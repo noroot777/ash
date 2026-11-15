@@ -64,11 +64,11 @@ export function ReplyBox({
   tasks = [],
   override,
   onAnswer,
+  onOpenTask,
   onDispatch,
   onDiscuss,
   discussHeld = null,
   asking,
-  onOpenTask,
 }: ReplyBoxProps) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();

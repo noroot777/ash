@@ -19,9 +19,10 @@ import { withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
 import { currentPauseGeneration, dispatchPauseSince, notePauseOfGroup, pausedSince } from "./pause-generation.js";
 import { taskHoldOf, type TaskHold } from "./task-hold.js";
 import { oweHeldStart } from "./dispatch-hold-owed.js";
-import { MAX_PARALLEL } from "./group-slots.js";
 import { startMember } from "./member-start.js";
 import { holdForPrerequisites } from "./prerequisite-launch.js";
+
+const MAX_PARALLEL = 4;
 
 type QueueAdvanceAttempt = {
   request?: QueueAdvanceRequest;
@@ -621,11 +622,13 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
         // 轮到名额才准入(member-start.ts):在哪、起没起过由那里重读,这里只答「按挑人时那同一把
         // 尺子,它此刻还该被分组运行拉起吗」。等的期间进了队列的,由队列按位置起(入队那一下就推过)。
         await startMember(groupId, taskId, {
-          // 还在等前置站齐的不起：这一次「被要求起跑」已经记成等齐就起（prerequisite-launch.ts）。
           prepare: async () => {
             if (await preparePendingCheckpointStart(taskId)) return true;
-            const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-            return !before || !!(await holdForPrerequisites(before, { source: "group" }));
+            // 还在等前置站齐的不起(prerequisite-launch.ts):齐了由那边起。那一问会动工作区,放在临界区外;
+            // 只问这一刻真要起的那几位(同下面 eligible 的尺子),别给起不来的记一笔「等齐就起」。
+            const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+            if (!row || !launchableMembers(await withMonitorHolds([row]), new Set()).length || await taskHoldOf(row)) return false;
+            return !!(await holdForPrerequisites(row, { source: "group" }));
           },
           eligible: async (row) => {
             if (!launchableMembers(await withMonitorHolds([row]), new Set()).length) return false;
@@ -664,8 +667,8 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       }
     };
 
-    // 名额由每一位自己在 startMember 里占（group-slots.ts，跟接着跑、等齐就起共用 launch-slots.ts 那一份）；
-    // 这里只限「同时在等名额 / 在跑」的这一批不超过上限，别把整组一次全排进去。
+    // 名额跟等齐就起、接着跑兑现欠账共用一份（launch-slots.ts），由 startMember 占：被别人占满时
+    // 它在里面等到有人跑完；这里只管自己这一批同时最多发出几位。
     while (pending.length || inflight.size) {
       if (!(await isPaused(groupId))) {
         while (pending.length && inflight.size < MAX_PARALLEL) {

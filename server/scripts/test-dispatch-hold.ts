@@ -16,7 +16,8 @@
 //     整件事只跑一次；正常停下的那一笔不因为恰好有一班定时到期被吞掉，接着跑照样从原会话续；
 //   · 停到一半出错：「还没停完」留着，tick 接着停完；推进途中停了又放，这次起跑交成欠账不丢；
 //     一组被按住的接着跑时照样受分组并发上限管；同一位被分组运行和接着跑各排了一次名额，只起一遍；
-//     名额集中还回、又来新的，同组总数也不越过上限；等名额期间进了队列的按队列顺序起、换了组的占新组的名额。
+//     等名额期间进了队列的按队列顺序起、换了组的占新组的名额。
+//     准入读完归属之后才入队的，占位那一笔写不成、交回队列；占位写进去之后读挂了的，回收到原状态再兑现。
 //
 // 走真实的调度链路（队列推进、分组运行、路由、结算钩子），只换掉「起一个 CLI」那一步：假执行器
 // 记下每一回合拿到的输入与续的是哪条原生会话，回合一直挂着，直到测试放它走或者它被停掉。
@@ -57,9 +58,10 @@ const { readRetryTurnFacts, retryTurnRejection } = await import("../src/task-ret
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { resumeOrRunTask } = await import("../src/task-resume.js");
 const { holdDispatched } = await import("../src/dispatch-hold.js");
+const { oweHeldStart } = await import("../src/dispatch-hold-owed.js");
 const { tick } = await import("../src/schedules.js");
 const { serializeQueueClaims } = await import("../src/queue-seat.js");
-const { acquireGroupSlot, groupSlotUsage, releaseGroupSlot } = await import("../src/group-slots.js");
+const { slotsTaken } = await import("../src/launch-slots.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -138,6 +140,7 @@ await db.insert(schema.groups).values([
   { id: "G3", projectId: "p", name: "六条的组", mode: "parallel", paused: false, createdAt: at },
   { id: "G4", projectId: "p", name: "等名额时挪走的组", mode: "parallel", paused: false, createdAt: at },
   { id: "G5", projectId: "p", name: "挪进来的组", mode: "parallel", paused: false, createdAt: at },
+  { id: "G7", projectId: "p", name: "读完归属才入队的组", mode: "parallel", paused: false, createdAt: at },
 ]);
 const task = (id: string, over: Partial<typeof tasks.$inferInsert> = {}): typeof tasks.$inferInsert => ({
   id, projectId: "p", title: `任务 ${id}`, body: id, status: "backlog", mode: "single", agentType: "claude",
@@ -180,6 +183,10 @@ await db.insert(tasks).values([
   ...["G1", "G2x", "G3", "G4", "G5", "G6"].map((id) => task(id, { groupId: "G3", dispatchedBy: "HG" })),
   task("HM", { status: "done", title: "等名额时被挪走" }),
   ...["M61", "M62", "M63", "M64", "M65", "M66"].map((id) => task(id, { groupId: "G4", dispatchedBy: "HM" })),
+  task("HN", { status: "done", title: "读完归属才入队" }),
+  ...["N71", "N72", "N73", "N74", "N75", "N76"].map((id) => task(id, { groupId: "G7", dispatchedBy: "HN" })),
+  task("HR", { status: "done", title: "占位写进去之后读挂了" }),
+  task("R3", { dispatchedBy: "HR" }),
 ]);
 await db.insert(schema.queueItems).values([
   { taskId: "A", queueId: "Q", position: 0, createdAt: at },
@@ -582,41 +589,78 @@ try {
   await until(`${movedLate} 按新组起跑`, () => turnsOf(movedLate!).length === 1);
   await sleep(300);
   assert.equal(turnsOf(queuedLate!).length, 0, "排在正在跑的那条后面，不抢跑");
-  assert.equal(groupSlotUsage("G4").used, 3, "旧组只剩还在跑的三条占名额");
-  assert.equal(groupSlotUsage("G5").used, 1, "挪过去的那条占的是新组的名额");
+  assert.equal(slotsTaken("G4"), 3, "旧组只剩还在跑的三条占名额");
+  assert.equal(slotsTaken("G5"), 1, "挪过去的那条占的是新组的名额");
   finish(m0!);
   await until(`${queuedLate} 等前一条做完才起`, () => turnsOf(queuedLate!).length === 1);
   assert.ok(!runs.isRunning(m0!));
   for (const id of [m2!, m3!, movedLate!, queuedLate!]) finish(id);
 
-  // ── 分组名额本身：集中还名额、再来新的，同组总数照样至多四个（第 2 轮复审 F2）────────────────
-  let active = 0;
-  let peak = 0;
-  const holds: Array<() => void> = [];
-  let probes = 0;
-  const occupy = async () => {
-    const probe = `probe-${probes++}`;
-    await acquireGroupSlot("slot-probe", probe);
-    peak = Math.max(peak, ++active);
-    await new Promise<void>((resolve) => holds.push(resolve));
-    active -= 1;
-    releaseGroupSlot("slot-probe", probe);
+  // ── 准入读完「不在队列」之后才入队：占位那一笔自己认归属，写不成就交回队列，不抢跑（第 4 轮复审 F1）──
+  const sixN = ["N71", "N72", "N73", "N74", "N75", "N76"];
+  assert.equal((await post("/tasks/HN/dispatched/hold")).status, 200);
+  await runGroup("G7");
+  assert.equal((await post("/tasks/HN/dispatched/release")).status, 200);
+  await until("先起四条", () => sixN.filter((id) => turnsOf(id).length === 1).length === 4);
+  const [n0, n1, n2, n3] = sixN.filter((id) => turnsOf(id).length === 1);
+  const [lateN, lastN] = sixN.filter((id) => turnsOf(id).length === 0);
+  await db.insert(schema.queueItems).values({ taskId: n0!, queueId: "Q7", position: 0, createdAt: at });
+  let readGate!: () => void;
+  const gateOpen = new Promise<void>((resolve) => { readGate = resolve; });
+  let membershipRead = 0;
+  (dbClient as { execute: unknown }).execute = async (stmt: Parameters<typeof execute>[0]) => {
+    const text = typeof stmt === "string" ? stmt : stmt.sql;
+    const args = typeof stmt === "string" ? [] : Object.values(stmt.args ?? {});
+    const result = await execute(stmt);
+    if (!membershipRead && text.startsWith('select "queue_id" from "queue_items"') && args.includes(lateN)) {
+      membershipRead += 1;
+      await gateOpen; // 读到的是「不在队列」，在它交回之前入队
+    }
+    return result;
   };
-  const firstFour = [0, 1, 2, 3].map(() => occupy());
-  const waiter = occupy();
-  await sleep(10);
-  assert.equal(holds.length, 4);
-  for (const resolve of holds.splice(0)) resolve();
-  await Promise.all(firstFour);
-  const nextFour = [0, 1, 2, 3].map(() => occupy());
-  for (let i = 0; i < 6; i += 1) {
-    await sleep(10);
-    assert.ok(active <= 4, `同组同时 ${active} 个`);
-    for (const resolve of holds.splice(0)) resolve();
+  try {
+    finish(n1!);
+    await until("准入读完归属", () => membershipRead === 1);
+    await db.insert(schema.queueItems).values({ taskId: lateN!, queueId: "Q7", position: 1, createdAt: at });
+  } finally {
+    readGate();
+    (dbClient as { execute: unknown }).execute = execute;
   }
-  await Promise.all([waiter, ...nextFour]);
-  assert.equal(peak, 4, "峰值就是四个");
-  assert.deepEqual(groupSlotUsage("slot-probe"), { used: 0, waiting: 0 }, "都还完了，记录也收掉");
+  await until(`${lastN} 接过名额`, () => turnsOf(lastN!).length === 1);
+  await sleep(300);
+  assert.equal(turnsOf(lateN!).length, 0, "排在正在跑的那条后面，不抢跑");
+  assert.equal((await row(lateN!)).status, "backlog", "没占成位，原样留着");
+  finish(n0!);
+  await until(`${lateN} 等前一条做完才起`, () => turnsOf(lateN!).length === 1);
+  for (const id of [n2!, n3!, lastN!, lateN!]) finish(id);
+
+  // ── 占位写进去之后附带的读取挂了：这具 queued 交给守卫式回收，回到原状态，tick 再兑现（第 4 轮复审 F2）──
+  await holdDispatched("HR");
+  await oweHeldStart("R3", "HR");
+  let queuedWritten = false;
+  let readFailed = 0;
+  (dbClient as { execute: unknown }).execute = async (stmt: Parameters<typeof execute>[0]) => {
+    const text = typeof stmt === "string" ? stmt : stmt.sql;
+    const args = typeof stmt === "string" ? [] : Object.values(stmt.args ?? {});
+    if (queuedWritten && !readFailed && text.startsWith('select "active_ms"') && args.includes("R3")) {
+      readFailed += 1;
+      throw new Error("注入：占位写进去之后附带的读取失败");
+    }
+    const result = await execute(stmt);
+    if (text.startsWith('update "tasks" set "status"') && args.includes("queued") && args.includes("R3")) queuedWritten = true;
+    return result;
+  };
+  try {
+    assert.equal((await post("/tasks/HR/dispatched/release")).status, 200);
+    await until("注入生效", () => readFailed === 1);
+  } finally {
+    (dbClient as { execute: unknown }).execute = execute;
+  }
+  assert.equal(turnsOf("R3").length, 0);
+  // 回收写回 backlog 的那一下，状态监听当场兑现欠账（tick 是兜底）。
+  await until("收回原状态后接着兑现", async () => turnsOf("R3").length === 1 || (await tick(), false), 5_000);
+  assert.equal((await row("R3")).holdOwedBy, null, "真起跑才销账");
+  finish("R3");
 
   console.log("dispatch hold: ok");
 } catch (error) {

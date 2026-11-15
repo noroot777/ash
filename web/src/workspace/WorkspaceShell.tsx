@@ -1,9 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CaretLeft } from "@phosphor-icons/react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
 import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
+import { leavesOnArchive, type ArchivedOnOpen } from "../lib/archivedSelection.ts";
 import { claimAction, isActionFresh } from "../lib/latestInteraction.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
@@ -171,6 +172,15 @@ export function WorkspaceShell() {
   }, [notify, projectId]);
   useEffect(() => { refreshGroups(); }, [refreshGroups]);
 
+  // 开着的这一条归档了要不要退出（lib/archivedSelection.ts）：打开时就已归档的照常开着。
+  const archivedOnOpen = useRef<ArchivedOnOpen>(null);
+  // 每打开一次重新认（排在下面那段之前跑）：收起之后再从链接打开同一条，算新的一次打开。
+  useEffect(() => { archivedOnOpen.current = null; }, [taskId]);
+  const leavesSelected = (task: Pick<TaskListItem, "id" | "archived">) => {
+    const verdict = leavesOnArchive(archivedOnOpen.current, task, settingsSection === "archive");
+    archivedOnOpen.current = verdict.seen;
+    return verdict.leave;
+  };
   useEffect(() => {
     if (!projectsReady || tasksLoading || !taskId) return;
     const taskProjectId = selectedTaskProjectId(tasks, taskId);
@@ -180,13 +190,13 @@ export function WorkspaceShell() {
     }
     const task = tasks.find((item) => item.id === taskId);
     if (task) {
-      if ((task.archived && settingsSection !== "archive") || !visibleOnThisMachine(task)) setTaskId(null);
+      if (leavesSelected(task) || !visibleOnThisMachine(task)) setTaskId(null);
       return;
     }
     let alive = true;
     api.task(taskId).then((loaded) => {
       if (!alive) return;
-      if ((loaded.archived && settingsSection !== "archive") || !visibleOnThisMachine(loaded)) {
+      if (leavesSelected(loaded) || !visibleOnThisMachine(loaded)) {
         setTaskId((current) => current === taskId ? null : current);
         return;
       }

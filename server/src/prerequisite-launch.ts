@@ -141,7 +141,7 @@ async function releaseOne(taskId: string): Promise<void> {
     const { turn, actingUserId } = claimed;
     let run: Promise<void> | null = null;
     const started = await seatThenStart(taskId, turn, () => {
-      // 齐了才起是系统替人起的：末端那道闸按自动起跑查（分组暂停、名下全部停下都认，turn-freeze.ts）。
+      // 等齐之后才起，已经不是当初那一下手动运行了：按自动起跑认（停着照样拦，turn-freeze.ts）。
       run = resumeOrRunTask(taskId, { origin: "auto", reason: "wake", turnHeld: turn, actingUserId });
       return run;
     });
