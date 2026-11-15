@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
+import type { AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
 import { PencilSimple, X } from "@phosphor-icons/react";
@@ -14,10 +14,9 @@ import {
   useReplyHeight,
 } from "./ReplyResizeHandle.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
-import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useReplyLayout } from "./useReplyLayout.ts";
 import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
-import { api, type ReplyTaskResult } from "../lib/api.ts";
+import type { ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
@@ -27,11 +26,14 @@ import { useReplyMention } from "./replyMention.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
-import { registerReplyInput } from "./replyQuote.ts";
+import { useExecutorProfiles } from "./useExecutorProfiles.ts";
+import { ComposerInput } from "./ComposerInput.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
 import type { ConversationItem } from "./conversationModel.ts";
+import { QuestionDock, useQuestionTakeover } from "./QuestionSlot.tsx";
+import type { QuestionAnswerInput } from "@ash/shared/questions";
 import { parseAttachmentText } from "./utils.ts";
 import {
   attachmentsFromPaths,
@@ -62,6 +64,7 @@ export function ReplyBox({
   moreRef,
   conversationItems = [],
   tasks = [],
+  onAnswer,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -118,6 +121,8 @@ export function ReplyBox({
   conversationItems?: ConversationItem[];
   /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
   tasks?: TaskListItem[];
+  /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
+  onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -144,9 +149,7 @@ export function ReplyBox({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
-  const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [profilesReady, setProfilesReady] = useState(false);
-  const [profilesFailed, setProfilesFailed] = useState(false);
+  const { profiles, ready: profilesReady, failed: profilesFailed } = useExecutorProfiles();
   const providers = useProviders();
   // 执行器名只用于提示文案：没钉 profile 时按「该类型的默认执行器」报，与运行侧
   // resolveExecutorFor 的降级口径一致，别让提示说出一个跑起来根本用不上的名字。
@@ -168,8 +171,6 @@ export function ReplyBox({
     pending: draft.pendingUploads,
     onPendingChange: draft.setPendingUploads,
   });
-  // 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。
-  useAutoGrowTextarea(textareaRef, { value, pinned: replyHeight.height });
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -204,9 +205,6 @@ export function ReplyBox({
     setCommandResult(null);
   }, [task.id]);
 
-  // 会话里选中一段话点「添加到对话」时，浮条要把光标送回这个输入框（见 replyQuote.ts）。
-  useEffect(() => registerReplyInput(task.id, textareaRef.current), [task.id]);
-
   const commandReset = useRef({ taskId: task.id, key: command?.resetKey });
   useEffect(() => {
     const previous = commandReset.current;
@@ -224,27 +222,22 @@ export function ReplyBox({
     wasQueueing.current = queueing;
   }, [queueing, scheduled.reload]);
 
-  useEffect(() => {
-    let alive = true;
-    setProfilesReady(false);
-    setProfilesFailed(false);
-    api.agents().then(
-      (nextProfiles) => { if (alive) setProfiles(nextProfiles); },
-      () => {
-        if (!alive) return;
-        setProfiles([]);
-        setProfilesFailed(true);
-      },
-    ).finally(() => { if (alive) setProfilesReady(true); });
-    return () => { alive = false; };
-  }, []);
-
   // 派生命令(ash 自己的)排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
   const ashItems: SlashItem[] = (command?.items ?? []).map((item) => ({ ...item, kind: "ash" }));
   const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
   const candidates = commandCandidates(value);
-  const menuOpen = !menuDismissed && candidates.length > 0;
+  // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
+  // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
+  // 之后选模型、派生面板）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
+  const takeover = useQuestionTakeover(onAnswer ? task : null);
+  const covering = takeover.covering;
+  useEffect(() => {
+    if (!covering) return;
+    setPicker(null);
+    setAnnotating(false);
+  }, [covering]);
+  const menuOpen = !covering && !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
   const commandMatch = !!command && command.matches(value);
   const selected = candidates[selectedIndex];
@@ -505,7 +498,7 @@ export function ReplyBox({
           onPick={pickCommand}
         />
       )}
-      {mention.open && !menuOpen && (
+      {mention.open && !menuOpen && !covering && (
         <MentionMenu
           className="task-reply-mention-menu"
           ariaLabel="召唤智能体或引用文件"
@@ -518,7 +511,7 @@ export function ReplyBox({
           onPick={mention.pick}
         />
       )}
-      {picker && (
+      {picker && !covering && (
         <AgentModelPicker
           types={registeredTypes.length ? registeredTypes : [activeAgent]}
           profiles={profiles}
@@ -535,7 +528,7 @@ export function ReplyBox({
         />
       )}
       <div className="reply-context">
-      {inlinePanel && !menuOpen && !mention.open && !picker && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {inlinePanel && !covering && !menuOpen && !mention.open && !picker && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         key={task.id}
         messages={scheduled.messages}
@@ -549,23 +542,27 @@ export function ReplyBox({
         tasks={tasks}
         onSendNow={(messageId) => void scheduled.sendNow(messageId)}
       />
-      <UploadAttachmentList
+      {!covering && <UploadAttachmentList
         attachments={uploads.attachments}
         pending={uploads.pending}
         error={uploads.error}
         onRemove={uploads.remove}
         onCancel={uploads.cancel}
-      />
+      />}
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      <div className="task-reply-box">
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} />}
+      {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
-        <textarea
-          ref={textareaRef}
+        {/* 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。 */}
+        <ComposerInput
+          inputRef={textareaRef}
           value={value}
+          pinned={replyHeight.height}
+          quoteTarget={task.id}
           rows={3}
           disabled={inputDisabled}
           placeholder={placeholder}
@@ -685,7 +682,7 @@ export function ReplyBox({
             taskId={task.id}
           />
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
