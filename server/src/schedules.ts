@@ -14,12 +14,54 @@ import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js"
 import { replayQueueAdvances } from "./queue-advance-retry.js";
 import { sweepReleasedQueueMembers } from "./queue-monitor-hold.js";
 import { sweepOwedStarts } from "./dispatch-hold.js";
-import { forgetHeldStart } from "./dispatch-hold-owed.js";
+import { markShiftAdmission } from "./dispatch-hold-owed.js";
 import { turnFreezeReason } from "./turn-freeze.js";
-import { shiftDue } from "./schedule-due.js";
 import { reportStuckWindDowns, reportSuspectTurns } from "./turn-lock-reclaim.js";
 
-// cron 解析与「这一班还欠不欠着」住在 schedule-due.ts:兑现「接着跑」欠账的那一边也问它。
+// ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
+// Supports *, n, a-b, */n, and comma lists. No seconds, no names.
+function fieldMatches(field: string, value: number, min: number, max: number): boolean {
+  return field.split(",").some((part) => {
+    let step = 1;
+    let range = part;
+    const slash = part.indexOf("/");
+    if (slash !== -1) {
+      step = Number(part.slice(slash + 1)) || 1;
+      range = part.slice(0, slash);
+    }
+    let lo = min;
+    let hi = max;
+    if (range !== "*") {
+      const dash = range.indexOf("-");
+      if (dash !== -1) {
+        lo = Number(range.slice(0, dash));
+        hi = Number(range.slice(dash + 1));
+      } else {
+        lo = hi = Number(range);
+      }
+    }
+    if (value < lo || value > hi) return false;
+    return (value - lo) % step === 0;
+  });
+}
+
+export function cronMatches(expr: string, d: Date): boolean {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  const [mi, ho, dom, mo, dow] = parts;
+  return (
+    fieldMatches(mi, d.getMinutes(), 0, 59) &&
+    fieldMatches(ho, d.getHours(), 0, 23) &&
+    fieldMatches(dom, d.getDate(), 1, 31) &&
+    fieldMatches(mo, d.getMonth() + 1, 1, 12) &&
+    fieldMatches(dow, d.getDay(), 0, 6)
+  );
+}
+
+const sameMinute = (a: string, b: Date) => {
+  const da = new Date(a);
+  return da.getFullYear() === b.getFullYear() && da.getMonth() === b.getMonth() && da.getDate() === b.getDate() && da.getHours() === b.getHours() && da.getMinutes() === b.getMinutes();
+};
 
 // Fire a scheduled task = start a FRESH run (a schedule RE-RUNS its task).
 // Never resume the prior CLI session: a recurring cron must open a new run
@@ -54,10 +96,13 @@ async function fire(taskId: string): Promise<boolean> {
   // 占到之后、交给 seatThenStart 之前这一段,锁归本函数管:不放行的每个出口 —— 退避,或者读库/
   // 写库抛错 —— 都在这里还掉。tick 会吞掉异常,漏还一次,任务就永远「回合正在进行」,自动和
   // 手动都起不来(第 3 轮审查 F1)。抛错同样不消费班次,下个 tick 重试。
+  // 放行之前这一班的责任在班次上:这期间按停只撤回、不记欠账(markShiftAdmission,dispatch-hold-owed.ts)。
+  const admitting = markShiftAdmission(taskId);
   let admitted = false;
   try {
     admitted = await admitClaimedFire(taskId);
   } finally {
+    admitting();
     if (!admitted) releaseTurn(taskId, turn);
   }
   if (!admitted) return false;
@@ -80,13 +125,10 @@ async function admitClaimedFire(taskId: string): Promise<boolean> {
   if (isAcceptingTask(taskId)) return false;
   // 占到之后按持久事实再认一次:入口那次 taskHoldOf 是一层层 await 往上读的,读到一半别处按了
   // 「全部停下」(或分组暂停),入口拿到的就是旧答案,而停的那一下清点时它还没占位、无从拦起
-  // (第 2 轮审查 F1)。认出来就退避、不消费班次 —— 这一班自己就是起跑的责任,放开之后下一个
-  // tick 照常开新的一轮;停的那一下若已经给它记了欠账就撤掉(兑现欠账是从原会话续,定时要的是
-  // 新一轮)。这之后才落下的停由 runTask 末端那道闸接住(origin auto),走欠账。
-  const frozen = await turnFreezeReason(taskId, true);
-  if (!frozen) return true;
-  if (frozen.source === "dispatch-hold") await forgetHeldStart(taskId, frozen.byTaskId);
-  return false;
+  // (第 2 轮审查 F1);占位之后才按的停留下的是撤回标记,这里一并消费。认出来就退避、不消费班次 ——
+  // 这一班自己就是起跑的责任,放开之后下一个 tick 照常开新的一轮(停的那一下没给它记欠账)。
+  // 放行之后才落下的停由 runTask 末端那道闸接住(origin auto):班次照常消费,只剩欠账这一份。
+  return !(await turnFreezeReason(taskId, true));
 }
 
 export async function tick() {
@@ -96,9 +138,17 @@ export async function tick() {
     try {
       // 先问 fire 能不能跑、真跑了才记账:fire 决定与写 lastRunAt 之间没有 await 间隙,
       // 同一分钟 double-fire 的旧防线不受影响;被跳过的班次不消费,下个 tick 重试。
-      if (!shiftDue(s, now) || !await fire(s.taskId)) continue;
-      await db.update(schedules).set(s.kind === "once" ? { lastRunAt: now.toISOString(), enabled: false } : { lastRunAt: now.toISOString() })
-        .where(eq(schedules.id, s.id));
+      if (s.kind === "once") {
+        if (s.at && new Date(s.at) <= now && !s.lastRunAt && await fire(s.taskId)) {
+          await db.update(schedules).set({ lastRunAt: now.toISOString(), enabled: false }).where(eq(schedules.id, s.id));
+        }
+      } else if (s.kind === "cron" && s.cron && cronMatches(s.cron, now)) {
+        // guard against double-fire within the same minute (tick runs more often)
+        if (s.lastRunAt && sameMinute(s.lastRunAt, now)) continue;
+        if (await fire(s.taskId)) {
+          await db.update(schedules).set({ lastRunAt: now.toISOString() }).where(eq(schedules.id, s.id));
+        }
+      }
     } catch {
       /* keep ticking */
     }

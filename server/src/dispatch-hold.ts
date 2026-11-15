@@ -17,7 +17,7 @@
 // 分组运行、起跑前那道闸、智能体调 run_task），各在任务上记一笔「欠一次起跑」（tasks.hold_owed_by，
 // dispatch-hold-owed.ts）。接着跑时清掉停着的标记，把欠账逐条兑现：在队列里的推一下那条队列（按原
 // 顺序从队首续），不在队列里的照分组运行拉起成员的做法从原会话续。账在真起跑或落终态时才销，此刻
-// 起不来的由状态落位的监听与 tick 巡检接着兑现。同一次起跑还有一班定时欠着的，让给班次（schedule-due.ts）。
+// 起不来的由状态落位的监听与 tick 巡检接着兑现。到点启动退避的那一班不记账（责任在班次上，dispatch-hold-owed.ts）。
 // 没欠账的一条不碰 —— 停之前就在等答复、等哨兵、被用户单独停掉、已经取消或失败的，接着跑之后还是原样。分组暂停和它互不相干：
 // 兑现时分组还停着，起跑那道闸照样拦（分组恢复时由分组那边拉起）。
 //
@@ -31,9 +31,8 @@ import { queueItems, tasks } from "./db/schema.js";
 import { claimOwnTurn, freezeStartingTurn, isRunning, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { notePauseOfTasks } from "./pause-generation.js";
-import { forgetHeldStart, oweHeldStart } from "./dispatch-hold-owed.js";
+import { forgetHeldStart, oweHeldStart, shiftAdmissionPending } from "./dispatch-hold-owed.js";
 import { taskHoldOf } from "./task-hold.js";
-import { scheduleOwesStart } from "./schedule-due.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { republishWaitsOf } from "./pending-wait.js";
 import { heldByMonitors } from "./queue-monitor-hold.js";
@@ -94,7 +93,9 @@ export async function holdDispatched(holderId: string): Promise<HoldResult> {
     const live = isRunning(taskId) || isTurnClaimed(taskId) || row.status === "running" || row.status === "queued";
     if (!live) continue;
     // 账先记、再停：停下这一刻起它就欠着，记不进去就别停（抛给路由，用户再按一次会再扫一遍）。
-    await oweHeldStart(taskId, holderId);
+    // 占着回合的是一班还没放行的到点启动：起跑的责任在班次上，只打撤回标记、不记账（dispatch-hold-owed.ts）。
+    const shift = shiftAdmissionPending(taskId);
+    if (!shift) await oweHeldStart(taskId, holderId);
     // 次序同 pauseGroup:status 可能在队列推进/续聊交错时短暂失真,有活 handle 就先杀。
     let stopped = stopTask(taskId, "paused");
     if (!stopped && row.status === "queued") {
@@ -103,7 +104,7 @@ export async function holdDispatched(holderId: string): Promise<HoldResult> {
     }
     if (!stopped) stopped = freezeStartingTurn(taskId, "paused", hold);
     // 到头来什么都没停到（刚好跑完、占着的不是回合）：它不欠这一次。
-    if (!stopped) await forgetHeldStart(taskId, holderId);
+    if (!stopped && !shift) await forgetHeldStart(taskId, holderId);
   }
   await settleAnnouncements(holderId, tree);
   return { holdAt: holder?.holdAt ?? null, tree };
@@ -146,12 +147,6 @@ export async function honorOwedStart(taskId: string): Promise<void> {
   if (!row?.holdOwedBy) return;
   const holder = (await db.select({ holdAt: tasks.dispatchHoldAt }).from(tasks).where(eq(tasks.id, row.holdOwedBy))).at(0);
   if (holder?.holdAt || !(await canResume(row)) || await taskHoldOf(row)) return;
-  // 同一次起跑只许一方去兑现：这条任务还有一班到了没跑的定时，就是那一班退避时没撤掉账（撤账写
-  // 失败）—— 让给班次，账撤掉（schedule-due.ts 文件头）。撤账再失败就整个留到下一次，仍旧不起。
-  if (await scheduleOwesStart(taskId)) {
-    await forgetHeldStart(taskId, row.holdOwedBy);
-    return;
-  }
   const item = (await db.select({ queueId: queueItems.queueId }).from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
   if (item) {
     const { advanceQueue, pickNextLaunchable } = await import("./scheduler.js");

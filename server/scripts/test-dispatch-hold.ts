@@ -12,8 +12,8 @@
 //   · 智能体的起跑过了入口检查才碰上停，起跑前最后一道闸照样拦下、记成欠账；
 //   · 先落「停着」再清点名下（清点途中新起跑的那一位逃不出去）；
 //   · 到点启动的入口读到旧答案时，占位之后那一次复查拦下它、不消费班次，放开后照常开新的一轮；
-//     那次复查读库失败时把占位还掉，下一个 tick 照常起；撤账写失败、班次和欠账都留着时，接着跑先对账
-//     让给班次，整件事只跑一次。
+//     那次复查读库失败时把占位还掉，下一个 tick 照常起；放行之前按的停不记欠账（责任只在班次上），
+//     整件事只跑一次；正常停下的那一笔不因为恰好有一班定时到期被吞掉，接着跑照样从原会话续。
 //
 // 走真实的调度链路（队列推进、分组运行、路由、结算钩子），只换掉「起一个 CLI」那一步：假执行器
 // 记下每一回合拿到的输入与续的是哪条原生会话，回合一直挂着，直到测试放它走或者它被停掉。
@@ -161,6 +161,9 @@ await db.insert(tasks).values([
   task("S5", { dispatchedBy: "H7" }),
   task("H8", { status: "done", title: "撤账写失败" }),
   task("S6", { dispatchedBy: "H8" }),
+  task("H9", { status: "done", title: "停下的同时有定时到期" }),
+  task("R1", { dispatchedBy: "H9" }),
+  task("R2", { dispatchedBy: "H9" }),
 ]);
 await db.insert(schema.queueItems).values([
   { taskId: "A", queueId: "Q", position: 0, createdAt: at },
@@ -421,23 +424,18 @@ try {
   await tick();
   await until("故障过去后下一个 tick 照常起", () => turnsOf("S5").length === 1);
 
-  // ── 到点启动已占位时按停（记了欠账），退避时撤账那一下写失败：班次和欠账都还在 ——
-  //    接着跑时先对账让给班次，只跑一次（第 4 轮审查 F1：只跑一次的任务跑了两遍）─────────────────
+  // ── 到点启动已占位、还没放行时按停：只撤回、不记欠账 —— 起跑的责任只在班次上，整件事只跑一次
+  //    （第 4 轮审查 F1：以前记了欠账、撤账写失败后放开各起一次）───────────────────────────────
   await db.insert(schema.schedules).values({ id: "once-S6", taskId: "S6", kind: "once", at: new Date(Date.now() - 1_000).toISOString(), createdAt: at });
   let heldDuringClaim = false;
-  let forgetFailed = 0;
   (dbClient as { execute: unknown }).execute = async (stmt: Parameters<typeof execute>[0]) => {
     const text = typeof stmt === "string" ? stmt : stmt.sql;
     const args = typeof stmt === "string" ? [] : Object.values(stmt.args ?? {});
-    // 占位之后那次复查一开口：此刻锁占着，让一次「全部停下」整个做完（它看见占位，记一笔欠账）。
+    // 占位之后那次复查一开口：此刻锁占着，让一次「全部停下」整个做完（它看得见这一位占着回合）。
     if (!heldDuringClaim && text.startsWith('select "archived", "group_id"') && args.includes("S6")) {
       heldDuringClaim = true;
       assert.ok(runs.isTurnClaimed("S6"));
-      await holdDispatched("H8");
-    }
-    if (!forgetFailed && text.startsWith('update "tasks" set "hold_owed_by"') && args[0] === null && args.includes("S6")) {
-      forgetFailed += 1;
-      throw new Error("注入：撤账那一下写失败");
+      assert.deepEqual((await holdDispatched("H8")).tree, ["S6"]);
     }
     return execute(stmt);
   };
@@ -446,14 +444,14 @@ try {
   } finally {
     (dbClient as { execute: unknown }).execute = execute;
   }
-  assert.ok(heldDuringClaim && forgetFailed === 1, "排列成立：占位时按停、撤账写失败一次");
-  assert.equal((await row("S6")).holdOwedBy, "H8", "两份责任都在：欠账没撤掉");
-  assert.equal((await db.select().from(schema.schedules).where(eq(schema.schedules.id, "once-S6")))[0]!.enabled, true, "班次也没消费");
+  assert.ok(heldDuringClaim, "排列成立：放行之前按的停");
+  assert.equal((await row("S6")).holdOwedBy, null, "不记欠账：这一次起跑的责任在班次上");
+  assert.equal((await db.select().from(schema.schedules).where(eq(schema.schedules.id, "once-S6")))[0]!.enabled, true, "班次没消费");
   assert.ok(!runs.isTurnClaimed("S6"));
+  assert.equal(await statusOf("S6"), "backlog", "原样留着");
   assert.equal((await post("/tasks/H8/dispatched/release")).status, 200);
   await sleep(300);
-  assert.equal(turnsOf("S6").length, 0, "接着跑没去兑现这笔欠账：让给班次");
-  assert.equal((await row("S6")).holdOwedBy, null, "账撤掉了");
+  assert.equal(turnsOf("S6").length, 0, "接着跑没有欠账可兑现");
   await tick();
   await until("班次开新的一轮", () => turnsOf("S6").length === 1);
   assert.equal(turnsOf("S6")[0]!.resume, undefined);
@@ -462,6 +460,21 @@ try {
   await tick();
   await sleep(300);
   assert.equal(turnsOf("S6").length, 1, "整件事只跑了一次");
+
+  // ── 正常停下的那一笔欠账不因为恰好有一班定时到期而被吞掉：接着跑从原会话续（第 5 轮审查 F1）──
+  for (const [id, shift] of [["R1", { kind: "once", at: new Date(Date.now() - 1_000).toISOString() }], ["R2", { kind: "cron", cron: "* * * * *" }]] as const) {
+    assert.equal((await post(`/tasks/${id}/run`)).status, 202);
+    await running(id);
+    assert.equal((await post("/tasks/H9/dispatched/hold")).status, 200);
+    await settled(id, "paused");
+    assert.equal((await row(id)).holdOwedBy, "H9");
+    await db.insert(schema.schedules).values({ id: `shift-${id}`, taskId: id, createdAt: at, ...shift });
+    assert.equal((await post("/tasks/H9/dispatched/release")).status, 200);
+    await until(`${id} 接着跑`, () => turnsOf(id).length === 2);
+    assert.equal(turnsOf(id)[1]!.resume, `native-${id}`, `${id}（${shift.kind}）从原会话续，不被到期的班次顶成新一轮`);
+    await until(`${id} 真起跑后欠账销掉`, async () => (await row(id)).holdOwedBy === null);
+    await db.delete(schema.schedules).where(eq(schema.schedules.id, `shift-${id}`));
+  }
 
   console.log("dispatch hold: ok");
 } catch (error) {

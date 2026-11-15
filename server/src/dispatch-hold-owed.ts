@@ -9,10 +9,31 @@
 // 「接着跑」本身不销账，它只是把停着的标记清掉、去试一次（dispatch-hold.ts）。试的那一刻起不来的
 // （还在退出、回合锁被占、起跑抛错、服务正好重启）账还在，由状态落位那一刻的监听和调度 tick 的巡检
 // 再兑现，直到上面两种了结之一发生。
+//
+// **定时班次不记这笔账**：到点启动已经占位、还没过放行那一关（schedules.ts admitClaimedFire）时按停，
+// 那一班自己就是这次起跑的责任 —— 它退避、不消费班次，放开后下一个 tick 照常开新的一轮。这时再记
+// 一笔欠账就是同一次起跑的两份持久责任：撤账那一下写失败，放开后各起一次；拿「此刻有一班到期」去
+// 对账又认不出是不是同一次，会把正常暂停该从原会话续的那一笔吞掉（第 4、5 轮审查）。所以停的那一下
+// 只打「起跑前撤回」的内存标记，不记账（`shiftAdmissionPending`）；过了放行那一关、在最后一道闸上才
+// 被撤回的，班次照常消费，只剩欠账这一份（turn-freeze.ts abortFrozen）。
 import { and, eq, sql } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
+
+/** 到点启动占位之后、放行之前的那几位（同进程内存，跟回合锁同生共死：进程没了锁也没了）。 */
+const shiftAdmissions = new Set<string>();
+
+/** 到点启动占到位的那一刻同步标上，定下放不放行（不论结果、不论抛错）就撤（schedules.ts fire）。 */
+export function markShiftAdmission(taskId: string): () => void {
+  shiftAdmissions.add(taskId);
+  return () => shiftAdmissions.delete(taskId);
+}
+
+/** 这一位此刻占着的回合是不是一班还没放行的到点启动：是的话停它不记账，见文件头。 */
+export function shiftAdmissionPending(taskId: string): boolean {
+  return shiftAdmissions.has(taskId);
+}
 
 /**
  * 记一笔：这一位本该起跑、被 `holderId` 按住了。已经记着别的按住人的改成这一个 —— 兑现时还被别处
