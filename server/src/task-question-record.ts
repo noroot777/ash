@@ -9,6 +9,10 @@ import { now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { questionOccurrenceOf } from "./task-wait-ownership.js";
 import { announceDispatchSignalsTo, markDispatchQuestionAnswered } from "./dispatch-signals.js";
+import { activeDispatchPlan, parseDispatchPlan } from "@ash/shared/dispatch-plan";
+
+/** 派活单被发回来改时，答复最前面那一句（智能体据此知道一条都没建）。 */
+export const DISPATCH_PLAN_RETURNED = "（派活单没有派出，一条任务都没建。用户的意见如下，按它改完可以再摆一次。）";
 
 export function prepareQuestionRecord(task: TaskRow, answer: string, input: QuestionAnswerInput): QuestionRecord {
   const source: QuestionSource = {
@@ -33,10 +37,12 @@ export function prepareQuestionRecord(task: TaskRow, answer: string, input: Ques
   }
   const text = answers ? formatQuestionAnswers(answers) : answer.trim();
   if (!text) throw new TypeError("answer 不能为空");
+  // 对着一张派活单回的话（网页上的「发回去改」、手机或飞书里直接回一句）：一条任务都没建，先跟智能体说清。
+  const plan = activeDispatchPlan({ question: task.question, dispatchPlan: parseDispatchPlan(task.dispatchPlan) });
   return {
     ...source, id: nanoid(12), answeredAt: now(), answer: text,
     ...(answers ? { answers: answers.map((value) => value.trim()) } : {}),
-    reply: `【答复】\n${text}`,
+    reply: `【答复】\n${plan ? `${DISPATCH_PLAN_RETURNED}\n` : ""}${text}`,
   };
 }
 
@@ -51,7 +57,7 @@ export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord,
   const claimed = await db.transaction(async (transaction) => {
     const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
     const claimed = await transaction.update(tasks).set({
-      question: null, questionOptions: null, questionItems: null,
+      question: null, questionOptions: null, questionItems: null, dispatchPlan: null,
       questionHistory: JSON.stringify([...history, record]), updatedAt: record.answeredAt,
     }).where(and(
       eq(tasks.id, task.id),

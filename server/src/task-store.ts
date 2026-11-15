@@ -16,7 +16,8 @@ import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
-import { resolveDispatchedBy } from "./task-dispatch.js";
+import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
+import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@ash/shared/dispatch-plan";
 import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
 
 export type TaskRow = typeof tasks.$inferSelect;
@@ -136,6 +137,9 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
   questionHistory: r.questionHistory ? JSON.parse(r.questionHistory) : [],
+  // 只在它绑的那一问还在时下发（shared/src/dispatch-plan.ts `activeDispatchPlan`）。
+  dispatchPlan: activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) }),
+  dispatchTarget: parseDispatchTarget(r.dispatchTarget),
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
 });
@@ -317,7 +321,9 @@ export async function createTasks(
     ...row,
     creationOrigin: row.creationOrigin === undefined ? null : row.creationOrigin,
   })));
-  const normalizedRows = await Promise.all(rows.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
+  // 没指明交给谁、又收在某条任务名下的：交给那条任务「派出去的活交给谁」的默认值（task-dispatch.ts）。
+  const assigned = await withDispatchDefaults(rows, dispatchedBy);
+  const normalizedRows = await Promise.all(assigned.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
     const requested = row.useWorktree ?? worktreeDefaultByProject.get(row.projectId) ?? false;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
     const { workflowId, ...rest } = row;

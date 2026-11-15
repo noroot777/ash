@@ -249,6 +249,11 @@ export const tasks = sqliteTable("tasks", {
   // 派它的那条任务：普通任务里（智能体经 MCP、或用户从回复框）派出去的独立任务。只管「收在谁名下」，
   // 不是 parentId —— 那一列是团队执行者，带着共用目录、跟团队一起验收的整套语义（见 task-dispatch.ts）。
   dispatchedBy: text("dispatched_by"),
+  // 摆在回复框上等用户过目的派活单（JSON，shared/src/dispatch-plan.ts）。跟 question 同一笔写下，
+  // 只在 question 还是它绑的那一问时算数，所以清提问的各处不必另清它。
+  dispatchPlan: text("dispatch_plan"),
+  // 「派出去的活交给谁」（JSON 的 DispatchRunTarget）；NULL = 同这里。
+  dispatchTarget: text("dispatch_target"),
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
   /**

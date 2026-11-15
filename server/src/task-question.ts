@@ -11,6 +11,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@ash/shared";
 import type { AgentType, QuestionItem, SessionRole } from "@ash/shared";
+import type { DispatchPlan } from "@ash/shared/dispatch-plan";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, sessions, tasks } from "./db/schema.js";
@@ -26,6 +27,8 @@ export interface AskInput {
   question: string;
   options?: string[];
   items?: QuestionItem[] | null;
+  /** 这一问是一张派活单（dispatch-plan.ts）：跟提问同一笔写下。普通提问不给，旧单随之作废。 */
+  dispatchPlan?: DispatchPlan | null;
   // agent 自己提问时绑定当前一次性回合；工作流/团队主动提问不传。
   currentTurn?: { token: string | null; directionToken?: string | null };
 }
@@ -55,6 +58,7 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
         question,
         questionOptions: options.length ? JSON.stringify(options) : null,
         questionItems: items ? JSON.stringify(items) : null,
+        dispatchPlan: input.dispatchPlan ? JSON.stringify(input.dispatchPlan) : null,
         updatedAt,
       })
       .where(where)
@@ -73,6 +77,7 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
     question,
     questionOptions: options.length ? options : null,
     questionItems: items,
+    dispatchPlan: input.dispatchPlan ?? null,
   });
   // 派出的任务来问：派它的那条任务的页面去重读那一刻的记录（触发器已经跟着这一笔写下了）。
   void announceDispatchSignals(taskId).catch((error) => console.error(`[ash] 通知派它的任务 ${taskId} 失败:`, error));

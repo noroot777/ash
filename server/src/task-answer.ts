@@ -15,6 +15,8 @@ import { claimQuestionAnswer, prepareQuestionRecord } from "./task-question-reco
 import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
+import type { QuestionRecord } from "@ash/shared/questions";
+import type { TaskRow } from "./task-store.js";
 
 export type TaskAnswerBody = QuestionAnswerInput & {
   answer?: string;
@@ -54,6 +56,23 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof TypeError ? 400 : 409);
   }
+  const delivered = await deliverAnswer(c, task, record, { ...attachments, via: typeof b.via === "string" ? b.via : undefined });
+  return c.json(delivered.body, delivered.status);
+}
+
+/**
+ * 认领这一问并把答复送进提问的那条会话（普通答复和派活单「派出去」共用）。
+ *
+ * `claim` 给了就由它来包住认领那一下：派活单要让「认领」和「建任务」落在同一处（认领落空就一条都不建，
+ * 见 dispatch-plan-launch.ts），所以它把认领塞进建任务的最后一道检查里，自己回报认没认到。
+ */
+export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionRecord, options: {
+  attachments?: string[];
+  via?: string;
+  claim?: (claimOnce: () => Promise<boolean>) => Promise<boolean>;
+} = {}): Promise<{ status: 200 | 409; body: Record<string, unknown> }> {
+  const taskId = task.id;
+  const attachments = options.attachments?.length ? { attachments: options.attachments } : {};
   const origin = await db.transaction((transaction) => questionWaitOrigin(transaction, task), { behavior: "immediate" });
   const asker = task.mode === "single" ? await askingAgentFor(taskId, origin.kind === "ordinary" ? "single" : undefined) : null;
   const reviewRoute = origin.kind === "review" && asker?.role === "reviewer" ? await freeReviewResumeOptions(taskId) : null;
@@ -67,16 +86,19 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   // 答复也是真人回合:共享项目里给别人的任务答疑,烧的是**我**的 key(§八)。
   const acting = ownerIdOf(actorOf(c));
   let reviewQueued = false;
+  const claimOnce = () => claimQuestionAnswer(task, record, async (transaction) => {
+    reviewQueued = await queueReviewAnswer(transaction, task,
+      pendingMessageRow({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id }));
+  }, options.via);
   try {
-    if (!await claimQuestionAnswer(task, record, async (transaction) => {
-      reviewQueued = await queueReviewAnswer(transaction, task,
-        pendingMessageRow({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id }));
-    }, typeof b.via === "string" ? b.via : undefined)) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
+    if (!await (options.claim ? options.claim(claimOnce) : claimOnce())) {
+      return { status: 409, body: { error: "问题已更新或已被答复，本次未投递，请刷新后查看" } };
+    }
   } catch (error) {
     if (error instanceof ReviewSuperseded) {
       await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId)
         .catch((failure) => console.error(`[ash] 失效审查收口待重试 ${taskId}:`, failure));
-      return c.json({ error: error.message }, 409);
+      return { status: 409, body: { error: error.message } };
     }
     throw error;
   }
@@ -84,7 +106,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   if (reviewQueued) {
     publishPendingMessages(taskId);
     void deliverPendingMessages(taskId).catch((error) => console.error(`[ash] 审查答复待投递 ${taskId}:`, error));
-    return c.json({ answered: true, resumed: false, queued: true, record });
+    return { status: 200, body: { answered: true, resumed: false, queued: true, record } };
   }
   // paused 的提问任务,答复续跑**是任务的执行回合**(selectNextInQueue 对 paused+question
   // 停队等它,它占着队列位置),必须过共用的队列认领(queue-seat.ts)——此前这里直接
@@ -109,7 +131,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
     const claim = await claimQueueSeat(taskId);
     if (!claim.ok) {
       await enqueueMessage({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, execution: true, answerId: record.id });
-      return c.json({ answered: true, resumed: false, queued: true, blockedBy: claim.blockers, record });
+      return { status: 200, body: { answered: true, resumed: false, queued: true, blockedBy: claim.blockers, record } };
     }
     const seat = claim.seat;
     let stashed = false;
@@ -127,7 +149,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
         // 先放执行位再扫:扫描要重新认领它(同 task-reply.ts)。
         if (stashed) flushPendingWhenTurnIdle(taskId);
       });
-    return c.json({ answered: true, resumed: true, record });
+    return { status: 200, body: { answered: true, resumed: true, record } };
   }
   void continueTask(taskId, answerText, { ...attachments, ...route, actingUserId: acting, answerIds }).then(async (started) => {
     if (started) return;
@@ -135,5 +157,5 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
     await enqueueMessage({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id });
     flushPendingWhenTurnIdle(taskId);
   });
-  return c.json({ answered: true, resumed: true, record });
+  return { status: 200, body: { answered: true, resumed: true, record } };
 }

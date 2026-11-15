@@ -144,6 +144,9 @@ const BUDGETS: Record<string, number> = {
   "mcp/list_tasks": 600,
   "mcp/patch_task": 1100,
   "mcp/pause_task": 950,
+  // 2026-11-15 新增（2068 实测）：派活单。说明里只留「什么时候用、调完会怎样、别再自己建一遍」；
+  // 字段大半是建任务那几个参数的原有说明（跟 batch_create_tasks 同一份 taskShape）。
+  "mcp/propose_dispatch": 2150,
   "mcp/queue_insert": 220,
   "mcp/queue_remove": 190,
   "mcp/queue_reorder": 270,
@@ -178,7 +181,8 @@ const DERIVED = (id: string): boolean =>
 const LONG_PATH = (id: string): boolean => id.startsWith("deep/");
 
 /** 片段集合加起来的顶。单条都压着、总量却靠「多加几份样本」涨回去，也算退步。 */
-const TOTAL_BUDGET = 83_400;
+// 2026-11-15 +2100：新工具 propose_dispatch（2068B，见 BUDGETS 里那一行）。
+const TOTAL_BUDGET = 85_500;
 
 /**
  * 动态段的上限：`<撑满的那一版> - <同名 -bare 样本>`。

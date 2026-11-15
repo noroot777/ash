@@ -17,6 +17,8 @@ import { turnRole } from "./runs.js";
 import { answerTask } from "./task-answer.js";
 import { setTaskQuestion } from "./task-question.js";
 import { listDispatchSignals } from "./dispatch-signals.js";
+import { activeDispatchPlan, parseDispatchPlan } from "@ash/shared/dispatch-plan";
+import { DISPATCH_PLAN_BLOCKS_ASK } from "./dispatch-plan.js";
 import { actorOf } from "./auth/context.js";
 import { canSeeProject, visibleProjectIds } from "./auth/visibility.js";
 
@@ -96,6 +98,10 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
+  // 同一时刻只有一样东西在等用户：这一回合已经摆了派活单，就不能再问（dispatch-plan-routes.ts 反过来也拦）。
+  if (activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) })) {
+    return c.json({ error: DISPATCH_PLAN_BLOCKS_ASK }, 409);
+  }
   const askToken = c.req.header("x-ash-turn-token");
   if (r.mode !== "team" && r.activeTurnToken && askToken !== r.activeTurnToken) {
     return c.json({

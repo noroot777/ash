@@ -384,6 +384,10 @@ export interface Task {
   // 多问题列表；null/[] 沿用单问题 question + questionOptions。
   questionItems?: QuestionItem[] | null;
   questionHistory?: QuestionRecord[];
+  // 摆在回复框上等用户过目的派活单（shared/src/dispatch-plan.ts）。只在它绑的那一问还在时下发，否则 null。
+  dispatchPlan?: import("./dispatch-plan.ts").DispatchPlan | null;
+  // 「派出去的活交给谁」：null = 同这里（这条任务自己的执行器）。
+  dispatchTarget?: import("./dispatch-plan.ts").DispatchRunTarget | null;
   // 任务接力标记（见 TaskHandoff）。null = 从未接力。
   handoff?: TaskHandoff | null;
   // 强制恢复清掉 handoff 后仍保留的风险审计；刷新后必须持续可见。
