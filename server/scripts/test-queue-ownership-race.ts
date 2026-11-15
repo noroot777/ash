@@ -17,7 +17,9 @@
 //     —— 不会被单独起跑,也不会被挪去别的组;
 //   ⑧ 重新排队等链期间有人占上回合锁起它:出链前重验,不再把它写回待办;
 //   ⑨ 重新排队挪位时写库失败:状态和位置一起不动,原入口照样能重试;
-//   ⑩ 改分组进门时目标组还在、轮到时已被删:拒绝,不把任务挂回一个删掉的组。
+//   ⑩ 改分组进门时目标组还在、轮到时已被删:拒绝,不把任务挂回一个删掉的组;
+//   ⑪ 等齐就起(前置放行)× 改分组:占着名额正要起跑(库里还是 backlog)时改分组被拒;改分组落在它读完
+//     分组、还没占名额之间的,起跑方在链上认出组变了,不按旧组的名额起,按新组重排再起。
 // ③ 排在最前:前两节在旧代码上会把任务塞进队列,队里在跑的一多,入队另有理由被拒,就分辨不出它。
 //
 // 走真实的路由与调度,只换掉「起一个 CLI」:假执行器的回合一直挂着,直到测试放它走。
@@ -50,6 +52,8 @@ const { mountGroupRoutes } = await import("../src/group-routes.js");
 const { holdDispatched, releaseDispatched } = await import("../src/dispatch-hold.js");
 const { oweHeldStart } = await import("../src/dispatch-hold-owed.js");
 const { claimQueueSeat, serializeQueueClaims } = await import("../src/queue-seat.js");
+const { sweepPrerequisiteLaunches } = await import("../src/prerequisite-launch.js");
+const { holdsSlot, slotsTaken } = await import("../src/launch-slots.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -179,6 +183,8 @@ await db.insert(schema.groups).values([
   { id: "GP", projectId: "p", name: "停着的组", mode: "serial", paused: true, createdAt: at },
   { id: "GR", projectId: "p", name: "在跑的组", mode: "parallel", paused: false, createdAt: at },
   { id: "GD", projectId: "p", name: "要删的组", mode: "parallel", paused: false, createdAt: at },
+  { id: "GS", projectId: "p", name: "等齐就起的组", mode: "parallel", paused: false, createdAt: at },
+  { id: "GF", projectId: "p", name: "挪进去的组", mode: "parallel", paused: false, createdAt: at },
 ]);
 const task = (id: string, over: Partial<typeof tasks.$inferInsert> = {}): typeof tasks.$inferInsert => ({
   id, projectId: "p", title: `任务 ${id}`, body: id, status: "backlog", mode: "single", agentType: "claude",
@@ -202,6 +208,8 @@ await db.insert(tasks).values([
   task("R3", { groupId: "GP" }),
   task("R4", { groupId: "GP" }),
   task("L", { groupId: "GR" }),
+  task("P1", { groupId: "GS" }),
+  task("P2", { groupId: "GS" }),
 ]);
 
 let failure: unknown = null;
@@ -388,7 +396,36 @@ try {
   assert.equal((await moving).status, 409, "目标组已经删了,不改");
   assert.equal((await row("Y1")).groupId, "G", "没被挂到删掉的组上");
 
-  assert.deepEqual(launches.filter((id) => id !== "A").sort(), ["L", "X1", "X2", "X4"], "每条只起了一次");
+  // ⑪ 等齐就起 × 改分组 ───────────────────────────────────────────────────────────
+  // 占着名额、还没落 running:改分组被拒,名额与分组一致。
+  await db.insert(schema.taskPrerequisiteLaunches).values({ taskId: "P1", requestedAt: at, source: "run" });
+  const moveP1 = interleave("before",
+    (sql, args) => /^select .*from "task_prerequisite_launches"/.test(sql) && args.includes("P1") && holdsSlot("P1"),
+    () => request("PATCH", "/tasks/P1", { groupId: "GF" }));
+  await sweepPrerequisiteLaunches();
+  assert.ok(moveP1.hit, "放行那一路占着名额时拦到了");
+  assert.equal((await moveP1.response!).status, 409, "占着原组名额正要起跑,不换组");
+  await running("P1");
+  assert.equal((await row("P1")).groupId, "GS");
+  assert.equal(slotsTaken("GS"), 1, "名额记在它真在的那一组");
+  // 改分组落在放行读完分组、还没占名额之间:不按旧组的名额起;名额空出来那一扫按新组起。
+  await db.insert(schema.taskPrerequisiteLaunches).values({ taskId: "P2", requestedAt: at, source: "run" });
+  const moveP2 = interleave("after",
+    (sql, args) => /^select .*from "tasks" where "tasks"\."id" = \?$/.test(sql) && args.includes("P2") && !holdsSlot("P2"),
+    () => request("PATCH", "/tasks/P2", { groupId: "GF" }));
+  await sweepPrerequisiteLaunches();
+  assert.ok(moveP2.hit, "拦到了放行读分组那一下");
+  assert.equal((await moveP2.response!).status, 200, "那时还没人占名额,改分组照常成");
+  assert.equal(launches.includes("P2"), false, "按旧组占的名额不起");
+  assert.equal(holdsSlot("P2"), false, "旧组的名额还回去了");
+  assert.equal((await row("P2")).status, "backlog");
+  await sweepPrerequisiteLaunches();
+  await running("P2");
+  assert.equal((await row("P2")).groupId, "GF");
+  assert.equal(slotsTaken("GF"), 1, "按新组的名额起");
+  assert.equal(slotsTaken("GS"), 1, "旧组只剩 P1");
+
+  assert.deepEqual(launches.filter((id) => id !== "A").sort(), ["L", "P1", "P2", "X1", "X2", "X4"], "每条只起了一次");
   console.log("queue ownership race: ok");
 } catch (error) {
   failure = error;

@@ -78,6 +78,8 @@ export type QueueSeatClaim =
     transient?: boolean;
     /** 挡路的是**这个任务自己的另一代占位**,不是同队别的成员。 */
     self?: boolean;
+    /** 占名额时按的那个分组(`slotGroup`)已经不是它此刻的分组:还掉名额、按新组重排。 */
+    regrouped?: boolean;
   };
 
 // 手动启动入口(/run、/fire、/retry、重跑上一回合)的认领失败话术。transient(数据库
@@ -102,9 +104,17 @@ export { serializeQueueClaims };
  * 不在队列的任务直接放行,独立任务没有同队互斥;但放行到它落成 running 之间不许被放进队列
  * (queue-claim-chain.ts)。`turnHeld`:调用方认领之前就占着这个任务的回合锁、并且一直占到
  * 起跑落定之后 —— 那把锁本身就说明它正在起跑,不必再记一笔。
+ * `slotGroup`:调用方已经按这个分组占了并发名额(launch-slots.ts)。占名额用的是链外读到的分组,
+ * 改分组可能就落在那一读与占名额之间;这里按此刻的行再认一次,不一致就不放行(`regrouped`)。
+ * 占好名额之后的改分组由换组守卫拒绝(queue-membership-guard.ts),两头合起来名额与分组始终一致。
  */
-export async function claimQueueSeat(taskId: string, opts: { turnHeld?: TurnOwner } = {}): Promise<QueueSeatClaim> {
+export async function claimQueueSeat(taskId: string, opts: { turnHeld?: TurnOwner; slotGroup?: string | null } = {}): Promise<QueueSeatClaim> {
   return serializeQueueClaims(async (): Promise<QueueSeatClaim> => {
+    if (opts.slotGroup !== undefined) {
+      const row = (await db.select({ groupId: tasks.groupId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+      if (!row) return { ok: false, blockers: ["任务已删除"] };
+      if ((row.groupId ?? null) !== opts.slotGroup) return { ok: false, regrouped: true, blockers: ["任务刚换了分组，按新分组重新排名额"] };
+    }
     // 「在不在队列」也只能在临界区里判:在外面读到「不在」就直接放行,入队请求恰好落在
     // 这一读与真正起跑之间,它就带着独立任务的身份和同队在跑的那条一起跑。
     const item = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
@@ -249,10 +259,12 @@ export async function seatThenStart(
   // 凭据只能由占位那一刻产生,所以它是参数。
   owner: TurnOwner,
   start: (seat: QueueSeat | null) => Promise<unknown>,
-): Promise<{ ok: true } | { ok: false; blockers: string[]; blocking?: QueueBlocker[]; transient?: boolean; self?: boolean }> {
+  /** 调用方已经按哪个分组占了并发名额(见 claimQueueSeat 的 `slotGroup`);没占名额的入口不传。 */
+  opts: { slotGroup?: string | null } = {},
+): Promise<{ ok: true } | { ok: false; blockers: string[]; blocking?: QueueBlocker[]; transient?: boolean; self?: boolean; regrouped?: boolean }> {
   let claim: QueueSeatClaim;
   try {
-    claim = await claimQueueSeat(taskId, { turnHeld: owner });
+    claim = await claimQueueSeat(taskId, { turnHeld: owner, slotGroup: opts.slotGroup });
   } catch (err) {
     // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimOwnTurn 之后的 500 + 锁泄漏
     // (调用方的「认领失败」分支走不到)。读失败没有写入遗留,按失败
