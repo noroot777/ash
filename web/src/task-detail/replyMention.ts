@@ -1,27 +1,23 @@
-import { useState, type KeyboardEvent } from "react";
 import type { AgentExecutorProfile, AgentType } from "@ash/shared";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
-import {
-  fileMentionRows, mentionHint, TREE_UNSUPPORTED, type MentionRow,
-} from "../components/MentionMenu.tsx";
-import { useFileMention } from "../lib/useFileMention.ts";
-import { firstSelectable, stepIndex } from "../lib/fileMentionTree.ts";
+import type { DraftHandle } from "../lib/DraftStore.tsx";
+import { useMention } from "../components/useMention.ts";
 
 /**
- * 单飞对话框那一个 `@` 的全部状态：**同一个符号**既召唤智能体、又引用工作区文件，
- * 两类候选合并成一张列表走同一条上下键。
+ * 单飞对话框那一个 `@`：在 useMention（随手记 + 工作区文件）前面再加一段智能体。
  *
- * 合并是刻意的 —— 用户敲 `@` 时想的是「引用点什么」，不是「我该用哪个选择器」。谁排
- * 前面由 token 自己决定：纯字母两边都可能命中，智能体在前（它换的是「谁来干」，代价
- * 大、要一眼看见）；token 里一出现 `/` 或 `.`，智能体那段整个让位，否则用户敲着路径
- * 回车却把这一回合派给了别的 CLI。
+ * 智能体只认「还像个类型名」的 token：纯字母时它和另外两段可能同时命中，智能体在前（它换
+ * 的是「谁来干」，代价大、要一眼看见）；token 里一出现 `/` 或 `.`，这一段整个让位，否则
+ * 用户敲着路径回车却把这一回合派给了别的 CLI。
  *
- * 单独成文件还有一个原因：ReplyBox 已经贴着 700 行，而这套东西自成一体。
+ * 单独成文件还有一个原因：ReplyBox 已经贴着 700 行。
  */
 export function useReplyMention({
   value,
   setValue,
+  draft,
   taskId,
+  projectId,
   profiles,
   profilesReady,
   profilesFailed,
@@ -31,7 +27,9 @@ export function useReplyMention({
 }: {
   value: string;
   setValue: (next: string) => void;
+  draft: Pick<DraftHandle, "update">;
   taskId: string;
+  projectId: string;
   profiles: AgentExecutorProfile[];
   profilesReady: boolean;
   profilesFailed: boolean;
@@ -41,104 +39,23 @@ export function useReplyMention({
   onPickAgent: (agent: AgentType) => void;
   onPicked: () => void;
 }) {
-  const [index, setIndex] = useState(0);
-  const [dismissed, setDismissed] = useState(false);
-
-  const match = /(?:^|\s)@([^\s@]*)$/.exec(value);
-  const token = match?.[1] ?? "";
-  // 智能体只认「还像个类型名」的 token：敲到 `@src/` 那一刻用户显然在说路径。
-  const agents = match && /^[a-z0-9_-]*$/i.test(token)
-    ? registeredAgentTypes(profiles).filter((type) => type.startsWith(token.toLowerCase()))
-    : [];
-  const files = useFileMention({
+  return useMention({
     value,
     setValue,
+    draft,
     scope: { kind: "task", taskId },
-    disabled: disabled || dismissed,
+    projectId,
+    disabled,
+    label: "召唤智能体，或引用随手记、文件",
+    agents: {
+      match: (token) => (/^[a-z0-9_-]*$/i.test(token)
+        ? registeredAgentTypes(profiles).filter((type) => type.startsWith(token.toLowerCase()))
+        : []),
+      onPick: (agent) => onPickAgent(agent as AgentType),
+    },
+    emptyStatus: !profilesReady ? "正在读取已注册智能体…"
+      : profilesFailed ? "执行器列表读取失败；也没有匹配的随手记或文件"
+        : "没有匹配的智能体、随手记或文件",
     onPicked,
   });
-  const rows: MentionRow[] = [
-    ...agents.map((agent) => ({ kind: "agent" as const, key: `agent:${agent}`, agent })),
-    ...fileMentionRows(files.rows),
-  ];
-  const open = !disabled && !dismissed && !!match;
-  const selectable = (at: number) => {
-    const row = rows[at];
-    return !!row && (row.kind === "agent" || !row.row.label);
-  };
-  const clamped = Math.min(index, Math.max(0, rows.length - 1));
-  const selectedIndex = selectable(clamped) ? clamped : firstSelectable(rows.length, selectable);
-  // 文件那半边还没回来时要说一句，否则「@ 了一下什么都没有」看着像功能坏了。
-  const status = files.treeUnsupported ? TREE_UNSUPPORTED
-    : files.loading && !files.rows.length
-    ? (files.browsing ? "正在读取这个目录…" : "正在搜索工作区文件…")
-    : files.failed ? "工作区文件读取失败，仍可直接手打路径"
-      : rows.length === 0 ? (!profilesReady ? "正在读取已注册智能体…"
-        : profilesFailed ? "执行器列表读取失败；也没有匹配的文件"
-          : "没有匹配的智能体或文件")
-        : files.more ? "匹配的文件还有更多，再敲几个字缩小范围" : null;
-
-  const pick = (row: MentionRow) => {
-    if (row.kind === "agent") onPickAgent(row.agent as AgentType);
-    else files.activate(row.row);
-  };
-
-  /** 接在 textarea 的 onChange 里。 */
-  const onValueChange = () => {
-    setIndex(0);
-    setDismissed(false);
-  };
-
-  const reset = () => {
-    setIndex(0);
-    setDismissed(false);
-  };
-
-  /** 返回 true = 这个按键已经被菜单吃掉了。 */
-  const onKeyDown = (event: KeyboardEvent): boolean => {
-    if (!open) return false;
-    if ((event.key === "ArrowDown" || event.key === "ArrowUp") && rows.length) {
-      event.preventDefault();
-      setIndex(stepIndex(rows.length, selectedIndex, event.key === "ArrowDown" ? 1 : -1, selectable));
-      return true;
-    }
-    // 树的左右键（展开 / 收起 / 跳回上一层）只对文件那半边有意义。文件行在这张合并
-    // 列表里整体后移了 agents.length 格，下标要两边换算。
-    if (rows[selectedIndex]?.kind === "file"
-      && files.onTreeKey(event, selectedIndex - agents.length, (next) => setIndex(agents.length + next))) {
-      return true;
-    }
-    if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
-      // 菜单开着时回车归菜单，哪怕文件那半边还没到货（智能体那半边是同步算的，有就直接
-      // 选）。放它去插换行会把 `@token` 顶到非行尾，菜单当场收起，用户还得退回来重敲。
-      event.preventDefault();
-      if (rows[selectedIndex]) pick(rows[selectedIndex]);
-      return true;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setDismissed(true);
-      return true;
-    }
-    return false;
-  };
-
-  return {
-    open,
-    rows,
-    token,
-    status,
-    index: selectedIndex,
-    setIndex,
-    // 第一条是智能体时提示「回车后继续选模型」，是文件时提示「回车插入路径」——
-    // 同一颗回车在这张列表里做两件事，不写清楚用户按下去才知道。
-    hint: `召唤智能体加入，或引用工作区文件 · ${
-      rows[selectedIndex]?.kind === "agent"
-        ? "↑↓ 选择，回车后继续选模型"
-        : mentionHint(files.rows[selectedIndex - agents.length])}`,
-    pick,
-    onKeyDown,
-    onValueChange,
-    reset,
-  };
 }

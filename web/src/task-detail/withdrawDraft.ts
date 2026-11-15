@@ -95,6 +95,25 @@ export function mergeAttachments(
 }
 
 /**
+ * 从别处引用进来的附件（`@` 一条随手记）接到草稿**后面**：跟撤回相反，这是正在写的这一份
+ * 往下续，先挑的排前面。同一路径只留一份，换上这一次的选择记号（理由同 mergeAttachments）。
+ */
+export function appendAttachments(
+  current: UploadAttachment[],
+  added: UploadAttachment[],
+): UploadAttachment[] {
+  const again = new Map(added.map((attachment) => [attachment.path, attachment]));
+  const currentPaths = new Set(current.map((attachment) => attachment.path));
+  return [
+    ...current.map((attachment) => {
+      const chosen = again.get(attachment.path);
+      return chosen ? { ...attachment, selection: chosen.selection } : attachment;
+    }),
+    ...added.filter((attachment) => !currentPaths.has(attachment.path)),
+  ];
+}
+
+/**
  * 一条消息发出去之后，草稿该不该清。
  *
  * 判据只有一条：**当前草稿逐字还是发送时的那一份吗**。是就清掉（常态：点了发送就没再

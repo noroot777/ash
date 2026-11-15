@@ -1,5 +1,5 @@
-// 对话框里 `@` 的回归：同一个 `@` 既能召唤智能体、又能引用工作区文件，两类候选混在
-// 一张列表里走同一条上下键。
+// 对话框里 `@` 的回归：同一个 `@` 既能召唤智能体、又能引用随手记和工作区文件，三类候选
+// 混在一张列表里走同一条上下键。
 //
 // 回归价值在这条**分界线**上：`@cl` 这样的纯字母 token 两边都可能命中（智能体在前），
 // 而一旦 token 里出现 `/` 或 `.`，智能体那段必须整个让位 —— 否则用户敲着路径，回车
@@ -30,6 +30,20 @@ const FILES = [
 ];
 // .gitignore 挡着的：照样能搜到、能选，只是排在最后并标出来（空查询时不给）。
 const IGNORED = new Set(["dist/api.js"]);
+// 这个项目的随手记。默认不给（前面那些只看智能体和文件的用例保持原样），验随手记那一段时
+// 再打开。
+const NOTES = [
+  {
+    id: "note-deploy", projectId: "project-1", body: "部署清单\n先跑迁移\n再重启服务",
+    attachments: ["data/uploads/deploy.png"], taskLinks: [], createdAt: 1, updatedAt: 2,
+  },
+  {
+    id: "note-api", projectId: "project-1", body: "api 限流阈值改成 200",
+    attachments: [], taskLinks: [], createdAt: 1, updatedAt: 1,
+  },
+];
+let notesEnabled = false;
+let notesRequests = 0;
 
 let browser;
 let releaseSlow = () => {};
@@ -52,6 +66,11 @@ try {
     const url = new URL(route.request().url());
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     if (url.pathname.endsWith("/agents")) return json(PROFILES);
+    if (url.pathname.endsWith("/notes")) {
+      notesRequests += 1;
+      assert.equal(url.searchParams.get("projectId"), "project-1", "随手记按任务所在的项目取");
+      return json(notesEnabled ? NOTES : []);
+    }
     if (url.pathname.endsWith("/file-search")) {
       // `dir` = 树里展开一层：只回这个目录的直接子项，跟服务端一个口径。
       const dir = url.searchParams.get("dir");
@@ -114,7 +133,7 @@ try {
   await page.goto(`${web.origin}/scripts/fixtures/file-mention.html`);
 
   const textarea = page.getByRole("textbox", { name: "回复任务" });
-  const menu = page.getByRole("listbox", { name: "召唤智能体或引用文件" });
+  const menu = page.getByRole("listbox", { name: "召唤智能体或引用随手记、文件" });
   const options = menu.getByRole("option");
   await textarea.waitFor();
 
@@ -277,7 +296,42 @@ try {
     "回车选的是文件，不是那一行目录头",
   );
 
-  // ⑭ 服务端还没更新时**必须说出来**。不说的话界面就是一列没有层级的文件，看着像
+  // ⑭ 随手记：排在智能体之后、文件之前；选中是把**内容**带进来 —— 正文替换掉 `@token`，
+  //    附件进附件栏，发出去时跟着走。（agent 不认识「随手记」，留个 `@标题` 它什么也读不到。）
+  notesEnabled = true;
+  await textarea.fill("");
+  const before = notesRequests;
+  await textarea.type("先看 @");
+  // （src/ 还展开着：⑫ 里点开的，树的展开状态跟着这个输入框走。）
+  await settled(["@claude", "@codex", "部署清单", "api 限流", "dist/", "docs/", "src/", "lib/", "api.ts", "README.md"]);
+  assert.ok(notesRequests > before, "每次打开菜单都重新拉一遍随手记（它随时在别处被改）");
+  assert.match(await options.nth(2).textContent() ?? "", /1 个附件/, "带附件的随手记要说一声");
+  // 命中不在标题里时补上命中的那一行，否则看不出这条为什么在列表里。
+  await textarea.type("迁移");
+  await settled(["部署清单"]);
+  assert.match(await options.first().textContent() ?? "", /先跑迁移/);
+  assert.match(await menu.locator("small").first().textContent() ?? "", /回车带入正文和附件/);
+  await page.keyboard.press("Enter");
+  assert.equal(await textarea.inputValue(), "先看 部署清单\n先跑迁移\n再重启服务\n");
+  await page.getByRole("button", { name: "移除 deploy.png" }).waitFor();
+  // 敲路径时随手记让位：`api` 两边都命中，`api.` 就只剩文件。
+  await textarea.fill("");
+  await textarea.type("@api");
+  await settled(["api 限流", "api.ts", "apiClient.ts", "api.js"]);
+  await textarea.fill("");
+  await textarea.type("@src/");
+  await settled(["lib/", "api.ts"]);
+  // 发出去：正文是随手记的内容，附件跟着这一句走。
+  await textarea.fill("先看 部署清单\n先跑迁移\n再重启服务");
+  await page.getByRole("button", { name: "发送回复" }).click();
+  await page.locator("#log li").nth(2).waitFor();
+  assert.equal(
+    (await page.locator("#log li").allTextContents()).at(-1),
+    "send:先看 部署清单\n先跑迁移\n再重启服务 +data/uploads/deploy.png",
+  );
+  notesEnabled = false;
+
+  // ⑮ 服务端还没更新时**必须说出来**。不说的话界面就是一列没有层级的文件，看着像
   //    树压根没做 —— 这一条正是这么被误判过一次的（前端新、:4317 还是旧进程）。
   legacyServer = true;
   await textarea.fill("");

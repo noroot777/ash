@@ -9,11 +9,11 @@ import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
 import { LaterSendKey, useLaterSend, type LaterChoice } from "../components/LaterSend.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
-import { FileMentionMenu } from "../components/MentionMenu.tsx";
+import { InputMentionMenu } from "../components/MentionMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
-import { useFileMention } from "../lib/useFileMention.ts";
+import { useMention } from "../components/useMention.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
@@ -80,11 +80,14 @@ export function TeamReplyBox({
     enabled: !disabled,
   });
   const slash = useSlashCompletion({ value, setValue, skills: cliCommandsForMode(skills.skills, task.agentType ?? "claude", "team"), disabled, onSend: () => void send() });
-  // `@` 引用团队工作区里的文件：团队共享一个工作目录，执行者拿到的相对路径和这里一致。
-  const mention = useFileMention({
+  // `@` 引用随手记或团队工作区里的文件：团队共享一个工作目录，执行者拿到的相对路径和这里一致。
+  const mention = useMention({
     value,
     setValue,
+    draft,
     scope: { kind: "task", taskId: task.id },
+    projectId: task.projectId,
+    label: "引用随手记或工作区文件",
     disabled: disabled || slash.open,
     onPicked: () => inputRef.current?.focus(),
   });
@@ -158,7 +161,7 @@ export function TeamReplyBox({
         />
       )}
       {mention.open && !slash.open && !covering && (
-        <FileMentionMenu mention={mention} label="引用工作区文件" className="team-reply-mention-menu" />
+        <InputMentionMenu mention={mention} label="引用随手记或工作区文件" className="team-reply-mention-menu" />
       )}
       <div className="reply-context">
       <ScheduledMessageTray

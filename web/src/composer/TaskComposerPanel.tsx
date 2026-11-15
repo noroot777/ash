@@ -29,8 +29,8 @@ import { applySlashPick, mergeSlashItems, slashQuery, type SlashItem } from "../
 import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { useSkills } from "../lib/useSkills.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
-import { FileMentionMenu } from "../components/MentionMenu.tsx";
-import { useFileMention } from "../lib/useFileMention.ts";
+import { InputMentionMenu } from "../components/MentionMenu.tsx";
+import { useMention } from "../components/useMention.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
 import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
@@ -292,13 +292,18 @@ export function TaskComposerPanel({
   });
   const slash = slashDismissed ? null : slashQuery(body);
   const slashCandidates = mergeSlashItems(ASH_SLASH_ITEMS, cliCommandsForMode(skills.skills, slashRun.agentType, mode), slash);
-  // `@` 引用项目里的文件：任务还不存在，所以按项目仓库搜。选中的路径原样写进正文，
-  // 跑起来之后 agent 在自己的工作目录（worktree 或主仓）里按同一条相对路径找得到。
-  // 非 git 项目照样给：服务端那边会退回自己走一遍目录（file-search.ts 的 walk）。
-  const mention = useFileMention({
+  // `@` 引用随手记或项目里的文件。文件：任务还不存在，所以按项目仓库搜，选中的路径原样
+  // 写进正文，跑起来之后 agent 在自己的工作目录（worktree 或主仓）里按同一条相对路径找得到；
+  // 非 git 项目照样给，服务端那边会退回自己走一遍目录（file-search.ts 的 walk）。随手记：
+  // 正文和附件带进草稿，并记进回链 —— 建好任务后它跟「转为新任务」一样显示「已转」。
+  const mention = useMention({
     value: body,
     setValue: (next) => { changeBody(next); setSlashIndex(0); },
+    draft,
     scope: { kind: "project", projectId: project.id },
+    projectId: project.id,
+    linkNotes: true,
+    label: "引用随手记或项目里的文件",
     onPicked: () => textareaRef.current?.focus(),
   });
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
@@ -529,7 +534,7 @@ export function TaskComposerPanel({
             mention={{
               onKeyDown: mention.onKeyDown,
               menu: mention.open && (
-                <FileMentionMenu mention={mention} label="引用项目里的文件" className="composer-mention-menu" />
+                <InputMentionMenu mention={mention} label="引用随手记或项目里的文件" className="composer-mention-menu" />
               ),
             }} />
           <ImagePreviewGroup isolated>

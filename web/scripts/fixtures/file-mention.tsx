@@ -34,8 +34,8 @@ function Ash() {
       <ReplyBox
         task={TASK}
         hasConversation
-        onSend={async (text) => {
-          setLog((current) => [...current, `send:${text}`]);
+        onSend={async (text, attachments) => {
+          setLog((current) => [...current, `send:${text}${attachments.length ? ` +${attachments.join(",")}` : ""}`]);
           return { started: true };
         }}
       />

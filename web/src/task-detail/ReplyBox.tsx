@@ -21,7 +21,7 @@ import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
-import { MentionMenu } from "../components/MentionMenu.tsx";
+import { InputMentionMenu } from "../components/MentionMenu.tsx";
 import { useReplyMention } from "./replyMention.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
@@ -252,7 +252,9 @@ export function ReplyBox({
   const mention = useReplyMention({
     value,
     setValue,
+    draft,
     taskId: task.id,
+    projectId: task.projectId,
     profiles,
     profilesReady,
     profilesFailed,
@@ -499,17 +501,7 @@ export function ReplyBox({
         />
       )}
       {mention.open && !menuOpen && !covering && (
-        <MentionMenu
-          className="task-reply-mention-menu"
-          ariaLabel="召唤智能体或引用文件"
-          hint={mention.hint}
-          rows={mention.rows}
-          token={mention.token}
-          status={mention.status}
-          selectedIndex={mention.index}
-          onHover={mention.setIndex}
-          onPick={mention.pick}
-        />
+        <InputMentionMenu mention={mention} label="召唤智能体或引用随手记、文件" className="task-reply-mention-menu" />
       )}
       {picker && !covering && (
         <AgentModelPicker
