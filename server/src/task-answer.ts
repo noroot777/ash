@@ -11,7 +11,8 @@ import { enqueueMessage, pendingMessageRow, publishPendingMessages, deliverPendi
 import { claimQueueSeat } from "./queue-seat.js";
 import { askingAgentFor } from "./task-question.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { claimQuestionAnswer, prepareQuestionRecord } from "./task-question-record.js";
+import { claimQuestionAnswer, claimQuestionAnswerWithin, prepareQuestionRecord, type QuestionClaim } from "./task-question-record.js";
+import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
@@ -63,13 +64,13 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
 /**
  * 认领这一问并把答复送进提问的那条会话（普通答复和派活单「派出去」共用）。
  *
- * `claim` 给了就由它来包住认领那一下：派活单要让「认领」和「建任务」落在同一处（认领落空就一条都不建，
- * 见 dispatch-plan-launch.ts），所以它把认领塞进建任务的最后一道检查里，自己回报认没认到。
+ * `claim` 给了就由它来包住认领那一下：派活单要让「认领」和「建任务」同一笔提交（认领落空就一条都不建，
+ * 建不成认领也不算数，见 dispatch-plan-launch.ts），所以交给它的是「在你的事务里认领」，它自己回报认没认到。
  */
 export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionRecord, options: {
   attachments?: string[];
   via?: string;
-  claim?: (claimOnce: () => Promise<boolean>) => Promise<boolean>;
+  claim?: (claimWithin: (transaction: ConclusionTransaction) => Promise<boolean>) => Promise<boolean>;
 } = {}): Promise<{ status: 200 | 409; body: Record<string, unknown> }> {
   const taskId = task.id;
   const attachments = options.attachments?.length ? { attachments: options.attachments } : {};
@@ -86,12 +87,22 @@ export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionR
   // 答复也是真人回合:共享项目里给别人的任务答疑,烧的是**我**的 key(§八)。
   const acting = ownerIdOf(actorOf(c));
   let reviewQueued = false;
-  const claimOnce = () => claimQuestionAnswer(task, record, async (transaction) => {
+  const onClaim = async (transaction: ConclusionTransaction) => {
     reviewQueued = await queueReviewAnswer(transaction, task,
       pendingMessageRow({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id }));
-  }, options.via);
+  };
+  let within: QuestionClaim | null = null;
+  const claimWithin = async (transaction: ConclusionTransaction) => {
+    within = await claimQuestionAnswerWithin(transaction, task, record, onClaim, options.via);
+    return !!within;
+  };
   try {
-    if (!await (options.claim ? options.claim(claimOnce) : claimOnce())) {
+    const claimed = options.claim
+      ? await options.claim(claimWithin)
+      : await claimQuestionAnswer(task, record, onClaim, options.via);
+    // 外层事务已经提交（claim 回报认到了）才去通知派它的那条任务。
+    if (claimed) (within as QuestionClaim | null)?.announce();
+    if (!claimed) {
       return { status: 409, body: { error: "问题已更新或已被答复，本次未投递，请刷新后查看" } };
     }
   } catch (error) {

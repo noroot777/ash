@@ -1,10 +1,12 @@
 // 派活单（src/dispatch-plan*.ts、MCP propose_dispatch）：
 //   · 摆出来之后任务停着：写下的是 task.question，结算落 paused；刷新（重读任务、列表）后单子还在；
 //   · 同一时刻只等用户一样东西：有提问在等时摆不出来，摆了单之后也问不出来，两边的拒绝说得清；
+//     同一回合里同时发出提问和派活单，只有一个写得进去，另一个明说被谁占了（不是两边都说成功）；
 //   · 「发回去改」就是对那一问的普通答复：一条任务都不建，智能体收到的是那句话（带一句「没有派出」）；
 //   · 「派出去」由 ash 照卡上此刻的样子建（换的人、去掉的条、一个接一个 / 同时、顺序），挂在这条任务名下；
 //     建任务的不是智能体（来源记的是用户），续上会话的那段答复里有建好的任务号、标题、交给了谁；
 //   · 派过一次的单子再按一次、拿着旧单子的号来按，都不再建；
+//   · 派出中途写库失败（队列那一笔）：整笔回滚，一条任务、一个分组都不留，单子原样还在；再按还是那样，修好再按只建一批；
 //   · 「派出去的活交给谁」：派活单上没指明的那几条默认交给它，智能体绕过派活单直接建任务没给执行器时也交给它。
 //
 // 跑的是 PATH 上的假 claude（scheduled-messages-fixture.ts），不起真实 CLI。
@@ -13,7 +15,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { asc, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray, like, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Task } from "@ash/shared";
 import { releaseTmpDb } from "./tmp-db.js";
@@ -95,12 +97,12 @@ const PLAN = [
   { title: "MCP 接入改成起跑时注入", body: "要上 Windows 真机验证（完整说明 C）", note: "要上真机", agentType: "codex", prerequisites: ["entry"] },
 ];
 
-const [P, Q] = ["dp-lead", "dp-asking"];
+const [P, Q, R] = ["dp-lead", "dp-asking", "dp-race"];
 let failure: unknown = null;
 try {
   await db.insert(projects).values({ id: projectId, name: "dispatch-plan", repoPath: root, apiKeys: null, createdAt: at });
-  await db.insert(tasks).values([row(P, "backlog"), row(Q, "backlog")]);
-  for (const id of [P, Q]) {
+  await db.insert(tasks).values([row(P, "backlog"), row(Q, "backlog"), row(R, "backlog")]);
+  for (const id of [P, Q, R]) {
     await db.insert(sessions).values({ id: `${id}-prev`, taskId: id, role: "single", agentType: "claude", executor: "claude@test", cwd: root, cliSessionId: `${id}-cli`, startedAt: at });
   }
 
@@ -110,6 +112,24 @@ try {
   const refused = await propose(Q, qHeaders, { tasks: PLAN });
   assert.equal(refused.status, 409);
   assert.equal(refused.body.error, plan.QUESTION_BLOCKS_PLAN, "拒绝说得清：有提问在等");
+
+  // —— 同一回合里同时发出提问和派活单：判在同一笔条件写里，只有一个写进去，另一个说清被谁占了。
+  const rHeaders = await inTurn(R);
+  const [racePlan, raceAsk] = await Promise.all([
+    propose(R, rHeaders, { tasks: PLAN.slice(0, 1) }),
+    send("POST", `/tasks/${R}/ask`, { question: "先回答我，还是先派活？" }, rHeaders),
+  ]);
+  assert.deepEqual([racePlan.status, raceAsk.status].sort(), [200, 409], `只有一个写得进去：${JSON.stringify([racePlan.body, raceAsk.body])}`);
+  const raced = await taskOf(R);
+  if (racePlan.status === 200) {
+    assert.equal(raceAsk.body.error, plan.DISPATCH_PLAN_BLOCKS_ASK);
+    assert.ok(raced.dispatchPlan && raced.question?.startsWith("派出这 1 个任务"), "留下的就是说成功的那一个");
+  } else {
+    assert.equal(racePlan.body.error, plan.QUESTION_BLOCKS_PLAN);
+    assert.equal(raced.question, "先回答我，还是先派活？");
+    assert.equal(raced.dispatchPlan, null);
+  }
+  console.log("✓ 同时提问和摆单：只有一个写进去，另一个明说被谁占了");
 
   // —— 智能体在回合里绕过派活单直接建：没给执行器的交给「同这里」（这条任务自己的那一套）。
   let headers = await inTurn(P);
@@ -211,11 +231,30 @@ try {
   const third = await propose(P, headers, { tasks: PLAN.slice(0, 2), order: "serial" });
   assert.equal(third.status, 200);
   await endTurn(P);
-  const serial = await send("POST", `/tasks/${P}/dispatch-plan/launch`, {
+  const serialInput = {
     planId: third.body.planId, order: "serial",
     items: [0, 1].map((index) => ({ index, target: { agentType: "codex", executorId: null, model: "gpt-5.6", reasoningEffort: null } })),
-  });
+  };
+  // 派出中途写库失败（任务已插、队列那一笔失败）：整笔回滚。按两次都一样：一条不留、单子还在。
+  const kidsBefore = (await kidsOf(P)).length;
+  const launchGroups = async () => (await db.select().from(groups).where(like(groups.name, "派出：%"))).length;
+  const groupsBefore = await launchGroups();
+  await db.run(sql`CREATE TRIGGER dp_fail_queue BEFORE INSERT ON queue_items BEGIN SELECT RAISE(FAIL, 'simulated queue write failure'); END`);
+  for (const attempt of [1, 2]) {
+    const failed = await send("POST", `/tasks/${P}/dispatch-plan/launch`, serialInput);
+    assert.equal(failed.status, 409, `第 ${attempt} 次：报没派出去`);
+    assert.match(String(failed.body.error), /simulated queue write failure/);
+    assert.equal((await kidsOf(P)).length, kidsBefore, `第 ${attempt} 次：一条任务都没留下`);
+    assert.equal(await launchGroups(), groupsBefore, `第 ${attempt} 次：分组也没留下`);
+    const still = (await send("GET", `/tasks/${P}`)).body as unknown as Task;
+    assert.equal(still.dispatchPlan?.id, third.body.planId, `第 ${attempt} 次：单子原样还在，卡还在回复框上`);
+    assert.equal(still.status, "paused");
+  }
+  await db.run(sql`DROP TRIGGER dp_fail_queue`);
+  console.log("✓ 派出中途写库失败：整笔回滚，一条任务一个分组都不留，单子还在；再按不会越建越多");
+  const serial = await send("POST", `/tasks/${P}/dispatch-plan/launch`, serialInput);
   assert.equal(serial.status, 200, JSON.stringify(serial.body));
+  assert.equal((await kidsOf(P)).length, kidsBefore + 2, "修好再按：只建这一批");
   const serialKids = serial.body.tasks as Task[];
   const queue = await db.select().from(queueItems).where(inArray(queueItems.taskId, serialKids.map((kid) => kid.id))).orderBy(asc(queueItems.position));
   assert.deepEqual(queue.map((item) => item.taskId), serialKids.map((kid) => kid.id), "一个接一个：一条队列，按卡上的顺序");

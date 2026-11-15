@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MCP_TOOL_BUDGETS } from "./prompt-budget-mcp.js";
 
 // 舞台根**故意含一个空格**：含空白的 `TMPDIR` 是合法环境（宿主给的临时目录就可能带空格），
 // 而第 2 轮审查正是在这种根下复现出「完整可读的地址被判成没有入口」—— 一条挡住验收的假红。
@@ -121,51 +122,8 @@ const BUDGETS: Record<string, number> = {
   "delivered/invited-first": 2350,
   "delivered/team-lead-first": 3600,
   "delivered/plan-first": 350,
-  // ── MCP 工具清单：每一条都常驻执行者的每一个回合 ─────────────────────────────
-  // 字段说明按 **SDK 真正发出去的那份 JSON Schema** 量（见采样器 `toolTexts`）。
-  "mcp/accept_task": 1750,
-  "mcp/answer_question": 600,
-  "mcp/ask_question": 1750,
-  "mcp/batch_create_tasks": 2300,
-  "mcp/complete_task": 1450,
-  "mcp/create_group": 400,
-  "mcp/create_queue": 220,
-  "mcp/create_task_chain": 2550,
-  "mcp/debate_reply": 1400,
-  "mcp/dispatch": 2100,
-  // 三块判据全文的唯一落脚处（见 PLACEMENT），所以它理应是工具里偏大的一条。
-  "mcp/dispute_review": 3400,
-  "mcp/get_queue": 160,
-  "mcp/get_task": 130,
-  "mcp/list_groups": 360,
-  "mcp/list_monitors": 430,
-  // 2026-11-15 +100（500 → 590 实测）：返回字段里多了 prerequisites（前置到哪一步 / 在不在等），派活的
-  // 智能体靠它看一串任务卡在哪，不再在任务说明里让执行者「没合入就提问等着」。
-  "mcp/list_tasks": 600,
-  "mcp/patch_task": 1100,
-  "mcp/pause_task": 950,
-  // 2026-11-15 新增（2068 实测）：派活单。说明里只留「什么时候用、调完会怎样、别再自己建一遍」；
-  // 字段大半是建任务那几个参数的原有说明（跟 batch_create_tasks 同一份 taskShape）。
-  "mcp/propose_dispatch": 2150,
-  "mcp/queue_insert": 220,
-  "mcp/queue_remove": 190,
-  "mcp/queue_reorder": 270,
-  "mcp/read_task_transcript": 1150,
-  // 2026-11-03 +100（1952 → 2119 实测）：`recurs` 字段说明（`RECURS_FIELD_GUIDE`，≤ 200B），
-  // 审查者声明同类问题承接的唯一入口。用户给的预算是「字段说明 ≤ 200 + 清单旁一句 ≤ 120」。
-  // 2026-11-13 -330（2119 → 1791 实测）：旧口径的 `verificationBasis` 参数随那道闸一起删掉。
-  "mcp/report_stage": 1820,
-  "mcp/requeue_task": 560,
-  "mcp/resolve_group": 530,
-  "mcp/resolve_project": 250,
-  "mcp/run_group": 320,
-  // 2026-11-15 +10：有前置没站稳时回 waiting 的那半句。
-  "mcp/run_task": 350,
-  // 「怎么登记回归」的机制住在这里而不在每轮前言（见 mcp/src/tools/monitor.ts 文件头）：
-  // 一份工具说明换掉每一轮都重发一遍，所以它大得有理由，但仍然要有个顶。
-  "mcp/start_monitor": 5100,
-  "mcp/stop_monitor": 850,
-  "mcp/stop_task": 480,
+  // ── MCP 工具清单（prompt-budget-mcp.ts）：每一条都常驻执行者的每一个回合 ──────────
+  ...MCP_TOOL_BUDGETS,
 };
 
 /** 这几族是**同一批文字的派生视图**，算进总量就是把同一段话数两遍。 */

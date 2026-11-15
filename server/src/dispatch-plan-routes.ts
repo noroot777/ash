@@ -12,7 +12,7 @@ import { tasks } from "./db/schema.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { turnRole } from "./turn-lock.js";
-import { setTaskQuestion } from "./task-question.js";
+import { setTaskQuestion, waitSlotTaken } from "./task-question.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 import { batchPrerequisiteEdges } from "./prerequisite-routes.js";
@@ -60,7 +60,11 @@ api.post("/tasks/:id/dispatch-plan", async (c) => {
     taskId, question, dispatchPlan: plan,
     currentTurn: { token: r.activeTurnToken, directionToken: r.activeDirectionToken },
   });
-  if (!written) return c.json({ error: "当前回合已经结束或已被引导，派活单未写入" }, 409);
+  if (!written) {
+    const latest = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (latest && waitSlotTaken(latest, true)) return c.json({ error: QUESTION_BLOCKS_PLAN }, 409);
+    return c.json({ error: "当前回合已经结束或已被引导，派活单未写入" }, 409);
+  }
   return c.json({ proposed: true, planId: plan.id, tasks: plan.items.length, willSettleAs: "paused" });
 });
 

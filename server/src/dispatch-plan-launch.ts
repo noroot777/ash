@@ -1,18 +1,18 @@
 // 派活单「派出去」那一下：按卡上此刻的样子建任务、挂在这条任务名下、起跑，再把建好的清单作为答复
 // 续上这条任务的会话。
 //
-// 「认领这一问」和「建任务」必须同进同退：认领落空（这一问已经被答掉、被新消息撤下）就一条都不建；
-// 认领到了才建。所以认领塞进 createTasks 的最后一道检查（`beforeInsert`，拿到仓库锁之后、产生任何副作用
-// 之前）。认领之后建任务仍可能失败（开工起点读不出来、前置成环），那时把这一问原样挂回去——卡还在，
-// 用户看得到为什么没派出去，改了再按一次。
-import { and, eq, isNull } from "drizzle-orm";
+// 「认领这一问」和「建任务」同一笔提交：认领那一问、分组、任务、前置、串行队列都写在 createTasks 的同一个
+// 事务里（`atomic`），任何一步失败整笔回滚——单子原样还在，一条任务都没留下，再按一次不会多建；认领落空
+// （这一问已经被答掉、被新消息撤下）同样整笔不落。所以这里**没有**「失败了把单子挂回去」的补偿写：挂回去
+// 得证明这一格还归我管，而事务回滚让单子从头到尾就没被拿走过。开工起点这类仓库准备在事务之前做，失败时
+// 还没认领。事务提交之后的事（读回、广播、续上会话、起跑）出了错，任务已经建好了，照「派出了」报。
+import { inArray } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Task } from "@ash/shared";
 import type { DispatchPlan, DispatchPlanItem, DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import { dispatchDefaultTarget, parseDispatchTarget } from "@ash/shared/dispatch-plan";
 import type { QuestionRecord } from "@ash/shared/questions";
 import { nanoid } from "nanoid";
-import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, groups, queueItems, tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -96,63 +96,50 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
     reply: launchReply(order, launched, dropped, label),
   };
 
-  await db.insert(groups).values({ id: groupId, projectId: task.projectId, name: `派出：${task.title}`.slice(0, 80), mode: groupMode, paused: false, createdAt: now() });
   let created: Task[] = [];
-  let claimed = false;
+  // 事务提交了没有，以库里有没有这批任务为准（提交之后的读回、广播抛错时用它分辨）。
+  const landed = async () => (await db.select({ id: tasks.id }).from(tasks).where(inArray(tasks.id, ids)).catch(() => [])).length > 0;
   let delivered;
   try {
     delivered = await deliverAnswer(c, task, record, {
-      claim: async (claimOnce) => {
+      claim: async (claimWithin) => {
         try {
-          created = await createTasks(rows, groupMode === "serial"
-            ? async () => {
-              const at = now();
-              const queueId = id();
-              await db.insert(queueItems).values(ids.map((taskId, position) => ({ taskId, queueId, position, createdAt: at })));
-            }
-            : undefined, async () => {
-            claimed = await claimOnce();
-            if (!claimed) throw new PlanClaimLost();
-          }, [], prerequisites.edges);
+          created = await createTasks(rows, undefined, undefined, [], prerequisites.edges, {
+            before: async (transaction) => {
+              if (!await claimWithin(transaction)) throw new PlanClaimLost();
+              await transaction.insert(groups).values({
+                id: groupId, projectId: task.projectId, name: `派出：${task.title}`.slice(0, 80), mode: groupMode, paused: false, createdAt: now(),
+              });
+            },
+            after: groupMode === "serial"
+              ? async (transaction) => {
+                const at = now();
+                const queueId = id();
+                await transaction.insert(queueItems).values(ids.map((taskId, position) => ({ taskId, queueId, position, createdAt: at })));
+              }
+              : undefined,
+          });
           return true;
         } catch (error) {
           if (error instanceof PlanClaimLost) return false;
-          if (claimed) await restoreQuestion(task, record);
-          throw error;
+          if (!await landed()) throw error;
+          console.error(`[ash] 派活单已派出，读回新任务时出错 ${task.id}:`, error);
+          return true;
         }
       },
     });
   } catch (error) {
-    await db.delete(groups).where(eq(groups.id, groupId)).catch(() => {});
     const message = error instanceof Error ? error.message : String(error);
-    return { status: 409, body: { error: `没能派出去：${message}` } };
+    if (!await landed()) return { status: 409, body: { error: `没能派出去：${message}` } };
+    // 任务已经建好、认领也落了，是续上会话那一段出的错：照派出了报，组照常起跑。
+    console.error(`[ash] 派活单已派出，续上会话时出错 ${task.id}:`, error);
+    void runGroupInBackground(groupId);
+    return { status: 200, body: { launched: true, groupId, tasks: created, warning: `任务已派出，但续上会话时出错：${message}` } };
   }
   if (delivered.status !== 200) {
-    await db.delete(groups).where(eq(groups.id, groupId)).catch(() => {});
     return { status: 409, body: { error: String(delivered.body.error ?? "派活单已经变了，请刷新后再看") } };
   }
   if (prerequisites.existing.length) await republishPrerequisiteView(prerequisites.existing);
   void runGroupInBackground(groupId);
   return { status: 200, body: { ...delivered.body, launched: true, groupId, tasks: created } };
-}
-
-/**
- * 认领之后没建成：把这一问原样挂回去（条件写：此刻仍是认领后的那一刻，没有别人又动过）。
- * 卡回到回复框上，用户看得到失败原因，改了再按一次。
- */
-async function restoreQuestion(task: TaskRow, record: QuestionRecord): Promise<void> {
-  const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
-  const restored = await db.update(tasks).set({
-    question: task.question, questionOptions: task.questionOptions, questionItems: task.questionItems,
-    dispatchPlan: task.dispatchPlan, questionHistory: task.questionHistory, updatedAt: now(),
-  }).where(and(
-    eq(tasks.id, task.id), isNull(tasks.question),
-    eq(tasks.questionHistory, JSON.stringify([...history, record])),
-  )).returning({ updatedAt: tasks.updatedAt });
-  if (!restored.length) return;
-  const plan = task.dispatchPlan ? JSON.parse(task.dispatchPlan) as DispatchPlan : null;
-  bus.publish({
-    type: "task.question", taskId: task.id, updatedAt: restored[0]!.updatedAt, question: task.question,
-    questionOptions: null, questionItems: null, dispatchPlan: plan,
-  });
 }

@@ -15,7 +15,7 @@ import { checkChoiceQuestion, choiceQuestionRejection } from "./choice-question-
 import { recurrenceBreakerArmed } from "./review-recurrence-gate.js";
 import { turnRole } from "./runs.js";
 import { answerTask } from "./task-answer.js";
-import { setTaskQuestion } from "./task-question.js";
+import { setTaskQuestion, waitSlotTaken } from "./task-question.js";
 import { listDispatchSignals } from "./dispatch-signals.js";
 import { activeDispatchPlan, parseDispatchPlan } from "@ash/shared/dispatch-plan";
 import { DISPATCH_PLAN_BLOCKS_ASK } from "./dispatch-plan.js";
@@ -134,7 +134,11 @@ api.post("/tasks/:id/ask", async (c) => {
       directionToken: r.activeDirectionToken,
     } }),
   });
-  if (!asked) return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
+  if (!asked) {
+    const latest = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (latest && waitSlotTaken(latest, false)) return c.json({ error: DISPATCH_PLAN_BLOCKS_ASK }, 409);
+    return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
+  }
   return c.json({
     asked: true,
     options: opts,

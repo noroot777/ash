@@ -643,26 +643,6 @@ export const teamInbound = sqliteTable(
   (t) => ({ taskIdx: index("team_inbound_task_idx").on(t.taskId, t.seq) }),
 );
 
-// 供应商(relay), system-level. 挂给执行器用:启动 CLI 时注入 base_url + key,
-// 顶掉 CLI 自己的官方登录账号。ash 自己不再直连 HTTP 调模型。
-export const llmProviders = sqliteTable("llm_providers", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  protocol: text("protocol").notNull().default("openai"), // anthropic | openai
-  baseUrl: text("base_url").notNull(), // 根地址,不含 /v1(各处按需自行补)
-  apiKey: text("api_key").notNull().default(""), // 本机存储,GET 不回传明文
-  model: text("model").notNull().default(""),
-  protocolConversionEnabled: integer("protocol_conversion_enabled", { mode: "boolean" }).notNull().default(false),
-  // 选模型面板的候选来源:'api'=每次现调 /models;'pinned'=只用 pinned_models(json string[])。
-  modelListMode: text("model_list_mode").notNull().default("api"),
-  pinnedModels: text("pinned_models").notNull().default("[]"),
-  // Anthropic 供应商逐模型声明 1M；存干净模型名，运行时再加 [1m] 并按需走本地转发。
-  context1mModels: text("context_1m_models").notNull().default("[]"),
-  // 多人模式:**不做共享池**,每人自带 API key(§八)。
-  ownerUserId: text("owner_user_id"),
-  createdAt: text("created_at").notNull(),
-});
-
 // 上传附件的**归属登记**(§八)。文件本身躺在 `data/uploads` 里 —— 那是个扁平目录,
 // 文件名就是全部信息,所以「谁能读它」只能靠这张表回答(判据在 `uploads.ts`)。
 export const uploads = sqliteTable("uploads", {
@@ -690,6 +670,8 @@ export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
   targetBranch: text("target_branch").notNull(),
 });
 
+// 供应商表住在 schema-llm-providers.ts（本文件 700 行闸）。这里转发，导入路径不变。
+export { llmProviders } from "./schema-llm-providers.js";
 // 推进意图表住在 schema-queue-advance.ts(本文件 700 行闸)。这里转发,导入路径不变。
 export { queueAdvanceIntents } from "./schema-queue-advance.js";
 

@@ -288,6 +288,8 @@ async function snapshotExecutor(row: NewTaskRow): Promise<string | null> {
 // 等锁可能等很久，等着的这段时间里委派来源可能已经不作数了（聊天派生的任务：群聊被删了），
 // 而 createTasks 一旦越过这里就只管把行插进去。抛出即取消创建，此时还没有分支计划、没有
 // 插入，无需回滚。放在这里而不是调用方 `await createTasks()` 之前——那太早，锁还没拿到。
+type TaskTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export async function createTasks(
   rows: NewTaskRow[],
   afterInsert?: () => Promise<void>,
@@ -296,6 +298,11 @@ export async function createTasks(
   alsoAdmit: (string | null | undefined)[] = [],
   /** 这一批里逐条写的前置（下游可以是这一批里的，前置也可以是已有的任务）。不成立就整批不建。 */
   prerequisites: PrerequisiteEdge[] = [],
+  /**
+   * 要跟这批任务同一笔提交的写（派活单：认领那一问、分组、队列，dispatch-plan-launch.ts）。`before` 在插任务之前、
+   * `after` 在之后，都在同一个事务里；任一步抛错整笔回滚，一条都不留。只能用传进来的事务写，别碰根 `db`。
+   */
+  atomic?: { before?: (transaction: TaskTransaction) => Promise<void>; after?: (transaction: TaskTransaction) => Promise<void> },
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
   for (const row of rows) {
@@ -368,8 +375,17 @@ export async function createTasks(
       // 判环与落边在整张图上排队（prerequisite-store.ts `withPrerequisiteGraph`）；不带前置的照旧直接落。
       const land = async () => {
         await assertPrerequisiteEdges(prerequisites, normalizedRows.map(edgeTaskOf));
-        await db.insert(tasks).values(normalizedRows);
-        await insertPrerequisiteEdges(prerequisites);
+        if (!atomic) {
+          await db.insert(tasks).values(normalizedRows);
+          await insertPrerequisiteEdges(prerequisites);
+          return;
+        }
+        await db.transaction(async (transaction) => {
+          await atomic.before?.(transaction);
+          await transaction.insert(tasks).values(normalizedRows);
+          await insertPrerequisiteEdges(prerequisites, transaction);
+          await atomic.after?.(transaction);
+        }, { behavior: "immediate" });
       };
       await (prerequisites.length ? withPrerequisiteGraph(land) : land());
     } catch (error) {

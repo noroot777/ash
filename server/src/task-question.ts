@@ -8,7 +8,7 @@
 // 答复一律走既有的 POST /tasks/:id/answer：清空提问，把答复原样送进这个任务的 CLI
 // 会话。所以工作流的提问也**不需要另开一条决策链路** —— 用户答「重做一次，先修
 // 类型错误」，干活的 agent 就带着这句话接着干；答「先这样，我自己来」，它就停在那儿。
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@ash/shared";
 import type { AgentType, QuestionItem, SessionRole } from "@ash/shared";
 import type { DispatchPlan } from "@ash/shared/dispatch-plan";
@@ -33,6 +33,21 @@ export interface AskInput {
   currentTurn?: { token: string | null; directionToken?: string | null };
 }
 
+/**
+ * 同一时刻只等用户一样东西：摆派活单时不能有普通提问在等（自己先前摆的那张可以换），智能体提问时不能
+ * 有派活单在等。判在这一笔条件写里——两条路各自先读后写拦不住同一回合里并发的那一对（两边都会说成功、
+ * 后写的悄悄盖掉先写的）。没写进去时由调用方重读一遍，按 `waitSlotTaken` 说清是哪一样占着。
+ */
+function waitSlotFree(input: AskInput) {
+  if (input.dispatchPlan) return or(isNull(tasks.question), isNotNull(tasks.dispatchPlan));
+  return input.currentTurn ? or(isNull(tasks.question), isNull(tasks.dispatchPlan)) : undefined;
+}
+
+/** 没写进去是不是因为那一格被另一样占着（调用方拿写失败后重读的那一行来问）。 */
+export function waitSlotTaken(row: { question: string | null; dispatchPlan: string | null }, proposingPlan: boolean): boolean {
+  return proposingPlan ? !!row.question && !row.dispatchPlan : !!row.question && !!row.dispatchPlan;
+}
+
 /** 写库 + 广播。校验（空问题、超限）由调用方做，这里只负责落地和发事件。 */
 export async function setTaskQuestion(input: AskInput): Promise<boolean> {
   const { taskId, question, options = [], items = null } = input;
@@ -41,6 +56,7 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
   const where = currentTurn
     ? and(
         eq(tasks.id, taskId),
+        waitSlotFree(input),
         eq(tasks.status, "running"),
         currentTurn.token === null
           ? isNull(tasks.activeTurnToken)
@@ -51,7 +67,7 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
             ? isNull(tasks.activeDirectionToken)
             : eq(tasks.activeDirectionToken, currentTurn.directionToken),
       )
-    : eq(tasks.id, taskId);
+    : and(eq(tasks.id, taskId), waitSlotFree(input));
   const updated = await withReviewAuthority(input.reviewAuthority, async (transaction) => {
     const updated = await transaction.update(tasks)
       .set({
