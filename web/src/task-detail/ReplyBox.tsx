@@ -67,6 +67,7 @@ export function ReplyBox({
   tasks = [],
   override,
   onAnswer,
+  onOpenTask,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -127,6 +128,8 @@ export function ReplyBox({
   override?: ReplyOverride;
   /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
   onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+  /** 托盘里「某某名下已全部停下」点过去打开那一条。 */
+  onOpenTask?: (taskId: string) => void;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -539,6 +542,7 @@ export function ReplyBox({
         onCancel={(messageId) => void scheduled.cancel(messageId)}
         tasks={tasks}
         onSendNow={(messageId) => void scheduled.sendNow(messageId)}
+        onOpenTask={onOpenTask}
       />
       {!covering && <UploadAttachmentList
         attachments={uploads.attachments}

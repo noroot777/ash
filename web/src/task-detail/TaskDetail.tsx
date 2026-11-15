@@ -586,6 +586,7 @@ export function TaskDetail({
                           : `以后这个任务交给 ${run}`);
                       }}
                       onSend={replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })}
+                      onOpenTask={onOpenTask}
                       override={ruling}
                       command={derivationAllowed ? {
                         matches: isTaskDerivationCommand,
