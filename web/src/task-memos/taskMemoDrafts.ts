@@ -43,11 +43,21 @@ const keyOf = (slot: MemoSlot) => (slot === null ? "new" : `memo:${slot}`);
 /** 一份草稿：正文 + 贴进来的附件路径。 */
 export type MemoDraft = { text: string; attachments: readonly string[] };
 
+/**
+ * 编辑中的那一份，带着**进编辑态那一刻**的内容（`base`）。保存时「改了哪一样」只对着它判：
+ * 拿列表里的那条备忘比是错的 —— 编辑途中后台重读会把它换成别处刚存上的新版本，于是没动
+ * 过的附件被判成「删掉了」，发出去把别处刚加的图撤掉（第 2 轮审查 F1）。
+ */
+export type MemoEditDraft = MemoDraft & { base: MemoDraft };
+
 /** 一张没传上去的。留着原文件，重试不用再选一遍。 */
 export type MemoUploadFailure = { id: string; file: File; message: string };
 
-/** 一格草稿 + 版本号。正文或附件每改一次版本 +1，提交时捕获、收尾时比对。 */
-type DraftSlot = MemoDraft & { rev: number };
+/**
+ * 一格草稿 + 版本号 + 基线。正文或附件每改一次版本 +1，提交时捕获、收尾时比对。基线在这一格
+ * 打开时定下，之后的改动（打字、上传落地、摘图）都不动它，收起时跟着整格一起没。
+ */
+type DraftSlot = MemoDraft & { rev: number; base: MemoDraft };
 
 type Entry = {
   composing: DraftSlot | null;
@@ -120,8 +130,10 @@ export function setMemoDraft(taskId: string, slot: MemoSlot, draft: MemoDraft | 
     for (const upload of current.uploads[keyOf(slot)] ?? []) upload.abort();
     return void set(taskId, withUploads(withSlot(current, slot, null), slot, []));
   }
-  const rev = (slotOf(current, slot)?.rev ?? 0) + 1;
-  set(taskId, withSlot(current, slot, { text: draft.text, attachments: draft.attachments, rev }));
+  const before = slotOf(current, slot);
+  const rev = (before?.rev ?? 0) + 1;
+  const base = before?.base ?? { text: draft.text, attachments: draft.attachments };
+  set(taskId, withSlot(current, slot, { text: draft.text, attachments: draft.attachments, rev, base }));
 }
 
 /** 只改这一格的附件（上传落地、摘掉一张）。这一格已经收起就什么都不做。 */
@@ -198,7 +210,7 @@ export type TaskMemoDrafts = {
   /** 新建那条的草稿。null = composer 没开；正文 `""` = 开着但还没打字。 */
   composing: MemoDraft | null;
   /** memoId → 这条正在编辑的草稿。不在表里 = 这条是读态。 */
-  edits: Readonly<Record<string, MemoDraft>>;
+  edits: Readonly<Record<string, MemoEditDraft>>;
   /** 有任何一发写在飞 —— 面板据此整体禁用（口径同原来的 busy，只是寿命跨卸载）。 */
   busy: boolean;
   /** 这个位置上有写在飞。 */
@@ -210,6 +222,7 @@ export type TaskMemoDrafts = {
 };
 
 const draftOf = ({ text, attachments }: DraftSlot): MemoDraft => ({ text, attachments });
+const editOf = (slot: DraftSlot): MemoEditDraft => ({ ...draftOf(slot), base: slot.base });
 
 export function useTaskMemoDrafts(taskId: string): TaskMemoDrafts {
   const entry = useSyncExternalStore(
@@ -228,7 +241,7 @@ export function useTaskMemoDrafts(taskId: string): TaskMemoDrafts {
   // 版本号是内部记账，不往组件里漏：它们只要正文和附件。
   return useMemo(() => ({
     composing: entry.composing ? draftOf(entry.composing) : null,
-    edits: Object.fromEntries(Object.entries(entry.edits).map(([memoId, slot]) => [memoId, draftOf(slot)])),
+    edits: Object.fromEntries(Object.entries(entry.edits).map(([memoId, slot]) => [memoId, editOf(slot)])),
     busy: entry.pending.size > 0,
     pendingOn: (slot: MemoSlot) => entry.pending.has(keyOf(slot)),
     uploadsOn: (slot: MemoSlot) => entry.uploads[keyOf(slot)] ?? NO_UPLOADS,

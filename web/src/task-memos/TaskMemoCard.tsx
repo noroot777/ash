@@ -13,7 +13,7 @@ import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.
 import { attachmentView, formatInstant } from "../task-detail/utils.ts";
 import { MemoEditor } from "./MemoEditor.tsx";
 import type { TaskMemoContent } from "../lib/apiTaskMemos.ts";
-import type { MemoDraft } from "./taskMemoDrafts.ts";
+import type { MemoDraft, MemoEditDraft } from "./taskMemoDrafts.ts";
 
 /** 折起来时露几行。再少就看不出这条在说什么，再多就等于没折。 */
 const CLAMP_LINES = 7;
@@ -28,7 +28,7 @@ export function TaskMemoCard({ taskId, memo, busy, highlight, draft, onDraft, on
    * 这条的编辑草稿；null = 读态。**编辑态是受控的**，state 住在 task-memos/taskMemoDrafts.ts
    * —— 放在这里的话，面板被自动切走（任务 status 一变就会）时草稿跟着卸载一起没。
    */
-  draft: MemoDraft | null;
+  draft: MemoEditDraft | null;
   onDraft: (next: MemoDraft | null) => void;
   /**
    * 存这条的新正文。**退出编辑态不由这里决定** —— 草稿由共享层在写入收尾时按版本清掉
@@ -70,12 +70,14 @@ export function TaskMemoCard({ taskId, memo, busy, highlight, draft, onDraft, on
     const text = draft.text.trim();
     const attachments = [...draft.attachments];
     if (!text && !attachments.length) return;
-    const same = attachments.length === memo.attachments.length
-      && attachments.every((path, at) => path === memo.attachments[at]);
-    if (text === memo.body && same) { onDraft(null); return; }
-    // 只发改了的那一样：没动的那一列交给服务端此刻的值，别拿进编辑态时的旧快照把别处
-    // 刚存上的改动盖回去（第 1 轮审查 F1）。
-    await onSave({ ...(text !== memo.body ? { body: text } : {}), ...(same ? {} : { attachments }) });
+    // 「改了哪一样」对着进编辑态那一刻的基线判，不对着 `memo`（编辑途中它会被后台重读换掉，
+    // 见 taskMemoDrafts.ts 的 MemoEditDraft）。只发改了的那一样，没动的交给服务端此刻的值。
+    const { base } = draft;
+    const textChanged = text !== base.text.trim();
+    const filesChanged = attachments.length !== base.attachments.length
+      || attachments.some((path, at) => path !== base.attachments[at]);
+    if (!textChanged && !filesChanged) { onDraft(null); return; }
+    await onSave({ ...(textChanged ? { body: text } : {}), ...(filesChanged ? { attachments } : {}) });
   };
 
   const edited = memo.updatedAt !== memo.createdAt;
