@@ -11,7 +11,7 @@ import { enqueueMessage, pendingMessageRow, publishPendingMessages, deliverPendi
 import { claimQueueSeat } from "./queue-seat.js";
 import { askingAgentFor } from "./task-question.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { claimQuestionAnswer, claimQuestionAnswerWithin, prepareQuestionRecord, type QuestionClaim } from "./task-question-record.js";
+import { claimQuestionAnswer, prepareQuestionRecord } from "./task-question-record.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
@@ -62,24 +62,29 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
 }
 
 /**
- * 认领这一问并把答复送进提问的那条会话（普通答复和派活单「派出去」共用）。
- *
- * `claim` 给了就由它来包住认领那一下：派活单要让「认领」和「建任务」同一笔提交（认领落空就一条都不建，
- * 建不成认领也不算数，见 dispatch-plan-launch.ts），所以交给它的是「在你的事务里认领」，它自己回报认没认到。
+ * 这一问的答复该送给谁、算不算任务的执行回合（普通答复和派活单「派出去」共用，后者见 dispatch-plan-launch.ts）。
+ * `sideways` 见 deliverAnswer 里那段说明：不是任务执行的答复不占队列位。
  */
-export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionRecord, options: {
-  attachments?: string[];
-  via?: string;
-  claim?: (claimWithin: (transaction: ConclusionTransaction) => Promise<boolean>) => Promise<boolean>;
-} = {}): Promise<{ status: 200 | 409; body: Record<string, unknown> }> {
-  const taskId = task.id;
-  const attachments = options.attachments?.length ? { attachments: options.attachments } : {};
+export async function answerRouteFor(task: TaskRow) {
   const origin = await db.transaction((transaction) => questionWaitOrigin(transaction, task), { behavior: "immediate" });
-  const asker = task.mode === "single" ? await askingAgentFor(taskId, origin.kind === "ordinary" ? "single" : undefined) : null;
-  const reviewRoute = origin.kind === "review" && asker?.role === "reviewer" ? await freeReviewResumeOptions(taskId) : null;
+  const asker = task.mode === "single" ? await askingAgentFor(task.id, origin.kind === "ordinary" ? "single" : undefined) : null;
+  const reviewRoute = origin.kind === "review" && asker?.role === "reviewer" ? await freeReviewResumeOptions(task.id) : null;
   const route = reviewRoute ?? (asker && asker.agent !== task.agentType
     ? { agent: asker.agent, executorId: asker.executorId, model: null, reasoningEffort: null }
     : {});
+  const terminal = task.status === "done" || task.status === "failed" || task.status === "canceled";
+  const sideways = terminal || (origin.kind !== "ordinary" && (asker?.role === "reviewer" || task.verifyRound !== null));
+  return { origin, route, sideways };
+}
+
+/** 认领这一问并把答复送进提问的那条会话。 */
+export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionRecord, options: {
+  attachments?: string[];
+  via?: string;
+} = {}): Promise<{ status: 200 | 409; body: Record<string, unknown> }> {
+  const taskId = task.id;
+  const attachments = options.attachments?.length ? { attachments: options.attachments } : {};
+  const { route, sideways } = await answerRouteFor(task);
   const answerText = record.reply;
   // 这条答复的身份跟着原话走（排队的那一路在 answer_id 列上），落进会话那条用户回合：删除消息与
   // 问答卡都按它认记录，不按原文猜（两次都答「可以」时原文一模一样）。
@@ -91,18 +96,8 @@ export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionR
     reviewQueued = await queueReviewAnswer(transaction, task,
       pendingMessageRow({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id }));
   };
-  let within: QuestionClaim | null = null;
-  const claimWithin = async (transaction: ConclusionTransaction) => {
-    within = await claimQuestionAnswerWithin(transaction, task, record, onClaim, options.via);
-    return !!within;
-  };
   try {
-    const claimed = options.claim
-      ? await options.claim(claimWithin)
-      : await claimQuestionAnswer(task, record, onClaim, options.via);
-    // 外层事务已经提交（claim 回报认到了）才去通知派它的那条任务。
-    if (claimed) (within as QuestionClaim | null)?.announce();
-    if (!claimed) {
+    if (!await claimQuestionAnswer(task, record, onClaim, options.via)) {
       return { status: 409, body: { error: "问题已更新或已被答复，本次未投递，请刷新后查看" } };
     }
   } catch (error) {
@@ -136,8 +131,6 @@ export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionR
   // 的执行回合,停止会把原任务结算成 canceled、没交卷会结算成 failed(第 9 轮审查:队列中已完成
   // 任务答复审查提问后 stop,任务从 done 变 canceled);同队有人在跑时则认领失败、答复暂存成
   // 执行型,要等整条队列跑完(2026-11-13 现场)。不在队列的终态任务认领直接放行,从没出过事。
-  const terminal = task.status === "done" || task.status === "failed" || task.status === "canceled";
-  const sideways = terminal || (origin.kind !== "ordinary" && (asker?.role === "reviewer" || task.verifyRound !== null));
   if (task.mode === "single" && !sideways) {
     const claim = await claimQueueSeat(taskId);
     if (!claim.ok) {

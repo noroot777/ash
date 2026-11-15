@@ -7,6 +7,8 @@
 //     建任务的不是智能体（来源记的是用户），续上会话的那段答复里有建好的任务号、标题、交给了谁；
 //   · 派过一次的单子再按一次、拿着旧单子的号来按，都不再建；
 //   · 派出中途写库失败（队列那一笔）：整笔回滚，一条任务、一个分组都不留，单子原样还在；再按还是那样，修好再按只建一批；
+//   · 建好之后的「让人看见」出错（刷新前置视图写库失败）：照派出了报，那一组照常起跑，答复照常送进会话；
+//   · 「欠一次起跑」跟建任务同一笔落库：进程在起跑之前没了，重启补起（recoverDispatchLaunchStarts）；
 //   · 「派出去的活交给谁」：派活单上没指明的那几条默认交给它，智能体绕过派活单直接建任务没给执行器时也交给它。
 //
 // 跑的是 PATH 上的假 claude（scheduled-messages-fixture.ts），不起真实 CLI。
@@ -30,7 +32,7 @@ process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
 process.env.PATH = `${installFakeClaude(root)}${delimiter}${originalPath ?? ""}`;
 
-const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan] = await Promise.all([
+const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan, launch] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/runs.js"),
@@ -40,9 +42,10 @@ const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, q
   import("../src/task-question.js"),
   import("../src/settle-status.js"),
   import("../src/dispatch-plan.js"),
+  import("../src/dispatch-plan-launch.js"),
 ]);
 const { DISPATCH_PLAN_RETURNED } = await import("../src/task-question-record.js");
-const { groups, projects, queueItems, sessions, tasks } = schema;
+const { dispatchLaunchStarts, groups, projects, queueItems, sessions, taskPrerequisiteLaunches, tasks } = schema;
 await ensureSchema();
 const api = new Hono();
 runRoutes.mountTaskRunRoutes(api);
@@ -260,8 +263,45 @@ try {
   assert.deepEqual(queue.map((item) => item.taskId), serialKids.map((kid) => kid.id), "一个接一个：一条队列，按卡上的顺序");
   const serialRecord = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { answer: string }[]).at(-1)!;
   assert.equal(serialRecord.answer, "派出这 2 个任务\n一个接一个", "跟单子一样就只说一个接一个");
+  await waitFor(() => delivered().includes(serialKids[1]!.id), "续上的会话里没有建好的任务清单");
   await waitFor(() => settled(P), "续上的那一轮没有结算");
   console.log("✓ 一个接一个：一条队列；没改动时气泡里只有派出几个和怎么排");
+
+  // —— 建好之后的「让人看见」出错：刷新已有前置的视图那一笔写库失败。照派出了报，起跑和答复都不受它挡。
+  const PRE = "dp-prereq";
+  await db.insert(tasks).values(row(PRE, "done", { stage: "accepted" }));
+  headers = await inTurn(P);
+  const fourth = await propose(P, headers, { tasks: [{ title: "接在已有任务后面", body: "提交后出错也照派(dp-post)", note: "", prerequisites: [PRE] }] });
+  assert.equal(fourth.status, 200, JSON.stringify(fourth.body));
+  await endTurn(P);
+  await db.run(sql`CREATE TRIGGER dp_fail_view BEFORE INSERT ON task_background_revisions WHEN NEW.task_id = 'dp-prereq' BEGIN SELECT RAISE(FAIL, 'simulated background revision write failure'); END`);
+  const post = await send("POST", `/tasks/${P}/dispatch-plan/launch`, {
+    planId: fourth.body.planId, order: "serial", items: [{ index: 0, target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null } }],
+  });
+  assert.equal(post.status, 200, `建好了就是派出了：${JSON.stringify(post.body)}`);
+  const postKid = (post.body.tasks as { id: string; title: string }[])[0]!;
+  assert.equal(postKid.title, "接在已有任务后面", "回给页面的清单就是建好的那几条，不因读回出错变成空的");
+  await waitFor(() => delivered().includes(postKid.id), "答复没有送进会话");
+  // 起这一组 = 那条去开工：要么已经跑起来，要么开工请求挂在前置上（前置站稳就起，prerequisite-gate.ts）。
+  await waitFor(async () => (await taskOf(postKid.id)).status !== "backlog"
+    || !!(await db.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, postKid.id))).at(0)?.requestedAt,
+  "那一组没有起跑");
+  assert.equal((await taskOf(P)).question, null, "单子收走了");
+  await db.run(sql`DROP TRIGGER dp_fail_view`);
+  await waitFor(() => settled(P), "续上的那一轮没有结算");
+  console.log("✓ 建好之后刷新视图出错：照派出了报，那一组照常起跑、答复送进会话");
+
+  // —— 欠着的起跑扛得住重启：上一个进程派出了（任务、记录都落了）就没了，重启时补起。
+  const ORPHAN = "dp-orphan";
+  await db.insert(groups).values({ id: "dp-orphan-group", projectId, name: "派出：没来得及起跑", mode: "parallel", paused: false, createdAt: at });
+  await db.insert(tasks).values(row(ORPHAN, "backlog", { groupId: "dp-orphan-group", dispatchedBy: P }));
+  await db.insert(dispatchLaunchStarts).values({ groupId: "dp-orphan-group", taskId: P, createdAt: at });
+  await launch.recoverDispatchLaunchStarts();
+  await waitFor(async () => (await taskOf(ORPHAN)).status !== "backlog", "重启后没有补起那一组");
+  await waitFor(() => settled(ORPHAN), "补起的那条没有结算");
+  await waitFor(async () => !(await db.select().from(dispatchLaunchStarts).where(eq(dispatchLaunchStarts.groupId, "dp-orphan-group"))).length,
+    "那一组那一趟跑完之后记录没有销掉");
+  console.log("✓ 欠着的起跑扛得住重启：补起之后销账");
 } catch (error) {
   failure = error;
   console.error(error);

@@ -302,7 +302,12 @@ export async function createTasks(
    * 要跟这批任务同一笔提交的写（派活单：认领那一问、分组、队列，dispatch-plan-launch.ts）。`before` 在插任务之前、
    * `after` 在之后，都在同一个事务里；任一步抛错整笔回滚，一条都不留。只能用传进来的事务写，别碰根 `db`。
    */
-  atomic?: { before?: (transaction: TaskTransaction) => Promise<void>; after?: (transaction: TaskTransaction) => Promise<void> },
+  atomic?: {
+    before?: (transaction: TaskTransaction) => Promise<void>;
+    after?: (transaction: TaskTransaction) => Promise<void>;
+    /** 那一笔提交成功的那一刻（之后的读回、广播再抛错，调用方据此知道任务已经建好了）。 */
+    onCommitted?: () => void;
+  },
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
   for (const row of rows) {
@@ -386,6 +391,7 @@ export async function createTasks(
           await insertPrerequisiteEdges(prerequisites, transaction);
           await atomic.after?.(transaction);
         }, { behavior: "immediate" });
+        atomic.onCommitted?.();
       };
       await (prerequisites.length ? withPrerequisiteGraph(land) : land());
     } catch (error) {

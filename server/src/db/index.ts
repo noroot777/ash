@@ -12,6 +12,7 @@ import { ensureAcceptGateSchema } from "./schema-accept-gate.js";
 import { ensureTaskBackgroundSchema } from "./schema-task-background.js";
 import { ensurePrerequisiteSchema } from "./schema-prerequisites.js";
 import { ensureDispatchSignalSchema } from "./schema-dispatch-signals.js";
+import { ensureDispatchLaunchSchema } from "./schema-dispatch-launch.js";
 import { ensureRegressionChecksSchema } from "./schema-regression-checks.js";
 import { ensureRegressionEvidenceSchema } from "./schema-regression-evidence.js";
 import { ensureImSchema } from "./schema-im.js";
@@ -398,6 +399,7 @@ export async function ensureSchema() {
   await ensureAcceptGateSchema(client);
   await ensureTaskBackgroundSchema(client);
   await ensureDispatchSignalSchema(client);
+  await ensureDispatchLaunchSchema(client);
   await ensureRegressionChecksSchema(client);
   await ensureRegressionEvidenceSchema(client);
   await ensureImSchema(client);
