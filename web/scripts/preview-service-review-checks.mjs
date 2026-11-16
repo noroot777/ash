@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { resizeViewport } from "./wait-until.mjs";
 
-// 预览日志在「更多」里（docs/ui-ux-audit reply-3）：入口是那颗「更多」，点开再点「预览日志」。
+// 预览日志在「更多」里：入口是那颗「更多」，点开再点「预览日志」。
 const MORE = ".free-workflow-toolbar .ui-menu-anchor > button";
 const openPreviewLog = async (page) => {
   await page.locator(MORE).click();

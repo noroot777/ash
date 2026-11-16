@@ -265,7 +265,7 @@ const withBlankTail = tracedSegments(
 assert.ok(withBlankTail.length >= 1);
 assert.equal(awaitingUpstream(withBlankTail), true, "等待那一位落到了折叠条读不到的段上");
 
-// ── 事后点开：紧挨着的几次重试并成一行，用最后一次的说法、带上一共几次（docs/ui-ux-audit run-9）──
+// ── 事后点开：紧挨着的几次重试并成一行，用最后一次的说法、带上一共几次──
 const RETRY_2 = "上游返回 502 server_error，正在重试（第 2/10 次，等 1.2 秒）";
 const RETRY_3 = "上游返回 502 server_error，正在重试（第 3/10 次，等 2.4 秒）";
 const retries = renderToStaticMarkup(<ExecutionDetails running={false} events={[

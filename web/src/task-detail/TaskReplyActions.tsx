@@ -4,7 +4,7 @@ import { PaperPlaneTilt } from "@phosphor-icons/react";
 import type { Notify } from "../lib/notify.ts";
 import { useFreeWorkflowActions } from "../free-workflow/useFreeWorkflowActions.tsx";
 
-// 回复框里那一行左边的动作（docs/ui-ux-audit reply-3）：再审、打开预览、接力到…在明面，
+// 回复框里那一行左边的动作：再审、打开预览、接力到…在明面，
 // 预览日志进「更多」。共同点是「任务正跑着也得看得见、点得动」：自由工作流的派审/预览是
 // 这样，把整个任务接力到另一台机器也是这样——真要接力时任务多半正卡着，藏进标题栏的溢出
 // 菜单里等于要用户先猜它在哪儿（接力对话框自己会先把任务停下来）。

@@ -1,11 +1,11 @@
-// 多人模式的共享类型与纯函数（docs/multi-user-plan.md）。
+// 多人模式的共享类型与纯函数。
 //
 // 纯类型 + 几个两端都要用的判据函数(目录名 slug 校验、角色比较)。运行时函数只能走
 // 子路径 `@ash/shared/multiuser` 引用 —— index.ts 不能转发运行时值(服务端直跑 .ts 源码)。
 
 /**
  * 实例模式。`single` = 自用,一行鉴权都不拦,与本功能上线前完全一致;
- * `multi` = 多人,闸生效。**只能单向转换**(见 docs/multi-user-plan.md §二)。
+ * `multi` = 多人,闸生效。**只能单向转换**。
  */
 export type InstanceMode = "single" | "multi";
 

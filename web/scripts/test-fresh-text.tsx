@@ -1,4 +1,4 @@
-// 放字（docs/ui-ux-audit run-4）：新放出来的字一段一颗 span，刚放的带淡入、早放的是空壳。跑：npm -w web run test:fresh-text
+// 放字：新放出来的字一段一颗 span，刚放的带淡入、早放的是空壳。跑：npm -w web run test:fresh-text
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
