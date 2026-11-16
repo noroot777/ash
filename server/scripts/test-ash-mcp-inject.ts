@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import { ASH_MCP_TOOLS, ASH_MCP_TURN_EXITS } from "@ash/shared/mcp";
+import { turnFingerprint } from "@ash/shared/turn-fingerprint";
 import { IS_WINDOWS } from "../src/platform.js";
 import { REPO_DIR } from "../src/paths.js";
 import { releaseTmpDb } from "./tmp-db.js";
@@ -48,19 +49,20 @@ try {
   {
     const dir = join(root, "claude-mcp");
     const entry = { command: "node", args: ["/code/mcp/dist/index.js"], env: { ASH_URL: "http://127.0.0.1:4317" } };
-    const first = claudeAshMcpInjection(dir, entry);
+    const first = claudeAshMcpInjection(undefined, { dir, entry });
     assert.equal(first.failure, null);
     assert.equal(first.args[0], "--mcp-config");
     const body = JSON.parse(readFileSync(first.args[1]!, "utf8"));
-    assert.deepEqual(body, { mcpServers: { ash: { type: "stdio", ...entry } } }, "文件里就是这份 ash 的那一条");
-    assert.deepEqual(claudeAshMcpInjection(dir, entry), first, "同内容复用同一个文件");
-    const other = claudeAshMcpInjection(dir, { ...entry, env: { ASH_URL: "http://127.0.0.1:14999" } });
+    assert.deepEqual(body, { mcpServers: { ash: { type: "stdio", ...entry, env: { ...entry.env, ASH_TURN_FINGERPRINT: "none" } } } },
+      "文件里就是这份 ash 的那一条(非任务回合写明无身份,回合指纹那一段见 test-turn-fingerprint.ts)");
+    assert.deepEqual(claudeAshMcpInjection(undefined, { dir, entry }), first, "同内容复用同一个文件");
+    const other = claudeAshMcpInjection(undefined, { dir, entry: { ...entry, env: { ASH_URL: "http://127.0.0.1:14999" } } });
     assert.notEqual(other.args[1], first.args[1], "另一个端口的实例各写各的,谁也盖不掉谁");
     assert.equal(JSON.parse(readFileSync(first.args[1]!, "utf8")).mcpServers.ash.env.ASH_URL, "http://127.0.0.1:4317");
     // 写不出来(目录被同名文件占住):结果只属于这一次,之前那次照旧是好的(第 2 轮审查发现 3)
     const blocked = join(root, "blocked");
     writeFileSync(blocked, "");
-    const failed = claudeAshMcpInjection(join(blocked, "sub"), entry);
+    const failed = claudeAshMcpInjection(undefined, { dir: join(blocked, "sub"), entry });
     assert.deepEqual(failed.args, [], "写不出就不注入");
     assert.match(failed.failure ?? "", /写不出注入文件/);
     assert.equal(first.failure, null, "别的回合写失败,不改这一回合的结果");
@@ -174,12 +176,16 @@ process.stdin.on("end", () => process.exit(0));
       args: ["D:\\ai_workspace\\ash\\mcp\\dist\\index.js"],
       env: { ASH_URL: "http://127.0.0.1:4317" },
     };
-    const [flag, value] = codexAshMcpArgs(["ASH_TASK_ID", "ASH_TURN_TOKEN"], winEntry);
+    const turn = { ASH_TASK_ID: "task-1", ASH_TURN_TOKEN: "turn-1" };
+    const fingerprint = turnFingerprint({ taskId: "task-1", turnToken: "turn-1", directionToken: "" });
+    const [flag, value] = codexAshMcpArgs(turn, winEntry);
     assert.equal(flag, "-c");
     assert.equal(value, 'mcp_servers.ash={command="C:\\\\Program Files\\\\nodejs\\\\node.exe",'
-      + 'args=["D:\\\\ai_workspace\\\\ash\\\\mcp\\\\dist\\\\index.js"],env={ASH_URL="http://127.0.0.1:4317"},'
+      + 'args=["D:\\\\ai_workspace\\\\ash\\\\mcp\\\\dist\\\\index.js"],'
+      + `env={ASH_URL="http://127.0.0.1:4317",ASH_TURN_FINGERPRINT="${fingerprint}"},`
       + 'enabled=true,env_vars=["ASH_TASK_ID","ASH_TURN_TOKEN"]}');
-    assert.ok(!codexAshMcpArgs([], winEntry)[1]!.includes("env_vars"), "没有回合身份(非任务回合)就不写 env_vars");
+    assert.ok(!value!.includes("turn-1"), "令牌值不进 argv,进的只是它的单向摘要");
+    assert.ok(!codexAshMcpArgs({}, winEntry)[1]!.includes("env_vars"), "没有回合身份(非任务回合)就不写 env_vars");
     const plan = resolveLaunch("codex", ["-c", value!, "mcp", "list", "--json"]);
     if (plan) {
       const home = join(root, "codex-home");
@@ -195,7 +201,7 @@ process.stdin.on("end", () => process.exit(0));
       assert.ok(listed?.enabled, "真 codex 列出了开着的 ash");
       assert.equal(listed!.transport.command, winEntry.command, "反斜杠和空格原样往返");
       assert.deepEqual(listed!.transport.args, winEntry.args);
-      assert.deepEqual(listed!.transport.env, winEntry.env);
+      assert.deepEqual(listed!.transport.env, { ...winEntry.env, ASH_TURN_FINGERPRINT: fingerprint });
       assert.deepEqual(listed!.transport.env_vars, ["ASH_TASK_ID", "ASH_TURN_TOKEN"]);
       console.log("✓ codex 注入的 TOML:Windows 路径与空格经真 codex 解析原样往返");
     } else {
