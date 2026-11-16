@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { taskLook } from "../../lib/taskLook.ts";
 import { dispatchHolderOf, dispatchHoldPhrase, dispatchedLive } from "../../lib/dispatchHold.ts";
+import { dispatchFacts, dispatchTally, dispatchTallySaid } from "../../lib/dispatchTree.ts";
 import type { Notify } from "../../lib/notify.ts";
 import { dispatchedMeta, dispatchedOrder, dispatchedWord } from "./dispatchedRows.ts";
 import { DispatchHoldKey } from "./DispatchHoldKey.tsx";
@@ -9,6 +10,10 @@ import { DispatchHoldKey } from "./DispatchHoldKey.tsx";
 // 右侧「派出的任务」那一格：这条任务直接派出去的那几条，一行一个 —— 状态点、标题、一行小字
 // （执行器、用时），右端是状态词。点一行在左边抽屉里打开它（会话和回复框都在，能直接对它说话）；
 // 要整页进去，抽屉头上有那颗键。
+//
+// 这一格只列直接名下的。某一行自己名下还有任务时，状态词前面带上侧栏那一行行尾的同一个数、同一个
+// 变色判据（lib/dispatchTree 的 dispatchTally）—— 不然再往下那几层失败了，格头的数变了色，格里却
+// 找不到是哪一行。
 //
 // 数据就是任务列表本身（随 SSE 实时合并），新派出去的、状态变了的不用刷新就跟着变。
 
@@ -53,6 +58,7 @@ export function DispatchedInspector({
   const byId = useMemo(() => new Map(allTasks.map((item) => [item.id, item] as const)), [allTasks]);
   const holder = dispatchHolderOf(task.id, byId);
   const live = useMemo(() => dispatchedLive(allTasks, task.id), [allTasks, task.id]);
+  const facts = useMemo(() => dispatchFacts(allTasks), [allTasks]);
   const head = [`${dispatched.length} 个`, order, task.dispatchHoldAt ? (task.dispatchHoldPendingAt ? "正在停下" : "已全部停下") : null].filter(Boolean).join(" · ");
   return (
     <div className={`dispatched-pane${task.dispatchHoldAt ? " is-held" : ""}`}>
@@ -70,13 +76,14 @@ export function DispatchedInspector({
           const { word, tone } = dispatchedWord(task);
           const meta = dispatchedMeta(task, now);
           const title = task.title || "未命名任务";
+          const tally = dispatchTally(facts, task.id);
           return (
             <li key={task.id}>
               <button
                 type="button"
                 className={`dispatched-row${openId === task.id ? " is-open" : ""}`}
                 aria-pressed={openId === task.id}
-                aria-label={`${title}，${word}${meta ? `，${meta}` : ""}`}
+                aria-label={[title, word, meta, tally && dispatchTallySaid(tally)].filter(Boolean).join("，")}
                 onClick={() => onOpen(task.id)}
               >
                 <span className="dispatched-row__mark"><StatusMark task={task} /></span>
@@ -84,7 +91,10 @@ export function DispatchedInspector({
                   <b>{title}</b>
                   {meta && <small>{meta}</small>}
                 </span>
-                <em className={tone ? `is-${tone}` : undefined}>{word}</em>
+                <em className={tone ? `is-${tone}` : undefined}>
+                  {tally && <i className={tally.warn ? "is-warn" : undefined} aria-hidden="true">{tally.count}</i>}
+                  {word}
+                </em>
               </button>
             </li>
           );

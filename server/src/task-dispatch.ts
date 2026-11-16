@@ -5,8 +5,14 @@
 // 目录、跟团队一起验收；派出去的任务仍是完整独立的任务（自己的 worktree、审查、验收），只是
 // 在界面上收在派它的那条下面。所以单开一列，parentId 的语义一处不碰。
 //
+// 规则只有一句：**从哪条任务里出来的，就收在哪条下面。**
+//
 // 判据（新建与存量回填同一份，回填的 SQL 在 db/migrate-dispatched-by.ts）：
 //   · 显式给了 dispatchedBy（用户从回复框派出去、派活单）→ 以它为准；
+//   · 系统替用户从一条任务里切出来的（裁定「转成独立任务」、合并结果审查的修复任务）→ 记来源那条
+//     （carvedOutUnder）。它不是谁派的：任务头照旧说「来自任务」，执行器照来源那条，不问来源
+//     「派出去的活交给谁」的默认值。认它的事实只有一条，前后端同一个：收在自己的来源
+//     （originTaskId）名下；
 //   · 否则看创建来源：智能体在某条任务的回合里建的，且那条任务是普通的独立任务（不是团队调度台、
 //     不是讨论、也不是团队执行者）、新任务自己也是普通任务、不是团队执行者 → 记那条任务。
 // 两头都得是独立的普通任务：团队执行者（mode 也是 single，靠 parentId 认）另建的任务若记在它
@@ -31,10 +37,14 @@ type DispatchCandidate = {
   dispatchedBy?: string | null;
 };
 
+/** 能收在别人名下的：普通任务、不是团队执行者。 */
+function canBeDispatched(row: { mode?: string | null; parentId?: string | null }): boolean {
+  return !row.parentId && (row.mode ?? "single") === "single";
+}
+
 /** 来源记录里认得出的派活人（还没查它是不是普通任务）。 */
 function originDispatcher(row: DispatchCandidate): string | null {
-  if (row.parentId) return null;
-  if ((row.mode ?? "single") !== "single") return null;
+  if (!canBeDispatched(row)) return null;
   const origin = parseTaskCreationOrigin(row.creationOrigin ?? null);
   if (origin?.kind !== "agent" || !origin.taskId || origin.taskId === row.id) return null;
   return origin.taskId;
@@ -43,6 +53,22 @@ function originDispatcher(row: DispatchCandidate): string | null {
 /** 能当派活人的：普通的独立任务（团队调度台、讨论、团队执行者都不算）。 */
 function canDispatch(source: { mode: string | null; parentId: string | null }): boolean {
   return source.mode === "single" && !source.parentId;
+}
+
+/**
+ * 从 source 里切出来的那一行收在谁名下：两头都是独立的普通任务就是 source，否则不收（来源是团队
+ * 执行者 / 讨论 / 团队调度台时，各自那一侧的样子不动）。建任务的那两条路拿它包一下待建的行。
+ */
+export function carvedOutUnder<T extends { mode?: string | null; parentId?: string | null }>(
+  source: { id: string; mode: string | null; parentId: string | null },
+  row: T,
+): T & { dispatchedBy: string | null } {
+  return { ...row, dispatchedBy: canDispatch(source) && canBeDispatched(row) ? source.id : null };
+}
+
+/** 切出来的 = 收在自己的来源名下（文件头）。 */
+function isCarvedOut(row: { originTaskId?: string | null }, dispatchedBy: string | null | undefined): boolean {
+  return !!dispatchedBy && row.originTaskId === dispatchedBy;
 }
 
 /** 一批待建的行各自归在谁名下。显式给了的（含 null）原样留着。 */
@@ -81,7 +107,7 @@ export async function dispatcherRefusal(
   if (!dispatcher || !(await canSeeProject(actor, dispatcher.projectId))) {
     return { status: 404, body: { error: "task not found", dispatchedBy: body.dispatchedBy } };
   }
-  if (!canDispatch(dispatcher) || body.parentId || (body.mode ?? "single") !== "single") {
+  if (!canDispatch(dispatcher) || !canBeDispatched(body)) {
     return { status: 400, body: { error: "只有普通任务能收派出去的普通任务", dispatchedBy: body.dispatchedBy } };
   }
   return null;
@@ -91,6 +117,8 @@ export async function dispatcherRefusal(
  * 没指明交给谁的那几行，交给派它的那条任务「派出去的活交给谁」的默认值（`dispatchDefaultTarget`：
  * 设了就是设的那个，没设就同这条任务自己）。智能体绕过派活单直接 batch_create_tasks / create_task_chain、
  * 又没给 agentType / executorId 时走的就是这一条；指明了的（含只给了类型的）一个字不碰。
+ * 切出来的那几行也不碰：它们不是派出去的活，执行器照来源那条 —— 来源自己两样都空着（跟随默认）
+ * 时，行上也空着，不能被当成「没指明」。
  *
  * 执行器是个人面资源：默认值里那个 id 归属人看不见就当没给，按类型默认执行器降级（同建任务的口径）。
  */
@@ -101,8 +129,10 @@ export async function withDispatchDefaults<T extends {
   model?: string | null;
   reasoningEffort?: string | null;
   ownerUserId?: string | null;
+  originTaskId?: string | null;
 }>(rows: T[], dispatchedBy: Map<string, string | null>): Promise<T[]> {
-  const open = rows.filter((row) => !row.agentType && !row.executorId && dispatchedBy.get(row.id));
+  const unassigned = (row: T) => !row.agentType && !row.executorId && !isCarvedOut(row, dispatchedBy.get(row.id));
+  const open = rows.filter((row) => unassigned(row) && dispatchedBy.get(row.id));
   if (!open.length) return rows;
   const sourceIds = [...new Set(open.map((row) => dispatchedBy.get(row.id)!))];
   const sources = await db.select({
@@ -120,7 +150,7 @@ export async function withDispatchDefaults<T extends {
     return scopes.get(owner)!;
   };
   return Promise.all(rows.map(async (row) => {
-    if (row.agentType || row.executorId) return row;
+    if (!unassigned(row)) return row;
     const source = dispatchedBy.get(row.id);
     const target = source ? defaults.get(source) : null;
     if (!target) return row;

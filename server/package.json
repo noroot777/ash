@@ -141,6 +141,7 @@
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:task-creation-origin": "tsx scripts/test-task-creation-origin.ts",
     "test:task-dispatched-by": "tsx scripts/test-task-dispatched-by.ts",
+    "test:carved-out-home": "tsx scripts/test-carved-out-home.ts",
     "test:dispatch-hold": "tsx scripts/test-dispatch-hold.ts",
     "test:dispatched-attention": "tsx scripts/test-dispatched-attention.ts",
     "test:queue-ownership": "tsx scripts/test-queue-ownership-race.ts",

@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import {
   buildDispatchForest, forestLatest, forestRoot, keepForestVisible, sortRootsByLatest,
 } from "../src/workspace/dispatchForest.ts";
-import { dispatchedOf, dispatchFacts, dispatchSubtree } from "../src/lib/dispatchTree.ts";
+import { dispatchedOf, dispatchFacts, dispatchSubtree, dispatchTally, dispatchTallySaid } from "../src/lib/dispatchTree.ts";
+import { taskParentLink, taskParentRelation } from "../src/lib/taskParent.ts";
 import { dispatchedMeta, dispatchedOrder, dispatchedWord } from "../src/task-detail/dispatched/dispatchedRows.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -177,6 +178,78 @@ const ids = (rows) => rows.map((row) => row.id);
   assert.equal(dispatchedOrder([task("a"), task("b")]), "同时");
   assert.equal(dispatchedOrder([task("a", { queueId: "q" }), task("b")]), null, "混着派的不写");
   assert.equal(dispatchedOrder([task("a", { queueId: "q" })]), null, "一条谈不上先后");
+}
+
+// —— 从一条任务里切出来的（裁定「转成独立任务」、合并结果审查的修复任务）：收在来源下面，和派出去的
+//    是同一棵树。转出的再转出一条，一层一层往下收；最上面那条的变色判据算得到最底下那条。
+{
+  const top = task("top");
+  const src = task("src", { dispatchedBy: "top" });
+  const cut = task("cut", { dispatchedBy: "src", originTaskId: "src", status: "backlog", stage: null });
+  const deeper = task("deeper", { dispatchedBy: "cut", originTaskId: "cut", status: "failed", stage: null });
+  const all = [deeper, cut, src, top];
+  const forest = buildDispatchForest(all);
+  assert.deepEqual(ids(forest.children.get("top")), ["src"]);
+  assert.deepEqual(ids(forest.children.get("src")), ["cut"], "切出来的收在来源那一行下面");
+  assert.deepEqual(ids(forest.children.get("cut")), ["deeper"], "转出的再转出：收在转出的那条下面");
+  assert.equal(forestRoot(forest, "deeper"), "top");
+  const facts = dispatchFacts(all);
+  assert.deepEqual(["top", "src", "cut"].map((id) => facts.count(id)), [1, 1, 1], "每一层的数只数直接名下的");
+  assert.deepEqual(["top", "src", "cut", "deeper"].map((id) => facts.needsYou(id)), [true, true, true, false],
+    "最底下那条失败了：来源和更上面各层都变色");
+  const calm = dispatchFacts([top, src, cut, { ...deeper, status: "running" }]);
+  assert.equal(calm.needsYou("top"), false, "底下在跑不算要你处理");
+}
+
+// —— 右侧「派出的任务」格里的一行带不带数：自己名下还有任务才带，跟侧栏那一行同一个数、同一个
+//    变色判据；名下没有任务的行不带。
+{
+  const all = [
+    task("top"),
+    task("src", { dispatchedBy: "top" }),
+    task("plain", { dispatchedBy: "top" }),
+    task("cut", { dispatchedBy: "src", originTaskId: "src", status: "running", stage: null }),
+  ];
+  const facts = dispatchFacts(all);
+  assert.deepEqual(dispatchTally(facts, "src"), { count: 1, warn: false }, "名下还有任务的那一行带数");
+  assert.equal(dispatchTally(facts, "plain"), null, "名下没有任务的行不带数");
+  assert.equal(dispatchTally(facts, "cut"), null);
+  const failing = dispatchFacts(all.map((row) => (row.id === "cut" ? { ...row, status: "failed" } : row)));
+  assert.deepEqual(dispatchTally(failing, "src"), { count: 1, warn: true }, "底下有要你处理的：数变色");
+  assert.deepEqual(dispatchTally(failing, "top"), { count: 2, warn: true });
+  assert.equal(dispatchTallySaid({ count: 1, warn: true }), "1 个派出的任务，有要你处理的");
+  assert.equal(dispatchTallySaid({ count: 2, warn: false }), "2 个派出的任务");
+  const buried = dispatchFacts([
+    task("a"), task("b", { dispatchedBy: "a", archived: true }),
+    task("c", { dispatchedBy: "b", status: "paused", stage: null, question: "？" }),
+  ]);
+  assert.deepEqual(dispatchTally(buried, "a"), { count: 0, warn: true }, "直接那几条全归档了、底下还在等你：变色的 0（同侧栏）");
+}
+
+// —— 任务头那句来源：切出来的那条仍写「来自任务」（它不是谁派的），派出去的写「派它的任务」。
+{
+  const all = [
+    task("src", { title: "来源那条" }),
+    task("cut", { dispatchedBy: "src", originTaskId: "src", creationOrigin: { kind: "system" } }),
+    task("sent", { dispatchedBy: "src", creationOrigin: { kind: "agent", taskId: "src" } }),
+    task("by-hand", { dispatchedBy: "src", creationOrigin: { kind: "user" } }),
+    task("fork", { originTaskId: "src", creationOrigin: { kind: "user" } }),
+    task("talk", { mode: "duet" }),
+    task("landed", { originTaskId: "talk" }),
+    task("team", { mode: "team" }),
+    task("worker", { parentId: "team", dispatchedBy: "src", originTaskId: "src" }),
+  ];
+  const said = (id) => {
+    const link = taskParentLink(all.find((row) => row.id === id), all);
+    return link && `${taskParentRelation(link)}·${link.taskId}`;
+  };
+  assert.equal(said("cut"), "来自任务·src", "裁定转出 / 合并结果修复建的任务：收在来源下面，任务头照旧说来自任务");
+  assert.equal(said("sent"), "派它的任务·src", "智能体派出去的照旧");
+  assert.equal(said("by-hand"), "派它的任务·src", "回复框、派活单派出去的照旧");
+  assert.equal(said("fork"), "来自任务·src", "手动派生的（不在树里）照旧");
+  assert.equal(said("landed"), "来自讨论·talk");
+  assert.equal(said("worker"), "所属团队·team", "团队执行者照旧以团队为准");
+  assert.equal(said("src"), null);
 }
 
 console.log("dispatch tree model ok");

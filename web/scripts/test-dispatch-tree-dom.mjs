@@ -10,6 +10,8 @@
 //   · 中间那条归档了：底下还失败着的那条照样让最上面变色；名下直接的全归档了也一样，而且
 //     这一行不因为自己旧就被年龄闸折起来。
 //   · 团队和它的执行者照旧：执行者不平铺，团队行的箭头照旧展开执行者。
+//   · 从一条任务里切出来的（裁定转出、合并结果审查的修复任务）同样收在来源下面，一层一层往下；
+//     来源不在列表里时照常平铺，那颗来源图标说的是「来自任务」。
 // 跑：npm -w web run test:dispatch-tree-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -142,6 +144,24 @@ try {
   }
   // 孙辈仍收在它自己那一条（kid-mid）下面：只是最顶上那一层没了。
   assert.equal(await row("kid-mid").locator(".workspace-dispatch-count").textContent(), "1");
+
+  // —— 切出来的任务：收在它来源（孙辈）那一行下面，再深一层；选中它时上面几层照样自己打开。
+  await page.evaluate(() => {
+    window.__add({ id: "cut", title: "从孙辈里切出来的", dispatchedBy: "grand", originTaskId: "grand", status: "failed", stage: null });
+    window.__add({ id: "cut-flat", title: "来源已归档的切出任务", dispatchedBy: "gone-lead", originTaskId: "gone-lead" });
+    window.__select("cut");
+  });
+  await row("cut").waitFor();
+  assert.equal(await page.locator('[role="group"][aria-label="孙辈任务 派出的任务"] [data-task-id="cut"]').count(), 1, "切出来的收在来源那一行下面");
+  assert.equal(await page.locator('[role="group"][aria-label="派出去又派了活的 派出的任务"] [data-task-id="cut"]').count(), 1, "一层一层往下：它在来源的上一层那一组里面");
+  assert.equal(await row("grand").locator(".workspace-dispatch-count").textContent(), "1");
+  for (const id of ["grand", "kid-mid"]) {
+    assert.equal(await color(row(id).locator(".workspace-dispatch-count")), amber, `切出来的那条失败了，${id} 那个数变色`);
+  }
+  assert.equal(await row("cut").getByRole("button", { name: /^(来自|派它的)任务/ }).count(), 0, "收在来源下面时不再另画来源图标：位置已经说了");
+  assert.equal(await row("cut-flat").count(), 1, "来源不在列表里，切出来的照常平铺");
+  assert.equal(await page.getByRole("button", { name: "来自任务：已经归档的派活人" }).count(), 1, "切出来的那条说的是「来自任务」，不是谁派的");
+  assert.equal(await page.getByRole("button", { name: "派它的任务：已经归档的派活人" }).count(), 1, "派出去的那条照旧");
 
   await context.close();
   console.log("✓ 侧栏：派出的任务收在派它的那条下面");

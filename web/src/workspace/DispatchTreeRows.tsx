@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { TaskListItem } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { type LookForTask } from "../lib/useTaskReadState.ts";
-import { dispatchSubtree, type DispatchFacts } from "../lib/dispatchTree.ts";
+import { dispatchSubtree, dispatchTally, dispatchTallySaid, type DispatchFacts } from "../lib/dispatchTree.ts";
 import { type DispatchForest } from "./dispatchForest.ts";
 import { RowMark, TaskRow } from "./TaskTreeRows.tsx";
 
@@ -80,10 +80,9 @@ type RowProps = {
 export function DispatchAwareRow(props: RowProps) {
   const facts = useContext(DispatchFactsContext);
   const kids = props.forest.children.get(props.task.id) ?? [];
-  const count = facts.count(props.task.id);
-  const needs = facts.needsYou(props.task.id);
-  // 名下直接的那几条全归档了、底下还有一条在等你：数是 0，照样得有那个变色的提示。
-  if (!kids.length && !count && !needs) {
+  // 名下直接的那几条全归档了、底下还有一条在等你：数是 0，照样得有那个变色的提示（dispatchTally）。
+  const tally = dispatchTally(facts, props.task.id);
+  if (!kids.length && !tally) {
     return (
       <TaskRow
         task={props.task}
@@ -97,7 +96,7 @@ export function DispatchAwareRow(props: RowProps) {
       />
     );
   }
-  return <DispatcherRow {...props} kids={kids} count={count} needs={needs} />;
+  return <DispatcherRow {...props} kids={kids} count={tally?.count ?? 0} needs={tally?.warn ?? false} />;
 }
 
 function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookForTask, showProject = true, child = false, showOrigin = true, kids, count, needs }: RowProps & {
@@ -118,7 +117,7 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
     if (selectedInside) openRows?.([task.id]);
   }, [openRows, selectedInside, task.id]);
   const look = lookForTask(task);
-  const said = `${count} 个派出的任务${needs ? "，有要你处理的" : ""}`;
+  const said = dispatchTallySaid({ count, warn: needs });
   return (
     <>
       <TaskRow

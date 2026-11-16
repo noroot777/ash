@@ -90,6 +90,17 @@
 .dispatched-row > em.is-ask { color: var(--amber); }
 .dispatched-row > em.is-bad { color: var(--red); }
 
+/* 这一行自己名下还有任务：状态词前面带侧栏那一行行尾的同一个数（.workspace-dispatch-count），
+   整棵往下有要你处理的就变琥珀色。数有自己的颜色，不跟状态词的走。 */
+.dispatched-row > em > i {
+  margin-right: 8px;
+  color: var(--faint);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.dispatched-row > em > i.is-warn { color: var(--amber); }
+
 /* 竖轨图标右上角那个数（CountedIcon）。描一圈竖轨底色，跟图标线条分开。 */
 .insp-counted-icon {
   position: relative;

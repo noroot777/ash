@@ -63,6 +63,21 @@ export type DispatchFacts = {
   needsYou: (taskId: string) => boolean;
 };
 
+/**
+ * 一行带不带那个数：名下有直接派出的，或者整棵往下有要你处理的（直接那几条全归档了、底下还在等你，
+ * 数是 0 也得带着变色）。侧栏那一行、右侧「派出的任务」格里的一行同一个判据。
+ */
+export function dispatchTally(facts: DispatchFacts, taskId: string): { count: number; warn: boolean } | null {
+  const count = facts.count(taskId);
+  const warn = facts.needsYou(taskId);
+  return count || warn ? { count, warn } : null;
+}
+
+/** 那个数念出来的那句（数本身只给眼睛看）。 */
+export function dispatchTallySaid(tally: { count: number; warn: boolean }): string {
+  return `${tally.count} 个派出的任务${tally.warn ? "，有要你处理的" : ""}`;
+}
+
 export function dispatchFacts(tasks: readonly TaskListItem[]): DispatchFacts {
   const edges = new Map<string, TaskListItem[]>();
   for (const task of tasks) {
