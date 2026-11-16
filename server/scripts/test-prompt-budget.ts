@@ -29,7 +29,17 @@ import { MCP_TOOL_BUDGETS } from "./prompt-budget-mcp.js";
 // 而第 2 轮审查正是在这种根下复现出「完整可读的地址被判成没有入口」—— 一条挡住验收的假红。
 // 路径里有空白是所有样本都该扛住的输入边界，所以整摞样本都在这种根下渲染一遍，而不是给
 // 某个样本加特判。归一化按整串 `root` 替换，与里面有没有空格无关。
-const root = mkdtempSync(join(tmpdir(), "ash prompt budget "));
+//
+// 根的**长度**也钉住：有几段（历史发现、深挖那几份）按「真实路径下的体积」决定内联几轮，渲染完
+// 再把根换成 `<ROOT>` 计数 —— 根越短，塞进去的轮数越多，量出来反而越大。下面的数是在 macOS
+// 默认临时目录下量定的（那时根是 73 个字符），换到临时目录更短的地方（验收执行器给每条测试的
+// `/tmp/ash-test-…`、Linux 的 `/tmp`）同一份提示词会多出一两百字节、平白红掉。所以不够长就在
+// 底下垫一层目录把它补到这个长度；临时目录本身就更长时缩不了，只能照实量。
+const ROOT_LENGTH = 73;
+const stage = mkdtempSync(join(tmpdir(), "ash prompt budget "));
+const pad = ROOT_LENGTH - stage.length - 1;
+const root = pad > 0 ? join(stage, "p".repeat(pad)) : stage;
+mkdirSync(root, { recursive: true });
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 
@@ -657,5 +667,5 @@ try {
   }
 } finally {
   await import("../src/db/index.js").then(({ dbClient }) => dbClient.close()).catch(() => undefined);
-  rmSync(root, { recursive: true, force: true });
+  rmSync(stage, { recursive: true, force: true });
 }
