@@ -5,7 +5,7 @@ import { cleanText, type ConfirmGate, type ConfirmView } from "./confirmPlan.ts"
 
 /**
  * 「这一按会做什么」：挂在主按钮下面的一层，一步一行。可以不做的那两步（运行、提交）前面带勾，
- * 取消了那一行自己写后果；两勾打开时是上一次确认的样子，确认了就记成新的（confirmPlan.ts）。事实来自 shared 的 acceptanceSteps —— 和飞书待验收卡那句话同源。
+ * 取消了那一行自己写后果；「运行」每次打开都按默认来、取消只管这一次，「提交」跟项目设置、确认了就写回去（confirmPlan.ts）。事实来自 shared 的 acceptanceSteps —— 和飞书待验收卡那句话同源。
  */
 export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitChoosable, commitDefault, commitRemembered, verification, source, family,
   waiting, canSetGate, onRun, onCommit, onAcknowledge, onRetryDefault, onRetryGate, onRetryVerification, onSetGate, onConfirm, onClose }: {

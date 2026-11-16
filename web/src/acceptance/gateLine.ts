@@ -9,7 +9,7 @@ import type { CheckTone } from "./CheckRow.tsx";
  * 状态词覆盖原先那张卡用标题区分的全部情形，但只说状态、不解释机制：没跑过、在跑、通过还作数、
  * 通过但不作数（一句短原因）、没过（交没交给任务）、准备命令没过、入口不在被测的树里、被取消或
  * 打断、进程还没退干净、本机能力不可用、源码输入不可用、状态读不出来。这一按会不会跑它，跟确认层
- * 打开时「运行」那一勾的默认同一个口径（上次跳过 → 「验收时跳过」）。
+ * 「运行」那一勾此刻的样子同一个口径（在层里取消了 → 「验收时跳过」；不记上一次）。
  */
 export type GateLine = {
   tone: CheckTone;
@@ -39,7 +39,7 @@ export type GateLineInput = {
   settled: boolean;
   /** 停在中途那道关口：这一按只是放行，不预告「验收时运行」。 */
   atFinalGate: boolean;
-  /** 这一按会跳过它：和确认层「运行」那一勾同一份推导（confirmPlan.ts 的 gateIntent），不另凭记忆猜。 */
+  /** 这一按会跳过它：和确认层「运行」那一勾同一份推导（confirmPlan.ts 的 gateIntent）。 */
   skipping?: boolean;
   now?: number;
 };
@@ -68,8 +68,8 @@ export function gateLine(input: GateLineInput): GateLine | null {
     ({ ...base, tone: error ? "idle" : tone, command: state.command, word: `${word}${unconfirmed}`, editable: true, retry: !!error, ...more });
   if (state.unavailable) return line("block", "本机能力不可用");
   if (state.sourceError) return line("block", "源码输入不可用");
-  // 这一按会跳过（上一次在这个项目里确认验收时取消了「运行」，确认层这次默认也不勾）：这一行得先说出来，
-  // 不打开确认层也看得出这一按不会跑它。由调用方按确认层的推导给 —— 统一验收不走那一勾，就不说跳过。
+  // 这一按会跳过（确认层里取消了「运行」）：从取消那一下到这一按落定，这一行照这一次说。由调用方按确认层的
+  // 推导给 —— 没开层、没取消就是照常跑。
   const skip = input.skipping === true;
   const plan = (word: string) => (skip ? `${word}，验收时跳过` : word);
   const pending = (more: Partial<GateLine> = {}) => (skip ? line("skipped", "验收时跳过", more) : line("idle", "验收时运行", more));
