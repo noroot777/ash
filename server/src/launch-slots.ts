@@ -15,6 +15,16 @@ export function slotsTaken(groupId: string | null | undefined): number {
 }
 
 /**
+ * 这条任务此刻占着名额吗（占着 = 正由某一路起跑、或者在跑）。占名额的那几路（分组运行、接着跑、等齐就起）
+ * 都是先占名额、隔几次 await 才把状态落成 queued/running，这段时间库里还是 backlog —— 换分组只看状态就会把
+ * 它挪走，名额却还记在原来那组（queue-membership-guard.ts）。
+ */
+export function holdsSlot(taskId: string): boolean {
+  for (const set of taken.values()) if (set.has(taskId)) return true;
+  return false;
+}
+
+/**
  * 占一个名额。满了、或者这条任务的名额已经被另一路占着（它正由那一路起跑），都返回 false ——
  * 不能让两路共用一个名额：起不来的那一路照例还名额，还掉的就是正在跑的那一路的。
  */

@@ -475,7 +475,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
                 : "同一队列里还有未完成或正在运行的任务", at.getTime());
             continue;
           }
-          seat = claim.seat ?? undefined;
+          seat = claim.seat;
         }
         fired.add(m.taskId);
         const release = holdInFlight(m.taskId);

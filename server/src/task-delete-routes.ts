@@ -24,6 +24,7 @@ import { forgetTaskUnconfirmed } from "./session-turns.js";
 import { forgetTaskRecordSeq } from "./session-seq.js";
 import { forgetTurnStarts } from "./turn-lock.js";
 import { forgetTaskPause } from "./pause-generation.js";
+import { forgetSoloStart } from "./queue-claim-chain.js";
 import { withRepoLock } from "./repo-lock.js";
 import { reclaimDeletedTaskDisk } from "./run-dir-reclaim.js";
 import { now } from "./util.js";
@@ -169,6 +170,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 起过几轮（turn-lock.ts）、被谁按停过（pause-generation.ts）也一样。
   forgetTurnStarts(taskId);
   forgetTaskPause(taskId);
+  forgetSoloStart(taskId);
   for (const waiter of waiters) publishPendingMessages(waiter.taskId);
   for (const dependent of dependents) {
     void appendTaskTimeline(dependent, alertLine(`前置任务「${deletedTitle}」已删除，这条前置关系随之解除。`));

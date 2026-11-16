@@ -57,6 +57,11 @@ export type SetTaskStatusOptions = {
    */
   commitGuard?: (commit: () => Promise<boolean>) => Promise<boolean>;
   /**
+   * 跟状态这一笔**同一个事务**落下的其余写入(重新排队的挪位)。状态没写中就不调;它抛错则整笔回滚,
+   * 状态也不变。只写库,别在里面发事件、推队列 —— 那些是提交之后的事。
+   */
+  alsoInTx?: (tx: StatusTxWriter) => Promise<void>;
+  /**
    * 这次写 paused 是续聊/旁路回合**恢复原状态**,不是「刚跑到检查点落位」——别触发
    * 队列推进钩子。推进会把一个本就静静等着的 paused 成员(典型:队列 head 上带
    * resumePrompt 的检查点)当作新到位的立即续跑:检查点被一句「怎么样了」间接消费、
@@ -105,6 +110,9 @@ export type SetTaskStatusOptions = {
    */
   settleStallTurns?: { sessionId: string; turnStartedAt: string }[];
 };
+
+/** `alsoInTx` 在状态那一笔事务里能用的读写。 */
+export type StatusTxWriter = Pick<typeof db, "select" | "insert" | "delete" | "update">;
 
 /** 只有 `writeGuardedTaskStatus` 这一条内部入口用得到的两档:调用方自带谓词 + 占位凭证。 */
 type WriteStatusOptions = SetTaskStatusOptions & {
@@ -194,10 +202,11 @@ async function writeTaskStatus(
   // **同一个事务**提交:状态落了库,「该推进」就一定也在库里,重启能补(turn-release.ts 文件头)。
   const advance = status === "done" || status === "canceled" || status === "failed" || (status === "paused" && !quietAdvance);
   const where = and(eq(tasks.id, taskId), opts?.guard, expect ? inArray(tasks.status, expect) : undefined);
-  const { written, advanceQueueId } = advance
+  const { written, advanceQueueId } = advance || opts?.alsoInTx
     ? await db.transaction(async (tx) => {
       const written = await tx.update(tasks).set(patch).where(where).returning({ id: tasks.id });
-      return { written, advanceQueueId: written.length ? await stageQueueAdvance(tx, taskId) : null };
+      if (written.length) await opts?.alsoInTx?.(tx);
+      return { written, advanceQueueId: written.length && advance ? await stageQueueAdvance(tx, taskId) : null };
     })
     : { written: await db.update(tasks).set(patch).where(where).returning({ id: tasks.id }), advanceQueueId: null };
   // 一行都没改到 = 要么状态在我读到它之后被别人改了、要么这一行已经不在了,这一笔过期。

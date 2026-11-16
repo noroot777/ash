@@ -3,6 +3,7 @@ import type {
   ScheduledMessage,
   ScheduledMessageMode,
   ScheduledMessageStatus,
+  TaskStatus,
 } from "@ash/shared";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Context, Hono } from "hono";
@@ -28,8 +29,8 @@ import { flushPendingForTask, publishPendingMessages } from "./pending-messages.
 import { withAfterGates } from "./pending-after.js";
 import { pendingMessagePresence } from "./pending-wait.js";
 import { isOvertaken, queueBlockedText, queueBlockerDetails, repackQueue, tailOrder } from "./queues.js";
-import { queueClaimError, seatThenStart } from "./queue-seat.js";
-import { claimOwnTurn, heldForAcceptance, releaseTurn, stopTask, turnBusyText } from "./runs.js";
+import { queueClaimError, seatThenStart, serializeQueueClaims } from "./queue-seat.js";
+import { claimOwnTurn, heldForAcceptance, isTurnClaimed, releaseTurn, stopTask, turnBusyText } from "./runs.js";
 import { noted, type RejectedAction } from "./user-action-rejection.js";
 import { readActionFacts, mountTaskActionRoutes } from "./task-actions.js";
 import { requeueVerdict, retryVerdict, runVerdict, stopVerdict, teamHaltVerdict, type Verdict } from "./task-action-verdicts.js";
@@ -632,26 +633,47 @@ api.post("/tasks/:id/requeue", async (c) => {
   // 团队验收占着这一位（team-acceptance-hold.ts）：落回 backlog 会让验收守卫当场拒掉这次验收，等验收结束再排。
   if (heldForAcceptance(taskId)) return c.json({ error: turnBusyText(taskId, "重新排队"), status: r.status }, 409);
 
-  const myItem = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
-  // 判据刚看过它在队列里；这中间被移出队列算撞车。
-  if (!myItem) return c.json({ error: "任务不在任何队列里，直接点运行即可" }, 409);
-  const queueId = myItem.queueId;
+  // 上面是无互斥的快速判断。真正的一笔在队列认领链上做完(queue-claim-chain.ts):按此刻的行重验资格、
+  // 挪位、条件写 backlog —— 不然等链那段时间里一次 /run、/retry 抢先起了它,这里出链后照样把一条
+  // 正在起跑的任务写回待办,还可能把它挪到队尾。回合锁被占着就是有人正在起它,同样不排。
+  const placed = await serializeQueueClaims(async (): Promise<{ refused: Response } | {
+    queueId: string; ordered: (typeof tasks.$inferSelect)[]; movedToEnd: boolean;
+  }> => {
+    const now = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!now) return { refused: c.json({ error: "not found" }, 404) };
+    const fresh = requeueVerdict(await readActionFacts(now));
+    if (!fresh.ok) return { refused: c.json({ error: fresh.reason, ...fresh.detail }, 409) };
+    if (isTurnClaimed(taskId)) return { refused: c.json({ error: turnBusyText(taskId, "重新排队"), status: now.status }, 409) };
+    const myItem = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+    // 判据刚看过它在队列里；这中间被移出队列算撞车。
+    if (!myItem) return { refused: c.json({ error: "任务不在任何队列里，直接点运行即可" }, 409) };
+    const items = await db
+      .select()
+      .from(queueItems)
+      .where(eq(queueItems.queueId, myItem.queueId))
+      .orderBy(asc(queueItems.position));
+    const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
+    const byId = new Map(rows.map((x) => [x.id, x] as const));
+    const ordered = items
+      .map((i) => byId.get(i.taskId))
+      .filter((t): t is typeof tasks.$inferSelect => !!t);
+    // 条件写 backlog 与挪到队尾同一笔事务:挪位失败,状态也不落,原入口照样能重试。
+    const movedToEnd = isOvertaken(ordered, taskId);
+    const written = await setTaskStatus(taskId, "backlog", {
+      expectStatus: now.status as TaskStatus,
+      alsoInTx: movedToEnd ? (tx) => repackQueue(myItem.queueId, tailOrder(ordered.map((t) => t.id), taskId), tx) : undefined,
+    }).catch(async (error) => {
+      // 提交之后的附带读取(广播用的 timing)也会抛:那时状态和位置已经一起落了,按库里的结果认,
+      // 别让一次已经成功的重新排队报失败、还漏掉后面那一推。
+      if ((await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.status === "backlog") return true;
+      throw error;
+    });
+    if (!written) return { refused: c.json({ error: "任务状态刚刚变了，这次没有重新排队", status: now.status }, 409) };
+    return { queueId: myItem.queueId, ordered, movedToEnd };
+  });
+  if ("refused" in placed) return placed.refused;
+  const { queueId, ordered, movedToEnd } = placed;
 
-  const items = await db
-    .select()
-    .from(queueItems)
-    .where(eq(queueItems.queueId, queueId))
-    .orderBy(asc(queueItems.position));
-  const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
-  const byId = new Map(rows.map((x) => [x.id, x] as const));
-  const ordered = items
-    .map((i) => byId.get(i.taskId))
-    .filter((t): t is typeof tasks.$inferSelect => !!t);
-
-  const movedToEnd = isOvertaken(ordered, taskId);
-  if (movedToEnd) await repackQueue(queueId, tailOrder(ordered.map((t) => t.id), taskId));
-
-  await setTaskStatus(taskId, "backlog");
   // 前面若还有人在跑,advanceQueue 会被 selectNextInQueue 的守卫挡住,什么都不做。
   advanceQueueInBackground(queueId);
 

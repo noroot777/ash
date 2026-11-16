@@ -16,8 +16,8 @@ import { claimOwnTurnUnlessStarted, turnStartsOf } from "./turn-lock.js";
 //   · 这期间有没有人替它起过（起跑票，turn-lock.ts turnStartsOf）：起过就不起第二遍（第 2 轮复审 F1）；
 //   · 调用方自己的资格（状态、提问、哨兵、被按住）照样轮到才判。
 // 占位与「落 queued」都在临界区里做完，跟队列推进（scheduler.ts advanceQueueAttempt）、手动启动
-// （queue-seat.ts claimQueueSeat）争的是同一个原子对象；改归属的接口不进这个临界区，所以归属由占位
-// 那一笔 UPDATE 自己再认一次。
+// （queue-seat.ts claimQueueSeat）争的是同一个原子对象；改归属的接口（入队、改分组、建任务时串队）也排在
+// 同一条链上（queue-claim-chain.ts），占位那一笔 UPDATE 自己再认一次归属是兜底。
 
 type TaskRow = typeof tasks.$inferSelect;
 export type MemberAdmitted = { owner: TurnIdentity; row: TaskRow };
