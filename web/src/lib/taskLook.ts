@@ -1,6 +1,6 @@
 import type { TaskListItem } from "@ash/shared";
 import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
-import { awaitsAcceptance, hasFailed, isAcceptedStage, spreadBucket, type SpreadBucket } from "./taskAttention.ts";
+import { awaitsAcceptance, awaitsRuling, hasFailed, isAcceptedStage, spreadBucket, type SpreadBucket } from "./taskAttention.ts";
 
 // 一条任务「现在怎么样」的唯一出处：侧栏行首画什么、指上去说什么、行尾那两三个字、算进
 // 顶上筛选的哪一颗 —— 全从 taskLook 一处取。从前行首那颗点（useTaskReadState）和顶上那排
@@ -19,8 +19,9 @@ export type TaskStatusIndicator =
   | "queued"
   /** 要它起跑了，在等前置站稳（shared/src/prerequisites.ts）。画法同排队：都是「轮到了自己会起」。 */
   | "waiting"
+  /** 轮到你说话：在等答复、等你裁定驳回、停在检查点、前置齐了却开不了工。 */
   | "attention"
-  /** 有东西在后台替它跑着、而且会自己回来：挂着的哨兵、正在跑的验收前置命令。 */
+  /** 有东西在后台替它跑着、而且会自己回来：挂着的哨兵、正在跑的验收前置命令。不用你管。 */
   | "working"
   /**
    * 它看着在跑,其实在**干等模型上游**(回合级停滞看门狗,见 server/src/turn-stall.ts)。
@@ -56,7 +57,7 @@ export function deriveTaskStatusIndicator(
 ): TaskStatusIndicator | null {
   if (task.mode === "team" && !task.parentId) {
     // 「等你说话」和「等一件会自己回来的事」分开，判据见下面单飞那一段。
-    if (task.question || workers.some((worker) => worker.question)) return "attention";
+    if (task.question || workers.some((worker) => worker.question) || awaitsRuling(task)) return "attention";
     // 排在 working/active 之前:一台卡在上游的调度台这三档全都成立,而「它其实没在动」是
     // 其中唯一需要用户做点什么的那一位。
     if (stalledNow(task) || workers.some(stalledNow)) return "stalled";
@@ -83,6 +84,10 @@ export function deriveTaskStatusIndicator(
   if (stalledNow(task)) return "stalled"; // 同上:排在 working/active 之前
   if (liveWork(task)) return "working";
   // 失败排在暂停、在跑之前，跟 spreadBucket 把它压在「在跑」之上同一个口径。
+  if (task.status === "failed") return "error";
+  // 等你裁定：任务多半已经 done（或停在检查点），只看 status/stage 会读成「做完了，等验收」。
+  // 排在「验证没过」前面：被驳回的正是那一轮没过的结论，下一步是你拍板，不是去看失败。
+  if (awaitsRuling(task)) return "attention";
   if (hasFailed(task)) return "error";
   if (task.status === "paused") return "attention";
   if (runningNow(task)) return "active";
@@ -101,7 +106,7 @@ export function deriveTaskStatusIndicator(
 }
 
 /** 侧栏行首那颗记号的画法（task-status-dot.css 的 .workspace-status-dot--*）。null = 槽空着、位置留着。 */
-export type TaskMark = "run" | "queue" | "wait" | "breathe" | "stalled" | "open" | "new" | "bad";
+export type TaskMark = "run" | "queue" | "wait" | "hold" | "stalled" | "open" | "new" | "bad";
 
 // 那张表。say 是指着记号时那句话（也是读屏念的）；没有记号就没有话。
 // 待排期（pending）在侧栏上不画：它就是「还没动过」，归「排着 / 暂停」那一档已经说清了。
@@ -111,7 +116,7 @@ export const TASK_LOOK: Record<TaskStatusIndicator, { mark: TaskMark | null; say
   queued: { mark: "queue", say: "排队中" },
   waiting: { mark: "queue", say: "在等前置任务" },
   attention: { mark: "wait", say: "需要人工输入" },
-  working: { mark: "breathe", say: "有东西在后台跑着，它会自己回来" },
+  working: { mark: "hold", say: "在等后台的事跑完，它会自己回来" },
   stalled: { mark: "stalled", say: "在干等模型上游回话，没有任何输出" },
   unaccepted: { mark: "open", say: "已完成，等你验收" },
   success: { mark: "new", say: "验收过，有没看的动态" },
@@ -119,14 +124,40 @@ export const TASK_LOOK: Record<TaskStatusIndicator, { mark: TaskMark | null; say
   pending: { mark: null, say: "尚未开始" },
 };
 
+/**
+ * 名下派出去的任务（Task.dispatchedBy，整棵往下）往上带到这一行的那几档，排前面的压过排后面的。
+ *
+ * 派出去的活收在派它的那条下面以后，派它的那条大多早就 done 了：只看它自己，名下还在跑、在问你、
+ * 摔了，行首照样是一圈「已完成，等你验收」，收起来就什么都看不出。所以跟团队调度台看执行者一样，
+ * 名下的这几档往上带；它自己那几档里只有「轮到你」的（等答复 / 裁定、失败、卡在上游）排在
+ * 「名下在跑」之前，其余（做完没验收、没看的动态、没开始）都让给名下。
+ */
+const ROLL_UP: readonly TaskStatusIndicator[] = ["attention", "error", "stalled", "active", "working", "queued", "waiting"];
+
+function rollUpRank(indicator: TaskStatusIndicator | null): number {
+  const at = indicator ? ROLL_UP.indexOf(indicator) : -1;
+  return at < 0 ? ROLL_UP.length : at;
+}
+
+/** 名下整棵里最该被看见的那一档（ROLL_UP 之外的不往上带）；没有就是 null。 */
+export function dispatchedRollUp(indicators: readonly (TaskStatusIndicator | null)[]): TaskStatusIndicator | null {
+  let best: TaskStatusIndicator | null = null;
+  for (const indicator of indicators) {
+    if (rollUpRank(indicator) < rollUpRank(best)) best = indicator;
+  }
+  return best;
+}
+
 export type TaskLook = {
   indicator: TaskStatusIndicator | null;
   mark: TaskMark | null;
   /** 指着记号时那句话；mark 为 null 时为空串。 */
   say: string;
+  /** 这颗记号说的是名下派出去的任务（dispatchedRollUp），不是这一条自己。 */
+  fromDispatched: boolean;
   /** 算进顶上那排筛选的哪一颗。判据本体是 lib/taskAttention 的 spreadBucket。 */
   bucket: SpreadBucket;
-  /** 行尾那两三个字（等什么）。只有明着等你答复、或前置齐了却开不了工时才有。 */
+  /** 行尾那两三个字（等什么）。只有明着等你答复 / 裁定、或前置齐了却开不了工时才有。 */
   word: string | null;
   /** 指着那两三个字时多给的半句（问题本身 / 开不了工的原因）。 */
   detail: string | null;
@@ -139,20 +170,31 @@ function questionOf(task: TaskListItem, workers: TaskListItem[]): string | null 
 
 const DETAIL_MAX = 60;
 
-export function taskLook(task: TaskListItem, workers: TaskListItem[] = [], unread = false): TaskLook {
-  const indicator = deriveTaskStatusIndicator(task, workers, unread);
+export function taskLook(
+  task: TaskListItem,
+  workers: TaskListItem[] = [],
+  unread = false,
+  /** 名下派出去的任务的档位（整棵往下、没归档的），见 dispatchedRollUp。 */
+  dispatched: TaskStatusIndicator | null = null,
+): TaskLook {
+  const own = deriveTaskStatusIndicator(task, workers, unread);
+  const fromDispatched = rollUpRank(dispatched) < rollUpRank(own);
+  const indicator = fromDispatched ? dispatched : own;
   const row = indicator ? TASK_LOOK[indicator] : null;
   const mark = row?.mark ?? null;
-  const asked = indicator === "attention" ? questionOf(task, workers) : null;
-  const blocked = indicator === "attention" && !asked ? task.prerequisites?.blocked ?? null : null;
+  // 行尾那两三个字只说这一条自己：名下哪一条在问你，那一行自己会写。
+  const asked = own === "attention" ? questionOf(task, workers) : null;
+  const ruling = own === "attention" && !asked && awaitsRuling(task);
+  const blocked = own === "attention" && !asked && !ruling ? task.prerequisites?.blocked ?? null : null;
   const question = asked ?? blocked;
   const oneLine = question?.replace(/\s+/g, " ").trim() ?? "";
   return {
     indicator,
     mark,
-    say: mark ? row!.say : "",
+    say: mark ? (fromDispatched ? `派出的任务：${row!.say}` : row!.say) : "",
+    fromDispatched,
     bucket: spreadBucket(task, workers),
-    word: asked ? "等你答复" : blocked ? "开不了工" : null,
+    word: asked ? "等你答复" : ruling ? "等你裁定" : blocked ? "开不了工" : null,
     detail: oneLine ? (oneLine.length > DETAIL_MAX ? `${oneLine.slice(0, DETAIL_MAX)}…` : oneLine) : null,
   };
 }

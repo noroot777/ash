@@ -1,6 +1,6 @@
 import { isAcceptedStage as sharedIsAcceptedStage, type Task, type TaskListItem } from "@ash/shared";
 import {
-  awaitsYourWord, hasFailed, isTaskAwaitingAcceptance, isTaskLive, isTeamLead, isTeamSettledLead,
+  awaitsRuling, awaitsYourWord, hasFailed, isTaskAwaitingAcceptance, isTaskLive, isTeamLead, isTeamSettledLead,
 } from "@ash/shared/task-attention";
 
 // 「轮到谁动」的判据本体在 shared/src/task-attention.ts（mobile 与 server 的飞书推送读的
@@ -9,7 +9,7 @@ import {
 // 放在 lib 而不是 workspace，是因为 lib/useTaskReadState 也要用它 —— 反过来引会成环。
 // 注意任务树的**排序**不看这里：那边只认更新时间（见 workspace/taskTreeModel.ts）。
 export {
-  awaitsAcceptance, awaitsYourWord, hasFailed, isTaskAwaitingAcceptance, isTaskLive, isTeamSettledLead,
+  awaitsAcceptance, awaitsRuling, awaitsYourWord, hasFailed, isTaskAwaitingAcceptance, isTaskLive, isTeamSettledLead,
   needsYourCommand,
 } from "@ash/shared/task-attention";
 
@@ -54,6 +54,8 @@ export function workersFrom(index: WorkerIndex | null | undefined, taskId: strin
 export function spreadBucket(task: TaskListItem, workers: TaskListItem[] = []): SpreadBucket {
   if (task.question) return "todo";
   if (hasFailed(task)) return "todo";
+  // 等你裁定：常常停在 paused（检查点那一档归「排着 / 暂停」），可它明着要你拍板。
+  if (awaitsRuling(task)) return "todo";
   // 等我盖章 = 轮到我动，判据跟任务模式共用一份（见 shared 的 isTaskAwaitingAcceptance）。
   // 干完没点头的因此落「需要你处理」，而不是「已收尾」—— 后者是「这事翻篇了」的意思。
   if (isTaskAwaitingAcceptance(task, workers)) return "todo";

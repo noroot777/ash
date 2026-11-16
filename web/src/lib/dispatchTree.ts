@@ -1,5 +1,5 @@
 import type { TaskListItem } from "@ash/shared";
-import { hasFailed } from "./taskAttention.ts";
+import { awaitsRuling, hasFailed } from "./taskAttention.ts";
 
 // 「派它的那条任务」（Task.dispatchedBy）在前端的几样读法：谁名下有谁、整棵往下算有没有要你
 // 处理的。侧栏的收纳（workspace/dispatchForest.ts）、侧栏那个数、详情页右侧「派出的任务」那一格
@@ -26,9 +26,9 @@ export function dispatchSubtree<T extends { id: string }>(children: ReadonlyMap<
   return result;
 }
 
-/** 需要你处理的那几种：在等答复、失败（含验证没过）。只有它们在「派出的任务」里带颜色。 */
-export function dispatchNeedsYou(task: Pick<TaskListItem, "question" | "status" | "stage">): boolean {
-  return !!task.question || hasFailed(task);
+/** 需要你处理的那几种：在等答复、等你裁定、失败（含验证没过）。只有它们在「派出的任务」里带颜色。 */
+export function dispatchNeedsYou(task: TaskListItem): boolean {
+  return !!task.question || awaitsRuling(task) || hasFailed(task);
 }
 
 /**
@@ -63,7 +63,8 @@ export type DispatchFacts = {
   needsYou: (taskId: string) => boolean;
 };
 
-export function dispatchFacts(tasks: readonly TaskListItem[]): DispatchFacts {
+/** 「派活人 id → 它直接派出去的那几条」，含归档的（能不能往下走只看边，见 isDispatchEdge）。 */
+export function dispatchEdges(tasks: readonly TaskListItem[]): Map<string, TaskListItem[]> {
   const edges = new Map<string, TaskListItem[]>();
   for (const task of tasks) {
     if (!isDispatchEdge(task)) continue;
@@ -71,6 +72,11 @@ export function dispatchFacts(tasks: readonly TaskListItem[]): DispatchFacts {
     if (bucket) bucket.push(task);
     else edges.set(task.dispatchedBy, [task]);
   }
+  return edges;
+}
+
+export function dispatchFacts(tasks: readonly TaskListItem[]): DispatchFacts {
+  const edges = dispatchEdges(tasks);
   const needs = new Map<string, boolean>();
   return {
     count: (taskId) => edges.get(taskId)?.filter((task) => !task.archived).length ?? 0,

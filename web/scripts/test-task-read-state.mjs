@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { deriveTaskStatusIndicator, readEventForTask, reconcileReadState } from "../src/lib/useTaskReadState.ts";
-import { taskLook } from "../src/lib/taskLook.ts";
+import { dispatchedRollUp, taskLook } from "../src/lib/taskLook.ts";
 
 function task(id, updatedAt) {
   return {
@@ -75,7 +75,9 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.equal(look.word, "等你答复");
   assert.equal(look.detail, "要不要 顺手把旧接口删掉？");
   const parked = taskLook({ ...task("parked", "2026-08-20T01:00:00.000Z"), status: "paused", monitorRunning: true });
-  assert.equal(parked.mark, "breathe", "等哨兵：会呼吸的琥珀点");
+  assert.equal(parked.mark, "hold", "等哨兵：不跳的主色点，机器的事");
+  assert.notEqual(parked.mark, look.mark, "等哨兵跟等你说话不是同一颗点");
+  assert.equal(parked.bucket, "wait");
   assert.equal(parked.word, null, "等哨兵行尾不写字");
   const failed = taskLook({ ...task("failed", "2026-08-20T01:00:00.000Z"), status: "failed" });
   assert.deepEqual([failed.mark, failed.bucket], ["bad", "todo"]);
@@ -83,6 +85,41 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.deepEqual([running.mark, running.bucket], ["run", "run"]);
   const quiet = taskLook({ ...task("quiet", "2026-08-20T01:00:00.000Z"), stage: "accepted" });
   assert.deepEqual([quiet.mark, quiet.say, quiet.bucket], [null, "", "accepted"]);
+}
+
+// 等你裁定（执行者驳回了一轮审查意见）：任务多半已经 done，不能读成「做完了，等验收」那一圈环。
+{
+  const at = "2026-08-20T01:00:00.000Z";
+  const ruling = taskLook({ ...task("ruling", at), disputeOpen: true });
+  assert.deepEqual([ruling.indicator, ruling.mark, ruling.word, ruling.bucket], ["attention", "wait", "等你裁定", "todo"]);
+  const parkedRuling = taskLook({ ...task("ruling", at), status: "paused", disputeOpen: true });
+  assert.deepEqual([parkedRuling.word, parkedRuling.bucket], ["等你裁定", "todo"], "停在检查点等裁定：也归「需要你处理」");
+  assert.equal(dot({ stage: "verify_failed", disputeOpen: true }), "attention", "被驳回的正是没过的那一轮：下一步是你拍板");
+  assert.equal(dot({ status: "running", disputeOpen: true }), "active", "跑着的时候事实是在跑");
+  assert.equal(dot({ status: "failed", disputeOpen: true }), "error");
+  assert.equal(dot({ stage: "accepted", disputeOpen: true }), null, "验收过的裁不了，不再催");
+  assert.equal(dot({ archived: true, disputeOpen: true }), "unaccepted", "归档的裁不了");
+  assert.equal(taskLook({ ...task("ask", at), status: "paused", question: "问你", disputeOpen: true }).word, "等你答复", "明着问你的先说");
+}
+
+// 名下派出去的任务往上带：派它的那条早就 done 了，名下还在跑、在问你、摔了，行首得看得出来。
+{
+  const at = "2026-08-20T01:00:00.000Z";
+  const parent = { ...task("parent", at) };
+  assert.equal(dispatchedRollUp([null, "unaccepted", "success", "pending"]), null, "名下做完没验收、没开始的不往上带");
+  assert.equal(dispatchedRollUp(["active", "working", "queued"]), "active");
+  assert.equal(dispatchedRollUp(["active", "error"]), "error");
+  assert.equal(dispatchedRollUp(["error", "attention", "active"]), "attention");
+  const busy = taskLook(parent, [], false, "active");
+  assert.deepEqual([busy.indicator, busy.mark, busy.fromDispatched, busy.say], ["active", "run", true, "派出的任务：运行中"]);
+  assert.equal(busy.bucket, "todo", "顶上那排分堆仍按它自己");
+  assert.equal(busy.word, null, "名下哪一条在问你，那一行自己写");
+  const own = taskLook({ ...parent, status: "paused", question: "问你" }, [], false, "active");
+  assert.deepEqual([own.indicator, own.fromDispatched, own.word], ["attention", false, "等你答复"], "轮到你的那几档压过名下在跑");
+  const asks = taskLook(parent, [], false, "attention");
+  assert.deepEqual([asks.mark, asks.word, asks.say], ["wait", null, "派出的任务：需要人工输入"]);
+  const quiet = taskLook(parent, [], false, null);
+  assert.deepEqual([quiet.indicator, quiet.fromDispatched], ["unaccepted", false], "名下没事就是它自己");
 }
 
 const lead = { ...task("lead", "2026-08-20T01:00:00.000Z"), mode: "team", status: "idle" };

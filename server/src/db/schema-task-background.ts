@@ -28,6 +28,25 @@ export async function ensureTaskBackgroundSchema(client: Client): Promise<void> 
     // 字段更新(web/src/lib/taskSnapshot.ts)。
     { table: "sessions", columns: ["upstream_stalled_since"], rowLifecycle: false },
   ];
+  // 「等你裁定」(Task.disputeOpen) 住在审查轮次上,轮次行不直接记任务 id,要经它那条审查链去找。
+  // 盯的是判据(free-review-awaiting-ruling.ts)里会变的那几列;插入时就带着驳回的(接力导入)也算。
+  const disputeColumns = ["dispute_reason", "dispute_defer_reason", "dispute_resolution", "dispute_superseded_at"];
+  const bumpRun = (record: string) => `
+    INSERT INTO task_background_revisions (task_id, revision)
+      SELECT task_id, 1 FROM free_review_runs WHERE id = ${record}.run_id
+      ON CONFLICT(task_id) DO UPDATE SET revision = revision + 1;
+  `;
+  await client.executeMultiple(`
+    CREATE TRIGGER IF NOT EXISTS free_review_rounds_dispute_background_update
+      AFTER UPDATE OF ${disputeColumns.join(", ")} ON free_review_rounds
+      WHEN ${disputeColumns.map((column) => `OLD.${column} IS NOT NEW.${column}`).join(" OR ")} BEGIN
+      ${bumpRun("NEW")}
+    END;
+    CREATE TRIGGER IF NOT EXISTS free_review_rounds_dispute_background_insert AFTER INSERT ON free_review_rounds
+      WHEN NEW.dispute_reason IS NOT NULL OR NEW.dispute_defer_reason IS NOT NULL BEGIN
+      ${bumpRun("NEW")}
+    END;
+  `);
   for (const { table, columns, rowLifecycle } of watched) {
     const changed = columns.map((column) => `OLD.${column} IS NOT NEW.${column}`).join(" OR ");
     const bump = (record: string, condition = "1") => `

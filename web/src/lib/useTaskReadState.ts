@@ -3,7 +3,8 @@ import type { Task, TaskListItem } from "@ash/shared";
 import { teamNeverStarted, timeMs } from "@ash/shared/team";
 import { coversRead, taskReadRound, type TaskReadEntry, type TaskReads } from "@ash/shared/task-reads";
 import { getTaskReads, subscribeTaskReads, updateTaskReads } from "./taskReadSync.ts";
-import { deriveTaskStatusIndicator, taskLook, type TaskLook, type TaskStatusIndicator } from "./taskLook.ts";
+import { dispatchEdges, dispatchSubtree } from "./dispatchTree.ts";
+import { deriveTaskStatusIndicator, dispatchedRollUp, taskLook, type TaskLook, type TaskStatusIndicator } from "./taskLook.ts";
 
 // 档位的判据和侧栏那张表在 taskLook.ts；这里只管「读没读过」，并把两样原样转出，
 // 让老的调用点继续从这里引用。读没读过的记录本身按人存在服务端，同步在 taskReadSync.ts。
@@ -17,6 +18,8 @@ type ReadState = TaskReads;
 type TaskIndex = {
   byId: Map<string, TaskListItem>;
   workersByLead: Map<string, TaskListItem[]>;
+  /** 派活人 → 它直接派出去的那几条（lib/dispatchTree.ts）。 */
+  dispatchedBy: Map<string, TaskListItem[]>;
 };
 
 export type IndicatorForTask = (task: TaskListItem) => TaskStatusIndicator | null;
@@ -45,7 +48,7 @@ function buildTaskIndex(tasks: TaskListItem[]): TaskIndex {
     if (workers) workers.push(task);
     else workersByLead.set(task.parentId, [task]);
   }
-  return { byId, workersByLead };
+  return { byId, workersByLead, dispatchedBy: dispatchEdges(tasks) };
 }
 
 export function readTaskIds(task: Pick<Task, "id" | "parentId">): string[] {
@@ -107,12 +110,26 @@ export function useTaskReadState(tasks: TaskListItem[], selectedTaskId: string |
     return new Set(selectedTask ? readTaskIds(selectedTask) : []);
   }, [index, selectedTaskId]);
 
+  // 名下派出去的任务往上带的那一档（taskLook 的 dispatchedRollUp）：整棵往下、没归档的。只看事实不看
+  // 读没读过，所以跟着任务表算一次、按需填，不随已读变化重算。
+  const dispatchedLook = useMemo(() => {
+    const known = new Map<string, TaskStatusIndicator | null>();
+    return (taskId: string): TaskStatusIndicator | null => {
+      if (!index.dispatchedBy.has(taskId)) return null;
+      if (known.has(taskId)) return known.get(taskId)!;
+      const below = dispatchSubtree(index.dispatchedBy, taskId).filter((task) => !task.archived);
+      const result = dispatchedRollUp(below.map((task) => deriveTaskStatusIndicator(task, index.workersByLead.get(task.id) ?? [])));
+      known.set(taskId, result);
+      return result;
+    };
+  }, [index]);
+
   const lookForTask = useCallback<LookForTask>((task) => {
     const workers = index.workersByLead.get(task.id) ?? [];
     const mark = readMarkForTask(task, workers);
     const unread = !!mark && !visibleTaskIds.has(task.id) && !coversRead(readState[task.id], mark);
-    return taskLook(task, workers, unread);
-  }, [index, readState, visibleTaskIds]);
+    return taskLook(task, workers, unread, dispatchedLook(task.id));
+  }, [dispatchedLook, index, readState, visibleTaskIds]);
   const indicatorForTask = useCallback<IndicatorForTask>((task) => lookForTask(task).indicator, [lookForTask]);
 
   return { indicatorForTask, lookForTask, markTaskRead };

@@ -49,6 +49,7 @@ import {
   forgetHeldTrigger,
   readFreeReviewReservation,
 } from "./free-review-reservations.js";
+import { awaitingRuling, disputeWritten } from "./free-review-awaiting-ruling.js";
 import { withRulingGate } from "./free-review-ruling-gate.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { turnRole } from "./runs.js";
@@ -58,6 +59,19 @@ import { now } from "./util.js";
 type TaskRow = typeof tasks.$inferSelect;
 export type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 export type ReviewRoundRow = typeof freeReviewRounds.$inferSelect;
+
+/**
+ * 驳回落下、被裁定、被新一轮审查取代：除了审查面板那一路（`task.review`），任务快照也要重发 ——
+ * 「等你裁定」是任务列表上的一格后台事实（`Task.disputeOpen`，task-store.ts 现查），侧栏那颗点
+ * 读它。它不在 tasks 表上，改它不动 updated_at，不补发的话侧栏要等下一次整表拉取才变。
+ */
+async function announceDispute(taskId: string): Promise<void> {
+  bus.publish({ type: "task.review", taskId });
+  const { publishTaskUpdated } = await import("./task-store.js");
+  await publishTaskUpdated(taskId).catch((error: unknown) => {
+    console.warn(`[ash] 重发任务 ${taskId} 的快照失败（等裁定标记）:`, error);
+  });
+}
 
 /** 驳回理由的长度上限：够写满一页逐条反驳，又不至于把一整份 diff 灌进数据库。 */
 export const MAX_DISPUTE_REASON_LEN = 20_000;
@@ -124,25 +138,6 @@ export function disputeInputOf(raw: { summary?: unknown; reason?: unknown; defer
 export function hasDispute(round: ReviewRoundRow | null | undefined): boolean {
   return !!(round?.disputeReason || round?.disputeDeferReason);
 }
-
-/**
- * 同一个判据的 SQL 版：查询与 CAS 都用它，不各写一份 `IS NOT NULL`。两边口径一偏（老数据
- * 或接力载荷里理由是空串），裁定闸按 SQL 认定「有驳回、等裁定」挡住预约，界面按
- * `hasDispute` 认定「没驳回」不给卡——用户看得见「等裁定」，却找不到能裁的那一条。
- */
-const disputeWritten = sql`(coalesce(${freeReviewRounds.disputeReason}, '') <> '' or coalesce(${freeReviewRounds.disputeDeferReason}, '') <> '')`;
-
-/**
- * 「等着用户裁定」的那组条件（不含任务过滤）：驳回已写下、没裁定、没被用户新派的审查取代、
- * 是工作区审查。按任务查（`unresolvedDisputes`）和跨任务查（`openDisputeTargets`）共用这一份，
- * 两处各写一遍的话，飞书推出去的卡和审查面板上的卡迟早不是同一批。
- */
-const awaitingRuling = and(
-  eq(freeReviewRuns.targetKind, "workspace"),
-  disputeWritten,
-  isNull(freeReviewRounds.disputeResolution),
-  isNull(freeReviewRounds.disputeSupersededAt),
-);
 
 // 排序键与界面上那张卡的 `dispute.at` 同一个兜底（free-workflow-state.ts）：接力载荷允许
 // 驳回时间为空，两边各按各的排，显示的那条和「默认那条」就会是两条。
@@ -305,7 +300,7 @@ export async function supersedeOpenDisputes(taskId: string, how: string): Promis
   const rounds = [...new Set(open.map(({ round }) => `第 ${round.round} 轮`))].join("、");
   await appendTaskTimeline(taskId,
     receiptLine(`执行者对${rounds}意见的驳回还没裁定，你${how}：这条驳回不再等裁定（驳回与报告原样留在审查记录里，没有替你选任何一档裁定）。`));
-  bus.publish({ type: "task.review", taskId });
+  await announceDispute(taskId);
 }
 
 /**
@@ -405,7 +400,7 @@ async function disputeFreeReviewHeld(
     hasDefer: !!deferReason,
     canceledAuto: !!canceledAuto,
   })));
-  bus.publish({ type: "task.review", taskId });
+  await announceDispute(taskId);
   return { runId: run.id, round: run.currentRound };
 }
 
@@ -501,7 +496,7 @@ export async function upholdDisputeOn(taskId: string, round: ReviewRoundRow): Pr
   await appendTaskTimeline(taskId,
     noticeLine({ kind: "review.repair", source: "free", round: round.round },
       `按第 ${round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`));
-  bus.publish({ type: "task.review", taskId });
+  await announceDispute(taskId);
   return true;
 }
 
@@ -593,7 +588,7 @@ export async function resolveFreeReviewDispute(
       `${note ? "按你写的要点和报告修复" : "照报告修复"}。`)
     // 时间线只放摘要，全文留在那一轮的审查记录里（时间线不是正文的第二个家）。
     + (note ? `你写下的裁定要点：${summarize(note)}` : "")));
-  bus.publish({ type: "task.review", taskId });
+  await announceDispute(taskId);
   if (resolution === "withdrawn") await releaseHeldReservation(taskId);
   await noteRulingSettled(taskId);
 

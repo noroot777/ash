@@ -308,19 +308,22 @@
 
 .workspace-team-row:hover .workspace-team-caret:not(:disabled),
 .workspace-team-row:focus-within .workspace-team-caret:not(:disabled),
-.workspace-team-row.is-expanded .workspace-team-caret:not(:disabled),
 .workspace-dispatch-row:hover > .workspace-task-leading .workspace-team-caret,
-.workspace-dispatch-row:focus-within > .workspace-task-leading .workspace-team-caret,
-.workspace-dispatch-row.is-expanded > .workspace-task-leading .workspace-team-caret {
+.workspace-dispatch-row:focus-within > .workspace-task-leading .workspace-team-caret {
+  opacity: 1;
+}
+/* 展开着、而这一行没有状态点（验收过也看过的）：箭头留着，不然行首空着，看不出它展开了。 */
+.workspace-team-row.is-expanded .workspace-team-leading:not(:has(> .workspace-status-dot)) > .workspace-team-caret:not(:disabled),
+.workspace-dispatch-row.is-expanded > .workspace-task-leading .workspace-team-leading:not(:has(> .workspace-status-dot)) > .workspace-team-caret {
   opacity: 1;
 }
 
+/* 展开着也照样是状态点，只有指到、聚焦时才换成箭头：展开是常驻的，一展开就把这一行的状态
+   藏起来，行首就只剩一颗箭头，看不出它自己（和名下）现在怎么样。展开没展开看底下那一列。 */
 .workspace-team-row:hover .workspace-team-leading > .workspace-status-dot,
 .workspace-team-row:focus-within .workspace-team-leading > .workspace-status-dot,
-.workspace-team-row.is-expanded .workspace-team-leading > .workspace-status-dot,
 .workspace-dispatch-row:hover > .workspace-task-leading .workspace-status-dot,
-.workspace-dispatch-row:focus-within > .workspace-task-leading .workspace-status-dot,
-.workspace-dispatch-row.is-expanded > .workspace-task-leading .workspace-status-dot {
+.workspace-dispatch-row:focus-within > .workspace-task-leading .workspace-status-dot {
   opacity: 0;
 }
 
