@@ -15,12 +15,6 @@ export type ExecutorSelection = {
   executorId: string | null;
 };
 
-export type ExecutorOption = {
-  value: string;
-  label: string;
-  disabled: boolean;
-};
-
 const TYPE_PREFIX = "__type:";
 const LOADING: AgentDetection = { status: "loading", agents: [] };
 
@@ -163,45 +157,4 @@ export function parseExecutorValue(
   }
   const profile = profiles.find((candidate) => candidate.id === value);
   return profile ? { agentType: profile.type, executorId: profile.id } : fallback;
-}
-
-/**
- * Generate native-select options in one place. `types` 已经由 registeredAgentTypes
- * 收窄；显式 Profile 与类型默认项都只来自注册表。失效的当前值仅作为禁用诊断项保留，
- * 不会重新变成可选候选。
- */
-export function executorOptions({
-  types,
-  profiles,
-  selection,
-  knownProfiles = profiles,
-}: {
-  types: AgentType[];
-  profiles: AgentExecutorProfile[];
-  selection?: ExecutorSelection;
-  knownProfiles?: AgentExecutorProfile[];
-}): ExecutorOption[] {
-  const options: ExecutorOption[] = types.map((type) => ({
-    value: executorValue({ agentType: type, executorId: null }),
-    label: `${type} · 类型默认`,
-    disabled: false,
-  }));
-  options.push(...profiles.map((profile) => ({
-    value: executorValue({ agentType: profile.type, executorId: profile.id }),
-    label: `${profile.name}${profile.model ? ` · ${profile.model}` : ""}${profile.isDefault ? "（默认）" : ""}`,
-    disabled: false,
-  })));
-  if (selection && !isExecutorPickable(selection, types, profiles)) {
-    const profile = selection.executorId
-      ? knownProfiles.find((candidate) => candidate.id === selection.executorId)
-      : null;
-    options.push({
-      value: executorValue(selection),
-      label: profile
-        ? `${profile.name}（当前设置 · 不可用）`
-        : `${selection.agentType} · 类型默认（当前设置 · 未注册）`,
-      disabled: true,
-    });
-  }
-  return options;
 }

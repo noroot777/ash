@@ -338,15 +338,6 @@
 }
 .wf-pop-option.is-none.is-on { color: var(--ink); }
 
-/* 加站菜单里每一条前面点一颗这一类站的颜色，和线上的站台是同一套记号 */
-.wf-pop-kind { display: flex; align-items: center; gap: 7px; }
-.wf-pop-kind i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--tone);
-}
-.wf-pop-kind:disabled i { background: var(--line2); }
 
 /* 起手式那张下拉：名字一行、颜色点一行、描述一行 */
 .wf-pop-tpl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }
@@ -575,8 +566,6 @@
 .wf-lib-rail .wf-body.is-pending { opacity: 1; }
 
 .wf-picker { max-width: 320px; }
-
-/* 收起态那条线 + 新建面板里的「干完之后」在 workflow-composer.css */
 
 /* ── Inspector 里的竖版线路 ───────────────────────────────────── */
 /* 340px 的窄栏里，竖着排比横着装得下更多：每一站有一整行的宽度。 */

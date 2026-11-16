@@ -32,18 +32,6 @@ export function freeReviewBlockingLabel(run: FreeReviewRun): string | null {
   return run.status === "reviewing" ? "审查进行中" : null;
 }
 
-function checkModeLabel(run: FreeReviewRun): string {
-  return run.checkMode === "logic" ? "逻辑检查" : "语法检查";
-}
-
-export function freeReviewActivityTitle(run: FreeReviewRun): string {
-  return `${run.reviewerName} · ${checkModeLabel(run)}`;
-}
-
-export function freeReviewActivityDetail(run: FreeReviewRun): string {
-  return `${FREE_REVIEW_RUN_LABELS[run.status]} · 已到第 ${run.currentRound} 轮 / 最多 ${run.retryLimit + 1} 轮`;
-}
-
 export type FreeReviewFreshness = "fresh" | "stale" | "unknown";
 
 /**
