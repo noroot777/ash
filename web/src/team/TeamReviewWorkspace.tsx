@@ -19,6 +19,7 @@ import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
+  commitTotal: number;
   branch: string | null;
   diff: TaskDiffResult;
   sessions: Session[];
@@ -30,7 +31,7 @@ function useReviewChanges(task: TaskListItem, enabled = true) {
   const factsVersion = useTaskFacts(task.id, task.updatedAt).version;
   return useVersionedRead<ReviewData>(task.id, `${task.updatedAt}|${commitVersion}|${factsVersion}`, () =>
     Promise.all([api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id)])
-      .then(([commits, diff, sessions]) => ({ commits: commits.commits, branch: commits.branch, diff, sessions })), enabled);
+      .then(([commits, diff, sessions]) => ({ commits: commits.commits, commitTotal: commits.total, branch: commits.branch, diff, sessions })), enabled);
 }
 
 function routeOf(task: TaskListItem, data: ReviewData): RouteData {
@@ -39,6 +40,7 @@ function routeOf(task: TaskListItem, data: ReviewData): RouteData {
     source: data.diff.sourceBranch || data.branch || session?.branch || "项目当前分支",
     target: routeTargetOf(task, data.diff.targetBranch),
     commits: data.commits,
+    commitTotal: data.commitTotal,
     diff: data.diff,
   };
 }

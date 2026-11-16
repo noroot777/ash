@@ -12,7 +12,9 @@ import { acceptTargetOf } from "./acceptTarget.ts";
 export type RouteData = {
   source: string;
   target: string;
+  /** 最近的一批提交；条数看 `commitTotal`，清单被截断时它比这里列出来的多。 */
   commits: TaskCommit[];
+  commitTotal: number;
   diff: TaskDiffResult;
 };
 
@@ -27,7 +29,9 @@ const TASK_BRANCH = /^(ash|harness)\//;
  * 选 other 是一次真改动（服务端会清掉冻结的目标），而不是「没变」；
  * 验收之后不再能点，后面跟着那次合并的区间（验收时冻结，后来分支再动也不改它）。
  * 「N 提交」点开是提交清单：diff 是分支相对基点的整体改动，不按单个提交切，所以每一条跳去 Git
- * 工作台看它自己的 diff，基点垫在最底下。
+ * 工作台看它自己的 diff，基点垫在最底下。N 是真实条数；清单只列最近一批，没列出来的有几条写在清单底下。
+ * 提交、文件、增删行说的是同一段改动：任务分支里合进来的目标分支、开工点带来的代码都不算（服务端
+ * task-change-scope.ts）。
  */
 export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
   task: TaskListItem;
@@ -67,7 +71,7 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
       ) : <code className="acc-dst">{data.target}</code>}
       {range && <code className="acc-range" aria-label={`合并区间 ${range}`}>{range}</code>}
       <button ref={commitsRef} type="button" className="acc-link" aria-expanded={layer === "commits"} disabled={!data.commits.length}
-        onClick={() => setLayer(layer === "commits" ? null : "commits")}>{data.commits.length} 提交</button>
+        onClick={() => setLayer(layer === "commits" ? null : "commits")}>{data.commitTotal} 提交</button>
       <span className="acc-stat">{files.length} 文件 <b className="acc-add">+{add}</b> <b className="acc-del">−{del}</b></span>
       {layer === "target" && entry && (
         <TargetMenu anchorRef={targetRef} taskId={task.id} projectId={entry.projectId} current={acceptTargetOf(task, entry) ?? data.target}
@@ -92,6 +96,7 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
               </button>
             </li>
           ))}</ul>
+          {data.commitTotal > data.commits.length && <p>更早的 {data.commitTotal - data.commits.length} 条没有列出</p>}
           {data.diff.mergeBase && <p>基点 <code>{data.diff.mergeBase.slice(0, 8)}</code></p>}
         </AcceptLayer>
       )}

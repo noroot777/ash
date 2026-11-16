@@ -17,6 +17,8 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 //    diff 区离验收台顶端不超过 150px（宽屏下连 diff 的第一个可见元素也在 150px 以内）。
 // ⑤ 旧验收台那一摞（「改动与提交」标题、分支条、「派生与验收」卡、验收快照卡、门禁卡和它的
 //    「这次跳过它，直接合并」「重跑一次」「刷新依赖」「重新核对」）确实不在了。
+// ⑥ **提交数不拿清单的长度冒充**。清单只列最近一批；第一行写的是真实条数，点开之后没列出来的
+//    有几条写在清单底下。2026-11-16 现场是一条 185 个提交的分支在第一行写着「50 提交」。
 const web = await startWebServer();
 
 const LONG_BLOCKER = "父任务「重写验收台」的分支还没合入 main，本任务基于它开工：web/src/acceptance/AcceptanceControls.tsx/web/src/acceptance/DependencyChecks.tsx/web/src/acceptance/CheckRow.tsx 这几处改动都还没进目标分支，请先验收父任务，或把开工起点改到 main 之后重新跑一遍再来验收。";
@@ -25,6 +27,8 @@ const GATE_COMMAND = "npm -w web run build && node scripts/test-acceptance-host-
 const GONE_TEXT = ["改动与提交", "派生与验收", "验收快照", "这次跳过它，直接合并", "重跑一次", "刷新依赖", "重新核对"];
 const GONE_SELECTORS = [".review-meta-bar", ".accepted-snapshot-card", ".branch-acceptance-panel", ".accept-gate-card", ".acceptance-host", ".team-accept-actions"];
 const ACTION = "验收通过";
+const LISTED_COMMITS = 50;
+const TOTAL_COMMITS = 185;
 
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n export { a, b };\n";
 const entry = (taskId, more = {}) => ({
@@ -82,7 +86,14 @@ function api(hold, unexpected) {
       }
       if (what === "accept-gate") return reply(gateOf(taskId));
       if (what === "scm") return reply(scmOf(taskId));
-      if (what === "commits") return reply({ branch: `ash/${taskId}`, commits: [{ sha: "1111111111111111", subject: "feat: 一行决定", at: "2026-11-02T01:20:00.000Z" }] });
+      if (what === "commits") {
+        // 冲突那张台子的清单是截断的：列 50 条，实际 185 条。其余的一条就是全部。
+        const listed = taskId === "conflict-task" ? LISTED_COMMITS : 1;
+        return reply({
+          branch: `ash/${taskId}`, total: taskId === "conflict-task" ? TOTAL_COMMITS : 1,
+          commits: Array.from({ length: listed }, (_, index) => ({ sha: `${String(index).padStart(4, "0")}111111111111`, subject: `feat: 一行决定 ${index}`, at: "2026-11-02T01:20:00.000Z" })),
+        });
+      }
       if (what === "diff") {
         return reply({ available: true, sourceBranch: `ash/${taskId}`, targetBranch: "main", mergeBase: "0123456789abcdef", diff: DIFF,
           files: [{ path: "a.ts", additions: 1, deletions: 1, origPath: null }], truncated: false, limitBytes: 1048576 });
@@ -249,6 +260,18 @@ try {
       for (const text of GONE_TEXT) assert.ok(!view.text.includes(text), `${width}px/${theme}：页面上还有「${text}」`);
       assert.equal(await page.locator(GONE_SELECTORS.join(",")).count(), 0, `${width}px/${theme}：旧验收台的元素还在`);
     }
+    // ⑥ 第一行写真实条数；点开的清单只有最近一批，底下写明还有几条没列出来。
+    const commitCount = (host) => page.locator(`[data-host="${host}"] .acc-route > button.acc-link`).first();
+    assert.equal((await commitCount("single").innerText()).trim(), "1 提交", `${width}px：没截断的清单，条数就是它的长度`);
+    assert.equal((await commitCount("conflict").innerText()).trim(), `${TOTAL_COMMITS} 提交`, `${width}px：截断的清单，第一行写的是真实条数`);
+    await commitCount("conflict").click();
+    const commitLayer = page.locator(".acc-layer-commits");
+    await commitLayer.waitFor();
+    assert.equal(await commitLayer.locator("li").count(), LISTED_COMMITS, `${width}px：清单只列最近一批`);
+    assert.ok((await commitLayer.innerText()).includes(`更早的 ${TOTAL_COMMITS - LISTED_COMMITS} 条没有列出`), `${width}px：没列出来的有几条要写出来`);
+    await page.keyboard.press("Escape");
+    await commitLayer.waitFor({ state: "detached" });
+
     // 深色确实换上了（变量只在 :root[data-theme="dark"] 下改）。
     const [lightBg, darkBg] = await page.evaluate(() => {
       const acc = document.querySelector(".acc-desk");

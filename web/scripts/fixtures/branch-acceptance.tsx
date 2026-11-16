@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task, TaskListItem } from "@ash/shared";
-import { api, type TaskCommit, type TaskDiffResult } from "../../src/lib/api.ts";
+import { api, type TaskCommitList, type TaskDiffResult } from "../../src/lib/api.ts";
 import { json, request } from "../../src/lib/apiClient.ts";
 import { AcceptanceControls } from "../../src/acceptance/AcceptanceControls.tsx";
 import { AcceptRoute } from "../../src/acceptance/AcceptRoute.tsx";
@@ -50,7 +50,7 @@ function PlanObserver({ task }: { task: TaskListItem }) {
 function Fixture() {
   const [task, setTask] = useState<Task | null>(null);
   const [diff, setDiff] = useState<TaskDiffResult | null>(null);
-  const [commits, setCommits] = useState<{ branch: string | null; commits: TaskCommit[] } | null>(null);
+  const [commits, setCommits] = useState<TaskCommitList | null>(null);
   const [notice, setNotice] = useState("");
   const [creationError, setCreationError] = useState("");
   const [mounted, setMounted] = useState(true);
@@ -62,7 +62,7 @@ function Fixture() {
   useEffect(() => {
     let alive = true;
     void api.taskDiff(taskId).then(value => { if (alive) setDiff(value); });
-    void api.taskCommits(taskId).then(value => { if (alive) setCommits(value); }, () => { if (alive) setCommits({ branch: null, commits: [] }); });
+    void api.taskCommits(taskId).then(value => { if (alive) setCommits(value); }, () => { if (alive) setCommits({ branch: null, commits: [], total: 0 }); });
     return () => { alive = false; };
   }, [taskId, task?.updatedAt]);
   if (!task) return <p>读取测试任务…</p>;
@@ -77,6 +77,7 @@ function Fixture() {
     source: diff.sourceBranch || commits?.branch || "项目当前分支",
     target: diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "验收时确定",
     commits: commits?.commits ?? [],
+    commitTotal: commits?.total ?? 0,
     diff,
   };
   return <main style={{ maxWidth: 920, padding: 32, margin: "auto" }}>

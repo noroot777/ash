@@ -4,14 +4,15 @@ import { CaretRight } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { InspRow } from "../inspector/parts.tsx";
 import { useInspectorNav } from "../inspector/nav.tsx";
-import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { api, type TaskDiffResult } from "../lib/api.ts";
 import { sharedTeamParent } from "../review/reviewModel.ts";
 import { branchDiffReason } from "../lib/branch-diff-reason.ts";
 import { RollingNumber } from "../lib/motion/index.ts";
 
 interface ChangeData {
   branch: string | null;
-  commits: TaskCommit[];
+  /** 真实条数（清单只列最近一批，不拿它的长度当总数）。 */
+  commitTotal: number;
   diff: TaskDiffResult;
 }
 
@@ -43,7 +44,7 @@ export function TaskChangeSummary({
     setError(null);
     Promise.all([api.taskCommits(sourceTask.id), api.taskDiff(sourceTask.id)]).then(
       ([commits, diff]) => {
-        if (alive) setData({ branch: commits.branch, commits: commits.commits, diff });
+        if (alive) setData({ branch: commits.branch, commitTotal: commits.total, diff });
       },
       (reason) => {
         if (alive) {
@@ -70,7 +71,7 @@ export function TaskChangeSummary({
               <button
                 type="button"
                 className="insp-val"
-                aria-label={`${shared ? `${shared}；` : ""}${data.diff.available ? `${data.diff.files.length} 个文件，增 ${additions} 行，删 ${deletions} 行` : "改动文件数未知"}，${data.commits.length} 个提交；去「改动」看`}
+                aria-label={`${shared ? `${shared}；` : ""}${data.diff.available ? `${data.diff.files.length} 个文件，增 ${additions} 行，删 ${deletions} 行` : "改动文件数未知"}，${data.commitTotal} 个提交；去「改动」看`}
                 {...tip.anchorProps}
                 onClick={open}
               >
@@ -81,7 +82,7 @@ export function TaskChangeSummary({
                     <RollingNumber className="insp-num insp-minus" value={deletions} format={(n) => `−${n}`} />
                   </>
                 ) : <span>查看改动</span>}
-                <span className="insp-num insp-faint">· {data.commits.length} 个提交</span>
+                <span className="insp-num insp-faint">· {data.commitTotal} 个提交</span>
                 <CaretRight size={12} aria-hidden="true" />
               </button>
               <HoverTip at={tip.at}>{shared ?? "去「改动」看"}</HoverTip>

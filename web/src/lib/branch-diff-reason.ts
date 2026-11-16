@@ -6,6 +6,8 @@ const labels: Record<string, string> = {
   no_merge_base: "任务分支与合入目标没有共同基点",
   accepted_snapshot_unreadable: "无法读取验收时保存的提交",
   start_commit_unreadable: "无法读取任务的开工提交",
+  base_conflict: "开工点带来的代码和任务分支里已合入的目标分支合不到一起，算不出这条任务自己的改动",
+  base_unreadable: "合成对比基准时 git 没有给出结果，请刷新后重试",
   task_diff_unreadable: "无法读取任务的分支改动，请刷新后重试",
 };
 

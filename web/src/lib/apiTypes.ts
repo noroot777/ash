@@ -58,6 +58,8 @@ export type DeleteTaskResult = {
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
 
 export type TaskCommit = { sha: string; subject: string; at: string };
+/** 任务自己的提交。`commits` 只列最近的一批，`total` 才是条数——清单被截断时它比 `commits.length` 大。 */
+export type TaskCommitList = { branch: string | null; commits: TaskCommit[]; total: number };
 
 export type RemoteTaskSnapshot = {
   task: Task;

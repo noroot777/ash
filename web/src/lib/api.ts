@@ -77,7 +77,7 @@ import type {
   PullStrategy,
   ReplyTaskResult,
   SessionTraceEntry,
-  TaskCommit,
+  TaskCommitList,
   TaskDiffResult,
   TaskFileDiffResult,
   TaskWorkspaceProbe,
@@ -482,8 +482,10 @@ export const api = {
   // 这个读的是提交历史上的一段区间。同一个文件两边的内容可以完全不同，路径也不通用。
   taskBranchFileDiff: (taskId: string, path: string, origPath?: string | null): Promise<TaskFileDiffResult> =>
     request(`/tasks/${id(taskId)}/diff/file?path=${id(path)}${origPath ? `&origPath=${id(origPath)}` : ""}`),
-  taskCommits: (taskId: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>
-    request(`/tasks/${id(taskId)}/commits`),
+  // 还没重启到新版的服务端不给 `total`：那时清单就是它知道的全部。
+  taskCommits: (taskId: string): Promise<TaskCommitList> =>
+    request<Omit<TaskCommitList, "total"> & { total?: number }>(`/tasks/${id(taskId)}/commits`)
+      .then((list) => ({ ...list, total: list.total ?? list.commits.length })),
 
   // 工作目录里的文件那一族（列目录、`@` 候选、读全文、打开方式、删除）在 `fileApi.ts`，
   // 整份 spread 进来，`api.taskFiles()` 这类调用点一字不动。
