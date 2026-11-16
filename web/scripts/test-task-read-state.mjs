@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { deriveTaskStatusIndicator, readEventForTask, reconcileReadState } from "../src/lib/useTaskReadState.ts";
-import { dispatchedRollUp, taskLook } from "../src/lib/taskLook.ts";
+import { dispatchedRollUp, dispatchedStateOf, taskLook } from "../src/lib/taskLook.ts";
 
 function task(id, updatedAt) {
   return {
@@ -102,24 +102,47 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.equal(taskLook({ ...task("ask", at), status: "paused", question: "问你", disputeOpen: true }).word, "等你答复", "明着问你的先说");
 }
 
-// 名下派出去的任务往上带：派它的那条早就 done 了，名下还在跑、在问你、摔了，行首得看得出来。
+// 父任务（团队、名下收着派出去的任务）不画圆点，行尾写一句短语：它自己的，或名下带上来的。
 {
   const at = "2026-08-20T01:00:00.000Z";
-  const parent = { ...task("parent", at) };
-  assert.equal(dispatchedRollUp([null, "unaccepted", "success", "pending"]), null, "名下做完没验收、没开始的不往上带");
-  assert.equal(dispatchedRollUp(["active", "working", "queued"]), "active");
-  assert.equal(dispatchedRollUp(["active", "error"]), "error");
-  assert.equal(dispatchedRollUp(["error", "attention", "active"]), "attention");
-  const busy = taskLook(parent, [], false, "active");
-  assert.deepEqual([busy.indicator, busy.mark, busy.fromDispatched, busy.say], ["active", "run", true, "派出的任务：运行中"]);
-  assert.equal(busy.bucket, "todo", "顶上那排分堆仍按它自己");
-  assert.equal(busy.word, null, "名下哪一条在问你，那一行自己写");
-  const own = taskLook({ ...parent, status: "paused", question: "问你" }, [], false, "active");
-  assert.deepEqual([own.indicator, own.fromDispatched, own.word], ["attention", false, "等你答复"], "轮到你的那几档压过名下在跑");
-  const asks = taskLook(parent, [], false, "attention");
-  assert.deepEqual([asks.mark, asks.word, asks.say], ["wait", null, "派出的任务：需要人工输入"]);
-  const quiet = taskLook(parent, [], false, null);
-  assert.deepEqual([quiet.indicator, quiet.fromDispatched], ["unaccepted", false], "名下没事就是它自己");
+  const phrase = (over, dispatched = null, workers = []) => taskLook({ ...task("p", at), ...over }, workers, false, dispatched).phrase;
+  const words = (over) => phrase(over)?.word ?? null;
+  assert.equal(words({ status: "paused", question: "问你" }), "等你答复");
+  assert.equal(words({ disputeOpen: true }), "等你裁定");
+  assert.equal(words({ status: "paused" }), "已暂停");
+  assert.equal(words({ status: "backlog", prerequisites: { prerequisites: [], dependents: [], waiting: false, blocked: "合不拢", launched: false } }), "开不了工");
+  assert.equal(words({ status: "backlog", prerequisites: { prerequisites: [], dependents: [], waiting: true, blocked: null, launched: false } }), "等前置");
+  assert.equal(words({ status: "failed" }), "失败");
+  assert.equal(words({ stage: "verify_failed" }), "验证没过");
+  assert.equal(words({ status: "running", upstreamStalled: true }), "卡在上游");
+  assert.equal(words({ status: "running" }), "运行中");
+  assert.equal(words({ status: "awaiting_review" }), "审查中");
+  assert.equal(words({ status: "paused", monitorRunning: true }), "等哨兵");
+  assert.equal(words({ acceptGateRunning: true }), "跑验收检查");
+  assert.equal(words({ status: "queued" }), "排队中");
+  assert.equal(words({}), "待验收");
+  assert.equal(taskLook({ ...task("p", at), stage: "accepted" }, [], true).phrase?.word, "有新动态");
+  assert.equal(words({ stage: "accepted" }), null, "验收过也看过：什么都不写");
+  assert.equal(words({ status: "canceled" }), null);
+  assert.deepEqual([phrase({ status: "paused", question: "问你" }).tone, phrase({ status: "failed" }).tone, phrase({ status: "running" }).tone], ["ask", "bad", null]);
+  assert.equal(phrase({ status: "paused", question: "  要不要\n删掉？ " }).tip, "要不要 删掉？", "指上去是问题本身");
+
+  const child = (over, title) => dispatchedStateOf({ ...task(title, at), title, ...over });
+  assert.equal(dispatchedRollUp([child({}, "a"), child({ stage: "accepted" }, "b")]), null, "名下做完没验收、验收过的不往上带");
+  assert.equal(child({ stage: "accepted" }, "b"), null, "验收过的没有短语");
+  const running = child({ status: "running" }, "跑着的");
+  const asking = child({ status: "paused", question: "?" }, "问你的");
+  const broken = child({ status: "failed" }, "摔了的");
+  assert.equal(dispatchedRollUp([running, broken, asking]), asking, "轮到你的压过失败、在跑");
+  assert.equal(dispatchedRollUp([running, broken]), broken);
+
+  const below = phrase({}, running);
+  assert.deepEqual([below.word, below.tone, below.tip], ["运行中", null, "派出的任务「跑着的」运行中"], "自己做完了，名下在跑：写名下的");
+  assert.deepEqual([phrase({}, asking).word, phrase({}, asking).tone], ["等你答复", "ask"]);
+  assert.equal(phrase({ status: "paused", question: "问你" }, running).word, "等你答复", "自己轮到你的压过名下在跑");
+  assert.equal(phrase({ status: "running" }, running).tip, "运行中", "同档写自己的");
+  assert.equal(phrase({ stage: "accepted" }, null), null);
+  assert.equal(taskLook({ ...task("p", at) }, [], false, asking).mark, "open", "圆点本身只说自己（父任务不画它）");
 }
 
 const lead = { ...task("lead", "2026-08-20T01:00:00.000Z"), mode: "team", status: "idle" };

@@ -1,14 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { TaskListItem } from "@ash/shared";
-import { CaretRight } from "@phosphor-icons/react";
 import { type LookForTask } from "../lib/useTaskReadState.ts";
 import { dispatchSubtree, type DispatchFacts } from "../lib/dispatchTree.ts";
 import { type DispatchForest } from "./dispatchForest.ts";
-import { RowMark, TaskRow } from "./TaskTreeRows.tsx";
+import { ParentCaret, TaskRow } from "./TaskTreeRows.tsx";
 
-// 侧栏里派出去的任务收在派它的那条下面：那一行行首多一颗箭头（平时是状态点，指到、聚焦、
-// 展开时换成箭头 —— 跟团队行同一种做法），行尾一个数（名下几条）。名下整棵有在等答复或失败
-// 的，那个数变琥珀色。默认收着；开过的记在本机，刷新后还开着。
+// 侧栏里派出去的任务收在派它的那条下面：那一行行首是展开箭头、不画状态点（跟团队行同一种做法），
+// 它自己和名下此刻怎么样写成行尾一句短语（lib/taskLook 的 phrase），后面一个数（名下几条）。名下
+// 整棵有在等答复或失败的，那个数变琥珀色。默认收着；开过的记在本机，刷新后还开着。
 //
 // 收在谁下面由 dispatchForest.ts 算（只在画出来的那批行之间收）；那个数和它的颜色是关系事实，
 // 从全量任务算（dispatchFacts，经 DispatchFactsProvider 递下来）—— 筛选把名下几条筛掉了，数照旧、
@@ -117,7 +116,6 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
   useEffect(() => {
     if (selectedInside) openRows?.([task.id]);
   }, [openRows, selectedInside, task.id]);
-  const look = lookForTask(task);
   const said = `${count} 个派出的任务${needs ? "，有要你处理的" : ""}`;
   return (
     <>
@@ -130,21 +128,11 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
         showProject={showProject}
         child={child}
         showOrigin={showOrigin}
+        parent
         wrapperClassName={expandable ? `workspace-dispatch-row${expanded ? " is-expanded" : ""}` : undefined}
         leading={expandable ? (
-          <span className="workspace-team-leading">
-            <RowMark look={look} />
-            <button
-              className="workspace-team-caret"
-              type="button"
-              aria-label={`${expanded ? "收起" : "展开"} ${said}`}
-              aria-expanded={expanded}
-              onClick={() => state?.toggle(task.id)}
-            >
-              <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
-            </button>
-          </span>
-        ) : undefined}
+          <ParentCaret expanded={expanded} label={`${expanded ? "收起" : "展开"} ${said}`} onToggle={() => state?.toggle(task.id)} />
+        ) : null}
         tally={
           // 有箭头时数和颜色由箭头那颗键念出来；名下几条都被筛掉了、没有箭头时，读屏得在这里听到。
           <em className={`workspace-dispatch-count${needs ? " is-warn" : ""}`}>

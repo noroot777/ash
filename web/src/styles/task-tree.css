@@ -161,6 +161,12 @@
   white-space: nowrap;
 }
 
+/* 父任务行尾那句短语（TaskTreeRows 的 RowPhrase）：跟圆点同一个读法，琥珀轮到你、红出事了，
+   其余（运行中、排队中、待验收……）淡灰，不抢标题。 */
+.workspace-task-phrase { color: var(--faint); }
+.workspace-task-phrase.is-ask { color: var(--amber); }
+.workspace-task-phrase.is-bad { color: var(--red); }
+
 .workspace-task-glyph {
   flex: 0 0 auto;
   color: var(--faint);
@@ -282,17 +288,8 @@
   position: relative;
 }
 
-.workspace-team-leading {
-  display: grid;
-  width: 22px;
-  height: 34px;
-  place-items: center;
-}
-
-.workspace-team-leading > * {
-  grid-area: 1 / 1;
-}
-
+/* 父任务（团队、名下收着派出去的任务）行首只有一颗展开箭头，一直在：这一格不画状态点，
+   它怎么样写在行尾那句短语里（RowPhrase）。没有可展开的执行者时箭头不画，槽位留着。 */
 .workspace-team-caret {
   display: grid;
   width: 22px;
@@ -302,35 +299,7 @@
   border-radius: 5px;
   background: transparent;
   color: var(--faint);
-  opacity: 0;
-  transition: color 130ms ease-out, opacity 130ms ease-out;
-}
-
-.workspace-team-row:hover .workspace-team-caret:not(:disabled),
-.workspace-team-row:focus-within .workspace-team-caret:not(:disabled),
-.workspace-dispatch-row:hover > .workspace-task-leading .workspace-team-caret,
-.workspace-dispatch-row:focus-within > .workspace-task-leading .workspace-team-caret {
-  opacity: 1;
-}
-/* 展开着、而这一行没有状态点（验收过也看过的）：箭头留着，不然行首空着，看不出它展开了。 */
-.workspace-team-row.is-expanded .workspace-team-leading:not(:has(> .workspace-status-dot)) > .workspace-team-caret:not(:disabled),
-.workspace-dispatch-row.is-expanded > .workspace-task-leading .workspace-team-leading:not(:has(> .workspace-status-dot)) > .workspace-team-caret {
-  opacity: 1;
-}
-
-/* 展开着也照样是状态点，只有指到、聚焦时才换成箭头：展开是常驻的，一展开就把这一行的状态
-   藏起来，行首就只剩一颗箭头，看不出它自己（和名下）现在怎么样。展开没展开看底下那一列。 */
-.workspace-team-row:hover .workspace-team-leading > .workspace-status-dot,
-.workspace-team-row:focus-within .workspace-team-leading > .workspace-status-dot,
-.workspace-dispatch-row:hover > .workspace-task-leading .workspace-status-dot,
-.workspace-dispatch-row:focus-within > .workspace-task-leading .workspace-status-dot {
-  opacity: 0;
-}
-
-/* 触屏没有「指到」：箭头一直在（点得到它、也看得出这一行能展开）。 */
-@media (hover: none) {
-  .workspace-dispatch-row > .workspace-task-leading .workspace-team-caret { opacity: 1; }
-  .workspace-dispatch-row > .workspace-task-leading .workspace-status-dot { opacity: 0; }
+  transition: color 130ms ease-out;
 }
 
 /* 派出去的任务收在派它的那条下面：缩进一档、左边一道细线（同团队执行者那一列）。 */

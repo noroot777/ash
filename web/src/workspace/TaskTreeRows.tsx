@@ -102,6 +102,41 @@ function RowWord({ look }: { look: TaskLook }) {
   );
 }
 
+// 父任务行尾那句短语（运行中、等你答复……，表在 lib/taskLook 的 phraseWord）：它不画圆点，
+// 箭头占着行首那一格。琥珀 = 轮到你，红 = 出事了，其余淡灰。指上去说是谁、在等什么。
+function RowPhrase({ look }: { look: TaskLook }) {
+  const tip = useHoverTip();
+  const phrase = look.phrase;
+  if (!phrase) return null;
+  return (
+    <>
+      <span className={`workspace-task-word workspace-task-phrase${phrase.tone ? ` is-${phrase.tone}` : ""}`} {...tip.anchorProps}>{phrase.word}</span>
+      <HoverTip at={tip.at}>{phrase.tip}</HoverTip>
+    </>
+  );
+}
+
+// 父任务行首那颗展开箭头：一直在（这一格不再画圆点）。名下一条可展开的都没有时不画，槽位留着。
+export function ParentCaret({ expanded, label, disabled = false, onToggle }: {
+  expanded: boolean;
+  label: string;
+  disabled?: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      className="workspace-team-caret"
+      type="button"
+      disabled={disabled}
+      aria-label={label}
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
+    </button>
+  );
+}
+
 // 行尾常驻的灰图标（团队任务、已置顶）：只是让你认得出这是哪种行，点了跟点整行一样。
 // 名字在提示里。
 function RowGlyph({ icon: Glyph, label, weight = "regular" }: { icon: Icon; label: string; weight?: "regular" | "fill" }) {
@@ -162,6 +197,7 @@ export function TaskRow({
   onTask,
   lookForTask,
   child = false,
+  parent = false,
   showOrigin = true,
   showProject = true,
   leading,
@@ -175,6 +211,8 @@ export function TaskRow({
   onTask: (task: TaskListItem) => void;
   lookForTask: LookForTask;
   child?: boolean;
+  /** 父任务（名下收着派出去的任务、团队调度台）：行首不画圆点（leading 只放箭头），行尾写短语。 */
+  parent?: boolean;
   showOrigin?: boolean;
   // 行首那枚项目徽标画不画。默认画（有徽标表就说明是任务模式）；**被项目分组装着的行
   // 传 false** —— 组头已经写着项目名，每行再标一次就是把「弱化」做反了。
@@ -225,11 +263,11 @@ export function TaskRow({
   // 智能体开的、却查不到来源任务的（外部智能体自报、群聊委派）：没地方可去，就只画一颗看的
   // 机器人。查得到来源的那种由下面的 OriginTaskChip 画成能点的那一颗。
   const agentOnly = showOrigin && !hasOrigin && task.creationOrigin?.kind === "agent" ? taskCreationLabel(task.creationOrigin) : null;
-  const hasEnd = !!look.word || isTeam || pinned || !!agentOnly || tally != null;
+  const hasEnd = (parent ? !!look.phrase : !!look.word) || isTeam || pinned || !!agentOnly || tally != null;
   return (
     <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && look.bucket === "todo" ? " is-todo" : ""}${hasEnd ? " has-end" : ""}${task.starredAt != null ? " has-star" : ""}${queueBadge ? " has-queue" : ""}${canStar ? " can-star" : ""}`}>
       <span className="workspace-task-leading">
-        {leading ?? <RowMark look={look} />}
+        {parent ? leading : leading ?? <RowMark look={look} />}
       </span>
       <button
         className={`workspace-task-row${child ? " workspace-task-row--child" : ""}${hasOrigin ? " workspace-task-row--has-origin" : ""}`}
@@ -243,7 +281,7 @@ export function TaskRow({
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
         {hasEnd && (
           <span className="workspace-task-end">
-            <RowWord look={look} />
+            {parent ? <RowPhrase look={look} /> : <RowWord look={look} />}
             {isTeam && <RowGlyph icon={UsersThree} label="团队任务" />}
             {agentOnly && <RowGlyph icon={Robot} label={agentOnly} />}
             {pinned && <RowGlyph icon={PushPin} label="已置顶" />}
@@ -340,7 +378,6 @@ export function TeamRow({
     [revealIndex, selectedWorkerIndex],
   );
   useRevealHiddenSelection(overflowSelectedId, revealOverflowWorkers);
-  const look = lookForTask(task);
   const visibleWorkers = workers.slice(0, TASK_PREVIEW_LIMIT + revealed);
   useEffect(() => {
     if (selectedWorker) setExpanded(true);
@@ -354,21 +391,15 @@ export function TeamRow({
         onTask={onTask}
         lookForTask={lookForTask}
         showProject={showProject}
+        parent
         wrapperClassName={`workspace-team-row${expanded ? " is-expanded" : ""}`}
         leading={
-          <span className="workspace-team-leading">
-            <RowMark look={look} />
-            <button
-              className="workspace-team-caret"
-              type="button"
-              disabled={!workers.length}
-              aria-label={expanded ? "折叠执行者" : `展开 ${workers.length} 个执行者`}
-              aria-expanded={expanded}
-              onClick={() => setExpanded((value) => !value)}
-            >
-              <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
-            </button>
-          </span>
+          <ParentCaret
+            expanded={expanded}
+            disabled={!workers.length}
+            label={expanded ? "折叠执行者" : `展开 ${workers.length} 个执行者`}
+            onToggle={() => setExpanded((value) => !value)}
+          />
         }
         trailing={<WorkerSummary workers={workers} lookForTask={lookForTask} />}
       />

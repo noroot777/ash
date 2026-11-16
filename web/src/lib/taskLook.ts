@@ -125,12 +125,53 @@ export const TASK_LOOK: Record<TaskStatusIndicator, { mark: TaskMark | null; say
 };
 
 /**
- * 名下派出去的任务（Task.dispatchedBy，整棵往下）往上带到这一行的那几档，排前面的压过排后面的。
+ * 父任务（行首是展开箭头的那几种：名下收着派出去的任务、团队调度台）不画圆点，箭头占着那一格；
+ * 它此刻怎么样改成行尾一句短语。这张表就是全部短语，按 indicator 再细分一层（同是「轮到你」，
+ * 是在问你、等你裁定还是停在检查点，对你来说是三件事）。null = 不写。
  *
- * 派出去的活收在派它的那条下面以后，派它的那条大多早就 done 了：只看它自己，名下还在跑、在问你、
- * 摔了，行首照样是一圈「已完成，等你验收」，收起来就什么都看不出。所以跟团队调度台看执行者一样，
- * 名下的这几档往上带；它自己那几档里只有「轮到你」的（等答复 / 裁定、失败、卡在上游）排在
- * 「名下在跑」之前，其余（做完没验收、没看的动态、没开始）都让给名下。
+ * 颜色只有三种：琥珀 = 轮到你（ask），红 = 出事了（bad），其余都是淡灰 —— 跟圆点那套同一个读法。
+ */
+export type PhraseTone = "ask" | "bad" | null;
+
+function phraseWord(task: TaskListItem, workers: TaskListItem[], indicator: TaskStatusIndicator | null): string | null {
+  switch (indicator) {
+    case "attention":
+      if (questionOf(task, workers)) return "等你答复";
+      if (awaitsRuling(task)) return "等你裁定";
+      if (task.status === "backlog" && task.prerequisites?.blocked) return "开不了工";
+      return "已暂停";
+    case "error": return task.status !== "failed" && task.stage === "verify_failed" ? "验证没过" : "失败";
+    case "stalled": return "卡在上游";
+    case "active": return task.status === "awaiting_review" ? "审查中" : "运行中";
+    case "working": return task.acceptGateRunning ? "跑验收检查" : "等哨兵";
+    case "queued": return "排队中";
+    case "waiting": return "等前置";
+    case "unaccepted": return "待验收";
+    case "success": return "有新动态";
+    default: return null;
+  }
+}
+
+function phraseTone(indicator: TaskStatusIndicator | null): PhraseTone {
+  if (indicator === "attention") return "ask";
+  return indicator === "error" || indicator === "stalled" ? "bad" : null;
+}
+
+/** 名下一条派出去的任务此刻的样子（只取往上带要用的那几样）。 */
+export type DispatchedState = { indicator: TaskStatusIndicator; word: string; title: string };
+
+export function dispatchedStateOf(task: TaskListItem, workers: TaskListItem[] = []): DispatchedState | null {
+  const indicator = deriveTaskStatusIndicator(task, workers);
+  const word = phraseWord(task, workers, indicator);
+  return indicator && word ? { indicator, word, title: task.title || "未命名任务" } : null;
+}
+
+/**
+ * 名下派出去的任务（Task.dispatchedBy，整棵往下）往上带到父任务那句短语的那几档，排前面的压过排后面的。
+ *
+ * 派它的那条大多早就 done 了：只看它自己，名下还在跑、在问你、摔了，收起来就什么都看不出。它自己
+ * 那几档里只有「轮到你」的（等答复 / 裁定、失败、卡在上游）排在「名下在跑」之前，其余（做完没验收、
+ * 没看的动态）都让给名下。名下做完没验收的不往上带：那是每一条自己的事，展开就看得见。
  */
 const ROLL_UP: readonly TaskStatusIndicator[] = ["attention", "error", "stalled", "active", "working", "queued", "waiting"];
 
@@ -139,28 +180,31 @@ function rollUpRank(indicator: TaskStatusIndicator | null): number {
   return at < 0 ? ROLL_UP.length : at;
 }
 
-/** 名下整棵里最该被看见的那一档（ROLL_UP 之外的不往上带）；没有就是 null。 */
-export function dispatchedRollUp(indicators: readonly (TaskStatusIndicator | null)[]): TaskStatusIndicator | null {
-  let best: TaskStatusIndicator | null = null;
-  for (const indicator of indicators) {
-    if (rollUpRank(indicator) < rollUpRank(best)) best = indicator;
+/** 名下整棵里最该被看见的那一条（ROLL_UP 之外的不往上带）；没有就是 null。同档取先来的那条。 */
+export function dispatchedRollUp(states: readonly (DispatchedState | null)[]): DispatchedState | null {
+  let best: DispatchedState | null = null;
+  for (const state of states) {
+    if (state && rollUpRank(state.indicator) < rollUpRank(best?.indicator ?? null)) best = state;
   }
   return best;
 }
+
+/** 父任务行尾那句短语。tip 是指着它时多给的那半句。 */
+export type TaskPhrase = { word: string; tone: PhraseTone; tip: string };
 
 export type TaskLook = {
   indicator: TaskStatusIndicator | null;
   mark: TaskMark | null;
   /** 指着记号时那句话；mark 为 null 时为空串。 */
   say: string;
-  /** 这颗记号说的是名下派出去的任务（dispatchedRollUp），不是这一条自己。 */
-  fromDispatched: boolean;
   /** 算进顶上那排筛选的哪一颗。判据本体是 lib/taskAttention 的 spreadBucket。 */
   bucket: SpreadBucket;
   /** 行尾那两三个字（等什么）。只有明着等你答复 / 裁定、或前置齐了却开不了工时才有。 */
   word: string | null;
   /** 指着那两三个字时多给的半句（问题本身 / 开不了工的原因）。 */
   detail: string | null;
+  /** 父任务不画圆点时行尾那句短语：它自己的，或名下带上来的（见 dispatchedRollUp）。 */
+  phrase: TaskPhrase | null;
 };
 
 function questionOf(task: TaskListItem, workers: TaskListItem[]): string | null {
@@ -174,27 +218,29 @@ export function taskLook(
   task: TaskListItem,
   workers: TaskListItem[] = [],
   unread = false,
-  /** 名下派出去的任务的档位（整棵往下、没归档的），见 dispatchedRollUp。 */
-  dispatched: TaskStatusIndicator | null = null,
+  /** 名下派出去的任务里最该被看见的那一条，见 dispatchedRollUp。 */
+  dispatched: DispatchedState | null = null,
 ): TaskLook {
-  const own = deriveTaskStatusIndicator(task, workers, unread);
-  const fromDispatched = rollUpRank(dispatched) < rollUpRank(own);
-  const indicator = fromDispatched ? dispatched : own;
+  const indicator = deriveTaskStatusIndicator(task, workers, unread);
   const row = indicator ? TASK_LOOK[indicator] : null;
   const mark = row?.mark ?? null;
-  // 行尾那两三个字只说这一条自己：名下哪一条在问你，那一行自己会写。
-  const asked = own === "attention" ? questionOf(task, workers) : null;
-  const ruling = own === "attention" && !asked && awaitsRuling(task);
-  const blocked = own === "attention" && !asked && !ruling ? task.prerequisites?.blocked ?? null : null;
+  const asked = indicator === "attention" ? questionOf(task, workers) : null;
+  const ruling = indicator === "attention" && !asked && awaitsRuling(task);
+  const blocked = indicator === "attention" && !asked && !ruling ? task.prerequisites?.blocked ?? null : null;
   const question = asked ?? blocked;
   const oneLine = question?.replace(/\s+/g, " ").trim() ?? "";
+  const detail = oneLine ? (oneLine.length > DETAIL_MAX ? `${oneLine.slice(0, DETAIL_MAX)}…` : oneLine) : null;
+  const own = phraseWord(task, workers, indicator);
+  const phrase: TaskPhrase | null = dispatched && rollUpRank(dispatched.indicator) < rollUpRank(indicator)
+    ? { word: dispatched.word, tone: phraseTone(dispatched.indicator), tip: `派出的任务「${dispatched.title}」${dispatched.word}` }
+    : own ? { word: own, tone: phraseTone(indicator), tip: detail ?? row!.say } : null;
   return {
     indicator,
     mark,
-    say: mark ? (fromDispatched ? `派出的任务：${row!.say}` : row!.say) : "",
-    fromDispatched,
+    say: mark ? row!.say : "",
     bucket: spreadBucket(task, workers),
     word: asked ? "等你答复" : ruling ? "等你裁定" : blocked ? "开不了工" : null,
-    detail: oneLine ? (oneLine.length > DETAIL_MAX ? `${oneLine.slice(0, DETAIL_MAX)}…` : oneLine) : null,
+    detail,
+    phrase,
   };
 }
