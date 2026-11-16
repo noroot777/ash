@@ -6,8 +6,8 @@
 //   · 答复：写成一条待发送消息（执行型，带答复身份），由待发送托盘送进会话——它本来就扛重启、扛「回合被
 //     占着」「同队前项还在跑」，这里不再自己 continueTask；
 //   · 起跑：派活单不记自己的账、也没有自己的起跑入口。该开工的那几条（同时：每一条；一个接一个：队首，后面的由
-//     队列推进）各挂一笔「等齐就起」（task_prerequisite_launches.requested_at，prerequisite-launch.ts）——没有
-//     前置就是零条、立刻就齐。放行、同组名额、停止撤回、重启补办全是那一套。
+//     队列推进）各挂一笔开工请求（launch-request.ts，跟一切自动开工同一份账）——没有前置就立刻就齐。放行、
+//     同组名额、停止撤回、重启补办全是那一套。
 // 任何一步失败整笔回滚：单子原样还在，一条任务都没留下，再按一次不会多建；认领落空同样整笔不落。所以没有
 // 「失败了把单子挂回去」的补偿写。开工起点这类仓库准备在事务之前做，失败时还没认领。
 //
@@ -19,13 +19,13 @@ import { dispatchDefaultTarget, parseDispatchTarget } from "@ash/shared/dispatch
 import type { QuestionRecord } from "@ash/shared/questions";
 import { nanoid } from "nanoid";
 import { db } from "./db/index.js";
-import { agents, groups, queueItems, scheduledMessages, taskPrerequisiteLaunches } from "./db/schema.js";
+import { agents, groups, queueItems, scheduledMessages } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { batchPrerequisiteEdges } from "./prerequisite-routes.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
-import { sweepPrerequisiteLaunches } from "./prerequisite-launch.js";
+import { requestLaunch, sweepLaunchRequests } from "./launch-request.js";
 import { answerRouteFor } from "./task-answer.js";
 import { claimQuestionAnswerWithin } from "./task-question-record.js";
 import { deliverPendingMessages, pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
@@ -131,7 +131,7 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
         }
         await transaction.insert(scheduledMessages).values(answer);
         const starters = groupMode === "serial" ? ids.slice(0, 1) : ids;
-        await transaction.insert(taskPrerequisiteLaunches).values(starters.map((taskId) => ({ taskId, requestedAt: at, source: "run", actingUserId: owner })));
+        await requestLaunch(starters, { source: "run", actingUserId: owner }, transaction);
       },
       onCommitted: () => { committed = true; },
     });
@@ -158,7 +158,7 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
   settle("送答复", () => { publishPendingMessages(task.id); return deliverPendingMessages(task.id); });
   if (prerequisites.existing.length) settle("刷新前置视图", () => republishPrerequisiteView(prerequisites.existing));
   // 不等下一次扫描：挂着的请求当场判一遍，齐了、有名额的就起（错过了还有开机补办和每分钟那一扫）。
-  settle("催起跑", () => sweepPrerequisiteLaunches());
+  settle("催起跑", () => sweepLaunchRequests());
   return {
     status: 200,
     body: { launched: true, answered: true, groupId, record, tasks: launched.map(({ id: taskId, title }) => ({ id: taskId, title })) },

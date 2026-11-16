@@ -20,7 +20,7 @@
 // 跑：npm -w server run test:prerequisites
 import {
   acceptTask, commit, db, diffFiles, git, hasStarted, holdForPrerequisites, launchRecord, project, request, row,
-  runs, setup, sleep, started, step, sweepPrerequisiteLaunches, taskPrerequisites, tasks, taskWorkspace, teardown, until,
+  runs, setup, sleep, started, step, sweepLaunchRequests, taskPrerequisites, tasks, taskWorkspace, teardown, until,
   prerequisiteStanding,
 } from "./prerequisite-fixture.js";
 import assert from "node:assert/strict";
@@ -29,7 +29,7 @@ import { dirname, join } from "node:path";
 import { and, eq, or } from "drizzle-orm";
 
 const { withPrerequisiteLock } = await import("../src/prerequisite-gate.js");
-const { withdrawPrerequisiteRequest } = await import("../src/prerequisite-launch.js");
+const { withdrawLaunchRequest } = await import("../src/launch-request.js");
 const { baseRef } = await import("../src/task-branch-plan.js");
 const { journalInstall } = await import("../src/prerequisite-install.js");
 const { taskNotices } = await import("../src/db/schema.js");
@@ -146,12 +146,12 @@ try {
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, a)); // 不发事件：放行只由下面这一扫触发
     let open!: () => void;
     const holder = withPrerequisiteLock(b, () => new Promise<void>((resolve) => { open = resolve; }));
-    const withdrawn = withdrawPrerequisiteRequest(b);
-    const swept = sweepPrerequisiteLaunches(); // 锁外读到请求，排在撤回后面
+    const withdrawn = withdrawLaunchRequest(b);
+    const swept = sweepLaunchRequests(); // 锁外读到请求，排在撤回后面
     await sleep(100);
     open();
     await holder;
-    assert.equal(await withdrawn, "withdrawn");
+    assert.equal((await withdrawn)?.kind, "withdrawn");
     await swept;
     await sleep(500);
     assert.equal(hasStarted(b), false, "撤回在前：放行那一路锁里重读，不起");
@@ -162,7 +162,7 @@ try {
     await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, a));
     assert.equal((await request("POST", `/tasks/${c}/run`)).status, 202);
     const turn = runs.claimOwnTurn(c, "single")!; // 放行那一路已经认领了回合、正要起跑
-    assert.equal(await withdrawPrerequisiteRequest(c), "starting", "正在起跑的：冻住那一次");
+    assert.equal((await withdrawLaunchRequest(c))?.kind, "starting", "正在起跑的：冻住那一次");
     assert.equal(runs.takeStartFreeze(c), "canceled", "起跑前最后一道闸会把它撤回");
     runs.releaseTurn(c, turn);
     assert.equal((await launchRecord(c))?.requestedAt ?? null, null);
@@ -225,12 +225,12 @@ try {
     writeFileSync(lock, "");
     const logged = console.error;
     console.error = () => {}; // 扫描会如实打出这次 git 失败
-    try { await sweepPrerequisiteLaunches(); } finally { console.error = logged; }
+    try { await sweepLaunchRequests(); } finally { console.error = logged; }
     assert.equal(runs.turnIdentity(b), null, "定起点抛错：认领的回合还回去了");
     assert.equal(hasStarted(b), false);
     rmSync(lock);
     started.push(b);
-    await sweepPrerequisiteLaunches();
+    await sweepLaunchRequests();
     await until("故障消失后照样起", () => hasStarted(b));
     console.log("✓ R8 放行认领回合后定起点抛错：回合归还，故障消失后照样起");
   }

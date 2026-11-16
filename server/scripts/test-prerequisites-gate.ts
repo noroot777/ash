@@ -26,7 +26,7 @@ import { eq } from "drizzle-orm";
 const { runTask } = await import("../src/task-run.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { prerequisiteStart } = await import("../src/prerequisite-start-point.js");
-const slots = await import("../src/launch-slots.js");
+const capacity = await import("../src/launch-capacity.js");
 
 /** 一条前置：开出工作区、落一个提交，状态先停在 running（还没站稳）。 */
 async function runningPrerequisite(p: Awaited<ReturnType<typeof project>>, suffix: string) {
@@ -183,13 +183,29 @@ try {
 
   // ── G7 名额 ─────────────────────────────────────────────────────────────────
   {
-    assert.ok(["t1", "t2", "t3", "t4"].every((id) => slots.takeSlot("slot-g", id)));
-    assert.equal(slots.takeSlot("slot-g", "t5"), false, "同一分组第五个占不到");
-    assert.equal(slots.takeSlot("slot-other", "t5"), true, "别的分组各算各的");
-    slots.freeSlot("slot-g", "t1");
-    assert.equal(slots.takeSlot("slot-g", "t5"), true);
-    for (const id of ["t2", "t3", "t4", "t5"]) slots.freeSlot("slot-g", id);
-    slots.freeSlot("slot-other", "t5");
+    // 名额数的是同组里占着执行回合的条数（launch-capacity.ts）：审查这类旁路回合不算；别的分组各算各的。
+    {
+      const q = await project();
+      const other = await project();
+      const ids: string[] = [];
+      for (let index = 0; index < 5; index++) ids.push(await q.task(`c${index}`));
+      const outsider = await other.task("c");
+      const held = ids.slice(0, 4).map((id) => runs.claimOwnTurn(id)!);
+      const fifth = await capacity.claimLaunchTurn(ids[4]!, q.group);
+      assert.equal(fifth.ok ? "ok" : fifth.why, "full", "同组四条占着执行回合，第五条占不到");
+      const elsewhere = await capacity.claimLaunchTurn(outsider, other.group);
+      assert.ok(elsewhere.ok, "别的分组各算各的");
+      runs.releaseTurn(outsider, elsewhere.turn);
+      runs.releaseTurn(ids[0]!, held[0]!);
+      const reviewer = runs.claimOwnTurn(ids[0]!, "reviewer")!;
+      const after = await capacity.claimLaunchTurn(ids[4]!, q.group);
+      assert.ok(after.ok, "腾出一条（换成审查回合不算数）就占得到");
+      assert.equal(await capacity.runningInGroup(q.group), 4);
+      runs.releaseTurn(ids[4]!, after.turn);
+      runs.releaseTurn(ids[0]!, reviewer);
+      for (const [index, turn] of held.slice(1).entries()) runs.releaseTurn(ids[index + 1]!, turn);
+      assert.equal(await capacity.runningInGroup(q.group), 0);
+    }
 
     const p = await project();
     const a = await runningPrerequisite(p, "a");
@@ -204,7 +220,7 @@ try {
     release(many.find(hasStarted)!);
     await until("有一条跑完，第五条起", () => many.every(hasStarted));
     for (const id of many) release(id);
-    console.log("✓ G7 名额同步占：同组同时放行五条最多四条在跑，跑完一条再补一条");
+    console.log("✓ G7 名额数的是同组在跑的执行回合：同时放行五条最多四条在跑，跑完一条再补一条");
   }
 
   // ── N1 停止撤回等待 ─────────────────────────────────────────────────────────

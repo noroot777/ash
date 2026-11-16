@@ -17,7 +17,7 @@
 import {
   acceptTask, api, arm, branchDependency, clearReviews, commit, db, diffFiles, freeReviewRounds, freeReviewRuns, git, groups,
   hasStarted, holdForPrerequisites, launchRecord, notePrerequisiteProgress, project, release, request, review, row,
-  setTaskStatus, setup, sleep, started, step, sweepPrerequisiteLaunches, taskPrerequisites, tasks, teardown, until,
+  setTaskStatus, setup, sleep, started, step, sweepLaunchRequests, taskPrerequisites, tasks, teardown, until,
   updateTaskBase, view, prerequisiteStanding, runs, at,
 } from "./prerequisite-fixture.js";
 import assert from "node:assert/strict";
@@ -234,7 +234,7 @@ try {
       assert.equal(res.status, 202);
       assert.equal((await res.json() as { waiting?: boolean }).waiting, true, `前置${status}：等着，不跳过`);
       assert.equal((await view(q)).prerequisites[0]!.step, status);
-      await sweepPrerequisiteLaunches();
+      await sweepLaunchRequests();
       await sleep(200);
       assert.equal(hasStarted(q), false);
       assert.equal((await request("DELETE", `/tasks/${q}/prerequisites/${bad}`)).status, 200);
@@ -264,13 +264,13 @@ try {
     await db.update(groups).set({ paused: true }).where(eq(groups.id, p.group));
     // 「重启期间」站稳：直接改库，任何出口都没被调用。
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, a));
-    await sweepPrerequisiteLaunches();
+    await sweepLaunchRequests();
     await sleep(300);
     assert.equal(hasStarted(b), false, "分组暂停着：不起");
     assert.ok((await launchRecord(b))?.requestedAt, "请求还挂着");
     await db.update(groups).set({ paused: false }).where(eq(groups.id, p.group));
     started.push(b);
-    await sweepPrerequisiteLaunches(); // 开机那一趟扫描
+    await sweepLaunchRequests(); // 开机那一趟扫描
     await until("恢复后补办起跑", () => hasStarted(b));
     release(b);
     console.log("✓ P6 暂停的分组不起；起跑请求在库里，开机扫描照样起");

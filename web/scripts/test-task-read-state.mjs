@@ -111,7 +111,12 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.equal(words({ disputeOpen: true }), "等你裁定");
   assert.equal(words({ status: "paused" }), "已暂停");
   assert.equal(words({ status: "backlog", prerequisites: { prerequisites: [], dependents: [], waiting: false, blocked: "合不拢", launched: false } }), "开不了工");
-  assert.equal(words({ status: "backlog", prerequisites: { prerequisites: [], dependents: [], waiting: true, blocked: null, launched: false } }), "等前置");
+  const open = { id: "pre", title: "前置", step: "running" };
+  assert.equal(words({ status: "backlog", prerequisites: { prerequisites: [open], dependents: [], waiting: true, blocked: null, launched: false, holdup: null } }), "等前置");
+  // 没有前置、只是等名额 / 分组恢复：不说「前置」，指上去那句是服务端说的在等什么。
+  const capacity = { prerequisites: [], dependents: [], waiting: true, blocked: null, launched: false, holdup: "同组已有 4 条在跑，空出来就开工" };
+  assert.equal(words({ status: "backlog", prerequisites: capacity }), "等开工");
+  assert.equal(phrase({ status: "backlog", prerequisites: capacity }).tip, capacity.holdup);
   assert.equal(words({ status: "failed" }), "失败");
   assert.equal(words({ stage: "verify_failed" }), "验证没过");
   assert.equal(words({ status: "running", upstreamStalled: true }), "卡在上游");

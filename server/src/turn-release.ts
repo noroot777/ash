@@ -80,6 +80,9 @@ function owe(taskId: string, queueId: string, staged: Promise<unknown>): void {
 }
 
 function settle(taskId: string): void {
+  for (const listener of alsoOnRelease) {
+    try { listener(taskId); } catch (error) { console.error(`[ash] 放锁后的登记回调失败 task=${taskId}:`, error); }
+  }
   const owed = owedAdvance.get(taskId);
   if (owed) {
     owedAdvance.delete(taskId);
@@ -94,6 +97,12 @@ function settle(taskId: string): void {
 function flushPending(taskId: string): void {
   void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId))
     .catch((error) => console.error(`[ash] 放锁后的待发送扫描失败 task=${taskId}:`, error));
+}
+
+/** 放锁时还要做的事（launch-request.ts：名额可能空出来了，被名额挡住的补放）。只登记、不在这里 import。 */
+const alsoOnRelease: Array<(taskId: string) => void> = [];
+export function onTurnReleasedAlso(listener: (taskId: string) => void): void {
+  alsoOnRelease.push(listener);
 }
 
 onTurnReleased(settle);

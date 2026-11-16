@@ -22,7 +22,6 @@ import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-pla
 import { taskBusyRejection } from "./task-busy.js";
 import { forgetTaskUnconfirmed } from "./session-turns.js";
 import { forgetTaskRecordSeq } from "./session-seq.js";
-import { forgetTurnStarts } from "./turn-lock.js";
 import { forgetTaskPause } from "./pause-generation.js";
 import { forgetSoloStart } from "./queue-claim-chain.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -167,8 +166,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   forgetTaskUnconfirmed(taskId);
   // 同理：这个任务各条会话发到第几号（session-seq.ts）也不必再记。
   forgetTaskRecordSeq(taskId);
-  // 起过几轮（turn-lock.ts）、被谁按停过（pause-generation.ts）也一样。
-  forgetTurnStarts(taskId);
+  // 被谁按停过（pause-generation.ts）也一样。
   forgetTaskPause(taskId);
   forgetSoloStart(taskId);
   for (const waiter of waiters) publishPendingMessages(waiter.taskId);

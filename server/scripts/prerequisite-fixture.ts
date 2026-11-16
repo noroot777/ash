@@ -15,7 +15,8 @@ import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) delete process.env[key];
-export const root = mkdtempSync(join(tmpdir(), "ash-prerequisites-"));
+// 跨进程的用例（重启那一档）让后一个进程接着用前一个进程的台子：ASH_TEST_FIXTURE_ROOT 指过来。
+export const root = process.env.ASH_TEST_FIXTURE_ROOT || mkdtempSync(join(tmpdir(), "ash-prerequisites-"));
 const inputLog = join(root, "inputs.jsonl");
 const releaseDir = join(root, "release");
 mkdirSync(releaseDir, { recursive: true });
@@ -82,7 +83,8 @@ export const { mountGroupRoutes } = await import("../src/group-routes.js");
 export const { prerequisiteStanding } = await import("../src/prerequisite-standing.js");
 export const { prerequisiteViews } = await import("../src/prerequisite-view.js");
 export const { launchRecord } = await import("../src/prerequisite-store.js");
-export const { holdForPrerequisites, notePrerequisiteProgress, startPrerequisiteLaunches, sweepPrerequisiteLaunches } = await import("../src/prerequisite-launch.js");
+export const { holdForPrerequisites, notePrerequisiteProgress, startPrerequisiteLaunches } = await import("../src/prerequisite-launch.js");
+export const { sweepLaunchRequests } = await import("../src/launch-request.js");
 export const { workspaceStateOf } = await import("../src/free-workflow-state.js");
 export const runs = await import("../src/runs.js");
 

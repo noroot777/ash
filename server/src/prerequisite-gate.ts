@@ -17,7 +17,7 @@
 // - **代码真的到了下游干活的地方才算开工**：工作区 / 任务分支换到起点（prerequisite-install.ts）之后才落
 //   「已开工」，半路断掉留下的都是「还没开工」。不用独立工作区的下游在项目目录里干活，核对那里检出的代码里
 //   有每条前置交出的那一版（prerequisite-start-point.ts `checkoutHasPrerequisites`），没有就挡住说清。
-// - **停止键撤回的请求不复活**：放行那一路只认此刻还挂着的那一笔（prerequisite-launch.ts releaseOne 在锁里
+// - **停止键撤回的请求不复活**：放行那一路只认此刻还挂着的那一笔（launch-request.ts releaseLaunch 在锁里
 //   重读、认领回合，再进这里）。
 import { and, eq } from "drizzle-orm";
 import { prerequisiteStepText } from "@ash/shared/prerequisites";
@@ -33,7 +33,7 @@ import { checkoutHasPrerequisites, prerequisiteStart } from "./prerequisite-star
 import { applyInstall, journalInstall, planInstall, settleAbandonedInstall } from "./prerequisite-install.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { alertLine, appendTaskTimeline, receiptLine } from "./task-timeline.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 
 /** 谁要求它起跑。`release` = 等齐之后由放行那一路自己起；`turn` = 底层起跑闸（见文件头）。 */
 export type LaunchSource = "run" | "queue" | "group" | "release" | "turn";
@@ -55,11 +55,14 @@ export async function recordRequest(taskId: string, request: LaunchRequest, bloc
   const existing = await launchRecord(taskId);
   // 放行那一路只替已经挂着的请求办事：没有了（停止键撤回了）就不替谁新挂一笔。
   if (request.source === "release" && !existing?.requestedAt) return;
+  // 新挂的一笔换一个代号、退避清零（launch-request.ts）；已经挂着的照旧是那一代。
+  const fresh = { requestId: id(), startFailures: 0, retryAt: null, giveUp: null };
   await db.insert(taskPrerequisiteLaunches)
-    .values({ taskId, requestedAt: now(), source: request.source, actingUserId: request.actingUserId ?? null, blocked })
+    .values({ taskId, requestedAt: now(), source: request.source, actingUserId: request.actingUserId ?? null, blocked, ...fresh })
     .onConflictDoUpdate({
       target: taskPrerequisiteLaunches.taskId,
       set: {
+        ...(existing?.requestedAt ? {} : fresh),
         requestedAt: existing?.requestedAt ?? now(),
         // 等齐之后由放行那一路替原来那个人起跑：别让这一笔把「谁要求的」覆盖掉。
         ...(request.source === "release" || (request.source === "turn" && existing?.requestedAt)
@@ -172,13 +175,14 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
           .where(and(eq(taskPrerequisites.taskId, taskId), eq(taskPrerequisites.prerequisiteId, id)));
       }
       // 起点定下了。别的入口起跑时，起不起得来由它自己负责（用户看得到结果、队列自己会重试），这一笔请求
-      // 就此了结；放行那一路自己放出来的，要等真起跑了才了结（见 prerequisite-launch.ts releaseOne）——
+      // 就此了结；放行那一路自己放出来的，要等真起跑了才了结（见 launch-request.ts releaseLaunch）——
       // 它只认已经挂着的那一笔，不新建：停止键撤回了的，不能被放行那一路复活。
       await tx.insert(taskPrerequisiteLaunches)
         .values({ taskId, launchedAt: now(), blocked: null, requestedAt: null, installJournal: null })
         .onConflictDoUpdate({
           target: taskPrerequisiteLaunches.taskId,
-          set: { launchedAt: now(), blocked: null, installJournal: null, ...(request.source === "release" ? {} : { requestedAt: null }) },
+          set: { launchedAt: now(), blocked: null, installJournal: null,
+            ...(request.source === "release" ? {} : { requestedAt: null, startFailures: 0, retryAt: null, giveUp: null }) },
         });
       return true;
     });

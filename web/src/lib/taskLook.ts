@@ -17,7 +17,7 @@ export type TaskStatusIndicator =
   | "active"
   /** 排在队里、还没轮到。归档仍是「在跑」（任务模式的口径），但样子跟真在跑的分开。 */
   | "queued"
-  /** 要它起跑了，在等前置站稳（shared/src/prerequisites.ts）。画法同排队：都是「轮到了自己会起」。 */
+  /** 要它开工了、还没开工：在等前置站稳，或者等同组名额、分组恢复（shared/src/prerequisites.ts）。画法同排队：都是「轮到了自己会起」。 */
   | "waiting"
   /** 轮到你说话：在等答复、等你裁定驳回、停在检查点、前置齐了却开不了工。 */
   | "attention"
@@ -114,7 +114,7 @@ export type TaskMark = "run" | "queue" | "wait" | "hold" | "stalled" | "open" | 
 export const TASK_LOOK: Record<TaskStatusIndicator, { mark: TaskMark | null; say: string }> = {
   active: { mark: "run", say: "运行中" },
   queued: { mark: "queue", say: "排队中" },
-  waiting: { mark: "queue", say: "在等前置任务" },
+  waiting: { mark: "queue", say: "等着开工" },
   attention: { mark: "wait", say: "需要人工输入" },
   working: { mark: "hold", say: "在等后台的事跑完，它会自己回来" },
   stalled: { mark: "stalled", say: "在干等模型上游回话，没有任何输出" },
@@ -133,6 +133,10 @@ export const TASK_LOOK: Record<TaskStatusIndicator, { mark: TaskMark | null; say
  */
 export type PhraseTone = "ask" | "bad" | null;
 
+/** 还有前置没站稳。没有前置、只是等名额 / 分组恢复的，不说「前置」。 */
+const waitsOnPrerequisites = (task: TaskListItem): boolean =>
+  !!task.prerequisites?.prerequisites.some((link) => link.step !== "settled");
+
 function phraseWord(task: TaskListItem, workers: TaskListItem[], indicator: TaskStatusIndicator | null): string | null {
   switch (indicator) {
     case "attention":
@@ -145,7 +149,7 @@ function phraseWord(task: TaskListItem, workers: TaskListItem[], indicator: Task
     case "active": return task.status === "awaiting_review" ? "审查中" : "运行中";
     case "working": return task.acceptGateRunning ? "跑验收检查" : "等哨兵";
     case "queued": return "排队中";
-    case "waiting": return "等前置";
+    case "waiting": return waitsOnPrerequisites(task) ? "等前置" : "等开工";
     case "unaccepted": return "待验收";
     case "success": return "有新动态";
     default: return null;
@@ -214,6 +218,12 @@ function questionOf(task: TaskListItem, workers: TaskListItem[]): string | null 
 
 const DETAIL_MAX = 60;
 
+/** 「等着开工」具体在等什么：前置没站齐就说前置，否则照服务端那句（同组名额满了、分组暂停着…）。 */
+function waitingSay(task: TaskListItem): string {
+  if (waitsOnPrerequisites(task)) return "在等前置任务";
+  return task.prerequisites?.holdup ?? TASK_LOOK.waiting.say;
+}
+
 export function taskLook(
   task: TaskListItem,
   workers: TaskListItem[] = [],
@@ -230,14 +240,15 @@ export function taskLook(
   const question = asked ?? blocked;
   const oneLine = question?.replace(/\s+/g, " ").trim() ?? "";
   const detail = oneLine ? (oneLine.length > DETAIL_MAX ? `${oneLine.slice(0, DETAIL_MAX)}…` : oneLine) : null;
+  const say = row ? (indicator === "waiting" ? waitingSay(task) : row.say) : "";
   const own = phraseWord(task, workers, indicator);
   const phrase: TaskPhrase | null = dispatched && rollUpRank(dispatched.indicator) < rollUpRank(indicator)
     ? { word: dispatched.word, tone: phraseTone(dispatched.indicator), tip: `派出的任务「${dispatched.title}」${dispatched.word}` }
-    : own ? { word: own, tone: phraseTone(indicator), tip: detail ?? row!.say } : null;
+    : own ? { word: own, tone: phraseTone(indicator), tip: detail ?? say } : null;
   return {
     indicator,
     mark,
-    say: mark ? row!.say : "",
+    say: mark ? say : "",
     bucket: spreadBucket(task, workers),
     word: asked ? "等你答复" : ruling ? "等你裁定" : blocked ? "开不了工" : null,
     detail,

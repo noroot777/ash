@@ -16,7 +16,8 @@ import { readDuetTurns } from "./duet/transcript-reads.js";
 import { mountDuetGateRoutes } from "./duet/gate-route.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
-import { holdForPrerequisites, withdrawPrerequisiteRequest } from "./prerequisite-launch.js";
+import { holdForPrerequisites } from "./prerequisite-gate.js";
+import { withdrawLaunchRequest } from "./launch-request.js";
 import { preparePendingCheckpointStart, recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
 import { cancelQueueAdvance } from "./queue-advance-retry.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
@@ -113,7 +114,7 @@ api.post("/tasks/:id/run", async (c) => {
   if (agentHold) return c.json(await noted(taskId, "运行", agentHold), 409);
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
-  // 有前置、前置还没站齐：不起，记成等齐就起（prerequisite-launch.ts）。这一下是被接受了的请求，不是挡回。
+  // 有前置、前置还没站齐：不起，记成等齐就起（prerequisite-gate.ts → launch-request.ts）。这一下是被接受了的请求，不是挡回。
   const prerequisiteHold = await holdForPrerequisites(r, { source: "run", actingUserId: ownerIdOf(actorOf(c)) });
   if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason, blocked: !!prerequisiteHold.blocked }, 202);
   // Fire-and-forget; progress streams over /api/events.
@@ -235,10 +236,10 @@ api.post("/tasks/:id/stop", async (c) => {
   const verdict = stopVerdict(await readActionFacts(r));
   if (!verdict.ok) return refuse(c, taskId, "停止", verdict);
   if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
-  const withdrawn = await withdrawPrerequisiteRequest(taskId);
-  if (withdrawn === "withdrawn") return c.json({ stopped: true, note: "已撤销「前置站齐就开工」的请求" });
-  // 前置刚站齐、放行那一路已经在起跑：请求撤了、那一次起跑也冻住了，照下面「停一个正在起跑的回合」收尾。
-  if (withdrawn === "starting") {
+  const withdrawn = await withdrawLaunchRequest(taskId);
+  if (withdrawn?.kind === "withdrawn") return c.json({ stopped: true, note: `已撤销${withdrawn.what}的请求` });
+  // 轮到它了、放行那一路已经在起跑：请求撤了、那一次起跑也冻住了，照下面「停一个正在起跑的回合」收尾。
+  if (withdrawn?.kind === "starting") {
     await setTaskStatus(taskId, "canceled");
     return c.json(await stopStartingTurn(taskId));
   }

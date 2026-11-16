@@ -6,7 +6,7 @@
 // 于是一条被分组暂停挡着、永远不会自己送出去的执行型消息，把失败卡撤掉了（第 1 轮审查实测）。
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { groups, scheduledMessages, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
+import { groups, scheduledMessages, taskPrerequisiteLaunches, taskPrerequisites, tasks } from "./db/schema.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import { withAfterGates, type AfterGate } from "./pending-after.js";
@@ -30,8 +30,11 @@ export interface DeliveryFacts {
   groupPaused: boolean;
   /** 上面派活的那条按了「全部停下」(task-hold.ts);没问或没按住时为 null。 */
   dispatchHold: DispatchHold | null;
-  /** 这一次投递会开执行回合，而任务挂着「等前置站齐就起」：等放行那一路连同这条一起起（prerequisite-gate.ts）。 */
-  prerequisiteWait: boolean;
+  /**
+   * 这一次投递会开执行回合，而任务挂着还没兑现的开工请求：等放行那一路连同这条一起起（launch-request.ts）。
+   * `prerequisites` = 在等前置站齐；`launch` = 没有前置（或已经齐了），在等名额、分组恢复这类。false = 没挂着。
+   */
+  prerequisiteWait: false | "prerequisites" | "launch";
   /** 这条任务上正在讨论（连同写合稿）：讨论期间用户发的话一律排着，说完再发（discussion.ts）。 */
   discussing: boolean;
 }
@@ -69,7 +72,7 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
     ? await monitorEventSourceState(m.origin)
     : undefined;
   const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
-  const prerequisiteWait = needQueueCheck && await awaitingPrerequisites(m.taskId);
+  const prerequisiteWait = needQueueCheck ? await awaitingPrerequisites(m.taskId) : false;
   const judged = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, dispatchHeld: !!dispatchHold, monitorSource, reviewBlocked,
     reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
   // 讨论只挡「送」：取消（任务没了、来源失效）照旧当场取消。托盘的等待说明也要它（任务在跑时同样在等讨论）。
@@ -78,10 +81,12 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
   return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused, dispatchHold, prerequisiteWait, discussing } };
 }
 
-/** 挂着「等齐就起」、起点还没定下：起跑要等放行那一路（见 prerequisite-launch.ts）。 */
-async function awaitingPrerequisites(taskId: string): Promise<boolean> {
+/** 挂着开工请求、起点还没定下：起跑要等放行那一路（见 launch-request.ts）。 */
+async function awaitingPrerequisites(taskId: string): Promise<false | "prerequisites" | "launch"> {
   const launch = (await db.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, taskId))).at(0);
-  return !!launch?.requestedAt && !launch.launchedAt;
+  if (!launch?.requestedAt || launch.launchedAt) return false;
+  const edges = await db.select({ id: taskPrerequisites.prerequisiteId }).from(taskPrerequisites).where(eq(taskPrerequisites.taskId, taskId)).limit(1);
+  return edges.length ? "prerequisites" : "launch";
 }
 
 /**

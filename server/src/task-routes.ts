@@ -11,6 +11,7 @@ import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
 import { serializeQueueClaims } from "./queue-claim-chain.js";
 import { QueueJoinRefused, groupMoveRefusal, joinQueueOnCreate } from "./queue-membership-guard.js";
+import { writingGroupMembership } from "./launch-capacity.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
 import { monitorBlockedReason } from "@ash/shared/monitor";
@@ -581,7 +582,7 @@ api.patch("/tasks/:id", async (c) => {
     const moved = "groupId" in patch
       ? await serializeQueueClaims(async () => {
         const refused = await groupMoveRefusal(tid, (patch.groupId as string | null) ?? null);
-        return refused ? { refused } : { written: await write() };
+        return refused ? { refused } : { written: await writingGroupMembership(write) };
       })
       : { written: await write() };
     if ("refused" in moved) return c.json({ error: moved.refused, groupId: existing.groupId }, 409);

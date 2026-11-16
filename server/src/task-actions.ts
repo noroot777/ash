@@ -51,7 +51,7 @@ export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
     freeReviewActive: row.workflowMode === "free" ? await hasActiveFreeReview(row.id) : false,
     legacyReviewActive: legacy.some((review) => LEGACY_REVIEW_IN_FLIGHT.includes(review.status)),
     checkpointBlock: await checkpointStartBlock(row.id),
-    prerequisiteRequest: row.status === "backlog" && !!(await db.select({ at: taskPrerequisiteLaunches.requestedAt })
+    prerequisiteRequest: (row.status === "backlog" || row.status === "paused") && !!(await db.select({ at: taskPrerequisiteLaunches.requestedAt })
       .from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, row.id))).at(0)?.at,
     team,
   };

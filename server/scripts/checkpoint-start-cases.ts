@@ -12,6 +12,7 @@ import { preparePendingCheckpointStart } from "../src/pending-checkpoint-recover
 import { occupyResumePrompt } from "../src/task-resume-prompt.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation } from "../src/task-queue-reservation.js";
 import { setTaskStatus } from "../src/status.js";
+import { sweepLaunchRequests } from "../src/launch-request.js";
 import { id } from "../src/util.js";
 
 function failAdmission(taskId: string, at = 3) {
@@ -98,35 +99,45 @@ export async function checkpointStartCases(): Promise<void> {
   }
 
   {
+    // 运行分组起到一半（回合已经认领、续跑交代的准入检查读失败）时用户点了停止：那一次起跑冻住、请求撤回、
+    // 落 canceled。没起来的那一下不算「起不来」去退避重试 —— 请求已经没了，之后再扫、腾出名额都不会再起它。
     const test = await freshTask();
     const groupId = id();
     const task = await taskOf(test.taskId);
     await db.insert(schema.groups).values({ id: groupId, projectId: task.projectId, name: "stop-race", mode: "parallel", createdAt: now() });
     await db.update(tasks).set({ groupId }).where(eq(tasks.id, test.taskId));
-    const fault = failAdmission(test.taskId);
     const execute = dbClient.execute;
     let stopped = false;
     dbClient.execute = async function (statement) {
-      if (!stopped && fault.count() && typeof statement !== "string"
-        && /^update "tasks" set "status" = \?/i.test(statement.sql) && Array.isArray(statement.args)
-        && statement.args[0] === "backlog" && statement.args.includes(test.taskId)) {
+      if (!stopped && typeof statement !== "string" && /"scheduled_messages"/.test(statement.sql)
+        && /"checkpoint_taken" is not null/i.test(statement.sql) && Array.isArray(statement.args)
+        && statement.args.includes(test.taskId) && runs.isTurnClaimed(test.taskId)) {
         stopped = true;
         const response = await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" });
         assert.equal(response.status, 200);
         assert.equal((await taskOf(test.taskId)).status, "canceled");
+        throw new Error("INJECT_INNER_START_ADMISSION_FAILURE");
       }
       return execute.call(dbClient, statement);
     };
     try {
       await runGroup(groupId);
       assert.equal(stopped, true);
+      await until("停下的那一次起跑收口", async () => !runs.isTurnClaimed(test.taskId));
+      await sweepLaunchRequests();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const launch = (await db.select().from(schema.taskPrerequisiteLaunches)
+        .where(eq(schema.taskPrerequisiteLaunches.taskId, test.taskId))).at(0);
+      assert.equal(launch?.requestedAt ?? null, null);
+      assert.equal(launch?.startFailures ?? 0, 0, "停下不算一次起不来");
       assert.equal((await taskOf(test.taskId)).status, "canceled");
       assert.equal((await taskOf(test.taskId)).queueSeatToken, null);
       assert.equal(runs.isTurnClaimed(test.taskId), false);
+      assert.equal(runs.isRunning(test.taskId), false);
     } finally {
-      fault.restore();
+      dbClient.execute = execute;
     }
-    console.log("PASS: real stop during group rollback remains canceled after the stale cleanup finishes");
+    console.log("PASS: real stop during a group start stays canceled and the withdrawn request never starts it later");
   }
 
   {

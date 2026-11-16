@@ -1,4 +1,5 @@
-// 任务快照上的 `prerequisites`：这条任务建在哪几条上面、各自到哪一步了、谁建在它上面、是不是在等齐就起。
+// 任务快照上的 `prerequisites`：这条任务建在哪几条上面、各自到哪一步了、谁建在它上面、是不是挂着开工请求、
+// 在等什么。没有前置、只挂着开工请求（分组运行、派活单）的任务也有这一格。
 //
 // 它是**后台事实**：前置那边一变，下游的这一格就变了，而下游自己的行一个字都没动。所以下游重发快照前先
 // 推一格后台水位（`task_background_revisions`），前端那套快照合并据此认新旧（web/src/lib/taskSnapshot.ts）。
@@ -11,6 +12,7 @@ import { prerequisiteStanding, type PrerequisiteStanding } from "./prerequisite-
 import { edgesAround } from "./prerequisite-store.js";
 import { expandHome, resolveWorktreeBranchName } from "./git.js";
 import { commitAt, containsCommit } from "./task-branch-plan.js";
+import { launchHoldup } from "./launch-holdup.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -44,20 +46,24 @@ async function movedOn(repo: string | undefined, prerequisite: TaskRow, inherite
 export async function prerequisiteViews(rows: TaskRow[]): Promise<Map<string, TaskPrerequisites>> {
   const out = new Map<string, TaskPrerequisites>();
   const ids = rows.map((row) => row.id);
+  if (!ids.length) return out;
   const edges = await edgesAround(ids);
-  if (!edges.length) return out;
-  const related = [...new Set(edges.flatMap((edge) => [edge.taskId, edge.prerequisiteId]))];
-  const byId = new Map((await db.select().from(tasks).where(inArray(tasks.id, related))).map((row) => [row.id, row] as const));
   const launches = new Map((await db.select().from(taskPrerequisiteLaunches)
     .where(inArray(taskPrerequisiteLaunches.taskId, ids))).map((row) => [row.taskId, row] as const));
+  if (!edges.length && ![...launches.values()].some((launch) => launch.requestedAt)) return out;
+  const related = [...new Set(edges.flatMap((edge) => [edge.taskId, edge.prerequisiteId]))];
+  const byId = new Map((related.length ? await db.select().from(tasks).where(inArray(tasks.id, related)) : [])
+    .map((row) => [row.id, row] as const));
   const projectIds = [...new Set(rows.map((row) => row.projectId))];
   const repoOf = new Map((await db.select({ id: projects.id, repoPath: projects.repoPath }).from(projects)
     .where(inArray(projects.id, projectIds))).map((row) => [row.id, expandHome(row.repoPath)] as const));
   await Promise.all(rows.map(async (row) => {
     const mine = edges.filter((edge) => edge.taskId === row.id);
     const theirs = edges.filter((edge) => edge.prerequisiteId === row.id);
-    if (!mine.length && !theirs.length) return;
     const launch = launches.get(row.id);
+    // 没有前置的任务挂着开工请求（分组运行、派活单）时也要这一格：页面上写它在等什么（名额、分组暂停…）。
+    const waiting = !!launch?.requestedAt && (row.status === "backlog" || row.status === "paused") && !row.archived;
+    if (!mine.length && !theirs.length && !waiting) return;
     const prerequisites = await Promise.all(mine.flatMap((edge) => {
       const prerequisite = byId.get(edge.prerequisiteId);
       if (!prerequisite) return [];
@@ -72,13 +78,15 @@ export async function prerequisiteViews(rows: TaskRow[]): Promise<Map<string, Ta
         };
       })()];
     }));
+    const open = prerequisites.some((link) => link.step !== "settled");
     out.set(row.id, {
       prerequisites,
       dependents: theirs.flatMap((edge) => {
         const dependent = byId.get(edge.taskId);
         return dependent ? [{ taskId: dependent.id, title: dependent.title || dependent.id }] : [];
       }),
-      waiting: !!launch?.requestedAt && row.status === "backlog" && !row.archived,
+      waiting,
+      holdup: waiting && !open && !launch?.blocked ? await launchHoldup(row, launch).catch(() => null) : null,
       blocked: row.status === "backlog" ? launch?.blocked ?? null : null,
       launched: !!launch?.launchedAt,
     });
