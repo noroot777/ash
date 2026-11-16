@@ -226,8 +226,8 @@ try {
     await bar.getByText("NEW PROGRESS 500 / 640", { exact: true }).waitFor();
     await page.emulateMedia({ reducedMotion: "reduce" });
     const animations = await page.evaluate(() => {
-      // 会动的那两档（在跑、等哨兵），侧栏和团队两套类名。
-      return ["workspace-status-dot--run", "workspace-status-dot--breathe", "team-status-dot--active", "team-status-dot--working"].map(className => {
+      // 会动的那一档（在跑），侧栏和团队两套类名。
+      return ["workspace-status-dot--run", "team-status-dot--active"].map(className => {
         const dot = document.createElement("span");
         dot.className = className;
         document.body.append(dot);
@@ -238,7 +238,7 @@ try {
         return still;
       });
     });
-    assert.deepEqual(animations, [true, true, true, true]);
+    assert.deepEqual(animations, [true, true]);
     await page.close();
   }
   // 日志行里的监督方式说的是**那一次**：下一次的范围不冒充成这一次的；命令撤掉了就整行不出。
@@ -381,11 +381,25 @@ try {
     const { page, store } = await open({ query: "?dots=1", events: true, tasks: rows });
     const assertDots = async kind => {
       for (const row of rows) {
-        // 侧栏那套记号的类名是 taskLook 的 mark（等你 = wait、会自己回来 = breathe），团队那套是档位名。
-        const variant = row.mode === "team" ? kind : { attention: "wait", working: "breathe" }[kind];
+        // 侧栏那套记号的类名是 taskLook 的 mark（等你 = wait、会自己回来 = hold），团队那套是档位名。
+        const variant = row.mode === "team" ? kind : { attention: "wait", working: "hold" }[kind];
         const dot = page.locator(`[data-task-id="${row.id}"] .${row.mode === "team" ? "team" : "workspace"}-status-dot--${variant}`);
         await dot.waitFor();
-        assert.equal(await dot.evaluate(element => getComputedStyle(element).animationName), kind === "working" ? "task-status-dot-pulse" : "none");
+        // 两档都不跳，靠颜色分：等你说话琥珀，会自己回来的主色。
+        const [animation, color, amber, accent] = await dot.evaluate(element => {
+          const probe = (value) => {
+            const swatch = document.createElement("i");
+            swatch.style.background = value;
+            document.body.append(swatch);
+            const resolved = getComputedStyle(swatch).backgroundColor;
+            swatch.remove();
+            return resolved;
+          };
+          const style = getComputedStyle(element);
+          return [style.animationName, style.backgroundColor, probe("var(--amber)"), probe("var(--accent)")];
+        });
+        assert.equal(animation, "none");
+        assert.equal(color, kind === "working" ? accent : amber);
       }
     };
     await assertDots("attention");

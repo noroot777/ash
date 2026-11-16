@@ -1,14 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { TaskListItem } from "@ash/shared";
-import { CaretRight } from "@phosphor-icons/react";
 import { type LookForTask } from "../lib/useTaskReadState.ts";
 import { dispatchSubtree, type DispatchFacts } from "../lib/dispatchTree.ts";
 import { type DispatchForest } from "./dispatchForest.ts";
-import { RowMark, TaskRow } from "./TaskTreeRows.tsx";
+import { ParentCaret, TaskRow } from "./TaskTreeRows.tsx";
 
-// 侧栏里派出去的任务收在派它的那条下面：那一行行首多一颗箭头（平时是状态点，指到、聚焦、
-// 展开时换成箭头 —— 跟团队行同一种做法），行尾一个数（名下几条）。名下整棵有在等答复或失败
-// 的，那个数变琥珀色。默认收着；开过的记在本机，刷新后还开着。
+// 侧栏里派出去的任务收在派它的那条下面：那一行行首是展开箭头、不画状态点（跟团队行同一种做法），
+// 它自己和名下此刻怎么样写成行尾一句短语（lib/taskLook 的 phrase），后面一个数（名下几条）。名下
+// 整棵有在等答复或失败的，那个数变琥珀色。默认收着；点开这一行就展开名下那一层（只开不收，收起
+// 用箭头）；开过的记在本机，刷新后还开着。
 //
 // 收在谁下面由 dispatchForest.ts 算（只在画出来的那批行之间收）；那个数和它的颜色是关系事实，
 // 从全量任务算（dispatchFacts，经 DispatchFactsProvider 递下来）—— 筛选把名下几条筛掉了，数照旧、
@@ -58,7 +58,7 @@ export function useDispatchOpenState(): DispatchOpen {
 
 export const DispatchOpenProvider = DispatchOpenContext.Provider;
 
-const NO_FACTS: DispatchFacts = { count: () => 0, needsYou: () => false };
+const NO_FACTS: DispatchFacts = { count: () => 0, needsYou: () => false, hasBelow: () => false };
 const DispatchFactsContext = createContext<DispatchFacts>(NO_FACTS);
 export const DispatchFactsProvider = DispatchFactsContext.Provider;
 export const useDispatchFacts = () => useContext(DispatchFactsContext);
@@ -82,8 +82,9 @@ export function DispatchAwareRow(props: RowProps) {
   const kids = props.forest.children.get(props.task.id) ?? [];
   const count = facts.count(props.task.id);
   const needs = facts.needsYou(props.task.id);
-  // 名下直接的那几条全归档了、底下还有一条在等你：数是 0，照样得有那个变色的提示。
-  if (!kids.length && !count && !needs) {
+  // 是不是父任务看完整的派活关系：名下直接的那几条全归档了、更底下还有一条在跑 / 在等你，数是 0，
+  // 照样是父任务（行尾那句短语就是在说那一条）。
+  if (!kids.length && !facts.hasBelow(props.task.id)) {
     return (
       <TaskRow
         task={props.task}
@@ -117,7 +118,6 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
   useEffect(() => {
     if (selectedInside) openRows?.([task.id]);
   }, [openRows, selectedInside, task.id]);
-  const look = lookForTask(task);
   const said = `${count} 个派出的任务${needs ? "，有要你处理的" : ""}`;
   return (
     <>
@@ -130,21 +130,12 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
         showProject={showProject}
         child={child}
         showOrigin={showOrigin}
+        parent
+        onExpand={expandable ? () => state?.open([task.id]) : undefined}
         wrapperClassName={expandable ? `workspace-dispatch-row${expanded ? " is-expanded" : ""}` : undefined}
         leading={expandable ? (
-          <span className="workspace-team-leading">
-            <RowMark look={look} />
-            <button
-              className="workspace-team-caret"
-              type="button"
-              aria-label={`${expanded ? "收起" : "展开"} ${said}`}
-              aria-expanded={expanded}
-              onClick={() => state?.toggle(task.id)}
-            >
-              <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
-            </button>
-          </span>
-        ) : undefined}
+          <ParentCaret expanded={expanded} label={`${expanded ? "收起" : "展开"} ${said}`} onToggle={() => state?.toggle(task.id)} />
+        ) : null}
         tally={
           // 有箭头时数和颜色由箭头那颗键念出来；名下几条都被筛掉了、没有箭头时，读屏得在这里听到。
           <em className={`workspace-dispatch-count${needs ? " is-warn" : ""}`}>

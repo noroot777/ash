@@ -160,6 +160,8 @@ assert.ok(keepVisibleInPreview(task("x", "single", { pinnedAt: 7 }), null), "置
 assert.ok(keepVisibleInPreview(task("x", "single"), "unaccepted"), "没盖的章");
 assert.ok(keepVisibleInPreview({ ...task("x", "single"), status: "failed" }, null), "跑挂了，且不靠未读点");
 assert.ok(keepVisibleInPreview({ ...task("x", "single"), stage: "verify_failed" }, null), "验证没过");
+assert.ok(keepVisibleInPreview({ ...task("x", "single"), status: "done", disputeOpen: true }, "attention"), "等你裁定：最该看见的时候不能被年龄闸收进「展开」");
+assert.ok(!keepVisibleInPreview({ ...task("x", "single"), status: "done", stage: "accepted", disputeOpen: true }, null), "验收过的裁不了，不再赖着");
 assert.ok(!keepVisibleInPreview(task("x", "single"), null), "普通的旧行照旧可以被折叠");
 assert.ok(!keepVisibleInPreview({ ...task("x", "single"), status: "done" }, "success"), "干完并盖过章的不赖着不走");
 

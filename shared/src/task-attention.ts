@@ -70,14 +70,25 @@ export function awaitsYourWord(task: TaskListItem, workers: TaskListItem[] = [])
   return isTeamLead(task) && workers.some((worker) => worker.question || worker.status === "paused");
 }
 
-// 「停在这儿等你指挥」= 明着问你（question），或者验证没过（verify_failed）。
+// 「等你裁定」：执行者驳回了一轮审查意见，链停下来等人拍板（Task.disputeOpen）。验收过、归档了、
+// 接力出去了的不算 —— 那几种裁定接口一律拒（web 的 reviewLocked 同一个口径），驳回留着也裁不了。
+// 机器正在动的也不算：那一刻的事实是「它在跑」，跑完落回来还挂着驳回，自然又是这一档。
+export function awaitsRuling(task: TaskListItem): boolean {
+  return !!task.disputeOpen
+    && !LIVE_STATUSES.has(task.status)
+    && !isAcceptedStage(task.stage)
+    && !task.archived
+    && task.handoff?.direction !== "out";
+}
+
+// 「停在这儿等你指挥」= 明着问你（question）、等你裁定驳回（awaitsRuling），或者验证没过（verify_failed）。
 //
 // 跟 awaitsYourWord 的分工：那条收的是「等我说句话」（提问 / 停在检查点），服务的是
 // 任务模式收哪些行；这条收的是「等我指挥」，多一档验证未通过，少一档 paused —— 停在
 // 检查点是等续跑指令，行内没有跟提问同级的醒目标识，硬拉进列表的年龄豁免就成了
 // 「留下来的比标出来的多」。
 export function needsYourCommand(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  const stuck = (item: TaskListItem) => !!item.question || item.stage === "verify_failed";
+  const stuck = (item: TaskListItem) => !!item.question || awaitsRuling(item) || item.stage === "verify_failed";
   return stuck(task) || (isTeamLead(task) && workers.some(stuck));
 }
 
