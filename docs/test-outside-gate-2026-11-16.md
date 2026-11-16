@@ -2,14 +2,14 @@
 
 任务 dD5fPlC20-vE 的交付附件。验收命令（`npm run test:accept`）只跑两条链：server 的 `test:accept` 和 web 的 `test`。这里列的是**不在这两条链里**的测试脚本：有哪些、各自保什么、建议并进门禁还是留在外面。
 
-这一轮**没有改、没有删、也没有跑**它们。「11-13 普查」一栏是三天前那轮全量普查（`docs/test-audit-2026-11-13.md`）实测到的结果和用时，分组沿用它的建议；「保什么」取自各文件头的说明（没有文件头的，取它跑完打印的那一句）。
+这一轮**没有改、没有删、也没有跑**它们。合 main（`4db389a0`）之后按文件清单重新核过一遍：main 删掉的 `test-task-star.ts` 拿掉，main 新带进来、没进门禁的两条（`test-pending-wait-normal.ts`、`test-queue-rank.ts`）补进「11-13 之后新增」。「11-13 普查」一栏是三天前那轮全量普查（`docs/test-audit-2026-11-13.md`）实测到的结果和用时，分组沿用它的建议；「保什么」取自各文件头的说明（没有文件头的，取它跑完打印的那一句）。
 
 ## 结论
 
 | 分组 | 条数 | 建议 |
 |---|---|---|
-| 11-13 之后新增 | 21 | **并进门禁**。几乎都是最近几条任务自己写的回归（前置、开工那一份账、派出的任务停下/接着跑、删任务的原子性、回合收尾…），功能在线上跑着，测试却不在验收里。先整组跑一遍确认是绿的再并 |
-| 建议纳入 | 357 | 并进门禁。普查时单条 15 秒以内、并行下稳定绿、不碰真 CLI，全并进来约多 3 分钟。并之前要先整组跑一遍：这三天产品动得多，门禁里就有 20 条因此变红，这一组里一定也有 |
+| 11-13 之后新增 | 23 | **并进门禁**。几乎都是最近几条任务自己写的回归（前置、开工那一份账、派出的任务停下/接着跑、删任务的原子性、回合收尾…），功能在线上跑着，测试却不在验收里。先整组跑一遍确认是绿的再并 |
+| 建议纳入 | 356 | 并进门禁。普查时单条 15 秒以内、并行下稳定绿、不碰真 CLI，全并进来约多 3 分钟。并之前要先整组跑一遍：这三天产品动得多，门禁里就有 20 条因此变红，这一组里一定也有 |
 | 可纳入（较慢） | 51 | 看取舍。单条 15–60 秒，全并进来门禁用时大约翻倍；建议只挑保着要紧事的并 |
 | 留在链外 | 27 | 留在外面。真模型 / 真 CLI（10 条，手动跑）、并发下闪红（8 条，要先查清为什么）、依赖整包构建或 mobile 导出（4 条）、太慢（3 条）、Windows 专属（1 条）、待定（1 条） |
 | 被别的测试引用的模块 | 17 | 不是独立的测试，名字以 `test-` 开头而已，跟着引用它的那条走 |
@@ -21,13 +21,13 @@
 
 ## 明细
 
-## 11-13 之后新增（21）
+## 11-13 之后新增（23）
 
 | 文件 | 保什么 | 11-13 普查 | 备注 |
 |---|---|---|---|
 | `scripts/test-macos-update.mjs` | mac app 自更新的定点回归（仅 macOS）：装新版之前那道闸（UpdateGate）和发版脚本（release.mjs）。 | 未普查 |  |
 | `scripts/test-restart-lock-owner.mjs` | 回归:restart.mjs 停谁只认「谁在监听端口」,单实例锁里的号码不当线索(用户 2026-11-16 选定)。 | 未普查 |  |
-| `server/scripts/test-accept-memory.ts` | 验收确认层「上次怎么勾的」的后端回归(为什么进库见 server/src/db/schema-accept-memory.ts，写入规则见 server/src/accept-memory.ts): · 「运行」那一勾按人、按项目各记一份，随门禁状态带出去(skipRemembered)； | 未普查 |  |
+| `server/scripts/test-accept-memory.ts` | 验收确认层点确认时记什么的后端回归(写入规则见 server/src/accept-memory.ts)：「运行」那一勾不记，跳过只管当次；老库里记着跳过的那张表启动时退役。 | 未普查 |  |
 | `server/scripts/test-answer-follow-up.ts` | 终态任务上的提问答复是续聊,不认领队列执行占位(2026-11-13 现场:队列里已完成的任务在续聊 回合里提了问,用户答复后落成执行型待发送消息,等整条队列跑完)。 | 未普查 |  |
 | `server/scripts/test-claude-monitor-legacy-lifetime.ts` | 内置 Monitor 投影的**旧期限纠偏**（db/migrations.ts 的 relaxUnfoundedClaudeMonitorLifetimes）。 | 未普查 |  |
 | `server/scripts/test-claude-monitor-transient.ts` | 内置 Monitor 实时投影的**写库责任**：事件一旦从流里消费掉，来源侧不会再发一遍，库里也没有 别的地方能补回来（翻会话记录的历史扫描已经删了）。 | 未普查 |  |
@@ -35,11 +35,13 @@
 | `server/scripts/test-launch-request.ts` | 自动开工的那一份账（launch-request.ts）和「同组同时最多四条」（launch-capacity.ts）。 | 未普查 |  |
 | `server/scripts/test-launch-restart.ts` | 重启之后名额照样数得对：名额数的是此刻占着执行回合的条数，重启接回的回合重新占上锁，就自然算在里面 —— 没有要在接回时补记的计数。 | 未普查 |  |
 | `server/scripts/test-monitor-reclaim-superseded.ts` | **号被复用的那几笔账:能证明原进程已经不在,就自己了结;证明不了,一笔都不许了结。 | 未普查 |  |
+| `server/scripts/test-pending-wait-normal.ts` | 排队消息等的是看得见的事就不算滞留（pending-messages 的 waitReason）：任务正在跑一轮长的，排队消息等它跑完是排队本身。 | 未普查 | 合 main 后新增 |
 | `server/scripts/test-prerequisite-candidates.ts` | 「建在谁上面」的候选（prerequisite-candidates.ts）和界面那条建任务的路： | 未普查 |  |
 | `server/scripts/test-prerequisites-gate.ts` | 前置的底层闸、工作区与并发（审查第 1 轮 F1–F7、N1、N2 那几类）。 | 未普查 |  |
 | `server/scripts/test-prerequisites-recovery.ts` | 前置的交付证明、起点、恢复与并发（审查第 2 轮 F1–F6、N1、N2，第 3 轮 1–3，第 4 轮 1 那几类）。 | 未普查 |  |
 | `server/scripts/test-prerequisites.ts` | 前置（shared/src/prerequisites.ts）：一条任务建在几条任务上面。 | 未普查 |  |
 | `server/scripts/test-queue-ownership-race.ts` | 队列/分组归属的写方与起跑认领争同一个原子边界(src/queue-claim-chain.ts)。 | 未普查 |  |
+| `server/scripts/test-queue-rank.ts` | 队列名次：对外的 queuePosition 是连续的名次(0..N-1)，删过任务留下缺号的老队列名次照样连续。 | 未普查 | 合 main 后新增 |
 | `server/scripts/test-task-delete-atomic.ts` | 删任务的**原子性**,以及它收口时那道删除门闸(`settleTaskRevocation`)。 | 未普查 |  |
 | `server/scripts/test-task-dispatched-by.ts` | 「派它的那条任务」（tasks.dispatched_by）：存量回填认得出、新建时自动记上、显式给的能收， 团队那一套（执行者 parentId、调度台用 MCP 另建的任务）一处不碰。 | 未普查 |  |
 | `server/scripts/test-task-reads.ts` | 任务「看过没有」的后端回归(为什么进库见 server/src/db/schema-task-reads.ts，新旧口径见 shared/src/task-reads.ts): · 新旧只认 round：迟到的旧一轮(断网后补送、停在旧数据上的页面)盖不掉已经记下的新一轮； | 未普查 |  |
@@ -47,7 +49,7 @@
 | `server/scripts/test-turn-wind-down.ts` | 回合收尾**有界**、卡住时**说得清**、占锁之后的出路**都还锁**(turn-wind-down.ts)。 | 未普查 |  |
 | `web/scripts/test-prerequisite-options.mjs` | （文件头没有说明；跑完打印）prerequisite options: all assertions passed | 未普查 |  |
 
-## 建议纳入（357）
+## 建议纳入（356）
 
 | 文件 | 保什么 | 11-13 普查 | 备注 |
 |---|---|---|---|
@@ -311,7 +313,6 @@
 | `server/scripts/test-task-list-body.ts` | 列表接口**不带正文**的回归（起临时库 + 挂真路由，不 spawn agent）。 | 绿 2s |  |
 | `server/scripts/test-task-memos.ts` | 任务备忘的后端回归：CRUD、校验、批量摘要。 | 绿 1s |  |
 | `server/scripts/test-task-page.ts` | 网页产物的沙箱预览（server/src/task-page.ts）。 | 绿 1s |  |
-| `server/scripts/test-task-star.ts` | （文件头没有说明；跑完打印）task star patch tests passed | 绿 2s |  |
 | `server/scripts/test-task-steer-hardening.ts` | （文件头没有说明；跑完打印）✓ complete_task 严格绑定当前回合 token，旧回合迟到确认返回 409 | 绿 2s |  |
 | `server/scripts/test-task-steer-rollback.ts` | 原生引导**发送失败那一程**：旧方向的三张票各自回得去吗。 | 绿 2s |  |
 | `server/scripts/test-task-workspace.ts` | （文件头没有说明；跑完打印）✓ 三种工作目录去向各自的措辞对得上，同回合的两条 marker 不互相打架 | 绿 5s |  |
