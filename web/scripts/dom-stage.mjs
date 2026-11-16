@@ -20,6 +20,13 @@ export const SHARED_WEB_ENV = "ASH_TEST_WEB_ORIGIN";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
+// 测试页的后端只有路由桩和各自起的假服务。web/vite.config.ts 默认把没打桩的 `/api` 代理到
+// localhost:4317，每交出一份页面文档还会去那里取一份真人动作凭据（vite/page-token.ts）——那是用户
+// 正在用的那套服务：漏一个桩，请求就真打到它身上，测试结果还跟着它起没起着走。没有显式指到别处
+// （test-page-token-delivery 指到自己的假后端）就一律指向一个没人听的端口。这一句要排在任何
+// vite 起来之前，所以放在模块顶上：起 vite 的测试（含各自 spawn 的夹具进程，环境是继承的）都先引这个文件。
+if (!process.env.ASH_PROXY && !process.env.HARNESS_PROXY) process.env.ASH_PROXY = "http://127.0.0.1:9";
+
 /**
  * 测试里的 vite 各用一份预构建缓存目录，别跟默认的 node_modules/.vite 混用。
  *
