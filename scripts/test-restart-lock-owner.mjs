@@ -1,4 +1,4 @@
-// 回归:restart.mjs 认「停谁」的三条线索里,单实例锁那一条(lockProvenPid)。
+// 回归:restart.mjs 认「停谁」的两条线索里,单实例锁那一条(lockProvenPid)。
 //
 // 两头都要钉住:
 //  · **复用号码不授权下刀**。ash 没正常退出,锁留在原地,号码被别的进程复用 —— Windows 上

@@ -78,33 +78,23 @@ const say = (line) => process.stdout.write(`${line}\n`);
 // 路径口径要跟 server 一致(ASH_DB 覆盖,默认 data/ash.db),否则找错文件。
 const LOCK_FILE = `${process.env.ASH_DB ? resolve(process.env.ASH_DB) : join(REPO, "data", "ash.db")}.ash.lock`;
 
-/**
- * 端口上应答的那个 ash 自报的 pid(`/api/health` 的 `pid`)。没人应答、或者是不报 pid 的
- * 旧版本,返回 null。
- *
- * 这是「停谁」的第二条线索,只在 listenerPids 漏掉时起作用:容器里 lsof/ss/fuser 可能一个
- * 都没有(2026-08-21 的 Rocky 容器就是),listenerPids 返回空,旧进程于是被整个放过。
- *
- * 它要 HTTP 答得上来;答不上来(卡死、事件循环被堵)时靠下面的 lockProvenPid。
- */
-async function answeringPid() {
-  const health = await localJson(PORT, "/api/health");
-  return Number.isInteger(health?.pid) && health.pid > 1 ? health.pid : null;
-}
-
 /** 墙钟测量的余量:POSIX 那边 ps 和 Date.now() 不是同一刻,两边各自也有毫秒级抖动。 */
 const BIRTH_PROOF_MARGIN_MS = 1_000;
 
 /**
  * 单实例锁里那个号码,**证明得了**是写锁的那个进程时返回它,否则 null。
  *
- * 这是「HTTP 答不上来、系统又查不出谁在监听」时唯一的恢复通道 —— 没有它,一个卡死的旧
- * server 连 --force 都停不掉,新进程起来只会撞端口(第 3 轮审查实测)。
+ * 端口探测只是旁证:容器里 lsof/ss/fuser 可能一个都没有(2026-08-21 的 Rocky 容器就是),
+ * listenerPids 返回空,旧进程于是被整个放过 —— 尤其是卡死不应答的那种,连 --force 都停不掉。
+ * 锁是 server 自己写的记录,拿它兜底零依赖。**只认端口对得上的那把锁**:同一台机器上完全
+ * 可能有别的 ash 守着别的 DB/端口(test-restart 就起在 14317)。
  *
  * 但锁里的号码**本身不授权下刀**:ash 没正常退出时锁留在原地,号码随后被别的进程复用
  * (Windows 上重启过机器几乎必然),拿它下刀等于去停一个陌生进程 —— 这正是「无法安全终止
- * Windows 旧实例」那次报错的来历。也别想靠比对命令行把号码「认回来」:命令行只是一段文本,
- * 末尾参数、应用参数、相对路径、符号链接都能让它跟真正的执行入口对不上(第 1、2 轮审查)。
+ * Windows 旧实例: <pid> 的进程身份不完整」那次报错的来历(2026-11-16 那台 Windows:旧 ash
+ * 11-12 就死了,锁里的号码被一个读不到命令行的进程占着)。也别想靠比对命令行把号码「认回
+ * 来」:命令行只是一段文本,末尾参数、应用参数、相对路径、符号链接都能让它跟真正的执行入口
+ * 对不上。
  *
  * 证明靠心跳:锁是持有者自己每 10s 原子重写一次的(server/src/singleton.ts 的 beat),
  * `heartbeatAtMs` 那一刻它还活着、占着这个号码。**两个活进程不会同时占一个号码**,所以
@@ -307,11 +297,9 @@ npm(["run", "build"], "✕ 构建失败,已中止——服务端未重启,跑的
 built = true;
 
 say(`▶ 2/3 重启 :${PORT} 服务端…`);
-// 监听者 ∪ 应答者自报 ∪ 锁里证明得了的那一个:三条线索各管一种「另外两条看不见」的情形
-// (见 answeringPid、lockProvenPid 的注释)。
-const answering = await answeringPid();
+// 端口 ∪ 锁文件:两条线索都用上,少一条就可能漏掉旧进程(见 lockProvenPid 的注释)。
 const proven = lockProvenPid();
-const old = [...new Set([...listenerPids(PORT), ...(answering ? [answering] : []), ...(proven ? [proven] : [])])];
+const old = [...new Set([...listenerPids(PORT), ...(proven ? [proven] : [])])];
 if (old.length) {
   // 别盲目打断会被打断的任务。判据是「重启会**真断**几个」而不是「有几个在跑」。
   // 问不出判据就中止(impactOrAbort):静默按 0 继续正是这条闸失效的样子。

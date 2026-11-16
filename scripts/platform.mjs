@@ -107,37 +107,14 @@ function executable(full) {
 }
 
 /** 跑一段 PowerShell 拿 stdout（非 Windows 直接空串）。编码传参绕开引号雷区。 */
-export function powerShell(script, opts = {}) {
+export function powerShell(script) {
   if (!IS_WINDOWS) return "";
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   for (const exe of ["pwsh.exe", "powershell.exe"]) {
-    const out = capture(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], opts);
+    const out = capture(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]);
     if (out.trim()) return out;
   }
   return "";
-}
-
-/**
- * 跑 windowsTerminateScript,**失败时也要 stdout**:那段脚本把失败原因打在
- * `ASH_RESTART_ERROR` 上、退出码非 0,而 `capture` 遇到非 0 会把 stdout 一起吞掉。
- * 带着结论(`ASH_RESTART_*`)回来的那一次就是答案,不再换另一个 PowerShell 重跑一刀。
- */
-function powerShellTerminate(script) {
-  const encoded = Buffer.from(script, "utf16le").toString("base64");
-  let last = "";
-  for (const exe of ["pwsh.exe", "powershell.exe"]) {
-    try {
-      last = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        windowsHide: true,
-      });
-    } catch (error) {
-      last = String(error?.stdout ?? "");
-    }
-    if (last.includes("ASH_RESTART_")) return last;
-  }
-  return last;
 }
 
 /**
@@ -199,15 +176,13 @@ catch { netstat -ano | Select-String ':${port}\\s' | Select-String 'LISTENING' |
 export function listProcesses() {
   const rows = [];
   if (IS_WINDOWS) {
-    // 整张表连命令行一起回来,开着几十个浏览器/编辑器/agent 的机器上轻松过 1MB ——
-    // 超了 execFileSync 的默认上限就是 ENOBUFS,被读成「进程表查询失败」,重启当场拒杀。
     const out = powerShell(`$ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 $rows=@(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {
   $born = if ($null -ne $_.CreationDate) { $_.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString() } else { '' }
   [pscustomobject]@{pid=$_.ProcessId;ppid=$_.ParentProcessId;created=$born;command=$_.CommandLine}
 })
-[Console]::Out.WriteLine((ConvertTo-Json -InputObject $rows -Compress -Depth 3))`, { maxBuffer: 256 * 1024 * 1024 });
+[Console]::Out.WriteLine((ConvertTo-Json -InputObject $rows -Compress -Depth 3))`);
     try {
       const parsed = JSON.parse(out);
       if (!Array.isArray(parsed)) return [];
@@ -303,11 +278,8 @@ export function killServerProcesses(pids, protect = [], { force = false } = {}) 
   }
   const doomed = plan.targets.filter((row) => row.pid !== process.pid);
   if (!doomed.length) return "gone";
-  const result = powerShellTerminate(windowsTerminateScript(doomed));
-  if (!result.includes("ASH_RESTART_KILLED")) {
-    const why = /ASH_RESTART_ERROR (.*)/.exec(result)?.[1]?.trim();
-    throw new Error(`Windows 进程实例核验或终止失败${why ? `(${why})` : ""}`);
-  }
+  const result = powerShell(windowsTerminateScript(doomed));
+  if (!result.includes("ASH_RESTART_KILLED")) throw new Error("Windows 进程实例核验或终止失败");
   return "selective";
 }
 

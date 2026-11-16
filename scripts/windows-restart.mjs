@@ -23,9 +23,7 @@ export function windowsRestartPlan(rows, rootPid, protectedPids) {
   const descendants = walk(rootPids);
   for (const pid of rootPids) {
     const root = byPid.get(pid);
-    if (root && root.ppid === null) throw new Error(`${pid} 的进程身份不完整`);
-    // 同用户的进程命令行总读得到;读不到 = 它跑在更高的权限上(管理员终端里起的 ash)。
-    if (root && !root.command) throw new Error(`${pid} 的进程身份不完整(命令行读不到,旧实例多半以管理员身份运行,请在同样以管理员身份打开的终端里重跑)`);
+    if (root && (!root.command || root.ppid === null)) throw new Error(`${pid} 的进程身份不完整`);
   }
   const protectedTree = walk(protectedPids);
   const preservedPids = rows
@@ -61,16 +59,10 @@ export function windowsRestartTargets(rows, rootPid, protectedPids) {
  * `tolerant` 决定代次对不上时怎么办:默认**整批抛**(生产重启要么全对要么一个都不动);
  * 开了则跳过那一个、把号码打在 `ASH_RESTART_SKIPPED <pid>` 上继续 —— 清场时一个号码换了
  * 主人不该把其余真该停的一起拦下。
- *
- * 失败时退出码照旧非 0,另把原因(哪个号码、哪一步、系统错误)打在 stdout 的
- * `ASH_RESTART_ERROR <原因>` 上:stderr 在中文 Windows 上是 GBK,而调用方要把这句原样
- * 报给人看 —— 只报「核验或终止失败」时,人连是哪个进程拦住的都不知道。
  */
 export function windowsTerminateScript(targets, options = {}) {
   const identities = targets.map((row) => `${row.pid}:${row.created}`).join(",");
   return `$ErrorActionPreference='Stop'
-[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
-try {
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -90,7 +82,6 @@ public static class AshRestartHandles {
   public static void Kill(string identities, bool tolerant) {
     var handles = new List<IntPtr>();
     var doomed = new List<IntPtr>();
-    var doomedPids = new List<int>();
     var skipped = new List<int>();
     try {
       foreach (var identity in identities.Split(',')) {
@@ -102,12 +93,12 @@ public static class AshRestartHandles {
           var error = Marshal.GetLastWin32Error();
           if (error == 87) continue;
           if (tolerant) { skipped.Add(pid); continue; }
-          throw new Exception("OpenProcess " + pid + ": " + new Win32Exception(error).Message);
+          throw new Win32Exception(error);
         }
         handles.Add(handle);
         long born, exit, kernel, user;
         if (!GetProcessTimes(handle, out born, out exit, out kernel, out user)) {
-          if (!tolerant) throw new Exception("GetProcessTimes " + pid + ": " + new Win32Exception().Message);
+          if (!tolerant) throw new Win32Exception();
           skipped.Add(pid); continue;
         }
         if (!Matches(born, parts[1])) {
@@ -115,14 +106,10 @@ public static class AshRestartHandles {
           skipped.Add(pid); continue;
         }
         doomed.Add(handle);
-        doomedPids.Add(pid);
       }
-      for (var i = 0; i < doomed.Count; i++) {
-        var handle = doomed[i];
+      foreach (var handle in doomed) {
         if (WaitForSingleObject(handle, 0) == 0) continue;
-        if (!TerminateProcess(handle, 1) && WaitForSingleObject(handle, 0) != 0) {
-          throw new Exception("TerminateProcess " + doomedPids[i] + ": " + new Win32Exception().Message);
-        }
+        if (!TerminateProcess(handle, 1) && WaitForSingleObject(handle, 0) != 0) throw new Win32Exception();
       }
     } finally {
       foreach (var handle in handles) CloseHandle(handle);
@@ -132,11 +119,5 @@ public static class AshRestartHandles {
 }
 '@
 [AshRestartHandles]::Kill('${identities}', $${options.tolerant ? "true" : "false"})
-[Console]::Out.WriteLine('ASH_RESTART_KILLED')
-} catch {
-  $why = $_.Exception
-  if ($null -ne $why.InnerException) { $why = $why.InnerException }
-  [Console]::Out.WriteLine('ASH_RESTART_ERROR ' + ($why.Message -replace '\\s+', ' '))
-  throw
-}`;
+[Console]::Out.WriteLine('ASH_RESTART_KILLED')`;
 }
