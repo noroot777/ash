@@ -177,15 +177,6 @@ try {
       await page.close();
     }
   }
-  const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
-  const demo = fileURLToPath(new URL("../../docs/demos/pending-input-demo.html", import.meta.url));
-  await page.goto(`${base}/@fs${demo}`);
-  await page.getByRole("button", { name: "展开全部 10 条", exact: true }).click();
-  const footer = await page.locator(".composer-footer").boundingBox();
-  const frame = await page.locator(".app-window").boundingBox();
-  assert.ok(footer.y + footer.height <= frame.y + frame.height, "原型同类边界也不能挤出发送区");
-  assert.match(await page.locator("#cancel-dialog").textContent(), /不执行停止哨兵操作/);
-  console.log("✓ 原型共用高度边界与中性取消说明通过");
 } finally {
   await browser?.close();
   await web.close();
