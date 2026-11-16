@@ -48,7 +48,16 @@ export async function startPeer(
   const tsxCli = join(serverDir, "..", "node_modules", "tsx", "dist", "cli.mjs");
   const peer = spawn(process.execPath, [tsxCli, "src/index.ts"], {
     cwd: serverDir,
-    env: { ...process.env, ...env, PORT: "0" },
+    env: {
+      ...process.env,
+      // 对端的数据目录跟着它自己的库走。本进程的 ASH_DATA_DIR 在 src/paths.ts 加载那一刻就从
+      // 环境里拿掉了,不显式给的话对端会落到这份检出的 data/ 上(往 data/tmp 写接力包)。
+      ...(env.ASH_DB ? { ASH_DATA_DIR: `${env.ASH_DB}.data` } : {}),
+      // 对端一启动就会预热模型目录,那是在问本机真装着的 CLI(见 model-probe.ts 的开关说明)。
+      ASH_TEST_NO_MODEL_PROBE: "1",
+      ...env,
+      PORT: "0",
+    },
     stdio: ["ignore", "pipe", "pipe"],
     // Windows 没有进程组这一说(detached 只影响控制台归属),那边靠调用方的 kill +
     // 进程退出时系统回收;POSIX 上这一位才是能杀到内层的关键。

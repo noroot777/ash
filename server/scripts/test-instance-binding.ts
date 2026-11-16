@@ -45,6 +45,9 @@ async function startServer(window: number): Promise<void> {
     env: {
       HOME: home, PATH: "/usr/bin:/bin", PORT: String(port), ASH_LOCAL_ONLY: "1", ASH_DATA_DIR: data, ASH_DB: join(data, "ash.db"),
       ASH_WINDOW_PORT: String(window),
+      // 环境是从零拼的，门禁给的开关传不过来：不关的话服务一启动就去问本机真装着的 claude
+      // （握手探针活得比服务久，每跑一次留一个）。
+      ASH_TEST_NO_MODEL_PROBE: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

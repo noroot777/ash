@@ -125,6 +125,11 @@ function writeHistory(updates) {
 // 一加载，数据目录就落在代码根的 `data/` —— 也就是这份检出自己的（走假 claude 的那批会往
 // `data/ash-mcp/` 写配置）。由执行器统一给，叶子不必各自记得设；自己另指数据目录的测试照旧
 // 以它自己的为准。目录跟着这条叶子的进程一起收：收完进程再删，删不掉只多留一个临时目录。
+// 每条叶子都带着的环境。`ASH_TEST_NO_MODEL_PROBE`：测试里起的真服务不去预热模型目录 —— 那是
+// 在问本机真装着的 CLI，其中握手探针是一个活得比服务久的 `claude -p`（开关的说明在
+// server/src/executors/model-probe.ts）。测探测本身的那几条自己把它拿掉、换成假 CLI。
+const LEAF_ENV = { ASH_TEST_NO_MODEL_PROBE: "1" };
+
 function leafDataDir(root, name) {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
@@ -219,7 +224,7 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
           cwd: leaf.cwd,
           detached: true,
           stdio: ["ignore", output, output],
-          env: { ...env, ...extra, [owner]: String(index), ASH_DATA_DIR: data.dir, npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
+          env: { ...env, ...extra, [owner]: String(index), ...LEAF_ENV, ASH_DATA_DIR: data.dir, npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
         });
       } finally {
         closeSync(output);
@@ -371,7 +376,7 @@ function runSequentially(repo, steps, env, log) {
     for (const step of steps) {
       const args = step.workspace === "." ? ["run", step.script] : ["-w", step.workspace, "run", step.script];
       const data = leafDataDir(dataRoot, String(steps.indexOf(step)));
-      const result = spawnSync(NPM, args, { ...NPM_SPAWN_OPTS, cwd: repo, stdio: "inherit", env: { ...env, ASH_DATA_DIR: data.dir } });
+      const result = spawnSync(NPM, args, { ...NPM_SPAWN_OPTS, cwd: repo, stdio: "inherit", env: { ...env, ...LEAF_ENV, ASH_DATA_DIR: data.dir } });
       if (result.error) log(`[test-runner] 无法启动 ${step.workspace} ${step.script}：${result.error.message}`);
       if (result.signal) log(`[test-runner] ${step.workspace} ${step.script} 被信号 ${result.signal} 终止。`);
       if (result.status !== 0) return { leaf: { label: `${step.workspace} ${step.script}`, step: steps.indexOf(step) }, code: result.status || 1 };

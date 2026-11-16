@@ -197,6 +197,14 @@ async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelC
 }
 
 /**
+ * 只给测试用的开关:`ASH_TEST_NO_MODEL_PROBE=1` 时不去问本机 CLI、也不抓官方文档,一律端内置
+ * 快照。服务一启动就会预热 claude 那份目录(`startClaudeModelRefreshLoop`):握手探针是一个真的
+ * `claude -p` 子进程,测试收掉服务时它还活着 —— 起真服务的测试每跑一次就留下一个。门禁执行器
+ * (scripts/test-runner.mjs)给每条测试都带上它;要测探测本身的那几条自己把它拿掉。
+ */
+const modelProbeOffForTests = (): boolean => process.env.ASH_TEST_NO_MODEL_PROBE === "1";
+
+/**
  * 一条缓存能存多久。导出只为回归测试钉住「降级结果不许和成功结果一样保鲜」。
  * 没有清单命令的 CLI 除外:它永远只有快照,重探不会有新结果,没必要反复问。
  */
@@ -245,6 +253,7 @@ export function modelCatalogFor(type: AgentType, force = false): Promise<CliMode
           probed: false,
         };
       }
+      if (modelProbeOffForTests()) return { catalog: presetCatalog(type), probed: false };
       const settings = type === "claude" ? await getAppSettings() : undefined;
       const cached = cache.get(type);
       if (!force && fresh(cached, settings?.claudeModelRefreshHours)) return { catalog: cached!.catalog, probed: false };
