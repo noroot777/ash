@@ -17,8 +17,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
-// 开机对账里任何一步真要拉起 agent 都拉不起来：PATH 里没有 CLI，HOME 是空目录。
+// 开机对账里任何一步真要拉起 agent 都拉不起来。光把 PATH 收窄不够：找命令还会去常见安装目录
+// （/opt/homebrew/bin…），开发机上真装着 claude，对照组那一轮就曾经把它起起来过。靠的是测试隔离那道闸
+// （executors/spawn.ts 的 guardAgentSpawn）：ASH_RUNS_DIR 指定了、又没有 ASH_ALLOW_REAL_AGENT，
+// 起执行器那一步直接失败。ASH_RUNS_DIR 在下面跟数据根一起设。
 process.env.PATH = "/usr/bin:/bin";
+delete process.env.ASH_ALLOW_REAL_AGENT;
 
 /** 照 index.ts 的顺序跑接管之后那一串开机对账（接管本身下面单独验）。 */
 async function startupRecovery(): Promise<void> {
@@ -42,7 +46,7 @@ function reviewFootprint(file: string): string {
       messages: rows("SELECT id, status FROM scheduled_messages ORDER BY id"),
       runs: rows("SELECT id, status FROM free_review_runs ORDER BY id"),
       rounds: rows("SELECT id, status, dispatch FROM free_review_rounds ORDER BY id"),
-      // 新开一条会话 = 开机对账真去起了 agent（这台测试里不该发生，PATH 上虽然没有 CLI，常见安装目录里可能有）。
+      // 新开一条会话 = 开机对账替源实例起了一个回合。
       sessions: rows("SELECT id FROM sessions ORDER BY id"),
     });
   } finally { db.close(); }
@@ -69,6 +73,7 @@ for (const dir of [source, target, sibling, project, process.env.HOME!, join(sou
 const file = join(target, "ash.db");
 process.env.ASH_DB = file;
 process.env.ASH_DATA_DIR = target;
+process.env.ASH_RUNS_DIR = join(target, "runs");
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -177,16 +182,17 @@ try {
   }
   controlDb.close();
   const probe = spawnSync(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), "--recover"], {
-    env: { ...process.env, ASH_DB: control, ASH_DATA_DIR: source }, encoding: "utf8", timeout: 90_000,
+    env: { ...process.env, ASH_DB: control, ASH_DATA_DIR: source, ASH_RUNS_DIR: join(source, "runs") }, encoding: "utf8", timeout: 90_000,
   });
   const footprint = probe.stdout.split("\n").find((line) => line.startsWith("FOOTPRINT "));
   if (!footprint || process.env.DEBUG_IMPORT_SNAPSHOT) console.error(probe.stdout, probe.stderr);
   const controlRun = footprint ? JSON.parse(footprint.slice("FOOTPRINT ".length)) as { before: string; after: string } : null;
+  // 只认「这条修复消息在不在」：它一入队，放锁那一下就会被投出去（投不投得成是另一回事，这里起不了
+  // 执行器），所以状态可能是 pending 也可能已经是 sent。
   const repairQueued = (shot: string) => (JSON.parse(shot).messages as { id: string; status: string }[])
-    .some((m) => m.id === "review-repair-g-r" && m.status === "pending");
+    .some((m) => m.id === "review-repair-g-r");
   check("对照：没洗的副本开机会替源实例重投修复", controlRun ? [repairQueued(controlRun.before), repairQueued(controlRun.after)] : null,
     [false, true]);
-  check("对照组没真去起 agent", controlRun ? JSON.parse(controlRun.after).sessions : null, []);
 
   const { prepareImportedSnapshot } = await import("../src/import-snapshot.js");
   const report = prepareImportedSnapshot(file, [source], target);
