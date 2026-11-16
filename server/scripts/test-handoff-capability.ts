@@ -7,6 +7,7 @@
 //
 // 所以下面每一条 not-blocking 的断言都对应一个具体的假警报来源:对端旧版报不出能力、
 // 对端是多人实例故意没探、模型清单只是发版时抄下的内置快照。它们全都必须放行。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -142,6 +143,11 @@ for (const absent of [null, undefined]) {
 // 审查。改成**自己造一个装了的 CLI**:临时目录里放一个假 grok(能应 `--version`,
 // `models` 印出 grok 的清单格式),PATH 前置。于是「有没有去问」在任何机器上都有确定
 // 答案 —— 探了就会拿到这份假清单,没探就只能是内置快照。
+//
+// 其余各家先全铺上只报版本的桩(host-cli-stubs.ts):上报侧会把目录里每一家都问一遍,不铺的话
+// 问到的是这台机器上真装着的 claude / codex / …。假 grok 的目录后加,排在桩前面。
+const { shadowHostClis } = await import("./host-cli-stubs.js");
+await shadowHostClis();
 const fakeCliDir = process.platform === "win32" ? null : mkdtempSync(join(tmpdir(), "ash-fake-cli-"));
 const FAKE_MODELS = ["fake-alpha", "fake-beta"];
 if (fakeCliDir) {
@@ -159,7 +165,6 @@ if (fakeCliDir) {
 }
 
 {
-  process.env.ASH_DB = process.env.ASH_DB ?? "/tmp/handoff-capability-unit.db";
   const { ensureSchema } = await import("../src/db/index.ts");
   await ensureSchema();
   const { localCapabilities } = await import("../src/handoff-capability.ts");

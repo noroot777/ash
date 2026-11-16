@@ -9,7 +9,7 @@
 //   ③ 每个 AgentType 都拿得到 catalog,Claude 文档及 spec.models 能力与按钮一致;
 //   ④ 没有清单命令 / 没装 CLI 时诚实降级:source==="preset" 且 models 等于内置快照;
 //   ⑤ 缓存命中不重复起子进程,force 会绕过缓存,降级结果比成功结果短命;
-//   ⑥ 本机装了 grok / codex 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提);
+//   ⑥ 本机装了 grok / codex 时的**真实**探测(ASH_TEST_REAL_CLI=1 才跑;其余各节只碰得到桩,见 host-cli-stubs.ts);
 //   ⑦ 多人模式下**一次都不问宿主机 CLI**(§八),连自用模式下探到的缓存也不许端出来;
 //   ⑧ per-model 档位的三条来源各自解析得对,且「不知道」与「没有档位」永远分得开。
 import assert from "node:assert/strict";
@@ -20,6 +20,7 @@ import { AGENT_TYPES } from "@ash/shared";
 import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@ash/shared/cli-presets";
 import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
+import { REAL_HOST_CLI, shadowHostClis } from "./host-cli-stubs.js";
 
 // ⑦ 要读实例模式(权威值在 app_settings 表里),所以这条测试也得自带临时库。
 //
@@ -30,6 +31,9 @@ import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 const stage = mkdtempSync(join(tmpdir(), "ash-cli-models-"));
 process.env.ASH_DB ||= join(stage, "cli-models.db");
 requireTmpDb("test-cli-models");
+// ③④⑤ 探的是「目录里每一家」，不该变成探这台机器上真装着的那几家（其中 claude 的握手探针是一个
+// 真的 `claude -p`）。默认只碰得到桩；⑥ / ⑧b 那两段拿真 CLI 对答案的，要 ASH_TEST_REAL_CLI=1 才跑。
+await shadowHostClis();
 
 const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { parseGrokModels } = await import("../src/executors/catalog/grok.js");
@@ -304,7 +308,8 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
 }
 
 // ── ⑥ 本机真实探测(装了才断言) ────────────────────────────────────────
-{
+if (!REAL_HOST_CLI) console.log("· 没给 ASH_TEST_REAL_CLI=1,跳过本机真实探测(⑥ / ⑧b)");
+if (REAL_HOST_CLI) {
   const grok = CLI_SPEC_BY_KEY.grok;
   const installed = await probeBins(grok.bins, grok.fallbackVersionMatch);
   if (!installed) {
@@ -323,7 +328,7 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
   }
 }
 
-{
+if (REAL_HOST_CLI) {
   const codex = CLI_SPEC_BY_KEY.codex;
   const installed = await probeBins(codex.bins, codex.fallbackVersionMatch);
   if (!installed) {
@@ -341,7 +346,7 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
   }
 }
 
-{
+if (REAL_HOST_CLI) {
   const spec = CLI_SPEC_BY_KEY.opencode;
   const installed = await probeBins(spec.bins, spec.fallbackVersionMatch);
   if (!installed) {
@@ -485,7 +490,7 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
 }
 
 // ⑧b 本机装了 codex / claude 就实探一次档位(装了才断言,同 ⑥ 的口径)。
-{
+if (REAL_HOST_CLI) {
   const codex = CLI_SPEC_BY_KEY.codex;
   if (await probeBins(codex.bins, codex.fallbackVersionMatch)) {
     const catalog = await modelCatalogFor("codex", true);
@@ -499,7 +504,7 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
   }
 }
 
-{
+if (REAL_HOST_CLI) {
   const claude = CLI_SPEC_BY_KEY.claude;
   const found = await probeBins(claude.bins, claude.fallbackVersionMatch);
   if (!found) {

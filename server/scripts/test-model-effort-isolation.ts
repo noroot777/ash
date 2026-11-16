@@ -46,6 +46,9 @@ process.env.XDG_CACHE_HOME = cacheHome;
 process.env.ASH_DB ||= join(stage, "effort-isolation.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-model-effort-isolation");
+// 目录那一面要真走一遍探测(档位来自上面那份 models.json),但问的不该是本机真装着的 opencode。
+const { shadowHostClis } = await import("./host-cli-stubs.js");
+await shadowHostClis();
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents, projects, tasks } = await import("../src/db/schema.js");

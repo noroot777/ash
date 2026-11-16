@@ -225,7 +225,8 @@ try {
   }
 
   // 审查复现的原样形状,问真 codex:带引号的登记它认得 → 不追加;重复定义它读不动 → 不动。
-  const codex = which("codex");
+  // 明说才问(ASH_TEST_REAL_CLI=1):这几条的结论跟着这台机器装的是哪一版 codex 走。
+  const codex = process.env.ASH_TEST_REAL_CLI === "1" ? which("codex") : null;
   if (codex) {
     const home = join(directory, "home");
     const askCodex = (args, where) => {
@@ -278,7 +279,7 @@ try {
       assert.ok(!readFileSync(twin, "utf8").includes("harness"), "另一端的旧名也没了");
     }
   } else {
-    console.log("⚠ 没装 codex,跳过问真 codex 那几条");
+    console.log("⚠ 没装 codex 或没给 ASH_TEST_REAL_CLI=1,跳过问真 codex 那几条");
   }
 } finally {
   rmSync(directory, { recursive: true, force: true });

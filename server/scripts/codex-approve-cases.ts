@@ -125,7 +125,7 @@ export async function checkCodexApprove(): Promise<void> {
       assert.equal(again.configured, false, "失败过的组合照样报失败");
       assert.equal(statSync(file).mtimeMs, past.getTime(), "第二次也一个字节都不该动");
     } else {
-      console.log("⚠ 没装 codex，跳过「真 codex 判决」那一条");
+      console.log("⚠ 没装 codex 或没给 ASH_TEST_REAL_CLI=1，跳过「真 codex 判决」那一条");
       assert.equal(state.configured, false, "问不动 codex ⇒ 不补接（不拿「问不出来」当批准）");
     }
   }

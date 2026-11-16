@@ -14,6 +14,7 @@ import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
 import { ensureAshMcp, type CodexAsk } from "../src/auth/user-cli-mcp.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
 import { REPO_DIR } from "../src/paths.js";
+import { REAL_HOST_CLI } from "./host-cli-stubs.js";
 
 
 export const stage = mkdtempSync(join(tmpdir(), "ash-user-cli-mcp-"));
@@ -64,7 +65,7 @@ export function canned(outcome: CodexAskOutcome, log?: Asked[], userFile?: strin
  * 产品代码里不许这么写(本轮审查 F2),那条断言在最后一格。
  */
 export const askRealCodex: CodexAsk = async (sandbox) => {
-  const plan = resolveLaunch("codex", ["mcp", "list", "--json"]);
+  const plan = REAL_HOST_CLI ? resolveLaunch("codex", ["mcp", "list", "--json"]) : null;
   if (!plan) return { kind: "not-started", why: "这台机器上没装 codex" };
   const res = spawnSync(plan.file, plan.args, {
     cwd: sandbox,
@@ -78,7 +79,8 @@ export const askRealCodex: CodexAsk = async (sandbox) => {
   return { kind: "answer", code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 };
 
-export const HAS_CODEX = !!resolveLaunch("codex", ["mcp", "list", "--json"]);
+// 拿本机真 codex 当判官的那一格要明说才跑(ASH_TEST_REAL_CLI=1):结论跟着这台机器装的是哪一版走。
+export const HAS_CODEX = REAL_HOST_CLI && !!resolveLaunch("codex", ["mcp", "list", "--json"]);
 
 /** 默认替身 = 「codex 收下了」。只有明确要考 codex 判决的格子才自己传。 */
 export const ensure = (dir: string, agent: string, host: string, ask: CodexAsk = canned(LISTS_ASH)) =>

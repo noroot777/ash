@@ -13,9 +13,10 @@
 //   ⑦ 备用命令名:检测命中 bins[1] 时执行也要用它(死认 bins[0] = 目录说可用、派任务 ENOENT);
 //   ⑧ Grok 的 token 级 thought 必须按连续段聚合,不能在 UI 生成几百个「思考过程」;
 //   ⑨ 档位三级优先(probe > 内置规则 > CLI 并集)与 probe 表的 key 归一。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
@@ -45,6 +46,7 @@ import {
 } from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 import { IS_WINDOWS } from "../src/platform.js";
+import { stubHostClis, writeVersionStub } from "./host-cli-stubs.js";
 
 const MISSING_BIN = "ash-definitely-not-installed-cli";
 
@@ -73,17 +75,14 @@ function writeEchoStub(dir: string, name: string): string {
   return file;
 }
 
-function writeVersionStub(dir: string, name: string, version: string): string {
-  const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
-  writeFileSync(file, IS_WINDOWS ? `@echo ${version}\r\n` : `#!/bin/sh\necho ${JSON.stringify(version)}\n`, { mode: 0o755 });
-  return file;
-}
 
 {
   const stubDir = mkdtempSync(join(tmpdir(), "ash-codex-version-stub-"));
   const originalPath = process.env.PATH;
   process.env.PATH = `${stubDir}${delimiter}${originalPath ?? ""}`;
   try {
+    // 检测会把目录里每一家都问一遍版本:先全铺上桩,问到的就不是本机真装着的那几家。
+    await stubHostClis(stubDir);
     writeVersionStub(stubDir, "codex", "codex-cli 0.147.8");
     const blocked = await registrationBlockReason("codex") ?? "";
     assert.ok(blocked, "已安装的 0.147.x 必须拒绝注册");
@@ -525,6 +524,14 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 // 「EXTRA_PATHS 探不到」这种假红。那边改用 `%APPDATA%\npm`(npm -g 的垫片目录,
 // 同在 extraPaths 里)。桩的壳也按平台换,理由见 writeEchoStub。
 {
+  // POSIX 上把家目录换成临时的再放桩:补充目录是按 `homedir()` 现算的,不必往真实的
+  // `~/.local/bin` 里写可执行文件。Windows 那支认的是 %APPDATA%,照旧。
+  const realHome = process.env.HOME;
+  const fakeHome = IS_WINDOWS ? null : mkdtempSync(join(tmpdir(), "ash-probe-home-"));
+  if (fakeHome) {
+    process.env.HOME = fakeHome;
+    mkdirSync(join(fakeHome, ".local", "bin"), { recursive: true });
+  }
   const dir = IS_WINDOWS ? join(process.env.APPDATA ?? homedir(), "npm") : join(homedir(), ".local", "bin");
   const name = `ash-probe-fixture-${process.pid}`;
   const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
@@ -550,6 +557,10 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
       process.env.PATH = originalPath;
       rmSync(file, { force: true });
     }
+  }
+  if (fakeHome) {
+    process.env.HOME = realHome;
+    rmSync(fakeHome, { recursive: true, force: true });
   }
 }
 
