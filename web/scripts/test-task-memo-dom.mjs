@@ -472,11 +472,13 @@ try {
     await api.releaseWrites();
     // 那一发收尾跑完的证据有两种形态：占位交还（框子重新可用）= 对的那种；草稿被清掉
     // （编辑框整个消失）= 回归的那种。两种都等，才能把失败报在断言上而不是等待超时。
+    // 按「备忘内容」这个框认，不按类名：2026-11-15 编辑框抽成共用组件时类名换过，这里照旧名
+    // 找不到框，把「框还在」误报成了「草稿被清掉」。
     await page.waitForFunction(() => {
-      const node = document.querySelector(".task-memo-card__edit textarea");
+      const node = document.querySelector('[aria-label="任务备忘"] textarea[aria-label="备忘内容"]');
       return !node || !node.disabled;
     });
-    const editor = panel.locator(".task-memo-card__edit textarea");
+    const editor = panel.getByRole("textbox", { name: "备忘内容" });
     assert.equal(await editor.count(), 1, "旧保存清掉了这期间新写的那一版，编辑态跟着没了");
     assert.equal(await editor.inputValue(), poked, "旧保存不许清掉后写的那一版");
     assert.deepEqual(errors, []);

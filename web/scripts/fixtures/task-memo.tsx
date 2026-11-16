@@ -13,7 +13,7 @@ import type { TaskListItem, TaskFollowUp, TaskFollowUpList } from "@ash/shared";
 import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { MemoSelectionScope } from "../../src/task-memos/MemoSelectionScope.tsx";
-import { setMemoEditDraft } from "../../src/task-memos/taskMemoDrafts.ts";
+import { setMemoDraft } from "../../src/task-memos/taskMemoDrafts.ts";
 import { addTaskMemo, editTaskMemo, useTaskMemos } from "../../src/task-memos/taskMemoStore.ts";
 import { TaskMemoInspector } from "../../src/task-memos/TaskMemoInspector.tsx";
 import { useTaskMemoTab } from "../../src/task-memos/useTaskMemoTab.tsx";
@@ -57,7 +57,7 @@ function DraftPoker() {
     <button
       type="button"
       data-testid="poke-draft"
-      onClick={() => setMemoEditDraft(TASK_ID, first.id, POKED)}
+      onClick={() => setMemoDraft(TASK_ID, first.id, { text: POKED, attachments: first.attachments })}
     >
       绕开界面改草稿
     </button>
@@ -84,8 +84,8 @@ function RaceWriter() {
       type="button"
       data-testid="race-edits"
       onClick={() => {
-        void editTaskMemo(TASK_ID, first.id, RACE_A).catch(() => undefined);
-        void editTaskMemo(TASK_ID, first.id, RACE_B).catch(() => undefined);
+        void editTaskMemo(TASK_ID, first.id, { body: RACE_A }).catch(() => undefined);
+        void editTaskMemo(TASK_ID, first.id, { body: RACE_B }).catch(() => undefined);
       }}
     >
       绕开界面连发两发编辑
@@ -169,7 +169,7 @@ function FetchFixture({ count }: { count: number }) {
         <SpreadRowCells task={tail} ctx={ctx} onOpen={() => undefined} />
       </div>
       {/* 真写一条进 store：这一下推动写入版本，那一列据此补发只问这个任务的摘要。 */}
-      <button type="button" data-testid="write-memo" onClick={() => void addTaskMemo(tail.id, FETCHED_MEMO)}>
+      <button type="button" data-testid="write-memo" onClick={() => void addTaskMemo(tail.id, { body: FETCHED_MEMO })}>
         写一条备忘
       </button>
     </main>
