@@ -7,7 +7,7 @@
 // 拿不到不该拖垮调用方。
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { request } from "node:http";
+import { Agent, request } from "node:http";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
@@ -312,6 +312,25 @@ export function killServerProcesses(pids, protect = [], { force = false } = {}) 
 }
 
 /**
+ * 这个进程**最晚可能**是什么时候出生的(墙钟 ms)。查不到返回 null。
+ *
+ * 只给「证明是不是同一个实例」用,所以取的是不利于证明的那一端:Windows 是进程表里的
+ * 精确创建时刻;POSIX 用 `etime`(已运行时长,不带时区,macOS 与 procps 都有),它截断到
+ * 秒,真实出生时刻落在 (估值 - 1s, 估值],于是直接拿估值当上界。
+ */
+export function processLatestBirthMs(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (IS_WINDOWS) {
+    const created = listProcesses().find((row) => row.pid === pid)?.created;
+    return /^\d+$/.test(created ?? "") ? Number(BigInt(created) / 10_000n) - 11_644_473_600_000 : null;
+  }
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(capture("ps", ["-o", "etime=", "-p", String(pid)]).trim());
+  if (!m) return null;
+  const [, days = "0", hours = "0", minutes, seconds] = m;
+  return Date.now() - (((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000;
+}
+
+/**
  * 命令行**以这个路径结尾**的进程。锚在末尾是有意的：`node …/mcp/dist/index.js` 该
  * 命中，而把同一个路径写在 `--mcp-config` 里的 claude/codex 父进程绝不能被误杀。
  */
@@ -362,9 +381,14 @@ export function isPidAlive(pid) {
  * 走 `node:http` 而不是 fetch 是**故意**的：本机控制面请求绝不能跟着 HTTP_PROXY /
  * ALL_PROXY 绕去代理。这个环境常驻代理却没设 NO_PROXY，服务重启的几秒空窗里代理
  * 会记住一次上游失败，于是 server 已经同秒监听、这里仍连续拿到失败并误报「没起来」。
- * `node:http` 不读任何代理环境变量，这条路是确定的（fetch 在 Node 24 起可以被
- * `NODE_USE_ENV_PROXY` 打开，不确定）。
+ *
+ * 光用 `node:http` 不够：Node 24 起 `NODE_USE_ENV_PROXY=1` 会把**全局 agent** 也换成读代理
+ * 变量的那个，`http.request` 照样被送去代理（本机环境就开着它）。于是请求一个没人监听的端口
+ * 拿到的是代理那头的超时 / 重置，而不是 ECONNREFUSED ——「端口安静」这条判据就永远不成立。
+ * 所以每次请求都显式带一个不认代理的 agent（DIRECT_AGENT），确定性不再取决于环境变量。
  */
+const DIRECT_AGENT = new Agent();
+
 export function localJson(port, path, timeoutMs = 2000, headers = undefined) {
   return localGet(port, path, timeoutMs, headers).then((r) => r.json);
 }
@@ -389,7 +413,7 @@ export function localGet(port, path, timeoutMs = 2000, headers = undefined) {
     const done = (value) => { if (!settled) { settled = true; resolve(value); } };
     let timedOut = false;
     const req = request(
-      { host: "127.0.0.1", port, path, timeout: timeoutMs, ...(headers ? { headers } : {}) },
+      { host: "127.0.0.1", port, path, timeout: timeoutMs, agent: DIRECT_AGENT, ...(headers ? { headers } : {}) },
       (res) => {
         let body = "";
         res.setEncoding("utf8");
