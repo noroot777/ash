@@ -62,7 +62,7 @@ function Fixture() {
   useEffect(() => {
     let alive = true;
     void api.taskDiff(taskId).then(value => { if (alive) setDiff(value); });
-    void api.taskCommits(taskId).then(value => { if (alive) setCommits(value); }, () => { if (alive) setCommits({ branch: null, commits: [], total: 0 }); });
+    void api.taskCommits(taskId).then(value => { if (alive) setCommits(value); }, () => { if (alive) setCommits({ branch: null, commits: [], total: null }); });
     return () => { alive = false; };
   }, [taskId, task?.updatedAt]);
   if (!task) return <p>读取测试任务…</p>;
@@ -77,7 +77,7 @@ function Fixture() {
     source: diff.sourceBranch || commits?.branch || "项目当前分支",
     target: diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "验收时确定",
     commits: commits?.commits ?? [],
-    commitTotal: commits?.total ?? 0,
+    commitTotal: commits?.total ?? null,
     diff,
   };
   return <main style={{ maxWidth: 920, padding: 32, margin: "auto" }}>

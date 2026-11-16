@@ -19,6 +19,8 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 //    「这次跳过它，直接合并」「重跑一次」「刷新依赖」「重新核对」）确实不在了。
 // ⑥ **提交数不拿清单的长度冒充**。清单只列最近一批；第一行写的是真实条数，点开之后没列出来的
 //    有几条写在清单底下。2026-11-16 现场是一条 185 个提交的分支在第一行写着「50 提交」。
+// ⑦ **数不出来的不写成 0**。diff 和提交都读不出来时第一行没有「提交」「文件」那两项（原因写在 diff 的
+//    位置上），不是「0 提交 0 文件 +0 −0」；连着不给总数的旧服务端、清单又列满时写「50+ 提交」。
 const web = await startWebServer();
 
 const LONG_BLOCKER = "父任务「重写验收台」的分支还没合入 main，本任务基于它开工：web/src/acceptance/AcceptanceControls.tsx/web/src/acceptance/DependencyChecks.tsx/web/src/acceptance/CheckRow.tsx 这几处改动都还没进目标分支，请先验收父任务，或把开工起点改到 main 之后重新跑一遍再来验收。";
@@ -29,6 +31,8 @@ const GONE_SELECTORS = [".review-meta-bar", ".accepted-snapshot-card", ".branch-
 const ACTION = "验收通过";
 const LISTED_COMMITS = 50;
 const TOTAL_COMMITS = 185;
+// ⑦ 用，都落在冲突那张台子上：legacy = 连的是不给总数的旧服务端；unreadable = diff 和提交都读不出来。
+const degraded = { mode: null };
 
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n export { a, b };\n";
 const entry = (taskId, more = {}) => ({
@@ -86,12 +90,23 @@ function api(hold, unexpected) {
       }
       if (what === "accept-gate") return reply(gateOf(taskId));
       if (what === "scm") return reply(scmOf(taskId));
+      const commit = (index) => ({ sha: `${String(index).padStart(4, "0")}111111111111`, subject: `feat: 一行决定 ${index}`, at: "2026-11-02T01:20:00.000Z" });
+      if (degraded.mode === "unreadable" && taskId === "conflict-task") {
+        if (what === "commits") return reply({ branch: null, commits: [], total: null, reason: "start_commit_unreadable" });
+        if (what === "diff") {
+          return reply({ available: false, sourceBranch: `ash/${taskId}`, targetBranch: "main", mergeBase: null, diff: "", files: [],
+            truncated: false, limitBytes: 1048576, reason: "start_commit_unreadable" });
+        }
+      }
+      if (degraded.mode === "legacy" && taskId === "conflict-task" && what === "commits") {
+        return reply({ branch: `ash/${taskId}`, commits: Array.from({ length: LISTED_COMMITS }, (_, index) => commit(index)) });
+      }
       if (what === "commits") {
         // 冲突那张台子的清单是截断的：列 50 条，实际 185 条。其余的一条就是全部。
         const listed = taskId === "conflict-task" ? LISTED_COMMITS : 1;
         return reply({
           branch: `ash/${taskId}`, total: taskId === "conflict-task" ? TOTAL_COMMITS : 1,
-          commits: Array.from({ length: listed }, (_, index) => ({ sha: `${String(index).padStart(4, "0")}111111111111`, subject: `feat: 一行决定 ${index}`, at: "2026-11-02T01:20:00.000Z" })),
+          commits: Array.from({ length: listed }, (_, index) => commit(index)),
         });
       }
       if (what === "diff") {
@@ -280,6 +295,27 @@ try {
       return [getComputedStyle(acc).backgroundColor, dark];
     });
     assert.notEqual(lightBg, darkBg, `${width}px：深色主题没有生效`);
+
+    // ⑦ 数不出来的不写成 0。
+    try {
+      degraded.mode = "legacy";
+      await page.reload();
+      await page.getByText(`${LISTED_COMMITS}+ 提交`).waitFor();
+      assert.equal((await commitCount("conflict").innerText()).trim(), `${LISTED_COMMITS}+ 提交`, `${width}px：旧服务端不给总数、清单又列满时，条数只知道「至少」`);
+      await commitCount("conflict").click();
+      await commitLayer.waitFor();
+      assert.ok((await commitLayer.innerText()).includes("更早的没有列出"), `${width}px：总数不知道时也要说清单不是全部`);
+      await page.keyboard.press("Escape");
+      await commitLayer.waitFor({ state: "detached" });
+
+      degraded.mode = "unreadable";
+      await page.reload();
+      await page.locator('[data-host="conflict"]').getByText("无法读取任务的开工提交").waitFor();
+      const broken = page.locator('[data-host="conflict"] .acc-route');
+      assert.equal(await broken.locator("button.acc-link").count(), 0, `${width}px：提交数不出来时不该有「N 提交」`);
+      assert.equal(await broken.locator(".acc-stat").count(), 0, `${width}px：diff 读不出来时不该有「N 文件 +a −d」`);
+      assert.doesNotMatch(await broken.innerText(), /提交|文件/, `${width}px：第一行不该给出任何数字`);
+    } finally { degraded.mode = null; }
 
     assert.deepEqual(unexpected, [], `${width}px：页面发了未声明的请求`);
     assert.deepEqual(errors, [], `${width}px 渲染报错`);

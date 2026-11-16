@@ -15,7 +15,7 @@ import { useWorkspaceCommitVersion } from "./workspaceCommit.ts";
 type ReviewData = {
   branch: string | null;
   commits: TaskCommit[];
-  commitTotal: number;
+  commitTotal: number | null;
   diff: TaskDiffResult;
 };
 

@@ -12,9 +12,9 @@ import { acceptTargetOf } from "./acceptTarget.ts";
 export type RouteData = {
   source: string;
   target: string;
-  /** 最近的一批提交；条数看 `commitTotal`，清单被截断时它比这里列出来的多。 */
+  /** 最近的一批提交；条数看 `commitTotal`，清单被截断时它比这里列出来的多。数不出来时是 null，不是 0。 */
   commits: TaskCommit[];
-  commitTotal: number;
+  commitTotal: number | null;
   diff: TaskDiffResult;
 };
 
@@ -32,6 +32,8 @@ const TASK_BRANCH = /^(ash|harness)\//;
  * 工作台看它自己的 diff，基点垫在最底下。N 是真实条数；清单只列最近一批，没列出来的有几条写在清单底下。
  * 提交、文件、增删行说的是同一段改动：任务分支里合进来的目标分支、开工点带来的代码都不算（服务端
  * task-change-scope.ts）。
+ * 数不出来的那一项不写：diff 读不出来时没有文件和增删行（原因在下面 diff 的位置上），提交数不出来时
+ * 没有提交那一项 —— 写成 0 会被读成「这条任务没有改动」。
  */
 export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
   task: TaskListItem;
@@ -55,6 +57,8 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
     ? "?" : files.reduce((sum, file) => sum + (file[side] ?? 0), 0);
   const add = total("additions");
   const del = total("deletions");
+  // 条数不知道、清单却有（连着还没重启到新版的服务端，清单列满了）：至少这么多。
+  const commitCount = data.commitTotal ?? (data.commits.length ? `${data.commits.length}+` : null);
   const range = task.stage === "accepted" && task.acceptedBaseCommit && task.acceptedMergeCommit
     ? `${task.acceptedBaseCommit.slice(0, 8)}..${task.acceptedMergeCommit.slice(0, 8)}` : null;
   return (
@@ -70,9 +74,13 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
         </button>
       ) : <code className="acc-dst">{data.target}</code>}
       {range && <code className="acc-range" aria-label={`合并区间 ${range}`}>{range}</code>}
-      <button ref={commitsRef} type="button" className="acc-link" aria-expanded={layer === "commits"} disabled={!data.commits.length}
-        onClick={() => setLayer(layer === "commits" ? null : "commits")}>{data.commitTotal} 提交</button>
-      <span className="acc-stat">{files.length} 文件 <b className="acc-add">+{add}</b> <b className="acc-del">−{del}</b></span>
+      {commitCount !== null && (
+        <button ref={commitsRef} type="button" className="acc-link" aria-expanded={layer === "commits"} disabled={!data.commits.length}
+          onClick={() => setLayer(layer === "commits" ? null : "commits")}>{commitCount} 提交</button>
+      )}
+      {data.diff.available && (
+        <span className="acc-stat">{files.length} 文件 <b className="acc-add">+{add}</b> <b className="acc-del">−{del}</b></span>
+      )}
       {layer === "target" && entry && (
         <TargetMenu anchorRef={targetRef} taskId={task.id} projectId={entry.projectId} current={acceptTargetOf(task, entry) ?? data.target}
           source={entry.sourceBranch ?? data.source} fingerprint={entry.fingerprint} disabled={locked}
@@ -96,7 +104,8 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
               </button>
             </li>
           ))}</ul>
-          {data.commitTotal > data.commits.length && <p>更早的 {data.commitTotal - data.commits.length} 条没有列出</p>}
+          {data.commitTotal === null ? <p>更早的没有列出</p>
+            : data.commitTotal > data.commits.length && <p>更早的 {data.commitTotal - data.commits.length} 条没有列出</p>}
           {data.diff.mergeBase && <p>基点 <code>{data.diff.mergeBase.slice(0, 8)}</code></p>}
         </AcceptLayer>
       )}

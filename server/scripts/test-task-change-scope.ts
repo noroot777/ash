@@ -98,6 +98,7 @@ async function scope(r: Repo, taskId: string) {
   const diff = await read(`/tasks/${taskId}/diff`);
   assert.equal(diff.available, true, `diff 读不出来：${diff.reason}`);
   const commits = await read(`/tasks/${taskId}/commits`);
+  assert.equal(commits.reason, undefined, "数得出来的清单不带原因");
   const task = await row(taskId);
   const paths = await taskBranchChangedPaths(r.repo, task);
   assert.equal(paths.available, true);
@@ -138,7 +139,9 @@ async function unavailable(r: Repo, taskId: string, reason: string, said: RegExp
   assert.equal(single.reason, reason);
   const commits = await read(`/tasks/${taskId}/commits`);
   assert.deepEqual(commits.commits, []);
-  assert.equal(commits.total, 0);
+  // 数不出来不是「没有提交」：条数是 null，原因和 diff 那边是同一个。
+  assert.equal(commits.total, null);
+  assert.equal(commits.reason, reason);
   const task = await row(taskId);
   const paths = await taskBranchChangedPaths(r.repo, task);
   assert.equal(paths.available, false);
@@ -331,6 +334,43 @@ try {
       "父任务压缩合入之后，它原来那些提交从目标分支走不到，仍然不算子任务的");
     console.log("✓ 从父任务分支开叉的子任务：父的改动和提交在合入前后都不算子任务的");
   }
+  for (const evidence of ["accepted", "receipt"] as const) {
+    // 父任务验收之后分支被清理：子任务后来合进来的那几条父提交，凭验收留下的那一版照样认得出来。
+    // 这一档里每个仓库都是头一次读，没有记着的答案可以借。
+    const r = await repository();
+    const parent = await prerequisite(r, "parent");
+    const child = await r.task("child", parent.head, { baseTaskId: parent.id, worktreeBase: parent.branch });
+    r.on(child.branch, () => commit(r.repo, "child.txt", lines("child")));
+    parent.head = r.on(parent.branch, () => commit(r.repo, "parent-more.txt", lines("more")));
+    r.on(child.branch, () => git(r.repo, "merge", "-q", "--no-ff", "-m", "merge parent", parent.branch));
+    const mergedIn = await squashAccept(r, parent, evidence);
+    git(r.repo, "branch", "-D", parent.branch);
+    r.mergeMain(child.branch, "merge main");
+    const seen = await scope(r, child.id);
+    assert.equal(seen.base, mergedIn, "父任务最新交来的那一版已经在合进来的目标分支里");
+    assert.deepEqual(seen.files, { "child.txt": [1, 0] });
+    assert.deepEqual(seen.subjects, ["merge main", "merge parent", "child.txt"], "父分支删了，父任务后来那条提交也不算子任务的");
+
+    // 按前置开工的下游同理：后来又合了一次前置的分支，前置压缩合入、分支清理。
+    const giver = await prerequisite(r, "pre");
+    const task = await downstream(r, "after-pre", [giver]);
+    r.on(task.branch, () => commit(r.repo, "down.txt", lines("down")));
+    giver.head = r.on(giver.branch, () => commit(r.repo, "pre-more.txt", lines("more")));
+    r.on(task.branch, () => git(r.repo, "merge", "-q", "--no-ff", "-m", "merge pre", giver.branch));
+    // 前置还没合入、分支还在：后来交来的那一版也从开工点这一侧扣掉。
+    commit(r.repo, "m9.txt", lines("m9"));
+    r.mergeMain(task.branch, "merge main");
+    let later = await scope(r, task.id);
+    assert.deepEqual(later.files, { "down.txt": [1, 0] });
+    assert.deepEqual(later.subjects, ["merge main", "merge pre", "down.txt"]);
+    await squashAccept(r, giver, evidence);
+    git(r.repo, "branch", "-D", giver.branch);
+    r.mergeMain(task.branch, "merge main again");
+    later = await scope(r, task.id);
+    assert.deepEqual(later.files, { "down.txt": [1, 0] });
+    assert.deepEqual(later.subjects, ["merge main again", "merge main", "merge pre", "down.txt"]);
+    console.log(`✓ 来源任务${evidence === "accepted" ? "压缩合入" : "凭回执合入"}后分支被清理：它后来交来的提交仍不算下游的（单父、前置两种）`);
+  }
   {
     // 提交清单截断：列出来的是最近一批，条数照实给。
     const r = await repository();
@@ -359,6 +399,7 @@ try {
     const live = await scope(r, task.id);
     assert.deepEqual(live.files, {}, "没有验收记录时照实算：分支整条已经在目标分支里，没有目标分支之外的改动");
     assert.deepEqual(live.subjects, []);
+    assert.equal(live.total, 0, "真的一条都没有时是 0，和数不出来的 null 分得开");
     await db.update(tasks).set({ stage: "merged", acceptedTargetBranch: "main", acceptedBaseCommit: before, acceptedMergeCommit: git(r.repo, "rev-parse", "main~1") })
       .where(eq(tasks.id, task.id));
     const seen = await scope(r, task.id);
@@ -383,6 +424,38 @@ try {
     r.mergeMain(task.branch, "merge main", { "shared.txt": lines("merged-one", "two", "three") });
     await unavailable(r, task.id, "base_conflict", /比较基线 未能确定（开工点带来的代码和任务分支里已合入的目标分支合不到一起/);
     console.log("✓ 开工点读不出来、合成基准时两边合不拢：各个入口给出同一个原因，不给数字");
+  }
+  {
+    // 目标那一版读不到：开工点还在也不退回按开工点算 —— 合进来的目标分支会整段算成任务自己的。
+    const r = await repository();
+    const task = await r.task("target-gone", r.head());
+    r.on(task.branch, () => commit(r.repo, "own.txt", lines("own")));
+    commit(r.repo, "foreign.txt", lines("foreign"));
+    const before = r.head();
+    r.mergeMain(task.branch, "merge main");
+    assert.deepEqual((await scope(r, task.id)).files, { "own.txt": [1, 0] });
+    // 已合入的任务认验收时冻结的那一版；那一版读不到，不拿此刻的目标分支顶替。
+    await db.update(tasks).set({ stage: "merged", acceptedBaseCommit: "0".repeat(40) }).where(eq(tasks.id, task.id));
+    await unavailable(r, task.id, "accepted_snapshot_unreadable", /比较基线 未能确定（无法读取验收时保存的提交）/);
+    await db.update(tasks).set({ stage: null, acceptedBaseCommit: null }).where(eq(tasks.id, task.id));
+
+    git(r.repo, "branch", "-m", "main", "trunk");
+    await unavailable(r, task.id, "target_branch_missing", /比较基线 未能确定（合入目标分支不在本地）/);
+    // 冻结的那一版还读得到时，目标分支后来改名、删除都不影响已合入的任务。
+    await db.update(tasks).set({ stage: "merged", acceptedBaseCommit: before }).where(eq(tasks.id, task.id));
+    assert.deepEqual((await scope(r, task.id)).subjects, ["merge main", "own.txt"]);
+    await db.update(tasks).set({ stage: null, acceptedBaseCommit: null }).where(eq(tasks.id, task.id));
+    // 把合入目标改到还在的那条分支上，数字就回来了。
+    await db.update(tasks).set({ mergeTargetBranch: "trunk" }).where(eq(tasks.id, task.id));
+    const seen = await scope(r, task.id);
+    assert.deepEqual(seen.files, { "own.txt": [1, 0] });
+    assert.deepEqual(seen.subjects, ["merge main", "own.txt"]);
+    git(r.repo, "checkout", "-q", "--detach");
+    git(r.repo, "branch", "-D", "trunk");
+    await unavailable(r, task.id, "target_branch_missing", /比较基线 未能确定（合入目标分支不在本地）/);
+    await db.update(tasks).set({ mergeTargetBranch: null }).where(eq(tasks.id, task.id));
+    await unavailable(r, task.id, "target_unresolved", /比较基线 未能确定（无法确定目标分支）/);
+    console.log("✓ 目标分支被删、被改名，或冻结的合入前那一版读不到：各个入口都说算不出来，不退回按开工点算");
   }
   console.log("PASS: 任务改动的口径");
 } finally {

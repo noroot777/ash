@@ -19,7 +19,7 @@ import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
-  commitTotal: number;
+  commitTotal: number | null;
   branch: string | null;
   diff: TaskDiffResult;
   sessions: Session[];

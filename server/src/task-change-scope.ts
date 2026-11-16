@@ -25,6 +25,10 @@
 // 只往对象库里写对象；身份和日期写死，同样的输入永远得到同一个提交号，反复读不会越攒越多。
 // 两边合不拢就照实说算不出来，不退回按开工点算 —— 那正是会给出错数字的那个算法。
 //
+// 同理，**要用的那几版缺一个读不到，就是算不出来**：任务分支头、记下的开工点、目标那一版
+// （没合入的任务是目标分支此刻的头，已合入的是验收时冻结的合入前那一版）。目标分支被删、被改名之后
+// 「它没有贡献」和「不知道它贡献了什么」是两回事，按开工点给出一份数字就是把后者说成前者。
+//
 // 面板每隔几秒就问一次，所以贵的那一半（共同祖先、祖先判定、合树）按提交号记着：
 // 同一组提交号的答案不会变，分支头、目标分支头、开工点任何一个动了，键就变了。
 import { execFileText as exec } from "./exec.js";
@@ -42,7 +46,7 @@ export interface ChangeScopeTask {
 
 export type ChangeScopeFailure =
   | "not_git_repo" | "source_branch_missing" | "start_commit_unreadable" | "target_unresolved"
-  | "target_branch_missing" | "no_merge_base" | "base_conflict" | "base_unreadable";
+  | "target_branch_missing" | "accepted_snapshot_unreadable" | "no_merge_base" | "base_conflict" | "base_unreadable";
 
 export type TaskChangeScope =
   | {
@@ -63,6 +67,7 @@ export const CHANGE_SCOPE_FAILURE_TEXT: Record<ChangeScopeFailure, string> = {
   start_commit_unreadable: "无法读取任务的开工提交",
   target_unresolved: "无法确定目标分支",
   target_branch_missing: "合入目标分支不在本地",
+  accepted_snapshot_unreadable: "无法读取验收时保存的提交",
   no_merge_base: "任务分支与合入目标没有共同基点",
   base_conflict: "开工点带来的代码和任务分支里已合入的目标分支合不到一起，算不出这条任务自己的改动",
   base_unreadable: "合成对比基准时 git 没有给出结果",
@@ -71,13 +76,13 @@ export const CHANGE_SCOPE_FAILURE_TEXT: Record<ChangeScopeFailure, string> = {
 const git = async (repo: string, args: string[], env?: NodeJS.ProcessEnv) =>
   (await exec("git", ["-C", repo, ...args], env ? { env } : {})).stdout.trim();
 
-const commitOf = (repo: string, ref: string): Promise<string | null> =>
+export const commitOf = (repo: string, ref: string): Promise<string | null> =>
   git(repo, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]).then((sha) => sha || null, () => null);
 
 // git 用退出码 1 回答「不是」「没有」；别的失败（对象读不到、被打断）不能当成回答记下来。
 const answeredNo = (error: unknown) => (error as { code?: unknown }).code === 1;
 
-const contains = (repo: string, ancestor: string, descendant: string): Promise<boolean> =>
+export const contains = (repo: string, ancestor: string, descendant: string): Promise<boolean> =>
   exec("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant]).then(() => true, (error) => {
     if (answeredNo(error)) return false;
     throw error;
@@ -161,10 +166,8 @@ async function combine(repo: string, picks: string[]): Promise<Combined> {
 }
 
 /** `carried` = 开工点这一侧别人交来的那几版（提交清单的排除项里要有它们）。 */
-async function changeBase(repo: string, taskId: string, head: string, start: string | null, target: string | null,
+async function changeBase(repo: string, taskId: string, head: string, start: string | null, target: string,
 ): Promise<{ ok: true; base: string; carried: string[] } | { ok: false; reason: ChangeScopeFailure }> {
-  // 目标分支读不到：没有可扣的，开工点就是能给出的全部。
-  if (!target) return { ok: true, base: start!, carried: [] };
   try {
     const shape = await shapes.get([repo, head, start ?? "", target].join("\0"), () => readShape(repo, head, start, target));
     if (!start && !shape.related) return { ok: false, reason: "no_merge_base" };
@@ -211,18 +214,21 @@ export async function taskChangeScope(repoPath: string, task: ChangeScopeTask): 
     recorded ? commitOf(repo, recorded) : null,
     settled ? commitOf(repo, settled) : null,
     // 判据是**本地分支还在不在**，同名 tag 不算（理由见 git.ts staleBaseFallback）。
-    targetBranch ? commitOf(repo, `refs/heads/${targetBranch}`) : null,
+    !settled && targetBranch ? commitOf(repo, `refs/heads/${targetBranch}`) : null,
   ]);
   if (!head) return fail(targetBranch, "source_branch_missing");
   if (recorded && !start) return fail(targetBranch, "start_commit_unreadable");
-  if (!start && !targetBranch) return fail(null, "target_unresolved");
-  if (!start && !liveTarget) return fail(targetBranch, "target_branch_missing");
-  const target = frozenTarget ?? liveTarget;
+  // 目标那一版读不到就停在这里，有没有开工点都一样；冻结的那一版读不到也不拿此刻的目标分支顶替 ——
+  // 已合入的任务自己就在里面，会被整个扣没。
+  if (settled && !frozenTarget) return fail(targetBranch, "accepted_snapshot_unreadable");
+  if (!settled && !targetBranch) return fail(null, "target_unresolved");
+  const target = settled ? frozenTarget : liveTarget;
+  if (!target) return fail(targetBranch, "target_branch_missing");
   const base = await changeBase(repo, task.id, head, start, target);
   if (!base.ok) return fail(targetBranch, base.reason);
   return {
     ok: true, sourceBranch, targetBranch, head, base: base.base,
-    exclude: [...new Set([target, start, ...base.carried].filter((commit): commit is string => !!commit))],
+    exclude: [...new Set([target, ...start ? [start] : [], ...base.carried])],
   };
 }
 
@@ -233,12 +239,13 @@ export const TASK_COMMIT_LIST_LIMIT = 50;
 
 /**
  * 这条任务自己的提交：分支上有、而从目标分支和开工点都走不到的。
- * `total` 是真实条数，`commits` 只列最近的 `limit` 条。口径算不出来时两样都是空的，原因在 `reason`。
+ * `total` 是真实条数，`commits` 只列最近的 `limit` 条。口径算不出来时清单是空的、`total` 是 null（不是 0：
+ * 「没有提交」和「数不出来」要分得开），原因在 `reason`。
  */
 export async function taskChangeCommits(repoPath: string, task: ChangeScopeTask, limit = TASK_COMMIT_LIST_LIMIT,
-): Promise<{ commits: TaskCommitEntry[]; total: number; reason?: string }> {
+): Promise<{ commits: TaskCommitEntry[]; total: number | null; reason?: string }> {
   const scope = await taskChangeScope(repoPath, task);
-  if (!scope.ok) return { commits: [], total: 0, reason: scope.reason };
+  if (!scope.ok) return { commits: [], total: null, reason: scope.reason };
   const repo = expandHome(repoPath);
   const range = [scope.head, "--not", ...scope.exclude];
   try {
@@ -247,9 +254,9 @@ export async function taskChangeCommits(repoPath: string, task: ChangeScopeTask,
         const [sha, subject, at] = line.split("\x1f");
         return { sha: sha!, subject: subject ?? "", at: at ?? "" };
       });
-    const total = commits.length < limit ? commits.length : Number(await git(repo, ["rev-list", "--count", ...range])) || commits.length;
+    const total = commits.length < limit ? commits.length : Number(await git(repo, ["rev-list", "--count", ...range]));
     return { commits, total };
   } catch {
-    return { commits: [], total: 0, reason: "task_diff_unreadable" };
+    return { commits: [], total: null, reason: "task_diff_unreadable" };
   }
 }

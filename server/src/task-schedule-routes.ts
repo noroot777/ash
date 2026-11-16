@@ -58,18 +58,18 @@ api.delete("/tasks/:id/schedule", async (c) => {
 });
 
 // 这条任务自己的提交：分支上有、而从目标分支和开工点都走不到的（口径同 diff，见
-// task-change-scope.ts）。`commits` 只列最近的一批，`total` 是真实条数。没有自己分支的任务
-// （就地跑、共享工作区）是空的。`branch` 是它的工作目录此刻检出的分支。
+// task-change-scope.ts）。`commits` 只列最近的一批，`total` 是真实条数。数不出来时（没有自己分支的
+// 就地跑/共享工作区任务、分支已清理、口径算不出来）清单是空的、`total` 是 null、原因在 `reason` ——
+// 不给 0，免得被读成「没有提交」。`branch` 是它的工作目录此刻检出的分支。
 api.get("/tasks/:id/commits", async (c) => {
   const tid = c.req.param("id");
   const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
   if (!t) return c.json({ error: "not found" }, 404);
   const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
-  if (!project) return c.json({ branch: null, commits: [], total: 0 });
+  if (!project) return c.json({ branch: null, commits: [], total: null, reason: "not_git_repo" });
   const sess = (await db.select().from(sessions).where(eq(sessions.taskId, tid))).find((s) => s.worktreePath);
   const wt = sess?.worktreePath ? expandHome(sess.worktreePath) : null;
   const branch = wt && existsSync(wt) ? await currentBranch(wt) ?? null : null;
-  const { commits, total } = await taskChangeCommits(project.repoPath, t);
-  return c.json({ branch, commits, total });
+  return c.json({ branch, ...await taskChangeCommits(project.repoPath, t) });
 });
 }
