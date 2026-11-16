@@ -54,7 +54,9 @@ export async function testPreviewWorkspaceDom() {
     await page.route("**/api/**", async (route) => {
       const request = route.request(), path = new URL(request.url()).pathname;
       const reply = (body) => route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-      if (path === "/api/events") return route.fulfill({ contentType: "text/event-stream", body: ": connected\n\n" });
+      // 这里不发事件。回 204 = 这条流不必再连；回一条写完就结束的流，EventSource 会每 3 秒重连一次，
+      // 连上和断开挨着到，页面在两下之间做什么全看机器忙不忙（同 accept-gate-stage.mjs 那一处）。
+      if (path === "/api/events") return route.fulfill({ status: 204 });
       if (path.endsWith("/preview") && new URL(request.url()).searchParams.has("launch")) return reply(launchInfo);
       if (path.endsWith("/preview/restart")) { launches.push(request.postDataJSON()); running = true; return reply(preview()); }
       if (path.endsWith("/preview")) return reply(preview());
