@@ -109,6 +109,8 @@ try {
       releaseTurn(id, rival.held!); // 竞争者让位,但它已经把自己重排在队首,所以审查又输一次
     }
     await until("界用尽后落终态", async () => (await runRow(run.id)).status === "failed");
+    // 终态先落库、那句话后写（中间还要收这一轮挂的哨兵）：等它写出来再读时间线。
+    await until("终态那句话写进时间线", () => /审查启动失败/.test(timeline(id)));
 
     const dead = await roundOf(run.id);
     assert.equal(dead.status, "error", "界用尽了才轮到终态");
@@ -176,6 +178,8 @@ try {
     await db.update(groups).set({ paused: true }).where(eq(groups.id, "g"));
     releaseTurn(id, undefined);
     await until("撤回一次就落终态", async () => (await runRow(run.id)).status === "failed");
+    // 终态先落库、那句话后写（中间还要收这一轮挂的哨兵）：等它写出来再读时间线。
+    await until("终态那句话写进时间线", () => /审查启动失败/.test(timeline(id)));
     assert.equal((await roundOf(run.id)).status, "error", "撤回不是「轮不到我们」，不重排");
     assert.equal((await roundOf(run.id)).dispatch, null, "落终态要把意图一并了结");
     const said = timeline(id);
