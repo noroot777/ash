@@ -1,0 +1,69 @@
+/* 任务页的骨架和头部（task.js）。会话流、提问坞在 feed.css，回复框在 reply.css，右侧面板在 insp.css。 */
+
+/* 骨架照现在的产品：右侧面板通顶，头部只压在会话那一列上面 */
+.task { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.task-col { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.task-insp { flex: none; min-height: 0; }
+
+/* 头部一行，高度和两侧留白照现状。左边一组说「这是哪个任务」（类型、标题、来源、图钉），右边只有图标：轮到你的那一步、验收的章、更多、面板开关 */
+.task-head { flex: none; display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 16px; border-bottom: 0.5px solid var(--line); }
+.task-name { display: flex; align-items: center; min-width: 0; }
+
+/* 类型、来源：各一个灰图标，名字在提示里 */
+.task-kind, .task-from { display: inline-grid; flex: none; place-items: center; width: 20px; height: 24px; color: var(--faint); }
+.task-kind .i, .task-from .i { width: 14px; height: 14px; }
+
+/* 标题平时就是一行字，指上去或点进去才看得出能改。宽度由 task.js 按字量出来，放不下时自己缩、打省略号 */
+.task-title { flex: 0 1 auto; min-width: 3em; height: 28px; padding: 0 6px; border: 0; border-radius: var(--r-sm); background: transparent; font-size: var(--t-md); font-weight: var(--w-medium); text-overflow: ellipsis; transition: background var(--dur-1) var(--ease-out); }
+.task-title:hover, .task-title:focus { background: var(--raised); }
+
+/* 图钉：置顶了是实心墨色、一直在；没置顶的平时不画，指到头部、或者键盘走到它才出来；触屏上常显 */
+.task-pin { color: var(--faint); opacity: 0; }
+.task-head:hover .task-pin, .task-pin:focus-visible, .task-pin[aria-pressed="true"] { opacity: 1; }
+.task-pin[aria-pressed="true"] { color: var(--ink); }
+.task-pin[aria-pressed="true"] .i { fill: currentColor; }
+@media (hover: none) { .task-pin { opacity: 1; } }
+
+/* 轮到你的那一步：墨色（头上别的图标都是灰的）。章验过了以后填实、退成灰——和图钉一个说法：实心 = 已经是了 */
+.task-acts { display: inline-flex; flex: none; gap: 2px; }
+.task-acts > .ico { color: var(--ink); }
+.task-seal[data-on="true"] { color: var(--faint); }
+.task-seal[data-on="true"]:hover, .task-seal[data-on="true"][aria-expanded="true"] { color: var(--muted); }
+.task-seal[data-on="true"] path:first-child { fill: currentColor; }
+.task-seal[data-on="true"] path:last-child { stroke: var(--canvas); }
+.task-seal[data-on="true"]:hover path:last-child, .task-seal[data-on="true"][aria-expanded="true"] path:last-child { stroke: var(--hover-bg); }
+
+/* 面板开着的时候，开关是按下的样子（底色来自 .ico[aria-expanded]） */
+.task-panel[aria-expanded="true"] { color: var(--ink); }
+
+/* 确认框里分两段说的话 */
+.task-say { display: block; }
+.task-say + .task-say { margin-top: 8px; }
+
+/* 改动工作区（changes.js）：顶替会话那一列。一行标题和验收动作，下面是分支、文件、提交——只画了骨架，差异没画 */
+.changes { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.changes-bar { flex: none; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 24px; border-bottom: 0.5px solid var(--line); }
+.changes-bar > b { font-weight: var(--w-medium); }
+.changes-done { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-size: var(--t-xs); font-weight: var(--w-regular); }
+.changes-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 28px; }
+.changes-body > * { max-width: 790px; margin-inline: auto; }
+.changes-body > .note { margin-bottom: 12px; }
+.changes-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); }
+.changes-meta > b { color: var(--ink); font: var(--w-regular) var(--t-sm) var(--font-mono); }
+.changes-meta > .num:first-of-type { margin-left: auto; }
+.changes-body li > button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 0 8px; border-radius: var(--r-sm); text-align: left; transition: background var(--dur-1) var(--ease-out); }
+.changes-body li > button:hover { background: var(--hover-bg); }
+.changes-body li .cut { flex: 1; }
+.changes-body li code, .changes-body li time { flex: none; color: var(--faint); font-size: var(--t-xs); }
+.changes-dir { color: var(--faint); }
+.changes .plus { color: var(--green); } .changes .minus { color: var(--red); }
+
+/* 派审 / 预约审查的对话框（review.js）：四行「标签 控件」，一个主动作 */
+.rv-dlg { width: min(440px, calc(100vw - 32px)); }
+.rv-dlg > h2 { margin-bottom: 12px; }
+.rv-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: start; gap: 10px; min-height: 36px; }
+.rv-row > span { color: var(--muted); line-height: 28px; }
+.rv-row > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-height: 28px; color: var(--muted); }
+.rv-row textarea.field { width: 100%; height: auto; min-height: 52px; padding: 6px 10px; resize: none; line-height: 20px; }
+.rv-zero { font-size: var(--t-xs); }

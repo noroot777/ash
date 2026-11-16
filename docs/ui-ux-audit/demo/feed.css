@@ -1,0 +1,185 @@
+/* 会话流、提问坞（任务页的骨架和头部在 task.css）。会话列居中、最宽 790，回合用「头像 20 + 间隔 10」这条轴对齐。
+   执行中的那几样（进行条、放字、落定）在 live.css。 */
+
+/* 会话流。外框裁掉溢出：提问卡进场时是从它的下缘升上来的 */
+.feed-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+/* 条与条之间的 20px 用行距给，不挂在每一条的下边距上：新来一条时，前面那些的尺寸一个像素都不变 */
+.feed { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; justify-items: center; row-gap: 20px; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 20px 24px 28px; }
+.feed > * { width: min(790px, 100%); }
+.feed > .is-gone { opacity: 0; transition: opacity var(--dur-1) var(--ease-in); }
+/* 会话区自己是一个 Tab 站：它和外框一样大，环画在里侧才不会被裁掉 */
+.feed:focus-visible { outline-offset: -2px; }
+
+/* 会话里平时只有三样：你的泡、它的回合、里程碑一行。ash 自己的话不单独占行（起因在回合头、回执挂在回合上，见 feed.js） */
+
+/* 你发的话：靠右的泡，泡里一行「你 · 时间」，复制和删除指到才出 */
+.bubble-row { display: flex; justify-content: flex-end; padding-left: 38px; }
+.bubble { min-width: 0; max-width: min(640px, 88%); padding: 8px 14px 10px; border-radius: 16px 6px 16px 16px; background: var(--raised); }
+.bubble > header { display: flex; align-items: center; gap: 6px; min-height: 24px; color: var(--faint); font-size: var(--t-xs); }
+.bubble > header b { color: var(--muted); font-weight: var(--w-regular); }
+.bubble > header time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bubble > header .ico { opacity: 0; }
+.bubble > header time + .ico, .bubble > header b + .ico { margin-left: auto; }
+.bubble:hover > header .ico, .bubble > header .ico:focus-visible, .bubble > header .ico.is-done { opacity: 1; }
+.bubble > p { color: color-mix(in oklab, var(--ink) 88%, var(--muted)); font-size: var(--t-md); line-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ico.is-done { color: var(--green); }
+/* 这句话答的是哪个提问：引在答案上面，左边一道线。带选项的可以点开看当时给了哪几个、选了哪个 */
+.bubble-quote { display: block; margin: 2px 0 6px; padding: 0 0 0 10px; border-left: 2px solid var(--line2); color: var(--muted); font-size: var(--t-sm); line-height: 20px; text-align: left; transition: color var(--dur-1) var(--ease-out); }
+button.bubble-quote:hover, button.bubble-quote[aria-expanded="true"] { color: var(--ink); }
+.bubble-opts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px 12px; color: var(--muted); }
+.bubble-opts li { padding: 1px 8px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px var(--line2); font-size: var(--t-xs); }
+.bubble-opts li.on { background: var(--green-bg); box-shadow: none; color: var(--green); }
+
+/* 回合 */
+/* 底下留的 10px 是给回合尾那一排的：它平时不显示，自己不占高度、往下探进行距里，出不出现都不改高度 */
+.turn { position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 10px; padding-bottom: 10px; }
+.turn-av { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-strong); line-height: 1; }
+/* 名字不让、后面那段（悬停才给的模型和时间）可以被省略：列再窄它也撑不宽这一行 */
+.turn-head { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 20px; color: var(--muted); font-size: var(--t-xs); }
+.turn-head b { flex: none; font-weight: var(--w-medium); }
+.turn-head .rt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.turn-body { grid-column: 2; min-width: 0; }
+/* 起因：名字后面的一句——这一回合不是你发话起的头，是谁。能点的（去那一轮审查、摊开哨兵发来的原文）指上去有下划线 */
+.turn-cause { flex: none; color: var(--muted); text-decoration: underline transparent; text-underline-offset: 3px; transition: color var(--dur-1) var(--ease-out), text-decoration-color var(--dur-1) var(--ease-out); }
+button.turn-cause:hover, button.turn-cause[aria-expanded="true"] { color: var(--ink); text-decoration-color: color-mix(in oklab, currentColor 40%, transparent); }
+.cause-body { width: min(520px, 100%); margin: 6px 0 4px; padding: 6px 12px 10px; border-radius: var(--r-md); background: var(--raised); font-size: var(--t-xs); }
+.cause-body .kv dt, .cause-body .kv dd { min-height: 24px; }
+/* 记在这一回合上的回执：回合尾那一排最后一项，点了摊在回合下面。摊开着的时候这一排不随悬停进出 */
+.turn-log { height: 24px; margin-left: 4px; padding: 0 6px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.turn-log:hover, .turn-log[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.turn > .sys-log { margin: 30px 0 0; }
+/* 悬停才给的那一类：回合头的模型与时间、每行后面的时间、回合尾的操作。触屏上常显 */
+.rt { color: var(--faint); font-size: var(--t-xs); font-variant-numeric: tabular-nums; white-space: nowrap; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.turn:hover > .turn-head .rt, .turn:focus-within > .turn-head .rt, .mile:hover .rt, .mile:focus-within .rt, .fold:hover .rt, .fold:focus-visible .rt, .rt.is-shown { opacity: 1; }
+.turn-acts { grid-column: 2; display: flex; align-items: flex-start; gap: 2px; height: 0; margin: 2px 0 0 -6px; opacity: 0; transition: opacity var(--dur-2) var(--ease-out); }
+.turn:hover > .turn-acts, .turn:focus-within > .turn-acts, .turn-acts.is-shown, .turn-acts:has([aria-expanded="true"]) { opacity: 1; }
+@media (hover: none) { .rt, .turn-acts, .bubble > header .ico { opacity: 1; } }
+
+/* 正文 */
+/* 第一行连上边距是 30px，和「执行过程」那一行一样高：「在想」换成正文的那一帧，上面的东西一个像素都不动 */
+.md { color: color-mix(in oklab, var(--ink) 88%, var(--muted)); font-size: var(--t-md); line-height: 24px; overflow-wrap: anywhere; }
+.md > * { margin: 8px 0; }
+.md > :first-child { margin-top: 6px; }
+.md > :last-child { margin-bottom: 0; }
+.md strong, .md b { color: var(--ink); font-weight: var(--w-medium); }
+.md ol { padding-left: 1.6em; list-style: decimal; }
+.md ul { padding-left: 1.4em; list-style: disc; }
+.md li + li { margin-top: 4px; }
+.md li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
+/* 行高收成 1：等宽字的上下伸部比正文高，不收的话它所在的那一行会被撑高 1px */
+.md code { padding: 1px 5px; border-radius: 4px; background: var(--raised); color: var(--ink); font-size: var(--t-sm); line-height: 1; }
+
+/* 执行过程：一句人话。点开是一步一行；每一步再点开是字段，原始参数再折一层 */
+.fold { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 26px; margin: 2px 0 2px -4px; padding: 0 6px 0 4px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); text-align: left; vertical-align: top; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.fold:hover { background: var(--hover-bg); color: var(--ink); }
+.fold:active { background: var(--sel-bg); }
+.fold > .i { width: 12px; height: 12px; color: var(--faint); transition: transform var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out); }
+.fold[aria-expanded="true"] > .i { transform: rotate(90deg); }
+.fold-label { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 里面还没有东西：不能点，折角不画但位置留着 */
+.fold.is-flat { cursor: default; }
+.fold.is-flat:hover, .fold.is-flat:active { background: none; color: var(--muted); }
+.fold.is-flat > .i { opacity: 0; }
+/* 点开的那一块：高度一帧到位，内容淡入；收起先淡出再撤掉。会话流里不做高度动画，贴底才不会跟它抢 */
+/* 一串步骤是逐行来的：前六行隔 45ms 依次出现（--i 由 feed.js 给），整段不超过 400ms */
+.step-more, .step-more > pre, .sys-log, .cause-body, .bubble-opts, .steps > * { animation: unfold var(--dur-2) var(--ease-out) backwards; }
+.steps > * { animation-delay: calc(var(--i, 0) * 45ms); }
+.steps > .enter { animation-delay: 0s; }
+@keyframes unfold { from { opacity: 0; transform: translateY(-4px); } }
+.is-shutting { opacity: 0; transition: opacity var(--dur-1) var(--ease-in); }
+.steps { padding: 2px 0 8px; }
+.step, .step-note { padding-left: 12px; border-left: 1px solid var(--line2); }
+.step > button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; color: var(--muted); font-size: var(--t-xs); text-align: left; transition: color var(--dur-1) var(--ease-out); }
+.step > button:hover, .step > button[aria-expanded="true"] { color: var(--ink); }
+.step > button .i { width: 13px; height: 13px; color: var(--faint); }
+.step > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 等到了哨兵的那一步：名字后面跟着等了多久、等到了什么。没等到好结果的、没成的，图标是红的 */
+.step-tail { flex: none; color: var(--faint); font-style: normal; white-space: nowrap; }
+.step.bad > button .i { color: var(--red); }
+.step.wait > .step-more > p, .step.mid > .step-more > p { color: var(--muted); line-height: 1.6; }
+.step.wait > .step-more > .sys-more, .step.mid > .step-more > .sys-more { display: inline-block; margin-top: 6px; }
+/* 在等哨兵（任务暂停着）：最近那一回合的最后一行。长相就是那一行执行过程，只是行首是哨兵的图标、点开不转；字是静止的 */
+.wait > .fold > .i, .wait > .fold[aria-expanded="true"] > .i { transform: none; }
+.wait > .fold.is-flat > .i { opacity: 1; }
+.wait > .step-more { padding-left: 18px; }
+.wait > .step-more > p { color: var(--muted); line-height: 1.6; }
+.wait-acts { display: flex; gap: 14px; margin-top: 4px; }
+/* 中途发生、不是它做的事（压缩了上下文、上游重试了几次）：和别的步骤同一种行，只是点不开 */
+.step.mid > p { display: flex; align-items: center; gap: 8px; min-height: 26px; color: var(--muted); font-size: var(--t-xs); }
+.step.mid > p .i { flex: none; width: 13px; height: 13px; color: var(--faint); }
+.step.mid > p > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 这一行执行过程里有没成的事：折角是红的，是哪一件写在摘要的最后半句 */
+.fold.has-bad > .i { color: var(--red); }
+.step code { padding: 0 4px; border-radius: 4px; background: var(--raised); color: var(--ink); font-size: var(--t-xs); }
+.step-note { display: flex; align-items: center; min-height: 26px; color: var(--muted); font-size: var(--t-xs); }
+.step-more { padding: 2px 0 8px 21px; font-size: var(--t-xs); }
+.step-more .kv { grid-template-columns: 56px minmax(0, 1fr); }
+.step-more .kv dt, .step-more .kv dd { min-height: 22px; }
+.step-more pre, .cause-body pre { margin-top: 6px; padding: 8px 10px; border-radius: var(--r-sm); background: var(--overlay); color: var(--muted); font: var(--t-xs)/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 里程碑：一行一句（审查出了结论、验收了），图标落在头像轴上，整行是一颗键。颜色只在图标上，结论写在字里；
+   谁、用时、时刻指到才出。还在审的那一轮没有颜色，字上带流光 */
+.mile { display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 10px; align-items: start; }
+.sys-ic { display: grid; place-items: center; width: 20px; height: 20px; margin-top: 2px; color: var(--faint); transition: color var(--dur-2) var(--ease-out); }
+.sys-ic .i { width: 14px; height: 14px; }
+.mile.ok .sys-ic { color: var(--green); } .mile.warn .sys-ic { color: var(--amber); } .mile.bad .sys-ic { color: var(--red); }
+.mile-line { display: inline-flex; flex-wrap: wrap; align-items: center; justify-self: start; gap: 0 10px; max-width: 100%; min-height: 24px; margin-left: -6px; padding: 0 6px; border-radius: var(--r-sm); color: var(--muted); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.mile-line:hover, .mile-line[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.mile-line:active { background: var(--sel-bg); }
+.mile-text code { padding: 0 4px; border-radius: 4px; background: var(--raised); color: var(--ink); font-size: var(--t-xs); }
+.sys-more { color: var(--muted); font-size: var(--t-xs); text-decoration: underline; text-decoration-color: color-mix(in oklab, currentColor 30%, transparent); text-underline-offset: 3px; transition: color var(--dur-1) var(--ease-out), text-decoration-color var(--dur-1) var(--ease-out); }
+.sys-more:hover, .sys-more[aria-expanded="true"] { color: var(--ink); text-decoration-color: currentColor; }
+/* 明细是一份流水：时间排在每一行的最前面 */
+.sys-log { grid-column: 2; margin-top: 6px; padding-left: 12px; border-left: 1px solid var(--line2); color: var(--muted); font-size: var(--t-xs); }
+.sys-log li { display: flex; gap: 10px; min-height: 22px; align-items: center; }
+.sys-log time { order: -1; color: var(--faint); font-variant-numeric: tabular-nums; }
+.sys-log code { padding: 0 4px; border-radius: 4px; background: var(--raised); color: var(--ink); }
+
+/* 回到顶部 / 底部：位置不动。回顶只在你自己滚的时候出现，停下约一秒淡出 */
+.scroll-btn { position: absolute; left: 50%; z-index: 8; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: color-mix(in oklab, var(--panel) 92%, transparent); box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--muted); backdrop-filter: blur(4px); translate: -50% 0; transition: opacity var(--dur-2) var(--ease-out), translate var(--dur-2) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.scroll-btn:hover { color: var(--ink); }
+.scroll-btn.top { top: 12px; } .scroll-btn.bottom { bottom: 12px; }
+.scroll-btn.is-hidden { opacity: 0; pointer-events: none; }
+.scroll-btn.top.is-hidden { translate: -50% -4px; } .scroll-btn.bottom.is-hidden { translate: -50% 4px; }
+.scroll-btn.is-idle { opacity: 0; pointer-events: none; }
+.scroll-btn.is-idle:focus-visible { opacity: 1; pointer-events: auto; }
+
+/* 输入导航（保留项，长相照现在的 conversation-input-rail.css）：左缘几条短横线，一条是你发过的一句话。悬停看原话，点了跳过去，Q 摊开 */
+.feed-rail { position: absolute; left: 0; top: 50%; z-index: 7; translate: 0 -50%; padding: 6px 12px 6px 7px; }
+.feed-rail button { display: block; height: 10px; padding: 0; }
+.feed-rail button::before { content: ""; display: block; width: 16px; height: 1.5px; border-radius: 1px; background: color-mix(in srgb, var(--faint) 55%, transparent); transform: scaleX(0.5); transform-origin: left; transition: transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
+.feed-rail button.on::before { transform: scaleX(0.75); background: var(--muted); }
+.feed-rail button:hover::before, .feed-rail button:focus-visible::before { transform: none; background: var(--ink); }
+.rail-list { width: min(420px, 80vw); padding: 6px; }
+.rail-list button { display: flex; gap: 10px; width: 100%; padding: 7px 8px; border-radius: var(--r-sm); text-align: left; }
+.rail-list button:hover, .rail-list button:focus-visible { background: var(--hover-bg); }
+.rail-list time { margin-left: auto; color: var(--faint); font-size: var(--t-xs); white-space: nowrap; }
+
+/* 提问坞：落定后住在会话下面、滚动区外面。进场那一段（is-rising）先浮在会话区的底缘，位置和落定后一样 */
+.dock { flex: none; padding: 0 24px; }
+.qcard { width: min(790px, 100%); margin: 0 auto 12px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--surface-shadow); }
+.qcard.is-rising { position: absolute; left: 24px; right: 24px; bottom: 0; z-index: 9; width: min(790px, calc(100% - 48px)); will-change: transform; }
+.qcard > header { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px 0 14px; }
+.qcard > header > .i { color: var(--cyan); }
+.qcard > header b { font-weight: var(--w-medium); }
+.qcard > header .ico .i { transition: transform var(--dur-1) var(--ease-out); }
+.qcard.is-shut > header .ico .i { transform: rotate(180deg); }
+.qcard.is-shut > .q-body, .qcard.is-shut > footer { display: none; }
+.q-body { max-height: 44vh; overflow-y: auto; padding: 2px 14px 4px; }
+.q-title { margin-bottom: 10px; font-weight: var(--w-regular); line-height: 1.6; }
+.qcard .opts { display: grid; gap: 6px; margin-bottom: 8px; }
+.qcard .opts button { display: flex; align-items: flex-start; gap: 9px; min-height: 32px; padding: 6px 10px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); line-height: 20px; text-align: left; transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
+.qcard .opts button:hover { background: var(--raised); }
+.qcard .opts button[aria-pressed="true"] { background: var(--cyan-bg); box-shadow: inset 0 0 0 1px var(--cyan); }
+/* 序号平时配数字键，选中了换成勾 */
+.q-key { display: grid; place-items: center; flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line2); color: var(--muted); font: var(--t-xs)/1 var(--font-mono); }
+.q-key .i { width: 12px; height: 12px; }
+[aria-pressed="true"] > .q-key { background: var(--cyan); box-shadow: none; color: var(--panel); }
+.qcard textarea { display: block; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: var(--r-md); background: var(--raised); resize: none; line-height: 20px; }
+.qcard > footer { display: flex; justify-content: flex-end; padding: 8px 12px 12px 14px; }
+
+@media (max-width: 720px) {
+  .feed { padding-inline: 16px; }
+  .dock { padding-inline: 16px; }
+  .qcard.is-rising { left: 16px; right: 16px; width: min(790px, calc(100% - 32px)); }
+}

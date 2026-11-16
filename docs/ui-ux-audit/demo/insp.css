@@ -1,0 +1,237 @@
+/* 右侧面板（改后）：右缘一条竖轨，一种高亮，一种行。
+   十一格的内容只用 base.css 的六个公共件（.sec .kv .go .none .note .btn）加卡片外框 .card；
+   这里只补竖轨、面板头，和公共件收不进去的那几样（文件行、时间线、缩略图、输入框）。
+   结构在 insp.js（外壳）、insp-panes.js（信息、文件、生成物、改动）、insp-work.js（备忘、工作流、审查、预览指正、哨兵）、insp-talk.js（子智能体、侧聊）。 */
+
+/* 整栏：展开 340（面板 300 + 竖轨 40），收起 0。开合只动 transform 和 opacity，宽度不做动画：
+   展开时宽度一步到位，里面的内容从右缘滑进来；收起时内容先退场，宽度等它退完再一步收掉。
+   用 clip 而不是 hidden：hidden 的盒子能被 scrollIntoView 横着滚走，定位清单条目时会把内容推歪 */
+.insp { display: flex; flex: none; width: 340px; min-height: 0; overflow: clip; }
+.insp.is-shut { width: 0; transition: width 0s linear var(--dur-1); }
+.insp-in { display: flex; flex: none; width: 340px; min-height: 0; border-left: 1px solid var(--line); transition: transform var(--dur-3) var(--ease-spring), opacity var(--dur-2) var(--ease-out); }
+.insp.is-shut .insp-in { visibility: hidden; opacity: 0; transform: translateX(16px); transition: transform var(--dur-1) var(--ease-in), opacity var(--dur-1) var(--ease-in), visibility 0s linear var(--dur-1); }
+.insp.is-snap, .insp.is-snap .insp-in { transition: none; }
+.insp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* 面板头：格名、这一格自己的动作、关闭键。和任务头同高（44），两条基线对得上；不画底线，靠留白和下面的内容分开 */
+.insp-head { display: flex; align-items: center; gap: 2px; flex: none; height: 44px; padding: 0 8px 0 16px; }
+.insp-head > b { flex: none; font-weight: var(--w-medium); }
+.insp-acts { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.insp-acts > .sel { color: var(--muted); font-size: var(--t-xs); }
+.insp-acts > .sel:hover, .insp-acts > .sel[aria-expanded="true"] { color: var(--ink); }
+.insp-acts > .ico[aria-pressed="true"] { background: var(--sel-bg); color: var(--ink); }
+.insp-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 16px 20px; }
+.insp-pane > :first-child { margin-top: 0; }
+
+/* 竖轨：宽 40，格 32、格间 2、簇间 10（2 + 8），不画线。这几个数和 insp.js 里算竖条位置的常量是一套 */
+.insp-rail { position: relative; flex: none; width: 40px; display: flex; flex-direction: column; align-items: center; padding: 4px 0 6px; border-left: 1px solid var(--line); }
+.insp-cells { display: flex; flex-direction: column; gap: 2px; }
+.insp-cell { position: relative; display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: var(--r-md); color: var(--muted); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.insp-cell:hover, .insp-cell[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.insp-cell:active { background: var(--sel-bg); }
+.insp-cell.gap { margin-top: 8px; }
+.insp-add { margin-top: auto; }
+/* 高亮只有一种：墨色图标 + 右缘竖条。竖条是一根，在格之间滑 */
+.insp-cell[aria-pressed="true"] { color: var(--ink); }
+.insp-ink { position: absolute; right: 0; top: 0; width: 2px; height: 20px; border-radius: 2px 0 0 2px; background: var(--ink); pointer-events: none; transform: translateY(var(--y, 10px)); transition: transform var(--dur-2) var(--ease-out); }
+.insp-ink.is-slow { transition-duration: var(--dur-3); }
+/* 状态是图标角上的一颗点：灰 = 这格里有东西，主色 = 有东西在跑。选中、悬停时都还在 */
+.insp-cell[data-dot]::before { content: ""; position: absolute; right: 6px; top: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 1.5px var(--canvas); }
+.insp-cell[data-dot="run"]::before { background: var(--accent); }
+.insp-cell[data-dot]:hover::before { box-shadow: 0 0 0 1.5px var(--hover-bg); }
+/* 「+」菜单里已在条上的项：置灰，悬停不亮 */
+.insp-add-menu > .menu > [disabled]:hover { background: none; }
+
+/* 键值行：面板里标签最多四个字，左列收窄；值不折行 */
+.insp .kv { grid-template-columns: 52px minmax(0, 1fr); }
+.insp .kv + .kv { margin-top: 14px; }
+.insp .kv dd { white-space: nowrap; }
+/* 面板里次要的字用 --muted：再浅一档在 13px 上读不清。只有图标和已被忽略的东西才用 --faint */
+.insp .faint, .insp-set .faint { color: var(--muted); }
+/* 面板里「在跑」的东西：主色的字，不扫光（扫光只留给会话流里正在动的那一行） */
+.insp-live { color: var(--accent); }
+.insp .plus { color: var(--green); }
+.insp .minus { color: var(--red); }
+/* 行里能点的值：平时就是一段字，悬停才显出是个按钮。下拉用公共的紧凑档（.sel.sm），尖角一直在——它就是「这一项能改」的全部说明；
+   这里只把它往左挪一个内边距，字和上下两行的值对齐 */
+.insp-val { display: inline-flex; align-items: center; gap: 6px; height: 24px; min-width: 0; margin-left: -8px; padding: 0 8px; border-radius: var(--r-sm); transition: background var(--dur-1) var(--ease-out); }
+.insp-val:hover, .insp-val[aria-expanded="true"] { background: var(--hover-bg); }
+.insp-val.end { margin: 0 -8px 0 auto; color: var(--muted); }
+.insp-val > .i { color: var(--faint); transition: transform var(--dur-1) var(--ease-out); }
+.insp .kv .sel { margin-left: -6px; }
+.insp .kv .sel > span { flex: 0 1 auto; }
+.insp-copy { opacity: 0; }
+.insp dd:hover > .insp-copy, .insp-path:hover > .insp-copy, .insp-copy:focus-visible { opacity: 1; }
+/* 一行里放不下、要占满两列的：点开的追问、调度的时间 */
+.insp .kv > .insp-wide { display: block; grid-column: 1 / -1; min-height: 0; padding: 2px 0 8px; white-space: normal; }
+.insp .kv > .insp-when { display: flex; gap: 6px; }
+
+/* 信息：需求一句，两行截断，点了展开 */
+.insp-req { display: block; width: 100%; margin-bottom: 14px; text-align: left; line-height: 1.6; transition: color var(--dur-1) var(--ease-out); }
+.insp-req > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.insp-req[aria-expanded="true"] > span { display: block; }
+.insp-req:hover { color: var(--muted); }
+.insp-asks > li + li { margin-top: 8px; }
+.insp-asks time { color: var(--faint); font-size: var(--t-xs); }
+.insp-asks p { line-height: 1.6; }
+.insp-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.insp-tag { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; height: 22px; padding: 0 4px 0 8px; border-radius: var(--r-sm); background: var(--overlay); transition: background var(--dur-1) var(--ease-out); }
+.insp-tag > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-tag:hover { background: var(--sel-bg); }
+.insp-tag > .i { width: 12px; height: 12px; color: var(--faint); }
+.insp-tag-in { width: 4em; height: 22px; padding: 0 4px; border: 0; border-radius: var(--r-sm); background: none; }
+.insp-bar { width: 48px; height: 3px; flex: none; overflow: hidden; border-radius: var(--r-full); background: var(--line2); }
+.insp-bar > i { display: block; height: 100%; background: var(--muted); transform: scaleX(var(--p, 0)); transform-origin: left; transition: transform var(--dur-3) var(--ease-out); }
+.insp-bar.is-low > i { background: var(--red); }
+/* 「压缩设置」「调整审查轮数」这两个浮层挂在 body 上，不在 .insp 里面 */
+.insp-set { width: 248px; padding: 6px 8px 8px; }
+.insp-set > .kv { margin-bottom: 8px; }
+.insp-set > label { display: grid; grid-template-columns: minmax(0, 1fr) 84px 40px; align-items: center; gap: 8px; min-height: 32px; }
+.insp-set .field { width: 100%; min-width: 0; text-align: right; }
+.insp-set > p { margin-top: 6px; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+.insp-step { display: flex; align-items: center; gap: 4px; min-height: 32px; }
+.insp-step > output { min-width: 20px; text-align: center; font-weight: var(--w-regular); }
+.insp-set-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--t-xs); }
+
+/* 行：文件、生成物、改动、提交、时间线共用。一行一条，右边是靠右对齐的灰字 */
+.insp-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; text-align: left; }
+.insp-row > .i { color: var(--faint); transition: transform var(--dur-1) var(--ease-out); }
+.insp-row > .meta, .insp .go > .meta { margin-left: auto; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.insp .go > .meta + .i { margin-left: 0; transition: transform var(--dur-1) var(--ease-out); }
+.insp .meta.bad { color: var(--red); }
+.insp .meta.insp-live { color: var(--accent); }
+.insp .mono { font-size: var(--t-xs); }
+button.insp-row { margin: 0 -8px; padding: 0 8px; width: calc(100% + 16px); border-radius: var(--r-sm); transition: background var(--dur-1) var(--ease-out); }
+button.insp-row:hover { background: var(--hover-bg); }
+button.insp-row[aria-current] { background: var(--sel-bg); }
+button.insp-row.is-in { padding-left: 28px; }
+.insp [aria-expanded="true"] > .i.insp-rot { transform: rotate(90deg); }
+.insp-path { display: flex; align-items: center; gap: 6px; min-height: 28px; color: var(--muted); }
+.insp-path > b { flex: 0 1 auto; color: var(--ink); font-weight: var(--w-regular); }
+.insp-path > span { flex: 1 1 0; }
+.insp-why { color: var(--muted); }
+.insp-why + .note { margin: 4px 0 6px; }
+.insp-clean { display: flex; align-items: center; gap: 6px; min-height: 28px; color: var(--muted); }
+.insp-clean > .i { color: var(--green); }
+.insp-dir { display: flex; align-items: center; gap: 6px; min-height: 26px; color: var(--muted); font-size: var(--t-xs); }
+.insp-dir > .i { color: var(--faint); }
+.is-ignored .insp-row { color: var(--muted); }
+.is-ignored .insp-row > .cut { opacity: 0.8; }
+.insp .go { width: calc(100% + 16px); min-height: 30px; }
+.insp-pane > .go { margin-top: 6px; }
+.insp-pane > .note { margin-bottom: 12px; }
+
+/* 生成物：只有图片和视频出缩略图，色块是 CSS 画的占位。「用本机应用打开」指到才出，换掉右边的大小。
+   来源（未提交 / 未跟踪）只在还没提交时跟在名字后面，小一号 */
+.insp-from { flex: none; color: var(--muted); font-size: var(--t-xs); }
+.insp-thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.insp-shot { position: relative; min-width: 0; }
+.insp-thumb { display: block; width: 100%; text-align: left; }
+.insp-thumb > i { display: grid; place-items: center; aspect-ratio: 16 / 10; margin-bottom: 6px; border-radius: var(--r-md); background: linear-gradient(135deg, var(--violet-bg), var(--cyan-bg)); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); transition: opacity var(--dur-1) var(--ease-out); }
+.insp-thumb.video > i { background: linear-gradient(135deg, var(--overlay), var(--sel-bg)); }
+.insp-thumb:hover > i { opacity: 0.8; }
+.insp-thumb > span { display: block; }
+.insp-thumb > small { color: var(--muted); font-size: var(--t-xs); }
+.insp-shot > .ico { position: absolute; top: 4px; right: 4px; background: var(--panel); box-shadow: var(--control-shadow); opacity: 0; }
+.insp-file { position: relative; }
+.insp-file > .ico { position: absolute; top: 2px; right: -4px; opacity: 0; }
+.insp-file:hover .meta, .insp-file:focus-within .meta { visibility: hidden; }
+.insp-shot:hover > .ico, .insp-shot:focus-within > .ico, .insp-file:hover > .ico, .insp-file:focus-within > .ico { opacity: 1; }
+
+/* 时间线：一颗点一行。只有审查的结论有颜色 */
+.insp-tl > li { position: relative; padding-left: 18px; }
+.insp-tl > li::before { content: ""; position: absolute; left: 2px; top: 11px; width: 7px; height: 7px; border-radius: 50%; background: var(--line2); }
+.insp-tl > li::after { content: ""; position: absolute; left: 5px; top: 22px; bottom: -8px; width: 1px; background: var(--line); }
+.insp-tl > li:last-child::after { display: none; }
+.insp-tl > .ok::before { background: var(--green); }
+.insp-tl > .bad::before { background: var(--red); }
+.insp-sub { color: var(--muted); }
+.insp-sub > li { display: flex; justify-content: space-between; min-height: 26px; align-items: center; font-variant-numeric: tabular-nums; }
+
+/* 审查：一句结论，一个主动作 */
+.insp-now { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--t-md); font-weight: var(--w-medium); }
+.insp-now.is-ok > .i { color: var(--green); }
+.insp-now.is-bad > .i { color: var(--red); }
+.insp-now.is-stale > .i { color: var(--amber); }
+.insp-do { display: flex; gap: 6px; margin-top: 8px; }
+.insp-do > [aria-pressed="true"] { background: var(--sel-bg); }
+.insp-report { margin: 2px 0 10px; color: var(--muted); line-height: 1.6; }
+.insp-report > p:first-child { font-size: var(--t-xs); }
+.insp-report > ol { padding-left: 18px; list-style: decimal; }
+.insp-report li + li { margin-top: 4px; }
+
+/* 卡片只有外框是公共的，里面各管各的 */
+.insp-cards { display: flex; flex-direction: column; gap: 8px; }
+.insp .card { padding: 10px 12px; }
+.insp-card-top { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.insp-card-top > .i { color: var(--muted); }
+.insp-card-top > b { font-weight: var(--w-medium); }
+.insp-card-meta { color: var(--muted); }
+.insp-card-foot { display: flex; align-items: center; gap: 2px; min-height: 24px; margin-top: 4px; color: var(--faint); font-size: var(--t-xs); }
+.insp-card-foot > .ico { opacity: 0; }
+.insp .card:hover .insp-card-foot > .ico, .insp-card-foot > .ico:focus-visible { opacity: 1; }
+.insp-folds { display: flex; gap: 4px; margin: 4px 0 0 -4px; }
+.insp-fold { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px 0 4px; border-radius: var(--r-sm); color: var(--muted); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.insp-fold:hover { background: var(--hover-bg); color: var(--ink); }
+.insp-fold > .i { width: 14px; height: 14px; transition: transform var(--dur-1) var(--ease-out); }
+.insp-code { margin: 6px 0 4px; padding: 8px 10px; border-radius: var(--r-md); background: var(--raised); color: var(--muted); font: var(--t-xs)/1.6 var(--font-mono); white-space: pre-wrap; word-break: break-all; }
+.insp-memo-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+
+/* 备忘的输入、起哨兵的表单：多行输入随内容长高 */
+.insp-edit { margin-bottom: 10px; }
+.insp-edit > textarea, .insp-form textarea { display: block; width: 100%; height: auto; padding: 8px 10px; line-height: 1.5; resize: none; }
+.insp-edit > textarea { min-height: 76px; }
+.insp-edit > div, .insp-form > .insp-form-acts { display: flex; flex-direction: row; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.insp-form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.insp-form > label, .insp-form > div { display: flex; flex-direction: column; gap: 4px; }
+.insp-form > label > span, .insp-form > div > span { color: var(--muted); font-size: var(--t-xs); }
+.insp-form .field, .insp-form .sel { width: 100%; }
+.insp-form textarea { min-height: 52px; font-size: var(--t-xs); }
+
+/* 子智能体：一行一个，右边是用时。在跑的那几个用时是主色，底下多一行它此刻在做什么；点开先是它带回来的话 */
+.insp-agent.is-older { margin-top: 10px; }
+.insp-agent-doing { margin: -3px 0 5px; color: var(--muted); font-size: var(--t-xs); }
+.insp-agent-more { margin: 0 0 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.insp-agent-facts { margin-top: 2px; color: var(--muted); font-size: var(--t-xs); }
+.insp-agent-in { margin-top: 4px; padding: 8px 10px; border-radius: var(--r-md); background: var(--raised); color: var(--muted); }
+.insp-fold.end { padding: 0 3px 0 6px; }
+/* 待办：最底下一行，点开是一张勾过的单子 */
+button.insp-row.insp-todo-row { margin-top: 14px; color: var(--muted); }
+.insp-todo { color: var(--muted); }
+.insp-todo > li { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; line-height: 20px; }
+.insp-todo > li > .i { flex: none; margin-top: 3px; color: var(--faint); }
+
+/* 侧聊：从上往下排，输入框贴在底上。你的话靠右、有底色；它的话靠左、没有框，谁都不报名字。
+   一问一答挨着（10），两轮之间隔着它那一排指到才出的键（24）：远近本身就把一轮一轮分开了 */
+.insp-pane[data-pane="chat"] { display: flex; flex-direction: column; min-height: 100%; }
+.insp-log { flex: 1; display: flex; flex-direction: column; gap: 10px; padding-bottom: 6px; line-height: 1.6; overflow-wrap: anywhere; }
+.insp-snap { align-self: center; margin-bottom: 4px; color: var(--faint); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.insp-me { align-self: flex-end; max-width: 88%; padding: 6px 12px; border-radius: 14px 5px 14px 14px; background: var(--raised); }
+.insp-me > .bubble-quote { margin: 2px 0 4px; font-size: var(--t-xs); line-height: 1.5; }
+.insp-ans-foot { display: flex; align-items: center; gap: 6px; height: 24px; margin-top: 2px; }
+.insp-ans-acts { display: flex; gap: 2px; margin-left: -5px; opacity: 0; transition: opacity var(--dur-2) var(--ease-out); }
+.insp-ans:hover .insp-ans-acts, .insp-ans:focus-within .insp-ans-acts { opacity: 1; }
+.insp-ans-acts > .insp-copy { opacity: 1; }
+.insp-receipt { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+.insp-receipt > .i { color: var(--faint); }
+.insp-receipt:not([hidden]) + .insp-ans-acts { margin-left: 0; }
+.insp-stopped { color: var(--muted); }
+.insp-ask { position: sticky; bottom: 0; padding: 10px 8px 8px; }
+.insp-ask > textarea { display: block; width: 100%; max-height: 160px; padding: 0 4px; line-height: 1.6; }
+.insp-ask > div:last-child { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+/* 从主会话带过来的那一段：输入框上面的一行引用，两行截断 */
+.insp-quote { display: flex; align-items: flex-start; gap: 4px; margin: 0 0 8px 4px; padding-left: 8px; border-left: 2px solid var(--line2); color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+.insp-quote > p { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.insp-quote > .ico { margin: -3px 0; }
+/* 谁来答：平时就是一个名字，指到才显出是颗键 */
+.insp-who { display: inline-flex; align-items: center; gap: 3px; height: 24px; min-width: 0; padding: 0 6px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.insp-who:hover, .insp-who[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.insp-who > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-who > .i { flex: none; color: var(--faint); }
+.insp-send { width: 28px; padding: 0; }
+/* 换一场：菜单挂在 body 上，一行是那一场的第一句话 */
+.insp-rooms { width: 280px; }
+.insp-rooms > .menu > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+@media (hover: none) { .insp-copy, .insp-card-foot > .ico, .insp-shot > .ico, .insp-file > .ico, .insp-ans-acts { opacity: 1; } }
+@media (max-width: 900px) { .insp { position: absolute; inset: 0 0 0 auto; z-index: 30; background: var(--canvas); } }
