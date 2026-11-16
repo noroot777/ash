@@ -21,7 +21,7 @@ const question = { question: "Review question", options: ["Original option"],
 
 assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
 try {
-  const { open } = await setupRegressionReviews();
+  const { openQuiet: open } = await setupRegressionReviews();
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {
     const review = await open(mode);
     await setTaskQuestion({ taskId: review.ownerTaskId, ...question });

@@ -17,7 +17,7 @@ mountTaskRunRoutes(api);
 
 assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
 try {
-  const { open } = await setupRegressionReviews();
+  const { open, openQuiet } = await setupRegressionReviews();
   for (const entry of ["continue", "checkpoint"] as const) {
     const review = await open("preset");
     await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, review.taskId));
@@ -47,7 +47,11 @@ try {
 
   for (const route of ["run", "retry"] as const) {
     for (const fault of ["evidence", "retirement"] as const) {
-      const review = await open("preset");
+      // 走的是独立审查任务(reviewOf)那一种:就地验证轮没出结论时 /run、/retry 在门口就拒了
+      // (task-action-verdicts.ts 的 pendingSideState),HTTP 能真走到起跑前检查的只剩这一种。
+      // 夹具排着的哨兵结果先撤掉,不然放锁那一下的后台投递会抢先把这一轮收走。
+      const opened = await openQuiet("legacy");
+      const review = { ...opened, taskId: opened.ownerTaskId };
       await db.update(tasks).set({ status: route === "run" ? "paused" : "failed" }).where(eq(tasks.id, review.taskId));
       await occupyResumePrompt(review.taskId, "Continue this review", false);
       const checkpoint = await row(review.taskId);
@@ -81,20 +85,23 @@ try {
       assert.equal(runs.isRunning(review.taskId), false);
       const second = await api.request(`/tasks/${review.taskId}/${route}`, { method: "POST" });
       assert.equal(second.status, 202, "a recovered database must not leave /run or /retry permanently blocked");
-      await until("retried review releases its test-only turn", async () => !runs.isTurnClaimed(review.taskId)
-        && (await row(review.taskId)).verifyRound === null);
+      await until("retried review releases its test-only turn", async () => !runs.isTurnClaimed(review.taskId));
       console.log(`✓ HTTP /${route} ${fault}: rejected startup preserves the checkpoint, reports failure and the next request starts`);
     }
   }
 
   const replacement = await open("preset");
-  let newer = runs.turnIdentity(replacement.taskId);
-  await assert.rejects(withTurnPreflight(replacement.taskId, true, async () => {
+  // 交下去的是**旧那一把的身份**:传 true 的话按号核验永远对不上,这一档无论产品对错都过。
+  const older = runs.turnIdentity(replacement.taskId);
+  assert.ok(older, "台子前提:派审已经占住这一轮");
+  let newer = older;
+  await assert.rejects(withTurnPreflight(replacement.taskId, older, async () => {
     runs.releaseTurn(replacement.taskId);
     assert(runs.claimTurn(replacement.taskId));
     newer = runs.turnIdentity(replacement.taskId);
     throw new Error("OLD_PREFLIGHT_FAILURE");
   }), /OLD_PREFLIGHT_FAILURE/);
+  assert.notEqual(newer, older);
   assert.equal(runs.turnIdentity(replacement.taskId), newer);
   assert(runs.isTurnClaimed(replacement.taskId));
   runs.releaseTurn(replacement.taskId);
