@@ -1,5 +1,5 @@
-// 「合并后提交」的到达序号（为什么要它见 server/src/accept-order.ts）。单独一个不依赖任何东西的模块：
-// 建表那一步（schema-accept-commit-order.ts）要拿库里已有的最大号给它垫底，accept-order.ts 要用它发号。
+// 验收记忆的到达序号（为什么要它见 server/src/accept-order.ts）。单独一个不依赖任何东西的模块：
+// 建表那一步（schema-accept-memory.ts）要拿库里已有的最大号给它垫底，accept-order.ts 要用它发号。
 
 let last = 0;
 
