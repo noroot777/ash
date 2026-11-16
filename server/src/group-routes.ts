@@ -12,6 +12,7 @@ import { joinQueueOnCreate } from "./queue-membership-guard.js";
 import { republishGroupWaits } from "./pending-wait.js";
 import { repoKey } from "./git.js";
 import { pauseGroup, runGroupInBackground } from "./scheduler.js";
+import { writingGroupMembership } from "./launch-capacity.js";
 import { createTasks } from "./task-store.js";
 import { id, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -281,10 +282,11 @@ api.delete("/groups/:id", async (c) => {
   // 摘出分组 = 改 groupId,归属写方进队列认领链(queue-claim-chain.ts);摘出与删组同一笔事务,
   // 链上改分组的那一笔(groupMoveRefusal 重验目标组还在)就不会落在两者之间、把任务挂回一个刚删掉的组。
   // 跟 task-refs.ts 同一口径:摘出不碰 updatedAt。
-  await serializeQueueClaims(() => db.transaction(async (tx) => {
+  // 摘出来的成员里可能有正占着执行回合的：同组名额按分组数，这一笔要让数名额的那一边看得见（launch-capacity.ts）。
+  await serializeQueueClaims(() => writingGroupMembership(() => db.transaction(async (tx) => {
     await tx.update(tasks).set({ groupId: null }).where(eq(tasks.groupId, gid));
     await tx.delete(groups).where(eq(groups.id, gid));
-  }));
+  })));
   return c.json({ deleted: true });
 });
 

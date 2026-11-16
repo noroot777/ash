@@ -27,8 +27,10 @@ export const taskPrerequisites = sqliteTable("task_prerequisites", {
  *
  * - `requestedAt` 非空 = 已经被要求开工、还没开工（前置没站齐、同组名额满了、分组暂停着…），**等齐就起**。
  *   这一笔是持久的：重启之后照旧在等，开机补办接上。
- * - `startFailures` / `retryAt` = 轮到它了却连着没起来几次、下一次最早什么时候再试（退避，有上限；到顶就撤掉
- *   请求、留一句交代，../launch-request.ts）。
+ * - `requestId` = 这一笔请求的代号。每被要求一次开工就换一个：一次起跑尝试的收尾（了结、记一次起不来、退避）
+ *   只动它自己认领时的那一代，旧尝试碰不到之后重新挂上的请求。
+ * - `startFailures` / `retryAt` = 轮到它了却连着没起来几次、下一次最早什么时候再试（退避，有上限）。
+ * - `giveUp` 非空 = 到顶了、不再自动起；这是还没写进时间线的那句交代。写成了才撤掉请求（../launch-request.ts）。
  * - `launchedAt` 非空 = 开工起点已经按前置定下来了。之后的运行不再看前置，前置也不能再加减。
  * - `blocked` = 前置都站稳了却起不了跑的原因（几条前置的改动合不到一起），等用户处理；前置一变就重判。
  * - `actingUserId` = 当初要求起跑的人：等齐之后替他起跑，这一轮烧谁的额度照他。
@@ -46,6 +48,8 @@ export const taskPrerequisiteLaunches = sqliteTable("task_prerequisite_launches"
   installJournal: text("install_journal", { mode: "json" }).$type<string[]>(),
   startFailures: integer("start_failures").notNull().default(0),
   retryAt: text("retry_at"),
+  requestId: text("request_id"),
+  giveUp: text("give_up"),
 });
 
 export async function ensurePrerequisiteSchema(client: Client): Promise<void> {
@@ -64,4 +68,6 @@ export async function ensurePrerequisiteSchema(client: Client): Promise<void> {
   await client.execute("ALTER TABLE task_prerequisite_launches ADD COLUMN install_journal TEXT").catch(() => undefined);
   await client.execute("ALTER TABLE task_prerequisite_launches ADD COLUMN start_failures INTEGER NOT NULL DEFAULT 0").catch(() => undefined);
   await client.execute("ALTER TABLE task_prerequisite_launches ADD COLUMN retry_at TEXT").catch(() => undefined);
+  await client.execute("ALTER TABLE task_prerequisite_launches ADD COLUMN request_id TEXT").catch(() => undefined);
+  await client.execute("ALTER TABLE task_prerequisite_launches ADD COLUMN give_up TEXT").catch(() => undefined);
 }

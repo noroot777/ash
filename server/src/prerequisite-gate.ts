@@ -33,7 +33,7 @@ import { checkoutHasPrerequisites, prerequisiteStart } from "./prerequisite-star
 import { applyInstall, journalInstall, planInstall, settleAbandonedInstall } from "./prerequisite-install.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { alertLine, appendTaskTimeline, receiptLine } from "./task-timeline.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 
 /** 谁要求它起跑。`release` = 等齐之后由放行那一路自己起；`turn` = 底层起跑闸（见文件头）。 */
 export type LaunchSource = "run" | "queue" | "group" | "release" | "turn";
@@ -54,11 +54,14 @@ export async function recordRequest(taskId: string, request: LaunchRequest, bloc
   const existing = await launchRecord(taskId);
   // 放行那一路只替已经挂着的请求办事：没有了（停止键撤回了）就不替谁新挂一笔。
   if (request.source === "release" && !existing?.requestedAt) return;
+  // 新挂的一笔换一个代号、退避清零（launch-request.ts）；已经挂着的照旧是那一代。
+  const fresh = { requestId: id(), startFailures: 0, retryAt: null, giveUp: null };
   await db.insert(taskPrerequisiteLaunches)
-    .values({ taskId, requestedAt: now(), source: request.source, actingUserId: request.actingUserId ?? null, blocked })
+    .values({ taskId, requestedAt: now(), source: request.source, actingUserId: request.actingUserId ?? null, blocked, ...fresh })
     .onConflictDoUpdate({
       target: taskPrerequisiteLaunches.taskId,
       set: {
+        ...(existing?.requestedAt ? {} : fresh),
         requestedAt: existing?.requestedAt ?? now(),
         // 等齐之后由放行那一路替原来那个人起跑：别让这一笔把「谁要求的」覆盖掉。
         ...(request.source === "release" || (request.source === "turn" && existing?.requestedAt)
@@ -177,7 +180,8 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
         .values({ taskId, launchedAt: now(), blocked: null, requestedAt: null, installJournal: null })
         .onConflictDoUpdate({
           target: taskPrerequisiteLaunches.taskId,
-          set: { launchedAt: now(), blocked: null, installJournal: null, ...(request.source === "release" ? {} : { requestedAt: null }) },
+          set: { launchedAt: now(), blocked: null, installJournal: null,
+            ...(request.source === "release" ? {} : { requestedAt: null, startFailures: 0, retryAt: null, giveUp: null }) },
         });
       return true;
     });

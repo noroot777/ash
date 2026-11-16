@@ -10,7 +10,8 @@
 //  L6 被名额挡住时点停止：请求撤回，腾出名额、再扫都不会再起它；
 //  L7 分组暂停：挂着请求的不起，页面上说被暂停了；「接着跑」之后照请求起；被暂停打断的成员从它自己的会话续跑；
 //  L8 团队执行者照样由运行分组起、照样受名额限制。
-// 起不来的退避、到顶只留一句交代、停止冻住正在起跑的那一次，在 checkpoint-group-failure-cases.ts。
+// L9–L12、N1（出岔子的那几档）在 launch-request-failure-cases.ts；起跑报错的退避、停止冻住正在起跑的那一次，
+// 在 checkpoint-group-failure-cases.ts。
 // 跑：npm -w server run test:launch-request
 import {
   db, hasStarted, inputsOf, project, release, request, row, runs, schema, setup, sleep, started, tasks, teardown, until, view,
@@ -19,6 +20,7 @@ import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 
 const { runGroup, pauseGroup, advanceQueue } = await import("../src/scheduler.js");
+const { launchRequestFailureCases } = await import("./launch-request-failure-cases.js");
 const { requestLaunch, releaseLaunch, sweepLaunchRequests } = await import("../src/launch-request.js");
 const { runningInGroup, PARALLEL_LIMIT } = await import("../src/launch-capacity.js");
 const { launchRecord } = await import("../src/prerequisite-store.js");
@@ -221,6 +223,7 @@ try {
     console.log("PASS L8: team executors are still started by the group run and still capped");
   }
 
+  await launchRequestFailureCases();
   console.log("launch request: ok");
 } finally {
   await teardown();

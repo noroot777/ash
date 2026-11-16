@@ -7,7 +7,11 @@
 //
 // 「数」和「占」之间没有 await：数完没满当场 `claimOwnTurn`，这一下认领本身就是占名额。数之前要知道每把锁
 // 的主人在哪个组（读库），读回来之后再同步看一遍此刻的锁：有新主人没读过就再读，读齐了才数、才占。
-// 占着执行锁的任务不许换组（queue-membership-guard.ts），所以读到的组在它放锁之前一直作数。
+//
+// 读回来的分组只在「这期间没有人改过任何任务的分组」时作数。锁的主人名单没变，不等于主人的分组没变：单条
+// 换组拦着占着执行锁的任务（queue-membership-guard.ts），删分组却会把整组成员一起摘成不在分组里。所以改已有
+// 任务分组的那几处写方都包在 `writingGroupMembership` 里：写之前、写完各推一次代号，写着的时候不许认领。
+// 认领那一刻代号还是读之前那个、也没有写在途，读回来的分组就是此刻库里的。
 import { inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -39,18 +43,78 @@ async function readGroups(unknown: string[], known: Map<string, string | null>):
 
 const MAX_READ_ROUNDS = 8;
 
+// ── 分组归属的写方 ───────────────────────────────────────────────────────────
+let membershipEpoch = 0;
+let membershipWrites = 0;
+let membershipIdle: { promise: Promise<void>; resolve: () => void } | null = null;
+
+/**
+ * 改**已有**任务分组的写入都从这里过（单条换组、删分组把成员摘出来）。建任务时写的分组不用：新任务手里
+ * 不可能已经占着执行锁。
+ */
+export async function writingGroupMembership<T>(write: () => Promise<T>): Promise<T> {
+  membershipWrites += 1;
+  membershipEpoch += 1;
+  try {
+    return await write();
+  } finally {
+    membershipWrites -= 1;
+    membershipEpoch += 1;
+    if (!membershipWrites && membershipIdle) {
+      membershipIdle.resolve();
+      membershipIdle = null;
+    }
+  }
+}
+
+function membershipSettled(): Promise<void> {
+  if (!membershipWrites) return Promise.resolve();
+  if (!membershipIdle) {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    membershipIdle = { promise, resolve };
+  }
+  return membershipIdle.promise;
+}
+
+/**
+ * 把此刻每把执行锁主人的分组读齐。`fresh(known)` 为真 = 读到的这份此刻还作数（同步判断，紧接着就可以数、占）。
+ * 读到一半有人改了分组，就从头再读。
+ */
+async function readHolders(): Promise<{ known: Map<string, string | null>; fresh: () => boolean } | null> {
+  let known = new Map<string, string | null>();
+  let epoch = membershipEpoch;
+  for (let round = 0; round < MAX_READ_ROUNDS; round += 1) {
+    if (membershipWrites) {
+      await membershipSettled();
+      continue;
+    }
+    if (epoch !== membershipEpoch) {
+      known = new Map();
+      epoch = membershipEpoch;
+    }
+    const unknown = executionHolders().filter((holder) => !known.has(holder));
+    if (unknown.length) {
+      await readGroups(unknown, known);
+      continue; // 读的这段时间里又有人占了锁、或者改了分组：回头再看一遍
+    }
+    const seen = epoch;
+    return { known, fresh: () => !membershipWrites && membershipEpoch === seen && executionHolders().every((holder) => known.has(holder)) };
+  }
+  return null;
+}
+
 function countIn(groupId: string | null, known: ReadonlyMap<string, string | null>): number {
   return executionHolders().filter((taskId) => known.has(taskId) && bucket(known.get(taskId)) === bucket(groupId)).length;
 }
 
 /** 同组此刻在跑几条（页面上那句「在等什么」用；要占名额走 `claimLaunchTurn`，别拿它先数后占）。 */
 export async function runningInGroup(groupId: string | null): Promise<number> {
+  const read = await readHolders();
+  if (read) return countIn(groupId, read.known);
+  // 一直读不齐（分组在不停地改）：按最后一次读回来的算，只是页面上的一句话。
   const known = new Map<string, string | null>();
-  for (let round = 0; round < MAX_READ_ROUNDS; round += 1) {
-    const unknown = executionHolders().filter((taskId) => !known.has(taskId));
-    if (!unknown.length) break;
-    await readGroups(unknown, known);
-  }
+  await readGroups(executionHolders(), known);
   return countIn(groupId, known);
 }
 
@@ -62,16 +126,13 @@ export type LaunchClaim = { ok: true; turn: TurnIdentity } | { ok: false; why: "
 
 /** 按 `groupId` 那一桶占一个名额并认领这条任务的执行回合。认领到之后照常由持有者在每条出路上还锁。 */
 export async function claimLaunchTurn(taskId: string, groupId: string | null): Promise<LaunchClaim> {
-  const known = new Map<string, string | null>();
   for (let round = 0; round < MAX_READ_ROUNDS; round += 1) {
-    const unknown = executionHolders().filter((holder) => !known.has(holder));
-    if (unknown.length) {
-      await readGroups(unknown, known);
-      continue; // 读的这段时间里又有人占了锁：回头再看一遍此刻的锁
-    }
-    // ── 从上面那一看到认领，没有 await ──
+    const read = await readHolders();
+    if (!read) break;
+    // ── 从这里到认领，没有 await ──
+    if (!read.fresh()) continue;
     if (isTurnClaimed(taskId)) return { ok: false, why: "busy" };
-    const running = countIn(groupId, known);
+    const running = countIn(groupId, read.known);
     if (running >= PARALLEL_LIMIT) return { ok: false, why: "full", running };
     const turn = claimOwnTurn(taskId, "single");
     return turn ? { ok: true, turn } : { ok: false, why: "busy" };

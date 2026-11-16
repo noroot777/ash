@@ -12,7 +12,11 @@
 // 没留下续跑交代的 paused）→ 没被按住（分组暂停 / 名下全部停下：请求原样留着，放开时照请求起）→ 前置都站稳
 // → 不在队列里（在的交给队列）→ 同组名额没满（launch-capacity.ts：数的是此刻占着执行回合的条数，数完当场
 // 认领）。认领之后在前置锁里重读一遍请求和任务（停止键排在同一把锁上；这期间别处起过、跑完的这里看得见），
-// 定起点，交给 seatThenStart。只认真实启动回执：没起来的退避再试，连着起不来到顶就撤掉请求、留一句交代。
+// 定起点，交给 seatThenStart。只认真实启动回执：认领回合之后没拿到回执的（不管是起跑报错、还是认领之后那几步
+// 自己抛了）都算一次起不来，退避再试；连着到顶就不再自动起，先把那句交代写进时间线，写成了才撤掉请求。
+//
+// 每一笔请求有自己的代号（requestId）：一次尝试的收尾 —— 了结、记一次起不来、到顶 —— 只动它认领时的那一代。
+// 这期间被重新要求了一次（又点了运行分组）就是新的一代，旧尝试的收尾碰不到它。
 //
 // 什么时候判：开机补办扫一遍；任何一把回合锁放开时（名额可能空出来了，turn-release.ts）；前置有进展时
 // （prerequisite-launch.ts）；分组恢复 / 名下放开时；每分钟兜底扫一遍。进程内的定时器只决定「什么时候再看
@@ -31,7 +35,7 @@ import { taskHoldOf } from "./task-hold.js";
 import { heldByMonitors } from "./queue-monitor-hold.js";
 import type { TurnIdentity } from "./turn-lock.js";
 import { onTurnReleasedAlso } from "./turn-release.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type Writer = Pick<typeof db, "insert">;
@@ -49,30 +53,38 @@ export function setLaunchRetryBase(ms: number): void {
 // ── 挂请求 ───────────────────────────────────────────────────────────────────
 
 /**
- * 给这几条任务挂上开工请求（已经挂着的不动它的时刻和来由）。重新被要求一次就清掉上一轮「起不来」的退避，
- * 当成新的一次请求。`writer` 传事务就跟调用方那一笔一起提交（派活单、接着跑）。
+ * 给这几条任务挂上开工请求（已经挂着的不动它的时刻和来由）。重新被要求一次就是新的一代：换代号、清掉上一轮
+ * 「起不来」的退避和没写完的交代。`writer` 传事务就跟调用方那一笔一起提交（派活单、接着跑）。
  */
 export async function requestLaunch(taskIds: string[], request: { source: LaunchSource | "hold"; actingUserId?: string | null }, writer: Writer = db): Promise<void> {
   if (!taskIds.length) return;
   const at = now();
   await writer.insert(taskPrerequisiteLaunches)
-    .values(taskIds.map((taskId) => ({ taskId, requestedAt: at, source: request.source, actingUserId: request.actingUserId ?? null })))
+    .values(taskIds.map((taskId) => ({ taskId, requestedAt: at, source: request.source, actingUserId: request.actingUserId ?? null, requestId: id() })))
     .onConflictDoUpdate({
       target: taskPrerequisiteLaunches.taskId,
       set: {
         source: sql`CASE WHEN ${taskPrerequisiteLaunches.requestedAt} IS NULL THEN excluded.source ELSE ${taskPrerequisiteLaunches.source} END`,
         actingUserId: sql`CASE WHEN ${taskPrerequisiteLaunches.requestedAt} IS NULL THEN excluded.acting_user_id ELSE ${taskPrerequisiteLaunches.actingUserId} END`,
         requestedAt: sql`COALESCE(${taskPrerequisiteLaunches.requestedAt}, excluded.requested_at)`,
+        requestId: sql`excluded.request_id`,
         startFailures: 0,
         retryAt: null,
+        giveUp: null,
       },
     });
 }
 
-/** 这笔请求了结（起了，或者它已经不该被自动起了）。 */
-async function settleRequest(taskId: string): Promise<void> {
-  await db.update(taskPrerequisiteLaunches).set({ requestedAt: null, startFailures: 0, retryAt: null })
-    .where(eq(taskPrerequisiteLaunches.taskId, taskId));
+/** 只认这一代请求的条件（老库里挂着的、没有代号的那一笔就是「没有代号」那一代）。 */
+function generation(taskId: string, requestId: string | null) {
+  return and(eq(taskPrerequisiteLaunches.taskId, taskId), isNotNull(taskPrerequisiteLaunches.requestedAt),
+    requestId ? eq(taskPrerequisiteLaunches.requestId, requestId) : isNull(taskPrerequisiteLaunches.requestId));
+}
+
+/** 这一代请求了结（起了，或者它已经不该被自动起了）。已经换了一代的不动。 */
+async function settleRequest(taskId: string, requestId: string | null): Promise<void> {
+  await db.update(taskPrerequisiteLaunches).set({ requestedAt: null, startFailures: 0, retryAt: null, giveUp: null })
+    .where(generation(taskId, requestId));
 }
 
 // ── 放行 ─────────────────────────────────────────────────────────────────────
@@ -96,11 +108,12 @@ export async function releaseLaunch(taskId: string): Promise<void> {
   if (booting) return; // 开机还没接回在跑的回合：此刻数名额会少数，等 startLaunchRequests 那一扫
   const launch = await launchRecord(taskId);
   if (!launch?.requestedAt) return;
+  if (launch.giveUp) return publishGiveUp(taskId);
   if (launch.retryAt && launch.retryAt > now()) return retryAt(taskId, launch.retryAt);
   const task = await readTask(taskId);
   if (!task || !(await awaitsLaunch(task, launch.source))) {
     // 已经从别处起跑了、跑完了、没了：这笔请求了结。
-    await settleRequest(taskId);
+    await settleRequest(taskId, launch.requestId);
     if (task) await republishPrerequisiteView([taskId]);
     return;
   }
@@ -108,7 +121,8 @@ export async function releaseLaunch(taskId: string): Promise<void> {
   const edges = await prerequisiteEdges(taskId);
   if (edges.length && !launch.launchedAt) {
     const standings = await prerequisiteStandings(edges.map((edge) => edge.prerequisiteId));
-    if (edges.some((edge) => standings.get(edge.prerequisiteId)?.standing.step !== "settled")) return;
+    // 刚挂上请求就在等前置（运行分组时前置还没站齐）：页面上要出现「在等」。
+    if (edges.some((edge) => standings.get(edge.prerequisiteId)?.standing.step !== "settled")) return noteHoldup(taskId, "prerequisites");
   }
   const queue = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
   if (queue) {
@@ -130,15 +144,25 @@ export async function releaseLaunch(taskId: string): Promise<void> {
   //
   // 回合从认领到交给 seatThenStart（之后由它负责还，queue-seat.ts）之间归这里：没交出去就退出 —— 不论正常返回
   // 还是抛错（定起点要写 git、读写库）—— 一律按认领时的那一代身份还回去，否则这条任务谁都起不了。
+  //
+  // 认领之后、交给 seatThenStart 之前抛出来的（锁里重读、定起点读写库…）同样是「轮到它了却没起来」：记一次，
+  // 走同一套退避。不记的话放锁那一下又触发一次扫描，200ms 一轮地原样再撞。
   let owned: TurnIdentity | null = null;
-  let outcome: { turn: TurnIdentity; actingUserId: string | null; source: string | null } | "full" | "churn" | "settle" | "regrouped" | null = null;
+  let handed = false;
+  let held: string | null = null; // 这次尝试认领时那一代的代号
+  type Claimed = { turn: TurnIdentity; actingUserId: string | null; source: string | null };
+  let outcome: Claimed | "full" | "churn" | "settle" | "regrouped" | null = null;
+  let failure: string | null = null;
   try {
     outcome = await withPrerequisiteLock(taskId, async () => {
       const current = await launchRecord(taskId);
-      if (!current?.requestedAt) return null;
+      if (!current?.requestedAt || current.giveUp) return null;
+      // 锁外预判时还没退避的，锁里再看一眼最新的：别的尝试可能刚记过一次起不来。
+      if (current.retryAt && current.retryAt > now()) return null;
       const seat = await claimLaunchTurn(taskId, task.groupId ?? null);
       if (!seat.ok) return seat.why === "busy" ? null : seat.why;
       owned = seat.turn;
+      held = current.requestId;
       // 占着回合重读：回合结算是持锁写状态的，所以这期间别处起过、跑完的，这里一定看得见。
       const row = await readTask(taskId);
       if (!row || !(await awaitsLaunch(row, current.source))) return "settle";
@@ -147,58 +171,98 @@ export async function releaseLaunch(taskId: string): Promise<void> {
       if (isAcceptingTask(taskId) || await holdForPrerequisitesLocked(taskId, { source: "release", actingUserId: current.actingUserId })) return null;
       return { turn: owned, actingUserId: current.actingUserId, source: current.source };
     });
+  } catch (error) {
+    if (!owned) throw error; // 还没认领回合：没有放锁补扫的循环，交给调用方记日志、下一次扫描再判
+    failure = error instanceof Error ? error.message : String(error);
   } finally {
     if (owned && (!outcome || typeof outcome === "string")) releaseTurn(taskId, owned);
   }
+  if (failure !== null) return noteStartFailure(taskId, held, failure);
   if (outcome === "full") return noteHoldup(taskId, "full");
   if (outcome === "settle") {
-    await settleRequest(taskId);
+    await settleRequest(taskId, held);
     return republishPrerequisiteView([taskId]);
   }
   if (outcome === "regrouped" || outcome === "churn") return sweepSoon();
   if (!outcome) return;
   noteHoldup(taskId, null);
-  const { turn, actingUserId, source } = outcome;
-  const { seatThenStart } = await import("./queue-seat.js");
-  const { resumeOrRunTask } = await import("./task-resume.js");
-  const reason = source === "group" ? "group" : source === "hold" ? "hold" : "wake";
-  let failure: string | null = null;
-  // 名额是按锁外读到的分组数的：认领那一步在队列认领链上再认一次分组，中途换了组就不起 —— 回合还掉，
-  // 那一放锁的一扫就按新组重排（queue-seat.ts `slotGroup`）。
-  const started = await seatThenStart(taskId, turn, () =>
-    // 不是用户当场那一下运行了：按自动起跑认（停着照样拦，turn-freeze.ts）。
-    resumeOrRunTask(taskId, { origin: "auto", reason, turnHeld: turn, actingUserId }),
-  { slotGroup: task.groupId ?? null, onStartError: (error) => { failure = error instanceof Error ? error.message : String(error); } });
-  if (started.ok) {
-    await settleRequest(taskId);
-    return republishPrerequisiteView([taskId]);
+  const { turn, actingUserId, source } = outcome as Claimed;
+  try {
+    const { seatThenStart } = await import("./queue-seat.js");
+    const { resumeOrRunTask } = await import("./task-resume.js");
+    const reason = source === "group" ? "group" : source === "hold" ? "hold" : "wake";
+    // 名额是按锁外读到的分组数的：认领那一步在队列认领链上再认一次分组，中途换了组就不起 —— 回合还掉，
+    // 那一放锁的一扫就按新组重排（queue-seat.ts `slotGroup`）。
+    handed = true; // 从这里起回合归 seatThenStart 还（queue-seat.ts）
+    const started = await seatThenStart(taskId, turn, () =>
+      // 不是用户当场那一下运行了：按自动起跑认（停着照样拦，turn-freeze.ts）。
+      resumeOrRunTask(taskId, { origin: "auto", reason, turnHeld: turn, actingUserId }),
+    { slotGroup: task.groupId ?? null, onStartError: (error) => { failure = error instanceof Error ? error.message : String(error); } });
+    if (started.ok) {
+      await settleRequest(taskId, held);
+      return republishPrerequisiteView([taskId]);
+    }
+    if (started.regrouped) return sweepSoon();
+    failure ??= started.blockers.join("；");
+  } catch (error) {
+    if (!handed) releaseTurn(taskId, turn);
+    failure = error instanceof Error ? error.message : String(error);
   }
-  if (started.regrouped) return sweepSoon();
-  await noteStartFailure(taskId, failure ?? started.blockers.join("；"));
+  await noteStartFailure(taskId, held, failure ?? "没有拿到启动回执");
 }
 
 /**
- * 轮到它了却没起来。先确认真是「起不来」：这期间状态变了、被按住了、请求被撤了的不算（下一次判定会各自了结）。
- * 退避再试，连着到 MAX_START_ATTEMPTS 次就撤掉请求、留一句交代 —— 不是每扫一次就重试一次、刷一串失败。
+ * 轮到它了却没起来。先确认真是「起不来」：这期间状态变了、被按住了、请求被撤了的不算（下一次判定会各自了结）；
+ * 已经换了一代请求的也不算 —— 那是之后重新要求的，跟这一次的尝试无关。
+ * 退避再试，连着到 MAX_START_ATTEMPTS 次就不再自动起、留一句交代 —— 不是每扫一次就重试一次、刷一串失败。
+ * 次数原子地加在这一代上（两次尝试同时记也不会互相盖掉）。
  */
-async function noteStartFailure(taskId: string, reason: string): Promise<void> {
-  const current = await launchRecord(taskId);
+async function noteStartFailure(taskId: string, requestId: string | null, reason: string): Promise<void> {
   const row = await readTask(taskId);
-  if (!current?.requestedAt || !row || !(await awaitsLaunch(row, current.source)) || await taskHoldOf(row)) return;
-  const failures = current.startFailures + 1;
+  const current = await launchRecord(taskId);
+  if (!current?.requestedAt || (current.requestId ?? null) !== requestId || !row
+    || !(await awaitsLaunch(row, current.source)) || await taskHoldOf(row)) return;
+  const [bumped] = await db.update(taskPrerequisiteLaunches)
+    .set({ startFailures: sql`${taskPrerequisiteLaunches.startFailures} + 1` })
+    .where(and(generation(taskId, requestId), isNull(taskPrerequisiteLaunches.giveUp)))
+    .returning({ failures: taskPrerequisiteLaunches.startFailures });
+  if (!bumped) return;
+  const failures = bumped.failures;
   if (failures >= MAX_START_ATTEMPTS) {
-    await settleRequest(taskId);
-    const { reportLaunchGiveUp } = await import("./group-start-failure.js");
-    await reportLaunchGiveUp(row, `连着 ${failures} 次没能自动开工（${reason}），不再自动重试。处理好之后点运行。`);
-    await republishPrerequisiteView([taskId]);
-    return;
+    // 先把交代记在这一代请求上，再去写时间线：写不成（库抖了、进程正好退出）时请求还在，下一次扫描接着写，
+    // 写成了才撤掉。记上之后放行口只办这一件事，不会再起它。
+    await db.update(taskPrerequisiteLaunches)
+      .set({ giveUp: `连着 ${failures} 次没能自动开工（${reason}），不再自动重试。处理好之后点运行。`, retryAt: null })
+      .where(generation(taskId, requestId));
+    console.error(`[ash] task=${taskId} 连着 ${failures} 次没能自动开工（${reason}），不再自动重试`);
+    return publishGiveUp(taskId);
   }
   const at = new Date(Date.now() + retryDelay(failures)).toISOString();
-  await db.update(taskPrerequisiteLaunches).set({ startFailures: failures, retryAt: at })
-    .where(and(eq(taskPrerequisiteLaunches.taskId, taskId), isNotNull(taskPrerequisiteLaunches.requestedAt)));
+  await db.update(taskPrerequisiteLaunches).set({ retryAt: at }).where(and(generation(taskId, requestId),
+    eq(taskPrerequisiteLaunches.startFailures, failures), isNull(taskPrerequisiteLaunches.giveUp)));
   console.warn(`[ash] 自动开工没起来 task=${taskId}（第 ${failures} 次，${at} 再试）：${reason}`);
   await republishPrerequisiteView([taskId]);
   retryAt(taskId, at);
+}
+
+/**
+ * 到顶的那句交代写进时间线，写成了才撤掉请求。在前置锁里做：跟停止键排成先后，两次扫描也不会各写一遍。
+ * 写不成就留着请求，页面上照样看得见那句话（launch-holdup.ts），下一次扫描再写。
+ */
+async function publishGiveUp(taskId: string): Promise<void> {
+  await withPrerequisiteLock(taskId, async () => {
+    const record = await launchRecord(taskId);
+    if (!record?.requestedAt || !record.giveUp) return;
+    const row = await readTask(taskId);
+    const { reportLaunchGiveUp } = await import("./group-start-failure.js");
+    if (row && !(await reportLaunchGiveUp(row, record.giveUp))) {
+      noteHoldup(taskId, "gave-up");
+      return;
+    }
+    await settleRequest(taskId, record.requestId);
+    lastHoldup.delete(taskId);
+    if (row) await republishPrerequisiteView([taskId]);
+  });
 }
 
 const retryTimers = new Map<string, NodeJS.Timeout>();
@@ -217,7 +281,7 @@ function retryAt(taskId: string, at: string): void {
  * 每放一次锁扫一遍也不会刷屏。只是「什么时候重发」的记忆，丢了（重启）最多多发一次。
  */
 const lastHoldup = new Map<string, string | null>();
-function noteHoldup(taskId: string, holdup: "held" | "queue" | "full" | null): void {
+function noteHoldup(taskId: string, holdup: "held" | "queue" | "full" | "prerequisites" | "gave-up" | null): void {
   if ((lastHoldup.get(taskId) ?? null) === holdup) return;
   if (holdup) lastHoldup.set(taskId, holdup); else lastHoldup.delete(taskId);
   void republishPrerequisiteView([taskId]).catch((error) => console.error(`[ash] 开工等待说明重发失败 task=${taskId}:`, error));
@@ -243,7 +307,7 @@ export async function withdrawLaunchRequest(taskId: string): Promise<WithdrawnLa
     if ((task?.status !== "backlog" && task?.status !== "paused") || !record?.requestedAt) return null;
     const { freezeStartingTurn, isTurnClaimed } = await import("./runs.js");
     const starting = isTurnClaimed(taskId) && freezeStartingTurn(taskId, "canceled");
-    await db.update(taskPrerequisiteLaunches).set({ requestedAt: null, blocked: null, startFailures: 0, retryAt: null })
+    await db.update(taskPrerequisiteLaunches).set({ requestedAt: null, blocked: null, startFailures: 0, retryAt: null, giveUp: null })
       .where(eq(taskPrerequisiteLaunches.taskId, taskId));
     // 「接着跑」欠下的那一笔也划掉：不然下一次兑现又把请求挂回来（dispatch-hold.ts）。
     await db.update(tasks).set({ holdOwedBy: null }).where(and(eq(tasks.id, taskId), isNotNull(tasks.holdOwedBy)));
