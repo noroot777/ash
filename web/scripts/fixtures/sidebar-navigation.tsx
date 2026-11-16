@@ -205,7 +205,6 @@ function Ash() {
             spread={spread}
             onTask={select}
             onRemoteTask={(next) => { setSelectedTaskId(null); setSelectedRemoteTaskId(next.id); }}
-            onTaskStarred={() => {}}
             onHandoffFinished={() => {}}
             outbound={{ outboundCount: 1, offlinePeers: [], asked: false, refreshing: false, onRefresh: () => {} }}
             notify={() => {}}

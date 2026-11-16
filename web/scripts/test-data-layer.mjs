@@ -77,7 +77,7 @@ try {
     liveSince: "2026-07-30T01:00:00.000Z",
     updatedAt: "2026-07-30T01:10:00.000Z",
   };
-  // useTasks 数据同步纯函数（SSE 事件应用 / 星标回写 / GET 快照合并）的用例在
+  // useTasks 数据同步纯函数（SSE 事件应用 / GET 快照合并）的用例在
   // scripts/test-task-sync.mjs（npm -w web run test:task-sync）。
 
   const session = {

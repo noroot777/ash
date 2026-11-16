@@ -200,8 +200,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN stage TEXT",
   // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
   "ALTER TABLE tasks ADD COLUMN pinned_at INTEGER",
-  // 星标：用户手动软记号（与自动状态正交）；null=未标
-  "ALTER TABLE tasks ADD COLUMN starred_at INTEGER",
   // §工作流：项目默认起手式 + 任务创建时拷下的那条线（快照，不是引用）
   "ALTER TABLE projects ADD COLUMN workflow_id TEXT",
   // 「新任务默认开不开 worktree」从 app_settings 搬到项目这一层（2026-09-14）。
