@@ -340,6 +340,13 @@ await test("pickNext: archived 透明跳过", async () => {
 
 // ── 4. 状态钩子:done 触发推进 ───────────────────────────────────────
 
+// 钩子是 fire-and-forget：等到「不再是 backlog」为止（最多 10 秒），不赌一个固定的 100ms。
+const leftBacklog = async (taskId: string) => {
+  for (const end = Date.now() + 10_000; Date.now() < end; await new Promise((r) => setTimeout(r, 20))) {
+    if ((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)?.status !== "backlog") return;
+  }
+};
+
 await test("setTaskStatus(done) 触发队列推进(链式拉下一个)", async () => {
   const p = await seedProject();
   const g = await seedGroup(p.id, "serial");
@@ -348,8 +355,7 @@ await test("setTaskStatus(done) 触发队列推进(链式拉下一个)", async (
   await seedQueue([a.id, b.id]);
   // 把 a 设成 done — 钩子应触发 advanceQueueFromTask
   await setTaskStatus(a.id, "done");
-  // 钩子是 async fire-and-forget,等一小会儿
-  await new Promise((r) => setTimeout(r, 100));
+  await leftBacklog(b.id);
   const bRow = (await db.select().from(tasks).where(eq(tasks.id, b.id))).at(0)!;
   // b 应已从 backlog 变成 queued(advanceQueue 调了 setQueued)
   // ——之后 resumeOrRunTask 会试着启动,会失败,但我们只看立刻的状态
@@ -366,7 +372,7 @@ await test("setTaskStatus(failed) 也触发推进(失败不拖链)", async () =>
   const b = await seedTask(p.id, g.id);
   await seedQueue([a.id, b.id]);
   await setTaskStatus(a.id, "failed");
-  await new Promise((r) => setTimeout(r, 100));
+  await leftBacklog(b.id);
   const bRow = (await db.select().from(tasks).where(eq(tasks.id, b.id))).at(0)!;
   assertTrue(
     bRow.status === "queued" || bRow.status === "running" || bRow.status === "failed",
@@ -383,7 +389,9 @@ await test("setTaskStatus(paused) 在 head → 推进(自我触发 resume)", asy
   const b = await seedTask(p.id, g.id, { resumePrompt: "继续 TTS" });
   await seedQueue([a.id, b.id]);
   await setTaskStatus(b.id, "paused");
-  await new Promise((r) => setTimeout(r, 100));
+  for (const end = Date.now() + 10_000; Date.now() < end; await new Promise((r) => setTimeout(r, 20))) {
+    if ((await db.select().from(tasks).where(eq(tasks.id, b.id))).at(0)?.status !== "paused") break;
+  }
   const bRow = (await db.select().from(tasks).where(eq(tasks.id, b.id))).at(0)!;
   assertTrue(
     bRow.status === "queued" || bRow.status === "running" || bRow.status === "failed",
@@ -420,7 +428,7 @@ await test("runGroup(parallel): queue 内 backlog 不被并行拉起,队外 back
   const d = await seedTask(p.id, g.id, { title: "d" }); // 队外独立任务
   await seedQueue([a.id, b.id, c.id]);
   await runGroup(g.id).catch(() => {});
-  await new Promise((r) => setTimeout(r, 100));
+  await leftBacklog(d.id);
   const row = async (tid: string) =>
     (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
   assertEq((await row(a.id)).status, "running", "head a 在跑,不该被动");
