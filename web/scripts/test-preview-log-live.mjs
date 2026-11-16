@@ -15,7 +15,7 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { checkPreviewServiceRegressions } from "./preview-service-review-checks.mjs";
 
 // 预览日志在「更多」里：这一页上「更多」里只有它，所以「更多」在 = 日志入口在。
-const MORE = ".free-workflow-toolbar .ui-menu-anchor > button";
+const MORE = ".free-workflow-toolbar .ui-icon-menu-anchor > button";
 const openPreviewLog = async (page) => {
   await page.locator(MORE).click();
   await page.getByTestId("preview-log-open").click();
