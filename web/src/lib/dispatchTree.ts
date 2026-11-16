@@ -61,6 +61,8 @@ export function dispatchedOf(tasks: readonly TaskListItem[], taskId: string): Ta
 export type DispatchFacts = {
   count: (taskId: string) => number;
   needsYou: (taskId: string) => boolean;
+  /** 名下整棵往下还有没归档的（中间那层归档了也算）：有就是父任务，行尾要有那句短语。 */
+  hasBelow: (taskId: string) => boolean;
 };
 
 /** 「派活人 id → 它直接派出去的那几条」，含归档的（能不能往下走只看边，见 isDispatchEdge）。 */
@@ -78,7 +80,15 @@ export function dispatchEdges(tasks: readonly TaskListItem[]): Map<string, TaskL
 export function dispatchFacts(tasks: readonly TaskListItem[]): DispatchFacts {
   const edges = dispatchEdges(tasks);
   const needs = new Map<string, boolean>();
+  const below = new Map<string, boolean>();
   return {
+    hasBelow: (taskId) => {
+      const known = below.get(taskId);
+      if (known !== undefined) return known;
+      const result = dispatchSubtree(edges, taskId).some((task) => !task.archived);
+      below.set(taskId, result);
+      return result;
+    },
     count: (taskId) => edges.get(taskId)?.filter((task) => !task.archived).length ?? 0,
     needsYou: (taskId) => {
       const known = needs.get(taskId);

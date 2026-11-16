@@ -60,19 +60,6 @@ type TaskRow = typeof tasks.$inferSelect;
 export type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 export type ReviewRoundRow = typeof freeReviewRounds.$inferSelect;
 
-/**
- * 驳回落下、被裁定、被新一轮审查取代：除了审查面板那一路（`task.review`），任务快照也要重发 ——
- * 「等你裁定」是任务列表上的一格后台事实（`Task.disputeOpen`，task-store.ts 现查），侧栏那颗点
- * 读它。它不在 tasks 表上，改它不动 updated_at，不补发的话侧栏要等下一次整表拉取才变。
- */
-async function announceDispute(taskId: string): Promise<void> {
-  bus.publish({ type: "task.review", taskId });
-  const { publishTaskUpdated } = await import("./task-store.js");
-  await publishTaskUpdated(taskId).catch((error: unknown) => {
-    console.warn(`[ash] 重发任务 ${taskId} 的快照失败（等裁定标记）:`, error);
-  });
-}
-
 /** 驳回理由的长度上限：够写满一页逐条反驳，又不至于把一整份 diff 灌进数据库。 */
 export const MAX_DISPUTE_REASON_LEN = 20_000;
 
@@ -300,7 +287,7 @@ export async function supersedeOpenDisputes(taskId: string, how: string): Promis
   const rounds = [...new Set(open.map(({ round }) => `第 ${round.round} 轮`))].join("、");
   await appendTaskTimeline(taskId,
     receiptLine(`执行者对${rounds}意见的驳回还没裁定，你${how}：这条驳回不再等裁定（驳回与报告原样留在审查记录里，没有替你选任何一档裁定）。`));
-  await announceDispute(taskId);
+  bus.publish({ type: "task.review", taskId });
 }
 
 /**
@@ -400,7 +387,7 @@ async function disputeFreeReviewHeld(
     hasDefer: !!deferReason,
     canceledAuto: !!canceledAuto,
   })));
-  await announceDispute(taskId);
+  bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };
 }
 
@@ -496,7 +483,7 @@ export async function upholdDisputeOn(taskId: string, round: ReviewRoundRow): Pr
   await appendTaskTimeline(taskId,
     noticeLine({ kind: "review.repair", source: "free", round: round.round },
       `按第 ${round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`));
-  await announceDispute(taskId);
+  bus.publish({ type: "task.review", taskId });
   return true;
 }
 
@@ -588,7 +575,7 @@ export async function resolveFreeReviewDispute(
       `${note ? "按你写的要点和报告修复" : "照报告修复"}。`)
     // 时间线只放摘要，全文留在那一轮的审查记录里（时间线不是正文的第二个家）。
     + (note ? `你写下的裁定要点：${summarize(note)}` : "")));
-  await announceDispute(taskId);
+  bus.publish({ type: "task.review", taskId });
   if (resolution === "withdrawn") await releaseHeldReservation(taskId);
   await noteRulingSettled(taskId);
 

@@ -58,7 +58,7 @@ export function useDispatchOpenState(): DispatchOpen {
 
 export const DispatchOpenProvider = DispatchOpenContext.Provider;
 
-const NO_FACTS: DispatchFacts = { count: () => 0, needsYou: () => false };
+const NO_FACTS: DispatchFacts = { count: () => 0, needsYou: () => false, hasBelow: () => false };
 const DispatchFactsContext = createContext<DispatchFacts>(NO_FACTS);
 export const DispatchFactsProvider = DispatchFactsContext.Provider;
 export const useDispatchFacts = () => useContext(DispatchFactsContext);
@@ -82,8 +82,9 @@ export function DispatchAwareRow(props: RowProps) {
   const kids = props.forest.children.get(props.task.id) ?? [];
   const count = facts.count(props.task.id);
   const needs = facts.needsYou(props.task.id);
-  // 名下直接的那几条全归档了、底下还有一条在等你：数是 0，照样得有那个变色的提示。
-  if (!kids.length && !count && !needs) {
+  // 是不是父任务看完整的派活关系：名下直接的那几条全归档了、更底下还有一条在跑 / 在等你，数是 0，
+  // 照样是父任务（行尾那句短语就是在说那一条）。
+  if (!kids.length && !facts.hasBelow(props.task.id)) {
     return (
       <TaskRow
         task={props.task}
