@@ -19,15 +19,7 @@ import { questionWaitOrigin } from "./task-wait-ownership.js";
 import type { QuestionRecord } from "@ash/shared/questions";
 import type { TaskRow } from "./task-store.js";
 
-export type TaskAnswerBody = QuestionAnswerInput & {
-  answer?: string;
-  attachments?: string[];
-  /**
-   * 在哪条任务的页面上答的：派它的那条任务（dispatched_by）里答派出的任务的提问时给。只决定那边的
-   * 会话里留不留「你」那颗气泡（dispatch-signals.ts）；答复照旧送给这条任务，不碰派它的那条。
-   */
-  via?: string;
-};
+export type TaskAnswerBody = QuestionAnswerInput & { answer?: string; attachments?: string[] };
 
 /** 普通答复路由和远程接力代理共用的提问 CAS + 续会话实现。 */
 export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBody): Promise<Response> {
@@ -57,7 +49,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof TypeError ? 400 : 409);
   }
-  const delivered = await deliverAnswer(c, task, record, { ...attachments, via: typeof b.via === "string" ? b.via : undefined });
+  const delivered = await deliverAnswer(c, task, record, attachments);
   return c.json(delivered.body, delivered.status);
 }
 
@@ -80,7 +72,6 @@ export async function answerRouteFor(task: TaskRow) {
 /** 认领这一问并把答复送进提问的那条会话。 */
 export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionRecord, options: {
   attachments?: string[];
-  via?: string;
 } = {}): Promise<{ status: 200 | 409; body: Record<string, unknown> }> {
   const taskId = task.id;
   const attachments = options.attachments?.length ? { attachments: options.attachments } : {};
@@ -97,7 +88,7 @@ export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionR
       pendingMessageRow({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id }));
   };
   try {
-    if (!await claimQuestionAnswer(task, record, onClaim, options.via)) {
+    if (!await claimQuestionAnswer(task, record, onClaim)) {
       return { status: 409, body: { error: "问题已更新或已被答复，本次未投递，请刷新后查看" } };
     }
   } catch (error) {

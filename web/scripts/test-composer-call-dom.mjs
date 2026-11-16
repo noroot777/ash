@@ -105,7 +105,7 @@ try {
 
   // ④ 叫着人时只能创建并运行。
   await page.getByRole("button", { name: /^启动设置：/ }).click();
-  for (const name of ["创建并排队", "仅创建", "一次性定时", "循环 Cron"]) {
+  for (const name of ["创建并排队", "仅创建", "一次性定时", "循环 Cron", "创建并等前置"]) {
     assert.equal(await page.getByRole("radio", { name: new RegExp(`^${name}`) }).isDisabled(), true, `叫着人时「${name}」置灰`);
   }
   await page.keyboard.press("Escape");

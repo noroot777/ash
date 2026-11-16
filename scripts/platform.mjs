@@ -7,7 +7,7 @@
 // 拿不到不该拖垮调用方。
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { request } from "node:http";
+import { Agent, request } from "node:http";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
@@ -334,9 +334,14 @@ export function isPidAlive(pid) {
  * 走 `node:http` 而不是 fetch 是**故意**的：本机控制面请求绝不能跟着 HTTP_PROXY /
  * ALL_PROXY 绕去代理。这个环境常驻代理却没设 NO_PROXY，服务重启的几秒空窗里代理
  * 会记住一次上游失败，于是 server 已经同秒监听、这里仍连续拿到失败并误报「没起来」。
- * `node:http` 不读任何代理环境变量，这条路是确定的（fetch 在 Node 24 起可以被
- * `NODE_USE_ENV_PROXY` 打开，不确定）。
+ *
+ * 光用 `node:http` 不够：Node 24 起 `NODE_USE_ENV_PROXY=1` 会把**全局 agent** 也换成读代理
+ * 变量的那个，`http.request` 照样被送去代理（本机环境就开着它）。于是请求一个没人监听的端口
+ * 拿到的是代理那头的超时 / 重置，而不是 ECONNREFUSED ——「端口安静」这条判据就永远不成立。
+ * 所以每次请求都显式带一个不认代理的 agent（DIRECT_AGENT），确定性不再取决于环境变量。
  */
+const DIRECT_AGENT = new Agent();
+
 export function localJson(port, path, timeoutMs = 2000, headers = undefined) {
   return localGet(port, path, timeoutMs, headers).then((r) => r.json);
 }
@@ -361,7 +366,7 @@ export function localGet(port, path, timeoutMs = 2000, headers = undefined) {
     const done = (value) => { if (!settled) { settled = true; resolve(value); } };
     let timedOut = false;
     const req = request(
-      { host: "127.0.0.1", port, path, timeout: timeoutMs, ...(headers ? { headers } : {}) },
+      { host: "127.0.0.1", port, path, timeout: timeoutMs, agent: DIRECT_AGENT, ...(headers ? { headers } : {}) },
       (res) => {
         let body = "";
         res.setEncoding("utf8");

@@ -17,7 +17,6 @@ import { monitorHoldPatch } from "./queue-monitor-hold.js";
 import { holdOwedPatch } from "./dispatch-hold-owed.js";
 import { heldFollowUpPatch } from "./follow-up-held.js";
 import { afterStatusLanded, stageQueueAdvance } from "./turn-release.js";
-import { announceDispatchSignalsTo, writeDispatchFailureReason } from "./dispatch-signals.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -110,12 +109,6 @@ export type SetTaskStatusOptions = {
    * turn-stall-verdict.ts 的 `clearStallFailure`)。
    */
   settleStallTurns?: { sessionId: string; turnStartedAt: string }[];
-  /**
-   * 落 failed 时这一轮为什么失败(一句人话)。派出的任务失败时,触发器跟这一笔同一条语句在
-   * dispatch_signals 里插一行,原因在同一个事务里写进那一行(dispatch-signals.ts)—— 派它的那条
-   * 任务里那颗气泡说得出为什么,而且不靠事后去猜「最新那一行是不是这一次」。非 failed 时忽略。
-   */
-  failedBecause?: string | null;
 };
 
 /** `alsoInTx` 在状态那一笔事务里能用的读写。 */
@@ -212,7 +205,6 @@ async function writeTaskStatus(
   const { written, advanceQueueId } = advance || opts?.alsoInTx
     ? await db.transaction(async (tx) => {
       const written = await tx.update(tasks).set(patch).where(where).returning({ id: tasks.id });
-      if (written.length && status === "failed") await writeDispatchFailureReason(tx, taskId, updatedAt, opts?.failedBecause);
       if (written.length) await opts?.alsoInTx?.(tx);
       return { written, advanceQueueId: written.length && advance ? await stageQueueAdvance(tx, taskId) : null };
     })
@@ -264,7 +256,6 @@ async function writeTaskStatus(
     .where(eq(sessions.taskId, taskId));
   const timing = runs.length ? runsTiming(runs) : {};
   bus.publish({ type: "task.status", taskId, status, updatedAt, startedAt, endedAt, ...timing });
-  if (status === "failed") announceDispatchSignalsTo(cur?.dispatchedBy);
   // 托盘上「在等什么」读的就是这些状态(pending-wait.ts):本任务和同队挂着待发送消息的,通知重拉。
   void import("./pending-wait.js").then(({ republishWaitsAround }) => republishWaitsAround(taskId))
     .catch((err) => console.error(`[ash] republishWaitsAround(${taskId}) failed:`, err));

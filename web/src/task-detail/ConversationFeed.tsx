@@ -357,7 +357,7 @@ export function ConversationFeed({
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
   /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
   onReuseInput?: (input: ReusableInput) => void;
-  /** 不在会话正文里、按时刻插进来的那几样（派出的任务来问的那颗气泡……，见 feedAsides.ts）。 */
+  /** 不在会话正文里、按时刻插进来的那几样（你派出去的那一句小灰字……，见 feedAsides.ts）。 */
   asides?: readonly FeedAside[];
 }) {
   const scroll = useRef<HTMLDivElement>(null);

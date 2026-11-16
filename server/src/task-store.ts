@@ -3,7 +3,9 @@ import { normalizeDuetConfig } from "@ash/shared/duet";
 import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { serializeQueueClaims } from "./queue-claim-chain.js";
-import { acceptGateRuns, agents, monitors, projects, queueItems, sessions, taskBackgroundRevisions, tasks } from "./db/schema.js";
+import { acceptGateRuns, agents, freeReviewRounds, freeReviewRuns, monitors, projects, queueItems, sessions, taskBackgroundRevisions, tasks } from "./db/schema.js";
+import { startDisputeOpenSync } from "./dispute-open-sync.js";
+import { awaitingRuling } from "./free-review-awaiting-ruling.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
@@ -147,6 +149,9 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
 });
 
+// 「等你裁定」那一格变了就重发快照：挂在列表投影旁边，加载即生效（dispute-open-sync.ts）。
+startDisputeOpenSync();
+
 // GET /tasks、task.created 和 task.updated 共用这一条序列化路径，保证派生的
 // executorLabel、执行时长以及 queueId/queuePosition 不会在事件里缺字段。
 export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
@@ -210,6 +215,11 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
         and newer.role = ${sessions.role}
         and coalesce(newer.turn_started_at, newer.started_at)
           > coalesce(${sessions.turnStartedAt}, ${sessions.startedAt})))`.mapWith(Boolean),
+    // 「执行者驳回了一轮审查意见，在等你裁定」。判据跟裁定闸、审查面板那张卡同一份（awaitingRuling）；
+    // 它变了由 dispute-open-sync.ts 统一重发快照（下面 startDisputeOpenSync）。
+    disputeOpen: sql<boolean>`exists(select 1 from ${freeReviewRounds}
+      inner join ${freeReviewRuns} on ${freeReviewRuns.id} = ${freeReviewRounds.runId}
+      where ${freeReviewRuns.taskId} = ${tasks.id} and ${awaitingRuling})`.mapWith(Boolean),
   }).from(tasks).leftJoin(taskBackgroundRevisions, eq(tasks.id, taskBackgroundRevisions.taskId))
     .where(inArray(tasks.id, rows.map(row => row.id)))).map(row => [row.taskId, row]));
   const { prerequisiteViews } = await import("./prerequisite-view.js");
@@ -226,6 +236,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       acceptGateRunning: background.get(r.id)?.acceptGateRunning ?? false,
       monitorRunning: background.get(r.id)?.monitorRunning ?? false,
       upstreamStalled: background.get(r.id)?.upstreamStalled ?? false,
+      disputeOpen: background.get(r.id)?.disputeOpen ?? false,
       ...(view ? { prerequisites: view } : {}),
     };
   });
@@ -432,7 +443,7 @@ export type QueueJoinWriter = Pick<typeof db, "select" | "insert">;
 
 const edgeTaskOf = (row: typeof tasks.$inferInsert & { id: string }): EdgeTask => ({
   id: row.id, projectId: row.projectId, title: row.title, mode: row.mode ?? "single", parentId: row.parentId ?? null,
-  reviewOf: row.reviewOf ?? null, status: row.status ?? "backlog", useWorktree: !!row.useWorktree,
+  reviewOf: row.reviewOf ?? null, status: row.status ?? "backlog", archived: !!row.archived, useWorktree: !!row.useWorktree,
   mergeTargetBranch: row.mergeTargetBranch ?? null, acceptedTargetBranch: row.acceptedTargetBranch ?? null,
   baseTaskId: row.baseTaskId ?? null, stage: row.stage ?? null,
 });

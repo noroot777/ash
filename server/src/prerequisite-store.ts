@@ -3,6 +3,8 @@
 // 一条边能不能成立，判据只在 `edgeProblem` 一处（建任务时逐条写的、建好之后加的都过它）：
 //   · 两头都是同项目里的普通任务（团队调度台、团队执行者、审查任务都不算）；
 //   · 下游还没开工：起点一旦按前置定下来，再加减前置就改不了它手里的代码了；
+//   · 前置没归档（已经合入的除外）：归档了的任务不会再往前走，建在它上面只会一直等。已经建好的边、前置后来才被
+//     归档的不在这里管，那是「在等的那条已归档」，由用户去处理（prerequisite-standing.ts）；
 //   · 不成环；
 //   · 两头都用 worktree 时，前置最终合入的分支要跟下游一致 —— 否则前置的代码进不了下游要合入的那条分支，
 //     下游的验收永远等不到它。已经合入的前置不受这条限制：它的代码已经在目标分支上了。
@@ -16,7 +18,7 @@ import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 /** 校验只用到的那几列：新建的行（还没落库）也能直接拿来判。 */
-export type EdgeTask = Pick<TaskRow, "id" | "projectId" | "title" | "mode" | "parentId" | "reviewOf" | "status"
+export type EdgeTask = Pick<TaskRow, "id" | "projectId" | "title" | "mode" | "parentId" | "reviewOf" | "status" | "archived"
   | "useWorktree" | "mergeTargetBranch" | "acceptedTargetBranch" | "baseTaskId" | "stage">;
 export type PrerequisiteEdge = { taskId: string; prerequisiteId: string };
 
@@ -47,13 +49,14 @@ export async function edgesAround(ids: string[]) {
     .orderBy(asc(taskPrerequisites.createdAt), asc(taskPrerequisites.prerequisiteId));
 }
 
-/** 团队调度台与团队执行者不参与前置：它们的「完成」和分支都不是普通任务那一套。 */
-async function teamMember(task: EdgeTask, known: Map<string, EdgeTask>): Promise<boolean> {
-  if (task.mode !== "single" || task.reviewOf) return true;
-  if (!task.parentId) return false;
+/** 团队调度台与团队执行者不参与前置：它们的「完成」和分支都不是普通任务那一套。返回它是哪一种（null = 普通任务）。 */
+async function nonOrdinaryKind(task: EdgeTask, known: Map<string, EdgeTask>): Promise<string | null> {
+  if (task.reviewOf) return "审查任务";
+  if (task.mode !== "single") return task.mode === "team" ? "团队任务" : "讨论任务";
+  if (!task.parentId) return null;
   const parent = known.get(task.parentId)
     ?? (await db.select().from(tasks).where(eq(tasks.id, task.parentId))).at(0);
-  return parent?.mode === "team";
+  return parent?.mode === "team" ? "团队执行者" : null;
 }
 
 /** 下游开工了没有：起点按前置定下来过、跑过任何一回合、或者已经不在待办上。 */
@@ -64,7 +67,7 @@ export async function hasLaunched(taskId: string, status?: string): Promise<bool
 }
 
 /** 从 `from` 沿「建在…上面」往前走，走得到 `target` 就说明加上 target → from 这条边会成环。 */
-function reaches(graph: Map<string, string[]>, from: string, target: string): boolean {
+export function reaches(graph: Map<string, string[]>, from: string, target: string): boolean {
   const seen = new Set<string>();
   const stack = [from];
   while (stack.length) {
@@ -77,7 +80,7 @@ function reaches(graph: Map<string, string[]>, from: string, target: string): bo
   return false;
 }
 
-async function graphWith(extra: PrerequisiteEdge[]): Promise<Map<string, string[]>> {
+export async function graphWith(extra: PrerequisiteEdge[]): Promise<Map<string, string[]>> {
   const graph = new Map<string, string[]>();
   for (const edge of [...await db.select().from(taskPrerequisites), ...extra]) {
     graph.set(edge.taskId, [...(graph.get(edge.taskId) ?? []), edge.prerequisiteId]);
@@ -113,36 +116,71 @@ export async function assertPrerequisiteEdges(edges: PrerequisiteEdge[], rows: E
     if (!prerequisite) throw new PrerequisiteError(`前置任务 ${edge.prerequisiteId} 不存在`, 404);
     if (!fresh.has(task.id) && await hasLaunched(task.id, task.status)) throw launchedError(task);
     const problem = await edgeProblem(task, prerequisite, known);
-    if (problem) throw new PrerequisiteError(problem);
-    if (reaches(await graphWith(accepted), prerequisite.id, task.id)) {
-      throw new PrerequisiteError(`${name(prerequisite)}已经直接或间接建在${name(task)}上面，再反过来就成环了`);
-    }
+    if (problem) throw new PrerequisiteError(problem.message);
+    if (reaches(await graphWith(accepted), prerequisite.id, task.id)) throw new PrerequisiteError(cycleProblem(task, prerequisite).message);
     accepted.push(edge);
   }
 }
 
-const launchedError = (task: EdgeTask) => new PrerequisiteError(`${name(task)}已经开工，起点定下来之后不能再改前置`, 409);
+export const launchedError = (task: Pick<EdgeTask, "id" | "title">) => new PrerequisiteError(`${name(task)}已经开工，起点定下来之后不能再改前置`, 409);
 
-async function edgeProblem(task: EdgeTask, prerequisite: EdgeTask, known: Map<string, EdgeTask>): Promise<string | null> {
-  if (task.id === prerequisite.id) return "任务不能建在自己上面";
-  if (task.projectId !== prerequisite.projectId) return `前置只能是同一项目里的任务，${name(prerequisite)}在别的项目里`;
-  if (await teamMember(task, known)) return `${name(task)}不是普通任务（团队、团队执行者、审查任务不能有前置）`;
-  if (await teamMember(prerequisite, known)) return `${name(prerequisite)}不是普通任务（团队、团队执行者、审查任务不能当前置）`;
-  if (task.baseTaskId) return `${name(task)}已经钉在父任务的分支上开工，不能再加前置`;
+/** 一条边不成立的原因：`message` 是拒绝时那一句；`brief` 是列候选时写在右边的短话（同一条判据，只是说得短）。 */
+export type EdgeProblem = { brief: string; message: string };
+const problemOf = (brief: string, message: string): EdgeProblem => ({ brief, message });
+
+export const cycleProblem = (task: EdgeTask, prerequisite: EdgeTask): EdgeProblem => problemOf(
+  `已建在${name(task)}上面，会成环`, `${name(prerequisite)}已经直接或间接建在${name(task)}上面，再反过来就成环了`);
+
+/** 下游这一头本身能不能有前置（跟选哪条前置无关）。 */
+export async function subjectProblem(task: EdgeTask, known: Map<string, EdgeTask>): Promise<EdgeProblem | null> {
+  const kind = await nonOrdinaryKind(task, known);
+  if (kind) return problemOf(`${kind}不能有前置`, `${name(task)}不是普通任务（团队、团队执行者、审查任务不能有前置）`);
+  if (task.baseTaskId) return problemOf("已钉在父任务分支上开工", `${name(task)}已经钉在父任务的分支上开工，不能再加前置`);
+  return null;
+}
+
+/** 一条边能不能成立的判据（下游已经开工另判，见 `assertPrerequisiteEdges`）。 */
+export async function edgeProblem(task: EdgeTask, prerequisite: EdgeTask, known: Map<string, EdgeTask>): Promise<EdgeProblem | null> {
+  if (task.id === prerequisite.id) return problemOf("就是它自己", "任务不能建在自己上面");
+  if (task.projectId !== prerequisite.projectId) {
+    return problemOf("在别的项目里", `前置只能是同一项目里的任务，${name(prerequisite)}在别的项目里`);
+  }
+  const subject = await subjectProblem(task, known);
+  if (subject) return subject;
+  if (prerequisite.archived && !isAcceptedStage(prerequisite.stage as TaskStage | null)) {
+    return problemOf("已归档", `${name(prerequisite)}已归档，不会再往前走，建在它上面只会一直等它`);
+  }
+  const kind = await nonOrdinaryKind(prerequisite, known);
+  if (kind) return problemOf(kind, `${name(prerequisite)}不是普通任务（团队、团队执行者、审查任务不能当前置）`);
   // 不用独立工作区的任务在项目目录里干活，拿不到还在前置分支上的代码（验收前它不在任何检出里）。
   if (!task.useWorktree && prerequisite.useWorktree && !isAcceptedStage(prerequisite.stage as TaskStage | null)) {
-    return `${name(task)}不用独立工作区，拿不到${name(prerequisite)}分支上的代码；让它用独立工作区，或等${name(prerequisite)}合入后再开工`;
+    return problemOf("代码在它的分支上，不用 worktree 拿不到",
+      `${name(task)}不用独立工作区，拿不到${name(prerequisite)}分支上的代码；让它用独立工作区，或等${name(prerequisite)}合入后再开工`);
   }
   if (task.useWorktree && prerequisite.useWorktree && !isAcceptedStage(prerequisite.stage as TaskStage | null)) {
     const mine = task.mergeTargetBranch;
-    const theirs = prerequisite.acceptedTargetBranch || prerequisite.mergeTargetBranch;
-    if (!theirs) return `${name(prerequisite)}的最终合入分支还没定，没法判断它的代码能不能进${name(task)}要合入的分支`;
+    const theirs = targetOf(prerequisite);
+    if (!theirs) {
+      return problemOf("合入分支还没定", `${name(prerequisite)}的最终合入分支还没定，没法判断它的代码能不能进${name(task)}要合入的分支`);
+    }
     if (mine && theirs !== mine) {
-      return `${name(prerequisite)}最终合入 ${theirs}，${name(task)}合入 ${mine}，它又还没合入：它的代码进不了 ${mine}，这条任务的验收会一直等它`;
+      return problemOf(`合入 ${theirs}，不是 ${mine}`,
+        `${name(prerequisite)}最终合入 ${theirs}，${name(task)}合入 ${mine}，它又还没合入：它的代码进不了 ${mine}，这条任务的验收会一直等它`);
     }
   }
   return null;
 }
+
+/**
+ * 下游的合入分支要跟着哪条前置走：用 worktree、还没合入的前置最终合入的那条（`edgeProblem` 比的就是它）。
+ * 已经合入的、不用 worktree 的前置不限制下游合入哪里，返回 null。
+ */
+export function prerequisiteTarget(task: EdgeTask, prerequisite: EdgeTask): string | null {
+  if (!task.useWorktree || !prerequisite.useWorktree || isAcceptedStage(prerequisite.stage as TaskStage | null)) return null;
+  return targetOf(prerequisite);
+}
+
+const targetOf = (task: EdgeTask) => task.acceptedTargetBranch || task.mergeTargetBranch || null;
 
 /** 落边（调用方先过 `assertPrerequisiteEdges`，两步包在同一次 `withPrerequisiteGraph` 里）。重复的忽略。`into` = 调用方的事务。 */
 export async function insertPrerequisiteEdges(edges: PrerequisiteEdge[], into: Pick<typeof db, "insert"> = db): Promise<void> {

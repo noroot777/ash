@@ -20,7 +20,7 @@ type TaskRow = typeof tasks.$inferSelect;
 const STANDING_TTL_MS = 1_500;
 const standingCache = new Map<string, { key: string; at: number; value: Promise<PrerequisiteStanding> }>();
 
-function cachedStanding(task: TaskRow): Promise<PrerequisiteStanding> {
+export function cachedStanding(task: TaskRow): Promise<PrerequisiteStanding> {
   const key = `${task.updatedAt}|${task.status}|${task.stage}|${task.archived}`;
   const hit = standingCache.get(task.id);
   if (hit && hit.key === key && Date.now() - hit.at < STANDING_TTL_MS) return hit.value;

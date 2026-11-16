@@ -3,7 +3,10 @@
 .agent-plate {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  /* 压在框里所有东西底下：框是独立的层叠上下文（下面那条 z-index），-1 只沉到框自己的底色
+     之上、框里一切内容之下。从前是 z-index:0 再把「框里其它东西」逐个抬到 1 —— 框顶那一行
+     （裁定、@ 了人之后那一行）没在名单里，水印就盖在那几颗键的字上。 */
+  z-index: -1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -40,9 +43,7 @@
   }
 }
 
-/* 水印是底色,框里其它东西一律压在它上面 */
-.task-reply-box textarea,
-.task-reply-actions {
-  position: relative;
-  z-index: 1;
-}
+/* 框（position: relative）自成一层：水印的 -1 才沉不出框外。取 1 而不是 isolation（=0 层）：
+   框里往上弹的浮层（底部胶囊的选模型）从前就跟着 .task-reply-actions 在第 1 层，跟会话区里
+   同层的东西比谁在上面，这一档不能降。 */
+.task-reply-box { z-index: 1; }

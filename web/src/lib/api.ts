@@ -46,6 +46,7 @@ import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, req
 import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
+import { prerequisiteApi } from "./apiPrerequisites.ts";
 import { taskMemoApi } from "./apiTaskMemos.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
@@ -215,9 +216,6 @@ export const api = {
     request(`/tasks/${id(taskId)}/actions`, { signal }),
   taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
     request(`/tasks/${id(taskId)}/question-history`, { signal }),
-  // 这条任务名下派出的任务来问 / 失败的那几刻（会话里那几颗气泡，server/src/dispatch-signals.ts）。
-  taskDispatchSignals: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").DispatchSignal[]> =>
-    request(`/tasks/${id(taskId)}/dispatch-signals`, { signal }),
   ...taskNoticeApi,
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>
@@ -229,10 +227,12 @@ export const api = {
   taskBodies: (taskIds: string[]): Promise<{ taskId: string; body: string }[]> =>
     request("/tasks/bodies", json("POST", { taskIds })),
   createTask: (
-    task: Partial<Task> & {
+    task: Partial<Omit<Task, "prerequisites">> & {
       projectId: string;
       title: string;
       attachments?: string[];
+      /** 建在哪几条任务上面（和任务同一次请求写进去，服务端判不成立就整条不建）。 */
+      prerequisites?: string[];
       // 挑哪条起手式；task.workflow 非空时它已经是就地改过的快照，服务端直接落库
       workflowId?: string | null;
     },
@@ -253,7 +253,8 @@ export const api = {
     const query = params.toString();
     return request(`/tasks/${id(taskId)}${query ? `?${query}` : ""}`, { method: "DELETE" });
   },
-  runTask: (taskId: string): Promise<unknown> =>
+  /** 有前置、前置没齐时不起跑：`waiting` 为真，记成等齐就起；`blocked` = 前置都齐了却开不了工。 */
+  runTask: (taskId: string): Promise<{ started?: boolean; waiting?: boolean; blocked?: boolean; reason?: string }> =>
     request(`/tasks/${id(taskId)}/run`, { method: "POST" }),
   // 「我现在动它，会不会被换掉执行器」。列表:duet 两位讨论者各占一格。
   // 多人模式的共享项目里才可能非空；自用模式恒为空数组。
@@ -283,9 +284,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/archive`, { method: "POST" }),
   unarchiveTask: (taskId: string): Promise<{ task: Task; restoreNote: string | null }> =>
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
-  // `via`：在派它的那条任务里答的（答复照旧送给 taskId 这一条，那边只多留一颗「你」的气泡）。
-  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput, via?: string): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(via ? { via } : {}) })),
+  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
   // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
   launchDispatchPlan: (taskId: string, input: import("@ash/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
     request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
@@ -626,6 +626,7 @@ export const api = {
 
   // 哨兵那一组住在 apiMonitors.ts（同样是为了守住 700 行），调用点写法不变。
   ...monitorApi,
+  ...prerequisiteApi,
   // 直连 LLM 供应商那一组住在 apiLlm.ts，同理。
   ...llmApi,
   // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。

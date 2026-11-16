@@ -142,4 +142,33 @@ for (const mounted of [true, false]) {
   assert.deepEqual(calls.notices, ["任务已创建，和 codex 的讨论开始了"]);
 }
 
+// 「创建并等前置」:建好后要求运行;前置没齐时服务端回「在等」,提示是「已建好、等谁站稳后自动开始」,
+// 不是「启动失败」;前置都齐了却开不了工时如实说原因;都站稳了就当场起跑。
+{
+  const realFetch = globalThis.fetch;
+  const runWith = async (body, waitingFor = () => ["前置A", "前置B"]) => {
+    const requests = [];
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url: String(url), method: init?.method });
+      return new Response(JSON.stringify(body), { status: 202, headers: { "content-type": "application/json" } });
+    };
+    try {
+      const { args, calls, store } = baseArgs({ launchMode: "prerequisites", waitingFor });
+      await settleCreatedTask(args);
+      return { calls, requests, store };
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  };
+  let { calls, requests, store } = await runWith({ started: false, waiting: true, blocked: false, reason: "在等前置：「前置A」在跑" });
+  assert.deepEqual(requests, [{ url: "/api/tasks/task-1/run", method: "POST" }], "建好之后要求运行");
+  assert.deepEqual(calls.notices, ["任务已建好，等「前置A」「前置B」站稳后自动开始"]);
+  assert.doesNotMatch(calls.notices[0], /失败/, "在等前置不是启动失败");
+  assert.equal(store.current, null, "建好了草稿照常丢");
+  ({ calls } = await runWith({ started: false, waiting: true, blocked: true, reason: "「前置A」和「前置B」的改动合不到一起" }));
+  assert.deepEqual(calls.notices, ["任务已建好，前置都站稳了，但还开不了工：「前置A」和「前置B」的改动合不到一起"]);
+  ({ calls } = await runWith({ started: true }));
+  assert.deepEqual(calls.notices, ["任务已创建并启动"], "前置都站稳了：当场起跑");
+}
+
 console.log("settle-created-task: all assertions passed");

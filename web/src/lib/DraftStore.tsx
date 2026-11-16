@@ -37,6 +37,10 @@ export type Draft = {
   // 切走再回来正文还在、条件却变回立即发送,按下去就提前发了(第 1 轮审查实测)。
   // 缺省 / null = 立即发送。
   later?: LaterDraft | null;
+  // 新建任务框的启动方式选了「创建并等前置」时，已选的前置（按选的先后）和这次的工作目录选择。跟 later 同一个
+  // 道理：正文还在、启动方式却变回立即运行，按下去就不等前置直接跑了。工作目录跟着一起存：前置能不能选要拿它判，
+  // 恢复时只回来一半（按项目默认判），本来能选的就会被当成失效去掉。缺省 / null = 没选这种启动方式。
+  prerequisites?: PrerequisiteDraft | null;
   // 正文的版本：正文每变一次就换一个（updateDraft 自动换），「改了再发」认领时也换。发送结算
   // 只在版本仍是提交那一刻的才清正文——字面相等不等于还是那一份：清掉再放回同一句，字一样，
   // 却是用户又选了一次（「改了再发」审查第 3 轮实测，迟到的确认把它清了）。
@@ -65,6 +69,8 @@ export type ComposerCreated = { task: Task; error: string };
 let textVersions = 0;
 /** 一个新的正文版本。只比相等，跳号无所谓。 */
 export const nextTextVersion = () => (textVersions += 1);
+
+export type PrerequisiteDraft = { ids: string[]; useWorktree: boolean };
 
 /** 选了「稍后」时的那份设置。时间过期、等的任务没了也原样留着,由用户改,不静默退回立即发。 */
 export type LaterDraft = { kind: "timed" | "after"; at: string; afterTaskId: string };
@@ -98,7 +104,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       let next = update(previous);
       if (next.text !== previous.text && next.textVersion === previous.textVersion) next = { ...next, textVersion: nextTextVersion() };
       if (!next.text && next.attachments.length === 0 && next.pendingUploads.length === 0
-        && next.noteIds.length === 0 && !next.screenshot && !next.later && !next.call && !next.created && !next.executor) {
+        && next.noteIds.length === 0 && !next.screenshot && !next.later && !next.call && !next.created && !next.executor && !next.prerequisites) {
         if (!(key in current)) return current;
         const { [key]: _removed, ...remaining } = current;
         return remaining;
@@ -109,6 +115,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
         && next.noteIds === previous.noteIds
         && next.screenshot === previous.screenshot
         && next.later === previous.later
+        && next.prerequisites === previous.prerequisites
         && next.call === previous.call
         && next.created === previous.created
         && next.executor === previous.executor
@@ -158,6 +165,8 @@ export type DraftHandle = {
   setNoteIds: Dispatch<SetStateAction<string[]>>;
   later: LaterDraft | null;
   setLater: Dispatch<SetStateAction<LaterDraft | null>>;
+  prerequisites: PrerequisiteDraft | null;
+  setPrerequisites: Dispatch<SetStateAction<PrerequisiteDraft | null>>;
   call: ReplyCall | null;
   setCall: Dispatch<SetStateAction<ReplyCall | null>>;
   executor: ComposerExecutorConfig | null;
@@ -234,6 +243,12 @@ export function useDraft(key: string): DraftHandle {
       later: typeof next === "function" ? next(current.later ?? null) : next,
     }));
   }, [key, updateDraft]);
+  const setPrerequisites = useCallback<Dispatch<SetStateAction<PrerequisiteDraft | null>>>((next) => {
+    updateDraft(key, (current) => ({
+      ...current,
+      prerequisites: typeof next === "function" ? next(current.prerequisites ?? null) : next,
+    }));
+  }, [key, updateDraft]);
   const setCall = useCallback<Dispatch<SetStateAction<ReplyCall | null>>>((next) => {
     updateDraft(key, (current) => ({
       ...current,
@@ -286,6 +301,8 @@ export function useDraft(key: string): DraftHandle {
     setNoteIds,
     later: draft.later ?? null,
     setLater,
+    prerequisites: draft.prerequisites ?? null,
+    setPrerequisites,
     call: draft.call ?? null,
     setCall,
     executor: draft.executor ?? null,

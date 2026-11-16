@@ -64,35 +64,31 @@ export function useQuestionTakeover(task: TaskListItem | null): QuestionTakeover
 const cardKey = (task: TaskListItem) => `${task.id}:${questionKey(task)}:${activeDispatchPlan(task)?.id ?? ""}`;
 
 /**
- * 卡本身，摆在宿主的回复框那一格（展开时框不挂，卡就占了那一格；收起时框在它下面）。
- *
- * 问的可以不是宿主自己：派它的那条任务里，名下派出的任务来问时这一格就是那一条的卡（`hostId` 是宿主，
- * 卡上那条不是它时题目前面写上是谁在问）。答复交回给调用方时带上卡对的是哪一条，由它送到那一条去。
+ * 卡本身，摆在宿主的回复框那一格（展开时框不挂，卡就占了那一格；收起时框在它下面）。卡只会是宿主
+ * 自己的：名下派出的任务来问、摆单，卡在那一条自己的页面上（左抽屉里打开它也是），不借这一格。
  */
-export function QuestionDock({ takeover, onAnswer, onLaunchPlan, hostId, hostDispatchTarget }: {
+export function QuestionDock({ takeover, onAnswer, onLaunchPlan, dispatchTarget }: {
   takeover: QuestionTakeover;
-  onAnswer: (answer: string, input: QuestionAnswerInput, asking: TaskListItem) => Promise<void>;
+  onAnswer: (answer: string, input: QuestionAnswerInput) => Promise<void>;
   /**
    * 这一问是一张派活单时「派出去」怎么做（DispatchPlanCard.tsx）。不给（远程任务页、团队页）就照普通提问
    * 画：清单那句话就是题目，回一句话就是发回去改。
    */
-  onLaunchPlan?: (input: DispatchLaunchInput, asking: TaskListItem) => Promise<void>;
-  hostId?: string;
-  /** 宿主「派出去的活交给谁」此刻的值（刚改、还在写回的也算）：卡对的是宿主自己时，没指明的行跟它走。 */
-  hostDispatchTarget?: DispatchRunTarget | null;
+  onLaunchPlan?: (input: DispatchLaunchInput) => Promise<void>;
+  /** 宿主「派出去的活交给谁」此刻的值（刚改、还在写回的也算）：没指明的行跟它走。 */
+  dispatchTarget?: DispatchRunTarget | null;
 }) {
   const { card, leaving } = takeover;
   if (!card) return null;
-  const asker = hostId && card.id !== hostId ? card.title || "未命名任务" : undefined;
   const plan = onLaunchPlan ? activeDispatchPlan(card) : null;
   return (
     <div className={`question-dock${leaving ? " is-leaving" : ""}`} inert={leaving ? true : undefined}>
       {plan && onLaunchPlan
-        ? <DispatchPlanCard key={cardKey(card)} plan={plan} asker={asker}
-          task={card.id === hostId && hostDispatchTarget !== undefined ? { ...card, dispatchTarget: hostDispatchTarget } : card}
-          onLaunch={(input) => onLaunchPlan(input, card)} onAnswer={(answer, input) => onAnswer(answer, input, card)}
+        ? <DispatchPlanCard key={cardKey(card)} plan={plan}
+          task={dispatchTarget !== undefined ? { ...card, dispatchTarget } : card}
+          onLaunch={onLaunchPlan} onAnswer={onAnswer}
           collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />
-        : <QuestionCard key={cardKey(card)} task={card} asker={asker} onAnswer={(answer, input) => onAnswer(answer, input, card)}
+        : <QuestionCard key={cardKey(card)} task={card} onAnswer={onAnswer}
           collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />}
     </div>
   );

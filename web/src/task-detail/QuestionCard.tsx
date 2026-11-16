@@ -24,8 +24,6 @@ const EMPTY: Draft = { picked: new Set(), note: "" };
 
 export type QuestionCardProps = {
   task: TaskListItem;
-  /** 问的是派出的那一条（不是这一页的任务）：它的标题，写在题目前面。题目和选项照它的原话。 */
-  asker?: string;
   onAnswer: (answer: string, input: QuestionAnswerInput) => Promise<void>;
   /** 收起：只剩题目一行，平常的回复框回到它下面（QuestionSlot 管）。已勾的、已写的都还在。 */
   collapsed: boolean;
@@ -62,7 +60,7 @@ function NoteField({ inputRef, value, disabled, label, placeholder, onChange, on
 /** 引在收起那一行里的题目：一行纯文字，长了交给样式截。 */
 const plain = (text: string) => text.replace(/\s+/g, " ").trim();
 
-export function QuestionCard({ task, asker, onAnswer, collapsed, onCollapsedChange }: QuestionCardProps) {
+export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: QuestionCardProps) {
   const items = questionItems(task);
   const multi = items.length > 1;
   const [drafts, setDrafts] = useState<Draft[]>(() => items.map(() => EMPTY));
@@ -143,12 +141,11 @@ export function QuestionCard({ task, asker, onAnswer, collapsed, onCollapsedChan
     }
   };
 
-  const label = asker ? `「${asker}」在等答复的问题` : "等待答复的问题";
   if (collapsed) {
     return (
-      <section className="question-card is-collapsed" aria-label={label}>
+      <section className="question-card is-collapsed" aria-label="等待答复的问题">
         <button type="button" className="question-card-peek" aria-expanded="false" onClick={() => onCollapsedChange(false)}>
-          <span>{asker && <b className="question-card-asker">「{asker}」问：</b>}{plain(item.question)}</span>
+          <span>{plain(item.question)}</span>
           <CaretDown size={13} weight="bold" aria-hidden="true" />
         </button>
       </section>
@@ -157,10 +154,9 @@ export function QuestionCard({ task, asker, onAnswer, collapsed, onCollapsedChan
 
   const sendLabel = sending ? "发送中…" : sent ? "已发送" : last ? "发送答复" : "下一题";
   return (
-    <section className="question-card" aria-label={label} aria-busy={sending} onKeyDown={onKeyDown}>
+    <section className="question-card" aria-label="等待答复的问题" aria-busy={sending} onKeyDown={onKeyDown}>
       <header className="question-card-head">
         <div className="question-card-prompt">
-          {asker && <p className="question-card-asker">「{asker}」问：</p>}
           {context && (
             <div
               className={`question-card-context${clampable && !contextOpen ? " is-clamped" : ""}`}

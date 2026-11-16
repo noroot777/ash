@@ -39,6 +39,8 @@ export async function settleCreatedTask(args: {
   onCreated: (task: Task, noteIds: string[], ownsComposer: boolean) => void;
   onTasksSynced?: (tasks: Task[]) => void;
   notify: (message: string) => void;
+  /** 「创建并等前置」：已选里还没站稳的那几条的名字（提示「等谁」用）。 */
+  waitingFor?: () => string[];
 }): Promise<boolean> {
   const { submitted } = args;
   let task = args.task;
@@ -71,8 +73,10 @@ export async function settleCreatedTask(args: {
     return true;
   }
   let launchError: unknown = null;
+  let held: Awaited<ReturnType<typeof api.runTask>> | null = null;
   try {
-    if (args.launchMode === "run") await (args.opening ? args.opening.start(task) : api.runTask(task.id));
+    if (args.launchMode === "run") held = await (args.opening ? args.opening.start(task).then(() => null) : api.runTask(task.id));
+    else if (args.launchMode === "prerequisites") held = await api.runTask(task.id);
     else if (args.launchMode === "once") {
       await api.setSchedule(task.id, { kind: "once", at: new Date(args.scheduleAt).toISOString(), cron: null });
     } else {
@@ -90,13 +94,26 @@ export async function settleCreatedTask(args: {
   }
   finishCreation();
   if (launchError) {
-    notify(`任务已创建，但${args.launchMode === "run" ? "启动" : "定时设置"}失败：${reason}`);
+    const what = args.launchMode === "run" || args.launchMode === "prerequisites" ? "启动" : "定时设置";
+    notify(`任务已创建，但${what}失败：${reason}`);
+    return true;
+  }
+  // 前置没齐时服务端不起跑、记成等齐就起：这是被接受了的请求，不是启动失败。
+  if (held?.waiting) {
+    if (held.blocked) {
+      notify(`任务已建好，前置都站稳了，但还开不了工：${held.reason ?? "原因未知"}`);
+      return true;
+    }
+    const names = (args.waitingFor?.() ?? []).map((title) => `「${title}」`).join("");
+    notify(`任务已建好，等${names || "前置"}站稳后自动开始`);
     return true;
   }
   notify(args.launchMode === "run"
     ? args.opening?.started ?? "任务已创建并启动"
-    : args.launchMode === "once"
-      ? "任务已创建，已设置一次性定时"
-      : "任务已创建，已设置 Cron 定时");
+    : args.launchMode === "prerequisites"
+      ? "任务已创建并启动"
+      : args.launchMode === "once"
+        ? "任务已创建，已设置一次性定时"
+        : "任务已创建，已设置 Cron 定时");
   return true;
 }

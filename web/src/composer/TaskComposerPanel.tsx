@@ -37,6 +37,7 @@ import { settleCreatedTask } from "./settleCreatedTask.ts";
 import { composerTaskInput } from "./composerTaskInput.ts";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { useQueueAfter } from "./useQueueAfter.tsx";
+import { usePrerequisitePicks } from "./usePrerequisitePicks.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import { useComposerExecutor } from "./useComposerExecutor.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
@@ -119,7 +120,7 @@ export function TaskComposerPanel({
   const [profilesError, setProfilesError] = useState<string | null>(null);
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
-  const [useWorktree, setUseWorktree] = useState(project.useWorktreeDefault);
+  const [ownUseWorktree, setOwnUseWorktree] = useState(project.useWorktreeDefault);
   // 项目那一份单独留着（而不是只拿它当初值）：工作目录弹层要能说出「你这次跟本项目的默认
   // 不一样」，并给一颗把本次选择写回项目的按钮 —— 否则用户只能每建一个任务翻一次开关。
   // 用本地 state 而不是直接读 project.useWorktreeDefault：`project` 由上层持有，写回之后
@@ -128,7 +129,15 @@ export function TaskComposerPanel({
   const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
   const { branches, base, setBase, automaticLabel, switching, isSwitching } = useComposerBranches(project, notify);
   const [busy, setBusy] = useState(false);
-  const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
+  // 「创建并等前置」记在草稿里（已选的前置跟正文同生共死）：草稿里有它，启动方式就是它。
+  const [otherLaunchMode, setLaunchMode] = useState<LaunchMode>("run");
+  const launchMode: LaunchMode = draft.prerequisites ? "prerequisites" : otherLaunchMode;
+  // 「创建并等前置」时工作目录跟已选的前置存在同一份草稿里：前置能不能选要拿它判，恢复时两样一起回来。
+  const useWorktree = draft.prerequisites ? draft.prerequisites.useWorktree : ownUseWorktree;
+  const setUseWorktree = (value: boolean) => {
+    setOwnUseWorktree(value);
+    draft.setPrerequisites((current) => current && { ...current, useWorktree: value });
+  };
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -136,6 +145,8 @@ export function TaskComposerPanel({
   const [slashDismissed, setSlashDismissed] = useState(false);
   // 「创建并排队」(launchMode="queue"):目标选择、分组联动、入队动作都在这个 hook 里。
   const queueAfter = useQueueAfter({ tasks, groups, projectId: project.id, notify, onFollowGroup: setGroupId });
+  const prerequisitePicks = usePrerequisitePicks({ draft, projectId: project.id, useWorktree: project.health.isRepo && useWorktree,
+    groups, enabled: launchMode === "prerequisites", notify });
   const uploads = useAttachments({
     value: draft.attachments,
     onChange: draft.setAttachments,
@@ -160,7 +171,7 @@ export function TaskComposerPanel({
     });
     // worktree 默认值住在项目行上（随 project 一起到手），不必等任何请求；换项目时这个
     // effect 会重跑，于是选择跟着新项目走而不是留着上一个项目的。
-    setUseWorktree(project.health.isRepo && project.useWorktreeDefault);
+    setOwnUseWorktree(project.health.isRepo && project.useWorktreeDefault);
     setWorktreeDefault(project.useWorktreeDefault);
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -273,7 +284,9 @@ export function TaskComposerPanel({
   const scheduleError = launchMode === "once" || launchMode === "cron"
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
-  const queueTargetError = launchMode === "queue" && !queueAfter.afterTaskId ? "选择要接在哪个任务之后" : null;
+  // 这一档自己没配好的那一句（排队没选目标、前置没选或有一条不成立）；还在核对前置时只挡发送、不当成错写出来。
+  const launchTargetError = launchMode === "queue" && !queueAfter.afterTaskId ? "选择要接在哪个任务之后"
+    : prerequisitePicks.blockReason;
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
   // 悄悄扔掉——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
@@ -288,17 +301,21 @@ export function TaskComposerPanel({
           : !profilesReady ? profilesError ? "执行器配置读取失败，暂不能发送" : "正在读取执行器配置"
             : noExecutor || executorBlocked ? availabilityMessage ?? "执行器不可用"
               : callsHost ? `叫着的 ${singleRun.agentType} 就是跑这条任务的执行器：换一个人叫，或者不叫了`
-                : scheduleError || queueTargetError || null;
+                : scheduleError || launchTargetError || null;
   const canSubmit = !blockReason && !busy;
 
   const changeLaunchMode = (next: LaunchMode) => {
-    setLaunchMode(next);
+    draft.setPrerequisites((current) => next === "prerequisites" ? current ?? { ids: [], useWorktree } : null);
+    if (next !== "prerequisites") {
+      setLaunchMode(next);
+      setOwnUseWorktree(useWorktree);
+    }
     if (next !== "queue") queueAfter.clear();
     if (next === "once" && !scheduleAt) setScheduleAt(defaultOnceTime());
   };
-  // 叫着人时第一回合就是他答这一句 / 这场讨论，当场起：排队、定时、仅创建都兑现不了，退回「创建并运行」。
+  // 叫着人时第一回合就是他答这一句 / 这场讨论，当场起：排队、定时、仅创建、等前置都兑现不了，退回「创建并运行」。
   const callHeld = call ? `叫着 ${call.target.agent} 时只能创建并运行` : null;
-  const unavailable = callHeld ? { queue: callHeld, create: callHeld, once: callHeld, cron: callHeld } : null;
+  const unavailable = callHeld ? { queue: callHeld, create: callHeld, once: callHeld, cron: callHeld, prerequisites: callHeld } : null;
   useEffect(() => {
     if (callHeld && launchMode !== "run") changeLaunchMode("run");
   }, [callHeld, launchMode]);
@@ -329,6 +346,8 @@ export function TaskComposerPanel({
       try {
         task = await api.createTask(composerTaskInput({
           project, body, fork, groupId, labels, attachments: allAttachments, useWorktree, base, run: singleRun,
+          prerequisites: launchMode === "prerequisites"
+            ? { ids: prerequisitePicks.picks, mergeTargetBranch: prerequisitePicks.mergeTargetBranch } : null,
         }));
       } catch (error) {
         notify(error instanceof Error ? error.message : "任务创建失败");
@@ -352,6 +371,7 @@ export function TaskComposerPanel({
       onCreated,
       onTasksSynced,
       notify,
+      waitingFor: prerequisitePicks.waitingTitles,
     });
     // 办成了、面板也归这次提交时上层会收起它；草稿已经换了（面板留着）或没办成，这里就得把按键放回来。
     if (mountedRef.current) setBusy(false);
@@ -408,6 +428,7 @@ export function TaskComposerPanel({
             automaticBaseLabel={automaticLabel}
             switchingBranch={switching}
             onBaseChange={setBase}
+            followPrerequisites={launchMode === "prerequisites" ? { mergeTarget: prerequisitePicks.mergeTargetBranch } : null}
             groups={groups}
             groupId={shown ? shown.groupId ?? "" : groupId}
             onGroupChange={changeGroup}
@@ -454,7 +475,7 @@ export function TaskComposerPanel({
                 busy={busy}
                 blocked={blockReason}
                 uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
-                error={scheduleError || queueTargetError}
+                error={scheduleError || (prerequisitePicks.checking ? null : launchTargetError)}
                 onModeChange={changeLaunchMode}
                 onAtChange={setScheduleAt}
                 onCronChange={setScheduleCron}
@@ -462,6 +483,7 @@ export function TaskComposerPanel({
                 queueSlot={queueAfter.slot}
                 unavailable={unavailable}
                 callText={call ? CALL_COPY[call.verb].send(call.target.agent) : null}
+                prerequisiteSlot={prerequisitePicks.slot}
               />
             </div>
           </footer>
