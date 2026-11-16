@@ -41,7 +41,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, lockHolderPid, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 import { parseRestartOptions, restartCommand, RESTART_USAGE } from "./restart-options.mjs";
@@ -86,12 +86,17 @@ const LOCK_FILE = `${process.env.ASH_DB ? resolve(process.env.ASH_DB) : join(REP
  *
  * **只认端口对得上的那把锁**:同一台机器上完全可能有别的 ash 守着别的 DB/端口
  * (test-restart 就起在 14317),不加这道判据就会去杀不相干的进程。
+ *
+ * **也只认号码上还是当初那个进程**:ash 没正常退出时锁会留在原地,号码随后被别的进程
+ * 复用 —— Windows 上复用得很快,重启过机器几乎必然撞上。只看「号码还活着」,就会把
+ * 那个陌生进程当成旧实例去杀:Windows 上被安全闸拦成「无法安全终止 Windows 旧实例」,
+ * 加 --force 则整树强杀一个无关程序;POSIX 上直接 SIGTERM 它。判据见 lockHolderPid。
+ * 认不出来就不当旧实例 —— 它真是的话还在端口上,端口那条线索照样抓得到,下面「端口
+ * 必须安静」那道闸也兜着。
  */
 function lockOwnerPid() {
   try {
-    const lock = JSON.parse(readFileSync(LOCK_FILE, "utf8"));
-    if (lock?.port !== PORT) return null;
-    return Number.isInteger(lock.pid) && lock.pid > 1 && isPidAlive(lock.pid) ? lock.pid : null;
+    return lockHolderPid(JSON.parse(readFileSync(LOCK_FILE, "utf8")), PORT);
   } catch {
     return null; // 没有锁文件 = 没有在跑的 ash,或者旧版本还不写锁
   }

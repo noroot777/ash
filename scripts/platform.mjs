@@ -107,14 +107,37 @@ function executable(full) {
 }
 
 /** 跑一段 PowerShell 拿 stdout（非 Windows 直接空串）。编码传参绕开引号雷区。 */
-export function powerShell(script) {
+export function powerShell(script, opts = {}) {
   if (!IS_WINDOWS) return "";
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   for (const exe of ["pwsh.exe", "powershell.exe"]) {
-    const out = capture(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]);
+    const out = capture(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], opts);
     if (out.trim()) return out;
   }
   return "";
+}
+
+/**
+ * 跑 windowsTerminateScript,**失败时也要 stdout**:那段脚本把失败原因打在
+ * `ASH_RESTART_ERROR` 上、退出码非 0,而 `capture` 遇到非 0 会把 stdout 一起吞掉。
+ * 带着结论(`ASH_RESTART_*`)回来的那一次就是答案,不再换另一个 PowerShell 重跑一刀。
+ */
+function powerShellTerminate(script) {
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  let last = "";
+  for (const exe of ["pwsh.exe", "powershell.exe"]) {
+    try {
+      last = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      });
+    } catch (error) {
+      last = String(error?.stdout ?? "");
+    }
+    if (last.includes("ASH_RESTART_")) return last;
+  }
+  return last;
 }
 
 /**
@@ -176,13 +199,15 @@ catch { netstat -ano | Select-String ':${port}\\s' | Select-String 'LISTENING' |
 export function listProcesses() {
   const rows = [];
   if (IS_WINDOWS) {
+    // 整张表连命令行一起回来,开着几十个浏览器/编辑器/agent 的机器上轻松过 1MB ——
+    // 超了 execFileSync 的默认上限就是 ENOBUFS,被读成「进程表查询失败」,重启当场拒杀。
     const out = powerShell(`$ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 $rows=@(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {
   $born = if ($null -ne $_.CreationDate) { $_.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString() } else { '' }
   [pscustomobject]@{pid=$_.ProcessId;ppid=$_.ParentProcessId;created=$born;command=$_.CommandLine}
 })
-[Console]::Out.WriteLine((ConvertTo-Json -InputObject $rows -Compress -Depth 3))`);
+[Console]::Out.WriteLine((ConvertTo-Json -InputObject $rows -Compress -Depth 3))`, { maxBuffer: 256 * 1024 * 1024 });
     try {
       const parsed = JSON.parse(out);
       if (!Array.isArray(parsed)) return [];
@@ -278,9 +303,71 @@ export function killServerProcesses(pids, protect = [], { force = false } = {}) 
   }
   const doomed = plan.targets.filter((row) => row.pid !== process.pid);
   if (!doomed.length) return "gone";
-  const result = powerShell(windowsTerminateScript(doomed));
-  if (!result.includes("ASH_RESTART_KILLED")) throw new Error("Windows 进程实例核验或终止失败");
+  const result = powerShellTerminate(windowsTerminateScript(doomed));
+  if (!result.includes("ASH_RESTART_KILLED")) {
+    const why = /ASH_RESTART_ERROR (.*)/.exec(result)?.[1]?.trim();
+    throw new Error(`Windows 进程实例核验或终止失败${why ? `(${why})` : ""}`);
+  }
   return "selective";
+}
+
+/**
+ * 「这个命令行是不是一个 ash server」。与 `server/src/singleton.ts` 的 `isAshServerCommand`
+ * 同一口径(那边是真相,两份不能合并的理由见本文件顶部):分隔符两种都认、可执行名
+ * 允许 `.exe`/`.cmd` 和前置引号。
+ */
+export function isAshServerCommand(command) {
+  if (!command) return false;
+  return (
+    /(?:^|[\s"'])(?:[^\s"']*[\\/])?(?:node|tsx)(?:\.exe|\.cmd)?(?:[\s"']|$)/i.test(command) &&
+    /(?:server[\\/])?(?:dist|src)[\\/]index\.(?:js|ts)\b/i.test(command)
+  );
+}
+
+/**
+ * 单个进程的 `{ command, startedAtMs }`。查不到(进程不在 / 命令不可用)返回 null;
+ * 命令行读不到给空串,启动时刻读不到给 null —— 「问不出来」不能说成某个值。
+ *
+ * Windows 取进程表那一行的 FILETIME;POSIX 用 `etime`(已运行时长,不带时区,
+ * macOS 与 procps 都有),精度到秒。
+ */
+export function inspectPid(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (IS_WINDOWS) {
+    const row = listProcesses().find((entry) => entry.pid === pid);
+    if (!row) return null;
+    const startedAtMs = /^\d+$/.test(row.created) ? Number(BigInt(row.created) / 10_000n) - 11_644_473_600_000 : null;
+    return { command: row.command, startedAtMs };
+  }
+  const m = /^\s*(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s+(.*)$/s.exec(
+    capture("ps", ["-ww", "-o", "etime=", "-o", "command=", "-p", String(pid)]).trim(),
+  );
+  if (!m) return null;
+  const [, days = "0", hours = "0", minutes, seconds, command] = m;
+  const elapsed = ((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds);
+  return { command, startedAtMs: Date.now() - elapsed * 1000 };
+}
+
+/** 跟 server 的 START_TIME_TOLERANCE_MS 同值:POSIX 的 etime 只到秒,锁里记的是 server 自报的时刻。 */
+const LOCK_START_TOLERANCE_MS = 10_000;
+
+/**
+ * 单实例锁里记的那个号码上,现在是不是**当初写锁的那个** ash server;是就返回号码。
+ *
+ * 判据跟 server 认陈旧锁同一套(`server/src/singleton.ts` 的 staleLockReason):端口对得上;
+ * 命令行读得到时必须是 ash server;锁里记了启动时刻时必须对得上。比不了启动时刻(旧版本的
+ * 锁没记)时命令行是唯一的身份证据,读不到就不认 —— 认错的代价是杀掉一个无关进程,
+ * 认漏的代价只是少一条线索。`inspect` 可注入只为回归测试。
+ */
+export function lockHolderPid(lock, port, inspect = inspectPid) {
+  if (lock?.port !== port || !Number.isInteger(lock.pid) || lock.pid <= 1) return null;
+  const info = inspect(lock.pid);
+  if (!info) return null;
+  if (info.command && !isAshServerCommand(info.command)) return null;
+  if (typeof lock.processStartedAtMs === "number" && info.startedAtMs !== null) {
+    return Math.abs(info.startedAtMs - lock.processStartedAtMs) <= LOCK_START_TOLERANCE_MS ? lock.pid : null;
+  }
+  return info.command ? lock.pid : null;
 }
 
 /**
