@@ -6,14 +6,14 @@
 // - 侧边栏铺开那一格「追问和备忘哪个新显示哪个」，以及悬浮卡里备忘排在追问下面；
 // - `?fetch=1`：**真 `useSidebarSpread` 自己去取**备忘摘要（不是静态数据）——「第 201 个
 //   任务也拿得到」只能这样测，批次是 hook 内部的事，从外面喂数据永远是绿的。
-import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, useEffect, useMemo, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { Info, NotePencil } from "@phosphor-icons/react";
 import type { TaskListItem, TaskFollowUp, TaskFollowUpList } from "@ash/shared";
 import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { MemoSelectionScope } from "../../src/task-memos/MemoSelectionScope.tsx";
-import { setMemoEditDraft } from "../../src/task-memos/taskMemoDrafts.ts";
+import { setMemoDraft, useTaskMemoDrafts } from "../../src/task-memos/taskMemoDrafts.ts";
 import { addTaskMemo, editTaskMemo, useTaskMemos } from "../../src/task-memos/taskMemoStore.ts";
 import { TaskMemoInspector } from "../../src/task-memos/TaskMemoInspector.tsx";
 import { useTaskMemoTab } from "../../src/task-memos/useTaskMemoTab.tsx";
@@ -51,13 +51,17 @@ const POKED = "第二版：绕开界面写进来的那几个字";
  */
 function DraftPoker() {
   const { memos } = useTaskMemos(TASK_ID);
+  const { edits } = useTaskMemoDrafts(TASK_ID);
   const first = memos.at(0);
   if (!first) return null;
   return (
     <button
       type="button"
       data-testid="poke-draft"
-      onClick={() => setMemoEditDraft(TASK_ID, first.id, POKED)}
+      onClick={() => setMemoDraft(TASK_ID, first.id, {
+        text: POKED,
+        attachments: edits[first.id]?.attachments ?? first.attachments,
+      })}
     >
       绕开界面改草稿
     </button>
@@ -84,8 +88,8 @@ function RaceWriter() {
       type="button"
       data-testid="race-edits"
       onClick={() => {
-        void editTaskMemo(TASK_ID, first.id, RACE_A).catch(() => undefined);
-        void editTaskMemo(TASK_ID, first.id, RACE_B).catch(() => undefined);
+        void editTaskMemo(TASK_ID, first.id, { body: RACE_A }).catch(() => undefined);
+        void editTaskMemo(TASK_ID, first.id, { body: RACE_B }).catch(() => undefined);
       }}
     >
       绕开界面连发两发编辑
@@ -169,7 +173,7 @@ function FetchFixture({ count }: { count: number }) {
         <SpreadRowCells task={tail} ctx={ctx} onOpen={() => undefined} />
       </div>
       {/* 真写一条进 store：这一下推动写入版本，那一列据此补发只问这个任务的摘要。 */}
-      <button type="button" data-testid="write-memo" onClick={() => void addTaskMemo(tail.id, FETCHED_MEMO)}>
+      <button type="button" data-testid="write-memo" onClick={() => void addTaskMemo(tail.id, { body: FETCHED_MEMO })}>
         写一条备忘
       </button>
     </main>
