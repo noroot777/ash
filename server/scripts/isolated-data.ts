@@ -10,4 +10,10 @@ import { join } from "node:path";
 const root = mkdtempSync(join(tmpdir(), "ash-test-data-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_DATA_DIR = join(root, "data");
-process.on("exit", () => rmSync(root, { recursive: true, force: true }));
+// 删目录之前必须先松开库(Windows 删不掉还开着的文件,理由见 tmp-db.ts)。退出回调里不能 await,
+// 所以趁现在把连接拿在手上 —— 用这份夹具的测试反正一加载产品模块就会开它;关库本身是同步的。
+const { dbClient } = await import("../src/db/index.js");
+process.on("exit", () => {
+  dbClient.close();
+  rmSync(root, { recursive: true, force: true });
+});
