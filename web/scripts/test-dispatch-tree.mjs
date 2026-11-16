@@ -234,6 +234,13 @@ const ids = (rows) => rows.map((row) => row.id);
     task("c", { dispatchedBy: "b", status: "paused", stage: null, question: "？" }),
   ]);
   assert.deepEqual(dispatchTally(buried, "a"), { count: 0, warn: true }, "直接那几条全归档了、底下还在等你：变色的 0（同侧栏）");
+  const quiet = dispatchFacts([
+    task("a"), task("b", { dispatchedBy: "a", archived: true }),
+    task("c", { dispatchedBy: "b", status: "running", stage: null }),
+    task("d"), task("e", { dispatchedBy: "d", archived: true }),
+  ]);
+  assert.deepEqual(dispatchTally(quiet, "a"), { count: 0, warn: false }, "更底下还有没归档的：照样带数（同侧栏认父任务的口径）");
+  assert.equal(dispatchTally(quiet, "d"), null, "名下全归档了、底下也没有：不带数");
 }
 
 // —— 任务头那句来源：切出来的那条仍写「来自任务」（它不是谁派的），派出去的写「派它的任务」。

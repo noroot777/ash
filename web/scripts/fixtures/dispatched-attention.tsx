@@ -151,7 +151,11 @@ function Fixture() {
     key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={drawers.dispatched.state.open} />,
   }));
   const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => descriptor.id === "dispatched"), [drawers.inspectors]);
-  const context = { dispatched: drawers.dispatched.state } as unknown as TaskInspectorContext;
+  // 右侧那一格要的那几样（这条任务、全量任务列表：格头的停 / 续、行尾名下的数都从它们算）。
+  const context = {
+    task: lead, allTasks: tasks, dispatched: drawers.dispatched.state,
+    onOpenTask: () => {}, onTaskUpdated: () => {}, notify: () => {},
+  } as unknown as TaskInspectorContext;
   return (
     <div style={{ height: "100vh", display: "flex", overflow: "hidden", background: "var(--canvas)" }}>
       <nav style={{ width: 300, flex: "0 0 auto", overflow: "auto" }}>
