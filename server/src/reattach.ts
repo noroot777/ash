@@ -207,7 +207,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         task.id, sess.role,
         restoredReview ? { run: restoredReview.id, round: restoredReview.round } : null,
       );
-      if (claimedTurn && task.activeTurnToken) bindTurnToken(task.id, task.activeTurnToken);
+      if (claimedTurn && task.activeTurnToken) bindTurnToken(task.id, task.activeTurnToken, sess.agentType);
       // 消费循环与它的 finally 要的是**这一次**接到的那个句柄(上面那个 let 为了让失败出口
       // 够得着它才声明在 try 外面,类型上是可空的)。
       const adoptedHandle = handle;

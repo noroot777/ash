@@ -169,21 +169,15 @@ try {
   await openComposer();
   const objective = page.locator(".composer-objective textarea");
   await objective.fill("切换聊天后，这份任务草稿仍然保留。");
-  const modeTabs = page.getByRole("tablist", { name: "任务模式" });
   assert.equal(await objective.count(), 1, "合并后只保留新版目标输入框");
   assert.equal(await page.locator(".studio-card").count(), 1);
-  assert.equal(await modeTabs.count(), 1, "新建面板只有一条模式栏");
-  // 模式栏只剩任务的三种模式；聊天、助手的入口在侧栏，不再外挂在这一栏里。
-  assert.deepEqual(await modeTabs.getByRole("tab").allInnerTexts(), ["单任务", "团队", "讨论"]);
-  for (const name of ["团队", "讨论", "单任务"]) {
-    await modeTabs.getByRole("tab", { name, exact: true }).click();
-    assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
-  }
+  // 新建只有一种任务：不再有「单任务 / 团队 / 讨论」那一排。
+  assert.equal(await page.getByRole("tablist", { name: "任务模式" }).count(), 0, "新建面板不再有模式栏");
   await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
   for (const width of [320, 390, 700, 900, 1440]) {
     await resizeViewport(page, { width, height: 1000 });
-    const tabBounds = await modeTabs.boundingBox();
-    assert(tabBounds && tabBounds.x >= 0 && tabBounds.x + tabBounds.width <= width, `${width}px 侧栏收起时模式栏不越界`);
+    const cardBounds = await page.locator(".studio-card").boundingBox();
+    assert(cardBounds && cardBounds.x >= 0 && cardBounds.x + cardBounds.width <= width, `${width}px 侧栏收起时输入卡不越界`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
   }
   await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();

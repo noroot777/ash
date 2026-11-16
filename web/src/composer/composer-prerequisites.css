@@ -1,0 +1,11 @@
+/* 新建面板启动设置浮层里的「建在谁上面」（composer/usePrerequisitePicks.tsx）：已选的一条一行，下面一颗下拉接着加。 */
+.send-key-body .composer-prerequisites { display: grid; gap: 6px; margin: 0; color: var(--muted); font-size: var(--t-xs); }
+.send-key-body .composer-prerequisites .ui-select-trigger { width: 100%; }
+.composer-prereq-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.composer-prereq-list > li { display: flex; min-width: 0; height: 28px; align-items: center; gap: 8px; border-radius: var(--r-sm); background: var(--overlay); padding: 0 3px 0 8px; color: var(--ink); }
+.composer-prereq-list > li > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-prereq-list > li > em { flex: 0 1 auto; min-width: 0; max-width: 55%; overflow: hidden; color: var(--muted); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.composer-prereq-list > li > em.is-attn { color: var(--amber); }
+.composer-prereq-list > li > button { display: grid; width: 22px; height: 22px; flex: none; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.composer-prereq-list > li > button:hover { background: var(--hover-bg); color: var(--ink); }
+.composer-prereq-list > li > button:focus-visible { outline: 2px solid var(--focus-soft); outline-offset: 0; }

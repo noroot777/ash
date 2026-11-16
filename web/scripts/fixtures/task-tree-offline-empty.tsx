@@ -79,7 +79,6 @@ function Ash() {
         spread={spread}
         onTask={() => {}}
         onRemoteTask={() => {}}
-        onTaskStarred={() => {}}
         onHandoffFinished={() => {}}
         outbound={{
           outboundCount: 1,

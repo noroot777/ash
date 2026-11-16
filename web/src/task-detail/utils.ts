@@ -69,7 +69,7 @@ export type TaskDurationInfo = {
   note?: string;
 };
 
-export function taskDurationInfo(task: Task, now = Date.now()): TaskDurationInfo | null {
+export function taskDurationInfo(task: Pick<Task, "startedAt" | "endedAt" | "activeMs" | "liveSince">, now = Date.now()): TaskDurationInfo | null {
   if (!task.startedAt) return null;
   const endTitle = task.endedAt ? `结束 ${formatInstant(task.endedAt)}` : undefined;
   if (typeof task.activeMs === "number") {

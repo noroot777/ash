@@ -3,14 +3,17 @@ import { createRoot } from "react-dom/client";
 import type { ProjectView, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import type { ScmOverview } from "../../src/lib/api.ts";
 import { ScheduledMessageTray } from "../../src/components/ScheduledMessageTray.tsx";
-import { AcceptanceWorkspaceCommit } from "../../src/review/AcceptanceWorkspaceCommit.tsx";
+import { WorkspaceCheck } from "../../src/acceptance/WorkspaceCheck.tsx";
 import { CreateProjectDialog } from "../../src/overlays/CreateProjectDialog.tsx";
 import { AuthContext } from "../../src/auth/authContext.ts";
-import { AcceptanceControls } from "../../src/team/TeamReviewWorkspace.tsx";
+import { AcceptanceControls } from "../../src/acceptance/AcceptanceControls.tsx";
 import "../../src/styles/global.css";
 
 const scenario = new URLSearchParams(location.search).get("scenario");
 let commitAttempts = 0;
+let scmReads = 0;
+const scmRequests: { method: string; path: string; body: string | null }[] = [];
+(window as unknown as { scmRequests: typeof scmRequests }).scmRequests = scmRequests;
 let overview: ScmOverview = {
   root: { path: "/workspace/demo/.worktrees/task", branch: "task", source: "worktree", gitRepo: true }, taskRunning: scenario === "running", readOnly: null,
   acceptanceCommitBlock: scenario === "shared" ? "此任务共用项目目录，不能一键全量提交。请到源代码管理中按文件选择提交。" : null,
@@ -27,6 +30,8 @@ const task = { id: "demo", projectId: "demo", title: "改进页面交互", body:
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.origin);
+  // 请求不出页面（这里就是假后端），测试要核对顺序和请求体只能读这份记录。
+  if (url.pathname.startsWith("/api/tasks/demo/scm")) scmRequests.push({ method: init?.method ?? "GET", path: url.pathname, body: init?.body ? String(init.body) : null });
   if (url.pathname === "/api/host") return response({ platform: "linux", sep: "/", home: "/workspace", canPickDirectory: false });
   if (url.pathname === "/api/projects/check") {
     const body = JSON.parse(String(init?.body ?? "{}"));
@@ -45,7 +50,21 @@ window.fetch = async (input, init) => {
     overview = { ...overview, status: { ...overview.status, staged: [], unstaged: [], untracked: [] } };
     return response({ ok: true, sha: "abc123456789", subject: "示例提交", status: overview.status });
   }
-  if (url.pathname === "/api/tasks/demo/scm") return response(overview);
+  if (url.pathname === "/api/tasks/demo/scm") {
+    scmReads += 1;
+    // unreadable：第一次读失败，之后照常。fresh：页面摆出来之后工作区里又多了一个文件——「提交」按下去
+    // 那一刻要再读一遍，提交的是那时的清单，不是 15 秒前摆在这一行上的。
+    if (scenario === "unreadable" && scmReads === 1) return response({ error: "读取工作区失败：磁盘忙" }, 500);
+    if (scenario === "fresh" && scmReads === 2) {
+      overview = { ...overview, status: { ...overview.status,
+        untracked: [...overview.status.untracked, { path: "late.txt", kind: "untracked", origPath: null, conflict: null, nested: false }] } };
+    }
+    return response(overview);
+  }
+  // 验收台另读的几份事实：自由工作流（没有审查链）。
+  if (url.pathname === "/api/tasks/demo/free-workflow") return response({ taskId: "demo", selectedReviewerId: null, stateVersion: 1,
+    workspaceHead: null, workspaceDirty: null, reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, override: null, runId: null },
+    reviewTurn: false, preview: { running: false }, executions: [], reviews: [] });
   if (url.pathname === "/api/tasks/demo/accept-gate") return response({ command: null, running: null, latest: null, basis: null });
   if (url.pathname === "/api/tasks/demo/accept") {
     task.stage = "accepted";
@@ -79,7 +98,7 @@ function Fixture() {
         onCancel={() => setNotice("仅取消这次哨兵唤醒，不停止哨兵")} />
       <h2>验收 · 未提交改动</h2>
       {scenario === "outcome" ? <AcceptanceControls task={acceptedTask} onTaskUpdated={setAcceptedTask} notify={setNotice} />
-        : <AcceptanceWorkspaceCommit task={{ id: "demo", projectId: "demo", title: "改进页面交互", updatedAt: "1" } as TaskListItem} notify={setNotice} disabled={scenario === "disabled"} />}
+        : <div role="list" aria-label="验收前提"><WorkspaceCheck task={{ id: "demo", projectId: "demo", title: "改进页面交互", updatedAt: "1" } as TaskListItem} notify={setNotice} disabled={scenario === "disabled"} /></div>}
       <p role="status" data-testid="result">{notice}</p>
       {dialog && <CreateProjectDialog projects={[]} onClose={() => setDialog(false)} notify={setNotice}
         onCreated={created => { setDialog(false); setNotice(`已创建项目：${created.name} · ${created.repoPath}`); }} />}

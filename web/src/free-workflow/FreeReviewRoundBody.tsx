@@ -1,23 +1,22 @@
-// 自由审查一轮点开后的正文：起止和检查类型一行、派审附言、报告、驳回与辩论的回放、证据截图。
-// 右侧「审查」格里就地铺开（ReviewInlineReport）；「工作流」格点一轮审查还是弹抽屉。
-import type { RefObject } from "react";
+// 自由审查一轮点开后的正文：起止和检查类型一行、派审附言、报告、证据截图；有驳回的那一轮，报告之后
+// 依次是驳回、辩论、裁定（FreeReviewDisputeRecord）。右侧「审议」格里就地铺开（ReviewInlineReport），
+// 读报告全文、「工作流」格点一轮审查，都是从左边推出来的那一屉（LeftDrawer）。
 import type { FreeReviewRound, FreeReviewRun } from "@ash/shared";
 import { Warning } from "@phosphor-icons/react";
-import { FoldedProse } from "../components/FoldedProse.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { MarkdownBody, ReviewReportBody } from "../components/MarkdownBody.tsx";
+import type { LeftDrawerEntry } from "../components/LeftDrawer.tsx";
+import { ReviewReportBody, ReviewReportFileView } from "../components/MarkdownBody.tsx";
 import { reportFileResolver } from "../components/markdownPolicy.ts";
 import { InspNote } from "../inspector/parts.tsx";
 import { api } from "../lib/api.ts";
-import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewInlineReport } from "../review/ReviewInlineReport.tsx";
 import { ReviewNote } from "../review/ReviewNote.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
-import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
-import { DISPUTE_PROSE_LABELS } from "./disputeCopy.ts";
+import { FreeReviewDisputeRecord, type DisputeRecordHost } from "./FreeReviewDisputeRecord.tsx";
 import {
-  checkModeText, disputeStateText, missingReportText, noVerdictSaidText, recurrenceText, reviewRoundLabel, timeRange,
+  checkModeText, missingReportText, noVerdictSaidText, recurrenceText, reviewRoundLabel, timeRange,
 } from "./freeReviewRounds.ts";
+import { useFreeWorkflowSnapshot } from "./useFreeWorkflowState.ts";
 
 const hasScreenshots = (round: FreeReviewRound) => round.screenshots.length > 0 || !!round.expiredScreenshots?.length;
 
@@ -33,8 +32,8 @@ function Screenshots({ taskId, run, round }: { taskId: string; run: FreeReviewRu
   );
 }
 
-/** 报告、驳回回放：就地和抽屉里是同一份。截图另放（抽屉里贴底边）。 */
-export function FreeReviewRoundContent({ taskId, run, round }: { taskId: string; run: FreeReviewRun; round: FreeReviewRound }) {
+/** 报告这一份：就地和左侧抽屉里是同一份。截图另放（抽屉里贴底边）。 */
+export function FreeReviewReportContent({ taskId, run, round }: { taskId: string; run: FreeReviewRun; round: FreeReviewRound }) {
   const recurrence = recurrenceText(round);
   return (
     <>
@@ -58,92 +57,76 @@ export function FreeReviewRoundContent({ taskId, run, round }: { taskId: string;
       {round.status !== "reviewing" && noVerdictSaidText(round.noVerdict) && (
         <p className="insp-faint review-round-said">{noVerdictSaidText(round.noVerdict)}</p>
       )}
-      {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、
-          理由是什么」。这里只回放，裁定入口在审查格上面那张卡上（一个动作一个入口）。 */}
-      {round.dispute && (
-        <div className="review-round-dispute">
-          <b>{disputeStateText(round)}</b>
-          {/* 和驳回卡同一个读法：那一句人话摆出来，几千字依据折起来（用户 2026-10-20
-              「一大篇文字都看不懂」）。老记录没有那一句，正文就默认摊开。 */}
-          {round.dispute.summary && <p className="review-round-dispute__gist">{round.dispute.summary}</p>}
-          {round.dispute.reason && (
-            <FoldedProse label={DISPUTE_PROSE_LABELS.reason} text={round.dispute.reason} open={!round.dispute.summary} />
-          )}
-          {round.dispute.deferReason && (
-            <FoldedProse label={DISPUTE_PROSE_LABELS.defer} text={round.dispute.deferReason} open={!round.dispute.summary} tone="defer" />
-          )}
-          {round.dispute.debates.map((debate, index) => (
-            <FreeReviewDebateTranscript
-              key={debate.id}
-              debate={debate}
-              ordinal={round.dispute!.debates.length > 1 ? index + 1 : null}
-            />
-          ))}
-          {/* 裁定要点是**用户**写的那一段，跟驳回理由和发言不是一回事，所以单独摆在最后
-              （时间顺序也在最后）。裁定完那张卡就收了，不在这儿留一份的话，用户自己写的
-              话下次打开就只剩时间线里那 60 字摘要。 */}
-          {round.dispute.resolutionNote && (
-            <div className="review-round-dispute__note">
-              <b>你裁定时写的要点</b>
-              <MarkdownBody text={round.dispute.resolutionNote} />
-            </div>
-          )}
-        </div>
-      )}
     </>
   );
 }
 
-function drawerTitle(run: FreeReviewRun, round: FreeReviewRound): string {
+function roundTitle(run: FreeReviewRun, round: FreeReviewRound): string {
   return run.target?.kind === "accepted_merge" ? `合并结果审查 · ${run.target.mergeCommit.slice(0, 8)}` : `第 ${round.round} 轮审查`;
 }
 
-function drawerSubtitle(run: FreeReviewRun, round: FreeReviewRound): string {
+function roundSubtitle(run: FreeReviewRun, round: FreeReviewRound): string {
   return `${reviewRoundLabel(round)} · ${run.reviewerName} · ${checkModeText(run)}`;
 }
 
-/** 抽屉里的那一份：标题、副标题、正文，截图贴底边。 */
-export function FreeReviewRoundDrawer({ taskId, run, round, anchorRef, keepOpenRef, onClose }: {
-  taskId: string;
-  run: FreeReviewRun;
-  round: FreeReviewRound;
-  anchorRef: RefObject<HTMLElement | null>;
-  keepOpenRef?: RefObject<HTMLElement | null>;
-  onClose: () => void;
-}) {
-  return (
-    <ImagePreviewGroup isolated>
-      <ReviewEvidenceDrawer
-        anchorRef={anchorRef}
-        keepOpenRef={keepOpenRef}
-        title={drawerTitle(run, round)}
-        subtitle={drawerSubtitle(run, round)}
-        onClose={onClose}
-        footer={hasScreenshots(round) ? <Screenshots taskId={taskId} run={run} round={round} /> : undefined}
-      >
-        <div className="review-round-body"><FreeReviewRoundContent taskId={taskId} run={run} round={round} /></div>
-      </ReviewEvidenceDrawer>
-    </ImagePreviewGroup>
-  );
+type RoundFallback = { run: FreeReviewRun; round: FreeReviewRound } | null;
+
+/** 抽屉里那一份跟着长：这个任务页上已经有人在拉审查状态（还在审的那一轮报告会落下来）。 */
+function useLiveRound(taskId: string, runId: string, round: number, fallback: RoundFallback): RoundFallback {
+  const live = useFreeWorkflowSnapshot(taskId);
+  const run = live?.reviews.find((item) => item.id === runId);
+  const hit = run?.rounds.find((item) => item.round === round);
+  return run && hit ? { run, round: hit } : fallback;
 }
 
-/** 「审查」格里就地铺开的那一份。 */
-export function FreeReviewRoundBody({ taskId, run, round, anchorRef }: {
+function LiveTitle({ taskId, runId, round, fallback }: { taskId: string; runId: string; round: number; fallback: RoundFallback }) {
+  const live = useLiveRound(taskId, runId, round, fallback);
+  return <>{live ? `${roundTitle(live.run, live.round)} · ${roundSubtitle(live.run, live.round)}` : `第 ${round} 轮审查`}</>;
+}
+
+function LiveReport({ taskId, runId, round, fallback }: { taskId: string; runId: string; round: number; fallback: RoundFallback }) {
+  const live = useLiveRound(taskId, runId, round, fallback);
+  // 手上没有这一轮的记录（只有报告的地址）：照报告文件本身读。
+  if (!live) return <ReviewReportFileView target={{ name: "report.md", url: api.freeReviewFileUrl(taskId, runId, round, "report.md") }} />;
+  return <div className="review-round-body"><FreeReviewReportContent taskId={taskId} run={live.run} round={live.round} /></div>;
+}
+
+function LiveShots({ taskId, runId, round, fallback }: { taskId: string; runId: string; round: number; fallback: RoundFallback }) {
+  const live = useLiveRound(taskId, runId, round, fallback);
+  return live ? <Screenshots taskId={taskId} run={live.run} round={live.round} /> : null;
+}
+
+/** 一轮自由审查的报告全文在左侧抽屉里的那一屉。`fallback` = 开的人手上那一份（没有就按地址读）。 */
+export function freeReportEntry(taskId: string, runId: string, round: number, fallback: RoundFallback): LeftDrawerEntry {
+  const props = { taskId, runId, round, fallback };
+  return {
+    key: `report:${taskId}:${runId}:${round}`,
+    kind: "审查报告",
+    title: <LiveTitle {...props} />,
+    ariaLabel: `审查报告：${fallback ? roundTitle(fallback.run, fallback.round) : `第 ${round} 轮审查`}`,
+    closeLabel: "关闭审查报告",
+    body: <ImagePreviewGroup isolated><LiveReport {...props} /></ImagePreviewGroup>,
+    // 截图贴底边：正文单独滚动，截图再多也不挤掉报告（没有截图时这一段是空的，不占地方）。
+    footer: <ImagePreviewGroup isolated><LiveShots {...props} /></ImagePreviewGroup>,
+  };
+}
+
+/** 「审议」格里就地铺开的那一份：报告，之后是驳回、辩论、裁定。 */
+export function FreeReviewRoundBody({ taskId, run, round, dispute }: {
   taskId: string;
   run: FreeReviewRun;
   round: FreeReviewRound;
-  /** 抽屉贴着谁的左边缘弹（右侧面板）。 */
-  anchorRef: RefObject<HTMLElement | null>;
+  /** 驳回、辩论、裁定那几段要的宿主信息（任务此刻的状态、去新任务）。不给就不摆那几段。 */
+  dispute?: DisputeRecordHost;
 }) {
   return (
     <ReviewInlineReport
       meta={`${checkModeText(run)} · ${timeRange(round.startedAt, round.endedAt)}`}
-      title={drawerTitle(run, round)}
-      subtitle={drawerSubtitle(run, round)}
-      anchorRef={anchorRef}
+      entry={freeReportEntry(taskId, run.id, round.round, { run, round })}
       screenshots={hasScreenshots(round) ? <Screenshots taskId={taskId} run={run} round={round} /> : null}
+      after={round.dispute && dispute ? <FreeReviewDisputeRecord run={run} round={round} host={dispute} /> : null}
     >
-      <FreeReviewRoundContent taskId={taskId} run={run} round={round} />
+      <FreeReviewReportContent taskId={taskId} run={run} round={round} />
     </ReviewInlineReport>
   );
 }

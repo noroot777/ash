@@ -25,6 +25,7 @@ import type { StallVerdictKind } from "./turn-stall-verdict.js";
 import { failedTurnLanding } from "./settle-landing.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
+import { settleDiscussionTurn } from "./discussion.js";
 import { settleTurnHandoffs } from "./monitor-turn-handoff.js";
 
 async function setStatus(
@@ -51,6 +52,8 @@ export async function afterSettlement(
   executionFailed = false,
 ) {
   try {
+    // 讨论的每一段（连同合稿）都是旁路回合，排在审查那一路之前收：交给它会被当成普通回合去消费预约、推审查链。
+    if (await settleDiscussionTurn(taskId, turnOk, role)) return;
     if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk, role, exitObserved, executionFailed)) return;
     await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
   } catch (error) {

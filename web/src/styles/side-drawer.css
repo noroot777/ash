@@ -36,3 +36,11 @@
   :root:not([data-motion="full"]) .side-drawer-scrim,
   :root:not([data-motion="full"]) .side-drawer-scrim.is-closing { animation: none; }
 }
+
+/* 读全文的那一屉（LeftDrawer.tsx）：正文单独滚动，截图证据贴底边。 */
+.side-drawer > .side-drawer__scroll { position: relative; min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 4px 24px 28px; }
+.side-drawer > .side-drawer__footer { flex: none; max-height: 40%; overflow-y: auto; border-top: .5px solid var(--line); padding: 10px 24px 12px; }
+@media (max-width: 760px) {
+  .side-drawer > .side-drawer__scroll, .side-drawer > .side-drawer__footer { padding-left: 16px; padding-right: 16px; }
+}
+.side-drawer > .side-drawer__footer:empty { display: none; }

@@ -1,5 +1,5 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TreeStructure } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { InspButton, InspNone } from "../inspector/parts.tsx";
@@ -10,6 +10,8 @@ import { ScmInspector } from "../scm/ScmInspector.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import type { Notify } from "../lib/notify.ts";
 import { TaskInspector } from "./TaskInspector.tsx";
+import { DispatchedInspector } from "./dispatched/DispatchedInspector.tsx";
+import type { DispatchedState } from "./dispatched/useDispatched.tsx";
 import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
@@ -26,6 +28,8 @@ import type { ReviewRetryAction } from "./turnRetry.ts";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
+  /** 「派出的任务」那一格：名下有谁、左边抽屉开着谁（useDispatched）。 */
+  dispatched: DispatchedState;
   /** 哨兵那一格的数据源；由 `useMonitorInspector` 提上来，面板开不开都在拉。 */
   monitors: TaskMonitorsState;
   task: Task;
@@ -85,7 +89,7 @@ function MonitorInspectorPane({ context }: { context: TaskInspectorContext }) {
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
-// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
+// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 派出的任务 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 //
 // 子智能体和哨兵这两格的 `defaultOpen` 是动态的（见 inspector/usedTabs.tsx）：全部面板一直
@@ -165,6 +169,27 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => <NativeWorkInspector {...context.nativeWork} />,
   },
   {
+    // 这条任务派出去的那几条（侧栏里收在它下面的同一批）。同子智能体「用过才浮现」：开合由
+    // useTaskInspectorStack 按「名下有没有」翻，图标上带个数。点一行在左边抽屉里打开那条任务。
+    id: "dispatched",
+    cluster: 3,
+    title: "派出的任务",
+    icon: <TreeStructure size={14} />,
+    shortcut: "d",
+    render: (context) => (
+      <DispatchedInspector
+        task={context.task}
+        allTasks={context.allTasks}
+        dispatched={context.dispatched.tasks}
+        openId={context.dispatched.openId}
+        onOpen={context.dispatched.open}
+        onOpenTask={context.onOpenTask}
+        onTaskUpdated={context.onTaskUpdated}
+        notify={context.notify}
+      />
+    ),
+  },
+  {
     // 备忘跟旁边两样东西的分界见 shared/src/task-memo.ts：它不进任何 prompt，所以**不走
     // 「用过才浮现」**——手写一条的入口只在这一格里，藏起来等于这条路只能从会话选文进。
     id: "memos",
@@ -198,7 +223,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   {
     id: "review",
     cluster: 3,
-    title: "审查",
+    title: "审议",
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
     shortcut: "r",

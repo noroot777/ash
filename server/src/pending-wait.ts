@@ -22,9 +22,12 @@ async function waitOf(m: Row & AfterGate, t: TaskRow | null, at: Date): Promise<
   const { verdict, facts } = await deliveryVerdictOf({ ...m, execution: pendingExecutionIntent(m, t) }, t, at);
   if (verdict.action !== "wait" || !t) return null;
   if (!isDueForDelivery(m, at)) return { kind: "schedule" };
+  // 讨论期间每一段都是一轮,「等这一轮结束」会说错:它要等整场说完、合稿写完。
+  if (facts.discussing) return { kind: "discussion" };
   // 次序跟 deliveryVerdict 一致:先看本任务这一轮,再看队列与分组。
   if (t.mode === "single" && t.status === "running") return { kind: "turn" };
   if (facts.groupPaused) return { kind: "groupPaused" };
+  if (facts.dispatchHold) return { kind: "dispatchHeld", by: { id: facts.dispatchHold.byTaskId, title: facts.dispatchHold.byTitle } };
   if (facts.queueBlocking.length) return { kind: "queue", blockers: facts.queueBlocking };
   // queued = 已被拉起、还没 spawn:也是在等本任务这一轮。
   if (t.mode === "single" && t.status === "queued") return { kind: "turn" };

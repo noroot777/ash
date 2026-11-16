@@ -47,6 +47,8 @@ export type ActionFacts = {
    * 只读预判，原因同一句。null = 没有。
    */
   checkpointBlock: string | null;
+  /** 挂着还没兑现的开工请求（等前置站齐 / 等同组名额 / 等放开，launch-request.ts）：停止能撤回它。 */
+  prerequisiteRequest?: boolean;
   /** 团队任务才有：名下每个执行者的状态、它所在的那一批（分组）有没有被停下。停止全组看整个团队。 */
   team: { workers: { status: string; groupPaused: boolean }[] } | null;
 };
@@ -145,7 +147,7 @@ export function stopVerdict(f: ActionFacts): Verdict {
   const request = task.queueAdvanceRequest;
   const pendingAdvance = !!request && request.resumePromptGeneration === task.resumePromptGeneration
     && ["paused", "backlog", "queued", "running"].includes(task.status);
-  if (pendingAdvance || f.liveProcess || live(task.status)) return OK;
+  if (pendingAdvance || f.prerequisiteRequest || f.liveProcess || live(task.status)) return OK;
   return hide("任务没有在运行的进程可停止", { status: task.status });
 }
 

@@ -1,5 +1,6 @@
 import type { DetectedPreviewService, PreviewServiceState } from "@ash/shared/preview";
 import type {
+  DiscussionStartInput,
   BranchPlanView,
   FamilyAcceptanceResult,
   AgentExecutorProfile,
@@ -34,11 +35,9 @@ import type {
   TaskListItem,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
-  TeamPreset,
-  TeamPresetConfig,
 } from "@ash/shared";
 
-import type { AcceptGateCancelResult, AcceptGateView } from "@ash/shared/accept-gate";
+import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult } from "@ash/shared/accept-gate";
 import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
@@ -47,6 +46,7 @@ import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, req
 import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
+import { prerequisiteApi } from "./apiPrerequisites.ts";
 import { taskMemoApi } from "./apiTaskMemos.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
@@ -197,6 +197,11 @@ export const api = {
     request(`/groups/${id(groupId)}/run`, { method: "POST" }),
   pauseGroup: (groupId: string): Promise<Group> =>
     request(`/groups/${id(groupId)}/pause`, { method: "POST" }),
+  // 「派出的任务」格头那一对键：这条任务名下全部停下 / 接着跑（server/src/dispatch-hold.ts）。
+  holdDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/hold`, { method: "POST" }),
+  releaseDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/release`, { method: "POST" }),
   createTasksBatch: (
     groupId: string,
     body: BatchCreateTasksBody,
@@ -205,7 +210,7 @@ export const api = {
 
   // 列表不带正文（见 shared 的 TaskListItem）；正文走 api.task(id)。
   tasks: (signal?: AbortSignal): Promise<TaskListItem[]> => request("/tasks", { signal }),
-  task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
+  task: (taskId: string, signal?: AbortSignal): Promise<Task> => request(`/tasks/${id(taskId)}`, { signal }),
   // 任务「此刻能做什么」（shared/src/task-actions.ts）：只经 useTaskActions 取，别处不直接调。
   taskActions: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").TaskActions> =>
     request(`/tasks/${id(taskId)}/actions`, { signal }),
@@ -222,10 +227,12 @@ export const api = {
   taskBodies: (taskIds: string[]): Promise<{ taskId: string; body: string }[]> =>
     request("/tasks/bodies", json("POST", { taskIds })),
   createTask: (
-    task: Partial<Task> & {
+    task: Partial<Omit<Task, "prerequisites">> & {
       projectId: string;
       title: string;
       attachments?: string[];
+      /** 建在哪几条任务上面（和任务同一次请求写进去，服务端判不成立就整条不建）。 */
+      prerequisites?: string[];
       // 挑哪条起手式；task.workflow 非空时它已经是就地改过的快照，服务端直接落库
       workflowId?: string | null;
     },
@@ -246,7 +253,8 @@ export const api = {
     const query = params.toString();
     return request(`/tasks/${id(taskId)}${query ? `?${query}` : ""}`, { method: "DELETE" });
   },
-  runTask: (taskId: string): Promise<unknown> =>
+  /** 有前置、前置没齐时不起跑：`waiting` 为真，记成等齐就起；`blocked` = 前置都齐了却开不了工。 */
+  runTask: (taskId: string): Promise<{ started?: boolean; waiting?: boolean; blocked?: boolean; reason?: string }> =>
     request(`/tasks/${id(taskId)}/run`, { method: "POST" }),
   // 「我现在动它，会不会被换掉执行器」。列表:duet 两位讨论者各占一格。
   // 多人模式的共享项目里才可能非空；自用模式恒为空数组。
@@ -278,6 +286,12 @@ export const api = {
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
   answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
+  // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
+  launchDispatchPlan: (taskId: string, input: import("@ash/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
+    request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
+  // 「派出去的活交给谁」：null = 同这里。
+  setDispatchTarget: (taskId: string, target: import("@ash/shared/dispatch-plan").DispatchRunTarget | null): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatch-target`, json("PUT", { target })),
   replyTask: (
     taskId: string,
     text: string,
@@ -368,6 +382,9 @@ export const api = {
     target: FreeReviewDisputeTarget,
   ): Promise<{ debateId: string; state: FreeWorkflowApiState }> =>
     request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges, target })),
+  // 回复框里 @ 了人、选「讨论」：各方来回几段，说完由这条任务的执行器在主会话里写合稿。
+  startDiscussion: (taskId: string, input: DiscussionStartInput): Promise<{ discussionId: string; state: FreeWorkflowApiState }> =>
+    request(`/tasks/${id(taskId)}/discussions`, json("POST", input)),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   adjustFreeReviewRounds: (taskId: string, input: FreeReviewRoundsInput): Promise<FreeWorkflowApiState> =>
@@ -418,6 +435,9 @@ export const api = {
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
   },
+  // 确认层点确认时记下这一次怎么勾的（按人按项目；「提交」写回项目设置，要管理权限）。
+  rememberAccept: (projectId: string, write: AcceptMemoryWrite, signal?: AbortSignal): Promise<AcceptMemoryWriteResult> =>
+    request(`/accept-memory/${id(projectId)}`, { ...json("PUT", write), signal }),
   acceptGate: (taskId: string, signal?: AbortSignal): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`, { signal }),
   // 整份日志单独取：状态接口每隔几秒拉一次，几十 MB 的回归输出不能搭在它上面。
   // runId 指定某一次（已验收那张回执看的是**凭据那一次**，不是最近一次）。
@@ -436,6 +456,9 @@ export const api = {
   // 与再推一把（agent 那一轮跑完了还没修好）。
   rehandOffAcceptGate: (taskId: string): Promise<{ handedOff: true; gate: AcceptGateView }> =>
     request(`/tasks/${id(taskId)}/accept-gate/handoff`, json("POST", {})),
+  // 合并预览撞了冲突：不等验收，直接把冲突交给任务去解（与验收撞冲突时交的是同一份）。
+  handOffGateConflict: (taskId: string): Promise<{ ok: true; message: string }> =>
+    request(`/tasks/${id(taskId)}/accept-gate/conflict-handoff`, json("POST", {})),
   branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
   releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
   changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),
@@ -559,15 +582,6 @@ export const api = {
   restoreWorkflow: (workflowId: string): Promise<WorkflowItem> =>
     request(`/workflows/${id(workflowId)}/restore`, { method: "POST" }),
 
-  teamPresets: (): Promise<TeamPreset[]> => request("/team-presets"),  createTeamPreset: (name: string, config: TeamPresetConfig): Promise<TeamPreset> =>
-    request("/team-presets", json("POST", { name, config })),
-  patchTeamPreset: (
-    presetId: string,
-    patch: { name?: string; config?: TeamPresetConfig },
-  ): Promise<TeamPreset> => request(`/team-presets/${id(presetId)}`, json("PATCH", patch)),
-  deleteTeamPreset: (presetId: string): Promise<{ deleted: true }> =>
-    request(`/team-presets/${id(presetId)}`, { method: "DELETE" }),
-
   // signal：会话列表是排成一条链读的（见 lib/useConversation.ts），一发卡住就轮不到
   // 后面的，所以调用方要能给它设上限、也能在用户手动重读时把它掐掉。
   sessions: (taskId: string, signal?: AbortSignal): Promise<Session[]> =>
@@ -612,6 +626,7 @@ export const api = {
 
   // 哨兵那一组住在 apiMonitors.ts（同样是为了守住 700 行），调用点写法不变。
   ...monitorApi,
+  ...prerequisiteApi,
   // 直连 LLM 供应商那一组住在 apiLlm.ts，同理。
   ...llmApi,
   // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。

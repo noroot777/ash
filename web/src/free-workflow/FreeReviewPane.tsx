@@ -1,6 +1,6 @@
-// 右侧「审查」格（自由工作流）：最上面一句结论配一个主动作，其余收进「更多」（只剩一项时
-// 直接摆出来）；下面是驳回卡（有待你裁定的驳回时）、各轮一行一条的审查记录、合并结果审查。
-// 点一行就在它底下铺开报告。派审、预约、调整预约走的是回复框那颗键同一张对话框
+// 右侧「审议」格（自由工作流）：最上面一句结论配一个主动作，其余收进「更多」（只剩一项时
+// 直接摆出来）；下面是各轮一行一条的审查记录（这条任务上的讨论也在这一列里，按开始时间排）、合并结果审查。点一行就在它底下铺开报告，有驳回的
+// 那一轮报告之后是驳回、辩论、裁定（FreeReviewDisputeRecord）——这里只留记录，裁定在回复框顶上那一行。派审、预约、调整预约走的是回复框那颗键同一张对话框
 // （FreeReviewDialog），叫法也取自同一份判据（freeReviewCopy 的 freeReviewView）。
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FreeReviewRound, FreeReviewRun, Task } from "@ash/shared";
@@ -12,14 +12,14 @@ import { InspNone, InspRecord, InspSec } from "../inspector/parts.tsx";
 import { api } from "../lib/api.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
-import { FreeReviewDisputeCard } from "./FreeReviewDisputeCard.tsx";
 import { useFreeReviewRepair } from "./FreeReviewRepairButton.tsx";
 import { FreeReviewRoundBody } from "./FreeReviewRoundBody.tsx";
 import { FreeReviewRoundsDialog } from "./FreeReviewRoundsDialog.tsx";
-import { freeReviewView } from "./freeReviewCopy.ts";
+import { freeReviewView, reviewLocked } from "./freeReviewCopy.ts";
 import { deferOnly, durationText, noVerdictText, reviewKey, reviewRoundLabel, reviewRoundTone } from "./freeReviewRounds.ts";
 import type { ReviewRetryAction } from "../task-detail/turnRetry.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
+import { FreeReviewDiscussion, discussionKey } from "./FreeReviewDiscussion.tsx";
 
 interface Conclusion {
   tone: InspTone;
@@ -38,6 +38,7 @@ function entries(runs: FreeReviewRun[]): Entry[] {
 
 /** 没找到的是哪一条：提示里说出来，连着点了几处时分得清是哪一处没找到。 */
 function missedReview(params: InspectorRequest): string {
+  if (typeof params.discussionId === "string") return "那一场讨论";
   const target = reviewTargetOf(params);
   if (target.source === "merge") return "那一场合并结果审查";
   return target.round == null ? "那一轮审查" : `第 ${target.round} 轮审查`;
@@ -55,15 +56,19 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
   const state = free.state;
   const rootRef = useRef<HTMLDivElement>(null);
   const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  /** 展开之后要滚到的那一处（那一轮，或那一轮下面的辩论那一段）。 */
+  const [scrollTo, setScrollTo] = useState<{ record: string; debate: string | null } | null>(null);
   // 打开时定下是哪一扇（同回复框那颗键）：审查在跑 = 调轮数，否则 = 派审/预约。
   const [dialog, setDialog] = useState<"rounds" | "review" | "post" | null>(null);
   const [postRepairBusy, setPostRepairBusy] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  /** 刚从会话里那颗讨论气泡点过来的那一条：亮一下就退掉。 */
+  const [here, setHere] = useState<string | null>(null);
 
   const all = useMemo(() => entries(state?.reviews ?? []), [state]);
   const workspace = all.filter((entry) => entry.run.target?.kind !== "accepted_merge");
   const postMerge = all.filter((entry) => entry.run.target?.kind === "accepted_merge");
+  const discussions = useMemo(() => state?.discussions ?? [], [state]);
   const postRuns = state?.reviews.filter((run) => run.target?.kind === "accepted_merge") ?? [];
   const latestPost = postRuns[0];
   const latestPostRound = latestPost?.rounds.at(-1);
@@ -72,12 +77,11 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
     ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
     : null;
   const view = freeReviewView(state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, disputedRun, waivedRound, debateRunning } = view;
+  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, waivedRound, debateRunning } = view;
   const taskReady = task.status !== "backlog";
   // 接力出去的任务在本机是历史存档，后端一律 409 —— 判据必须与回复框那颗键完全一样，
   // 否则同一个派审动作会出现「那边灰、这里能点（点了吃 409）」。
-  const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived
-    || task.handoff?.direction === "out";
+  const locked = reviewLocked(task);
   const repair = useFreeReviewRepair({
     taskId: task.id,
     run: stoppedRun,
@@ -93,14 +97,29 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
 
   useEffect(() => {
     if (!scrollTo) return;
-    rootRef.current?.querySelector(`[data-record="${CSS.escape(scrollTo)}"]`)?.scrollIntoView({ block: "nearest" });
-    setScrollTo(null);
+    // 等刚展开的那一轮排版落定再滚：长报告量过高度之后才把自己夹短，早滚一帧，要停的那一段就被
+    // 顶出视野。从辩论气泡点过来停在那一轮的辩论那一段（顶到上沿）；认不出那一段就停在那一轮。
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const debate = scrollTo.debate ? rootRef.current?.querySelector(`${scrollTo.record} [data-debate="${CSS.escape(scrollTo.debate)}"]`) : null;
+        if (debate) debate.scrollIntoView({ block: "start" });
+        else rootRef.current?.querySelector(scrollTo.record)?.scrollIntoView({ block: "nearest" });
+        setScrollTo(null);
+      });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [scrollTo, openKeys]);
 
-  const reveal = (key: string) => {
+  const reveal = (key: string, debateId?: string | null) => {
     setOpenKeys((current) => new Set(current).add(key));
-    setScrollTo(key);
+    setScrollTo({ record: `[data-record="${CSS.escape(key)}"]`, debate: debateId ?? null });
   };
+  useEffect(() => {
+    if (!here) return;
+    const timer = setTimeout(() => setHere(null), 1600);
+    return () => clearTimeout(timer);
+  }, [here]);
+
   const toggle = (key: string) => setOpenKeys((current) => {
     const next = new Set(current);
     if (!next.delete(key)) next.add(key);
@@ -111,15 +130,25 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
   // 「来源 + 那一场 + 轮号」（见 review/reviewTarget）；不知道是哪一场就什么都不展开——拿最近
   // 那场的同号轮顶上，打开的就是另一份报告。审查记录还没读到时先等；读到的那一份里没有（可能
   // 是点之前的旧快照），强制重读一次再认，还没有就说出来（见 useInspectorRequest）。
+  // 会话里那颗讨论气泡点过来：展开那一场讨论、滚过去亮一下。
   const requestMiss = useInspectorRequest("review", (params) => {
+    if (typeof params.discussionId === "string") {
+      const hit = discussions.find((item) => item.id === params.discussionId);
+      if (hit) {
+        reveal(discussionKey(hit.id));
+        setHere(discussionKey(hit.id));
+        return;
+      }
+      return !state && !free.error ? "wait" : "missing";
+    }
     const target = reviewTargetOf(params);
     if (target.source === "inline" || !target.runId) return "missing";
     const pool = target.source === "merge" ? postMerge : workspace;
     const hit = [...pool].reverse().find((entry) => entry.run.id === target.runId
       && (target.round == null || entry.round.round === target.round));
-    if (hit) { reveal(reviewKey(hit.run.id, hit.round.round)); return; }
+    if (hit) { reveal(reviewKey(hit.run.id, hit.round.round), target.debateId); return; }
     return !state && !free.error ? "wait" : "missing";
-  }, { version: [all, free.error], refresh: () => free.reload(true, true) });
+  }, { version: [all, discussions, free.error], refresh: () => free.reload(true, true) });
 
   if (free.loading && !state) return <div className="insp-pane"><InspConclusion tone="busy">正在读取审查记录…</InspConclusion></div>;
   if (free.error && !state) {
@@ -227,7 +256,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
       };
     }
     if (disputedRound) {
-      // 裁定的几个动作都在下面那张卡上；顶上不再摆一颗，免得同一件事两处各说一半。
+      // 裁定在回复框顶上那一行；这里不再摆一颗，免得同一件事两处各说一半。
       return {
         tone: "hold",
         text: `第 ${disputedRound.round} 轮未通过 · ${deferOnly(disputedRound) ? "执行者说有几条越界" : "执行者不认"}，${debateRunning ? "双方辩论中" : "等你裁定"}`,
@@ -308,13 +337,26 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
         open={openKeys.has(key)}
         onToggle={() => toggle(key)}
       >
-        <FreeReviewRoundBody taskId={task.id} run={run} round={round} anchorRef={rootRef} />
+        <FreeReviewRoundBody taskId={task.id} run={run} round={round} dispute={{ task, reviews: state?.reviews, onOpenTask }} />
       </InspRecord>
     );
   };
 
+  // 审查各轮和讨论排在同一列里，按开始时间。
+  const records = [
+    ...workspace.map((entry) => ({ at: entry.round.startedAt, node: record(entry) })),
+    ...discussions.map((discussion) => {
+      const key = discussionKey(discussion.id);
+      return {
+        at: discussion.startedAt,
+        node: <FreeReviewDiscussion key={key} task={task} discussion={discussion} discussions={discussions}
+          open={openKeys.has(key)} here={here === key} onToggle={() => toggle(key)} />,
+      };
+    }),
+  ].sort((a, b) => a.at.localeCompare(b.at));
+
   return (
-    <div className="insp-pane review-pane" aria-label="自由任务审查" ref={rootRef}>
+    <div className="insp-pane review-pane" aria-label="审议" ref={rootRef}>
       <section className="insp-head" aria-label={acceptedTarget ? "合并结果审查" : "审查结论"}>
         <InspConclusion tone={now.tone}>{now.text}</InspConclusion>
         <InspActions>
@@ -329,26 +371,11 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
       </section>
 
       <RequestMissNote miss={requestMiss} what={missedReview} />
-      {disputedRound && disputedRun && notify && (
-        <FreeReviewDisputeCard
-          // 一张卡 = 一条驳回：换成另一条（轮询、另一个窗口裁掉了这条）就整张重建，
-          // 开着的确认框、写了一半的要点都跟着旧那条走掉，不留给新那条。
-          key={`${task.id}:${disputedRun.id}:${disputedRound.round}`}
-          taskId={task.id}
-          run={disputedRun}
-          round={disputedRound}
-          disabled={locked || taskBusy || !!reviewing}
-          onChanged={free.setState}
-          notify={notify}
-          // 卡上只有执行者的说法；审查者那一半在报告里，就地展开那一轮。
-          onOpenReport={() => reveal(reviewKey(disputedRun.id, disputedRound.round))}
-        />
-      )}
 
-      <section aria-label="审查记录">
-        <InspSec count={workspace.length || undefined}>审查记录</InspSec>
-        {workspace.length
-          ? <div className="insp-recs">{workspace.map((entry) => record(entry))}</div>
+      <section aria-label="审议记录">
+        <InspSec count={records.length || undefined}>{discussions.length ? "审议记录" : "审查记录"}</InspSec>
+        {records.length
+          ? <div className="insp-recs">{records.map((item) => item.node)}</div>
           : <InspNone>{locked ? "验收前没有审查记录。" : "还没有审查记录。"}</InspNone>}
       </section>
 

@@ -131,7 +131,7 @@ assert.equal((noteMarkup.match(/<svg/g) ?? []).length, 1, "气泡里唯一的图
 assert.doesNotMatch(noteMarkup, /重点看 SSE 断线重连/, "附言不摊在会话里");
 const opened: Array<unknown> = [];
 const linkedMarkup = renderToStaticMarkup(<ReviewBubble taskId="t1" lane={noteLane} onOpenRound={(round) => opened.push(round)} />);
-assert.match(linkedMarkup, /aria-label="第 3 轮审查未通过，在右侧审查格里打开这一轮"/, "接上审查格时整颗气泡就是去那一轮的键");
+assert.match(linkedMarkup, /aria-label="第 3 轮审查未通过，在右侧审议格里打开这一轮"/, "接上审议格时整颗气泡就是去那一轮的键");
 const liveMarkup = renderToStaticMarkup(<ReviewBubble lane={noteLane} live />);
 assert.match(liveMarkup, /<div class="review-verdict" role="status">/, "还是现在的未通过：读屏听得到");
 assert.match(liveMarkup, /<span class="turn-footnote-dot is-bad" aria-hidden="true"><\/span><span data-selection-content="">第 3 轮审查未通过/, "字前一颗红点");

@@ -1,33 +1,5 @@
-.scheduled-message-tray { container-type: inline-size; display: flex; margin-bottom: 7px; flex-direction: column; gap: 4px; }
-.scheduled-message-tray > small { color: var(--muted); font-size: var(--t-xs); }
-.scheduled-message-tray > p { margin: 0; color: var(--red); font-size: var(--t-xs); }
-.scheduled-message-row { display: flex; min-height: 28px; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--overlay); padding: 4px 6px 4px 8px; color: var(--muted); font-size: var(--t-xs); }
-.scheduled-message-row time,
-.scheduled-message-row > em,
-.scheduled-message-row > span { flex: 0 0 auto; }
-.scheduled-message-row > span { font-family: var(--font-mono); }
-.scheduled-message-row > em { font-style: normal; }
-.scheduled-message-row > b { min-width: 0; flex: 1; overflow: hidden; color: var(--ink); font-size: var(--t-xs); font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
-.scheduled-message-row > button { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); }
-.scheduled-message-row > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-.scheduled-message-row > button:disabled { opacity: .48; }
-/* 审查链自己排的答复：只标出来，不给撤回按钮（那颗按钮的承诺在这里兑现不了）。 */
-.scheduled-message-row > .scheduled-message-managed { flex: 0 0 auto; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
-/* 这一条在等什么(服务端下发);跟抬头那句一样时不出现。 */
-.scheduled-message-row > .scheduled-message-wait { max-width: 46%; flex: 0 1 auto; overflow: hidden; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
-.scheduled-message-row > .scheduled-message-guide { display: inline-flex; width: auto; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; }
-.scheduled-message-guide > svg { color: var(--muted); }
-.scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in oklab, var(--ink) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
-.scheduled-message-guide:disabled { opacity: .48; }
-@container (max-width: 520px) {
-  .scheduled-message-row > .scheduled-message-guide { width: 24px; justify-content: center; padding: 0; }
-  .scheduled-message-guide > span { display: none; }
-}
-/* 托盘里「等某任务完成后发送」那一行:在等谁。等不到了(失败/取消/删除)标琥珀色,旁边给「直接发送」。 */
-.scheduled-message-row > .scheduled-message-after { max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scheduled-message-row > .scheduled-message-after.is-stuck { color: var(--amber); }
 /* 对话框底部那颗胶囊本体在 run-target-picker.css（`.run-target-picker.is-chip`）；这里只剩
-   「取消 @ 召唤」那颗小圆叉，它挂在胶囊外面，不属于三段中的任何一段。 */
+   「不叫 xx 了」那颗小圆叉，它挂在胶囊外面，不属于胶囊的任何一段。 */
 .task-reply-chip-reset { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
 .task-reply-chip-reset:hover { background: var(--raised); color: var(--ink); }
 

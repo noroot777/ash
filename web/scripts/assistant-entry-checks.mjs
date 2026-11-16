@@ -274,31 +274,31 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await page.locator(".task-composer-panel.is-home").waitFor();
   await page.getByRole("button", { name: "新建任务" }).click();
   await objective.waitFor();
-  await page.getByRole("tab", { name: "团队", exact: true }).click();
-  await objective.fill("保留这份团队任务草稿");
+  await objective.fill("保留这份任务草稿");
   await footerAssistant.click();
   await page.getByRole("region", { name: "ash 助手" }).waitFor();
   assert.match(page.url(), /[?&]from=composer(?:&|$)/u, "assistant URL records its composer origin");
-  assert.match(page.url(), /[?&]mode=team(?:&|$)/u, "assistant URL records the composer mode");
+  assert.doesNotMatch(page.url(), /[?&]mode=/u, "新建只有一种任务，URL 不再记模式");
   await page.getByRole("button", { name: "关闭助手" }).click();
   await objective.waitFor();
-  assert.equal(await objective.inputValue(), "保留这份团队任务草稿", "composer draft survives an assistant round trip");
-  assert.equal(await page.getByRole("tab", { name: "团队", exact: true }).getAttribute("aria-selected"), "true",
-    "composer mode survives an assistant round trip");
-  await footerAssistant.click();
-  await page.reload();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
-  await page.getByRole("button", { name: "关闭助手" }).click();
-  await objective.waitFor();
-  assert.equal(await page.getByRole("tab", { name: "团队", exact: true }).getAttribute("aria-selected"), "true",
-    "composer mode survives an assistant page reload");
-  await page.getByRole("tab", { name: "团队", exact: true }).click();
-  await objective.fill("原有的团队草稿");
+  assert.equal(await objective.inputValue(), "保留这份任务草稿", "composer draft survives an assistant round trip");
+  // 老链接还带着 `mode=team` / `mode=duet`：一律打开普通的新建框，没有模式那一排。（草稿库只活在这一次会话里，
+  // 刷新即清空，跟回复框一致——同一次会话里正文按项目存、不按模式存，换不换模式都是同一份。）
+  for (const mode of ["team", "duet"]) {
+    const legacy = new URL(page.url());
+    legacy.searchParams.delete("from");
+    legacy.searchParams.set("view", "create");
+    legacy.searchParams.set("mode", mode);
+    await page.goto(legacy.toString());
+    await objective.waitFor();
+    assert.equal(await page.getByRole("tablist", { name: "任务模式" }).count(), 0, `老链接 mode=${mode} 不再出模式那一排`);
+    assert.doesNotMatch(page.url(), /[?&]mode=/u, `老链接 mode=${mode} 打开后 URL 不再带模式`);
+  }
+  await objective.fill("原有的任务草稿");
   await footerAssistant.click();
   const composerNoteId = await convertNewNote("从原新建任务来源的助手转来的随手记");
   assert.match(page.url(), /[?&]view=create(?:&|$)/u);
-  assert.match(page.url(), /[?&]mode=single(?:&|$)/u, "note conversion switches directly to single-task composer");
-  const mergedNoteDraft = "从原新建任务来源的助手转来的随手记\n\n原有的团队草稿";
+  const mergedNoteDraft = "从原新建任务来源的助手转来的随手记\n\n原有的任务草稿";
   assert.equal(await objective.inputValue(), mergedNoteDraft, "converted note seed and existing composer draft are both retained");
   await footerAssistant.click();
   await page.getByRole("button", { name: "关闭助手" }).click();

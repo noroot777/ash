@@ -1,6 +1,7 @@
-import { StrictMode } from "react";
+import { StrictMode, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import type { TaskReviewRound } from "@ash/shared";
+import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
 import { TaskReviewRounds } from "../../src/review/TaskReviewRounds.tsx";
 import "../../src/styles/global.css";
 
@@ -39,21 +40,29 @@ const rounds: TaskReviewRound[] = [
   }),
 ];
 
-// 侧边栏在页面右侧，左边是主工作区——抽屉贴着侧边栏左边缘展开，所以位置断言要有这块留白。
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <div style={{ display: "flex", height: 640 }}>
-      <div style={{ flex: 1 }} />
-      <aside className="inspector-host" style={{ width: 360, minWidth: 360 }}>
-        <div className="insp-pane review-pane" style={{ overflow: "auto", height: "100%" }}>
-          <TaskReviewRounds
-            taskId="t1"
-            state={{ info: { reviewRequested: true, rounds }, loading: false, error: null, reload: async () => undefined }}
-            emptyMessage="尚无验证记录。"
-            onOpenTask={(taskId) => opened.push(taskId)}
-          />
+// 摆成线上的骨架（InspectorHost 那几层）：左边是主区（`.task-detail`，读全文那一屉的定位基准），右边是
+// 侧边栏。窄屏时侧边栏盖在主区上（inspector.css），那一屉得盖在它上面。
+function Page() {
+  const host = useLeftDrawerHost({ resetKey: "t1" });
+  return (
+    <LeftDrawerProvider value={host.api}>
+      <div className="inspector-layout" style={{ height: 640 }}>
+        <div className="inspector-layout__main">
+          <div className="task-detail"><p style={{ padding: 16 }}>会话</p>{host.drawer}</div>
         </div>
-      </aside>
-    </div>
-  </StrictMode>,
-);
+        <aside className="inspector-host" style={{ "--inspector-width": "360px" } as CSSProperties}>
+          <div className="insp-pane review-pane" style={{ overflow: "auto", height: "100%", flex: 1 }}>
+            <TaskReviewRounds
+              taskId="t1"
+              state={{ info: { reviewRequested: true, rounds }, loading: false, error: null, reload: async () => undefined }}
+              emptyMessage="尚无验证记录。"
+              onOpenTask={(taskId) => opened.push(taskId)}
+            />
+          </div>
+        </aside>
+      </div>
+    </LeftDrawerProvider>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(<StrictMode><Page /></StrictMode>);

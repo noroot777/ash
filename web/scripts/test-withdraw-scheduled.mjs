@@ -77,7 +77,8 @@ try {
   await page.goto(`${web.origin}/scripts/fixtures/withdraw-scheduled.html`);
 
   const input = page.getByRole("textbox", { name: "回复任务" });
-  await page.getByRole("button", { name: "展开全部 3 条" }).click();
+  // 撤回在点开后那一行的行尾（指到这一行才出）。
+  await page.getByRole("button", { name: "排着 3 条", exact: true }).click();
   const rows = page.locator(".scheduled-message-row");
   await rows.getByText("排队里的原话", { exact: true }).waitFor();
   await input.fill("我后来又写的草稿");

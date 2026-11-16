@@ -1,8 +1,9 @@
-// 「执行者驳回了、等你裁定」那条时间线旁注上的「去裁定」按钮。
+// 「执行者驳回了、等你裁定」那条时间线旁注：留到裁完为止，后面不再挂「去裁定」（裁定在回复框顶上那一行）。
 //
-// 三种形态并排：**挂着未裁定驳回**（该有按钮）、**已裁定**（同一条旁注还在，按钮必须
-// 没了——它指向的那张卡已经不在了）、**没有 onOpenReviewPanel**（只读会话视图、团队
-// 时间线那种场合，给一颗点了没反应的按钮比不给更糟）。
+// 几种形态并排：**挂着未裁定驳回**（那一句带点）、**已裁定**（那一句还在，但已是过去的事）、
+// **没有 onOpenReviewPanel**（只读会话视图）。另有两份照 R8M9Tsn2q0aj 那一回合录的：驳回之后同一回合
+// 又落了一句「本回合没有交卷」——任务还开着（那一句不被盖掉）、任务已验收（没裁过的驳回也不再是等你
+// 裁定的事）。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { FreeReviewRun, Session, Task } from "@ash/shared";
@@ -40,6 +41,16 @@ const output = [
 ].join("\n");
 
 const items = buildConversationItems([{ session, output, trace: [] }], [session], [] as never);
+
+// R8M9Tsn2q0aj 那一回合：驳回落下 13 秒后，同一回合又落了结算说明「本回合没有交卷」。
+const settled = [
+  "已按第 2 轮意见修好，只剩一条建议转出去。",
+  `\x1e${JSON.stringify({ t: "system", text: DISPUTE_NOTE, aside: true, notice: { kind: "review.dispute", round: 2 }, at: "2026-09-24T04:00:00.000Z" })}`,
+  `\x1e${JSON.stringify({ t: "agentEnd", at: "2026-09-24T04:00:13.000Z" })}`,
+  `\x1e${JSON.stringify({ t: "system", text: "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。", level: "notice", at: "2026-09-24T04:00:13.000Z" })}`,
+].join("\n");
+const heldItems = buildConversationItems([{ session, output: settled, trace: [] }], [session], [] as never);
+const acceptedTask = { ...task, stage: "accepted" } as unknown as Task;
 
 function run(resolution: "deferred" | null): FreeReviewRun {
   return {
@@ -100,6 +111,27 @@ createRoot(document.getElementById("root")!).render(
           task={task} items={items} questionHistory={[]} sessions={[session]} loading={false} error={null}
           reviews={[run("deferred")]}
           onOpenReviewPanel={() => opened.push("review")}
+        />
+      </section>
+      <section className="held-fixture">
+        <ConversationFeed
+          task={task} items={heldItems} questionHistory={[]} sessions={[session]} loading={false} error={null}
+          reviews={[run(null)]}
+          onOpenReviewPanel={() => opened.push("held")}
+        />
+      </section>
+      <section className="accepted-fixture">
+        <ConversationFeed
+          task={acceptedTask} items={heldItems} questionHistory={[]} sessions={[session]} loading={false} error={null}
+          reviews={[run(null)]}
+          onOpenReviewPanel={() => opened.push("accepted")}
+        />
+      </section>
+      <section className="accepted-alone-fixture">
+        <ConversationFeed
+          task={acceptedTask} items={items} questionHistory={[]} sessions={[session]} loading={false} error={null}
+          reviews={[run(null)]}
+          onOpenReviewPanel={() => opened.push("accepted")}
         />
       </section>
       <section className="readonly-fixture">

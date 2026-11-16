@@ -54,7 +54,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
     ? checkoutRecovery(checkout) ?? `分支 ${target} 的登记仍指向 ${checkout.path}，请核对该工作区的检出登记。` : null;
   const targetWorkspaceBlocker = checkout?.path && !checkout.atRepo
     ? `目标分支 ${target} 仍在工作区 ${checkout.path} 检出。${checkoutRecovery(checkout) ?? ""}${targetOwner
-      ? `请先停止任务「${targetOwner.title}」的执行，在其「派生与验收」中释放工作区目录（保留分支），再单独验收本任务。`
+      ? `请先停止任务「${targetOwner.title}」的执行，在它验收台的前提列里点「释放目录」（保留分支），再单独验收本任务。`
       : "请先解除该工作区对目标分支的占用并保留分支，再验收；也可重设合入目标。"}` : null;
   if (!blocker && targetWorkspaceBlocker) {
     blockerLabel = "目标工作区仍被占用";
@@ -70,7 +70,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
     unexecutedVerification: await unexecutedVerification(task),
     taskId: task.id, projectId: task.projectId, title: task.title, status: task.status, stage: task.stage,
     startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit, targetWorkspaceBlocker, targetWorkspaceRecovery,
-    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算。可重试更新基线，或点击「处理未完成的基线更新」：尚未改写时可放弃，已经生效时会同步开工起点，保留当前代码与恢复备份。" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
+    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算。可重试更新基线，或点这一行的「处理」：尚未改写时可放弃，已经生效时会同步开工起点，保留当前代码与恢复备份。" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
   };
 }
 

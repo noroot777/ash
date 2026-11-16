@@ -38,9 +38,17 @@
       "types": "./src/questions.ts",
       "default": "./src/questions.ts"
     },
+    "./dispatch-plan": {
+      "types": "./src/dispatch-plan.ts",
+      "default": "./src/dispatch-plan.ts"
+    },
     "./scheduled-message-wait": {
       "types": "./src/scheduled-message-wait.ts",
       "default": "./src/scheduled-message-wait.ts"
+    },
+    "./prerequisites": {
+      "types": "./src/prerequisites.ts",
+      "default": "./src/prerequisites.ts"
     },
     "./branch-plan": {
       "types": "./src/branch-plan.ts",
@@ -154,6 +162,10 @@
       "types": "./src/workflow-presets.ts",
       "default": "./src/workflow-presets.ts"
     },
+    "./discussion": {
+      "types": "./src/discussion.ts",
+      "default": "./src/discussion.ts"
+    },
     "./free-workflow": {
       "types": "./src/free-workflow.ts",
       "default": "./src/free-workflow.ts"
@@ -185,6 +197,10 @@
     "./mcp": {
       "types": "./src/mcp.ts",
       "default": "./src/mcp.ts"
+    },
+    "./turn-fingerprint": {
+      "types": "./src/turn-fingerprint.ts",
+      "default": "./src/turn-fingerprint.ts"
     },
     "./repo-url": {
       "types": "./src/repo-url.ts",

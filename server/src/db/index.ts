@@ -10,12 +10,14 @@ import { ensureHandoffTokenUnique } from "./handoff-token-index.js";
 import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
 import { ensureAcceptGateSchema } from "./schema-accept-gate.js";
 import { ensureTaskBackgroundSchema } from "./schema-task-background.js";
+import { ensurePrerequisiteSchema } from "./schema-prerequisites.js";
 import { ensureRegressionChecksSchema } from "./schema-regression-checks.js";
 import { ensureRegressionEvidenceSchema } from "./schema-regression-evidence.js";
 import { ensureImSchema } from "./schema-im.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 import { ensureTaskNoticeSchema } from "./schema-task-notice.js";
 import { ensureTaskReadsSchema } from "./schema-task-reads.js";
+import { ensureAcceptMemorySchema } from "./schema-accept-memory.js";
 import { ensureTaskWritesSchema } from "./schema-task-writes.js";
 import { installTaskActionTriggers } from "./task-action-triggers.js";
 
@@ -390,12 +392,14 @@ export async function ensureSchema() {
   await ensureFreeWorkflowSchema(client);
   await ensureTaskNoticeSchema(client);
   await ensureTaskReadsSchema(client);
+  await ensureAcceptMemorySchema(client);
   await ensureTaskWritesSchema(client);
   await ensureAcceptGateSchema(client);
   await ensureTaskBackgroundSchema(client);
   await ensureRegressionChecksSchema(client);
   await ensureRegressionEvidenceSchema(client);
   await ensureImSchema(client);
+  await ensurePrerequisiteSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。
   await runDataMigrations(client);
   // 表和列都齐了才装：「任务能做什么」依赖的事实一落库就记脏（task-action-triggers.ts）。

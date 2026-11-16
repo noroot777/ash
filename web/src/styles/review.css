@@ -1,37 +1,9 @@
-/* 验收台外壳:普通任务(single)和团队(team)共用同一副形状——顶栏一行放标题和验收动作,
-   主体一列只铺这一屏独有的东西(改动本身)。返回口:普通任务在本顶栏最右(任务顶栏只剩一颗状态章),团队在团队顶栏(「返回协作」)。两边的选择器并排
-   写在这一处,拆成两份迟早只改一边就漂开了;team-review.css 那边只留团队独有的部分(可折叠的
-   执行者记录卡等)。 */
+/* 验收台外壳:普通任务(single)和团队(team)共用同一副形状——第一行与前提列(acceptance.css)
+   之下只铺这一屏独有的东西(改动本身)。team-review.css 那边只留团队独有的部分。 */
 .single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
-.single-review-subbar,.team-review-subbar { display:flex; min-height:52px; max-height:60%; flex:0 0 auto; flex-wrap:wrap; overflow-y:auto; overscroll-behavior:contain; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
-.accept-workspace-commit { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in oklab, var(--amber) 35%, var(--line)); border-radius: 9px; background: color-mix(in oklab, var(--amber) 6%, var(--panel)); padding: 11px 12px; color: var(--amber); font-size: var(--t-xs); }
-.accept-workspace-commit > svg { flex-shrink: 0; margin-top: 2px; }
-.accept-workspace-commit > div:first-of-type { min-width: 0; flex: 1; }
-.accept-workspace-commit p { margin: 5px 0; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
-.accept-workspace-commit small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.6; }
-.accept-workspace-commit-actions { display: flex; flex-shrink: 0; gap: 5px; }
-.accept-workspace-commit button { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 4px 8px; color: var(--ink); font-size: var(--t-xs); }
-.accept-workspace-commit button:disabled { cursor: not-allowed; opacity: .5; }
-@media (max-width: 600px) { .accept-workspace-commit { flex-wrap: wrap; } .accept-workspace-commit-actions { width: 100%; justify-content: flex-end; } }
-/* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。它带来的那串状态卡
-   (失败详情、待提交、验收前置命令…)各自铺满顶栏下沿一整行,摆放次序就是它们在
-   AcceptanceControls 里出现的次序 —— 这些由两个顶栏都带的 .acceptance-host 统一管,
-   原先在这里逐张卡列的那三条白名单已并入它(见 team-review.css)。 */
-.single-review-subbar b,.single-review-subbar small,.team-review-subbar b,.team-review-subbar small { display:block; }
-.single-review-subbar b,.team-review-subbar b { font-size:12.5px; }
-.single-review-subbar small,.team-review-subbar small { color:var(--muted); font-size:var(--t-xs); }
-.single-review-subbar > button:not(.ui-icon-button),.single-review-subbar > a,.team-review-subbar > button:not(.ui-icon-button),.team-review-subbar > a { display:inline-flex; height:28px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:var(--t-xs); }
-.single-review-subbar > button:not(.ui-icon-button):hover,.single-review-subbar > a:hover,.team-review-subbar > button:not(.ui-icon-button):hover,.team-review-subbar > a:hover { background:var(--raised); color:var(--ink); }
-/* 返回口排在第一行最右：标题、验收动作、它三个一起提到 AcceptanceControls 带来的那串状态卡前面，
-   否则它会按 DOM 次序落到最后一张卡底下。 */
-.single-review-subbar > :is(.acceptance-host-title, .team-accept-actions, .single-review-shared-badge, .acceptance-host-close) { order:-1; }
-/* 窄屏时动作簇自占一行靠右（team-review.css），返回口跟在它后面同一行，不单独掉到下一行最左。
-   动作簇要能收缩：主按钮可能顶着整句受阻理由，不收缩就按 max-content 戳出顶栏右边；放不下
-   时它在这一行里自己换行（返回口这时掉到下一行），而不是溢出。 */
-@media (max-width: 760px) { .single-review-subbar.acceptance-host > .team-accept-actions { width:auto; flex:1 1 auto; } }
+.single-review-diff-region { min-height:0; flex:1; overflow-y:auto; padding:10px clamp(10px,2vw,20px) 32px; }
 .single-review-scroll,.team-review-scroll { min-height:0; flex:1; overflow-y:auto; padding:18px clamp(14px,3vw,34px) 38px; }
 .single-review-stack,.team-review-stack { display:flex; width:100%; max-width:1180px; margin:0 auto; flex-direction:column; gap:14px; }
-.single-review-shared-badge { display:inline-flex; height:27px; align-items:center; border:1px solid color-mix(in oklab,var(--cyan) 28%,var(--line)); border-radius:7px; background:color-mix(in oklab,var(--cyan) 6%,var(--panel)); padding:0 8px; color:var(--cyan); font-size:var(--t-xs); font-weight:var(--w-medium); }
 .single-review-facts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:0; }
 .single-review-facts > div { min-width:0; border:1px solid var(--line); border-radius:7px; background:var(--panel); padding:7px 8px; }
 .single-review-facts dt { color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); letter-spacing:.05em; text-transform:uppercase; }
@@ -41,40 +13,6 @@
 .single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--ink); font-size:var(--t-xs); font-weight:var(--w-medium); }
 .single-review-loading,.single-review-error { display:flex; align-items:center; gap:6px; margin:0; border:1px dashed var(--line2); border-radius:8px; padding:18px; color:var(--muted); font-size:var(--t-xs); }
 .single-review-error { color:var(--red); }
-.accepted-snapshot-card { display:grid; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:10px 11px; }.accepted-snapshot-card > header { display:grid; min-width:0; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:8px; }.accepted-snapshot-card > header > span { display:grid; width:27px; height:27px; place-items:center; border-radius:8px; background:color-mix(in oklab,var(--cyan) 8%,var(--raised)); color:var(--cyan); }.accepted-snapshot-card header b,.accepted-snapshot-card header small { display:block; }.accepted-snapshot-card header b { font-size:var(--t-xs); }.accepted-snapshot-card header small { margin-top:1px; color:var(--muted); font-size:var(--t-xs); }.accepted-snapshot-card header em { color:var(--green); font-size:var(--t-xs); font-style:normal; }.accepted-snapshot-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }.accepted-snapshot-card dl > div { min-width:0; border-radius:7px; background:var(--canvas); padding:6px 7px; }.accepted-snapshot-card dt { color:var(--muted); font-size:var(--t-xs); }.accepted-snapshot-card dd { overflow:hidden; margin:2px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }.accepted-snapshot-card > button { justify-self:start; border:0; background:transparent; padding:0; color:var(--ink); font-size:var(--t-xs); text-align:left; }.accepted-snapshot-card > button:hover { text-decoration:underline; }
-/* 提交横铺一条，宽度全留给下面的「改动文件 + diff」（理由见 CommitStrip.tsx）。 */
-.single-review-content { display:grid; min-width:0; gap:10px; }
-/* 分支 → 合入目标 + 提交，压成一条元信息行（理由见 ChangeMetaBar.tsx）。 */
-.review-meta-bar { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.review-meta-bar__line { display:flex; min-height:32px; flex-wrap:wrap; align-items:center; gap:6px; padding:5px 9px; color:var(--muted); font-size:var(--t-xs); }
-.review-meta-bar__line > svg { flex:0 0 auto; color:var(--faint); }
-.review-meta-bar code { min-width:0; overflow:hidden; font-family:var(--font-mono); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
-.review-meta-bar__branch { display:inline-flex; min-width:0; align-items:center; gap:5px; }
-.review-meta-bar__branch svg { flex:0 0 auto; color:var(--faint); }
-.review-meta-bar__branch code { color:var(--accent); }
-.review-meta-bar__where { flex:0 0 auto; border-radius:5px; background:var(--raised); padding:2px 6px; color:var(--muted); font-size:var(--t-xs); }
-.review-meta-bar__toggle { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; margin-left:auto; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:var(--t-xs); }
-.review-meta-bar__toggle:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
-.review-meta-bar__toggle:disabled { color:var(--faint); }
-.review-meta-bar__toggle > svg:last-child { transition:transform 140ms ease; }
-.review-meta-bar__toggle[aria-expanded="true"] > svg:last-child { transform:rotate(180deg); }
-.review-meta-bar__commits { border-top:.5px solid var(--line); padding:8px 9px; }
-.review-meta-bar__commits > small { display:block; margin-bottom:6px; color:var(--muted); font-size:var(--t-xs); }
-.review-meta-bar__commits .review-commit-strip { border:0; border-radius:0; }
-.review-meta-bar__commits .review-commit-strip > ul { padding:0; }
-.review-commit-strip { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.review-commit-strip > ul { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,290px),1fr)); gap:6px; margin:0; padding:8px 9px; list-style:none; }
-.review-commit-strip > ul > li { display:flex; min-width:0; align-items:baseline; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--canvas); padding:5px 7px; }
-/* 可点开的那一份：内边距交给里面的按钮，整格都是热区。 */
-.review-commit-strip > ul > li.is-linked { padding:0; }
-.review-commit-strip > ul > li.is-linked > button { display:flex; width:100%; min-width:0; align-items:baseline; gap:6px; border:0; border-radius:6px; background:transparent; padding:5px 7px; text-align:left; }
-.review-commit-strip > ul > li.is-linked:hover { border-color:var(--ink); background:var(--raised); }
-.review-commit-strip li code { flex:0 0 auto; color:var(--accent); font-family:var(--font-mono); font-size:var(--t-xs); }
-.review-commit-strip li b { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); text-overflow:ellipsis; white-space:nowrap; }
-.review-commit-strip li time { flex:0 0 auto; color:var(--faint); font-size:var(--t-xs); }
-.review-commit-strip > p { margin:0; padding:14px 9px; color:var(--muted); font-size:var(--t-xs); text-align:center; }
-.review-commit-strip > button { width:100%; min-height:29px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--ink); font-size:var(--t-xs); }
-.review-commit-strip > button:hover { background:var(--raised); }
 .single-review-files,.single-review-diff { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .single-review-files > header { display:flex; height:34px; align-items:center; justify-content:space-between; border-bottom:.5px solid var(--line); padding:0 9px; color:var(--muted); font-size:var(--t-xs); }
 .single-review-files > header span { display:inline-flex; align-items:center; gap:5px; }
@@ -166,4 +104,4 @@
 .diff-layout-toggle button:hover { background:var(--raised); color:var(--ink); }
 .diff-layout-toggle button[aria-pressed="true"] { background:var(--sel-bg); color:var(--ink); }
 .single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--ink); font-size:var(--t-xs); }
-@media (max-width:760px) { .single-review-facts,.single-review-diff-layout,.accepted-snapshot-card dl { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }
+@media (max-width:760px) { .single-review-facts,.single-review-diff-layout { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }

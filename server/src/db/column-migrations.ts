@@ -200,8 +200,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN stage TEXT",
   // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
   "ALTER TABLE tasks ADD COLUMN pinned_at INTEGER",
-  // 星标：用户手动软记号（与自动状态正交）；null=未标
-  "ALTER TABLE tasks ADD COLUMN starred_at INTEGER",
   // §工作流：项目默认起手式 + 任务创建时拷下的那条线（快照，不是引用）
   "ALTER TABLE projects ADD COLUMN workflow_id TEXT",
   // 「新任务默认开不开 worktree」从 app_settings 搬到项目这一层（2026-09-14）。
@@ -413,4 +411,15 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
   // 被哨兵隔开的续聊,续聊前的状态(见 db/schema.ts 同名列)。存量行 NULL:升级前已经落下的那些不追改。
   "ALTER TABLE tasks ADD COLUMN follow_up_held_from TEXT",
+  // 备忘里贴的图(见 db/schema.ts 同名列)。存量行 NULL = 没有附件。
+  "ALTER TABLE task_memos ADD COLUMN attachments TEXT",
+  // 派它的那条任务(见 db/schema.ts 同名列)。存量行由 migrate-dispatched-by.ts 按 creation_origin 回填。
+  "ALTER TABLE tasks ADD COLUMN dispatched_by TEXT",
+  // 派活单与「派出去的活交给谁」(见 db/schema.ts 同名列)。存量行 NULL = 没摆单、同这里。
+  "ALTER TABLE tasks ADD COLUMN dispatch_plan TEXT",
+  "ALTER TABLE tasks ADD COLUMN dispatch_target TEXT",
+  // 名下全部停着 / 欠一次起跑 / 停下还没做完(见 db/schema.ts 同名列)。存量行 NULL = 没停过。
+  "ALTER TABLE tasks ADD COLUMN dispatch_hold_at TEXT",
+  "ALTER TABLE tasks ADD COLUMN hold_owed_by TEXT",
+  "ALTER TABLE tasks ADD COLUMN dispatch_hold_pending_at TEXT",
 ];

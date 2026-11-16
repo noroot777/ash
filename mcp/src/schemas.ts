@@ -36,11 +36,17 @@ export const RECURS = z.unknown().superRefine((value, ctx) => {
 // zod 会把旧调用方传的 `"preset"` 静默剥掉，它拿到一条自由工作流任务却以为是预设线。
 export const WORKFLOW_MODE = z.string().describe("缺省即可：新建任务一律是自由工作流");
 
+// 前置 vs 队列：派活的智能体最容易混的一处，两段说明在这里各留一份，几个工具共用。
+export const PREREQUISITES_GUIDE =
+  "前置：建在哪几条任务上面（同批写 key，已有的写 id）。前置都完成且审查通过就自动起跑，开工即有前置的代码、diff 不含前置的，不等验收；别再在任务说明里写「没合入就提问等着」";
+export const QUEUE_VS_PREREQUISITES =
+  "只要一个接一个跑、不要对方的代码，用 chain（队列）；要前一条的代码，用 prerequisites 或 stack（前置），只依赖同一条前置的会同时起";
+
 // One task spec, reused by batch_create_tasks and create_task_chain.
 // 注意:不再接受 dependsOn / resumeDependsOn —— 顺序依赖统一走 queue,
 // chain:true 是创建队列的语法糖。要细调队列请用 queue_* 工具。
 export const taskShape = z.object({
-  key: z.string().optional().describe("此任务的本地标识(目前没有内部用途,保留供日志/调试)"),
+  key: z.string().optional().describe("此任务在这一批里的本地标识，同一批的 prerequisites 用它指这条"),
   title: z.string().optional().describe("省略则首次运行时由 agent 自动起名"),
   body: z.string().optional().describe("交给 agent 执行的 prompt / 目标"),
   agentType: AGENT_TYPE.optional().describe("覆盖批次默认 agent"),
@@ -52,4 +58,13 @@ export const taskShape = z.object({
   mergeTargetBranch: z.string().nullable().optional().describe("最终合入分支；派生任务默认继承父任务的最终目标，独立于开工起点"),
   workflowMode: WORKFLOW_MODE.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
+  prerequisites: z.array(z.string()).optional().describe(PREREQUISITES_GUIDE),
+});
+
+// 派活单上的一条（propose_dispatch）：建任务那几个参数照旧（去掉 workflowMode —— 一律自由工作流），
+// 标题、完整说明、一句备注必填：卡上一行就是标题和备注，建出来的任务正文就是 body。
+export const planTaskShape = taskShape.omit({ workflowMode: true }).extend({
+  title: z.string().min(1).describe("卡上这一行的标题"),
+  body: z.string().min(1).describe("完整说明，建出的任务正文就是它（目标、背景、约束、验收标准）"),
+  note: z.string().max(120).describe("标题下那一行小字：一句话说这条为什么、要注意什么"),
 });

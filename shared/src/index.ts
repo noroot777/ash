@@ -17,6 +17,17 @@ export type {
   TeamConfig,
 } from "./team.ts";
 export type {
+  DiscussionOutcome,
+  DiscussionParticipant,
+  DiscussionRounds,
+  DiscussionStartInput,
+  DiscussionStatus,
+  DiscussionLostRecord,
+  DiscussionTurn,
+  DiscussionTurnStatus,
+  TaskDiscussion,
+} from "./discussion.ts";
+export type {
   FreeReviewCheckMode,
   FreeReviewDebate,
   FreeReviewDebateSide,
@@ -292,14 +303,13 @@ export interface Task {
   status: TaskStatus;
   stage?: TaskStage | null;
   pinnedAt?: number | null; // null=未置顶；整数毫秒时间戳用于置顶区排序
-  starredAt?: number | null; // 星标：用户手动的软记号，与自动状态正交。null=未标
   reviewOf?: string | null;
   reviewRound?: number | null;
   reviewRequested?: boolean;
   labels: string[];
   dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代
   resumeDependsOn: string[]; // [废弃,保留为 []] 同上
-  // 队列归属与位置（null = 不在队列），推进规则见 queues.ts。
+  // 队列归属与名次（0 起、连续；null = 不在队列），推进规则见 queues.ts。
   queueId?: string | null;
   queuePosition?: number | null;
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it
@@ -367,6 +377,15 @@ export interface Task {
   // Backlink used by duet ↔ team derivation chains.
   originTaskId?: string | null;
   creationOrigin?: import("./task-origin.ts").TaskCreationOrigin | null;
+  // 派它的那条任务（普通任务里派出去的独立任务收在谁名下）。不是 parentId：那是团队执行者。
+  // 随列表下发；建任务时可显式指定（用户从回复框派出去），不给就按创建来源认（server/src/task-dispatch.ts）。
+  dispatchedBy?: string | null;
+  // 这一条名下全部停着（「派出的任务」格头按了「全部停下」的时刻）；null = 没停。名下的任务被谁按住，
+  // 前端顺着 dispatchedBy 往上找第一条带它的（web/src/lib/dispatchHold.ts）。
+  dispatchHoldAt?: string | null;
+  // 按了「全部停下」、名下还没停完（中途出错，服务端在补停）：页面说「正在停下」、给「再停一次」，
+  // 不说「已全部停下」也不给「接着跑」。停完清空。
+  dispatchHoldPendingAt?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
   // 就地验证轮的轮次号；非空 = 这一轮验证还没出结论。任务此刻多半没有进程在跑
@@ -380,6 +399,10 @@ export interface Task {
   // 多问题列表；null/[] 沿用单问题 question + questionOptions。
   questionItems?: QuestionItem[] | null;
   questionHistory?: QuestionRecord[];
+  // 摆在回复框上等用户过目的派活单（shared/src/dispatch-plan.ts）。只在它绑的那一问还在时下发，否则 null。
+  dispatchPlan?: import("./dispatch-plan.ts").DispatchPlan | null;
+  // 「派出去的活交给谁」：null = 同这里（这条任务自己的执行器）。
+  dispatchTarget?: import("./dispatch-plan.ts").DispatchRunTarget | null;
   // 任务接力标记（见 TaskHandoff）。null = 从未接力。
   handoff?: TaskHandoff | null;
   // 强制恢复清掉 handoff 后仍保留的风险审计；刷新后必须持续可见。
@@ -400,6 +423,17 @@ export interface Task {
    * 不是「有东西会自己回来」,而是「它在干等,大概回不来」—— 所以圆点是另一档。
    */
   upstreamStalled?: boolean;
+  /**
+   * 执行者驳回了一轮审查意见、**在等你裁定**（判据见 server/src/free-review-awaiting-ruling.ts）。
+   * 后台事实，同上随 `backgroundRevision` 一起刷新。任务此刻常常是 done，只看 status/stage 会把它
+   * 读成「做完了，等验收」——可驳回不裁，验收就是没看审查意见就合并。
+   */
+  disputeOpen?: boolean;
+  /**
+   * 前置（这条任务建在哪几条上面）与谁建在它上面；没有前置也没人建在它上面时省略。
+   * 后台事实：前置那边一变它就跟着变，随 `backgroundRevision` 一起刷新（server/src/prerequisite-view.ts）。
+   */
+  prerequisites?: import("./prerequisites.ts").TaskPrerequisites;
   backgroundRevision?: number;
 }
 

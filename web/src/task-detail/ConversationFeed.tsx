@@ -1,7 +1,7 @@
-import { memo, useMemo, useRef, useState, type ReactNode } from "react";
-import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
+import { Fragment, memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
-import type { FreeReviewRun } from "@ash/shared";
+import type { FreeReviewRun, TaskDiscussion } from "@ash/shared";
 import type { TaskCreationOrigin } from "@ash/shared/task-origin";
 import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
 import { conversationTailKey } from "./conversationModel.ts";
@@ -14,35 +14,41 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageText } from "../components/MessageText.tsx";
 import { LiveStrip } from "../components/LiveStrip.tsx";
+import { PrerequisiteWait } from "./PrerequisiteWait.tsx";
 import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
+import { conversationDiscussionRows } from "./conversationDiscussionRows.ts";
 import { conversationSystemRows, laneReceipts, laneTailFootnote, type ConversationFootnoteRow, type TurnReceipt } from "./conversationSystemRows.ts";
-import { DebateLane } from "./DebateLane.tsx";
+import { DebateBubble } from "./DebateBubble.tsx";
+import { DiscussionBubble } from "./DiscussionBubble.tsx";
 import { laneRoundOpener } from "./reviewLaneLinks.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
-import type { ReviewTarget } from "../review/reviewTarget.ts";
+import { reviewPanelSources, reviewTargetLocatable, type ReviewTarget } from "../review/reviewTarget.ts";
 import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
-import { isPreviewLifecycleNotice, noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
+import { isUnshownNotice, noticeView, questionsOnScreen, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
 import { ReviewBubble } from "./ReviewBubble.tsx";
+import { feedRowAt, interleaveAsides, type FeedAside } from "./feedAsides.ts";
 import { reviewProgress } from "./reviewProgress.ts";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
-import { QuestionDock } from "./QuestionDock.tsx";
 import { useJustEnded } from "./useJustEnded.ts";
 import { conversationKeys } from "./conversationKeys.ts";
 import {
   ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
 } from "./TurnReceipts.tsx";
-import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
+import { reviewLocked } from "../free-workflow/freeReviewCopy.ts";
+import { openDisputeTarget, sameDisputeTarget } from "../free-workflow/disputeRuling.ts";
+import { footnoteActions } from "./footnoteActions.ts";
 import { RetryCta } from "./RetryCta.tsx";
-import { laneNoVerdicts, noVerdictPartId } from "./reviewNoVerdictCause.ts";
+import { laneNoVerdicts } from "./reviewNoVerdictCause.ts";
 import type { ReviewRetryAction, TurnRetryAction } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
+import { useQuestionHistory } from "./useQuestionHistory.ts";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
 import { canForkReply } from "./conversationFork.ts";
 import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
@@ -287,11 +293,12 @@ export function ConversationFeed({
   error,
   forkBlockedReason,
   footer,
-  dock,
   onForkReply,
   onAskSideChat,
   reviews,
+  discussions,
   onOpenReviewPanel,
+  onOpenTask,
   reviewRetry,
   turnRetry,
   questionHistory,
@@ -300,6 +307,7 @@ export function ConversationFeed({
   bodyReady = true,
   onDeleteMessage,
   onReuseInput,
+  asides,
 }: {
   task: TaskListItem;
   /**
@@ -313,25 +321,20 @@ export function ConversationFeed({
   error: Error | null;
   forkBlockedReason?: string | null;
   footer?: React.ReactNode;
-  /**
-   * 停在会话下方、不跟着滚的一条：待答复的提问卡走这里。
-   * 跟 `footer` 的区别是它在滚动容器**外面**——问题一直在手边，
-   * 也不会被「回到底部」那颗浮动按钮压住。
-   */
-  dock?: React.ReactNode;
   onForkReply?: (replyId: string) => void;
   /** 回合尾「更多」里的「在侧聊里问这一段」。不给就没有这一项（没有侧聊的视图）。 */
   onAskSideChat?: (quote: string) => void;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
+  /** 这条任务上的讨论（落盘记录）：一场折成一颗讨论气泡，靠它配。 */
+  discussions?: readonly TaskDiscussion[] | null;
   /**
-   * 打开审查面板（那张裁定卡在里面）。不给就不出「去裁定」按钮——只读的会话视图、
-   * 团队时间线都没有那块面板，给一颗点了没反应的按钮比不给更糟。
-   *
-   * `round`：会话里那一行审查结论被点了，要在审查格里展开的是哪一轮（合并结果审查没有
-   * 轮号，给 null）；「去裁定」不带。
+   * 打开右侧审查格的那一轮：会话里那颗审查结论 / 辩论气泡被点了。不给（只读的会话视图、团队时间线
+   * 都没有那块面板）就在气泡下面就地摊开，不给一颗点了没反应的键。
    */
   onOpenReviewPanel?: (target?: ReviewTarget) => void;
+  /** 「在等前置」那一行点名字时打开那条任务。 */
+  onOpenTask?: (taskId: string) => void;
   /** 此刻能「继续本轮审查」的那一轮和那个动作（审查格主按钮同一份）。不给 = 尾注上不挂。 */
   reviewRetry?: ReviewRetryAction | null;
   /** 此刻能「重试这一回合」的那条会话和那个动作（turnRetry.ts）。不给 = 失败那句话后面不挂。 */
@@ -354,6 +357,8 @@ export function ConversationFeed({
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
   /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
   onReuseInput?: (input: ReusableInput) => void;
+  /** 不在会话正文里、按时刻插进来的那几样（你派出去的那一句小灰字……，见 feedAsides.ts）。 */
+  asides?: readonly FeedAside[];
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   // 被挡回的用户操作合进同一条任务历史。正文读到手之后**无条件合** —— 「有没有正文」跟「这段历史该不该
@@ -393,9 +398,15 @@ export function ConversationFeed({
   const reviewRunning = lastFeedRow?.kind === "review-lane" && lastFeedRow.id === currentLaneId && progressOf(lastFeedRow).phase === "running";
   // 没出结论的那几轮为什么没出：按轮次身份从审查状态取，贴在那颗结论气泡下面（reviewNoVerdictCause）。
   const causes = laneNoVerdicts(feedRows, reviews);
+  // 此刻挂着动作的那几句（等你裁定、继续本轮审查、重试这一回合）：尾注里各占一个位置，不被挤掉。
+  const actions = footnoteActions({ items, task, reviews, causes, crashed, reviewRetry, turnRetry });
+  // 另有一处看得见的那几道题：提问那一轮的结算说明对的是它们时就不再抄一遍（isUnshownNotice）。
+  // 跟答过的气泡读同一份合并后的问答历史，补读、推送、删除一到两边同时变（useQuestionHistory.ts）。
+  const history = useQuestionHistory(task.id, questionHistory, liveQuestionHistory);
+  const onScreen = questionsOnScreen(task, history.records);
   const { rows, receipts, footnotes } = conversationSystemRows(
-    conversationDebateRows(feedRows, { reviews }),
-    { failures: crashed, context: noticeContext, causes },
+    conversationDiscussionRows(conversationDebateRows(feedRows, { reviews }), { discussions }),
+    { failures: crashed, context: noticeContext, causes, held: actions.held, onScreen },
   );
   // 一轮审查里（审查者气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
   // 那一回合上（见 laneReceipts）。
@@ -404,63 +415,31 @@ export function ConversationFeed({
     ...[...receipts.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.receipts] : [])]
       .flatMap((list) => list.flatMap((receipt) => receipt.lane ? [receipt.lane] : [])),
   ];
-  const lanes = new Map(shownLanes.map((lane) => [lane.id, laneReceipts(lane)] as const));
+  const lanes = new Map(shownLanes.map((lane) => [lane.id, laneReceipts(lane, actions.held)] as const));
   const laneViews = [...lanes.values()];
   const receiptsOf = (id: string) => receipts.get(id) ?? laneViews.find((lane) => lane.receipts.has(id))?.receipts.get(id);
   const footnoteOf = (id: string) => footnotes.get(id) ?? laneViews.find((lane) => lane.footnotes.has(id))?.footnotes.get(id);
   const wakeReplies = monitorWakeReplyIds(items);
-  // 「执行者驳回了，现在由你裁定」那条旁注上挂一颗「去裁定」——那句话把出路列了出来，
-  // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。
-  //
-  // 两个条件都要：**此刻真的挂着一条待裁定的驳回**（`openDisputeIn`，与审查面板同一口径），
-  // 以及**最后那条**这样的旁注。只认文本会在裁定完之后留下一颗按钮，指向一张已经不在的卡；
-  // 只认状态则会给历史上每一次驳回都挂一颗，而其中只有最后一条还作数。
-  //
-  // 按钮只把人送到那张卡跟前，不在这里复制四个出口：每个出口都带自己的确认框和说明
-  // （「作废」和「转出去」的差别就写在那些文字里），复制一份必然漂成两套说法。
-  const lastDisputeId = [...items].reverse().find((item) => item.kind === "event" && noticeView(item).dispute)?.id ?? null;
-  const disputeEventId = onOpenReviewPanel && openDisputeIn(reviews) ? lastDisputeId : null;
-  // 尾注里「等你裁定」那一句的点只说现在：裁定过的（或者后来又驳回过一次的）就不再是要你拍板的事。
-  // 拿不到审查记录的视图不知道裁没裁，照位置判。
-  const disputeOpen = (part: FootnotePart) => part.kind === "event" && part.item?.id === lastDisputeId
-    && (reviews == null || !!openDisputeIn(reviews));
+  // 「执行者驳回了，现在由你裁定」那一句留到裁完为止：它说的是此刻的状态。裁定本身在回复框顶上那一行，
+  // 这里不再挂「去裁定」把人送去别处（用户 2026-11-15）。
+  // 尾注里「等你裁定」那一句的点只说现在：裁定过的、后来又驳回过一次的、任务已经裁不了的，都不再是
+  // 要你拍板的事。
   const settleDisputes = (footnote: TurnFootnote | undefined): TurnFootnote | undefined => footnote && {
     ...footnote,
-    parts: footnote.parts.map((part) => part.view.dispute && !disputeOpen(part) ? { ...part, view: { ...part.view, tone: "neutral" as const } } : part),
+    parts: footnote.parts.map((part) => part.view.dispute && part.id !== actions.standingDisputeId
+      ? { ...part, view: { ...part.view, tone: "neutral" as const } } : part),
   };
-  const ruleAction = disputeEventId ? (
-    <button type="button" className="system-event-cta" onClick={() => onOpenReviewPanel!()}>
-      <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
-    </button>
-  ) : null;
-  // 「这一轮审查为什么没结论」那一句后面挂「继续本轮审查」：只挂在此刻还能续的那一轮（同一场、同一轮）
-  // 上 —— 续过了（round.retry 没了）、另开了新链，`reviewRetry` 就换了人或者没了，这颗也就跟着不出。
-  // 那一句平时是结论气泡下面按轮次身份取的那一句（见 reviewNoVerdictCause）；会话里认不出那张卡时
-  // （没有「开始」那一条、拿不到审查状态的视图），才退回最后一条说这一轮原因的旁注。
-  const retryCauseId = reviewRetry ? noVerdictPartId(reviewRetry.review.runId, reviewRetry.review.round) : null;
-  const causeHostsRetry = !!retryCauseId && [...causes.values()].some((entry) => noVerdictPartId(entry.runId, entry.round) === retryCauseId);
-  const retryEventId = reviewRetry && !causeHostsRetry ? [...items].reverse().find((item) => item.kind === "event"
-    && item.notice?.kind === "review.no_verdict"
-    && item.notice.runId === reviewRetry.review.runId && item.notice.round === reviewRetry.review.round)?.id ?? null : null;
-  // 普通回合崩了、此刻能重试：「重试这一回合」挂在**那一回合**（会话里最后一条气泡，且就是要重跑的
-  // 那条会话）尾注里说它没办成的那半句后面 —— 直播那一路是异常回合边界，刷新以后是从会话行补出来的
-  // 那一句，两路都归「failure」这件事。那半句被别的几件事挤出了尾注（一回合最多三句），就挂在最后一句后面：
+  // 「重试这一回合」挂在那一回合尾注里说它没办成的那一句后面。认不出那一句时挂在最后一句后面：
   // 能重试时页面上一定要有这个入口。
-  const lastAgent = [...items].reverse().find((item) => item.kind === "agent");
-  const retryTurnFootnoteId = turnRetry && lastAgent?.kind === "agent" && lastAgent.session?.id === turnRetry.sessionId
-    ? `footnote:${lastAgent.id}` : null;
-  const turnRetryPartOf = (footnote: TurnFootnote) => footnote.id !== retryTurnFootnoteId ? null
-    : footnote.parts.findLast((part) => part.view.topic === "failure") ?? footnote.parts.at(-1) ?? null;
-  const isRetryable = (part: FootnotePart, footnote: TurnFootnote) => (part.kind === "cause" && part.id === retryCauseId)
-    || (part.kind === "event" && !!retryEventId && part.item?.id === retryEventId)
+  const turnRetryPartOf = (footnote: TurnFootnote) => footnote.id !== actions.retryTurnFootnoteId ? null
+    : footnote.parts.find((part) => part.id === actions.retryFailureId)
+      ?? footnote.parts.findLast((part) => part.view.topic === "failure") ?? footnote.parts.at(-1) ?? null;
+  const isRetryable = (part: FootnotePart, footnote: TurnFootnote) => (part.kind === "cause" && part.id === actions.retryCauseId)
+    || (part.kind === "event" && part.id === actions.retryEventId)
     || turnRetryPartOf(footnote) === part;
-  // 辩论条上的同一颗按钮：辩论就是为了裁定才开的，读完该能当场决定，而不是往上翻回
-  // 那条旁注（用户 2026-09-27）。条件比旁注那颗更严一格——必须**这场辩论**辩的就是
-  // 此刻待裁定的那条驳回，而且它已经说完了（还在跑时后端也会拒绝裁定）。
-  const openDispute = onOpenReviewPanel ? openDisputeIn(reviews) : null;
-  const resolvableDebateIds = new Set(
-    (openDispute?.dispute?.debates ?? []).filter((debate) => debate.status !== "running").map((debate) => debate.id),
-  );
+  // 辩论气泡：辩的就是此刻等裁定的那一条时写「收尾 · 立场」那一句。
+  const openTarget = reviewLocked(task) ? null : openDisputeTarget(reviews);
+  const panelSources = reviewPanelSources(task.workflowMode);
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {
     const item = items[index]!;
@@ -498,7 +477,7 @@ export function ConversationFeed({
           taskActive={task.status === "running" || task.status === "queued"}
           receipts={receiptsOf(item.id)}
           footnote={footnote?.parts.length
-            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some(isRuled) ? "rule" : footnote.parts.some((part) => isRetryable(part, footnote)) ? "retry" : "") }
+            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some((part) => isRetryable(part, footnote)) ? "retry" : "") }
             : undefined}
         />
       );
@@ -506,8 +485,8 @@ export function ConversationFeed({
     if (item.kind === "user") {
       return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} onReuse={onReuseInput} />;
     }
-    // 辩论兜底那一路不经过 conversationSystemRows，预览开关那几种老记录在这里同样拿掉。
-    if (isPreviewLifecycleNotice(item.text)) return null;
+    // 辩论兜底那一路不经过 conversationSystemRows，不画的那几种旁注（isUnshownNotice）在这里同样拿掉。
+    if (isUnshownNotice(item.text, onScreen)) return null;
     if (preserveSystemStyle) {
       return (
         <p
@@ -525,8 +504,6 @@ export function ConversationFeed({
     if (view.tier === "reply") return <CommandReply key={item.id} item={item} view={view} />;
     return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, "standalone");
   };
-  // 「去裁定」挂在等你裁定的那半句后面（只有此刻还挂着的那一条）。
-  const isRuled = (part: FootnotePart) => part.kind === "event" && !!disputeEventId && part.item?.id === disputeEventId;
   // 一轮审查就地摊开时的经过：那一轮里的旁注照样记在审查者那一回合上。
   const renderLaneRows = (lane: ConversationReviewLane) => {
     const roles = reviewLaneMessageRoles(lane);
@@ -538,8 +515,7 @@ export function ConversationFeed({
   };
   const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
     <FootnoteLine key={footnote.id} footnote={footnote} placement={placement}
-      actionFor={(part) => isRuled(part) ? ruleAction
-        : turnRetry && turnRetryPartOf(footnote) === part ? <RetryCta label="重试这一回合" run={turnRetry.run} blocked={turnRetry.blocked} />
+      actionFor={(part) => turnRetry && turnRetryPartOf(footnote) === part ? <RetryCta label="重试这一回合" run={turnRetry.run} blocked={turnRetry.blocked} />
           : isRetryable(part, footnote) && reviewRetry ? <RetryCta label="继续本轮审查" run={reviewRetry.run} blocked={reviewRetry.blocked} /> : null} />
   );
   // 「N 条记录」里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套。
@@ -557,7 +533,7 @@ export function ConversationFeed({
   ) : <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
 
   return (
-    <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory} live={liveQuestionHistory}
+    <QuestionHistoryProvider history={history}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
     <MessageDeleteProvider onDelete={onDeleteMessage}>
     <ReceiptReviewContext.Provider value={receiptReview}>
@@ -565,7 +541,8 @@ export function ConversationFeed({
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
           {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} onReuse={onReuseInput} />}
-          {rows.map((row) => {
+          {interleaveAsides(rows, asides ?? [], feedRowAt).map(({ row, aside }) => {
+            if (aside) return <Fragment key={aside.key}>{aside.node}</Fragment>;
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
               return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} />;
@@ -581,17 +558,28 @@ export function ConversationFeed({
               );
             }
             if (row.kind === "debate-lane") {
+              const target = row.candidate && { runId: row.candidate.runId, round: row.candidate.round };
               return (
-                <DebateLane
+                <DebateBubble
                   key={row.id}
                   row={row}
-                  onResolve={
-                    onOpenReviewPanel && row.candidate && resolvableDebateIds.has(row.candidate.debate.id)
-                      ? () => onOpenReviewPanel()
-                      : undefined
-                  }
+                  task={task}
+                  reviews={reviews}
+                  awaiting={sameDisputeTarget(openTarget, target)}
+                  onOpenRound={onOpenReviewPanel && target && reviewTargetLocatable({ source: "free", ...target }, panelSources) ? onOpenReviewPanel : undefined}
                   fallback={row.items.map((item) => renderItem(item, true))}
                 />
+              );
+            }
+            if (row.kind === "discussion-lane") {
+              const topic = row.discussion?.topic;
+              return (
+                <Fragment key={row.id}>
+                  {topic && <UserBubble id={`${row.id}:topic`} author="你" text={topic} attachments={row.discussion!.attachments ?? []} at={row.discussion!.startedAt} />}
+                  <DiscussionBubble row={row} task={task} fallback={row.items.map((item) => renderItem(item, true))}
+                    onOpen={onOpenReviewPanel && panelSources.has("free")
+                      ? (discussionId) => onOpenReviewPanel({ source: "free", runId: null, round: null, discussionId }) : undefined} />
+                </Fragment>
               );
             }
             // 收了口的审查轮不在这里（它是上面那一行审查结论）；走到这里的是还没出结论的那一轮。
@@ -607,7 +595,11 @@ export function ConversationFeed({
             : <LiveStrip since={task.liveSince} />)}
           {/* 正文一条都没读下来时这里是空的，但那不是「还没开始跑」——`forkBlockedReason`
               在场就说明读挂了，再劝用户点运行是把失败说成了空会话。 */}
-          {!items.length && !loading && !error && !forkBlockedReason && !activityPhase && (
+          {task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked) && !activityPhase && (
+            <PrerequisiteWait view={task.prerequisites} onOpenTask={onOpenTask} />
+          )}
+          {!items.length && !asides?.length && !loading && !error && !forkBlockedReason && !activityPhase
+            && !(task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked)) && (
             <div className="task-conversation-empty">
               <File size={20} aria-hidden="true" />
               <p>点击「运行」开始，执行输出会实时显示在这里。</p>
@@ -624,7 +616,6 @@ export function ConversationFeed({
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} revealReady={bodyReady} />
       </div>
-      <QuestionDock>{dock}</QuestionDock>
     </ImagePreviewGroup>
     </ReceiptReviewContext.Provider>
     </MessageDeleteProvider>

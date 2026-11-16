@@ -76,7 +76,7 @@ function rewritePath(base: string, add: string | null): string | null {
  *
  * `PATH` 这一段是给「只把 `PATH` 交给 MCP 子进程」的那几家用的(copilot 文档明写其余变量
  * 必须写死在登记里,而写死就是过期的假身份)。约定本体与四条安全要点见 `@ash/shared/mcp`
- * 的 `ASH_TURN_IDENTITY_PATH_DIR`;认得它的是 `mcp/src/runtime.ts`。
+ * 的 `ASH_TURN_IDENTITY_PATH_DIR`;认得它的是 `mcp/src/turn-identity.ts`。
  *
  * 底座那份 `PATH` 先过一遍筛子:**ash 自己可能就是从一个 ash 任务里起来的**,那时继承到的
  * `PATH` 里带着**那条任务**的身份目录 —— 不筛掉就是一条跨任务借身份的暗路。
@@ -111,6 +111,3 @@ export function withoutTurnIdentity<T extends Record<string, string | undefined>
   if (path !== null) out.PATH = path;
   return out as T & Record<string, string | undefined>;
 }
-
-/** MCP 子进程要拿到的那几个变量名(codex 的 `env_vars` 白名单按它声明)。 */
-export const TURN_IDENTITY_ENV_KEYS = ASH_TURN_IDENTITY_ENV_KEYS;

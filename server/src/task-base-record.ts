@@ -3,6 +3,7 @@ import { db } from "./db/index.js";
 import { tasks, taskBranchReceipts } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
 import { baseRef } from "./task-branch-plan.js";
+import { rebaseInheritedCommits } from "./prerequisite-dependency.js";
 import { now } from "./util.js";
 
 export async function recordCompletedBaseUpdate(repo: string, taskId: string, targetBranch: string,
@@ -13,5 +14,6 @@ export async function recordCompletedBaseUpdate(repo: string, taskId: string, ta
       taskId, sourceCommit: intent.head, mergeCommit: intent.rebased, targetBranch }).onConflictDoNothing();
     await tx.update(tasks).set({ worktreeStartCommit: intent.target, acceptedSourceCommit: null,
       baseUpdateIntent: null, stage: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+    await rebaseInheritedCommits(taskId, intent.target, tx);
   });
 }

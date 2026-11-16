@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话里 ash 的话 · 改成回复末尾的一句</title>
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="audit.css">
+<style>
+/* 这一页只讲一处：会话里 ash 自己说的那几行改成什么样。「现在」两张照 2026-11-13 的两张截图画，「改后」是要做成的样子。
+   样机沿用报告的规矩：ash 自己的色板、恒为浅色、字号不低于 12px。 */
+.top { padding: clamp(48px, 7vw, 88px) 0 clamp(28px, 4vw, 48px); }
+.top h1 { font-size: clamp(28px, 3.6vw, 42px); margin-bottom: 20px; }
+.top .lede { font-size: 17px; }
+main > section { padding: 0 0 clamp(40px, 6vw, 72px); border-top: 0; }
+.rewrite figure + small { margin-top: 4px; }
+.rewrite > .quotes { max-width: 780px; }
+
+.c { min-width: 520px; padding: 20px 24px; }
+.c.fade { padding-top: 4px; -webkit-mask-image: linear-gradient(transparent, #000 44px); mask-image: linear-gradient(transparent, #000 44px); }
+.c-turn { display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 10px; }
+.c-turn > * { grid-column: 2; }
+.c-turn > .c-av { grid-column: 1; grid-row: 1; }
+.c-turn + .c-turn { margin-top: 30px; }
+.c-av { width: 20px; height: 20px; border-radius: 50%; background: #ededf0; color: var(--m2); font: 500 12px/20px var(--sans); text-align: center; }
+.c-head { display: flex; align-items: center; gap: 8px; min-height: 20px; margin-bottom: 6px; color: var(--m2); font-size: 12px; }
+.c-head b { font-weight: 500; }
+.c-proc { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; color: var(--m2); font-size: 13px; }
+.mock .c-proc svg { width: 12px; height: 12px; }
+.c-body { font-size: 14px; line-height: 1.7; }
+.c-body p { margin: 0 0 8px; }
+.c-body ul { margin: 0 0 8px; padding-left: 22px; color: #3d3d44; }
+.c-body ul:last-child, .c-body p:last-child { margin-bottom: 0; }
+.c-body code { background: #efeff2; }
+
+/* 现在：图标落在头像那一列，一句占一行 */
+.c-row { display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 10px; align-items: center; min-height: 24px; margin: 14px 0; color: var(--m2); font-size: 13px; }
+.c-turn + .c-row { margin-top: 22px; }
+.c-row + .c-turn { margin-top: 20px; }
+.mock .c-row > svg { width: 14px; height: 14px; margin: 0 3px; fill: currentColor; stroke: none; }
+.c-row .ok { color: #168466; }
+.c-row .bad { color: #d93d4c; }
+.c-row .warn { color: #b57b00; }
+.c-row time { margin-left: 12px; color: var(--m3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.mock .c-row span svg { width: 14px; height: 14px; margin-left: 14px; color: var(--m3); vertical-align: -2px; }
+.c-row.lone { display: block; margin-left: 30px; font-size: 12px; }
+
+/* 改后：正文下面一句。和回合头同一档字，几件事之间一个间隔号 */
+.c-tail { display: flex; flex-wrap: wrap; align-items: baseline; margin: 8px 0 0; color: var(--m2); font-size: 12px; line-height: 22px; }
+.c-tail > span:not(:last-of-type)::after { content: "·"; margin: 0 7px; color: var(--m3); }
+.c-tail code { padding: 0; background: none; font: 12px var(--mono); }
+.c-tail time { margin-left: 10px; color: var(--m3); font-variant-numeric: tabular-nums; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.c-tail .dot::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #d93d4c; vertical-align: 1px; }
+.c-tail .dot.warn::before { background: #b57b00; }
+.mock .c-go { height: 20px; margin-left: 8px; padding: 0 8px; border-radius: 6px; box-shadow: inset 0 0 0 1px #d6d6dc; background: #fff; color: #1c1c1f; font-size: 12px; font-weight: 500; line-height: 20px; }
+.c-acts { display: flex; align-items: flex-start; gap: 2px; height: 0; margin: 2px 0 0 -6px; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.c-acts > * { flex: none; }
+.c-acts .more { height: 26px; margin: 1px 0 0 4px; padding: 0 6px; border-radius: 6px; color: var(--m2); font-size: 12px; line-height: 26px; }
+.c-acts .more.on { background: #ededf0; color: #1c1c1f; }
+.c-turn:has(.c-acts) { margin-bottom: 10px; }
+.c-turn:hover .c-acts, .c-turn:hover .c-tail time, .is-hover .c-acts, .is-hover .c-tail time { opacity: 1; }
+.c-acts.open { height: 30px; }
+.c-turn:has(.c-acts.open) { margin-bottom: 0; }
+.c-log { margin: 8px 0 0; padding: 0 0 0 12px; border-left: 1px solid #dcdce1; list-style: none; color: var(--m2); font-size: 12px; line-height: 22px; }
+.c-log li { display: flex; align-items: center; gap: 10px; }
+.c-log time { flex: none; width: 34px; color: var(--m3); font-variant-numeric: tabular-nums; }
+.mock .c-log svg { width: 13px; height: 13px; color: var(--m3); }
+
+/* 「颜色只说现在的事」的三格：正文用灰条代替，只看尾注 */
+.seq { grid-column: 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 12px; }
+.seq.two { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.seq figcaption { padding: 12px 18px 0; color: var(--m2); font-size: 12px; }
+.seq .c { min-width: 0; padding: 14px 18px 18px; }
+.seq .c-turn + .c-turn { margin-top: 20px; }
+.sk { height: 8px; margin: 4px 0 10px; border-radius: 4px; background: #e8e8ec; }
+.sk + .c-tail { margin-top: 2px; }
+.c-live { color: var(--m3); font-size: 13px; }
+@media (max-width: 860px) { .seq, .seq.two { grid-template-columns: minmax(0, 1fr); } }
+
+/* 没选的画法：两条回复之间一条线 */
+.c-rule { display: flex; align-items: center; gap: 12px; margin: 22px 0; color: var(--m3); font-size: 12px; white-space: nowrap; }
+.c-rule::before, .c-rule::after { content: ""; flex: 1; height: 1px; background: var(--mline); }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></symbol>
+  <symbol id="i-fork" viewBox="0 0 16 16"><circle cx="4" cy="3.5" r="1.5"/><circle cx="12" cy="3.5" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4 5v1.5a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V5M8 8.5V11"/></symbol>
+  <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></symbol>
+  <symbol id="i-open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.3 4.3V2.9h3.4v1.4M4.2 4.3l.6 8.3a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8.3M6.7 7v3.8M9.3 7v3.8"/></symbol>
+  <symbol id="f-alert" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="M8 4.3v4.4" stroke="#fafafa" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="11.3" r="1" fill="#fafafa"/></symbol>
+  <symbol id="f-check" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="m4.9 8.3 2.1 2.1 4.1-4.5" fill="none" stroke="#fafafa" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="f-shield" viewBox="0 0 16 16"><path d="M8 1.3 13.6 3v4.7c0 3.2-2.2 5.8-5.6 7-3.4-1.2-5.6-3.8-5.6-7V3L8 1.3Z"/><path d="m5.4 8 1.9 1.9 3.4-3.7" fill="none" stroke="#fafafa" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<nav class="nav"><div class="wrap">
+  <b>ash 界面审查</b>
+  <a href="index.html#rewrite">回报告</a>
+</div></nav>
+
+<header class="top"><div class="wrap">
+  <h1>ash 的话，写成回复末尾的一句。</h1>
+  <p class="lede measure">会话里占一行的只剩两种：<strong>你说的，它说的</strong>。ash 要告诉你的事——审查出了结论、验收了、没办成——接在它那条回复的正文下面，一句小灰字，不带图标。回复的头一行说它为什么开口，最后一行说它后来怎样。</p>
+</div></header>
+
+<main>
+<section><div class="wrap">
+
+  <div class="rewrite" style="--w:780px">
+    <h3>会话末尾</h3>
+    <p>你圈的第二处。三句话占三行，三种长相，比它最后那段结论还占地方。改后并成一句。</p>
+    <small>现在</small><figure class="mock"><div class="c fade">
+      <div class="c-turn"><div class="c-body">
+        <p>还有两处没测到：</p>
+        <ul><li>测试里点不到「过期的重试」，因为新请求一来旧提示就消失了。所以「过期的重试不会生效」这道保护只过了类型检查。</li><li>验证记录和哨兵格的这两种情况没有逐一实测，是靠三处共用同一套逻辑推断的。</li></ul>
+      </div></div>
+      <div class="c-row"><svg class="ok"><use href="#f-shield"/></svg><span>第 5 轮审查通过</span></div>
+      <div class="c-row"><svg class="ok"><use href="#f-check"/></svg><span>已验收，合并到 feat/ui-revamp<time>11/13 08:02</time><svg><use href="#i-trash"/></svg></span></div>
+      <div class="c-row lone">8 条记录</div>
+    </div></figure>
+    <small>改后</small><figure class="after mock"><div class="c fade">
+      <div class="c-turn"><div class="c-body">
+        <p>还有两处没测到：</p>
+        <ul><li>测试里点不到「过期的重试」，因为新请求一来旧提示就消失了。所以「过期的重试不会生效」这道保护只过了类型检查。</li><li>验证记录和哨兵格的这两种情况没有逐一实测，是靠三处共用同一套逻辑推断的。</li></ul>
+      </div>
+      <p class="c-tail"><span>第 5 轮审查通过</span><span>已验收，合并到 <code>feat/ui-revamp</code></span><time>11/13 08:02</time></p>
+      <div class="c-acts"><span class="m-ico"><svg><use href="#i-copy"/></svg></span><span class="m-ico"><svg><use href="#i-fork"/></svg></span><span class="m-ico"><svg><use href="#i-more"/></svg></span><span class="more">9 条记录</span></div>
+      </div>
+    </div></figure>
+    <small>指到时</small><figure class="after mock" aria-hidden="true"><div class="c is-hover">
+      <div class="c-turn">
+      <p class="c-tail" style="margin-top:0"><span>第 5 轮审查通过</span><span>已验收，合并到 <code>feat/ui-revamp</code></span><time>11/13 08:02</time></p>
+      <div class="c-acts"><span class="m-ico"><svg><use href="#i-copy"/></svg></span><span class="m-ico"><svg><use href="#i-fork"/></svg></span><span class="m-ico"><svg><use href="#i-more"/></svg></span><span class="more">9 条记录</span></div>
+      </div>
+    </div></figure>
+    <small>点开记录</small><figure class="after mock" aria-hidden="true"><div class="c is-hover">
+      <div class="c-turn">
+      <p class="c-tail" style="margin-top:0"><span>第 5 轮审查通过</span><span>已验收，合并到 <code>feat/ui-revamp</code></span><time>11/13 08:02</time></p>
+      <div class="c-acts open"><span class="m-ico"><svg><use href="#i-copy"/></svg></span><span class="m-ico"><svg><use href="#i-fork"/></svg></span><span class="m-ico"><svg><use href="#i-more"/></svg></span><span class="more on">9 条记录</span></div>
+      <ul class="c-log">
+        <li><time>23:53</time>开始盯：登记的导航测试</li>
+        <li><time>23:53</time>任务暂停，等测试结果</li>
+        <li><time>23:53</time>审查已预约，这一轮跑完自动开始</li>
+        <li><time>00:04</time>第 5 轮审查通过</li>
+        <li><time>08:02</time>合并完成：ash/sEmzSiit → feat/ui-revamp（纯 fast-forward）<svg><use href="#i-trash"/></svg></li>
+        <li><time>08:02</time>随 worktree 一并删除了 Git 忽略的本地文件或目录：.sub、data……等 31 项</li>
+        <li><time>08:02</time>清理完成：已删除 worktree 和分支 ash/sEmzSiit</li>
+        <li><time>08:02</time>验收完成：目标分支 feat/ui-revamp</li>
+        <li><time>08:02</time>已验收，合并到 feat/ui-revamp</li>
+      </ul>
+      </div>
+    </div></figure>
+    <p style="margin:8px 0 0">原来单挂在最后的那几条记录归到最后这条回复上，尾注里的两句也在里面，删除在每一条的后面。审查那半句照旧能点，去右侧审查格的那一轮。</p>
+  </div>
+
+  <div class="rewrite" style="--w:780px">
+    <h3>两条回复之间</h3>
+    <p>你圈的第一处。这四行是 ash 记的流水，本来就不该常显。它们冒出来，是因为现在记下的话不分种类，界面只能照字面猜：「哨兵已起：……」后面带着命令原文，里面有「失败」「错误」这样的字，就被当成出了岔子、标了红。改后不猜了，只有固定的几种说法上尾注，其余一律进记录。</p>
+    <small>现在</small><figure class="mock"><div class="c fade">
+      <div class="c-turn"><div class="c-body">
+        <ul><li>前端构建和界面约定检查都通过。</li></ul>
+        <p>还有两处没测到：</p>
+        <ul><li>验证记录和哨兵格的这两种情况，测试里没有逐个点过，靠的是三处共用同一套逻辑。</li></ul>
+      </div></div>
+      <div class="c-row"><svg class="bad"><use href="#f-alert"/></svg><span>哨兵已起</span></div>
+      <div class="c-row"><svg class="bad"><use href="#f-alert"/></svg><span>哨兵结束</span></div>
+      <div class="c-row"><svg class="warn"><use href="#f-alert"/></svg><span>本回合要落的终态被拦下，改为检查点暂停<time>11/12 23:53</time><svg><use href="#i-trash"/></svg></span></div>
+      <div class="c-row"><svg class="bad"><use href="#f-alert"/></svg><span>本回合要落的终态被拦下，改为检查点暂停</span></div>
+      <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b>被哨兵叫醒</div>
+        <div class="c-proc"><svg><use href="#i-open"/></svg>跑了 1 条命令，等了 1 次哨兵，另有 1 步</div>
+        <div class="c-body"><p>第 4 轮审查报的那个问题修好了，已提交（<code>abbfe68c</code>）。登记的导航测试也跑完了，退出码 0。任务已标记完成。</p></div>
+      </div>
+    </div></figure>
+    <small>改后</small><figure class="after mock"><div class="c fade">
+      <div class="c-turn"><div class="c-body">
+        <ul><li>前端构建和界面约定检查都通过。</li></ul>
+        <p>还有两处没测到：</p>
+        <ul><li>验证记录和哨兵格的这两种情况，测试里没有逐个点过，靠的是三处共用同一套逻辑。</li></ul>
+      </div>
+      <div class="c-acts"><span class="m-ico"><svg><use href="#i-copy"/></svg></span><span class="m-ico"><svg><use href="#i-fork"/></svg></span><span class="m-ico"><svg><use href="#i-more"/></svg></span><span class="more">4 条记录</span></div>
+      </div>
+      <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b>被哨兵叫醒</div>
+        <div class="c-proc"><svg><use href="#i-open"/></svg>跑了 1 条命令，等了 1 次哨兵，另有 1 步</div>
+        <div class="c-body"><p>第 4 轮审查报的那个问题修好了，已提交（<code>abbfe68c</code>）。登记的导航测试也跑完了，退出码 0。任务已标记完成。</p></div>
+      </div>
+    </div></figure>
+    <small>那四条在</small><figure class="after mock" aria-hidden="true"><div class="c is-hover">
+      <div class="c-turn">
+      <div class="c-acts open" style="margin-top:0"><span class="m-ico"><svg><use href="#i-copy"/></svg></span><span class="m-ico"><svg><use href="#i-fork"/></svg></span><span class="m-ico"><svg><use href="#i-more"/></svg></span><span class="more on">4 条记录</span></div>
+      <ul class="c-log">
+        <li><time>23:41</time>哨兵已起：登记的导航测试</li>
+        <li><time>23:53</time>哨兵结束：登记的导航测试，退出码 0</li>
+        <li><time>23:53</time>本回合要落的终态被拦下，改为检查点暂停：名下还有哨兵没了结</li>
+        <li><time>23:53</time>本回合要落的终态被拦下，改为检查点暂停：名下还有哨兵没了结</li>
+      </ul>
+      </div>
+    </div></figure>
+    <p style="margin:8px 0 0">前一条回复指到时的「4 条记录」里。「终态被拦下，改为检查点暂停」说的是任务暂停了、在等哨兵——等的时候回复末尾已经有「在等哨兵」那一行。</p>
+  </div>
+
+  <div class="rewrite" style="--w:1000px">
+    <h3>颜色只说现在的事</h3>
+    <p>尾注平时全灰，通过、已验收也不带绿。只有还没了结的坏消息，字前面有一颗小圆点：红是没办成，琥珀是等你拍板。后面一有新的回复，点就灭——审五轮不会留下五颗彩色记号。</p>
+    <div class="seq">
+      <figure class="after mock"><figcaption>第 4 轮刚审完</figcaption><div class="c">
+        <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b></div>
+          <div class="sk" style="width:92%"></div><div class="sk" style="width:64%"></div>
+          <p class="c-tail"><span class="dot">第 4 轮审查未通过，1 条意见</span></p>
+        </div>
+      </div></figure>
+      <figure class="after mock"><figcaption>它开始改了</figcaption><div class="c">
+        <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b></div>
+          <div class="sk" style="width:92%"></div><div class="sk" style="width:64%"></div>
+          <p class="c-tail"><span>第 4 轮审查未通过，1 条意见</span></p>
+        </div>
+        <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b>按第 4 轮审查的意见改</div>
+          <div class="c-live">在读 3 个文件…</div>
+        </div>
+      </div></figure>
+      <figure class="after mock"><figcaption>改完，又审过了</figcaption><div class="c">
+        <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b></div>
+          <div class="sk" style="width:92%"></div><div class="sk" style="width:64%"></div>
+          <p class="c-tail"><span>第 4 轮审查未通过，1 条意见</span></p>
+        </div>
+        <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b>按第 4 轮审查的意见改</div>
+          <div class="sk" style="width:80%"></div><div class="sk" style="width:48%"></div>
+          <p class="c-tail"><span>第 5 轮审查通过</span></p>
+        </div>
+      </div></figure>
+    </div>
+    <div class="seq two" style="margin-top:12px">
+      <figure class="after mock"><figcaption>这一轮没跑完</figcaption><div class="c">
+        <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b></div>
+          <div class="sk" style="width:70%"></div>
+          <p class="c-tail"><span class="dot">这一轮异常结束</span></p>
+        </div>
+      </div></figure>
+      <figure class="after mock"><figcaption>它不认审查的意见</figcaption><div class="c">
+        <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b>按第 4 轮审查的意见改</div>
+          <div class="sk" style="width:86%"></div><div class="sk" style="width:52%"></div>
+          <p class="c-tail"><span class="dot warn">驳回了第 4 轮的 1 条意见，等你裁定</span><button class="c-go" type="button">去裁定</button></p>
+        </div>
+      </div></figure>
+    </div>
+  </div>
+
+  <div class="rewrite" style="--w:780px">
+    <h3>哪句话去哪</h3>
+    <ul class="quotes">
+      <li><q>第 N 轮审查通过 / 未通过，N 条意见</q><span>尾注；点了去右侧审查格的那一轮</span></li>
+      <li><q>已验收，合并到某分支</q><span>尾注，和审查结论并成一句</span></li>
+      <li><q>这一轮异常结束、审查没能开始</q><span>尾注，还没了结时带红点</span></li>
+      <li><q>驳回了审查意见，等你裁定</q><span>尾注，带琥珀点，后面跟「去裁定」</span></li>
+      <li><q>哨兵已起、哨兵结束、改为暂停、合并完成、清理完成……</q><span>只在「N 条记录」里</span></li>
+      <li><q>审查正在进行</q><span>不变，还是那张卡：审查者正在说话</span></li>
+      <li><q>向你提问、合并冲突要你接手</q><span>不变，要你动手的还是卡</span></li>
+    </ul>
+  </div>
+
+  <div class="rewrite" style="--w:780px">
+    <h3>没选的画法</h3>
+    <p>两条回复之间拉一条细线、中间写小字，聊天软件里常见。没选它：线会把会话切成一段一段，哨兵那次你嫌的就是这个；它还把这句话挂在两条回复之间，可这句话说的是前一条回复的下场。</p>
+    <small>没选</small><figure class="mock" aria-hidden="true"><div class="c">
+      <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b></div>
+        <div class="sk" style="width:88%"></div><div class="sk" style="width:60%;margin-bottom:0"></div>
+      </div>
+      <div class="c-rule">第 4 轮审查未通过，1 条意见</div>
+      <div class="c-turn"><i class="c-av">C</i><div class="c-head"><b>claude@nodemach</b>按第 4 轮审查的意见改</div>
+        <div class="sk" style="width:76%"></div><div class="sk" style="width:44%;margin-bottom:0"></div>
+      </div>
+      <div class="c-rule" style="margin-bottom:4px">第 5 轮审查通过 · 已验收，合并到 feat/ui-revamp</div>
+    </div></figure>
+  </div>
+
+</div></section>
+</main>
+
+</body>
+</html>

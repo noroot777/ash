@@ -390,7 +390,6 @@ async function importValidated(
     acceptedGateRunId: m.task.acceptedGateRunId ?? null,
     acceptanceId: returningAcceptanceId(existing, m.task),
     pinnedAt: m.task.pinnedAt,
-    starredAt: m.task.starredAt,
     createdAt: m.task.createdAt,
     updatedAt: now(),
     startedAt: m.task.startedAt,
@@ -658,7 +657,7 @@ async function importValidated(
 
   if (autoResume) {
     // 火后不管:失败会照常走任务自己的失败结算,在界面上可见。
-    void resumeOrRunTask(m.task.id, { reason: "run" }).catch((e) => {
+    void resumeOrRunTask(m.task.id, { origin: "auto", reason: "run" }).catch((e) => {
       console.warn(`[handoff] 接力任务 ${m.task.id} 自动续跑失败:`, e);
     });
     notes.push("已触发自动续跑");

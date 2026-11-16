@@ -1,12 +1,15 @@
-import { Fragment, useEffect, useRef, type ReactNode } from "react";
-import { CaretDown, CaretRight, File, FolderSimple } from "@phosphor-icons/react";
+import { Fragment, useEffect, useRef, type MouseEvent, type ReactNode } from "react";
+import type { Note } from "@ash/shared";
+import { CaretDown, CaretRight, File, FolderSimple, NotePencil } from "@phosphor-icons/react";
 import { AgentIcon } from "./AgentIcon.tsx";
+import { noteTitle } from "../lib/noteMention.ts";
 import type { FileMentionState } from "../lib/useFileMention.ts";
+import type { MentionState } from "./useMention.ts";
 import type { MentionTreeRow } from "../lib/fileMentionTree.ts";
 
 // 输入框敲 `@` 弹出来的那张菜单：新建任务、单飞对话框、团队对话框共用一份。
 //
-// 两类候选混在同一张列表里、走同一条上下键序列，是**刻意**的：用户敲 `@` 的时候心里想的
+// 几类候选（智能体、随手记、文件）混在同一张列表里、走同一条上下键序列，是**刻意**的：用户敲 `@` 的时候心里想的
 // 是「引用点什么东西」，而不是「我现在要用智能体选择器还是文件选择器」。谁排前面由候选
 // 本身决定——`@cl` 那样的纯字母 token 两边都可能命中，智能体在前（它改的是「谁来干」，
 // 代价大、要一眼看见）；一旦 token 里出现 `/` 或 `.`，智能体那段自然就空了。
@@ -17,6 +20,7 @@ import type { MentionTreeRow } from "../lib/fileMentionTree.ts";
 
 export type MentionRow =
   | { kind: "agent"; key: string; agent: string; detail?: string }
+  | { kind: "note"; key: string; note: Note; excerpt: string | null }
   | { kind: "file"; key: string; row: MentionTreeRow };
 
 export function fileMentionRows(rows: MentionTreeRow[]): MentionRow[] {
@@ -71,6 +75,18 @@ function FileRow({ row, token }: { row: MentionTreeRow; token: string }) {
   );
 }
 
+/** 一行随手记：标题，命中不在标题里时补上命中的那一句，带着附件的说一声带几个。 */
+function NoteRow({ note, excerpt, token }: { note: Note; excerpt: string | null; token: string }) {
+  return (
+    <>
+      <NotePencil size={14} aria-hidden="true" />
+      <b><Highlighted text={noteTitle(note.body)} token={token} /></b>
+      {excerpt && <em><Highlighted text={excerpt} token={token} /></em>}
+      {note.attachments.length > 0 && <span className="mention-menu-tag">{note.attachments.length} 个附件</span>}
+    </>
+  );
+}
+
 export function MentionMenu({
   className,
   ariaLabel,
@@ -96,6 +112,16 @@ export function MentionMenu({
 }) {
   const firstFileIndex = rows.findIndex((row) => row.kind === "file");
   const selectedRef = useRef<HTMLButtonElement>(null);
+  // 悬停只认**指针真的动了**：候选异步到货、树展开时整张列表会在静止的指针底下挪位，
+  // 浏览器照样补发 mouseenter/mousemove，按它选中就等于让「到货」替用户换了一条。第一下
+  // 只记位置：菜单弹在指针底下时补发的那一下同样没有「之前」可比。
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  const hover = (index: number, event: MouseEvent) => {
+    const last = pointer.current;
+    pointer.current = { x: event.clientX, y: event.clientY };
+    if (!last || (last.x === event.clientX && last.y === event.clientY)) return;
+    onHover?.(index);
+  };
   // 候选多到要滚时，↑↓ 走出视野的那条必须自己跟着滚进来，否则回车选中的是什么全靠猜。
   useEffect(() => {
     selectedRef.current?.scrollIntoView({ block: "nearest" });
@@ -129,7 +155,7 @@ export function MentionMenu({
             style={row.kind === "file" && row.row.depth
               ? { paddingLeft: `${8 + row.row.depth * 14}px` }
               : undefined}
-            onMouseEnter={() => onHover?.(index)}
+            onMouseMove={(event) => hover(index, event)}
             onClick={() => onPick(row)}
           >
             {row.kind === "agent" ? (
@@ -138,7 +164,9 @@ export function MentionMenu({
                 <b>@{row.agent}</b>
                 {row.detail && <em>{row.detail}</em>}
               </>
-            ) : <FileRow row={row.row} token={token} />}
+            ) : row.kind === "note"
+              ? <NoteRow note={row.note} excerpt={row.excerpt} token={token} />
+              : <FileRow row={row.row} token={token} />}
           </button>
           )}
         </Fragment>
@@ -148,11 +176,34 @@ export function MentionMenu({
   );
 }
 
+/** 输入框（新建任务、单飞对话框、团队对话框）上那张合并菜单的成品：状态全由 useMention 给。 */
+export function InputMentionMenu({ mention, label, className }: {
+  mention: MentionState;
+  /** 读屏念的名字。 */
+  label: string;
+  /** 定位类（贴在哪个输入框边上）。盒子样式一律来自 .mention-menu。 */
+  className: string;
+}) {
+  return (
+    <MentionMenu
+      className={className}
+      ariaLabel={label}
+      hint={mention.hint}
+      rows={mention.rows}
+      token={mention.token}
+      status={mention.status}
+      selectedIndex={mention.index}
+      onHover={mention.setIndex}
+      onPick={mention.pick}
+    />
+  );
+}
+
 /**
- * 只有文件、没有智能体的那几个表面（新建任务、团队调度台、派生配置卡）的成品菜单：
+ * 只引用文件的那几个表面（派生配置卡、duet 交接）的成品菜单：
  * 状态文案和「回车插入路径」这套提示必须处处一样，所以收在这里，调用点只给一个标签。
  *
- * 单飞对话框不走这条 —— 它要把智能体和文件混在同一张列表里，自己拼 rows。
+ * 主输入框不走这条 —— 它们还要列随手记（单飞对话框还有智能体），走 InputMentionMenu。
  */
 export function FileMentionMenu({
   mention,

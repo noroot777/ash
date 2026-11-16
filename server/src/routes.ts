@@ -44,8 +44,10 @@ import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskMemoRoutes } from "./task-memos.js";
 import { mountTaskReadRoutes } from "./task-reads.js";
+import { mountAcceptMemoryRoutes } from "./accept-memory.js";
 import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
+import { mountDispatchHoldRoutes } from "./dispatch-hold-routes.js";
 import { mountMonitorRoutes } from "./monitor-routes.js";
 import { mountCleanupDebtRoutes } from "./cleanup-debt-routes.js";
 import { mountHandoffRoutes } from "./handoff-routes.js";
@@ -344,9 +346,12 @@ mountTaskRoutes(api);
 mountTaskMemoRoutes(api);
 // 看过哪些任务(侧栏绿点的已读记录,按人存,见 db/schema-task-reads.ts)。
 mountTaskReadRoutes(api);
+// 验收确认层上次怎么勾的(按人按项目,见 db/schema-accept-memory.ts)。
+mountAcceptMemoryRoutes(api);
 // 分组(批次容器)路由:列表/运行/暂停/批量建任务(从 task-routes.ts 拆出)。
 mountGroupRoutes(api);
 mountTaskRunRoutes(api);
+mountDispatchHoldRoutes(api);
 // 哨兵:绑在任务上的长跑命令,stdout 每一行就是一条唤醒事件(实现在 ./monitors.ts)。
 mountMonitorRoutes(api);
 

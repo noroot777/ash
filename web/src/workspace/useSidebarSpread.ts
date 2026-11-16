@@ -19,11 +19,10 @@ export type { SpreadBucket, WorkerIndex };
 // 动画期间仍按铺开态排版，否则列会先「啪」地塌回去、侧边栏再慢慢滑窄，看着像闪了一下。
 export const SPREAD_ANIM_MS = 260;
 
-export type SpreadFilter = "all" | "starred" | SpreadBucket;
+export type SpreadFilter = "all" | SpreadBucket;
 
 export const SPREAD_FILTERS: { key: SpreadFilter; label: string }[] = [
   { key: "all", label: "全部" },
-  { key: "starred", label: "星标" },
   { key: "todo", label: "需要你处理" },
   { key: "run", label: "在跑" },
   { key: "wait", label: "排着 / 暂停" },
@@ -31,8 +30,7 @@ export const SPREAD_FILTERS: { key: SpreadFilter; label: string }[] = [
   { key: "accepted", label: "验收完成" },
 ];
 
-// 窄态那排点：「全部」在点上表现为「一个都没选中」，不占一个点位；
-// 星标不是状态桶（见 matchesSpreadFilter），画成星形而不是圆点。
+// 窄态那排点：「全部」在点上表现为「一个都没选中」，不占一个点位。
 export const SPREAD_DOT_FILTERS = SPREAD_FILTERS.filter(
   (item): item is { key: Exclude<SpreadFilter, "all">; label: string } => item.key !== "all",
 );
@@ -42,14 +40,10 @@ export type SpreadCounts = Record<SpreadFilter, number>;
 // 分堆的判据见 lib/taskAttention.ts 的 spreadBucket；计数和筛选都经 lib/taskLook 的 taskLook 取它 ——
 // 侧栏行首那颗记号也从那里取，两边查的是同一张表。
 
-// 星标不是第六个桶：它是用户手动的软记号，与自动状态正交（同一个任务既可以
-// 「在跑」也可以带星标）。所以筛选判据单独一条，不进 spreadBucket。
-//
 // workers 必须一路传到这里：团队的桶写在执行者身上（见 spreadBucket），漏传的话
 // 筛选条上会冒出「排着 / 暂停」，点开却是一条已经干完等你验收的团队。
 export function matchesSpreadFilter(task: TaskListItem, filter: SpreadFilter, workers: TaskListItem[] = []): boolean {
   if (filter === "all") return true;
-  if (filter === "starred") return task.starredAt != null;
   return taskLook(task, workers).bucket === filter;
 }
 
@@ -57,14 +51,13 @@ export function matchesSpreadFilter(task: TaskListItem, filter: SpreadFilter, wo
 // 口径 = **当前作用域**里的顶层活任务，跟任务树里被筛的那批行是同一批 —— 任务模式
 // 下这个口径自然收窄到「在跑 / 待验收」，不必另开一套计数。
 export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCounts {
-  const counts: SpreadCounts = { all: 0, starred: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
+  const counts: SpreadCounts = { all: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
   // 执行者表按**全量**建：作用域筛过的列表里，团队的执行者虽然也在（scopeTasks 会带上），
   // 但别指望这一点 —— 桶的判据要的是这个团队真实的执行者集合。
   const workers = indexWorkers(tasks);
   for (const task of scopeTasks(tasks, scope)) {
     if (task.archived || task.parentId || !visibleInScope(task, scope)) continue;
     counts.all += 1;
-    if (task.starredAt != null) counts.starred += 1;
     counts[taskLook(task, workersFrom(workers, task.id)).bucket] += 1;
   }
   return counts;
@@ -72,8 +65,7 @@ export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCou
 
 // 「作用域里那份顶层列表」—— 筛过状态、按树的第一原则排好。侧栏**收起**时 J/K 拿它
 // 当退路顺序(展开着的时候那份顺序只认屏幕,见 sidebarNavigation)。筛选判据必须走
-// matchesSpreadFilter,别在调用点自己拼 `spreadBucket(task) === filter` —— starred 不是桶,
-// 那样星标筛选下会拿到空数组,按键被吞但选中不动。
+// matchesSpreadFilter,别在调用点自己拼 `spreadBucket(task) === filter`。
 export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filter: SpreadFilter): TaskListItem[] {
   const workers = indexWorkers(tasks);
   return orderedTopLevelTasks(

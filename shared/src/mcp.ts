@@ -27,6 +27,7 @@ export const ASH_MCP_TOOLS = [
   "list_tasks",
   "patch_task",
   "pause_task",
+  "propose_dispatch",
   "queue_insert",
   "queue_remove",
   "queue_reorder",
@@ -50,6 +51,7 @@ export const ASH_MCP_TURN_EXITS: Readonly<Record<string, string>> = {
   complete_task: "需要确认完成的回合会记未完成",
   pause_task: "要停在检查点等续跑的回合停不下来",
   ask_question: "要等人拍板的回合问不出来",
+  propose_dispatch: "派活单摆不出来，要派的活没法先给用户过目",
   report_stage: "审查回合报不上结论",
   debate_reply: "辩论里交不了发言",
   dispute_review: "驳不了审查意见",
@@ -68,7 +70,7 @@ export const ASH_MCP_TURN_EXITS: Readonly<Record<string, string>> = {
  * 配置层面的出路;登记里的 `env` 不受过滤,但只放得下静态值,装不了每回合都换的令牌。
  *
  * 于是同一个值再按一个不撞过滤的名字(`*_TICKET`)导一份:ash 起跑时两套都设,MCP 侧
- * 两套都读(`mcp/src/runtime.ts`),谁活着用谁。代价是这一个值在那些 CLI 里对**同一会话里
+ * 两套都读(`mcp/src/turn-identity.ts`),谁活着用谁。代价是这一个值在那些 CLI 里对**同一会话里
  * 别的 MCP server** 也可见 —— 它本来就只是「某条任务某一回合」的一次性凭据(claude 那条路
  * 上一直如此:claude 把整份环境原样传给每个 MCP 子进程),换来的是那几家 CLI 交得了卷。
  */
@@ -116,7 +118,7 @@ export const ASH_TURN_IDENTITY_FILE = "identity.json";
  * 预览实例也会换)。两条斜杠都认:Windows 上拼出来的是 `\`。
  *
  * 两侧共用这一个判据:server 侧拿它清(`withoutTurnIdentity`),MCP 侧拿它读
- * (`mcp/src/runtime.ts`)。各写一份的话,改名那天就只有一边改。
+ * (`mcp/src/turn-identity.ts`)。各写一份的话,改名那天就只有一边改。
  */
 export function isTurnIdentityPathEntry(entry: string): boolean {
   const parts = entry.replace(/[\\/]+$/, "").split(/[\\/]/);

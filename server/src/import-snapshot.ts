@@ -99,7 +99,7 @@ function holdRuntime(db: DatabaseSync): Record<string, number> {
   run(null, "free_review_rounds", ["status", "ended_at", "started_at"],
     `UPDATE free_review_rounds SET status='error', ended_at=COALESCE(ended_at, started_at) WHERE status='reviewing'`);
   run("reviews", "free_review_debates", ["status", "finished_at", "updated_at"],
-    `UPDATE free_review_debates SET status='failed', finished_at=COALESCE(finished_at, ?), updated_at=? WHERE status='running'`, at, at);
+    `UPDATE free_review_debates SET status='failed', finished_at=COALESCE(finished_at, ?), updated_at=? WHERE status IN ('running','synthesizing')`, at, at);
   run(null, "free_review_debate_turns", ["status", "ended_at"],
     `UPDATE free_review_debate_turns SET status='error', ended_at=COALESCE(ended_at, ?) WHERE status='speaking'`, at);
 

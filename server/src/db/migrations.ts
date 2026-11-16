@@ -12,8 +12,9 @@
 import { stampOnboardingBaseline } from "./migrate-onboarding.js";
 import { migrateSessionTurnIdentity } from "./migrate-session-turns.js";
 import { backfillMonitorHolds } from "./migrate-monitor-hold.js";
+import { backfillDispatchedBy } from "./migrate-dispatched-by.js";
 import type { Client } from "./node-sqlite-client.js";
-import { dropRetiredTables } from "./retired-schema.js";
+import { dropRetiredTables, dropRetiredTriggers } from "./retired-schema.js";
 
 async function widenWorkflowBuiltinIndex(client: Client): Promise<void> {
   try {
@@ -212,6 +213,7 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "accept_gate_runs", column: "diagnosis", why: "门禁事后归因已删除" },
   { table: "accept_gate_runs", column: "miss_attribution", why: "门禁事后归因已删除" },
   { table: "accept_gate_runs", column: "diagnosis_generation", why: "门禁事后归因已删除" },
+  { table: "tasks", column: "starred_at", why: "星标已移除" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。
@@ -224,6 +226,15 @@ const RETIRED_TABLES: { table: string; why: string }[] = [
   { table: "monitor_pending_calls", why: "内置 Monitor 历史扫描已移除" },
   { table: "monitor_scan_cursors", why: "内置 Monitor 历史扫描已移除" },
   { table: "monitor_pending_calls_rekey", why: "内置 Monitor 历史扫描已移除(换键中断留下的搬运表)" },
+];
+
+// 派出的任务来问 / 失败时记在派它的那条任务名下、画成它会话里一颗气泡的那一套（用户 2026-11-15 定的：
+// 派它的那条任务的会话里一律不出东西，提示只靠侧栏、任务头那颗键的数变色和右侧那一格）。
+// 只拆触发器，dispatch_signals 那张表连同已记下的行原样留着，不再有人读写。
+const RETIRED_TRIGGERS: { trigger: string; why: string }[] = [
+  { trigger: "dispatch_signals_question", why: "派出的任务来问不再画在派它的任务里" },
+  { trigger: "dispatch_signals_failed", why: "派出的任务失败不再画在派它的任务里" },
+  { trigger: "dispatch_signals_task_deleted", why: "dispatch_signals 不再有人读写" },
 ];
 
 // 旧自由工作流「合并&清理」的三列（merge_status/message/merged_at）在 DROP 前必须把
@@ -505,6 +516,8 @@ async function backfillMonitorTimeoutFromExpiry(client: Client): Promise<void> {
 }
 
 export async function runDataMigrations(client: Client): Promise<void> {
+  // 先拆退役的触发器：下面那几步数据搬运会改 tasks，别再让它们往没人读的表里记。
+  await dropRetiredTriggers(client, RETIRED_TRIGGERS);
   await widenWorkflowBuiltinIndex(client);
   await relaxDebateRoundIndex(client);
   await migrateLegacyNoteTaskLinks(client);
@@ -526,6 +539,7 @@ export async function runDataMigrations(client: Client): Promise<void> {
   await backfillMonitorTimeoutFromExpiry(client);
   await migrateSessionTurnIdentity(client);
   await backfillMonitorHolds(client);
+  await backfillDispatchedBy(client);
   // 升上来的老实例不该被糊一屏首启向导。判据只在这一刻算一次,之后 `src/onboarding.ts`
   // 只读那条记录 —— 拿实时业务列表反推会把首装过程本身当成「早就配好了」。
   await stampOnboardingBaseline(client);

@@ -15,6 +15,7 @@ import { derivedTaskTitle } from "./derived-task-title.js";
 import { freeReviewRounds, tasks } from "./db/schema.js";
 import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
+import { carvedOutUnder } from "./task-dispatch.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { createTasks, enrichTasks } from "./task-store.js";
 import { id, now } from "./util.js";
@@ -115,7 +116,8 @@ export async function deferOpenDispute(
 
     let created: Task;
     try {
-      const rows = await createTasks([{
+      // 从原任务里切出来的，就收在原任务下面（task-dispatch.ts）。
+      const rows = await createTasks([carvedOutUnder(source, {
         id: id(),
         projectId: source.projectId,
         groupId: source.groupId,
@@ -146,13 +148,15 @@ export async function deferOpenDispute(
         // 开始，所以它不会自己转起来。preset 更不行：那需要一份工作流步骤配置，硬塞
         // 过去只会建出一个跑不起来的任务。
         workflowMode: "free",
-      }]);
+      })]);
       created = rows[0]!;
       if (!created) throw new Error("派生任务创建失败");
     } catch (error) {
       await db.update(freeReviewRounds)
         .set({ disputeResolution: null, disputeResolvedAt: null, disputeResolutionNote: null })
         .where(eq(freeReviewRounds.id, round.id));
+      // 回滚也是「等你裁定」又变了一次：中间若有人读到过「已裁定」，这一声让面板和列表都追回来。
+      bus.publish({ type: "task.review", taskId: source.id });
       throw error;
     }
 

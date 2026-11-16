@@ -62,6 +62,8 @@ import {
   reconcileCheckpointDeliveries,
 } from "./pending-checkpoint-recovery.js";
 import { id, now } from "./util.js";
+import { dispatchHoldText, type DispatchHold } from "./task-hold.js";
+import type { FreezeGuard } from "./turn-freeze.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
 // 判定与投递参数的无状态部分拆在 pending-verdict.ts(本文件顶过 700 行上限);
@@ -355,10 +357,14 @@ export function deliverPendingMessages(taskId?: string): Promise<void> {
 // 调用处刚刚查出来的,顺手拼起来比让判定多返回一个字段便宜。
 function waitReason(
   task: { status: string; mode: string | null } | null,
-  blockers: { queueBlocked: boolean; groupPaused: boolean },
+  blockers: { queueBlocked: boolean; groupPaused: boolean; dispatchHold: DispatchHold | null; prerequisiteWait?: false | "prerequisites" | "launch"; discussing?: boolean },
 ): string {
   if (!task) return "读不到任务当前状态";
   if (blockers.groupPaused) return "任务所在分组已暂停";
+  if (blockers.dispatchHold) return dispatchHoldText(blockers.dispatchHold);
+  if (blockers.discussing) return "这条任务上正在讨论，说完（连同合稿）自动发出";
+  if (blockers.prerequisiteWait === "prerequisites") return "在等前置任务站稳，齐了会连同这条一起开工";
+  if (blockers.prerequisiteWait) return "在等自动开工（同组名额、分组恢复），开工时连同这条一起发出";
   if (task.status === "running") return "任务正在运行，等它这一轮结束";
   // queued 单独说:它既可能是正常排队,也可能是一具没人回滚的占位遗留 —— 后者正是
   // 2026-10-26 那次卡死的形态,所以措辞里要给出下一步该看哪里。
@@ -411,7 +417,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         m.execution = execution;
       }
       // 判定要的那几样持久事实（队列占位、分组暂停、哨兵来源、审查归属）读齐了交给纯判定；飞书推卡按同一份判（pending-delivery-facts.ts）。
-      const { verdict, facts: { needQueueCheck, queueBlocked, groupPaused } } = await deliveryVerdictOf(m, t, at);
+      const { verdict, facts: { needQueueCheck, queueBlocked, groupPaused, dispatchHold, prerequisiteWait, discussing } } = await deliveryVerdictOf(m, t, at);
       if (verdict.action === "wait") {
         // 还没到期(钟点未到、前置任务未完成)的等待是它自己的语义,不是滞留。
         if (!isDueForDelivery(m, at)) continue;
@@ -421,7 +427,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         // 「等」是正常的,**一直等**不是:久久发不出去要出声并留痕,否则它和「根本没这条
         // 消息」在日志与界面上长得一模一样(见 noteStalledPending)。判定本身不带 reason,
         // 在这里按刚查到的那几样组装一句人话 —— 用户想知道的就是「在等什么」。
-        noteStalledPending(stallView(m, at), waitReason(t, { queueBlocked, groupPaused }), at.getTime());
+        noteStalledPending(stallView(m, at), waitReason(t, { queueBlocked, groupPaused, dispatchHold, prerequisiteWait, discussing }), at.getTime());
         continue;
       }
       if (verdict.action === "cancel") {
@@ -470,7 +476,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
                 : "同一队列里还有未完成或正在运行的任务", at.getTime());
             continue;
           }
-          seat = claim.seat ?? undefined;
+          seat = claim.seat;
         }
         fired.add(m.taskId);
         const release = holdInFlight(m.taskId);
@@ -518,7 +524,7 @@ export function flushPendingWhenTurnIdle(taskId: string): void {
 export async function handDuePendingMessageToRun(
   taskId: string,
   // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: FreezeGuard; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);

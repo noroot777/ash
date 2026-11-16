@@ -23,9 +23,6 @@ import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { codexAshMcpArgs } from "./ash-mcp-inject.js";
 import { CodexExecAshMcp } from "./ash-mcp-confirm.js";
-import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
-
-const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
 import { openCodexAppServer } from "./codex-app-server.js";
 import { readCodexAppServerState } from "./codex-app-server-state.js";
 import { codexTurnError } from "./model-failure.js";
@@ -111,7 +108,7 @@ export class CodexExecutor implements AgentExecutor {
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
     // ash 自己的 MCP 起跑时注入(ash-mcp-inject.ts),连同按**变量名**透传的回合身份(codex 默认
     // 过滤 MCP 子进程环境;argv 里没有 token 值)。放在用户 extraArgs 之后,同 key 时以注入为准。
-    common.push(...codexAshMcpArgs(ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key])));
+    common.push(...codexAshMcpArgs(opts.env));
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }
 
@@ -186,7 +183,7 @@ export class CodexExecutor implements AgentExecutor {
     const turn = appServerCompatibleArgs(opts.extraArgs ?? []);
     args.push(...profile.args, ...turn.args);
     // App Server 同样由它自己拉起 MCP 子进程:注入与身份透传同 exec(见 execArgs)。
-    args.push(...codexAshMcpArgs(ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key])));
+    args.push(...codexAshMcpArgs(opts.env));
     return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 

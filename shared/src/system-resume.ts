@@ -6,9 +6,10 @@
 
 /**
  * queue 队列推进 / run 有人点了运行或继续（界面上的按钮，或 agent 调 run_task）/ retry 用户点
- * 重试 / group 分组运行 / wake 上游完成后叫醒下游 / repair 预设工作流把这一站打回重做。
+ * 重试 / group 分组运行 / wake 上游完成后叫醒下游 / repair 预设工作流把这一站打回重做 / hold 派它的
+ * 那条任务上按了「接着跑」（名下全部停下之后）。
  */
-export const RESUME_REASONS = ["queue", "run", "retry", "group", "wake", "repair"] as const;
+export const RESUME_REASONS = ["queue", "run", "retry", "group", "wake", "repair", "hold"] as const;
 export type ResumeReason = (typeof RESUME_REASONS)[number];
 
 /**

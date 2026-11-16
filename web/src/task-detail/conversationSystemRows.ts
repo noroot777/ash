@@ -3,7 +3,7 @@ import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
 import { conflictContextEvent, isConflictHandoff } from "./systemNoticeModel.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
-import { isPreviewLifecycleNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
+import { isUnshownNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
 import type { CrashedTurn } from "./turnFailure.ts";
 import { absorbs, noVerdictCauseView, noVerdictPartId, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";
 import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
@@ -118,6 +118,8 @@ type Accessors<Row> = {
   failureOf?: (turnId: string) => CrashedTurn | undefined;
   /** 认老记录时用得上的、这个任务自己的东西（见 timelineNoticeCopy 的 NoticeContext）。 */
   context?: NoticeContext;
+  /** 此刻挂着动作、尾注里不许挤掉的那几句（见 footnoteActions）。 */
+  held?: ReadonlySet<string>;
 };
 
 /**
@@ -272,9 +274,9 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
   closeSegment();
 
   const footnotes = new Map<string, TurnFootnote>();
-  for (const [id, list] of parts) footnotes.set(id, { id: `footnote:${id}`, parts: composeFootnote(list), live: false });
-  for (const entry of orphans) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts) };
-  for (const entry of verdicts) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts) };
+  for (const [id, list] of parts) footnotes.set(id, { id: `footnote:${id}`, parts: composeFootnote(list, acc.held), live: false });
+  for (const entry of orphans) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts, acc.held) };
+  for (const entry of verdicts) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts, acc.held) };
   // 现在的事：会话里最后一个有话要说的回合（或审查结论、原处那一句），后面又没有你的话。
   for (let index = out.length - 1; index >= 0; index -= 1) {
     const row = out[index]!;
@@ -303,22 +305,29 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
 }
 
 /**
- * 认归属之前就拿掉、哪儿都不出现的：预览开关那几种老记录（见 isPreviewLifecycleNotice），以及
- * 缘由已经写到它起头的回合头上的系统续跑记录（见 turnCause）。
+ * 认归属之前就拿掉、哪儿都不出现的：预览开关那几种老记录、题目另有一处看得见的提问结算说明（见
+ * isUnshownNotice），以及缘由已经写到它起头的回合头上的系统续跑记录（见 turnCause）。
  */
-function shown(item: ConversationItem): boolean {
-  return item.kind !== "event" || (!item.onTurnHead && !isPreviewLifecycleNotice(item.text));
+function shown(item: ConversationItem, onScreen?: ReadonlySet<string>): boolean {
+  return item.kind !== "event" || (!item.onTurnHead && !isUnshownNotice(item.text, onScreen));
 }
 
 export function conversationSystemRows(
   rows: ConversationDebateFeedRow[],
-  options: { failures?: ReadonlyMap<string, CrashedTurn>; context?: NoticeContext; causes?: ReadonlyMap<string, LaneNoVerdict> } = {},
+  options: {
+    failures?: ReadonlyMap<string, CrashedTurn>;
+    context?: NoticeContext;
+    causes?: ReadonlyMap<string, LaneNoVerdict>;
+    held?: ReadonlySet<string>;
+    /** 此刻另有一处看得见的那几道题（questionsOnScreen）。 */
+    onScreen?: ReadonlySet<string>;
+  } = {},
 ): ConversationDisplay {
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
-  const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item))), {
+  const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item, options.onScreen))), {
     turnIdOf: (row) => row.kind === "item" && row.item.kind === "agent" ? row.item.id : null,
-    // 辩论分段；还没出结论的那一轮审查不分（它收口以后就是被审那一回合后面那一行结论）。
-    breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),
+    // 辩论、讨论分段；还没出结论的那一轮审查不分（它收口以后就是被审那一回合后面那一行结论）。
+    breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "discussion-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),
     eventOf: (row) => row.kind === "item" && row.item.kind === "event" ? row.item : null,
     laneOf: (row) => row.kind === "review-lane" && row.complete ? row : null,
     pendingLaneOf: (row) => row.kind === "review-lane" && !row.complete,
@@ -326,6 +335,7 @@ export function conversationSystemRows(
     failureOf: (id) => options.failures?.get(id),
     causeOf: (lane) => options.causes?.get(lane.id),
     context: options.context,
+    held: options.held,
   });
   return display as ConversationDisplay;
 }
@@ -336,8 +346,9 @@ export type LaneRow = { kind: "item"; item: ConversationItem } | ConversationFoo
  * 同一套归属，用在一轮审查里：那一轮里的旁注同样不单独占行，记在审查者那一回合上。
  * 收了口的一轮，那条结论旁注就是审查结论那一行本身，不在摊开的经过里再说一遍。
  * 那一轮里的尾注不带颜色（那是过去的一轮，或者正在跑、还没有现在的结论）。
+ * `held` 跟外层同一份（footnoteActions）：那一轮里说它为什么断了的旁注，此刻能续时同样不许挤掉。
  */
-export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "complete">): {
+export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "complete">, held?: ReadonlySet<string>): {
   rows: LaneRow[];
   receipts: ReadonlyMap<string, TurnReceipt[]>;
   footnotes: ReadonlyMap<string, TurnFootnote>;
@@ -350,6 +361,7 @@ export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "compl
       turnIdOf: (row) => row.item.kind === "agent" ? row.item.id : null,
       breaksSegment: (row) => row.item.kind === "user",
       eventOf: (row) => row.item.kind === "event" ? row.item : null,
+      held,
     },
   );
   const footnotes = new Map([...attached.footnotes].map(([id, footnote]) => [id, { ...footnote, live: false }]));

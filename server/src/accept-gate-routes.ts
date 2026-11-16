@@ -3,8 +3,14 @@
 // 单独一个文件而不是塞进 task-accept.ts：那边已经 690 行，而这三条路由跟验收主流程
 // 没有共享状态 —— 它们只认 taskId。
 import type { Hono } from "hono";
+import { eq } from "drizzle-orm";
 import { acceptGateLogText } from "./accept-gate-process.js";
 import { acceptGateRunOf, acceptGateState, cancelAcceptGate, forceReleaseAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
+import { handOffPreviewConflict } from "./accept-gate-conflict.js";
+import { rememberedSkipGate } from "./accept-memory.js";
+import { actorOf } from "./auth/context.js";
+import { db } from "./db/index.js";
+import { tasks } from "./db/schema.js";
 
 export function mountAcceptGateRoutes(api: Hono): void {
   api.post("/tasks/:id/accept-gate/force-release", async (c) => {
@@ -15,7 +21,14 @@ export function mountAcceptGateRoutes(api: Hono): void {
     return result.ok ? c.json(result) : c.json(result, 409);
   });
   // 验收台要的那一份：这个项目设没设门禁、上一次跑成什么样、那次结果对现在这棵树还作不作数。
-  api.get("/tasks/:id/accept-gate", async (c) => c.json(await acceptGateState(c.req.param("id"))));
+  // 「运行」那一勾上次的样子（skipRemembered）是**问的这个人**的，跟着这一份带出去：前提列那一行和
+  // 确认层的默认读同一份，不会一处说跑、一处说跳过（accept-memory.ts）。
+  api.get("/tasks/:id/accept-gate", async (c) => {
+    const taskId = c.req.param("id");
+    const state = await acceptGateState(taskId);
+    const projectId = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.projectId;
+    return c.json({ ...state, skipRemembered: projectId ? await rememberedSkipGate(actorOf(c), projectId) : false });
+  });
 
   // 整份日志。几十 MB 的回归输出不塞进状态接口（那个接口每隔几秒就要拉一次），
   // 要看全文的人点一下单独取。
@@ -45,6 +58,12 @@ export function mountAcceptGateRoutes(api: Hono): void {
     const result = await rehandOffAcceptGate(c.req.param("id"));
     if (!result.ok) return c.json({ error: result.error }, 409);
     return c.json({ handedOff: true, gate: result.gate });
+  });
+
+  // 「让任务解决」：合并预览撞冲突时直接把那份冲突交给任务，不必先点验收再被拒（accept-gate-conflict.ts）。
+  api.post("/tasks/:id/accept-gate/conflict-handoff", async (c) => {
+    const result = await handOffPreviewConflict(c.req.param("id"));
+    return result.ok ? c.json(result) : c.json({ error: result.error }, 409);
   });
 
   // 不想等了：收掉它。取消是用户自己的动作，所以留下的是 canceled 而不是 failed ——

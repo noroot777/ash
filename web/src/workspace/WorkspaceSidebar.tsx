@@ -41,7 +41,6 @@ export function WorkspaceSidebar({
   onTaskMode,
   onTask,
   onRemoteTask,
-  onTaskStarred,
   onHandoffFinished,
   onQueueChanged,
   outbound,
@@ -74,7 +73,6 @@ export function WorkspaceSidebar({
   onTaskMode: () => void;
   onTask: (task: TaskListItem) => void;
   onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
-  onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
   onQueueChanged: () => void;
   outbound: OutboundBar;
@@ -188,7 +186,6 @@ export function WorkspaceSidebar({
         spread={spread}
         onTask={onTask}
         onRemoteTask={onRemoteTask}
-        onTaskStarred={onTaskStarred}
         onHandoffFinished={onHandoffFinished}
         onQueueChanged={onQueueChanged}
         outbound={outbound}

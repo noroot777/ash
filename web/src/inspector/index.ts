@@ -1,4 +1,4 @@
-export { InspectorHost } from "./InspectorHost.tsx";
+export { InspectorHost, InspectorOverlayProvider } from "./InspectorHost.tsx";
 export { InspectorHeadActions } from "./headActions.tsx";
 export { retireInspectorTab } from "./retiredTabs.ts";
 export { surfaceTabWhenUsed } from "./usedTabs.tsx";

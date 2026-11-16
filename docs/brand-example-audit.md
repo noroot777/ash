@@ -12,10 +12,10 @@
 
 | 内容 | 位置 | 修改 |
 | --- | --- | --- |
-| 旧品牌与项目示例 | `docs/demos/new-task-{editorial-demo,studio,summary-demo}.*`、`docs/handoff-location-demo.{html,js}` | harness / Harness → ash，包括 Demo 草稿存储键 |
-| 旧 H 头像 | `docs/demos/task-marker-flag.html`、`docs/ui-demo2/{app.js,workflow-codex.html}`、`docs/ui-demo-workflow-claude/index.html`、`docs/ui-demo.html`、`docs/ui-demo-free-postmerge-review/index.html` | H → A |
+| 旧品牌与项目示例 | 历史新建任务、接力设计原型（已清理，可从 Git 历史查看） | harness / Harness → ash，包括 Demo 草稿存储键 |
+| 旧 H 头像 | 历史任务标记、工作流与审查设计原型（已清理） | H → A |
 | 个人用户名与设备名 | 接力 Demo、验收 Demo | 换为“开发者”“开发用 MacBook” |
-| 个人目录示例 | `mcp/README.md`、`mobile/README.md`、`mobile/design-mockups/BRIEF*.md`、`docs/ui-demo-workflow-inline/*.html`、`docs/ui-demo.html` | 用户目录名换为 example |
+| 个人目录示例 | `mcp/README.md`、`mobile/README.md`，以及已清理的手机设计稿和 Web 原型 | 用户目录名换为 example |
 | 测试和组件示例路径 | `web/scripts/fixtures/{bulk-handoff-dialog,image-preview,inspector-attachments}.tsx`、相关路径测试、`server/scripts/test-dir-picker.ts` | 输入及断言中的用户名同步换为 example |
 | 解释性注释 | `server/src/{dir-picker,handoff-collect,singleton}.ts`、`web/src/lib/useHostInfo.ts`、`web/src/styles/task-tree.css` | 使用通用路径与 ash 项目名 |
 
@@ -36,7 +36,7 @@
 | --- | --- |
 | 旧安装兼容 | `HARNESS_*` 环境变量、`harness.db` 数据库迁移、`harness/*` 历史任务分支、旧 MCP 名、`harness-next:` / `harness.baseURL` 存储键及对应测试；删除会影响旧安装或历史数据读取 |
 | 历史任务测试输入 | `web/scripts/test-turn-fold.mjs`、`web/scripts/fixtures/turn-fold.tsx`、`server/scripts/test-handoff-return.ts` 等仍含旧工具名或项目名，不是线上固定文案 |
-| 真实记录与历史说明 | `docs/chat-mode.md`、`docs/demos/system-notice-task-demo.data.js`、`web/scripts/fixtures/legacy-*.md`、`server/src/local-open-routes.ts` 等包含历史路径；搜索性能注释包含当时的 harness 查询词 |
+| 真实记录与历史说明 | `docs/chat-mode.md`、`web/scripts/fixtures/legacy-*.md`、`server/src/local-open-routes.ts` 等包含历史路径；搜索性能注释包含当时的 harness 查询词 |
 | 校验和 | `mobile/package-lock.json` 的完整性哈希中有大小写不敏感的 fjh 字符片段，不是用户名 |
 
 Git 跟踪的文件和目录名称中未发现含 harness 或 fjh 的条目。当前检出所在的真实绝对路径仍含这两个名称，不属于仓库中的示例。

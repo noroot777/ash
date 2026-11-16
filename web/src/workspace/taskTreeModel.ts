@@ -32,8 +32,8 @@ export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 // 24 小时年龄闸的豁免名单：哪些行**永不因为旧而被折叠**。
 //
-// 五类，理由是同一句话「我要一直看得见」的五种形状 —— 用户手动摁下的记号（星标、置顶）、
-// 没盖的章（unaccepted）、坏在半路的活（失败）、以及停在那儿等你指挥的（提问中 /
+// 五类，理由是同一句话「我要一直看得见」的五种形状 —— 用户手动摁下的置顶、
+// 没盖的章（unaccepted）、坏在半路的活（失败）、以及停在那儿等你指挥的（提问中 / 等你裁定 /
 // 验证没通过，团队时问题写在执行者身上，所以要连 workers 一起看）。
 //
 // 失败这一档直接问 hasFailed，不绕行首那颗点：点现在虽然一直红着（见 lib/taskLook），
@@ -49,8 +49,7 @@ export function keepVisibleInPreview(
   indicator: TaskStatusIndicator | null,
   workers: TaskListItem[] = [],
 ): boolean {
-  return task.starredAt != null
-    || task.pinnedAt != null
+  return task.pinnedAt != null
     || hasFailed(task)
     || indicator === "unaccepted"
     // 门禁正在跑的那几分钟里它不再是 unaccepted（见 deriveTaskStatusIndicator），

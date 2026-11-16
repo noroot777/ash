@@ -9,6 +9,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { continueTask } from "./orchestrator.js";
+import { holdForPrerequisites } from "./prerequisite-gate.js";
 import { AfterTargetGoneError, resolveAfterTarget } from "./pending-after.js";
 import { enqueueMessage, flushPendingWhenTurnIdle } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
@@ -93,7 +94,10 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     return c.json({ error: error instanceof Error ? error.message : String(error), started: false }, 409);
   }
 
-  const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
+  // 讨论的两段之间回合是空的、状态也不是 running，照常直送就会插进去被当成讨论的一段（discussion.ts）：
+  // 讨论没说完（连同合稿）之前，这句话跟任务在跑时一样排着，说完自动发出。
+  const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued"
+    || await (await import("./discussion.js")).discussionHolds(taskId));
   const goalCommand = parseCliCommand(b.agent ?? (r.agentType as AgentType) ?? "claude", b.text ?? "");
   const goalExecution = !isTeam && isGoalExecution(goalCommand);
   const goalRecovery = !isTeam && isGoalRecovery(goalCommand);
@@ -174,6 +178,11 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       taskId, text, ...route, agent: b.agent ?? null,
       ownerUserId: route.actingUserId, execution: true,
     });
+    // 有前置、还没开过工：前置没站齐就把这句话暂存成执行型待发送，等齐由放行那一路连同它一起起（prerequisite-gate.ts）。
+    if (await holdForPrerequisites({ id: taskId }, { source: "run", actingUserId: route.actingUserId })) {
+      const row = await stash();
+      return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
+    }
     const claim = await claimQueueSeat(taskId);
     if (!claim.ok) {
       const row = await stash();

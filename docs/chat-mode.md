@@ -132,14 +132,9 @@
 ## 验证记录
 
 - `npm -w server run test:chat`：所有 15 类智能体的创建/更新成员、点名派发；使用模拟执行器工厂验证真实 resolver/run 链路保留类型、模型和参数、只读工具事件不打断回复、项目目录不被清理、撤权和已停止调用不启动进程。新增真实 invokeChat/ChatService 链路的无工具事件写入复现，覆盖同步写入、流式写入、已有文件修改/删除/重命名、临时创建后删除、非只读工具、警告持久化及停止竞态；不冒充 15 个真实 CLI 全部实测。
-- `npm -w web run test:chat`：独立数据库和模拟执行器，真实页面与 HTTP/SSE 链路覆盖 Codex/Claude/Grok 三种成员类型、中文相邻点名、咨询、原 Codex 类型的任务卡 running→done、停止刷新、390px 窄屏、减少动态效果、群间隔离和草稿保留。新增实际模拟写文件→调用失败→群中出现路径和警告→刷新后仍在、未误建任务的浏览器验证，截图为 `chat-boundary.png`。截图写入每次独立的系统临时目录，路径由控制台打印，不覆盖已跟踪示例图。
+- `npm -w web run test:chat`：独立数据库和模拟执行器，真实页面与 HTTP/SSE 链路覆盖 Codex/Claude/Grok 三种成员类型、中文相邻点名、咨询、原 Codex 类型的任务卡 running→done、停止刷新、390px 窄屏、减少动态效果、群间隔离和草稿保留。新增实际模拟写文件→调用失败→群中出现路径和警告→刷新后仍在、未误建任务的浏览器验证，截图为 `chat-boundary.png`。截图写入每次独立的系统临时目录，路径由控制台打印。
 - `ASH_CHAT_SMOKE=1 npx tsx server/scripts/test-chat-cli.ts codex`、`... claude` 和 `... grok`：三个真实 CLI 读取临时项目文件中的随机标记（标记不在 prompt 中），回复准确且简短、task 为 null、源文件不变，均通过；验证的是读取咨询，不冒充真实代码任务验收。
 - `npm run build`：全工作区构建及前端构建前置回归。
 - `npm -w server run test:multi-user`、`test:claude-stream` 和 `test:claude-relay-settings-live` 均通过；原有多用户权限、CLI 输出解析和供应商配置行为保持正常。构建保留已有大 chunk 提示。
 
 第三轮浏览器先尝试 Chrome 扩展具名会话「🔎 聊天副作用验证」。扩展拒绝 `visible:false`，返回 `Capability is not available: visibility`；无法保证新标签保持后台，因此改用临时 profile 的独立无头 Chrome，没有激活、接管或直连用户普通标签，也未启动有头浏览器。
-
-初版历史示例截图（当前测试不覆盖这些文件）：
-
-- [桌面群聊与已完成任务卡](../output/playwright/chat-desktop.png)
-- [窄屏聊天](../output/playwright/chat-mobile.png)

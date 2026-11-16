@@ -15,7 +15,6 @@ import {
   NotePencil,
   Play,
   Plus,
-  ChatsCircle,
   Stack,
   Stop,
   Trash,
@@ -72,7 +71,7 @@ type CommandPaletteProps = {
   onTaskUpdated: (task: TaskListItem) => void;
   /** projectId 为 null = 当前没有可用项目：由上层决定提示什么、要不要引导去建项目，这里不静默吞掉。 */
   onNote: (projectId: string | null, noteId: string | null) => void;
-  onComposer: (mode?: "single" | "team" | "duet") => void;
+  onComposer: () => void;
   onNewGroup: () => void;
   onNewProject: () => void;
   onDeleteTask: (task: TaskListItem) => void;
@@ -188,7 +187,7 @@ export function CommandPalette({
         result.push({
           key: "task:parent",
           group: taskGroup,
-          label: `${parent.kind === "team" ? "打开所属团队" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
+          label: `${parent.kind === "team" ? "打开所属团队" : parent.kind === "dispatch" ? "打开派它的任务" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
           icon: <TaskModeIcon mode={taskParentMode(parent)} />,
           run: closeRun(() => onTask(parent.task!)),
         });
@@ -261,8 +260,7 @@ export function CommandPalette({
       }
     }
     result.push(
-      { key: "new:task", group: "新建", label: "新建任务", keys: "C", icon: <Plus size={15} />, run: closeRun(() => onComposer("single")) },
-      { key: "new:duet", group: "新建", label: "新建讨论 · 给你答案", icon: <ChatsCircle size={15} />, run: closeRun(() => onComposer("duet")) },
+      { key: "new:task", group: "新建", label: "新建任务", keys: "C", icon: <Plus size={15} />, run: closeRun(() => onComposer()) },
       { key: "new:note", group: "新建", label: "新建随手记", keys: "NI", icon: <NotePencil size={15} />, run: closeRun(() => onNote(currentProject?.id ?? null, "__new__")) },
       { key: "new:group", group: "新建", label: "新建分组", icon: <Stack size={15} />, run: closeRun(onNewGroup) },
       { key: "new:project", group: "新建", label: "新建项目", icon: <FolderPlus size={15} />, run: closeRun(onNewProject) },

@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MCP_TOOL_BUDGETS } from "./prompt-budget-mcp.js";
 
 // 舞台根**故意含一个空格**：含空白的 `TMPDIR` 是合法环境（宿主给的临时目录就可能带空格），
 // 而第 2 轮审查正是在这种根下复现出「完整可读的地址被判成没有入口」—— 一条挡住验收的假红。
@@ -121,45 +122,8 @@ const BUDGETS: Record<string, number> = {
   "delivered/invited-first": 2350,
   "delivered/team-lead-first": 3600,
   "delivered/plan-first": 350,
-  // ── MCP 工具清单：每一条都常驻执行者的每一个回合 ─────────────────────────────
-  // 字段说明按 **SDK 真正发出去的那份 JSON Schema** 量（见采样器 `toolTexts`）。
-  "mcp/accept_task": 1750,
-  "mcp/answer_question": 600,
-  "mcp/ask_question": 1750,
-  "mcp/batch_create_tasks": 2300,
-  "mcp/complete_task": 1450,
-  "mcp/create_group": 400,
-  "mcp/create_queue": 220,
-  "mcp/create_task_chain": 2550,
-  "mcp/debate_reply": 1400,
-  "mcp/dispatch": 2100,
-  // 三块判据全文的唯一落脚处（见 PLACEMENT），所以它理应是工具里偏大的一条。
-  "mcp/dispute_review": 3400,
-  "mcp/get_queue": 160,
-  "mcp/get_task": 130,
-  "mcp/list_groups": 360,
-  "mcp/list_monitors": 430,
-  "mcp/list_tasks": 500,
-  "mcp/patch_task": 1100,
-  "mcp/pause_task": 950,
-  "mcp/queue_insert": 220,
-  "mcp/queue_remove": 190,
-  "mcp/queue_reorder": 270,
-  "mcp/read_task_transcript": 1150,
-  // 2026-11-03 +100（1952 → 2119 实测）：`recurs` 字段说明（`RECURS_FIELD_GUIDE`，≤ 200B），
-  // 审查者声明同类问题承接的唯一入口。用户给的预算是「字段说明 ≤ 200 + 清单旁一句 ≤ 120」。
-  // 2026-11-13 -330（2119 → 1791 实测）：旧口径的 `verificationBasis` 参数随那道闸一起删掉。
-  "mcp/report_stage": 1820,
-  "mcp/requeue_task": 560,
-  "mcp/resolve_group": 530,
-  "mcp/resolve_project": 250,
-  "mcp/run_group": 320,
-  "mcp/run_task": 340,
-  // 「怎么登记回归」的机制住在这里而不在每轮前言（见 mcp/src/tools/monitor.ts 文件头）：
-  // 一份工具说明换掉每一轮都重发一遍，所以它大得有理由，但仍然要有个顶。
-  "mcp/start_monitor": 5100,
-  "mcp/stop_monitor": 850,
-  "mcp/stop_task": 480,
+  // ── MCP 工具清单（prompt-budget-mcp.ts）：每一条都常驻执行者的每一个回合 ──────────
+  ...MCP_TOOL_BUDGETS,
 };
 
 /** 这几族是**同一批文字的派生视图**，算进总量就是把同一段话数两遍。 */
@@ -175,7 +139,8 @@ const DERIVED = (id: string): boolean =>
 const LONG_PATH = (id: string): boolean => id.startsWith("deep/");
 
 /** 片段集合加起来的顶。单条都压着、总量却靠「多加几份样本」涨回去，也算退步。 */
-const TOTAL_BUDGET = 83_400;
+// 2026-11-15 +2100：新工具 propose_dispatch（2068B，见 BUDGETS 里那一行）。
+const TOTAL_BUDGET = 85_500;
 
 /**
  * 动态段的上限：`<撑满的那一版> - <同名 -bare 样本>`。

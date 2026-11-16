@@ -6,17 +6,21 @@ import { createWorkflowMode } from "@ash/shared/free-workflow";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { groups, projects, queueItems } from "./db/schema.js";
+import { groups, projects, tasks } from "./db/schema.js";
+import { serializeQueueClaims } from "./queue-claim-chain.js";
+import { joinQueueOnCreate } from "./queue-membership-guard.js";
 import { republishGroupWaits } from "./pending-wait.js";
 import { repoKey } from "./git.js";
 import { pauseGroup, runGroupInBackground } from "./scheduler.js";
+import { writingGroupMembership } from "./launch-capacity.js";
 import { createTasks } from "./task-store.js";
-import { id, now, taskBody } from "./util.js";
+import { id, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { visibleProjectIds } from "./auth/visibility.js";
+import { visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
+import { batchPrerequisiteEdges, prerequisiteRefusal } from "./prerequisite-routes.js";
+import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
-import { detachTaskRefs } from "./task-refs.js";
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
 // 从 task-routes.ts 拆出的分组路由:列表/运行/暂停/批量建任务/编辑/删除。
@@ -160,6 +164,12 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
 
   // Pre-generate ids (chain 用得到).
   const ids = specs.map(() => id());
+  // 前置：按 key 认同一批里的、认不出的当已有任务（prerequisite-routes.ts）。已有的要看得见。
+  const prerequisites = batchPrerequisiteEdges(specs, ids, !!b.stack);
+  if (typeof prerequisites === "string") return c.json({ error: prerequisites }, 400);
+  const visible = new Set(await visibleTaskIds(actorOf(c), prerequisites.existing));
+  const hidden = prerequisites.existing.find((taskId) => !visible.has(taskId));
+  if (hidden) return c.json({ error: `前置任务 ${hidden} 不存在（同一批里的请用 key 指）` }, 404);
 
   const firstLine = (body?: string) =>
     (body ?? "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 30) ?? "";
@@ -229,18 +239,18 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   const queueId = b.chain && specs.length > 1 ? id() : null;
   let created: Task[];
   try {
-    created = await createTasks(rows, queueId
-      ? async () => {
-          const qts = now();
-          await db.insert(queueItems).values(
-            ids.map((tid, i) => ({ taskId: tid, queueId, position: i, createdAt: qts })),
-          );
-        }
-      : undefined);
+    // 任务行与队列成员同一笔事务在链上落库(createTasks 的 `atomic.after`):先插行后串队的话,
+    // 中间那一拍里另一处分组运行就能把队尾那几条当独立任务先起了。
+    created = await createTasks(rows, undefined, undefined, [], prerequisites.edges,
+      queueId ? { after: joinQueueOnCreate(queueId, ids, { existing: false }) } : undefined);
   } catch (error) {
     if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    const refused = prerequisiteRefusal(error);
+    if (refused) return c.json(refused.body, refused.status);
     throw error;
   }
+  // 已有的前置那边也多了「谁建在它上面」。
+  if (prerequisites.existing.length) await republishPrerequisiteView(prerequisites.existing);
 
   if (b.run) void runGroupInBackground(groupId);
   return c.json(
@@ -269,8 +279,14 @@ api.patch("/groups/:id", async (c) => {
 // Delete a group. Tasks are NOT deleted — they're just ungrouped (groupId null).
 api.delete("/groups/:id", async (c) => {
   const gid = c.req.param("id");
-  await detachTaskRefs("groupId", gid);
-  await db.delete(groups).where(eq(groups.id, gid));
+  // 摘出分组 = 改 groupId,归属写方进队列认领链(queue-claim-chain.ts);摘出与删组同一笔事务,
+  // 链上改分组的那一笔(groupMoveRefusal 重验目标组还在)就不会落在两者之间、把任务挂回一个刚删掉的组。
+  // 跟 task-refs.ts 同一口径:摘出不碰 updatedAt。
+  // 摘出来的成员里可能有正占着执行回合的：同组名额按分组数，这一笔要让数名额的那一边看得见（launch-capacity.ts）。
+  await serializeQueueClaims(() => writingGroupMembership(() => db.transaction(async (tx) => {
+    await tx.update(tasks).set({ groupId: null }).where(eq(tasks.groupId, gid));
+    await tx.delete(groups).where(eq(groups.id, gid));
+  })));
   return c.json({ deleted: true });
 });
 

@@ -49,6 +49,12 @@ export type TurnIdentity = {
   review: TurnReview | null;
   token: string | null;
   /**
+   * 这一轮**实际起跑的是哪一位执行器**。跟令牌同一处绑上来(`bindTurnToken`):起跑那一刻已经
+   * 定了用谁、续哪条会话。要核「此刻说话的是谁」的(讨论的一段只认该说的那一位交卷)读它,
+   * 不去会话表里按时间排谁最近 —— 接力或校时之后,最近的那条可能是早已结束的另一位。
+   */
+  agent: string | null;
+  /**
    * 这把锁是**哪一刻**占下的（`Date.now()`）。占位转正(`reclaimTurn`)沿用原值 —— 转正不是
    * 重新占一次,把它刷新会让一把已经占了十分钟的锁每次转正都显得崭新。
    *
@@ -111,7 +117,9 @@ const afterTurn = new Map<string, Array<() => void>>();
 // `tasks.status` 也可能还停在上一轮的终态 —— 只有回合锁看得见它，所以分组暂停既杀不到
 // 也拦不住（第 1 轮审查 finding 1：pause 已经 200 返回，重试仍把 CLI 拉起来了）。
 // 记在这里，由起跑前的最后一道闸在 spawn 之前消费（turn-freeze.ts）。
-const startFreeze = new Map<string, StopSettle>();
+// 「名下全部停下」打下的标记另带是谁按的（dispatch-hold.ts），撤回时那一句要指得到那条任务。
+type StartFreeze = { settle: StopSettle; hold?: { byTaskId: string; byTitle: string } };
+const startFreeze = new Map<string, StartFreeze>();
 
 /**
  * SCM 面板占住工作区时写进 `turns` 的身份。它**不是一个回合**：没有 agent、没有 spawn、
@@ -165,18 +173,23 @@ export const ACCEPT_HOLD_ROLE = "accept-hold";
  * 真回合的东西），标记会活到下一次真启动，把一次正常的「运行」莫名撤回成 paused，时间线
  * 还写成「所在分组已暂停」——分组其实早恢复了（第 3 轮审查稳定复现）。
  */
-export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"): boolean {
+export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused", hold?: StartFreeze["hold"]): boolean {
   const role = turns.get(taskId)?.role;
   if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
   if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
   if (role === SEAT_ROLLBACK_ROLE) return false; // 占位回滚也不是回合,理由同上
   if (role === ACCEPT_HOLD_ROLE) return false; // 团队验收的占位也不是回合,理由同上
-  startFreeze.set(taskId, settle);
+  startFreeze.set(taskId, hold ? { settle, hold } : { settle });
   return true;
 }
 
 /** 起跑前的最后一道闸消费它：非 null = 这一轮必须在 spawn 之前撤回，并按这个落位结算。 */
 export function takeStartFreeze(taskId: string): StopSettle | null {
+  return takeStartFreezeDetail(taskId)?.settle ?? null;
+}
+
+/** 同上，连「是谁按的」一起交出来（turn-freeze.ts 写撤回那一句用）。 */
+export function takeStartFreezeDetail(taskId: string): StartFreeze | null {
   const s = startFreeze.get(taskId) ?? null;
   startFreeze.delete(taskId);
   return s;
@@ -191,7 +204,7 @@ export function takeStartFreeze(taskId: string): StopSettle | null {
  */
 export function claimOwnTurn(taskId: string, role = "single", review: TurnReview | null = null): TurnIdentity | null {
   if (turns.has(taskId)) return null;
-  const identity: TurnIdentity = { role, review, token: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
+  const identity: TurnIdentity = { role, review, token: null, agent: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
   turns.set(taskId, identity);
   return identity;
 }
@@ -242,7 +255,7 @@ export function turnIdentity(taskId: string): TurnIdentity | null {
  * (orchestrator 起一轮、task-run 首跑、reattach 接回上一轮),这样「库里那个令牌」和
  * 「内存里这一轮」永远指同一件事 —— 来源核验据此只认一份事实。
  */
-export function bindTurnToken(taskId: string, token: string): void {
+export function bindTurnToken(taskId: string, token: string, agent: string): void {
   const held = turns.get(taskId);
   if (!held) {
     // 没占位就写令牌 = 调用顺序错了。不静默:来源核验会把这一轮当「不是当前这一轮」拒掉。
@@ -250,6 +263,7 @@ export function bindTurnToken(taskId: string, token: string): void {
     return;
   }
   held.token = token;
+  held.agent = agent ?? null;
 }
 
 /**
@@ -277,6 +291,7 @@ export function reclaimTurn(taskId: string, owner: TurnOwner, role: string,
     role,
     review: review === undefined ? held.review : review,
     token: held.token,
+    agent: held.agent,
     claimedAt: held.claimedAt,
     seq: held.seq, // 同一把锁,不换号(见 `TurnIdentity.seq`)
     windDown: held.windDown,

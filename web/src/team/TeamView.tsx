@@ -3,6 +3,7 @@ import type { Group, Task, TaskListItem } from "@ash/shared";
 import { batchesOf, teamGroupsOf, waitingWorkers, workersOf } from "@ash/shared/team";
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { SideDrawer } from "../components/SideDrawer.tsx";
+import { LeftDrawerProvider, useLeftDrawerHost } from "../components/LeftDrawer.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { TaskFileLinks } from "../components/TaskFileLink.tsx";
 import { FileViewer } from "../files/FileViewer.tsx";
@@ -20,7 +21,6 @@ import { useConversation } from "../lib/useConversation.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
-import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { useReuseInput } from "../task-detail/ReuseInput.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
@@ -116,7 +116,8 @@ export function TeamView({
   const { indicatorForTask, markTaskRead } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   const reuseInput = useReuseInput(task.id);
-  // 子智能体执行详情和执行者详情都是从左侧推出来的抽屉，一次只留一个。
+  // 子智能体执行详情、执行者详情、读全文那一屉（审查报告）都是从左侧推出来的抽屉，一次只留一个。
+  const leftDrawer = useLeftDrawerHost({ resetKey: task.id, onOpen: () => { setSelectedWorkerId(null); subagents.closeAgent(); } });
   const subagents = useSubagents(TEAM_INSPECTORS, {
     taskId: task.id,
     items: conversation.items,
@@ -124,7 +125,7 @@ export function TeamView({
     loading: conversation.refreshing,
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
-  }, { onOpen: () => setSelectedWorkerId(null) });
+  }, { onOpen: () => { setSelectedWorkerId(null); leftDrawer.close(); } });
   // 哨兵那一格：挂在调度台自己身上，看着别的面板时也要拉（图标条上那点活信号靠它）。
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
   const inspectors = monitorTab.inspectors;
@@ -162,8 +163,9 @@ export function TeamView({
     const worker = workers.find((item) => item.id === taskId);
     if (worker) markTaskRead(worker);
     subagents.closeAgent();
+    leftDrawer.close();
     setSelectedWorkerId(taskId);
-  }, [markTaskRead, subagents.closeAgent, workers]);
+  }, [leftDrawer.close, markTaskRead, subagents.closeAgent, workers]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -210,11 +212,12 @@ export function TeamView({
     void refreshGroups();
   }, [refreshGroups, task.id]);
 
+  const closeDrawers = () => { subagents.closeAgent(); leftDrawer.close(); };
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     if (open) {
       fileView.close();
-      subagents.closeAgent();
+      closeDrawers();
     }
     onReviewOpenChange?.(open);
   };
@@ -286,18 +289,19 @@ export function TeamView({
   const openFileInCenter = (path: string, reel?: readonly string[]) => {
     fileView.openFile(path, reel);
     setSelectedWorkerId(null);
-    subagents.closeAgent();
+    closeDrawers();
     if (reviewOpen) changeReviewOpen(false);
   };
   const openFolderInCenter = (path: string) => {
     fileView.openFolder(path);
     setSelectedWorkerId(null);
-    subagents.closeAgent();
+    closeDrawers();
     if (reviewOpen) changeReviewOpen(false);
   };
 
   return (
     <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter} onOpenError={notify}>
+      <LeftDrawerProvider value={leftDrawer.api}>
       <InspectorHost
         contextKey={`team:${task.id}`}
         descriptors={inspectors}
@@ -321,7 +325,7 @@ export function TeamView({
           onOpenDiff: (target: ScmDiffTarget) => {
             fileView.openDiff(target);
             setSelectedWorkerId(null);
-            subagents.closeAgent();
+            closeDrawers();
             if (reviewOpen) changeReviewOpen(false);
           },
           notify,
@@ -351,7 +355,11 @@ export function TeamView({
           notify={notify}
         />
         {reviewOpen ? (
-          <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
+          <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify}
+            onReturned={(target) => {
+              changeReviewOpen(false);
+              if (target.id !== task.id) selectWorker(target.id);
+            }} />
         ) : fileView.filePath ? (
           <FileViewer
             taskId={task.id}
@@ -392,15 +400,6 @@ export function TeamView({
           />
         ) : (
           <>
-            {task.question && (
-              <div className="team-lead-question">
-                <QuestionCard task={task} onAnswer={async (answer, input) => {
-                  await api.answerTask(task.id, answer, input);
-                  await refreshTask();
-                  notify("已答复调度者，原会话正在续跑");
-                }} />
-              </div>
-            )}
             {stopped && <HaltNotice workers={workers} groupCount={teamGroups.length} historyOnly={teamGroups.length === 0} />}
             {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} notify={notify} />}
             <TeamAttentionBar
@@ -435,7 +434,12 @@ export function TeamView({
                   <AcceptGateWaitCard key={task.id} taskId={task.id} expected notify={notify} />
                 </div>
               )}
-              <TeamReplyBox task={task} tasks={allTasks} onSend={async (text, attachments, options) => {
+              {/* 调度者向你提问时，回复框那一格是答题卡（跟任务页同一副形状）。 */}
+              <TeamReplyBox task={task} tasks={allTasks} onAnswer={async (answer, input) => {
+                await api.answerTask(task.id, answer, input);
+                await refreshTask();
+                notify("已答复调度者，原会话正在续跑");
+              }} onSend={async (text, attachments, options) => {
                 // 回复也会起一轮(与普通任务详情页同口径)。
                 if (!(await confirmExecutorSwap(task.id))) return null;
                 const result = await api.replyTask(task.id, text, { attachments, ...options });
@@ -469,6 +473,7 @@ export function TeamView({
         {/* 子智能体抽屉不跟着验收台让位：那一格列表在验收台开着时也点得到，按了就得有反应
             （反过来打开验收台会先收起它，见 changeReviewOpen）。 */}
         {subagents.drawer}
+        {leftDrawer.drawer}
         {deleteOpen && (
           <DeleteTaskDialog
             task={task}
@@ -479,6 +484,7 @@ export function TeamView({
         )}
         </div>}
       </InspectorHost>
+      </LeftDrawerProvider>
     </TaskFileLinks>
   );
 }

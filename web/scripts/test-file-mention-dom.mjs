@@ -1,5 +1,5 @@
-// 对话框里 `@` 的回归：同一个 `@` 既能召唤智能体、又能引用工作区文件，两类候选混在
-// 一张列表里走同一条上下键。
+// 对话框里 `@` 的回归：同一个 `@` 既能召唤智能体、又能引用随手记和工作区文件，三类候选
+// 混在一张列表里走同一条上下键。
 //
 // 回归价值在这条**分界线**上：`@cl` 这样的纯字母 token 两边都可能命中（智能体在前），
 // 而一旦 token 里出现 `/` 或 `.`，智能体那段必须整个让位 —— 否则用户敲着路径，回车
@@ -30,6 +30,25 @@ const FILES = [
 ];
 // .gitignore 挡着的：照样能搜到、能选，只是排在最后并标出来（空查询时不给）。
 const IGNORED = new Set(["dist/api.js"]);
+// 这个项目的随手记。默认不给（前面那些只看智能体和文件的用例保持原样），验随手记那一段时
+// 再打开。
+const NOTES = [
+  {
+    id: "note-deploy", projectId: "project-1", body: "部署清单\n先跑迁移\n再重启服务",
+    attachments: ["data/uploads/deploy.png"], taskLinks: [], createdAt: 1, updatedAt: 2,
+  },
+  {
+    id: "note-api", projectId: "project-1", body: "api 限流阈值改成 200",
+    attachments: [], taskLinks: [], createdAt: 1, updatedAt: 1,
+  },
+];
+let notesEnabled = false;
+let notesRequests = 0;
+// 随手记接口的两种异常：扣住不回（验晚到）、直接 503（验读取失败要说出来）。
+let notesOverride = null;
+let notesGate = null;
+let releaseNotes = () => {};
+let notesFail = false;
 
 let browser;
 let releaseSlow = () => {};
@@ -52,6 +71,13 @@ try {
     const url = new URL(route.request().url());
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     if (url.pathname.endsWith("/agents")) return json(PROFILES);
+    if (url.pathname.endsWith("/notes")) {
+      notesRequests += 1;
+      assert.equal(url.searchParams.get("projectId"), "project-1", "随手记按任务所在的项目取");
+      if (notesGate) await notesGate;
+      if (notesFail) return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"down"}' });
+      return json(notesOverride ?? (notesEnabled ? NOTES : []));
+    }
     if (url.pathname.endsWith("/file-search")) {
       // `dir` = 树里展开一层：只回这个目录的直接子项，跟服务端一个口径。
       const dir = url.searchParams.get("dir");
@@ -114,7 +140,7 @@ try {
   await page.goto(`${web.origin}/scripts/fixtures/file-mention.html`);
 
   const textarea = page.getByRole("textbox", { name: "回复任务" });
-  const menu = page.getByRole("listbox", { name: "召唤智能体或引用文件" });
+  const menu = page.getByRole("listbox", { name: "召唤智能体或引用随手记、文件" });
   const options = menu.getByRole("option");
   await textarea.waitFor();
 
@@ -163,8 +189,9 @@ try {
   assert.equal(await textarea.inputValue(), '读 @"docs/计划 A.md" ');
 
   // ⑤ 选中文件**不该**改这一回合的执行器：胶囊仍然是任务自己的那个，
-  //    也不该冒出「取消召唤」那颗按钮。
-  assert.equal(await page.getByRole("button", { name: /取消召唤/ }).count(), 0);
+  //    也不该冒出「不叫 xx 了」那颗小叉、框顶「它来做什么」那一行。
+  assert.equal(await page.getByRole("button", { name: /^不叫 .+ 了$/ }).count(), 0);
+  assert.equal(await page.locator(".reply-dock-row").count(), 0);
   const agentChip = page.getByRole("button", { name: /智能体：/ });
   assert.match(await agentChip.getAttribute("aria-label") ?? "", /智能体：codex/);
 
@@ -277,7 +304,84 @@ try {
     "回车选的是文件，不是那一行目录头",
   );
 
-  // ⑭ 服务端还没更新时**必须说出来**。不说的话界面就是一列没有层级的文件，看着像
+  // ⑭ 随手记：排在智能体之后、文件之前；选中是把**内容**带进来 —— 正文替换掉 `@token`，
+  //    附件进附件栏，发出去时跟着走。（agent 不认识「随手记」，留个 `@标题` 它什么也读不到。）
+  notesEnabled = true;
+  await textarea.fill("");
+  const before = notesRequests;
+  await textarea.type("先看 @");
+  // （src/ 还展开着：⑫ 里点开的，树的展开状态跟着这个输入框走。）
+  await settled(["@claude", "@codex", "部署清单", "api 限流", "dist/", "docs/", "src/", "lib/", "api.ts", "README.md"]);
+  assert.ok(notesRequests > before, "每次打开菜单都重新拉一遍随手记（它随时在别处被改）");
+  assert.match(await options.nth(2).textContent() ?? "", /1 个附件/, "带附件的随手记要说一声");
+  // 命中不在标题里时补上命中的那一行，否则看不出这条为什么在列表里。
+  await textarea.type("迁移");
+  await settled(["部署清单"]);
+  assert.match(await options.first().textContent() ?? "", /先跑迁移/);
+  assert.match(await menu.locator("small").first().textContent() ?? "", /回车带入正文和附件/);
+  await page.keyboard.press("Enter");
+  assert.equal(await textarea.inputValue(), "先看 部署清单\n先跑迁移\n再重启服务\n");
+  await page.getByRole("button", { name: "移除 deploy.png" }).waitFor();
+  // 敲路径时随手记让位：`api` 两边都命中，`api.` 就只剩文件。
+  await textarea.fill("");
+  await textarea.type("@api");
+  await settled(["api 限流", "api.ts", "apiClient.ts", "api.js"]);
+  await textarea.fill("");
+  await textarea.type("@src/");
+  await settled(["lib/", "api.ts"]);
+  // 发出去：正文是随手记的内容，附件跟着这一句走。
+  await textarea.fill("先看 部署清单\n先跑迁移\n再重启服务");
+  await page.getByRole("button", { name: "发送回复" }).click();
+  await page.locator("#log li").nth(2).waitFor();
+  assert.equal(
+    (await page.locator("#log li").allTextContents()).at(-1),
+    "send:先看 部署清单\n先跑迁移\n再重启服务 +data/uploads/deploy.png",
+  );
+  // ⑮ 随手记晚到时**不许把高亮从用户看着的那一条上挪走**。（第 1 轮审查复现：`@README` 高亮着
+  //    README.md，随手记的结果后到、插在文件前面，同一个下标指到了随手记，回车插进去的是
+  //    一段随手记正文外加一张图。）上一次读到的随手记里没有命中 README 的，这一次的扣住。
+  notesGate = new Promise((resolve) => { releaseNotes = resolve; });
+  notesOverride = [{
+    id: "note-readme", projectId: "project-1", body: "README 部署说明：不要修改配置",
+    attachments: ["data/uploads/readme.png"], taskLinks: [], createdAt: 3, updatedAt: 3,
+  }];
+  await textarea.fill("");
+  await textarea.type("读 @README");
+  await settled(["README.md"]);
+  releaseNotes();
+  notesGate = null;
+  await settled(["README 部署说明", "README.md"]);
+  assert.equal(
+    await menu.locator('[aria-selected="true"]').textContent(),
+    "README.md",
+    "后到的候选插在前面，高亮也得留在原来那条上",
+  );
+  await page.keyboard.press("Enter");
+  assert.equal(await textarea.inputValue(), "读 @README.md ", "回车选的是用户看着的那条，不是后到的随手记");
+  notesOverride = null;
+
+  // ⑯ 随手记读不出来要说出来，不能说成「没有匹配」—— 那是没查成，不是查了没有。
+  notesFail = true;
+  await textarea.fill("");
+  await textarea.type("@不存在");
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("随手记读取失败"),
+    null,
+    { timeout: WAIT_TIMEOUT_MS },
+  );
+  // 手上有上一次读到的：照旧列出来，但要说这不是刚读的。
+  await textarea.fill("");
+  await textarea.type("@部署");
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("没能刷新"),
+    null,
+    { timeout: WAIT_TIMEOUT_MS },
+  );
+  assert.equal(await options.count(), 1, "刷新失败时上一次读到的随手记照样能选");
+  notesFail = false;
+  notesEnabled = false;
+
+  // ⑰ 服务端还没更新时**必须说出来**。不说的话界面就是一列没有层级的文件，看着像
   //    树压根没做 —— 这一条正是这么被误判过一次的（前端新、:4317 还是旧进程）。
   legacyServer = true;
   await textarea.fill("");
@@ -298,6 +402,7 @@ try {
   console.log("file-mention-dom: ok");
 } finally {
   releaseSlow();
+  releaseNotes();
   await browser?.close();
   await web.close();
 }

@@ -3,6 +3,7 @@ import type {
   ScheduledMessage,
   ScheduledMessageMode,
   ScheduledMessageStatus,
+  TaskStatus,
 } from "@ash/shared";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Context, Hono } from "hono";
@@ -15,6 +16,8 @@ import { readDuetTurns } from "./duet/transcript-reads.js";
 import { mountDuetGateRoutes } from "./duet/gate-route.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { holdForPrerequisites } from "./prerequisite-gate.js";
+import { withdrawLaunchRequest } from "./launch-request.js";
 import { preparePendingCheckpointStart, recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
 import { cancelQueueAdvance } from "./queue-advance-retry.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
@@ -27,8 +30,8 @@ import { flushPendingForTask, publishPendingMessages } from "./pending-messages.
 import { withAfterGates } from "./pending-after.js";
 import { pendingMessagePresence } from "./pending-wait.js";
 import { isOvertaken, queueBlockedText, queueBlockerDetails, repackQueue, tailOrder } from "./queues.js";
-import { queueClaimError, seatThenStart } from "./queue-seat.js";
-import { claimOwnTurn, heldForAcceptance, releaseTurn, stopTask, turnBusyText } from "./runs.js";
+import { queueClaimError, seatThenStart, serializeQueueClaims } from "./queue-seat.js";
+import { claimOwnTurn, heldForAcceptance, isTurnClaimed, releaseTurn, stopTask, turnBusyText } from "./runs.js";
 import { noted, type RejectedAction } from "./user-action-rejection.js";
 import { readActionFacts, mountTaskActionRoutes } from "./task-actions.js";
 import { requeueVerdict, retryVerdict, runVerdict, stopVerdict, teamHaltVerdict, type Verdict } from "./task-action-verdicts.js";
@@ -42,11 +45,13 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
+import { mountDispatchPlanRoutes } from "./dispatch-plan-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { handMonitorResultsOnPause, pauseHandedNote } from "./monitor-turn-handoff.js";
 import { receiptHands } from "./monitor-turn-ack.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { failureVersionOf } from "./task-result-version.js";
+import { agentRunHold, fromAgent } from "./dispatch-hold-routes.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -74,6 +79,7 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskSessionRoutes(api);
   mountTaskSteerRoutes(api);
   mountTaskQuestionRoutes(api);
+  mountDispatchPlanRoutes(api);
   // 收敛闸口 `POST /tasks/:id/gate`(放行 / 打回 / 注入意见 / 提问)住在 duet/gate-route.ts。
   mountDuetGateRoutes(api);
   const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
@@ -102,8 +108,15 @@ api.post("/tasks/:id/run", async (c) => {
   // 队列挡路：判据见 task-action-verdicts.ts 的 runVerdict，界面上那颗「运行 / 继续」读同一份。
   const verdict = runVerdict(await readActionFacts(r));
   if (!verdict.ok) return refuse(c, taskId, "运行", verdict);
+  // 智能体调 run_task 起一条被按住的任务（派它的那条按了「全部停下」）：不起，记欠账，「接着跑」
+  // 时兑现（task-hold.ts）。用户自己点「运行」照旧放行 —— 同分组暂停，那是人显式要它跑。
+  const agentHold = await agentRunHold(c, r);
+  if (agentHold) return c.json(await noted(taskId, "运行", agentHold), 409);
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
+  // 有前置、前置还没站齐：不起，记成等齐就起（prerequisite-gate.ts → launch-request.ts）。这一下是被接受了的请求，不是挡回。
+  const prerequisiteHold = await holdForPrerequisites(r, { source: "run", actingUserId: ownerIdOf(actorOf(c)) });
+  if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason, blocked: !!prerequisiteHold.blocked }, 202);
   // Fire-and-forget; progress streams over /api/events.
   // team 也走「先占位、再镜像查验收锁」这一套（占位对常驻调度台本身没用途,runTask 的
   // team 分支会立刻还回来）—— 它只为让 202 是真话:早先 team 分支排在这两道检查**之前**
@@ -117,7 +130,7 @@ api.post("/tasks/:id/run", async (c) => {
       releaseTurn(taskId, turn);
       return c.json(await noted(taskId, "运行", { error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }), 409);
     }
-    void resumeOrRunTask(taskId, { reason: "run", turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
+    void resumeOrRunTask(taskId, { origin: "user", reason: "run", turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
     return c.json({ started: true }, 202);
   }
   // **最后一个 await 之后**原子占位再启动：只读预检查后的任何 await 间隙里另一次启动
@@ -141,7 +154,7 @@ api.post("/tasks/:id/run", async (c) => {
   const started = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
       ? runDuet(taskId, { turnHeld: turn, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "run", turnHeld: turn, actingUserId: acting }));
+      : resumeOrRunTask(taskId, { origin: fromAgent(c) ? "agent" : "user", reason: "run", turnHeld: turn, actingUserId: acting }));
   if (!started.ok) {
     return c.json(await noted(taskId, "运行", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
   }
@@ -179,6 +192,9 @@ api.post("/tasks/:id/fire", async (c) => {
   // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
   if (isAcceptingTask(taskId))
     return c.json(await noted(taskId, "触发新一轮", { error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }), 409);
+  // 同 /run：前置没站齐就只记下请求、如实答「在等」（底层 runTask 也会挡，但那样 202 就成了谎报）。
+  const prerequisiteHold = await holdForPrerequisites(r, { source: "run", actingUserId: ownerIdOf(actorOf(c)) });
+  if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason, blocked: !!prerequisiteHold.blocked }, 202);
   const blocking = await queueBlockerDetails(taskId);
   if (blocking.length) {
     return c.json(
@@ -201,7 +217,7 @@ api.post("/tasks/:id/fire", async (c) => {
   const fired = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
       ? runDuet(taskId, { turnHeld: turn, actingUserId: firedBy })
-      : runTask(taskId, { turnHeld: turn, actingUserId: firedBy })); // 全新一轮,永不 resume
+      : runTask(taskId, { origin: "user", turnHeld: turn, actingUserId: firedBy })); // 全新一轮,永不 resume
   if (!fired.ok) {
     return c.json(await noted(taskId, "触发新一轮", { error: queueClaimError(fired), blockedBy: fired.blockers }), 409);
   }
@@ -220,6 +236,13 @@ api.post("/tasks/:id/stop", async (c) => {
   const verdict = stopVerdict(await readActionFacts(r));
   if (!verdict.ok) return refuse(c, taskId, "停止", verdict);
   if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
+  const withdrawn = await withdrawLaunchRequest(taskId);
+  if (withdrawn?.kind === "withdrawn") return c.json({ stopped: true, note: `已撤销${withdrawn.what}的请求` });
+  // 轮到它了、放行那一路已经在起跑：请求撤了、那一次起跑也冻住了，照下面「停一个正在起跑的回合」收尾。
+  if (withdrawn?.kind === "starting") {
+    await setTaskStatus(taskId, "canceled");
+    return c.json(await stopStartingTurn(taskId));
+  }
   if (stopTask(taskId)) return c.json({ stopped: true });
   if (r.status === "queued" || r.status === "running") {
     await setTaskStatus(taskId, "canceled");
@@ -585,7 +608,7 @@ api.post("/tasks/:id/retry", async (c) => {
   const started = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
       ? resumeDuet(taskId, { turnHeld: turn, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "retry", turnHeld: turn, actingUserId: acting }));
+      : resumeOrRunTask(taskId, { origin: "user", reason: "retry", turnHeld: turn, actingUserId: acting }));
   if (!started.ok) {
     return c.json(await noted(taskId, "重试", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
   }
@@ -611,26 +634,47 @@ api.post("/tasks/:id/requeue", async (c) => {
   // 团队验收占着这一位（team-acceptance-hold.ts）：落回 backlog 会让验收守卫当场拒掉这次验收，等验收结束再排。
   if (heldForAcceptance(taskId)) return c.json({ error: turnBusyText(taskId, "重新排队"), status: r.status }, 409);
 
-  const myItem = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
-  // 判据刚看过它在队列里；这中间被移出队列算撞车。
-  if (!myItem) return c.json({ error: "任务不在任何队列里，直接点运行即可" }, 409);
-  const queueId = myItem.queueId;
+  // 上面是无互斥的快速判断。真正的一笔在队列认领链上做完(queue-claim-chain.ts):按此刻的行重验资格、
+  // 挪位、条件写 backlog —— 不然等链那段时间里一次 /run、/retry 抢先起了它,这里出链后照样把一条
+  // 正在起跑的任务写回待办,还可能把它挪到队尾。回合锁被占着就是有人正在起它,同样不排。
+  const placed = await serializeQueueClaims(async (): Promise<{ refused: Response } | {
+    queueId: string; ordered: (typeof tasks.$inferSelect)[]; movedToEnd: boolean;
+  }> => {
+    const now = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!now) return { refused: c.json({ error: "not found" }, 404) };
+    const fresh = requeueVerdict(await readActionFacts(now));
+    if (!fresh.ok) return { refused: c.json({ error: fresh.reason, ...fresh.detail }, 409) };
+    if (isTurnClaimed(taskId)) return { refused: c.json({ error: turnBusyText(taskId, "重新排队"), status: now.status }, 409) };
+    const myItem = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+    // 判据刚看过它在队列里；这中间被移出队列算撞车。
+    if (!myItem) return { refused: c.json({ error: "任务不在任何队列里，直接点运行即可" }, 409) };
+    const items = await db
+      .select()
+      .from(queueItems)
+      .where(eq(queueItems.queueId, myItem.queueId))
+      .orderBy(asc(queueItems.position));
+    const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
+    const byId = new Map(rows.map((x) => [x.id, x] as const));
+    const ordered = items
+      .map((i) => byId.get(i.taskId))
+      .filter((t): t is typeof tasks.$inferSelect => !!t);
+    // 条件写 backlog 与挪到队尾同一笔事务:挪位失败,状态也不落,原入口照样能重试。
+    const movedToEnd = isOvertaken(ordered, taskId);
+    const written = await setTaskStatus(taskId, "backlog", {
+      expectStatus: now.status as TaskStatus,
+      alsoInTx: movedToEnd ? (tx) => repackQueue(myItem.queueId, tailOrder(ordered.map((t) => t.id), taskId), tx) : undefined,
+    }).catch(async (error) => {
+      // 提交之后的附带读取(广播用的 timing)也会抛:那时状态和位置已经一起落了,按库里的结果认,
+      // 别让一次已经成功的重新排队报失败、还漏掉后面那一推。
+      if ((await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.status === "backlog") return true;
+      throw error;
+    });
+    if (!written) return { refused: c.json({ error: "任务状态刚刚变了，这次没有重新排队", status: now.status }, 409) };
+    return { queueId: myItem.queueId, ordered, movedToEnd };
+  });
+  if ("refused" in placed) return placed.refused;
+  const { queueId, ordered, movedToEnd } = placed;
 
-  const items = await db
-    .select()
-    .from(queueItems)
-    .where(eq(queueItems.queueId, queueId))
-    .orderBy(asc(queueItems.position));
-  const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
-  const byId = new Map(rows.map((x) => [x.id, x] as const));
-  const ordered = items
-    .map((i) => byId.get(i.taskId))
-    .filter((t): t is typeof tasks.$inferSelect => !!t);
-
-  const movedToEnd = isOvertaken(ordered, taskId);
-  if (movedToEnd) await repackQueue(queueId, tailOrder(ordered.map((t) => t.id), taskId));
-
-  await setTaskStatus(taskId, "backlog");
   // 前面若还有人在跑,advanceQueue 会被 selectNextInQueue 的守卫挡住,什么都不做。
   advanceQueueInBackground(queueId);
 

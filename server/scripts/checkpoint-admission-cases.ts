@@ -23,14 +23,14 @@ export async function checkpointAdmissionCases(): Promise<void> {
       at: "2020-01-01T00:00:00.000Z",
     });
     const execute = dbClient.execute;
-    let reads = 0;
     let failed = false;
     let previous: ReturnType<typeof runs.turnIdentity> = null;
     let successor: ReturnType<typeof runs.turnIdentity> = null;
     dbClient.execute = async function (statement) {
       if (typeof statement !== "string" && /"scheduled_messages"/.test(statement.sql)
         && /"checkpoint_taken" is not null/i.test(statement.sql) && Array.isArray(statement.args)
-        && statement.args.includes(test.taskId) && ++reads === 3) {
+        // 起跑那一路已经认领了回合之后的头一次续跑交代检查（入口自己先查的几次不带回合，不算）。
+        && statement.args.includes(test.taskId) && !failed && runs.turnIdentity(test.taskId)) {
         failed = true;
         previous = runs.turnIdentity(test.taskId);
         assert.ok(previous);

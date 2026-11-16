@@ -14,7 +14,6 @@ import { useFileView } from "../files/useFileView.ts";
 import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api } from "../lib/api.ts";
-import { createClientId } from "../lib/clientId.ts";
 import { toggleArchive } from "../lib/archive.ts";
 import type { Notify } from "../lib/notify.ts";
 import { useConversation } from "../lib/useConversation.ts";
@@ -26,17 +25,17 @@ import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
-import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
-import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
+import { replySend } from "./replySend.ts";
+import { replyDispatch } from "./replyDispatch.ts";
+import { launchPlan, saveDispatchTarget } from "./dispatchPlanActions.ts";
+import { replyDiscuss } from "./replyDiscuss.ts";
+import { dispatchNotes } from "./dispatchNotes.ts";
+import { DispatchNoteLine } from "./DispatchNoteLine.tsx";
+import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
+import { useDisputeRulingDock } from "../free-workflow/DisputeRulingDock.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
-import {
-  canDeriveTask,
-  isTaskDerivationCommand,
-  parseTaskDerivationCommand,
-  TASK_DERIVATION_COMMANDS,
-  type TaskDerivationCommand,
-} from "./taskDerivation.ts";
+import { canDeriveTask } from "./taskDerivation.ts";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { reviewTargetRequest } from "../review/reviewTarget.ts";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
@@ -49,12 +48,12 @@ import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTa
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
-import { useTaskInspectorStack } from "./useTaskInspectorStack.ts";
+import { useTaskDrawers } from "./useTaskDrawers.tsx";
 import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
 import { stageSideChatQuote } from "../side-chat/sideChatQuote.ts";
 import { useAddReplyQuote } from "./replyQuote.ts";
 import { useReuseInput } from "./ReuseInput.tsx";
-import { localeDateTime } from "../lib/localeFormat.ts";
+import { DispatchHeldLine, useDispatchHolder } from "./dispatched/DispatchHeldLine.tsx";
 
 
 export function TaskDetail({
@@ -101,20 +100,21 @@ export function TaskDetail({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markDoneOpen, setMarkDoneOpen] = useState(false);
   const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
-  const [derivation, setDerivation] = useState<{
-    command: TaskDerivationCommand;
-    committed: boolean;
-  } | null>(null);
-  const [derivationResetKey, setDerivationResetKey] = useState(0);
   // 刚发出去的那一回合由谁跑。会话行一落库就由它接管(见 runActivityExecutor),
   // 这里只补中间那一两秒;任务停下来就作废,免得下一次「运行」照抄旧目标。
   // 读过 / 没读过的账（侧栏那一行的点）随打开的任务对齐；头上不再画状态点，返回值这里用不上。
   useTaskReadState(allTasks, task.id);
+  // 只在它确实停着（已暂停 / 排着）时说；已经做完的那几条不用解释为什么没在跑。
+  const holder = useDispatchHolder(task.id, allTasks, task.status === "paused" || task.status === "backlog");
   const conversation = useConversation(task.id);
-  // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
+  // 左边那几屉（子智能体 / 读全文 / 派出的任务，互斥）和 Inspector 栈，整块在 useTaskDrawers.tsx。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts } =
-    useTaskInspectorStack(task, allTasks, conversation);
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts, leftDrawer, dispatched, closeDrawers, drawers } = useTaskDrawers({
+    task, allTasks, conversation, onOpenTask,
+    renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
+  });
+  // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
+  const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
   const actions = useTaskActions(task.id);
   // 「上一回合崩了、任务却停在终态」的那颗重来落在说这件事的地方，带字：普通回合挂在会话里那一回合
@@ -142,6 +142,11 @@ export function TaskDetail({
     ? latestPostMerge?.status === "reviewing" ? "查看合并审查" : latestPostMerge ? "再次审查合并结果" : "审查合并结果"
     : null;
   const derivationAllowed = canDeriveTask(task);
+  // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字，点它在左抽屉打开（dispatchNotes.ts）。
+  // 派出的任务后来来问、失败，这里一概不画：提示在侧栏和任务头那颗「派出的任务」键的数、右侧那一格里。
+  const asides = useMemo(() => dispatchNotes(task.id, allTasks).map((note) => ({
+    key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={dispatched.state.open} />,
+  })), [allTasks, dispatched.state.open, task.id]);
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
@@ -172,25 +177,17 @@ export function TaskDetail({
     setDeleteOpen(false);
     setMarkDoneOpen(false);
     setPostMergeDialogOpen(false);
-    setDerivation(null);
     fileView.close();
   }, [fileView.close, initialReviewOpen, task.id]);
 
-  // 中间那一栏换内容时，子智能体抽屉必须跟着收起来 —— 它盖在主区上面，不收的话用户
-  // 点了「审查」/ 文件 / diff 只会看到原来那份执行详情（与 TeamView 同一口径）。
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     if (open) {
       setPreviewOpen(false);
       fileView.close();
-      subagents.closeAgent();
+      closeDrawers();
     }
     onReviewOpenChange?.(open);
-  };
-
-  const closeDerivation = () => {
-    setDerivation(null);
-    setDerivationResetKey((current) => current + 1);
   };
 
   const refreshTask = async () => {
@@ -305,23 +302,25 @@ export function TaskDetail({
   const openFileInCenter = (path: string, reel?: readonly string[]) => {
     setPreviewOpen(false);
     fileView.openFile(path, reel);
-    subagents.closeAgent();
+    closeDrawers();
     if (reviewOpen) changeReviewOpen(false);
   };
   const openFolderInCenter = (path: string) => {
     setPreviewOpen(false);
     fileView.openFolder(path);
-    subagents.closeAgent();
+    closeDrawers();
     if (reviewOpen) changeReviewOpen(false);
   };
 
   return (
     <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter} onOpenError={notify}>
+      <LeftDrawerProvider value={leftDrawer.api}>
       <InspectorHost
         contextKey={inspectorContextKey}
         descriptors={inspectors}
         context={{
           nativeWork: subagents.nativeWork,
+          dispatched: dispatched.state,
           monitors: monitorTab.monitors,
           task,
           groups,
@@ -331,7 +330,7 @@ export function TaskDetail({
           runFacts,
           onOpenTask,
           onOpenReview: () => changeReviewOpen(true),
-          onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); subagents.closeAgent(); },
+          onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); closeDrawers(); },
           onTaskUpdated: onTaskUpdate,
           onPatch: patch,
           onQueueChanged: (updatedTask) => {
@@ -351,7 +350,7 @@ export function TaskDetail({
           onOpenScmDiff: (target: ScmDiffTarget) => {
             setPreviewOpen(false);
             fileView.openDiff(target);
-            subagents.closeAgent();
+            closeDrawers();
             if (reviewOpen) changeReviewOpen(false);
           },
           notify,
@@ -416,6 +415,7 @@ export function TaskDetail({
                     if (latestPostMerge?.status === "reviewing") openTab("review");
                     else setPostMergeDialogOpen(true);
                   } : undefined}
+                  onOpenReview={() => openTab("review")}
                   onClose={() => changeReviewOpen(false)}
                 />
               ) : fileView.filePath ? (
@@ -513,8 +513,10 @@ export function TaskDetail({
                       onReuseInput={task.mode === "single" && !task.archived && !handedOut && hasConversation ? reuseInput : undefined}
                       // 任务停下来等哨兵：会话最后多一行「在等哨兵…」（feed-7）。在跑的时候不出——
                       // 那时挂上的哨兵是执行过程里的一步，事件排着队等这一轮跑完。
-                      footer={task.status !== "running" && task.status !== "queued" && (liveMonitors.length || liveBuiltinCount) ? (
-                        <MonitorWaitLine
+                      // 被派它的那条按住了（名下全部停下）：同一处再多一行「是谁按的」，点过去接着跑。
+                      footer={task.status !== "running" && task.status !== "queued" && (holder || liveMonitors.length || liveBuiltinCount) ? (<>
+                        {holder && <DispatchHeldLine holder={holder} onOpen={onOpenTask} />}
+                        {(liveMonitors.length > 0 || liveBuiltinCount > 0) && <MonitorWaitLine
                           key={`monitor-wait:${task.id}`}
                           monitors={liveMonitors}
                           builtinCount={liveBuiltinCount}
@@ -522,25 +524,16 @@ export function TaskDetail({
                           reviewArmed={!!free.state?.reviewReservation.armed}
                           onOpenPanel={() => openTab("monitors", liveMonitors[0] ? { monitorId: liveMonitors[0].id } : undefined)}
                           notify={notify}
-                        />
-                      ) : undefined}
+                        />}
+                      </>) : undefined}
                       reviewRetry={reviewRetry}
                       turnRetry={crashedTurnRetry}
                       reviews={free.state?.reviews}
+                      discussions={free.state?.discussions}
+                      asides={asides}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
-                      // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
-                      // 对话上下文里）；哨兵是「它自己会回来」，一行就够，落在回复框上方
-                      // 那条 rail 上（见下面的 monitorWait）。
-                      dock={task.question ? (
-                        <QuestionCard
-                          task={task}
-                          onAnswer={async (answer, input) => {
-                            await api.answerTask(task.id, answer, input);
-                            notify("已发送答复，任务正在续跑");
-                          }}
-                        />
-                      ) : undefined}
+                      onOpenTask={onOpenTask}
                     />
                     </MemoSelectionScope>
                     <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
@@ -566,6 +559,14 @@ export function TaskDetail({
                           )}
                         />
                       )}
+                      // 这条任务自己的提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
+                      // 名下派出的任务来问不占这一格：那张卡在它自己的页面上（左抽屉里打开它也是）。
+                      onAnswer={async (answer, input) => {
+                        await api.answerTask(task.id, answer, input);
+                        notify("已发送答复，任务正在续跑");
+                      }}
+                      onLaunchPlan={launchPlan(task.id, notify)}
+                      onDispatchTargetChange={task.mode === "single" && !task.parentId && !task.archived ? saveDispatchTarget(task, onTaskUpdate, notify) : undefined}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}
@@ -582,66 +583,17 @@ export function TaskDetail({
                           ? `以后这个任务交给 ${run}；当前这一轮跑完后生效`
                           : `以后这个任务交给 ${run}`);
                       }}
-                      onSend={async (text, attachments, { executorLabel, ...options }) => {
-                        if (!(await confirmExecutorSwap(task.id))) return null;
-                        const clientKey = createClientId();
-                        const result = await api.replyTask(task.id, text, { attachments, ...options, clientKey });
-                        // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
-                        // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
-                        // 否则用户看到自己的话已在时间线上、agent 却还没收到。
-                        if ("scheduled" in result) {
-                          // 同样按结果措辞:暂停/待办任务也会因排队未轮到被暂存(r3 审查),
-                          // 对它说「任务进行中」是错的。
-                          notify(result.message.mode === "queued"
-                            ? (task.status === "running" || task.status === "queued"
-                              ? "任务进行中，已排队；这一轮结束后自动发出"
-                              : "任务在队列中等待，已排队；轮到它时自动发出")
-                            : result.message.mode === "after"
-                              ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送`
-                              : `已安排 ${localeDateTime(result.message.sendAt)} 发送`);
-                          return result;
-                        }
-                        if ("command" in result) {
-                          notify(result.recorded ? "原生命令已执行，结果见会话记录" : result.text);
-                          return result;
-                        }
-                        conversation.addUser(text, attachments, { clientKey });
-                        notify(options.agent
-                          ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`
-                          : "回复已发送");
-                        return result;
-                      }}
-                      command={derivationAllowed ? {
-                        matches: isTaskDerivationCommand,
-                        items: TASK_DERIVATION_COMMANDS,
-                        resetKey: derivationResetKey,
-                        onSubmit: (text) => {
-                          const parsed = parseTaskDerivationCommand(text);
-                          if (parsed) setDerivation({ command: parsed, committed: true });
-                        },
-                        onChange: (text) => {
-                          setDerivation((current) => {
-                            if (current?.committed) return current;
-                            const parsed = parseTaskDerivationCommand(text);
-                            return parsed ? { command: parsed, committed: false } : null;
-                          });
-                        },
-                        onCancel: closeDerivation,
-                      } : undefined}
-                      inlinePanel={derivationAllowed && derivation ? (
-                        <TaskDerivationComposer
-                          key={derivation.command.kind}
-                          task={task}
-                          command={derivation.command}
-                          live={!derivation.committed}
-                          onClose={closeDerivation}
-                          onCreated={(created) => {
-                            onTaskUpdate(created);
-                            onOpenTask(created.id);
-                          }}
-                          notify={notify}
-                        />
-                      ) : undefined}
+                      onSend={replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })}
+                      onOpenTask={onOpenTask}
+                      // 「派出去」只在普通的独立任务里有（团队执行者、审查任务各有归属，服务端也不收）。
+                      onDispatch={derivationAllowed && task.mode === "single" && !task.archived
+                        ? replyDispatch({ task, onCreated: onTaskUpdate, notify }) : undefined}
+                      // 「讨论」同样只在普通的独立任务里有，且只认自由工作流（服务端 discussionBlocker 同一口径）。
+                      onDiscuss={derivationAllowed && task.mode === "single" && !task.archived && task.workflowMode === "free"
+                        ? replyDiscuss({ task, onChanged: free.setState }) : undefined}
+                      discussHeld={(free.state?.discussions ?? []).some((item) => item.status === "running" || item.status === "synthesizing")
+                        ? "这条任务上正在讨论，说完再开下一场" : null}
+                      override={ruling}
                     />}
                   </section>
                 </div>
@@ -675,8 +627,8 @@ export function TaskDetail({
                   notify={notify}
                 />
               )}
-              {/* 子智能体执行详情：盖住中间那一栏，右侧 Inspector 的列表仍然看得见。 */}
-              {subagents.drawer}
+              {/* 左边那一屉（子智能体 / 读全文 / 派出的任务）：盖住中间那一栏，右侧 Inspector 仍然看得见、点得着。 */}
+              {drawers}
             </div>
             {inspectorMode === "drawer" && inspectorToggleTarget
               ? createPortal(toggleButton, inspectorToggleTarget)
@@ -684,6 +636,7 @@ export function TaskDetail({
           </>
         )}
       </InspectorHost>
+      </LeftDrawerProvider>
     </TaskFileLinks>
   );
 }

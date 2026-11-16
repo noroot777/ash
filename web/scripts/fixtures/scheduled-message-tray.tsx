@@ -32,7 +32,7 @@ function Fixture() {
     <main className={team ? "team-flow-main" : "task-detail-main"} style={{ height: "calc(100dvh - 48px)", maxWidth: 1000, margin: "0 auto" }}>
       <div className="conversation-scroll-region"><section className={team ? "team-feed" : "task-conversation"}>
         <h1 style={{ fontSize: 18 }}>排队输入 · {team ? "团队" : "普通任务"}</h1>
-        <p>当前回合继续运行，排队输入在同一张卡片内向上展开。</p>
+        <p>当前回合继续运行，排队输入那一行点开向上长。</p>
         <button type="button">会话区域按钮</button>
       </section></div>
       <div ref={shellRef} className={team ? "team-reply-shell" : "task-reply-shell"}>

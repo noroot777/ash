@@ -2,6 +2,7 @@ import type { FreeReviewRun } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import type { ConversationFeedRow } from "./conversationReviewLanes.ts";
 import { debateCandidatesOf, type DebateCandidate } from "../free-workflow/debateModel.ts";
+import type { ConversationDiscussionRow } from "./conversationDiscussionRows.ts";
 
 /**
  * 时间线上的一整场辩论，折成一行。
@@ -12,7 +13,8 @@ import { debateCandidatesOf, type DebateCandidate } from "../free-workflow/debat
  * （codex 一句「本段发言已提交」、claude 把整段又讲一遍）。所以按对话渲染必然是一边
  * 完整一边空白，用户 2026-09-24 报的「codex 那一方所有结论我都看不到」就是这么来的。
  *
- * 折起来之后：卡头一行给出「谁跟谁、几段、审查者自述什么立场」，展开列的是 statement。
+ * 折起来之后是会话里的一颗辩论气泡（DebateBubble）：写此刻辩到哪了、审查者收尾的立场，摊开是每段一句、
+ * 左侧抽屉里是完整的 statement。
  */
 export type ConversationDebateRow = {
   kind: "debate-lane";
@@ -29,7 +31,8 @@ export type ConversationDebateRow = {
   endedAt: string | null;
 };
 
-export type ConversationDebateFeedRow = ConversationFeedRow | ConversationDebateRow;
+/** 折过之后的一行：辩论、讨论各折成一行（讨论那一折在 conversationDiscussionRows.ts）。 */
+export type ConversationDebateFeedRow = ConversationFeedRow | ConversationDebateRow | ConversationDiscussionRow;
 
 const DEBATE_START = /^开始辩论第\s*(\d+)\s*轮审查意见/;
 // 收口的两句：好好辩完，或者某一段没能起跑而中止。两句都由 free-review-debate.ts 写。
