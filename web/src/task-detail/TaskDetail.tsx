@@ -108,7 +108,7 @@ export function TaskDetail({
   const conversation = useConversation(task.id);
   // 左边那几屉（子智能体 / 读全文 / 派出的任务，互斥）和 Inspector 栈，整块在 useTaskDrawers.tsx。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, free, runFacts, leftDrawer, dispatched, closeDrawers, drawers } = useTaskDrawers({
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, leftDrawer, dispatched, closeDrawers, drawers } = useTaskDrawers({
     task, allTasks, conversation, onOpenTask,
     renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
   });
@@ -534,6 +534,7 @@ export function TaskDetail({
                       // 还在盯的哨兵跟排队消息并在框上方同一块里（任务在跑、在等都在）。
                       monitors={{
                         live: liveMonitors,
+                        ended: endedMonitorIds,
                         running: task.status === "running" || task.status === "queued",
                         resumePrompt: task.resumePrompt ?? null,
                         reviewArmed: !!free.state?.reviewReservation.armed,

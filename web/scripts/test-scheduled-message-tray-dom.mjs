@@ -306,6 +306,21 @@ try {
     assert.ok(keys.length > 0 && keys.every(Boolean), `${width}px 行尾的键都在列表里、没被挤出去`);
     if (width === 1280 || width === 390) await page.screenshot({ path: `${artifacts}scheduled-message-production-${width}.png`, fullPage: true });
   }
+  // 窄窗收着、排队 + 哨兵 + 要留意 + 引导撤回全挤在一行：摘要仍留得下一截（第 1 轮审查 N1：300px 时被挤成 0 宽）。
+  await page.getByRole("button", { name: "排队 30", exact: true }).click();
+  await page.getByRole("button", { name: "挂上哨兵", exact: true }).click();
+  await page.getByRole("button", { name: "排队 30，哨兵 4", exact: true }).waitFor();
+  for (const width of [420, 340, 300]) {
+    await resizeViewport(page, { width, height: 700 });
+    await settle();
+    const head = await trayLine.locator(".scheduled-tray-head-summary").evaluate((element) => element.getBoundingClientRect().width);
+    assert.ok(head >= 24, `${width}px 收着那一行的摘要还看得见（${head}px）`);
+    assert.equal(await trayLine.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true, `${width}px 收着那一行不横溢`);
+  }
+  await page.getByRole("button", { name: "挂上哨兵", exact: true }).click();
+  await page.getByRole("button", { name: "排队 30", exact: true }).click();
+  await resizeViewport(page, { width: 320, height: 700 });
+  await settle();
   // 深色主题：颜色都取主题变量，琥珀色仍与普通来源分得开。
   await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
   await settle();

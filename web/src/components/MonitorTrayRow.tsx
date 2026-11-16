@@ -9,6 +9,11 @@ import { RevealButton } from "./ScheduledMessageRow.tsx";
 export type TrayMonitors = {
   /** 还在盯的那几个：ash 自己起的 + claude 内置 Monitor 的只读投影。 */
   live: readonly TaskMonitor[];
+  /**
+   * 读到了明确终态的那几个的 id：它送来的排队结果前面画「已结束」。只认读到的终态——列表还没读到、
+   * 读失败、或里面找不到这一个，都是「不知道」，什么都不画。
+   */
+  ended: ReadonlySet<string>;
   /** 任务此刻在跑一轮（或排着队要跑）：哨兵是这一轮里挂上的，不是在「等」它。 */
   running: boolean;
   /** agent 用 `pause_task` 留下的续跑交代；在等的时候照抄进说明。 */

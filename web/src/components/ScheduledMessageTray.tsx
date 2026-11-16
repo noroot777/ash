@@ -58,6 +58,11 @@ export function ScheduledMessageTray(props: TrayProps) {
   const waking = watching.some((monitor) => monitor.kind === "ash");
   const now = useMinuteClock(watching.length > 0);
   const hasItems = ordered.length > 0 || watching.length > 0;
+  // 哨兵送来的结果前面那个「已结束」：只认读到的终态（TrayMonitors.ended），不拿「不在在盯那几个里」顶。
+  const endedOf = (message: ScheduledMessage) => {
+    const id = monitorIdFromOrigin(message.origin);
+    return !!id && !!monitors?.ended.has(id);
+  };
   const open = hasItems && expanded;
   const cancelMessage = ordered.find((message) => message.id === pendingCancel);
 
@@ -122,7 +127,7 @@ export function ScheduledMessageTray(props: TrayProps) {
           {ordered.length > 0 && <span>排队 {ordered.length}</span>}
           {ordered.length > 0 && watching.length > 0 && <span className="scheduled-tray-sep" aria-hidden="true">·</span>}
           {watching.length > 0 && <span className={`scheduled-tray-monitors${waking ? " is-live" : ""}`}>
-            <Pulse size={12} aria-hidden="true" />哨兵 {watching.length}
+            <Pulse size={12} aria-hidden="true" /><span className="scheduled-tray-monitors-word">哨兵 </span>{watching.length}
           </span>}
         </button>
         {attention.length > 0 && <button type="button" className="scheduled-tray-attention" aria-label={`查看 ${attention.length} 条退出码非零的输入`}
@@ -148,7 +153,7 @@ export function ScheduledMessageTray(props: TrayProps) {
           open={openIds.has(`monitor:${monitor.id}`)} bodyId={`${bodyIdPrefix}-monitor-${monitor.id}`}
           onToggle={() => toggleBody(`monitor:${monitor.id}`)} />)}
         {ordered.map((message) => <ScheduledMessageRow key={message.id} message={message} busy={busy(message)}
-          monitorEnded={monitors ? !watching.some((monitor) => monitor.id === monitorIdFromOrigin(message.origin)) : undefined}
+          monitorEnded={endedOf(message)}
           steering={!!steeringIds?.has(message.id)} open={openIds.has(message.id)} bodyId={`${bodyIdPrefix}-${message.id}`}
           tasks={tasks} onToggle={() => toggleBody(message.id)} onSteer={onSteer} onWithdraw={onWithdraw}
           onCancel={onCancel ? setPendingCancel : undefined} onSendNow={onSendNow} onOpenTask={onOpenTask} />)}

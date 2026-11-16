@@ -60,6 +60,7 @@ function WaitFixture({ mode }: { mode: string }) {
         messages={[]} loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined}
         monitors={{
           live: [mode === "pending" ? WAIT_PENDING : WAIT_BASE],
+          ended: new Set(),
           running: false,
           resumePrompt: "继续：接着做 tts 这一段",
           reviewArmed: false,

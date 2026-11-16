@@ -5,6 +5,7 @@ import { createElement, useMemo } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
+import { endedMonitorIds } from "../monitors/monitorTray.ts";
 import { useTaskMemoTab } from "../task-memos/useTaskMemoTab.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
@@ -70,6 +71,8 @@ export function useTaskInspectorStack(
     const running = monitorTab.monitors.monitors.filter((m) => m.status === "running");
     return [...running.filter((m) => m.kind === "ash"), ...running.filter((m) => m.kind !== "ash")];
   }, [monitorTab.monitors.monitors]);
+  const ended = useMemo(() => endedMonitorIds(monitorTab.monitors.monitors, monitorTab.monitors.listed),
+    [monitorTab.monitors.listed, monitorTab.monitors.monitors]);
 
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
@@ -98,5 +101,5 @@ export function useTaskInspectorStack(
   // 「信息」格里最近一轮的用量、上下文、压缩中：取自会话流里最新那条回复（直播值比会话行新）。
   const runFacts = useMemo(() => latestRunFacts(conversation.items), [conversation.items]);
 
-  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, free, runFacts };
+  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds: ended, free, runFacts };
 }

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ScheduledMessage } from "@ash/shared";
 import type { TaskMonitor } from "@ash/shared/monitor";
 import type { TrayMonitors } from "../src/components/MonitorTrayRow.tsx";
+import { endedMonitorIds } from "../src/monitors/monitorTray.ts";
 import { annotationBatchPrompt, type AnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
 import {
   retainScheduledMessageActionError,
@@ -99,8 +100,8 @@ const watcher = (id: string, description: string, extra: Partial<TaskMonitor> = 
   startedAtExact: true, expiresAt: new Date(Date.now() + 12 * 60_000).toISOString(), timeoutMs: 900_000,
   endedAt: null, endedReason: null, stopWhen: null, resultHandoffAt: null, resultsAbandonedAt: null, ...extra,
 } as TaskMonitor);
-const trayMonitors = (live: TaskMonitor[], running = true): TrayMonitors => ({
-  live, running, resumePrompt: null, reviewArmed: false, onOpen: () => undefined, onStop: async () => undefined,
+const trayMonitors = (live: TaskMonitor[], running = true, ended: ReadonlySet<string> = new Set()): TrayMonitors => ({
+  live, ended, running, resumePrompt: null, reviewArmed: false, onOpen: () => undefined, onStop: async () => undefined,
 });
 const two = [watcher("m1", "等回归跑完"), watcher("m2", "盯构建日志")];
 {
@@ -139,9 +140,15 @@ const two = [watcher("m1", "等回归跑完"), watcher("m2", "盯构建日志")]
   assert.match(rows[2]!, /scheduled-monitor-mark is-builtin/, "内置的那一行：不动的灰点");
   const fromEnded = { ...samples[1], id: "ended", origin: "monitor:gone", text: "【哨兵结束】早就停了（monitorId=gone），退出码 1。" };
   const fromLive = { ...samples[2], id: "alive", origin: "monitor:m1", text: "【哨兵事件】等回归跑完（monitorId=m1）\n一行输出" };
-  const mixed = renderTray([fromEnded, fromLive], { monitors: trayMonitors(two), defaultExpanded: true });
-  assert.match(rowOf(mixed, "早就停了"), /scheduled-monitor-mark is-ended" role="img" aria-label="已结束"/, "哨兵已经不在盯：空心方块");
+  const mixed = renderTray([fromEnded, fromLive], { monitors: trayMonitors(two, true, new Set(["gone"])), defaultExpanded: true });
+  assert.match(rowOf(mixed, "早就停了"), /scheduled-monitor-mark is-ended" role="img" aria-label="已结束"/, "读到它已结束：空心方块");
   assert.doesNotMatch(rowOf(mixed, "一行输出"), /scheduled-monitor-mark/, "哨兵还在盯，它送来的这一条不说「已结束」");
+  // 列表还没读到 / 读失败 / 里面找不到这一个：不在「在盯」里不等于停了，什么都不画（第 1 轮审查 F1）
+  const unknown = renderTray([fromEnded, fromLive], { monitors: trayMonitors([]), defaultExpanded: true });
+  assert.doesNotMatch(unknown, /scheduled-monitor-mark/, "没读到终态就不说「已结束」");
+  const finished = { ...watcher("gone", "早就停了"), status: "exited" } as TaskMonitor;
+  assert.deepEqual([...endedMonitorIds([two[0]!, finished], true)], ["gone"], "读到的列表里，不在跑的那几个才算结束");
+  assert.equal(endedMonitorIds([finished], false).size, 0, "列表还没读成功过：一个都不算结束");
   assert.doesNotMatch(renderTray([fromEnded], { defaultExpanded: true }), /scheduled-monitor-mark/, "不知道哪些在盯（团队回复框）就不画记号");
 }
 // 要留意的条数:退出码非零的哨兵才算,是琥珀色的字。

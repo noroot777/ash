@@ -58,3 +58,11 @@ export function monitorsBrief(monitors: readonly TaskMonitor[], running: boolean
   if (!starts.length) return name;
   return `${name} · ${running ? "盯了" : "等了"} ${elapsedLabel(now - Math.min(...starts))}`;
 }
+
+/**
+ * 读到了明确终态的那几个哨兵（排队里它们送来的结果据此画「已结束」）。列表还没读成功过（刚进来、
+ * 切任务、首次读失败）就一个都不算：列表里没有它，不等于它停了。
+ */
+export function endedMonitorIds(monitors: readonly TaskMonitor[], listed: boolean): ReadonlySet<string> {
+  return new Set(listed ? monitors.filter((monitor) => monitor.status !== "running").map((monitor) => monitor.id) : []);
+}

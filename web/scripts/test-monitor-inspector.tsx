@@ -539,7 +539,7 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   const tray = (live: TaskMonitor[]) => renderToStaticMarkup(
     <ScheduledMessageTray
       messages={[]} loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined}
-      monitors={{ live, running: false, resumePrompt: null, reviewArmed: false, onOpen: () => undefined, onStop: async () => undefined }}
+      monitors={{ live, ended: new Set(), running: false, resumePrompt: null, reviewArmed: false, onOpen: () => undefined, onStop: async () => undefined }}
     />,
   );
   // 这里只管收着的样子:正文**要点开才渲染**,静态渲染拿不到点击,所以「摊开之后说了什么」一律
