@@ -1,70 +1,96 @@
-// 回归 restart.mjs 认「锁里那个号码还是旧实例吗」的判据(platform.mjs 的 lockHolderPid)。
+// 回归:单实例锁里的号码**不授权**停任何进程(restart.mjs 的 answeringPid 注释)。
 //
 // 事故形状:ash 没正常退出,锁留在原地,号码被别的进程复用 —— Windows 上重启过机器几乎
-// 必然撞上。旧判据只看「号码还活着」,于是把陌生进程当旧实例去杀:Windows 上报「无法安全
-// 终止 Windows 旧实例」拒绝重启(--force 则整树强杀它),POSIX 上直接 SIGTERM 它。
+// 必然撞上。旧版拿锁里的号码当旧实例去停:Windows 上报「无法安全终止 Windows 旧实例」拒绝
+// 重启(--force 则整树强杀它),POSIX 上直接 SIGTERM 它。中间两版改成按命令行把号码「认回
+// 来」,照样认错(第 1、2 轮审查)—— 所以这里的旁观者故意做成最难分辨的样子:命令行末尾
+// 就是 ash 的 server 入口,锁里的 argv 与启动时刻都照它的真值写。
+//
+// 端到端跑真的 restart.mjs(假 npm、假 server,同 test-restart.mjs 的搭法),端口上没人应答:
+// 重启必须照常完成,旁观者必须毫发无损。
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isAshServerCommand, lockHolderPid, sleep } from "./platform.mjs";
+import { fileURLToPath } from "node:url";
+import { IS_WINDOWS, isPidAlive, sleep } from "./platform.mjs";
 import { withTestResources } from "./test-process-resources.mjs";
-import { spawnTestFixture } from "./test-process-scope.mjs";
+import { runTestProcess } from "./test-process.mjs";
+import { spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
 
-const PORT = 4317;
-const ENTRY = "/Users/me/ash/server/dist/index.js";
-const ASH = `/opt/homebrew/bin/node ${ENTRY}`;
-const T0 = 1_794_749_046_785;
-const fixed = (info) => () => info;
-const lock = (extra = {}) => ({ pid: 4242, port: PORT, processStartedAtMs: T0, argv: ["/opt/homebrew/bin/node", ENTRY], ...extra });
-const seen = (command, startedAtMs = T0 - 300) => fixed({ command, startedAtMs });
+const REPO = fileURLToPath(new URL("..", import.meta.url));
+const PORT = 14327;
+const TMP = mkdtempSync(join(tmpdir(), "ash-restart-lock-"));
+const FAKE_BIN = join(TMP, "bin");
+const ENTRY = join(TMP, "ash", "server", "dist", "index.js");
+const BYSTANDER = join(TMP, "watcher.cjs");
+const BORN = join(TMP, "bystander.json");
+const PID_FILE = join(TMP, "server.pid");
+mkdirSync(FAKE_BIN);
+mkdirSync(join(TMP, "ash", "server", "dist"), { recursive: true });
 
-assert.equal(lockHolderPid(lock(), PORT, seen(ASH)), 4242, "同一个实例要认");
-assert.equal(lockHolderPid(lock(), PORT, seen(ASH, T0 + 800)), 4242, "POSIX etime 截断到秒:观察值略晚也要认");
-assert.equal(lockHolderPid(lock(), PORT, seen(ASH, T0 + 3_600_000)), null, "号码复用:进程比锁晚一小时出生");
-assert.equal(lockHolderPid(lock(), PORT, seen(ASH, T0 + 5_000)), null, "号码复用:进程比锁里那一刻晚 5s 出生");
-assert.equal(lockHolderPid(lock(), PORT, seen("C:\\Windows\\System32\\svchost.exe -k netsvcs")), null, "号码上不是 ash server");
-assert.equal(lockHolderPid(lock(), PORT, seen("/usr/local/bin/node /srv/other-app/dist/index.js")), null, "别的项目的同名入口");
-assert.equal(lockHolderPid(lock(), PORT, seen("/usr/local/bin/node /Users/me/ash/mcp/dist/index.js")), null, "ash 自己的 MCP 入口也不是 server");
-assert.equal(lockHolderPid(lock(), PORT, seen(`/usr/local/bin/node tool.js --entry ${ENTRY} --watch`)), null, "入口只出现在参数中间");
-assert.equal(lockHolderPid(lock(), PORT, seen("")), null, "命令行读不到:证明不了");
-assert.equal(lockHolderPid(lock(), PORT, fixed({ command: ASH, startedAtMs: null })), null, "启动时刻读不到:证明不了");
-assert.equal(lockHolderPid(lock({ processStartedAtMs: undefined }), PORT, seen(ASH)), null, "旧版本的锁没记启动时刻:证明不了代次");
-assert.equal(lockHolderPid(lock({ argv: undefined }), PORT, seen(ASH)), null, "锁里没记入口:证明不了是哪个服务");
-assert.equal(lockHolderPid(lock(), PORT, fixed(null)), null, "号码上没进程");
-assert.equal(lockHolderPid(lock({ port: 14317 }), PORT, seen(ASH)), null, "别的端口的锁不认");
-assert.ok(isAshServerCommand('"C:\\Program Files\\nodejs\\node.exe" D:\\ai_workspace\\ash\\server\\dist\\index.js'));
-console.log("✓ 锁里的号码:入口、代次任一证明不了就不当旧实例(别的项目的 dist/index.js、晚出生的进程、旧锁都不认)");
+const npmShim = join(FAKE_BIN, "npm-shim.mjs");
+writeFileSync(npmShim, "");
+if (IS_WINDOWS) {
+  writeFileSync(join(FAKE_BIN, "npm.cmd"), `@echo off\r\nnode "${npmShim}" %*\r\n`);
+} else {
+  writeFileSync(join(FAKE_BIN, "npm"), `#!/bin/sh\nexec node "${npmShim}" "$@"\n`);
+  chmodSync(join(FAKE_BIN, "npm"), 0o755);
+}
+writeFileSync(ENTRY, "setInterval(() => {}, 1000);\n");
+writeFileSync(BYSTANDER, `require("node:fs").writeFileSync(${JSON.stringify(BORN)}, JSON.stringify({
+  argv: process.argv, born: Date.now() - Math.round(process.uptime() * 1000) }));
+setInterval(() => {}, 1000);\n`);
+const fakeServer = join(TMP, "fake-server.mjs");
+writeFileSync(fakeServer, `import { writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+createServer((req, res) => {
+  const body = req.url?.startsWith("/api/restart-impact")
+    ? '{"survives":[],"resumes":[],"interrupted":[],"mcpDisrupted":[]}'
+    : JSON.stringify({ ok: true, pid: process.pid });
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(body);
+}).listen(${PORT}, "127.0.0.1", () => writeFileSync(${JSON.stringify(PID_FILE)}, String(process.pid)));
+`);
 
-// 真进程:inspectPid 读出来的启动时刻要和进程自报的对得上(server 写锁用的就是自报值),
-// 否则上面的判据在真机上会把活着的旧实例认丢。旁观者是另一个项目的 `dist/index.js` ——
-// 它也命中「像 ash」的宽泛正则,能拦住它的只有入口比对。
-const stage = mkdtempSync(join(tmpdir(), "ash-lock-owner-"));
-const reporter = (bornFile) => `require("node:fs").writeFileSync(${JSON.stringify(bornFile)}, String(Date.now() - Math.round(process.uptime() * 1000)));
-setInterval(() => {}, 1000);`;
-const entry = join(stage, "ash", "server", "dist", "index.js");
-const otherEntry = join(stage, "other-app", "dist", "index.js");
-mkdirSync(join(stage, "ash", "server", "dist"), { recursive: true });
-mkdirSync(join(stage, "other-app", "dist"), { recursive: true });
-writeFileSync(entry, reporter(join(stage, "ash.born")));
-writeFileSync(otherEntry, reporter(join(stage, "other.born")));
-const fake = spawnTestFixture(process.execPath, [entry], { stdio: "ignore" });
-const bystander = spawnTestFixture(process.execPath, [otherEntry], { stdio: "ignore" });
-const bornOf = async (file) => {
-  for (let i = 0; i < 100; i++) {
-    const text = (() => { try { return readFileSync(file, "utf8"); } catch { return ""; } })();
-    if (text) return Number(text);
-    await sleep(50);
-  }
-  return NaN;
-};
+const bystander = spawnTestFixture(process.execPath, [BYSTANDER, "--entry", ENTRY], { stdio: "ignore" });
+let server = null;
 await withTestResources(async () => {
-  const born = await bornOf(join(stage, "ash.born"));
-  const otherBorn = await bornOf(join(stage, "other.born"));
-  assert.ok(Number.isFinite(born) && Number.isFinite(otherBorn), "fixture 没报出启动时刻");
-  const ashLock = (pid, processStartedAtMs) => ({ pid, port: PORT, processStartedAtMs, argv: [process.execPath, entry] });
-  assert.equal(lockHolderPid(ashLock(fake.pid, born), PORT), fake.pid, "真进程:同一实例要认");
-  assert.equal(lockHolderPid(ashLock(fake.pid, born - 5_000), PORT), null, "真进程:锁里那一刻早于它出生 5s,是后来的进程");
-  assert.equal(lockHolderPid(ashLock(bystander.pid, otherBorn), PORT), null, "真进程:号码上是别的项目的 dist/index.js");
-  console.log("✓ 真进程:启动时刻与自报值对得上,复用号码和别的 Node 服务都认得出来");
-}, [() => fake.dispose(), () => bystander.dispose(), () => rmSync(stage, { recursive: true, force: true })]);
+  for (let i = 0; i < 100 && !existsSync(BORN); i++) await sleep(50);
+  const { argv, born } = JSON.parse(readFileSync(BORN, "utf8"));
+  writeFileSync(join(TMP, "ash.db.ash.lock"), JSON.stringify({
+    version: 1, pid: bystander.pid, processStartedAtMs: born, port: PORT, argv, cwd: TMP, token: "t",
+  }));
+
+  const run = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs"), "--skip-mcp"], {
+    cwd: REPO,
+    env: {
+      ...process.env,
+      PATH: FAKE_BIN + (IS_WINDOWS ? ";" : ":") + process.env.PATH,
+      PORT: String(PORT),
+      ASH_DB: join(TMP, "ash.db"),
+      ASH_LOG: join(TMP, "ash.log"),
+      SERVER_ENTRY: fakeServer,
+      START_TIMEOUT: "10",
+    },
+    encoding: "utf8",
+    preserveScripts: [fakeServer],
+  });
+  const serverPid = existsSync(PID_FILE) ? Number(readFileSync(PID_FILE, "utf8").trim()) : 0;
+  server = run.preserved.find((instance) => instance.pid === serverPid) ?? null;
+  const output = (run.stdout ?? "") + (run.stderr ?? "");
+
+  assert.ok(isPidAlive(bystander.pid), `锁里的号码被当成旧实例停掉了:\n${output}`);
+  assert.doesNotMatch(output, /无法安全终止|试过 kill/, "锁里的号码不该进候选");
+  assert.match(output, new RegExp(`${PORT} 已就绪`), `重启没完成:\n${output}`);
+  console.log("✓ 残锁指向一个命令行末尾就是 ash 入口的无关进程:重启照常完成,它毫发无损");
+}, [
+  async () => {
+    if (!server) return;
+    const shot = terminateInstance(server);
+    if (shot.error) throw shot.error;
+    for (let i = 0; i < 50 && isPidAlive(server.pid); i++) await sleep(40);
+  },
+  () => bystander.dispose(),
+  () => rmSync(TMP, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }),
+]);

@@ -41,7 +41,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, lockHolderPid, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 import { parseRestartOptions, restartCommand, RESTART_USAGE } from "./restart-options.mjs";
@@ -79,27 +79,24 @@ const say = (line) => process.stdout.write(`${line}\n`);
 const LOCK_FILE = `${process.env.ASH_DB ? resolve(process.env.ASH_DB) : join(REPO, "data", "ash.db")}.ash.lock`;
 
 /**
- * 现在是哪个 pid 占着这个 DB。**端口探测只是旁证**:容器里 lsof/ss/fuser 可能一个
+ * 端口上应答的那个 ash 自报的 pid(`/api/health` 的 `pid`)。没人应答、或者是不报 pid 的
+ * 旧版本,返回 null。
+ *
+ * 这是「停谁」的第二条线索,只在 listenerPids 漏掉时起作用:容器里 lsof/ss/fuser 可能一个
  * 都没有(2026-08-21 的 Rocky 容器就是),listenerPids 返回空,旧进程于是被整个放过。
- * 锁文件是 server 自己写的权威记录,跟它拒绝第二个实例启动时用的是同一份判据,拿它
- * 兜底既零依赖又不会看走眼。
  *
- * **只认端口对得上的那把锁**:同一台机器上完全可能有别的 ash 守着别的 DB/端口
- * (test-restart 就起在 14317),不加这道判据就会去杀不相干的进程。
- *
- * **也只认号码上还是当初那个进程**:ash 没正常退出时锁会留在原地,号码随后被别的进程
- * 复用 —— Windows 上复用得很快,重启过机器几乎必然撞上。只看「号码还活着」,就会把
- * 那个陌生进程当成旧实例去杀:Windows 上被安全闸拦成「无法安全终止 Windows 旧实例」,
- * 加 --force 则整树强杀一个无关程序;POSIX 上直接 SIGTERM 它。判据见 lockHolderPid。
- * 认不出来就不当旧实例 —— 它真是的话还在端口上,端口那条线索照样抓得到,下面「端口
- * 必须安静」那道闸也兜着。
+ * **停谁只认活的事实,不认记录**:端口正被谁监听(系统说的),或者端口上应答的 ash 说自己
+ * 是谁。单实例锁里那个号码**不能**当线索 —— ash 没正常退出时锁留在原地,号码随后被别的
+ * 进程复用(Windows 上重启过机器几乎必然),拿它下刀等于去停一个陌生进程:Windows 上被
+ * 安全闸拦成「无法安全终止 Windows 旧实例」,加 --force 则整树强杀它,POSIX 上直接 SIGTERM。
+ * 也别想靠比对命令行把锁里的号码「认回来」:命令行只是一段文本,末尾参数、应用参数、
+ * 相对路径、符号链接都能让它跟真正的执行入口对不上,两头都会认错(第 1、2 轮审查)。
+ * 锁真正的主人要么还在应答(这里认得出),要么没在应答 —— 那就不需要我们去停它,下面
+ * 「端口必须安静」那道闸与新 server 自己的单实例检查会把它兜住。
  */
-function lockOwnerPid() {
-  try {
-    return lockHolderPid(JSON.parse(readFileSync(LOCK_FILE, "utf8")), PORT);
-  } catch {
-    return null; // 没有锁文件 = 没有在跑的 ash,或者旧版本还不写锁
-  }
+async function answeringPid() {
+  const health = await localJson(PORT, "/api/health");
+  return Number.isInteger(health?.pid) && health.pid > 1 ? health.pid : null;
 }
 
 /**
@@ -280,9 +277,9 @@ npm(["run", "build"], "✕ 构建失败,已中止——服务端未重启,跑的
 built = true;
 
 say(`▶ 2/3 重启 :${PORT} 服务端…`);
-// 端口 ∪ 锁文件:两条线索都用上,少一条就可能漏掉旧进程(见 lockOwnerPid 的注释)。
-const owner = lockOwnerPid();
-const old = [...new Set([...listenerPids(PORT), ...(owner ? [owner] : [])])];
+// 监听者 ∪ 应答者自报:两条线索都用上,少一条就可能漏掉旧进程(见 answeringPid 的注释)。
+const answering = await answeringPid();
+const old = [...new Set([...listenerPids(PORT), ...(answering ? [answering] : [])])];
 if (old.length) {
   // 别盲目打断会被打断的任务。判据是「重启会**真断**几个」而不是「有几个在跑」。
   // 问不出判据就中止(impactOrAbort):静默按 0 继续正是这条闸失效的样子。
@@ -343,7 +340,7 @@ if (await localJson(PORT, "/api/health")) {
   say(`  ✕ :${PORT} 上仍有一个 ash 在应答,没能让它下线 —— 已中止,未重启服务端。`);
   say(`     (新代码已 build 进 dist,不会丢;继续跑的是旧代码。)`);
   if (old.length) say(`     试过 kill:${old.join(", ")} —— 它没退,或者应答的根本是别的进程。`);
-  else say("     一个候选 pid 都没找到:这台机器上 lsof/ss/fuser 可能都没装,锁文件也没读到。");
+  else say("     一个候选 pid 都没找到:这台机器上 lsof/ss/fuser 可能都没装,应答的又是不报 pid 的旧版本。");
   say(`     手工确认它是谁:  cat ${LOCK_FILE}`);
   say("                       ps -ef | grep server/dist/index.js");
   say("     然后 kill 掉它,再重跑一次 npm run restart。");
