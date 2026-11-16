@@ -198,6 +198,10 @@
       "types": "./src/mcp.ts",
       "default": "./src/mcp.ts"
     },
+    "./turn-fingerprint": {
+      "types": "./src/turn-fingerprint.ts",
+      "default": "./src/turn-fingerprint.ts"
+    },
     "./repo-url": {
       "types": "./src/repo-url.ts",
       "default": "./src/repo-url.ts"
