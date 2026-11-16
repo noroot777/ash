@@ -284,25 +284,6 @@ export function killServerProcesses(pids, protect = [], { force = false } = {}) 
 }
 
 /**
- * 这个进程**最晚可能**是什么时候出生的(墙钟 ms)。查不到返回 null。
- *
- * 只给「证明是不是同一个实例」用,所以取的是不利于证明的那一端:Windows 是进程表里的
- * 精确创建时刻;POSIX 用 `etime`(已运行时长,不带时区,macOS 与 procps 都有),它截断到
- * 秒,真实出生时刻落在 (估值 - 1s, 估值],于是直接拿估值当上界。
- */
-export function processLatestBirthMs(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (IS_WINDOWS) {
-    const created = listProcesses().find((row) => row.pid === pid)?.created;
-    return /^\d+$/.test(created ?? "") ? Number(BigInt(created) / 10_000n) - 11_644_473_600_000 : null;
-  }
-  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(capture("ps", ["-o", "etime=", "-p", String(pid)]).trim());
-  if (!m) return null;
-  const [, days = "0", hours = "0", minutes, seconds] = m;
-  return Date.now() - (((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000;
-}
-
-/**
  * 命令行**以这个路径结尾**的进程。锚在末尾是有意的：`node …/mcp/dist/index.js` 该
  * 命中，而把同一个路径写在 `--mcp-config` 里的 claude/codex 父进程绝不能被误杀。
  */

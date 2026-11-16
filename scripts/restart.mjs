@@ -41,7 +41,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, localGet, processLatestBirthMs, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 import { parseRestartOptions, restartCommand, RESTART_USAGE } from "./restart-options.mjs";
@@ -77,47 +77,6 @@ const say = (line) => process.stdout.write(`${line}\n`);
 // 单实例锁:server 自己写的「谁占着这个 DB」,字段见 server/src/singleton.ts。
 // 路径口径要跟 server 一致(ASH_DB 覆盖,默认 data/ash.db),否则找错文件。
 const LOCK_FILE = `${process.env.ASH_DB ? resolve(process.env.ASH_DB) : join(REPO, "data", "ash.db")}.ash.lock`;
-
-/** 墙钟测量的余量:POSIX 那边 ps 和 Date.now() 不是同一刻,两边各自也有毫秒级抖动。 */
-const BIRTH_PROOF_MARGIN_MS = 1_000;
-
-/**
- * 单实例锁里那个号码,**证明得了**是写锁的那个进程时返回它,否则 null。
- *
- * 端口探测只是旁证:容器里 lsof/ss/fuser 可能一个都没有(2026-08-21 的 Rocky 容器就是),
- * listenerPids 返回空,旧进程于是被整个放过 —— 尤其是卡死不应答的那种,连 --force 都停不掉。
- * 锁是 server 自己写的记录,拿它兜底零依赖。**只认端口对得上的那把锁**:同一台机器上完全
- * 可能有别的 ash 守着别的 DB/端口(test-restart 就起在 14317)。
- *
- * 但锁里的号码**本身不授权下刀**:ash 没正常退出时锁留在原地,号码随后被别的进程复用
- * (Windows 上重启过机器几乎必然),拿它下刀等于去停一个陌生进程 —— 这正是「无法安全终止
- * Windows 旧实例: <pid> 的进程身份不完整」那次报错的来历(2026-11-16 那台 Windows:旧 ash
- * 11-12 就死了,锁里的号码被一个读不到命令行的进程占着)。也别想靠比对命令行把号码「认回
- * 来」:命令行只是一段文本,末尾参数、应用参数、相对路径、符号链接都能让它跟真正的执行入口
- * 对不上。
- *
- * 证明靠心跳:锁是持有者自己每 10s 原子重写一次的(server/src/singleton.ts 的 beat),
- * `heartbeatAtMs` 那一刻它还活着、占着这个号码。**两个活进程不会同时占一个号码**,所以
- * 现在号码上那个进程如果出生在那次心跳之前,它在心跳那一刻就已经占着这个号码 —— 它就是
- * 写锁的那一个。复用号码的进程只可能出生在原主死后,也就晚于最后一次心跳,一定过不了这关。
- * 不比命令行,也不靠时间窗口去「猜」:要么证明得了,要么不认。
- *
- * 证明不了的(旧版本的锁没有心跳、server 起来不到一个心跳周期、出生时刻查不到)一律不认;
- * 那种情形下端口若仍被占着,下面「端口必须安静」那道闸会如实中止,不会起一个注定撞端口的新进程。
- */
-function lockProvenPid() {
-  let lock;
-  try {
-    lock = JSON.parse(readFileSync(LOCK_FILE, "utf8"));
-  } catch {
-    return null; // 没有锁文件 = 没有在跑的 ash,或者旧版本还不写锁
-  }
-  if (lock?.port !== PORT || !Number.isInteger(lock.pid) || lock.pid <= 1 || lock.pid === process.pid) return null;
-  if (typeof lock.heartbeatAtMs !== "number" || !Number.isFinite(lock.heartbeatAtMs)) return null;
-  const born = processLatestBirthMs(lock.pid);
-  if (born === null) return null;
-  return born + BIRTH_PROOF_MARGIN_MS < lock.heartbeatAtMs ? lock.pid : null;
-}
 
 /**
  * 宿主机运维者的凭证:锁文件里那串 token(server 自己写的,文件 0600)。
@@ -297,9 +256,14 @@ npm(["run", "build"], "✕ 构建失败,已中止——服务端未重启,跑的
 built = true;
 
 say(`▶ 2/3 重启 :${PORT} 服务端…`);
-// 端口 ∪ 锁文件:两条线索都用上,少一条就可能漏掉旧进程(见 lockProvenPid 的注释)。
-const proven = lockProvenPid();
-const old = [...new Set([...listenerPids(PORT), ...(proven ? [proven] : [])])];
+// 停谁**只认系统说的「谁在监听这个端口」**。单实例锁里的号码不当线索:ash 没正常退出时
+// 锁留在原地,号码随后被别的进程复用(Windows 上重启过机器几乎必然)—— 2026-11-16 那台
+// Windows 上旧 ash 11-12 就死了,号码被一个系统服务占着,拿它下刀于是报「无法安全终止
+// Windows 旧实例: <pid> 的进程身份不完整」。想从锁里把号码「认回来」也走不通:命令行比对会
+// 认错,出生时刻早于心跳的证明扛不住系统时间回拨(第 1~4 轮审查)。
+// 代价是 lsof/ss/fuser 都没装的机器上找不到旧进程 —— 那种情况下面「端口必须安静」那道闸
+// 会如实中止、提示手工停掉它,不会起一个注定撞端口的新进程(用户 2026-11-16 选定)。
+const old = listenerPids(PORT);
 if (old.length) {
   // 别盲目打断会被打断的任务。判据是「重启会**真断**几个」而不是「有几个在跑」。
   // 问不出判据就中止(impactOrAbort):静默按 0 继续正是这条闸失效的样子。
@@ -368,7 +332,7 @@ if (!(await quiet())) {
     : `  ✕ :${PORT} 仍被占着(连得上、但不应答),没能让它下线 —— 已中止,未重启服务端。`);
   say(`     (新代码已 build 进 dist,不会丢;继续跑的是旧代码。)`);
   if (old.length) say(`     试过 kill:${old.join(", ")} —— 它没退,或者占着端口的根本是别的进程。`);
-  else say("     一个能确认身份的候选 pid 都没有:lsof/ss/fuser 查不到监听者、它不应答,锁里的号码也证明不了是它。");
+  else say("     系统没查到谁在监听这个端口:这台机器上 lsof/ss/fuser 可能都没装。");
   say(`     手工确认它是谁:  cat ${LOCK_FILE}`);
   say("                       ps -ef | grep server/dist/index.js");
   say("     然后 kill 掉它,再重跑一次 npm run restart。");
