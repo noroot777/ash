@@ -249,16 +249,11 @@ export async function readTaskArtifacts(
         if (prefix && !path.startsWith(prefix)) return null;
         return prefix ? path.slice(prefix.length) : path;
       };
-      const committed = await taskBranchChangedPaths(
-        project.repoPath,
-        task.id,
-        task.mergeTargetBranch || task.worktreeBase,
-        task.worktreeStartCommit,
-      );
+      const committed = await taskBranchChangedPaths(project.repoPath, task);
       if (committed.available) {
         branchSource = committed.sourceBranch ?? null;
-        // 分支 diff **自带归属**：分支名由 taskId 派生，`merge-base..分支` 里的每个提交都是
-        // 它做的，跟它在哪个目录跑过、有没有留下运行区间都无关。worktree 事后被删、面板降级
+        // 分支 diff **自带归属**：分支名由 taskId 派生，口径（task-change-scope.ts）里只剩它自己
+        // 的改动 —— 合进来的目标分支、开工点带来的都已扣掉，跟它在哪个目录跑过、有没有留下运行区间都无关。worktree 事后被删、面板降级
         // 到主仓展示时，这是唯一还拿得出来的证据，不能被上面那道时间门槛一起挡掉。
         for (const path of committed.paths) {
           const rel = relocate(path);

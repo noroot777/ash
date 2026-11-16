@@ -1,7 +1,8 @@
 import { cappedGitStdout } from "./git-exec.js";
 import { literalPathspec } from "./git-status.js";
-import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
+import { expandHome, isGitRepo } from "./git.js";
 import { execFileText as exec } from "./exec.js";
+import { taskChangeScope, type ChangeScopeTask } from "./task-change-scope.js";
 const DIFF_LIMIT_BYTES = 1024 * 1024;
 
 export interface TaskDiffFile {
@@ -16,6 +17,7 @@ export interface TaskDiffResult {
   available: boolean;
   sourceBranch: string;
   targetBranch: string | null;
+  /** 对比基准。分支合过目标分支、而开工点带着别处代码时是一个合成的提交（task-change-scope.ts）。 */
   mergeBase: string | null;
   diff: string;
   files: TaskDiffFile[];
@@ -100,91 +102,52 @@ function fileDiffUnavailable(path: string, origPath: string | null, reason: stri
   return { available: false, path, origPath, diff: "", truncated: false, limitBytes, binary: false, reason };
 }
 
-type BranchRange =
-  | { ok: true; sourceBranch: string; targetBranch: string | null; mergeBase: string }
-  | { ok: false; sourceBranch: string; targetBranch: string | null; reason: string };
-
 /**
- * 「这条任务分支相对合入目标」是哪一段区间——整份 diff 和单文件 diff 必须问同一句话，
- * 否则清单上列出来的文件、点进去按另一段区间比，得到的会是另一份内容（甚至空的）。
- */
-async function taskBranchRange(
-  repo: string,
-  taskId: string,
-  requestedTarget: string | null | undefined,
-  startCommit?: string | null,
-): Promise<BranchRange> {
-  // 分支名走 resolveWorktreeBranchName：改名成 ash 之后新任务是 `ash/xxx`，改名前建的
-  // 老任务还挂在 `harness/xxx` 上，这里得两边都认，否则老任务一律报 source_branch_missing。
-  const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
-  const fail = (targetBranch: string | null, reason: string): BranchRange =>
-    ({ ok: false, sourceBranch, targetBranch, reason });
-  if (!(await isGitRepo(repo))) return fail(null, "not_git_repo");
-  const targetBranch = await resolveTaskMergeTarget(repo, requestedTarget);
-  if (!(await localBranchExists(repo, sourceBranch))) return fail(targetBranch, "source_branch_missing");
-  if (startCommit) {
-    try {
-      const { stdout } = await exec("git", ["-C", repo, "rev-parse", "--verify", "--end-of-options", `${startCommit}^{commit}`]);
-      return { ok: true, sourceBranch, targetBranch, mergeBase: stdout.trim() };
-    } catch {
-      return fail(targetBranch, "start_commit_unreadable");
-    }
-  }
-  if (!targetBranch) return fail(null, "target_unresolved");
-  if (!(await localBranchExists(repo, targetBranch))) return fail(targetBranch, "target_branch_missing");
-  try {
-    const { stdout } = await exec("git", ["-C", repo, "merge-base", targetBranch, sourceBranch]);
-    return { ok: true, sourceBranch, targetBranch, mergeBase: stdout.trim() };
-  } catch {
-    return fail(targetBranch, "no_merge_base");
-  }
-}
-
-/**
- * 只要「这条分支相对合入目标动过哪些文件」的**路径**，不读内容。
+ * 只要「这条任务自己动过哪些文件」的**路径**，不读内容。
  *
  * 产物面板要的就是这一句：它只想知道有没有新出来一张图，不关心图里改了哪几个字节，
  * 而 `taskBranchDiff` 会顺带把整份 diff 文本读出来（默认上限 1 MB）——面板每隔几秒问
- * 一次，那是白读。区间仍走 `taskBranchRange`，跟清单、单文件 diff 同源。
+ * 一次，那是白读。口径仍走 `taskChangeScope`，跟清单、单文件 diff 同源。
  *
  * 已删除的路径照样在结果里：调用方随后要 stat 它们（要 size/mtime），那一步自然会把
  * 磁盘上已经没有的滤掉，这里不必重复判一次。
  */
 export async function taskBranchChangedPaths(
   repoPath: string,
-  taskId: string,
-  requestedTarget: string | null | undefined,
-  startCommit?: string | null,
+  task: ChangeScopeTask,
 ): Promise<{ available: boolean; paths: string[]; reason?: string; sourceBranch?: string }> {
   const repo = expandHome(repoPath);
-  const range = await taskBranchRange(repo, taskId, requestedTarget, startCommit);
-  if (!range.ok) return { available: false, paths: [], reason: range.reason };
+  const scope = await taskChangeScope(repo, task);
+  if (!scope.ok) return { available: false, paths: [], reason: scope.reason };
   try {
     const { stdout } = await exec(
       "git",
-      ["-C", repo, "diff", "--name-only", "-z", range.mergeBase, range.sourceBranch],
+      ["-C", repo, "diff", "--name-only", "-z", scope.base, scope.head],
       { maxBuffer: 16 * 1024 * 1024 },
     );
     // 分支名一并交回：调用方要拿分支末端那份内容跟磁盘上现在这份比（task-artifact-version.ts）。
-    return { available: true, paths: stdout.split("\0").filter(Boolean), sourceBranch: range.sourceBranch };
+    return { available: true, paths: stdout.split("\0").filter(Boolean), sourceBranch: scope.sourceBranch };
   } catch {
     return { available: false, paths: [], reason: "task_diff_unreadable" };
   }
 }
 
+/**
+ * 「这条任务自己改了什么」的整份 diff。对比基准（`mergeBase`）与分支头由 `taskChangeScope` 定 ——
+ * 整份 diff 和单文件 diff 必须问同一句话，否则清单上列出来的文件、点进去按另一段区间比，
+ * 得到的会是另一份内容（甚至空的）。
+ */
 export async function taskBranchDiff(
   repoPath: string,
-  taskId: string,
-  requestedTarget: string | null | undefined,
+  task: ChangeScopeTask,
   limitBytes = DIFF_LIMIT_BYTES,
-  startCommit?: string | null,
 ): Promise<TaskDiffResult> {
   const repo = expandHome(repoPath);
-  const range = await taskBranchRange(repo, taskId, requestedTarget, startCommit);
+  const scope = await taskChangeScope(repo, task);
   const unavailable = (reason: string): TaskDiffResult => ({
     available: false,
-    sourceBranch: range.sourceBranch,
-    targetBranch: range.targetBranch,
+    sourceBranch: scope.sourceBranch,
+    targetBranch: scope.targetBranch,
     mergeBase: null,
     diff: "",
     files: [],
@@ -192,19 +155,19 @@ export async function taskBranchDiff(
     limitBytes,
     reason,
   });
-  if (!range.ok) return unavailable(range.reason);
-  const { mergeBase, sourceBranch, targetBranch } = range;
+  if (!scope.ok) return unavailable(scope.reason);
+  const { base, head, sourceBranch, targetBranch } = scope;
   try {
     const [{ stdout: numstat }, diff] = await Promise.all([
-      exec("git", ["-C", repo, "diff", "--numstat", "-z", mergeBase, sourceBranch], { maxBuffer: 16 * 1024 * 1024 }),
-      cappedGitStdout(repo, ["diff", "--no-ext-diff", "--no-color", "--unified=3", mergeBase, sourceBranch], limitBytes),
+      exec("git", ["-C", repo, "diff", "--numstat", "-z", base, head], { maxBuffer: 16 * 1024 * 1024 }),
+      cappedGitStdout(repo, ["diff", "--no-ext-diff", "--no-color", "--unified=3", base, head], limitBytes),
     ]);
     const files = parseNumstat(numstat);
     return {
       available: true,
       sourceBranch,
       targetBranch,
-      mergeBase,
+      mergeBase: base,
       diff: diff.text,
       files,
       truncated: diff.truncated,
@@ -223,18 +186,16 @@ export async function taskBranchDiff(
  */
 export async function taskBranchFileDiff(
   repoPath: string,
-  taskId: string,
-  requestedTarget: string | null | undefined,
+  task: ChangeScopeTask,
   path: string,
   origPath: string | null = null,
   limitBytes = DIFF_LIMIT_BYTES,
-  startCommit?: string | null,
 ): Promise<TaskFileDiffResult> {
   const repo = expandHome(repoPath);
-  const range = await taskBranchRange(repo, taskId, requestedTarget, startCommit);
-  if (!range.ok) return fileDiffUnavailable(path, origPath, range.reason, limitBytes);
+  const scope = await taskChangeScope(repo, task);
+  if (!scope.ok) return fileDiffUnavailable(path, origPath, scope.reason, limitBytes);
   try {
-    return await rangeFileDiff(repo, range.mergeBase, range.sourceBranch, path, origPath, limitBytes);
+    return await rangeFileDiff(repo, scope.base, scope.head, path, origPath, limitBytes);
   } catch {
     return fileDiffUnavailable(path, origPath, "task_diff_unreadable", limitBytes);
   }
