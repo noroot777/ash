@@ -32,7 +32,7 @@ export type ReplyBoxProps = {
   ) => Promise<ReplyTaskResult | null>;
   /**
    * 停掉这一轮（在跑）或不排了（排着队）。给了才有停止键：任务头上不再有停止，它就是发送键的
-   * 另一面（docs/ui-ux-audit reply-4）。
+   * 另一面。
    */
   onStop?: () => Promise<void>;
   /** 服务端说此刻停不了的那句原因（停止结论 `blocker`）：给了 onStop 时停止键灰着说它。 */
@@ -48,7 +48,7 @@ export type ReplyBoxProps = {
   skills?: SkillEntry[];
   /** 框上方只放状态（验收前置命令在跑之类）；没有就不占地方。 */
   topRail?: ReactNode;
-  /** 框里那一行左边、附件后面的动作（再审、打开预览、接力到…）（docs/ui-ux-audit reply-3）。 */
+  /** 框里那一行左边、附件后面的动作（再审、打开预览、接力到…）。 */
   actions?: ReactNode;
   /** 「更多」里除截图批注以外的项（预览日志）。 */
   moreItems?: IconMenuItem[];

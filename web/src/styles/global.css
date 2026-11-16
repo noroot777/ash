@@ -170,7 +170,7 @@
   --scrollbar: rgb(55 57 63 / 28%);
   --scrollbar-hover: rgb(55 57 63 / 44%);
 
-  /* 尺子（docs/ui-ux-audit 08「定尺」）。各面的字号、字重、圆角、动效只从这里取。
+  /* 尺子。各面的字号、字重、圆角、动效只从这里取。
      名字用短前缀（--t- / --w- / --r-），不用 --text- / --radius-：那两个是 Tailwind 的
      主题命名空间，同名会把 rounded-sm、text-xs 这些工具类一起改掉。 */
   --t-xs: 12px;
