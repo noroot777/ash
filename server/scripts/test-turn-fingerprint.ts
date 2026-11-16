@@ -10,7 +10,8 @@
 //   4. 真 codex app-server:[mcp_servers.ash.env] 写死了旧身份,同上四种
 //
 // MCP 用的是一个桩:真 resolveTurnIdentity 挑身份(落盘给测试看),拒绝就退出,否则只答握手。
-// 不调模型、不碰用户的 CLI 配置。没装对应 CLI 就跳过那一段(打一行 ⚠)。
+// 不调模型、不碰用户的 CLI 配置。第 3、4 段要起本机装着的真 CLI(各四次),结果跟着那台机器装的
+// 版本走,所以只在 `ASH_TEST_REAL_CLI=1` 时跑(升级 CLI 之后手动核一次);平时只打一行 ⚠。
 //
 // 跑:npx tsx scripts/test-turn-fingerprint.ts(cwd = server)
 import assert from "node:assert/strict";
@@ -152,9 +153,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   // 本回合的起跑环境照真任务回合那样由 turnIdentityEnv 给(变量 + PATH 上的身份目录)。
   const { turnIdentityEnv } = await import("../src/turn-identity.js");
   const ctx = { root, entry, currentVars, currentEnv: turnIdentityEnv(current), stale, allStale, current, lead: "task-lead", picked };
-  const { checkRealClaude, checkRealCodex } = await import("./turn-fingerprint-real-cli.js");
-  await checkRealClaude(ctx);
-  await checkRealCodex(ctx);
+  if (process.env.ASH_TEST_REAL_CLI === "1") {
+    const { checkRealClaude, checkRealCodex } = await import("./turn-fingerprint-real-cli.js");
+    await checkRealClaude(ctx);
+    await checkRealCodex(ctx);
+  } else {
+    console.log("⚠ 真 CLI 那两段没跑(要跑:ASH_TEST_REAL_CLI=1)");
+  }
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
