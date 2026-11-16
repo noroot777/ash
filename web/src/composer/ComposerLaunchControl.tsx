@@ -40,9 +40,9 @@ export function ComposerLaunchControl({
   onCronChange,
   onSubmit,
   queueSlot,
-  queueUnavailable,
   prerequisiteSlot,
-  prerequisiteUnavailable,
+  unavailable,
+  callText,
 }: {
   mode: LaunchMode;
   at: string;
@@ -59,21 +59,21 @@ export function ComposerLaunchControl({
   onSubmit: () => void;
   /** mode="queue" 时的目标任务选择器(由面板构造,这里只负责摆进浮层)。 */
   queueSlot?: ReactNode;
-  /** 非空 = 当前任务模式不支持排队(如团队任务),选项置灰并附上原因。 */
-  queueUnavailable?: string | null;
   /** mode="prerequisites" 时的「建在谁上面」(由面板构造)。 */
   prerequisiteSlot?: ReactNode;
-  /** 非空 = 当前任务模式不能有前置,选项置灰并附上原因。 */
-  prerequisiteUnavailable?: string | null;
+  /** 此刻用不了的那几档和原因（框里叫着人时只能创建并运行），选项置灰并附上原因。 */
+  unavailable?: Partial<Record<LaunchMode, string>> | null;
+  /** 框里叫着人时键上写这一按的名字（「问 codex」「开始讨论」，同回复框）。 */
+  callText?: string | null;
 }) {
   const launchGroup = useRovingChoice(LAUNCH_MODES, mode, onModeChange);
   const current = LAUNCH_OPTIONS.find((option) => option.value === mode) ?? LAUNCH_OPTIONS[0]!;
   return (
     <SendKey
       size="md"
-      action="创建并运行"
-      text={uploading || current.text}
-      tip={current.text ? current.say : null}
+      action={callText ? `创建并${callText}` : "创建并运行"}
+      text={uploading || callText || current.text}
+      tip={callText ? null : current.text ? current.say : null}
       blocked={blocked}
       busy={busy}
       onSend={onSubmit}
@@ -85,14 +85,13 @@ export function ComposerLaunchControl({
         children: <>
           <div className="send-key-choices" {...launchGroup.groupProps} aria-label="启动方式">
             {LAUNCH_OPTIONS.map((option) => {
-              const unavailable = option.value === "queue" ? queueUnavailable
-                : option.value === "prerequisites" ? prerequisiteUnavailable : null;
+              const held = unavailable?.[option.value] ?? null;
               return (
                 <button key={option.value} type="button" {...launchGroup.itemProps(option.value)}
-                  disabled={busy || !!unavailable}
-                  aria-label={unavailable ? `${option.label}（${unavailable}）` : option.label}
+                  disabled={busy || !!held}
+                  aria-label={held ? `${option.label}（${held}）` : option.label}
                   onClick={() => onModeChange(option.value)}>
-                  <span>{option.label}</span><em>{unavailable ?? option.say}</em>
+                  <span>{option.label}</span><em>{held ?? option.say}</em>
                 </button>
               );
             })}

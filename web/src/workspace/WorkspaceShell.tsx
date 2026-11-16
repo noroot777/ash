@@ -1,9 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CaretLeft } from "@phosphor-icons/react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
-import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
+import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem } from "@ash/shared";
 import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
+import { leavesOnArchive, type ArchivedOnOpen } from "../lib/archivedSelection.ts";
 import { claimAction, isActionFresh } from "../lib/latestInteraction.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
@@ -68,7 +69,8 @@ const GitWorkbench = lazy(() => import("../git-workbench/GitWorkbench.tsx").then
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
 
 type ContextView = "git" | "review" | "settings" | "palette" | "notes" | "create" | "chat" | "assistant";
-type ComposerState = { draft?: ComposerDraft | null; mode: TaskMode };
+// 新建任务不再分模式：老链接里的 `mode=team` / `mode=duet` 一律打开普通的新建框（正文在草稿库里，一个字不丢）。
+type ComposerState = { draft?: ComposerDraft | null };
 type AssistantOrigin = "chat" | "workspace" | { kind: "composer"; composer: ComposerState };
 
 function readUrlSelection() {
@@ -76,12 +78,10 @@ function readUrlSelection() {
   const settings = parseSettingsSection(params.get("settings"));
   const rawView = params.get("view");
   const view: ContextView | null = rawView === "git" || rawView === "review" || rawView === "settings" || rawView === "palette" || rawView === "notes" || rawView === "create" || rawView === "chat" || rawView === "assistant" ? rawView : null;
-  const rawMode = params.get("mode");
-  const mode: TaskMode = rawMode === "team" || rawMode === "duet" ? rawMode : "single";
   const assistantOrigin: AssistantOrigin | null = view !== "assistant" ? null
     : params.get("from") === "chat" ? "chat"
-    : params.get("from") === "composer" ? { kind: "composer", composer: { mode } } : "workspace";
-  return { projectId: params.get("project"), taskId: params.get("task"), settings, view, noteId: params.get("note"), mode, assistantOrigin };
+    : params.get("from") === "composer" ? { kind: "composer", composer: {} } : "workspace";
+  return { projectId: params.get("project"), taskId: params.get("task"), settings, view, noteId: params.get("note"), assistantOrigin };
 }
 
 export function WorkspaceShell() {
@@ -108,7 +108,7 @@ export function WorkspaceShell() {
   // composer.draft 只承载「从别处带进来的一份内容」（随手记转任务）。用户自己敲的正文
   // 和附件不走这里 —— 它们存在全局草稿库里按项目留着（见 composer/composerDraft.ts），
   // 所以去聊天/看别的任务再回来，框里原样还在，不需要谁把它抬来抬去。
-  const [composer, setComposer] = useState<ComposerState | null>(initial.view === "create" ? { mode: initial.mode } : null);
+  const [composer, setComposer] = useState<ComposerState | null>(initial.view === "create" ? {} : null);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(initial.view === "review" ? initial.taskId : null);
   const [deleteTarget, setDeleteTarget] = useState<TaskListItem | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<TaskListItem | null>(null);
@@ -171,6 +171,15 @@ export function WorkspaceShell() {
   }, [notify, projectId]);
   useEffect(() => { refreshGroups(); }, [refreshGroups]);
 
+  // 开着的这一条归档了要不要退出（lib/archivedSelection.ts）：打开时就已归档的照常开着。
+  const archivedOnOpen = useRef<ArchivedOnOpen>(null);
+  // 每打开一次重新认（排在下面那段之前跑）：收起之后再从链接打开同一条，算新的一次打开。
+  useEffect(() => { archivedOnOpen.current = null; }, [taskId]);
+  const leavesSelected = (task: Pick<TaskListItem, "id" | "archived">) => {
+    const verdict = leavesOnArchive(archivedOnOpen.current, task, settingsSection === "archive");
+    archivedOnOpen.current = verdict.seen;
+    return verdict.leave;
+  };
   useEffect(() => {
     if (!projectsReady || tasksLoading || !taskId) return;
     const taskProjectId = selectedTaskProjectId(tasks, taskId);
@@ -180,13 +189,13 @@ export function WorkspaceShell() {
     }
     const task = tasks.find((item) => item.id === taskId);
     if (task) {
-      if ((task.archived && settingsSection !== "archive") || !visibleOnThisMachine(task)) setTaskId(null);
+      if (leavesSelected(task) || !visibleOnThisMachine(task)) setTaskId(null);
       return;
     }
     let alive = true;
     api.task(taskId).then((loaded) => {
       if (!alive) return;
-      if ((loaded.archived && settingsSection !== "archive") || !visibleOnThisMachine(loaded)) {
+      if (leavesSelected(loaded) || !visibleOnThisMachine(loaded)) {
         setTaskId((current) => current === taskId ? null : current);
         return;
       }
@@ -216,11 +225,10 @@ export function WorkspaceShell() {
       if (assistantOrigin === "chat") params.set("from", "chat");
       else if (typeof assistantOrigin === "object") {
         params.set("from", "composer");
-        params.set("mode", assistantOrigin.composer.mode);
       }
     }
     else if (chatOpen && (!projectsReady || hasCurrentProject)) params.set("view", "chat");
-    else if (composer && (!projectsReady || hasCurrentProject)) { params.set("view", "create"); params.set("mode", composer.mode); }
+    else if (composer && (!projectsReady || hasCurrentProject)) params.set("view", "create");
     else if (paletteOpen) params.set("view", "palette");
     else if (reviewTaskId && reviewTaskId === taskId) params.set("view", "review");
     const query = params.toString();
@@ -241,7 +249,7 @@ export function WorkspaceShell() {
       setChatOpen(next.view === "chat");
       setAssistantOrigin(next.view === "assistant" ? "workspace" : null);
       setNotes(next.view === "notes" && next.projectId ? { projectId: next.projectId, noteId: next.noteId } : null);
-      setComposer(next.view === "create" ? { mode: next.mode } : null);
+      setComposer(next.view === "create" ? {} : null);
       setReviewTaskId(next.view === "review" ? next.taskId : null);
     };
     window.addEventListener("popstate", onPopState);
@@ -427,13 +435,13 @@ export function WorkspaceShell() {
   // 设置页的正门：项目下拉里那颗「设置」和快捷键 G S 共用它。分开写迟早漂成两个落点，
   // 而按钮上标着的键位一旦和按钮本身各去各的地方，那行 kbd 就成了句假话。
   const openSettingsHome = () => openSettings();
-  const openComposer = (mode: TaskMode = "single", draft?: ComposerDraft) => {
-    if (!requireProject(`新建${mode === "team" ? "团队" : mode === "duet" ? "讨论" : "任务"}`)) return;
+  const openComposer = (draft?: ComposerDraft) => {
+    if (!requireProject("新建任务")) return;
     setRemoteSelection(null);
     setGitOpen(false); setChatOpen(false); setAssistantOrigin(null);
     setSettingsSection(null);
     setNotes(null);
-    setComposer((current) => draft ? { mode, draft } : current ? { ...current, mode } : { mode, draft: null });
+    setComposer((current) => draft ? { draft } : current ?? { draft: null });
   };
   const openChat = () => {
     setGitOpen(false);
@@ -515,7 +523,7 @@ export function WorkspaceShell() {
 
   // 新建面板和首页是同一个组件、同一个 key：从首页点「全部选项」展开、或从面板 Esc 退回首页，
   // React 认作同一个实例，写到一半的东西和选好的执行器、工作目录都不丢（见 ComposerHome）。
-  const composerPanel = (project: ProjectView, home?: ComposerHome) => <TaskComposerPanel key={`composer:${project.id}`} project={project} groups={groups} tasks={tasks} initialDraft={home ? null : composer?.draft} onDraftSeeded={dropComposerSeed} mode={home ? "single" : composer?.mode ?? "single"} onModeChange={(mode) => home ? openComposer(mode) : setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onTasksSynced={applyTaskSnapshots} onCreateGroup={createComposerGroup} onProjectUpdated={applyProjectUpdate} notify={notify} home={home} />;
+  const composerPanel = (project: ProjectView, home?: ComposerHome) => <TaskComposerPanel key={`composer:${project.id}`} project={project} groups={groups} tasks={tasks} initialDraft={home ? null : composer?.draft} onDraftSeeded={dropComposerSeed} onCancel={() => setComposer(null)} onCreated={createTask} onTasksSynced={applyTaskSnapshots} onCreateGroup={createComposerGroup} onProjectUpdated={applyProjectUpdate} notify={notify} home={home} />;
 
   // J/K 挪一格：顺序只认屏幕上那份列表（见 sidebarNavigation），所以展开/收起团队执行者、
   // 折叠项目分组、年龄闸那几档都自动跟着走，不必在这里重算一份。
@@ -537,7 +545,7 @@ export function WorkspaceShell() {
     spreadOpen: spread.open,
     onNavigate: navigateSidebar,
     onTogglePalette: () => setPaletteOpen((value) => !value),
-    onCreate: () => openComposer("single"),
+    onCreate: () => openComposer(),
     onToggleSpread: () => { if (collapsed) setCollapsed(false); spread.toggle(); },
     onCloseSpread: spread.close,
     onToggleTaskMode: toggleTaskMode,
@@ -588,15 +596,15 @@ export function WorkspaceShell() {
     ? <ErrorBoundary key={currentProject.id} fallback={() => <LoadFailure what="终端" onClose={terminal.hide} />}><Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} dock={terminal} notify={notify} /></Suspense></ErrorBoundary>
     : null;
   const overlays = <>
-    <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTaskMode={() => { selectTaskMode(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => { if (requireProject("新建分组")) setCreateDialog({ kind: "group" }); }} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
-    {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => openComposer("single", draft)} notify={notify} />}
+    <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTaskMode={() => { selectTaskMode(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={() => openComposer()} onNewGroup={() => { if (requireProject("新建分组")) setCreateDialog({ kind: "group" }); }} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
+    {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => openComposer(draft)} notify={notify} />}
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={(ids) => { ids.forEach(deleteTask); setDeleteTarget(null); }} notify={notify} />}
     {handoffTarget && <HandoffDialog task={handoffTarget} onClose={() => setHandoffTarget(null)} onTaskUpdate={updateTask} onOpenRemote={selectRemoteTask} notify={notify} />}
     {createDialog?.kind === "project" && <CreateProjectDialog projects={projects} reason={createDialog.reason} notify={notify} onClose={() => setCreateDialog(null)} onCreated={(created) => { const existing = projects.some(project => project.id === created.id); setProjects((current) => current.some(project => project.id === created.id) ? current : [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify(existing ? "已打开项目" : "项目已创建"); }} />}
     {createDialog?.kind === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
     <WorkspaceToast toasts={toasts} onDismiss={dismissToast} onOpenSettings={openSettings} />
   </>;
-  if (gitOpen && !settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><div className="workspace-git-page">{currentProject ? <ErrorBoundary fallback={() => <LoadFailure what="Git 工作台" onClose={() => setGitOpen(false)} />}><Suspense fallback={<div className="workspace-load-error">正在打开 Git 工作台…</div>}><GitWorkbench key={`${currentProject.id}:${gitLocation.root || ""}:${gitLocation.taskId || ""}`} projectId={currentProject.id} projectName={currentProject.name} projects={projects} root={gitLocation.root} taskId={gitLocation.taskId} view={gitLocation.view} initialRef={gitLocation.ref} initialCommit={gitLocation.commit} onAssist={(body) => openComposer("single", { body, attachments: [] })} notify={notify} onExit={() => { setGitOpen(false); if (gitLocation.taskId) void selectTaskById(gitLocation.taskId); }} openTask={(id) => { setGitOpen(false); void selectTaskById(id); }} /></Suspense></ErrorBoundary> : <div className="workspace-load-error">{loadError?.message || (projectsReady ? "项目不存在或不可访问" : "正在读取项目…")}<button onClick={() => setGitOpen(false)}>返回 ash</button></div>}</div>{terminalDock}{statusBar}</div>{overlays}</>;
+  if (gitOpen && !settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><div className="workspace-git-page">{currentProject ? <ErrorBoundary fallback={() => <LoadFailure what="Git 工作台" onClose={() => setGitOpen(false)} />}><Suspense fallback={<div className="workspace-load-error">正在打开 Git 工作台…</div>}><GitWorkbench key={`${currentProject.id}:${gitLocation.root || ""}:${gitLocation.taskId || ""}`} projectId={currentProject.id} projectName={currentProject.name} projects={projects} root={gitLocation.root} taskId={gitLocation.taskId} view={gitLocation.view} initialRef={gitLocation.ref} initialCommit={gitLocation.commit} onAssist={(body) => openComposer({ body, attachments: [] })} notify={notify} onExit={() => { setGitOpen(false); if (gitLocation.taskId) void selectTaskById(gitLocation.taskId); }} openTask={(id) => { setGitOpen(false); void selectTaskById(id); }} /></Suspense></ErrorBoundary> : <div className="workspace-load-error">{loadError?.message || (projectsReady ? "项目不存在或不可访问" : "正在读取项目…")}<button onClick={() => setGitOpen(false)}>返回 ash</button></div>}</div>{terminalDock}{statusBar}</div>{overlays}</>;
   if (settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><SettingsPage
     section={settingsSection}
     anchor={settingsAnchor}
@@ -616,7 +624,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}${assistantOpen ? " is-assistant" : ""}${narrowPane.pane === "both" ? "" : ` is-narrow-${narrowPane.pane}`}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} collapsed={collapsed && !narrowPane.narrow} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={toContent(selectTask)} onRemoteTask={toContent(selectRemoteTask)} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} onQueueChanged={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? terminal.reveal : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onChat={toContent(openChat)} chatOpen={chatOpen} onAssistant={toContent(openAssistant)} assistantOpen={assistantOpen} onCreate={toContent(() => openComposer("single"))} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} collapsed={collapsed && !narrowPane.narrow} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={toContent(selectTask)} onRemoteTask={toContent(selectRemoteTask)} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} onQueueChanged={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? terminal.reveal : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onChat={toContent(openChat)} chatOpen={chatOpen} onAssistant={toContent(openAssistant)} assistantOpen={assistantOpen} onCreate={toContent(() => openComposer())} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
       <main className="workspace-main">
         {narrowPane.pane === "content" && <button type="button" className="workspace-narrow-back" onClick={narrowPane.showList}><CaretLeft size={14} weight="bold" aria-hidden="true" />列表</button>}
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
@@ -633,12 +641,12 @@ export function WorkspaceShell() {
         ) : selectedFullTask?.mode === "duet" ? (
           <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedFullTask ? (
-          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
+          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer(draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : currentProject && !selectedTask ? composerPanel(currentProject, {
           title: scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject.name,
           detail: scopeKind === "tasks" ? `新建到 ${currentProject.name}` : undefined,
           count: `${activeTaskCount} 项${scopeKind === "tasks" ? "还没落地" : "任务"}`,
-          onExpand: () => openComposer("single"),
+          onExpand: () => openComposer(),
           below: <HomeTodo rows={homeRows} all={tasks} onOpen={(task) => toContent(selectTask)(task)} />,
         }) : <><header className="workspace-app-bar"><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span></header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={selectedTask} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section></div></>}
       </main>

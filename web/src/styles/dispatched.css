@@ -171,6 +171,48 @@
   display: none;
 }
 
+/* 格头那颗「全部停下」（DispatchHoldKey）：没停着时指到格头、或键盘走进格头才出；触屏上常驻。
+   停着时它是「接着跑」（没停完是「再停一次」），常驻。 */
+.inspector-host__panel-head:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) {
+  opacity: 0;
+}
+
+.dispatched-hold-key {
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+@media (hover: none) {
+  .inspector-host__panel-head:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) {
+    opacity: 1;
+  }
+}
+
+/* 被更上面那条按住时，格头一句指过去。字是次级色，能点的照黑白灰，不上颜色。 */
+.dispatched-head__holder {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, currentColor 30%, transparent);
+  text-underline-offset: 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatched-head__holder:hover {
+  color: var(--ink);
+}
+
+/* 被按住的任务页面上那一行（DispatchHeldLine）：借「在等哨兵」那一行的样子，图标不上颜色 —— 停是你按的，
+   不是要你处理的状态。 */
+.dispatch-held-line .monitor-wait-line__bar > svg {
+  color: var(--faint);
+}
+
 /* 派它的那条任务的会话里，派出的任务来问 / 失败的那颗气泡（task-detail/dispatched/DispatchedBubble.tsx）：
    审查者那颗的骨架；字前那颗点只在还在等、失败时出现。标题加重那一下照辩论气泡（.debate-bubble-say b）。 */
 .dispatched-bubble .review-verdict-text { display: flex; align-items: flex-start; gap: 8px; }

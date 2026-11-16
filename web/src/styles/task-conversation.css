@@ -1,5 +1,5 @@
 /* 任务会话流：气泡、markdown 正文、账目胶囊、附件、提问卡。
-   外壳（头部、侧栏、抽屉）在 task-detail.css，回复框与派生面板在 task-reply.css，
+   外壳（头部、侧栏、抽屉）在 task-detail.css，回复框在 task-reply.css，
    执行过程折叠块在 execution-trace.css，它用到的流光与换字在 motion-text.css。 */
 :root {
   /* 两条消息之间的空里住着两样指到才出、不占排版高度的东西：上一回合尾那一排（.turn-acts，2px 离正文

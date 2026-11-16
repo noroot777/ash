@@ -177,11 +177,11 @@ export function prerequisiteTarget(task: EdgeTask, prerequisite: EdgeTask): stri
 
 const targetOf = (task: EdgeTask) => task.acceptedTargetBranch || task.mergeTargetBranch || null;
 
-/** 落边（调用方先过 `assertPrerequisiteEdges`，两步包在同一次 `withPrerequisiteGraph` 里）。重复的忽略。 */
-export async function insertPrerequisiteEdges(edges: PrerequisiteEdge[]): Promise<void> {
+/** 落边（调用方先过 `assertPrerequisiteEdges`，两步包在同一次 `withPrerequisiteGraph` 里）。重复的忽略。`into` = 调用方的事务。 */
+export async function insertPrerequisiteEdges(edges: PrerequisiteEdge[], into: Pick<typeof db, "insert"> = db): Promise<void> {
   if (!edges.length) return;
   const at = now();
-  await db.insert(taskPrerequisites)
+  await into.insert(taskPrerequisites)
     .values(edges.map((edge) => ({ ...edge, createdAt: at })))
     .onConflictDoNothing();
 }

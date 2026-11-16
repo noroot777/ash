@@ -7,7 +7,7 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // - 草稿记得这种启动方式和已选的前置；恢复时失效的那条被去掉；
 // - 建任务被服务端拒绝时原样显示原因、面板上写的不丢；按下去 = 一次建任务请求带上两条前置，再要求运行；
 //   前置没齐时提示「已建好，等谁站稳后自动开始」，不是启动失败；
-// - 团队模式不提供这种启动方式。
+// - 框里 `@` 了人时不提供这种启动方式：见 test-composer-call-dom.mjs ④。
 const web = await startWebServer();
 let browser;
 try {
@@ -189,14 +189,7 @@ try {
   await page.getByText(/任务已建好，等「前置甲」「前置乙」站稳后自动开始/).waitFor();
   assert.doesNotMatch(await notices(), /启动失败/, "在等前置不是启动失败");
 
-  // 团队模式不提供。
-  await page.getByRole("tab", { name: "团队", exact: true }).click();
-  await openLaunch();
-  assert.equal(await page.getByRole("radio", { name: /创建并等前置/ }).isDisabled(), true);
-  await page.keyboard.press("Escape");
-
   // 窄屏：浮层里那几行不横向溢出。
-  await page.getByRole("tab", { name: "单任务", exact: true }).click();
   await page.setViewportSize({ width: 360, height: 800 });
   await openLaunch();
   await page.getByRole("radio", { name: "创建并等前置" }).click();

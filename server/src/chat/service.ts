@@ -278,7 +278,8 @@ export class ChatService {
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "running"))).returning();
       if (!settled.length) { await preserveNotice(); return; }
       if (taskToStart && !abort.signal.aborted) {
-        void this.startTask(taskToStart).catch(async (error) => {
+        // 群聊里由模型建出来、顺手起跑的:同智能体调 run_task(turn-freeze.ts StartOrigin)。
+        void this.startTask(taskToStart, { origin: "agent" }).catch(async (error) => {
           await db.update(chatMessages).set({ status: "failed", body: withNotice(`任务已创建，但启动失败：${error instanceof Error ? error.message : String(error)}。请打开任务重试。`) }).where(eq(chatMessages.id, message.id));
         });
       }

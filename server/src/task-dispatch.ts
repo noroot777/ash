@@ -19,6 +19,9 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { Actor } from "./auth/context.js";
 import { canSeeProject } from "./auth/visibility.js";
+import { executorScopeForOwner } from "./auth/owned-executors.js";
+import { dispatchDefaultTarget, parseDispatchTarget } from "@ash/shared/dispatch-plan";
+import type { AgentType } from "@ash/shared";
 
 type DispatchCandidate = {
   id: string;
@@ -82,4 +85,52 @@ export async function dispatcherRefusal(
     return { status: 400, body: { error: "只有普通任务能收派出去的普通任务", dispatchedBy: body.dispatchedBy } };
   }
   return null;
+}
+
+/**
+ * 没指明交给谁的那几行，交给派它的那条任务「派出去的活交给谁」的默认值（`dispatchDefaultTarget`：
+ * 设了就是设的那个，没设就同这条任务自己）。智能体绕过派活单直接 batch_create_tasks / create_task_chain、
+ * 又没给 agentType / executorId 时走的就是这一条；指明了的（含只给了类型的）一个字不碰。
+ *
+ * 执行器是个人面资源：默认值里那个 id 归属人看不见就当没给，按类型默认执行器降级（同建任务的口径）。
+ */
+export async function withDispatchDefaults<T extends {
+  id: string;
+  agentType?: string | null;
+  executorId?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  ownerUserId?: string | null;
+}>(rows: T[], dispatchedBy: Map<string, string | null>): Promise<T[]> {
+  const open = rows.filter((row) => !row.agentType && !row.executorId && dispatchedBy.get(row.id));
+  if (!open.length) return rows;
+  const sourceIds = [...new Set(open.map((row) => dispatchedBy.get(row.id)!))];
+  const sources = await db.select({
+    id: tasks.id, agentType: tasks.agentType, executorId: tasks.executorId, model: tasks.model,
+    reasoningEffort: tasks.reasoningEffort, dispatchTarget: tasks.dispatchTarget,
+  }).from(tasks).where(inArray(tasks.id, sourceIds));
+  const defaults = new Map(sources.map((source) => [source.id, dispatchDefaultTarget({
+    ...source,
+    agentType: source.agentType as AgentType | null,
+    dispatchTarget: parseDispatchTarget(source.dispatchTarget),
+  })] as const));
+  const scopes = new Map<string | null, Awaited<ReturnType<typeof executorScopeForOwner>>>();
+  const scopeOf = async (owner: string | null) => {
+    if (!scopes.has(owner)) scopes.set(owner, await executorScopeForOwner(owner));
+    return scopes.get(owner)!;
+  };
+  return Promise.all(rows.map(async (row) => {
+    if (row.agentType || row.executorId) return row;
+    const source = dispatchedBy.get(row.id);
+    const target = source ? defaults.get(source) : null;
+    if (!target) return row;
+    const executorId = (await scopeOf(row.ownerUserId ?? null)).keep(target.executorId) ?? null;
+    return {
+      ...row,
+      agentType: target.agentType,
+      executorId,
+      model: row.model ?? target.model,
+      reasoningEffort: row.reasoningEffort ?? target.reasoningEffort,
+    };
+  }));
 }

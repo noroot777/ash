@@ -19,6 +19,8 @@ type TrayProps = {
   tasks?: TaskListItem[];
   /** 前置任务不会再完成时(失败/取消/删除/归档),那一行给的出口:不等了,直接发。 */
   onSendNow?: (messageId: string) => void;
+  /** 「某某名下已全部停下」那一格点过去打开那一条;没给就只是一句话。 */
+  onOpenTask?: (taskId: string) => void;
   /** 一开始就点开(回归脚本静态渲染点开后的那几行用)。 */
   defaultExpanded?: boolean;
 };
@@ -28,7 +30,7 @@ type TrayProps = {
  * 那条(和它能引导时的「引导会话」),其余动作都在点开后的那一行行尾。
  */
 export function ScheduledMessageTray(props: TrayProps) {
-  const { messages, loading, error, cancelingIds, steeringIds, onSteer, onWithdraw, onCancel, tasks, onSendNow } = props;
+  const { messages, loading, error, cancelingIds, steeringIds, onSteer, onWithdraw, onCancel, tasks, onSendNow, onOpenTask } = props;
   const [expanded, setExpanded] = useState(!!props.defaultExpanded);
   const [pendingCancel, setPendingCancel] = useState<string | null>(null);
   // 点开后要滚到哪一条;focus=true 时连焦点一起交给它那一行的摘要。
@@ -122,7 +124,7 @@ export function ScheduledMessageTray(props: TrayProps) {
         {ordered.map((message) => <ScheduledMessageRow key={message.id} message={message} busy={busy(message)}
           steering={!!steeringIds?.has(message.id)} open={openIds.has(message.id)} bodyId={`${bodyIdPrefix}-${message.id}`}
           tasks={tasks} onToggle={() => toggleBody(message.id)} onSteer={onSteer} onWithdraw={onWithdraw}
-          onCancel={onCancel ? setPendingCancel : undefined} onSendNow={onSendNow} />)}
+          onCancel={onCancel ? setPendingCancel : undefined} onSendNow={onSendNow} onOpenTask={onOpenTask} />)}
       </div>}
       <span className="scheduled-message-announcement" role="status">{ordered.length} 条待发送消息{attention.length > 0 && `，${attention.length} 条需留意`}</span>
     </div>

@@ -68,3 +68,7 @@
   .scheduled-tray-line > .scheduled-message-guide { padding: 0; }
   .scheduled-message-guide > span { display: none; }
 }
+
+/* 「某某名下已全部停下」那一格：点过去到那一条里接着跑。样子仍是那一格的字，指到才像链接。 */
+.scheduled-message-when.is-link { border: 0; background: transparent; padding: 0; font: inherit; font-size: var(--t-xs); text-align: left; cursor: pointer; }
+.scheduled-message-when.is-link:hover, .scheduled-message-when.is-link:focus-visible { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }

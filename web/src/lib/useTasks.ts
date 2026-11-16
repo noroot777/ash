@@ -99,6 +99,8 @@ export function applyTaskMetadataEvent<T extends TaskListItem>(task: T, event: T
     question: event.question,
     questionOptions: event.questionOptions,
     questionItems: event.questionItems,
+    // 每一次提问的变动都带着这一问是不是派活单：换了题、答了、撤下都让卡跟着走。
+    dispatchPlan: event.dispatchPlan ?? null,
   };
 }
 

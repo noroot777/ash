@@ -8,7 +8,7 @@ export interface SlashItem {
   command: string;
   label: string;
   hint?: string;
-  /** ash 自己的派生命令(/team、/duet)vs CLI 已装的技能。 */
+  /** ash 自己的叫人命令(/讨论、/派)vs CLI 已装的技能。 */
   kind: "ash" | "native" | "skill";
   source?: SkillSource;
   /** 同一份技能还装在哪些别的 CLI 上(按物理路径认)。 */

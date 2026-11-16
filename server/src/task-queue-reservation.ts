@@ -1,6 +1,6 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
-import { tasks } from "./db/schema.js";
+import { queueItems, tasks } from "./db/schema.js";
 import { SEAT_ROLLBACK_ROLE, isTurnClaimed, turnRole } from "./runs.js";
 import { writeGuardedTaskStatus } from "./status.js";
 import { id } from "./util.js";
@@ -25,6 +25,19 @@ export async function reserveQueuedTask(reservation: TaskQueueReservation): Prom
     reservation.advanceRequest && eq(tasks.resumePromptGeneration, reservation.advanceRequest.resumePromptGeneration),
   )!, reservation.token);
   if (!claimed) throw new Error("任务状态已改变，本次启动占位已撤销");
+}
+
+/**
+ * 不在队列里的成员占位（member-start.ts）：「此刻不在任何队列、还在这个组」和「落 queued」是**同一条
+ * UPDATE**。读完归属到这一笔之间有人把它排进队列、挪了组，这一笔就不成立 —— 返回 false，什么都没写。
+ * 抛错 = 不知道写没写进去（UPDATE 提交之后附带的读取也会抛），调用方要交出守卫式回收。
+ */
+export async function reserveUnqueuedMember(reservation: TaskQueueReservation, groupId: string | null): Promise<boolean> {
+  return writeGuardedTaskStatus(reservation.taskId, "queued", and(
+    eq(tasks.status, reservation.prevStatus), eq(tasks.directionEpoch, reservation.epoch),
+    groupId === null ? isNull(tasks.groupId) : eq(tasks.groupId, groupId),
+    sql`not exists (select 1 from ${queueItems} where ${queueItems.taskId} = ${reservation.taskId})`,
+  )!, reservation.token);
 }
 
 export async function restoreQueuedTask(reservation: TaskQueueReservation): Promise<boolean> {

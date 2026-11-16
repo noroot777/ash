@@ -8,7 +8,7 @@ import {
 } from "../src/task-detail/replyCall.ts";
 import { dispatchNotes } from "../src/task-detail/dispatchNotes.ts";
 import { interleaveAsides } from "../src/task-detail/feedAsides.ts";
-import { buildDispatchBody, buildTaskDerivationBody } from "../src/task-detail/taskDerivation.ts";
+import { buildDispatchBody } from "../src/task-detail/taskDerivation.ts";
 
 // —— 停在哪一种做法 ——
 const ALL = { dispatchable: true, discussable: true };
@@ -105,7 +105,7 @@ const asides = notes.map((note) => ({ key: note.id, at: note.at, node: null }));
 assert.deepEqual(interleaveAsides(rows, asides, (row) => row.at).map((entry) => entry.row ? entry.row.id : entry.aside.key),
   ["a", "lane", "early", "b", "late"], "按派出去那一刻插进会话：排在第一个比它晚的行前面，最晚的跟在最后");
 
-// —— 派出去的新任务正文：写的那句在最前，后面带着这场对话（跟 /team、/duet 同一份带法）——
+// —— 派出去的新任务正文：写的那句在最前，后面带着这场对话 ——
 const sourceTask = { id: "src", title: "登录页", body: "改成新样式", status: "running" };
 const sessions = [
   { startedAt: "2026-11-15T01:00:00.000Z", transcriptPath: "/runs/src/old.md" },
@@ -117,16 +117,4 @@ assert.match(body, /## 来源普通任务\n任务标题：登录页\n改成新�
 assert.match(body, /来源任务当前为「[^」]+」；创建这条任务不会改变来源任务的状态。/);
 assert.match(body, /最新会话记录：`\/runs\/src\/new\.md`/, "带最新那条会话");
 assert.match(body, /来源任务 ID（仅供溯源）：src$/);
-// /team 那一份的字面一个不变（拆出共用那几段时别把它改了）。
-assert.equal(buildTaskDerivationBody(sourceTask, [], "team", "").split("\n").slice(0, 8).join("\n"), [
-  "请以这个普通任务为背景，先理解已有目标与进展，再拆解工作、组织团队执行并验证交付。",
-  "",
-  "## 来源普通任务",
-  "任务标题：登录页",
-  "改成新样式",
-  "",
-  "## 当前状态",
-  `来源任务当前为「${body.match(/来源任务当前为「([^」]+)」/)[1]}」；创建本任务不会改变来源任务的状态。`,
-].join("\n"));
-
 console.log("reply call test passed");
