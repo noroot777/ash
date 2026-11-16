@@ -65,7 +65,7 @@ export function IconMenu({ label = "更多", items, placement, size = "sm", alig
   }, [open, side]);
   if (!items.length) return null;
   return (
-    <span className={`ui-menu-anchor${className ? ` ${className}` : ""}`} ref={root}>
+    <span className={`ui-icon-menu-anchor${className ? ` ${className}` : ""}`} ref={root}>
       <IconButton
         ref={button}
         label={label}
@@ -78,7 +78,7 @@ export function IconMenu({ label = "更多", items, placement, size = "sm", alig
         <DotsThree size={size === "sm" ? 15 : 17} weight="bold" aria-hidden="true" />
       </IconButton>
       {open && (
-        <div ref={menu} className={`ui-menu${align === "end" ? " is-end" : ""}${side === "above" || flipped ? " is-above" : ""}`} role="menu">
+        <div ref={menu} className={`ui-icon-menu${align === "end" ? " is-end" : ""}${side === "above" || flipped ? " is-above" : ""}`} role="menu">
           {items.map((item) => (
             <button
               key={item.label}
