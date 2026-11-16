@@ -10,4 +10,12 @@ import { join } from "node:path";
 const root = mkdtempSync(join(tmpdir(), "ash-test-data-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_DATA_DIR = join(root, "data");
-process.on("exit", () => rmSync(root, { recursive: true, force: true }));
+// 进程退出那一刻库还开着：Windows 上删不掉打开着的文件（EBUSY），在 exit 钩子里抛出来会把测试的退出码
+// 改成 1。删不掉就留着 —— 门禁给每条叶子另给了系统临时目录，叶子跑完随它一起删。
+process.on("exit", () => {
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch {
+    /* 见上 */
+  }
+});
