@@ -4,7 +4,10 @@
 // 卡里不再套框：一块面板，细线分段；选项一行一个，行首一小格是数字（也是快捷键），勾上变成
 // 黑底对勾。勾了就是选了，不再把那句话抄进输入框；最后一行只写补充，发出去的是两者拼起来的
 // （joinQuestionAnswer，跟从前的答复文本同一种形状）。
-import { useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+//
+// 宿主能收附件时（attachable），最后一行跟平常的回复框一样能贴图：粘贴或点回形针，图跟着整份答复
+// 一起走（服务端 /answer 的 attachments，与回复同一条路拼进提示词）。附件是整张卡的、不分题。
+import { useId, useRef, useState, type ClipboardEvent, type KeyboardEvent, type RefObject } from "react";
 import type { QuestionItem, TaskListItem } from "@ash/shared";
 import { CaretDown, Check } from "@phosphor-icons/react";
 import {
@@ -15,6 +18,7 @@ import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
 
 /** 背景短就直接摊开：为两行字多设一次「点开看全」纯属添堵。 */
 const CONTEXT_CLAMP_CHARS = 110;
@@ -24,7 +28,9 @@ const EMPTY: Draft = { picked: new Set(), note: "" };
 
 export type QuestionCardProps = {
   task: TaskListItem;
-  onAnswer: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+  onAnswer: (answer: string, input: QuestionAnswerInput, attachments?: string[]) => Promise<void>;
+  /** 能随答复带附件（远程任务页没有本机附件的路，不给）。 */
+  attachable?: boolean;
   /** 收起：只剩题目一行，平常的回复框回到它下面（QuestionSlot 管）。已勾的、已写的都还在。 */
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
@@ -35,7 +41,7 @@ export type QuestionCardProps = {
  * 换了一个新节点，撑高的那份记账（上次写的高度、是否被拖过）得跟着重来，不然展开后的新框会被当成
  * 「拖过了」，从此不再长高。
  */
-function NoteField({ inputRef, value, disabled, label, placeholder, onChange, onCommit }: {
+function NoteField({ inputRef, value, disabled, label, placeholder, onChange, onCommit, onPaste }: {
   inputRef: RefObject<HTMLTextAreaElement | null>;
   value: string;
   disabled: boolean;
@@ -43,11 +49,13 @@ function NoteField({ inputRef, value, disabled, label, placeholder, onChange, on
   placeholder: string;
   onChange: (value: string) => void;
   onCommit: () => void;
+  onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
 }) {
   useAutoGrowTextarea(inputRef, { value, maxLines: 6 });
   return (
     <textarea ref={inputRef} value={value} rows={1} disabled={disabled} aria-label={label} placeholder={placeholder}
       onChange={(event) => onChange(event.target.value)}
+      onPaste={onPaste}
       onKeyDown={(event) => {
         if (!isSendKeyEvent(event)) return;
         event.preventDefault();
@@ -60,7 +68,7 @@ function NoteField({ inputRef, value, disabled, label, placeholder, onChange, on
 /** 引在收起那一行里的题目：一行纯文字，长了交给样式截。 */
 const plain = (text: string) => text.replace(/\s+/g, " ").trim();
 
-export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: QuestionCardProps) {
+export function QuestionCard({ task, onAnswer, attachable = false, collapsed, onCollapsedChange }: QuestionCardProps) {
   const items = questionItems(task);
   const multi = items.length > 1;
   const [drafts, setDrafts] = useState<Draft[]>(() => items.map(() => EMPTY));
@@ -75,6 +83,7 @@ export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: Q
   const hintId = useId();
   const sendKeys = useSendKeyLabels();
   const sendTip = useHoverTip({ placement: "above" });
+  const uploads = useAttachments();
 
   const current = Math.min(index, items.length - 1);
   const item: QuestionItem = items[current]!;
@@ -111,12 +120,14 @@ export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: Q
     });
   };
   const submit = async () => {
-    if (inFlight.current || unavailable || !answered) return;
+    // 还在传的图没拿到路径，这时发出去它就丢了：等传完。
+    if (inFlight.current || unavailable || !answered || uploads.uploading) return;
     inFlight.current = true;
     setSending(true);
     setError(null);
     try {
-      await onAnswer(formatQuestionAnswers(answers), { answers, questionKey: questionKey(task) });
+      const paths = uploads.attachments.map((attachment) => attachment.path);
+      await onAnswer(formatQuestionAnswers(answers), { answers, questionKey: questionKey(task) }, paths.length ? paths : undefined);
       setSent(true);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -152,7 +163,8 @@ export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: Q
     );
   }
 
-  const sendLabel = sending ? "发送中…" : sent ? "已发送" : last ? "发送答复" : "下一题";
+  const sendLabel = sending ? "发送中…" : sent ? "已发送" : last && uploads.uploading ? uploadingLabel(uploads.pending) : last ? "发送答复" : "下一题";
+  const sendBlocked = unavailable || !answered || (last && uploads.uploading);
   return (
     <section className="question-card" aria-label="等待答复的问题" aria-busy={sending} onKeyDown={onKeyDown}>
       <header className="question-card-head">
@@ -214,6 +226,8 @@ export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: Q
       {!!options.length && <small id={hintId} className="task-visually-hidden">
         可多选 · 数字键 1–{Math.min(options.length, 9)} 勾选{noteKey ? `，${noteKey} 写自己的话` : ""}
       </small>}
+      {attachable && <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending} error={uploads.error}
+        onRemove={uploads.remove} onCancel={uploads.cancel} />}
       <div className="question-card-note">
         {!!options.length && <span className="question-card-key" aria-hidden="true">{noteKey ?? ""}</span>}
         <NoteField inputRef={input} value={draft.note} disabled={unavailable}
@@ -221,15 +235,17 @@ export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: Q
           placeholder={settling ? "这一轮结束后即可答复" : options.length ? "自己写，或者补一句…" : "写下你的答案…"}
           onChange={(note) => update((entry) => ({ ...entry, note }))}
           onCommit={commit}
+          onPaste={attachable && !unavailable ? uploads.onPaste : undefined}
         />
-        <button type="button" className="question-card-send" disabled={unavailable || !answered}
+        {attachable && <AttachmentPicker addFiles={uploads.addFiles} disabled={unavailable} />}
+        <button type="button" className="question-card-send" disabled={sendBlocked}
           onClick={commit} aria-describedby={`${task.id}-answer-key`} {...sendTip.anchorProps}>
           {sent && <Check size={13} aria-hidden="true" />}
           {sendLabel}
         </button>
         {/* 键名不常驻；读屏仍从按钮的描述里念到此刻生效的那一档。 */}
         <span id={`${task.id}-answer-key`} className="task-visually-hidden">{sendKeys.send} {last ? "发送" : "下一题"}</span>
-        {!unavailable && !!answered && <HoverTip at={sendTip.at}>{last ? "发送答复" : "下一题"}<kbd>{sendKeys.send}</kbd></HoverTip>}
+        {!sendBlocked && <HoverTip at={sendTip.at}>{last ? "发送答复" : "下一题"}<kbd>{sendKeys.send}</kbd></HoverTip>}
       </div>
       {error && <p className="question-card-error" role="alert">{error}</p>}
     </section>

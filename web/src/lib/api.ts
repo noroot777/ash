@@ -284,8 +284,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/archive`, { method: "POST" }),
   unarchiveTask: (taskId: string): Promise<{ task: Task; restoreNote: string | null }> =>
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
-  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
+  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput, attachments?: string[]): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(attachments?.length ? { attachments } : {}) })),
   // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
   launchDispatchPlan: (taskId: string, input: import("@ash/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
     request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),

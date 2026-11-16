@@ -228,7 +228,7 @@ function UserMessage({
   preserveSystemStyle?: boolean;
   onReuse?: (input: ReusableInput) => void;
 }) {
-  if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
+  if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} attachments={item.attachments} />;
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);
   if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {

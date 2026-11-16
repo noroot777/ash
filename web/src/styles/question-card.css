@@ -61,6 +61,10 @@
 .question-card-send:hover:not(:disabled) { background: var(--action-hover); }
 /* 能点的一律黑白（a11y-6）：实心键发不出去时还是黑的，只有字和图标淡下去。 */
 .question-card-send:disabled { color: var(--on-action-dim); cursor: not-allowed; }
+/* 贴进来的图：跟回复框同一种小卡，排在最后一行上面；和那一行同属一段，中间不再划线。 */
+.question-card > .task-upload-list { flex: 0 0 auto; margin: 0; border-top: 1px solid var(--line); padding: 8px 14px 0; }
+.question-card > .task-upload-list + .question-card-note { border-top: 0; }
+.question-card-note > .task-reply-icon { flex: 0 0 auto; margin-bottom: 2px; }
 .question-card-error { flex: 0 0 auto; margin: 0; padding: 0 14px 9px; color: var(--red); font-size: var(--t-xs); overflow-wrap: anywhere; }
 
 /* 收起：只剩题目一行（一行截断），点它再展开。 */
@@ -99,5 +103,5 @@
   .question-card-head { padding-left: 12px; }
   .question-card-prompt { max-height: 26vh; }
   .question-card-options button { min-height: 44px; padding-left: 12px; padding-right: 12px; }
-  .question-card-note { padding-left: 12px; }
+  .question-card-note, .question-card > .task-upload-list { padding-left: 12px; }
 }

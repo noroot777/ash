@@ -503,7 +503,7 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
         dispatchTarget={dispatchDefault.value} />}
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
