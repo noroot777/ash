@@ -7,7 +7,7 @@
 // 跑法：node scripts/test-runner.mjs <workspace> <script>（如 `web test`）；验收入口
 // scripts/accept-test.mjs 用 runSteps() 把后端、前端两步并进同一个池子。
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -121,6 +121,16 @@ function writeHistory(updates) {
   }
 }
 
+// 每条叶子一个自己的临时数据目录（`ASH_DATA_DIR`）。只指定了库和 runs 目录的测试，产品模块
+// 一加载，数据目录就落在代码根的 `data/` —— 也就是这份检出自己的（走假 claude 的那批会往
+// `data/ash-mcp/` 写配置）。由执行器统一给，叶子不必各自记得设；自己另指数据目录的测试照旧
+// 以它自己的为准。目录跟着这条叶子的进程一起收：收完进程再删，删不掉只多留一个临时目录。
+function leafDataDir(root, name) {
+  const dir = join(root, name);
+  mkdirSync(dir, { recursive: true });
+  return { dir, remove: () => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) };
+}
+
 function schedule(leaves, history) {
   const rank = (leaf) => {
     const last = history[leaf.label];
@@ -148,6 +158,7 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
   const timings = {};
   const remaining = steps.map((_, index) => queue.filter((leaf) => leaf.step === index).length);
   const logs = mkdtempSync(join(tmpdir(), "ash-test-runner-"));
+  const dataRoot = mkdtempSync(join(tmpdir(), "ash-test-data-"));
   const owner = `ASH_TEST_RUNNER_${process.pid}_${Date.now().toString(36)}`;
   const stages = new Map();
   const running = new Map();
@@ -199,19 +210,22 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
     const file = join(logs, `${index}.log`);
     const startedAt = Date.now();
     let child;
+    let data;
     try {
+      data = leafDataDir(dataRoot, String(index));
       const output = openSync(file, "w");
       try {
         child = spawn("/bin/sh", ["-c", `${leaf.command}\n__rc=$?; exit $__rc`], {
           cwd: leaf.cwd,
           detached: true,
           stdio: ["ignore", output, output],
-          env: { ...env, ...extra, [owner]: String(index), npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
+          env: { ...env, ...extra, [owner]: String(index), ASH_DATA_DIR: data.dir, npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
         });
       } finally {
         closeSync(output);
       }
     } catch (error) {
+      data?.remove();
       return { leaf, file, status: { code: 1, error }, seconds: 0 };
     }
     running.set(leaf, child);
@@ -228,6 +242,11 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
       swept = { count: 0, unconfirmed: true, error };
     } finally {
       running.delete(leaf);
+    }
+    try {
+      data.remove();
+    } catch {
+      // 收尾时整棵 dataRoot 还会再删一次。
     }
     status.leftovers = swept.count;
     if (swept.unconfirmed) {
@@ -332,6 +351,11 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
       }
     }
     rmSync(logs, { recursive: true, force: true });
+    try {
+      rmSync(dataRoot, { recursive: true, force: true, maxRetries: 3 });
+    } catch (error) {
+      log(`[test-runner] 临时数据目录没删干净（${dataRoot}）：${error.message}`);
+    }
     writeHistory(timings);
     for (const [name, handler] of handlers) process.off(name, handler);
   }
@@ -340,16 +364,27 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
 
 // Windows 上没有 /bin/sh 和 ps，进程组也是另一套语义：照旧按链一步一步交给 npm 跑。
 // 其它平台设 ASH_TEST_RUNNER=serial 也走这条，门禁自检靠它在本机核对这份契约。
+// 这条路上叶子是 npm 自己一条条起的，临时数据目录只能按步给：一步一个，跑完删。
 function runSequentially(repo, steps, env, log) {
-  for (const step of steps) {
-    const args = step.workspace === "." ? ["run", step.script] : ["-w", step.workspace, "run", step.script];
-    const result = spawnSync(NPM, args, { ...NPM_SPAWN_OPTS, cwd: repo, stdio: "inherit", env });
-    if (result.error) log(`[test-runner] 无法启动 ${step.workspace} ${step.script}：${result.error.message}`);
-    if (result.signal) log(`[test-runner] ${step.workspace} ${step.script} 被信号 ${result.signal} 终止。`);
-    if (result.status !== 0) return { leaf: { label: `${step.workspace} ${step.script}`, step: steps.indexOf(step) }, code: result.status || 1 };
-    step.onPass?.();
+  const dataRoot = mkdtempSync(join(tmpdir(), "ash-test-data-"));
+  try {
+    for (const step of steps) {
+      const args = step.workspace === "." ? ["run", step.script] : ["-w", step.workspace, "run", step.script];
+      const data = leafDataDir(dataRoot, String(steps.indexOf(step)));
+      const result = spawnSync(NPM, args, { ...NPM_SPAWN_OPTS, cwd: repo, stdio: "inherit", env: { ...env, ASH_DATA_DIR: data.dir } });
+      if (result.error) log(`[test-runner] 无法启动 ${step.workspace} ${step.script}：${result.error.message}`);
+      if (result.signal) log(`[test-runner] ${step.workspace} ${step.script} 被信号 ${result.signal} 终止。`);
+      if (result.status !== 0) return { leaf: { label: `${step.workspace} ${step.script}`, step: steps.indexOf(step) }, code: result.status || 1 };
+      step.onPass?.();
+    }
+    return { leaf: null, code: 0 };
+  } finally {
+    try {
+      rmSync(dataRoot, { recursive: true, force: true, maxRetries: 3 });
+    } catch (error) {
+      log(`[test-runner] 临时数据目录没删干净（${dataRoot}）：${error.message}`);
+    }
   }
-  return { leaf: null, code: 0 };
 }
 
 export function defaultJobs() {

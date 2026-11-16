@@ -37,12 +37,13 @@ function fixture(context, { backend = "node backend.mjs && npm run test:more", w
   }));
   // 每条叶子留一份「我跑过了」的痕迹：在哪个目录、以哪条脚本的名义、看见了哪些要剥掉的变量。
   const step = (name, exitVar, stdout) => `
-    import { appendFileSync, writeFileSync } from "node:fs";
+    import { appendFileSync, statSync, writeFileSync } from "node:fs";
     import { join } from "node:path";
     appendFileSync(join(${JSON.stringify(root)}, "order.txt"), ${JSON.stringify(`${name}
 `)});
     writeFileSync(join(${JSON.stringify(root)}, ${JSON.stringify(`${name}.json`)}),
       JSON.stringify({ cwd: process.cwd(), event: process.env.npm_lifecycle_event, stage: process.env.FIXTURE_STAGE ?? null,
+        data: process.env.ASH_DATA_DIR ?? null, dataReady: statSync(process.env.ASH_DATA_DIR ?? "", { throwIfNoEntry: false })?.isDirectory() ?? false,
         environment: Object.keys(process.env).filter((key) => /^ASH_(?:DB|RUNS_DIR)$/i.test(key)) }));
     console.log(${JSON.stringify(stdout)});
     console.error(${JSON.stringify(`${stdout}_STDERR`)});
@@ -337,6 +338,23 @@ test("进程清单看不全时不能报通过", { skip: process.platform !== "da
   assert.match(result.stdout, /无法确认这条起的进程已经收干净/);
   assert.doesNotMatch(result.stdout, /验收前置检查全部通过/);
 });
+// 只指定了库和 runs 的测试，数据目录会落在代码根的 data/ —— 被验收的那份检出自己的。执行器
+// 统一给，宿主带进来的那份不许漏给叶子。
+test("每条叶子拿到自己的临时数据目录，跑完删掉，宿主的数据目录不漏进去", parallelOnly, (context) => {
+  const root = fixture(context);
+  const host = join(root, "host-data");
+  const result = run(root, { ASH_DATA_DIR: host, ash_data_dir: host });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const dirs = ["backend", "more", "web"].map((name) => {
+    const ran = seen(root, name);
+    assert.ok(ran.data && ran.dataReady, `${name} 开跑时数据目录还没备好：${ran.data}`);
+    assert.notEqual(ran.data, host, name);
+    assert.equal(existsSync(ran.data), false, `${name} 的数据目录跑完还留着`);
+    return ran.data;
+  });
+  assert.equal(new Set(dirs).size, 3, "几条叶子共用了同一个数据目录");
+  assert.equal(existsSync(host), false);
+});
 
 // 串行契约：Windows 的默认走法，其它平台显式切过去核对同一份行为。
 test("串行：两步按链依次跑完，各自报通过", (context) => {
@@ -363,6 +381,20 @@ test("串行：叶子同样不继承宿主数据库与运行目录", (context) =
   const result = run(root, { ...SERIAL, ASH_DB: join(root, "host.db"), ash_runs_dir: join(root, "lower-runs") });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   for (const name of ["backend", "more", "web"]) assert.deepEqual(seen(root, name).environment, [], name);
+});
+
+test("串行：数据目录一步一个，跑完删掉", (context) => {
+  const root = fixture(context);
+  const host = join(root, "host-data");
+  const result = run(root, { ...SERIAL, ASH_DATA_DIR: host });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const [backend, more, web] = ["backend", "more", "web"].map((name) => seen(root, name));
+  for (const ran of [backend, more, web]) {
+    assert.ok(ran.data && ran.dataReady && ran.data !== host, JSON.stringify(ran));
+    assert.equal(existsSync(ran.data), false, "数据目录跑完还留着");
+  }
+  assert.equal(backend.data, more.data);
+  assert.notEqual(backend.data, web.data);
 });
 
 test("依赖缺失导致测试无法启动时拒绝放行", (context) => {
