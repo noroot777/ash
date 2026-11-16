@@ -355,9 +355,6 @@ button.context-meter-chip.is-tight { background: color-mix(in oklab, var(--red) 
 .context-compact-save:hover:not(:disabled) { background: var(--action-hover); }
 .context-compact-save:disabled { border-color: var(--line); background: transparent; color: var(--faint); }
 
-.task-event-line { display: flex; max-width: 790px; align-items: center; gap: 9px; margin: 17px 0 17px 30px; color: var(--muted); font-size: var(--t-xs); }
-.task-event-line p { margin: 0; }
-.task-event-line.is-error { color: var(--red); }
 
 /* 「放开回合占位」那个开关(ReclaimTurnSwitch):说清副作用,再给按钮。 */
 .task-turn-remedy { display: grid; gap: 8px; justify-items: start; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2, transparent); }

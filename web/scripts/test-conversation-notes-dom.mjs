@@ -38,7 +38,7 @@ try {
     "回执连同尾注里的每一句都记在各自所属的回合上，一条不少（预约、验收阶段、迁移说明、会话轮换、回合边界、实时预约）",
   );
   // 回合边界不再横贯会话：正常收口是那一回合上的一条记录。
-  assert.equal(await page.locator(".task-event-line, .system-boundary").count(), 0);
+  assert.equal(await page.locator(".system-boundary").count(), 0);
   // 后面又起了回合，它们都是过去的事：没有一颗彩色的点。
   assert.equal(await page.locator(".turn-footnote-dot").count(), 0, "过去回合上的未通过、结算说明都是灰字");
   const openLog = async (index) => {

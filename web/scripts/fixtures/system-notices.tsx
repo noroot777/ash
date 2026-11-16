@@ -111,7 +111,6 @@ createRoot(document.getElementById("root")!).render(
             {(["neutral", "error"] as const).map((tone) => (
               <SystemBoundary
                 key={tone}
-                surface={surface}
                 item={{ text: tone === "error" ? "执行异常结束 · exit 1" : "本轮执行结束", tone }}
               />
             ))}

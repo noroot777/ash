@@ -57,7 +57,6 @@ try {
     assert(!shown.includes("localhost"), "远程入口的原文不残留回环地址");
     const surfaces = [
       <SystemBoundary item={item} />,
-      <SystemBoundary item={item} surface="team" />,
       <SystemAuthoredMessage item={{ kind: "user", id: "action", text: "预览已启动", attachments: [] }} related={[item]} />,
     ];
     for (const surface of surfaces) {

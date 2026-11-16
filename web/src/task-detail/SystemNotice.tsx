@@ -56,9 +56,9 @@ export function SystemEventNote({ item, action, onScreen }: {
 }
 
 /** 团队时间线上的回合边界：一条很淡的分隔线和一句说明。 */
-export function SystemBoundary({ item, surface = "task" }: { item: Omit<EventLike, "id">; surface?: "task" | "team" }) {
+export function SystemBoundary({ item }: { item: Omit<EventLike, "id"> }) {
   return (
-    <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary${item.tone === "error" ? " is-error" : ""}`}>
+    <div className={`team-feed-event system-boundary${item.tone === "error" ? " is-error" : ""}`}>
       <span className="system-boundary-rule" aria-hidden="true" />
       <p>{previewNoticeText(item.text)}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
       <DeleteMessageButton item={item} />

@@ -304,7 +304,7 @@ export function TeamFeed({
               );
             }
             if (item.variant === "boundary") {
-              return <SystemBoundary item={item} surface="team" key={row.key} />;
+              return <SystemBoundary item={item} key={row.key} />;
             }
             return <SystemEventNote item={item} key={row.key} onScreen={onScreen} />;
           })}
