@@ -32,7 +32,6 @@ function task(id, extra = {}) {
     stage: null,
     question: null,
     pinnedAt: null,
-    starredAt: null,
     parentId: null,
     archived: false,
     createdAt: "2026-08-01T00:00:00.000Z",
@@ -48,11 +47,8 @@ assert.deepEqual(
 );
 assert.ok(!SPREAD_DOT_FILTERS.some((item) => item.key === "all"));
 
-// 星标是手动记号，与状态桶正交：点位列表里有它，但它不是 spreadBucket 的产出。
-const BUCKET_FILTERS = SPREAD_DOT_FILTERS.filter((item) => item.key !== "starred");
-
 const tasks = [
-  task("todo-question", { status: "running", question: "选哪个？", starredAt: 1754900000000 }),
+  task("todo-question", { status: "running", question: "选哪个？" }),
   task("todo-failed", { status: "failed" }),
   // 失败的另外两种形状：验证没过（status 还是 done，摔在 stage 上）、以及盖过章之后重跑
   // 又挂了的（记号是 accepted，事实是坏的）。三种都得算「还没落地的活」。
@@ -64,23 +60,21 @@ const tasks = [
   task("todo-stale-done", { status: "done" }),
   task("run-running", { status: "running" }),
   task("run-accepted-review", { status: "awaiting_review", stage: "accepted" }),
-  task("wait-backlog", { status: "backlog", starredAt: 1754900001000 }),
+  task("wait-backlog", { status: "backlog" }),
   task("wait-paused", { status: "paused" }),
   // 「已收尾」这一档现在只剩取消掉的：干完的要么盖了章（验收完成）、要么还等着我（需要你处理）。
   task("done-canceled", { status: "canceled" }),
   task("accepted-merged", { status: "done", stage: "merged" }),
   // 下面三条都不该进计数：执行者不是顶层行、归档的不在树里、别的项目也不在。
-  // 执行者/归档行就算带着星也不算——它们根本不在树里。
-  task("worker", { status: "running", parentId: "run-running", starredAt: 1754900002000 }),
-  task("archived", { status: "done", archived: true, starredAt: 1754900003000 }),
+  task("worker", { status: "running", parentId: "run-running" }),
+  task("archived", { status: "done", archived: true }),
   task("other-project", { status: "running", projectId: "p2" }),
   // 接力出去、此刻在持有机上跑着（status 是 useOutboundState 从对端问回来合并进去的）。
-  task("handed-out", { status: "running", handoff: { direction: "out", pending: false }, starredAt: 1754900004000 }),
+  task("handed-out", { status: "running", handoff: { direction: "out", pending: false } }),
 ];
 
 const counts = spreadCounts(tasks, P1);
 assert.equal(counts.all, 13);
-assert.equal(counts.starred, 2);
 assert.equal(counts.todo, 7);
 assert.equal(counts.run, 2);
 assert.equal(counts.wait, 2);
@@ -108,9 +102,8 @@ assert.ok(inTaskMode(task("x", { status: "failed", stage: "accepted" })), "盖�
 assert.equal(spreadBucket(task("x", { status: "failed", stage: "accepted" })), "todo", "它归「需要你处理」，不是「验收完成」");
 
 // 五个桶互斥且铺满：加起来必须正好是「全部」，否则筛选条上的数字自己就打架了。
-// 星标不进这笔账 —— 它跟桶正交，进来就会重复计。
 assert.equal(
-  BUCKET_FILTERS.reduce((sum, item) => sum + counts[item.key], 0),
+  SPREAD_DOT_FILTERS.reduce((sum, item) => sum + counts[item.key], 0),
   counts.all,
 );
 
@@ -128,23 +121,21 @@ for (const item of SPREAD_DOT_FILTERS) {
   );
 }
 
-// matchesSpreadFilter 与 spreadBucket 对桶档同口径；星标档只认 starredAt。
+// matchesSpreadFilter 与 spreadBucket 同口径。
 const workerIndex = indexWorkers(tasks);
 for (const row of rows) {
   const rowWorkers = workersFrom(workerIndex, row.id);
-  for (const item of BUCKET_FILTERS) {
+  for (const item of SPREAD_DOT_FILTERS) {
     assert.equal(
       matchesSpreadFilter(row, item.key, rowWorkers),
       spreadBucket(row, rowWorkers) === item.key,
       `${row.id}:${item.key}`,
     );
   }
-  assert.equal(matchesSpreadFilter(row, "starred", rowWorkers), row.starredAt != null, `${row.id}:starred`);
   assert.equal(matchesSpreadFilter(row, "all", rowWorkers), true);
 }
 
-// J/K 快捷键遍历的可见列表（spreadVisibleTasks）必须与树同口径。它曾在调用点自己拼
-// `spreadBucket === filter`：starred 不是桶，星标筛选下快捷键拿到空数组、按键被吞。
+// J/K 快捷键遍历的可见列表（spreadVisibleTasks）必须与树同口径。
 for (const item of SPREAD_FILTERS) {
   assert.deepEqual(
     spreadVisibleTasks(tasks, P1, item.key).map((row) => row.id),
@@ -152,7 +143,6 @@ for (const item of SPREAD_FILTERS) {
     `visible:${item.key}`,
   );
 }
-assert.equal(spreadVisibleTasks(tasks, P1, "starred").length, counts.starred);
 
 // 空项目：每一档都是 0，点还是画满一排（画不出来就没地方取消筛选了）。
 const empty = spreadCounts(tasks, P3);
@@ -184,7 +174,7 @@ for (const id of ["wait-backlog", "accepted-merged", "archived", "worker", "done
 }
 assert.equal(taskMode.all, taskModeRows.length);
 assert.equal(
-  BUCKET_FILTERS.reduce((sum, item) => sum + taskMode[item.key], 0),
+  SPREAD_DOT_FILTERS.reduce((sum, item) => sum + taskMode[item.key], 0),
   taskMode.all,
 );
 // 计数与列表同口径（跟单项目态一样的钉子，换个作用域再钉一次）。

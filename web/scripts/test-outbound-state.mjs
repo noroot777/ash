@@ -19,7 +19,6 @@ function task(id, extra = {}) {
     stage: null,
     question: null,
     pinnedAt: null,
-    starredAt: null,
     parentId: null,
     archived: false,
     title: `任务 ${id}`,

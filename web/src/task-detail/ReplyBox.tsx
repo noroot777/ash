@@ -56,6 +56,7 @@ export function ReplyBox({
   onStandingExecutorChange,
   skills = EMPTY_SKILLS,
   topRail,
+  monitors,
   actions,
   moreItems = [],
   moreRef,
@@ -489,6 +490,7 @@ export function ReplyBox({
         tasks={tasks}
         onSendNow={(messageId) => void scheduled.sendNow(messageId)}
         onOpenTask={onOpenTask}
+        monitors={monitors}
       />
       {!covering && <UploadAttachmentList
         attachments={uploads.attachments}

@@ -8,7 +8,7 @@ export async function checkTaskCreationOrigin(page, fixtureUrl) {
     await page.getByRole("heading", { name: title, exact: true }).waitFor({ state: "visible" });
   };
   // 详情页头上不再挂徽标、也不再另起一条「来自…」：谁开的、从哪来收在标题前那一颗来源图标的
-  // 读屏名和提示里（docs/ui-ux-audit head-2）。来源任务还在就能点过去。
+  // 读屏名和提示里。来源任务还在就能点过去。
   const source = () => page.locator(".task-detail-header .task-head-source");
   const sourceSaid = async () => (await source().count()) ? await source().first().getAttribute("aria-label") : null;
   const ensureNoStrayLines = async title => {

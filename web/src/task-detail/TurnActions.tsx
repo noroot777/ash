@@ -8,7 +8,7 @@ import { TokenUsageChip } from "../components/TokenUsageChip.tsx";
 import { useMessageDelete, type DeletableItem } from "./MessageDelete.tsx";
 
 /**
- * 回合尾那一排：复制、派生、本轮用量、更多（docs/ui-ux-audit feed-2）。平时不画，指到这一回合、
+ * 回合尾那一排：复制、派生、本轮用量、更多。平时不画，指到这一回合、
  * 或键盘走进来才出现；触屏上常显（样式在 task-conversation.css 的 `.turn-acts`）。
  *
  * 这一排自己不占高度——往下探进两条消息之间的空里，出不出现会话都不跳。

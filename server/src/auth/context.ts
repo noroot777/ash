@@ -3,7 +3,7 @@
 // 三类调用方,判据完全不同,但都要收敛成同一个 Actor:
 //  · **人**(web cookie / mobile Bearer):落在 users 表上,有实例角色。
 //  · **agent**(MCP 回连,带回合凭证):不走用户会话,归属记在那个任务的 owner 名下,
-//    但**权限只到那条任务**。见 docs/multi-user-plan.md §三。它没有 web 会话,也不该有
+//    但**权限只到那条任务**。它没有 web 会话,也不该有
 //    —— 一个 agent 拿到的权限恰好是它那条任务的权限,多一分都是横向越权(项目轴的收窄
 //    在 visibility.ts `agentScope`,账号面的在下面的 `isAccountHolder`)。
 //  · **自用模式**:恒定的隐式本地用户(id 见 SINGLE_USER_ID)。这样归属列只有一套

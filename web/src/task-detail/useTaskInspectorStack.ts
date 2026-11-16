@@ -5,6 +5,7 @@ import { createElement, useMemo } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
+import { endedMonitorIds } from "../monitors/monitorTray.ts";
 import { useTaskMemoTab } from "../task-memos/useTaskMemoTab.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
@@ -62,18 +63,16 @@ export function useTaskInspectorStack(
     ? { ...descriptor, dot: reviewing ? "run" as const : null }
     : descriptor)), [dispatchedTab, reviewing]);
 
-  // 会话区那张卡把两种来源**分开**数（同 MonitorInspector 的分段）：ash 那几个才是「在等」
-  // —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那
-  // 条已经结束的会话）。但内置那几个也不能当不存在：agent 明明在对话里说了「已挂监听」，
-  // 卡片要替它说清那句话到底成不成立。
-  const liveMonitors = useMemo(
-    () => monitorTab.monitors.monitors.filter((m) => m.kind === "ash" && m.status === "running"),
-    [monitorTab.monitors.monitors],
-  );
-  const liveBuiltinCount = useMemo(
-    () => monitorTab.monitors.monitors.filter((m) => m.kind === "claude" && m.status === "running").length,
-    [monitorTab.monitors.monitors],
-  );
+  // 回复框上方那块里还在盯的哨兵（MonitorTrayRow）：两种来源都列、ash 的排前面。ash 那几个才会把任务
+  // 叫醒 —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那条已经
+  // 结束的会话）。但内置那几个也不能当不存在：agent 明明在对话里说了「已挂监听」，那一行要替它说清
+  // 那句话到底成不成立。
+  const liveMonitors = useMemo(() => {
+    const running = monitorTab.monitors.monitors.filter((m) => m.status === "running");
+    return [...running.filter((m) => m.kind === "ash"), ...running.filter((m) => m.kind !== "ash")];
+  }, [monitorTab.monitors.monitors]);
+  const ended = useMemo(() => endedMonitorIds(monitorTab.monitors.monitors, monitorTab.monitors.listed),
+    [monitorTab.monitors.listed, monitorTab.monitors.monitors]);
 
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
@@ -102,5 +101,5 @@ export function useTaskInspectorStack(
   // 「信息」格里最近一轮的用量、上下文、压缩中：取自会话流里最新那条回复（直播值比会话行新）。
   const runFacts = useMemo(() => latestRunFacts(conversation.items), [conversation.items]);
 
-  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts };
+  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds: ended, free, runFacts };
 }

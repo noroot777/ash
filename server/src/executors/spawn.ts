@@ -25,7 +25,7 @@ export {
   shareTrackFdRegistration, sweepOrphanTrackFiles,
 } from "./kill.js";
 
-// ── 多人模式:server 进程自己的出站凭证不透传给 agent(docs/multi-user-plan.md §八)──
+// ── 多人模式:server 进程自己的出站凭证不透传给 agent──
 // 宿主机上跑着的 ash 很可能自带 ANTHROPIC_API_KEY 之类;不删的话,一个「没挂供应商」
 // 的执行器照样能花到宿主的钱,「抹去宿主订阅」整节就是空的。
 //

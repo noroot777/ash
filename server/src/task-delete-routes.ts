@@ -13,6 +13,7 @@ import { dependentEdges, prerequisiteDeletes } from "./prerequisite-store.js";
 import { notePrerequisiteProgress } from "./prerequisite-launch.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { republishWaitsOf } from "./pending-wait.js";
+import { closeQueueGap } from "./queues.js";
 import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskReads, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
 import { beginTaskRevocation, settleTaskRevocation } from "./claude-monitor-revoked.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
@@ -175,6 +176,10 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   }
   if (dependents.length) notePrerequisiteProgress(taskId, dependents);
   void republishWaitsOf([...queueMates, ...heldTree]).catch((err) => console.error(`[ash] 删除 ${taskId} 后通知同队托盘失败:`, err));
+  // 重排失败不改写「已删除」:读的一侧按先后算名次(task-store.ts enrichTasks),缺号不会显示出来。
+  if (queue && queueMates.length) {
+    await closeQueueGap(queue.queueId).catch((err) => console.error(`[ash] 删除 ${taskId} 后重排队列 ${queue.queueId} 失败:`, err));
+  }
 }
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支

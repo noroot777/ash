@@ -41,7 +41,6 @@ type TaskTreeProps = {
   spread: SidebarSpread;
   onTask: (task: TaskListItem) => void;
   onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
-  onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
   // 队列抽屉里拖了顺序/移出成员后刷新任务列表(行上的「位次/总数」徽标靠它更新)。
   onQueueChanged: () => void;
@@ -101,7 +100,7 @@ function ScopedTaskTree({
   );
   const rowTasks = useMemo(() => projectIndex ? allTasks.filter((task) => !task.archived) : tasks, [allTasks, projectIndex, tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
-  // 年龄闸的豁免名单（星标 / 置顶 / 没盖的章 / 摔了的 / 等你指挥的），判据本体在
+  // 年龄闸的豁免名单（置顶 / 没盖的章 / 摔了的 / 等你指挥的），判据本体在
   // taskTreeModel 的 keepVisibleInPreview —— 跟 previewTasksByAge 挨着，测试也钉在那儿。
   // 团队的问题写在执行者身上，所以要把 workers 一起递进去。
   const keepRowVisible = useCallback(
@@ -194,7 +193,7 @@ function ScopedTaskTree({
     const hiddenCount = preview.hidden.length;
     const revealed = Math.min(revealedIn(group.key), hiddenCount);
     // 展开是**往后接**，不是重排：新放出来的一页接在已经露着的行后面。（早先展开后整块
-    // 回到 group.tasks 的原顺序，星标之类被年龄闸豁免的旧行会当场下沉换个位置 ——
+    // 回到 group.tasks 的原顺序，置顶之类被年龄闸豁免的旧行会当场下沉换个位置 ——
     // 点一下「显示更多」，刚才看着的那行就跑了。）
     const visibleTasks = revealed > 0 ? [...preview.visible, ...preview.hidden.slice(0, revealed)] : preview.visible;
     return (
@@ -360,7 +359,7 @@ function useOtherProjectsOpen() {
   return [open, setOpen] as const;
 }
 
-export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, onQueueChanged, outbound, notify }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onHandoffFinished, onQueueChanged, outbound, notify }: TaskTreeProps) {
   const { lookForTask } = useTaskReadState(tasks, selectedTaskId);
   // 哪几条的「派出的任务」展开着（记在本机，刷新后还在）。
   const dispatchOpen = useDispatchOpenState();
@@ -388,8 +387,8 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   const treeRef = useRef<HTMLElement>(null);
   useLayoutMotion(treeRef, ".workspace-task-row-wrap");
   const treeActions = useMemo(
-    () => ({ onStarred: onTaskStarred, notify, projectBadges, onOpenQueue: setOpenQueueId }),
-    [notify, onTaskStarred, projectBadges],
+    () => ({ projectBadges, onOpenQueue: setOpenQueueId }),
+    [projectBadges],
   );
   return (
     <TaskTreeActionsProvider value={treeActions}>

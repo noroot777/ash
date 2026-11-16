@@ -62,7 +62,7 @@ try {
   await copied(action, "摊开的那一轮审查里的复制图标");
   assert.match(await clipboard(), /审查结论/, "复制的是这条审查发言");
 
-  // 会话号、resume 命令、用量、上下文不在回合尾了（docs/ui-ux-audit feed-2），住在右侧「信息」格。
+  // 会话号、resume 命令、用量、上下文不在回合尾了，住在右侧「信息」格。
   assert.equal(await page.locator(".task-message-footer").count(), 0, "回合尾不再挂账目胶囊");
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });

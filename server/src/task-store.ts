@@ -91,7 +91,6 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   status: r.status as TaskStatus,
   stage: (r.stage as TaskStage | null) ?? null,
   pinnedAt: r.pinnedAt ?? null,
-  starredAt: r.starredAt ?? null,
   reviewOf: r.reviewOf ?? null,
   reviewRound: r.reviewRound ?? null,
   reviewRequested: r.reviewRequested,
@@ -185,6 +184,20 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
     .from(queueItems)
     .where(inArray(queueItems.taskId, rows.map((r) => r.id)));
   const byQueueTask = new Map(items.map((q) => [q.taskId, q] as const));
+  // 对外的 queuePosition 是**名次**(0..N-1),不是库里那一列的原值:position 只保证先后,
+  // 中间缺号(删任务只摘自己那一格)的话原值 +1 就成了「13/12」这种读数。
+  const queueRank = new Map<string, number>();
+  const queueIds = [...new Set(items.map((q) => q.queueId))];
+  if (queueIds.length) {
+    const members = await db.select({ queueId: queueItems.queueId, taskId: queueItems.taskId }).from(queueItems)
+      .where(inArray(queueItems.queueId, queueIds)).orderBy(queueItems.queueId, queueItems.position);
+    let queueId: string | null = null;
+    let rank = 0;
+    for (const member of members) {
+      if (member.queueId !== queueId) { queueId = member.queueId; rank = 0; }
+      queueRank.set(member.taskId, rank++);
+    }
+  }
   const background = new Map((await db.select({
     taskId: tasks.id,
     backgroundRevision: sql<number>`coalesce(${taskBackgroundRevisions.revision}, 0)`.mapWith(Number),
@@ -231,7 +244,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       ...toTask(r, profiles),
       ...runsTiming(byTask.get(r.id) ?? []),
       queueId: q?.queueId ?? null,
-      queuePosition: q?.position ?? null,
+      queuePosition: q ? queueRank.get(r.id) ?? q.position : null,
       backgroundRevision: background.get(r.id)?.backgroundRevision ?? 0,
       acceptGateRunning: background.get(r.id)?.acceptGateRunning ?? false,
       monitorRunning: background.get(r.id)?.monitorRunning ?? false,
@@ -350,20 +363,21 @@ export async function createTasks(
     .where(inArray(projects.id, projectIds));
   const repoByProject = new Map(projectRows.map((project) => [project.id, project.repoPath] as const));
   const worktreeDefaultByProject = new Map(projectRows.map((project) => [project.id, project.useWorktreeDefault] as const));
-  // 收在谁名下（判据见 task-dispatch.ts）：显式给的优先，否则按创建来源认。
-  const dispatchedBy = await resolveDispatchedBy(rows.map((row) => ({
+  // 创建来源先定下来：调用方没给 = 服务端自己建的（系统）。下面两步认的都是落库的这一份。
+  const sourced = rows.map((row) => ({
     ...row,
-    creationOrigin: row.creationOrigin === undefined ? null : row.creationOrigin,
-  })));
+    creationOrigin: row.creationOrigin === undefined ? JSON.stringify({ kind: "system" }) : row.creationOrigin,
+  }));
+  // 收在谁名下（判据见 task-dispatch.ts）：显式给的优先，否则按创建来源认。
+  const dispatchedBy = await resolveDispatchedBy(sourced);
   // 没指明交给谁、又收在某条任务名下的：交给那条任务「派出去的活交给谁」的默认值（task-dispatch.ts）。
-  const assigned = await withDispatchDefaults(rows, dispatchedBy);
+  const assigned = await withDispatchDefaults(sourced, dispatchedBy);
   const normalizedRows = await Promise.all(assigned.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
     const requested = row.useWorktree ?? worktreeDefaultByProject.get(row.projectId) ?? false;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
     const { workflowId, ...rest } = row;
     return {
       ...rest,
-      creationOrigin: row.creationOrigin === undefined ? JSON.stringify({ kind: "system" }) : row.creationOrigin,
       dispatchedBy: dispatchedBy.get(row.id) ?? null,
       useWorktree,
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,

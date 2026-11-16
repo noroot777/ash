@@ -9,6 +9,8 @@
 //   · 在哪答：点右侧那一行，左边那一屉里是那条任务自己的答题卡，答复送到它（不带别的任务）；
 //     名下都答完了，两处的数不用刷新就收回颜色。
 //   · 失败：会话里同样什么都不出；两处的数又变色，右侧那一行写着失败（红），点它在左边打开那条任务。
+//   · 右侧那一格只列直接名下的：某一行自己名下还有任务（它派的、从它里面切出来的），状态词前面带
+//     侧栏那个数；再往下有失败的，那个数和两处的数一起变色；名下没有任务的行不带数。
 //   · 刷新后还是这样。
 //   · 直接派出的那几条全归档了、再往下一层还在等答复：两处都是变色的 0（任务头那颗键照样冒出来），
 //     那一层答掉之后颜色收回、那颗键上的数也撤掉。
@@ -91,6 +93,27 @@ try {
   assert.equal((await requests()).filter((request) => request.url.endsWith("/answer")).map((request) => request.url).join(),
     "/tasks/kid-b/answer,/tasks/kid-a/answer");
   assert.equal(await leadFeed.innerText(), feed, "答完了会话里也一个字都不多");
+
+  // —— 第二条里切出去一条（裁定转出建的任务收在来源下面）：这一格只列直接名下的，第二条那一行
+  //    行尾带上它名下的数；切出去的那条失败了，那个数跟侧栏、竖轨两处一起变色。
+  const tally = (title) => row(title).locator("em > i");
+  assert.equal(await pane.locator("em > i").count(), 0, "名下没有任务的行不带数");
+  await page.evaluate(() => window.__server.add({ id: "cut", title: "从第二条里切出来的", dispatchedBy: "kid-b", originTaskId: "kid-b", status: "backlog" }));
+  await tally("第二条派出去的").waitFor();
+  assert.equal(await tally("第二条派出去的").innerText(), "1");
+  assert.equal(await tally("第二条派出去的").getAttribute("class"), null, "底下没有要你处理的，数不带颜色");
+  assert.equal(await pane.locator("em > i").count(), 1, "只有名下还有任务的那一行带数");
+  assert.equal(await pane.locator(".dispatched-row").count(), 3, "这一格照旧只列直接名下的三条");
+  assert.equal(await sideCount.innerText(), "3", "最上面那条的数照旧只数直接名下的");
+  assert.match(await row("第二条派出去的").getAttribute("aria-label"), /，1 个派出的任务$/);
+  await page.evaluate(() => window.__server.fail("cut"));
+  await bothWarn(true);
+  await page.waitForFunction(() => document.querySelector(".dispatched-pane em > i")?.className === "is-warn");
+  assert.match(await row("第二条派出去的").getAttribute("aria-label"), /，1 个派出的任务，有要你处理的$/);
+  assert.equal(await row("第二条派出去的").locator("em").getAttribute("class"), null, "那一行自己的状态词不跟着变色");
+  await page.evaluate(() => window.__server.patch("cut", { status: "done" }));
+  await bothWarn(false);
+  await page.waitForFunction(() => document.querySelector(".dispatched-pane em > i")?.className === "");
 
   // —— 失败：会话里什么都不出；两处的数又变色，右侧那一行写着失败、带红；点它在左边打开那条任务。
   await drawerA.getByRole("button", { name: "关上派出的任务" }).click();

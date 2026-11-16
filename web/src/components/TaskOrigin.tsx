@@ -3,40 +3,10 @@ import type { Task, TaskListItem } from "@ash/shared";
 import { FileText, ChatsCircle, UsersThree, Robot } from "@phosphor-icons/react";
 import { taskCreationLabel } from "@ash/shared/task-origin";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";
+import { taskParentLink, taskParentMode, taskParentRelation } from "../lib/taskParent.ts";
 
-export type TaskParentLink = {
-  taskId: string;
-  task: TaskListItem | undefined;
-  kind: "team" | "dispatch" | "origin";
-};
-
-export function taskModeLabel(mode: Task["mode"]): string {
-  if (mode === "duet") return "讨论";
-  if (mode === "team") return "团队";
-  return "任务";
-}
-
-export function taskParentLink(task: TaskListItem, allTasks: TaskListItem[]): TaskParentLink | null {
-  // 执行者首先属于直接派出它的团队；旧数据即使同时带来源任务，也以团队为准。
-  // 其次是派它的那条任务（dispatchedBy）：侧栏里它就收在那一条下面，来源说的得是同一条。
-  const creator = task.creationOrigin?.kind === "agent" ? task.creationOrigin.taskId : null;
-  const taskId = task.parentId ?? task.dispatchedBy ?? task.originTaskId ?? creator ?? task.baseTaskId;
-  if (!taskId) return null;
-  return {
-    taskId,
-    task: allTasks.find((item) => item.id === taskId),
-    kind: task.parentId ? "team" : task.dispatchedBy ? "dispatch" : "origin",
-  };
-}
-
-export function taskParentMode(link: TaskParentLink): Task["mode"] {
-  return link.kind === "team" ? "team" : (link.task?.mode ?? "single");
-}
-
-export function taskParentRelation(link: TaskParentLink): string {
-  if (link.kind === "team") return "所属团队";
-  return link.kind === "dispatch" ? "派它的任务" : `来自${taskModeLabel(taskParentMode(link))}`;
-}
+// 「上面那一条是谁、怎么称呼」的判据在 lib/taskParent.ts；这里只管画。
+export { taskModeLabel, taskParentLink, taskParentMode, taskParentRelation, type TaskParentLink } from "../lib/taskParent.ts";
 
 export function TaskModeIcon({ mode, size = 14 }: { mode: Task["mode"]; size?: number }) {
   if (mode === "duet") return <ChatsCircle size={size} aria-hidden="true" />;

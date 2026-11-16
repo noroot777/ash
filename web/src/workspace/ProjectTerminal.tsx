@@ -125,7 +125,7 @@ function TerminalPane({
       scrollback: 5000,
       allowTransparency: true,
       // 底部坞是深色的(terminal.css),xterm 的调色板跟着走:浅色那套落在 #17181d 上
-      // 只剩一团糊。色值取自设计稿 demo(docs/demos/project-command-center/shared.css)。
+      // 只剩一团糊。原配色见 Git 历史 712b4e8b:docs/demos/project-command-center/shared.css。
       theme: {
         background: "#17181d",
         foreground: "#c9cbd6",

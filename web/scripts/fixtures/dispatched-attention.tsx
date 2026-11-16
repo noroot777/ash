@@ -151,9 +151,9 @@ function Fixture() {
     key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={drawers.dispatched.state.open} />,
   }));
   const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => descriptor.id === "dispatched"), [drawers.inspectors]);
-  // 「派出的任务」那一格读的那几样（DispatchedInspector 的入参）都给上；别的格没挂，不用给。
+  // 右侧那一格要的那几样（这条任务、全量任务列表：格头的停 / 续、行尾名下的数都从它们算）。
   const context = {
-    dispatched: drawers.dispatched.state, task: lead, allTasks: tasks,
+    task: lead, allTasks: tasks, dispatched: drawers.dispatched.state,
     onOpenTask: () => {}, onTaskUpdated: () => {}, notify: () => {},
   } as unknown as TaskInspectorContext;
   return (
@@ -162,7 +162,7 @@ function Fixture() {
         <TaskTree
           projects={[project]} currentProjectId={project.id} scope={{ kind: "project", projectId: project.id }}
           tasks={db.tasks} selectedTaskId="lead" selectedRemoteTaskId={null} spread={idleSpread}
-          onTask={() => {}} onRemoteTask={() => {}} onTaskStarred={() => {}} onHandoffFinished={() => {}} onQueueChanged={() => {}}
+          onTask={() => {}} onRemoteTask={() => {}} onHandoffFinished={() => {}} onQueueChanged={() => {}}
           outbound={{ outboundCount: 0, offlinePeers: [], asked: true, refreshing: false, onRefresh: () => {} }}
           notify={() => {}}
         />

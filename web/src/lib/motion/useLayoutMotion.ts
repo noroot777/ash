@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
 import { animate } from "animejs";
 import { motionReduced } from "../useSwapText.ts";
 
-/** 重排（docs/ui-ux-audit 08「点睛」之一）：留下的滑到新位置，新来的淡入。 */
+/** 重排：留下的滑到新位置，新来的淡入。 */
 const MOVE_MS = 320;
 const ENTER_MS = 200;
 

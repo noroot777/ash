@@ -11,7 +11,8 @@ import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { formatInstant } from "../src/task-detail/utils.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
 import { emptyLogCopy } from "../src/monitors/monitorCopy.ts";
-import { MonitorWaitLine } from "../src/monitors/MonitorWaitLine.tsx";
+import { monitorDue } from "../src/monitors/monitorTray.ts";
+import { ScheduledMessageTray } from "../src/components/ScheduledMessageTray.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
 import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
 
@@ -110,24 +111,14 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
   assert.match(spanOnly, /总共盯 2 分钟/, "119.6 秒说成「2 分钟」，不是「1 分 60 秒」");
   assert.doesNotMatch(spanOnly, /60 秒/, "任何情况下都不该出现 60 秒");
 
-  // 「（起点不确定）」这句话现在只剩**会话最后那一行「在等哨兵」**一个去处：起点不作数、
+  // 「（起点不确定）」这句话现在只剩**回复框上方那一块里哨兵那一行**一个去处：起点不作数、
   // 算不出「最迟几点」时，那一行退回这一句，所以必须自带这半句。卡片上它是重复的（起点那一段
   // 已经认了），于是传 `startSaidSeparately` 关掉——两头要分别钉住，否则「到处都不说」也能让上面那条绿。
-  const waiting = renderToStaticMarkup(
-    <MonitorWaitLine
-      monitors={[{ ...base, expiresAt: null, timeoutMs: 119_600, startedAtExact: false }]} builtinCount={0}
-      resumePrompt={null} reviewArmed={false} onOpenPanel={() => undefined}
-    />,
-  );
-  assert.match(waiting, /总共盯 2 分钟（起点不确定）/, "等待行算不出最迟几点时要自带「起点不确定」");
+  assert.match(monitorDue({ ...base, expiresAt: null, timeoutMs: 119_600, startedAtExact: false }) ?? "",
+    /总共盯 2 分钟（起点不确定）/, "托盘那一行算不出最迟几点时要自带「起点不确定」");
   // 起点作数时直接说最迟几点。
-  const due = renderToStaticMarkup(
-    <MonitorWaitLine
-      monitors={[{ ...base, expiresAt: null, timeoutMs: 119_600 }]} builtinCount={0}
-      resumePrompt={null} reviewArmed={false} onOpenPanel={() => undefined}
-    />,
-  );
-  assert.match(due, /最迟 (\d\d\/\d\d )?\d\d:\d\d/, "起点作数时等待行写最迟几点");
+  assert.match(monitorDue({ ...base, expiresAt: null, timeoutMs: 119_600 }) ?? "",
+    /最迟 (\d\d\/\d\d )?\d\d:\d\d/, "起点作数时托盘那一行写最迟几点");
   assert.doesNotMatch(spanOnly, /起点不确定/, "卡片上起点已经单独说过了，不许再带一遍");
 }
 
@@ -526,11 +517,11 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
   }
 }
 
-// ── 会话最后那一行「在等哨兵」：折叠时只说等的是谁 ──────────────────────────────
+// ── 回复框上方那一块里的哨兵：收着时只说盯的是谁 ──────────────────────────────
 //
 // 重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步时,那一行是 running、pid 空、
 // `ended_reason` 上写着受阻原因(server/src/monitor-adopt.ts 的 `notePendingIntent`)。
-// 它展开之后该说什么**全归 DOM 测试**(第 22 轮审查 N1 改的就是那几句:监督已经不随认领走,
+// 它摊开之后该说什么**全归 DOM 测试**(第 22 轮审查 N1 改的就是那几句:监督已经不随认领走,
 // 所以「会被叫醒」对它也是真的,该说的是「点停未必停得掉它」)——正文要点开才渲染。
 {
   const stuck: TaskMonitor = {
@@ -538,19 +529,20 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
     endedReason: "server 重启后这一刻认不回它：起进程时没来得及记下 pid（身份边条这一刻读不出来：读盘报错：EIO），"
       + "所以一个信号都没发；这条创建意图原样留着，ash 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）",
   };
-  const wait = (monitors: TaskMonitor[]) => renderToStaticMarkup(
-    <MonitorWaitLine
-      monitors={monitors} builtinCount={0} resumePrompt={null}
-      reviewArmed={false} onOpenPanel={() => undefined}
+  const tray = (live: TaskMonitor[]) => renderToStaticMarkup(
+    <ScheduledMessageTray
+      messages={[]} loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined}
+      monitors={{ live, ended: new Set(), running: false, resumePrompt: null, reviewArmed: false, onOpen: () => undefined, onStop: async () => undefined }}
     />,
   );
-  // 这里只管折叠态:正文**要点开才渲染**,静态渲染拿不到点击,所以「展开之后说了什么」一律
+  // 这里只管收着的样子:正文**要点开才渲染**,静态渲染拿不到点击,所以「摊开之后说了什么」一律
   // 归 test-monitor-inspector-dom.mjs 的 `?wait=pending|claimed` 两张台子(第 21 轮审查 N2:
-  // 上一版在折叠态上断言「不含『重新叫醒』」,那在任何实现下都成立,等于什么都没查)。
-  const shut = wait([stuck]);
-  assert.match(shut, /在等哨兵「盯构建日志」/, "折叠那一行:等的是谁");
-  assert.doesNotMatch(shut, /monitor-wait-line__body/,
-    "折叠态连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
+  // 上一版在收着的样子上断言「不含『重新叫醒』」,那在任何实现下都成立,等于什么都没查)。
+  const shut = tray([stuck]);
+  assert.match(shut, /哨兵 1/, "收着那一行:有几个哨兵在盯");
+  assert.match(shut, /盯构建日志/, "收着那一行:盯的是谁");
+  assert.doesNotMatch(shut, /scheduled-monitor-body/,
+    "收着连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
 }
 
 // ── 空日志那一格：只说可证实的事实（第 1 轮审查 F3 的前端那一半）──────────────

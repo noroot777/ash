@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { TaskListItem } from "@ash/shared";
 import { type LookForTask } from "../lib/useTaskReadState.ts";
-import { dispatchSubtree, type DispatchFacts } from "../lib/dispatchTree.ts";
+import { dispatchSubtree, dispatchTallySaid, type DispatchFacts } from "../lib/dispatchTree.ts";
 import { type DispatchForest } from "./dispatchForest.ts";
 import { ParentCaret, TaskRow } from "./TaskTreeRows.tsx";
 
@@ -118,7 +118,7 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
   useEffect(() => {
     if (selectedInside) openRows?.([task.id]);
   }, [openRows, selectedInside, task.id]);
-  const said = `${count} 个派出的任务${needs ? "，有要你处理的" : ""}`;
+  const said = dispatchTallySaid({ count, warn: needs });
   return (
     <>
       <TaskRow
