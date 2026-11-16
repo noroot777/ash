@@ -161,8 +161,10 @@ try {
 
   // —— 切出来的任务：收在它来源（孙辈）那一行下面，再深一层；选中它时上面几层照样自己打开。
   await page.evaluate(() => {
-    window.__add({ id: "cut", title: "从孙辈里切出来的", dispatchedBy: "grand", originTaskId: "grand", status: "failed", stage: null });
-    window.__add({ id: "cut-flat", title: "来源已归档的切出任务", dispatchedBy: "gone-lead", originTaskId: "gone-lead" });
+    window.__add({ id: "cut", title: "从孙辈里切出来的", dispatchedBy: "grand", originTaskId: "grand", creationOrigin: { kind: "system" }, status: "failed", stage: null });
+    window.__add({ id: "cut-flat", title: "来源已归档的切出任务", dispatchedBy: "gone-lead", originTaskId: "gone-lead", creationOrigin: { kind: "system" } });
+    // 你派出去、同时回链到派它的那条的普通任务：不是切出来的。
+    window.__add({ id: "sent-linked", title: "回链到派活人的普通派活", dispatchedBy: "gone-lead", originTaskId: "gone-lead", creationOrigin: { kind: "user" } });
     window.__select("cut");
   });
   await row("cut").waitFor();
@@ -172,10 +174,13 @@ try {
   for (const id of ["grand", "kid-mid"]) {
     assert.equal(await color(row(id).locator(".workspace-dispatch-count")), amber, `切出来的那条失败了，${id} 那个数变色`);
   }
-  assert.equal(await row("cut").getByRole("button", { name: /^(来自|派它的)任务/ }).count(), 0, "收在来源下面时不再另画来源图标：位置已经说了");
+  // 来源图标是行外面的兄弟（跟星标一样），按这一行的外壳找。
+  const origin = (id, name) => page.locator(".workspace-task-row-wrap", { has: page.locator(`[data-task-id="${id}"]`) }).getByRole("button", { name });
+  assert.equal(await origin("cut", /^(来自|派它的)任务/).count(), 0, "收在来源下面时不再另画来源图标：位置已经说了");
   assert.equal(await row("cut-flat").count(), 1, "来源不在列表里，切出来的照常平铺");
-  assert.equal(await page.getByRole("button", { name: "来自任务：已经归档的派活人" }).count(), 1, "切出来的那条说的是「来自任务」，不是谁派的");
-  assert.equal(await page.getByRole("button", { name: "派它的任务：已经归档的派活人" }).count(), 1, "派出去的那条照旧");
+  assert.equal(await origin("cut-flat", "来自任务：已经归档的派活人").count(), 1, "切出来的那条说的是「来自任务」，不是谁派的");
+  assert.equal(await origin("sent-linked", "派它的任务：已经归档的派活人").count(), 1, "普通派活同时回链到派它的那条，仍说是谁派的");
+  assert.equal(await origin("orphan", "派它的任务：已经归档的派活人").count(), 1, "派出去的那条照旧");
 
   await context.close();
   console.log("✓ 侧栏：派出的任务收在派它的那条下面");

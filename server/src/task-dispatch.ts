@@ -11,8 +11,10 @@
 //   · 显式给了 dispatchedBy（用户从回复框派出去、派活单）→ 以它为准；
 //   · 系统替用户从一条任务里切出来的（裁定「转成独立任务」、合并结果审查的修复任务）→ 记来源那条
 //     （carvedOutUnder）。它不是谁派的：任务头照旧说「来自任务」，执行器照来源那条，不问来源
-//     「派出去的活交给谁」的默认值。认它的事实只有一条，前后端同一个：收在自己的来源
-//     （originTaskId）名下；
+//     「派出去的活交给谁」的默认值。认它的事实前后端同一个（isCarvedOut、web/src/lib/taskParent.ts）：
+//     **系统建的**、而且收在自己的来源（originTaskId）名下。光看后半句不够 —— 那只说明挂在哪、
+//     回链到哪：你或智能体派出去的普通任务也可以同时回链到派它的那条，那仍是派出去的活。创建来源
+//     是服务端自己记的（建任务的接口只会记成用户 / 智能体），所以前半句冒充不了；
 //   · 否则看创建来源：智能体在某条任务的回合里建的，且那条任务是普通的独立任务（不是团队调度台、
 //     不是讨论、也不是团队执行者）、新任务自己也是普通任务、不是团队执行者 → 记那条任务。
 // 两头都得是独立的普通任务：团队执行者（mode 也是 single，靠 parentId 认）另建的任务若记在它
@@ -66,9 +68,13 @@ export function carvedOutUnder<T extends { mode?: string | null; parentId?: stri
   return { ...row, dispatchedBy: canDispatch(source) && canBeDispatched(row) ? source.id : null };
 }
 
-/** 切出来的 = 收在自己的来源名下（文件头）。 */
-function isCarvedOut(row: { originTaskId?: string | null }, dispatchedBy: string | null | undefined): boolean {
-  return !!dispatchedBy && row.originTaskId === dispatchedBy;
+/** 切出来的 = 系统建的、收在自己的来源名下（文件头）。创建来源要的是落库的那一份（createTasks 已补上缺省）。 */
+function isCarvedOut(
+  row: { originTaskId?: string | null; creationOrigin?: string | null },
+  dispatchedBy: string | null | undefined,
+): boolean {
+  return !!dispatchedBy && row.originTaskId === dispatchedBy
+    && parseTaskCreationOrigin(row.creationOrigin ?? null)?.kind === "system";
 }
 
 /** 一批待建的行各自归在谁名下。显式给了的（含 null）原样留着。 */
@@ -117,8 +123,8 @@ export async function dispatcherRefusal(
  * 没指明交给谁的那几行，交给派它的那条任务「派出去的活交给谁」的默认值（`dispatchDefaultTarget`：
  * 设了就是设的那个，没设就同这条任务自己）。智能体绕过派活单直接 batch_create_tasks / create_task_chain、
  * 又没给 agentType / executorId 时走的就是这一条；指明了的（含只给了类型的）一个字不碰。
- * 切出来的那几行也不碰：它们不是派出去的活，执行器照来源那条 —— 来源自己两样都空着（跟随默认）
- * 时，行上也空着，不能被当成「没指明」。
+ * 切出来的那几行（isCarvedOut）也不碰：它们不是派出去的活，执行器照来源那条 —— 来源自己两样都
+ * 空着（跟随默认）时，行上也空着，不能被当成「没指明」。
  *
  * 执行器是个人面资源：默认值里那个 id 归属人看不见就当没给，按类型默认执行器降级（同建任务的口径）。
  */
@@ -130,6 +136,7 @@ export async function withDispatchDefaults<T extends {
   reasoningEffort?: string | null;
   ownerUserId?: string | null;
   originTaskId?: string | null;
+  creationOrigin?: string | null;
 }>(rows: T[], dispatchedBy: Map<string, string | null>): Promise<T[]> {
   const unassigned = (row: T) => !row.agentType && !row.executorId && !isCarvedOut(row, dispatchedBy.get(row.id));
   const open = rows.filter((row) => unassigned(row) && dispatchedBy.get(row.id));

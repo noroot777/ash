@@ -5,6 +5,8 @@
 // 钉住的是这几件事：
 //   · 两条路建出来就在来源名下；来源是团队执行者 / 讨论 / 团队调度台时不记；
 //   · 其余一样没动：来源回链、创建来源、待办不起跑；执行器照来源那条，不问来源「派出去的活交给谁」；
+//   · 认「切出来的」要看是不是系统建的：你或智能体派出去的普通任务同时回链到派它的那条，仍是派出去
+//     的活，照旧拿来源「派出去的活交给谁」的默认值（建任务的接口记不出「系统」这个创建来源）；
 //   · 转出的再转出：一层一层往下收；在来源或更上层按「全部停下」管得到最底下那条；
 //   · 存量补记：这两条路建的补上；只带来源回链的手动派生不动；已有归属的不改写；审查记录和回链
 //     对不上的不补；重复跑不出新变化；规则上线之后建的（落在边界之后）不碰。
@@ -15,6 +17,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-carved-out-home-"));
@@ -29,7 +32,11 @@ const { deferOpenDispute } = await import("../src/free-review-defer.js");
 const { createPostMergeRepairTask } = await import("../src/post-merge-review.js");
 const { dispatchTree, holdDispatched } = await import("../src/dispatch-hold.js");
 const { dispatchHoldOf, taskHoldOf } = await import("../src/task-hold.js");
+const { createTasks } = await import("../src/task-store.js");
+const { mountTaskRoutes } = await import("../src/task-routes.js");
 await ensureSchema();
+const api = new Hono();
+mountTaskRoutes(api);
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 const at = minutesAgo(30);
@@ -164,6 +171,27 @@ try {
   const carvedNamed = await taskOf((await carve("named")).id);
   assert.deepEqual([carvedNamed.agentType, carvedNamed.executorId, carvedNamed.dispatchedBy], ["claude", "mine", "named"]);
 
+  // ── 回链到派它的那条的普通派活不是切出来的 ────────────────────────────────────────────
+  // 「收在来源名下」只说明挂在哪、回链到哪。建任务的接口允许两样同时给，创建来源由服务端记成用户 /
+  // 智能体：这种任务没指明交给谁时，照旧拿来源「派出去的活交给谁」的默认值，跟不带回链的一模一样。
+  const post = async (body: Record<string, unknown>) => (await api.request("/tasks", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectId: "project", useWorktree: false, title: "派出去的普通任务", ...body }),
+  })).json() as Promise<Record<string, unknown>>;
+  const assignment = (task: Record<string, unknown>) => [task.agentType, task.model, task.reasoningEffort, task.dispatchedBy];
+  const plain = await post({ dispatchedBy: "src" });
+  const linked = await post({ dispatchedBy: "src", originTaskId: "src" });
+  assert.deepEqual(plain.creationOrigin, { kind: "user" });
+  assert.deepEqual(linked.creationOrigin, { kind: "user" }, "建任务的接口记不出「系统」这个创建来源");
+  assert.equal(linked.originTaskId, "src");
+  assert.deepEqual(assignment(plain), ["codex", "gpt-test", "high", "src"], "前提：不带回链的普通派活拿到来源的派活默认值");
+  assert.deepEqual(assignment(linked), assignment(plain), "同时回链到派它的那条：仍是派出去的活，默认值照给");
+  const [byAgent] = await createTasks([{
+    ...row("agent-linked", { agentType: null, originTaskId: "src", dispatchedBy: "src" }),
+    creationOrigin: JSON.stringify({ kind: "agent", taskId: "src", agentType: "claude" }),
+  }]);
+  assert.deepEqual(assignment(byAgent as never), ["codex", "gpt-test", "high", "src"], "智能体派的同样");
+
   assert.equal((await carve("worker")).dispatchedBy ?? null, null, "来源是团队执行者：不记");
   assert.equal((await carve("duet")).dispatchedBy ?? null, null, "来源是讨论：不记");
   assert.equal((await carve("team")).dispatchedBy ?? null, null, "来源是团队调度台：不记");
@@ -190,7 +218,8 @@ try {
   // 最底下那条排着：在来源上按「全部停下」，它退回待办、起不了；再往上一层按，说得出是被谁按住的。
   await db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, deeper.id));
   const held = await holdDispatched("src");
-  assert.deepEqual(held.tree, [carved.id, deeper.id], "在来源那条上按，管到它切出去的整棵");
+  assert.ok([carved.id, deeper.id].every((id) => held.tree.includes(id)), "在来源那条上按，管到它切出去的整棵");
+  assert.ok(!held.tree.includes("named") && !held.tree.includes(repair.id), "同一层别处的那一棵不受影响");
   assert.equal((await taskOf(deeper.id)).status, "backlog", "排着的那条被停下");
   assert.equal((await dispatchHoldOf(deeper.id))?.byTaskId, "src");
   assert.equal((await taskHoldOf(await taskOf(carved.id)))?.kind, "dispatch", "各处起跑的闸问的就是这一句");

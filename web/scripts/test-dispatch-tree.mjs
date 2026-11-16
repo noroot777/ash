@@ -250,6 +250,11 @@ const ids = (rows) => rows.map((row) => row.id);
     task("cut", { dispatchedBy: "src", originTaskId: "src", creationOrigin: { kind: "system" } }),
     task("sent", { dispatchedBy: "src", creationOrigin: { kind: "agent", taskId: "src" } }),
     task("by-hand", { dispatchedBy: "src", creationOrigin: { kind: "user" } }),
+    // 派出去的活同时回链到派它的那条：不是系统切出来的，照旧是「派它的任务」。
+    task("sent-linked", { dispatchedBy: "src", originTaskId: "src", creationOrigin: { kind: "agent", taskId: "src" } }),
+    task("by-hand-linked", { dispatchedBy: "src", originTaskId: "src", creationOrigin: { kind: "user" } }),
+    task("unrecorded-linked", { dispatchedBy: "src", originTaskId: "src", creationOrigin: null }),
+    task("system-elsewhere", { dispatchedBy: "src", originTaskId: "talk", creationOrigin: { kind: "system" } }),
     task("fork", { originTaskId: "src", creationOrigin: { kind: "user" } }),
     task("talk", { mode: "duet" }),
     task("landed", { originTaskId: "talk" }),
@@ -263,6 +268,10 @@ const ids = (rows) => rows.map((row) => row.id);
   assert.equal(said("cut"), "来自任务·src", "裁定转出 / 合并结果修复建的任务：收在来源下面，任务头照旧说来自任务");
   assert.equal(said("sent"), "派它的任务·src", "智能体派出去的照旧");
   assert.equal(said("by-hand"), "派它的任务·src", "回复框、派活单派出去的照旧");
+  assert.equal(said("sent-linked"), "派它的任务·src", "智能体派的、同时回链到派它的那条：不是切出来的");
+  assert.equal(said("by-hand-linked"), "派它的任务·src", "你派的、同时回链到派它的那条：不是切出来的");
+  assert.equal(said("unrecorded-linked"), "派它的任务·src", "创建来源没记的不当成系统切出来的");
+  assert.equal(said("system-elsewhere"), "派它的任务·src", "收在别处名下、不是自己的来源：不算从那条里切出来");
   assert.equal(said("fork"), "来自任务·src", "手动派生的（不在树里）照旧");
   assert.equal(said("landed"), "来自讨论·talk");
   assert.equal(said("worker"), "所属团队·team", "团队执行者照旧以团队为准");

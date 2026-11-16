@@ -6,8 +6,9 @@ import type { Task, TaskListItem } from "@ash/shared";
 // 收在别人名下（dispatchedBy）有两种来路，称呼不一样：
 //   · 派出去的（智能体在回合里建的、你从回复框 / 派活单派的）—— 「派它的任务」；
 //   · 从那条里切出来的（裁定「转成独立任务」、合并结果审查的修复任务）—— 它不是谁派的，照旧说
-//     「来自任务」。认它的事实只有一条，跟服务端同一个（server/src/task-dispatch.ts）：收在自己的
-//     来源（originTaskId）名下。
+//     「来自任务」。认它的事实跟服务端同一个（server/src/task-dispatch.ts 的 isCarvedOut）：系统建的、
+//     而且收在自己的来源（originTaskId）名下。光看后半句不够：你或智能体派出去的任务也可以同时
+//     回链到派它的那条，那仍是派出去的活。
 
 export type TaskParentLink = {
   taskId: string;
@@ -29,7 +30,8 @@ export function taskParentLink(task: Linked, allTasks: readonly TaskListItem[]):
   const creator = task.creationOrigin?.kind === "agent" ? task.creationOrigin.taskId : null;
   const taskId = task.parentId ?? task.dispatchedBy ?? task.originTaskId ?? creator ?? task.baseTaskId;
   if (!taskId) return null;
-  const dispatched = !!task.dispatchedBy && task.dispatchedBy !== task.originTaskId;
+  const carvedOut = task.creationOrigin?.kind === "system" && task.dispatchedBy === task.originTaskId;
+  const dispatched = !!task.dispatchedBy && !carvedOut;
   return {
     taskId,
     task: allTasks.find((item) => item.id === taskId),
