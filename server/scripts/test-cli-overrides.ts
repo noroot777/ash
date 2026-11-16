@@ -174,6 +174,8 @@ chmodSync(fakeBin, 0o755);
 // 目录名 —— 假 claude 找不到不说,连 node 自己都从 PATH 上消失。
 process.env.PATH = `${sandbox}${delimiter}${process.env.PATH ?? ""}`;
 process.env.ASH_TEST_PROBE = probe;
+// 下面起的是上面铺的这个假 claude（排在 PATH 最前）；测试环境默认不许起执行器，这里显式放行。
+process.env.ASH_ALLOW_REAL_AGENT = "1";
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents } = await import("../src/db/schema.js");

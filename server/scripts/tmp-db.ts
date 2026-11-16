@@ -8,8 +8,9 @@
 //
 // 同时 `/tmp` 也不能删:macOS 的 `os.tmpdir()` 返回的是 `$TMPDIR`(`/var/folders/…`),
 // 跟 `/tmp` 不是一个目录,而现有的跑法全是 `ASH_DB=/tmp/xxx.db`。两个都认。
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { IS_WINDOWS, PATH_SEP, isInsidePath } from "../src/platform.js";
 
 // `resolve` 顺手把 Windows 上的正斜杠写法(`C:/…/Temp/x.db`)归一成反斜杠,
@@ -19,22 +20,43 @@ function underTemp(dbPath: string): boolean {
   return roots.some((root) => isInsidePath(resolve(root), resolve(dbPath), PATH_SEP));
 }
 
+// 测试自己备的临时目录，进程退出时删。Windows 上库还开着会删不掉 —— 只多留一个临时目录。
+function ownTempDir(name: string): string {
+  const root = mkdtempSync(join(tmpdir(), `${name}-`));
+  process.on("exit", () => {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      // 见上。
+    }
+  });
+  return root;
+}
+
 /**
- * 没设 ASH_DB、或者它不在临时目录下,就打印怎么跑并 `exit(1)`。
- * `name` 用来拼示例命令,给测试自己的名字即可。
+ * 保证这条测试接下来开的库是临时的、起不了真执行器。放在任何碰库的 import **之前**调。
+ *
+ * - `ASH_DB` 指到了临时目录之外：打印原因并 `exit(1)`（那多半是用户的真实任务库）。
+ * - 没设 `ASH_DB`：自己备一个临时库。验收门禁会先把宿主的 `ASH_DB` 剥掉再跑测试，
+ *   以前这里的做法是拒跑并让人手动带上变量 —— 等于这条测试进不了门禁。
+ * - 没设 `ASH_RUNS_DIR`：一并指到临时目录。不指的话，测试写的会话记录落在检出自己的
+ *   `data/runs/`，而且「测试隔离环境禁止启动真执行器」那道闸（executors/spawn.ts 的
+ *   guardAgentSpawn）认的就是这个变量：test-queue 只设了库没设它，2026-08～10 月先后五次
+ *   拿夹具里的字符串当 prompt 真起了 `claude -p`。测试自己随后再指到别处的，以它的为准。
+ *
+ * `name` 用来给临时目录起名，给测试自己的名字即可。
  */
 export function requireTmpDb(name: string): void {
   const dbPath = process.env.ASH_DB;
-  const example = `${tmpdir()}${PATH_SEP}${name}-${Date.now()}.db`;
-  if (!dbPath) {
-    console.error(`先设 ASH_DB 再跑,比如 ASH_DB=${example}`);
-    process.exit(1);
-  }
-  if (!underTemp(dbPath)) {
+  if (dbPath && !underTemp(dbPath)) {
     console.error(`ASH_DB 必须在临时目录下(防止误改真实数据):${tmpdir()}${IS_WINDOWS ? "" : " 或 /tmp"}`);
     console.error(`当前值:${dbPath}`);
     process.exit(1);
   }
+  if (dbPath && process.env.ASH_RUNS_DIR) return;
+  const root = ownTempDir(name);
+  process.env.ASH_DB ||= join(root, "ash.db");
+  process.env.ASH_RUNS_DIR ||= join(root, "runs");
 }
 
 /**
