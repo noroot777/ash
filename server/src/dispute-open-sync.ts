@@ -1,48 +1,52 @@
-import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
-import { db } from "./db/index.js";
-import { freeReviewRounds, freeReviewRuns } from "./db/schema.js";
-import { awaitingRuling } from "./free-review-awaiting-ruling.js";
 
-// 「等你裁定」（Task.disputeOpen）变了就重发一次任务快照。
+// 「等你裁定」（Task.disputeOpen）变了，列表得收到一份新的任务快照。
 //
 // 它是任务列表上的一格后台事实（task-store.ts 现查），住在审查轮次上，改它不动 tasks.updated_at；
-// 侧栏只认 task.created / task.updated，审查面板才认 task.review。驳回落下、维持、采纳、转独立任务
-// （连同建任务失败后的回滚）、被新一轮审查取代 —— 每一处写完都会发 task.review，所以推送挂在这条
-// 事件上：任何一个出口不必再记得「另外补发一次快照」，以后多一个出口也一样（第 1 轮审查：转独立
-// 任务那一路提前返回，漏了补发，侧栏一直写着等你裁定）。
+// 侧栏只认 task.created / task.updated，审查面板才认 task.review。会改它的写入点全都发 task.review：
+// 驳回落下、维持（含「按意见修复」）、采纳、转独立任务、转出失败回滚、被新一轮审查取代
+// （free-review-dispute.ts / free-review-defer.ts）；接力导入整条带过来的那一路自己发 task.updated
+// （handoff-import.ts）。所以推送挂在 task.review 上统一做，哪个出口都不必再记得「另外补发一次」。
 //
-// task.review 也随审查进度频繁地发；这里先查一次那一格，**变了**才重发，不变不打扰列表。只记
-// 「此刻是 true」的那些任务：重启后第一次看到它为 true 时会多发一次，无害。
+// **每次都发，不按缓存去重。** 第 2 轮审查：上一版先查那一格、跟进程里记着的值相等就不发 —— 可那份
+// 记忆只是「这个进程见过什么」，不是「页面手里拿着什么」。重启之后、或页面先整表拉到了 true，记忆里
+// 是空的，裁定把它改成 false 时恰好「相等」，列表就一直写着等你裁定。task.review 本来就只在审查状态
+// 真的变了时才发（不是逐行进度），多发一份快照的代价是一次单行查询；页面那边按 updatedAt /
+// backgroundRevision 合并，重复的一份不会改动任何东西。
+//
+// 同一个任务一连发几次时并成一次：正在发的那次之后至多再补一次，补的那次读的是最新的库。
 
-const open = new Set<string>();
-const pending = new Map<string, Promise<void>>();
+const inflight = new Map<string, Promise<void>>();
+const again = new Set<string>();
 
-async function disputeOpenNow(taskId: string): Promise<boolean> {
-  const rows = await db.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
-    .innerJoin(freeReviewRuns, eq(freeReviewRuns.id, freeReviewRounds.runId))
-    .where(and(eq(freeReviewRuns.taskId, taskId), awaitingRuling))
-    .limit(1);
-  return rows.length > 0;
+async function republish(taskId: string): Promise<void> {
+  try {
+    const { publishTaskUpdated } = await import("./task-store.js");
+    await publishTaskUpdated(taskId);
+  } catch (error) {
+    console.warn(`[ash] 重发任务 ${taskId} 的快照失败（审查状态变了）:`, error);
+  }
 }
 
-async function check(taskId: string): Promise<void> {
-  const now = await disputeOpenNow(taskId);
-  if (now === open.has(taskId)) return;
-  if (now) open.add(taskId);
-  else open.delete(taskId);
-  const { publishTaskUpdated } = await import("./task-store.js");
-  await publishTaskUpdated(taskId);
-}
-
-/** 同一个任务的几次核对排成一队：并发跑的话，后读到的旧值可能晚落地，把集合改回去。 */
-function queueCheck(taskId: string): Promise<void> {
-  const next = (pending.get(taskId) ?? Promise.resolve())
-    .then(() => check(taskId))
-    .catch((error: unknown) => console.warn(`[ash] 核对任务 ${taskId} 的等裁定标记失败:`, error));
-  pending.set(taskId, next);
-  void next.finally(() => { if (pending.get(taskId) === next) pending.delete(taskId); });
-  return next;
+function schedule(taskId: string): Promise<void> {
+  const running = inflight.get(taskId);
+  if (running) {
+    again.add(taskId);
+    return running;
+  }
+  const run = (async () => {
+    do {
+      again.delete(taskId);
+      await republish(taskId);
+    } while (again.has(taskId));
+  })();
+  inflight.set(taskId, run);
+  // 循环刚退出、这里还没清掉之间又来了一次：那一次记在 again 里，清完接着补。
+  void run.finally(() => {
+    inflight.delete(taskId);
+    if (again.delete(taskId)) void schedule(taskId);
+  });
+  return run;
 }
 
 let started = false;
@@ -51,11 +55,11 @@ export function startDisputeOpenSync(): void {
   if (started) return;
   started = true;
   bus.subscribe((event) => {
-    if (event.type === "task.review") void queueCheck(event.taskId);
+    if (event.type === "task.review") void schedule(event.taskId);
   });
 }
 
-/** 测试用：等某个任务排着的核对都落地。 */
+/** 测试用：等某个任务排着的重发都落地。 */
 export function disputeOpenSettled(taskId: string): Promise<void> {
-  return pending.get(taskId) ?? Promise.resolve();
+  return inflight.get(taskId) ?? Promise.resolve();
 }
