@@ -24,6 +24,7 @@ import type { AgentEvent } from "@ash/shared";
 import { ASH_MCP_TOOLS, ASH_MCP_TURN_EXITS } from "@ash/shared/mcp";
 import { IS_WINDOWS } from "../src/platform.js";
 import { REPO_DIR } from "../src/paths.js";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-inject-"));
 process.env.ASH_DATA_DIR = join(root, "data");
@@ -287,5 +288,7 @@ process.stdin.on("end", () => process.exit(0));
   await checkRealClaudePrecedence(root);
   await checkRealCodexAppServer(root);
 } finally {
+  // 先松开临时库(第 3 段建过表),否则 Windows 上删目录必然 EBUSY(理由见 tmp-db.ts)
+  await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }
