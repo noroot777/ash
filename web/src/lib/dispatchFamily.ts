@@ -18,8 +18,7 @@ export function dispatchPath(task: TaskListItem, tasks: readonly TaskListItem[])
   return path;
 }
 
-export function dispatchFamily(task: TaskListItem, tasks: readonly TaskListItem[]) {
-  const root = dispatchPath(task, tasks)[0];
+export function dispatchBranch(root: TaskListItem, tasks: readonly TaskListItem[]) {
   const edges = dispatchEdges(tasks);
   const children = new Map<string, TaskListItem[]>();
   const visited = new Set([root.id]);

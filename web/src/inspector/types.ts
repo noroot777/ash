@@ -32,7 +32,6 @@ export interface InspectorTabPolicy {
   focusOnEntry?: string;
   entryReady?: boolean;
   focusRequest?: { key: string; tabId: string };
-  entryTab?: { id: string; visible: boolean };
 }
 
 export interface InspectorHostControls {

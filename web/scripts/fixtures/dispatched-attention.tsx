@@ -11,7 +11,6 @@ import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { InspectorHost } from "../../src/inspector/index.ts";
 import { LeftDrawerProvider } from "../../src/components/LeftDrawer.tsx";
 import { TaskTree } from "../../src/workspace/TaskTree.tsx";
-import { rememberFamilyInspector } from "../../src/task-detail/dispatched/inspectorNavigation.ts";
 import { pushTaskHistoryEntry } from "../../src/workspace/workspaceHistory.ts";
 import { TaskAncestry } from "../../src/components/TaskAncestry.tsx";
 import type { SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";
@@ -147,7 +146,6 @@ function Fixture() {
   const navigate = (id: string) => {
     const next = db.tasks.find((row) => row.id === id);
     if (!next) return;
-    rememberFamilyInspector(lead.id, id, tasks);
     pushTaskHistoryEntry(next);
     setSelected(id);
   };

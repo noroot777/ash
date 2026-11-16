@@ -1,19 +1,6 @@
 import { useState } from "react";
-import type { TaskListItem } from "@ash/shared";
-import { dispatchSubtree } from "../../lib/dispatchTree.ts";
-import { dispatchLevel } from "../../lib/dispatchFamily.ts";
 
 const storageKey = (rootId: string) => `ash:subtasks:folds:${rootId}`;
-
-export function revealDispatchSelection(folds: ReadonlyMap<string, boolean>, children: ReadonlyMap<string, readonly TaskListItem[]>, selectedId: string) {
-  const next = new Map(folds);
-  for (const parentId of children.keys()) {
-    if (!dispatchSubtree(children, parentId).some((item) => item.id === selectedId)) continue;
-    next.set(parentId, true);
-    if (dispatchLevel(children, parentId, selectedId).acceptedOpen) next.set(`accepted:${parentId}`, true);
-  }
-  return next;
-}
 
 export function readDispatchFolds(rootId: string): ReadonlyMap<string, boolean> {
   let folds = new Map<string, boolean>();
@@ -29,17 +16,14 @@ export function writeDispatchFolds(rootId: string, folds: ReadonlyMap<string, bo
   try { sessionStorage.setItem(storageKey(rootId), JSON.stringify({ folds: [...folds] })); } catch {}
 }
 
-export function useDispatchFolds(rootId: string, children: ReadonlyMap<string, readonly TaskListItem[]>, selectedId: string) {
-  const initial = () => {
-    const manual = readDispatchFolds(rootId);
-    return { rootId, selectedId, manual, folds: revealDispatchSelection(manual, children, selectedId) };
-  };
+export function useDispatchFolds(rootId: string) {
+  const initial = () => ({ rootId, folds: readDispatchFolds(rootId) });
   const [state, setState] = useState(initial);
-  if (state.rootId !== rootId || state.selectedId !== selectedId) setState(initial());
+  if (state.rootId !== rootId) setState(initial());
   const toggle = (id: string, open: boolean) => {
-    const manual = new Map(state.manual).set(id, !open);
-    writeDispatchFolds(rootId, manual);
-    setState({ ...state, manual, folds: new Map(state.folds).set(id, !open) });
+    const folds = new Map(state.folds).set(id, !open);
+    writeDispatchFolds(rootId, folds);
+    setState({ rootId, folds });
   };
   return { folds: state.folds, toggle };
 }

@@ -11,7 +11,6 @@ import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
 import { upsertTask, useTasks } from "../lib/useTasks.ts";
 import { handedOut, useOutboundState } from "./useOutboundState.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
-import { rememberFamilyInspector } from "../task-detail/dispatched/inspectorNavigation.ts";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
 import { StatusBar } from "./StatusBar.tsx";
@@ -386,7 +385,6 @@ export function WorkspaceShell() {
     if (!options?.keepSpread) spread.close();
   };
   const selectTaskById = (nextTaskId: string) => {
-    rememberFamilyInspector(taskId, nextTaskId, tasks);
     const target = tasks.find((task) => task.id === nextTaskId);
     if (target) selectTask(target);
     else api.task(nextTaskId).then((task) => { updateTask(task); selectTask(task); }).catch(() => notify("关联任务不存在或读取失败"));

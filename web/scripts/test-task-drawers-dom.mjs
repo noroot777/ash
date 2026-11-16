@@ -29,14 +29,18 @@ try {
   await page.evaluate(() => window.__add({ id: "accepted-leaf", title: "验收孙任务", dispatchedBy: "accepted" }));
   await pane.locator('.dispatched-pips > button[aria-label="验收的子任务"]').click();
   await current("accepted").waitFor();
-  await row("accepted").locator(".dispatched-fold").waitFor();
-  await page.evaluate(() => window.__go("accepted-leaf"));
+  await row("accepted-leaf").waitFor();
+  assert.equal(await row("accepted").count(), 0, "当前任务不列在自己的子任务表里");
+  assert.equal(await row("kid-b").count(), 0, "子任务表不沿用父任务的兄弟行");
+  assert.equal(await pane.locator(".dispatched-pips > button").count(), 1);
+  assert.equal(await page.locator(".insp-counted-icon i").textContent(), "1", "图标计数只算当前子任务名下");
+  await row("accepted-leaf").locator(".dispatched-row__title").click();
   await current("accepted-leaf").waitFor();
-  await row("accepted-leaf").waitFor();
-  await page.getByRole("button", { name: "切到info", exact: true }).click();
+  assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "信息", "无子任务的子任务走自己的默认格");
+  assert.equal(await page.locator('.inspector-rail__tab[aria-label^="子任务"]').count(), 0);
   await page.getByRole("button", { name: "切到dispatched", exact: true }).click();
-  await row("accepted-leaf").waitFor();
-  assert.equal(await page.evaluate(() => sessionStorage.getItem("ash:subtasks:folds:lead")), null, "选中路径的自动展开不写入偏好");
+  assert.equal(await page.locator("[data-subtask-id]").count(), 0, "手动打开也只显示自己的空表");
+  assert.match(await pane.textContent(), /还没有子任务/);
   await page.getByRole("button", { name: "父任务：父任务", exact: true }).click();
   await current("lead").waitFor();
   await row("accepted").waitFor({ state: "detached" });
@@ -56,11 +60,12 @@ try {
   await current("leaf").waitFor();
   assert.equal(await page.locator("aside.side-drawer").count(), 0);
   assert.match(page.url(), /task=leaf/);
-  assert.equal(await row("leaf").locator('[aria-current="page"]').count(), 1);
+  assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "信息");
+  assert.equal(await row("leaf").count(), 0);
   assert.match(await page.locator(".task-ancestry").innerText(), /父任务.*中间任务/s);
   await page.reload();
   await current("leaf").waitFor();
-  await row("leaf").waitFor();
+  assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "信息");
   await page.getByRole("button", { name: "父任务：父任务", exact: true }).click();
   await current("lead").waitFor();
   await page.goBack();
@@ -68,11 +73,11 @@ try {
   await page.getByRole("button", { name: "切到files", exact: true }).click();
   await page.getByRole("button", { name: "父任务：父任务", exact: true }).click();
   await current("lead").waitFor();
-  assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "文件");
-  await page.getByRole("button", { name: "切到dispatched", exact: true }).click();
+  assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "子任务", "回父任务走父任务策略，不继承子任务的文件格");
   await pane.locator('.dispatched-pips > button[aria-label="提问的子任务"]').click();
   await current("kid-b").waitFor();
-  await row("kid-b").waitFor();
+  assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "信息");
+  assert.equal(await page.locator("[data-subtask-id]").count(), 0);
   await page.getByRole("button", { name: "父任务：父任务", exact: true }).click();
   await current("lead").getByRole("button", { name: "打开子任务：运行的子任务" }).click();
   await current("kid-a").waitFor();
@@ -139,8 +144,8 @@ try {
   assert.match(await page.locator(".palette-preview h2").innerText(), /父任务 › 中间任务 › 最下层任务/);
   await search.press("Enter");
   await current("leaf").waitFor();
-  await row("leaf").waitFor();
-  assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "子任务");
+  assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "文件", "搜索进入恢复子任务自己的格，不继承父任务当前的信息格");
+  assert.match(await page.locator(".inspector-host__content").textContent(), /最下层任务 的文件/);
 
   await page.getByRole("button", { name: "切到subagents", exact: true }).click();
   const agent = page.locator(".native-work__agent .native-work__row").first();
@@ -154,7 +159,7 @@ try {
     window.__add({ id: "deep", title: "第四层", dispatchedBy: "leaf" });
     window.__add({ id: "deepest", title: "第五层", dispatchedBy: "deep" });
   });
-  await row("leaf").locator(".dispatched-fold").waitFor();
+  await row("deep").locator(".dispatched-fold").waitFor();
   await page.evaluate(() => window.__go("deepest"));
   await current("deepest").waitFor();
   await page.getByRole("button", { name: "展开中间的父任务", exact: true }).click();
@@ -184,7 +189,8 @@ try {
   await narrowPage.locator('[data-current-task="accepted"]').waitFor();
   assert.equal(await narrowPage.locator(".inspector-host").count(), 0, "窄屏搜索进入也不盖住会话");
   await narrowPage.getByRole("button", { name: "显示 Inspector", exact: true }).click();
-  await narrowPage.locator('[data-subtask-id="accepted"]').waitFor();
+  assert.equal(await narrowPage.locator(".inspector-host__panel-title").textContent(), "信息", "窄屏搜索叶子任务也走自己的默认格");
+  assert.equal(await narrowPage.locator("[data-subtask-id]").count(), 0);
   await narrowPage.getByRole("button", { name: "收起 Inspector", exact: true }).click();
   await narrowPage.evaluate(() => window.__add({ id: "narrow-arrival", title: "窄屏刚派出", dispatchedBy: "accepted", status: "running", stage: null }));
   await narrowPage.locator(".dispatched-pane").waitFor();
@@ -238,7 +244,7 @@ try {
     await cold.close();
   }
   for (const width of [1600, 400]) {
-    for (const taskId of ["lead", "leaf", "solo"]) {
+    for (const taskId of ["lead", "mid", "leaf", "solo"]) {
       const cold = await browser.newPage({ viewport: { width, height: 900 } });
       cold.setDefaultTimeout(WAIT_TIMEOUT_MS);
       cold.on("pageerror", (error) => errors.push(error.message));
@@ -248,12 +254,13 @@ try {
       await cold.evaluate(() => window.__hydrate(false));
       await cold.waitForFunction(() => window.__tasks().length === 7);
       await settlePage(cold);
-      assert.equal(await cold.evaluate((key) => JSON.parse(localStorage.getItem(key)).activeTab, key), taskId === "leaf" ? "info" : "review", "分批列表到达不提前消费进入判定");
+      assert.equal(await cold.evaluate((key) => JSON.parse(localStorage.getItem(key)).activeTab, key), taskId === "leaf" || taskId === "mid" ? "info" : "review", "分批列表到达不提前消费进入判定");
       if (width <= 720) assert.equal(await cold.locator(".inspector-host").count(), 0);
       await cold.evaluate(() => window.__ready());
-      const expectedTab = taskId === "solo" ? "review" : "dispatched";
+      const hasChildren = taskId === "lead" || taskId === "mid";
+      const expectedTab = hasChildren ? "dispatched" : taskId === "solo" ? "review" : "info";
       await cold.waitForFunction(({ key, tab }) => JSON.parse(localStorage.getItem(key)).activeTab === tab, { key, tab: expectedTab });
-      if (width > 720 && taskId !== "solo") await cold.locator(".dispatched-pane").waitFor();
+      if (width > 720 && hasChildren) await cold.locator(".dispatched-pane").waitFor();
       else if (width <= 720) assert.equal(await cold.locator(".inspector-host").count(), 0, "延后进入判定也不弹窄屏盖层");
       await cold.evaluate((key) => {
         const saved = JSON.parse(localStorage.getItem(key));
@@ -263,7 +270,7 @@ try {
       await cold.locator(`[data-current-task="${taskId}"]`).waitFor();
       await cold.evaluate(() => window.__hydrate());
       await cold.locator('[data-tasks-ready="true"]').waitFor();
-      if (taskId === "solo") {
+      if (!hasChildren) {
         await settlePage(cold);
         assert.equal(await cold.locator(".inspector-host").count(), 0, "无子任务仍尊重关闭状态");
       } else {
@@ -273,7 +280,10 @@ try {
         }, key);
         assert.equal(await cold.locator(".inspector-host").count(), width > 720 ? 1 : 0, "刷新后的进入判定恢复被关闭和摘掉的子任务格");
         if (width <= 720) await cold.getByRole("button", { name: "显示 Inspector", exact: true }).click();
-        if (taskId === "leaf") await cold.locator('[data-subtask-id="leaf"] [aria-current="page"]').waitFor();
+        if (taskId === "mid") {
+          await cold.locator('[data-subtask-id="leaf"]').waitFor();
+          assert.equal(await cold.locator('[data-subtask-id="kid-b"]').count(), 0);
+        }
       }
       if (await cold.locator(".inspector-host").count()) await cold.locator('.inspector-rail__tab[aria-label^="文件"]').click();
       else await cold.getByRole("button", { name: "切到files", exact: true }).click();
@@ -310,6 +320,53 @@ try {
       await cold.close();
     }
   }
+  const scoped = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+  scoped.setDefaultTimeout(WAIT_TIMEOUT_MS);
+  scoped.on("pageerror", (error) => errors.push(error.message));
+  await scoped.goto(`${web.origin}/scripts/fixtures/task-drawers.html`);
+  await scoped.locator(".dispatched-pane").waitFor();
+  await scoped.evaluate(() => window.__patch("kid-a", { status: "done", stage: "verified" }));
+  await scoped.getByRole("button", { name: "切到side-chat", exact: true }).click();
+  await scoped.getByRole("button", { name: "打开子任务：运行的子任务", exact: true }).click();
+  await scoped.locator('[data-current-task="kid-a"]').waitFor();
+  assert.equal(await scoped.locator(".inspector-host__panel-title").textContent(), "审议", "点进子任务按它的阶段默认审议，不复制父任务侧聊");
+  await scoped.getByRole("button", { name: "切到files", exact: true }).click();
+  await scoped.getByRole("button", { name: "父任务：父任务", exact: true }).click();
+  await scoped.locator('[data-current-task="lead"]').waitFor();
+  assert.equal(await scoped.locator(".inspector-host__panel-title").textContent(), "侧聊", "父任务也保留自己的侧聊");
+  await scoped.getByRole("button", { name: "打开子任务：运行的子任务", exact: true }).click();
+  await scoped.locator('[data-current-task="kid-a"]').waitFor();
+  assert.equal(await scoped.locator(".inspector-host__panel-title").textContent(), "文件", "再次进入恢复子任务自己的手动选择");
+  await scoped.getByRole("button", { name: "父任务：父任务", exact: true }).click();
+  await scoped.getByRole("button", { name: "打开子任务：中间任务", exact: true }).click();
+  await scoped.locator('[data-current-task="mid"]').waitFor();
+  await scoped.locator('[data-subtask-id="leaf"]').waitFor();
+  assert.equal(await scoped.locator(".inspector-host__panel-title").textContent(), "子任务");
+  assert.equal(await scoped.locator(".insp-counted-icon i").textContent(), "1");
+  assert.equal(await scoped.locator(".insp-counted-icon.is-warn").count(), 0, "兄弟任务的问题不污染当前任务计数");
+  assert.equal(await scoped.locator(".dispatched-pips > button").count(), 1);
+  assert.equal(await scoped.locator('[data-subtask-id="kid-b"]').count(), 0);
+  await scoped.evaluate(() => window.__patch("leaf", { status: "running", stage: null }));
+  await scoped.getByRole("button", { name: "全部停下", exact: true }).click();
+  await scoped.getByRole("button", { name: "接着跑", exact: true }).waitFor();
+  await scoped.getByRole("button", { name: "接着跑", exact: true }).click();
+  await scoped.getByRole("button", { name: "全部停下", exact: true }).waitFor();
+  assert.deepEqual(await scoped.evaluate(() => window.__mutations()), ["/api/tasks/mid/dispatched/hold", "/api/tasks/mid/dispatched/release"], "停跑只操作当前子任务，不操作祖先");
+  await scoped.evaluate(() => window.__patch("lead", { dispatchHoldAt: new Date().toISOString() }));
+  await scoped.getByRole("button", { name: "「父任务」名下已全部停下", exact: true }).waitFor();
+  assert.equal(await scoped.getByRole("button", { name: "接着跑", exact: true }).count(), 0, "祖先按住时保留来路提示，不冒充当前任务的恢复操作");
+  await scoped.evaluate(() => window.__patch("lead", { dispatchHoldAt: null }));
+  await scoped.getByRole("button", { name: "切到files", exact: true }).click();
+  await scoped.evaluate(() => window.__add({ id: "parent-new", title: "父任务新派出", dispatchedBy: "lead" }));
+  await scoped.waitForFunction(() => window.__tasks().some((item) => item.id === "parent-new"));
+  await settlePage(scoped);
+  assert.equal(await scoped.locator(".inspector-host__panel-title").textContent(), "文件", "祖先新派出不抢当前子任务的格");
+  await scoped.evaluate(() => window.__add({ id: "child-new", title: "子任务自己新派出", dispatchedBy: "mid", status: "queued", stage: null }));
+  await scoped.locator('[data-subtask-id="child-new"]').waitFor();
+  assert.equal(await scoped.locator(".inspector-host__panel-title").textContent(), "子任务");
+  assert.equal(await scoped.locator(".insp-counted-icon i").textContent(), "2");
+  assert.equal(await scoped.locator('[data-subtask-id="parent-new"]').count(), 0);
+  await scoped.close();
   assert.deepEqual(errors, []);
-  console.log("✓ 子任务导航与面板策略：冷启动等权威列表后默认落格，手动选择优先，窄屏不盖层；历史回填不冒充新派出");
+  console.log("✓ 当前任务独立的 Inspector：数据、计数、默认格、存储、停跑、新派出、冷启动及窄屏导航");
 } finally { await browser?.close(); await web.close(); }

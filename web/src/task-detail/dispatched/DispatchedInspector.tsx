@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
-import { dispatchFamily, dispatchBranchAccepted, dispatchLevel, createDispatchView } from "../../lib/dispatchFamily.ts";
+import { dispatchBranch, dispatchBranchAccepted, dispatchLevel, createDispatchView } from "../../lib/dispatchFamily.ts";
 import { dispatchHolderOf, dispatchHoldPhrase, dispatchedLive } from "../../lib/dispatchHold.ts";
 import { dispatchedOf, dispatchFacts, dispatchTally, dispatchTallySaid } from "../../lib/dispatchTree.ts";
 import { InspectorHeadActions } from "../../inspector/index.ts";
@@ -18,14 +18,14 @@ export function DispatchedInspector({ task, allTasks, onOpenTask, onTaskUpdated,
   notify: Notify;
   foldState: DispatchFoldState;
 }) {
-  const family = useMemo(() => dispatchFamily(task, allTasks), [task, allTasks]);
-  return <FamilyTable key={family.root.id} {...{ task, allTasks, onOpenTask, onTaskUpdated, notify, foldState }} family={family} />;
+  const branch = useMemo(() => dispatchBranch(task, allTasks), [task, allTasks]);
+  return <SubtaskTable key={task.id} {...{ task, allTasks, onOpenTask, onTaskUpdated, notify, foldState }} branch={branch} />;
 }
 
-function FamilyTable({ task, allTasks, onOpenTask, onTaskUpdated, notify, family, foldState }: Parameters<typeof DispatchedInspector>[0] & {
-  family: ReturnType<typeof dispatchFamily>;
+function SubtaskTable({ task, allTasks, onOpenTask, onTaskUpdated, notify, branch, foldState }: Parameters<typeof DispatchedInspector>[0] & {
+  branch: ReturnType<typeof dispatchBranch>;
 }) {
-  const { root, children } = family;
+  const { root, children } = branch;
   const direct = dispatchedOf(allTasks, root.id);
   const { folds, toggle } = foldState;
   const [hint, setHint] = useState<string | null>(null);
@@ -51,11 +51,11 @@ function FamilyTable({ task, allTasks, onOpenTask, onTaskUpdated, notify, family
     const { word, tone } = dispatchedWord(item, dispatchView.look(item));
     const meta = !accepted ? dispatchedMeta(item, now) : "";
     return <li key={item.id}>
-      <div data-subtask-id={item.id} className={`dispatched-row${task.id === item.id ? " is-current" : ""}${hint === item.id ? " is-hinted" : ""}${accepted ? " is-settled" : ""}`}>
+      <div data-subtask-id={item.id} className={`dispatched-row${hint === item.id ? " is-hinted" : ""}${accepted ? " is-settled" : ""}`}>
         <span className="dispatched-row__mark">{!accepted && mark(item)}</span>
         <span className="dispatched-row__main">
           <span className="dispatched-row__top">
-            <button type="button" className="dispatched-row__title" aria-current={task.id === item.id ? "page" : undefined} onClick={() => onOpenTask(item.id)}>{item.title || "未命名任务"}</button>
+            <button type="button" className="dispatched-row__title" onClick={() => onOpenTask(item.id)}>{item.title || "未命名任务"}</button>
             {tally && <button type="button" className={`dispatched-fold${tally.warn ? " is-warn" : ""}`} aria-label={dispatchTallySaid(tally)} aria-expanded={open} onClick={() => toggle(item.id, open)}>{tally.count}<CaretDown size={10} aria-hidden="true" /></button>}
           </span>
           {meta && <small className={item.question ? undefined : "is-mono"}>{meta}</small>}
