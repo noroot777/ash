@@ -174,7 +174,7 @@ for (const id of ["wait-backlog", "accepted-merged", "archived", "worker", "done
 }
 assert.equal(taskMode.all, taskModeRows.length);
 assert.equal(
-  BUCKET_FILTERS.reduce((sum, item) => sum + taskMode[item.key], 0),
+  SPREAD_DOT_FILTERS.reduce((sum, item) => sum + taskMode[item.key], 0),
   taskMode.all,
 );
 // 计数与列表同口径（跟单项目态一样的钉子，换个作用域再钉一次）。
