@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 import { TEAM_DEFAULTS } from "@ash/shared";
-import { installFakeClaude } from "./scheduled-messages-fixture.js";
+import { installFakeClaude, settleFakeClaudes } from "./scheduled-messages-fixture.js";
 import { runHandoffCases } from "./scheduled-handoff-cases.js";
 import { runQueueGateCases } from "./scheduled-queue-gate-cases.js";
 import { runCkptPendingCases } from "./scheduled-ckpt-pending-cases.js";
@@ -658,17 +658,13 @@ try {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   delete process.env.ASH_TEST_LEAD_LOG;
-  rmSync(join(paths.RUNS_DIR, deliveredTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, unavailableTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, closingTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, blockedTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, steerTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, steerUnavailableTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, steerLockedTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, steerLateTaskId), { recursive: true, force: true });
+  const taskIds = [
+    deliveredTaskId, unavailableTaskId, closingTaskId, queuedTaskId, lockedTaskId, pausedChatTaskId, pausedCompleteTaskId,
+    crashTaskId, blockedTaskId, steerTaskId, steerUnavailableTaskId, steerLockedTaskId, steerLateTaskId,
+  ];
+  // 跑完不留进程：最后那一轮结算之后，它的假 claude 还要一小会儿才真的没了；等到没了再拆台、再退。
+  await settleFakeClaudes(root);
+  for (const taskId of taskIds) rmSync(join(paths.RUNS_DIR, taskId), { recursive: true, force: true });
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
   // 收尾**不许盖住正主**:这里跑在 finally 里,try 抛出的断言错会被这一句的异常顶掉,

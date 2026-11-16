@@ -1,6 +1,27 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { IS_WINDOWS } from "../src/platform.js";
+
+/**
+ * 等这座舞台起过的假 claude 都退干净（按命令行里的桩路径认）；到点还活着的直接杀掉并说一声。
+ * 测试进程一退，它们就成了没人管的孤儿 —— 桩自己那道「目录没了就退」只是兜底，半秒才看一眼。
+ * Windows 上没有 ps，那边只剩桩自己的兜底。
+ */
+export async function settleFakeClaudes(root: string, graceMs = 5_000): Promise<void> {
+  if (IS_WINDOWS) return;
+  const script = join(root, "bin", "fake-claude.js");
+  const alive = () => (spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" }).stdout ?? "").split("\n")
+    .filter((line) => line.includes(script)).map((line) => Number(line.trim().split(/\s+/)[0]));
+  for (const until = Date.now() + graceMs; Date.now() < until;) {
+    if (!alive().length) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  for (const pid of alive()) {
+    console.warn(`⚠︎ 假 claude 没自己退，收掉：pid ${pid}`);
+    try { process.kill(pid, "SIGKILL"); } catch {}
+  }
+}
 
 export function installFakeClaude(root: string): string {
   const fakeBin = join(root, "bin");

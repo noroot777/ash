@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerKimiMcp } from "./kimi-mcp.mjs";
+import { registerHostMcp } from "./mcp-hosts.mjs";
+
+// kimi 这一家在装机脚本里怎么登记：setup.mjs 对各家统一走 registerHostMcp，落点由 KIMI_CODE_HOME 定。
+const registerKimiMcp = ({ configDir, mcpEntry, url }) =>
+  registerHostMcp({ agentType: "kimi", mcpEntry, url, nodeBin: process.execPath, env: { KIMI_CODE_HOME: configDir } });
 
 const directory = mkdtempSync(join(tmpdir(), "ash-kimi-mcp-"));
 const file = join(directory, "mcp.json");

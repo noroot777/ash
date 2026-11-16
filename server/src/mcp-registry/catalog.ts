@@ -127,7 +127,7 @@ export const ASH_MCP_TABLE = {
     identity: "unknown",
     evidence: "tested",
     source: "装好的 kimi 二进制里原文写着「The unified MCP management view: user-level "
-      + "`<KIMI_CODE_HOME>/mcp.json`」，`mcpServers` 形状同族；本仓 `scripts/kimi-mcp.mjs` 已按它写",
+      + "`<KIMI_CODE_HOME>/mcp.json`」，`mcpServers` 形状同族；本仓 `scripts/mcp-hosts.mjs` 已按它写",
     notes: "**没有 `mcp` 子命令**（`kimi mcp add` 报 unknown command），所以只能我们写文件，"
       + "也意味着没法拿 CLI 自己的输出来复核 —— 预检对它只有读配置这一档依据",
   },

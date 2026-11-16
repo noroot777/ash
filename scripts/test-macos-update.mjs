@@ -228,7 +228,7 @@ try {
   fake = await startFake();
   const entered = join(temporary, "lock-entered");
   const locker = spawn("/usr/bin/lockf", ["-k", join(data, ".mac-launch.lock"), process.execPath, "-e",
-    `require('node:fs').writeFileSync(${JSON.stringify(entered)},'1');setTimeout(()=>{},60000)`], { stdio: "ignore" });
+    `require('node:fs').writeFileSync(${JSON.stringify(entered)},'1');setTimeout(()=>{},60000)`], { stdio: "ignore", detached: true });
   fakes.add(locker);
   for (let i = 0; i < 100 && !existsSync(entered); i++) await delay(50);
   const backupsBefore = backups().length;
@@ -237,7 +237,7 @@ try {
   assert.match(result.out, /REPORT 另一处正在起 ash 服务/);
   assert.equal(alive(fake), true, "the service is not stopped while someone else is starting one");
   assert.equal(backups().length, backupsBefore);
-  locker.kill("SIGKILL");
+  process.kill(-locker.pid, "SIGKILL"); // 整组：只杀 lockf 的话，它里面那个 node 还要再活一分钟
   await once(locker, "exit");
   console.log("PASS: the gate takes the launch lock before stopping anything");
 
