@@ -198,6 +198,7 @@ export function TaskRow({
   lookForTask,
   child = false,
   parent = false,
+  onExpand,
   showOrigin = true,
   showProject = true,
   leading,
@@ -213,6 +214,8 @@ export function TaskRow({
   child?: boolean;
   /** 父任务（名下收着派出去的任务、团队调度台）：行首不画圆点（leading 只放箭头），行尾写短语。 */
   parent?: boolean;
+  /** 父任务：点这一行（打开它自己）时把名下那一层展开。只开不收，收起用行首箭头。 */
+  onExpand?: () => void;
   showOrigin?: boolean;
   // 行首那枚项目徽标画不画。默认画（有徽标表就说明是任务模式）；**被项目分组装着的行
   // 传 false** —— 组头已经写着项目名，每行再标一次就是把「弱化」做反了。
@@ -224,6 +227,7 @@ export function TaskRow({
   tally?: React.ReactNode;
 }) {
   const selected = selectedTaskId === task.id;
+  const open = () => { onExpand?.(); onTask(task); };
   const look = lookForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
   // 当前就在本机运行的任务（含接力转入、已经移回）按普通任务展示；接力只在真正
@@ -274,7 +278,7 @@ export function TaskRow({
         type="button"
         aria-selected={selected}
         data-task-id={task.id}
-        onClick={() => onTask(task)}
+        onClick={open}
         title={task.title}
       >
         {project && <TaskProjectBadge project={project} />}
@@ -308,7 +312,7 @@ export function TaskRow({
         )}
       </button>
       {canStar && <TaskStarButton task={task} />}
-      {spreadCells && <SpreadRowCells task={task} ctx={spreadCells} onOpen={() => onTask(task)} />}
+      {spreadCells && <SpreadRowCells task={task} ctx={spreadCells} onOpen={open} />}
       {hasOrigin && (
         <OriginTaskChip
           task={task}
@@ -392,6 +396,7 @@ export function TeamRow({
         lookForTask={lookForTask}
         showProject={showProject}
         parent
+        onExpand={workers.length ? () => setExpanded(true) : undefined}
         wrapperClassName={`workspace-team-row${expanded ? " is-expanded" : ""}`}
         leading={
           <ParentCaret

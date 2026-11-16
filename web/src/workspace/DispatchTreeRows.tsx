@@ -7,7 +7,8 @@ import { ParentCaret, TaskRow } from "./TaskTreeRows.tsx";
 
 // 侧栏里派出去的任务收在派它的那条下面：那一行行首是展开箭头、不画状态点（跟团队行同一种做法），
 // 它自己和名下此刻怎么样写成行尾一句短语（lib/taskLook 的 phrase），后面一个数（名下几条）。名下
-// 整棵有在等答复或失败的，那个数变琥珀色。默认收着；开过的记在本机，刷新后还开着。
+// 整棵有在等答复或失败的，那个数变琥珀色。默认收着；点开这一行就展开名下那一层（只开不收，收起
+// 用箭头）；开过的记在本机，刷新后还开着。
 //
 // 收在谁下面由 dispatchForest.ts 算（只在画出来的那批行之间收）；那个数和它的颜色是关系事实，
 // 从全量任务算（dispatchFacts，经 DispatchFactsProvider 递下来）—— 筛选把名下几条筛掉了，数照旧、
@@ -129,6 +130,7 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
         child={child}
         showOrigin={showOrigin}
         parent
+        onExpand={expandable ? () => state?.open([task.id]) : undefined}
         wrapperClassName={expandable ? `workspace-dispatch-row${expanded ? " is-expanded" : ""}` : undefined}
         leading={expandable ? (
           <ParentCaret expanded={expanded} label={`${expanded ? "收起" : "展开"} ${said}`} onToggle={() => state?.toggle(task.id)} />
