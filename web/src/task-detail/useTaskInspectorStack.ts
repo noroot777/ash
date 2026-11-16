@@ -12,10 +12,11 @@ import { TASK_INSPECTORS } from "./taskInspectors.tsx";
 import type { useConversation } from "../lib/useConversation.ts";
 import { latestRunFacts } from "./info/infoRunFacts.ts";
 import { surfaceTabWhenUsed } from "../inspector/index.ts";
-import { dispatchedOf, dispatchFacts } from "../lib/dispatchTree.ts";
+import { dispatchFacts } from "../lib/dispatchTree.ts";
 import { dispatchFamily } from "../lib/dispatchFamily.ts";
 import { clearInspectorEntry, takeInspectorEntry } from "./dispatched/inspectorNavigation.ts";
 import { useDispatchFolds } from "./dispatched/dispatchFolds.ts";
+import { startDispatchArrivals, observeDispatchArrivals, type DispatchArrivals } from "./dispatched/dispatchArrivals.ts";
 import { CountedIcon } from "./dispatched/CountedIcon.tsx";
 
 // 这几档 stage 下默认落在「审议」那一格：到了这一步，用户要看的就是审查那摊事。
@@ -56,12 +57,10 @@ export function useTaskInspectorStack(
   const dispatchedShown = hasFamily || !!(task.dispatchedBy && !task.parentId);
   const entryTab = useMemo(() => takeInspectorEntry(task.id), [task.id]);
   useEffect(() => clearInspectorEntry(task.id), [task.id]);
-  const arrivals = useRef({ taskId: task.id, ids: new Set<string>(), revision: 0 });
-  const directIds = dispatchedOf(allTasks, task.id).map((item) => item.id);
-  if (arrivals.current.taskId !== task.id) arrivals.current = { taskId: task.id, ids: new Set(directIds), revision: 0 };
-  if (directIds.some((id) => !arrivals.current.ids.has(id))) {
-    arrivals.current = { taskId: task.id, ids: new Set(directIds), revision: arrivals.current.revision + 1 };
-  }
+  const arrivals = useRef<DispatchArrivals | null>(null);
+  arrivals.current = arrivals.current?.taskId === task.id
+    ? observeDispatchArrivals(arrivals.current, allTasks)
+    : startDispatchArrivals(task.id, allTasks, Date.now());
   const arrivalRevision = arrivals.current.revision;
   const dispatchedTab = useMemo(() => surfaceTabWhenUsed(memoTab, "dispatched", dispatchedShown, (descriptor) => ({
     icon: dispatchedShown

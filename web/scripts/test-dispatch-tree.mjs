@@ -10,6 +10,7 @@ import { dispatchedMeta, dispatchedOrder, dispatchedWord } from "../src/task-det
 import { readState, applyTabPolicy } from "../src/inspector/inspectorState.ts";
 import { rememberFamilyInspector, takeInspectorEntry } from "../src/task-detail/dispatched/inspectorNavigation.ts";
 import { taskParentLink, taskParentRelation } from "../src/lib/taskParent.ts";
+import { startDispatchArrivals, observeDispatchArrivals } from "../src/task-detail/dispatched/dispatchArrivals.ts";
 
 const now = Date.parse("2026-11-16T12:00:00Z");
 const task = (id, extra = {}) => ({
@@ -62,6 +63,41 @@ assert.equal(spreadCounts(all, scope).run, 1);
 assert.ok(scopeTasks(all, { kind: "tasks" }).some((item) => item.id === "root"));
 assert.deepEqual(ids(spreadVisibleTasks([root, { ...mid, projectId: "p2" }, leaf], scope, "todo")), ["root"]);
 assert.deepEqual(ids(spreadVisibleTasks([{ ...root, projectId: "p2" }, { ...mid, projectId: "p2" }, leaf], scope, "todo")), ["leaf"]);
+
+let arrivals = startDispatchArrivals("root", [root], now);
+for (const snapshot of [[root, mid], all, [root], all]) {
+  arrivals = observeDispatchArrivals(arrivals, snapshot);
+  assert.equal(arrivals.revision, 0, "初始分批加载和重连追平的历史任务不算新派出");
+}
+const newlyCreated = (id, extra = {}) => task(id, { dispatchedBy: "root", createdAt: new Date(now + 1).toISOString(), ...extra });
+const archivedNew = newlyCreated("archived-new", { archived: true });
+arrivals = observeDispatchArrivals(arrivals, [...all, archivedNew]);
+arrivals = observeDispatchArrivals(arrivals, [...all, { ...archivedNew, archived: false }]);
+arrivals = observeDispatchArrivals(arrivals, all);
+arrivals = observeDispatchArrivals(arrivals, [...all, { ...archivedNew, archived: false }]);
+assert.equal(arrivals.revision, 0, "已观察的归档项取消归档、消失再回填都不触发");
+const lateOldArchived = task("late-old-archived", { dispatchedBy: "root", archived: true });
+arrivals = observeDispatchArrivals(arrivals, [...all, lateOldArchived]);
+arrivals = observeDispatchArrivals(arrivals, [...all, { ...lateOldArchived, archived: false }]);
+assert.equal(arrivals.revision, 0);
+const ignored = [newlyCreated("other-parent", { dispatchedBy: "elsewhere" }), newlyCreated("grandchild", { dispatchedBy: "mid" }), newlyCreated("team-worker", { parentId: "team" }), newlyCreated("invalid-time", { createdAt: "invalid" }), newlyCreated("at-entry", { createdAt: new Date(now).toISOString() })];
+arrivals = observeDispatchArrivals(arrivals, [...all, ...ignored]);
+arrivals = observeDispatchArrivals(arrivals, [...all, { ...ignored[0], dispatchedBy: "root" }]);
+assert.equal(arrivals.revision, 0, "别处派出、孙任务、团队执行者、无效时间或关系回填不抢当前任务");
+const freshBatch = [newlyCreated("fresh-1"), newlyCreated("fresh-2")];
+arrivals = observeDispatchArrivals(arrivals, [...all, ...freshBatch]);
+assert.equal(arrivals.revision, 1, "进入后真实新建的一批只触发一次");
+const afterBatch = arrivals;
+arrivals = observeDispatchArrivals(arrivals, [...all, ...freshBatch.map((item) => ({ ...item, status: "paused" }))]);
+assert.equal(arrivals, afterBatch, "状态变化不算新派出");
+arrivals = observeDispatchArrivals(arrivals, all);
+arrivals = observeDispatchArrivals(arrivals, [...all, ...freshBatch]);
+assert.equal(arrivals.revision, 1, "新批次的重复快照不重放");
+arrivals = observeDispatchArrivals(arrivals, [...all, task("old-catch-up", { dispatchedBy: "root" }), newlyCreated("fresh-after-reconnect")]);
+assert.equal(arrivals.revision, 2, "重连混合快照只识别进入后真正创建的任务");
+const reentered = observeDispatchArrivals(startDispatchArrivals("root", [root], now + 100), [...all, ...freshBatch]);
+assert.equal(reentered.revision, 0, "刷新或离开后返回，不把此前创建的子任务当成新批次");
+assert.equal(startDispatchArrivals("root", [...all, ...freshBatch], now).revision, 0, "首次已有的完整列表只是基准");
 
 const accepted = task("accepted", { dispatchedBy: "root" });
 const acceptedChild = task("accepted-child", { dispatchedBy: "accepted" });

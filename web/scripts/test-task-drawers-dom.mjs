@@ -200,6 +200,41 @@ try {
     await narrowPage.waitForFunction((count) => JSON.parse(localStorage.getItem("ash:inspector:task:accepted")).focusKey === String(count), id === "side-chat" ? 2 : 3);
     assert.equal(await narrowPage.locator(".inspector-host").count(), 0, "侧聊和备忘不因新派出弹出盖层");
   }
+
+  for (const width of [1600, 400]) {
+    const cold = await browser.newPage({ viewport: { width, height: 900 } });
+    cold.setDefaultTimeout(WAIT_TIMEOUT_MS);
+    cold.on("pageerror", (error) => errors.push(error.message));
+    await cold.goto(`${web.origin}/scripts/fixtures/task-drawers.html?partial=1&task=lead`);
+    await cold.locator('[data-current-task="lead"]').waitFor();
+    if (width > 720) await cold.getByRole("button", { name: "切到files", exact: true }).click();
+    else assert.equal(await cold.locator(".inspector-host").count(), 0);
+    await cold.evaluate(() => window.__hydrate());
+    await cold.waitForFunction(() => window.__tasks().length === 7);
+    if (width > 720) {
+      assert.equal(await cold.locator(".inspector-host__panel-title").textContent(), "文件", "冷启动历史名单补全不抢用户当前格");
+      await cold.getByRole("button", { name: "隐藏 Inspector", exact: true }).click();
+    } else assert.equal(await cold.locator(".inspector-host").count(), 0, "窄屏历史名单补全不盖层");
+    await cold.evaluate(() => window.__add({ id: "old-catch-up", title: "历史追平", dispatchedBy: "lead", createdAt: "2026-01-01T00:00:00.000Z" }));
+    await cold.waitForFunction(() => window.__tasks().length === 8);
+    assert.equal(await cold.locator(".inspector-host").count(), 0, "重连追平不强开");
+    await cold.evaluate(() => window.__add({ id: "archived-backfill", title: "归档回填", dispatchedBy: "lead", archived: true }));
+    await cold.waitForFunction(() => window.__tasks().length === 9);
+    await cold.evaluate(() => window.__patch("archived-backfill", { archived: false }));
+    await cold.waitForFunction(() => window.__tasks().find((item) => item.id === "archived-backfill")?.archived === false);
+    assert.equal(await cold.locator(".inspector-host").count(), 0, "进入后才出现的归档项取消归档也不触发");
+    assert.equal(await cold.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")).focusKey), "0");
+    await cold.evaluate(() => window.__add({ id: "real-new-batch", title: "真正的新批次", dispatchedBy: "lead", status: "running", stage: null }));
+    await cold.locator(".dispatched-pane").waitFor();
+    assert.equal(await cold.locator(".inspector-host__panel-title").textContent(), "子任务", "名单补全后真正派出仍强开并落格");
+    await cold.getByRole("button", { name: width > 720 ? "隐藏 Inspector" : "收起 Inspector", exact: true }).click();
+    await cold.reload();
+    await cold.locator('[data-current-task="lead"]').waitFor();
+    await cold.evaluate(() => window.__hydrate());
+    await cold.waitForFunction(() => window.__tasks().length === 7);
+    assert.equal(await cold.locator(".inspector-host").count(), 0, "刷新后再次分批加载不重放上次新派出");
+    await cold.close();
+  }
   assert.deepEqual(errors, []);
-  console.log("✓ 子任务整页导航、状态不抢面板、临时展开不污染偏好、窄屏会话可见、搜索与新批次落格");
+  console.log("✓ 子任务导航与面板策略：冷启动分批加载、重连追平、取消归档和刷新不误判，真正新建才落格");
 } finally { await browser?.close(); await web.close(); }

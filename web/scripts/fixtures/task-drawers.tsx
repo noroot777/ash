@@ -89,18 +89,22 @@ declare global { interface Window {
   __add: (row: Partial<Task> & { id: string; title: string }) => void;
   __patch: (id: string, patch: Partial<Task>) => void;
   __go: (id: string) => void;
+  __hydrate: () => void;
+  __tasks: () => Task[];
 } }
 
 function App() {
-  const [tasks, setTasks] = useState(initial);
+  const [tasks, setTasks] = useState(() => new URLSearchParams(location.search).has("partial") ? initial.filter((item) => item.id === "lead") : initial);
   const [selected, setSelected] = useState(() => new URLSearchParams(location.search).get("task") ?? "lead");
   const [palette, setPalette] = useState(false);
   currentTasks = tasks;
   const navigate = (id: string) => { const next = tasks.find((item) => item.id === id); if (next) { pushTaskHistoryEntry(next); setSelected(id); } };
   useEffect(() => {
-    window.__add = (row) => setTasks((current) => [...current, task(row.id, row.title, { createdAt: at(40), ...row })]);
+    window.__add = (row) => setTasks((current) => [...current, task(row.id, row.title, { createdAt: new Date().toISOString(), ...row })]);
     window.__patch = (id, patch) => setTasks((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
     window.__go = navigate;
+    window.__hydrate = () => setTasks((current) => [...current, ...initial.filter((item) => !current.some((known) => known.id === item.id))]);
+    window.__tasks = () => currentTasks;
   });
   useEffect(() => {
     const pop = () => setSelected(new URLSearchParams(location.search).get("task") ?? "lead");
