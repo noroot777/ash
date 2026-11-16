@@ -277,6 +277,10 @@ try {
 // —— 进行中的那一轮：同一颗气泡，从开始审到出结论（fixtures/review-progress.tsx）——
 async function reviewProgress(browser) {
   const page = await browser.newPage({ timezoneId: "Asia/Shanghai", viewport: { width: 1000, height: 1100 } });
+  // 夹具里这一轮的起点是写死的日期，「用时」拿真实的现在去减：过了一天格式就从「几分几秒」变成
+  // 「几天几时几分」，一分钟才跳一下，下面等它走秒的那一步有一半机会等不到。把页面的现在定在
+  // 起点后几分钟，从那儿照常往前走。
+  await page.clock.install({ time: new Date("2026-11-14T08:30:00.000Z") });
   await page.goto(`${web.origin}/scripts/fixtures/review-progress.html?opener=1`);
   const bubble = page.locator(".task-conversation > .review-verdict");
   await bubble.waitFor();
