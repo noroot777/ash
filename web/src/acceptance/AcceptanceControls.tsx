@@ -29,7 +29,7 @@ import { AutoCommitCheck, WorkspaceCheck } from "./WorkspaceCheck.tsx";
 /** 宿主自己知道、这里不知道的那一道关（团队：共享执行者还没跑完）。 */
 export type HostBlock = { text: string; detail?: string };
 
-/** 把「提交」那一勾写回项目设置，最多等这么久；过了就照层里看见的值直接验收。 */
+/** 记下这一次怎么勾的，最多等这么久；过了就照层里看见的值直接验收。 */
 const REMEMBER_TIMEOUT_MS = 5_000;
 
 const BASELINE_ISSUE = {
@@ -87,7 +87,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   // 动作成功之后这个任务的事实要整份追平（taskFacts.ts）：追平之前不许确认，读失败那一行给重试。
   const taskFacts = useTaskFacts(task.id, task.updatedAt);
   const retryTaskFacts = () => void refreshTaskFacts(task, onTaskUpdated);
-  useEffect(() => { setChecked([]); setFailure(null); setLayer(null); setRunChoice(null); setCommitChoice(null); }, [task.id]);
+  useEffect(() => { setChecked([]); setFailure(null); setLayer(null); }, [task.id]);
   // 版本一推，前置命令那份状态（基准对照的目标分支跟着合入目标走）也重读一次。
   useEffect(() => { if (taskFacts.version) void gate.reload(); }, [taskFacts.version]);
 
@@ -136,6 +136,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         passedAgo: latest?.status === "passed" ? ago(latest.finishedAt ?? latest.startedAt) : null,
         lastFailed: latest?.status === "failed",
         issue: issue ? BASELINE_ISSUE[issue.reason] : null,
+        skipRemembered: gate.state.skipRemembered === true,
       }
     : null;
   const unverified = family.filter((row) => row.unexecutedVerification);
@@ -153,13 +154,9 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   });
   const described = acceptanceSteps(task, view.commit);
   const shownSteps = described.kind === "merge" && acceptTarget ? { ...described, target: acceptTarget } : described;
-  // 关掉就回到默认（confirmPlan.ts）：「运行」不记上一次，取消只管这一按。这一按的两勾活到它走完（busy）：
-  // 发出去到落定之间前提列那一行照这一次说；层为同一按重新打开（要补一勾「知情」）时还是刚才的样子。
+  // 关掉就回到默认 —— 默认就是上一次确认时的样子（confirmPlan.ts），只开关不确认不会改它。「知情」那一勾不记。
   useEffect(() => {
-    if (!confirming && !busy) { setRunChoice(null); setCommitChoice(null); }
-  }, [confirming, busy]);
-  useEffect(() => {
-    if (!confirming) { setFamilyAck(false); verification.setAcknowledged(false); }
+    if (!confirming) { setRunChoice(null); setCommitChoice(null); setFamilyAck(false); verification.setAcknowledged(false); }
   }, [confirming]);
 
   // 动作已经生效之后的「再拉一遍任务」是另一件事：失败只在成功提示后面缀一句，绝不报成动作失败；
@@ -180,8 +177,8 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     setLayer(null);
     setBusy(true);
     setFailure(null);
-    // 先把「提交」那一勾写回项目设置（下一个任务打开就是这个样子），再验收。记不住不拦验收：这一按用的是
-    // 层里看到的值，记没记住在提示后面缀一句。「运行」那一勾不记，取消只管这一按。
+    // 先记下这一次怎么勾的（下一个任务打开就是这个样子），再验收。记不住不拦验收：这一按用的是层里看到的值，
+    // 记没记住在提示后面缀一句。
     // 等它有上限（第 1 轮审查 F2）：连接挂住不报错时，不能让验收一直等在「记住」后面。到点就不等了 ——
     // 放弃等待不是取消，服务端那一下可能稍后才做完，所以提示只说「不一定记住了」；晚做完的它也盖不掉
     // 之后再确认的那一次（服务端按到达顺序写，server/src/accept-order.ts）。
@@ -189,13 +186,15 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     if (memory) {
       try {
         const saved = await api.rememberAccept(task.projectId, memory, AbortSignal.timeout(REMEMBER_TIMEOUT_MS));
+        // 前提列那一行跟着刚记下的说（服务端也会推一次，断线时不能只指望它）。
+        if (memory.skipGate !== undefined) void gate.reload();
         // 打开时以为有管理权限、确认那一刻已经没有了：照回执说，不拿打开时的角色推断（第 1 轮审查 N2）。
-        if (!saved.commitSaved && canManage !== false) forgot = "（「提交」那一勾只管了这一次：项目默认要管理员改）";
+        if (memory.commit !== undefined && !saved.commitSaved && canManage !== false) forgot = "（「提交」那一勾只管了这一次：项目默认要管理员改）";
       } catch (reason) {
         // 超时、连接断了：请求可能已经到了服务端，说不准；服务端回了错误：确实没写。
-        forgot = reason instanceof DOMException && reason.name === "TimeoutError" ? "（「提交」那一勾不一定记住了：保存超时）"
-          : reason instanceof TypeError ? "（「提交」那一勾不一定记住了：连接断了）"
-            : `（「提交」那一勾没记住：${reason instanceof Error ? reason.message : String(reason)}）`;
+        forgot = reason instanceof DOMException && reason.name === "TimeoutError" ? "（这次的选择不一定记住了：保存超时）"
+          : reason instanceof TypeError ? "（这次的选择不一定记住了：连接断了）"
+            : `（这次的选择没记住：${reason instanceof Error ? reason.message : String(reason)}）`;
       }
     }
     const say = (message: string) => notify(message + forgot);
@@ -222,8 +221,8 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         if (result.reason === "accept_gate_running") gate.holdRunning(result.gate?.status === "running" ? result.gate : null);
         if (gateReason || result.reason === "merge_conflict") await gate.reload();
         if (result.confirmationRequired === "confirmUnverified") {
-          // 层为这一按重新打开：两勾还是刚才的样子（上面那个 effect 等 busy 落下才清）。
-          await refreshAfterMutation();
+          // 层要重新打开：「运行」的默认跟着刚记下的那一份走，先把它读回来。
+          await Promise.all([refreshAfterMutation(), memory?.skipGate === undefined ? null : gate.reload()]);
           setProposal(plan.view);
           setLayer("confirm");
           return;
@@ -285,7 +284,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         <PendingMergeCheck key={task.id} task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
         {autoCommit?.taskId === task.id && <AutoCommitCheck outcome={autoCommit.outcome} />}
         {!midGate && !settled && <WorkspaceCheck key={task.id} task={task} notify={notify} disabled={rowDisabled} />}
-        {/* 这一按跳不跳过，前提列与确认层同一份推导（view）：只在层里取消了「运行」、到这一按落定之间说跳过。 */}
+        {/* 这一按跳不跳过，前提列与确认层同一份推导（view）：统一验收不走「运行」那一勾，就不预告跳过。 */}
         {!midGate && <GateCheck task={task} gate={gate} canManage={canManage} settled={settled} atFinalGate={!midGate}
           skipping={view.gateIntent === "skip"}
           disabled={rowDisabled} editRequested={editGate} onEditClosed={() => setEditGate(false)} notify={notify} />}

@@ -22,7 +22,7 @@
     "test:task-memos": "tsx scripts/test-task-memos.ts",
     "//test:task-reads": "任务「看过没有」(侧栏绿点)的后端:按人存、后看的算数、钟快不写到未来、坏请求体不 500、裁到上限、信号只推给本人。",
     "test:task-reads": "tsx scripts/test-task-reads.ts",
-    "//test:accept-memory": "验收确认层点确认时记什么:「运行」那一勾不记(跳过只管当次,老库里记着的跳过升级后不再生效、表退役);「提交」写回项目设置、按到达顺序、没管理权限不写;坏请求不收。",
+    "//test:accept-memory": "验收确认层上次怎么勾的:「运行」按人按项目记、随门禁状态带出去;「提交」写回项目设置、没管理权限不写;坏请求不收;只有门禁状态那条读。",
     "test:accept-memory": "tsx scripts/test-accept-memory.ts",
     "test:monitor-wake-data": "tsx scripts/test-monitor-wake-data.ts",
     "test:monitor-delivery-batch": "tsx scripts/test-monitor-delivery-batch.ts",

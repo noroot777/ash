@@ -435,7 +435,7 @@ export const api = {
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
   },
-  // 确认层点确认时把「提交」那一勾写回项目设置（要管理权限；「运行」那一勾不记）。
+  // 确认层点确认时记下这一次怎么勾的（按人按项目；「提交」写回项目设置，要管理权限）。
   rememberAccept: (projectId: string, write: AcceptMemoryWrite, signal?: AbortSignal): Promise<AcceptMemoryWriteResult> =>
     request(`/accept-memory/${id(projectId)}`, { ...json("PUT", write), signal }),
   acceptGate: (taskId: string, signal?: AbortSignal): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`, { signal }),

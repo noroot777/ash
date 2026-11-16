@@ -27,7 +27,7 @@
 |---|---|---|---|
 | `scripts/test-macos-update.mjs` | mac app 自更新的定点回归（仅 macOS）：装新版之前那道闸（UpdateGate）和发版脚本（release.mjs）。 | 未普查 |  |
 | `scripts/test-restart-lock-owner.mjs` | 回归:restart.mjs 停谁只认「谁在监听端口」,单实例锁里的号码不当线索(用户 2026-11-16 选定)。 | 未普查 |  |
-| `server/scripts/test-accept-memory.ts` | 验收确认层点确认时记什么的后端回归(写入规则见 server/src/accept-memory.ts)：「运行」那一勾不记，跳过只管当次；老库里记着跳过的那张表启动时退役。 | 未普查 |  |
+| `server/scripts/test-accept-memory.ts` | 验收确认层点确认时记什么的后端回归(写入规则见 server/src/accept-memory.ts)：「运行」那一勾按人按项目记、随门禁状态带出去；「提交」写回项目设置、按到达顺序写。 | 未普查 |  |
 | `server/scripts/test-answer-follow-up.ts` | 终态任务上的提问答复是续聊,不认领队列执行占位(2026-11-13 现场:队列里已完成的任务在续聊 回合里提了问,用户答复后落成执行型待发送消息,等整条队列跑完)。 | 未普查 |  |
 | `server/scripts/test-claude-monitor-legacy-lifetime.ts` | 内置 Monitor 投影的**旧期限纠偏**（db/migrations.ts 的 relaxUnfoundedClaudeMonitorLifetimes）。 | 未普查 |  |
 | `server/scripts/test-claude-monitor-transient.ts` | 内置 Monitor 实时投影的**写库责任**：事件一旦从流里消费掉，来源侧不会再发一遍，库里也没有 别的地方能补回来（翻会话记录的历史扫描已经删了）。 | 未普查 |  |

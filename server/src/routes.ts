@@ -346,7 +346,7 @@ mountTaskRoutes(api);
 mountTaskMemoRoutes(api);
 // 看过哪些任务(侧栏绿点的已读记录,按人存,见 db/schema-task-reads.ts)。
 mountTaskReadRoutes(api);
-// 验收确认层「提交」那一勾写回项目设置(见 accept-memory.ts)。
+// 验收确认层上次怎么勾的(按人按项目,见 db/schema-accept-memory.ts)。
 mountAcceptMemoryRoutes(api);
 // 分组(批次容器)路由:列表/运行/暂停/批量建任务(从 task-routes.ts 拆出)。
 mountGroupRoutes(api);
