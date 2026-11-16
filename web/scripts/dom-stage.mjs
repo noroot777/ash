@@ -9,6 +9,7 @@
 // 并行执行器（scripts/test-runner.mjs）跑前端回归时先起一份共用的 Chrome 和 vite，用下面两个
 // 环境变量交给每条测试：每条测试照旧开自己的 context/page，彼此不共享任何页面状态，只省掉
 // 一百多次起停和 vite 的冷编译。单独跑某条测试时这两个变量不存在，各起各的。
+import { createServer as createHttpServer } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -22,10 +23,33 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 
 // 测试页的后端只有路由桩和各自起的假服务。web/vite.config.ts 默认把没打桩的 `/api` 代理到
 // localhost:4317，每交出一份页面文档还会去那里取一份真人动作凭据（vite/page-token.ts）——那是用户
-// 正在用的那套服务：漏一个桩，请求就真打到它身上，测试结果还跟着它起没起着走。没有显式指到别处
-// （test-page-token-delivery 指到自己的假后端）就一律指向一个没人听的端口。这一句要排在任何
-// vite 起来之前，所以放在模块顶上：起 vite 的测试（含各自 spawn 的夹具进程，环境是继承的）都先引这个文件。
-if (!process.env.ASH_PROXY && !process.env.HARNESS_PROXY) process.env.ASH_PROXY = "http://127.0.0.1:9";
+// 正在用的那套服务：漏一个桩，请求就真打到它身上（2026-11-16 实测整套跑一遍漏过去近两百发，
+// 含 /api/events、/api/settings），测试页拿到的是用户的真设置和真事件流，结果跟着线上那台走。
+//
+// 所以没有显式指到别处时（test-page-token-delivery 指到自己的假后端），后端一律是下面这个
+// 「什么都没有的 ash」：事件流连得上但永远安静，其余接口一律 404，页面文档上有一份占位凭据。
+// 它要排在任何 vite 起来之前，所以放在模块顶上——起 vite 的测试都先引这个文件，它们各自 spawn 的
+// 夹具进程、执行器起的叶子，环境是继承的，用的是同一个。unref：不替任何进程续命。
+if (!process.env.ASH_PROXY && !process.env.HARNESS_PROXY) {
+  const emptyBackend = createHttpServer((request, response) => {
+    const path = new URL(request.url ?? "/", "http://ash.test").pathname;
+    if (path === "/api/events") {
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      response.write(":\n\n");
+    } else if (path.startsWith("/api/") || path.startsWith("/preview/")) {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "测试页没有后端：这条请求没有打桩" }));
+    } else {
+      // meta 名即 @ash/shared/human-action 的 HUMAN_ACTION_TOKEN_META；对不上只是少盖这一份。
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end('<!doctype html><meta name="ash-human-action-token" content="ash-test-page-token">');
+    }
+  });
+  await new Promise((resolve, reject) => emptyBackend.once("error", reject).listen(0, "127.0.0.1", resolve));
+  emptyBackend.unref();
+  emptyBackend.on("connection", (socket) => socket.unref());
+  process.env.ASH_PROXY = `http://127.0.0.1:${emptyBackend.address().port}`;
+}
 
 /**
  * 测试里的 vite 各用一份预构建缓存目录，别跟默认的 node_modules/.vite 混用。
