@@ -348,26 +348,47 @@ export function inspectPid(pid) {
   return { command, startedAtMs: Date.now() - elapsed * 1000 };
 }
 
-/** 跟 server 的 START_TIME_TOLERANCE_MS 同值:POSIX 的 etime 只到秒,锁里记的是 server 自报的时刻。 */
-const LOCK_START_TOLERANCE_MS = 10_000;
+/**
+ * 锁里自报的启动时刻(`Date.now() - uptime`)减去这边观察到的启动时刻,允许落在这个区间。
+ *
+ * 不对称是有意的:自报值只可能**晚于**内核记的创建时刻(中间隔着 node 自己的启动),
+ * 而 POSIX 的 `etime` 截断到秒,观察值最多晚 1s。所以「锁里那一刻比这个进程出生还早」
+ * 超过 1.5s,说明这个号码上已经是后来的进程了 —— 那正是号码复用的形状。
+ */
+const LOCK_START_SKEW_MS = { min: -1_500, max: 5_000 };
 
 /**
  * 单实例锁里记的那个号码上,现在是不是**当初写锁的那个** ash server;是就返回号码。
  *
- * 判据跟 server 认陈旧锁同一套(`server/src/singleton.ts` 的 staleLockReason):端口对得上;
- * 命令行读得到时必须是 ash server;锁里记了启动时刻时必须对得上。比不了启动时刻(旧版本的
- * 锁没记)时命令行是唯一的身份证据,读不到就不认 —— 认错的代价是杀掉一个无关进程,
- * 认漏的代价只是少一条线索。`inspect` 可注入只为回归测试。
+ * 这个答案直接授权下刀,所以每一条都必须**证明得了**,证明不了就不认 —— 认错的代价是
+ * 杀掉一个无关进程,认漏的代价只是少一条线索(真是旧实例的话它还在端口上):
+ *  · 端口对得上;
+ *  · 锁里记了启动时刻,且对得上(区间见 LOCK_START_SKEW_MS)。旧版本的锁没记,一律不认;
+ *  · 命令行读得到,且**以锁里记的那个入口结尾**(`lock.argv` 的最后一项,即 server 自己的
+ *    入口脚本)。只认「像 ash」的宽泛正则不够:别的项目的 `node …/dist/index.js` 一样命中。
+ *    锚在末尾,跟 pidsRunningScript 同理:把这个路径当参数写在中间的进程不算。
+ *
+ * `inspect` 可注入只为回归测试。
  */
 export function lockHolderPid(lock, port, inspect = inspectPid) {
   if (lock?.port !== port || !Number.isInteger(lock.pid) || lock.pid <= 1) return null;
+  if (typeof lock.processStartedAtMs !== "number") return null;
+  const entry = Array.isArray(lock.argv) ? lock.argv[lock.argv.length - 1] : null;
+  if (typeof entry !== "string" || !entry) return null;
   const info = inspect(lock.pid);
-  if (!info) return null;
-  if (info.command && !isAshServerCommand(info.command)) return null;
-  if (typeof lock.processStartedAtMs === "number" && info.startedAtMs !== null) {
-    return Math.abs(info.startedAtMs - lock.processStartedAtMs) <= LOCK_START_TOLERANCE_MS ? lock.pid : null;
-  }
-  return info.command ? lock.pid : null;
+  if (!info || !info.command || info.startedAtMs === null) return null;
+  const skew = lock.processStartedAtMs - info.startedAtMs;
+  if (skew < LOCK_START_SKEW_MS.min || skew > LOCK_START_SKEW_MS.max) return null;
+  if (!isAshServerCommand(info.command) || !commandEndsWithScript(info.command, entry)) return null;
+  return lock.pid;
+}
+
+/** 命令行是不是以这个脚本路径结尾(允许收尾引号;Windows 不分大小写、两种分隔符都认)。 */
+function commandEndsWithScript(command, scriptPath) {
+  const norm = (text) => (IS_WINDOWS ? text.replaceAll("\\", "/").toLowerCase() : text);
+  const cmd = norm(command.trim());
+  const want = norm(scriptPath);
+  return cmd.endsWith(want) || cmd.endsWith(`${want}"`) || cmd.endsWith(`${want}'`);
 }
 
 /**
