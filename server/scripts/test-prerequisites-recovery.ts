@@ -30,6 +30,7 @@ import { and, eq, or } from "drizzle-orm";
 
 const { withPrerequisiteLock } = await import("../src/prerequisite-gate.js");
 const { withdrawLaunchRequest } = await import("../src/launch-request.js");
+const { taskPrerequisiteLaunches } = await import("../src/db/schema.js");
 const { baseRef } = await import("../src/task-branch-plan.js");
 const { journalInstall } = await import("../src/prerequisite-install.js");
 const { taskNotices } = await import("../src/db/schema.js");
@@ -223,16 +224,26 @@ try {
     const lock = join(p.repo, ".git", `${baseRef(b)}.lock`);
     mkdirSync(dirname(lock), { recursive: true });
     writeFileSync(lock, "");
-    const logged = console.error;
-    console.error = () => {}; // 扫描会如实打出这次 git 失败
-    try { await sweepLaunchRequests(); } finally { console.error = logged; }
-    assert.equal(runs.turnIdentity(b), null, "定起点抛错：认领的回合还回去了");
-    assert.equal(hasStarted(b), false);
-    rmSync(lock);
-    started.push(b);
-    await sweepLaunchRequests();
-    await until("故障消失后照样起", () => hasStarted(b));
-    console.log("✓ R8 放行认领回合后定起点抛错：回合归还，故障消失后照样起");
+    const logged = { error: console.error, warn: console.warn };
+    console.error = console.warn = () => {}; // 扫描会如实打出这次 git 失败
+    try {
+      // 两路放行同时到（放锁补扫、定时那一扫、重试凑到一起是常事）：只该撞一次。
+      await Promise.all([sweepLaunchRequests(), sweepLaunchRequests()]);
+      assert.equal(runs.turnIdentity(b), null, "定起点抛错：认领的回合还回去了");
+      assert.equal(hasStarted(b), false);
+      assert.equal((await launchRecord(b))?.startFailures, 1, "同一次故障只记一次起不来：另一路放行不许趁账还没记上再撞一次");
+      rmSync(lock);
+      started.push(b);
+      await sweepLaunchRequests();
+      assert.equal(hasStarted(b), false, "认领之后没起来的照样退避（30 秒），不是每扫一次撞一次");
+      // 把退避拨到点，不等那 30 秒。
+      await db.update(taskPrerequisiteLaunches).set({ retryAt: new Date().toISOString() }).where(eq(taskPrerequisiteLaunches.taskId, b));
+      await sweepLaunchRequests();
+      await until("故障消失后，退避一过照样起", () => hasStarted(b));
+    } finally {
+      Object.assign(console, logged);
+    }
+    console.log("✓ R8 放行认领回合后定起点抛错：回合归还、只记一次，故障消失后照样起");
   }
 
   // ── R9 换到一半断掉、前置一条都不剩 ──────────────────────────────────────

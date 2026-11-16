@@ -103,6 +103,13 @@ async function awaitsLaunch(task: TaskRow, source: string | null): Promise<boole
 
 const readTask = async (taskId: string) => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0) ?? null;
 
+/**
+ * 正在办的那一次尝试：认领了回合、这一次的账（起了 / 记一次起不来）还没落下。这期间别的放行不插进来 ——
+ * 起不来是放了回合之后才记上退避的，排在锁上的另一次放行会趁这个空原样再撞一次：一次故障记成两三次，
+ * 几路扫描凑到一起就直接到顶、不再自动起了。
+ */
+const attempting = new Set<string>();
+
 /** 一条挂着请求的任务：该起、能起就起。不该起了的了结请求；该起而此刻起不了的原样留着。 */
 export async function releaseLaunch(taskId: string): Promise<void> {
   if (booting) return; // 开机还没接回在跑的回合：此刻数名额会少数，等 startLaunchRequests 那一扫
@@ -154,61 +161,67 @@ export async function releaseLaunch(taskId: string): Promise<void> {
   let outcome: Claimed | "full" | "churn" | "settle" | "regrouped" | null = null;
   let failure: string | null = null;
   try {
-    outcome = await withPrerequisiteLock(taskId, async () => {
-      const current = await launchRecord(taskId);
-      if (!current?.requestedAt || current.giveUp) return null;
-      // 锁外预判时还没退避的，锁里再看一眼最新的：别的尝试可能刚记过一次起不来。
-      if (current.retryAt && current.retryAt > now()) return null;
-      const seat = await claimLaunchTurn(taskId, task.groupId ?? null);
-      if (!seat.ok) return seat.why === "busy" ? null : seat.why;
-      owned = seat.turn;
-      held = current.requestId;
-      // 占着回合重读：回合结算是持锁写状态的，所以这期间别处起过、跑完的，这里一定看得见。
-      const row = await readTask(taskId);
-      if (!row || !(await awaitsLaunch(row, current.source))) return "settle";
-      if ((row.groupId ?? null) !== (task.groupId ?? null)) return "regrouped";
-      if (await taskHoldOf(row)) return null;
-      if (isAcceptingTask(taskId) || await holdForPrerequisitesLocked(taskId, { source: "release", actingUserId: current.actingUserId })) return null;
-      return { turn: owned, actingUserId: current.actingUserId, source: current.source };
-    });
-  } catch (error) {
-    if (!owned) throw error; // 还没认领回合：没有放锁补扫的循环，交给调用方记日志、下一次扫描再判
-    failure = error instanceof Error ? error.message : String(error);
-  } finally {
-    if (owned && (!outcome || typeof outcome === "string")) releaseTurn(taskId, owned);
-  }
-  if (failure !== null) return noteStartFailure(taskId, held, failure);
-  if (outcome === "full") return noteHoldup(taskId, "full");
-  if (outcome === "settle") {
-    await settleRequest(taskId, held);
-    return republishPrerequisiteView([taskId]);
-  }
-  if (outcome === "regrouped" || outcome === "churn") return sweepSoon();
-  if (!outcome) return;
-  noteHoldup(taskId, null);
-  const { turn, actingUserId, source } = outcome as Claimed;
-  try {
-    const { seatThenStart } = await import("./queue-seat.js");
-    const { resumeOrRunTask } = await import("./task-resume.js");
-    const reason = source === "group" ? "group" : source === "hold" ? "hold" : "wake";
-    // 名额是按锁外读到的分组数的：认领那一步在队列认领链上再认一次分组，中途换了组就不起 —— 回合还掉，
-    // 那一放锁的一扫就按新组重排（queue-seat.ts `slotGroup`）。
-    handed = true; // 从这里起回合归 seatThenStart 还（queue-seat.ts）
-    const started = await seatThenStart(taskId, turn, () =>
-      // 不是用户当场那一下运行了：按自动起跑认（停着照样拦，turn-freeze.ts）。
-      resumeOrRunTask(taskId, { origin: "auto", reason, turnHeld: turn, actingUserId }),
-    { slotGroup: task.groupId ?? null, onStartError: (error) => { failure = error instanceof Error ? error.message : String(error); } });
-    if (started.ok) {
+    try {
+      outcome = await withPrerequisiteLock(taskId, async () => {
+        const current = await launchRecord(taskId);
+        if (!current?.requestedAt || current.giveUp) return null;
+        // 锁外预判时还没退避的，锁里再看一眼最新的：别的尝试可能刚记过一次起不来。
+        if (current.retryAt && current.retryAt > now()) return null;
+        if (attempting.has(taskId)) return null;
+        const seat = await claimLaunchTurn(taskId, task.groupId ?? null);
+        if (!seat.ok) return seat.why === "busy" ? null : seat.why;
+        owned = seat.turn;
+        attempting.add(taskId);
+        held = current.requestId;
+        // 占着回合重读：回合结算是持锁写状态的，所以这期间别处起过、跑完的，这里一定看得见。
+        const row = await readTask(taskId);
+        if (!row || !(await awaitsLaunch(row, current.source))) return "settle";
+        if ((row.groupId ?? null) !== (task.groupId ?? null)) return "regrouped";
+        if (await taskHoldOf(row)) return null;
+        if (isAcceptingTask(taskId) || await holdForPrerequisitesLocked(taskId, { source: "release", actingUserId: current.actingUserId })) return null;
+        return { turn: owned, actingUserId: current.actingUserId, source: current.source };
+      });
+    } catch (error) {
+      if (!owned) throw error; // 还没认领回合：没有放锁补扫的循环，交给调用方记日志、下一次扫描再判
+      failure = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (owned && (!outcome || typeof outcome === "string")) releaseTurn(taskId, owned);
+    }
+    if (failure !== null) return await noteStartFailure(taskId, held, failure);
+    if (outcome === "full") return noteHoldup(taskId, "full");
+    if (outcome === "settle") {
       await settleRequest(taskId, held);
       return republishPrerequisiteView([taskId]);
     }
-    if (started.regrouped) return sweepSoon();
-    failure ??= started.blockers.join("；");
-  } catch (error) {
-    if (!handed) releaseTurn(taskId, turn);
-    failure = error instanceof Error ? error.message : String(error);
+    if (outcome === "regrouped" || outcome === "churn") return sweepSoon();
+    if (!outcome) return;
+    noteHoldup(taskId, null);
+    const { turn, actingUserId, source } = outcome as Claimed;
+    try {
+      const { seatThenStart } = await import("./queue-seat.js");
+      const { resumeOrRunTask } = await import("./task-resume.js");
+      const reason = source === "group" ? "group" : source === "hold" ? "hold" : "wake";
+      // 名额是按锁外读到的分组数的：认领那一步在队列认领链上再认一次分组，中途换了组就不起 —— 回合还掉，
+      // 那一放锁的一扫就按新组重排（queue-seat.ts `slotGroup`）。
+      handed = true; // 从这里起回合归 seatThenStart 还（queue-seat.ts）
+      const started = await seatThenStart(taskId, turn, () =>
+        // 不是用户当场那一下运行了：按自动起跑认（停着照样拦，turn-freeze.ts）。
+        resumeOrRunTask(taskId, { origin: "auto", reason, turnHeld: turn, actingUserId }),
+      { slotGroup: task.groupId ?? null, onStartError: (error) => { failure = error instanceof Error ? error.message : String(error); } });
+      if (started.ok) {
+        await settleRequest(taskId, held);
+        return republishPrerequisiteView([taskId]);
+      }
+      if (started.regrouped) return sweepSoon();
+      failure ??= started.blockers.join("；");
+    } catch (error) {
+      if (!handed) releaseTurn(taskId, turn);
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    await noteStartFailure(taskId, held, failure ?? "没有拿到启动回执");
+  } finally {
+    if (owned) attempting.delete(taskId);
   }
-  await noteStartFailure(taskId, held, failure ?? "没有拿到启动回执");
 }
 
 /**
