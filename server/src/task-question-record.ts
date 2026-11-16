@@ -8,7 +8,6 @@ import type { TaskRow } from "./task-store.js";
 import { now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { questionOccurrenceOf } from "./task-wait-ownership.js";
-import { announceDispatchSignalsTo, markDispatchQuestionAnswered } from "./dispatch-signals.js";
 import { activeDispatchPlan, parseDispatchPlan } from "@ash/shared/dispatch-plan";
 
 /** 派活单被发回来改时，答复最前面那一句（智能体据此知道一条都没建）。 */
@@ -46,28 +45,15 @@ export function prepareQuestionRecord(task: TaskRow, answer: string, input: Ques
   };
 }
 
-/**
- * 整行条件写认领这一问。派出的任务的那一行提问记录（「答过了」、在派它的那条里答的那条答复，
- * dispatch-signals.ts）跟认领同一个事务：条件写命中才证明答的就是那一问。`via` 是答复者在哪条任务的
- * 页面里答的。
- */
+/** 整行条件写认领这一问：条件写命中才证明答的就是那一问。 */
 export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord,
-  onClaim?: (transaction: ConclusionTransaction) => Promise<void>, via?: string): Promise<boolean> {
-  const claim = await db.transaction((transaction) => claimQuestionAnswerWithin(transaction, task, record, onClaim, via),
-    { behavior: "immediate" });
-  claim?.announce();
-  return !!claim;
+  onClaim?: (transaction: ConclusionTransaction) => Promise<void>): Promise<boolean> {
+  return db.transaction((transaction) => claimQuestionAnswerWithin(transaction, task, record, onClaim), { behavior: "immediate" });
 }
 
-/** 认领到了：事务提交之后调 `announce` 通知派它的那条任务去重读。 */
-export type QuestionClaim = { announce: () => void };
-
-/**
- * 同上，但落在调用方的事务里：派活单「派出去」要让认领和建任务同一笔提交（dispatch-plan-launch.ts）。
- * 没认领到返回 null；认领到了，等外层事务提交之后再调返回值的 `announce`。
- */
+/** 同上，但落在调用方的事务里：派活单「派出去」要让认领和建任务同一笔提交（dispatch-plan-launch.ts）。 */
 export async function claimQuestionAnswerWithin(transaction: ConclusionTransaction, task: TaskRow, record: QuestionRecord,
-  onClaim?: (transaction: ConclusionTransaction) => Promise<void>, via?: string): Promise<QuestionClaim | null> {
+  onClaim?: (transaction: ConclusionTransaction) => Promise<void>): Promise<boolean> {
   const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
   const claimed = await transaction.update(tasks).set({
     question: null, questionOptions: null, questionItems: null, dispatchPlan: null,
@@ -81,8 +67,7 @@ export async function claimQuestionAnswerWithin(transaction: ConclusionTransacti
     task.waitOwnership === null ? isNull(tasks.waitOwnership) : eq(tasks.waitOwnership, task.waitOwnership),
     task.mode === "team" ? undefined : eq(tasks.status, task.status),
   )).returning({ id: tasks.id });
-  if (!claimed.length) return null;
-  const announce = await markDispatchQuestionAnswered(transaction, task, record, via);
+  if (!claimed.length) return false;
   await onClaim?.(transaction);
-  return { announce: () => announceDispatchSignalsTo(announce) };
+  return true;
 }

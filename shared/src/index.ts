@@ -1,7 +1,6 @@
 // Core domain types shared between server and web.
 import type { TeamConfig } from "./team.ts";
 import type { QuestionRecord } from "./questions.ts";
-export type { DispatchSignal } from "./dispatch-signals.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";

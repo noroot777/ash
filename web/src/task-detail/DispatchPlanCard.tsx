@@ -26,8 +26,6 @@ const ORDERS: DispatchOrder[] = ["serial", "parallel"];
 export type DispatchPlanCardProps = {
   task: TaskListItem;
   plan: DispatchPlan;
-  /** 摆单的是名下派出的那一条（不是这一页的任务）：它的标题。 */
-  asker?: string;
   onLaunch: (input: DispatchLaunchInput) => Promise<void>;
   /** 发回去改：就是对那一问的普通答复。 */
   onAnswer: (answer: string, input: QuestionAnswerInput) => Promise<void>;
@@ -42,7 +40,7 @@ function fallbackTarget(task: TaskListItem): DispatchRunTarget {
   };
 }
 
-export function DispatchPlanCard({ task, plan, asker, onLaunch, onAnswer, collapsed, onCollapsedChange }: DispatchPlanCardProps) {
+export function DispatchPlanCard({ task, plan, onLaunch, onAnswer, collapsed, onCollapsedChange }: DispatchPlanCardProps) {
   const { profiles } = useExecutorProfiles();
   const drawer = useLeftDrawer();
   const [order, setOrder] = useState<DispatchOrder>(plan.order);
@@ -69,7 +67,6 @@ export function DispatchPlanCard({ task, plan, asker, onLaunch, onAnswer, collap
   const unavailable = settling || sending || sent;
   const returning = !!note.trim();
   const canSend = !unavailable && (returning || rows.length > 0);
-  const label = asker ? `「${asker}」摆出的派活单` : "等你过目的派活单";
 
   const drop = (index: number, at: number) => {
     setDropped((list) => [...list, index]);
@@ -109,9 +106,9 @@ export function DispatchPlanCard({ task, plan, asker, onLaunch, onAnswer, collap
 
   if (collapsed) {
     return (
-      <section className="question-card dispatch-plan is-collapsed" aria-label={label}>
+      <section className="question-card dispatch-plan is-collapsed" aria-label="等你过目的派活单">
         <button type="button" className="question-card-peek" aria-expanded="false" onClick={() => onCollapsedChange(false)}>
-          <span>{asker && <b className="question-card-asker">「{asker}」：</b>}派出这 {rows.length} 个任务</span>
+          <span>派出这 {rows.length} 个任务</span>
           <CaretDown size={13} weight="bold" aria-hidden="true" />
         </button>
       </section>
@@ -120,10 +117,9 @@ export function DispatchPlanCard({ task, plan, asker, onLaunch, onAnswer, collap
 
   const sendLabel = sending ? (returning ? "发送中…" : "派出中…") : sent ? (returning ? "已发回" : "已派出") : returning ? "发回去改" : "派出去";
   return (
-    <section className="question-card dispatch-plan" aria-label={label} aria-busy={sending}>
+    <section className="question-card dispatch-plan" aria-label="等你过目的派活单" aria-busy={sending}>
       <header className="question-card-head">
         <div className="question-card-prompt">
-          {asker && <p className="question-card-asker">「{asker}」想派：</p>}
           <p className="dispatch-plan-title">派出这 {rows.length} 个任务</p>
         </div>
         <div className="question-card-tools">

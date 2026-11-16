@@ -27,7 +27,7 @@ import { batchPrerequisiteEdges } from "./prerequisite-routes.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { sweepPrerequisiteLaunches } from "./prerequisite-launch.js";
 import { answerRouteFor } from "./task-answer.js";
-import { claimQuestionAnswerWithin, type QuestionClaim } from "./task-question-record.js";
+import { claimQuestionAnswerWithin } from "./task-question-record.js";
 import { deliverPendingMessages, pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { createTasks, type TaskRow } from "./task-store.js";
@@ -114,13 +114,11 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
   const answer = pendingMessageRow({
     taskId: task.id, text: record.reply, ...delivery.route, ownerUserId: owner, answerId: record.id, execution: !delivery.sideways,
   });
-  let claim: QuestionClaim | null = null;
   let committed = false;
   try {
     await createTasks(rows, undefined, undefined, [], prerequisites.edges, {
       before: async (transaction) => {
-        claim = await claimQuestionAnswerWithin(transaction, task, record);
-        if (!claim) throw new PlanClaimLost();
+        if (!await claimQuestionAnswerWithin(transaction, task, record)) throw new PlanClaimLost();
         await transaction.insert(groups).values({
           id: groupId, projectId: task.projectId, name: `派出：${task.title}`.slice(0, 80), mode: groupMode, paused: false, createdAt: now(),
         });
@@ -154,7 +152,6 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
       console.error(`[ash] 派活单已派出，${what}出错 ${task.id}:`, error);
     }
   };
-  settle("通知派它的任务", () => (claim as QuestionClaim | null)?.announce());
   settle("广播收卡", () => bus.publish({
     type: "task.question", taskId: task.id, updatedAt: record.answeredAt, question: null, questionOptions: null, questionItems: null, answeredQuestion: record,
   }));

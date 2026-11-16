@@ -1,14 +1,14 @@
 // 任务页回复框里跟派活单有关的两件事（单独成文件守 TaskDetail 的 700 行）：
-//   · 「派出去」：交给 ash 照卡建（卡对的可以是名下派出的那一条自己摆的单，就送到那一条去）；
+//   · 「派出去」：交给 ash 照卡建（卡只会是这条任务自己摆的单）；
 //   · 「派出去的活交给谁」：写回这条任务。
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task } from "@ash/shared";
 import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import { api } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";
 
-export function launchPlanFromHost(notify: Notify) {
-  return async (input: DispatchLaunchInput, asking: TaskListItem) => {
-    const { tasks } = await api.launchDispatchPlan(asking.id, input);
+export function launchPlan(taskId: string, notify: Notify) {
+  return async (input: DispatchLaunchInput) => {
+    const { tasks } = await api.launchDispatchPlan(taskId, input);
     notify(`派出了 ${tasks.length} 个任务`);
   };
 }

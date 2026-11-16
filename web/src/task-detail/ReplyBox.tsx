@@ -69,7 +69,6 @@ export function ReplyBox({
   onDispatchTargetChange,
   onDiscuss,
   discussHeld = null,
-  asking,
 }: ReplyBoxProps) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -181,7 +180,7 @@ export function ReplyBox({
   // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
   // 之后选模型）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
-  const takeover = useQuestionTakeover(onAnswer ? asking === undefined ? task : asking : null);
+  const takeover = useQuestionTakeover(onAnswer ? task : null);
   const covering = takeover.covering;
   useEffect(() => {
     if (covering) setAnnotating(false);
@@ -503,7 +502,7 @@ export function ReplyBox({
       {topRail}
       </div>
       {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
-        hostId={task.id} hostDispatchTarget={dispatchDefault.value} />}
+        dispatchTarget={dispatchDefault.value} />}
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />

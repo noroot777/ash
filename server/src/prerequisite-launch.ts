@@ -140,11 +140,13 @@ async function releaseOne(taskId: string): Promise<void> {
     if (!claimed) return;
     const { turn, actingUserId } = claimed;
     let run: Promise<void> | null = null;
+    // 名额是按上面那一读的分组占的：认领那一步在链上再认一次分组，中途换了组就不起 —— 下面还掉名额，
+    // 名额一空出来的那一扫（onSlotFreed）就按新组重排（queue-seat.ts `slotGroup`）。
     const started = await seatThenStart(taskId, turn, () => {
       // 等齐之后才起，已经不是当初那一下手动运行了：按自动起跑认（停着照样拦，turn-freeze.ts）。
       run = resumeOrRunTask(taskId, { origin: "auto", reason: "wake", turnHeld: turn, actingUserId });
       return run;
-    });
+    }, { slotGroup: task.groupId ?? null });
     if (!started.ok) return;
     await db.update(taskPrerequisiteLaunches).set({ requestedAt: null }).where(eq(taskPrerequisiteLaunches.taskId, taskId));
     handed = true;

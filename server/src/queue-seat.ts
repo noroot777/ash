@@ -32,6 +32,7 @@ import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { oweQueueAdvance } from "./turn-release.js";
+import { noteSoloStart, serializeQueueClaims } from "./queue-claim-chain.js";
 
 export type QueueSeat = {
   taskId: string;
@@ -39,6 +40,12 @@ export type QueueSeat = {
   prevStatus: string;
   /** 占位落空的兜底回滚(守卫判据见模块头)。送达/正常结算后调用是 no-op,可安全多调。 */
   release(): Promise<void>;
+  /**
+   * false = 不在队列的任务拿到的那一份:没落 queued,手里只有一份「正在起跑」的凭证
+   * (queue-claim-chain.ts)。它**起跑成功也要交回** —— 不交,这个任务就一直算在起跑、永远进不了队列;
+   * 落了 queued 的那种成功时由结算覆盖,不必交。
+   */
+  holdsQueued: boolean;
 };
 
 // ── 旁路回合欠下的队列推进(第 ln9Q6IJEgmWf 链第 3、4 轮)─────────────────────────
@@ -59,7 +66,9 @@ export function noteMissedAdvance(taskId: string, queueId: string): void {
 }
 
 export type QueueSeatClaim =
-  | { ok: true; seat: QueueSeat | null } // seat=null:任务不在任何队列,没有同队语义
+  // 不在队列的任务也拿到一份 seat:它不落 queued,release() 只撤掉「正在起跑」那一笔
+  // (queue-claim-chain.ts),调用方照占位一样在放弃时交回即可。
+  | { ok: true; seat: QueueSeat }
   | {
     ok: false;
     blockers: string[];
@@ -69,6 +78,8 @@ export type QueueSeatClaim =
     transient?: boolean;
     /** 挡路的是**这个任务自己的另一代占位**,不是同队别的成员。 */
     self?: boolean;
+    /** 占名额时按的那个分组(`slotGroup`)已经不是它此刻的分组:还掉名额、按新组重排。 */
+    regrouped?: boolean;
   };
 
 // 手动启动入口(/run、/fire、/retry、重跑上一回合)的认领失败话术。transient(数据库
@@ -82,33 +93,43 @@ export function queueClaimError(r: { blockers: string[]; blocking?: readonly Que
     : queueBlockedText(r.blocking ?? []);
 }
 
-// 所有「检查整队 → 占位/落 queued」的临界区排在这一条链上依次执行。队列很小、临界区里
-// 只有几条 SQLite 查询,全局一条链足够;链上任何一次失败都不许断链(与 pending-messages
-// 的 scanChain 同款写法)。
-let chain: Promise<unknown> = Promise.resolve();
-
-export function serializeQueueClaims<T>(fn: () => Promise<T>): Promise<T> {
-  const next = chain.then(fn);
-  chain = next.catch(() => undefined);
-  return next;
-}
+// 所有「检查整队 → 占位/落 queued」的临界区,连同队列/分组归属的写方,排在同一条链上
+// 依次执行(为什么写方也得进来,见 queue-claim-chain.ts)。队列很小、临界区里只有几条
+// SQLite 查询,全局一条链足够。
+export { serializeQueueClaims };
 
 /**
  * 为 taskId 认领它所在队列的执行占位。认领到 = 任务已落 queued,调用方随后真正拉起它;
  * 被挡 = 返回挡路成员,调用方按自己的语义处理(路由 409 / 扫描按「等」记账)。
- * 不在队列的任务直接放行(seat 为 null),独立任务没有同队互斥。
+ * 不在队列的任务直接放行,独立任务没有同队互斥;但放行到它落成 running 之间不许被放进队列
+ * (queue-claim-chain.ts)。`turnHeld`:调用方认领之前就占着这个任务的回合锁、并且一直占到
+ * 起跑落定之后 —— 那把锁本身就说明它正在起跑,不必再记一笔。
+ * `slotGroup`:调用方已经按这个分组占了并发名额(launch-slots.ts)。占名额用的是链外读到的分组,
+ * 改分组可能就落在那一读与占名额之间;这里按此刻的行再认一次,不一致就不放行(`regrouped`)。
+ * 占好名额之后的改分组由换组守卫拒绝(queue-membership-guard.ts),两头合起来名额与分组始终一致。
  */
-export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
-  const item = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
-  if (!item) return { ok: true, seat: null };
+export async function claimQueueSeat(taskId: string, opts: { turnHeld?: TurnOwner; slotGroup?: string | null } = {}): Promise<QueueSeatClaim> {
   return serializeQueueClaims(async (): Promise<QueueSeatClaim> => {
+    if (opts.slotGroup !== undefined) {
+      const row = (await db.select({ groupId: tasks.groupId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+      if (!row) return { ok: false, blockers: ["任务已删除"] };
+      if ((row.groupId ?? null) !== opts.slotGroup) return { ok: false, regrouped: true, blockers: ["任务刚换了分组，按新分组重新排名额"] };
+    }
+    // 「在不在队列」也只能在临界区里判:在外面读到「不在」就直接放行,入队请求恰好落在
+    // 这一读与真正起跑之间,它就带着独立任务的身份和同队在跑的那条一起跑。
+    const item = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+    if (!item) {
+      const current = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+      if (!current) return { ok: false, blockers: ["任务已删除"] };
+      const forget = opts.turnHeld ? () => undefined : noteSoloStart(taskId);
+      return { ok: true, seat: { taskId, prevStatus: current.status, holdsQueued: false, release: async () => forget() } };
+    }
     // 成员与状态都在临界区里重读:链上前一次认领刚落的 queued,这里必须看得见。
     const items = await db
       .select()
       .from(queueItems)
       .where(eq(queueItems.queueId, item.queueId))
       .orderBy(asc(queueItems.position));
-    if (!items.some((i) => i.taskId === taskId)) return { ok: true, seat: null }; // 排队间隙被移出了队列
     const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
     const position = new Map(items.map((i) => [i.taskId, i.position]));
     const members = rows.map((r) => ({ ...r, position: position.get(r.id) ?? 0 }));
@@ -215,6 +236,7 @@ function makeSeat(reservation: TaskQueueReservation, queueId: string): QueueSeat
   return {
     taskId,
     prevStatus,
+    holdsQueued: true,
     async release() {
       if (released) return;
       released = true;
@@ -237,10 +259,12 @@ export async function seatThenStart(
   // 凭据只能由占位那一刻产生,所以它是参数。
   owner: TurnOwner,
   start: (seat: QueueSeat | null) => Promise<unknown>,
-): Promise<{ ok: true } | { ok: false; blockers: string[]; blocking?: QueueBlocker[]; transient?: boolean; self?: boolean }> {
+  /** 调用方已经按哪个分组占了并发名额(见 claimQueueSeat 的 `slotGroup`);没占名额的入口不传。 */
+  opts: { slotGroup?: string | null } = {},
+): Promise<{ ok: true } | { ok: false; blockers: string[]; blocking?: QueueBlocker[]; transient?: boolean; self?: boolean; regrouped?: boolean }> {
   let claim: QueueSeatClaim;
   try {
-    claim = await claimQueueSeat(taskId);
+    claim = await claimQueueSeat(taskId, { turnHeld: owner, slotGroup: opts.slotGroup });
   } catch (err) {
     // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimOwnTurn 之后的 500 + 锁泄漏
     // (调用方的「认领失败」分支走不到)。读失败没有写入遗留,按失败
@@ -262,7 +286,7 @@ export async function seatThenStart(
       await appendTaskTimeline(taskId, alertLine(`本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`));
     } finally {
       releaseTurn(taskId, owner);
-      await seat?.release();
+      await seat.release();
     }
   });
   return started ? { ok: true }

@@ -17,7 +17,6 @@ import { monitorHoldPatch } from "./queue-monitor-hold.js";
 import { holdOwedPatch } from "./dispatch-hold-owed.js";
 import { heldFollowUpPatch } from "./follow-up-held.js";
 import { afterStatusLanded, stageQueueAdvance } from "./turn-release.js";
-import { announceDispatchSignalsTo, writeDispatchFailureReason } from "./dispatch-signals.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -57,6 +56,11 @@ export type SetTaskStatusOptions = {
    * 把核验、等待写门、提交及广播串在一起;队列推进异步排到链尾,不在这里等待重入。
    */
   commitGuard?: (commit: () => Promise<boolean>) => Promise<boolean>;
+  /**
+   * 跟状态这一笔**同一个事务**落下的其余写入(重新排队的挪位)。状态没写中就不调;它抛错则整笔回滚,
+   * 状态也不变。只写库,别在里面发事件、推队列 —— 那些是提交之后的事。
+   */
+  alsoInTx?: (tx: StatusTxWriter) => Promise<void>;
   /**
    * 这次写 paused 是续聊/旁路回合**恢复原状态**,不是「刚跑到检查点落位」——别触发
    * 队列推进钩子。推进会把一个本就静静等着的 paused 成员(典型:队列 head 上带
@@ -105,13 +109,10 @@ export type SetTaskStatusOptions = {
    * turn-stall-verdict.ts 的 `clearStallFailure`)。
    */
   settleStallTurns?: { sessionId: string; turnStartedAt: string }[];
-  /**
-   * 落 failed 时这一轮为什么失败(一句人话)。派出的任务失败时,触发器跟这一笔同一条语句在
-   * dispatch_signals 里插一行,原因在同一个事务里写进那一行(dispatch-signals.ts)—— 派它的那条
-   * 任务里那颗气泡说得出为什么,而且不靠事后去猜「最新那一行是不是这一次」。非 failed 时忽略。
-   */
-  failedBecause?: string | null;
 };
+
+/** `alsoInTx` 在状态那一笔事务里能用的读写。 */
+export type StatusTxWriter = Pick<typeof db, "select" | "insert" | "delete" | "update">;
 
 /** 只有 `writeGuardedTaskStatus` 这一条内部入口用得到的两档:调用方自带谓词 + 占位凭证。 */
 type WriteStatusOptions = SetTaskStatusOptions & {
@@ -201,11 +202,11 @@ async function writeTaskStatus(
   // **同一个事务**提交:状态落了库,「该推进」就一定也在库里,重启能补(turn-release.ts 文件头)。
   const advance = status === "done" || status === "canceled" || status === "failed" || (status === "paused" && !quietAdvance);
   const where = and(eq(tasks.id, taskId), opts?.guard, expect ? inArray(tasks.status, expect) : undefined);
-  const { written, advanceQueueId } = advance
+  const { written, advanceQueueId } = advance || opts?.alsoInTx
     ? await db.transaction(async (tx) => {
       const written = await tx.update(tasks).set(patch).where(where).returning({ id: tasks.id });
-      if (written.length && status === "failed") await writeDispatchFailureReason(tx, taskId, updatedAt, opts?.failedBecause);
-      return { written, advanceQueueId: written.length ? await stageQueueAdvance(tx, taskId) : null };
+      if (written.length) await opts?.alsoInTx?.(tx);
+      return { written, advanceQueueId: written.length && advance ? await stageQueueAdvance(tx, taskId) : null };
     })
     : { written: await db.update(tasks).set(patch).where(where).returning({ id: tasks.id }), advanceQueueId: null };
   // 一行都没改到 = 要么状态在我读到它之后被别人改了、要么这一行已经不在了,这一笔过期。
@@ -255,7 +256,6 @@ async function writeTaskStatus(
     .where(eq(sessions.taskId, taskId));
   const timing = runs.length ? runsTiming(runs) : {};
   bus.publish({ type: "task.status", taskId, status, updatedAt, startedAt, endedAt, ...timing });
-  if (status === "failed") announceDispatchSignalsTo(cur?.dispatchedBy);
   // 托盘上「在等什么」读的就是这些状态(pending-wait.ts):本任务和同队挂着待发送消息的,通知重拉。
   void import("./pending-wait.js").then(({ republishWaitsAround }) => republishWaitsAround(taskId))
     .catch((err) => console.error(`[ash] republishWaitsAround(${taskId}) failed:`, err));

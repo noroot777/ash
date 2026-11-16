@@ -2,6 +2,7 @@ import { eq, inArray, sql } from "drizzle-orm";
 import { normalizeDuetConfig } from "@ash/shared/duet";
 import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
+import { serializeQueueClaims } from "./queue-claim-chain.js";
 import { acceptGateRuns, agents, monitors, projects, queueItems, sessions, taskBackgroundRevisions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
@@ -290,6 +291,13 @@ async function snapshotExecutor(row: NewTaskRow): Promise<string | null> {
 // 等锁可能等很久，等着的这段时间里委派来源可能已经不作数了（聊天派生的任务：群聊被删了），
 // 而 createTasks 一旦越过这里就只管把行插进去。抛出即取消创建，此时还没有分支计划、没有
 // 插入，无需回滚。放在这里而不是调用方 `await createTasks()` 之前——那太早，锁还没拿到。
+//
+// 串进队列这一种挂靠不能走 afterInsert，要走 `atomic`：任务行一插进去，调度器（分组运行、
+// 队列推进）和改分组那些写方读库就看得见它，这时队列成员还没写，它就是一条可以被单独起跑、
+// 单独改组的独立任务 —— 随后再串进队列，挂上的是一条已经在跑、或者已经换了组的任务；串不进去
+// 时再删行，删掉的可能是一条已经被人接手跑起来的任务（NJ1Maq-3KV_I 第 2 轮审查实测三种）。所以
+// 任务行与队列成员**同一笔事务**落库，且整笔排在队列认领链上（queue-claim-chain.ts）：事务没提交时
+// 同一条连接上的读看得见新行，但凡要起它、改它归属的都在链上，轮到时它已经在队里了。
 type TaskTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export async function createTasks(
@@ -301,8 +309,9 @@ export async function createTasks(
   /** 这一批里逐条写的前置（下游可以是这一批里的，前置也可以是已有的任务）。不成立就整批不建。 */
   prerequisites: PrerequisiteEdge[] = [],
   /**
-   * 要跟这批任务同一笔提交的写（派活单：认领那一问、分组、队列，dispatch-plan-launch.ts）。`before` 在插任务之前、
-   * `after` 在之后，都在同一个事务里；任一步抛错整笔回滚，一条都不留。只能用传进来的事务写，别碰根 `db`。
+   * 要跟这批任务同一笔提交的写（派活单：认领那一问、分组、队列，dispatch-plan-launch.ts；串到队尾 / 串成队列：
+   * queue-membership-guard.ts `joinQueueOnCreate`）。`before` 在插任务之前、`after` 在之后，都在同一个事务里，整笔
+   * 排在队列认领链上（见上）；任一步抛错整笔回滚，一条都不留。只能用传进来的事务写，别碰根 `db`，也别再等那条链。
    */
   atomic?: {
     before?: (transaction: TaskTransaction) => Promise<void>;
@@ -380,6 +389,7 @@ export async function createTasks(
       }
       // 合入目标要等分支计划算出来才判得了（prerequisite-store.ts），所以排在它后面、落库前面。
       // 判环与落边在整张图上排队（prerequisite-store.ts `withPrerequisiteGraph`）；不带前置的照旧直接落。
+      // 带 `atomic` 的：任务行、前置边和调用方那几笔同一笔事务，在认领链上（见上）。锁序是图 → 认领链：链上的人不会回头等图。
       const land = async () => {
         await assertPrerequisiteEdges(prerequisites, normalizedRows.map(edgeTaskOf));
         if (!atomic) {
@@ -387,12 +397,12 @@ export async function createTasks(
           await insertPrerequisiteEdges(prerequisites);
           return;
         }
-        await db.transaction(async (transaction) => {
+        await serializeQueueClaims(() => db.transaction(async (transaction) => {
           await atomic.before?.(transaction);
           await transaction.insert(tasks).values(normalizedRows);
           await insertPrerequisiteEdges(prerequisites, transaction);
           await atomic.after?.(transaction);
-        }, { behavior: "immediate" });
+        }, { behavior: "immediate" }));
         atomic.onCommitted?.();
       };
       await (prerequisites.length ? withPrerequisiteGraph(land) : land());
@@ -416,6 +426,9 @@ export async function createTasks(
   for (const task of created) bus.publish({ type: "task.created", task });
   return created;
 }
+
+/** 串进队列那一笔事务里能用的读写(createTasks 的 `atomic.after`,queue-membership-guard.ts)。 */
+export type QueueJoinWriter = Pick<typeof db, "select" | "insert">;
 
 const edgeTaskOf = (row: typeof tasks.$inferInsert & { id: string }): EdgeTask => ({
   id: row.id, projectId: row.projectId, title: row.title, mode: row.mode ?? "single", parentId: row.parentId ?? null,
