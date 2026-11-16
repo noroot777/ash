@@ -309,9 +309,13 @@
   padding-left: 4px;
 }
 
-/* 行尾那个数：名下几条。名下整棵有在等答复 / 失败的，变琥珀色。 */
+/* 行尾那个数：名下几条，前面带「派出的任务」那颗图标，跟前面的短语分开读。名下整棵有在等
+   答复 / 失败的，变琥珀色（图标跟着变）。 */
 .workspace-dispatch-count {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
   color: var(--faint);
   font-size: var(--t-xs);
   font-style: normal;

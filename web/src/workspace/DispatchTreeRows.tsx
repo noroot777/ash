@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { TaskListItem } from "@ash/shared";
+import { TreeStructure } from "@phosphor-icons/react";
 import { type LookForTask } from "../lib/useTaskReadState.ts";
 import { dispatchSubtree, dispatchTallySaid, type DispatchFacts } from "../lib/dispatchTree.ts";
 import { type DispatchForest } from "./dispatchForest.ts";
@@ -7,7 +8,8 @@ import { ParentCaret, TaskRow } from "./TaskTreeRows.tsx";
 
 // 侧栏里派出去的任务收在派它的那条下面：那一行行首是展开箭头、不画状态点（跟团队行同一种做法），
 // 它自己和名下此刻怎么样写成行尾一句短语（lib/taskLook 的 phrase），后面一个数（名下几条）。名下
-// 整棵有在等答复或失败的，那个数变琥珀色。默认收着；点开这一行就展开名下那一层（只开不收，收起
+// 整棵有在等答复或失败的，那个数变琥珀色。数前面带竖轨上「派出的任务」那一格的同一颗图标：光秃秃
+// 一个数挨着短语，「运行中 13」读出来是「13 个在运行」，其实是「它在运行、名下派了 13 条」。默认收着；点开这一行就展开名下那一层（只开不收，收起
 // 用箭头）；开过的记在本机，刷新后还开着。
 //
 // 收在谁下面由 dispatchForest.ts 算（只在画出来的那批行之间收）；那个数和它的颜色是关系事实，
@@ -139,6 +141,7 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
         tally={
           // 有箭头时数和颜色由箭头那颗键念出来；名下几条都被筛掉了、没有箭头时，读屏得在这里听到。
           <em className={`workspace-dispatch-count${needs ? " is-warn" : ""}`}>
+            <TreeStructure size={11} aria-hidden="true" />
             <span aria-hidden="true">{count}</span>
             {!expandable && <span className="task-visually-hidden">{said}</span>}
           </em>

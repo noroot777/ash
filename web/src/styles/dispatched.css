@@ -90,10 +90,14 @@
 .dispatched-row > em.is-ask { color: var(--amber); }
 .dispatched-row > em.is-bad { color: var(--red); }
 
-/* 这一行自己名下还有任务：状态词前面带侧栏那一行行尾的同一个数（.workspace-dispatch-count），
-   整棵往下有要你处理的就变琥珀色。数有自己的颜色，不跟状态词的走。 */
+/* 这一行自己名下还有任务：状态词后面带侧栏那一行行尾的同一个数、同一颗图标
+   （.workspace-dispatch-count），整棵往下有要你处理的就变琥珀色。数有自己的颜色，不跟状态词的走。 */
 .dispatched-row > em > i {
-  margin-right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  vertical-align: middle;
   color: var(--faint);
   font-style: normal;
   font-variant-numeric: tabular-nums;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
+import { TreeStructure } from "@phosphor-icons/react";
 import { taskLook } from "../../lib/taskLook.ts";
 import { dispatchHolderOf, dispatchHoldPhrase, dispatchedLive } from "../../lib/dispatchHold.ts";
 import { dispatchFacts, dispatchTally, dispatchTallySaid } from "../../lib/dispatchTree.ts";
@@ -11,8 +12,8 @@ import { DispatchHoldKey } from "./DispatchHoldKey.tsx";
 // （执行器、用时），右端是状态词。点一行在左边抽屉里打开它（会话和回复框都在，能直接对它说话）；
 // 要整页进去，抽屉头上有那颗键。
 //
-// 这一格只列直接名下的。某一行自己名下还有任务时，状态词前面带上侧栏那一行行尾的同一个数、同一个
-// 变色判据（lib/dispatchTree 的 dispatchTally）—— 不然再往下那几层失败了，格头的数变了色，格里却
+// 这一格只列直接名下的。某一行自己名下还有任务时，状态词后面带上侧栏那一行行尾的同一个数（同一颗
+// 图标、同一个变色判据，lib/dispatchTree 的 dispatchTally）—— 不然再往下那几层失败了，格头的数变了色，格里却
 // 找不到是哪一行。
 //
 // 数据就是任务列表本身（随 SSE 实时合并），新派出去的、状态变了的不用刷新就跟着变。
@@ -92,8 +93,8 @@ export function DispatchedInspector({
                   {meta && <small>{meta}</small>}
                 </span>
                 <em className={tone ? `is-${tone}` : undefined}>
-                  {tally && <i className={tally.warn ? "is-warn" : undefined} aria-hidden="true">{tally.count}</i>}
                   {word}
+                  {tally && <i className={tally.warn ? "is-warn" : undefined} aria-hidden="true"><TreeStructure size={11} />{tally.count}</i>}
                 </em>
               </button>
             </li>
