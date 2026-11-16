@@ -1,5 +1,6 @@
 import "./isolated-data.js";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -160,6 +161,11 @@ try {
     await waitFor(() => existsSync(prefix + ".pid"));
     const pid = Number(readFileSync(prefix + ".pid", "utf8"));
     pids.push(pid);
+    // 等中转真的退了、工人过继给 init 再停：工人写下 pid 时中转可能还没退干净（机器忙时常见），那一刻它还挂在
+    // 启动器的进程树上，停止会顺着树把它一起收掉 —— 那就不是「端口那条道点不到它」这个形状了。
+    if (process.platform !== "win32") {
+      await waitFor(() => execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).trim() === "1");
+    }
     const original = terminalSessions.listForProject(projectId)[0];
     const result = await stopCommand(projectId, "service", null, { portGraceMs: 50 });
     assert.equal(result.status, 200);

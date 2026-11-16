@@ -29,7 +29,7 @@ import { dirname, join } from "node:path";
 import { and, eq, or } from "drizzle-orm";
 
 const { withPrerequisiteLock } = await import("../src/prerequisite-gate.js");
-const { withdrawLaunchRequest } = await import("../src/launch-request.js");
+const { setLaunchRetryBase, withdrawLaunchRequest } = await import("../src/launch-request.js");
 const { taskPrerequisiteLaunches } = await import("../src/db/schema.js");
 const { baseRef } = await import("../src/task-branch-plan.js");
 const { journalInstall } = await import("../src/prerequisite-install.js");
@@ -226,6 +226,8 @@ try {
     writeFileSync(lock, "");
     const logged = { error: console.error, warn: console.warn };
     console.error = console.warn = () => {}; // 扫描会如实打出这次 git 失败
+    // 退避放长到十分钟：机器忙时一趟扫描自己就能花掉三十秒，那样「还在退避」这句就成了赌时间。
+    setLaunchRetryBase(10 * 60_000);
     try {
       // 两路放行同时到（放锁补扫、定时那一扫、重试凑到一起是常事）：只该撞一次。
       await Promise.all([sweepLaunchRequests(), sweepLaunchRequests()]);
@@ -235,12 +237,13 @@ try {
       rmSync(lock);
       started.push(b);
       await sweepLaunchRequests();
-      assert.equal(hasStarted(b), false, "认领之后没起来的照样退避（30 秒），不是每扫一次撞一次");
-      // 把退避拨到点，不等那 30 秒。
+      assert.equal(hasStarted(b), false, "认领之后没起来的照样退避，不是每扫一次撞一次");
+      // 把退避拨到点，不真等。
       await db.update(taskPrerequisiteLaunches).set({ retryAt: new Date().toISOString() }).where(eq(taskPrerequisiteLaunches.taskId, b));
       await sweepLaunchRequests();
       await until("故障消失后，退避一过照样起", () => hasStarted(b));
     } finally {
+      setLaunchRetryBase(30_000);
       Object.assign(console, logged);
     }
     console.log("✓ R8 放行认领回合后定起点抛错：回合归还、只记一次，故障消失后照样起");

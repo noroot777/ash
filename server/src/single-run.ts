@@ -550,6 +550,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     clearTurnStart(taskId);
     publishEvent({ kind: "system", text: STEERED_NOTE, at: endIso }, writeTurn(out, { t: "system", agent: agentType, text: STEERED_NOTE }, endIso));
     writeTurnEnd(out, endIso);
+    // 被截断的这一回合也可能攒着会话旁注（codex 收场时报的「这条恢复 thread 要作废」就是）：跟普通结算
+    // 一样在关流之前落下。漏了的话 finally 那句兜底会往已经 end 的流上写，整个 server 当场退出。
+    flushSessionNotices();
     out.end();
     return;
   }
@@ -581,8 +584,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 正常路径上上面那句已经把旁注清空了，这里是**异常路径**的保险：清库、重放、结算
     // 任何一步抛错，都不能让「这条会话作废了、下次会丢上下文」只活在实时 SSE 里 ——
     // 用户一刷新就什么都看不到，还会去重试同一条坏会话。flushSessionNotices 先取空再写，
-    // 所以正常路径走到这里必然是空的，绝不会往已经 end 掉的流上再写一次（写已 end 的
-    // 流会当场打崩 server，见 duet/turn.ts 里同样的告诫）。
+    // 关流的两处（上面被引导截断那一支、single-run-settle.ts）都在 end 之前取空过，所以正常路径
+    // 走到这里必然是空的；万一还有，它自己认得流已经关了、不会再写（写已 end 的流会当场打崩
+    // server，见 duet/turn.ts 里同样的告诫）。
     flushSessionNotices();
     await closeExecution("failed", now());
   }

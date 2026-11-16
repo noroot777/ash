@@ -439,7 +439,21 @@ assert.equal(
 
 // ── 预览站真起真收 ────────────────────────────────────────────────────────
 const { startPreview, readPreview, stopPreview } = await import("../src/preview.js");
-const port = 14000 + (process.pid % 900);
+// 三个互不相同的空闲端口：同时占住再一起放。按 pid 算端口的话，相邻 pid 的两份测试会互相撞（一个用 N、N+1，
+// 另一个用 N+1、N+2）。
+const [port, nextPort, unsafePort] = await (async () => {
+  const { createServer } = await import("node:net");
+  const { once } = await import("node:events");
+  const probes = await Promise.all([0, 1, 2].map(async () => {
+    const probe = createServer();
+    probe.listen(0, "127.0.0.1");
+    await once(probe, "listening");
+    return probe;
+  }));
+  const ports = probes.map((probe) => (probe.address() as { port: number }).port);
+  await Promise.all(probes.map((probe) => new Promise((done) => probe.close(done))));
+  return ports;
+})();
 const previewStep = makeStep("preview", "pv");
 if (previewStep.kind === "preview") {
   previewStep.p = {
@@ -458,7 +472,7 @@ if (started.ok) {
   const replacement = makeStep("preview", "pv-replacement");
   if (replacement.kind === "preview") {
     replacement.p = {
-      cmd: `node -e "if(process.env.ASH_PREVIEW_MODE!=='full')process.exit(13);require('http').createServer((q,s)=>s.end('next')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
+      cmd: `node -e "if(process.env.ASH_PREVIEW_MODE!=='full')process.exit(13);require('http').createServer((q,s)=>s.end('next')).listen(${nextPort},()=>console.log('ready on http://localhost:${nextPort}/'))"`,
       mode: "full",
       ready: "http200",
       life: "gate",
@@ -468,13 +482,13 @@ if (started.ok) {
   assert.equal(replaced.ok, true, "另一个任务的预览也能起来");
   assert.ok(readPreview("t1"), "不同 worktree/任务的预览可以并行，旧预览仍在");
   assert.ok(readPreview("t2"), "新预览有自己的记录");
-  assert.equal(await fetch(`http://localhost:${port + 1}/`).then((res) => res.text()), "next");
+  assert.equal(await fetch(`http://localhost:${nextPort}/`).then((res) => res.text()), "next");
   assert.equal(await stopPreview("t2", "测试收尾"), true);
   assert.equal(readPreview("t2"), null, "收掉之后记录一并删掉");
   const unsafe = makeStep("preview", "pv-unsafe");
   if (unsafe.kind === "preview") {
     unsafe.p = {
-      cmd: `node -e "console.log('[ash] scheduler started');require('http').createServer((q,s)=>s.end('bad')).listen(${port + 3},()=>console.log('ready on http://localhost:${port + 3}/'))"`,
+      cmd: `node -e "console.log('[ash] scheduler started');require('http').createServer((q,s)=>s.end('bad')).listen(${unsafePort},()=>console.log('ready on http://localhost:${unsafePort}/'))"`,
       mode: "command",
       ready: "http200",
       life: "gate",
@@ -484,12 +498,9 @@ if (started.ok) {
   assert.equal(refused.ok, false, "旧分支预览一旦启动真调度器必须当场拒绝");
   if (!refused.ok) assert.match(refused.reason, /真调度器/);
   assert.equal(await stopPreview("t1", "测试收尾"), true);
-  await new Promise((r) => setTimeout(r, 300));
-  assert.equal(
-    await fetch(`http://localhost:${port}/`).then(() => true).catch(() => false),
-    false,
-    "进程真被杀了,不是只删了记录",
-  );
+  const answers = () => fetch(`http://localhost:${port}/`).then(() => true).catch(() => false);
+  for (const end = Date.now() + 10_000; Date.now() < end && await answers();) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(await answers(), false, "进程真被杀了,不是只删了记录");
 }
 
 // ── 一站没过之后,线上写的那一档真的做出来了 ────────────────────────────────

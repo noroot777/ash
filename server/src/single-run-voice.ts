@@ -65,6 +65,11 @@ export function createRunVoice(a: {
     },
     flushSessionNotices: () => {
       for (const notice of sessionNotices.splice(0)) {
+        // 流已经关了就落不了盘：如实记一笔，不往上写 —— 那是一个没人接的 error 事件，会带走整个 server。
+        if ((out as { writableEnded?: boolean }).writableEnded) {
+          console.error(`[ash] task=${taskId} 的会话旁注来不及落盘（流已关闭）：${notice.text}`);
+          continue;
+        }
         writeTurn(out, { t: "system", agent: agentType, text: notice.text, level: notice.level }, notice.at, notice.identity);
       }
     },
