@@ -24,13 +24,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import { ASH_MCP_TOOLS, ASH_MCP_TURN_EXITS } from "@ash/shared/mcp";
-import { IS_WINDOWS } from "../src/platform.js";
-import { REPO_DIR } from "../src/paths.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-inject-"));
 process.env.ASH_DATA_DIR = join(root, "data");
 process.env.ASH_DB = join(root, "ash.db");
 delete process.env.ASH_LAX_DONE;
+// 数据目录在 paths.ts 加载那一刻就定下来：放在上面两句之后再 import，不然注入文件写进这份检出的 data/。
+const { IS_WINDOWS } = await import("../src/platform.js");
+const { REPO_DIR } = await import("../src/paths.js");
 
 type ErrorEvent = Extract<AgentEvent, { kind: "error" }>;
 const isAshProblem = (e: AgentEvent): e is ErrorEvent => e.kind === "error" && e.message.startsWith("ash 的工具在这一回合没接上");

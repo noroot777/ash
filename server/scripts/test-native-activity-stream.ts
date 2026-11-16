@@ -1,3 +1,4 @@
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
