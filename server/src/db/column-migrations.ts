@@ -346,7 +346,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN human_gate_id TEXT",
   // 项目级浏览器登录态授权白名单（JSON 字符串数组）。空/null = 不授权,是默认。
   "ALTER TABLE projects ADD COLUMN browser_cdp_domains TEXT",
-  // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
+  // ── 多人模式──────────────────────────────
   // 归属列。全部可空:自用模式下恒为 null,转多人时由向导一次性实名化成初始管理员。
   "ALTER TABLE tasks ADD COLUMN owner_user_id TEXT",
   "ALTER TABLE tasks ADD COLUMN executor_snapshot TEXT",

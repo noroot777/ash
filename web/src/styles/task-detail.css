@@ -12,7 +12,7 @@
 }
 
 /* 头部一行：左边说「这是哪个任务」（类型、标题、来源、图钉），右边只有图标：轮到你的那一步、
-   验收的章、更多、面板开关（docs/ui-ux-audit head-1、head-2）。 */
+   验收的章、更多、面板开关。 */
 .task-detail-header {
   --task-header-gap: 6px;
   position: relative;

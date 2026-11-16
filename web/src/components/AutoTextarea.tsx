@@ -7,7 +7,7 @@ type Props = TextareaHTMLAttributes<HTMLTextAreaElement> & {
 };
 
 /**
- * 随内容长高、没有拖拽角的输入框（docs/ui-ux-audit feed-12）。`rows` 是空着时的最少行数，
+ * 随内容长高、没有拖拽角的输入框。`rows` 是空着时的最少行数，
  * 高度只由 useAutoGrowTextarea 写——任务回复框那种带外部拖动条的仍直接用钩子。
  * 非受控（defaultValue）的框没有 value 可跟，就在每次输入时重量一遍。
  */

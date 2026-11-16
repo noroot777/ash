@@ -10,7 +10,7 @@
 // 于是自然得到个人 skill / 个人全局 CLAUDE.md·AGENTS.md / 个人插件 / 个人 CLI 设置。
 // 没有等价环境变量的 CLI(gemini 等)如实降级为「仅项目级」,并在 UI 标注 —— 不假装。
 //
-// ⚠ seed 的现状(2026-08-27 探针,见 docs/multi-user-plan.md §九):
+// ⚠ seed 的现状(2026-08-27 探针):
 //   ① 空配置目录 + 无 API key → claude 直接「Not logged in」退出,**不回落宿主钥匙串**。
 //      「配置目录即隔离/抹去订阅」成立,这是整节的地基。
 //   ② `~/.claude.json` 跟着配置目录走,宿主那份不被触碰。

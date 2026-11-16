@@ -4,7 +4,7 @@ import { HoverTip, useHoverTip, type HoverTipPlacement } from "./HoverTip.tsx";
 /**
  * 一颗只画图标的键：名字不写在键上，写在 `aria-label` 和指上去才出的提示里。
  *
- * 改版以后头上、回合尾、侧栏底都是这种键（docs/ui-ux-audit 03：右边只剩图标，名字在提示里），
+ * 改版以后头上、回合尾、侧栏底都是这种键（右边只剩图标，名字在提示里），
  * 每一处都自己拼一遍 useHoverTip + aria-label，迟早有一处漏了提示或漏了读屏名。收成一个。
  *
  * `tip` 不给就念 `label`；给了可以多说半句（快捷键、为什么点不了）。
