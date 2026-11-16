@@ -498,6 +498,21 @@ try {
     await unavailable(r, task.id, "target_unresolved", /比较基线 未能确定（无法确定目标分支）/);
     console.log("✓ 目标分支被删、被改名，或冻结的合入前那一版读不到：各个入口都说算不出来，不退回按开工点算");
   }
+  {
+    // 只有提交清单读不出来（一条说明长到撑破读取上限）、diff 是好的：清单那边给出自己的原因，不给 0，diff 照常。
+    const r = await repository();
+    const task = await r.task("long-subject", r.head());
+    r.on(task.branch, () => {
+      commit(r.repo, "own.txt", lines("own"));
+      execFileSync("git", ["-C", r.repo, "commit", "-q", "--allow-empty", "-F", "-"], { input: "x".repeat(1_100_000), stdio: ["pipe", "ignore", "pipe"] });
+    });
+    const commits = await read(`/tasks/${task.id}/commits`);
+    assert.deepEqual([commits.commits, commits.total, commits.reason], [[], null, "commit_list_unreadable"]);
+    const diff = await read(`/tasks/${task.id}/diff`);
+    assert.equal(diff.available, true);
+    assert.deepEqual(diff.files.map((file: { path: string }) => file.path), ["own.txt"]);
+    console.log("✓ 只有提交清单读不出来：清单给出原因和 null，diff 不受牵连");
+  }
   console.log("PASS: 任务改动的口径");
 } finally {
   await releaseTmpDb(); rmSync(root, { recursive: true, force: true });
