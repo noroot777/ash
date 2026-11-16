@@ -4,7 +4,8 @@
 //     选了一条之后合入分支跟着它走，合入别的分支的那条置灰并标成「对不上」；自己就不能选的已选项不参与定合入分支；
 //     不用 worktree 时，代码还在分支上的前置置灰；
 //  C2 已有的任务问的：已经是前置的、加上会成环的置灰；开工之后加不了也减不了（不再逐条判）；
-//  C3 建任务时一次请求写两条前置，要求运行时前置没齐：回「在等」、不是挡回，也不是「开不了工」。
+//  C3 建任务时一次请求写两条前置，要求运行时前置没齐：回「在等」、不是挡回，也不是「开不了工」；
+//  C4 写边时也不接已归档（还没合入）的前置：已有的任务加、新建时带，都挡回；已经合入的归档任务照样能选。
 //
 // 跑：npm -w server run test:prerequisites
 import { at, db, project, request, setup, tasks, teardown } from "./prerequisite-fixture.js";
@@ -124,7 +125,35 @@ try {
     assert.match(body.reason, /在等前置/);
   }
 
-  console.log("prerequisite candidates: draft/existing candidates, merge target follow, one-request create, waiting run passed");
+  // ── C4 写边时也不接已归档的前置（候选读的是同一条判据；选好之后才被归档的，提交时照样挡回）─────────────
+  {
+    const p = await project();
+    const subject = await p.task("subject");
+    const shelved = await p.task("shelved");
+    const merged = await p.task("merged");
+    await db.update(tasks).set({ archived: true }).where(eq(tasks.id, shelved));
+    await db.update(tasks).set({ archived: true, stage: "accepted" }).where(eq(tasks.id, merged));
+    const list = await candidates(p.key, `taskId=${subject}`);
+    assert.equal(problemOf(list, shelved), "已归档");
+    assert.equal(problemOf(list, merged), null, "已经合入的归档任务算站稳了，照样能当前置");
+
+    let res = await request("POST", `/tasks/${subject}/prerequisites`, { prerequisiteId: shelved });
+    assert.equal(res.status, 400, "已有的任务加一条已归档的前置：挡回");
+    assert.match((await res.json() as { error: string }).error, /已归档/);
+    assert.equal((await db.select().from(taskPrerequisites).where(eq(taskPrerequisites.taskId, subject))).length, 0, "一条都不落");
+
+    res = await request("POST", "/tasks", {
+      projectId: p.key, title: "建在已归档上面", body: "test", mode: "single", agentType: "claude", useWorktree: true,
+      worktreeBase: null, mergeTargetBranch: "main", workflowMode: "free", prerequisites: [shelved], createdAt: at,
+    });
+    assert.equal(res.status, 400, "新建时带着已归档的前置：挡回，任务不建");
+    assert.match((await res.json() as { error: string }).error, /已归档/);
+
+    res = await request("POST", `/tasks/${subject}/prerequisites`, { prerequisiteId: merged });
+    assert.equal(res.status, 200, await res.clone().text());
+  }
+
+  console.log("prerequisite candidates: draft/existing candidates, merge target follow, one-request create, waiting run, archived write refusal passed");
 } finally {
   await teardown();
 }

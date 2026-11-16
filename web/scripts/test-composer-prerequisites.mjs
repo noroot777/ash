@@ -91,7 +91,11 @@ try {
   await worktreeOn();
   await openLaunch();
   await page.getByRole("radio", { name: "创建并等前置" }).click();
-  assert.match(await page.getByRole("radio", { name: "创建并等前置" }).innerText(), /前置审查通过后自动开始，带着它们的代码/);
+  assert.match(await page.getByRole("radio", { name: "创建并等前置" }).innerText(), /前置审查通过后带着代码开始/);
+  // 每一档的说明都在浮层里读得完：最长的那一行不能把整列撑出内容宽度。
+  const launchRowsFit = () => page.locator(".send-key-choices").evaluate((list) =>
+    [...list.children].every((row) => row.scrollWidth <= list.clientWidth));
+  assert.equal(await launchRowsFit(), true, "启动设置各档说明不被裁掉");
   assert.match(await page.getByRole("radio", { name: "创建并排队" }).innerText(), /轮到它时自动开始/, "排队那一档照旧");
   assert.equal(await sendKey.getAttribute("aria-disabled"), "true", "一条前置都没选：点不动");
   assert.match(await blockedReason(), /选择要建在哪几条任务上面/, "说得出差什么");
@@ -192,6 +196,7 @@ try {
   // 窄屏：浮层里那几行不横向溢出。
   await page.setViewportSize({ width: 360, height: 800 });
   await openLaunch();
+  assert.equal(await launchRowsFit(), true, "窄屏下各档说明也不被裁掉");
   await page.getByRole("radio", { name: "创建并等前置" }).click();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "页面不横向溢出");
 

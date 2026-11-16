@@ -7,8 +7,6 @@
 //     （`mergeTargetBranch`，面板建任务时照它写），所以「几条前置合入的分支不一样」在这里就判出来、置灰。
 //     只有**自己就能选**的已选项才参与定合入分支：已归档、不能当前置、已经不可见的那条不能反过来把别的挤掉。
 //     因为跟这个合入分支对不上才不能选的，标 `conflict`（单独拿出来是能选的）——面板恢复草稿时只去掉自己就不成立的。
-//
-// 「已归档」只在这里挡：加边的判据不拦它，可归档的任务永远站不稳，选了只会一直等。
 import { desc, eq } from "drizzle-orm";
 import type { PrerequisiteCandidates } from "@ash/shared/prerequisites";
 import { db } from "./db/index.js";
@@ -56,7 +54,7 @@ export async function prerequisiteCandidates(projectId: string, query: Candidate
   } else {
     const useWorktree = query.useWorktree && projectHealthLight(project.repoPath).isRepo;
     const draft: EdgeTask = {
-      id: DRAFT_ID, projectId, title: "新任务", mode: "single", parentId: null, reviewOf: null, status: "backlog",
+      id: DRAFT_ID, projectId, title: "新任务", mode: "single", parentId: null, reviewOf: null, status: "backlog", archived: false,
       useWorktree, mergeTargetBranch: null, acceptedTargetBranch: null, baseTaskId: null, stage: null,
     };
     standalone = draft;
@@ -72,7 +70,6 @@ export async function prerequisiteCandidates(projectId: string, query: Candidate
 
   async function ownProblem(task: EdgeTask, row: typeof rows[number]): Promise<string | null> {
     if (taken.has(row.id)) return "已经是前置";
-    if (row.archived) return "已归档";
     return (await edgeProblem(task, row, known))?.brief
       ?? (graph && reaches(graph, row.id, task.id) ? cycleProblem(task, row).brief : null);
   }

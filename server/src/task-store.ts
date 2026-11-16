@@ -419,7 +419,7 @@ export async function createTasks(
 
 const edgeTaskOf = (row: typeof tasks.$inferInsert & { id: string }): EdgeTask => ({
   id: row.id, projectId: row.projectId, title: row.title, mode: row.mode ?? "single", parentId: row.parentId ?? null,
-  reviewOf: row.reviewOf ?? null, status: row.status ?? "backlog", useWorktree: !!row.useWorktree,
+  reviewOf: row.reviewOf ?? null, status: row.status ?? "backlog", archived: !!row.archived, useWorktree: !!row.useWorktree,
   mergeTargetBranch: row.mergeTargetBranch ?? null, acceptedTargetBranch: row.acceptedTargetBranch ?? null,
   baseTaskId: row.baseTaskId ?? null, stage: row.stage ?? null,
 });

@@ -15,7 +15,7 @@ export type LaunchMode = "create" | "run" | "queue" | "prerequisites" | Schedule
 const LAUNCH_OPTIONS: { value: LaunchMode; label: string; text: string; glyph: SendKeyGlyph; say: string }[] = [
   { value: "run", label: "创建并运行", text: "", glyph: "caret", say: "创建后立即开始执行" },
   { value: "queue", label: "创建并排队", text: "创建并排队", glyph: "sand", say: "入队不起跑，轮到它时自动开始" },
-  { value: "prerequisites", label: "创建并等前置", text: "创建并等前置", glyph: "sand", say: "前置审查通过后自动开始，带着它们的代码" },
+  { value: "prerequisites", label: "创建并等前置", text: "创建并等前置", glyph: "sand", say: "前置审查通过后带着代码开始" },
   { value: "create", label: "仅创建", text: "创建任务", glyph: "caret", say: "先放入待办，需要时再运行" },
   { value: "once", label: "一次性定时", text: "创建并定时", glyph: "clock", say: "在指定的时间运行一次" },
   { value: "cron", label: "循环 Cron", text: "创建并定时", glyph: "clock", say: "按 Cron 表达式循环运行" },

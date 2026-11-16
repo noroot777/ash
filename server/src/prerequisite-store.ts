@@ -3,6 +3,8 @@
 // 一条边能不能成立，判据只在 `edgeProblem` 一处（建任务时逐条写的、建好之后加的都过它）：
 //   · 两头都是同项目里的普通任务（团队调度台、团队执行者、审查任务都不算）；
 //   · 下游还没开工：起点一旦按前置定下来，再加减前置就改不了它手里的代码了；
+//   · 前置没归档（已经合入的除外）：归档了的任务不会再往前走，建在它上面只会一直等。已经建好的边、前置后来才被
+//     归档的不在这里管，那是「在等的那条已归档」，由用户去处理（prerequisite-standing.ts）；
 //   · 不成环；
 //   · 两头都用 worktree 时，前置最终合入的分支要跟下游一致 —— 否则前置的代码进不了下游要合入的那条分支，
 //     下游的验收永远等不到它。已经合入的前置不受这条限制：它的代码已经在目标分支上了。
@@ -16,7 +18,7 @@ import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 /** 校验只用到的那几列：新建的行（还没落库）也能直接拿来判。 */
-export type EdgeTask = Pick<TaskRow, "id" | "projectId" | "title" | "mode" | "parentId" | "reviewOf" | "status"
+export type EdgeTask = Pick<TaskRow, "id" | "projectId" | "title" | "mode" | "parentId" | "reviewOf" | "status" | "archived"
   | "useWorktree" | "mergeTargetBranch" | "acceptedTargetBranch" | "baseTaskId" | "stage">;
 export type PrerequisiteEdge = { taskId: string; prerequisiteId: string };
 
@@ -145,6 +147,9 @@ export async function edgeProblem(task: EdgeTask, prerequisite: EdgeTask, known:
   }
   const subject = await subjectProblem(task, known);
   if (subject) return subject;
+  if (prerequisite.archived && !isAcceptedStage(prerequisite.stage as TaskStage | null)) {
+    return problemOf("已归档", `${name(prerequisite)}已归档，不会再往前走，建在它上面只会一直等它`);
+  }
   const kind = await nonOrdinaryKind(prerequisite, known);
   if (kind) return problemOf(kind, `${name(prerequisite)}不是普通任务（团队、团队执行者、审查任务不能当前置）`);
   // 不用独立工作区的任务在项目目录里干活，拿不到还在前置分支上的代码（验收前它不在任何检出里）。
