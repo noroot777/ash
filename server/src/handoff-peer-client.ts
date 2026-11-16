@@ -129,6 +129,27 @@ export async function fetchPeer<T>(
   return payload as T;
 }
 
+// 对端 ash 刚重启时，本机连接池里可能还留着通往旧进程的长连接：请求写进一条对面早已关掉的
+// 连接，拿到的是「other side closed」/ECONNRESET 而不是应答，探测就被记成「核对不过」——
+// 用户再点一次才好。下面两个探测都是只读的（不带本机签名、不改对端任何状态），这类连接层
+// 错误就换一条新连接再试**一次**。拿到了应答（哪怕验签不过）、超时、连不上，都不重试。
+const STALE_CONNECTION_CODES = new Set(["UND_ERR_SOCKET", "UND_ERR_CLOSED", "ECONNRESET", "EPIPE"]);
+
+function staleConnection(error: unknown): boolean {
+  const code = (error instanceof Error ? error.cause as { code?: unknown } | undefined : undefined)?.code;
+  return typeof code === "string" && STALE_CONNECTION_CODES.has(code);
+}
+
+async function fetchReadOnlyProbe(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const attempt = () => fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  try {
+    return await attempt();
+  } catch (error) {
+    if (!staleConnection(error)) throw error;
+    return await attempt();
+  }
+}
+
 /**
  * 只读取目标机公开身份，不带本机签名、不携带任务 id，也不会触发对端 touchPeer。
  * 批量弹窗用它把用户填写的主机名/IP 映射到 marker 指纹；正式预检仍会做签名挑战。
@@ -137,7 +158,7 @@ export async function probePeerIdentity(rawTargetUrl: string, timeoutMs = 2_000)
   const url = `${normalizePeerUrl(rawTargetUrl)}/api/handoff/identity`;
   let response: Response;
   try {
-    response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    response = await fetchReadOnlyProbe(url, {}, timeoutMs);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new HandoffError(`连不上对端 ash（${url}）：${message}`, 502, true);
@@ -175,10 +196,9 @@ export async function probeSignedPeerFingerprint(
   try { base = normalizePeerUrl(rawTargetUrl); } catch { return null; }
   const nonce = newNonce();
   try {
-    const response = await fetch(`${base}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`, {
+    const response = await fetchReadOnlyProbe(`${base}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`, {
       redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    }, timeoutMs);
     if (!response.ok) return null;
     const ping = (await response.json().catch(() => null)) as HandoffPingResponse | null;
     if (!ping?.ok || ping.service !== "ash") return null;
