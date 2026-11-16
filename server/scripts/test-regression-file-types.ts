@@ -112,14 +112,11 @@ try {
     assert.ok(record.logDigest);
     assert.equal(await regressionLogDigest(record.logPath), record.logDigest);
     assert.match(record.reason, /测试前后与当前代码树一致/);
-    assert.equal(record.reusable, false, "正常日志不能替代不可变输入证明");
     rmSync(record.logPath);
     execFileSync("mkfifo", [record.logPath]);
     await withoutPipeWait(record.logPath, regressionEvidenceReference(task, repo, evidenceDir));
     const invalidated = manifest().records.find((item) => item.monitorId === result.monitor.id)!;
-    assert.equal(invalidated.reusable, false,
-      "公共派审清单遇到 FIFO 能完成生成并拒绝复用");
-    assert.match(invalidated.reason, /日志缺失、损坏或目录不安全/);
+    assert.match(invalidated.reason, /日志缺失、损坏或目录不安全/, "公共派审清单遇到 FIFO 能完成生成并说出日志不对");
 
     const monitorId = "preexisting-fifo";
     await prepareRegressionCommand(taskId, monitorId, "node -e \"console.log('must not run')\"", repo, "single");

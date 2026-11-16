@@ -136,7 +136,10 @@ try {
   assert.match(delivered[0]!, /当前方向身份/);
   invalidForward = true;
   authorizeWholeMessage = true;
-  for (const [index, command] of naturalSideRequests.entries()) {
+  // 核验器在这里是假的（authorizeWholeMessage 一个开关定结果），措辞换哪句都走同一条路：每张表取两句
+  // 当代表，验的是「放行 → 入队投给绑定的主任务」「拒绝 → 不入队也不投」这条管线。哪些措辞算授权只有
+  // 真模型判得了，整张表留给手动跑的 test-side-authorization-cli.ts。
+  for (const [index, command] of naturalSideRequests.slice(0, 2).entries()) {
     const reply = await send(command, `review-natural-${index}`);
     await until(async () => (await snapshot("side-room")).messages.at(-1)?.forward?.status === "sent");
     assert.equal(reply.body, fakeReply);
@@ -159,7 +162,7 @@ try {
   authorizeWholeMessage = true;
   runs.untrackRun("parent", handle); runs.trackRun("parent", native);
   runs.bindNativeSteer("parent", native, { agentType: "codex", record: () => {} });
-  for (const [index, command] of rejectedSideRequests.entries()) {
+  for (const [index, command] of rejectedSideRequests.slice(0, 2).entries()) {
     const rejected = await send(command, `review-rejected-${index}`);
     assert.equal(rejected.status, "done");
     assert.equal(rejected.body, fakeReply);
@@ -170,7 +173,7 @@ try {
     assert.equal(delivered.length, nativeCount, "即使 native 可用也不投递");
   }
   authorizeWholeMessage = false;
-  for (const [index, command] of deferredSideRequests.entries()) {
+  for (const [index, command] of deferredSideRequests.slice(0, 2).entries()) {
     const reply = await send(command, `review-deferred-excerpt-${index}`);
     assert.equal(reply.body, fakeReply);
     assert.ok(reply.forwardError, command);

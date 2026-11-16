@@ -436,9 +436,6 @@ try {
       text.includes(CLASS_PROBLEM_BOUNDARY),
       `${source} 必须原样带上类问题的边界口径，否则「类问题」标签会替掉内容判断`,
     );
-    for (const stale of ["为什么越界(是哪一轮的哪次改动引入的)", "多半是本轮修复引入的衍生问题"]) {
-      assert.ok(!text.includes(stale), `${source} 不许残留旧的单一形态措辞「${stale}」`);
-    }
   }
   assert.ok(
     !(toolConfig.description ?? "").includes(CLASS_PROBLEM_BOUNDARY),

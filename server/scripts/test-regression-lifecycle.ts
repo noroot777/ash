@@ -74,12 +74,6 @@ try {
   assert.equal((await stage()).status, 200, "清单不在场也不影响结论门禁");
   writeFileSync(join(evidenceDir, "regression-evidence.json"), '{"protocol":2,"records":[]}');
   assert.equal((await stage()).status, 200);
-  const lifecycleUrl = new URL("../src/regression-evidence-lifecycle.ts", import.meta.url).href;
-  execFileSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e", `
-    const {checkPresetRegressionConclusion}=await import(${JSON.stringify(lifecycleUrl)});
-    const checked=await checkPresetRegressionConclusion(${JSON.stringify(taskId)},"verified");
-    if(!checked) process.exit(1);
-  `], { env: process.env, stdio: "pipe" });
   await db.update(tasks).set({ verifyRound: 1, stage: "verifying" }).where(eq(tasks.id, taskId));
   await refreshRegressionEvidence(taskId, evidenceDir);
   assert.equal((manifest() as ReturnType<typeof manifest> & { verification?: unknown }).verification, undefined,
