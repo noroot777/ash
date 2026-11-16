@@ -162,7 +162,7 @@ function Fixture() {
         <TaskTree
           projects={[project]} currentProjectId={project.id} scope={{ kind: "project", projectId: project.id }}
           tasks={db.tasks} selectedTaskId="lead" selectedRemoteTaskId={null} spread={idleSpread}
-          onTask={() => {}} onRemoteTask={() => {}} onTaskStarred={() => {}} onHandoffFinished={() => {}} onQueueChanged={() => {}}
+          onTask={() => {}} onRemoteTask={() => {}} onHandoffFinished={() => {}} onQueueChanged={() => {}}
           outbound={{ outboundCount: 0, offlinePeers: [], asked: true, refreshing: false, onRefresh: () => {} }}
           notify={() => {}}
         />

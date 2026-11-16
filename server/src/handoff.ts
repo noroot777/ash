@@ -506,7 +506,7 @@ export async function exportHandoff(
           acceptedMergeMethod: task.acceptedMergeMethod,
           acceptedGateMode: task.acceptedGateMode as HandoffManifest["task"]["acceptedGateMode"],
           acceptedGateRunId: task.acceptedGateRunId, acceptanceId: task.acceptanceId,
-          pinnedAt: task.pinnedAt, starredAt: task.starredAt,
+          pinnedAt: task.pinnedAt,
           createdAt: task.createdAt, startedAt: task.startedAt, endedAt: task.endedAt,
         },
         sessions: rows.map((s) => ({

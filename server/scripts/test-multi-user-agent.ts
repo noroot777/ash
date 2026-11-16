@@ -1,5 +1,4 @@
-// agent 回合凭证的**边界**:它代表的是那一条任务,不是任务 owner 的账号(§三,
-// `docs/multi-user-plan.md:50`「有效回合凭证 → 任务归属项目」)。
+// agent 回合凭证的**边界**:它代表的是那一条任务,不是任务 owner 的账号。
 //
 // 第 2 轮审查 P1 实测过的越界(共享账号下,owner 同时是多个项目的成员):只带
 // `x-ash-source-task-id` + `x-ash-turn-token` 的请求能

@@ -1,4 +1,4 @@
-// 一条消息从发出到这一回合收口是同一个身份（docs/ui-ux-audit 08 工程前提）：直播里的号、客户端的
+// 一条消息从发出到这一回合收口是同一个身份：直播里的号、客户端的
 // 号、落盘那一套号各不相同，React 的 key 不能跟着换，否则收口那一刻整条回复卸掉重建。
 // 跑:npm -w web run test:conversation-keys
 import assert from "node:assert/strict";

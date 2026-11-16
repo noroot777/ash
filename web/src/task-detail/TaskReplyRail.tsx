@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 
-// 输入框正上方那一条：只放状态（docs/ui-ux-audit reply-3）。动作都挪进了框里那一行
+// 输入框正上方那一条：只放状态。动作都挪进了框里那一行
 // （TaskReplyActions.tsx），排着的消息、在传的附件由回复框自己摆。
 export function TaskReplyRail({ gateWait }: {
   /**

@@ -291,7 +291,7 @@ assert.match(css, /\.scheduled-message-row:focus-within \.scheduled-message-reve
 assert.match(css, /@media \(hover: none\) \{ \.scheduled-message-reveal \{ opacity: 1; \} \}/, "触屏没有悬停,指到才出的键一直在");
 assert.doesNotMatch(readSource(new URL("../src/styles/reply.css", import.meta.url)), /scheduled-message/, "托盘的样式只在它自己那份文件里");
 const replySource = readSource(new URL("../src/task-detail/ReplyBox.tsx", import.meta.url));
-// 输入框里只写「回复…」（docs/ui-ux-audit reply-1）；队尾那颗引导键自己指上去说它做什么。
+// 输入框里只写「回复…」；队尾那颗引导键自己指上去说它做什么。
 assert.match(replySource, /: "回复…"/, "回复框占位只写「回复…」，原因只在发不出去时才写进去");
 assert.match(
   readSource(new URL("../src/components/ScheduledMessageRow.tsx", import.meta.url)),

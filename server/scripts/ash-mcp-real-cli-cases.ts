@@ -90,7 +90,7 @@ export async function checkRealCodexAppServer(root: string): Promise<void> {
   const probe = async (config: string, injected: ReturnType<typeof entry>) => {
     const home = mkdtempSync(join(root, "codex-app-"));
     writeFileSync(join(home, "config.toml"), config);
-    const launch = resolveLaunch("codex", ["app-server", "--stdio", ...codexAshMcpArgs([], injected)])!;
+    const launch = resolveLaunch("codex", ["app-server", "--stdio", ...codexAshMcpArgs(undefined, injected)])!;
     const child = spawn(launch.file, launch.args, {
       cwd: home, env: { ...process.env, CODEX_HOME: home }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),

@@ -115,7 +115,7 @@ function AgentMessageView({
   const cause = turnCauseText(item);
   // 轮次徽标只是审查者气泡上「第 N 轮审查」的复读，摊开的那一轮里一律不出。
   const showBadge = !!reviewer && !item.continuation && !laneRole;
-  // 回合头只留名字（docs/ui-ux-audit feed-1）：模型、智能水平、时间、用时排成一句，
+  // 回合头只留名字：模型、智能水平、时间、用时排成一句，
   // 指到这一回合才出现。审查者气泡上已经说过时间的那条（lead）不再说。
   const meta = [
     showIdentity && item.run ? item.run.model || "CLI 默认" : null,
@@ -168,7 +168,7 @@ function AgentMessageView({
 type AgentMessageProps = Parameters<typeof AgentMessageView>[0];
 
 /**
- * 已经收口的回合不跟着别人的事件重渲（docs/ui-ux-audit 08 的两条工程前提之一）。会话每来一条
+ * 已经收口的回合不跟着别人的事件重渲。会话每来一条
  * 事件，整份条目都会重新拼一遍、每一条都是新对象；还在说的那一回合要跟着变，说完的那些只在
  * 它自己真的变了时才重画（重读回来补上了执行过程、被删了一截、旁边多了回执）。回调只认有没有：
  * 它们闭包里拿的都是稳定的 setter / 派发函数。

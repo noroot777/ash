@@ -23,7 +23,7 @@ try {
   const oldJia = page.getByRole("button", { name: "很久以前的任务甲" });
   const oldYi = page.getByRole("button", { name: "很久以前的任务乙" });
   const oldBing = page.getByRole("button", { name: "很久以前的任务丙" });
-  const oldStarred = page.getByRole("button", { name: "很久以前但加了星" });
+  const oldFailed = page.getByRole("button", { name: "很久以前但失败了" });
   const oldUnaccepted = page.getByRole("button", { name: "很久以前但没验收" });
   const expand = page.getByRole("button", { name: "展开(3/3)" });
   const collapse = page.getByRole("button", { name: "收起", exact: true });
@@ -38,36 +38,27 @@ try {
   assert.equal(await handoffInRow.count(), 1, "转入的任务按普通任务展示");
   assert.equal(await handoffInMark.count(), 0, "转入的任务不再挂接力标记");
   assert.equal(await handoffOutMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "0");
-  // 行尾那批(meta 图标、星标)在 hover 和**选中**两种状态下都要浮出来,标题必须同步让开
-  // 它们。曾经只有 hover 让位、选中不让:鼠标一移开,标题就叠印在小飞机和星星上。
-  // 判据用同一行在三种状态下的标题遮罩:选中态必须和 hover 态一模一样,且都不同于静置。
+  // 行尾那批 meta 图标在 hover 和**选中**两种状态下都要浮出来,标题的遮罩也必须两种状态一致。
+  // 曾经只有 hover 让位、选中不让:鼠标一移开,标题就叠印在小飞机上。
   const titleMask = () => handoffPendingRow.evaluate((node) =>
     getComputedStyle(node.closest(".workspace-task-row-wrap").querySelector(".workspace-task-title")).maskImage);
-  const idleMask = await titleMask();
   await handoffPendingRow.hover();
   // meta 淡入有 130ms 过渡，等它跑完再读：固定睡一会儿在并行跑、帧被压慢时会读到半截透明度。
   await animationsSettled(page);
   assert.equal(await handoffOutMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "1", "指向转出任务时标记应显示");
   const hoverMask = await titleMask();
-  assert.notEqual(hoverMask, idleMask, "指到时标题要额外让开星标那格");
   await handoffPendingRow.click();
   await page.mouse.move(4, 4);
   // 移开鼠标后 hover 那组过渡开始回落：同上，等页面上的 CSS 过渡跑完再读，不睡固定时长。
   // 等之前先过一帧，让 hover 状态的变化落成样式（过渡在样式重算时才创建）。
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
   await animationsSettled(page);
-  const selectedTail = await handoffPendingRow.evaluate((node) => {
-    const wrap = node.closest(".workspace-task-row-wrap");
-    return {
-      meta: getComputedStyle(wrap.querySelector(".workspace-task-meta")).opacity,
-      star: getComputedStyle(wrap.querySelector(".workspace-task-star")).opacity,
-    };
-  });
-  assert.equal(selectedTail.meta, "1", "选中的行也要露出 meta 图标");
-  assert.equal(selectedTail.star, "1", "选中的行也要露出星标");
+  const selectedMeta = await handoffPendingRow.evaluate((node) =>
+    getComputedStyle(node.closest(".workspace-task-row-wrap").querySelector(".workspace-task-meta")).opacity);
+  assert.equal(selectedMeta, "1", "选中的行也要露出 meta 图标");
   assert.equal(await titleMask(), hoverMask, "选中态的标题让位必须和 hover 一致,否则鼠标一移开文字就压在图标上");
   assert.equal(await oldJia.count(), 0, "默认只显示 24 小时内的任务");
-  assert.equal(await oldStarred.count(), 1, "星标的任务再旧也不进折叠");
+  assert.equal(await oldFailed.count(), 1, "失败的任务再旧也不进折叠");
   assert.equal(await oldUnaccepted.count(), 1, "还没验收的任务再旧也不进折叠");
   await expand.click();
   await oldJia.waitFor();
@@ -83,7 +74,7 @@ try {
   assert.equal(await oldYi.count(), 0);
   assert.equal(await oldBing.count(), 0);
   assert.equal(await recent.count(), 1);
-  assert.equal(await oldStarred.count(), 1, "收起之后星标的仍然在");
+  assert.equal(await oldFailed.count(), 1, "收起之后失败的仍然在");
   assert.equal(await oldUnaccepted.count(), 1, "收起之后未验收的仍然在");
 
   console.log("✓ 任务树预览：展开后点旧任务，收起仍能收回去");

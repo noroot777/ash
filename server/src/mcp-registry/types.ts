@@ -329,7 +329,7 @@ export type AshMcpIdentity =
    * ash 每回合开一个一次性目录、把 `identity.json` 放进去、把目录追加到 `PATH` 末尾,
    * MCP 侧在变量都不在时读它。约定与四条安全要点见 `@ash/shared/mcp` 的
    * `ASH_TURN_IDENTITY_PATH_DIR`,两侧实现在 `server/src/turn-identity.ts` 与
-   * `mcp/src/runtime.ts`。
+   * `mcp/src/turn-identity.ts`。
    *
    * 这一档**不需要在登记里写任何东西**(写进 `env` 的只有静态的 `ASH_URL`)。
    */

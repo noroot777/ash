@@ -457,7 +457,7 @@ export class ClaudeExecutor implements AgentExecutor {
     if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);
     // ash 自己的 MCP 起跑时注入:同名以最后一个 `--mcp-config` 为准,所以排在全部参数之后(ash-mcp-inject.ts)。
-    const ash = claudeAshMcpInjection();
+    const ash = claudeAshMcpInjection(opts.env);
     args.push(...ash.args);
     return { args, ash };
   }

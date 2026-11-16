@@ -213,6 +213,7 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "accept_gate_runs", column: "diagnosis", why: "门禁事后归因已删除" },
   { table: "accept_gate_runs", column: "miss_attribution", why: "门禁事后归因已删除" },
   { table: "accept_gate_runs", column: "diagnosis_generation", why: "门禁事后归因已删除" },
+  { table: "tasks", column: "starred_at", why: "星标已移除" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。

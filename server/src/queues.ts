@@ -43,6 +43,20 @@ export async function repackQueue(queueId: string, orderedTaskIds: string[], wri
   await (writer ? write(writer) : db.transaction(write));
 }
 
+// 删任务只在删行那一批里摘掉自己那一格(task-delete-routes.ts),后面的成员原位不动、中间
+// 留下缺号。删完在认领链上按现有先后重排一遍，再给剩下的成员补发快照:它们的名次都变了。
+// 不推进 updatedAt —— 同队删掉一条不是这些任务自己的动静，推了会把一串早已收尾的任务顶到列表最前。
+export async function closeQueueGap(queueId: string): Promise<void> {
+  const remaining = await serializeQueueClaims(async () => {
+    const items = await db.select({ taskId: queueItems.taskId }).from(queueItems)
+      .where(eq(queueItems.queueId, queueId)).orderBy(asc(queueItems.position));
+    const ids = items.map((item) => item.taskId);
+    await repackQueue(queueId, ids);
+    return ids;
+  });
+  await Promise.all(remaining.map((taskId) => publishTaskUpdated(taskId)));
+}
+
 // 队列变更后给受影响的任务补发 task.updated:Task 的 queueId/queuePosition 是从
 // queue_items 派生的,只动 queue_items 不动 tasks 表,不发事件的话所有已打开的
 // 页面(行徽标、详情队列区块)都会停在变更前的快照上。

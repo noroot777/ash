@@ -1,7 +1,7 @@
 // 执行过程那一串怎么说成人话:每一行(describeEvent)、在跑时折叠条上那一句(liveLabel)、
 // 做完以后的过去式摘要(pastSummary)。工具那一部分的翻译在 toolPhrase.ts。
 //
-// 摘要的说法照样机(docs/ui-ux-audit/demo/live-words.js 的 summarize):「读了 3 个文件，搜了 1 次，
+// 摘要的说法:「读了 3 个文件，搜了 1 次，
 // 改了 2 个文件，另有 1 步」。读、改按文件去重;只说前三类,其余并成「另有 N 步」;相邻两类
 // 都是「文件」时后一类省掉名词。只有一步时直接说那一步:「读了 ReplyBox.tsx」。
 import { isVisibleExecutionEvent, type ExecutionEvent } from "./executionTrace.ts";

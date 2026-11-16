@@ -136,7 +136,6 @@ try {
       acceptedTargetBranch: stage ? "main" : null,
       acceptedBaseCommit: stage ? originBase : null,
       pinnedAt: null,
-      starredAt: null,
       createdAt: now(),
       startedAt: now(),
       endedAt: now(),

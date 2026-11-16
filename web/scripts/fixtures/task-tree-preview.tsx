@@ -84,8 +84,8 @@ const tasks: Task[] = [
   task("old-1", "很久以前的任务甲", old),
   task("old-2", "很久以前的任务乙", old),
   task("old-3", "很久以前的任务丙", old),
-  // 这两条是「永不折叠」的两种理由：用户加的星标，和还没盖的章。
-  task("old-starred", "很久以前但加了星", old, { starredAt: now - 5 * 60 * 1000 }),
+  // 这两条是「永不折叠」的两种理由：坏在半路的活，和还没盖的章。
+  task("old-failed", "很久以前但失败了", old, { status: "failed" }),
   task("old-unaccepted", "很久以前但没验收", old, { stage: null }),
 ];
 
@@ -113,7 +113,6 @@ function Ash() {
         selectedTaskId={selectedTaskId}
         spread={spread}
         onTask={(next) => setSelectedTaskId(next.id)}
-        onTaskStarred={() => {}}
         notify={() => {}}
       />
     </main>
