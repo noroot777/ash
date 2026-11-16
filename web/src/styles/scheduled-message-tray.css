@@ -74,3 +74,17 @@
 /* 「某某名下已全部停下」那一格：点过去到那一条里接着跑。样子仍是那一格的字，指到才像链接。 */
 .scheduled-message-when.is-link { border: 0; background: transparent; padding: 0; font: inherit; font-size: var(--t-xs); text-align: left; cursor: pointer; }
 .scheduled-message-when.is-link:hover, .scheduled-message-when.is-link:focus-visible { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+
+/* 还在盯的哨兵（components/MonitorTrayRow.tsx）：跟排队消息同一张网格。收着那一行上的「哨兵 N」前面一颗
+   琥珀色的脉冲，有会叫醒任务的哨兵在盯时缓缓地动；只剩内置 Monitor（不会叫醒任务）时是灰的、不动。 */
+.scheduled-tray-sep { color: var(--faint); font-weight: var(--w-regular); }
+.scheduled-tray-monitors { display: inline-flex; align-items: center; gap: 4px; }
+.scheduled-tray-monitors > svg { color: var(--faint); }
+.scheduled-tray-monitors.is-live > svg { color: var(--amber); animation: scheduled-tray-beat 2.4s ease-in-out infinite; }
+@keyframes scheduled-tray-beat { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .scheduled-tray-monitors.is-live > svg { animation: none; } }
+.scheduled-monitor-body > code { display: block; margin-bottom: 6px; color: var(--ink); font-family: var(--font-mono); font-size: var(--t-xs); white-space: pre-wrap; }
+.scheduled-monitor-body > p { margin: 4px 0 0; }
+.scheduled-monitor-body q { color: var(--ink); quotes: "「" "」"; }
+.scheduled-monitor-body p code { border-radius: 4px; background: var(--overlay); padding: 0 3px; font-family: var(--font-mono); }
+.scheduled-monitor-body .is-stuck { color: var(--amber); }

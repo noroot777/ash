@@ -4,7 +4,6 @@ import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
-import { MonitorWaitLine } from "../monitors/MonitorWaitLine.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { TaskFileLinks } from "../components/TaskFileLink.tsx";
@@ -109,7 +108,7 @@ export function TaskDetail({
   const conversation = useConversation(task.id);
   // 左边那几屉（子智能体 / 读全文 / 派出的任务，互斥）和 Inspector 栈，整块在 useTaskDrawers.tsx。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts, leftDrawer, dispatched, closeDrawers, drawers } = useTaskDrawers({
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, free, runFacts, leftDrawer, dispatched, closeDrawers, drawers } = useTaskDrawers({
     task, allTasks, conversation, onOpenTask,
     renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
   });
@@ -532,25 +531,25 @@ export function TaskDetail({
                       tasks={allTasks}
                       hasConversation={hasConversation}
                       conversationItems={conversation.items}
-                      // 框上方只放状态：还有哨兵在盯时那一行（任务在跑、在等都在），和验收前置命令那一条。
-                      // 验收前置命令点了验收之后在工作区里跑十几分钟,
+                      // 还在盯的哨兵跟排队消息并在框上方同一块里（任务在跑、在等都在）。
+                      monitors={{
+                        live: liveMonitors,
+                        running: task.status === "running" || task.status === "queued",
+                        resumePrompt: task.resumePrompt ?? null,
+                        reviewArmed: !!free.state?.reviewReservation.armed,
+                        onOpen: (monitorId) => openTab("monitors", { monitorId }),
+                        onStop: async (monitor) => {
+                          const running = task.status === "running" || task.status === "queued";
+                          try { await api.stopMonitor(monitor.id, `用户在回复框上方点了「${running ? "停掉" : "不等了"}」`); }
+                          catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }
+                        },
+                      }}
+                      // 框上方另一样状态：验收前置命令那一条。点了验收之后它在工作区里跑十几分钟,
                       // 而任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页上就完全
                       // 看不出有东西在跑(时间轴那行很快被顶走)。
                       // 卡自己判要不要出现（它读门禁状态，不只看任务投影），没在跑时这一条是空的、不占地方。
                       topRail={(
                         <TaskReplyRail
-                          monitorWait={(liveMonitors.length > 0 || liveBuiltinCount > 0) && (
-                            <MonitorWaitLine
-                              key={`monitor-wait:${task.id}`}
-                              monitors={liveMonitors}
-                              builtinCount={liveBuiltinCount}
-                              resumePrompt={task.resumePrompt ?? null}
-                              reviewArmed={!!free.state?.reviewReservation.armed}
-                              running={task.status === "running" || task.status === "queued"}
-                              onOpenPanel={() => openTab("monitors", liveMonitors[0] ? { monitorId: liveMonitors[0].id } : undefined)}
-                              notify={notify}
-                            />
-                          )}
                           gateWait={(
                             <AcceptGateWaitCard
                               key={`accept-gate:${task.id}`}

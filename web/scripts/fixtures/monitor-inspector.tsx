@@ -5,7 +5,7 @@
 //   跟 TaskDetail 一样——Host 自己是按 contextKey 重挂的，hook 不是）；
 // - 「用过才浮现」那条规矩落到图标条上是什么样（`?rail=1`，见下）：挂没挂过哨兵决定它
 //   上不上条，角上那颗点来自 CSS 的 `[data-dot]::before`，属性一改就悄悄没了。
-// - 会话最后那一行「在等哨兵」展开之后说了什么（`?wait=pending|claimed`）：它默认折叠，正文
+// - 回复框上方那一块里哨兵那一行摊开之后说了什么（`?wait=pending|claimed`）：它默认折叠，正文
 //   **要点开才渲染**，所以静态渲染根本摸不到那段文案（第 21 轮审查 N2：上一版那条静态断言
 //   查的是折叠态，于是「不含某句话」在任何实现下都成立）。
 import { StrictMode, useState } from "react";
@@ -14,7 +14,7 @@ import { Info, Pulse } from "@phosphor-icons/react";
 import type { TaskMonitor } from "@ash/shared/monitor";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { MonitorInspector } from "../../src/monitors/MonitorInspector.tsx";
-import { MonitorWaitLine } from "../../src/monitors/MonitorWaitLine.tsx";
+import { ScheduledMessageTray } from "../../src/components/ScheduledMessageTray.tsx";
 import { useMonitorInspector } from "../../src/monitors/useMonitorInspector.tsx";
 import type { TaskMonitorsState } from "../../src/monitors/useTaskMonitors.ts";
 import "../../src/styles/global.css";
@@ -37,7 +37,7 @@ const DESCRIPTORS: readonly InspectorDescriptor<Context>[] =
     ? [{ id: "info", title: "信息", icon: <Info size={14} />, defaultOpen: true, shortcut: "i", render: () => <p>信息</p> }, MONITORS]
     : [MONITORS];
 
-/** 「在等哨兵」那一行的台子：pid 还空着（认领受阻）与正常在盯两种，正文只有点开才有。 */
+/** 回复框上方那一块里哨兵那一行的台子：pid 还空着（认领受阻）与正常在盯两种，正文只有点开才有。 */
 const WAIT_BASE: TaskMonitor = {
   id: "m-wait", taskId: "task-a", kind: "ash", nativeId: null, lifetime: "bounded",
   command: "tail -F build.log", description: "盯构建日志", cwd: "/repo", status: "running",
@@ -56,12 +56,16 @@ const WAIT_PENDING: TaskMonitor = {
 function WaitFixture({ mode }: { mode: string }) {
   return (
     <main style={{ padding: 16 }}>
-      <MonitorWaitLine
-        monitors={[mode === "pending" ? WAIT_PENDING : WAIT_BASE]}
-        builtinCount={0}
-        resumePrompt="继续：接着做 tts 这一段"
-        reviewArmed={false}
-        onOpenPanel={() => undefined}
+      <ScheduledMessageTray
+        messages={[]} loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined}
+        monitors={{
+          live: [mode === "pending" ? WAIT_PENDING : WAIT_BASE],
+          running: false,
+          resumePrompt: "继续：接着做 tts 这一段",
+          reviewArmed: false,
+          onOpen: () => undefined,
+          onStop: async () => undefined,
+        }}
       />
     </main>
   );

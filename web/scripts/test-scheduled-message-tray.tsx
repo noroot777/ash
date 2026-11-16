@@ -3,6 +3,8 @@ import { readSource } from "../../scripts/read-source.mjs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ScheduledMessage } from "@ash/shared";
+import type { TaskMonitor } from "@ash/shared/monitor";
+import type { TrayMonitors } from "../src/components/MonitorTrayRow.tsx";
 import { annotationBatchPrompt, type AnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
 import {
   retainScheduledMessageActionError,
@@ -50,7 +52,7 @@ const renderSteerTray = (messages: ScheduledMessage[], extra: TrayExtra = {}) =>
 /** 点开后的那几行;每一段是一条(从它的 data-message-id 起)。 */
 const openRows = (markup: string) => markup.split('<div class="scheduled-message-item').slice(1);
 const rowOf = (markup: string, text: string) => openRows(markup).find((chunk) => chunk.includes(text)) ?? "";
-/** 「排着 N 条」那一行本身,到点开的列表(或读屏播报)为止。 */
+/** 「排队 N」那一行本身,到点开的列表(或读屏播报)为止。 */
 const line = (markup: string) => {
   const start = markup.indexOf('class="scheduled-tray-line"');
   const ends = [markup.indexOf('class="scheduled-tray-list"', start), markup.indexOf("scheduled-message-announcement", start)].filter((at) => at > 0);
@@ -63,7 +65,7 @@ assert.equal(renderTray([]), "", "空队列不占回复区");
 for (const count of [1, 2, 3]) {
   const markup = renderTray(samples.slice(0, count));
   assert.equal((markup.match(/class="scheduled-tray-line"/g) ?? []).length, 1, "收着时只有一行");
-  assert.match(markup, new RegExp(`排着 ${count} 条`));
+  assert.match(markup, new RegExp(`排队 ${count}<`));
   assert.match(markup, /aria-expanded="false"/);
   assert.equal(openRows(markup).length, 0, "收着时不列出每一条");
   assert.match(line(markup), /查看完整输入：输入-0/, "这一行上带着用户自己最早那条");
@@ -83,12 +85,54 @@ const timedFirst = renderSteerTray([{ ...samples[0], mode: "timed" }, { ...sampl
 assert.match(line(timedFirst), /查看完整输入：输入-1[\s\S]*引导会话/, "定时的不按排队顺序发:那一行带的是下一个就发的那条");
 assert.match(line(renderTray([{ ...samples[0], mode: "timed" }])), /查看完整输入：输入-0/, "没有排队的才带定时那条");
 const machinesOnly = renderTray([{ ...samples[0], origin: "monitor:m", text: "【哨兵事件】盯构建" }, { ...samples[1], sessionRole: "reviewer" }]);
-assert.doesNotMatch(line(machinesOnly), /scheduled-tray-head|查看完整输入/, "没有自己的消息时这一行只说排着几条");
+assert.doesNotMatch(line(machinesOnly), /scheduled-tray-head|查看完整输入/, "没有自己的消息时这一行只说排队几条");
 // 收着时最早那条的撤回跟引导会话一样就在这一行上，不用先点开（用户 2026-11-16）。
 assert.match(line(folded), /撤回排队中的待发送消息“输入-0”[\s\S]*引导会话/, "撤回在这一行上，排在引导会话前面");
 assert.match(line(renderTray(samples)), /scheduled-message-withdraw is-shown[^>]*撤回排队中的待发送消息“输入-0”/, "不能引导时撤回照样在，而且常显");
 assert.doesNotMatch(line(machinesOnly), /撤回/, "没有自己的消息时这一行没有撤回");
 assert.doesNotMatch(line(renderTray(samples, { defaultExpanded: true })), /撤回/, "点开后撤回回到每一行行尾，这一行不再带");
+
+// ── 还在盯的哨兵并在同一块里（用户 2026-11-16：另占一行显得臃肿）─────────────────────
+const watcher = (id: string, description: string, extra: Partial<TaskMonitor> = {}): TaskMonitor => ({
+  id, taskId: "task", kind: "ash", nativeId: null, lifetime: "bounded", command: `watch ${id}`, description, cwd: "/repo",
+  status: "running", pid: 1, events: 0, exitCode: null, startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+  startedAtExact: true, expiresAt: new Date(Date.now() + 12 * 60_000).toISOString(), timeoutMs: 900_000,
+  endedAt: null, endedReason: null, stopWhen: null, resultHandoffAt: null, resultsAbandonedAt: null, ...extra,
+} as TaskMonitor);
+const trayMonitors = (live: TaskMonitor[], running = true): TrayMonitors => ({
+  live, running, resumePrompt: null, reviewArmed: false, onOpen: () => undefined, onStop: async () => undefined,
+});
+const two = [watcher("m1", "等回归跑完"), watcher("m2", "盯构建日志")];
+{
+  const both = renderSteerTray([{ ...samples[0], steerable: true }], { monitors: trayMonitors(two) });
+  assert.equal((both.match(/class="scheduled-tray-line"/g) ?? []).length, 1, "哨兵不另占一行");
+  assert.doesNotMatch(both, /monitor-wait-line/, "那条单独的「哨兵在盯」不再出现");
+  assert.match(line(both), /aria-label="排队 1，哨兵 2"/, "条数那颗键把两样都数上");
+  assert.match(line(both), /scheduled-tray-monitors is-live/, "有会叫醒任务的哨兵在盯：脉冲在动");
+  assert.match(line(both), /查看完整输入：输入-0[\s\S]*引导会话/, "有自己的消息时这一行仍带最早那条");
+  assert.doesNotMatch(line(both), /等回归跑完/, "有自己的消息时不再挤上哨兵那一句");
+
+  const only = renderTray([], { monitors: trayMonitors(two) });
+  assert.match(line(only), /aria-label="哨兵 2"/, "只有哨兵时只数哨兵");
+  assert.match(line(only), /等回归跑完 \+1 · 盯了 3 分钟/, "没有自己的消息时这一行说盯的是谁、盯了多久（到分钟）");
+  assert.match(renderTray([], { monitors: trayMonitors(two, false) }), /等回归跑完 \+1 · 等了 3 分钟/, "任务停下来等它时说「等了」");
+  assert.match(only, /role="status">0 条待发送消息，2 个哨兵在盯</, "读屏播报带上哨兵");
+  assert.equal(renderTray([], { monitors: trayMonitors([]) }), "", "什么都没有就不占回复区");
+
+  const builtinOnly = renderTray([], { monitors: trayMonitors([watcher("c1", "内置的那个", { kind: "claude" })]) });
+  assert.match(line(builtinOnly), /class="scheduled-tray-monitors"/, "只剩内置 Monitor：脉冲不动（它不会叫醒任务）");
+
+  const opened = renderTray([samples[0]], { monitors: trayMonitors([...two, watcher("c1", "内置的那个", { kind: "claude" })]), defaultExpanded: true });
+  const rows = opened.split('<div class="scheduled-message-item').slice(1);
+  assert.equal(rows.length, 4, "点开：三个哨兵一行一个，加一条排队消息");
+  assert.match(rows[0]!, /data-monitor-id="m1"[\s\S]*>在盯<[\s\S]*>等回归跑完<[\s\S]*盯了 3 分钟 · 最迟 (\d\d\/\d\d )?\d\d:\d\d/, "哨兵在前：谁 · 盯什么 · 盯了多久、最迟几点");
+  assert.match(rows[0]!, /在右侧哨兵格里看「等回归跑完」[\s\S]*停掉：哨兵「等回归跑完」/, "行尾两颗键：去哨兵格、停掉");
+  assert.match(rows[2]!, />内置<[\s\S]*不会叫醒任务/, "内置的那种说清它不会叫醒任务");
+  assert.doesNotMatch(rows[2]!, /停掉/, "内置的停不掉，就不给停的键");
+  assert.match(rows[3]!, /data-message-id="sample-0"/, "排队消息在哨兵后面");
+  assert.match(renderTray([], { monitors: trayMonitors(two, false), defaultExpanded: true }), />在等<[\s\S]*不等了：哨兵「等回归跑完」/,
+    "任务停下来等它时：「在等」、键叫「不等了」");
+}
 // 要留意的条数:退出码非零的哨兵才算,是琥珀色的字。
 const attentionTray = renderTray([samples[0], { ...samples[1], origin: "monitor:a", text: "【哨兵结束】检查，退出码 2。" },
   { ...samples[2], origin: "monitor:b", text: "【哨兵结束】检查，退出码 0。" }, { ...samples[0], id: "c", origin: "monitor:c", text: "REGRESSION_FINISHED exitCode=1" }]);

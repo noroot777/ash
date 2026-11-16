@@ -37,8 +37,8 @@ export function SteerButton({ message, busy, steering, onSteer }: {
   </>;
 }
 
-/** 指到这一行才出的那颗图标键(撤回 / 取消这次唤醒);忙着的时候一直亮着,好让转圈看得见。 */
-function RevealButton({ label, tip: tipText, busy, spinning, onClick, className, children }: {
+/** 指到这一行才出的那颗图标键(撤回 / 取消这次唤醒 / 停掉哨兵);忙着的时候一直亮着,好让转圈看得见。 */
+export function RevealButton({ label, tip: tipText, busy, spinning, onClick, className, children }: {
   label: string;
   tip: string;
   busy: boolean;

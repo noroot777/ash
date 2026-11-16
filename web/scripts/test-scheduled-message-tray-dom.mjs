@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { resizeViewport } from "./wait-until.mjs";
 
-// 回复框上方那一行「排着 N 条」,点开是几行(ScheduledMessageTray.tsx)。真浏览器钉住:收着只占一行且
+// 回复框上方那一行「排队 N」,点开是几行(ScheduledMessageTray.tsx)。真浏览器钉住:收着只占一行且
 // 带着自己最早那条和引导键;点开向上长、回复框不动;每条行尾的键按来源给;指到才出的键键盘与触屏够得着;
 // 全文就地摊开;要留意的条数能跳过去;哨兵取消的确认框;任务 / 团队两个宿主同一副画法;四档宽度不横溢。
 const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
@@ -64,7 +64,7 @@ try {
   const trayLine = page.locator(".scheduled-tray-line");
   const list = page.getByRole("region", { name: "排队输入完整列表" });
   const draft = page.getByRole("textbox", { name: "回复草稿" });
-  const toggle = page.getByRole("button", { name: /^排着 \d+ 条$/ });
+  const toggle = page.getByRole("button", { name: /^排队 \d+$/ });
   const item = (id) => page.locator(`.scheduled-message-item[data-message-id="${id}"]`);
   const focused = (locator) => locator.evaluate((element) => element === document.activeElement);
   const opacity = (locator) => locator.evaluate((element) => Number(getComputedStyle(element).opacity));
@@ -82,12 +82,12 @@ try {
   const expand = async () => { await toggle.click(); await list.waitFor(); await settle(); };
 
   // ── 收着:只占一行,带着自己最早那条和它的引导键 ───────────────────────────────
-  await page.getByRole("button", { name: "排着 10 条", exact: true }).waitFor();
+  await page.getByRole("button", { name: "排队 10", exact: true }).waitFor();
   assert.equal(await trayLine.count(), 1);
   assert.equal(await list.count(), 0, "默认收着");
   const collapsed = await geometry();
   assert.ok(collapsed.tray.height < 36, `收着时只占一行：${collapsed.tray.height}`);
-  assert.match(await trayLine.innerText(), /排着 10 条\s*2 条要留意\s*你\s*输入-1/, "那一行：条数、要留意、自己最早那条");
+  assert.match(await trayLine.innerText(), /排队 10\s*2 条要留意\s*你\s*输入-1/, "那一行：条数、要留意、自己最早那条");
   assert.doesNotMatch(await tray.innerText(), /我的消息|审查答复 \d|筛选|展开全部|#\d|按发送时间|monitorId=|REGRESSION_FINISHED|@codex/);
   const lineGuide = trayLine.getByRole("button", { name: /引导会话/ });
   assert.match(await lineGuide.getAttribute("aria-label"), /输入-1/, "引导键在这一行上,指向自己最早那条");
@@ -323,7 +323,7 @@ try {
   assert.ok(teamPosition.tray.top >= 48 && teamPosition.draft.bottom <= 700, "团队托盘和回复框同样保持可见");
   await page.screenshot({ path: `${artifacts}scheduled-message-production-team.png`, fullPage: true });
   await page.getByRole("button", { name: "切换任务", exact: true }).click();
-  await page.getByRole("button", { name: "排着 30 条", exact: true }).waitFor();
+  await page.getByRole("button", { name: "排队 30", exact: true }).waitFor();
   assert.equal(await list.count(), 0, "切换任务重置点开状态");
   assert.equal(await draft.inputValue(), "未发送的草稿", "浏览、引导和取消哨兵不改动草稿");
   assert.deepEqual(errors, []);

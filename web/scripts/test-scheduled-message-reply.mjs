@@ -39,7 +39,7 @@ try {
         assert.equal(result.scrollTop, 0, `${variant} ${label}: 不能依赖页面滚动找回发送按钮`);
         return result;
       };
-      const toggle = page.getByRole("button", { name: "排着 10 条", exact: true });
+      const toggle = page.getByRole("button", { name: "排队 10", exact: true });
       await toggle.waitFor();
       await input.fill("要发送的草稿");
       const before = await visibleSend("短窗口折叠");
@@ -131,7 +131,7 @@ try {
     await page.route("**/api/**", (route) => route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("/scheduled-messages") ? pending : [] }));
     try {
       await page.goto(`${base}/scripts/fixtures/scheduled-message-reply.html?variant=${variant}`);
-      const toggle = page.getByRole("button", { name: `排着 ${mixed.length} 条`, exact: true });
+      const toggle = page.getByRole("button", { name: `排队 ${mixed.length}`, exact: true });
       await toggle.waitFor();
       const reachable = (selector) => page.evaluate((selector) => [...document.querySelectorAll(selector)].map((element) => {
         const box = element.getBoundingClientRect();
@@ -159,7 +159,7 @@ try {
       // 多位数条数 + 多位数要留意:最挤的那种,收着仍是一行;点要留意再 Esc 收回来也一样。
       pending = crowded;
       await page.reload();
-      const crowdedToggle = page.getByRole("button", { name: "排着 100 条", exact: true });
+      const crowdedToggle = page.getByRole("button", { name: "排队 100", exact: true });
       await crowdedToggle.waitFor();
       for (const width of [800, 480, 390, 360, 320, 300]) {
         await resizeViewport(page, { width, height: 750 });

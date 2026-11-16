@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import type { AgentType, DiscussionRounds, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import type { QuestionAnswerInput } from "@ash/shared/questions";
 import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import type { TrayMonitors } from "../components/MonitorTrayRow.tsx";
 import type { IconMenuItem } from "../components/IconMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -48,6 +49,8 @@ export type ReplyBoxProps = {
   skills?: SkillEntry[];
   /** 框上方只放状态（验收前置命令在跑之类）；没有就不占地方。 */
   topRail?: ReactNode;
+  /** 还在盯的哨兵：跟排队消息并在框上方同一块里（ScheduledMessageTray）。 */
+  monitors?: TrayMonitors;
   /** 框里那一行左边、附件后面的动作（再审、打开预览、接力到…）（docs/ui-ux-audit reply-3）。 */
   actions?: ReactNode;
   /** 「更多」里除截图批注以外的项（预览日志）。 */
