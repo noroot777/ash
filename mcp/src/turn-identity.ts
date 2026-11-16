@@ -71,8 +71,10 @@ export function resolveTurnIdentity(env: Env): ResolvedTurnIdentity & { refused:
   }
   if (fingerprint === ASH_TURN_FINGERPRINT_NONE) return { ...EMPTY, refused: null };
 
+  // 令牌两项都可以是空串：团队调度台的身份只有任务 id（见 `turnFingerprint`）。空串排在最后，
+  // 所以单飞回合不会被它挑中；团队那份也就不会捎上配置里残留的旧令牌。
   for (const taskId of taskIds) {
-    for (const turnToken of turnTokens) {
+    for (const turnToken of [...turnTokens, ""]) {
       for (const directionToken of [...directionTokens, ""]) {
         if (turnFingerprint({ taskId, turnToken, directionToken }) === fingerprint) {
           return { taskId, turnToken, directionToken, refused: null };

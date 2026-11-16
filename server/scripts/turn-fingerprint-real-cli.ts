@@ -25,6 +25,8 @@ export type RealCliContext = {
   stale: Record<string, string>;
   allStale: Record<string, string>;
   current: { taskId: string; turnToken: string };
+  /** 团队调度台的任务 id:它的起跑环境只有这一个变量(team/session.ts) */
+  lead: string;
   /** 桩这一次挑出的身份(读完即删);桩没起来就是 null */
   picked: () => Picked | null;
 };
@@ -77,7 +79,12 @@ export async function checkRealClaude(ctx: RealCliContext): Promise<void> {
   assert.deepEqual([side.picked?.taskId, side.picked?.turnToken, side.picked?.refused], ["", "", null],
     "非任务回合:配置里写死的旧身份不认");
   assert.equal(side.problem, null);
-  console.log("✓ 真 claude:settings.env 写死旧身份时接上本回合那份;全是旧的 ⇒ ash 没接上并留诊断;非任务回合不认旧身份");
+
+  const team = await probe({ ASH_TURN_TOKEN: "turn-old" }, { ASH_TASK_ID: ctx.lead });
+  assert.deepEqual([team.picked?.taskId, team.picked?.turnToken, team.picked?.refused], [ctx.lead, "", null],
+    "团队调度台:带着自己的任务 id 连上,不捎配置里残留的旧令牌");
+  assert.equal(team.problem, null);
+  console.log("✓ 真 claude:settings.env 写死旧身份时接上本回合那份;全是旧的 ⇒ ash 没接上并留诊断;非任务回合不认旧身份;团队调度台保住任务 id");
 }
 
 /** 真 codex app-server:[mcp_servers.ash.env] 写死旧身份。只走到 thread/start,不发 turn/start。 */
@@ -99,10 +106,16 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
     let next = 0;
     let settled: () => void = () => {};
     const ashDone = new Promise<void>((r) => { settled = r; });
-    const request = (method: string, params: unknown) => new Promise<unknown>((resolve, reject) => {
+    // 每一问都有界:codex 卡住不答时照样走到 finally 收掉进程,而不是把整条验收挂到哨兵超时。
+    const request = (method: string, params: unknown, timeoutMs = 15_000) => new Promise<unknown>((resolve, reject) => {
       const id = ++next;
-      waiters.set(id, { resolve, reject });
+      const timer = setTimeout(() => { waiters.delete(id); reject(new Error(`codex ${method} ${timeoutMs}ms 没应答`)); }, timeoutMs);
+      const done = <T>(f: (v: T) => void) => (v: T) => { clearTimeout(timer); waiters.delete(id); f(v); };
+      waiters.set(id, { resolve: done(resolve), reject: done(reject) });
       child.stdin!.write(`${JSON.stringify({ id, method, params })}\n`);
+    });
+    child.once("exit", (code) => {
+      for (const w of [...waiters.values()]) w.reject(new Error(`codex app-server 退出了(${code})`));
     });
     createInterface({ input: child.stdout! }).on("line", (line) => {
       let m: { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown };
@@ -148,5 +161,10 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
   assert.deepEqual([side.picked?.taskId, side.picked?.turnToken, side.picked?.refused], ["", "", null],
     "非任务回合:登记里写死的旧身份不认");
   assert.deepEqual(side.said, []);
-  console.log("✓ 真 codex app-server:登记 env 写死旧身份时接上本回合那份;全是旧的 ⇒ ash 没接上并留诊断;非任务回合不认旧身份");
+
+  const team = await probe({ ASH_TURN_TOKEN: "turn-old" }, { ASH_TASK_ID: ctx.lead });
+  assert.deepEqual([team.picked?.taskId, team.picked?.turnToken, team.picked?.refused], [ctx.lead, "", null],
+    "团队调度台:带着自己的任务 id 连上,不捎登记里写死的旧令牌");
+  assert.deepEqual(team.said, []);
+  console.log("✓ 真 codex app-server:登记 env 写死旧身份时接上本回合那份;全是旧的 ⇒ ash 没接上并留诊断;非任务回合不认旧身份;团队调度台保住任务 id");
 }

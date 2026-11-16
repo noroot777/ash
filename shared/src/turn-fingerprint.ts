@@ -30,6 +30,13 @@ export interface TurnFingerprintIdentity {
   directionToken: string;
 }
 
+/**
+ * 身份分三种，都由起跑环境里有什么决定，指纹照实摘：
+ *  · 单飞回合：任务 id + 回合令牌 + 方向令牌（`turnIdentityEnv`）；
+ *  · 团队调度台的常驻会话：**只有任务 id**，没有回合令牌（`team/session.ts`，服务端按团队来源
+ *    放行）—— 两个令牌按空串摘，不能当成「无身份」，否则调度台改不了执行者、建的任务丢了来源；
+ *  · 无身份：`ASH_TURN_FINGERPRINT_NONE`。
+ */
 export function turnFingerprint(id: TurnFingerprintIdentity): string {
   return createHash("sha256")
     .update(JSON.stringify([id.taskId, id.turnToken, id.directionToken]))

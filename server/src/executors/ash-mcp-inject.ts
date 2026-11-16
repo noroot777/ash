@@ -48,13 +48,16 @@ type SpawnEnv = Readonly<Record<string, string | undefined>> | undefined;
 
 const turnTaskId = (env: SpawnEnv): string => env?.[ASH_TURN_IDENTITY_ENV.taskId]?.trim() ?? "";
 
-/** 注入登记里多出来的那一项：这一回合身份的指纹，没有身份就是「无身份」。 */
+/**
+ * 注入登记里多出来的那一项：这一回合身份的指纹。判据是**有没有任务 id**，不是有没有回合令牌 ——
+ * 团队调度台只带任务 id（见 `turnFingerprint`），缺的令牌按空串摘；连任务 id 都没有才是「无身份」。
+ */
 function fingerprintEnv(env: SpawnEnv): Record<string, string> {
   const taskId = turnTaskId(env);
   const turnToken = env?.[ASH_TURN_IDENTITY_ENV.turnToken]?.trim() ?? "";
   const directionToken = env?.[ASH_TURN_IDENTITY_ENV.directionToken]?.trim() ?? "";
   return {
-    [ASH_TURN_FINGERPRINT_ENV]: taskId && turnToken ? turnFingerprint({ taskId, turnToken, directionToken }) : ASH_TURN_FINGERPRINT_NONE,
+    [ASH_TURN_FINGERPRINT_ENV]: taskId ? turnFingerprint({ taskId, turnToken, directionToken }) : ASH_TURN_FINGERPRINT_NONE,
   };
 }
 

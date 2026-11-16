@@ -2,12 +2,12 @@
 // (shared/src/turn-fingerprint.ts、mcp/src/turn-identity.ts、server/src/executors/ash-mcp-inject.ts)。
 //
 //   1. MCP 侧挑身份:没指纹照旧逐项取;指纹是「无身份」时哪条通道里有都不认;正名被换掉时从别名 /
-//      PATH 里挑出对得上的那份;一份都对不上就拒绝启动
+//      PATH 里挑出对得上的那份;一份都对不上就拒绝启动;团队调度台只有任务 id,保住它、不捎旧令牌
 //   2. server 侧注入:claude 的注入文件按回合写在任务自己的 runs 目录、写新的删旧的;非任务回合写明
 //      无身份;codex 的 `-c` 里带指纹、不带令牌值
 //   3. 真 claude:settings.json 的 env 写死了旧身份 —— 照样接上本回合的身份;所有通道都是旧的 ⇒
-//      MCP 不起来、init 报 failed、ash 留诊断;非任务回合不继承配置里的旧身份
-//   4. 真 codex app-server:[mcp_servers.ash.env] 写死了旧身份,同上两种
+//      MCP 不起来、init 报 failed、ash 留诊断;非任务回合不继承配置里的旧身份;团队调度台保住任务 id
+//   4. 真 codex app-server:[mcp_servers.ash.env] 写死了旧身份,同上四种
 //
 // MCP 用的是一个桩:真 resolveTurnIdentity 挑身份(落盘给测试看),拒绝就退出,否则只答握手。
 // 不调模型、不碰用户的 CLI 配置。没装对应 CLI 就跳过那一段(打一行 ⚠)。
@@ -75,9 +75,15 @@ try {
     assert.match(refused.refused ?? "", /settings\.json 里的 env/, "说清多半是哪里写死了");
     assert.match(pick({ [ASH_TURN_FINGERPRINT_ENV]: fp }).refused ?? "", /一份身份都没收到/);
 
+    const leadFp = turnFingerprint({ taskId: "lead", turnToken: "", directionToken: "" });
+    assert.deepEqual(pick({ ASH_TASK_ID: "lead", ASH_TURN_TOKEN: "turn-old", [ASH_TURN_FINGERPRINT_ENV]: leadFp }),
+      { taskId: "lead", turnToken: "", directionToken: "", refused: null },
+      "团队调度台(只有任务 id):保住来源任务 id,不捎配置里残留的旧令牌");
+    assert.match(pick({ ASH_TASK_ID: "task-old", [ASH_TURN_FINGERPRINT_ENV]: leadFp }).refused ?? "", /回合身份对不上/,
+      "团队调度台的任务 id 被换成别的:照样拒绝");
     assert.deepEqual(pick({ ...allStale, PATH: pathDir(current), [ASH_TURN_FINGERPRINT_ENV]: "none" }),
       { taskId: "", turnToken: "", directionToken: "", refused: null }, "非任务回合:哪条通道里有都不认,也不拒绝启动");
-    console.log("✓ MCP 挑身份:没指纹逐项取、对得上的那份从任一通道挑出、对不上拒绝启动、无身份一律不认");
+    console.log("✓ MCP 挑身份:没指纹逐项取、对得上的那份从任一通道挑出、对不上拒绝启动、团队只认任务 id、无身份一律不认");
   }
 
   // ── 2. server 侧注入 ──────────────────────────────────────────────────────
@@ -94,6 +100,16 @@ try {
     assert.notEqual(next.args[1], first.args[1], "下一回合另一份");
     assert.deepEqual(readdirSync(taskDir), [next.args[1]!.slice(taskDir.length + 1)], "写新的就删这个任务旧的那份");
 
+    // 团队调度台的起跑环境只有任务 id(team/session.ts):是有身份的,不是「无身份」
+    const team = { ASH_TASK_ID: "lead" };
+    const leadFp = turnFingerprint({ taskId: "lead", turnToken: "", directionToken: "" });
+    const teamFile = claudeAshMcpInjection(team, { entry }).args[1]!;
+    assert.ok(teamFile.startsWith(join(RUNS_DIR, "lead", "ash-mcp")), "团队调度台也写在它自己的任务目录下");
+    assert.equal(JSON.parse(readFileSync(teamFile, "utf8")).mcpServers.ash.env[ASH_TURN_FINGERPRINT_ENV], leadFp, "团队调度台带的是任务 id 的指纹");
+    const teamCodex = codexAshMcpArgs(team, entry)[1]!;
+    assert.ok(teamCodex.includes(`${ASH_TURN_FINGERPRINT_ENV}="${leadFp}"`) && teamCodex.includes('env_vars=["ASH_TASK_ID"]'),
+      "codex 的团队调度台同样带任务 id 的指纹、透传任务 id");
+
     const side = claudeAshMcpInjection(withoutTurnIdentity({ ...currentVars }), { entry });
     assert.equal(side.args[1]!.startsWith(join(DATA_DIR, "ash-mcp")), true, "非任务回合放数据目录下共用");
     assert.equal(JSON.parse(readFileSync(side.args[1]!, "utf8")).mcpServers.ash.env[ASH_TURN_FINGERPRINT_ENV], "none", "写明无身份");
@@ -104,7 +120,7 @@ try {
     assert.ok(!codex!.includes(current.turnToken) && !codex!.includes(current.directionToken), "argv 里没有令牌值");
     assert.ok(codexAshMcpArgs(withoutTurnIdentity({ ...currentVars }), entry)[1]!.includes(`${ASH_TURN_FINGERPRINT_ENV}="none"`),
       "codex 非任务回合同样写明无身份");
-    console.log("✓ 注入:claude 文件按回合写进任务目录并删旧、非任务回合写明无身份;codex 覆盖带指纹不带令牌");
+    console.log("✓ 注入:claude 文件按回合写进任务目录并删旧、团队调度台带任务 id 的指纹、非任务回合写明无身份;codex 覆盖带指纹不带令牌");
   }
 
   // ── 3/4. 真 CLI ───────────────────────────────────────────────────────────
@@ -135,11 +151,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   };
   // 本回合的起跑环境照真任务回合那样由 turnIdentityEnv 给(变量 + PATH 上的身份目录)。
   const { turnIdentityEnv } = await import("../src/turn-identity.js");
-  const ctx = { root, entry, currentVars, currentEnv: turnIdentityEnv(current), stale, allStale, current, picked };
+  const ctx = { root, entry, currentVars, currentEnv: turnIdentityEnv(current), stale, allStale, current, lead: "task-lead", picked };
   const { checkRealClaude, checkRealCodex } = await import("./turn-fingerprint-real-cli.js");
   await checkRealClaude(ctx);
   await checkRealCodex(ctx);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
-
