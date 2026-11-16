@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import {
-  api, db, dbClient, failCheckpointRestore, hits, now, pending, rowOf, runs, scenario,
+  api, db, dbClient, failCheckpointRestore, hits, interceptStatements, now, pending, rowOf, runs, scenario,
   schema, settled, taskOf, tasks, until,
 } from "./checkpoint-recovery-fixture.js";
 import { advanceQueue, reclaimStrandedSeat } from "../src/scheduler.js";
 import { serializeQueueClaims } from "../src/queue-seat.js";
+import { isQueueAdvanceCanceling } from "../src/queue-advance-retry.js";
 import { reserveQueuedTask, taskQueueReservation } from "../src/task-queue-reservation.js";
 import { cancelPendingMonitorEvents } from "../src/monitor-events.js";
 import { monitorWakeCheckpoint } from "../src/monitor-checkpoint-handoff.js";
@@ -65,24 +66,24 @@ export async function checkpointStopCases(): Promise<void> {
 
   {
     const test = await deferred();
-    const execute = dbClient.execute;
     let failed = false;
-    dbClient.execute = async function (statement) {
-      if (!failed && typeof statement !== "string" && Array.isArray(statement.args) && /^update "tasks" set "status" = \?/i.test(statement.sql)
-        && statement.args[0] === "canceled" && statement.args.includes(test.taskId)) {
-        failed = true;
-        throw new Error("INJECT_PENDING_STOP_WRITE_FAILURE");
-      }
-      return execute.call(dbClient, statement);
-    };
+    // 撤销写入跟推进凭据同一个事务提交,只拦 dbClient.execute 打不到它(见 interceptStatements)。
+    const restore = interceptStatements({
+      statement: (sql, args) => {
+        if (!failed && /^update "tasks" set "status" = \?/i.test(sql) && args[0] === "canceled" && args.includes(test.taskId)) {
+          failed = true;
+          throw new Error("INJECT_PENDING_STOP_WRITE_FAILURE");
+        }
+      },
+    });
     try {
       const response = await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" });
-      assert.equal(response.status, 500);
       assert.equal(failed, true);
+      assert.equal(response.status, 500);
       assert.equal((await taskOf(test.taskId)).status, "paused");
       assert.equal((await taskOf(test.taskId)).queueAdvanceRequest?.id, test.request.id);
     } finally {
-      dbClient.execute = execute;
+      restore();
     }
     try {
       assert.equal((await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" })).status, 200);
@@ -134,18 +135,25 @@ export async function checkpointStopCases(): Promise<void> {
     const test = await deferred();
     test.fault.restore();
     await pending.deliverPendingMessages();
-    const execute = dbClient.execute;
     let interrupted = false;
-    dbClient.execute = async function (statement) {
-      const target = entry === "cancel-write" ? "canceled" : "running";
-      if (!interrupted && typeof statement !== "string" && Array.isArray(statement.args) && /^update "tasks" set "status" = \?/i.test(statement.sql)
-        && statement.args[0] === target && statement.args.includes(test.taskId)) {
-        interrupted = true;
-        if (entry === "cancel-write") await advanceQueue(test.queueId, test.request);
-        else assert.equal((await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" })).status, 200);
-      }
-      return execute.call(dbClient, statement);
-    };
+    const restore = entry === "cancel-write"
+      // 撤销写入跟推进凭据同一个事务提交(status.ts writeTaskStatus):「重放恰好落在停止写入之前」
+      // 就是落在那笔事务开启之前。停止那一路里只有这一笔事务,按「正在撤销」认它。
+      ? interceptStatements({
+        transaction: async () => {
+          if (interrupted || !isQueueAdvanceCanceling(test.taskId)) return;
+          interrupted = true;
+          await advanceQueue(test.queueId, test.request);
+        },
+      })
+      : interceptStatements({
+        statement: async (sql, args) => {
+          if (!interrupted && /^update "tasks" set "status" = \?/i.test(sql) && args[0] === "running" && args.includes(test.taskId)) {
+            interrupted = true;
+            assert.equal((await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" })).status, 200);
+          }
+        },
+      });
     try {
       if (entry === "cancel-write") {
         assert.equal((await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" })).status, 200);
@@ -157,7 +165,7 @@ export async function checkpointStopCases(): Promise<void> {
       }
       assert.equal(interrupted, true);
     } finally {
-      dbClient.execute = execute;
+      restore();
     }
     await stopped(test);
     console.log(`PASS: ${entry}, in-flight stop/replay or pre-spawn work cannot resurrect the canceled request`);
