@@ -40,7 +40,7 @@ assert.deepEqual(
 assert.equal(legacy("预约审查仍在等待：任务正在等你答复。预约已保留，后续执行回合正常结束后自动开始。").text, "预约的审查先不开始：任务在等你答复");
 assert.equal(legacy("预约审查仍在等待：说不清的原因。预约已保留，后续执行回合正常结束后自动开始。").text, "预约的审查先不开始：说不清的原因", "认不出是哪一种就照登原因");
 // 没有专门说法的：图标按句子的主语认，引在后面的描述不算。
-assert.equal(legacy("预览已回收（任务结束）：http://localhost:5174").icon, "preview");
+assert.equal(legacy("预览异常：端口被占用").icon, "preview");
 assert.equal(legacy("验收前置命令开跑：`npm test`（独立快照 abc）").icon, "gate", "「验收前置命令」不认成验收");
 assert.equal(legacy("合入目标由 main 更改为 feat/x；开工提交未变").icon, "accept");
 assert.equal(legacy("子分支基线已更新到 main@abc").icon, "branch");

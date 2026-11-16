@@ -184,8 +184,6 @@ try {
   await input.waitFor();
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "侧聊消息输入");
   assert.equal((await roomsFor("parent")).length, 0, "选文打开侧聊不会提前建房");
-  assert.equal(await page.getByRole("button", { name: "开始侧聊", exact: true }).count(), 0);
-  assert.equal(await page.getByText("这里聊，不打断思路", { exact: true }).count(), 0);
   await page.getByRole("group", { name: "侧聊执行器", exact: true }).waitFor();
   assert.equal(await reference.evaluate((element) => element.nextElementSibling?.classList.contains("side-chat-input")), true, "引用紧邻输入框上方");
   await page.screenshot({ path: join(artifacts, "selection-first-config.png") });

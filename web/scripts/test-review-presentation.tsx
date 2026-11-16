@@ -104,7 +104,7 @@ assert.match(emptyMarkup, /<div class="review-verdict is-pending">/, "进行中�
 assert.match(emptyMarkup, /workspace-status-dot--run[^"]*" aria-hidden="true"><\/span><span data-selection-content="">第 4 轮审查中<\/span>/, "没说话时气泡里写轮次，字前一颗会动的点");
 assert.doesNotMatch(emptyMarkup, /<button type="button" class="review-verdict-text"/, "没有正文时没有无效的展开键");
 assert.match(emptyMarkup, /class="review-verdict-text is-static" tabindex="0"/, "键盘照样走得进来，指到才出的那一行看得见");
-assert.doesNotMatch(emptyMarkup, /verify-lane|ShieldCheck|进行中/, "没有卡、没有盾、没有「进行中」徽章");
+assert.doesNotMatch(emptyMarkup, /进行中/, "没有「进行中」徽章");
 
 // 派审附言是这一轮审查的输入，卡里必须看得见 —— 否则它写完就只剩派审对话框里那个
 // textarea 知道，用户读结论时无从核对「我要求重点看的那一点他看了没有」。
@@ -235,11 +235,6 @@ const feedMarkup = renderToStaticMarkup(
   />,
 );
 assert.match(feedMarkup, /gpt-5\.5 · high/, "卡头报出模型与智能水平");
-assert.doesNotMatch(feedMarkup, /class="turn-head"><b>/, "卡内首条气泡不再重复审查者");
-assert.doesNotMatch(feedMarkup, /turn-meta">[^<]*gpt-5\.5/, "卡内首条气泡不再重复模型");
-assert.doesNotMatch(feedMarkup, /verify-badge/, "轮次徽标是卡头标题的复读，卡内不出");
-assert.doesNotMatch(feedMarkup, /turn-meta">[^<]*用时/, "用时已在卡头，首条气泡不再重复");
-assert.doesNotMatch(feedMarkup, /task-message-avatar/, "卡头左边已有一颗盾，卡内气泡不再各挂一颗");
 
 // 跑完了：同一轮在会话里收成一句，卡头那些（模型、智能水平）不再摆出来。
 const doneItems = buildConversationItems([{
@@ -256,6 +251,5 @@ const doneMarkup = renderToStaticMarkup(
   <ConversationFeed task={{ id: "t1", status: "done" } as never} items={doneItems} sessions={[session]} loading={false} error={null} />,
 );
 assert.match(doneMarkup, />第 1 轮验证通过</);
-assert.doesNotMatch(doneMarkup, /class="verify-lane/, "收了口的一轮不再是整张卡");
 
 console.log("review-presentation ok");

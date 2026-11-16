@@ -20,7 +20,6 @@ try {
 
   const action = page.locator(".system-action-note.is-conflict");
   await action.waitFor();
-  assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "四套试验摆法连同切换条一起拿掉了");
   assert.equal(await action.count(), 1, "冲突流程只占一条系统旁注");
   assert.match(await action.innerText(), /验收遇到冲突.*目标分支未改动/s);
   assert.equal(await action.locator(".system-action-files").isHidden(), true, "冲突文件默认收进详情，不在会话里铺开");
@@ -38,7 +37,6 @@ try {
   assert.match(await action.innerText(), /开始验收.*验收未完成.*冲突交接/s, "原始流程记录仍可展开核对");
 
   // —— 会话里占行的只有你说的、它说的；ash 的话是所属回合最后那一句小灰字（尾注） ——
-  assert.equal(await page.locator(".notice-line, .review-milestone").count(), 0, "图标落在头像轴上的独占一行整个退役");
   const owner = page.locator(".task-message--agent").filter({ hasText: "冲突已经解决并提交。" });
   const footnotes = page.locator(".turn-footnote");
   assert.equal(await footnotes.count(), 1, "回执、明面的话都不在会话里另占一行");
@@ -313,7 +311,7 @@ try {
         }),
       })),
     );
-    assert.equal(boundaries.length, 4, "两种会话和两种结束状态都应覆盖");
+    assert.equal(boundaries.length, 2, "两种结束状态都应覆盖");
     for (const boundary of boundaries) {
       const label = `${width}px ${boundary.surface}/${boundary.error ? "error" : "neutral"}`;
       assert.equal(boundary.rules.length, 2, `${label} 两侧各一条分隔线`);

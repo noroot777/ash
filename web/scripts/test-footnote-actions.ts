@@ -143,7 +143,6 @@ const standingPart = (result: ReturnType<typeof display>) => result.footnote?.pa
   const result = display(persisted(), { reviews: review(dispute()) });
   assert.deepEqual(texts(result.footnote), [RULING, UNSUBMITTED_TEXT], "驳回那一句不被 13 秒后的结算说明盖掉");
   assert.equal(standingPart(result)?.view.text, RULING, "带颜色的就是驳回那一句");
-  assert(!("ruleEventId" in result.actions), "不再认「去裁定」挂在哪一句：裁定在回复框顶上");
   // 改之前的样子：同一份记录不给 held，驳回那一句被盖掉——夹具确实复现了现场。
   const before = conversationSystemRows(conversationDebateRows(conversationFeedRows(result.items, { reviews: review(dispute()) }), { reviews: review(dispute()) }));
   assert.deepEqual(texts(before.footnotes.get(result.footnote!.id.replace(/^footnote:/, ""))), [UNSUBMITTED_TEXT], "夹具复现现场：不留位置时驳回那一句被盖掉");

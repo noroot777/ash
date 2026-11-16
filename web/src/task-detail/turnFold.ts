@@ -17,27 +17,6 @@ function isHandsOn(event: ExecutionEvent): boolean {
   return event.kind !== "error" && event.kind !== "notice" && !isBookkeepingEvent(event);
 }
 
-/**
- * 一条回合此刻该怎么排：**它自己还在飞就一律平铺，收口那一下才折**。
- *
- * 折叠本身是个**重组**动作（见 splitTurnSegments）：它把最后一次动手之前的一切 —— 连同
- * 已经说出口、已经露在外面的正文 —— 收进「执行过程」块，外面只留最后那段话。跑的过程中
- * 干这件事，用户眼睁睁看着刚读到一半的内容被吸走：agent 一说话就收编（外面只剩最后一
- * 句），下一个工具调用又把它们吐回来（切点后移、折不出结论），来回闪。
- *
- * 闸只看**这一条回合**结束没有（会话行的 `endedAt`），不看整个任务停没停。任务往下还有
- * 好几站要走 —— 换轮、就地验证、审查门、团队执行者还在干活 —— 拿任务状态当闸，讲完的
- * 回合会一直摊在那儿不收（用户 2026-09-01 反馈：「执行完了怎么没有自动折叠」）。回合是
- * 单调的：`endedAt` 落下来就不会再回到 null，所以折过一次位置就不再变。
- */
-export function turnLayout(
-  segments: AgentContentSegment[],
-  { live }: { live: boolean },
-): { process: AgentContentSegment[]; conclusion: AgentContentSegment[] } {
-  if (live) return { process: [], conclusion: segments };
-  return splitTurnSegments(segments);
-}
-
 /** 折叠切点:**最后一次真正动手**的那一段(见 isHandsOn);-1 = 这一回合没得折。 */
 export function handsOnPivot(segments: AgentContentSegment[]): number {
   for (let index = segments.length - 1; index >= 0; index -= 1) {

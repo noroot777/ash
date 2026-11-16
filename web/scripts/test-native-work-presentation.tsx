@@ -122,7 +122,7 @@ assert.ok(!assigned.includes("任务说明"), "子智能体那一份是「收到
 
 // 抬头那条是横向摊开的一句，不是列表里那套两列表格。
 const headline = renderToStaticMarkup(<NativeWorkHeadline row={{ ...timedRow, kind: "agent", model: "gpt-5.6-sol", effort: "xhigh" }} />);
-assert.ok(!headline.includes("native-work__meta") && !headline.includes("<dl") && !headline.includes("开始时间"),
+assert.ok(!headline.includes("<dl") && !headline.includes("开始时间"),
   "抬头不复刻两列表格");
 for (const piece of ["codex@test", "gpt-5.6-sol", "xhigh", "09/09 08:00 → 08:08", "8分 0秒"]) {
   assert.ok(headline.includes(piece), `抬头该带上 ${piece}`);

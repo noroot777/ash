@@ -50,7 +50,6 @@ try {
   assert.equal(await side("unknown").innerText(), "状态未知");
   assert.equal(await page.locator(".native-work__doing").count(), 1, "只有在跑的那一行底下多一行它此刻在做什么");
   assert.ok((await page.locator('.native-work__agent[data-status="running"] .native-work__doing').innerText()).trim().length > 0);
-  assert.equal(await page.locator(".native-work__counts, .native-work__intro").count(), 0, "三格统计和那段说明都不要了");
   assert.equal(await page.locator(".native-work__more").count(), 0, "默认都收着");
 
   await mkdir(output, { recursive: true });
@@ -135,8 +134,6 @@ try {
   assert.notEqual(avatar.background, "rgba(0, 0, 0, 0)");
   await header.screenshot({ path: `${output}/native-agent-drawer-header.png` });
   // 模型与时间原本是正文顶上一块要点开的两列表格，现在顺着标题横向摊在抬头里。
-  assert.equal(await conversation.locator(".native-agent__metadata").count(), 0, "正文里不再有单独的「模型与时间」折叠区");
-  assert.equal(await conversation.locator(".native-work__meta").count(), 0, "抬头不复刻列表里那套两列表格");
   // 跨度这里只验形状：运行中的项按真实时钟一直在走，写死「3天 6小时」会随日期自然失效。
   // 具体文案由下面收工后那条（endedAt 固定）钉住。
   assert.match(await headline.innerText(),

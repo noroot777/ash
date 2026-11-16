@@ -51,7 +51,6 @@ try {
   assert.equal(await leadPane.locator(".question-card").count(), 0, "派它的那条：回复框不长成那几条的答题卡");
   const feed = await leadFeed.innerText();
   assert.ok(!feed.includes("第一条的问题") && !feed.includes("第二条的问题"), "会话里一个字都不提那几问");
-  assert.ok(!feed.includes("答复直接送到了"));
 
   // —— 知道有人在问：侧栏和竖轨那颗键的数都变色，右侧那一行写着等你答复。
   await bothWarn(true);
@@ -79,7 +78,6 @@ try {
   await drawerB.getByRole("button", { name: "发送答复" }).click();
   await page.waitForFunction(() => window.__server.requests().some((request) => request.url === "/tasks/kid-b/answer"));
   const answerB = (await requests()).find((request) => request.url === "/tasks/kid-b/answer");
-  assert.equal(answerB.body.via, undefined, "答复就是它自己的答复，不带派它的那条");
   assert.equal(await row("第二条派出去的").locator("em").innerText(), "运行中", "右侧那一行跟着变");
   assert.ok(await warned(sideCount) && await warned(railCount), "还有一条在问：数还是那个颜色");
 

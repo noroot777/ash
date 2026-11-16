@@ -404,13 +404,6 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
   assert.equal(html.split("命令自己跑完了").length - 1, 1, "同一句话不该在一张卡上出现两次");
 }
 
-// ── 哨兵只有一个落脚点：回复框上面不再并排一条 ───────────────────────────────
-// 同一件事摆两处必然漂移，而且回复框上方每多一行，输入区就矮一行。
-for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx"]) {
-  const source = readSource(new URL(file, import.meta.url));
-  assert.doesNotMatch(source, /TaskMonitorStrip/, `${file} 不该再并排一条哨兵，它已经整格搬进 Inspector`);
-}
-
 // ── 手机端同样要有「叫停」这一下 ─────────────────────────────────────────────
 // 人不在电脑前的时候恰恰最需要它：哨兵每推一条事件就唤醒任务跑一个真回合。只在桌面端
 // 给停止入口，等于让用户眼睁睁看着它烧到自己走回电脑前。

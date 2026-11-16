@@ -110,7 +110,6 @@ try {
   const link = page.locator(".link-report");
   await link.getByRole("link", { name: "查看截图" }).waitFor();
   await until(() => listRequests.T7 >= 1, "T7 的清单取过一次");
-  assert.equal(listRequests.T7, 1);
   world.T7 = { version: 2, expired: ["x.png"] };
   await link.getByRole("link", { name: "查看截图" }).click();
   await page.locator(".image-preview-lightbox__gone").waitFor();

@@ -18,7 +18,7 @@ import { appendMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wa
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { verifyNoteOf } from "../src/task-detail/conversationNotes.ts";
-import { turnLayout } from "../src/task-detail/turnFold.ts";
+import { splitTurnSegments } from "../src/task-detail/turnFold.ts";
 
 type Agent = Extract<ConversationItem, { kind: "agent" }>;
 const T0 = Date.parse("2026-11-13T02:00:00.000Z");
@@ -77,7 +77,7 @@ const wakes = (items: ConversationItem[]) => items.filter((item) => item.kind ==
   const fix = turns[1]!;
   assert.match(fix.markdown, /照意见修好了[\s\S]*B 过了，修复完成。/);
   // 外面只留醒来后那段话，暂停前写的那段收进执行过程。
-  const { process, conclusion } = turnLayout(fix.segments, { live: false });
+  const { process, conclusion } = splitTurnSegments(fix.segments);
   assert.deepEqual(conclusion.map((segment) => segment.markdown.trim()).filter(Boolean), ["B 过了，修复完成。"]);
   assert.match(process.map((segment) => segment.markdown).join(""), /照意见修好了/);
   assert.ok(process.some((segment) => segment.events.some((e) => e.label.endsWith("monitor_wake"))), "叫醒那一下不在执行过程里");

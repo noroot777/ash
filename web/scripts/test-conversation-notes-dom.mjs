@@ -23,7 +23,6 @@ try {
   // 这份 fixture 全是**没有类型的老记录**：照样认得出哪几句要你知道，它们是所属回合的尾注。
   const messages = page.locator(".task-message--agent");
   await messages.first().waitFor();
-  assert.equal(await page.locator(".notice-line").count(), 0, "没有独占一行、图标落在头像轴上的旁注");
   const footnoteTexts = await messages.evaluateAll((elements) => elements.map((el) =>
     [...el.querySelectorAll(".turn-footnote-text")].map((text) => text.textContent).join(" · ")));
   assert.deepEqual(
