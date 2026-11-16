@@ -45,7 +45,8 @@ for (const baseUrl of ["https://provider.invalid", "https://provider.invalid/v1/
     assert.equal(config.env().ASH_RELAY_KEY, relay.apiKey);
     const appServer = config.appServerArgs({});
     assert.deepEqual(appServer.ignored, []);
-    assert.deepEqual(appServer.args, ["app-server", "--stdio", ...wiring.args!]);
+    // 后面还跟着 ash 自己那份 MCP 的 `-c mcp_servers.ash=…`（test-ash-mcp-inject 管），这里只认供应商这一段。
+    assert.deepEqual(appServer.args.slice(0, 2 + wiring.args!.length), ["app-server", "--stdio", ...wiring.args!]);
     for (const sessionId of ["", "fixture-session"]) {
       const execArgs = config.execArgs({ cwd: "/fixture" }, sessionId);
       assert.equal(execArgs.filter((arg) => arg === actorHeader).length, 1);

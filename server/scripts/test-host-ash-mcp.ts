@@ -9,16 +9,35 @@
 // Run: npm -w server run test:host-ash-mcp
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
-const src = new URL("../src/", import.meta.url);
-const mcpEntry = new URL("../../mcp/dist/index.js", import.meta.url);
-assert.ok(existsSync(mcpEntry), "先 build 出 mcp/dist（npm -w mcp run build）：补接要指向一个真实存在的入口");
+// realpath：macOS 的临时目录是条软链，而模块自己的位置（代码根由它算）是解析过的那一个。
+const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-host-mcp-")));
+
+// 被测代码认的「这份 ash 的 MCP 入口」是 `<代码根>/mcp/dist/index.js`，一份构建产物：验收门禁的快照里
+// 没有它，开发机上有没有也看人。所以不拿真仓库当代码根，另摆一份：server/src 抄过去（代码根是按源文件
+// 自己的位置算的，软链会被解析回原处）、依赖用链借、入口放一个占位文件 —— 补接只认它在不在，不跑它。
+const codeRoot = join(root, "code");
+const serverDir = fileURLToPath(new URL("..", import.meta.url));
+cpSync(join(serverDir, "src"), join(codeRoot, "server", "src"), { recursive: true });
+for (const file of ["package.json", "tsconfig.json"]) copyFileSync(join(serverDir, file), join(codeRoot, "server", file));
+const ownModules = join(serverDir, "node_modules");
+if (existsSync(ownModules)) symlinkSync(ownModules, join(codeRoot, "server", "node_modules"), "junction");
+for (let dir = dirname(serverDir); ; dir = dirname(dir)) {
+  if (existsSync(join(dir, "node_modules"))) { symlinkSync(join(dir, "node_modules"), join(codeRoot, "node_modules"), "junction"); break; }
+  assert.notEqual(dir, dirname(dir), "往上找不到 node_modules");
+}
+const src = pathToFileURL(join(codeRoot, "server", "src") + sep);
+const mcpEntry = pathToFileURL(join(codeRoot, "mcp", "dist", "index.js"));
+mkdirSync(dirname(fileURLToPath(mcpEntry)), { recursive: true });
+writeFileSync(mcpEntry, "// 占位：测试只要这个入口存在\n");
 
 function run(home: string, bin: string, body: string): Record<string, unknown> {
   const script = `${body}\nconsole.log("PROBE=" + JSON.stringify(out));`;
@@ -49,7 +68,6 @@ const out = { claude: hosts.find((h) => h.agentType === "claude") ?? null, untou
 
 type SetUp = { claude: Record<string, string> | null; untouched: boolean; onlyInstalled: boolean };
 
-const root = mkdtempSync(join(tmpdir(), "ash-host-mcp-"));
 try {
   const home = join(root, "home");
   const bin = join(root, "bin");

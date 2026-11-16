@@ -131,7 +131,11 @@ try {
   assert.equal((await windowCreate("window-stale", `ash_instance=${stale}`)).status, 409, "窗口端口上带着别人的实例号一样 409");
   assert.ok((await windowCreate("window-ours", `ash_instance=${ours}`)).status < 300, "窗口端口上带自己的实例号照常执行");
   assert.deepEqual((await names()).filter((n) => n.startsWith("window-")), ["window-ours"]);
-  assert.equal((await fetch(`${windowBase}/`, { headers: { cookie: `ash_instance=${ours}` } })).status, 200, "窗口端口上能载页面");
+  // 跟主端口比，不认死 200：页面是 web/dist 那份构建产物，没 build 过（验收门禁的快照就是）两个端口都答 503。
+  const page = (at: string) => fetch(`${at}/`, { headers: { cookie: `ash_instance=${ours}` } }).then((r) => r.status);
+  const windowPage = await page(windowBase);
+  assert.notEqual(windowPage, 409, "窗口端口上带自己的实例号不拒页面");
+  assert.equal(windowPage, await page(base), "窗口端口上载页面跟主端口一个结果");
 
   // 窗口专用端口被别的程序占着：服务照常起在主端口上，health 报 null（app 据此不载页面）。
   await stopServer();
