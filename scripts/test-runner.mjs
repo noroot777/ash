@@ -5,7 +5,7 @@
 // 名单，链怎么改这里就怎么跑。
 //
 // 跑法：node scripts/test-runner.mjs <workspace> <script>（如 `web test`）；验收入口
-// scripts/accept-test.mjs 用 runSteps() 把后端、前端两步并进同一个池子。
+// scripts/accept-test.mjs 用 runSteps() 把后端、前端、根脚本几步并进同一个池子。
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
@@ -20,7 +20,7 @@ const manifest = (dir) => JSON.parse(readFileSync(join(dir, "package.json"), "ut
 // 子包里写 `npm -w server` 指的是它自己底下的 server，npm 会报找不到，这里也不能替它圆过去。
 function workspaceResolver(repo) {
   const names = new Map();
-  const dirs = new Set([repo]);
+  const dirs = new Set([resolve(repo)]); // 调用方给的根常带着结尾的斜杠，`.` 解析出来的不带
   for (const entry of manifest(repo).workspaces ?? []) {
     const dir = resolve(repo, entry);
     dirs.add(dir);
@@ -42,11 +42,17 @@ export function expandChain(repo, workspace, script) {
     for (const part of chain.split("&&").map((text) => text.trim())) {
       const local = /^npm run (\S+)$/.exec(part);
       const other = /^npm (?:-w|--workspace) (\S+) run (\S+)$/.exec(part);
+      // `npm --prefix <目录> run <脚本>`：进到一个不是 workspace 的包里跑（mobile 就是），目录相对发起这条链的包。
+      const prefixed = /^npm --prefix (\S+) run (\S+)$/.exec(part);
       if (local) visit(dir, local[1]);
       else if (other) {
         const target = findWorkspace(dir, other[1]);
         if (!target) throw new Error(`找不到 workspace ${other[1]}（${relative(repo, dir) || "."} 的 ${name}）`);
         visit(target, other[2]);
+      } else if (prefixed) {
+        const target = resolve(dir, prefixed[1]);
+        if (!existsSync(join(target, "package.json"))) throw new Error(`找不到包 ${prefixed[1]}（${relative(repo, dir) || "."} 的 ${name}）`);
+        visit(target, prefixed[2]);
       } else leaves.push({ cwd: dir, command: part, script: name, label: `${relative(repo, dir) || "."}: ${part}` });
     }
   };

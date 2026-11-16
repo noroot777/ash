@@ -12,10 +12,11 @@ for (const key of Object.keys(environment)) {
 // 一张「每回合读 39.7M token」的账单；它现在由后端那一步带进来（test:accept → test:review
 // → test-prompt-budget），所以这里**不要**再单列一条，单列就是同一条跑两遍。
 //
-// 两步的叶子进同一个并行池子（scripts/test-runner.mjs），任何一条红就收掉在跑的、拒绝验收。
+// 几步的叶子进同一个并行池子（scripts/test-runner.mjs），任何一条红就收掉在跑的、拒绝验收。
 const STEPS = [
   { label: "后端核心回归", workspace: "server", script: "test:accept" },
   { label: "前端全量回归", workspace: "web", script: "test" },
+  { label: "脚本与手机端回归", workspace: ".", script: "test:accept-scripts" },
 ];
 
 console.log(`[accept-test] 运行${STEPS.map((step) => step.label).join("、")}…`);

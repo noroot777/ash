@@ -19,11 +19,32 @@ const SERIAL = { ASH_TEST_RUNNER: "serial" };
 function fixture(context, { backend = "node backend.mjs && npm run test:more", web = "node regression.mjs", webExtra = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), "ash accept-test "));
   context.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const dir of ["scripts", "server", "web"]) mkdirSync(join(root, dir));
+  for (const dir of ["scripts", "server", "web", "mobile"]) mkdirSync(join(root, dir));
   for (const name of ["accept-test.mjs", "test-runner.mjs", "test-runner-processes.mjs", "npm.mjs"]) {
     cpSync(join(repo, "scripts", name), join(root, "scripts", name));
   }
-  writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["server", "web"] }));
+  // 第三步的链住在根包：一条根目录下的脚本，再用 `npm --prefix` 进到一个**不是** workspace 的包（mobile 的形状）。
+  writeFileSync(join(root, "package.json"), JSON.stringify({
+    private: true,
+    workspaces: ["server", "web"],
+    scripts: { "test:accept-scripts": "node scripts/root-leaf.mjs && npm --prefix mobile run test:phone" },
+  }));
+  writeFileSync(join(root, "mobile", "package.json"), JSON.stringify({
+    name: "fixture-mobile",
+    private: true,
+    scripts: { "test:phone": "node phone.mjs" },
+  }));
+  // 这两条只留痕迹、不进 order.txt：下面按先后钉顺序的几条用例只看后端和前端那三条。
+  const quiet = (name) => `
+    import { writeFileSync } from "node:fs";
+    import { join } from "node:path";
+    writeFileSync(join(${JSON.stringify(root)}, ${JSON.stringify(`${name}.json`)}),
+      JSON.stringify({ cwd: process.cwd(), event: process.env.npm_lifecycle_event, data: process.env.ASH_DATA_DIR ?? null,
+        environment: Object.keys(process.env).filter((key) => /^ASH_(?:DB|RUNS_DIR)$/i.test(key)) }));
+    process.exit(Number(process.env[${JSON.stringify(`ACCEPT_TEST_${name.toUpperCase()}_EXIT`)}] ?? 0));
+  `;
+  writeFileSync(join(root, "scripts", "root-leaf.mjs"), quiet("root"));
+  writeFileSync(join(root, "mobile", "phone.mjs"), quiet("phone"));
   writeFileSync(join(root, "server", "package.json"), JSON.stringify({
     name: "fixture-server",
     private: true,
@@ -139,6 +160,26 @@ test("链里嵌的 npm run 展开成叶子，各在自己的包目录、以自�
   assert.equal(seen(root, "more").cwd, realpathSync(join(root, "server")));
   assert.match(result.stdout, /后端核心回归通过/);
   assert.match(result.stdout, /验收前置检查全部通过/);
+});
+
+test("第三步：根包的脚本在仓库根跑，npm --prefix 进到不是 workspace 的包里跑", (context) => {
+  const root = fixture(context);
+  const result = run(root);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(seen(root, "root").cwd, realpathSync(root));
+  assert.equal(seen(root, "phone").cwd, realpathSync(join(root, "mobile")));
+  assert.equal(seen(root, "phone").event, "test:phone");
+  assert.match(result.stdout, /脚本与手机端回归通过/);
+  // 这一步的叶子同样一条一个数据目录、同样不带宿主的库。
+  for (const name of ["root", "phone"]) {
+    assert.ok(seen(root, name).data, name);
+    assert.deepEqual(seen(root, name).environment, [], name);
+  }
+  const failed = fixture(context);
+  const red = run(failed, { ACCEPT_TEST_PHONE_EXIT: "5" });
+  assert.equal(red.status, 5, red.stdout + red.stderr);
+  assert.match(red.stdout, /脚本与手机端回归未通过/);
+  assert.doesNotMatch(red.stdout, /验收前置检查全部通过/);
 });
 
 test("跨包的 npm -w 也展开，跟 npm 一样按包名或相对本包目录的路径认", (context) => {
