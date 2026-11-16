@@ -563,8 +563,8 @@ export function TaskDetail({
                       )}
                       // 这条任务自己的提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
                       // 名下子任务来问不占这一格：那张卡在它自己的页面上。
-                      onAnswer={async (answer, input) => {
-                        await api.answerTask(task.id, answer, input);
+                      onAnswer={async (answer, input, attachments) => {
+                        await api.answerTask(task.id, answer, input, attachments);
                         notify("已发送答复，任务正在续跑");
                       }}
                       onLaunchPlan={launchPlan(task.id, notify)}
