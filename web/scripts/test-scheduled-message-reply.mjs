@@ -5,6 +5,12 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { resizeViewport } from "./wait-until.mjs";
 
 const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
+// 要看图再截（SHOT=1）：没有断言读这些图，不必每跑一次往检出的 output/ 里落一批。
+const shot = async (target, name, options = {}) => {
+  if (!process.env.SHOT) return;
+  await mkdir(artifacts, { recursive: true });
+  await target.screenshot({ path: `${artifacts}${name}.png`, ...options });
+};
 const web = await startWebServer();
 const messages = Array.from({ length: 10 }, (_, index) => ({
   id: `monitor-${index}`, taskId: "task-a", text: `【哨兵结束】检查 ${index}，退出码 0。命令自己跑完了。`,
@@ -14,7 +20,6 @@ const messages = Array.from({ length: 10 }, (_, index) => ({
 }));
 let browser;
 try {
-  await mkdir(artifacts, { recursive: true });
   const base = web.origin;
   browser = await launchChrome();
   for (const variant of ["single", "team"]) {
@@ -47,7 +52,7 @@ try {
       await settle();
       const after = await visibleSend("短窗口展开");
       assert.ok(Math.abs(after.bottom - before.bottom) < 1, `${variant}: 展开不将发送区向下推`);
-      await page.screenshot({ path: `${artifacts}scheduled-message-reply-${variant}-short.png` });
+      await shot(page, `scheduled-message-reply-${variant}-short`);
       await page.setViewportSize({ width: 390, height: 700 });
       await page.getByRole("separator").focus();
       await page.keyboard.press("End");
@@ -56,7 +61,7 @@ try {
       await input.fill(Array.from({ length: 80 }, (_, index) => `保留草稿第 ${index} 行`).join("\n"));
       assert.equal(await input.evaluate((element) => getComputedStyle(element).overflowY), "auto");
       assert.equal(await input.evaluate((element) => element.scrollHeight > element.clientHeight), true);
-      await page.screenshot({ path: `${artifacts}scheduled-message-reply-${variant}-resized.png` });
+      await shot(page, `scheduled-message-reply-${variant}-resized`);
       await page.getByRole("button", { name: "加入附件", exact: true }).click();
       await page.locator(".task-upload-chip").first().waitFor();
       for (const [width, height] of [[320, 320], [390, 400], [1024, 500], [390, 700]]) {
@@ -75,7 +80,7 @@ try {
       assert.deepEqual(errors, []);
       console.log(`✓ ${variant} 真实回复框：短视口、最大拉高、附件/操作栏、窗口变化和收起均保持发送按钮可见`);
     } catch (error) {
-      await page.screenshot({ path: `${artifacts}scheduled-message-reply-${variant}-failure.png`, fullPage: true });
+      await shot(page, `scheduled-message-reply-${variant}-failure`, { fullPage: true });
       throw error;
     } finally {
       await context.close();
@@ -155,7 +160,7 @@ try {
       await page.locator('[data-message-id="after"] .scheduled-message-summary').click();
       await page.locator('[data-message-id="after"] .scheduled-message-full').waitFor();
       await resizeViewport(page, { width: 540, height: 750 });
-      await page.screenshot({ path: `${artifacts}scheduled-message-reply-${variant}-mixed-540.png` });
+      await shot(page, `scheduled-message-reply-${variant}-mixed-540`);
       // 多位数条数 + 多位数要留意:最挤的那种,收着仍是一行;点要留意再 Esc 收回来也一样。
       pending = crowded;
       await page.reload();
@@ -170,7 +175,7 @@ try {
       await page.keyboard.press("Escape");
       assert.equal(await crowdedToggle.getAttribute("aria-expanded"), "false");
       assertOneLine(await collapsedLine(page), variant, "300px / 100 条 Esc 收回后");
-      await page.screenshot({ path: `${artifacts}scheduled-message-reply-${variant}-crowded-300.png` });
+      await shot(page, `scheduled-message-reply-${variant}-crowded-300`);
       assert.deepEqual(errors, []);
       console.log(`✓ ${variant} 混合输入：1280–300px 收着只占一行（含 100 条 / 99 条要留意）且摘要、引导够得着，点开后每条摘要都能读能点`);
     } finally {

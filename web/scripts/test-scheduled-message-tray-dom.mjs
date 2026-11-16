@@ -8,6 +8,12 @@ import { resizeViewport } from "./wait-until.mjs";
 // 带着自己最早那条和引导键;点开向上长、回复框不动;每条行尾的键按来源给;指到才出的键键盘与触屏够得着;
 // 全文就地摊开;要留意的条数能跳过去;哨兵取消的确认框;任务 / 团队两个宿主同一副画法;四档宽度不横溢。
 const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
+// 要看图再截（SHOT=1）：没有断言读这些图，不必每跑一次往检出的 output/ 里落一批。
+const shot = async (target, name, options = {}) => {
+  if (!process.env.SHOT) return;
+  await mkdir(artifacts, { recursive: true });
+  await target.screenshot({ path: `${artifacts}${name}.png`, ...options });
+};
 const web = await startWebServer();
 const message = (index) => {
   const kind = index % 5;
@@ -30,7 +36,6 @@ const deleted = [];
 const steered = [];
 let browser;
 try {
-  await mkdir(artifacts, { recursive: true });
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
@@ -304,7 +309,7 @@ try {
       });
     });
     assert.ok(keys.length > 0 && keys.every(Boolean), `${width}px 行尾的键都在列表里、没被挤出去`);
-    if (width === 1280 || width === 390) await page.screenshot({ path: `${artifacts}scheduled-message-production-${width}.png`, fullPage: true });
+    if (width === 1280 || width === 390) await shot(page, `scheduled-message-production-${width}`, { fullPage: true });
   }
   // 窄窗收着、排队 + 哨兵 + 要留意 + 引导撤回全挤在一行：摘要仍留得下一截（第 1 轮审查 N1：300px 时被挤成 0 宽）。
   await page.getByRole("button", { name: "排队 30", exact: true }).click();
@@ -328,7 +333,7 @@ try {
     getComputedStyle(document.querySelector(`[data-message-id="${id}"] .scheduled-message-source`)).color));
   assert.notEqual(dark[0], dark[1]);
   assert.notDeepEqual(dark, colors, "深色主题换了一套颜色");
-  await page.screenshot({ path: `${artifacts}scheduled-message-production-dark.png`, fullPage: true });
+  await shot(page, `scheduled-message-production-dark`, { fullPage: true });
   await page.evaluate(() => { delete document.documentElement.dataset.theme; });
 
   await page.getByRole("button", { name: "切换团队", exact: true }).click();
@@ -336,7 +341,7 @@ try {
   assert.equal(await page.getByRole("button", { name: /引导会话/ }).count(), 0, "团队入口不新增引导权限");
   const teamPosition = await geometry();
   assert.ok(teamPosition.tray.top >= 48 && teamPosition.draft.bottom <= 700, "团队托盘和回复框同样保持可见");
-  await page.screenshot({ path: `${artifacts}scheduled-message-production-team.png`, fullPage: true });
+  await shot(page, `scheduled-message-production-team`, { fullPage: true });
   await page.getByRole("button", { name: "切换任务", exact: true }).click();
   await page.getByRole("button", { name: "排队 30", exact: true }).waitFor();
   assert.equal(await list.count(), 0, "切换任务重置点开状态");
