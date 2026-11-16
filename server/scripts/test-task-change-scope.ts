@@ -48,6 +48,8 @@ const commit = (repo: string, file: string, content: string, message = file) => 
   return git(repo, "rev-parse", "HEAD");
 };
 const lines = (...values: string[]) => `${values.join("\n")}\n`;
+/** 同一秒内的提交先后不稳：清单里有别的分支带进来的提交时只比有哪些。 */
+const sorted = (values: string[]) => [...values].sort();
 
 let sequence = 0;
 /** 一个临时仓库：main 上有 shared.txt（三行）和 old.txt。 */
@@ -312,64 +314,103 @@ try {
     console.log("✓ 两条前置一进一没进：两边的改动都不算到下游头上");
   }
   {
-    // 单父继承（从父任务分支开叉）：父任务没合入时扣掉父的，压缩合入之后也不算回来。
+    // 单父继承（从父任务分支开叉）：开工点就是父任务那一版，父的改动在合入前后都不算子任务的。
     const r = await repository();
     const parent = await prerequisite(r, "parent");
     const child = await r.task("child", parent.head, { baseTaskId: parent.id, worktreeBase: parent.branch });
     r.on(child.branch, () => commit(r.repo, "child.txt", lines("child")));
-    // 父任务后来又有新提交，子任务把父分支再合进来一次：这一版比开工点新，同样不算子任务的。
+    commit(r.repo, "m1.txt", lines("m1"));
+    r.mergeMain(child.branch, "merge main");
+    let seen = await scope(r, child.id);
+    assert.deepEqual(seen.files, { "child.txt": [1, 0] });
+    assert.deepEqual(seen.subjects, ["merge main", "child.txt"], "开工点里的父提交不在子任务的清单里");
+    await squashAccept(r, parent, "accepted");
+    commit(r.repo, "parent.txt", lines("parent", "more"), "main extends parent.txt");
+    r.mergeMain(child.branch, "merge main again", { "parent.txt": lines("parent", "more") });
+    seen = await scope(r, child.id);
+    assert.deepEqual(seen.files, { "child.txt": [1, 0] }, "父任务压缩合入后不算回子任务头上，目标分支后来对它的修改也不算");
+    assert.deepEqual(seen.subjects, ["merge main again", "merge main", "child.txt"]);
+    console.log("✓ 从父任务分支开叉的子任务：开工点里父的改动和提交在父合入前后都不算子任务的");
+  }
+  for (const evidence of ["accepted", "receipt"] as const) for (const cleaned of [true, false]) {
+    // 定下来的行为（用户 2026-11-16）：只认「在哪」，不认「谁做的」。下游开工之后又手动合进来的上游提交，
+    // 在上游合入目标分支、下游把那一段合进来之前，算在下游的改动里 —— 文件和提交清单都有它；
+    // 合进来之后两边一起消失，凭的是上游验收时记下的那一版，上游的分支在不在都一样。
+    // 要拿上游后来的成果又不想算在自己头上，正路是「更新基线」（挪开工点），不是手动合。
+    const r = await repository();
+    const parent = await prerequisite(r, "parent");
+    const child = await r.task("child", parent.head, { baseTaskId: parent.id, worktreeBase: parent.branch });
+    r.on(child.branch, () => commit(r.repo, "child.txt", lines("child")));
     parent.head = r.on(parent.branch, () => commit(r.repo, "parent-more.txt", lines("more")));
     r.on(child.branch, () => git(r.repo, "merge", "-q", "--no-ff", "-m", "merge parent", parent.branch));
     commit(r.repo, "m1.txt", lines("m1"));
     r.mergeMain(child.branch, "merge main");
     let seen = await scope(r, child.id);
-    assert.deepEqual(seen.files, { "child.txt": [1, 0] });
-    assert.deepEqual(seen.subjects, ["merge main", "merge parent", "child.txt"], "父任务的提交不在子任务的清单里");
-    await squashAccept(r, parent, "accepted");
-    commit(r.repo, "parent.txt", lines("parent", "more"), "main extends parent.txt");
-    r.mergeMain(child.branch, "merge main again", { "parent.txt": lines("parent", "more") });
-    seen = await scope(r, child.id);
-    assert.deepEqual(seen.files, { "child.txt": [1, 0] });
-    assert.deepEqual(seen.subjects, ["merge main again", "merge main", "merge parent", "child.txt"],
-      "父任务压缩合入之后，它原来那些提交从目标分支走不到，仍然不算子任务的");
-    console.log("✓ 从父任务分支开叉的子任务：父的改动和提交在合入前后都不算子任务的");
-  }
-  for (const evidence of ["accepted", "receipt"] as const) {
-    // 父任务验收之后分支被清理：子任务后来合进来的那几条父提交，凭验收留下的那一版照样认得出来。
-    // 这一档里每个仓库都是头一次读，没有记着的答案可以借。
-    const r = await repository();
-    const parent = await prerequisite(r, "parent");
-    const child = await r.task("child", parent.head, { baseTaskId: parent.id, worktreeBase: parent.branch });
-    r.on(child.branch, () => commit(r.repo, "child.txt", lines("child")));
-    parent.head = r.on(parent.branch, () => commit(r.repo, "parent-more.txt", lines("more")));
-    r.on(child.branch, () => git(r.repo, "merge", "-q", "--no-ff", "-m", "merge parent", parent.branch));
-    const mergedIn = await squashAccept(r, parent, evidence);
-    git(r.repo, "branch", "-D", parent.branch);
-    r.mergeMain(child.branch, "merge main");
-    const seen = await scope(r, child.id);
-    assert.equal(seen.base, mergedIn, "父任务最新交来的那一版已经在合进来的目标分支里");
-    assert.deepEqual(seen.files, { "child.txt": [1, 0] });
-    assert.deepEqual(seen.subjects, ["merge main", "merge parent", "child.txt"], "父分支删了，父任务后来那条提交也不算子任务的");
+    assert.deepEqual(seen.files, { "child.txt": [1, 0], "parent-more.txt": [1, 0] }, "父任务没合入：子任务手动合进来的那条父改动算在子任务的改动里");
+    assert.deepEqual(sorted(seen.subjects), sorted(["merge main", "merge parent", "parent-more.txt", "child.txt"]), "提交清单同样有它：和文件说的是同一件事");
 
-    // 按前置开工的下游同理：后来又合了一次前置的分支，前置压缩合入、分支清理。
+    const landedAt = await squashAccept(r, parent, evidence);
+    if (cleaned) git(r.repo, "branch", "-D", parent.branch);
+    seen = await scope(r, child.id);
+    assert.deepEqual(seen.files, { "child.txt": [1, 0], "parent-more.txt": [1, 0] }, "父任务合入了，子任务还没把那一段合进来：照旧");
+    assert.equal(seen.total, 4);
+    r.mergeMain(child.branch, "merge main again");
+    seen = await scope(r, child.id);
+    assert.equal(seen.base, landedAt, "父任务的验收版本已经在合进来的目标分支里：基准就是那一段");
+    assert.deepEqual(seen.files, { "child.txt": [1, 0] }, "父的改动已经在目标分支上：不算子任务的");
+    assert.deepEqual(sorted(seen.subjects), sorted(["merge main again", "merge main", "merge parent", "child.txt"]), "父的提交也一起从清单里消失");
+
+    // 按前置开工的下游同理。
     const giver = await prerequisite(r, "pre");
     const task = await downstream(r, "after-pre", [giver]);
     r.on(task.branch, () => commit(r.repo, "down.txt", lines("down")));
     giver.head = r.on(giver.branch, () => commit(r.repo, "pre-more.txt", lines("more")));
     r.on(task.branch, () => git(r.repo, "merge", "-q", "--no-ff", "-m", "merge pre", giver.branch));
-    // 前置还没合入、分支还在：后来交来的那一版也从开工点这一侧扣掉。
     commit(r.repo, "m9.txt", lines("m9"));
     r.mergeMain(task.branch, "merge main");
     let later = await scope(r, task.id);
-    assert.deepEqual(later.files, { "down.txt": [1, 0] });
-    assert.deepEqual(later.subjects, ["merge main", "merge pre", "down.txt"]);
+    assert.deepEqual(later.files, { "down.txt": [1, 0], "pre-more.txt": [1, 0] });
+    assert.deepEqual(sorted(later.subjects), sorted(["merge main", "merge pre", "pre-more.txt", "down.txt"]));
     await squashAccept(r, giver, evidence);
-    git(r.repo, "branch", "-D", giver.branch);
+    if (cleaned) git(r.repo, "branch", "-D", giver.branch);
     r.mergeMain(task.branch, "merge main again");
     later = await scope(r, task.id);
     assert.deepEqual(later.files, { "down.txt": [1, 0] });
-    assert.deepEqual(later.subjects, ["merge main again", "merge main", "merge pre", "down.txt"]);
-    console.log(`✓ 来源任务${evidence === "accepted" ? "压缩合入" : "凭回执合入"}后分支被清理：它后来交来的提交仍不算下游的（单父、前置两种）`);
+    assert.deepEqual(sorted(later.subjects), sorted(["merge main again", "merge main", "merge pre", "down.txt"]));
+    console.log(`✓ 开工后手动合进来的上游提交（上游${evidence === "accepted" ? "压缩合入" : "凭回执合入"}、分支${cleaned ? "已清理" : "还在"}）：上游合入并被下游合进来之前算下游的，之后文件和提交一起不算`);
+  }
+  {
+    // 上游收过下游的一部分再回流：父任务先合了子任务当时的成果、自己再往前走，子任务又把父分支合回来。
+    // 子任务自己前后两次的文件和提交都在 —— 不从共同祖先去猜哪一段是「父交来的」。
+    const r = await repository();
+    const parent = await prerequisite(r, "parent");
+    const child = await r.task("child", parent.head, { baseTaskId: parent.id, worktreeBase: parent.branch });
+    r.on(child.branch, () => commit(r.repo, "child-first.txt", lines("first")));
+    parent.head = r.on(parent.branch, () => {
+      git(r.repo, "merge", "-q", "--no-ff", "-m", "parent receives child", child.branch);
+      return commit(r.repo, "parent-more.txt", lines("more"));
+    });
+    r.on(child.branch, () => {
+      commit(r.repo, "child-second.txt", lines("second"));
+      git(r.repo, "merge", "-q", "--no-ff", "-m", "merge parent", parent.branch);
+    });
+    commit(r.repo, "foreign.txt", lines("foreign"));
+    r.mergeMain(child.branch, "merge main");
+    let seen = await scope(r, child.id);
+    assert.deepEqual(seen.files, { "child-first.txt": [1, 0], "child-second.txt": [1, 0], "parent-more.txt": [1, 0] },
+      "子任务两次自己的文件都在；父任务没合入的那条照上一档的规矩也在");
+    assert.deepEqual(sorted(seen.subjects),
+      sorted(["merge main", "merge parent", "child-second.txt", "parent-more.txt", "parent receives child", "child-first.txt"]),
+      "子任务两次自己的提交和它做的两次合并都在清单里");
+
+    // 父任务随后压缩合入，合入的那一版里就有 child-first：它从此是「目标分支上已经有的」，
+    // 子任务把那一段合进来之后，文件和提交一起不再算（验收子任务也不会再带进去这一份）。
+    await squashAccept(r, parent, "accepted");
+    r.mergeMain(child.branch, "merge main again");
+    seen = await scope(r, child.id);
+    assert.deepEqual(seen.files, { "child-second.txt": [1, 0] });
+    assert.deepEqual(sorted(seen.subjects), sorted(["merge main again", "merge main", "merge parent", "child-second.txt"]));
+    console.log("✓ 上游收过下游的一部分再回流：下游自己的文件和提交不被扣掉；随上游合入目标分支的那部分之后才不算");
   }
   {
     // 提交清单截断：列出来的是最近一批，条数照实给。

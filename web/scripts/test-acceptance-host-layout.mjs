@@ -21,6 +21,7 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 //    有几条写在清单底下。2026-11-16 现场是一条 185 个提交的分支在第一行写着「50 提交」。
 // ⑦ **数不出来的不写成 0**。diff 和提交都读不出来时第一行没有「提交」「文件」那两项（原因写在 diff 的
 //    位置上），不是「0 提交 0 文件 +0 −0」；连着不给总数的旧服务端、清单又列满时写「50+ 提交」。
+//    只有提交清单读不出来、diff 是好的时候，原因没有别处可写：留一个不带数字的「提交」，点开是原因。
 const web = await startWebServer();
 
 const LONG_BLOCKER = "父任务「重写验收台」的分支还没合入 main，本任务基于它开工：web/src/acceptance/AcceptanceControls.tsx/web/src/acceptance/DependencyChecks.tsx/web/src/acceptance/CheckRow.tsx 这几处改动都还没进目标分支，请先验收父任务，或把开工起点改到 main 之后重新跑一遍再来验收。";
@@ -31,7 +32,8 @@ const GONE_SELECTORS = [".review-meta-bar", ".accepted-snapshot-card", ".branch-
 const ACTION = "验收通过";
 const LISTED_COMMITS = 50;
 const TOTAL_COMMITS = 185;
-// ⑦ 用，都落在冲突那张台子上：legacy = 连的是不给总数的旧服务端；unreadable = diff 和提交都读不出来。
+// ⑦ 用，都落在冲突那张台子上：legacy = 连的是不给总数的旧服务端；unreadable = diff 和提交都读不出来；
+// listOnly = 只有提交清单读不出来，diff 是好的。
 const degraded = { mode: null };
 
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n export { a, b };\n";
@@ -97,6 +99,9 @@ function api(hold, unexpected) {
           return reply({ available: false, sourceBranch: `ash/${taskId}`, targetBranch: "main", mergeBase: null, diff: "", files: [],
             truncated: false, limitBytes: 1048576, reason: "start_commit_unreadable" });
         }
+      }
+      if (degraded.mode === "listOnly" && taskId === "conflict-task" && what === "commits") {
+        return reply({ branch: null, commits: [], total: null, reason: "commit_list_unreadable" });
       }
       if (degraded.mode === "legacy" && taskId === "conflict-task" && what === "commits") {
         return reply({ branch: `ash/${taskId}`, commits: Array.from({ length: LISTED_COMMITS }, (_, index) => commit(index)) });
@@ -315,6 +320,18 @@ try {
       assert.equal(await broken.locator("button.acc-link").count(), 0, `${width}px：提交数不出来时不该有「N 提交」`);
       assert.equal(await broken.locator(".acc-stat").count(), 0, `${width}px：diff 读不出来时不该有「N 文件 +a −d」`);
       assert.doesNotMatch(await broken.innerText(), /提交|文件/, `${width}px：第一行不该给出任何数字`);
+
+      degraded.mode = "listOnly";
+      await page.reload();
+      await page.locator('[data-host="conflict"] .acc-route .acc-stat').waitFor();
+      assert.equal((await commitCount("conflict").innerText()).trim(), "提交", `${width}px：清单读不出来时不写数字，但留着看原因的入口`);
+      assert.match(await broken.locator(".acc-stat").innerText(), /1 文件/, `${width}px：diff 是好的，文件和增删行照写`);
+      await commitCount("conflict").click();
+      await commitLayer.waitFor();
+      assert.ok((await commitLayer.innerText()).includes("提交清单读不出来"), `${width}px：点开要说清是清单读不出来`);
+      assert.equal(await commitLayer.locator("li").count(), 0);
+      await page.keyboard.press("Escape");
+      await commitLayer.waitFor({ state: "detached" });
     } finally { degraded.mode = null; }
 
     assert.deepEqual(unexpected, [], `${width}px：页面发了未声明的请求`);

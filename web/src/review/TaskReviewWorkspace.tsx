@@ -2,6 +2,7 @@ import type { Task, TaskListItem } from "@ash/shared";
 import { GitBranch, X } from "@phosphor-icons/react";
 import { IconButton } from "../components/IconButton.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { commitListFailure } from "../lib/branch-diff-reason.ts";
 import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
 import { routeTargetOf } from "../acceptance/acceptTarget.ts";
 import { AcceptRoute } from "../acceptance/AcceptRoute.tsx";
@@ -16,6 +17,7 @@ type ReviewData = {
   branch: string | null;
   commits: TaskCommit[];
   commitTotal: number | null;
+  commitFailure: string | null;
   diff: TaskDiffResult;
 };
 
@@ -65,7 +67,8 @@ export function TaskReviewWorkspace({
   const version = `${task.updatedAt}|${commitVersion}|${factsVersion}`;
   const changes = useVersionedRead<ReviewData>(task.id, version, () =>
     Promise.all([api.taskCommits(task.id), api.taskDiff(task.id)])
-      .then(([commits, diff]) => ({ branch: commits.branch, commits: commits.commits, commitTotal: commits.total, diff })), !sharedParent);
+      .then(([commits, diff]) => ({ branch: commits.branch, commits: commits.commits, commitTotal: commits.total,
+        commitFailure: commitListFailure(commits, diff.available), diff })), !sharedParent);
   const shared = useVersionedRead<string | null>(`${task.id}>${sharedParent?.id ?? ""}`, version,
     () => api.taskCommits(sharedParent!.id).then((commits) => commits.branch), !!sharedParent);
 
@@ -98,6 +101,7 @@ export function TaskReviewWorkspace({
     target: routeTargetOf(task, data.diff.targetBranch),
     commits: data.commits,
     commitTotal: data.commitTotal,
+    commitFailure: data.commitFailure,
     diff: data.diff,
   };
   return (

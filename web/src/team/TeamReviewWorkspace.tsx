@@ -4,6 +4,7 @@ import { taskDisplayStatus } from "@ash/shared";
 import { CaretDown, SpinnerGap } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { commitListFailure } from "../lib/branch-diff-reason.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { parseAttachmentText } from "../task-detail/utils.ts";
@@ -20,6 +21,7 @@ import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 type ReviewData = {
   commits: TaskCommit[];
   commitTotal: number | null;
+  commitFailure: string | null;
   branch: string | null;
   diff: TaskDiffResult;
   sessions: Session[];
@@ -31,7 +33,8 @@ function useReviewChanges(task: TaskListItem, enabled = true) {
   const factsVersion = useTaskFacts(task.id, task.updatedAt).version;
   return useVersionedRead<ReviewData>(task.id, `${task.updatedAt}|${commitVersion}|${factsVersion}`, () =>
     Promise.all([api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id)])
-      .then(([commits, diff, sessions]) => ({ commits: commits.commits, commitTotal: commits.total, branch: commits.branch, diff, sessions })), enabled);
+      .then(([commits, diff, sessions]) => ({ commits: commits.commits, commitTotal: commits.total,
+        commitFailure: commitListFailure(commits, diff.available), branch: commits.branch, diff, sessions })), enabled);
 }
 
 function routeOf(task: TaskListItem, data: ReviewData): RouteData {
@@ -41,6 +44,7 @@ function routeOf(task: TaskListItem, data: ReviewData): RouteData {
     target: routeTargetOf(task, data.diff.targetBranch),
     commits: data.commits,
     commitTotal: data.commitTotal,
+    commitFailure: data.commitFailure,
     diff: data.diff,
   };
 }

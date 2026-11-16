@@ -6,14 +6,14 @@ import { InspRow } from "../inspector/parts.tsx";
 import { useInspectorNav } from "../inspector/nav.tsx";
 import { api, type TaskDiffResult } from "../lib/api.ts";
 import { sharedTeamParent } from "../review/reviewModel.ts";
-import { branchDiffReason } from "../lib/branch-diff-reason.ts";
+import { branchDiffReason, commitListFailure } from "../lib/branch-diff-reason.ts";
 import { RollingNumber } from "../lib/motion/index.ts";
 
 interface ChangeData {
   branch: string | null;
-  /** 真实条数（清单只列最近一批，不拿它的长度当总数）。 */
-  /** 数不出来时是 null：那时不写提交数，不写成 0。 */
+  /** 真实条数（清单只列最近一批，不拿它的长度当总数）。数不出来时是 null：那时不写提交数，不写成 0。 */
   commitTotal: number | null;
+  commitFailure: string | null;
   diff: TaskDiffResult;
 }
 
@@ -45,7 +45,7 @@ export function TaskChangeSummary({
     setError(null);
     Promise.all([api.taskCommits(sourceTask.id), api.taskDiff(sourceTask.id)]).then(
       ([commits, diff]) => {
-        if (alive) setData({ branch: commits.branch, commitTotal: commits.total, diff });
+        if (alive) setData({ branch: commits.branch, commitTotal: commits.total, commitFailure: commitListFailure(commits, diff.available), diff });
       },
       (reason) => {
         if (alive) {
@@ -92,6 +92,9 @@ export function TaskChangeSummary({
       </InspRow>
       {!loading && data && !data.diff.available && (
         <InspRow wide><p className="insp-faint">当前无法生成分支 diff：{branchDiffReason(data.diff.reason)}。</p></InspRow>
+      )}
+      {!loading && data?.commitFailure && (
+        <InspRow wide><p className="insp-faint">{branchDiffReason(data.commitFailure)}。</p></InspRow>
       )}
     </>
   );

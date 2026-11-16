@@ -20,6 +20,15 @@
 // 解冲突时动的内容落在「合出来的树」与分支头之间，算任务自己的。
 //
 // 提交清单同理：分支上有、而从目标分支和开工点都走不到的提交（它自己做的合并提交算）。
+// 另外只多排除一种，而且只凭记录：来源任务（前置、父任务）验收时记下的那一版，并且那次合入已经在
+// 任务分支合进来的那段目标分支里 —— 压缩合入之后那些提交从目标分支走不到，内容却已经在目标分支上了。
+//
+// **不认「谁做的」，只认「在哪」**（用户 2026-11-16 定）。提交历史只记得谁能走到谁，不记得谁交给谁，
+// 所以这里不推断归属：下游开工之后又手动合进来的上游提交（比如再合一次父任务的分支），在上游合入
+// 目标分支、下游把那一段合进来之前，**算在下游的改动里** —— 提交清单和文件都有它，两边说的是同一件事。
+// 这和合并请求页面的读法一致，验收时依赖闸也会等上游先合入；要拿上游后来的成果，正路是「更新基线」，
+// 那条路会挪开工点，挪完就不算了。曾经试过从共同祖先、来源分支头去认「上游后来交来的」，每补一种
+// 走法就漏另一种（上游收过下游的一部分再回流时，下游自己的改动会被整段扣掉），所以整层没有了。
 //
 // 只读：不碰任何工作区和索引。要合成一棵树时用 `merge-tree --write-tree` + `commit-tree`，
 // 只往对象库里写对象；身份和日期写死，同样的输入永远得到同一个提交号，反复读不会越攒越多。
@@ -165,23 +174,19 @@ async function combine(repo: string, picks: string[]): Promise<Combined> {
   return { ok: true, commit: acc, synthesized: kept.length > 1 };
 }
 
-/** `carried` = 开工点这一侧别人交来的那几版（提交清单的排除项里要有它们）。 */
+/** `landed` = 来源任务已经进了那段目标分支的验收版本（提交清单的排除项里要有它们）。 */
 async function changeBase(repo: string, taskId: string, head: string, start: string | null, target: string,
-): Promise<{ ok: true; base: string; carried: string[] } | { ok: false; reason: ChangeScopeFailure }> {
+): Promise<{ ok: true; base: string; landed: string[] } | { ok: false; reason: ChangeScopeFailure }> {
   try {
     const shape = await shapes.get([repo, head, start ?? "", target].join("\0"), () => readShape(repo, head, start, target));
     if (!start && !shape.related) return { ok: false, reason: "no_merge_base" };
-    if (start && !shape.merged.length) return { ok: true, base: start, carried: [] };
-    let picks = shape.merged;
-    let carried: string[] = [];
-    if (start && !shape.startInside) {
-      // 开工点不在合进来的那段目标分支里：它带着别处的代码（前置、父任务、另一条基线分支）。
-      // 其中已经进了那段目标分支的不再另算，判据在 task-change-sources.ts（要读库，按需加载）。
-      const { startSideOf } = await import("./task-change-sources.js");
-      const side = await startSideOf(repo, taskId, head, start, shape.merged);
-      picks = [...shape.merged, ...side.pending];
-      carried = side.carried;
-    }
+    if (start && !shape.merged.length) return { ok: true, base: start, landed: [] };
+    // 合过目标分支：来源任务的验收记录说了算的两件事在 task-change-sources.ts（要读库，按需加载）。
+    const { startSideOf } = await import("./task-change-sources.js");
+    const side = await startSideOf(repo, taskId, start, shape.merged);
+    // 开工点不在合进来的那段目标分支里：它带着别处的代码（前置、父任务、另一条基线分支），
+    // 其中已经进了那段目标分支的不再另算。
+    const picks = start && !shape.startInside ? [...shape.merged, ...side.pending] : shape.merged;
     const key = [repo, ...picks].join("\0");
     const compute = () => combine(repo, picks);
     let combined = await combinations.get(key, compute);
@@ -190,7 +195,7 @@ async function changeBase(repo: string, taskId: string, head: string, start: str
       combinations.forget(key);
       combined = await combinations.get(key, compute);
     }
-    return combined.ok ? { ok: true, base: combined.commit, carried } : combined;
+    return combined.ok ? { ok: true, base: combined.commit, landed: side.landed } : combined;
   } catch {
     return { ok: false, reason: "base_unreadable" };
   }
@@ -228,7 +233,7 @@ export async function taskChangeScope(repoPath: string, task: ChangeScopeTask): 
   if (!base.ok) return fail(targetBranch, base.reason);
   return {
     ok: true, sourceBranch, targetBranch, head, base: base.base,
-    exclude: [...new Set([target, ...start ? [start] : [], ...base.carried])],
+    exclude: [...new Set([target, ...start ? [start] : [], ...base.landed])],
   };
 }
 
@@ -257,6 +262,6 @@ export async function taskChangeCommits(repoPath: string, task: ChangeScopeTask,
     const total = commits.length < limit ? commits.length : Number(await git(repo, ["rev-list", "--count", ...range]));
     return { commits, total };
   } catch {
-    return { commits: [], total: null, reason: "task_diff_unreadable" };
+    return { commits: [], total: null, reason: "commit_list_unreadable" };
   }
 }

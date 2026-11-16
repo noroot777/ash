@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { Task, TaskListItem } from "@ash/shared";
 import { api, type TaskCommitList, type TaskDiffResult } from "../../src/lib/api.ts";
 import { json, request } from "../../src/lib/apiClient.ts";
+import { commitListFailure } from "../../src/lib/branch-diff-reason.ts";
 import { AcceptanceControls } from "../../src/acceptance/AcceptanceControls.tsx";
 import { AcceptRoute } from "../../src/acceptance/AcceptRoute.tsx";
 import { useBranchPlan } from "../../src/review/useBranchPlan.ts";
@@ -78,6 +79,7 @@ function Fixture() {
     target: diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "验收时确定",
     commits: commits?.commits ?? [],
     commitTotal: commits?.total ?? null,
+    commitFailure: commits ? commitListFailure(commits, diff.available) : null,
     diff,
   };
   return <main style={{ maxWidth: 920, padding: 32, margin: "auto" }}>
