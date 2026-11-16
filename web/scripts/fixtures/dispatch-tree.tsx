@@ -3,7 +3,7 @@
 // 摆的是线上会碰到的几种行：一条派了三条的分析任务（其中一条在等答复、一条自己又派了一条），
 // 一条派它的那条已经归档了的派出任务（得照常平铺），一个团队和它的执行者（样子不能变）。
 // 「搜索命中」走的是工作区的同一条路：选中某个任务 id —— 这里由 window.__select 代劳；侧栏筛选
-// （星标、状态）由 window.__filter 拨。
+// （状态）由 window.__filter 拨。
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ProjectView, Task } from "@ash/shared";
@@ -83,7 +83,6 @@ function Ash() {
         spread={spread}
         onTask={(next) => setSelectedTaskId(next.id)}
         onRemoteTask={() => {}}
-        onTaskStarred={() => {}}
         onHandoffFinished={() => {}}
         onQueueChanged={() => {}}
         outbound={{ outboundCount: 0, offlinePeers: [], asked: true, refreshing: false, onRefresh: () => {} }}

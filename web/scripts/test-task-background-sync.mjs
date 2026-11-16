@@ -8,12 +8,13 @@ import { mergeTaskSnapshotFields } from "../src/lib/taskSnapshot.ts";
 // upstreamStalled: undefined」—— 2026 年加停滞看门狗那一刀就是这么把它搞红的,而那句话
 // 说不出「这一格到底该不该跟着版本号走」。答案是该:它跟另外两格同一个版本号。
 const base = { id: "task", projectId: "project", title: "same", updatedAt: "2026-10-24T00:00:00Z",
-  backgroundRevision: 0, acceptGateRunning: false, monitorRunning: false, upstreamStalled: false };
+  backgroundRevision: 0, acceptGateRunning: false, monitorRunning: false, upstreamStalled: false,
+  disputeOpen: false, prerequisites: undefined };
 const mergers = [mergeFetchedTasks, (current, incoming) => upsertTask(current, incoming[0]),
   (current, incoming) => mergeCreatedTask(current, incoming[0]),
   (current, incoming) => mergeTaskSnapshot(current, incoming[0])];
 
-for (const field of ["acceptGateRunning", "monitorRunning", "upstreamStalled"]) {
+for (const field of ["acceptGateRunning", "monitorRunning", "upstreamStalled", "disputeOpen"]) {
   const started = { ...base, [field]: true, backgroundRevision: 1 };
   const ended = { ...base, backgroundRevision: 2 };
   for (const merge of mergers) {
@@ -36,7 +37,7 @@ for (const field of ["acceptGateRunning", "monitorRunning", "upstreamStalled"]) 
     assert.deepEqual(merge([started], [started])[0], started);
   }
 }
-const both = { ...base, acceptGateRunning: true, monitorRunning: true, upstreamStalled: true, backgroundRevision: 3 };
+const both = { ...base, acceptGateRunning: true, monitorRunning: true, upstreamStalled: true, disputeOpen: true, backgroundRevision: 3 };
 assert.deepEqual(mergeTaskSnapshotFields(both, base), both);
 assert.equal(mergeTaskSnapshot([], both).length, 0);
 assert.deepEqual(mergeCreatedTask([], both), [both]);

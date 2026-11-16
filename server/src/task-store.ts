@@ -91,7 +91,6 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   status: r.status as TaskStatus,
   stage: (r.stage as TaskStage | null) ?? null,
   pinnedAt: r.pinnedAt ?? null,
-  starredAt: r.starredAt ?? null,
   reviewOf: r.reviewOf ?? null,
   reviewRound: r.reviewRound ?? null,
   reviewRequested: r.reviewRequested,
@@ -185,6 +184,20 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
     .from(queueItems)
     .where(inArray(queueItems.taskId, rows.map((r) => r.id)));
   const byQueueTask = new Map(items.map((q) => [q.taskId, q] as const));
+  // 对外的 queuePosition 是**名次**(0..N-1),不是库里那一列的原值:position 只保证先后,
+  // 中间缺号(删任务只摘自己那一格)的话原值 +1 就成了「13/12」这种读数。
+  const queueRank = new Map<string, number>();
+  const queueIds = [...new Set(items.map((q) => q.queueId))];
+  if (queueIds.length) {
+    const members = await db.select({ queueId: queueItems.queueId, taskId: queueItems.taskId }).from(queueItems)
+      .where(inArray(queueItems.queueId, queueIds)).orderBy(queueItems.queueId, queueItems.position);
+    let queueId: string | null = null;
+    let rank = 0;
+    for (const member of members) {
+      if (member.queueId !== queueId) { queueId = member.queueId; rank = 0; }
+      queueRank.set(member.taskId, rank++);
+    }
+  }
   const background = new Map((await db.select({
     taskId: tasks.id,
     backgroundRevision: sql<number>`coalesce(${taskBackgroundRevisions.revision}, 0)`.mapWith(Number),
@@ -231,7 +244,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       ...toTask(r, profiles),
       ...runsTiming(byTask.get(r.id) ?? []),
       queueId: q?.queueId ?? null,
-      queuePosition: q?.position ?? null,
+      queuePosition: q ? queueRank.get(r.id) ?? q.position : null,
       backgroundRevision: background.get(r.id)?.backgroundRevision ?? 0,
       acceptGateRunning: background.get(r.id)?.acceptGateRunning ?? false,
       monitorRunning: background.get(r.id)?.monitorRunning ?? false,

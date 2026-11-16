@@ -84,7 +84,7 @@ export type LaterSend = ReturnType<typeof useLaterSend>;
  *  的文案,免得设置藏在浮层里、按钮看上去还是「发送」。status 是此刻主按钮不在「发送」的
  *  那些情形(上传中、补全技能…),它优先,也不受「稍后」没配好的拦截。 */
 /**
- * 有东西可停时这颗键也是停止键（docs/ui-ux-audit reply-4）：输入框空着时主段就是停止；打了字
+ * 有东西可停时这颗键也是停止键：输入框空着时主段就是停止；打了字
  * 主段要用来发送，停止挪到它左边一颗小键上——什么时候都停得下来。
  */
 export type SendStop = { label: string; busy?: boolean; onStop: () => void };

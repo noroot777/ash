@@ -1,6 +1,6 @@
 # 原生目标与斜杠命令
 
-本次对照本机 Codex CLI 0.153.4、Claude Code 2.1.283 的协议和官方命令清单接入。入口只有对话框中的 `/` 补全与直接输入斜杠命令；没有新增“＋ → 目标”、目标按钮或另一套控制面板。原生命令在菜单中单独分组，不作为 skill 交给模型猜测执行。
+入口只有对话框中的 `/` 补全与直接输入斜杠命令；没有新增“＋ → 目标”、目标按钮或另一套控制面板。原生命令在菜单中单独分组，不作为 skill 交给模型猜测执行。
 
 ## 目标
 
@@ -90,17 +90,3 @@ Codex 原生适配依赖 App Server。带 exec 专属参数的 profile 不会偷
 | `/logout`、`/feedback`、`/import`、`/delete` | 会改变账号、发送日志、迁移全局配置或删除原生历史；没有因批量接入命令而自动开放这些副作用 |
 | `/experimental`、`/memories`、hooks 信任/启停、插件安装 | 涉及 CLI 全局开关或配置持久化，本次只接入任务范围设置和只读清单，不伪装成完整配置管理 |
 | `/init` | 生成仓库 `AGENTS.md`，没有稳定的独立 App Server 命令；未用普通提示词冒充原生接口，也未擅自添加仓库规则 |
-
-## 验证
-
-`npm -w server run test:cli-commands` 覆盖解析、预算、执行器差异、RPC、多轮生命周期、提前完成/延迟 verdict、失败恢复、隐私、HTTP 即时控制、持久暂停与结算隔离。
-
-`npm -w server run test:goal-native-live` 使用真实 Codex/Claude 二进制与独立配置目录，但模型端是本机 Responses/Anthropic 测试服务；不消耗用户模型额度。验证 Codex 两轮后原生预算停止，以及 Claude 三轮目标工作和上下文文件清理，另验证 Codex 的检查、设置、压缩、审查、分叉与新会话协议。它还走 ash 的真实续聊链路，覆盖计划状态按执行器隔离、旁路回合不受计划模式污染、持久预算暂停、目标查询和新建/清空后不复用旧上下文。
-
-`npm -w web run test:cli-commands` 在独立测试库中启动真实 ash 服务，验证两种执行器的补全、团队过滤、快照查询不产生假用户气泡、验收状态保留以及刷新后会话说明仍在。另覆盖跨执行器与常设智能体切换后的计划作用域提示、真实 `@` 临时召唤 Codex 及 `/plan off`、Claude 普通回复不受 Codex 计划影响，以及 Codex 运行/Claude 运行与重试清除全部作用域。需要先构建 shared、server 和 web。
-
-`npm --prefix mobile run test:reply-command-ui` 使用已导出的手机 Web 产物、独立无头浏览器和临时 HTTP 夹具，验证未落盘命令结果在轮询后仍可见、已落盘结果不重复且刷新可见、延迟响应不串到其他任务。先运行 `npm run build:mobile`；此测试不连接用户的 live ash 服务，也不替代 iOS/Android 真机验证。
-
-本轮浏览器通道先尝试 Chrome 扩展具名后台会话 `🧪 ash 原生目标命令`，扩展报告 `unsupported Codex auth method: apikey`，无法建立连接。随后使用独立临时 profile 的 headless Chromium 验证；没有激活 Chrome、接管普通标签或启动有头浏览器。
-
-参考协议与语义来源：OpenAI 官方 `learn.chatgpt.com/docs/app-server`、`learn.chatgpt.com/docs/developer-commands`；Anthropic 官方 `code.claude.com/docs/en/goal`。实际 RPC 形状另以本机 `codex app-server generate-json-schema --experimental` 生成的版本化 schema 校验。

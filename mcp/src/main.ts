@@ -10,11 +10,18 @@
 // runtime.ts，共用入参形状在 schemas.ts。
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { BASE } from "./runtime.js";
+import { BASE, IDENTITY_REFUSAL } from "./runtime.js";
 import { registerMonitorTools } from "./tools/monitor.js";
 import { registerOrchestrationTools } from "./tools/orchestrate.js";
 import { registerReadTranscriptTools } from "./tools/read-transcript.js";
 import { registerTaskTurnTools } from "./tools/task-turn.js";
+
+// 回合身份对不上 ash 注入的指纹:不连。连上了 CLI 就报 connected、工具一样不少,带的却是别的回合
+// 的令牌,要到交卷才被拒;退出则 CLI 当场报 ash 没接上,ash 据此留一条诊断(见 turn-identity.ts)。
+if (IDENTITY_REFUSAL) {
+  console.error(`[ash-mcp] ${IDENTITY_REFUSAL}`);
+  process.exit(1);
+}
 
 const server = new McpServer({ name: "ash", version: "0.1.0" });
 registerOrchestrationTools(server);

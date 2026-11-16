@@ -303,14 +303,13 @@ export interface Task {
   status: TaskStatus;
   stage?: TaskStage | null;
   pinnedAt?: number | null; // null=未置顶；整数毫秒时间戳用于置顶区排序
-  starredAt?: number | null; // 星标：用户手动的软记号，与自动状态正交。null=未标
   reviewOf?: string | null;
   reviewRound?: number | null;
   reviewRequested?: boolean;
   labels: string[];
   dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代
   resumeDependsOn: string[]; // [废弃,保留为 []] 同上
-  // 队列归属与位置（null = 不在队列），推进规则见 queues.ts。
+  // 队列归属与名次（0 起、连续；null = 不在队列），推进规则见 queues.ts。
   queueId?: string | null;
   queuePosition?: number | null;
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it

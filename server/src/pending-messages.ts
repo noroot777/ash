@@ -62,7 +62,7 @@ import {
   reconcileCheckpointDeliveries,
 } from "./pending-checkpoint-recovery.js";
 import { id, now } from "./util.js";
-import { dispatchHoldText, type DispatchHold } from "./task-hold.js";
+import type { DispatchHold } from "./task-hold.js";
 import type { FreezeGuard } from "./turn-freeze.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
@@ -355,25 +355,26 @@ export function deliverPendingMessages(taskId?: string): Promise<void> {
 // 判了「等」的那一轮,到底在等什么 —— 给滞留告警组装一句用户读得懂的话。
 // `deliveryVerdict` 的 wait 分支刻意不带 reason(它是纯判定,不负责措辞),而这几样正是
 // 调用处刚刚查出来的,顺手拼起来比让判定多返回一个字段便宜。
+//
+// 返回 null = 这一等就是排队本身的语义,界面上本来就看得见在等什么(任务在跑、分组被你
+// 停了、前面还排着别的任务、正在讨论、在等前置),等多久都不算滞留,不出声。滞留告警只为
+// 「等的理由在界面上看不出来」的那几种存在:读不到任务、占位没人回滚、状态说不清。
+// 一轮跑二十分钟时每条排队消息都报一句「还没发出去：任务正在运行」,是把正常排队说成了故障。
 function waitReason(
   task: { status: string; mode: string | null } | null,
   blockers: { queueBlocked: boolean; groupPaused: boolean; dispatchHold: DispatchHold | null; prerequisiteWait?: false | "prerequisites" | "launch"; discussing?: boolean },
-): string {
+): string | null {
   if (!task) return "读不到任务当前状态";
-  if (blockers.groupPaused) return "任务所在分组已暂停";
-  if (blockers.dispatchHold) return dispatchHoldText(blockers.dispatchHold);
-  if (blockers.discussing) return "这条任务上正在讨论，说完（连同合稿）自动发出";
-  if (blockers.prerequisiteWait === "prerequisites") return "在等前置任务站稳，齐了会连同这条一起开工";
-  if (blockers.prerequisiteWait) return "在等自动开工（同组名额、分组恢复），开工时连同这条一起发出";
-  if (task.status === "running") return "任务正在运行，等它这一轮结束";
+  if (blockers.groupPaused || blockers.dispatchHold || blockers.discussing || blockers.prerequisiteWait) return null;
+  if (task.status === "running") return null;
   // queued 单独说:它既可能是正常排队,也可能是一具没人回滚的占位遗留 —— 后者正是
   // 2026-10-26 那次卡死的形态,所以措辞里要给出下一步该看哪里。
   if (task.status === "queued") {
     return blockers.queueBlocked
-      ? "任务排队中，前面还有未完成或正在运行的任务"
+      ? null
       : "任务停在「排队中」，但队列里没有别的任务在跑；如果它长时间不动，多半是回合占位没人回滚";
   }
-  if (blockers.queueBlocked) return "同一队列里还有未完成或正在运行的任务";
+  if (blockers.queueBlocked) return null;
   return `任务当前状态（${task.status}）还不适合投递`;
 }
 
@@ -424,10 +425,12 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。
         noteBusyAgain(m.id, at.getTime());
-        // 「等」是正常的,**一直等**不是:久久发不出去要出声并留痕,否则它和「根本没这条
-        // 消息」在日志与界面上长得一模一样(见 noteStalledPending)。判定本身不带 reason,
-        // 在这里按刚查到的那几样组装一句人话 —— 用户想知道的就是「在等什么」。
-        noteStalledPending(stallView(m, at), waitReason(t, { queueBlocked, groupPaused, dispatchHold, prerequisiteWait, discussing }), at.getTime());
+        // 「等」是正常的,**等一件界面上看不出来的事**不是:那种久久发不出去要出声并留痕,
+        // 否则它和「根本没这条消息」长得一模一样(见 noteStalledPending)。判定本身不带 reason,
+        // 在这里按刚查到的那几样组装一句人话;等的是看得见的事(任务在跑、前面还排着)就不出声。
+        const why = waitReason(t, { queueBlocked, groupPaused, dispatchHold, prerequisiteWait, discussing });
+        // 等它写完再往下扫:一次扫描的结局(写没写滞留诊断)在扫描返回时就定了,不留在后台。
+        if (why) await noteStalledPending(stallView(m, at), why, at.getTime());
         continue;
       }
       if (verdict.action === "cancel") {
@@ -467,13 +470,14 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           if (!claim.ok) {
             noteBusyAgain(m.id, at.getTime());
             // 同 wait 分支:认领不到执行占位也是一种「一直发不出去」,久了要说出来。
-            // 三档各说各的真话:套用「同队有人在跑」会让用户去等一个不存在的前项
-            // (第 ll7XKsu_ps0n 链第 2 轮指出的同一个毛病)。
-            noteStalledPending(stallView(m, at), claim.transient
-              ? "队列占位读写失败，正在重试"
-              : claim.self
-                ? "这个任务已经有另一条启动路径占着执行位"
-                : "同一队列里还有未完成或正在运行的任务", at.getTime());
+            // 两档各说各的真话:套用「同队有人在跑」会让用户去等一个不存在的前项
+            // (第 ll7XKsu_ps0n 链第 2 轮指出的同一个毛病)。同队真有别的在跑就是排队本身,
+            // 不出声(见 waitReason)。
+            if (claim.transient || claim.self) {
+              await noteStalledPending(stallView(m, at), claim.transient
+                ? "队列占位读写失败，正在重试"
+                : "这个任务已经有另一条启动路径占着执行位", at.getTime());
+            }
             continue;
           }
           seat = claim.seat;

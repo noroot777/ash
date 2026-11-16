@@ -24,7 +24,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const row = (overrides) => ({
   id: "t-1", projectId: "p1", title: "任务一", status: "running", parentId: null, archived: false,
   mode: "single", groupId: null, queueId: null, queuePosition: null, labels: [],
-  updatedAt: "2026-10-31T00:00:00.000Z", starredAt: null, backgroundRevision: 0,
+  updatedAt: "2026-10-31T00:00:00.000Z", backgroundRevision: 0,
   acceptGateRunning: false, monitorRunning: false, ...overrides,
 });
 

@@ -200,8 +200,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN stage TEXT",
   // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
   "ALTER TABLE tasks ADD COLUMN pinned_at INTEGER",
-  // 星标：用户手动软记号（与自动状态正交）；null=未标
-  "ALTER TABLE tasks ADD COLUMN starred_at INTEGER",
   // §工作流：项目默认起手式 + 任务创建时拷下的那条线（快照，不是引用）
   "ALTER TABLE projects ADD COLUMN workflow_id TEXT",
   // 「新任务默认开不开 worktree」从 app_settings 搬到项目这一层（2026-09-14）。
@@ -346,7 +344,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN human_gate_id TEXT",
   // 项目级浏览器登录态授权白名单（JSON 字符串数组）。空/null = 不授权,是默认。
   "ALTER TABLE projects ADD COLUMN browser_cdp_domains TEXT",
-  // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
+  // ── 多人模式──────────────────────────────
   // 归属列。全部可空:自用模式下恒为 null,转多人时由向导一次性实名化成初始管理员。
   "ALTER TABLE tasks ADD COLUMN owner_user_id TEXT",
   "ALTER TABLE tasks ADD COLUMN executor_snapshot TEXT",

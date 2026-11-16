@@ -11,9 +11,10 @@
 .scheduled-tray-line > .scheduled-tray-toggle { display: inline-flex; height: 24px; flex: none; align-items: center; gap: 5px; border-radius: var(--r-sm); padding: 0 6px 0 4px; color: var(--ink); font-weight: var(--w-medium); white-space: nowrap; }
 .scheduled-tray-toggle > svg { color: var(--muted); }
 .scheduled-tray-line > .scheduled-tray-toggle:hover { background: var(--raised); }
-.scheduled-tray-line > .scheduled-tray-attention { flex: none; color: var(--amber); white-space: nowrap; }
+/* 「N 条要留意」是这一行里唯一能让的：摘要保底一截（.scheduled-tray-head 的 min-width），挤不下时它先截断。 */
+.scheduled-tray-line > .scheduled-tray-attention { flex: 0 1 auto; min-width: 2.5em; overflow: hidden; color: var(--amber); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-tray-attention:hover { text-decoration: underline; text-underline-offset: 2px; }
-.scheduled-tray-head { display: flex; min-width: 0; flex: 1 1 0; align-items: center; gap: 8px; }
+.scheduled-tray-head { display: flex; min-width: 5em; flex: 1 1 0; align-items: center; gap: 8px; }
 .scheduled-tray-head > .scheduled-message-source { flex: none; }
 .scheduled-tray-head > .scheduled-tray-head-summary { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-tray-head > .scheduled-tray-head-summary:hover { color: var(--ink); }
@@ -42,6 +43,8 @@
 .scheduled-message-row:hover .scheduled-message-reveal, .scheduled-message-row:focus-within .scheduled-message-reveal,
 .scheduled-message-item.is-busy .scheduled-message-reveal { opacity: 1; }
 @media (hover: none) { .scheduled-message-reveal { opacity: 1; } }
+/* 收着那一行上最早那条的撤回：跟「引导会话」一样常显，只是一颗图标。 */
+.scheduled-tray-line > .scheduled-message-reveal.is-shown { flex: none; opacity: 1; }
 .scheduled-message-full { grid-column: 1 / -1; padding: 2px 0 8px; color: var(--muted); font-size: var(--t-xs); }
 .scheduled-message-body { overflow-wrap: anywhere; border-radius: 6px; background: var(--overlay); padding: 9px 10px; line-height: 1.7; white-space: pre-wrap; }
 .scheduled-message-full ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
@@ -67,8 +70,31 @@
   .scheduled-tray-head { gap: 5px; }
   .scheduled-tray-line > .scheduled-message-guide { padding: 0; }
   .scheduled-message-guide > span { display: none; }
+  /* 「哨兵 4」只留脉冲和数：那颗脉冲就是哨兵的记号，读屏名称在键上照旧说全。 */
+  .scheduled-tray-monitors-word { display: none; }
 }
 
 /* 「某某名下已全部停下」那一格：点过去到那一条里接着跑。样子仍是那一格的字，指到才像链接。 */
 .scheduled-message-when.is-link { border: 0; background: transparent; padding: 0; font: inherit; font-size: var(--t-xs); text-align: left; cursor: pointer; }
 .scheduled-message-when.is-link:hover, .scheduled-message-when.is-link:focus-visible { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+
+/* 还在盯的哨兵（components/MonitorTrayRow.tsx）：跟排队消息同一张网格。收着那一行上的「哨兵 N」前面一颗
+   琥珀色的脉冲，有会叫醒任务的哨兵在盯时缓缓地动；只剩内置 Monitor（不会叫醒任务）时是灰的、不动。 */
+.scheduled-tray-sep { color: var(--faint); font-weight: var(--w-regular); }
+.scheduled-tray-monitors { display: inline-flex; align-items: center; gap: 4px; }
+.scheduled-tray-monitors > svg { color: var(--faint); }
+.scheduled-tray-monitors.is-live > svg { color: var(--amber); animation: scheduled-tray-beat 2.4s ease-in-out infinite; }
+@keyframes scheduled-tray-beat { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .scheduled-tray-monitors.is-live > svg { animation: none; } }
+.scheduled-monitor-body > code { display: block; margin-bottom: 6px; color: var(--ink); font-family: var(--font-mono); font-size: var(--t-xs); white-space: pre-wrap; }
+.scheduled-monitor-body > p { margin: 4px 0 0; }
+.scheduled-monitor-body q { color: var(--ink); quotes: "「" "」"; }
+.scheduled-monitor-body p code { border-radius: 4px; background: var(--overlay); padding: 0 3px; font-family: var(--font-mono); }
+.scheduled-monitor-body .is-stuck { color: var(--amber); }
+/* 哨兵那几行最前面的记号（MonitorMark）：在盯 = 琥珀色呼吸的点；内置 = 不动的灰点；已结束 = 不动的灰色空心方块。 */
+/* 记号挂在左边留白里（来源那一格往左借 12px 内边距，记号再用负外边距退进去），有记号和没记号的行字对齐。 */
+.scheduled-tray-list .scheduled-message-source { margin-left: -12px; padding-left: 12px; }
+.scheduled-message-source > .scheduled-monitor-mark { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px -12px; flex: none; vertical-align: middle; border-radius: 50%; background: var(--faint); }
+.scheduled-message-source > .scheduled-monitor-mark.is-live { background: var(--amber); animation: scheduled-tray-beat 2.4s ease-in-out infinite; }
+.scheduled-message-source > .scheduled-monitor-mark.is-ended { box-sizing: border-box; border: 1.5px solid var(--faint); border-radius: 1.5px; background: transparent; }
+@media (prefers-reduced-motion: reduce) { .scheduled-message-source > .scheduled-monitor-mark.is-live { animation: none; } }

@@ -17,7 +17,7 @@ const ago = (hours) => new Date(NOW - hours * HOUR).toISOString();
 function task(id, extra = {}) {
   return {
     id, projectId: "p1", groupId: null, parentId: null, title: id, mode: "single", status: "done", stage: "accepted",
-    pinnedAt: null, starredAt: null, question: null, archived: false, queueId: null, dispatchedBy: null,
+    pinnedAt: null, question: null, archived: false, queueId: null, dispatchedBy: null,
     createdAt: ago(48), updatedAt: ago(48), ...extra,
   };
 }
@@ -100,10 +100,10 @@ const ids = (rows) => rows.map((row) => row.id);
   assert.equal(keep(task("stale")), false);
 }
 
-// —— 那个数和颜色是关系事实，从全量算：筛选（星标、状态）、置顶把名下几条从画出来的行里拿掉了，
+// —— 那个数和颜色是关系事实，从全量算：筛选（状态）、置顶把名下几条从画出来的行里拿掉了，
 //    数照旧、该变色照旧变色。归档的、团队执行者不算。
 {
-  const lead = task("lead", { starredAt: 1 });
+  const lead = task("lead");
   const failed = task("failed-kid", { dispatchedBy: "lead", status: "failed", stage: null });
   const pinned = task("pinned-kid", { dispatchedBy: "lead", pinnedAt: 5 });
   const all = [
@@ -111,8 +111,8 @@ const ids = (rows) => rows.map((row) => row.id);
     task("archived-kid", { dispatchedBy: "lead", archived: true, status: "failed", stage: null }),
     task("worker", { dispatchedBy: "lead", parentId: "team", status: "failed", stage: null }),
   ];
-  const starredOnly = buildDispatchForest(all.filter((row) => row.starredAt != null));
-  assert.equal(starredOnly.children.get("lead"), undefined, "星标筛选下名下几条都不在画出来的行里");
+  const leadOnly = buildDispatchForest(all.filter((row) => row.id === "lead"));
+  assert.equal(leadOnly.children.get("lead"), undefined, "筛选下名下几条都不在画出来的行里");
   const facts = dispatchFacts(all);
   assert.equal(facts.count("lead"), 2, "数不随筛选、置顶变（归档的、团队执行者不算）");
   assert.equal(facts.needsYou("lead"), true, "名下失败的那条被筛掉了，也还得变色");

@@ -71,8 +71,8 @@ export type TimelineNotice =
   /** 验收做完了。`target` = 合进了哪条分支；`noCommit` = 只合进了工作区、等用户自己提交；`tag` = 只打了标签没合并。 */
   | { kind: "accept.done"; target: string | null; noCommit?: boolean; tag?: string | null }
   // ── 要用户拍板（明面）──
-  /** 执行者驳回了这一轮审查意见，等用户裁定。 */
-  | { kind: "review.dispute"; round: number }
+  /** 执行者驳回了这一轮审查意见，等用户裁定。`runId` = 哪一场派审（点它去审议格那一轮靠它认）；老记录没有。 */
+  | { kind: "review.dispute"; round: number; runId?: string }
   // ── 审查段的结构（本身是回执，审查泳道靠它们定起止）──
   /**
    * 一轮审查开始了。`rerun` = 同一轮重跑上一回合 / 从中断处继续，不算新开一轮。`runId` = 这是

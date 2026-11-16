@@ -12,7 +12,7 @@ const handoffBanner = readSource(new URL("../src/task-detail/HandoffBanner.tsx",
 const handoffViews = readSource(new URL("../src/task-detail/HandoffDialogViews.tsx", import.meta.url));
 const returnView = readSource(new URL("../src/task-detail/HandoffReturnView.tsx", import.meta.url));
 const taskDetail = readSource(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url));
-// 接力 / 移回那颗键在回复框那一行动作里（docs/ui-ux-audit reply-3）。
+// 接力 / 移回那颗键在回复框那一行动作里。
 const replyRail = readSource(new URL("../src/task-detail/TaskReplyActions.tsx", import.meta.url));
 const taskHeader = readSource(new URL("../src/task-detail/TaskHeader.tsx", import.meta.url));
 const handoffSettings = readSource(new URL("../src/settings/HandoffSettings.tsx", import.meta.url));
@@ -47,7 +47,7 @@ assert.doesNotMatch(handoff + handoffBanner, /const canOpenRemote|task-handoff-o
 assert.doesNotMatch(taskDetail, /onOpenRemote=|onRemoteTask/, "任务详情不应再为不可选中的 out 存档接死代码回调");
 assert.match(handoff, /hasOwnProperty\.call\(pendingHandoff, "returnTransferId"\)/, "移回应答丢失后的重放弹窗仍应保持移回语义");
 assert.match(replyRail, /hasOwnProperty\.call\(task\.handoff, "returnTransferId"\)/, "移回应答丢失后的任务操作仍应显示移回而不是接力");
-// 任务头 2026-11 起不写状态字（docs/ui-ux-audit head-1），「移回 / 接力未确认」只由横幅说。
+// 任务头 2026-11 起不写状态字，「移回 / 接力未确认」只由横幅说。
 assert.doesNotMatch(taskHeader, /接力未确认/, "任务头不再写状态字，接力未确认只由横幅说");
 assert.match(handoffBanner, /pendingReturn\s*\?\s*`[^`]*移回\$\{peer\}后没收到确认/, "移回应答丢失后的横幅不能误报成接力未确认");
 assert.match(returnView, /上次移回没收到确认/, "移回重放警告必须使用移回和来源机语义");

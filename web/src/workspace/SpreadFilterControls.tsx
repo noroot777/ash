@@ -1,5 +1,4 @@
 import type { TaskListItem } from "@ash/shared";
-import { Star } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { scopeHasFilters, type TaskScope } from "./taskScope.ts";
 import {
@@ -68,10 +67,7 @@ function SpreadFilterDot({
         {...tip.anchorProps}
         onClick={onToggle}
       >
-        {/* 星标是手动记号不是状态桶,画成星形跟那排状态圆点分开 */}
-        <i aria-hidden="true">
-          {bucketKey === "starred" && <Star size={7} weight="fill" />}
-        </i>
+        <i aria-hidden="true" />
       </button>
       {/* 点了不收气泡：这颗点一按就换档，那句话的内容跟着变（多出/去掉「再点看全部」），
           鼠标还停在原地，正是最该让人读到新说法的时候。 */}

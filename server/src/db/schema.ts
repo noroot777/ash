@@ -49,7 +49,7 @@ export const projects = sqliteTable("projects", {
   createdAt: text("created_at").notNull(),
 });
 
-// ── 多人模式(docs/multi-user-plan.md)────────────────────────────────────────
+// ── 多人模式────────────────────────────────────────
 // users / user_sessions / user_invites / project_members / project_invites /
 // user_handoff_targets / user_settings 在 `schema-multiuser.ts`。整份原样再导出:
 // drizzle 的 `import * as schema` 要看到全部表,拆文件不能拆掉那个视图。
@@ -162,7 +162,6 @@ export const tasks = sqliteTable("tasks", {
   status: text("status").notNull().default("backlog"),
   stage: text("stage"), // 正交验收阶段；不参与 status 调度/结算语义
   pinnedAt: integer("pinned_at"), // null=未置顶；多个置顶任务按时间戳排序
-  starredAt: integer("starred_at"), // 星标（用户手动软记号）；null=未标
   reviewOf: text("review_of"), // 审查任务 → 被审任务 id；普通任务为 null
   reviewRound: integer("review_round"), // 审查任务针对该目标的轮次（从 1 开始）
   // 就地验证：验证轮不再另起一个任务，而是在这个任务自己身上多跑一个旁路回合。

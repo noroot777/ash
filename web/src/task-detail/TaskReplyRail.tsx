@@ -1,11 +1,11 @@
 import { Fragment, type ReactNode } from "react";
 
-// 输入框正上方那一条：只放状态（docs/ui-ux-audit reply-3）。动作都挪进了框里那一行
+// 输入框正上方那一条：只放状态。动作都挪进了框里那一行
 // （TaskReplyActions.tsx），排着的消息、在传的附件由回复框自己摆。
 export function TaskReplyRail({ gateWait }: {
   /**
-   * 验收前置命令那一条（折叠态；`AcceptGateWaitCard` 自己判要不要出现）。哨兵那一条原来
-   * 和它并排住在这里，现在挪进了会话最后（feed-7，monitors/MonitorWaitLine.tsx）。
+   * 验收前置命令那一条（折叠态；`AcceptGateWaitCard` 自己判要不要出现）。还在盯的哨兵不在这里：
+   * 它们跟排队消息并在同一块里（components/MonitorTrayRow.tsx）。
    */
   gateWait?: ReactNode;
 }) {

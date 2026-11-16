@@ -301,7 +301,6 @@ export interface HandoffManifest {
     // 身份配上对端的新验收，飞书那边认不出是新的一次。
     acceptanceId?: string | null;
     pinnedAt: number | null;
-    starredAt: number | null;
     createdAt: string;
     startedAt: string | null;
     endedAt: string | null;

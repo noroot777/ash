@@ -3,8 +3,8 @@
 //
 // 第 1 轮审查(新审查者)P1 实测:`/api/search` 只把「可见项目集合」交给 searchAll,
 // 随手记于是只过了项目这一条轴。同一个共享项目里,Alice 搜 Bob 的私有随手记能连
-// `snippet` / `preview` 一起拿到 —— 而 §八(`docs/multi-user-plan.md:124`-`130`)把
-// 随手记列在**个人面**:逐人隔离,连实例管理员也不例外。`/notes` 早就是两条轴
+// `snippet` / `preview` 一起拿到 —— 而随手记列在**个人面**:
+// 逐人隔离,连实例管理员也不例外。`/notes` 早就是两条轴
 // (`notes.ts` 的 `visibleNotes`:先 `filterOwned`,再问项目可见),搜索少了一条。
 //
 // 这条测试钉住两条轴各自的边界,两个路由(`/search` 与 `/search/stream`)都走一遍 ——

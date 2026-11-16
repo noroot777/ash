@@ -6,6 +6,7 @@ import type { TurnReceipt } from "./conversationSystemRows.ts";
 import { LaneBody, laneHasTrace } from "./ReviewBubble.tsx";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { NoticeIconGlyph } from "./NoticeIconGlyph.tsx";
+import type { NoticeLink } from "./noticeLinks.ts";
 import { laneReviewTarget } from "./reviewLaneLinks.ts";
 import { formatInstant } from "./utils.ts";
 
@@ -17,6 +18,8 @@ export type ReceiptReview = {
   taskId?: string;
   reviewOpener?: (lane: ConversationReviewLane) => ((target: ReviewTarget) => void) | undefined;
   renderLane?: (lane: ConversationReviewLane) => ReactNode;
+  /** 其余几句点过去去哪儿（「等你裁定」去审议格那一轮、哨兵那几句去哨兵格，见 noticeLinks）。 */
+  linkFor?: (item: NonNullable<TurnReceipt["item"]>) => NoticeLink | null;
 };
 
 export const ReceiptReviewContext = createContext<ReceiptReview | null>(null);
@@ -44,6 +47,7 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
   // 认不出去哪儿就在下面摊开那一轮的经过。去审查格的那种另有一颗经过键（审查格里没有经过）。
   const go = lane && review ? review.reviewOpener?.(lane) : undefined;
   const traceToggle = !!go && !!review?.renderLane && laneHasTrace(lane!);
+  const link = !lane && receipt.item ? review?.linkFor?.(receipt.item) ?? null : null;
   return (
     <li className={`turn-receipt tone-${view.tone}`}>
       {time && <time dateTime={receipt.at} aria-label={formatInstant(receipt.at)}>{time}</time>}
@@ -59,6 +63,10 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
             aria-controls={go ? undefined : detailId}
             onClick={() => (go ? go(laneReviewTarget(lane)) : setOpen((value) => !value))}
           >
+            {text}
+          </button>
+        ) : link ? (
+          <button type="button" className="turn-receipt-more" aria-label={`${view.text}，${link.label}`} onClick={link.open}>
             {text}
           </button>
         ) : view.detail ? (
@@ -91,7 +99,7 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
           <LaneBody lane={lane} id={detailId} taskId={review.taskId} renderLane={review.renderLane} />
         </div>
       )}
-      {!(lane && review) && view.detail && open && <p className="turn-receipt-detail" id={detailId}>{view.detail}</p>}
+      {!(lane && review) && !link && view.detail && open && <p className="turn-receipt-detail" id={detailId}>{view.detail}</p>}
     </li>
   );
 }

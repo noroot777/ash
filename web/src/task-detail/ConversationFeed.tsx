@@ -3,7 +3,7 @@ import { File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun, TaskDiscussion } from "@ash/shared";
 import type { TaskCreationOrigin } from "@ash/shared/task-origin";
-import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
+import type { ConversationEventItem, ConversationItem, ConversationSource } from "./conversationModel.ts";
 import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
@@ -30,6 +30,7 @@ import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { isUnshownNotice, noticeView, questionsOnScreen, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
+import { noticeLink, type NoticeLinkTargets } from "./noticeLinks.ts";
 import { ReviewBubble } from "./ReviewBubble.tsx";
 import { feedRowAt, interleaveAsides, type FeedAside } from "./feedAsides.ts";
 import { reviewProgress } from "./reviewProgress.ts";
@@ -114,7 +115,7 @@ function AgentMessageView({
   const cause = turnCauseText(item);
   // 轮次徽标只是审查者气泡上「第 N 轮审查」的复读，摊开的那一轮里一律不出。
   const showBadge = !!reviewer && !item.continuation && !laneRole;
-  // 回合头只留名字（docs/ui-ux-audit feed-1）：模型、智能水平、时间、用时排成一句，
+  // 回合头只留名字：模型、智能水平、时间、用时排成一句，
   // 指到这一回合才出现。审查者气泡上已经说过时间的那条（lead）不再说。
   const meta = [
     showIdentity && item.run ? item.run.model || "CLI 默认" : null,
@@ -167,7 +168,7 @@ function AgentMessageView({
 type AgentMessageProps = Parameters<typeof AgentMessageView>[0];
 
 /**
- * 已经收口的回合不跟着别人的事件重渲（docs/ui-ux-audit 08 的两条工程前提之一）。会话每来一条
+ * 已经收口的回合不跟着别人的事件重渲。会话每来一条
  * 事件，整份条目都会重新拼一遍、每一条都是新对象；还在说的那一回合要跟着变，说完的那些只在
  * 它自己真的变了时才重画（重读回来补上了执行过程、被删了一截、旁边多了回执）。回调只认有没有：
  * 它们闭包里拿的都是稳定的 setter / 派发函数。
@@ -298,6 +299,7 @@ export function ConversationFeed({
   reviews,
   discussions,
   onOpenReviewPanel,
+  onOpenMonitorPanel,
   onOpenTask,
   reviewRetry,
   turnRetry,
@@ -333,6 +335,8 @@ export function ConversationFeed({
    * 都没有那块面板）就在气泡下面就地摊开，不给一颗点了没反应的键。
    */
   onOpenReviewPanel?: (target?: ReviewTarget) => void;
+  /** 哨兵那几句旁注点过去打开右侧哨兵格的那一张卡（null = 认不出是哪一个）。不给就在原处摊开原文。 */
+  onOpenMonitorPanel?: (monitorId: string | null) => void;
   /** 「在等前置」那一行点名字时打开那条任务。 */
   onOpenTask?: (taskId: string) => void;
   /** 此刻能「继续本轮审查」的那一轮和那个动作（审查格主按钮同一份）。不给 = 尾注上不挂。 */
@@ -454,6 +458,9 @@ export function ConversationFeed({
     ) hiddenTimes.add(item.id);
   }
 
+  // 旁注点过去去哪儿（驳回 → 审议格那一轮，哨兵 → 哨兵格那一张，见 noticeLinks）。
+  const linkTargets: NoticeLinkTargets = { workflowMode: task.workflowMode, reviews, onOpenReviewPanel, onOpenMonitorPanel };
+  const linkFor = (item: ConversationEventItem) => noticeLink(item, linkTargets);
   const keys = conversationKeys(items);
   const renderItem = (
     item: ConversationItem,
@@ -477,7 +484,8 @@ export function ConversationFeed({
           taskActive={task.status === "running" || task.status === "queued"}
           receipts={receiptsOf(item.id)}
           footnote={footnote?.parts.length
-            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some((part) => isRetryable(part, footnote)) ? "retry" : "") }
+            // 点得过去的那几句也进签名：审查记录晚到一步才认得出驳回是哪一场，那一回合得跟着重画。
+            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, `${footnote.parts.some((part) => isRetryable(part, footnote)) ? "retry" : ""}:${footnote.parts.map((part) => part.kind === "event" && noticeLink(part.item, linkTargets) ? 1 : 0).join("")}`) }
             : undefined}
         />
       );
@@ -515,6 +523,7 @@ export function ConversationFeed({
   };
   const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
     <FootnoteLine key={footnote.id} footnote={footnote} placement={placement}
+      linkFor={(part) => part.kind === "event" ? noticeLink(part.item, linkTargets) : null}
       actionFor={(part) => turnRetry && turnRetryPartOf(footnote) === part ? <RetryCta label="重试这一回合" run={turnRetry.run} blocked={turnRetry.blocked} />
           : isRetryable(part, footnote) && reviewRetry ? <RetryCta label="继续本轮审查" run={reviewRetry.run} blocked={reviewRetry.blocked} /> : null} />
   );
@@ -523,6 +532,7 @@ export function ConversationFeed({
     taskId: task.id,
     reviewOpener: (lane) => laneRoundOpener(lane, task.workflowMode, onOpenReviewPanel),
     renderLane: renderLaneRows,
+    linkFor,
   };
   // 前面没有回合可挂的那几句：留在原处，同一种小灰字；它们的记录跟在后面。
   const renderFootnoteRow = (row: ConversationFootnoteRow) => row.footnote.parts.length ? (

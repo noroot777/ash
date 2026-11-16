@@ -325,7 +325,7 @@ CLI 接 ash 那一下用得到;其余十三家的退路仍是它们自己配置�
   ash 每回合在 `<runs>/<taskId>/turn-identity/<turnToken>/identity.json` 写一份、把那个目录追加到
   `PATH` 末尾(目录里没有可执行文件,盖不掉任何命令),MCP 侧在变量都不在时读它
   (`@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_PATH_DIR` 是约定本体,两侧实现在
-  `server/src/turn-identity.ts` 与 `mcp/src/runtime.ts`,回归在 `test:turn-identity`)。
+  `server/src/turn-identity.ts` 与 `mcp/src/turn-identity.ts`,回归在 `test:turn-identity`)。
   **按回合开目录、开新的就删旧的**:上一回合的残留子进程读到的是空,而不是当前令牌。
   表里 `identity: "path"` + `caveat` —— 这条桥本机没装 copilot、没法实测,万一它连 `PATH` 也改写,
   表现就回到「交卷被拒」。另外 `--config-dir` 旗标优先于 `COPILOT_HOME`,起跑带了它这条判据会错。

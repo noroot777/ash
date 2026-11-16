@@ -102,7 +102,6 @@ function Ash() {
         selectedTaskId={selectedTaskId}
         spread={spread}
         onTask={(next) => setSelectedTaskId(next.id)}
-        onTaskStarred={() => {}}
         notify={() => {}}
       />
     </main>
