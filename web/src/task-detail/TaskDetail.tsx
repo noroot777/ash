@@ -58,6 +58,7 @@ import { DispatchHeldLine, useDispatchHolder } from "./dispatched/DispatchHeldLi
 export function TaskDetail({
   task,
   allTasks,
+  tasksReady = true,
   onTaskUpdate,
   onTasksSynced,
   onDeleted,
@@ -72,6 +73,7 @@ export function TaskDetail({
 }: {
   task: Task;
   allTasks: TaskListItem[];
+  tasksReady?: boolean;
   onTaskUpdate: (task: Task) => void;
   /** 入队响应的全体成员快照整批上交,由工作台按 updatedAt 合并进任务列表;
    * 不传的挂载面(团队成员抽屉,排队入口本就不可见)退回逐个 onTaskUpdate。 */
@@ -108,7 +110,7 @@ export function TaskDetail({
   const conversation = useConversation(task.id);
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
   const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
-    task, allTasks, conversation,
+    task, allTasks, tasksReady, conversation,
   });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });

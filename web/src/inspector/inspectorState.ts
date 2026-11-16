@@ -96,14 +96,7 @@ export function readState<Context>(
   defaultVisible: boolean,
   tabPolicy?: InspectorTabPolicy,
 ) {
-  const onEntry = (state: InspectorState): InspectorState => {
-    const entry = tabPolicy?.entryTab;
-    if (entry && descriptors.some((descriptor) => descriptor.id === entry.id)) return {
-      ...state, openTabs: orderedValidTabs([...state.openTabs, entry.id], descriptors),
-      activeTab: entry.id, visible: entry.visible, dismissed: state.dismissed.filter((id) => id !== entry.id),
-    };
-    return tabPolicy?.focusOnEntry ? applyTabPolicy(state, tabPolicy, descriptors, true) : state;
-  };
+  const onEntry = (state: InspectorState) => tabPolicy ? applyInspectorEntry(state, tabPolicy, descriptors) : state;
   const focusKey = tabPolicy?.focusRequest?.key ?? null;
   const fallback = { ...defaultState(descriptors, defaultVisible), focusKey };
   const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
@@ -145,6 +138,20 @@ export function readState<Context>(
   } catch {
     return onEntry(tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback);
   }
+}
+
+export function applyInspectorEntry<Context>(
+  state: InspectorState,
+  policy: InspectorTabPolicy,
+  descriptors: readonly InspectorDescriptor<Context>[],
+): InspectorState {
+  const entry = policy.entryTab;
+  if (entry && descriptors.some((descriptor) => descriptor.id === entry.id)) return {
+    ...state, openTabs: orderedValidTabs([...state.openTabs, entry.id], descriptors),
+    activeTab: entry.id, visible: entry.visible, dismissed: state.dismissed.filter((id) => id !== entry.id),
+  };
+  if (policy.entryReady === false) return state;
+  return policy.focusOnEntry ? applyTabPolicy(state, policy, descriptors, true) : state;
 }
 
 export function storageKeyFor(contextKey: string) {

@@ -28,6 +28,7 @@ export function useTaskInspectorStack(
   conversation: ReturnType<typeof useConversation>,
   /** 推出子智能体抽屉之前收起读全文那一屉（同一个位置，互斥）。 */
   onOpenSubagent?: () => void,
+  tasksReady = true,
 ) {
   // 子智能体：列表在 Inspector 里，执行详情从左侧抽屉推出来（与团队模式点执行者同一套外壳）。
   const subagents = useSubagents(TASK_INSPECTORS, {
@@ -107,9 +108,10 @@ export function useTaskInspectorStack(
     defaultOpenTabIds: ["info", "files", "artifacts", "scm", "memos", "side-chat", "workflow", "review", "preview"],
     defaultActiveTabId: reviewFocused ? "review" : "info",
     focusOnEntry: dispatchedShown ? "dispatched" : undefined,
+    entryReady: tasksReady,
     focusRequest: { key: String(arrivalRevision), tabId: "dispatched" },
     entryTab,
-  }), [arrivalRevision, dispatchedShown, entryTab, reviewFocused, task.status]);
+  }), [arrivalRevision, dispatchedShown, entryTab, reviewFocused, task.status, tasksReady]);
 
   // 「信息」格里最近一轮的用量、上下文、压缩中：取自会话流里最新那条回复（直播值比会话行新）。
   const runFacts = useMemo(() => latestRunFacts(conversation.items), [conversation.items]);

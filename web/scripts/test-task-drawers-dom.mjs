@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { WAIT_TIMEOUT_MS } from "./wait-until.mjs";
+import { settlePage, WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -232,9 +232,84 @@ try {
     await cold.locator('[data-current-task="lead"]').waitFor();
     await cold.evaluate(() => window.__hydrate());
     await cold.waitForFunction(() => window.__tasks().length === 7);
-    assert.equal(await cold.locator(".inspector-host").count(), 0, "刷新后再次分批加载不重放上次新派出");
+    await cold.waitForFunction(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")).activeTab === "dispatched");
+    assert.equal(await cold.locator(".inspector-host").count(), width > 720 ? 1 : 0, "刷新属于新进入，桌面默认打开子任务，窄屏不盖层");
+    assert.equal(await cold.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")).focusKey), "0", "进入默认格不重放上次新派出");
     await cold.close();
   }
+  for (const width of [1600, 400]) {
+    for (const taskId of ["lead", "leaf", "solo"]) {
+      const cold = await browser.newPage({ viewport: { width, height: 900 } });
+      cold.setDefaultTimeout(WAIT_TIMEOUT_MS);
+      cold.on("pageerror", (error) => errors.push(error.message));
+      const key = `ash:inspector:task:${taskId}`;
+      await cold.goto(`${web.origin}/scripts/fixtures/task-drawers.html?partial=1&task=${taskId}`);
+      await cold.locator(`[data-current-task="${taskId}"]`).waitFor();
+      await cold.evaluate(() => window.__hydrate(false));
+      await cold.waitForFunction(() => window.__tasks().length === 7);
+      await settlePage(cold);
+      assert.equal(await cold.evaluate((key) => JSON.parse(localStorage.getItem(key)).activeTab, key), taskId === "leaf" ? "info" : "review", "分批列表到达不提前消费进入判定");
+      if (width <= 720) assert.equal(await cold.locator(".inspector-host").count(), 0);
+      await cold.evaluate(() => window.__ready());
+      const expectedTab = taskId === "solo" ? "review" : "dispatched";
+      await cold.waitForFunction(({ key, tab }) => JSON.parse(localStorage.getItem(key)).activeTab === tab, { key, tab: expectedTab });
+      if (width > 720 && taskId !== "solo") await cold.locator(".dispatched-pane").waitFor();
+      else if (width <= 720) assert.equal(await cold.locator(".inspector-host").count(), 0, "延后进入判定也不弹窄屏盖层");
+      await cold.evaluate((key) => {
+        const saved = JSON.parse(localStorage.getItem(key));
+        localStorage.setItem(key, JSON.stringify({ ...saved, visible: false, activeTab: "files", openTabs: saved.openTabs.filter((id) => id !== "dispatched"), dismissed: ["dispatched"] }));
+      }, key);
+      await cold.reload();
+      await cold.locator(`[data-current-task="${taskId}"]`).waitFor();
+      await cold.evaluate(() => window.__hydrate());
+      await cold.locator('[data-tasks-ready="true"]').waitFor();
+      if (taskId === "solo") {
+        await settlePage(cold);
+        assert.equal(await cold.locator(".inspector-host").count(), 0, "无子任务仍尊重关闭状态");
+      } else {
+        await cold.waitForFunction((key) => {
+          const saved = JSON.parse(localStorage.getItem(key));
+          return saved.activeTab === "dispatched" && saved.visible && !saved.dismissed.includes("dispatched");
+        }, key);
+        assert.equal(await cold.locator(".inspector-host").count(), width > 720 ? 1 : 0, "刷新后的进入判定恢复被关闭和摘掉的子任务格");
+        if (width <= 720) await cold.getByRole("button", { name: "显示 Inspector", exact: true }).click();
+        if (taskId === "leaf") await cold.locator('[data-subtask-id="leaf"] [aria-current="page"]').waitFor();
+      }
+      if (await cold.locator(".inspector-host").count()) await cold.locator('.inspector-rail__tab[aria-label^="文件"]').click();
+      else await cold.getByRole("button", { name: "切到files", exact: true }).click();
+      await cold.evaluate(() => window.__hydrate());
+      await settlePage(cold);
+      assert.equal(await cold.locator(".inspector-host__panel-title").textContent(), "文件", "列表重取不重复应用进入落格");
+      await cold.close();
+    }
+    for (const action of ["rail", "close-tab", "hide", "side-chat", "memos"]) {
+      const cold = await browser.newPage({ viewport: { width, height: 900 } });
+      cold.setDefaultTimeout(WAIT_TIMEOUT_MS);
+      cold.on("pageerror", (error) => errors.push(error.message));
+      await cold.goto(`${web.origin}/scripts/fixtures/task-drawers.html?partial=1&task=lead`);
+      await cold.locator('[data-current-task="lead"]').waitFor();
+      if (width <= 720) await cold.getByRole("button", { name: "显示 Inspector", exact: true }).click();
+      if (action === "rail") await cold.locator('.inspector-rail__tab[aria-label^="文件"]').click();
+      else if (action === "close-tab") await cold.getByRole("button", { name: width > 720 ? "关闭审议" : "收起 Inspector", exact: true }).click();
+      else if (action === "hide") await cold.getByRole("button", { name: width > 720 ? "隐藏 Inspector" : "收起 Inspector", exact: true }).click();
+      else {
+        await cold.locator(`.inspector-rail__tab[aria-label^="${action === "side-chat" ? "侧聊" : "备忘"}"]`).click();
+        await cold.getByRole("button", { name: width > 720 ? "隐藏 Inspector" : "收起 Inspector", exact: true }).click();
+        await cold.reload();
+        await cold.locator('[data-current-task="lead"]').waitFor();
+      }
+      await settlePage(cold);
+      const before = await cold.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")));
+      const visible = await cold.locator(".inspector-host").count();
+      await cold.evaluate(() => window.__hydrate());
+      await cold.locator('[data-tasks-ready="true"]').waitFor();
+      await settlePage(cold);
+      const after = await cold.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")));
+      assert.equal(after.activeTab, before.activeTab, `${action}：等待列表时的选择及侧聊/备忘偏好优先`);
+      assert.equal(await cold.locator(".inspector-host").count(), visible, `${action}：就绪不能撤销手动关闭`);
+      await cold.close();
+    }
+  }
   assert.deepEqual(errors, []);
-  console.log("✓ 子任务导航与面板策略：冷启动分批加载、重连追平、取消归档和刷新不误判，真正新建才落格");
+  console.log("✓ 子任务导航与面板策略：冷启动等权威列表后默认落格，手动选择优先，窄屏不盖层；历史回填不冒充新派出");
 } finally { await browser?.close(); await web.close(); }

@@ -59,8 +59,8 @@ const items = buildConversationItems([{ session, output: "", trace: [
 const conversation = { items, sessions: [session], refreshing: false, error: null, traceError: null, refetch: () => {} } as never;
 const nothing = () => {};
 
-function Detail({ current, tasks, navigate }: { current: Task; tasks: Task[]; navigate: (id: string) => void }) {
-  const drawers = useTaskDrawers({ task: current, allTasks: tasks, conversation });
+function Detail({ current, tasks, tasksReady, navigate }: { current: Task; tasks: Task[]; tasksReady: boolean; navigate: (id: string) => void }) {
+  const drawers = useTaskDrawers({ task: current, allTasks: tasks, tasksReady, conversation });
   const readReport = () => drawers.leftDrawer.api.open({ key: "report", kind: "审查报告", title: "第 1 轮", ariaLabel: "审查报告：第 1 轮", closeLabel: "关上审查报告", body: <p>报告正文</p> });
   const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => ["info", "files", "dispatched", "subagents", "review", "memos", "side-chat"].includes(descriptor.id))
     .map((descriptor) => descriptor.id === "subagents" ? { ...descriptor, render: (context: TaskInspectorContext) => <><InspectorHeadActions><button type="button" onClick={readReport}>读审查报告</button></InspectorHeadActions>{descriptor.render(context)}</> }
@@ -89,12 +89,14 @@ declare global { interface Window {
   __add: (row: Partial<Task> & { id: string; title: string }) => void;
   __patch: (id: string, patch: Partial<Task>) => void;
   __go: (id: string) => void;
-  __hydrate: () => void;
+  __hydrate: (ready?: boolean) => void;
+  __ready: () => void;
   __tasks: () => Task[];
 } }
 
 function App() {
-  const [tasks, setTasks] = useState(() => new URLSearchParams(location.search).has("partial") ? initial.filter((item) => item.id === "lead") : initial);
+  const [tasks, setTasks] = useState(() => new URLSearchParams(location.search).has("partial") ? initial.filter((item) => item.id === (new URLSearchParams(location.search).get("task") ?? "lead")) : initial);
+  const [tasksReady, setTasksReady] = useState(() => !new URLSearchParams(location.search).has("partial"));
   const [selected, setSelected] = useState(() => new URLSearchParams(location.search).get("task") ?? "lead");
   const [palette, setPalette] = useState(false);
   currentTasks = tasks;
@@ -103,7 +105,11 @@ function App() {
     window.__add = (row) => setTasks((current) => [...current, task(row.id, row.title, { createdAt: new Date().toISOString(), ...row })]);
     window.__patch = (id, patch) => setTasks((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
     window.__go = navigate;
-    window.__hydrate = () => setTasks((current) => [...current, ...initial.filter((item) => !current.some((known) => known.id === item.id))]);
+    window.__hydrate = (ready = true) => {
+      setTasks((current) => [...current, ...initial.filter((item) => !current.some((known) => known.id === item.id))]);
+      if (ready) setTasksReady(true);
+    };
+    window.__ready = () => setTasksReady(true);
     window.__tasks = () => currentTasks;
   });
   useEffect(() => {
@@ -113,8 +119,8 @@ function App() {
     return () => { removeEventListener("popstate", pop); removeEventListener("keydown", keys); };
   }, []);
   const current = tasks.find((item) => item.id === selected)!;
-  return <div style={{ height: "100vh", display: "flex", overflow: "hidden" }}>
-    <Detail key={current.id} current={current} tasks={tasks} navigate={navigate} />
+  return <div data-tasks-ready={String(tasksReady)} style={{ height: "100vh", display: "flex", overflow: "hidden" }}>
+    <Detail key={current.id} current={current} tasks={tasks} tasksReady={tasksReady} navigate={navigate} />
     <CommandPalette open={palette} projects={[project]} currentProject={project} tasks={tasks} selectedTask={current} groups={[]} onClose={() => setPalette(false)}
       onProject={nothing} onTaskMode={nothing} onTask={(item: TaskListItem) => navigate(item.id)} onTaskUpdated={nothing} onNote={nothing} onComposer={nothing}
       onNewGroup={nothing} onNewProject={nothing} onDeleteTask={nothing} onSettings={nothing} notify={nothing} />

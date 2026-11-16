@@ -30,6 +30,7 @@ export interface InspectorTabPolicy {
   defaultActiveTabId: string;
   preserveActiveTabIds?: readonly string[];
   focusOnEntry?: string;
+  entryReady?: boolean;
   focusRequest?: { key: string; tabId: string };
   entryTab?: { id: string; visible: boolean };
 }

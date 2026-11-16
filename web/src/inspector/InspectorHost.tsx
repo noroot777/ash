@@ -18,6 +18,7 @@ import { InspectorNavProvider, type InspectorNav, type InspectorRequest } from "
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
 import {
   applyTabPolicy,
+  applyInspectorEntry,
   requestedInspectorFocus,
   clampWidth,
   INSPECTOR_DEFAULT_WIDTH,
@@ -82,6 +83,7 @@ function InspectorHostState<Context>({
 }) {
   const storageKey = storageKeyFor(contextKey);
   const [state, setState] = useState(() => readState(storageKey, descriptors, defaultVisible, tabPolicy));
+  const pendingEntry = useRef(tabPolicy?.entryReady === false);
   const [resizing, setResizing] = useState(false);
   /** 头带中段那块动作位的真实节点，交给当前面板 portal 用（见 headActions.tsx）。 */
   const [headSlot, setHeadSlot] = useState<HTMLDivElement | null>(null);
@@ -144,15 +146,19 @@ function InspectorHostState<Context>({
 
   useEffect(() => {
     if (!tabPolicy) return;
+    const entering = pendingEntry.current && tabPolicy.entryReady !== false;
+    if (entering) pendingEntry.current = false;
     // localStorage wins while stateKey is unchanged; a new semantic state wins exactly once.
     setState((current) => {
-      if (current.policyKey === tabPolicy.stateKey && current.focusKey === (tabPolicy.focusRequest?.key ?? null)) return current;
+      const changed = current.policyKey !== tabPolicy.stateKey || current.focusKey !== (tabPolicy.focusRequest?.key ?? null);
+      if (!entering && !changed) return current;
       const focusTabId = requestedInspectorFocus(current, tabPolicy);
-      const next = applyTabPolicy(current, tabPolicy, descriptors);
+      const updated = changed ? applyTabPolicy(current, tabPolicy, descriptors) : current;
+      const next = entering ? applyInspectorEntry(updated, tabPolicy, descriptors) : updated;
       if (narrow && focusTabId && next.activeTab === focusTabId) setNarrowOpen(true);
       return next;
     });
-  }, [descriptors, tabPolicy?.stateKey, tabPolicy?.focusRequest?.key]);
+  }, [descriptors, tabPolicy?.stateKey, tabPolicy?.focusRequest?.key, tabPolicy?.entryReady]);
 
   useEffect(() => {
     try {
@@ -204,6 +210,7 @@ function InspectorHostState<Context>({
   };
 
   const toggle = () => {
+    pendingEntry.current = false;
     if (narrow) {
       if (panelVisible) {
         setNarrowOpen(false);
@@ -225,6 +232,7 @@ function InspectorHostState<Context>({
   // 不算，连点两下不会连摘两格。中间换过格、加过格就不再拦（那已经不是连点了）。
   const removedAt = useRef(0);
   const closeTab = (id: string) => {
+    pendingEntry.current = false;
     if (performance.now() - removedAt.current < 400) return;
     removedAt.current = performance.now();
     setState((current) => {
@@ -242,6 +250,7 @@ function InspectorHostState<Context>({
   // 350ms 内的那一下不算，否则双击一格会「先选中再收起」。
   const switchedAt = useRef(0);
   const selectTab = (id: string, clicks = 0) => {
+    pendingEntry.current = false;
     if (id === activeDescriptor?.id) {
       if (clicks > 0 && performance.now() - switchedAt.current > 350) {
         if (narrow) setNarrowOpen(false);
@@ -262,6 +271,7 @@ function InspectorHostState<Context>({
   }, []);
 
   const openTab = useCallback((id: string, params?: InspectorRequest) => {
+    pendingEntry.current = false;
     // 新的一次打开顶掉还没办成的那份（那一格可能还在等数据）：用户已经换了想看的东西。
     if (params) {
       requestSeq.current += 1;
@@ -372,7 +382,11 @@ function InspectorHostState<Context>({
                 className="inspector-host__panel-close"
                 aria-label={narrow ? "收起 Inspector" : `关闭${activeDescriptor.title}`}
                 {...closeTip.anchorProps}
-                onClick={() => narrow ? setNarrowOpen(false) : closeTab(activeDescriptor.id)}
+                onClick={() => {
+                  pendingEntry.current = false;
+                  if (narrow) setNarrowOpen(false);
+                  else closeTab(activeDescriptor.id);
+                }}
               >
                 <X size={14} aria-hidden="true" />
               </button>
