@@ -1,7 +1,7 @@
 // 普通任务详情页的 Inspector 栈：**哪几格存在**（三层 hook 依次往描述符表上贴东西）
 // 和**默认开哪几格**（tabPolicy）。单独一个文件是为了守住 700 行，顺带把这条叠法
 // 集中到一处 —— 顺序错了症状很隐晦（下一层拿到的是上一层没加工过的表）。
-import { createElement, useMemo } from "react";
+import { createElement, useEffect, useMemo, useRef } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
@@ -13,6 +13,10 @@ import type { useConversation } from "../lib/useConversation.ts";
 import { latestRunFacts } from "./info/infoRunFacts.ts";
 import { surfaceTabWhenUsed } from "../inspector/index.ts";
 import { dispatchFacts } from "../lib/dispatchTree.ts";
+import { dispatchFamily } from "../lib/dispatchFamily.ts";
+import { clearInspectorEntry, takeInspectorEntry } from "./dispatched/inspectorNavigation.ts";
+import { useDispatchFolds } from "./dispatched/dispatchFolds.ts";
+import { startDispatchArrivals, observeDispatchArrivals, type DispatchArrivals } from "./dispatched/dispatchArrivals.ts";
 import { CountedIcon } from "./dispatched/CountedIcon.tsx";
 
 // 这几档 stage 下默认落在「审议」那一格：到了这一步，用户要看的就是审查那摊事。
@@ -24,6 +28,7 @@ export function useTaskInspectorStack(
   conversation: ReturnType<typeof useConversation>,
   /** 推出子智能体抽屉之前收起读全文那一屉（同一个位置，互斥）。 */
   onOpenSubagent?: () => void,
+  tasksReady = true,
 ) {
   // 子智能体：列表在 Inspector 里，执行详情从左侧抽屉推出来（与团队模式点执行者同一套外壳）。
   const subagents = useSubagents(TASK_INSPECTORS, {
@@ -39,15 +44,25 @@ export function useTaskInspectorStack(
   // 备忘那一格只改标题/图标（有几条），开合仍按 TASK_INSPECTORS 的 defaultOpen —— 理由
   // 见 task-memos/useTaskMemoTab.tsx：手写第一条的入口只在那一格里。
   const memoTab = useTaskMemoTab(monitorTab.inspectors, task.id);
-  // 派出的任务：名下有才冒到图标条上，图标带个数（数据就是任务列表，派出去一条当场就有）。数和它
+  // 子任务：名下有才冒到图标条上，图标带个数（数据就是任务列表，派出去一条当场就有）。数和它
   // 变不变色跟侧栏那一行行尾的数是同一份关系事实（dispatchFacts）：名下整棵有在等答复、失败的就变色。
   // 「有要你处理的」不从数里推：直接派出的那几条全归档了、再往下一层还在等，数是 0 照样得冒出来、
   // 照样变色（同侧栏 DispatchTreeRows 那一处）。
-  const { dispatchedCount, dispatchedWarn } = useMemo(() => {
+  const { dispatchedCount, dispatchedWarn, hasFamily, family } = useMemo(() => {
     const facts = dispatchFacts(allTasks);
-    return { dispatchedCount: facts.count(task.id), dispatchedWarn: facts.needsYou(task.id) };
-  }, [allTasks, task.id]);
-  const dispatchedShown = dispatchedCount > 0 || dispatchedWarn;
+    const family = dispatchFamily(task, allTasks);
+    const { root } = family;
+    return { dispatchedCount: facts.count(root.id), dispatchedWarn: facts.needsYou(root.id), hasFamily: facts.hasBelow(root.id), family };
+  }, [allTasks, task]);
+  const dispatchedFolds = useDispatchFolds(family.root.id, family.children, task.id);
+  const dispatchedShown = hasFamily || !!(task.dispatchedBy && !task.parentId);
+  const entryTab = useMemo(() => takeInspectorEntry(task.id), [task.id]);
+  useEffect(() => clearInspectorEntry(task.id), [task.id]);
+  const arrivals = useRef<DispatchArrivals | null>(null);
+  arrivals.current = arrivals.current?.taskId === task.id
+    ? observeDispatchArrivals(arrivals.current, allTasks)
+    : startDispatchArrivals(task.id, allTasks, Date.now());
+  const arrivalRevision = arrivals.current.revision;
   const dispatchedTab = useMemo(() => surfaceTabWhenUsed(memoTab, "dispatched", dispatchedShown, (descriptor) => ({
     icon: dispatchedShown
       ? createElement(CountedIcon, { icon: descriptor.icon, count: dispatchedCount, warn: dispatchedWarn })
@@ -77,7 +92,7 @@ export function useTaskInspectorStack(
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v7:${task.status}:${reviewFocused ? "review" : "info"}`,
+    stateKey: `single:all-tabs-v8:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
     // 停在这几格上时**不要**被自动切走。判据是「用户主动打开它在干活」：侧聊在跟人对话，
     // 备忘可能正编辑着一条几百字的。stateKey 含 status，任务一跑完就换挡，于是「写到一半
@@ -86,20 +101,20 @@ export function useTaskInspectorStack(
     preserveActiveTabIds: ["side-chat", "memos"],
     // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」。
     //
-    // 子智能体、派出的任务和哨兵**故意不在这张表里**：那几格走「用过才浮现」（inspector/usedTabs.tsx），
-    // 开合由各自的 hook 按本任务用没用过翻 `defaultOpen`，再由 InspectorHost 冒上来。写进
-    // 这张表会让它们在每次语义换挡时被无条件并集回去，等于把那条规矩拆了。
-    //
     // 新增一格只加进这张表是不够的：存量用户的 `openTabs` 躺在 localStorage 里，
     // `applyTabPolicy` 只在 `stateKey` 变过一次时才拿这张表去并集。所以**加面板要连
     // 带把 `all-tabs-vN` 往上跳一版**，否则老用户永远看不到它（生成物那一格就是这么
     // 差点漏掉的）。
     defaultOpenTabIds: ["info", "files", "artifacts", "scm", "memos", "side-chat", "workflow", "review", "preview"],
     defaultActiveTabId: reviewFocused ? "review" : "info",
-  }), [reviewFocused, task.status]);
+    focusOnEntry: dispatchedShown ? "dispatched" : undefined,
+    entryReady: tasksReady,
+    focusRequest: { key: String(arrivalRevision), tabId: "dispatched" },
+    entryTab,
+  }), [arrivalRevision, dispatchedShown, entryTab, reviewFocused, task.status, tasksReady]);
 
   // 「信息」格里最近一轮的用量、上下文、压缩中：取自会话流里最新那条回复（直播值比会话行新）。
   const runFacts = useMemo(() => latestRunFacts(conversation.items), [conversation.items]);
 
-  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds: ended, free, runFacts };
+  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds: ended, free, runFacts, dispatchedFolds };
 }

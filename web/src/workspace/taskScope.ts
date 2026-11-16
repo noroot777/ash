@@ -2,6 +2,7 @@ import type { TaskListItem } from "@ash/shared";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { indexWorkers, inTaskMode, workersFrom } from "../lib/taskAttention.ts";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
+import { dispatchEdges, dispatchSubtree } from "../lib/dispatchTree.ts";
 
 // 侧栏任务列表的**作用域**：只看当前项目一家，还是进「任务模式」。
 //
@@ -37,10 +38,11 @@ export { TASK_MODE_SHORTCUT_LABEL } from "./goChord.ts";
 export function scopeTasks<T extends TaskListItem>(tasks: T[], scope: TaskScope): T[] {
   if (scope.kind === "project") return tasks.filter((task) => task.projectId === scope.projectId);
   const workers = indexWorkers(tasks);
+  const edges = dispatchEdges(tasks);
   const leads = new Set<string>();
   for (const task of tasks) {
     if (task.parentId) continue;
-    if (inTaskMode(task, workersFrom(workers, task.id))) leads.add(task.id);
+    if ([task, ...dispatchSubtree(edges, task.id)].some((item) => !item.archived && inTaskMode(item, workersFrom(workers, item.id)))) leads.add(task.id);
   }
   return tasks.filter((task) => leads.has(task.parentId ?? task.id));
 }

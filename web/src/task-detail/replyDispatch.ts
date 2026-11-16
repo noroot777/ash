@@ -14,7 +14,7 @@ type Dispatch = NonNullable<ReplyBoxProps["onDispatch"]>;
 
 export function replyDispatch({ task, onCreated, notify }: {
   task: Task;
-  /** 建好了：并进任务列表（右侧「派出的任务」、侧栏、会话里那一句都从列表里认）。 */
+  /** 建好了：并进任务列表（右侧「子任务」、侧栏、会话里那一句都从列表里认）。 */
   onCreated: (created: Task) => void;
   notify: Notify;
 }): Dispatch {
@@ -36,11 +36,11 @@ export function replyDispatch({ task, onCreated, notify }: {
       worktreeBase,
     });
     onCreated(created);
-    // 起跑没成不算派失败：任务已经在「派出的任务」里了，框照常清掉，说清楚去那里重试。
+    // 起跑没成不算派失败：任务已经在「子任务」里了，框照常清掉，说清楚去那里重试。
     try {
       await api.runTask(created.id);
     } catch (error) {
-      notify(`新任务已建好，但没能起跑：${error instanceof Error ? error.message : "未知错误"}。在「派出的任务」里打开它再运行`);
+      notify(`新任务已建好，但没能起跑：${error instanceof Error ? error.message : "未知错误"}。在「子任务」里打开它再运行`);
     }
   };
 }

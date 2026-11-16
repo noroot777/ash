@@ -1,18 +1,3 @@
-// 侧栏里派出的任务收在派它的那条下面（真浏览器）。模型层的判据在 test-dispatch-tree.mjs。
-//
-// 钉的是这几件事：
-//   · 默认收着：行首箭头、行尾一个数；名下有在等答复的，数变琥珀色。
-//   · 展开记在本机，刷新后还开着；点这一行本身（打开它）也展开，只开不收。
-//   · 派它的那条不在列表里（归档了），派出的任务照常平铺，不跟着消失。
-//   · 搜索命中一条收着的任务（= 选中它）时，它上面那几层自己打开，看得见它。
-//   · 新派出去的任务不刷新就收进来。
-//   · 筛选把名下几条筛掉了（只看已收尾）：那个数和它的颜色照旧 —— 关系事实不随筛选变。
-//   · 中间那条归档了：底下还失败着的那条照样让最上面变色；名下直接的全归档了也一样，而且
-//     这一行不因为自己旧就被年龄闸折起来。
-//   · 团队和它的执行者照旧：执行者不平铺，团队行的箭头照旧展开执行者。
-//   · 从一条任务里切出来的（裁定转出、合并结果审查的修复任务）同样收在来源下面，一层一层往下；
-//     来源不在列表里时照常平铺，那颗来源图标说的是「来自任务」。
-// 跑：npm -w web run test:dispatch-tree-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
@@ -20,171 +5,46 @@ const web = await startWebServer();
 let browser;
 try {
   browser = await launchChrome();
-  const context = await browser.newContext();
-  const page = await context.newPage();
+  const page = await browser.newPage();
   await page.goto(`${web.origin}/scripts/fixtures/dispatch-tree.html`);
-
-  // 行按任务 id 找（data-task-id 是侧栏每一行的身份，J/K 也认它）。
   const row = (id) => page.locator(`.workspace-task-tree [data-task-id="${id}"]`);
-  const lead = row("lead");
-  const caret = page.getByRole("button", { name: /^展开 3 个派出的任务/ });
-  await lead.waitFor();
-
-  // —— 默认收着。
-  for (const id of ["kid-run", "kid-ask", "kid-mid", "grand"]) {
-    assert.equal(await row(id).count(), 0, `${id} 默认收在派它的那条下面`);
-  }
-  assert.equal(await caret.count(), 1, "行首那颗箭头说得出名下几个、有要你处理的");
-  assert.match(await caret.getAttribute("aria-label"), /有要你处理的/);
-  const count = lead.locator(".workspace-dispatch-count");
-  assert.equal(await count.textContent(), "3");
-  assert.ok(await count.evaluate((node) => node.classList.contains("is-warn")), "名下在等答复，那个数变色");
-  const color = (locator) => locator.evaluate((node) => getComputedStyle(node).color);
-  // 琥珀取的是现有变量：拿同一个变量在页面上解析出来的颜色比。
-  const amber = await page.evaluate(() => {
-    const probe = document.createElement("i");
-    probe.style.color = "var(--amber)";
-    document.body.append(probe);
-    const value = getComputedStyle(probe).color;
-    probe.remove();
-    return value;
-  });
-  assert.equal(await color(count), amber, "名下有要你处理的，那个数是琥珀色");
-
-  // —— 派它的那条归档了：照常平铺。
-  assert.equal(await row("orphan").count(), 1, "派它的那条不在列表里时，派出的任务不能跟着消失");
-  assert.equal(await page.getByRole("button", { name: "派它的任务：已经归档的派活人" }).count(), 1, "平铺的那条照旧写着是谁派的");
-
-  // —— 团队照旧：执行者不平铺，团队行自己的箭头展开执行者。
-  assert.equal(await row("worker").count(), 0, "执行者照旧收在团队下面");
-  await page.getByRole("button", { name: "展开 1 个执行者" }).click();
-  await page.locator('.workspace-worker-list [data-task-id="worker"]').waitFor();
-  assert.equal(await page.locator(".workspace-worker-list .workspace-dispatch-count").count(), 0, "团队行不长出派活那一层");
-  await page.getByRole("button", { name: "折叠执行者" }).click();
-  await page.waitForFunction(() => !document.querySelector('.workspace-worker-list [data-task-id="worker"]'));
-  await row("team").click();
-  await page.locator('.workspace-worker-list [data-task-id="worker"]').waitFor();
-  assert.equal(await row("team").getAttribute("aria-selected"), "true", "点团队行本身：打开它，执行者也跟着展开");
-
-  // —— 展开：名下三条出来，孙辈仍收在它自己那一层下面。
-  await caret.click();
-  await row("kid-run").waitFor();
-  assert.equal(await row("kid-ask").count(), 1);
-  assert.equal(await row("kid-mid").locator(".workspace-dispatch-count").textContent(), "1", "派出去的任务自己又派了活，同样收在它自己下面");
-  assert.equal(await row("grand").count(), 0);
-  assert.notEqual(await color(row("kid-mid").locator(".workspace-dispatch-count")), amber, "名下没有要你处理的，那个数不带颜色");
-  assert.equal(
-    await page.locator('[role="group"][aria-label="拆活的分析任务 派出的任务"] [data-task-id]').count(),
-    3,
-    "名下那一组只有直接派出的三条",
-  );
-
-  // —— 刷新后还开着。
-  await page.reload();
-  await row("kid-run").waitFor();
-  assert.equal(await page.getByRole("button", { name: /^收起 3 个派出的任务/ }).getAttribute("aria-expanded"), "true", "展开记在本机，刷新后还开着");
-
-  // —— 收着时点这一行本身（打开它）：名下那一层跟着展开；再点一次不会收回去，收起只靠箭头。
-  await page.getByRole("button", { name: /^收起 3 个派出的任务/ }).click();
-  await page.waitForFunction(() => !document.querySelector('[data-task-id="kid-run"]'));
-  await lead.click();
-  await row("kid-run").waitFor();
-  assert.equal(await lead.getAttribute("aria-selected"), "true");
-  await lead.click();
-  assert.equal(await page.getByRole("button", { name: /^收起 3 个派出的任务/ }).getAttribute("aria-expanded"), "true", "再点一次仍开着");
-
-  // —— 收起之后，搜索命中孙辈（= 选中它）：两层都自己打开。
-  await page.getByRole("button", { name: /^收起 3 个派出的任务/ }).click();
-  await page.waitForFunction(() => !document.querySelector('[data-task-id="kid-run"]'));
+  const wrap = (id) => page.locator(".workspace-task-row-wrap", { has: page.locator(`[data-task-id="${id}"]`) });
+  await row("lead").waitFor();
+  for (const id of ["kid-run", "kid-ask", "kid-mid", "grand", "old-grand"]) assert.equal(await row(id).count(), 0);
+  assert.equal(await wrap("lead").locator(".workspace-team-caret").count(), 0);
+  assert.equal(await wrap("lead").locator(".workspace-status-dot--wait").count(), 1);
+  assert.equal(await row("lead").locator(".workspace-dispatch-count").textContent(), "3");
+  assert.equal(await row("lead").locator(".workspace-dispatch-count.is-warn").count(), 1);
+  assert.match(await row("lead").innerText(), /等你答复/);
   await page.evaluate(() => window.__select("grand"));
-  await row("grand").waitFor();
-  assert.equal(await row("grand").getAttribute("aria-selected"), "true", "搜索命中收着的那条：它上面那几层自己打开，看得见它");
-  assert.equal(await row("kid-run").count(), 1);
-
-  // —— 新派出去的任务不刷新就收进来，数跟着变。
-  await page.evaluate(() => window.__add({ id: "kid-new", title: "刚派出去的", dispatchedBy: "lead", status: "queued", stage: null }));
-  await row("kid-new").waitFor();
-  assert.equal(await page.locator('[data-task-id="lead"] .workspace-dispatch-count').textContent(), "4");
-
-  // —— 等答复的那条答完了、名下再没有要你处理的：数回到不带颜色。
-  await page.evaluate(() => window.__patch("kid-ask", { question: null, status: "running" }));
-  await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
-
-  // —— 只看已收尾：派它的那条取消了、名下没有一条落在这一档。名下几条不在画出来的行里，但那个数照旧、等答复的
-  //    那条照旧让它变色；没有可展开的行，就不画箭头，数和颜色由读屏在这一行里念到。
-  await page.evaluate(() => window.__patch("kid-ask", { question: "还是选哪种？", status: "paused" }));
-  await page.waitForFunction(() => document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
-  await page.evaluate(() => { window.__patch("lead", { status: "canceled", stage: null }); window.__filter("done"); });
-  await page.waitForFunction(() => !document.querySelector('[data-task-id="kid-run"]'));
-  const filteredCount = lead.locator(".workspace-dispatch-count");
-  assert.equal(await filteredCount.locator('[aria-hidden="true"]').textContent(), "4", "名下几条被筛掉了，数照旧");
-  assert.equal(await color(filteredCount), amber, "名下在等答复的那条被筛掉了，也照旧变色");
-  assert.equal(await lead.locator(".workspace-team-caret").count(), 0, "没有可展开的行，不画箭头");
-  assert.equal(await filteredCount.locator(".task-visually-hidden").textContent(), "4 个派出的任务，有要你处理的");
-  await page.evaluate(() => { window.__filter("all"); window.__patch("lead", { status: "done", stage: "accepted" }); });
-  await row("kid-run").waitFor();
-  assert.equal(await lead.locator(".workspace-dispatch-count").textContent(), "4");
-
-  // —— 归档中间那一条：孙辈失败着，kid-mid 归档后它平铺出来，但最上面那个数照样变色。
-  await page.evaluate(() => window.__patch("kid-ask", { question: null, status: "running" }));
-  await page.evaluate(() => window.__patch("grand", { status: "failed", stage: null }));
-  await page.waitForFunction(() => document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
-  await page.evaluate(() => window.__patch("kid-mid", { archived: true }));
-  await page.waitForFunction(() => !document.querySelector('[data-task-id="kid-mid"]'));
-  assert.equal(await row("grand").count(), 1, "中间那条归档了，孙辈照常平铺");
-  assert.equal(await lead.locator(".workspace-dispatch-count").textContent(), "3", "数只算没归档的直接那几条");
-  assert.ok(await lead.locator(".workspace-dispatch-count").evaluate((node) => node.classList.contains("is-warn")), "孙辈还失败着，最上面照样变色");
-  assert.match(await page.getByRole("button", { name: /个派出的任务/ }).first().getAttribute("aria-label"), /3 个派出的任务，有要你处理的/);
-  await page.evaluate(() => window.__patch("grand", { status: "done", stage: "accepted" }));
-  await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
-  await page.evaluate(() => window.__patch("kid-mid", { archived: false }));
-  await row("kid-mid").waitFor();
-
-  // —— 两天前那条：直接派出的全归档了、底下那条失败着。数是 0、变色，没有可展开的行；自己旧也不进年龄闸。
-  const oldLead = row("old-lead");
-  assert.equal(await oldLead.count(), 1, "名下有要你处理的，这一行不因为自己旧就被折起来");
-  const oldCount = oldLead.locator(".workspace-dispatch-count");
-  assert.equal(await oldCount.locator('[aria-hidden="true"]').textContent(), "0");
-  assert.equal(await color(oldCount), amber);
-  assert.equal(await oldLead.locator(".workspace-team-caret").count(), 0);
-  assert.equal(await oldCount.locator(".task-visually-hidden").textContent(), "0 个派出的任务，有要你处理的");
-
-  // —— 派它的那条一归档，名下照常平铺（归档派它的那条不等于归档名下的）。
+  await page.waitForFunction(() => document.querySelector('[data-task-id="lead"]')?.getAttribute("aria-selected") === "true");
+  await row("lead").click();
+  assert.equal(await row("grand").count(), 0);
+  assert.equal(await page.evaluate(() => localStorage.getItem("ash:task-tree:dispatch-open")), null);
+  await page.evaluate(() => window.__scope("tasks"));
+  await page.locator(".workspace-task-project-group").waitFor();
+  const more = page.locator(".workspace-task-project-group .workspace-task-more:not(.workspace-task-more--collapse)");
+  if (await more.count()) await more.first().click();
+  for (const id of ["kid-run", "kid-ask", "kid-mid", "grand", "old-grand"]) assert.equal(await row(id).count(), 0, "任务模式的更多任务也不漏出子任务");
+  await page.evaluate(() => window.__scope("project"));
+  for (const filter of ["todo", "run"]) {
+    await page.evaluate((value) => window.__filter(value), filter);
+    await row("lead").waitFor();
+    assert.equal(await row("kid-run").count(), 0);
+  }
+  await page.evaluate(() => { window.__filter("all"); window.__patch("kid-mid", { archived: true }); window.__patch("grand", { status: "failed", stage: null }); });
+  await row("lead").waitFor();
+  assert.equal(await row("grand").count(), 0);
+  assert.equal(await row("old-lead").count(), 1);
+  assert.equal(await row("old-lead").locator(".workspace-dispatch-count").textContent(), "0");
   await page.evaluate(() => window.__patch("lead", { archived: true }));
-  await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"]'));
-  for (const id of ["kid-run", "kid-mid"]) {
-    assert.equal(await row(id).count(), 1, `${id} 回到顶层`);
-    assert.equal(await page.locator(`.workspace-dispatch-list > * [data-task-id="${id}"], .workspace-dispatch-list > [data-task-id="${id}"]`).count(), 0, `${id} 不再缩在别人底下`);
-  }
-  // 孙辈仍收在它自己那一条（kid-mid）下面：只是最顶上那一层没了。
-  assert.equal(await row("kid-mid").locator(".workspace-dispatch-count").textContent(), "1");
-
-  // —— 切出来的任务：收在它来源（孙辈）那一行下面，再深一层；选中它时上面几层照样自己打开。
-  await page.evaluate(() => {
-    window.__add({ id: "cut", title: "从孙辈里切出来的", dispatchedBy: "grand", originTaskId: "grand", creationOrigin: { kind: "system" }, status: "failed", stage: null });
-    window.__add({ id: "cut-flat", title: "来源已归档的切出任务", dispatchedBy: "gone-lead", originTaskId: "gone-lead", creationOrigin: { kind: "system" } });
-    // 你派出去、同时回链到派它的那条的普通任务：不是切出来的。
-    window.__add({ id: "sent-linked", title: "回链到派活人的普通派活", dispatchedBy: "gone-lead", originTaskId: "gone-lead", creationOrigin: { kind: "user" } });
-    window.__select("cut");
-  });
-  await row("cut").waitFor();
-  assert.equal(await page.locator('[role="group"][aria-label="孙辈任务 派出的任务"] [data-task-id="cut"]').count(), 1, "切出来的收在来源那一行下面");
-  assert.equal(await page.locator('[role="group"][aria-label="派出去又派了活的 派出的任务"] [data-task-id="cut"]').count(), 1, "一层一层往下：它在来源的上一层那一组里面");
-  assert.equal(await row("grand").locator(".workspace-dispatch-count").textContent(), "1");
-  for (const id of ["grand", "kid-mid"]) {
-    assert.equal(await color(row(id).locator(".workspace-dispatch-count")), amber, `切出来的那条失败了，${id} 那个数变色`);
-  }
-  // 来源图标是行外面的兄弟，按这一行的外壳找。
-  const origin = (id, name) => page.locator(".workspace-task-row-wrap", { has: page.locator(`[data-task-id="${id}"]`) }).getByRole("button", { name });
-  assert.equal(await origin("cut", /^(来自|派它的)任务/).count(), 0, "收在来源下面时不再另画来源图标：位置已经说了");
-  assert.equal(await row("cut-flat").count(), 1, "来源不在列表里，切出来的照常平铺");
-  assert.equal(await origin("cut-flat", "来自任务：已经归档的派活人").count(), 1, "切出来的那条说的是「来自任务」，不是谁派的");
-  assert.equal(await origin("sent-linked", "派它的任务：已经归档的派活人").count(), 1, "普通派活同时回链到派它的那条，仍说是谁派的");
-  assert.equal(await origin("orphan", "派它的任务：已经归档的派活人").count(), 1, "派出去的那条照旧");
-
-  await context.close();
-  console.log("✓ 侧栏：派出的任务收在派它的那条下面");
-} finally {
-  await browser?.close();
-  await web.close();
-}
+  await row("kid-run").waitFor();
+  await row("grand").waitFor();
+  await row("orphan").waitFor();
+  await wrap("team").getByRole("button", { name: /展开.*执行者/ }).click();
+  await row("worker").waitFor();
+  await page.reload();
+  await row("lead").waitFor();
+  assert.equal(await row("kid-run").count(), 0);
+  console.log("✓ 侧栏只画祖先：记号、短语、计数、筛选、选中与团队执行者");
+} finally { await browser?.close(); await web.close(); }
