@@ -141,7 +141,7 @@ export function DispatchPlanCard({ task, plan, onLaunch, onAnswer, collapsed, on
           </button>
         </div>
       </header>
-      <ol className="dispatch-plan-rows" ref={rowsRef} aria-label="要子任务">
+      <ol className="dispatch-plan-rows" ref={rowsRef} aria-label="待派出的子任务">
         {rows.map(({ item, index, target }, at) => {
           const executorId = target.executorId
             ?? profiles.find((profile) => profile.type === target.agentType && profile.isDefault)?.id ?? null;

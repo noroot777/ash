@@ -107,7 +107,7 @@ export function TaskDetail({
   const holder = useDispatchHolder(task.id, allTasks, task.status === "paused" || task.status === "backlog");
   const conversation = useConversation(task.id);
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
     task, allTasks, conversation,
   });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
@@ -317,6 +317,7 @@ export function TaskDetail({
         descriptors={inspectors}
         context={{
           nativeWork: subagents.nativeWork,
+          dispatchedFolds,
           monitors: monitorTab.monitors,
           task,
           groups,

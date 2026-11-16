@@ -14,6 +14,7 @@ export interface InspectorState {
   width: number;
   visible: boolean;
   policyKey: string | null;
+  focusKey?: string | null;
   /**
    * 用户亲手从竖轨上摘掉的格。任务状态变了（applyTabPolicy）也不把它们补回来，只有从「+」
    * 或快捷键加回才算数。必开的那一格（信息）不受它管：下次打开面板它自己回来。
@@ -53,12 +54,13 @@ export function applyTabPolicy<Context>(
   state: InspectorState,
   policy: InspectorTabPolicy,
   descriptors: readonly InspectorDescriptor<Context>[],
+  entering = false,
 ): InspectorState {
   const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
-  const preserved = !!state.activeTab && !!policy.preserveActiveTabIds?.includes(state.activeTab);
-  const forceFocus = policy.revealOnFocus && !preserved;
-  const dismissed = new Set(state.dismissed.filter((id) => id !== policy.requiredTabId && !(forceFocus && id === policy.defaultActiveTabId)));
-  const suggested = [...policy.defaultOpenTabIds, policy.defaultActiveTabId].filter((id) => !dismissed.has(id));
+  const focusTabId = requestedInspectorFocus(state, policy, entering);
+  const targetTabId = focusTabId ?? policy.defaultActiveTabId;
+  const dismissed = new Set(state.dismissed.filter((id) => id !== policy.requiredTabId && id !== focusTabId));
+  const suggested = [...policy.defaultOpenTabIds, targetTabId].filter((id) => !dismissed.has(id));
   const openTabs = orderedValidTabs([
     ...state.openTabs,
     policy.requiredTabId,
@@ -66,8 +68,8 @@ export function applyTabPolicy<Context>(
   ], descriptors);
   const activeTab = state.activeTab && descriptorIds.has(state.activeTab) && policy.preserveActiveTabIds?.includes(state.activeTab)
     ? state.activeTab
-    : descriptorIds.has(policy.defaultActiveTabId) && openTabs.includes(policy.defaultActiveTabId)
-    ? policy.defaultActiveTabId
+    : descriptorIds.has(targetTabId) && openTabs.includes(targetTabId)
+    ? targetTabId
     : state.activeTab && openTabs.includes(state.activeTab)
     ? state.activeTab
     : openTabs[0] ?? null;
@@ -75,10 +77,17 @@ export function applyTabPolicy<Context>(
     ...state,
     openTabs,
     activeTab,
-    visible: (state.visible || !!forceFocus) && openTabs.length > 0,
+    visible: (state.visible || !!focusTabId) && openTabs.length > 0,
     policyKey: policy.stateKey,
+    focusKey: policy.focusRequest?.key ?? null,
     dismissed: [...dismissed],
   };
+}
+
+export function requestedInspectorFocus(state: InspectorState, policy: InspectorTabPolicy, entering = false) {
+  if (state.activeTab && policy.preserveActiveTabIds?.includes(state.activeTab)) return undefined;
+  if (entering) return policy.focusOnEntry;
+  return policy.focusRequest && state.focusKey !== policy.focusRequest.key ? policy.focusRequest.tabId : undefined;
 }
 
 export function readState<Context>(
@@ -93,9 +102,10 @@ export function readState<Context>(
       ...state, openTabs: orderedValidTabs([...state.openTabs, entry.id], descriptors),
       activeTab: entry.id, visible: entry.visible, dismissed: state.dismissed.filter((id) => id !== entry.id),
     };
-    return tabPolicy?.focusOnEntry ? applyTabPolicy(state, tabPolicy, descriptors) : state;
+    return tabPolicy?.focusOnEntry ? applyTabPolicy(state, tabPolicy, descriptors, true) : state;
   };
-  const fallback = defaultState(descriptors, defaultVisible);
+  const focusKey = tabPolicy?.focusRequest?.key ?? null;
+  const fallback = { ...defaultState(descriptors, defaultVisible), focusKey };
   const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
   try {
     const raw = readRenamedStorage(storageKey);
@@ -122,7 +132,7 @@ export function readState<Context>(
     const dismissed = Array.isArray(parsed.dismissed)
       ? parsed.dismissed.filter((id): id is string => typeof id === "string" && descriptorIds.has(id))
       : [];
-    let restored: InspectorState = { openTabs, activeTab, width, visible, policyKey, dismissed };
+    let restored: InspectorState = { openTabs, activeTab, width, visible, policyKey, dismissed, focusKey };
     if (tabPolicy && policyKey !== tabPolicy.stateKey) {
       // A semantic task-state change deliberately wins over restored focus once.
       return onEntry(applyTabPolicy(restored, tabPolicy, descriptors));

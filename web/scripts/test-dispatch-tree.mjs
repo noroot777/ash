@@ -5,7 +5,7 @@ import { dispatchPath, dispatchFamily, dispatchLevel, dispatchBranchAccepted, di
 import { spreadCounts, spreadVisibleTasks } from "../src/workspace/useSidebarSpread.ts";
 import { sidebarSelectionId, stepTaskId } from "../src/workspace/sidebarNavigation.ts";
 import { scopeTasks } from "../src/workspace/taskScope.ts";
-import { readDispatchFolds, writeDispatchFolds } from "../src/task-detail/dispatched/dispatchFolds.ts";
+import { readDispatchFolds, writeDispatchFolds, revealDispatchSelection } from "../src/task-detail/dispatched/dispatchFolds.ts";
 import { dispatchedMeta, dispatchedOrder, dispatchedWord } from "../src/task-detail/dispatched/dispatchedRows.ts";
 import { readState, applyTabPolicy } from "../src/inspector/inspectorState.ts";
 import { rememberFamilyInspector, takeInspectorEntry } from "../src/task-detail/dispatched/inspectorNavigation.ts";
@@ -84,25 +84,48 @@ globalThis.window = { localStorage: storage };
 globalThis.localStorage = storage;
 globalThis.sessionStorage = storage;
 writeDispatchFolds("root", new Map([["mid", false], ["accepted:root", false]]));
-assert.equal(readDispatchFolds("root", family.children, "root").get("mid"), false);
-assert.equal(readDispatchFolds("root", family.children, "leaf").get("mid"), true);
-assert.equal(readDispatchFolds("root", family.children, "accepted-child").get("accepted:root"), true);
-assert.equal(readDispatchFolds("root", family.children, "accepted-child").get("accepted"), true);
-writeDispatchFolds("root", new Map([["mid", false], ["accepted:root", false]]), "leaf");
-assert.equal(readDispatchFolds("root", family.children, "leaf").get("mid"), false);
-assert.equal(readDispatchFolds("root", family.children, "accepted-child").get("accepted:root"), true);
+const manualFolds = readDispatchFolds("root");
+const savedFolds = memory.get("ash:subtasks:folds:root");
+assert.equal(manualFolds.get("mid"), false);
+assert.equal(revealDispatchSelection(manualFolds, family.children, "leaf").get("mid"), true);
+const revealedAccepted = revealDispatchSelection(manualFolds, family.children, "accepted-child");
+assert.equal(revealedAccepted.get("accepted:root"), true);
+assert.equal(revealedAccepted.get("accepted"), true);
+assert.equal(revealedAccepted.get("accepted:accepted"), true);
+assert.equal(memory.get("ash:subtasks:folds:root"), savedFolds);
+const returnedFolds = revealDispatchSelection(readDispatchFolds("root"), family.children, "root");
+assert.equal(returnedFolds.get("mid"), false);
+assert.equal(returnedFolds.get("accepted:root"), false);
+assert.equal(returnedFolds.has("accepted"), false);
+writeDispatchFolds("root", new Map([["accepted:root", true]]));
+assert.equal(readDispatchFolds("root").get("accepted:root"), true);
 
 const descriptors = ["info", "dispatched", "review", "files", "side-chat", "memos"].map((id) => ({ id, defaultOpen: true }));
-const policy = { stateKey: "new-batch", requiredTabId: "info", defaultOpenTabIds: ["info"], defaultActiveTabId: "dispatched", preserveActiveTabIds: ["side-chat", "memos"], focusOnEntry: true, revealOnFocus: true };
-const hidden = { openTabs: ["info", "review"], activeTab: "review", visible: false, width: 350, policyKey: "new-batch", dismissed: ["dispatched"] };
+const policy = { stateKey: "running", requiredTabId: "info", defaultOpenTabIds: ["info"], defaultActiveTabId: "info", preserveActiveTabIds: ["side-chat", "memos"], focusOnEntry: "dispatched", focusRequest: { key: "batch-1", tabId: "dispatched" } };
+const hidden = { openTabs: ["info", "review"], activeTab: "review", visible: false, width: 350, policyKey: "running", focusKey: "batch-1", dismissed: ["dispatched"] };
 memory.set("test", JSON.stringify(hidden));
 const entry = readState("test", descriptors, false, policy);
 assert.equal(entry.visible, true);
 assert.equal(entry.activeTab, "dispatched");
 assert.ok(entry.openTabs.includes("dispatched"));
 assert.ok(!entry.dismissed.includes("dispatched"));
+for (const [stateKey, defaultActiveTabId] of [["paused", "info"], ["done", "info"], ["verifying", "review"], ["awaiting_acceptance", "review"]]) {
+  const changed = applyTabPolicy(hidden, { ...policy, stateKey, defaultActiveTabId }, descriptors);
+  assert.equal(changed.visible, false, "仅状态变化不强行打开面板");
+  assert.equal(changed.activeTab, defaultActiveTabId);
+  assert.ok(changed.dismissed.includes("dispatched"));
+  assert.ok(!changed.openTabs.includes("dispatched"));
+}
+const newBatch = { ...policy, focusRequest: { key: "batch-2", tabId: "dispatched" } };
+const arrived = applyTabPolicy(hidden, newBatch, descriptors);
+assert.equal(arrived.activeTab, "dispatched");
+assert.equal(arrived.visible, true);
+assert.ok(!arrived.dismissed.includes("dispatched"));
+const afterArrival = applyTabPolicy({ ...arrived, activeTab: "files", visible: false }, { ...newBatch, stateKey: "paused" }, descriptors);
+assert.equal(afterArrival.visible, false);
+assert.equal(afterArrival.activeTab, "info");
 for (const activeTab of ["side-chat", "memos"]) {
-  const preserved = applyTabPolicy({ ...hidden, openTabs: [activeTab], activeTab }, policy, descriptors);
+  const preserved = applyTabPolicy({ ...hidden, openTabs: [activeTab], activeTab }, newBatch, descriptors);
   assert.equal(preserved.activeTab, activeTab);
   assert.equal(preserved.visible, false);
 }

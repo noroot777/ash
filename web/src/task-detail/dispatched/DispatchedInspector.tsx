@@ -8,28 +8,28 @@ import { InspectorHeadActions } from "../../inspector/index.ts";
 import type { Notify } from "../../lib/notify.ts";
 import { dispatchedMeta, dispatchedOrder, dispatchedWord } from "./dispatchedRows.ts";
 import { DispatchHoldKey } from "./DispatchHoldKey.tsx";
-import { readDispatchFolds, writeDispatchFolds } from "./dispatchFolds.ts";
+import type { DispatchFoldState } from "./dispatchFolds.ts";
 
-export function DispatchedInspector({ task, allTasks, onOpenTask, onTaskUpdated, notify }: {
+export function DispatchedInspector({ task, allTasks, onOpenTask, onTaskUpdated, notify, foldState }: {
   task: TaskListItem;
   allTasks: readonly TaskListItem[];
   onOpenTask: (taskId: string) => void;
   onTaskUpdated: (task: Task) => void;
   notify: Notify;
+  foldState: DispatchFoldState;
 }) {
   const family = useMemo(() => dispatchFamily(task, allTasks), [task, allTasks]);
-  return <FamilyTable key={family.root.id} {...{ task, allTasks, onOpenTask, onTaskUpdated, notify }} family={family} />;
+  return <FamilyTable key={family.root.id} {...{ task, allTasks, onOpenTask, onTaskUpdated, notify, foldState }} family={family} />;
 }
 
-function FamilyTable({ task, allTasks, onOpenTask, onTaskUpdated, notify, family }: Parameters<typeof DispatchedInspector>[0] & {
+function FamilyTable({ task, allTasks, onOpenTask, onTaskUpdated, notify, family, foldState }: Parameters<typeof DispatchedInspector>[0] & {
   family: ReturnType<typeof dispatchFamily>;
 }) {
   const { root, children } = family;
   const direct = dispatchedOf(allTasks, root.id);
-  const [folds, setFolds] = useState(() => readDispatchFolds(root.id, children, task.id));
+  const { folds, toggle } = foldState;
   const [hint, setHint] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now);
-  useEffect(() => writeDispatchFolds(root.id, folds, task.id), [folds, root.id, task.id]);
   const ticking = allTasks.some((item) => item.startedAt && !item.endedAt);
   useEffect(() => {
     if (!ticking) return;
@@ -39,10 +39,6 @@ function FamilyTable({ task, allTasks, onOpenTask, onTaskUpdated, notify, family
   const facts = useMemo(() => dispatchFacts(allTasks), [allTasks]);
   const dispatchView = useMemo(() => createDispatchView(allTasks), [allTasks]);
   const holder = dispatchHolderOf(task.id, new Map(allTasks.map((item) => [item.id, item])));
-  const toggle = (id: string, open: boolean) => setFolds((current) => {
-    const next = new Map(current).set(id, !open);
-    return next;
-  });
   const mark = (item: TaskListItem) => {
     const look = dispatchView.look(item);
     return look.mark ? <i className={`workspace-status-dot workspace-status-dot--${look.mark}`} aria-hidden="true" /> : null;

@@ -160,7 +160,7 @@ function Fixture() {
   const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => descriptor.id === "dispatched"), [drawers.inspectors]);
   // 右侧那一格要的那几样（这条任务、全量任务列表：格头的停 / 续、行尾名下的数都从它们算）。
   const context = {
-    task: lead, allTasks: tasks,
+    task: lead, allTasks: tasks, dispatchedFolds: drawers.dispatchedFolds,
     onOpenTask: navigate, onTaskUpdated: () => {}, notify: () => {},
   } as unknown as TaskInspectorContext;
   return (

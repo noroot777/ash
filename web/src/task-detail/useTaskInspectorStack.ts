@@ -15,6 +15,7 @@ import { surfaceTabWhenUsed } from "../inspector/index.ts";
 import { dispatchedOf, dispatchFacts } from "../lib/dispatchTree.ts";
 import { dispatchFamily } from "../lib/dispatchFamily.ts";
 import { clearInspectorEntry, takeInspectorEntry } from "./dispatched/inspectorNavigation.ts";
+import { useDispatchFolds } from "./dispatched/dispatchFolds.ts";
 import { CountedIcon } from "./dispatched/CountedIcon.tsx";
 
 // 这几档 stage 下默认落在「审议」那一格：到了这一步，用户要看的就是审查那摊事。
@@ -45,11 +46,13 @@ export function useTaskInspectorStack(
   // 变不变色跟侧栏那一行行尾的数是同一份关系事实（dispatchFacts）：名下整棵有在等答复、失败的就变色。
   // 「有要你处理的」不从数里推：直接派出的那几条全归档了、再往下一层还在等，数是 0 照样得冒出来、
   // 照样变色（同侧栏 DispatchTreeRows 那一处）。
-  const { dispatchedCount, dispatchedWarn, hasFamily } = useMemo(() => {
+  const { dispatchedCount, dispatchedWarn, hasFamily, family } = useMemo(() => {
     const facts = dispatchFacts(allTasks);
-    const { root } = dispatchFamily(task, allTasks);
-    return { dispatchedCount: facts.count(root.id), dispatchedWarn: facts.needsYou(root.id), hasFamily: facts.hasBelow(root.id) };
+    const family = dispatchFamily(task, allTasks);
+    const { root } = family;
+    return { dispatchedCount: facts.count(root.id), dispatchedWarn: facts.needsYou(root.id), hasFamily: facts.hasBelow(root.id), family };
   }, [allTasks, task]);
+  const dispatchedFolds = useDispatchFolds(family.root.id, family.children, task.id);
   const dispatchedShown = hasFamily || !!(task.dispatchedBy && !task.parentId);
   const entryTab = useMemo(() => takeInspectorEntry(task.id), [task.id]);
   useEffect(() => clearInspectorEntry(task.id), [task.id]);
@@ -89,7 +92,7 @@ export function useTaskInspectorStack(
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v8:${task.status}:${reviewFocused ? "review" : "info"}:${dispatchedShown}:${arrivalRevision}`,
+    stateKey: `single:all-tabs-v8:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
     // 停在这几格上时**不要**被自动切走。判据是「用户主动打开它在干活」：侧聊在跟人对话，
     // 备忘可能正编辑着一条几百字的。stateKey 含 status，任务一跑完就换挡，于是「写到一半
@@ -103,14 +106,14 @@ export function useTaskInspectorStack(
     // 带把 `all-tabs-vN` 往上跳一版**，否则老用户永远看不到它（生成物那一格就是这么
     // 差点漏掉的）。
     defaultOpenTabIds: ["info", "files", "artifacts", "scm", "memos", "side-chat", "workflow", "review", "preview"],
-    defaultActiveTabId: dispatchedShown ? "dispatched" : reviewFocused ? "review" : "info",
-    focusOnEntry: dispatchedShown,
-    revealOnFocus: dispatchedShown,
+    defaultActiveTabId: reviewFocused ? "review" : "info",
+    focusOnEntry: dispatchedShown ? "dispatched" : undefined,
+    focusRequest: { key: String(arrivalRevision), tabId: "dispatched" },
     entryTab,
   }), [arrivalRevision, dispatchedShown, entryTab, reviewFocused, task.status]);
 
   // 「信息」格里最近一轮的用量、上下文、压缩中：取自会话流里最新那条回复（直播值比会话行新）。
   const runFacts = useMemo(() => latestRunFacts(conversation.items), [conversation.items]);
 
-  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds: ended, free, runFacts };
+  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds: ended, free, runFacts, dispatchedFolds };
 }

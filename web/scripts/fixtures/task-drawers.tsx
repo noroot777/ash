@@ -66,7 +66,7 @@ function Detail({ current, tasks, navigate }: { current: Task; tasks: Task[]; na
     .map((descriptor) => descriptor.id === "subagents" ? { ...descriptor, render: (context: TaskInspectorContext) => <><InspectorHeadActions><button type="button" onClick={readReport}>读审查报告</button></InspectorHeadActions>{descriptor.render(context)}</> }
       : descriptor.id === "dispatched" ? descriptor : { ...descriptor, render: () => <p>{current.title} 的{descriptor.title}</p> }), [current.title, drawers.inspectors]);
   const go = (id: string) => { rememberFamilyInspector(current.id, id, tasks); navigate(id); };
-  const context = { task: current, allTasks: tasks, nativeWork: drawers.subagents.nativeWork, onOpenTask: go, onTaskUpdated: nothing, notify: nothing } as unknown as TaskInspectorContext;
+  const context = { task: current, allTasks: tasks, dispatchedFolds: drawers.dispatchedFolds, nativeWork: drawers.subagents.nativeWork, onOpenTask: go, onTaskUpdated: nothing, notify: nothing } as unknown as TaskInspectorContext;
   return <LeftDrawerProvider value={drawers.leftDrawer.api}>
     <InspectorHost contextKey={`task:${current.id}`} descriptors={descriptors} context={context} tabPolicy={drawers.inspectorPolicy}>
       {(inspector) => <main className="task-detail" data-current-task={current.id} style={{ position: "relative", flex: 1, minHeight: 0 }}>

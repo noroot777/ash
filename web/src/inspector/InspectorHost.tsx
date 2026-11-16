@@ -18,6 +18,7 @@ import { InspectorNavProvider, type InspectorNav, type InspectorRequest } from "
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
 import {
   applyTabPolicy,
+  requestedInspectorFocus,
   clampWidth,
   INSPECTOR_DEFAULT_WIDTH,
   INSPECTOR_MAX_WIDTH,
@@ -96,7 +97,7 @@ function InspectorHostState<Context>({
   // 记着的开 / 关。开着的时候窗口被拉窄，就照样开着（变成盖在上面的一层），不让正看着的东西凭空消失。
   const narrowScreen = useNarrowScreen();
   const narrow = narrowScreen;
-  const [narrowOpen, setNarrowOpen] = useState(!!tabPolicy?.focusOnEntry && state.visible);
+  const [narrowOpen, setNarrowOpen] = useState(false);
   const [narrowSeen, setNarrowSeen] = useState(narrow);
   if (narrow !== narrowSeen) {
     setNarrowSeen(narrow);
@@ -145,12 +146,13 @@ function InspectorHostState<Context>({
     if (!tabPolicy) return;
     // localStorage wins while stateKey is unchanged; a new semantic state wins exactly once.
     setState((current) => {
-      if (current.policyKey === tabPolicy.stateKey) return current;
+      if (current.policyKey === tabPolicy.stateKey && current.focusKey === (tabPolicy.focusRequest?.key ?? null)) return current;
+      const focusTabId = requestedInspectorFocus(current, tabPolicy);
       const next = applyTabPolicy(current, tabPolicy, descriptors);
-      if (narrow && tabPolicy.revealOnFocus && next.activeTab === tabPolicy.defaultActiveTabId) setNarrowOpen(true);
+      if (narrow && focusTabId && next.activeTab === focusTabId) setNarrowOpen(true);
       return next;
     });
-  }, [descriptors, tabPolicy?.stateKey]);
+  }, [descriptors, tabPolicy?.stateKey, tabPolicy?.focusRequest?.key]);
 
   useEffect(() => {
     try {

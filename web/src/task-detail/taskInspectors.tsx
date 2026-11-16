@@ -11,6 +11,7 @@ import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import type { Notify } from "../lib/notify.ts";
 import { TaskInspector } from "./TaskInspector.tsx";
 import { DispatchedInspector } from "./dispatched/DispatchedInspector.tsx";
+import type { DispatchFoldState } from "./dispatched/dispatchFolds.ts";
 import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
@@ -33,6 +34,7 @@ export interface TaskInspectorContext {
   groups: Group[];
   sessions: Session[];
   allTasks: TaskListItem[];
+  dispatchedFolds: DispatchFoldState;
   followUps: { text: string; attachments: string[]; at?: string }[];
   /** 「信息」格里最近一轮的用量、上下文与压缩中（以前挂在会话尾栏的药丸上）。 */
   runFacts: InfoRunFacts;
@@ -173,6 +175,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     shortcut: "d",
     render: (context) => (
       <DispatchedInspector
+        foldState={context.dispatchedFolds}
         task={context.task}
         allTasks={context.allTasks}
         onOpenTask={context.onOpenTask}

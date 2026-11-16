@@ -29,8 +29,8 @@ export interface InspectorTabPolicy {
   /** Focused once when stateKey changes; manual focus wins until then. */
   defaultActiveTabId: string;
   preserveActiveTabIds?: readonly string[];
-  focusOnEntry?: boolean;
-  revealOnFocus?: boolean;
+  focusOnEntry?: string;
+  focusRequest?: { key: string; tabId: string };
   entryTab?: { id: string; visible: boolean };
 }
 
