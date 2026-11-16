@@ -151,7 +151,11 @@ function Fixture() {
     key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={drawers.dispatched.state.open} />,
   }));
   const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => descriptor.id === "dispatched"), [drawers.inspectors]);
-  const context = { dispatched: drawers.dispatched.state } as unknown as TaskInspectorContext;
+  // 「派出的任务」那一格读的那几样（DispatchedInspector 的入参）都给上；别的格没挂，不用给。
+  const context = {
+    dispatched: drawers.dispatched.state, task: lead, allTasks: tasks,
+    onOpenTask: () => {}, onTaskUpdated: () => {}, notify: () => {},
+  } as unknown as TaskInspectorContext;
   return (
     <div style={{ height: "100vh", display: "flex", overflow: "hidden", background: "var(--canvas)" }}>
       <nav style={{ width: 300, flex: "0 0 auto", overflow: "auto" }}>

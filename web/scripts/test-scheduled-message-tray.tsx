@@ -232,10 +232,10 @@ assert.match(
   "队尾的引导键必须自己说清它做什么，用户才发现得了它",
 );
 // 撤回的回填只能发生在取消成功之后：失败了消息还挂在队列上，再往输入框塞一份就成了两条。
-// 团队那半的回复框在 e5107008 从 TeamView.tsx 拆进了 TeamReplyBox.tsx —— 这里读的是实现
-// 所在的那个文件，拆走后没跟过来就等于这几条断言在读一份不存在的 withdraw。
+// 只读团队那半（老团队任务还在用的 TeamReplyBox.tsx）：它没有按行为验的测试，这几条源码级的先留着。
+// 任务回复框那半不在这里读源码 —— 撤回与发送结算由 test-withdraw-scheduled.mjs 在真浏览器里按行为验
+// （取消失败一个字不动、取消成功才回填、发送在途时撤回 / 重写互不清掉），实现挪个文件不该让测试红。
 for (const [file, source] of [
-  ["ReplyBox.tsx", replySource],
   ["TeamReplyBox.tsx", readSource(new URL("../src/team/TeamReplyBox.tsx", import.meta.url))],
 ] as const) {
   const withdraw = source.slice(source.indexOf("const withdraw = async"));

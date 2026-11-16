@@ -173,7 +173,7 @@ function Fixture() {
         onTask={(task) => setOpened((all) => [...all, task.id])}
         onTaskUpdated={() => {}}
         onNote={() => {}}
-        onComposer={(mode) => setActions((all) => [...all, `new:${mode}`])}
+        onComposer={() => setActions((all) => [...all, "new:task"])}
         onNewGroup={() => {}}
         onNewProject={() => {}}
         onDeleteTask={() => {}}

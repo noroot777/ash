@@ -111,7 +111,11 @@ function App() {
     () => drawers.inspectors.filter((descriptor) => descriptor.id === "subagents" || descriptor.id === "dispatched"),
     [drawers.inspectors],
   );
-  const context = { nativeWork: drawers.subagents.nativeWork, dispatched: drawers.dispatched.state } as unknown as TaskInspectorContext;
+  // 挂着的这两格读的那几样都给上（「派出的任务」那一格还要这条任务自己、整张任务表和几个回调）。
+  const context = {
+    nativeWork: drawers.subagents.nativeWork, dispatched: drawers.dispatched.state, task: lead, allTasks: tasks,
+    onOpenTask: setOpened, onTaskUpdated: () => {}, notify: () => {},
+  } as unknown as TaskInspectorContext;
   return (
     <div style={{ height: "100vh", display: "flex", overflow: "hidden" }}>
       <LeftDrawerProvider value={drawers.leftDrawer.api}>
