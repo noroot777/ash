@@ -226,7 +226,8 @@ export function QuestionCard({ task, onAnswer, attachable = false, collapsed, on
       {!!options.length && <small id={hintId} className="task-visually-hidden">
         可多选 · 数字键 1–{Math.min(options.length, 9)} 勾选{noteKey ? `，${noteKey} 写自己的话` : ""}
       </small>}
-      {attachable && <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending} error={uploads.error}
+      {/* 上传失败的那句不放进附件列表：列表图多了会在自己里面滚，那句话得跟卡底的报错一样始终看得见。 */}
+      {attachable && <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending} error={null}
         onRemove={uploads.remove} onCancel={uploads.cancel} />}
       <div className="question-card-note">
         {!!options.length && <span className="question-card-key" aria-hidden="true">{noteKey ?? ""}</span>}
@@ -247,6 +248,7 @@ export function QuestionCard({ task, onAnswer, attachable = false, collapsed, on
         <span id={`${task.id}-answer-key`} className="task-visually-hidden">{sendKeys.send} {last ? "发送" : "下一题"}</span>
         {!sendBlocked && <HoverTip at={sendTip.at}>{last ? "发送答复" : "下一题"}<kbd>{sendKeys.send}</kbd></HoverTip>}
       </div>
+      {attachable && uploads.error && <p className="question-card-error" role="alert">{uploads.error}</p>}
       {error && <p className="question-card-error" role="alert">{error}</p>}
     </section>
   );

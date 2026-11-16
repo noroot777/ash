@@ -229,6 +229,21 @@ try {
   await card.waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "窄屏不横向溢出");
 
+  // 窄屏一次选一大批图：附件区在自己里面滚，最后一行和发送键始终留在卡里、看得见。
+  const names = Array.from({ length: 24 }, (_, i) => `many-${i}.png`);
+  await card.locator("input[type=file]").setInputFiles(names.map((name) => ({ name, mimeType: "image/png", buffer: Buffer.from(PNG, "base64") })));
+  for (const name of names) {
+    await waitUntil(() => held.has(name), `${name} 发出上传请求`);
+    held.get(name)();
+  }
+  await waitUntil(async () => await card.locator(".task-upload-chip:not(.is-uploading)").count() === names.length, "整批图都传完");
+  const uploadList = card.locator(".task-upload-list");
+  assert.equal(await uploadList.evaluate((el) => el.scrollHeight > el.clientHeight), true, "图多了附件区在自己里面滚");
+  const [cardBox, sendBox] = [await card.boundingBox(), await send.boundingBox()];
+  assert.ok(sendBox.y >= cardBox.y && sendBox.y + sendBox.height <= cardBox.y + cardBox.height, "发送键没被挤出卡外");
+  assert.ok(sendBox.y + sendBox.height <= 720, "发送键在视口里");
+  assert.equal(await note.isVisible(), true, "输入行还在");
+
   // 团队页同一副形状：TeamReplyBox 的发送设置开着时题到了，一样跟着框退下。
   await page.goto(`${web.origin}/scripts/fixtures/question-card.html?host=team`);
   await page.evaluate(() => localStorage.clear());
@@ -240,7 +255,7 @@ try {
     open: () => page.locator(".team-reply-box .send-key-opt").click(), layer: ".send-key-panel" });
 
   assert.deepEqual(failures, []);
-  console.log("question card DOM: docked in the reply slot, one input + one send key (composer portals unmounted in task and team hosts), picks not copied but sent, jump/next/send switch, digit keys + last cell, collapse shows the reply box, settling locked, failure keeps answers, question shown once, pasted images ride along with the answer, narrow screen passed");
+  console.log("question card DOM: docked in the reply slot, one input + one send key (composer portals unmounted in task and team hosts), picks not copied but sent, jump/next/send switch, digit keys + last cell, collapse shows the reply box, settling locked, failure keeps answers, question shown once, pasted images ride along with the answer, narrow screen (incl. many images keep the send row) passed");
 } finally {
   await browser?.close();
   await web.close();
