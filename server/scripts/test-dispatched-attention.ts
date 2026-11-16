@@ -195,7 +195,8 @@ try {
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
-  for (const id of runs.runningTaskIds?.() ?? []) runs.stopTask(id);
+  // 还在跑的逐个停掉（假 claude 在临时目录删掉后也会自己退，这里只是不把它留给那半秒）。
+  for (const { id } of await db.select({ id: tasks.id }).from(tasks)) if (runs.isRunning(id)) runs.stopTask(id);
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
   process.exit(failure ? 1 : 0);
