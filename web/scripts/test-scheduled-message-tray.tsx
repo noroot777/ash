@@ -132,6 +132,17 @@ const two = [watcher("m1", "等回归跑完"), watcher("m2", "盯构建日志")]
   assert.match(rows[3]!, /data-message-id="sample-0"/, "排队消息在哨兵后面");
   assert.match(renderTray([], { monitors: trayMonitors(two, false), defaultExpanded: true }), />在等<[\s\S]*不等了：哨兵「等回归跑完」/,
     "任务停下来等它时：「在等」、键叫「不等了」");
+
+  // 在盯的和已经结束的一眼分得出（用户 2026-11-16）：在盯 = 呼吸的琥珀点，内置 = 不动的灰点，
+  // 已结束、结果还排着的 = 不动的空心方块；还在盯的哨兵送来的一条不画「已结束」。
+  assert.match(rows[0]!, /scheduled-monitor-mark is-live" role="img" aria-label="在盯"/, "在盯的那一行：呼吸的点");
+  assert.match(rows[2]!, /scheduled-monitor-mark is-builtin/, "内置的那一行：不动的灰点");
+  const fromEnded = { ...samples[1], id: "ended", origin: "monitor:gone", text: "【哨兵结束】早就停了（monitorId=gone），退出码 1。" };
+  const fromLive = { ...samples[2], id: "alive", origin: "monitor:m1", text: "【哨兵事件】等回归跑完（monitorId=m1）\n一行输出" };
+  const mixed = renderTray([fromEnded, fromLive], { monitors: trayMonitors(two), defaultExpanded: true });
+  assert.match(rowOf(mixed, "早就停了"), /scheduled-monitor-mark is-ended" role="img" aria-label="已结束"/, "哨兵已经不在盯：空心方块");
+  assert.doesNotMatch(rowOf(mixed, "一行输出"), /scheduled-monitor-mark/, "哨兵还在盯，它送来的这一条不说「已结束」");
+  assert.doesNotMatch(renderTray([fromEnded], { defaultExpanded: true }), /scheduled-monitor-mark/, "不知道哪些在盯（团队回复框）就不画记号");
 }
 // 要留意的条数:退出码非零的哨兵才算,是琥珀色的字。
 const attentionTray = renderTray([samples[0], { ...samples[1], origin: "monitor:a", text: "【哨兵结束】检查，退出码 2。" },

@@ -3,6 +3,7 @@ import type { ScheduledMessage, TaskListItem } from "@ash/shared";
 import { ArrowUUpLeft, ChatsCircle, PaperPlaneRight, SpinnerGap, X } from "@phosphor-icons/react";
 import { formatInstant } from "../task-detail/utils.ts";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";
+import { MonitorMark } from "./MonitorMark.tsx";
 import {
   scheduledMessageExitCode, scheduledMessageSource, scheduledMessageSummary, scheduledMessageText, scheduledMessageWhen,
   type ScheduledMessageSource,
@@ -73,8 +74,10 @@ export function WithdrawButton({ message, tasks, busy, spinning, onWithdraw, cla
   </RevealButton>;
 }
 
-export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tasks, onToggle, onSteer, onWithdraw, onCancel, onSendNow, onOpenTask }: {
+export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tasks, monitorEnded, onToggle, onSteer, onWithdraw, onCancel, onSendNow, onOpenTask }: {
   message: ScheduledMessage;
+  /** 哨兵送来的这一条，它的哨兵已经不在盯了（托盘拿得到在盯的那几个时才知道；不知道就不画记号）。 */
+  monitorEnded?: boolean;
   busy: boolean;
   steering: boolean;
   /** 全文是否在这一行下面摊开。 */
@@ -99,7 +102,8 @@ export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tas
   const heldBy = message.mode === "queued" && message.wait?.kind === "dispatchHeld" ? message.wait.by : null;
   return <div className={`scheduled-message-item${busy ? " is-busy" : ""}`} data-message-id={message.id}>
     <div className="scheduled-message-row">
-      <span className={`scheduled-message-source${attention ? " is-attention" : ""}`}>{SOURCE_LABELS[source]}
+      <span className={`scheduled-message-source${attention ? " is-attention" : ""}`}>
+        {source === "monitor" && monitorEnded && <MonitorMark state="ended" />}{SOURCE_LABELS[source]}
         {attention && <span className="scheduled-message-exit">exit {exitCode}</span>}
         {message.agent && <span className="scheduled-message-agent">@{message.agent}</span>}
       </span>

@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ScheduledMessage, TaskListItem } from "@ash/shared";
 import { CaretDown, CaretRight, Pulse } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorsBrief } from "../monitors/monitorTray.ts";
 import { MonitorTrayRow, type TrayMonitors } from "./MonitorTrayRow.tsx";
 import { ScheduledMessageRow, scheduledMessageLabel, SteerButton, WithdrawButton } from "./ScheduledMessageRow.tsx";
@@ -147,6 +148,7 @@ export function ScheduledMessageTray(props: TrayProps) {
           open={openIds.has(`monitor:${monitor.id}`)} bodyId={`${bodyIdPrefix}-monitor-${monitor.id}`}
           onToggle={() => toggleBody(`monitor:${monitor.id}`)} />)}
         {ordered.map((message) => <ScheduledMessageRow key={message.id} message={message} busy={busy(message)}
+          monitorEnded={monitors ? !watching.some((monitor) => monitor.id === monitorIdFromOrigin(message.origin)) : undefined}
           steering={!!steeringIds?.has(message.id)} open={openIds.has(message.id)} bodyId={`${bodyIdPrefix}-${message.id}`}
           tasks={tasks} onToggle={() => toggleBody(message.id)} onSteer={onSteer} onWithdraw={onWithdraw}
           onCancel={onCancel ? setPendingCancel : undefined} onSendNow={onSendNow} onOpenTask={onOpenTask} />)}

@@ -88,3 +88,10 @@
 .scheduled-monitor-body q { color: var(--ink); quotes: "「" "」"; }
 .scheduled-monitor-body p code { border-radius: 4px; background: var(--overlay); padding: 0 3px; font-family: var(--font-mono); }
 .scheduled-monitor-body .is-stuck { color: var(--amber); }
+/* 哨兵那几行最前面的记号（MonitorMark）：在盯 = 琥珀色呼吸的点；内置 = 不动的灰点；已结束 = 不动的灰色空心方块。 */
+/* 记号挂在左边留白里（来源那一格往左借 12px 内边距，记号再用负外边距退进去），有记号和没记号的行字对齐。 */
+.scheduled-tray-list .scheduled-message-source { margin-left: -12px; padding-left: 12px; }
+.scheduled-message-source > .scheduled-monitor-mark { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px -12px; flex: none; vertical-align: middle; border-radius: 50%; background: var(--faint); }
+.scheduled-message-source > .scheduled-monitor-mark.is-live { background: var(--amber); animation: scheduled-tray-beat 2.4s ease-in-out infinite; }
+.scheduled-message-source > .scheduled-monitor-mark.is-ended { box-sizing: border-box; border: 1.5px solid var(--faint); border-radius: 1.5px; background: transparent; }
+@media (prefers-reduced-motion: reduce) { .scheduled-message-source > .scheduled-monitor-mark.is-live { animation: none; } }

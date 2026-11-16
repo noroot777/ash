@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowSquareOut, X } from "@phosphor-icons/react";
 import { canStopMonitor, type TaskMonitor } from "@ash/shared/monitor";
 import { monitorWhen } from "../monitors/monitorTray.ts";
+import { MonitorMark } from "./MonitorMark.tsx";
 import { RevealButton } from "./ScheduledMessageRow.tsx";
 
 /** 托盘里哨兵那几行要的东西（TaskDetail 给；团队回复框不给，那边没有哨兵）。 */
@@ -42,7 +43,9 @@ export function MonitorTrayRow({ monitor, monitors, now, open, bodyId, onToggle 
   };
   return <div className={`scheduled-message-item is-monitor${stopping ? " is-busy" : ""}`} data-monitor-id={monitor.id}>
     <div className="scheduled-message-row">
-      <span className={`scheduled-message-source${builtin ? "" : " is-monitor-live"}`}>{builtin ? "内置" : running ? "在盯" : "在等"}</span>
+      <span className="scheduled-message-source">
+        <MonitorMark state={builtin ? "builtin" : "live"} />{builtin ? "内置" : running ? "在盯" : "在等"}
+      </span>
       <button type="button" className="scheduled-message-summary" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
         {monitor.description}
       </button>
