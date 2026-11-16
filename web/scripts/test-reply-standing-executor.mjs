@@ -26,7 +26,8 @@ try {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: path.endsWith("/agents") ? JSON.stringify(PROFILES) : "[]",
+        // `@` 同时会搜文件：答成兜底的 `[]` 页面那边会抛错、菜单重画，跟点选项那一下赌先后。
+        body: path.endsWith("/agents") ? JSON.stringify(PROFILES) : path.endsWith("/file-search") ? '{"hits":[],"more":false}' : "[]",
       });
     });
     await page.goto(`${web.origin}/scripts/fixtures/reply-standing-executor.html${query}`);

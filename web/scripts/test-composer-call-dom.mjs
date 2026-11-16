@@ -48,6 +48,8 @@ try {
     if (path === "/agents") return agentsDown ? json({ error: "执行器读取暂时失败（夹具）" }, 503) : json(PROFILES);
     if (path === "/settings") return json({ defaultWorkflowId: null });
     if (path.endsWith("/branches")) return json({ branches: ["main"], current: "main" });
+    // `@` 同时会搜文件：答错形状（兜底的 `[]`）页面那边会抛错、菜单重画，跟下面那一下点击赌先后。
+    if (/\/file-search$/.test(path)) return json({ hits: [], more: false });
     if (path === "/uploads" && request.method() === "POST") {
       return json({ id: "u1", name: "shot.png", path: "/tmp/uploads/shot.png", kind: "image" });
     }
