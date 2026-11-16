@@ -7,7 +7,7 @@ import { groups, queueItems, tasks } from "./db/schema.js";
 import { queueJoinRefusal } from "./queues.js";
 import type { QueueJoinWriter } from "./task-store.js";
 import { now } from "./util.js";
-import { holdsSlot } from "./launch-slots.js";
+import { holdsExecutionTurn } from "./launch-capacity.js";
 
 /** 建任务时串进队列被拒(队列没了、或已经不和新任务同项目同组)。整笔创建随之回滚。 */
 export class QueueJoinRefused extends Error {}
@@ -15,10 +15,11 @@ export class QueueJoinRefused extends Error {}
 /**
  * 改 groupId 之前问一句:现在还能改吗。在链里调用。返回 null = 可以改。
  *   · 目标分组此刻还在、还属于这个项目:进门时那次查过,但删分组可能就排在它前面;
- *   · 已经占好位、在跑、或者占着名额正要起跑(库里还是 backlog)的不换组:它占着旧组的并发名额
- *     (launch-slots.ts),挪过去新组就多跑一条、名额却还在旧组账上。占名额的那几路在链上按当前
- *     分组再认一次(member-start.ts admit、queue-seat.ts `slotGroup`),所以改分组落在它占名额之前
- *     的,由起跑方发现组变了、退回去按新组重排。团队调度台不在此列:它的 running 是常驻,不占分组名额;
+ *   · 已经占好位、在跑、或者占着执行回合正要起跑(库里还是 backlog)的不换组:同组名额数的就是占着
+ *     执行回合的那几条按库里的分组算(launch-capacity.ts),挪过去旧组的数立刻少一条、新组多一条,而
+ *     起跑方是按旧组数的名额。占名额的那一路在链上按当前分组再认一次(queue-seat.ts `slotGroup`),
+ *     所以改分组落在它占名额之前的,由起跑方发现组变了、退回去按新组重排。团队调度台不在此列:它的
+ *     running 是常驻,不算分组名额;
  *   · 跟别的成员同在一条队列里的不单独换组:同一队列必须同组(queues.ts 不变量①)。
  */
 export async function groupMoveRefusal(taskId: string, groupId: string | null): Promise<string | null> {
@@ -32,7 +33,7 @@ export async function groupMoveRefusal(taskId: string, groupId: string | null): 
   if (row.mode !== "team" && (row.status === "running" || row.status === "queued")) {
     return "任务正在运行，占着原分组的并发名额，等这一轮结束再换分组";
   }
-  if (row.mode !== "team" && holdsSlot(taskId)) return "任务正在起跑，占着原分组的并发名额，等这一轮结束再换分组";
+  if (row.mode !== "team" && holdsExecutionTurn(taskId)) return "任务正在起跑，占着原分组的并发名额，等这一轮结束再换分组";
   const item = (await db.select({ queueId: queueItems.queueId }).from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
   if (!item) return null;
   const mates = await db.select({ taskId: queueItems.taskId }).from(queueItems).where(eq(queueItems.queueId, item.queueId));

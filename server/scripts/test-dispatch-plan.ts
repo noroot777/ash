@@ -45,13 +45,13 @@ const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, q
   import("../src/task-question.js"),
   import("../src/settle-status.js"),
   import("../src/dispatch-plan.js"),
-  import("../src/prerequisite-launch.js"),
+  import("../src/launch-request.js"),
 ]);
 const { DISPATCH_PLAN_RETURNED } = await import("../src/task-question-record.js");
 const { groups, projects, queueItems, sessions, taskPrerequisiteLaunches, taskPrerequisites, tasks } = schema;
 await ensureSchema();
 // 派出去之后的起跑全走「等齐就起」那一套：开机那一下挂上事件总线、名额空出来就补放（跟 main.ts 一样）。
-await launch.startPrerequisiteLaunches(60_000);
+await (await import("../src/prerequisite-launch.js")).startPrerequisiteLaunches(60_000);
 const api = new Hono();
 runRoutes.mountTaskRunRoutes(api);
 groupRoutes.mountGroupRoutes(api);
@@ -362,7 +362,7 @@ try {
   assert.equal(await requestOf(behind[0]!), null, "停止撤掉了那一笔");
   await stopAll(running(six.ids));
   await waitFor(() => runs.isRunning(behind[1]!), "腾出名额之后剩下那一条没有接着起");
-  await launch.sweepPrerequisiteLaunches(); // 开机补办那一扫
+  await launch.sweepLaunchRequests(); // 开机补办那一扫
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(await requestOf(behind[0]!), null, "补办没有替停掉的那条挂回去");
   assert.equal((await taskOf(behind[0]!)).status, "backlog", "停掉的那条没有被起");
@@ -374,7 +374,7 @@ try {
   await db.insert(groups).values({ id: "dp-orphan-group", projectId, name: "派出：没来得及起跑", mode: "parallel", paused: false, createdAt: at });
   await db.insert(tasks).values(row(ORPHAN, "backlog", { groupId: "dp-orphan-group", dispatchedBy: P }));
   await db.insert(taskPrerequisiteLaunches).values({ taskId: ORPHAN, requestedAt: at, source: "run", actingUserId: null });
-  await launch.sweepPrerequisiteLaunches();
+  await launch.sweepLaunchRequests();
   await waitFor(async () => (await taskOf(ORPHAN)).status !== "backlog", "开机补办没有起那一条");
   await waitFor(() => settled(ORPHAN), "补起的那条没有结算");
   assert.equal(await requestOf(ORPHAN), null, "起了之后那一笔了结");
@@ -391,7 +391,7 @@ try {
   const chainStop = await send("POST", `/tasks/${chain.ids[0]}/stop`);
   assert.equal(chainStop.status, 200, JSON.stringify(chainStop.body));
   assert.equal(await requestOf(chain.ids[0]!), null);
-  await launch.sweepPrerequisiteLaunches();
+  await launch.sweepLaunchRequests();
   assert.equal(await requestOf(chain.ids[0]!), null, "停掉之后补办不挂回");
   console.log("✓ 一个接一个：只给队首挂请求，前置没站稳就等；停掉之后补办不挂回");
 } catch (error) {

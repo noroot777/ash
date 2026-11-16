@@ -28,7 +28,7 @@ import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
-import { freezeStartingTurn, isRunning, isTurnClaimed, stopTask, type TurnIdentity } from "./runs.js";
+import { freezeStartingTurn, isRunning, isTurnClaimed, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { notePauseOfTasks } from "./pause-generation.js";
 import { forgetHeldStart, oweHeldStart, shiftAdmissionPending } from "./dispatch-hold-owed.js";
@@ -36,11 +36,8 @@ import { taskHoldOf } from "./task-hold.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { republishWaitsOf } from "./pending-wait.js";
 import { heldByMonitors } from "./queue-monitor-hold.js";
-import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
-import { waitForStartReceipt } from "./task-start-receipt.js";
-import { resumeOrRunTask } from "./task-resume.js";
 import { now } from "./util.js";
-import { startMember } from "./member-start.js";
+import { releaseLaunch, requestLaunch, sweepSoon } from "./launch-request.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -155,6 +152,8 @@ export async function releaseDispatched(holderId: string): Promise<HoldResult> {
   await settleAnnouncements(holderId, tree);
   const owed = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.holdOwedBy, holderId));
   for (const { id } of owed) await honorOwedStart(id);
+  // 停着期间挂着的开工请求（分组运行、派活单、前置站齐）原样留着，放开了就照请求起。
+  sweepSoon();
   // 停着期间排下的执行型消息（停下之前在跑时用户排的话、答复）照常送：投递那边自己判轮没轮到。
   void import("./pending-messages.js").then(({ deliverPendingMessages }) =>
     Promise.all(tree.map((taskId) => deliverPendingMessages(taskId).catch(() => undefined))));
@@ -180,17 +179,17 @@ export async function honorOwedStart(taskId: string): Promise<void> {
   if (!row || !(await owedAndFree(row))) return;
   const item = (await db.select({ queueId: queueItems.queueId }).from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
   if (item) return honorInQueue(item.queueId, taskId);
-  if (starting.has(taskId)) return;
-  starting.add(taskId);
-  // 组里的成员占分组的并发名额起（同分组运行），不然一组被按住的全部同时开跑；轮到之后在哪、
-  // 起没起过由 member-start.ts 重读 —— 等名额期间进了队列的交回队列，换了组的按新组排。
-  void startMember(row.groupId, taskId, {
-    prepare: () => preparePendingCheckpointStart(taskId),
-    eligible: owedAndFree,
-    queued: (queueId) => honorInQueue(queueId, taskId),
-    start: ({ owner }) => startOwed(taskId, owner),
-  }).catch((error) => console.error(`[ash] 接着跑没能拉起 task=${taskId}(账还在，tick 会再试):`, error))
-    .finally(() => starting.delete(taskId));
+  // 不在队列里的：欠账换成一笔开工请求（同一笔事务：账划掉、请求挂上），由自动开工那一个放行口起
+  // （launch-request.ts）—— 同组名额、起跑回执、起不来的退避、停止撤回、重启补办都是那一套，不另起一条路。
+  const holder = row.holdOwedBy!;
+  const converted = await db.transaction(async (tx) => {
+    const cleared = await tx.update(tasks).set({ holdOwedBy: null })
+      .where(and(eq(tasks.id, taskId), eq(tasks.holdOwedBy, holder))).returning({ id: tasks.id });
+    if (!cleared.length) return false;
+    await requestLaunch([taskId], { source: "hold" }, tx);
+    return true;
+  }, { behavior: "immediate" });
+  if (converted) await releaseLaunch(taskId);
 }
 
 /** 账还挂着（没被别处的起跑销掉）、按住它的那条已经放开、它此刻接得上、也没被别处按住。 */
@@ -205,9 +204,6 @@ async function honorInQueue(queueId: string, taskId: string): Promise<void> {
   const { advanceQueue, pickNextLaunchable } = await import("./scheduler.js");
   if ((await pickNextLaunchable(queueId))?.id === taskId) await advanceQueue(queueId);
 }
-
-/** 这一刻正在由本进程拉起的那几位：监听、巡检、接着跑同时来时只起一次。 */
-const starting = new Set<string>();
 
 /** 调度 tick 的兜底：按住它的已经放开、账还挂着的，再兑现一次（重启之后同样由它接上）。 */
 export async function sweepOwedStarts(): Promise<void> {
@@ -227,17 +223,6 @@ async function canResume(row: TaskRow): Promise<boolean> {
   if (row.status === "backlog") return true;
   if (row.status !== "paused" || row.question || hasCliGoalHold(row.cliState)) return false;
   return !(await heldByMonitors(row.id));
-}
-
-/** 不在队列里的那一位，占好位之后：照分组运行拉起成员的做法从原会话续（scheduler.ts runParallel）。 */
-async function startOwed(taskId: string, owner: TurnIdentity): Promise<void> {
-  let run!: Promise<void>;
-  await waitForStartReceipt(taskId, () => {
-    run = resumeOrRunTask(taskId, { origin: "auto", reason: "hold", turnHeld: owner });
-    run.catch(() => {});
-    return run;
-  });
-  await run;
 }
 
 // 被停下的那一位真正落到 paused / backlog 的那一刻（停止请求返回时它多半还在退出），按住它的那条

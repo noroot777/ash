@@ -17,7 +17,7 @@ export type TaskStatusIndicator =
   | "active"
   /** 排在队里、还没轮到。归档仍是「在跑」（任务模式的口径），但样子跟真在跑的分开。 */
   | "queued"
-  /** 要它起跑了，在等前置站稳（shared/src/prerequisites.ts）。画法同排队：都是「轮到了自己会起」。 */
+  /** 要它开工了、还没开工：在等前置站稳，或者等同组名额、分组恢复（shared/src/prerequisites.ts）。画法同排队：都是「轮到了自己会起」。 */
   | "waiting"
   | "attention"
   /** 有东西在后台替它跑着、而且会自己回来：挂着的哨兵、正在跑的验收前置命令。 */
@@ -109,7 +109,7 @@ export type TaskMark = "run" | "queue" | "wait" | "breathe" | "stalled" | "open"
 export const TASK_LOOK: Record<TaskStatusIndicator, { mark: TaskMark | null; say: string }> = {
   active: { mark: "run", say: "运行中" },
   queued: { mark: "queue", say: "排队中" },
-  waiting: { mark: "queue", say: "在等前置任务" },
+  waiting: { mark: "queue", say: "等着开工" },
   attention: { mark: "wait", say: "需要人工输入" },
   working: { mark: "breathe", say: "有东西在后台跑着，它会自己回来" },
   stalled: { mark: "stalled", say: "在干等模型上游回话，没有任何输出" },
@@ -139,6 +139,13 @@ function questionOf(task: TaskListItem, workers: TaskListItem[]): string | null 
 
 const DETAIL_MAX = 60;
 
+/** 「等着开工」具体在等什么：前置没站齐就说前置，否则照服务端那句（同组名额满了、分组暂停着…）。 */
+function waitingSay(task: TaskListItem): string {
+  const view = task.prerequisites;
+  if (view?.prerequisites.some((link) => link.step !== "settled")) return "在等前置任务";
+  return view?.holdup ?? TASK_LOOK.waiting.say;
+}
+
 export function taskLook(task: TaskListItem, workers: TaskListItem[] = [], unread = false): TaskLook {
   const indicator = deriveTaskStatusIndicator(task, workers, unread);
   const row = indicator ? TASK_LOOK[indicator] : null;
@@ -150,7 +157,7 @@ export function taskLook(task: TaskListItem, workers: TaskListItem[] = [], unrea
   return {
     indicator,
     mark,
-    say: mark ? row!.say : "",
+    say: mark ? (indicator === "waiting" ? waitingSay(task) : row!.say) : "",
     bucket: spreadBucket(task, workers),
     word: asked ? "等你答复" : blocked ? "开不了工" : null,
     detail: oneLine ? (oneLine.length > DETAIL_MAX ? `${oneLine.slice(0, DETAIL_MAX)}…` : oneLine) : null,

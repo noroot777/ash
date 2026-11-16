@@ -6,11 +6,11 @@
 // 还没提交**的那一拍把写请求发出去,断言写方要么排在后面看见那个占位而拒绝,要么根本没机会插进来:
 //   ③ 回复/答复/补投那类先认领、后占回合锁的入口:认领刚放行、锁还没占上时入队,409。每次放行一张
 //     凭证,只有交回它才作废:中途别处占过又还了回合锁(工作区操作之类)不算;两次放行各交各的;
-//   ① 接着跑兑现(member-start.ts admit)× 入队:入队 409,队列里仍只有原来那一条;
+//   ① 接着跑兑现(换成开工请求、经 launch-request.ts → claimQueueSeat)× 入队:入队 409,队列里仍只有原来那一条;
 //   ② 手动运行一条独立任务(/run → claimQueueSeat 不在队列那一支,不落 queued)× 入队:同上;
 //   ⑤ 正在起跑的独立任务跟一条空闲任务一起建队:不能因为「在跑的只有一条」就放行 —— 队列推进
 //     只读库,它在库里还是 backlog,排在前面的空闲任务会被拉起来跟它一起跑;
-//   ④ 接着跑兑现 × 改 groupId:改分组排在占位之后,此刻它已占着旧组的名额,改分组被拒;
+//   ④ 接着跑兑现 × 改 groupId:改分组排在认领之后,此刻它已占着执行回合(按旧组数过名额),改分组被拒;
 //   ⑥ 在跑的任务、跟别的成员同队的任务都不许改分组(名额记在旧组 / 同队必须同组);
 //   ⑦ 建任务串到队尾时队列在中途没了:创建被拒,一行都没落下;
 //   ⑦b 建任务那一笔还没提交时,别处运行分组、改它的分组:都排在提交之后,看见的是已经在队里的它
@@ -52,8 +52,8 @@ const { mountGroupRoutes } = await import("../src/group-routes.js");
 const { holdDispatched, releaseDispatched } = await import("../src/dispatch-hold.js");
 const { oweHeldStart } = await import("../src/dispatch-hold-owed.js");
 const { claimQueueSeat, serializeQueueClaims } = await import("../src/queue-seat.js");
-const { sweepPrerequisiteLaunches } = await import("../src/prerequisite-launch.js");
-const { holdsSlot, slotsTaken } = await import("../src/launch-slots.js");
+const { sweepLaunchRequests } = await import("../src/launch-request.js");
+const { holdsExecutionTurn: holdsSlot, runningInGroup } = await import("../src/launch-capacity.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -168,10 +168,6 @@ async function holdChain(): Promise<() => Promise<void>> {
 }
 const queueMembershipRead = (taskId: string) => (sql: string, args: unknown[]) =>
   /^select .*from "queue_items" where "queue_items"\."task_id" = \?$/.test(sql) && args.includes(taskId);
-// 接着跑在临界区里读完归属之后落的那一笔 queued 占位(进临界区之前还有一次无互斥的快速读,那次
-// 被入队插进来是对的:它会把任务交回队列按位置起)。
-const queuedReservation = (taskId: string) => (sql: string, args: unknown[]) =>
-  /^update "tasks" set "status" = \?/.test(sql) && args[0] === "queued" && args.includes(taskId);
 
 // ── 夹具:Q 是一条队列,头上的 A 一直在跑 ──────────────────────────────────────────────
 const at = new Date().toISOString();
@@ -252,7 +248,8 @@ try {
   // ① 接着跑兑现 × 入队 ─────────────────────────────────────────────────────────────
   await holdDispatched("H1");
   await oweHeldStart("X1", "H1");
-  const joinX1 = interleave("before", queuedReservation("X1"),
+  // 接着跑兑现换成开工请求、走自动开工那一个放行口：它在认领临界区里读归属时已经占着回合锁（launch-request.ts）。
+  const joinX1 = interleave("after", (sql, args) => queueMembershipRead("X1")(sql, args) && runs.isTurnClaimed("X1"),
     () => request("POST", `/queues/${Q}/insert`, { taskId: "X1", position: 1 }));
   await releaseDispatched("H1");
   await until("接着跑读到 X1 的归属", () => joinX1.hit);
@@ -286,18 +283,14 @@ try {
   // ④ 接着跑兑现 × 改分组 ───────────────────────────────────────────────────────────
   await holdDispatched("H4");
   await oweHeldStart("X4", "H4");
-  let statusWhenMoved: string | null = null;
-  const moveX4 = interleave("before", queuedReservation("X4"),
-    () => request("PATCH", "/tasks/X4", { groupId: "G2" }).then(async (response) => {
-      statusWhenMoved = (await row("X4")).status;
-      return response;
-    }));
+  // 认领链上那一次「再认一次分组」（queue-seat.ts slotGroup）：那时它已经占着执行回合，名额按旧组数过了。
+  const moveX4 = interleave("after",
+    (sql, args) => /^select "group_id" from "tasks" where "tasks"\."id" = \?$/.test(sql) && args.includes("X4") && runs.isTurnClaimed("X4"),
+    () => request("PATCH", "/tasks/X4", { groupId: "G2" }));
   await releaseDispatched("H4");
   await until("接着跑读到 X4 的归属", () => moveX4.hit);
-  assert.equal(moveX4.settledInWindow, false, "改分组不能插进接着跑「比对分组 → 落占位」的那一拍");
-  assert.equal((await moveX4.response!).status, 409, "占好位之后它占着旧组的名额,改分组要被拒");
-  assert.ok(statusWhenMoved === "queued" || statusWhenMoved === "running",
-    `改分组排在占位之后(应答时 X4 是 ${statusWhenMoved})`);
+  assert.equal(moveX4.settledInWindow, false, "改分组不能插进接着跑「比对分组 → 放行起跑」的那一拍");
+  assert.equal((await moveX4.response!).status, 409, "占着执行回合（按旧组数过名额）,改分组要被拒");
   await running("X4");
   assert.equal((await row("X4")).groupId, "G", "分组没变");
 
@@ -402,28 +395,28 @@ try {
   const moveP1 = interleave("before",
     (sql, args) => /^select .*from "task_prerequisite_launches"/.test(sql) && args.includes("P1") && holdsSlot("P1"),
     () => request("PATCH", "/tasks/P1", { groupId: "GF" }));
-  await sweepPrerequisiteLaunches();
+  await sweepLaunchRequests();
   assert.ok(moveP1.hit, "放行那一路占着名额时拦到了");
   assert.equal((await moveP1.response!).status, 409, "占着原组名额正要起跑,不换组");
   await running("P1");
   assert.equal((await row("P1")).groupId, "GS");
-  assert.equal(slotsTaken("GS"), 1, "名额记在它真在的那一组");
+  assert.equal(await runningInGroup("GS"), 1, "名额记在它真在的那一组");
   // 改分组落在放行读完分组、还没占名额之间:不按旧组的名额起;名额空出来那一扫按新组起。
   await db.insert(schema.taskPrerequisiteLaunches).values({ taskId: "P2", requestedAt: at, source: "run" });
   const moveP2 = interleave("after",
     (sql, args) => /^select .*from "tasks" where "tasks"\."id" = \?$/.test(sql) && args.includes("P2") && !holdsSlot("P2"),
     () => request("PATCH", "/tasks/P2", { groupId: "GF" }));
-  await sweepPrerequisiteLaunches();
+  await sweepLaunchRequests();
   assert.ok(moveP2.hit, "拦到了放行读分组那一下");
   assert.equal((await moveP2.response!).status, 200, "那时还没人占名额,改分组照常成");
   assert.equal(launches.includes("P2"), false, "按旧组占的名额不起");
   assert.equal(holdsSlot("P2"), false, "旧组的名额还回去了");
   assert.equal((await row("P2")).status, "backlog");
-  await sweepPrerequisiteLaunches();
+  await sweepLaunchRequests();
   await running("P2");
   assert.equal((await row("P2")).groupId, "GF");
-  assert.equal(slotsTaken("GF"), 1, "按新组的名额起");
-  assert.equal(slotsTaken("GS"), 1, "旧组只剩 P1");
+  assert.equal(await runningInGroup("GF"), 1, "按新组的名额起");
+  assert.equal(await runningInGroup("GS"), 1, "旧组只剩 P1");
 
   assert.deepEqual(launches.filter((id) => id !== "A").sort(), ["L", "P1", "P2", "X1", "X2", "X4"], "每条只起了一次");
   console.log("queue ownership race: ok");

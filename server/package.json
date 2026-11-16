@@ -142,6 +142,7 @@
     "test:task-creation-origin": "tsx scripts/test-task-creation-origin.ts",
     "test:task-dispatched-by": "tsx scripts/test-task-dispatched-by.ts",
     "test:dispatch-hold": "tsx scripts/test-dispatch-hold.ts",
+    "test:launch-request": "tsx scripts/test-launch-request.ts && tsx scripts/test-launch-restart.ts",
     "test:queue-ownership": "tsx scripts/test-queue-ownership-race.ts",
     "test:dispatch-signals": "tsx scripts/test-dispatch-signals.ts",
     "test:dispatch-plan": "tsx scripts/test-dispatch-plan.ts",

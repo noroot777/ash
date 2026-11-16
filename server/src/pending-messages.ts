@@ -357,13 +357,14 @@ export function deliverPendingMessages(taskId?: string): Promise<void> {
 // 调用处刚刚查出来的,顺手拼起来比让判定多返回一个字段便宜。
 function waitReason(
   task: { status: string; mode: string | null } | null,
-  blockers: { queueBlocked: boolean; groupPaused: boolean; dispatchHold: DispatchHold | null; prerequisiteWait?: boolean; discussing?: boolean },
+  blockers: { queueBlocked: boolean; groupPaused: boolean; dispatchHold: DispatchHold | null; prerequisiteWait?: false | "prerequisites" | "launch"; discussing?: boolean },
 ): string {
   if (!task) return "读不到任务当前状态";
   if (blockers.groupPaused) return "任务所在分组已暂停";
   if (blockers.dispatchHold) return dispatchHoldText(blockers.dispatchHold);
   if (blockers.discussing) return "这条任务上正在讨论，说完（连同合稿）自动发出";
-  if (blockers.prerequisiteWait) return "在等前置任务站稳，齐了会连同这条一起开工";
+  if (blockers.prerequisiteWait === "prerequisites") return "在等前置任务站稳，齐了会连同这条一起开工";
+  if (blockers.prerequisiteWait) return "在等自动开工（同组名额、分组恢复），开工时连同这条一起发出";
   if (task.status === "running") return "任务正在运行，等它这一轮结束";
   // queued 单独说:它既可能是正常排队,也可能是一具没人回滚的占位遗留 —— 后者正是
   // 2026-10-26 那次卡死的形态,所以措辞里要给出下一步该看哪里。

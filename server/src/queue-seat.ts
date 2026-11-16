@@ -104,7 +104,7 @@ export { serializeQueueClaims };
  * 不在队列的任务直接放行,独立任务没有同队互斥;但放行到它落成 running 之间不许被放进队列
  * (queue-claim-chain.ts)。`turnHeld`:调用方认领之前就占着这个任务的回合锁、并且一直占到
  * 起跑落定之后 —— 那把锁本身就说明它正在起跑,不必再记一笔。
- * `slotGroup`:调用方已经按这个分组占了并发名额(launch-slots.ts)。占名额用的是链外读到的分组,
+ * `slotGroup`:调用方已经按这个分组占了并发名额(launch-capacity.ts)。占名额用的是链外读到的分组,
  * 改分组可能就落在那一读与占名额之间;这里按此刻的行再认一次,不一致就不放行(`regrouped`)。
  * 占好名额之后的改分组由换组守卫拒绝(queue-membership-guard.ts),两头合起来名额与分组始终一致。
  */
@@ -259,8 +259,11 @@ export async function seatThenStart(
   // 凭据只能由占位那一刻产生,所以它是参数。
   owner: TurnOwner,
   start: (seat: QueueSeat | null) => Promise<unknown>,
-  /** 调用方已经按哪个分组占了并发名额(见 claimQueueSeat 的 `slotGroup`);没占名额的入口不传。 */
-  opts: { slotGroup?: string | null } = {},
+  /**
+   * `slotGroup`:调用方已经按哪个分组占了并发名额(见 claimQueueSeat);没占名额的入口不传。
+   * `onStartError`:起跑抛错时交给调用方自己交代(自动开工退避重试,每次都写一行就成了刷屏),不传就当场写一行。
+   */
+  opts: { slotGroup?: string | null; onStartError?: (error: unknown) => void } = {},
 ): Promise<{ ok: true } | { ok: false; blockers: string[]; blocking?: QueueBlocker[]; transient?: boolean; self?: boolean; regrouped?: boolean }> {
   let claim: QueueSeatClaim;
   try {
@@ -283,7 +286,8 @@ export async function seatThenStart(
       await start(seat);
     } catch (err) {
       console.error(`[ash] 任务 ${taskId} 启动异常:`, err);
-      await appendTaskTimeline(taskId, alertLine(`本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`));
+      if (opts.onStartError) opts.onStartError(err);
+      else await appendTaskTimeline(taskId, alertLine(`本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`));
     } finally {
       releaseTurn(taskId, owner);
       await seat.release();

@@ -17,7 +17,7 @@
 // - **代码真的到了下游干活的地方才算开工**：工作区 / 任务分支换到起点（prerequisite-install.ts）之后才落
 //   「已开工」，半路断掉留下的都是「还没开工」。不用独立工作区的下游在项目目录里干活，核对那里检出的代码里
 //   有每条前置交出的那一版（prerequisite-start-point.ts `checkoutHasPrerequisites`），没有就挡住说清。
-// - **停止键撤回的请求不复活**：放行那一路只认此刻还挂着的那一笔（prerequisite-launch.ts releaseOne 在锁里
+// - **停止键撤回的请求不复活**：放行那一路只认此刻还挂着的那一笔（launch-request.ts releaseLaunch 在锁里
 //   重读、认领回合，再进这里）。
 import { and, eq } from "drizzle-orm";
 import { prerequisiteStepText } from "@ash/shared/prerequisites";
@@ -171,7 +171,7 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
           .where(and(eq(taskPrerequisites.taskId, taskId), eq(taskPrerequisites.prerequisiteId, id)));
       }
       // 起点定下了。别的入口起跑时，起不起得来由它自己负责（用户看得到结果、队列自己会重试），这一笔请求
-      // 就此了结；放行那一路自己放出来的，要等真起跑了才了结（见 prerequisite-launch.ts releaseOne）——
+      // 就此了结；放行那一路自己放出来的，要等真起跑了才了结（见 launch-request.ts releaseLaunch）——
       // 它只认已经挂着的那一笔，不新建：停止键撤回了的，不能被放行那一路复活。
       await tx.insert(taskPrerequisiteLaunches)
         .values({ taskId, launchedAt: now(), blocked: null, requestedAt: null, installJournal: null })

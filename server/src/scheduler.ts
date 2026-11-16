@@ -19,10 +19,8 @@ import { withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
 import { currentPauseGeneration, dispatchPauseSince, notePauseOfGroup, pausedSince } from "./pause-generation.js";
 import { taskHoldOf, type TaskHold } from "./task-hold.js";
 import { oweHeldStart } from "./dispatch-hold-owed.js";
-import { startMember } from "./member-start.js";
-import { holdForPrerequisites } from "./prerequisite-launch.js";
-
-const MAX_PARALLEL = 4;
+import { holdForPrerequisites } from "./prerequisite-gate.js";
+import { releaseLaunch, requestLaunch } from "./launch-request.js";
 
 type QueueAdvanceAttempt = {
   request?: QueueAdvanceRequest;
@@ -57,21 +55,6 @@ export async function pauseGroup(groupId: string): Promise<void> {
     if (t.status === "queued") await setTaskStatus(t.id, "backlog");
     else freezeStartingTurn(t.id, "paused");
   }
-}
-
-// Re-read the live paused flag each tick (the pause endpoint flips it mid-run).
-async function isPaused(groupId: string): Promise<boolean> {
-  const g = (await db.select().from(groups).where(eq(groups.id, groupId))).at(0);
-  return !!g?.paused;
-}
-
-// Park tasks that were queued-but-never-started back to backlog so a paused
-// group shows them parked (not stuck "queued") and a restart won't reap them.
-async function parkQueued(groupId: string): Promise<void> {
-  const waiting = (await db.select().from(tasks).where(eq(tasks.groupId, groupId))).filter(
-    (t) => t.status === "queued",
-  );
-  for (const t of waiting) await setTaskStatus(t.id, "backlog");
 }
 
 // 终态钩子：任务进 done / canceled / failed 时,如果它在某个 queue 里,推进
@@ -405,13 +388,14 @@ export async function queueMembers(queueId: string): Promise<QueueRow[]> {
   return withMonitorHolds(items.map((i) => byId.get(i.taskId)).filter((t): t is typeof tasks.$inferSelect => !!t));
 }
 
-// Run an entire group. parallel mode:扫所有 backlog/paused,限流并行启动。
+// Run an entire group. parallel mode:该起的成员各挂一笔开工请求,由自动开工那一个放行口
+// 按同组名额起(launch-request.ts),这里不等它们跑完。
 // serial mode:找该 group 关联的 queue,调用 advanceQueue 推进一次
 // (后续推进靠 advanceQueueFromTask 终态钩子自动链式触发,不再 while-loop)。
-// A paused group starts nothing;pausing mid-run 不会取消已在跑的,但不会启动新的。
+// A paused group starts nothing;pausing mid-run 不会取消已在跑的,挂着的请求等恢复分组再起。
 /**
  * 失败交代的扇出名单。**语义是「这一轮还欠谁一次启动」**,不是「这一轮碰过谁」:
- * 成员一旦了结(起跑了、有正当理由没起、或者自己那条失败已经单独交代过)就当场退出名单。
+ * 成员的开工请求一落库就退出名单 —— 从那一刻起没起来的交代归那份账(launch-request.ts)。
  * `selected` 记的是「挑这一步做到了没有」—— 它决定抛在半路时还要不要回头再算一次名单。
  */
 export type GroupLaunchRoster = { selected: boolean; owed: Set<string> };
@@ -455,9 +439,9 @@ export async function runGroupInBackground(groupId: string): Promise<void> {
   // 才再算一次 —— 算得出来只告诉「本该起跑、结果没起」的那几位,算不出来就只剩日志,也绝不
   // 退回「按 groupId 全捞」那种连坐。
   //
-  // 为什么要分「挑过没有」而不是只看名单空不空:全部成员都成功起跑之后、收尾那几步(parkQueued
-  // / 推队列)才抛的那一档,名单正该是空的 —— 此刻回头再算一次,等于把一批正在跑的任务重新
-  // 算成「没能起跑」。
+  // 为什么要分「挑过没有」而不是只看名单空不空:请求都落了库之后、收尾那几步(推队列)才抛的
+  // 那一档,名单正该是空的 —— 此刻回头再算一次,等于把一批已经交给调度、多半正在跑的任务
+  // 重新算成「没能起跑」。
   const roster: GroupLaunchRoster = { selected: false, owed: new Set() };
   try { await runGroup(groupId, roster); }
   catch (error) {
@@ -570,7 +554,7 @@ async function recoverQueueAdvance(queueId: string, accepted: AcceptedAdvance | 
   await advanceQueue(queueId);
 }
 
-// parallel mode 的执行:扫所有 backlog 任务并行启动,限流 MAX_PARALLEL。
+// parallel mode 的执行:扫所有 backlog 任务,各挂一笔开工请求(同组名额由放行口数)。
 // **不**主动唤起检查点 paused(带 resumePrompt)/提问 paused(带 question)任务
 // ——那些得靠队列推进按顺序 resume / 等答复(否则同链上所有 paused task 一起跑
 // 就破坏了 resume 顺序)。canceled / failed 也不在这里被
@@ -607,80 +591,15 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
     attempted.selected = true;
     for (const t of launchable) attempted.owed.add(t.id);
   }
-
   if (launchable.length) {
-    const pending = [...launchable];
-    const inflight = new Map<string, Promise<void>>();
-
-    const launch = async (taskId: string): Promise<void> => {
-      // 「这一位到底起没起来」只认**真实启动回执**(adoptRun 那一刻 acknowledge 的那张),
-      // 不拿「resumeOrRunTask 抛没抛」当判据:它抛出来可能是根本没起来,也可能是起来之后
-      // 跑挂了、或者收尾那几步(放回合锁、还占位)挂了 —— 后两种给人写一句「这一轮没能起跑」
-      // 就是假的:那一位要么正在跑,要么已经跑完(第 1 轮审查发现 4)。
-      let spawned = false;
-      try {
-        // 轮到名额才准入(member-start.ts):在哪、起没起过由那里重读,这里只答「按挑人时那同一把
-        // 尺子,它此刻还该被分组运行拉起吗」。等的期间进了队列的,由队列按位置起(入队那一下就推过)。
-        await startMember(groupId, taskId, {
-          prepare: async () => {
-            if (await preparePendingCheckpointStart(taskId)) return true;
-            // 还在等前置站齐的不起(prerequisite-launch.ts):齐了由那边起。那一问会动工作区,放在临界区外;
-            // 只问这一刻真要起的那几位(同下面 eligible 的尺子),别给起不来的记一笔「等齐就起」。
-            const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-            if (!row || !launchableMembers(await withMonitorHolds([row]), new Set()).length || await taskHoldOf(row)) return false;
-            return !!(await holdForPrerequisites(row, { source: "group" }));
-          },
-          eligible: async (row) => {
-            if (!launchableMembers(await withMonitorHolds([row]), new Set()).length) return false;
-            // 分组没停、这一位却被上面派活的那条按住了:不起,记欠账(同队列推进那一处)。
-            const hold = await taskHoldOf(row);
-            if (hold?.kind === "dispatch") await oweHeldStart(taskId, hold.byTaskId);
-            return !hold;
-          },
-          queued: async () => undefined,
-          start: async ({ owner }) => {
-            // 回执先到就先记下 spawned;这一位整轮跑完(或抛出)仍由 `run` 等到底,
-            // 分组的并发上限才还是「同时 N 个在跑」。
-            let run!: Promise<void>;
-            spawned = await waitForStartReceipt(taskId, () => {
-              run = resumeOrRunTask(taskId, { origin: "auto", reason: "group", turnHeld: owner });
-              run.catch(() => {}); // 只为了别在 await 之前变成 unhandled;原 promise 照旧抛给下面
-              return run;
-            });
-            // 回执一到就退出扇出名单:这一位是**真的起跑了**,此后整组再出什么事都不该给它写
-            // 「这一轮没能起跑」—— 它那时多半还在跑(第 1 轮审查发现 4)。不等这一轮跑完才摘,
-            // 正是因为「还在跑」才是最容易被这句假话误伤的状态。
-            if (spawned) attempted?.owed.delete(taskId);
-            await run;
-          },
-        });
-      } catch (error) {
-        if (spawned) {
-          console.error(`[ash] 分组成员已起跑，随后失败 group=${groupId} task=${taskId}:`, error);
-          return;
-        }
-        await reportGroupStartFailure(groupId, error, { taskId });
-      } finally {
-        // 这一位这一轮已经了结(起跑了 / 有正当理由没起 / 自己那条失败已经交代过):
-        // 整组的失败扇出从此不该再捎上它。名单的语义是「这一轮还欠谁一次启动」。
-        attempted?.owed.delete(taskId);
-      }
-    };
-
-    // 名额跟等齐就起、接着跑兑现欠账共用一份（launch-slots.ts），由 startMember 占：被别人占满时
-    // 它在里面等到有人跑完；这里只管自己这一批同时最多发出几位。
-    while (pending.length || inflight.size) {
-      if (!(await isPaused(groupId))) {
-        while (pending.length && inflight.size < MAX_PARALLEL) {
-          const t = pending.shift()!;
-          const p = launch(t.id).finally(() => inflight.delete(t.id));
-          inflight.set(t.id, p);
-        }
-      }
-      if (inflight.size) await Promise.race(inflight.values());
-      else break;
-    }
-    await parkQueued(groupId);
+    // 「这一刻该起的这几位」各挂一笔开工请求，然后走跟一切自动开工同一个放行口（launch-request.ts）：同组名额、
+    // 起跑回执、起不来的退避与交代、被按住时留着等放开、停止撤回、重启补办，全是那一套。请求一落库，
+    // 「欠谁一次启动」就归那份账管了，这里的扇出名单随之清空。
+    const ids = launchable.map((t) => t.id);
+    await requestLaunch(ids, { source: "group" });
+    for (const id of ids) attempted?.owed.delete(id);
+    await Promise.all(ids.map((id) => releaseLaunch(id)
+      .catch((error) => console.error(`[ash] 分组成员开工判定失败 group=${groupId} task=${id}(请求留着，稍后再判):`, error))));
   }
 
   // 让本 group 关联的所有 queue 也推一下(关键:如果有 paused task 在 queue

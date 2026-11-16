@@ -49,3 +49,17 @@ export async function reportGroupStartFailure(groupId: string, error: unknown, s
     console.error(`[ash] 分组启动失败交代读取失败 group=${groupId}:`, reportError);
   }
 }
+
+/**
+ * 自动开工连着起不来、不再自动重试了（launch-request.ts）：给那一条留一句交代，跟分组起不来的那句同一套
+ * （刷新之后还在，看得出「没起成」）。
+ */
+export async function reportLaunchGiveUp(task: typeof tasks.$inferSelect, message: string): Promise<void> {
+  console.error(`[ash] task=${task.id} ${message}`);
+  try {
+    const target = await freshRunFailureTarget(task, null);
+    await reportTurnFailure({ taskId: task.id, message, role: "single", target });
+  } catch (error) {
+    console.error(`[ash] 自动开工失败交代写入失败 task=${task.id}:`, error);
+  }
+}

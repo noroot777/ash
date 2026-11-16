@@ -1,6 +1,6 @@
 // 队列/分组归属的唯一原子边界。两类人排在这一条链上依次执行：
 //   · 认领方 —— 「整队无人在跑 / 还在原组」的检查和「落 queued 占位」（queue-seat.ts 手动启动、
-//     scheduler.ts 队列推进、member-start.ts 分组运行与接着跑兑现）；
+//     scheduler.ts 队列推进、launch-request.ts 自动开工经 queue-seat.ts）；
 //   · 归属写方 —— 改 queue_items（建队、插入、重排、移出、重新排队、建任务时串队）和改任务
 //     groupId（PATCH、删分组摘出）。
 //

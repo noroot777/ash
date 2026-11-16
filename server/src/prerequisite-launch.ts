@@ -18,22 +18,20 @@
 // 重启之后：记账是持久的，开机补办扫一遍全部挂着的请求（重启期间站稳的就在这一趟起跑），之后每分钟
 // 再扫一遍兜底 —— 哪个出口漏调了，最多晚一分钟。
 //
-// ## 起跑这一侧的规矩
+// ## 起跑这一侧
 //
 // 前置失败、取消了：它不站稳，下游一直等，**不跳过**（跟队列透明跳过 failed 相反：下游要的是它的代码）。
-// 分组暂停着的不起。同时在跑的名额跟分组运行共用一份（launch-slots.ts），名额满了就等有人跑完再补放。
-// 下游自己被移进队列的，交给队列推进。
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
-import { db, dbClient } from "./db/index.js";
-import { groups, projects, queueItems, scheduledMessages, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
+// 齐了之后怎么起（分组暂停、同组名额、队列、停止撤回、起不来退避）跟一切自动开工是同一个放行口，住在
+// launch-request.ts。
+import { eq } from "drizzle-orm";
+import { db } from "./db/index.js";
+import { projects, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { prerequisiteStandings } from "./prerequisite-standing.js";
 import { dependentEdges, launchRecord, prerequisiteEdges } from "./prerequisite-store.js";
-import { holdForPrerequisitesLocked, withPrerequisiteLock } from "./prerequisite-gate.js";
-import { alertLine, appendTaskTimeline, receiptLine } from "./task-timeline.js";
+import { withPrerequisiteLock } from "./prerequisite-gate.js";
+import { alertLine, appendTaskTimeline } from "./task-timeline.js";
 import { forgetStanding, isRepublishingView, republishPrerequisiteView } from "./prerequisite-view.js";
-import { freeSlot, onSlotFreed, takeSlot } from "./launch-slots.js";
-import type { TurnIdentity } from "./turn-lock.js";
+import { releaseLaunch } from "./launch-request.js";
 
 export { holdForPrerequisites, type LaunchSource, type PrerequisiteHold } from "./prerequisite-gate.js";
 
@@ -61,7 +59,7 @@ async function progress(prerequisiteId: string, known?: string[]): Promise<void>
   await republishPrerequisiteView(dependents);
   for (const taskId of dependents) {
     await settleIfAbandoned(taskId);
-    await releaseOne(taskId);
+    await releaseLaunch(taskId);
   }
 }
 
@@ -86,131 +84,8 @@ async function settleIfAbandoned(taskId: string): Promise<void> {
   });
 }
 
-/** 一条挂着「等齐就起」的下游：齐了就起。不齐、分组暂停、名额满了、已经起过的都原样留着。 */
-async function releaseOne(taskId: string): Promise<void> {
-  const launch = await launchRecord(taskId);
-  if (!launch?.requestedAt) return;
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task || task.archived || task.status !== "backlog") {
-    // 已经从别处起跑了（或者没了）：这笔请求了结。
-    await db.update(taskPrerequisiteLaunches).set({ requestedAt: null }).where(eq(taskPrerequisiteLaunches.taskId, taskId));
-    if (task) await republishPrerequisiteView([taskId]);
-    return;
-  }
-  if (task.groupId && (await db.select({ paused: groups.paused }).from(groups).where(eq(groups.id, task.groupId))).at(0)?.paused) return;
-  const edges = await prerequisiteEdges(taskId);
-  if (edges.length && !launch.launchedAt) {
-    const standings = await prerequisiteStandings(edges.map((edge) => edge.prerequisiteId));
-    if (edges.some((edge) => standings.get(edge.prerequisiteId)?.standing.step !== "settled")) return;
-  }
-  const queue = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
-  if (queue) {
-    const { advanceQueueInBackground } = await import("./scheduler.js");
-    advanceQueueInBackground(queue.queueId);
-    return;
-  }
-  // 名额先占后做事：查和占之间没有 await，几路同时放行也不会一起越过上限（launch-slots.ts）。
-  if (!takeSlot(task.groupId, taskId)) return;
-  let handed = false;
-  try {
-    const { claimOwnTurn, releaseTurn } = await import("./runs.js");
-    const { isAcceptingTask } = await import("./acceptance-lock.js");
-    const { seatThenStart } = await import("./queue-seat.js");
-    const { resumeOrRunTask } = await import("./task-resume.js");
-    // 「请求还在 → 认领回合 → 定起点」在同一把锁里做完，跟停止键（withdrawPrerequisiteRequest）排成先后：
-    // 锁外读到的那份请求可能已经被撤回了，锁里重读一遍才算数；认领之后再来的停止，冻住的是这一次起跑。
-    //
-    // 回合从认领到交给 seatThenStart（之后由它负责还，queue-seat.ts）之间归这里：没交出去就退出 —— 不论
-    // 正常返回还是抛错（定起点要写 git、读写库，哪一步都可能失败）—— 一律按认领时的那一代身份还回去，
-    // 否则这条任务谁都起不了（第 3 轮审查实测）。
-    let owned: TurnIdentity | null = null;
-    let claimed: { turn: TurnIdentity; actingUserId: string | null } | null = null;
-    try {
-      claimed = await withPrerequisiteLock(taskId, async () => {
-        const current = await launchRecord(taskId);
-        if (!current?.requestedAt) return null;
-        owned = claimOwnTurn(taskId, "single");
-        if (!owned) return null;
-        if (isAcceptingTask(taskId) || await holdForPrerequisitesLocked(taskId, { source: "release", actingUserId: current.actingUserId })) return null;
-        return { turn: owned, actingUserId: current.actingUserId };
-      });
-    } finally {
-      if (owned && !claimed) releaseTurn(taskId, owned);
-    }
-    if (!claimed) return;
-    const { turn, actingUserId } = claimed;
-    let run: Promise<void> | null = null;
-    // 名额是按上面那一读的分组占的：认领那一步在链上再认一次分组，中途换了组就不起 —— 下面还掉名额，
-    // 名额一空出来的那一扫（onSlotFreed）就按新组重排（queue-seat.ts `slotGroup`）。
-    const started = await seatThenStart(taskId, turn, () => {
-      // 等齐之后才起，已经不是当初那一下手动运行了：按自动起跑认（停着照样拦，turn-freeze.ts）。
-      run = resumeOrRunTask(taskId, { origin: "auto", reason: "wake", turnHeld: turn, actingUserId });
-      return run;
-    }, { slotGroup: task.groupId ?? null });
-    if (!started.ok) return;
-    await db.update(taskPrerequisiteLaunches).set({ requestedAt: null }).where(eq(taskPrerequisiteLaunches.taskId, taskId));
-    handed = true;
-    const settle = () => freeSlot(task.groupId, taskId);
-    if (run) void (run as Promise<void>).then(settle, settle);
-    else settle();
-  } finally {
-    if (!handed) freeSlot(task.groupId, taskId);
-  }
-}
-
-/**
- * 停止键撤回「等齐就起」：还没起跑（backlog）、挂着请求的才撤。留一行记录、页面上的「在等」随之消失，
- * 刷新之后也看得出停过 —— 从没跑过的任务没有会话可写时间线，记成任务历史里的一条。
- *
- * 放行那一路已经认领了回合、正要起跑的（锁里认领，见 releaseOne），把那一次起跑冻住：它在拉起执行器
- * 之前的最后一道闸上撤回（turn-lock.ts `freezeStartingTurn`）。返回 `starting`，由调用方照「停一个正在
- * 起跑的回合」那一套收尾；撤了、没在起跑返回 `withdrawn`；没有可撤的返回 null。
- */
-export async function withdrawPrerequisiteRequest(taskId: string): Promise<"withdrawn" | "starting" | null> {
-  return withPrerequisiteLock(taskId, async () => {
-    const task = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-    const record = await launchRecord(taskId);
-    if (task?.status !== "backlog" || !record?.requestedAt) return null;
-    const { freezeStartingTurn, isTurnClaimed } = await import("./runs.js");
-    const starting = isTurnClaimed(taskId) && freezeStartingTurn(taskId, "canceled");
-    await db.update(taskPrerequisiteLaunches).set({ requestedAt: null, blocked: null }).where(eq(taskPrerequisiteLaunches.taskId, taskId));
-    // 等着跟它一起开工的回复（执行型待发送）一并撤掉，否则下一次投递扫描又把请求挂回去；原文照抄进时间线。
-    const { cancelPendingMessage } = await import("./pending-messages.js");
-    const stashed = await db.select().from(scheduledMessages).where(and(eq(scheduledMessages.taskId, taskId),
-      eq(scheduledMessages.status, "pending"), eq(scheduledMessages.execution, true), isNull(scheduledMessages.deliveringSince)));
-    for (const message of stashed) await cancelPendingMessage(message, "停止了「前置站齐就开工」");
-    const text = "已停止：不再等前置站齐自动开工。要开工再点运行。";
-    if (!await appendTaskTimeline(taskId, receiptLine(text))) {
-      const { noteSystemNotice } = await import("./user-action-rejection.js");
-      await noteSystemNotice(taskId, `prerequisite-withdrawn:${record.requestedAt}`, "停止", text);
-    }
-    await republishPrerequisiteView([taskId]);
-    return starting ? "starting" : "withdrawn";
-  });
-}
-
-/** 全部挂着的请求扫一遍：开机补办、定时兜底、有一条放出来的跑完腾出位置时都走这里。 */
-export async function sweepPrerequisiteLaunches(): Promise<void> {
-  if (dbClient.closed) return; // 进程收尾（测试关库、server 退出）时迟到的那一扫
-  const rows = await db.select({ taskId: taskPrerequisiteLaunches.taskId }).from(taskPrerequisiteLaunches)
-    .where(isNotNull(taskPrerequisiteLaunches.requestedAt));
-  for (const { taskId } of rows) {
-    await releaseOne(taskId).catch((error) => { if (!dbClient.closed) console.error(`[ash] 等齐就起补办失败 task=${taskId}:`, error); });
-  }
-}
-
-let sweepTimer: NodeJS.Timeout | null = null;
-function sweepSoon(): void {
-  if (sweepTimer) return;
-  sweepTimer = setTimeout(() => {
-    sweepTimer = null;
-    void sweepPrerequisiteLaunches().catch((error) => console.error("[ash] 等齐就起扫描失败:", error));
-  }, 500);
-  sweepTimer.unref();
-}
-
 let started = false;
-/** 开机调一次：补办重启期间站稳的、挂上事件总线、每分钟兜底扫一遍。 */
+/** 开机调一次：挂上事件总线（前置的状态 / 审查一变就重判下游），再起自动开工那一份账（补办、每分钟兜底）。 */
 export async function startPrerequisiteLaunches(intervalMs = 60_000): Promise<void> {
   if (started) return;
   started = true;
@@ -218,8 +93,6 @@ export async function startPrerequisiteLaunches(intervalMs = 60_000): Promise<vo
     if (event.type === "task.status" || event.type === "task.review") notePrerequisiteProgress(event.taskId);
     else if (event.type === "task.updated" && !isRepublishingView(event.task.id)) notePrerequisiteProgress(event.task.id);
   });
-  // 名额空出来（不论是放行的还是分组运行的那一位跑完）就补放被名额挡住的。
-  onSlotFreed(sweepSoon);
-  await sweepPrerequisiteLaunches();
-  setInterval(() => void sweepPrerequisiteLaunches().catch((error) => console.error("[ash] 等齐就起扫描失败:", error)), intervalMs).unref();
+  const { startLaunchRequests } = await import("./launch-request.js");
+  await startLaunchRequests(intervalMs);
 }

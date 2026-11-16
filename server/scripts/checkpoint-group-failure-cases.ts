@@ -8,7 +8,7 @@ import {
 import { mountGroupRoutes } from "../src/group-routes.js";
 import { runGroup } from "../src/scheduler.js";
 import { takeResumePrompt } from "../src/task-resume-prompt.js";
-import { reserveQueuedTask, taskQueueReservation } from "../src/task-queue-reservation.js";
+import { MAX_START_ATTEMPTS, setLaunchRetryBase, sweepLaunchRequests } from "../src/launch-request.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
 import { isDiagnosticSession } from "../src/turn-failure.js";
 import { id } from "../src/util.js";
@@ -24,8 +24,25 @@ async function transcript(taskId: string): Promise<string> {
   }).join("\n");
 }
 
+function calledFrom(name: string): boolean {
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 100;
+  try {
+    return new RegExp(`\\b${name}\\b`).test(new Error().stack ?? "");
+  } finally {
+    Error.stackTraceLimit = limit;
+  }
+}
+
+const launchOf = async (taskId: string) => (await db.select().from(schema.taskPrerequisiteLaunches)
+  .where(eq(schema.taskPrerequisiteLaunches.taskId, taskId))).at(0);
+
 export async function checkpointGroupFailureCases(): Promise<void> {
-  for (const failure of ["write", "guarded-stop", "cleanup"]) {
+  // 分组里一位成员起不来：只是它自己的事。`give-up`：每一次起跑都在拉起执行器之前抛错 —— 退避再试，连着到顶
+  // 就撤掉请求、留一句交代（不是每扫一次刷一条）；`guarded-stop`：起跑途中用户点了停止 —— 这一次冻住、请求撤回，
+  // 之后腾出名额也不再起它。两档里其余成员（含超过名额、靠回填起的第 5/6 位）和关联队列都照常跑。
+  setLaunchRetryBase(20);
+  for (const failure of ["give-up", "guarded-stop"]) {
     const members = [];
     for (let index = 0; index < 6; index++) {
       const test = await scenario(0);
@@ -43,43 +60,52 @@ export async function checkpointGroupFailureCases(): Promise<void> {
     await db.insert(schema.queueItems).values({ taskId: follower.taskId, queueId, position: 0, createdAt: now() });
     const failedId = members[1]!.taskId;
     const execute = dbClient.execute;
-    let injected = false;
-    let cleanupFailed = false;
+    let injected = 0;
     const unhandled: unknown[] = [];
     const onUnhandled = (error: unknown) => { unhandled.push(error); };
     process.on("unhandledRejection", onUnhandled);
+    // 起跑读任务头那一下（task-run.ts runHeldTask）：回合已经认领、执行器还没拉起。
     dbClient.execute = async function (statement) {
-      if (typeof statement !== "string" && /^update "tasks" set "status" =/i.test(statement.sql)
+      if (typeof statement !== "string" && /^select "mode", "handoff" from "tasks"/i.test(statement.sql)
         && Array.isArray(statement.args) && statement.args.includes(failedId)) {
-        if (!injected && statement.args[0] === "queued") {
-          injected = true;
-          if (failure === "guarded-stop") {
-            await reserveQueuedTask(taskQueueReservation(await taskOf(failedId)));
-            assert.equal((await api.request(`/tasks/${failedId}/stop`, { method: "POST" })).status, 200);
-          } else {
-            if (failure === "cleanup") await execute.call(dbClient, statement);
-            throw new Error("INJECT_MEMBER_SEAT_WRITE_FAILURE");
-          }
-        } else if (failure === "cleanup" && !cleanupFailed && statement.args[0] === "backlog") {
-          cleanupFailed = true;
-          throw new Error("INJECT_MEMBER_SEAT_CLEANUP_FAILURE");
+        injected += 1;
+        if (failure === "guarded-stop") {
+          if (injected === 1) assert.equal((await api.request(`/tasks/${failedId}/stop`, { method: "POST" })).status, 200);
+        } else {
+          throw new Error("INJECT_MEMBER_START_FAILURE");
         }
       }
       return execute.call(dbClient, statement);
     };
     try {
       await runGroup(groupId);
-      assert.equal(injected, true);
-      assert.equal(cleanupFailed, failure === "cleanup");
+      if (failure === "give-up") {
+        await until("连着起不来到顶后撤掉请求、留下交代", async () => !(await launchOf(failedId))?.requestedAt
+          && /没能自动开工/.test(await transcript(failedId)));
+        assert.equal(injected, MAX_START_ATTEMPTS, "退避重试到顶为止，不多试一次");
+      } else {
+        assert.equal(injected, 1);
+      }
       for (const member of members) {
         await settled(member.taskId);
         assert.equal((await taskOf(member.taskId)).queueSeatToken, null);
         const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.taskId, member.taskId));
         if (member.taskId === failedId) {
           assert.equal(hits(member.body), 0);
-          assert.equal((await taskOf(failedId)).status, failure === "guarded-stop" ? "canceled" : "backlog");
-          assert.ok(sessions.some(isDiagnosticSession));
-          assert.match(await transcript(failedId), /分组本次启动未完成/);
+          assert.equal(runs.isTurnClaimed(failedId), false);
+          assert.equal((await launchOf(failedId))?.requestedAt ?? null, null);
+          if (failure === "give-up") {
+            assert.equal((await taskOf(failedId)).status, "backlog");
+            assert.equal(sessions.filter(isDiagnosticSession).length, 1, "交代只留一条");
+            const said = await transcript(failedId);
+            assert.equal(said.split("没能自动开工").length - 1, 1);
+            assert.match(said, /INJECT_MEMBER_START_FAILURE/);
+          } else {
+            assert.equal((await taskOf(failedId)).status, "canceled");
+            // 冻在拉起执行器之前：没有执行会话，只有那一句「停过」（刷新后仍看得见）。
+            assert.ok(sessions.length > 0 && sessions.every(isDiagnosticSession));
+            assert.match(await transcript(failedId), /停止/);
+          }
         } else {
           assert.ok(hits(member.body) > 0, "超过并发上限的第5/6项也到达执行器");
           assert.equal(sessions.filter((session) => !isDiagnosticSession(session)).length, 1);
@@ -87,6 +113,11 @@ export async function checkpointGroupFailureCases(): Promise<void> {
       }
       await until("并行分组收尾仍推进关联队列", async () => hits(follower.checkpoint) === 1);
       await settled(follower.taskId);
+      // 再扫一遍、再等过最长的退避：撤掉的请求不会把它重新起出来。
+      await sweepLaunchRequests();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(injected, failure === "give-up" ? MAX_START_ATTEMPTS : 1);
+      assert.equal(hits(members[1]!.body), 0);
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.deepEqual(unhandled, []);
     } finally {
@@ -94,8 +125,9 @@ export async function checkpointGroupFailureCases(): Promise<void> {
       process.off("unhandledRejection", onUnhandled);
       await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
     }
-    console.log(`PASS: parallel group ${failure} stays local, later members and linked queues still run with durable diagnostics`);
+    console.log(`PASS: parallel group ${failure} stays local, later members and linked queues still run, one durable statement`);
   }
+  setLaunchRetryBase(30_000);
 
   {
     const test = await scenario(0);
@@ -163,7 +195,7 @@ export async function checkpointGroupFailureCases(): Promise<void> {
     console.log("PASS: background group failure reaches only this run's launch targets and the owner, never bystanders");
   }
   {
-    // 成员全部**成功起跑**之后、收尾那几步(parkQueued / 推队列)才抛的那一档。
+    // 成员全部**成功起跑**之后、收尾那一步(推关联队列)才抛的那一档。
     // 第 1 轮审查发现 4:名单此刻正该是空的,早先却在这里回头按 `groupId` 重算一遍,
     // 等于把一批正在跑(或已跑完)的任务重新算成「这一轮没能起跑」。上面那个
     // background-error 用例只证明了**静态旁观者**不连坐 —— 它们从头到尾没被挑中;
@@ -182,19 +214,28 @@ export async function checkpointGroupFailureCases(): Promise<void> {
     const owner = await scenario(0);
     await db.update(tasks).set({ status: "idle" }).where(eq(tasks.id, owner.taskId));
     await db.update(schema.groups).set({ ownerTaskId: owner.taskId }).where(eq(schema.groups.id, groupId));
-    for (const member of [...members, owner]) {
+    const follower = await scenario(0);
+    const queueId = id();
+    for (const member of [...members, owner, follower]) {
       await db.update(tasks).set({ groupId }).where(eq(tasks.id, member.taskId));
     }
+    await db.insert(schema.queueItems).values({ taskId: follower.taskId, queueId, position: 0, createdAt: now() });
     const execute = dbClient.execute;
     let injected = false;
-    // 全员都已到达执行器之后的第一次「按 group_id 捞成员」—— 那就是收尾的 parkQueued。
-    // 用「到过执行器」而不是数第几次读,是为了让注入点无条件落在起跑之后。
+    // 运行分组收尾推这条关联队列那一下（runParallel 先等齐放行口、成员各自拿到启动回执，再推队列）：推进意图
+    // 落不了库、临界区读队列项也失败 —— advanceQueue 这时才会把错抛回给运行分组（只失败一笔它自己兜得住）。
+    // 意图那一笔认调用栈：页面那边展开动作、别处的推进也会碰同一条队列。
+    let armed = false;
     dbClient.execute = async function (statement) {
-      if (!injected && typeof statement !== "string" && /from "tasks" where/i.test(statement.sql)
-        && Array.isArray(statement.args) && statement.args.includes(groupId)
-        && members.every((member) => hits(member.body) > 0)) {
-        injected = true;
-        throw new Error("INJECT_GROUP_TEARDOWN_FAILURE");
+      if (!injected && typeof statement !== "string" && Array.isArray(statement.args) && statement.args.includes(queueId)) {
+        if (!armed && /^insert into "queue_advance_intents"/i.test(statement.sql) && calledFrom("runParallel")) {
+          armed = true;
+          throw new Error("INJECT_GROUP_TEARDOWN_INTENT_FAILURE");
+        }
+        if (armed && /^select "task_id", "queue_id", "position", "created_at" from "queue_items"/i.test(statement.sql)) {
+          injected = true;
+          throw new Error("INJECT_GROUP_TEARDOWN_FAILURE");
+        }
       }
       return execute.call(dbClient, statement);
     };
@@ -212,6 +253,8 @@ export async function checkpointGroupFailureCases(): Promise<void> {
       }
     } finally {
       dbClient.execute = execute;
+      await settled(follower.taskId);
+      await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
     }
     console.log("PASS: post-launch group teardown failure tells only the owner, never the members that already started");
   }
