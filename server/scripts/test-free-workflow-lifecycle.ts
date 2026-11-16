@@ -13,6 +13,8 @@ import { releaseTmpDb } from "./tmp-db.js";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-free-lifecycle-"));
+// 不指定的话，scratch、ash-mcp 这些会落进这份检出自己的 data/ 目录。
+process.env.ASH_DATA_DIR = join(root, "data");
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 // 这份文件里绝大多数任务都用 `reasoningEffort: "ultra-fake"` 让执行器解析必炸、压根不拉起

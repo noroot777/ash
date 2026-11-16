@@ -23,6 +23,8 @@ import { dirname, join } from "node:path";
 // 快照恰好落在仓库内**那条偶然的祖先链 —— 那条链一旦移走,旧实现连第三方包都解析不到。
 const outside = process.env.GATE_SUPPLY_OUTSIDE === "1";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-supply-")));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 const runsHome = outside ? realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-supply-runs-"))) : null;
 
 const save = (path: string, content: string) => {

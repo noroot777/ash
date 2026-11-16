@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-plan-")));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 process.env.ASH_RUNS_DIR = join(root, "execution", "data", "runs");
 const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, verifyGateSnapshot } =
   await import("../src/accept-gate-source.js");

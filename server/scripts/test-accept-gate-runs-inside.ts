@@ -11,6 +11,8 @@ import { dirname, join, resolve } from "node:path";
 //
 // 这条用例必须单独一个文件:RUNS_DIR 在模块 import 时就由环境变量固化了,同一个进程里换不掉。
 const root = mkdtempSync(join(tmpdir(), "ash-gate-runs-inside-"));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 const repo = join(root, "project");
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 const linkDir = (target: string, path: string) => (process.platform === "win32"

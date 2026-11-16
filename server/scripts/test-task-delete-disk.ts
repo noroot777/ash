@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "ash-task-delete-disk-"));
+// 不指定的话，scratch、ash-mcp 这些会落进这份检出自己的 data/ 目录。
+process.env.ASH_DATA_DIR = join(root, "data");
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const runs = process.env.ASH_RUNS_DIR;

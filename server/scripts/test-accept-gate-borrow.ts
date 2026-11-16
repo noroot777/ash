@@ -15,6 +15,8 @@ import { dirname, join, resolve } from "node:path";
 // 落在快照自己那份源码上(直接 import / 被借包的传递导入 / .bin 里的 CLI shim),和「依赖根不可达
 // 时不许拖垮快照」。
 const root = mkdtempSync(join(tmpdir(), "ash-gate-borrow-"));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 const linkDir = (target: string, path: string) => (process.platform === "win32"
