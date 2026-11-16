@@ -1,7 +1,7 @@
 // 普通任务详情页的 Inspector 栈：**哪几格存在**（三层 hook 依次往描述符表上贴东西）
 // 和**默认开哪几格**（tabPolicy）。单独一个文件是为了守住 700 行，顺带把这条叠法
 // 集中到一处 —— 顺序错了症状很隐晦（下一层拿到的是上一层没加工过的表）。
-import { createElement, useEffect, useMemo, useRef } from "react";
+import { createElement, useMemo, useRef } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
@@ -13,8 +13,6 @@ import type { useConversation } from "../lib/useConversation.ts";
 import { latestRunFacts } from "./info/infoRunFacts.ts";
 import { surfaceTabWhenUsed } from "../inspector/index.ts";
 import { dispatchFacts } from "../lib/dispatchTree.ts";
-import { dispatchFamily } from "../lib/dispatchFamily.ts";
-import { clearInspectorEntry, takeInspectorEntry } from "./dispatched/inspectorNavigation.ts";
 import { useDispatchFolds } from "./dispatched/dispatchFolds.ts";
 import { startDispatchArrivals, observeDispatchArrivals, type DispatchArrivals } from "./dispatched/dispatchArrivals.ts";
 import { CountedIcon } from "./dispatched/CountedIcon.tsx";
@@ -48,16 +46,11 @@ export function useTaskInspectorStack(
   // 变不变色跟侧栏那一行行尾的数是同一份关系事实（dispatchFacts）：名下整棵有在等答复、失败的就变色。
   // 「有要你处理的」不从数里推：直接派出的那几条全归档了、再往下一层还在等，数是 0 照样得冒出来、
   // 照样变色（同侧栏 DispatchTreeRows 那一处）。
-  const { dispatchedCount, dispatchedWarn, hasFamily, family } = useMemo(() => {
+  const { dispatchedCount, dispatchedWarn, dispatchedShown } = useMemo(() => {
     const facts = dispatchFacts(allTasks);
-    const family = dispatchFamily(task, allTasks);
-    const { root } = family;
-    return { dispatchedCount: facts.count(root.id), dispatchedWarn: facts.needsYou(root.id), hasFamily: facts.hasBelow(root.id), family };
+    return { dispatchedCount: facts.count(task.id), dispatchedWarn: facts.needsYou(task.id), dispatchedShown: facts.hasBelow(task.id) };
   }, [allTasks, task]);
-  const dispatchedFolds = useDispatchFolds(family.root.id, family.children, task.id);
-  const dispatchedShown = hasFamily || !!(task.dispatchedBy && !task.parentId);
-  const entryTab = useMemo(() => takeInspectorEntry(task.id), [task.id]);
-  useEffect(() => clearInspectorEntry(task.id), [task.id]);
+  const dispatchedFolds = useDispatchFolds(task.id);
   const arrivals = useRef<DispatchArrivals | null>(null);
   arrivals.current = arrivals.current?.taskId === task.id
     ? observeDispatchArrivals(arrivals.current, allTasks)
@@ -92,7 +85,7 @@ export function useTaskInspectorStack(
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v8:${task.status}:${reviewFocused ? "review" : "info"}`,
+    stateKey: `single:all-tabs-v9:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
     // 停在这几格上时**不要**被自动切走。判据是「用户主动打开它在干活」：侧聊在跟人对话，
     // 备忘可能正编辑着一条几百字的。stateKey 含 status，任务一跑完就换挡，于是「写到一半
@@ -110,8 +103,7 @@ export function useTaskInspectorStack(
     focusOnEntry: dispatchedShown ? "dispatched" : undefined,
     entryReady: tasksReady,
     focusRequest: { key: String(arrivalRevision), tabId: "dispatched" },
-    entryTab,
-  }), [arrivalRevision, dispatchedShown, entryTab, reviewFocused, task.status, tasksReady]);
+  }), [arrivalRevision, dispatchedShown, reviewFocused, task.status, tasksReady]);
 
   // 「信息」格里最近一轮的用量、上下文、压缩中：取自会话流里最新那条回复（直播值比会话行新）。
   const runFacts = useMemo(() => latestRunFacts(conversation.items), [conversation.items]);

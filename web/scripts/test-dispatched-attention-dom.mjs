@@ -30,17 +30,19 @@ try {
   await pane("kid-b").locator(".question-card").waitFor();
   assert.equal(await page.locator("aside.side-drawer").count(), 0);
   assert.equal(await side.getAttribute("aria-selected"), "true");
-  assert.equal(await row("kid-b").locator('[aria-current="page"]').count(), 1);
+  assert.equal(await page.locator("[data-subtask-id]").count(), 0, "子任务页不沿用父任务的表");
   await pane("kid-b").getByRole("button", { name: "要", exact: true }).click();
   await pane("kid-b").getByRole("button", { name: "发送答复" }).click();
   await page.waitForFunction(() => window.__server.requests().some((request) => request.url === "/tasks/kid-b/answer"));
   assert.equal(await page.evaluate(() => window.__server.requests().find((item) => item.url === "/tasks/kid-b/answer").body.via), undefined);
+  await page.getByRole("button", { name: "父任务：拆活的分析任务", exact: true }).click();
   await ask("kid-a").click();
   await pane("kid-a").getByRole("button", { name: "先迁数据", exact: true }).click();
   await pane("kid-a").getByRole("button", { name: "发送答复" }).click();
   await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"] .workspace-dispatch-count.is-warn'));
   await page.evaluate(() => window.__server.fail("kid-c"));
   await page.waitForFunction(() => document.querySelector('[data-task-id="lead"] .workspace-dispatch-count.is-warn'));
+  await side.click();
   assert.equal(await row("kid-c").locator("em.is-bad").textContent(), "失败");
   assert.match(await side.innerText(), /失败/);
   assert.equal(await page.locator(".workspace-task-row-wrap", { has: side }).locator(".workspace-status-dot--bad").count(), 1);
@@ -54,12 +56,12 @@ try {
   await page.reload();
   await pane("grand").locator(".question-card").waitFor();
   assert.equal(await side.getAttribute("aria-selected"), "true");
-  assert.equal(await row("grand").locator('[aria-current="page"]').count(), 1);
+  assert.equal(await page.locator("[data-subtask-id]").count(), 0, "孙任务刷新后仍是自己的空表");
   await page.evaluate(() => {
     window.__server.patch("kid-b", { archived: true });
     window.__server.patch("mid", { archived: true });
   });
-  await row("grand").waitFor();
+  assert.equal(await page.locator("[data-subtask-id]").count(), 0);
   assert.equal(await row("mid").count(), 0);
   assert.equal(await page.locator('[data-task-id="grand"]').count(), 0);
   assert.deepEqual(failures, []);

@@ -145,11 +145,6 @@ export function applyInspectorEntry<Context>(
   policy: InspectorTabPolicy,
   descriptors: readonly InspectorDescriptor<Context>[],
 ): InspectorState {
-  const entry = policy.entryTab;
-  if (entry && descriptors.some((descriptor) => descriptor.id === entry.id)) return {
-    ...state, openTabs: orderedValidTabs([...state.openTabs, entry.id], descriptors),
-    activeTab: entry.id, visible: entry.visible, dismissed: state.dismissed.filter((id) => id !== entry.id),
-  };
   if (policy.entryReady === false) return state;
   return policy.focusOnEntry ? applyTabPolicy(state, policy, descriptors, true) : state;
 }

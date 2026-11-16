@@ -12,7 +12,6 @@
   transition: background var(--dur-1) var(--ease-out);
 }
 .dispatched-row:hover, .dispatched-row.is-hinted { background: var(--hover-bg); }
-.dispatched-row.is-current { background: var(--sel-bg); }
 .dispatched-row__mark { display: grid; height: 20px; place-items: center; }
 .dispatched-row__main { display: grid; min-width: 0; gap: 1px; }
 .dispatched-row__top { display: flex; min-width: 0; align-items: center; gap: 6px; }

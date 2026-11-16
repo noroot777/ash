@@ -9,7 +9,6 @@ import type { TaskInspectorContext } from "../../src/task-detail/taskInspectors.
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { DispatchNoteLine } from "../../src/task-detail/DispatchNoteLine.tsx";
 import { dispatchNotes } from "../../src/task-detail/dispatchNotes.ts";
-import { rememberFamilyInspector } from "../../src/task-detail/dispatched/inspectorNavigation.ts";
 import { pushTaskHistoryEntry } from "../../src/workspace/workspaceHistory.ts";
 import { CommandPalette } from "../../src/overlays/CommandPalette.tsx";
 import "../../src/styles/global.css";
@@ -29,11 +28,18 @@ const initial = [
   task("solo", "还没派活的任务", { stage: "verified" }),
 ];
 let currentTasks = initial;
+const mutations: string[] = [];
 const project = { id: "p1", name: "ash", repoPath: "/tmp/ash", health: { exists: true, isRepo: true } } as ProjectView;
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   if (!url.includes("/api/")) return realFetch(input, init);
+  const hold = new URL(url, location.origin).pathname.match(/^\/api\/tasks\/([^/]+)\/dispatched\/(hold|release)$/);
+  if (hold) {
+    mutations.push(new URL(url, location.origin).pathname);
+    const current = currentTasks.find((item) => item.id === hold[1])!;
+    return Response.json({ ...current, dispatchHoldAt: hold[2] === "hold" ? new Date().toISOString() : null, dispatchHoldPendingAt: null });
+  }
   if (url.includes("/search/stream")) {
     const query = new URL(url, location.origin).searchParams.get("q") ?? "";
     const hits = currentTasks.filter((item) => item.title.includes(query) || item.id === query).map((item) => ({
@@ -65,8 +71,8 @@ function Detail({ current, tasks, tasksReady, navigate }: { current: Task; tasks
   const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => ["info", "files", "dispatched", "subagents", "review", "memos", "side-chat"].includes(descriptor.id))
     .map((descriptor) => descriptor.id === "subagents" ? { ...descriptor, render: (context: TaskInspectorContext) => <><InspectorHeadActions><button type="button" onClick={readReport}>读审查报告</button></InspectorHeadActions>{descriptor.render(context)}</> }
       : descriptor.id === "dispatched" ? descriptor : { ...descriptor, render: () => <p>{current.title} 的{descriptor.title}</p> }), [current.title, drawers.inspectors]);
-  const go = (id: string) => { rememberFamilyInspector(current.id, id, tasks); navigate(id); };
-  const context = { task: current, allTasks: tasks, dispatchedFolds: drawers.dispatchedFolds, nativeWork: drawers.subagents.nativeWork, onOpenTask: go, onTaskUpdated: nothing, notify: nothing } as unknown as TaskInspectorContext;
+  const go = navigate;
+  const context = { task: current, allTasks: tasks, dispatchedFolds: drawers.dispatchedFolds, nativeWork: drawers.subagents.nativeWork, onOpenTask: go, onTaskUpdated: (updated: Task) => window.__patch(updated.id, updated), notify: nothing } as unknown as TaskInspectorContext;
   return <LeftDrawerProvider value={drawers.leftDrawer.api}>
     <InspectorHost contextKey={`task:${current.id}`} descriptors={descriptors} context={context} tabPolicy={drawers.inspectorPolicy}>
       {(inspector) => <main className="task-detail" data-current-task={current.id} style={{ position: "relative", flex: 1, minHeight: 0 }}>
@@ -92,6 +98,7 @@ declare global { interface Window {
   __hydrate: (ready?: boolean) => void;
   __ready: () => void;
   __tasks: () => Task[];
+  __mutations: () => string[];
 } }
 
 function App() {
@@ -111,6 +118,7 @@ function App() {
     };
     window.__ready = () => setTasksReady(true);
     window.__tasks = () => currentTasks;
+    window.__mutations = () => mutations;
   });
   useEffect(() => {
     const pop = () => setSelected(new URLSearchParams(location.search).get("task") ?? "lead");
