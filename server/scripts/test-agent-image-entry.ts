@@ -8,6 +8,7 @@
 //   · 定义离引用很远 / 定义多到装不下一个预算;
 //   · 同 id 的子智能体 completed 之后又被唤醒接着说;
 //   · 消费者自己抛错(落库失败)时,已经露过脸的那张图不许被当垃圾删掉。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";

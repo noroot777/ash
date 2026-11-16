@@ -2,6 +2,7 @@
 // i8RAcPM3zvgD):先不收台、空档插话直接送、到期杀进程、进程退了按未完成结算,以及「后台跑完」与
 // 「下一回合开始」分开判。都是假常驻句柄直接喂 `singleRunFromResident`;真实 CLI 子进程那一路在
 // test-claude-reattach-background.ts。从 test-native-steer.ts 拆出来(那份逼近 700 行)。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import type { AgentEvent } from "@ash/shared";
 import { singleRunFromResident } from "../src/executors/claude.js";

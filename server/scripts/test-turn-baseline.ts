@@ -25,6 +25,7 @@
 // 另外钉住「拆屋」：为接住一句话临时建的空壳 worktree，agent 一个字没改就该删掉 ——
 // 这个任务早已验收过、不会再验收第二次，不在这儿删就永远没人删了，而用户看不见它。
 // Run: npm -w server run test:turn-baseline
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

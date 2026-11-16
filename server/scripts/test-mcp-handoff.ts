@@ -7,6 +7,7 @@
 // fixture 用的是 2026-08-06 那次真实事故的原始流（codex 跑完验证、report_stage 连撞
 // 两次 Transport closed），格式一个字节都没改。
 // Run: npm -w server run test:mcp-handoff
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

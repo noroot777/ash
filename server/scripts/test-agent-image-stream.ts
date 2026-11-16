@@ -8,6 +8,7 @@
 // 这一份从**真的起一个进程**那一端验:任意自定义解析器 + GenericCliExecutor.run,事件流里
 // 必须出现带 `source` 的 attachment。另外验流式碎片(半句话分两次到)和去重。
 // 滑动窗口那一族(⑬-⑰、⑲ 系)拆在 test-agent-image-stream-window.ts(单文件 700 行闸)。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";

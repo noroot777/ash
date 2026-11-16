@@ -26,6 +26,7 @@
 //
 // 跑法(自带临时库):
 //   npm -w server run test:handoff-cli-config-dir
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,3 +1,4 @@
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { Writable } from "node:stream";
 import type { ServerEvent } from "@ash/shared";

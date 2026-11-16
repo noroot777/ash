@@ -10,6 +10,7 @@
 // 一模一样。
 //
 // 跑法:npm -w server run test:user-cli-mcp
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

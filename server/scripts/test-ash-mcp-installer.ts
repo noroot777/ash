@@ -11,6 +11,7 @@
 //      备份完整但 CLI 读的是活动那份。有备份 ≠ 失败安全。
 //
 // 跑:`npm -w server run test:ash-mcp-registry`(它串起这两条 + kimi 那条)
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

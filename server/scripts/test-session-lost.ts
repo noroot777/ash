@@ -13,6 +13,7 @@
  *   ④ 每一条「拿库存 id 去 --resume」的链路都真的接了这套清理(别再长出第四条漏网的)
  * 跑:npm -w server run test:session-lost
  */
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";

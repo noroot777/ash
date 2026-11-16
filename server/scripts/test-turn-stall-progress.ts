@@ -4,6 +4,7 @@
 // 两档动手(阈值、熔断、回收、现场重放)在 test-turn-stall.ts;这一份只钉判据本身 ——
 // 判据整份住在 `@ash/shared/waiting` 的 `producesWork`,它被三条消费链共用,漂一个字就会
 // 让「同一次重试」在不同表面上给出不同结论。夹具见 stall-fixtures.ts。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import type { AgentEvent } from "@ash/shared";
 import { codexErrorEvent } from "../src/executors/codex-error-event.js";

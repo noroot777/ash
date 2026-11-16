@@ -19,6 +19,7 @@ import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "ash-verify-override-"));
 process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_DATA_DIR ??= join(root, "data");
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 

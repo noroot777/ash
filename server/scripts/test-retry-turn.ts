@@ -2,6 +2,7 @@
 // 认错了界面上看不出来：会静默退回「从中断处续跑」，而崩在 CLI 起来之前的那一回合根本
 // 没把指令交给 CLI —— 用户点了重试，agent 却什么都没收到。所以在这里钉住。
 // 跑:npm -w server run test:retry-turn
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import type { RetryTurnFacts, RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";

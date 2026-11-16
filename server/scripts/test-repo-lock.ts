@@ -1,5 +1,6 @@
 // 仓库级串行锁回归测试:并行验收必须排队依次合并,而不是一起冲进同一个 `.git`。
 // 每个用例自带临时仓库,任何 checkout / ref 更新都不会外溢到 ash 仓库。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";

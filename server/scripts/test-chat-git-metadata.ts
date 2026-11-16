@@ -14,6 +14,7 @@ const linked = join(stage, "linked");
 mkdirSync(repo);
 process.env.ASH_DB = join(stage, "test.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.ASH_DATA_DIR ??= join(stage, "data");
 const gitEnv = { ...process.env, GIT_OPTIONAL_LOCKS: "1" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "core.hooksPath=", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env: gitEnv }).trim();
 git(repo, "init", "-q", "-b", "main");

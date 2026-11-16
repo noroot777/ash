@@ -22,6 +22,7 @@
 //
 // 跑法(自带临时库):
 //   npm -w server run test:upload-visibility
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

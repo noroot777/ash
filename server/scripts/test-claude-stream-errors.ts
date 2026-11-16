@@ -11,6 +11,7 @@
  *
  * 这份测试用假 CLI 输出把两条路都钉住。
  */
+import "./isolated-data.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

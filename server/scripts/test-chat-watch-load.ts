@@ -3,6 +3,7 @@
 // 下 3/12 漏报（rename / edit-existing / sync-write 拿到空附注）——晚到的 FSEvents 事件
 // 被 close() 永久丢弃且不降级。静默结算 + 武装窗口后必须稳定捕获；另铺不在观察范围内的
 // 背景 churn 抬高 fseventsd 投递负载，逼近真实并发场景。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

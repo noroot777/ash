@@ -12,6 +12,7 @@
 //   ③ 探测不到（非 git 目录、目录没了、根本没记起点）→ 同样闭嘴，绝不能抛 —— 这是个
 //      提示性功能，不许把一次正常结算带下水。
 // Run: npm -w server run test:turn-output
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

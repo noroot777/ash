@@ -50,6 +50,7 @@ requireTmpDb("test-multi-user-run");
 // 产物一律留在舞台里,别写进真实 data/runs(必须在 import paths.js 之前设)。
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+process.env.ASH_DATA_DIR ??= join(stage, "data");
 // spawn.ts 的隔离闸默认不许「真起执行器」。这条测试要的恰恰是真走完 spawn 链路 ——
 // 但 PATH 上那个 `claude` 是下面亲手种的假货,起的从来不是真 CLI。
 process.env.ASH_ALLOW_REAL_AGENT = "1";

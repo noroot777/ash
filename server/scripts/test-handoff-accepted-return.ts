@@ -10,6 +10,7 @@
 // 单进程直调，不 spawn 对端 server：两台机器用两个 git 仓库模拟，共用一个临时库，所以
 // 「持有机那条任务行」在打完包之后显式删掉（真实场景里它本来就在另一台机器的库里）。
 // ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn：万一续跑闸失手，也不会真拉起 CLI。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

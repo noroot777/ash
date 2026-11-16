@@ -7,6 +7,7 @@
 // 同一轮 F2 的另一半是「此刻还在等」压根不该从落盘产物反推:正文有缓冲(要到下一条非正文
 // 事件才冲进 trace),照 trace 判会在整段恢复回答期间一直说正在重试。所以这件事由事件消费链
 // 顺序维护,这里钉的就是那个状态机。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import type { AgentEvent } from "@ash/shared";
 import {

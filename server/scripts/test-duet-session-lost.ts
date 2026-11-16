@@ -13,6 +13,7 @@
  *   ⑤ 清完之后的下一轮开出新会话,那个新 id 要**写回库** —— 只清不写回,库里就一直是空
  * 跑:ASH_DB=/tmp/t.db npm -w server run test:duet-session-lost
  */
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

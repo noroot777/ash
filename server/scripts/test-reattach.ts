@@ -10,6 +10,7 @@
 process.env.ASH_DB ||= `/tmp/test-reattach-${Math.random().toString(36).slice(2)}.db`;
 process.env.ASH_LAX_DONE = "1"; // 这里验的是接管，不是严格 done 协议
 
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";

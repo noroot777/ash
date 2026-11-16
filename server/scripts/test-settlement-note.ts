@@ -9,6 +9,7 @@
 //   ② 它不是「上一回合的输入」：结算说明恒排在最后一个真人回合之后，`lastInputOf` 必须
 //      跳过它，否则每个「没交卷」的失败回合都会让「重跑上一回合」静默退回 resume。
 // 跑：npm -w server run test:settlement-note
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import { parseSessionOutput } from "@ash/shared/session-output";
