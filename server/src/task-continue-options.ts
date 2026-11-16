@@ -10,6 +10,7 @@ import type { TurnIdentity, TurnSource } from "./runs.js";
 // starts a fresh run via runTask (schedules.ts), so it never resumes.
 export type { ResumeReason } from "@ash/shared/system-resume";
 import type { ResumeReason } from "@ash/shared/system-resume";
+import type { FreezeGuard } from "./turn-freeze.js";
 
 /**
  * **这一轮没能起跑,是哪一种**(`continueTask` 返回 false 时必定带一个)。
@@ -150,7 +151,7 @@ export type ContinueTaskOptions = {
    * 还会把回合锁交接一次。普通续聊不开：在一个排队中/分组暂停的任务上发消息本来就允许，
    * 那不是被冻结的启动（说明见 turn-freeze.ts）。
    */
-  freezeGuard?: boolean;
+  freezeGuard?: FreezeGuard;
   /**
    * 「这一轮的输入**到底有没有进 agent 手里**」的回执回调 —— 在原话作为一个真人回合写进会话、
    * 并且问过协议层之后立刻调,不等这一轮跑完（`continueTask` 要等整轮结束才 resolve,那时早过了）。

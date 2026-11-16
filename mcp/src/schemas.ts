@@ -60,3 +60,11 @@ export const taskShape = z.object({
   labels: z.array(z.string()).optional().describe("任务标签"),
   prerequisites: z.array(z.string()).optional().describe(PREREQUISITES_GUIDE),
 });
+
+// 派活单上的一条（propose_dispatch）：建任务那几个参数照旧（去掉 workflowMode —— 一律自由工作流），
+// 标题、完整说明、一句备注必填：卡上一行就是标题和备注，建出来的任务正文就是 body。
+export const planTaskShape = taskShape.omit({ workflowMode: true }).extend({
+  title: z.string().min(1).describe("卡上这一行的标题"),
+  body: z.string().min(1).describe("完整说明，建出的任务正文就是它（目标、背景、约束、验收标准）"),
+  note: z.string().max(120).describe("标题下那一行小字：一句话说这条为什么、要注意什么"),
+});

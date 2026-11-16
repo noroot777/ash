@@ -88,7 +88,7 @@ function Fixture() {
       {teamHost
         ? <TeamReplyBox task={{ ...state.task, mode: "team" }} tasks={[]} onSend={async () => ({ started: true })} onAnswer={submitAnswer} />
         : <ReplyBox task={state.task} hasConversation onSend={async () => ({ started: true })} onStandingExecutorChange={async () => undefined}
-          command={{ matches: () => false, onSubmit: () => undefined, items: [{ command: "/team", label: "组队" }] }}
+          onDiscuss={async () => undefined}
           onAnswer={submitAnswer} />}
     </div>
     {payload && <pre aria-label="发给智能体的回复" style={{ padding: 12, margin: 0, borderTop: "1px solid var(--line)", fontSize: 11, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{payload}</pre>}

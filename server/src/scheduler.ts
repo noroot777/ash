@@ -9,23 +9,27 @@ import type { TurnIdentity } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
-import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
+import { reserveQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
 import { clearQueueAdvance, deferQueueAdvance, isQueueAdvanceCanceling, requestQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
 import { reclaimStrandedSeat, scheduleSeatReclaim } from "./queue-seat-reclaim.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
-import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
+import { withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
+import { currentPauseGeneration, dispatchPauseSince, notePauseOfGroup, pausedSince } from "./pause-generation.js";
+import { taskHoldOf, type TaskHold } from "./task-hold.js";
+import { oweHeldStart } from "./dispatch-hold-owed.js";
+import { startMember } from "./member-start.js";
 import { holdForPrerequisites } from "./prerequisite-launch.js";
-import { freeSlot, takeSlot, whenSlotFrees } from "./launch-slots.js";
 
 const MAX_PARALLEL = 4;
-let pauseGeneration = 0;
-const groupPauses = new Map<string, number>();
+
 type QueueAdvanceAttempt = {
   request?: QueueAdvanceRequest;
   candidate?: { taskId: string; generation: number };
   pauseGeneration: number;
+  /** 这一趟因「名下全部停下」作废、交成欠账的那一位：出了临界区当场兑现一次（按停那条可能已经放开）。 */
+  yielded?: string;
 };
 
 // 暂停整组(POST /groups/:id/pause 与团队的「停止全组」共用这一份):置 paused、
@@ -42,7 +46,7 @@ export async function pauseGroup(groupId: string): Promise<void> {
     await transaction.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
     await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(eq(tasks.groupId, groupId));
   }, { behavior: "immediate" });
-  groupPauses.set(groupId, ++pauseGeneration);
+  notePauseOfGroup(groupId);
   // 没有成员在跑时暂停只改了 groups.paused,不会有任何任务换状态:托盘的等待说明得单独通知。
   void import("./pending-wait.js").then(({ republishGroupWaits }) => republishGroupWaits(groupId))
     .catch((err) => console.error(`[ash] republishGroupWaits(${groupId}) failed:`, err));
@@ -103,7 +107,7 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
   // 一次正常返回,而责任只活在这个进程的内存里(第 1 轮审查 F2 跨进程实测:同库两笔持久
   // 写入一起失败,推进责任彻底蒸发;准入口径见 queue-advance-admission.ts)。
   const intent = await recordQueueAdvanceIntent(queueId);
-  const attempt: QueueAdvanceAttempt = { request, pauseGeneration };
+  const attempt: QueueAdvanceAttempt = { request, pauseGeneration: currentPauseGeneration() };
   const done = await retryableQueueAdvance(queueId, attempt, intent);
   if (intent || done.ok) return;
   // 候选是临界区里挑出来的,挑到了才知道该把这句话写给谁(没挑到就只剩日志与抛出)。
@@ -147,6 +151,28 @@ export function advanceQueueInBackground(queueId: string): void {
   void advanceQueue(queueId).catch((error) => console.error(`[ash] 后台队列推进失败 queue=${queueId}:`, error));
 }
 
+/**
+ * 推进因「按住」作废时，这次起跑不能跟着这一趟一起消失 —— 外层随后会把这条队列的推进意图当作了结
+ * 删掉（第 1 轮复审 F2：停完马上接着跑，这一趟才走到这里，队首那位从此没人起）。分组暂停不用交：
+ * 恢复分组时由分组那边重推整条队列。名下全部停下交给按停那一条的欠账，「接着跑」时由那边兑现；
+ * 那一条此刻已经放开了的，出了临界区当场兑现一次（kickOwedStart）。认谁按的：此刻还按着的那一条，
+ * 或者这一趟开始之后按过、已经放开的那一条（pause-generation.ts 记着）。
+ */
+async function yieldToHold(task: { id: string; groupId: string | null }, attempt: QueueAdvanceAttempt, hold?: TaskHold | null): Promise<"paused"> {
+  const current = hold === undefined ? await taskHoldOf(task) : hold;
+  const by = current ? (current.kind === "dispatch" ? current.byTaskId : null) : dispatchPauseSince(task.id, attempt.pauseGeneration);
+  if (by) {
+    await oweHeldStart(task.id, by);
+    attempt.yielded = task.id;
+  }
+  return "paused";
+}
+
+function kickOwedStart(taskId: string): void {
+  void import("./dispatch-hold.js").then(({ honorOwedStart }) => honorOwedStart(taskId))
+    .catch((error) => console.error(`[ash] 交给欠账的起跑当场兑现失败 task=${taskId}(tick 会再来):`, error));
+}
+
 async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt): Promise<void> {
   const request = attempt.request;
   // 「挑下一个」与「落 queued」收进队列认领临界区(queue-seat.ts,与手动运行/重跑/
@@ -168,15 +194,20 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
       && task.resumePromptGeneration === attempt.candidate!.generation)) {
       attempt.candidate = undefined;
     }
-    if (candidate?.groupId && (groupPauses.get(candidate.groupId) ?? 0) > attempt.pauseGeneration) return "paused";
+    if (candidate && pausedSince(candidate, attempt.pauseGeneration)) return yieldToHold(candidate, attempt);
     if (request) {
       const target = rows.find((task) => task.id === request.taskId);
       if (!target || target.queueAdvanceRequest?.id !== request.id
         || target.resumePromptGeneration !== request.resumePromptGeneration || target.archived
         || ["done", "failed", "canceled"].includes(target.status) || target.question || hasCliGoalHold(target.cliState)
-        || target.monitorHold || (target.groupId && await isPaused(target.groupId))) {
+        || target.monitorHold) {
         await clearQueueAdvance(request);
         return "paused";
+      }
+      const targetHold = await taskHoldOf(target);
+      if (targetHold) {
+        await clearQueueAdvance(request);
+        return yieldToHold(target, attempt, targetHold);
       }
       if (!candidate || candidate.id !== request.taskId) {
         deferQueueAdvance(queueId);
@@ -200,12 +231,16 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
     // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
-    if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    // 上面那条派活的任务按了「全部停下」同理(task-hold.ts):不起它、也不越过它,记一笔欠账,
+    // 「接着跑」时由那边兑现(dispatch-hold.ts)。
+    const hold = await taskHoldOf(candidate);
+    if (hold) return yieldToHold(candidate, attempt, hold);
     // 队首还在等前置站齐：不起，这一次「轮到它」已经记成等齐就起，齐了由那边再推这条队列。
     if (await holdForPrerequisites(candidate, { source: "queue" })) return null;
     attempt.candidate ??= { taskId: candidate.id, generation: candidate.resumePromptGeneration };
     const advanceRequest = request ?? await requestQueueAdvance(queueId, candidate);
-    if (!advanceRequest) return "paused";
+    // 落请求那一刻（事务里再认一次）被按住了，同上交出去；别的原因（删了、归档、落了终态）不欠。
+    if (!advanceRequest) return yieldToHold(candidate, attempt);
     attempt.request = advanceRequest;
     deferQueueAdvance(queueId);
     if (await preparePendingCheckpointStart(candidate.id)) {
@@ -246,10 +281,13 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // 在其间把这把锁拔走、另一轮占上(本轮审查 F1)。
     return { ...candidate, reservation, advanceRequest, turn };
   });
-  if (next === "paused") return;
+  if (next === "paused") {
+    if (attempt.yielded) kickOwedStart(attempt.yielded);
+    return;
+  }
   if (next && typeof next === "object") {
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
-    void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { reason: "queue", turnHeld: next.turn })
+    void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { origin: "auto", reason: "queue", turnHeld: next.turn })
       .catch((err) => {
         console.error(`[ash] 队列推进续跑(${next.id})失败:`, err);
         // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 由认领方
@@ -581,32 +619,41 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       // 就是假的:那一位要么正在跑,要么已经跑完(第 1 轮审查发现 4)。
       let spawned = false;
       try {
-        if (await preparePendingCheckpointStart(taskId)) return;
-        const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-        if (!before || (before.status === "paused" && (before.resumePrompt || await heldByMonitors(taskId)))) return;
-        if (await holdForPrerequisites(before, { source: "group" })) return;
-        const owner = claimOwnTurn(taskId);
-        if (!owner) return;
-        const reservation = taskQueueReservation(before);
-        try {
-          await reserveQueuedTask(reservation);
-          // 回执先到就先记下 spawned;这一位整轮跑完(或抛出)仍由 `run` 等到底,
-          // 分组的并发上限才还是「同时 N 个在跑」。
-          let run!: Promise<void>;
-          spawned = await waitForStartReceipt(taskId, () => {
-            run = resumeOrRunTask(taskId, { reason: "group", turnHeld: owner });
-            run.catch(() => {}); // 只为了别在 await 之前变成 unhandled;原 promise 照旧抛给下面
-            return run;
-          });
-          // 回执一到就退出扇出名单:这一位是**真的起跑了**,此后整组再出什么事都不该给它写
-          // 「这一轮没能起跑」—— 它那时多半还在跑(第 1 轮审查发现 4)。不等这一轮跑完才摘,
-          // 正是因为「还在跑」才是最容易被这句假话误伤的状态。
-          if (spawned) attempted?.owed.delete(taskId);
-          await run;
-        } finally {
-          releaseTurn(taskId, owner);
-          await restoreQueuedTask(reservation);
-        }
+        // 轮到名额才准入(member-start.ts):在哪、起没起过由那里重读,这里只答「按挑人时那同一把
+        // 尺子,它此刻还该被分组运行拉起吗」。等的期间进了队列的,由队列按位置起(入队那一下就推过)。
+        await startMember(groupId, taskId, {
+          prepare: async () => {
+            if (await preparePendingCheckpointStart(taskId)) return true;
+            // 还在等前置站齐的不起(prerequisite-launch.ts):齐了由那边起。那一问会动工作区,放在临界区外;
+            // 只问这一刻真要起的那几位(同下面 eligible 的尺子),别给起不来的记一笔「等齐就起」。
+            const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+            if (!row || !launchableMembers(await withMonitorHolds([row]), new Set()).length || await taskHoldOf(row)) return false;
+            return !!(await holdForPrerequisites(row, { source: "group" }));
+          },
+          eligible: async (row) => {
+            if (!launchableMembers(await withMonitorHolds([row]), new Set()).length) return false;
+            // 分组没停、这一位却被上面派活的那条按住了:不起,记欠账(同队列推进那一处)。
+            const hold = await taskHoldOf(row);
+            if (hold?.kind === "dispatch") await oweHeldStart(taskId, hold.byTaskId);
+            return !hold;
+          },
+          queued: async () => undefined,
+          start: async ({ owner }) => {
+            // 回执先到就先记下 spawned;这一位整轮跑完(或抛出)仍由 `run` 等到底,
+            // 分组的并发上限才还是「同时 N 个在跑」。
+            let run!: Promise<void>;
+            spawned = await waitForStartReceipt(taskId, () => {
+              run = resumeOrRunTask(taskId, { origin: "auto", reason: "group", turnHeld: owner });
+              run.catch(() => {}); // 只为了别在 await 之前变成 unhandled;原 promise 照旧抛给下面
+              return run;
+            });
+            // 回执一到就退出扇出名单:这一位是**真的起跑了**,此后整组再出什么事都不该给它写
+            // 「这一轮没能起跑」—— 它那时多半还在跑(第 1 轮审查发现 4)。不等这一轮跑完才摘,
+            // 正是因为「还在跑」才是最容易被这句假话误伤的状态。
+            if (spawned) attempted?.owed.delete(taskId);
+            await run;
+          },
+        });
       } catch (error) {
         if (spawned) {
           console.error(`[ash] 分组成员已起跑，随后失败 group=${groupId} task=${taskId}:`, error);
@@ -620,18 +667,17 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       }
     };
 
-    // 名额跟等齐就起共用一份（launch-slots.ts）：自己这一批没有在跑的、名额却被别人占满时，等有人跑完再接着起。
+    // 名额跟等齐就起、接着跑兑现欠账共用一份（launch-slots.ts），由 startMember 占：被别人占满时
+    // 它在里面等到有人跑完；这里只管自己这一批同时最多发出几位。
     while (pending.length || inflight.size) {
-      const paused = await isPaused(groupId);
-      if (!paused) {
-        while (pending.length && inflight.size < MAX_PARALLEL && takeSlot(groupId, pending[0]!.id)) {
+      if (!(await isPaused(groupId))) {
+        while (pending.length && inflight.size < MAX_PARALLEL) {
           const t = pending.shift()!;
-          const p = launch(t.id).finally(() => { inflight.delete(t.id); freeSlot(groupId, t.id); });
+          const p = launch(t.id).finally(() => inflight.delete(t.id));
           inflight.set(t.id, p);
         }
       }
       if (inflight.size) await Promise.race(inflight.values());
-      else if (!paused && pending.length) await whenSlotFrees();
       else break;
     }
     await parkQueued(groupId);

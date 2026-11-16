@@ -31,6 +31,7 @@ const RESUME_CAUSE: Record<ResumeReason, string> = {
   group: "分组运行",
   wake: "上游完成后续跑",
   repair: "打回重做",
+  hold: "接着跑",
 };
 
 export function turnCauseText(item: AgentItem): string | null {

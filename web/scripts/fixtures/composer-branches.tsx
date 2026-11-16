@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, Task, TaskMode } from "@ash/shared";
+import type { ProjectView, Task } from "@ash/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { ProjectGitContext } from "../../src/workspace/ProjectGitContext.tsx";
@@ -86,7 +86,6 @@ const projectOf = (projectId: string): ProjectView => ({
 
 function Fixture() {
   const [project, setProject] = useState(() => projectOf("p1"));
-  const [mode, setMode] = useState<TaskMode>("single");
   const [round, setRound] = useState(0);
   const [notices, setNotices] = useState<string[]>([]);
   const [records, setRecords] = useState(created);
@@ -110,7 +109,7 @@ function Fixture() {
       <button onClick={() => { holdCheckout = false; releaseCheckout?.(); setHolding(false); }}>完成分支切换</button>
       <span data-testid="holding">{holding ? "切换将延迟" : "正常切换"}</span>
     </header>
-    <TaskComposerPanel key={round} project={project} groups={[]} mode={mode} onModeChange={setMode}
+    <TaskComposerPanel key={round} project={project} groups={[]}
       onCancel={() => {}} onCreated={(_task: Task) => { setRecords([...created]); setRound((value) => value + 1); }}
       onCreateGroup={async () => { throw new Error("not used"); }} onProjectUpdated={setProject} notify={notify} />
     {/* 跟现场一样摆在侧栏最底下那一行里（钉在左下角），浮层从这一行的上沿往上弹。 */}

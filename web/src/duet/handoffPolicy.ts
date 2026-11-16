@@ -9,21 +9,21 @@ export function gateAllowsRevision(linkedTeam?: Pick<Task, "id"> | null): boolea
   return !linkedTeam;
 }
 
-// Team creation is the transaction boundary. These follow-ups must never throw
-// back into the creation form: otherwise a partial failure invites duplicate teams.
+// Task creation is the transaction boundary. These follow-ups must never throw
+// back into the creation form: otherwise a partial failure invites duplicate tasks.
 export async function runCreatedHandoffFollowUps({
   closeGate,
-  startTeam,
+  startTask,
 }: {
   closeGate: (() => Promise<unknown>) | null;
-  startTeam: () => Promise<unknown>;
+  startTask: () => Promise<unknown>;
 }): Promise<{ phase: "gate" | "start"; reason: unknown }[]> {
   const failures: { phase: "gate" | "start"; reason: unknown }[] = [];
   if (closeGate) {
     try { await closeGate(); }
     catch (reason) { failures.push({ phase: "gate", reason }); }
   }
-  try { await startTeam(); }
+  try { await startTask(); }
   catch (reason) { failures.push({ phase: "start", reason }); }
   return failures;
 }

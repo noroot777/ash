@@ -27,6 +27,7 @@ async function waitOf(m: Row & AfterGate, t: TaskRow | null, at: Date): Promise<
   // 次序跟 deliveryVerdict 一致:先看本任务这一轮,再看队列与分组。
   if (t.mode === "single" && t.status === "running") return { kind: "turn" };
   if (facts.groupPaused) return { kind: "groupPaused" };
+  if (facts.dispatchHold) return { kind: "dispatchHeld", by: { id: facts.dispatchHold.byTaskId, title: facts.dispatchHold.byTitle } };
   if (facts.queueBlocking.length) return { kind: "queue", blockers: facts.queueBlocking };
   // queued = 已被拉起、还没 spawn:也是在等本任务这一轮。
   if (t.mode === "single" && t.status === "queued") return { kind: "turn" };

@@ -1,6 +1,7 @@
 import type { ReactNode, RefObject } from "react";
 import type { AgentType, DiscussionRounds, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import type { QuestionAnswerInput } from "@ash/shared/questions";
+import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import type { IconMenuItem } from "../components/IconMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -42,18 +43,9 @@ export type ReplyBoxProps = {
    * `label` 只是提示文案用的执行器名，别当业务字段使。
    */
   onStandingExecutorChange?: (next: StandingExecutor, label: string) => Promise<void>;
-  command?: {
-    matches: (text: string) => boolean;
-    onSubmit: (text: string) => void;
-    onChange?: (text: string) => void;
-    onCancel?: () => void;
-    resetKey?: number;
-    items: { command: string; label: string; hint?: string }[];
-  };
-  // 当前执行器已装的技能。选中只把 `/名字` 补进正文，不把它当派生命令截走；
+  // 当前执行器已装的技能。选中只把 `/名字` 补进正文，不把它当命令截走；
   // server 会在运行这一回合前注入对应 SKILL.md。
   skills?: SkillEntry[];
-  inlinePanel?: ReactNode;
   /** 框上方只放状态（验收前置命令在跑之类）；没有就不占地方。 */
   topRail?: ReactNode;
   /** 框里那一行左边、附件后面的动作（再审、打开预览、接力到…）（docs/ui-ux-audit reply-3）。 */
@@ -69,11 +61,17 @@ export type ReplyBoxProps = {
   override?: ReplyOverride;
   /** 这条任务自己有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
   onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+  /** 那一问是这条任务自己摆的派活单时，「派出去」交给 ash 照卡建（DispatchPlanCard.tsx）。 */
+  onLaunchPlan?: (input: DispatchLaunchInput) => Promise<void>;
+  /** 「派出去的活交给谁」（胶囊点开那一层里的一行）：null = 同这里。不给就不出这一行。 */
+  onDispatchTargetChange?: (target: DispatchRunTarget | null) => Promise<void>;
   /**
    * `@` 了人之后的「派出去」：开一条新任务交给他（replyDispatch.ts）。失败就抛，框里的人、做法和字都留着。
    * 不给 = 这里派不出去（团队执行者、审查任务），`@` 只剩问一句，框顶那一行不出。
    */
   onDispatch?: (input: { text: string; attachments: string[]; target: MentionTarget; worktreeBase: string | null }) => Promise<void>;
+  /** 托盘里「某某名下已全部停下」点过去打开那一条。 */
+  onOpenTask?: (taskId: string) => void;
   /**
    * `@` 了人之后的「讨论」：叫上的人（`people`，一到两个）和这条任务的执行器来回几段（replyDiscuss.ts）。失败就抛，
    * 框里的人、轮数和字都留着。不给 = 这里开不了讨论（团队执行者、审查任务、预设工作流的任务）。

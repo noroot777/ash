@@ -35,8 +35,6 @@ import type {
   TaskListItem,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
-  TeamPreset,
-  TeamPresetConfig,
 } from "@ash/shared";
 
 import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult } from "@ash/shared/accept-gate";
@@ -198,6 +196,11 @@ export const api = {
     request(`/groups/${id(groupId)}/run`, { method: "POST" }),
   pauseGroup: (groupId: string): Promise<Group> =>
     request(`/groups/${id(groupId)}/pause`, { method: "POST" }),
+  // 「派出的任务」格头那一对键：这条任务名下全部停下 / 接着跑（server/src/dispatch-hold.ts）。
+  holdDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/hold`, { method: "POST" }),
+  releaseDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/release`, { method: "POST" }),
   createTasksBatch: (
     groupId: string,
     body: BatchCreateTasksBody,
@@ -279,6 +282,12 @@ export const api = {
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
   answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
+  // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
+  launchDispatchPlan: (taskId: string, input: import("@ash/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
+    request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
+  // 「派出去的活交给谁」：null = 同这里。
+  setDispatchTarget: (taskId: string, target: import("@ash/shared/dispatch-plan").DispatchRunTarget | null): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatch-target`, json("PUT", { target })),
   replyTask: (
     taskId: string,
     text: string,
@@ -568,15 +577,6 @@ export const api = {
     request(`/workflows/${id(workflowId)}`, { method: "DELETE" }),
   restoreWorkflow: (workflowId: string): Promise<WorkflowItem> =>
     request(`/workflows/${id(workflowId)}/restore`, { method: "POST" }),
-
-  teamPresets: (): Promise<TeamPreset[]> => request("/team-presets"),  createTeamPreset: (name: string, config: TeamPresetConfig): Promise<TeamPreset> =>
-    request("/team-presets", json("POST", { name, config })),
-  patchTeamPreset: (
-    presetId: string,
-    patch: { name?: string; config?: TeamPresetConfig },
-  ): Promise<TeamPreset> => request(`/team-presets/${id(presetId)}`, json("PATCH", patch)),
-  deleteTeamPreset: (presetId: string): Promise<{ deleted: true }> =>
-    request(`/team-presets/${id(presetId)}`, { method: "DELETE" }),
 
   // signal：会话列表是排成一条链读的（见 lib/useConversation.ts），一发卡住就轮不到
   // 后面的，所以调用方要能给它设上限、也能在用户手动重读时把它掐掉。

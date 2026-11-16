@@ -16,7 +16,8 @@ import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
-import { resolveDispatchedBy } from "./task-dispatch.js";
+import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
+import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@ash/shared/dispatch-plan";
 import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
 
 export type TaskRow = typeof tasks.$inferSelect;
@@ -130,12 +131,17 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   originTaskId: r.originTaskId ?? null,
   creationOrigin: parseTaskCreationOrigin(r.creationOrigin),
   dispatchedBy: r.dispatchedBy ?? null,
+  dispatchHoldAt: r.dispatchHoldAt ?? null,
+  dispatchHoldPendingAt: r.dispatchHoldPendingAt ?? null,
   resumePrompt: r.resumePrompt ?? null,
   verifyRound: r.verifyRound ?? null,
   question: r.question ?? null,
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
   questionHistory: r.questionHistory ? JSON.parse(r.questionHistory) : [],
+  // 只在它绑的那一问还在时下发（shared/src/dispatch-plan.ts `activeDispatchPlan`）。
+  dispatchPlan: activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) }),
+  dispatchTarget: parseDispatchTarget(r.dispatchTarget),
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
 });
@@ -284,6 +290,8 @@ async function snapshotExecutor(row: NewTaskRow): Promise<string | null> {
 // 等锁可能等很久，等着的这段时间里委派来源可能已经不作数了（聊天派生的任务：群聊被删了），
 // 而 createTasks 一旦越过这里就只管把行插进去。抛出即取消创建，此时还没有分支计划、没有
 // 插入，无需回滚。放在这里而不是调用方 `await createTasks()` 之前——那太早，锁还没拿到。
+type TaskTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export async function createTasks(
   rows: NewTaskRow[],
   afterInsert?: () => Promise<void>,
@@ -292,6 +300,16 @@ export async function createTasks(
   alsoAdmit: (string | null | undefined)[] = [],
   /** 这一批里逐条写的前置（下游可以是这一批里的，前置也可以是已有的任务）。不成立就整批不建。 */
   prerequisites: PrerequisiteEdge[] = [],
+  /**
+   * 要跟这批任务同一笔提交的写（派活单：认领那一问、分组、队列，dispatch-plan-launch.ts）。`before` 在插任务之前、
+   * `after` 在之后，都在同一个事务里；任一步抛错整笔回滚，一条都不留。只能用传进来的事务写，别碰根 `db`。
+   */
+  atomic?: {
+    before?: (transaction: TaskTransaction) => Promise<void>;
+    after?: (transaction: TaskTransaction) => Promise<void>;
+    /** 那一笔提交成功的那一刻（之后的读回、广播再抛错，调用方据此知道任务已经建好了）。 */
+    onCommitted?: () => void;
+  },
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
   for (const row of rows) {
@@ -317,7 +335,9 @@ export async function createTasks(
     ...row,
     creationOrigin: row.creationOrigin === undefined ? null : row.creationOrigin,
   })));
-  const normalizedRows = await Promise.all(rows.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
+  // 没指明交给谁、又收在某条任务名下的：交给那条任务「派出去的活交给谁」的默认值（task-dispatch.ts）。
+  const assigned = await withDispatchDefaults(rows, dispatchedBy);
+  const normalizedRows = await Promise.all(assigned.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
     const requested = row.useWorktree ?? worktreeDefaultByProject.get(row.projectId) ?? false;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
     const { workflowId, ...rest } = row;
@@ -362,8 +382,18 @@ export async function createTasks(
       // 判环与落边在整张图上排队（prerequisite-store.ts `withPrerequisiteGraph`）；不带前置的照旧直接落。
       const land = async () => {
         await assertPrerequisiteEdges(prerequisites, normalizedRows.map(edgeTaskOf));
-        await db.insert(tasks).values(normalizedRows);
-        await insertPrerequisiteEdges(prerequisites);
+        if (!atomic) {
+          await db.insert(tasks).values(normalizedRows);
+          await insertPrerequisiteEdges(prerequisites);
+          return;
+        }
+        await db.transaction(async (transaction) => {
+          await atomic.before?.(transaction);
+          await transaction.insert(tasks).values(normalizedRows);
+          await insertPrerequisiteEdges(prerequisites, transaction);
+          await atomic.after?.(transaction);
+        }, { behavior: "immediate" });
+        atomic.onCommitted?.();
       };
       await (prerequisites.length ? withPrerequisiteGraph(land) : land());
     } catch (error) {

@@ -137,7 +137,7 @@ try {
   // 答题卡接管的是整套输入：普通回复框里敲到一半的斜杠菜单，在卡展开时跟着退下，草稿原样留着。
   await page.getByRole("button", { name: "撤下提问" }).click();
   await card.waitFor({ state: "detached" });
-  await replyBox.fill("/te");
+  await replyBox.fill("/讨");
   const slashMenu = page.locator(".task-reply-command-menu");
   await slashMenu.waitFor();
   await page.getByRole("button", { name: "单题" }).click();
@@ -145,7 +145,7 @@ try {
   assert.equal(await slashMenu.isVisible(), false, "卡展开时普通回复框的补全菜单不能还挂着");
   assert.equal(await visibleInputs(), 1);
   await card.getByRole("button", { name: "收起答题卡，先看上文" }).click();
-  assert.equal(await replyBox.inputValue(), "/te", "收起后普通回复的草稿原样在");
+  assert.equal(await replyBox.inputValue(), "/讨", "收起后普通回复的草稿原样在");
   await card.locator(".question-card-peek").click();
 
   // 框里的工具开出来的浮层（选执行器、发送设置、截图批注）都 portal 在 body 上：卡展开时它们跟着框一起
