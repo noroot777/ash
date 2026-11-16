@@ -20,7 +20,9 @@ try {
   // 老形状：`ended_at NOT NULL`、有两轮历史、外加一对「同一回合两行」（没有唯一索引时才可能）。
   await dbClient.executeMultiple(`
     CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT, agent_type TEXT, executor TEXT,
-      cwd TEXT, started_at TEXT NOT NULL, ended_at TEXT, turn_started_at TEXT, active_ms INTEGER,
+      -- exit_status 从第一版建表起就有、没有补列迁移：真实的老库里一定在，这里也得在
+      --（「任务能做什么」那组触发器读它，见 db/task-action-triggers.ts）。
+      cwd TEXT, started_at TEXT NOT NULL, ended_at TEXT, exit_status INTEGER, turn_started_at TEXT, active_ms INTEGER,
       -- 上一版（0f89b2b8）已经有 turns_started 和 turns_base 两列,但还没有 turns_base_approx。
       -- 这就是「中间版本跑过真实任务」之后库里的样子,回填必须认得出它不可信。
       turns_started INTEGER, turns_base INTEGER);

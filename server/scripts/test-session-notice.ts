@@ -40,6 +40,7 @@ const { tasks, sessions } = await import("../src/db/schema.js");
 const { bus } = await import("../src/bus.js");
 const { RUNS_DIR } = await import("../src/paths.js");
 const { parseSessionTrace } = await import("../src/transcript.js");
+const { parseSessionOutput } = await import("@ash/shared/session-output");
 const { consumeSingleRun } = await import("../src/single-run.js");
 await ensureSchema();
 
@@ -180,6 +181,18 @@ assert.ok(persistedSettlement, `.md 里没有结算说明的 system 回合行：
 assert.equal(persistedSettlement.level, "notice", "结算说明落盘时把 level 丢了");
 assert.ok(md.includes("这一轮正文已经完整产出。"), "正文本身必须原样落盘");
 ok(".md 留下持久 system 注记（含 level），刷新后还在");
+
+// 旁注落在这一回合的结束标记**之后**，而且只落一次。夹在正文和结束标记之间，重建时结束时间
+// 盖不到 agent 气泡上，这一回合的用时就退回「算到下一次说话为止」；收尾链正常走完之后异常
+// 兜底还会再 flush 一次，写两遍、或者写到已经 end 的流上（当场打崩 server）都是它没先取空。
+const rebuilt = parseSessionOutput(md);
+const agentAt = rebuilt.findIndex((segment) => segment.kind === "agent");
+assert.ok(agentAt >= 0 && rebuilt[agentAt]?.endedAt, `agent 气泡没拿到结束时间：${JSON.stringify(rebuilt.map((s) => [s.kind, s.endedAt]))}`);
+const rotationAt = rebuilt.findIndex((segment) => segment.kind === "system" && segment.text.includes("全新会话"));
+assert.ok(rotationAt > agentAt, "轮换旁注要独立成段、排在这一回合的正文之后");
+assert.equal(systemTurnTexts.filter((text) => text.includes("全新会话")).length, 1, "轮换说明只落盘一次");
+assert.equal(systemTurnTexts.filter((text) => text === DIAGNOSIS).length, 1, "诊断只落盘一次");
+ok("旁注排在回合结束标记之后、只落一次：气泡的结束时间还在");
 
 // 既有语义一个都不能被这次改动动到：exit 0 照记，恢复字段照清。
 const row = (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!;

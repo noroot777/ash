@@ -312,13 +312,9 @@ assert.equal(
   "旁注夹在正文和 agentEnd 之间会让 agent 气泡丢掉结束时间(所以两条链都必须写在 agentEnd 之后)",
 );
 
-// 落盘顺序由代码保证:两条链都得先 writeTurnEnd,再补旁注。
+// 落盘顺序由代码保证:两条链都得先 writeTurnEnd,再补旁注。单飞那一条由 test-session-notice.ts
+// 真跑一回合、从落盘的 .md 上验(气泡拿得到结束时间、旁注独立成段排在后面)。
 const singleRunCode = readSource(join(SRC, "single-run.ts"));
-assert.match(
-  singleRunCode,
-  /writeTurnEnd\(out, endIso\);[^\n]*\n\s*flushSessionNotices\(\);/,
-  "single-run 的轮换旁注必须写在 writeTurnEnd 之后",
-);
 // 而且不能只在正常尾部落盘:清库/重放/结算任何一步抛错,旁注就只活在实时 SSE 里,
 // 用户一刷新什么都看不到,还会去重试同一条坏会话。异常路径必须有兜底 flush。
 assert.match(
@@ -326,13 +322,8 @@ assert.match(
   /\} finally \{[\s\S]{0,600}?flushSessionNotices\(\);[\s\S]{0,200}?await closeExecution\("failed", now\(\)\);/,
   "single-run 的 finally 必须兜底把轮换旁注落盘,否则异常路径上这条证据会整个消失",
 );
-// 兜底能安全跑两次的前提:flush 先把缓冲取空。否则正常路径已经 end 掉流之后再写一次,
-// 会当场把整个 server 打崩(ERR_STREAM_WRITE_AFTER_END)。
-assert.match(
-  singleRunCode,
-  /const flushSessionNotices = \(\) => \{\s*\n\s*const notices = sessionNotices\.splice\(0\);/,
-  "flushSessionNotices 必须先取空再写,否则 finally 那次兜底会把同一条写两遍/写到已 end 的流上",
-);
+// 兜底能安全跑两次(正常路径 flush 过一次,finally 里还会再来一次):test-session-notice.ts 真跑的
+// 那一回合两次都走到,旁注只落盘一次、流也没被写在 end 之后。
 for (const fence of [/writeTurnEnd\(lead\.out, endIso\);[^\n]*\n\s*flushSessionNotices\(lead\)/]) {
   assert.match(teamSessionCode, fence, "team 的轮换旁注必须紧跟在 writeTurnEnd 之后落盘");
 }
@@ -341,15 +332,8 @@ assert.equal(
   3, // endTurn + closeLead + retireLead:回合正常结束、进程没了、被接管换台,三条路都得落盘
   "endTurn / closeLead / retireLead 都要 flush 旁注,漏一条那一路的旁注就只活在 SSE 里",
 );
-// 但「flush 排在 writeTurnEnd 之后」还不够:那一行写库一旦**抛出去**,flush 根本轮不到
-// —— 而它跑在 consume 的 for-await 里,抛出去掀掉的是整台调度台(第 2 轮审查现场,理由
-// 写在 team/session.ts 的 reportLeadFailure 顶部)。所以收尾链上的写库一律走
-// persistOrReport;真失败下的行为由 test-team-lead-resilience.ts 注入触发器实测。
-assert.match(
-  teamSessionCode,
-  /async function endTurn[\s\S]*?await updateOwnSession\(\s*lead,\s*"回合收尾状态"/,
-  "endTurn 的回合收尾写库必须走 updateOwnSession(它内含 persistOrReport),否则一次写库失败会掀掉整台调度台",
-);
+// 「flush 排在 writeTurnEnd 之后」还不够:那一行写库一旦**抛出去**,flush 根本轮不到 ——
+// 真失败下的行为由 test-team-lead-resilience.ts ① 注入触发器实测。
 // scope 分流:三条链都得认这个字段,少一条就会在成功回合上记异常。判据只有 session-notice.ts
 // 那一份 —— 谁在自己那条链上再内联写一次 `scope === "session"`,改一处就会漏一处
 // (test-session-notice.ts 从反面钉着同一条)。
@@ -368,12 +352,8 @@ assert.match(
   /rotation\.announced \? ROTATION_ALREADY_ANNOUNCED : dropNote/,
   "consume 里已经播过轮换说明时,closeLead 应只补指路而不是整段重复",
 );
-// 中途清库那一步也要认「这条会话行已被新进程接管」,否则会抹掉新进程刚写进去的 id。
-assert.match(
-  teamSessionCode,
-  /if \(leads\.get\(lead\.taskId\) === lead\) \{\s*\n\s*let note = sessionResumeFaultNote\("poisoned"\);\s*\n\s*try \{\s*\n\s*await db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)/,
-  "常驻中途作废会话前必须排除 superseded,否则会清掉新进程的有效 id",
-);
+// 中途清库那一步也要认「这条会话行已被新进程接管」,否则会抹掉新进程刚写进去的 id ——
+// 按行为钉在 test-team-lead-resilience.ts ⑧(被接管之后才判死的旧台)。
 ok("常驻中途作废:不重播说明,也不抹掉接管进程的新会话 id");
 
 // ── ⑦ 轮换状态机:标志位必须跟着会话一起翻篇 ────────────────────────────────

@@ -232,6 +232,8 @@ try {
   async function* sharedOldScript(): AsyncGenerator<AgentEvent> {
     sharedOldReady();
     await holdSharedOld; // 新台接管之后才轮到它收尾
+    // 出局之后才判死自己那条会话:中途清库那一步同样不许碰新台的那一行(下面 cliSessionId 那条)。
+    yield { kind: "error", message: POISON, scope: "session" };
     yield { kind: "done", exitStatus: 7 };
   }
   await startLead({ taskId: SHARED, sessId: SHARED_SESS, cliSessionId: "old-thread", events: sharedOldScript() });

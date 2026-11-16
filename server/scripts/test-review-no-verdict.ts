@@ -17,7 +17,7 @@
 //   4. 状态接口只在这一轮仍是「error 且没结论」时带出 noVerdict；合并结果审查的尾注带 source=merge
 //   5. 看门狗熔断的原因取自熔断判据的同一批事件：穿过子智能体包装、只认最后那条、恢复过就不沿用
 //      （第 3 轮审查第 1 条）；判决没类型时不说成「上游连不上」
-//   6. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线）
+//   6. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线：真的跑一回合审查者的收尾）
 //   7. 那份记录上线之前断掉、没存过原因的轮次：状态接口按盘上的事实现算（诊断文件、会话 trace、
 //      判决日志、会话与回合行、报告在不在）；原话进结构，只认执行器说的；类型只认当时挂上的，执行
 //      故障只认消费链收到过的（原始事件文件不读）；什么都读不到就不带。看门狗熔断的老回合：诊断里
@@ -26,7 +26,7 @@
 //
 // 跑：npm -w server run test:review-no-verdict
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -390,15 +390,39 @@ try {
     __resetStallFailures();
   }
 
-  // ── 6. 接线 ───────────────────────────────────────────────────────────────
+  // ── 6. 接线：真的跑一回合审查者的收尾 ───────────────────────────────────────
   {
-    const run = readFileSync(new URL("../src/single-run.ts", import.meta.url), "utf8");
-    assert.match(run, /const failure = executionFailed \? \{ exitStatus, verdict: watchdogFailure, error: lastExecutionError \} : null;/,
-      "单飞收尾按「这一回合自己异常结束」交事实：退出码、看门狗判决（带熔断那条错误的类型）、那条执行故障");
-    assert.doesNotMatch(run, /lastRetryModel/, "熔断原因不另收一份：只认看门狗判决里的");
-    assert.match(run, /noteReviewerChannelGap\(\{[^}]*failure \}\)/, "交进说明里");
-    assert.match(run, /sawExecutionError = true; if \(!lastExecutionError\?\.model \|\| emittedEvent\.model\) lastExecutionError = emittedEvent;/,
-      "带模型类型的那条不被后面的执行诊断汇总盖掉");
+    const { consumeSingleRun } = await import("../src/single-run.js");
+    const { claimOwnTurn, releaseHeldTurn } = await import("../src/turn-lock.js");
+    const s = await scene({ work: false });
+    const upstream = codexErrorEvent({ error: { message: UPSTREAM_503 } })!.event;
+    assert.ok(claimOwnTurn(s.taskId, "reviewer", { run: s.runId, round: 1 }), "回合锁本来就该是空的");
+    const out = createWriteStream(sessionTranscriptPath(s.taskId, s.sessId), { flags: "a" });
+    const closed = new Promise<void>((resolve) => out.on("close", resolve));
+    try {
+      await consumeSingleRun({
+        taskId: s.taskId, sessId: s.sessId, agentType: "codex", role: "reviewer",
+        ex: { model: null, reasoningEffort: null, resumeFields: () => ({}) } as never,
+        cwd: repo,
+        handle: {
+          sessionId: s.sessId, commandLine: "fake", kill() {},
+          events: (async function* (): AsyncGenerator<AgentEvent> {
+            yield { kind: "text", text: "先读 diff。\n" };
+            yield upstream;
+            // 执行器收尾时再报一条不带类型的诊断汇总：不许盖掉前面那条带模型类型的。
+            yield { kind: "error", message: "codex exited with code 1" };
+            yield { kind: "done", exitStatus: 1 };
+          })(),
+        } as never,
+        out, turnStart: at, cliSessionId: s.sessId, autoTitle: false,
+      });
+      await closed;
+    } finally {
+      releaseHeldTurn(s.taskId);
+    }
+    assert.deepEqual(await s.cause(), { kind: "interrupted", reason: "模型上游连不上（503）" },
+      "单飞收尾把「这一回合自己异常结束」的事实交进说明：退出码、带模型类型的那条执行故障");
+    assert.match(s.timeline(), /模型上游连不上（状态码 503）/, "那句话落在审查者自己的会话里");
   }
 
   // ── 7. 没存过原因的老轮次：按盘上的事实现算 ────────────────────────────────────
