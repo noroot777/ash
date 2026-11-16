@@ -74,13 +74,23 @@ function stageModule(cwd) {
 // 装「收到信号就自己关掉然后 process.exit」的处理（Playwright 的 launchServer 装 SIGINT/SIGTERM/
 // SIGHUP，vite 的 createServer 装 SIGTERM 和 stdin 结束），哪个先跑哪个就把执行器带走了，
 // 收场还没开始。所以起台子期间新装上的这几类处理一律摘掉，台子由执行器在收尾时自己 stop。
+//
+// 台子跑在执行器进程里，起它的这一段把执行器的临时目录变量临时换成 `scratch`（跟叶子一样的那
+// 几个）：台子起的 Chrome、Playwright 的临时 profile 落在它里面，收尾时跟着整棵根一起删 —— 浏览器
+// 是直接杀的，自己不会收。这段时间里起的叶子不受影响，它们的这几个变量都由 leafScratch 另给。
 const EXIT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
-async function startStageExclusively(module) {
+async function startStageExclusively(module, scratch) {
   const before = new Map(EXIT_SIGNALS.map((name) => [name, process.listeners(name)]));
   const stdinBefore = process.stdin.listeners("end");
+  const saved = TMP_ENV_KEYS.map((key) => [key, process.env[key]]);
   try {
+    for (const key of TMP_ENV_KEYS) process.env[key] = scratch.env[key];
     return await import(module).then((loaded) => loaded.startSharedStage());
   } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     for (const name of EXIT_SIGNALS) {
       for (const listener of process.listeners(name)) {
         if (!before.get(name).includes(listener)) process.removeListener(name, listener);
@@ -138,6 +148,11 @@ function writeHistory(updates) {
 // server/src/executors/model-probe.ts）。测探测本身的那几条自己把它拿掉、换成假 CLI。
 const LEAF_ENV = { ASH_TEST_NO_MODEL_PROBE: "1" };
 
+// 系统临时目录认的变量。`MAC_CHROMIUM_TMPDIR`：macOS 上的 Chrome 不看 TMPDIR，单例套接字的目录
+// （`com.google.Chrome.XXXXXX`）按它找、没有就落到系统默认的临时目录；测试关浏览器是直接杀的，
+// 这个目录没人删，每起一次 Chrome 留一个。
+const TMP_ENV_KEYS = ["TMPDIR", "TMP", "TEMP", "MAC_CHROMIUM_TMPDIR"];
+
 function leafScratch(root, name) {
   const base = join(root, name);
   const data = join(base, "data");
@@ -145,7 +160,7 @@ function leafScratch(root, name) {
   mkdirSync(data, { recursive: true });
   mkdirSync(tmp, { recursive: true });
   return {
-    env: { ASH_DATA_DIR: data, TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+    env: { ASH_DATA_DIR: data, ...Object.fromEntries(TMP_ENV_KEYS.map((key) => [key, tmp])) },
     remove: () => rmSync(base, { recursive: true, force: true, maxRetries: 3 }),
   };
 }
@@ -194,7 +209,7 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
   const stageEnv = (cwd) => {
     const module = stageModule(cwd);
     if (!module) return Promise.resolve({});
-    if (!stages.has(module)) stages.set(module, startStageExclusively(module));
+    if (!stages.has(module)) stages.set(module, startStageExclusively(module, leafScratch(dataRoot, `stage-${stages.size}`)));
     return stages.get(module).then((stage) => stage.env);
   };
 

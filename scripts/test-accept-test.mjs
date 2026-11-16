@@ -69,6 +69,7 @@ function fixture(context, { backend = "node backend.mjs && npm run test:more", w
     writeFileSync(join(${JSON.stringify(root)}, ${JSON.stringify(`${name}.json`)}),
       JSON.stringify({ cwd: process.cwd(), event: process.env.npm_lifecycle_event, stage: process.env.FIXTURE_STAGE ?? null,
         data: process.env.ASH_DATA_DIR ?? null, dataReady: isDir(process.env.ASH_DATA_DIR), tmp: tmpdir(), leftover,
+        chromeTmp: process.env.MAC_CHROMIUM_TMPDIR ?? null,
         environment: Object.keys(process.env).filter((key) => /^ASH_(?:DB|RUNS_DIR)$/i.test(key)) }));
     console.log(${JSON.stringify(stdout)});
     console.error(${JSON.stringify(`${stdout}_STDERR`)});
@@ -278,9 +279,14 @@ test("验收子进程不继承宿主数据库与运行目录，包括大小写�
 
 test("包声明的共用台子只交给本包的叶子，跑完收掉", parallelOnly, (context) => {
   const root = fixture(context, { webExtra: { testStage: "stage.mjs" } });
+  // 台子跑在执行器进程里：它起的浏览器、临时 profile 落在执行器给的临时目录里，收尾跟着删。
   writeFileSync(join(root, "web", "stage.mjs"), `
-    import { writeFileSync } from "node:fs";
+    import { mkdtempSync, writeFileSync } from "node:fs";
+    import { tmpdir } from "node:os";
+    import { join } from "node:path";
     export async function startSharedStage() {
+      const leftover = mkdtempSync(join(tmpdir(), "fixture-stage-"));
+      writeFileSync(${JSON.stringify(join(root, "stage.json"))}, JSON.stringify({ tmp: tmpdir(), chromeTmp: process.env.MAC_CHROMIUM_TMPDIR ?? null, leftover }));
       return { env: { FIXTURE_STAGE: "shared" }, stop: async () => writeFileSync(${JSON.stringify(join(root, "stopped"))}, "") };
     }
   `);
@@ -289,6 +295,11 @@ test("包声明的共用台子只交给本包的叶子，跑完收掉", parallel
   assert.equal(seen(root, "web").stage, "shared");
   assert.equal(seen(root, "backend").stage, null);
   assert.equal(existsSync(join(root, "stopped")), true);
+  const stage = seen(root, "stage");
+  assert.ok(stage.tmp !== root && !stage.leftover.startsWith(root), `台子用的还是宿主的系统临时目录：${stage.tmp}`);
+  assert.equal(stage.chromeTmp, stage.tmp);
+  assert.equal(existsSync(stage.leftover), false, "台子留在临时目录里的东西跑完还在");
+  assert.notEqual(seen(root, "web").tmp, stage.tmp, "叶子跟台子共用了临时目录");
 });
 
 test("叶子退出后它 detached 出去的后台进程也收掉，红绿都一样", parallelOnly, (context) => {
@@ -412,6 +423,7 @@ test("每条叶子拿到自己的系统临时目录，留在里面的东西跑�
     assert.ok(ran.tmp !== root && !ran.leftover.startsWith(root), `${name} 用的还是宿主的系统临时目录：${ran.tmp}`);
     assert.equal(existsSync(ran.leftover), false, `${name} 留在系统临时目录里的东西跑完还在`);
     assert.equal(existsSync(ran.tmp), false, `${name} 的系统临时目录跑完还留着`);
+    assert.equal(ran.chromeTmp, ran.tmp, `${name} 起的 Chrome 会把单例目录落到系统默认临时目录`);
     return ran.tmp;
   });
   assert.equal(new Set(dirs).size, 3, "几条叶子共用了同一个系统临时目录");
