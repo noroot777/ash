@@ -7,7 +7,8 @@
 //   ⑤ 别的旁注一律不给路。
 // 跑：npm -w web run test:notice-links
 import assert from "node:assert/strict";
-import type { FreeReviewRun, TimelineNotice } from "@ash/shared";
+import type { FreeReviewRun } from "@ash/shared";
+import type { TimelineNotice } from "@ash/shared/timeline-notice";
 import type { ConversationEventItem } from "../src/task-detail/conversationModel.ts";
 import type { ReviewTarget } from "../src/review/reviewTarget.ts";
 import { disputeReviewTarget, noticeLink, noticeMonitorId, type NoticeLinkTargets } from "../src/task-detail/noticeLinks.ts";

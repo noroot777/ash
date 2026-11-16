@@ -105,9 +105,9 @@ function backend() {
         return route.fulfill({ json: snapshot });
       }
       if (list && method === "POST") {
-        const body = JSON.parse(request.postData() ?? "{}").body;
+        const { body = "", attachments = [] } = JSON.parse(request.postData() ?? "{}");
         const at = new Date(Date.now() + ++seq * 1000).toISOString();
-        const memo = { id: `m${seq}`, taskId: list[1], body, createdAt: at, updatedAt: at };
+        const memo = { id: `m${seq}`, taskId: list[1], body, attachments, createdAt: at, updatedAt: at };
         rows.unshift(memo);
         // 摘要跟着写入走（真后端是从同一张表算的），否则「写完那一列该显示新的」测不出来。
         this.digestOf.set(list[1], { text: body, at });
@@ -116,7 +116,9 @@ function backend() {
       if (one && method === "PATCH") {
         if (this.failPatch) return route.fulfill({ status: 503, json: { error: "保存失败（503）" } });
         const memo = rows.find((row) => row.id === one[2]);
-        memo.body = JSON.parse(request.postData() ?? "{}").body;
+        const content = JSON.parse(request.postData() ?? "{}");
+        if (content.body !== undefined) memo.body = content.body;
+        if (content.attachments !== undefined) memo.attachments = content.attachments;
         memo.updatedAt = new Date(Date.now() + ++seq * 1000).toISOString();
         this.digestOf.set(one[1], { text: memo.body, at: memo.updatedAt });
         if (this.holdWrites) {
@@ -472,11 +474,8 @@ try {
     await api.releaseWrites();
     // 那一发收尾跑完的证据有两种形态：占位交还（框子重新可用）= 对的那种；草稿被清掉
     // （编辑框整个消失）= 回归的那种。两种都等，才能把失败报在断言上而不是等待超时。
-    await page.waitForFunction(() => {
-      const node = document.querySelector(".task-memo-card__edit textarea");
-      return !node || !node.disabled;
-    });
-    const editor = panel.locator(".task-memo-card__edit textarea");
+    const editor = panel.getByRole("textbox", { name: "备忘内容", exact: true });
+    await waitUntil(async () => (await editor.count()) === 0 || await editor.isEnabled(), "旧保存应答处理完");
     assert.equal(await editor.count(), 1, "旧保存清掉了这期间新写的那一版，编辑态跟着没了");
     assert.equal(await editor.inputValue(), poked, "旧保存不许清掉后写的那一版");
     assert.deepEqual(errors, []);
