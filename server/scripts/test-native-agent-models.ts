@@ -122,7 +122,9 @@ rl.on('line', (line) => {
   const reported = events.flatMap((event) => event.kind === "tool" && event.nativeWork?.type === "agent"
     && (event.nativeWork.effort || event.nativeWork.title) ? [[event.nativeWork.effort, event.nativeWork.title]] : []);
   assert.deepEqual(reported, ["reported", "missing-model"].includes(mode) ? [["xhigh", "page_audit"]] : []);
-  assert.equal(events.some((event) => event.kind === "error"), false, "可选模型查询失败不影响执行");
+  // 这个假 app-server 不报 MCP 启动状态，回合收尾会有一条「ash 的工具没接上」的提示（affectsTurn:false，
+  // ash-mcp-confirm.ts）—— 那不是这里要看的事。
+  assert.equal(events.some((event) => event.kind === "error" && event.affectsTurn !== false), false, "可选模型查询失败不影响执行");
   assert.ok(events.some((event) => event.kind === "done" && event.exitStatus === 0));
 }
 console.log("子代理实际模型：Codex/Claude 读取、继承边界、历史补充、归属隔离和查询失败回归通过");
