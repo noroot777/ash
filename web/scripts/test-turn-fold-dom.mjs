@@ -125,7 +125,7 @@ try {
     assert.equal(await folded("grow"), 0, `第 ${frame + 1} 帧：跑的中途把回合折了`);
     // 正文是匀速放出来的（run-4），新的那句要等它放完才整句都在。
     const want = expected[frame].map((index) => saidSoFar[index]);
-    await waitUntil(async () => JSON.stringify(await visibleSays()) === JSON.stringify(want), { timeout: 3000, message: `第 ${frame + 1} 帧的正文放完` }).catch(() => undefined);
+    await waitUntil(async () => JSON.stringify(await visibleSays()) === JSON.stringify(want), { message: `第 ${frame + 1} 帧的正文放完` }).catch(() => undefined);
     assert.deepEqual(await visibleSays(), want, `第 ${frame + 1} 帧：说过的话被收编进过程块了`);
     assert.equal(await folded("grow"), 0, `第 ${frame + 1} 帧：放字途中把回合折了`);
   }

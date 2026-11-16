@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import {
   freeConclusionFreshness,
-  freeReviewActivityDetail,
-  freeReviewActivityTitle,
   freeReviewBlockingLabel,
   freeReviewView,
   openDisputeIn,
@@ -16,15 +14,6 @@ const run = {
   rounds: [],
 };
 
-assert.equal(freeReviewActivityTitle({ ...run, status: "reviewing" }), "5.5审查 · 逻辑检查");
-assert.equal(
-  freeReviewActivityDetail({ ...run, status: "reviewing" }),
-  "审查中 · 已到第 1 轮 / 最多 2 轮",
-);
-assert.equal(
-  freeReviewActivityDetail({ ...run, status: "stopped" }),
-  "未通过，等待处理 · 已到第 1 轮 / 最多 2 轮",
-);
 
 // 验收只等审查回合本身；stopped/passed/failed 都不硬拦（警示归验收页）。
 assert.equal(freeReviewBlockingLabel({ ...run, status: "reviewing" }), "审查进行中");

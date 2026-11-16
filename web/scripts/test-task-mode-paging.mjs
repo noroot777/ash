@@ -39,9 +39,14 @@ try {
   await first.getByRole("button", { name: "展开(20/45)", exact: true }).waitFor();
   await second.getByRole("button", { name: "展开(20/22)", exact: true }).waitFor();
   await pinnedOnly.getByRole("button", { name: "展开(2/2)", exact: true }).waitFor();
+  // 要看图再截（SHOT=1）：没有断言读这些图，不必每跑一次往检出的 output/ 里落五张。
   const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
-  await mkdir(artifacts, { recursive: true });
-  await page.screenshot({ path: `${artifacts}task-mode-default.png` });
+  const shot = async (name) => {
+    if (!process.env.SHOT) return;
+    await mkdir(artifacts, { recursive: true });
+    await page.screenshot({ path: `${artifacts}${name}.png` });
+  };
+  await shot("task-mode-default");
 
   await first.getByRole("button", { name: "展开(20/45)", exact: true }).click();
   assert.equal(await extras(first).count(), 20);
@@ -53,7 +58,7 @@ try {
   await first.getByRole("button", { name: "展开 2 个执行者", exact: true }).click();
   await first.locator('[data-task-id="a-worker-2"]').waitFor();
   await page.locator(".workspace-task-tree").evaluate((tree) => { tree.scrollTop = 0; });
-  await page.screenshot({ path: `${artifacts}task-mode-expanded.png` });
+  await shot("task-mode-expanded");
   const expanded = await ids();
   assert.equal(new Set(expanded).size, expanded.length, "不重复渲染置顶或展开任务");
   await clear();
@@ -68,7 +73,7 @@ try {
   await first.getByRole("button", { name: "展开(5/5)", exact: true }).click();
   assert.equal(await extras(first).count(), 45);
   assert.equal(await first.getByRole("button", { name: /^展开\(/ }).count(), 0);
-  await page.screenshot({ path: `${artifacts}task-mode-fully-expanded.png` });
+  await shot("task-mode-fully-expanded");
   await first.getByRole("button", { name: "收起", exact: true }).click();
   assert.equal(await extras(first).count(), 0);
   assert.deepEqual(await ids(), ["c-pin", "a-live", "a-question", "b-live"]);
@@ -118,7 +123,7 @@ try {
   await first.getByRole("button", { name: "展开(20/424)", exact: true }).waitFor();
   assert.deepEqual(await ids(), ["c-pin", "a-live", "a-question", "b-live"], "深链到第 420 条历史任务时默认列表保持短列表");
   assert.equal(await first.locator(".workspace-task-project-head em").textContent(), "6", "项目只统计两条可见任务及四条年龄闸任务");
-  await page.screenshot({ path: `${artifacts}task-mode-history-deeplink.png` });
+  await shot("task-mode-history-deeplink");
   await first.getByRole("button", { name: "展开(20/424)", exact: true }).click();
   const agedIds = ["a-aged-1", "a-aged-2", "a-aged-3", "a-aged-4"];
   const firstHistoryIds = Array.from({ length: 16 }, (_, index) => `a-extra-${index + 1}`);
@@ -136,7 +141,7 @@ try {
   await first.locator('[data-task-id="a-aged-4"]').waitFor();
   assert.equal(await first.locator('[data-task-id^="a-aged-"]').count(), 4, "自动揭示仍保留任务模式的年龄闸任务");
   assert.equal(await extras(first).count(), 0, "自动揭示只到年龄闸末尾，不顺带补满一页历史");
-  await page.screenshot({ path: `${artifacts}task-mode-aged-reveal.png` });
+  await shot("task-mode-aged-reveal");
   await first.getByRole("button", { name: "收起", exact: true }).click();
   assert.equal(await first.locator('[data-task-id^="a-aged-"]').count(), 0, "选中年龄闸任务时也允许用户收起");
 

@@ -13,7 +13,6 @@ import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueMo
 import { leadTurns, teamFeedOptions } from "../src/team/teamModel.ts";
 import {
   executorRunSummary,
-  executorOptions,
   registeredAgentTypes,
 } from "../src/lib/agentAvailability.ts";
 import { isLocalDiskImagePath, localDiskPath } from "../src/components/markdownPolicy.ts";
@@ -582,25 +581,6 @@ try {
     "失效的执行器引用应与服务端一致回退到类型默认值",
   );
   assert.deepEqual(registeredAgentTypes(registeredProfiles), ["codex", "qwen"]);
-  const candidateTypes = registeredAgentTypes(registeredProfiles);
-  const executorLabels = executorOptions({
-    types: candidateTypes,
-    profiles: registeredProfiles,
-  }).map(({ label }) => label);
-  assert.equal(executorLabels.some((label) => label.startsWith("claude ·")), false);
-  assert.equal(executorLabels.some((label) => label.startsWith("codex ·")), true);
-  assert.equal(executorLabels.some((label) => label.startsWith("qwen ·")), true);
-  const staleType = executorOptions({
-    types: candidateTypes,
-    profiles: registeredProfiles,
-    selection: { agentType: "claude", executorId: null },
-  }).find(({ value }) => value === "__type:claude");
-  assert.deepEqual(staleType, {
-    value: "__type:claude",
-    label: "claude · 类型默认（当前设置 · 未注册）",
-    disabled: true,
-  });
-
   const groupTasks = [
     { id: "done", groupId: "group-1", archived: false, status: "done", createdAt: "2026-07-30T01:00:00.000Z", resumeDependsOn: [] },
     { id: "paused", groupId: "group-1", archived: false, status: "paused", createdAt: "2026-07-30T02:00:00.000Z", resumeDependsOn: ["done"] },

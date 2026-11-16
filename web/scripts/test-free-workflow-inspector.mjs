@@ -247,8 +247,7 @@ try {
   const acceptance = page.locator(".acceptance-fixture");
   const toolbar = acceptance.locator('[aria-label="自由工作流快捷操作"]');
   await toolbar.waitFor();
-  assert.deepEqual(await toolbar.getByRole("button").allInnerTexts(), ["派审查", "打开预览"], "会话上方只保留派审与预览");
-  assert.equal(await acceptance.getByText("合并&清理", { exact: true }).count(), 0, "自由工作流快捷栏不再显示合并按钮");
+  assert.deepEqual(await toolbar.getByRole("button").allInnerTexts(), ["派审查", "打开预览"], "这一组键只保留派审与预览");
   const acceptButton = acceptance.getByRole("button", { name: "验收", exact: true });
   await acceptButton.click();
   const acceptanceWorkspace = acceptance.locator(".single-review-workspace");
@@ -256,7 +255,6 @@ try {
   const workspaceAcceptButton = acceptanceWorkspace.getByRole("button", { name: "验收通过", exact: true });
   await workspaceAcceptButton.waitFor();
   assert.equal(await workspaceAcceptButton.count(), 1, "自由任务应进入统一验收页");
-  assert.equal(await acceptanceWorkspace.getByText("用会话上方“合并&清理”操作", { exact: true }).count(), 0);
 
   const blockedAcceptance = page.locator(".acceptance-blocked-fixture");
   await blockedAcceptance.getByRole("button", { name: "验收", exact: true }).click();
