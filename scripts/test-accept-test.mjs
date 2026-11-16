@@ -58,13 +58,17 @@ function fixture(context, { backend = "node backend.mjs && npm run test:more", w
   }));
   // 每条叶子留一份「我跑过了」的痕迹：在哪个目录、以哪条脚本的名义、看见了哪些要剥掉的变量。
   const step = (name, exitVar, stdout) => `
-    import { appendFileSync, statSync, writeFileSync } from "node:fs";
+    import { appendFileSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+    import { tmpdir } from "node:os";
     import { join } from "node:path";
     appendFileSync(join(${JSON.stringify(root)}, "order.txt"), ${JSON.stringify(`${name}
 `)});
+    const isDir = (path) => statSync(path ?? "", { throwIfNoEntry: false })?.isDirectory() ?? false;
+    // 往系统临时目录里丢一个不删的目录：测试红了、忘了收，留下的就是这种。
+    const leftover = mkdtempSync(join(tmpdir(), "fixture-leftover-"));
     writeFileSync(join(${JSON.stringify(root)}, ${JSON.stringify(`${name}.json`)}),
       JSON.stringify({ cwd: process.cwd(), event: process.env.npm_lifecycle_event, stage: process.env.FIXTURE_STAGE ?? null,
-        data: process.env.ASH_DATA_DIR ?? null, dataReady: statSync(process.env.ASH_DATA_DIR ?? "", { throwIfNoEntry: false })?.isDirectory() ?? false,
+        data: process.env.ASH_DATA_DIR ?? null, dataReady: isDir(process.env.ASH_DATA_DIR), tmp: tmpdir(), leftover,
         environment: Object.keys(process.env).filter((key) => /^ASH_(?:DB|RUNS_DIR)$/i.test(key)) }));
     console.log(${JSON.stringify(stdout)});
     console.error(${JSON.stringify(`${stdout}_STDERR`)});
@@ -397,6 +401,22 @@ test("每条叶子拿到自己的临时数据目录，跑完删掉，宿主的�
   assert.equal(existsSync(host), false);
 });
 
+// 测试自己 mkdtemp 的目录红了、忘了删，就留在系统临时目录里，每跑一遍门禁多一批。叶子的
+// 系统临时目录由执行器给（夹具这里宿主的系统临时目录就是夹具根），跟着叶子一起收。
+test("每条叶子拿到自己的系统临时目录，留在里面的东西跑完一并删掉", parallelOnly, (context) => {
+  const root = fixture(context);
+  const result = run(root);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const dirs = ["backend", "more", "web"].map((name) => {
+    const ran = seen(root, name);
+    assert.ok(ran.tmp !== root && !ran.leftover.startsWith(root), `${name} 用的还是宿主的系统临时目录：${ran.tmp}`);
+    assert.equal(existsSync(ran.leftover), false, `${name} 留在系统临时目录里的东西跑完还在`);
+    assert.equal(existsSync(ran.tmp), false, `${name} 的系统临时目录跑完还留着`);
+    return ran.tmp;
+  });
+  assert.equal(new Set(dirs).size, 3, "几条叶子共用了同一个系统临时目录");
+});
+
 // 串行契约：Windows 的默认走法，其它平台显式切过去核对同一份行为。
 test("串行：两步按链依次跑完，各自报通过", (context) => {
   const root = fixture(context);
@@ -424,7 +444,7 @@ test("串行：叶子同样不继承宿主数据库与运行目录", (context) =
   for (const name of ["backend", "more", "web"]) assert.deepEqual(seen(root, name).environment, [], name);
 });
 
-test("串行：数据目录一步一个，跑完删掉", (context) => {
+test("串行：数据目录和系统临时目录一步一个，跑完删掉", (context) => {
   const root = fixture(context);
   const host = join(root, "host-data");
   const result = run(root, { ...SERIAL, ASH_DATA_DIR: host });
@@ -433,9 +453,12 @@ test("串行：数据目录一步一个，跑完删掉", (context) => {
   for (const ran of [backend, more, web]) {
     assert.ok(ran.data && ran.dataReady && ran.data !== host, JSON.stringify(ran));
     assert.equal(existsSync(ran.data), false, "数据目录跑完还留着");
+    assert.equal(existsSync(ran.leftover), false, "留在系统临时目录里的东西跑完还在");
   }
   assert.equal(backend.data, more.data);
   assert.notEqual(backend.data, web.data);
+  assert.equal(backend.tmp, more.tmp);
+  assert.notEqual(backend.tmp, web.tmp);
 });
 
 test("依赖缺失导致测试无法启动时拒绝放行", (context) => {

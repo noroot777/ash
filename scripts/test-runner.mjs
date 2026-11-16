@@ -127,20 +127,33 @@ function writeHistory(updates) {
   }
 }
 
-// 每条叶子一个自己的临时数据目录（`ASH_DATA_DIR`）。只指定了库和 runs 目录的测试，产品模块
-// 一加载，数据目录就落在代码根的 `data/` —— 也就是这份检出自己的（走假 claude 的那批会往
-// `data/ash-mcp/` 写配置）。由执行器统一给，叶子不必各自记得设；自己另指数据目录的测试照旧
-// 以它自己的为准。目录跟着这条叶子的进程一起收：收完进程再删，删不掉只多留一个临时目录。
+// 每条叶子一个自己的临时数据目录（`ASH_DATA_DIR`）和系统临时目录（`TMPDIR`/`TMP`/`TEMP`）。
+// 只指定了库和 runs 目录的测试，产品模块一加载，数据目录就落在代码根的 `data/` —— 也就是这份
+// 检出自己的（走假 claude 的那批会往 `data/ash-mcp/` 写配置）；测试自己 mkdtemp 出来的目录、
+// 起的浏览器留下的 profile，红了或忘了删就一直堆在系统临时目录里，每跑一遍门禁多几百个。由
+// 执行器统一给，叶子不必各自记得设；自己另指数据目录的测试照旧以它自己的为准。两个目录跟着
+// 这条叶子的进程一起收：收完进程再删，删不掉只多留一个临时目录，收尾时整棵根还会再删一次。
 // 每条叶子都带着的环境。`ASH_TEST_NO_MODEL_PROBE`：测试里起的真服务不去预热模型目录 —— 那是
 // 在问本机真装着的 CLI，其中握手探针是一个活得比服务久的 `claude -p`（开关的说明在
 // server/src/executors/model-probe.ts）。测探测本身的那几条自己把它拿掉、换成假 CLI。
 const LEAF_ENV = { ASH_TEST_NO_MODEL_PROBE: "1" };
 
-function leafDataDir(root, name) {
-  const dir = join(root, name);
-  mkdirSync(dir, { recursive: true });
-  return { dir, remove: () => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) };
+function leafScratch(root, name) {
+  const base = join(root, name);
+  const data = join(base, "data");
+  const tmp = join(base, "tmp");
+  mkdirSync(data, { recursive: true });
+  mkdirSync(tmp, { recursive: true });
+  return {
+    env: { ASH_DATA_DIR: data, TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+    remove: () => rmSync(base, { recursive: true, force: true, maxRetries: 3 }),
+  };
 }
+
+// 这些目录的根放在短路径下：macOS 的 `$TMPDIR` 本身就有 49 个字符，再往下套两层，Chrome 在
+// 临时目录里建的单例套接字（`com.google.Chrome.XXXXXX/SingletonSocket`）就超过 Unix 套接字
+// 104 字节的上限。Windows 没有这个限制，照旧用系统临时目录。
+const scratchRoot = () => mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "ash-test-"));
 
 function schedule(leaves, history) {
   const rank = (leaf) => {
@@ -169,7 +182,7 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
   const timings = {};
   const remaining = steps.map((_, index) => queue.filter((leaf) => leaf.step === index).length);
   const logs = mkdtempSync(join(tmpdir(), "ash-test-runner-"));
-  const dataRoot = mkdtempSync(join(tmpdir(), "ash-test-data-"));
+  const dataRoot = scratchRoot();
   const owner = `ASH_TEST_RUNNER_${process.pid}_${Date.now().toString(36)}`;
   const stages = new Map();
   const running = new Map();
@@ -223,14 +236,14 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
     let child;
     let data;
     try {
-      data = leafDataDir(dataRoot, String(index));
+      data = leafScratch(dataRoot, String(index));
       const output = openSync(file, "w");
       try {
         child = spawn("/bin/sh", ["-c", `${leaf.command}\n__rc=$?; exit $__rc`], {
           cwd: leaf.cwd,
           detached: true,
           stdio: ["ignore", output, output],
-          env: { ...env, ...extra, [owner]: String(index), ...LEAF_ENV, ASH_DATA_DIR: data.dir, npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
+          env: { ...env, ...extra, [owner]: String(index), ...LEAF_ENV, ...data.env, npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
         });
       } finally {
         closeSync(output);
@@ -375,14 +388,14 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
 
 // Windows 上没有 /bin/sh 和 ps，进程组也是另一套语义：照旧按链一步一步交给 npm 跑。
 // 其它平台设 ASH_TEST_RUNNER=serial 也走这条，门禁自检靠它在本机核对这份契约。
-// 这条路上叶子是 npm 自己一条条起的，临时数据目录只能按步给：一步一个，跑完删。
+// 这条路上叶子是 npm 自己一条条起的，临时数据目录和系统临时目录只能按步给：一步一个，跑完删。
 function runSequentially(repo, steps, env, log) {
-  const dataRoot = mkdtempSync(join(tmpdir(), "ash-test-data-"));
+  const dataRoot = scratchRoot();
   try {
     for (const step of steps) {
       const args = step.workspace === "." ? ["run", step.script] : ["-w", step.workspace, "run", step.script];
-      const data = leafDataDir(dataRoot, String(steps.indexOf(step)));
-      const result = spawnSync(NPM, args, { ...NPM_SPAWN_OPTS, cwd: repo, stdio: "inherit", env: { ...env, ...LEAF_ENV, ASH_DATA_DIR: data.dir } });
+      const data = leafScratch(dataRoot, String(steps.indexOf(step)));
+      const result = spawnSync(NPM, args, { ...NPM_SPAWN_OPTS, cwd: repo, stdio: "inherit", env: { ...env, ...LEAF_ENV, ...data.env } });
       if (result.error) log(`[test-runner] 无法启动 ${step.workspace} ${step.script}：${result.error.message}`);
       if (result.signal) log(`[test-runner] ${step.workspace} ${step.script} 被信号 ${result.signal} 终止。`);
       if (result.status !== 0) return { leaf: { label: `${step.workspace} ${step.script}`, step: steps.indexOf(step) }, code: result.status || 1 };
