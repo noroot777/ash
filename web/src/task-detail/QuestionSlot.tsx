@@ -65,7 +65,7 @@ const cardKey = (task: TaskListItem) => `${task.id}:${questionKey(task)}:${activ
 
 /**
  * 卡本身，摆在宿主的回复框那一格（展开时框不挂，卡就占了那一格；收起时框在它下面）。卡只会是宿主
- * 自己的：名下派出的任务来问、摆单，卡在那一条自己的页面上（左抽屉里打开它也是），不借这一格。
+ * 自己的：名下子任务来问、摆单，卡在那一条自己的页面上，不借这一格。
  */
 export function QuestionDock({ takeover, onAnswer, onLaunchPlan, dispatchTarget }: {
   takeover: QuestionTakeover;

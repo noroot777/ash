@@ -106,11 +106,9 @@ export function TaskDetail({
   // 只在它确实停着（已暂停 / 排着）时说；已经做完的那几条不用解释为什么没在跑。
   const holder = useDispatchHolder(task.id, allTasks, task.status === "paused" || task.status === "backlog");
   const conversation = useConversation(task.id);
-  // 左边那几屉（子智能体 / 读全文 / 派出的任务，互斥）和 Inspector 栈，整块在 useTaskDrawers.tsx。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, leftDrawer, dispatched, closeDrawers, drawers } = useTaskDrawers({
-    task, allTasks, conversation, onOpenTask,
-    renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
+    task, allTasks, conversation,
   });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
@@ -141,11 +139,11 @@ export function TaskDetail({
     ? latestPostMerge?.status === "reviewing" ? "查看合并审查" : latestPostMerge ? "再次审查合并结果" : "审查合并结果"
     : null;
   const derivationAllowed = canDeriveTask(task);
-  // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字，点它在左抽屉打开（dispatchNotes.ts）。
-  // 派出的任务后来来问、失败，这里一概不画：提示在侧栏和任务头那颗「派出的任务」键的数、右侧那一格里。
+  // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字（dispatchNotes.ts）。
+  // 子任务后来来问、失败，这里一概不画：提示在侧栏和任务头那颗「子任务」键的数、右侧那一格里。
   const asides = useMemo(() => dispatchNotes(task.id, allTasks).map((note) => ({
-    key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={dispatched.state.open} />,
-  })), [allTasks, dispatched.state.open, task.id]);
+    key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
+  })), [allTasks, onOpenTask, task.id]);
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
@@ -319,7 +317,6 @@ export function TaskDetail({
         descriptors={inspectors}
         context={{
           nativeWork: subagents.nativeWork,
-          dispatched: dispatched.state,
           monitors: monitorTab.monitors,
           task,
           groups,
@@ -562,7 +559,7 @@ export function TaskDetail({
                         />
                       )}
                       // 这条任务自己的提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
-                      // 名下派出的任务来问不占这一格：那张卡在它自己的页面上（左抽屉里打开它也是）。
+                      // 名下子任务来问不占这一格：那张卡在它自己的页面上。
                       onAnswer={async (answer, input) => {
                         await api.answerTask(task.id, answer, input);
                         notify("已发送答复，任务正在续跑");
@@ -629,7 +626,7 @@ export function TaskDetail({
                   notify={notify}
                 />
               )}
-              {/* 左边那一屉（子智能体 / 读全文 / 派出的任务）：盖住中间那一栏，右侧 Inspector 仍然看得见、点得着。 */}
+              {/* 左边那一屉（子智能体 / 读全文）：盖住中间那一栏，右侧 Inspector 仍然看得见、点得着。 */}
               {drawers}
             </div>
             {inspectorMode === "drawer" && inspectorToggleTarget

@@ -125,8 +125,7 @@ export const TASK_LOOK: Record<TaskStatusIndicator, { mark: TaskMark | null; say
 };
 
 /**
- * 父任务（行首是展开箭头的那几种：名下收着派出去的任务、团队调度台）不画圆点，箭头占着那一格；
- * 它此刻怎么样改成行尾一句短语。这张表就是全部短语，按 indicator 再细分一层（同是「轮到你」，
+ * 父任务行尾的短语。这张表就是全部短语，按 indicator 再细分一层（同是「轮到你」，
  * 是在问你、等你裁定还是停在检查点，对你来说是三件事）。null = 不写。
  *
  * 颜色只有三种：琥珀 = 轮到你（ask），红 = 出事了（bad），其余都是淡灰 —— 跟圆点那套同一个读法。
@@ -207,7 +206,7 @@ export type TaskLook = {
   word: string | null;
   /** 指着那两三个字时多给的半句（问题本身 / 开不了工的原因）。 */
   detail: string | null;
-  /** 父任务不画圆点时行尾那句短语：它自己的，或名下带上来的（见 dispatchedRollUp）。 */
+  /** 父任务行尾那句短语：它自己的，或名下带上来的（见 dispatchedRollUp）。 */
   phrase: TaskPhrase | null;
 };
 
@@ -231,7 +230,9 @@ export function taskLook(
   /** 名下派出去的任务里最该被看见的那一条，见 dispatchedRollUp。 */
   dispatched: DispatchedState | null = null,
 ): TaskLook {
-  const indicator = deriveTaskStatusIndicator(task, workers, unread);
+  const ownIndicator = deriveTaskStatusIndicator(task, workers, unread);
+  const rolled = dispatched && rollUpRank(dispatched.indicator) < rollUpRank(ownIndicator) ? dispatched : null;
+  const indicator = rolled?.indicator ?? ownIndicator;
   const row = indicator ? TASK_LOOK[indicator] : null;
   const mark = row?.mark ?? null;
   const asked = indicator === "attention" ? questionOf(task, workers) : null;
@@ -240,10 +241,10 @@ export function taskLook(
   const question = asked ?? blocked;
   const oneLine = question?.replace(/\s+/g, " ").trim() ?? "";
   const detail = oneLine ? (oneLine.length > DETAIL_MAX ? `${oneLine.slice(0, DETAIL_MAX)}…` : oneLine) : null;
-  const say = row ? (indicator === "waiting" ? waitingSay(task) : row.say) : "";
-  const own = phraseWord(task, workers, indicator);
-  const phrase: TaskPhrase | null = dispatched && rollUpRank(dispatched.indicator) < rollUpRank(indicator)
-    ? { word: dispatched.word, tone: phraseTone(dispatched.indicator), tip: `派出的任务「${dispatched.title}」${dispatched.word}` }
+  const say = rolled ? `子任务「${rolled.title}」${rolled.word}` : row ? (indicator === "waiting" ? waitingSay(task) : row.say) : "";
+  const own = phraseWord(task, workers, ownIndicator);
+  const phrase: TaskPhrase | null = rolled
+    ? { word: rolled.word, tone: phraseTone(rolled.indicator), tip: say }
     : own ? { word: own, tone: phraseTone(indicator), tip: detail ?? say } : null;
   return {
     indicator,

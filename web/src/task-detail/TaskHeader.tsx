@@ -22,6 +22,7 @@ import {
   UsersThree,
 } from "@phosphor-icons/react";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentRelation } from "../components/TaskOrigin.tsx";
+import { TaskAncestry } from "../components/TaskAncestry.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { IconButton } from "../components/IconButton.tsx";
 import { ActionMenuItem } from "../components/ActionMenuItem.tsx";
@@ -166,7 +167,10 @@ export function TaskHeader({
   return (
     <header className="task-detail-header">
       <div className="task-head-name">
-        <TaskKindGlyph mode={task.mode} />
+        {task.dispatchedBy && !task.parentId
+          ? <span className="task-head-glyph" role="img" aria-label="子任务"><TreeStructure size={14} aria-hidden="true" /></span>
+          : <TaskKindGlyph mode={task.mode} />}
+        <TaskAncestry task={task} tasks={allTasks} onOpen={onOpenTask} />
         {task.parentId !== null ? (
           <span className="task-detail-title is-readonly">{task.title || "未命名任务"}</span>
         ) : (
@@ -189,7 +193,7 @@ export function TaskHeader({
             />
           </span>
         )}
-        <TaskSourceGlyph task={task} allTasks={allTasks} onOpen={onOpenTask} />
+        {taskParentLink(task, allTasks)?.kind !== "dispatch" && <TaskSourceGlyph task={task} allTasks={allTasks} onOpen={onOpenTask} />}
         {task.parentId === null && <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />}
       </div>
       <span className="task-head-grow" />

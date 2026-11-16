@@ -55,7 +55,9 @@ export function applyTabPolicy<Context>(
   descriptors: readonly InspectorDescriptor<Context>[],
 ): InspectorState {
   const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
-  const dismissed = new Set(state.dismissed.filter((id) => id !== policy.requiredTabId));
+  const preserved = !!state.activeTab && !!policy.preserveActiveTabIds?.includes(state.activeTab);
+  const forceFocus = policy.revealOnFocus && !preserved;
+  const dismissed = new Set(state.dismissed.filter((id) => id !== policy.requiredTabId && !(forceFocus && id === policy.defaultActiveTabId)));
   const suggested = [...policy.defaultOpenTabIds, policy.defaultActiveTabId].filter((id) => !dismissed.has(id));
   const openTabs = orderedValidTabs([
     ...state.openTabs,
@@ -73,8 +75,9 @@ export function applyTabPolicy<Context>(
     ...state,
     openTabs,
     activeTab,
-    visible: state.visible && openTabs.length > 0,
+    visible: (state.visible || !!forceFocus) && openTabs.length > 0,
     policyKey: policy.stateKey,
+    dismissed: [...dismissed],
   };
 }
 
@@ -84,11 +87,19 @@ export function readState<Context>(
   defaultVisible: boolean,
   tabPolicy?: InspectorTabPolicy,
 ) {
+  const onEntry = (state: InspectorState): InspectorState => {
+    const entry = tabPolicy?.entryTab;
+    if (entry && descriptors.some((descriptor) => descriptor.id === entry.id)) return {
+      ...state, openTabs: orderedValidTabs([...state.openTabs, entry.id], descriptors),
+      activeTab: entry.id, visible: entry.visible, dismissed: state.dismissed.filter((id) => id !== entry.id),
+    };
+    return tabPolicy?.focusOnEntry ? applyTabPolicy(state, tabPolicy, descriptors) : state;
+  };
   const fallback = defaultState(descriptors, defaultVisible);
   const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
   try {
     const raw = readRenamedStorage(storageKey);
-    if (!raw) return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback;
+    if (!raw) return onEntry(tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback);
     const parsed = JSON.parse(raw) as Partial<InspectorState>;
     const storedTabs = Array.isArray(parsed.openTabs)
       ? parsed.openTabs.filter((id): id is string => typeof id === "string")
@@ -114,19 +125,18 @@ export function readState<Context>(
     let restored: InspectorState = { openTabs, activeTab, width, visible, policyKey, dismissed };
     if (tabPolicy && policyKey !== tabPolicy.stateKey) {
       // A semantic task-state change deliberately wins over restored focus once.
-      return applyTabPolicy(restored, tabPolicy, descriptors);
+      return onEntry(applyTabPolicy(restored, tabPolicy, descriptors));
     }
     if (tabPolicy && visible && descriptorIds.has(tabPolicy.requiredTabId)
       && !restored.openTabs.includes(tabPolicy.requiredTabId)) {
       restored = { ...restored, openTabs: [...restored.openTabs, tabPolicy.requiredTabId] };
     }
-    return restored;
+    return onEntry(restored);
   } catch {
-    return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback;
+    return onEntry(tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback);
   }
 }
 
 export function storageKeyFor(contextKey: string) {
   return `ash:inspector:${contextKey}`;
 }
-

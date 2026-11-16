@@ -226,13 +226,6 @@
   transition: color 130ms ease-out;
 }
 
-/* 派出去的任务收在派它的那条下面：缩进一档、左边一道细线（同团队执行者那一列）。 */
-.workspace-dispatch-list {
-  margin: 1px 0 6px 10px;
-  border-left: 1px solid var(--line2);
-  padding-left: 4px;
-}
-
 /* 行尾那个数：名下几条。名下整棵有在等答复 / 失败的，变琥珀色。 */
 .workspace-dispatch-count {
   flex: 0 0 auto;

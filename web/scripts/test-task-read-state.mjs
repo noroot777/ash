@@ -102,7 +102,6 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.equal(taskLook({ ...task("ask", at), status: "paused", question: "问你", disputeOpen: true }).word, "等你答复", "明着问你的先说");
 }
 
-// 父任务（团队、名下收着派出去的任务）不画圆点，行尾写一句短语：它自己的，或名下带上来的。
 {
   const at = "2026-08-20T01:00:00.000Z";
   const phrase = (over, dispatched = null, workers = []) => taskLook({ ...task("p", at), ...over }, workers, false, dispatched).phrase;
@@ -142,12 +141,12 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.equal(dispatchedRollUp([running, broken]), broken);
 
   const below = phrase({}, running);
-  assert.deepEqual([below.word, below.tone, below.tip], ["运行中", null, "派出的任务「跑着的」运行中"], "自己做完了，名下在跑：写名下的");
+  assert.deepEqual([below.word, below.tone, below.tip], ["运行中", null, "子任务「跑着的」运行中"], "自己做完了，名下在跑：写名下的");
   assert.deepEqual([phrase({}, asking).word, phrase({}, asking).tone], ["等你答复", "ask"]);
   assert.equal(phrase({ status: "paused", question: "问你" }, running).word, "等你答复", "自己轮到你的压过名下在跑");
   assert.equal(phrase({ status: "running" }, running).tip, "运行中", "同档写自己的");
   assert.equal(phrase({ stage: "accepted" }, null), null);
-  assert.equal(taskLook({ ...task("p", at) }, [], false, asking).mark, "open", "圆点本身只说自己（父任务不画它）");
+  assert.equal(taskLook({ ...task("p", at) }, [], false, asking).mark, "wait", "父任务的记号和行尾短语说同一条子任务的状态");
 }
 
 const lead = { ...task("lead", "2026-08-20T01:00:00.000Z"), mode: "team", status: "idle" };

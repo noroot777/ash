@@ -1,22 +1,7 @@
 import type { TaskListItem } from "@ash/shared";
 import { byCreated, dispatchSubtree } from "../lib/dispatchTree.ts";
 
-// 侧栏里「派出去的任务收在派它的那条下面」这一层怎么排。
-//
-// **只在画出来的那批行之间收纳**：一条派出去的任务，只有派它的那条此刻也在这份列表里（同一个
-// 作用域、同一个筛选、没归档），才收到它下面；派它的那条不在（归档了、被筛掉、在别的项目），
-// 它就照常平铺 —— 不能跟着一起消失。所以森林总是在「已经筛好的行」上建，不在全量上建。
-//
-// 置顶的行不收：置顶是用户手动摁下去的「我要一直盯着这条」，收进别人底下就违背了它。
-//
-// 收进去之后，派它的那条在列表里的先后、过不过 24 小时年龄闸，都按**整棵**算：名下有一条刚动过、
-// 刚摔了的，这一行就该在上面、看得见，而不是因为它自己旧就被折进「展开」里、连带名下一起藏起来。
-//
-// 这里只管「画哪几行、怎么排」。行尾那个数和它变不变色是关系事实，不随筛选变，从全量任务算
-// （lib/dispatchTree.ts 的 dispatchFacts）。
-
 export type DispatchForest<T extends TaskListItem = TaskListItem> = {
-  /** 画在某一行下面的那几条（只含这份列表里在的）。 */
   children: Map<string, T[]>;
   /** 收进别人下面、不再单独成行的。 */
   nested: Set<string>;
@@ -24,14 +9,21 @@ export type DispatchForest<T extends TaskListItem = TaskListItem> = {
   host: Map<string, string>;
 };
 
-export function buildDispatchForest<T extends TaskListItem>(rows: readonly T[]): DispatchForest<T> {
+export function buildDispatchForest<T extends TaskListItem>(rows: readonly T[], allTasks: readonly TaskListItem[] = rows): DispatchForest<T> {
   const ids = new Set(rows.map((row) => row.id));
+  const byId = new Map(allTasks.map((row) => [row.id, row]));
   const children = new Map<string, T[]>();
   const host = new Map<string, string>();
   for (const row of rows) {
-    const by = row.dispatchedBy;
-    if (!by || by === row.id || !ids.has(by) || row.pinnedAt != null || row.parentId) continue;
-    host.set(row.id, by);
+    if (row.parentId) continue;
+    let by = row.dispatchedBy;
+    const seen = new Set([row.id]);
+    while (by && !seen.has(by)) {
+      seen.add(by);
+      if (ids.has(by)) { host.set(row.id, by); break; }
+      const parent = byId.get(by);
+      by = parent && !parent.parentId ? parent.dispatchedBy : null;
+    }
   }
   const below = new Map<string, string[]>();
   for (const [child, parent] of host) {

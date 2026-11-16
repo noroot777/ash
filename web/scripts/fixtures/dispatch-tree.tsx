@@ -1,14 +1,9 @@
-// 侧栏里「派出的任务收在派它的那条下面」（test-dispatch-tree-dom.mjs）。
-//
-// 摆的是线上会碰到的几种行：一条派了三条的分析任务（其中一条在等答复、一条自己又派了一条），
-// 一条派它的那条已经归档了的派出任务（得照常平铺），一个团队和它的执行者（样子不能变）。
-// 「搜索命中」走的是工作区的同一条路：选中某个任务 id —— 这里由 window.__select 代劳；侧栏筛选
-// （状态）由 window.__filter 拨。
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ProjectView, Task } from "@ash/shared";
 import { TaskTree } from "../../src/workspace/TaskTree.tsx";
 import type { SidebarSpread, SpreadFilter } from "../../src/workspace/useSidebarSpread.ts";
+import type { TaskScope } from "../../src/workspace/taskScope.ts";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
 import "../../src/styles/task-tree.css";
@@ -56,6 +51,7 @@ declare global {
     __add: (task: Partial<Task> & { id: string; title: string }) => void;
     __patch: (id: string, patch: Partial<Task>) => void;
     __filter: (filter: SpreadFilter) => void;
+    __scope: (kind: "project" | "tasks") => void;
   }
 }
 
@@ -63,9 +59,11 @@ function Ash() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [tasks, setTasks] = useState(initial);
   const [filter, setFilter] = useState<SpreadFilter>("all");
+  const [scope, setScope] = useState<TaskScope>({ kind: "project", projectId: project.id });
   const spread = useMemo(() => ({ ...idleSpread, filter, setFilter }), [filter]);
   useEffect(() => {
     window.__filter = setFilter;
+    window.__scope = (kind) => setScope(kind === "tasks" ? { kind } : { kind, projectId: project.id });
     window.__select = setSelectedTaskId;
     window.__add = (next) => setTasks((current) => [...current, task(next.id, next.title, 1, next)]);
     window.__patch = (id, patch) => setTasks((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)));
@@ -76,7 +74,7 @@ function Ash() {
       <TaskTree
         projects={[project]}
         currentProjectId={project.id}
-        scope={{ kind: "project", projectId: project.id }}
+        scope={scope}
         tasks={tasks}
         selectedTaskId={selectedTaskId}
         selectedRemoteTaskId={null}
