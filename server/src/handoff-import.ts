@@ -390,7 +390,6 @@ async function importValidated(
     acceptedGateRunId: m.task.acceptedGateRunId ?? null,
     acceptanceId: returningAcceptanceId(existing, m.task),
     pinnedAt: m.task.pinnedAt,
-    starredAt: m.task.starredAt,
     createdAt: m.task.createdAt,
     updatedAt: now(),
     startedAt: m.task.startedAt,

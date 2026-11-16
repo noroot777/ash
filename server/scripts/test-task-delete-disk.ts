@@ -122,7 +122,7 @@ try {
     task: { id, title: id, body: "", status: "done", stage: null, labels: "[]", agentType: "claude", model: null,
       reasoningEffort: null, autoTitle: false, useWorktree: false, worktreeBase: null, workflow: null, workflowMode: "free",
       workflowAt: null, reviewStep: null, verifyRounds: 0, verifyStationRounds: 0, resumePrompt: null, question: null,
-      questionOptions: null, questionItems: null, pinnedAt: null, starredAt: null, createdAt: stamp, startedAt: stamp, endedAt: stamp },
+      questionOptions: null, questionItems: null, pinnedAt: null, createdAt: stamp, startedAt: stamp, endedAt: stamp },
     sessions: [{ id: sessionId, role: "main", agentType: "claude", executor: "claude", startedAt: stamp, endedAt: stamp, cliSessionId: null }],
     files: [{ kind: "run-artifact", rel: `${sessionId}.md`, dataBase64: Buffer.from(text).toString("base64") }],
     freeWorkflow: null, uploads: [], messages: [], schedule: null });

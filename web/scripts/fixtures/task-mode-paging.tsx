@@ -120,7 +120,6 @@ function TaskModePaging() {
           spread={spread}
           onTask={onTask}
           onRemoteTask={onTask}
-          onTaskStarred={() => {}}
           onHandoffFinished={() => {}}
           onQueueChanged={() => {}}
           outbound={{ outboundCount: 0, offlinePeers: [], asked: false, refreshing: false, onRefresh: () => {} }}

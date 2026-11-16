@@ -17,8 +17,7 @@ import { tasks } from "./db/schema.js";
 // 几百条历史任务同时跳回列表最前、解除折叠、集体亮起未读点 —— 而且删除本身没有任何
 // 界面回声,等人发现时已经没人记得点过什么。
 //
-// 判据跟 task-routes.ts 里 `starOnly` 那条豁免是同一条:**与任务活动正交的写入不推进
-// 最后活动时间**。那边管的是手动软记号(星标),这边管的是系统替你做的引用清理。
+// 判据:**与任务活动正交的写入不推进最后活动时间**。这里管的是系统替你做的引用清理。
 const REF_COLUMNS = {
   executorId: tasks.executorId,
   groupId: tasks.groupId,

@@ -435,18 +435,6 @@ api.patch("/tasks/:id", async (c) => {
   ) {
     return c.json({ error: "pinnedAt 必须是非负整数时间戳或 null" }, 400);
   }
-  if (
-    b.starredAt !== undefined &&
-    b.starredAt !== null &&
-    (!Number.isSafeInteger(b.starredAt) || b.starredAt < 0)
-  ) {
-    return c.json({ error: "starredAt 必须是非负整数时间戳或 null" }, 400);
-  }
-  // UI 只给顶层任务画星标入口:child/worker 一旦被标上就成了看不见也清不掉的隐形状态。
-  // null(清除)放行 —— 老数据里已有的 child 星标得留一条从 API 清理的路。
-  if (b.starredAt !== undefined && b.starredAt !== null && existing.parentId != null) {
-    return c.json({ error: "星标只支持顶层任务，执行者/子任务不能设置 starredAt" }, 400);
-  }
   const patch: Record<string, unknown> = {};
   // 显式改名 = 这就是标题。不关掉 autoTitle 的话，一个还没跑过的任务被改名后，首轮
   // 起跑的自动命名（auto-title.ts）会把它悄悄覆盖回去 —— 智能体用 patch_task 改名尤其
@@ -458,7 +446,6 @@ api.patch("/tasks/:id", async (c) => {
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
   if (b.pinnedAt !== undefined) patch.pinnedAt = b.pinnedAt;
-  if (b.starredAt !== undefined) patch.starredAt = b.starredAt;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   // 同建任务:groupId 是请求体里的 id,横切闸只护住了路径上的 taskId —— 少了这句,
   // 一条我看得见的任务能被改挂到别人项目的分组上(第 2 轮审查 P1)。null = 摘出分组,
@@ -544,12 +531,7 @@ api.patch("/tasks/:id", async (c) => {
   if (b.resumePrompt !== undefined) {
     patch.resumePrompt = b.resumePrompt && String(b.resumePrompt).trim() ? String(b.resumePrompt) : null;
   }
-  // updatedAt 在产品里是「最后活动时间」:同组排序、24 小时折叠、未读完成/失败事件键、
-  // 铺开态时间列都读它。星标是与活动正交的手动软记号 —— 只动 starredAt 的 PATCH 不推进
-  // updatedAt,否则给旧任务点星会让它跳到组首、解除折叠、把已读终态伪装成新事件。
-  // task.updated 事件照发(下方 publishTaskUpdated),前端仍实时回流。
-  const starOnly = "starredAt" in patch && Object.keys(patch).length === 1 && b.status === undefined;
-  if (!starOnly) patch.updatedAt = now();
+  patch.updatedAt = now();
   // 手动把任务改成**终态**，要和「起这一轮」争同一把回合锁。
   //
   // 上面那道反向守卫只看库里是不是 running/queued，而 `claimOwnTurn` 到 status 落 running
