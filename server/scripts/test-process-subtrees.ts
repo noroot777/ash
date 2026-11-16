@@ -87,6 +87,8 @@ if (IS_WINDOWS) {
   // **最要紧的一条**:已经退场的那个根,它名下不许冒出别人的孩子来。
   assert.equal(deadTree.descendants.length, 0, "退场的根不许带出任何后代");
 
+  // 整组收：只杀根的话，它那个要活一分钟的孩子会留到测试退出之后。
+  try { process.kill(-parent.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
   try { process.kill(parent.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
 }
 

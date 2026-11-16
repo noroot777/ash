@@ -38,6 +38,9 @@ try {
     peer = createServer(async (req, res) => {
       const url = new URL(req.url!, "http://localhost");
       seen.push({ path: url.pathname, key: req.headers["x-ash-peer-user-key"] as string | undefined, signature: req.headers["x-ash-peer-key"] as string | undefined });
+      // 每个请求一条连接：这台假机器在同一个端口上关了又开（换机那一档），本进程里的 fetch 要是留着上一台的
+      // 长连接，下一次探测会撞上「对端已关」而不是真的去问新机器（并行 16 份里四份闪红）。
+      res.setHeader("connection", "close");
       if (redirect || (redirectRequest && !url.pathname.endsWith("/ping"))) {
         res.writeHead(307, { location: "/redirected" }); res.end(); return;
       }
