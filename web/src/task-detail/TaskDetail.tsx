@@ -511,21 +511,10 @@ export function TaskDetail({
                       onAskSideChat={(quote) => { stageSideChatQuote(task.id, quote); openTab("side-chat"); }}
                       // 跟回复框可用同一口径（ReplyBox 的 disabled）：框是灰的，放回去也没法发。
                       onReuseInput={task.mode === "single" && !task.archived && !handedOut && hasConversation ? reuseInput : undefined}
-                      // 任务停下来等哨兵：会话最后多一行「在等哨兵…」（feed-7）。在跑的时候不出——
-                      // 那时挂上的哨兵是执行过程里的一步，事件排着队等这一轮跑完。
-                      // 被派它的那条按住了（名下全部停下）：同一处再多一行「是谁按的」，点过去接着跑。
-                      footer={task.status !== "running" && task.status !== "queued" && (holder || liveMonitors.length || liveBuiltinCount) ? (<>
-                        {holder && <DispatchHeldLine holder={holder} onOpen={onOpenTask} />}
-                        {(liveMonitors.length > 0 || liveBuiltinCount > 0) && <MonitorWaitLine
-                          key={`monitor-wait:${task.id}`}
-                          monitors={liveMonitors}
-                          builtinCount={liveBuiltinCount}
-                          resumePrompt={task.resumePrompt ?? null}
-                          reviewArmed={!!free.state?.reviewReservation.armed}
-                          onOpenPanel={() => openTab("monitors", liveMonitors[0] ? { monitorId: liveMonitors[0].id } : undefined)}
-                          notify={notify}
-                        />}
-                      </>) : undefined}
+                      // 被派它的那条按住了（名下全部停下）：会话最后多一行「是谁按的」，点过去接着跑。
+                      // 哨兵那一行不在这里：它是进行中的状态，住在回复框上方（见下面的 topRail）。
+                      footer={task.status !== "running" && task.status !== "queued" && holder
+                        ? <DispatchHeldLine holder={holder} onOpen={onOpenTask} /> : undefined}
                       reviewRetry={reviewRetry}
                       turnRetry={crashedTurnRetry}
                       reviews={free.state?.reviews}
@@ -533,6 +522,7 @@ export function TaskDetail({
                       asides={asides}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
+                      onOpenMonitorPanel={(monitorId) => openTab("monitors", monitorId ? { monitorId } : undefined)}
                       onOpenTask={onOpenTask}
                     />
                     </MemoSelectionScope>
@@ -542,13 +532,25 @@ export function TaskDetail({
                       tasks={allTasks}
                       hasConversation={hasConversation}
                       conversationItems={conversation.items}
-                      // 哨兵不住这儿了：等的时候是会话最后那一行（feed-7，见下面传给会话的 footer）。
-                      // 框上方只剩状态：验收前置命令那一条。点了验收之后它在工作区里跑十几分钟,
+                      // 框上方只放状态：还有哨兵在盯时那一行（任务在跑、在等都在），和验收前置命令那一条。
+                      // 验收前置命令点了验收之后在工作区里跑十几分钟,
                       // 而任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页上就完全
                       // 看不出有东西在跑(时间轴那行很快被顶走)。
                       // 卡自己判要不要出现（它读门禁状态，不只看任务投影），没在跑时这一条是空的、不占地方。
                       topRail={(
                         <TaskReplyRail
+                          monitorWait={(liveMonitors.length > 0 || liveBuiltinCount > 0) && (
+                            <MonitorWaitLine
+                              key={`monitor-wait:${task.id}`}
+                              monitors={liveMonitors}
+                              builtinCount={liveBuiltinCount}
+                              resumePrompt={task.resumePrompt ?? null}
+                              reviewArmed={!!free.state?.reviewReservation.armed}
+                              running={task.status === "running" || task.status === "queued"}
+                              onOpenPanel={() => openTab("monitors", liveMonitors[0] ? { monitorId: liveMonitors[0].id } : undefined)}
+                              notify={notify}
+                            />
+                          )}
                           gateWait={(
                             <AcceptGateWaitCard
                               key={`accept-gate:${task.id}`}

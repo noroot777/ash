@@ -379,7 +379,7 @@ async function disputeFreeReviewHeld(
     ? await consumeFreeReviewReservation(taskId, reservation)
     : null;
 
-  await appendTaskTimeline(taskId, noticeLine({ kind: "review.dispute", round: run.currentRound }, disputeTimelineNote({
+  await appendTaskTimeline(taskId, noticeLine({ kind: "review.dispute", round: run.currentRound, runId: run.id }, disputeTimelineNote({
     round: run.currentRound,
     reviewerName: run.reviewerName,
     summary,

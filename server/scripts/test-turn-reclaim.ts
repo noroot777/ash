@@ -686,6 +686,25 @@ const stallSession = await seedSession("t-stall");
     "定时消息在 sendAt 之前不算滞留,不该报警");
 }
 
+{
+  // 等的是看得见的事就不算滞留：任务正在跑一轮长的，排队消息等它跑完是排队本身。
+  // 每条都报一句「还没发出去：任务正在运行」是把正常排队说成了故障（用户 2026-11-16 指出）。
+  const { deliverPendingMessages } = await import("../src/pending-messages.js");
+  await createTasks([{ ...baseTask, id: "t-stall-running", title: "long turn", status: "running" }]);
+  const longAgo = new Date(Date.now() - 45 * 60_000).toISOString();
+  await db.insert(scheduledMessages).values({
+    id: "m-stall-running", taskId: "t-stall-running", text: "继续", mode: "queued", status: "pending",
+    sendAt: longAgo, createdAt: longAgo, sentAt: null, deliveringSince: null,
+    attachments: "[]", agent: null, executorId: null, model: null, reasoningEffort: null,
+    origin: null, execution: false, sessionRole: null,
+  } as never);
+  await deliverPendingMessages("t-stall-running");
+  assert.deepEqual(await recentRejectionNotices("t-stall-running"), [],
+    "任务在跑时排队消息等它这一轮结束是正常排队，不该写滞留诊断");
+  const [still] = await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "m-stall-running"));
+  assert.equal(still?.status, "pending", "消息仍在托盘里等着");
+}
+
 console.log("turn-reclaim regressions ok");
 dbClient.close();
 process.exit(0);

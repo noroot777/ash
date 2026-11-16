@@ -84,6 +84,11 @@ assert.match(line(timedFirst), /查看完整输入：输入-1[\s\S]*引导会话
 assert.match(line(renderTray([{ ...samples[0], mode: "timed" }])), /查看完整输入：输入-0/, "没有排队的才带定时那条");
 const machinesOnly = renderTray([{ ...samples[0], origin: "monitor:m", text: "【哨兵事件】盯构建" }, { ...samples[1], sessionRole: "reviewer" }]);
 assert.doesNotMatch(line(machinesOnly), /scheduled-tray-head|查看完整输入/, "没有自己的消息时这一行只说排着几条");
+// 收着时最早那条的撤回跟引导会话一样就在这一行上，不用先点开（用户 2026-11-16）。
+assert.match(line(folded), /撤回排队中的待发送消息“输入-0”[\s\S]*引导会话/, "撤回在这一行上，排在引导会话前面");
+assert.match(line(renderTray(samples)), /scheduled-message-withdraw is-shown[^>]*撤回排队中的待发送消息“输入-0”/, "不能引导时撤回照样在，而且常显");
+assert.doesNotMatch(line(machinesOnly), /撤回/, "没有自己的消息时这一行没有撤回");
+assert.doesNotMatch(line(renderTray(samples, { defaultExpanded: true })), /撤回/, "点开后撤回回到每一行行尾，这一行不再带");
 // 要留意的条数:退出码非零的哨兵才算,是琥珀色的字。
 const attentionTray = renderTray([samples[0], { ...samples[1], origin: "monitor:a", text: "【哨兵结束】检查，退出码 2。" },
   { ...samples[2], origin: "monitor:b", text: "【哨兵结束】检查，退出码 0。" }, { ...samples[0], id: "c", origin: "monitor:c", text: "REGRESSION_FINISHED exitCode=1" }]);
@@ -234,20 +239,24 @@ assert.match(
 // 撤回的回填只能发生在取消成功之后：失败了消息还挂在队列上，再往输入框塞一份就成了两条。
 // 团队那半的回复框在 e5107008 从 TeamView.tsx 拆进了 TeamReplyBox.tsx —— 这里读的是实现
 // 所在的那个文件，拆走后没跟过来就等于这几条断言在读一份不存在的 withdraw。
-for (const [file, source] of [
-  ["ReplyBox.tsx", replySource],
-  ["TeamReplyBox.tsx", readSource(new URL("../src/team/TeamReplyBox.tsx", import.meta.url))],
+// 单飞那半的撤回又抽进了 withdrawDraft.ts 的 withdrawIntoBox（取消、等发送、回填都在那儿，经 `box.` 调），
+// ReplyBox 只管把自己那几样交过去——同样读实现所在的那一份。
+const withdrawDraftSource = readSource(new URL("../src/task-detail/withdrawDraft.ts", import.meta.url));
+assert.match(replySource, /const withdraw = \(message: ScheduledMessage\) => withdrawIntoBox\(message,/, "ReplyBox.tsx 撤回走 withdrawIntoBox");
+for (const [file, source, withdraw] of [
+  ["ReplyBox.tsx", replySource, withdrawDraftSource.slice(withdrawDraftSource.indexOf("export async function withdrawIntoBox"))],
+  ...[readSource(new URL("../src/team/TeamReplyBox.tsx", import.meta.url))]
+    .map((team) => ["TeamReplyBox.tsx", team, team.slice(team.indexOf("const withdraw = async"))] as const),
 ] as const) {
-  const withdraw = source.slice(source.indexOf("const withdraw = async"));
-  assert.match(withdraw, /if \(!await scheduled\.cancel\(message\.id\)\) return;/, `${file} 撤回必须先取消成功再回填`);
-  assert.match(withdraw, /await draft\.afterSend\(\);/, `${file} 撤回必须等在途的发送先结算，靠顺序而不是靠猜`);
+  assert.match(withdraw, /if \(!await (scheduled|box)\.cancel\(message\.id\)\) return;/, `${file} 撤回必须先取消成功再回填`);
+  assert.match(withdraw, /await (box\.)?draft\.afterSend\(\);/, `${file} 撤回必须等在途的发送先结算，靠顺序而不是靠猜`);
   // 在途发送登记在草稿库上（一组而不是一个），早退的那次调用顶不掉真正在飞的。
   assert.match(source, /draft\.trackSend\(run\);/, `${file} 发送必须登记到草稿库，撤回和「改了再发」才等得到它`);
   assert.match(withdraw, /joinDraftText\(message\.text, current\)/, `${file} 撤回必须把正文放回草稿`);
   assert.match(withdraw, /attachmentsFromPaths\(message\.attachments\)/, `${file} 撤回必须把附件放回草稿`);
   // 发送结算只认「草稿逐字没变」这一条:任何形式的子串搜索都可能把用户新写的句子
   // 当成旧的那一份删掉(2026-08-27 审查实测「方案」→「新方案细节」)。
-  const send = source.slice(source.indexOf("const runSend = async"), source.indexOf("const withdraw = async"));
+  const send = source.slice(source.indexOf("const runSend = async"), source.indexOf("const withdraw = "));
   assert.match(send, /const draftAtSend = \{ text: value, textVersion: draft\.value\.textVersion \};/, `${file} 发送要先留下整份草稿快照（字面 + 版本）`);
   assert.match(send, /clearSentDraft\(current, draftAtSend\)/, `${file} 发送后只在草稿没动过时才清`);
   assert.match(send, /const sentSelection = sentSelections\(uploads\.attachments\);/, `${file} 发送要记下提交的是哪几次选择`);

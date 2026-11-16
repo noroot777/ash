@@ -57,6 +57,22 @@ function RevealButton({ label, tip: tipText, busy, spinning, onClick, className,
   </>;
 }
 
+/** 撤回：取下这条，内容放回输入框。点开的那一行指到才出；收着那一行带着最早那条时常显。 */
+export function WithdrawButton({ message, tasks, busy, spinning, onWithdraw, className = "" }: {
+  message: ScheduledMessage;
+  tasks?: TaskListItem[];
+  busy: boolean;
+  spinning: boolean;
+  onWithdraw: (message: ScheduledMessage) => void;
+  className?: string;
+}) {
+  const whenSpoken = message.mode === "queued" ? "排队中" : message.mode === "timed" ? formatInstant(message.sendAt) : scheduledMessageWhen(message, tasks).text;
+  return <RevealButton className={`scheduled-message-withdraw ${className}`.trim()} busy={busy} spinning={spinning} tip="撤回，内容放回输入框"
+    label={`撤回${whenSpoken}的待发送消息“${scheduledMessageText(message) || "附件"}”，内容放回输入框`} onClick={() => onWithdraw(message)}>
+    <ArrowUUpLeft size={12} weight="bold" aria-hidden="true" />
+  </RevealButton>;
+}
+
 export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tasks, onToggle, onSteer, onWithdraw, onCancel, onSendNow, onOpenTask }: {
   message: ScheduledMessage;
   busy: boolean;
@@ -81,7 +97,6 @@ export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tas
   const attention = exitCode !== null && exitCode !== 0;
   const when = scheduledMessageWhen(message, tasks);
   const heldBy = message.mode === "queued" && message.wait?.kind === "dispatchHeld" ? message.wait.by : null;
-  const whenSpoken = message.mode === "queued" ? "排队中" : message.mode === "timed" ? formatInstant(message.sendAt) : when.text;
   return <div className={`scheduled-message-item${busy ? " is-busy" : ""}`} data-message-id={message.id}>
     <div className="scheduled-message-row">
       <span className={`scheduled-message-source${attention ? " is-attention" : ""}`}>{SOURCE_LABELS[source]}
@@ -103,10 +118,7 @@ export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tas
           disabled={busy} aria-label={`不再等前置任务，把“${displayText || "附件"}”直接发出`} onClick={() => onSendNow(message.id)}>
           <PaperPlaneRight size={12} aria-hidden="true" /><span>直接发送</span>
         </button>}
-        {source === "mine" && <RevealButton className="scheduled-message-withdraw" busy={busy} spinning={busy && !steering} tip="撤回，内容放回输入框"
-          label={`撤回${whenSpoken}的待发送消息“${displayText || "附件"}”，内容放回输入框`} onClick={() => onWithdraw(message)}>
-          <ArrowUUpLeft size={12} weight="bold" aria-hidden="true" />
-        </RevealButton>}
+        {source === "mine" && <WithdrawButton message={message} tasks={tasks} busy={busy} spinning={busy && !steering} onWithdraw={onWithdraw} />}
         {source === "monitor" && onCancel && <RevealButton className="scheduled-message-cancel" busy={busy} spinning={busy} tip="取消这次唤醒"
           label={`取消哨兵事件“${displayText}”这一次唤醒（仅移除本条输入，不执行停止哨兵操作）`} onClick={() => onCancel(message.id)}>
           <X size={12} weight="bold" aria-hidden="true" />

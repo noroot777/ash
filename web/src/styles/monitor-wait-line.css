@@ -1,5 +1,6 @@
-/* 「在等哨兵」那一行（monitors/MonitorWaitLine.tsx）：会话最后、和回合正文对齐的一行静止的字。
-   图标是琥珀色（等你处理 / 在等的那一类状态色），字是次级色；点开是一块浅底的说明。 */
+/* 「哨兵在盯 / 在等哨兵」那一行（monitors/MonitorWaitLine.tsx）住在回复框上方的 rail 上，跟「排着 N 条」
+   那一行同一种没框的小字；「被派它的那条按住了」那一行（DispatchHeldLine）借这套样子留在会话最后。
+   图标是琥珀色（等你处理 / 在等的那一类状态色），哨兵在盯时缓缓地动；字是次级色；点开是一块浅底的说明。 */
 .monitor-wait-line { max-width: 790px; margin: -8px 0 20px; padding-left: 30px; color: var(--muted); font-size: var(--t-xs); }
 .monitor-wait-line__bar { display: flex; max-width: 100%; min-height: 24px; align-items: center; gap: 6px; border: 0; border-radius: var(--r-sm); background: transparent; padding: 0 6px; margin-left: -6px; color: var(--muted); font-size: var(--t-xs); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .monitor-wait-line__bar:hover, .monitor-wait-line__bar[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
@@ -20,3 +21,11 @@
 .monitor-wait-line__acts button + button { margin-left: 4px; }
 .monitor-wait-line__acts button:hover:not(:disabled) { background: var(--hover-bg); }
 .monitor-wait-line__acts button:disabled { opacity: .5; }
+
+/* 回复框上方那一份：不缩进、独占 rail 的一行，左边跟「排着 N 条」那一行对齐。 */
+.task-reply-rail > .monitor-wait-line { flex: 1 1 100%; max-width: none; margin: 0; padding-left: 2px; }
+.task-reply-rail > .monitor-wait-line .monitor-wait-line__bar { margin-left: 0; padding: 0 6px 0 4px; }
+.task-reply-rail > .monitor-wait-line .monitor-wait-line__body { width: 100%; }
+.monitor-wait-line.is-live .monitor-wait-line__bar > svg { animation: monitor-wait-line-beat 2.4s ease-in-out infinite; }
+@keyframes monitor-wait-line-beat { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .monitor-wait-line.is-live .monitor-wait-line__bar > svg { animation: none; } }

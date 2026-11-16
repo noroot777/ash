@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ScheduledMessage, TaskListItem } from "@ash/shared";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { ScheduledMessageRow, scheduledMessageLabel, SteerButton } from "./ScheduledMessageRow.tsx";
+import { ScheduledMessageRow, scheduledMessageLabel, SteerButton, WithdrawButton } from "./ScheduledMessageRow.tsx";
 import { bySendTime, scheduledMessageNeedsAttention, scheduledMessageSource, scheduledMessageText } from "./scheduledMessagePresentation.ts";
 
 type TrayProps = {
@@ -27,7 +27,7 @@ type TrayProps = {
 
 /**
  * 回复框上方那一行「排着 N 条」,点开是按发送顺序排的几行。收着的时候这一行上直接带着用户自己最早
- * 那条(和它能引导时的「引导会话」),其余动作都在点开后的那一行行尾。
+ * 那条和它的两颗键(撤回、能引导时的「引导会话」),其余动作都在点开后的那一行行尾。
  */
 export function ScheduledMessageTray(props: TrayProps) {
   const { messages, loading, error, cancelingIds, steeringIds, onSteer, onWithdraw, onCancel, tasks, onSendNow, onOpenTask } = props;
@@ -117,6 +117,8 @@ export function ScheduledMessageTray(props: TrayProps) {
             <button type="button" className="scheduled-tray-head-summary" aria-label={`查看完整输入：${scheduledMessageLabel(head)}`}
               onClick={() => show(head.id, { readable: true })}>{scheduledMessageLabel(head)}</button>
           </span>
+          <WithdrawButton className="is-shown" message={head} tasks={tasks} busy={busy(head)}
+            spinning={busy(head) && !steeringIds?.has(head.id)} onWithdraw={onWithdraw} />
           {head.steerable === true && onSteer && <SteerButton message={head} busy={busy(head)} steering={!!steeringIds?.has(head.id)} onSteer={onSteer} />}
         </>}
       </div>}

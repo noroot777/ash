@@ -42,6 +42,8 @@
 .scheduled-message-row:hover .scheduled-message-reveal, .scheduled-message-row:focus-within .scheduled-message-reveal,
 .scheduled-message-item.is-busy .scheduled-message-reveal { opacity: 1; }
 @media (hover: none) { .scheduled-message-reveal { opacity: 1; } }
+/* 收着那一行上最早那条的撤回：跟「引导会话」一样常显，只是一颗图标。 */
+.scheduled-tray-line > .scheduled-message-reveal.is-shown { flex: none; opacity: 1; }
 .scheduled-message-full { grid-column: 1 / -1; padding: 2px 0 8px; color: var(--muted); font-size: var(--t-xs); }
 .scheduled-message-body { overflow-wrap: anywhere; border-radius: 6px; background: var(--overlay); padding: 9px 10px; line-height: 1.7; white-space: pre-wrap; }
 .scheduled-message-full ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }

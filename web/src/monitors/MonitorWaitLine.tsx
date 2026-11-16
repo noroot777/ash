@@ -1,11 +1,15 @@
-// 「在等哨兵」那一行：任务停下来等哨兵时，最近那一回合的最后一行（docs/ui-ux-audit feed-7）。
+// 「哨兵在盯」那一行：回复框上方，排队消息那一行旁边的一行字。只要还有哨兵在盯就在，任务在跑
+// 也在——那时挂上的哨兵是执行过程里的一步，可它在后台花的是真回合，这一刻有几个、盯的是什么，
+// 页面上得看得出来（用户 2026-11-16：挪进会话最后以后，任务在跑时就完全看不见了）。
 //
-// 等的时候任务是暂停的，状态机一个字不改：这一行只是把「它为什么不动」说在会话里——
-// 在等谁、等了多久、最迟等到几点。字上没有流光（没有东西在跑）。点开是等到以后它接着做
-// 什么，和两条出路：不等了（停掉哨兵，任务留在暂停）、去哨兵格看它的输出。
+// 它是「进行中的状态」，不是会话内容，所以不进主内容流（feed-7 那一版把它放在会话最后，只在任务
+// 停下来等它时出现）。两种说法：
+//   · 任务停下来等它（`running` 为假）：在等谁、等了多久、最迟等到几点；点开是等到以后它接着做
+//     什么，和两条出路：不等了（停掉哨兵，任务留在暂停）、去哨兵格看它的输出。
+//   · 任务正在跑一轮：哨兵在盯什么、盯了多久；事件先排着，这一轮跑完再送进去。出路是停掉、去哨兵格。
+// 图标在盯的时候一直缓缓地动（有东西在后台跑着）。
 //
-// 原来这件事是回复框上方常驻的一条（用户 2026-10-16 要它「主会话里看得见」，这一版仍然
-// 看得见，只是挪进了会话最后、不再占着回复框上面那一行）。点开之后的那几段说明照旧：
+// 点开之后的那几段说明：
 //
 // **「在等」只算 ash 自己起的那些**：claude 内置 Monitor 的通知只注回它那一轮的会话，
 // 回合一结束就跟着没了，ash 这边够不着任何唤醒通道 —— 把它算进「在等」就是让用户等一件
@@ -23,6 +27,7 @@ export function MonitorWaitLine({
   builtinCount,
   resumePrompt,
   reviewArmed,
+  running = false,
   onOpenPanel,
   notify,
 }: {
@@ -34,6 +39,8 @@ export function MonitorWaitLine({
   resumePrompt: string | null;
   /** 这个任务上有一条已预约、还没开跑的审查。 */
   reviewArmed: boolean;
+  /** 任务此刻正在跑一轮（或排着队要跑）：哨兵是这一轮里挂上的，不是在「等」它。 */
+  running?: boolean;
   onOpenPanel: () => void;
   notify?: (message: string) => void;
 }) {
@@ -57,7 +64,7 @@ export function MonitorWaitLine({
   const quit = async () => {
     setStopping(true);
     try {
-      for (const monitor of stoppable) await api.stopMonitor(monitor.id, "用户在会话里点了「不等了」");
+      for (const monitor of stoppable) await api.stopMonitor(monitor.id, running ? "用户在回复框上方点了「停掉」" : "用户在回复框上方点了「不等了」");
       setOpen(false);
     } catch (reason) {
       notify?.(reason instanceof Error ? reason.message : String(reason));
@@ -67,7 +74,7 @@ export function MonitorWaitLine({
   };
 
   return (
-    <section className={`monitor-wait-line${builtinOnly ? " is-builtin-only" : ""}`} aria-label="任务的哨兵">
+    <section className={`monitor-wait-line${builtinOnly ? " is-builtin-only" : " is-live"}`} aria-label="任务的哨兵">
       <button
         type="button"
         className="monitor-wait-line__bar"
@@ -77,9 +84,9 @@ export function MonitorWaitLine({
       >
         <Pulse size={13} aria-hidden="true" />
         <span className="monitor-wait-line__label">
-          {builtinOnly ? `${builtinCount} 个内置 Monitor 在跑，不会叫醒任务` : `在等哨兵「${name}」`}
+          {builtinOnly ? `${builtinCount} 个内置 Monitor 在跑，不会叫醒任务` : running ? `哨兵在盯「${name}」` : `在等哨兵「${name}」`}
         </span>
-        {waited !== null && <span className="monitor-wait-line__time">等了 {formatDuration(now - waited)}</span>}
+        {waited !== null && <span className="monitor-wait-line__time">{running ? "盯了" : "等了"} {formatDuration(now - waited)}</span>}
         {first && monitors.length === 1 && dueLabel(first) && <span className="monitor-wait-line__due">{dueLabel(first)}</span>}
       </button>
       {open && (
@@ -99,6 +106,11 @@ export function MonitorWaitLine({
               这几个是智能体用 claude 自带的 <code>Monitor</code> 起的：进程在它自己那一轮里，
               通知也只注回那条会话 —— <b>它们不会把这个任务叫醒</b>，回合一结束就跟着被收走。
               要跨回合等一件事，得用 ash 的哨兵（<code>start_monitor</code>）并用 <code>pause_task</code> 收尾那一轮。
+            </p>
+          ) : running ? (
+            <p>
+              它是这一轮里挂上的：有事件先排着，这一轮跑完再送进{reviewerOnly ? "审查那条会话" : "这条会话"}。
+              {builtinCount > 0 && <> 另有 {builtinCount} 个 claude 内置 Monitor 在智能体自己那一轮里跑着，它们不会唤醒任务。</>}
             </p>
           ) : (
             <p>
@@ -121,7 +133,7 @@ export function MonitorWaitLine({
           )}
           <p className="monitor-wait-line__acts">
             {stoppable.length > 0 && (
-              <button type="button" disabled={stopping} onClick={() => void quit()}>不等了</button>
+              <button type="button" disabled={stopping} onClick={() => void quit()}>{running ? "停掉" : "不等了"}</button>
             )}
             <button type="button" onClick={onOpenPanel}>在哨兵格里看</button>
           </p>
