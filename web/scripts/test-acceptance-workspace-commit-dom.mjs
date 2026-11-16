@@ -7,7 +7,8 @@ let browser;
 try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" }));
+  // 204 = 这条流不连、也不重连（回一段写完就结束的流，EventSource 会每 3 秒重连一次）。
+  await page.route("**/api/events", route => route.fulfill({ status: 204 }));
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   const fixture = `${web.origin}/scripts/fixtures/page-interactions.html`;

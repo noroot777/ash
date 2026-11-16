@@ -168,8 +168,11 @@ export function gateStage({ browser, base }) {
     await page.route("**/api/tasks/gate-task/accept-gate/log?*", route => route.fulfill({
       status: 200, contentType: "text/plain", body: store.logText,
     }));
-    // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
-    await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
+    // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件。回 204 = 服务端说「不必再连」，这条流
+    // 从头到尾没连上、也不重连（要它连着的用例传 events: true）。别回一条 200 的空流：流一结束
+    // EventSource 就每 3 秒重连一次，连上和断开挨着到，「断线作废」那一下取消不取消排着的自动重试
+    // 只看这两下之间页面来不来得及渲染 —— 机器一忙，读失败之后就再也没有下一发。
+    await page.route("**/api/events", (route) => route.fulfill({ status: 204 }));
     await page.route("**/api/projects", async (route) => {
       store.projectReads += 1;
       if (store.projectHold) { await store.projectHold; return; }
