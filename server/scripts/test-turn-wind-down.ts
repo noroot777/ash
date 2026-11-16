@@ -311,9 +311,11 @@ async function windDownTurn(taskId: string) {
   const stepNow = () => turnIdentity(taskId)?.windDown?.step ?? null;
   await waitFor("收尾走到写会话那一步", () => stepNow() === "写执行记录与会话收尾(closeExecution / recordTurnSpan)");
 
-  // 没到阈值:不报;人工放开拒绝,说的是「正在收尾,会自己放」。
-  assert.equal(await reportStuckWindDowns(), 0);
-  const early = turnReclaimStatus(taskId);
+  // 没到阈值:不报;人工放开拒绝,说的是「正在收尾,会自己放」。时刻明着给(进到这一步之后 1ms) ——
+  // 阈值压到了 150ms,按挂钟问的话机器一忙,走到这两句时就已经过线了。
+  const justIn = turnIdentity(taskId)!.windDown!.stepAt + 1;
+  assert.equal(await reportStuckWindDowns(justIn), 0);
+  const early = turnReclaimStatus(taskId, justIn);
   assert.equal(early.kind, "blocked");
   assert.match(early.kind === "blocked" ? early.reason : "", /正在收尾.*会自己放开占位/);
 

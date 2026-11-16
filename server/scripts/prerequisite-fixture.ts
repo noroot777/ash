@@ -41,6 +41,8 @@ function start(input) {
   started = true;
   process.stdout.write(JSON.stringify({ type: "system", session_id: "prereq-" + task }) + "\\n");
   const timer = setInterval(() => {
+    // 台子被拆了（测试中途失败、被杀）就别再等放行文件：没人会来放它了。
+    if (!fs.existsSync(process.env.ASH_TEST_RELEASE_DIR)) process.exit(0);
     if (!fs.existsSync(path.join(process.env.ASH_TEST_RELEASE_DIR, task))) return;
     clearInterval(timer);
     process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: "prereq-" + task }) + "\\n");
@@ -100,7 +102,9 @@ export const request = (method: string, path: string, body?: unknown) => api.req
 export const at = new Date().toISOString();
 export const started: string[] = [];
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-export const until = async (what: string, cond: () => boolean | Promise<boolean>, ms = 15_000) => {
+// 上限放宽到一分钟：同组几条起跑要挨个过同仓库的 git 锁，机器忙时（门禁并行 8 路）四条起齐实测要 30 秒。
+// 只是「最多等多久」，条件成立立刻返回，绿的时候不会变慢。
+export const until = async (what: string, cond: () => boolean | Promise<boolean>, ms = 60_000) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(25)) if (await cond()) return;
   assert.fail(`等不到:${what}`);
 };

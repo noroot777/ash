@@ -130,9 +130,10 @@ if (isExec) {
     assert.match(inFlight.commandLine ?? "", /--profile my-profile/, "profile 参数及其值必须原样保留");
     assert.match(inFlight.commandLine ?? "", /-c foo=1/, "exec 与 App Server 共用的 -c 也必须保留");
     assert.doesNotMatch(inFlight.commandLine ?? "", new RegExp(secret));
-    writeFileSync(process.env.ASH_NOTICE_TRIGGER!, "finish");
-    await running;
   } finally {
+    // 放走假 codex 排在 finally 里:上面哪条断言先红了,它也不会一直等着这个文件、变成没人管的进程。
+    writeFileSync(process.env.ASH_NOTICE_TRIGGER!, "finish");
+    await running?.catch(() => {});
     unsubscribe();
   }
 

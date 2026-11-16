@@ -157,7 +157,11 @@ setTimeout(() => { clearInterval(keep); process.exit(0); }, 30000);
     const feed = join(root, `late-ready-${attempt}.mjs`);
     // 期限有 1 秒地板（monitors.ts 的 `EXPIRY_FLOOR_MS`）,所以这一行**贴着期限**写出来:它落进
     // 缓冲之后那 300ms 的冲刷窗口来不及先把它推出去,到期先占到收尾槽位 —— 正是审查的那个现场。
-    writeFileSync(feed, `setTimeout(() => console.log("READY"), 960);\nsetInterval(() => {}, 1000);\n`);
+    // 「贴着期限」按**同一只钟**对：那一行约在挂上之后 850ms 这个时刻写出来 —— 落在冲刷窗口（期限前
+    // 300ms）正中，前后各留 150ms。按子进程自己起来的时刻数 960ms 的话，进程起得慢一点（机器一忙就是
+    // 几十到几百毫秒）那一行就落到期限之后，四轮都凑不出前提。
+    const due = Date.now() + 850;
+    writeFileSync(feed, `setTimeout(() => console.log("READY"), Math.max(0, ${due} - Date.now()));\nsetInterval(() => {}, 1000);\n`);
     const started = await startMonitor({
       taskId,
       command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,

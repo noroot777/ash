@@ -110,8 +110,12 @@ const ok = await trialPreviewScript({ cwd: process.cwd(), script: listen, mode: 
 check("听住借来的端口就算起来了", ok.ok, true);
 check("——并且报出探到的地址", typeof ok.url === "string" && ok.url.includes(String(ok.port)), true);
 // 杀不干净的话这台机器上会留一个谁也管不到的 dev server，界面上连痕迹都没有。
-await new Promise((done) => setTimeout(done, 500));
-check("试跑结束后进程被杀干净，端口空出来", await canConnect(ok.port ?? 0), false);
+let stillListening = true;
+for (const until = Date.now() + 10_000; stillListening && Date.now() < until;) {
+  stillListening = await canConnect(ok.port ?? 0);
+  if (stillListening) await new Promise((done) => setTimeout(done, 50));
+}
+check("试跑结束后进程被杀干净，端口空出来", stillListening, false);
 
 const gone = await trialPreviewScript({ cwd: process.cwd(), script: "echo 我不干了 >&2; exit 3", mode: "command", timeoutMs: 30_000 });
 check("进程自己退了就是没起来", gone.ok, false);

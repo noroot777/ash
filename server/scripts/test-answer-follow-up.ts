@@ -303,7 +303,8 @@ try {
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
-  for (const id of runs.runningTaskIds?.() ?? []) runs.stopTask(id);
+  // 中途失败时还开着的那几轮照样停掉（任务 id 都是这个前缀，按库里的行逐条停）。
+  for (const { id } of await db.select({ id: tasks.id }).from(tasks).catch(() => [])) runs.stopTask(id);
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
   process.exit(failure ? 1 : 0);
