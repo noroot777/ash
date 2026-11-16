@@ -1,5 +1,5 @@
 import type { TaskListItem } from "@ash/shared";
-import { hasFailed } from "./taskAttention.ts";
+import { awaitsRuling, hasFailed } from "./taskAttention.ts";
 
 // 「派它的那条任务」（Task.dispatchedBy）在前端的几样读法：谁名下有谁、整棵往下算有没有要你
 // 处理的。侧栏的收纳（workspace/dispatchForest.ts）、侧栏那个数、详情页右侧「派出的任务」那一格
@@ -26,9 +26,9 @@ export function dispatchSubtree<T extends { id: string }>(children: ReadonlyMap<
   return result;
 }
 
-/** 需要你处理的那几种：在等答复、失败（含验证没过）。只有它们在「派出的任务」里带颜色。 */
-export function dispatchNeedsYou(task: Pick<TaskListItem, "question" | "status" | "stage">): boolean {
-  return !!task.question || hasFailed(task);
+/** 需要你处理的那几种：在等答复、等你裁定、失败（含验证没过）。只有它们在「派出的任务」里带颜色。 */
+export function dispatchNeedsYou(task: TaskListItem): boolean {
+  return !!task.question || awaitsRuling(task) || hasFailed(task);
 }
 
 /**
@@ -61,16 +61,17 @@ export function dispatchedOf(tasks: readonly TaskListItem[], taskId: string): Ta
 export type DispatchFacts = {
   count: (taskId: string) => number;
   needsYou: (taskId: string) => boolean;
+  /** 名下整棵往下还有没归档的（中间那层归档了也算）：有就是父任务，行尾要有那句短语。 */
+  hasBelow: (taskId: string) => boolean;
 };
 
 /**
- * 一行带不带那个数：名下有直接派出的，或者整棵往下有要你处理的（直接那几条全归档了、底下还在等你，
- * 数是 0 也得带着变色）。侧栏那一行、右侧「派出的任务」格里的一行同一个判据。
+ * 一行带不带那个数、变不变色：名下整棵往下还有没归档的才带（直接那几条全归档了、更底下还有，数是 0
+ * 也带着），整棵往下有要你处理的就变色。右侧「派出的任务」格里的一行用它，口径同侧栏那一行
+ * （workspace/DispatchTreeRows.tsx：hasBelow 定是不是父任务，count / needsYou 定那个数和颜色）。
  */
 export function dispatchTally(facts: DispatchFacts, taskId: string): { count: number; warn: boolean } | null {
-  const count = facts.count(taskId);
-  const warn = facts.needsYou(taskId);
-  return count || warn ? { count, warn } : null;
+  return facts.hasBelow(taskId) ? { count: facts.count(taskId), warn: facts.needsYou(taskId) } : null;
 }
 
 /** 那个数念出来的那句（数本身只给眼睛看）。 */
@@ -78,7 +79,8 @@ export function dispatchTallySaid(tally: { count: number; warn: boolean }): stri
   return `${tally.count} 个派出的任务${tally.warn ? "，有要你处理的" : ""}`;
 }
 
-export function dispatchFacts(tasks: readonly TaskListItem[]): DispatchFacts {
+/** 「派活人 id → 它直接派出去的那几条」，含归档的（能不能往下走只看边，见 isDispatchEdge）。 */
+export function dispatchEdges(tasks: readonly TaskListItem[]): Map<string, TaskListItem[]> {
   const edges = new Map<string, TaskListItem[]>();
   for (const task of tasks) {
     if (!isDispatchEdge(task)) continue;
@@ -86,8 +88,21 @@ export function dispatchFacts(tasks: readonly TaskListItem[]): DispatchFacts {
     if (bucket) bucket.push(task);
     else edges.set(task.dispatchedBy, [task]);
   }
+  return edges;
+}
+
+export function dispatchFacts(tasks: readonly TaskListItem[]): DispatchFacts {
+  const edges = dispatchEdges(tasks);
   const needs = new Map<string, boolean>();
+  const below = new Map<string, boolean>();
   return {
+    hasBelow: (taskId) => {
+      const known = below.get(taskId);
+      if (known !== undefined) return known;
+      const result = dispatchSubtree(edges, taskId).some((task) => !task.archived);
+      below.set(taskId, result);
+      return result;
+    },
     count: (taskId) => edges.get(taskId)?.filter((task) => !task.archived).length ?? 0,
     needsYou: (taskId) => {
       const known = needs.get(taskId);

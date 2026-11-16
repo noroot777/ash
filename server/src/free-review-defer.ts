@@ -155,6 +155,8 @@ export async function deferOpenDispute(
       await db.update(freeReviewRounds)
         .set({ disputeResolution: null, disputeResolvedAt: null, disputeResolutionNote: null })
         .where(eq(freeReviewRounds.id, round.id));
+      // 回滚也是「等你裁定」又变了一次：中间若有人读到过「已裁定」，这一声让面板和列表都追回来。
+      bus.publish({ type: "task.review", taskId: source.id });
       throw error;
     }
 

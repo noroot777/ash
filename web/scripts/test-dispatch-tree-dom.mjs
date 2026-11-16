@@ -2,7 +2,7 @@
 //
 // 钉的是这几件事：
 //   · 默认收着：行首箭头、行尾一个数；名下有在等答复的，数变琥珀色。
-//   · 展开记在本机，刷新后还开着。
+//   · 展开记在本机，刷新后还开着；点这一行本身（打开它）也展开，只开不收。
 //   · 派它的那条不在列表里（归档了），派出的任务照常平铺，不跟着消失。
 //   · 搜索命中一条收着的任务（= 选中它）时，它上面那几层自己打开，看得见它。
 //   · 新派出去的任务不刷新就收进来。
@@ -60,6 +60,11 @@ try {
   await page.getByRole("button", { name: "展开 1 个执行者" }).click();
   await page.locator('.workspace-worker-list [data-task-id="worker"]').waitFor();
   assert.equal(await page.locator(".workspace-worker-list .workspace-dispatch-count").count(), 0, "团队行不长出派活那一层");
+  await page.getByRole("button", { name: "折叠执行者" }).click();
+  await page.waitForFunction(() => !document.querySelector('.workspace-worker-list [data-task-id="worker"]'));
+  await row("team").click();
+  await page.locator('.workspace-worker-list [data-task-id="worker"]').waitFor();
+  assert.equal(await row("team").getAttribute("aria-selected"), "true", "点团队行本身：打开它，执行者也跟着展开");
 
   // —— 展开：名下三条出来，孙辈仍收在它自己那一层下面。
   await caret.click();
@@ -78,6 +83,15 @@ try {
   await page.reload();
   await row("kid-run").waitFor();
   assert.equal(await page.getByRole("button", { name: /^收起 3 个派出的任务/ }).getAttribute("aria-expanded"), "true", "展开记在本机，刷新后还开着");
+
+  // —— 收着时点这一行本身（打开它）：名下那一层跟着展开；再点一次不会收回去，收起只靠箭头。
+  await page.getByRole("button", { name: /^收起 3 个派出的任务/ }).click();
+  await page.waitForFunction(() => !document.querySelector('[data-task-id="kid-run"]'));
+  await lead.click();
+  await row("kid-run").waitFor();
+  assert.equal(await lead.getAttribute("aria-selected"), "true");
+  await lead.click();
+  assert.equal(await page.getByRole("button", { name: /^收起 3 个派出的任务/ }).getAttribute("aria-expanded"), "true", "再点一次仍开着");
 
   // —— 收起之后，搜索命中孙辈（= 选中它）：两层都自己打开。
   await page.getByRole("button", { name: /^收起 3 个派出的任务/ }).click();

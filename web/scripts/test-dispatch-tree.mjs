@@ -147,6 +147,16 @@ const ids = (rows) => rows.map((row) => row.id);
 
   const archivedFailure = dispatchFacts([task("a"), task("x", { dispatchedBy: "a", archived: true, status: "failed", stage: null })]);
   assert.equal(archivedFailure.needsYou("a"), false, "归档了的失败是用户收起来的，不再算要你处理");
+  assert.equal(archivedFailure.hasBelow("a"), false, "名下全归档、底下也没别的：不算父任务");
+
+  // 中间那条归档了、底下那条只是在跑（不算要你处理、数也是 0）：上面那条照样是父任务，行尾要说它在跑。
+  const archivedMiddle = dispatchFacts([
+    task("a"),
+    task("b", { dispatchedBy: "a", archived: true }),
+    task("c", { dispatchedBy: "b", status: "running", stage: null }),
+  ]);
+  assert.deepEqual([archivedMiddle.count("a"), archivedMiddle.needsYou("a"), archivedMiddle.hasBelow("a")], [0, false, true]);
+  assert.equal(dispatchFacts([task("a"), task("b", { dispatchedBy: "a", stage: null, disputeOpen: true })]).needsYou("a"), true, "等你裁定也算要你处理");
 }
 
 // —— 右侧那一格：名下有谁（没归档、不是执行者）、状态词、一行小字、一个接一个还是同时。
