@@ -6,7 +6,8 @@
 //    主按钮锁着（读不出来不放行），读到之后由门禁那一行接手。
 // ⑱ 归档 / 任务在跑 / 宿主那道关（审查进行中）任何一个在，主按钮都锁着，原因各自一行。
 // ⑲ 红了之后的两条出路都在确认层里，**打开确认层不动任何东西**：取消「运行」+ 取消「提交」
-//    发的是 {commit:false, gate:"skip"}（确认之后记成默认）；重新勾上再确认（失败从不被沿用）就是重跑，
+//    发的是 {commit:false, gate:"skip"}（跳过只管这一按，「提交」记成项目默认）；下一次打开「运行」又是勾着的，
+//    照常确认（失败从不被沿用）就是重跑，
 //    回执说「已开跑」之后那一行写「运行中」、主按钮锁着，确认层不留着。
 // ⑳ 门禁还在读的时候主按钮只转圈不放行（文字不变）；读到的命令是项目**现在**那一条，不是
 //    上一次跑的那一条；读出来是「没设」就没有这一行、确认层里也不跑；读失败不能被当成「没设」。
@@ -79,13 +80,13 @@ export async function testAcceptGateActions({ open, run }) {
       assert.deepEqual(store.accepts[1], { confirmUnverified: false, commit: false, gate: "skip" });
       await checkRow(page, "failure").filter({ hasText: "验收没完成" }).waitFor();
 
-      // 上一按确认了跳过、不提交：记成这个项目的默认（test-accept-gate-confirm.mjs ⑭b），那一行先说出来。
-      await row.filter({ hasText: "未通过，还没交给任务，验收时跳过" }).waitFor();
+      // 上一按确认了跳过、不提交：跳过只管那一按（test-accept-gate-confirm.mjs ⑭b），那一行不再预告跳过。
+      await deskSettled(page);
+      await waitUntil(async () => (await row.locator(".acc-check-state").innerText()) === "未通过，还没交给任务", "那一按落定，那一行不再说跳过");
       // ⑲ 照常确认 = 重跑：回执说已开跑，那一行换成「运行中」，主按钮锁着，层不留着。
       layer = await openConfirm(page);
-      assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), false, "上一按确认的跳过记住了");
+      assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), true, "上一按的跳过不记：这次默认还是跑");
       assert.equal(await layer.getByRole("checkbox", { name: "合并后提交" }).isChecked(), false, "上一按确认的不提交记住了");
-      await layer.getByRole("checkbox", { name: "运行前置命令" }).check();
       await layer.getByRole("checkbox", { name: "合并后提交" }).check();
       await layer.getByRole("button", { name: "确认验收", exact: true }).click();
       await waitUntil(() => store.accepts.length === 3, "重跑那一按发出去");

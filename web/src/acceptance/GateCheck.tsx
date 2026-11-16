@@ -28,7 +28,7 @@ export function GateCheck({ task, gate, canManage, settled, atFinalGate, skippin
   canManage: boolean | null;
   settled: boolean;
   atFinalGate: boolean;
-  /** 这一按会跳过它（确认层「运行」那一勾此刻的样子，默认是上一次确认的）。 */
+  /** 这一按会跳过它（确认层里取消了「运行」；只管这一按，不记）。 */
   skipping: boolean;
   /** 归档、任务在跑、这一屏正忙：会真的起一轮的「交给任务」跟着禁用。 */
   disabled: boolean;

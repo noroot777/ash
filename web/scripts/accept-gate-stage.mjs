@@ -99,9 +99,9 @@ export async function assertTone(row, tone, message) {
  * 而送不出）之后兑现；页面那一侧有没有消费完看 fetchesSettled（只记 TRACKED_READS）。
  *
  * 发给 /accept 的请求体按顺序记在 `store.accepts`，回什么由 `store.acceptReply(body)` 定
- * （缺省回一个 409 target_unresolved「模拟验收响应」：什么都没动）。确认层点确认时记下的那几勾
- * （PUT /accept-memory）按顺序记在 `store.memory`，照服务端那样落回门禁状态的 skipRemembered 与
- * 项目的 acceptCommit（`role` 不是 admin 时提交那一勾不写）；`store.memoryDown` 让它回 503，
+ * （缺省回一个 409 target_unresolved「模拟验收响应」：什么都没动）。确认层点确认时记下的「提交」那一勾
+ * （PUT /accept-memory）按顺序记在 `store.memory`，照服务端那样落回项目的 acceptCommit（`role` 不是
+ * admin 时不写）；`store.memoryDown` 让它回 503，
  * `store.memoryHold` 给一个 promise 就扣住它（连接挂住、不报错）；`store.projectHold` 同样扣住 GET /api/projects。`children` 给依赖计划挂派生任务。
  *
  * 其余开关：`status` 门禁读取一开始就回这个错误码；`hold` 一开始就扣住每一发门禁读取（见
@@ -185,10 +185,10 @@ export function gateStage({ browser, base }) {
       store.memory.push(body);
       if (store.memoryHold) { await store.memoryHold; return; }
       if (store.memoryDown) return json(route, { error: "数据库忙" }, 503);
-      if (typeof body.skipGate === "boolean") store.gate = { ...store.gate, skipRemembered: body.skipGate };
-      const commitSaved = typeof body.commit === "boolean" && role === "admin";
+      if (typeof body.commit !== "boolean") return json(route, { error: "commit 只能是布尔值" }, 400);
+      const commitSaved = role === "admin";
       if (commitSaved) store.acceptCommit = body.commit;
-      return json(route, { skipGate: store.gate?.skipRemembered === true, commit: store.acceptCommit !== false, commitSaved });
+      return json(route, { commit: store.acceptCommit !== false, commitSaved });
     });
     await page.route("**/api/projects/proj-1", async (route) => {
       store.patches.push(JSON.parse(route.request().postData() ?? "{}"));

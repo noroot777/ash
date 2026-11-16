@@ -472,8 +472,8 @@ export * from "./schema-task-notice.js";
 // 任务「看过没有」(task_reads,侧栏绿点的已读记录),表定义 + 建表在 `schema-task-reads.ts`。
 export * from "./schema-task-reads.js";
 
-// 验收确认层「运行」那一勾上次的样子(accept_memory,按人按项目),表定义 + 建表在 `schema-accept-memory.ts`。
-export * from "./schema-accept-memory.js";
+// 项目设置「合并后提交」最后一笔是哪一次写的(accept_commit_order),表定义 + 建表在 `schema-accept-commit-order.ts`。
+export * from "./schema-accept-commit-order.js";
 
 // 任务写过的位置(task_writes,生成物面板的并发裁决用),表定义 + 建表在 `schema-task-writes.ts`。
 export * from "./schema-task-writes.js";

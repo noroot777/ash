@@ -12,7 +12,6 @@ import { eq, isNull, sql } from "drizzle-orm";
 import { getAppSettings } from "../app-settings.js";
 import { db } from "../db/index.js";
 import {
-  acceptMemory,
   agents,
   llmProviders,
   notes,
@@ -107,9 +106,6 @@ export async function claimExistingDataFor(userId: string): Promise<Record<strin
     db.update(taskReads).set({ owner: userId }).where(eq(taskReads.owner, "")));
   await take("taskReadRevs", () =>
     db.update(taskReadRevs).set({ owner: userId }).where(eq(taskReadRevs.owner, "")));
-  // 验收确认层「运行」那一勾上次的样子:同样记在空串名下(schema-accept-memory.ts)。
-  await take("acceptMemory", () =>
-    db.update(acceptMemory).set({ owner: userId }).where(eq(acceptMemory.owner, "")));
   await take("executors", () =>
     db.update(agents).set({ ownerUserId: userId }).where(isNull(agents.ownerUserId)));
   await take("providers", () =>
