@@ -10,6 +10,8 @@
 // 失败的 lsof/ss/fuser 垫片模拟「系统查不出监听者」;Windows 的监听者走 PowerShell,垫不掉,
 // 那一段只在 POSIX 上跑。
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:net";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +26,20 @@ const TMP = mkdtempSync(join(tmpdir(), "ash-restart-lock-"));
 const FAKE_BIN = join(TMP, "bin");
 const NO_LISTENERS_BIN = join(TMP, "no-listeners");
 const ENTRY = join(TMP, "ash", "server", "dist", "index.js");
+
+// 四个互不相同的空闲端口：同时占住再一起放，免得拿到同一个。写死端口的话这条测试没法跟自己并行，
+// 也会撞上机器上碰巧占着那个号的东西。
+const PORTS = await (async () => {
+  const probes = await Promise.all(Array.from({ length: 4 }, async () => {
+    const probe = createServer();
+    probe.listen(0, "127.0.0.1");
+    await once(probe, "listening");
+    return probe;
+  }));
+  const ports = probes.map((probe) => probe.address().port);
+  await Promise.all(probes.map((probe) => new Promise((done) => probe.close(done))));
+  return ports;
+})();
 
 function shim(dir, name, body) {
   writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`);
@@ -112,7 +128,7 @@ await withTestResources(async () => {
     const bystander = spawnTestFixture(process.execPath, [script.file, "--entry", ENTRY], { stdio: "ignore" });
     await withTestResources(async () => {
       const { argv, born } = await bornOf(script.born);
-      for (const [port, heartbeatAtMs, shape] of [[14327, born - 2_000, "心跳早于它出生"], [14330, born + 3_600_000, "时钟回拨:心跳晚于它出生"]]) {
+      for (const [port, heartbeatAtMs, shape] of [[PORTS[0], born - 2_000, "心跳早于它出生"], [PORTS[3], born + 3_600_000, "时钟回拨:心跳晚于它出生"]]) {
         const output = await restart(port, { lock: { pid: bystander.pid, processStartedAtMs: born - 3_600_000, argv, heartbeatAtMs } });
         assert.ok(isPidAlive(bystander.pid), `${shape}:锁里的号码被当成旧实例停掉了:\n${output}`);
         assert.doesNotMatch(output, /无法安全终止|试过 kill/, `${shape}:锁里的号码不该进候选`);
@@ -125,7 +141,7 @@ await withTestResources(async () => {
 
   // ── 2. 卡死不应答的旧实例,系统查得到监听者:--force 换得掉 ────────────────────
   {
-    const port = 14328;
+    const port = PORTS[1];
     const script = fixtureScript("hung-listened", { port, hung: true });
     const old = spawnTestFixture(process.execPath, [script.file], { stdio: "ignore" });
     await withTestResources(async () => {
@@ -140,7 +156,7 @@ await withTestResources(async () => {
 
   // ── 3. 同样卡死,但系统查不出监听者:不碰它(锁里有它的号码也不用),如实中止 ──────
   if (!IS_WINDOWS) {
-    const port = 14329;
+    const port = PORTS[2];
     const script = fixtureScript("hung-unlistened", { port, hung: true });
     const old = spawnTestFixture(process.execPath, [script.file], { stdio: "ignore" });
     await withTestResources(async () => {
