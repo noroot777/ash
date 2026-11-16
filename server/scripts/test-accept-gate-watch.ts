@@ -163,7 +163,8 @@ try {
     writeFileSync(logPath, "[ash] $ racing-command\n", "utf8"); // 开跑前的启动说明
     const rounds = 20;
     const line = "ACTUAL_CHILD_CASE_STARTED\n"; // 26 字节 × 20 = 520B，故意压在 1KB 以内好精确比对
-    overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 20, sampleMs: 10, timeoutMs: 1_000 });
+    // 时限要盖过另一个 node 进程的冷启动 + 它写完 20 行的 600ms：压在 1 秒时，机器一忙子进程就写不完。
+    overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 20, sampleMs: 10, timeoutMs: 3_000 });
     const verdict = await awaitScene((resolve) => {
       startGateWatch({ logPath, onVerdict: resolve });
       // 真·另一个进程在写，和看门狗的 stat/append 自然交错。
@@ -505,7 +506,8 @@ try {
 
     // 撞上限 + 停止期吐 6KB 清理输出：现场必须仍在最后 ACCEPT_GATE_TAIL_BYTES 字节里。
     {
-      overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 200, sampleMs: 40, timeoutMs: 700 });
+      // 时限里要走完握手放行、登录 shell、node 冷启动、打出那一行并装好 SIGTERM 处理器，700ms 是在赌。
+      overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 200, sampleMs: 40, timeoutMs: 2_500 });
       const script = "process.on('SIGTERM', () => { process.stdout.write('CLEANUP '.repeat(900) + String.fromCharCode(10)); process.exit(0); });"
         + " console.log('REAL_GATE_LAST_STEP'); setInterval(() => {}, 1000);";
       const taskId = await seed("tail-keep", `"${process.execPath}" -e "${script.replace(/"/g, '\\"')}"`);
