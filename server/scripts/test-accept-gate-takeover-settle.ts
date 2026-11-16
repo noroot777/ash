@@ -75,10 +75,12 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
       worker.once("exit", (_code, exitSignal) => { clearTimeout(timeout); resolve(exitSignal); });
     });
     if (code !== undefined) {
+      // 上限跟上面那只工人自己的 30 秒看齐：它要起 tsx、加载整套产品、建快照才走到放行，机器上同时
+      // 跑着别的整套回归时实测超过 15 秒；这里先放弃的话，红的是等待，不是被测的那件事。
       await until(async () => {
         const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, s.taskId))).at(0);
         return !!row && readGateLaunch(row.logPath)?.phase === "armed";
-      }, "命令放行");
+      }, "命令放行", 30_000);
       writeFileSync(s.release, code);
     }
     assert.equal(await exited, "SIGKILL", diagnostic);

@@ -117,19 +117,27 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
   {
     const s = await stage("timeout");
     const row = await crashMidRun(s.taskId);
-    const limit = 3_000;
-    await until(() => Date.now() - Date.parse(row.startedAt) > limit + 200, "跑过时限", limit + 5_000);
+    const limit = 5_000;
+    // 「跑过时限」照产品计时的那个起点等（启动器起来那一刻，比这一行的开跑时刻晚出建快照那一段），
+    // 否则接管时离时限还差着那一段，后面的判据平白吃掉这么多余量。
+    const launchedAt = Date.parse(readGateLaunch(row.logPath)?.launchedAt ?? row.startedAt);
+    await until(() => Date.now() - launchedAt > limit + 200, "跑过时限", limit + 10_000);
     overrideGateWatchTimings({ timeoutMs: limit, sampleMs: 20 });
     const resumedAt = Date.now();
+    let reactedAfter = Infinity;
     try {
       assert.equal((await recoverAcceptGates()).resumed, 1);
+      // 判据取「动手收命令」那一刻，不取整条结算做完：从接管重新计时的话，最早也要到 resumedAt + limit
+      // 才动手，早于它就只能是从开跑算的。结算后面那几步（落库、交回任务去修）在门禁并行跑满时
+      // 自己就能拖过两秒，跟计时起点无关。
+      await until(() => !alive(row.pid!), "超时收掉命令", limit + 15_000);
+      reactedAfter = Date.now() - resumedAt;
       await settled(s.taskId);
     } finally { overrideGateWatchTimings(null); }
-    assert.ok(Date.now() - resumedAt < limit - 1_000, "从接管那一刻重新计时的话，这里还得再等一整个时限");
+    assert.ok(reactedAfter < limit, `从接管那一刻重新计时的话，这里还得再等一整个时限（实际 ${reactedAfter}ms 后动手）`);
     const done = await runOf(s.taskId);
     assert.equal(done.status, "failed");
     assert.equal(done.failure, "timeout");
-    await until(() => !alive(row.pid!), "超时收掉命令");
     for (let i = 0; i < 200 && isTurnClaimed(s.taskId); i++) await sleep(25);
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, s.taskId));
     releaseTurn(s.taskId);
