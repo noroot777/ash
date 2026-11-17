@@ -37,11 +37,11 @@
 // scripts/platform.mjs。
 import "./env.mjs";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { countOf, drainWait as drainUntilSafe, explainNoVerdict, killListeners, lockFileFor, noVerdictReason, queryImpact, waitPortQuiet } from "./server-control.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 import { parseRestartOptions, restartCommand, RESTART_USAGE } from "./restart-options.mjs";
@@ -74,83 +74,9 @@ const WAIT_TIMEOUT = process.env.WAIT_TIMEOUT ? Number(process.env.WAIT_TIMEOUT)
 
 const say = (line) => process.stdout.write(`${line}\n`);
 
-// 单实例锁:server 自己写的「谁占着这个 DB」,字段见 server/src/singleton.ts。
-// 路径口径要跟 server 一致(ASH_DB 覆盖,默认 data/ash.db),否则找错文件。
-const LOCK_FILE = `${process.env.ASH_DB ? resolve(process.env.ASH_DB) : join(REPO, "data", "ash.db")}.ash.lock`;
-
-/**
- * 宿主机运维者的凭证:锁文件里那串 token(server 自己写的,文件 0600)。
- *
- * 多人模式下 `/api/restart-impact` 会挡住未登录请求 —— 而跑这个脚本的人手上没有任何
- * 网页登录态。读得到这个 token = 读得到 ash 的数据目录 = 本来就能直接读库,所以拿它
- * 当「我就是这台机器的运维者」的证明既够用也不额外扩大暴露面(server/src/singleton.ts
- * `liveLockToken`)。
- */
-function hostToken() {
-  try {
-    const lock = JSON.parse(readFileSync(LOCK_FILE, "utf8"));
-    return lock?.port === PORT && typeof lock.token === "string" ? lock.token : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 「现在重启会真正打断几个任务」。**不是** running/queued 的个数 —— agent 的输出
- * 走文件之后（server/src/executors/detached.ts），单飞任务的进程压根不随 server 死，
- * 重启后按 pid+offset 接管，全程无感；团队调度台进程会断但会自动 --resume 接回。
- * 判据单点在 server 的 /api/restart-impact，跟真正接管时用同一条口径，免得这边说能
- * 接、那边又不认。
- *
- * 回答分**三档**,而不是「拿到 / 没拿到」两档:
- *  · 拿到判据          → 原样返回
- *  · `refused`         服务端答了、但不给判据(多人模式要凭证,见 hostToken)
- *  · `unknown`         **问不出来**:超时、连接被重置
- *  · `{}`              端口上压根没人在听 = server 没在跑 = 本来就没有任务会被打断
- *
- * 后两者过去被压成同一个 `{}`,于是 ash 响应慢的时候安全闸静默变成 0:不加 FORCE 的重启
- * 照样下刀,保护名单还跟着变成空数组(第 1 轮审查 F1 / P1 是同一类错)。
- * **「问不出来」不等于「没有」**,所以这里把它单独报出来,由 impactOrAbort 去 fail closed。
- */
-async function impact() {
-  const token = hostToken();
-  const ask = (timeoutMs) => localGet(
-    PORT,
-    "/api/restart-impact",
-    timeoutMs,
-    token ? { "x-ash-host-token": token } : undefined,
-  );
-  let probe = await ask(2000);
-  // 慢一次不代表问不出来(重启前这台机器往往正忙):再给一次、时限放宽。注意这**不是**
-  // 修 F1 的办法 —— 两次都没拿到仍然算 unknown,下面照样中止。加这一次只是少一点误拦。
-  if (!probe.json && probe.status === null && !isNotListening(probe.error)) probe = await ask(6000);
-  if (probe.json) return probe.json;
-  if (probe.status !== null) return { refused: probe.status };
-  if (isNotListening(probe.error)) return {};
-  return { unknown: probe.error || "unknown" };
-}
-
-function countOf(data, field) {
-  return Array.isArray(data[field]) ? data[field].length : 0;
-}
-
-/** 服务端答了、但没给出判据。 */
-function refusedStatus(data) {
-  return typeof data.refused === "number" ? data.refused : null;
-}
-
-/** 连上了却没拿到答复(超时 / 被重置)。 */
-function unknownReason(data) {
-  return typeof data.unknown === "string" ? data.unknown : null;
-}
-
-/** 「判据问不到」时给人看的那半句话；拿到了判据就返回 null。 */
-function noVerdictReason(data) {
-  const refused = refusedStatus(data);
-  if (refused !== null) return `服务端回 ${refused}`;
-  const unknown = unknownReason(data);
-  return unknown === null ? null : `服务端在端口上，但没答复这条判据（${unknown}）`;
-}
+// 单实例锁的路径口径跟 server 一致(ASH_DB 覆盖,默认 data/ash.db),否则找错文件。
+const LOCK_FILE = lockFileFor(REPO);
+const impact = () => queryImpact(PORT, LOCK_FILE);
 
 /** build 那一步跑过没有 —— 只用来让中止提示说得准（见 impactOrAbort）。 */
 let built = false;
@@ -166,16 +92,7 @@ async function impactOrAbort() {
   const why = noVerdictReason(data);
   if (why === null || FORCE) return data;
   say(`  ✋ 问不到「重启会打断谁」(${why}) —— 已中止,未重启服务端。`);
-  if (refusedStatus(data) !== null) {
-    say(`     多人模式下这条判据要宿主机凭证:确认 ${LOCK_FILE} 读得到`);
-    say("     (它由 server 自己写、权限 0600;换个用户跑这个脚本就读不到了)。");
-  } else {
-    // 这一档是「它在,只是没答上来」:ash 正忙,或者真卡住了。两种都不该让脚本自己拍板下刀
-    // —— 问不出保护名单的那一刀,等于拿正在跑的任务赌一把(第 1 轮审查 F1)。
-    say("     它还在端口上,只是没按时答复 —— ash 正忙,或者卡住了。");
-    say("     「问不出来」不等于「没有任务会被打断」,所以这里不下刀。稍后重试;");
-    say(`     真卡住了就先看日志 ${LOG},必要时手工 kill 掉它再重跑。`);
-  }
+  explainNoVerdict(data, { say, lockFile: LOCK_FILE, log: LOG });
   say(`     明知可能打断也要重启:  ${restartCommand("--force")}`);
   // WAIT 那一档在 build 之前就问,所以这句必须按实际走到哪儿说 —— 说反了会让人
   // 以为新代码已经落盘。
@@ -189,25 +106,8 @@ async function interruptCount() {
   return countOf(await impactOrAbort(), "interrupted");
 }
 
-/** WAIT=1 用:轮询到「不再有会被打断的任务」为止,把「人守着等」换成「脚本替你等」。 */
-async function drainWait() {
-  let n = await interruptCount();
-  if (!n) return;
-  say(`  ⏳ WAIT:还有 ${n} 个任务重启会被打断,等它们跑完(Ctrl-C 可随时放弃)…`);
-  let elapsed = 0;
-  const step = 5;
-  while (n > 0) {
-    if (WAIT_TIMEOUT !== null && elapsed >= WAIT_TIMEOUT) {
-      say(`  ✕ WAIT 超时(${WAIT_TIMEOUT}s),仍有 ${n} 个会被打断 —— 已中止,未重启服务端。`);
-      process.exit(3);
-    }
-    await sleep(step * 1000);
-    elapsed += step;
-    n = await interruptCount();
-    if (elapsed % 60 === 0 && n > 0) say(`  ⏳ 已等 ${elapsed / 60}min,还有 ${n} 个会被打断…`);
-  }
-  say("  ✓ 已经没有会被打断的任务了,继续。");
-}
+/** WAIT=1 用:等到「不再有会被打断的任务」为止。 */
+const drainWait = () => drainUntilSafe({ count: interruptCount, waitTimeout: WAIT_TIMEOUT, say, verb: "重启" });
 
 function npm(args, failMessage) {
   const res = spawnSync(NPM, args, { stdio: "inherit", ...NPM_SPAWN_OPTS });
@@ -291,18 +191,10 @@ if (old.length) {
     say(`  ✓ 有任务在跑,但重启不会打断:${safe} 个会被接管(继续跑,无感)、${lead} 个调度台会自动接回。`);
   }
   if (busy > 0) say(`  ⚠ FORCE:打断 ${busy} 个**接管不了**的任务(判为 failed,可重试);会被接管的不受影响。`);
-  // 「会被接管的不受影响」在 Windows 上得自己兑现:那边没有信号,旧版这一刀是
-  // `taskkill /T /F`,/T 按父子关系把整棵树一起杀 —— agent 的输出早就落盘了,是这一刀
-  // 把它们带走的。所以把 survives 的那几棵子树点名保住(判据见 platform.mjs 的
-  // killServerProcess)。POSIX 上这个参数没有作用:SIGTERM 从来不级联。
-  //
-  // 这份名单是**上一时刻**的快照,所以它只是个额外输入:真正的不变量在
-  // killServerProcess 那边 —— 它按进程表里的壳记号认人,名单漏了的新 agent 也保得住
-  // (第 1 轮审查 F2)。走到这儿时判据一定是问到了的(问不到 impactOrAbort 已经中止)。
-  const spare = Array.isArray(data.survives) ? data.survives.map((t) => t.pid) : [];
+  // 走到这儿时判据一定是问到了的(问不到 impactOrAbort 已经中止);保护名单怎么用见 killListeners。
   let how = "signal";
   try {
-    how = killServerProcesses(old, spare, { force: FORCE });
+    how = killListeners(old, data, { force: FORCE });
   } catch (error) {
     say(`  ✋ 无法安全终止 Windows 旧实例: ${error.message}。已中止重启。`);
     say(`     未授权整树强杀;确定接受任务中断才使用 ${restartCommand("--force")}。`);
@@ -314,18 +206,10 @@ if (old.length) {
   }
 }
 
-// 不管上面找没找到旧进程,端口都必须**彻底安静**才能起新的。这是全脚本唯一不依赖
-// 任何系统命令的判据,也是「谎报成功」的最后一道闸 ——
-// 2026-08-21 那台 Rocky 容器里 lsof/ss/fuser 一个都没有,`old` 是空的,旧进程原封
-// 不动;新进程起来撞上单实例锁当场退出,而 /api/health 由**老进程**照常回 200,脚本
-// 于是打印「✓ 已就绪」。用户看到的是成功,机器上跑的是三小时前的代码。
-//
-// 「安静」**只认连接被明确拒绝**。超时、连接被重置都只是「问不出来」:一个卡死的旧进程
-// 照样占着端口、照样不答,把它当成安静,新进程起来就撞端口(第 3 轮审查实测 EADDRINUSE)。
-const quiet = async () => isNotListening((await localGet(PORT, "/api/health", 1000)).error);
-const quietBy = Date.now() + 15_000;
-while (Date.now() < quietBy && !(await quiet())) await sleep(200);
-if (!(await quiet())) {
+// 不管上面找没找到旧进程,端口都必须**彻底安静**才能起新的 —— 「谎报成功」的最后一道闸
+// (2026-08-21 Rocky 容器里没有 lsof,`old` 是空的,新进程撞单实例锁退出,而 /api/health
+// 由老进程照常回 200,脚本于是打印「✓ 已就绪」;判据细节见 isPortQuiet)。
+if (!(await waitPortQuiet(PORT))) {
   const answers = Boolean(await localJson(PORT, "/api/health"));
   say(answers
     ? `  ✕ :${PORT} 上仍有一个 ash 在应答,没能让它下线 —— 已中止,未重启服务端。`

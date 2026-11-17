@@ -236,6 +236,7 @@ scripts/  setup / restart / package（.mjs，跨平台）
 npm run dev          # 后端 :4317 + 前端 :5173（HMR，/api 代理到后端）
 npm run build        # 全量构建（shared → web → server → mcp）
 npm run restart      # 构建 + 后台常驻（自动检测任务安全）
+npm run stop         # 停掉后台常驻的服务端（同一套任务安全检测）
 npm run package      # 生成分发包（仅入库文件，不含 data/）
 ```
 
@@ -258,6 +259,8 @@ PowerShell 可能将裸 `npm` 解析为会吞掉 `--` 的 `npm.ps1`，带选项�
 `--force --skip-mcp` 只强制重启服务端，不刷新 MCP。
 仍兼容原环境变量；PowerShell 不支持 `FORCE=1 npm run restart`，旧版本可用
 `$env:FORCE='1'; npm run restart`（该变量会保留在当前 PowerShell 会话，之后可用 `Remove-Item Env:FORCE` 清除）。
+
+`npm run stop` 走同一套判据，只是停完不再起新的：可接管的任务照常跑完、下次启动时接管；有会被打断的任务就拒绝停止，`--wait` / `--force` 含义同上（`node scripts/stop.mjs --help`）。
 
 前端修改后仅需 `npm run build`，server 从磁盘读取 `web/dist`，**无需重启**。
 
