@@ -226,8 +226,8 @@
   transition: color 130ms ease-out;
 }
 
-/* 行尾那个数：名下几条，前面带「子任务」图标，跟前面的短语分开读。名下整棵有在等答复 /
-   失败的，变琥珀色（图标跟着变）。 */
+/* 行尾那个数：名下几条，前面带「子任务」图标。名下此刻怎么样只上在图标上（.dispatch-glyph，
+   见 task-status-dot.css），数字一直是灰的。 */
 .workspace-dispatch-count {
   display: inline-flex;
   flex: 0 0 auto;
@@ -238,10 +238,6 @@
   font-style: normal;
   font-weight: var(--w-regular);
   font-variant-numeric: tabular-nums;
-}
-
-.workspace-dispatch-count.is-warn {
-  color: var(--amber);
 }
 
 .workspace-team-caret:hover:not(:disabled),

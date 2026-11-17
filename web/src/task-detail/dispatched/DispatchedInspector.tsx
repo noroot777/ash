@@ -3,7 +3,8 @@ import type { Task, TaskListItem } from "@ash/shared";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import { dispatchBranch, dispatchBranchAccepted, dispatchLevel, createDispatchView } from "../../lib/dispatchFamily.ts";
 import { dispatchHolderOf, dispatchHoldPhrase, dispatchedLive } from "../../lib/dispatchHold.ts";
-import { dispatchedOf, dispatchFacts, dispatchTally, dispatchTallySaid } from "../../lib/dispatchTree.ts";
+import { dispatchedOf, dispatchFacts, dispatchTally } from "../../lib/dispatchTree.ts";
+import { DispatchGlyph, dispatchGlyphSaid } from "../../components/DispatchGlyph.tsx";
 import { InspectorHeadActions } from "../../inspector/index.ts";
 import type { Notify } from "../../lib/notify.ts";
 import { dispatchedMeta, dispatchedOrder, dispatchedWord } from "./dispatchedRows.ts";
@@ -47,8 +48,9 @@ function SubtaskTable({ task, allTasks, onOpenTask, onTaskUpdated, notify, branc
     const accepted = dispatchBranchAccepted(item, children);
     const level = dispatchLevel(children, item.id, task.id);
     const open = (hint && dispatchLevel(children, item.id, hint).containsSelection) || (folds.get(item.id) ?? level.branchOpen);
-    const tally = dispatchTally(facts, item.id);
-    const { word, tone } = dispatchedWord(item, dispatchView.look(item));
+    const count = dispatchTally(facts, item.id);
+    const below = dispatchView.look(item).below;
+    const { word, tone } = dispatchedWord(item);
     const meta = !accepted ? dispatchedMeta(item, now) : "";
     return <li key={item.id}>
       <div data-subtask-id={item.id} className={`dispatched-row${hint === item.id ? " is-hinted" : ""}${accepted ? " is-settled" : ""}`}>
@@ -56,7 +58,7 @@ function SubtaskTable({ task, allTasks, onOpenTask, onTaskUpdated, notify, branc
         <span className="dispatched-row__main">
           <span className="dispatched-row__top">
             <button type="button" className="dispatched-row__title" onClick={() => onOpenTask(item.id)}>{item.title || "未命名任务"}</button>
-            {tally && <button type="button" className={`dispatched-fold${tally.warn ? " is-warn" : ""}`} aria-label={dispatchTallySaid(tally)} aria-expanded={open} onClick={() => toggle(item.id, open)}>{tally.count}<CaretDown size={10} aria-hidden="true" /></button>}
+            {count != null && <button type="button" className="dispatched-fold" aria-label={dispatchGlyphSaid(count, below)} aria-expanded={open} onClick={() => toggle(item.id, open)}><DispatchGlyph below={below} />{count}<CaretDown size={10} className="dispatched-fold__caret" aria-hidden="true" /></button>}
           </span>
           {meta && <small className={item.question ? undefined : "is-mono"}>{meta}</small>}
         </span>

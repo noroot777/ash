@@ -66,17 +66,12 @@ export type DispatchFacts = {
 };
 
 /**
- * 一行带不带那个数、变不变色：名下整棵往下还有没归档的才带（直接那几条全归档了、更底下还有，数是 0
- * 也带着），整棵往下有要你处理的就变色。右侧「子任务」格里的一行用它，口径同侧栏那一行
- * （workspace/DispatchTreeRows.tsx：hasBelow 定是不是父任务，count / needsYou 定那个数和颜色）。
+ * 一行带不带那个数：名下整棵往下还有没归档的才带（直接那几条全归档了、更底下还有，数是 0 也带着）。
+ * 那颗图标画成什么颜色不在这里定，看名下带上来的那一条（taskLook 的 below）。侧栏那一行
+ * （workspace/DispatchTreeRows.tsx）和右侧「子任务」格里的一行同一个口径。
  */
-export function dispatchTally(facts: DispatchFacts, taskId: string): { count: number; warn: boolean } | null {
-  return facts.hasBelow(taskId) ? { count: facts.count(taskId), warn: facts.needsYou(taskId) } : null;
-}
-
-/** 那个数念出来的那句（数本身只给眼睛看）。 */
-export function dispatchTallySaid(tally: { count: number; warn: boolean }): string {
-  return `${tally.count} 个子任务${tally.warn ? "，有要你处理的" : ""}`;
+export function dispatchTally(facts: DispatchFacts, taskId: string): number | null {
+  return facts.hasBelow(taskId) ? facts.count(taskId) : null;
 }
 
 /** 「派活人 id → 它直接派出去的那几条」，含归档的（能不能往下走只看边，见 isDispatchEdge）。 */

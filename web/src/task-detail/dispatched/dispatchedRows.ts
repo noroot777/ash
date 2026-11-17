@@ -1,6 +1,6 @@
 import { taskDisplayStatus, type TaskListItem } from "@ash/shared";
 import { awaitsRuling, hasFailed } from "../../lib/taskAttention.ts";
-import { taskLook, type TaskLook } from "../../lib/taskLook.ts";
+import { taskLook } from "../../lib/taskLook.ts";
 import { taskDurationInfo } from "../utils.ts";
 
 // 右侧「子任务」那一格一行里的几样字：状态词、那一行小字、这一批是一个接一个还是同时。
@@ -12,14 +12,13 @@ export type DispatchedTone = "ask" | "bad" | null;
  * 状态词用产品里现有的叫法，不造新词：等答复跟侧栏行尾那两三个字同一句「等你答复」，
  * 做完没验收跟侧栏那颗环同一句「待验收」，其余照任务头那套（运行中、排队中、暂停中……）。
  * 只有需要你处理的几种带颜色：等你答复 / 等你裁定（琥珀）、失败 / 验证没过（红）。
+ * 只说它自己；名下怎么样看它那颗折叠键上的图标颜色（DispatchGlyph），跟侧栏那一行同一个读法。
  */
-export function dispatchedWord(task: TaskListItem, look: TaskLook = taskLook(task)): { word: string; tone: DispatchedTone } {
+export function dispatchedWord(task: TaskListItem): { word: string; tone: DispatchedTone } {
   if (task.question) return { word: "等你答复", tone: "ask" };
   if (awaitsRuling(task)) return { word: "等你裁定", tone: "ask" };
   const display = taskDisplayStatus(task.status, task.stage, false);
   if (hasFailed(task)) return { word: display.label, tone: "bad" };
-  // 它自己没轮到你、也没摔：名下还有事就说名下（子项运行中 / 子项等答复……），跟侧栏那一行同一句。
-  if (look.below) return { word: look.below.word, tone: look.below.tone };
   if (taskLook(task).indicator === "unaccepted") return { word: "待验收", tone: null };
   if (task.queueId != null && task.queuePosition != null && (task.status === "queued" || task.status === "backlog")) return { word: `排第 ${task.queuePosition + 1}`, tone: null };
   return { word: display.label, tone: null };
