@@ -19,6 +19,16 @@ const pendingMessage = "已请求停止预览，但仍有进程未退出；后�
 const identityMessage = "预览进程仍存活，但暂时无法确认启动身份；后台会继续检查。";
 const alive = (target: Target) => isPidAlive(target.pid) || isProcessGroupAlive(target.pid);
 
+/** 发 TERM 之后多久补一刀 KILL；多久还没退就落成「后台继续检查」。 */
+export type PreviewStopTimings = { killAfterMs: number; giveUpMs: number };
+const STOP_TIMINGS: PreviewStopTimings = { killAfterMs: 2_000, giveUpMs: 5_000 };
+let timingOverrides: Partial<PreviewStopTimings> | null = null;
+
+/** 只给回归用：造「忽略 TERM」「杀不掉」的用例每停一次都要等满这两道时限，压短它们。传 null 还原。 */
+export function overridePreviewStopTimings(timings: Partial<PreviewStopTimings> | null): void {
+  timingOverrides = timings;
+}
+
 export function previewStopFailure(error: unknown): Extract<PreviewStopResult, { stopped: false }> {
   const code = (error as NodeJS.ErrnoException | null)?.code;
   return { stopped: false, reason: "record_error", message: `预览停止记录暂时无法读写${code ? `（${code}）` : ""}；请检查任务记录目录权限或磁盘状态后重试。` };
@@ -109,10 +119,11 @@ async function discardInvalidTargets(taskId: string, file: string, reason: strin
 async function terminate(taskId: string, file: string, record: StopRecord, signalable = record.targets): Promise<PreviewStopResult> {
   const { targets } = record;
   for (const target of signalable) if (alive(target)) killTree(target.pid, "SIGTERM");
+  const { killAfterMs, giveUpMs } = { ...STOP_TIMINGS, ...timingOverrides };
   const started = Date.now();
   let forced = false;
-  while (targets.some(alive) && Date.now() - started < 5000) {
-    if (!forced && Date.now() - started >= 2000) {
+  while (targets.some(alive) && Date.now() - started < giveUpMs) {
+    if (!forced && Date.now() - started >= killAfterMs) {
       for (const target of signalable) if (alive(target)) killTree(target.pid, "SIGKILL");
       forced = true;
     }
