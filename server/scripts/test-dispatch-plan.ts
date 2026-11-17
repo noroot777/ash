@@ -14,7 +14,8 @@
 //   · 一个接一个时前面的等后面的成果（队列与前置合起来互相等住）：摆单时拒；卡上改成一个接一个再派时拒，单子留着、不建；
 //   · 「派出去的活交给谁」：派活单上没指明的那几条默认交给它，智能体绕过派活单直接建任务没给执行器时也交给它。
 //
-// 跑的是 PATH 上的假 claude（scheduled-messages-fixture.ts），不起真实 CLI。
+// 跑的是 PATH 上的假 CLI（scheduled-messages-fixture.ts），不起真实 CLI：claude 是会应答的那份，
+// 「换人」那几条交给的 codex / gemini 是一起就退的垫片——它们只用来看建出来的任务照不照卡上那一格。
 // 跑：npm -w @ash/server run test:dispatch-plan
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -24,7 +25,7 @@ import { asc, eq, inArray, like, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Task } from "@ash/shared";
 import { releaseTmpDb } from "./tmp-db.js";
-import { installFakeClaude } from "./scheduled-messages-fixture.js";
+import { installExitingClis, installFakeClaude } from "./scheduled-messages-fixture.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-dispatch-plan-"));
 const leadLog = join(root, "lead-input.jsonl");
@@ -33,7 +34,9 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${originalPath ?? ""}`;
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
+await installExitingClis(fakeBin, ["codex", "gemini"]);
 
 const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan, launch] = await Promise.all([
   import("../src/db/index.js"),
@@ -400,7 +403,10 @@ try {
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
-  for (const id of runs.runningTaskIds?.() ?? []) runs.stopTask(id);
+  // 这条测试起过的回合一个不留：还在跑的逐个停掉，等到它们的进程收尾再删临时目录。
+  const started = (await db.select({ id: tasks.id }).from(tasks)).map((task) => task.id);
+  for (const id of started) if (runs.isRunning(id)) runs.stopTask(id);
+  await waitFor(() => started.every((id) => !runs.isRunning(id)), "收尾：还有没停下的假 CLI").catch((error) => { failure ??= error; });
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
   process.exit(failure ? 1 : 0);

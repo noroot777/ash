@@ -8,6 +8,7 @@ import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-personal-cli-settings-"));
 process.env.ASH_DB = join(stage, "test.db");
+process.env.ASH_DATA_DIR = join(stage, "data");
 requireTmpDb("test-personal-cli-settings");
 const { mountPersonalCliRoutes } = await import("../src/auth/personal-routes.js");
 const { USER_CLI_ROOT, userCliDir, writePersonalSkill } = await import("../src/auth/user-cli.js");

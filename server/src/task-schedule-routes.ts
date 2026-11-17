@@ -1,10 +1,12 @@
 // 定时班次（§9，一个任务至多一条）与 worktree 分支上的提交列表（从 task-run-routes.ts
 // 拆出，纯行数拆分）。两块都只读写自己的表，不碰回合所有权。
+import { existsSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, schedules, sessions, tasks } from "./db/schema.js";
-import { taskCommits } from "./git.js";
+import { currentBranch, expandHome } from "./git.js";
+import { taskChangeCommits } from "./task-change-scope.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { id, now } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -55,15 +57,19 @@ api.delete("/tasks/:id/schedule", async (c) => {
   return c.json({ deleted: true });
 });
 
-// Commits produced on a task's isolated worktree branch. Empty when the task ran
-// in place (no worktree).
+// 这条任务自己的提交：分支上有、而从目标分支和开工点都走不到的（口径同 diff，见
+// task-change-scope.ts）。`commits` 只列最近的一批，`total` 是真实条数。数不出来时（没有自己分支的
+// 就地跑/共享工作区任务、分支已清理、口径算不出来）清单是空的、`total` 是 null、原因在 `reason` ——
+// 不给 0，免得被读成「没有提交」。`branch` 是它的工作目录此刻检出的分支。
 api.get("/tasks/:id/commits", async (c) => {
   const tid = c.req.param("id");
   const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
   if (!t) return c.json({ error: "not found" }, 404);
   const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
+  if (!project) return c.json({ branch: null, commits: [], total: null, reason: "not_git_repo" });
   const sess = (await db.select().from(sessions).where(eq(sessions.taskId, tid))).find((s) => s.worktreePath);
-  if (!sess?.worktreePath || !project) return c.json({ branch: null, commits: [] });
-  return c.json(await taskCommits(sess.worktreePath, t));
+  const wt = sess?.worktreePath ? expandHome(sess.worktreePath) : null;
+  const branch = wt && existsSync(wt) ? await currentBranch(wt) ?? null : null;
+  return c.json({ branch, ...await taskChangeCommits(project.repoPath, t) });
 });
 }

@@ -100,7 +100,4 @@ assert.equal(reviewFileTarget("//cdn.example.invalid/data/runs/T1/review/round-2
 assert.ok(reviewFileTarget("/Users/fjh/code/harness/data/runs/T1/review/round-2/shot.png"));
 assert.ok(reviewFileTarget("file:///Users/fjh/code/harness/data/runs/T1/review/round-2/shot.png"));
 
-// ⑥ 清单那条路连函数都不该剩下：留着就会有人再拿「清单里有没有它」当归属判据。
-assert.equal(policy.evidenceListingUrl, undefined, "清单地址推导已撤");
-
 console.log("报告文档根归属回归通过");

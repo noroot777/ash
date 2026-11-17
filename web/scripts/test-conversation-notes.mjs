@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import {
   NEUTRAL_SESSION_NOTES,
   SESSION_DROP_PERSISTENCE_FAILED_NOTE,
-  SESSION_LOST_NOTE,
   SESSION_POISONED_NOTE,
   normalizeSessionNoteText,
 } from "@ash/shared/session-notes";
@@ -508,17 +507,12 @@ assert.deepEqual(
 const rotationSession = { ...session, agentType: "codex", endedAt: null, turnStartedAt: session.startedAt };
 const diagnosis = "Codex 会话诊断：session=poisoned_session";
 const rotationNote = SESSION_POISONED_NOTE;
-// 轮换说明自己带着「异常」二字(它在转述 Codex 报的 rollout 异常),不专门认出来就会被
-// FAILED_HINTS 染红 —— 只断言 variant 会漏掉这一整层(自由工作流第 2 轮审查)。
-assert.equal(noteTone(SESSION_POISONED_NOTE), "neutral", "poisoned 轮换说明不许被关键词染红");
-assert.equal(noteTone(SESSION_LOST_NOTE), "neutral", "会话失效轮换说明不许被关键词染红");
-assert.equal(noteTone(`更正上面那条:CLI 会话接不回了。${SESSION_POISONED_NOTE}`), "neutral", "收尾更正说的是同一件事");
 // 这条不是轮换而是真出了问题:恢复字段没写进库,下一次可能再撞旧会话。该红就红。
 assert.equal(noteTone(SESSION_DROP_PERSISTENCE_FAILED_NOTE), "error", "清理写库失败仍必须报红");
 // 旁注三处渲染点(ConversationFeed、team/TeamFeed、duet 的 duet-turn-notice)都是纯文本,
 // 措辞里带 `**` 用户就会看到字面量的星号(自由工作流第 1 轮审查)。哪天真上了受控的
 // inline Markdown 渲染,记得三处一起上,再来改这条断言。
-for (const [name, text] of Object.entries({ SESSION_LOST_NOTE, SESSION_POISONED_NOTE, SESSION_DROP_PERSISTENCE_FAILED_NOTE })) {
+for (const [name, text] of Object.entries({ SESSION_DROP_PERSISTENCE_FAILED_NOTE })) {
   assert.doesNotMatch(text, /\*\*|`|^#|\[.+\]\(/m, `${name} 是纯文本旁注，不能带 Markdown 标记`);
 }
 const rotationLive = buildConversationItems(

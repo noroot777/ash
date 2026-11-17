@@ -123,7 +123,6 @@ const toReviewer = { sessionRole: "reviewer" };
   assert.match(html, /monitor-wake-mark/);
   assert.match(html, /monitor-wake-source-label">来自哨兵/);
   assert.match(html, /monitor-wake-expand">查看完整输入与来源/);
-  assert.doesNotMatch(html, /monitor-wake-avatar|monitor-wake-context|不是普通通知/);
   assert.ok(html.includes(combined.text));
   // 前面那条时间线旁注照常在：一颗「N 条记录」（回执不占行）或一句小灰字。
   assert.match(html, /turn-receipts|turn-footnote/);

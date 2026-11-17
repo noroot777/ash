@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 源码隔离的收口:**项目自己的包必须解析到快照里那份冻结的源码**。
 //
@@ -20,6 +21,8 @@ import { pathToFileURL } from "node:url";
 // 快照必须落在 fixture 项目**内部**(ASH_RUNS_DIR),否则向上查找那一条根本走不到。RUNS_DIR 在模块
 // 加载时就固定了,所以这组用例必须独占一个进程、在 import 之前设好环境变量。
 const root = mkdtempSync(join(tmpdir(), "ash-gate-confine-"));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 process.env.ASH_RUNS_DIR = join(root, "host", "data", "runs");
 const { readGateSource, createGateSnapshot, verifyGateSnapshot, gateSnapshotPath } =
   await import(pathToFileURL(join(import.meta.dirname, "..", "src", "accept-gate-source.ts")).href);
@@ -660,4 +663,4 @@ try {
     + "borrowed tree, partial installs, relocated packages, dangling trunks, native link semantics, "
     + "scope-link write ownership, ancestor-install provenance, CLI entry closure, consumer "
     + "resolution edges, deleted-package same-name samples and known external file sources passed");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

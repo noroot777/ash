@@ -282,11 +282,14 @@ try {
     const runsDir = join(root, "runs", rerunId);
     mkdirSync(runsDir, { recursive: true });
     const termed = join(root, "rerun-race-termed");
+    const armed = join(root, "rerun-race-armed");
     const stubborn = spawn(process.execPath, ["-e",
-      `process.on('SIGTERM',()=>require('fs').writeFileSync(${JSON.stringify(termed)},''));setInterval(()=>{},100);`],
+      `process.on('SIGTERM',()=>require('fs').writeFileSync(${JSON.stringify(termed)},''));`
+      + `require('fs').writeFileSync(${JSON.stringify(armed)},'');setInterval(()=>{},100);`],
     { detached: true, stdio: "ignore" });
     stubborn.unref();
-    await sleep(200); // 等它把 SIGTERM 的处理挂上，否则那一下直接把它打死，窗口就没了
+    // 等它自己说「SIGTERM 的处理挂上了」再往下，否则那一下直接把它打死，窗口就没了。
+    await waitFor(() => existsSync(armed), "不肯退的那个进程还没把 SIGTERM 的处理挂上");
     writeFileSync(join(runsDir, "preview.json"), JSON.stringify({
       taskId: rerunId, cmd: "npm run dev", pid: stubborn.pid, url: "http://localhost:1/", port: 1, life: "task",
       startedAt: new Date().toISOString(), log: join(runsDir, "preview.log"), links: [],

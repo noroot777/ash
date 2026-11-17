@@ -65,11 +65,13 @@ const cardKey = (task: TaskListItem) => `${task.id}:${questionKey(task)}:${activ
 
 /**
  * 卡本身，摆在宿主的回复框那一格（展开时框不挂，卡就占了那一格；收起时框在它下面）。卡只会是宿主
- * 自己的：名下派出的任务来问、摆单，卡在那一条自己的页面上（左抽屉里打开它也是），不借这一格。
+ * 自己的：名下子任务来问、摆单，卡在那一条自己的页面上，不借这一格。
  */
-export function QuestionDock({ takeover, onAnswer, onLaunchPlan, dispatchTarget }: {
+export function QuestionDock({ takeover, onAnswer, attachable, onLaunchPlan, dispatchTarget }: {
   takeover: QuestionTakeover;
-  onAnswer: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+  onAnswer: (answer: string, input: QuestionAnswerInput, attachments?: string[]) => Promise<void>;
+  /** 答复能带本机附件（贴图）。远程任务页不给：对端读不到本机路径。 */
+  attachable?: boolean;
   /**
    * 这一问是一张派活单时「派出去」怎么做（DispatchPlanCard.tsx）。不给（远程任务页、团队页）就照普通提问
    * 画：清单那句话就是题目，回一句话就是发回去改。
@@ -88,7 +90,7 @@ export function QuestionDock({ takeover, onAnswer, onLaunchPlan, dispatchTarget 
           task={dispatchTarget !== undefined ? { ...card, dispatchTarget } : card}
           onLaunch={onLaunchPlan} onAnswer={onAnswer}
           collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />
-        : <QuestionCard key={cardKey(card)} task={card} onAnswer={onAnswer}
+        : <QuestionCard key={cardKey(card)} task={card} onAnswer={onAnswer} attachable={attachable}
           collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />}
     </div>
   );

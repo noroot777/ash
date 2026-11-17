@@ -24,22 +24,7 @@ assert.match(html(), /不经过构建/);
 assert.match(html(), /本次预览命令/);
 assert.match(html(), /改用截图批注/);
 
-// —— 打开预览的现场必须教会 $PORT ——
-// 这块以前只有一句「端口使用 ash 提供的 PORT 环境变量」，读起来像「ash 会替你处理」，
-// 真实意思却是「你得把它写进命令」；完整说明只在设置页的对话框里，而打开预览的人不路过那儿。
-const posix = html();
-assert.match(posix, /服务只认命令行参数（Vite、Angular、Astro、Django、Rails、Laravel…）/);
-assert.match(posix, /必须把 \$PORT 写进命令/);
-// 判据的另一半同样要紧：少了它，用户会给只读 PORT 的框架加一个它不认的 --port。
-assert.match(posix, /服务自己读 PORT 环境变量（Next、Nest、Express、Spring Boot、Go…）/);
-assert.match(posix, /不用写，npm run dev 就行/);
-assert.match(posix, /npm run dev -- --port \$PORT/, "起手式必须是可以直接填进去的整行命令");
-// 方言按**服务端**那台机器来。`$PORT` 在 cmd 上是字面量、端口静默失效，所以 Windows 上
-// 一个 `$PORT` 都不许出现（这正是 preview-shell.ts 记的那次漏判）。
-const win = renderToStaticMarkup(<PreviewLaunchOptions state={state} starting={false} stopped={false} dialect="cmd"
-  onStart={() => {}} onCancel={() => {}} onRetry={() => {}} />);
-assert.match(win, /%PORT%/);
-assert(!/\$PORT/.test(win), "Windows 方言下不许出现 $PORT —— 它在 cmd 上是字面量");
+// 打开预览的现场怎么教 $PORT（判据两半、起手式、Windows 方言）在真 DOM 里看：test-preview-port-guide.mjs。
 // 唯一零误报、因此唯一会主动弹出来的检查：方言写反了。
 assert.match(wrongPortDialectHint("npm run dev -- --port $PORT", "cmd")!, /cmd/);
 assert.match(wrongPortDialectHint("npm run dev -- --port %PORT%", "posix")!, /sh/);

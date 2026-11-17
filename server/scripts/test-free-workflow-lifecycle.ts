@@ -13,6 +13,8 @@ import { releaseTmpDb } from "./tmp-db.js";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-free-lifecycle-"));
+// 不指定的话，scratch、ash-mcp 这些会落进这份检出自己的 data/ 目录。
+process.env.ASH_DATA_DIR = join(root, "data");
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 // 这份文件里绝大多数任务都用 `reasoningEffort: "ultra-fake"` 让执行器解析必炸、压根不拉起
@@ -527,9 +529,12 @@ try {
   const raceRound = await startVerifyRound("vr-race-task"); // 校验通过，状态写下，投递排第二
   assert.equal(raceRound.round, 1);
   releaseTurn("vr-race-task"); // 竞争者先拿到；验证 waiter 同步 claim 失败 → onError 回滚
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  const raceRow = (await db.select({ verifyRound: tasks.verifyRound, stage: tasks.stage, reviewStep: tasks.reviewStep })
+  // 回滚是放锁之后异步写库的：等到它落下来（有上限），不赌 300ms 够不够。
+  const readRace = async () => (await db.select({ verifyRound: tasks.verifyRound, stage: tasks.stage, reviewStep: tasks.reviewStep })
     .from(tasks).where(eq(tasks.id, "vr-race-task"))).at(0);
+  const rolledBack = (row: Awaited<ReturnType<typeof readRace>>) => row?.verifyRound === null && row.stage === null && row.reviewStep === null;
+  for (let i = 0; i < 150 && !rolledBack(await readRace()); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+  const raceRow = await readRace();
   assert.equal(raceRow?.verifyRound, null, "验证没起来必须清 verifyRound");
   assert.equal(raceRow?.stage, null, "对称回滚必须连 stage=verifying 一起恢复（UI 不能永久显示验证中）");
   assert.equal(raceRow?.reviewStep, null, "station 字段一并回滚");

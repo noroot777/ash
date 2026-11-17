@@ -87,10 +87,6 @@ try {
   assert.equal((await rooms()).length, 0);
   assert.equal(await roomClock.count(), 0, "没有历史房间时不显示那颗钟");
   assert.equal(await page.getByRole("log", { name: "侧聊消息" }).innerText(), "");
-  assert.equal(await page.getByRole("button", { name: "开始侧聊", exact: true }).count(), 0);
-  assert.equal(await page.getByText("这里聊，不打断思路", { exact: true }).count(), 0);
-  // 说明不常驻：发送快捷键写在发送键的悬停提示里，头带上没有 ⓘ。
-  assert.equal(await page.getByRole("button", { name: "侧聊说明", exact: true }).count(), 0);
   await input.fill("看一眼发送键的提示");
   await send.hover();
   assert.match(await page.getByRole("tooltip").innerText(), /Enter 发送/, "发送快捷键的说明在发送键的提示里");

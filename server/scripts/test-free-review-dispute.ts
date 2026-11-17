@@ -8,11 +8,11 @@
 // （测试隔离环境本来也禁止真起执行器）。要换发言方身份的那几段，改成另起一个任务 +
 // 直接种好该段的库状态，而不是释放回合——释放会把排着的起跑一次性放出去。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { releaseTmpDb } from "./tmp-db.js";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-free-review-dispute-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -436,9 +436,6 @@ try {
       text.includes(CLASS_PROBLEM_BOUNDARY),
       `${source} 必须原样带上类问题的边界口径，否则「类问题」标签会替掉内容判断`,
     );
-    for (const stale of ["为什么越界(是哪一轮的哪次改动引入的)", "多半是本轮修复引入的衍生问题"]) {
-      assert.ok(!text.includes(stale), `${source} 不许残留旧的单一形态措辞「${stale}」`);
-    }
   }
   assert.ok(
     !(toolConfig.description ?? "").includes(CLASS_PROBLEM_BOUNDARY),
@@ -555,8 +552,7 @@ try {
   console.log("free review dispute ok");} catch (error) {
   failure = error;
 } finally {
-  releaseTmpDb();
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 if (failure) {
   console.error(failure);

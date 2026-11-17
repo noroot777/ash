@@ -77,7 +77,7 @@ import type {
   PullStrategy,
   ReplyTaskResult,
   SessionTraceEntry,
-  TaskCommit,
+  TaskCommitList,
   TaskDiffResult,
   TaskFileDiffResult,
   TaskWorkspaceProbe,
@@ -197,7 +197,7 @@ export const api = {
     request(`/groups/${id(groupId)}/run`, { method: "POST" }),
   pauseGroup: (groupId: string): Promise<Group> =>
     request(`/groups/${id(groupId)}/pause`, { method: "POST" }),
-  // 「派出的任务」格头那一对键：这条任务名下全部停下 / 接着跑（server/src/dispatch-hold.ts）。
+  // 「子任务」格头那一对键：这条任务名下全部停下 / 接着跑（server/src/dispatch-hold.ts）。
   holdDispatched: (taskId: string): Promise<Task> =>
     request(`/tasks/${id(taskId)}/dispatched/hold`, { method: "POST" }),
   releaseDispatched: (taskId: string): Promise<Task> =>
@@ -284,8 +284,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/archive`, { method: "POST" }),
   unarchiveTask: (taskId: string): Promise<{ task: Task; restoreNote: string | null }> =>
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
-  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
+  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput, attachments?: string[]): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(attachments?.length ? { attachments } : {}) })),
   // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
   launchDispatchPlan: (taskId: string, input: import("@ash/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
     request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
@@ -482,8 +482,10 @@ export const api = {
   // 这个读的是提交历史上的一段区间。同一个文件两边的内容可以完全不同，路径也不通用。
   taskBranchFileDiff: (taskId: string, path: string, origPath?: string | null): Promise<TaskFileDiffResult> =>
     request(`/tasks/${id(taskId)}/diff/file?path=${id(path)}${origPath ? `&origPath=${id(origPath)}` : ""}`),
-  taskCommits: (taskId: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>
-    request(`/tasks/${id(taskId)}/commits`),
+  // 还没重启到新版的服务端不给 `total`，清单最多列 50 条：没列满就是全部，列满了条数就不知道。
+  taskCommits: (taskId: string): Promise<TaskCommitList> =>
+    request<Omit<TaskCommitList, "total"> & { total?: number | null }>(`/tasks/${id(taskId)}/commits`)
+      .then((list) => ({ ...list, total: list.total !== undefined ? list.total : list.commits.length < 50 ? list.commits.length : null })),
 
   // 工作目录里的文件那一族（列目录、`@` 候选、读全文、打开方式、删除）在 `fileApi.ts`，
   // 整份 spread 进来，`api.taskFiles()` 这类调用点一字不动。

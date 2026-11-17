@@ -10,7 +10,9 @@
 //      装了 codex 时交给真 codex 解析往返
 //   5. codex app-server 的确认:只认注入的名字、工具清单翻页、问不到 / 问挂了 / 到收尾还没回来
 //      都说「核实不了」、只说一次;codex exec 按本回合记录判
-//   6. 真 CLI(ash-mcp-real-cli-cases.ts):真 claude 的同名优先级、真 codex app-server 的启动报告
+//   6. 真 CLI(ash-mcp-real-cli-cases.ts):真 claude 的同名优先级、真 codex app-server 的启动报告。
+//      第 4 段的真 codex 往返和这一段要起本机装着的真 CLI,结果跟着那台机器装的版本走,
+//      所以只在 `ASH_TEST_REAL_CLI=1` 时跑(升级 CLI 之后手动核一次);平时只打一行 ⚠。
 //
 // codex 起跑参数与回合身份透传的端到端在 `test-codex-mcp-turn-token.ts`。
 //
@@ -23,17 +25,19 @@ import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import { ASH_MCP_TOOLS, ASH_MCP_TURN_EXITS } from "@ash/shared/mcp";
 import { turnFingerprint } from "@ash/shared/turn-fingerprint";
-import { IS_WINDOWS } from "../src/platform.js";
-import { REPO_DIR } from "../src/paths.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-inject-"));
 process.env.ASH_DATA_DIR = join(root, "data");
 process.env.ASH_DB = join(root, "ash.db");
 delete process.env.ASH_LAX_DONE;
+// 数据目录在 paths.ts 加载那一刻就定下来：放在上面两句之后再 import，不然注入文件写进这份检出的 data/。
+const { IS_WINDOWS } = await import("../src/platform.js");
+const { REPO_DIR } = await import("../src/paths.js");
 
 type ErrorEvent = Extract<AgentEvent, { kind: "error" }>;
 const isAshProblem = (e: AgentEvent): e is ErrorEvent => e.kind === "error" && e.message.startsWith("ash 的工具在这一回合没接上");
+const realCli = process.env.ASH_TEST_REAL_CLI === "1";
 const msg = (e: AgentEvent | null) => (e as ErrorEvent | null)?.message ?? "";
 const level = (e: AgentEvent | null) => (e as ErrorEvent | null)?.level;
 
@@ -186,7 +190,7 @@ process.stdin.on("end", () => process.exit(0));
       + 'enabled=true,env_vars=["ASH_TASK_ID","ASH_TURN_TOKEN"]}');
     assert.ok(!value!.includes("turn-1"), "令牌值不进 argv,进的只是它的单向摘要");
     assert.ok(!codexAshMcpArgs({}, winEntry)[1]!.includes("env_vars"), "没有回合身份(非任务回合)就不写 env_vars");
-    const plan = resolveLaunch("codex", ["-c", value!, "mcp", "list", "--json"]);
+    const plan = realCli ? resolveLaunch("codex", ["-c", value!, "mcp", "list", "--json"]) : null;
     if (plan) {
       const home = join(root, "codex-home");
       mkdirSync(home, { recursive: true });
@@ -205,7 +209,7 @@ process.stdin.on("end", () => process.exit(0));
       assert.deepEqual(listed!.transport.env_vars, ["ASH_TASK_ID", "ASH_TURN_TOKEN"]);
       console.log("✓ codex 注入的 TOML:Windows 路径与空格经真 codex 解析原样往返");
     } else {
-      console.log("⚠ 没装 codex,TOML 往返只核了字面量");
+      console.log("⚠ 没交给真 codex 解析(要跑:ASH_TEST_REAL_CLI=1,且装了 codex),TOML 往返只核了字面量");
     }
   }
 
@@ -291,8 +295,12 @@ process.stdin.on("end", () => process.exit(0));
   }
 
   // ── 6. 真 CLI ────────────────────────────────────────────────────────────
-  await checkRealClaudePrecedence(root);
-  await checkRealCodexAppServer(root);
+  if (realCli) {
+    await checkRealClaudePrecedence(root);
+    await checkRealCodexAppServer(root);
+  } else {
+    console.log("⚠ 真 CLI 那两段没跑(要跑:ASH_TEST_REAL_CLI=1)");
+  }
 } finally {
   // 先松开临时库(第 3 段建过表),否则 Windows 上删目录必然 EBUSY(理由见 tmp-db.ts)
   await releaseTmpDb();

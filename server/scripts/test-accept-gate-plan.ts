@@ -3,8 +3,11 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-plan-")));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 process.env.ASH_RUNS_DIR = join(root, "execution", "data", "runs");
 const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, verifyGateSnapshot } =
   await import("../src/accept-gate-source.js");
@@ -526,6 +529,6 @@ try {
   } else console.log("accept-gate-plan: POSIX unreadable-directory fixture skipped on Windows (no ACL changes)");
   console.log("accept-gate-plan: post-binding consumers, non-destructive remedies, nested repositories, unknown metadata, project identity, per-path read counts and prior provenance cases passed");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
   console.log("accept-gate-plan: cleanup=true");
 }

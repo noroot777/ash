@@ -14,7 +14,7 @@
 // 跑:npm -w web run test:review-navigation-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { waitUntil } from "./wait-until.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -41,7 +41,8 @@ try {
 
   // ① 记录还没读到就点旧那场启动失败的那张卡：请求挂着等，读到之后展开的是旧那场。
   await milestone("old-failed").click();
-  await page.waitForTimeout(150);
+  await waitUntil(async () => /old-run/.test(await page.evaluate(() => window.__pendingRequest.free()) ?? ""), "free 那一格的请求挂上了");
+  await settlePage(page);
   assert.match(await page.evaluate(() => window.__pendingRequest.free()) ?? "", /old-run/, "记录没读到时这份请求不能被当场收掉");
   await page.evaluate(() => window.__reviews.release("nav-task"));
   await page.locator('[data-pane="free"] [data-record]').first().waitFor();
@@ -95,7 +96,8 @@ try {
   await page.locator('[data-pane="stale"] [data-record^="old-run"]').first().waitFor();
   await page.evaluate(() => { window.__reviews.hold("nav-stale"); window.__reviews.set("nav-stale", ["old-run", "new-run"]); });
   await milestone("stale-new").click();
-  await page.waitForTimeout(300);
+  await waitUntil(async () => /new-run/.test(await page.evaluate(() => window.__pendingRequest.stale()) ?? ""), "stale 那一格的请求挂上了");
+  await settlePage(page);
   assert.match(await page.evaluate(() => window.__pendingRequest.stale()) ?? "", /new-run/, "旧快照里没有不等于找不到：请求不能被收掉");
   await page.evaluate(() => window.__reviews.release("nav-stale"));
   const staleKey = async (runId) => page.locator(`[data-pane="stale"] [data-record^="${runId}"]`).first().getAttribute("data-record");
@@ -158,7 +160,8 @@ try {
 
   // ③ 就地验证：验证记录还在读时点过来也要等，读到了展开第 1 轮（不是最新那轮）。
   await milestone("verify").click();
-  await page.waitForTimeout(150);
+  await waitUntil(async () => /inline/.test(await page.evaluate(() => window.__pendingRequest.verify()) ?? ""), "verify 那一格的请求挂上了");
+  await settlePage(page);
   assert.match(await page.evaluate(() => window.__pendingRequest.verify()) ?? "", /inline/, "验证记录没读到时这份请求等着");
   await page.evaluate(() => window.__releaseRounds());
   await waitUntil(async () => (await expanded("verify", "1-inline")) === "true", "验证记录展开第 1 轮");

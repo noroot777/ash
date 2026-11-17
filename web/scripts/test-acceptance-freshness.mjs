@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { afterFrames, animationsSettled } from "./wait-until.mjs";
 
 // 验收台上的事实**属于哪一版**、读失败时**出路在哪一行**。钉的是第 1 轮审查拦下的几条：
 //
@@ -228,7 +229,8 @@ try {
     await main.click();
     const layer = page.getByRole("dialog", { name: "确认验收" });
     await layer.waitFor();
-    await page.waitForTimeout(50);
+    await afterFrames(page);
+    await animationsSettled(page);
     const box = await layer.evaluate((node) => {
       node.scrollTop = node.scrollHeight;
       const rect = node.getBoundingClientRect();

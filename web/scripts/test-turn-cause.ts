@@ -87,6 +87,7 @@ function liveResume(resume: SystemResume | undefined) {
 
 const EXPECTED: Record<ResumeReason, string> = {
   queue: "队列续跑", run: "手动续跑", retry: "你点了重试", group: "分组运行", wake: "上游完成后续跑", repair: "打回重做",
+  hold: "接着跑",
 };
 
 // ① 每种缘由，两路各一遍 ────────────────────────────────────────────────────────

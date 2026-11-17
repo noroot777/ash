@@ -1,231 +1,95 @@
-/* 右侧「派出的任务」那一格（task-detail/dispatched/DispatchedInspector.tsx）。
-   一行一个任务：状态点、标题、一行小字（执行器、用时），右端状态词。只有需要你处理的两种带颜色。 */
-.dispatched-pane {
-  padding: 2px 16px 20px;
-}
-
-.dispatched-head {
-  display: flex;
-  min-height: 28px;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--t-xs);
-}
-
-.dispatched-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.dispatched-list > li + li {
-  border-top: .5px solid var(--line);
-}
-
+.dispatched-pane { padding: 0 8px 24px; }
+.dispatched-head { margin: 8px; color: var(--faint); font-size: var(--t-xs); }
+.dispatched-list { margin: 0; padding: 0; list-style: none; }
+.dispatched-list .dispatched-list { margin-left: 11px; border-left: .5px solid var(--line); padding-left: 4px; }
 .dispatched-row {
+  position: relative;
   display: grid;
-  width: calc(100% + 16px);
-  min-height: 46px;
-  grid-template-columns: 7px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  margin: 0 -8px;
-  border: 0;
+  min-height: 34px;
+  grid-template-columns: 23px minmax(0, 1fr) auto;
   border-radius: var(--r-md);
-  background: transparent;
-  padding: 6px 8px;
-  color: var(--ink);
-  font: inherit;
-  text-align: left;
+  padding: 7px 9px 7px 0;
   transition: background var(--dur-1) var(--ease-out);
 }
-
-.dispatched-row:hover,
-.dispatched-row:focus-visible {
-  background: var(--hover-bg);
-}
-
-.dispatched-row.is-open {
-  background: var(--sel-bg);
-}
-
-.dispatched-row__mark {
-  display: grid;
-  width: 7px;
-  place-items: center;
-}
-
-.dispatched-row__main {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.dispatched-row__main > b {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: var(--w-regular);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dispatched-row__main > small {
-  overflow: hidden;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dispatched-row > em {
-  color: var(--muted);
-  font-size: var(--t-xs);
-  font-style: normal;
-  white-space: nowrap;
-}
-
-.dispatched-row > em.is-ask { color: var(--amber); }
-.dispatched-row > em.is-bad { color: var(--red); }
-
-/* 这一行自己名下还有任务：状态词后面带侧栏那一行行尾的同一个数、同一颗图标
-   （.workspace-dispatch-count），整棵往下有要你处理的就变琥珀色。数有自己的颜色，不跟状态词的走。 */
-.dispatched-row > em > i {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  margin-left: 8px;
-  vertical-align: middle;
-  color: var(--faint);
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-}
-
-.dispatched-row > em > i.is-warn { color: var(--amber); }
-
-/* 竖轨图标右上角那个数（CountedIcon）。描一圈竖轨底色，跟图标线条分开。 */
-.insp-counted-icon {
-  position: relative;
-  display: inline-grid;
-  place-items: center;
-}
-
-.insp-counted-icon > i {
-  position: absolute;
-  top: -6px;
-  right: -9px;
-  min-width: 12px;
-  border-radius: var(--r-full);
-  background: var(--rail-bg, var(--panel));
-  padding: 0 2px;
-  color: var(--muted);
-  font-size: 10px;
-  font-style: normal;
-  font-weight: var(--w-medium);
-  font-variant-numeric: tabular-nums;
-  line-height: 12px;
-  text-align: center;
-}
-
-.insp-counted-icon.is-warn > i { color: var(--amber); }
-
-/* 整页只有一屉（task-detail/useTaskDrawers.tsx）：「派出的任务」那一屉、里层推出来的那一屉都画在
-   这两层里，自己不占位置，定位基准仍是 .task-detail。里层推出东西时外层那一屉让出来 —— 藏起来，
-   不卸载（里层那一屉的内容就长在它里面），关上之后原样露回来。 */
-.page-drawer-slot,
-.page-drawer-layer {
-  display: contents;
-}
-
-.page-drawer-slot.is-covered {
-  visibility: hidden;
-}
-
-/* 派出的任务这一层（task-detail/useTaskDrawers.tsx）：开着时挂在详情区那一层（.inspector-layout）里，
-   盖中间那一栏还是整个详情区、抽屉多宽，都由 useDrawerArea 量好写进这几个变量。 */
-.page-drawer-host {
-  display: contents;
-}
-
-.inspector-layout:has(> .page-drawer-host) {
-  position: relative;
-}
-
-.page-drawer-host .side-drawer-scrim {
-  inset: auto;
-  top: var(--page-area-top);
-  left: var(--page-area-left);
-  width: var(--page-area-width);
-  height: var(--page-area-height);
-}
-
-.page-drawer-host .side-drawer {
-  top: var(--page-area-top);
-  bottom: auto;
-  left: var(--page-area-left);
-  width: var(--page-drawer-width);
-  height: var(--page-area-height);
-}
-
-/* 这一屉里那一页自己的 Inspector 一律盖在内容上，不并排：抽屉最宽 680，并排之后内容那一栏到不了
-   回复框要的 420（同窄屏下 inspector.css 的做法，只是这里按抽屉而不是按窗口判）。 */
-.page-drawer-host .side-drawer > .inspector-layout {
-  position: relative;
-}
-
-.page-drawer-host .side-drawer > .inspector-layout > .inspector-host {
-  position: absolute;
-  z-index: 30;
-  inset: 0;
-  width: 100%;
-  min-width: 0;
-  border-left: 0;
-}
-
-.page-drawer-host .side-drawer > .inspector-layout > .inspector-host .inspector-host__resize-handle {
-  display: none;
-}
-
-/* 格头那颗「全部停下」（DispatchHoldKey）：没停着时指到格头、或键盘走进格头才出；触屏上常驻。
-   停着时它是「接着跑」（没停完是「再停一次」），常驻。 */
-.inspector-host__panel-head:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) {
-  opacity: 0;
-}
-
-.dispatched-hold-key {
-  transition: opacity var(--dur-1) var(--ease-out);
-}
-
-@media (hover: none) {
-  .inspector-host__panel-head:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) {
-    opacity: 1;
-  }
-}
-
-/* 被更上面那条按住时，格头一句指过去。字是次级色，能点的照黑白灰，不上颜色。 */
-.dispatched-head__holder {
+.dispatched-row:hover, .dispatched-row.is-hinted { background: var(--hover-bg); }
+.dispatched-row__mark { display: grid; height: 20px; place-items: center; }
+.dispatched-row__main { display: grid; min-width: 0; gap: 1px; }
+.dispatched-row__top { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.dispatched-row__title {
   min-width: 0;
   overflow: hidden;
   border: 0;
   background: transparent;
   padding: 0;
-  color: var(--muted);
+  color: var(--ink);
   font: inherit;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, currentColor 30%, transparent);
-  text-underline-offset: 3px;
+  font-size: var(--t-sm);
+  line-height: 20px;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.dispatched-head__holder:hover {
-  color: var(--ink);
-}
-
-/* 被按住的任务页面上那一行（DispatchHeldLine）：借「在等哨兵」那一行的样子，图标不上颜色 —— 停是你按的，
-   不是要你处理的状态。 */
-.dispatch-held-line .monitor-wait-line__bar > svg {
+.dispatched-row__title::after { position: absolute; inset: 0; border-radius: var(--r-md); content: ""; }
+.dispatched-row__title:focus-visible { outline: 0; }
+.dispatched-row__title:focus-visible::after { outline: 2px solid var(--ink); outline-offset: -1px; }
+.dispatched-row.is-settled .dispatched-row__title { color: var(--muted); }
+.dispatched-row__main > small {
+  display: -webkit-box;
+  overflow: hidden;
   color: var(--faint);
+  font-size: var(--t-xs);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
+.dispatched-row > em { margin-left: 10px; color: var(--muted); font-size: var(--t-xs); font-style: normal; line-height: 20px; white-space: nowrap; }
+.dispatched-row > em.is-ask { color: var(--amber); }
+.dispatched-row > em.is-bad { color: var(--red); }
+.dispatched-fold {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  height: 18px;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 0 3px 0 5px;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+.dispatched-fold:hover { background: var(--line); color: var(--ink); }
+.dispatched-fold.is-warn { color: var(--amber); }
+.dispatched-fold[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.dispatched-accepted { display: flex; width: 100%; min-height: 34px; align-items: center; gap: 12px; border: 0; border-radius: var(--r-md); background: transparent; padding: 0 7px; color: var(--faint); font-size: var(--t-xs); text-align: left; }
+.dispatched-accepted:hover { background: var(--hover-bg); color: var(--ink); }
+.dispatched-accepted[aria-expanded="true"] svg { transform: rotate(90deg); }
+.dispatched-pips { display: flex; flex-wrap: wrap; padding: 0 8px 4px; }
+.dispatched-pips > button { display: grid; width: 14px; height: 24px; flex: 0 0 14px; place-items: center; border: 0; background: transparent; padding: 0; }
+.dispatched-pips > button:hover > i { transform: scale(1.35); }
+.dispatched-pips .workspace-status-dot { width: 5px; height: 5px; margin: 0; }
+.dispatched-pip--quiet { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+.dispatched-summary { margin-right: auto; color: var(--faint); font-size: var(--t-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.inspector-host__panel-head:has(.dispatched-summary) .inspector-host__panel-title { flex: 0 1 auto; }
+.inspector-host__panel-head:has(.dispatched-summary) .inspector-host__panel-actions { flex: 1; gap: 8px; margin-left: 6px; }
+.dispatched-row__main > small.is-mono { font-family: var(--font-mono); }
+.insp-counted-icon { position: relative; display: inline-grid; place-items: center; }
+.insp-counted-icon > i { position: absolute; top: -6px; right: -9px; min-width: 12px; border-radius: var(--r-full); background: var(--rail-bg, var(--panel)); padding: 0 2px; color: var(--muted); font-size: 10px; font-style: normal; font-weight: var(--w-medium); font-variant-numeric: tabular-nums; line-height: 12px; text-align: center; }
+.insp-counted-icon.is-warn > i { color: var(--amber); }
+.inspector-host__panel-head:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) { opacity: 0; }
+.dispatched-hold-key { transition: opacity var(--dur-1) var(--ease-out); }
+@media (hover: none) {
+  .inspector-host__panel-head:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) { opacity: 1; }
+}
+.dispatched-head__holder { min-width: 0; overflow: hidden; border: 0; background: transparent; padding: 0; color: var(--muted); font: inherit; text-decoration: underline; text-decoration-color: color-mix(in oklab, currentColor 30%, transparent); text-underline-offset: 3px; text-overflow: ellipsis; white-space: nowrap; }
+.dispatched-head__holder:hover { color: var(--ink); }
+.dispatch-held-line .monitor-wait-line__bar > svg { color: var(--faint); }
+.task-ancestry { display: inline-flex; min-width: 0; max-width: 55%; flex: 0 1 auto; align-items: center; gap: 4px; }
+.task-crumb { min-width: 24px; max-width: 15em; overflow: hidden; border: 0; border-radius: 5px; background: transparent; padding: 2px 5px; color: var(--muted); font: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.task-crumb:hover { background: var(--hover-bg); color: var(--ink); }
+.task-crumb-sep { flex: none; color: var(--faint); }
+.task-crumb-overflow { position: relative; display: inline-flex; flex: none; align-items: center; }
+.task-crumb-menu { position: absolute; z-index: 50; top: 100%; left: 0; display: grid; max-width: min(300px, 70vw); max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: 4px; box-shadow: var(--shadow-md); }
+.palette-task-ancestry { color: var(--muted); font-weight: var(--w-regular); }

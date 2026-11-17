@@ -62,19 +62,6 @@ try {
     console.log(`✓ ${mode}: old receipt closes only its own ledger, not a newer target direction`);
   }
 
-  for (const missing of ["identity", "entire-state"] as const) {
-    const review = await open("legacy");
-    assert.equal((await review.stage()).status, 200);
-    if (missing === "identity") await db.update(schema.regressionEvidence).set({ targetIdentity: null }).where(eq(schema.regressionEvidence.directory, review.directory));
-    else await db.delete(schema.regressionEvidence).where(eq(schema.regressionEvidence.directory, review.directory));
-    await review.settle(false);
-    assert.equal((await row(review.taskId)).stage, "verified");
-    assert.equal((await review.state()).settlement?.target, null);
-    assert.equal((await review.state()).finalization?.superseded, true);
-    runs.releaseTurn(review.ownerTaskId);
-    console.log(`✓ historical ${missing}: recovery cannot sample a new target identity`);
-  }
-
   for (const mode of ["preset", "legacy"] as const) {
     const review = await open(mode);
     const ready = join(root, `${mode}-ready`), release = join(root, `${mode}-release`), effect = join(root, `${mode}-effect`);

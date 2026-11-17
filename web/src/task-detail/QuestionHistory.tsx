@@ -2,9 +2,11 @@ import { createContext, useContext, useId, useMemo, useState, type ReactNode } f
 import {
   formatQuestionAnswers, legacyQuestionRecord, pairAnswerMessages, questionItems, questionOptionSelected, type QuestionRecord,
 } from "@ash/shared/questions";
+import { parseAttachmentText } from "@ash/shared/attachments";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { ConversationSource } from "./conversationModel.ts";
+import { MessageAttachments } from "./Attachments.tsx";
 import { DeleteMessageButton, type DeletableItem } from "./MessageDelete.tsx";
 import { formatInstant } from "./utils.ts";
 import type { QuestionHistoryState } from "./useQuestionHistory.ts";
@@ -86,7 +88,12 @@ function QuestionQuote({ question, options, answer, number }: {
  *
  * `deletable`：这张卡出自会话里的那条答复（有出处才删得掉，见 MessageDelete.tsx）。
  */
-export function AnsweredQuestionCard({ record, deletable }: { record: QuestionRecord; deletable?: DeletableItem }) {
+export function AnsweredQuestionCard({ record, deletable, attachments = [] }: {
+  record: QuestionRecord;
+  deletable?: DeletableItem;
+  /** 随答复贴的图和文件（问答记录里没有，出自会话里那条答复）。 */
+  attachments?: readonly string[];
+}) {
   const items = questionItems(record);
   const answers = record.answers ?? (items.length === 1 ? [record.answer] : undefined);
   const partial = answers?.some((answer) => !answer.trim());
@@ -114,22 +121,27 @@ export function AnsweredQuestionCard({ record, deletable }: { record: QuestionRe
             {items.map((item, index) => <QuestionQuote key={index} question={item.question} options={item.options} number={multi ? index + 1 : undefined} />)}
             <p>{record.answer}</p>
           </>}
+        <MessageAttachments paths={[...attachments]} />
       </div>
     </article>
   );
 }
 
-export function AnsweredQuestionMessage({ text, id, at, deletable }: { text: string; id: string; at?: string; deletable?: DeletableItem }) {
+export function AnsweredQuestionMessage({ text, id, at, deletable, attachments = [] }: {
+  text: string; id: string; at?: string; deletable?: DeletableItem; attachments?: readonly string[];
+}) {
   const { pairing } = useContext(HistoryContext);
   const paired = pairing.paired.get(id);
+  // 带了附件的答复，会话原文尾部是附件块（server attachmentsPrompt）：摘出来画成缩略图，答案只留正文。
+  const parsed = parseAttachmentText(text);
   const record = (paired && !paired.deleted ? paired : undefined)
-    ?? legacyQuestionRecord(text, id, at)
-    ?? { id, question: "你的答复", answer: text.trimStart().replace(/^【答复】\s*/, ""), reply: text, answeredAt: at ?? "" };
+    ?? legacyQuestionRecord(parsed.body, id, at)
+    ?? { id, question: "你的答复", answer: parsed.body.replace(/^【答复】\s*/, ""), reply: text, answeredAt: at ?? "" };
   // 删除时指名这张卡对的那条记录：老会话的段上没有 answerIds，服务端靠它认（核对原文才删）。
   const target = deletable && paired
     ? { sources: deletable.sources?.map((source) => "index" in source ? { ...source, answerId: paired.id } : source) }
     : deletable;
-  return <AnsweredQuestionCard record={record} deletable={target} />;
+  return <AnsweredQuestionCard record={record} deletable={target} attachments={[...parsed.paths, ...attachments]} />;
 }
 
 /** 问答历史里有、会话里找不到出处的那些答复（不在这几条会话里），补成卡片放在末尾。 */

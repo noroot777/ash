@@ -308,6 +308,9 @@ try {
       .where(eq(freeReviewRounds.id, `${reopenedRun}-round`));
     await db.update(freeReviewRuns).set({ status: "failed", finishedAt: at })
       .where(eq(freeReviewRuns.id, reopenedRun));
+    const generationNow = async () => (await db.select({ generation: regressionEvidence.generation }).from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, freeReviewEvidenceDir(reopened, reopenedRun, 1)))).at(0)?.generation;
+    const generationBefore = await generationNow();
     const busy = holdLifecycle(reopenedRun);
     const retrying = reopenFailedFreeReview(reopened);
     for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -316,7 +319,9 @@ try {
     busy.open();
     await busy.done;
     assert.equal((await retrying).dispatched, true, "放手之后照常重跑并派出去");
-    assert.equal((await roundOf(reopenedRun)).status, "reviewing", "这一轮回到进行中");
+    // 「回到进行中」在这里只有一瞬:不许起真执行器,派出去的那一轮随即被拒、又落回 error,看状态就是
+    // 跟它赌先后。换没换代次不会回退,看它。
+    assert.notEqual(await generationNow(), generationBefore, "这一轮换了代次重新起跑");
     console.log("✓ ⑲ 旧代次的收尾与重跑换代次互斥：要么先做完，要么进来时整段作废");
   }
 

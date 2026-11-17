@@ -63,6 +63,9 @@ try {
       requests.push({ kind: match[2], task: match[1] });
       return json({});
     }
+    // 敲 `@` 同时会搜文件：答成它那个形状的「没有」。答成空数组的话页面按 hits 遍历当场抛错、菜单没了，
+    // 而这一发比点菜单晚到还是早到全看机器忙不忙（并行跑时点 `@codex` 那一下就这么超时过）。
+    if (/\/file-search$/.test(path)) return json({ hits: [], more: false });
     return json([]);
   });
   await page.goto(`${web.origin}/scripts/fixtures/reply-call.html`);

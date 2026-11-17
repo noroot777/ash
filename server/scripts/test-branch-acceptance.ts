@@ -224,14 +224,15 @@ try {
     await checkDiff("source_branch_missing");
     await taskWorkspace(await row(task.id), s.repo);
     await checkDiff(null);
+    // 目标分支读不到：任务分支里合进来过多少目标分支无从得知，按开工点给出的会是错的数字（task-change-scope.ts）。
     git(s.repo, "branch", "-m", "main", "renamed-main");
-    await checkDiff(null);
+    await checkDiff("target_branch_missing");
     await db.update(tasks).set({ worktreeStartCommit: "0".repeat(40) }).where(eq(tasks.id, task.id));
     await checkDiff("start_commit_unreadable");
     assert.equal((await api.request(`/tasks/${task.id}/diff/file?path=../shared.txt`)).status, 400);
     await db.update(tasks).set({ worktreeStartCommit: null }).where(eq(tasks.id, task.id));
     await checkDiff("target_branch_missing");
-    console.log("✓ unstarted and unreadable pinned diff ranges return matching structured results; pinned diffs survive target rename");
+    console.log("✓ unstarted and unreadable pinned diff ranges return matching structured results; a missing target is reported, never papered over with the pinned start");
   }
   {
     const s = await setup("squash");

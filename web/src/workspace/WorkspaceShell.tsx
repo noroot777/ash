@@ -125,7 +125,7 @@ export function WorkspaceShell() {
   // 项目主仓被切分支/拉取过之后重拉一次 ProjectHealth：侧栏胶囊上的分支名和「有未提交
   // 改动」那颗点都从它来，不跟着刷就会停在操作之前的样子。
   const [gitVersion, setGitVersion] = useState(0);
-  const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, confirmedDeleteIds } = useTasks();
+  const { tasks: localTasks, setTasks, loading: tasksLoading, snapshotReady: tasksReady, error: tasksError, connected, settlementVersion, refetch: refetchTasks, confirmedDeleteIds } = useTasks();
   // 接力出去的行，状态要跨机器问持有机才知道 —— 本机那一行停在交出去那一刻。
   // **这一问由用户按**（见 useOutboundState 顶部：自动轮询会没完没了地敲别人的服务器），
   // 所以没问过时列表里就是接力当时的状态，由 OutboundStatusBar 如实说出来。
@@ -641,7 +641,7 @@ export function WorkspaceShell() {
         ) : selectedFullTask?.mode === "duet" ? (
           <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedFullTask ? (
-          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer(draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
+          <TaskDetail task={selectedFullTask} allTasks={tasks} tasksReady={tasksReady} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer(draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : currentProject && !selectedTask ? composerPanel(currentProject, {
           title: scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject.name,
           detail: scopeKind === "tasks" ? `新建到 ${currentProject.name}` : undefined,

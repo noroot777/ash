@@ -55,6 +55,8 @@ try {
       started.push({ task: match[1], body: JSON.parse(request.postData() ?? "{}") });
       return json({ discussionId: `new-${started.length}`, state: { stateVersion: 99, reviews: [], discussions: [{}] } }, 201);
     }
+    // `@` 同时会搜文件：答成兜底的 `[]` 页面那边会抛错、菜单重画，跟点选项那一下赌先后。
+    if (/\/file-search$/.test(path)) return json({ hits: [], more: false });
     return json([]);
   });
   await page.goto(`${web.origin}/scripts/fixtures/discussion.html`);

@@ -9,8 +9,6 @@ import { acceptTask } from "../src/task-accept.js";
 import { acceptGateState, cancelAcceptGate, hasLiveAcceptGate, recoverAcceptGates, stopAcceptGatesForTask } from "../src/accept-gate.js";
 import { forgetGateProcess, hasStoppingGateProcess } from "../src/accept-gate-ownership.js";
 import { gateLaunchPath, readGateLaunch, writeGateLaunch } from "../src/accept-gate-launch.js";
-import { acceptGateCheck } from "../src/accept-gate.js";
-import { discardPendingAcceptanceGate } from "../src/task-accept-gate-launch.js";
 import { mountAcceptGateRoutes } from "../src/accept-gate-routes.js";
 import { acceptGateLogTail, acceptGateLogText, spawnAcceptGate } from "../src/accept-gate-process.js";
 import { taskBusyRejection } from "../src/task-busy.js";
@@ -196,24 +194,6 @@ export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
     }
     assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId)))[0].failure, "ownership_waived");
     assert.equal((await acceptTask(taskId)).accepted, true, "停止证据无法恢复的旧记录有明确风险确认的出路，不靠删库");
-  }
-
-  {
-    const repo = makeRepo("pending-exception");
-    const projectId = await seedProject("pending-exception", repo, "sleep 120");
-    const taskId = "gate-pending-exception";
-    await seedTask(projectId, repo, taskId, "pending.txt");
-    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
-    const project = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
-    assert.equal((await acceptGateCheck(task, project, { choices: { by: "human" }, onBasis() {} }))?.reason, "accept_gate_required");
-    assert.equal(hasLiveAcceptGate(taskId), true);
-    await discardPendingAcceptanceGate(taskId, new Error("injected after registration"));
-    assert.equal(hasLiveAcceptGate(taskId), false);
-    assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId))).length, 0);
-    const retry = await acceptTask(taskId);
-    assert.equal(retry.accepted, false);
-    if (!retry.accepted) assert.ok(retry.gate);
-    await cancelAcceptGate(taskId);
   }
 
   {

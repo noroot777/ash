@@ -11,6 +11,7 @@
 //   ⑦ 某一发挂死不回：等到上限就放掉、再读，入口回得来，不会永远卡在那一发上。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage } from "./wait-until.mjs";
 
 const web = await startWebServer();
 const link = (page) => page.getByRole("link", { name: "在新窗口打开预览" });
@@ -44,15 +45,15 @@ try {
   await stage(() => window.__stage.drop());
   await stage(() => window.__stage.setRunning(false));
   await stage(() => window.__stage.open());
-  await link(page).waitFor({ state: "detached", timeout: 2000 });
+  await link(page).waitFor({ state: "detached" });
 
   // ⑤ 连着的时候来一条事件，但那一次没读到：入口先收起来，读得到了自己回来。
   await stage(() => window.__stage.setRunning(true));
   await stage(() => window.__stage.review());
-  await link(page).waitFor({ timeout: 2000 });
+  await link(page).waitFor();
   await stage(() => window.__stage.failReads(true));
   await stage(() => window.__stage.review());
-  await link(page).waitFor({ state: "detached", timeout: 2000 });
+  await link(page).waitFor({ state: "detached" });
   await stage(() => window.__stage.failReads(false));
   await link(page).waitFor({ timeout: 6000 });
 
@@ -67,7 +68,9 @@ try {
   // 读的途中又来了事件，不另起一发：最多一发在路上，回来以后补读一次。
   const before = await stage(() => window.__stage.reads());
   await stage(() => { window.__stage.review(); window.__stage.review(); window.__stage.review(); });
-  await page.waitForTimeout(1000);
+  // 夹具在请求**发出那一刻**记数，叠出并行请求的话冲刷一轮就读得到；固定睡一秒反而会把
+  // 「在途那一发回来后补读一次」（正确行为）算进来。
+  await settlePage(page);
   assert.ok((await stage(() => window.__stage.reads())) - before <= 1, "读的途中来了三条事件，叠出了好几发并行的请求");
   await stage(() => window.__stage.slowReads(0));
 

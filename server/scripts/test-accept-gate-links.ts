@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 这一份专收「各用一个独立小仓」的链接/输入计划用例 —— 它们要自带 .gitignore、提交历史,甚至自带
 // 一个装在项目内部的运行目录,挤进 test-accept-gate-source.ts 那个共用 repo 会互相污染(根落点那条
 // 会把共用 repo 里全部被忽略的条目都拉进复制计划)。共用 fixture 的那批仍在那边。
 const root = mkdtempSync(join(tmpdir(), "ash-gate-links-"));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 // 运行目录故意放进 runtime-filter 夹具仓库内部:「源侧过滤、副本回算不过滤」只有在「ash 的 runs
 // 目录就在项目里」时才复现,而 RUNS_DIR 在模块 import 时就定下来了。其它夹具仓库都不包含它,排除
 // 计划对它们是空的。
@@ -225,4 +228,4 @@ try {
 
   console.log("accept-gate-links: link identity, native path semantics, frozen relocation, dangling-link tolerance"
     + " and runtime-directory exclusion passed");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

@@ -100,6 +100,7 @@ try {
 
   // ① 开局:列表读到了,SSE 连上了(连上本身也会触发一次追平)。
   await page.waitForSelector('[data-task="t-1"]');
+  await page.waitForSelector('main[data-ready="true"]');
   await page.waitForSelector('main[data-connected="true"]');
   await page.waitForFunction(() => document.querySelectorAll("li").length === 1);
   // 连上那一次对账要先走完再记「之前」：它由一个零延迟定时器发车（useCatchUpLink），越过它、
@@ -123,6 +124,7 @@ try {
   assert.equal(await page.locator("li").count(), 1, "GET 掉了,这一刻页面还是旧快照");
   assert.equal(store.hits, hitsBefore + 1, "事件应当只换来一发 GET");
   assert.equal(await page.locator('[data-task="t-1"]').getAttribute("data-monitor"), "false");
+  assert.equal(await page.locator("main").getAttribute("data-ready"), "true", "后续请求失败不撤销首次完整快照的就绪状态");
 
   // ③ **恢复责任**:没有第二次事件、没有重连、没有人点刷新,它必须自己再试一次并追平。
   await page.waitForSelector('[data-task="t-2"]', { timeout: CATCH_UP_RETRY_MS + 10_000 });
@@ -178,6 +180,20 @@ try {
   assert.equal(await page.locator("li").count(), 4, "迟到的旧快照不许把追平的结果盖回去");
   assert.equal(await page.locator("main").getAttribute("data-connected"), "true");
 
+  await page.close();
+  store.failures = 100;
+  const cold = await browser.newPage();
+  cold.on("pageerror", (error) => errors.push(error.message));
+  await cold.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/task-catch-up.html`);
+  await cold.waitForSelector('main[data-error="true"][data-ready="false"][data-connected="true"]');
+  emit({ type: "task.created", task: row({ id: "sse-only", title: "仅事件到达" }) });
+  await cold.waitForSelector('[data-task="sse-only"]');
+  assert.equal(await cold.locator("main").getAttribute("data-ready"), "false", "首次 GET 失败和 SSE 单行回填都不是完整列表");
+  store.failures = 0;
+  emit({ type: "task.monitors", taskId: "t-1" });
+  await cold.waitForSelector('main[data-ready="true"]', { timeout: CATCH_UP_RETRY_MS + 10_000 });
+  await cold.waitForSelector('[data-task="t-4"]');
+  assert.equal(await cold.locator("main").getAttribute("data-error"), "true", "静默重试成功即就绪，不依赖初次错误横幅清除");
   assert.deepEqual(errors, []);
   console.log(`✓ 哨兵事件带着恢复责任:GET 掉了自己重试到追平(重试间隔 ${CATCH_UP_RETRY_MS}ms,连掉两发也不放弃),断线前那一发回来也不许清掉重连后欠下的那一趟`);
 } finally {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { waitUntil } from "./wait-until.mjs";
 
 // 新建面板「创建并等前置」（composer/usePrerequisitePicks.tsx）：
 // - 没选前置时发送键点不动、说得出差什么；候选全部列出，不能选的置灰写原因，能选的写它到哪一步了；
@@ -112,7 +113,9 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await picked.count(), 2);
   assert.match(await picked.nth(1).innerText(), /前置乙[\s\S]*在审第 1 轮/);
-  assert.ok(candidateQueries.some((query) => query.useWorktree === "1" && query.selected.join() === "t-a,t-b"), "按选的先后、带着工作目录选择去问");
+  // 这一问是选完之后页面自己发的，等它到（忙的时候会比上面那几句断言晚）。
+  await waitUntil(() => candidateQueries.some((query) => query.useWorktree === "1" && query.selected.join() === "t-a,t-b"),
+    "按选的先后、带着工作目录选择去问");
   await page.keyboard.press("Escape");
   assert.equal(await sendKey.count(), 1, "发送键跟着这一种启动方式写字");
 

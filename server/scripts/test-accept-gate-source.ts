@@ -5,8 +5,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-gate-source-"));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 // 目录链:Windows 上普通软链要 SeCreateSymbolicLinkPrivilege,包管理器(pnpm 等)改用 junction,
@@ -295,4 +298,4 @@ try {
     assert.equal(await verifyGateSnapshot(target, source), false, "改掉它必须判成「测试改了被测源码」");
   }
   console.log("accept-gate-source: isolated commits, dirty/index/untracked rejection, borrowed dependencies, outputs non-Git identity, tracked dependency directories and files named like them passed");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

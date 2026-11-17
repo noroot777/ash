@@ -1,57 +1,61 @@
-// 详情页左边那几屉的互斥 + 右侧「派出的任务」那一格（test-task-drawers-dom.mjs）。
-//
-// 挂的是 TaskDetail 自己用的那一个 hook（useTaskDrawers）：互斥的接线就在它里面，夹具不抄一份。
-// 三屉各从生产的入口打开：子智能体从 Inspector 里那一行，读全文从 LeftDrawer 的槽（审查格、
-// 辩论气泡就是这么开的），派出的任务从右侧那一格。
-//
-// 抽屉里那条任务是 NestedDetail：生产里是抽屉模式的完整 TaskDetail，这里只留它跟抽屉有关的那一半
-// —— 自己也调 useTaskDrawers、自己也有三屉（往下一层的派出任务、子智能体、读全文），三颗键各开
-// 一屉。整页只有一屉这条（往下一层看是替换、不叠出越来越窄的抽屉）就是靠它钉住的。
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentEvent, Session, Task, TaskListItem } from "@ash/shared";
-import { InspectorHost } from "../../src/inspector/index.ts";
+import type { AgentEvent, ProjectView, Session, Task, TaskListItem } from "@ash/shared";
+import { InspectorHost, InspectorHeadActions } from "../../src/inspector/index.ts";
 import { LeftDrawerProvider } from "../../src/components/LeftDrawer.tsx";
 import { useTaskDrawers } from "../../src/task-detail/useTaskDrawers.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import type { TaskInspectorContext } from "../../src/task-detail/taskInspectors.tsx";
+import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
+import { DispatchNoteLine } from "../../src/task-detail/DispatchNoteLine.tsx";
+import { dispatchNotes } from "../../src/task-detail/dispatchNotes.ts";
+import { pushTaskHistoryEntry } from "../../src/workspace/workspaceHistory.ts";
+import { CommandPalette } from "../../src/overlays/CommandPalette.tsx";
 import "../../src/styles/global.css";
 
-// 没有服务端：正文按 id 回空串，其余读取一律空表（各格自己会画空态）。
+const at = (minutes: number) => new Date(Date.now() - (60 - minutes) * 60_000).toISOString();
+const task = (id: string, title: string, extra: Partial<Task> = {}): Task => ({
+  id, projectId: "p1", groupId: null, parentId: null, title, body: "", mode: "single", status: "done", stage: "accepted",
+  labels: [], dependsOn: [], resumeDependsOn: [], workflowMode: "preset", agentType: "claude", creationOrigin: { kind: "user" }, createdAt: at(0), updatedAt: at(0), ...extra,
+});
+const initial = [
+  task("lead", "父任务", { stage: "verified" }),
+  task("kid-a", "运行的子任务", { dispatchedBy: "lead", queueId: "q1", status: "running", stage: null, executorLabel: "codex@cpa", startedAt: at(1), createdAt: at(1) }),
+  task("kid-b", "提问的子任务", { dispatchedBy: "lead", queueId: "q1", status: "paused", stage: null, question: "先迁数据还是先改接口？", createdAt: at(2) }),
+  task("mid", "中间任务", { dispatchedBy: "lead", stage: null, createdAt: at(3) }),
+  task("leaf", "最下层任务", { dispatchedBy: "mid", createdAt: at(4) }),
+  task("accepted", "验收的子任务", { dispatchedBy: "lead", createdAt: at(5) }),
+  task("solo", "还没派活的任务", { stage: "verified" }),
+];
+let currentTasks = initial;
+const mutations: string[] = [];
+const project = { id: "p1", name: "ash", repoPath: "/tmp/ash", health: { exists: true, isRepo: true } } as ProjectView;
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   if (!url.includes("/api/")) return realFetch(input, init);
+  const hold = new URL(url, location.origin).pathname.match(/^\/api\/tasks\/([^/]+)\/dispatched\/(hold|release)$/);
+  if (hold) {
+    mutations.push(new URL(url, location.origin).pathname);
+    const current = currentTasks.find((item) => item.id === hold[1])!;
+    return Response.json({ ...current, dispatchHoldAt: hold[2] === "hold" ? new Date().toISOString() : null, dispatchHoldPendingAt: null });
+  }
+  if (url.includes("/search/stream")) {
+    const query = new URL(url, location.origin).searchParams.get("q") ?? "";
+    const hits = currentTasks.filter((item) => item.title.includes(query) || item.id === query).map((item) => ({
+      kind: "task", ...item, projectName: "ash", archived: false, field: "title", snippet: "", preview: item.title,
+    }));
+    return new Response(hits.map((hit) => JSON.stringify(hit)).join("\n"));
+  }
   if (url.includes("/tasks/bodies")) {
-    const { taskIds } = JSON.parse(String(init?.body ?? "{}")) as { taskIds: string[] };
-    return Response.json(taskIds.map((taskId) => ({ taskId, body: "" })));
+    const { taskIds } = JSON.parse(String(init?.body ?? "{}"));
+    return Response.json(taskIds.map((taskId: string) => ({ taskId, body: "" })));
   }
   return Response.json([]);
 };
-
-const at = (minutes: number) => new Date(Date.parse("2026-11-15T10:00:00.000Z") + minutes * 60_000).toISOString();
-function task(id: string, title: string, extra: Partial<Task> = {}): Task {
-  return {
-    id, projectId: "p1", groupId: null, parentId: null, title, body: "", mode: "single", status: "done", stage: null,
-    labels: [], dependsOn: [], resumeDependsOn: [], workflowMode: "preset", agentType: "claude",
-    createdAt: at(0), updatedAt: at(0), ...extra,
-  } as Task;
-}
-
-const lead = task("lead", "拆活的分析任务", { status: "paused" });
-const initial: TaskListItem[] = [
-  lead,
-  task("kid-a", "第一条派出去的", { dispatchedBy: "lead", queueId: "q1", status: "running", executorLabel: "codex@cpa", startedAt: at(1), createdAt: at(1) }),
-  task("kid-b", "第二条派出去的", { dispatchedBy: "lead", queueId: "q1", status: "paused", question: "选哪种？", createdAt: at(2) }),
-];
-
-const session = {
-  id: "s1", taskId: "lead", agentType: "claude", role: "single", executor: "claude@fixture",
-  startedAt: at(0), endedAt: null,
-} as unknown as Session;
+const session = { id: "s1", taskId: "lead", agentType: "claude", role: "single", executor: "claude@fixture", startedAt: at(0), endedAt: null } as Session;
 const native = (nativeWork: NonNullable<Extract<AgentEvent, { kind: "tool" }>["nativeWork"]>, seconds: number) => ({
-  at: new Date(Date.parse(session.startedAt) + seconds * 1000).toISOString(),
-  turnStartedAt: session.startedAt,
+  at: new Date(Date.parse(session.startedAt) + seconds * 1000).toISOString(), turnStartedAt: session.startedAt,
   event: { kind: "tool", name: "fixture", nativeWork } satisfies AgentEvent,
 });
 const items = buildConversationItems([{ session, output: "", trace: [
@@ -59,83 +63,75 @@ const items = buildConversationItems([{ session, output: "", trace: [
   native({ type: "result", id: "agent-call", result: "查完了", failed: false }, 5),
 ] as never }], [session], []);
 const conversation = { items, sessions: [session], refreshing: false, error: null, traceError: null, refetch: () => {} } as never;
+const nothing = () => {};
 
-declare global {
-  interface Window { __add: (row: Partial<Task> & { id: string; title: string }) => void }
-}
-
-const NESTED_INSPECTORS = [{ id: "info", title: "信息", icon: <span aria-hidden="true">i</span>, render: () => <p>这条任务的信息</p> }];
-
-function NestedDetail({ task, allTasks, onOpenTask }: { task: Task; allTasks: TaskListItem[]; onOpenTask: (id: string) => void }) {
-  const drawers = useTaskDrawers({
-    task, allTasks, conversation, onOpenTask,
-    renderTask: (child) => <NestedDetail key={child.id} task={child} allTasks={allTasks} onOpenTask={onOpenTask} />,
-  });
-  const agent = drawers.subagents.nativeWork.rows.find((row) => row.kind === "agent");
-  // 它自己的 Inspector（生产里是任务详情的那一栏）：在抽屉里开它，不能把会话和回复框挤成一条。
-  return (
-    <LeftDrawerProvider value={drawers.leftDrawer.api}>
-      <InspectorHost contextKey={`nested:${task.id}`} descriptors={NESTED_INSPECTORS} context={{}} defaultVisible={false}>
-      {({ toggleButton }) => (
-      <section className="task-detail" data-drawer-task={task.id} style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        {toggleButton}
-        <p>{task.title} 的会话</p>
-        {/* 回复框那一行（附件、派审查、预览、接力、执行器胶囊、发送键，收成图标之后）大约这么宽。 */}
-        <div className="reply-row-probe" style={{ width: 320, height: 4 }} aria-hidden="true" />
-        {drawers.dispatched.state.tasks.map((kid) => (
-          <button key={kid.id} type="button" onClick={() => drawers.dispatched.state.open(kid.id)}>在{task.title}里打开：{kid.title}</button>
-        ))}
-        <button type="button" onClick={() => agent && drawers.subagents.nativeWork.onOpenAgent(agent.id)}>在{task.title}里看子智能体</button>
-        <button type="button" onClick={() => drawers.leftDrawer.api.open({
-          key: `report-${task.id}`, kind: "审查报告", title: task.title, ariaLabel: `审查报告：${task.title}`, closeLabel: "关上审查报告", body: <p>{task.title} 的报告</p>,
-        })}>在{task.title}里读审查报告</button>
+function Detail({ current, tasks, tasksReady, navigate }: { current: Task; tasks: Task[]; tasksReady: boolean; navigate: (id: string) => void }) {
+  const drawers = useTaskDrawers({ task: current, allTasks: tasks, tasksReady, conversation });
+  const readReport = () => drawers.leftDrawer.api.open({ key: "report", kind: "审查报告", title: "第 1 轮", ariaLabel: "审查报告：第 1 轮", closeLabel: "关上审查报告", body: <p>报告正文</p> });
+  const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => ["info", "files", "dispatched", "subagents", "review", "memos", "side-chat"].includes(descriptor.id))
+    .map((descriptor) => descriptor.id === "subagents" ? { ...descriptor, render: (context: TaskInspectorContext) => <><InspectorHeadActions><button type="button" onClick={readReport}>读审查报告</button></InspectorHeadActions>{descriptor.render(context)}</> }
+      : descriptor.id === "dispatched" ? descriptor : { ...descriptor, render: () => <p>{current.title} 的{descriptor.title}</p> }), [current.title, drawers.inspectors]);
+  const go = navigate;
+  const context = { task: current, allTasks: tasks, dispatchedFolds: drawers.dispatchedFolds, nativeWork: drawers.subagents.nativeWork, onOpenTask: go, onTaskUpdated: (updated: Task) => window.__patch(updated.id, updated), notify: nothing } as unknown as TaskInspectorContext;
+  return <LeftDrawerProvider value={drawers.leftDrawer.api}>
+    <InspectorHost contextKey={`task:${current.id}`} descriptors={descriptors} context={context} tabPolicy={drawers.inspectorPolicy}>
+      {(inspector) => <main className="task-detail" data-current-task={current.id} style={{ position: "relative", flex: 1, minHeight: 0 }}>
+        <TaskHeader task={current} actions={null} allTasks={tasks} conversationMarkdown="" busy={false} refreshing={false} reviewOpen={false}
+          onTitle={async () => {}} onTogglePin={async () => {}} onPrimary={nothing} onRequeue={nothing} onArchive={nothing}
+          onRefresh={nothing} onReview={nothing} onOpenTask={go} onDelete={nothing} inspectorToggle={inspector.toggleButton} notify={nothing} />
+        <div style={{ display: "flex", gap: 8 }}>
+          {["info", "dispatched", "subagents", "files", "side-chat", "memos"].map((id) => <button key={id} onClick={() => inspector.openTab(id)}>切到{id}</button>)}
+        </div>
+        <p>{current.title} 的会话</p>
+        {dispatchNotes(current.id, tasks).map((note) => <DispatchNoteLine key={note.id} note={note} onOpen={go} />)}
+        <textarea aria-label={`回话给${current.title}`} />
         {drawers.drawers}
-      </section>
-      )}
-      </InspectorHost>
-    </LeftDrawerProvider>
-  );
+      </main>}
+    </InspectorHost>
+  </LeftDrawerProvider>;
 }
+
+declare global { interface Window {
+  __add: (row: Partial<Task> & { id: string; title: string }) => void;
+  __patch: (id: string, patch: Partial<Task>) => void;
+  __go: (id: string) => void;
+  __hydrate: (ready?: boolean) => void;
+  __ready: () => void;
+  __tasks: () => Task[];
+  __mutations: () => string[];
+} }
 
 function App() {
-  const [tasks, setTasks] = useState(initial);
-  const [opened, setOpened] = useState<string | null>(null);
+  const [tasks, setTasks] = useState(() => new URLSearchParams(location.search).has("partial") ? initial.filter((item) => item.id === (new URLSearchParams(location.search).get("task") ?? "lead")) : initial);
+  const [tasksReady, setTasksReady] = useState(() => !new URLSearchParams(location.search).has("partial"));
+  const [selected, setSelected] = useState(() => new URLSearchParams(location.search).get("task") ?? "lead");
+  const [palette, setPalette] = useState(false);
+  currentTasks = tasks;
+  const navigate = (id: string) => { const next = tasks.find((item) => item.id === id); if (next) { pushTaskHistoryEntry(next); setSelected(id); } };
   useEffect(() => {
-    window.__add = (row) => setTasks((current) => [...current, task(row.id, row.title, row)]);
-  }, []);
-  const drawers = useTaskDrawers({
-    task: lead, allTasks: tasks, conversation, onOpenTask: setOpened,
-    renderTask: (child) => <NestedDetail key={child.id} task={child} allTasks={tasks} onOpenTask={setOpened} />,
+    window.__add = (row) => setTasks((current) => [...current, task(row.id, row.title, { createdAt: new Date().toISOString(), ...row })]);
+    window.__patch = (id, patch) => setTasks((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
+    window.__go = navigate;
+    window.__hydrate = (ready = true) => {
+      setTasks((current) => [...current, ...initial.filter((item) => !current.some((known) => known.id === item.id))]);
+      if (ready) setTasksReady(true);
+    };
+    window.__ready = () => setTasksReady(true);
+    window.__tasks = () => currentTasks;
+    window.__mutations = () => mutations;
   });
-  const descriptors = useMemo(
-    () => drawers.inspectors.filter((descriptor) => descriptor.id === "subagents" || descriptor.id === "dispatched"),
-    [drawers.inspectors],
-  );
-  const context = { nativeWork: drawers.subagents.nativeWork, dispatched: drawers.dispatched.state } as unknown as TaskInspectorContext;
-  return (
-    <div style={{ height: "100vh", display: "flex", overflow: "hidden" }}>
-      <LeftDrawerProvider value={drawers.leftDrawer.api}>
-        <InspectorHost contextKey="task-drawers-fixture" descriptors={descriptors} context={context} defaultVisible>
-          {(inspector) => (
-            <main style={{ minWidth: 0, minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-              <header style={{ display: "flex", gap: 6, padding: "12px 24px" }}>
-                <button type="button" onClick={() => inspector.openTab("subagents")}>切到子智能体</button>
-                <button type="button" onClick={() => inspector.openTab("dispatched")}>切到派出的任务</button>
-                <button type="button" onClick={() => drawers.leftDrawer.api.open({
-                  key: "report", kind: "审查报告", title: "第 1 轮", ariaLabel: "审查报告：第 1 轮", closeLabel: "关上审查报告", body: <p>报告正文</p>,
-                })}>读审查报告</button>
-                <output data-opened={opened ?? ""}>{opened}</output>
-              </header>
-              <section className="task-detail" style={{ position: "relative", overflow: "hidden", flex: 1, minHeight: 0 }}>
-                <h1>中间那一栏</h1>
-                {drawers.drawers}
-              </section>
-            </main>
-          )}
-        </InspectorHost>
-      </LeftDrawerProvider>
-    </div>
-  );
+  useEffect(() => {
+    const pop = () => setSelected(new URLSearchParams(location.search).get("task") ?? "lead");
+    const keys = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPalette(true); } };
+    addEventListener("popstate", pop); addEventListener("keydown", keys);
+    return () => { removeEventListener("popstate", pop); removeEventListener("keydown", keys); };
+  }, []);
+  const current = tasks.find((item) => item.id === selected)!;
+  return <div data-tasks-ready={String(tasksReady)} style={{ height: "100vh", display: "flex", overflow: "hidden" }}>
+    <Detail key={current.id} current={current} tasks={tasks} tasksReady={tasksReady} navigate={navigate} />
+    <CommandPalette open={palette} projects={[project]} currentProject={project} tasks={tasks} selectedTask={current} groups={[]} onClose={() => setPalette(false)}
+      onProject={nothing} onTaskMode={nothing} onTask={(item: TaskListItem) => navigate(item.id)} onTaskUpdated={nothing} onNote={nothing} onComposer={nothing}
+      onNewGroup={nothing} onNewProject={nothing} onDeleteTask={nothing} onSettings={nothing} notify={nothing} />
+  </div>;
 }
-
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);

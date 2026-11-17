@@ -20,7 +20,7 @@ import {
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import type { AgentContentSegment } from "../src/task-detail/conversationModel.ts";
 import { awaitingUpstream } from "../src/task-detail/conversationSegments.ts";
-import { turnLayout } from "../src/task-detail/turnFold.ts";
+import { splitTurnSegments } from "../src/task-detail/turnFold.ts";
 import { applyDuetEvent, emptyDuet } from "../src/duet/duetState.ts";
 
 const RETRY = "上游返回 502 server_error，正在重试（第 1/10 次，等 0.6 秒）";
@@ -106,13 +106,12 @@ assert.deepEqual(
 // ── 4) 回合折叠:提示不是「动手」，不能被当成切点 ──────────────────────────────
 // 切点落在**最后一次真正动手**的那一步上，它之前的正文折进过程、之后的留在外面。提示
 // 讲的恰恰是「什么都没发生」——拿它当切点，上游抽风那一下之前说过的话就全被折没了。
-const folded = turnLayout(
+const folded = splitTurnSegments(
   [
     { id: "f0", markdown: "边干边说的那一段。\n", events: [{ kind: "tool", label: "Bash" }], attachments: [] },
     { id: "f1", markdown: "", events: [{ kind: "notice", label: "提示", detail: RETRY }], attachments: [] },
     { id: "f2", markdown: "这是结论。", events: [], attachments: [] },
   ],
-  { live: false },
 );
 assert.equal(
   folded.conclusion.map((segment) => segment.markdown).join(""),

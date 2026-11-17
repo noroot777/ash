@@ -335,7 +335,7 @@ try {
     writeFileSync(join(ws.path, "after.txt"), "after fallback\n");
     git(ws.path, "add", "-A");
     git(ws.path, "commit", "-m", "work after fallback");
-    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    const diff = await taskBranchDiff(repo, reloaded);
     assert.equal(diff.available, true, `降级后 diff 必须能出来，实际 ${JSON.stringify(diff)}`);
   }
 
@@ -375,7 +375,7 @@ try {
     git(again.path, "add", "-A");
     git(again.path, "commit", "-m", "work in kept worktree");
     const reloaded = await load("keptwt-task");
-    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    const diff = await taskBranchDiff(repo, reloaded);
     assert.equal(diff.available, true, `复用路径降级后 diff 也必须能出来，实际 ${JSON.stringify(diff)}`);
   }
 
@@ -459,7 +459,7 @@ try {
     git(ws.path, "add", "-A");
     git(ws.path, "commit", "-m", "work on tag base");
     const reloaded = await load("tagmask-task");
-    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    const diff = await taskBranchDiff(repo, reloaded);
     assert.equal(diff.available, true, `同名 tag 场景下 diff 也必须能出来，实际 ${JSON.stringify(diff)}`);
   }
 

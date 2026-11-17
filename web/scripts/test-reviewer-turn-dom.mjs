@@ -10,7 +10,7 @@ const web = await startWebServer();
 let browser;
 try {
   browser = await launchChrome();
-  const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
+  const page = await browser.newPage({ timezoneId: "Asia/Shanghai", viewport: { width: 1000, height: 1200 } });
   await page.route(/\/api\/tasks\/t1\/review\/file/, async (route) => {
     const round = new URL(route.request().url()).searchParams.get("round") ?? "?";
     await route.fulfill({
@@ -255,7 +255,7 @@ try {
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
 
   // 触屏没有悬停：那一行常显在气泡里。
-  const touch = await browser.newPage({ viewport: { width: 390, height: 900 }, hasTouch: true, isMobile: true });
+  const touch = await browser.newPage({ timezoneId: "Asia/Shanghai", viewport: { width: 390, height: 900 }, hasTouch: true, isMobile: true });
   await touch.goto(`${web.origin}/scripts/fixtures/reviewer-turn.html`);
   await touch.locator(".review-verdict").first().waitFor();
   const touchHead = await touch.evaluate(() => {
@@ -276,7 +276,11 @@ try {
 
 // —— 进行中的那一轮：同一颗气泡，从开始审到出结论（fixtures/review-progress.tsx）——
 async function reviewProgress(browser) {
-  const page = await browser.newPage({ viewport: { width: 1000, height: 1100 } });
+  const page = await browser.newPage({ timezoneId: "Asia/Shanghai", viewport: { width: 1000, height: 1100 } });
+  // 夹具里这一轮的起点是写死的日期，「用时」拿真实的现在去减：过了一天格式就从「几分几秒」变成
+  // 「几天几时几分」，一分钟才跳一下，下面等它走秒的那一步有一半机会等不到。把页面的现在定在
+  // 起点后几分钟，从那儿照常往前走。
+  await page.clock.install({ time: new Date("2026-11-14T08:30:00.000Z") });
   await page.goto(`${web.origin}/scripts/fixtures/review-progress.html?opener=1`);
   const bubble = page.locator(".task-conversation > .review-verdict");
   await bubble.waitFor();
@@ -418,14 +422,14 @@ async function reviewProgress(browser) {
     const box = el.getBoundingClientRect();
     return { whole: el.scrollWidth <= el.clientWidth + 1, inside: box.left >= 0 && box.right <= window.innerWidth, opacity: getComputedStyle(el.parentElement).opacity };
   };
-  const touch = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const touch = await browser.newPage({ timezoneId: "Asia/Shanghai", viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   await touch.goto(`${web.origin}/scripts/fixtures/review-progress.html`);
   const touchMeta = touch.locator(".review-verdict-meta");
   await touchMeta.waitFor();
   assert.match(await touchMeta.textContent(), meta);
   assert.deepEqual(await touchMeta.evaluate(readable), { whole: true, inside: true, opacity: "1" }, "触屏上那一行换行读全");
   await touch.close();
-  const narrow = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const narrow = await browser.newPage({ timezoneId: "Asia/Shanghai", viewport: { width: 390, height: 844 } });
   await narrow.goto(`${web.origin}/scripts/fixtures/review-progress.html`);
   await narrow.locator(".review-verdict-text").focus();
   await narrow.waitForFunction(() => getComputedStyle(document.querySelector(".review-verdict-bubble > header")).opacity === "1");

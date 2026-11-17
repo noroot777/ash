@@ -46,8 +46,9 @@ try {
 
   // 事件流**必须在这里截住**:这个 hook 现在订阅 task.notices(失效协议,见
   // useRejectionNotices.ts),而 vite 的 /api 代理会把它接到真正在跑的 :4317 上去 ——
-  // 一个回归测试不该连到用户的实例上。空响应 = 连不上,这一支本来也不验事件路。
-  await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
+  // 一个回归测试不该连到用户的实例上。204 = 连不上、也不重连(200 的空流会每 3 秒重连一次),
+  // 这一支本来也不验事件路。
+  await page.route("**/api/events", (route) => route.fulfill({ status: 204 }));
 
   await page.route("**/api/tasks/t-stale/notices", (route) => json(route, notices([
     { id: "n4", action: "放开回合占位", outcome: "unknown", reason: "占位身份 single、已持有约 3 分钟", occurredAt: at(4) },

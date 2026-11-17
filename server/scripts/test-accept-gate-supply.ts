@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 「任务 worktree、一个依赖都没装」—— worktree 全局默认开启、node_modules 被 gitignore，所以这是
 // **标准路径**。本文件钉住的是它从「隔离证明必然失败」变成「可证隔离且绿」，根因与两条路线的实测
@@ -23,6 +24,8 @@ import { dirname, join } from "node:path";
 // 快照恰好落在仓库内**那条偶然的祖先链 —— 那条链一旦移走,旧实现连第三方包都解析不到。
 const outside = process.env.GATE_SUPPLY_OUTSIDE === "1";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-supply-")));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.ASH_DB = join(root, "ash-test.db");
 const runsHome = outside ? realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-supply-runs-"))) : null;
 
 const save = (path: string, content: string) => {
@@ -204,7 +207,7 @@ try {
   console.log(`accept-gate-supply(${where}): worktree 未装依赖 → 快照自带依赖树、直接与传递 import 均落在本次提交、`
     + `改参考检出不影响、身份绑定(含补给带进来的外部安装树)、只补空位、无参考安装不编 通过`);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
   if (runsHome) rmSync(runsHome, { recursive: true, force: true });
 }
 

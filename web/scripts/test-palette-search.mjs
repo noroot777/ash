@@ -187,7 +187,7 @@ try {
   assert.equal(await page.locator("#opened").getAttribute("data-opened"), "hit-16,hit-00");
   await page.setViewportSize({ width: 1100, height: 700 });
 
-  for (const [query, action] of [["新建任务", "new:single"], ["harness", "project:p1"]]) {
+  for (const [query, action] of [["新建任务", "new:task"], ["harness", "project:p1"]]) {
     await page.evaluate(() => { delete window.__releaseCommandSearch; });
     await input.fill(query);
     await page.waitForFunction(() => typeof window.__releaseCommandSearch === "function");

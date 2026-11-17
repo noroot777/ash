@@ -37,10 +37,26 @@ try {
   }, id);
   const atBottom = () => feed.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight <= 2);
   const highlighted = (name) => page.evaluate((name) => CSS.highlights.has(name), name);
-  const currentText = () => page.evaluate(() => {
+  // 标记是亮、灭、亮、灭、亮地闪的（searchReveal.ts 的 BLINKS，一拍 220ms），闪完就收。隔开读
+  // 几次，总有一次落在「灭」那一拍上 —— 所以要看的东西都在亮着的同一拍里一次读完：等到落点标的
+  // 是这个词，当场把别处标了几处、落点在哪个元素里、在不在屏幕上（boxes：框它的每一层，加上
+  // 窗口，都得框得住它）一并带回来。标记会收、位置不会，所以它排在看位置之前。
+  const flashing = async (text, boxes = []) => (await page.waitForFunction(([text, boxes]) => {
     const highlight = CSS.highlights.get("search-reveal-current");
-    return highlight ? [...highlight].map((range) => range.toString()).join("|") : null;
-  });
+    if (!highlight || [...highlight].map((range) => range.toString()).join("|") !== text) return null;
+    const range = [...highlight][0];
+    const rect = range.getBoundingClientRect();
+    const frames = [...boxes.map((id) => {
+      const node = document.querySelector(`[data-testid="${id}"]`);
+      const box = node.getBoundingClientRect();
+      return { top: box.top + node.clientTop, left: box.left + node.clientLeft, bottom: box.top + node.clientTop + node.clientHeight, right: box.left + node.clientLeft + node.clientWidth };
+    }), { top: 0, left: 0, bottom: innerHeight, right: innerWidth }];
+    return {
+      others: CSS.highlights.get("search-reveal")?.size ?? 0,
+      parent: range.startContainer.parentElement.dataset.testid ?? null,
+      onScreen: frames.every((box) => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1 && rect.left >= box.left - 1 && rect.right <= box.right + 1),
+    };
+  }, [text, boxes], { timeout: WAIT_TIMEOUT_MS })).jsonValue();
   const waitLanded = (id) => page.waitForFunction((id) => {
     const node = document.querySelector('[data-testid="feed"]');
     const target = node?.querySelector(`[data-item="${id}"] p`)?.getBoundingClientRect();
@@ -60,11 +76,9 @@ try {
   assert.equal(await highlighted("search-reveal-current"), false, "正文还没读完就不该先闪");
 
   await page.evaluate(() => window.fixture.ready(true));
+  // 落点那一处被标出来的就是这个词，别的出现处也一起标出来。
+  assert.equal((await flashing("编辑器")).others, 2, "另外两处「编辑器」都标上（原始需求、尾部）");
   await waitLanded("middle");
-  assert.equal(await currentText(), "编辑器", "落点那一处被标出来的就是这个词");
-  assert.equal(await highlighted("search-reveal"), true, "别的出现处也一起标出来");
-  const othersCount = await page.evaluate(() => CSS.highlights.get("search-reveal").size);
-  assert.equal(othersCount, 2, "另外两处「编辑器」都标上（原始需求、尾部）");
 
   // 落下去之后来了新回复：不把人拽回底部。
   const before = await feed.evaluate((node) => node.scrollTop);
@@ -74,16 +88,22 @@ try {
   assert.equal(await feed.evaluate((node) => node.scrollTop), before, "新回复不该把读者从落点拽走");
   assert.equal(await atBottom(), false);
 
-  // 过一会儿闪烁自己收掉。
-  await page.waitForFunction(() => !CSS.highlights.has("search-reveal-current") && !CSS.highlights.has("search-reveal"), null, { timeout: WAIT_TIMEOUT_MS });
+  // 过一会儿闪烁自己收掉：连着半秒都没亮才算（「灭」那一拍只有 220ms，碰上它不算收掉）。
+  await page.waitForFunction(() => {
+    if (CSS.highlights.has("search-reveal-current") || CSS.highlights.has("search-reveal")) {
+      window.darkSince = undefined;
+      return false;
+    }
+    window.darkSince ??= performance.now();
+    return performance.now() - window.darkSince > 500;
+  }, null, { timeout: WAIT_TIMEOUT_MS });
 
   // ── 2. 会话一挂上正文就是现成的（换任务时常见）：首屏那次落底不能盖过落点 ─────────
   await page.evaluate(() => window.fixture.request("t2", "编辑器", "原始需求：设置页里的执行模式编辑器要压成一行。"));
   await page.evaluate(() => window.fixture.mount("t2"));
   // 原始需求本来就在最顶上，刚挂上时位置也对 —— 先等标出来（落地那一刻才标），再看位置。
-  await page.waitForFunction(() => CSS.highlights.has("search-reveal-current"), null, { timeout: WAIT_TIMEOUT_MS });
+  await flashing("编辑器");
   await waitLanded("requirement");
-  assert.equal(await currentText(), "编辑器");
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.ok((await placeOf("requirement")) < 0.6, "首屏落底不该在落点之后又把视口拽到底");
 
@@ -92,6 +112,8 @@ try {
   await feed.evaluate((node) => { node.scrollTop = node.scrollHeight; });
   await page.evaluate(() => window.fixture.request("t2", "旁路通道", "排查了一下旁路通道的残留进程"));
   await page.waitForFunction(() => document.querySelector('[data-testid="fold"]')?.open, null, { timeout: WAIT_TIMEOUT_MS });
+  // 任务已经开着时再打开也照样落、照样标。
+  await flashing("旁路通道");
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="feed"]');
     const target = document.querySelector('[data-testid="fold"] p')?.getBoundingClientRect();
@@ -99,7 +121,6 @@ try {
     const top = (target.top - node.getBoundingClientRect().top) / node.clientHeight;
     return top > 0 && top < 0.6;
   }, null, { timeout: WAIT_TIMEOUT_MS });
-  assert.equal(await currentText(), "旁路通道", "任务已经开着时再打开也照样落、照样标");
 
   // ── 4. 正文还没读完时读者自己滚了：待办当场作废，读完了也不再替他挪 ─────────────
   // 作废要在**读完之前**就生效（审查第 1 轮 #2：那时找词的那一侧还没挂上，滚轮没人听）。
@@ -141,24 +162,11 @@ try {
 
   // 落点那几个字**本身**露没露出来：框它的每一层（给出的框、会话流、窗口）都得框得住它。
   // 只看「所在元素露出来了」不算（审查第 2 轮：长议题里元素露出来了，词还在屏幕外）。
-  const currentOnScreen = (boxes) => page.evaluate((boxes) => {
-    const highlight = CSS.highlights.get("search-reveal-current");
-    if (!highlight) return false;
-    const rect = [...highlight][0].getBoundingClientRect();
-    const frames = [...boxes.map((id) => {
-      const node = document.querySelector(`[data-testid="${id}"]`);
-      const box = node.getBoundingClientRect();
-      return { top: box.top + node.clientTop, left: box.left + node.clientLeft, bottom: box.top + node.clientTop + node.clientHeight, right: box.left + node.clientLeft + node.clientWidth };
-    }), { top: 0, left: 0, bottom: innerHeight, right: innerWidth }];
-    return frames.every((box) => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1 && rect.left >= box.left - 1 && rect.right <= box.right + 1);
-  }, boxes);
   const landOn = async (query, hint, text, boxes) => {
     await page.evaluate(([query, hint]) => window.fixture.request("t5", query, hint), [query, hint]);
-    await page.waitForFunction((text) => {
-      const highlight = CSS.highlights.get("search-reveal-current");
-      return !!highlight && [...highlight][0].toString() === text;
-    }, text, { timeout: WAIT_TIMEOUT_MS });
-    assert.ok(await currentOnScreen(boxes), `「${text}」被标出来时必须真的在屏幕上（${boxes.join(" / ")}）`);
+    const marked = await flashing(text, boxes);
+    assert.ok(marked.onScreen, `「${text}」被标出来时必须真的在屏幕上（${boxes.join(" / ")}）`);
+    return marked;
   };
 
   // ── 5. 命中的正文画在会话流外面（duet 顶上的议题），议题很长、词在最后 ───────────────
@@ -169,13 +177,9 @@ try {
     return node && node.scrollTop > 0 && node.scrollHeight - node.scrollTop - node.clientHeight <= 2;
   }, null, { timeout: WAIT_TIMEOUT_MS });
   assert.equal(await page.getByTestId("topic").evaluate((node) => node.open), false);
-  await landOn("议题专用词", "…讨论一下议题专用词该怎么落地。", "议题专用词", ["topic-full"]);
+  const topic = await landOn("议题专用词", "…讨论一下议题专用词该怎么落地。", "议题专用词", ["topic-full"]);
   assert.equal(await page.getByTestId("topic").evaluate((node) => node.open), true, "议题那一块被打开");
-  assert.equal(
-    await page.evaluate(() => [...CSS.highlights.get("search-reveal-current")][0].startContainer.parentElement.dataset.testid),
-    "topic-full",
-    "落在完整的议题上，不是摘要条里截断的那一份",
-  );
+  assert.equal(topic.parent, "topic-full", "落在完整的议题上，不是摘要条里截断的那一份");
   assert.ok(await page.getByTestId("topic-full").evaluate((node) => node.scrollTop > 0), "是议题自己的框滚到了词那里");
   assert.equal(await atBottom(), true, "落点不在会话流里时，会话本身不动");
   await page.getByTestId("topic").evaluate((node) => { node.open = false; });

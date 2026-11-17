@@ -102,3 +102,28 @@ process.stdin.on("end", () => {
   );
   return fakeBin;
 }
+
+/**
+ * 给假目录再铺几个「一起就退」的垫片（codex、gemini…），并核对这几个名字此刻解析到的就是它们。
+ *
+ * 只铺假 claude 不够：找可执行文件除了 PATH 还会看 /opt/homebrew/bin 这些常见安装目录
+ * （executors/bin-resolve.ts 的 extraPaths），而放行真执行器的测试（ASH_ALLOW_REAL_AGENT=1）
+ * 一旦把任务交给别家，装着那家 CLI 的机器上就会拿着测试正文真起一个回合——
+ * test-dispatch-plan 在 2026-11-15～16 这样起过 54 个真 codex 会话。
+ */
+export async function installExitingClis(fakeBin: string, names: string[]): Promise<void> {
+  for (const name of names) {
+    writeFileSync(
+      join(fakeBin, IS_WINDOWS ? `${name}.cmd` : name),
+      IS_WINDOWS ? "@exit /b 1\r\n" : "#!/bin/sh\nexit 1\n",
+      { mode: 0o755 },
+    );
+  }
+  const { resolveBin } = await import("../src/executors/bin-resolve.js");
+  for (const name of ["claude", ...names]) {
+    const resolved = resolveBin(name);
+    if (!resolved || !resolved.startsWith(fakeBin)) {
+      throw new Error(`${name} 解析到了 ${resolved ?? "（找不到）"}，不是测试铺的假 CLI：假目录必须排在 PATH 最前`);
+    }
+  }
+}

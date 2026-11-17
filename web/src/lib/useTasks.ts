@@ -79,6 +79,7 @@ export function applyTaskMetadataEvent<T extends TaskListItem>(task: T, event: T
 export function useTasks(projectId?: string) {
   const [tasks, setTasks] = useState<TaskListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [snapshotScope, setSnapshotScope] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [settlementVersion, setSettlementVersion] = useState(0);
 
@@ -107,6 +108,7 @@ export function useTasks(projectId?: string) {
         const scoped = projectId ? allTasks.filter((task) => task.projectId === projectId) : allTasks;
         for (const id of confirmedDeletions(idsAtStart, scoped)) confirmedDeleteIds.current.add(id);
         setTasks((current) => mergeFetchedTasks(current, scoped));
+        setSnapshotScope(projectId ?? "");
       }
       return true;
     } catch (reason) {
@@ -155,5 +157,5 @@ export function useTasks(projectId?: string) {
   // useCatchUpLink 里（五个消费者原先各写一遍，四处漏了「断线作废」，见那边的文件头）。
   useCatchUpLink(catchUp, connected);
 
-  return { tasks, setTasks, loading, error, connected, settlementVersion, refetch, confirmedDeleteIds };
+  return { tasks, setTasks, loading, snapshotReady: snapshotScope === (projectId ?? ""), error, connected, settlementVersion, refetch, confirmedDeleteIds };
 }

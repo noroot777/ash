@@ -435,8 +435,8 @@ export function TeamView({
                 </div>
               )}
               {/* 调度者向你提问时，回复框那一格是答题卡（跟任务页同一副形状）。 */}
-              <TeamReplyBox task={task} tasks={allTasks} onAnswer={async (answer, input) => {
-                await api.answerTask(task.id, answer, input);
+              <TeamReplyBox task={task} tasks={allTasks} onAnswer={async (answer, input, attachments) => {
+                await api.answerTask(task.id, answer, input, attachments);
                 await refreshTask();
                 notify("已答复调度者，原会话正在续跑");
               }} onSend={async (text, attachments, options) => {
