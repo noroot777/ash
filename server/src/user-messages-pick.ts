@@ -66,6 +66,12 @@ export function queryTerms(query: string): string[] {
   return [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))];
 }
 
+/** 只看我说的那句本身（整段，截掉的部分也算）。 */
+export function textMatches(message: IndexedMessage, terms: readonly string[]): boolean {
+  const haystack = message.full.toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
 export function matchesTerms(message: IndexedMessage, title: string, terms: readonly string[]): boolean {
   if (!terms.length) return true;
   const haystack = `${message.full}\n${title}`.toLowerCase();

@@ -1,4 +1,4 @@
-/* R 键「我说过的话」（recall/RecallDialog.tsx）。外壳照 ⌘K 的面板，只是更大：左边一句一行，右边读全文。 */
+/* R 键「我说过的话」（recall/RecallDialog.tsx）。外壳照 ⌘K 的面板，只是更大：左边任务一行一条，右边是我在里面说过的话。 */
 
 .recall-scrim {
   align-items: flex-start;
@@ -37,64 +37,69 @@
   font-size: var(--t-md);
 }
 
+/* 搜索还没跟上输入：说一声，左边那一列（还是上一问的结果）淡下去，这时候不许打开。 */
+.recall-searching {
+  flex: none;
+  color: var(--faint);
+  font-size: var(--t-xs);
+}
+
+.recall-list[data-stale] {
+  opacity: 0.55;
+}
+
 .recall-body {
   display: grid;
   min-height: 0;
   flex: 1 1 auto;
-  grid-template-columns: minmax(340px, 44%) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 34%) minmax(0, 1fr);
 }
 
+/* 左边：跟侧栏同一个长相 —— 行首那颗记号、标题一行；打了字时行尾一个淡色的数（几句对得上）。 */
 .recall-list {
   min-height: 0;
   overflow-y: auto;
   border-right: 1px solid var(--line);
-  padding: 4px 6px 8px;
+  padding: 6px;
 }
 
-.recall-day {
-  position: sticky;
-  z-index: 1;
-  top: -4px;
-  background: var(--panel);
-  padding: 14px 10px 2px;
-  color: var(--ink);
-  font-size: var(--t-xs);
-  font-weight: var(--w-medium);
-}
-
-/* 任务名：同一个任务连着说的几句只写一次，淡一档，跟正文分开读。 */
 .recall-task {
   display: flex;
-  overflow: hidden;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
-  padding: 8px 10px 2px;
-  color: var(--faint);
-  font-size: var(--t-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.recall-task span {
-  flex: none;
-}
-
-/* 一句一行。 */
-.recall-row {
-  overflow: hidden;
   border-radius: 7px;
-  padding: 5px 10px;
+  padding: 5px 8px;
   color: var(--ink);
   cursor: pointer;
   font-size: var(--t-sm);
   line-height: 1.5;
+}
+
+/* 选中只认 aria-selected：指针动一下就换选中，底色永远只有一行（同 ⌘K 的口径）。 */
+.recall-task[aria-selected="true"] {
+  background: var(--sel-bg);
+}
+
+.recall-task-mark {
+  display: inline-flex;
+  width: 12px;
+  flex: none;
+  justify-content: center;
+}
+
+.recall-task-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 选中只认 aria-selected：指针动一下就换选中，底色永远只有一行（同 ⌘K 的口径）。 */
-.recall-row[aria-selected="true"] {
-  background: var(--sel-bg);
+.recall-task-hits {
+  flex: none;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .recall mark {
@@ -111,10 +116,6 @@
   text-align: center;
 }
 
-.recall-sentinel {
-  height: 1px;
-}
-
 .recall-error {
   display: flex;
   align-items: center;
@@ -123,6 +124,28 @@
   padding: 24px 18px;
   color: var(--red);
   font-size: var(--t-xs);
+}
+
+/* 正文搜索失败：贴在左边那一列最上面，下面照样按任务名筛。 */
+.recall-error--inline {
+  justify-content: space-between;
+  padding: 6px 8px 8px;
+  text-align: left;
+}
+
+/* 右边最上面：滚到这里接着读更早的。高度定死，「正在读…」出现、消失时下面的话不跟着跳。 */
+.recall-older {
+  display: flex;
+  min-height: 20px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  font-size: var(--t-xs);
+}
+
+.recall-older .recall-error {
+  padding: 0;
 }
 
 .recall-error button {
@@ -141,7 +164,8 @@
 
 .recall-preview > header {
   flex: none;
-  padding: 16px 24px 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 14px 24px 12px;
 }
 
 .recall-preview-task {
@@ -169,55 +193,81 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 那一句前后的对话，长相照会话：我的话是右边一颗气泡，智能体的话是左边的正文。 */
+/* 右边：我说的话，长相照会话 —— 右边一颗颗气泡，旧的在上。 */
 .recall-thread {
   display: flex;
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   overflow-y: auto;
   padding: 4px 24px 24px;
 }
 
-.recall-agent {
-  color: var(--ink);
-  font-size: var(--t-sm);
-  line-height: 1.6;
-}
-
-/* 我是在接哪句话：只是个由头，淡下去、三行为止。 */
-.recall-before {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0;
+.recall-day {
+  align-self: center;
+  padding: 12px 0 0;
   color: var(--faint);
   font-size: var(--t-xs);
-  line-height: 1.6;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
 }
 
-.recall-agent :is(h1, h2, h3, h4) {
-  font-size: var(--t-sm);
+/* 说话的地方换到它名下某个执行者 / 子任务（或者换回来）：那一条的标题，右对齐贴着下面的气泡。 */
+.recall-where {
+  align-self: flex-end;
+  max-width: 88%;
+  overflow: hidden;
+  padding-top: 4px;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .recall-mine {
+  position: relative;
   align-self: flex-end;
   max-width: 88%;
   border: 1px solid var(--line2);
   border-radius: 12px;
   background: var(--raised);
   padding: 9px 13px;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.recall-mine:hover,
+.recall-mine:focus-visible {
+  border-color: var(--muted);
+}
+
+/* 几点几分：不常驻，指到那颗气泡才出来，挂在它左边。 */
+.recall-mine time {
+  position: absolute;
+  top: 10px;
+  right: calc(100% + 8px);
+  color: var(--faint);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  white-space: nowrap;
+}
+
+.recall-mine:hover time,
+.recall-mine:focus-visible time {
+  opacity: 1;
 }
 
 .recall-mine p {
+  display: -webkit-box;
+  overflow: hidden;
   margin: 0;
-  color: var(--ink);
   font-size: var(--t-sm);
   line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
 }
 
 .recall-mine p + p {
@@ -226,13 +276,10 @@
 
 /* 引文：同会话气泡里的引文（message-text.css 的 .message-quote），淡一档、左边一道竖线、两行为止。 */
 .recall-mine p.recall-quote {
-  display: -webkit-box;
-  overflow: hidden;
   border-left: 2px solid var(--line2);
   padding-left: 10px;
   color: var(--muted);
   font-size: var(--t-xs);
-  -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
@@ -252,9 +299,8 @@
   gap: 5px;
 }
 
-/* 窄了就只留列表：一句两行、任务名一行，认得出来就够点了。 */
+/* 窄了就上下摞：任务列表在上、话在下。 */
 @media (max-width: 760px) {
-  .recall-body { grid-template-columns: minmax(0, 1fr); }
-  .recall-list { border-right: 0; }
-  .recall-preview { display: none; }
+  .recall-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: 40% minmax(0, 1fr); }
+  .recall-list { border-right: 0; border-bottom: 1px solid var(--line); }
 }

@@ -1,12 +1,14 @@
 // R 键「我说过的话」的纯逻辑回归：
 //   pickRevealInput —— 点开一句之后，会话里认哪一颗气泡（出处 → 时刻 → 正文）
-//   recallRows / dayLabel / rowText / highlightParts —— 列表按天分段、命中的词露得出来、画得对
+//   recallOrder / recallMembers / recallTaskRows —— 左边的顺序（同侧栏屏幕）、各自连带哪几条、筛的时候留谁
+//   recallBlocks / dayLabel / highlightParts —— 右边一串话怎么分段、命中的词画得对
 // 跑：npm -w web run test:recall
 import assert from "node:assert/strict";
+import type { TaskListItem } from "@ash/shared";
 import type { UserMessage } from "@ash/shared/user-messages";
 import { REQUIREMENT_INPUT_ID, conversationInputs, type ConversationInput } from "../src/task-detail/conversationInputs.ts";
 import { pickRevealInput, type MessageRevealRequest } from "../src/search/messageReveal.ts";
-import { dayLabel, highlightParts, plainSnippet, recallRows, rowText } from "../src/recall/recallModel.ts";
+import { dayLabel, highlightParts, messageMatches, openDecision, recallBlocks, recallMembers, recallOrder, recallTaskRows } from "../src/recall/recallModel.ts";
 
 // ── 认气泡 ──────────────────────────────────────────────────────────────────
 
@@ -39,7 +41,44 @@ assert.equal(pickRevealInput(inputs, request({ sessionId: "s3", index: 0, at: "�
 assert.equal(pickRevealInput(inputs, request({ sessionId: "s9", index: 0, at: "x", text: "从没说过" })), null, "认不出来就不落");
 assert.equal(pickRevealInput(inputs.filter((input) => input.id !== REQUIREMENT_INPUT_ID), request({ sessionId: null })), null, "没画原始需求就不硬落");
 
-// ── 列表 ────────────────────────────────────────────────────────────────────
+// ── 左边：任务 ──────────────────────────────────────────────────────────────
+
+const task = (id: string, fields: Partial<TaskListItem> = {}): TaskListItem =>
+  ({ id, title: id, parentId: null, dispatchedBy: null, createdAt: "2026-11-01T00:00:00.000Z", ...fields }) as TaskListItem;
+const order = [task("lead", { title: "团队调度" }), task("solo", { title: "改按钮颜色" })];
+const all = [
+  ...order,
+  task("worker", { parentId: "lead", title: "执行者甲", createdAt: "2026-11-02T00:00:00.000Z" }),
+  task("derived", { dispatchedBy: "worker", title: "派出去的子任务", createdAt: "2026-11-03T00:00:00.000Z" }),
+  task("archived-child", { dispatchedBy: "solo", archived: true, title: "归档的子任务" }),
+  task("orphan", { dispatchedBy: "gone" }),
+  task("loop-a", { dispatchedBy: "loop-b" }),
+  task("loop-b", { dispatchedBy: "loop-a" }),
+];
+const members = recallMembers(order, all);
+assert.deepEqual(members.get("lead"), ["lead", "worker", "derived"], "执行者、执行者派出去的都算在调度那一行上，按创建先后");
+assert.deepEqual(members.get("solo"), ["solo", "archived-child"], "归档的子任务也算：里面说过的话还在");
+assert.equal([...members.values()].flat().includes("orphan"), false, "够不着左边任何一行的不算");
+
+// 顺序认屏幕：侧栏画出来的先后原样照搬（任务模式按项目分组后的那份），展开着的执行者、收在下面的子任务
+// 不单独成行；侧栏没画出来的按模型顺序接在后面；整栏收起就整份用模型顺序。
+const orderAll = [...all, task("hidden-old")];
+const fallback = ["solo", "lead", "hidden-old", "derived"].map((id) => orderAll.find((item) => item.id === id)!);
+const screenIds = (rows: TaskListItem[]) => rows.map((row) => row.id);
+assert.deepEqual(screenIds(recallOrder({ kind: "screen", ids: ["lead", "worker", "solo"] }, fallback, orderAll)), ["lead", "solo", "hidden-old"],
+  "屏幕上 lead 在 solo 前面就照这个排（模型顺序反过来也不管）；执行者归团队；没画出来的接在后面，收在 lead 下面的 derived 不单独成行");
+assert.deepEqual(screenIds(recallOrder({ kind: "offscreen" }, fallback, orderAll)), ["solo", "lead", "hidden-old", "derived"], "侧栏收起：整份用模型顺序");
+assert.deepEqual(screenIds(recallOrder({ kind: "screen", ids: ["gone", "solo"] }, [], orderAll)), ["solo"], "屏幕上有、任务表里没有的（远端行之类）跳过");
+
+const titleOf = (id: string) => all.find((item) => item.id === id)?.title ?? "";
+const ids = (rows: { task: TaskListItem }[]) => rows.map((row) => row.task.id);
+assert.deepEqual(ids(recallTaskRows(order, members, titleOf, "", null)), ["lead", "solo"], "没打字全列，顺序同侧栏");
+assert.deepEqual(ids(recallTaskRows(order, members, titleOf, "按钮", null)), ["solo"], "按标题筛");
+assert.deepEqual(ids(recallTaskRows(order, members, titleOf, "执行者", null)), ["lead"], "名下那几条的标题也算");
+const hit = recallTaskRows(order, members, titleOf, "部署", new Map([["derived", 2], ["worker", 1]]));
+assert.deepEqual(hit.map((row) => [row.task.id, row.hits]), [["lead", 3]], "正文对得上的按服务端数，名下几条加在一起");
+
+// ── 右边：一串话 ────────────────────────────────────────────────────────────
 
 const now = new Date(2026, 10, 17, 15, 0);
 const at = (month: number, day: number, hour = 12, year = 2026) => new Date(year, month - 1, day, hour).toISOString();
@@ -48,26 +87,23 @@ assert.equal(dayLabel(at(11, 16, 23), now), "昨天");
 assert.equal(dayLabel(at(11, 3), now), "11月3日");
 assert.equal(dayLabel(at(12, 30, 12, 2025), now), "2025年12月30日", "往年的带上年份");
 
-const message = (id: string, when: string, text: string, attachments: string[] = []): UserMessage => ({
-  id, taskId: "t", sessionId: "s", index: 0, text, truncated: false, attachments, at: when,
+const message = (id: string, taskId: string, when: string, text = id): UserMessage => ({
+  id, taskId, sessionId: "s", index: 0, text, truncated: false, attachments: [], at: when,
 });
-const rows = recallRows([
-  message("a", at(11, 17, 14), "今天下午"),
-  message("b", at(11, 17, 9), "今天上午"),
-  { ...message("b2", at(11, 17, 8), "另一个任务里"), taskId: "t2" },
-  message("c", at(11, 16, 20), "昨晚"),
-  message("d", at(11, 3), "更早"),
-], now);
-assert.deepEqual(rows.map((row) => row.day), ["今天", null, null, "昨天", "11月3日"], "每一天只在第一行上画段头");
-assert.deepEqual(rows.map((row) => row.task), [true, false, true, true, true], "同一任务连着说的几句只画一次任务名；换任务、换天都重画");
+const blocks = recallBlocks([
+  message("m1", "lead", at(11, 16, 9)),
+  message("m2", "lead", at(11, 16, 10)),
+  message("m3", "worker", at(11, 17, 9)),
+  message("m4", "worker", at(11, 17, 10)),
+  message("m5", "lead", at(11, 17, 11)),
+], "lead", now);
+assert.deepEqual(blocks.map((block) => block.kind === "day" ? `day:${block.label}` : block.kind === "task" ? `task:${block.taskId}` : block.message.id), [
+  "day:昨天", "m1", "m2", "day:今天", "task:worker", "m3", "m4", "task:lead", "m5",
+], "换一天画段头；一直在它自己身上说不画标题，换到执行者、换回来才画");
 
-const fileName = (path: string) => path.split("/").at(-1)!;
-assert.equal(rowText(message("x", at(11, 17), "  第一行\n\n第二行  "), fileName), "第一行 第二行", "空白压成一个空格");
-assert.equal(rowText(message("x", at(11, 17), "", ["/up/a.png", "/up/b.pdf"]), fileName), "a.png、b.pdf", "只发了附件的报附件名");
-const longText = `${"前".repeat(80)}关键词在后面`;
-const excerpt = rowText(message("x", at(11, 17), longText), fileName, "关键词");
-assert.ok(excerpt.startsWith("…") && excerpt.includes("关键词"), "筛中的词在后面时，那一行从词前面一点起头");
-assert.equal(rowText(message("x", at(11, 17), "关键词在开头"), fileName, "关键词"), "关键词在开头", "词就在开头附近的照原样");
+assert.equal(messageMatches("把 Deploy 按钮挪到右边", "deploy 右边"), true);
+assert.equal(messageMatches("把 Deploy 按钮挪到右边", "deploy 左边"), false, "每个词都得出现");
+assert.equal(messageMatches("随便什么", ""), false, "没打字不算命中");
 
 assert.deepEqual(highlightParts("把 Deploy 按钮挪到右边", "deploy 右边"), [
   { text: "把 ", hit: false },
@@ -78,17 +114,14 @@ assert.deepEqual(highlightParts("把 Deploy 按钮挪到右边", "deploy 右边"
 assert.deepEqual(highlightParts("编辑器", "编辑 编辑器"), [{ text: "编辑器", hit: true }], "同一处有长有短时画长的");
 assert.deepEqual(highlightParts("没有命中", ""), [{ text: "没有命中", hit: false }]);
 
-assert.equal(
-  plainSnippet("## 改法\n\n| 情况 | 改前 |\n|---|---|\n| a | b |\n\n- **单条任务**：看 `web/a.ts`，见 [文档](https://x)\n> 引一句"),
-  "改法 单条任务：看 web/a.ts，见 文档 引一句",
-  "由头那段压成纯文本：表格行不要，记号和链接地址去掉",
-);
+// ── 打开动作 ────────────────────────────────────────────────────────────────
 
-// 引了一段再补一句：那一行露我补的话，不露裸的 `>`；筛中的词只在引文里时才露引文。
-const quoted = message("q", at(11, 17), "> 团队任务：改成「有成员在跑」优先\n> 第二行引文\n\n不是啊，demo 里我主要要看这些");
-assert.equal(rowText(quoted, fileName), "不是啊，demo 里我主要要看这些");
-assert.equal(rowText(quoted, fileName, "有成员在跑"), "团队任务：改成「有成员在跑」优先 第二行引文");
-assert.equal(rowText(quoted, fileName, "demo"), "不是啊，demo 里我主要要看这些", "词在我补的话里就露我补的话");
-assert.equal(rowText(message("q2", at(11, 17), "> 只有一段引文"), fileName), "只有一段引文", "只有引文时露引文，去掉 >");
+assert.equal(openDecision({ open: true, pending: false, query: "x" }), "open");
+assert.equal(openDecision({ open: true, pending: true, query: "x" }), "wait", "列表还是上一问的：不开");
+assert.equal(openDecision({ open: false, pending: false, query: "x" }), "drop", "窗口关着：哪个入口都不开");
+assert.equal(openDecision({ open: true, pending: true, query: "新词" }, "新词"), "wait", "搜索中按的回车：等结果");
+assert.equal(openDecision({ open: true, pending: false, query: " 新词 " }, "新词"), "open", "结果跟上了：开");
+assert.equal(openDecision({ open: false, pending: false, query: "新词" }, "新词"), "drop", "搜索中按回车再关窗口：关窗口让搜索中结束了，也不能开上一问的");
+assert.equal(openDecision({ open: true, pending: false, query: "又改了" }, "新词"), "drop", "回车之后词又改了：那下回车作废");
 
 console.log("recall tests passed");
