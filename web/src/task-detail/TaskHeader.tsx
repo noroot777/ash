@@ -18,7 +18,7 @@ import {
   SealCheck,
   SpinnerGap,
   Trash,
-  TreeStructure,
+  TreeView,
   UsersThree,
 } from "@phosphor-icons/react";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentRelation } from "../components/TaskOrigin.tsx";
@@ -168,7 +168,7 @@ export function TaskHeader({
     <header className="task-detail-header">
       <div className="task-head-name">
         {task.dispatchedBy && !task.parentId
-          ? <span className="task-head-glyph" role="img" aria-label="子任务"><TreeStructure size={14} aria-hidden="true" /></span>
+          ? <span className="task-head-glyph" role="img" aria-label="子任务"><TreeView size={14} aria-hidden="true" /></span>
           : <TaskKindGlyph mode={task.mode} />}
         <TaskAncestry task={task} tasks={allTasks} onOpen={onOpenTask} />
         {task.parentId !== null ? (
@@ -347,7 +347,7 @@ function TaskSourceGlyph({ task, allTasks, onOpen }: { task: TaskListItem; allTa
   ].filter(Boolean).join("，");
   const glyph = link?.kind === "team" ? <UsersThree size={14} aria-hidden="true" />
     : creator ? <Robot size={14} aria-hidden="true" />
-      : link?.kind === "dispatch" ? <TreeStructure size={14} aria-hidden="true" />
+      : link?.kind === "dispatch" ? <TreeView size={14} aria-hidden="true" />
         : <GitFork size={14} aria-hidden="true" />;
   if (link?.task) {
     return (

@@ -1,5 +1,5 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TreeStructure } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TreeView } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { InspButton, InspNone } from "../inspector/parts.tsx";
@@ -171,7 +171,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     id: "dispatched",
     cluster: 3,
     title: "子任务",
-    icon: <TreeStructure size={14} />,
+    icon: <TreeView size={14} />,
     shortcut: "d",
     render: (context) => (
       <DispatchedInspector
