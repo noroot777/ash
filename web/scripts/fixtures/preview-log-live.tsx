@@ -156,7 +156,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
         return reply({ error: `temporary log error #${removalFailures}` }, 500);
       }
       const currentServices = serviceRemoved ? serviceStates.filter((service) => service.id !== "api")
-        : lateServices && logReads++ < 5 ? (lateShort ? [] : serviceStates.slice(0, 1)) : serviceStates;
+        // 服务列表迟到：扣到测试放行（window.__servicesArrive）之后的那一轮才给全，不按读了几轮算。
+        : lateServices && !(window as unknown as { __servicesArrive?: boolean }).__servicesArrive
+          ? (lateShort ? [] : serviceStates.slice(0, 1)) : serviceStates;
       if (selectedService === "web") {
         // 这一份要**晚过**随后切到的那个服务才回来：扣到测试放行（window.__releaseStaleWeb）为止，
         // 不赌一个固定延迟一定比下一发慢。window.__staleWebHeld 记扣下了几发。
