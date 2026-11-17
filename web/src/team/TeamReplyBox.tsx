@@ -187,14 +187,14 @@ export function TeamReplyBox({
       {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable />}
       {!covering && <div className="team-reply-box">
         <ReplyResizeHandle targetRef={inputRef} {...replyHeight} />
-        {/* 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框
+        {/* 跟着输入行数长高;顶边那条拖动条拖出来的高度只当下限——跟普通任务回复框
             同一套(task-detail/ReplyResizeHandle.tsx),高度只有 useAutoGrowTextarea 一个写者,
             所以 CSS 那边把原生右下角把手关掉了。会话里「改了再发」放回草稿之后光标也送进这个框。 */}
         <ComposerInput
           inputRef={inputRef}
           rows={2}
           value={value}
-          pinned={replyHeight.height}
+          floor={replyHeight.height}
           quoteTarget={task.id}
           disabled={disabled}
           placeholder={disabled ? "团队已归档（只读）" : task.status === "idle" ? `调度者待命中，说句话就接回同一会话…（${sendKeys.sendShort} 发送）` : `插一句话（改方向、加要求、直接替它拍板；${sendKeys.sendShort} 发送）…`}

@@ -8,15 +8,15 @@ import { useEffect, type RefObject, type TextareaHTMLAttributes } from "react";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { registerReplyInput } from "./replyQuote.ts";
 
-export function ComposerInput({ inputRef, value, pinned = null, quoteTarget, ...rest }: {
+export function ComposerInput({ inputRef, value, floor = null, quoteTarget, ...rest }: {
   inputRef: RefObject<HTMLTextAreaElement | null>;
   value: string;
-  /** 顶边拖动条拖出来的高度；null = 跟着行数撑。 */
-  pinned?: number | null;
+  /** 顶边拖动条拖出来的高度，只当下限：内容更多照样长高；null = 没拖过。 */
+  floor?: number | null;
   /** 会话里的「添加到对话」往哪个任务的框里送光标；不给 = 这个框不接（replyQuote.ts）。 */
   quoteTarget?: string;
 } & Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value">) {
-  useAutoGrowTextarea(inputRef, { value, pinned });
+  useAutoGrowTextarea(inputRef, { value, floor });
   useEffect(() => quoteTarget ? registerReplyInput(quoteTarget, inputRef.current) : undefined, [quoteTarget, inputRef]);
   return <textarea ref={inputRef} value={value} {...rest} />;
 }

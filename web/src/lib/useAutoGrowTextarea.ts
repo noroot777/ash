@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import { useLayoutEffect, type RefObject } from "react";
 
 /** 自动撑高最多撑到几行,再多就在框内滚动。 */
 const DEFAULT_MAX_LINES = 12;
@@ -40,10 +40,10 @@ function measure(el: HTMLTextAreaElement): Metrics {
 /**
  * 让对话框跟着输入的行数长高,长到上限为止(再多就在框内滚)。
  *
- * **这个上限只管「自动撑高」,不参与用户手动拉动的判定**——用户自己拖出来的高度一律照旧,
- * 想拉多高拉多高(只受各自拖动条自己的上限约束),这个钩子从此不再插手那个框:
- *   - `pinned` 给了数字 = 外部拖动条(task-detail/ReplyResizeHandle.tsx)定的高度,照写;
- *   - 没有外部拖动条、靠 CSS `resize: vertical` 原生把手拖的,靠比对 style.height 认出来。
+ * `floor` 是外部拖动条(task-detail/ReplyResizeHandle.tsx)拖出来的高度,它只抬**下限**:
+ * 框至少这么高,内容更多照样往上长,上限取「自动撑高的上限」和 floor 里大的那个。
+ * 别把它当成固定高度——拖动条的值是跨任务、跨刷新记着的,当固定高度用时,哪怕一次
+ * 无意的几像素拖动都会让所有框从此不再长高,而且界面上看不出原因。
  *
  * 高度只由这一个地方写。别在同一个 textarea 上再挂第二套写 style.height 的机制,
  * 两套会互相打架(见 styles/task-reply.css 里那条注释)。
@@ -52,32 +52,18 @@ export function useAutoGrowTextarea(
   ref: RefObject<HTMLTextAreaElement | null>,
   {
     value,
-    pinned = null,
+    floor = null,
     maxLines = DEFAULT_MAX_LINES,
-  }: { value: string; pinned?: number | null; maxLines?: number },
+  }: { value: string; floor?: number | null; maxLines?: number },
 ): void {
-  // 上一次由我们写进去的值。原生把手拖过之后 style.height 会跟它对不上,据此认出「用户拖过了」。
-  const applied = useRef<string | null>(null);
-  const manual = useRef(false);
-
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
 
     const apply = () => {
-      if (pinned !== null) {
-        // 外部拖动条说了算:它自己 clamp 过,这里不拿自动撑高那套上限去二次设限。
-        const height = `${Math.round(pinned)}px`;
-        el.style.height = height;
-        el.style.overflowY = "auto";
-        applied.current = height;
-        return;
-      }
-      if (applied.current !== null && el.style.height !== applied.current) manual.current = true;
-      if (manual.current) return;
-
       const { lineHeight, chrome, border, cssMin, cssMax } = measure(el);
-      const min = Math.max(cssMin, Math.ceil(chrome + lineHeight * (el.rows || 1)));
+      const min = Math.max(cssMin, Math.ceil(chrome + lineHeight * (el.rows || 1)), Math.round(floor ?? 0));
+      // 拖出来的下限自己 clamp 过,可以比自动撑高的上限高;此时框就停在下限,内容在框内滚。
       const max = Math.max(min, Math.min(
         Math.ceil(chrome + lineHeight * maxLines),
         Math.round(window.innerHeight * VIEWPORT_SHARE),
@@ -87,15 +73,13 @@ export function useAutoGrowTextarea(
       el.style.height = "auto";
       const natural = el.scrollHeight + border;
       const next = Math.max(min, Math.min(natural, max));
-      const height = `${next}px`;
-      el.style.height = height;
+      el.style.height = `${next}px`;
       el.style.overflowY = natural > next ? "auto" : "hidden";
-      applied.current = height;
     };
 
     apply();
     // 上限跟着窗口走,窗口一变就重算。
     window.addEventListener("resize", apply);
     return () => window.removeEventListener("resize", apply);
-  }, [ref, value, pinned, maxLines]);
+  }, [ref, value, floor, maxLines]);
 }

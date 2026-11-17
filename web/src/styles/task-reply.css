@@ -6,9 +6,9 @@
 .task-reply-rail:empty { display: none; }
 /* 不裁内容：「更多」要从框里往上开。圆角里的水印自己裁（agent-plate.css）。 */
 .task-reply-box { position: relative; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); }
-/* 高度有两个来源,但**只有一个写者**(lib/useAutoGrowTextarea.ts):没拖过时跟着输入的行数
-   自动撑高(撑到上限就在框内滚),拖过之后照抄顶边拖动条(task-detail/ReplyResizeHandle.tsx)
-   定的高度——那条拖动条的上限比自动撑高的上限宽,自动撑高的限度不限制用户拖。
+/* 高度有两个来源,但**只有一个写者**(lib/useAutoGrowTextarea.ts):跟着输入的行数自动撑高
+   (撑到上限就在框内滚),顶边拖动条(task-detail/ReplyResizeHandle.tsx)拖出来的高度只当下限,
+   拖过也照样长高——那条拖动条的上限比自动撑高的上限宽,自动撑高的限度不限制用户拖。
    浏览器原生的右下角把手仍然关着:两套机制都往 style.height 上写会互相打架。 */
 .task-reply-box textarea { display: block; width: 100%; min-height: 58px; resize: none; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; }
 /* 回复框是输入卡：里面的输入框不套环，环画在卡上——卡自己那圈线换成淡墨，外面再晕开一圈。 */

@@ -1,4 +1,5 @@
-// 对话框顶边的拖动条:往上拖变高、往下拖变矮、双击复位、上下限收住、刷新后还在。
+// 对话框顶边的拖动条:往上拖变高、往下拖变矮、双击复位、上下限收住、刷新后还在;
+// 拖出来的只是下限,拖过之后输入更多照样长高、删掉又缩回拖出来的高度。
 // 普通任务回复框和团队调度台回复框是同一套交互、各记各的高度,所以两种变体都验一遍。
 // 跑法:npm -w web run test:reply-resize
 import assert from "node:assert/strict";
@@ -101,14 +102,25 @@ try {
     const ceiling = await fieldHeight();
     assert.ok(ceiling <= 900 - 260 + 2, `${label}：上限应给会话留出空间，实际 ${ceiling}`);
 
-    // 自动撑高那个上限只管自动撑高:拖能拖到比它高得多,拖过之后输入也不再把它改回去。
+    // 自动撑高那个上限只管自动撑高:拖能拖到比它高得多,内容再多也停在拖出来的高度、在框内滚。
     assert.ok(ceiling > autoCap, `${label}：手动拖动应能超过自动撑高的上限：自动 ${autoCap} / 拖到 ${ceiling}`);
-    await fill(40);
-    assert.ok(Math.abs((await fieldHeight()) - ceiling) < 2, `${label}：拖过之后输入不该改动高度`);
+    assert.ok(Math.abs((await fill(40)) - ceiling) < 2, `${label}：拖得比自动上限高时，输入不该再改动高度`);
     // 「清空也不该缩回去」：清空那次提交落地之后（layout effect 已经跑过）再量。
     await field.fill("");
     await settlePage(page);
     assert.ok(Math.abs((await fieldHeight()) - ceiling) < 2, `${label}：拖过之后清空也不该缩回去`);
+
+    // 拖出来的只是下限:拖到自然高度之上一点,输入多了照样长到自动上限,删少了缩回拖出来的高度。
+    // 这条护的是「拖过一次(哪怕无意的几像素)就让所有框从此不再长高」——拖动高度是跨任务记着的。
+    await handle.dblclick();
+    await drag(20);
+    const dragged = await fieldHeight();
+    assert.ok(dragged > natural + 10, `${label}：往上拖 20 应长高：${natural} → ${dragged}`);
+    assert.ok(Math.abs((await fill(12)) - autoCap) < 2, `${label}：拖过之后 12 行仍应长到自动上限 ${autoCap}`);
+    assert.ok(Math.abs((await fill(40)) - autoCap) < 2, `${label}：拖过之后超过自动上限也不该再长`);
+    assert.ok(Math.abs((await fill(1)) - dragged) < 2, `${label}：内容变少应缩回拖出来的高度 ${dragged}`);
+    await field.fill("");
+    await settlePage(page);
 
     // 刷新后高度还在。
     const kept = await page.getByTestId("state").textContent();
