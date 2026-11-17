@@ -126,8 +126,12 @@ export class GitHub {
   async findRelease(repo, tag) {
     const { status, json } = await this.call("GET", `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, { allow: [404] });
     if (status !== 404) return json;
-    const list = (await this.call("GET", `/repos/${repo}/releases?per_page=100`)).json || [];
-    return list.find((release) => release.draft && release.tag_name === tag) ?? null;
+    for (let page = 1; ; page++) {
+      const list = (await this.call("GET", `/repos/${repo}/releases?per_page=100&page=${page}`)).json || [];
+      const found = list.find((release) => release.draft && release.tag_name === tag);
+      if (found) return found;
+      if (list.length < 100) return null;
+    }
   }
 
   /** tag 指向哪个提交（附注 tag 剥到底）；tag 不存在是 null。 */
@@ -148,9 +152,12 @@ export class GitHub {
     })).json;
   }
 
-  /** 草稿 → 公开（draft=false）或退回草稿（draft=true）。 */
-  async setDraft(repo, release, draft) {
-    return (await this.call("PATCH", `/repos/${repo}/releases/${release.id}`, { body: { draft } })).json;
+  /**
+   * 草稿 → 公开，同时把目标提交写成 target（沿用的旧草稿可能记着别的提交；tag 就是这一下按它打出来的）。
+   * 只有这一个方向：公开了就不再退回草稿。
+   */
+  async publishRelease(repo, release, target) {
+    return (await this.call("PATCH", `/repos/${repo}/releases/${release.id}`, { body: { draft: false, target_commitish: target } })).json;
   }
 
   /** 经 API 下回一个附件（草稿的附件也下得到，公开地址那时还不通）。 */

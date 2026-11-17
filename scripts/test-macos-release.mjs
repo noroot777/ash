@@ -11,8 +11,10 @@
 // 真写得了分开模拟）。什么都不公开的几种：账号能写、token 只写得了其中一个或都写不了；清单分支要 PR / 开着
 // 保护；构建提交没推；同名 tag 指着别的提交；app 里没记构建提交；旧格式（只有一个 repo）的配置。都齐了：
 // 草稿 Release → 传 dmg → 下回来核对 → 公开（tag 打在构建提交上）→ appcast 提交进 o/feed、指向 o/app 的
-// 公开附件 → （临时仓库里的）README 链接只提交 README。预检都过、提交 appcast 时才被拒：Release 退回草稿、
-// 外面下不到；修好后重跑沿用那个草稿补完。全都发完、只是 README 没提交上：重跑只补 README，不碰 GitHub。
+// 公开附件 → （临时仓库里的）README 链接只提交 README。预检都过、提交 appcast 时才被拒：Release 保持公开
+// （公开不撤回），修好后重跑只补 appcast。沿用一个记着别的提交、排在第二页的旧草稿：找得到，公开时 tag
+// 打在这次的构建提交上。全都发完、只是 README 没提交上：重跑只补 README，不碰 GitHub；补的是旧版的收尾时
+// README 不倒回旧版。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
@@ -171,12 +173,18 @@ async function localRehearsal() {
  * 本地假 GitHub：只认 `Bearer test-token`，记下每个请求。push 是账号对仓库的权限（仓库信息里的
  * permissions.push），token 是这张凭证真写得了的仓库（缺省同 push）；commits 是装包仓库里有的提交，
  * tags 是已有的 tag，rules / protectedBranches 是清单分支上的限制，feedPut 是提交 appcast 时回的状态。
+ * drafts 是事先就在的草稿（[{ tag, target }]），newer 是排在它们前面的别的 Release 数（列表按页给，每页 100）。
  * 草稿的附件只能经 API 下，公开之后才有公开地址。
  */
-async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules = [], protectedBranch = false, feedPut = 200 }) {
+async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules = [], protectedBranch = false, feedPut = 200, drafts = [], newer = 0 }) {
   const state = { calls: [], files: new Map(), releases: [], downloads: new Map(), assets: new Map(), tags: { ...tags }, feedPut };
   let base = "";
   let ids = 0;
+  for (const draft of drafts) {
+    ids++;
+    state.releases.push({ id: ids, repo: "o/app", tag_name: draft.tag, target: draft.target, draft: true, assets: [], upload_url: `PLACEHOLDER/uploads/${ids}{?name,label}` });
+  }
+  const others = Array.from({ length: newer }, (_, i) => ({ id: 10000 + i, repo: "o/app", tag_name: `other-${i}`, draft: false, assets: [] }));
   const publicUrl = (release, name) => `${base}/download/${release.repo}/${release.tag_name}/${name}`;
   const server = createServer(async (req, res) => {
     const chunks = [];
@@ -228,7 +236,12 @@ async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules =
       const found = state.releases.find((r) => r.repo === repo && !r.draft && r.tag_name === decodeURIComponent(rest.split("/").pop()));
       return found ? json(200, found) : json(404, {});
     }
-    if (req.method === "GET" && rest.startsWith("/releases")) return json(200, state.releases.filter((r) => r.repo === repo));
+    if (req.method === "GET" && rest === "/releases") {
+      const page = Number(url.searchParams.get("page") || 1);
+      const size = Number(url.searchParams.get("per_page") || 30);
+      const all = [...(repo === "o/app" ? others : []), ...state.releases.filter((r) => r.repo === repo)];
+      return json(200, all.slice((page - 1) * size, page * size));
+    }
     if (req.method === "POST" && rest === "/releases") {
       const { tag_name: tagName, target_commitish: target, name, body: notes, draft } = JSON.parse(body);
       const created = { id: ++ids, repo, tag_name: tagName, target, name, body: notes, draft, assets: [], upload_url: `${base}/uploads/${ids}{?name,label}` };
@@ -238,8 +251,10 @@ async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules =
     const patch = rest.match(/^\/releases\/(\d+)$/);
     if (patch && req.method === "PATCH") {
       const release = state.releases.find((r) => r.id === Number(patch[1]));
-      release.draft = JSON.parse(body).draft;
-      // 公开时打 tag（已有就沿用）、附件换成公开地址；退回草稿时公开地址作废。
+      const change = JSON.parse(body);
+      release.draft = change.draft;
+      release.target = change.target_commitish ?? release.target;
+      // 公开时按（这一下写进来的）目标打 tag，已有就沿用；附件换成公开地址。退回草稿时公开地址作废。
       if (!release.draft) state.tags[`${repo}:${release.tag_name}`] ??= release.target;
       for (const asset of release.assets) {
         state.downloads.delete(new URL(asset.browser_download_url).pathname);
@@ -253,6 +268,7 @@ async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules =
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   base = `http://127.0.0.1:${server.address().port}`;
+  for (const release of state.releases) release.upload_url = release.upload_url.replace("PLACEHOLDER", base);
   return { state, base, close: () => new Promise((done) => { server.closeAllConnections(); server.close(done); }) };
 }
 
@@ -324,33 +340,41 @@ async function formalRehearsal() {
   await refused({}, /没记构建提交/, "the app does not know its build commit", fakeApp("20000102.0002", key.publicKey, { feed }));
   await refused({}, /旧格式/, "a single-repo config is refused, not guessed", app, { ...config, repo: "o/feed" });
 
-  // 预检都过、提交 appcast 时才被拒（比如权限在这期间被收回）：公开过的 Release 退回草稿，外面下不到。
+  // 预检都过、提交 appcast 时才被拒（比如权限在这期间被收回）：公开不撤回 —— 撤回之前要确认没有哪份
+  // appcast 引用它，而读和撤之间别的发版进程可能刚提交了 appcast。只靠重跑往前补完。
   let github = await fakeGitHub({ push: both, commits: { abc1234: sha }, feedPut: 403 });
   let result = await publish(github, app);
   assert.notEqual(result.status, 0, result.out);
   assert.match(result.out, /appcast 没提交上/);
-  assert.match(result.out, /已把 Release .* 退回草稿/);
-  assert.deepEqual(writes(github), ["POST /repos/o/app/releases", `POST /uploads/${github.state.releases[0].id}`,
-    `PATCH /repos/o/app/releases/${github.state.releases[0].id}`, "PUT /repos/o/feed/contents/ash/mac/appcast.xml",
-    `PATCH /repos/o/app/releases/${github.state.releases[0].id}`], "draft, upload, publish, appcast refused, back to draft");
-  assert.equal(github.state.releases[0].draft, true, "the release is a draft again");
-  assert.equal(github.state.downloads.size, 0, "nothing can be downloaded publicly");
+  assert.match(result.out, /公开不撤回/);
+  const id = github.state.releases[0].id;
+  assert.deepEqual(writes(github), ["POST /repos/o/app/releases", `POST /uploads/${id}`, `PATCH /repos/o/app/releases/${id}`,
+    "PUT /repos/o/feed/contents/ash/mac/appcast.xml"], "draft, upload, publish, appcast refused — and nothing is taken back");
+  assert.equal(github.state.releases[0].draft, false, "the release stays public");
   assert.equal(github.state.files.size, 0);
-  // 修好后重跑：沿用那个草稿和已经传上去的包，补完公开和 appcast。
+  // 修好后重跑：认出已公开的 Release 和上面的包，只补 appcast。
   github.state.calls.length = 0;
   github.state.feedPut = 200;
   result = await publish(github, app);
   await github.close();
   assert.equal(result.status, 0, result.out);
-  assert.match(result.out, /沿用 o\/app 里已有的草稿 Release/);
-  assert.deepEqual(writes(github), [`PATCH /repos/o/app/releases/${github.state.releases[0].id}`, "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
-    "no second release, no second upload");
+  assert.match(result.out, /沿用 o\/app 里已有的 Release/);
+  assert.deepEqual(writes(github), ["PUT /repos/o/feed/contents/ash/mac/appcast.xml"], "no second release, no second upload, no second publish");
   assert.equal(github.state.releases.length, 1);
-  assert.equal(github.state.releases[0].draft, false);
-  console.log("PASS: when the appcast is refused after the release went public, the release goes back to draft; a rerun reuses it and finishes");
+  console.log("PASS: when the appcast is refused after the release went public, the release stays public and a rerun only adds the appcast");
 
-  git("checkout", "-q", "--", "README.md");
-  git("reset", "-q", "--hard", "HEAD~1");
+  // 沿用一个旧草稿：它排在 150 个更新的 Release 后面（第二页），还记着别的提交、没有 tag。
+  github = await fakeGitHub({ push: both, commits: { abc1234: sha }, drafts: [{ tag: "ash-mac-v0.2.0-20000102.0001", target: "e".repeat(40) }], newer: 150 });
+  result = await publish(github, app, { artifacts: "draft-artifacts" });
+  await github.close();
+  assert.equal(result.status, 0, result.out);
+  assert.match(result.out, /沿用 o\/app 里已有的草稿 Release/, "the draft is found past the first page");
+  assert.deepEqual(writes(github).filter((c) => c.startsWith("POST /repos")), [], "no second release is created");
+  assert.equal(github.state.tags["o/app:ash-mac-v0.2.0-20000102.0001"], sha, "publishing writes this build's commit as the target, so the tag lands on it");
+  console.log("PASS: an old draft is found on a later page and published with this build's commit as its tag");
+
+  const initial = git("rev-list", "--max-parents=0", "HEAD");
+  git("reset", "-q", "--hard", initial);
   writeFileSync(join(dirname(readme), "other.txt"), "someone else's uncommitted change\n");
   github = await fakeGitHub({ push: both, commits: { abc1234: sha } });
   result = await publish(github, app, { artifacts: "formal-artifacts-2" });
@@ -387,16 +411,27 @@ async function formalRehearsal() {
   console.log("PASS: a formal release proves write access to both repos and a pushed, untagged-elsewhere build commit before writing anything; then a draft release, upload, read-back, publish, the signed appcast in the feed repo, and only the README link committed locally");
 
   // 全都发完了、只是 README 没提交上（这里把那个提交撤掉来模拟）：重跑只补 README，不再碰 GitHub。
-  git("reset", "-q", "--hard", "HEAD~1");
+  git("reset", "-q", "--hard", initial);
   writeFileSync(join(dirname(readme), "other.txt"), "someone else's uncommitted change\n");
   assert.ok(readFileSync(readme, "utf8").includes("第一版还没发布"));
   github.state.calls.length = 0;
   result = await publish(github, app, { artifacts: "formal-artifacts-2" });
-  await github.close();
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /appcast 里已经是这个包：只补没做完的收尾/);
   assert.deepEqual(writes(github), [], "nothing is written to GitHub again");
   assert.ok(readFileSync(readme, "utf8").includes(link), "the README link is filled in");
   assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0001）");
-  console.log("PASS: rerunning a fully published version only finishes the README link");
+
+  // 再发一版，README 指向它；之后补旧版的收尾不把 README 倒回旧版。
+  result = await publish(github, fakeApp("20000102.0003", key.publicKey, { feed, commit: "abc1234" }), { artifacts: "formal-artifacts-2" });
+  assert.equal(result.status, 0, result.out);
+  assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0003）");
+  github.state.calls.length = 0;
+  result = await publish(github, app, { artifacts: "formal-artifacts-2" });
+  await github.close();
+  assert.equal(result.status, 0, result.out);
+  assert.match(result.out, /README 的下载链接留在更新的 20000102\.0003/);
+  assert.deepEqual(writes(github), []);
+  assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0003）", "the README keeps the newer version");
+  console.log("PASS: rerunning a fully published version only finishes the README link, and never moves it back to an older version");
 }

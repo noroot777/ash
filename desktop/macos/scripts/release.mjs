@@ -20,12 +20,15 @@
 //  · 两个仓库任何一个写不了，什么都不公开：包放出去了 appcast 却改不了，或者反过来，都是半截的发版。
 //    「写得了」要当场证明（这张凭证真写一次、清单分支没有挡着直接提交的规则），不看账号权限。
 //  · 包先进草稿 Release（外面看不见）、经 API 下回来核对，再公开，确认公开地址下得下来，最后推
-//    appcast：feed 永远不指向一个还不存在的包。公开之后 appcast 还是没推上去，就把 Release 退回草稿。
+//    appcast：feed 永远不指向一个还不存在的包。公开是单向的：之后哪一步失败都不撤回（撤回要先确认
+//    没有哪份 appcast 引用它，而读和撤之间别的发版进程可能刚提交了 appcast），只靠重跑往前补完。
 //  · 没发完重跑时，同一版沿用上次封好的 dmg（重封出来的字节不同，签名就和已传上去的那份对不上了）
 //    —— 但只在这次给的 app 和封那个 dmg 的是同一份时（旁边记着 app 的内容摘要），不是就拒发。
-//    appcast 里已经是这个包（签名一样）时只补后面没做完的：公开 Release、README 链接。
+//    appcast 里已经是这个包（签名一样）时只补后面没做完的：公开 Release、README 链接（README 只在
+//    这一版仍是 appcast 里最新的时候才改，补旧版的收尾不把首页链接倒回去）。
 //  · Release 的 tag 打在构建这份 app 的那个提交上：那个提交要先推到装包仓库；同名 tag 已经在、
-//    却指着别的提交，就拒发（GitHub 会沿用已有的 tag，Release 就对不上源码）。
+//    却指着别的提交，就拒发（GitHub 会沿用已有的 tag，Release 就对不上源码）。公开那一下连目标提交
+//    一起写（沿用的旧草稿可能记着别的提交），公开后再核对一遍 tag。
 import { spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync } from "node:fs";
@@ -207,7 +210,6 @@ async function main() {
   const notes = values.notes != null ? notesFromText(values.notes) : releaseNotes(earlier, commit);
 
   // ── 5. 先把包放上去 ──
-  let rollback = null;
   if (local) {
     copyFileSync(dmg, join(local, dmgName));
   } else {
@@ -217,36 +219,27 @@ async function main() {
       body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Ash 拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`,
     });
     url = put.url;
-    rollback = put.rollback;
   }
 
   // ── 6. 再更新 appcast ──
-  try {
-    if (!local) await confirmDownloadable(url, dmg, length);
-    if (!already) await publishAppcast({ github, config, local, remote, appcastPath, earlier, keyArgs, tool, notes, info, url, length, signature, commit });
-  } catch (error) {
-    if (rollback) {
-      // 提交请求报错不等于没提交上（比如响应路上断了）：appcast 里真有这一版时退回草稿，feed 就指向了
-      // 一个看不见的包。读回来确认没有才退；读不回来宁可留着公开（只是多一个暂时没进 feed 的包）。
-      const inFeed = await feedHasVersion(github, config, version);
-      if (inFeed === false) await rollback();
-      else say(inFeed ? "▶ appcast 其实已经提交上了：Release 保持公开。" : "▶ 读不回 appcast，确认不了它提交上没有：Release 保持公开，重跑会补完。");
-    }
-    throw error;
-  }
+  if (!local) await confirmDownloadable(url, dmg, length);
+  if (!already) await publishAppcast({ github, config, local, remote, appcastPath, earlier, keyArgs, tool, notes, info, url, length, signature, commit });
   say(`✓ 已发 ${shortVersion}（${version}）`);
   say(`  包：${url}`);
   say(`  appcast：${local ? appcastPath : feedOf(config)}`);
   if (!local) {
     say("  （raw.githubusercontent 有几分钟缓存，已装的 app 下一次定时检查或点「检查更新…」时就能看到）");
-    say(`  ${commitLink(README, { url, shortVersion, version })}`);
+    // 补旧版的收尾时首页已经指着更新的一版了，不倒回去。
+    say(`  ${latest && compareVersions(version, latest) < 0
+      ? `README 的下载链接留在更新的 ${latest}（这次补的是旧版 ${version}）`
+      : commitLink(README, { url, shortVersion, version })}`);
   }
 }
 
 /**
  * 把 dmg 放到装包仓库的 Release 上，公开它，给出公开的下载地址。草稿阶段外面什么都看不见：建草稿、传包、
- * 经 API 下回来核对都在这里，任何一步失败都不留公开的东西。返回的 rollback 只在这一次把它公开了时才有：
- * 后面（确认下载、推 appcast）失败时把它退回草稿。
+ * 经 API 下回来核对，任何一步失败都不留公开的东西。公开之后（包括公开请求发出去、却没收到答复）出的错
+ * 都只能重跑往前补：重跑会认出已公开的 Release、沿用上面的附件。
  */
 async function putOnRelease(github, config, { tag, commit, dmg, length, name, body }) {
   const repo = config.releaseRepo;
@@ -260,26 +253,26 @@ async function putOnRelease(github, config, { tag, commit, dmg, length, name, bo
   }
   say(`▶ 传 ${basename(dmg)}（${(length / 1048576).toFixed(1)} MB）`);
   const asset = await github.uploadAsset(release, dmg);
-  let rollback = null;
   if (release.draft) {
     const back = await github.downloadAsset(asset);
     const want = createHash("sha256").update(readFileSync(dmg)).digest("hex");
     const got = createHash("sha256").update(back).digest("hex");
     if (back.length !== length || got !== want) die(`草稿里的 ${asset.name} 和本地这份不一样（${back.length} 字节，sha256 ${got}）：没有公开。`);
     say(`▶ 公开 Release ${tag}`);
-    release = await github.setDraft(repo, release, false);
-    rollback = async () => {
-      try {
-        await github.setDraft(repo, release, true);
-        say(`▶ 已把 Release ${tag} 退回草稿：这一版没发成，外面看不到这个包；修好后重跑会沿用它。`);
-      } catch (error) {
-        say(`✕ 把 Release ${tag} 退回草稿也失败了（${error.message}）：去 ${repo} 的 Releases 页把它改回草稿或删掉。`);
-      }
-    };
+    try {
+      release = await github.publishRelease(repo, release, target);
+    } catch (error) {
+      die(`公开 Release ${tag} 时出错（${error.message}）：它可能已经公开了。appcast 没有推；直接重跑，会认出它接着补。`);
+    }
+  }
+  const tagged = await github.tagCommit(repo, tag);
+  if (tagged !== target) {
+    die(`Release ${tag} 已经公开，但它的 tag 指着 ${tagged ?? "（没有）"}，不是构建提交 ${target}：appcast 没有推。`
+      + "去 Releases 页把这个 Release 和 tag 删掉后重跑。");
   }
   const published = (release.assets || []).find((a) => a.name === asset.name);
-  if (!published) die(`公开后的 Release ${tag} 里找不到 ${asset.name}`);
-  return { url: published.browser_download_url, rollback };
+  if (!published) die(`公开后的 Release ${tag} 里找不到 ${asset.name}：appcast 没有推，重跑会接着补。`);
+  return { url: published.browser_download_url };
 }
 
 /** 新的一项排在最前、整份重签；正式发版带着读出时的 sha 提交回清单仓库。 */
@@ -306,18 +299,9 @@ async function publishAppcast({ github, config, local, remote, appcastPath, earl
         message: `ash mac ${shortVersion}（${version}）`,
       });
     } catch (error) {
-      die(`appcast 没提交上：${error.message}\nHTTP 409 / 422 是这期间 appcast 被别处改过，直接重跑（会沿用同一个包、重新读一遍 appcast）。`);
+      die(`appcast 没提交上：${error.message}\n包已经公开了（公开不撤回），修好后直接重跑：会沿用同一个 Release 和包、重新读一遍 appcast 再提交。`
+        + "HTTP 409 / 422 是这期间 appcast 被别处改过，直接重跑就行。");
     }
-  }
-}
-
-/** 清单仓库里的 appcast 现在有没有这一版；读不到是 null。 */
-async function feedHasVersion(github, config, version) {
-  try {
-    const remote = await github.readFile(config.feedRepo, config.appcastPath, config.feedBranch);
-    return parseItems(remote?.text ?? "").some((item) => item.version === version);
-  } catch {
-    return null;
   }
 }
 
