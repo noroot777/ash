@@ -38,7 +38,8 @@ export type TimelineLine = { text: string; notice: TimelineNotice };
 /** 回执：记在所属回合上、平时不画的那一类。原文就是它的话。 */
 export const receiptLine = (text: string): TimelineLine => ({ text, notice: { kind: "receipt" } });
 /** 出了岔子 / 需要用户知道的：留在会话明面上。原文就是它的话。 */
-export const alertLine = (text: string): TimelineLine => ({ text, notice: { kind: "alert" } });
+export const alertLine = (text: string, owner?: { discussionId: string }): TimelineLine =>
+  ({ text, notice: { kind: "alert", ...(owner ? { discussionId: owner.discussionId } : {}) } });
 /** 有专门 kind 的那几类（审查起止与结论、验收完成、哨兵起停……）。 */
 export const noticeLine = (notice: TimelineNotice, text: string): TimelineLine => ({ text, notice });
 

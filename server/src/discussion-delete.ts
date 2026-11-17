@@ -8,9 +8,9 @@
 //     截下的背景副本里也有这一场，跟着抹（discussion-background.ts `syncBackgroundCopies`）。
 //  ④ 各方 CLI 自己的会话文件里都记着这一场：给这条任务每一条持有 CLI 会话的会话行挂上「下一轮重建上下文」。
 //
-// 哪些段归这一场：讨论期间这条任务的回合全归它（discussion.ts 文件头），所以起止之间起跑的回合就是它的各段与合稿；
-// 旁注只认带这一场身份的那几句，以及起止之间、写在这些回合上的那几句 —— 讨论之后才写的旁注也挂着最后一个回合的
-// 身份，不能只看回合。
+// 哪些段归这一场：讨论期间这条任务的回合全归它（discussion.ts 文件头），所以起止之间起跑的回合就是它的各段与合稿。
+// 旁注只认写明了是这一场的那几句（开始 / 轮到谁 / 结束 / 中止，合稿没写完的提醒）：哨兵起停、预约审查这类别的
+// 事的旁注会借着正在写的那条会话落盘、带上讨论回合的身份，时刻也落在起止之间，但它们不是讨论的。
 //
 // 顺序同删消息：先挂重建标记，再抹盘上的（先副本、再 trace、最后正文），讨论记录最后删。哪一步断了，界面上那一场
 // 都还在，删除入口还在，重试按同样的判据再来一遍（已经抹掉的段不会再算一次）。
@@ -39,8 +39,7 @@ const within = (at: string | null | undefined, span: Span): boolean => {
 export function segmentOfDiscussion(seg: ConvSeg, discussionId: string, span: Span): boolean {
   if (seg.deleted) return false;
   if (seg.kind === "system" && seg.aside) {
-    if (seg.notice?.kind === "discussion") return seg.notice.discussionId === discussionId;
-    return within(seg.at, span) && within(seg.turnStartedAt, span);
+    return (seg.notice?.kind === "discussion" || seg.notice?.kind === "alert") && seg.notice.discussionId === discussionId;
   }
   return within(seg.turnStartedAt, span);
 }

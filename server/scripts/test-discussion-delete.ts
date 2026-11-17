@@ -1,8 +1,8 @@
 // 删掉一整场讨论（discussion-delete.ts）与讨论背景副本跟着删除走（discussion-background.ts）的回归。
 //
 // 要钉住的是「删完之后哪个 agent 都读不到这一场」，不只是界面上那两块没了：
-//   ① 各会话 .md 里属于这一场的段（各段与合稿的回合、带这一场身份的旁注、起止之间那句提醒）换成墓碑，
-//      讨论前后的话、讨论结束后才写的旁注（哪怕挂着最后一个回合的身份）一个不动；trace 按回合摘；
+//   ① 各会话 .md 里属于这一场的段（各段与合稿的回合、写明是这一场的旁注和提醒）换成墓碑；讨论前后的话、
+//      讨论期间借着讨论回合落盘的别的事的旁注（哨兵结束、没带讨论身份的提醒）、讨论之后的旁注一个不动；trace 按回合摘；
 //   ② 讨论记录（那一行和各段）、讨论自己的目录都没了；之后那场讨论截下的背景副本里也不剩这一场；
 //   ③ 每一条持有 CLI 会话的会话行都挂上「下一轮重建上下文」；
 //   ④ 还在说、任务在跑都拒，路由是真人专属；
@@ -64,8 +64,11 @@ try {
     resume("codex", 3, T(11)),
     agentHead(4, T(11), T(11)), "SECRET codex 第一段的交代", end(5, T(11), T(12)),
     aside("codex", "讨论结束：claude 和 codex 谈了 2 段，没谈拢。", T(15), 6, T(11), talkNotice("talkA", "end")),
-    // 起止之间、写在讨论回合上的提醒（合稿没写完那一句）：跟着这一场走。
-    aside("codex", "SECRET 合稿没写完。讨论的记录都在", T(19), 7, T(11), { kind: "alert" }),
+    // 写明是这一场的提醒（合稿没写完那一句）：跟着这一场走。
+    aside("codex", "SECRET 合稿没写完。讨论的记录都在", T(19), 7, T(11), { kind: "alert", discussionId: "talkA" }),
+    // 讨论期间别的事借这条会话落盘的旁注：时刻在起止之间、挂着讨论回合的身份，但不是讨论的 —— 不动。
+    aside("codex", "哨兵结束：构建，退出码 0。", T(12), 9, T(11), { kind: "monitor.finished", monitorId: "m1", description: "构建" }),
+    aside("codex", "预约的审查没能起跑", T(14), 10, T(11), { kind: "alert" }),
     // 另一场讨论的旁注：不动。
     aside("codex", "开始讨论：codex 和 claude，1 轮。", T(40), 8, null, talkNotice("talkB", "start")),
     "",
@@ -120,9 +123,11 @@ try {
     assert.deepEqual(parseSessionSpans(HOST).filter((_, i) => hostIn[i]).map((item) => item.seg.text),
       ["〔系统〕继续（从中断处）", "SECRET 第二段发言的交代", "【讨论说完了 · 写合稿】SECRET 合稿提示", "SECRET 合稿正文"],
       "主会话里只认起止之间起跑的回合");
-    assert.equal(guestIn.filter(Boolean).length, 6, "被叫来那方：三句带身份的旁注、那一段回合、起止之间的提醒");
-    assert.equal(guestIn.at(-1), false, "另一场讨论的旁注不认");
-    ok("归属：回合按起跑时刻、旁注按身份或「起止之间 + 讨论回合」");
+    assert.deepEqual(parseSessionSpans(GUEST).filter((_, i) => guestIn[i]).map((item) => item.seg.text), [
+      "开始讨论：claude 和 codex，1 轮。", "讨论第 1/2 段：轮到 codex。", "〔系统〕继续（从中断处）", "SECRET codex 第一段的交代",
+      "讨论结束：claude 和 codex 谈了 2 段，没谈拢。", "SECRET 合稿没写完。讨论的记录都在",
+    ], "被叫来那方：写明是这一场的旁注和提醒、那一段回合；另一场的、借讨论回合落盘的别的事都不认");
+    ok("归属：回合按起跑时刻，旁注只认写明的讨论身份");
   }
 
   // ── ②③ 删一整场 ────────────────────────────────────────────────────────────
@@ -136,7 +141,8 @@ try {
     }
     assert.deepEqual(live(host), ["先把 A 方案改了", "A 方案改完了。", "已预约审查", "接着做 B 方案", "B 方案开工。"], "讨论前后的话和之后的旁注都还在");
     assert.equal(parseSessionSpans(host).length, parseSessionSpans(HOST).length, "段落序号不动（墓碑占位）");
-    assert.deepEqual(live(guest), ["开始讨论：codex 和 claude，1 轮。"], "被叫来那方只剩另一场的旁注");
+    assert.deepEqual(live(guest), ["哨兵结束：构建，退出码 0。", "预约的审查没能起跑", "开始讨论：codex 和 claude，1 轮。"],
+      "被叫来那方只剩另一场的旁注和讨论期间别的事的旁注");
     const traceAfter = readFileSync(sessionTracePath("t", "host"), "utf8");
     assert.ok(traceAfter.includes(`t-${T(1)}`) && traceAfter.includes(`t-${T(30)}`) && traceAfter.includes('"run"'), "trace 只摘讨论那几个回合（run 留着记账）");
     assert.equal(existsSync(dirOf("t", "talkA")), false, "讨论自己的目录删掉了");

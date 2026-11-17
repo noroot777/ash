@@ -317,11 +317,11 @@ async function finishTalking(task: TaskRow, talk: TalkRow, agreed: boolean, turn
 
 /** 合稿那一回合收尾（或根本没起来）：这场讨论到此为止。 */
 async function closeSynthesis(talkId: string, taskId: string, reason: string | null): Promise<void> {
-  // 那句提醒先落、再记结束时刻：它落在这一场的起止之间，删掉整场讨论时跟着走（discussion-delete.ts）。
-  if (reason) await appendTaskTimeline(taskId, alertLine(`${reason}。讨论的记录都在，可以让它照着记录重写，或者再讨论一次。`));
   const at = now();
   await db.update(freeReviewDebates).set({ status: "finished", endedNote: reason, updatedAt: at, finishedAt: at })
     .where(eq(freeReviewDebates.id, talkId));
+  // 带着是哪一场：删掉整场讨论时按它认（discussion-delete.ts）。
+  if (reason) await appendTaskTimeline(taskId, alertLine(`${reason}。讨论的记录都在，可以让它照着记录重写，或者再讨论一次。`, { discussionId: talkId }));
   bus.publish({ type: "task.review", taskId });
   const { flushPendingWhenTurnIdle } = await import("./pending-messages.js");
   flushPendingWhenTurnIdle(taskId);
