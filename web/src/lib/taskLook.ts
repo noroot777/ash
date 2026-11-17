@@ -37,7 +37,11 @@ export type TaskStatusIndicator =
   /** 摔了（失败 / 验证没过）。一直亮着，跟读没读过无关 —— 失败是越老越该被看见的一档。 */
   | "error";
 
-const liveWork = (task: TaskListItem): boolean => !!task.acceptGateRunning || !!task.monitorRunning;
+const runningNow = (task: TaskListItem): boolean => task.status === "running" || task.status === "awaiting_review";
+// 「后台替它跑着、会自己回来」只说停着的任务。回合正跑着时挂的哨兵是它顺手放出去的活，
+// 它本人在动，就是在跑 —— 否则一条跑了十分钟的任务读成「等哨兵」，还沿派活树一路带上去。
+const liveWork = (task: TaskListItem): boolean =>
+  !runningNow(task) && (!!task.acceptGateRunning || !!task.monitorRunning);
 
 /**
  * 「它此刻在干等上游」。
@@ -48,7 +52,6 @@ const liveWork = (task: TaskListItem): boolean => !!task.acceptGateRunning || !!
  * 口径**再问一次:条件一致,正常情形下一个字都不变,只是不让陈旧的 true 自己说话。
  */
 const stalledNow = (task: TaskListItem): boolean => !!task.upstreamStalled && task.status === "running";
-const runningNow = (task: TaskListItem): boolean => task.status === "running" || task.status === "awaiting_review";
 
 export function deriveTaskStatusIndicator(
   task: TaskListItem,
@@ -61,8 +64,9 @@ export function deriveTaskStatusIndicator(
     // 排在 working/active 之前:一台卡在上游的调度台这三档全都成立,而「它其实没在动」是
     // 其中唯一需要用户做点什么的那一位。
     if (stalledNow(task) || workers.some(stalledNow)) return "stalled";
-    if (liveWork(task) || workers.some(liveWork)) return "working";
+    // 在跑的压过等哨兵的，跟名下往上带（ROLL_UP）同一个次序：有人在动，就先说有人在动。
     if (task.status === "running" || workers.some(runningNow)) return "active";
+    if (liveWork(task) || workers.some(liveWork)) return "working";
     if (workers.some((worker) => worker.status === "queued")) return "queued";
     if (task.status === "paused" || workers.some(worker => worker.status === "paused")) return "attention";
     // 调度台自己摔了：跟 spreadBucket 一样直接算「需要你处理」，红点一直在。

@@ -44,6 +44,8 @@ assert.equal(dot({ status: "paused" }), "attention", "暂停本身不能证明�
 assert.equal(dot({ status: "paused", monitorRunning: true }), "working");
 assert.equal(dot({ status: "done", monitorRunning: true }), "working");
 assert.equal(dot({ status: "paused", monitorRunning: false }), "attention");
+assert.equal(dot({ status: "running", monitorRunning: true }), "active", "回合正跑着、顺手挂了哨兵：它本人在动，是在跑");
+assert.equal(dot({ status: "awaiting_review", monitorRunning: true }), "active");
 assert.equal(
   dot({ status: "paused", monitorRunning: true, question: "选哪条？" }),
   "attention",
@@ -139,6 +141,11 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   const broken = child({ status: "failed" }, "摔了的");
   assert.equal(dispatchedRollUp([running, broken, asking]), asking, "轮到你的压过失败、在跑");
   assert.equal(dispatchedRollUp([running, broken]), broken);
+  // 孙任务正跑着回合、又挂着哨兵：子任务、父任务都该带上「运行中」，不是「等哨兵」。
+  const busy = child({ status: "running", monitorRunning: true }, "跑着还挂哨兵的");
+  const parked = child({ status: "paused", monitorRunning: true }, "停着等哨兵的");
+  assert.equal(busy.word, "运行中");
+  assert.equal(dispatchedRollUp([parked, busy]), busy, "名下有在跑的压过等哨兵的");
 
   const below = phrase({}, running);
   assert.deepEqual([below.word, below.tone, below.tip], ["运行中", null, "子任务「跑着的」运行中"], "自己做完了，名下在跑：写名下的");
@@ -158,6 +165,12 @@ assert.equal(deriveTaskStatusIndicator({ ...lead, status: "paused" }, []), "atte
 assert.equal(deriveTaskStatusIndicator({ ...lead, status: "paused", monitorRunning: true }, []), "working");
 assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "paused", monitorRunning: true, question: "问你" })]), "attention");
 assert.equal(deriveTaskStatusIndicator({ ...lead, acceptGateRunning: true }, []), "working");
+assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "running", monitorRunning: true })]), "active");
+assert.equal(
+  deriveTaskStatusIndicator(lead, [worker({ status: "paused", monitorRunning: true }), worker({ status: "running" })]),
+  "active",
+  "一个在等哨兵、一个在跑：先说有人在动，跟名下往上带同一个次序",
+);
 assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "queued" })]), "queued");
 assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "done" }), worker({ status: "failed" })]), "error", "执行者摔了、收了工没盖章：一直红");
 assert.equal(deriveTaskStatusIndicator({ ...lead, stage: "accepted" }, [worker({ status: "failed" })]), null, "盖过章就不再红");
