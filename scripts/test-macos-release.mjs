@@ -14,7 +14,8 @@
 // 公开附件 → （临时仓库里的）README 链接只提交 README。预检都过、提交 appcast 时才被拒：Release 保持公开
 // （公开不撤回），修好后重跑只补 appcast。沿用一个记着别的提交、排在第二页的旧草稿：找得到，公开时 tag
 // 打在这次的构建提交上。全都发完、只是 README 没提交上：重跑只补 README，不碰 GitHub；补的是旧版的收尾时
-// README 不倒回旧版。
+// README 不倒回旧版。README 那一步只动自己写的内容：提交失败且期间别处改过 README 时保留现场，README 已经指向
+// 更新的一版时不倒回去。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
@@ -91,9 +92,76 @@ function dmgContents(dmg) {
   }
 }
 
+/**
+ * README 链接那一步只动自己写的内容：提交失败时文件仍是自己写的那份才还原，期间被别处改过就保留现场；
+ * README 已经指向更新的一版时不倒回去（不靠调用方早先读的 appcast）。commitLink 是同步的，放子进程里跑，
+ * 好在提交钩子卡着的时候从外面改 README。
+ */
+async function readmeOwnership() {
+  const dir = join(temporary, "readme-ownership");
+  mkdirSync(join(dir, "hooks"), { recursive: true });
+  const git = (...args) => {
+    const out = spawnSync("git", args, { cwd: dir, encoding: "utf8", env: cleanEnv });
+    assert.equal(out.status, 0, out.stderr);
+    return out.stdout.trim();
+  };
+  const readme = join(dir, "README.md");
+  const original = "# ash\n<!-- ash-mac-download -->\n**[下载 ash 0.2.0（20000102.0002）](https://example.invalid/2.dmg)**\n<!-- /ash-mac-download -->\n";
+  git("init", "-q", "-b", "main");
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "test");
+  writeFileSync(readme, original);
+  git("add", ".");
+  git("commit", "-q", "-m", "init");
+  // 钩子进来后留个记号，等到外面放行（或两秒）再失败。
+  git("config", "core.hooksPath", "hooks");
+  writeFileSync(join(dir, "hooks/pre-commit"), "#!/bin/sh\ntouch .entered\nfor i in $(seq 40); do [ -e .go ] && break; sleep 0.05; done\necho 'hook says no' >&2\nexit 1\n", { mode: 0o755 });
+  const helper = join(mac, "scripts/download-link.mjs");
+  const commitLink = (version, during) => {
+    rmSync(join(dir, ".entered"), { force: true });
+    rmSync(join(dir, ".go"), { force: true });
+    const runner = `import { commitLink } from ${JSON.stringify(helper)};
+console.log(commitLink(${JSON.stringify(readme)}, { url: "https://example.invalid/${version}.dmg", shortVersion: "0.2.0", version: "${version}" }));`;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", runner], { cwd: dir, env: cleanEnv });
+    let out = "";
+    child.stdout.on("data", (data) => (out += data));
+    child.stderr.on("data", (data) => (out += data));
+    return (async () => {
+      if (during) {
+        while (!existsSync(join(dir, ".entered")) && child.exitCode === null) await new Promise((done) => setTimeout(done, 10));
+        during();
+        writeFileSync(join(dir, ".go"), "");
+      }
+      const [status] = await once(child, "close");
+      assert.equal(status, 0, out);
+      return out;
+    })();
+  };
+  const clean = () => assert.equal(git("status", "--porcelain", "--", "README.md"), "");
+
+  let out = await commitLink("20000102.0003");
+  assert.match(out, /提交 .* 失败（hook says no），已还原/);
+  assert.equal(readFileSync(readme, "utf8"), original, "a failed commit of an untouched README restores it");
+  clean();
+
+  out = await commitLink("20000102.0003", () => writeFileSync(readme, readFileSync(readme, "utf8") + "a line someone just saved\n"));
+  assert.match(out, /期间被别处改过，保留现场没还原/);
+  assert.ok(readFileSync(readme, "utf8").includes("a line someone just saved"), "someone else's edit survives the failed commit");
+  assert.ok(readFileSync(readme, "utf8").includes("20000102.0003"));
+  writeFileSync(readme, original);
+  clean();
+
+  out = await commitLink("20000102.0001");
+  assert.match(out, /README 的下载链接留在更新的 20000102\.0002/);
+  assert.equal(readFileSync(readme, "utf8"), original, "an older version never replaces a newer link");
+  assert.equal(git("log", "--format=%s"), "init");
+  console.log("PASS: the README link step only touches what it wrote: a failed commit restores an untouched README, keeps someone else's concurrent edit, and an older version never replaces a newer link");
+}
+
 try {
   await localRehearsal();
   await formalRehearsal();
+  await readmeOwnership();
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
