@@ -7,7 +7,8 @@
 //  ① 盘上抹掉。.md 里那一段换成一行带 `deleted:true` 的 sentinel（只留时刻与回合身份，
 //     正文一个字不剩），段落序号与回合边界不动，界面排版和 trace 切点照旧对得上；被删
 //     回复那段时间里的 trace 正文/思考/工具事件一并去掉。读正文的人（MCP 读转录、同伴拿到
-//     的 .md 路径、追问列表、重试取上一条输入、⌘K 搜 .md）从此都读不到。
+//     的 .md 路径、追问列表、重试取上一条输入、⌘K 搜 .md）从此都读不到。讨论发起时截下的背景
+//     副本是这份 .md 的一份拷贝，同样抹掉。
 //  ② 删的是一条答复：任务上的问答历史里那一条也只留墓碑（id、时刻、出自哪一段），否则换个
 //     入口（问答卡、get_task）又读回来。认哪一条按答复的身份（段上的 answerIds；老会话由页面
 //     指名、服务端核对），不按原文猜 —— 两次都答「可以」原文一模一样。
@@ -38,9 +39,11 @@ import {
 } from "@ash/shared/session-output";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
+import { backgroundCopiesOf, syncBackgroundCopies } from "./discussion-background.js";
 import { sessions, tasks } from "./db/schema.js";
 import { replaceFileAtomically, withRunFileLock } from "./run-file-lock.js";
 import { claimNonTurn, isRunning } from "./runs.js";
+import { activeTalkOf } from "./talk/segments.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { parseSessionTrace, sessionTracePath, sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
@@ -194,12 +197,19 @@ export function traceStepsWindow(traceRaw: string | null, span: StepsSpan): Wind
 /** 纯函数：从 trace 里摘掉落在时间窗里的执行事件（回合身份 run 与用量 usage 留着记账）。 */
 export function redactTrace(raw: string, windows: readonly Window[]): string {
   if (!windows.length) return raw;
+  return redactTraceWhere(raw, (entry) => windows.some((window) => inWindow(entry, window)));
+}
+
+export type TraceLineIdentity = { at?: string; turnStartedAt?: string; seq?: number };
+
+/** 纯函数：从 trace 里摘掉 `drop` 认下的执行事件（run 与 usage 照旧留着）。整场讨论按回合摘也走这里。 */
+export function redactTraceWhere(raw: string, drop: (entry: TraceLineIdentity) => boolean): string {
   return raw.split("\n").filter((line) => {
     if (!line.trim()) return true;
-    let entry: { at?: string; turnStartedAt?: string; seq?: number; event?: { kind?: string } };
+    let entry: TraceLineIdentity & { event?: { kind?: string } };
     try { entry = JSON.parse(line); } catch { return true; }
     if (traceKeptOnDelete(entry.event?.kind ?? "")) return true;
-    return !windows.some((window) => inWindow(entry, window));
+    return !drop(entry);
   }).join("\n");
 }
 
@@ -284,12 +294,15 @@ export async function deleteConversationSegments(sessionId: string, targets: rea
   if (task.mode !== "single") throw new RedactRefusal("目前只有单个智能体的任务支持删除消息", 409);
   const busy = "智能体正在运行，请先停止再删除消息";
   if (task.status === "running" || task.status === "queued" || isRunning(task.id)) throw new RedactRefusal(busy, 409);
+  // 讨论两段之间回合是空的，但下一段要读的背景副本、它该接的会话都还在路上：说完再删。
+  if (await activeTalkOf(task.id, "discussion", ["running", "synthesizing"])) throw new RedactRefusal("讨论还在进行，说完再删除消息", 409);
   const release = claimNonTurn(task.id, "conversation-redact");
   if (!release) throw new RedactRefusal(busy, 409);
   let answersTouched = false;
   try {
     const mdPath = sessionTranscriptPath(task.id, sessionId);
     const tracePath = sessionTracePath(task.id, sessionId);
+    const copies = await backgroundCopiesOf(task.id, sessionId).catch((error) => { throw unfinished(error); });
     // 先校验、认出被删的答复（只读）：指名对不上（页面旧了）就到此为止，什么都不动 —— 包括下面
     // 那道全任务的失效标记，否则一次 409 就白白让每条会话都丢掉旧上下文。
     const { users } = await withRunFileLock([mdPath, tracePath], () => planRewrite(mdPath, tracePath, targets))
@@ -304,7 +317,9 @@ export async function deleteConversationSegments(sessionId: string, targets: rea
       // 之间有旁注追加也无妨 —— 这里按同样的指名重算一遍，对不上就拒绝（墓碑已在，重试认得回）。
       const { raw, traceRaw, redacted, traceNext } = planRewrite(mdPath, tracePath, targets);
       try {
-        // 先 trace 后正文：正文没换成，用户看到的就还是原样，重试时会按同样的窗口再摘一遍。
+        // 讨论截下的背景副本里也有这几段，跟着抹（discussion-background.ts）。先副本、再 trace、最后正文：
+        // 正文没换成，用户看到的就还是原样，重试时按同样的指名再来一遍。
+        if (redacted && redacted.text !== raw) syncBackgroundCopies(copies, redacted.text);
         if (traceNext !== null && traceNext !== traceRaw) replaceFileAtomically(tracePath, traceNext);
         if (redacted && redacted.text !== raw) replaceFileAtomically(mdPath, redacted.text);
       } catch (error) {

@@ -204,6 +204,20 @@ try {
   assert.equal(await record.locator(".discussion-lost").innerText(), LOST, "审议格那一场同样写");
   assert.equal(await scope("live").locator(".discussion-lost").count(), 0, "背景是全的不写");
 
+  // 删掉一整场：说完了的在你那一句上、讨论气泡浮出那一行都能删，删的是同一场；还在说的哪儿都没有。
+  const liveTopic = scope("live").locator(".task-message--user", { hasText: "幽灵回合锁走哪条路" });
+  assert.equal(await liveTopic.getByRole("button", { name: "删除这场讨论" }).count(), 0, "在说时那一句上没有删除");
+  assert.equal(await live.getByRole("button", { name: "删除这场讨论" }).count(), 0, "在说时气泡上没有删除");
+  assert.equal(await topicBubble.getByRole("button", { name: "删除这场讨论" }).count(), 1, "说完了，那一句上能删整场");
+  await pressKey(done, "删除这场讨论");
+  const confirm = page.getByRole("dialog", { name: "删除这场讨论？" });
+  await confirm.waitFor();
+  assert.match(await confirm.innerText(), /各方每一段发言和合稿一起删掉/, "确认框说清删的是整场");
+  await confirm.getByRole("button", { name: "删除", exact: true }).click();
+  await waitUntil(async () => (await page.evaluate(() => window.__deleted_done ?? [])).length === 1, "删出去");
+  assert.deepEqual(await page.evaluate(() => window.__deleted_done), ["d-done"]);
+  await confirm.waitFor({ state: "detached" });
+
   // ④ 文档键 = 左侧抽屉读完整记录：一段一节，第一轮写明写的时候没看对方的。
   await pressKey(done, "讨论的完整记录");
   const drawer = scope("done").locator(".side-drawer");
@@ -239,7 +253,7 @@ try {
     assert.ok(overflow <= 1, `${name}：窄屏不横向溢出（多出 ${overflow}px）`);
   }
 
-  console.log("discussion dom ok: 审议格、发起（做法/轮数/三方/自己/命令/在跑）、四种此刻、点法、同一个组件、左侧抽屉");
+  console.log("discussion dom ok: 审议格、发起（做法/轮数/三方/自己/命令/在跑）、四种此刻、点法、同一个组件、左侧抽屉、删掉整场");
 } finally {
   await browser?.close();
   await web.close();

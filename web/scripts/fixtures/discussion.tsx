@@ -112,6 +112,7 @@ function Stage({ name, pane = false, task: patch = {} }: { name: keyof typeof ST
               <section className="task-detail-main">
                 <ConversationFeed task={task} items={items(stage?.output ?? "开始吧")} questionHistory={[]} sessions={[session]}
                   loading={false} error={null} reviews={[]} discussions={stage ? [stage.discussion] : []}
+                  onDeleteDiscussion={async (id) => log(`__deleted_${name}`, id)}
                   onOpenReviewPanel={pane ? (target) => nav.openTab("review", target ? reviewTargetRequest(target) : undefined) : undefined} />
                 <ReplyBox task={task} hasConversation
                   onSend={async (text) => { log(`__sent_${name}`, text); return { started: true } as never; }}

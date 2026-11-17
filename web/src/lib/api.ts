@@ -606,6 +606,9 @@ export const api = {
     >,
   ): Promise<{ deleted: number }> =>
     humanAction(`/sessions/${id(sessionId)}/conversation/delete`, json("POST", { segments })),
+  // 删一整场讨论（同上，真人专属）：服务端把各会话里那几段、讨论记录和它的目录一起清掉。
+  deleteDiscussion: (taskId: string, discussionId: string): Promise<{ deleted: true }> =>
+    humanAction(`/tasks/${id(taskId)}/discussions/${id(discussionId)}/delete`, json("POST", {})),
   duetTranscript: (taskId: string): Promise<unknown[]> =>
     request(`/tasks/${id(taskId)}/duet`),
 
