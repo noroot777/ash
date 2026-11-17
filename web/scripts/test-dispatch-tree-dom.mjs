@@ -14,8 +14,8 @@ try {
   assert.equal(await wrap("lead").locator(".workspace-team-caret").count(), 0);
   assert.equal(await wrap("lead").locator(".workspace-status-dot--wait").count(), 0, "圆点只说它自己（验收过）：名下在问你不改它的圆点");
   assert.equal(await row("lead").locator(".workspace-dispatch-count").textContent(), "3");
-  assert.equal(await row("lead").locator(".workspace-dispatch-count.is-warn").count(), 1);
-  assert.match(await row("lead").innerText(), /子项等答复/);
+  assert.equal(await row("lead").locator(".workspace-dispatch-count .dispatch-glyph.is-ask").count(), 1, "名下在问你：图标琥珀");
+  assert.doesNotMatch(await row("lead").innerText(), /子项/, "名下怎么样不写字，只给图标上色");
   await page.evaluate(() => window.__select("grand"));
   await page.waitForFunction(() => document.querySelector('[data-task-id="lead"]')?.getAttribute("aria-selected") === "true");
   await row("lead").click();
