@@ -17,6 +17,7 @@ import {
   decodeCursor,
   encodeCursor,
   pageMessages,
+  textMatches,
   toIndexed,
   utterancesIn,
   type IndexedMessage,
@@ -91,6 +92,9 @@ assert.deepEqual(pageMessages(all, titleOf, { query: "部署  挂了", limit: 10
 assert.deepEqual(pageMessages(all, titleOf, { query: "上线 脚本", limit: 10 }).messages.map((one) => one.id), ["m2"], "词可以落在任务标题里");
 assert.deepEqual(pageMessages(all, titleOf, { query: "没有这个词", limit: 10 }), { messages: [], next: null });
 
+assert.equal(textMatches(all.find((one) => one.id === "m2")!, ["部署", "挂了"]), true, "R 键左边按正文数命中：只看那句话本身");
+assert.equal(textMatches(all.find((one) => one.id === "m2")!, ["上线"]), false, "任务标题不算（标题前端自己筛）");
+assert.equal(textMatches(long, ["结尾的关键词"]), true, "截掉的部分照样算");
 assert.equal(decodeCursor("不是游标"), null, "坏游标当没给");
 assert.deepEqual(decodeCursor(encodeCursor({ at: "a", id: "b" })), { at: "a", id: "b" });
 

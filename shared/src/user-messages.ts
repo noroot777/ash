@@ -54,3 +54,20 @@ export interface UserMessageContext {
   before: { text: string; truncated: boolean } | null;
   after: { text: string; truncated: boolean } | null;
 }
+
+/**
+ * R 键那张表以任务为主：左边是任务（顺序同侧栏），右边是选中那一条（连它名下的执行者、派出去的子任务）
+ * 里我说过的每一句。GET /user-messages/of?taskIds=… 一次给齐，**旧的在前**（跟会话一个方向）；
+ * 太多时只留最近的 USER_MESSAGES_OF_MAX 句，`truncated` 为 true。
+ */
+export interface UserMessagesOf {
+  messages: UserMessage[];
+  truncated: boolean;
+}
+
+export const USER_MESSAGES_OF_MAX = 2000;
+
+/** GET /user-messages/hits?q=… —— 哪些任务里有我说过的话对得上这些词，各几句。不看任务标题（那个前端手里就有）。 */
+export interface UserMessageHits {
+  hits: { taskId: string; count: number }[];
+}
