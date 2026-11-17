@@ -10,6 +10,9 @@
 //  · 服务端已有新一轮 / 封顶 / 不存在：以服务端为准，不一直重送；拉失败了过一会儿自己再拉；
 //  · 不带账号的老缓存：自用模式补送，多人模式丢掉，都只处理一次。
 import assert from "node:assert/strict";
+import { mock } from "node:test";
+
+mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
 
 const storage = new Map();
 const windowListeners = new Set();
@@ -121,7 +124,17 @@ globalThis.fetch = async (path, init = {}) => {
 let source = null;
 globalThis.EventSource = class { constructor() { source = this; } close() {} };
 const emit = (event) => source?.onmessage?.({ data: JSON.stringify(event) });
-const settle = (ms = 700) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * 走过 `ms` 的时间。定时器和 Date.now 是假的（下面 mock.timers），按 10 毫秒一步拨，每步之间让真的
+ * 事件循环转几圈 —— 假服务端的回执、Response 读正文、模块里的 then 链都靠它往前走。产品里的
+ * 5 秒重试、400 毫秒攒批就不必真等。
+ */
+const settle = async (ms = 700) => {
+  for (let left = ms; left > 0; left -= 10) {
+    mock.timers.tick(Math.min(10, left));
+    for (let spin = 0; spin < 4; spin += 1) await new Promise((resolve) => setImmediate(resolve));
+  }
+};
 const putsFor = (taskId) => server.puts.filter((put) => put.reads[taskId]).length;
 let instance = 0;
 /** 开一个标签页：登录关口确认是 who（AuthGate），然后侧栏开始订阅。 */
