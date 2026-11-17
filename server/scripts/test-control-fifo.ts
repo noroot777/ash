@@ -4,12 +4,17 @@
 //   ② 根被单独杀掉、CLI 还攥着 stdin：管子留着；等它也走了才收得掉
 //   ③ 判据本身：没人开着才删；有人开着（带读端 / **只写**）、组可写、不是 FIFO、不存在都不删
 //   ④ 起跑前同一路径上已有一根：没人开着就收掉照常起；有人开着就不起、那根原样留着
-//   ⑤ 启动那一扫（sweepRunLogs）：只收没人开着的，在跑的那根、只写开着的、还没结束的会话那根都留着
+//   ⑤ 查进程表的那段空档（macOS，用一个先列完再停住的 lsof 壳把空档拉长）：原名上已经没有它，
+//      这时按原名打开扑空；空档里有人开着挪开的那根 ⇒ 改回原名、inode 不变；进程表卡死 ⇒ 超时、放回
+//   ⑥ 启动那一扫（sweepRunLogs）：只收没人开着的，在跑的那根、只写开着的、还没结束的会话那根都留着；
+//      上一辈子挪开一半就死掉的放回原名再判，挪开它的进程还活着就不碰
 // POSIX 专属：Windows 上可引导回合走壳守着的具名管道，没有这根文件。
 import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +26,7 @@ if (IS_WINDOWS) {
 
 const root = mkdtempSync(join(tmpdir(), "ash-control-fifo-"));
 process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.ASH_FIFO_LIST_TIMEOUT_MS = "3000"; // ⑤ 要等它超时；正常一次 lsof 约 0.2 秒
 process.env.ASH_ALLOW_REAL_AGENT = "1"; // 起的是本文件自己写的假 agent，验的就是进程收尾
 const { detachedPathsFor, spawnControllableForRun } = await import("../src/executors/detached.js");
 const { controlFifoPath, removeIdleControlFifo } = await import("../src/executors/control-fifo.js");
@@ -188,6 +194,55 @@ try {
   }
   console.log("✓ 起跑前路径上的旧管子：没人开着才收，有人开着就不起也不删");
 
+  // ⑤ 查进程表的那段空档
+  if (process.platform === "darwin") {
+    const dir = join(root, "window");
+    const bin = join(dir, "bin");
+    mkdirSync(bin, { recursive: true });
+    const ready = join(dir, "listed");
+    const release = join(dir, "release");
+    // 真的 lsof 先列完（结果原样交回），列完停住，等测试放行 —— 只拉长空档，不伪造占用。
+    writeFileSync(join(bin, "lsof"), `#!/bin/sh
+out=$(/usr/sbin/lsof "$@"); rc=$?
+: > "${ready}"
+while [ ! -e "${release}" ]; do sleep 0.05; done
+printf '%s\n' "$out"; exit $rc
+`, { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath}`;
+    try {
+      const fifo = join(dir, "racy.agent-rc.stdin.fifo");
+      mkfifo(fifo);
+      const inode = statSync(fifo).ino;
+      const pending = removeIdleControlFifo(fifo);
+      await until(() => existsSync(ready), "进程表列完");
+      assert.equal(existsSync(fifo), false, "空档里原名上已经没有它");
+      assert.throws(() => openSync(fifo, "r+"), /ENOENT/, "这时按原名打开扑空（用户选定的代价）");
+      const parked = readdirSync(dir).find((name) => name.startsWith("racy.agent-rc.stdin.fifo.retiring-"));
+      assert.ok(parked, "挪开的那根在同目录");
+      const fd = openSync(join(dir, parked), "r+");    // 空档里出现的持有者
+      writeFileSync(release, "");
+      assert.equal(await pending, "busy", "定论时有人开着 ⇒ 不删");
+      assert.equal(statSync(fifo).ino, inode, "改回原名，还是同一根");
+      assert.equal(readdirSync(dir).some((name) => name.includes(".retiring-")), false, "不留挪开的名字");
+      closeSync(fd);
+      rmSync(release);
+      rmSync(ready);
+
+      // 进程表卡住不返回：超时当拿不准，放回原名
+      const hung = join(dir, "hung.agent-rc.stdin.fifo");
+      mkfifo(hung);
+      const started = Date.now();
+      assert.equal(await removeIdleControlFifo(hung), "unknown");
+      assert.ok(Date.now() - started < 8000, "按时限收手");
+      assert.ok(statSync(hung).isFIFO(), "放回原名");
+      writeFileSync(release, "");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    console.log("✓ 查进程表的空档里原名打不开；空档里有人开着就改回原名；进程表卡死按超时放回");
+  }
+
   // ④ 启动那一扫
   {
     await ensureSchema();
@@ -200,6 +255,12 @@ try {
     const liveFifo = controlFifoPath(liveRc);
     const writeOnly = join(taskDir, "writer-20261117T082017788Z.agent-rc.stdin.fifo");
     for (const path of [stale, busy, liveFifo, writeOnly]) mkfifo(path);
+    // 上一辈子挪开一半就死掉的；以及挪开它的进程还活着的（那一位自己会收尾）。
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }).stdout;
+    const abandonedFrom = join(taskDir, "crashed-20261101T000000000Z.agent-rc.stdin.fifo");
+    const abandoned = `${abandonedFrom}.retiring-${dead}-0000`;
+    const inProgress = join(taskDir, `other-20261101T000000000Z.agent-rc.stdin.fifo.retiring-${process.pid}-0000`);
+    for (const path of [abandoned, inProgress]) mkfifo(path);
     await hold(busy);
     await holdWriteOnly(writeOnly);
     const now = new Date().toISOString();
@@ -214,13 +275,15 @@ try {
       agentPid: 999999, agentRcPath: liveRc,
     } as never);
     const swept = await sweepRunLogs();
-    assert.equal(swept.fifos, 1);
+    assert.equal(swept.fifos, 2);
     assert.equal(existsSync(stale), false, "没人开着的旧管子被收掉");
+    assert.equal(existsSync(abandoned) || existsSync(abandonedFrom), false, "挪开一半就死掉的：放回原名再判，没人开着就收掉");
+    assert.ok(existsSync(inProgress), "挪开它的进程还活着：不碰");
     assert.ok(existsSync(busy), "此刻有人开着的那根留着");
     assert.ok(existsSync(writeOnly), "只写开着的那根也留着");
     assert.ok(existsSync(liveFifo), "还没结束的会话那根留着");
   }
-  console.log("✓ 启动那一扫只收没人开着的旧管子");
+  console.log("✓ 启动那一扫只收没人开着的旧管子；挪开一半就死掉的认回来再判");
 } finally {
   for (const holder of holders) holder.kill("SIGKILL");
   for (const pid of pids) { try { process.kill(-pid, "SIGKILL"); } catch { /* 已退出 */ } }

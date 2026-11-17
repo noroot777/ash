@@ -13,7 +13,9 @@ import { eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
-import { CONTROL_FIFO_SUFFIX, controlFifoPath, removeIdleControlFifos } from "./executors/control-fifo.js";
+import {
+  CONTROL_FIFO_SUFFIX, controlFifoPath, removeIdleControlFifos, restoreAbandonedRetirements,
+} from "./executors/control-fifo.js";
 
 // 只认这三种后缀 —— 白名单而不是黑名单：这个目录里还躺着 .md 正文、审查证据、
 // 用户上传的图片，误删任何一样都是不可逆的。
@@ -30,6 +32,7 @@ const KEEP_HOURS = Number(process.env.ASH_RUNLOG_KEEP_H ?? 24);
 
 // 可引导回合的 stdin 具名管道（executors/control-fifo.ts）不看年龄：根一走它就没用了，正常
 // 情况下根退出时已经收掉；这里扫的是上一辈子没来得及收的。删不删只听「此刻有没有人开着」。
+// 上一辈子收到一半（挪开了还没定论）就死掉的，先放回原名再一起判。
 export async function sweepRunLogs(): Promise<{ removed: number; bytes: number; fifos: number }> {
   const cutoff = Date.now() - KEEP_HOURS * 3600_000;
 
@@ -64,6 +67,9 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number; 
       entries = readdirSync(dir);
     } catch {
       continue;
+    }
+    for (const path of restoreAbandonedRetirements(dir, entries)) {
+      if (!live.has(path)) fifoPaths.push(path);
     }
     for (const name of entries) {
       if (name.endsWith(CONTROL_FIFO_SUFFIX)) {
