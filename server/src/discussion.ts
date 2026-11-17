@@ -320,7 +320,8 @@ async function closeSynthesis(talkId: string, taskId: string, reason: string | n
   const at = now();
   await db.update(freeReviewDebates).set({ status: "finished", endedNote: reason, updatedAt: at, finishedAt: at })
     .where(eq(freeReviewDebates.id, talkId));
-  if (reason) await appendTaskTimeline(taskId, alertLine(`${reason}。讨论的记录都在，可以让它照着记录重写，或者再讨论一次。`));
+  // 带着是哪一场：删掉整场讨论时按它认（discussion-delete.ts）。
+  if (reason) await appendTaskTimeline(taskId, alertLine(`${reason}。讨论的记录都在，可以让它照着记录重写，或者再讨论一次。`, { discussionId: talkId }));
   bus.publish({ type: "task.review", taskId });
   const { flushPendingWhenTurnIdle } = await import("./pending-messages.js");
   flushPendingWhenTurnIdle(taskId);

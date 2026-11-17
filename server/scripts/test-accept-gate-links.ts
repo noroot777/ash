@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 这一份专收「各用一个独立小仓」的链接/输入计划用例 —— 它们要自带 .gitignore、提交历史,甚至自带
 // 一个装在项目内部的运行目录,挤进 test-accept-gate-source.ts 那个共用 repo 会互相污染(根落点那条
@@ -227,4 +228,4 @@ try {
 
   console.log("accept-gate-links: link identity, native path semantics, frozen relocation, dangling-link tolerance"
     + " and runtime-directory exclusion passed");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

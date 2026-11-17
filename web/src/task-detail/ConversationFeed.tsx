@@ -22,6 +22,7 @@ import { conversationDebateRows } from "./conversationDebateRows.ts";
 import { conversationDiscussionRows } from "./conversationDiscussionRows.ts";
 import { conversationSystemRows, laneReceipts, laneTailFootnote, type ConversationFootnoteRow, type TurnReceipt } from "./conversationSystemRows.ts";
 import { DebateBubble } from "./DebateBubble.tsx";
+import { discussionLive } from "../free-workflow/discussionModel.ts";
 import { DiscussionBubble } from "./DiscussionBubble.tsx";
 import { laneRoundOpener } from "./reviewLaneLinks.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
@@ -228,7 +229,7 @@ function UserMessage({
   preserveSystemStyle?: boolean;
   onReuse?: (input: ReusableInput) => void;
 }) {
-  if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
+  if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} attachments={item.attachments} />;
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);
   if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {
@@ -308,6 +309,7 @@ export function ConversationFeed({
   historyReady = true,
   bodyReady = true,
   onDeleteMessage,
+  onDeleteDiscussion,
   onReuseInput,
   asides,
 }: {
@@ -359,6 +361,8 @@ export function ConversationFeed({
   bodyReady?: boolean;
   /** 删掉一条已落盘的消息。不给就一颗删除按钮都不出（正在跑、团队/研讨任务、只读视图）。 */
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
+  /** 删掉说完了的一整场讨论（发起那一句、讨论气泡、合稿）。给不给同上。 */
+  onDeleteDiscussion?: (discussionId: string) => Promise<void>;
   /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
   onReuseInput?: (input: ReusableInput) => void;
   /** 不在会话正文里、按时刻插进来的那几样（你派出去的那一句小灰字……，见 feedAsides.ts）。 */
@@ -545,7 +549,7 @@ export function ConversationFeed({
   return (
     <QuestionHistoryProvider history={history}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
-    <MessageDeleteProvider onDelete={onDeleteMessage}>
+    <MessageDeleteProvider onDelete={onDeleteMessage} onDeleteDiscussion={onDeleteDiscussion}>
     <ReceiptReviewContext.Provider value={receiptReview}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
@@ -583,9 +587,10 @@ export function ConversationFeed({
             }
             if (row.kind === "discussion-lane") {
               const topic = row.discussion?.topic;
+              const deletable = row.discussion && !discussionLive(row.discussion) ? { discussionId: row.discussion.id } : undefined;
               return (
                 <Fragment key={row.id}>
-                  {topic && <UserBubble id={`${row.id}:topic`} author="你" text={topic} attachments={row.discussion!.attachments ?? []} at={row.discussion!.startedAt} />}
+                  {topic && <UserBubble id={`${row.id}:topic`} author="你" text={topic} attachments={row.discussion!.attachments ?? []} at={row.discussion!.startedAt} deletable={deletable} />}
                   <DiscussionBubble row={row} task={task} fallback={row.items.map((item) => renderItem(item, true))}
                     onOpen={onOpenReviewPanel && panelSources.has("free")
                       ? (discussionId) => onOpenReviewPanel({ source: "free", runId: null, round: null, discussionId }) : undefined} />

@@ -161,6 +161,8 @@ p.acc-detail-text { white-space: pre-line; }
 .acc-layer-commits time { font-family: inherit; }
 .acc-layer-commits span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acc-layer-commits p { margin: 2px 0 0; border-top: .5px solid var(--line); padding: 6px 8px 4px; color: var(--faint); font-size: var(--t-xs); }
+.acc-layer-commits p + p { margin-top: 0; border-top: 0; padding-top: 0; }
+.acc-layer-commits p:first-child { margin-top: 0; border-top: 0; }
 
 .acc-layer-gate { width: 420px; }
 .acc-field { display: grid; grid-template-columns: 60px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 36px; }

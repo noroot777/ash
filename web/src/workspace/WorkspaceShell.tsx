@@ -27,6 +27,7 @@ import {
   type SettingsSection,
 } from "../settings/SettingsPage.tsx";
 import { CommandPalette } from "../overlays/CommandPalette.tsx";
+import { RecallDialog } from "../recall/RecallDialog.tsx";
 import { NotesPanel } from "../overlays/NotesPanel.tsx";
 import { TaskComposerPanel, type ComposerDraft, type ComposerHome } from "../composer/TaskComposerPanel.tsx";
 import { HomeTodo } from "./HomeTodo.tsx";
@@ -101,6 +102,7 @@ export function WorkspaceShell() {
   const [settingsAnchor, setSettingsAnchor] = useState<string | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
+  const [recallOpen, setRecallOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(initial.view === "chat");
   const [assistantOrigin, setAssistantOrigin] = useState<AssistantOrigin | null>(initial.assistantOrigin);
   const assistantOpen = assistantOrigin !== null;
@@ -125,7 +127,7 @@ export function WorkspaceShell() {
   // 项目主仓被切分支/拉取过之后重拉一次 ProjectHealth：侧栏胶囊上的分支名和「有未提交
   // 改动」那颗点都从它来，不跟着刷就会停在操作之前的样子。
   const [gitVersion, setGitVersion] = useState(0);
-  const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, confirmedDeleteIds } = useTasks();
+  const { tasks: localTasks, setTasks, loading: tasksLoading, snapshotReady: tasksReady, error: tasksError, connected, settlementVersion, refetch: refetchTasks, confirmedDeleteIds } = useTasks();
   // 接力出去的行，状态要跨机器问持有机才知道 —— 本机那一行停在交出去那一刻。
   // **这一问由用户按**（见 useOutboundState 顶部：自动轮询会没完没了地敲别人的服务器），
   // 所以没问过时列表里就是接力当时的状态，由 OutboundStatusBar 如实说出来。
@@ -537,8 +539,8 @@ export function WorkspaceShell() {
   });
 
   useWorkspaceShortcuts({
-    // 这颗开关只管列表导航那几颗单键（j/k/f/c/r/q）：换了界面它们就没有落点。
-    // `G …` 一族不受它约束，在聊天 / 助手 / 设置页照样按得到（见 useWorkspaceShortcuts）。
+    // 这颗开关只管列表导航那几颗单键（j/k/f/c/Shift+R/q）：换了界面它们就没有落点。
+    // `G …` 一族和 R 不受它约束，在聊天 / 助手 / 设置页照样按得到（见 useWorkspaceShortcuts）。
     enabled: !gitOpen && !settingsSection && !chatOpen && !assistantOpen,
     paletteOpen,
     composerOpen: composer !== null,
@@ -554,6 +556,7 @@ export function WorkspaceShell() {
     // G C / G Z 跟状态栏上那两颗按钮完全同一条路;没权限(多人模式非管理员)就没有落点。
     onToggleCommands: () => { if (canUseTerminal) setCommandsPopSignal((value) => value + 1); },
     onToggleTerminal: () => { if (canUseTerminal && currentProject) terminal.toggle(); },
+    onOpenRecall: () => setRecallOpen(true),
   });
 
   const dropSettingsAnchor = useCallback(() => setSettingsAnchor(null), []);
@@ -597,6 +600,7 @@ export function WorkspaceShell() {
     : null;
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTaskMode={() => { selectTaskMode(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={() => openComposer()} onNewGroup={() => { if (requireProject("新建分组")) setCreateDialog({ kind: "group" }); }} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
+    <RecallDialog open={recallOpen} tasks={tasks} projects={projects} onClose={() => setRecallOpen(false)} onTask={selectTask} notify={notify} />
     {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => openComposer(draft)} notify={notify} />}
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={(ids) => { ids.forEach(deleteTask); setDeleteTarget(null); }} notify={notify} />}
     {handoffTarget && <HandoffDialog task={handoffTarget} onClose={() => setHandoffTarget(null)} onTaskUpdate={updateTask} onOpenRemote={selectRemoteTask} notify={notify} />}
@@ -641,7 +645,7 @@ export function WorkspaceShell() {
         ) : selectedFullTask?.mode === "duet" ? (
           <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedFullTask ? (
-          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer(draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
+          <TaskDetail task={selectedFullTask} allTasks={tasks} tasksReady={tasksReady} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer(draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : currentProject && !selectedTask ? composerPanel(currentProject, {
           title: scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject.name,
           detail: scopeKind === "tasks" ? `新建到 ${currentProject.name}` : undefined,

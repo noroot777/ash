@@ -7,7 +7,7 @@ import { api } from "../../lib/api.ts";
 import { dispatchHoldKey } from "../../lib/dispatchHold.ts";
 import type { Notify } from "../../lib/notify.ts";
 
-// 「派出的任务」格头那一颗：全部停下 / 接着跑（服务端 server/src/dispatch-hold.ts）。
+// 「子任务」格头那一颗：全部停下 / 接着跑（服务端 server/src/dispatch-hold.ts）。
 //
 // 没停着时指到格头才出（键盘走进这一格、触屏上常驻，见 dispatched.css）；名下没有在跑也没有排着的
 // 就不出。停着时它是「接着跑」，常驻 —— 停过这件事得一眼看得出来，刷新之后也一样（状态记在服务端）。

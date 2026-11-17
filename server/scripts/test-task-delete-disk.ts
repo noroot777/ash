@@ -6,11 +6,12 @@
 //   同一个 id 又有了任务行（接力迁回本机）：账作废、目录一个字节不动；
 //   旧清理和同编号的真实接力导入交错（第 3 轮审查 F1）：两种先后都不许删掉导入的正文。
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-task-delete-disk-"));
 // 不指定的话，scratch、ash-mcp 这些会落进这份检出自己的 data/ 目录。
@@ -185,6 +186,6 @@ try {
   console.log("task delete disk: ok");
 } finally {
   unlockAll();
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 process.exit(0);

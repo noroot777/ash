@@ -170,10 +170,15 @@ export function ReplyBox({
     wasQueueing.current = queueing;
   }, [queueing, scheduled.reload]);
 
+  // 选模型那个浮层和底部胶囊的候选都取它。讨论要叫另一个执行器：`/讨论` 打开的选人菜单、讨论里再 @ 一个，
+  // 都不列这条任务自己的执行器——列着它（还常排第一个），回车一按就成了「只能派出去」。一个别人都没注册，
+  // `/讨论` 也就不出。
+  const registeredTypes = registeredAgentTypes(profiles);
+  const discussTypes = registeredTypes.filter((type) => type !== standing.config.agentType);
   // 叫人的命令（`/讨论`、`/派`）排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
   const ashItems: SlashItem[] = [
-    ...(ability.discussable ? [DISCUSS_SLASH_ITEM] : []),
+    ...(ability.discussable && discussTypes.length ? [DISCUSS_SLASH_ITEM] : []),
     ...(dispatchable ? [DISPATCH_SLASH_ITEM] : []),
   ].map((item) => ({ ...item, kind: "ash" }));
   const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
@@ -198,16 +203,13 @@ export function ReplyBox({
   const menuCompletes = menuOpen && !menuSends && selected?.kind !== "ash";
   const commandActive = menuOpen || callTyped;
   const pickingCall = menuOpen ? callCommandVerb(selected?.command) : callTyped ? typedCall!.verb : null;
-  // 选模型那个浮层和底部胶囊的候选都取它；`@` 那张菜单里的智能体候选在 replyMention.ts
-  // 里自己算（它还要按 token 过滤）。
-  const registeredTypes = registeredAgentTypes(profiles);
   const mention = useReplyMention({
     value,
     setValue,
     draft,
     taskId: task.id,
     projectId: task.projectId,
-    profiles,
+    callable: calling.pickingVerb() === "discuss" ? discussTypes : registeredTypes,
     profilesReady,
     profilesFailed,
     disabled: disabled || commandActive || !!take,
@@ -263,7 +265,7 @@ export function ReplyBox({
     setCommandIndex(0);
     setMenuDismissed(false);
     const last = readCallMemory().last;
-    if (last && registeredTypes.includes(last) && !(verb === "discuss" && last === standing.config.agentType)) {
+    if (last && (verb === "discuss" ? discussTypes : registeredTypes).includes(last)) {
       setValue(rest);
       calling.start(last, verb);
     } else {
@@ -503,7 +505,7 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
         dispatchTarget={dispatchDefault.value} />}
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />

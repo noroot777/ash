@@ -74,7 +74,7 @@ function AgentRow({
 
 function UserRow({ row, onReuse }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]; onReuse?: (input: ReusableInput) => void }) {
   if (row.kind !== "user") return null;
-  if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
+  if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} attachments={row.attachments} />;
   const bySystem = !!row.bySystem;
   if (bySystem && !isReviewSystemPrompt(row.text)) {
     return <SystemAuthoredMessage item={row} surface="team" />;

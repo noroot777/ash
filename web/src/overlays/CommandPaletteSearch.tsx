@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import type { SearchHit } from "@ash/shared";
+import type { SearchHit, TaskListItem } from "@ash/shared";
+import { taskAncestryLabel } from "../components/TaskAncestry.tsx";
 import type { SearchSort } from "@ash/shared/search";
 import { NotePencil } from "@phosphor-icons/react";
 import { formatInstant } from "../task-detail/utils.ts";
@@ -57,7 +58,7 @@ export function Highlight({ text, query }: { text: string; query: string }) {
   return <>{parts}</>;
 }
 
-export function SearchPreview({ hit, query, onOpen }: { hit: SearchHit | undefined; query: string; onOpen?: (hit: SearchHit) => void }) {
+export function SearchPreview({ hit, query, onOpen, tasks = [] }: { hit: SearchHit | undefined; query: string; onOpen?: (hit: SearchHit) => void; tasks?: readonly TaskListItem[] }) {
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => { if (body.current) body.current.scrollTop = 0; }, [hit?.id, hit?.kind]);
   if (!hit) {
@@ -79,7 +80,7 @@ export function SearchPreview({ hit, query, onOpen }: { hit: SearchHit | undefin
           </span>
           <div className="min-w-0 flex-1">
             <h2 className="flex min-w-0 items-center gap-1.5 text-sm font-medium leading-5 text-ink">
-              <span className="min-w-0"><Highlight text={hit.title} query={query} /></span>
+              <span className="min-w-0"><SearchTaskTitle hit={hit} query={query} tasks={tasks} /></span>
               {isIdMatch(hit) && <IdMatchBadge />}
             </h2>
             <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[length:var(--t-xs)] leading-4 text-faint">
@@ -109,6 +110,7 @@ export function SearchHitRow({
   query,
   onSelect,
   onOpen,
+  tasks = [],
 }: {
   hit: SearchHit;
   index: number;
@@ -116,6 +118,7 @@ export function SearchHitRow({
   query: string;
   onSelect: (index: number) => void;
   onOpen: (hit: SearchHit) => void;
+  tasks?: readonly TaskListItem[];
 }) {
   const fieldChip = FIELD_LABEL[hit.field];
   return (
@@ -135,7 +138,7 @@ export function SearchHitRow({
         <span className="grid size-[15px] shrink-0 place-items-center">
           {hit.kind === "task" ? <SearchStatus hit={hit} /> : <NotePencil size={15} className="text-muted" />}
         </span>
-        <span className="palette-hit-title min-w-0 truncate font-medium text-ink"><Highlight text={hit.title} query={query} /></span>
+        <span className="palette-hit-title min-w-0 truncate font-medium text-ink"><SearchTaskTitle hit={hit} query={query} tasks={tasks} /></span>
         {isIdMatch(hit) && <IdMatchBadge />}
         {hit.kind === "task" && hit.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[length:var(--t-xs)] text-faint">已归档</span>}
         {hit.kind === "note" && hit.taskCount > 0 && <span className="shrink-0 rounded bg-overlay px-1 text-[length:var(--t-xs)] text-faint">已转 {hit.taskCount} 个任务</span>}
@@ -163,6 +166,7 @@ export function SearchHitList({
   sort,
   onSelect,
   onOpen,
+  tasks = [],
 }: {
   hits: SearchHit[];
   active: number;
@@ -171,6 +175,7 @@ export function SearchHitList({
   sort: SearchSort;
   onSelect: (index: number) => void;
   onOpen: (hit: SearchHit) => void;
+  tasks?: readonly TaskListItem[];
 }) {
   return <>{hits.map((hit, hitIndex) => {
     // 相关度档里任务整体排在随手记之前，于是「任务 / 随手记」是两个真的分区，各挂一个
@@ -182,8 +187,13 @@ export function SearchHitList({
     return (
       <div key={`${hit.kind}:${hit.id}`}>
         {header && <div className="palette-label">{header}</div>}
-        <SearchHitRow hit={hit} index={startIndex + hitIndex} active={active} query={query} onSelect={onSelect} onOpen={onOpen} />
+        <SearchHitRow hit={hit} index={startIndex + hitIndex} active={active} query={query} onSelect={onSelect} onOpen={onOpen} tasks={tasks} />
       </div>
     );
   })}</>;
+}
+
+function SearchTaskTitle({ hit, query, tasks }: { hit: SearchHit; query: string; tasks: readonly TaskListItem[] }) {
+  const ancestry = hit.kind === "task" ? taskAncestryLabel(hit.id, tasks) : "";
+  return <>{ancestry && <span className="palette-task-ancestry">{ancestry} › </span>}<Highlight text={hit.title} query={query} /></>;
 }

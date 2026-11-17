@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { ArrowRight, CaretDown, Check, GitBranch } from "@phosphor-icons/react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { branchDiffReason } from "../lib/branch-diff-reason.ts";
 import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import { formatInstant } from "../task-detail/utils.ts";
 import { useBranchPlan } from "../review/useBranchPlan.ts";
@@ -12,7 +13,11 @@ import { acceptTargetOf } from "./acceptTarget.ts";
 export type RouteData = {
   source: string;
   target: string;
+  /** 最近的一批提交；条数看 `commitTotal`，清单被截断时它比这里列出来的多。数不出来时是 null，不是 0。 */
   commits: TaskCommit[];
+  commitTotal: number | null;
+  /** 只有提交清单读不出来（diff 是好的）时才有：见 branch-diff-reason.ts 的 `commitListFailure`。 */
+  commitFailure?: string | null;
   diff: TaskDiffResult;
 };
 
@@ -27,7 +32,12 @@ const TASK_BRANCH = /^(ash|harness)\//;
  * 选 other 是一次真改动（服务端会清掉冻结的目标），而不是「没变」；
  * 验收之后不再能点，后面跟着那次合并的区间（验收时冻结，后来分支再动也不改它）。
  * 「N 提交」点开是提交清单：diff 是分支相对基点的整体改动，不按单个提交切，所以每一条跳去 Git
- * 工作台看它自己的 diff，基点垫在最底下。
+ * 工作台看它自己的 diff，基点垫在最底下。N 是真实条数；清单只列最近一批，没列出来的有几条写在清单底下。
+ * 提交、文件、增删行说的是同一段改动：任务分支里合进来的目标分支、开工点带来的代码都不算（服务端
+ * task-change-scope.ts）。
+ * 数不出来的那一项不写：diff 读不出来时没有文件和增删行（原因在下面 diff 的位置上），提交数不出来时
+ * 没有提交那一项 —— 写成 0 会被读成「这条任务没有改动」。只有提交清单读不出来、diff 是好的时候，
+ * 原因没有别处可写：留一个不带数字的「提交」，点开是原因。
  */
 export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
   task: TaskListItem;
@@ -51,6 +61,8 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
     ? "?" : files.reduce((sum, file) => sum + (file[side] ?? 0), 0);
   const add = total("additions");
   const del = total("deletions");
+  // 条数不知道、清单却有（连着还没重启到新版的服务端，清单列满了）：至少这么多。
+  const commitCount = data.commitTotal ?? (data.commits.length ? `${data.commits.length}+` : null);
   const range = task.stage === "accepted" && task.acceptedBaseCommit && task.acceptedMergeCommit
     ? `${task.acceptedBaseCommit.slice(0, 8)}..${task.acceptedMergeCommit.slice(0, 8)}` : null;
   return (
@@ -66,9 +78,16 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
         </button>
       ) : <code className="acc-dst">{data.target}</code>}
       {range && <code className="acc-range" aria-label={`合并区间 ${range}`}>{range}</code>}
-      <button ref={commitsRef} type="button" className="acc-link" aria-expanded={layer === "commits"} disabled={!data.commits.length}
-        onClick={() => setLayer(layer === "commits" ? null : "commits")}>{data.commits.length} 提交</button>
-      <span className="acc-stat">{files.length} 文件 <b className="acc-add">+{add}</b> <b className="acc-del">−{del}</b></span>
+      {commitCount !== null ? (
+        <button ref={commitsRef} type="button" className="acc-link" aria-expanded={layer === "commits"} disabled={!data.commits.length}
+          onClick={() => setLayer(layer === "commits" ? null : "commits")}>{commitCount} 提交</button>
+      ) : data.commitFailure && (
+        <button ref={commitsRef} type="button" className="acc-link" aria-expanded={layer === "commits"} aria-label="提交清单读不出来，点开看原因"
+          onClick={() => setLayer(layer === "commits" ? null : "commits")}>提交</button>
+      )}
+      {data.diff.available && (
+        <span className="acc-stat">{files.length} 文件 <b className="acc-add">+{add}</b> <b className="acc-del">−{del}</b></span>
+      )}
       {layer === "target" && entry && (
         <TargetMenu anchorRef={targetRef} taskId={task.id} projectId={entry.projectId} current={acceptTargetOf(task, entry) ?? data.target}
           source={entry.sourceBranch ?? data.source} fingerprint={entry.fingerprint} disabled={locked}
@@ -84,6 +103,7 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
       )}
       {layer === "commits" && (
         <AcceptLayer open anchorRef={commitsRef} onClose={() => setLayer(null)} label="提交" className="acc-layer-commits">
+          {commitCount === null && data.commitFailure && <p>{branchDiffReason(data.commitFailure)}</p>}
           <ul>{data.commits.map((commit) => (
             <li key={commit.sha}>
               <button type="button" aria-label={`在 Git 工作台打开提交 ${commit.sha.slice(0, 8)} ${commit.subject}`}
@@ -92,6 +112,8 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
               </button>
             </li>
           ))}</ul>
+          {data.commitTotal === null ? <p>更早的没有列出</p>
+            : data.commitTotal > data.commits.length && <p>更早的 {data.commitTotal - data.commits.length} 条没有列出</p>}
           {data.diff.mergeBase && <p>基点 <code>{data.diff.mergeBase.slice(0, 8)}</code></p>}
         </AcceptLayer>
       )}

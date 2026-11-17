@@ -4,7 +4,7 @@ import type { Task, TaskListItem } from "@ash/shared";
 // （画法在 components/TaskOrigin.tsx）。
 //
 // 收在别人名下（dispatchedBy）有两种来路，称呼不一样：
-//   · 派出去的（智能体在回合里建的、你从回复框 / 派活单派的）—— 「派它的任务」；
+//   · 派出去的（智能体在回合里建的、你从回复框 / 派活单派的）—— 「父任务」；
 //   · 从那条里切出来的（裁定「转成独立任务」、合并结果审查的修复任务）—— 它不是谁派的，照旧说
 //     「来自任务」。认它的事实跟服务端同一个（server/src/task-dispatch.ts 的 isCarvedOut）：系统建的、
 //     而且收在自己的来源（originTaskId）名下。光看后半句不够：你或智能体派出去的任务也可以同时
@@ -45,5 +45,5 @@ export function taskParentMode(link: TaskParentLink): Task["mode"] {
 
 export function taskParentRelation(link: TaskParentLink): string {
   if (link.kind === "team") return "所属团队";
-  return link.kind === "dispatch" ? "派它的任务" : `来自${taskModeLabel(taskParentMode(link))}`;
+  return link.kind === "dispatch" ? "父任务" : `来自${taskModeLabel(taskParentMode(link))}`;
 }

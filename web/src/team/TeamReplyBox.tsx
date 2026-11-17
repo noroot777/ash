@@ -48,7 +48,7 @@ export function TeamReplyBox({
   // 返回 null = 用户在确认闸上取消了:草稿和附件一个都别清(与 task-detail/ReplyBox 同口径)。
   onSend: (text: string, attachments: string[], options: LaterChoice) => Promise<ReplyTaskResult | null>;
   /** 调度者问你的时候怎么答：给了，框那一格就由答题卡接管（task-detail/QuestionSlot.tsx）。 */
-  onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+  onAnswer?: (answer: string, input: QuestionAnswerInput, attachments?: string[]) => Promise<void>;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -184,7 +184,7 @@ export function TeamReplyBox({
       />}
       {error && <p>{error}</p>}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} />}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable />}
       {!covering && <div className="team-reply-box">
         <ReplyResizeHandle targetRef={inputRef} {...replyHeight} />
         {/* 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框

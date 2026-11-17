@@ -25,6 +25,7 @@ import { verifyHistorySection } from "./review-history.js";
 import type { Workspace } from "./git.js";
 import { REVIEW_VALIDATION_REQUIREMENT } from "@ash/shared/free-workflow";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
+import { CHANGE_SCOPE_FAILURE_TEXT, taskChangeScope } from "./task-change-scope.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -78,10 +79,17 @@ function verifyRules(evidenceDir: string): string {
     REPORT_SUMMARY_FORMAT;
 }
 
-function comparisonBaseline(target: TaskRow): string {
-  return target.useWorktree
-    ? target.worktreeStartCommit || target.worktreeBase || "未记录任务起点，请先核实历史提交"
-    : "当前工作树的基准提交";
+/**
+ * 告诉审查者「这条任务自己的改动」从哪比起：跟验收台的 diff、提交清单同一份口径（task-change-scope.ts）。
+ * 算不出来就把原因写给它，不退回开工点 —— 分支合过目标分支时，那会把目标分支的进展整个算进审查范围。
+ */
+async function comparisonBaseline(target: TaskRow, repoPath: string): Promise<string> {
+  if (!target.useWorktree) return "当前工作树的基准提交";
+  const scope = await taskChangeScope(repoPath, target).catch(() => null);
+  if (!scope) return "未能确定（读取仓库失败），请先核实历史提交";
+  if (!scope.ok) return `未能确定（${CHANGE_SCOPE_FAILURE_TEXT[scope.reason]}），请先核实历史提交`;
+  return `${scope.base}（任务分支里合进来的目标分支、开工点带来的代码都已扣掉；` +
+    `本任务自己的提交：git log ${scope.sourceBranch} --not ${scope.exclude.join(" ")}）`;
 }
 
 /**
@@ -101,7 +109,7 @@ export async function verifyProtocolFor(
   station: string | null = null,
 ): Promise<string> {
   const evidenceDir = reviewRoundDir(target.id, round);
-  const baseline = comparisonBaseline(target);
+  const baseline = await comparisonBaseline(target, repoPath);
   const requirements = await reviewRequestReference(target, evidenceDir);
   // 口径本体由同一条消息里的 `verifyRules`(`REVIEW_VALIDATION_REQUIREMENT`)讲一遍就够,
   // 清单说明只讲「这份文件怎么读」。每回合提醒那两条没有它,仍走默认的复述。
@@ -150,7 +158,7 @@ export async function reviewProtocolFor(
   const target = (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0);
   if (!target) return `【审查任务】被审任务 ${review.reviewOf} 已不存在，记录问题后结束本轮。\n\n`;
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
-  const baseline = comparisonBaseline(target);
+  const baseline = await comparisonBaseline(target, repoPath);
   const requirements = await reviewRequestReference(target, evidenceDir);
   // 口径本体由同一条消息里的 `verifyRules`(`REVIEW_VALIDATION_REQUIREMENT`)讲一遍就够,
   // 清单说明只讲「这份文件怎么读」。每回合提醒那两条没有它,仍走默认的复述。

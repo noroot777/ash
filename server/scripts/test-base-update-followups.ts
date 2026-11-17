@@ -137,7 +137,7 @@ try {
     const oldGrand = git(s.repo, "rev-parse", s.grand.branch!);
     assert.equal((await updateTaskBase(s.grand.task.id, oldGrand)).ok, true);
     assert.equal((await branchDependency(await row(s.grand.task.id), s.repo))?.state, "ready");
-    const diff = await taskBranchDiff(s.repo, s.grand.task.id, "main", undefined, (await row(s.grand.task.id)).worktreeStartCommit);
+    const diff = await taskBranchDiff(s.repo, { ...(await row(s.grand.task.id)), mergeTargetBranch: "main" });
     assert.deepEqual(diff.files.map(file => file.path), ["grand.txt"]);
     assert.equal((await acceptTask(s.grand.task.id)).accepted, true);
     assert.equal(readFileSync(join(s.repo, "middle.txt"), "utf8"), mode === "complete" ? "middle" : "amended middle");

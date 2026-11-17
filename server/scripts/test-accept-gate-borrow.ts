@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 依赖这一层的回归。依赖**不**逐文件深拷,放法有两种,判据是依赖树里有没有一条链落回项目自己的
 // 源码:没有就借一条指向工作区那一份的链(O(1)),有就整棵克隆进快照(数据块共享)。为什么这么分、
@@ -452,4 +453,4 @@ try {
   assert.equal(runIn(join(looseMonoSnap, "probe.mjs")), "looseMono-certified");
 
   console.log("accept-gate-borrow: launch-from-snapshot, cleanup safety, install-declaration identity, no-dependencies parity, link roots, workspace isolation across all four runtime entries, unreachable roots and clone-traversal fidelity passed");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

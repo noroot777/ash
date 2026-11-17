@@ -70,6 +70,10 @@
       "types": "./src/task-origin.ts",
       "default": "./src/task-origin.ts"
     },
+    "./user-messages": {
+      "types": "./src/user-messages.ts",
+      "default": "./src/user-messages.ts"
+    },
     "./native-work": {
       "types": "./src/native-work.ts",
       "default": "./src/native-work.ts"

@@ -1,0 +1,260 @@
+/* R 键「我说过的话」（recall/RecallDialog.tsx）。外壳照 ⌘K 的面板，只是更大：左边一句一行，右边读全文。 */
+
+.recall-scrim {
+  align-items: flex-start;
+  padding-top: min(8vh, 72px);
+}
+
+.recall {
+  display: flex;
+  width: min(1080px, calc(100vw - 48px));
+  height: min(calc(100vh - min(8vh, 72px) - 32px), 780px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.recall-input {
+  display: flex;
+  height: 52px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 16px;
+  color: var(--faint);
+}
+
+.recall-input input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--t-md);
+}
+
+.recall-body {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(340px, 44%) minmax(0, 1fr);
+}
+
+.recall-list {
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  padding: 4px 6px 8px;
+}
+
+.recall-day {
+  position: sticky;
+  z-index: 1;
+  top: -4px;
+  background: var(--panel);
+  padding: 14px 10px 2px;
+  color: var(--ink);
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
+}
+
+/* 任务名：同一个任务连着说的几句只写一次，淡一档，跟正文分开读。 */
+.recall-task {
+  display: flex;
+  overflow: hidden;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px 2px;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recall-task span {
+  flex: none;
+}
+
+/* 一句一行。 */
+.recall-row {
+  overflow: hidden;
+  border-radius: 7px;
+  padding: 5px 10px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 选中只认 aria-selected：指针动一下就换选中，底色永远只有一行（同 ⌘K 的口径）。 */
+.recall-row[aria-selected="true"] {
+  background: var(--sel-bg);
+}
+
+.recall mark {
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--ink) 15%, transparent);
+  color: inherit;
+}
+
+.recall-empty {
+  margin: 0;
+  padding: 36px 18px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  text-align: center;
+}
+
+.recall-sentinel {
+  height: 1px;
+}
+
+.recall-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 18px;
+  color: var(--red);
+  font-size: var(--t-xs);
+}
+
+.recall-error button {
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 2px 10px;
+  color: var(--ink);
+}
+
+.recall-preview {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.recall-preview > header {
+  flex: none;
+  padding: 16px 24px 12px;
+}
+
+.recall-preview-task {
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink);
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.recall-preview-task:hover,
+.recall-preview-task:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.recall-preview > header p {
+  margin: 2px 0 0;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 那一句前后的对话，长相照会话：我的话是右边一颗气泡，智能体的话是左边的正文。 */
+.recall-thread {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 4px 24px 24px;
+}
+
+.recall-agent {
+  color: var(--ink);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+}
+
+/* 我是在接哪句话：只是个由头，淡下去、三行为止。 */
+.recall-before {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.recall-agent :is(h1, h2, h3, h4) {
+  font-size: var(--t-sm);
+}
+
+.recall-mine {
+  align-self: flex-end;
+  max-width: 88%;
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  background: var(--raised);
+  padding: 9px 13px;
+}
+
+.recall-mine p {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.recall-mine p + p {
+  margin-top: 6px;
+}
+
+/* 引文：同会话气泡里的引文（message-text.css 的 .message-quote），淡一档、左边一道竖线、两行为止。 */
+.recall-mine p.recall-quote {
+  display: -webkit-box;
+  overflow: hidden;
+  border-left: 2px solid var(--line2);
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.recall-mine ul {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  list-style: none;
+}
+
+.recall-mine li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 窄了就只留列表：一句两行、任务名一行，认得出来就够点了。 */
+@media (max-width: 760px) {
+  .recall-body { grid-template-columns: minmax(0, 1fr); }
+  .recall-list { border-right: 0; }
+  .recall-preview { display: none; }
+}

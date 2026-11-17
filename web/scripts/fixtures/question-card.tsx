@@ -53,16 +53,19 @@ function Fixture() {
   const single = { ...initial, question: "选择界面优化方向", questionItems: null, questionOptions: ["清楚展示问题", "优化阅读层级\n减少重复文案"] };
   // 题是服务端推来的，不是点出来的：回归要在浮层开着的时候让题到，点页面上任何一颗键都会先把浮层点关。
   (window as { fixtureAsk?: () => void }).fixtureAsk = () => ask(single);
-  const submitAnswer = async (answer: string, input: QuestionAnswerInput) => {
+  const submitAnswer = async (answer: string, input: QuestionAnswerInput, attachments?: string[]) => {
     setCalls((n) => n + 1);
     // 模拟一次网络往返，让「发送中」那一段在人工点检时看得见；自动化回归等的是结果，不依赖这段时长。
     await new Promise((resolve) => setTimeout(resolve, 400));
     if (fail) throw new Error("发送失败，请重试。你的答案已保留。");
     const record: QuestionRecord = { id: crypto.randomUUID(), question: state.task.question, questionOptions: state.task.questionOptions,
       questionItems: state.task.questionItems, answer, answers: input.answers, answeredAt: new Date().toISOString(), reply: `【答复】\n${answer}` };
-    setPayload(record.reply);
+    // 带了附件时，落进会话的那条答复尾部是附件块（同 server/src/util.ts 的 attachmentsPrompt）。
+    const text = record.reply + (attachments?.length
+      ? `\n\n[用户附带的文件，请用 Read 工具查看以下本地文件]\n${attachments.map((path) => `- ${path}`).join("\n")}` : "");
+    setPayload(text);
     update({ task: { ...state.task, question: null, questionOptions: null, questionItems: null }, records: [...state.records, record],
-      items: [...state.items, { kind: "user", id: record.id, text: record.reply, isAnswer: true, bySystem: true, attachments: [], at: record.answeredAt }] });
+      items: [...state.items, { kind: "user", id: record.id, text, isAnswer: true, bySystem: true, attachments: [], answerIds: [record.id], at: record.answeredAt }] });
   };
   return <main style={{ height: "100dvh", maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", background: "var(--canvas)" }}>
     <header style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 12, borderBottom: "1px solid var(--line)", fontSize: 12 }}>

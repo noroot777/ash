@@ -11,7 +11,9 @@ import {
   startManualFreeReviewRepair,
 } from "./free-workflow.js";
 import { startFreeReviewDebate, submitDebateStatement } from "./free-review-debate.js";
+import { RedactRefusal } from "./conversation-redact.js";
 import { startDiscussion, submitDiscussionStatement } from "./discussion.js";
+import { deleteDiscussion } from "./discussion-delete.js";
 import { activeTalkOf } from "./talk/segments.js";
 import { adjustFreeReviewRounds } from "./free-review-rounds.js";
 import { noted } from "./user-action-rejection.js";
@@ -193,6 +195,17 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
       const started = await startDiscussion(c.req.param("id"), body, { holdTurn: true });
       return c.json({ ...started, state: await freeWorkflowState(c.req.param("id")) }, 201);
     } catch (error) { return c.json(await noted(c.req.param("id"), "开始讨论", errorBody(error)), 409); }
+  });
+  // 删掉一整场讨论（真人专属：auth/personal-gate.ts 的 HUMAN_ONLY_PATHS），四处怎么清见 discussion-delete.ts。
+  api.post("/tasks/:id/discussions/:discussionId/delete", async (c) => {
+    const blocked = await blockedByHandoff(c);
+    if (blocked) return blocked;
+    try {
+      return c.json(await deleteDiscussion(c.req.param("id"), c.req.param("discussionId")));
+    } catch (error) {
+      if (error instanceof RedactRefusal) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
   });
   api.put("/tasks/:id/free-workflow/review-reservation", async (c) => {
     const blocked = await blockedByHandoff(c);

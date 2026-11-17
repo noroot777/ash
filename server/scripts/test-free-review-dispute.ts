@@ -8,11 +8,11 @@
 // （测试隔离环境本来也禁止真起执行器）。要换发言方身份的那几段，改成另起一个任务 +
 // 直接种好该段的库状态，而不是释放回合——释放会把排着的起跑一次性放出去。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { releaseTmpDb } from "./tmp-db.js";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-free-review-dispute-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -552,8 +552,7 @@ try {
   console.log("free review dispute ok");} catch (error) {
   failure = error;
 } finally {
-  releaseTmpDb();
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 if (failure) {
   console.error(failure);

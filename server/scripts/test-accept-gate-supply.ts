@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 「任务 worktree、一个依赖都没装」—— worktree 全局默认开启、node_modules 被 gitignore，所以这是
 // **标准路径**。本文件钉住的是它从「隔离证明必然失败」变成「可证隔离且绿」，根因与两条路线的实测
@@ -206,7 +207,7 @@ try {
   console.log(`accept-gate-supply(${where}): worktree 未装依赖 → 快照自带依赖树、直接与传递 import 均落在本次提交、`
     + `改参考检出不影响、身份绑定(含补给带进来的外部安装树)、只补空位、无参考安装不编 通过`);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
   if (runsHome) rmSync(runsHome, { recursive: true, force: true });
 }
 

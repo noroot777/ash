@@ -75,3 +75,15 @@ export async function releaseTmpDb(): Promise<void> {
     .then(({ dbClient }) => dbClient.close())
     .catch(() => undefined);
 }
+
+/**
+ * 收掉一个装着临时库的舞台目录:**先松开库,再删目录**。
+ *
+ * 这个先后就是上面那段说的不变量,所以收在这一处,不在各个 `finally` 里各写一遍 —— 只写了
+ * `rmSync(root)` 的那种在 POSIX 上看不出毛病,到 Windows 上就是断言全过、收尾 EBUSY。
+ * 删不掉照样抛:吞掉它等于把红灯换成一堆留在磁盘上的临时目录。
+ */
+export async function removeTmpStage(root: string): Promise<void> {
+  await releaseTmpDb();
+  rmSync(root, { recursive: true, force: true });
+}
