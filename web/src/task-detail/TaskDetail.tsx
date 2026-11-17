@@ -42,6 +42,7 @@ import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { useTaskReplyActions } from "./TaskReplyActions.tsx";
 import { useWaitingTitle } from "./useWaitingTitle.ts";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
+import { discussionDrawerKey } from "../free-workflow/DiscussionRecord.tsx";
 import { retryTurnActions, type TurnRetryTarget } from "./turnRetry.ts";
 import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
@@ -505,6 +506,18 @@ export function TaskDetail({
                             notify(reason instanceof Error ? reason.message : String(reason));
                           }
                           await conversation.refetch();
+                        }
+                        : undefined}
+                      onDeleteDiscussion={task.mode === "single" && !handedOut && task.status !== "running" && task.status !== "queued"
+                        ? async (discussionId) => {
+                          try {
+                            await api.deleteDiscussion(task.id, discussionId);
+                            if (leftDrawer.api.activeKey === discussionDrawerKey(task.id, discussionId)) leftDrawer.api.close();
+                            notify("已删除这场讨论。下一轮会换一条新的会话，只带着删除后留下的记录继续");
+                          } catch (reason) {
+                            notify(reason instanceof Error ? reason.message : String(reason));
+                          }
+                          await Promise.all([conversation.refetch(), free.reload(true, true)]);
                         }
                         : undefined}
                       onAskSideChat={(quote) => { stageSideChatQuote(task.id, quote); openTab("side-chat"); }}

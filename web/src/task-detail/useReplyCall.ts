@@ -42,6 +42,9 @@ export function useReplyCall({ ownAgent, ability, profiles, state }: {
     else if (current.opened) pending.current = null;
   };
 
+  /** 这会儿 `@` 选中的人来做什么：`/讨论`、`/派` 等着选人，或者已经叫着人（讨论时再 @ 是再叫一个）。 */
+  const pickingVerb = (): CallVerb | null => pending.current?.verb ?? call?.verb ?? null;
+
   const fresh = (target: MentionTarget, verb: CallVerb): ReplyCall => ({ target, verb, base: "here", others: [], rounds: readDiscussRounds() });
   const start = (agent: AgentType, prefer: CallVerb | null = null) => {
     const verb = pending.current?.verb ?? prefer;
@@ -111,7 +114,7 @@ export function useReplyCall({ ownAgent, ability, profiles, state }: {
   return {
     call,
     self: !!call && (dispatchable || ability.discussable) && selfOf(call.target.agent),
-    start, pend, picking, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, drop, sent,
+    start, pend, picking, pickingVerb, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, drop, sent,
     /** 只记住这一套、不动叫着的人（新建框：叫的人跟草稿一起由提交结算去清，见 DraftStore 的 settleSubmission）。 */
     remember,
   };

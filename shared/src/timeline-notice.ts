@@ -122,7 +122,8 @@ export type TimelineNotice =
   | { kind: "discussion"; discussionId: string; phase: "start" | "segment" | "end" | "aborted" }
   // ── 通用两档：原文就是它的话 ──
   | { kind: "receipt" }
-  | { kind: "alert" };
+  /** `discussionId`：这句提醒是哪一场讨论的（合稿没写完那一句），删掉整场时按它认（server/src/discussion-delete.ts）。 */
+  | { kind: "alert"; discussionId?: string };
 
 export type TimelineNoticeKind = TimelineNotice["kind"];
 
@@ -143,5 +144,7 @@ export function timelineNoticeOf(value: unknown): TimelineNotice | undefined {
   if (typeof kind !== "string" || !KINDS.has(kind)) return undefined;
   // 讨论那几句靠讨论身份配记录：没带身份的当没有，退回按原文读（原文只是一句普通回执）。
   if (kind === "discussion" && typeof (value as { discussionId?: unknown }).discussionId !== "string") return undefined;
+  // 提醒上的讨论身份是可选的：形状不对就当没带，提醒本身照常认。
+  if (kind === "alert" && "discussionId" in value && typeof (value as { discussionId?: unknown }).discussionId !== "string") return { kind: "alert" };
   return value as TimelineNotice;
 }
