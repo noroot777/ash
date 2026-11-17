@@ -9,10 +9,10 @@ import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
 import { GO_CHORD_KEYS, GO_CHORD_PREFIX, isGoChordKey } from "./goChord.ts";
 
-// enabled 只关**列表导航那几颗单键**（j/k/f/c/r/q 和铺开态的 Esc/Enter）：它们要么改选中行、
-// 要么按在主工作区的按钮上，换了界面就没有落点。`G …` 一族相反 —— 它的整个存在理由就是
-// 「在任何界面上都按得到」（见 goChord.ts），所以它排在 enabled 之前，聊天 / 助手 / 设置页
-// 照样认。护栏仍然有：在输入框里打字、命令面板开着、模态层盖着、带修饰键，一律不算数。
+// enabled 只关**列表导航那几颗单键**（j/k/f/c/Shift+R/q 和铺开态的 Esc/Enter）：它们要么改选中行、
+// 要么按在主工作区的按钮上，换了界面就没有落点。`G …` 一族和 R 相反 —— 它们的落点不靠当前界面
+// （`G …` 见 goChord.ts；R 打开「我说过的话」，点一句就跳进那个任务），所以排在 enabled 之前，
+// 聊天 / 助手 / 设置页照样认。护栏仍然有：在输入框里打字、命令面板开着、模态层盖着、带修饰键，一律不算数。
 type ShortcutOptions = {
   enabled: boolean;
   paletteOpen: boolean;
@@ -33,6 +33,8 @@ type ShortcutOptions = {
   onToggleCommands: () => void;
   /** G Z:开合终端抽屉。 */
   onToggleTerminal: () => void;
+  /** R：打开「我说过的话」（recall/RecallDialog.tsx）。 */
+  onOpenRecall: () => void;
 };
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -61,7 +63,7 @@ function ownsArrowKeys(target: EventTarget | null): boolean {
 }
 
 function clickVisibleRunAction(): void {
-  // The page owns eligibility and busy state; R only activates its opted-in button.
+  // The page owns eligibility and busy state; Shift+R only activates its opted-in button.
   const action = document.querySelector<HTMLButtonElement>("button[data-workspace-run-action]:not(:disabled):not([aria-disabled=\"true\"])");
   action?.click();
 }
@@ -84,6 +86,7 @@ export function useWorkspaceShortcuts({
   onOpenSettings,
   onToggleCommands,
   onToggleTerminal,
+  onOpenRecall,
 }: ShortcutOptions): void {
   const inspectorSequence = useRef(createInspectorShortcutSequence());
   const goSequence = useRef(createKeyChordSequence(GO_CHORD_PREFIX, isGoChordKey));
@@ -156,6 +159,14 @@ export function useWorkspaceShortcuts({
         }
       }
 
+      // R：「我说过的话」。单键 r 原来是「运行」，它让给了这个（用户 2026-11-17 要 R），运行挪到 Shift+R。
+      if (event.key === "r" && !event.repeat) {
+        inspectorSequence.current.reset();
+        event.preventDefault();
+        onOpenRecall();
+        return;
+      }
+
       // 到这儿为止都是全局键。下面几颗单键只在主工作区认 —— 聊天 / 助手 / 设置页里
       // 它们没有落点（既没有那份列表，也没有主区那颗运行按钮）。
       if (!enabled) return;
@@ -198,7 +209,7 @@ export function useWorkspaceShortcuts({
         onCreate();
         return;
       }
-      if (event.key === "r" && !composerOpen) {
+      if (event.key === "R" && !composerOpen) {
         event.preventDefault();
         clickVisibleRunAction();
         return;
@@ -213,5 +224,5 @@ export function useWorkspaceShortcuts({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [composerOpen, enabled, onCloseSpread, onCreate, onNavigate, onOpenSettings, onToggleCommands, onToggleSpread, onToggleTaskMode, onTogglePalette, onToggleTerminal, paletteOpen, spreadOpen]);
+  }, [composerOpen, enabled, onCloseSpread, onCreate, onNavigate, onOpenRecall, onOpenSettings, onToggleCommands, onToggleSpread, onToggleTaskMode, onTogglePalette, onToggleTerminal, paletteOpen, spreadOpen]);
 }

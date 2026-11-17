@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { normalizeDuetConfig } from "@ash/shared/duet";
+import { DUET_TIMELINE_SESSION } from "@ash/shared/user-messages";
 import type { GateAction, Session, Task, TaskActions, TaskListItem } from "@ash/shared";
 import { runActivityPhase } from "@ash/shared/run-activity";
 import { taskDisplayStatus } from "@ash/shared";
@@ -205,18 +206,26 @@ export function DuetView({
     ? duet.state.turns
     : duet.state.turns.filter((turn) => turn.done), [duet.state.turns, task.status]);
   // 我插的话没有条目 id，按「第几次插话」认：轮次只往后追加，插话本身也一定是 done 的，
-  // 上面那道过滤动不了它们的先后。
-  const userTurnIds = useMemo(() => {
+  // 上面那道过滤动不了它们的先后。这个编号也是它在讨论时间线上的出处 —— R 键那张表
+  // （服务端 duetUtterancesIn）按同样的数法给它编号，点过来靠它落到这一颗上。
+  const userTurnOrdinals = useMemo(() => {
     let count = 0;
-    return new Map(turns.flatMap((turn) => turn.speaker === "user" ? [[turn, `duet-user:${count++}`] as const] : []));
+    return new Map(turns.flatMap((turn) => turn.speaker === "user" ? [[turn, count++] as const] : []));
   }, [turns]);
   const inputs = useMemo(() => conversationInputs(
     { text: task.body || config.topic, at: task.createdAt },
     turns.flatMap((turn) => {
-      const id = userTurnIds.get(turn);
-      return id ? [{ kind: "user", id, text: turn.text, at: turn.at }] : [];
+      const ordinal = userTurnOrdinals.get(turn);
+      return ordinal === undefined ? [] : [{
+        kind: "user",
+        id: `duet-user:${ordinal}`,
+        text: turn.text,
+        at: turn.at,
+        sessionId: DUET_TIMELINE_SESSION,
+        sources: [{ sessionId: DUET_TIMELINE_SESSION, index: ordinal }],
+      }];
     }),
-  ), [config.topic, task.body, task.createdAt, turns, userTurnIds]);
+  ), [config.topic, task.body, task.createdAt, turns, userTurnOrdinals]);
   const currentRound = turns.reduce((max, turn) => Math.max(max, turn.round), 0);
   const gate = duet.state.gate ?? latestDuetGate(turns, task.status === "awaiting_review");
   const gateOpen = isOpenDuetGate(gate, task.status);
@@ -375,7 +384,7 @@ export function DuetView({
               <TurnBubble
                 key={`${turn.round}-${turn.speaker}-${index}`}
                 turn={turn}
-                inputId={userTurnIds.get(turn)}
+                inputId={userTurnOrdinals.has(turn) ? `duet-user:${userTurnOrdinals.get(turn)}` : undefined}
                 previousRound={turns[index - 1]?.round}
                 session={turn.speaker === "A" ? sessionsByRole.voiceA : turn.speaker === "B" ? sessionsByRole.voiceB : undefined}
                 fallback={turn.speaker === "B" ? config.voiceB : config.voiceA}
