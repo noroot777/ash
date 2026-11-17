@@ -1,7 +1,7 @@
-// 对话框高度的夹具:跟着行数自动撑高、撑到上限就滚,拖动改高度、双击复位、上下限收住、
+// 对话框高度的夹具:跟着行数自动撑高、撑到上限就滚,拖动改下限(拖过照样长高)、双击复位、上下限收住、
 // 刷新后还在。结构与 task-detail/ReplyBox.tsx（?variant=team 时与 team/TeamView.tsx 的
 // TeamReplyBox）保持同构 —— 高度只有 useAutoGrowTextarea 一个写者,拖动条只负责把
-// pinned 递进去。两种变体各记各的高度,所以要分别验一遍。
+// floor 递进去。两种变体各记各的高度,所以要分别验一遍。
 // 跑法:npm -w web run test:reply-resize
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -20,7 +20,7 @@ function Demo() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const replyHeight = useReplyHeight(team ? TEAM_REPLY_PIN : SINGLE_REPLY_PIN);
   const [value, setValue] = useState("");
-  useAutoGrowTextarea(textareaRef, { value, pinned: replyHeight.height });
+  useAutoGrowTextarea(textareaRef, { value, floor: replyHeight.height });
 
   const field = (
     <textarea

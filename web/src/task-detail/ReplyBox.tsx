@@ -88,7 +88,7 @@ export function ReplyBox({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const later = useLaterSend(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
+  // null = 没拖过;拖过的高度只当下限,照样跟着行数长高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
   const { profiles, ready: profilesReady, failed: profilesFailed } = useExecutorProfiles();
   // 执行器名只用于提示文案：没钉 profile 时按「该类型的默认执行器」报，与运行侧
@@ -514,11 +514,11 @@ export function ReplyBox({
           ? <ReplyCallDock call={call} self={calling.self} ability={ability} onVerb={calling.setVerb} onCancel={cancelCall}
             baseError={baseContext.error} onRetryBase={baseContext.retry} />
           : activeOverride?.head}
-        {/* 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。 */}
+        {/* 输入几行就撑几行高,撑到上限为止;拖过之后至少是拖出来的高度(拖动条自己的上限更宽)。 */}
         <ComposerInput
           inputRef={textareaRef}
           value={takeInput?.value ?? value}
-          pinned={replyHeight.height}
+          floor={replyHeight.height}
           quoteTarget={task.id}
           rows={3}
           hidden={!!take && !takeInput}
