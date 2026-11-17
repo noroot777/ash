@@ -104,7 +104,11 @@ function ScopedTaskTree({
   // taskTreeModel 的 keepVisibleInPreview —— 跟 previewTasksByAge 挨着，测试也钉在那儿。
   // 团队的问题写在执行者身上，所以要把 workers 一起递进去。
   const keepRowVisible = useCallback(
-    (task: TaskListItem) => keepVisibleInPreview(task, lookForTask(task).indicator, workersFrom(workerIndex, task.id)),
+    // 名下还有事（在动、在问你）的也留着：圆点只说它自己，名下那一句写在行尾。
+    (task: TaskListItem) => {
+      const look = lookForTask(task);
+      return keepVisibleInPreview(task, look.indicator, workersFrom(workerIndex, task.id)) || look.below !== null;
+    },
     [lookForTask, workerIndex],
   );
   const dispatchView = useMemo(() => createDispatchView(allTasks), [allTasks]);
