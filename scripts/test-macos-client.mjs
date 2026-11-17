@@ -13,7 +13,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import { once } from "node:events";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -373,6 +373,11 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   mkdirSync(join(source, "uploads"), { recursive: true });
   for (const dir of ["deps/cache", "tmp", "logs", "downloads"]) mkdirSync(join(source, dir), { recursive: true });
   writeFileSync(join(source, "runs", "task-1", "transcript.jsonl"), "line\n");
+  symlinkSync("transcript.jsonl", join(source, "runs", "task-1", "latest"));
+  // server 给可续话的 agent 当 stdin 的命名管道：拷不了，也不该拷，但不能让它把整次导入拦下。
+  const fifo = join(source, "runs", "task-1", "deep", "s-T0.agent-rc.stdin.fifo");
+  mkdirSync(join(fifo, ".."), { recursive: true });
+  assert.equal(spawnSync("mkfifo", [fifo]).status, 0, "fixture: mkfifo");
   writeFileSync(join(source, "uploads", "a.png"), "png");
   writeFileSync(join(source, "logs", "server.log"), "the source's own log");
   writeFileSync(join(source, "ash.db.exits.jsonl"), "{}\n");
@@ -459,8 +464,11 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   mkdirSync(abandoned);
   result = await launch(binary, ["import", source], env).done;
   assert.equal(result.status, 0, result.output);
-  assert.match(result.output, /held=schedules:1,tasks:2 relocated=3/, "what the import held is reported");
+  assert.match(result.output, /held=schedules:1,tasks:2 relocated=3 skipped=1/, "what the import held and skipped is reported");
   assert.equal(readFileSync(join(data, "runs", "task-1", "transcript.jsonl"), "utf8"), "line\n");
+  assert.ok(lstatSync(join(data, "runs", "task-1", "latest")).isSymbolicLink(), "a symlink is copied as a link");
+  assert.equal(readlinkSync(join(data, "runs", "task-1", "latest")), "transcript.jsonl");
+  assert.deepEqual(readdirSync(join(data, "runs", "task-1", "deep")), [], "a named pipe is not carried over");
   assert.equal(readFileSync(join(data, "uploads", "a.png"), "utf8"), "png");
   assert.equal(existsSync(join(data, "runs", "other-task")), false, "leftovers of an unfinished publish are not mixed in");
   assert.equal(existsSync(abandoned), false, "staging left by a dead import is collected");
@@ -520,7 +528,7 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   assert.equal(result.status, 1);
   assert.match(result.output, /多人模式/);
   console.log("PASS: import stages a consistent, washed snapshot and publishes it under the launch lock only into an empty data root; "
-    + "failures, a racing fresh start and lock timeouts leave nothing behind; leftovers of an unfinished publish are collected; nested roots, multi-user data refused");
+    + "named pipes are skipped, symlinks stay links; failures, a racing fresh start and lock timeouts leave nothing behind; leftovers of an unfinished publish are collected; nested roots, multi-user data refused");
 } finally {
   for (const child of children) child.kill("SIGKILL");
   for (const pid of fixturePids) { try { process.kill(pid, "SIGKILL"); } catch {} }
