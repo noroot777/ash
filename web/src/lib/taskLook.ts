@@ -174,11 +174,11 @@ export function dispatchedStateOf(task: TaskListItem, workers: TaskListItem[] = 
 }
 
 /**
- * 名下派出去的任务（Task.dispatchedBy，整棵往下）往上带到父任务那句短语的那几档，排前面的压过排后面的。
+ * 名下派出去的任务（Task.dispatchedBy，整棵往下）往上带到父任务行尾的那几档，排前面的压过排后面的。
  *
- * 派它的那条大多早就 done 了：只看它自己，名下还在跑、在问你、摔了，收起来就什么都看不出。它自己
- * 那几档里只有「轮到你」的（等答复 / 裁定、失败、卡在上游）排在「名下在跑」之前，其余（做完没验收、
- * 没看的动态）都让给名下。名下做完没验收的不往上带：那是每一条自己的事，展开就看得见。
+ * 派它的那条大多早就 done 了：收起来就看不出名下还在跑、在问你、摔了。只往行尾带，不动它自己那颗
+ * 圆点 —— 圆点说它自己，行尾说名下（见 belowPhrase）。名下做完没验收的不往上带：那是每一条自己的事，
+ * 展开就看得见。
  */
 const ROLL_UP: readonly TaskStatusIndicator[] = ["attention", "error", "stalled", "active", "working", "queued", "waiting"];
 
@@ -196,6 +196,19 @@ export function dispatchedRollUp(states: readonly (DispatchedState | null)[]): D
   return best;
 }
 
+// 名下在动的（在跑、等哨兵、跑验收检查、排队、等开工）都是机器自己的事，行尾一律「子项运行中」；
+// 只有轮到你的、出事的才说具体是什么。哪一条、到底在等什么，指上去那半句里有。
+const BELOW_BUSY: readonly TaskStatusIndicator[] = ["active", "working", "queued", "waiting"];
+
+function belowPhrase(state: DispatchedState): TaskPhrase {
+  const busy = BELOW_BUSY.includes(state.indicator);
+  return {
+    word: busy ? "子项运行中" : `子项${state.word.replace(/^等你/, "等")}`,
+    tone: busy ? null : phraseTone(state.indicator),
+    tip: `子任务「${state.title}」${state.word}`,
+  };
+}
+
 /** 父任务行尾那句短语。tip 是指着它时多给的那半句。 */
 export type TaskPhrase = { word: string; tone: PhraseTone; tip: string };
 
@@ -210,8 +223,10 @@ export type TaskLook = {
   word: string | null;
   /** 指着那两三个字时多给的半句（问题本身 / 开不了工的原因）。 */
   detail: string | null;
-  /** 父任务行尾那句短语：它自己的，或名下带上来的（见 dispatchedRollUp）。 */
+  /** 它自己此刻怎么样的一句短语。团队调度台那一行不画圆点，靠它说。 */
   phrase: TaskPhrase | null;
+  /** 名下派出去的任务带上来的那一句（子项运行中 / 子项等答复……），见 dispatchedRollUp。 */
+  below: TaskPhrase | null;
 };
 
 function questionOf(task: TaskListItem, workers: TaskListItem[]): string | null {
@@ -234,9 +249,7 @@ export function taskLook(
   /** 名下派出去的任务里最该被看见的那一条，见 dispatchedRollUp。 */
   dispatched: DispatchedState | null = null,
 ): TaskLook {
-  const ownIndicator = deriveTaskStatusIndicator(task, workers, unread);
-  const rolled = dispatched && rollUpRank(dispatched.indicator) < rollUpRank(ownIndicator) ? dispatched : null;
-  const indicator = rolled?.indicator ?? ownIndicator;
+  const indicator = deriveTaskStatusIndicator(task, workers, unread);
   const row = indicator ? TASK_LOOK[indicator] : null;
   const mark = row?.mark ?? null;
   const asked = indicator === "attention" ? questionOf(task, workers) : null;
@@ -245,11 +258,9 @@ export function taskLook(
   const question = asked ?? blocked;
   const oneLine = question?.replace(/\s+/g, " ").trim() ?? "";
   const detail = oneLine ? (oneLine.length > DETAIL_MAX ? `${oneLine.slice(0, DETAIL_MAX)}…` : oneLine) : null;
-  const say = rolled ? `子任务「${rolled.title}」${rolled.word}` : row ? (indicator === "waiting" ? waitingSay(task) : row.say) : "";
-  const own = phraseWord(task, workers, ownIndicator);
-  const phrase: TaskPhrase | null = rolled
-    ? { word: rolled.word, tone: phraseTone(rolled.indicator), tip: say }
-    : own ? { word: own, tone: phraseTone(indicator), tip: detail ?? say } : null;
+  const say = row ? (indicator === "waiting" ? waitingSay(task) : row.say) : "";
+  const own = phraseWord(task, workers, indicator);
+  const phrase: TaskPhrase | null = own ? { word: own, tone: phraseTone(indicator), tip: detail ?? say } : null;
   return {
     indicator,
     mark,
@@ -258,5 +269,6 @@ export function taskLook(
     word: asked ? "等你答复" : ruling ? "等你裁定" : blocked ? "开不了工" : null,
     detail,
     phrase,
+    below: dispatched ? belowPhrase(dispatched) : null,
   };
 }

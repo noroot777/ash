@@ -14,11 +14,12 @@ export type DispatchedTone = "ask" | "bad" | null;
  * 只有需要你处理的几种带颜色：等你答复 / 等你裁定（琥珀）、失败 / 验证没过（红）。
  */
 export function dispatchedWord(task: TaskListItem, look: TaskLook = taskLook(task)): { word: string; tone: DispatchedTone } {
-  if (look.indicator !== taskLook(task).indicator && look.phrase) return { word: look.phrase.word, tone: look.phrase.tone };
   if (task.question) return { word: "等你答复", tone: "ask" };
   if (awaitsRuling(task)) return { word: "等你裁定", tone: "ask" };
   const display = taskDisplayStatus(task.status, task.stage, false);
   if (hasFailed(task)) return { word: display.label, tone: "bad" };
+  // 它自己没轮到你、也没摔：名下还有事就说名下（子项运行中 / 子项等答复……），跟侧栏那一行同一句。
+  if (look.below) return { word: look.below.word, tone: look.below.tone };
   if (taskLook(task).indicator === "unaccepted") return { word: "待验收", tone: null };
   if (task.queueId != null && task.queuePosition != null && (task.status === "queued" || task.status === "backlog")) return { word: `排第 ${task.queuePosition + 1}`, tone: null };
   return { word: display.label, tone: null };

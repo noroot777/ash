@@ -12,10 +12,10 @@ try {
   await row("lead").waitFor();
   for (const id of ["kid-run", "kid-ask", "kid-mid", "grand", "old-grand"]) assert.equal(await row(id).count(), 0);
   assert.equal(await wrap("lead").locator(".workspace-team-caret").count(), 0);
-  assert.equal(await wrap("lead").locator(".workspace-status-dot--wait").count(), 1);
+  assert.equal(await wrap("lead").locator(".workspace-status-dot--wait").count(), 0, "圆点只说它自己（验收过）：名下在问你不改它的圆点");
   assert.equal(await row("lead").locator(".workspace-dispatch-count").textContent(), "3");
   assert.equal(await row("lead").locator(".workspace-dispatch-count.is-warn").count(), 1);
-  assert.match(await row("lead").innerText(), /等你答复/);
+  assert.match(await row("lead").innerText(), /子项等答复/);
   await page.evaluate(() => window.__select("grand"));
   await page.waitForFunction(() => document.querySelector('[data-task-id="lead"]')?.getAttribute("aria-selected") === "true");
   await row("lead").click();

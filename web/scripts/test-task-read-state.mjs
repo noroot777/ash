@@ -147,13 +147,19 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.equal(busy.word, "运行中");
   assert.equal(dispatchedRollUp([parked, busy]), busy, "名下有在跑的压过等哨兵的");
 
-  const below = phrase({}, running);
-  assert.deepEqual([below.word, below.tone, below.tip], ["运行中", null, "子任务「跑着的」运行中"], "自己做完了，名下在跑：写名下的");
-  assert.deepEqual([phrase({}, asking).word, phrase({}, asking).tone], ["等你答复", "ask"]);
-  assert.equal(phrase({ status: "paused", question: "问你" }, running).word, "等你答复", "自己轮到你的压过名下在跑");
-  assert.equal(phrase({ status: "running" }, running).tip, "运行中", "同档写自己的");
-  assert.equal(phrase({ stage: "accepted" }, null), null);
-  assert.equal(taskLook({ ...task("p", at) }, [], false, asking).mark, "wait", "父任务的记号和行尾短语说同一条子任务的状态");
+  // 圆点只说它自己，行尾那一句只说名下：在动的一律「子项运行中」，轮到你的、出事的才说具体。
+  const below = (over, dispatched) => taskLook({ ...task("p", at), ...over }, [], false, dispatched).below;
+  assert.deepEqual(Object.values(below({}, running)), ["子项运行中", null, "子任务「跑着的」运行中"]);
+  assert.deepEqual(Object.values(below({}, parked)), ["子项运行中", null, "子任务「停着等哨兵的」等哨兵"], "等哨兵也是子项运行中，指上去才说具体");
+  assert.equal(below({}, child({ status: "queued" }, "排着的")).word, "子项运行中");
+  assert.equal(below({}, child({ acceptGateRunning: true }, "跑门禁的")).word, "子项运行中");
+  assert.deepEqual([below({}, asking).word, below({}, asking).tone], ["子项等答复", "ask"]);
+  assert.equal(below({}, child({ disputeOpen: true }, "等裁定的")).word, "子项等裁定");
+  assert.deepEqual([below({}, broken).word, below({}, broken).tone], ["子项失败", "bad"]);
+  assert.equal(below({}, null), null);
+  const parent = taskLook({ ...task("p", at), status: "running" }, [], false, asking);
+  assert.deepEqual([parent.mark, parent.phrase.word, parent.below.word], ["run", "运行中", "子项等答复"], "父任务的圆点说它自己，名下的事不改它的圆点");
+  assert.equal(taskLook({ ...task("p", at), stage: "accepted" }, [], false, running).mark, null, "验收过的父任务名下在跑：圆点照旧空着");
 }
 
 const lead = { ...task("lead", "2026-08-20T01:00:00.000Z"), mode: "team", status: "idle" };

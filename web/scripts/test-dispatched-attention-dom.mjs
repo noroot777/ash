@@ -19,7 +19,7 @@ try {
   await row("kid-b").waitFor();
   assert.equal(await pane("lead").locator(".question-card").count(), 0);
   assert.equal(await side.locator(".workspace-dispatch-count.is-warn").textContent(), "3");
-  assert.match(await side.innerText(), /等你答复/);
+  assert.match(await side.innerText(), /子项等答复/);
   assert.equal(await row("kid-b").locator("em").innerText(), "等你答复");
   assert.match(await row("kid-b").locator("small").innerText(), /第二条的问题/);
   await pane("lead").getByRole("textbox", { name: "回复任务" }).fill("先汇总父任务的进度");
@@ -44,8 +44,8 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-task-id="lead"] .workspace-dispatch-count.is-warn'));
   await side.click();
   assert.equal(await row("kid-c").locator("em.is-bad").textContent(), "失败");
-  assert.match(await side.innerText(), /失败/);
-  assert.equal(await page.locator(".workspace-task-row-wrap", { has: side }).locator(".workspace-status-dot--bad").count(), 1);
+  assert.match(await side.innerText(), /子项失败/);
+  assert.equal(await page.locator(".workspace-task-row-wrap", { has: side }).locator(".workspace-status-dot--bad").count(), 0, "名下摔了只写在行尾，圆点照旧说它自己");
   await page.evaluate(() => {
     window.__server.add({ id: "mid", title: "再往下一层", dispatchedBy: "kid-b", status: "done" });
     window.__server.add({ id: "grand", title: "孙一层", dispatchedBy: "mid", status: "paused", question: "孙一层的问题？" });

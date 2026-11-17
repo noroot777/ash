@@ -6,7 +6,7 @@ import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
 import { taskCreationLabel } from "@ash/shared/task-origin";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
-import type { TaskLook } from "../lib/taskLook.ts";
+import type { TaskLook, TaskPhrase } from "../lib/taskLook.ts";
 import { type LookForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { RevealMore, useReveal } from "./TaskReveal.tsx";
@@ -98,11 +98,11 @@ function RowWord({ look }: { look: TaskLook }) {
   );
 }
 
-// 父任务行尾那句短语（运行中、等你答复……，表在 lib/taskLook 的 phraseWord）：它不画圆点，
-// 箭头占着行首那一格。琥珀 = 轮到你，红 = 出事了，其余淡灰。指上去说是谁、在等什么。
-function RowPhrase({ look }: { look: TaskLook }) {
+// 行尾一句短语：团队调度台说它自己（它不画圆点，箭头占着行首那一格），名下收着派出任务的
+// 那一行说名下（子项运行中 / 子项等答复……，它自己怎么样看圆点）。琥珀 = 轮到你，红 = 出事了，
+// 其余淡灰。指上去说是谁、在等什么。
+function RowPhrase({ phrase }: { phrase: TaskPhrase | null }) {
   const tip = useHoverTip();
-  const phrase = look.phrase;
   if (!phrase) return null;
   return (
     <>
@@ -250,7 +250,9 @@ export function TaskRow({
   // 智能体开的、却查不到来源任务的（外部智能体自报、群聊委派）：没地方可去，就只画一颗看的
   // 机器人。查得到来源的那种由下面的 OriginTaskChip 画成能点的那一颗。
   const agentOnly = showOrigin && !hasOrigin && task.creationOrigin?.kind === "agent" ? taskCreationLabel(task.creationOrigin) : null;
-  const hasEnd = (parent || phrase ? !!look.phrase : !!look.word) || isTeam || pinned || !!agentOnly || queueRank != null || tally != null;
+  // 名下收着派出任务的那一行：它自己轮到你（等答复 / 裁定）照普通行写，不然写名下那一句。
+  const endPhrase = parent ? look.phrase : phrase && !look.word ? look.below : null;
+  const hasEnd = !!endPhrase || (!parent && !!look.word) || isTeam || pinned || !!agentOnly || queueRank != null || tally != null;
   return (
     <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && look.bucket === "todo" ? " is-todo" : ""}${hasEnd ? " has-end" : ""}`}>
       <span className="workspace-task-leading">
@@ -268,7 +270,7 @@ export function TaskRow({
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
         {hasEnd && (
           <span className="workspace-task-end">
-            {parent || phrase ? <RowPhrase look={look} /> : <RowWord look={look} />}
+            {endPhrase ? <RowPhrase phrase={endPhrase} /> : !parent && <RowWord look={look} />}
             {isTeam && <RowGlyph icon={UsersThree} label="团队任务" />}
             {agentOnly && <RowGlyph icon={Robot} label={agentOnly} />}
             {pinned && <RowGlyph icon={PushPin} label="已置顶" />}
