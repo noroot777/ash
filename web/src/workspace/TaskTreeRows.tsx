@@ -240,7 +240,7 @@ export function TaskRow({
     : null;
   const hasMeta = task.mode === "duet" || showHandoffMeta || trailing != null;
   const project = topLevel && showProject ? actions?.projectBadges?.get(task.projectId) : undefined;
-  // 行尾常驻的那几样：等什么（两三个字）、团队任务、置顶、排第几。都是灰的，平时就在；智能体开的
+  // 行尾常驻的那几样：等什么（两三个字）、团队任务、排第几、子任务数，置顶压在最后。都是灰的，平时就在；智能体开的
   // 那颗机器人图标是能点的（去来源任务），所以它是行外面的兄弟，不在这一组里。
   const isTeam = task.mode === "team" && topLevel;
   const pinned = topLevel && task.pinnedAt != null;
@@ -268,9 +268,9 @@ export function TaskRow({
             {parent ? <RowPhrase phrase={look.phrase} /> : <RowWord look={look} />}
             {isTeam && <RowGlyph icon={UsersThree} label="团队任务" />}
             {agentOnly && <RowGlyph icon={Robot} label={agentOnly} />}
-            {pinned && <RowGlyph icon={PushPin} label="已置顶" />}
             {queueRank}
             {tally}
+            {pinned && <RowGlyph icon={PushPin} label="已置顶" />}
           </span>
         )}
         {hasMeta && (
