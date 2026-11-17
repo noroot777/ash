@@ -7,8 +7,8 @@
 // 跑法：node scripts/test-runner.mjs <workspace> <script>（如 `web test`）；验收入口
 // scripts/accept-test.mjs 用 runSteps() 把后端、前端、根脚本几步并进同一个池子。
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { availableParallelism, tmpdir } from "node:os";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { availableParallelism, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
@@ -153,12 +153,25 @@ const LEAF_ENV = { ASH_TEST_NO_MODEL_PROBE: "1" };
 // 这个目录没人删，每起一次 Chrome 留一个。
 const TMP_ENV_KEYS = ["TMPDIR", "TMP", "TEMP", "MAC_CHROMIUM_TMPDIR"];
 
+// tsx 把编译结果缓存在 `<系统临时目录>/tsx-<uid>` 下。每条叶子一份新的系统临时目录，它就每条
+// 都从空缓存起步、把整个 server 重编一遍（导入一次 server 冷的 1.8 秒、热的 0.5 秒）；所以在叶子的
+// 临时目录里放一个软链，同一轮的叶子共用整棵根下的一份，跟着根一起删。不跨轮留着：系统临时目录里
+// 那份攒了几万条的旧缓存，每起一个进程都要整个列一遍，反而更慢。键是内容哈希，读到写了一半的
+// 文件 tsx 自己会丢掉重编，几条叶子同时读写不会读错。Windows 上建软链要特权，那边按步给临时目录、
+// 同一步的叶子本来就共用一份。
+const TSX_CACHE = `tsx-${process.geteuid?.() ?? userInfo().username}`;
+
 function leafScratch(root, name) {
   const base = join(root, name);
   const data = join(base, "data");
   const tmp = join(base, "tmp");
   mkdirSync(data, { recursive: true });
   mkdirSync(tmp, { recursive: true });
+  if (process.platform !== "win32") {
+    const shared = join(root, TSX_CACHE);
+    mkdirSync(shared, { recursive: true });
+    symlinkSync(shared, join(tmp, TSX_CACHE), "dir");
+  }
   return {
     env: { ASH_DATA_DIR: data, ...Object.fromEntries(TMP_ENV_KEYS.map((key) => [key, tmp])) },
     remove: () => rmSync(base, { recursive: true, force: true, maxRetries: 3 }),

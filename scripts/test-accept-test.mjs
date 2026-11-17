@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
@@ -58,8 +58,8 @@ function fixture(context, { backend = "node backend.mjs && npm run test:more", w
   }));
   // 每条叶子留一份「我跑过了」的痕迹：在哪个目录、以哪条脚本的名义、看见了哪些要剥掉的变量。
   const step = (name, exitVar, stdout) => `
-    import { appendFileSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
-    import { tmpdir } from "node:os";
+    import { appendFileSync, mkdtempSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+    import { tmpdir, userInfo } from "node:os";
     import { join } from "node:path";
     appendFileSync(join(${JSON.stringify(root)}, "order.txt"), ${JSON.stringify(`${name}
 `)});
@@ -70,6 +70,7 @@ function fixture(context, { backend = "node backend.mjs && npm run test:more", w
       JSON.stringify({ cwd: process.cwd(), event: process.env.npm_lifecycle_event, stage: process.env.FIXTURE_STAGE ?? null,
         data: process.env.ASH_DATA_DIR ?? null, dataReady: isDir(process.env.ASH_DATA_DIR), tmp: tmpdir(), leftover,
         chromeTmp: process.env.MAC_CHROMIUM_TMPDIR ?? null,
+        tsxCache: (() => { try { return readlinkSync(join(tmpdir(), \`tsx-\${process.geteuid?.() ?? userInfo().username}\`)); } catch { return null; } })(),
         environment: Object.keys(process.env).filter((key) => /^ASH_(?:DB|RUNS_DIR)$/i.test(key)) }));
     console.log(${JSON.stringify(stdout)});
     console.error(${JSON.stringify(`${stdout}_STDERR`)});
@@ -427,6 +428,12 @@ test("每条叶子拿到自己的系统临时目录，留在里面的东西跑�
     return ran.tmp;
   });
   assert.equal(new Set(dirs).size, 3, "几条叶子共用了同一个系统临时目录");
+  // 只有 tsx 的编译缓存是同一轮叶子共用的一份（不然每条叶子都把 server 从头编一遍），也跟着收。
+  const caches = new Set(["backend", "more", "web"].map((name) => seen(root, name).tsxCache));
+  assert.equal(caches.size, 1, `几条叶子的 tsx 缓存不是同一份：${[...caches]}`);
+  const [cache] = caches;
+  assert.equal(dirname(cache ?? ""), dirname(dirname(dirs[0])), `tsx 缓存没放在这一轮的临时根下：${cache}`);
+  assert.equal(existsSync(cache), false, "tsx 缓存跑完还留着");
 });
 
 // 串行契约：Windows 的默认走法，其它平台显式切过去核对同一份行为。
