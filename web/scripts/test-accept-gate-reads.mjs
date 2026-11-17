@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { CATCH_UP_DEADLINE_MS } from "../src/lib/catchUp.ts";
 import { confirmLayer, deskSettled, gateRow, mainButton, openConfirm, stateOf, checkRow } from "./accept-gate-stage.mjs";
-import { WAIT_TIMEOUT_MS, waitUntil } from "./wait-until.mjs";
+import { waitUntil } from "./wait-until.mjs";
 
 /** 页面里那层 fetch：记下每一发门禁读取的 signal，`holdGateReads` 为真时扣住不回（只能被 abort）。 */
 const holdReads = (hold) => (page) => page.addInitScript(hold => {
@@ -33,7 +33,8 @@ const gate = { command: "npm run current-check", running: null, latest: null, ba
 
 export async function testAcceptGateReads({ open }) {
   {
-    const { page, store } = await open({ gate, events: true, init: holdReads(false) });
+    // 假时钟：被扣住的那一发要等追平层的 15 秒期限才掐掉，三种触发各真等一遍就是 45 秒。
+    const { page, store } = await open({ gate, events: true, init: holdReads(false), clock: true });
     try {
       await gateRow(page).filter({ hasText: "npm run current-check" }).waitFor();
       const layer = await openConfirm(page);
@@ -46,6 +47,7 @@ export async function testAcceptGateReads({ open }) {
           else window.emitGateEvent(trigger === "task.updated"
             ? { type: trigger, task: { id: "gate-task" } } : { type: trigger, taskId: "gate-task" });
         }, trigger);
+        if (trigger === "reconnect") await page.clock.runFor(51);
         await page.waitForFunction(reads => window.gateReadSignals.length > reads, reads);
         await layer.getByText("读取运行状态").waitFor();
         assert.equal(await confirm.isEnabled(), false, `${trigger}：那份状态在重读，确认等它读到`);
@@ -57,8 +59,10 @@ export async function testAcceptGateReads({ open }) {
           window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" });
         });
         // 被扣住的那一发不会自己回来：事件触发的 run() 只记一笔欠账（不抢占），要等追平层的
-        // 期限把它掐掉、补发的那一趟才落地。所以预算是「期限 + 满载余量」，不是 locator 默认的 30 秒。
-        await page.waitForFunction(index => window.gateReadSignals[index].aborted, held, { timeout: CATCH_UP_DEADLINE_MS + WAIT_TIMEOUT_MS });
+        // 期限把它掐掉、补发的那一趟才落地。
+        assert.equal(await page.evaluate(index => window.gateReadSignals[index].aborted, held), false, "期限之前不掐");
+        await page.clock.runFor(CATCH_UP_DEADLINE_MS + 1);
+        await page.waitForFunction(index => window.gateReadSignals[index].aborted, held);
         await page.waitForFunction(index => window.gateReadSignals.length > index + 1, held);
         assert.equal(await confirmLayer(page).count(), 1, "后台读取不收起确认层");
         await waitUntil(() => confirm.isEnabled(), `${trigger}：读到之后确认放开`);
