@@ -75,10 +75,12 @@ function DiscussionRecordBody({ source }: { source: DiscussionDrawerSource }) {
   );
 }
 
+export const discussionDrawerKey = (taskId: string, discussionId: string) => `discussion:${taskId}:${discussionId}`;
+
 /** 左侧抽屉里那一屉：一场讨论一个 key，再开同一场 = 换停的那一段。跟子智能体、辩论那几屉同一个位置，互斥。 */
 export function discussionDrawerEntry(source: DiscussionDrawerSource): LeftDrawerEntry {
   return {
-    key: `discussion:${source.task.id}:${source.discussionId}`,
+    key: discussionDrawerKey(source.task.id, source.discussionId),
     kind: "讨论",
     title: <DiscussionRecordTitle source={source} />,
     ariaLabel: "讨论的完整记录",

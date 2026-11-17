@@ -78,7 +78,6 @@
 
 /* 缩进的子列表各自把缩进量还回去，右边几列就跟顶层行对齐了。 */
 .workspace-sidebar.is-spread .workspace-worker-list { --spread-row-w: calc(100cqw - 50px); }
-.workspace-sidebar.is-spread .workspace-dispatch-list { --spread-row-w: calc(100cqw - 50px); }
 .workspace-sidebar.is-spread .workspace-other-project-tasks { --spread-row-w: calc(100cqw - 43px); }
 
 /* 来源徽标本来贴着行的右端，铺开后行右端在 76px 时间列那边 —— 把它拉回标题列末尾。 */

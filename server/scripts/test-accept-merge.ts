@@ -99,11 +99,11 @@ try {
     git(ws.path, "commit", "-m", "task ff");
     git(repo, "checkout", "-b", "parking"); // release main without touching task branch
 
-    const before = await taskBranchDiff(repo, taskId, "main");
+    const before = await taskBranchDiff(repo, { id: taskId, mergeTargetBranch: "main" });
     assert.equal(before.available, true);
     assert.deepEqual(before.files.map((file) => file.path), ["ff.txt"]);
     assert.match(before.diff, /fast forward/);
-    const capped = await taskBranchDiff(repo, taskId, "main", 16);
+    const capped = await taskBranchDiff(repo, { id: taskId, mergeTargetBranch: "main" }, 16);
     assert.equal(capped.truncated, true);
     assert.ok(Buffer.byteLength(capped.diff) <= 16);
 
@@ -177,7 +177,7 @@ try {
     git(ws.path, "add", "-A");
     git(ws.path, "commit", "-m", "already merged work");
     git(repo, "worktree", "remove", "--force", ws.path);
-    const branchOnlyDiff = await taskBranchDiff(repo, taskId, "main");
+    const branchOnlyDiff = await taskBranchDiff(repo, { id: taskId, mergeTargetBranch: "main" });
     assert.equal(branchOnlyDiff.available, true, "worktree 目录没了但分支还在时仍应能出 diff");
     assert.deepEqual(branchOnlyDiff.files.map((file) => file.path), ["already.txt"]);
     git(repo, "checkout", "-b", "parking");

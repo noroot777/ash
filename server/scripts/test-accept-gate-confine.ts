@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 源码隔离的收口:**项目自己的包必须解析到快照里那份冻结的源码**。
 //
@@ -662,4 +663,4 @@ try {
     + "borrowed tree, partial installs, relocated packages, dangling trunks, native link semantics, "
     + "scope-link write ownership, ancestor-install provenance, CLI entry closure, consumer "
     + "resolution edges, deleted-package same-name samples and known external file sources passed");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

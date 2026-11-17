@@ -1,9 +1,11 @@
 // 答题卡（task-detail/QuestionCard.tsx + QuestionSlot.tsx）在真浏览器里：停在回复框那一格、全页只有一处
 // 打字一颗发送键、勾选不抄进输入框而答复里有它、多题跳题与「下一题 / 发送答复」、数字键与最后一格、
-// 收起后平常的回复框出现、那一轮没结束点不动、发送失败答案不丢、问题全文只出现一次。
+// 收起后平常的回复框出现、那一轮没结束点不动、发送失败答案不丢、问题全文只出现一次、自由回复区能贴图。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { WAIT_TIMEOUT_MS } from "./wait-until.mjs";
+import { WAIT_TIMEOUT_MS, waitUntil } from "./wait-until.mjs";
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 const web = await startWebServer();
 let browser;
@@ -13,8 +15,17 @@ try {
   const page = await browser.newPage();
   page.setDefaultTimeout(WAIT_TIMEOUT_MS);
   page.on("pageerror", (error) => failures.push(error.message));
-  // 夹具不该连服务端；会话区那几条后台读取（挡回记录之类）给空的。
-  await page.route("**/api/**", (route) => route.fulfill({ json: [] }));
+  // 夹具不该连服务端；会话区那几条后台读取（挡回记录之类）给空的。上传扣住不放，等用例放行：
+  // 「还在传」那一段要看得见。
+  const held = new Map();
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    if (new URL(request.url()).pathname !== "/api/uploads" || request.method() !== "POST") return route.fulfill({ json: [] });
+    const { name } = JSON.parse(request.postData() ?? "{}");
+    await new Promise((resolve) => held.set(name, resolve));
+    await route.fulfill({ json: { id: `up-${name}`, path: `/ash/data/uploads/up12345678ab-${name}`, url: `data:image/png;base64,${PNG}`, name, kind: "image" } })
+      .catch(() => {});
+  });
   await page.goto(`${web.origin}/scripts/fixtures/question-card.html`);
   await page.evaluate(() => localStorage.clear());
   await page.reload();
@@ -120,6 +131,28 @@ try {
   await note.fill("ask-card");
   assert.equal(await send.isDisabled(), false);
 
+  // 自由回复区能贴图：粘贴进来先挂成「上传中」、这时发不出去；传完图跟着答复一起发出，答过的气泡里看得见。
+  await note.evaluate((textarea, png) => {
+    const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
+    const data = new DataTransfer();
+    data.items.add(new File([bytes], "shot.png", { type: "image/png" }));
+    textarea.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  }, PNG);
+  await card.locator(".task-upload-chip.is-uploading").waitFor();
+  assert.equal(await note.inputValue(), "ask-card", "贴图不动输入框里的字");
+  assert.equal(await send.isDisabled(), true, "图还在传时发不出去");
+  await waitUntil(() => held.has("shot.png"), "贴的图发出上传请求");
+  held.get("shot.png")();
+  await card.locator(".task-upload-chip:not(.is-uploading)").waitFor();
+  assert.equal(await send.isDisabled(), false);
+  assert.equal(await card.getByRole("button", { name: "上传附件" }).count(), 1, "最后一行也有回形针");
+  await send.click();
+  await card.waitFor({ state: "detached" });
+  assert.match(await page.getByLabel("发给智能体的回复", { exact: true }).innerText(), /ask-card\n\n\[用户附带的文件[^\]]*\]\n- \/ash\/data\/uploads\/up12345678ab-shot\.png$/, "图跟着答复一起发出");
+  const answered = page.locator(".task-question-record").last();
+  assert.equal(await answered.locator(".task-message-image img").count(), 1, "答过的气泡里画出贴的图");
+  assert.doesNotMatch(await answered.innerText(), /用户附带的文件/, "附件块不当成答案文字");
+
   // 收起再展开以后，多行补充照样跟着行数长高（输入框换了新节点，撑高的记账跟着重来）。
   await page.getByRole("button", { name: "重置" }).click();
   await card.waitFor();
@@ -196,6 +229,21 @@ try {
   await card.waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "窄屏不横向溢出");
 
+  // 窄屏一次选一大批图：附件区在自己里面滚，最后一行和发送键始终留在卡里、看得见。
+  const names = Array.from({ length: 24 }, (_, i) => `many-${i}.png`);
+  await card.locator("input[type=file]").setInputFiles(names.map((name) => ({ name, mimeType: "image/png", buffer: Buffer.from(PNG, "base64") })));
+  for (const name of names) {
+    await waitUntil(() => held.has(name), `${name} 发出上传请求`);
+    held.get(name)();
+  }
+  await waitUntil(async () => await card.locator(".task-upload-chip:not(.is-uploading)").count() === names.length, "整批图都传完");
+  const uploadList = card.locator(".task-upload-list");
+  assert.equal(await uploadList.evaluate((el) => el.scrollHeight > el.clientHeight), true, "图多了附件区在自己里面滚");
+  const [cardBox, sendBox] = [await card.boundingBox(), await send.boundingBox()];
+  assert.ok(sendBox.y >= cardBox.y && sendBox.y + sendBox.height <= cardBox.y + cardBox.height, "发送键没被挤出卡外");
+  assert.ok(sendBox.y + sendBox.height <= 720, "发送键在视口里");
+  assert.equal(await note.isVisible(), true, "输入行还在");
+
   // 团队页同一副形状：TeamReplyBox 的发送设置开着时题到了，一样跟着框退下。
   await page.goto(`${web.origin}/scripts/fixtures/question-card.html?host=team`);
   await page.evaluate(() => localStorage.clear());
@@ -207,7 +255,7 @@ try {
     open: () => page.locator(".team-reply-box .send-key-opt").click(), layer: ".send-key-panel" });
 
   assert.deepEqual(failures, []);
-  console.log("question card DOM: docked in the reply slot, one input + one send key (composer portals unmounted in task and team hosts), picks not copied but sent, jump/next/send switch, digit keys + last cell, collapse shows the reply box, settling locked, failure keeps answers, question shown once, narrow screen passed");
+  console.log("question card DOM: docked in the reply slot, one input + one send key (composer portals unmounted in task and team hosts), picks not copied but sent, jump/next/send switch, digit keys + last cell, collapse shows the reply box, settling locked, failure keeps answers, question shown once, pasted images ride along with the answer, narrow screen (incl. many images keep the send row) passed");
 } finally {
   await browser?.close();
   await web.close();

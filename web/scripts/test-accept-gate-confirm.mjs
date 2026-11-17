@@ -5,17 +5,17 @@
 //    这次跳过（gate:"skip"）；有一次还作数的绿时默认不勾（沿用那次，不带 gate）、勾上 = 重跑
 //    （gate:"rerun"）。「提交」那一勾默认跟项目设置，发给 /accept 的 commit 就是层里看见的值，
 //    取消时确认键改口「验收，不提交」。
-// ⑭b 「运行」那一勾**不记上一次**（用户 2026-11-16：跳过只管当次）：取消过一次并确认之后，下一次打开默认
-//    仍是跑；老库里记着跳过的（门禁状态里带着 skipRemembered）也不认。前提列那一行只在层里取消了、到那一按
-//    落定之间说「验收时跳过」；同一按被拦回来补「知情」时，重新打开的层还是刚才取消的样子。
-//    「提交」那一勾照旧记成项目设置本身（点确认才记，PUT /accept-memory），关掉层（取消、Esc、再点主按钮）
-//    不记；没有管理权限时层里说只管这一次；记不住不拦验收、提示里说出来；「知情」那一勾不记。
+// ⑭b 两勾的默认是**上一次真的确认验收时的样子**（用户 2026-11-15）：点确认才记（PUT /accept-memory），
+//    关掉层（取消、Esc、再点主按钮）不记、回到记住的那个样子；记住跳过时前提列那一行先说「验收时跳过」，
+//    不打开层也看得出；「提交」记成项目设置本身，没有管理权限时层里说只管这一次；有一次作数的绿时
+//    沿用与重跑都不改记住的「跳没跳过」；记不住不拦验收、提示里说出来；「知情」那一勾不记。
 // ⑭c 第 1 轮审查：层开着时项目默认被别处改了（project.updated / 断线重连），没手动动过的「提交」跟着变、
-//    动过的照旧；「记住」挂住不返回时最多等几秒就照常验收；勾上派生任务一起验收时确认层里没有「运行」那一步。
+//    动过的照旧；「记住」挂住不返回时最多等几秒就照常验收；勾上派生任务一起验收时前提列不预告跳过
+//    （统一验收不走「运行」那一勾）。
 // ⑭d 第 2 轮审查：项目默认重读失败、挂住时，手动改过「提交」也不许确认；勾照画、写明在读，读有上限，
 //    到点给「重试」。
-// ⑭e 门禁状态重读中，确认层勾照画、写明「读取运行状态」、确认锁着；读到之后照新的那份走。
-// ⑭f 每一次会合并的确认都登记「提交」，跟默认一样也登记（上一次保存超时、服务端稍后才做完时，靠它排上号）。
+// ⑭e 门禁状态（带着记住的「跳没跳过」）重读中，确认层勾照画、写明「读取运行状态」、确认锁着。
+// ⑭f 每一次有资格记的确认都登记，跟默认一样也登记（上一次保存超时、服务端稍后才做完时，靠它排上号）。
 // ⑮ 红行拦主按钮：前置命令在跑（gate.occupied）时主按钮 disabled、那一行写「运行中」；
 //    门禁状态读不出来（GET 503）时主按钮 disabled、那一行写「状态读不出来」带「重试」，点重试
 //    读到之后才放开 —— **读失败不放行**（「没读到」不等于「没在跑」）。
@@ -28,8 +28,7 @@ import { waitUntil } from "./wait-until.mjs";
 const accepted = (store, count) => waitUntil(() => store.accepts.length === count, `第 ${count} 次验收请求发出去`);
 
 export async function testAcceptGateConfirm({ open, run }) {
-  // ⑭ 没有可沿用的绿（没跑过 / 过期了 / 上次红了）：运行默认勾着，取消 = gate:"skip"，只管这一按 ——
-  //    下一次打开默认仍是跑；「提交」那一勾照旧记。
+  // ⑭ 没有可沿用的绿（没跑过 / 过期了 / 上次红了）：运行默认勾着，取消 = gate:"skip"，确认之后记成「跳过」。
   for (const [label, latest, pending, skipping] of [["一次都没跑过", null, "验收时运行", "验收时跳过"],
     ["绿了但过期了", run({ stale: true }), "通过，但代码变了", "通过，但代码变了，验收时跳过"],
     ["上次红了", run({ status: "failed", exitCode: 1, failure: "exit_code" }), "未通过，还没交给任务", "未通过，还没交给任务，验收时跳过"]]) {
@@ -59,13 +58,10 @@ export async function testAcceptGateConfirm({ open, run }) {
     await runBox().uncheck();
     assert.equal(await layer.locator("li.is-off").count(), 1, `${label}：不跑的那一步划掉`);
     assert.equal(await layer.getByText("上次未通过").count(), latest?.status === "failed" ? 1 : 0);
-    // 在层里取消了：前提列那一行照这一次说。
-    await gateRow(page).filter({ hasText: skipping }).waitFor();
-    await assertTone(gateRow(page), latest?.status === "failed" ? "failed" : "skipped", `${label}：这一按会跳过时那一行的调子`);
     await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
     await accepted(store, 1);
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" }, `${label}：这一按要带 gate=skip`);
-    assert.deepEqual(store.memory, [{ commit: true }], `${label}：确认时登记的只有「提交」，跳过不记`);
+    assert.deepEqual(store.memory, [{ skipGate: true, commit: true }], `${label}：确认时记下层里看见的样子`);
     // 发出去就关层；回执（这里是一句「验收没完成」）留在前提列里，细节点开看。
     await confirmLayer(page).waitFor({ state: "detached" });
     const failure = checkRow(page, "failure");
@@ -73,79 +69,55 @@ export async function testAcceptGateConfirm({ open, run }) {
     await failure.locator(".acc-check-main").click();
     await failure.getByText("模拟验收响应").waitFor();
 
-    // 取消过一次并确认了：那一按落定，前提列那一行回到「会跑」；再打开层，「运行」默认仍是勾着的。
-    await deskSettled(page);
-    await waitUntil(async () => (await stateOf(gateRow(page))) === pending, `${label}：跳过只管那一按，那一行不再说跳过`);
+    // 记住了跳过：不打开层，前提列那一行先说出来；打开层就是跳过的样子，确认键照样说破。
+    await gateRow(page).filter({ hasText: skipping }).waitFor();
+    await assertTone(gateRow(page), latest?.status === "failed" ? "failed" : "skipped", `${label}：记住跳过时那一行的调子`);
     layer = await openConfirm(page);
-    assert.equal(await runBox().isChecked(), true, `${label}：取消过一次之后，下一次打开默认仍是跑`);
-    assert.equal(await layer.locator("li.is-off").count(), 0, `${label}：没有哪一步划掉`);
-    await layer.getByRole("button", { name: "确认验收", exact: true }).waitFor();
+    assert.equal(await runBox().isChecked(), false, `${label}：上次跳过，这次默认不勾`);
+    assert.equal(await layer.locator("li.is-off").count(), 1, `${label}：那一步照样划掉`);
+    await layer.getByRole("button", { name: "跳过并验收", exact: true }).waitFor();
+    // 关掉再开：还是跳过的样子（记住的值不被只开关改动）。
+    await runBox().check();
+    await layer.getByRole("button", { name: "取消", exact: true }).click();
+    layer = await openConfirm(page);
+    assert.equal(await runBox().isChecked(), false, `${label}：没确认的那一勾不算`);
 
-    // 照跑、取消提交并确认：「提交」记成新的，下一次打开默认不提交；「运行」还是照跑。
+    // 重新勾上、取消提交并确认：两样都记成新的，下一次打开恢复运行、默认不提交。
+    await runBox().check();
     await commitBox().uncheck();
     await layer.getByRole("button", { name: "验收，不提交", exact: true }).waitFor();
     assert.match(await layer.innerText(), /改动留在 main 工作区/);
     await layer.getByRole("button", { name: "验收，不提交", exact: true }).click();
     await accepted(store, 2);
     assert.deepEqual(store.accepts[1], { confirmUnverified: false, commit: false }, `${label}：照跑、不提交`);
-    assert.deepEqual(store.memory[1], { commit: false });
+    assert.deepEqual(store.memory[1], { skipGate: false, commit: false });
     assert.equal(store.acceptCommit, false, `${label}：「提交」写回项目设置，设置页看到的是同一个值`);
-    await deskSettled(page);
+    await gateRow(page).filter({ hasText: pending }).waitFor();
+    assert.equal(await stateOf(gateRow(page)), pending, `${label}：恢复运行，那一行跟着改回来`);
     layer = await openConfirm(page);
-    assert.equal(await runBox().isChecked(), true, `${label}：照旧默认运行`);
+    assert.equal(await runBox().isChecked(), true, `${label}：恢复为默认运行`);
     assert.equal(await commitBox().isChecked(), false, `${label}：上次不提交，这次默认不勾`);
     await layer.getByRole("button", { name: "验收，不提交", exact: true }).waitFor();
     await page.close();
   }
 
-  // ⑭b 老库里记着跳过（升级前取消过一次；老服务端把它带在门禁状态里）：不认，前提列与确认层都照常跑。
+  // ⑭b 一打开就记着跳过（换浏览器、重启之后从服务端读回来的那份）：前提列与确认层一致，确认键要按才走。
   {
     const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null, skipRemembered: true } });
-    assert.equal(await stateOf(gateRow(page)), "验收时运行", "旧库里记着跳过的：那一行照常说会跑");
+    assert.equal(await stateOf(gateRow(page)), "验收时跳过", "不打开确认层也看得出这一按不会跑");
+    await deskSettled(page);
+    assert.equal(store.accepts.length, 0, "记住了也不会自动验收");
     const layer = await openConfirm(page);
-    assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), true, "旧库里记着跳过的：默认是跑");
-    await layer.getByRole("button", { name: "确认验收", exact: true }).click();
-    await accepted(store, 1);
-    assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true }, "照常跑：不带 gate");
-    await page.close();
-  }
-
-  // ⑭b 同一按被拦回来补「知情」：层为这一按重新打开，两勾还是刚才的样子（跳过只管当次，这一次还没完）；
-  //     这一按走完之后再打开，才回到默认。
-  {
-    let replies = 0;
-    const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null },
-      role: "member", acceptReply: () => (++replies === 1
-        ? { status: 409, body: { accepted: false, taskId: "gate-task", reason: "verify_not_run", error: "独立验证尚未执行",
-          confirmationRequired: "confirmUnverified" } }
-        : null) });
-    let layer = await openConfirm(page);
-    const runBox = () => confirmLayer(page).getByRole("checkbox", { name: "运行前置命令" });
-    const commitBox = () => confirmLayer(page).getByRole("checkbox", { name: "合并后提交" });
-    await runBox().uncheck();
-    await commitBox().uncheck();
+    assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), false);
     await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
     await accepted(store, 1);
-    assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: false, gate: "skip" });
-    await waitUntil(async () => (await mainButton(page).getAttribute("aria-busy")) === null && await confirmLayer(page).count() === 1,
-      "被拦回来之后层重新打开");
-    assert.equal(await runBox().isChecked(), false, "同一按：刚才取消的「运行」还是取消着");
-    assert.equal(await commitBox().isChecked(), false, "同一按：刚才取消的「提交」也是（成员写不回项目设置，只能靠这一按自己带着）");
-    assert.equal(await stateOf(gateRow(page)), "验收时跳过", "那一行跟着这一按说");
-    await confirmLayer(page).getByRole("button", { name: "跳过并验收", exact: true }).click();
-    await accepted(store, 2);
-    assert.deepEqual(store.accepts[1], { confirmUnverified: false, commit: false, gate: "skip" });
-    await deskSettled(page);
-    await waitUntil(async () => (await stateOf(gateRow(page))) === "验收时运行", "这一按走完，那一行回到会跑");
-    layer = await openConfirm(page);
-    assert.equal(await runBox().isChecked(), true, "这一按走完之后：默认仍是跑");
-    assert.equal(await commitBox().isChecked(), true, "成员的「提交」只管了那一次");
+    assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" });
     await page.close();
   }
 
-  // ⑭b 有一次还作数的绿：默认沿用；勾上是一次性重跑，下一次还是沿用。
+  // ⑭b 有一次还作数的绿：记着跳过也照样默认沿用；沿用、重跑都不改记住的「跳没跳过」。
   {
-    const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run(), basis: null } });
+    const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run(), basis: null, skipRemembered: true } });
     assert.match(await stateOf(gateRow(page)), /^通过 · /, "这一按沿用那次绿，不提跳过");
     let layer = await openConfirm(page);
     assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), false);
@@ -154,10 +126,10 @@ export async function testAcceptGateConfirm({ open, run }) {
     await layer.getByRole("button", { name: "确认验收", exact: true }).click();
     await accepted(store, 1);
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "rerun" });
-    assert.deepEqual(store.memory, [{ commit: true }], "登记的只有「提交」");
-    await deskSettled(page);
+    assert.deepEqual(store.memory, [{ commit: true }], "重跑是一次性的：不送「跳没跳过」");
+    assert.equal(store.gate.skipRemembered, true);
     layer = await openConfirm(page);
-    assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), false, "重跑是一次性的：下一次还是沿用");
+    assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), false, "重跑不记：下一次还是沿用");
     await page.close();
   }
 
@@ -187,7 +159,7 @@ export async function testAcceptGateConfirm({ open, run }) {
     await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
     await accepted(store, 1);
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" });
-    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "「提交」那一勾没记住" }).waitFor();
+    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "这次的选择没记住" }).waitFor();
     await page.close();
   }
 
@@ -258,33 +230,32 @@ export async function testAcceptGateConfirm({ open, run }) {
     await page.close();
   }
 
-  // ⑭e 别处刚把前置命令跑绿，这一页的门禁状态重读还没回来：勾照画、写明在读、确认锁着（用户 2026-11-15
-  //     选的：确认层开着时宁可灰一下），不许照旧的那份确认；读到之后跟着变（沿用那次绿），确认照新的发。
+  // ⑭e 另一页刚确认成「要运行」，这一页的门禁状态重读还没回来：勾照画、写明在读、确认锁着（用户 2026-11-15
+  //     选的：确认层开着时宁可灰一下），不许拿旧的「跳过」去确认；读到之后跟着变，确认照新的跑、照新的记。
   {
-    const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null },
+    const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null, skipRemembered: true },
       events: true, acceptReply: () => ({ status: 200, body: { accepted: true, taskId: "gate-task" } }) });
     const layer = await openConfirm(page);
     const runBox = layer.getByRole("checkbox", { name: "运行前置命令" });
-    const confirm = layer.getByRole("button", { name: "确认验收", exact: true });
-    await confirm.and(page.locator("button:enabled")).waitFor();
-    assert.equal(await runBox.isChecked(), true);
+    await layer.getByRole("button", { name: "跳过并验收", exact: true }).and(page.locator("button:enabled")).waitFor();
     let release;
     store.hold = new Promise((resolve) => { release = resolve; });
-    store.gate = { ...store.gate, latest: run() };
+    store.gate = { ...store.gate, skipRemembered: false };
     const before = store.reads;
     await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
     await waitUntil(() => store.reads > before, "重读发出去了（被扣住）");
     await layer.getByText("读取运行状态").waitFor();
     assert.equal(await runBox.count(), 1, "重读中勾照画");
-    assert.equal(await layer.locator("footer .is-primary").isEnabled(), false, "重读中不许照旧的那份确认");
+    assert.equal(await layer.locator("footer .is-primary").isEnabled(), false, "重读中不许拿旧的「跳过」确认");
     store.hold = null;
     release();
+    const confirm = layer.getByRole("button", { name: "确认验收", exact: true });
     await confirm.and(page.locator("button:enabled")).waitFor();
-    assert.equal(await runBox.isChecked(), false, "读到之后跟着新的那份：有一次作数的绿，默认沿用");
+    assert.equal(await runBox.isChecked(), true, "读到之后跟着另一页刚确认的「要运行」");
     await confirm.click();
     await accepted(store, 1);
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true });
-    assert.deepEqual(store.memory, [{ commit: true }]);
+    assert.deepEqual(store.memory, [{ skipGate: false, commit: true }]);
     await page.close();
   }
 
@@ -317,7 +288,7 @@ export async function testAcceptGateConfirm({ open, run }) {
     await layer.getByRole("checkbox", { name: "合并后提交" }).uncheck();
     await layer.getByRole("button", { name: "验收，不提交", exact: true }).click();
     await waitUntil(() => store.accepts.length === 1, { message: "保存挂住也照常验收", timeout: 15_000 });
-    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "「提交」那一勾不一定记住了：保存超时" }).waitFor();
+    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "不一定记住了：保存超时" }).waitFor();
     store.memoryHold = null;
     await deskSettled(page);
     layer = await openConfirm(page);
@@ -337,22 +308,25 @@ export async function testAcceptGateConfirm({ open, run }) {
     await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
     await waitUntil(() => store.accepts.length === 1, { message: "挂住的保存不能把验收一直拦在后面", timeout: 15_000 });
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" });
-    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "「提交」那一勾不一定记住了：保存超时" }).waitFor();
+    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "这次的选择不一定记住了：保存超时" }).waitFor();
     await deskSettled(page);
     assert.equal(await mainButton(page).isEnabled(), true, "验收走完之后主按钮放开");
     await page.close();
   }
 
-  // ⑭c 勾上派生任务一起验收：统一验收不走「运行」那一勾，确认层里没有这一步，前提列也不说跳过。
+  // ⑭c 记着跳过，但勾上派生任务一起验收：统一验收不走「运行」那一勾，前提列就不预告跳过。
   {
-    const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null }, children: ["派生甲"] });
-    assert.equal(await stateOf(gateRow(page)), "验收时运行");
+    const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null, skipRemembered: true },
+      children: ["派生甲"] });
+    assert.equal(await stateOf(gateRow(page)), "验收时跳过");
     await checkRow(page, "child").getByRole("checkbox").check();
     await mainButton(page).filter({ hasText: "验收 2 个任务" }).waitFor();
+    await gateRow(page).filter({ hasText: "验收时运行" }).waitFor();
     const layer = await openConfirm(page);
     assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).count(), 0, "确认层里本来就没有这一步");
-    assert.equal(await stateOf(gateRow(page)), "验收时运行");
     await layer.getByRole("button", { name: "取消", exact: true }).click();
+    await checkRow(page, "child").getByRole("checkbox").uncheck();
+    await gateRow(page).filter({ hasText: "验收时跳过" }).waitFor();
     await page.close();
   }
 
@@ -475,5 +449,5 @@ export async function testAcceptGateConfirm({ open, run }) {
     assert.equal(await mainButton(page).isEnabled(), true);
     await page.close();
   }
-  console.log("accept gate confirm: run/commit checks ↔ /accept params, run never remembered / commit remembered, blocking rows ↔ main button, baseline conflict hand-off covered");
+  console.log("accept gate confirm: run/commit checks ↔ /accept params, remembered defaults ↔ gate row, blocking rows ↔ main button, baseline conflict hand-off covered");
 }

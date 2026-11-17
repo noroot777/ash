@@ -1,6 +1,6 @@
 import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { mkdirSync, statSync, existsSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
-import type { ProjectHealth, Task } from "@ash/shared";
+import type { ProjectHealth } from "@ash/shared";
 import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, expandHome, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
@@ -336,30 +336,6 @@ async function discardWorktreeLeftover(repo: string, path: string): Promise<void
 // 「这个任务留下的 worktree/分支还在不在」搬到了 ./workspace-cleanup.ts
 // (detectTaskWorkspace):删除任务时要连分支一起问,光看目录在不在已经不够。
 
-export async function taskCommits(
-  worktreePath: string | null | undefined,
-  task: Pick<Task, "worktreeStartCommit" | "worktreeBase">,
-): Promise<{ branch: string | null; commits: { sha: string; subject: string; at: string }[] }> {
-  const wt = expandHome(worktreePath);
-  if (!wt || !isDir(wt)) return { branch: null, commits: [] };
-  try {
-    const branch = (await currentBranch(wt)) ?? null;
-    const baseRef = task.worktreeStartCommit?.trim() || task.worktreeBase?.trim();
-    if (!baseRef || baseRef === branch) return { branch, commits: [] };
-    const { stdout } = await exec("git", ["-C", wt, "log", "--format=%H%x1f%s%x1f%cI", "-n", "50", `${baseRef}..HEAD`]);
-    const commits = stdout
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => {
-        const [sha, subject, at] = l.split("\x1f");
-        return { sha, subject, at };
-      });
-    return { branch, commits };
-  } catch {
-    return { branch: null, commits: [] };
-  }
-}
-
 // Materialize (or reuse) the worktree for this task. Idempotent, and graded by
 // how much of the previous work survives:
 //   • dir exists         → return as-is (re-run, retry, continue)
@@ -653,7 +629,7 @@ async function commitExists(repo: string, ref: string): Promise<boolean> {
 }
 
 // Current branch of a working dir ("HEAD" when detached); null if git can't tell.
-async function currentBranch(p: string): Promise<string | null> {
+export async function currentBranch(p: string): Promise<string | null> {
   try {
     const { stdout } = await exec("git", ["-C", p, "rev-parse", "--abbrev-ref", "HEAD"]);
     return stdout.trim() || null;

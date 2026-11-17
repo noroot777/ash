@@ -81,7 +81,9 @@ export async function checkBaseUpdateRecovery(page, fixtureUrl, checkpoint = asy
     ensure(!await main.isEnabled(), "pending update must block acceptance");
     ensure(!await d.target.isEnabled(), "pending update must lock the merge target");
     if (complete) {
-      await files.filter({ hasText: "unrelated-main.txt" }).waitFor({ state: "visible" });
+      // 基线更新停在半途、开工点还没跟上：diff 按「分支里已合进来的目标分支」扣，这时也只有任务自己的文件，
+      // 目标分支上别人的 unrelated-main.txt 不在里面（服务端 task-change-scope.ts）。
+      await files.filter({ hasText: task === "case17-child" ? /^child\.txt,newer\.txt$/ : /^child\.txt$/ }).waitFor({ state: "visible" });
       await button(row("parent"), "更新基线").click();
       await dialog.getByRole("heading", { name: "更新子分支基线？", exact: true }).waitFor({ state: "visible" });
       await button(dialog, "更新基线").click();

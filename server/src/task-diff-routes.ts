@@ -18,8 +18,12 @@ import { assertPathShape, ScmOperationError } from "./scm-paths.js";
 // 里」，一个提交过、工作区已经干净的文件在那儿一律被拒）。
 //
 // 两档数据源由任务自己的状态决定，且**清单与单文件必须同源**：验收之后原分支和 worktree
-// 都清掉了，只能按冻结下来的 commit 区间读；没验收就按 `merge-base(target, 任务分支)`
-// 到分支头读。清单那一档给了 A、点进去按 B 比，用户看到的是一份对不上的 diff。
+// 都清掉了，只能按冻结下来的 commit 区间读；没验收就按 task-change-scope.ts 定的那份口径
+// （开工点 + 分支里已合进来的那部分目标分支 → 分支头）读。清单那一档给了 A、点进去按 B 比，
+// 用户看到的是一份对不上的 diff。
+//
+// 验收后那一档不用另外扣什么：区间是「目标分支合入前 → 合入后」，目标分支本来就有的两头都有；
+// 前置没进目标分支时验收会被依赖闸拦住，所以这一段里也不会有前置的改动。
 
 export function mountTaskDiffRoutes(api: Hono): void {
   /** 任务 + 它的项目 + 「按哪一档区间读」。两张表任一缺失都给 404。 */
@@ -50,7 +54,7 @@ export function mountTaskDiffRoutes(api: Hono): void {
         context.accepted.mergeCommit,
       ));
     }
-    return c.json(await taskBranchDiff(context.project.repoPath, context.task.id, context.task.mergeTargetBranch || context.task.worktreeBase, undefined, context.task.worktreeStartCommit));
+    return c.json(await taskBranchDiff(context.project.repoPath, context.task));
   });
 
   api.get("/tasks/:id/diff/file", async (c) => {
@@ -72,7 +76,7 @@ export function mountTaskDiffRoutes(api: Hono): void {
           path,
           origPath,
         )
-        : await taskBranchFileDiff(context.project.repoPath, taskId, context.task.mergeTargetBranch || context.task.worktreeBase, path, origPath, undefined, context.task.worktreeStartCommit);
+        : await taskBranchFileDiff(context.project.repoPath, context.task, path, origPath);
       return c.json(diff);
     } catch (error) {
       const status = error instanceof ScmOperationError ? error.status : 500;

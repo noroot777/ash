@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 运行产物目录(ASH_RUNS_DIR)落在**依赖目录内部**时,依赖那边的复制遍历必须跟源码那边用同一份排除
 // 计划,而且无论如何都不能走进正在建的快照自己。2026-10-26 独立审查实测:不过滤时克隆 node_modules
@@ -90,4 +91,4 @@ try {
   assert.equal(readdirSync(runs).includes(".keep"), true, "工作区那份运行产物目录本身不被动");
 
   console.log("accept-gate-runs-inside: runtime directory inside the dependency tree is excluded from both copies");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

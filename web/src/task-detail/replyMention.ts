@@ -1,5 +1,4 @@
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
-import { registeredAgentTypes } from "../lib/agentAvailability.ts";
+import type { AgentType } from "@ash/shared";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import { useMention } from "../components/useMention.ts";
 
@@ -18,7 +17,7 @@ export function useReplyMention({
   draft,
   taskId,
   projectId,
-  profiles,
+  callable,
   profilesReady,
   profilesFailed,
   disabled,
@@ -30,7 +29,8 @@ export function useReplyMention({
   draft: Pick<DraftHandle, "update">;
   taskId: string;
   projectId: string;
-  profiles: AgentExecutorProfile[];
+  /** 这会儿能叫的智能体（已注册的；讨论时不含这条任务自己的执行器）。 */
+  callable: AgentType[];
   profilesReady: boolean;
   profilesFailed: boolean;
   /** 这会儿根本不该弹（非单飞 / 已归档 / 正在配派生命令 / 框被裁定借着）。 */
@@ -49,7 +49,7 @@ export function useReplyMention({
     label: "召唤智能体，或引用随手记、文件",
     agents: {
       match: (token) => (/^[a-z0-9_-]*$/i.test(token)
-        ? registeredAgentTypes(profiles).filter((type) => type.startsWith(token.toLowerCase()))
+        ? callable.filter((type) => type.startsWith(token.toLowerCase()))
         : []),
       onPick: (agent) => onPickAgent(agent as AgentType),
     },

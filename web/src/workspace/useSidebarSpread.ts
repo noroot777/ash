@@ -9,6 +9,8 @@ import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type Worker
 import { taskLook } from "../lib/taskLook.ts";
 import { scopeHasFilters, scopeTasks, visibleInScope, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
+import { createDispatchView } from "../lib/dispatchFamily.ts";
+import { buildDispatchForest } from "./dispatchForest.ts";
 
 // 桶的判据搬到了 lib/taskAttention.ts（任务树排序和状态点也要读它，留在这里会成环）。
 // 这里继续对外露出同一个名字，免得每个调用点都改 import。
@@ -54,11 +56,15 @@ export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCou
   const counts: SpreadCounts = { all: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
   // 执行者表按**全量**建：作用域筛过的列表里，团队的执行者虽然也在（scopeTasks 会带上），
   // 但别指望这一点 —— 桶的判据要的是这个团队真实的执行者集合。
-  const workers = indexWorkers(tasks);
-  for (const task of scopeTasks(tasks, scope)) {
+  const scoped = scopeTasks(tasks, scope).filter((task) => !task.archived && !task.parentId && visibleInScope(task, scope));
+  const forest = buildDispatchForest(scoped, tasks);
+  const dispatchView = createDispatchView(tasks);
+  for (const task of scoped.filter((item) => !forest.nested.has(item.id))) {
     if (task.archived || task.parentId || !visibleInScope(task, scope)) continue;
     counts.all += 1;
-    counts[taskLook(task, workersFrom(workers, task.id)).bucket] += 1;
+    for (const { key } of SPREAD_FILTERS) {
+      if (key !== "all" && dispatchView.matchesFilter(task, key)) counts[key] += 1;
+    }
   }
   return counts;
 }
@@ -67,11 +73,13 @@ export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCou
 // 当退路顺序(展开着的时候那份顺序只认屏幕,见 sidebarNavigation)。筛选判据必须走
 // matchesSpreadFilter,别在调用点自己拼 `spreadBucket(task) === filter`。
 export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filter: SpreadFilter): TaskListItem[] {
-  const workers = indexWorkers(tasks);
-  return orderedTopLevelTasks(
+  const dispatchView = createDispatchView(tasks);
+  const rows = orderedTopLevelTasks(
     scopeTasks(tasks.filter((task) => !task.archived), scope),
     { unifiedPinned: true, includeElsewhere: scope.kind === "tasks" },
-  ).filter((task) => matchesSpreadFilter(task, filter, workersFrom(workers, task.id)));
+  ).filter((task) => dispatchView.matchesFilter(task, filter));
+  const forest = buildDispatchForest(rows, tasks);
+  return rows.filter((task) => !forest.nested.has(task.id));
 }
 
 // 分批把一列填满：一批到一批、边到边显示，读不到的那批留白（铺开是「扫一眼」的动作，

@@ -187,7 +187,7 @@ export function CommandPalette({
         result.push({
           key: "task:parent",
           group: taskGroup,
-          label: `${parent.kind === "team" ? "打开所属团队" : parent.kind === "dispatch" ? "打开派它的任务" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
+          label: `${parent.kind === "team" ? "打开所属团队" : parent.kind === "dispatch" ? "打开父任务" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
           icon: <TaskModeIcon mode={taskParentMode(parent)} />,
           run: closeRun(() => onTask(parent.task!)),
         });
@@ -502,7 +502,7 @@ export function CommandPalette({
         {step === "search" && !slashMode && (
           <div className="palette-body">
             <div className="palette-results">
-              <SearchHitList hits={pinnedHits} active={active} startIndex={0} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
+              <SearchHitList hits={pinnedHits} active={active} startIndex={0} query={query} sort={sort} onSelect={setActive} onOpen={openHit} tasks={tasks} />
               {items.map((item, position) => {
                 const index = position + pinnedHits.length;
                 const header = position === 0 || items[position - 1]?.group !== item.group ? item.group : null;
@@ -519,13 +519,13 @@ export function CommandPalette({
                   </div>
                 );
               })}
-              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
+              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} sort={sort} onSelect={setActive} onOpen={openHit} tasks={tasks} />
               {!normalTotal && !searchError && <p className="palette-empty">{searching ? searchNote : isSearchQueryReady(query) ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
               {searching && normalTotal > 0 && <p className="px-4 py-2 text-center text-[length:var(--t-xs)] text-faint">{searchNote}</p>}
               {searchError && <div role="alert" className="palette-search-error"><span>{searchError}</span><button type="button" onClick={retry}>重试</button></div>}
               {!searching && hits.length >= SEARCH_MAX_HITS && <p className="px-4 py-2 text-center text-[length:var(--t-xs)] text-faint">显示前 {SEARCH_MAX_HITS} 条结果</p>}
             </div>
-            {hasHits && <SearchPreview hit={activeHit} query={query} onOpen={openHit} />}
+            {hasHits && <SearchPreview hit={activeHit} query={query} onOpen={openHit} tasks={tasks} />}
           </div>
         )}
 

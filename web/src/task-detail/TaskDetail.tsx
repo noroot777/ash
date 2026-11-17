@@ -42,6 +42,7 @@ import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { useTaskReplyActions } from "./TaskReplyActions.tsx";
 import { useWaitingTitle } from "./useWaitingTitle.ts";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
+import { discussionDrawerKey } from "../free-workflow/DiscussionRecord.tsx";
 import { retryTurnActions, type TurnRetryTarget } from "./turnRetry.ts";
 import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
@@ -58,6 +59,7 @@ import { DispatchHeldLine, useDispatchHolder } from "./dispatched/DispatchHeldLi
 export function TaskDetail({
   task,
   allTasks,
+  tasksReady = true,
   onTaskUpdate,
   onTasksSynced,
   onDeleted,
@@ -72,6 +74,7 @@ export function TaskDetail({
 }: {
   task: Task;
   allTasks: TaskListItem[];
+  tasksReady?: boolean;
   onTaskUpdate: (task: Task) => void;
   /** 入队响应的全体成员快照整批上交,由工作台按 updatedAt 合并进任务列表;
    * 不传的挂载面(团队成员抽屉,排队入口本就不可见)退回逐个 onTaskUpdate。 */
@@ -106,11 +109,9 @@ export function TaskDetail({
   // 只在它确实停着（已暂停 / 排着）时说；已经做完的那几条不用解释为什么没在跑。
   const holder = useDispatchHolder(task.id, allTasks, task.status === "paused" || task.status === "backlog");
   const conversation = useConversation(task.id);
-  // 左边那几屉（子智能体 / 读全文 / 派出的任务，互斥）和 Inspector 栈，整块在 useTaskDrawers.tsx。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, leftDrawer, dispatched, closeDrawers, drawers } = useTaskDrawers({
-    task, allTasks, conversation, onOpenTask,
-    renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
+    task, allTasks, tasksReady, conversation,
   });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
@@ -141,11 +142,11 @@ export function TaskDetail({
     ? latestPostMerge?.status === "reviewing" ? "查看合并审查" : latestPostMerge ? "再次审查合并结果" : "审查合并结果"
     : null;
   const derivationAllowed = canDeriveTask(task);
-  // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字，点它在左抽屉打开（dispatchNotes.ts）。
-  // 派出的任务后来来问、失败，这里一概不画：提示在侧栏和任务头那颗「派出的任务」键的数、右侧那一格里。
+  // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字（dispatchNotes.ts）。
+  // 子任务后来来问、失败，这里一概不画：提示在侧栏和任务头那颗「子任务」键的数、右侧那一格里。
   const asides = useMemo(() => dispatchNotes(task.id, allTasks).map((note) => ({
-    key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={dispatched.state.open} />,
-  })), [allTasks, dispatched.state.open, task.id]);
+    key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
+  })), [allTasks, onOpenTask, task.id]);
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
@@ -319,7 +320,7 @@ export function TaskDetail({
         descriptors={inspectors}
         context={{
           nativeWork: subagents.nativeWork,
-          dispatched: dispatched.state,
+          dispatchedFolds,
           monitors: monitorTab.monitors,
           task,
           groups,
@@ -507,6 +508,18 @@ export function TaskDetail({
                           await conversation.refetch();
                         }
                         : undefined}
+                      onDeleteDiscussion={task.mode === "single" && !handedOut && task.status !== "running" && task.status !== "queued"
+                        ? async (discussionId) => {
+                          try {
+                            await api.deleteDiscussion(task.id, discussionId);
+                            if (leftDrawer.api.activeKey === discussionDrawerKey(task.id, discussionId)) leftDrawer.api.close();
+                            notify("已删除这场讨论。下一轮会换一条新的会话，只带着删除后留下的记录继续");
+                          } catch (reason) {
+                            notify(reason instanceof Error ? reason.message : String(reason));
+                          }
+                          await Promise.all([conversation.refetch(), free.reload(true, true)]);
+                        }
+                        : undefined}
                       onAskSideChat={(quote) => { stageSideChatQuote(task.id, quote); openTab("side-chat"); }}
                       // 跟回复框可用同一口径（ReplyBox 的 disabled）：框是灰的，放回去也没法发。
                       onReuseInput={task.mode === "single" && !task.archived && !handedOut && hasConversation ? reuseInput : undefined}
@@ -562,9 +575,9 @@ export function TaskDetail({
                         />
                       )}
                       // 这条任务自己的提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
-                      // 名下派出的任务来问不占这一格：那张卡在它自己的页面上（左抽屉里打开它也是）。
-                      onAnswer={async (answer, input) => {
-                        await api.answerTask(task.id, answer, input);
+                      // 名下子任务来问不占这一格：那张卡在它自己的页面上。
+                      onAnswer={async (answer, input, attachments) => {
+                        await api.answerTask(task.id, answer, input, attachments);
                         notify("已发送答复，任务正在续跑");
                       }}
                       onLaunchPlan={launchPlan(task.id, notify)}
@@ -629,7 +642,7 @@ export function TaskDetail({
                   notify={notify}
                 />
               )}
-              {/* 左边那一屉（子智能体 / 读全文 / 派出的任务）：盖住中间那一栏，右侧 Inspector 仍然看得见、点得着。 */}
+              {/* 左边那一屉（子智能体 / 读全文）：盖住中间那一栏，右侧 Inspector 仍然看得见、点得着。 */}
               {drawers}
             </div>
             {inspectorMode === "drawer" && inspectorToggleTarget

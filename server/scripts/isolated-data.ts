@@ -10,9 +10,13 @@ import { join } from "node:path";
 const root = mkdtempSync(join(tmpdir(), "ash-test-data-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_DATA_DIR = join(root, "data");
-// 进程退出那一刻库还开着：Windows 上删不掉打开着的文件（EBUSY），在 exit 钩子里抛出来会把测试的退出码
-// 改成 1。删不掉就留着 —— 门禁给每条叶子另给了系统临时目录，叶子跑完随它一起删。
+// 删目录之前必须先松开库(Windows 删不掉还开着的文件,理由见 tmp-db.ts)。退出回调里不能 await,
+// 所以趁现在把连接拿在手上 —— 用这份夹具的测试反正一加载产品模块就会开它;关库本身是同步的。
+// 测试自己另开着的句柄照样会让 Windows 删不掉：在 exit 钩子里抛出来会把测试的退出码改成 1，
+// 删不掉就留着 —— 门禁给每条叶子另给了系统临时目录，叶子跑完随它一起删。
+const { dbClient } = await import("../src/db/index.js");
 process.on("exit", () => {
+  dbClient.close();
   try {
     rmSync(root, { recursive: true, force: true });
   } catch {

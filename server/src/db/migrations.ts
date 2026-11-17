@@ -226,9 +226,6 @@ const RETIRED_TABLES: { table: string; why: string }[] = [
   { table: "monitor_pending_calls", why: "内置 Monitor 历史扫描已移除" },
   { table: "monitor_scan_cursors", why: "内置 Monitor 历史扫描已移除" },
   { table: "monitor_pending_calls_rekey", why: "内置 Monitor 历史扫描已移除(换键中断留下的搬运表)" },
-  // 验收确认层「运行前置命令」那一勾不再记上次取消过没有（用户 2026-11-16：跳过只管当次）。老库里记着的
-  // 「跳过」跟着表一起没：升级后下一次打开确认层默认就是跑。
-  { table: "accept_memory", why: "验收确认层不再记「运行」那一勾" },
 ];
 
 // 派出的任务来问 / 失败时记在派它的那条任务名下、画成它会话里一颗气泡的那一套（用户 2026-11-15 定的：
