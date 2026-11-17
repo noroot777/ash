@@ -8,7 +8,7 @@ import type { TaskListItem } from "@ash/shared";
 import type { UserMessage } from "@ash/shared/user-messages";
 import { REQUIREMENT_INPUT_ID, conversationInputs, type ConversationInput } from "../src/task-detail/conversationInputs.ts";
 import { pickRevealInput, type MessageRevealRequest } from "../src/search/messageReveal.ts";
-import { dayLabel, highlightParts, messageMatches, recallBlocks, recallMembers, recallOrder, recallTaskRows } from "../src/recall/recallModel.ts";
+import { dayLabel, highlightParts, messageMatches, openDecision, recallBlocks, recallMembers, recallOrder, recallTaskRows } from "../src/recall/recallModel.ts";
 
 // ── 认气泡 ──────────────────────────────────────────────────────────────────
 
@@ -113,5 +113,15 @@ assert.deepEqual(highlightParts("把 Deploy 按钮挪到右边", "deploy 右边"
 ], "不分大小写，每个词都画");
 assert.deepEqual(highlightParts("编辑器", "编辑 编辑器"), [{ text: "编辑器", hit: true }], "同一处有长有短时画长的");
 assert.deepEqual(highlightParts("没有命中", ""), [{ text: "没有命中", hit: false }]);
+
+// ── 打开动作 ────────────────────────────────────────────────────────────────
+
+assert.equal(openDecision({ open: true, pending: false, query: "x" }), "open");
+assert.equal(openDecision({ open: true, pending: true, query: "x" }), "wait", "列表还是上一问的：不开");
+assert.equal(openDecision({ open: false, pending: false, query: "x" }), "drop", "窗口关着：哪个入口都不开");
+assert.equal(openDecision({ open: true, pending: true, query: "新词" }, "新词"), "wait", "搜索中按的回车：等结果");
+assert.equal(openDecision({ open: true, pending: false, query: " 新词 " }, "新词"), "open", "结果跟上了：开");
+assert.equal(openDecision({ open: false, pending: false, query: "新词" }, "新词"), "drop", "搜索中按回车再关窗口：关窗口让搜索中结束了，也不能开上一问的");
+assert.equal(openDecision({ open: true, pending: false, query: "又改了" }, "新词"), "drop", "回车之后词又改了：那下回车作废");
 
 console.log("recall tests passed");

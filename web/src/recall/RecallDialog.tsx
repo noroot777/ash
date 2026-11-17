@@ -11,7 +11,7 @@ import { requestMessageReveal } from "../search/messageReveal.ts";
 import { attachmentView } from "../task-detail/utils.ts";
 import { sidebarRowOrder, type SidebarRowOrder } from "../workspace/sidebarNavigation.ts";
 import { RowMark } from "../workspace/TaskTreeRows.tsx";
-import { clockOf, highlightParts, messageMatches, recallBlocks, recallMembers, recallOrder, recallTaskRows, type RecallTaskRow } from "./recallModel.ts";
+import { clockOf, highlightParts, messageMatches, openDecision, recallBlocks, recallMembers, recallOrder, recallTaskRows, type RecallTaskRow } from "./recallModel.ts";
 import { useRecallHits, useRecallMessagesOf } from "./useRecallData.ts";
 import "../styles/recall.css";
 
@@ -51,8 +51,10 @@ export function RecallDialog({
   const [activeId, setActiveId] = useState<string | null>(null);
   // 打开那一下侧栏的样子：开着窗口时不跟着侧栏变（列表在手底下挪动，选中会跳）。
   const [screen, setScreen] = useState<SidebarRowOrder>({ kind: "offscreen" });
-  // 搜索还没跟上输入时按了回车：等结果跟上了再开（开的是新结果里选中的那条）。
-  const [enterQueued, setEnterQueued] = useState(false);
+  // 搜索还没跟上输入时按了回车：记着按下那一刻的词，等结果跟上了再开（判据见 openDecision）。
+  const [enterQueued, setEnterQueued] = useState<string | null>(null);
+  // 第几次打开。打开动作要先读任务（手里没有那一条）时，读回来那一刻窗口已经重开过，就不再跳。
+  const generation = useRef(0);
   const panel = useRef<HTMLElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -69,11 +71,13 @@ export function RecallDialog({
   const active = rows.find((row) => row.task.id === activeId) ?? rows[0] ?? null;
 
   useEffect(() => {
+    // 关窗口、开窗口都把没开成的回车扔掉：它属于上一次打开。
+    setEnterQueued(null);
     if (!open) return;
+    generation.current += 1;
     const opened = sidebarRowOrder();
     setScreen(opened);
     setQuery("");
-    setEnterQueued(false);
     const home = currentTaskId ? [...recallMembers(recallOrder(opened, fallbackOrder, tasks), tasks)].find(([, ids]) => ids.includes(currentTaskId))?.[0] : undefined;
     setActiveId(home ?? null);
     window.setTimeout(() => input.current?.focus(), 0);
@@ -90,12 +94,14 @@ export function RecallDialog({
     if (active) list.current?.querySelector(`[data-recall-task="${active.task.id}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
+  const gate = { open, pending: hits.pending, query };
   const openTask = (taskId: string, message?: UserMessage) => {
-    // 列表还是上一问的结果：这时候开出去的是上一问选中的那条，不是输入框里这一问要找的。
-    if (hits.pending) return;
+    if (openDecision(gate) !== "open") return;
+    const mine = generation.current;
     onClose();
     void Promise.resolve().then(async () => {
       const task = byId.get(taskId) ?? await api.task(taskId);
+      if (generation.current !== mine) return;
       if (message) {
         requestMessageReveal({
           taskId,
@@ -111,12 +117,14 @@ export function RecallDialog({
   };
 
   useEffect(() => {
-    if (!enterQueued || hits.pending) return;
-    setEnterQueued(false);
-    if (active) openTask(active.task.id);
-    // 只在「结果跟上了」那一下开：active 已经是新结果里的了。
+    if (enterQueued === null) return;
+    const decision = openDecision(gate, enterQueued);
+    if (decision === "wait") return;
+    setEnterQueued(null);
+    if (decision === "open" && active) openTask(active.task.id);
+    // 只在窗口开关、结果跟上、词又改了这几下判：active 是那一刻新结果里的。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enterQueued, hits.pending]);
+  }, [enterQueued, hits.pending, open, query]);
 
   if (!open) return null;
 
@@ -148,8 +156,9 @@ export function RecallDialog({
               else if (event.key === "PageDown") move(8);
               else if (event.key === "PageUp") move(-8);
               else if (event.key === "Enter") {
-                if (hits.pending) setEnterQueued(true);
-                else if (active) openTask(active.task.id);
+                const decision = openDecision(gate);
+                if (decision === "wait") setEnterQueued(query.trim());
+                else if (decision === "open" && active) openTask(active.task.id);
               } else return;
               event.preventDefault();
             }}

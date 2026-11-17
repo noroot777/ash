@@ -186,3 +186,21 @@ export function highlightParts(text: string, query: string): { text: string; hit
   if (position < text.length) parts.push({ text: text.slice(position), hit: false });
   return parts;
 }
+
+/**
+ * 打开动作该不该发生。窗口里四个入口（回车、双击左边那行、点右边的任务名、点一句话）和「搜索中按的那下
+ * 回车」都问它，判据只有这一份：
+ *
+ * - 窗口关着就什么都不开 —— 关窗口本身会让「搜索中」那一刻结束，不能把这当成「新结果到了，可以开了」；
+ * - 列表还是上一问的结果（pending）就不开，开出去的会是上一问选中的那条；
+ * - 搜索中按下的回车记着按下那一刻输入框里的词（`queued`）：词又改了就作废 —— 那下回车是冲着旧词按的。
+ *
+ * 返回 open = 现在开；wait = 回车留着，等结果跟上；drop = 这下回车作废。
+ */
+export type OpenGate = { open: boolean; pending: boolean; query: string };
+
+export function openDecision(gate: OpenGate, queued?: string): "open" | "wait" | "drop" {
+  if (!gate.open) return "drop";
+  if (queued !== undefined && queued !== gate.query.trim()) return "drop";
+  return gate.pending ? "wait" : "open";
+}
