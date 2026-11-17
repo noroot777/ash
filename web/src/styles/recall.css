@@ -37,6 +37,17 @@
   font-size: var(--t-md);
 }
 
+/* 搜索还没跟上输入：说一声，左边那一列（还是上一问的结果）淡下去，这时候不许打开。 */
+.recall-searching {
+  flex: none;
+  color: var(--faint);
+  font-size: var(--t-xs);
+}
+
+.recall-list[data-stale] {
+  opacity: 0.55;
+}
+
 .recall-body {
   display: grid;
   min-height: 0;
@@ -113,6 +124,28 @@
   padding: 24px 18px;
   color: var(--red);
   font-size: var(--t-xs);
+}
+
+/* 正文搜索失败：贴在左边那一列最上面，下面照样按任务名筛。 */
+.recall-error--inline {
+  justify-content: space-between;
+  padding: 6px 8px 8px;
+  text-align: left;
+}
+
+/* 右边最上面：滚到这里接着读更早的。高度定死，「正在读…」出现、消失时下面的话不跟着跳。 */
+.recall-older {
+  display: flex;
+  min-height: 20px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  font-size: var(--t-xs);
+}
+
+.recall-older .recall-error {
+  padding: 0;
 }
 
 .recall-error button {

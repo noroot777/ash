@@ -26,6 +26,52 @@ export function clockOf(at: string): string {
   return Number.isNaN(date.getTime()) ? "" : `${two(date.getHours())}:${two(date.getMinutes())}`;
 }
 
+/** 沿 parentId → dispatchedBy 往上走（不含自己），碰到 `stop` 返回 true 就停。脏数据成环时每条只走一次。 */
+function climbs(task: TaskListItem, byId: ReadonlyMap<string, TaskListItem>, stop: (id: string) => boolean): string | null {
+  const seen = new Set([task.id]);
+  let up = task.parentId ?? task.dispatchedBy ?? null;
+  while (up && !seen.has(up)) {
+    if (stop(up)) return up;
+    seen.add(up);
+    const next = byId.get(up);
+    up = next ? next.parentId ?? next.dispatchedBy ?? null : null;
+  }
+  return null;
+}
+
+/**
+ * 左边那一列的顺序：**跟侧栏人眼看到的一样** —— 跟 J/K 同一个来源（workspace/sidebarNavigation 的
+ * sidebarRowOrder，读侧栏的 DOM）。侧栏的顺序有一摞只活在组件里的状态（任务模式按项目分组、名下最近
+ * 一次动静、年龄闸、展开到第几页），在模型这一层重算一份迟早对不上。
+ *
+ * - 屏幕上展开着的团队执行者、收在别人下面的子任务也有自己的行：它们归到上面那一行（recallMembers），
+ *   不单独成行。
+ * - 侧栏此刻没画出来的（折进「展开」的旧任务、收起的分组）接在后面，按模型顺序（fallback）。
+ * - 侧栏整栏收起（offscreen）就整份用 fallback，同 J/K 的退路。
+ */
+export function recallOrder(
+  screen: { kind: "screen"; ids: readonly string[] } | { kind: "offscreen" },
+  fallback: readonly TaskListItem[],
+  all: readonly TaskListItem[],
+): TaskListItem[] {
+  if (screen.kind === "offscreen") return [...fallback];
+  const byId = new Map(all.map((task) => [task.id, task]));
+  const listed = new Set<string>();
+  const order: TaskListItem[] = [];
+  const add = (task: TaskListItem | undefined) => {
+    if (!task || listed.has(task.id)) return;
+    listed.add(task.id);
+    order.push(task);
+  };
+  const onScreen = new Set(screen.ids);
+  for (const id of screen.ids) {
+    const task = byId.get(id);
+    if (task && !climbs(task, byId, (up) => onScreen.has(up))) add(task);
+  }
+  for (const task of fallback) if (!climbs(task, byId, (up) => listed.has(up))) add(task);
+  return order;
+}
+
 /**
  * 左边一行任务连带哪几条：它自己，加上挂在它下面的 —— 团队执行者（parentId）和派出去的子任务
  * （dispatchedBy）。侧栏把这些收在那一行底下，我在它们里面说的话也算在这一行上。
@@ -38,20 +84,9 @@ export function recallMembers(order: readonly TaskListItem[], all: readonly Task
   const listed = new Set(order.map((task) => task.id));
   const byId = new Map(all.map((task) => [task.id, task]));
   const members = new Map(order.map((task) => [task.id, [task.id]]));
-  const rootOf = (task: TaskListItem): string | null => {
-    const seen = new Set([task.id]);
-    let current: TaskListItem | undefined = task;
-    while (current && !listed.has(current.id)) {
-      const up: string | null = current.parentId ?? current.dispatchedBy ?? null;
-      if (!up || seen.has(up)) return null;
-      seen.add(up);
-      current = byId.get(up);
-    }
-    return current?.id ?? null;
-  };
   const below = all.filter((task) => !listed.has(task.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   for (const task of below) {
-    const root = rootOf(task);
+    const root = climbs(task, byId, (up) => listed.has(up));
     if (root) members.get(root)!.push(task.id);
   }
   return members;

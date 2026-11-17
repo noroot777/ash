@@ -16,7 +16,7 @@ import { join } from "node:path";
 import type { Hono } from "hono";
 import { asc, eq } from "drizzle-orm";
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
-import { DUET_TIMELINE_SESSION, USER_MESSAGE_PAGE, USER_MESSAGES_OF_MAX, type UserMessage, type UserMessageHits, type UserMessagesOf, type UserMessageContext, type UserMessagePage, type UserMessageTask } from "@ash/shared/user-messages";
+import { DUET_TIMELINE_SESSION, USER_MESSAGE_PAGE, USER_MESSAGES_OF_PAGE, type UserMessage, type UserMessageHits, type UserMessagesOf, type UserMessageContext, type UserMessagePage, type UserMessageTask } from "@ash/shared/user-messages";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { actorOf, type Actor } from "./auth/context.js";
@@ -43,7 +43,6 @@ const FRESH_MS = 3_000;
 /** 同时开着的文件数。 */
 const READ_CONCURRENCY = 48;
 const PAGE_MAX = 200;
-const TASK_IDS_MAX = 300;
 
 type TaskRow = {
   id: string;
@@ -190,18 +189,21 @@ export async function userMessagePage(
   return { messages: page.messages.map(strip), tasks: pageTasks, next: page.next };
 }
 
-/** 这几个任务里我说过的每一句，旧的在前；看不见的任务当没有。 */
-export async function userMessagesOf(actor: Actor, taskIds: readonly string[]): Promise<UserMessagesOf> {
+/** 这几个任务里我说过的话，从 cursor（缺省 = 最新）往前一页，页内旧的在前；看不见的任务当没有。 */
+export async function userMessagesOf(
+  actor: Actor,
+  taskIds: readonly string[],
+  options: { cursor?: string | null; limit: number },
+): Promise<UserMessagesOf> {
   const { messages, tasks: byId } = await currentSnapshot();
   const inScope = await scopeOf(actor);
   const wanted = new Set(taskIds.filter((taskId) => {
     const task = byId.get(taskId);
     return task !== undefined && inScope(task);
   }));
-  // 快照是新的在前：先取最近的那些，再翻成旧的在前。
-  const newest = messages.filter((message) => wanted.has(message.taskId));
-  const kept = newest.slice(0, USER_MESSAGES_OF_MAX);
-  return { messages: kept.reverse().map(strip), truncated: newest.length > kept.length };
+  // 快照是新的在前，翻页的游标同 /user-messages（at + id）：往前读一页再翻成旧的在前。
+  const page = pageMessages(messages.filter((message) => wanted.has(message.taskId)), () => "", { query: "", ...options });
+  return { messages: page.messages.reverse().map(strip), older: page.next };
 }
 
 /** 哪些任务里有我说的话对得上这些词（空白分词、都得出现、不分大小写）。 */
@@ -268,11 +270,13 @@ export function mountUserMessageRoutes(api: Hono): void {
       limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, PAGE_MAX) : USER_MESSAGE_PAGE,
     }));
   });
-  // taskIds：逗号分开，一次最多 TASK_IDS_MAX 个（一条任务连它名下的执行者、子任务）。
-  api.get("/user-messages/of", async (c) => {
-    const taskIds = (c.req.query("taskIds") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
-    if (!taskIds.length || taskIds.length > TASK_IDS_MAX) return c.json({ error: `taskIds 必给，最多 ${TASK_IDS_MAX} 个` }, 400);
-    return c.json(await userMessagesOf(actorOf(c), taskIds));
+  // 请求体 { taskIds: string[], cursor?: string, limit?: number }：一条任务连它名下的执行者、子任务，多少条都行。
+  api.post("/user-messages/of", async (c) => {
+    const body = await c.req.json<unknown>().catch(() => null) as { taskIds?: unknown; cursor?: unknown; limit?: unknown } | null;
+    const taskIds = Array.isArray(body?.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
+    if (!taskIds.length) return c.json({ error: "taskIds 必给" }, 400);
+    const limit = typeof body?.limit === "number" && Number.isInteger(body.limit) && body.limit > 0 ? Math.min(body.limit, PAGE_MAX) : USER_MESSAGES_OF_PAGE;
+    return c.json(await userMessagesOf(actorOf(c), taskIds, { cursor: typeof body?.cursor === "string" ? body.cursor : null, limit }));
   });
   api.get("/user-messages/hits", async (c) => c.json(await userMessageHits(actorOf(c), (c.req.query("q") ?? "").trim())));
   // taskId 必给；sessionId + index 指到那一句，不给 sessionId 就是原始需求。

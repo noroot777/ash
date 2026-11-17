@@ -57,15 +57,16 @@ export interface UserMessageContext {
 
 /**
  * R 键那张表以任务为主：左边是任务（顺序同侧栏），右边是选中那一条（连它名下的执行者、派出去的子任务）
- * 里我说过的每一句。GET /user-messages/of?taskIds=… 一次给齐，**旧的在前**（跟会话一个方向）；
- * 太多时只留最近的 USER_MESSAGES_OF_MAX 句，`truncated` 为 true。
+ * 里我说过的每一句。POST /user-messages/of（任务 id 放在请求体里：一家子有多少条都装得下，不受地址长度限制）
+ * 一页给最近的 USER_MESSAGES_OF_PAGE 句，页内**旧的在前**（跟会话一个方向）；`older` 是再往前读的游标，
+ * null = 读到头了。
  */
 export interface UserMessagesOf {
   messages: UserMessage[];
-  truncated: boolean;
+  older: string | null;
 }
 
-export const USER_MESSAGES_OF_MAX = 2000;
+export const USER_MESSAGES_OF_PAGE = 200;
 
 /** GET /user-messages/hits?q=… —— 哪些任务里有我说过的话对得上这些词，各几句。不看任务标题（那个前端手里就有）。 */
 export interface UserMessageHits {

@@ -1,6 +1,6 @@
 // R 键「我说过的话」的纯逻辑回归：
 //   pickRevealInput —— 点开一句之后，会话里认哪一颗气泡（出处 → 时刻 → 正文）
-//   recallMembers / recallTaskRows —— 左边哪些任务、各自连带哪几条、筛的时候留谁
+//   recallOrder / recallMembers / recallTaskRows —— 左边的顺序（同侧栏屏幕）、各自连带哪几条、筛的时候留谁
 //   recallBlocks / dayLabel / highlightParts —— 右边一串话怎么分段、命中的词画得对
 // 跑：npm -w web run test:recall
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import type { TaskListItem } from "@ash/shared";
 import type { UserMessage } from "@ash/shared/user-messages";
 import { REQUIREMENT_INPUT_ID, conversationInputs, type ConversationInput } from "../src/task-detail/conversationInputs.ts";
 import { pickRevealInput, type MessageRevealRequest } from "../src/search/messageReveal.ts";
-import { dayLabel, highlightParts, messageMatches, recallBlocks, recallMembers, recallTaskRows } from "../src/recall/recallModel.ts";
+import { dayLabel, highlightParts, messageMatches, recallBlocks, recallMembers, recallOrder, recallTaskRows } from "../src/recall/recallModel.ts";
 
 // ── 认气泡 ──────────────────────────────────────────────────────────────────
 
@@ -59,6 +59,16 @@ const members = recallMembers(order, all);
 assert.deepEqual(members.get("lead"), ["lead", "worker", "derived"], "执行者、执行者派出去的都算在调度那一行上，按创建先后");
 assert.deepEqual(members.get("solo"), ["solo", "archived-child"], "归档的子任务也算：里面说过的话还在");
 assert.equal([...members.values()].flat().includes("orphan"), false, "够不着左边任何一行的不算");
+
+// 顺序认屏幕：侧栏画出来的先后原样照搬（任务模式按项目分组后的那份），展开着的执行者、收在下面的子任务
+// 不单独成行；侧栏没画出来的按模型顺序接在后面；整栏收起就整份用模型顺序。
+const orderAll = [...all, task("hidden-old")];
+const fallback = ["solo", "lead", "hidden-old", "derived"].map((id) => orderAll.find((item) => item.id === id)!);
+const screenIds = (rows: TaskListItem[]) => rows.map((row) => row.id);
+assert.deepEqual(screenIds(recallOrder({ kind: "screen", ids: ["lead", "worker", "solo"] }, fallback, orderAll)), ["lead", "solo", "hidden-old"],
+  "屏幕上 lead 在 solo 前面就照这个排（模型顺序反过来也不管）；执行者归团队；没画出来的接在后面，收在 lead 下面的 derived 不单独成行");
+assert.deepEqual(screenIds(recallOrder({ kind: "offscreen" }, fallback, orderAll)), ["solo", "lead", "hidden-old", "derived"], "侧栏收起：整份用模型顺序");
+assert.deepEqual(screenIds(recallOrder({ kind: "screen", ids: ["gone", "solo"] }, [], orderAll)), ["solo"], "屏幕上有、任务表里没有的（远端行之类）跳过");
 
 const titleOf = (id: string) => all.find((item) => item.id === id)?.title ?? "";
 const ids = (rows: { task: TaskListItem }[]) => rows.map((row) => row.task.id);
