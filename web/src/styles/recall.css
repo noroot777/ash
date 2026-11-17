@@ -1,0 +1,233 @@
+/* R 键「我说过的话」（recall/RecallDialog.tsx）。外壳照 ⌘K 的面板，只是更大：左边一句一行，右边读全文。 */
+
+.recall-scrim {
+  align-items: flex-start;
+  padding-top: min(8vh, 72px);
+}
+
+.recall {
+  display: flex;
+  width: min(1080px, calc(100vw - 48px));
+  height: min(calc(100vh - min(8vh, 72px) - 32px), 780px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.recall-input {
+  display: flex;
+  height: 52px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 16px;
+  color: var(--faint);
+}
+
+.recall-input input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--t-md);
+}
+
+.recall-body {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(340px, 44%) minmax(0, 1fr);
+}
+
+.recall-list {
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  padding: 4px 6px 8px;
+}
+
+.recall-day {
+  position: sticky;
+  z-index: 1;
+  top: -4px;
+  background: var(--panel);
+  padding: 10px 10px 4px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
+}
+
+.recall-row {
+  display: grid;
+  gap: 3px;
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+/* 选中只认 aria-selected：指针动一下就换选中，底色永远只有一行（同 ⌘K 的口径）。 */
+.recall-row[aria-selected="true"] {
+  background: var(--sel-bg);
+}
+
+.recall-row p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.recall-row-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+.recall-row-task {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recall-row-project {
+  flex: none;
+  color: var(--faint);
+}
+
+.recall-row-meta time {
+  flex: none;
+  margin-left: auto;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.recall mark {
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--ink) 15%, transparent);
+  color: inherit;
+}
+
+.recall-empty {
+  margin: 0;
+  padding: 36px 18px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  text-align: center;
+}
+
+.recall-sentinel {
+  height: 1px;
+}
+
+.recall-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 18px;
+  color: var(--red);
+  font-size: var(--t-xs);
+}
+
+.recall-error button {
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 2px 10px;
+  color: var(--ink);
+}
+
+.recall-preview {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  background: color-mix(in oklab, var(--canvas) 72%, var(--panel));
+}
+
+.recall-preview-task {
+  align-self: flex-start;
+  max-width: calc(100% - 32px);
+  margin: 16px 20px 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink);
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.recall-preview-task:hover,
+.recall-preview-task:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.recall-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 4px 20px 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+.recall-preview-meta time {
+  font-variant-numeric: tabular-nums;
+}
+
+.recall-preview-text {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding: 14px 20px 20px;
+}
+
+.recall-preview-text p {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.recall-preview-files {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  list-style: none;
+}
+
+.recall-preview-files li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 窄了就只留列表：一句两行、任务名一行，认得出来就够点了。 */
+@media (max-width: 760px) {
+  .recall-body { grid-template-columns: minmax(0, 1fr); }
+  .recall-list { border-right: 0; }
+  .recall-preview { display: none; }
+}

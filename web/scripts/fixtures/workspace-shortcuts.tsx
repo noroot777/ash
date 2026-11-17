@@ -57,6 +57,7 @@ function Ash() {
     onOpenSettings: () => setLog((current) => [...current, "settings"]),
     onToggleCommands: () => setLog((current) => [...current, "commands"]),
     onToggleTerminal: () => setLog((current) => [...current, "terminal"]),
+    onOpenRecall: () => setLog((current) => [...current, "recall"]),
   });
 
   return (
@@ -67,6 +68,8 @@ function Ash() {
       <button type="button" data-testid="toggle-enabled" onClick={() => setEnabled((current) => !current)}>切换列表导航</button>
       <button type="button" data-testid="toggle-inputs" onClick={() => setHasInputs((current) => !current)}>切换会话输入导航</button>
       <input data-testid="text-entry" aria-label="文本输入" />
+      {/* 主区那颗「运行」：Shift+R 按的就是它（单键 r 让给了「我说过的话」）。 */}
+      <button type="button" data-testid="run-action" data-workspace-run-action="run" onClick={() => setLog((current) => [...current, "run"])}>运行</button>
     </main>
   );
 }

@@ -6,6 +6,8 @@ import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useUserScrolling } from "../lib/useUserScrolling.ts";
 import { abandonSearchReveal } from "../search/searchReveal.ts";
 import { useSearchReveal } from "../search/useSearchReveal.ts";
+import { abandonMessageReveal } from "../search/messageReveal.ts";
+import { useMessageReveal } from "../search/useMessageReveal.ts";
 import type { ConversationInput } from "../task-detail/conversationInputs.ts";
 import { ConversationInputRail } from "./ConversationInputRail.tsx";
 
@@ -30,7 +32,7 @@ export function ConversationScrollControls({
    */
   inputs?: readonly ConversationInput[];
   /**
-   * 给了就表示这是一个任务的会话（resetKey 即任务 id），接 ⌘K「打开命中、落到命中处」的待办；
+   * 给了就表示这是一个任务的会话（resetKey 即任务 id），接 ⌘K「打开命中、落到命中处」和 R 键「落到那一句」的待办；
    * 值是正文读完了没有，见 useSearchReveal。群聊、侧聊这类不是任务会话的表面不给。
    */
   revealReady?: boolean;
@@ -44,7 +46,11 @@ export function ConversationScrollControls({
   const placing = useRef(false);
   const { noteUserScrollIntent, resume, hold } = useStickToBottom(
     scrollRef, resetKey, tailKey, undefined,
-    revealTaskId ? () => { if (!placing.current) abandonSearchReveal(revealTaskId); } : undefined,
+    revealTaskId ? () => {
+      if (placing.current) return;
+      abandonSearchReveal(revealTaskId);
+      abandonMessageReveal(revealTaskId);
+    } : undefined,
   );
   const revealDetach = useCallback((detachFromBottom: boolean) => {
     placing.current = true;
@@ -55,6 +61,8 @@ export function ConversationScrollControls({
     }
   }, [noteUserScrollIntent]);
   useSearchReveal(scrollRef, revealTaskId, !!revealReady, revealDetach, revealRoots);
+  // R 键「我说过的话」点开的那一句：同一套待办，认的是哪一颗气泡（见 search/messageReveal.ts）。
+  useMessageReveal(scrollRef, revealTaskId, !!revealReady, inputs, revealDetach);
   const { atTop, atBottom } = useScrollEdges(scrollRef, resetKey);
   const top = useRef<HTMLButtonElement>(null);
   const scrolling = useUserScrolling(scrollRef, resetKey, top);
