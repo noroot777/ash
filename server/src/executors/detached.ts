@@ -33,6 +33,7 @@ import {
 } from "./kernel-confine.js";
 import { reopenWindowsControlStdin, spawnWindowsDetachedAgent } from "./detached-win.js";
 import { registerWindowsOwnership } from "./windows-run-evidence.js";
+import { controlFifoPath, removeIdleControlFifo, retireControlFifo } from "./control-fifo.js";
 
 // 落盘文件 / tailFile / 伪装外壳这一层搬到了 detached-child.ts(那边是纯文件与流,
 // 不碰进程);使用方照旧从本文件 import,所以在这里原样转出。
@@ -48,7 +49,7 @@ export type { DetachedChild, DetachedPaths };
 // 频率可以低得多。
 const LIVENESS_MS = 400;
 
-const controlPath = (paths: DetachedPaths) => `${paths.rc}.stdin.fifo`;
+const controlPath = (paths: DetachedPaths) => controlFifoPath(paths.rc);
 
 function fifoWriter(path: string): ChildProcess["stdin"] {
   // FIFO 的纯写 open 会等待读端；若进程恰在异步 open 完成前被停止，libuv worker 会
@@ -132,7 +133,11 @@ export function spawnControllableDetachedAgent(
   registerRootLife(real, bornAt);
   // **起不来就把圈撤掉**:一条没跑起来的运行留下的圈再也没人认领(登记挂在这个被丢掉的
   // `real` 上),会一路攒到那道 24 小时的年龄门才清。圈里没成员,`rmdir` 必然成功。
-  if (!real.pid) { confine?.dispose(); return failedChild(`起不来:${shq(bin)}`); }
+  if (!real.pid) {
+    confine?.dispose();
+    removeIdleControlFifo(input);
+    return failedChild(`起不来:${shq(bin)}`);
+  }
   const writer = fifoWriter(input);
   if (!writer) {
     // `killChild` 把刀发给了整圈,但**成员不一定已经退了**,所以紧跟其后的 `dispose()`
@@ -140,6 +145,7 @@ export function spawnControllableDetachedAgent(
     // 扫就是了。这里要的只是「能撤就撤」:一条没跑起来的运行不该留一个没人认领的圈。
     killChild(real);
     confine?.dispose();
+    removeIdleControlFifo(input);
     return failedChild(`打开可重连 stdin 失败：${input}`);
   }
   writer?.write(initialInput);
@@ -150,7 +156,10 @@ export function spawnControllableDetachedAgent(
     startOffset: 0,
     stdin: writer,
     kill: () => killChild(real),
-    onExit: (cb) => {
+    // 根一退出，这根管子就再没人会重开（见 control-fifo.ts）：收台的那一刀往往是 SIGKILL，
+    // 脚本里的 trap 没机会跑，所以这里替它收。
+    onExit: (settle) => {
+      const cb = (code: number) => { settle(code); retireControlFifo(input, writer); };
       real.on("error", () => cb(1));
       real.on("exit", (code, sig) => {
         const fallback = code ?? (sig ? 1 : 0);
@@ -385,7 +394,11 @@ export function reattachDetachedAgent(opts: {
         // 册上,随后的补刀据此才敢对一个刚空下来的组号发信号。
         if (pidRunStillAlive(opts.pid, opts.startedAt) !== "gone") return;
         clearInterval(t);
-        setTimeout(() => cb(readExitCode(opts.paths.rc)), 50);
+        setTimeout(() => {
+          cb(readExitCode(opts.paths.rc));
+          // 接回的那一轮同样由这里替 trap 收管子（普通一次性 detached 没有这根，答 absent）。
+          if (!IS_WINDOWS) retireControlFifo(controlPath(opts.paths), child.stdin);
+        }, 50);
       }, LIVENESS_MS);
       (t as { unref?: () => void }).unref?.();
     },

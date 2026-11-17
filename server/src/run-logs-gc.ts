@@ -13,6 +13,7 @@ import { eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
+import { CONTROL_FIFO_SUFFIX, controlFifoPath, removeIdleControlFifo } from "./executors/control-fifo.js";
 
 // 只认这三种后缀 —— 白名单而不是黑名单：这个目录里还躺着 .md 正文、审查证据、
 // 用户上传的图片，误删任何一样都是不可逆的。
@@ -27,7 +28,9 @@ const MONITOR_SUFFIX = ".log";
 // 留窗口。ASH_RUNLOG_KEEP_H 可调，0 = 结束即删。
 const KEEP_HOURS = Number(process.env.ASH_RUNLOG_KEEP_H ?? 24);
 
-export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }> {
+// 可引导回合的 stdin 具名管道（executors/control-fifo.ts）不看年龄：根一走它就没用了，正常
+// 情况下根退出时已经收掉；这里扫的是上一辈子没来得及收的。删不删只听「此刻有没有人开着」。
+export async function sweepRunLogs(): Promise<{ removed: number; bytes: number; fifos: number }> {
   const cutoff = Date.now() - KEEP_HOURS * 3600_000;
 
   // 正在被使用的那几个绝不能删：有 agent_pid 且这一轮还没结束 = 此刻可能正有
@@ -37,6 +40,7 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
   for (const s of await db.select().from(sessions).where(isNull(sessions.endedAt))) {
     if (!s.agentPid) continue;
     for (const p of [s.agentOutPath, s.agentErrPath, s.agentRcPath]) if (p) live.add(p);
+    if (s.agentRcPath) live.add(controlFifoPath(s.agentRcPath));
   }
   // 还在盯的哨兵同理：它的进程此刻正往这个文件里写，tail 也正从里面读。
   for (const m of await db.select({ logPath: monitors.logPath }).from(monitors).where(eq(monitors.status, "running"))) {
@@ -45,11 +49,12 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
 
   let removed = 0;
   let bytes = 0;
+  let fifos = 0;
   let taskDirs: string[];
   try {
     taskDirs = readdirSync(RUNS_DIR);
   } catch {
-    return { removed, bytes }; // 还没有 runs 目录
+    return { removed, bytes, fifos }; // 还没有 runs 目录
   }
   for (const taskId of taskDirs) {
     const dir = join(RUNS_DIR, taskId);
@@ -61,6 +66,11 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
       continue;
     }
     for (const name of entries) {
+      if (name.endsWith(CONTROL_FIFO_SUFFIX)) {
+        const full = join(dir, name);
+        if (!live.has(full) && removeIdleControlFifo(full) === "removed") fifos++;
+        continue;
+      }
       const isMonitorLog = name.startsWith(MONITOR_PREFIX) && name.endsWith(MONITOR_SUFFIX);
       if (!isMonitorLog && !SUFFIXES.some((sfx) => name.endsWith(sfx))) continue;
       const full = join(dir, name);
@@ -76,5 +86,5 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
       }
     }
   }
-  return { removed, bytes };
+  return { removed, bytes, fifos };
 }
