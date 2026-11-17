@@ -6,6 +6,10 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { WAIT_TIMEOUT_MS, waitUntil } from "./wait-until.mjs";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const PROFILES = [
+  { id: "profile-codex", name: "codex@local", type: "codex", isDefault: true },
+  { id: "profile-claude", name: "claude@local", type: "claude", isDefault: true },
+];
 
 const web = await startWebServer();
 let browser;
@@ -20,7 +24,9 @@ try {
   const held = new Map();
   await page.route("**/api/**", async (route) => {
     const request = route.request();
-    if (new URL(request.url()).pathname !== "/api/uploads" || request.method() !== "POST") return route.fulfill({ json: [] });
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/agents") return route.fulfill({ json: PROFILES });
+    if (path !== "/api/uploads" || request.method() !== "POST") return route.fulfill({ json: [] });
     const { name } = JSON.parse(request.postData() ?? "{}");
     await new Promise((resolve) => held.set(name, resolve));
     await route.fulfill({ json: { id: `up-${name}`, path: `/ash/data/uploads/up12345678ab-${name}`, url: `data:image/png;base64,${PNG}`, name, kind: "image" } })
@@ -172,10 +178,10 @@ try {
   await card.waitFor({ state: "detached" });
   await replyBox.fill("/讨");
   const slashMenu = page.locator(".task-reply-command-menu");
-  await slashMenu.waitFor();
-  await page.getByRole("button", { name: "单题" }).click();
+  await slashMenu.getByRole("option", { name: /\/讨论/ }).waitFor();
+  await page.evaluate(() => window.fixtureAsk());
   await card.waitFor();
-  assert.equal(await slashMenu.isVisible(), false, "卡展开时普通回复框的补全菜单不能还挂着");
+  assert.equal(await slashMenu.count(), 0, "卡展开时普通回复框的补全菜单不能还挂着");
   assert.equal(await visibleInputs(), 1);
   await card.getByRole("button", { name: "收起答题卡，先看上文" }).click();
   assert.equal(await replyBox.inputValue(), "/讨", "收起后普通回复的草稿原样在");
