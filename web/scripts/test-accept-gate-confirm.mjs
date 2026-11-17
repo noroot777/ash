@@ -242,7 +242,8 @@ export async function testAcceptGateConfirm({ open, run }) {
 
   // ⑭d 重读挂住不返回：层里写明在读，读有上限，到点落到「读不出来 · 重试」。
   {
-    const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null }, events: true });
+    // 假时钟：读取上限是 8 秒（useAcceptCommitDefault 的 READ_TIMEOUT_MS），不真等。
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null }, events: true, clock: true });
     const layer = await openConfirm(page);
     const confirm = layer.getByRole("button", { name: "确认验收", exact: true });
     await confirm.and(page.locator("button:enabled")).waitFor();
@@ -251,7 +252,8 @@ export async function testAcceptGateConfirm({ open, run }) {
     await layer.getByText("读取项目默认").waitFor();
     assert.equal(await confirm.isEnabled(), false, "重读中不许确认");
     assert.equal(await layer.getByRole("checkbox", { name: "合并后提交" }).count(), 1, "重读中勾照画");
-    await layer.getByText("项目默认读不出来").waitFor({ timeout: 15_000 });
+    await page.clock.runFor(8_001);
+    await layer.getByText("项目默认读不出来").waitFor();
     store.projectHold = null;
     await layer.getByRole("button", { name: "重试", exact: true }).click();
     await confirm.and(page.locator("button:enabled")).waitFor();

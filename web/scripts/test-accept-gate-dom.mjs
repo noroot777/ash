@@ -84,16 +84,18 @@ try {
 
   // ⑩ 角色读失败只是「还没读到」：不许就此当成「你不是管理员」，它自己要重试到读到。
   {
-    const { page, store } = await open({ gate: { command: null, running: null, latest: null }, projectDown: true });
-    // 先证「它真的在自己重试」：不碰页面，等到读取次数自己涨过首发那一拨。
+    // 假时钟：重试间隔是 5 秒，这一档要跨两次，真等就是十来秒。
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null }, projectDown: true, clock: true });
+    // 先证「它真的在自己重试」：不碰页面，读取次数要在一个重试间隔之后自己涨过首发那一拨。
     const baseline = store.projectReads;
-    await waitUntil(() => store.projectReads > baseline, { timeout: CATCH_UP_RETRY_MS + 10_000,
-      message: `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互` });
+    await page.clock.runFor(CATCH_UP_RETRY_MS + 1);
+    await waitUntil(() => store.projectReads > baseline, `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互`);
     const layer = await openConfirm(page);
     assert.equal(await layer.getByRole("button", { name: "设一条前置命令", exact: true }).count(), 0, "还没读到角色时不摆必然 403 的入口");
     // 服务端恢复之后入口要自己回来 —— 旧实现把 503 记成 `false`，它永远不再出现。
     store.projectDown = false;
-    await layer.getByRole("button", { name: "设一条前置命令", exact: true }).waitFor({ timeout: CATCH_UP_RETRY_MS + 10_000 });
+    await page.clock.runFor(CATCH_UP_RETRY_MS + 1);
+    await layer.getByRole("button", { name: "设一条前置命令", exact: true }).waitFor();
     await page.close();
   }
 
