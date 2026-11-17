@@ -51,7 +51,11 @@ try {
   const { acceptGateState, cancelAcceptGate, recoverAcceptGates, rehandOffAcceptGate, whenAcceptGateSettled } = await import("../src/accept-gate.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { isTurnClaimed, releaseTurn } = await import("../src/turn-lock.js");
+  const { overrideGateKillGrace } = await import("../src/accept-gate-process.js");
   await ensureSchema();
+  // 本条第 14 档和 lifecycle 里两档的命令带着 `trap "" TERM` 的后代，每收一次都按产品的 5 秒宽限
+  // 真等到补刀。钉的是「整棵树真没了才算收掉」，不是那个数。
+  overrideGateKillGrace(500);
 
   const createdAt = new Date().toISOString();
   const runsOf = (taskId: string) => db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId))

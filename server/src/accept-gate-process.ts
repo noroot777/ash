@@ -17,6 +17,12 @@ import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, g
 
 /** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
 const KILL_GRACE_MS = 5_000;
+let killGraceOverride: number | null = null;
+
+/** 只给回归用：`trap '' TERM` 的夹具每取消一次都要等满上面那道宽限，压短它。传 null 还原。 */
+export function overrideGateKillGrace(ms: number | null): void {
+  killGraceOverride = ms;
+}
 
 /** SIGKILL 之后再确认多久。KILL 收不下，那就是真卡在内核里了（D 状态 / 没权限）。 */
 const KILL_CONFIRM_MS = 3_000;
@@ -162,7 +168,7 @@ export async function stopAcceptGate(
   };
   if (!empty()) {
     confinement.killAll("SIGTERM");
-    if (!await untilEmpty(empty, KILL_GRACE_MS)) {
+    if (!await untilEmpty(empty, killGraceOverride ?? KILL_GRACE_MS)) {
       confinement.killAll("SIGKILL");
       if (!await untilEmpty(empty, KILL_CONFIRM_MS)) return false;
     }
