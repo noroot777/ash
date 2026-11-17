@@ -134,13 +134,16 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.equal(phrase({ status: "paused", question: "  要不要\n删掉？ " }).tip, "要不要 删掉？", "指上去是问题本身");
 
   const child = (over, title) => dispatchedStateOf({ ...task(title, at), title, ...over });
-  assert.equal(dispatchedRollUp([child({}, "a"), child({ stage: "accepted" }, "b")]), null, "名下做完没验收、验收过的不往上带");
+  assert.equal(dispatchedRollUp([child({ stage: "accepted" }, "b")]), null, "名下验收过的不往上带");
+  const unaccepted = child({}, "没验收的");
+  assert.equal(dispatchedRollUp([child({ stage: "accepted" }, "b"), unaccepted]), unaccepted, "名下做完没验收的要带上来：侧栏不展开子孙，不带就看不出");
   assert.equal(child({ stage: "accepted" }, "b"), null, "验收过的没有短语");
   const running = child({ status: "running" }, "跑着的");
   const asking = child({ status: "paused", question: "?" }, "问你的");
   const broken = child({ status: "failed" }, "摔了的");
   assert.equal(dispatchedRollUp([running, broken, asking]), asking, "轮到你的压过失败、在跑");
   assert.equal(dispatchedRollUp([running, broken]), broken);
+  assert.equal(dispatchedRollUp([unaccepted, running]), running, "没验收的排最后，在动的压过它");
   // 孙任务正跑着回合、又挂着哨兵：子任务、父任务都该带上「运行中」，不是「等哨兵」。
   const busy = child({ status: "running", monitorRunning: true }, "跑着还挂哨兵的");
   const parked = child({ status: "paused", monitorRunning: true }, "停着等哨兵的");
@@ -156,6 +159,7 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.deepEqual(below({}, asking), { tone: "ask", tip: "子任务「问你的」等你答复" });
   assert.equal(below({}, child({ disputeOpen: true }, "等裁定的")).tone, "ask");
   assert.deepEqual(below({}, broken), { tone: "bad", tip: "子任务「摔了的」失败" });
+  assert.deepEqual(below({}, unaccepted), { tone: "open", tip: "子任务「没验收的」待验收" }, "做完没验收：主色不跳");
   assert.equal(below({}, null), null);
   const parent = taskLook({ ...task("p", at), status: "running" }, [], false, asking);
   assert.deepEqual([parent.mark, parent.phrase.word, parent.below.tone], ["run", "运行中", "ask"], "父任务的圆点说它自己，名下的事不改它的圆点");
