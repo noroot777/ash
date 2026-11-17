@@ -147,18 +147,18 @@ assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在
   assert.equal(busy.word, "运行中");
   assert.equal(dispatchedRollUp([parked, busy]), busy, "名下有在跑的压过等哨兵的");
 
-  // 圆点只说它自己，行尾那一句只说名下：在动的一律「子项运行中」，轮到你的、出事的才说具体。
+  // 圆点只说它自己，名下只给行尾那颗图标上色：在动的一律主色会跳（busy），轮到你琥珀、出事红；具体是什么指上去说。
   const below = (over, dispatched) => taskLook({ ...task("p", at), ...over }, [], false, dispatched).below;
-  assert.deepEqual(Object.values(below({}, running)), ["子项运行中", null, "子任务「跑着的」运行中"]);
-  assert.deepEqual(Object.values(below({}, parked)), ["子项运行中", null, "子任务「停着等哨兵的」等哨兵"], "等哨兵也是子项运行中，指上去才说具体");
-  assert.equal(below({}, child({ status: "queued" }, "排着的")).word, "子项运行中");
-  assert.equal(below({}, child({ acceptGateRunning: true }, "跑门禁的")).word, "子项运行中");
-  assert.deepEqual([below({}, asking).word, below({}, asking).tone], ["子项等答复", "ask"]);
-  assert.equal(below({}, child({ disputeOpen: true }, "等裁定的")).word, "子项等裁定");
-  assert.deepEqual([below({}, broken).word, below({}, broken).tone], ["子项失败", "bad"]);
+  assert.deepEqual(below({}, running), { tone: "busy", tip: "子任务「跑着的」运行中" });
+  assert.deepEqual(below({}, parked), { tone: "busy", tip: "子任务「停着等哨兵的」等哨兵" }, "等哨兵也是在动，指上去才说具体");
+  assert.equal(below({}, child({ status: "queued" }, "排着的")).tone, "busy");
+  assert.equal(below({}, child({ acceptGateRunning: true }, "跑门禁的")).tone, "busy");
+  assert.deepEqual(below({}, asking), { tone: "ask", tip: "子任务「问你的」等你答复" });
+  assert.equal(below({}, child({ disputeOpen: true }, "等裁定的")).tone, "ask");
+  assert.deepEqual(below({}, broken), { tone: "bad", tip: "子任务「摔了的」失败" });
   assert.equal(below({}, null), null);
   const parent = taskLook({ ...task("p", at), status: "running" }, [], false, asking);
-  assert.deepEqual([parent.mark, parent.phrase.word, parent.below.word], ["run", "运行中", "子项等答复"], "父任务的圆点说它自己，名下的事不改它的圆点");
+  assert.deepEqual([parent.mark, parent.phrase.word, parent.below.tone], ["run", "运行中", "ask"], "父任务的圆点说它自己，名下的事不改它的圆点");
   assert.equal(taskLook({ ...task("p", at), stage: "accepted" }, [], false, running).mark, null, "验收过的父任务名下在跑：圆点照旧空着");
 }
 

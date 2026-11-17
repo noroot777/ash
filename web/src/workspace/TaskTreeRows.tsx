@@ -98,9 +98,8 @@ function RowWord({ look }: { look: TaskLook }) {
   );
 }
 
-// 行尾一句短语：团队调度台说它自己（它不画圆点，箭头占着行首那一格），名下收着派出任务的
-// 那一行说名下（子项运行中 / 子项等答复……，它自己怎么样看圆点）。琥珀 = 轮到你，红 = 出事了，
-// 其余淡灰。指上去说是谁、在等什么。
+// 行尾一句短语：团队调度台说它自己（它不画圆点，箭头占着行首那一格）。琥珀 = 轮到你，红 = 出事了，
+// 其余淡灰。指上去说是谁、在等什么。名下收着派出任务的那一行不写短语，名下怎么样看行尾那颗图标。
 function RowPhrase({ phrase }: { phrase: TaskPhrase | null }) {
   const tip = useHoverTip();
   if (!phrase) return null;
@@ -193,7 +192,6 @@ export function TaskRow({
   lookForTask,
   child = false,
   parent = false,
-  phrase = false,
   onExpand,
   showOrigin = true,
   showProject = true,
@@ -210,7 +208,6 @@ export function TaskRow({
   child?: boolean;
   /** 团队调度台：行首不画圆点，leading 放执行者展开箭头。 */
   parent?: boolean;
-  phrase?: boolean;
   /** 父任务：点这一行（打开它自己）时把名下那一层展开。只开不收，收起用行首箭头。 */
   onExpand?: () => void;
   showOrigin?: boolean;
@@ -250,9 +247,7 @@ export function TaskRow({
   // 智能体开的、却查不到来源任务的（外部智能体自报、群聊委派）：没地方可去，就只画一颗看的
   // 机器人。查得到来源的那种由下面的 OriginTaskChip 画成能点的那一颗。
   const agentOnly = showOrigin && !hasOrigin && task.creationOrigin?.kind === "agent" ? taskCreationLabel(task.creationOrigin) : null;
-  // 名下收着派出任务的那一行：它自己轮到你（等答复 / 裁定）照普通行写，不然写名下那一句。
-  const endPhrase = parent ? look.phrase : phrase && !look.word ? look.below : null;
-  const hasEnd = !!endPhrase || (!parent && !!look.word) || isTeam || pinned || !!agentOnly || queueRank != null || tally != null;
+  const hasEnd = !!(parent ? look.phrase : look.word) || isTeam || pinned || !!agentOnly || queueRank != null || tally != null;
   return (
     <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && look.bucket === "todo" ? " is-todo" : ""}${hasEnd ? " has-end" : ""}`}>
       <span className="workspace-task-leading">
@@ -270,7 +265,7 @@ export function TaskRow({
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
         {hasEnd && (
           <span className="workspace-task-end">
-            {endPhrase ? <RowPhrase phrase={endPhrase} /> : !parent && <RowWord look={look} />}
+            {parent ? <RowPhrase phrase={look.phrase} /> : <RowWord look={look} />}
             {isTeam && <RowGlyph icon={UsersThree} label="团队任务" />}
             {agentOnly && <RowGlyph icon={Robot} label={agentOnly} />}
             {pinned && <RowGlyph icon={PushPin} label="已置顶" />}

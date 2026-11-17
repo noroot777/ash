@@ -61,8 +61,7 @@
   font-variant-numeric: tabular-nums;
 }
 .dispatched-fold:hover { background: var(--line); color: var(--ink); }
-.dispatched-fold.is-warn { color: var(--amber); }
-.dispatched-fold[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.dispatched-fold[aria-expanded="false"] .dispatched-fold__caret { transform: rotate(-90deg); }
 .dispatched-accepted { display: flex; width: 100%; min-height: 34px; align-items: center; gap: 12px; border: 0; border-radius: var(--r-md); background: transparent; padding: 0 7px; color: var(--faint); font-size: var(--t-xs); text-align: left; }
 .dispatched-accepted:hover { background: var(--hover-bg); color: var(--ink); }
 .dispatched-accepted[aria-expanded="true"] svg { transform: rotate(90deg); }
