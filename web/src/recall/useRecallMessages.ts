@@ -13,6 +13,10 @@ type State = {
   loading: boolean;
   /** 正在接下一页。 */
   loadingMore: boolean;
+  /**
+   * 出错了。有它在就不再自己去取：接下一页有两处自动触发（滚到底、按着 ↓ 快到底），失败后两处的条件都
+   * 还成立，不停下就是一边报错一边连珠炮地重试。只有点「重试」才清掉它。
+   */
   error: string | null;
 };
 
@@ -66,7 +70,7 @@ export function useRecallMessages(open: boolean, query: string) {
   }, [attempt, debounced, open]);
 
   const more = useCallback(() => {
-    if (!open || state.loading || state.loadingMore || !state.next) return;
+    if (!open || state.loading || state.loadingMore || state.error || !state.next) return;
     const current = controller.current ?? new AbortController();
     const cursor = state.next;
     setState((previous) => ({ ...previous, loadingMore: true }));
@@ -84,15 +88,21 @@ export function useRecallMessages(open: boolean, query: string) {
           tasks,
           next: page.next,
           loadingMore: false,
+          error: null,
         };
       });
     }).catch((error: unknown) => {
       if (current.signal.aborted) return;
       setState((previous) => ({ ...previous, loadingMore: false, error: messageOf(error) }));
     });
-  }, [debounced, open, state.loading, state.loadingMore, state.next]);
+  }, [debounced, open, state.error, state.loading, state.loadingMore, state.next]);
 
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  // 第一页就没取到：整份重来。接下一页时出的错：已经读到的留着，清掉错误，两处自动触发会照常接上那一页。
+  const pagingFailed = state.error !== null && state.messages.length > 0 && state.next !== null;
+  const retry = useCallback(() => {
+    if (pagingFailed) setState((previous) => ({ ...previous, error: null }));
+    else setAttempt((value) => value + 1);
+  }, [pagingFailed]);
   // 列表此刻对应的查询：打字还没停下时 query 已经变了、列表还是上一问的，高亮得跟列表走。
   return { ...state, query: debounced, more, retry };
 }

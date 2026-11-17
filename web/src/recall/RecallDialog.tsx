@@ -39,16 +39,14 @@ export function RecallDialog({
   projects,
   onClose,
   onTask,
-  onArchive,
   notify,
 }: {
   open: boolean;
   tasks: readonly TaskListItem[];
   projects: readonly ProjectView[];
   onClose: () => void;
+  /** 归档的也走这里：打开时就已归档的任务照常开着会话（lib/archivedSelection.ts），一样落到那一句。 */
   onTask: (task: TaskListItem) => void;
-  /** 归档的任务没有会话可落，去的是归档页（同 ⌘K）。 */
-  onArchive: () => void;
   notify: (message: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -106,23 +104,19 @@ export function RecallDialog({
 
   const openMessage = (message: UserMessage | undefined) => {
     if (!message) return;
-    const info = infoOf(message.taskId);
+    const live = liveById.get(message.taskId);
     onClose();
     void Promise.resolve().then(async () => {
-      const task = info?.live ?? await api.task(message.taskId);
-      const archived = info?.archived ?? !!task.archived;
-      if (!archived) {
-        requestMessageReveal({
-          taskId: message.taskId,
-          sessionId: message.sessionId,
-          index: message.index,
-          at: message.at,
-          text: message.text,
-          truncated: message.truncated,
-        });
-      }
+      const task = live ?? await api.task(message.taskId);
+      requestMessageReveal({
+        taskId: message.taskId,
+        sessionId: message.sessionId,
+        index: message.index,
+        at: message.at,
+        text: message.text,
+        truncated: message.truncated,
+      });
       onTask(task);
-      if (archived) onArchive();
     }).catch((error: unknown) => notify(error instanceof Error ? error.message : "这个任务打不开了"));
   };
 

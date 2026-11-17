@@ -2,6 +2,7 @@
 //   utterancesIn —— 一份会话正文里哪几句算我说的、段号跟页面上气泡的出处对不对得上
 //   pageMessages —— 新的在前、按词筛（正文或任务标题）、游标翻页不重不漏
 //   contextAround —— 右边那栏的上下文：我在接它哪句话、它这一轮最后怎么回的
+//   duetUtterancesIn / duetContextAround —— 讨论里插的话（不在会话 .md 里，在讨论时间线上）
 // 跑：npm -w server run test:user-messages
 import assert from "node:assert/strict";
 import { parseSessionSpans } from "@ash/shared/session-output";
@@ -11,6 +12,8 @@ import {
   MESSAGE_TEXT_CAP,
   contextAround,
   compareNewestFirst,
+  duetContextAround,
+  duetUtterancesIn,
   decodeCursor,
   encodeCursor,
   pageMessages,
@@ -138,5 +141,37 @@ const narrated = contextAround([turn("user", "查一下"), "先查哨兵记录�
 assert.ok(narrated.text.startsWith("**确实有哨兵在跑。**"), "开头冒号结尾的过程话去掉，露出真正的回答");
 assert.ok(narrated.text.includes("细节如下："), "回答中间的冒号句照留");
 assert.equal(contextAround([turn("user", "问"), "只有这一句："].join("\n"), 0).after?.text, "只有这一句：", "全是过程话时至少留一段");
+
+assert.deepEqual(contextAround(chat, indexOf("首轮结论：按钮已经改好。")), { before: null, after: null }, "段号指到智能体那段：不是我的话");
+assert.deepEqual(contextAround(chat, 999), { before: null, after: null }, "段号越界不抛");
+
+// ── 讨论时间线 ──────────────────────────────────────────────────────────────
+
+const row = (fields: Record<string, unknown>) => JSON.stringify(fields);
+const timeline = [
+  row({ round: 1, speaker: "B", text: "B 的开场" }),
+  row({ round: 1, speaker: "A", text: "A 的开场方案" }),
+  row({ type: "duet.gate", taskId: "t", gate: "G1", open: true }),
+  row({ round: 2, speaker: "user", text: "你们能给个草案吗", at: "2026-06-18T15:03:01.896Z", kind: "ask" }),
+  row({ type: "duet.progress", phase: "start", round: 2, speaker: "A" }),
+  row({ round: 2, speaker: "A", text: "先看一下现有界面：\n\n草案如下：一屏一个任务" }),
+  row({ round: 2, speaker: "B", text: "B 的草案" }),
+  "不是 JSON 的一行",
+  row({ round: 3, speaker: "user", text: "", at: "2026-06-19T00:00:00.000Z" }),
+  row({ round: 4, speaker: "user", text: "先不做配对相关的", at: "2026-06-19T02:51:01.009Z", target: "B" }),
+  row({ round: 4, speaker: "B", text: "明白，范围收窄" }),
+].join("\n");
+assert.deepEqual(duetUtterancesIn(timeline), [
+  { index: 0, at: "2026-06-18T15:03:01.896Z", raw: "你们能给个草案吗" },
+  { index: 1, at: "2026-06-19T00:00:00.000Z", raw: "" },
+  { index: 2, at: "2026-06-19T02:51:01.009Z", raw: "先不做配对相关的" },
+], "只收 speaker=user 的行；空的也占号（讨论页按同样的数法编气泡），坏行、闸口、进度行跳过");
+assert.deepEqual(duetContextAround(timeline, 0), {
+  before: { text: "A 的开场方案", truncated: false },
+  after: { text: "草案如下：一屏一个任务", truncated: false },
+}, "前面是紧挨着的那位讨论者；回复是之后第一位开口的，开头过程话去掉");
+assert.deepEqual(duetContextAround(timeline, 2), { before: null, after: { text: "明白，范围收窄", truncated: false } }, "前面紧挨着我自己的话：不算在接它的话");
+assert.equal(duetContextAround(timeline, null).after?.text, "B 的开场", "议题的回复是第一位发言");
+assert.deepEqual(duetContextAround(timeline, 9), { before: null, after: null }, "没有这一次插话");
 
 console.log("user-messages tests passed");

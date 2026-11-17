@@ -2,9 +2,16 @@
 // 判据跟会话左侧的输入导航、侧栏铺开那一列同一份（isUserFollowUp）；端点 GET /user-messages。
 
 /**
+ * 讨论（duet）里我插的话不在哪条会话 .md 里，在讨论自己的时间线（transcript.jsonl）上。这些发言的
+ * sessionId 记这个保留值，index 是「这场讨论里我第几次插话」（从 0 数）—— 讨论页给我那几颗气泡记的
+ * 是同一个编号（DuetView 的 `duet-user:N`），落点靠它认。会话 id 是 12 位随机串，撞不上它。
+ */
+export const DUET_TIMELINE_SESSION = "duet-timeline";
+
+/**
  * 一句话在会话里的位置。`sessionId + index` 是它在那条会话 .md 里的段号（parseSessionSpans 的
  * 下标，含删掉的段），页面上每颗用户气泡的出处（ConversationSource）记的就是这一对，落点靠它认；
- * 原始需求不在会话里，两样都是 null。
+ * 原始需求不在会话里，两样都是 null；讨论里的插话见 DUET_TIMELINE_SESSION。
  */
 export interface UserMessage {
   /** 列表里的稳定 key，也是翻页游标的一半。 */

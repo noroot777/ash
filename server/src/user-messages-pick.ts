@@ -173,6 +173,8 @@ function dropNarration(text: string): string {
  */
 export function contextAround(output: string, index: number | null): { before: ContextLine | null; after: ContextLine | null } {
   const segs = parseSessionSpans(output).map(({ seg }) => seg);
+  // 段号指不到我说的一句（越界、指到智能体那段）：这不是一句我的话，前后都无从谈起。
+  if (index !== null && segs[index]?.kind !== "user") return { before: null, after: null };
   let before: ContextLine | null = null;
   if (index !== null) {
     for (let at = index - 1; at >= 0; at -= 1) {
@@ -193,4 +195,66 @@ export function contextAround(output: string, index: number | null): { before: C
     if (seg.text.trim()) reply = seg.text;
   }
   return { before, after: reply === null ? null : capHead(dropNarration(reply), CONTEXT_AFTER_CAP) };
+}
+
+// ── 讨论（duet）的时间线 ─────────────────────────────────────────────────────
+//
+// 讨论里我插的话（注入意见、提问）不写进任何一条会话 .md，只落在讨论自己的 transcript.jsonl 上
+// （server/src/duet/timeline.ts 的 recordUserTurn）。一行一条：我插的话是 `speaker: "user"`，两位讨论者
+// 的整轮发言是 `speaker: "A" | "B" | …`，另有闸口、进度、诊断几种带 `type` 的行，跟对话无关。
+
+type DuetRow = { speaker: string; text: string; at: string | null };
+
+function duetRows(raw: string): DuetRow[] {
+  const rows: DuetRow[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let row: unknown;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (!row || typeof row !== "object") continue;
+    const { type, speaker, text, at } = row as Record<string, unknown>;
+    if (type !== undefined || typeof speaker !== "string") continue;
+    rows.push({ speaker, text: typeof text === "string" ? text : "", at: typeof at === "string" ? at : null });
+  }
+  return rows;
+}
+
+/**
+ * 一场讨论里我插的每一句，按先后。段号是「第几次插话」（从 0 数，空的也占号）—— 讨论页按同样的数法给
+ * 我那几颗气泡编号（DuetView 的 userTurnIds），落点靠它对上。
+ */
+export function duetUtterancesIn(raw: string): SessionUtterance[] {
+  return duetRows(raw).filter((row) => row.speaker === "user").map((row, index) => ({ index, at: row.at, raw: row.text }));
+}
+
+/**
+ * 讨论里一句话前后的对话，口径同 contextAround：before 是紧挨在前面那位讨论者的发言末尾（前面先碰到
+ * 我自己的话就是 null）；after 是我这句之后第一位开口的讨论者怎么回的（到我下一句为止）。`ordinal` 为
+ * null = 议题本身：回复是第一位发言。
+ */
+export function duetContextAround(raw: string, ordinal: number | null): { before: ContextLine | null; after: ContextLine | null } {
+  const rows = duetRows(raw);
+  let position = -1;
+  if (ordinal !== null) {
+    let seen = -1;
+    position = rows.findIndex((row) => row.speaker === "user" && (seen += 1) === ordinal);
+    if (position < 0) return { before: null, after: null };
+  }
+  let before: ContextLine | null = null;
+  for (let at = position - 1; at >= 0; at -= 1) {
+    const row = rows[at]!;
+    if (row.speaker === "user") break;
+    if (!row.text.trim()) continue;
+    before = capTail(row.text, CONTEXT_BEFORE_CAP);
+    break;
+  }
+  let after: ContextLine | null = null;
+  for (let at = position + 1; at < rows.length; at += 1) {
+    const row = rows[at]!;
+    if (row.speaker === "user") break;
+    if (!row.text.trim()) continue;
+    after = capHead(dropNarration(row.text), CONTEXT_AFTER_CAP);
+    break;
+  }
+  return { before, after };
 }
