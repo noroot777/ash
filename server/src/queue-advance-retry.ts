@@ -12,6 +12,14 @@ const deferred = new Map<string, {
   timer: ReturnType<typeof setTimeout>; retries: Set<() => Promise<void>>;
 }>();
 const canceling = new Map<string, number>();
+/** 隔多久把这条队列的推进再重放一次（推进时挂的兜底、失败后的退避都是它）。 */
+const RETRY_MS = 1_000;
+let retryOverride: number | null = null;
+
+/** 只给回归用：故障注入的用例每次都要真等这一秒的重放，压短它。传 null 还原。 */
+export function overrideQueueAdvanceRetry(ms: number | null): void {
+  retryOverride = ms;
+}
 
 export const isQueueAdvanceCanceling = (taskId: string): boolean => canceling.has(taskId);
 
@@ -92,7 +100,7 @@ export function deferQueueAdvance(queueId: string, retry?: () => Promise<void>):
       deferQueueAdvance(queueId);
       for (const attempt of retries) deferQueueAdvance(queueId, attempt);
     });
-  }, 1_000);
+  }, retryOverride ?? RETRY_MS);
   timer.unref?.();
   deferred.set(queueId, { timer, retries });
 }

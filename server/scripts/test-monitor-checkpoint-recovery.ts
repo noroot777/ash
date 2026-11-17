@@ -19,6 +19,7 @@ import { advanceQueue, runGroup } from "../src/scheduler.js";
 import { claimCheckpointForRun } from "../src/task-checkpoint-delivery.js";
 import { enterLeadDelivery, enterTurn } from "../src/turn-entry-guard.js";
 import { monitorWakeCheckpoint } from "../src/monitor-checkpoint-handoff.js";
+import { overrideQueueAdvanceRetry } from "../src/queue-advance-retry.js";
 import { id } from "../src/util.js";
 import { checkpointStartCases } from "./checkpoint-start-cases.js";
 import { checkpointQueueCases } from "./checkpoint-queue-cases.js";
@@ -52,6 +53,9 @@ async function resultsDelivered(test: Awaited<ReturnType<typeof scenario>>): Pro
   await settled(test.taskId);
 }
 
+// 推进队列时总会挂一趟 1 秒后的兜底重放，这一套注入的故障多半靠它补上，每次都按产品的 1 秒真等。
+// 钉的是「那一趟会来、补得上」，不是那一秒。
+overrideQueueAdvanceRetry(100);
 try {
   await checkpointOwnershipCases();
   await checkpointAckFailureCases();
