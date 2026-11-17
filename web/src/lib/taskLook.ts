@@ -177,10 +177,10 @@ export function dispatchedStateOf(task: TaskListItem, workers: TaskListItem[] = 
  * 名下派出去的任务（Task.dispatchedBy，整棵往下）往上带到父任务行尾的那几档，排前面的压过排后面的。
  *
  * 派它的那条大多早就 done 了：收起来就看不出名下还在跑、在问你、摔了。只往行尾带，不动它自己那颗
- * 圆点 —— 圆点说它自己，行尾那颗子任务图标说名下（见 belowSignal）。名下做完没验收的不往上带：那是每一条自己的事，
- * 展开就看得见。
+ * 圆点 —— 圆点说它自己，行尾那颗子任务图标说名下（见 belowSignal）。名下做完没验收的也带上来，排最后：
+ * 侧栏只画最外层那条，子孙不展开，不带上来就没处看得出底下还有章没盖。
  */
-const ROLL_UP: readonly TaskStatusIndicator[] = ["attention", "error", "stalled", "active", "working", "queued", "waiting"];
+const ROLL_UP: readonly TaskStatusIndicator[] = ["attention", "error", "stalled", "active", "working", "queued", "waiting", "unaccepted"];
 
 function rollUpRank(indicator: TaskStatusIndicator | null): number {
   const at = indicator ? ROLL_UP.indexOf(indicator) : -1;
@@ -198,17 +198,18 @@ export function dispatchedRollUp(states: readonly (DispatchedState | null)[]): D
 
 // 名下带上来的那一条不写字，只给行尾那颗子任务图标上色（圆点说它自己，图标说名下）：在跑、等哨兵、
 // 跑验收检查、排队、等开工都是机器自己的事，主色、会跳，跟「运行中」那颗圆点同一个读法；轮到你的
-// 琥珀、出事的红，都不跳。哪一条、到底在等什么，指上去那半句里有。
+// 琥珀、出事的红，都不跳；做完没验收的主色、不跳（同那颗靛蓝环：干完了，等你盖章）。哪一条、到底在
+// 等什么，指上去那半句里有。
 const BELOW_BUSY: readonly TaskStatusIndicator[] = ["active", "working", "queued", "waiting"];
 
-export type BelowTone = "busy" | "ask" | "bad";
+export type BelowTone = "busy" | "ask" | "bad" | "open";
 
 /** 名下带上来的那一条：图标画成哪种颜色，指上去说什么。 */
 export type BelowSignal = { tone: BelowTone; tip: string };
 
 function belowSignal(state: DispatchedState): BelowSignal {
   return {
-    tone: BELOW_BUSY.includes(state.indicator) ? "busy" : phraseTone(state.indicator) ?? "busy",
+    tone: BELOW_BUSY.includes(state.indicator) ? "busy" : state.indicator === "unaccepted" ? "open" : phraseTone(state.indicator) ?? "busy",
     tip: `子任务「${state.title}」${state.word}`,
   };
 }

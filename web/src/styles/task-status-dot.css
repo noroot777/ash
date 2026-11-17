@@ -56,7 +56,7 @@
 
 /* 父任务行尾、右侧「子任务」折叠键上那颗子任务图标（components/DispatchGlyph）：说名下最该被看见的
    那一条，读法跟圆点一样 —— 名下在动（在跑、等哨兵、排队……都是机器的事）主色、会跳；轮到你琥珀、
-   出事了红，都不跳；都做完了留灰（不加类，跟着数字的颜色）。 */
+   出事了红，都不跳；做完没验收的主色、不跳（同那颗靛蓝环）；都验收了留灰（不加类，跟着数字的颜色）。 */
 .dispatch-glyph { flex: 0 0 auto; transform-origin: center; }
 .dispatch-glyph.is-busy {
   color: var(--accent);
@@ -65,6 +65,7 @@
 }
 .dispatch-glyph.is-ask { color: var(--amber); }
 .dispatch-glyph.is-bad { color: var(--red); }
+.dispatch-glyph.is-open { color: var(--accent); }
 
 @keyframes task-status-dot-pulse {
   0%, 100% {
