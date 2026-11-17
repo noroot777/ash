@@ -4,7 +4,7 @@
 // ① 右边那一格叫「审议」，不再有叫「审查」的格；只有讨论、没有审查时，那一格里照样有这一场；
 // ② 发起：@ 一个人、选「讨论」——发送键写「开始讨论」、占位写「要讨论什么…」；轮数那一段点一下换一档、下次记得；
 //    「和谁」那一段多选，再勾一个就是三方（中间不再摆一个人的模型）；@ 这条任务自己的执行器时「讨论」按不动；
-//    `/讨论` 叫上次那个人、停在「讨论」；任务正在跑时「开始讨论」按不动、说清为什么；发出去的是话题、轮数和叫的人；
+//    `/讨论` 叫上次那个人、停在「讨论」（上次那个是自己就开选人菜单，菜单里不列自己）；任务正在跑时「开始讨论」按不动、说清为什么；发出去的是话题、轮数和叫的人；
 // ③ 会话里一场一颗气泡、跟在你发起时那一句后面（那一句带着发起时附的文件；发起时读不到的旧记录在展开、审议格、
 //    完整记录三处都写一句），段间流水一条不留；四种此刻（一段都
 //    没交卷 / 在说 / 说完 / 断了）各写各的；在说时展开前后，谁在说第几段都在气泡下面；
@@ -127,6 +127,19 @@ try {
   await row("start", "codex").waitFor();
   assert.equal(await key("start", "codex", "讨论").getAttribute("aria-pressed"), "true", "/讨论 停在讨论");
   assert.equal(await input("start").inputValue(), "再谈一轮");
+  await scope("start").getByRole("button", { name: "不叫 codex 了" }).click();
+
+  // ② `/讨论`，上次叫的是这条任务自己的执行器（别的任务里叫过它）：开选人菜单，菜单里没有它——列着它、
+  //    回车一按就落到「只能派出去」；选另一个人，停在「讨论」。
+  await page.evaluate(() => localStorage.setItem("ash:reply-call", JSON.stringify({ last: "claude", byAgent: {} })));
+  await input("start").fill("/讨论");
+  await scope("start").getByRole("option", { name: /\/讨论/ }).waitFor();
+  await input("start").press("Enter");
+  await scope("start").getByRole("option", { name: /@codex/ }).waitFor();
+  assert.equal(await scope("start").getByRole("option", { name: /@claude/ }).count(), 0, "讨论选人不列自己");
+  await input("start").press("Enter");
+  await row("start", "codex").waitFor();
+  assert.equal(await key("start", "codex", "讨论").getAttribute("aria-pressed"), "true", "回车选中的人停在讨论");
   await scope("start").getByRole("button", { name: "不叫 codex 了" }).click();
 
   // ② 任务正在跑：按不动，说清为什么。
