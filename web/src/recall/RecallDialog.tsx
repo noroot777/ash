@@ -4,6 +4,7 @@ import type { ProjectView, TaskListItem } from "@ash/shared";
 import type { UserMessage, UserMessageTask } from "@ash/shared/user-messages";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
+import { splitMessageQuotes } from "../lib/messageQuotes.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { requestMessageReveal } from "../search/messageReveal.ts";
 import { attachmentView } from "../task-detail/utils.ts";
@@ -237,7 +238,10 @@ function Preview({
           <p className="recall-before">{`${context.before.truncated ? "…" : ""}${plainSnippet(context.before.text)}`}</p>
         )}
         <div className="recall-mine">
-          {message.text && <p><Highlighted text={message.text} query={query} /></p>}
+          {/* 引文照会话气泡的长相：淡一档、左边一道竖线（MessageText），不露裸的 `>`。 */}
+          {splitMessageQuotes(message.text).map((block, index) => (
+            <p key={index} className={block.kind === "quote" ? "recall-quote" : undefined}><Highlighted text={block.text} query={query} /></p>
+          ))}
           {message.attachments.length > 0 && (
             <ul>
               {message.attachments.map((path) => <li key={path}><Paperclip size={12} aria-hidden="true" />{fileName(path)}</li>)}

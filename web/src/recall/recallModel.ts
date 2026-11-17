@@ -1,6 +1,7 @@
 // R 键那张「我说过的话」的纯逻辑：按天分段、时刻怎么写、一条在列表里那一行露什么。
-// 拆出来是为了能脱 DOM 钉住（scripts/test-recall-model.ts）。
+// 拆出来是为了能脱 DOM 钉住（scripts/test-recall.ts）。
 import type { UserMessage } from "@ash/shared/user-messages";
+import { splitMessageQuotes } from "../lib/messageQuotes.ts";
 
 const two = (value: number) => String(value).padStart(2, "0");
 
@@ -56,14 +57,23 @@ export function recallRows(messages: readonly UserMessage[], now: Date = new Dat
 const EXCERPT_LEAD = 24;
 
 /**
- * 列表里那一行的正文：空白压成一个空格，只发了附件的报附件名。一行只露两行字，筛中的词落在后面时
+ * 列表里那一行的正文：空白压成一个空格，只发了附件的报附件名。一行只露一行字，筛中的词落在后面时
  * 从词前面一点起头 —— 不然命中的那一句在列表里看不出命中在哪。
+ *
+ * 引了一段别人的话（`> ` 开头，「添加到对话」写进来的）再补一句的：那一行露的是**我补的那句**，引文
+ * 只是由头 —— 照原样露出来就是一行裸的 `>` 加别人的话。筛中的词只落在引文里时才露引文（去掉 `>`）。
  */
 export function rowText(message: UserMessage, fileName: (path: string) => string, query = ""): string {
-  const text = message.text.replace(/\s+/g, " ").trim();
+  const blocks = splitMessageQuotes(message.text);
+  const flat = (kind: "quote" | "text") => blocks.filter((block) => block.kind === kind).map((block) => block.text).join(" ").replace(/\s+/g, " ").trim();
+  const own = flat("text");
+  const quoted = flat("quote");
+  const terms = recallTerms(query);
+  const hitIn = (value: string) => terms.some((term) => value.toLowerCase().includes(term));
+  const text = own && !(terms.length && !hitIn(own) && hitIn(quoted)) ? own : quoted;
   if (!text) return message.attachments.map(fileName).join("、");
   const lower = text.toLowerCase();
-  const hits = recallTerms(query).map((term) => lower.indexOf(term)).filter((at) => at >= 0);
+  const hits = terms.map((term) => lower.indexOf(term)).filter((at) => at >= 0);
   const first = hits.length ? Math.min(...hits) : -1;
   return first > EXCERPT_LEAD * 2 ? `…${text.slice(first - EXCERPT_LEAD)}` : text;
 }

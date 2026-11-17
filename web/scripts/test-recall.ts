@@ -84,4 +84,11 @@ assert.equal(
   "由头那段压成纯文本：表格行不要，记号和链接地址去掉",
 );
 
+// 引了一段再补一句：那一行露我补的话，不露裸的 `>`；筛中的词只在引文里时才露引文。
+const quoted = message("q", at(11, 17), "> 团队任务：改成「有成员在跑」优先\n> 第二行引文\n\n不是啊，demo 里我主要要看这些");
+assert.equal(rowText(quoted, fileName), "不是啊，demo 里我主要要看这些");
+assert.equal(rowText(quoted, fileName, "有成员在跑"), "团队任务：改成「有成员在跑」优先 第二行引文");
+assert.equal(rowText(quoted, fileName, "demo"), "不是啊，demo 里我主要要看这些", "词在我补的话里就露我补的话");
+assert.equal(rowText(message("q2", at(11, 17), "> 只有一段引文"), fileName), "只有一段引文", "只有引文时露引文，去掉 >");
+
 console.log("recall tests passed");

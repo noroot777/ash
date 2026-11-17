@@ -220,6 +220,22 @@
   white-space: pre-wrap;
 }
 
+.recall-mine p + p {
+  margin-top: 6px;
+}
+
+/* 引文：同会话气泡里的引文（message-text.css 的 .message-quote），淡一档、左边一道竖线、两行为止。 */
+.recall-mine p.recall-quote {
+  display: -webkit-box;
+  overflow: hidden;
+  border-left: 2px solid var(--line2);
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .recall-mine ul {
   display: grid;
   gap: 4px;
