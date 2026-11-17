@@ -10,11 +10,11 @@ import { join } from "node:path";
 const root = mkdtempSync(join(tmpdir(), "ash-test-data-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_DATA_DIR = join(root, "data");
-// 进程退出那一刻库还开着：Windows 上删不掉打开着的文件（EBUSY），在 exit 钩子里抛出来会把测试的退出码
-// 改成 1。删不掉就留着 —— 门禁给每条叶子另给了系统临时目录，叶子跑完随它一起删。
+// 进程退出那一刻库还开着（测试自己另开的句柄也一样）：Windows 上删不掉打开着的文件（EBUSY），在 exit
+// 钩子里抛出来会把测试的退出码改成 1。删不掉就留着 —— 门禁给每条叶子另给了系统临时目录，叶子跑完随它一起删。
 // 不能为了退出时先关库而在这里提前 import 库模块：有的测试导入这份夹具之后还要改 ASH_DB / ASH_RUNS_DIR /
-// ASH_UPLOADS_DIR 再动态导入产品模块（test-agent-image-entry、test-handoff 等），提前开库就把它们的目录
-// 全定死在这里了。
+// ASH_UPLOADS_DIR 再动态导入产品模块（test-agent-image-entry、test-agent-image-stream、test-chat-boundary
+// 等），提前开库就把它们的目录全定死在这里了，这几条会红。
 process.on("exit", () => {
   try {
     rmSync(root, { recursive: true, force: true });

@@ -177,10 +177,10 @@ export function dispatchedStateOf(task: TaskListItem, workers: TaskListItem[] = 
  * 名下派出去的任务（Task.dispatchedBy，整棵往下）往上带到父任务行尾的那几档，排前面的压过排后面的。
  *
  * 派它的那条大多早就 done 了：收起来就看不出名下还在跑、在问你、摔了。只往行尾带，不动它自己那颗
- * 圆点 —— 圆点说它自己，行尾说名下（见 belowPhrase）。名下做完没验收的不往上带：那是每一条自己的事，
- * 展开就看得见。
+ * 圆点 —— 圆点说它自己，行尾那颗子任务图标说名下（见 belowSignal）。名下做完没验收的也带上来，排最后：
+ * 侧栏只画最外层那条，子孙不展开，不带上来就没处看得出底下还有章没盖。
  */
-const ROLL_UP: readonly TaskStatusIndicator[] = ["attention", "error", "stalled", "active", "working", "queued", "waiting"];
+const ROLL_UP: readonly TaskStatusIndicator[] = ["attention", "error", "stalled", "active", "working", "queued", "waiting", "unaccepted"];
 
 function rollUpRank(indicator: TaskStatusIndicator | null): number {
   const at = indicator ? ROLL_UP.indexOf(indicator) : -1;
@@ -196,20 +196,25 @@ export function dispatchedRollUp(states: readonly (DispatchedState | null)[]): D
   return best;
 }
 
-// 名下在动的（在跑、等哨兵、跑验收检查、排队、等开工）都是机器自己的事，行尾一律「子项运行中」；
-// 只有轮到你的、出事的才说具体是什么。哪一条、到底在等什么，指上去那半句里有。
+// 名下带上来的那一条不写字，只给行尾那颗子任务图标上色（圆点说它自己，图标说名下）：在跑、等哨兵、
+// 跑验收检查、排队、等开工都是机器自己的事，主色、会跳，跟「运行中」那颗圆点同一个读法；轮到你的
+// 琥珀、出事的红，都不跳；做完没验收的主色、不跳（同那颗靛蓝环：干完了，等你盖章）。哪一条、到底在
+// 等什么，指上去那半句里有。
 const BELOW_BUSY: readonly TaskStatusIndicator[] = ["active", "working", "queued", "waiting"];
 
-function belowPhrase(state: DispatchedState): TaskPhrase {
-  const busy = BELOW_BUSY.includes(state.indicator);
+export type BelowTone = "busy" | "ask" | "bad" | "open";
+
+/** 名下带上来的那一条：图标画成哪种颜色，指上去说什么。 */
+export type BelowSignal = { tone: BelowTone; tip: string };
+
+function belowSignal(state: DispatchedState): BelowSignal {
   return {
-    word: busy ? "子项运行中" : `子项${state.word.replace(/^等你/, "等")}`,
-    tone: busy ? null : phraseTone(state.indicator),
+    tone: BELOW_BUSY.includes(state.indicator) ? "busy" : state.indicator === "unaccepted" ? "open" : phraseTone(state.indicator) ?? "busy",
     tip: `子任务「${state.title}」${state.word}`,
   };
 }
 
-/** 父任务行尾那句短语。tip 是指着它时多给的那半句。 */
+/** 团队调度台行尾那句短语（它不画圆点，靠这句说它自己）。tip 是指着它时多给的那半句。 */
 export type TaskPhrase = { word: string; tone: PhraseTone; tip: string };
 
 export type TaskLook = {
@@ -225,8 +230,8 @@ export type TaskLook = {
   detail: string | null;
   /** 它自己此刻怎么样的一句短语。团队调度台那一行不画圆点，靠它说。 */
   phrase: TaskPhrase | null;
-  /** 名下派出去的任务带上来的那一句（子项运行中 / 子项等答复……），见 dispatchedRollUp。 */
-  below: TaskPhrase | null;
+  /** 名下派出去的任务带上来的那一条（只给图标上色，不写字），见 dispatchedRollUp。 */
+  below: BelowSignal | null;
 };
 
 function questionOf(task: TaskListItem, workers: TaskListItem[]): string | null {
@@ -269,6 +274,6 @@ export function taskLook(
     word: asked ? "等你答复" : ruling ? "等你裁定" : blocked ? "开不了工" : null,
     detail,
     phrase,
-    below: dispatched ? belowPhrase(dispatched) : null,
+    below: dispatched ? belowSignal(dispatched) : null,
   };
 }

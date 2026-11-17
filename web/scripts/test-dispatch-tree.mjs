@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { buildDispatchForest, forestRoot, forestLatest, keepForestVisible } from "../src/workspace/dispatchForest.ts";
-import { dispatchFacts, dispatchTally, dispatchTallySaid, dispatchSubtree } from "../src/lib/dispatchTree.ts";
+import { dispatchFacts, dispatchTally, dispatchSubtree } from "../src/lib/dispatchTree.ts";
 import { dispatchPath, dispatchBranch, dispatchLevel, dispatchBranchAccepted, dispatchLook, dispatchMatchesFilter } from "../src/lib/dispatchFamily.ts";
 import { spreadCounts, spreadVisibleTasks } from "../src/workspace/useSidebarSpread.ts";
 import { sidebarSelectionId, stepTaskId } from "../src/workspace/sidebarNavigation.ts";
@@ -47,18 +47,17 @@ const bridged = [root, { ...mid, archived: true }, leaf];
 assert.deepEqual(ids(dispatchBranch(root, bridged).children.get("root")), ["leaf"]);
 assert.equal(dispatchFacts(bridged).count("root"), 0);
 assert.equal(dispatchFacts(bridged).needsYou("root"), true);
-assert.deepEqual(dispatchTally(dispatchFacts(all), "root"), { count: 2, warn: true });
-assert.equal(dispatchTallySaid({ count: 2, warn: true }), "2 个子任务，有要你处理的");
-// 圆点只说它自己（root 验收过、看过：不画），名下那一句只在行尾。
+assert.equal(dispatchTally(dispatchFacts(all), "root"), 2);
+assert.equal(dispatchTally(dispatchFacts([leaf]), "leaf"), null, "名下没有就不带那个数");
+// 圆点只说它自己（root 验收过、看过：不画），名下只给行尾那颗图标上色，指上去说是哪一条。
 assert.equal(dispatchLook(root, all).mark, null);
-assert.equal(dispatchLook(root, all).below.word, "子项等答复");
-assert.equal(dispatchLook(root, all).below.tip, "子任务「leaf」等你答复");
-assert.equal(dispatchedWord(root, dispatchLook(root, all)).word, "子项等答复");
+assert.deepEqual(dispatchLook(root, all).below, { tone: "ask", tip: "子任务「leaf」等你答复" });
+assert.equal(dispatchedWord(root).word, "验收完成", "右侧那一行的字只说它自己，名下的事看折叠键上的图标");
 const brokenBelow = dispatchLook(root, [root, { ...leaf, dispatchedBy: "root", question: null, status: "failed" }]);
-assert.deepEqual([brokenBelow.mark, brokenBelow.below.word, brokenBelow.below.tone], [null, "子项失败", "bad"]);
+assert.deepEqual([brokenBelow.mark, brokenBelow.below.tone], [null, "bad"]);
 const busyBelow = dispatchLook(root, [root, { ...run, monitorRunning: true, status: "paused" }]);
-assert.deepEqual([busyBelow.below.word, busyBelow.below.tone, busyBelow.below.tip], ["子项运行中", null, "子任务「run」等哨兵"], "等哨兵也写成子项运行中，指上去才说具体");
-assert.equal(dispatchedWord({ ...root, status: "paused", question: "问你" }, dispatchLook(root, all)).word, "等你答复", "它自己在问你：先说它自己");
+assert.deepEqual(busyBelow.below, { tone: "busy", tip: "子任务「run」等哨兵" }, "等哨兵也算在动，指上去才说具体");
+assert.equal(dispatchedWord({ ...root, status: "paused", question: "问你" }).word, "等你答复", "它自己在问你：先说它自己");
 assert.ok(dispatchMatchesFilter(root, "todo", all));
 assert.ok(dispatchMatchesFilter(root, "run", all));
 assert.ok(!dispatchMatchesFilter(root, "run", [root, { ...run, archived: true }]));

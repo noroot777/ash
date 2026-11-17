@@ -11,6 +11,7 @@
 | 这一轮看过、没并进来 | 2 | 一条要整包构建产物，一条要编译、可能联网，还会往检出里写东西 |
 | 较慢 | 51 | 单条 15–60 秒，全并进来门禁用时大约翻倍。这一轮没动、没跑 |
 | 留在链外 | 27 | 真模型 / 真 CLI（手动跑）、并发下闪红、依赖整包构建或 mobile 导出、太慢、Windows 专属。这一轮没动、没跑 |
+| 合 main 时才发现、还没看过 | 3 | 两条是并之前就在、但当时那份清单里没有的；一条是之后 main 新带进来的。都没普查、没跑，留给下一次挑着并 |
 | 被别的测试引用的模块 | 17 | 不是独立的测试，名字以 `test-` 开头而已，跟着引用它的那条走 |
 
 ## 这一轮看过、没并进来（2）
@@ -21,6 +22,14 @@
 | `web/scripts/test-cli-goal-lifecycle-ui.mjs` | `/goal` 生命周期在界面上的端到端。 | 要先有 `server/dist` 和 `web/dist`（整包构建产物），门禁不做构建 |
 
 另有两处清单上的条目不是测试、或者已经不存在：`scripts/test-runner.mjs` 是执行器本身；`server/scripts/test-task-star.ts` 文件已经没有了。
+
+## 合 main 时才发现、还没看过（3）
+
+| 文件 | 保什么 | 为什么在外面 |
+|---|---|---|
+| `server/scripts/test-pending-wait-normal.ts` | 排队消息等的是看得见的事就不算滞留（pending-messages 的 waitReason）：任务正在跑一轮长的，排队消息等它跑完是排队本身。 | 并的时候照的那份清单还没有它（main 审查时补进了旧清单）。在 `test:turn-reclaim` 链里 |
+| `server/scripts/test-queue-rank.ts` | 队列名次：对外的 queuePosition 是连续的名次(0..N-1)，删过任务留下缺号的老队列名次照样连续。 | 同上。在 `test:queue` 链里 |
+| `server/scripts/test-discussion-delete.ts` | 删掉一整场讨论之后哪个 agent 都读不到这一场；删普通消息时讨论的背景副本跟着抹。 | 并完之后 main 才带进来。在 `test:discussion` 链里 |
 
 ## 留在外面的那两组里，这一轮顺带看到的
 

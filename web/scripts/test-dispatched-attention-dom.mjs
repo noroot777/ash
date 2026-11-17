@@ -18,8 +18,9 @@ try {
   await pane("lead").waitFor();
   await row("kid-b").waitFor();
   assert.equal(await pane("lead").locator(".question-card").count(), 0);
-  assert.equal(await side.locator(".workspace-dispatch-count.is-warn").textContent(), "3");
-  assert.match(await side.innerText(), /子项等答复/);
+  assert.equal(await side.locator(".workspace-dispatch-count").textContent(), "3");
+  assert.equal(await side.locator(".dispatch-glyph.is-ask").count(), 1, "名下在问你：图标琥珀，数字不变色");
+  assert.doesNotMatch(await side.innerText(), /子项/);
   assert.equal(await row("kid-b").locator("em").innerText(), "等你答复");
   assert.match(await row("kid-b").locator("small").innerText(), /第二条的问题/);
   await pane("lead").getByRole("textbox", { name: "回复任务" }).fill("先汇总父任务的进度");
@@ -39,18 +40,19 @@ try {
   await ask("kid-a").click();
   await pane("kid-a").getByRole("button", { name: "先迁数据", exact: true }).click();
   await pane("kid-a").getByRole("button", { name: "发送答复" }).click();
-  await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"] .workspace-dispatch-count.is-warn'));
+  await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"] .dispatch-glyph:is(.is-ask, .is-bad)'));
   await page.evaluate(() => window.__server.fail("kid-c"));
-  await page.waitForFunction(() => document.querySelector('[data-task-id="lead"] .workspace-dispatch-count.is-warn'));
+  await page.waitForFunction(() => document.querySelector('[data-task-id="lead"] .dispatch-glyph.is-bad'));
   await side.click();
   assert.equal(await row("kid-c").locator("em.is-bad").textContent(), "失败");
-  assert.match(await side.innerText(), /子项失败/);
+  assert.doesNotMatch(await side.innerText(), /子项/);
   assert.equal(await page.locator(".workspace-task-row-wrap", { has: side }).locator(".workspace-status-dot--bad").count(), 0, "名下摔了只写在行尾，圆点照旧说它自己");
   await page.evaluate(() => {
     window.__server.add({ id: "mid", title: "再往下一层", dispatchedBy: "kid-b", status: "done" });
     window.__server.add({ id: "grand", title: "孙一层", dispatchedBy: "mid", status: "paused", question: "孙一层的问题？" });
   });
   await row("grand").waitFor();
+  assert.equal(await row("kid-b").locator(".dispatched-fold .dispatch-glyph.is-ask").count(), 1, "右侧那一行的折叠键：名下在问你，图标琥珀");
   await ask("grand").click();
   await pane("grand").locator(".question-card").waitFor();
   await page.reload();

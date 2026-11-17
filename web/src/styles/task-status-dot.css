@@ -54,6 +54,19 @@
 .workspace-status-dot--small.workspace-status-dot--stalled { box-shadow: inset 0 0 0 1px var(--red); }
 .workspace-status-dot--small.workspace-status-dot--open { box-shadow: inset 0 0 0 1px var(--accent); }
 
+/* 父任务行尾、右侧「子任务」折叠键上那颗子任务图标（components/DispatchGlyph）：说名下最该被看见的
+   那一条，读法跟圆点一样 —— 名下在动（在跑、等哨兵、排队……都是机器的事）主色、会跳；轮到你琥珀、
+   出事了红，都不跳；做完没验收的主色、不跳（同那颗靛蓝环）；都验收了留灰（不加类，跟着数字的颜色）。 */
+.dispatch-glyph { flex: 0 0 auto; transform-origin: center; }
+.dispatch-glyph.is-busy {
+  color: var(--accent);
+  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+.dispatch-glyph.is-ask { color: var(--amber); }
+.dispatch-glyph.is-bad { color: var(--red); }
+.dispatch-glyph.is-open { color: var(--accent); }
+
 @keyframes task-status-dot-pulse {
   0%, 100% {
     opacity: 0.68;
@@ -66,9 +79,9 @@
 }
 
 /* 减少动效：会动的那一档停在原大小，不停在关键帧的末一帧（全局那条只把时长压到 0）。 */
-:root[data-motion="reduce"] :is(.workspace-status-dot--run, .team-status-dot--active) { animation: none; }
+:root[data-motion="reduce"] :is(.workspace-status-dot--run, .team-status-dot--active, .dispatch-glyph.is-busy) { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) :is(.workspace-status-dot--run, .team-status-dot--active) { animation: none; }
+  :root:not([data-motion="full"]) :is(.workspace-status-dot--run, .team-status-dot--active, .dispatch-glyph.is-busy) { animation: none; }
 }
 
 .team-status-dot { display: inline-block; box-sizing: border-box; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
