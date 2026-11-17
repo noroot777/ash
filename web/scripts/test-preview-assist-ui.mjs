@@ -104,7 +104,6 @@ try {
   await script.waitFor();
   assert.match(await capsule.getByRole("button", { name: /模型：/ }).getAttribute("aria-label") ?? "",
     /模型：sonnet/, "刷新之后还得记着刚选的模型");
-  await dismiss().catch(() => {});
 
   // ① 点下去
   await startAssist.click();
@@ -157,7 +156,6 @@ try {
   assert.equal(await page.locator(".preview-assist-error").count(), 0, "接管成功就不该再红一条启动失败");
   await stopAssist.click();
   await progress.locator(".preview-assist-step").getByText("已取消", { exact: false }).waitFor();
-  await dismiss().catch(() => {});
 
   // ⑤b 响应丢在路上，但服务端那边作业已经跑完、还成功了：那次验证是真的
   await page.getByTestId("assist-drop-post-succeeded").click();
