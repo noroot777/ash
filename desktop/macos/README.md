@@ -5,7 +5,7 @@
 ```bash
 npm run install:mac                     # 构建并装进 /Applications，然后打开
 npm run build:mac                       # 只构建 → desktop/macos/build/Ash.app
-bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.dmg
+bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.dmg（与发版同一个格式）
 ```
 
 构建要 Xcode 命令行工具（`swiftc`、编 node-pty 的 clang）和本机的 node/npm，只在 Apple 芯片的 Mac 上出包。最低 macOS 14，ad-hoc 签名。
@@ -37,9 +37,14 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 
 ## 自更新
 
-用 [Sparkle](https://sparkle-project.org) 2（版本和 sha256 钉在 `scripts/sparkle.mjs`，框架原样放进 `Contents/Frameworks`）。菜单「ash → 检查更新…」，另外每 6 小时自己查一次。更新包放在素材库 [noroot777/materials](https://github.com/noroot777/materials)（公开仓库，`release.json` 里配）：appcast 是 `ash/mac/appcast.xml`（app 拉的是它在 raw.githubusercontent 上的那份），zip 是 tag 为 `ash-mac-v<版本>-<构建号>` 的 GitHub Release 的附件。
+用 [Sparkle](https://sparkle-project.org) 2（版本和 sha256 钉在 `scripts/sparkle.mjs`，框架原样放进 `Contents/Frameworks`）。菜单「ash → 检查更新…」，另外每 6 小时自己查一次。两个公开仓库，都在 `release.json` 里配：
 
-**只靠 EdDSA 签名校验**：app 是 ad-hoc 签名，没有能跨版本延续的 Apple 签名身份，而 Sparkle 的规则是「Apple 签名身份和 EdDSA 密钥至少一样不变」。所以 Info.plist 里的 `SUPublicEDKey` **永远不能换**，换了已装的 app 就再也装不上新版。appcast 本身也签（`SURequireSignedFeed`），zip 先验签再解压（`SUVerifyUpdateBeforeExtraction`）：被改过的 zip 或 appcast 一律拒装。公钥由 `build.sh` 从 `release.json` 写进 Info.plist；还没配公钥的构建不带更新源，菜单里也没有「检查更新…」。
+- **安装包**在 [noroot777/ash](https://github.com/noroot777/ash)（`releaseRepo`）：tag 为 `ash-mac-v<版本>-<构建号>` 的 GitHub Release 上的 `Ash-<版本>-<构建号>.dmg`。只出 dmg：新用户下载安装的、Sparkle 更新用的是同一个文件。
+- **appcast** 在素材库 [noroot777/materials](https://github.com/noroot777/materials)（`feedRepo`）的 `ash/mac/appcast.xml`，app 的 `SUFeedURL` 是它在 raw.githubusercontent 上的那份；每一版的下载地址指向 noroot777/ash 那个 Release 上的 dmg。
+
+**只靠 EdDSA 签名校验**：app 是 ad-hoc 签名，没有能跨版本延续的 Apple 签名身份，而 Sparkle 的规则是「Apple 签名身份和 EdDSA 密钥至少一样不变」。所以 Info.plist 里的 `SUPublicEDKey` **永远不能换**，换了已装的 app 就再也装不上新版。appcast 本身也签（`SURequireSignedFeed`），dmg 先验签再挂载（`SUVerifyUpdateBeforeExtraction`）：被改过的 dmg 或 appcast 一律拒装。公钥由 `build.sh` 从 `release.json` 写进 Info.plist；还没配公钥的构建不带更新源，菜单里也没有「检查更新…」。
+
+dmg 的格式（`scripts/make-dmg.sh`，按 Sparkle 2.10.1 的源码核对过）：UDZO 只读压缩镜像，不带许可协议；卷里是 `Ash.app`、指向 `/Applications` 的软链和 Finder 布局（`dmg/DS_Store`，由 `scripts/make-dmg-layout.py` 生成后入库，出包时不用 Finder）。Sparkle 挂载时跳过软链和隐藏文件、只拷出 app，再按已装那份的文件名（`Ash.app`）认出新版，所以卷里的名字固定是 `Ash.app`。dmg 不签：Sparkle 对 dmg 的「Apple 签名兜底」只认 Developer ID，ad-hoc 的 app 没有 team，这条兜底永远走不通，验签失败就是拒装。
 
 ### 装之前那道闸
 
@@ -71,7 +76,8 @@ server 一启动就做不可逆的迁移，所以闸在停掉服务之后、换 
 ```bash
 # 1. 退出 app，停掉服务（数据根里 ash.db.ash.lock 记着 pid）
 kill "$(node -p 'require(process.env.HOME + "/Library/Application Support/dev.ash.mac/ash.db.ash.lock").pid')"
-# 2. 从素材库的 Releases 里下回备份文件名里那个构建号的 zip（tag ash-mac-v…-<构建号>），解开换掉 /Applications/Ash.app
+# 2. 从 noroot777/ash 的 Releases 里下回备份文件名里那个构建号的 dmg（tag ash-mac-v…-<构建号>），
+#    打开后把里面的 Ash 拖进 Applications，选「替换」
 # 3. 把备份放回去（先把现在这份挪开，别直接覆盖）
 cd ~/Library/Application\ Support/dev.ash.mac
 mkdir -p rolled-back && mv ash.db ash.db-wal ash.db-shm rolled-back/ 2>/dev/null
@@ -99,9 +105,11 @@ desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.ash.mac -f <
 npm run release:mac
 ```
 
-从**干净的提交**构建（构建号由账本发，见上面「版本」）→ 核对 app 里的公钥就是签名私钥的那一把、更新源就是素材库里那份 appcast → 版本号必须比 appcast 里最新的大 → 压 zip（`ditto`）、`sign_update` 签名 → 在素材库建 GitHub Release `ash-mac-v<版本>-<构建号>`、传 zip → 把包下回来核对 → 再更新 appcast（新的一项在前，旧的原样保留，整份重签）→ 经 GitHub Contents API 提交回素材库（带着读出时的 sha，这期间别处改过就拒，重跑即可；不克隆素材库，宣传片等大文件一个字节都不下）。先传包、确认下得下来才提交 appcast，feed 不会指向一个还不存在的包；中途失败重跑，同一版沿用 `build/releases/` 里上次压好的 zip —— 只在这次的 app 和压那个 zip 的是同一份时（zip 旁边的 `.source` 记着 app 的内容摘要），同一个构建号换了包就拒发。更新说明默认是上一版以来的提交标题，`--notes` 可以换。
+从**干净的提交**构建（构建号由账本发，见上面「版本」）→ 核对 app 里的公钥就是签名私钥的那一把、更新源就是素材库里那份 appcast → 版本号必须比 appcast 里最新的大 → 封 dmg（`scripts/make-dmg.sh`）、`sign_update` 签名 → 在 noroot777/ash 建 GitHub Release `ash-mac-v<版本>-<构建号>`（tag 打在构建 app 的那个提交上，所以**那个提交要先 `git push`**，没推就在传任何东西之前停下）、传 dmg → 把包下回来核对 → 再更新 appcast（新的一项在前，旧的原样保留，整份重签）→ 经 GitHub Contents API 提交回素材库（带着读出时的 sha，这期间别处改过就拒，重跑即可；不克隆素材库，宣传片等大文件一个字节都不下；也不碰 noroot777/ash 的 main）。先传包、确认下得下来才提交 appcast，feed 不会指向一个还不存在的包；中途失败重跑，同一版沿用 `build/releases/` 里上次封好的 dmg —— 只在这次的 app 和封那个 dmg 的是同一份时（dmg 旁边的 `.source` 记着 app 的内容摘要），同一个构建号换了包就拒发。更新说明默认是上一版以来的提交标题，`--notes` 可以换。
 
-GitHub 凭证按顺序找：`GH_TOKEN` / `GITHUB_TOKEN` → `gh auth token` → git 存在钥匙串里的 github.com 凭证（`git push` 用的那条）。都没有就报错并说怎么配。传包和提交 appcast 只用这一张，开传之前先确认它对素材库有写权限，没有就什么都不传。`--init-repo` 只在 `release.json` 的 repo 还不存在时才用得上（会建成公开仓库）。raw.githubusercontent 有几分钟缓存，推完稍等已装的 app 才看得到。
+最后把仓库根 `README.md`「下载 mac 版」两行标记之间改成这个 dmg 的直链，**只提交 README.md、不推送**（`scripts/download-link.mjs`）：noroot777/ash 以后可能还发别的 Release，`releases/latest` 不一定是 mac 包，所以写死成具体那一版；发完才改、当场提交，下一次发版要求的干净工作区不受影响；推送照常由人来，推上去之前 GitHub 首页还是上一版的链接，那一版装上后会自己更新到最新。README 自己有没提交的改动时不替你改，只打出新链接。
+
+GitHub 凭证按顺序找：`GH_TOKEN` / `GITHUB_TOKEN` → `gh auth token` → git 存在钥匙串里的 github.com 凭证（`git push` 用的那条）。都没有就报错并说怎么配。传包和提交 appcast 只用这一张，开传之前先确认它对 noroot777/ash 和素材库**都**有写权限，缺一个就什么都不传（fine-grained token 要把两个仓库都选上）。`--init-repo` 只在 `release.json` 里的仓库还不存在时才用得上（会建成公开仓库）。raw.githubusercontent 有几分钟缓存，推完稍等已装的 app 才看得到。
 
 ### 本地演练
 
@@ -120,7 +128,7 @@ defaults write dev.ash.mac.rehearsal HostMcpSetupDone -array /tmp/r/data   # 别
 open /tmp/r/Ash.app                                                          # 菜单「检查更新…」
 ```
 
-演练私钥是 base64 的 32 字节 ed25519 种子（`generate_keys -x` 导出的就是这个格式）。演练完删掉 `dev.ash.mac.rehearsal` 的 defaults 和 `~/Library/{Caches,HTTPStorages,WebKit}/dev.ash.mac.rehearsal`。
+演练出来的 `/tmp/r/feed` 里是 dmg 和 appcast，和正式发版传上去的是同一种东西。演练私钥是 base64 的 32 字节 ed25519 种子（`generate_keys -x` 导出的就是这个格式）。演练完删掉 `dev.ash.mac.rehearsal` 的 defaults 和 `~/Library/{Caches,HTTPStorages,WebKit}/dev.ash.mac.rehearsal`。
 
 ## 第一次打开
 
@@ -146,7 +154,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 
 也可以 `defaults write dev.ash.mac AshDataDir <目录>` 换数据根、`defaults write dev.ash.mac AshURL http://192.168.1.187:4317` 连别的 ash（非本机地址不替它起服务，也不做身份判断）。
 
-定点回归（仅 macOS）：`node scripts/test-macos-update.mjs` 覆盖装之前那道闸（不会打断就不问；会打断先问、等到排空自己装、现在装；问不出来按会打断；等的时候一次 503 / 不应答不放行；只停评估过的那个进程；另一处在起服务时不停；维护标记跨进程生效、持有者没了作废；停不下来不装也不备份；别的 ash 不碰；退出那一档和它备份失败时的说法；Sparkle 放弃后闸收回、重试再备份；起服务前补备份、没有服务记录时连着起不来也留住迁移前的原件、起它的启动器没等到时由之后看到它应答的那一处确认、下一版不拿上一次的底顶替、确认后旧恢复点作废；旧版服务识别）、库备份（WAL 里的写入、确认前不轮换、确认后只留 5 份、同一秒不覆盖且按生成先后认新旧）和发版脚本（zip 与 appcast 的签名、篡改检测、重发 / 旧版本 / 钥匙不配对拒发、`--notes`、缓存 zip 认 app；对着本地假 GitHub 的正式发版：只给 GH_TOKEN 走完传包和提交 appcast、没写权限什么都不传）。`node scripts/test-macos-client.mjs` 用真的 AshConfig / AshHealth / ServerLauncher / DataImport / BrowserWindowController 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据（数据根 + 自带代码 + 本机模式）、窗口只连专用端口、在线后换人（自己那份停了、不认实例号的旧版 ash 接手 4317，页面持续写请求，一条都到不了 4317；导航与定时两道撤页；自家服务重起后换上新实例号）、空数据根不起、起服务的环境（终端配置盖不掉）、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、构建号、安装（别名目录、带正则字符的目录、相对路径起的包内可执行文件、包外软链起的入口靠它拿着的锁认出、最后检查之后改名之前起来的入口等在锁上并读到整份新包、锁文件缺了不启动不安装、两个安装器并发）、导入（WAL 里的写入、暂存里洗过再发布、和起服务互斥、失败与抢跑不留痕迹、残留清单、停掉的源、互相包含、多人库拒绝）。server 那一半：`npm -w server run test:host-ash-mcp`（MCP 登记归类）、`npm -w server run test:import-snapshot`（导入不是重启：真的接管入口对着洗过的库认不出活着的源进程；同一串开机对账对着没洗/洗过的副本各跑一遍，前者替源实例重投修复、后者一行不动；路径逐字重定位）、`npm -w server run test:instance-binding`（真服务：带着别人实例号的写请求、页面、预览与预览 WebSocket 一律 409 且不执行，health 照答；窗口专用端口上同一套判据，被占着时 health 报 null、服务照常起）。
+定点回归（仅 macOS）：`node scripts/test-macos-update.mjs` 覆盖装之前那道闸（不会打断就不问；会打断先问、等到排空自己装、现在装；问不出来按会打断；等的时候一次 503 / 不应答不放行；只停评估过的那个进程；另一处在起服务时不停；维护标记跨进程生效、持有者没了作废；停不下来不装也不备份；别的 ash 不碰；退出那一档和它备份失败时的说法；Sparkle 放弃后闸收回、重试再备份；起服务前补备份、没有服务记录时连着起不来也留住迁移前的原件、起它的启动器没等到时由之后看到它应答的那一处确认、下一版不拿上一次的底顶替、确认后旧恢复点作废；旧版服务识别）、库备份（WAL 里的写入、确认前不轮换、确认后只留 5 份、同一秒不覆盖且按生成先后认新旧）。`node scripts/test-macos-release.mjs` 覆盖发版脚本：只出 dmg（格式、卷里只有 app + Applications 软链 + 入库的布局）、dmg 与 appcast 的签名、篡改检测、重发 / 旧版本 / 钥匙不配对拒发、`--notes`、缓存 dmg 认 app 且同一份原样沿用；对着本地假 GitHub（装包、清单两个仓库）的正式发版：只对一个仓库有写权限、构建提交没推，都什么都不传；都齐了 dmg 进装包仓库、appcast 进清单仓库且指向那个 dmg，README 链接只提交 README；旧格式配置拒绝。`node scripts/test-macos-sparkle-dmg.mjs` 用真的 Sparkle（`Tests/SparkleDmg` 编的空壳 app，更新配置同 build.sh）走一遍：dmg 被改一个字节 → 下载了但挂载前验签不过、不装；appcast 被改 → 连 dmg 都不下；都对 → 装上新版并由 Sparkle 重开。`node scripts/test-macos-client.mjs` 用真的 AshConfig / AshHealth / ServerLauncher / DataImport / BrowserWindowController 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据（数据根 + 自带代码 + 本机模式）、窗口只连专用端口、在线后换人（自己那份停了、不认实例号的旧版 ash 接手 4317，页面持续写请求，一条都到不了 4317；导航与定时两道撤页；自家服务重起后换上新实例号）、空数据根不起、起服务的环境（终端配置盖不掉）、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、构建号、安装（别名目录、带正则字符的目录、相对路径起的包内可执行文件、包外软链起的入口靠它拿着的锁认出、最后检查之后改名之前起来的入口等在锁上并读到整份新包、锁文件缺了不启动不安装、两个安装器并发）、导入（WAL 里的写入、暂存里洗过再发布、和起服务互斥、失败与抢跑不留痕迹、残留清单、停掉的源、互相包含、多人库拒绝）。server 那一半：`npm -w server run test:host-ash-mcp`（MCP 登记归类）、`npm -w server run test:import-snapshot`（导入不是重启：真的接管入口对着洗过的库认不出活着的源进程；同一串开机对账对着没洗/洗过的副本各跑一遍，前者替源实例重投修复、后者一行不动；路径逐字重定位）、`npm -w server run test:instance-binding`（真服务：带着别人实例号的写请求、页面、预览与预览 WebSocket 一律 409 且不执行，health 照答；窗口专用端口上同一套判据，被占着时 health 报 null、服务照常起）。
 
 ## 窗口
 
@@ -177,7 +185,10 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `Sources/DatabaseBackup.swift` | SQLite 一致快照；更新前备份、恢复点与保留 |
 | `scripts/sparkle.mjs` | 取固定版本的 Sparkle（框架 + 签名工具） |
 | `scripts/release.mjs`、`appcast.mjs`、`github.mjs` | 发版、appcast 读写、GitHub API |
-| `release.json` | 发布仓库与 appcast 路径、tag 前缀、钥匙串条目名、EdDSA 公钥 |
+| `scripts/download-link.mjs` | 发完改写并单独提交根 README 的下载链接 |
+| `scripts/make-dmg.sh` | 封 dmg（下载安装和 Sparkle 更新同一个） |
+| `scripts/make-dmg-layout.py`、`dmg/DS_Store` | dmg 打开时那扇拖拽安装窗口的 Finder 布局 |
+| `release.json` | 装包仓库、清单仓库与 appcast 路径、tag 前缀、钥匙串条目名、EdDSA 公钥 |
 | `Sources/AppDelegate.swift` | 生命周期与菜单（⌘C/⌘V 靠编辑菜单分发，不能省） |
 | `Sources/BrowserWindowController.swift` | 窗口、WKWebView、探活、页面在时认人、菜单动作 |
 | `Sources/WindowChrome.swift` | 内容铺到窗口顶：量红绿灯、和页面的约定、拖窗口 |

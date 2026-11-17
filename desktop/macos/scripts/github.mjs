@@ -3,7 +3,7 @@
 // git 子进程去推（那样用的是 git 自己的凭证，和这里查过权限的不是同一个身份）。
 import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, extname } from "node:path";
 
 // ASH_MAC_GITHUB_API 只给回归测试指向一个本地假的 GitHub。
 const API = process.env.ASH_MAC_GITHUB_API || "https://api.github.com";
@@ -27,9 +27,10 @@ export function resolveToken() {
 }
 
 export const NO_TOKEN_HINT = [
-  "找不到能调 GitHub API 的凭证。任选一种（传附件、改 appcast 都只用这一张）：",
+  "找不到能调 GitHub API 的凭证，或者它对 release.json 里的两个仓库（releaseRepo 放安装包、feedRepo 放 appcast）不是都能写。",
+  "任选一种（传附件、改 appcast 都只用这一张）：",
   "  · 装 gh 并登录：brew install gh && gh auth login",
-  "  · 或者给一个有该仓库 contents 写权限的 token：export GH_TOKEN=…（fine-grained token，仓库权限 Contents: Read and write）",
+  "  · 或者给一个对这两个仓库都有 contents 写权限的 token：export GH_TOKEN=…（fine-grained token，两个仓库都选上，权限 Contents: Read and write）",
   "  · 或者让 git 记住 github.com 的凭证（git push 过一次、存进钥匙串的那种）",
 ].join("\n");
 
@@ -65,6 +66,16 @@ export class GitHub {
     return Boolean((await this.call("GET", `/repos/${repo}`)).json?.permissions?.push);
   }
 
+  async defaultBranch(repo) {
+    return (await this.call("GET", `/repos/${repo}`)).json.default_branch;
+  }
+
+  /** 仓库里有没有这个提交（短 sha 也认），有就给出完整 sha，没有是 null。 */
+  async commitSha(repo, ref) {
+    const { status, json } = await this.call("GET", `/repos/${repo}/commits/${encodeURIComponent(ref)}`, { allow: [404, 422] });
+    return status === 404 || status === 422 ? null : json.sha;
+  }
+
   /** 读分支上的一个文件：{ sha, text }；不存在是 null。 */
   async readFile(repo, path, branch) {
     const { status, json } = await this.call("GET", `/repos/${repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(branch)}`, { allow: [404] });
@@ -96,9 +107,10 @@ export class GitHub {
     return status === 404 ? null : json;
   }
 
-  async createRelease(repo, { tag, branch, name, body }) {
+  /** 建 Release；tag 还不存在时打在 target（分支名或完整 sha）上。 */
+  async createRelease(repo, { tag, target, name, body }) {
     return (await this.call("POST", `/repos/${repo}/releases`, {
-      body: { tag_name: tag, target_commitish: branch, name, body, draft: false, prerelease: false },
+      body: { tag_name: tag, target_commitish: target, name, body, draft: false, prerelease: false },
     })).json;
   }
 
@@ -114,9 +126,10 @@ export class GitHub {
     const url = release.upload_url.replace(/\{.*$/, `?name=${encodeURIComponent(name)}`);
     return (await this.call("POST", url, {
       body: new Uint8Array(readFileSync(file)),
-      headers: { "content-type": "application/zip", "content-length": String(size) },
+      headers: { "content-type": CONTENT_TYPES[extname(name)] || "application/octet-stream", "content-length": String(size) },
     })).json;
   }
 }
 
+const CONTENT_TYPES = { ".dmg": "application/x-apple-diskimage", ".zip": "application/zip" };
 const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");

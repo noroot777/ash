@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="#快速开始">快速开始</a> · <a href="#核心能力">核心能力</a> · <a href="#编排模式">编排模式</a> · <a href="#任务接力">任务接力</a> · <a href="#实时预览">实时预览</a> · <a href="#多人模式">多人模式</a> · <a href="docs/install.md">部署文档</a>
+  <a href="#下载-mac-版">下载 mac 版</a> · <a href="#快速开始">快速开始</a> · <a href="#核心能力">核心能力</a> · <a href="#编排模式">编排模式</a> · <a href="#任务接力">任务接力</a> · <a href="#实时预览">实时预览</a> · <a href="#多人模式">多人模式</a> · <a href="docs/install.md">部署文档</a>
 </p>
 
 ---
@@ -33,6 +33,26 @@ https://github.com/user-attachments/assets/1197fcee-17e4-4e01-8b29-ee0f267e259b
 Ash 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
 
 一个 Node 进程，一个端口，数据全在本地磁盘。
+
+## 下载 mac 版
+
+<!-- ash-mac-download -->
+第一版还没发布，现在请按下面的「快速开始」从源码运行。
+<!-- /ash-mac-download -->
+
+<!-- 上面两行标记之间由发版脚本（npm run release:mac）在每次发完后改成那一版 dmg 的直链，并单独提交这个文件。 -->
+
+自带 node 和 ash 本体，装好就能用，不用克隆仓库。需要 Apple 芯片（M 系列）的 Mac、macOS 14 以上。
+
+1. 下载上面的 dmg，打开后把 **Ash** 拖进 **Applications**（应用程序）。
+2. 第一次打开会被系统拦下（app 没有经过 Apple 公证）：到「系统设置 → 隐私与安全性」，在页面下方点「仍要打开」。
+3. 如果提示「已损坏，无法打开」，在终端里执行下面这行，再打开一次：
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Ash.app
+   ```
+
+4. 以后的新版本从菜单「ash → 检查更新…」安装（app 也会每 6 小时自己查一次）。
 
 ## 快速开始
 

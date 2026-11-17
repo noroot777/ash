@@ -5,7 +5,7 @@
 #
 #   desktop/macos/build.sh             # 产物 desktop/macos/build/Ash.app
 #   desktop/macos/build.sh --install   # 装进 /Applications（不可写就 ~/Applications）并打开；旧版还有进程在用就不装
-#   desktop/macos/build.sh --dmg       # 另出一份拖进「应用程序」安装的 build/Ash.dmg
+#   desktop/macos/build.sh --dmg       # 另出一份拖进「应用程序」安装的 build/Ash.dmg（与发版同一个 dmg 格式）
 #
 # 自更新（Sparkle）的更新源和 EdDSA 公钥取自 release.json；公钥还空着时编出来的 app 不带更新源，
 # 「检查更新…」不出现。演练与测试用的口子（正式发版不用）：
@@ -35,11 +35,14 @@ touch "$BOOK"
 BUILD_NUMBER="${ASH_MAC_BUILD_NUMBER:-$(lockf -k "$BOOK" node "$HERE/scripts/build-number.mjs" "$BOOK")}"
 BUNDLE_ID="${ASH_MAC_BUNDLE_ID:-dev.ash.mac}"
 
-# 更新源：release.json 里的发布仓库 → raw.githubusercontent 上那份 appcast。
-read -r RELEASE_REPO RELEASE_BRANCH RELEASE_APPCAST RELEASE_KEY < <(node -e '
+# 更新源：release.json 里放 appcast 的那个仓库（feedRepo，不是放安装包的 releaseRepo）→
+# raw.githubusercontent 上那份 appcast。
+RELEASE_CONFIG="$(node -e '
   const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  console.log(c.repo, c.branch || "main", c.appcastPath || "appcast.xml", c.publicKey || "-");' "$HERE/release.json")
-FEED_URL="${ASH_MAC_FEED_URL:-https://raw.githubusercontent.com/$RELEASE_REPO/$RELEASE_BRANCH/$RELEASE_APPCAST}"
+  if (!c.feedRepo) { console.error("✕ release.json 里没有 feedRepo"); process.exit(1); }
+  console.log(c.feedRepo, c.feedBranch || "main", c.appcastPath || "appcast.xml", c.publicKey || "-");' "$HERE/release.json")"
+read -r FEED_REPO FEED_BRANCH FEED_APPCAST RELEASE_KEY <<< "$RELEASE_CONFIG"
+FEED_URL="${ASH_MAC_FEED_URL:-https://raw.githubusercontent.com/$FEED_REPO/$FEED_BRANCH/$FEED_APPCAST}"
 ED_KEY="${ASH_MAC_ED_PUBLIC_KEY:-$RELEASE_KEY}"
 [[ "$ED_KEY" == "-" ]] && ED_KEY=""
 
@@ -74,7 +77,7 @@ cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
 node "$HERE/scripts/bundle-runtime.mjs" "$APP/Contents/Resources"
 
 # Sparkle：只认 EdDSA（app 是 ad-hoc 签名，没有能延续的 Apple 签名身份），appcast 本身也要签过；
-# 先验签再解压。定时检查每 6 小时一次；检查到了先问，装之前过 UpdateGate 那道闸。
+# 先验签再解包。定时检查每 6 小时一次；检查到了先问，装之前过 UpdateGate 那道闸。
 SPARKLE_KEYS=""
 if [[ -n "$ED_KEY" ]]; then
   SPARKLE_KEYS="  <key>SUFeedURL</key><string>$FEED_URL</string>
@@ -138,13 +141,7 @@ case "${1:-}" in
     open "$DEST_DIR/Ash.app"
     ;;
   --dmg)
-    STAGE="$BUILD/dmg"
-    rm -rf "$STAGE" "$BUILD/Ash.dmg"
-    mkdir -p "$STAGE"
-    ditto "$APP" "$STAGE/Ash.app"
-    ln -s /Applications "$STAGE/Applications"
-    hdiutil create -quiet -volname ash -srcfolder "$STAGE" -ov -format UDZO "$BUILD/Ash.dmg"
-    rm -rf "$STAGE"
+    bash "$HERE/scripts/make-dmg.sh" "$APP" "$BUILD/Ash.dmg"
     echo "✓ $BUILD/Ash.dmg"
     ;;
 esac
