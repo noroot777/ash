@@ -359,8 +359,9 @@ async function initializeServer() {
   // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
   // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
   void sweepRunLogs()
-    .then(({ removed, bytes }) => {
+    .then(({ removed, bytes, fifos }) => {
       if (removed) console.log(`[ash] 回收 ${removed} 个已结束运行的原始输出文件（${(bytes / 1048576).toFixed(1)} MB）`);
+      if (fifos) console.log(`[ash] 回收 ${fifos} 根已经没人开着的 agent stdin 管道`);
     })
     .catch((err) => console.error("[ash] 原始输出文件回收失败（不影响运行）:", err));
   stageModule.mountTaskStageRoutes(routesModule.api);

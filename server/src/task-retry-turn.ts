@@ -97,21 +97,33 @@ type NonAgentSeg = Exclude<ConvSeg, { kind: "agent" }>;
 // 后端旁注（level:"notice"：结算说明、会话轮换那句）不是输入，必须跳过 —— 它们恒在回合
 // 收尾时落盘，也就是恒在最后一个真人回合之后。不跳的话每一个「没交卷」的失败回合末尾都
 // 挂着一条旁注，`lastInputOf` 拿到 system 就判成「上一轮本来就是续跑」，于是「重跑上一
-// 回合」再也重投不了用户那句话，静默退回 resume。
+// 回合」再也重投不了用户那句话，静默退回 resume。时间线旁注（aside：验收回执、「这一轮没有产出
+// 任何改动」）同理，也恒排在回合后面。
+//
+// 回合中途的系统注记（工作目录重建、基线改道，turn-system-note.ts）既不带 notice 也不是旁注，
+// 却跟那一回合的输入同带一个回合身份、排在输入后面。只取「最后一段」就会把它当成输入：worktree
+// 被验收清掉之后的每一次续聊崩了，重试都静默退回续跑，续跑是任务的执行，没交卷就把「已完成」
+// 改成「失败」，「重试这一回合」从此消失（jV60dIbVuBga）。系统续跑的那一段带着 `resume`，又恒是
+// 它那一回合的第一段；同一回合里排在别的输入后面、又没有 `resume` 的系统段只能是注记。回合中途
+// 补进来的那句话（原生 steer）是 user 段，照旧算数。
 export function lastInputOf(out: string): NonAgentSeg | null {
-  return [...parseSessionOutput(out)]
-    .reverse()
-    .find((seg): seg is NonAgentSeg => seg.kind !== "agent" && !(seg.kind === "system" && seg.level === "notice"))
-    ?? null;
+  const inputs = parseSessionOutput(out).filter((seg): seg is NonAgentSeg =>
+    seg.kind !== "agent" && !(seg.kind === "system" && (seg.level === "notice" || seg.aside)));
+  const midTurnNote = (seg: NonAgentSeg, index: number) => seg.kind === "system" && !seg.resume && !!seg.turnStartedAt
+    && inputs.findIndex((other) => other.turnStartedAt === seg.turnStartedAt) < index;
+  return inputs.filter((seg, index) => !midTurnNote(seg, index)).at(-1) ?? null;
 }
 
 async function lastInputSeg(path: string): Promise<NonAgentSeg | null> {
+  let hit: NonAgentSeg | null = null;
   for (const step of TAIL_STEPS) {
     const { text, whole } = await readTail(path, step);
-    const hit = lastInputOf(text);
-    if (hit || whole) return hit;
+    hit = lastInputOf(text);
+    // 切口正好落在回合输入和它后面的注记之间时，注记会被认成那一回合的第一段：再往前读一截。
+    const cut = hit?.kind === "system" && !hit.resume && !!hit.turnStartedAt;
+    if ((hit && !cut) || whole) return hit;
   }
-  return null;
+  return hit;
 }
 
 type UserSeg = Extract<NonAgentSeg, { kind: "user" }>;

@@ -67,7 +67,7 @@ if mode == "import-inspect" || mode == "import" {
     var held = ""
     if mode == "import" {
       let report = try DataImport.run(source, into: AshConfig.dataURL, lockTimeout: Double(CommandLine.arguments.dropFirst(3).first ?? "") ?? 60)
-      held = " held=\(report.held.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")) relocated=\(report.relocated)"
+      held = " held=\(report.held.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")) relocated=\(report.relocated) skipped=\(report.skippedSpecial)"
     }
     print("OK live=\(source.livePID.map(String.init) ?? "none")\(held)")
     exit(0)

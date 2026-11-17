@@ -25,10 +25,13 @@ enum DataImport {
     let livePID: Int32?
   }
 
-  /// 洗副本时停下来的东西（import-snapshot 的 ImportPreparation）。
+  /// 洗副本时停下来的东西（import-snapshot 的 ImportPreparation），外加复制时跳过的特殊文件数。
   struct Report: Decodable {
     let held: [String: Int]
     let relocated: Int
+    var skippedSpecial = 0
+
+    private enum CodingKeys: String, CodingKey { case held, relocated }
   }
 
   typealias Failure = SQLiteFile.Failure
@@ -67,12 +70,14 @@ enum DataImport {
     let staging = dest.appendingPathComponent("\(stagingPrefix)\(getpid())-\(UUID().uuidString)", isDirectory: true)
     defer { try? fm.removeItem(at: staging) }
     try fm.createDirectory(at: staging, withIntermediateDirectories: false)
+    var special = 0
     for name in try fm.contentsOfDirectory(atPath: source.url.path) where !skipped(name) {
-      try fm.copyItem(at: source.url.appendingPathComponent(name), to: staging.appendingPathComponent(name))
+      special += try copyTree(source.url.appendingPathComponent(name).path, to: staging.appendingPathComponent(name).path)
     }
     let db = staging.appendingPathComponent("ash.db")
     try SQLiteFile.snapshot(from: source.url.appendingPathComponent("ash.db"), to: db)
-    let report = try prepare(db, source: source.url, dest: dest)
+    var report = try prepare(db, source: source.url, dest: dest)
+    report.skippedSpecial = special
     try seal(db)
 
     let lock = try ServerStartLock(dataDir: dest)
@@ -91,6 +96,30 @@ enum DataImport {
     let exact: Set<String> = ["ash.db", "ash.db-wal", "ash.db-shm", "ash.db-journal", "deps", "tmp", journalName]
     return exact.contains(name) || appOwned.contains(name) || name.hasPrefix(stagingPrefix)
       || name.hasSuffix(".ash.lock") || name.contains(".ash-online.")
+  }
+
+  /// 只搬普通文件、目录和符号链接（链接照原样复制成链接，不跟进去，跟 `copyItem` 一致）。命名管道、
+  /// socket、设备文件绑的是源那台机器上的进程，副本里没有用，`copyItem` 碰到 FIFO 还会直接抛错、
+  /// 让整次导入作罢 —— 跳过，返回跳过了几个。
+  private static func copyTree(_ from: String, to: String) throws -> Int {
+    let fm = FileManager.default
+    let attributes = try fm.attributesOfItem(atPath: from)   // lstat：不跟随链接
+    switch attributes[.type] as? FileAttributeType {
+    case .typeRegular?, .typeSymbolicLink?:
+      try fm.copyItem(atPath: from, toPath: to)
+      return 0
+    case .typeDirectory?:
+      try fm.createDirectory(atPath: to, withIntermediateDirectories: false)
+      var special = 0
+      for name in try fm.contentsOfDirectory(atPath: from) {
+        special += try copyTree((from as NSString).appendingPathComponent(name), to: (to as NSString).appendingPathComponent(name))
+      }
+      // 权限放到最后：源目录要是只读的，先设上就写不进里面的东西了。
+      if let mode = attributes[.posixPermissions] { try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: to) }
+      return special
+    default:
+      return 1
+    }
   }
 
   // MARK: 发布

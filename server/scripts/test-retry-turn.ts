@@ -57,6 +57,54 @@ const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
   assert.equal(seg?.kind, "system");
 }
 
+// ── 回合中途的系统注记（工作目录重建）跟输入同一个回合身份、排在输入后面 → 跳过它，重投用户那句 ──
+// 认错了就退回续跑：续跑是任务的执行，没交卷把「已完成」改成「失败」，重试入口从此消失（jV60dIbVuBga）。
+{
+  const at = "2026-11-17T04:47:16.250Z";
+  const seg = lastInputOf([
+    turn("system", "收到新的指令，这条线先退回「让 AI 干活」这一站", { aside: true, notice: { kind: "receipt" }, seq: 1, turnStartedAt: null }),
+    turn("user", "先给我做个 html demo", { seq: 2, turnStartedAt: at }),
+    turn("system", "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状", { seq: 3, turnStartedAt: at }),
+    "API Error: 503",
+  ].join("\n"));
+  assert.equal(seg?.kind, "user", "工作目录重建那句是注记，不是输入");
+  assert.equal(seg?.text, "先给我做个 html demo");
+}
+
+// ── 回合末尾的时间线旁注（aside）也不是输入 ──────────────────────────────────
+{
+  const seg = lastInputOf([
+    turn("user", "看一下现状", { seq: 1, turnStartedAt: "2026-11-17T04:38:53.006Z" }),
+    "agent 崩了",
+    turn("system", "这一轮没有产出任何改动", { aside: true, notice: { kind: "receipt" }, seq: 2, turnStartedAt: "2026-11-17T04:38:53.006Z" }),
+  ].join("\n"));
+  assert.equal(seg?.text, "看一下现状");
+}
+
+// ── 系统续跑那一段（带 resume）后面跟着注记 → 仍认续跑 ────────────────────────
+{
+  const at = "2026-11-17T08:36:53.397Z";
+  const seg = lastInputOf([
+    turn("user", "开工", { seq: 1, turnStartedAt: "2026-11-17T08:00:00.000Z" }),
+    turn("system", "〔系统〕继续（从中断处）", { resume: { reason: "retry" }, seq: 2, turnStartedAt: at }),
+    turn("system", "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状", { seq: 3, turnStartedAt: at }),
+  ].join("\n"));
+  assert.equal(seg?.kind, "system");
+  assert.equal(seg?.kind === "system" ? seg.resume?.reason : undefined, "retry", "取的是续跑那一段，不是注记");
+}
+
+// ── 回合中途补进来的那句话（原生 steer）是 user 段，照旧是最后的输入 ───────────────
+{
+  const at = "2026-11-17T09:00:00.000Z";
+  const seg = lastInputOf([
+    turn("user", "先改标题", { seq: 1, turnStartedAt: at }),
+    "agent 改着",
+    turn("user", "顺便把副标题也改了", { seq: 2, turnStartedAt: at }),
+    "agent 崩了",
+  ].join("\n"));
+  assert.equal(seg?.text, "顺便把副标题也改了");
+}
+
 // ── 自由工作流自动修复回合崩了：最后一段是后端代写的 user 回合 → 重投并保留标记 ──
 {
   const seg = lastInputOf([
