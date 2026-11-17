@@ -53,7 +53,7 @@ function UsageValue({ label, agentType, usage, wakes }: { label: string; agentTy
   );
 }
 
-/** 上下文那一行：一根细条画剩下的那一截（剩到 15% 以下变红），右边是「压缩设置」——点开就是原来那颗胶囊的明细加快捷设置。 */
+/** 上下文那一行：一根细条从左往右涨，画已经用掉的那一截（剩到 15% 以下变红），右边是「压缩设置」——点开就是原来那颗胶囊的明细加快捷设置。 */
 function ContextValue({ facts }: { facts: InfoRunFacts }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(true);
@@ -74,7 +74,7 @@ function ContextValue({ facts }: { facts: InfoRunFacts }) {
     <>
       {remain !== null && (
         <span className={`insp-bar${remain <= 15 ? " is-low" : ""}`} aria-hidden="true">
-          <i style={{ transform: `scaleX(${remain / 100})` }} />
+          <i style={{ transform: `scaleX(${Math.min(1, Math.max(0, 1 - remain / 100))})` }} />
         </span>
       )}
       <span className={facts.compacting ? "insp-live" : "insp-num"} aria-label={facts.compacting ? "正在压缩上下文" : view.spoken}>
