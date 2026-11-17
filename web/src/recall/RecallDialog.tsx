@@ -2,13 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { MagnifyingGlass, Paperclip } from "@phosphor-icons/react";
 import type { ProjectView, TaskListItem } from "@ash/shared";
 import type { UserMessage, UserMessageTask } from "@ash/shared/user-messages";
-import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
-import { deriveTaskStatusIndicator } from "../lib/taskLook.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { requestMessageReveal } from "../search/messageReveal.ts";
 import { attachmentView } from "../task-detail/utils.ts";
-import { clockOf, fullInstant, highlightParts, recallRows, rowText } from "./recallModel.ts";
+import { fullInstant, highlightParts, plainSnippet, recallRows, rowText } from "./recallModel.ts";
+import { useRecallContext } from "./useRecallContext.ts";
 import { useRecallMessages } from "./useRecallMessages.ts";
 import "../styles/recall.css";
 
@@ -18,6 +18,12 @@ const PREFETCH_ROWS = 8;
 const PAGE_ROWS = 8;
 
 type TaskInfo = { title: string; projectId: string; archived: boolean; live: TaskListItem | null };
+
+/*
+ * 左边只有两样东西：我说的那句（一行）和它属于哪个任务（同一个任务连着说的几句只写一次任务名）。
+ * 状态、项目、时刻都不在列表里常驻 —— 一行三四样东西排满，整张表就成了一坨字，跟 F 铺开一个毛病。
+ * 选中那句的时刻、项目和前后的对话在右边。
+ */
 
 /**
  * R 键：我在所有任务里说过的每一句话，新的在前。左边一句一行，右边是选中那句的全文和它所在的任务；
@@ -30,7 +36,6 @@ export function RecallDialog({
   open,
   tasks,
   projects,
-  currentProjectId,
   onClose,
   onTask,
   onArchive,
@@ -39,7 +44,6 @@ export function RecallDialog({
   open: boolean;
   tasks: readonly TaskListItem[];
   projects: readonly ProjectView[];
-  currentProjectId: string | null;
   onClose: () => void;
   onTask: (task: TaskListItem) => void;
   /** 归档的任务没有会话可落，去的是归档页（同 ⌘K）。 */
@@ -67,11 +71,6 @@ export function RecallDialog({
   useDismissable({ enabled: open, containerRef: panel, onClose });
 
   const liveById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
-  const workersOf = useMemo(() => {
-    const byParent = new Map<string, TaskListItem[]>();
-    for (const task of tasks) if (task.parentId) byParent.set(task.parentId, [...byParent.get(task.parentId) ?? [], task]);
-    return byParent;
-  }, [tasks]);
   const projectNames = useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
   // 手里有实时的那份就用实时的（状态跟着变），没有（归档的、列表还没读到的）用服务端随页带来的。
   const infoOf = (taskId: string): TaskInfo | null => {
@@ -162,12 +161,17 @@ export function RecallDialog({
         </div>
         <div className="recall-body">
           <div ref={list} id="recall-list" className="recall-list" role="listbox" aria-label="我说过的话">
-            {rows.map(({ message, index, day }) => {
-              const info = infoOf(message.taskId);
-              const project = info && info.projectId !== currentProjectId ? projectNames.get(info.projectId) : undefined;
+            {rows.map(({ message, index, day, task }) => {
+              const info = task ? infoOf(message.taskId) : null;
               return (
                 <div key={message.id} role="presentation">
                   {day && <div className="recall-day" role="presentation">{day}</div>}
+                  {task && (
+                    <div className="recall-task" role="presentation">
+                      {info?.title ?? "已删除的任务"}
+                      {info?.archived && <span>已归档</span>}
+                    </div>
+                  )}
                   <div
                     id={`recall-row-${index}`}
                     role="option"
@@ -178,14 +182,7 @@ export function RecallDialog({
                     onPointerMove={() => { if (index !== active) setActive(index); }}
                     onClick={() => openMessage(message)}
                   >
-                    <p><Highlighted text={rowText(message, fileName, data.query)} query={data.query} /></p>
-                    <div className="recall-row-meta">
-                      {info?.live && <StatusOf task={info.live} workers={workersOf.get(info.live.id)} />}
-                      <span className="recall-row-task">{info?.title ?? "已删除的任务"}</span>
-                      {project && <span className="recall-row-project">{project}</span>}
-                      {info?.archived && <span className="recall-row-project">已归档</span>}
-                      <time dateTime={message.at}>{clockOf(message.at)}</time>
-                    </div>
+                    <Highlighted text={rowText(message, fileName, data.query)} query={data.query} />
                   </div>
                 </div>
               );
@@ -207,11 +204,6 @@ export function RecallDialog({
   );
 }
 
-function StatusOf({ task, workers }: { task: TaskListItem; workers?: TaskListItem[] }) {
-  const indicator = deriveTaskStatusIndicator(task, workers);
-  return indicator ? <TaskStatusDot indicator={indicator} surface="workspace" small /> : null;
-}
-
 function Preview({
   message,
   info,
@@ -227,25 +219,35 @@ function Preview({
   fileName: (path: string) => string;
   onOpen: () => void;
 }) {
+  const context = useRecallContext(message);
   const scroller = useRef<HTMLDivElement>(null);
-  // 换了一句就从头读起。
+  // 换了一句就从头读起：最上面那段由头只有三行，我那句总在第一屏里。
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = 0;
   }, [message.id]);
+  const project = info ? projectName.get(info.projectId) : undefined;
   return (
     <aside className="recall-preview" aria-live="polite">
-      <button type="button" className="recall-preview-task" onClick={onOpen}>{info?.title ?? "已删除的任务"}</button>
-      <div className="recall-preview-meta">
-        {info && <span>{projectName.get(info.projectId) ?? ""}</span>}
-        {info?.archived && <span>已归档</span>}
-        <time dateTime={message.at}>{fullInstant(message.at)}</time>
-      </div>
-      <div ref={scroller} className="recall-preview-text">
-        {message.text && <p><Highlighted text={message.text} query={query} /></p>}
-        {message.attachments.length > 0 && (
-          <ul className="recall-preview-files">
-            {message.attachments.map((path) => <li key={path}><Paperclip size={12} aria-hidden="true" />{fileName(path)}</li>)}
-          </ul>
+      <header>
+        <button type="button" className="recall-preview-task" onClick={onOpen}>{info?.title ?? "已删除的任务"}</button>
+        <p>{[project, info?.archived ? "已归档" : null, fullInstant(message.at)].filter(Boolean).join(" · ")}</p>
+      </header>
+      <div ref={scroller} className="recall-thread">
+        {context?.before && (
+          <p className="recall-before">{`${context.before.truncated ? "…" : ""}${plainSnippet(context.before.text)}`}</p>
+        )}
+        <div className="recall-mine">
+          {message.text && <p><Highlighted text={message.text} query={query} /></p>}
+          {message.attachments.length > 0 && (
+            <ul>
+              {message.attachments.map((path) => <li key={path}><Paperclip size={12} aria-hidden="true" />{fileName(path)}</li>)}
+            </ul>
+          )}
+        </div>
+        {context?.after && (
+          <div className="recall-agent">
+            <MarkdownBody text={`${context.after.text}${context.after.truncated ? "\n\n…" : ""}`} />
+          </div>
         )}
       </div>
     </aside>

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import type { UserMessage } from "@ash/shared/user-messages";
 import { REQUIREMENT_INPUT_ID, conversationInputs, type ConversationInput } from "../src/task-detail/conversationInputs.ts";
 import { pickRevealInput, type MessageRevealRequest } from "../src/search/messageReveal.ts";
-import { dayLabel, highlightParts, recallRows, rowText } from "../src/recall/recallModel.ts";
+import { dayLabel, highlightParts, plainSnippet, recallRows, rowText } from "../src/recall/recallModel.ts";
 
 // ── 认气泡 ──────────────────────────────────────────────────────────────────
 
@@ -54,10 +54,12 @@ const message = (id: string, when: string, text: string, attachments: string[] =
 const rows = recallRows([
   message("a", at(11, 17, 14), "今天下午"),
   message("b", at(11, 17, 9), "今天上午"),
+  { ...message("b2", at(11, 17, 8), "另一个任务里"), taskId: "t2" },
   message("c", at(11, 16, 20), "昨晚"),
   message("d", at(11, 3), "更早"),
 ], now);
-assert.deepEqual(rows.map((row) => row.day), ["今天", null, "昨天", "11月3日"], "每一天只在第一行上画段头");
+assert.deepEqual(rows.map((row) => row.day), ["今天", null, null, "昨天", "11月3日"], "每一天只在第一行上画段头");
+assert.deepEqual(rows.map((row) => row.task), [true, false, true, true, true], "同一任务连着说的几句只画一次任务名；换任务、换天都重画");
 
 const fileName = (path: string) => path.split("/").at(-1)!;
 assert.equal(rowText(message("x", at(11, 17), "  第一行\n\n第二行  "), fileName), "第一行 第二行", "空白压成一个空格");
@@ -75,5 +77,11 @@ assert.deepEqual(highlightParts("把 Deploy 按钮挪到右边", "deploy 右边"
 ], "不分大小写，每个词都画");
 assert.deepEqual(highlightParts("编辑器", "编辑 编辑器"), [{ text: "编辑器", hit: true }], "同一处有长有短时画长的");
 assert.deepEqual(highlightParts("没有命中", ""), [{ text: "没有命中", hit: false }]);
+
+assert.equal(
+  plainSnippet("## 改法\n\n| 情况 | 改前 |\n|---|---|\n| a | b |\n\n- **单条任务**：看 `web/a.ts`，见 [文档](https://x)\n> 引一句"),
+  "改法 单条任务：看 web/a.ts，见 文档 引一句",
+  "由头那段压成纯文本：表格行不要，记号和链接地址去掉",
+);
 
 console.log("recall tests passed");

@@ -112,3 +112,85 @@ export function pageMessages(
   }
   return { messages: page, next: more && page.length ? encodeCursor(page.at(-1)!) : null };
 }
+
+/** 上下文里智能体那两段各带多少字：认得出在聊什么就够，读全文去会话里。 */
+export const CONTEXT_BEFORE_CAP = 240;
+export const CONTEXT_AFTER_CAP = 520;
+
+export type ContextLine = { text: string; truncated: boolean };
+
+/** 截到段落边界上（截在代码块、列表中间会把 Markdown 弄坏）；找不到合适的边界就硬截。 */
+function capHead(text: string, cap: number): ContextLine {
+  const trimmed = text.trim();
+  if (trimmed.length <= cap) return { text: trimmed, truncated: false };
+  const head = trimmed.slice(0, cap);
+  const cut = head.lastIndexOf("\n\n");
+  return { text: (cut > cap / 2 ? head.slice(0, cut) : head).trimEnd(), truncated: true };
+}
+
+/**
+ * 留末尾：从最后一段往前整段地收，装不下就停 —— 从表格、列表中间切进去，剩下的半截 Markdown 画出来
+ * 是一堆竖线。最后一段自己就超长时才硬截它的尾巴。
+ */
+function capTail(text: string, cap: number): ContextLine {
+  const trimmed = text.trim();
+  if (trimmed.length <= cap) return { text: trimmed, truncated: false };
+  const paragraphs = trimmed.split(/\n{2,}/);
+  const kept: string[] = [];
+  let length = 0;
+  for (let at = paragraphs.length - 1; at >= 0; at -= 1) {
+    const paragraph = paragraphs[at]!;
+    if (length + paragraph.length > cap) break;
+    kept.unshift(paragraph);
+    length += paragraph.length + 2;
+  }
+  return { text: kept.length ? kept.join("\n\n") : trimmed.slice(-cap).trimStart(), truncated: true };
+}
+
+/**
+ * 回复开头那几句过程话（「先查一下哨兵记录：」「截图核对一下渲染结果：」）—— 它们是智能体边干活边念叨的，
+ * 每句后面跟着一串工具调用，正文里只剩一行冒号结尾的短句。去掉它们，露出来的才是它真正回我的话。
+ */
+const NARRATION = /^[^\n]{1,80}[：:]$/;
+
+function dropNarration(text: string): string {
+  const paragraphs = text.trim().split(/\n{2,}/);
+  let at = 0;
+  while (at < paragraphs.length - 1 && NARRATION.test(paragraphs[at]!.trim())) at += 1;
+  return paragraphs.slice(at).join("\n\n");
+}
+
+/**
+ * 一句话前后的对话：它上一句说了什么（我是在接哪句话）、它怎么回的。
+ *
+ * - before：往前找最近的一段智能体正文，取**末尾** —— 紧挨着我这句的是它最后说的那几句。中间先碰到
+ *   我自己的另一句（连着说了两句）就不算「在接它的话」，给 null。
+ * - after：往后到我下一句话为止，智能体最后那段正文，去掉开头的过程话（dropNarration）取**开头** ——
+ *   一轮回复往往先是「我先看看」之类的过程话，最后那段才是结论。
+ * - 旁注（系统注记）和系统代写的输入（哨兵投喂、审查打回）不是我跟它的对话，跳过：它们只是把同一件事
+ *   接着往下推，回复要读到我下一次开口为止。删掉的段不算。`index` 为 null = 原始需求：前面没有东西，回复是
+ *   第一条会话开头那一轮。
+ */
+export function contextAround(output: string, index: number | null): { before: ContextLine | null; after: ContextLine | null } {
+  const segs = parseSessionSpans(output).map(({ seg }) => seg);
+  let before: ContextLine | null = null;
+  if (index !== null) {
+    for (let at = index - 1; at >= 0; at -= 1) {
+      const seg = segs[at]!;
+      if (seg.deleted || seg.kind === "system" || (seg.kind === "user" && !isUserFollowUp(seg)) || !seg.text.trim()) continue;
+      if (seg.kind === "agent") before = capTail(seg.text, CONTEXT_BEFORE_CAP);
+      break;
+    }
+  }
+  let reply: string | null = null;
+  for (let at = (index ?? -1) + 1; at < segs.length; at += 1) {
+    const seg = segs[at]!;
+    if (seg.deleted || seg.kind === "system") continue;
+    if (seg.kind === "user") {
+      if (isUserFollowUp(seg)) break;
+      continue;
+    }
+    if (seg.text.trim()) reply = seg.text;
+  }
+  return { before, after: reply === null ? null : capHead(dropNarration(reply), CONTEXT_AFTER_CAP) };
+}

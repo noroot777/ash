@@ -38,3 +38,12 @@ export interface UserMessagePage {
 
 /** 一页多少条。 */
 export const USER_MESSAGE_PAGE = 60;
+
+/**
+ * 一句话前后的对话（GET /user-messages/context）：智能体上一段说到哪（取末尾）、这一轮它怎么回的
+ * （取最后那段正文的开头）。都截过；没有就是 null。
+ */
+export interface UserMessageContext {
+  before: { text: string; truncated: boolean } | null;
+  after: { text: string; truncated: boolean } | null;
+}

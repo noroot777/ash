@@ -32,16 +32,23 @@ export function fullInstant(at: string): string {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`;
 }
 
-export type RecallRow = { message: UserMessage; index: number; day: string | null };
+/**
+ * 列表的一行行。day：这一行上面画天的段头（跟上一行不是同一天）；task：这一行上面画任务名
+ * （跟上一行不是同一个任务，或者换了一天）。同一个任务里连着说的几句归在一个任务名下面，
+ * 任务名不必每行都写一遍。
+ */
+export type RecallRow = { message: UserMessage; index: number; day: string | null; task: boolean };
 
-/** 列表的一行行：day 不为 null 的那一行上面画段头（跟上一行不是同一天）。 */
 export function recallRows(messages: readonly UserMessage[], now: Date = new Date()): RecallRow[] {
-  let previous: string | null = null;
+  let previousDay: string | null = null;
+  let previousTask: string | null = null;
   return messages.map((message, index) => {
     const label = dayLabel(message.at, now);
-    const day = label === previous ? null : label;
-    previous = label;
-    return { message, index, day };
+    const day = label === previousDay ? null : label;
+    const task = day !== null || message.taskId !== previousTask;
+    previousDay = label;
+    previousTask = message.taskId;
+    return { message, index, day, task };
   });
 }
 
@@ -92,4 +99,20 @@ export function highlightParts(text: string, query: string): { text: string; hit
   }
   if (position < text.length) parts.push({ text: text.slice(position), hit: false });
   return parts;
+}
+
+/**
+ * 「它上一句说到哪」那一小段的纯文本：它只是个由头，淡色、三行，不值得画成 Markdown —— 表格行整行不要，
+ * 标题井号、加粗、行内代码的记号、链接地址去掉，换行压成空格。
+ */
+export function plainSnippet(markdown: string): string {
+  return markdown
+    .split("\n")
+    .filter((line) => !/^\s*\|/.test(line) && !/^\s*```/.test(line))
+    .map((line) => line.replace(/^\s*(#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s?)/, ""))
+    .join(" ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }

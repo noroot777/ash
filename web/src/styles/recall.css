@@ -56,63 +56,45 @@
   z-index: 1;
   top: -4px;
   background: var(--panel);
-  padding: 10px 10px 4px;
-  color: var(--muted);
+  padding: 14px 10px 2px;
+  color: var(--ink);
   font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
+/* 任务名：同一个任务连着说的几句只写一次，淡一档，跟正文分开读。 */
+.recall-task {
+  display: flex;
+  overflow: hidden;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px 2px;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recall-task span {
+  flex: none;
+}
+
+/* 一句一行。 */
 .recall-row {
-  display: grid;
-  gap: 3px;
-  border-radius: 8px;
-  padding: 7px 10px;
+  overflow: hidden;
+  border-radius: 7px;
+  padding: 5px 10px;
+  color: var(--ink);
   cursor: pointer;
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 选中只认 aria-selected：指针动一下就换选中，底色永远只有一行（同 ⌘K 的口径）。 */
 .recall-row[aria-selected="true"] {
   background: var(--sel-bg);
-}
-
-.recall-row p {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0;
-  color: var(--ink);
-  font-size: var(--t-sm);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.recall-row-meta {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: var(--t-xs);
-}
-
-.recall-row-task {
-  overflow: hidden;
-  min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.recall-row-project {
-  flex: none;
-  color: var(--faint);
-}
-
-.recall-row-meta time {
-  flex: none;
-  margin-left: auto;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
 }
 
 .recall mark {
@@ -155,13 +137,15 @@
   display: flex;
   min-height: 0;
   flex-direction: column;
-  background: color-mix(in oklab, var(--canvas) 72%, var(--panel));
+}
+
+.recall-preview > header {
+  flex: none;
+  padding: 16px 24px 12px;
 }
 
 .recall-preview-task {
-  align-self: flex-start;
-  max-width: calc(100% - 32px);
-  margin: 16px 20px 0;
+  max-width: 100%;
   border: 0;
   background: transparent;
   padding: 0;
@@ -178,29 +162,56 @@
   text-underline-offset: 3px;
 }
 
-.recall-preview-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin: 4px 20px 0;
-  color: var(--muted);
+.recall-preview > header p {
+  margin: 2px 0 0;
+  color: var(--faint);
   font-size: var(--t-xs);
-}
-
-.recall-preview-meta time {
   font-variant-numeric: tabular-nums;
 }
 
-.recall-preview-text {
+/* 那一句前后的对话，长相照会话：我的话是右边一颗气泡，智能体的话是左边的正文。 */
+.recall-thread {
+  display: flex;
   min-height: 0;
   flex: 1;
+  flex-direction: column;
+  gap: 14px;
   overflow-y: auto;
-  margin-top: 12px;
-  border-top: 1px solid var(--line);
-  padding: 14px 20px 20px;
+  padding: 4px 24px 24px;
 }
 
-.recall-preview-text p {
+.recall-agent {
+  color: var(--ink);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+}
+
+/* 我是在接哪句话：只是个由头，淡下去、三行为止。 */
+.recall-before {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.recall-agent :is(h1, h2, h3, h4) {
+  font-size: var(--t-sm);
+}
+
+.recall-mine {
+  align-self: flex-end;
+  max-width: 88%;
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  background: var(--raised);
+  padding: 9px 13px;
+}
+
+.recall-mine p {
   margin: 0;
   color: var(--ink);
   font-size: var(--t-sm);
@@ -209,17 +220,17 @@
   white-space: pre-wrap;
 }
 
-.recall-preview-files {
+.recall-mine ul {
   display: grid;
   gap: 4px;
-  margin: 12px 0 0;
+  margin: 8px 0 0;
   padding: 0;
   color: var(--muted);
   font-size: var(--t-xs);
   list-style: none;
 }
 
-.recall-preview-files li {
+.recall-mine li {
   display: flex;
   align-items: center;
   gap: 5px;
