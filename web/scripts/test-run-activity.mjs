@@ -3,6 +3,7 @@ import {
   runActivityCopy,
   runActivityExecutor,
   runActivityPhase,
+  liveRunActor,
   runActivityTail,
 } from "@ash/shared/run-activity";
 import { latestActiveDuetTurn, rebuildDuetState } from "../src/duet/duetState.ts";
@@ -44,6 +45,12 @@ assert.equal(
 assert.equal(runActivityExecutor({ sessions: [], fallback: "claude@ccb" }), "claude@ccb");
 assert.equal(runActivityExecutor({ sessions: [{ agentType: "grok", executor: "  ", endedAt: null }] }), "grok");
 assert.equal(runActivityExecutor({}), null);
+
+// 进行条前面画谁的标：只认此刻开着回合的那条会话，没有就不画（不退到任务常设执行器）。
+assert.equal(liveRunActor([standing, summoned])?.agentType, "grok");
+assert.equal(liveRunActor([{ ...standing, endedAt: null }, summoned])?.agentType, "grok", "两条都开着取回合最新的");
+assert.equal(liveRunActor([standing]), null, "都收了口 = 还没交到谁手上");
+assert.equal(liveRunActor([]), null);
 
 assert.deepEqual(runActivityCopy({ status: "running", mode: "single", executor: "codex@local" }), {
   title: "codex@local 正在启动",

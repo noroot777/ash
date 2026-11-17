@@ -15,7 +15,7 @@ import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageText } from "../components/MessageText.tsx";
 import { LiveStrip } from "../components/LiveStrip.tsx";
 import { PrerequisiteWait } from "./PrerequisiteWait.tsx";
-import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
+import { liveRunActor, runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
@@ -293,6 +293,7 @@ export function ConversationFeed({
   items: feedItems,
   loading,
   error,
+  sessions,
   forkBlockedReason,
   footer,
   onForkReply,
@@ -607,7 +608,7 @@ export function ConversationFeed({
           {/* 等它开口的那一段只有一行进行条（run-2）；排着队时字不动，原因指上去看。 */}
           {activityPhase && !loading && !error && !reviewRunning && (task.status === "queued"
             ? <LiveStrip still since={null} text={queuedCopy?.title ?? "排着队"} tip={queuedCopy?.detail} />
-            : <LiveStrip since={task.liveSince} />)}
+            : <LiveStrip since={task.liveSince} agent={liveRunActor(sessions ?? [])?.agentType} />)}
           {/* 正文一条都没读下来时这里是空的，但那不是「还没开始跑」——`forkBlockedReason`
               在场就说明读挂了，再劝用户点运行是把失败说成了空会话。 */}
           {task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked) && !activityPhase && (
