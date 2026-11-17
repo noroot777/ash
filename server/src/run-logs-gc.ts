@@ -13,7 +13,7 @@ import { eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
-import { CONTROL_FIFO_SUFFIX, controlFifoPath, removeIdleControlFifo } from "./executors/control-fifo.js";
+import { CONTROL_FIFO_SUFFIX, controlFifoPath, removeIdleControlFifos } from "./executors/control-fifo.js";
 
 // 只认这三种后缀 —— 白名单而不是黑名单：这个目录里还躺着 .md 正文、审查证据、
 // 用户上传的图片，误删任何一样都是不可逆的。
@@ -49,12 +49,12 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number; 
 
   let removed = 0;
   let bytes = 0;
-  let fifos = 0;
+  const fifoPaths: string[] = [];
   let taskDirs: string[];
   try {
     taskDirs = readdirSync(RUNS_DIR);
   } catch {
-    return { removed, bytes, fifos }; // 还没有 runs 目录
+    return { removed, bytes, fifos: 0 }; // 还没有 runs 目录
   }
   for (const taskId of taskDirs) {
     const dir = join(RUNS_DIR, taskId);
@@ -68,7 +68,7 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number; 
     for (const name of entries) {
       if (name.endsWith(CONTROL_FIFO_SUFFIX)) {
         const full = join(dir, name);
-        if (!live.has(full) && removeIdleControlFifo(full) === "removed") fifos++;
+        if (!live.has(full)) fifoPaths.push(full);
         continue;
       }
       const isMonitorLog = name.startsWith(MONITOR_PREFIX) && name.endsWith(MONITOR_SUFFIX);
@@ -86,5 +86,7 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number; 
       }
     }
   }
+  const swept = await removeIdleControlFifos(fifoPaths);
+  const fifos = [...swept.values()].filter((result) => result === "removed").length;
   return { removed, bytes, fifos };
 }

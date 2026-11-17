@@ -15,7 +15,7 @@
 // stdin 从匿名管道换成可重开的具名管道，因此 server 重启后两边都能接回。
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { closeSync, createWriteStream, openSync, existsSync, unlinkSync } from "node:fs";
+import { closeSync, createWriteStream, openSync, existsSync } from "node:fs";
 import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
@@ -33,7 +33,7 @@ import {
 } from "./kernel-confine.js";
 import { reopenWindowsControlStdin, spawnWindowsDetachedAgent } from "./detached-win.js";
 import { registerWindowsOwnership } from "./windows-run-evidence.js";
-import { controlFifoPath, removeIdleControlFifo, retireControlFifo } from "./control-fifo.js";
+import { controlFifoPath, removeIdleControlFifoSync, retireControlFifo } from "./control-fifo.js";
 
 // 落盘文件 / tailFile / 伪装外壳这一层搬到了 detached-child.ts(那边是纯文件与流,
 // 不碰进程);使用方照旧从本文件 import,所以在这里原样转出。
@@ -83,13 +83,18 @@ export function spawnControllableDetachedAgent(
     try { closeSync(openSync(p, "a")); } catch { /* 交给 spawn 报 */ }
   }
   const input = controlPath(paths);
-  try { unlinkSync(input); } catch { /* 首次创建 */ }
-  const made = spawnSync("mkfifo", [input]);
+  // 回合身份唯一，路径上本不该已有东西；真有，也只在确认没人开着时才收（control-fifo.ts）。
+  const leftover = removeIdleControlFifoSync(input);
+  if (leftover !== "absent" && leftover !== "removed") {
+    return failedChild(`可重连 stdin 的路径上还有东西没法收（${leftover}）：${input}`);
+  }
+  // 只给属主读写：删不删要能确认「一个持有者都没有」，组/其他人可写的管子那一步答不了。
+  const made = spawnSync("mkfifo", ["-m", "600", input]);
   if (made.status !== 0) return failedChild(`创建可重连 stdin 失败：${input}`);
 
   const script = [
     CONFINE_ENROLL_CMD,                             // 分隔符由下面的 join 写
-    'trap \'rm -f "$ASH_IN"\' EXIT',
+    // 不在这里 `rm` 管子：shell 看不见别的持有者，删除一律交给 server（control-fifo.ts）。
     'exec 3<>"$ASH_IN"',
     '"$@" <&3 >>"$ASH_OUT" 2>>"$ASH_ERR"',
     'rc=$?',
@@ -135,7 +140,7 @@ export function spawnControllableDetachedAgent(
   // `real` 上),会一路攒到那道 24 小时的年龄门才清。圈里没成员,`rmdir` 必然成功。
   if (!real.pid) {
     confine?.dispose();
-    removeIdleControlFifo(input);
+    retireControlFifo(input, null);
     return failedChild(`起不来:${shq(bin)}`);
   }
   const writer = fifoWriter(input);
@@ -145,7 +150,7 @@ export function spawnControllableDetachedAgent(
     // 扫就是了。这里要的只是「能撤就撤」:一条没跑起来的运行不该留一个没人认领的圈。
     killChild(real);
     confine?.dispose();
-    removeIdleControlFifo(input);
+    retireControlFifo(input, null);
     return failedChild(`打开可重连 stdin 失败：${input}`);
   }
   writer?.write(initialInput);
