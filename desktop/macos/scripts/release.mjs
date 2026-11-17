@@ -17,11 +17,15 @@
 //  · 发出去的 app 里的公钥必须就是签这一版的私钥对应的那把 —— 对不上直接拒，发出去谁都装不上。
 //  · 版本号（CFBundleVersion）必须比 appcast 里最新的一版大；正式发版要求工作区干净（发出去的包
 //    对得上一个提交）。
-//  · 两个仓库任何一个写不了，一个字节都不传：包传上去了 appcast 却改不了，或者反过来，都是半截的发版。
-//  · 先传 dmg、确认下得下来，再推 appcast：feed 永远不指向一个还不存在的包。没发完重跑时，同
-//    一版沿用上次封好的 dmg（重封出来的字节不同，签名就和已传上去的那份对不上了）—— 但只在
-//    这次给的 app 和封那个 dmg 的是同一份时（旁边记着 app 的内容摘要），不是就拒发。
-//  · Release 的 tag 打在构建这份 app 的那个提交上，所以那个提交要先推到装包仓库。
+//  · 两个仓库任何一个写不了，什么都不公开：包放出去了 appcast 却改不了，或者反过来，都是半截的发版。
+//    「写得了」要当场证明（这张凭证真写一次、清单分支没有挡着直接提交的规则），不看账号权限。
+//  · 包先进草稿 Release（外面看不见）、经 API 下回来核对，再公开，确认公开地址下得下来，最后推
+//    appcast：feed 永远不指向一个还不存在的包。公开之后 appcast 还是没推上去，就把 Release 退回草稿。
+//  · 没发完重跑时，同一版沿用上次封好的 dmg（重封出来的字节不同，签名就和已传上去的那份对不上了）
+//    —— 但只在这次给的 app 和封那个 dmg 的是同一份时（旁边记着 app 的内容摘要），不是就拒发。
+//    appcast 里已经是这个包（签名一样）时只补后面没做完的：公开 Release、README 链接。
+//  · Release 的 tag 打在构建这份 app 的那个提交上：那个提交要先推到装包仓库；同名 tag 已经在、
+//    却指着别的提交，就拒发（GitHub 会沿用已有的 tag，Release 就对不上源码）。
 import { spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync } from "node:fs";
@@ -111,10 +115,15 @@ async function main() {
     if (missing.length) die(`${missing.join("、")} 还不存在：先跑一次 npm run release:mac -- --init-repo`);
     // 传附件和改 appcast 用的是同一张凭证、写的是两个仓库：在对外放出任何东西之前确认两样都做得了。
     const readOnly = [];
-    for (const repo of repos) if (!(await github.canPush(repo))) readOnly.push(repo);
+    for (const repo of repos) if (!(await github.canWrite(repo))) readOnly.push(repo);
     if (readOnly.length) {
       die(`这张凭证（${auth.source}）对 ${readOnly.join("、")} 没有写权限：安装包要传到 ${config.releaseRepo}、`
         + `appcast 要提交进 ${config.feedRepo}，缺一样就一样都不传。\n${NO_TOKEN_HINT}`);
+    }
+    const blocked = await github.branchRestrictions(config.feedRepo, config.feedBranch);
+    if (blocked.length) {
+      die(`${config.feedRepo} 的 ${config.feedBranch} 分支上${blocked.join("、")}：appcast 是直接提交到这个分支的，`
+        + "证明不了提得上去，就一样都不传。去掉这些限制，或者换一个能直接提交的 feedBranch（app 的更新源也要跟着换）。");
     }
   }
 
@@ -131,6 +140,7 @@ async function main() {
   const version = info.CFBundleVersion;
   const shortVersion = info.CFBundleShortVersionString;
   const commit = info.AshSourceCommit && info.AshSourceCommit !== "unknown" ? info.AshSourceCommit : null;
+  if (!local && !commit) die(`${app} 里没记构建提交（AshSourceCommit）：正式发版的 tag 要打在它上面，对不上源码的包不发。`);
 
   // ── 2. 钥匙对不对 ──
   const signingKey = values["ed-key-file"]
@@ -155,17 +165,19 @@ async function main() {
   const current = local ? (existsSync(appcastPath) ? readFileSync(appcastPath, "utf8") : "") : remote?.text ?? "";
   const items = parseItems(current);
   const latest = latestVersion(items);
-  if (items.some((item) => item.version === version)) die(`${version} 已经发过了（appcast 里有）。`);
-  if (latest && compareVersions(version, latest) <= 0) die(`这一版 ${version} 不比 appcast 里最新的 ${latest} 新：Sparkle 不会把它当成更新。`);
-
-  // ── 4. 封 dmg、签名 ──
-  // 只出 dmg：人下载的和 Sparkle 更新用的是同一个文件（scripts/make-dmg.sh 里有格式上的取舍）。
   const tag = `${local ? "v" : config.tagPrefix}${shortVersion}-${version}`;
   // ASH_MAC_RELEASE_ARTIFACTS 只给回归测试换地方，免得演练的包落进 build/releases。
   const artifacts = join(process.env.ASH_MAC_RELEASE_ARTIFACTS || join(MAC, "build", "releases"), tag);
-  mkdirSync(artifacts, { recursive: true });
   const dmg = join(artifacts, `Ash-${shortVersion}-${version}.dmg`);
   const source = `${dmg}.source`;
+  // appcast 里已经有这一版：只有正式发版、上次签进去的那个包本地还在时才往下走（签名对上了只补收尾）。
+  const already = items.find((item) => item.version === version);
+  if (already && (local || !existsSync(dmg))) die(`${version} 已经发过了（appcast 里有）。`);
+  if (!already && latest && compareVersions(version, latest) <= 0) die(`这一版 ${version} 不比 appcast 里最新的 ${latest} 新：Sparkle 不会把它当成更新。`);
+
+  // ── 4. 封 dmg、签名 ──
+  // 只出 dmg：人下载的和 Sparkle 更新用的是同一个文件（scripts/make-dmg.sh 里有格式上的取舍）。
+  mkdirSync(artifacts, { recursive: true });
   const digest = appDigest(app);
   if (existsSync(dmg)) {
     const packed = existsSync(source) ? readFileSync(source, "utf8").trim() : "（没有记录）";
@@ -184,53 +196,43 @@ async function main() {
   }
   const signature = run(tool("sign_update"), [...keyArgs, "-p", dmg]);
   run(tool("sign_update"), [...keyArgs, "--verify", dmg, signature]);
+  if (already) {
+    if (already.xml.match(/sparkle:edSignature="([^"]+)"/)?.[1] !== signature) die(`${version} 已经发过了（appcast 里有，而且不是这个包）。`);
+    say(`▶ appcast 里已经是这个包：只补没做完的收尾`);
+  }
   const length = statSync(dmg).size;
   const dmgName = basename(dmg);
   let url = local ? new URL(dmgName, info.SUFeedURL).href : null;
-  const notes = values.notes != null ? notesFromText(values.notes) : releaseNotes(items, commit);
+  const earlier = items.filter((item) => item !== already);
+  const notes = values.notes != null ? notesFromText(values.notes) : releaseNotes(earlier, commit);
 
   // ── 5. 先把包放上去 ──
+  let rollback = null;
   if (local) {
     copyFileSync(dmg, join(local, dmgName));
   } else {
-    let release = await github.releaseByTag(config.releaseRepo, tag);
-    if (!release) {
-      const target = await tagTarget(github, config.releaseRepo, commit);
-      say(`▶ 在 ${config.releaseRepo} 建 Release ${tag}（tag 打在 ${target.label}）`);
-      release = await github.createRelease(config.releaseRepo, {
-        tag, target: target.ref, name: `ash for macOS ${shortVersion}（${version}）`,
-        body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Ash 拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`,
-      });
-    }
-    say(`▶ 传 ${dmgName}（${(length / 1048576).toFixed(1)} MB）`);
-    url = (await github.uploadAsset(release, dmg)).browser_download_url;
-    await confirmDownloadable(url, dmg, length);
+    const put = await putOnRelease(github, config, {
+      tag, commit, dmg, length,
+      name: `ash for macOS ${shortVersion}（${version}）`,
+      body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Ash 拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`,
+    });
+    url = put.url;
+    rollback = put.rollback;
   }
 
   // ── 6. 再更新 appcast ──
-  const item = renderItem({
-    version, shortVersion, url, length, signature, commit,
-    minimumSystemVersion: info.LSMinimumSystemVersion || "14.0",
-    notes: notes.html,
-    pubDate: new Date(),
-  });
-  writeFileSync(appcastPath, renderAppcast({
-    title: "ash for macOS",
-    link: `https://github.com/${config.releaseRepo}`,
-    items: [item, ...items.map((i) => i.xml)],
-  }));
-  run(tool("sign_update"), [...keyArgs, appcastPath]);
-  run(tool("sign_update"), [...keyArgs, "--verify", appcastPath]);
-  if (!local) {
-    say(`▶ 提交 ${config.feedRepo}/${config.appcastPath}`);
-    try {
-      await github.writeFile(config.feedRepo, {
-        path: config.appcastPath, branch: config.feedBranch, text: readFileSync(appcastPath, "utf8"), sha: remote?.sha,
-        message: `ash mac ${shortVersion}（${version}）`,
-      });
-    } catch (error) {
-      die(`appcast 没提交上：${error.message}\n包已经传好了；HTTP 409 / 422 是这期间 appcast 被别处改过，直接重跑（会沿用同一个包、重新读一遍 appcast）。`);
+  try {
+    if (!local) await confirmDownloadable(url, dmg, length);
+    if (!already) await publishAppcast({ github, config, local, remote, appcastPath, earlier, keyArgs, tool, notes, info, url, length, signature, commit });
+  } catch (error) {
+    if (rollback) {
+      // 提交请求报错不等于没提交上（比如响应路上断了）：appcast 里真有这一版时退回草稿，feed 就指向了
+      // 一个看不见的包。读回来确认没有才退；读不回来宁可留着公开（只是多一个暂时没进 feed 的包）。
+      const inFeed = await feedHasVersion(github, config, version);
+      if (inFeed === false) await rollback();
+      else say(inFeed ? "▶ appcast 其实已经提交上了：Release 保持公开。" : "▶ 读不回 appcast，确认不了它提交上没有：Release 保持公开，重跑会补完。");
     }
+    throw error;
   }
   say(`✓ 已发 ${shortVersion}（${version}）`);
   say(`  包：${url}`);
@@ -242,17 +244,96 @@ async function main() {
 }
 
 /**
- * Release 的 tag 打在哪：构建这份 app 的那个提交（装包仓库里得有它，没推就停在这里，此时什么都还没传）；
- * app 里没记提交（--app 给的老构建）才退回仓库的默认分支。
+ * 把 dmg 放到装包仓库的 Release 上，公开它，给出公开的下载地址。草稿阶段外面什么都看不见：建草稿、传包、
+ * 经 API 下回来核对都在这里，任何一步失败都不留公开的东西。返回的 rollback 只在这一次把它公开了时才有：
+ * 后面（确认下载、推 appcast）失败时把它退回草稿。
  */
-async function tagTarget(github, repo, commit) {
-  if (!commit) {
-    const branch = await github.defaultBranch(repo);
-    return { ref: branch, label: `${branch} 分支的最新提交（app 里没记构建提交）` };
+async function putOnRelease(github, config, { tag, commit, dmg, length, name, body }) {
+  const repo = config.releaseRepo;
+  const target = await tagTarget(github, repo, commit, tag);
+  let release = await github.findRelease(repo, tag);
+  if (!release) {
+    say(`▶ 在 ${repo} 建草稿 Release ${tag}（tag 公开时打在构建提交 ${commit}）`);
+    release = await github.createDraftRelease(repo, { tag, target, name, body });
+  } else {
+    say(`▶ 沿用 ${repo} 里已有的${release.draft ? "草稿 " : " "}Release ${tag}`);
   }
+  say(`▶ 传 ${basename(dmg)}（${(length / 1048576).toFixed(1)} MB）`);
+  const asset = await github.uploadAsset(release, dmg);
+  let rollback = null;
+  if (release.draft) {
+    const back = await github.downloadAsset(asset);
+    const want = createHash("sha256").update(readFileSync(dmg)).digest("hex");
+    const got = createHash("sha256").update(back).digest("hex");
+    if (back.length !== length || got !== want) die(`草稿里的 ${asset.name} 和本地这份不一样（${back.length} 字节，sha256 ${got}）：没有公开。`);
+    say(`▶ 公开 Release ${tag}`);
+    release = await github.setDraft(repo, release, false);
+    rollback = async () => {
+      try {
+        await github.setDraft(repo, release, true);
+        say(`▶ 已把 Release ${tag} 退回草稿：这一版没发成，外面看不到这个包；修好后重跑会沿用它。`);
+      } catch (error) {
+        say(`✕ 把 Release ${tag} 退回草稿也失败了（${error.message}）：去 ${repo} 的 Releases 页把它改回草稿或删掉。`);
+      }
+    };
+  }
+  const published = (release.assets || []).find((a) => a.name === asset.name);
+  if (!published) die(`公开后的 Release ${tag} 里找不到 ${asset.name}`);
+  return { url: published.browser_download_url, rollback };
+}
+
+/** 新的一项排在最前、整份重签；正式发版带着读出时的 sha 提交回清单仓库。 */
+async function publishAppcast({ github, config, local, remote, appcastPath, earlier, keyArgs, tool, notes, info, url, length, signature, commit }) {
+  const { CFBundleVersion: version, CFBundleShortVersionString: shortVersion } = info;
+  const item = renderItem({
+    version, shortVersion, url, length, signature, commit,
+    minimumSystemVersion: info.LSMinimumSystemVersion || "14.0",
+    notes: notes.html,
+    pubDate: new Date(),
+  });
+  writeFileSync(appcastPath, renderAppcast({
+    title: "ash for macOS",
+    link: `https://github.com/${config.releaseRepo}`,
+    items: [item, ...earlier.map((i) => i.xml)],
+  }));
+  run(tool("sign_update"), [...keyArgs, appcastPath]);
+  run(tool("sign_update"), [...keyArgs, "--verify", appcastPath]);
+  if (!local) {
+    say(`▶ 提交 ${config.feedRepo}/${config.appcastPath}`);
+    try {
+      await github.writeFile(config.feedRepo, {
+        path: config.appcastPath, branch: config.feedBranch, text: readFileSync(appcastPath, "utf8"), sha: remote?.sha,
+        message: `ash mac ${shortVersion}（${version}）`,
+      });
+    } catch (error) {
+      die(`appcast 没提交上：${error.message}\nHTTP 409 / 422 是这期间 appcast 被别处改过，直接重跑（会沿用同一个包、重新读一遍 appcast）。`);
+    }
+  }
+}
+
+/** 清单仓库里的 appcast 现在有没有这一版；读不到是 null。 */
+async function feedHasVersion(github, config, version) {
+  try {
+    const remote = await github.readFile(config.feedRepo, config.appcastPath, config.feedBranch);
+    return parseItems(remote?.text ?? "").some((item) => item.version === version);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Release 的 tag 打在构建这份 app 的那个提交上（完整 sha）。装包仓库里还没有这个提交、或者同名 tag 已经
+ * 指着别的提交，都停在这里 —— 此时什么都还没传。
+ */
+async function tagTarget(github, repo, commit, tag) {
   const sha = await github.commitSha(repo, commit);
   if (!sha) die(`${repo} 里还没有提交 ${commit}（这份 app 就是从它构建的）：先 git push，再重跑（什么都还没传）。`);
-  return { ref: sha, label: `构建提交 ${commit}` };
+  const tagged = await github.tagCommit(repo, tag);
+  if (tagged && tagged !== sha) {
+    die(`${repo} 里已经有 tag ${tag}，指着 ${tagged.slice(0, 12)}，不是这份 app 的构建提交 ${sha.slice(0, 12)}：`
+      + "GitHub 会沿用已有的 tag，Release 就对不上源码。删掉那个 tag 或换个构建号再发（什么都还没传）。");
+  }
+  return sha;
 }
 
 /** 一份 app 的内容摘要：每个文件的相对路径、可执行位、内容（软链记指向）。认「是不是同一份 app」用。 */

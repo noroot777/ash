@@ -36,8 +36,10 @@ export function commitLink(readme, release) {
   if (git("status", "--porcelain", "--", basename(readme)).stdout.trim()) {
     return `${readme} 有没提交的改动，没替你改：下载链接请手动改成 ${release.url}`;
   }
-  const next = replaceLink(readFileSync(readme, "utf8"), renderLink(release));
+  const text = readFileSync(readme, "utf8");
+  const next = replaceLink(text, renderLink(release));
   if (next === null) return `${readme} 里没有成对的 ${START} / ${END}，下载链接请手动改成 ${release.url}`;
+  if (next === text) return "README 的下载链接已经是这一版";
   writeFileSync(readme, next);
   const message = `${LINK_COMMIT_PREFIX} ${release.shortVersion}（${release.version}）`;
   const commit = git("commit", "--only", "-m", message, "--", basename(readme));

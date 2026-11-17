@@ -7,10 +7,12 @@
 // 版前面、第一版原样保留；`--notes` 进 appcast（转义过）；同一构建号缓存的 dmg 来自另一份 app 时拒发，
 // 来自同一份时原样沿用。
 //
-// 正式发版对着一个本地假 GitHub 跑（两个仓库：o/app 放安装包，o/feed 放 appcast）：只对其中一个有写权限
-// 时什么都不传；构建提交还没推到装包仓库时什么都不传；都齐了就在 o/app 建 Release（tag 打在构建提交上）、
-// 传 dmg，再把 appcast 提交进 o/feed，appcast 里的下载地址指向 o/app 的那个附件；最后把（临时仓库里的）
-// README 下载链接改成这个 dmg、只提交 README。旧格式（只有一个 repo）的配置拒绝。
+// 正式发版对着一个本地假 GitHub 跑（两个仓库：o/app 放安装包，o/feed 放 appcast；账号权限和这张 token
+// 真写得了分开模拟）。什么都不公开的几种：账号能写、token 只写得了其中一个或都写不了；清单分支要 PR / 开着
+// 保护；构建提交没推；同名 tag 指着别的提交；app 里没记构建提交；旧格式（只有一个 repo）的配置。都齐了：
+// 草稿 Release → 传 dmg → 下回来核对 → 公开（tag 打在构建提交上）→ appcast 提交进 o/feed、指向 o/app 的
+// 公开附件 → （临时仓库里的）README 链接只提交 README。预检都过、提交 appcast 时才被拒：Release 退回草稿、
+// 外面下不到；修好后重跑沿用那个草稿补完。全都发完、只是 README 没提交上：重跑只补 README，不碰 GitHub。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
@@ -18,7 +20,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
@@ -165,10 +167,17 @@ async function localRehearsal() {
   console.log("PASS: release --local ships only a signed drag-to-install dmg; refuses re-releases, older versions and mismatched keys; tampering is detected; notes kept; cached dmg bound to its app and reused for it");
 }
 
-/** 本地假 GitHub：只认 `Bearer test-token`；记下每个请求。push 列出这张凭证能写的仓库，commits 是装包仓库里有的提交。 */
-async function fakeGitHub({ push, commits = {} }) {
-  const state = { calls: [], files: new Map(), releases: [], downloads: new Map() };
+/**
+ * 本地假 GitHub：只认 `Bearer test-token`，记下每个请求。push 是账号对仓库的权限（仓库信息里的
+ * permissions.push），token 是这张凭证真写得了的仓库（缺省同 push）；commits 是装包仓库里有的提交，
+ * tags 是已有的 tag，rules / protectedBranches 是清单分支上的限制，feedPut 是提交 appcast 时回的状态。
+ * 草稿的附件只能经 API 下，公开之后才有公开地址。
+ */
+async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules = [], protectedBranch = false, feedPut = 200 }) {
+  const state = { calls: [], files: new Map(), releases: [], downloads: new Map(), assets: new Map(), tags: { ...tags }, feedPut };
   let base = "";
+  let ids = 0;
+  const publicUrl = (release, name) => `${base}/download/${release.repo}/${release.tag_name}/${name}`;
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -178,29 +187,37 @@ async function fakeGitHub({ push, commits = {} }) {
     if (req.method === "GET" && state.downloads.has(url.pathname)) return res.end(state.downloads.get(url.pathname));
     state.calls.push(`${req.method} ${url.pathname}`);
     if (req.headers.authorization !== "Bearer test-token") return json(401, { message: "Bad credentials" });
-    const route = url.pathname.match(/^\/repos\/(o\/(?:app|feed))(\/.*)?$/);
-    if (!route) {
-      if (req.method === "POST" && url.pathname.startsWith("/uploads/")) {
-        const parts = url.pathname.split("/");
-        const repo = `${parts[2]}/${parts[3]}`;
-        const tag = parts[4];
-        const name = url.searchParams.get("name");
-        const asset = { name, size: body.length, contentType: req.headers["content-type"], browser_download_url: `${base}/download/${repo}/${tag}/${name}` };
-        state.downloads.set(`/download/${repo}/${tag}/${name}`, body);
-        state.releases.find((r) => r.repo === repo && r.tag_name === tag).assets.push(asset);
-        return json(201, asset);
-      }
-      return json(404, {});
+    if (req.method === "GET" && state.assets.has(url.pathname)) return res.end(state.assets.get(url.pathname));
+    if (req.method === "POST" && url.pathname.startsWith("/uploads/")) {
+      const release = state.releases.find((r) => r.id === Number(url.pathname.split("/")[2]));
+      const name = url.searchParams.get("name");
+      const asset = { id: ++ids, name, size: body.length, contentType: req.headers["content-type"], url: `${base}/assets/${ids}`,
+        browser_download_url: release.draft ? `${base}/download/${release.repo}/untagged-${release.id}/${name}` : publicUrl(release, name) };
+      state.assets.set(`/assets/${ids}`, body);
+      if (!release.draft) state.downloads.set(new URL(asset.browser_download_url).pathname, body);
+      release.assets.push(asset);
+      return json(201, asset);
     }
+    const route = url.pathname.match(/^\/repos\/(o\/(?:app|feed))(\/.*)?$/);
+    if (!route) return json(404, {});
     const [, repo, rest = ""] = route;
     if (req.method === "GET" && rest === "") return json(200, { default_branch: "main", permissions: { push: push.includes(repo) } });
+    if (req.method === "POST" && rest === "/git/blobs") return token.includes(repo) ? json(201, { sha: "b".repeat(40) }) : json(403, { message: "Resource not accessible by personal access token" });
+    if (req.method === "GET" && rest === "/branches/main") return json(200, { name: "main", protected: repo === "o/feed" && protectedBranch });
+    if (req.method === "GET" && rest === "/rules/branches/main") return json(200, repo === "o/feed" ? rules : []);
     const commit = rest.match(/^\/commits\/(.+)$/);
     if (commit && req.method === "GET") return repo === "o/app" && commits[commit[1]] ? json(200, { sha: commits[commit[1]] }) : json(422, {});
+    const tag = rest.match(/^\/git\/ref\/tags\/(.+)$/);
+    if (tag && req.method === "GET") {
+      const sha = state.tags[`${repo}:${decodeURIComponent(tag[1])}`];
+      return sha ? json(200, { object: { type: "commit", sha } }) : json(404, {});
+    }
     const contents = rest.match(/^\/contents\/(.+)$/);
     if (contents) {
       const path = `${repo}:${decodeURIComponent(contents[1])}`;
       const file = state.files.get(path);
       if (req.method === "GET") return file ? json(200, { sha: file.sha, encoding: "base64", content: Buffer.from(file.text).toString("base64") }) : json(404, {});
+      if (state.feedPut !== 200) return json(state.feedPut, { message: "Resource not accessible by personal access token" });
       const put = JSON.parse(body);
       if (file?.sha !== put.sha) return json(409, { message: "sha does not match" });
       const sha = createHash("sha1").update(put.content).digest("hex");
@@ -208,14 +225,28 @@ async function fakeGitHub({ push, commits = {} }) {
       return json(200, { content: { sha } });
     }
     if (req.method === "GET" && rest.startsWith("/releases/tags/")) {
-      const found = state.releases.find((r) => r.repo === repo && r.tag_name === decodeURIComponent(rest.split("/").pop()));
+      const found = state.releases.find((r) => r.repo === repo && !r.draft && r.tag_name === decodeURIComponent(rest.split("/").pop()));
       return found ? json(200, found) : json(404, {});
     }
+    if (req.method === "GET" && rest.startsWith("/releases")) return json(200, state.releases.filter((r) => r.repo === repo));
     if (req.method === "POST" && rest === "/releases") {
-      const { tag_name: tag, target_commitish: target, name, body: notes } = JSON.parse(body);
-      const created = { repo, tag_name: tag, target, name, body: notes, assets: [], upload_url: `${base}/uploads/${repo}/${tag}{?name,label}` };
+      const { tag_name: tagName, target_commitish: target, name, body: notes, draft } = JSON.parse(body);
+      const created = { id: ++ids, repo, tag_name: tagName, target, name, body: notes, draft, assets: [], upload_url: `${base}/uploads/${ids}{?name,label}` };
       state.releases.push(created);
       return json(201, created);
+    }
+    const patch = rest.match(/^\/releases\/(\d+)$/);
+    if (patch && req.method === "PATCH") {
+      const release = state.releases.find((r) => r.id === Number(patch[1]));
+      release.draft = JSON.parse(body).draft;
+      // 公开时打 tag（已有就沿用）、附件换成公开地址；退回草稿时公开地址作废。
+      if (!release.draft) state.tags[`${repo}:${release.tag_name}`] ??= release.target;
+      for (const asset of release.assets) {
+        state.downloads.delete(new URL(asset.browser_download_url).pathname);
+        asset.browser_download_url = release.draft ? `${base}/download/${repo}/untagged-${release.id}/${asset.name}` : publicUrl(release, asset.name);
+        if (!release.draft) state.downloads.set(new URL(asset.browser_download_url).pathname, state.assets.get(new URL(asset.url).pathname));
+      }
+      return json(200, release);
     }
     json(404, {});
   });
@@ -252,11 +283,11 @@ async function formalRehearsal() {
     tagPrefix: "ash-mac-v", keychainAccount: "unused", publicKey: key.publicKey };
   const feed = "https://raw.githubusercontent.com/o/feed/main/ash/mac/appcast.xml";
   const { readme, git } = readmeRepo();
-  const publish = async (github, app, conf = config) => new Promise((done) => {
+  const publish = async (github, app, { conf = config, artifacts = "formal-artifacts" } = {}) => new Promise((done) => {
     writeFileSync(configFile, JSON.stringify(conf));
     const child = spawn(process.execPath, [releaseScript, "--app", app, "--ed-key-file", key.file, "--notes", "正式 & <b>演练</b>"], {
       env: { ...cleanEnv, GH_TOKEN: "test-token", GITHUB_TOKEN: "", ASH_MAC_GITHUB_API: github.base,
-        ASH_MAC_RELEASE_CONFIG: configFile, ASH_MAC_RELEASE_ARTIFACTS: join(temporary, "formal-artifacts"), ASH_MAC_README: readme },
+        ASH_MAC_RELEASE_CONFIG: configFile, ASH_MAC_RELEASE_ARTIFACTS: join(temporary, artifacts), ASH_MAC_README: readme },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -264,42 +295,73 @@ async function formalRehearsal() {
     child.stderr.on("data", (chunk) => { out += chunk; });
     child.once("close", (status) => done({ status, out }));
   });
-  const writes = (github) => github.state.calls.filter((c) => !c.startsWith("GET"));
+  // 写操作里去掉预检那几个看不见的 blob（证明 token 写得了用的）。
+  const writes = (github) => github.state.calls.filter((c) => !c.startsWith("GET") && !c.endsWith("/git/blobs"));
   const sha = "abc1234".padEnd(40, "0");
   const app = fakeApp("20000102.0001", key.publicKey, { feed, commit: "abc1234" });
-
-  for (const push of [["o/app"], ["o/feed"], []]) {
-    const github = await fakeGitHub({ push, commits: { abc1234: sha } });
-    const result = await publish(github, app);
+  const both = ["o/app", "o/feed"];
+  const refused = async (options, pattern, why, target = app, conf = config) => {
+    const github = await fakeGitHub({ push: both, commits: { abc1234: sha }, ...options });
+    const result = await publish(github, target, { conf, artifacts: "refused-artifacts" });
     await github.close();
     assert.notEqual(result.status, 0, result.out);
-    assert.match(result.out, /没有写权限/);
-    assert.match(result.out, /缺一样就一样都不传/);
-    assert.deepEqual(writes(github), [], `nothing is published when the credential can write only ${push.join(",") || "neither"}`);
+    assert.match(result.out, pattern, why);
+    assert.deepEqual(writes(github), [], `nothing is written: ${why}`);
+    assert.deepEqual(github.state.releases, []);
+    return github;
+  };
+
+  for (const token of [["o/app"], ["o/feed"], []]) {
+    const github = await refused({ token }, /没有写权限[\s\S]*缺一样就一样都不传/,
+      `the account can push to both, but the token can write only ${token.join(",") || "neither"}`);
+    assert.ok(github.state.calls.includes("POST /repos/o/app/git/blobs"), "write access is proven by writing, not read off the repo info");
   }
+  await refused({ push: ["o/app"], token: both }, /o\/feed 没有写权限/, "the account cannot push to the feed repo");
+  await refused({ rules: [{ type: "deletion" }, { type: "pull_request" }] }, /ruleset 规则 pull_request/, "the feed branch only takes pull requests");
+  await refused({ protectedBranch: true }, /开着分支保护/, "the feed branch is protected");
+  await refused({ commits: {} }, /还没有提交 abc1234.*先 git push/, "the build commit is not pushed");
+  await refused({ tags: { "o/app:ash-mac-v0.2.0-20000102.0001": "f".repeat(40) } }, /已经有 tag .*不是这份 app 的构建提交/, "a same-named tag points elsewhere");
+  await refused({}, /没记构建提交/, "the app does not know its build commit", fakeApp("20000102.0002", key.publicKey, { feed }));
+  await refused({}, /旧格式/, "a single-repo config is refused, not guessed", app, { ...config, repo: "o/feed" });
 
-  let github = await fakeGitHub({ push: ["o/app", "o/feed"], commits: {} });
+  // 预检都过、提交 appcast 时才被拒（比如权限在这期间被收回）：公开过的 Release 退回草稿，外面下不到。
+  let github = await fakeGitHub({ push: both, commits: { abc1234: sha }, feedPut: 403 });
   let result = await publish(github, app);
-  await github.close();
   assert.notEqual(result.status, 0, result.out);
-  assert.match(result.out, /还没有提交 abc1234.*先 git push/);
-  assert.deepEqual(writes(github), [], "an unpushed build commit stops the release before anything is written");
-
-  github = await fakeGitHub({ push: ["o/app", "o/feed"] });
-  result = await publish(github, app, { ...config, repo: "o/feed" });
-  await github.close();
-  assert.match(result.out, /旧格式/, "a single-repo config is refused, not guessed");
-  assert.deepEqual(github.state.calls, []);
-
-  github = await fakeGitHub({ push: ["o/app", "o/feed"], commits: { abc1234: sha } });
+  assert.match(result.out, /appcast 没提交上/);
+  assert.match(result.out, /已把 Release .* 退回草稿/);
+  assert.deepEqual(writes(github), ["POST /repos/o/app/releases", `POST /uploads/${github.state.releases[0].id}`,
+    `PATCH /repos/o/app/releases/${github.state.releases[0].id}`, "PUT /repos/o/feed/contents/ash/mac/appcast.xml",
+    `PATCH /repos/o/app/releases/${github.state.releases[0].id}`], "draft, upload, publish, appcast refused, back to draft");
+  assert.equal(github.state.releases[0].draft, true, "the release is a draft again");
+  assert.equal(github.state.downloads.size, 0, "nothing can be downloaded publicly");
+  assert.equal(github.state.files.size, 0);
+  // 修好后重跑：沿用那个草稿和已经传上去的包，补完公开和 appcast。
+  github.state.calls.length = 0;
+  github.state.feedPut = 200;
   result = await publish(github, app);
   await github.close();
   assert.equal(result.status, 0, result.out);
+  assert.match(result.out, /沿用 o\/app 里已有的草稿 Release/);
+  assert.deepEqual(writes(github), [`PATCH /repos/o/app/releases/${github.state.releases[0].id}`, "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
+    "no second release, no second upload");
+  assert.equal(github.state.releases.length, 1);
+  assert.equal(github.state.releases[0].draft, false);
+  console.log("PASS: when the appcast is refused after the release went public, the release goes back to draft; a rerun reuses it and finishes");
+
+  git("checkout", "-q", "--", "README.md");
+  git("reset", "-q", "--hard", "HEAD~1");
+  writeFileSync(join(dirname(readme), "other.txt"), "someone else's uncommitted change\n");
+  github = await fakeGitHub({ push: both, commits: { abc1234: sha } });
+  result = await publish(github, app, { artifacts: "formal-artifacts-2" });
+  assert.equal(result.status, 0, result.out);
   assert.match(result.out, /GitHub 凭证：GH_TOKEN/);
-  assert.deepEqual(writes(github), ["POST /repos/o/app/releases", "POST /uploads/o/app/ash-mac-v0.2.0-20000102.0001", "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
-    "release and dmg go to the app repo, then the appcast to the feed repo — all through the API with the one token");
   const [release] = github.state.releases;
-  assert.equal(release.target, sha, "the tag points at the commit the app was built from");
+  assert.deepEqual(writes(github), ["POST /repos/o/app/releases", `POST /uploads/${release.id}`, `PATCH /repos/o/app/releases/${release.id}`,
+    "PUT /repos/o/feed/contents/ash/mac/appcast.xml"], "release and dmg go to the app repo (as a draft, then public), then the appcast to the feed repo");
+  assert.ok(github.state.calls.includes(`GET /assets/${release.assets[0].id}`), "the uploaded dmg is read back before the release goes public");
+  assert.equal(release.target, sha, "the tag is created on the commit the app was built from");
+  assert.equal(github.state.tags["o/app:ash-mac-v0.2.0-20000102.0001"], sha);
   assert.match(release.name, /macOS/);
   assert.equal(release.assets[0].name, "Ash-0.2.0-20000102.0001.dmg");
   assert.equal(release.assets[0].contentType, "application/x-apple-diskimage");
@@ -308,19 +370,33 @@ async function formalRehearsal() {
   assert.equal(committed.branch, "main");
   assert.match(committed.text, /<sparkle:version>20000102\.0001<\/sparkle:version>/);
   const url = `${github.base}/download/o/app/ash-mac-v0.2.0-20000102.0001/Ash-0.2.0-20000102.0001.dmg`;
-  assert.ok(committed.text.includes(`url="${url}"`), "the appcast in the feed repo points at the dmg in the app repo");
+  assert.ok(committed.text.includes(`url="${url}"`), "the appcast in the feed repo points at the public dmg in the app repo");
   writeFileSync(join(temporary, "committed-appcast.xml"), committed.text);
   assert.equal(verify(join(temporary, "committed-appcast.xml")), 0, "the committed appcast is signed");
   writeFileSync(join(temporary, "uploaded.dmg"), github.state.downloads.get(new URL(url).pathname));
-  assert.equal(verify(join(temporary, "uploaded.dmg"), committed.text.match(/sparkle:edSignature="([^"]+)"/)[1]), 0, "the uploaded dmg matches its signature");
+  assert.equal(verify(join(temporary, "uploaded.dmg"), committed.text.match(/sparkle:edSignature="([^"]+)"/)[1]), 0, "the public dmg matches its signature");
   assert.equal(unescapeXml(committed.text.match(/<description>([^<]*)<\/description>/)[1]), "<p>正式 &amp; &lt;b&gt;演练&lt;/b&gt;</p>",
     "in the appcast the notes are HTML-escaped");
 
-  assert.ok(readFileSync(readme, "utf8").includes(`<!-- ash-mac-download -->\n**[下载 ash 0.2.0（20000102.0001）](${url})**\n<!-- /ash-mac-download -->`),
-    "the README download link names this very dmg");
+  const link = `<!-- ash-mac-download -->\n**[下载 ash 0.2.0（20000102.0001）](${url})**\n<!-- /ash-mac-download -->`;
+  assert.ok(readFileSync(readme, "utf8").includes(link), "the README download link names this very dmg");
   assert.match(result.out, /README 的下载链接已改成这一版并提交/);
   assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0001）");
   assert.equal(git("show", "--name-only", "--format=", "HEAD"), "README.md", "only the README is committed");
   assert.equal(git("status", "--porcelain"), "M other.txt", "someone else's change stays uncommitted");
-  console.log("PASS: a formal release needs write access to both repos and a pushed build commit before writing anything; then the dmg goes to the app repo, the signed appcast to the feed repo, and only the README link is committed locally");
+  console.log("PASS: a formal release proves write access to both repos and a pushed, untagged-elsewhere build commit before writing anything; then a draft release, upload, read-back, publish, the signed appcast in the feed repo, and only the README link committed locally");
+
+  // 全都发完了、只是 README 没提交上（这里把那个提交撤掉来模拟）：重跑只补 README，不再碰 GitHub。
+  git("reset", "-q", "--hard", "HEAD~1");
+  writeFileSync(join(dirname(readme), "other.txt"), "someone else's uncommitted change\n");
+  assert.ok(readFileSync(readme, "utf8").includes("第一版还没发布"));
+  github.state.calls.length = 0;
+  result = await publish(github, app, { artifacts: "formal-artifacts-2" });
+  await github.close();
+  assert.equal(result.status, 0, result.out);
+  assert.match(result.out, /appcast 里已经是这个包：只补没做完的收尾/);
+  assert.deepEqual(writes(github), [], "nothing is written to GitHub again");
+  assert.ok(readFileSync(readme, "utf8").includes(link), "the README link is filled in");
+  assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0001）");
+  console.log("PASS: rerunning a fully published version only finishes the README link");
 }

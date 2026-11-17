@@ -61,13 +61,33 @@ export class GitHub {
     return (await this.call("GET", `/repos/${repo}`, { allow: [404] })).status !== 404;
   }
 
-  /** 这张凭证能不能往仓库里写（传附件、改 appcast 都要）。 */
-  async canPush(repo) {
-    return Boolean((await this.call("GET", `/repos/${repo}`)).json?.permissions?.push);
+  /**
+   * 这张凭证能不能往仓库里写（建 Release、传附件、改 appcast 都是同一项 Contents 写权限）。
+   * 仓库信息里的 permissions.push 说的是账号对仓库的权限，不是这张 token 的：fine-grained token 没选这个
+   * 仓库、或没给 Contents 写权限时它照样是 true。所以真写一次 —— 建一个不挂到任何提交、分支上的 blob：
+   * 和改文件同一项权限，外面看不见，没有引用会被 GitHub 回收。
+   */
+  async canWrite(repo) {
+    if (!(await this.call("GET", `/repos/${repo}`)).json?.permissions?.push) return false;
+    const { status } = await this.call("POST", `/repos/${repo}/git/blobs`, {
+      body: { content: "ash release: write check", encoding: "utf-8" }, allow: [401, 403, 404, 422],
+    });
+    return status === 201;
   }
 
-  async defaultBranch(repo) {
-    return (await this.call("GET", `/repos/${repo}`)).json.default_branch;
+  /**
+   * 分支上挡着「经 Contents API 直接提交」的东西：经典分支保护，或 ruleset 里除了不许删、不许强推、
+   * 线性历史以外的规则（要 PR、限制更新、要状态检查……）。读不到详情（要管理员权限）也算挡着：
+   * 证明不了能直接提交，就当不能。
+   */
+  async branchRestrictions(repo, branch) {
+    const found = [];
+    const { status, json } = await this.call("GET", `/repos/${repo}/branches/${encodeURIComponent(branch)}`, { allow: [404] });
+    if (status === 404) return [`分支 ${branch} 不存在`];
+    if (json.protected) found.push("开着分支保护");
+    const rules = (await this.call("GET", `/repos/${repo}/rules/branches/${encodeURIComponent(branch)}`, { allow: [404] })).json || [];
+    for (const rule of rules) if (!HARMLESS_RULES.has(rule.type)) found.push(`ruleset 规则 ${rule.type}`);
+    return found;
   }
 
   /** 仓库里有没有这个提交（短 sha 也认），有就给出完整 sha，没有是 null。 */
@@ -102,16 +122,45 @@ export class GitHub {
     return (await this.call("POST", path, { body: { name, description, private: false, auto_init: true } })).json;
   }
 
-  async releaseByTag(repo, tag) {
+  /** 这个 tag 的 Release，草稿也算（草稿还没有 tag，按 tag 查不到，只能从列表里认 tag_name）。 */
+  async findRelease(repo, tag) {
     const { status, json } = await this.call("GET", `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, { allow: [404] });
-    return status === 404 ? null : json;
+    if (status !== 404) return json;
+    const list = (await this.call("GET", `/repos/${repo}/releases?per_page=100`)).json || [];
+    return list.find((release) => release.draft && release.tag_name === tag) ?? null;
   }
 
-  /** 建 Release；tag 还不存在时打在 target（分支名或完整 sha）上。 */
-  async createRelease(repo, { tag, target, name, body }) {
+  /** tag 指向哪个提交（附注 tag 剥到底）；tag 不存在是 null。 */
+  async tagCommit(repo, tag) {
+    const { status, json } = await this.call("GET", `/repos/${repo}/git/ref/tags/${encodeURIComponent(tag)}`, { allow: [404] });
+    if (status === 404) return null;
+    let object = json.object;
+    for (let depth = 0; object.type === "tag" && depth < 5; depth++) {
+      object = (await this.call("GET", `/repos/${repo}/git/tags/${object.sha}`)).json.object;
+    }
+    return object.type === "commit" ? object.sha : null;
+  }
+
+  /** 建草稿 Release：谁都看不见，tag 要到公开时才在 target（分支名或完整 sha）上打出来。 */
+  async createDraftRelease(repo, { tag, target, name, body }) {
     return (await this.call("POST", `/repos/${repo}/releases`, {
-      body: { tag_name: tag, target_commitish: target, name, body, draft: false, prerelease: false },
+      body: { tag_name: tag, target_commitish: target, name, body, draft: true, prerelease: false },
     })).json;
+  }
+
+  /** 草稿 → 公开（draft=false）或退回草稿（draft=true）。 */
+  async setDraft(repo, release, draft) {
+    return (await this.call("PATCH", `/repos/${repo}/releases/${release.id}`, { body: { draft } })).json;
+  }
+
+  /** 经 API 下回一个附件（草稿的附件也下得到，公开地址那时还不通）。 */
+  async downloadAsset(asset) {
+    const response = await fetch(asset.url, {
+      headers: { authorization: `Bearer ${this.token}`, accept: "application/octet-stream", "x-github-api-version": "2022-11-28" },
+      redirect: "follow",
+    });
+    if (!response.ok) throw new Error(`下载附件 ${asset.name} → HTTP ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
   }
 
   /** 传附件。同名附件已经在、大小也对就当传过了；大小不对说明是另一份，拒绝覆盖。 */
@@ -131,5 +180,6 @@ export class GitHub {
   }
 }
 
+const HARMLESS_RULES = new Set(["deletion", "non_fast_forward", "required_linear_history"]);
 const CONTENT_TYPES = { ".dmg": "application/x-apple-diskimage", ".zip": "application/zip" };
 const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");
