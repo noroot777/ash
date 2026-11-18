@@ -16,6 +16,7 @@ import { HandoffPeerKeyField } from "../settings/HandoffPeerKeyField.tsx";
 import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDialogViews.tsx";
 import { HandoffCapabilityNotice } from "../task-detail/HandoffCapabilityNotice.tsx";
 import { BulkHandoffTaskList } from "./BulkHandoffTaskList.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import {
   bulkIdentityMismatchWarning,
   bulkIdentityUnavailableWarning,
@@ -499,7 +500,7 @@ export function BulkHandoffDialog({
         {identityResolving ? (
           <div className="handoff-bulk-body">
             <div className="handoff-bulk-progress" role="status">
-              <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />
+              <NaviLoader />
               <span>正在读取目标机公开身份；不会发送接力申请或任务信息…</span>
             </div>
             <p className="handoff-bulk-scope">弹窗已经打开，可随时取消；目标机离线时会在短暂超时后改用本地地址提示。</p>
@@ -635,7 +636,8 @@ export function BulkHandoffDialog({
         )}
         {(phase === "approval" || phase === "transferring") && (
           <div className="handoff-bulk-progress" role="status">
-            <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />
+            {/* 等对端答复是在等内容回来（找北）；开始传了才是事情在跑（转圈）。 */}
+            {phase === "approval" ? <NaviLoader /> : <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />}
             <span>
               {phase === "approval"
                 ? "正在联系目标机…"

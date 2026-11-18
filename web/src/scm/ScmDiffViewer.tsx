@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileText, GitDiff, SpinnerGap, Warning, X } from "@phosphor-icons/react";
+import { FileText, GitDiff, Warning, X } from "@phosphor-icons/react";
 import { api, type ScmChangeKind } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { countDiffLines, parseDiffLines } from "../review/diffModel.ts";
 import { DiffBody, DiffLayoutToggle } from "../review/DiffBody.tsx";
 import { useDiffLayout } from "../review/diffLayout.ts";
 import { branchDiffReason, type ScmDiffKind } from "./scmModel.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 // 单个文件的 diff，摆在中间那一栏（跟 FileViewer 同一个位置，也沿用它的外壳样式：
 // 两者是同一种「中间区换一块内容、关掉就回会话」的东西，没必要各长一套边框和标题栏）。
@@ -135,7 +136,7 @@ export function ScmDiffViewer({
       )}
 
       <div className="file-viewer__body">
-        {!diff && !error && <p className="file-viewer__state"><SpinnerGap size={14} aria-hidden="true" />正在生成 diff…</p>}
+        {!diff && !error && <p className="file-viewer__state"><NaviLoader />正在生成 diff…</p>}
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
         {diff?.unavailable && (
           <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />读不到这个文件的改动：{diff.unavailable}。</p>

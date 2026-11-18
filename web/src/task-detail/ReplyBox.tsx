@@ -44,9 +44,10 @@ import { screenshotCandidates, type AnnotationReply } from "../page-annotation/m
 import { QuestionDock, useQuestionTakeover } from "./QuestionSlot.tsx";
 import { parseAttachmentText } from "./utils.ts";
 import { clearSentDraft, dropSentAttachments, sentSelections, withdrawIntoBox } from "./withdrawDraft.ts";
+import { replyGate, sessionlessSkills } from "./replyGate.ts";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
-/** 只能查目标时那颗键的发送方式：永远是立即发，改不动（真正的发送方式留在草稿里不碰）。 */
+/** 还没跑过时那颗键的发送方式：永远是立即发，改不动（真正的发送方式留在草稿里不碰）。 */
 const NOW_ONLY = { later: null, setLater: () => {} };
 // 菜单顶行只给第一组起名:原生命令和排在后面的技能各有 SlashMenu 画的分隔线。
 const MENU_HEADING: Record<SlashItem["kind"], string> = { ash: "叫人 · ", native: "", skill: "技能 · " };
@@ -145,31 +146,16 @@ export function ReplyBox({
   // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
   const { take, takeInput } = overrideTake(activeOverride);
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
-  // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
-  // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
+  // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。真正没得说的情况——不是单任务、
+  // 已归档、从没跑过因而没有会话可续——归 replyGate.ts 判。
   const queueing = task.status === "running" || task.status === "queued";
   // 讨论开不开得了：任务在跑时不开（这一轮说的话和讨论的几段会搅在一起），其余由宿主说（已经在讨论了…）。
   const discussHold = queueing ? "任务正在跑，这一轮结束后再开讨论" : discussHeld;
-  const cliCommand = parseCliCommand(target?.agent ?? standing.config.agentType, value);
-  const scopeDiscovery = cliCommand?.name === "goal" && cliCommand.args === "--scopes";
-  const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing && !scopeDiscovery);
-  // 从没跑过的任务发不出普通的话，但执行器查得了目标时框得能敲：`/goal --scopes` 不碰会话，要在这里打出来。
-  // 那一下只带字、立即发（服务端不收附件和稍后发送，task-cli-command.ts）：粘贴、附件、批注、发送设置都关着，
-  // 草稿里原有的附件和发送方式也不动，留给以后真正回复时用。
-  const queryOnly = !hasConversation && !queueing;
-  const canQueryGoal = parseCliCommand(target?.agent ?? standing.config.agentType, "/goal --scopes") !== null;
-  const inputLocked = task.mode !== "single" || task.archived || (queryOnly && !canQueryGoal);
+  const gate = replyGate(task, hasConversation, parseCliCommand(target?.agent ?? standing.config.agentType, value));
   // 占位只有「回复…」，水印透出来（reply-1）。快捷键在发送键的提示里，「可以粘贴」在附件键的
-  // 提示里，「引导会话」在待发送那一条的键上；发不出去的原因指到发送键上才说。只有整个输入框
-  // 都用不了（不是单任务、已归档、还没跑过）时，原因才写在占位里——那时没有键可指。
-  const reason = task.mode !== "single"
-    ? "请在对应的团队或讨论页面继续操作"
-    : task.archived
-      ? "任务已归档，无法继续回复"
-      : !hasConversation && !queueing && !scopeDiscovery
-        ? "先运行任务，再继续回复"
-        : null;
-  const placeholder = disabled && reason ? reason : call ? CALL_COPY[call.verb].placeholder(call.target.agent) : "回复…";
+  // 提示里，「引导会话」在待发送那一条的键上；发不出去的原因指到发送键上才说。只有没有会话可说话
+  // （不是单任务、已归档、还没跑过）时，原因才写在占位里——空框那时没有别处可说。
+  const placeholder = gate.notice ?? (call ? CALL_COPY[call.verb].placeholder(call.target.agent) : "回复…");
 
   const resetComposerState = () => {
     slash.reset();
@@ -198,7 +184,7 @@ export function ReplyBox({
   const discussTypes = registeredTypes.filter((type) => type !== standing.config.agentType);
   // 叫人的命令（`/讨论`、`/派`）排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
-  const ashItems: SlashItem[] = [
+  const ashItems: SlashItem[] = gate.mute ? [] : [
     ...(ability.discussable && discussTypes.length ? [DISCUSS_SLASH_ITEM] : []),
     ...(dispatchable ? [DISPATCH_SLASH_ITEM] : []),
   ].map((item) => ({ ...item, kind: "ash" }));
@@ -211,14 +197,15 @@ export function ReplyBox({
     if (covering) setAnnotating(false);
   }, [covering]);
   const slash = useReplySlash({
-    value, setValue, ash: ashItems, skills, blocked: !!take || covering, inputRef: textareaRef,
+    value, setValue, ash: ashItems, skills: gate.unstarted ? sessionlessSkills(skills) : skills,
+    blocked: !!take || covering, sendable: !gate.held, inputRef: textareaRef,
     onCall: (verb, text, caret) => startCallCommand(verb, text, caret),
   });
   const menuOpen = slash.open;
   const candidates = slash.candidates;
   // 正文**开头**敲全了的 `/派 …`、`/讨论 …`：发送 = 叫上次那个人、停在那一种，后面那段留在框里。写在句中的
   // 不算（那是在话里提到这个命令），原样当普通消息发。
-  const typedCall = take || call ? null : parseCallCommand(value);
+  const typedCall = take || call || gate.mute ? null : parseCallCommand(value);
   const callTyped = !!typedCall && (typedCall.verb === "dispatch" ? dispatchable : ability.discussable);
   const menuSends = slash.sends;
   const menuCompletes = slash.completes;
@@ -233,7 +220,7 @@ export function ReplyBox({
     callable: calling.pickingVerb() === "discuss" ? discussTypes : registeredTypes,
     profilesReady,
     profilesFailed,
-    disabled: disabled || commandActive || !!take,
+    disabled: gate.mute || commandActive || !!take,
     onPickAgent: (agent) => pickMention(agent),
     onPicked: () => textareaRef.current?.focus(),
   });
@@ -263,7 +250,7 @@ export function ReplyBox({
     ?? activeAgent;
   // 胶囊改的是「以后都用谁」，跟「现在能不能说话」是两件事：从没跑过的任务同样该能
   // 先把执行器挑好（详情页没有第二个入口，TaskInspector 那节是只读的）。所以这里
-  // 不跟着 disabled 走，只挡真正改不动的：非单飞、已归档、正在发送、正在敲命令。
+  // 不跟着「能不能说话」走，只挡真正改不动的：非单飞、已归档、正在发送、正在敲命令。
   const configDisabled = task.mode !== "single" || task.archived || sending || commandActive
     || (!target && !onStandingExecutorChange);
 
@@ -350,8 +337,9 @@ export function ReplyBox({
     // 截图批注是另一条入口：叫着人只在「问一句」时算数，派出去不经过这里。
     const askCall = call?.verb === "ask" ? call : null;
     const askTarget = askCall?.target ?? null;
-    if (disabled || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
-    const choice = annotation || queryOnly ? {} : later.resolve();
+    if ((annotation ? gate.mute : gate.held) || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
+    // 还没跑过时发得出去的只有查目标那一句：只带字、立即发，草稿里原有的附件和发送方式不动（服务端不收这两样）。
+    const choice = annotation || gate.unstarted ? {} : later.resolve();
     // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
     if (!choice) {
       setSendError(`${later.submitLabel}：${later.blockerOf(choice)}`);
@@ -365,9 +353,9 @@ export function ReplyBox({
     const draftAtSend = { text: value, textVersion: draft.value.textVersion };
     const laterAtSend = draft.later;
     const sentText = annotation?.text ?? value.trim();
-    const sentPaths = annotation?.attachments ?? (queryOnly ? [] : uploads.attachments.map((attachment) => attachment.path));
+    const sentPaths = annotation?.attachments ?? (gate.unstarted ? [] : uploads.attachments.map((attachment) => attachment.path));
     // 发送结算只摘这一次提交的那几次选择（路径 + 选择记号），途中又放回的同一张图留着。
-    const sentSelection = sentSelections(queryOnly ? [] : uploads.attachments);
+    const sentSelection = sentSelections(gate.unstarted ? [] : uploads.attachments);
     try {
       // 改完执行器立刻按发送时，PATCH 可能还在飞 —— 回复的 POST 先到，服务端读到的
       // 仍是旧执行器，这一句照旧由旧的跑。先等写回落地，落不下去就别发：静默按旧
@@ -403,7 +391,7 @@ export function ReplyBox({
       if (!annotation) {
         clearSent(draftAtSend, sentSelection);
         // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
-        if (!queryOnly) draft.setLater((current) => (current === laterAtSend ? null : current));
+        if (!gate.unstarted) draft.setLater((current) => (current === laterAtSend ? null : current));
       }
       if (askCall) calling.sent(askCall);
       return true;
@@ -439,7 +427,7 @@ export function ReplyBox({
     });
   const runCall = async (current: ReplyCall, act: (text: string, attachments: string[]) => Promise<void>): Promise<boolean> => {
     const text = value.trim();
-    if (disabled || sending || uploads.uploading || !text) return false;
+    if (gate.mute || sending || uploads.uploading || !text) return false;
     setSending(true);
     setSendError(null);
     setCommandResult(null);
@@ -525,7 +513,7 @@ export function ReplyBox({
           quoteTarget={task.id}
           rows={3}
           hidden={!!take && !takeInput}
-          disabled={inputLocked && !takeInput}
+          disabled={!!gate.closed && !takeInput}
           readOnly={takeInput?.readOnly}
           placeholder={takeInput?.placeholder ?? placeholder}
           aria-label={takeInput?.label ?? "回复任务"}
@@ -538,7 +526,7 @@ export function ReplyBox({
             mention.onValueChange();
           }}
           {...slash.caret.inputProps}
-          onPaste={take ? (activeOverride?.attachable ? uploads.onPaste : undefined) : queryOnly ? undefined : uploads.onPaste}
+          onPaste={(take ? !activeOverride?.attachable : gate.mute) ? undefined : uploads.onPaste}
           onKeyDown={(event) => {
             if (overrideKeyDown(activeOverride, event)) return;
             if (slash.onKeyDown(event, () => void send(), () => setValue(""))) return;
@@ -558,17 +546,17 @@ export function ReplyBox({
         />
         {take && "body" in take && take.body}
         <div className="task-reply-actions">
-          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive || (take ? !activeOverride?.attachable : queryOnly)} />
+          <AttachmentPicker addFiles={uploads.addFiles} disabled={gate.mute || sending || commandActive || (!!take && !activeOverride?.attachable)} />
           {actions}
           {/* 截图批注、预览日志用得少，收进「更多」。 */}
           <IconMenu side="above" buttonRef={moreButton} className="task-reply-more" items={[
             { label: draft.screenshot ? "继续批注" : "截图批注", icon: <PencilSimple size={15} />,
-              disabled: disabled || queryOnly || sending || uploads.uploading || commandActive, onPick: () => setAnnotating(true) },
+              disabled: gate.mute || sending || uploads.uploading || commandActive, onPick: () => setAnnotating(true) },
             ...moreItems,
           ]} />
           <ScreenshotAnnotation key={task.id} taskId={task.id} open={annotating} onOpenChange={setAnnotating} returnFocusRef={moreButton}
             candidates={screenshotCandidates(conversationItems, [...parseAttachmentText(task.body).paths, ...uploads.attachments.map((attachment) => attachment.path)])}
-            disabled={disabled || queryOnly || sending || uploads.uploading || commandActive} queueing={queueing}
+            disabled={gate.mute || sending || uploads.uploading || commandActive} queueing={queueing}
             executorLabel={activeExecutorLabel} onSend={(reply) => runSend(reply)} />
           <span className="task-reply-actions-gap" aria-hidden="true" />
           {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后向右接着配置；跟新建
@@ -604,13 +592,14 @@ export function ReplyBox({
             call={call}
             callHeld={call?.verb === "discuss" ? discussHold : baseContext.status === "loading" ? "正在确认新任务从哪开工"
               : baseContext.status === "failed" ? "确认不了新任务从哪开工，先重试" : null}
-            later={queryOnly ? nowOnly : later}
+            later={gate.unstarted ? nowOnly : later}
             text={value}
-            attachments={queryOnly ? 0 : uploads.attachments.length}
+            attachments={gate.unstarted ? 0 : uploads.attachments.length}
             uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
             queueing={queueing}
             sending={sending}
-            blocked={disabled ? reason ?? "现在发不出去" : null}
+            // 还没跑过时把命令补进正文不算发送，照点；补全之后发不发得出去再按正文说。
+            blocked={menuCompletes ? null : gate.held}
             // 敲着命令时这颗键干的是别的事：补全命令、叫人派出去或讨论。
             override={menuCompletes ? { text: "补全", action: "把命令补进正文" }
               : pickingCall ? { text: "叫人", action: `叫上次那个人，停在${CALL_COPY[pickingCall].label}` } : null}
@@ -623,7 +612,7 @@ export function ReplyBox({
             stopTip={["queued", "paused", "backlog"].includes(task.status) ? "不排了" : "停止这一轮"}
             stopBlocked={stopBlocked}
             stopping={stopping}
-            configDisabled={disabled || queryOnly || sending || uploads.uploading || commandActive || mention.open}
+            configDisabled={gate.mute || sending || uploads.uploading || commandActive || mention.open}
             tasks={tasks}
             projectId={task.projectId}
             taskId={task.id}

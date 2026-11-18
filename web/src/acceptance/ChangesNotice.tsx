@@ -1,7 +1,7 @@
-import { SpinnerGap } from "@phosphor-icons/react";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /**
- * 走向与 diff 没有「这一版」时说什么（数据来自 useVersionedRead）。顶行那一格：还在读就转圈，
+ * 走向与 diff 没有「这一版」时说什么（数据来自 useVersionedRead）。顶行那一格：还在读就转「找北」，
  * 读失败就说出来并给「重试」—— 上一版的走向绝不顶替上来（它指的目标可能已经不是这一按会合的那个）。
  */
 export function ChangesLeadNote({ loading, error, retry }: { loading: boolean; error: string | null; retry: () => void }) {
@@ -13,7 +13,7 @@ export function ChangesLeadNote({ loading, error, retry }: { loading: boolean; e
       </span>
     );
   }
-  if (loading) return <span className="acc-lead-note"><SpinnerGap size={12} className="is-spinning" aria-hidden="true" />汇总改动</span>;
+  if (loading) return <span className="acc-lead-note"><NaviLoader size={14} />汇总改动</span>;
   return null;
 }
 

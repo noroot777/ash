@@ -11,8 +11,10 @@ import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 import { InspButton } from "./parts.tsx";
 import { DrawnCheck } from "../lib/motion/index.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
-export type InspTone = "ok" | "bad" | "stale" | "busy" | "hold" | "none";
+/** busy 是「事情在跑」（审查中、验证中）；loading 只是「这一格的内容还在读」。 */
+export type InspTone = "ok" | "bad" | "stale" | "busy" | "loading" | "hold" | "none";
 
 export interface InspMainAction {
   label: string;
@@ -26,7 +28,7 @@ export interface InspMainAction {
   dialog?: boolean;
 }
 
-const TONE_ICON: Record<Exclude<InspTone, "busy">, ReactNode> = {
+const TONE_ICON: Record<Exclude<InspTone, "busy" | "loading">, ReactNode> = {
   ok: <Check size={16} weight="bold" />,
   bad: <X size={16} weight="bold" />,
   stale: <MagnifyingGlass size={16} />,
@@ -44,6 +46,8 @@ export function InspConclusion({ tone, children }: { tone: InspTone; children: R
     <p className={`insp-now is-${tone}`} role="status">
       {tone === "busy"
         ? <><SpinnerGap size={16} className="is-spinning" aria-hidden="true" /><span className="insp-live">{children}</span></>
+        : tone === "loading"
+        ? <><NaviLoader /><span>{children}</span></>
         : <><span className="insp-now__icon" aria-hidden="true">{tone === "ok" ? <DrawnCheck draw={drawCheck} /> : TONE_ICON[tone]}</span><span>{children}</span></>}
     </p>
   );

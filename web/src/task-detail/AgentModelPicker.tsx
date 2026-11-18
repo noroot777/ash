@@ -1,11 +1,12 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
-import { ArrowLeft, ArrowsClockwise, CaretRight, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowsClockwise, CaretRight, Warning } from "@phosphor-icons/react";
 import { AgentIcon } from "../components/AgentIcon.tsx";
 import { useAgentModelCatalog } from "../lib/modelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import {
   agentRows,
   clampIndex,
@@ -213,7 +214,7 @@ export function AgentModelPicker({
                 <header>
                   <b>{section.group.providerName}</b>
                   <small className={section.group.status === "failed" ? "is-error" : ""}>
-                    {section.group.status === "loading" && <SpinnerGap size={10} className="is-spinning" aria-hidden="true" />}
+                    {section.group.status === "loading" && <NaviLoader size={12} />}
                     {section.group.status === "failed" && <Warning size={10} aria-hidden="true" />}
                     {section.group.note}
                   </small>

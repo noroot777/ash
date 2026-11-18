@@ -7,7 +7,6 @@ import {
   Copy,
   FolderOpen,
   GitDiff,
-  SpinnerGap,
   Trash,
   Warning,
   X,
@@ -21,6 +20,7 @@ import { formatSize, isImageName } from "./fileModel.ts";
 import { MARKDOWN_PATTERN, MarkdownFileBody } from "./MarkdownFileBody.tsx";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 function TextBody({ file }: { file: FileContent }) {
   const lines = useMemo(() => (file.text ?? "").split("\n"), [file.text]);
@@ -409,7 +409,7 @@ export function FileViewer({
       )}
 
       <div className="file-viewer__body">
-        {loading && <p className="file-viewer__state"><SpinnerGap size={14} aria-hidden="true" />正在读取…</p>}
+        {loading && <p className="file-viewer__state"><NaviLoader />正在读取…</p>}
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
         {!loading && !error && file && (
           <Body taskId={taskId} file={file} pageUrl={pageUrl} showSource={showSource} />

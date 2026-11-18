@@ -1,6 +1,7 @@
 import { BARS, NEEDLE_NORTH, NEEDLE_SOUTH, VIEW } from "./naviMark.ts";
 
-// 所有实例共用这一份元素。墨色跟文字色走，指北那半截是 --navi-north（styles/navi-brand.css）。
+// 所有实例共用这一份元素。配色是品牌的 --navi-ink / --navi-north（styles/navi-brand.css）；
+// 放在应用图标那样的米白块上时，给那一块挂 .navi-tile。
 const NEEDLE = (
   <g className="navi-mark__needle">
     <polygon points={NEEDLE_SOUTH} />

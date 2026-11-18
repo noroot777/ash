@@ -7,7 +7,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
     <div className="auth-shell">
       <div className="auth-stage">
         <aside className="auth-brand">
-          <div className="auth-brand-mark"><NaviMark size={28} label="Navi" /></div>
+          <div className="auth-brand-mark navi-tile"><NaviMark size={28} label="Navi" /></div>
           <div className="auth-brand-copy">
             <span>LOCAL AGENT OPERATIONS</span>
             <h2>把复杂的协作，留在一张清楚的工作台里。</h2>

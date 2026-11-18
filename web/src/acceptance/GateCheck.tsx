@@ -11,7 +11,7 @@ import type { useAcceptGate } from "../review/useAcceptGate.ts";
 import { AcceptGateForceRelease } from "../review/AcceptGateForceRelease.tsx";
 import { AcceptGateBaselineChoice } from "../review/AcceptGateBaselineChoice.tsx";
 import { AcceptLayer } from "./AcceptLayer.tsx";
-import { CheckAction, CheckRow } from "./CheckRow.tsx";
+import { CheckAction, CheckRow, RetryAction } from "./CheckRow.tsx";
 import { baselineEffect, gateLine, supervisionName } from "./gateLine.ts";
 
 type Gate = ReturnType<typeof useAcceptGate>;
@@ -77,7 +77,7 @@ export function GateCheck({ task, gate, canManage, settled, atFinalGate, skippin
       await reload();
       return handed.failure === "entry_missing" ? "已交给任务：它会先看入口为什么不在被测的树里" : "已把这条红交给任务去修";
     })}>交给任务</CheckAction>}
-    {line?.retry && <CheckAction busy={busy} onClick={() => void act(async () => { await reload(); return null; })}>重试</CheckAction>}
+    {line?.retry && <RetryAction onRetry={reload} disabled={busy} />}
     {editable && <button ref={gear} type="button" className="acc-icon-btn acc-reveal" aria-label="前置命令设置"
       aria-expanded={editing} onClick={() => (editing ? closeSettings() : setSettingsOpen(true))}>
       <SlidersHorizontal size={14} aria-hidden="true" />

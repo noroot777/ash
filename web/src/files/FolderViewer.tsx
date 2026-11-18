@@ -5,7 +5,6 @@ import {
   File,
   Folder,
   FolderOpen,
-  SpinnerGap,
   Trash,
   Warning,
   X,
@@ -16,6 +15,7 @@ import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize, siblingReel } from "./fileModel.ts";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
 import { OpenInIdeMenu } from "./OpenInIdeMenu.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /**
  * 会话区里的文件夹详情，和 `FileViewer` 占中间栏同一个位置。
@@ -163,7 +163,7 @@ export function FolderViewer({
       )}
 
       <div className="file-viewer__body">
-        {loading && <p className="file-viewer__state"><SpinnerGap size={14} aria-hidden="true" />正在统计…</p>}
+        {loading && <p className="file-viewer__state"><NaviLoader />正在统计…</p>}
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
         {!loading && !error && overview && (
           <div className="folder-viewer__body">

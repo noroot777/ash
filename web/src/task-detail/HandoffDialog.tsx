@@ -8,7 +8,7 @@ import type {
 } from "@ash/shared";
 import { needsPeerKey } from "@ash/shared/handoff";
 import { isAcceptedStage } from "@ash/shared";
-import { Fingerprint, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { Fingerprint, Warning } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -16,6 +16,7 @@ import { HandoffPeerKeyField } from "../settings/HandoffPeerKeyField.tsx";
 import { handoffTargetsForTask, nextUntriedHandoffTarget } from "./handoffTargetPolicy.ts";
 import { HandoffReturnView, type HandoffReturnPhase } from "./HandoffReturnView.tsx";
 import { HandoffCapabilityNotice } from "./HandoffCapabilityNotice.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import {
   HandoffDialogHeader,
   HandoffProgress,
@@ -452,7 +453,7 @@ export function HandoffDialog({
             {/* 移回时服务端可能要按指纹探几个候选地址才知道来源机在哪，别让下拉空着干等。 */}
             {targets === null && (
               <p className="handoff-probing">
-                <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+                <NaviLoader size={14} />
                 {returningHandoff ? "正在定位来源机器…" : "正在读取远程主机…"}
               </p>
             )}
@@ -505,7 +506,7 @@ export function HandoffDialog({
               <p className="handoff-peer-line is-warn"><Warning size={13} aria-hidden="true" /><span>{fallbackNotice}</span></p>
             )}
             {applying && targetUrl && (
-              <p className="handoff-probing"><SpinnerGap size={13} className="is-spinning" aria-hidden="true" />正在探测对端…</p>
+              <p className="handoff-probing"><NaviLoader size={14} />正在探测对端…</p>
             )}
             {preflight && (
               <>
