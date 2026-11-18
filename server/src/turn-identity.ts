@@ -22,6 +22,7 @@ import {
   ASH_TURN_IDENTITY_ENV, ASH_TURN_IDENTITY_ENV_ALL_KEYS, ASH_TURN_IDENTITY_FILE,
   ASH_TURN_IDENTITY_PATH_DIR, isTurnIdentityPathEntry,
 } from "@ash/shared/mcp";
+import { withLegacyEnvNames } from "@ash/shared/env-names";
 import { augmentedEnv } from "./executors/bin-resolve.js";
 import { RUNS_DIR } from "./paths.js";
 
@@ -72,6 +73,17 @@ function rewritePath(base: string, add: string | null): string | null {
 
 
 /**
+ * 回合身份变量交给智能体时**新旧两代名字同值各一份**(`NAVI_TASK_ID` 和 `ASH_TASK_ID`)。
+ *
+ * 跟交给用户命令的变量同一个道理(`withLegacyEnvNames`):智能体的回合里跑的不只是我们的 MCP ——
+ * 用户自己配的钩子、脚本、升级之前装的工具都按旧名读身份。我们自己这一侧(MCP)按新名优先读,
+ * 两份同值,谁读到都是这一回合的。拆:用户的钩子/脚本都换成新名之后,改回只写新名。
+ */
+export function turnIdentityVars(vars: Readonly<Record<string, string>>): Record<string, string> {
+  return withLegacyEnvNames(vars);
+}
+
+/**
  * 这一回合的身份:五个变量(两套名字同值)+ `PATH` 上那条备用通路。
  *
  * `PATH` 这一段是给「只把 `PATH` 交给 MCP 子进程」的那几家用的(copilot 文档明写其余变量
@@ -83,14 +95,16 @@ function rewritePath(base: string, add: string | null): string | null {
  */
 export function turnIdentityEnv(id: TurnIdentity): Record<string, string | undefined> {
   const vars: Record<string, string | undefined> = {
-    // 旧名先清掉:ash 从一个改名之前的任务里起来时,继承的环境里带着**那条任务**的 `ASH_TASK_ID`,
-    // 只设新名的话它就原样留在这一回合的环境里(从前同名覆盖,改名之后不再自动盖掉)。
+    // 各代名字先全清掉:ash 从一个改名之前的任务里起来时,继承的环境里带着**那条任务**的身份,
+    // 再上一代(`HARNESS_`)的这里不再写,不清就原样留在这一回合的环境里。
     ...Object.fromEntries(ASH_TURN_IDENTITY_ENV_ALL_KEYS.map((key) => [key, undefined])),
-    [ASH_TURN_IDENTITY_ENV.taskId]: id.taskId,
-    [ASH_TURN_IDENTITY_ENV.turnToken]: id.turnToken,
-    [ASH_TURN_IDENTITY_ENV.directionToken]: id.directionToken,
-    [ASH_TURN_IDENTITY_ENV.turnTicket]: id.turnToken,
-    [ASH_TURN_IDENTITY_ENV.directionTicket]: id.directionToken,
+    ...turnIdentityVars({
+      [ASH_TURN_IDENTITY_ENV.taskId]: id.taskId,
+      [ASH_TURN_IDENTITY_ENV.turnToken]: id.turnToken,
+      [ASH_TURN_IDENTITY_ENV.directionToken]: id.directionToken,
+      [ASH_TURN_IDENTITY_ENV.turnTicket]: id.turnToken,
+      [ASH_TURN_IDENTITY_ENV.directionTicket]: id.directionToken,
+    }),
   };
   const path = rewritePath(augmentedEnv().PATH ?? "", materializeIdentityDir(id));
   return path === null ? vars : { ...vars, PATH: path };

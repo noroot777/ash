@@ -397,7 +397,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
         await cloneSealedSnapshot(cwd, target, preview.settings);
       } else {
         await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
-        await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
+        await git(target, ["config", "core.hooksPath", join(target, ".git", "navi-no-hooks")]);
       }
       await snap(["checkout", "--detach", source.commit]);
       // 封好的克隆自带的配置里本就没有 origin；已含目标分支时（tree 为 null）不合，检出的就是分支那棵树。

@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileText } from "./exec.js";
 import { expandHome } from "./platform.js";
+import { LEGACY_SEALED_SNAPSHOT_MARK } from "@ash/shared/legacy-names";
 
 const MAX_BUFFER = 32 * 1024 * 1024;
 /**
@@ -156,7 +157,9 @@ const sealed = (empty: string) => ["-c", `core.attributesFile=${empty}`, "-c", `
 
 /** 换掉快照本地配置时保留的那几项：没有它们这份仓库就打不开（格式、对象格式、引用存储）。 */
 const KEPT_SETTINGS = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|compatobjectformat|refstorage))$/;
-const SEAL_MARK = "ash.sealedsnapshot";
+const SEAL_MARK = "navi.sealedsnapshot";
+/** 认得出的全部封存标记：升级前封的快照上是旧名（见 legacy-names.ts）。写只写当前名。 */
+const SEAL_MARKS = [SEAL_MARK, LEGACY_SEALED_SNAPSHOT_MARK];
 
 async function sealedExec(cwd: string, args: string[]): Promise<string> {
   const { empty } = await scratch();
@@ -181,10 +184,10 @@ export async function cloneSealedSnapshot(source: string, target: string, settin
     return at < 0 ? [line, "true"] : [line.slice(0, at), line.slice(at + 1)];
   }).filter(([key]) => KEPT_SETTINGS.test(key));
   const entries: [string, string][] = [...kept, ...settings,
-    ["core.hooksPath", join(target, ".git", "ash-no-hooks")],
-    ["core.attributesFile", join(target, ".git", "ash-no-attributes")],
+    ["core.hooksPath", join(target, ".git", "navi-no-hooks")],
+    ["core.attributesFile", join(target, ".git", "navi-no-attributes")],
     ["core.fsmonitor", "false"], [SEAL_MARK, "true"]];
-  const next = `${file}.ash-sealed`;
+  const next = `${file}.navi-sealed`;
   await writeFile(next, "");
   for (const [key, value] of entries) await execFileText("git", ["config", "--file", next, key, value], { env });
   await rename(next, file);
@@ -258,8 +261,12 @@ export async function checkoutGaps(repo: string): Promise<string[]> {
 /** 这份快照是不是 `cloneSealedSnapshot` 建的（收尾核验据此决定用哪套环境跑 git）。 */
 export async function isSealedSnapshot(cwd: string): Promise<boolean> {
   const { empty } = await scratch();
-  return (await execFileText("git", ["config", "--file", join(cwd, ".git", "config"), "--get", SEAL_MARK],
-    { env: cleanEnv(empty) }).catch(() => null))?.stdout.trim() === "true";
+  for (const mark of SEAL_MARKS) {
+    const value = (await execFileText("git", ["config", "--file", join(cwd, ".git", "config"), "--get", mark],
+      { env: cleanEnv(empty) }).catch(() => null))?.stdout.trim();
+    if (value === "true") return true;
+  }
+  return false;
 }
 
 /**

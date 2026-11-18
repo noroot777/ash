@@ -25,7 +25,7 @@
 
 import { createHash } from "node:crypto";
 import type { DetachedPaths } from "./detached-child.js";
-import { FROZEN_WINDOWS_AGENT_WRAP_SUFFIX } from "@ash/shared/legacy-names";
+import { FROZEN_WINDOWS_AGENT_WRAP_SUFFIX, FROZEN_WINDOWS_STDIN_PIPE_PREFIX } from "@ash/shared/legacy-names";
 
 /**
  * 壳脚本的文件名后缀。**这不只是个文件名,它是一个对外可见的记号**:壳的路径原样挂在它自己
@@ -54,7 +54,7 @@ export function windowsWrapPaths(paths: DetachedPaths): {
     // 存在性判定走**文件**而不是管道本身:`existsSync` 对 `\\.\pipe\…` 的行为跨 Node 版本
     // 不好保证,而这个文件由壳自己在收尾时删掉 —— 它在 = 管道还有人守着。
     pipeMarker: `${paths.rc}.stdin.pipe`,
-    pipeName: `\\\\.\\pipe\\ash-stdin-${id}`,
+    pipeName: `\\\\.\\pipe\\${FROZEN_WINDOWS_STDIN_PIPE_PREFIX}${id}`,
     state: `${paths.rc}.stdin.json`,
     ownership: `${paths.rc}.ownership.json`,
   };

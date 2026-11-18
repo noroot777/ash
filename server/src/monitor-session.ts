@@ -32,7 +32,7 @@
 // 输入(实测 `originalRequest.reviewRound=1` → `monitor.source_review_round=2`)。
 // 三截都答不出来时**一律不静默当执行者**:要么由调用方显式指定唤醒目标,要么拒绝这次创建。
 import { and, eq } from "drizzle-orm";
-import { MONITOR_WAKE_TARGETS, monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { MONITOR_WAKE_TARGETS, OWN_MONITOR_KIND, monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { freeReviewRuns, monitors, regressionEvidence } from "./db/schema.js";
@@ -490,7 +490,7 @@ export async function liveMonitorSummary(
     .where(and(
       eq(monitors.taskId, taskId),
       eq(monitors.status, "running"),
-      eq(monitors.kind, "ash"),
+      eq(monitors.kind, OWN_MONITOR_KIND),
     ));
   return {
     count: rows.length,

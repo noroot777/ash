@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import { type CliHostEnv, cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
 import type { CompactSnapshot } from "@ash/shared/usage";
+import { LEGACY_CLAUDE_RUNTIME_SETTINGS_PREFIX } from "@ash/shared/legacy-names";
 import { claudeLaunchCompact, cliHostEnv, hostEnvOf } from "./cli-env.js";
 import { type ClaudeCompactFacts, claudeCompactFacts, claudeConfigDirOf } from "./claude-settings.js";
 import type { AgentExecutor, ConsumedOutput, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
@@ -26,7 +27,12 @@ export { singleRunFromResident } from "./claude-single-run.js";
 export { claudeEffortUnsupportedMessage, claudeRootBypassMessage, normalizeClaudeCliError, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 
 type RuntimeSettings = { arg: string | null; cleanup: () => void; error?: string };
-const RUNTIME_SETTINGS_RE = /^ash-claude-settings-(\d+)-[0-9a-f-]+\.json$/i;
+/** 运行时设置文件（带中转密钥）的名字前缀：`<前缀><pid>-<uuid>.json`。 */
+const RUNTIME_SETTINGS_PREFIX = "navi-claude-settings-";
+// 清扫和从命令行认文件都两代一起认：升级前起的智能体、死掉的老进程留下的是旧前缀（legacy-names.ts）。
+const RUNTIME_SETTINGS_NAMES = `(?:${[RUNTIME_SETTINGS_PREFIX, LEGACY_CLAUDE_RUNTIME_SETTINGS_PREFIX].join("|")})`;
+const RUNTIME_SETTINGS_RE = new RegExp(`^${RUNTIME_SETTINGS_NAMES}(\\d+)-[0-9a-f-]+\\.json$`, "i");
+const RUNTIME_SETTINGS_ARG_RE = new RegExp(`--settings (.*?${RUNTIME_SETTINGS_NAMES}\\d+-[0-9a-f-]+\\.json)(?:\\s|$)`, "i");
 
 function removeRuntimeSettings(path: string): void {
   try { rmSync(path, { force: true }); } catch { /* 退出/重启清理只做 best effort */ }
@@ -54,7 +60,7 @@ function cleanupStaleRuntimeSettings(): void {
 }
 
 function runtimeSettingsCleanupFromCommandLine(commandLine: string): () => void {
-  const match = commandLine.match(/--settings (.*?ash-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i);
+  const match = commandLine.match(RUNTIME_SETTINGS_ARG_RE);
   const path = match?.[1];
   return path ? () => removeRuntimeSettings(path) : () => {};
 }
@@ -191,7 +197,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const settings = this.settingsPayload(cwd, model, this.relay?.apiKey, crossTurn, host);
     if (!settings) return { arg: null, cleanup: () => {} };
     if (!this.relay) return { arg: JSON.stringify(settings), cleanup: () => {} };
-    const path = join(tmpdir(), `ash-claude-settings-${process.pid}-${randomUUID()}.json`);
+    const path = join(tmpdir(), `${RUNTIME_SETTINGS_PREFIX}${process.pid}-${randomUUID()}.json`);
     try {
       writeFileSync(path, JSON.stringify(settings), { encoding: "utf8", mode: 0o600, flag: "wx" });
       return { arg: path, cleanup: () => removeRuntimeSettings(path) };

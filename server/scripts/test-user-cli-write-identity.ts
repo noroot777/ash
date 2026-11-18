@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
 import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
 import { REPO_DIR } from "../src/paths.js";
@@ -26,9 +27,11 @@ process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
 
 /** 「codex 收下了」—— 这几格钉的是**写出来那个文件的身份**,不是 codex 的判决。 */
 const LISTS_ASH: CodexAskOutcome = {
-  kind: "answer", code: 0, stdout: JSON.stringify([{ name: "ash", enabled: true }]), stderr: "",
+  kind: "answer", code: 0, stdout: JSON.stringify([{ name: ASH_MCP_SERVER_NAME, enabled: true }]), stderr: "",
 };
+// 宿主机上是改名之前 setup 写的旧名；搬进个人目录落的是当前名。
 const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+const TABLE_RE = new RegExp(`\\[mcp_servers\\.${ASH_MCP_SERVER_NAME}\\]`);
 const BEFORE = `model = "gpt"\n`;
 
 let seq = 0;
@@ -63,7 +66,7 @@ if (process.platform === "win32") {
   const ino = Number(statSync(file).ino);
   const state = await ensure(dir, host);
   assert.equal(state.configured, true);
-  assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/);
+  assert.match(readFileSync(file, "utf8"), TABLE_RE);
   if (ino !== 0) assert.equal(Number(statSync(file).ino), ino, "就地写：不许换文件");
   assert.equal(existsSync(`${file}.ash-tmp`), false, "就地写不该产生临时副本");
 } else {
@@ -77,7 +80,7 @@ if (process.platform === "win32") {
     const state = await ensure(dir, host);
     assert.equal(state.configured, true, "该接上的照样接上");
     assert.equal(statSync(file).mode & 0o777, 0o600, "0600 不许被放宽");
-    assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/);
+    assert.match(readFileSync(file, "utf8"), TABLE_RE);
   }
   // ② 配置是条软链（集中管理 dotfiles 的常见做法）：写它指向的那份，链接本身别换掉。
   {
@@ -90,7 +93,7 @@ if (process.platform === "win32") {
     const state = await ensure(dir, host);
     assert.equal(state.configured, true);
     assert.ok(lstatSync(file).isSymbolicLink(), "软链还得是软链");
-    assert.match(readFileSync(managed, "utf8"), /\[mcp_servers\.ash\]/, "写的是它指向的那份");
+    assert.match(readFileSync(managed, "utf8"), TABLE_RE, "写的是它指向的那份");
     assert.ok(readFileSync(managed, "utf8").startsWith(BEFORE), "原文照旧在前面");
     assert.equal(statSync(managed).mode & 0o777, 0o600, "目标的权限也不许动");
   }
@@ -105,7 +108,7 @@ if (process.platform === "win32") {
     const state = await ensure(dir, host);
     assert.equal(state.configured, true);
     assert.ok(lstatSync(file).isSymbolicLink() && lstatSync(hop).isSymbolicLink(), "两层链接都还在");
-    assert.match(readFileSync(dangling, "utf8"), /\[mcp_servers\.ash\]/, "写到最终那个路径上");
+    assert.match(readFileSync(dangling, "utf8"), TABLE_RE, "写到最终那个路径上");
   }
   // ④ 硬链接：rename 换 inode 会断开用户显式接起来的关联,这一种就地写。
   {
@@ -118,7 +121,7 @@ if (process.platform === "win32") {
     const state = await ensure(dir, host);
     assert.equal(state.configured, true);
     assert.equal(statSync(file).ino, ino, "inode 不许换");
-    assert.match(readFileSync(twin, "utf8"), /\[mcp_servers\.ash\]/, "另一端跟着更新");
+    assert.match(readFileSync(twin, "utf8"), TABLE_RE, "另一端跟着更新");
   }
   // ⑤ 原来没有这个文件：新建那一路**只给自己读**(0600)。这一档没有「原来那份」可抄,所以
   //    不是就地写那条规矩在管 —— 是「这个文件装着 MCP 接法,别按 umask 摊开给同机器上别的
@@ -129,7 +132,7 @@ if (process.platform === "win32") {
     const file = join(dir, "config.toml");
     const state = await ensure(dir, host);
     assert.equal(state.configured, true);
-    assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/, "原来没有就新建一份");
+    assert.match(readFileSync(file, "utf8"), TABLE_RE, "原来没有就新建一份");
     assert.equal(statSync(file).mode & 0o777, 0o600, "新建的只给自己读,不按 umask 摊开");
   }
   // ⑥ **扩展 ACL 也得留下** —— mode 相等不等于有效权限相等(审查第 5 轮 F1:macOS 上
@@ -145,7 +148,7 @@ if (process.platform === "win32") {
     } else {
       const state = await ensure(dir, host);
       assert.equal(state.configured, true);
-      assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/);
+      assert.match(readFileSync(file, "utf8"), TABLE_RE);
       assert.deepEqual(acl.list(), acl.aces, `那条禁读写完还得在:\n${acl.show()}`);
       // 顺手钉住**这个探测本身是灵敏的**:同一个路径被 rename 换掉时 ACL 会整条丢掉,那必须
       // 比出不一样。否则哪天 `ls -le` 换了格式、一条 ACE 都解析不出来,这一组会在「两边都是

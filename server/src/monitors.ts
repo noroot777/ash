@@ -26,6 +26,7 @@ import {
   MONITOR_TAIL_MAX_LINES,
   monitorExactExpiry,
   monitorStartTrusted,
+  OWN_MONITOR_KIND,
   type MonitorStatus,
   type TaskMonitor,
 } from "@ash/shared/monitor";
@@ -67,12 +68,12 @@ export type Row = typeof monitors.$inferSelect;
 // `liveMonitorsOf`(配额)、`attach`(把 tail 和定时器挂起来)、`publish`、`toTaskMonitor`、
 // `Row`。它拆出去只是因为「创建协议」那一段(先落身份、再起进程、回填 pid、放行)自己就是一
 // 整件事,而这个文件已经顶到行数上限 —— 运行时仍然只有这一份。
-export const isAshKind = eq(monitors.kind, "ash");
+export const isAshKind = eq(monitors.kind, OWN_MONITOR_KIND);
 
 export const toTaskMonitor = (r: Row): TaskMonitor => ({
   id: r.id,
   taskId: r.taskId,
-  kind: (r.kind === "claude" ? "claude" : "ash"),
+  kind: (r.kind === "claude" ? "claude" : OWN_MONITOR_KIND),
   nativeId: r.nativeId,
   lifetime: (r.sourceLifetime === "persistent" || r.sourceLifetime === "unknown" ? r.sourceLifetime : "bounded"),
   command: r.command,

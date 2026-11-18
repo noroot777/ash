@@ -5,6 +5,7 @@
 //
 // `schema.ts` 原样转发 `monitors`，所有 `from "./db/schema.js"` 的导入不受影响。
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
 
 // 哨兵（Monitor）：一条绑在任务上的长跑命令，由 **ash server** 起、不在 agent 进程树里，
 // stdout 每一行就是一条事件（语义与上限见 shared/src/monitor.ts）。
@@ -130,7 +131,7 @@ export const monitors = sqliteTable("monitors", {
   // 出身:'ash' = ash server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的
   // **只读投影**(停不掉、无日志、随 agent 进程消失)。语义见 shared/src/monitor.ts 文件头。
   // 所有「接管进程/杀进程/读日志」的查询都必须按它过滤,否则会拿 pid=null 的投影行去认进程。
-  kind: text("kind").notNull().default("ash"),
+  kind: text("kind").notNull().default(OWN_MONITOR_KIND),
   // 来源侧的原生 id(claude 的后台任务 id,形如 b69ym4qzv)。'ash' 那种恒为 null。
   nativeId: text("native_id"),
   // 这条投影是哪条 CLI 会话报上来的('ash' 那种恒为 null)。**它是重启后认领关系的唯一凭据**:

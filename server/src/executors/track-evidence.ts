@@ -13,6 +13,7 @@ import { IS_WINDOWS, isPidAlive } from "../platform.js";
 import { processUnitEvidence } from "../proc.js";
 import { childStillOurs } from "./child-identity.js";
 import { unitTokenOf } from "./unit-token.js";
+import { LEGACY_TRACK_FILE_PREFIX } from "@ash/shared/legacy-names";
 
 // ── 逃逸进程追踪(继承 fd,systemd 同款思路)──────────────────────────────
 // 进程组击杀(kill -pid)只覆盖「还留在 agent 进程组里」的后代。但 codex/claude
@@ -311,7 +312,9 @@ export const holdersMayExist = (probe: HolderProbe): boolean =>
 // 而不是各写一份 —— 少一份就意味着那条路上的孤儿没人管。
 // Windows 上直接返回空:反查手段不存在(见 killEscapees 顶部),开了也没人用,
 // 还会平白留下一堆临时文件。
-const TRACK_PREFIX = "ash-track-";
+const TRACK_PREFIX = "navi-track-";
+/** 清扫两代一起认：升级之前的进程留下的是旧前缀（legacy-names.ts）。写只写当前名。 */
+const TRACK_PREFIXES = [TRACK_PREFIX, LEGACY_TRACK_FILE_PREFIX];
 
 export function openTrackFd(): { fd: number | null; path: string | null } {
   if (IS_WINDOWS) return { fd: null, path: null };
@@ -456,8 +459,9 @@ export async function sweepOrphanTrackFiles(): Promise<number> {
   }
   const candidates: string[] = [];
   for (const name of names) {
-    if (!name.startsWith(TRACK_PREFIX)) continue;
-    const owner = Number(name.slice(TRACK_PREFIX.length).split("-")[0]);
+    const prefix = TRACK_PREFIXES.find((p) => name.startsWith(p));
+    if (!prefix) continue;
+    const owner = Number(name.slice(prefix.length).split("-")[0]);
     if (!Number.isInteger(owner) || owner === process.pid || isPidAlive(owner)) continue;
     const path = join(tmpdir(), name);
     if (!leases.has(path) && existsSync(path)) candidates.push(path);

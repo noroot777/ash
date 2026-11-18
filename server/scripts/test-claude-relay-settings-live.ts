@@ -14,6 +14,7 @@ if (spawnSync("claude", ["--version"], { encoding: "utf8" }).status !== 0) {
 }
 
 const scratch = mkdtempSync(join(tmpdir(), "ash-claude-relay-live-"));
+// 死进程留下的设置文件故意用改名之前的前缀：启动清扫要两代一起认（legacy-names.ts）。
 const staleSettings = join(tmpdir(), "ash-claude-settings-2147483647-00000000-0000-0000-0000-000000000000.json");
 writeFileSync(staleSettings, "stale");
 const cwd = join(scratch, "repo");
@@ -94,7 +95,7 @@ try {
     },
   });
   const handle = executor.run({ cwd, prompt: "ping", env: { CLAUDE_CONFIG_DIR: configDir } });
-  const settingsPath = handle.commandLine.match(/--settings (.*?ash-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i)?.[1];
+  const settingsPath = handle.commandLine.match(/--settings (.*?navi-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i)?.[1];
   assert.ok(settingsPath && existsSync(settingsPath), "运行期 settings 文件应在 spawn 前准备好");
   if (platform() !== "win32") assert.equal(statSync(settingsPath).mode & 0o777, 0o600);
   const runtimeSettings = readFileSync(settingsPath, "utf8");
@@ -125,7 +126,7 @@ try {
     ["runSteerable", executor.runSteerable({ cwd: join(scratch, "missing-steerable"), prompt: "ping", env: { CLAUDE_CONFIG_DIR: configDir } })],
     ["openResident", executor.openResident({ cwd: join(scratch, "missing-resident"), prompt: "ping", env: { CLAUDE_CONFIG_DIR: configDir } })],
   ] as const) {
-    const failedSettingsPath = failed.commandLine.match(/--settings (.*?ash-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i)?.[1];
+    const failedSettingsPath = failed.commandLine.match(/--settings (.*?navi-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i)?.[1];
     assert.ok(failedSettingsPath && existsSync(failedSettingsPath), `${label}:预检前应已准备 settings`);
     for await (const _event of failed.events) { /* consume failedChild error/done */ }
     assert.equal(existsSync(failedSettingsPath), false, `${label}:调用方不调 cleanup 时也必须删除 settings`);
@@ -143,7 +144,7 @@ try {
     },
     startupError: "test startup error",
   }).run({ cwd, prompt: "ping" });
-  assert.doesNotMatch(startupFailed.commandLine, /ash-claude-settings-/);
+  assert.doesNotMatch(startupFailed.commandLine, /claude-settings-/);
   for await (const _event of startupFailed.events) { /* consume startup error */ }
   console.log("claude relay settings live: ok");
 } finally {

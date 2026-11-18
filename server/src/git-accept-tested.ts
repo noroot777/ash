@@ -37,7 +37,7 @@ type Published = "merge_commit" | "squash" | "fast_forward";
 let noHooks: Promise<string> | null = null;
 /** 发布用的 git：钩子目录指向一个空目录，fsmonitor 关掉。 */
 const landingGit = async (cwd: string, args: string[]) => {
-  noHooks ??= mkdtemp(join(tmpdir(), "ash-no-hooks-"));
+  noHooks ??= mkdtemp(join(tmpdir(), "navi-no-hooks-"));
   return exec("git", ["-C", cwd, "-c", `core.hooksPath=${await noHooks}`, "-c", "core.fsmonitor=false", ...args]);
 };
 

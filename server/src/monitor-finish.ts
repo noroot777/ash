@@ -9,7 +9,7 @@
 // 这边只按它们的公开判据组合。**公开面照旧从 monitors.ts 出**(那边 re-export 这几个名字,
 // 调用方一个都不用改)。
 import { and, eq } from "drizzle-orm";
-import type { MonitorStatus } from "@ash/shared/monitor";
+import { OWN_MONITOR_KIND, type MonitorStatus } from "@ash/shared/monitor";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
@@ -307,7 +307,7 @@ async function finishHeld(
     // 是**唯一**能把身份补全的东西(见 monitor-reclaim-debts 的 `completeIdentity`)。责任还欠着
     // 就把它删掉,等于把「这一刻 ps 答不出来」永久固化成「这条永远证不出身份」:之后既不敢下刀,
     // 也销不掉账(第 10 轮审查 F2-B)。确认退出之后它才真的没用了。
-    if (row.kind === "ash" && row.logPath && verdict === "closed") clearSpawnIdentity(row.logPath);
+    if (row.kind === OWN_MONITOR_KIND && row.logPath && verdict === "closed") clearSpawnIdentity(row.logPath);
   } finally {
     // 不传 `holdingChain`:这个函数本身不跑在 `serialize(monitorId)` 上(它只在里面排过
     // flush),所以让交接层把这一趟排进那条队列 —— 并发的两笔收尾于是各自有序,后落定的

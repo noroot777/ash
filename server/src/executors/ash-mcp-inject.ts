@@ -36,6 +36,10 @@ import { ASH_TURN_FINGERPRINT_ENV, ASH_TURN_FINGERPRINT_NONE, turnFingerprint } 
 import { ashMcpEntry } from "../mcp-registry/register.js";
 import type { AshMcpEntry } from "../mcp-registry/types.js";
 import { DATA_DIR, RUNS_DIR } from "../paths.js";
+import { LEGACY_INJECTED_MCP_DIR } from "@ash/shared/legacy-names";
+
+/** 注入文件所在的子目录名（`<runs>/<taskId>/` 与数据目录下）。 */
+export const INJECTED_MCP_DIR = "navi-mcp";
 
 /** 起跑时由 ash 注入自己 MCP 的执行器。其余几家走它们自己的配置登记。 */
 export const ASH_MCP_INJECTED = ["claude", "codex"] as const;
@@ -68,7 +72,7 @@ export type ClaudeAshMcpInjection = { args: string[]; failure: string | null };
  * claude 的 `--mcp-config` 参数。写成文件而不是内联 JSON：Windows 上 claude 是 `.cmd` 垫片，
  * 一段带引号的 JSON 过 cmd.exe 是另一场仗。文件名按内容取哈希。
  *
- * 放在哪：任务回合的内容带着本回合指纹、一回合一份，写在 `<runs>/<taskId>/ash-mcp/` 下，写新的
+ * 放在哪：任务回合的内容带着本回合指纹、一回合一份，写在 `<runs>/<taskId>/navi-mcp/` 下，写新的
  * 就删这个任务旧的那几份（claude 只在启动时读它）；非任务回合内容只随端口变，放数据目录下共用
  * —— 同一个数据目录下可能同时跑着不同端口的实例（预览、验证实例），各写各的、谁也盖不掉谁。
  *
@@ -82,7 +86,7 @@ export function claudeAshMcpInjection(
   { entry = ashMcpEntry(), dir }: { entry?: AshMcpEntry; dir?: string } = {},
 ): ClaudeAshMcpInjection {
   const taskId = turnTaskId(env);
-  const target = dir ?? (taskId ? join(RUNS_DIR, taskId, "ash-mcp") : join(DATA_DIR, "ash-mcp"));
+  const target = dir ?? (taskId ? join(RUNS_DIR, taskId, INJECTED_MCP_DIR) : join(DATA_DIR, INJECTED_MCP_DIR));
   const server = { type: "stdio", ...entry, env: { ...entry.env, ...fingerprintEnv(env) } };
   const body = `${JSON.stringify({ mcpServers: { [ASH_MCP_SERVER_NAME]: server } }, null, 2)}\n`;
   const name = `claude-${createHash("sha256").update(body).digest("hex").slice(0, 12)}.json`;
@@ -100,12 +104,15 @@ export function claudeAshMcpInjection(
     return { args: [], failure };
   }
   if (taskId) {
-    // 旧回合那几份：删不掉不碍事，下一回合再删。
-    try {
-      for (const old of readdirSync(target)) {
-        if (old !== name && old.startsWith("claude-")) rmSync(join(target, old), { force: true });
-      }
-    } catch { /* 同上 */ }
+    // 旧回合那几份：删不掉不碍事，下一回合再删。升级之前的回合写在旧目录名下，一并收掉。
+    const stale = dir ? [target] : [target, join(RUNS_DIR, taskId, LEGACY_INJECTED_MCP_DIR)];
+    for (const folder of stale) {
+      try {
+        for (const old of readdirSync(folder)) {
+          if (!(folder === target && old === name) && old.startsWith("claude-")) rmSync(join(folder, old), { force: true });
+        }
+      } catch { /* 同上 */ }
+    }
   }
   return { args: ["--mcp-config", file], failure: null };
 }

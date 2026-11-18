@@ -49,7 +49,7 @@
 // (判据已收紧在 proc.ts 的 `unverifiable` 档)。所以这里**拒绝**:身份问不全就不放行,
 // 而那一刻要收掉的进程由**句柄**证明所有权,不经过 pid 身份那条路。
 import { desc, eq } from "drizzle-orm";
-import { MONITOR_MAX_PER_TASK, MONITOR_MAX_TIMEOUT_MS, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
+import { MONITOR_MAX_PER_TASK, MONITOR_MAX_TIMEOUT_MS, OWN_MONITOR_KIND, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
 import { neverExitsVerdict } from "@ash/shared/command-never-exits";
 import { endConditionAdvice, endConditionDemand, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { db } from "./db/index.js";
@@ -291,7 +291,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       resultHandoffAt: null,
       resultHandoffText: null,
       ownerUserId: input.ownerUserId ?? null,
-      kind: "ash",
+      kind: OWN_MONITOR_KIND,
       nativeId: null,
       cliSessionId: null,
       // 只有 claude 投影才有「起它的那个 tool_use」。

@@ -186,6 +186,57 @@ try {
     console.log("✓ 资源记号:智能体和哨兵起跑时先擦各代旧记号,继承来的旧单元不会把新进程认走");
   }
 
+  // ── ④d 交给智能体的回合身份:新旧两代同值各一份(用户的钩子/脚本按旧名读) ─────────────────
+  {
+    const { turnIdentityEnv, withoutTurnIdentity } = await import("../src/turn-identity.js");
+    const env = turnIdentityEnv({ taskId: "Tk1", turnToken: "tt", directionToken: "dd" });
+    for (const [name, value] of [["TASK_ID", "Tk1"], ["TURN_TOKEN", "tt"], ["DIRECTION_TOKEN", "dd"], ["TURN_TICKET", "tt"]] as const) {
+      assert.equal(env[`NAVI_${name}`], value, `NAVI_${name}`);
+      assert.equal(env[`ASH_${name}`], value, `ASH_${name}:旧名同值一份`);
+    }
+    assert.ok("HARNESS_TASK_ID" in env && env.HARNESS_TASK_ID === undefined, "再上一代的不写,继承来的要清掉");
+    const cleared = withoutTurnIdentity({ ...env, HARNESS_TASK_ID: "x" });
+    for (const key of ["NAVI_TASK_ID", "ASH_TASK_ID", "HARNESS_TASK_ID"]) assert.equal(cleared[key], undefined, `${key}:非任务回合三代都清`);
+    console.log("✓ 回合身份:交给智能体的环境里新旧两代同值,非任务回合三代都清");
+  }
+
+  // ── ④e 宿主机上旧名的 codex 登记:搬进隔离档时按它自己的表改写 ─────────────────────────
+  {
+    const { relocateHostFact } = await import("../src/mcp-registry/relocate.js");
+    const to = { entry: "/new/mcp/dist/index.js", node: "/new/node", runnable: () => true };
+    const moved = relocateHostFact({ status: "on", detail: "",
+      block: '[mcp_servers.ash]\ncommand = "node"\nargs = ["/old/mcp/dist/index.js"]\n' } as Parameters<typeof relocateHostFact>[0], to);
+    assert.ok("fact" in moved && moved.fact?.block?.includes('args = ["/new/mcp/dist/index.js"]'), JSON.stringify(moved));
+    console.log("✓ 搬登记:旧表头 [mcp_servers.ash] 照样按它自己的表换入口");
+  }
+
+  // ── ④f 落盘/接口上的其余约定:封存标记、本机补接接口、哨兵出身 ─────────────────────────
+  {
+    // 升级前封的测试快照(旧标记)照样认得出是封好的,新封的写新标记。
+    const { isSealedSnapshot } = await import("../src/accept-gate-preview.js");
+    const snap = repoWithCommit("sealed");
+    assert.equal(await isSealedSnapshot(snap), false);
+    git(snap, "config", "--file", join(snap, ".git", "config"), legacyNames.LEGACY_SEALED_SNAPSHOT_MARK, "true");
+    assert.equal(await isSealedSnapshot(snap), true, "旧标记的快照照样认");
+    git(snap, "config", "--file", join(snap, ".git", "config"), "--unset", legacyNames.LEGACY_SEALED_SNAPSHOT_MARK);
+    git(snap, "config", "--file", join(snap, ".git", "config"), "navi.sealedsnapshot", "true");
+    assert.equal(await isSealedSnapshot(snap), true);
+    // mac 应用打的是旧路径:两条都接(本机直连之外一律 403,但不是 404)。
+    const { Hono } = await import("hono");
+    const { HOST_MCP_SETUP_PATH, mountHostAshMcpRoutes } = await import("../src/host-ash-mcp-routes.js");
+    const api = new Hono();
+    mountHostAshMcpRoutes(api);
+    for (const path of [HOST_MCP_SETUP_PATH, legacyNames.LEGACY_HOST_MCP_SETUP_PATH]) {
+      assert.notEqual((await api.request(path, { method: "POST" })).status, 404, `${path}:要接`);
+    }
+    // 哨兵出身的值冻结:每一行记录、每一个客户端都按它认「Navi 自己起的」。
+    const { MONITOR_KINDS, OWN_MONITOR_KIND, canStopMonitor } = await import("@ash/shared/monitor");
+    assert.equal(OWN_MONITOR_KIND, legacyNames.FROZEN_MONITOR_KIND_OWN);
+    assert.deepEqual([...MONITOR_KINDS], ["ash", "claude"], "落库的值不许跟着改名变");
+    assert.ok(canStopMonitor("ash"));
+    console.log("✓ 其余约定:旧封存标记的快照照认,本机补接接口新旧路径都接,哨兵出身的落库值冻结");
+  }
+
   // ── ⑤ 互斥:改名之前的服务留下的锁、占有锁、在线登记都要挡得住新版 ─────────────
   {
     // 一个「活着的、长得像 Navi 服务」的进程:命令行形状是 `node …/server/dist/index.js`。

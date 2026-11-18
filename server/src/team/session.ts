@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@ash/shared";
 import { ASH_TURN_IDENTITY_ENV } from "@ash/shared/mcp";
+import { turnIdentityVars } from "../turn-identity.js";
 import { TEAM_DEFAULTS } from "@ash/shared";
 import { bindTurnSource, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields, unbindTurnSource } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
@@ -498,7 +499,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
       objective,
       newMessage: promptedText,
     });
-  const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), [ASH_TURN_IDENTITY_ENV.taskId]: taskId };
+  const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ...turnIdentityVars({ [ASH_TURN_IDENTITY_ENV.taskId]: taskId }) };
   await ex.prepareResume?.({ cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined, env: runEnv });
   // 接回同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
   // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍（第 1 轮审查 F2,

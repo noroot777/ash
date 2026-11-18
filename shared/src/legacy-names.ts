@@ -86,6 +86,31 @@ export const LEGACY_LOG_TAG = "[ash]";
 /** 回合进展证明文件的旧版本行。只影响升级那一刻正在跑的回合。拆：升级后跑完一轮即可。 */
 export const LEGACY_TURN_PROGRESS_WATCH_HEAD = "ash-turn-progress-watch/v2";
 
+/**
+ * 合并预览档测试快照的封存标记（快照自己 `.git/config` 里的一个键）。快照活得过服务重启：升级前封的
+ * 那一份，收尾核验时照样要认出来。拆：升级前开跑的验收门禁都收完尾之后。
+ */
+export const LEGACY_SEALED_SNAPSHOT_MARK = "ash.sealedsnapshot";
+
+/**
+ * claude 运行时设置文件（系统临时目录下 `<前缀><pid>-<uuid>.json`，带中转密钥）的旧前缀。启动时按前缀
+ * 清扫死进程留下的，接回升级前起的智能体时从它的命令行里认出这份文件、跟着它收尾。拆：升级前起的
+ * 智能体都结束、旧文件被清扫过一轮之后。
+ */
+export const LEGACY_CLAUDE_RUNTIME_SETTINGS_PREFIX = "ash-claude-settings-";
+
+/** 逃逸追踪文件（系统临时目录下）的旧前缀。启动时按前缀清扫没人握着的。拆：清扫过一轮之后。 */
+export const LEGACY_TRACK_FILE_PREFIX = "ash-track-";
+
+/**
+ * 「替本机 CLI 接好 MCP」接口的旧路径。mac 应用（`desktop/macos/Sources/HostMcpSetup.swift`）打的是它，
+ * 新旧两条都接。拆：mac 应用改打新路径、旧版应用不再连这台服务之后。
+ */
+export const LEGACY_HOST_MCP_SETUP_PATH = "/ash-mcp/host-setup";
+
+/** 注入给 claude 的 MCP 配置文件所在子目录（runs/<任务>/ 与数据目录下）的旧名。写新回合时顺手删旧目录里的。拆：升级前的任务目录都被回收之后。 */
+export const LEGACY_INJECTED_MCP_DIR = "ash-mcp";
+
 // ── 冻结：协议版本号与哈希盐，当前版本照旧写 ────────────────────────────────────────────
 
 /** 接力签名/加密的域标签。换了它，旧版对端验不了签、解不了封，库里已存的签名也作废。拆：接力协议升 v2 时。 */
@@ -121,6 +146,21 @@ export const FROZEN_HUMAN_APPROVAL_PURPOSE = "ash-human-approval-v1";
 export const FROZEN_AGENT_UNIT_PREFIX = "ash-agent-";
 export const FROZEN_CONFINE_TMP_DIR = "ash-confine";
 export const FROZEN_WINDOWS_AGENT_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
+/**
+ * Windows 上智能体包装壳守着的输入管道（`\\.\pipe\<前缀><id>`）。管道名由同一份运行目录算出来，
+ * 服务重启后接回那个智能体、给它送输入时按名字去连 —— 升级那一刻正在跑的智能体，它的包装壳守着的
+ * 是旧名，所以跟上面几项一起冻结。拆：不拆。
+ */
+export const FROZEN_WINDOWS_STDIN_PIPE_PREFIX = "ash-stdin-";
+
+/**
+ * 哨兵的出身（`monitors.kind`、接口里的 `kind`）里「Navi 自己起的那种」的值。它落在每一行哨兵记录上，
+ * 停止、接回、交接、完成闸的查询都按它筛；装在手机上的 app、没刷新的页面、局域网里的旧版对端读到
+ * 别的值，会把这条哨兵当成 claude 内置的只读投影（停不掉、没日志）。改它得迁库、所有客户端同步换，
+ * 而且回退旧版时新写的行它全认不出 —— 用户却从来看不到这个值（页面上写的是「Navi 哨兵」）。所以冻结。
+ * 拆：不拆；哪天要动，先写库迁移并让客户端两种值都认。
+ */
+export const FROZEN_MONITOR_KIND_OWN = "ash";
 
 /** codex 中转供应商 id。codex 把它记进会话存档，换了它，升级前的会话续跑时对不上供应商。拆：不拆。 */
 export const FROZEN_CODEX_RELAY_PROVIDER_ID = "ash_relay";

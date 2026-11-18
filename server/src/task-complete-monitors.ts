@@ -69,7 +69,7 @@
 // 类，而它问的正是同一个集合，所以搬出去共用一份（那边只多一道「限定本轮 run+round」的过滤）。
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { OWN_MONITOR_KIND, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
 import { monitorLogBytes } from "./monitors.js";
 import { monitors, sessions } from "./db/schema.js";
@@ -301,7 +301,7 @@ export async function noteMonitorsDropped(taskId: string): Promise<void> {
     const turn = await currentTurn(taskId);
     if (!turn) return;
     const rows = await db.select(MONITOR_COLUMNS).from(monitors)
-      .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "ash"), eq(monitors.endedBy, "actor")));
+      .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, OWN_MONITOR_KIND), eq(monitors.endedBy, "actor")));
     const dropped: MonitorFacts[] = [];
     for (const r of rows) {
       // 时间窗：字符串比较成立是因为两列都是 `new Date().toISOString()`（util.ts 的 `now`），

@@ -24,6 +24,7 @@
  * 现在的顺序 + 一个会重试的接管者,比换一个更难证的顺序便宜。
  */
 import { eq } from "drizzle-orm";
+import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { attach, serialize, supervisionOf, teardownRuntimeLocked } from "./monitors.js";
@@ -53,7 +54,7 @@ async function reconcile(monitorId: string, step: number): Promise<HandoverOutco
     const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
     // claude 的投影行没有自己的进程(进程在 agent 的进程树里),这一层没有它的事 —— 判据
     // 跟 `reattachMonitors` 那一侧同口径。
-    if (!row || row.status !== "running" || row.kind !== "ash") {
+    if (!row || row.status !== "running" || row.kind !== OWN_MONITOR_KIND) {
       if (supervisionOf(monitorId).watching) {
         console.error(`[ash] 终态已经落定却还有人在盯,撤掉 monitor=${monitorId}（${row?.status ?? "行已不在"}）`);
         await teardownRuntimeLocked(monitorId);

@@ -17,7 +17,7 @@
 //      `sh -c "…"`、`NODE_OPTIONS` 里,或者跟当前入口写在同一个值里——第 5 轮审查:「值里出现过当前
 //      入口」证明不了「没有旧入口」)→ 登记失败并说清该改成什么。不发布一条已知会失效、还报成功的登记。
 //      判的是 CLI 解码后实际读到的值,细则见 `residue.ts`。
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAMES } from "@ash/shared/mcp";
 import { scanCodexToml, tomlPairSpans } from "../codex-toml.js";
 import { normalizePath, staleField, staleIn, staleStatement } from "./residue.js";
 import type { AshMcpNameFact } from "./types.js";
@@ -63,11 +63,12 @@ export function relocateHostFact(fact: AshMcpNameFact | null, to: RelocateTarget
   if (fact.block) {
     // 截出来的那段跟扫整份文件得到的启动方式对不上(启动字段写在表头之外),而后者提到了旧的 ash
     // 脚本:照搬这一段等于丢掉那半,同样是一条起不来的登记。
-    const own = scanCodexToml(fact.block).servers.get(ASH_MCP_SERVER_NAME)?.spec;
+    const name = blockServerName(fact.block);
+    const own = scanCodexToml(fact.block).servers.get(name)?.spec;
     const launch = fact.launch;
     if (launch && !sameLaunch(own, launch) && staleMention({ command: launch.command ?? "",
       args: Array.isArray(launch.args) ? launch.args : [] }, to)) {
-      return { why: unmovable("宿主那条的启动字段不全在 [mcp_servers.ash] 表里", null, to) };
+      return { why: unmovable(`宿主那条的启动字段不全在 [mcp_servers.${name}] 表里`, null, to) };
     }
     const block = relocateTomlBlock(fact.block, to);
     if ("why" in block) return block;
@@ -131,10 +132,11 @@ function relocateRaw(raw: Record<string, unknown>, to: RelocateTarget): Record<s
  * 加了引号的键都认;没有 args 就在 command 后面补一条),别的字节一个不动;改完用同一个扫描器读回核对。
  */
 function relocateTomlBlock(block: string, to: RelocateTarget): { text: string } | { why: string } {
-  const spec = scanCodexToml(block).servers.get(ASH_MCP_SERVER_NAME)?.spec;
+  const name = blockServerName(block);
+  const spec = scanCodexToml(block).servers.get(name)?.spec;
   const spans = tomlPairSpans(block);
   const inMain = (key: string) => (spans ?? []).filter((s) => s.table.length === 2 && s.table[0] === "mcp_servers"
-    && s.table[1] === ASH_MCP_SERVER_NAME && s.path.length === 1 && s.path[0] === key);
+    && s.table[1] === name && s.path.length === 1 && s.path[0] === key);
   const commandSpan = inMain("command");
   const argsSpan = inMain("args");
   const command = spec?.command;
@@ -159,10 +161,20 @@ function relocateTomlBlock(block: string, to: RelocateTarget): { text: string } 
     lines.splice(edit.first, edit.last - edit.first + 1, ...edit.text.map((t) => `${indent}${t}`));
   }
   const out = lines.join("\n");
-  const back = scanCodexToml(out).servers.get(ASH_MCP_SERVER_NAME)?.spec;
+  const back = scanCodexToml(out).servers.get(name)?.spec;
   const ok = back?.command === next.command && Array.isArray(back.args)
     && back.args.length === next.args.length && back.args.every((a, i) => a === next.args[i]);
   return ok ? { text: out } : refuse;
+}
+
+/**
+ * 这段 TOML 是哪一代名字的登记。从整份配置里截出来时表头已经统一成当前名（`extractTomlTables`），
+ * 这里照样各代都认 —— 改名之前的 `[mcp_servers.ash]` 原样传进来，也按它自己的表改写，而不是扑空后把
+ * 整段当成「读不全」。都没有就落回当前名（读不到 spec，下面按读不全处理）。
+ */
+function blockServerName(block: string): string {
+  const servers = scanCodexToml(block).servers;
+  return ASH_MCP_SERVER_NAMES.find((name) => servers.has(name)) ?? ASH_MCP_SERVER_NAMES[0]!;
 }
 
 function unmovable(what: string, next: Launch | null, to: RelocateTarget): string {

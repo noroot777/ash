@@ -37,6 +37,7 @@
 // 的是**常驻会话**（团队调度台，`--input-format stream-json`——那种模式下 CLI 进程一直
 // 活着，内置 Monitor 真能唤醒它自己，拦它才是错的），以及**历史**：改道之前跑过的任务，
 // 会话文件里还躺着它们，面板得答得出「那 12 个 Monitor 后来怎么了」。
+import { FROZEN_MONITOR_KIND_OWN } from "./legacy-names.ts";
 
 // `matched` 是**第五种结束方式**,不是 `stopped` 的一个变种:它说的是「约定的那一行出现了,
 // 这条哨兵就此收工」——人点停、推满上限、系统回收都叫 stopped,把这一种也塞进去,卡片上就会
@@ -44,8 +45,14 @@
 export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "matched", "lost"] as const;
 export type MonitorStatus = (typeof MONITOR_STATUSES)[number];
 
+/**
+ * Navi 自己起的哨兵（停得掉、有日志）。值是冻结的旧名 `"ash"`：它落在每一行哨兵记录上、走在接口里，
+ * 理由见 legacy-names.ts 的 `FROZEN_MONITOR_KIND_OWN`。判「是不是自己起的」一律比它，别写字面量。
+ */
+export const OWN_MONITOR_KIND = FROZEN_MONITOR_KIND_OWN;
+
 /** 哨兵的出身。能力差异见文件头那一段——`claude` 那种是只读投影。 */
-export const MONITOR_KINDS = ["ash", "claude"] as const;
+export const MONITOR_KINDS = [OWN_MONITOR_KIND, "claude"] as const;
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 
 /**
@@ -328,16 +335,16 @@ export const normalizeMonitorDto = <T extends {
     ? row
     : {
       ...row,
-      kind: row.kind ?? ("ash" as const),
+      kind: row.kind ?? OWN_MONITOR_KIND,
       startedAtExact: row.startedAtExact ?? false,
       // 老后端答不出这一列 ⇒ 没约定过,不是「有但读不出来」。
       stopWhen: row.stopWhen ?? null,
     });
 
 /** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
-export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
+export const canStopMonitor = (kind: MonitorKind) => kind === OWN_MONITOR_KIND;
 /** 有没有日志文件可以回看尾巴。只有 ash 自己起的才有。 */
-export const hasMonitorLog = (kind: MonitorKind) => kind === "ash";
+export const hasMonitorLog = (kind: MonitorKind) => kind === OWN_MONITOR_KIND;
 
 export interface TaskMonitor {
   id: string;

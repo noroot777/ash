@@ -18,7 +18,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { ASH_MCP_TOOLS } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAME, ASH_MCP_TOOLS } from "@ash/shared/mcp";
+import { LEGACY_INJECTED_MCP_DIR } from "@ash/shared/legacy-names";
 import { ASH_TURN_FINGERPRINT_ENV, turnFingerprint } from "@ash/shared/turn-fingerprint";
 
 const root = mkdtempSync(join(tmpdir(), "ash-turn-fingerprint-"));
@@ -32,10 +33,13 @@ const currentVars = {
 };
 const stale = { ASH_TASK_ID: "task-old", ASH_TURN_TOKEN: "turn-old", ASH_DIRECTION_TOKEN: "dir-old" };
 const allStale = { ...stale, ASH_TURN_TICKET: "turn-old", ASH_DIRECTION_TICKET: "dir-old" };
+// 服务端自己拼的起跑环境、注入写进 CLI 配置的都是当前名（NAVI_）。MCP 侧挑身份那一段照旧喂旧名：
+// 那证明的是升级前起的回合照样认得出。
+const toNavi = (vars: Record<string, string>) => Object.fromEntries(Object.entries(vars).map(([k, v]) => [k.replace(/^ASH_/, "NAVI_"), v]));
 
 try {
   const { resolveTurnIdentity } = await import("../../mcp/src/turn-identity.js");
-  const { claudeAshMcpInjection, codexAshMcpArgs } = await import("../src/executors/ash-mcp-inject.js");
+  const { INJECTED_MCP_DIR, claudeAshMcpInjection, codexAshMcpArgs } = await import("../src/executors/ash-mcp-inject.js");
   const { withoutTurnIdentity } = await import("../src/turn-identity.js");
   // paths.js 必须在设好 ASH_DATA_DIR 之后再加载(它在加载时就定下数据目录),所以不静态导入。
   const { RUNS_DIR, DATA_DIR } = await import("../src/paths.js");
@@ -89,37 +93,43 @@ try {
 
   // ── 2. server 侧注入 ──────────────────────────────────────────────────────
   {
-    const entry = { command: "node", args: ["/code/mcp/dist/index.js"], env: { ASH_URL: "http://127.0.0.1:4317" } };
-    const first = claudeAshMcpInjection({ ...currentVars }, { entry });
+    const naviVars = toNavi(currentVars);
+    const entry = { command: "node", args: ["/code/mcp/dist/index.js"], env: { NAVI_URL: "http://127.0.0.1:4317" } };
+    // 升级之前的回合写在旧目录名下的那份：写新回合时一并收掉。
+    const legacyDir = join(RUNS_DIR, current.taskId, LEGACY_INJECTED_MCP_DIR);
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "claude-0123456789ab.json"), "{}");
+    const first = claudeAshMcpInjection({ ...naviVars }, { entry });
     assert.equal(first.failure, null);
-    const taskDir = join(RUNS_DIR, current.taskId, "ash-mcp");
+    const taskDir = join(RUNS_DIR, current.taskId, INJECTED_MCP_DIR);
     assert.equal(first.args[1]!.startsWith(taskDir), true, `任务回合写在任务自己的 runs 目录下:${first.args[1]}`);
     const body = JSON.parse(readFileSync(first.args[1]!, "utf8"));
-    assert.equal(body.mcpServers.ash.env[ASH_TURN_FINGERPRINT_ENV], fp, "带着本回合指纹");
+    assert.equal(body.mcpServers[ASH_MCP_SERVER_NAME].env[ASH_TURN_FINGERPRINT_ENV], fp, "带着本回合指纹");
     assert.ok(!readFileSync(first.args[1]!, "utf8").includes(current.turnToken), "文件里只有指纹,没有令牌");
-    const next = claudeAshMcpInjection({ ...currentVars, ASH_TURN_TOKEN: "turn-next" }, { entry });
+    const next = claudeAshMcpInjection({ ...naviVars, NAVI_TURN_TOKEN: "turn-next" }, { entry });
     assert.notEqual(next.args[1], first.args[1], "下一回合另一份");
     assert.deepEqual(readdirSync(taskDir), [next.args[1]!.slice(taskDir.length + 1)], "写新的就删这个任务旧的那份");
+    assert.deepEqual(readdirSync(legacyDir), [], "旧目录名下升级前那份也删了");
 
     // 团队调度台的起跑环境只有任务 id(team/session.ts):是有身份的,不是「无身份」
-    const team = { ASH_TASK_ID: "lead" };
+    const team = { NAVI_TASK_ID: "lead" };
     const leadFp = turnFingerprint({ taskId: "lead", turnToken: "", directionToken: "" });
     const teamFile = claudeAshMcpInjection(team, { entry }).args[1]!;
-    assert.ok(teamFile.startsWith(join(RUNS_DIR, "lead", "ash-mcp")), "团队调度台也写在它自己的任务目录下");
-    assert.equal(JSON.parse(readFileSync(teamFile, "utf8")).mcpServers.ash.env[ASH_TURN_FINGERPRINT_ENV], leadFp, "团队调度台带的是任务 id 的指纹");
+    assert.ok(teamFile.startsWith(join(RUNS_DIR, "lead", INJECTED_MCP_DIR)), "团队调度台也写在它自己的任务目录下");
+    assert.equal(JSON.parse(readFileSync(teamFile, "utf8")).mcpServers[ASH_MCP_SERVER_NAME].env[ASH_TURN_FINGERPRINT_ENV], leadFp, "团队调度台带的是任务 id 的指纹");
     const teamCodex = codexAshMcpArgs(team, entry)[1]!;
-    assert.ok(teamCodex.includes(`${ASH_TURN_FINGERPRINT_ENV}="${leadFp}"`) && teamCodex.includes('env_vars=["ASH_TASK_ID"]'),
+    assert.ok(teamCodex.includes(`${ASH_TURN_FINGERPRINT_ENV}="${leadFp}"`) && teamCodex.includes('env_vars=["NAVI_TASK_ID"]'),
       "codex 的团队调度台同样带任务 id 的指纹、透传任务 id");
 
-    const side = claudeAshMcpInjection(withoutTurnIdentity({ ...currentVars }), { entry });
-    assert.equal(side.args[1]!.startsWith(join(DATA_DIR, "ash-mcp")), true, "非任务回合放数据目录下共用");
-    assert.equal(JSON.parse(readFileSync(side.args[1]!, "utf8")).mcpServers.ash.env[ASH_TURN_FINGERPRINT_ENV], "none", "写明无身份");
+    const side = claudeAshMcpInjection(withoutTurnIdentity({ ...naviVars }), { entry });
+    assert.equal(side.args[1]!.startsWith(join(DATA_DIR, INJECTED_MCP_DIR)), true, "非任务回合放数据目录下共用");
+    assert.equal(JSON.parse(readFileSync(side.args[1]!, "utf8")).mcpServers[ASH_MCP_SERVER_NAME].env[ASH_TURN_FINGERPRINT_ENV], "none", "写明无身份");
     assert.equal(claudeAshMcpInjection(undefined, { entry }).args[1], side.args[1], "没传环境也按无身份,内容相同复用同一份");
 
-    const [, codex] = codexAshMcpArgs({ ...currentVars }, entry);
+    const [, codex] = codexAshMcpArgs({ ...naviVars }, entry);
     assert.ok(codex!.includes(`${ASH_TURN_FINGERPRINT_ENV}="${fp}"`), "codex 的覆盖里带指纹");
     assert.ok(!codex!.includes(current.turnToken) && !codex!.includes(current.directionToken), "argv 里没有令牌值");
-    assert.ok(codexAshMcpArgs(withoutTurnIdentity({ ...currentVars }), entry)[1]!.includes(`${ASH_TURN_FINGERPRINT_ENV}="none"`),
+    assert.ok(codexAshMcpArgs(withoutTurnIdentity({ ...naviVars }), entry)[1]!.includes(`${ASH_TURN_FINGERPRINT_ENV}="none"`),
       "codex 非任务回合同样写明无身份");
     console.log("✓ 注入:claude 文件按回合写进任务目录并删旧、团队调度台带任务 id 的指纹、非任务回合写明无身份;codex 覆盖带指纹不带令牌");
   }
@@ -144,7 +154,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `);
   // 桩要 import 一份 .ts:沿用跑本测试的这套加载器(tsx)。
-  const entry = { command: process.execPath, args: [...process.execArgv, stub], env: { ASH_URL: "http://127.0.0.1:9" } };
+  const entry = { command: process.execPath, args: [...process.execArgv, stub], env: { NAVI_URL: "http://127.0.0.1:9" } };
   const picked = () => {
     const raw = existsSync(dump) ? JSON.parse(readFileSync(dump, "utf8")) as { taskId: string; turnToken: string; refused: string | null } : null;
     rmSync(dump, { force: true });
@@ -152,7 +162,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   };
   // 本回合的起跑环境照真任务回合那样由 turnIdentityEnv 给(变量 + PATH 上的身份目录)。
   const { turnIdentityEnv } = await import("../src/turn-identity.js");
-  const ctx = { root, entry, currentVars, currentEnv: turnIdentityEnv(current), stale, allStale, current, lead: "task-lead", picked };
+  const ctx = { root, entry, currentVars: toNavi(currentVars), currentEnv: turnIdentityEnv(current), stale: toNavi(stale), allStale: toNavi(allStale), current, lead: "task-lead", picked };
   if (process.env.ASH_TEST_REAL_CLI === "1") {
     const { checkRealClaude, checkRealCodex } = await import("./turn-fingerprint-real-cli.js");
     await checkRealClaude(ctx);

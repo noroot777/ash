@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { AgentEvent } from "@ash/shared";
+import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { claudeAshMcpProblem, CodexAshMcpStatus } from "../src/executors/ash-mcp-confirm.js";
 import { claudeAshMcpInjection, codexAshMcpArgs } from "../src/executors/ash-mcp-inject.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
@@ -80,21 +81,21 @@ export async function checkRealClaude(ctx: RealCliContext): Promise<void> {
     "非任务回合:配置里写死的旧身份不认");
   assert.equal(side.problem, null);
 
-  const team = await probe({ ASH_TURN_TOKEN: "turn-old" }, { ASH_TASK_ID: ctx.lead });
+  const team = await probe({ NAVI_TURN_TOKEN: "turn-old" }, { NAVI_TASK_ID: ctx.lead });
   assert.deepEqual([team.picked?.taskId, team.picked?.turnToken, team.picked?.refused], [ctx.lead, "", null],
     "团队调度台:带着自己的任务 id 连上,不捎配置里残留的旧令牌");
   assert.equal(team.problem, null);
   console.log("✓ 真 claude:settings.env 写死旧身份时接上本回合那份;全是旧的 ⇒ ash 没接上并留诊断;非任务回合不认旧身份;团队调度台保住任务 id");
 }
 
-/** 真 codex app-server:[mcp_servers.ash.env] 写死旧身份。只走到 thread/start,不发 turn/start。 */
+/** 真 codex app-server:[mcp_servers.navi.env] 写死旧身份。只走到 thread/start,不发 turn/start。 */
 export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
   if (!resolveLaunch("codex", ["app-server", "--stdio"])) { console.log("⚠ 没装 codex,跳过真 codex 那一段"); return; }
   const probe = async (staticEnv: Record<string, string>, spawnEnv: Env) => {
     const home = mkdtempSync(join(ctx.root, "codex-home-"));
     mkdirSync(home, { recursive: true });
     const lines = Object.entries(staticEnv).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join("\n");
-    writeFileSync(join(home, "config.toml"), `[mcp_servers.ash]\ncommand = "unused"\n[mcp_servers.ash.env]\n${lines}\n`);
+    writeFileSync(join(home, "config.toml"), `[mcp_servers.${ASH_MCP_SERVER_NAME}]\ncommand = "unused"\n[mcp_servers.${ASH_MCP_SERVER_NAME}.env]\n${lines}\n`);
     const launch = resolveLaunch("codex", ["app-server", "--stdio", ...codexAshMcpArgs(spawnEnv, ctx.entry)])!;
     const child = spawn(launch.file, launch.args, {
       cwd: home, env: { ...baseEnv(), ...spawnEnv, CODEX_HOME: home }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
@@ -130,7 +131,7 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
       const e = status.update(m.params!);
       if (e) said.push(e);
       status.checkTools(request, m.params!.threadId, (x) => said.push(x));
-      if (m.params!.name === "ash" && m.params!.status !== "starting") settled();
+      if (m.params!.name === ASH_MCP_SERVER_NAME && m.params!.status !== "starting") settled();
     });
     try {
       await request("initialize", { clientInfo: { name: "ash-test", version: "1" }, capabilities: { experimentalApi: true } });
@@ -162,7 +163,7 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
     "非任务回合:登记里写死的旧身份不认");
   assert.deepEqual(side.said, []);
 
-  const team = await probe({ ASH_TURN_TOKEN: "turn-old" }, { ASH_TASK_ID: ctx.lead });
+  const team = await probe({ NAVI_TURN_TOKEN: "turn-old" }, { NAVI_TASK_ID: ctx.lead });
   assert.deepEqual([team.picked?.taskId, team.picked?.turnToken, team.picked?.refused], [ctx.lead, "", null],
     "团队调度台:带着自己的任务 id 连上,不捎登记里写死的旧令牌");
   assert.deepEqual(team.said, []);

@@ -118,7 +118,7 @@ const bench = async (name, claudeEntry, codexToml) => {
   const codex = await registerAshMcp({ agentType: "codex", dir, hostHome: host, env: {} });
   return {
     claude, codex,
-    claudeEntry: existsSync(join(dir, ".claude.json")) ? JSON.parse(readFileSync(join(dir, ".claude.json"), "utf8")).mcpServers?.ash : null,
+    claudeEntry: existsSync(join(dir, ".claude.json")) ? JSON.parse(readFileSync(join(dir, ".claude.json"), "utf8")).mcpServers?.navi : null, // 宿主那条是旧名 ash,搬进来落成当前名
     codexText: existsSync(join(dir, "config.toml")) ? readFileSync(join(dir, "config.toml"), "utf8") : null,
   };
 };
@@ -264,7 +264,8 @@ const out = {
       env: { HARNESS_URL: "https://remote.example:8443", ASH_RECONNECT_MS: "7000" },
     }, "只换脚本入口和跑不起来的 node;cwd/timeout/env(含 HARNESS_URL 远端)原样留着");
     for (const kept of [
-      "startup_timeout_sec = 120", 'enabled_tools = ["get_task"]', "[mcp_servers.ash.env]",
+      // 宿主那条是改名之前的 `ash`，搬进隔离档落成当前名。
+      "startup_timeout_sec = 120", 'enabled_tools = ["get_task"]', "[mcp_servers.navi.env]",
       'HARNESS_URL = "https://remote.example:8443"', 'ASH_RECONNECT_MS = "7000"',
       `command = ${JSON.stringify(moved.node)}`, `args = [${JSON.stringify(moved.entry)}]`,
     ]) assert.ok(codexText.includes(kept), `TOML 族:${kept}\n${codexText}`);
