@@ -14,7 +14,7 @@ type RefreshResult = { text: string; error: boolean };
 function refreshFailure(catalog: CliModelCatalog | null): string {
   if (catalog?.error) return catalog.error;
   if (catalog?.skipped) return catalog.skipped;
-  if (catalog?.probeSupported === false) return "当前 ash 服务端尚不支持官方文档模型目录，请更新并重启服务端";
+  if (catalog?.probeSupported === false) return "当前 Navi 服务端尚不支持官方文档模型目录，请更新并重启服务端";
   return "服务端未返回官方目录，请检查服务端版本或网络";
 }
 

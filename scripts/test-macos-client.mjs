@@ -244,7 +244,7 @@ try {
     healthBody = "<h1>nginx</h1>";
     result = await launch(binary, ["start-fresh", "2"], env).done;
     assert.equal(result.status, 2, result.output);
-    assert.match(result.output, /不是 ash/);
+    assert.match(result.output, /不是 Navi/);
     assert.equal(existsSync(marker), false, "an occupied port must not get a second service");
   });
   assert.equal(await probe(200, ""), "DOWN", "nobody listening");
@@ -447,7 +447,7 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   fixturePids.delete(holderPid);
   result = await racing.done;
   assert.equal(result.status, 1, result.output);
-  assert.match(result.output, /已经有一份 ash 数据/);
+  assert.match(result.output, /已经有一份 Navi 数据/);
   assert.equal(readFileSync(join(data, "ash.db"), "utf8"), "fresh", "the data a fresh start created is kept");
   assert.deepEqual(readdirSync(join(data, "uploads")), ["fresh.png"], "nothing of the import is mixed into it");
   assert.equal(existsSync(join(data, "runs")), false);
@@ -494,7 +494,7 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   live.close();
   assert.equal(existsSync(join(source, "ash.db-shm")), false, "fixture: the source ash stopped cleanly");
   result = await launch(binary, ["import", source], env).done;
-  assert.match(result.output, /已经有一份 ash 数据/, "an initialised data root never takes a second import");
+  assert.match(result.output, /已经有一份 Navi 数据/, "an initialised data root never takes a second import");
   // 源实例正常停掉（-wal、-shm 都收了）之后也导得了，源目录仍旧不多一个文件。
   const stoppedTarget = join(temporary, "data-from-stopped");
   const stoppedBefore = readdirSync(source).sort();

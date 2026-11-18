@@ -101,8 +101,8 @@ enum MainMenu {
   }
 
   private static func appMenu() -> NSMenu {
-    let menu = NSMenu(title: "ash")
-    menu.addItem(item("关于 ash", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+    let menu = NSMenu(title: "Navi")
+    menu.addItem(item("关于 Navi", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
     if let target = AppUpdater.shared.menuTarget {
       let check = item("检查更新…", #selector(SPUStandardUpdaterController.checkForUpdates(_:)))
       check.target = target
@@ -112,14 +112,14 @@ enum MainMenu {
       menu.addItem(pending)
     }
     menu.addItem(.separator())
-    menu.addItem(item("登录时启动 ash 服务", #selector(AppDelegate.toggleLoginService(_:))))
-    menu.addItem(item("检查 ash MCP 登记…", #selector(AppDelegate.checkHostMcp(_:))))
+    menu.addItem(item("登录时启动 Navi 服务", #selector(AppDelegate.toggleLoginService(_:))))
+    menu.addItem(item("检查 Navi MCP 登记…", #selector(AppDelegate.checkHostMcp(_:))))
     menu.addItem(.separator())
-    menu.addItem(item("隐藏 ash", #selector(NSApplication.hide(_:)), "h"))
+    menu.addItem(item("隐藏 Navi", #selector(NSApplication.hide(_:)), "h"))
     menu.addItem(item("隐藏其他", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]))
     menu.addItem(item("全部显示", #selector(NSApplication.unhideAllApplications(_:))))
     menu.addItem(.separator())
-    menu.addItem(item("退出 ash", #selector(NSApplication.terminate(_:)), "q"))
+    menu.addItem(item("退出 Navi", #selector(NSApplication.terminate(_:)), "q"))
     return menu
   }
 

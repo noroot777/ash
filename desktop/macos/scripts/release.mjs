@@ -215,8 +215,8 @@ async function main() {
   } else {
     const put = await putOnRelease(github, config, {
       tag, commit, dmg, length,
-      name: `ash for macOS ${shortVersion}（${version}）`,
-      body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Ash 拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`,
+      name: `Navi for macOS ${shortVersion}（${version}）`,
+      body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Ash（Ash.app）拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`,
     });
     url = put.url;
   }
@@ -285,7 +285,7 @@ async function publishAppcast({ github, config, local, remote, appcastPath, earl
     pubDate: new Date(),
   });
   writeFileSync(appcastPath, renderAppcast({
-    title: "ash for macOS",
+    title: "Navi for macOS",
     link: `https://github.com/${config.releaseRepo}`,
     items: [item, ...earlier.map((i) => i.xml)],
   }));
@@ -400,7 +400,7 @@ async function initRepos(repos, github) {
       say(`✓ ${name} 已经在了`);
       continue;
     }
-    const repo = await github.createPublicRepo(name, "ash for macOS 的发布仓库（安装包 / appcast）");
+    const repo = await github.createPublicRepo(name, "Navi for macOS 的发布仓库（安装包 / appcast）");
     say(`✓ 已建公开仓库 ${repo.html_url}`);
   }
 }

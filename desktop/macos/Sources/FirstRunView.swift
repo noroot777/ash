@@ -21,7 +21,7 @@ final class FirstRunView: NSView {
   private let location = NSTextField(wrappingLabelWithString: "")
   private let fresh = ChoiceButton(title: "全新开始", detail: "从空白开始，接着配好供应商、执行器和项目。",
                                    textWidth: columnWidth)
-  private let importer = ChoiceButton(title: "导入已有数据…", detail: "从另一份 ash 的数据目录复制过来，原来那份不动。",
+  private let importer = ChoiceButton(title: "导入已有数据…", detail: "从另一份 Navi 的数据目录复制过来，原来那份不动。",
                                       textWidth: columnWidth)
 
   override init(frame: NSRect) {
@@ -110,7 +110,7 @@ private final class BrandPane: NSView {
     super.init(frame: frame)
     wantsLayer = true
 
-    let name = NSTextField(labelWithString: "ash")
+    let name = NSTextField(labelWithString: "Navi")
     name.font = .systemFont(ofSize: 30, weight: .semibold)
     name.textColor = .white
     let pitch = NSTextField(wrappingLabelWithString: "")

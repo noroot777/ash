@@ -176,7 +176,7 @@ export function UsersSettings({
         <header className="settings-heading">
           <div>
             <h1>用户</h1>
-            <p>这台 ash 现在是自用模式，没有用户这回事；要几个人一起用，去「默认规则 → 危险区」切到多人模式。</p>
+            <p>这台 Navi 现在是自用模式，没有用户这回事；要几个人一起用，去「默认规则 → 危险区」切到多人模式。</p>
           </div>
         </header>
       </section>

@@ -241,7 +241,7 @@ export const antigravitySpec: CliSpec = {
     "⑦`--effort` 取 low/medium/high(1.1.5 加入)。" +
     "仍未确认(要装了 CLI 才能定):" +
     "㈠**非 TTY 下 stdout 被丢弃/挂死**是这个 CLI 的历史顽疾(issue #76 已关但无修复说明、#318 仍开)," +
-    "changelog 只写了修 Windows 侧;ash 一律用管道 spawn,这是最可能翻车的一条,parser 已针对" +
+    "changelog 只写了修 Windows 侧;Navi 一律用管道 spawn,这是最可能翻车的一条,parser 已针对" +
     "「exit 0 但零输出」给出指名道姓的提示;" +
     "㈡首次启动的 Workspace Trust 确认是交互式的,`--dangerously-skip-permissions` 是否连它一起跳过未知;" +
     "㈢model slug 的确切拼写(见 shared 的 CLI_MODEL_PRESETS 注释),且 slug 自带 effort 后缀时再叠 `--effort` 的行为未知;" +

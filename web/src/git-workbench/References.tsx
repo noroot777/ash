@@ -70,7 +70,7 @@ export function References({
       ask({
         title: "新建手动工作树",
         message:
-          "从指定基点创建新分支与独立工作目录。ash 自动选择 .worktrees 下的空目录；这份工作树由你管理，不绑定任务。",
+          "从指定基点创建新分支与独立工作目录。Navi 自动选择 .worktrees 下的空目录；这份工作树由你管理，不绑定任务。",
         fields: [
           { key: "name", label: "新分支名", required: true },
           {

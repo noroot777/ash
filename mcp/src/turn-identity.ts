@@ -85,7 +85,7 @@ export function resolveTurnIdentity(env: Env): ResolvedTurnIdentity & { refused:
   const seen = taskIds.length || turnTokens.length ? `收到的 ${taskIds.length} 个任务 id、${turnTokens.length} 个回合令牌` : "一份身份都没收到";
   return {
     ...EMPTY,
-    refused: `回合身份对不上 ash 注入的回合指纹（${seen}）：多半是 CLI 配置里写死了 `
+    refused: `回合身份对不上 Navi 注入的回合指纹（${seen}）：多半是 CLI 配置里写死了 `
       + `${ASH_TURN_IDENTITY_ENV.taskId} / ${ASH_TURN_IDENTITY_ENV.turnToken} 这类变量（claude 的 settings.json 里的 env、`
       + "codex 的 [mcp_servers.ash.env]），盖掉了这一回合的身份。删掉那几项再重跑",
   };

@@ -44,7 +44,7 @@ export function jsonOr(v: unknown, fallback: string): string {
 export function validate(input: unknown): HandoffManifest {
   const m = input as HandoffManifest;
   if (!m || typeof m !== "object") throw new HandoffError("导入体必须是 JSON 对象");
-  if (m.version !== 1) throw new HandoffError(`不认识的接力协议版本 ${String((m as { version?: unknown }).version)},两边 ash 版本差太远`);
+  if (m.version !== 1) throw new HandoffError(`不认识的接力协议版本 ${String((m as { version?: unknown }).version)},两边 Navi 版本差太远`);
   if (!isStr(m.targetProjectId)) throw new HandoffError("缺 targetProjectId");
   const sourceFingerprint = (m as { sourceFingerprint?: unknown }).sourceFingerprint;
   if (sourceFingerprint != null && (!isStr(sourceFingerprint) || !/^[0-9a-f]{64}$/.test(sourceFingerprint))) {

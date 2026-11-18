@@ -61,7 +61,7 @@ export function ClaimPage({ token, onDone }: { token: string; onDone: () => void
   return (
     <AuthShell>
       <div className="auth-card auth-card--wide">
-        <h1>领取你的 ash 账号</h1>
+        <h1>领取你的 Navi 账号</h1>
         {error ? <p className="auth-error">{error}</p> : null}
         {info ? (
           <>

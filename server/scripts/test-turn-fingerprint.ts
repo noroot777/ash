@@ -72,7 +72,7 @@ try {
 
     const refused = pick({ ...allStale, PATH: pathDir({ taskId: "task-old", turnToken: "turn-old-2", directionToken: "d" }), [ASH_TURN_FINGERPRINT_ENV]: fp });
     assert.equal(refused.taskId + refused.turnToken + refused.directionToken, "", "对不上:一份身份都不带");
-    assert.match(refused.refused ?? "", /回合身份对不上 ash 注入的回合指纹/);
+    assert.match(refused.refused ?? "", /回合身份对不上 Navi 注入的回合指纹/);
     assert.match(refused.refused ?? "", /settings\.json 里的 env/, "说清多半是哪里写死了");
     assert.match(pick({ [ASH_TURN_FINGERPRINT_ENV]: fp }).refused ?? "", /一份身份都没收到/);
 

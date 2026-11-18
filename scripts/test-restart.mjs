@@ -239,7 +239,7 @@ await disposeFixture(stubbornProc, "赖着不走的假 server");
 await sleep(200);
 
 if (blockedOutput.includes("已就绪")) fail("旧进程还占着端口,却打印了「已就绪」", blockedOutput);
-if (!blockedOutput.includes("仍有一个 ash 在应答")) {
+if (!blockedOutput.includes("仍有一个 Navi 在应答")) {
   fail("失败信息没说清「旧的没下线」这个成因", blockedOutput);
 }
 }

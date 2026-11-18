@@ -135,7 +135,7 @@ export function scanCodexToml(text: string): CodexTomlScan {
     const head = `["']?mcp_servers["']?\\s*\\.\\s*${name}`;
     const suspicious = new RegExp(`^\\s*\\[\\[?\\s*${head}\\s*[.\\]]|^\\s*${head}\\s*[.=]`, "m");
     if (suspicious.test(text)) {
-      doubt = "文本里有像是 ash 登记的写法，但扫描器没认出来";
+      doubt = "文本里有像是 Navi 登记的写法，但扫描器没认出来";
     }
   }
   return { servers, doubt, unreadable, sealed };

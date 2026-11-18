@@ -107,7 +107,7 @@ export class PairingCards {
         const pressing = await db.select({ id: imActions.id }).from(imActions)
           .where(and(eq(imActions.outboxId, row.id), isNotNull(imActions.usedAt), isNull(imActions.result)));
         if (pressing.length) continue;
-        const text = decided?.id !== row.subject ? "这张申请失效了：过期了，或者 ash 重启过。"
+        const text = decided?.id !== row.subject ? "这张申请失效了：过期了，或者 Navi 重启过。"
           : decided.approved ? "已在别处允许这台设备连接。" : "已在别处拒绝。";
         await reconciler.resolve(row, text, null);
       }

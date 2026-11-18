@@ -168,7 +168,7 @@ async function build(
     const source = resolution.source === "probe"
       ? `${type} CLI 报的`
       : resolution.source === "model-rule"
-        ? `ash 内置规则 ${resolution.ruleId}`
+        ? `Navi 内置规则 ${resolution.ruleId}`
         : `${type} 的档位并集`;
     throw new Error(
       `${type} 模型 ${model ?? "（跟随 CLI）"} 不支持思考强度 ${reasoningEffort}`

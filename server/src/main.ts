@@ -311,7 +311,7 @@ async function initializeServer() {
     void (async () => {
       const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
       await sweepPersonalAshMcp();
-    })().catch((err) => console.error("[ash] 个人 CLI 的 ash MCP 自检失败（不影响启动）:", err));
+    })().catch((err) => console.error("[ash] 个人 CLI 的 Navi MCP 自检失败（不影响启动）:", err));
   }
   // 上一个 ash 留下的逃逸追踪文件(tmpdir 里的空文件)。证据的寿命跟着「还能不能取到人」
   // 走、不再有硬期限(见 executors/kill.ts),所以「进程整个没了、内存里的租约也没了」这条
@@ -437,7 +437,7 @@ app.route("/api", api);
 app.all("/api/*", (c) =>
   c.json({
     error: `接口 ${c.req.method} ${new URL(c.req.url).pathname} 不存在。` +
-      `多半是服务端跑的代码比前端旧:重新 npm run build 并重启 ash 再试。`,
+      `多半是服务端跑的代码比前端旧:重新 npm run build 并重启 Navi 再试。`,
   }, 404));
 
 // ── 待审视频预览(Tailscale 旁路)─────────────────────────────────────────────
@@ -543,7 +543,7 @@ const mobileMiss = "手机预览还没构建 —— 在仓库根跑 `npm run bui
 
 // 手机外框页:设备尺寸切换 + 刷新/首页,iframe 与本页同源所以能直接控制它。
 const PHONE_FRAME = `<!doctype html><html><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>Ash · 手机预览</title>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>Navi · 手机预览</title>
 <style>
 :root{--bg:#0C0E12;--panel:#161A20;--line:#2A2F38;--ink:#E6E9EE;--muted:#8B92A0;--accent:#5EE6C5}
 *{box-sizing:border-box}
@@ -562,7 +562,7 @@ iframe{display:block;border:0;border-radius:32px;background:var(--bg);width:390p
 .hint{color:var(--muted);font-size:12px;max-width:480px;text-align:center}
 .hint code{color:var(--accent);background:#11151b;padding:1px 6px;border-radius:5px}
 </style></head><body>
-<header><h1>Ash · 手机预览</h1>
+<header><h1>Navi · 手机预览</h1>
 <div class="seg" id="sizes"></div>
 <button class="btn" onclick="reloadVp()">↻ 刷新</button>
 <button class="btn" onclick="homeVp()">⌂ 首页</button></header>
@@ -636,7 +636,7 @@ app.get("/mobile/app/*", async (c) => {
   });
 });
 
-const webMiss = "Ash web build not found — run `npm -w web run build`.";
+const webMiss = "Navi web build not found — run `npm -w web run build`.";
 app.get("/*", (c) => {
   if (!hasWebBuild) return c.text(webMiss, 503);
   const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/+/, "");

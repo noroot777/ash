@@ -237,7 +237,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     } else if (message.method === "item/tool/requestUserInput") {
       write({ id: message.id, result: { answers: {} } });
     } else {
-      write({ id: message.id, error: { code: -32601, message: `ash 不处理 App Server 请求 ${message.method}` } });
+      write({ id: message.id, error: { code: -32601, message: `Navi 不处理 App Server 请求 ${message.method}` } });
     }
   };
 

@@ -99,7 +99,7 @@ export function relocateLaunch(launch: Launch, to: RelocateTarget): Launch | nul
   }
   const next = { command, args };
   const leftover = staleMention(next, to);
-  if (leftover) return unmovable(`参数 ${JSON.stringify(leftover)} 里嵌着旧的 ash 脚本路径`, null, to);
+  if (leftover) return unmovable(`参数 ${JSON.stringify(leftover)} 里嵌着旧的 Navi 脚本路径`, null, to);
   return touched ? next : null;
 }
 
@@ -168,7 +168,7 @@ function relocateTomlBlock(block: string, to: RelocateTarget): { text: string } 
 function unmovable(what: string, next: Launch | null, to: RelocateTarget): string {
   const target = next
     ? `command 改成 ${JSON.stringify(next.command)}、args 改成 ${JSON.stringify(next.args)}`
-    : `ash 的 MCP 脚本换成 ${JSON.stringify(to.entry)}`;
-  return `宿主机上那条 ash MCP 登记还指着旧的安装位置（${what}），ash 没法安全改写它，所以没有把它搬进来`
+    : `Navi 的 MCP 脚本换成 ${JSON.stringify(to.entry)}`;
+  return `宿主机上那条 Navi MCP 登记还指着旧的安装位置（${what}），Navi 没法安全改写它，所以没有把它搬进来`
     + `（照搬过来是一条起不来的登记）。请在宿主那条里把 ${target} 再重试`;
 }

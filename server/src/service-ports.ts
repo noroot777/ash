@@ -236,7 +236,7 @@ export async function stopByPorts(
       }
       const holder = inspected.holder;
       if (selfPgid !== null && holder.pgid === selfPgid) {
-        outcome.spared.push({ holder, reason: "那是 ash 自己所在的进程组" });
+        outcome.spared.push({ holder, reason: "那是 Navi 自己所在的进程组" });
         continue;
       }
       if (anchor !== "ours") {

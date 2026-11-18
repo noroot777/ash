@@ -143,15 +143,15 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       <Select label="预览启动范围" value={config.launch} disabled={!canManage || busy} options={PREVIEW_MODE.map((value) => ({ value, label: PREVIEW_MODE_LABELS[value] }))} onChange={(launch) => setConfig({ ...config, launch })} />
     </div>
     <div className="preview-help preview-launch-scope-help">
-      <small>ash 把这个选择作为 <code>{variable("ASH_PREVIEW_MODE")}</code> 递给上面的启动脚本，<b>起不起后端是脚本自己的事</b> —— 脚本不读这个变量时，四档没有区别（大多数项目都是这样，选哪个都行）。</small>
+      <small>Navi 把这个选择作为 <code>{variable("ASH_PREVIEW_MODE")}</code> 递给上面的启动脚本，<b>起不起后端是脚本自己的事</b> —— 脚本不读这个变量时，四档没有区别（大多数项目都是这样，选哪个都行）。</small>
       {/* 这一句是这个选项存在的全部理由：选「只起前端」时预览里的后端根本不是这个分支的，
           而页面上看不出来——改了后端跑来预览里验，看到的是主实例的旧行为，症状只是「我改的
           东西没生效」。界面不说，用户无从知道该去看哪儿。 */}
-      <small>选「只启动前端」时，脚本通常会把 <code>/api</code> 打回正在跑的这台 ash：<b>你在预览里验的是主实例的后端，不是这个分支的</b>。要验后端改动，请选前后端全启动的那两档，或在脚本里自己起后端。</small>
+      <small>选「只启动前端」时，脚本通常会把 <code>/api</code> 打回正在跑的这台 Navi：<b>你在预览里验的是主实例的后端，不是这个分支的</b>。要验后端改动，请选前后端全启动的那两档，或在脚本里自己起后端。</small>
     </div>
-    <div className="settings-field preview-proxy-field"><span>通过 ash 反向代理访问</span>
+    <div className="settings-field preview-proxy-field"><span>通过 Navi 反向代理访问</span>
       <Select
-        label="通过 ash 反向代理访问"
+        label="通过 Navi 反向代理访问"
         value={config.proxy}
         disabled={!canManage || busy}
         options={[
@@ -163,7 +163,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       />
     </div>
     <div className="preview-help preview-proxy-help">
-      <small>{proxied ? "当前使用反代：浏览器复用 ash 入口，无需开放每个服务的端口。预览页面跑在独立沙箱里，与 ash 的登录态隔离，只有一个例外——被预览的仓库就是这台 ash 自己、而且启动命令自己声明了「我的 /api 打到这台 ash 上」（ash 自带的「只起前端」启动方式默认这么声明；多服务预览一律不算，脚本里用 ASH_PROXY 把前端指向自己的后端也会让它改口）时，/api 会由代理单独接回这台 ash 并替你带上当前这条会话，打开即登录态；否则你只会看到一个登录框，而在预览页里粘 key 比这危险得多（key 是长期凭证，会落到被预览的应用手上）。这条会话只出现在 /api 那一跳上，被预览的 dev server 一个字都收不到，页面本身也读不出来；代价是页面能借这条路以你的身份调 ash 的接口。你一登出它就失效，链接被别人拿去打开也不会继承。预览页面自己发出的请求所带的 Authorization（Bearer 等）会照常转发，从 ash 页面或命令行带进来的鉴权头不会（否则你的 ash key 会落到被预览的应用手上）；Basic/Digest 一律不转发，需要它们的应用请改用直连。localStorage、sessionStorage 和 document.cookie 由 ash 在页面内模拟——读写正常，但只活在当前这个页面：刷新或跳转即清空，页面写的 Cookie 也不会随请求发出，所以把登录态存在本地存储的应用每次刷新都要重新登录。IndexedDB、Service Worker 和站外接口在沙箱里用不了，依赖它们的应用请改用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
+      <small>{proxied ? "当前使用反代：浏览器复用 Navi 入口，无需开放每个服务的端口。预览页面跑在独立沙箱里，与 Navi 的登录态隔离，只有一个例外——被预览的仓库就是这台 Navi 自己、而且启动命令自己声明了「我的 /api 打到这台 Navi 上」（Navi 自带的「只起前端」启动方式默认这么声明；多服务预览一律不算，脚本里用 ASH_PROXY 把前端指向自己的后端也会让它改口）时，/api 会由代理单独接回这台 Navi 并替你带上当前这条会话，打开即登录态；否则你只会看到一个登录框，而在预览页里粘 key 比这危险得多（key 是长期凭证，会落到被预览的应用手上）。这条会话只出现在 /api 那一跳上，被预览的 dev server 一个字都收不到，页面本身也读不出来；代价是页面能借这条路以你的身份调 Navi 的接口。你一登出它就失效，链接被别人拿去打开也不会继承。预览页面自己发出的请求所带的 Authorization（Bearer 等）会照常转发，从 Navi 页面或命令行带进来的鉴权头不会（否则你的 Navi key 会落到被预览的应用手上）；Basic/Digest 一律不转发，需要它们的应用请改用直连。localStorage、sessionStorage 和 document.cookie 由 Navi 在页面内模拟——读写正常，但只活在当前这个页面：刷新或跳转即清空，页面写的 Cookie 也不会随请求发出，所以把登录态存在本地存储的应用每次刷新都要重新登录。IndexedDB、Service Worker 和站外接口在沙箱里用不了，依赖它们的应用请改用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
       {proxied && <small>服务需要配置资源前缀时，可读取 <code>{variable("ASH_PREVIEW_BASE")}</code>。例如 Vite 可在启动参数中使用 <code>--base {variable("ASH_PREVIEW_BASE")}</code>。</small>}
     </div>
     <ProjectPreviewHelp isWindows={host?.platform === "win32"} />

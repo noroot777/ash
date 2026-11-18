@@ -89,7 +89,7 @@ export function portHint(port: number | null): string {
   const name = port ? `PORT=${port}` : "PORT";
   return "启动命令里的端口多半是写死的，而同一个项目此刻往往已经有一份在跑"
     + "（你自己那份、或者别的任务的预览）。\n"
-    + `ash 已经给这次预览借了一个空闲端口，以环境变量 ${name} 传了进去 —— `
+    + `Navi 已经给这次预览借了一个空闲端口，以环境变量 ${name} 传了进去 —— `
     + "把这一站的启动命令改成认它的写法就能错开，例如 `npm run dev -- --port $PORT`。";
 }
 
@@ -106,10 +106,10 @@ export function portHint(port: number | null): string {
  * 命令是用户的，他有权让服务听一个固定端口。
  */
 export function lentPortIgnoredHint(lent: number, actual: number): string {
-  return `[ash] 注意：这个服务起在 ${actual}，不是 ash 借给它的 ${lent}。\n`
+  return `[ash] 注意：这个服务起在 ${actual}，不是 Navi 借给它的 ${lent}。\n`
     + "[ash] 预览这次能接上（照日志里印的地址接的），但端口是命令自己写死的：同一个项目再开一份"
     + "预览、或者你本机已经有一份在跑，两边就会抢同一个端口。\n"
-    + "[ash] 把启动命令改成认 ash 借的那个端口即可，例如 `npm run dev -- --port $PORT`"
+    + "[ash] 把启动命令改成认 Navi 借的那个端口即可，例如 `npm run dev -- --port $PORT`"
     + "（Windows 上写 `%PORT%`）；服务自己读 PORT 环境变量的（Next / Nest / Express / Spring Boot / Go…）"
     + "则不用改命令，检查一下它有没有被配置文件里写死的端口盖掉。\n";
 }
@@ -208,17 +208,17 @@ function nodeModulesHint(
   const blocked = tried.length > 0 && tried.every((one) => one.blocked === "workspace");
   const head = blocked
     ? `${what} —— 这个任务直接跑在项目检出里（没有开 worktree）。\n`
-      + "ash 只在自己建的任务 worktree 里挂依赖入口，**不往你的项目目录里写任何东西**，"
+      + "Navi 只在自己建的任务 worktree 里挂依赖入口，**不往你的项目目录里写任何东西**，"
       + "所以这次没有代备：\n"
       + `${details}\n`
     : `${what} —— 任务 worktree 是一份干净检出，node_modules 不在里面。\n`
-      + "起预览之前 ash 会**自己在项目外备一份**再挂进来（装在 ash 的 `data/deps` 下，只读你的"
+      + "起预览之前 Navi 会**自己在项目外备一份**再挂进来（装在 Navi 的 `data/deps` 下，只读你的"
       + " package.json 和锁文件，你的项目不会被写）。这次没成：\n"
       + `${details}\n`;
   if (!advice.length) {
     return `${head}\n手工的话，把主仓已经装好的那份借过来最省事：在任务工作区里软链一次即可，例如：\n`
       + "`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`"
-      + "（Windows 用 `mklink /J`）。ash 认得这条软链，不会因此把工作区判成脏。";
+      + "（Windows 用 `mklink /J`）。Navi 认得这条软链，不会因此把工作区判成脏。";
   }
   // 一次最多说三条：并排的子项目再多，先解决看得见的这几个。
   const lines = advice.slice(0, 3).map((one) => {
@@ -233,7 +233,7 @@ function nodeModulesHint(
       + `在你自己的主仓里装一次就有了 —— ${installCommand(one.sourceDir, one.pm)}，装完再软链：${link}`;
   });
   return `${head}\n手工要走的话，缺依赖的是这几个：\n${lines.join("\n")}\n`
-    + "（软链 ash 认得，不会因此把工作区判成脏。**在主仓里装要留意锁文件**：node_modules 被"
+    + "（软链 Navi 认得，不会因此把工作区判成脏。**在主仓里装要留意锁文件**：node_modules 被"
     + " gitignore 不会进 diff，但锁文件是跟踪文件，install 有可能改写它 —— 装完 `git status`"
     + " 看一眼，别让它跟着任务 diff 走进验收。）";
 }
@@ -246,7 +246,7 @@ function runtimeMissingHint(name: string): string {
       : /^(?:pnpm|yarn)$/i.test(name) ? `，又或者 \`corepack enable\`（Node 自带，直接开出 ${name}）`
         : "";
   return `\`${name}\` 这个命令没找到。它不是这个工作区里的依赖，所以软链 node_modules 帮不上忙 —— `
-    + "要么这台机器上没装它，要么它不在 ash 起预览时那个 shell 的 PATH 上"
+    + "要么这台机器上没装它，要么它不在 Navi 起预览时那个 shell 的 PATH 上"
     + "（POSIX 上是 `sh -lc`，`~/.profile` 一类登录时读的配置算数；只在图形界面或 IDE 里"
     + "设过的 PATH 不算）。\n"
     + `装上它并确认新开一个终端 \`${name} --version\` 能跑，`
@@ -276,13 +276,13 @@ export function missingDepsHint(
   if (name === null) {
     return "启动命令里有个东西没找到（日志里那句 not found）。两种可能，对号入座：\n"
       + "① 它是这个项目 node 依赖里的可执行文件 —— 任务 worktree 是干净检出，"
-      + "node_modules 不在里面。ash 起预览前会自己在项目外备一份挂进来（`data/deps`），"
+      + "node_modules 不在里面。Navi 起预览前会自己在项目外备一份挂进来（`data/deps`），"
       + "这次没备成；手工的话把主仓装好的那份软链进来即可"
       + "（`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`，"
       + "Windows 用 `mklink /J`）。别把 install 写进预览命令 —— 那会在你的工作区里改写"
       + "锁文件，跟着任务 diff 走进验收。\n"
       + "② 它是一门运行时、包管理器或构建工具（node / pnpm / mvn / dotnet / go / python…）"
-      + "—— 那就是没装，或者不在 ash 起预览那个 shell 的 PATH 上，跟 node_modules 无关。";
+      + "—— 那就是没装，或者不在 Navi 起预览那个 shell 的 PATH 上，跟 node_modules 无关。";
   }
   const bare = bareName(name);
   if (NODE_RUNTIMES.has(bare)) return runtimeMissingHint(bare);

@@ -39,7 +39,7 @@ try {
   assert.equal(await page.getByRole("heading", { name: "任务接力" }).count(), 1);
   const card = page.locator("#handoff-source-addresses");
   await card.waitFor();
-  const input = page.getByRole("textbox", { name: "书房 Windows的 ash 地址" });
+  const input = page.getByRole("textbox", { name: "书房 Windows的 Navi 地址" });
   await input.waitFor();
   assert.equal(await input.inputValue(), originalUrl, "服务端记录的原地址应预填");
   assert.match(await card.innerText(), /指纹 A1B2-C3D4-E5F6-0718-293A/);

@@ -67,7 +67,7 @@ final class ServerLauncher {
       while try !lock.tryAcquire() {
         if let settled = Self.settle(AshHealth.probeSync()) { return settled }
         if let hold { return .failed(hold) }
-        guard Date() < deadline else { return .failed("等另一处启动 ash 服务超时。可以重试；服务起来后也会自动载入。") }
+        guard Date() < deadline else { return .failed("等另一处启动 Navi 服务超时。可以重试；服务起来后也会自动载入。") }
         Thread.sleep(forTimeInterval: 0.2)
       }
     } catch {
@@ -79,7 +79,7 @@ final class ServerLauncher {
     if let failure = Self.backUpBeforeMigration() { return .failed(failure) }
     let parts = [AshConfig.nodeURL, AshConfig.serverEntryURL, AshConfig.detachScriptURL]
     if let missing = parts.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
-      return .failed("app 里自带的 ash 不完整（缺 \(missing.path)）。重新装一次 Ash.app。")
+      return .failed("app 里自带的 Navi 不完整（缺 \(missing.path)）。重新装一次 Ash.app。")
     }
     do {
       try FileManager.default.createDirectory(at: AshConfig.logURL, withIntermediateDirectories: true)
@@ -243,7 +243,7 @@ enum Occupant {
   static func otherAsh(_ instance: AshInstance) -> String {
     let port = AshConfig.port
     let who = instance.pid.map { "进程 \($0)" } ?? "进程号不明"
-    var lines = ["\(port) 端口上已经有一份 ash 在跑（\(who)），但它不是这个 app 起的那份，所以没有连上去。\(instance.mismatch ?? "")"]
+    var lines = ["\(port) 端口上已经有一份 Navi 在跑（\(who)），但它不是这个 app 起的那份，所以没有连上去。\(instance.mismatch ?? "")"]
     if let codeDir = instance.codeDir, let dataDir = instance.dataDir {
       lines.append("代码：\(codeDir)\n数据：\(dataDir)")
       if FileManager.default.fileExists(atPath: URL(fileURLWithPath: codeDir).appendingPathComponent(".git").path) {
@@ -257,7 +257,7 @@ enum Occupant {
 
   static func notAsh(_ what: String) -> String {
     let port = AshConfig.port
-    return "\(port) 端口被别的程序占着（它应答了 \(what)，不是 ash），ash 服务起不来。\n\n"
+    return "\(port) 端口被别的程序占着（它应答了 \(what)，不是 Navi），Navi 服务起不来。\n\n"
       + "看是谁：lsof -nP -iTCP:\(port) -sTCP:LISTEN；关掉它之后点「重试」。"
   }
 }

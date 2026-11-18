@@ -159,7 +159,7 @@ export async function instanceAdminOnly(
 ): Promise<{ status: 403; body: { error: string } } | null> {
   const actor = actorOf(c as never);
   if (!KIND_POLICY[actor.kind].hostAccess) {
-    return { status: 403, body: { error: `${what}不对经飞书等 IM 通道发来的请求开放，请在 ash 页面上操作` } };
+    return { status: 403, body: { error: `${what}不对经飞书等 IM 通道发来的请求开放，请在 Navi 页面上操作` } };
   }
   const { isMultiUser } = await import("./mode.js");
   if (!(await isMultiUser())) return null;

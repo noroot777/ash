@@ -368,7 +368,7 @@ export async function ensureWorktreesIgnored(repo: string): Promise<void> {
     mkdirSync(dirname(excludePath), { recursive: true });
     writeFileSync(
       excludePath,
-      `${current}${current && !current.endsWith("\n") ? "\n" : ""}# ash 任务 worktree（本地忽略，不入库）\n${entry}\n`,
+      `${current}${current && !current.endsWith("\n") ? "\n" : ""}# Navi 任务 worktree（本地忽略，不入库）\n${entry}\n`,
     );
   } catch (err) {
     console.warn("[ash] 无法把 .worktrees/ 写进 .git/info/exclude：", err instanceof Error ? err.message : err);

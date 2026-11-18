@@ -311,7 +311,7 @@ async function sweepOrphans(): Promise<number> {
       const token = turnIdentity(taskId)?.token;
       const orphans = held.filter((m) => m.by !== token).map((m) => ({ id: m.id, by: m.by! }));
       if (!orphans.length) return;
-      returned += await returnTaken(taskId, orphans, "ash 重启时那一回合没能接回来");
+      returned += await returnTaken(taskId, orphans, "Navi 重启时那一回合没能接回来");
     });
   }
   return returned;

@@ -276,7 +276,7 @@ function systemNotice(settings: SystemProxySettings): string | null {
     const effective = settings.http || settings.https
       ? `已按系统手动代理转发（HTTP ${redactProxy(settings.http, !!settings.credentials?.http)}，HTTPS ${redactProxy(settings.https, !!settings.credentials?.https)}）`
       : "当前直连";
-    notices.push(`系统代理里的${settings.unsupported.join("、")}ash 不支持、未生效，${effective}；需要时可设置 HTTPS_PROXY 指定代理`);
+    notices.push(`系统代理里的${settings.unsupported.join("、")}Navi 不支持、未生效，${effective}；需要时可设置 HTTPS_PROXY 指定代理`);
   }
   return notices.length ? notices.join("；") : null;
 }

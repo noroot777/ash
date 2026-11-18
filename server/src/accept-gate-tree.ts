@@ -130,7 +130,7 @@ export async function copyLink(source: string, destination: string, target: stri
   // 文件链没有退路：拷成真文件正是本模块要修的那个 bug（靠自身位置做相对解析的运行时会当场
   // 死），所以宁可停在这里把原因说清楚，而不是悄悄交出一份跑不起来的快照。
   throw new Error(`无法在测试快照中重建符号链接 ${source}（${(failure as Error).message}）；`
-    + "Windows 上请开启开发者模式或以管理员身份运行 ash，或改用不含文件软链的依赖安装方式");
+    + "Windows 上请开启开发者模式或以管理员身份运行 Navi，或改用不含文件软链的依赖安装方式");
 }
 
 async function entryStats(path: string): Promise<Stats | null> {

@@ -199,8 +199,8 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     const done = await runOf(s.taskId);
     assert.equal(done.status, "interrupted");
     assert.equal(done.failure, "server_restarted");
-    assert.ok(s.timeline().includes(`验收前置命令被打断：ash 重启时它还在跑（\`${s.command}\`），已按未完成收尾。`));
-    assert.match(read(row.logPath), /ash 重启后核对进程，执行状态为 interrupted/);
+    assert.ok(s.timeline().includes(`验收前置命令被打断：Navi 重启时它还在跑（\`${s.command}\`），已按未完成收尾。`));
+    assert.match(read(row.logPath), /Navi 重启后核对进程，执行状态为 interrupted/);
     await until(() => !alive(child), "残留进程收掉");
     assert.equal(main(s.repo), s.before);
   }

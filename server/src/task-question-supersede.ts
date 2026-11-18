@@ -70,6 +70,6 @@ const QUOTE_LIMIT = 120;
 /** 跟着这一轮提示交给 agent：卡已经撤了，还要等答复就自己重新问。 */
 export function questionSupersededNote(question: string): string {
   const quoted = question.length > QUOTE_LIMIT ? `${question.slice(0, QUOTE_LIMIT)}…` : question;
-  return `\n\n(ash:你之前的提问「${quoted}」用户没有直接答复，而是发来了上面这条消息，那张问答卡已随之撤下。`
+  return `\n\n(Navi:你之前的提问「${quoted}」用户没有直接答复，而是发来了上面这条消息，那张问答卡已随之撤下。`
     + `这条消息没回答到它、你仍然需要用户拍板的话，就重新调用 ask_question。)`;
 }

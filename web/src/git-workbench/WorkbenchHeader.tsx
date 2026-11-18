@@ -57,7 +57,7 @@ export function WorkbenchHeader({
         <button
           type="button"
           className="gwb-back"
-          aria-label="返回 ash 工作区"
+          aria-label="返回 Navi 工作区"
           onClick={onExit}
           {...backTip.anchorProps}
         >

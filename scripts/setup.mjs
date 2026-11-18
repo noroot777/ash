@@ -93,7 +93,7 @@ function sqliteUsable() {
   }
 }
 if (sqliteUsable()) ok(`node v${process.versions.node}`);
-else bad(`node v${process.versions.node} 带不动内置的 node:sqlite(ash 的数据库),需要 >= ${NODE_MIN}(建议 24)`);
+else bad(`node v${process.versions.node} 带不动内置的 node:sqlite(Navi 的数据库),需要 >= ${NODE_MIN}(建议 24)`);
 
 const npmVersion = run(NPM, ["-v"]);
 if (npmVersion.status === 0) ok(`npm ${npmVersion.stdout.trim()}`);
@@ -177,7 +177,7 @@ if (!process.env.SKIP_BUILD) {
 }
 
 say();
-say("▶ 4/5 接上 ash MCP(agent 靠它交卷)");
+say("▶ 4/5 接上 Navi MCP(agent 靠它交卷)");
 const mcpEntry = join(REPO, "mcp", "dist", "index.js");
 
 if (process.env.SKIP_MCP) {
@@ -187,7 +187,7 @@ if (process.env.SKIP_MCP) {
   if (which("claude")) {
     const listed = run("claude", ["mcp", "list"]);
     if (new RegExp(`^${ASH_MCP_SERVER_NAME}:`, "m").test(listed.stdout)) {
-      ok("claude:ash 已注册,不动它");
+      ok("claude:Navi 已注册,不动它");
     } else {
       const legacy = new RegExp(`^${LEGACY_ASH_MCP_SERVER_NAME}:`, "m").test(listed.stdout);
       const added = run("claude", [
@@ -196,10 +196,10 @@ if (process.env.SKIP_MCP) {
       if (added.status === 0) {
         if (legacy) {
           const removed = run("claude", ["mcp", "remove", LEGACY_ASH_MCP_SERVER_NAME, "--scope", "user"]);
-          if (removed.status === 0) ok("claude:旧 harness 条目已迁移为 ash");
-          else warn("claude:ash 已接好,但旧 harness 条目没删掉;可手动执行 claude mcp remove harness --scope user");
+          if (removed.status === 0) ok("claude:旧 harness 条目已迁移为 Navi");
+          else warn("claude:Navi 已接好,但旧 harness 条目没删掉;可手动执行 claude mcp remove harness --scope user");
         } else {
-          ok("claude:已注册 ash(user 作用域,编排别的仓库时也在)");
+          ok("claude:已注册 Navi(user 作用域,编排别的仓库时也在)");
         }
       }
       else {
@@ -234,17 +234,17 @@ if (process.env.SKIP_MCP) {
       name: ASH_MCP_SERVER_NAME, legacyName: LEGACY_ASH_MCP_SERVER_NAME, listServers, removeServer,
     });
     if (r.action === "kept") {
-      if (r.enabled) ok(`codex:ash 已在 ${codexCfg} 里,不动它`);
-      else warn(`codex:${codexCfg} 里的 ash 写着 enabled = false,没有替你打开`);
+      if (r.enabled) ok(`codex:Navi 已在 ${codexCfg} 里,不动它`);
+      else warn(`codex:${codexCfg} 里的 Navi 写着 enabled = false,没有替你打开`);
     } else if (r.action === "foreignChange") {
       warn(`codex:${r.why}${r.backup ? `(补写前的备份在 ${r.backup})` : ""};先看一眼 ${codexCfg} 现在的内容,再决定要不要重跑 setup`);
     } else if (r.action === "blocked") {
       // 现在「批准」发生在写之前(整条迁移在沙盘里做),所以没写成只有一种收场:一个字节都没动。
       warn(`codex:${r.why};没有动 ${codexCfg};先跑 codex mcp list 看它报什么、修好再重跑 setup`);
     } else if (r.legacyLeft) {
-      warn(`codex:已写入 ash,但旧 harness 条目没删掉(两个名字都能用);可手动执行 codex mcp remove harness`);
+      warn(`codex:已写入 Navi,但旧 harness 条目没删掉(两个名字都能用);可手动执行 codex mcp remove harness`);
     } else {
-      ok(`codex:${r.action === "migrated" ? "旧 harness 条目已迁移为 ash" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
+      ok(`codex:${r.action === "migrated" ? "旧 harness 条目已迁移为 Navi" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
     }
   } else {
     warn("没装 codex CLI,跳过它的 MCP 注册");
@@ -266,7 +266,7 @@ if (process.env.SKIP_MCP) {
     if (!bin) continue;
     try {
       const result = registerHostMcp({ agentType, mcpEntry, url: URL_BASE });
-      if (result.added) ok(`${agentType}:已注册 ash MCP (${result.file})`);
+      if (result.added) ok(`${agentType}:已注册 Navi MCP (${result.file})`);
       else warn(`${agentType}:${result.why || "没有写入"}`);
     } catch (error) {
       warn(`${agentType} MCP 注册失败：${error.message}；手动接入见 docs/install.md`);
@@ -279,7 +279,7 @@ if (existsSync(join(REPO, ".git"))) {
   if (run("git", ["config", "core.hooksPath", ".githooks"]).status === 0) ok("git hooks 已指向 .githooks");
   else warn("git config core.hooksPath 设置失败(不影响运行,只是少了两道提交闸和 push 前的前端回归闸)");
 } else {
-  warn("不是 git 仓库(压缩包解出来的通常如此)。ash 本身能跑,但对**它自己这个仓库**做不了 worktree/diff/合并。");
+  warn("不是 git 仓库(压缩包解出来的通常如此)。Navi 本身能跑,但对**它自己这个仓库**做不了 worktree/diff/合并。");
   say("      想用完整能力:git init && git add -A && git commit -m init && git config core.hooksPath .githooks");
 }
 
@@ -294,7 +294,7 @@ for (const cli of ["claude", "codex", "gemini", "cursor-agent", "opencode", "qwe
   }
 }
 if (!found) {
-  warn("一个 agent CLI 都没有。ash 是**调度台**,自己不写代码,得先装至少一个并登录:");
+  warn("一个 agent CLI 都没有。Navi 是**调度台**,自己不写代码,得先装至少一个并登录:");
   say("      npm install -g @anthropic-ai/claude-code   然后 claude   登录一次");
   say("      npm install -g @openai/codex               然后 codex    登录一次");
 } else {

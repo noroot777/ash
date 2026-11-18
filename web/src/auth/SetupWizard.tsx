@@ -57,7 +57,7 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
           <h1>{resuming ? "把管理员补建出来" : "切到多人模式"}</h1>
           {resuming ? (
             <p className="auth-note">
-              上一次转换没走完：这台 ash 已经是多人模式，但还没有任何人能登录。
+              上一次转换没走完：这台 Navi 已经是多人模式，但还没有任何人能登录。
               填一次姓名就能补上，根目录已经锁死、不用再选。
             </p>
           ) : null}
@@ -77,7 +77,7 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
   return (
     <AuthShell>
       <div className="auth-card auth-card--wide">
-        <h1>这台 ash 给谁用？</h1>
+        <h1>这台 Navi 给谁用？</h1>
         <p className="auth-note">选完就能开始。之后从自用切到多人还来得及，反过来不行。</p>
 
         <button type="button" className="auth-choice" onClick={() => void chooseSingle()} disabled={busy}>
@@ -94,7 +94,7 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
             每人一把 key、一个自己的目录、一套自己的执行器。
             CLI 额度是<b>各花各的还是共用这台机器的订阅，下一步选</b>，之后也能改。
             权限是<b>防误操作的护栏，不是 OS 级隔离</b>：所有 agent 都以同一个系统账号运行。
-            传输安全靠 Tailscale / 反向代理的 TLS，ash 自己不做 HTTPS。
+            传输安全靠 Tailscale / 反向代理的 TLS，Navi 自己不做 HTTPS。
           </span>
         </button>
 

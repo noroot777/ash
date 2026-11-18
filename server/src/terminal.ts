@@ -208,7 +208,7 @@ export class TerminalSessionManager {
     // 采样后继续对清场报成功(第 5 轮自由审查)。Linux 有 /proc 永真,macOS 的 ps 在
     // /bin/ps(SIP 保护),真实环境到不了这里;到了就是环境坏了,该修环境而不是带病运行。
     if (!IS_WINDOWS && !this.containment) {
-      throw new Error("终端依赖缺失：ps 与 /proc 都不可用，无法保证关闭会话时清空进程树；请安装 procps 后重启 ash");
+      throw new Error("终端依赖缺失：ps 与 /proc 都不可用，无法保证关闭会话时清空进程树；请安装 procps 后重启 Navi");
     }
     const args = launch.args;
     // POSIX 一律包 wrapper,session leader 是常驻 /bin/sh、真正的 shell/命令是它的孩子,

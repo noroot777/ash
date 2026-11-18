@@ -84,7 +84,7 @@ try {
       buttonHeight: button.getBoundingClientRect().height,
     };
   });
-  assert.ok(!settingsKeyReveal.eyebrow.includes("ASH ACCESS"), `设置页不应出现身份页眉题：${JSON.stringify(settingsKeyReveal)}`);
+  assert.ok(!settingsKeyReveal.eyebrow.includes("NAVI ACCESS"), `设置页不应出现身份页眉题：${JSON.stringify(settingsKeyReveal)}`);
   assert.equal(settingsKeyReveal.headingSize, "17px", "设置页 KeyReveal 标题应使用卡片层级");
   assert.equal(settingsKeyReveal.keyBorderStyle, "solid", "设置页 key 应保留紧凑卡片样式");
   assert.equal(settingsKeyReveal.checkBorderWidth, "0px", "设置页确认项不应套用身份页方框");

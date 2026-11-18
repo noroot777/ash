@@ -245,7 +245,7 @@ export function FileMentionMenu({
  * 服务端还不认 `?dir=` 时说的那句话。**必须说出来**：不说的话界面就是一列没有层级的
  * 文件，看着像树这个功能压根没做 —— 这一条正是这么被误判过一次的。
  */
-export const TREE_UNSUPPORTED = "服务端是旧版，暂时只能平铺；重启 ash 服务后才有树形浏览";
+export const TREE_UNSUPPORTED = "服务端是旧版，暂时只能平铺；重启 Navi 服务后才有树形浏览";
 
 export function mentionHint(selected: MentionTreeRow | undefined): string {
   if (selected?.expandable && !selected.expanded) return "↑↓ 选择，回车或 → 展开目录";

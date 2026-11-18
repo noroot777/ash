@@ -15,7 +15,7 @@ const END = "<!-- /ash-mac-download -->";
 export const LINK_COMMIT_PREFIX = "docs(README): mac 版下载指向";
 
 export function renderLink({ url, shortVersion, version }) {
-  return `**[下载 ash ${shortVersion}（${version}）](${url})**`;
+  return `**[下载 Navi ${shortVersion}（${version}）](${url})**`;
 }
 
 /** 把两个标记之间换成新的一行；标记缺了或不成对返回 null（不猜该写在哪）。 */

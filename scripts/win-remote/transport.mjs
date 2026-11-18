@@ -65,13 +65,13 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
     // rexec 靠 `ac.signal.aborted` 把它翻译成「按失败返回 code 124」,不能在这儿改写语义。
     if (signal.aborted && signal.reason?.name === "TimeoutError") {
       const limit = fallback ? `${CONTROL_TIMEOUT}ms` : "期限";
-      throw new Error(`${init.method ?? "GET"} ${path} → ${limit}内没等到 ${host} 的响应(对端 ash 没在跑,或者卡住了)`);
+      throw new Error(`${init.method ?? "GET"} ${path} → ${limit}内没等到 ${host} 的响应(对端 Navi 没在跑,或者卡住了)`);
     }
     throw e;
   }
   if (res.status === 401) {
     throw new Error(
-      `${init.method ?? "GET"} ${path} → 401:对端 ash 要访问密钥。在那台机器上打开 ash「设置 → 默认规则 → 远程访问」`
+      `${init.method ?? "GET"} ${path} → 401:对端 Navi 要访问密钥。在那台机器上打开 Navi「设置 → 默认规则 → 远程访问」`
         + `(或在它本机 curl http://127.0.0.1:4317/api/remote-access)拿到后,用 WIN_REMOTE_KEY=<密钥> 传进来`,
     );
   }
@@ -82,7 +82,7 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
 /** 找到对端 ash 里指向 ash 仓库自己的那个项目(终端会话必须挂在某个项目上)。 */
 export async function resolveProject(host = DEFAULT_HOST, signal = controlSignal()) {
   const projects = await api("/projects", { signal }, host);
-  if (!projects.length) throw new Error("对端 ash 里一个项目都没有,先在它的界面上添加 ash 仓库");
+  if (!projects.length) throw new Error("对端 Navi 里一个项目都没有,先在它的界面上添加 Navi 仓库");
   const pick = process.env.WIN_REMOTE_PROJECT;
   if (pick) {
     // 指定了 id 也照样得把项目取回来:`repoPath` 是后面每条命令的 cwd,给不出来的话
@@ -92,7 +92,7 @@ export async function resolveProject(host = DEFAULT_HOST, signal = controlSignal
     const hit = projects.find((p) => p.id === pick);
     if (!hit) {
       throw new Error(
-        `WIN_REMOTE_PROJECT=${pick} 在对端 ash 里不存在。现有项目:\n` +
+        `WIN_REMOTE_PROJECT=${pick} 在对端 Navi 里不存在。现有项目:\n` +
           projects.map((p) => `  ${p.id}  ${p.repoPath ?? "(无路径)"}`).join("\n"),
       );
     }
@@ -349,7 +349,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
     // deadline 到点时,卡住的那一跳会以 AbortError 抛出来。但 rexec 对调用者的承诺是
     // 「超时按失败返回而不是抛」(收回传那条路径一直是这么做的),控制面卡住没道理换一种。
     if (ac.signal.aborted) {
-      return { code: 124, out: `[win-remote] 超时 ${hardMs}ms,对端 ash 的控制面请求没在期限内返回`, timedOut: true };
+      return { code: 124, out: `[win-remote] 超时 ${hardMs}ms,对端 Navi 的控制面请求没在期限内返回`, timedOut: true };
     }
     throw e;
   } finally {

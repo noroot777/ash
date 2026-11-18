@@ -79,7 +79,7 @@ async function continueAcceptance(row: GateRow): Promise<void> {
   if (!choices) {
     // 不是欠着的一步（下次启动再读也还是坏的）：说清楚，交回给人点。
     await appendTaskTimeline(row.taskId, alertLine("验收前置命令通过了，但当初那一下验收的选择（点的是哪一版、怎么提交）读不出来了，"
-      + "没有替你自动验收：回 ash 看过这一版再点一次验收。"));
+      + "没有替你自动验收：回 Navi 看过这一版再点一次验收。"));
     return;
   }
   const { acceptTask } = await import("./task-accept.js");
@@ -98,7 +98,7 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     // 用户，但欠账留着：下次启动会接着做，不把一次临时故障变成永远没人补的那一步。
     const reason = error instanceof Error ? error.message : String(error);
     await appendTaskTimeline(row.taskId, alertLine(`验收前置命令通过后自动继续验收时出错（${reason}）。这一步还欠着：`
-      + "ash 下次启动会接着做，你也可以现在直接再点一次验收。")).catch(() => {});
+      + "Navi 下次启动会接着做，你也可以现在直接再点一次验收。")).catch(() => {});
     throw error;
   });
   if (!result.accepted) {

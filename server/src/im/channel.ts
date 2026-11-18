@@ -314,7 +314,7 @@ async function announce(runtime: FeishuRuntime): Promise<void> {
   for (const binding of bindings) {
     if (!multi ? !binding.userId : !!binding.userId && (await getUser(binding.userId))?.role === "admin") targets.push(binding);
   }
-  const text = `ash 实例 ${instanceTag()} 已上线。若你同时看到别的指纹的上线消息，说明另一台机器连着同一个飞书应用，事件会被两边随机分走。`;
+  const text = `Navi 实例 ${instanceTag()} 已上线。若你同时看到别的指纹的上线消息，说明另一台机器连着同一个飞书应用，事件会被两边随机分走。`;
   await runtime.reconciler.run(async () => {
     for (const binding of targets) {
       await runtime.reconciler.insert({

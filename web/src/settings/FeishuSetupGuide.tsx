@@ -57,7 +57,7 @@ export function FeishuSetupGuide({ connected }: { connected: boolean }) {
         <li>
           <b>订阅事件。</b>回开发者后台「事件与回调」，订阅方式选「使用长连接接收」，
           事件订阅加 <Scope value="im.message.receive_v1" />，回调订阅加 <Scope value="card.action.trigger" />。
-          这一步要求 ash 已经连着，所以必须排在第 3 步之后。
+          这一步要求 Navi 已经连着，所以必须排在第 3 步之后。
         </li>
         <li>
           <b>发布版本。</b>权限和订阅每改一次都要发一次版才生效；部分权限要企业管理员审核。
@@ -67,9 +67,9 @@ export function FeishuSetupGuide({ connected }: { connected: boolean }) {
         <b>接进来之前要知道的</b>
         <ul>
           <li>能给机器人下指令就能让这台机器上的 agent 干活，而 agent 手里有 shell——<b>飞书账号从此等于这台机器的 shell 凭据</b>。公司租户的企业管理员和应用协作者能改应用配置、轮换密钥。</li>
-          <li>凭证存在库文件旁边的 <code>&lt;库文件&gt;.feishu.json</code>（权限 0600），不进设置、不进环境变量。但本机 agent 和 ash 服务是同一个系统用户，<b>它们读得到这个文件</b>，可以冒充机器人发消息。</li>
+          <li>凭证存在库文件旁边的 <code>&lt;库文件&gt;.feishu.json</code>（权限 0600），不进设置、不进环境变量。但本机 agent 和 Navi 服务是同一个系统用户，<b>它们读得到这个文件</b>，可以冒充机器人发消息。</li>
           <li>Windows 上 0600 这个权限位不生效，文件能被谁读取取决于它所在目录的权限设置。</li>
-          <li>一个飞书应用只能连一个 ash 实例：飞书会把事件随机分给连着的客户端之一，两台机器连同一个应用就会各丢一半消息。每台机器各建一个应用；上面的「本机实例指纹」可以用来核对连着的是哪一台。</li>
+          <li>一个飞书应用只能连一个 Navi 实例：飞书会把事件随机分给连着的客户端之一，两台机器连同一个应用就会各丢一半消息。每台机器各建一个应用；上面的「本机实例指纹」可以用来核对连着的是哪一台。</li>
         </ul>
       </div>
     </details>

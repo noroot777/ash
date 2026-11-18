@@ -38,7 +38,7 @@ export async function ensureExecutorAshMcp(
     if (!dir) return failed(`${agentType} 没有可写 MCP 登记的配置目录`);
     return await ensureAshMcp(dir, agentType);
   } catch (e) {
-    return failed(`补写 ash MCP 登记失败：${(e as Error).message}`);
+    return failed(`补写 Navi MCP 登记失败：${(e as Error).message}`);
   }
 }
 
@@ -56,18 +56,18 @@ export async function executorAshMcpState(
     const unsupported = ashMcpUnsupported(agentType, ashMcpMechanism(agentType));
     if (unsupported) return { state: unsupported.tier === "refuse" ? "missing" : "unknown", detail: unsupported.why };
     const dir = hostCliConfigDir(agentType);
-    if (!dir) return unknown(`算不出 ${agentType} 的配置目录，看不出 ash MCP 接没接上`);
+    if (!dir) return unknown(`算不出 ${agentType} 的配置目录，看不出 Navi MCP 接没接上`);
     const found = ashMcpRegistration(dir, agentType);
     // 执行器自己带了 MCP 覆盖参数时,配置文件只是一半事实:参数既能补接,也能把文件里那条
     // 关掉或整组换掉,而这些参数是真传给 CLI 的。两头都说成 unknown。
     if (extraArgs.some((arg) => /mcp/i.test(arg))) {
       return unknown(found.state === "present"
-        ? "配置里有 ash MCP 登记，但这个执行器的参数里带了 MCP 相关的覆盖（可能把它关掉或换掉），看不出最终接没接上"
-        : "配置文件里没看到可用的 ash MCP 登记，但这个执行器的参数里带了 MCP 相关的覆盖，看不出最终接没接上");
+        ? "配置里有 Navi MCP 登记，但这个执行器的参数里带了 MCP 相关的覆盖（可能把它关掉或换掉），看不出最终接没接上"
+        : "配置文件里没看到可用的 Navi MCP 登记，但这个执行器的参数里带了 MCP 相关的覆盖，看不出最终接没接上");
     }
     if (found.state === "present") return CONNECTED;
-    if (found.state === "unknown") return unknown(`看不准这个执行器有没有接上 ash MCP：${found.detail}`);
-    if (found.state === "disabled") return missing(`${found.detail}，ash 没有替你打开`);
+    if (found.state === "unknown") return unknown(`看不准这个执行器有没有接上 Navi MCP：${found.detail}`);
+    if (found.state === "disabled") return missing(`${found.detail}，Navi 没有替你打开`);
     // 手工那段跟自动补接走同一次合成:这份配置不许往末尾接时,给的是原因而不是一段照抄会坏的配置。
     const hand = ashMcpHandAdvice(agentType, dir, process.env);
     if (hand && "block" in hand) {
@@ -77,7 +77,7 @@ export async function executorAshMcpState(
     return missing(`${found.detail}，这个执行器交不了卷（接法见 docs/install.md）`);
   } catch (e) {
     // 诊断本身出错不该把执行器列表打成 500,但也不能当成「接上了」。
-    return unknown(`检查 ash MCP 登记时出错：${(e as Error).message}`);
+    return unknown(`检查 Navi MCP 登记时出错：${(e as Error).message}`);
   }
 }
 

@@ -103,7 +103,7 @@ export function mountImRoutes(api: Hono): void {
   // 写操作统一先过这一道：只放账号本人（agent 回合凭证、匿名都进不来）。
   api.use("/im/feishu/*", async (c, next) => {
     if (c.req.method !== "GET" && !isAccountHolder(actorOf(c))) {
-      return c.json({ error: "飞书设置只能由账号本人在 ash 页面上改" }, 403);
+      return c.json({ error: "飞书设置只能由账号本人在 Navi 页面上改" }, 403);
     }
     await next();
   });
@@ -173,7 +173,7 @@ export function mountImRoutes(api: Hono): void {
     if (!binding || binding.appId !== runtime.appId) return c.json({ error: "你还没绑定当前这个飞书应用" }, 409);
     if (!(await quotaMeter()).allows("notice")) return c.json({ error: "本月飞书额度已到降级线，测试卡不发了（决策卡照常推）" }, 409);
     const card = renderCard({
-      title: "ash 测试卡", tone: "green",
+      title: "Navi 测试卡", tone: "green",
       blocks: [{ type: "text", text: "能看到这张卡，说明推送通了。之后任务等你答复、失败、待验收时，卡片会推到这里。" }],
     });
     await runtime.reconciler.run(() => runtime.reconciler.insert({

@@ -94,10 +94,10 @@ enum ServerShutdown {
     case .unreachable(let why):
       return .changed("服务这会儿没有答复（\(why)）")
     case .notAsh(let what):
-      return .changed("端口上的应答不像 ash（\(what)）")
+      return .changed("端口上的应答不像 Navi（\(what)）")
     case .ash(let instance) where !instance.isOurs:
-      guard instance.dataDir != nil else { return .changed("端口上的 ash 认不出是不是这一份") }
-      if case .ours = target { return .changed("端口上换成了别的 ash") }
+      guard instance.dataDir != nil else { return .changed("端口上的 Navi 认不出是不是这一份") }
+      if case .ours = target { return .changed("端口上换成了别的 Navi") }
       return .stopped(nil)
     case .ash(let instance):
       guard let pid = instance.pid, pid > 1 else { return .failed("服务没报自己的进程号，没法让它下线。") }
@@ -149,7 +149,7 @@ final class Maintenance {
     let lock = try ServerStartLock(dataDir: AshConfig.dataURL)
     let deadline = Date().addingTimeInterval(timeout)
     while try !lock.tryAcquire() {
-      guard Date() < deadline else { throw SQLiteFile.Failure("另一处正在起 ash 服务，\(Int(timeout)) 秒还没完") }
+      guard Date() < deadline else { throw SQLiteFile.Failure("另一处正在起 Navi 服务，\(Int(timeout)) 秒还没完") }
       Thread.sleep(forTimeInterval: 0.2)
     }
     let marker = Marker(pid: getpid(), note: note, since: Date())

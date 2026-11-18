@@ -58,7 +58,7 @@ async function impactOrAbort() {
 async function failStillUp(old) {
   const answers = Boolean(await localJson(PORT, "/api/health"));
   say(answers
-    ? `  ✕ :${PORT} 上仍有一个 ash 在应答,没能让它下线。`
+    ? `  ✕ :${PORT} 上仍有一个 Navi 在应答,没能让它下线。`
     : `  ✕ :${PORT} 仍被占着(连得上、但不应答),没能让它下线。`);
   if (old.length) say(`     试过 kill:${old.join(", ")} —— 它没退,或者占着端口的根本是别的进程。`);
   else say("     系统没查到谁在监听这个端口:这台机器上 lsof/ss/fuser 可能都没装。");

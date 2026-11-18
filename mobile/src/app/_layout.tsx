@@ -65,7 +65,7 @@ export default function RootLayout() {
       <View style={{ flex: 1, backgroundColor: theme.bg, alignItems: "center", justifyContent: "center" }}>
         <StatusBar style="auto" />
         <Text style={{ color: theme.faint, fontSize: 14, fontFamily: fontsLoaded ? fonts.mono : undefined }}>
-          Ash…
+          Navi…
         </Text>
       </View>
     );

@@ -418,7 +418,7 @@ export function HandoffDialog({
               placeholder="如 家里的台式机"
               onChange={(event) => setDraftTargetName(event.target.value)}
             />
-            <label htmlFor="handoff-new-target-url">ash 地址</label>
+            <label htmlFor="handoff-new-target-url">Navi 地址</label>
             <input
               id="handoff-new-target-url"
               value={draftTargetUrl}
@@ -439,7 +439,7 @@ export function HandoffDialog({
             <p>
               {returningHandoff
                 ? "把这个任务连同 git 分支、CLI 会话历史移回最初交出它的机器。目标已按来源机指纹锁定，不能转送到第三台机器。"
-                : "把这个任务连同 git 分支、CLI 会话历史整体迁到另一台 ash 上继续跑。"}
+                : "把这个任务连同 git 分支、CLI 会话历史整体迁到另一台 Navi 上继续跑。"}
               {preflight?.local.running ? "任务正在运行,接力会先把它停下来。" : ""}
             </p>
             {pendingHandoff && (

@@ -72,7 +72,7 @@ export async function ensureAshMcp(
     });
     return result.ok ? ok(result.serverName) : fail(result.why);
   } catch (e) {
-    return fail(`补写 ash MCP 登记失败：${(e as Error).message}`);
+    return fail(`补写 Navi MCP 登记失败：${(e as Error).message}`);
   }
 }
 
@@ -110,7 +110,7 @@ export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegist
   return {
     state: found.state,
     serverName: found.serverName,
-    detail: found.detail || (found.state === "present" ? "" : "这个配置目录里没有 ash MCP 登记"),
+    detail: found.detail || (found.state === "present" ? "" : "这个配置目录里没有 Navi MCP 登记"),
   };
 }
 

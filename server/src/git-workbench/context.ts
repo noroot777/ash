@@ -98,7 +98,7 @@ export async function claimWorkbench(
   if (owner?.archived) fail("任务已归档，工作区只读，请先取消归档");
   if (owner && action.kind === "pull" && action.strategy === "rebase")
     fail(
-      "任务工作树的基线由 ash 管理，请使用快进或合并拉取，或从任务入口更新基线",
+      "任务工作树的基线由 Navi 管理，请使用快进或合并拉取，或从任务入口更新基线",
     );
   if (
     (action.kind === "branch-delete" || action.kind === "branch-rename") &&
@@ -110,7 +110,7 @@ export async function claimWorkbench(
     )
   ) {
     fail(
-      "这条分支被 ash 任务或任务基线引用，请从任务的验收／工作区清理入口处理",
+      "这条分支被 Navi 任务或任务基线引用，请从任务的验收／工作区清理入口处理",
     );
   }
   if (
@@ -139,7 +139,7 @@ export async function claimWorkbench(
   ) {
     if (action.kind !== "branch-create" || action.checkout)
       fail(
-        "任务工作树的分支与基线由 ash 管理，请在手动工作树中重写历史或切分支",
+        "任务工作树的分支与基线由 Navi 管理，请在手动工作树中重写历史或切分支",
       );
   }
   const anchor = {

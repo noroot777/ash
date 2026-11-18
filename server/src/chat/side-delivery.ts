@@ -47,7 +47,7 @@ export async function settleSideChat(room: Room, messageId: string, result: Veri
       status: "done", context: null, body: displayed,
       modelReply: result.reply + (result.formatWarning ? "\n[上一轮未按约定 JSON 格式输出，以上为原始输出]" : "")
         + (forwardError ? `\n[未发送到主任务：${forwardError}]`
-        : pending ? `\n[本轮已请求回传主任务，正文：${result.forward!.text}；实际投递状态以 ash 回执为准]` : ""),
+        : pending ? `\n[本轮已请求回传主任务，正文：${result.forward!.text}；实际投递状态以 Navi 回执为准]` : ""),
       forwardMessageId: pending?.id ?? null,
       forwardError,
     }).where(and(eq(chatMessages.id, messageId), eq(chatMessages.roomId, room.id), eq(chatMessages.status, "running"))).returning({ id: chatMessages.id });

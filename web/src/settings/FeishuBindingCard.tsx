@@ -110,7 +110,7 @@ export function FeishuBindingCard({ binding, online, onBinding, notify }: {
         <div>
           <b>飞书用户 …{binding.openIdTail} 在 {formatTime(binding.claimedAt)} 发来了这串码，是你吗？</b>
           <small>
-            没开通讯录权限，ash 拿不到飞书里的名字，只能显示 open_id 的末几位。不是你发的就点「不是我」——说明码落到了别人手里。
+            没开通讯录权限，Navi 拿不到飞书里的名字，只能显示 open_id 的末几位。不是你发的就点「不是我」——说明码落到了别人手里。
             {left ? `${left}内有效。` : "这次申请已过期。"}
           </small>
         </div>
@@ -134,7 +134,7 @@ export function FeishuBindingCard({ binding, online, onBinding, notify }: {
         <div className="settings-row">
           <div>
             <b>已绑定飞书用户 …{binding.openIdTail}</b>
-            <small>绑定于 {formatTime(binding.boundAt)}。只显示 open_id 的末几位：没开通讯录权限，ash 拿不到飞书里的名字。</small>
+            <small>绑定于 {formatTime(binding.boundAt)}。只显示 open_id 的末几位：没开通讯录权限，Navi 拿不到飞书里的名字。</small>
             {binding.stale && (
               <small className="feishu-warn">换过飞书应用（绑定时用的是 {binding.appId}），需要重新绑定：同一个人在不同应用里的 open_id 不一样。</small>
             )}

@@ -152,7 +152,7 @@ try {
 
   const projectMenu = page.getByLabel("选择 Git 项目", { exact: true });
   const worktreeMenu = page.getByLabel("选择工作树", { exact: true });
-  const exit = page.getByLabel("返回 ash 工作区", { exact: true });
+  const exit = page.getByLabel("返回 Navi 工作区", { exact: true });
   const fetch = page.getByLabel("获取", { exact: true });
   await Promise.all([projectMenu.waitFor(), worktreeMenu.waitFor(), exit.waitFor()]);
   assert.equal(await projectMenu.count(), 1, "project selector must have one trigger");
@@ -302,7 +302,7 @@ try {
     scrollWidth: document.documentElement.scrollWidth,
   }));
   assert.equal(dimensions.scrollWidth, dimensions.clientWidth, "mobile workbench must not overflow horizontally");
-  const mobileExit = mobilePage.getByLabel("返回 ash 工作区", { exact: true });
+  const mobileExit = mobilePage.getByLabel("返回 Navi 工作区", { exact: true });
   const mobileFetch = mobilePage.getByLabel("获取", { exact: true });
   // 窄屏顶栏折成两行：返回在第一行最左，拉取引用那一组落到第二行——按阅读顺序它仍在前面。
   const [mobileExitBox, mobileFetchBox] = [await box(mobileExit), await box(mobileFetch)];

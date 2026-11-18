@@ -12,7 +12,7 @@ import { runPreview, type PreviewStartOptions } from "./preview-start.js";
 export { readPreview, readPreviewLog, hasPreviewLog, previewLogPath } from "./preview-store.js";
 export type { PreviewStep, PreviewRecord, PreviewResult } from "./preview-store.js";
 export { beginPreviewStart, endPreviewStart, previewStartCanceled } from "./preview-start-state.js";
-export const PREVIEW_CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）";
+export const PREVIEW_CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / Navi 重启）";
 const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
 
@@ -177,7 +177,7 @@ async function sweepTaskPreview(taskId: string): Promise<void> {
     const retired = await retirePreview(record, "failed");
     if (!retired) return;
     await appendTaskTimeline(taskId, !retired.stopped ? alertLine(retired.message) : interrupted
-      ? receiptLine(`预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`)
+      ? receiptLine(`预览没能起完就中断了（Navi 重启），已经清理：${record.cmd}`)
       : alertLine(`预览进程已自行退出：${record.url ?? record.cmd}`));
     return;
   }

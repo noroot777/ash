@@ -262,7 +262,7 @@ function blockingMessage({ live, unread, inflight, handed }: Blocking): string |
       : "")
     + (inflight.length
       ? "④ 正在送的那几条：**等一下再调一次 complete_task 就行** —— 它们是刚刚跑完的哨兵的结束通知，"
-        + "ash 正在把它们送到你手上（通常就是下一个瞬间；这一笔万一写失败，有人按退避一直重试、"
+        + "Navi 正在把它们送到你手上（通常就是下一个瞬间；这一笔万一写失败，有人按退避一直重试、"
         + "每分钟还会巡检一遍，不需要你做什么）。确实不要了也可以对它调 stop_monitor。"
       : "")
     + (handed.length

@@ -80,13 +80,16 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   launcher_failed: "门禁启动器出了错，分不清停在哪一段",
   timeout: "超时",
   spawn_failed: "命令起不来",
-  server_restarted: "ash 重启,这次没跑完",
+  server_restarted: "Navi 重启,这次没跑完",
   canceled: "你取消了这一次",
   source_changed: "测试修改了被测源码，不能用结果为原版本放行",
   process_unconfirmed: "尚未取得整次运行退出的证据",
   ownership_waived: "已确认风险并强制释放，未取得整次退出证据",
   entry_missing: "入口不在被测的树里，没有起跑",
 };
+
+/** 改名 Navi 之前落盘的门禁摘要里写的旧标签：认老记录用，不再生成。 */
+export const ACCEPT_GATE_FAILURE_LEGACY_LABELS: readonly string[] = ["ash 重启,这次没跑完"];
 
 /**
  * 把存下来的 failure 归一到**当前**的联合里。认不出的(撤掉的 `command_missing`、将来再撤的

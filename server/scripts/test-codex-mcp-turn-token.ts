@@ -142,7 +142,7 @@ if (args.includes("app-server")) {
     return seen;
   };
   const ashProblems = (events: AgentEvent[]) =>
-    events.filter((e): e is Extract<AgentEvent, { kind: "error" }> => e.kind === "error" && e.message.startsWith("ash 的工具在这一回合没接上"));
+    events.filter((e): e is Extract<AgentEvent, { kind: "error" }> => e.kind === "error" && e.message.startsWith("Navi 的工具在这一回合没接上"));
 
   process.env.ASH_FAKE_MCP_STATUS = "ready";
   const handle = executor.runSteerable({
@@ -184,7 +184,7 @@ if (args.includes("app-server")) {
   const calledEvents = await drain(execCalled.events);
   await execCalled.cleanup?.();
   delete process.env.ASH_FAKE_EXEC_CALL;
-  assert.ok(!calledEvents.some((e) => e.kind === "error" && /ash/.test(e.message)), "调成过 ash 的工具 ⇒ 不出声");
+  assert.ok(!calledEvents.some((e) => e.kind === "error" && /Navi/.test(e.message)), "调成过 ash 的工具 ⇒ 不出声");
   const untracked = executor.run({ cwd: root, prompt: "probe exec chat", env: { CODEX_HOME: unconfigured } });
   const untrackedEvents = await drain(untracked.events);
   await untracked.cleanup?.();
@@ -196,7 +196,7 @@ if (args.includes("app-server")) {
   const failed = ashProblems(await drain(failedHandle.events));
   await failedHandle.cleanup?.();
   assert.equal(failed.length, 1, "失败只说一次");
-  assert.match(failed[0]!.message, /codex 报告 ash MCP 启动失败：handshake closed/);
+  assert.match(failed[0]!.message, /codex 报告 Navi MCP 启动失败：handshake closed/);
   assert.equal(failed[0]!.affectsTurn, false, "这条是诊断,成败照旧由交卷判");
 
   // ready 了但用户配置里的工具名单把协议工具挡掉 ⇒ 经执行器问 mcpServerStatus/list 后出声。
@@ -206,7 +206,7 @@ if (args.includes("app-server")) {
   const narrowed = ashProblems(await drain(narrowedHandle.events));
   await narrowedHandle.cleanup?.();
   assert.equal(narrowed.length, 1, "工具清单缺了 complete_task ⇒ 一条诊断");
-  assert.match(narrowed[0]!.message, /codex 连上了 ash，但 complete_task 不在 agent 手上/);
+  assert.match(narrowed[0]!.message, /codex 连上了 Navi，但 complete_task 不在 agent 手上/);
 
   // 清单那一问到回合收尾都没回来 ⇒ 有界地等一下,然后说核实不了(提示级),不折回没问题
   process.env.ASH_FAKE_MCP_TOOLS = "silent";
@@ -226,7 +226,7 @@ if (args.includes("app-server")) {
   const silent = ashProblems(await drain(silentHandle.events));
   await silentHandle.cleanup?.();
   assert.equal(silent.length, 1);
-  assert.match(silent[0]!.message, /codex 这一回合没有加载 ash MCP/);
+  assert.match(silent[0]!.message, /codex 这一回合没有加载 Navi MCP/);
   console.log("✓ Codex 起跑注入 ash MCP(不依赖配置登记)、env_vars 透传回合身份、argv 无 token,ash 没连上 / 工具不全 / exec 核实不了时如实出声");
 } finally {
   if (oldProbe === undefined) delete process.env.ASH_FAKE_MCP_PROBE;

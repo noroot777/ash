@@ -213,7 +213,7 @@ export function ProjectGitSettings({ projectId, canManage, notify }: {
             {!canManage
               ? "这是整个项目共用的凭证，覆盖一次所有人都跟着换，所以只有项目管理员能改；令牌本来就取不回来，这里只显示用户名。"
               : anyHttps || !identity.remotes.length
-                ? "只存在 ash 自己的库里，不写进仓库；这个项目的拉取、推送（含任务工作区的推送）都用它。"
+                ? "只存在 Navi 自己的库里，不写进仓库；这个项目的拉取、推送（含任务工作区的推送）都用它。"
                 : "当前远端都是 SSH，配了也不会被用到——SSH 走上面那把私钥。"}
           </span>
           {canManage && (

@@ -432,7 +432,7 @@ async function acceptTaskUnlocked(
         // 他此刻在哪个目录）。三条出路都写上，别让他自己拼。
         ? `合并完成（未提交）：${merge.sourceBranch} 的改动已合进 ${merge.targetBranch} 的工作区并暂存，`
           + `${merge.targetBranch} 的提交历史一动没动。三条出路，任选一条：`
-          + `① 在验收台点「现在提交」，ash 会先核对索引里确实只有这次合并的改动再替你落成提交；`
+          + `① 在验收台点「现在提交」，Navi 会先核对索引里确实只有这次合并的改动再替你落成提交；`
           + `② 自己落成提交 —— git -C ${project.repoPath} commit -m "squash 合并 ${merge.sourceBranch}"；`
           + `③ 丢弃这次合并 —— git -C ${project.repoPath} reset --hard`
           + `（会把暂存区和工作区一起退回 ${merge.targetBranch} 当前提交，这次合进来的改动就没了）。`

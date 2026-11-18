@@ -55,7 +55,7 @@ try {
     .map((call) => JSON.stringify(contentOf(call))).join("\n");
   // 重试接口的报错原文带着项目里的字（受控输入）。fakeRetry 打开时 /retry 不进真接口、回这一句；stall 在就先停在那里。
   const SECRET = "部署项目「内部客户甲」失败：/private/customer-a/deploy.sh 无法执行";
-  const WITHHELD = /这次操作的结果不在飞书里显示了（([^）]+)），请到 ash 网页查看。/;
+  const WITHHELD = /这次操作的结果不在飞书里显示了（([^）]+)），请到 Navi 网页查看。/;
   const gate = () => {
     let reached!: () => void;
     let release!: () => void;
@@ -133,7 +133,7 @@ try {
     fake.reset();
     assert.equal(await im.relay.post(ctx, "msg:om_relay_post", "room-gone", "你好", [], null, null), false);
     await im.settle();
-    assert.match(repliesTo("om_relay_post"), /没能送进 ash：/, "房间没了，投不进去的说明照发");
+    assert.match(repliesTo("om_relay_post"), /没能送进 Navi：/, "房间没了，投不进去的说明照发");
 
     // 投进去了、回复还没来，房间被删了。
     const member = { agentType: "claude", name: "Claude" };
@@ -258,7 +258,7 @@ try {
       await bindAgain(new Date(Date.now() + 4_000).toISOString());
     });
     assert.doesNotMatch(JSON.stringify(quick), /内部客户甲/, "按钮快路径：换绑了，toast 不带原文");
-    assert.match(JSON.stringify(quick), /没办成，原因见 ash。/);
+    assert.match(JSON.stringify(quick), /没办成，原因见 Navi。/);
     await unbindOwner("");
     await bindAgain(at);
     fakeRetry = false;
@@ -327,7 +327,7 @@ try {
     fake.reset();
     const retry = await asBob("/retry", groupCard.messageId!);
     await im.settle();
-    assert.match(repliesTo(retry), /没能重试，原因见 ash。/, "只推标题：换成短句");
+    assert.match(repliesTo(retry), /没能重试，原因见 Navi。/, "只推标题：换成短句");
     assert.doesNotMatch(repliesTo(retry), /没能重试：/);
     await patchOptions({ titleOnlyProjectIds: [] });
   }
@@ -409,7 +409,7 @@ try {
     const toast = await during(() => im.click("ou_bob", value), dropBob("tgb"));
     await im.settle();
     assert.doesNotMatch(JSON.stringify(toast) + sentText(), /内部客户甲/, "按钮：任务删了、他也看不到了，不带原文");
-    assert.match(JSON.stringify(toast), /没办成，原因见 ash。/);
+    assert.match(JSON.stringify(toast), /没办成，原因见 Navi。/);
   }
 
   im.reconciler.stop();

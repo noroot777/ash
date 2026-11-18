@@ -190,7 +190,7 @@ export async function writeGitIdentity(
     // 拼出来的那一种形状 —— 让「往 config 里塞一条任意命令」在这一层就没有通道，而不是
     // 依赖每个调用点都记得先过 `checkSshKeyPath`。
     if (key === "core.sshCommand" && value && sshKeyPath(value) === null) {
-      throw new ScmOperationError("core.sshCommand 只接受 ash 拼出来的形状（ssh -i \"<私钥>\" -o IdentitiesOnly=yes）", 400);
+      throw new ScmOperationError("core.sshCommand 只接受 Navi 拼出来的形状（ssh -i \"<私钥>\" -o IdentitiesOnly=yes）", 400);
     }
     try {
       await exec(

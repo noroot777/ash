@@ -108,7 +108,7 @@ try {
   assert.equal(await probeSignedPeerFingerprint(base), null);
   assert.equal(requests, 2, "签名探测最多试两次");
   await reset({ dropAll: true });
-  await assert.rejects(probePeerIdentity(base), /连不上对端 ash/);
+  await assert.rejects(probePeerIdentity(base), /连不上对端 Navi/);
   assert.equal(requests, 2, "公开身份探测最多试两次");
 
   // ⑤ 根本连不上（端口没人听）不是「旧连接已断」：不重试，照旧报。
@@ -120,7 +120,7 @@ try {
     });
   });
   assert.equal(await probeSignedPeerFingerprint(`http://127.0.0.1:${closedPort}`), null);
-  await assert.rejects(probePeerIdentity(`http://127.0.0.1:${closedPort}`), /连不上对端 ash/);
+  await assert.rejects(probePeerIdentity(`http://127.0.0.1:${closedPort}`), /连不上对端 Navi/);
 
   console.log("handoff probe retry: 撞上已断的长连接重试一次、验签不过与一直断开照旧报错 —— 全部通过");
 } finally {

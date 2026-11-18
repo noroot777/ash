@@ -18,7 +18,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
             <li><ArrowsLeftRight size={17} weight="duotone" /><span><b>顺滑接力</b><small>上下文与进度一起移动</small></span></li>
             <li><ShieldCheck size={17} weight="duotone" /><span><b>身份明确</b><small>多人协作保留清晰边界</small></span></li>
           </ul>
-          <p className="auth-brand-foot">ASH · AGENT CONTROL ROOM</p>
+          <p className="auth-brand-foot">NAVI · AGENT CONTROL ROOM</p>
         </aside>
         <main className="auth-stage-content">{children}</main>
       </div>

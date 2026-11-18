@@ -85,7 +85,7 @@ export function foldScan(scan: AshMcpNameScan, at = ""): AshMcpConfigState {
   if (off.length) {
     return { state: "disabled", serverName: off[0]![0], detail: say(off.map(([, f]) => f.detail).join("、")) };
   }
-  return absent(say(scan.missing ? "配置文件还不存在" : "没有 ash MCP 登记"));
+  return absent(say(scan.missing ? "配置文件还不存在" : "没有 Navi MCP 登记"));
 }
 
 /**
@@ -135,7 +135,7 @@ function switchVerdict(
     const found = at(path);
     if (!found) return null;
     if (!Array.isArray(found.value)) {
-      return { doubt: `根级 ${show(path)} 不是一个数组 —— 这家 CLI 拿它怎么判 ash 没实测过` };
+      return { doubt: `根级 ${show(path)} 不是一个数组 —— 这家 CLI 拿它怎么判 Navi 没实测过` };
     }
     return found.value.map(String);
   };
@@ -283,7 +283,7 @@ function putJson(
   const body = spliced.body;
   // 自己复核一遍:这一族的「真解析器」就在手上(语义全在 JSON 语法里),所以拼完能当场验。
   const back = shape.read(body);
-  if (back.state !== "present") return { why: `补上那条之后仍读不出 ash MCP 登记（${back.detail}）` };
+  if (back.state !== "present") return { why: `补上那条之后仍读不出 Navi MCP 登记（${back.detail}）` };
   return { body };
 }
 
@@ -456,7 +456,7 @@ function appendToml(text: string | null, block: string): AshMcpCompose {
   const current = text ?? "";
   const scan = scanCodexToml(current);
   if (scan.doubt) {
-    return { why: `看不准配置里有没有 ash MCP 登记（${scan.doubt}），没有自动追加，免得写出重复的表` };
+    return { why: `看不准配置里有没有 Navi MCP 登记（${scan.doubt}），没有自动追加，免得写出重复的表` };
   }
   // 整张表写成内联值之后 TOML 不许再用表头扩展 —— 照写进去 CLI 整份拒载(codex 真机实测)。
   if (scan.sealed) {

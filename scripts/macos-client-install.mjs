@@ -68,7 +68,7 @@ export async function testInstall({ root, temporary, launch, children, until, de
     ["bundled executable started by a relative path", ["./node", "600"], apps, join(appsAlias, "Ash.app/Contents/Resources")],
     // 别处的 node 按相对路径跑包里的脚本，工作目录在包外（第 3 轮审查的复现）。
     ["script by a relative path from outside the bundle", [process.execPath, "Apps [1]+ $x/Ash.app/Contents/keepalive.mjs"], appsAlias],
-    ["ash entry started through a symlink outside the bundle", [process.execPath, "run.mjs"], apps, outside],
+    ["Navi entry started through a symlink outside the bundle", [process.execPath, "run.mjs"], apps, outside],
   ];
   for (const [label, [command, ...args], into, cwd = temporary] of users) {
     const user = startUser(command, args, cwd);

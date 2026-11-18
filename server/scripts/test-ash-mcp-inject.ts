@@ -36,7 +36,7 @@ const { IS_WINDOWS } = await import("../src/platform.js");
 const { REPO_DIR } = await import("../src/paths.js");
 
 type ErrorEvent = Extract<AgentEvent, { kind: "error" }>;
-const isAshProblem = (e: AgentEvent): e is ErrorEvent => e.kind === "error" && e.message.startsWith("ash 的工具在这一回合没接上");
+const isAshProblem = (e: AgentEvent): e is ErrorEvent => e.kind === "error" && e.message.startsWith("Navi 的工具在这一回合没接上");
 const realCli = process.env.ASH_TEST_REAL_CLI === "1";
 const msg = (e: AgentEvent | null) => (e as ErrorEvent | null)?.message ?? "";
 const level = (e: AgentEvent | null) => (e as ErrorEvent | null)?.level;
@@ -101,7 +101,7 @@ try {
     assert.equal(claudeAshMcpProblem(ok, [injected], ["Bash", ...ALL]), null);
     assert.equal(claudeAshMcpProblem(ok, [{ name: "ash", status: "connected" }], ALL), null, "老版本不报 source:按连上算");
     // 只认注入的那个名字:历史名 harness 连着也不替 ash 作证
-    assert.match(msg(claudeAshMcpProblem(ok, [{ name: "harness", status: "connected", source: "user" }], ALL)), /清单里没有 ash/);
+    assert.match(msg(claudeAshMcpProblem(ok, [{ name: "harness", status: "connected", source: "user" }], ALL)), /清单里没有 ash（Navi MCP 的登记名）/);
     assert.match(msg(claudeAshMcpProblem(ok, [{ ...injected, status: "failed" }, { name: "harness", status: "connected" }], ALL)), /状态是 failed/);
     // 连上的是用户配置里那条 ⇒ 注入没生效
     assert.match(msg(claudeAshMcpProblem(ok, [{ ...injected, source: "user" }], ALL)), /注入没生效.*来源 user/);
@@ -165,7 +165,7 @@ process.stdin.on("end", () => process.exit(0));
       assert.deepEqual(good.seen.filter(isAshProblem), [], `${mode}:接上了不出声`);
       const bad = (await run(mode, [{ ...injected, status: "failed" }])).seen.filter(isAshProblem);
       assert.equal(bad.length, 1, `${mode}:claude 报 failed ⇒ 一条诊断`);
-      assert.match(bad[0]!.message, /claude 启动时报告 ash MCP 的状态是 failed/);
+      assert.match(bad[0]!.message, /claude 启动时报告 Navi MCP 的状态是 failed/);
       const narrowed = (await run(mode, [injected], without("pause_task"))).seen.filter(isAshProblem);
       assert.equal(narrowed.length, 1, `${mode}:init 里的工具清单缺了收尾出口 ⇒ 经执行器也出声`);
       assert.match(narrowed[0]!.message, /pause_task 不在 agent 手上/);
@@ -241,7 +241,7 @@ process.stdin.on("end", () => process.exit(0));
     const narrowed = readied(async () => page([{ name: "ash", tools: tools(ASH_MCP_TOOLS.filter((t) => t !== "debate_reply")) }]));
     assert.equal(await narrowed.settle(), null, "问到时已经说过,收尾不重复");
     assert.equal(said.length, 1);
-    assert.match(msg(said[0]!), /codex 连上了 ash，但 debate_reply 不在 agent 手上.*辩论里交不了发言/);
+    assert.match(msg(said[0]!), /codex 连上了 Navi，但 debate_reply 不在 agent 手上.*辩论里交不了发言/);
     said.length = 0;
 
     // 问不到:超时 / 出错 / 应答认不出 / 没有 ash ⇒ 核实不了(提示级),不折回没问题
@@ -251,10 +251,10 @@ process.stdin.on("end", () => process.exit(0));
     assert.match(msg(hungSaid), /工具清单没拿到（到回合收尾还没问到）/);
     assert.match(msg(await readied(async () => { throw new Error("Codex mcpServerStatus/list 超时"); }).settle()), /工具清单没拿到（Codex mcpServerStatus\/list 超时）/);
     assert.match(msg(await readied(async () => ({ nope: 1 })).settle()), /应答里没有 data 列表/);
-    assert.match(msg(await readied(async () => page([{ name: "kb", tools: {} }])).settle()), /清单里没有 ash/);
+    assert.match(msg(await readied(async () => page([{ name: "kb", tools: {} }])).settle()), /清单里没有 ash（Navi MCP 的登记名）/);
     const neverAsked = new CodexAshMcpStatus();
     neverAsked.update({ name: "ash", status: "ready" });
-    assert.match(msg(await neverAsked.settle()), /ash 就绪之后没有问到/);
+    assert.match(msg(await neverAsked.settle()), /Navi 就绪之后没有问到/);
     assert.deepEqual(said, [], "问不到时不当场乱说");
 
     // 启动状态:失败带原话、只说一次;没加载 / 没启动完;别家与历史名不归这里说
@@ -263,7 +263,7 @@ process.stdin.on("end", () => process.exit(0));
     const told = failed.update({ name: "ash", status: "failed", error: "MCP client for `ash` timed out after 30 seconds." });
     assert.match(msg(told), /启动失败：MCP client for `ash` timed out/, "带上 codex 的原话");
     assert.equal(await failed.settle(), null, "说过了就不再说");
-    assert.match(msg(await new CodexAshMcpStatus().settle()), /没有加载 ash MCP/);
+    assert.match(msg(await new CodexAshMcpStatus().settle()), /没有加载 Navi MCP/);
     const stuck = new CodexAshMcpStatus();
     stuck.update({ name: "ash", status: "starting" });
     assert.match(msg(await stuck.settle()), /一直没启动完成/);
@@ -280,13 +280,13 @@ process.stdin.on("end", () => process.exit(0));
     const crashed = new CodexExecAshMcp();
     crashed.stderr("2026-11-14T08:00:00Z ERROR codex_core::mcp: MCP client for `ash` failed to start: handshake closed\n");
     const crashedSaid = crashed.settle();
-    assert.match(msg(crashedSaid), /^ash 的工具在这一回合没接上（codex 报告 ash MCP 启动失败：.*handshake closed/);
+    assert.match(msg(crashedSaid), /^Navi 的工具在这一回合没接上（codex 报告 Navi MCP 启动失败：.*handshake closed/);
     assert.equal(level(crashedSaid), undefined, "点名失败的是红色诊断");
     const brokenCall = new CodexExecAshMcp();
     brokenCall.item({ type: "mcp_tool_call", server: "ash", tool: "complete_task", status: "failed" });
     const unknown = brokenCall.settle();
     assert.equal(level(unknown), "notice", "没有证据只说核实不了,提示级");
-    assert.match(msg(unknown), /codex exec，这条路上 codex 不报 ash MCP 连没连上/);
+    assert.match(msg(unknown), /codex exec，这条路上 codex 不报 Navi MCP 连没连上/);
     const split = new CodexExecAshMcp();
     split.stderr("MCP server `ash` failed to st");
     split.stderr("art and is unavailable. Continue without it.");

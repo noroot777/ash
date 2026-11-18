@@ -72,7 +72,7 @@ export async function checkRealClaude(ctx: RealCliContext): Promise<void> {
   // 变量全被换掉、又没有 PATH 那条(比如身份目录没写下来)
   const refused = await probe(ctx.allStale, ctx.currentVars);
   assert.match(refused.picked?.refused ?? "", /回合身份对不上/, "所有通道都是旧的 ⇒ MCP 拒绝启动");
-  assert.match(errorText(refused.problem), /ash 的工具在这一回合没接上（claude 启动时报告 ash MCP 的状态是 failed/,
+  assert.match(errorText(refused.problem), /Navi 的工具在这一回合没接上（claude 启动时报告 Navi MCP 的状态是 failed/,
     "不再是 connected 却交不了卷:ash 留下一条持久诊断");
 
   const side = await probe(ctx.stale, withoutTurnIdentity({}));
@@ -155,7 +155,7 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
   const refused = await probe(ctx.allStale, ctx.currentVars);
   assert.match(refused.picked?.refused ?? "", /回合身份对不上/, "所有通道都是旧的 ⇒ MCP 拒绝启动");
   assert.equal(refused.said.length, 1, `ash 留下一条诊断:${JSON.stringify(refused.said)}`);
-  assert.match(errorText(refused.said[0]!), /ash 的工具在这一回合没接上（codex 报告 ash MCP 启动失败/);
+  assert.match(errorText(refused.said[0]!), /Navi 的工具在这一回合没接上（codex 报告 Navi MCP 启动失败/);
 
   const side = await probe(ctx.stale, withoutTurnIdentity({}));
   assert.deepEqual([side.picked?.taskId, side.picked?.turnToken, side.picked?.refused], ["", "", null],

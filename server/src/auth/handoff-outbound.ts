@@ -38,7 +38,7 @@ export async function peerUserKeyHeader(url: string, expectedFp?: string | null)
   if (!credential) return {};
   if (!credential.peerFp) {
     const error = new HandoffError(
-      "这把账号 key 尚未绑定机器身份，未发送。请确认对端运行支持签名核对的 ash，再重新填写并保存 key。", 401,
+      "这把账号 key 尚未绑定机器身份，未发送。请确认对端运行支持签名核对的 Navi，再重新填写并保存 key。", 401,
     );
     error.code = HANDOFF_PEER_KEY_REQUIRED;
     throw error;

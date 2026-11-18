@@ -258,7 +258,7 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
 
   const stopped = panel([{ ...projected, status: "stopped", endedAt: "2026-08-25T11:00:00.000Z" }]);
   assert.match(stopped, /没命等到结果/, "被停掉/盯满的那两档是「还在等，但已经没命等了」");
-  assert.match(stopped, /ash 自己的哨兵/, "每一档都要给出能跨回合等的那条路");
+  assert.match(stopped, /Navi 自己的哨兵/, "每一档都要给出能跨回合等的那条路");
 }
 
 // ── 「盯到什么时候」必须如实 ────────────────────────────────────────────────

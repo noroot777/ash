@@ -129,7 +129,7 @@ export function claudeMcpEvidence(text: string): Evidence {
     // 偏掉的诊断 —— 跟派审门禁上那条是同一类（第 3 轮审查 B2）。
     const mine = rows.filter((s) => typeof s.name === "string" && wanted.has(s.name));
     if (!mine.length) {
-      return { connected: false, definite: true, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ash。` };
+      return { connected: false, definite: true, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ${ASH_MCP_SERVER_NAME}（Navi MCP 的登记名）。` };
     }
     const connected = mine.some((server) => server.status === "connected");
     const states = mine.map((server) => `${String(server.name)}=${typeof server.status === "string" && server.status ? server.status : "未知"}`).sort().join("、");
@@ -137,11 +137,11 @@ export function claudeMcpEvidence(text: string): Evidence {
       // **只说连上了，别替它断言工具在手**：init 事件写的是「server 连上没有」，不是
       // 「report_stage 暴露了没有」—— 执行器的工具白/黑名单能把具体工具挡掉，那时说
       // 「多半是它自己漏了上报」就是把限制归咎于审查者（第 2 位审查者 N2）。
-      ? { connected: true, definite: false, detail: `这条会话启动时 ash MCP 是连上的（claude 报告的状态：${states}）。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
+      ? { connected: true, definite: false, detail: `这条会话启动时 Navi MCP 是连上的（claude 报告的状态：${states}）。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
       : {
           connected: false,
           definite: mine.every((server) => typeof server.status === "string" && CLAUDE_FAILED_STATUSES.has(server.status)),
-          detail: `这条会话启动时 ash MCP 的状态是「${states}」，没有报告 connected。`,
+          detail: `这条会话启动时 Navi MCP 的状态是「${states}」，没有报告 connected。`,
         };
   }
   return null;
@@ -167,7 +167,7 @@ export function codexMcpEvidence(text: string): Evidence {
   const failed = CODEX_NAMED_ASH.filter((alias) => hits.some((line) => alias.startFailed.test(line)));
   const silent = CODEX_NAMED_ASH.filter((alias) => !failed.includes(alias));
   const picked = named.slice(-2);
-  const detail = `codex 的 stderr 里有这些跟 ash MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`;
+  const detail = `codex 的 stderr 里有这些跟 Navi MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`;
   // 全部兼容名都明确启动失败了，才敢替整个通道下结论；只坏了一份时**只说这一份的事实**，
   // 剩下那个名字登记了没有、连上没有，这份证据看不出来（见 Evidence 上面那段）。
   if (!silent.length) return { connected: false, definite: true, detail };
@@ -184,7 +184,7 @@ export function codexMcpEvidence(text: string): Evidence {
 
 // claude / codex 的 ash MCP 是起跑时由 ash 注入的（executors/ash-mcp-inject.ts），用户配置里那条
 // 登记不再起作用 —— 自查要看的是 CLI 启动时自己报的原因，不是去翻配置。
-const INJECTED_CHECK = "看执行记录里那条红色的「ash 的工具在这一回合没接上」，括号里是 CLI 启动时自己报的原因";
+const INJECTED_CHECK = "看执行记录里那条红色的「Navi 的工具在这一回合没接上」，括号里是 CLI 启动时自己报的原因";
 const HOW_TO_CHECK: Record<string, string> = {
   claude: INJECTED_CHECK,
   codex: `${INJECTED_CHECK}；走 codex exec 的回合 codex 不报启动状态，那里只有一句「核实不了」`,
@@ -273,7 +273,7 @@ export async function noteReviewerChannelGap(a: {
     text = `这一轮审查是中途断掉的：${interruption.detail}。${report}${interruption.next}`;
   } else {
     const evidence = turnEvidence(a);
-    const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
+    const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 Navi MCP 登记";
     const why = evidence
       ? evidence.detail
       // 没有证据时只能推断，措辞就得是推断：「最可能」而不是陈述一个原因。
@@ -285,7 +285,7 @@ export async function noteReviewerChannelGap(a: {
       : evidence?.connected === null
         ? `可以先点「继续本轮审查」让它接着上一次的上下文${finish}（不用重跑这一轮）；要是它说没有这个工具，按上面的自查修好再来一次。`
         : `修好之后点「继续本轮审查」，它会接着上一次的上下文${written ? "只补上报" : finish}，不用重跑这一轮。`;
-    text = `${written ? "这一轮的审查报告已经写完了，只是结论没能上报到 ash。" : `这一轮回合正常收尾了，结论却没上报到 ash。${report}`}${why}${next}`;
+    text = `${written ? "这一轮的审查报告已经写完了，只是结论没能上报到 Navi。" : `这一轮回合正常收尾了，结论却没上报到 Navi。${report}`}${why}${next}`;
   }
   const cause = noVerdictCause(interruption, written);
   await record(cause);
@@ -326,10 +326,10 @@ export async function noteTurnChannelGap(a: {
   if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
   const evidence = turnEvidence(a);
   if (!evidence?.definite) return false;
-  const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
+  const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 Navi MCP 登记";
   await appendTaskTimeline(
     a.taskId,
-    alertLine("这一轮没交卷多半不是 agent 漏了，而是它手上没有 ash 的工具：complete_task、ask_question、pause_task 都是 ash MCP 提供的，"
+    alertLine("这一轮没交卷多半不是 agent 漏了，而是它手上没有 Navi 的工具：complete_task、ask_question、pause_task 都是 Navi MCP 提供的，"
       + `通道不在，这一轮干得再好也交不上（自查：${check}）。修好之后点重试，它会从中断处接着做、只补交卷。`
       + `证据：${evidence.detail}`),
     { sessionId: a.sessId },

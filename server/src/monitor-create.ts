@@ -375,7 +375,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
         await noteProcessClue(row, null);
         return await abandonRegistration(
           row,
-          "这次开工交接恢复不了（这一侧没有放行闸，身份边条也写不下来），ash 一重启就再也定位不到它，所以不放行",
+          "这次开工交接恢复不了（这一侧没有放行闸，身份边条也写不下来），Navi 一重启就再也定位不到它，所以不放行",
           spawned,
         );
       }

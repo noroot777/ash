@@ -231,7 +231,7 @@ export function mountPreviewOpenRoutes(api: Hono): void {
     // 是**兜底**：存量记录、手填的服务端口照样能绕过判读，而这条路一旦走通，用户面对的就是
     // 一个长得跟 ash 一模一样、却要他重新粘 key 的页面。
     const self = currentListeningPort();
-    if (self !== null && service.port === self) return c.text("预览记录指到了 ash 自己，请关掉预览重开一次。", 502);
+    if (self !== null && service.port === self) return c.text("预览记录指到了 Navi 自己，请关掉预览重开一次。", 502);
     const actor = actorOf(c);
     const { getUser } = await import("./auth/store.js");
     const { SESSION_COOKIE } = await import("./auth/middleware.js");

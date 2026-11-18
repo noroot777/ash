@@ -553,7 +553,7 @@ try {
   assert.equal(changedReturnSafe.status, 409);
   const changedReturnSafeBody = (await changedReturnSafe.json()) as { error: string; forceReason?: string };
   assert.equal(changedReturnSafeBody.forceReason, "identity");
-  assert.match(changedReturnSafeBody.error, /新版 ash.*没有对应的历史存档|地址已经换机|存档已删除/);
+  assert.match(changedReturnSafeBody.error, /新版 Navi.*没有对应的历史存档|地址已经换机|存档已删除/);
   assert.doesNotMatch(changedReturnSafeBody.error, /版本过旧/);
   await api(machineB, `/tasks/${changedReturnTask.id}/handoff`, {
     method: "DELETE", headers: { "content-type": "application/json" },

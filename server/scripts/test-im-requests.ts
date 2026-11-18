@@ -66,7 +66,7 @@ try {
   const sentText = () => fake.sends().map((call) => JSON.stringify(contentOf(call))).join("\n");
   const repliesTo = (messageId: string) => fake.sends().filter((call) => call.path.includes(`/messages/${messageId}/reply`))
     .map((call) => JSON.stringify(contentOf(call))).join("\n");
-  const WITHHELD = /这次操作的结果不在飞书里显示了（([^）]+)），请到 ash 网页查看。/;
+  const WITHHELD = /这次操作的结果不在飞书里显示了（([^）]+)），请到 Navi 网页查看。/;
 
   let generation = 0;
   /** 同一个飞书账号绑给 userId（每次都是新的一次绑定）。 */

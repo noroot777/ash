@@ -85,8 +85,8 @@ export function browseCard(view: BrowseView, envelope: string): CardModel {
     ...(view.picker ? [{ text: "换个项目", value: value(envelope, "back") }] : []),
   ];
   blocks.push({ type: "buttons", buttons });
-  if (!view.base && shown.length) blocks.push({ type: "note", text: "设置 → 飞书 里填上 ash 的访问地址后，点任务就能直接打开。" });
-  else if (view.tasks.length > BROWSE_MAX && more <= 0) blocks.push({ type: "note", text: `一共 ${view.tasks.length} 个，更早的去 ash 里看。` });
+  if (!view.base && shown.length) blocks.push({ type: "note", text: "设置 → 飞书 里填上 Navi 的访问地址后，点任务就能直接打开。" });
+  else if (view.tasks.length > BROWSE_MAX && more <= 0) blocks.push({ type: "note", text: `一共 ${view.tasks.length} 个，更早的去 Navi 里看。` });
   return { title: scrubTitle(view.project.name, 40), subtitle: `${view.tasks.length} 个任务`, tone: "blue", blocks };
 }
 

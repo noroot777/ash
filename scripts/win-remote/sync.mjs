@@ -56,7 +56,7 @@ function workspaceRel() {
   const raw = String(WORKSPACE).trim();
   const bad = (why) =>
     new Error(`WIN_REMOTE_WORKSPACE=${JSON.stringify(raw)} 不能用:${why}。它必须是 repo 下的相对子目录,比如 .worktrees/win-remote`);
-  if (!raw) throw bad("空值会解析成对端 repo 根,也就是那个正在跑 ash 的主工作区");
+  if (!raw) throw bad("空值会解析成对端 repo 根,也就是那个正在跑 Navi 的主工作区");
   if (/^[a-zA-Z]:/.test(raw) || /^[\\/]/.test(raw)) throw bad("是绝对路径或 UNC 路径,越出了 repo");
   const segs = raw.split(/[\\/]+/).filter(Boolean);
   if (!segs.length) throw bad("规范化之后什么都不剩");

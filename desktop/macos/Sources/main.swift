@@ -7,16 +7,16 @@ import AppKit
 if CommandLine.arguments.contains("--start-server") {
   switch ServerLauncher.shared.ensureRunningSync(timeout: 60) {
   case .ready:
-    print("ash 服务已就绪：\(AshConfig.baseURL.absoluteString)")
+    print("Navi 服务已就绪：\(AshConfig.baseURL.absoluteString)")
     exit(0)
   case .needsSetup:
-    print("\(AshConfig.dataURL.path) 里还没有数据：先打开一次 ash 选「全新开始」或「导入已有数据」。")
+    print("\(AshConfig.dataURL.path) 里还没有数据：先打开一次 Navi 选「全新开始」或「导入已有数据」。")
     exit(0)
   case .occupied(let explanation):
     print(explanation)
     exit(1)
   case .failed(let reason):
-    print("ash 服务没起来：\(reason)")
+    print("Navi 服务没起来：\(reason)")
     exit(1)
   }
 }

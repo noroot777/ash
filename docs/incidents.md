@@ -24,15 +24,15 @@
 
 点「停止全组」后端全做对了——进程 SIGTERM、内部组置 `paused`、会话写入系统提示——但按钮原样、状态徽标不动、`paused` 前端压根没渲染，用户只能得出「按钮坏了」。
 
-更坏的是它**掩盖了真问题**：界面若明说「已停止，0 个执行者被打断（都已完成）」，用户立刻就知道还在动的鼠标不归 ash 管，而不是把一个架构缺口误报成 UI bug。
+更坏的是它**掩盖了真问题**：界面若明说「已停止，0 个执行者被打断（都已完成）」，用户立刻就知道还在动的鼠标不归 Navi 管，而不是把一个架构缺口误报成 UI bug。
 
 ---
 
-## CUA 旁路会话：ash 够不着的全局单例（2026-07-27）
+## CUA 旁路会话：Navi 够不着的全局单例（2026-07-27）
 
-对应约定：`CLAUDE.md` 的「三层击杀只覆盖 ash 自己 spawn 的进程树」。
+对应约定：`CLAUDE.md` 的「三层击杀只覆盖 Navi 自己 spawn 的进程树」。
 
-codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUseService`（**开机级全局单例**，跟着宿主 App 一起启动，不是每任务一个），ash 的进程组/fd/ppid 三条线索一条都够不着它。
+codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUseService`（**开机级全局单例**，跟着宿主 App 一起启动，不是每任务一个），Navi 的进程组/fd/ppid 三条线索一条都够不着它。
 
 **已验证有效的手段**：`stopTask` 三层击杀掉执行者后，`SkyComputerUseService` 随即消失，屏幕指示器跟着走（CUA 服务有 `shouldTerminateWhenNoClientsRemain` 语义，codex 客户端一死它就自行退出）。
 
@@ -249,7 +249,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 
 对应说明：`server/src/auth/run-env.ts` 的 `cliConfigDirForOwner`、`handoff-collect.ts` 的 `claudeProjectDir`、`handoff-import.ts` 那道「CLI 自己找得到吗」的闸。回归：`npm -w server run test:handoff-cli-config-dir`（并入 `test:handoff`）。
 
-现象只有一行红字：任务 `fvosBsZ8V7XA` 从自用机接力到一台多用户 ash（172）之后，自动续跑的那一回合 **1 秒结束**，时间线上只有一句「回合正常结束,但本回合内没有收到 complete_task 的完成确认」。那句话是**结算结果**，不是原因——它把真正的故障整个盖住了。
+现象只有一行红字：任务 `fvosBsZ8V7XA` 从自用机接力到一台多用户 Navi（172）之后，自动续跑的那一回合 **1 秒结束**，时间线上只有一句「回合正常结束,但本回合内没有收到 complete_task 的完成确认」。那句话是**结算结果**，不是原因——它把真正的故障整个盖住了。
 
 拉回对端快照后，证据链很干净：`turnStartedAt 13:27:03.325 → endedAt 13:27:04.756`，usage 全 0，`agentOffset: 761`，trace 只有 `run → usage(全0) → error: result: error_during_execution`，没有 init、没有正文、没有水位。
 
@@ -267,7 +267,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 三处让它更难查：
 
 - **导入侧那道闸拦不住它**。`handoff-import.ts` 的注释写着「只认文件写盘成功、且 CLI 自己找得到的会话」，但 claude 一路只比对文件名到没到 `arrived` 集合里；「CLI 定位得到吗」这一问当时只对 codex 追（因为 rollout 的目录深度有过教训）。于是 `cliSessionId` 被保留、`--resume` 照发——正是这个文件早就命名过的「假恢复」。
-- **CLI 说了原因，ash 没听**。`executors/claude.ts` 组织错误消息时只读 `ev.result` 和 `ev.api_error_status`；而 CLI **自身**失败时 `result` 是空的，原因只在 `errors[]` 里。用户因此只拿到一句没有信息量的 `result: error_during_execution`。更要命的是 `executors/session-lost.ts` 早就收了 `no conversation found with session id` 这条正则，注释里甚至写明「同时把同一句塞进 stream-json 的 `result.errors[]`」，还把「把库从另一台机器搬过来」列为已知入口——**识别是现成的，只是那串字符从来没送到它面前**。
+- **CLI 说了原因，Navi 没听**。`executors/claude.ts` 组织错误消息时只读 `ev.result` 和 `ev.api_error_status`；而 CLI **自身**失败时 `result` 是空的，原因只在 `errors[]` 里。用户因此只拿到一句没有信息量的 `result: error_during_execution`。更要命的是 `executors/session-lost.ts` 早就收了 `no conversation found with session id` 这条正则，注释里甚至写明「同时把同一句塞进 stream-json 的 `result.errors[]`」，还把「把库从另一台机器搬过来」列为已知入口——**识别是现成的，只是那串字符从来没送到它面前**。
 - **就算送到了这次也清不掉**。`shouldDropSession` 对 `lost` 要求退出码非零（防止 agent 正文里出现这句话就误清一条能续的会话，是有意的取舍），而对端这一回合记的 `exitStatus` 是 0——本机同参数复现是 1，这个差异没有继续追。所以自愈这条路在本例里并不成立，修必须落在「一开始就别写错目录」。
 
 修法对称成三层：`cliConfigDirForOwner` 直接读 `runEnvForOwner` 的注入结果（不另拼一次路径，判据只留一份），接力找/放两侧都用它；导入侧的闸给 claude 补上 `existsSync` 那一问，找不到就清掉 `cliSessionId` 老实开新会话；claude 执行器补读 `errors[]`。
@@ -290,7 +290,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 
 对应代码：`server/src/exit-ledger.ts`、`server/src/singleton.ts`（心跳与信号覆盖）。
 
-用户两次遇到「ash 服务好像又停了」，手动 `restart` 救回。日志 `/tmp/ash-4317.log` 里对应的痕迹只有两行 `stale singleton lock`（PID 51330、PID 65995），前后都是普通的 llm-relay 记录，中间什么都没有。
+用户两次遇到「Navi 服务好像又停了」，手动 `restart` 救回。日志 `/tmp/ash-4317.log` 里对应的痕迹只有两行 `stale singleton lock`（PID 51330、PID 65995），前后都是普通的 llm-relay 记录，中间什么都没有。
 
 **死亡时刻只能从系统日志反推**：`/usr/bin/log show` 里 `mDNSResponder` 在 `15:20:15.491` 记了一条 `DNSServiceCreateConnection STOP PID[65995](node)`，而最后一次数据库写入是 `15:20:06`（`session_turns.started_at`）。进程不是 launchd 管的，所以连 `runningboardd` 的 `termination reported by proc_exit` 都没有——那条 DNS 连接拆除是它留下的唯一一句话。
 
@@ -301,7 +301,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 | JS 崩溃 | 否 | `index.ts` 的 `uncaughtException`/`unhandledRejection` 兜底会打印，日志里没有 |
 | V8 OOM | 否 | 那会打印 `FATAL ERROR: heap out of memory` |
 | 原生崩溃（SEGV/ABRT） | 否 | `~/Library/Logs/DiagnosticReports` 当天一份 `.ips` 都没有 |
-| 内存压力击杀 | 否 | 当天唯一一份 `JetsamEvent` 是 12:53，那次被杀的是 `IntelligencePlatformComputeServi`（`reason: per-process-limit`），ash 在那份快照里还活着 |
+| 内存压力击杀 | 否 | 当天唯一一份 `JetsamEvent` 是 12:53，那次被杀的是 `IntelligencePlatformComputeServi`（`reason: per-process-limit`），Navi 在那份快照里还活着 |
 | 终端挂断 SIGHUP | 否 | 服务由 `start-detached.mjs` detached 起，自成 session、`TTY=??`，没有控制终端可挂断 |
 | `npm run restart` | 否 | 那条路只发 SIGTERM（`scripts/platform.mjs` 的 `killPid`），而 SIGTERM 会删掉单例锁 |
 | 不留话地被带走（SIGKILL，或当时还没处理器的 SIGHUP/SIGQUIT） | **是** | 下面那条判据 |
@@ -318,7 +318,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 
 心跳有两条边界，都别越：**它不能参与存活判据**——事件循环被同步活儿堵住时心跳也会停，拿它判陈旧就会把一个还活着的 server 判死，然后两个实例调度同一份库（存活判据始终是 pid + 进程启动时间 + 命令形状那三条）；**它也不是死亡时刻的上界**，只是「最后已知存活」——堵塞、睡眠、心跳落盘失败都能让间隔任意长，审查实测过权限失败导致心跳停更而进程照活。
 
-两个顺带的坑：zsh 里 `log` 被占用（报 `too many arguments`），查系统日志必须写全路径 `/usr/bin/log`；那份 12:53 的 `JetsamEvent` 里 ash 的 `lifetimeMax` 是 182030 页（≈2.85 GB 峰值），不是这次的死因，但值得留意。
+两个顺带的坑：zsh 里 `log` 被占用（报 `too many arguments`），查系统日志必须写全路径 `/usr/bin/log`；那份 12:53 的 `JetsamEvent` 里 Navi 的 `lifetimeMax` 是 182030 页（≈2.85 GB 峰值），不是这次的死因，但值得留意。
 
 ## 重启后的对账把 112 条老审查改写成 failed（2026-10-26）
 

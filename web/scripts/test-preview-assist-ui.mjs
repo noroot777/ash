@@ -4,7 +4,7 @@
 // 用户在这几分钟里会换页面、会刷新、会自己动手写脚本，还可能碰上 ash 重启或者网断一下：
 //   ① 点下去 → 看得见第几轮、看得见「停止」；
 //   ② 点停止 → 留下「已取消」（不是悄悄退回初始按钮）；
-//   ③ ash 重启把内存态吞了 → 「已随 ash 重启中断」，而且**刷新之后还在**
+//   ③ ash 重启把内存态吞了 → 「已随 Navi 重启中断」，而且**刷新之后还在**
 //      （项目约定：停止/中断必须留下持久可见的状态，判据就是刷新后还看得见）；
 //   ④ 作业正常跑完、终态过了 10 分钟被清掉 → 说的是「过期」，**不能说成重启**
 //      （服务端回的都是 job: null，靠它自报的实例身份分辨）；
@@ -123,10 +123,10 @@ try {
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   await page.getByTestId("assist-restart").click();
-  await progress.getByText("已随 ash 重启中断", { exact: false }).waitFor();
+  await progress.getByText("已随 Navi 重启中断", { exact: false }).waitFor();
   await page.reload();
   await script.waitFor();
-  await progress.getByText("已随 ash 重启中断", { exact: false }).waitFor();
+  await progress.getByText("已随 Navi 重启中断", { exact: false }).waitFor();
   assert.match(await progress.innerText(), /再点一次/, "中断之后要说清下一步怎么办");
   // 这张卡是本地记录推出来的，服务端没有对应的东西可轮询，所以必须给它一个出口。
   await dismiss();
@@ -186,7 +186,7 @@ try {
   await progress.getByText("保留你自己写的那条", { exact: false }).waitFor();
   const kept = await progress.innerText();
   assert.doesNotMatch(kept, /脚本已填进上面的输入框/, "没填进去就不能说填了");
-  assert.match(kept, /没有经过 ash 试跑/, "要说清框里这条没被验证过");
+  assert.match(kept, /没有经过 Navi 试跑/, "要说清框里这条没被验证过");
   assert.equal(await editorText(script), mine, "选了保留就还是手写那份");
 
   // ⑥b 同一张卡的另一个选择：点「用这条替换」才换

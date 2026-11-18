@@ -61,8 +61,8 @@ export function PreviewPortDriftNotice({ services, dialect, gen }: {
     {drifts.map((drift) => <div key={drift.serviceId} className="preview-port-drift-item">
       <Warning size={15} aria-hidden="true" />
       <div>
-        <b>{services.length > 1 ? `${drift.serviceName}：` : ""}这次预览起在 {drift.actual}，不是 ash 借给它的 {drift.lent}。</b>
-        <small>能接上是因为 ash 照日志里印的地址接的。但端口是命令自己定死的：同一个项目再开一份预览、或者你本机已经有一份在跑，两边就会抢 {drift.actual}。</small>
+        <b>{services.length > 1 ? `${drift.serviceName}：` : ""}这次预览起在 {drift.actual}，不是 Navi 借给它的 {drift.lent}。</b>
+        <small>能接上是因为 Navi 照日志里印的地址接的。但端口是命令自己定死的：同一个项目再开一份预览、或者你本机已经有一份在跑，两边就会抢 {drift.actual}。</small>
         {drift.fixed
           ? <>
             <small>命令里那个 {drift.actual} 换成 {previewPortRef("PORT", dialect)} 就错得开：</small>
@@ -76,7 +76,7 @@ export function PreviewPortDriftNotice({ services, dialect, gen }: {
           </>
           : <small>
             {drift.actual} 不在这条启动命令里，它来自项目的配置文件（vite.config.ts、application.yml 之类）。
-            改法是让那处读 ash 给的端口，或者在启动命令上追加覆盖参数（例如 <code>--port {previewPortRef("PORT", dialect)}</code>）。
+            改法是让那处读 Navi 给的端口，或者在启动命令上追加覆盖参数（例如 <code>--port {previewPortRef("PORT", dialect)}</code>）。
           </small>}
       </div>
       <button type="button" className="preview-port-drift-dismiss" onClick={() => setDismissed([...dismissed, scope(drift)])}

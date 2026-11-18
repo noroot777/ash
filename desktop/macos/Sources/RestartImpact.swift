@@ -29,7 +29,7 @@ struct RestartImpact: Decodable {
       out.append((item.title, item.reason.map { "会被判失败：\($0)" } ?? "会被判失败"))
     }
     for item in mcpDisrupted where seen.insert(item.id).inserted {
-      out.append((item.title, "手里握着 ash MCP，服务重启那会儿交卷可能失败"))
+      out.append((item.title, "手里握着 Navi MCP，服务重启那会儿交卷可能失败"))
     }
     return out
   }
@@ -69,9 +69,9 @@ enum RestartImpactProbe {
       return .unknown("服务没有答复：\(why)")
     case .notAsh(let what):
       // 自己那份正忙、正在重启时也会这样（比如一次 503），不能当成「端口上不是 ash」。
-      return .unknown("端口上的应答不像 ash（\(what)）")
+      return .unknown("端口上的应答不像 Navi（\(what)）")
     case .ash(let instance) where !instance.isOurs:
-      guard instance.dataDir != nil else { return .unknown("端口上的 ash 没报数据根在哪，认不出是不是这一份") }
+      guard instance.dataDir != nil else { return .unknown("端口上的 Navi 没报数据根在哪，认不出是不是这一份") }
       return .clear(.foreign(pid: instance.pid))
     case .ash(let instance):
       guard let pid = instance.pid, pid > 1 else { return .unknown("服务没报自己的进程号") }

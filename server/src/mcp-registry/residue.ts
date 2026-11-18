@@ -55,7 +55,7 @@ export function staleIn(value: string, entry: string): boolean {
 
 /** JSON 族要发布的那整条里,第一个还引用着旧 ash 脚本的字符串值(返回说给用户听的那一处)。 */
 export function staleField(value: unknown, entry: string, path = ""): string | null {
-  if (typeof value === "string") return staleIn(value, entry) ? `${path || "登记"} 还引用着旧的 ash 脚本` : null;
+  if (typeof value === "string") return staleIn(value, entry) ? `${path || "登记"} 还引用着旧的 Navi 脚本` : null;
   if (Array.isArray(value)) {
     for (const [i, item] of value.entries()) {
       const hit = staleField(item, entry, `${path}[${i}]`);
@@ -78,7 +78,7 @@ export function staleStatement(block: string, entry: string): string | null {
     const where = `[${span.table.join(".")}] 里的 ${span.path.join(".")}`;
     const values = tomlStringValues(span.value);
     if (!values) return `${where} 按 TOML 解不开,说不准它引用了什么`;
-    if (values.some((value) => staleIn(value, entry))) return `${where} 还引用着旧的 ash 脚本`;
+    if (values.some((value) => staleIn(value, entry))) return `${where} 还引用着旧的 Navi 脚本`;
   }
   return null;
 }

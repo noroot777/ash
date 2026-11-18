@@ -46,7 +46,7 @@ enum DataImport {
   static func inspect(_ url: URL) throws -> Source {
     let db = url.appendingPathComponent("ash.db")
     guard FileManager.default.fileExists(atPath: db.path) else {
-      throw Failure("\(url.path) 里没有 ash.db。要选的是 ash 的数据目录（仓库里是 data/）。")
+      throw Failure("\(url.path) 里没有 ash.db。要选的是 Navi 的数据目录（仓库里是 data/）。")
     }
     let source = AshHealth.realPath(url.path), dest = AshHealth.realPath(AshConfig.dataURL.path)
     guard source != dest else { throw Failure("这就是 app 自己的数据目录。") }
@@ -83,7 +83,7 @@ enum DataImport {
     let lock = try ServerStartLock(dataDir: dest)
     let deadline = Date().addingTimeInterval(lockTimeout)
     while try !lock.tryAcquire() {
-      guard Date() < deadline else { throw Failure("另一处正在启动 ash 服务，等它超时了。这次没有导入，可以重试。") }
+      guard Date() < deadline else { throw Failure("另一处正在启动 Navi 服务，等它超时了。这次没有导入，可以重试。") }
       Thread.sleep(forTimeInterval: 0.2)
     }
     try withExtendedLifetime(lock) { try publish(staging, into: dest) }
@@ -168,7 +168,7 @@ enum DataImport {
 
   private static func requireNoDatabase(_ dest: URL) throws {
     guard !FileManager.default.fileExists(atPath: dest.appendingPathComponent("ash.db").path) else {
-      throw Failure("\(dest.path) 里已经有一份 ash 数据了（可能另一个窗口或登录项刚点了「全新开始」）。这次没有导入，那份数据没有动。")
+      throw Failure("\(dest.path) 里已经有一份 Navi 数据了（可能另一个窗口或登录项刚点了「全新开始」）。这次没有导入，那份数据没有动。")
     }
   }
 
@@ -177,7 +177,7 @@ enum DataImport {
   /// 自带 node 跑 server 的 import-snapshot：源数据根按选的路径和它的真实路径各给一份。
   private static func prepare(_ db: URL, source: URL, dest: URL) throws -> Report {
     for part in [AshConfig.nodeURL, AshConfig.importToolURL] where !FileManager.default.fileExists(atPath: part.path) {
-      throw Failure("app 里自带的 ash 不完整（缺 \(part.path)）。重新装一次 Ash.app。")
+      throw Failure("app 里自带的 Navi 不完整（缺 \(part.path)）。重新装一次 Ash.app。")
     }
     let roots = Array(Set([source.standardizedFileURL.path, AshHealth.realPath(source.path)]))
     let tool = Process()
@@ -217,7 +217,7 @@ enum DataImport {
     defer { sqlite3_close(handle) }
     var statement: OpaquePointer?
     guard sqlite3_prepare_v2(handle, "select value from app_settings where key = 'instanceMode'", -1, &statement, nil) == SQLITE_OK else {
-      throw Failure("读不出这份库（\(String(cString: sqlite3_errmsg(handle)))），它可能不是 ash 的库。")
+      throw Failure("读不出这份库（\(String(cString: sqlite3_errmsg(handle)))），它可能不是 Navi 的库。")
     }
     defer { sqlite3_finalize(statement) }
     guard sqlite3_step(statement) == SQLITE_ROW, let text = sqlite3_column_text(statement, 0) else { return "" }

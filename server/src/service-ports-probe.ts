@@ -161,7 +161,7 @@ export async function probeOwnedPorts(
     const holders = found.pids.filter((pid) => pid !== process.pid);
     if (!holders.length) continue;
     if (!token) {
-      why ??= `端口 ${port} 上有人在听，但这条会话没有启动记号（多半是 ash 重启前起的），核不上归属`;
+      why ??= `端口 ${port} 上有人在听，但这条会话没有启动记号（多半是 Navi 重启前起的），核不上归属`;
       continue;
     }
     const lineage = await readLineage(holders, token);

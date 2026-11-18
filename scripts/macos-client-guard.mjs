@@ -89,9 +89,9 @@ export async function testInstanceGuard({ binary, env, port, windowPort, data, r
       guard.stdin.write("FLIPPED\n");
       await until(() => out.includes("BLANKED"), `guard probe (${mode}) never covered the page: ${out}`, 20000);
       assert.match(out, /BLANKED url=about:blank content=\|\|\n/,
-        `${mode}: the whole page is taken down, nothing of the other ash shown: ${out}`);
+        `${mode}: the whole page is taken down, nothing of the other Navi shown: ${out}`);
       assert.deepEqual(requests.filter((r) => r.on === "base"), [],
-        `${mode}: nothing the window sent ever reached 4317, where an old ash would have executed it`);
+        `${mode}: nothing the window sent ever reached 4317, where an old Navi would have executed it`);
       generation += 1;
       occupant = "ours";
       window = await listen(windowPort, onWindow);

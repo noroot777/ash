@@ -177,7 +177,7 @@ export interface PreviewPortRule {
 export function previewPortRule(dialect: PreviewPortDialect): PreviewPortRule {
   const port = previewPortRef("PORT", dialect);
   return {
-    lead: `ash 每次开预览都借一个空闲端口，用 ${port} 传给你的命令。`,
+    lead: `Navi 每次开预览都借一个空闲端口，用 ${port} 传给你的命令。`,
     branches: [
       {
         when: "服务自己读 PORT 环境变量（Next、Nest、Express、Spring Boot、Go…）",
@@ -221,10 +221,10 @@ export function previewCommandSamples(dialect: PreviewPortDialect): PreviewComma
  */
 export function wrongPortDialectHint(command: string, dialect: PreviewPortDialect): string | null {
   if (dialect === "cmd" && /\$\{?PORT\d?\}?/.test(command)) {
-    return "这台 ash 跑在 Windows 上，命令交给 cmd 执行：$PORT 在那儿是一串字面量，不是变量。请改写成 %PORT%。";
+    return "这台 Navi 跑在 Windows 上，命令交给 cmd 执行：$PORT 在那儿是一串字面量，不是变量。请改写成 %PORT%。";
   }
   if (dialect === "posix" && /%PORT\d?%/.test(command)) {
-    return "这台 ash 跑在类 Unix 系统上，命令交给 sh 执行：%PORT% 在那儿是一串字面量，不是变量。请改写成 $PORT。";
+    return "这台 Navi 跑在类 Unix 系统上，命令交给 sh 执行：%PORT% 在那儿是一串字面量，不是变量。请改写成 $PORT。";
   }
   return null;
 }

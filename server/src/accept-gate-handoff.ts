@@ -177,7 +177,7 @@ export async function resolveInterruptedHandoff(row: GateRow): Promise<void> {
   const delivered = typeof key === "string"
     && sessionRows.some(({ id }) => deliveredIn(sessionTranscriptPath(row.taskId, id), key));
   if (!delivered) {
-    const why = "ash 重启时这份修复输入正在投递，说不清有没有送到，为免重复没有自动重发";
+    const why = "Navi 重启时这份修复输入正在投递，说不清有没有送到，为免重复没有自动重发";
     await markHandoff(row.id, { at: now(), error: why });
     await appendTaskTimeline(row.taskId, alertLine(`门禁交接：${why}。看一眼会话里有没有这条修复要求，没有的话在验收台上点「再交一次」（日志 ${row.logPath}）。`));
   }

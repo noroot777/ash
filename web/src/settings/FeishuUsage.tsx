@@ -24,7 +24,7 @@ export function FeishuUsage({ usage, outbox }: {
         <div>
           <b>本月调用额度（{usage.month}）</b>
           <small>
-            按自然月（北京时间）计。飞书开放平台没有查询额度的接口，这里是 ash 自己记的次数，
+            按自然月（北京时间）计。飞书开放平台没有查询额度的接口，这里是 Navi 自己记的次数，
             上限照「推送」卡里填的月额度；以开发者后台的用量页为准。
           </small>
         </div>

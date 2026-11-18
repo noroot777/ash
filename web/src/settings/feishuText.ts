@@ -25,9 +25,9 @@ export function connectionView(state: ImConnectionState, error: string | null, a
     case "broken":
       return { tone: "red", label: "凭证文件坏了", detail: "库文件旁边那份飞书凭证读不出来，机器人不在线。重新保存一次凭证即可覆盖。" };
     case "preview":
-      return { tone: "neutral", label: "预览实例不连接", detail: "这是预览实例，按设计不连飞书——一个飞书应用只能连一个 ash 实例，预览要是也连上，会和正式实例抢事件。" };
+      return { tone: "neutral", label: "预览实例不连接", detail: "这是预览实例，按设计不连飞书——一个飞书应用只能连一个 Navi 实例，预览要是也连上，会和正式实例抢事件。" };
     case "not_exclusive":
-      return { tone: "amber", label: "同库多实例，不连接", detail: "同一个库正被多个 ash 实例打开。飞书会把每条事件随机交给其中一个，连上就会丢消息，所以都不连。只留一个实例后重启。" };
+      return { tone: "amber", label: "同库多实例，不连接", detail: "同一个库正被多个 Navi 实例打开。飞书会把每条事件随机交给其中一个，连上就会丢消息，所以都不连。只留一个实例后重启。" };
     case "disabled":
       return { tone: "neutral", label: "已关闭", detail: "推送总开关关着：长连接已断开，机器人下线，飞书里发消息也没人接。" };
     case "idle":

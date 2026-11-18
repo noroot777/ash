@@ -52,7 +52,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
       contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered, defer: false)
-    window.title = "ash"
+    window.title = "Navi"
     window.minSize = NSSize(width: 720, height: 480)
     window.isReleasedWhenClosed = false
     window.tabbingMode = .disallowed
@@ -104,7 +104,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     observations = [
       webView.observe(\.title, options: [.initial, .new]) { [weak self] view, _ in
         let title = view.title ?? ""
-        self?.window?.title = title.isEmpty ? "ash" : title
+        self?.window?.title = title.isEmpty ? "Navi" : title
       },
       webView.observe(\.themeColor, options: [.initial, .new]) { [weak self] view, _ in
         self?.window?.backgroundColor = view.themeColor ?? AshPalette.chrome

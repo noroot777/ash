@@ -218,7 +218,7 @@ async function warnHostAshMcp(): Promise<void> {
     if (found.state === "absent" || found.state === "disabled") gaps.push(`${agentType}（${file}）：${found.detail}`);
   }
   if (!gaps.length) return;
-  console.warn("[ash] 看这台机器的默认配置，这些 CLI 没有可用的 ash MCP 登记（ash 不替它们注入），"
+  console.warn("[ash] 看这台机器的默认配置，这些 CLI 没有可用的 Navi MCP 登记（Navi 不替它们注入），"
     + "这么跑起来的 agent 交不了卷（没有 complete_task，干完的活会记 failed）：");
   for (const line of gaps) console.warn(`  · ${line}`);
   console.warn("  接法见 docs/install.md，或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
@@ -248,7 +248,7 @@ export async function sweepPersonalAshMcp(): Promise<void> {
     }
   }
   if (!broken.length) return;
-  console.warn("[ash] 这些个人 CLI 配置目录缺 ash MCP 登记，它们的 agent 交不了卷（没有 complete_task，干完的活会记 failed）：");
+  console.warn("[ash] 这些个人 CLI 配置目录缺 Navi MCP 登记，它们的 agent 交不了卷（没有 complete_task，干完的活会记 failed）：");
   for (const line of broken) console.warn(`  · ${line}`);
 }
 

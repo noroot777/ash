@@ -49,7 +49,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     } catch (e) {
       // 拿不到状态 = 服务端不可达或比前端旧。**不放行** —— 放行会让工作台带着一堆
       // 401 渲染出来,那种画面看不出成因。
-      setError(e instanceof ApiError ? e.message : "连不上 ash 服务端");
+      setError(e instanceof ApiError ? e.message : "连不上 Navi 服务端");
       // 已经有旧状态时下面那块错误屏不出来(它只认 `!state`),所以失败必须**回给
       // 调用方**:等着这一次刷新换屏的人只有它自己知道该怎么收场。
       return false;
@@ -122,7 +122,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       <AuthShell>
         <div className="auth-card auth-card--service">
           <h1>只接受本机访问</h1>
-          <p className="auth-note">请在 ash 所在的这台机器上直接打开。</p>
+          <p className="auth-note">请在 Navi 所在的这台机器上直接打开。</p>
         </div>
       </AuthShell>
     );

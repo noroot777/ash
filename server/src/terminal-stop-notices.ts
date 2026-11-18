@@ -83,7 +83,7 @@ export function leftoverNotice(where: string, left: LaunchMember[]): string {
   }
   if (strangers.length) {
     parts.push(`跟它同组的 ${who(strangers)} 还活着：${strangers[0].reason}`
-      + ` —— 没有归属凭据，ash 不敢动它们`);
+      + ` —— 没有归属凭据，Navi 不敢动它们`);
   }
   return `${parts.join("")}，所以没法说这次启动起来的东西都停了。`
     + (strangers.length ? `要连它们一起收，请在「管理常用命令」里给这个服务填一条停止命令。` : ``);
@@ -97,7 +97,7 @@ export function leftoverNotice(where: string, left: LaunchMember[]): string {
  */
 export function truncatedNotice(open: TerminalSessionInfo, hasStopScript: boolean): string {
   return `这次启动记录了端口 ${open.ports.join("、")}，但打印的本机端口超过 ${open.ports.length} 个，`
-    + `多出来的没能记下来 —— 如果还有服务只听那些端口，ash 没问过它们。`
+    + `多出来的没能记下来 —— 如果还有服务只听那些端口，Navi 没问过它们。`
     + (hasStopScript
       ? `这次启动没法确认停净，要确认请自己去看一眼那几个端口。`
       : `要确保停净，请在「管理常用命令」里给这个服务填一条停止命令。`);
@@ -109,7 +109,7 @@ export function truncatedNotice(open: TerminalSessionInfo, hasStopScript: boolea
  */
 export function membersNotice(open: TerminalSessionInfo, hasStopScript: boolean): string {
   return `这次启动记录了端口 ${open.ports.join("、")}，但没能把同组成员列全（进程表或端口查询没答上来）`
-    + ` —— 跟它一起起来的还有谁，ash 这一趟没问到，`
+    + ` —— 跟它一起起来的还有谁，Navi 这一趟没问到，`
     + (hasStopScript ? `所以没法确认你那条停止命令收干净了。` : `所以没法说这次启动起来的东西都停了。`);
 }
 
@@ -122,7 +122,7 @@ function survivorNotice(pids: number[], hasStopScript: boolean): string {
   const head = pids.slice(0, 3).map((pid) => `pid ${pid}`).join("、");
   return `这次启动的进程组已经收掉了，但按这次启动的记号还点到 ${head}`
     + `${pids.length > 3 ? ` 等 ${pids.length} 个` : ""} 还活着 —— `
-    + `它们双 fork 之后自己脱离了进程组和会话（ash 的进程树、会话成员、累积进程组三条线索都`
+    + `它们双 fork 之后自己脱离了进程组和会话（Navi 的进程树、会话成员、累积进程组三条线索都`
     + `点不到名），所以这次启动还没停净。`
     + (hasStopScript
       ? `你那条停止命令没收掉它们，要连它们一起收请在脚本里也收掉。`
@@ -168,7 +168,7 @@ export function scanIncompleteNotice(scan: LaunchScan, scripted: boolean): strin
 
 /** ash 这一趟的成员清单没列全(`killed.complete === false`)时,端口那条道上那句话。 */
 export function killedIncompleteNotice(open: TerminalSessionInfo, scripted: boolean): string {
-  return `端口 ${open.ports.join("、")} 让出来了，但 ash 这一趟连成员清单都没列全`
+  return `端口 ${open.ports.join("、")} 让出来了，但 Navi 这一趟连成员清单都没列全`
     + `（进程表或端口查询没答上来），收掉的只是问出来的那些 —— `
     + (scripted ? "所以没法确认你那条停止命令收干净了。" : "所以没法说这次启动起来的东西都停了。");
 }
@@ -226,19 +226,19 @@ export function processStopVerdict(open: TerminalSessionInfo, scripted: boolean,
   // 组也不会空;真逃出去的那些另有 ① 那一问直接点名。
   if (open.groupAlive && killed.groupGone && killed.complete !== false) return { kind: "stopped" };
   const did = killed.complete === null
-    ? "这次启动的进程早就自己退了（服务在 ash 的进程树之外），没有进程可杀"
+    ? "这次启动的进程早就自己退了（服务在 Navi 的进程树之外），没有进程可杀"
     : killed.complete
-      ? "ash 已经把这次启动的整个进程组、以及它见过的全部后代收干净了"
-      : "ash 这一趟连成员清单都没列全（进程表或端口查询没答上来），收掉的只是问出来的那些";
+      ? "Navi 已经把这次启动的整个进程组、以及它见过的全部后代收干净了"
+      : "Navi 这一趟连成员清单都没列全（进程表或端口查询没答上来），收掉的只是问出来的那些";
   const why = PORT_TIER_AVAILABLE
     ? "可这次启动没留下任何本机端口线索：一个双 fork 之后自己 setsid 出去的后台进程，"
-      + "在进程树、会话成员、累积进程组三条线索上都点不到名，ash 看不见它，也就证明不了它不存在"
+      + "在进程树、会话成员、累积进程组三条线索上都点不到名，Navi 看不见它，也就证明不了它不存在"
     : "而当前平台无法核验本机端口，脱离了进程树的后台进程这里一条线索都没有";
   return {
     kind: "unresolved", leftovers: [], complete: false,
     // 「ash 没法确认是否停净」这半句是**固定措辞**:界面和回归都靠它认这一档,三条支路
     // 只换前因、不换这句结论。
-    notice: `${did}，${why} —— 所以 ash 没法确认是否停净，不能说这次启动起来的东西都停了。`
+    notice: `${did}，${why} —— 所以 Navi 没法确认是否停净，不能说这次启动起来的东西都停了。`
       + (scripted
         ? "停止命令已执行，但退出码为零不代表服务已经停止；要确认请自己去看一眼。"
         : "请检查服务是否仍在运行，或者在「管理常用命令」里给这个服务填一条真正停得掉它的停止命令。"),
@@ -249,9 +249,9 @@ export function processStopVerdict(open: TerminalSessionInfo, scripted: boolean,
 export function scriptLeftoverNotice(left: LaunchMember[]): string {
   return `停止命令跑完了，但停止前在跑的 ${who(left)} 还活着：${left[0].reason}。`
     + (left.some((one) => one.ours)
-      ? `它们是这次启动起来的，但 ash 不替你那条脚本强杀（你写它正是不想让 ash 直接 kill）——`
+      ? `它们是这次启动起来的，但 Navi 不替你那条脚本强杀（你写它正是不想让 Navi 直接 kill）——`
         + `要连它们一起收，请在脚本里也收掉它们。`
-      : `没有归属凭据，ash 不敢动它们，所以没法说这次启动起来的东西都停了。`);
+      : `没有归属凭据，Navi 不敢动它们，所以没法说这次启动起来的东西都停了。`);
 }
 
 /**

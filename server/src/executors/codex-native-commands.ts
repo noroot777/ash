@@ -66,7 +66,7 @@ export class CodexNativeCommands {
     if (command?.name === "goal" && (!command.args || command.args === "pause")) {
       if (!this.goal || (expected ? !matches : scopedState)) {
         const warning = expected
-          ? `${this.goal ? "原生会话里的目标与保存快照不一致" : "原生会话里没有这个目标"}；以上为 ash 保存快照。`
+          ? `${this.goal ? "原生会话里的目标与保存快照不一致" : "原生会话里没有这个目标"}；以上为 Navi 保存快照。`
           : `所选作用域没有保存目标；${this.goal ? "原生会话属于其他目标" : "原生会话中也没有目标"}。`;
         this.snapshotControl = { goal: expected ?? null, warning: `${warning}未改变原生目标、预算或已用量。使用 /goal --scopes 查看保存的目标。` };
         this.goal = expected ?? null;
@@ -165,7 +165,7 @@ export class CodexNativeCommands {
       return stringify(servers);
     }
     if (command.name === "ps") return stringify(await request("thread/backgroundTerminals/list", { threadId }));
-    if (command.name === "stop") { await request("thread/backgroundTerminals/clean", { threadId }); return "当前会话的后台终端已停止；ash 任务未取消。"; }
+    if (command.name === "stop") { await request("thread/backgroundTerminals/clean", { threadId }); return "当前会话的后台终端已停止；Navi 任务未取消。"; }
     if (command.name === "debug-config") return stringify(await request("config/read", { includeLayers: true, cwd: this.transport.cwd }));
     if (command.name === "hooks") return stringify(await request("hooks/list", { cwds: [this.transport.cwd] }));
     if (command.name === "plugins") return stringify(await request("plugin/list", { cwds: [this.transport.cwd], forceRefetch: false, marketplaceKinds: ["local"] }));

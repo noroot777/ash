@@ -94,7 +94,7 @@ async function request(method: string, path: string, body: unknown, directionTok
       if (!code || Date.now() >= deadline) {
         const waited = lastCode ? `（已重试 ${Math.round(RECONNECT_WINDOW_MS / 1000)}s，${lastCode}）` : "";
         throw new Error(
-          `连不上 ash server (${BASE})${waited}，确认它在运行（npm start）。原始错误：${e instanceof Error ? e.message : String(e)}`,
+          `连不上 Navi server (${BASE})${waited}，确认它在运行（npm start）。原始错误：${e instanceof Error ? e.message : String(e)}`,
         );
       }
       lastCode = code;

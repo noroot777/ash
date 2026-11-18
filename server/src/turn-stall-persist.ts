@@ -87,7 +87,7 @@ const journalUnavailable = ((): string | null => {
   // 读出来多少先装多少 —— 坏了一行不该连带丢掉同一份日志里其它完好的判决。
   const loaded = loadStallFailures(pendingStallVerdicts(read));
   if (read.status === "unavailable") {
-    console.warn(`[ash] 熔断判决日志有内容读不出来,这台 ash 核不了自己的判决:${read.why}`);
+    console.warn(`[ash] 熔断判决日志有内容读不出来,这台 Navi 核不了自己的判决:${read.why}`);
     return read.why;
   }
   if (loaded) console.log(`[ash] 从判决日志装回 ${loaded} 条还没结算的熔断判决`);

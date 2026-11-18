@@ -56,7 +56,7 @@ const FORM_TTL_MS = 24 * 3600_000;
 const FORM_LIMIT = 100;
 /** 飞书输入框的上限（feishu/cards.ts INPUT_MAX）：更长的要求不放进框里，随信封带着。 */
 const INPUT_MAX = 1000;
-const NO_GROUP_PROJECT = "这个群还没绑定 ash 项目：先在 ash 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用。";
+const NO_GROUP_PROJECT = "这个群还没绑定 Navi 项目：先在 Navi 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用。";
 
 /** 按名字认项目：先认一模一样的，再认包含这几个字的（不分大小写）。 */
 function projectNamed(list: Project[], name: string): Project | undefined {
@@ -67,7 +67,7 @@ function projectNamed(list: Project[], name: string): Project | undefined {
 
 export const HELP = [
   "直接回复提问卡 = 答复它（附图片、文件也行）；回复别的任务卡要以 /reply 开头，才会发给那个任务。",
-  "单聊里直接说话 = 跟 ash 助手聊（它能帮你查任务、建任务）。",
+  "单聊里直接说话 = 跟 Navi 助手聊（它能帮你查任务、建任务）。",
   "/todo —— 还有哪些事等你；积压的卡逐张推过来",
   "/tasks —— 看某个项目的任务：先选项目，点任务直接打开；/tasks 项目名 直接看",
   "/new —— 弹出建任务卡片：选项目、写要做什么，提交就开跑（标题由智能体起）；/new 后面直接跟一段话会替你先填好；要带图片、文件就和 /new 一起发，或者回复那张卡发过来",
@@ -163,9 +163,9 @@ export class CommandRunner {
         // 不行就把原因回给他（否则只剩沉默）。
         const seen = await this.deps.ash.get(ctx.principal, taskPath(taskId));
         if (!seen.ok) return this.say(ctx, `停不了：${scrubText(seen.error, 300)}`, answer,
-          { taskId, brief: "停不了，原因见 ash。" });
+          { taskId, brief: "停不了，原因见 Navi。" });
         const title = cardHeaderOf(ctx.card.content).title;
-        return this.card(ctx, "停掉任务？", `「${title}」会被停掉（可以之后在 ash 里重试续跑）。`, { command: "stop", taskId }, true,
+        return this.card(ctx, "停掉任务？", `「${title}」会被停掉（可以之后在 Navi 里重试续跑）。`, { command: "stop", taskId }, true,
           this.scoped(ctx, { kind: "task", taskId }));
       }
       case "retry": {
@@ -176,7 +176,7 @@ export class CommandRunner {
         const answer = await this.answered(ctx, { taskId });
         const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/retry"), { expectedFailure: versionOf(ctx.card.subject) });
         return this.say(ctx, result.ok ? "已重试，任务重新开始跑了。" : `没能重试：${scrubText(result.error, 300)}`, answer,
-          { taskId, ...(result.ok ? {} : { brief: "没能重试，原因见 ash。" }) });
+          { taskId, ...(result.ok ? {} : { brief: "没能重试，原因见 Navi。" }) });
       }
       default:
         // /answer、/reply 由调用方按回复卡片处理（inbound.ts toTask），走不到这里。
@@ -319,7 +319,7 @@ export class CommandRunner {
     // 请求本身被拒（参数、权限）才放回信封让他再点；5xx、没调通的任务可能已经建出来了，再点一下就是第二个：
     // 按「办完了、结局不明」收起，跟 ash 重启打断确认卡同一个说法（actions.ts recoverOne）。
     if (!created.ok && failureOf(created) === "transient") {
-      return { ok: true, final: true, tone: "orange", text: `不确定建成没有（${scrubText(created.error, 120)}）：请在 ash 里看一眼，需要的话重新发 /new。` };
+      return { ok: true, final: true, tone: "orange", text: `不确定建成没有（${scrubText(created.error, 120)}）：请在 Navi 里看一眼，需要的话重新发 /new。` };
     }
     if (!created.ok) return { ok: false, text: scrubText(created.error, 300), final: false };
     // 任务已经建出来了：后面再出什么错都不能算「没办成」—— 那会放回信封，再点一下就又建一个。
@@ -329,7 +329,7 @@ export class CommandRunner {
     return {
       ok: true, final: true, tone: run.ok ? "green" : "orange", link,
       text: run.ok ? `已建任务「${title}」${attachments.length ? `（带 ${attachments.length} 个附件）` : ""}并开跑。` : `任务已建好，但没能开跑：${scrubText(run.error, 300)}`,
-      ...(run.ok ? {} : { brief: "任务已建好，但没能开跑，原因见 ash。" }),
+      ...(run.ok ? {} : { brief: "任务已建好，但没能开跑，原因见 Navi。" }),
     };
   }
 }

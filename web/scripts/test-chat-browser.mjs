@@ -128,7 +128,7 @@ try {
   await send("@codex 请实现频道导航与任务状态卡。");
   await page.locator(".chat-task-card").getByText("运行中", { exact: false }).waitFor();
   await page.locator(".chat-task-card.is-done").waitFor();
-  await page.locator(".chat-task-card").getByText("ASH 任务 · codex").waitFor();
+  await page.locator(".chat-task-card").getByText("Navi 任务 · codex").waitFor();
   await page.screenshot({ path: `${output}/chat-desktop.png`, animations: "disabled" });
   await send("@codex 等待一下，我要测试停止。");
   await page.waitForFunction(() => document.querySelectorAll(".chat-message.is-running").length === 1);

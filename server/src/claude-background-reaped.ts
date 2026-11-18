@@ -473,5 +473,5 @@ export function backgroundReapedNotice(tally: Partial<Record<BackgroundKind, Bac
   return `这次智能体进程里起了 ${parts.join("；")}。`
     + (reaped ? "还在跑的那些已随智能体进程一并收走——" : "")
     + `它们的完成通知只注回智能体自己的会话，从来不会唤醒任务。`
-    + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
+    + `要跨回合等一件事，得用 Navi 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
 }

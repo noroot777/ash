@@ -33,7 +33,7 @@ export interface ExitHost {
 
 export const NEUTRAL_CONTENT = (why?: string) => JSON.stringify(renderCard(neutralCard(why)));
 /** 回复核不过时换上的那一句。why 只取 scope.ts 里的固定说法。 */
-export const WITHHELD_TEXT = (why: string) => `这次操作的结果不在飞书里显示了（${why}），请到 ash 网页查看。`;
+export const WITHHELD_TEXT = (why: string) => `这次操作的结果不在飞书里显示了（${why}），请到 Navi 网页查看。`;
 
 export class OutboxExits implements OutboxGuard {
   constructor(private readonly host: ExitHost) {}

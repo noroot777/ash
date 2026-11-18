@@ -470,7 +470,7 @@ export async function prepareNodeDeps(
   // 打开 worktree），预览命令照常去跑。
   if (targets.length && !ashWorktree(workspace)) {
     return targets.map((one) => {
-      const detail = "这个任务直接跑在项目检出里（没有开 worktree），ash 不往用户的项目里挂东西，"
+      const detail = "这个任务直接跑在项目检出里（没有开 worktree），Navi 不往用户的项目里挂东西，"
         + "所以没有代备依赖：给这个任务打开 worktree，或者自己在项目里装一次";
       note(logPath, `${one.rel}：${detail}`);
       return { rel: one.rel, ok: false, detail, link: null, blocked: "workspace" as const };
@@ -521,7 +521,7 @@ async function prepareOne(
   // workspaces 的树装在仓库根上，把一个成员的 package.json 单拎出去装是装不对的
   // （依赖会指回 `workspace:*` 这类只有在仓库里才解析得了的说明符）。认出来就别硬来。
   if (/"workspaces"\s*:/.test(manifest) || existsSync(join(one.dir, "pnpm-workspace.yaml"))) {
-    return fail("package.json 声明了 workspaces，隔离安装装不出正确的依赖树，ash 没有代装");
+    return fail("package.json 声明了 workspaces，隔离安装装不出正确的依赖树，Navi 没有代装");
   }
   // 同一类毛病的另一半，而且更阴：`"shared": "file:../shared"` 这种**相对**路径依赖。
   // 隔离目录不在项目里，`../shared` 于是指到 ash 缓存目录的隔壁 —— npm 照样退出码 0，
@@ -530,7 +530,7 @@ async function prepareOne(
   const relativeDep = relativeFileDep(manifest);
   if (relativeDep) {
     return fail(`package.json 里有相对路径依赖（${relativeDep}），它指的是项目里的目录，`
-      + "搬到 ash 的隔离目录里就指空了 —— 装出来是断链而不是报错，所以 ash 没有代装");
+      + "搬到 Navi 的隔离目录里就指空了 —— 装出来是断链而不是报错，所以 Navi 没有代装");
   }
 
   const cache = cacheDir(one.rel, one.pm, manifest, lock, configOf(one.dir));
@@ -539,14 +539,14 @@ async function prepareOne(
   // ② 之前装好过同样内容的一份
   if (ready(cache)) {
     touch(cache); // 「最后一次用是什么时候」——pruneNodeDeps 按它决定谁该被清掉
-    return linkTo(cached, `复用 ash 之前备好的依赖（${cached}）`);
+    return linkTo(cached, `复用 Navi 之前备好的依赖（${cached}）`);
   }
 
   // ③ 现装。**只从项目里读**：清单和锁文件复制过去，install 改写的是那份拷贝。
   const error = await once(cache, () => build(one, cache, lockName, logPath, onChild));
   if (error) return fail(error);
   touch(cache);
-  return linkTo(cached, `ash 已在项目外装好依赖（${cached}，你的项目没有被写）`);
+  return linkTo(cached, `Navi 已在项目外装好依赖（${cached}，你的项目没有被写）`);
 }
 
 /**
@@ -595,7 +595,7 @@ async function build(
   if (dangling) {
     rmSync(temp, { recursive: true, force: true });
     return `${one.pm} install 退出码是 0，但装出来的 node_modules/${dangling} 是条断链，`
-      + "这棵树用不了（多半是清单里有指向项目内目录的路径依赖），ash 没有把它当成装好了";
+      + "这棵树用不了（多半是清单里有指向项目内目录的路径依赖），Navi 没有把它当成装好了";
   }
   try {
     writeFileSync(join(temp, READY_MARK), `${one.pm}\n`);

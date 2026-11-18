@@ -49,6 +49,8 @@ import { clearSentDraft, dropSentAttachments, sentSelections, withdrawIntoBox } 
 import { replyGate, sessionlessSkills } from "./replyGate.ts";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
+/** 还没跑过时那颗键的发送方式：永远是立即发，改不动（真正的发送方式留在草稿里不碰）。 */
+const NOW_ONLY = { later: null, setLater: () => {} };
 // 菜单顶行只给第一组起名:原生命令和排在后面的技能各有 SlashMenu 画的分隔线。
 const MENU_HEADING: Record<SlashItem["kind"], string> = { ash: "叫人 · ", native: "", skill: "技能 · " };
 
@@ -90,6 +92,7 @@ export function ReplyBox({
   const currentTaskId = useRef(task.id);
   currentTaskId.current = task.id;
   const later = useLaterSend(draft);
+  const nowOnly = useLaterSend(NOW_ONLY);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // null = 没拖过;拖过的高度只当下限,照样跟着行数长高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
@@ -341,7 +344,8 @@ export function ReplyBox({
     const askCall = call?.verb === "ask" ? call : null;
     const askTarget = askCall?.target ?? null;
     if ((annotation ? gate.mute : gate.held) || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
-    const choice = annotation ? {} : later.resolve();
+    // 还没跑过时发得出去的只有查目标那一句：只带字、立即发，草稿里原有的附件和发送方式不动（服务端不收这两样）。
+    const choice = annotation || gate.unstarted ? {} : later.resolve();
     // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
     if (!choice) {
       setSendError(`${later.submitLabel}：${later.blockerOf(choice)}`);
@@ -355,9 +359,9 @@ export function ReplyBox({
     const draftAtSend = { text: value, textVersion: draft.value.textVersion };
     const laterAtSend = draft.later;
     const sentText = annotation?.text ?? value.trim();
-    const sentPaths = annotation?.attachments ?? uploads.attachments.map((attachment) => attachment.path);
+    const sentPaths = annotation?.attachments ?? (gate.unstarted ? [] : uploads.attachments.map((attachment) => attachment.path));
     // 发送结算只摘这一次提交的那几次选择（路径 + 选择记号），途中又放回的同一张图留着。
-    const sentSelection = sentSelections(uploads.attachments);
+    const sentSelection = sentSelections(gate.unstarted ? [] : uploads.attachments);
     try {
       // 改完执行器立刻按发送时，PATCH 可能还在飞 —— 回复的 POST 先到，服务端读到的
       // 仍是旧执行器，这一句照旧由旧的跑。先等写回落地，落不下去就别发：静默按旧
@@ -393,7 +397,7 @@ export function ReplyBox({
       if (!annotation) {
         clearSent(draftAtSend, sentSelection);
         // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
-        draft.setLater((current) => (current === laterAtSend ? null : current));
+        if (!gate.unstarted) draft.setLater((current) => (current === laterAtSend ? null : current));
       }
       if (askCall) calling.sent(askCall);
       return true;
@@ -595,9 +599,9 @@ export function ReplyBox({
             call={call}
             callHeld={call?.verb === "discuss" ? discussHold : baseContext.status === "loading" ? "正在确认新任务从哪开工"
               : baseContext.status === "failed" ? "确认不了新任务从哪开工，先重试" : dispatchReviewHold}
-            later={later}
+            later={gate.unstarted ? nowOnly : later}
             text={value}
-            attachments={uploads.attachments.length}
+            attachments={gate.unstarted ? 0 : uploads.attachments.length}
             uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
             queueing={queueing}
             sending={sending}

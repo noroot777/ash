@@ -275,7 +275,7 @@ export function CommandsLauncher({
                       <button
                         type="button"
                         className="cmd-pop__svc-btn is-stop"
-                        aria-label="这次启动 ash 停不掉也删不掉：我自己处理，放弃管理责任"
+                        aria-label="这次启动 Navi 停不掉也删不掉：我自己处理，放弃管理责任"
                         onClick={() => setHandoff(serviceTarget)}
                       ><HandPalm size={13} /></button>
                     )}
@@ -319,7 +319,7 @@ export function CommandsLauncher({
                             <button type="button" onClick={() => requestRun(row, "restart", row.command)} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
                             <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>
                             {needsHandoff(running) && (
-                              <button type="button" onClick={() => setHandoff(row)} aria-label={`${row.name} ash 停不掉也删不掉：我自己处理`}><HandPalm size={13} />我自己处理…</button>
+                              <button type="button" onClick={() => setHandoff(row)} aria-label={`${row.name} Navi 停不掉也删不掉：我自己处理`}><HandPalm size={13} />我自己处理…</button>
                             )}
                           </>
                         ) : (

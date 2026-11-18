@@ -65,7 +65,7 @@ const minutes = (ms: number): string => (ms / 60_000).toFixed(1);
 export function gateExitOutcome(exit: GateExit, timeoutMs = gateTimeoutMs()): GateOutcome {
   if (exit.elapsedMs !== undefined && exit.elapsedMs >= timeoutMs) return { status: "failed", exitCode: null, failure: "timeout",
     note: `命令跑了 ${minutes(exit.elapsedMs)} 分钟才退出（rc=${exit.code}），超过了 ${minutes(timeoutMs)} 分钟的上限，`
-      + "按超时处理：过了时限的退出码不作数，不论那一刻 ash 在不在场。" };
+      + "按超时处理：过了时限的退出码不作数，不论那一刻 Navi 在不在场。" };
   if (exit.infra) return { status: "interrupted", exitCode: null, failure: "launcher_failed", note: exit.infra };
   if (exit.phase === "prepare" && exit.code !== 0 && exit.code !== null && !exit.signal) {
     return { status: "failed", exitCode: exit.code, failure: "prepare_failed" };

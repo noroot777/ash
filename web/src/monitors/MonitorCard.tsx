@@ -254,7 +254,7 @@ export const MonitorCard = forwardRef<HTMLElement, {
         {reason && <p className="monitor-card__reason">{reason}</p>}
         {!logged && (
           <p className="monitor-card__readonly">
-            这是智能体自己起的 Monitor，ash 只能看不能停——它的进程在智能体的进程树里，
+            这是智能体自己起的 Monitor，Navi 只能看不能停——它的进程在智能体的进程树里，
             输出也直接进了它自己的会话。
             {/* 结束之后这句话要换一半：光一个「已停止」读起来像「等到了然后停了」，而实测
                 绝大多数是回合一结束就被 CLI 成批收走，它盯的那件事当时还在跑（整段实测行序

@@ -13,8 +13,8 @@ node scripts/win-remote.mjs test --all          # 跑三条 Windows 专属回归
 node scripts/win-remote.mjs test x --no-sync    # 跳过同步,重跑上次那份代码
 ```
 
-环境变量:`WIN_REMOTE_KEY`(对端 ash 的访问密钥——自用模式的 ash 对别处来的脚本只认这把密钥,
-不带就是 401;在那台 Windows 上打开 ash「设置 → 默认规则 → 远程访问」拿,或在它本机
+环境变量:`WIN_REMOTE_KEY`(对端 Navi 的访问密钥——自用模式的 Navi 对别处来的脚本只认这把密钥,
+不带就是 401;在那台 Windows 上打开 Navi「设置 → 默认规则 → 远程访问」拿,或在它本机
 `curl http://127.0.0.1:4317/api/remote-access`)、`WIN_REMOTE_HOST`(默认 `http://192.168.1.187:4317`)、`WIN_REMOTE_SELF`(本机对外 IP,
 自动探测不准时用)、`WIN_REMOTE_PROJECT`(对端项目 id,自动按 `repoPath` 猜歪了时用;给了不存在的
 id 会把现有项目列出来)、`WIN_REMOTE_GIT_PORT`(钉死 git daemon 端口,默认每次现挑一个空闲的)、
@@ -29,9 +29,9 @@ sync 检出、exec 的 cwd、test 的 cwd、doctor 的探针都取同一个来�
 
 ## 它是怎么通的
 
-那台机器只有两个入站端口:445(SMB,要凭证)和 4317(ash 自己)。装 OpenSSH Server 要点 UAC，
-无人值守时点不动 —— 所以**通道就是 ash 自己的终端 API**,不需要在 Windows 上装任何东西、
-也不需要管理员权限。终端 API 本身就是一个 shell,所以它和 ash 的其它接口一样要访问密钥
+那台机器只有两个入站端口:445(SMB,要凭证)和 4317(Navi 自己)。装 OpenSSH Server 要点 UAC，
+无人值守时点不动 —— 所以**通道就是 Navi 自己的终端 API**,不需要在 Windows 上装任何东西、
+也不需要管理员权限。终端 API 本身就是一个 shell,所以它和 Navi 的其它接口一样要访问密钥
 (`WIN_REMOTE_KEY`),控制面的每一跳都带着它。
 
 ```
@@ -75,7 +75,7 @@ Windows 仓库里了。快照带着未提交和未跟踪的内容,留在那儿�
 临时凭据一直存着,所以远端脚本整个包在 `try/finally` 里,失败路径也删。
 
 **落到对端的 `.worktrees/win-remote`,绝不动它的主工作区。** 那台机器上的 `D:\ai_workspace\ash`
-是**正在跑着的 ash 自己**,而且有未提交的本地改动。往那儿 checkout 等于既覆盖别人的活、又把
+是**正在跑着的 Navi 自己**,而且有未提交的本地改动。往那儿 checkout 等于既覆盖别人的活、又把
 live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析 node_modules 会逐级向上,worktree 里
 不装依赖也能跑。唯一要补的是 `node_modules/@ash/*` 的 junction —— 不补的话 `@ash/shared`
 会解析到**主仓那份**,于是你改了 shared 却测的是旧代码。「缺了就建」不够:junction **在**、却指着
@@ -110,7 +110,7 @@ live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析
 
    `WIN_REMOTE_WORKSPACE` 本身也在**一个**地方规范化并校验(`workspaceRel()`):空串、`.`、`..`、
    含 `..` 的路径、盘符开头、`/` 或 `\` 开头、UNC —— 一律拒绝并说明理由,CLI 以 1 退出。
-   空串尤其要拦:它拼出来的正是对端 repo 根,也就是那个**正在跑着 ash 的主工作区**。
+   空串尤其要拦:它拼出来的正是对端 repo 根,也就是那个**正在跑着 Navi 的主工作区**。
 2. **先摘掉目录型 reparse point,再 clean。** `git clean` 的递归删除同样会穿过 junction ——
    那四个 `@ash/*` 指着的正是主仓的 `shared`/`server`/`web`/`mcp`。摘掉的链接紧接着
    就原地重建,所以顺带也免了「junction 指错」那一半。连**枚举**都不能进 junction:
@@ -123,7 +123,7 @@ token 文件都没有,原先「删文件 vs 开发机随手关掉终端会话」
 删除那步的情况(一小时的门槛保证不会误伤正在跑的另一条命令,单条上限 10 分钟)。
 
 **一次调用只有一个期限,而且从第一次远端请求之前就开始走。** 通道的控制面全是裸 `fetch`
-(查项目、建终端会话、两次 `/input`、删会话),而裸 `fetch` 没有任何超时:对端 ash 卡死、
+(查项目、建终端会话、两次 `/input`、删会话),而裸 `fetch` 没有任何超时:对端 Navi 卡死、
 代理只接连接不回包、半开连接,这几种都不是「立刻抛错」而是**永不返回**,进程能挂到底层 TCP
 自己想通为止。早先的 `timeout` 只罩着「等回传」那一段(从会话建成之后才起算),上面这些全在
 保护之外。现在整次调用共用一个 `AbortController`:控制面每一跳都带着它,等回传的兜底也挂在它
@@ -140,7 +140,7 @@ token 文件都没有,原先「删文件 vs 开发机随手关掉终端会话」
 (至少 1 秒),开发机是 `timeout + 30s`(`CLEANUP_GRACE`),超时消息里两段分开写清楚。
 
 期限还得覆盖**进 `rexec` 之前**那一跳。CLI 的四个子命令都先查一次项目拿 `repoPath`,那次查询在
-`rexec` 的 deadline 之外 —— 对端只接连接不回包时,`doctor/sync/exec/test` 全停在「对端 ash」
+`rexec` 的 deadline 之外 —— 对端只接连接不回包时,`doctor/sync/exec/test` 全停在「对端 Navi」
 那一行不动,只能外面 kill。教训是「带 signal」不能写成调用方的义务:漏一个调用点就等于漏一条永不
 返回的路。所以 `api()` 自己兜底 —— 调用方给了 signal 就用它(整次调用共享一个 deadline),没给就
 按 `WIN_REMOTE_CONTROL_TIMEOUT`(默认 15s)现建一个,不存在「没有期限」的路径。
@@ -192,7 +192,7 @@ owner 带随机 id + ISO 时间戳也不会 ABA),并且**在句柄里重新算�
 
 ## 两个边界
 
-**通道跑在被测的 ash 里。** 改了 server 代码想看真实行为(而不是测试结果),得重启对端 ash ——
+**通道跑在被测的 Navi 里。** 改了 server 代码想看真实行为(而不是测试结果),得重启对端 Navi ——
 那会连着把这条通道一起掐了。所以默认路线是跑回归测试:它们是独立进程,不需要重启对端服务。
 
 **`exec` 的完成判据是进程退出,不是管道 EOF。** 早先版本用 `<cmd> *>&1 | Out-File`,而管道要等

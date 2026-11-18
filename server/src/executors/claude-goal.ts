@@ -8,7 +8,7 @@ import { formatGoal } from "./codex-native-commands.js";
 
 export function formatClaudeGoal(goal: CliGoal | null): string {
   if (!goal) return formatGoal(null);
-  return `${formatGoal(goal).split("\n").slice(0, 2).join("\n")}\n这是 ash 保存的目标快照；实时评估与用量见 Claude 的会话输出。`;
+  return `${formatGoal(goal).split("\n").slice(0, 2).join("\n")}\n这是 Navi 保存的目标快照；实时评估与用量见 Claude 的会话输出。`;
 }
 
 export function claudeGoalInvocation(opts: RunOpts): { input: string; args: string[]; marker: string; cleanup(): void } {

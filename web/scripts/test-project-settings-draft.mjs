@@ -22,7 +22,7 @@ try {
   const preview = page.getByRole("textbox", { name: "启动脚本", exact: true });
   const name = page.locator("label", { hasText: "项目名称" }).locator("input");
   const repoPath = page.locator("label", { hasText: "工作目录" }).locator("input");
-  const proxy = selectTrigger(page, "通过 ash 反向代理访问");
+  const proxy = selectTrigger(page, "通过 Navi 反向代理访问");
   const savePreview = page.getByRole("button", { name: "保存预览设置" });
   const scriptMode = page.getByRole("radio", { name: "自定义脚本", exact: true });
   const servicesMode = page.getByRole("radio", { name: "选择服务", exact: true });

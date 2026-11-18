@@ -356,7 +356,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       {/* 这段小字要挡住的是「它会不会乱动我的仓库」这个顾虑 —— 这一颗按钮会在用户的项目
           目录里起真进程，不说清楚就没人敢点。判定方式也得说，否则「AI 填的」在用户眼里
           和「猜的」没区别。 */}
-      <small>AI 在<b>项目目录</b>里读文件判断启动方式，ash 再借一个空闲端口把它给的脚本<b>真跑一遍</b>——端口上真有响应才算数，随后进程会被停掉，起不来就甩回去重来（最多 {job?.maxRounds ?? 3} 轮）。它被要求不改仓库里的任何文件、不替你装依赖。</small>
+      <small>AI 在<b>项目目录</b>里读文件判断启动方式，Navi 再借一个空闲端口把它给的脚本<b>真跑一遍</b>——端口上真有响应才算数，随后进程会被停掉，起不来就甩回去重来（最多 {job?.maxRounds ?? 3} 轮）。它被要求不改仓库里的任何文件、不替你装依赖。</small>
     </div>
     {error && <p className="preview-assist-error" role="alert">{error}</p>}
     {job && <PreviewAssistProgress job={job} offered={offered} applied={applied} foreign={foreign} onTakeOffered={takeOffered} onKeepMine={keepMine} onDismiss={lost ? dismiss : undefined} />}
@@ -392,7 +392,7 @@ function PreviewAssistProgress({ job, offered, applied, foreign, onTakeOffered, 
       脚本已填进上面的输入框；确认无误后点「保存预览设置」，任务里的「打开预览」就按它启动。
     </p>}
     {job.status === "succeeded" && applied === "kept" && <><p className="preview-assist-verdict">
-      已按你的选择<b>保留你自己写的那条</b>：上面输入框一个字都没动，它没有经过 ash 试跑。AI 真起来过的是这一条，要换就把它复制过去：
+      已按你的选择<b>保留你自己写的那条</b>：上面输入框一个字都没动，它没有经过 Navi 试跑。AI 真起来过的是这一条，要换就把它复制过去：
     </p><pre className="preview-assist-script">{job.script}</pre></>}
     {job.status === "succeeded" && applied === "shown" && <><p className="preview-assist-verdict">
       这条结果不是这个页面点出来的（别的页面点的，或者上一次留下的——服务端把结果留 10 分钟），所以<b>没有动上面输入框里的内容</b>。要用它就把下面这条复制过去，或者自己再点一次「AI 协助填写」：

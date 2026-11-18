@@ -198,7 +198,7 @@ server.registerTool(
     // 队列会提前推进、活着的 agent 撞 409、结算再把 canceled 覆盖成 failed —— 2026-07-21
     // 「complete_task 409 → failed 错乱」事故的根因,经过见 docs/incidents.md。正文只留禁令。
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。executorId 指执行器 profile(agents.id),为空/悬空按 agentType 默认执行器降级;model/reasoningEffort 覆盖该 profile,缺省/null=跟随执行器。这三项 ash 拉起的当前 agent 可在运行中改(下一回合生效),外部 MCP 客户端只能在任务空闲后改。\n**改不了的**:队列归属走 queue_insert / queue_remove / queue_reorder;failed/canceled 回队列等待用 requeue_task(它顺带处理位置);running/queued/awaiting_review 不能手动设。**running/queued 的 status 一律 409**——停止/取消用 stop_task(只有它会杀掉 agent 进程树),确认完成用 complete_task(回合结算只认它),都不要 patch status。",
+      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。executorId 指执行器 profile(agents.id),为空/悬空按 agentType 默认执行器降级;model/reasoningEffort 覆盖该 profile,缺省/null=跟随执行器。这三项 Navi 拉起的当前 agent 可在运行中改(下一回合生效),外部 MCP 客户端只能在任务空闲后改。\n**改不了的**:队列归属走 queue_insert / queue_remove / queue_reorder;failed/canceled 回队列等待用 requeue_task(它顺带处理位置);running/queued/awaiting_review 不能手动设。**running/queued 的 status 一律 409**——停止/取消用 stop_task(只有它会杀掉 agent 进程树),确认完成用 complete_task(回合结算只认它),都不要 patch status。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),

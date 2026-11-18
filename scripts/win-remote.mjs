@@ -48,7 +48,7 @@ async function target() {
 const inWorkspace = (p, fn) => withRemoteLock({ repoPath: p.repoPath, projectId: p.id, onNote: note }, fn);
 
 async function cmdDoctor() {
-  console.log(bold("对端 ash"));
+  console.log(bold("对端 Navi"));
   const p = await target();
   console.log(`  项目 ${p.id}  仓库 ${p.repoPath}`);
 

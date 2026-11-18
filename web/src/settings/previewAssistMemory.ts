@@ -189,9 +189,9 @@ export function lostAssistState(
 ): PreviewAssistState {
   const at = trace.round > 0 ? `第 ${trace.round} 轮` : "刚开工";
   const pending = !trace.jobId;
-  const step = sameInstance ? (pending ? "没收到启动结果" : "上一次的结果已经过期") : "已随 ash 重启中断";
+  const step = sameInstance ? (pending ? "没收到启动结果" : "上一次的结果已经过期") : "已随 Navi 重启中断";
   const error = !sameInstance
-    ? `上一次的 AI 协助跑到${at}时 ash 重启了，进度没能留下来（它是内存态的）。要继续就再点一次「AI 协助填写」。`
+    ? `上一次的 AI 协助跑到${at}时 Navi 重启了，进度没能留下来（它是内存态的）。要继续就再点一次「AI 协助填写」。`
     : pending
       ? "上一次点「AI 协助填写」时没收到服务端的回复，现在这个项目上也没有在跑的协助 —— 那一次多半没开起来。要继续就再点一次。"
       : `上一次的 AI 协助在你没看着的时候结束了，结果只保留 10 分钟、现在已经取不回来了（它跑到${at}）。要拿脚本就再点一次「AI 协助填写」。`;

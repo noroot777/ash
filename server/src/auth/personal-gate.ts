@@ -132,7 +132,7 @@ export function isHumanOnlyPath(path: string): boolean {
 }
 
 export const HUMAN_ACTION_TOKEN_REFUSAL =
-  "这个动作需要本次会话的页面凭据：请在 ash 页面上点这个开关。"
+  "这个动作需要本次会话的页面凭据：请在 Navi 页面上点这个开关。"
   + "凭据随页面下发、用一次就失效，刷新页面可以换一份新的";
 
 export const AGENT_PERSONAL_REFUSAL =

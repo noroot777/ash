@@ -40,7 +40,7 @@ enum HostMcpSetup {
       case .success(let hosts): present(hosts, window: window, quietWhenFine: false)
       case .failure(let error):
         let alert = NSAlert()
-        alert.messageText = "查不了 ash MCP 登记"
+        alert.messageText = "查不了 Navi MCP 登记"
         alert.informativeText = error.localizedDescription
         show(alert, in: window)
       }
@@ -52,7 +52,7 @@ enum HostMcpSetup {
   private static func request(_ completion: @escaping (Result<[Host], Error>) -> Void) {
     AshHealth.probe(AshConfig.windowHealthURL) { probe in
       guard let id = AshHealth.ours(probe)?.id else {
-        return DispatchQueue.main.async { completion(.failure(DataImport.Failure("端口上不是这个 app 的 ash 服务，没有去改 CLI 的登记。"))) }
+        return DispatchQueue.main.async { completion(.failure(DataImport.Failure("端口上不是这个 app 的 Navi 服务，没有去改 CLI 的登记。"))) }
       }
       send(instance: id, completion)
     }
@@ -89,11 +89,11 @@ enum HostMcpSetup {
       sections.append("\(host.agentType) 没接上：\(host.detail ?? "")")
     }
     if elsewhere.isEmpty && failed.isEmpty {
-      alert.messageText = "本机 CLI 的 ash MCP 都接好了"
+      alert.messageText = "本机 CLI 的 Navi MCP 都接好了"
       let names = hosts.map { "\($0.agentType)\($0.state == "added" ? "（刚补上）" : "")" }
-      alert.informativeText = names.isEmpty ? "这台机器上没找到能接 ash MCP 的 CLI。" : names.joined(separator: "、")
+      alert.informativeText = names.isEmpty ? "这台机器上没找到能接 Navi MCP 的 CLI。" : names.joined(separator: "、")
     } else {
-      alert.messageText = elsewhere.isEmpty ? "有 CLI 没接上 ash MCP" : "有 CLI 的 ash MCP 指向别处，没有替你改"
+      alert.messageText = elsewhere.isEmpty ? "有 CLI 没接上 Navi MCP" : "有 CLI 的 Navi MCP 指向别处，没有替你改"
       alert.informativeText = elsewhere.isEmpty
         ? "没接上的 CLI 跑完任务交不了卷，照下面的说法补上。"
         : "没接上或没指向这里的 CLI，跑完任务交不了卷。已有的登记 app 不会自动改，改不改你来定。"

@@ -104,18 +104,18 @@ export async function imGate(c: Context, next: Next): Promise<Response | void | 
   if (!principal) return null;
   const path = new URL(c.req.url).pathname;
   if (!imRouteAllowed(c.req.method, path)) {
-    return c.json({ error: "这个操作不能经飞书发起，请在 ash 页面上操作" }, 403);
+    return c.json({ error: "这个操作不能经飞书发起，请在 Navi 页面上操作" }, 403);
   }
   if (FORBIDDEN_HEADERS.some((name) => c.req.header(name))) {
     return c.json({ error: "IM 通道请求不应携带其它凭证" }, 403);
   }
   const actor = await imActorFor(principal);
-  if (!actor) return c.json({ error: "飞书绑定已失效，请在 ash 网页上重新绑定" }, 403);
+  if (!actor) return c.json({ error: "飞书绑定已失效，请在 Navi 网页上重新绑定" }, 403);
   // 验收只放「照常验收」：跳过前置命令、确认未验证都是绕过用户自己设的闸，只能在网页上点。
   if (c.req.method === "POST" && /\/accept$/.test(path)) {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
     if (body && typeof body === "object" && ("gate" in body || "confirmUnverified" in body)) {
-      return c.json({ error: "跳过验收前置命令、确认未验证只能在 ash 页面上操作" }, 403);
+      return c.json({ error: "跳过验收前置命令、确认未验证只能在 Navi 页面上操作" }, 403);
     }
   }
   setActor(c, actor);
