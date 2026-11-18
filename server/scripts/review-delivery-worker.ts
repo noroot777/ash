@@ -19,8 +19,8 @@ const run = (options: RunOpts): RunHandle => {
   execFileSync(process.execPath, ["-e", "require('fs').appendFileSync(process.argv[1],'delivered\\n')", marker!]);
   if (fault === "committed-live") {
     assert(options.detach);
-    const previousPermission = process.env.ASH_ALLOW_REAL_AGENT;
-    process.env.ASH_ALLOW_REAL_AGENT = "1";
+    const previousPermission = process.env.ASH_TEST_AGENT_BIN;
+    process.env.ASH_TEST_AGENT_BIN = process.execPath;
     try {
       const child = spawnDetachedAgent(options.cwd, process.execPath, ["-e", "setTimeout(()=>{},60000)"], "", options.detach);
       const detached = detachedInfo(child);
@@ -28,8 +28,8 @@ const run = (options: RunOpts): RunHandle => {
       return { sessionId: "review-delivery-live", commandLine: "local persistent review delivery test",
         detached, kill: () => { child.kill(); }, events: (async function* () {})() };
     } finally {
-      if (previousPermission === undefined) delete process.env.ASH_ALLOW_REAL_AGENT;
-      else process.env.ASH_ALLOW_REAL_AGENT = previousPermission;
+      if (previousPermission === undefined) delete process.env.ASH_TEST_AGENT_BIN;
+      else process.env.ASH_TEST_AGENT_BIN = previousPermission;
     }
   }
   return { sessionId: "review-delivery-test", commandLine: "local review delivery test", kill() {},

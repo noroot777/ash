@@ -8,13 +8,13 @@ import { ClaudeExecutor } from "../src/executors/claude.js";
 import type { RunHandle } from "../src/executors/types.js";
 import { IS_WINDOWS } from "../src/platform.js";
 
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 const root = mkdtempSync(join(tmpdir(), "ash-claude-steer-ack-"));
 const requestPath = join(root, "request-id");
 const gatePath = join(root, "ack-gate");
 const newInputPath = join(root, "new-input");
 const script = join(root, "fake-claude.mjs");
 const bin = IS_WINDOWS ? join(root, "claude.cmd") : script;
+process.env.ASH_TEST_AGENT_BIN = bin;
 let handle: RunHandle | null = null;
 
 const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {

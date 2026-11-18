@@ -22,7 +22,6 @@ const releaseDir = join(root, "release");
 mkdirSync(releaseDir, { recursive: true });
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_ALLOW_REAL_AGENT = "1"; // 跑的是下面这个假 claude
 process.env.ASH_LAX_DONE = "1";
 process.env.ASH_TEST_INPUT_LOG = inputLog;
 process.env.ASH_TEST_RELEASE_DIR = releaseDir;
@@ -67,6 +66,7 @@ writeFileSync(
   { mode: 0o755 },
 );
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
+process.env.ASH_TEST_AGENT_BIN = bin;
 
 export const { db, ensureSchema } = await import("../src/db/index.js");
 export const schema = await import("../src/db/schema.js");

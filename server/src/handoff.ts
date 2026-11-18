@@ -61,7 +61,7 @@ import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
-import { exportWaitOrigins } from "./handoff-wait.js";
+import { manifestTask } from "./handoff-manifest-task.js";
 import { collectGateRuns } from "./handoff-accept-gate.js";
 import { withRunFileLock } from "./run-file-lock.js";
 import { sessionContextCompact } from "./usage.js";
@@ -461,6 +461,7 @@ export async function exportHandoff(
         [
           task.body, task.resumePrompt ?? "", task.question ?? "",
           task.questionOptions ?? "", task.questionItems ?? "", task.questionHistory ?? "",
+          task.dispatchSuggestions ?? "",
           ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
           ...[...sessionFiles, ...artifacts]
             .filter((f) => isTextRel(f.rel))
@@ -485,30 +486,7 @@ export async function exportHandoff(
         ...(taskScopedReturn ? { returnTransferId: returnContext?.returnTransferId ?? null } : {}),
         autoResume,
         sourceWorkspace,
-        task: {
-          id: task.id, title: task.title, body: task.body,
-          status: task.status, stage: task.stage, labels: task.labels,
-          agentType: task.agentType, model: task.model, reasoningEffort: task.reasoningEffort,
-          autoTitle: task.autoTitle, useWorktree: task.useWorktree, worktreeBase: task.worktreeBase,
-          worktreeStartCommit: task.worktreeStartCommit, worktreeBaseBranch: task.worktreeBaseBranch, mergeTargetBranch: task.mergeTargetBranch,
-          baseTaskId: task.baseTaskId, acceptedSourceCommit: task.acceptedSourceCommit,
-          creationOrigin: task.creationOrigin,
-          workflow: task.workflow, workflowMode: task.workflowMode, workflowAt: task.workflowAt,
-          reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
-          verifyCompletedSteps: task.verifyCompletedSteps,
-          resumePrompt: task.resumePrompt, resumePromptAuto: task.resumePromptAuto, question: task.question,
-          waitOrigins: await exportWaitOrigins(task),
-          questionOptions: task.questionOptions, questionItems: task.questionItems,
-          questionHistory: task.questionHistory,
-          acceptedTargetBranch: task.acceptedTargetBranch,
-          acceptedBaseCommit: task.acceptedBaseCommit,
-          acceptedMergeCommit: task.acceptedMergeCommit,
-          acceptedMergeMethod: task.acceptedMergeMethod,
-          acceptedGateMode: task.acceptedGateMode as HandoffManifest["task"]["acceptedGateMode"],
-          acceptedGateRunId: task.acceptedGateRunId, acceptanceId: task.acceptanceId,
-          pinnedAt: task.pinnedAt,
-          createdAt: task.createdAt, startedAt: task.startedAt, endedAt: task.endedAt,
-        },
+        task: await manifestTask(task),
         sessions: rows.map((s) => ({
           id: s.id, role: s.role, agentType: s.agentType, executor: s.executor,
           turnModel: s.turnModel, turnReasoningEffort: s.turnReasoningEffort,

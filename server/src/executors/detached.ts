@@ -75,9 +75,9 @@ export function spawnControllableDetachedAgent(
   paths: DetachedPaths,
   extraEnv?: Record<string, string | undefined>,
 ): DetachedChild | ChildProcess {
-  const blocked = guardAgentSpawn(bin);
-  if (blocked) return blocked;
-  const abs = resolveBin(bin);
+  const gate = guardAgentSpawn(bin);
+  if (gate.blocked) return gate.blocked;
+  const abs = resolveBin(gate.bin);
   if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
   for (const p of [paths.out, paths.err]) {
     try { closeSync(openSync(p, "a")); } catch { /* 交给 spawn 报 */ }
@@ -206,9 +206,9 @@ export function spawnDetachedAgent(
   paths: DetachedPaths,
   extraEnv?: Record<string, string | undefined>,
 ): DetachedChild | ChildProcess {
-  const blocked = guardAgentSpawn(bin);
-  if (blocked) return blocked;
-  const abs = resolveBin(bin);
+  const gate = guardAgentSpawn(bin);
+  if (gate.blocked) return gate.blocked;
+  const abs = resolveBin(gate.bin);
   if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
 
   // 先把文件建出来:tailFile 一开始就要 open 它们,而 shell 的 >> 要等到真正

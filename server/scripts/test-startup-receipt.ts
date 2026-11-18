@@ -22,7 +22,6 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_UPLOADS_DIR = join(root, "uploads");
 process.env.CODEX_HOME = join(root, "codex-home");
-process.env.ASH_ALLOW_REAL_AGENT = "1"; // 跑的是自己装在 PATH 上的假 codex(executors/spawn.ts)
 process.env.ASH_LAX_DONE = "1";
 process.env.ASH_TURN_INPUT_ACK_MS = "1000";
 process.env.ASH_CODEX_TURN_START_ACK_MS = "1000";
@@ -62,6 +61,8 @@ writeFileSync(join(bin, "codex"),
   `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(shim)} "$@"\n`, { mode: 0o755 });
 writeFileSync(startsFile, "");
 process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
+// 只放行自己装在 PATH 上的这个假 codex(executors/spawn.ts)。
+process.env.ASH_TEST_AGENT_BIN = bin;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, scheduledMessages, tasks } = await import("../src/db/schema.js");

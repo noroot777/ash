@@ -13,9 +13,9 @@ const root = mkdtempSync(join(tmpdir(), "ash-run-notices-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_LAX_DONE = "1";
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_NOTICE_TRIGGER = join(root, "finish");
 process.env.PATH = `${root}${delimiter}${process.env.PATH ?? ""}`;
+process.env.ASH_TEST_AGENT_BIN = root;
 
 const [
   { db, ensureSchema },

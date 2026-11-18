@@ -6,7 +6,7 @@ import { readdirSync, statSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { testCleanupViolations } from "./test-process-conventions.mjs";
+import { REAL_AGENT_SCRIPTS, realAgentSwitchViolations, testCleanupViolations } from "./test-process-conventions.mjs";
 import { brandTextHits } from "./check-brand-text.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -134,6 +134,29 @@ if (cleanupHits.length) {
   console.error(`\n✗ 测试 finally 直接析构会遮盖原始错误并短路其他资源（${cleanupHits.length} 处）：`);
   for (const hit of cleanupHits) console.error("   " + hit);
   console.error("   test-process-resources.mjs 提供独立结算每项回收并保留原始错误的资源边界。\n");
+}
+
+function scriptFiles(dir, out = []) {
+  let names = [];
+  try { names = readdirSync(join(ROOT, dir)); } catch { /* 这个包没有脚本目录 */ }
+  for (const name of names) {
+    if (name === "node_modules") continue;
+    if (statSync(join(ROOT, dir, name)).isDirectory()) scriptFiles(`${dir}/${name}`, out);
+    else if (/\.(mjs|js|ts)$/.test(name)) out.push(`${dir}/${name}`);
+  }
+  return out;
+}
+const realAgentHits = ["scripts", "server/scripts", "web/scripts", "mobile/scripts", "mcp/scripts"]
+  .flatMap((dir) => scriptFiles(dir))
+  .filter((rel) => !REAL_AGENT_SCRIPTS.includes(rel))
+  .flatMap((rel) => realAgentSwitchViolations(readFileSync(join(ROOT, rel), "utf8"), rel));
+if (realAgentHits.length) {
+  failed = true;
+  console.error(`\n✗ 测试脚本把执行器隔离闸整个打开了（${realAgentHits.length} 处）：`);
+  for (const hit of realAgentHits) console.error("   " + hit);
+  console.error("   整体放行下，收尾还原 PATH 后才轮到的起跑会起机器上真的 CLI。");
+  console.error("   起的是自己铺的假 CLI 就写 process.env.ASH_TEST_AGENT_BIN = <假目录或可执行文件>；");
+  console.error("   就是要起真 CLI 的 live 脚本，登记进 scripts/test-process-conventions.mjs 的 REAL_AGENT_SCRIPTS。\n");
 }
 
 // shell 脚本里 `$VAR` 紧跟非 ASCII 字符（典型：中文标点）会被 bash 吞掉一个字节

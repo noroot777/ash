@@ -21,13 +21,6 @@ import { LONG_WIND_DOWN_STEP_MS, WIND_DOWN_SETTLEMENT_WAIT_MS, windDownWithin } 
 import { withExternalWaitBound } from "./external-wait-bound.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import type { TurnOwner } from "./turn-lock.js";
-import { pruneSuggestions, turnSuggestionPrune } from "./dispatch-suggestion.js";
-import { publishTaskUpdated } from "./task-store.js";
-
-async function pruneTurnSuggestions(taskId: string, sessId: string): Promise<void> {
-  const keep = await turnSuggestionPrune(taskId, sessId);
-  if (keep !== undefined && await pruneSuggestions(taskId, keep)) await publishTaskUpdated(taskId);
-}
 
 export type SingleRunSettlement = {
   taskId: string;
@@ -77,13 +70,6 @@ export async function settleSingleRunTurn(s: SingleRunSettlement): Promise<void>
   // 提问 / 续跑指令 / 持续目标那三支都排在非零退出之前,一个留过续跑指令的回合于是显示
   // 「暂停中 + 继续」,而同一轮区间记 failed(第 3 轮审查 F1,已实测)。落位规则仍然只有
   // 结算那一个单点,这里只负责如实报原因。
-  // 这条任务自己的执行器干净跑完一个执行回合：之前挂着、还没处理的「可以派出去的活」收掉，这一轮挂的留下
-  // （dispatch-suggestion.ts）。被停、跑挂的不算跑完；要排在结算之前，落位那一笔会清掉回合令牌。
-  if (!stopped && !executionFailed && !watchdogFailure && exitStatus === 0) {
-    step("收掉上一回合挂的可派出的活(pruneSuggestions)");
-    await pruneTurnSuggestions(taskId, sessId)
-      .catch((error) => console.error(`[ash] 收掉旧的可派出的活失败 task=${taskId}:`, error));
-  }
   step("结算任务状态(settleTaskStatus)");
   const settled = await settleTaskStatus(taskId, settleExit, stopped, sessId,
     // 原因原样交进去:判决自己带着种类,这里不做翻译 —— 两份同义枚举之间的手工映射,加一种

@@ -45,6 +45,7 @@ import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
 import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns, returningAcceptanceId } from "./handoff-accept-gate.js";
 import { newHumanGate } from "./task-human-gate.js";
+import { landedSuggestionColumns, returnedSuggestionColumns } from "./handoff-suggestions.js";
 
 export interface HandoffImportResult {
   ok: true;
@@ -201,6 +202,8 @@ async function importValidated(
     m.task.questionOptions = rwJson(m.task.questionOptions);
     m.task.questionItems = rwJson(m.task.questionItems);
     m.task.questionHistory = rwJson(m.task.questionHistory ?? null);
+    // 建议任务的说明也是 JSON 列里的文本。没带（老版本对端）的保持没带：落成 null 就成了「持有机上一件都不剩」。
+    if (m.task.dispatchSuggestions) m.task.dispatchSuggestions = rwJson(m.task.dispatchSuggestions);
     // 待发送消息:正文是纯文本,attachments 列是 JSON string[](路径以转义形态出现)。
     for (const msg of messages) {
       msg.text = applyUploadRewrites(msg.text, rewrites, "plain");
@@ -410,6 +413,7 @@ async function importValidated(
     executorId: null,
     reportBack: false,
     ...importedTaskValues,
+    ...landedSuggestionColumns(m.task),
     // 接力导入的任务归对端那个人:之后它在本机重跑、回复,烧的都是他自己的 key。
     ownerUserId: context.ownerUserId ?? null,
   };
@@ -529,6 +533,8 @@ async function importValidated(
         // 不在单任务协议里（用户 2026-08-27 确认），整行删除再插入会把它们静默清空。
         await tx.update(tasks).set({
           ...importedTaskValues,
+          // 挂着的建议任务与收回记录：带了才动，收回记录只往后接（handoff-suggestions.ts）。
+          ...await returnedSuggestionColumns(tx, m.task),
           // 执行器 id 只在本机有意义；agent 类型没变才保留原机选择，否则按类型重新解析。
           executorId: existing?.agentType === m.task.agentType ? existing.executorId : null,
         }).where(eq(tasks.id, m.task.id));

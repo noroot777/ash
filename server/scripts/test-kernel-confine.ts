@@ -425,7 +425,7 @@ if (!confine) {
   // 结构性地看不见它,于是它活下来;而两边的结论都如实,没有一边冒充清理完成。
   const home = mkdtempSync(join(tmpdir(), "ash-confine-e2e-"));
   process.env.ASH_DB = join(home, "ash.db");
-  process.env.ASH_ALLOW_REAL_AGENT = "1";
+  process.env.ASH_TEST_AGENT_BIN = process.execPath;
   const { ensureSchema } = await import("../src/db/index.js");
   await ensureSchema();
   const { detachedPathsFor, spawnForRun } = await import("../src/executors/detached.js");

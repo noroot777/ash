@@ -20,9 +20,10 @@ export type Row = typeof scheduledMessages.$inferSelect;
 export const api = new Hono();
 mountTaskRunRoutes(api);
 const log = join(root, "checkpoint-input.log");
-const environment = { path: process.env.PATH, allow: process.env.ASH_ALLOW_REAL_AGENT, log: process.env.ASH_TEST_LEAD_LOG };
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${environment.path ?? ""}`;
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+const environment = { path: process.env.PATH, staged: process.env.ASH_TEST_AGENT_BIN, log: process.env.ASH_TEST_LEAD_LOG };
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${environment.path ?? ""}`;
+process.env.ASH_TEST_AGENT_BIN = fakeBin;
 process.env.ASH_TEST_LEAD_LOG = log;
 const created: string[] = [];
 export const input = () => existsSync(log) ? readFileSync(log, "utf8") : "";
@@ -168,8 +169,8 @@ export async function cleanup(): Promise<void> {
     } finally {
       if (environment.path === undefined) delete process.env.PATH;
       else process.env.PATH = environment.path;
-      if (environment.allow === undefined) delete process.env.ASH_ALLOW_REAL_AGENT;
-      else process.env.ASH_ALLOW_REAL_AGENT = environment.allow;
+      if (environment.staged === undefined) delete process.env.ASH_TEST_AGENT_BIN;
+      else process.env.ASH_TEST_AGENT_BIN = environment.staged;
       if (environment.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
       else process.env.ASH_TEST_LEAD_LOG = environment.log;
     }
