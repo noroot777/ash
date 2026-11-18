@@ -8,7 +8,7 @@ import { isVisibleExecutionEvent, type ExecutionEvent } from "./executionTrace.t
 import { describeTool, joinVerb, type StepKind, type StepPhrase } from "./toolPhrase.ts";
 import { COMPACTED, COMPACTING, isCompactionEvent } from "./compaction.ts";
 
-export type StepView = StepPhrase & { tone: "tool" | "thinking" | "error" | "notice" };
+export type StepView = StepPhrase & { tone: "tool" | "thinking" | "error" | "notice" | "compaction" };
 
 const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -29,8 +29,8 @@ function plain(tone: StepView["tone"], verb: string, text: string): StepView {
 export function describeEvent(event: ExecutionEvent): StepView {
   if (event.kind === "tool") return { ...describeTool(event), tone: "tool" };
   if (event.kind === "thinking") return plain("thinking", "思考", event.detail ?? "");
-  // 压缩上下文是这一轮中途发生的事，一句话说完（run-9）。
-  if (isCompactionEvent(event)) return plain("notice", event.detail ?? COMPACTED, "");
+  // 压缩上下文是这一轮中途发生的事，一句话说完（run-9）。它不是上游闹脾气，不穿「提示」那身琥珀。
+  if (isCompactionEvent(event)) return plain("compaction", event.detail ?? COMPACTED, "");
   // 提示的正文在 detail 里(label 恒为「提示」,见 conversationSegments 的 auxEvent)。
   if (event.kind === "notice") return plain("notice", event.label || "提示", event.detail ?? "");
   // 异常的话在 label 里;有 detail 的(少见)点开看。

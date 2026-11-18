@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { CaretRight, File, Globe, Lightbulb, ListChecks, MagnifyingGlass, PencilSimple, Plug, Pulse, Robot, TerminalWindow, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowsInLineVertical, CaretRight, File, Globe, Lightbulb, ListChecks, MagnifyingGlass, PencilSimple, Plug, Pulse, Robot, TerminalWindow, WarningCircle, X } from "@phosphor-icons/react";
 import { isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 import { describeEvent, isFlatStep, liveLabel, mergeRetryRuns, pastSummary, type StepView } from "../lib/executionWords.ts";
 import { useSwapText } from "../lib/useSwapText.ts";
@@ -19,6 +19,8 @@ function StepIcon({ view }: { view: StepView }) {
   // 提示跟系统旁注里那身琥珀同一个图形(SystemNotice 的 eventIcon):同一类语气,
   // 换个地方出现时不该换一副长相。
   if (view.tone === "notice") return <WarningCircle {...props} weight="fill" />;
+  // 压缩：上下两头往中间那条线收。跟别的步骤同一身灰，没压成的那次走异常、照旧是红的。
+  if (view.tone === "compaction") return <ArrowsInLineVertical {...props} />;
   if (view.tone === "thinking") return <Lightbulb {...props} />;
   switch (view.kind) {
     case "read": return <File {...props} />;
