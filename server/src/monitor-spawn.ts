@@ -195,7 +195,7 @@ export type SpawnedMonitor = {
 };
 
 /** 放行闸的那段壳前缀：先从 fd 3 读一行，读不到（ash 没了）就退出，绝不执行用户的命令。 */
-const GATE_PREFIX = "IFS= read -r __ash_go <&3 || exit 97; exec 3<&-; ";
+const GATE_PREFIX = "IFS= read -r __navi_go <&3 || exit 97; exec 3<&-; ";
 
 export function spawnMonitor(
   /** `unitToken` = 这一次创建独有的资源记号(见文件头)。缺省只出现在测试台子上。 */

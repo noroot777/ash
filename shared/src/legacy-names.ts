@@ -240,7 +240,12 @@ export const FROZEN_SYNTHETIC_COMMIT_MESSAGE = "ash: 任务改动的对比基准
 //  · 模型目录请求的 User-Agent `navi/model-catalog`、中转诊断错误码 `NAVI_*`（同一进程里产生和消费）、
 //    终端包装壳的 `$0` `navi-terminal`、分发包名 `navi-<日期>-<版本>`；
 //  · claude 模型探测的 `control_request` 请求号 `navi_models_1`（同一次探测里发出、回执不按它对）；
-//  · 验收移动分支时写进用户仓库 reflog 的说明 `navi accept: <来源分支>`（没有读取方）。
+//  · 验收移动分支时写进用户仓库 reflog 的说明 `navi accept: <来源分支>`（没有读取方）；
+//  · 嵌进生成脚本、跑起来会落到进程外的字样：终端包装壳（`terminal-process-tree.ts`）在 macOS 上枚举
+//    会话成员时写的临时文件 `$TMPDIR/.navi_members.<pid>` 及同一段脚本的函数名，哨兵门闩前缀里出现在
+//    进程命令行上的变量 `__navi_go`（`monitor-spawn.ts`）。这几项是按嵌入脚本逐行的实际副作用（重定向、
+//    临时路径、导出的环境、输出给别的进程读的行）清点出来的。
 //
 // 不算约定、所以没动的：只活在本进程一个数据库连接里的 TEMP 触发器与自定义函数名（`ash_actions_*`），
-// 生成器内部占位符、shell 函数名、内部 Symbol、进程内派发用的假域名，以及测试入口的环境变量。
+// 交给 shell / PowerShell 之前就被替换掉的生成器占位符、编译进原生小工具的类名、内部 Symbol、
+// 进程内派发用的假域名，以及测试入口的环境变量。

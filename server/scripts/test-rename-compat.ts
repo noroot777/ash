@@ -10,12 +10,12 @@
 //   ⑦ setup 把 codex 里旧名的登记迁成 navi;真执行器开关的闸三代名字都拦。
 //   (④b–④g 是两轮审查补上的其余落盘/跨进程约定:验收标签、资源记号、回合身份、旧表头登记、
 //    封存标记、本机补接接口、哨兵出身、/goal 上下文、门禁 Job、冻结的 Git 落款与快照根、
-//    贮藏所有权标记、claude 打断请求号、飞书绑定码。)
+//    贮藏所有权标记、claude 打断请求号、飞书绑定码、终端包装壳的临时文件。)
 //
 // 跑:`npm -w server run test:rename-compat`
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -322,6 +322,42 @@ try {
     assert.equal(extractCode("请绑定 NAVI-ABCD-EFGH"), "ABCDEFGH");
     assert.equal(extractCode(`${legacyNames.LEGACY_IM_BIND_CODE_PREFIX}-abcd-efgh`), "ABCDEFGH");
     console.log("✓ 第三轮清点:旧标记的贮藏照样是本人的、新存的写新标记;旧打断记录接管后序号接着编;新旧绑定码都认");
+  }
+
+  // ── ④i 嵌在生成脚本里、跑起来落到进程外的字样:终端包装壳枚举会话成员时写的临时文件 ──────────────
+  {
+    // 真 PTY 里跑两种包装壳;ps 换成一个只看不改的观察者:shell 把 ps 的输出重定向到临时文件之后才轮到
+    // 它跑,它把那一刻的临时目录列出来再交给真 ps。Linux 有 /proc 时走早返回、不建这个文件,只验 macOS 这条。
+    const { TTY_COMMAND_WRAPPER, TTY_REAPER_WRAPPER } = await import("../src/terminal-process-tree.js");
+    for (const wrapper of [TTY_COMMAND_WRAPPER, TTY_REAPER_WRAPPER]) {
+      assert.ok(!/[^A-Za-z]ash_|\.ash[_.-]/.test(wrapper), "包装壳里不该再有旧名");
+    }
+    if (process.platform === "darwin") {
+      const pty = await import("node-pty");
+      const scratch = mkdtempSync(join(tmpdir(), "navi-rename-terminal-"));
+      const seen = join(scratch, "seen.txt");
+      const observer = join(scratch, "ps-observer");
+      const tmp = join(scratch, "tmp");
+      mkdirSync(tmp);
+      writeFileSync(observer, `#!/bin/sh\n/bin/ls -a "$TMPDIR" >> '${seen}'\nexec /bin/ps "$@"\n`, { mode: 0o755 });
+      for (const wrapper of [TTY_REAPER_WRAPPER, TTY_COMMAND_WRAPPER]) {
+        const terminal = pty.spawn("/bin/sh", ["-c", wrapper, "navi-terminal", "/usr/bin/true"], {
+          name: "xterm-256color", cols: 80, rows: 24, cwd: scratch,
+          env: { ...process.env, TMPDIR: tmp, NAVI_PS: observer, NAVI_PTY_PARENT: String(process.pid) },
+        });
+        const exit = await new Promise<{ exitCode: number }>((resolve, reject) => {
+          const timer = setTimeout(() => { terminal.kill(); reject(new Error("包装壳 15 秒没退出")); }, 15_000);
+          terminal.onExit((result) => { clearTimeout(timer); resolve(result); });
+        });
+        assert.equal(exit.exitCode, 0);
+      }
+      const listed = [...new Set(readFileSync(seen, "utf8").split("\n").filter((name) => name.startsWith(".") && name.length > 2))];
+      assert.equal(listed.filter((name) => /^\.navi_members\.\d+$/.test(name)).length, 2, `两种包装壳各建一次新名临时文件:${listed}`);
+      assert.ok(!listed.some((name) => /^\.ash/.test(name)), `不再建旧名临时文件:${listed}`);
+      assert.deepEqual(readdirSync(tmp), [], "用完删掉");
+      rmSync(scratch, { recursive: true, force: true });
+    }
+    console.log("✓ 生成脚本:终端包装壳枚举成员写的临时文件是新名,两种包装壳都用完即删");
   }
 
   // ── ⑤ 互斥:改名之前的服务留下的锁、占有锁、在线登记都要挡得住新版 ─────────────

@@ -218,7 +218,7 @@ export function containmentAvailable(): boolean {
 }
 
 // ── wrapper 脚本 ────────────────────────────────────────────────────────────────
-// 共享 prelude。ash_members 产出 " pid:pgid" 清单,成员判定 = 会话成员 ∪ pty fd 持有者
+// 共享 prelude。navi_members 产出 " pid:pgid" 清单,成员判定 = 会话成员 ∪ pty fd 持有者
 // (为什么是这两条、为什么必须在 leader 存活期间枚举,见文件头)。两个硬性排除,少一个
 // 都出事故:`$$`(wrapper 自己,不排除就自杀)与 `$NAVI_PTY_PARENT`(ash server:macOS
 // 的 lsof 把 pty **master** 端也解析成同一个 /dev/ttysN,不排除会把 server TERM 掉,
@@ -230,7 +230,7 @@ export function containmentAvailable(): boolean {
 //     重定向自身;pgid 查不到(ps 输出为空 = 已死的瞬时进程)的命中一律跳过。
 //   - Linux 分支用 read 内建读 stat,零 fork;fd 反查的 ls/grep 是瞬时子进程,不在循环
 //     开头展开的 /proc 通配結果里,不会自计。
-const WRAPPER_PRELUDE = `ash_bins() {
+const WRAPPER_PRELUDE = `navi_bins() {
   PSB="$NAVI_PS"
   [ -x "$PSB" ] || PSB="$(command -v ps 2>/dev/null)"
   [ -x "$PSB" ] || PSB=/bin/ps
@@ -240,7 +240,7 @@ const WRAPPER_PRELUDE = `ash_bins() {
   [ -x "$L" ] || L=/usr/sbin/lsof
   [ -x "$L" ] || L=""
 }
-ash_members() {
+navi_members() {
   MEMBERS=""
   if [ -d /proc/self/fd ]; then
     for d in /proc/[0-9]*; do
@@ -260,7 +260,7 @@ ash_members() {
   fi
   TN="\${T#/dev/}"
   if [ -n "$TN" ] && [ -n "$PSB" ]; then
-    TF="\${TMPDIR:-/tmp}/.ash_members.$$"
+    TF="\${TMPDIR:-/tmp}/.navi_members.$$"
     "$PSB" -axo pid=,pgid=,tty= </dev/null > "$TF" 2>/dev/null &
     PSPID=$!
     wait "$PSPID"
@@ -304,8 +304,8 @@ trap ':' TERM HUP
 export const TTY_REAPER_WRAPPER = `${WRAPPER_PRELUDE}"$@"
 code=$?
 T="$(tty 2>/dev/null)"
-ash_bins
-ash_members
+navi_bins
+navi_members
 if [ -n "$MEMBERS" ]; then
   for e in $MEMBERS; do
     p="\${e%%:*}"; g="\${e##*:}"
@@ -313,7 +313,7 @@ if [ -n "$MEMBERS" ]; then
     [ "$g" -gt 1 ] 2>/dev/null && kill -s TERM -- "-$g" 2>/dev/null
   done
   sleep 0.2
-  ash_members
+  navi_members
   for e in $MEMBERS; do
     p="\${e%%:*}"; g="\${e##*:}"
     kill -s KILL -- "$p" 2>/dev/null
@@ -333,9 +333,9 @@ exit $code`;
 export const TTY_COMMAND_WRAPPER = `${WRAPPER_PRELUDE}"$@"
 code=$?
 T="$(tty 2>/dev/null)"
-ash_bins
+navi_bins
 while :; do
-  ash_members
+  navi_members
   [ -z "$MEMBERS" ] && break
   sleep 2
 done
