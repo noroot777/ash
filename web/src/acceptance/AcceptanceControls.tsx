@@ -25,6 +25,7 @@ import { acceptTargetOf, sameBranch } from "./acceptTarget.ts";
 import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
 import { useReviewFacts, type FactRow } from "./useReviewFacts.ts";
 import { AutoCommitCheck, WorkspaceCheck } from "./WorkspaceCheck.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /** 宿主自己知道、这里不知道的那一道关（团队：共享执行者还没跑完）。 */
 export type HostBlock = { text: string; detail?: string };
@@ -119,7 +120,9 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     || (worktreeChecks && dependencyBlocked(plan.view, plan.error))
     || !!selectionBlock
     || (!settled && gate.occupied);
-  const loading = busy || checkingDependencies || gateLoading || facts.loading || taskFacts.pending;
+  // 读前提（依赖、门禁、事实）和这一按自己在跑是两回事：前者画「找北」，后者是键上的转圈。
+  const reading = checkingDependencies || gateLoading || facts.loading || taskFacts.pending;
+  const loading = busy || reading;
   const acceptDisabled = blocked || loading || gateUnread;
   useEffect(() => { if (blocked && confirming) setLayer(null); }, [blocked, confirming]);
 
@@ -267,7 +270,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
             </button>
             <button ref={acceptRef} type="button" className="acc-btn is-primary" aria-expanded={confirming} disabled={acceptDisabled}
               aria-busy={loading || undefined} onClick={() => (confirming ? setLayer(null) : openConfirm())}>
-              {loading ? <i className="acc-spin" aria-hidden="true" /> : <Check size={13} weight="bold" aria-hidden="true" />}{mainLabel}
+              {busy ? <i className="acc-spin" aria-hidden="true" /> : reading ? <NaviLoader size={14} className="navi-inverse" /> : <Check size={13} weight="bold" aria-hidden="true" />}{mainLabel}
             </button>
           </>}
           {trailing}
@@ -312,6 +315,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           source={plan.view?.task.sourceBranch ?? "任务分支"}
           family={family.map((row) => row.title)}
           waiting={acceptDisabled}
+          submitting={busy}
           canSetGate={!midGate && canManage === true && !!gate.state && !gate.state.command}
           onRun={setRunChoice}
           onCommit={setCommitChoice}

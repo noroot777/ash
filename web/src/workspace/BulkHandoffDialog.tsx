@@ -636,7 +636,8 @@ export function BulkHandoffDialog({
         )}
         {(phase === "approval" || phase === "transferring") && (
           <div className="handoff-bulk-progress" role="status">
-            <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />
+            {/* 等对端答复是在等内容回来（找北）；开始传了才是事情在跑（转圈）。 */}
+            {phase === "approval" ? <NaviLoader /> : <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />}
             <span>
               {phase === "approval"
                 ? "正在联系目标机…"

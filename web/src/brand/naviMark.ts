@@ -86,6 +86,7 @@ export function faviconSvg(): string {
 /**
  * 网页上标的配色与转轴。墨色、朱红跟着应用的深浅色换（根上的 data-theme，不是系统偏好）；
  * 挂 .navi-tile 的那一块是应用图标的米白底，底是定死的浅色，里面的标也定死浅底那组。
+ * .navi-inverse 给落在实心键上的标：键的底色和页面反着（浅色页上是黑键），标就取另一组。
  * vite/brand-head.ts 把它写进页面 <head>；docs/logo/build.mjs 把它嵌进 loader.svg。
  */
 export function brandCss(): string {
@@ -94,6 +95,8 @@ export function brandCss(): string {
     `:root{--navi-ink:${light.ink};--navi-north:${light.north}}` +
     `:root[data-theme="dark"]{--navi-ink:${dark.ink};--navi-north:${dark.north}}` +
     `.navi-tile{background:${tile};--navi-ink:${light.ink};--navi-north:${light.north}}` +
+    `.navi-inverse{--navi-ink:${dark.ink};--navi-north:${dark.north}}` +
+    `:root[data-theme="dark"] .navi-inverse{--navi-ink:${light.ink};--navi-north:${light.north}}` +
     `.navi-mark__needle{transform-box:view-box;transform-origin:${PIVOT}px ${PIVOT}px}`
   );
 }

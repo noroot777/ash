@@ -50,7 +50,7 @@
 .acc-icon-btn:hover, .acc-icon-btn[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
 
 .acc-spin { display: inline-block; flex: none; width: 12px; height: 12px; border: 1.5px solid color-mix(in oklab, var(--on-action) 30%, transparent); border-top-color: var(--on-action); border-radius: 50%; animation: acc-spin .8s linear infinite; }
-.acc-btn:not(.is-primary) .acc-spin, .acc-spin.is-ink { border-color: var(--line2); border-top-color: var(--ink); }
+.acc-btn:not(.is-primary) .acc-spin { border-color: var(--line2); border-top-color: var(--ink); }
 /* 主按钮转圈时跟对勾一样宽（13px），读取前后宽度不跳。 */
 .acc-btn.is-primary > .acc-spin { width: 13px; height: 13px; }
 
