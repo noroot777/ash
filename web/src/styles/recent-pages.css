@@ -80,10 +80,7 @@
   place-items: center;
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 14px;
-  /* 和应用图标同一块：米白底上的标。底是定死的浅色，所以墨色和朱红也定死浅底那组，不跟主题走。 */
-  background: #eceae4;
-  color: #111113;
-  --navi-north: #e5484d;
+  /* 底色和里面标的配色来自 .navi-tile（和应用图标同一块）。 */
   box-shadow: 0 12px 30px rgb(0 0 0 / 22%);
 }
 

@@ -25,10 +25,6 @@
   animation: auth-booting-in 240ms ease-out both;
 }
 
-.auth-booting .navi-loader {
-  color: var(--ink);
-}
-
 @keyframes auth-booting-in {
   from { opacity: 0; }
   to { opacity: 1; }

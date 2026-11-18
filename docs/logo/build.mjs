@@ -25,6 +25,7 @@ import {
   WORDMARK,
   adaptivePaint,
   adaptiveStyle,
+  brandCss,
   faviconSvg,
   fixedPaint,
   markBody,
@@ -57,9 +58,9 @@ const tile = (size, rounded = true) =>
 const lockup = (style, paint) =>
   svg(WORDMARK.viewBox, WORDMARK.width * 3, VIEW * 3, style + markBody(paint) + wordBody(paint));
 
-// 动画：和前端是同一份样式 —— 把 web/src/styles/navi-brand.css 原样嵌进来，元素结构照 NaviMark.tsx 摆。
-// 那份样式认的是 currentColor 和 --navi-north，这里把它们接到本文件跟着深浅色换的两个色上
-// （样式里的 :root 在独立的 SVG 里就是 <svg> 本身，所以这里要用更具体的选择器压过它）。
+// 动画：和前端是同一份样式 —— 页面 <head> 里那段配色与转轴（brandCss）加 web/src/styles/navi-brand.css，
+// 元素结构照 NaviMark.tsx 摆。那两段认的是 --navi-ink / --navi-north，这里把它们接到本文件跟着系统深浅色换的
+// 两个色上（brandCss 里的 :root 在独立的 SVG 里就是 <svg> 本身，所以这里要用更具体的选择器压过它）。
 function loader() {
   const css = readFileSync(join(root, "web/src/styles/navi-brand.css"), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -68,7 +69,7 @@ function loader() {
   const body = markBody((role) => (role === "north" ? `class="navi-mark__north"` : ""), "navi-mark__needle");
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" class="navi-mark navi-loader" viewBox="0 0 ${VIEW} ${VIEW}" width="256" height="256">\n` +
-    `${adaptiveStyle()}<style>${css} svg.navi-loader{color:var(--ink);--navi-north:var(--north)}</style>${body}\n</svg>\n`
+    `${adaptiveStyle()}<style>${brandCss()}${css} svg.navi-loader{--navi-ink:var(--ink);--navi-north:var(--north)}</style>${body}\n</svg>\n`
   );
 }
 

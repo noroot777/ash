@@ -149,7 +149,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
       <div className="onboarding-card">
         <aside className="onboarding-aside">
           <div className="onboarding-brand">
-            <span className="onboarding-mark"><NaviMark size={26} /></span>
+            <span className="onboarding-mark navi-tile"><NaviMark size={26} /></span>
             <b>ash</b>
             <p>把活派给本机的 claude、codex，<br />进度、审查、验收都在这一处。</p>
           </div>

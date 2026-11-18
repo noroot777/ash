@@ -1,27 +1,17 @@
 /* navi 的标（brand/NaviMark.tsx）和它的加载动画「找北」（brand/NaviLoader.tsx）。
-   墨色跟文字色走；指北那半截是品牌自己的朱红 --navi-north，只给这个标用，不拿它当强调色或报错色。
-   颜色的出处是 brand/naviMark.ts 的 COLORS，这里照抄浅、深两份。
-   docs/logo/build.mjs 把这个文件原样嵌进 loader.svg，所以这里只认 currentColor 和 --navi-north。
+   颜色和针的转轴不写在这里：--navi-ink / --navi-north 与 .navi-mark__needle 的转轴由 brand/naviMark.ts
+   生成、构建时写进页面 <head>（vite/brand-head.ts）。墨色是品牌自己的墨，不跟所在那行字的颜色走；
+   朱红只给这个标用，不拿它当强调色或报错色。
+   docs/logo/build.mjs 把这个文件原样嵌进 loader.svg，所以这里只认那两个变量。
    减少动效不用另写：全应用那一条（motion-text.css）让它跑一遍就停，停下来针正好竖着，就是静止的标。 */
-:root {
-  --navi-north: #e5484d;
-}
-:root[data-theme="dark"] {
-  --navi-north: #ff6b6b;
-}
-
 .navi-mark {
   flex: none;
   display: inline-block;
   vertical-align: -0.2em;
-  fill: currentColor;
+  fill: var(--navi-ink);
 }
 .navi-mark__north {
   fill: var(--navi-north);
-}
-.navi-mark__needle {
-  transform-box: view-box;
-  transform-origin: 12px 12px;
 }
 
 /* 一圈 1800ms：从正北甩到右边、晃回来，一下比一下小，最后两成时间竖着歇。正数是顺时针。

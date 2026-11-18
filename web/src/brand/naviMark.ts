@@ -1,5 +1,6 @@
 // navi 的标：字母 N —— 两道往前斜 20° 的杠，中间一根竖直的指南针，指北那半截是朱红。
-// 几何以这一份为准：前端的标与加载动画（NaviMark.tsx / NaviLoader.tsx）、标签页图标（vite/brand-favicon.ts）、
+// 几何和配色以这一份为准：前端的标与加载动画（NaviMark.tsx / NaviLoader.tsx）、页面上标的配色和转轴与
+// 标签页图标（都由 vite/brand-head.ts 写进页面 <head>）、
 // docs/logo 下的整套 SVG 和手机端图标（docs/logo/build.mjs）都从这里取；mac 的应用图标是把
 // docs/logo/icon.svg 栅格化出来的（desktop/macos/scripts/make-icon.swift），首启页的标就是应用图标本身。
 //
@@ -80,4 +81,19 @@ export function wordBody(paint: Paint): string {
 /** 标签页图标：标铺满整张图，颜色跟着浏览器的深浅色换（标签栏是浏览器画的，不归应用的主题管）。 */
 export function faviconSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${VIEW} ${VIEW}">${adaptiveStyle()}${markBody(adaptivePaint)}</svg>`;
+}
+
+/**
+ * 网页上标的配色与转轴。墨色、朱红跟着应用的深浅色换（根上的 data-theme，不是系统偏好）；
+ * 挂 .navi-tile 的那一块是应用图标的米白底，底是定死的浅色，里面的标也定死浅底那组。
+ * vite/brand-head.ts 把它写进页面 <head>；docs/logo/build.mjs 把它嵌进 loader.svg。
+ */
+export function brandCss(): string {
+  const { light, dark, tile } = COLORS;
+  return (
+    `:root{--navi-ink:${light.ink};--navi-north:${light.north}}` +
+    `:root[data-theme="dark"]{--navi-ink:${dark.ink};--navi-north:${dark.north}}` +
+    `.navi-tile{background:${tile};--navi-ink:${light.ink};--navi-north:${light.north}}` +
+    `.navi-mark__needle{transform-box:view-box;transform-origin:${PIVOT}px ${PIVOT}px}`
+  );
 }

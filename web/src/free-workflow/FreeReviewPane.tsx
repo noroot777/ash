@@ -150,7 +150,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
     return !state && !free.error ? "wait" : "missing";
   }, { version: [all, discussions, free.error], refresh: () => free.reload(true, true) });
 
-  if (free.loading && !state) return <div className="insp-pane"><InspConclusion tone="busy">正在读取审查记录…</InspConclusion></div>;
+  if (free.loading && !state) return <div className="insp-pane"><InspConclusion tone="loading">正在读取审查记录…</InspConclusion></div>;
   if (free.error && !state) {
     return <div className="insp-pane"><RequestMissNote miss={requestMiss} what={missedReview} /><InspNone>{free.error}</InspNone></div>;
   }
