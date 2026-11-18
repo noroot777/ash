@@ -18,7 +18,7 @@ export interface AshMcpEntry {
   command: string;
   /** 参数,通常是 `[<repo>/mcp/dist/index.js]`。 */
   args: string[];
-  /** 进程环境:至少有 ASH_URL。 */
+  /** 进程环境:至少有 NAVI_URL。 */
   env: Record<string, string>;
 }
 

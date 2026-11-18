@@ -1,3 +1,4 @@
+import { readEnv } from "@ash/shared/env-names";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
@@ -125,14 +126,14 @@ export function failedChild(message: string): ChildProcess {
 export type SpawnGate = { blocked: ChildProcess } | { blocked: null; bin: string };
 
 export function guardAgentSpawn(bin: string): SpawnGate {
-  if (!process.env.ASH_RUNS_DIR || process.env.ASH_ALLOW_REAL_AGENT === "1") return { blocked: null, bin };
+  if (!readEnv(process.env, "NAVI_RUNS_DIR") || readEnv(process.env, "NAVI_ALLOW_REAL_AGENT") === "1") return { blocked: null, bin };
   const vetted = vetStagedLaunch(bin);
   return "launch" in vetted ? { blocked: null, bin: vetted.launch } : { blocked: failedChild(vetted.refusal) };
 }
 
 /** 隔离环境里唯一能产出放行的地方：要么一条核验过的绝对路径，要么拒绝的理由，没有「原名照过」这一支。 */
 function vetStagedLaunch(bin: string): { launch: string } | { refusal: string } {
-  const staged = splitPathList(process.env.ASH_TEST_AGENT_BIN).map(stagedRoot).filter((root) => root !== null);
+  const staged = splitPathList(readEnv(process.env, "NAVI_TEST_AGENT_BIN")).map(stagedRoot).filter((root) => root !== null);
   if (!staged.length) {
     return { refusal: `测试隔离环境禁止启动真执行器 ${bin}；`
       + "这个测试若就是要验证进程管理，把自己铺的假 CLI 所在目录列进 ASH_TEST_AGENT_BIN" };

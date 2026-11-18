@@ -18,7 +18,7 @@ import { join } from "node:path";
 import type { PreviewMode } from "@ash/shared/preview";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { isPidAlive, isProcessGroupAlive, killTree } from "./platform.js";
-import { afterLoginShell, previewBaseEnv, previewScriptLaunch } from "./preview-env.js";
+import { afterLoginShell, previewScriptLaunch, previewSpawnEnv } from "./preview-env.js";
 import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, stripAnsi } from "./preview-log.js";
 import { nodeDepsAdvice } from "./preview-deps.js";
 import { canConnect, ready } from "./preview-probe.js";
@@ -74,12 +74,12 @@ export async function trialPreviewScript(options: PreviewTrialOptions): Promise<
   const ports = await freePorts(PORT_POOL);
   const lent = ports[0] ?? null;
   const env = portEnv(ports);
-  env.ASH_PREVIEW_BASE = "/";
+  env.NAVI_PREVIEW_BASE = "/";
   // 「只起前端」那一档的脚本要把 /api 打回这台 ash，正式预览给的就是这个值（不猜，绑上了
   // 才有）。试跑不给它，那一档的脚本会在启动时就连不上后端，判出来的失败跟真实预览对不上。
   const hostApiUrl = boundListeningPort() === null ? null : `http://127.0.0.1:${boundListeningPort()}`;
-  if (hostApiUrl) env.ASH_HOST_API = hostApiUrl;
-  const banner = `$ ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${mode} ${script}\n`;
+  if (hostApiUrl) env.NAVI_HOST_API = hostApiUrl;
+  const banner = `$ ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none NAVI_PREVIEW=1 NAVI_PREVIEW_MODE=${mode} ${script}\n`;
   // Windows 的多行脚本要落成 .cmd 才跑得起来（previewScriptLaunch），那个文件写在 ash 自己
   // 的临时目录里 —— 写进用户仓库就是往人家的 git status 里塞垃圾。
   const dir = mkdtempSync(join(tmpdir(), "ash-preview-trial-"));
@@ -96,7 +96,7 @@ export async function trialPreviewScript(options: PreviewTrialOptions): Promise<
       windowsHide: true,
       windowsVerbatimArguments: launch.windowsVerbatimArguments,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...previewBaseEnv(cwd), ...env, ASH_PREVIEW: "1", ASH_PREVIEW_MODE: mode, BROWSER: "none" },
+      env: previewSpawnEnv(cwd, { ...env, NAVI_PREVIEW: "1", NAVI_PREVIEW_MODE: mode, BROWSER: "none" }),
     });
     const absorb = (chunk: Buffer | string) => {
       text = (text + stripAnsi(String(chunk))).slice(-LOG_LIMIT);

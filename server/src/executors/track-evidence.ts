@@ -3,6 +3,7 @@
 //
 // 从 kill.ts 搬出来的理由同 child-identity.ts:三摊各自顶着 700 行,而这一摊的使用方
 // (击杀、逃逸枚举、清理责任)谁都只用得到它的几个入口。
+import { readEnv } from "@ash/shared/env-names";
 import { execFile } from "node:child_process";
 import type { ChildProcess, ExecFileException } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -338,8 +339,8 @@ export function openTrackFd(): { fd: number | null; path: string | null } {
 // 一个进程,会话长过一分钟,早已 close 的回合的证据就全没了),改成「注册后 24 小时」之后
 // 判据还是时长 —— 团队没有 24 小时寿命上限,持续有消息就能跨过去,跨过之后清理还在用这个
 // 文件取证(第 3 轮审查 F2 实测:心跳从 86 涨到 225,`stopResult=false`)。
-const TRACK_TAIL_MS = Number(process.env.ASH_TRACK_EVIDENCE_MS ?? 60_000);
-const TRACK_RECHECK_MS = Number(process.env.ASH_TRACK_EVIDENCE_RECHECK_MS ?? 10 * 60 * 1000);
+const TRACK_TAIL_MS = Number(readEnv(process.env, "NAVI_TRACK_EVIDENCE_MS") ?? 60_000);
+const TRACK_RECHECK_MS = Number(readEnv(process.env, "NAVI_TRACK_EVIDENCE_RECHECK_MS") ?? 10 * 60 * 1000);
 
 // 按**路径**记而不是按 ChildProcess 记:shareTrackFdRegistration 会让合成句柄和真进程两个
 // 对象指向同一个文件,它们说的是同一份租约。`WeakRef` 是为了不让租约反过来钉住句柄 ——

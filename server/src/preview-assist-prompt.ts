@@ -9,10 +9,10 @@
 import { PREVIEW_ASSIST_MARKER } from "@ash/shared/preview-assist";
 import { PREVIEW_MODE_LABELS, previewPortDialect, previewPortRuleText, previewPortRef, type PreviewMode } from "@ash/shared/preview";
 
-/** 每一档 `$ASH_PREVIEW_MODE` 对脚本作者的意思。四档只有认这个变量的脚本才有区别。 */
+/** 每一档 `$NAVI_PREVIEW_MODE` 对脚本作者的意思。四档只有认这个变量的脚本才有区别。 */
 const MODE_NOTE: Record<PreviewMode, string> = {
   command: "按项目自己的启动命令来，Navi 不额外要求起什么。",
-  frontend: "只起前端；这一档的脚本通常把 /api 打回正在跑的这台 Navi（地址在 $ASH_HOST_API）。",
+  frontend: "只起前端；这一档的脚本通常把 /api 打回正在跑的这台 Navi（地址在 $NAVI_HOST_API）。",
   full: "前后端都要起，后端用一个独立的新库，别碰用户正在用的数据。",
   test: "前后端都要起，后端用测试库快照。",
 };
@@ -40,7 +40,7 @@ export function assistOpeningPrompt(opts: {
     "3. 必须是**前台**常驻进程：不要 `&`、`nohup`、`docker compose up -d` 这类起完就退的写法 —— Navi 靠「进程还活着 + 借出去的端口上有响应」判定成功，退出即判失败。",
     "4. 优先 dev server（热更新那种）。只有项目确实没有 dev server 时才退而求其次 build + serve。",
     `5. 要起好几个服务就用一条脚本全起：配角用 ${ref("PORT2")}～${ref("PORT5")}、地址用 ${ref("URL2")}～${ref("URL5")}，配角丢后台，主角最后前台跑。`,
-    `6. Navi 会把 ASH_PREVIEW_MODE=${opts.mode}（${PREVIEW_MODE_LABELS[opts.mode]}）递给脚本：${MODE_NOTE[opts.mode]}`,
+    `6. Navi 会把 NAVI_PREVIEW_MODE=${opts.mode}（${PREVIEW_MODE_LABELS[opts.mode]}）递给脚本：${MODE_NOTE[opts.mode]}`,
     "7. **这是用户的工作仓库，一个字节都不要改**：不改代码、不改锁文件、不 git 提交、不装依赖、不删缓存。缺依赖导致起不来就如实说，由用户自己决定装不装。",
     "8. 你可以自己挑个空闲端口试跑确认（推荐），但结束前**必须把你起的所有进程停干净**。",
     "",

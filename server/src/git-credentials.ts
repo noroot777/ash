@@ -36,8 +36,8 @@ export interface GitNetInjection {
   env: NodeJS.ProcessEnv;
 }
 
-const USERNAME_ENV = "ASH_GIT_USERNAME";
-const SECRET_ENV = "ASH_GIT_PASSWORD";
+const USERNAME_ENV = "NAVI_GIT_USERNAME";
+const SECRET_ENV = "NAVI_GIT_PASSWORD";
 
 /**
  * 喂给 `credential.helper` 的 shell 片段。

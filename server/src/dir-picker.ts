@@ -27,7 +27,7 @@ const DIALOG_TIMEOUT_MS = 4 * 60_000;
 const PROMPT = "选择项目目录";
 
 /** Windows 侧把起始目录经环境变量递进去，绕开 PowerShell 的引号规则（脚本本身是常量）。 */
-const START_ENV = "ASH_DIR_PICKER_START";
+const START_ENV = "NAVI_DIR_PICKER_START";
 
 /** 一次只准开一个窗口。模态窗口叠起来只会让服务端桌面没法用。 */
 let inFlight = false;

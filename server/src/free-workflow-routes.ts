@@ -33,6 +33,7 @@ import { handoffBlockReasonById } from "./handoff-guard.js";
 import { createPostMergeRepairTask, startPostMergeReview } from "./post-merge-review.js";
 import { evidenceHeaders } from "./evidence-path.js";
 import { actorOf } from "./auth/context.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
 
@@ -60,13 +61,13 @@ async function turnIdentityError(c: Context, taskId: string, what: string): Prom
     activeDirectionToken: tasks.activeDirectionToken,
   }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return "任务不存在";
-  const turnToken = c.req.header("x-ash-turn-token");
+  const turnToken = requestHeader(c, NAVI_HEADERS.turnToken);
   if (task.activeTurnToken && turnToken !== task.activeTurnToken) {
     return turnToken
       ? `${what}来自已结束的回合，已拒绝写入当前会话`
       : `MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），${what}已拒绝写入`;
   }
-  const direction = c.req.header("x-ash-direction-token");
+  const direction = requestHeader(c, NAVI_HEADERS.directionToken);
   if (task.activeDirectionToken && direction !== task.activeDirectionToken) {
     return direction
       ? `${what}的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试`
@@ -179,7 +180,7 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
       const body = await c.req.json<ReplyBody>().catch(() => ({} as ReplyBody));
       // 讨论跟辩论共用这一个交卷口（MCP debate_reply）：这条任务上此刻在说的是讨论就交给讨论。
       if (await activeTalkOf(taskId, "discussion")) {
-        const turnToken = c.req.header("x-ash-turn-token") ?? null;
+        const turnToken = requestHeader(c, NAVI_HEADERS.turnToken) ?? null;
         return c.json({ recorded: true, taskId, ...(await submitDiscussionStatement(taskId, body, { turnToken })) });
       }
       return c.json({ recorded: true, taskId, ...(await submitDebateStatement(taskId, body)) });

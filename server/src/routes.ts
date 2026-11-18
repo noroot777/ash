@@ -79,6 +79,7 @@ import { patchSettingsFor, settingsForActor } from "./auth/personal-settings.js"
 import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { canUseOwned, filterOwned, ownerStamp } from "./auth/owned.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 export const api = new Hono();
 // 改了谁能看哪张卡的那几条成功后叫飞书通道对账：包在它们外面，得最先挂（im/routes.ts mountImSweeps）。
@@ -147,7 +148,7 @@ api.get("/restart-impact", async (c) => {
   if (actorOf(c).kind === "anonymous") {
     const { liveLockToken } = await import("./singleton.js");
     const expected = liveLockToken();
-    const given = c.req.header("x-ash-host-token")?.trim() ?? "";
+    const given = requestHeader(c, NAVI_HEADERS.hostToken)?.trim() ?? "";
     // 没拿到锁(ASH_ALLOW_MULTI=1)时这条凭证根本不存在 —— 拒绝,别拿空串对空串放行。
     if (!expected || !secretsEqual(given, expected)) {
       return c.json({ error: "请先登录", needsAuth: true }, 401);

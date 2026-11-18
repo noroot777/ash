@@ -139,6 +139,7 @@
 // 那一侧(CKjeps4QSRTE)治「赢家占着锁不干活」,这一侧治「输家一次就放弃」。两者独立成立:
 // 幽灵修好了,也仍然会有合法的赢家让我们输一次;重排做好了,也仍然需要有人把幽灵锁放开,
 // 否则重排等的那次释放永远不来。
+import { readEnv } from "@ash/shared/env-names";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, type FreeReviewDispatchIntent } from "./db/schema.js";
@@ -174,7 +175,7 @@ type ContinueOpts = import("./task-continue-options.js").ContinueTaskOptions;
  * 同一口径从环境读。
  */
 export const MAX_REVIEW_DISPATCH_ATTEMPTS = (() => {
-  const configured = Number(process.env.ASH_REVIEW_DISPATCH_ATTEMPTS);
+  const configured = Number(readEnv(process.env, "NAVI_REVIEW_DISPATCH_ATTEMPTS"));
   return Number.isInteger(configured) && configured > 0 ? configured : 5;
 })();
 

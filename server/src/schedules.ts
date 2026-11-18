@@ -8,6 +8,7 @@ import { schedules, tasks } from "./db/schema.js";
 import { taskHoldOf } from "./task-hold.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
+import { SCHEDULER_STARTED } from "./log-signals.js";
 import { deliverPendingMessages, reclaimStaleDeliveries } from "./pending-messages.js";
 import { restoreFollowUpAnswers } from "./legacy-answer-intent.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
@@ -197,5 +198,5 @@ export function startScheduler(intervalMs = 30_000) {
     .catch((err) => console.error("[ash] restoreFollowUpAnswers failed:", err))
     .then(() => tick());
   setInterval(() => void tick(), intervalMs);
-  console.log("[ash] scheduler started");
+  console.log(SCHEDULER_STARTED);
 }

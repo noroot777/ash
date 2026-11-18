@@ -11,6 +11,7 @@ import { rewritePreviewText, rewritePreviewUrl } from "./preview-proxy-rewrite.j
 import { connectionOf, forwardedFor, originOfIncoming, requestOrigin } from "./auth/remote-access.js";
 import { grantFor, canUsePreview, claimGrant, forkGrant, holdPreviewChannel } from "./preview-access.js";
 import { addressedElsewhere, INSTANCE_HEADER } from "./instance-binding.js";
+import { isNaviHeaderName, readHeader } from "@ash/shared/http-headers";
 import { attributeName, cookieAttribute, cookieHeaderFor, defaultPath, rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
 
 const httpAgent = new Agent({ keepAlive: true });
@@ -136,7 +137,7 @@ function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCook
   const connection = pick("connection")?.toLowerCase().split(",").map((s) => s.trim()) ?? [];
   for (const [key, value] of entries) {
     const k = key.toLowerCase();
-    if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded" || k === "x-real-ip") continue;
+    if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || isNaviHeaderName(k) || k.startsWith("x-forwarded-") || k === "forwarded" || k === "x-real-ip") continue;
     result[k] = value;
   }
   const site = pick("sec-fetch-site");
@@ -361,7 +362,7 @@ export function attachPreviewUpgrades(server: Server): void {
       return;
     }
     // 升级不经过 Hono 那道 instanceBinding，同一个判据在这里再认一次。
-    if (addressedElsewhere(incoming.headers.cookie, incoming.headers[INSTANCE_HEADER] as string | undefined)) {
+    if (addressedElsewhere(incoming.headers.cookie, readHeader((key) => incoming.headers[key] as string | undefined, INSTANCE_HEADER))) {
       socket.end("HTTP/1.1 409 Conflict\r\nConnection: close\r\n\r\n");
       return;
     }

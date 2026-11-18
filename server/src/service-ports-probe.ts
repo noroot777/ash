@@ -11,13 +11,18 @@
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { promisify } from "node:util";
+import { envNameGenerations } from "@ash/shared/env-names";
 import { IS_WINDOWS } from "./platform.js";
 import { HAS_PROC, LSOF_PATH, PS_PATH, processAlive, readProcessTableSync } from "./terminal-process-tree.js";
 
 const run = promisify(execFile);
 
 /** 这次启动的记号落在哪个环境变量里。命令会话的 env 由 terminal.ts 注入。 */
-export const LAUNCH_ID_ENV = "ASH_LAUNCH_ID";
+export const LAUNCH_ID_ENV = "NAVI_LAUNCH_ID";
+
+/** 认记号时各代变量名都认（改名之前那一版起的进程身上是旧名）；种只种当前名。 */
+const LAUNCH_ID_ENV_NAMES = envNameGenerations(LAUNCH_ID_ENV);
+const launchNeedles = (token: string): string[] => LAUNCH_ID_ENV_NAMES.map((name) => `${name}=${token}`);
 
 export const PROBE_TIMEOUT_MS = 5_000;
 
@@ -555,7 +560,7 @@ function lineageWithoutPs(pids: number[], token: string): Map<number, Lineage> |
  */
 function lineageFromPs(read: PsRead, pids: number[], token: string): Map<number, Lineage> {
   const lineage = new Map<number, Lineage>();
-  const needle = `${LAUNCH_ID_ENV}=${token}`;
+  const needles = launchNeedles(token);
   let current: number | null = null;
   const text = new Map<number, string>();
   for (const line of read.stdout.split("\n")) {
@@ -575,8 +580,11 @@ function lineageFromPs(read: PsRead, pids: number[], token: string): Map<number,
       lineage.set(pid, "unverified");
       continue;
     }
-    const at = body.indexOf(needle);
-    if (at >= 0 && (at + needle.length === body.length || /\s/.test(body[at + needle.length]))) {
+    const ours = needles.some((needle) => {
+      const at = body.indexOf(needle);
+      return at >= 0 && (at + needle.length === body.length || /\s/.test(body[at + needle.length]));
+    });
+    if (ours) {
       lineage.set(pid, "ours");
       continue;
     }
@@ -585,7 +593,7 @@ function lineageFromPs(read: PsRead, pids: number[], token: string): Map<number,
     // (`stranger`);一枚记号都没有 = 没有证据(`unmarked`),它可能是这次启动现搭环境
     // fork 出去的工人。三种都不动它,但说法要诚实。
     if (!/\s[A-Z_][A-Z0-9_]*=/.test(body)) { lineage.set(pid, "unknown"); continue; }
-    lineage.set(pid, body.includes(`${LAUNCH_ID_ENV}=`) ? "stranger" : "unmarked");
+    lineage.set(pid, LAUNCH_ID_ENV_NAMES.some((name) => body.includes(`${name}=`)) ? "stranger" : "unmarked");
   }
   return lineage;
 }
@@ -599,7 +607,7 @@ function lineageFromPs(read: PsRead, pids: number[], token: string): Map<number,
  */
 function lineageFromProc(pids: number[], token: string): Map<number, Lineage> {
   const lineage = new Map<number, Lineage>();
-  const needle = `${LAUNCH_ID_ENV}=${token}`;
+  const needles = launchNeedles(token);
   for (const pid of pids) {
     let environ: string;
     try { environ = readFileSync(`/proc/${pid}/environ`, "utf8"); }
@@ -609,8 +617,8 @@ function lineageFromProc(pids: number[], token: string): Map<number, Lineage> {
       continue;
     }
     const entries = environ.split("\0");
-    lineage.set(pid, entries.includes(needle) ? "ours"
-      : entries.some((entry) => entry.startsWith(`${LAUNCH_ID_ENV}=`)) ? "stranger" : "unmarked");
+    lineage.set(pid, needles.some((needle) => entries.includes(needle)) ? "ours"
+      : entries.some((entry) => LAUNCH_ID_ENV_NAMES.some((name) => entry.startsWith(`${name}=`))) ? "stranger" : "unmarked");
   }
   return lineage;
 }

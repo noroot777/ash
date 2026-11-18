@@ -24,7 +24,7 @@ import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
 import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import { and, eq } from "drizzle-orm";
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAME, ASH_MCP_SERVER_NAMES } from "@ash/shared/mcp";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, sessions } from "./db/schema.js";
 import { detachedPathsFor } from "./executors/detached.js";
@@ -99,7 +99,7 @@ const CLAUDE_FAILED_STATUSES = new Set(["failed", "needs-auth", "disabled"]);
  * **一个兼容名一份**：判「是不是全部登记都坏了」要按名字分别看，不能把两个名字混成一个正则
  * 之后数行数（那样「ash 坏了」会被当成「两个名字都坏了」）。
  */
-const CODEX_NAMED_ASH = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME].map((name) => {
+const CODEX_NAMED_ASH = ASH_MCP_SERVER_NAMES.map((name) => {
   const at = `\\bMCP (?:client|server)(?: for)? [\`'"]${name}[\`'"]`;
   return { name, named: new RegExp(at, "i"), startFailed: new RegExp(`${at}\\s+failed to (?:start|initialize)\\b`, "i") };
 });
@@ -113,7 +113,7 @@ const CODEX_NAMED_ASH = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME].map((n
  * 历史名」是两回事。
  */
 export function claudeMcpEvidence(text: string): Evidence {
-  const wanted = new Set<string>([ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME]);
+  const wanted = new Set<string>(ASH_MCP_SERVER_NAMES);
   for (const line of text.split("\n")) {
     if (!line.includes('"init"')) continue;
     let parsed: unknown;

@@ -23,6 +23,7 @@
 // 为什么不落库:清单是**本机 CLI 当下的事实**,不是用户配置。落库要额外处理「换了
 // CLI 版本 / 换了登录账号 / 卸载了」的失效,而重启后重探一次的代价只有几百毫秒。
 
+import { readEnv } from "@ash/shared/env-names";
 import type { AgentType, AppSettings } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
 import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
@@ -202,7 +203,7 @@ async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelC
  * `claude -p` 子进程,测试收掉服务时它还活着 —— 起真服务的测试每跑一次就留下一个。门禁执行器
  * (scripts/test-runner.mjs)给每条测试都带上它;要测探测本身的那几条自己把它拿掉。
  */
-const modelProbeOffForTests = (): boolean => process.env.ASH_TEST_NO_MODEL_PROBE === "1";
+const modelProbeOffForTests = (): boolean => readEnv(process.env, "NAVI_TEST_NO_MODEL_PROBE") === "1";
 
 /**
  * 一条缓存能存多久。导出只为回归测试钉住「降级结果不许和成功结果一样保鲜」。

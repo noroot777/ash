@@ -4,10 +4,12 @@
 // 整份传输层重新读一遍。
 //
 // 这里不含任何业务判断 —— 业务全在 ash 的 HTTP 端点上（见 index.ts 顶部那段）。
+import { readEnv } from "@ash/shared/env-names";
+import { NAVI_HEADERS } from "@ash/shared/http-headers";
 import { answeredMcpError, UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
 import { resolveTurnIdentity } from "./turn-identity.js";
 
-export const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
+export const BASE = (readEnv(process.env, "NAVI_URL") ?? "http://localhost:4317").replace(/\/+$/, "");
 
 // 回合身份(任务 id + 回合令牌 + 方向令牌)从哪几条通道来、带了回合指纹时怎么挑,见 turn-identity.ts。
 // 对不上指纹时 `IDENTITY_REFUSAL` 非空,main.ts 据此拒绝启动。
@@ -37,7 +39,7 @@ export const IDENTITY_REFUSAL = identity.refused;
 
 // 重启窗口的等待上限。scripts/restart.mjs 是「杀掉 → 等端口释放 → 起新进程 →
 // 轮询 /api/health」,正常几秒内回来;给到 60s 是留足构建慢、机器忙的余量。
-export const RECONNECT_WINDOW_MS = Number(process.env.ASH_RECONNECT_MS ?? process.env.HARNESS_RECONNECT_MS ?? 60_000);
+export const RECONNECT_WINDOW_MS = Number(readEnv(process.env, "NAVI_RECONNECT_MS") ?? 60_000);
 
 // 只对「明确没送达」的连接错误重试。ECONNREFUSED = 根本没人在监听那个端口
 // (server 重启期间的确切表现),请求一个字节都没发出去,重试绝不会重复执行。
@@ -78,11 +80,11 @@ async function request(method: string, path: string, body: unknown, directionTok
   let res: Response;
   for (;;) {
     try {
-      const headers: Record<string, string> = { "x-ash-client": "mcp" };
+      const headers: Record<string, string> = { [NAVI_HEADERS.client]: "mcp" };
       if (body !== undefined) headers["content-type"] = "application/json";
-      if (SOURCE_TASK_ID) headers["x-ash-source-task-id"] = SOURCE_TASK_ID;
-      if (TURN_TOKEN) headers["x-ash-turn-token"] = TURN_TOKEN;
-      if (directionToken) headers["x-ash-direction-token"] = directionToken;
+      if (SOURCE_TASK_ID) headers[NAVI_HEADERS.sourceTaskId] = SOURCE_TASK_ID;
+      if (TURN_TOKEN) headers[NAVI_HEADERS.turnToken] = TURN_TOKEN;
+      if (directionToken) headers[NAVI_HEADERS.directionToken] = directionToken;
       res = await fetch(`${BASE}/api${path}`, {
         method,
         headers: Object.keys(headers).length ? headers : undefined,
@@ -99,7 +101,7 @@ async function request(method: string, path: string, body: unknown, directionTok
       }
       lastCode = code;
       // stderr 才是 MCP 的日志通道(stdout 是协议帧,写脏了会直接搞崩会话)。
-      console.error(`[ash-mcp] ${code} — server 可能在重启，${delay}ms 后重试 ${method} ${path}`);
+      console.error(`[navi-mcp] ${code} — server 可能在重启，${delay}ms 后重试 ${method} ${path}`);
       await sleep(Math.min(delay, Math.max(0, deadline - Date.now())));
       delay = Math.min(delay * 2, 5_000);
     }

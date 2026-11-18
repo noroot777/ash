@@ -46,6 +46,8 @@
 // 上线时那次真机验证走的是 `run()`（一次性 `claude -p`），恰好是唯一挂着 hook 的那条路。
 // 现在两个概念分开了（`crossTurn`），而 `test-claude-monitor-hook.ts` 直接按三条真实出
 // 入口断言「谁该带、谁不该带」。
+import { NAVI_HEADERS } from "@ash/shared/http-headers";
+import { ASH_MCP_SERVER_NAME, ASH_TURN_IDENTITY_ENV } from "@ash/shared/mcp";
 import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/monitor";
 import { currentListeningPort } from "./listening-port.js";
 import { startMonitor } from "./monitor-create.js";
@@ -55,7 +57,7 @@ import { turnCaller, type VerifiedTurn } from "./monitor-session.js";
 const MONITOR_TOOL = "Monitor";
 
 const HOW_TO_DIY =
-  "你可以自己调 `mcp__harness__start_monitor`（同样的 command/description），再用 `pause_task` 收尾这一轮。";
+  `你可以自己调 \`mcp__${ASH_MCP_SERVER_NAME}__start_monitor\`（同样的 command/description），再用 \`pause_task\` 收尾这一轮。`;
 
 const WHY_NOT_BUILTIN =
   "claude 内置的 Monitor 在 Navi 里活不过这一轮（它的进程在你自己的进程树里，回合一结束就被收走，"
@@ -210,10 +212,10 @@ export function monitorRedirectHook(crossTurn: boolean): Record<string, unknown>
               // 那就等于放行 —— 所以这个数宁可宽一点。
               timeout: 15,
               headers: {
-                "x-ash-source-task-id": "$ASH_TASK_ID",
-                "x-ash-turn-token": "$ASH_TURN_TOKEN",
+                [NAVI_HEADERS.sourceTaskId]: `$${ASH_TURN_IDENTITY_ENV.taskId}`,
+                [NAVI_HEADERS.turnToken]: `$${ASH_TURN_IDENTITY_ENV.turnToken}`,
               },
-              allowedEnvVars: ["ASH_TASK_ID", "ASH_TURN_TOKEN"],
+              allowedEnvVars: [ASH_TURN_IDENTITY_ENV.taskId, ASH_TURN_IDENTITY_ENV.turnToken],
             },
           ],
         },

@@ -45,7 +45,7 @@ const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
 
 /** 「指向这份 ash 自己」的那条:这份代码里的 MCP 入口 + 这个端口。起跑注入(`executors/ash-mcp-inject.ts`)用它。 */
 export function ashMcpEntry(): AshMcpEntry {
-  return { command: mcpNodeCommand(), args: [MCP_ENTRY], env: { ASH_URL: localUrl() } };
+  return { command: mcpNodeCommand(), args: [MCP_ENTRY], env: { NAVI_URL: localUrl() } };
 }
 
 /**

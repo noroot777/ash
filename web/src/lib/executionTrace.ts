@@ -5,7 +5,7 @@
 //   claude/qwen/qoder → JSON.stringify(tool_use.input),超 1500 字会被截断成半截 JSON
 //   codex             → 命令原文 / 文件路径(纯文本)
 // 所以先按工具名挑字段,JSON 解析失败(截断)时退回正则取值,再退回首行文本。
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAMES } from "@ash/shared/mcp";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import type { NativeWorkEvent } from "@ash/shared";
 import { mergeCompaction } from "./compaction.ts";
@@ -198,7 +198,7 @@ const PLAN_BOOKKEEPING = new Set(["taskcreate", "taskupdate", "tasklist", "todow
 
 /** `mcp__ash__complete_task`(claude)/ `ash/complete_task`(codex)→ `complete_task`。 */
 export function ashMcpTool(label: string): string | null {
-  for (const server of [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME]) {
+  for (const server of ASH_MCP_SERVER_NAMES) {
     if (label.startsWith(`mcp__${server}__`)) return label.slice(`mcp__${server}__`.length);
     if (label.startsWith(`${server}/`)) return label.slice(server.length + 1);
   }

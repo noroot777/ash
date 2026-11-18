@@ -1,8 +1,29 @@
-/** 当前安装器、Codex 配置与 CLI 事件共同使用的 ash MCP 服务名。 */
-export const ASH_MCP_SERVER_NAME = "ash";
+import { envNameGenerations } from "./env-names.ts";
+import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.ts";
 
-/** setup 会迁移、执行器在迁移前仍兼容的历史服务名。 */
-export const LEGACY_ASH_MCP_SERVER_NAME = "harness";
+/** 当前安装器、Codex 配置与 CLI 事件共同使用的 Navi MCP 服务名。注入和新登记一律写它。 */
+export const ASH_MCP_SERVER_NAME = "navi";
+
+/**
+ * 认得出的全部登记名，当前名在前。用户 CLI 配置里旧版 setup 登记的那条（`ash`、更早的 `harness`）、
+ * 升级前起的会话里 CLI 报出来的工具名（`mcp__ash__complete_task`），都按这一份认。
+ */
+export const ASH_MCP_SERVER_NAMES: readonly string[] = [ASH_MCP_SERVER_NAME, ...LEGACY_MCP_SERVER_NAMES];
+
+/** setup 会迁移、执行器在迁移前仍兼容的历史服务名（不含当前名）。 */
+export const LEGACY_ASH_MCP_SERVER_NAMES: readonly string[] = LEGACY_MCP_SERVER_NAMES;
+
+export const isAshMcpServerName = (name: unknown): boolean =>
+  typeof name === "string" && ASH_MCP_SERVER_NAMES.includes(name);
+
+/** claude 的 MCP 工具名 `mcp__<登记名>__<工具>` → 工具名；不是本服务（任一代名字）的返回 null。 */
+export function ashMcpToolOf(toolName: string): string | null {
+  for (const server of ASH_MCP_SERVER_NAMES) {
+    const prefix = `mcp__${server}__`;
+    if (toolName.startsWith(prefix) && toolName.length > prefix.length) return toolName.slice(prefix.length);
+  }
+  return null;
+}
 
 /**
  * ash MCP 注册的全部工具（`mcp/src` 里每一处 `registerTool` 逐个对得上，`test-ash-mcp-inject.ts`
@@ -70,22 +91,29 @@ export const ASH_MCP_TURN_EXITS: Readonly<Record<string, string>> = {
  * 而它的 `allowedEnvironmentVariables` 这条白名单自己也被同一组正则过滤,所以**没有**
  * 配置层面的出路;登记里的 `env` 不受过滤,但只放得下静态值,装不了每回合都换的令牌。
  *
- * 于是同一个值再按一个不撞过滤的名字(`*_TICKET`)导一份:ash 起跑时两套都设,MCP 侧
+ * 于是同一个值再按一个不撞过滤的名字(`*_TICKET`)导一份:Navi 起跑时两套都设,MCP 侧
  * 两套都读(`mcp/src/turn-identity.ts`),谁活着用谁。代价是这一个值在那些 CLI 里对**同一会话里
  * 别的 MCP server** 也可见 —— 它本来就只是「某条任务某一回合」的一次性凭据(claude 那条路
  * 上一直如此:claude 把整份环境原样传给每个 MCP 子进程),换来的是那几家 CLI 交得了卷。
  */
 export const ASH_TURN_IDENTITY_ENV = {
-  taskId: "ASH_TASK_ID",
-  turnToken: "ASH_TURN_TOKEN",
-  directionToken: "ASH_DIRECTION_TOKEN",
+  taskId: "NAVI_TASK_ID",
+  turnToken: "NAVI_TURN_TOKEN",
+  directionToken: "NAVI_DIRECTION_TOKEN",
   /** 别名:名字刻意不含 TOKEN/KEY/SECRET 这类词(见上)。 */
-  turnTicket: "ASH_TURN_TICKET",
-  directionTicket: "ASH_DIRECTION_TICKET",
+  turnTicket: "NAVI_TURN_TICKET",
+  directionTicket: "NAVI_DIRECTION_TICKET",
 } as const;
 
-/** 回合身份的全部变量名 —— 设和清都按这一份,别在某处只写三个。 */
+/** 回合身份的全部变量名(当前名)—— 设按这一份,别在某处只写三个。 */
 export const ASH_TURN_IDENTITY_ENV_KEYS = Object.values(ASH_TURN_IDENTITY_ENV) as readonly string[];
+
+/**
+ * 同上,连旧名(`ASH_TASK_ID`…)一起 —— **清**按这一份:升级前起的智能体、它们留下的子进程环境里
+ * 是旧名,只清新名等于留了一份别的任务的身份。读的一侧(MCP)也按各代逐个认。
+ */
+export const ASH_TURN_IDENTITY_ENV_ALL_KEYS: readonly string[] =
+  ASH_TURN_IDENTITY_ENV_KEYS.flatMap((key) => envNameGenerations(key as `NAVI_${string}`));
 
 /**
  * 回合身份的**第二条通路**:搭 `PATH` 这班车的一次性目录。

@@ -1,3 +1,4 @@
+import { readEnv } from "@ash/shared/env-names";
 import type { PreviewPageImage } from "@ash/shared/page-annotation";
 import { readPreview } from "./preview-store.js";
 
@@ -21,7 +22,7 @@ export async function captureAnnotationReference(taskId: string, input: {
   try {
     // playwright-core has no browser download; an absent package/executable degrades to the other evidence sources.
     const { chromium } = await import("playwright-core");
-    browser = await chromium.launch({ headless: true, timeout: 5000, ...(process.env.ASH_ANNOTATION_BROWSER ? { executablePath: process.env.ASH_ANNOTATION_BROWSER } : {}) });
+    browser = await chromium.launch({ headless: true, timeout: 5000, ...(readEnv(process.env, "NAVI_ANNOTATION_BROWSER") ? { executablePath: readEnv(process.env, "NAVI_ANNOTATION_BROWSER") } : {}) });
     const size = (value: unknown, fallback: number) => typeof value === "number" && Number.isFinite(value) ? Math.round(Math.max(1, Math.min(1920, value))) : fallback;
     const context = await browser.newContext({ viewport: { width: size(input.viewport?.width, 1280), height: size(input.viewport?.height, 800) }, serviceWorkers: "block" });
     await context.route("**/*", (route) => {

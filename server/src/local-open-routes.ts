@@ -1,3 +1,4 @@
+import { readEnv } from "@ash/shared/env-names";
 import type { Hono } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { realpath, stat } from "node:fs/promises";
@@ -17,7 +18,7 @@ import { isInsidePath, splitPathList, windowsPathRejection } from "./platform.js
 //
 // 分隔符走 splitPathList(PATH_DELIMITER),**不能写死 ":"** —— Windows 上那会把
 // `C:\videos` 从盘符处切成 `C` 和 `\videos` 两条都不存在的路径。
-const CONFIGURED_ROOTS = splitPathList(process.env.ASH_LOCAL_OPEN_ROOTS)
+const CONFIGURED_ROOTS = splitPathList(readEnv(process.env, "NAVI_LOCAL_OPEN_ROOTS"))
   .map((path) => resolve(expandHome(path)));
 
 export function isTrustedLocalOpenRemote(address: string | undefined): boolean {

@@ -12,6 +12,7 @@
  * 为什么是工厂而不是一组裸函数：这几件事都要问「此刻 leads 里登记的是不是我」—— 那张表
  * 归 `session.js` 持有,只能注进来。
  */
+import { readEnv } from "@ash/shared/env-names";
 import { Writable } from "node:stream";
 import { clearSessionWaiting } from "../session-waiting.js";
 import { clearTurnStall } from "../turn-stall.js";
@@ -22,9 +23,9 @@ import { flushSessionNotices } from "./lead-voice.js";
 import { persistOrReport } from "./lead-session-writes.js";
 import type { Lead } from "./session-types.js";
 
-export const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
+export const IDLE_MS = Number(readEnv(process.env, "NAVI_TEAM_IDLE_MS") ?? 30 * 60_000);
 const CLOSE_GRACE_MS = 10_000;
-const STATUS_RETRY_MS = Number(process.env.ASH_TEAM_STATUS_RETRY_MS ?? 5_000);
+const STATUS_RETRY_MS = Number(readEnv(process.env, "NAVI_TEAM_STATUS_RETRY_MS") ?? 5_000);
 
 export function createLeadStatus({ leads, releasePending }: {
   leads: Map<string, Lead>;

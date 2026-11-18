@@ -4,6 +4,7 @@
 // 从 `codex-app-server.ts` 拆出来的理由同 `codex-app-server-state.ts` / `-adopt.ts`:那份文件
 // 顶到了单文件上限(根 CLAUDE.md 的 700 行)。这一块自成一块 —— 它不碰协议收发,只回答「调用方
 // 要交什么、我们按什么期限和什么措辞收口」。
+import { readEnv } from "@ash/shared/env-names";
 import type { ChildProcess } from "node:child_process";
 import type { TokenUsage } from "@ash/shared";
 import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
@@ -19,7 +20,7 @@ import type { DetachedPaths } from "./detached.js";
  * 环境变量只给回归脚本用 —— 真实运行一律用默认值。
  */
 export const CODEX_TURN_START_ACK_MS = (() => {
-  const raw = Number(process.env.ASH_CODEX_TURN_START_ACK_MS);
+  const raw = Number(readEnv(process.env, "NAVI_CODEX_TURN_START_ACK_MS"));
   return Number.isFinite(raw) && raw > 0 ? raw : 60_000;
 })();
 
@@ -29,7 +30,7 @@ export const CODEX_TURN_START_ACK_MS = (() => {
  * `wireAdoptionRecovery`)。前几拍按这个节奏,之后翻倍退避封顶,核验不设上限。
  */
 export const CODEX_ADOPT_REREAD_MS = (() => {
-  const raw = Number(process.env.ASH_CODEX_ADOPT_REREAD_MS);
+  const raw = Number(readEnv(process.env, "NAVI_CODEX_ADOPT_REREAD_MS"));
   return Number.isFinite(raw) && raw > 0 ? raw : 2_000;
 })();
 

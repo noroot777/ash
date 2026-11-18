@@ -53,6 +53,7 @@ import { receiptHands } from "./monitor-turn-ack.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { failureVersionOf } from "./task-result-version.js";
 import { agentRunHold, fromAgent } from "./dispatch-hold-routes.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -284,7 +285,7 @@ api.post("/tasks/:id/pause", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时设置检查点", status: r.status }, 409);
-  const pauseToken = c.req.header("x-ash-turn-token");
+  const pauseToken = requestHeader(c, NAVI_HEADERS.turnToken);
   if (r.activeTurnToken && pauseToken !== r.activeTurnToken) {
     return c.json({
       error: pauseToken
@@ -292,7 +293,7 @@ api.post("/tasks/:id/pause", async (c) => {
         : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），检查点已拒绝写入",
     }, 409);
   }
-  const pauseDirection = c.req.header("x-ash-direction-token");
+  const pauseDirection = requestHeader(c, NAVI_HEADERS.directionToken);
   if (r.activeDirectionToken && pauseDirection !== r.activeDirectionToken) {
     return c.json({ error: pauseDirection
       ? "检查点的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试"
@@ -345,7 +346,7 @@ api.post("/tasks/:id/complete", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时确认完成", status: r.status }, 409);
-  const completeToken = c.req.header("x-ash-turn-token");
+  const completeToken = requestHeader(c, NAVI_HEADERS.turnToken);
   if (r.activeTurnToken && completeToken !== r.activeTurnToken) {
     return c.json({
       error: completeToken
@@ -353,7 +354,7 @@ api.post("/tasks/:id/complete", async (c) => {
         : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），完成确认已拒绝写入",
     }, 409);
   }
-  const completeDirection = c.req.header("x-ash-direction-token");
+  const completeDirection = requestHeader(c, NAVI_HEADERS.directionToken);
   if (r.activeDirectionToken && completeDirection !== r.activeDirectionToken) {
     return c.json({ error: completeDirection
       ? "完成确认的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 complete_task"

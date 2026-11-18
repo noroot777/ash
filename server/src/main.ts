@@ -1,3 +1,4 @@
+import { readEnv } from "@ash/shared/env-names";
 import "./env.js";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
@@ -139,10 +140,11 @@ async function initializeServer() {
     console.log(`[ash] 多人模式：根目录 ${instance.rootDir}`);
   }
   // 测试库档第一次从主库播种，之后复用这个 worktree 自己的副本。
-  if (process.env.ASH_SEED_FROM) {
+  const seedFrom = readEnv(process.env, "NAVI_SEED_FROM");
+  if (seedFrom) {
     const { seedPreviewDb } = await import("./preview-seed.js");
-    const mode = process.env.ASH_SEED_MODE === "config" ? "config" : "snapshot";
-    await seedPreviewDb(process.env.ASH_SEED_FROM, mode);
+    const mode = readEnv(process.env, "NAVI_SEED_MODE") === "config" ? "config" : "snapshot";
+    await seedPreviewDb(seedFrom, mode);
   }
   // 测试库会持久，所以每次启动都重新洗运行态；不能只在首次播种时洗。
   if (IS_PREVIEW_INSTANCE) {
@@ -448,7 +450,7 @@ app.all("/api/*", (c) =>
 // createReadStream 跟随软链,所以 review 目录放软链即可,无需拷贝原片。
 // 根目录默认跟随 ash 仓库(review/ 在仓库根下,迁机器也不失效);代码不在仓库里(独立 app,
 // bundle 只读、放不进软链)时落到数据目录下。可用 ASH_REVIEW_ROOT 覆盖。
-const REVIEW_ROOT = normalize(process.env.ASH_REVIEW_ROOT ?? join(REPO_DIR ?? DATA_DIR, "review"));
+const REVIEW_ROOT = normalize(readEnv(process.env, "NAVI_REVIEW_ROOT") ?? join(REPO_DIR ?? DATA_DIR, "review"));
 app.get("/review", (c) => c.redirect("/review/"));
 app.get("/review/*", async (c) => {
   const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/review\/?/, "");

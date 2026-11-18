@@ -59,7 +59,7 @@ export async function setUpHostAshMcp(): Promise<HostAshMcp[]> {
       out.push({
         agentType, file, state: "elsewhere",
         current: launch ? describe(launch.command ?? null, stringArgs(launch.args), launch.ashUrl ?? null) : "认不出它怎么起",
-        ...(wanted ? { wanted: describe(wanted.command, wanted.args, wanted.env.ASH_URL ?? null) } : {}),
+        ...(wanted ? { wanted: describe(wanted.command, wanted.args, wanted.env.NAVI_URL ?? null) } : {}),
       });
     }
   }
@@ -68,7 +68,7 @@ export async function setUpHostAshMcp(): Promise<HostAshMcp[]> {
 
 /**
  * 这条登记起的是不是这份 ash 的 MCP、连的是不是这一台：node 真正执行的那个脚本是这里的入口、
- * 命令是同一个 node、ASH_URL 规范化之后是同一个地址。
+ * 命令是同一个 node、NAVI_URL(旧登记里是 ASH_URL)规范化之后是同一个地址。
  */
 export function pointsAt(launch: AshMcpLaunch | null, wanted: AshMcpEntry): boolean {
   if (!launch?.command) return false;
@@ -80,10 +80,10 @@ export function pointsAt(launch: AshMcpLaunch | null, wanted: AshMcpEntry): bool
     ? samePath(launch.command, wanted.command)
     : launch.command === wanted.command;
   const target = baseOf(launch.ashUrl ?? DEFAULT_MCP_URL);
-  return commandMatches && target !== null && target === baseOf(wanted.env.ASH_URL ?? localUrl());
+  return commandMatches && target !== null && target === baseOf(wanted.env.NAVI_URL ?? localUrl());
 }
 
-/** MCP 服务自己没拿到 ASH_URL 时连的地址(mcp/src/runtime.ts)。 */
+/** MCP 服务自己没拿到 NAVI_URL(及旧名)时连的地址(mcp/src/runtime.ts)。 */
 const DEFAULT_MCP_URL = "http://localhost:4317";
 const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
 
@@ -132,6 +132,6 @@ function describe(command: string | null, args: string[], ashUrl: string | null)
   return [
     `command = ${JSON.stringify(command ?? "")}`,
     `args = [${args.map((a) => JSON.stringify(a)).join(", ")}]`,
-    `ASH_URL = ${JSON.stringify(ashUrl ?? DEFAULT_MCP_URL)}`,
+    `NAVI_URL = ${JSON.stringify(ashUrl ?? DEFAULT_MCP_URL)}`,
   ].join("\n");
 }

@@ -17,6 +17,7 @@
 // 否则这条建议就只能继续用占位符，而占位符正是它上一次没有闭环的原因。
 import type { NodeDepsAdvice, NodeDepsPrepared, PackageManager } from "./preview-deps.js";
 import { previewShell } from "./preview-shell.js";
+import { PREVIEW_API_HOST_RE } from "./log-signals.js";
 
 /**
  * 提示里给出的命令**也是要被粘进 shell 执行的**，所以路径一律按方言引好。
@@ -447,7 +448,7 @@ export function pickPreviewUrl(
  * 只认回环主机名：反代无论如何只会拨回环，写着别处地址的自述对不上它将要做的事。
  * 端口对不对得上「我们此刻真绑着的那个」由调用方核（preview-start.ts）——这里只读日志。
  */
-const HOST_API_RE = /\[ash\] preview-api-host (?:localhost|127\.0\.0\.1|\[::1\]):(\d{2,5})\b/i;
+const HOST_API_RE = PREVIEW_API_HOST_RE;
 
 export function declaredHostApiPort(log: string): number | null {
   const hit = HOST_API_RE.exec(stripAnsi(log));

@@ -33,6 +33,7 @@
 // 为什么等在这里、而不是把 `onDelivered` 推迟到回合结束之后再问:托盘上那条消息在标 `sent`
 // 之前一直显示「排队中」,而回合可能跑几十分钟 —— 一条早就在会话里的话挂着「排队中」挂半小时
 // 是另一种撒谎。`inputAccepted` 正常在几百毫秒内落定,等它是最便宜的那个位置。
+import { readEnv } from "@ash/shared/env-names";
 import type { InputAcceptance, RunHandle } from "./executors/types.js";
 
 // 三档本身定在执行器契约里(判出它们的是协议适配器),这里只做有界等待那一层。
@@ -40,7 +41,7 @@ export type { InputAcceptance } from "./executors/types.js";
 
 /** 有界等待的上限。`<= 0` 或配成非数 = 退回默认值(看门狗那边同一个口径,见 turn-stall.ts 的 num)。 */
 function ackTimeoutMs(): number {
-  const raw = process.env.ASH_TURN_INPUT_ACK_MS;
+  const raw = readEnv(process.env, "NAVI_TURN_INPUT_ACK_MS");
   if (raw == null || raw === "") return 60_000;
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : 60_000;

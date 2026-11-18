@@ -14,6 +14,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { appendTaskTimeline, receiptLine, type TimelineLine, noticeLine } from "./task-timeline.js";
 import { REPORTED_ACCEPTANCE_PREFIX } from "./review-acceptance.js";
 import { id, now } from "./util.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 export async function setTaskStage(
   taskId: string,
@@ -279,11 +280,11 @@ export function mountTaskStageRoutes(api: Hono): void {
     // 接力出去的任务不能再流转验收阶段:它在本机只是历史存档,阶段变化应发生在对端。
     const handedOff = handoffBlockReason(task.handoff);
     if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
-    const sourceTaskId = c.req.header("x-ash-source-task-id");
+    const sourceTaskId = requestHeader(c, NAVI_HEADERS.sourceTaskId);
     const source = sourceTaskId && sourceTaskId !== taskId
       ? (await db.select().from(tasks).where(eq(tasks.id, sourceTaskId)))[0] : task;
     if (!source || (source.id !== taskId && source.reviewOf !== taskId)) return c.json({ error: "阶段来源不属于当前任务或审查" }, 409);
-    const stageToken = c.req.header("x-ash-turn-token");
+    const stageToken = requestHeader(c, NAVI_HEADERS.turnToken);
     if (source.activeTurnToken && stageToken !== source.activeTurnToken) {
       return c.json({
         error: stageToken
@@ -291,7 +292,7 @@ export function mountTaskStageRoutes(api: Hono): void {
           : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），验收阶段已拒绝写入",
       }, 409);
     }
-    const stageDirection = c.req.header("x-ash-direction-token");
+    const stageDirection = requestHeader(c, NAVI_HEADERS.directionToken);
     if (source.activeDirectionToken && stageDirection !== source.activeDirectionToken) {
       return c.json({
         error: stageDirection

@@ -7,6 +7,7 @@
 //
 // 不碰 codex-events.jsonl / stderr.log：它们是失败取证的现场，按「任务了结 + 宽限期」
 // 回收，规则在 run-retention.ts。
+import { readEnv } from "@ash/shared/env-names";
 import { readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { eq, isNull } from "drizzle-orm";
@@ -28,7 +29,7 @@ const MONITOR_SUFFIX = ".log";
 
 // 默认保留一天。跑完就没用了，留一天纯粹是给「任务刚挂、想翻原始输出查一眼」
 // 留窗口。ASH_RUNLOG_KEEP_H 可调，0 = 结束即删。
-const KEEP_HOURS = Number(process.env.ASH_RUNLOG_KEEP_H ?? 24);
+const KEEP_HOURS = Number(readEnv(process.env, "NAVI_RUNLOG_KEEP_H") ?? 24);
 
 // 可引导回合的 stdin 具名管道（executors/control-fifo.ts）不看年龄：根一走它就没用了，正常
 // 情况下根退出时已经收掉；这里扫的是上一辈子没来得及收的。删不删只听「此刻有没有人开着」。

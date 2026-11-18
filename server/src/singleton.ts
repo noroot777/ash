@@ -1,3 +1,4 @@
+import { readEnv } from "@ash/shared/env-names";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -200,7 +201,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
           `database is being migrated by an offline maintenance process (resource ${maintenance.key})`,
         );
       }
-      if (process.env.ASH_ALLOW_MULTI === "1") {
+      if (readEnv(process.env, "NAVI_ALLOW_MULTI") === "1") {
         console.warn(
           `[ash] WARNING: ASH_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
         );

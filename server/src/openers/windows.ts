@@ -286,7 +286,7 @@ export function buildWindowsCommand(template: string, absPath: string) {
  *    `...\pctEXPANDEDpct`(打开的根本不是用户点的那个);走环境变量则原样是
  *    `pct%ASH_F1_X%pct` —— 展开是单遍的,展开出来的 `%` 不会再被扫一次。
  */
-export const WIN_OPEN_TARGET_ENV = "ASH_OPEN_TARGET";
+export const WIN_OPEN_TARGET_ENV = "NAVI_OPEN_TARGET";
 
 export function windowsDefaultOpenCommand(absPath: string) {
   return {

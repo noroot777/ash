@@ -23,6 +23,8 @@ import { imBindings } from "../db/schema-im.js";
 import { setActor, SINGLE_USER_ID, type Actor } from "./context.js";
 import { isMultiUser } from "./mode.js";
 import { getUser } from "./store.js";
+import { headerNameGenerations, NAVI_HEADERS } from "@ash/shared/http-headers";
+import { HUMAN_ACTION_TOKEN_HEADER } from "@ash/shared/human-action";
 
 export interface ImPrincipal {
   channel: "feishu";
@@ -91,8 +93,9 @@ export function imRouteAllowed(method: string, path: string): boolean {
 }
 
 const FORBIDDEN_HEADERS = [
-  "cookie", "authorization", "x-ash-source-task-id", "x-ash-turn-token",
-  "x-ash-direction-token", "x-ash-human-action-token",
+  "cookie", "authorization",
+  ...([NAVI_HEADERS.sourceTaskId, NAVI_HEADERS.turnToken, NAVI_HEADERS.directionToken, HUMAN_ACTION_TOKEN_HEADER] as const)
+    .flatMap((name) => headerNameGenerations(name)),
 ];
 
 /**

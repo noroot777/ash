@@ -32,8 +32,15 @@ import { isMultiUser } from "./mode.js";
 import { noteOwnerHolder, ownerProof } from "./remote-access.js";
 import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
 import { resolveSession, touchUser, findUserByKey } from "./store.js";
+import { NAVI_HEADERS, requestHeader } from "../request-headers.js";
+import { LEGACY_SESSION_COOKIE } from "@ash/shared/legacy-names";
 
-export const SESSION_COOKIE = "ash_session";
+export const SESSION_COOKIE = "navi_session";
+
+/** 这个请求带的会话凭证：认新名，也认升级前发出去的旧名 cookie（它们照常有效到过期）。 */
+export function sessionCookieOf(c: Context): string | undefined {
+  return getCookie(c, SESSION_COOKIE) ?? getCookie(c, LEGACY_SESSION_COOKIE);
+}
 
 /** 无需登录就能打的接口。清单短、且每一条都要说得出理由。 */
 const PUBLIC_API_PATHS = new Set([
@@ -208,8 +215,8 @@ const requestHost = (c: Context): string => c.req.header("host") ?? new URL(c.re
  * 自用模式也保留有效回合身份,其余请求的回合凭证由各路由核验。
  */
 export async function agentActor(c: Context): Promise<Actor | null> {
-  const taskId = c.req.header("x-ash-source-task-id")?.trim();
-  const token = c.req.header("x-ash-turn-token")?.trim();
+  const taskId = requestHeader(c, NAVI_HEADERS.sourceTaskId)?.trim();
+  const token = requestHeader(c, NAVI_HEADERS.turnToken)?.trim();
   if (!taskId || !token) return null;
   const row = (
     await db
@@ -241,7 +248,7 @@ async function bearerActor(c: Context): Promise<Actor | null> {
 }
 
 async function cookieActor(c: Context): Promise<Actor | null> {
-  const token = getCookie(c, SESSION_COOKIE) ?? "";
+  const token = sessionCookieOf(c) ?? "";
   if (!token) return null;
   const user = await resolveSession(token);
   if (!user) return null;
@@ -285,7 +292,7 @@ export function authGate(): MiddlewareHandler {
       actor = (await cookieActor(c)) ?? (await bearerActor(c));
       ambient = actor !== null;
     } else if (!actor) {
-      const proof = ownerProof(c, getCookie(c, SESSION_COOKIE));
+      const proof = ownerProof(c, sessionCookieOf(c));
       if (proof) {
         actor = SINGLE_ACTOR;
         noteOwnerHolder(c, proof.holder);

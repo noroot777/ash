@@ -46,6 +46,7 @@
 // 归还;欠账是本地账,只能靠补偿往前推,补不动就一直补 —— 不设上限、不自行退场。进程真的没了
 // 也有交接:协议事实在调用这条路之前就已经落盘(orchestrator 的 `noteDeliveryAccepted`),
 // 开机对账按那张记号判「已送达」并补记,不会把它当成未送达重投(pending-checkpoint-recovery.ts)。
+import { readEnv } from "@ash/shared/env-names";
 import type { InputAcceptance } from "./executors/types.js";
 
 /**
@@ -67,7 +68,7 @@ export function parseRetryMs(raw: string | undefined): number[] {
     .map(Number).filter((x) => Number.isFinite(x) && x >= 0);
   return parsed.length ? parsed : DEFAULT_RETRY_MS;
 }
-const RETRY_MS = parseRetryMs(process.env.ASH_DELIVERY_RETRY_MS);
+const RETRY_MS = parseRetryMs(readEnv(process.env, "NAVI_DELIVERY_RETRY_MS"));
 
 export interface DeliveryLease {
   /** 接 `ContinueTaskOptions.onInputSettled`:初次与迟到都喂进来。 */

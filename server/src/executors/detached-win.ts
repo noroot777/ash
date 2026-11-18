@@ -121,16 +121,16 @@ export function spawnWindowsDetachedAgent(
   const env: Record<string, string | undefined> = {
     ...agentBaseEnv(),
     ...extraEnv,
-    // 壳认的那几项。跟 POSIX 的 `ASH_OUT`/`ASH_ERR`/`ASH_RC`/`ASH_IN` 同名同义。
-    ASH_OUT: paths.out,
-    ASH_ERR: paths.err,
-    ASH_RC: paths.rc,
-    ASH_VERBATIM: plan.windowsVerbatimArguments ? "1" : "0",
-    ASH_KEEP_STDIN: opts?.keepStdin ? "1" : "0",
-    ASH_IN: opts?.keepStdin ? wrap.pipeName : undefined,
-    ASH_IN_MARKER: opts?.keepStdin ? wrap.pipeMarker : undefined,
-    ASH_STDIN_STATE: wrap.state,
-    ASH_OWNERSHIP: wrap.ownership,
+    // 壳认的那几项。跟 POSIX 的 `NAVI_OUT`/`NAVI_ERR`/`NAVI_RC`/`NAVI_IN` 同名同义。
+    NAVI_OUT: paths.out,
+    NAVI_ERR: paths.err,
+    NAVI_RC: paths.rc,
+    NAVI_VERBATIM: plan.windowsVerbatimArguments ? "1" : "0",
+    NAVI_KEEP_STDIN: opts?.keepStdin ? "1" : "0",
+    NAVI_IN: opts?.keepStdin ? wrap.pipeName : undefined,
+    NAVI_IN_MARKER: opts?.keepStdin ? wrap.pipeMarker : undefined,
+    NAVI_STDIN_STATE: wrap.state,
+    NAVI_OWNERSHIP: wrap.ownership,
   };
   const unitToken = seedUnitToken(env);
   // 内核圈定(Windows 上是 Job Object,见 kernel-confine.ts / confine-job.ts):圈号与记号
@@ -146,7 +146,7 @@ export function spawnWindowsDetachedAgent(
     : ["pipe", outFd, errFd, track.fd];
   const bornAt = Date.now();                      // 理由见 spawn.ts 里同一句
   // 壳拿 `node <wrap.cjs> <program> <args…>`:程序和参数照旧逐个过内核,不拼命令行,
-  // 所以 `windowsVerbatimArguments` 这类规则留给壳里那次 spawn 处理(走 ASH_VERBATIM)。
+  // 所以 `windowsVerbatimArguments` 这类规则留给壳里那次 spawn 处理(走 NAVI_VERBATIM)。
   const real = spawn(process.execPath, [wrap.script, plan.file, ...plan.args], {
     cwd,
     stdio,

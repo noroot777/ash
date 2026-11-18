@@ -9,12 +9,13 @@ import { holdDispatched, releaseDispatched } from "./dispatch-hold.js";
 import { oweHeldStart } from "./dispatch-hold-owed.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { dispatchHoldOf, dispatchHoldText } from "./task-hold.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
 /** 这次调用是智能体发的（MCP 带着它那一回合的身份，或者 agent 令牌）。 */
 export function fromAgent(c: Context): boolean {
-  return actorOf(c).kind === "agent" || c.req.header("x-ash-client") === "mcp";
+  return actorOf(c).kind === "agent" || requestHeader(c, NAVI_HEADERS.client) === "mcp";
 }
 
 /**

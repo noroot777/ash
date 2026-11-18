@@ -26,6 +26,7 @@
 // 有没有断链（见 danglingLink）。那几条建议里「去主仓装一次」仍然要提醒 lock 文件可能被改写：node_modules 被
 // gitignore 不等于 install 不写跟踪文件。
 import { spawn } from "node:child_process";
+import { withLegacyEnvNames } from "@ash/shared/env-names";
 import { createHash } from "node:crypto";
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync,
@@ -399,7 +400,7 @@ async function install(
         // 不设 `CI=1`：pnpm/yarn 在 CI 下会自动切成 frozen-lockfile，锁文件跟 package.json
         // 稍有出入就直接失败 —— 我们宁可装出一份能跑的。npm 的审计和捐助提示是纯噪音，
         // 关掉（这两个 env 只有 npm 认，别的包管理器当没看见）。
-        env: { ...augmentedEnv(), ASH_PREVIEW: "1", npm_config_audit: "false", npm_config_fund: "false" },
+        env: { ...augmentedEnv(), ...withLegacyEnvNames({ NAVI_PREVIEW: "1" }), npm_config_audit: "false", npm_config_fund: "false" },
       });
       if (child.pid) onChild(child.pid);
       const timer = setTimeout(() => {

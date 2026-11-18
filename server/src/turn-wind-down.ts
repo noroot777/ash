@@ -17,6 +17,7 @@
 //
 // 记录**挂在那把锁的身份上**(`TurnIdentity.windDown`),跟锁同生同死:放锁即带走,换了主人
 // 的锁上读不到上一轮的记录。依赖单向:这里读写 turn-lock 交出来的身份,turn-lock 只借类型。
+import { readEnv } from "@ash/shared/env-names";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { turnIdentity, type TurnOwner } from "./turn-lock.js";
 
@@ -29,7 +30,7 @@ import { turnIdentity, type TurnOwner } from "./turn-lock.js";
  * 取到 10 分钟,有界的步骤够不着。可用 `ASH_STUCK_WIND_DOWN_MS`(毫秒)调,回归测试靠它压窗口。
  */
 export const STUCK_WIND_DOWN_MS = (() => {
-  const configured = Number(process.env.ASH_STUCK_WIND_DOWN_MS);
+  const configured = Number(readEnv(process.env, "NAVI_STUCK_WIND_DOWN_MS"));
   return Number.isFinite(configured) && configured > 0 ? configured : 10 * 60_000;
 })();
 
@@ -46,7 +47,7 @@ export const LONG_WIND_DOWN_STEP_MS = 6 * STUCK_WIND_DOWN_MS;
  * `git diff HEAD`。可用 `ASH_WIND_DOWN_COMMAND_TIMEOUT_MS` 调。
  */
 export const WIND_DOWN_COMMAND_TIMEOUT_MS = (() => {
-  const configured = Number(process.env.ASH_WIND_DOWN_COMMAND_TIMEOUT_MS);
+  const configured = Number(readEnv(process.env, "NAVI_WIND_DOWN_COMMAND_TIMEOUT_MS"));
   return Number.isFinite(configured) && configured > 0 ? configured : 2 * 60_000;
 })();
 

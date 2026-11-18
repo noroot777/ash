@@ -5,10 +5,10 @@
 // `server/src/auth/human-action-token.ts`。
 
 /** 真人动作请求带凭据的头。 */
-export const HUMAN_ACTION_TOKEN_HEADER = "x-ash-human-action-token";
+export const HUMAN_ACTION_TOKEN_HEADER = "x-navi-human-action-token";
 
 /** 页面文档里承载凭据的 meta 名。 */
-export const HUMAN_ACTION_TOKEN_META = "ash-human-action-token";
+export const HUMAN_ACTION_TOKEN_META = "navi-human-action-token";
 
 /**
  * 响应里给回「下一份凭据」的**头**名（服务端用一次就烧掉，所以必须轮换）。
@@ -20,4 +20,4 @@ export const HUMAN_ACTION_TOKEN_META = "ash-human-action-token";
  * `await next()` 之后挂上去,不分状态码 —— 消费与续发收在同一处,新增一条真人端点不需要
  * 记得做任何事。
  */
-export const HUMAN_ACTION_TOKEN_NEXT_HEADER = "x-ash-human-action-token-next";
+export const HUMAN_ACTION_TOKEN_NEXT_HEADER = "x-navi-human-action-token-next";

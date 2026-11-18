@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Hono } from "hono";
-import { getCookie } from "hono/cookie";
 import type { Actor } from "./auth/context.js";
 import { credentialAlive, onCredentialRevoked, ownerHolderOf } from "./auth/remote-access.js";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
@@ -11,6 +10,8 @@ import { alive, readAnyPreview } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
 import { rewritePreviewUrl } from "./preview-proxy-rewrite.js";
 import { rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
+import { LEGACY_SESSION_COOKIE } from "@ash/shared/legacy-names";
 
 /**
  * `jar` 是这一趟预览自己的 cookie 罐子（存在服务端，规矩和缘由都在 preview-cookies.ts）。
@@ -234,10 +235,10 @@ export function mountPreviewOpenRoutes(api: Hono): void {
     if (self !== null && service.port === self) return c.text("预览记录指到了 Navi 自己，请关掉预览重开一次。", 502);
     const actor = actorOf(c);
     const { getUser } = await import("./auth/store.js");
-    const { SESSION_COOKIE } = await import("./auth/middleware.js");
+    const { SESSION_COOKIE, sessionCookieOf } = await import("./auth/middleware.js");
     const grant: PreviewGrant = {
       taskId, gen: record.gen, actor, expires: Date.now() + GRANT_LIFE,
-      session: getCookie(c, SESSION_COOKIE), turn: c.req.header("x-ash-turn-token"),
+      session: sessionCookieOf(c), turn: requestHeader(c, NAVI_HEADERS.turnToken),
       keyHash: actor.kind === "user" && c.req.header("authorization") ? (await getUser(actor.userId!))?.keyHash : undefined,
       holder: ownerHolderOf(c), live: new Set(),
       jar: new Map(), client: null, nav: "", content: null, forks: [], ownApi: null,
@@ -251,6 +252,8 @@ export function mountPreviewOpenRoutes(api: Hono): void {
     if (grant.session && bound !== null && record.hostApi === bound && await previewsOwnRepo(taskId)) {
       const jar: PreviewCookieJar = new Map();
       rememberCookie(jar, `${SESSION_COOKIE}=${grant.session}; Path=/`, "/");
+      // 被预览的可能是改名之前那一版代码（任务分支还没合进来），它只认旧名的 cookie。
+      rememberCookie(jar, `${LEGACY_SESSION_COOKIE}=${grant.session}; Path=/`, "/");
       grant.ownApi = { port: bound, jar };
     }
     for (const [token, value] of grants) if (value.expires <= Date.now() || readAnyPreview(value.taskId)?.gen !== value.gen) dropGrant(token);

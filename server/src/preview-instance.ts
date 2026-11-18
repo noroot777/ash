@@ -11,7 +11,8 @@
 //
 // 顺带的第二件事：预览实例**不跑调度器**。schedules / scheduled_messages 两张表压根没
 // 进快照，加上这条就是双保险——预览绝不会替你到点派活、到点发消息。
-export const IS_PREVIEW_INSTANCE = process.env.ASH_PREVIEW === "1";
+import { readEnv } from "@ash/shared/env-names";
+export const IS_PREVIEW_INSTANCE = readEnv(process.env, "NAVI_PREVIEW") === "1";
 
 /** 预览横幅里也写着同一句话，这里是给报错用的短版。 */
 export function previewRefusal(what: string): string {

@@ -5,6 +5,7 @@
 //
 // **落位规则是全局单点**,谁也不该另造一份:续聊、原生命令、手停、组暂停、提问、检查点、
 // 严格完成协议、以及那条「挂着哨兵不许落终态」的不变量,全都在下面这一个函数里算清楚。
+import { readEnv } from "@ash/shared/env-names";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { SessionRole, TaskStatus } from "@ash/shared";
 import { monitorSweepingStatus } from "@ash/shared/monitor";
@@ -84,7 +85,7 @@ export async function afterSettlement(
 // (接没配 ash MCP 的 agent 时用)。一处算清楚,run / continue 共用。
 // 队列推进：done / canceled / failed / paused 进 setTaskStatus 后会触发同 queue 推进。
 // 返回落位状态 + note(未确认降级的说明,调用方写进时间线让用户知道为什么)。
-const STRICT_DONE = !process.env.ASH_LAX_DONE;
+const STRICT_DONE = !readEnv(process.env, "NAVI_LAX_DONE");
 /**
  * 导出给 orchestrator：宽松模式下**连前言也别发**。
  *

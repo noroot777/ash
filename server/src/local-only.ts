@@ -7,9 +7,10 @@
 //   · 远程设备配对 / 访问密钥那一整套入口关掉（端点答 403，`AuthState.localOnly` 让 web 把
 //     对应的页和卡片都藏起来）。
 // 不开时以上全部照旧，多人能力一点不少。
-export const LOCAL_ONLY = process.env.ASH_LOCAL_ONLY === "1";
+import { clearEnv, readEnv } from "@ash/shared/env-names";
+export const LOCAL_ONLY = readEnv(process.env, "NAVI_LOCAL_ONLY") === "1";
 // 读完就从本进程环境里拿掉：agent 在某个 ash 检出里起的验证用 server 不该悄悄继承这个开关。
-delete process.env.ASH_LOCAL_ONLY;
+clearEnv(process.env, "NAVI_LOCAL_ONLY");
 
 export const LOCAL_ONLY_HOSTNAME = "127.0.0.1";
 

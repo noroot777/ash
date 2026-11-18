@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { PreviewServiceConfig } from "@ash/shared/preview";
 import { bus } from "./bus.js";
 import { RUNS_DIR } from "./paths.js";
-import { afterLoginShell, previewBaseEnv, previewScriptLaunch } from "./preview-env.js";
+import { afterLoginShell, previewScriptLaunch, previewSpawnEnv } from "./preview-env.js";
 import { stopPreviewProcesses } from "./preview-process-stop.js";
 import { prepareNodeDeps, nodeDepsAdvice } from "./preview-deps.js";
 import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, lentPortIgnoredHint, declaredHostApiPort } from "./preview-log.js";
@@ -15,6 +15,7 @@ import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { canceledGens, previewRetiring, whileRetiringPreview } from "./preview-start-state.js";
 import { alive, archivePreview, logFollower, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { now } from "./util.js";
+import { mentionsSchedulerStarted } from "./log-signals.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 
 export interface PreviewStartOptions {
@@ -70,11 +71,11 @@ export async function runPreview(
       env[`PORT${i + 1}`] = String(p);
       env[`URL${i + 1}`] = `http://localhost:${p}`;
     });
-    env.ASH_PREVIEW_BASE = proxyToken ? `/preview/${taskId}/${proxyToken}/${s.id}/` : "/";
-    if (hostApiUrl) env.ASH_HOST_API = hostApiUrl;
+    env.NAVI_PREVIEW_BASE = proxyToken ? `/preview/${taskId}/${proxyToken}/${s.id}/` : "/";
+    if (hostApiUrl) env.NAVI_HOST_API = hostApiUrl;
     return env;
   });
-  const banners = services.map((s, i) => `$ ${Object.entries(envs[i]).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${s.cmd}\n`);
+  const banners = services.map((s, i) => `$ ${Object.entries(envs[i]).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none NAVI_PREVIEW=1 NAVI_PREVIEW_MODE=${step.p.mode} ${s.cmd}\n`);
   writeFileSync(log, configs.length > 1 ? `启动 ${configs.length} 个预览服务\n` : banners[0]);
   services.forEach((s, i) => { if (s.log !== log) writeFileSync(s.log, banners[i]); });
   writeRecord({
@@ -124,7 +125,7 @@ export async function runPreview(
         const child = spawn(launch.file, launch.args, {
           cwd, detached: process.platform !== "win32", windowsHide: true,
           windowsVerbatimArguments: launch.windowsVerbatimArguments, stdio: ["ignore", fd, fd],
-          env: { ...previewBaseEnv(cwd), ...envs[i], ASH_PREVIEW: "1", ASH_PREVIEW_MODE: step.p.mode, BROWSER: "none" },
+          env: previewSpawnEnv(cwd, { ...envs[i], NAVI_PREVIEW: "1", NAVI_PREVIEW_MODE: step.p.mode, BROWSER: "none" }),
         });
         child.on("error", (error) => errors.set(s.id, error.message));
         child.on("exit", () => {
@@ -163,7 +164,7 @@ export async function runPreview(
     const scanFresh = (i: number): string | null => {
       const fresh = follow[i]();
       if (!fresh) return null;
-      if (fresh.includes("[ash] scheduler started")) {
+      if (mentionsSchedulerStarted(fresh)) {
         return "这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先同步新版预览隔离逻辑。";
       }
       if (services.length === 1 && hostApi === null && bound !== null && declaredHostApiPort(fresh) === bound) hostApi = bound;

@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { codexNativeWork } from "./native-work.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
+import { ASH_TURN_IDENTITY_ENV } from "@ash/shared/mcp";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
@@ -139,7 +140,7 @@ export class CodexExecutor implements AgentExecutor {
         // 它下面 —— 水位必须去同一个目录读。
         configDir: opts.env?.CODEX_HOME,
         // 任务回合才要 ash 的工具交卷;exec 这条路 codex 不报 MCP 启动状态,按本回合记录判(ash-mcp-inject.ts)。
-        ashMcp: opts.env?.ASH_TASK_ID ? new CodexExecAshMcp() : undefined,
+        ashMcp: opts.env?.[ASH_TURN_IDENTITY_ENV.taskId] ? new CodexExecAshMcp() : undefined,
       }), { bin: this.bin, args: this.appServerArgs(opts).args, cwd: opts.cwd,
         env: { ...this.env(), ...opts.env } }, opts.sessionId, () => cleanupAfterRun(child)),
       kill: () => {

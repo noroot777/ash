@@ -1,3 +1,4 @@
+import { readEnv } from "@ash/shared/env-names";
 import { randomUUID } from "node:crypto";
 import { Agent, ProxyAgent, type Dispatcher } from "undici";
 import {
@@ -212,6 +213,9 @@ function upstreamOrigin(url: string): string {
   try { return new URL(url).origin; } catch { return "无效地址"; }
 }
 
+/** 中转请求的诊断 id，挂在应答头上（协议转换那一层原样转出去，见 openai-converter/proxy.ts）。 */
+export const RELAY_REQUEST_ID_HEADER = "x-navi-relay-request-id";
+
 function logDiagnostic(diagnostic: RelayDiagnostic): void {
   console.warn(`[ash][llm-relay] ${JSON.stringify(diagnostic)}`);
 }
@@ -220,7 +224,7 @@ export function relayErrorResponse(error: unknown): Response {
   if (error instanceof RelayRequestError) {
     return Response.json({ error: { message: error.message, type: "upstream_connection_error" } }, {
       status: error.diagnostic.status,
-      headers: { "x-ash-relay-request-id": error.diagnostic.requestId },
+      headers: { [RELAY_REQUEST_ID_HEADER]: error.diagnostic.requestId },
     });
   }
   return Response.json({ error: { message: "供应商转发失败", type: "upstream_connection_error" } }, { status: 502 });
@@ -231,9 +235,9 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   const requestId = randomUUID();
   const upstream = upstreamOrigin(url);
   const method = (init.method ?? "GET").toUpperCase();
-  const timeoutMs = positiveTimeout(options.headersTimeoutMs ?? process.env.ASH_LLM_RELAY_HEADERS_TIMEOUT_MS,
+  const timeoutMs = positiveTimeout(options.headersTimeoutMs ?? readEnv(process.env, "NAVI_LLM_RELAY_HEADERS_TIMEOUT_MS"),
     method === "GET" || method === "HEAD" ? 15_000 : 300_000);
-  const bodyTimeoutMs = positiveTimeout(options.bodyTimeoutMs ?? process.env.ASH_LLM_RELAY_BODY_TIMEOUT_MS, 300_000);
+  const bodyTimeoutMs = positiveTimeout(options.bodyTimeoutMs ?? readEnv(process.env, "NAVI_LLM_RELAY_BODY_TIMEOUT_MS"), 300_000);
   const deadline = new AbortController();
   const signal = init.signal ? AbortSignal.any([init.signal, deadline.signal]) : deadline.signal;
   let timedOut = false;
@@ -287,7 +291,7 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     clearTimeout(timer);
   }
   const headers = new Headers(response.headers);
-  headers.set("x-ash-relay-request-id", requestId);
+  headers.set(RELAY_REQUEST_ID_HEADER, requestId);
   if (response.status >= 500) {
     logDiagnostic({ requestId, upstream, method, phase: "headers", status: response.status, elapsedMs: Date.now() - startedAt, codes: [`HTTP_${response.status}`], ...routeFields() });
   }

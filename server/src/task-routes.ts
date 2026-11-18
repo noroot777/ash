@@ -33,6 +33,7 @@ import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
 import { mountTaskReadRoutes } from "./task-read-routes.js";
 import { mountPrerequisiteRoutes, prerequisiteRefusal, stringList } from "./prerequisite-routes.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 export function mountTaskRoutes(api: Hono): void {
   // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts、只读的查询那几条住在
@@ -361,9 +362,9 @@ api.patch("/tasks/:id", async (c) => {
   // 标记 user-action；MCP 则携带发起任务 id + 回合 token。校验的是「发起者当前仍是这
   // 一回合」，因此团队调度者可以跨任务改执行者，而被“引导会话”结束的旧单飞回合会被拒。
   let updateWhere: SQL = eq(tasks.id, tid);
-  if ((existing.status === "running" || existing.status === "queued") && c.req.header("x-ash-user-action") !== "1") {
-    const sourceTaskId = c.req.header("x-ash-source-task-id")?.trim() ?? "";
-    const turnToken = c.req.header("x-ash-turn-token")?.trim() ?? "";
+  if ((existing.status === "running" || existing.status === "queued") && requestHeader(c, NAVI_HEADERS.userAction) !== "1") {
+    const sourceTaskId = requestHeader(c, NAVI_HEADERS.sourceTaskId)?.trim() ?? "";
+    const turnToken = requestHeader(c, NAVI_HEADERS.turnToken)?.trim() ?? "";
     if (sourceTaskId) {
       const source = (await db.select({
         mode: tasks.mode,

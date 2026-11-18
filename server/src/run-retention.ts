@@ -17,6 +17,7 @@
 // 进行中的任务一律不碰，不管多旧；查不到任务行的目录不归这里管（删任务有自己的回收与重试，
 // run-dir-reclaim.ts）。一个任务从读任务行到删完文件整段持这个编号的目录锁（task-dir-lock.ts）：
 // 接力导入会往同一个目录写新文件、再改任务行，插在中间就会拿旧了结去删新导入的东西。
+import { readEnv } from "@ash/shared/env-names";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -49,11 +50,11 @@ export type RetentionSweep = Record<keyof typeof KINDS, Reclaimed>;
  * TRACE 是因为它先管的是原始事件流，截图沿用同一个开关。
  */
 export function retentionKeepDays(): number {
-  const raw = process.env.ASH_TRACE_KEEP_DAYS?.trim();
+  const raw = readEnv(process.env, "NAVI_TRACE_KEEP_DAYS")?.trim();
   if (!raw) return DEFAULT_KEEP_DAYS;
   const days = Number(raw);
   if (Number.isFinite(days) && days >= 0) return days;
-  console.warn(`[ash] ASH_TRACE_KEEP_DAYS=${JSON.stringify(process.env.ASH_TRACE_KEEP_DAYS)} 不是有效天数，按 ${DEFAULT_KEEP_DAYS} 天处理`);
+  console.warn(`[ash] ASH_TRACE_KEEP_DAYS=${JSON.stringify(readEnv(process.env, "NAVI_TRACE_KEEP_DAYS"))} 不是有效天数，按 ${DEFAULT_KEEP_DAYS} 天处理`);
   return DEFAULT_KEEP_DAYS;
 }
 

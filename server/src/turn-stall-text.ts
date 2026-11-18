@@ -85,8 +85,8 @@ export function stallTripText(facts: StallFacts): string {
     + `已终止本回合并按失败结算。${stalledAfter(facts)}${lastLine(facts)}\n`
     + `原始事件流:${rawLogHint(facts)}(会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt})\n`
     + "可直接重试续跑,或换一个执行器/供应商再跑。"
-    + "熔断时长由 ASH_STALL_TRIP_MS 配置(默认 30 分钟,置 0 关闭);"
-    + "警告档是 ASH_STALL_WARN_ERRORS(默认 5 条)与 ASH_STALL_WARN_MS(默认 5 分钟)。";
+    + "熔断时长由 NAVI_STALL_TRIP_MS 配置(默认 30 分钟,置 0 关闭);"
+    + "警告档是 NAVI_STALL_WARN_ERRORS(默认 5 条)与 NAVI_STALL_WARN_MS(默认 5 分钟)。";
 }
 
 /**
@@ -117,8 +117,8 @@ export function silentTurnTripText(facts: StallFacts): string {
     + "一条模型输出、思考或工具调用都没有过,判定这一轮压根没真正跑起来(最常见的两种:"
     + "回合输入没送到 agent,以及连接从头没建起来),已终止本回合并按失败结算。\n"
     + `原始事件流:${rawLogHint(facts)}(会话 ${facts.sessionId})\n`
-    + "可直接重试续跑。静默熔断时长由 ASH_STALL_SILENT_TRIP_MS 配置"
-    + "(默认 45 分钟,置 0 关闭);警告档是 ASH_STALL_SILENT_WARN_MS(默认 10 分钟)。";
+    + "可直接重试续跑。静默熔断时长由 NAVI_STALL_SILENT_TRIP_MS 配置"
+    + "(默认 45 分钟,置 0 关闭);警告档是 NAVI_STALL_SILENT_WARN_MS(默认 10 分钟)。";
 }
 
 /**
@@ -202,5 +202,5 @@ export function stallVolatileVerdictText(): string {
 export function stallEscalateText(facts: StallFacts, graceMs: number): string {
   return `〔上游停滞·终止请求未生效,已回收进程〕${minutes(graceMs)}前已请求终止这一停滞回合,`
     + `到现在仍未收到回合结束 —— 改为直接回收它的进程。这一轮仍按失败结算(${tally(facts)})。\n`
-    + "宽限期由 ASH_STALL_TRIP_GRACE_MS 配置(默认 60 秒,置 0 关闭这一档)。";
+    + "宽限期由 NAVI_STALL_TRIP_GRACE_MS 配置(默认 60 秒,置 0 关闭这一档)。";
 }

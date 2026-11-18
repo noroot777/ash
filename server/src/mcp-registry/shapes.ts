@@ -8,7 +8,8 @@
 //  ① **已有登记一律不覆盖**,含历史名 `harness` —— 用户可能自己改过路径或 URL;
 //  ② **「读不出来」绝不当成「没有」**:解析失败、写法超出认得的范围一律 unknown,
 //     因为拿「读不出来」当空去写,就是一份只剩 MCP 登记的新文件把用户整份配置盖掉。
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { envNameGenerations } from "@ash/shared/env-names";
+import { ASH_MCP_SERVER_NAME, ASH_MCP_SERVER_NAMES } from "@ash/shared/mcp";
 import { extractTomlTables, scanCodexToml, tomlRootStringArray } from "../codex-toml.js";
 import { readJsonLoose, spliceJsonMember } from "./json-edit.js";
 import type {
@@ -16,8 +17,8 @@ import type {
   AshMcpNameScan, AshMcpShape, AshMcpSwitches,
 } from "./types.js";
 
-/** 认的那两个服务名(`ash` 和历史名 `harness`)—— **两条独立登记**,顺序就是优先。 */
-export const ASH_MCP_NAMES = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
+/** 认的服务名(当前名 `navi`、历史名 `ash` / `harness`)—— **各自独立的登记**,顺序就是优先。 */
+export const ASH_MCP_NAMES: readonly string[] = ASH_MCP_SERVER_NAMES;
 
 const WANTED = ASH_MCP_NAMES;
 
@@ -293,6 +294,17 @@ function putJson(
 // 用真 CLI 验过一遍(`gemini mcp add ash node <entry> -s user -e ASH_URL=…` 写出来的
 // 就是这个形状),其余几家按各自官方文档(出处记在 `catalog.ts` 的 `source`)。
 
+/**
+ * 登记里写的 MCP 服务地址。各代变量名都认、新名优先 —— 跟 MCP 服务自己读的顺序一致
+ * （mcp/src/runtime.ts）：旧版 setup 写的登记里是 `ASH_URL`。
+ */
+export function mcpUrlOf(env: Record<string, unknown>): string | null {
+  for (const key of envNameGenerations("NAVI_URL")) {
+    if (typeof env[key] === "string") return env[key] as string;
+  }
+  return null;
+}
+
 const CONTAINER = "mcpServers";
 
 /** 这一族的启动方式:`command` 是字符串、`args` 另给、环境变量的键叫 `env`。 */
@@ -301,7 +313,7 @@ function mcpServersLaunch(entry: Record<string, unknown>): AshMcpLaunch {
   return {
     command: typeof entry.command === "string" ? entry.command : null,
     args: entry.args,
-    ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
+    ashUrl: mcpUrlOf(env),
   };
 }
 
@@ -355,7 +367,7 @@ function opencodeLaunch(entry: Record<string, unknown>): AshMcpLaunch {
   return {
     command: argv[0] ?? null,
     args: argv.slice(1),
-    ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
+    ashUrl: mcpUrlOf(env),
   };
 }
 

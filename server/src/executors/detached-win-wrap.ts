@@ -75,17 +75,17 @@ const { spawn } = require("node:child_process");
 const { appendFileSync, closeSync, openSync, renameSync, unlinkSync, writeFileSync } = require("node:fs");
 const net = require("node:net");
 
-const OUT = process.env.ASH_OUT;
-const ERR = process.env.ASH_ERR;
-const RC = process.env.ASH_RC;
-const PIPE = process.env.ASH_IN || "";
-const MARKER = process.env.ASH_IN_MARKER || "";
-const KEEP = process.env.ASH_KEEP_STDIN === "1";
-const STATE = process.env.ASH_STDIN_STATE;
-const OWNERSHIP = process.env.ASH_OWNERSHIP;
+const OUT = process.env.NAVI_OUT;
+const ERR = process.env.NAVI_ERR;
+const RC = process.env.NAVI_RC;
+const PIPE = process.env.NAVI_IN || "";
+const MARKER = process.env.NAVI_IN_MARKER || "";
+const KEEP = process.env.NAVI_KEEP_STDIN === "1";
+const STATE = process.env.NAVI_STDIN_STATE;
+const OWNERSHIP = process.env.NAVI_OWNERSHIP;
 const [file, ...args] = process.argv.slice(2);
 
-const gripe = (msg) => { try { appendFileSync(ERR, "[ash-wrap] " + msg + "\n"); } catch { /* 盘满 */ } };
+const gripe = (msg) => { try { appendFileSync(ERR, "[navi-wrap] " + msg + "\n"); } catch { /* 盘满 */ } };
 const persist = (path, value) => {
   writeFileSync(path + ".tmp", JSON.stringify(value));
   renameSync(path + ".tmp", path);
@@ -109,7 +109,7 @@ const from = Date.now();
 const child = spawn(file, args, {
   stdio: ["pipe", out, err],
   windowsHide: true,
-  windowsVerbatimArguments: process.env.ASH_VERBATIM === "1",
+  windowsVerbatimArguments: process.env.NAVI_VERBATIM === "1",
 });
 const ownership = { wrapperPid: process.pid, pid: child.pid, from, bornBefore: Date.now(), exitedAt: null };
 try { persist(OWNERSHIP, ownership); }

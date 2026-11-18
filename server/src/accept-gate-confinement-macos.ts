@@ -3,13 +3,21 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { cachedGateMacScannerExecutable, gateMacScannerExecutable } from "./accept-gate-macos-native.js";
 import { inspectProcessSync, isPidAlive } from "./platform.js";
+import { envNameGenerations } from "@ash/shared/env-names";
 import type { GateConfinement } from "./accept-gate-confinement.js";
 
-export const MAC_GATE_ENV = "ASH_ACCEPT_GATE_UNIT";
+export const MAC_GATE_ENV = "NAVI_ACCEPT_GATE_UNIT";
+/**
+ * 改名之前起的验收身上挂的是旧名记号（`ASH_ACCEPT_GATE_UNIT`），重启后接回它时得按旧名扫。哪一代
+ * 由监督标识本身说明：旧版的标识是 `macos-observed:<token>`，本版起的带一段 `navi:`。
+ */
+const LEGACY_MAC_GATE_ENV = envNameGenerations(MAC_GATE_ENV)[1]!;
+const MAC_GATE_SCOPE = "macos-observed:";
+const CURRENT_SCOPE_TAG = "navi:";
 export const MAC_GATE_NOTICE = "macOS 兼容监督：实际执行验收命令，按进程组、已观察后代和继承标记收尾；"
   + "不具备 cgroup/Job 的整次运行内核保证，清空标记并脱离的未观察后代可能无法识别。独立测试快照保留到任务验收、归档或删除时回收。";
 export const macGateToken = (logPath: string): string => createHash("sha256").update(logPath).digest("hex");
-export const isMacGateScope = (id: string | null | undefined): boolean => !!id?.startsWith("macos-observed:");
+export const isMacGateScope = (id: string | null | undefined): boolean => !!id?.startsWith(MAC_GATE_SCOPE);
 
 type Member = { pid: number; born: number };
 type Row = Member & { ppid: number; group: number; session: number; marked: number; zombie: boolean };
@@ -23,14 +31,16 @@ export async function macGateBootstrap(logPath: string) {
 
 export function macGateConfinement(logPath: string, pid: number, startedAt: string | null, existingId?: string): GateConfinement {
   const token = macGateToken(logPath);
-  const id = `macos-observed:${token}`;
+  const legacy = existingId === `${MAC_GATE_SCOPE}${token}`;
+  const id = legacy ? existingId : `${MAC_GATE_SCOPE}${CURRENT_SCOPE_TAG}${token}`;
+  const marker = legacy ? LEGACY_MAC_GATE_ENV : MAC_GATE_ENV;
   const path = `${logPath}.macos-processes.json`;
   let executable = cachedGateMacScannerExecutable();
   let timer: NodeJS.Timeout | null = null;
   let registeredGuardian: Member | null = null;
   const scan = (): Scan => {
     if (!executable) throw new Error("macOS 进程监督器尚未就绪");
-    return JSON.parse(execFileSync(executable, ["scan", `${MAC_GATE_ENV}=${token}`, String(pid)], {
+    return JSON.parse(execFileSync(executable, ["scan", `${marker}=${token}`, String(pid)], {
       encoding: "utf8", timeout: 5_000, maxBuffer: 16 * 1024 * 1024,
     })) as Scan;
   };

@@ -2,6 +2,7 @@
 // 那道解析闸。判据与动手住在 ./turn-stall.ts;拆出来是因为那份文件贴着 700 行上限。
 
 /** 配过一次的坏值只报一次,别让看门狗自己变成刷屏源。 */
+import { readEnv, type NaviEnvName } from "@ash/shared/env-names";
 const badEnvReported = new Set<string>();
 
 /**
@@ -11,8 +12,8 @@ const badEnvReported = new Set<string>();
  * `NaN`,而 `NaN <= 0` 和 `elapsedMs < NaN` **都是 false** —— 两道闸同时放行,于是第一条
  * 错误事件就当场熔断。看门狗配错一个字就变成「见错就杀」,这比不设看门狗更坏。
  */
-function num(name: string, fallback: number): number {
-  const raw = process.env[name];
+function num(name: NaviEnvName, fallback: number): number {
+  const raw = readEnv(process.env, name);
   if (raw == null || raw === "") return fallback;
   const value = Number(raw);
   if (Number.isFinite(value)) return value;
@@ -32,26 +33,26 @@ function num(name: string, fallback: number): number {
 export function thresholds() {
   return {
     /** 警告档:连续这么多条错误事件(期间上游一次都没真回话)就报。 */
-    warnErrors: num("ASH_STALL_WARN_ERRORS", 5),
+    warnErrors: num("NAVI_STALL_WARN_ERRORS", 5),
     /** 警告档:这种状态持续这么久也报(两个条件取或)。 */
-    warnMs: num("ASH_STALL_WARN_MS", 5 * 60_000),
+    warnMs: num("NAVI_STALL_WARN_MS", 5 * 60_000),
     /** 熔断档:这种状态持续这么久就终止本回合。 */
-    tripMs: num("ASH_STALL_TRIP_MS", 30 * 60_000),
+    tripMs: num("NAVI_STALL_TRIP_MS", 30 * 60_000),
     /** 熔断之后留给「这一轮真的结束」的宽限期,过了就回收句柄(见 StallActions.escalate)。 */
-    graceMs: num("ASH_STALL_TRIP_GRACE_MS", 60_000),
+    graceMs: num("NAVI_STALL_TRIP_GRACE_MS", 60_000),
     /** 静默档·警告:回合开始这么久还没有过任何进展事件就报。 */
-    silentWarnMs: num("ASH_STALL_SILENT_WARN_MS", 10 * 60_000),
+    silentWarnMs: num("NAVI_STALL_SILENT_WARN_MS", 10 * 60_000),
     /**
      * 静默档·熔断:同上,终止本回合。
      *
      * **刻意比错误档的 30 分钟宽**:那一档手里有几百条错误事件当证据,这一档只有「什么都没有」,
      * 是更弱的证据 —— 同一个方向上的取舍(宁可晚杀不可早杀)在这里要再让一步。
      */
-    silentTripMs: num("ASH_STALL_SILENT_TRIP_MS", 45 * 60_000),
+    silentTripMs: num("NAVI_STALL_SILENT_TRIP_MS", 45 * 60_000),
   };
 }
 
-export const pollMs = () => Math.min(30_000, Math.max(200, num("ASH_STALL_POLL_MS", 15_000)));
+export const pollMs = () => Math.min(30_000, Math.max(200, num("NAVI_STALL_POLL_MS", 15_000)));
 
 /** 只给回归测试(`__resetTurnStalls`):坏值告警重新可报。 */
 export function resetStallThresholdWarnings(): void {

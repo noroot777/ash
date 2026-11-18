@@ -1,3 +1,4 @@
+import { readEnv } from "@ash/shared/env-names";
 import { accessSync, constants, lstatSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 
@@ -38,11 +39,11 @@ export function readTrustedHumanApprovalKeyFile(path: string, files = keyFiles):
 }
 
 export function humanApprovalPublicKeyFile(): string | undefined {
-  return process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE || undefined;
+  return readEnv(process.env, "NAVI_HUMAN_APPROVAL_PUBLIC_KEY_FILE") || undefined;
 }
 
 export function configuredHumanApprovalKey(): string | undefined {
-  if (process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY) return process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY;
+  if (readEnv(process.env, "NAVI_HUMAN_APPROVAL_PUBLIC_KEY")) return readEnv(process.env, "NAVI_HUMAN_APPROVAL_PUBLIC_KEY");
   const path = humanApprovalPublicKeyFile();
   return path ? readTrustedHumanApprovalKeyFile(path) : undefined;
 }

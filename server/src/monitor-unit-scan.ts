@@ -17,6 +17,7 @@
 // 「这一问答出了什么」的四档投影在 proc.ts 的 `processUnitEvidence`。
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { envNameGenerations } from "@ash/shared/env-names";
 import { IS_WINDOWS } from "./platform.js";
 import { processGenerationSync, type ProcessGeneration, type ProcessMember } from "./process-generation.js";
 
@@ -57,7 +58,13 @@ import { processGenerationSync, type ProcessGeneration, type ProcessMember } fro
  * 就都问不到了 —— 那一刻只能落「证不出」,**不许当成整项退出已证明**(见 proc.ts、
  * monitor-reclaim-evidence.ts 的 `traceless`)。
  */
-export const MONITOR_UNIT_ENV = "ASH_MONITOR_UNIT";
+export const MONITOR_UNIT_ENV = "NAVI_MONITOR_UNIT";
+
+/**
+ * 认记号时各代变量名都认：改名之前起的进程（活过了升级重启的智能体、哨兵）身上是 `ASH_MONITOR_UNIT`。
+ * 种记号只种当前名（`MONITOR_UNIT_ENV`）。
+ */
+const MONITOR_UNIT_ENV_NAMES = envNameGenerations(MONITOR_UNIT_ENV);
 
 /**
  * 这一问**答得有多实**:
@@ -176,7 +183,7 @@ export function liveMonitorUnitsSync(opts: { fresh?: boolean } = {}): MonitorUni
 }
 
 /** 展示文本里**所有**出现过的 `记号=值`。全局匹配是刻意的:只取第一个就会被假记号遮住。 */
-const UNIT_MARK = new RegExp(`(?:^|\\s)${MONITOR_UNIT_ENV}=(\\S+)`, "g");
+const UNIT_MARK = new RegExp(`(?:^|\\s)(?:${MONITOR_UNIT_ENV_NAMES.join("|")})=(\\S+)`, "g");
 
 /** 一行展示文本里看得见的记号(可能来自 argv、也可能来自别的变量的值 ⇒ `ambiguous`)。 */
 function marksInText(text: string): string[] {
@@ -291,9 +298,10 @@ function passViaProc(): PassRow[] | null {
       continue;
     }
     const after = processGenerationSync(pid);
-    const prefix = `${MONITOR_UNIT_ENV}=`;
-    const marks = raw.split("\0").filter((item) => item.startsWith(prefix))
-      .map((item) => item.slice(prefix.length));
+    const marks = raw.split("\0").flatMap((item) => {
+      const name = MONITOR_UNIT_ENV_NAMES.find((candidate) => item.startsWith(`${candidate}=`));
+      return name ? [item.slice(name.length + 1)] : [];
+    });
     rows.push({ pid, gen: before && before === after ? before : null, marks });
   }
   return rows;

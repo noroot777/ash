@@ -6,10 +6,9 @@
 //     (middleware.ts)。它们各自要的凭据在路由里验:申请的 secret、一次性码。
 //   · `/remote-access*` —— **机主那一侧**,在闸内。
 import type { Context, Hono } from "hono";
-import { getCookie } from "hono/cookie";
 import type { PairClaim, PairCode, PairRequestView, PairTicket, RemoteAccessView, RemoteDeviceView } from "@ash/shared";
 import { actorOf } from "./context.js";
-import { SESSION_COOKIE } from "./middleware.js";
+import { sessionCookieOf } from "./middleware.js";
 import { readOptions } from "../im/meta.js";
 import { isMultiUser } from "./mode.js";
 import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
@@ -26,7 +25,7 @@ const MULTI_REFUSAL = "多人模式下每个人用自己的 key 登录，没有�
 /** 发这次请求的设备(凭 cookie 或 Bearer 进来的那台);本机直连和脚本没有。 */
 function currentDevice(c: Context) {
   const bearer = /^Bearer\s+(\S+)$/i.exec((c.req.header("authorization") ?? "").trim())?.[1];
-  return deviceByToken(bearer) ?? deviceByToken(getCookie(c, SESSION_COOKIE));
+  return deviceByToken(bearer) ?? deviceByToken(sessionCookieOf(c));
 }
 
 function viewFor(c: Context): RemoteAccessView {

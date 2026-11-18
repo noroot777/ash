@@ -20,6 +20,7 @@
 // 供应商回 `hasKey`、接力目标机回 `hasKey`、git 凭证只写不读 —— 所以「读得到」不等于
 // 「拿得到 key」。真正花掉 key 的动作(`POST /llm-providers/models`、`…/test`)是写方法,
 // 被这道闸挡在外面。
+import { headerNameGenerations, readHeader } from "@ash/shared/http-headers";
 import type { MiddlewareHandler } from "hono";
 import { actorOf, isAccountHolder } from "./context.js";
 import {
@@ -159,7 +160,8 @@ export function personalWriteGate(): MiddlewareHandler {
     let issued: string | null = null;
     const handoff = async () => {
       await next();
-      if (issued) c.header(HUMAN_ACTION_TOKEN_NEXT_HEADER, issued);
+      // 新旧两个名字都发：升级前打开、还没刷新的页面读的是旧名，读不到就拿着废号去点下一下。
+      if (issued) for (const name of headerNameGenerations(HUMAN_ACTION_TOKEN_NEXT_HEADER)) c.header(name, issued);
     };
     // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
     if (isHumanOnlyPath(c.req.path)) {
@@ -172,7 +174,7 @@ export function personalWriteGate(): MiddlewareHandler {
       // 它的能力边界写在 human-action-token.ts 顶部,别把它当密码学边界用。
       //
       // 这几条 403 都**不发**下一份:凭据没被烧掉(或者这根本不是本人),页面手里那份还能用。
-      if (!consumeHumanActionToken(c.req.header(HUMAN_ACTION_TOKEN_HEADER))) {
+      if (!consumeHumanActionToken(readHeader((key) => c.req.header(key), HUMAN_ACTION_TOKEN_HEADER))) {
         return rejectHumanRequest(c, HUMAN_ACTION_TOKEN_REFUSAL);
       }
       // 核验过了盖个戳。路由拿它决定留痕的措辞 —— 别让路由自己去重读请求头推断

@@ -10,6 +10,7 @@
 // （ash 不注入的那几家，走它们自己配置里的登记）照旧按「正名 → 别名 → PATH」逐项取。
 import { readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
+import { envNameGenerations, readEnv, type NaviEnvName } from "@ash/shared/env-names";
 import { ASH_TURN_IDENTITY_ENV, ASH_TURN_IDENTITY_FILE, isTurnIdentityPathEntry } from "@ash/shared/mcp";
 import { ASH_TURN_FINGERPRINT_ENV, ASH_TURN_FINGERPRINT_NONE, turnFingerprint } from "@ash/shared/turn-fingerprint";
 
@@ -49,22 +50,30 @@ const uniq = (values: (string | undefined)[]): string[] =>
   [...new Set(values.map((v) => v?.trim() ?? "").filter(Boolean))];
 
 /**
+ * 一个身份变量的各代名字（`NAVI_TASK_ID`、`ASH_TASK_ID`…）在这份环境里的值，新名在前。升级前起的
+ * 会话里是旧名；新旧都在而值不同时两个都进候选，由指纹挑（没指纹时新名在前）。
+ */
+const generations = (env: Env, name: string): (string | undefined)[] =>
+  envNameGenerations(name as NaviEnvName).map((key) => env[key]);
+
+/**
  * 挑出这一回合的身份。`refused` 非空 = 登记带了指纹、却没有哪份身份对得上：MCP 应当拒绝启动
  * （见 main.ts），让 CLI 报「ash 没接上」，而不是带着别的回合的令牌连上、到交卷才被拒。
  */
 export function resolveTurnIdentity(env: Env): ResolvedTurnIdentity & { refused: string | null } {
   const fromPath = identitiesFromPath(env.PATH);
   // 每一项的候选按「正名 → 别名 → PATH」排：没带指纹时取第一个，带了指纹时也按这个顺序试。
-  const taskIds = uniq([env[ASH_TURN_IDENTITY_ENV.taskId], ...fromPath.map((p) => p.taskId)]);
+  const taskIds = uniq([...generations(env, ASH_TURN_IDENTITY_ENV.taskId), ...fromPath.map((p) => p.taskId)]);
   const turnTokens = uniq([
-    env[ASH_TURN_IDENTITY_ENV.turnToken], env[ASH_TURN_IDENTITY_ENV.turnTicket], ...fromPath.map((p) => p.turnToken),
+    ...generations(env, ASH_TURN_IDENTITY_ENV.turnToken), ...generations(env, ASH_TURN_IDENTITY_ENV.turnTicket),
+    ...fromPath.map((p) => p.turnToken),
   ]);
   const directionTokens = uniq([
-    env[ASH_TURN_IDENTITY_ENV.directionToken], env[ASH_TURN_IDENTITY_ENV.directionTicket],
+    ...generations(env, ASH_TURN_IDENTITY_ENV.directionToken), ...generations(env, ASH_TURN_IDENTITY_ENV.directionTicket),
     ...fromPath.map((p) => p.directionToken),
   ]);
 
-  const fingerprint = env[ASH_TURN_FINGERPRINT_ENV]?.trim();
+  const fingerprint = readEnv(env, ASH_TURN_FINGERPRINT_ENV as NaviEnvName)?.trim();
   if (!fingerprint) {
     // 逐项取，不整组取：有的 CLI 只删带 TOKEN 字样的那两个（gemini），`ASH_TASK_ID` 是过得去的。
     return { taskId: taskIds[0] ?? "", turnToken: turnTokens[0] ?? "", directionToken: directionTokens[0] ?? "", refused: null };
@@ -87,6 +96,6 @@ export function resolveTurnIdentity(env: Env): ResolvedTurnIdentity & { refused:
     ...EMPTY,
     refused: `回合身份对不上 Navi 注入的回合指纹（${seen}）：多半是 CLI 配置里写死了 `
       + `${ASH_TURN_IDENTITY_ENV.taskId} / ${ASH_TURN_IDENTITY_ENV.turnToken} 这类变量（claude 的 settings.json 里的 env、`
-      + "codex 的 [mcp_servers.ash.env]），盖掉了这一回合的身份。删掉那几项再重跑",
+      + "codex 的 [mcp_servers.navi.env]），盖掉了这一回合的身份。删掉那几项再重跑",
   };
 }

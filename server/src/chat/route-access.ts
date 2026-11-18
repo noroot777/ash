@@ -10,6 +10,7 @@ import { canSeeProject } from "../auth/visibility.js";
 import { canUseOwned, filterOwned } from "../auth/owned.js";
 import { id } from "../util.js";
 import type { RoomRow } from "./service.js";
+import { NAVI_HEADERS, requestHeader } from "../request-headers.js";
 
 export async function visibleRoom(c: Context): Promise<RoomRow | undefined> {
   const actor = actorOf(c);
@@ -37,7 +38,7 @@ async function projectVisibleTo(actor: Actor, projectId: string) {
 }
 
 export function isHumanRequest(c: Context) {
-  return isHumanPrincipal(actorOf(c)) && !c.req.header("x-ash-source-task-id") && !c.req.header("x-ash-turn-token");
+  return isHumanPrincipal(actorOf(c)) && !requestHeader(c, NAVI_HEADERS.sourceTaskId) && !requestHeader(c, NAVI_HEADERS.turnToken);
 }
 
 /** 成员 + 执行器的组合键。用 JSON 拼，免得分隔符和 id / 类型里的字符撞上。 */

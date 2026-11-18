@@ -17,6 +17,7 @@ import {
   type AgentSuggestionChange,
 } from "./dispatch-suggestion.js";
 import { launchSuggestions, normalizeSuggestionLaunch } from "./dispatch-suggestion-launch.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 export function mountDispatchSuggestionRoutes(api: Hono): void {
 api.post("/tasks/:id/dispatch-suggestions", async (c) => {
@@ -27,11 +28,11 @@ api.post("/tasks/:id/dispatch-suggestions", async (c) => {
   // 派出去的任务收在这条名下：只有普通的独立任务能挂（团队、讨论、团队执行者各有各的归属）。
   if (r.mode !== "single" || r.parentId) return c.json({ error: "只有普通任务能挂可以派出去的活" }, 409);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时挂或收回", status: r.status }, 409);
-  const token = c.req.header("x-ash-turn-token");
+  const token = requestHeader(c, NAVI_HEADERS.turnToken);
   if (r.activeTurnToken && token !== r.activeTurnToken) {
     return c.json({ error: token ? "来自已结束的回合，已拒绝写入" : "MCP 未携带当前回合身份，已拒绝写入" }, 409);
   }
-  const direction = c.req.header("x-ash-direction-token");
+  const direction = requestHeader(c, NAVI_HEADERS.directionToken);
   if (r.activeDirectionToken && direction !== r.activeDirectionToken) {
     return c.json({ error: direction
       ? "方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试"

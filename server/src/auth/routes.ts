@@ -1,12 +1,13 @@
 // 认证与首启/转换的端点。**这些路由本身不在闸内**(见 middleware.ts 的 PUBLIC 清单)——
 // 前端要先问「现在是什么模式、我登没登」才知道该渲染哪一屏。
 import type { Context, Hono } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, setCookie } from "hono/cookie";
 import type { AuthState, InviteInfo, UserRole } from "@ash/shared";
 import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
 import { hostname } from "node:os";
 import { actorOf, authErrorResponse, isAccountHolder, requireAdmin } from "./context.js";
-import { SESSION_COOKIE, crossSiteRejection } from "./middleware.js";
+import { SESSION_COOKIE, crossSiteRejection, sessionCookieOf } from "./middleware.js";
+import { LEGACY_SESSION_COOKIE } from "@ash/shared/legacy-names";
 import {
   ensureHomeDirUnder,
   ensureUserHomeDir,
@@ -128,12 +129,13 @@ export function mountAuthRoutes(api: Hono): void {
   });
 
   api.post("/auth/logout", async (c) => {
-    const session = getCookie(c, SESSION_COOKIE) ?? "";
+    const session = sessionCookieOf(c) ?? "";
     await deleteSession(session);
     // 自用模式:登出 = 这台设备自己退出名册,凭证当场作废。
     const device = deviceByToken(session);
     if (device) removeDevice(device.id, connectionOf(c));
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    deleteCookie(c, LEGACY_SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
   });
 

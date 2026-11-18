@@ -7,6 +7,16 @@ import { join } from "node:path";
 import { userShellLaunch } from "./platform.js";
 import { augmentedEnv, withoutForeignNodeBins } from "./executors/spawn.js";
 import { previewShell } from "./preview-shell.js";
+import { envNameGenerations, withLegacyEnvNames } from "@ash/shared/env-names";
+
+/**
+ * 预览命令的环境：基座之上叠这一次的变量。`NAVI_` 开头的那几个（`NAVI_PREVIEW_BASE`、
+ * `NAVI_HOST_API`…）连旧名一起给 —— 读它们的是**用户自己写的启动脚本**，还有预览的任务分支上
+ * 改名之前那一版的 `scripts/dev.mjs`，它们只认 `ASH_`。
+ */
+export function previewSpawnEnv(cwd: string, vars: Readonly<Record<string, string>>): NodeJS.ProcessEnv {
+  return { ...previewBaseEnv(cwd), ...withLegacyEnvNames(vars) };
+}
 
 /**
  * 预览子进程的基座环境。
@@ -36,7 +46,7 @@ export function previewBaseEnv(cwd: string): NodeJS.ProcessEnv {
   return env;
 }
 
-const INHERITED_API_TARGETS = new Set(["ASH_PROXY", "HARNESS_PROXY", "ASH_HOST_API"]);
+const INHERITED_API_TARGETS = new Set([...envNameGenerations("NAVI_PROXY"), ...envNameGenerations("NAVI_HOST_API")]);
 
 /**
  * 同样三个变量，**在登录 shell 读完用户 profile 之后**再擦一遍，然后把这次的 `ASH_HOST_API`
@@ -55,7 +65,11 @@ const INHERITED_API_TARGETS = new Set(["ASH_PROXY", "HARNESS_PROXY", "ASH_HOST_A
 export function afterLoginShell(command: string, hostApiUrl: string | null): string {
   if (process.platform === "win32") return command;
   const lines = [`unset ${[...INHERITED_API_TARGETS].join(" ")}`];
-  if (hostApiUrl) lines.push(`export ASH_HOST_API=${previewShell().quote(hostApiUrl)}`);
+  if (hostApiUrl) {
+    for (const [name, value] of Object.entries(withLegacyEnvNames({ NAVI_HOST_API: hostApiUrl }))) {
+      lines.push(`export ${name}=${previewShell().quote(value)}`);
+    }
+  }
   return [...lines, command].join("\n");
 }
 

@@ -5,9 +5,10 @@
 // codex 自己认得的写法，预检说「接好了」，注入却认不出来、不给 MCP 传回合身份，审查跑完
 // 交卷照样 409（新链第 4 轮审查第 1 条）。判据只有一份，才不会出现「预检越准、越替一份
 // 实际交不了卷的配置背书」。
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { envNameGenerations } from "@ash/shared/env-names";
+import { ASH_MCP_SERVER_NAMES } from "@ash/shared/mcp";
 
-const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
+const WANTED: readonly string[] = ASH_MCP_SERVER_NAMES;
 
 /** 一条登记**怎么起** —— 只拿来出提示，不参与拦/放。 */
 export type LaunchSpec = { command?: string | null; args?: unknown; ashUrl?: string | null };
@@ -400,6 +401,10 @@ function inlinePairs(raw: string): { path: string[]; value: string }[] | null {
   return depth || quote || multiline ? null : fields;
 }
 
+/** 登记里 MCP 地址变量的各代名字，新名在前；`urlRank` 记下这条登记的地址是从第几代名字读来的。 */
+const URL_ENV_NAMES = envNameGenerations("NAVI_URL");
+const urlRank = new WeakMap<LaunchSpec, number>();
+
 function applyServerValue(server: CodexServer, path: string[], raw: string): boolean {
   const value = raw.trim();
   if (!path.length || (path.length === 1 && path[0] === "env")) {
@@ -412,8 +417,14 @@ function applyServerValue(server: CodexServer, path: string[], raw: string): boo
       server.enabled = value === "true";
     } else if (path[0] === "command") server.spec.command = tomlString(value);
     else if (path[0] === "args") server.spec.args = tomlStringArray(value);
-  } else if (path.length === 2 && path[0] === "env" && path[1] === "ASH_URL") {
-    server.spec.ashUrl = tomlString(value);
+  } else if (path.length === 2 && path[0] === "env" && URL_ENV_NAMES.includes(path[1]!)) {
+    // 各代名字都认，同一张表里新旧都写了就以新名为准（跟 MCP 服务自己读的顺序一致）。
+    const rank = URL_ENV_NAMES.indexOf(path[1]!);
+    const seen = urlRank.get(server.spec);
+    if (seen === undefined || rank <= seen) {
+      server.spec.ashUrl = tomlString(value);
+      urlRank.set(server.spec, rank);
+    }
   }
   return true;
 }

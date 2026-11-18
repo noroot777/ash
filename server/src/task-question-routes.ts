@@ -18,6 +18,7 @@ import { answerTask } from "./task-answer.js";
 import { setTaskQuestion, waitSlotTaken } from "./task-question.js";
 import { activeDispatchPlan, parseDispatchPlan } from "@ash/shared/dispatch-plan";
 import { DISPATCH_PLAN_BLOCKS_ASK } from "./dispatch-plan.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 export function mountTaskQuestionRoutes(api: Hono): void {
 // 提问(对称 /pause,§Team):agent 在执行中调用,写下「我被这个问题卡住了」。
@@ -99,7 +100,7 @@ api.post("/tasks/:id/ask", async (c) => {
   if (activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) })) {
     return c.json({ error: DISPATCH_PLAN_BLOCKS_ASK }, 409);
   }
-  const askToken = c.req.header("x-ash-turn-token");
+  const askToken = requestHeader(c, NAVI_HEADERS.turnToken);
   if (r.mode !== "team" && r.activeTurnToken && askToken !== r.activeTurnToken) {
     return c.json({
       error: askToken
@@ -107,7 +108,7 @@ api.post("/tasks/:id/ask", async (c) => {
         : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），提问已拒绝写入",
     }, 409);
   }
-  const askDirection = c.req.header("x-ash-direction-token");
+  const askDirection = requestHeader(c, NAVI_HEADERS.directionToken);
   if (r.mode !== "team" && r.activeDirectionToken && askDirection !== r.activeDirectionToken) {
     return c.json({ error: askDirection
       ? "提问的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 ask_question"

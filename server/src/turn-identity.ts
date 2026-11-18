@@ -19,7 +19,7 @@
 import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import {
-  ASH_TURN_IDENTITY_ENV, ASH_TURN_IDENTITY_ENV_KEYS, ASH_TURN_IDENTITY_FILE,
+  ASH_TURN_IDENTITY_ENV, ASH_TURN_IDENTITY_ENV_ALL_KEYS, ASH_TURN_IDENTITY_FILE,
   ASH_TURN_IDENTITY_PATH_DIR, isTurnIdentityPathEntry,
 } from "@ash/shared/mcp";
 import { augmentedEnv } from "./executors/bin-resolve.js";
@@ -81,8 +81,11 @@ function rewritePath(base: string, add: string | null): string | null {
  * 底座那份 `PATH` 先过一遍筛子:**ash 自己可能就是从一个 ash 任务里起来的**,那时继承到的
  * `PATH` 里带着**那条任务**的身份目录 —— 不筛掉就是一条跨任务借身份的暗路。
  */
-export function turnIdentityEnv(id: TurnIdentity): Record<string, string> {
-  const vars = {
+export function turnIdentityEnv(id: TurnIdentity): Record<string, string | undefined> {
+  const vars: Record<string, string | undefined> = {
+    // 旧名先清掉:ash 从一个改名之前的任务里起来时,继承的环境里带着**那条任务**的 `ASH_TASK_ID`,
+    // 只设新名的话它就原样留在这一回合的环境里(从前同名覆盖,改名之后不再自动盖掉)。
+    ...Object.fromEntries(ASH_TURN_IDENTITY_ENV_ALL_KEYS.map((key) => [key, undefined])),
     [ASH_TURN_IDENTITY_ENV.taskId]: id.taskId,
     [ASH_TURN_IDENTITY_ENV.turnToken]: id.turnToken,
     [ASH_TURN_IDENTITY_ENV.directionToken]: id.directionToken,
@@ -103,7 +106,7 @@ export function withoutTurnIdentity<T extends Record<string, string | undefined>
   env: T,
 ): T & Record<string, string | undefined> {
   const out: Record<string, string | undefined> = { ...env };
-  for (const key of ASH_TURN_IDENTITY_ENV_KEYS) out[key] = undefined;
+  for (const key of ASH_TURN_IDENTITY_ENV_ALL_KEYS) out[key] = undefined;
   // `PATH` 上那条通路也要摘干净,道理和上面那段注释一字不差:子进程默认继承 server 自己的
   // 环境,而 ash 从一个 ash 任务里启动时那份 `PATH` 里**就带着**那条任务的身份目录。
   // 没有可摘的就一个字都不动 —— 这几条路的行为必须与这条桥上线前逐字节一致。

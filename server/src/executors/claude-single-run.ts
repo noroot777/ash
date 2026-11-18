@@ -1,5 +1,6 @@
 // claude 单飞：常驻那条可引导的流上，一个回合 = 一个进程（`ClaudeExecutor.runSteerable` / 接管单飞）。
 // 从 claude.ts 拆出来的（那份逼近 700 行），内容没动；为什么要等后台、怎么收台见下面 `singleRunFromResident`。
+import { readEnv } from "@ash/shared/env-names";
 import type { AgentEvent } from "@ash/shared";
 import type { ResidentHandle, RunHandle } from "./types.js";
 import type { StallVerdict } from "../turn-stall-verdict.js";
@@ -12,7 +13,7 @@ import { resolveSteerText, type SteerText } from "./steer-text.js";
  */
 const BACKGROUND_HOLD_MS = (() => {
   const fallback = 2 * 60 * 60_000;
-  const raw = process.env.ASH_BACKGROUND_HOLD_MS?.trim();
+  const raw = readEnv(process.env, "NAVI_BACKGROUND_HOLD_MS")?.trim();
   if (!raw) return fallback;
   const value = Number(raw);
   if (Number.isFinite(value) && value > 0 && value <= 2 ** 31 - 1) return value;

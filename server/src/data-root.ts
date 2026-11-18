@@ -2,6 +2,7 @@
 // 所以要在 paths.js 冻成常量之前、或者替别的环境算数据根的地方也能用。
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
+import { readEnv } from "@ash/shared/env-names";
 
 // 这份 ash 的代码根：server/、web/、mcp/ 的产物都在它底下。src 与编译后的 dist 都在
 // server/ 下一层，所以 ../.. 两种跑法都指向同一处。它**不一定是仓库**：独立打包的 app
@@ -15,7 +16,7 @@ export const CODE_DIR = fileURLToPath(new URL("../..", import.meta.url));
  * `npm -w server`、`tsx` 落在同一处）。`ASH_DB`、`ASH_RUNS_DIR` 这些单项覆盖照旧优先，
  * 由各自的读取点处理。
  */
-export function dataRootFor(env: { ASH_DATA_DIR?: string | undefined }): string {
-  const explicit = env.ASH_DATA_DIR?.trim();
+export function dataRootFor(env: Readonly<Record<string, string | undefined>>): string {
+  const explicit = readEnv(env, "NAVI_DATA_DIR")?.trim();
   return explicit ? resolve(explicit) : join(CODE_DIR, "data");
 }

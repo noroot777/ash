@@ -26,6 +26,7 @@
 //    可写 ⇒ 留着。**看不见的两类**：root（绕过权限位，非 root 也列不到它），以及在权限收紧之前
 //    就已经开着它的其他用户 —— 这两类不在这里能答的范围之内。
 // 列不出来（命令不在、失败、超时、带了警告、记录不完整、平台没有办法）一律当「拿不准」。
+import { readEnv } from "@ash/shared/env-names";
 import { execFile, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
@@ -47,7 +48,7 @@ const retiringName = (path: string) =>
   join(dirname(path), `${basename(path)}${RETIRING}${process.pid}-${randomBytes(4).toString("hex")}`);
 
 // 进程表最多等这么久；超时 = 列不全 = 留着（同步那条路上也就最多卡这么久）。环境变量只给测试用。
-const LIST_TIMEOUT_MS = Number(process.env.ASH_FIFO_LIST_TIMEOUT_MS) || 10_000;
+const LIST_TIMEOUT_MS = Number(readEnv(process.env, "NAVI_FIFO_LIST_TIMEOUT_MS")) || 10_000;
 const LSOF_BUFFER = 256 << 20;
 const lsofArgs = (uid: number) => ["-n", "-P", "-F", "fti", "-u", String(uid)];
 

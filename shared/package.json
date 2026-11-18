@@ -210,6 +210,18 @@
       "types": "./src/turn-fingerprint.ts",
       "default": "./src/turn-fingerprint.ts"
     },
+    "./legacy-names": {
+      "types": "./src/legacy-names.ts",
+      "default": "./src/legacy-names.ts"
+    },
+    "./env-names": {
+      "types": "./src/env-names.ts",
+      "default": "./src/env-names.ts"
+    },
+    "./http-headers": {
+      "types": "./src/http-headers.ts",
+      "default": "./src/http-headers.ts"
+    },
     "./repo-url": {
       "types": "./src/repo-url.ts",
       "default": "./src/repo-url.ts"

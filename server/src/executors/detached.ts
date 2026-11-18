@@ -95,19 +95,19 @@ export function spawnControllableDetachedAgent(
   const script = [
     CONFINE_ENROLL_CMD,                             // 分隔符由下面的 join 写
     // 不在这里 `rm` 管子：shell 看不见别的持有者，删除一律交给 server（control-fifo.ts）。
-    'exec 3<>"$ASH_IN"',
-    '"$@" <&3 >>"$ASH_OUT" 2>>"$ASH_ERR"',
+    'exec 3<>"$NAVI_IN"',
+    '"$@" <&3 >>"$NAVI_OUT" 2>>"$NAVI_ERR"',
     'rc=$?',
-    'printf %s "$rc" >"$ASH_RC"',
+    'printf %s "$rc" >"$NAVI_RC"',
     'exit "$rc"',
   ].join("; ");
   const env = {
     ...agentBaseEnv(),
     ...extraEnv,
-    ASH_IN: input,
-    ASH_OUT: paths.out,
-    ASH_ERR: paths.err,
-    ASH_RC: paths.rc,
+    NAVI_IN: input,
+    NAVI_OUT: paths.out,
+    NAVI_ERR: paths.err,
+    NAVI_RC: paths.rc,
   };
   const track = openTrackFd();
   const stdio: Array<"ignore" | number> =
@@ -217,13 +217,13 @@ export function spawnDetachedAgent(
     try { closeSync(openSync(p, "a")); } catch { /* 目录不存在等,交给下面的 spawn 报错 */ }
   }
 
-  const script = `${CONFINE_ENROLL_CMD}; "$@" >>"$ASH_OUT" 2>>"$ASH_ERR"; printf %s $? >"$ASH_RC"`;
+  const script = `${CONFINE_ENROLL_CMD}; "$@" >>"$NAVI_OUT" 2>>"$NAVI_ERR"; printf %s $? >"$NAVI_RC"`;
   const env = {
     ...agentBaseEnv(),
     ...extraEnv,
-    ASH_OUT: paths.out,
-    ASH_ERR: paths.err,
-    ASH_RC: paths.rc,
+    NAVI_OUT: paths.out,
+    NAVI_ERR: paths.err,
+    NAVI_RC: paths.rc,
   };
   // 逃逸追踪跟普通 spawn 走同一套(见 spawn.ts 的 openTrackFd 注释)。
   const track = openTrackFd();

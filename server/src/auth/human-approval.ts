@@ -1,3 +1,4 @@
+import { readEnv } from "@ash/shared/env-names";
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto";
 import { configuredHumanApprovalKey, humanApprovalPublicKeyFile } from "./human-approval-key.js";
 export { humanApprovalPublicKeyFile } from "./human-approval-key.js";
@@ -21,7 +22,7 @@ export type HumanApprovalProof = { challengeId: string; signature: string };
 export function humanApprovalUnavailableReason(): string {
   const prefix = "放开回合占位需要离机人工授权；实例尚未配置有效公钥。";
   const restart = "需要重启服务；重启会清除内存中的回合占位，并中断正在运行的任务。当前不会放开互斥";
-  if (process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY) {
+  if (readEnv(process.env, "NAVI_HUMAN_APPROVAL_PUBLIC_KEY")) {
     return `${prefix}启动公钥 ASH_HUMAN_APPROVAL_PUBLIC_KEY 无效，请管理员修正启动配置。${restart}`;
   }
   if (humanApprovalPublicKeyFile()) {

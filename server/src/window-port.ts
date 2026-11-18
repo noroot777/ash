@@ -10,14 +10,15 @@
 // 执行。这是用户知情接受的剩余风险（desktop/macos/README.md），彻底堵住要换掉窗口的请求形式。
 //
 // 端口被别的程序占着就不监听，health 答 null：app 据此不载页面、说明是哪个端口被占，绝不退回 4317。
+import { clearEnv, readEnv } from "@ash/shared/env-names";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { LOCAL_ONLY, LOCAL_ONLY_HOSTNAME } from "./local-only.js";
 
-const raw = Number(process.env.ASH_WINDOW_PORT);
+const raw = Number(readEnv(process.env, "NAVI_WINDOW_PORT"));
 const requested = LOCAL_ONLY && Number.isInteger(raw) && raw > 0 && raw <= 65_535 ? raw : null;
 // 读完就拿掉：agent 与应用内终端会继承服务的环境，再起一份服务不该抢这个端口。
-delete process.env.ASH_WINDOW_PORT;
+clearEnv(process.env, "NAVI_WINDOW_PORT");
 
 let listening: number | null = null;
 

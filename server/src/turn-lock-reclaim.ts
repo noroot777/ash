@@ -54,6 +54,7 @@
 // 是一个判据:**持有者的等待有没有时长上界**。没有上界 → ① 在它身上不携带任何信息,
 // 报出来纯是噪音(每个等裁决的 duet 任务都会收到一条「可疑」)。清单漏了谁的代价也只是
 // 一条多余的提示 —— 上面那条不变量兜着。
+import { readEnv } from "@ash/shared/env-names";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -74,7 +75,7 @@ import { stuckWindDownText, windDownStuck, heldFor, type WindDown } from "./turn
 export const SUSPECT_TURN_MS = (() => {
   // 可调(`ASH_SUSPECT_TURN_MS`,毫秒):回归测试要把这个窗口压到毫秒级才测得动真实的
   // HTTP 救援路径,照 `ASH_MONITOR_SCAN_MAX_BYTES` 等数值常量同一口径从环境读。
-  const configured = Number(process.env.ASH_SUSPECT_TURN_MS);
+  const configured = Number(readEnv(process.env, "NAVI_SUSPECT_TURN_MS"));
   return Number.isFinite(configured) && configured > 0 ? configured : 60_000;
 })();
 

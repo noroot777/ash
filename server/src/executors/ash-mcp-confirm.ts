@@ -16,16 +16,17 @@
 //     调成过 ash 的工具就是接上了，stderr 点名 ash 启动失败就照原话说，都没有就说核实不了。
 //
 // 诊断都落 trace 与 .md（刷新后仍在），`affectsTurn: false`：不改本回合成败，成败照旧由交卷判。
+import { readEnv } from "@ash/shared/env-names";
 import { existsSync } from "node:fs";
 import type { AgentEvent } from "@ash/shared";
-import { ASH_MCP_SERVER_NAME, ASH_MCP_TOOLS, ASH_MCP_TURN_EXITS } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAME, ASH_MCP_TOOLS, ASH_MCP_TURN_EXITS, isAshMcpServerName } from "@ash/shared/mcp";
 import { ashMcpEntry } from "../mcp-registry/register.js";
 import type { ClaudeAshMcpInjection } from "./ash-mcp-inject.js";
 
 type Problem = AgentEvent | null;
 
 /** 宽松完成协议（ASH_LAX_DONE）就是给「agent 够不着 ash MCP」的环境准备的，这些话只会是噪音。 */
-const lax = () => !!process.env.ASH_LAX_DONE;
+const lax = () => !!readEnv(process.env, "NAVI_LAX_DONE");
 
 function unbuiltHint(): string {
   const entry = ashMcpEntry().args[0]!;
@@ -170,7 +171,8 @@ export class CodexExecAshMcp {
   private tail = "";
 
   item(it: { type?: unknown; server?: unknown; status?: unknown }): void {
-    if (it.type === "mcp_tool_call" && it.server === ASH_MCP_SERVER_NAME && it.status !== "failed") this.worked = true;
+    // 调成过任一代登记名的那条都算接上（用户配置里旧版 setup 登记的 `ash` 也是这个 MCP）。
+    if (it.type === "mcp_tool_call" && isAshMcpServerName(it.server) && it.status !== "failed") this.worked = true;
   }
 
   stderr(chunk: string): void {

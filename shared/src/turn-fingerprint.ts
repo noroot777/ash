@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto";
 
 /** 指纹进 MCP 子进程用的变量名。只出现在注入的那份登记里，不进 agent 进程的环境。 */
-export const ASH_TURN_FINGERPRINT_ENV = "ASH_TURN_FINGERPRINT";
+export const ASH_TURN_FINGERPRINT_ENV = "NAVI_TURN_FINGERPRINT";
 
 /**
  * 「这一回合没有身份」（侧聊、预览助手、duet 讨论者）：MCP 一律不带身份，哪条通道里有都不认 ——

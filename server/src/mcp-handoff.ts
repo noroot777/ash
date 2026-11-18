@@ -27,7 +27,7 @@ import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
 import { isTaskStage } from "@ash/shared";
 import { isReplayableMcpTool, isUndeliveredMcpFailure } from "@ash/shared/mcp-delivery";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { ashMcpToolOf, isAshMcpServerName } from "@ash/shared/mcp";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -68,7 +68,8 @@ function parseCodexCalls(text: string): McpCallRecord[] {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const item = asRecord(asRecord(parsed).item);
-    if (item.type !== "mcp_tool_call" || item.server !== ASH_MCP_SERVER_NAME) continue;
+    // 登记名各代都认：升级前起的会话、用户配置里旧版 setup 登记的那条，报的是旧名。
+    if (item.type !== "mcp_tool_call" || !isAshMcpServerName(item.server)) continue;
     if (item.status !== "failed" && item.status !== "completed") continue; // in_progress 那条跳过
     const tool = typeof item.tool === "string" ? item.tool : "";
     if (!tool) continue;
@@ -85,8 +86,7 @@ function parseCodexCalls(text: string): McpCallRecord[] {
   return out;
 }
 
-// claude 的 MCP 工具名形如 `mcp__ash__report_stage`。
-const CLAUDE_TOOL = new RegExp(`^mcp__${ASH_MCP_SERVER_NAME}__(.+)$`);
+// claude 的 MCP 工具名形如 `mcp__navi__report_stage`（旧名 `mcp__ash__…` 同样认，见 `ashMcpToolOf`）。
 
 /**
  * claude：stream-json。调用与结果分在两条消息里，靠 `tool_use_id` 对上。
@@ -101,7 +101,7 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
   const pending = new Map<string, { tool: string; args: Record<string, unknown> }>();
   const out: McpCallRecord[] = [];
   for (const line of text.split("\n")) {
-    if (!line.includes(`mcp__${ASH_MCP_SERVER_NAME}__`) && !line.includes("tool_result")) continue;
+    if (!line.includes("mcp__") && !line.includes("tool_result")) continue;
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const root = asRecord(parsed);
@@ -113,8 +113,8 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
       if (block.type === "tool_use") {
         const name = typeof block.name === "string" ? block.name : "";
         const id = typeof block.id === "string" ? block.id : "";
-        const matched = name.match(CLAUDE_TOOL);
-        if (matched && id) pending.set(id, { tool: matched[1], args: asRecord(block.input) });
+        const tool = ashMcpToolOf(name);
+        if (tool && id) pending.set(id, { tool, args: asRecord(block.input) });
       } else if (block.type === "tool_result") {
         const id = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
         const call = id ? pending.get(id) : undefined;

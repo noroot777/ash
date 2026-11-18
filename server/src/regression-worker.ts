@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
+import { clearEnv } from "@ash/shared/env-names";
 import { dirname } from "node:path";
 import { and, eq, isNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
@@ -27,9 +28,8 @@ try {
     try {
       const launch = userShellLaunch(record.command);
       const environment = { ...process.env };
-      for (const key of Object.keys(environment)) {
-        if (/^ASH_(?:DB|RUNS_DIR|DATA_DIR)$/i.test(key)) delete environment[key];
-      }
+      // 宿主的库和数据目录不交给回归命令：三代名字一起擦，擦漏一代，测试就开到真库上去。
+      for (const name of ["NAVI_DB", "NAVI_RUNS_DIR", "NAVI_DATA_DIR"] as const) clearEnv(environment, name);
       code = await new Promise<number | null>((resolve, reject) => {
         const child = spawn(launch.file, launch.args, {
           cwd: record.cwd, stdio: ["ignore", handle.fd, handle.fd], windowsHide: true,

@@ -50,6 +50,7 @@
 // 这台设备再权威也不去放松它。一个已经被别的设备点过名、此刻还活着的号,内核圈定可以推出
 // 「它不在我这个集合里 ⇒ 它不是这次运行的」—— 但那是**改核销判据**,不在本次改动的范围内
 // (约束原话:`dischargeOpen` 的语义不要改)。所以名单上还剩一条,这里照样降成 `unknown`。
+import { readEnv } from "@ash/shared/env-names";
 import type { ChildProcess } from "node:child_process";
 import {
   existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync,
@@ -107,12 +108,12 @@ export type ConfineRead =
  * 换成了 `..._CMD`:它不是「可以直接贴上去的前缀」,是「要自己接分隔符的一条命令」。
  */
 export const CONFINE_ENROLL_CMD =
-  'test -n "$ASH_CONFINE_PROCS" && { echo $$ >"$ASH_CONFINE_PROCS"'
-  + ' && echo $$ >"$ASH_CONFINE_OK"; } 2>>"${ASH_ERR:-/dev/null}"';
+  'test -n "$NAVI_CONFINE_PROCS" && { echo $$ >"$NAVI_CONFINE_PROCS"'
+  + ' && echo $$ >"$NAVI_CONFINE_OK"; } 2>>"${NAVI_ERR:-/dev/null}"';
 
 /** `CONFINE_ENROLL_CMD` 认的两项环境变量:圈的成员文件,以及那一句的成功凭据。 */
-export const CONFINE_PROCS_ENV = "ASH_CONFINE_PROCS";
-export const CONFINE_OK_ENV = "ASH_CONFINE_OK";
+export const CONFINE_PROCS_ENV = "NAVI_CONFINE_PROCS";
+export const CONFINE_OK_ENV = "NAVI_CONFINE_OK";
 
 export type Confinement = {
   /**
@@ -182,8 +183,8 @@ export function confineAbstention(): string | null {
  * 两遍,证明「答不出来就退回原路」这条真的走得通(`test:kernel-confine` 第 5 组);真出了
  * 问题时它也是一条退路 —— 关掉只是少一台设备,判定原样退回既有那套,不会放松任何判据。
  */
-const CONFINE_OFF_ENV = "ASH_KERNEL_CONFINE";
-const confineEnabled = (): boolean => process.env[CONFINE_OFF_ENV] !== "0";
+const CONFINE_OFF_ENV = "NAVI_KERNEL_CONFINE";
+const confineEnabled = (): boolean => readEnv(process.env, CONFINE_OFF_ENV) !== "0";
 
 /** `null` = 建得出来(已经删掉);非 null = 建不出来的那个 errno。 */
 function probeCgroupWritable(mount: string): string | null {
