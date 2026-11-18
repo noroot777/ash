@@ -1,11 +1,14 @@
 // 真的 Sparkle 从 dmg 装新版（仅 macOS）：旧版 app 查到更新 → 下载 dmg → 先验 EdDSA 再挂载 → 换上新版 →
 // 重开，全程不碰 GitHub、钥匙串和「应用程序」里的 app。
 //
-// 宿主是 desktop/macos/Tests/SparkleDmg 编出来的空壳 Ash.app：带真的 Sparkle.framework（与 build.sh 同一份），
+// 宿主是 desktop/macos/Tests/SparkleDmg 编出来的空壳 Navi.app：带真的 Sparkle.framework（与 build.sh 同一份），
 // Info.plist 里的更新配置与 build.sh 写的同一套，界面换成照单全收的 SPUUserDriver。新版用发版脚本的
 // `--local` 演练出 dmg 和签过的 appcast（make-dmg.sh 封的就是正式发版那个格式），由本机 http 托着。
 // 覆盖：dmg 被（长度不变地）改了一个字节 → 下载了但验签不过、不挂载不安装，装着的还是旧版；appcast 被改过
 // → 连 dmg 都不下，装着的还是旧版；都对 → 装上新版、Sparkle 把它重开。
+// 改名（Ash.app / dev.ash.* → Navi.app / dev.navi.*）：改名前的 Ash.app 拿到 Navi 的包也装不上（Sparkle 只认同名或
+// 同包标识的包，下载验签后拒装，装着的原样不动）—— 这就是要手动装一次 Navi 的原因；它看的那份改名前的 appcast
+// 里是「仅通知」的条目，查到只提示、指向下载页，不下载任何东西。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
@@ -20,7 +23,8 @@ assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
 const mac = join(root, "desktop/macos");
 const temporary = realpathSync(mkdtempSync(join(tmpdir(), "ash-sparkle-dmg-")));
-const bundleId = `dev.ash.sparkle-dmg-probe.${process.pid}`;
+const bundleId = `dev.navi.sparkle-dmg-probe.${process.pid}`;
+const legacyId = `dev.ash.sparkle-dmg-probe.${process.pid}`;
 const log = join(temporary, "probe.log");
 const lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
@@ -62,25 +66,25 @@ const build = spawnSync("swiftc", ["-swift-version", "5", "-target", "arm64-appl
   join(mac, "Tests/SparkleDmg/main.swift"), "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
 
-/** 一份空壳 Ash.app：版本、要不要一打开就查更新；更新配置同 build.sh。 */
-function makeApp(dir, version, { check }) {
-  const app = join(dir, "Ash.app");
+/** 一份空壳 Navi.app（或改名前的 Ash.app）：版本、要不要一打开就查更新、看哪份 appcast；更新配置同 build.sh。 */
+function makeApp(dir, version, { check, name = "Navi", id = bundleId, feed = feedURL }) {
+  const app = join(dir, `${name}.app`);
   mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
   mkdirSync(join(app, "Contents/Frameworks"), { recursive: true });
-  cpSync(binary, join(app, "Contents/MacOS/Ash"));
+  cpSync(binary, join(app, `Contents/MacOS/${name}`));
   assert.equal(spawnSync("ditto", [join(sparkle, "Sparkle.framework"), join(app, "Contents/Frameworks/Sparkle.framework")]).status, 0);
   writeFileSync(join(app, "Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>${bundleId}</string>
-  <key>CFBundleName</key><string>ash</string>
-  <key>CFBundleExecutable</key><string>Ash</string>
+  <key>CFBundleIdentifier</key><string>${id}</string>
+  <key>CFBundleName</key><string>${name}</string>
+  <key>CFBundleExecutable</key><string>${name}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>CFBundleVersion</key><string>${version}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
-  <key>SUFeedURL</key><string>${feedURL}</string>
+  <key>SUFeedURL</key><string>${feed}</string>
   <key>SUPublicEDKey</key><string>${publicKey}</string>
   <key>SURequireSignedFeed</key><true/>
   <key>SUVerifyUpdateBeforeExtraction</key><true/>
@@ -105,7 +109,8 @@ async function runOnce(installed, feed, { until }) {
   served = feed;
   requests.length = 0;
   rmSync(log, { force: true });
-  const child = spawn(join(installed, "Contents/MacOS/Ash"), [], { stdio: "ignore", env: cleanEnv });
+  const executable = installed.split("/").pop().replace(/\.app$/, "");
+  const child = spawn(join(installed, `Contents/MacOS/${executable}`), [], { stdio: "ignore", env: cleanEnv });
   children.add(child);
   child.once("exit", () => children.delete(child));
   const deadline = Date.now() + 120_000;
@@ -128,7 +133,7 @@ try {
   const release = spawnSync(process.execPath, [join(mac, "scripts/release.mjs"), "--local", good, "--app", fresh, "--ed-key-file", keyFile, "--notes", "新版"],
     { encoding: "utf8", env: { ...cleanEnv, ASH_MAC_RELEASE_ARTIFACTS: join(temporary, "artifacts") } });
   assert.equal(release.status, 0, `${release.stdout}${release.stderr}`);
-  const dmgName = "Ash-0.2.0-20000101.0002.dmg";
+  const dmgName = "Navi-0.2.0-20000101.0002.dmg";
   assert.ok(existsSync(join(good, dmgName)));
 
   const badDmg = join(temporary, "feed-bad-dmg");
@@ -166,15 +171,37 @@ try {
   assert.ok(existsSync(join(installed, "Contents/Frameworks/Sparkle.framework/Versions/Current")), "the framework's symlinks survived the trip through the dmg");
   assert.equal(spawnSync("codesign", ["--verify", "--deep", "--strict", installed]).status, 0, "and its signature is intact");
   console.log("PASS: the old app finds the update, downloads the dmg, verifies it before mounting, installs the new app and relaunches it");
+
+  // 改名前的 Ash.app（另一个包名、另一个包标识）对着同一个 Navi 包：下载、验签都过，但认不出这是自己的新版，拒装。
+  const ash = makeApp(join(temporary, "Applications-ash"), "20000101.0001", { check: true, name: "Ash", id: legacyId });
+  result = await runOnce(ash, good, { until: /^ERROR / });
+  assert.ok(result.seen.includes("FOUND 20000101.0002"), result.seen.join("\n"));
+  assert.match(result.seen.find((line) => line.startsWith("ERROR ")), /No suitable install/i, result.seen.join("\n"));
+  assert.equal(versionOf(ash), "20000101.0001", "Ash.app is left exactly as it was");
+  assert.ok(!existsSync(join(temporary, "Applications-ash", "Navi.app")), "and no Navi.app appears next to it");
+  console.log(`PASS: a pre-rename Ash.app cannot install the Navi bundle itself (Sparkle: ${result.seen.at(-1).split(" <- ").at(-1)}) — hence the one manual install`);
+
+  // 它实际看的是改名前那份 appcast：里面只有一条「仅通知」，查到只提示、给出下载页，什么都不下。
+  const notified = makeApp(join(temporary, "Applications-ash-2"), "20000101.0001", {
+    check: true, name: "Ash", id: legacyId, feed: feedURL.replace(/appcast\.xml$/, "legacy-appcast.xml"),
+  });
+  result = await runOnce(notified, good, { until: /^(INFORMATIONAL|ERROR|FOUND) / });
+  assert.deepEqual(result.seen.filter((line) => !line.startsWith("LAUNCHED") && line !== "CHECKING"),
+    [`INFORMATIONAL 20000101.0002 ${feedURL.replace(/appcast\.xml$/, dmgName)}`], result.seen.join("\n"));
+  assert.deepEqual(result.requests, ["legacy-appcast.xml"], "nothing but the feed is fetched");
+  assert.equal(versionOf(notified), "20000101.0001");
+  console.log("PASS: through the pre-rename feed, Ash.app only gets an informational notice pointing at the download, and fetches nothing else");
 } finally {
   for (const child of children) child.kill("SIGKILL");
   await new Promise((done) => { server.closeAllConnections(); server.close(done); });
   for (const app of bundles) spawnSync(lsregister, ["-u", app]);
-  // defaults delete 只清内容、留下一个空 plist，文件另删。
-  spawnSync("defaults", ["delete", bundleId], { stdio: "ignore" });
-  rmSync(join(homedir(), "Library/Preferences", `${bundleId}.plist`), { force: true });
-  for (const dir of ["Library/Caches", "Library/HTTPStorages", "Library/Saved Application State", "Library/WebKit"]) {
-    rmSync(join(homedir(), dir, dir.endsWith("State") ? `${bundleId}.savedState` : bundleId), { recursive: true, force: true });
+  for (const id of [bundleId, legacyId]) {
+    // defaults delete 只清内容、留下一个空 plist，文件另删。
+    spawnSync("defaults", ["delete", id], { stdio: "ignore" });
+    rmSync(join(homedir(), "Library/Preferences", `${id}.plist`), { force: true });
+    for (const dir of ["Library/Caches", "Library/HTTPStorages", "Library/Saved Application State", "Library/WebKit"]) {
+      rmSync(join(homedir(), dir, dir.endsWith("State") ? `${id}.savedState` : id), { recursive: true, force: true });
+    }
   }
   rmSync(temporary, { recursive: true, force: true });
 }

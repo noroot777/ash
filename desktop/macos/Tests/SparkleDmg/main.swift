@@ -1,7 +1,7 @@
 import AppKit
 import Sparkle
 
-// scripts/test-macos-sparkle-dmg.mjs 的宿主 app：一个只带 Sparkle 的空壳 Ash.app，Info.plist 里的更新配置与
+// scripts/test-macos-sparkle-dmg.mjs 的宿主 app：一个只带 Sparkle 的空壳 app（Navi.app，或改名前的 Ash.app），Info.plist 里的更新配置与
 // build.sh 写的同一套（EdDSA 公钥、SURequireSignedFeed、SUVerifyUpdateBeforeExtraction）。界面那一层换成照单
 // 全收的 SPUUserDriver：查到就装、下好就装并重开；每一步往 Info.plist 的 ProbeLog 记一行给测试读。
 // 带 ProbeCheck 的那一版（旧版）一打开就查更新；不带的（新版，被 Sparkle 重开的那个）记一行就退。
@@ -38,6 +38,13 @@ final class AcceptEverything: NSObject, SPUUserDriver {
   }
   func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) { emit("CHECKING") }
   func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState, reply: @escaping (SPUUserUpdateChoice) -> Void) {
+    // 「仅通知」的条目（改名前的 Ash.app 收到的那种）：没有可装的东西，记下它指向哪就退。
+    if appcastItem.isInformationOnlyUpdate {
+      emit("INFORMATIONAL \(appcastItem.versionString) \(appcastItem.infoURL?.absoluteString ?? "-")")
+      reply(.dismiss)
+      NSApp.terminate(nil)
+      return
+    }
     emit("FOUND \(appcastItem.versionString)")
     reply(.install)
   }

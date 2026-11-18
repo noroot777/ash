@@ -3,15 +3,16 @@
 // GitHub Release、传 dmg → 更新 appcast.xml（整份也签过）→ 经 GitHub API 提交进清单仓库（feedRepo）→
 // 把仓库根 README 的下载链接改成这个 dmg、只在本地提交。已装的 app 定时拉那份 appcast，看到新版就提示
 // 安装；同一个 dmg 也是新用户下载安装的那个。读写 GitHub 全程只用一张凭证，开传之前先确认它对两个仓库
-// 都有写权限。
+// 都有写权限。改名前装的 Ash.app 看的是另一份 appcast（legacyAppcastPath），也装不了包标识不同的 Navi：
+// 那一份里只放一条「仅通知」的条目，点开是下载页（见 publishLegacyFeed）。
 //
 //   npm run release:mac                         # 正式发版（要先 --keys 做过一次）
 //   npm run release:mac -- --keys               # 生成 / 读出正式 EdDSA 密钥，公钥写进 release.json
 //   npm run release:mac -- --init-repo          # release.json 里的仓库还不存在时建它们（公开）
-//   npm run release:mac -- --local <目录> --app <Ash.app> --ed-key-file <私钥文件>
+//   npm run release:mac -- --local <目录> --app <Navi.app> --ed-key-file <私钥文件>
 //                                               # 演练：dmg 和 appcast 写进本地目录，不碰 GitHub、不碰 README
 //
-// 其它选项：--app <Ash.app> 用现成的构建（不重新 build）；--notes <文字> 换掉自动生成的更新说明。
+// 其它选项：--app <Navi.app> 用现成的构建（不重新 build）；--notes <文字> 换掉自动生成的更新说明。
 //
 // 几条不变量（README「发版」里有为什么）：
 //  · 发出去的 app 里的公钥必须就是签这一版的私钥对应的那把 —— 对不上直接拒，发出去谁都装不上。
@@ -35,7 +36,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSy
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { compareVersions, latestVersion, parseItems, previousCommit, renderAppcast, renderItem } from "./appcast.mjs";
+import { compareVersions, latestVersion, parseItems, previousCommit, renderAppcast, renderInformationalItem, renderItem } from "./appcast.mjs";
 import { commitLink, LINK_COMMIT_PREFIX } from "./download-link.mjs";
 import { GitHub, NO_TOKEN_HINT, resolveToken } from "./github.mjs";
 import { ensureSparkle } from "./sparkle.mjs";
@@ -77,6 +78,19 @@ function readConfig() {
   return { feedBranch: "main", appcastPath: "appcast.xml", tagPrefix: "v", ...config };
 }
 
+/**
+ * 签名用的钥匙串条目：keychainAccount 里没有私钥、改名前的 legacyKeychainAccount 里有，就用旧的那条
+ * （同一把私钥，只是条目名还是旧的），并说一声怎么挪到新名下。
+ */
+function signingAccount(config, tool) {
+  const has = (account) => spawnSync(tool("generate_keys"), ["--account", account, "-p"], { encoding: "utf8" }).status === 0;
+  if (!config.legacyKeychainAccount || has(config.keychainAccount) || !has(config.legacyKeychainAccount)) return config.keychainAccount;
+  say(`▶ 私钥还在改名前的钥匙串条目 ${config.legacyKeychainAccount} 下，这次用它签。挪到新名下（挪完可以删掉旧条目）：\n`
+    + `  ${tool("generate_keys")} --account ${config.legacyKeychainAccount} -x <临时文件> && `
+    + `${tool("generate_keys")} --account ${config.keychainAccount} -f <临时文件> && rm <临时文件>`);
+  return config.legacyKeychainAccount;
+}
+
 const feedOf = (config) => `https://raw.githubusercontent.com/${config.feedRepo}/${config.feedBranch}/${config.appcastPath}`;
 
 function infoOf(app) {
@@ -99,9 +113,10 @@ async function main() {
   const config = readConfig();
   const sparkle = await ensureSparkle();
   const tool = (name) => join(sparkle, "bin", name);
-  const keyArgs = values["ed-key-file"] ? ["--ed-key-file", resolve(values["ed-key-file"])] : ["--account", config.keychainAccount];
+  const account = values["ed-key-file"] ? null : signingAccount(config, tool);
+  const keyArgs = account ? ["--account", account] : ["--ed-key-file", resolve(values["ed-key-file"])];
 
-  if (values.keys) return makeKeys(config, tool);
+  if (values.keys) return makeKeys({ ...config, keychainAccount: account ?? config.keychainAccount }, tool);
 
   const local = values.local ? resolve(values.local) : null;
   let github = null;
@@ -112,9 +127,14 @@ async function main() {
     say(`▶ GitHub 凭证：${auth.source}`);
     github = new GitHub(auth.token);
     const repos = [...new Set([config.releaseRepo, config.feedRepo])];
-    if (values["init-repo"]) return initRepos(repos, github);
     const missing = [];
     for (const repo of repos) if (!(await github.repoExists(repo))) missing.push(repo);
+    // 改名：装包仓库要先在 GitHub 上从旧名改过来（改名后旧地址自动跳转，已发的下载链接不断）。这时去
+    // --init-repo 会建出一个空的新仓库，改名就撞名了。
+    if (missing.includes(config.releaseRepo) && config.legacyReleaseRepo && (await github.repoExists(config.legacyReleaseRepo))) {
+      die(`${config.releaseRepo} 还不存在，${config.legacyReleaseRepo} 还在：先在 GitHub 上把 ${config.legacyReleaseRepo} 改名为 ${config.releaseRepo}，再发版（别跑 --init-repo）。`);
+    }
+    if (values["init-repo"]) return initRepos(repos, github);
     if (missing.length) die(`${missing.join("、")} 还不存在：先跑一次 npm run release:mac -- --init-repo`);
     // 传附件和改 appcast 用的是同一张凭证、写的是两个仓库：在对外放出任何东西之前确认两样都做得了。
     const readOnly = [];
@@ -131,24 +151,26 @@ async function main() {
   }
 
   // ── 1. 这次要发的 app ──
-  let app = values.app ? resolve(values.app) : join(MAC, "build", "Ash.app");
+  let app = values.app ? resolve(values.app) : join(MAC, "build", "Navi.app");
   if (!values.app) {
     if (run("git", ["status", "--porcelain"], { cwd: REPO })) die("工作区有没提交的改动：正式发版要从干净的提交构建（发出去的包要对得上一个提交）。");
     say("▶ 构建独立 app");
     const build = spawnSync("bash", [join(MAC, "build.sh")], { stdio: "inherit" });
     if (build.status !== 0) die("构建失败");
-    app = join(MAC, "build", "Ash.app");
+    app = join(MAC, "build", "Navi.app");
   }
   const info = infoOf(app);
   const version = info.CFBundleVersion;
   const shortVersion = info.CFBundleShortVersionString;
-  const commit = info.AshSourceCommit && info.AshSourceCommit !== "unknown" ? info.AshSourceCommit : null;
-  if (!local && !commit) die(`${app} 里没记构建提交（AshSourceCommit）：正式发版的 tag 要打在它上面，对不上源码的包不发。`);
+  // 改名前的构建记在 AshSourceCommit 里（重发一份旧构建时用得上）。
+  const recorded = info.NaviSourceCommit ?? info.AshSourceCommit;
+  const commit = recorded && recorded !== "unknown" ? recorded : null;
+  if (!local && !commit) die(`${app} 里没记构建提交（NaviSourceCommit）：正式发版的 tag 要打在它上面，对不上源码的包不发。`);
 
   // ── 2. 钥匙对不对 ──
   const signingKey = values["ed-key-file"]
     ? publicKeyOfKeyFile(resolve(values["ed-key-file"]))
-    : run(tool("generate_keys"), ["--account", config.keychainAccount, "-p"]);
+    : run(tool("generate_keys"), ["--account", account, "-p"]);
   if (!info.SUPublicEDKey) die(`${app} 里没有 SUPublicEDKey：这一份不带自更新，发出去也没人收得到下一版。`);
   if (info.SUPublicEDKey !== signingKey) {
     die(`app 里的公钥（${info.SUPublicEDKey}）和这次签名用的私钥（公钥 ${signingKey}）不是一对：发出去谁都装不上。`);
@@ -171,7 +193,7 @@ async function main() {
   const tag = `${local ? "v" : config.tagPrefix}${shortVersion}-${version}`;
   // ASH_MAC_RELEASE_ARTIFACTS 只给回归测试换地方，免得演练的包落进 build/releases。
   const artifacts = join(process.env.ASH_MAC_RELEASE_ARTIFACTS || join(MAC, "build", "releases"), tag);
-  const dmg = join(artifacts, `Ash-${shortVersion}-${version}.dmg`);
+  const dmg = join(artifacts, `Navi-${shortVersion}-${version}.dmg`);
   const source = `${dmg}.source`;
   // appcast 里已经有这一版：只有正式发版、上次签进去的那个包本地还在时才往下走（签名对上了只补收尾）。
   const already = items.find((item) => item.version === version);
@@ -216,7 +238,8 @@ async function main() {
     const put = await putOnRelease(github, config, {
       tag, commit, dmg, length,
       name: `Navi for macOS ${shortVersion}（${version}）`,
-      body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Ash（Ash.app）拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`,
+      body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Navi（Navi.app）拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`
+        + `\n\n装着改名前的 Ash.app：装法一样，装好打开一次 Navi，它会接过 Ash 的设置、数据和登录项，把 Ash.app 移到废纸篓。`,
     });
     url = put.url;
   }
@@ -224,6 +247,10 @@ async function main() {
   // ── 6. 再更新 appcast ──
   if (!local) await confirmDownloadable(url, dmg, length);
   if (!already) await publishAppcast({ github, config, local, remote, appcastPath, earlier, keyArgs, tool, notes, info, url, length, signature, commit });
+  if (config.legacyAppcastPath) {
+    const page = local ? url : `https://github.com/${config.releaseRepo}/releases/tag/${tag}`;
+    await publishLegacyFeed({ github, config, local, keyArgs, tool, notes, info, page });
+  }
   say(`✓ 已发 ${shortVersion}（${version}）`);
   say(`  包：${url}`);
   say(`  appcast：${local ? appcastPath : feedOf(config)}`);
@@ -296,12 +323,48 @@ async function publishAppcast({ github, config, local, remote, appcastPath, earl
     try {
       await github.writeFile(config.feedRepo, {
         path: config.appcastPath, branch: config.feedBranch, text: readFileSync(appcastPath, "utf8"), sha: remote?.sha,
-        message: `ash mac ${shortVersion}（${version}）`,
+        message: `navi mac ${shortVersion}（${version}）`,
       });
     } catch (error) {
       die(`appcast 没提交上：${error.message}\n包已经公开了（公开不撤回），修好后直接重跑：会沿用同一个 Release 和包、重新读一遍 appcast 再提交。`
         + "HTTP 409 / 422 是这期间 appcast 被别处改过，直接重跑就行。");
     }
+  }
+}
+
+/**
+ * 改名前的更新源：已装的 Ash.app（dev.ash.mac）只看它，Sparkle 也只肯装包标识相同的包 —— Navi 它装不了。
+ * 这一份里只放一条「仅通知」的条目（sparkle:informationalUpdate）：旧 app 查到它会提示有新版，「了解更多」
+ * 打开这一版的下载页，不会去下载安装。每次发版换成最新这一版；已经是这一版或更新的就不动（重跑时补得上，
+ * 补旧版的收尾也不把它倒回旧版）。
+ * 签名与新的那份是同一把钥匙（旧 app 认的就是它）。本地演练写在演练目录的 legacy-appcast.xml。
+ */
+async function publishLegacyFeed({ github, config, local, keyArgs, tool, notes, info, page }) {
+  const { CFBundleVersion: version, CFBundleShortVersionString: shortVersion } = info;
+  const path = local ? join(local, "legacy-appcast.xml") : join(MAC, "build", "release-appcast", "legacy-appcast.xml");
+  const remote = local ? null : await github.readFile(config.feedRepo, config.legacyAppcastPath, config.feedBranch);
+  const current = local ? (existsSync(path) ? readFileSync(path, "utf8") : "") : remote?.text ?? "";
+  const pointed = latestVersion(parseItems(current));
+  if (pointed && compareVersions(pointed, version) >= 0) return say(`▶ 改名前的更新源已经指着 ${pointed}`);
+  const item = renderInformationalItem({
+    version, shortVersion, link: page, pubDate: new Date(),
+    minimumSystemVersion: info.LSMinimumSystemVersion || "14.0",
+    notes: `<p>Ash 改名为 Navi。新版换了应用标识，没法从 Ash 里直接更新：点「了解更多」下载 Navi，拖进「应用程序」后打开一次，`
+      + "它会接过 Ash 的设置、数据和登录项，并把旧的 Ash.app 移到废纸篓。</p>" + notes.html,
+  });
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, renderAppcast({ title: "Navi for macOS", link: `https://github.com/${config.releaseRepo}`, items: [item] }));
+  run(tool("sign_update"), [...keyArgs, path]);
+  run(tool("sign_update"), [...keyArgs, "--verify", path]);
+  if (local) return;
+  say(`▶ 提交 ${config.feedRepo}/${config.legacyAppcastPath}（给还装着 Ash.app 的机器看的通知）`);
+  try {
+    await github.writeFile(config.feedRepo, {
+      path: config.legacyAppcastPath, branch: config.feedBranch, text: readFileSync(path, "utf8"), sha: remote?.sha,
+      message: `navi mac ${shortVersion}（${version}）：通知改名前的 Ash.app`,
+    });
+  } catch (error) {
+    die(`改名前那份 appcast 没提交上：${error.message}\n新版本身已经发完了，直接重跑会只补这一步。`);
   }
 }
 

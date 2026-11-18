@@ -5,6 +5,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var windowController: BrowserWindowController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // 第一个 WKWebView 建出来之前：要把改名前的网页数据复制过来，还要先让旧 app 退出（见 LegacyIdentity）。
+    LegacyIdentity.adoptAtLaunch()
     AppUpdater.shared.start()
     NSApp.mainMenu = MainMenu.build()
     let controller = BrowserWindowController()

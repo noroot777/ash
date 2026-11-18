@@ -9,8 +9,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { compareVersions } from "./appcast.mjs";
 
-const START = "<!-- ash-mac-download -->";
-const END = "<!-- /ash-mac-download -->";
+const START = "<!-- navi-mac-download -->";
+const END = "<!-- /navi-mac-download -->";
 /** 这类提交的标题前缀：更新说明里不列它们（每一版都有一条，对用户没信息量）。 */
 export const LINK_COMMIT_PREFIX = "docs(README): mac 版下载指向";
 

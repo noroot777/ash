@@ -35,17 +35,17 @@ export async function testInstall({ root, temporary, launch, children, until, de
       `import { writeFileSync } from "node:fs"; if (process.env.LOADED) writeFileSync(process.env.LOADED, ${JSON.stringify(version)}); setInterval(() => {}, 1000);`);
     writeFileSync(join(dir, "Contents/keepalive.mjs"), "setInterval(() => {}, 1000)");
   };
-  const newApp = join(temporary, "build", "Ash.app");
-  const newerApp = join(temporary, "build-2", "Ash.app");
+  const newApp = join(temporary, "build", "Navi.app");
+  const newerApp = join(temporary, "build-2", "Navi.app");
   fakeApp(newApp, "new");
   fakeApp(newerApp, "newer");
-  fakeApp(join(apps, "Ash.app"), "old");
+  fakeApp(join(apps, "Navi.app"), "old");
   symlinkSync(apps, appsAlias);
-  const installed = () => readFileSync(join(apps, "Ash.app/Contents/version"), "utf8");
+  const installed = () => readFileSync(join(apps, "Navi.app/Contents/version"), "utf8");
   const outside = join(temporary, "outside");
   mkdirSync(outside);
   // 经包外的软链起 ash 的入口：命令行、可执行文件、工作目录都看不出它跟包有关，只有它拿着的锁。
-  symlinkSync(join(apps, "Ash.app/Contents/Resources/app/server/dist/entry.mjs"), join(outside, "run.mjs"));
+  symlinkSync(join(apps, "Navi.app/Contents/Resources/app/server/dist/entry.mjs"), join(outside, "run.mjs"));
   const startUser = (command, args, cwd, env = {}) => {
     const user = spawn(command, args, { stdio: "ignore", cwd, env: { ...process.env, ...env } });
     children.add(user);
@@ -59,15 +59,15 @@ export async function testInstall({ root, temporary, launch, children, until, de
 
   // 系统 node 跑包里的脚本（脚本读完就关，只有命令行认得出），和包里的「node」本身在跑（可执行文件认得出；
   // 拿一份 /bin/sleep 当它 —— 开发机上的 node 多半连着动态库，拷出来起不来）。
-  const bundledNode = join(apps, "Ash.app/Contents/Resources/node");
+  const bundledNode = join(apps, "Navi.app/Contents/Resources/node");
   copyFileSync("/bin/sleep", bundledNode);
   const users = [
-    ["script, started via the real path, installing via the alias", [process.execPath, join(apps, "Ash.app/Contents/Resources/app/server/dist/index.js")], appsAlias],
-    ["script, started via the alias, installing via the real path", [process.execPath, join(appsAlias, "Ash.app/Contents/Resources/app/server/dist/index.js")], apps],
+    ["script, started via the real path, installing via the alias", [process.execPath, join(apps, "Navi.app/Contents/Resources/app/server/dist/index.js")], appsAlias],
+    ["script, started via the alias, installing via the real path", [process.execPath, join(appsAlias, "Navi.app/Contents/Resources/app/server/dist/index.js")], apps],
     // 命令行里一个 .app 都没有（相对路径起的），只能靠打开着的可执行文件认。
-    ["bundled executable started by a relative path", ["./node", "600"], apps, join(appsAlias, "Ash.app/Contents/Resources")],
+    ["bundled executable started by a relative path", ["./node", "600"], apps, join(appsAlias, "Navi.app/Contents/Resources")],
     // 别处的 node 按相对路径跑包里的脚本，工作目录在包外（第 3 轮审查的复现）。
-    ["script by a relative path from outside the bundle", [process.execPath, "Apps [1]+ $x/Ash.app/Contents/keepalive.mjs"], appsAlias],
+    ["script by a relative path from outside the bundle", [process.execPath, "Apps [1]+ $x/Navi.app/Contents/keepalive.mjs"], appsAlias],
     ["Navi entry started through a symlink outside the bundle", [process.execPath, "run.mjs"], apps, outside],
   ];
   for (const [label, [command, ...args], into, cwd = temporary] of users) {
@@ -83,7 +83,7 @@ export async function testInstall({ root, temporary, launch, children, until, de
   rmSync(bundledNode);
 
   // 锁文件缺了：入口不照跑（照跑就会被当成没人在用）。
-  const lockless = join(temporary, "lockless", "Ash.app");
+  const lockless = join(temporary, "lockless", "Navi.app");
   fakeApp(lockless, "lockless", { lock: false });
   let result = await launch(process.execPath, [join(lockless, "Contents/Resources/app/server/dist/entry.mjs")]).done;
   assert.equal(result.status, 78, result.output);
@@ -99,14 +99,14 @@ export async function testInstall({ root, temporary, launch, children, until, de
   result = await launch("/bin/bash", [install, newApp, appsAlias], installEnv).done;
   assert.equal(result.status, 0, result.output);
   assert.equal(installed(), "new");
-  assert.deepEqual(readdirSync(apps), ["Ash.app"], "no staging or replaced copy is left behind");
+  assert.deepEqual(readdirSync(apps), ["Navi.app"], "no staging or replaced copy is left behind");
 
   // 第 4 轮审查的复现：最后一次检查做完、改名之前停住，这时从包外软链起一个入口。
   const barrier = join(temporary, "barrier");
   mkdirSync(barrier);
   const quote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
   writeFileSync(join(barrier, "mv"), `#!/bin/bash
-if [[ "$1" == ${quote(join(apps, "Ash.app"))} && ! -e ${quote(join(barrier, "paused"))} ]]; then
+if [[ "$1" == ${quote(join(apps, "Navi.app"))} && ! -e ${quote(join(barrier, "paused"))} ]]; then
   touch ${quote(join(barrier, "paused"))}
   while [[ ! -e ${quote(join(barrier, "release"))} ]]; do sleep 0.05; done
 fi
@@ -139,12 +139,12 @@ exec /bin/mv "$@"
     assert.equal(result.status, 0, result.output);
   }
   assert.ok(["new", "newer"].includes(installed()), installed());
-  assert.deepEqual(readdirSync(apps), ["Ash.app"], "racing installs leave exactly one app");
-  assert.deepEqual(readdirSync(join(apps, "Ash.app")), ["Contents"], "no staging bundle nested inside the installed one");
+  assert.deepEqual(readdirSync(apps), ["Navi.app"], "racing installs leave exactly one app");
+  assert.deepEqual(readdirSync(join(apps, "Navi.app")), ["Contents"], "no staging bundle nested inside the installed one");
 
   // 装着的是还没有代码锁的旧版：没人用时按扫描那一档照常换上。
-  rmSync(join(apps, "Ash.app"), { recursive: true });
-  fakeApp(join(apps, "Ash.app"), "legacy", { lock: false });
+  rmSync(join(apps, "Navi.app"), { recursive: true });
+  fakeApp(join(apps, "Navi.app"), "legacy", { lock: false });
   result = await launch("/bin/bash", [install, newApp, apps], installEnv).done;
   assert.equal(result.status, 0, result.output);
   assert.equal(installed(), "new", "an older bundle without the lock is still replaced when nothing uses it");

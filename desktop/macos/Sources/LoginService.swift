@@ -1,14 +1,20 @@
 import Foundation
 
-/// 「登录时启动 ash 服务」：一份 LaunchAgent，登录时跑一次 `Ash --start-server`
+/// 「登录时启动 Navi 服务」：一份 LaunchAgent，登录时跑一次 `Navi --start-server`
 /// （见 main.swift），起法与打开 app 时完全同一条路径，只是不开窗口。
 ///
 /// 只在登录那一刻跑一次，不设 KeepAlive：服务是 start-detached 放出去的独立进程，launchd
 /// 守不住它；真要守，用户手动停掉服务（比如要让开发实例临时占用端口）时它会被立刻拉回来。
 enum LoginService {
-  /// 正式那份沿用最早的名字；演练用的 app（别的 bundle id）各登记各的，碰不到日常那条。
+  /// 正式那份叫 dev.navi.server；演练用的 app（别的 bundle id）各登记各的，碰不到日常那条。改名前那条
+  /// （dev.ash.server）由 LegacyIdentity 卸掉、换成这一条。
   static var label: String {
-    AshConfig.bundleID == "dev.ash.mac" ? "dev.ash.server" : "\(AshConfig.bundleID).server"
+    AshConfig.bundleID == LegacyIdentity.successor ? "dev.navi.server" : "\(AshConfig.bundleID).server"
+  }
+
+  /// 装在「应用程序」里（不是从构建目录直接打开的那份）：登录项、旧 app 的软链只指向这种位置。
+  static var isInstalledLocation: Bool {
+    ["/Applications/", "\(NSHomeDirectory())/Applications/"].contains { Bundle.main.bundlePath.hasPrefix($0) }
   }
 
   static var plistURL: URL {
@@ -28,7 +34,7 @@ enum LoginService {
   /// 路径写进登录项。已开着但 app 换了位置时重写一份。
   static func reconcileAtLaunch() throws {
     let configured = "LoginServiceConfigured"
-    let installed = ["/Applications/", "\(NSHomeDirectory())/Applications/"].contains { Bundle.main.bundlePath.hasPrefix($0) }
+    let installed = isInstalledLocation
     if installed && !UserDefaults.standard.bool(forKey: configured) {
       try setEnabled(true)
       return
@@ -79,6 +85,11 @@ enum LoginService {
     try checkedLaunchctl(["bootstrap", domain, plistURL.path])
     guard isEnabled else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO)) }
     UserDefaults.standard.set(true, forKey: "LoginServiceConfigured")
+  }
+
+  /// 卸掉一条（可能已经不在了的）登录项，不管结果。
+  static func bootout(label: String) {
+    launchctl(["bootout", "gui/\(getuid())/\(label)"])
   }
 
   private static func checkedLaunchctl(_ args: [String]) throws {

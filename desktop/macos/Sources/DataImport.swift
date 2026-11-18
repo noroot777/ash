@@ -177,7 +177,7 @@ enum DataImport {
   /// 自带 node 跑 server 的 import-snapshot：源数据根按选的路径和它的真实路径各给一份。
   private static func prepare(_ db: URL, source: URL, dest: URL) throws -> Report {
     for part in [AshConfig.nodeURL, AshConfig.importToolURL] where !FileManager.default.fileExists(atPath: part.path) {
-      throw Failure("app 里自带的 Navi 不完整（缺 \(part.path)）。重新装一次 Ash.app。")
+      throw Failure("app 里自带的 Navi 不完整（缺 \(part.path)）。重新装一次 Navi.app。")
     }
     let roots = Array(Set([source.standardizedFileURL.path, AshHealth.realPath(source.path)]))
     let tool = Process()

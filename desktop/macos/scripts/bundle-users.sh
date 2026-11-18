@@ -1,5 +1,5 @@
 #!/bin/bash
-# 还有哪些进程在用某个 .app：desktop/macos/scripts/bundle-users.sh <Ash.app>
+# 还有哪些进程在用某个 .app：desktop/macos/scripts/bundle-users.sh <Navi.app>
 # 每行「pid 命令行」，没人用就什么都不打。bundle 不存在时也什么都不打。
 #
 # 认的是文件身份，不是路径拼写：同一个 bundle 可以经软链、目录别名、相对路径被拉起，路径里还

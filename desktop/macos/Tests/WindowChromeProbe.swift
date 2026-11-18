@@ -92,7 +92,7 @@ func runWindowChromeProbe() -> Never {
 
   // #strip-button 在红绿灯那一条里；#bar 在它下面、用 --window-drag 划成可拖；#plain 什么都不是。
   let page = """
-    <meta name="ash-window-chrome" content="overlay">
+    <meta name="navi-window-chrome" content="overlay">
     <style>
       html, body { margin: 0; height: 100%; }
       button { position: fixed; width: 80px; height: 18px; padding: 0; }
@@ -188,8 +188,9 @@ func runWindowChromeProbe() -> Never {
       && js("document.title") == "plain" && titlebarNow() == 0
   }
   require(window.contentView!.frame.maxY < window.frame.height, "the page no longer extends under the window controls")
+  // 改名前的页面（连旧版服务时载到的）表态用的是 ash-window-chrome，照样认。
   webView.loadHTMLString("<meta name='ash-window-chrome' content='overlay'><title>opted</title>", baseURL: nil)
-  eventually("a document that opts in is laid out under the window controls again") {
+  eventually("a document that opts in (with the pre-rename meta name) is laid out under the window controls again") {
     chrome.overlay && window.styleMask.contains(.fullSizeContentView) && js("document.title") == "opted" && titlebarNow() == titlebar
   }
 
