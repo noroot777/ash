@@ -26,7 +26,7 @@
 // 而且 `taskkill /T` 那条路不受影响。
 import { randomBytes } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
-import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } from "../monitor-unit-scan.js";
+import { invalidateMonitorUnitScan, seedMonitorUnitEnv } from "../monitor-unit-scan.js";
 import { FROZEN_AGENT_UNIT_PREFIX } from "@ash/shared/legacy-names";
 
 /**
@@ -55,7 +55,7 @@ export function mintUnitToken(): string {
  */
 export function seedUnitToken(env: NodeJS.ProcessEnv): string {
   const token = mintUnitToken();
-  env[MONITOR_UNIT_ENV] = token;
+  seedMonitorUnitEnv(env, token);
   return token;
 }
 

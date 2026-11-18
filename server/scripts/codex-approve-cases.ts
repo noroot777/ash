@@ -9,10 +9,15 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
 import type { CodexAsk } from "../src/auth/user-cli-mcp.js";
 import { DATA_DIR, REPO_DIR } from "../src/paths.js";
 import { type Asked, bench, canned, ensure, askRealCodex, HAS_BUILT_MCP, HAS_CODEX, LISTS_ASH } from "./user-cli-mcp-bench.js";
+
+// 补进去的那条登记的表头：落的是当前名。宿主机上的 `[mcp_servers.ash]` 是改名之前 setup 写的旧名。
+const TABLE = `[mcp_servers.${ASH_MCP_SERVER_NAME}]`;
+const TABLE_RE = new RegExp(`\\[mcp_servers\\.${ASH_MCP_SERVER_NAME}\\]`);
 
 export async function checkCodexApprove(): Promise<void> {
   // ⑱ **先批准再发布：验不过的那次，用户那份配置一个字节都没被动过**（本轮审查 F1）。
@@ -34,7 +39,7 @@ export async function checkCodexApprove(): Promise<void> {
     const written = readFileSync(file, "utf8");
     assert.ok(written.startsWith(before), "用户原有那几行原样留在前面");
     if (HAS_BUILT_MCP) {
-      assert.match(written, /\[mcp_servers\.ash\]/, "补的是规范名那条");
+      assert.match(written, TABLE_RE, "补的是规范名那条");
       assert.ok(!/enabled = false/.test(written), "宿主那条关着的一个字都不许搬过来");
       assert.match(written, /mcp[\\/]dist[\\/]index\.js/, "搬不了就按内置那条渲染(指向本仓库的 MCP 入口)");
     } else {
@@ -61,7 +66,7 @@ export async function checkCodexApprove(): Promise<void> {
     const third = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n` });
     writeFileSync(join(third.dir, "config.toml"), before, "utf8");
     assert.equal((await ensure(third.dir, "codex", third.host)).configured, true, "开着的照样补得上");
-    assert.match(readFileSync(join(third.dir, "config.toml"), "utf8"), /\[mcp_servers\.ash\]/);
+    assert.match(readFileSync(join(third.dir, "config.toml"), "utf8"), TABLE_RE);
   }
 
   // ⑲ **整张 mcp_servers 写成内联值时一个字都不许写**（第 2 轮审查 F1）：我们唯一会写的东西
@@ -152,7 +157,7 @@ export async function checkCodexApprove(): Promise<void> {
       assert.equal(state.configured, false, `${why}:不许报「已接好」`);
       assert.match(state.problem ?? "", expect, `${why}:要说清为什么没接上 —— ${state.problem}`);
       assert.match(state.problem ?? "", /手工/, `${why}:补不上就得给办法`);
-      assert.ok(state.problem?.includes("[mcp_servers.ash]"), `${why}:办法里要带上那段内容`);
+      assert.ok(state.problem?.includes(TABLE), `${why}:办法里要带上那段内容`);
       assert.equal(readFileSync(file, "utf8"), before, `${why}:用户那份配置一个字节都不许动`);
       assert.equal(statSync(file).mtimeMs, past.getTime(), `${why}:连 mtime 都不该变`);
     }
@@ -173,7 +178,7 @@ export async function checkCodexApprove(): Promise<void> {
     assert.equal(log.length, 1, "一次补接只问一遍");
     assert.notEqual(log[0]!.sandbox, dir, "问的得是另一个目录,不是用户的配置目录");
     assert.equal(log[0]!.userFile, before, "问的时候用户那份配置还是原样");
-    assert.match(log[0]!.candidate, /\[mcp_servers\.ash\]/, "沙盘里放的是拼好的候选内容");
+    assert.match(log[0]!.candidate, TABLE_RE, "沙盘里放的是拼好的候选内容");
     assert.ok(log[0]!.candidate.includes(before), "候选 = 原文 + 那段,不是只剩那段");
     assert.equal(readFileSync(file, "utf8"), log[0]!.candidate, "批准之后落盘的就是批准过的那一份");
     assert.ok(!existsSync(log[0]!.sandbox), "问完沙盘要清掉");
@@ -231,7 +236,7 @@ export async function checkCodexApprove(): Promise<void> {
     const final = readFileSync(file, "utf8");
     assert.ok(final.includes(`model = "gpt-5"`), "别人存的新模型不许被盖回去");
     assert.ok(final.includes("[mcp_servers.user_added]"), "别人加的 MCP 不许消失");
-    assert.match(final, /\[mcp_servers\.ash\]/, "ash 还是要接上");
+    assert.match(final, TABLE_RE, "ash 还是要接上");
   }
 
   // ㉕ **一直撞上就如实说没写**（第 2 轮审查 F1 的另一半）：重做不能无限转,也不能为了「接上」
@@ -310,7 +315,7 @@ export async function checkCodexApprove(): Promise<void> {
       return LISTS_ASH;
     });
     assert.equal(state.configured, true, "清不掉沙盘不影响「codex 收下了」这个结论");
-    assert.match(readFileSync(join(dir, "config.toml"), "utf8"), /\[mcp_servers\.ash\]/, "该写的照样写");
+    assert.match(readFileSync(join(dir, "config.toml"), "utf8"), TABLE_RE, "该写的照样写");
     chmodSync(stuck!, 0o700);
     rmSync(join(stuck!, ".."), { recursive: true, force: true });
   } else {
@@ -350,7 +355,7 @@ export async function checkCodexApprove(): Promise<void> {
         jump(120_000);
         const healed = await ensure(dir, "codex", host, canned(LISTS_ASH));
         assert.equal(healed.configured, true, "装好 codex 之后不该还得重启 ash 才认");
-        assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/);
+        assert.match(readFileSync(file, "utf8"), TABLE_RE);
       }
     } finally {
       Date.now = realNow;

@@ -509,20 +509,23 @@ async function mergeTaskBranchLocked(
       commitOf(repo, `refs/tags/${tag}`),
       commitOf(repo, `refs/tags/${legacyTag}`),
     ]);
-    if (!tagged && legacyTagged && legacyTagged === head) {
-      return { ok: true, sourceBranch, targetBranch, method: "tagged", tag: legacyTag };
-    }
-    if (tagged) {
-      if (tagged === head) return { ok: true, sourceBranch, targetBranch, method: "tagged", tag };
+    // 新旧两个名字是**同一份验收记录**：改名之前打的 `ash-accepted/<id>` 也算数。任何一个指着
+    // 别处都按冲突报 —— 只看新名的话，升级前验收过、之后又有新提交的任务会绕开这道闸，留下
+    // 两份指着不同提交的验收标签。都指着这个提交（或只有一个、指着它）就是重复验收。
+    const existing = [{ name: tag, commit: tagged }, { name: legacyTag, commit: legacyTagged }]
+      .filter((t): t is { name: string; commit: string } => !!t.commit);
+    const elsewhere = existing.find((t) => t.commit !== head);
+    if (elsewhere) {
       return {
         ok: false,
         reason: "merge_failed",
-        message: `标签 ${tag} 已经存在、而且指向别的提交（${tagged.slice(0, 8)}）；`
+        message: `标签 ${elsewhere.name} 已经存在、而且指向别的提交（${elsewhere.commit.slice(0, 8)}）；`
           + "不覆盖它，请先确认那是什么再手动处理。",
         sourceBranch,
         targetBranch,
       };
     }
+    if (existing.length) return { ok: true, sourceBranch, targetBranch, method: "tagged", tag: existing[0]!.name };
     try {
       await exec("git", ["-C", repo, "tag", tag, sourceRef]);
       return { ok: true, sourceBranch, targetBranch, method: "tagged", tag };

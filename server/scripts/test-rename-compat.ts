@@ -131,6 +131,61 @@ try {
     console.log("✓ 任务分支:新建写 navi/,已有的 ash/、harness/ 分支照旧找得到");
   }
 
+  // ── ④b 「只打标签」验收:新旧两个标签是同一份验收记录 ─────────────────────────────
+  {
+    const { mergeTaskBranch } = await import("../src/git-accept.js");
+    const taskId = "Tg7hJk2mExample";
+    const accept = async (setup: (repo: string, previous: string) => void) => {
+      const repo = repoWithCommit(`tag-${Math.random().toString(36).slice(2, 8)}`);
+      const previous = git(repo, "rev-parse", "HEAD");
+      git(repo, "checkout", "-q", "-b", "ash/Tg7hJk2m");
+      git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "after");
+      git(repo, "checkout", "-q", "main");
+      setup(repo, previous);
+      const result = await mergeTaskBranch(repo, taskId, "main", "tag");
+      return { result, tags: git(repo, "tag", "--list").split("\n").filter(Boolean).sort() };
+    };
+    // 升级前打过旧标签、之后任务分支又有新提交:按冲突拒,不另打一份新标签。
+    let seen = await accept((repo, previous) => git(repo, "tag", "ash-accepted/Tg7hJk2m", previous));
+    assert.equal(seen.result.ok, false, "旧标签指着别的提交 = 冲突");
+    assert.match(seen.result.ok ? "" : seen.result.message ?? "", /ash-accepted\/Tg7hJk2m/, "说清是哪个标签");
+    assert.deepEqual(seen.tags, ["ash-accepted/Tg7hJk2m"], "不许留下两份指着不同提交的验收标签");
+    // 新标签对、旧标签不对:照样是冲突。
+    seen = await accept((repo, previous) => {
+      git(repo, "tag", "ash-accepted/Tg7hJk2m", previous);
+      git(repo, "tag", "navi-accepted/Tg7hJk2m", "ash/Tg7hJk2m");
+    });
+    assert.equal(seen.result.ok, false, "新旧任何一个指着别处都算冲突");
+    // 旧标签就指着这个提交:重复验收,沿用旧标签,不再打新的。
+    seen = await accept((repo) => git(repo, "tag", "ash-accepted/Tg7hJk2m", "ash/Tg7hJk2m"));
+    assert.ok(seen.result.ok && seen.result.tag === "ash-accepted/Tg7hJk2m", JSON.stringify(seen.result));
+    assert.deepEqual(seen.tags, ["ash-accepted/Tg7hJk2m"]);
+    // 都没有:打新名。
+    seen = await accept(() => {});
+    assert.ok(seen.result.ok && seen.result.tag === "navi-accepted/Tg7hJk2m", JSON.stringify(seen.result));
+    console.log("✓ 验收标签:旧标签指着别处照样按冲突拒,指着同一提交就沿用,都没有才打新名");
+  }
+
+  // ── ④c 资源记号:继承来的旧名记号要擦掉,一个进程只属于一个单元 ───────────────────
+  {
+    const { seedMonitorUnitEnv } = await import("../src/monitor-unit-scan.js");
+    const { seedUnitToken } = await import("../src/executors/unit-token.js");
+    // 从改名之前的回合/哨兵里继承来的环境:身上已经挂着旧单元的记号。
+    const inherited = () => ({ PATH: "/bin", ASH_MONITOR_UNIT: "old-unit", HARNESS_MONITOR_UNIT: "older-unit" });
+    const monitorEnv = seedMonitorUnitEnv(inherited(), "new-unit");
+    assert.deepEqual(Object.keys(monitorEnv).filter((k) => /MONITOR_UNIT$/.test(k)), ["NAVI_MONITOR_UNIT"], "哨兵:只留新单元那一份");
+    assert.equal(monitorEnv.NAVI_MONITOR_UNIT, "new-unit");
+    const agentEnv: NodeJS.ProcessEnv = inherited();
+    const token = seedUnitToken(agentEnv);
+    assert.deepEqual(Object.keys(agentEnv).filter((k) => /MONITOR_UNIT$/.test(k)), ["NAVI_MONITOR_UNIT"], "智能体:只留新单元那一份");
+    assert.equal(agentEnv.NAVI_MONITOR_UNIT, token);
+    for (const file of ["monitor-spawn.ts", "executors/unit-token.ts"]) {
+      const text = readFileSync(join(REPO, "server", "src", file), "utf8");
+      assert.ok(text.includes("seedMonitorUnitEnv(") && !/\[MONITOR_UNIT_ENV\]\s*[:=]/.test(text), `${file}:记号只经 seedMonitorUnitEnv 种`);
+    }
+    console.log("✓ 资源记号:智能体和哨兵起跑时先擦各代旧记号,继承来的旧单元不会把新进程认走");
+  }
+
   // ── ⑤ 互斥:改名之前的服务留下的锁、占有锁、在线登记都要挡得住新版 ─────────────
   {
     // 一个「活着的、长得像 Navi 服务」的进程:命令行形状是 `node …/server/dist/index.js`。

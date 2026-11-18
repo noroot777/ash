@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
 import { ensureAshMcp, type CodexAsk } from "../src/auth/user-cli-mcp.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
@@ -40,9 +41,9 @@ export const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"))
 // 这几格要钉的是「codex 问出不同答案时各自怎么收场」,真 codex 只会给其中一种,所以这里换
 // 替身把那几条路逐个驱动起来。
 
-/** codex 收下了。多数格子钉的是**写出来的内容**,不是 codex 的判决,用这个。 */
+/** codex 收下了(列出的是写进去的那条,也就是当前名)。多数格子钉的是**写出来的内容**,不是 codex 的判决,用这个。 */
 export const LISTS_ASH: CodexAskOutcome = {
-  kind: "answer", code: 0, stdout: JSON.stringify([{ name: "ash", enabled: true }]), stderr: "",
+  kind: "answer", code: 0, stdout: JSON.stringify([{ name: ASH_MCP_SERVER_NAME, enabled: true }]), stderr: "",
 };
 
 /** 按固定答案应付,并把「它拿什么去问的、问的时候用户那份文件长什么样」记下来。 */

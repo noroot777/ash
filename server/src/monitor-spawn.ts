@@ -65,7 +65,7 @@ import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentBaseEnv } from "./executors/spawn.js";
-import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } from "./monitor-unit-scan.js";
+import { invalidateMonitorUnitScan, seedMonitorUnitEnv } from "./monitor-unit-scan.js";
 import { IS_WINDOWS, killTree, userShellLaunch } from "./platform.js";
 import { RUNS_DIR } from "./paths.js";
 
@@ -232,7 +232,7 @@ export function spawnMonitor(
     const child = spawn(launch.file, launch.args, {
       cwd: opts.cwd,
       // 记号跟着环境走 —— 这是整棵树唯一的身份凭证(见文件头)。
-      env: opts.unitToken ? { ...agentBaseEnv(), [MONITOR_UNIT_ENV]: opts.unitToken } : agentBaseEnv(),
+      env: opts.unitToken ? seedMonitorUnitEnv(agentBaseEnv(), opts.unitToken) : agentBaseEnv(),
       detached: true,
       stdio: gated ? ["ignore", fd, fd, "pipe"] : ["ignore", fd, fd],
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),

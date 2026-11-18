@@ -596,4 +596,3 @@ function formatConflictMessage(
   ];
   return lines.join("\n");
 }
-

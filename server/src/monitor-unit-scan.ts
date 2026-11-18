@@ -17,7 +17,7 @@
 // 「这一问答出了什么」的四档投影在 proc.ts 的 `processUnitEvidence`。
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { envNameGenerations } from "@ash/shared/env-names";
+import { envNameGenerations, setEnv } from "@ash/shared/env-names";
 import { IS_WINDOWS } from "./platform.js";
 import { processGenerationSync, type ProcessGeneration, type ProcessMember } from "./process-generation.js";
 
@@ -62,9 +62,22 @@ export const MONITOR_UNIT_ENV = "NAVI_MONITOR_UNIT";
 
 /**
  * 认记号时各代变量名都认：改名之前起的进程（活过了升级重启的智能体、哨兵）身上是 `ASH_MONITOR_UNIT`。
- * 种记号只种当前名（`MONITOR_UNIT_ENV`）。
+ * 种记号只种当前名（`MONITOR_UNIT_ENV`），并且**先擦掉各代旧名** —— 见 `seedMonitorUnitEnv`。
  */
 const MONITOR_UNIT_ENV_NAMES = envNameGenerations(MONITOR_UNIT_ENV);
+
+/**
+ * 往一份环境里种记号：唯一的写入口，智能体（`seedUnitToken`）和哨兵（`monitor-spawn.ts`）都走这里。
+ *
+ * 擦旧名不是洁癖：读侧「各代任一个都算这个单元」只有在**每个进程身上最多一份有效记号**时才成立。
+ * 从改名之前起的那份 ash 进程（或一个旧任务的回合）里继承来的环境带着 `ASH_MONITOR_UNIT=<旧单元>`，
+ * 只加新名的话，新起的这棵树会同时被认成旧单元的成员 —— 收旧单元的尾会牵连它、或者一直报「旧单元
+ * 没清干净」。改名之前是同名覆盖，天然只有一份。
+ */
+export function seedMonitorUnitEnv(env: NodeJS.ProcessEnv, token: string): NodeJS.ProcessEnv {
+  setEnv(env, MONITOR_UNIT_ENV, token);
+  return env;
+}
 
 /**
  * 这一问**答得有多实**:

@@ -14,12 +14,18 @@ import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { LEGACY_MCP_SERVER_NAMES } from "@ash/shared/legacy-names";
 import { extractTomlTables, hostAshMcp, readAshMcp } from "../src/auth/user-cli-mcp.js";
 import { REPO_DIR } from "../src/paths.js";
 import { checkCodexApprove } from "./codex-approve-cases.js";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 import { bench, ensure, HAS_BUILT_MCP, readJson, stage } from "./user-cli-mcp-bench.js";
+
+// 改名之前的登记名：宿主机上旧版 setup 写的是 `ash`（再早是 `harness`）。已有这条就不再补；搬进个人目录、
+// 或者从表里抠出来的时候，落成当前名（`ASH_MCP_SERVER_NAME`）。
+const [ASH, HARNESS] = LEGACY_MCP_SERVER_NAMES;
+const NAME = ASH_MCP_SERVER_NAME;
 
 
 // 宿主那条故意写成**用户自定义**的形状(不是 `node …/mcp/dist/index.js`):标准本机登记不照搬、
@@ -40,7 +46,7 @@ const HOST_CLAUDE = JSON.stringify({
   assert.equal(state.serverName, ASH_MCP_SERVER_NAME);
   const doc = readJson(join(dir, ".claude.json"));
   assert.equal(doc.hasCompletedOnboarding, true, "seed 里原有的键不能被冲掉");
-  assert.deepEqual(doc.mcpServers.ash.args, ["/opt/ash/custom/ash-mcp.js"], "定义要照搬宿主那条");
+  assert.deepEqual(doc.mcpServers[NAME].args, ["/opt/ash/custom/ash-mcp.js"], "定义要照搬宿主那条，名字落成当前名");
   assert.ok(!doc.mcpServers.kb, "只搬 ash 这一条,宿主的第三方 server 不许跟着过来");
 }
 
@@ -48,7 +54,7 @@ const HOST_CLAUDE = JSON.stringify({
 {
   const { host, dir } = bench({ claude: HOST_CLAUDE });
   assert.equal((await ensure(dir, "claude", host)).configured, true);
-  assert.ok(readJson(join(dir, ".claude.json")).mcpServers.ash, "该建的文件要建出来");
+  assert.ok(readJson(join(dir, ".claude.json")).mcpServers[NAME], "该建的文件要建出来");
 }
 
 // ③ 幂等:第二次调用一个字节都不该改(CLI 可能正在写这份文件)。
@@ -67,10 +73,10 @@ const HOST_CLAUDE = JSON.stringify({
   const mine = { type: "stdio", command: "node", args: ["/我改过的/index.js"], env: {} };
   writeFileSync(join(dir, ".claude.json"), JSON.stringify({ mcpServers: { harness: mine } }), "utf8");
   const state = await ensure(dir, "claude", host);
-  assert.equal(state.serverName, LEGACY_ASH_MCP_SERVER_NAME, "历史名也算已登记");
+  assert.equal(state.serverName, HARNESS, "历史名也算已登记");
   const doc = readJson(join(dir, ".claude.json"));
   assert.deepEqual(doc.mcpServers.harness, mine, "用户改过的定义不许动");
-  assert.ok(!doc.mcpServers.ash, "已有登记时不该再塞一条");
+  assert.ok(!doc.mcpServers[NAME], "已有登记时不该再塞一条");
 }
 
 // ⑤ 个人 .claude.json 坏了:如实报错,**绝不覆盖**(那是用户的文件,里面还有会话记录)。
@@ -90,7 +96,7 @@ const HOST_CLAUDE = JSON.stringify({
   const state = await ensure(dir, "claude", host);
   assert.equal(state.configured, HAS_BUILT_MCP);
   if (HAS_BUILT_MCP) {
-    assert.deepEqual(readJson(join(dir, ".claude.json")).mcpServers.ash.args, [join(REPO_DIR, "mcp", "dist", "index.js")]);
+    assert.deepEqual(readJson(join(dir, ".claude.json")).mcpServers[NAME].args, [join(REPO_DIR, "mcp", "dist", "index.js")]);
   } else {
     assert.ok(state.problem?.includes("mcp"), "补不上时要指出缺的是什么");
   }
@@ -113,8 +119,8 @@ const HOST_CLAUDE = JSON.stringify({
   const state = await ensure(dir, "codex", host);
   assert.equal(state.configured, true);
   const written = readFileSync(join(dir, "config.toml"), "utf8");
-  assert.ok(written.includes("[mcp_servers.ash]"), "主表要在");
-  assert.ok(written.includes("[mcp_servers.ash.env]"), "子表也要跟着搬");
+  assert.ok(written.includes(`[mcp_servers.${NAME}]`), "主表要在");
+  assert.ok(written.includes(`[mcp_servers.${NAME}.env]`), "子表也要跟着搬");
   assert.ok(!written.includes("projects"), "后面那张无关的表不许被带走");
 }
 
@@ -123,7 +129,7 @@ const HOST_CLAUDE = JSON.stringify({
   const { host, dir } = bench({ codex: `[mcp_servers.harness]\ncommand = "node"\nargs = ["/old/index.js"]\n` });
   assert.equal((await ensure(dir, "codex", host)).configured, true);
   const written = readFileSync(join(dir, "config.toml"), "utf8");
-  assert.ok(written.includes("[mcp_servers.ash]"), "表头要落成规范名");
+  assert.ok(written.includes(`[mcp_servers.${NAME}]`), "表头要落成规范名");
   assert.ok(written.includes("/old/index.js"), "定义本身照搬");
 }
 
@@ -134,13 +140,13 @@ const HOST_CLAUDE = JSON.stringify({
   await ensure(dir, "codex", host);
   const written = readFileSync(join(dir, "config.toml"), "utf8");
   assert.ok(written.includes(`model = "gpt-5.6"`), "用户原有设置必须留着");
-  assert.ok(written.includes("[mcp_servers.ash]"), "登记要追加进去");
+  assert.ok(written.includes(`[mcp_servers.${NAME}]`), "登记要追加进去");
 }
 
 // ⑪ 表头切段的边界:数组表 [[...]] 也算一次切换。
 {
   const config = `[mcp_servers.ash]\ncommand = "node"\n\n[[hooks]]\nrun = "x"\n`;
-  const block = extractTomlTables(config, ASH_MCP_SERVER_NAME);
+  const block = extractTomlTables(config, ASH);
   assert.ok(block?.includes(`command = "node"`));
   assert.ok(!block?.includes("hooks"), "数组表不许被吞进来");
 }
@@ -149,24 +155,24 @@ const HOST_CLAUDE = JSON.stringify({
 {
   const quoted = `[mcp_servers."ash"]\ncommand = "node"\nargs = ["/h.js"]\n\n[mcp_servers."ash".env]\nASH_URL = "u"\n`;
   assert.equal(
-    extractTomlTables(quoted, ASH_MCP_SERVER_NAME),
+    extractTomlTables(quoted, ASH),
     `[mcp_servers.ash]\ncommand = "node"\nargs = ["/h.js"]\n\n[mcp_servers.ash.env]\nASH_URL = "u"`,
     "带引号的表头照样抠得出来,表头改写成规范拼法",
   );
   const commented = `[mcp_servers.ash]\ncommand = "node"\n[mcp_servers.secret] # 别人的\ncommand = "s"\ntoken = "t"\n`;
-  const block = extractTomlTables(commented, ASH_MCP_SERVER_NAME);
+  const block = extractTomlTables(commented, ASH);
   assert.ok(block && !block.includes("secret") && !block.includes("token"),
     "表头带行尾注释也算一次切换,别人的配置不许被抄进来");
   assert.equal(
-    extractTomlTables(`[mcp_servers.'harness']\ncommand = "node"\n`, LEGACY_ASH_MCP_SERVER_NAME, ASH_MCP_SERVER_NAME),
-    `[mcp_servers.ash]\ncommand = "node"`, "历史名(带引号)顺手改成规范名",
+    extractTomlTables(`[mcp_servers.'harness']\ncommand = "node"\n`, HARNESS, NAME),
+    `[mcp_servers.${NAME}]\ncommand = "node"`, "历史名(带引号)顺手改成规范名",
   );
   assert.equal(
-    extractTomlTables(`[mcp_servers]\nash.command = "node"\n[mcp_servers.ash.env]\nASH_URL = "u"\n`, ASH_MCP_SERVER_NAME),
+    extractTomlTables(`[mcp_servers]\nash.command = "node"\n[mcp_servers.ash.env]\nASH_URL = "u"\n`, ASH),
     null, "只抠得到 .env 那段 = 造出一条没有 command 的登记,宁可用内置模板",
   );
   assert.equal(
-    extractTomlTables(`note = """\n[mcp_servers.ash]\ncommand = "x"\n"""\n`, ASH_MCP_SERVER_NAME),
+    extractTomlTables(`note = """\n[mcp_servers.ash]\ncommand = "x"\n"""\n`, ASH),
     null, "多行字符串里的假表头不切段",
   );
   // 端到端:宿主是带引号的写法,隔离档要搬的是**宿主那份**,不是内置模板。
@@ -183,7 +189,7 @@ const HOST_CLAUDE = JSON.stringify({
   assert.equal(state.configured, false, "空目录里当然没有登记");
   assert.ok(!existsSync(join(dir, ".claude.json")), "只读版不许把文件建出来");
   writeFileSync(join(dir, ".claude.json"), JSON.stringify({ mcpServers: { ash: {} } }), "utf8");
-  assert.equal(readAshMcp(dir, "claude").serverName, ASH_MCP_SERVER_NAME);
+  assert.equal(readAshMcp(dir, "claude").serverName, ASH, "旧名登记也认得出");
 }
 
 // ⑬ 宿主视角的路径差一层:claude 读 ~/.claude.json,codex 读 ~/.codex/config.toml。
