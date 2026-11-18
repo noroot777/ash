@@ -208,7 +208,7 @@ try {
   assert.equal(await page.locator(".task-upload-chip").count(), 1, "聊天往返保留附件且不重复");
   await openChat();
   await input.waitFor();
-  const currentRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
+  const currentRoomId = await page.evaluate(() => localStorage.getItem("navi:chat:chat-demo"));
   assert.ok(currentRoomId);
   await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${currentRoomId}`, { data: { seed: true, mode: "hold" } });
   await send("@all 请讨论这些背景资料");
@@ -241,7 +241,7 @@ try {
   await page.getByRole("button", { name: "添加成员", exact: true }).click();
   await page.getByRole("button", { name: "创建群聊", exact: true }).click();
   await input.waitFor();
-  const summaryRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
+  const summaryRoomId = await page.evaluate(() => localStorage.getItem("navi:chat:chat-demo"));
   await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${summaryRoomId}`, { data: { seed: true, mode: "prefixed" } });
   await send("@codex 请给建议");
   await page.getByRole("status").filter({ hasText: "较早历史已整理为共享摘要" }).waitFor();
@@ -293,7 +293,7 @@ try {
   for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "添加成员", exact: true }).click();
   await page.getByRole("button", { name: "创建群聊", exact: true }).click();
   await input.waitFor();
-  const stopRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
+  const stopRoomId = await page.evaluate(() => localStorage.getItem("navi:chat:chat-demo"));
   for (const clear of [false, true]) {
     await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${stopRoomId}`, { data: { seed: true, count: 65, mode: "hold" } });
     await send(`@all 前台整理期间${clear ? "清空" : "停止"}`);

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const storageKey = (rootId: string) => `ash:subtasks:folds:${rootId}`;
+const storageKey = (rootId: string) => `navi:subtasks:folds:${rootId}`;
 
 export function readDispatchFolds(rootId: string): ReadonlyMap<string, boolean> {
   let folds = new Map<string, boolean>();

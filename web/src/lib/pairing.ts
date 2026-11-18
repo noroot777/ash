@@ -2,7 +2,7 @@ import { localeDate } from "./localeFormat.ts";
 // 设备配对在界面上的两处(顶条、设置页的「远程访问」卡)共用的小东西。
 
 /** 一处处理完申请后喊一声,另一处立刻重读,不必等下一轮轮询。 */
-export const PAIR_REQUESTS_CHANGED_EVENT = "ash:pair-requests-changed";
+export const PAIR_REQUESTS_CHANGED_EVENT = "navi:pair-requests-changed";
 
 export function seenLabel(iso: string): string {
   const at = Date.parse(iso);

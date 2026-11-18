@@ -46,9 +46,9 @@
 // 「这一页自己点过按钮」同理是副本复制不走的证据:它只活在这一份文档的内存里。
 //
 // BroadcastChannel 不会把消息投回给发送方自己,所以「自己应答自己」这种事不会发生。
-const CHANNEL = "ash:preview-assist-claims";
-const LOCK = (projectId: string, claim: string) => `ash:preview-assist:${projectId}:${claim}`;
-const HANDOFF_KEY = (projectId: string) => `ash:preview-assist-handoff:${projectId}`;
+const CHANNEL = "navi:preview-assist-claims";
+const LOCK = (projectId: string, claim: string) => `navi:preview-assist:${projectId}:${claim}`;
+const HANDOFF_KEY = (projectId: string) => `navi:preview-assist-handoff:${projectId}`;
 /** 接力凭据的有效期。刷新是一瞬间的事,给足加载时间就够;过期只是退回「摆出来让用户拍板」。 */
 const HANDOFF_MS = 60_000;
 /** 这一页的身份。只活在内存里 —— sessionStorage 里的东西会被复制,这个不会。 */

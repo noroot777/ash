@@ -131,7 +131,7 @@ try {
 
   // ② `/讨论`，上次叫的是这条任务自己的执行器（别的任务里叫过它）：开选人菜单，菜单里没有它——列着它、
   //    回车一按就落到「只能派出去」；选另一个人，停在「讨论」。
-  await page.evaluate(() => localStorage.setItem("ash:reply-call", JSON.stringify({ last: "claude", byAgent: {} })));
+  await page.evaluate(() => localStorage.setItem("navi:reply-call", JSON.stringify({ last: "claude", byAgent: {} })));
   await input("start").fill("/讨论");
   await scope("start").getByRole("option", { name: /\/讨论/ }).waitFor();
   await input("start").press("Enter");

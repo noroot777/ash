@@ -1,4 +1,4 @@
-const DONE_KEY = "ash:inspector:retired-tabs";
+const DONE_KEY = "navi:inspector:retired-tabs";
 
 interface StoredState {
   openTabs?: unknown;

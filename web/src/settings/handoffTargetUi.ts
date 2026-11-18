@@ -4,7 +4,7 @@
 import type { HandoffApprovalResult } from "@ash/shared";
 
 export const HANDOFF_URL_RE = /^https?:\/\/\S+$/;
-export const HANDOFF_PEERS_CHANGED_EVENT = "ash:handoff-peers-changed";
+export const HANDOFF_PEERS_CHANGED_EVENT = "navi:handoff-peers-changed";
 
 export const normalizeTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
 

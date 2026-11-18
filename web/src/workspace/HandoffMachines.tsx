@@ -6,14 +6,14 @@ import { BulkHandoffDialog } from "./BulkHandoffDialog.tsx";
 import { outboundTasksForTarget } from "./bulkHandoff.ts";
 import { useRevealHiddenSelection } from "./TaskTreeRows.tsx";
 
-// 开合状态自己存一份，不跟任务分节共用 `ash:task-tree:collapsed-sections`：那份由
+// 开合状态自己存一份，不跟任务分节共用 `navi:task-tree:collapsed-sections`：那份由
 // TaskTree 里的 useCollapsedSections 持有，这一节在它外面，两个 hook 实例各写各的
 // 同一个键，最后一个写的会把另一个的收起状态抹掉。
 //
-// 这一节排在任务后面、默认折成一行。键从旧的 `ash:handoff-machines:collapsed` 换成了
+// 这一节排在任务后面、默认折成一行。键从旧的 `navi:handoff-machines:collapsed` 换成了
 // 记「开着」的这一个：老用户本地存着的是「展开」（"0"），沿用旧键的话默认折起对他们
 // 永远不生效。旧键不再读。
-const OPEN_STORAGE_KEY = "ash:handoff-machines:open";
+const OPEN_STORAGE_KEY = "navi:handoff-machines:open";
 
 function readOpen(): boolean {
   try {

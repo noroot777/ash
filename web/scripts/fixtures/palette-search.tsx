@@ -186,5 +186,5 @@ function Fixture() {
 
 // 排序档是记在 localStorage 里的；夹具每次都从「相关度」开始，免得上一轮跑剩的档位
 // 让断言随机漂。
-window.localStorage.removeItem("ash:palette:sort");
+window.localStorage.removeItem("navi:palette:sort");
 createRoot(document.getElementById("root")!).render(<Fixture />);

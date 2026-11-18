@@ -120,7 +120,7 @@ export function nextRounds(rounds: DiscussionRounds): DiscussionRounds {
   return DISCUSSION_ROUND_CHOICES[(index + 1) % DISCUSSION_ROUND_CHOICES.length]!;
 }
 
-const ROUNDS_KEY = "ash:reply-discuss-rounds";
+const ROUNDS_KEY = "navi:reply-discuss-rounds";
 const DEFAULT_ROUNDS: DiscussionRounds = 2;
 
 /** 上次选的几轮（整个浏览器共享，不进库）；没选过是 2 轮。 */
@@ -206,7 +206,7 @@ export function parseDispatchCommand(text: string): string | null {
 type Remembered = Pick<MentionTarget, "executorId" | "model" | "reasoningEffort">;
 export type CallMemory = { last: AgentType | null; byAgent: Partial<Record<AgentType, Remembered>> };
 
-const MEMORY_KEY = "ash:reply-call";
+const MEMORY_KEY = "navi:reply-call";
 const EMPTY: CallMemory = { last: null, byAgent: {} };
 
 export function readCallMemory(): CallMemory {

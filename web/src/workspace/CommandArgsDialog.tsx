@@ -16,7 +16,7 @@ import "./command-args-dialog.css";
 // 上次填过的值记在 localStorage 里,下次开框就是上次那套(改端口/换分支这类命令,多数时候
 // 值是同一个;每次从空白开始等于把便利又收回去了)。没记过的退回占位符自己的默认值。
 
-const storageKey = "ash:command-args";
+const storageKey = "navi:command-args";
 
 type ValueMap = Record<string, string>;
 

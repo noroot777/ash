@@ -54,7 +54,7 @@ function App() {
   </>;
 }
 
-const storageKeys = ["ash:inspector:shortcut-outer", "ash:inspector:shortcut-drawer"];
+const storageKeys = ["navi:inspector:shortcut-outer", "navi:inspector:shortcut-drawer"];
 const clearStorage = () => storageKeys.forEach((key) => window.localStorage.removeItem(key));
 clearStorage();
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

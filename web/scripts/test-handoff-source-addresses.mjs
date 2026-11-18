@@ -19,7 +19,7 @@ try {
   const fixture = `${web.origin}/scripts/fixtures/handoff-source-addresses.html`
     + "?project=fixture-project&task=fixture-task";
   await page.goto(fixture);
-  await page.evaluate(() => localStorage.removeItem("ash:fixture:handoff-source-address"));
+  await page.evaluate(() => localStorage.removeItem("navi:fixture:handoff-source-address"));
   await page.reload();
 
   const routeLink = page.getByRole("link", { name: /设置 → 默认规则 → 任务接力 → 来源机器地址/ });

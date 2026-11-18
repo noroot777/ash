@@ -228,7 +228,7 @@ export async function testPreviewWorkspaceDom() {
     assert.deepEqual(await iframe.boundingBox(), box, "collapsing notes does not resize the embedded page");
     assert(await page.evaluate(() => document.elementFromPoint(700, 400)?.tagName === "IFRAME"), "empty space between floating controls remains interactive");
     await button("标注").click();
-    const draft = () => page.evaluate(() => JSON.parse(localStorage.getItem("ash.annotation-batch.fixture")));
+    const draft = () => page.evaluate(() => JSON.parse(localStorage.getItem("navi.annotation-batch.fixture")));
     const emit = async (number, tool = "element") => {
       await page.frames().find((frame) => frame.url().includes("/preview/open/")).evaluate(({ number, tool }) => window.emit({ type: "annotation", canSelectParent: false, annotation: {
         id: `item-${number}`, number, tool, points: [{x:100,y:100}], element: null,
@@ -282,7 +282,7 @@ export async function testPreviewWorkspaceDom() {
     await frame.evaluate((png) => window.emit({ type: "image", id: "item-1", image: {
       capturedAt: 1, dataUrl: `data:image/png;base64,${png}`, missing: ["Canvas", "fonts"],
     } }), png);
-    await page.waitForFunction(() => JSON.parse(localStorage.getItem("ash.annotation-batch.fixture"))?.evidence.some((item) => item.path));
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem("navi.annotation-batch.fixture"))?.evidence.some((item) => item.path));
     await page.getByRole("status").filter({ hasText: "已保存 · 草稿" }).waitFor();
     assert.deepEqual((await draft()).evidence, record.batch.evidence, "uploaded evidence and server record have the same content");
     assert.notEqual(JSON.stringify((await draft()).evidence), JSON.stringify(record.batch.evidence), "server normalization reorders path/missing");
@@ -326,7 +326,7 @@ export async function testPreviewWorkspaceDom() {
       oldBatch.items = oldBatch.items.map((item) => ({ ...item, gen: oldBatch.gen }));
       record = { batch: oldBatch, revision: 1, state: "saved", messageId: null, error: null, savedAt: "2026-09-11" };
       savedRecords.clear(); savedRecords.set(oldBatch.id, record);
-      await page.evaluate((batch) => localStorage.setItem("ash.annotation-batch.fixture", JSON.stringify(batch)), oldBatch);
+      await page.evaluate((batch) => localStorage.setItem("navi.annotation-batch.fixture", JSON.stringify(batch)), oldBatch);
       await page.reload();
       await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
       if (scenario === "service") {
@@ -385,7 +385,7 @@ export async function testPreviewWorkspaceDom() {
       assert.equal(await page.locator(".preview-workspace-detail textarea").inputValue(), "最终意见");
     }
 
-    await page.evaluate(() => localStorage.removeItem("ash.annotation-batch.fixture"));
+    await page.evaluate(() => localStorage.removeItem("navi.annotation-batch.fixture"));
     record = null; savedRecords.clear(); realRuntime = true;
     await page.reload();
     await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);

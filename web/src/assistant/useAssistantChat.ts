@@ -24,9 +24,9 @@ export function useAssistantChat(projectId: string) {
     if (selected.current === id) return;
     const previousId = selected.current;
     selected.current = id;
-    window.localStorage.setItem("ash:assistant:global", id);
+    window.localStorage.setItem("navi:assistant:global", id);
     setRoomId(id); setSnapshot(null); setError(""); setConnected(false);
-    const savedDraft = window.sessionStorage.getItem(`ash:assistant-draft:${id}`) ?? "";
+    const savedDraft = window.sessionStorage.getItem(`navi:assistant-draft:${id}`) ?? "";
     setDraft((current) => previousId ? savedDraft : current || savedDraft);
     request.current = null;
   }, []);
@@ -49,14 +49,14 @@ export function useAssistantChat(projectId: string) {
     chatApi.assistants("").then((rows) => {
       if (!alive) return;
       setRooms(rows);
-      const saved = window.localStorage.getItem("ash:assistant:global");
+      const saved = window.localStorage.getItem("navi:assistant:global");
       const first = rows.find((room) => room.id === saved) ?? rows.at(-1);
       if (first) select(first.id);
     }).catch((reason) => { if (alive) setError(String(reason)); }).finally(() => { if (alive) setReady(true); });
     return () => { alive = false; };
   }, [select]);
   useEffect(() => {
-    if (roomId) window.sessionStorage.setItem(`ash:assistant-draft:${roomId}`, draft);
+    if (roomId) window.sessionStorage.setItem(`navi:assistant-draft:${roomId}`, draft);
   }, [roomId, draft]);
   useEffect(() => {
     if (!roomId) return;
@@ -106,14 +106,14 @@ export function useAssistantChat(projectId: string) {
     dismissed.current.add(targetId);
     try { await chatApi.remove(targetId); }
     catch (reason) { dismissed.current.delete(targetId); throw reason; }
-    window.sessionStorage.removeItem(`ash:assistant-draft:${targetId}`);
+    window.sessionStorage.removeItem(`navi:assistant-draft:${targetId}`);
     const rest = rooms.filter((row) => row.id !== targetId);
     setRooms(rest);
     if (selected.current !== targetId) return;
     // 删掉当前这段就落到最近一次对话上，和首次进入时的选中规则一致。
     const next = [...rest].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1);
     if (next) { select(next.id); return; }
-    window.localStorage.removeItem("ash:assistant:global");
+    window.localStorage.removeItem("navi:assistant:global");
     selected.current = null;
     request.current = null;
     setRoomId(null); setSnapshot(null); setDraft(""); setError("");

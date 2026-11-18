@@ -32,7 +32,7 @@ export function useAnnotationBatch(taskId: string) {
       refreshRef.current();
     }
   });
-  const key = `ash.annotation-batch.${taskId}`;
+  const key = `navi.annotation-batch.${taskId}`;
   const remember = (record: AnnotationBatchRecord) => {
     if (record.batch.taskId !== taskId) return;
     cache.current.set(record.batch.id, record);

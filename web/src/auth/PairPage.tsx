@@ -13,7 +13,7 @@ import { LoginPage } from "./LoginPage.tsx";
 
 const POLL_MS = 2_000;
 // 申请存在这个标签页里:刷新一下不该在机主那边多弹一张。
-const TICKET_KEY = "ash:pair-ticket";
+const TICKET_KEY = "navi:pair-ticket";
 
 function storedTicket(): PairTicket | null {
   try {

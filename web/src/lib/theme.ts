@@ -18,7 +18,7 @@ import { COLOR_THEMES } from "@ash/shared";
 
 export type ResolvedTheme = "light" | "dark";
 
-const STORAGE_KEY = "ash.colorTheme";
+const STORAGE_KEY = "navi.colorTheme";
 
 const isColorTheme = (value: unknown): value is ColorTheme =>
   typeof value === "string" && (COLOR_THEMES as readonly string[]).includes(value);

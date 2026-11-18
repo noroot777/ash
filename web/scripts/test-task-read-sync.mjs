@@ -46,7 +46,7 @@ const warnings = [];
 console.warn = (...args) => { warnings.push(args); };
 /** 磁盘上这个人待发的那几眼：每个任务取看到的最新一轮。 */
 const pendingOf = (who) => {
-  const prefix = `ash:task-reads-v3:${who || "local"}:p:`;
+  const prefix = `navi:task-reads-v3:${who || "local"}:p:`;
   const out = {};
   for (const [key, value] of storage) {
     if (!key.startsWith(prefix)) continue;
@@ -352,13 +352,13 @@ const look = (page, taskId, round) => page.updateTaskReads((current) => ({ ...cu
   storageDenied = false;
 
   server.tasks.set("after-bad", 5_000);
-  storage.set("ash:task-reads-v3:local:p:%:1", JSON.stringify({ event: "done:bad", round: 1, at: 1 }));
-  storage.set("ash:task-reads-v3:local:p:no-round", "{oops");
+  storage.set("navi:task-reads-v3:local:p:%:1", JSON.stringify({ event: "done:bad", round: 1, at: 1 }));
+  storage.set("navi:task-reads-v3:local:p:no-round", "{oops");
   server.failPuts = true;
   const other = await openPage("");
   look(other, "after-bad", 5_000);
   assert.equal(pendingOf("")["after-bad"]?.round, 5_000, "坏键不拖垮整份");
-  assert.equal(storage.has("ash:task-reads-v3:local:p:%:1") || storage.has("ash:task-reads-v3:local:p:no-round"), false, "坏键顺手删掉");
+  assert.equal(storage.has("navi:task-reads-v3:local:p:%:1") || storage.has("navi:task-reads-v3:local:p:no-round"), false, "坏键顺手删掉");
   server.failPuts = false;
   await settle(5_500);
   assert.equal(server.of("").reads.get("after-bad")?.round, 5_000);
@@ -401,16 +401,16 @@ const look = (page, taskId, round) => page.updateTaskReads((current) => ({ ...cu
 
 // ── 不带账号的老缓存 ─────────────────────────────────────────────────────────────
 {
-  storage.set("ash:task-read-state-v1", JSON.stringify({ "alice-task": { event: "done:2026-11-13T00:00:00.000Z:", readAt: 1 } }));
+  storage.set("navi:task-read-state-v1", JSON.stringify({ "alice-task": { event: "done:2026-11-13T00:00:00.000Z:", readAt: 1 } }));
   server.cookie = "bob";
   const bob = await openPage("bob");
   await settle();
   assert.equal(server.of("bob").reads.get("alice-task"), undefined, "多人模式下认不出是谁的：不送");
-  assert.equal(storage.get("ash:task-read-state-v1"), undefined, "只处理一次");
+  assert.equal(storage.get("navi:task-read-state-v1"), undefined, "只处理一次");
   bob.stop();
 
   const at = "2026-11-13T00:00:01.000Z";
-  storage.set("ash:task-read-state-v1", JSON.stringify({ six: { event: `done:2026-11-13T00:00:00.000Z:${at}`, readAt: 1 } }));
+  storage.set("navi:task-read-state-v1", JSON.stringify({ six: { event: `done:2026-11-13T00:00:00.000Z:${at}`, readAt: 1 } }));
   server.tasks.set("six", Date.parse(at));
   server.cookie = "";
   const single = await openPage("");

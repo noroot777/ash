@@ -24,8 +24,8 @@ const CONTENT_PADDING = 16;
 const MAX_DRAG_HEIGHT = 900;
 
 const externalValue = Annotation.define<boolean>();
-const wrapStorageKey = "ash:preview-command-wrap";
-const heightStorageKey = "ash:shell-editor-height";
+const wrapStorageKey = "navi:preview-command-wrap";
+const heightStorageKey = "navi:shell-editor-height";
 const highlighting = HighlightStyle.define([
   { tag: tags.keyword, color: "var(--accent)", fontWeight: "500" },
   { tag: [tags.string, tags.special(tags.string)], color: "var(--green)" },

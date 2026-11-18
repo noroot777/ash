@@ -6,7 +6,7 @@ import { createClientId } from "../lib/clientId.ts";
 import { readSideStorage, writeSideStorage } from "./sideChatStorage.ts";
 
 export function useSideChatMember(task: Task) {
-  const key = `ash:side-chat:member:${task.id}`;
+  const key = `navi:side-chat:member:${task.id}`;
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [member, setMember] = useState<ChatMember | undefined>(() => {
     try {

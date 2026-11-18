@@ -26,8 +26,8 @@
 import type { PreviewAssistState } from "@ash/shared/preview-assist";
 import { claimAssistOwnership, holdAssistClaim } from "./previewAssistTabs.ts";
 
-const EXECUTOR_KEY = (projectId: string) => `ash:preview-assist-executor:${projectId}`;
-const LIVE_KEY = (projectId: string) => `ash:preview-assist-live:${projectId}`;
+const EXECUTOR_KEY = (projectId: string) => `navi:preview-assist-executor:${projectId}`;
+const LIVE_KEY = (projectId: string) => `navi:preview-assist-live:${projectId}`;
 
 /** 两种存储在隐私模式下都会抛，这一整套都是「有就用、没有就算了」。 */
 function get(store: Storage | undefined, key: string): string | null {

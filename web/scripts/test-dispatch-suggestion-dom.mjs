@@ -29,7 +29,7 @@ try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
   // 叫过 codex：`/派` 直接叫他，不再先开 `@` 菜单（没叫过人的那一路在 test-reply-call-dom.mjs）。
-  await page.addInitScript(() => localStorage.setItem("ash:reply-call", JSON.stringify({ last: "codex", byAgent: {} })));
+  await page.addInitScript(() => localStorage.setItem("navi:reply-call", JSON.stringify({ last: "codex", byAgent: {} })));
   const requests = [];
   await page.route("**/api/**", async (route) => {
     const request = route.request();

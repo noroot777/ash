@@ -116,7 +116,7 @@ try {
       "切到从没挂过哨兵的任务，图标条不该留着上一个任务带来的那一格",
     );
     assert.doesNotMatch(
-      String(await page.evaluate(() => window.localStorage.getItem("ash:inspector:task:task-b"))),
+      String(await page.evaluate(() => window.localStorage.getItem("navi:inspector:task:task-b"))),
       /"monitors"/,
       "那一格还会被存进 openTabs：刷新之后它仍然在，错得更久",
     );

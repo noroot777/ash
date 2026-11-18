@@ -4,12 +4,11 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { api, type TerminalEvent } from "../lib/api.ts";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { TerminalTabStrip } from "./TerminalTabStrip.tsx";
 import type { ProjectTerminalTab } from "./terminalTabs.ts";
 import type { TerminalDock } from "./useTerminalDock.ts";
 
-const TERMINAL_HEIGHT_KEY = "ash:terminal-height";
+const TERMINAL_HEIGHT_KEY = "navi:terminal-height";
 const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 170;
 const MAX_HEIGHT = 560;
@@ -29,9 +28,9 @@ function preferredHeight(value: number): number {
 }
 
 function initialHeight(): number {
-  // 没存过时 readRenamedStorage 给的是 null,Number(null) = 0 —— 0 也是有限数,照单全收
+  // 没存过时 getItem 给的是 null,Number(null) = 0 —— 0 也是有限数,照单全收
   // 就等于每个新用户第一次开终端都只得到 MIN_HEIGHT 那一条缝,而不是 DEFAULT_HEIGHT。
-  const stored = Number(readRenamedStorage(TERMINAL_HEIGHT_KEY));
+  const stored = Number(window.localStorage.getItem(TERMINAL_HEIGHT_KEY));
   return Number.isFinite(stored) && stored > 0 ? preferredHeight(stored) : DEFAULT_HEIGHT;
 }
 

@@ -83,17 +83,17 @@ try {
   await current("kid-a").waitFor();
   await page.getByRole("button", { name: "切到files", exact: true }).click();
   await page.evaluate(() => window.__patch("kid-a", { status: "queued" }));
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem("ash:inspector:task:kid-a")).policyKey.includes(":queued:"));
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("navi:inspector:task:kid-a")).policyKey.includes(":queued:"));
   assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "信息", "状态换挡沿用原来的默认格，不强切子任务");
   await page.getByRole("button", { name: "切到dispatched", exact: true }).click();
   await page.getByRole("button", { name: "关闭子任务", exact: true }).click();
   await page.evaluate(() => window.__patch("kid-a", { status: "paused" }));
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem("ash:inspector:task:kid-a")).policyKey.includes(":paused:"));
-  assert.ok(await page.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:kid-a")).dismissed.includes("dispatched")), "状态变化不撤销手动摘除");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("navi:inspector:task:kid-a")).policyKey.includes(":paused:"));
+  assert.ok(await page.evaluate(() => JSON.parse(localStorage.getItem("navi:inspector:task:kid-a")).dismissed.includes("dispatched")), "状态变化不撤销手动摘除");
   await page.getByRole("button", { name: "切到info", exact: true }).click();
   await page.getByRole("button", { name: "隐藏 Inspector", exact: true }).click();
   await page.evaluate(() => window.__patch("kid-a", { status: "done", stage: "awaiting_acceptance" }));
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem("ash:inspector:task:kid-a")).policyKey.includes(":done:review"));
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("navi:inspector:task:kid-a")).policyKey.includes(":done:review"));
   assert.equal(await page.locator(".inspector-host").count(), 0, "待验收换挡不强开用户关掉的面板");
   await page.getByRole("button", { name: "显示 Inspector", exact: true }).click();
   assert.equal(await page.locator(".inspector-host__panel-title").textContent(), "审议");
@@ -197,13 +197,13 @@ try {
   assert.equal(await narrowPage.locator(".inspector-host__panel-title").textContent(), "子任务", "窄屏仅新派出时自动展开");
   await narrowPage.getByRole("button", { name: "收起 Inspector", exact: true }).click();
   await narrowPage.evaluate(() => window.__patch("accepted", { status: "paused", stage: null }));
-  await narrowPage.waitForFunction(() => JSON.parse(localStorage.getItem("ash:inspector:task:accepted")).policyKey.includes(":paused:"));
+  await narrowPage.waitForFunction(() => JSON.parse(localStorage.getItem("navi:inspector:task:accepted")).policyKey.includes(":paused:"));
   assert.equal(await narrowPage.locator(".inspector-host").count(), 0, "窄屏状态变化不重新盖层");
   for (const id of ["side-chat", "memos"]) {
     await narrowPage.getByRole("button", { name: `切到${id}`, exact: true }).click();
     await narrowPage.getByRole("button", { name: "收起 Inspector", exact: true }).click();
     await narrowPage.evaluate((suffix) => window.__add({ id: `narrow-preserve-${suffix}`, title: "窄屏不抢", dispatchedBy: "accepted" }), id);
-    await narrowPage.waitForFunction((count) => JSON.parse(localStorage.getItem("ash:inspector:task:accepted")).focusKey === String(count), id === "side-chat" ? 2 : 3);
+    await narrowPage.waitForFunction((count) => JSON.parse(localStorage.getItem("navi:inspector:task:accepted")).focusKey === String(count), id === "side-chat" ? 2 : 3);
     assert.equal(await narrowPage.locator(".inspector-host").count(), 0, "侧聊和备忘不因新派出弹出盖层");
   }
 
@@ -229,7 +229,7 @@ try {
     await cold.evaluate(() => window.__patch("archived-backfill", { archived: false }));
     await cold.waitForFunction(() => window.__tasks().find((item) => item.id === "archived-backfill")?.archived === false);
     assert.equal(await cold.locator(".inspector-host").count(), 0, "进入后才出现的归档项取消归档也不触发");
-    assert.equal(await cold.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")).focusKey), "0");
+    assert.equal(await cold.evaluate(() => JSON.parse(localStorage.getItem("navi:inspector:task:lead")).focusKey), "0");
     await cold.evaluate(() => window.__add({ id: "real-new-batch", title: "真正的新批次", dispatchedBy: "lead", status: "running", stage: null }));
     await cold.locator(".dispatched-pane").waitFor();
     assert.equal(await cold.locator(".inspector-host__panel-title").textContent(), "子任务", "名单补全后真正派出仍强开并落格");
@@ -238,9 +238,9 @@ try {
     await cold.locator('[data-current-task="lead"]').waitFor();
     await cold.evaluate(() => window.__hydrate());
     await cold.waitForFunction(() => window.__tasks().length === 7);
-    await cold.waitForFunction(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")).activeTab === "dispatched");
+    await cold.waitForFunction(() => JSON.parse(localStorage.getItem("navi:inspector:task:lead")).activeTab === "dispatched");
     assert.equal(await cold.locator(".inspector-host").count(), width > 720 ? 1 : 0, "刷新属于新进入，桌面默认打开子任务，窄屏不盖层");
-    assert.equal(await cold.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")).focusKey), "0", "进入默认格不重放上次新派出");
+    assert.equal(await cold.evaluate(() => JSON.parse(localStorage.getItem("navi:inspector:task:lead")).focusKey), "0", "进入默认格不重放上次新派出");
     await cold.close();
   }
   for (const width of [1600, 400]) {
@@ -248,7 +248,7 @@ try {
       const cold = await browser.newPage({ viewport: { width, height: 900 } });
       cold.setDefaultTimeout(WAIT_TIMEOUT_MS);
       cold.on("pageerror", (error) => errors.push(error.message));
-      const key = `ash:inspector:task:${taskId}`;
+      const key = `navi:inspector:task:${taskId}`;
       await cold.goto(`${web.origin}/scripts/fixtures/task-drawers.html?partial=1&task=${taskId}`);
       await cold.locator(`[data-current-task="${taskId}"]`).waitFor();
       await cold.evaluate(() => window.__hydrate(false));
@@ -309,12 +309,12 @@ try {
         await cold.locator('[data-current-task="lead"]').waitFor();
       }
       await settlePage(cold);
-      const before = await cold.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")));
+      const before = await cold.evaluate(() => JSON.parse(localStorage.getItem("navi:inspector:task:lead")));
       const visible = await cold.locator(".inspector-host").count();
       await cold.evaluate(() => window.__hydrate());
       await cold.locator('[data-tasks-ready="true"]').waitFor();
       await settlePage(cold);
-      const after = await cold.evaluate(() => JSON.parse(localStorage.getItem("ash:inspector:task:lead")));
+      const after = await cold.evaluate(() => JSON.parse(localStorage.getItem("navi:inspector:task:lead")));
       assert.equal(after.activeTab, before.activeTab, `${action}：等待列表时的选择及侧聊/备忘偏好优先`);
       assert.equal(await cold.locator(".inspector-host").count(), visible, `${action}：就绪不能撤销手动关闭`);
       await cold.close();

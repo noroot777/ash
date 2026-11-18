@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ScmOverview, ScmStatus } from "../lib/api.ts";
 
-const COMMITTED = "ash:workspace-committed";
+const COMMITTED = "navi:workspace-committed";
 
 export function workspaceCommitPaths(status: ScmStatus): string[] {
   return [...new Set([...status.staged, ...status.unstaged, ...status.untracked, ...status.merge]

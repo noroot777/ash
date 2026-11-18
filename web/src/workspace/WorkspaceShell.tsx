@@ -6,7 +6,6 @@ import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
 import { leavesOnArchive, type ArchivedOnOpen } from "../lib/archivedSelection.ts";
 import { claimAction, isActionFresh } from "../lib/latestInteraction.ts";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
 import { upsertTask, useTasks } from "../lib/useTasks.ts";
 import { handedOut, useOutboundState } from "./useOutboundState.ts";
@@ -116,7 +115,7 @@ export function WorkspaceShell() {
   const [handoffTarget, setHandoffTarget] = useState<TaskListItem | null>(null);
   // 新建项目的弹层带着「为什么会弹出来」：被门禁拦下时是一句因果，用户主动点新建项目时是 null。
   const [createDialog, setCreateDialog] = useState<{ kind: "group" } | { kind: "project"; reason: string | null } | null>(null);
-  const [collapsed, setCollapsed] = useState(() => readRenamedStorage("ash:sidebar-collapsed") === "1");
+  const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem("navi:sidebar-collapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   // G C 的信号:每按一下加一,CommandsLauncher(侧栏顶行那颗 ▶)收到变化就开合弹层
   // (状态住在它那边)。侧栏收起 / 去设置页时它会重新挂载,所以那边按「挂载时那一格」比对。
@@ -258,7 +257,7 @@ export function WorkspaceShell() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  useEffect(() => { window.localStorage.setItem("ash:sidebar-collapsed", collapsed ? "1" : "0"); }, [collapsed]);
+  useEffect(() => { window.localStorage.setItem("navi:sidebar-collapsed", collapsed ? "1" : "0"); }, [collapsed]);
   useEffect(() => { window.localStorage.setItem(WORKSPACE_SIDEBAR_STORAGE_KEY, String(sidebarWidth)); }, [sidebarWidth]);
 
   useEffect(() => {
