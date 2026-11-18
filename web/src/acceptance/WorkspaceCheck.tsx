@@ -3,7 +3,7 @@ import type { TaskListItem } from "@ash/shared";
 import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 import { api, type ScmOverview } from "../lib/api.ts";
 import { announceWorkspaceCommit, workspaceCommitBlock, workspaceCommitPaths } from "../review/workspaceCommit.ts";
-import { CheckAction, CheckRow, FileList } from "./CheckRow.tsx";
+import { CheckAction, CheckRow, FileList, RetryAction } from "./CheckRow.tsx";
 
 /** 这一次验收自己顺手做的那次提交（或跳过它的理由）。 */
 export function AutoCommitCheck({ outcome }: { outcome: AcceptanceAutoCommitOutcome }) {
@@ -23,7 +23,7 @@ export function WorkspaceCommitRow({ overview, busy, disabled = false, error, re
   error: string | null;
   readError?: string | null;
   onCommit: () => void;
-  onRetry?: () => void;
+  onRetry?: () => unknown;
 }) {
   const paths = [...new Set([...overview.status.staged, ...overview.status.unstaged, ...overview.status.untracked, ...overview.status.merge]
     .map((change) => change.path))];
@@ -47,7 +47,7 @@ export function WorkspaceCommitRow({ overview, busy, disabled = false, error, re
         </div>
       ) : undefined}
       tools={<>
-        {readError && onRetry && <CheckAction onClick={onRetry}>重试</CheckAction>}
+        {readError && onRetry && <RetryAction onRetry={onRetry} />}
         {paths.length > 0 && <CheckAction busy={busy} disabled={disabled || !!block} onClick={onCommit}>提交</CheckAction>}
       </>}
     />
@@ -60,7 +60,8 @@ export function WorkspaceCheck({ task, notify, disabled = false }: {
   disabled?: boolean;
 }) {
   const [state, setState] = useState<{ taskId: string; overview: ScmOverview | null; error: string | null }>({ taskId: task.id, overview: null, error: null });
-  const [attempt, setAttempt] = useState(0);
+  // 重试和提交之后的重读都走这一条，交回那次读取（重试键靠它画「找北」）。
+  const refreshRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const [busy, setBusy] = useState(false);
   const [commitError, setCommitError] = useState<{ taskId: string; message: string } | null>(null);
   const activeTask = useRef(task.id);
@@ -76,10 +77,12 @@ export function WorkspaceCheck({ task, notify, disabled = false }: {
           error: message.includes("不是 Git 仓库") ? null : message }));
       },
     );
+    refreshRef.current = refresh;
     void refresh();
     const timer = window.setInterval(() => void refresh(), 15_000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [task.id, task.updatedAt, attempt]);
+  }, [task.id, task.updatedAt]);
+  const reread = () => refreshRef.current();
   const current = state.taskId === task.id ? state : null;
   const commit = async () => {
     if (busy || disabled) return;
@@ -92,7 +95,7 @@ export function WorkspaceCheck({ task, notify, disabled = false }: {
       const block = workspaceCommitBlock(overview);
       if (block) throw new Error(block);
       const paths = workspaceCommitPaths(overview.status);
-      if (!paths.length) { setAttempt((value) => value + 1); return; }
+      if (!paths.length) { void reread(); return; }
       const result = await api.scmCommit(taskId, `chore: ${task.title.replace(/[\r\n]+/g, " ")}`, { stagePaths: paths, acceptance: true });
       announceWorkspaceCommit(taskId);
       notify(`任务改动已提交${result.sha ? ` · ${result.sha.slice(0, 8)}` : ""}${result.warning ? `；${result.warning}` : ""}${result.note ? `；${result.note}` : ""}`);
@@ -102,15 +105,15 @@ export function WorkspaceCheck({ task, notify, disabled = false }: {
     } finally {
       if (activeTask.current === taskId) setBusy(false);
     }
-    if (activeTask.current === taskId) setAttempt((value) => value + 1);
+    if (activeTask.current === taskId) void reread();
   };
   if (!current?.overview) {
     return current?.error
       ? <CheckRow check="workspace" tone="block" text="未提交改动读不出来" state={current.error}
-        tools={<CheckAction onClick={() => setAttempt((value) => value + 1)}>重试</CheckAction>} />
+        tools={<RetryAction onRetry={reread} />} />
       : null;
   }
   return <WorkspaceCommitRow overview={current.overview} busy={busy} disabled={disabled}
     error={commitError?.taskId === task.id ? commitError.message : null} readError={current.error}
-    onCommit={() => void commit()} onRetry={() => setAttempt((value) => value + 1)} />;
+    onCommit={() => void commit()} onRetry={reread} />;
 }

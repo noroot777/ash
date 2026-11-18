@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { TaskListItem, TaskWorkspaceLeftover } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { CheckAction, CheckRow } from "./CheckRow.tsx";
+import { CheckAction, CheckRow, RetryAction } from "./CheckRow.tsx";
 import { useRowRead } from "./useRowRead.ts";
 
 /**
@@ -22,9 +22,11 @@ export function ReleaseCheck({ task, disabled, blocker, onReleased, notify }: {
   const workspace = read.value;
   const [proposal, setProposal] = useState<{ workspace: TaskWorkspaceLeftover; fingerprint: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // 按「释放目录」先核对现场、读方案（在读），确认后才真去释放（busy）。
+  const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const open = async () => {
-    setBusy(true); setError("");
+    setChecking(true); setError("");
     try {
       // 按下那一刻再核对一次现场：摆在这一行的可能是几分钟前的样子。读不到就落回本行的待核对。
       const latest = await read.reload();
@@ -34,7 +36,7 @@ export function ReleaseCheck({ task, disabled, blocker, onReleased, notify }: {
       if (latest.path) setProposal({ workspace: latest, fingerprint: view.task.fingerprint });
       else await onReleased();
     } catch (e) { notify(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    finally { setChecking(false); }
   };
   const run = async () => {
     if (!proposal || busy || disabled) return;
@@ -56,12 +58,12 @@ export function ReleaseCheck({ task, disabled, blocker, onReleased, notify }: {
   if (!workspace) {
     return read.error
       ? <CheckRow check="release" tone="block" text="工作区读不出来" state={read.error}
-        tools={<CheckAction onClick={() => void read.reload()}>重试</CheckAction>} />
+        tools={<RetryAction onRetry={read.reload} />} />
       : null;
   }
   const released = !workspace.path && !!workspace.branch;
   const stale = read.error ? `待核对：${read.error}` : null;
-  const retry = read.error ? <CheckAction onClick={() => void read.reload()}>重试</CheckAction> : null;
+  const retry = read.error ? <RetryAction onRetry={read.reload} /> : null;
   return (
     <>
       {released
@@ -71,7 +73,7 @@ export function ReleaseCheck({ task, disabled, blocker, onReleased, notify }: {
           : <CheckRow check="release" tone="passed" text="工作区目录已释放" tools={retry}
             state={stale ?? <>分支 <code>{workspace.branch}</code> 保留</>} />
         : <CheckRow check="release" tone="idle" text="子任务合入这个任务的分支" state={stale ?? "工作区目录还占着它"}
-          tools={<>{retry}<CheckAction disabled={disabled} busy={busy} onClick={() => void open()}>释放目录</CheckAction></>} />}
+          tools={<>{retry}<CheckAction disabled={disabled} busy={busy} reading={checking} onClick={() => void open()}>释放目录</CheckAction></>} />}
       {proposal && <ConfirmDialog title="释放工作区目录？"
         message="移除下面的目录，保留任务记录、分支和已提交的代码。有未提交文件时会拒绝。释放后可验收子任务，这个任务之后仍可继续执行。"
         confirmLabel="释放目录，保留分支" busy={busy} confirmDisabled={disabled}

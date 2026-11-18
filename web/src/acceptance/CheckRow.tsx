@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import { CaretDown } from "@phosphor-icons/react";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /**
  * 前提列里一行的调子。红（block）拦验收，琥珀（warn）只提醒，live 是「有东西正在替你办」
@@ -44,19 +45,38 @@ export function CheckRow({ check, tone, text, state, tools, detail, defaultOpen 
   );
 }
 
-/** 行尾那一个出路。黑白：颜色只留给状态。 */
-export function CheckAction({ children, onClick, disabled, busy, label }: {
+/**
+ * 行尾那一个出路。黑白：颜色只留给状态。
+ * 等的东西分两种，画法不同：reading 是在等内容读回来（「找北」）；busy 是这一按的动作已经发出去、
+ * 事情在跑（转圈）。两种都让键灰着、aria-busy。
+ */
+export function CheckAction({ children, onClick, disabled, busy, reading, label }: {
   children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
   busy?: boolean;
+  reading?: boolean;
   label?: string;
 }) {
+  const waiting = !!busy || !!reading;
   return (
-    <button type="button" className="acc-btn is-sm" disabled={disabled || busy} aria-busy={busy || undefined} aria-label={label} onClick={onClick}>
-      {busy && <i className="acc-spin" aria-hidden="true" />}{children}
+    <button type="button" className="acc-btn is-sm" disabled={disabled || waiting} aria-busy={waiting || undefined} aria-label={label} onClick={onClick}>
+      {busy ? <i className="acc-spin" aria-hidden="true" /> : reading ? <NaviLoader size={14} /> : null}{children}
     </button>
   );
+}
+
+/**
+ * 读失败后的「重试」：只是把内容再读一遍，所以重读期间是「找北」。自己盯着 onRetry 交回的那次读取；
+ * 读取另有人在跑（后台重验之类）时由调用方用 reading 说出来。
+ */
+export function RetryAction({ onRetry, reading = false, disabled }: { onRetry: () => unknown; reading?: boolean; disabled?: boolean }) {
+  const [own, setOwn] = useState(false);
+  const retry = () => {
+    setOwn(true);
+    void Promise.resolve(onRetry()).catch(() => undefined).finally(() => setOwn(false));
+  };
+  return <CheckAction reading={reading || own} disabled={disabled} onClick={retry}>重试</CheckAction>;
 }
 
 /** 展开层里的文件清单（冲突文件、挡路文件、待提交文件）。 */

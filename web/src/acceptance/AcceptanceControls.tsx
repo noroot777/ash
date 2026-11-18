@@ -12,7 +12,7 @@ import { AcceptConfirm } from "./AcceptConfirm.tsx";
 import { AcceptReject, type ReturnOutcome } from "./AcceptReject.tsx";
 import { acceptMessage, gateNotice } from "./acceptMessages.ts";
 import { BaselineCheck } from "./BaselineCheck.tsx";
-import { CheckAction, CheckRow } from "./CheckRow.tsx";
+import { CheckAction, CheckRow, RetryAction } from "./CheckRow.tsx";
 import { confirmView, type ConfirmGate } from "./confirmPlan.ts";
 import { DependencyChecks, dependencyBlocked, selectionBlockOf } from "./DependencyChecks.tsx";
 import { FailureCheck } from "./FailureCheck.tsx";
@@ -87,7 +87,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const verification = useAcceptanceVerification(task, confirming);
   // 动作成功之后这个任务的事实要整份追平（taskFacts.ts）：追平之前不许确认，读失败那一行给重试。
   const taskFacts = useTaskFacts(task.id, task.updatedAt);
-  const retryTaskFacts = () => void refreshTaskFacts(task, onTaskUpdated);
+  const retryTaskFacts = () => refreshTaskFacts(task, onTaskUpdated);
   useEffect(() => { setChecked([]); setFailure(null); setLayer(null); }, [task.id]);
   // 版本一推，前置命令那份状态（基准对照的目标分支跟着合入目标走）也重读一次。
   useEffect(() => { if (taskFacts.version) void gate.reload(); }, [taskFacts.version]);
@@ -280,7 +280,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         {factBlocks.map((row) => (
           <CheckRow key={row.key} check={row.key} tone={row.tone} text={row.text}
             detail={row.key === "host" && block?.detail ? <p className="acc-detail-text">{block.detail}</p> : undefined}
-            tools={row.retry ? <CheckAction onClick={row.retry}>重试</CheckAction> : undefined} />
+            tools={row.retry ? <RetryAction onRetry={row.retry} /> : undefined} />
         ))}
         {failure?.taskId === task.id && (!settled || !!failure.completedMerge || !!failure.completedTag)
           && failure.reason !== issue?.reason && <FailureCheck failure={failure} gateReadable={!!gate.state && !gate.error} />}
