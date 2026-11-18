@@ -27,7 +27,7 @@ if (IS_WINDOWS) {
 const root = mkdtempSync(join(tmpdir(), "ash-control-fifo-"));
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_FIFO_LIST_TIMEOUT_MS = "3000"; // ⑤ 要等它超时；正常一次 lsof 约 0.2 秒
-process.env.ASH_ALLOW_REAL_AGENT = "1"; // 起的是本文件自己写的假 agent，验的就是进程收尾
+process.env.ASH_TEST_AGENT_BIN = process.execPath; // 起的是本文件自己写的假 agent（node 跑脚本），验的就是进程收尾
 const { detachedPathsFor, spawnControllableForRun } = await import("../src/executors/detached.js");
 const { controlFifoPath, removeIdleControlFifo } = await import("../src/executors/control-fifo.js");
 const mkfifo = (path: string) => assert.equal(spawnSync("mkfifo", [path]).status, 0, `fixture: mkfifo ${path}`);

@@ -24,8 +24,6 @@ process.env.ASH_DB = join(stage, "ash.db");
 requireTmpDb("test-conversation-redact");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-// PATH 上的 claude 是下面种的假货，放行 spawn 的测试隔离闸。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 const ok = (m: string) => console.log("   ✓ " + m);
 
 // ── 假 claude：把 argv 和 stdin 收到的每一行记下来，回一个成功的 result ─────────────
@@ -57,6 +55,8 @@ const fakeBin = join(bin, IS_WINDOWS ? "claude.cmd" : "claude");
 writeFileSync(fakeBin, IS_WINDOWS ? `@node "${probeJs}" %*\r\n` : `#!/bin/sh\nexec node "${probeJs}" "$@"\n`);
 chmodSync(fakeBin, 0o755);
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
+// spawn 的测试隔离闸只放行上面种的这个假 claude。
+process.env.ASH_TEST_AGENT_BIN = bin;
 process.env.ASH_TEST_PROBES = probes;
 const failOnce = join(stage, "fail-once");
 process.env.ASH_TEST_FAIL_ONCE = failOnce;

@@ -131,8 +131,8 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 **`test-accept-merge.ts` 和 `test-review-flow.ts` 已经不摆假 CLI 了**,别再照着上面那张表去找。
 它们要的只是「别真起 claude」,而这件事 `spawn.ts` 的 `guardAgentSpawn` 已经在做:设了
-`ASH_RUNS_DIR` 且没显式给 `ASH_ALLOW_REAL_AGENT=1` 时,任何执行器启动都被换成一个立刻
-失败的假 child。于是这两条改成在开头断言这个隔离确实生效 —— 假 CLI 是「挡住了就没人知道有没有
+`ASH_RUNS_DIR` 时,执行器启动一律被换成一个立刻失败的假 child —— 除非解析到的可执行文件落在
+测试自己列出的假 CLI 里(`ASH_TEST_AGENT_BIN`),或者是 live 脚本显式给了 `ASH_ALLOW_REAL_AGENT=1`。于是这两条改成在开头断言这个隔离确实生效 —— 假 CLI 是「挡住了就没人知道有没有
 挡住」,fail-closed 断言是「没挡住就当场炸」。断言故意会响,所以这两条的临时目录清理挂在
 `process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`ASH_ALLOW_REAL_AGENT=1`
 跑一次就在 `os.tmpdir()` 留一个 `ash-review-flow-*`)。

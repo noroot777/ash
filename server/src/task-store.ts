@@ -21,7 +21,7 @@ import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
 import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
 import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@ash/shared/dispatch-plan";
-import { parseDispatchSuggestions, publicSuggestions } from "@ash/shared/dispatch-suggestion";
+import { parseDispatchSuggestions, parseWithdrawnSuggestions, publicSuggestions } from "@ash/shared/dispatch-suggestion";
 import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
 import type { CreateReviewChoice } from "@ash/shared/review-on-create";
 import { announceCreateReviews, reservationRows, resolveCreateReviews, type CreateReviewSlot } from "./review-on-create.js";
@@ -149,6 +149,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   dispatchPlan: activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) }),
   dispatchTarget: parseDispatchTarget(r.dispatchTarget),
   dispatchSuggestions: publicSuggestions(parseDispatchSuggestions(r.dispatchSuggestions)),
+  dispatchWithdrawals: parseWithdrawnSuggestions(r.dispatchWithdrawals),
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
 });

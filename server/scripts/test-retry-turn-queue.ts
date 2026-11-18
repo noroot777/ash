@@ -29,8 +29,6 @@ const releaseDir = join(root, "release");
 mkdirSync(releaseDir, { recursive: true });
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
-// 设了 ASH_RUNS_DIR 就有测试隔离闸;这里跑的是下面这个假 claude,显式放行。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_INPUT_LOG = inputLog;
 process.env.ASH_TEST_RELEASE_DIR = releaseDir;
 delete process.env.ASH_LAX_DONE;
@@ -77,6 +75,8 @@ writeFileSync(
   { mode: 0o755 },
 );
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
+// 设了 ASH_RUNS_DIR 就有测试隔离闸;只放行上面这个假 claude。
+process.env.ASH_TEST_AGENT_BIN = bin;
 
 const [{ db, ensureSchema }, schema, runRoutes, runs, { setTaskStatus }, { queueStatus }, transcript, store,
   { freeWorkflowState }, { freeReviewEvidenceDir }, { evidenceState }] = await Promise.all([

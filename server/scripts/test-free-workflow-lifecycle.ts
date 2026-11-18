@@ -23,11 +23,10 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 // 解析必炸的任务永远到不了那一步。所以给它备一个真能起来的假 claude。
 const fakeBin = installFakeClaude(root);
 const priorEnv = {
-  path: process.env.PATH, allow: process.env.ASH_ALLOW_REAL_AGENT, log: process.env.ASH_TEST_LEAD_LOG,
+  path: process.env.PATH, staged: process.env.ASH_TEST_AGENT_BIN, log: process.env.ASH_TEST_LEAD_LOG,
 };
-// PATH 上备着它就行;**放行真进程(ASH_ALLOW_REAL_AGENT)只在 ⑨ 那一小段开**——
-// 这份文件里别的任务用的是 baseTask 的 codex 执行器,全局放行会把它们也真的拉起来
-// (实测:真去 spawn /opt/homebrew/bin/codex)。
+// PATH 上备着它就行;**放行(ASH_TEST_AGENT_BIN)只在 ⑨ 那一小段开**——这份文件里别的任务
+// 用的是 baseTask 的 codex 执行器,测的是锁与账,一个进程都不该起。
 process.env.PATH = `${fakeBin}${delimiter}${priorEnv.path ?? ""}`;
 
 function git(cwd: string, ...args: string[]): string {
@@ -264,7 +263,7 @@ try {
   // 所以这里用假 claude 能服务的 agentType,不跟这份文件里其它用例共用 ultra-fake。
   await createTasks([{ ...baseTask, id: "sched-task", title: "sched",
     agentType: "claude", executorId: null }]);
-  process.env.ASH_ALLOW_REAL_AGENT = "1";
+  process.env.ASH_TEST_AGENT_BIN = fakeBin;
   process.env.ASH_TEST_LEAD_LOG = joinPath(root, "fake-claude-input.log");
   try {
     assert.equal(beginAccepting("sched-task"), true);
@@ -285,7 +284,7 @@ try {
     assert.equal(schedRow?.enabled, false, "解锁后的下一个 tick 应正常消费 once 班次");
     assert.equal(!!schedRow?.lastRunAt, true);
   } finally {
-    delete process.env.ASH_ALLOW_REAL_AGENT;
+    delete process.env.ASH_TEST_AGENT_BIN;
     if (priorEnv.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
     else process.env.ASH_TEST_LEAD_LOG = priorEnv.log;
   }
@@ -578,8 +577,8 @@ try {
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
   if (priorEnv.path === undefined) delete process.env.PATH; else process.env.PATH = priorEnv.path;
-  if (priorEnv.allow === undefined) delete process.env.ASH_ALLOW_REAL_AGENT;
-  else process.env.ASH_ALLOW_REAL_AGENT = priorEnv.allow;
+  if (priorEnv.staged === undefined) delete process.env.ASH_TEST_AGENT_BIN;
+  else process.env.ASH_TEST_AGENT_BIN = priorEnv.staged;
   if (priorEnv.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
   else process.env.ASH_TEST_LEAD_LOG = priorEnv.log;
   rmSync(root, { recursive: true, force: true });

@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "ash-windows-detached-"));
 process.env.ASH_DB = join(root, "test.db");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+process.env.ASH_TEST_AGENT_BIN = process.execPath;
 process.env.ASH_KERNEL_CONFINE = "0";
 const { detachedPathsFor, spawnForRun, spawnControllableForRun, reattachDetachedAgent } = await import("../src/executors/detached.js");
 const { windowsWrapPaths } = await import("../src/executors/detached-win-wrap.js");

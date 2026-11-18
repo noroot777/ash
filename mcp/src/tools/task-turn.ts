@@ -26,9 +26,9 @@ import {
 } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { callWithMonitorResults } from "./monitor-results.js";
-import { MODE, RECURS, TASK_STAGE, planTaskShape, reviewChoiceOf, suggestionShape } from "../schemas.js";
+import { MODE, RECURS, TASK_STAGE, planTaskShape, reviewChoiceOf, suggestionShape, suggestionWithdrawShape } from "../schemas.js";
 import { MAX_DISPATCH_PLAN_ITEMS } from "@ash/shared/dispatch-plan";
-import { MAX_SUGGESTIONS_PER_CALL } from "@ash/shared/dispatch-suggestion";
+import { MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK } from "@ash/shared/dispatch-suggestion";
 
 export function registerTaskTurnTools(server: McpServer): void {
 server.registerTool(
@@ -263,18 +263,20 @@ server.registerTool(
 server.registerTool(
   "suggest_dispatch",
   {
-    title: "挂出可以另开的任务(不停下)",
+    title: "挂出/收回可以另开的任务(不停下)",
     description:
       "只在你本来就要写「建议另开任务」时用：那件事该做、但不属于本任务。说明写好挂在用户回复框顶上，用户一按就派成新任务。"
-      + "不停任务，调完照常往下做、照常结束。拆自己的活用 propose_dispatch；顺手能做完的、想法没成形的不挂。新任务看不到这场对话，body 要自带上下文。",
+      + "不停任务，调完照常往下做、照常结束。拆自己的活用 propose_dispatch；顺手能做完的、想法没成形的不挂。新任务看不到这场对话，body 要自带上下文。\n\n"
+      + "挂上的一直留到用户派掉或点叉，不用重挂。后来不成立了（你自己做了、情况变了）用 withdraw 收回。",
     inputSchema: {
       taskId: z.string(),
-      tasks: z.array(suggestionShape).min(1).max(MAX_SUGGESTIONS_PER_CALL),
+      tasks: z.array(suggestionShape).max(MAX_SUGGESTIONS_PER_CALL).optional(),
+      withdraw: z.array(suggestionWithdrawShape).max(MAX_SUGGESTIONS_PER_TASK).optional(),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken，原样传入"),
     },
   },
-  async ({ taskId, tasks, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-suggestions`, { tasks }, directionToken)); }
+  async ({ taskId, tasks, withdraw, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-suggestions`, { tasks, withdraw }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

@@ -180,8 +180,8 @@ const frames = [
 const fakeClaude = join(fixtureDir, "fake-claude");
 writeFileSync(fakeClaude, `#!/bin/sh\ncat <<'EOF'\n${frames}\nEOF\n`);
 chmodSync(fakeClaude, 0o755);
-// 下面每个执行器都显式指着这个假 claude（bin: fakeClaude）；测试环境默认不许起执行器，这里放行。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+// 下面每个执行器都显式指着这个假 claude（bin: fakeClaude）；测试环境默认不许起执行器，只放行它。
+process.env.ASH_TEST_AGENT_BIN = fakeClaude;
 const contextOf = async (events: AsyncIterable<{ kind: string; context?: unknown }>) => {
   let found: unknown = null;
   for await (const event of events) if (event.kind === "context") found = event.context;

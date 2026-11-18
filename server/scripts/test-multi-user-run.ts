@@ -51,9 +51,6 @@ requireTmpDb("test-multi-user-run");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
 process.env.ASH_DATA_DIR ??= join(stage, "data");
-// spawn.ts 的隔离闸默认不许「真起执行器」。这条测试要的恰恰是真走完 spawn 链路 ——
-// 但 PATH 上那个 `claude` 是下面亲手种的假货,起的从来不是真 CLI。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 // 故意让**测试进程自己**带一个别的任务的身份:子进程默认继承 server 环境,而 ash 从
 // 一个 ash 任务里启动时这个变量真的有值。不在这里钉死,这条判据就只在「跑测试的人
 // 恰好也在一个任务里」时才成立。
@@ -87,6 +84,9 @@ writeFileSync(fakeBin, IS_WINDOWS ? `@node "${probeJs}" %*\r\n` : `#!/bin/sh\nex
 chmodSync(fakeBin, 0o755);
 // 分隔符用 path.delimiter:Windows 是 `;`,写死 `:` 会把整条 PATH 粘成一个不存在的目录。
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
+// spawn.ts 的隔离闸默认不许起执行器。这条测试要的恰恰是真走完 spawn 链路,只放行上面亲手种的
+// 这个假 `claude`。
+process.env.ASH_TEST_AGENT_BIN = bin;
 process.env.ASH_TEST_PROBES = probes;
 
 const readProbes = () =>

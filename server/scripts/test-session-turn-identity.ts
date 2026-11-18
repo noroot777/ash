@@ -24,9 +24,6 @@ process.on("exit", () => {
 });
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-// spawn.ts 的隔离闸默认不许真起执行器。这条测试要的就是真走完 spawn 链路——而 PATH 上那个
-// `codex` 是下面亲手种的假货。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 mkdirSync(process.env.ASH_RUNS_DIR, { recursive: true });
 
 // ── 假 codex：每次运行往 output/ 写一张图,顺便把运行次数记在盘上 ──────────────
@@ -54,6 +51,9 @@ setTimeout(() => process.exit(0), 50);
 writeFileSync(join(bin, "codex"),
   `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeJs)} "$@"\n`, { mode: 0o755 });
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
+// spawn.ts 的隔离闸默认不许起执行器。这条测试要的就是真走完 spawn 链路，只放行上面亲手种的
+// 这个假 `codex`。
+process.env.ASH_TEST_AGENT_BIN = bin;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { agents, appSettings, projects, sessions, tasks } = await import("../src/db/schema.js");

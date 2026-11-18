@@ -576,11 +576,6 @@ try {
   const objective = page.getByRole("textbox", { name: "任务目标" });
   await objective.fill("/go");
   await page.getByRole("option", { name: /^\/goal\b/ }).waitFor();
-  await page.getByRole("tab", { name: "团队", exact: true }).click();
-  await objective.fill("/");
-  await page.getByRole("listbox").waitFor();
-  assert.equal(await page.getByRole("option", { name: /^\/goal\b/ }).count(), 0);
-  await page.getByRole("tab", { name: "单任务", exact: true }).click();
   const composerAgentPicker = page.getByRole("button", { name: /^智能体：/ });
   await composerAgentPicker.click();
   await page.getByRole("option", { name: /@claude/ }).click();

@@ -3,7 +3,7 @@ import type { PendingMergeState } from "@ash/shared/accept-pending";
 import type { Task, TaskListItem } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { CheckAction, CheckRow, FileList } from "./CheckRow.tsx";
+import { CheckAction, CheckRow, FileList, RetryAction } from "./CheckRow.tsx";
 import { refreshTaskFacts } from "./taskFacts.ts";
 import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
 import { useRowRead } from "./useRowRead.ts";
@@ -64,7 +64,7 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
   if (!applicable) return null;
   if (error && !state) {
     return <CheckRow check="pending-merge" tone="block" text="读不到那次合并的现场" state={error}
-      tools={<CheckAction onClick={() => void reload()}>重试</CheckAction>} />;
+      tools={<RetryAction onRetry={reload} />} />;
   }
   if (!state || state.kind === "committed") return null;
 
@@ -117,7 +117,7 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
           </div>
         )}
         tools={<>
-          {error && <CheckAction onClick={() => void reload()}>重试</CheckAction>}
+          {error && <RetryAction onRetry={reload} />}
           {state.canCommit
             ? <CheckAction busy={busy} onClick={() => setAction("commit")}>提交</CheckAction>
             : state.canRemerge

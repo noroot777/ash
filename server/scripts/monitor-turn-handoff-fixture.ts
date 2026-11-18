@@ -14,8 +14,9 @@ import { id } from "../src/util.js";
 
 export type Row = typeof scheduledMessages.$inferSelect;
 export const log = join(root, "turn-handoff-input.log");
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${process.env.PATH ?? ""}`;
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ""}`;
+process.env.ASH_TEST_AGENT_BIN = fakeBin;
 process.env.ASH_TEST_LEAD_LOG = log;
 
 export const api = new Hono();

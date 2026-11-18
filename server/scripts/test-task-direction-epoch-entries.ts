@@ -25,13 +25,14 @@ const root = mkdtempSync(join(tmpdir(), "ash-direction-epoch-entries-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_TEST_LEAD_LOG = join(root, "fake-input.jsonl");
-// 这个用例就是要验证真实起跑/落盘/结算整条链，所以显式放行真进程（executors/spawn.ts）。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 delete process.env.ASH_LAX_DONE; // 台子前提：严格完成协议，没交卷就是 failed
 requireTmpDb("task-direction-epoch-entries");
 
 const { installFakeClaude } = await import("./scheduled-messages-fixture.js");
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${process.env.PATH ?? ""}`;
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ""}`;
+// 这个用例就是要验证真实起跑/落盘/结算整条链，所以放行上面铺的假 claude（executors/spawn.ts）。
+process.env.ASH_TEST_AGENT_BIN = fakeBin;
 
 const [{ db, ensureSchema }, schema, tickets, directionState, { setTaskStatus }, { runTask }, { continueTask }] =
   await Promise.all([

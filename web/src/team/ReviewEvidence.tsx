@@ -15,6 +15,7 @@ import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { ReviewDispatchControl } from "../review/ReviewDispatchControl.tsx";
 import { useTaskReviewInfo as useDispatchReviewInfo } from "../review/useTaskReviewInfo.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 const REVIEW_IN_FLIGHT = new Set(["backlog", "queued", "running", "paused"]);
 
@@ -183,7 +184,7 @@ export function ReviewEvidence({
             <small>{rounds.length ? `已记录 ${rounds.length} 轮真实运行验证` : "结论、报告与截图集中保存在这里"}</small>
           </div>
         </header>
-        {state.loading && <p><SpinnerGap size={13} className="is-spinning" />正在读取验证记录…</p>}
+        {state.loading && <p><NaviLoader />正在读取验证记录…</p>}
         {!state.loading && state.error && (
           <p className="is-error">验证记录加载失败：{state.error} <button type="button" onClick={() => void state.reload()}>重试</button></p>
         )}

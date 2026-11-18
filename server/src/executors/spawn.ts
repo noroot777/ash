@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { IS_WINDOWS } from "../platform.js";
+import { IS_WINDOWS, isInsidePath, splitPathList } from "../platform.js";
 import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
 import { openTrackFd, registerTrackFd } from "./kill.js";
@@ -100,15 +101,60 @@ export function failedChild(message: string): ChildProcess {
 /**
  * 真库流程测试会把 RUNS_DIR 指到临时目录。这种进程默认绝不起真 CLI：测试只想
  * 验证游标/状态却误走生产副作用，就是 2026-08-07 一次泄漏 19 个 Claude 回合的根因。
- * 少数确实要验证进程管理的测试必须显式给 ASH_ALLOW_REAL_AGENT=1；不再依赖每个调用点
- * 记得注入 no-op。
+ *
+ * 要验证进程管理的测试用 ASH_TEST_AGENT_BIN 列出**自己铺的**执行器（目录或可执行文件，
+ * PATH 分隔符分开），只有此刻解析结果落在其中的才放行。按路径认而不按开关认，是因为起跑是
+ * 异步的：收尾把 PATH 还原之后才轮到的起跑，解析到的就是机器上真的那个 —— 2026-11-18
+ * test-dispatch-suggestion 这样漏出 4 个 PPID=1 的真 `claude -p`。开关分不出这两种，路径分得出，
+ * 所以收尾顺序写错、某个名字忘了铺桩，都只会得到一条禁启错误。
+ *
+ * ASH_ALLOW_REAL_AGENT=1 整个放行，只留给就是要起真 CLI 的 live 脚本；谁可以写它由
+ * scripts/test-process-conventions.mjs 的名单管着。
+ *
+ * **隔离环境里放行只有一种含义：交回的 `bin` 是一条核验过的绝对路径，调用方拿它去起。**
+ * 验的和起的是同一个字符串，所以调用方之后怎么解析它，结果只能是它自己或「没了」，换不成别的：
+ *   - 解析结果是相对路径（命令写成 `bin/claude`，或 PATH 里有相对目录）：校验按本进程的 cwd 认，
+ *     子进程却按任务的 cwd 找 —— 交回绝对路径，两处就分不开；
+ *   - 交回的是父目录走过 realpath 的那个写法，也就是拿去比放行范围的那一个，而不是另一种等价写法：
+ *     路径中途的软链之后改指别处，起的仍是验过的位置；
+ *   - 此刻解析不到，就在这里报「找不到」，不把原名交回去让调用方再找一遍 —— 再找的那一遍若找到了
+ *     （文件正好这时装上），起的就是一个没人验过的东西。
+ * 闸认的是**位置**不是内容：能往放行范围里写文件的人本来就能决定起什么，那正是「测试自己铺的」的意思。
+ * 没进隔离这一档的（生产、整体放行）原样交回，起法一个字不变。
  */
-export function guardAgentSpawn(bin: string): ChildProcess | null {
-  if (!process.env.ASH_RUNS_DIR || process.env.ASH_ALLOW_REAL_AGENT === "1") return null;
-  return failedChild(
-    `测试隔离环境禁止启动真执行器 ${bin}；`
-    + "这个测试若就是要验证进程管理，显式设 ASH_ALLOW_REAL_AGENT=1",
-  );
+export type SpawnGate = { blocked: ChildProcess } | { blocked: null; bin: string };
+
+export function guardAgentSpawn(bin: string): SpawnGate {
+  if (!process.env.ASH_RUNS_DIR || process.env.ASH_ALLOW_REAL_AGENT === "1") return { blocked: null, bin };
+  const vetted = vetStagedLaunch(bin);
+  return "launch" in vetted ? { blocked: null, bin: vetted.launch } : { blocked: failedChild(vetted.refusal) };
+}
+
+/** 隔离环境里唯一能产出放行的地方：要么一条核验过的绝对路径，要么拒绝的理由，没有「原名照过」这一支。 */
+function vetStagedLaunch(bin: string): { launch: string } | { refusal: string } {
+  const staged = splitPathList(process.env.ASH_TEST_AGENT_BIN).map(stagedRoot).filter((root) => root !== null);
+  if (!staged.length) {
+    return { refusal: `测试隔离环境禁止启动真执行器 ${bin}；`
+      + "这个测试若就是要验证进程管理，把自己铺的假 CLI 所在目录列进 ASH_TEST_AGENT_BIN" };
+  }
+  const resolved = resolveBin(bin);
+  const launch = resolved && anchored(resolve(resolved));
+  if (!resolved || !launch) return { refusal: `找不到 ${bin} 命令(不在 PATH，也不在常见目录)` };
+  if (staged.some((root) => isInsidePath(root, launch, sep))) return { launch };
+  return { refusal: `测试隔离环境禁止启动真执行器 ${bin}：它此刻解析到 ${resolved}，`
+    + "不在这个测试自己铺的那几处（ASH_TEST_AGENT_BIN）之内" };
+}
+
+// 父目录走 realpath（macOS 的临时目录是 /var → /private/var 的软链），文件名原样留着：
+// 测试铺的桩本身可以是指向 node 的软链，认的是「铺在哪」而不是「指向哪」。
+// 父目录读不出来就是 null：说不清它在哪，就不拿一个没核过的写法去比。
+function anchored(abs: string): string | null {
+  try { return join(realpathSync(dirname(abs)), basename(abs)); } catch { return null; }
+}
+
+function stagedRoot(entry: string): string | null {
+  try { if (statSync(entry).isDirectory()) return realpathSync(entry); } catch { /* 当成文件认 */ }
+  return anchored(resolve(entry));
 }
 
 // Turn a spawn error into a truthful message. `precise` errors (from pre-flight)
@@ -153,14 +199,14 @@ export function spawnAgent(
   extraEnv?: Record<string, string | undefined>,
   opts?: { keepStdin?: boolean },
 ): ChildProcess {
-  const blocked = guardAgentSpawn(bin);
-  if (blocked) return blocked;
+  const gate = guardAgentSpawn(bin);
+  if (gate.blocked) return gate.blocked;
   // Local pre-flight: distinguish "cwd missing" from "binary missing" so the
   // error never lies (both raise ENOENT from spawn, indistinguishable by code).
   if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
   let plan;
   try {
-    plan = resolveLaunch(bin, args);
+    plan = resolveLaunch(gate.bin, args);
   } catch (e) {
     // Windows 上必须过 cmd.exe、而某个参数带换行 —— 转义不了,如实报出来。
     return failedChild(e instanceof Error ? e.message : String(e));

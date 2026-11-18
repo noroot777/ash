@@ -155,18 +155,14 @@ private final class BrandPane: NSView {
   }
 }
 
-/// 和 app 图标同一个字形，反过来：白底黑字，放在黑栏上。画法同 scripts/make-icon.swift。
+/// 就是 app 图标本身：米白圆角块上的 navi 标，放在黑栏上（web 向导的 `.onboarding-mark` 照着它画）。
+/// 图标那张图在 macOS 图标网格里四周留了 100/1024 的边给阴影，这里把那圈边撑到视图外面，让圆角块正好铺满。
 private final class BrandMark: NSView {
   override var intrinsicContentSize: NSSize { NSSize(width: 44, height: 44) }
 
   override func draw(_ dirtyRect: NSRect) {
-    NSColor.white.setFill()
-    NSBezierPath(roundedRect: bounds, xRadius: bounds.width * 0.225, yRadius: bounds.width * 0.225).fill()
-    let font = NSFont.systemFont(ofSize: bounds.height * 0.62, weight: .semibold)
-    let glyph = NSAttributedString(string: "a", attributes: [.font: font, .foregroundColor: NSColor.black])
-    // 按 x 高居中：小写字母按行高放会偏下。
-    let baseline = bounds.midY - font.xHeight / 2
-    glyph.draw(at: NSPoint(x: bounds.midX - glyph.size().width / 2, y: baseline + font.descender))
+    let margin = bounds.width * 100 / 824
+    NSApp.applicationIconImage.draw(in: bounds.insetBy(dx: -margin, dy: -margin))
   }
 }
 

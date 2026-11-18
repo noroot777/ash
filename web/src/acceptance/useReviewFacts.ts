@@ -6,8 +6,8 @@ export type FactRow = {
   key: string;
   tone: "block" | "warn" | "live" | "idle";
   text: string;
-  /** 这一行自己的出路：读失败的重试、审查警示去看审查。 */
-  retry?: () => void;
+  /** 读失败时这一行的重试：把那份内容再读一遍，交回那次读取。 */
+  retry?: () => unknown;
 };
 
 export type ReviewFacts = {
@@ -46,7 +46,7 @@ export function useReviewFacts(task: TaskListItem): ReviewFacts {
     if (active) blocks.push({ key: "review", tone: "live", text: freeReviewBlockingLabel(active)! });
     // 后端只在终态放行自由任务验收；在跑的那一种由「任务在跑」那一行说，这里只说停着没结束的。
     else if (!["done", "failed", "canceled"].includes(task.status) && !inFlight) blocks.push({ key: "unfinished", tone: "block", text: "任务尚未结束" });
-    else if (free.error) blocks.push({ key: "review-state", tone: "block", text: "审查状态读不出来", retry: () => void free.reload(false, true) });
+    else if (free.error) blocks.push({ key: "review-state", tone: "block", text: "审查状态读不出来", retry: () => free.reload(false, true) });
     else if (!free.state) loading = true;
     const view = freeReviewView(free.state, task as Task);
     warning = view.stoppedRun && (view.stale || view.freshness === "unknown")

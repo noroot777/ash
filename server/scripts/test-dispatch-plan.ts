@@ -32,10 +32,10 @@ const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
+process.env.ASH_TEST_AGENT_BIN = fakeBin;
 await installExitingClis(fakeBin, ["codex", "gemini"]);
 
 const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan, launch] = await Promise.all([

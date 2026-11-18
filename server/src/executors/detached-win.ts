@@ -76,13 +76,13 @@ export function spawnWindowsDetachedAgent(
   extraEnv?: Record<string, string | undefined>,
   opts?: { keepStdin?: boolean },
 ): DetachedChild | ChildProcess {
-  const blocked = guardAgentSpawn(bin);
-  if (blocked) return blocked;
+  const gate = guardAgentSpawn(bin);
+  if (gate.blocked) return gate.blocked;
   // 前置判定跟 spawnAgent 同一套:两者都会报 ENOENT,只有分开说才不说假话。
   if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
   let plan;
   try {
-    plan = resolveLaunch(bin, args);
+    plan = resolveLaunch(gate.bin, args);
   } catch (e) {
     return failedChild(e instanceof Error ? e.message : String(e));
   }
