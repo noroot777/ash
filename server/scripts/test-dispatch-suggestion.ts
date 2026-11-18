@@ -4,12 +4,15 @@
 //   · 「派出去」照那一行此刻的样子建：改过的标题和说明、换过的人、补的那句话（标明是用户补的）；挂在这条任务名下、
 //     来源记用户；那一件同一笔摘掉；这条任务的会话里不多一个回合、不多一条待发送；同一件再按一次不再建；
 //   · 好几件「一个接一个」：成一组、按顺序排进队列；叉掉一件就没了；
-//   · 这条任务自己的执行器又跑完一个执行回合：之前挂着的收掉、那一回合挂的留下；审查、旁路、`@` 别人来问一句不算；
-//     端到端走一次真回合（假 CLI），跑完旧的没了，会话里没有多出字。
+//   · 用户还没处理的不随回合消失：之后又跑完几个执行回合，没重挂的那一件还在；同名的不挂第二件；
+//   · 智能体收回：要写一句为什么，那一件从框顶拿掉、原因记进它自己那条会话（带类型的旁注）；收回再挂同名的一次
+//     就换了说明；要收回的已经不在了不算错；审查回合收不了；
+//   · 端到端复现用户遇到的顺序（假 CLI 真跑一个回合）：挂建议 → 同一回合提问停下 → 用户答题 → 续跑回合结束，
+//     那一件还在、照样派得出去。
 //
 // 跑：npm -w @ash/server run test:dispatch-suggestion
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { asc, eq } from "drizzle-orm";
@@ -30,7 +33,7 @@ const fakeBin = installFakeClaude(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
 await installExitingClis(fakeBin, ["codex", "gemini"]);
 
-const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, settle, suggestion] = await Promise.all([
+const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, settle, transcript] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/runs.js"),
@@ -38,7 +41,7 @@ const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, s
   import("../src/group-routes.js"),
   import("../src/task-routes.js"),
   import("../src/settle-status.js"),
-  import("../src/dispatch-suggestion.js"),
+  import("../src/transcript.js"),
 ]);
 const { groups, projects, queueItems, scheduledMessages, sessions, tasks } = schema;
 await ensureSchema();
@@ -75,14 +78,16 @@ const inTurn = async (id: string) => {
   await db.update(tasks).set({ status: "running", activeTurnToken: `turn-${turn}`, activeDirectionToken: `dir-${turn}` }).where(eq(tasks.id, id));
   return { "x-ash-client": "mcp", "x-ash-source-task-id": id, "x-ash-turn-token": `turn-${turn}`, "x-ash-direction-token": `dir-${turn}` };
 };
-/** 那一回合确认完成后结束：照真结算的判据落位。 */
-const endTurnDone = async (id: string) => {
-  await db.update(tasks).set({ completeConfirmedAt: new Date().toISOString() }).where(eq(tasks.id, id));
+/** 那一回合结束：照真结算的判据落位（confirm = 结束前确认过完成）。 */
+const endTurn = async (id: string, confirm: boolean) => {
+  if (confirm) await db.update(tasks).set({ completeConfirmedAt: new Date().toISOString() }).where(eq(tasks.id, id));
   const result = await settle.settleTaskStatus(id, 0, null);
   await db.update(tasks).set({ status: result.status, activeTurnToken: null, activeDirectionToken: null }).where(eq(tasks.id, id));
   return result.status;
 };
-const suggest = (id: string, headers: Record<string, string>, items: unknown[]) => send("POST", `/tasks/${id}/dispatch-suggestions`, { tasks: items }, headers);
+const endTurnDone = (id: string) => endTurn(id, true);
+const suggest = (id: string, headers: Record<string, string>, items: unknown[] | undefined, withdraw?: unknown[]) =>
+  send("POST", `/tasks/${id}/dispatch-suggestions`, { tasks: items, withdraw }, headers);
 const shown = async (id: string) => ((await send("GET", `/tasks/${id}`)).body as unknown as Task).dispatchSuggestions ?? [];
 const kidsOf = async (id: string) => db.select().from(tasks).where(eq(tasks.dispatchedBy, id)).orderBy(asc(tasks.createdAt));
 const RED = { title: "修好斜杠菜单那条红测试", body: "## 目标\n让 test-question-card-dom 重新变绿（完整说明 A）", note: "main 上每次验收都被它挡住" };
@@ -114,6 +119,7 @@ try {
   // —— 挂出来：任务不停，照常结算成完成；刷新后还在；页面拿不到回合令牌。
   const posted = await suggest(S, headers, [RED]);
   assert.equal(posted.status, 200, JSON.stringify(posted.body));
+  assert.deepEqual(posted.body.hanging, [{ id: (posted.body.ids as string[])[0], title: RED.title }], "回包里是此刻挂着的全部");
   assert.equal((await taskOf(S)).question, null, "不占提问那一格");
   assert.equal(await endTurnDone(S), "done", "照常结算成完成，不落暂停");
   const first = await shown(S);
@@ -182,34 +188,70 @@ try {
   assert.deepEqual(await shown(S), [], "叉掉就没了");
   console.log("✓ 在跑时照派；好几件一个接一个成一组、按顺序排队；叉掉就没了；挂满了拒");
 
-  // —— 回合结束收旧的：判据只认这条任务自己的执行器跑完的执行回合。
-  assert.equal((await suggest(S, headers, [{ ...RED, title: "旧回合挂的" }])).status, 200);
-  headers = await inTurn(S);
-  assert.equal((await suggest(S, headers, [{ ...RED, title: "这一回合挂的" }])).status, 200);
-  const session = (id: string, extra: Partial<typeof sessions.$inferInsert>) => ({
-    id, taskId: S, role: "single", agentType: "claude", executor: "claude@test", cwd: root, startedAt: at, ...extra,
-  });
-  await db.insert(sessions).values([
-    session("ds-side", { sideTurn: true }), session("ds-reviewer", { role: "reviewer" }), session("ds-codex", { agentType: "codex" }),
-  ]);
-  assert.equal(await suggestion.turnSuggestionPrune(S, "ds-side"), undefined, "旁路回合（就地验证、讨论的一段）不算");
-  assert.equal(await suggestion.turnSuggestionPrune(S, "ds-reviewer"), undefined, "审查回合不算");
-  assert.equal(await suggestion.turnSuggestionPrune(S, "ds-codex"), undefined, "@ 别人来问一句不算");
-  assert.equal(await suggestion.turnSuggestionPrune(S, `${S}-prev`), `turn-${turn}`, "自己的执行回合：留下这一回合挂的");
-  assert.equal(await suggestion.pruneSuggestions(S, `turn-${turn}`), true);
-  assert.deepEqual((await shown(S)).map((item) => item.title), ["这一回合挂的"], "之前挂的收掉，这一回合挂的留下");
+  // —— 用户还没处理的不随回合消失：之后又跑完两个执行回合、谁都没重挂，那一件还在；同名的不挂第二件。
+  const old = await suggest(S, headers, [{ ...RED, title: "旧回合挂的" }]);
+  assert.equal(old.status, 200, JSON.stringify(old.body));
+  const oldId = (old.body.ids as string[])[0]!;
   await endTurnDone(S);
-  console.log("✓ 回合结束收旧的：只认自己的执行回合，这一回合挂的留下");
+  headers = await inTurn(S);
+  await endTurnDone(S);
+  headers = await inTurn(S);
+  assert.deepEqual((await shown(S)).map((item) => item.id), [oldId], "又跑完两个执行回合，没处理的那一件还在");
+  const twice = await suggest(S, headers, [{ ...RED, title: "旧回合挂的", body: "记岔了又挂一遍" }, { ...RED, title: "新的" }, { ...RED, title: "新的" }]);
+  assert.equal(twice.status, 200, JSON.stringify(twice.body));
+  assert.deepEqual([twice.body.suggested, twice.body.already], [1, [{ id: oldId, title: "旧回合挂的" }, { id: (twice.body.ids as string[])[0], title: "新的" }]],
+    "跟挂着的、跟同一批里前面的同名：不挂第二件，指回挂着的那一件");
+  assert.deepEqual((await shown(S)).map((item) => [item.title, item.body]), [["旧回合挂的", RED.body], ["新的", RED.body]], "挂着的那一件原样没动");
+  console.log("✓ 用户还没处理的不随回合消失；同名的不挂第二件");
 
-  // —— 端到端：这条任务真跑完一个执行回合（假 CLI），没处理的旧建议没了；会话里没有多出字。
-  const replied = await send("POST", `/tasks/${S}/reply`, { text: "接着看看(ds-reply)" });
-  assert.ok(replied.status < 300, JSON.stringify(replied.body));
-  await waitFor(() => existsSync(leadLog) && readFileSync(leadLog, "utf8").includes("ds-reply"), "那一回合没有送进会话");
-  await waitFor(async () => !runs.isTurnClaimed(S) && (await taskOf(S)).status !== "running", "那一回合没有结算");
-  await waitFor(async () => (await shown(S)).length === 0, "跑完一个执行回合后旧建议没收掉");
-  const md = readdirSync(join(root, "runs", S)).filter((name) => name.endsWith(".md")).map((name) => readFileSync(join(root, "runs", S, name), "utf8")).join("\n");
-  assert.equal(/可以派出去|这一回合挂的/.test(md), false, "收掉时会话里不留字");
-  console.log("✓ 端到端：自己的执行器跑完一个执行回合，旧建议收掉，会话里不留字");
+  // —— 智能体收回：要写为什么；那一件拿掉、原因记进它自己那条会话；收回再挂同名的一次就换了说明。
+  await db.insert(sessions).values({ id: "ds-reviewer", taskId: S, role: "reviewer", agentType: "claude", executor: "claude@test", cwd: root, startedAt: new Date().toISOString() });
+  assert.equal((await suggest(S, headers, undefined, [{ id: oldId, reason: "" }])).status, 400, "收回要写一句为什么");
+  assert.equal((await suggest(S, headers, undefined, undefined)).status, 400, "要挂的和要收回的至少给一样");
+  const reviewing = runs.claimOwnTurn(S, "reviewer");
+  assert.equal((await suggest(S, headers, undefined, [{ id: oldId, reason: "审查者觉得不用了" }])).status, 409, "审查回合收不了");
+  runs.releaseTurn(S, reviewing!);
+  const swapped = await suggest(S, headers, [{ ...RED, title: "旧回合挂的", body: "换过的说明(ds-swapped)" }],
+    [{ id: oldId, reason: "说明里漏了一处，换成新的(ds-why)" }, { id: "ds-not-there", reason: "早就派掉了" }]);
+  assert.equal(swapped.status, 200, JSON.stringify(swapped.body));
+  assert.deepEqual([swapped.body.withdrawn, swapped.body.gone, swapped.body.suggested, swapped.body.already], [[oldId], ["ds-not-there"], 1, undefined],
+    "先收回再挂：同名的新说明挂得上；要收回的已经不在了不算错");
+  const afterSwap = await shown(S);
+  assert.deepEqual(afterSwap.map((item) => [item.title, item.body]), [["新的", RED.body], ["旧回合挂的", "换过的说明(ds-swapped)"]]);
+  assert.deepEqual(swapped.body.hanging, afterSwap.map((item) => ({ id: item.id, title: item.title })));
+  const noted = readFileSync(transcript.sessionTranscriptPath(S, `${S}-prev`), "utf8");
+  assert.ok(noted.includes("收回了建议任务「旧回合挂的」：说明里漏了一处，换成新的(ds-why)"), "为什么收回记进了会话");
+  assert.ok(noted.includes('"kind":"suggestion.withdrawn"'), "带着类型：页面据它摆在那一回合下面");
+  assert.equal(existsSync(transcript.sessionTranscriptPath(S, "ds-reviewer")), false, "记在执行者自己那条会话里，不落到更新的审查会话上");
+  const only = await suggest(S, headers, undefined, [{ id: afterSwap[0]!.id, reason: "已经在本任务里顺手做了" }]);
+  assert.deepEqual([only.status, only.body.suggested, only.body.withdrawn], [200, 0, [afterSwap[0]!.id]], "只收回、不挂新的");
+  assert.deepEqual((await shown(S)).map((item) => item.title), ["旧回合挂的"]);
+  await send("DELETE", `/tasks/${S}/dispatch-suggestions/${afterSwap[1]!.id}`);
+  await endTurnDone(S);
+  console.log("✓ 智能体收回：写明原因、记进自己那条会话；收回再挂同名的一次换说明；不在了的不算错；审查回合收不了");
+
+  // —— 端到端复现：挂建议 → 同一回合提问停下 → 用户答题 → 续跑回合（假 CLI 真跑）结束 → 那一件还在、照样派得出去。
+  headers = await inTurn(S);
+  const kept = await suggest(S, headers, [{ ...RED, title: "提问那一回合挂的" }]);
+  assert.equal(kept.status, 200, JSON.stringify(kept.body));
+  const asked = await send("POST", `/tasks/${S}/ask`, { question: "规则文件要不要带口令提交？" }, headers);
+  assert.equal(asked.status, 200, JSON.stringify(asked.body));
+  assert.equal(await endTurn(S, false), "paused", "回合停在提问上");
+  const answered = await send("POST", `/tasks/${S}/answer`, { answer: "带口令提交(ds-answer)" });
+  assert.ok(answered.status < 300, JSON.stringify(answered.body));
+  await waitFor(() => existsSync(leadLog) && readFileSync(leadLog, "utf8").includes("ds-answer"), "答复没有送进会话");
+  await waitFor(async () => !runs.isTurnClaimed(S) && (await taskOf(S)).status !== "running", "续跑的那一回合没有结算");
+  const survived = await shown(S);
+  assert.deepEqual(survived.map((item) => item.title), ["提问那一回合挂的"], "用户只是答了一道题，续跑回合结束后那一件还在");
+  const kidsBefore = (await kidsOf(S)).length;
+  const late = await send("POST", `/tasks/${S}/dispatch-suggestions/launch`, {
+    items: [{ id: survived[0]!.id, title: survived[0]!.title, body: survived[0]!.body, target: claude, worktreeBase: null }],
+  });
+  assert.equal(late.status, 200, JSON.stringify(late.body));
+  assert.equal((await kidsOf(S)).at(-1)?.title, "提问那一回合挂的");
+  assert.equal((await kidsOf(S)).length, kidsBefore + 1, "照样派得出去");
+  assert.deepEqual(await shown(S), []);
+  console.log("✓ 端到端：挂建议 → 同回合提问停下 → 答题 → 续跑回合结束，那一件还在、照样派得出去");
 } catch (error) {
   failure = error;
   console.error(error);

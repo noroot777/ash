@@ -4,6 +4,7 @@
 //
 // 派出去交给 ash 照那一行此刻的样子建（server/src/dispatch-suggestion-launch.ts），这条任务的智能体不被叫醒，
 // 所以它在跑时也照派。派掉、叉掉的那几件先在本地藏起来，不等服务端那一条广播回来。
+// 一行只有三种去处：你派了、你叉了、智能体收回了（为什么收回记在会话里那一回合下面）——没有自己消失的。
 import { useEffect, useState } from "react";
 import type { AgentType, Task } from "@ash/shared";
 import { dispatchDefaultTarget, type DispatchOrder, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
@@ -95,7 +96,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
     extra: armedRow?.id === row.id ? value : "",
   }));
   useEffect(() => publishViews(views));
-  // 选中的那一件没了（派掉、叉掉、回合结束收掉），框回到平常；读着的那一件没了，抽屉跟着关。
+  // 选中的那一件没了（派掉、叉掉、智能体收回），框回到平常；读着的那一件没了，抽屉跟着关。
   useEffect(() => {
     if (storedArmed && !armedRow) setArmed(task.id, null);
     if (readingId && !rows.some((row) => row.id === readingId)) drawer?.close();

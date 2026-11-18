@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { AGENT_TYPES, STAGE_ORDER } from "@ash/shared";
 import { RECURS_SHAPE_ERROR } from "@ash/shared/free-workflow";
+import { MAX_WITHDRAW_REASON_LEN } from "@ash/shared/dispatch-suggestion";
 
 export const AGENT_TYPE = z.enum(AGENT_TYPES);
 export const MODE = z.enum(["parallel", "serial"]);
@@ -79,4 +80,10 @@ export const suggestionShape = z.object({
   executorId: z.string().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
+});
+
+// 收回一件挂着的（suggest_dispatch 的 withdraw）：原因原样给用户看，是他知道「它为什么不在了」的唯一去处。
+export const suggestionWithdrawShape = z.object({
+  id: z.string().min(1).describe("挂时返回的 id"),
+  reason: z.string().min(1).max(MAX_WITHDRAW_REASON_LEN).describe("为什么不用派了，用户会看到"),
 });

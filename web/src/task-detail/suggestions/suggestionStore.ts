@@ -75,7 +75,7 @@ export function setEditing(id: string | null): void {
   changed();
 }
 
-/** 派出去了、收掉了：那一件的改动和画法都不用再留。 */
+/** 派出去了、叉掉了：那一件的改动和画法都不用再留。 */
 export function forgetSuggestions(ids: readonly string[]): void {
   for (const id of ids) {
     edits.delete(id);

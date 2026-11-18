@@ -111,6 +111,12 @@ export type TimelineNotice =
   | { kind: "complete.held"; after: "pending" | "new-monitor" }
   /** 预约的审查到点了却还不能开始，预约留着。`why` = 在等什么（说法在展示端）。 */
   | { kind: "review.waiting"; why: ReviewWaitReason }
+  // ── 要用户知道（明面）──
+  /**
+   * 智能体收回了自己挂在回复框顶上、用户还没处理的建议任务（shared/src/dispatch-suggestion.ts）。那几件
+   * 从框顶拿掉了，这一句是用户知道「它为什么不在了」的唯一去处：每件带着标题和智能体写的那句为什么。
+   */
+  | { kind: "suggestion.withdrawn"; items: { title: string; reason: string }[] }
   // ── 你那条命令的回答（常显：是你要看的东西）──
   /** 斜杠命令（/goal --scopes、/rename …）就地执行的结果。原文里带着命令本身和全部输出。 */
   | { kind: "command.output"; command: string }
@@ -131,7 +137,7 @@ const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
   "review.verdict", "review.no_verdict", "accept.done", "review.dispute", "review.start", "review.repair", "stage",
   "review.reserved", "review.unreserved", "review.launch",
   "monitor.started", "monitor.finished", "monitor.released", "monitor.handed", "complete.held", "review.waiting",
-  "command.output", "discussion", "receipt", "alert",
+  "suggestion.withdrawn", "command.output", "discussion", "receipt", "alert",
 ]);
 
 /**
@@ -144,6 +150,13 @@ export function timelineNoticeOf(value: unknown): TimelineNotice | undefined {
   if (typeof kind !== "string" || !KINDS.has(kind)) return undefined;
   // 讨论那几句靠讨论身份配记录：没带身份的当没有，退回按原文读（原文只是一句普通回执）。
   if (kind === "discussion" && typeof (value as { discussionId?: unknown }).discussionId !== "string") return undefined;
+  // 收回建议那一句靠每件的标题和原因写话：形状不对的当没有，退回按原文读。
+  if (kind === "suggestion.withdrawn") {
+    const items = (value as { items?: unknown }).items;
+    const shaped = Array.isArray(items) && items.length > 0 && items.every((item) =>
+      !!item && typeof (item as { title?: unknown }).title === "string" && typeof (item as { reason?: unknown }).reason === "string");
+    if (!shaped) return undefined;
+  }
   // 提醒上的讨论身份是可选的：形状不对就当没带，提醒本身照常认。
   if (kind === "alert" && "discussionId" in value && typeof (value as { discussionId?: unknown }).discussionId !== "string") return { kind: "alert" };
   return value as TimelineNotice;

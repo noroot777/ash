@@ -252,7 +252,7 @@ export const tasks = sqliteTable("tasks", {
   dispatchPlan: text("dispatch_plan"),
   // 「派出去的活交给谁」（JSON 的 DispatchRunTarget）；NULL = 同这里。
   dispatchTarget: text("dispatch_target"),
-  // 挂在回复框顶上、可以派出去的活（JSON 的 StoredDispatchSuggestion[]，server/src/dispatch-suggestion.ts）。
+  // 挂在回复框顶上、可以派出去的活（JSON 的 DispatchSuggestion[]，server/src/dispatch-suggestion.ts）。
   // 不占提问那一格，跟 question / dispatchPlan 互不相干。NULL = 一件都没有。
   dispatchSuggestions: text("dispatch_suggestions"),
   // 这一条名下（dispatchedBy 整棵往下）全部停着：用户在「派出的任务」格头按了「全部停下」的那一刻。

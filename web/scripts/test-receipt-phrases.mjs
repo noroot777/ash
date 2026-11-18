@@ -24,6 +24,23 @@ assert.deepEqual(
   ["monitor", "哨兵结果在这一回合里交给了它"],
   "回合里就交到手上的那一句同样是哨兵那一枚",
 );
+// 智能体收回了挂在回复框顶上的建议任务：那一行不在了，为什么不在只有这一句说——摆在明面上（那一回合的尾注），
+// 原因直接写出来；不是坏消息，不带颜色。好几件并成一句，各自的原因点开看。
+const withdrawnRaw = "收回了建议任务「修好那条红测试」：已经在本任务里顺手修了";
+assert.deepEqual(
+  (({ tier, tone, icon, text, detail }) => [tier, tone, icon, text, detail])(typed({
+    kind: "suggestion.withdrawn", items: [{ title: "修好那条红测试", reason: "已经在本任务里顺手修了" }],
+  }, withdrawnRaw)),
+  ["alert", "neutral", "dispatch", withdrawnRaw, null],
+);
+const withdrawnTwo = `${withdrawnRaw}\n收回了建议任务「补文档」：需求取消了`;
+assert.deepEqual(
+  (({ tier, text, detail }) => [tier, text, detail])(typed({
+    kind: "suggestion.withdrawn",
+    items: [{ title: "修好那条红测试", reason: "已经在本任务里顺手修了" }, { title: "补文档", reason: "需求取消了" }],
+  }, withdrawnTwo)),
+  ["alert", "收回了 2 条建议任务", withdrawnTwo],
+);
 for (const tone of ["neutral", "notice", "error"]) {
   assert.deepEqual(
     (({ icon, text }) => [icon, text])(legacy(held, tone)),
