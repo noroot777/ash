@@ -133,8 +133,8 @@ try {
     // 只改用户名：令牌留空 = 沿用已存的那个
     await saveProjectGitCredential("p1", "octodog", "");
     const injection = await gitNetInjection("p1");
-    assert.equal(injection.env.ASH_GIT_USERNAME, "octodog");
-    assert.equal(injection.env.ASH_GIT_PASSWORD, SECRET, "留空要沿用旧令牌，不能被清成空");
+    assert.equal(injection.env.NAVI_GIT_USERNAME, "octodog");
+    assert.equal(injection.env.NAVI_GIT_PASSWORD, SECRET, "留空要沿用旧令牌，不能被清成空");
     assert.equal(injection.args.join(" ").includes(SECRET), false, "令牌绝不进 argv");
     assert.deepEqual(injection.args.slice(0, 2), ["-c", "credential.helper="],
       "先清空继承来的 helper，否则系统钥匙串里那份旧凭证会抢着答");
@@ -208,7 +208,7 @@ try {
     assert.equal(cred.status, 200);
     const credBody = await cred.text();
     assert.equal(credBody.includes("s3cret"), false, "端点回包里不许带令牌");
-    assert.equal((await gitNetInjection(pid)).env.ASH_GIT_PASSWORD, "s3cret");
+    assert.equal((await gitNetInjection(pid)).env.NAVI_GIT_PASSWORD, "s3cret");
 
     // 删项目要连凭证一起删：id 是可以被复用的，捡到上一个项目的令牌会静默推错地方。
     const gone = await send(`/projects/${pid}`, "DELETE");

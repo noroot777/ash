@@ -68,7 +68,7 @@ export async function setUpHostAshMcp(): Promise<HostAshMcp[]> {
 
 /**
  * 这条登记起的是不是这份 ash 的 MCP、连的是不是这一台：node 真正执行的那个脚本是这里的入口、
- * 命令是同一个 node、NAVI_URL(旧登记里是 NAVI_URL)规范化之后是同一个地址。
+ * 命令是同一个 node、NAVI_URL(旧登记里是 ASH_URL、HARNESS_URL)规范化之后是同一个地址。
  */
 export function pointsAt(launch: AshMcpLaunch | null, wanted: AshMcpEntry): boolean {
   if (!launch?.command) return false;

@@ -92,7 +92,7 @@ try {
     const saved = await readProjectGitCredential(project.id);
     assert.equal(saved?.username, "tester", "克隆能连上,后面的 fetch/push 就该跟着用同一对凭证");
     const injection = await gitNetInjection(project.id);
-    assert.equal(injection.env.ASH_GIT_PASSWORD, secret, "令牌要一字不差地存下来");
+    assert.equal(injection.env.NAVI_GIT_PASSWORD, secret, "令牌要一字不差地存下来");
     assert.ok(!injection.args.some((arg) => arg.includes("tok en")), "令牌绝不进 argv");
 
     // 只填一半等于没填(服务端 `credentialInjection` 就是这么判的),不许留下半截凭证

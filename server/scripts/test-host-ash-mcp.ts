@@ -84,8 +84,8 @@ try {
   assert.ok(result.onlyInstalled, "只问装了的那几家");
   assert.ok(result.untouched, "没装的 CLI 不该被建配置");
   const written = JSON.parse(readFileSync(claudeJson, "utf8"));
-  assert.deepEqual(written.mcpServers.ash.args, [new URL(mcpEntry).pathname]);
-  assert.equal(written.mcpServers.ash.env.ASH_URL, "http://127.0.0.1:4317");
+  assert.deepEqual(written.mcpServers.navi.args, [new URL(mcpEntry).pathname]);
+  assert.equal(written.mcpServers.navi.env.NAVI_URL, "http://127.0.0.1:4317");
 
   // ── 再问一次：已经指向这里 ──
   result = run(home, bin, setUp) as unknown as SetUp;
@@ -108,7 +108,7 @@ try {
   // ── pointsAt：node 真正执行的入口、命令、完整地址都要对上（只有本机回环别名算同一台）──
   const points = run(home, bin, `
 const { pointsAt } = await import(${JSON.stringify(new URL("mcp-registry/host-setup.js", src).href)});
-const wanted = { command: "/app/node", args: [${JSON.stringify(new URL(mcpEntry).pathname)}], env: { ASH_URL: "http://127.0.0.1:4317" } };
+const wanted = { command: "/app/node", args: [${JSON.stringify(new URL(mcpEntry).pathname)}], env: { NAVI_URL: "http://127.0.0.1:4317" } };
 const entry = wanted.args[0];
 const out = {
   same: pointsAt({ command: "/app/node", args: [entry], ashUrl: "http://localhost:4317" }, wanted),
@@ -122,7 +122,7 @@ const out = {
   otherScheme: pointsAt({ command: "/app/node", args: [entry], ashUrl: "https://127.0.0.1:4317" }, wanted),
   otherPath: pointsAt({ command: "/app/node", args: [entry], ashUrl: "http://127.0.0.1:4317/another-ash" }, wanted),
   sameHostName: pointsAt({ command: "/app/node", args: [entry], ashUrl: "http://remote.example:4317" },
-    { ...wanted, env: { ASH_URL: "http://REMOTE.example:4317/" } }),
+    { ...wanted, env: { NAVI_URL: "http://REMOTE.example:4317/" } }),
   evalMode: pointsAt({ command: "/app/node", args: ["--eval", "1", entry], ashUrl: null }, wanted),
   entryAsArgument: pointsAt({ command: "/app/node", args: ["/elsewhere/proxy.js", entry], ashUrl: null }, wanted),
   entryAfterValueOption: pointsAt({ command: "/app/node", args: ["--require", entry, "/elsewhere/index.js"], ashUrl: null }, wanted),
