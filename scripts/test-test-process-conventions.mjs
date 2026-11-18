@@ -25,6 +25,9 @@ for (const source of [
   'spawn(node, args, { env: { ...process.env, ASH_ALLOW_REAL_AGENT: "1" } });',
   'const ASH_ALLOW_REAL_AGENT = "1"; spawn(node, args, { env: { ASH_ALLOW_REAL_AGENT } });',
   'const env: Record<string, string> = { "ASH_ALLOW_REAL_AGENT": "1" };',
+  'spawn(node, args, { env: { ...process.env, ["ASH_ALLOW_REAL_AGENT"]: "1" } });',
+  'Reflect.set(process.env, "ASH_ALLOW_REAL_AGENT", "1");',
+  'Object.defineProperty(process.env, "ASH_ALLOW_REAL_AGENT", { value: "1" });',
 ]) assert.equal(realAgentSwitchViolations(source, "fixture.ts").length, 1, source);
 for (const source of [
   "delete process.env.ASH_ALLOW_REAL_AGENT;",
@@ -32,6 +35,8 @@ for (const source of [
   'if (process.env.ASH_ALLOW_REAL_AGENT !== "1") throw new Error("先设 ASH_ALLOW_REAL_AGENT=1");',
   'const allowed = process.env.ASH_ALLOW_REAL_AGENT === "1"; // process.env.ASH_ALLOW_REAL_AGENT = "1"',
   "process.env.ASH_TEST_AGENT_BIN = fakeBin;",
+  'Reflect.get(process.env, "ASH_ALLOW_REAL_AGENT");',
+  'const key = "ASH_ALLOW_REAL_AGENT"; const seen = key in process.env;',
 ]) assert.deepEqual(realAgentSwitchViolations(source, "fixture.ts"), [], source);
 assert.match(realAgentSwitchViolations('\nprocess.env.ASH_ALLOW_REAL_AGENT = "1";', "fixture.mjs")[0], /^fixture\.mjs:2:1 /);
-console.log("✓ AST 闸拦截对整体放行开关的赋值与传给子进程的同名键,读/比较/delete/注释不误报");
+console.log("✓ AST 闸拦截对整体放行开关的赋值、传给子进程的同名键(含写死的计算键)与点名的 Reflect.set/defineProperty,读/比较/delete/注释不误报");

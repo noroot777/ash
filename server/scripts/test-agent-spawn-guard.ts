@@ -3,7 +3,8 @@
 //
 // 放行按路径认（ASH_TEST_AGENT_BIN）：测试只能起自己铺的那几个可执行文件。后半段钉的就是
 // 「收尾先把 PATH 还原、排着的任务这时才起跑」——那一刻同一个名字解析到的是机器上真的 CLI，
-// 必须被闸住，一次都不许跑起来。
+// 必须被闸住，一次都不许跑起来。再后面钉「验的和起的是同一个文件」：解析结果是相对路径时，
+// 校验按本进程的 cwd 认、子进程按任务的 cwd 找，两处各有一个同名文件就会验一个起另一个。
 // Run: npm -w server run test:agent-spawn-guard
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -13,12 +14,13 @@ import { delimiter, join } from "node:path";
 const root = mkdtempSync(join(tmpdir(), "ash-agent-guard-"));
 const IS_WINDOWS = process.platform === "win32";
 const originalPath = process.env.PATH;
+const originalCwd = process.cwd();
 process.env.ASH_RUNS_DIR = join(root, "runs");
 delete process.env.ASH_ALLOW_REAL_AGENT;
 delete process.env.ASH_TEST_AGENT_BIN;
 
 const { spawnAgent } = await import("../src/executors/spawn.js");
-const { detachedPathsFor, spawnDetachedAgent } = await import("../src/executors/detached.js");
+const { detachedPathsFor, spawnControllableForRun, spawnDetachedAgent, spawnForRun } = await import("../src/executors/detached.js");
 type Child = ReturnType<typeof spawnAgent>;
 
 function errorOf(child: Child): Promise<string> {
@@ -33,8 +35,9 @@ function errorOf(child: Child): Promise<string> {
 
 function exitOf(child: Child): Promise<number | null> {
   return new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
+    const timer = setTimeout(() => reject(new Error("起来的进程没有按时退出")), 10_000);
+    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("close", (code) => { clearTimeout(timer); resolve(code); });
   });
 }
 
@@ -96,6 +99,34 @@ try {
   assert.equal(await exitOf(spawnAgent(root, "claude", [], "")), 0);
   assert.match(await errorOf(spawnAgent(root, "codex", [], "")), BLOCKED);
   console.log("✓ 单个文件只放行它自己；多项、等价路径照常认");
+
+  // —— 验的和起的是同一个文件。本进程 cwd 下的 rel/claude 在放行范围里，任务 cwd 下还有一个同名的：
+  //    命令写成相对路径、PATH 里有相对目录，三种起法起的都必须是通过校验的那一个。
+  const stage = join(root, "stage");
+  const work = join(stage, "work");
+  const vetted = stub(join(stage, "rel"), "claude");
+  const impostor = stub(join(work, "rel"), "claude");
+  process.env.ASH_TEST_AGENT_BIN = join(stage, "rel");
+  process.env.PATH = ["rel", originalPath ?? ""].join(delimiter);
+  const launches: [string, () => Child][] = [
+    ["管道，命令写成相对路径", () => spawnForRun(work, join("rel", "claude"), [], "")],
+    ["管道，PATH 里是相对目录", () => spawnForRun(work, "claude", [], "")],
+    ["落盘，PATH 里是相对目录", () => spawnForRun(work, "claude", [], "", undefined, detachedPathsFor(root, "session", "relative"))],
+    ["可重连 stdin，PATH 里是相对目录",
+      () => spawnControllableForRun(work, "claude", [], "", undefined, detachedPathsFor(root, "session", "relative-stdin"))],
+  ];
+  process.chdir(stage);
+  try {
+    for (const [label, launch] of launches) {
+      rmSync(vetted.ran, { force: true });
+      assert.equal(await exitOf(launch()), 0, label);
+      assert.ok(existsSync(vetted.ran), `${label}：通过校验的那个应当跑起来`);
+      assert.ok(!existsSync(impostor.ran), `${label}：起的不是通过校验的那个，是任务目录下的同名文件`);
+    }
+  } finally {
+    process.chdir(originalCwd);
+  }
+  console.log("✓ 解析结果是相对路径：管道、落盘、可重连 stdin 起的都是通过校验的那一个");
 
   // —— live 脚本的整体放行仍然是整体放行。
   delete process.env.ASH_TEST_AGENT_BIN;

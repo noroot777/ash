@@ -110,36 +110,42 @@ export function failedChild(message: string): ChildProcess {
  *
  * ASH_ALLOW_REAL_AGENT=1 整个放行，只留给就是要起真 CLI 的 live 脚本；谁可以写它由
  * scripts/test-process-conventions.mjs 的名单管着。
+ *
+ * **放行时交回的 `bin` 就是通过校验的那一个，调用方必须拿它去起**，不能回头再用原来的名字解析
+ * 一遍。解析结果可以是相对路径（命令写成 `bin/claude`，或 PATH 里有相对目录）：校验按本进程的
+ * cwd 认，子进程却按任务的 cwd 找，两处一分开，验的是一个文件、起的是另一个。所以按路径放行的
+ * 那一档交回绝对路径；没进这一档的（生产、整体放行）原样交回，起法一个字不变。
  */
-export function guardAgentSpawn(bin: string): ChildProcess | null {
-  if (!process.env.ASH_RUNS_DIR || process.env.ASH_ALLOW_REAL_AGENT === "1") return null;
+export type SpawnGate = { blocked: ChildProcess } | { blocked: null; bin: string };
+
+export function guardAgentSpawn(bin: string): SpawnGate {
+  if (!process.env.ASH_RUNS_DIR || process.env.ASH_ALLOW_REAL_AGENT === "1") return { blocked: null, bin };
   const staged = splitPathList(process.env.ASH_TEST_AGENT_BIN).map(stagedRoot);
   if (!staged.length) {
-    return failedChild(
+    return { blocked: failedChild(
       `测试隔离环境禁止启动真执行器 ${bin}；`
       + "这个测试若就是要验证进程管理，把自己铺的假 CLI 所在目录列进 ASH_TEST_AGENT_BIN",
-    );
+    ) };
   }
   const resolved = resolveBin(bin);
-  if (!resolved) return null; // 交给调用方照常报「找不到」
-  const target = anchored(resolved);
-  if (staged.some((root) => isInsidePath(root, target, sep))) return null;
-  return failedChild(
-    `测试隔离环境禁止启动真执行器 ${bin}：它此刻解析到 ${resolved}，`
+  if (!resolved) return { blocked: null, bin }; // 交给调用方照常报「找不到」
+  const launch = resolve(resolved);
+  if (staged.some((root) => isInsidePath(root, anchored(launch), sep))) return { blocked: null, bin: launch };
+  return { blocked: failedChild(
+    `测试隔离环境禁止启动真执行器 ${bin}：它此刻解析到 ${launch}，`
     + "不在这个测试自己铺的那几处（ASH_TEST_AGENT_BIN）之内",
-  );
+  ) };
 }
 
 // 父目录走 realpath（macOS 的临时目录是 /var → /private/var 的软链），文件名原样留着：
 // 测试铺的桩本身可以是指向 node 的软链，认的是「铺在哪」而不是「指向哪」。
-function anchored(path: string): string {
-  const abs = resolve(path);
+function anchored(abs: string): string {
   try { return join(realpathSync(dirname(abs)), basename(abs)); } catch { return abs; }
 }
 
 function stagedRoot(entry: string): string {
   try { if (statSync(entry).isDirectory()) return realpathSync(entry); } catch { /* 当成文件认 */ }
-  return anchored(entry);
+  return anchored(resolve(entry));
 }
 
 // Turn a spawn error into a truthful message. `precise` errors (from pre-flight)
@@ -184,14 +190,14 @@ export function spawnAgent(
   extraEnv?: Record<string, string | undefined>,
   opts?: { keepStdin?: boolean },
 ): ChildProcess {
-  const blocked = guardAgentSpawn(bin);
-  if (blocked) return blocked;
+  const gate = guardAgentSpawn(bin);
+  if (gate.blocked) return gate.blocked;
   // Local pre-flight: distinguish "cwd missing" from "binary missing" so the
   // error never lies (both raise ENOENT from spawn, indistinguishable by code).
   if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
   let plan;
   try {
-    plan = resolveLaunch(bin, args);
+    plan = resolveLaunch(gate.bin, args);
   } catch (e) {
     // Windows 上必须过 cmd.exe、而某个参数带换行 —— 转义不了,如实报出来。
     return failedChild(e instanceof Error ? e.message : String(e));

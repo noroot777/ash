@@ -40,12 +40,20 @@ export const REAL_AGENT_SCRIPTS = [
 
 const REAL_AGENT_SWITCH = "ASH_ALLOW_REAL_AGENT";
 
-/** 写 ASH_ALLOW_REAL_AGENT 的地方：赋值，或拼给子进程的环境对象里的同名键。读、比较、delete 不算。 */
+/**
+ * 写 ASH_ALLOW_REAL_AGENT 的地方：赋值、拼给子进程的环境对象里的同名键（含 `["…"]` 这种写死的
+ * 计算键）、`Reflect.set` / `Object.defineProperty` 点名写它。读、比较、delete 不算。
+ * 认的是**字面上点了名**的写法；键名运行时才拼出来的认不出，这不是「没人写它」的证明。
+ */
 export function realAgentSwitchViolations(source, filename) {
   if (!source.includes(REAL_AGENT_SWITCH)) return [];
   const syntax = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true,
     /\.tsx?$/.test(filename) ? ts.ScriptKind.TS : ts.ScriptKind.JS);
-  const named = (node) => node && (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && node.text === REAL_AGENT_SWITCH;
+  const named = (node) => {
+    const key = node && ts.isComputedPropertyName(node) ? node.expression : node;
+    return !!key && (ts.isIdentifier(key) || ts.isStringLiteralLike(key)) && key.text === REAL_AGENT_SWITCH;
+  };
+  const SETTERS = ["Reflect.set", "Object.defineProperty"];
   const violations = [];
   function visit(node) {
     const written = ts.isBinaryExpression(node)
@@ -53,7 +61,9 @@ export function realAgentSwitchViolations(source, filename) {
       && (ts.isPropertyAccessExpression(node.left) ? named(node.left.name)
         : ts.isElementAccessExpression(node.left) && named(node.left.argumentExpression));
     const passed = (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && named(node.name);
-    if (written || passed) {
+    const called = ts.isCallExpression(node) && SETTERS.includes(node.expression.getText(syntax))
+      && named(node.arguments[1]);
+    if (written || passed || called) {
       const location = syntax.getLineAndCharacterOfPosition(node.getStart(syntax));
       violations.push(`${filename}:${location.line + 1}:${location.character + 1}  ${node.getText(syntax).slice(0, 72)}`);
     }
