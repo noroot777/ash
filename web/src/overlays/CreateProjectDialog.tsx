@@ -32,7 +32,7 @@ type Mode = "local" | "clone";
 
 const MODES: { key: Mode; label: string; hint: string }[] = [
   { key: "local", label: "本地目录", hint: "指向这台机器上的目录；不存在的话会建出来" },
-  { key: "clone", label: "从 Git 检出", hint: "输入仓库地址，ash 克隆到你指定的位置" },
+  { key: "clone", label: "从 Git 检出", hint: "输入仓库地址，Navi 克隆到你指定的位置" },
 ];
 
 export function CreateProjectDialog({ projects, reason = null, onClose, onCreated, notify }: {
@@ -299,7 +299,7 @@ export function CreateProjectDialog({ projects, reason = null, onClose, onCreate
           </div>
           <p className="create-project-mode-hint">
             填了就在克隆时用上，并存到新项目的 Git 凭证里，之后的拉取和推送都跟着用；只存在
-            ash 自己的库里，不写进仓库。
+            Navi 自己的库里，不写进仓库。
           </p>
         </details>}
       </>}

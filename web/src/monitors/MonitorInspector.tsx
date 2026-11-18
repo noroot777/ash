@@ -20,7 +20,7 @@ import type { TaskMonitorsState } from "./useTaskMonitors.ts";
  */
 const MONITOR_GROUPS: readonly { kind: MonitorKind; title: string; hint: string | null }[] = [
   // ash 那组能停、有输出，按钮和折叠就在卡上，不用再解释一遍。
-  { kind: "ash", title: "ash 哨兵", hint: null },
+  { kind: "ash", title: "Navi 哨兵", hint: null },
   { kind: "claude", title: "claude 自带 Monitor", hint: "只读：进程在智能体自己那一轮里，停不掉、没有输出可看，也不会唤醒任务。" },
 ];
 
@@ -96,7 +96,7 @@ export function MonitorInspector({
         <InspectorHeadActions>
           <InspTool
             label="手动起一个哨兵"
-            tip="手动起一个哨兵：一条绑在任务上的长跑命令，由 ash 起，每吐一行就唤醒任务一次。智能体挂的（含 claude 自带的 Monitor）也列在这一格"
+            tip="手动起一个哨兵：一条绑在任务上的长跑命令，由 Navi 起，每吐一行就唤醒任务一次。智能体挂的（含 claude 自带的 Monitor）也列在这一格"
             className="monitor-inspector__add"
             aria-expanded={form !== null}
             onClick={() => setForm((current) => (current === null ? ++nextForm.current : null))}

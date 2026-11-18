@@ -157,7 +157,7 @@ export function RemoteTaskDetail({
     <div className="remote-return-error" role="alert">
       <strong>{returnError ? "移回未完成" : "移回需要确认"}</strong>
       <p>{returnError ?? capabilityBlock}</p>
-      <p>移回需要「{target.name}」主动连接本机。若提示连接失败，请确认本机 ash 正在运行，且来源地址能从对端访问；能查看远程会话不代表回程连通。</p>
+      <p>移回需要「{target.name}」主动连接本机。若提示连接失败，请确认本机 Navi 正在运行，且来源地址能从对端访问；能查看远程会话不代表回程连通。</p>
       {!returnOpen && (
         <div className="remote-return-actions">
           <button type="button" onClick={() => setReturnDialog("resume")}>{returnError ? "重试移回" : "查看移回确认"}</button>

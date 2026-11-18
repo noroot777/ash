@@ -45,7 +45,7 @@ export const presenceFileFor = (key: string, pid = process.pid): string =>
 /** 这套资源上「有没有人在线」没答上来。调用方必须按「可能有」处理。 */
 export class AshPresenceUnknownError extends Error {
   constructor(public readonly target: string, reason: string) {
-    super(`无法确认 ${target} 上还有没有活着的 ash（${reason}）：`
+    super(`无法确认 ${target} 上还有没有活着的 Navi（${reason}）：`
       + "不能据此认定没人在线，请恢复该路径可读取（或删掉读不懂的那份登记）后重试");
     this.name = "AshPresenceUnknownError";
   }

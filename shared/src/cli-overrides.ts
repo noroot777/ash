@@ -194,7 +194,7 @@ const CLAUDE_OVERRIDES: CliConfigOverride[] = [
     label: "上下文窗口",
     env: "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
     shadows: "~/.claude/settings.json → autoCompactWindow",
-    help: `照实填这个模型的上下文窗口。留空 = 跟随 CLI 判断,而 CLI 对白名单外的模型(fable-5、走中转的第三方模型)判不出来,会整段跳过自动压缩,水位一路涨到炸 —— 所以这一项是这一档的开关,不填下面的百分比也不生效。填上之后 ash 会连 claude 的自动压缩总开关一起摁住(你 settings.json 里的 autoCompactEnabled:false / ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.map((key) => `${key}=1`).join(" / ")} 在这次调用里不算数),否则数填对了也一次都不会压。拿不准就往小了填:填小只是压得早一点,填大会压得太晚直接撞上限。`,
+    help: `照实填这个模型的上下文窗口。留空 = 跟随 CLI 判断,而 CLI 对白名单外的模型(fable-5、走中转的第三方模型)判不出来,会整段跳过自动压缩,水位一路涨到炸 —— 所以这一项是这一档的开关,不填下面的百分比也不生效。填上之后 Navi 会连 claude 的自动压缩总开关一起摁住(你 settings.json 里的 autoCompactEnabled:false / ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.map((key) => `${key}=1`).join(" / ")} 在这次调用里不算数),否则数填对了也一次都不会压。拿不准就往小了填:填小只是压得早一点,填大会压得太晚直接撞上限。`,
     min: 100_000,
     max: 1_000_000,
     placeholder: "留空 = 跟随 CLI",
@@ -535,7 +535,7 @@ export function cliConfigOverrideHints(
     : "";
   // 摁住总开关这件事得说出来:它盖的是用户自己配置文件里的开关,不说明白就等于
   // 「悄悄改了别人的配置」;而不摁的话上面这个触发点根本不会发生(见 JI())。
-  const forced = [`这次调用里 ash 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];
+  const forced = [`这次调用里 Navi 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];
   if (trigger === null) {
     return [`${clamped}${unknownReason},这里判不出确切的触发点;起跑后以会话里上下文胶囊显示的为准。`, ...forced];
   }

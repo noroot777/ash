@@ -37,7 +37,7 @@ export function addressedElsewhere(cookie: string | undefined, header: string | 
   return values.length > 0 && !values.every((value) => value === INSTANCE_ID);
 }
 
-export const INSTANCE_MISMATCH = "这个页面认的是另一份 ash（端口上的服务已经换了），请求没有执行。";
+export const INSTANCE_MISMATCH = "这个页面认的是另一份 Navi（端口上的服务已经换了），请求没有执行。";
 
 export function instanceBinding(): MiddlewareHandler {
   return async (c, next) => {

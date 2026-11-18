@@ -213,7 +213,7 @@ export function sourceScan(source: AshMcpSource, reading: AshMcpReading): AshMcp
     try {
       return reading.shape.scan(source.text ?? null, reading.switches);
     } catch (e) {
-      return { doubt: `读里面的 ash MCP 登记失败：${(e as Error).message}`, names: new Map() };
+      return { doubt: `读里面的 Navi MCP 登记失败：${(e as Error).message}`, names: new Map() };
     }
   }
   const probe = fileState(source.file);
@@ -222,7 +222,7 @@ export function sourceScan(source: AshMcpSource, reading: AshMcpReading): AshMcp
   try {
     return reading.shape.scan(readFileSync(source.file, "utf8"), reading.switches);
   } catch (e) {
-    return { doubt: `读里面的 ash MCP 登记失败：${(e as Error).message}`, names: new Map() };
+    return { doubt: `读里面的 Navi MCP 登记失败：${(e as Error).message}`, names: new Map() };
   }
 }
 
@@ -286,9 +286,9 @@ export function resolveAshMcp(
   // 格式族知道「这种写法怎么合」,站点知道「这家 CLI 到底会不会合」—— 两个都成立才真的合。
   const merge = merges ? reading.shape.mergeFacts : undefined;
   if (read.length > 1 && !merges && new Set(folded.map((f) => f.state)).size > 1) {
-    return unknownState("这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
+    return unknownState("这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 Navi 没实测过："
       + folded.map((f, i) => f.detail
-        || (f.state === "present" ? `${read[i]!.source.label} 里已经有 ash 登记` : f.state)).join("；"));
+        || (f.state === "present" ? `${read[i]!.source.label} 里已经有 Navi 登记` : f.state)).join("；"));
   }
   const picks: NamePick[] = [];
   for (const name of ASH_MCP_NAMES) {
@@ -317,7 +317,7 @@ export function resolveAshMcp(
     }
     if (new Set(winners.map((w) => w.fact.status)).size > 1) {
       picks.push({
-        why: `同一层里好几份配置都写了 ${name} 这条登记、结论还不一致、谁覆盖谁 ash 没实测过（`
+        why: `同一层里好几份配置都写了 ${name} 这条登记、结论还不一致、谁覆盖谁 Navi 没实测过（`
           + winners.map((w) => `${w.source.label}：${w.fact.status === "on" ? "开着" : "关着"}`).join("；") + "）",
       });
       continue;
@@ -414,12 +414,12 @@ export function ashMcpStateIn(
   if (!mechanism) return unknownState(`不认识的执行器 ${agentType}`);
   if (mechanism.kind === "none") return { state: "absent", serverName: null, detail: mechanism.why };
   if (mechanism.kind === "manual") {
-    return unknownState(`${agentType} 的 MCP 配置 ash 不自动读写：${mechanism.howTo}`);
+    return unknownState(`${agentType} 的 MCP 配置 Navi 不自动读写：${mechanism.howTo}`);
   }
   const file = siteFileFor(agentType, dir, mechanism.site, env);
   // 同目录有这家也读、而我们读不了格式的配置 ⇒ 不下结论(`AshMcpConfigSite.opaque`)。
   const opaque = ashMcpOpaqueSibling(dir, mechanism.site);
-  if (opaque) return unknownState(`${opaque} 这份配置 ${agentType} 也读，而 ash 读不了它的格式`);
+  if (opaque) return unknownState(`${opaque} 这份配置 ${agentType} 也读，而 Navi 读不了它的格式`);
   // **先分清「没有这个文件」和「有但读不动」**:下面的读取路径会把异常吞成「空」,于是一次
   // EACCES / EIO 会被说成「没有登记」。只有确实没有文件才配得上 absent。
   return fileConfigState(file, readingFor(mechanism));

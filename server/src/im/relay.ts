@@ -92,7 +92,7 @@ export class RoomRelay {
     const template = Array.isArray(rooms.data)
       ? [...rooms.data].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((room) => room.members[0])
       : undefined;
-    if (!template) return { error: "还没配置过 ash 助手：先在 ash 网页里打开一次助手、选好智能体，之后飞书里就能直接聊。" };
+    if (!template) return { error: "还没配置过 Navi 助手：先在 Navi 网页里打开一次助手、选好智能体，之后飞书里就能直接聊。" };
     const created = await this.deps.ash.post<ChatRoom>(principal, "/api/chats", {
       kind: "assistant", projectId: "", name: "飞书", members: [template.members[0]],
     });
@@ -124,7 +124,7 @@ export class RoomRelay {
     const template = Array.isArray(rooms.data)
       ? [...rooms.data].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((room) => room.members[0])
       : undefined;
-    if (!template) return { error: "还没配置过 ash 助手：先在 ash 网页里打开一次助手、选好智能体。" };
+    if (!template) return { error: "还没配置过 Navi 助手：先在 Navi 网页里打开一次助手、选好智能体。" };
     const created = await this.deps.ash.post<ChatRoom>(ctx.principal, "/api/chats", {
       kind: "chat", projectId: group.projectId, name: scrubTitle(`飞书群 ${group.name ?? ""}`.trim(), 60), members: [template.members[0]],
     });
@@ -156,11 +156,11 @@ export class RoomRelay {
       if (landed !== true) {
         const notice = await this.deps.commands.answered(ctx, { projectId });
         if (landed === false) {
-          await this.deps.commands.say(ctx, `没能送进 ash：${scrubText(sent.error, 300)}`, notice);
+          await this.deps.commands.say(ctx, `没能送进 Navi：${scrubText(sent.error, 300)}`, notice);
           await this.mark(inboundId, "failed", sent.error);
           return false;
         }
-        await this.deps.commands.say(ctx, `不确定这句送进 ash 没有（${scrubText(sent.error, 120)}）：有回复会照常发回来，一直没动静就去 ash 里看一眼。`, notice);
+        await this.deps.commands.say(ctx, `不确定这句送进 Navi 没有（${scrubText(sent.error, 120)}）：有回复会照常发回来，一直没动静就去 Navi 里看一眼。`, notice);
       }
     }
     await db.update(imInbound).set({ state: "sent", roomId, detail: messageId, scope: JSON.stringify(scope), updatedAt: now() })
@@ -222,7 +222,7 @@ export class RoomRelay {
     if (!answers.length) {
       // 没有任何成员被点到（群聊里没 @ 到人）就不会有回复。
       if (timedOut || snapshot.data.messages.some((message) => message.id === row.detail && !message.mentions.length)) {
-        if (timedOut) await notice("等了 20 分钟没等到回复，去 ash 里看看吧。");
+        if (timedOut) await notice("等了 20 分钟没等到回复，去 Navi 里看看吧。");
         await this.mark(row.id, "replied", null);
       }
       return;

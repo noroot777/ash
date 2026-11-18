@@ -676,7 +676,7 @@ export async function exportHandoff(
         } else if (result.git === "none") {
           notes.push("对端没有按 worktree 任务导入,代码没有在对端落地;本机 worktree 和分支照原样保留");
         } else {
-          notes.push("对端是旧版 ash,没报代码落地结果;本机 worktree 和分支照原样保留,确认对端无误后可手动删除");
+          notes.push("对端是旧版 Navi,没报代码落地结果;本机 worktree 和分支照原样保留,确认对端无误后可手动删除");
         }
       }
       await publishTaskUpdated(taskId);

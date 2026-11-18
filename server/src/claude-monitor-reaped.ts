@@ -178,7 +178,7 @@ const reapedNotice = (tally: { total: number; finished: number }, missed?: ReapM
       : `其中 ${finished} 个自己跑完了、剩下 ${total - finished} 个在回合结束时已经失效`;
   return `本轮智能体自己起了 ${total} 个内置 Monitor${unrecorded}，${how}——`
     + `它们的通知只注回智能体自己的会话（回合一结束，连它自己也看不到了），从来不会唤醒任务。`
-    + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。${inexact}`;
+    + `要跨回合等一件事，得用 Navi 的哨兵（start_monitor）并用 pause_task 收尾这一轮。${inexact}`;
 };
 
 /**

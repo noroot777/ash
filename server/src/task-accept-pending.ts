@@ -241,7 +241,7 @@ export async function inspectPendingMerge(task: TaskRow, project: ProjectRow): P
     ...common, kind: "foreign", canCommit: false, canRemerge: false, stagedFiles, dirtyFiles,
     message: `${target} 的索引里现在的内容跟那次合并留下的不一样`
       + (pendingTree ? "（这中间有人动过暂存区）" : "（这次验收做在本功能之前，没留下内容指纹，没法核对）")
-      + "，所以 ash 不替你提交 —— 硬提交会把无关改动一起裹进这次合并。"
+      + "，所以 Navi 不替你提交 —— 硬提交会把无关改动一起裹进这次合并。"
       + `请自己在 ${project.repoPath} 里核对后提交，或 git -C ${project.repoPath} reset --hard 丢弃再重新验收。${branchTail}`,
   };
 }

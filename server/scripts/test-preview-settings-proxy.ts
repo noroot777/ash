@@ -198,7 +198,7 @@ try {
     try {
       const response = await request(state.url);
       assert.equal(response.status, 502, "指到 ash 自己不该照常开");
-      assert.match(await response.text(), /ash 自己/);
+      assert.match(await response.text(), /Navi 自己/);
     } finally { writeRecord(good); }
     assert.equal((await request(state.url)).status, 302, "记录恢复后照旧能开");
   }

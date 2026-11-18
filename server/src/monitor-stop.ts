@@ -57,7 +57,7 @@ export async function stopMonitorChecked(monitorId: string, reason = "被停掉�
     return {
       ok: false,
       status: 409,
-      error: "这是 claude 自己起的 Monitor，ash 只能看不能停——它的进程在智能体的进程树里。要停只能让智能体自己 TaskStop，或者停掉整个任务。",
+      error: "这是 claude 自己起的 Monitor，Navi 只能看不能停——它的进程在智能体的进程树里。要停只能让智能体自己 TaskStop，或者停掉整个任务。",
     };
   }
   const monitor = await stopMonitor(monitorId, reason);

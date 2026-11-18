@@ -65,7 +65,7 @@ export function PairPage({ onDone }: { onDone: () => Promise<unknown> | void }) 
     } catch (error) {
       // 409 = 这台设备其实已经进得来了(另一个标签页刚配对完),直接去问一次状态。
       if (error instanceof ApiError && error.status === 409) return void onDone();
-      setPhase({ kind: "stopped", message: error instanceof ApiError ? error.message : "连不上 ash 服务端" });
+      setPhase({ kind: "stopped", message: error instanceof ApiError ? error.message : "连不上 Navi 服务端" });
     }
   }, [onDone]);
 
@@ -118,7 +118,7 @@ export function PairPage({ onDone }: { onDone: () => Promise<unknown> | void }) 
   return (
     <AuthShell>
       <div className="auth-card">
-        <h1>ash</h1>
+        <h1>Navi</h1>
         {phase.kind === "stopped" ? (
           <>
             <p className="auth-error" role="alert">{phase.message}</p>
@@ -126,7 +126,7 @@ export function PairPage({ onDone }: { onDone: () => Promise<unknown> | void }) 
           </>
         ) : (
           <>
-            <p className="auth-note">在跑着 ash 的那台电脑上点「允许」，这里会自己进去。</p>
+            <p className="auth-note">在跑着 Navi 的那台电脑上点「允许」，这里会自己进去。</p>
             <output className="auth-pair-code" aria-label="配对码" aria-live="polite">{ticket?.code ?? "····"}</output>
           </>
         )}

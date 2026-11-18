@@ -183,7 +183,7 @@ export function crossSiteRejection(headers: {
  * agent,所以把「去哪拿、怎么带」一次说全。
  */
 const REMOTE_ACCESS_REFUSAL =
-  "这台 ash 只认本机直连、配对过的设备和访问密钥：用浏览器打开它的地址会自动申请配对，"
+  "这台 Navi 只认本机直连、配对过的设备和访问密钥：用浏览器打开它的地址会自动申请配对，"
   + "在它本机点「允许」即可；脚本每个请求带 Authorization: Bearer <访问密钥>，"
   + "密钥在它本机的「设置 → 默认规则 → 远程访问」里";
 
@@ -336,6 +336,6 @@ export function authGate(): MiddlewareHandler {
     }
     // /mobile 与 /review 不是 SPA 壳:前者是手机 app 的静态站(它自己有 key 字段,
     // 但外框页与导出资源都得先登录才给),后者直接暴露待审视频文件。
-    return c.text("请先打开 ash 首页登录，再访问这个地址", 401);
+    return c.text("请先打开 Navi 首页登录，再访问这个地址", 401);
   };
 }

@@ -57,7 +57,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     ? `\n\n本轮审查的是已经验收后的合并快照，不是原任务工作区：\n` +
       `- 目标分支：${run.targetBranch}\n- 准确区间：${run.targetBaseCommit}..${run.targetCommit}\n` +
       "- 当前目录是 merge commit 上的 detached 临时 worktree；只审查和验证，不要提交、推送、改写目标分支或重新打开原任务。\n" +
-      "- 若未通过，只报告问题；Ash 会让用户另建独立修复任务。"
+      "- 若未通过，只报告问题；Navi 会让用户另建独立修复任务。"
     : "";
   const reviewLocation = acceptedMerge ? "当前 detached 临时 worktree" : repoPath;
   // 扫描义务**不再分 workspace / accepted_merge 两份**：原先那个分叉存在的唯一理由是

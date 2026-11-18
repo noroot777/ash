@@ -64,8 +64,8 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
     const publicBaseUrl = await readOptions().then((options) => options.publicBaseUrl, () => null);
     if (!knownHost(host, [publicBaseUrl])) {
       return c.json({
-        error: `ash 还不认得「${host ?? ""}」这个地址，从它打开的页面不能直接申请配对。`
-          + "改用 IP 地址打开，或者在 ash 那台电脑上「扫码添加」、用访问密钥进来一次 —— 之后这个地址就认得了",
+        error: `Navi 还不认得「${host ?? ""}」这个地址，从它打开的页面不能直接申请配对。`
+          + "改用 IP 地址打开，或者在 Navi 那台电脑上「扫码添加」、用访问密钥进来一次 —— 之后这个地址就认得了",
       }, 403);
     }
     const { name } = await c.req.json<{ name?: unknown }>().catch(() => ({ name: undefined }));
@@ -73,7 +73,7 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
       name: deviceName(c.req.header("user-agent"), name),
       address: peerAddress(c),
     });
-    if (!ticket) return c.json({ error: "等着批准的设备太多了，先在 ash 那台电脑上处理掉几个" }, 429);
+    if (!ticket) return c.json({ error: "等着批准的设备太多了，先在 Navi 那台电脑上处理掉几个" }, 429);
     return c.json(ticket);
   });
 
@@ -94,7 +94,7 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
       name: deviceName(c.req.header("user-agent"), name),
       address: peerAddress(c),
     });
-    if (!token) return c.json({ error: "这个二维码用过了或者过期了，在 ash 那台电脑上重新出一个" }, 410);
+    if (!token) return c.json({ error: "这个二维码用过了或者过期了，在 Navi 那台电脑上重新出一个" }, 410);
     issueSessionCookie(c, token);
     return c.json({ token });
   });
@@ -142,7 +142,7 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
   api.post("/remote-access/rotate", async (c) => {
     const refused = await ownerRefusal(c);
     if (refused) return refused;
-    if (!isLocalDirect(c)) return c.json({ error: "访问密钥只能在 ash 所在的那台机器上更换" }, 403);
+    if (!isLocalDirect(c)) return c.json({ error: "访问密钥只能在 Navi 所在的那台机器上更换" }, 403);
     rotateRemoteAccessKey();
     return c.json(viewFor(c));
   });

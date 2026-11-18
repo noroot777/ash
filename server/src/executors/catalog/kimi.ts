@@ -143,7 +143,7 @@ export const kimiSpec: CliSpec = {
     "stream-json、session.resume_hint 与跨进程 --session 续跑。kimi provider list --json 读取本机模型及档位。" +
     "智能水平通过 KIMI_MODEL_THINKING_EFFORT 注入，仅 kimi provider 支持；不提供第三方供应商覆盖。" +
     "官方账号调用返回 403（当前订阅无 Kimi Code 权限），官方云端成功回合尚未验证。" +
-    "运行 npm run setup 注册用户级 ash MCP；未注册时无法调用 complete_task。",
+    "运行 npm run setup 注册用户级 Navi MCP；未注册时无法调用 complete_task。",
   models: { args: ["provider", "list", "--json"], parse: parseKimiModels },
   exec: {
     preflight: kimiEffortPreflight,

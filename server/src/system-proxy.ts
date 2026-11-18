@@ -315,7 +315,7 @@ export function parseKdeProxy(text: string): SystemProxySettings {
     delete settings.invalid;
   }
   // KDE 会先把主机名解析成 IP 再判网段；转发路径上不做 DNS，网段只对 IP 地址生效
-  if (settings.bypass.some((entry) => entry.includes("/") && !entry.includes("://"))) settings.unsupported.push("网段例外对主机名的匹配（KDE 先解析成 IP 再判，ash 只判 IP 地址）");
+  if (settings.bypass.some((entry) => entry.includes("/") && !entry.includes("://"))) settings.unsupported.push("网段例外对主机名的匹配（KDE 先解析成 IP 再判，Navi 只判 IP 地址）");
   if (manual("socksProxy", null) && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
   return settings;
 }

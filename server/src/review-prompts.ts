@@ -58,8 +58,8 @@ function verifyRules(evidenceDir: string): string {
     // 那一下会被改道成 ash 哨兵（claude-monitor-hook.ts），但改道只换得掉进程归属，换不掉
     // 「回合就这么结束了」——所以这一句照样要说：挂完得用 pause_task 收尾。
     `要等的那件事以分钟计（长构建、接口冒烟、长转码）时，别干等、也别就这么结束这一轮：` +
-    `用 ash 的 start_monitor 挂一条盯它的命令（过滤到你真会据此做事的那几行，成功与失败两类标记都要覆盖），` +
-    `再用 pause_task 收尾本回合、写清「被叫醒后该干什么」——哨兵的进程由 ash 起，活得过你这一轮，` +
+    `用 Navi 的 start_monitor 挂一条盯它的命令（过滤到你真会据此做事的那几行，成功与失败两类标记都要覆盖），` +
+    `再用 pause_task 收尾本回合、写清「被叫醒后该干什么」——哨兵的进程由 Navi 起，活得过你这一轮，` +
     `事件来了会把你这条会话重新叫醒，你当初写下的那段交代也会一起喂回来。` +
     `**没给结论就结束回合**会被判成「本轮未能给出结论」，整条审查链当场停掉。\n\n` +
     `一旦用了 playwright，验证结束前必须把它落在仓库工作区里的产物删干净（.playwright-cli/、playwright-report/、test-results/ 等），` +
@@ -218,5 +218,5 @@ export function repairPrompt(input: {
     (coverageGuard ? `${coverageGuard}\n\n` : "") +
     `证据目录：${dir}\n\n` +
     `修完必须调用 complete_task(taskId="${target.id}") 确认完成；` +
-    (input.autoNext ? "确认后 ash 会自动再验一轮。" : "本轮不自动续验，确认后可由用户手动再验一轮。");
+    (input.autoNext ? "确认后 Navi 会自动再验一轮。" : "本轮不自动续验，确认后可由用户手动再验一轮。");
 }

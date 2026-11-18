@@ -42,8 +42,8 @@ export function registerHostMcp({ agentType, mcpEntry, url, nodeBin = process.ex
     return {
       file,
       added: false,
-      why: `${opaque} 这份配置 ${agentType} 也会读，而 ash 读不了它的格式，所以没动 ${file}`
-        + "（请在那份配置里自己加一条 ash 登记，接法见 docs/install.md）",
+      why: `${opaque} 这份配置 ${agentType} 也会读，而 Navi 读不了它的格式，所以没动 ${file}`
+        + "（请在那份配置里自己加一条 Navi 登记，接法见 docs/install.md）",
     };
   }
   // **先看这家 CLI 会读的全部来源**(本轮审查 F4):判的是「最终生效的是哪一条」,不是
@@ -106,7 +106,7 @@ function composeJson(text, entry, site, file) {
   const back = readJsonLoose(spliced.body);
   const live = back === null || back === undefined ? undefined : back[container];
   if (!live || typeof live !== "object" || Array.isArray(live) || !Object.hasOwn(live, ASH)) {
-    return { why: `${file}：拼出来的配置里，生效的那个 ${container} 容器仍然没有 ash 登记，所以没写` };
+    return { why: `${file}：拼出来的配置里，生效的那个 ${container} 容器仍然没有 Navi 登记，所以没写` };
   }
   return { body: spliced.body };
 }
@@ -139,9 +139,9 @@ function composeToml(text, entry, site) {
   // 所以「拼完之后恰好一张 ash 表、而且还扫得准」是写出去的前置条件 —— 不能只信扫描器判对。
   const after = scanTomlServers(body);
   if (after.why) return { why: `拼出来的配置自己又读不准了（${after.why}），所以没写` };
-  if (!after.names.includes(ASH)) return { why: "拼出来的配置自己又读不出那条 ash 登记，所以没写" };
+  if (!after.names.includes(ASH)) return { why: "拼出来的配置自己又读不出那条 Navi 登记，所以没写" };
   if (after.duplicateTables.includes(ASH)) {
-    return { why: "拼出来的配置里有不止一张 ash 表（TOML 不许重复表，CLI 会整份拒载），所以没写" };
+    return { why: "拼出来的配置里有不止一张 Navi 表（TOML 不许重复表，CLI 会整份拒载），所以没写" };
   }
   return { body };
 }

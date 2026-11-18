@@ -212,7 +212,7 @@ export function unknownResumeNote(spec: CliSpec | { name: string }, sessionId: s
   // 三种原因分开说,否则用户看不出「这个 CLI 不支持」和「这条会话没接通」的区别。
   const why =
     s?.interactive && !("exec" in spec && hasTrustedSessionId(spec))
-      ? "ash 没把会话 id 交给它、它也没回报,所以这个 id 只是运行记录,不能用来 --resume"
+      ? "Navi 没把会话 id 交给它、它也没回报,所以这个 id 只是运行记录,不能用来 --resume"
       : !sessionId
         ? "本次运行没有拿到 CLI 的会话 id"
         : "暂无已知的会话恢复命令";

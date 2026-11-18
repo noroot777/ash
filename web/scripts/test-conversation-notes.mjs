@@ -54,6 +54,13 @@ assert.equal(legacy(held, "notice").tier, "receipt");
 assert.equal(noticeView({ text: held, tone: "neutral", variant: "note", notice: { kind: "receipt" } }).tier, "receipt");
 assert.equal(legacy("分组被暂停,本回合被中止 —— 任务落为已暂停", "notice").tier, "receipt", "你自己停的不用再告诉你");
 assert.equal(legacy("本回合被 ash 主动终止:上游连不上", "notice").tier, "alert", "被 ash 判失败的结算说明要你知道");
+// 改名 Navi 之后新写的那几句、和改名前落盘的老记录，起头两种都要认。
+for (const name of ["ash", "Navi"]) {
+  assert.equal(legacy(`本回合是上次 ${name} 中断时留下的,而本次启动读不出熔断判决日志`, "notice").tier, "alert", `${name} 中断留下的那一轮要你知道`);
+  assert.equal(legacy(`${name} 重启接管时读不出这个进程之前的输出,确认不了后台工作流/子代理`, "notice").tier, "alert", `${name} 接管读不出输出要你知道`);
+  assert.equal(legacy(`${name} 重启后继续核对验收前置命令 \`npm test\``).tier, "alert", `${name} 重启后核对门禁要你知道`);
+}
+assert.equal(legacy("本回合被 Navi 主动终止:上游连不上", "notice").tier, "alert", "改名后的结算说明照样认");
 assert.equal(legacy("预览没起来（`npm run dev`）\n端口被占用").tier, "alert", "照 alertLine 调用点的起头认");
 assert.equal(legacy("预约审查仍在等待：回合还没结束。", "error").tier, "receipt", "表里没有的起头一律是回执");
 assert.equal(legacy("〔系统〕已预约完成后审查：5.5审查。").tier, "receipt", "老记录的〔系统〕前缀是回执");

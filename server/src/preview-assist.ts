@@ -138,7 +138,7 @@ async function loop(
     }
     noScript = 0;
     job.state.phase = "trying";
-    job.state.step = `第 ${round} 轮：ash 正在借一个空闲端口，照这条脚本真跑一遍`;
+    job.state.step = `第 ${round} 轮：Navi 正在借一个空闲端口，照这条脚本真跑一遍`;
     const attempt: PreviewAssistAttempt = { round, script, ok: false, url: null, reason: null, log: "" };
     job.state.attempts = [...job.state.attempts, attempt];
     const outcome = await trialPreviewScript({

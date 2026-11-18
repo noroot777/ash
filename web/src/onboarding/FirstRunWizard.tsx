@@ -40,12 +40,12 @@ function headlineOf(step: FirstRunStep, isolated: boolean): { title: string; hin
     return {
       title: "模型从哪儿来",
       hint: isolated
-        ? "这台 ash 隔离了宿主机的 CLI 订阅：任务要跑起来，执行器必须挂一家自带 Key 的供应商。"
+        ? "这台 Navi 隔离了宿主机的 CLI 订阅：任务要跑起来，执行器必须挂一家自带 Key 的供应商。"
         : "执行器默认用 CLI 自己的订阅账号；要走中转站或第三方 API，在这里登记一次。",
     };
   }
   if (step === "executor") {
-    return { title: "谁来干活", hint: "ash 自己不调模型，任务全交给这些本地 CLI 执行。" };
+    return { title: "谁来干活", hint: "Navi 自己不调模型，任务全交给这些本地 CLI 执行。" };
   }
   return {
     title: "在哪儿干活",
@@ -125,7 +125,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
     // 表态已经存下了,这一下只差「重新确认身份」。它失败就把按钮还给用户再按一次 ——
     // 把回执丢掉的那一版会永久停在「正在进入…」上,服务恢复了也动不了(见 authContext)。
     if (!(await onDone())) {
-      notify("配置已保存，但没能重新确认身份；服务恢复后再按一次「进入 ash」。");
+      notify("配置已保存，但没能重新确认身份；服务恢复后再按一次「进入 Navi」。");
       setFinishing(false);
     }
   };
@@ -150,7 +150,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
         <aside className="onboarding-aside">
           <div className="onboarding-brand">
             <span className="onboarding-mark"><NaviMark size={26} /></span>
-            <b>ash</b>
+            <b>Navi</b>
             <p>把活派给本机的 claude、codex，<br />进度、审查、验收都在这一处。</p>
           </div>
           {/* 导轨同时是「回上一步」的入口,所以每一格都是按钮;app 里多出来的「数据」那格已经走完、回不去。 */}
@@ -223,7 +223,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
                 跳过
               </Button>
               <Button variant="primary" disabled={loading || finishing || !ready} onClick={() => advance(true)}>
-                {last ? (finishing ? "正在进入…" : "进入 ash") : "下一步"}
+                {last ? (finishing ? "正在进入…" : "进入 Navi") : "下一步"}
               </Button>
             </div>
           </footer>

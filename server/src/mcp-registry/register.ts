@@ -38,7 +38,7 @@ import type {
 const MCP_ENTRY = join(CODE_DIR, "mcp", "dist", "index.js");
 
 const NO_SOURCE =
-  `宿主机的配置里没有 ash MCP，仓库里也没有 ${MCP_ENTRY}(先在仓库根跑一次 npm run build，` +
+  `宿主机的配置里没有 Navi MCP，仓库里也没有 ${MCP_ENTRY}(先在仓库根跑一次 npm run build，` +
   `或按 docs/install.md 走一遍 MCP 接入)`;
 
 const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
@@ -92,7 +92,7 @@ export function ashMcpUnsupported(
   if (mechanism.kind === "manual") {
     return {
       tier: "hint",
-      why: `${agentType} 的 ash MCP 登记 ash 不会自动写（${mechanism.howTo}）；若没接过，这一轮跑完上报会失败`,
+      why: `${agentType} 的 Navi MCP 登记 Navi 不会自动写（${mechanism.howTo}）；若没接过，这一轮跑完上报会失败`,
     };
   }
   return null;
@@ -157,12 +157,12 @@ export async function registerAshMcp(opts: AshMcpRegisterOptions): Promise<AshMc
   const env = opts.env ?? process.env;
   const hostHome = opts.hostHome ?? homedir();
   const mechanism = ashMcpMechanism(agentType);
-  if (!mechanism) return { ok: false, why: `不认识的执行器 ${agentType}，没有 ash MCP 登记这一问` };
+  if (!mechanism) return { ok: false, why: `不认识的执行器 ${agentType}，没有 Navi MCP 登记这一问` };
   if (mechanism.kind === "none") {
     return { ok: false, why: `${agentType} 没有 MCP 机制：${mechanism.why}` };
   }
   if (mechanism.kind === "manual") {
-    return { ok: false, why: `ash 不自动写 ${agentType} 的 MCP 配置：${mechanism.howTo}` };
+    return { ok: false, why: `Navi 不自动写 ${agentType} 的 MCP 配置：${mechanism.howTo}` };
   }
   const file = siteFileFor(agentType, dir, mechanism.site, env);
   const fail = (why: string): AshMcpRegisterResult => ({ ok: false, why });
@@ -170,9 +170,9 @@ export async function registerAshMcp(opts: AshMcpRegisterOptions): Promise<AshMc
   // ash 可能已经被写在那里面了,而同名登记同时来自两个来源、谁生效没有文档依据。
   const opaque = ashMcpOpaqueSibling(dir, mechanism.site);
   if (opaque) {
-    return fail(`${opaque} 这份配置 ${agentType} 也会读，而 ash 读不了它的格式 —— `
-      + `所以没有自动补写 ${file}（免得同一个 ash 登记在两份配置里各有一条）；`
-      + "请在那份配置里自己加一条 ash 登记，或者把它挪开再重启");
+    return fail(`${opaque} 这份配置 ${agentType} 也会读，而 Navi 读不了它的格式 —— `
+      + `所以没有自动补写 ${file}（免得同一个 Navi 登记在两份配置里各有一条）；`
+      + "请在那份配置里自己加一条 Navi 登记，或者把它挪开再重启");
   }
   // **写之前把这家 CLI 会读的其它来源看一眼**(本轮审查 R3)。只有宿主档会有这种事:隔离档
   // 是我们自己造的目录。任一来源已经有 ash ⇒ 不写(往更高优先级那份补一条会把它顶掉);
@@ -186,7 +186,7 @@ export async function registerAshMcp(opts: AshMcpRegisterOptions): Promise<AshMc
       if (state.state === "present") return { ok: true, serverName: state.serverName ?? ASH_MCP_SERVER_NAME };
       if (state.state === "disabled") return fail(`${state.detail}，没有替你打开`);
       if (state.state === "unknown") {
-        return fail(`看不准这家 CLI 到底有没有 ash MCP 登记（${state.detail}），所以没有自动补写 ——`
+        return fail(`看不准这家 CLI 到底有没有 Navi MCP 登记（${state.detail}），所以没有自动补写 ——`
           + "你那几份配置一个字节都没动");
       }
     }
@@ -199,7 +199,7 @@ export async function registerAshMcp(opts: AshMcpRegisterOptions): Promise<AshMc
     // 写到一半」和「用户手工改坏了」,两种都不该靠猜去补 —— 判错成「没有」就会再写一份,
     // TOML 里是重复的表(CLI 整份拒载),JSON 里是把半截内容当底稿盖回去。
     if (found.state === "unknown") {
-      return fail(`看不准 ${file} 里有没有 ash MCP 登记（${found.detail}），所以没有自动补写 ——`
+      return fail(`看不准 ${file} 里有没有 Navi MCP 登记（${found.detail}），所以没有自动补写 ——`
         + `你那份配置一个字节都没动；手工修好它（或挪开它）再重启`);
     }
     const plan = composeEntry(mechanism, read.text, agentType, hostHome, env);

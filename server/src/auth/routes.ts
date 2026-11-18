@@ -112,7 +112,7 @@ export function mountAuthRoutes(api: Hono): void {
       // 本机自用模式没有「放一台设备进来」这回事(身份判据见 remote-access.ts 的 ownerProof)。
       if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
       if (!remoteKeyMatches(key ?? "")) {
-        return c.json({ error: "访问密钥不对。现在这一把在 ash 所在那台机器的「设置 → 默认规则 → 远程访问」里" }, 401);
+        return c.json({ error: "访问密钥不对。现在这一把在 Navi 所在那台机器的「设置 → 默认规则 → 远程访问」里" }, 401);
       }
       const { token } = enrollDevice({ name: deviceName(c.req.header("user-agent")), via: "key", address: peerAddress(c) });
       issueSessionCookie(c, token);
@@ -172,7 +172,7 @@ export function mountAuthRoutes(api: Hono): void {
     // 能抢在机主前面把它设成自己的多人实例。补做(resuming)那一档不在此列:多人模式的
     // 身份体系里没有访问密钥这回事,它沿用既有的免登录名单。
     if (config.mode === "" && actorOf(c).kind === "anonymous") {
-      return c.json({ error: "首次设置要在 ash 所在的那台机器上做，或者先用访问密钥登录", needsAuth: true }, 401);
+      return c.json({ error: "首次设置要在 Navi 所在的那台机器上做，或者先用访问密钥登录", needsAuth: true }, 401);
     }
     // 已经定过模式 = 这是设置页危险区的转换,必须是管理员(自用模式下人人都是)。
     if (!first) {
@@ -277,7 +277,7 @@ export function mountAuthRoutes(api: Hono): void {
   api.get("/auth/setup/preflight", async (c) => {
     if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
     if (await isMultiUser()) {
-      return c.json({ error: "这台 ash 已经是多人模式了，转换前的盘点只在转换那一刻有意义" }, 409);
+      return c.json({ error: "这台 Navi 已经是多人模式了，转换前的盘点只在转换那一刻有意义" }, 409);
     }
     const { unbackedExecutors, counts } = await conversionPreflight();
     return c.json({ unbackedExecutors, counts, host: hostname() });
@@ -345,7 +345,7 @@ export function mountAuthRoutes(api: Hono): void {
   api.get("/auth/recovery-hint", (c) =>
     c.json({
       command: "node scripts/ash-admin.mjs invite-admin",
-      note: "在跑着 ash 的那台机器上、仓库根目录执行。它会打印一条新的管理员邀请链接。",
+      note: "在跑着 Navi 的那台机器上、仓库根目录执行。它会打印一条新的管理员邀请链接。",
     }));
 
   // 管理员为**别人**重置 key:走专属邀请链接重领(§五),旧 key 即刻失效。

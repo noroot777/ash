@@ -501,7 +501,7 @@ try {
   await refreshSystemProxy();
   const pacDirect = await relayFetch(mappedUrl, {});
   assert.deepEqual(await pacDirect.json(), { ok: true });
-  assert(warnings.some((line) => line.includes("PAC 自动配置（http://pac.test/proxy.pac）ash 不支持、未生效，当前直连")));
+  assert(warnings.some((line) => line.includes("PAC 自动配置（http://pac.test/proxy.pac）Navi 不支持、未生效，当前直连")));
   assert.doesNotMatch(warnings.join("\n"), /system-proxy-secret/);
   console.log("  ✓ 代理连不上时报出代理地址与来源（凭据打码）且不降级直连，PAC 明说未生效");
 

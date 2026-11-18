@@ -169,9 +169,9 @@ export function confineAbstention(): string | null {
   // 换来的是「弃权就一定说得出为什么」这条能被回归钉住的不变量。
   const probe = probeCgroupWritable(mount);
   return probe
-    ? `这台机器上建不出 cgroup(${probe}):ash 自己这个 cgroup 的目录不可写 —— `
-      + "常见于从 ssh 登录会话直接起的 ash(那个 scope 归 root);"
-      + "要拿到这台设备得让 ash 跑在一个被 delegate 的 scope 里(systemd-run --user --scope)"
+    ? `这台机器上建不出 cgroup(${probe}):Navi 自己这个 cgroup 的目录不可写 —— `
+      + "常见于从 ssh 登录会话直接起的 Navi(那个 scope 归 root);"
+      + "要拿到这台设备得让 Navi 跑在一个被 delegate 的 scope 里(systemd-run --user --scope)"
     : null;
 }
 

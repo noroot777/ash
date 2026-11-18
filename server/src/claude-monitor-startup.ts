@@ -47,7 +47,7 @@ export async function loseDeadClaudeMonitors(): Promise<{ kept: number; lost: nu
     await db.update(monitors).set({
       status: "lost",
       endedAt: now(),
-      endedReason: "起它的那个智能体进程已经不在了（ash 重启后确认）",
+      endedReason: "起它的那个智能体进程已经不在了（Navi 重启后确认）",
     }).where(and(
       inArray(monitors.id, dead.map((r) => r.id)),
       eq(monitors.status, "running"),

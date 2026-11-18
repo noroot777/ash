@@ -105,9 +105,9 @@ export const heldFor = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)} 
 export function stuckWindDownText(windDown: WindDown, at = Date.now()): string {
   return `这一轮的 CLI 已经结束，收尾停在「${windDown.step}」已经约 ${heldFor(at - windDown.stepAt)}`
     + `（收尾开始于约 ${heldFor(at - windDown.since)}前），回合占位因此一直没放，点运行会被挡回。`
-    + "收尾里等外部命令和仓库锁的那几步都有时限，超过阈值还不动，多半是 ash 进程里这一段调用卡住了；"
+    + "收尾里等外部命令和仓库锁的那几步都有时限，超过阈值还不动，多半是 Navi 进程里这一段调用卡住了；"
     + "从外面放开占位会让它和下一轮同时活着、互相改状态，所以不提供手动放开。"
-    + "出路是重启 ash：在跑的其它 agent 会被接回、不会丢；这一轮的产物都在磁盘上，"
+    + "出路是重启 Navi：在跑的其它 agent 会被接回、不会丢；这一轮的产物都在磁盘上，"
     + "任务要是还停在「运行中」会按中断收成可重试，没走完的那几步收尾不会再补。";
 }
 

@@ -165,7 +165,7 @@ try {
   const response = page.waitForResponse((value) => value.url().endsWith("/tasks/claude-ui-task/reply") && value.request().method() === "POST");
   await page.getByRole("button", { name: "发送回复", exact: true }).click();
   assert.equal((await (await response).json()).command, true);
-  await page.getByText(/这是 ash 保存的目标快照/).first().waitFor();
+  await page.getByText(/这是 Navi 保存的目标快照/).first().waitFor();
   // 原生命令不落成「你说的话」。任务原始需求自 eab6cf39 起是会话的第一颗你的气泡（data-conversation-input="requirement"），
   // 不算这条命令的回显，排除在外。
   assert.equal(await page.locator(".task-message--user:not(:has([data-conversation-input=\"requirement\"]))").count(), 0);
@@ -173,7 +173,7 @@ try {
   assert.equal(unchanged.status, "done");
   assert.equal(unchanged.stage, "accepted");
   await page.reload();
-  await page.getByText(/这是 ash 保存的目标快照/).first().waitFor();
+  await page.getByText(/这是 Navi 保存的目标快照/).first().waitFor();
   await page.screenshot({ path: join(screenshots, "claude-goal-status.png"), fullPage: true });
 
   await page.goto(`${base}/?project=cli-ui&task=codex-ui-task`);
@@ -592,9 +592,9 @@ try {
   await page.getByRole("button", { name: "创建并运行", exact: true }).click();
   const rejected = await invalidCreation;
   assert.equal(rejected.status(), 400);
-  assert.match((await rejected.json()).error, /ash 通道不支持 \/plan/);
-  await page.getByText("当前执行器的 ash 通道不支持 /plan", { exact: true }).waitFor();
-  await page.locator(".workspace-toast.is-visible").filter({ hasText: "当前执行器的 ash 通道不支持 /plan" }).waitFor();
+  assert.match((await rejected.json()).error, /Navi 通道不支持 \/plan/);
+  await page.getByText("当前执行器的 Navi 通道不支持 /plan", { exact: true }).waitFor();
+  await page.locator(".workspace-toast.is-visible").filter({ hasText: "当前执行器的 Navi 通道不支持 /plan" }).waitFor();
   assert.equal(await objective.inputValue(), "/plan 怎么做这个功能");
   assert.equal((await (await fetch(`${base}/api/tasks`)).json()).length, beforeCreation.length);
   await page.screenshot({ path: join(screenshots, "cli-creation-validation.png"), fullPage: true, animations: "disabled" });
@@ -607,7 +607,7 @@ try {
   for (const [taskId, reason] of [
     ["edited-cli-task", /这一轮没能起跑：\/status 不接受参数/],
     ["legacy-cli-task", /这一轮没能起跑：\/usage 不接受参数/],
-    ["legacy-claude-task", /这一轮没能起跑：当前执行器的 ash 通道不支持 \/plan/],
+    ["legacy-claude-task", /这一轮没能起跑：当前执行器的 Navi 通道不支持 \/plan/],
   ]) {
     await page.goto(`${base}/?project=cli-ui&task=${taskId}`);
     const runResponse = page.waitForResponse((response) => response.url().endsWith(`/tasks/${taskId}/run`) && response.request().method() === "POST");

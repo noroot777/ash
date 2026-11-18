@@ -20,7 +20,7 @@ export function AssistantConnection({ initial, onSave, onCancel, onSettings }: {
       if (!alive) return;
       setProfiles(rows);
       const first = rows.find((profile) => profile.isDefault) ?? rows[0];
-      if (first) setMember((current) => current ?? { id: createClientId(), name: "ash助手", agentType: first.type, executorId: first.id, model: null, reasoningEffort: null });
+      if (first) setMember((current) => current ?? { id: createClientId(), name: "Navi助手", agentType: first.type, executorId: first.id, model: null, reasoningEffort: null });
     }).catch((reason) => { if (alive) setError(String(reason)); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, []);
@@ -35,7 +35,7 @@ export function AssistantConnection({ initial, onSave, onCancel, onSettings }: {
   };
   return <section className="assistant-connection" aria-label="助手智能体配置">
     <h2>{initial ? "更换助手的智能体" : "接入你的智能体"}</h2>
-    <p>选择 ash 中已配置的执行器，随后就可以直接对话。</p>
+    <p>选择 Navi 中已配置的执行器，随后就可以直接对话。</p>
     {loading ? <p role="status">正在读取执行器…</p> : member && profiles.length ? <ExecutorPickerField label="助手执行器" value={executorValue(member)} types={types} profiles={profiles} knownProfiles={profiles} fallbackType={member.agentType}
       override={{ model: member.model, effort: member.reasoningEffort }}
       onChange={(value, override) => setMember({ ...member, ...parseExecutorValue(value, profiles, member), model: override.model || null, reasoningEffort: override.effort || null })}

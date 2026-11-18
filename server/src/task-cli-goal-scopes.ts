@@ -39,7 +39,7 @@ export async function cliGoalScopeLabel(scope: CliGoalScope): Promise<string> {
 export async function formatCliGoalScopes(task: TaskRow, ownerUserId: string | null): Promise<string> {
   const scopes = cliGoalScopes(task);
   if (!scopes.length) return "没有已保存的目标。使用 /goal 描述 设置持续目标。";
-  const lines = ["已保存的目标作用域（ash 快照，不启动模型）："];
+  const lines = ["已保存的目标作用域（Navi 快照，不启动模型）："];
   for (const scope of scopes) {
     lines.push(`\n${await cliGoalScopeLabel(scope)}${scope.state.goalHold ? "；持有任务暂停标记" : ""}`);
     if ((scope.state.ownerUserId ?? null) !== ownerUserId) {

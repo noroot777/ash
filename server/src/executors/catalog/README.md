@@ -1,6 +1,6 @@
 # 智能体目录(catalog)
 
-ash 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 spec 文件**。这份 spec 同时喂三条链路:
+Navi 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 spec 文件**。这份 spec 同时喂三条链路:
 
 | 链路 | 用到的字段 | 出口 |
 |---|---|---|
@@ -36,7 +36,7 @@ ash 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 spec 
    cd /tmp && mkdir -p probe && cd probe
    <bin> <你写进 spec 的那串参数> # prompt 用「创建 hello.txt,内容 hi」这种可验证的
    ```
-   看三件事:①有没有卡在交互确认(卡住 = 自动批准的 flag 没给对,ash 里会表现为任务永远不结束);②有没有真的动文件;③stdout 长什么样(决定 parser)。
+   看三件事:①有没有卡在交互确认(卡住 = 自动批准的 flag 没给对,Navi 里会表现为任务永远不结束);②有没有真的动文件;③stdout 长什么样(决定 parser)。
 3. **把实测结果写进 spec**,去掉 `untested`,`notes` 改成「实测于 <日期> + 版本号 + 仍未确认的点」。**没实测通就别去掉 `untested`** —— 那个标记是给用户看的诚实声明,不是待办勾选框。
 4. **跑测试**:
    ```bash
@@ -145,7 +145,7 @@ session: {
 session: { resumeArgs: (id) => ["resume", id], interactive: (id) => `foo resume ${id}` }
 ```
 
-**只写 `interactive` 是无效的**(第 1 轮审查抓到过):没有 `newIdFlag` 也没有 `resumeArgs` 时,ash 手里那个 id 是它自己发的运行记录,CLI 压根没听说过 —— 拿它拼 `--resume <id>` 就是给用户一条引用不存在会话的命令。所以 `interactiveResumeInner`(`executors/generic.ts`)会判定它不可信、退化成诚实说明,`interactive` 等于白写。知道该 CLI 有 `--resume` 但还没查清 id 从哪来时,就走 (a) 档、把线索写进 `notes`。
+**只写 `interactive` 是无效的**(第 1 轮审查抓到过):没有 `newIdFlag` 也没有 `resumeArgs` 时,Navi 手里那个 id 是它自己发的运行记录,CLI 压根没听说过 —— 拿它拼 `--resume <id>` 就是给用户一条引用不存在会话的命令。所以 `interactiveResumeInner`(`executors/generic.ts`)会判定它不可信、退化成诚实说明,`interactive` 等于白写。知道该 CLI 有 `--resume` 但还没查清 id 从哪来时,就走 (a) 档、把线索写进 `notes`。
 
 **供应商注入(`relay`)** —— **密钥绝不能进 argv**(`commandLine` 会存进 `sessions.command_line` 并在 UI 展示):
 
@@ -228,21 +228,21 @@ factory: (opts) => new FooExecutor(opts),
 
 ---
 
-## ash MCP 登记矩阵(2026-10-31)
+## Navi MCP 登记矩阵(2026-10-31)
 
-**为什么这张表要紧**:ash 的完成协议整个建立在 ash MCP 上(`complete_task` / `ask_question` /
+**为什么这张表要紧**:Navi 的完成协议整个建立在 Navi MCP 上(`complete_task` / `ask_question` /
 `pause_task` / `report_stage`)。一家 CLI 接不上它,用它跑的任务干完活也交不了卷,界面上只看得到
 「失败」—— 用户 2026-10-30 实测到的就是这个:claude / codex 之外的十三家压根没有注册逻辑。
 
-**claude / codex 不靠这张表**(2026-11-14 起):起跑时由 ash 把自己的 MCP 注入进去,连没连上
+**claude / codex 不靠这张表**(2026-11-14 起):起跑时由 Navi 把自己的 MCP 注入进去,连没连上
 以 CLI 启动时自己报的为准(`executors/ash-mcp-inject.ts`)。表里这两行只在独立 app 首启替本机
-CLI 接 ash 那一下用得到;其余十三家的退路仍是它们自己配置里的登记。
+CLI 接 Navi 那一下用得到;其余十三家的退路仍是它们自己配置里的登记。
 
 **表本体是代码,不是这段文字**:`server/src/mcp-registry/catalog.ts`(`satisfies Record<AgentType,…>`
 保证新增执行器时编译不过,逼着当场给结论)。下面这张是给人读的同一份内容,
 `npm -w server run test:ash-mcp-registry` 会逐行比对它和代码里那张表,对不上就红。
 
-| 执行器 | ash 自动写? | 落点(用户级) | 配置目录变量 | 格式族 | 回合身份 | 档位 |
+| 执行器 | Navi 自动写? | 落点(用户级) | 配置目录变量 | 格式族 | 回合身份 | 档位 |
 |---|---|---|---|---|---|---|
 | claude | 是 | `<配置目录>/.claude.json` | `CLAUDE_CONFIG_DIR` | `mcpServers` JSON | 原样继承 | 实测 |
 | codex | 是 | `$CODEX_HOME/config.toml` | `CODEX_HOME` | `[mcp_servers.x]` TOML | 要声明(`env_vars`) | 实测 |
@@ -274,10 +274,10 @@ CLI 接 ash 那一下用得到;其余十三家的退路仍是它们自己配置�
     (`grok mcp list` 打出 `(disabled)`);
   - **同样写 TOML 的 codex 压根不认那个根级键**(`codex mcp list --json` 仍是
     `enabled: true, disabled_reason: null`)—— 所以它**不许**声明 `switches`。上一版两家共用
-    格式族、无条件解释那个键,给 grok 关一次 ash 会把 codex 这条能用的连接也判成「被关掉了」,
+    格式族、无条件解释那个键,给 grok 关一次 Navi 会把 codex 这条能用的连接也判成「被关掉了」,
     安装器还说是用户自己关的;
-  - **gemini 还有两个根级名单**:`mcp.excluded` 列着 ash、或 `mcp.allowed` 这个白名单里没有
-    ash(**空数组也算「一个都不放行」**),真 CLI 把那条登记直接打成 `⛔ Blocked`。所以它
+  - **gemini 还有两个根级名单**:`mcp.excluded` 列着 Navi、或 `mcp.allowed` 这个白名单里没有
+    Navi(**空数组也算「一个都不放行」**),真 CLI 把那条登记直接打成 `⛔ Blocked`。所以它
     **压根没登记时也要如实说「被挡住了」**(没登记的名字里只问规范名 —— 历史名 `harness` 不在
     白名单里是常态,拿它判会把一份完全可用的配置说成关着的),而且绝不替用户改那两个名单。
   格式族只负责**结构读取**:条目上那两个布尔之外的开关一律由逐家声明进来(本轮审查 F2)。
@@ -305,9 +305,9 @@ CLI 接 ash 那一下用得到;其余十三家的退路仍是它们自己配置�
   加载,`ashMcpHostSources` 不按路径去重 —— 去重会把优先级最高的那次加载整个删掉,实测把一条
   `connected` 的登记判成 disabled、落点还指错。
   ③ **任何一份读不通就整份拒载**:实测 `debug config --pure` 直接 `exit 1`(不管那份在哪一层、
-  有没有提到 ash),所以 `resolveAshMcp` 只要见到一份读不准就回 unknown,不能靠「优先级比它低
+  有没有提到 Navi),所以 `resolveAshMcp` 只要见到一份读不准就回 unknown,不能靠「优先级比它低
   的影响不到」放行 —— 那时压根没有生效的登记可言。
-  来源**入口**那一侧还有两条(本轮审查 F1,三行实测里真 CLI 全是 `ash connected`、而 ash 答
+  来源**入口**那一侧还有两条(本轮审查 F1,三行实测里真 CLI 全是 `ash connected`、而 Navi 答
   absent 并据此硬拒、安装器还新写一条把生效 `ASH_URL` 换掉了):
   ④ **指到文件的变量给相对路径时按 CLI 自己的工作目录解** —— 所以 `ashMcpHostSources` 吃一个
   `cwd`:知道那个目录就解准,不知道就把这份来源标成**证不出来**(`AshMcpSource.unprovable`),
@@ -322,7 +322,7 @@ CLI 接 ash 那一下用得到;其余十三家的退路仍是它们自己配置�
   读不读它没有第二处证据。
 - **copilot 的身份搭 `PATH` 那班车**:官方文档明写「`PATH` 自动继承,其余环境变量必须配在这条登记的
   `env` 里」,而回合身份一轮一个值 —— 写死进配置文件就是过期的假身份。所以身份改走**一份文件**:
-  ash 每回合在 `<runs>/<taskId>/turn-identity/<turnToken>/identity.json` 写一份、把那个目录追加到
+  Navi 每回合在 `<runs>/<taskId>/turn-identity/<turnToken>/identity.json` 写一份、把那个目录追加到
   `PATH` 末尾(目录里没有可执行文件,盖不掉任何命令),MCP 侧在变量都不在时读它
   (`@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_PATH_DIR` 是约定本体,两侧实现在
   `server/src/turn-identity.ts` 与 `mcp/src/turn-identity.ts`,回归在 `test:turn-identity`)。
@@ -332,10 +332,10 @@ CLI 接 ash 那一下用得到;其余十三家的退路仍是它们自己配置�
 - **trae 写的是它「另外支持的那种格式」**:原生 `~/.trae/traecli.yaml` 是 YAML(`mcp_servers` 对象
   数组、`env` 是 `{key,value}` 列表),本仓没有保得住注释缩进的 YAML 写入器;但它同样扫描标准
   `mcpServers` JSON(`~/.trae/mcp.json`),所以走后者。**同目录出现 `traecli.yaml` / `mcp.yaml` /
-  `.mcp.yaml` 时一个字都不写、也不下结论**(`site.opaque`):ash 可能已经被写在那里面了,而同名登记
-  同时来自两份配置、谁生效没有文档依据。项目里的 `.trae/mcp.json` 是用户仓库文件,ash 不碰。
+  `.mcp.yaml` 时一个字都不写、也不下结论**(`site.opaque`):Navi 可能已经被写在那里面了,而同名登记
+  同时来自两份配置、谁生效没有文档依据。项目里的 `.trae/mcp.json` 是用户仓库文件,Navi 不碰。
 
-**「回合身份」那一列的几种值**:原样继承 = ash 起跑时注进 CLI 进程就够了;要声明 = 得在登记里放行
+**「回合身份」那一列的几种值**:原样继承 = Navi 起跑时注进 CLI 进程就够了;要声明 = 得在登记里放行
 变量名(codex 的 `env_vars`,按回合用 `-c` 给,不写进配置文件);走 PATH 上那份文件 = CLI 只自动继承
 `PATH`(copilot),身份改走一次性目录里的 `identity.json`,登记里一个身份字段都不用写。还留着一档
 **送不进去**(`blocked`)当判据,现在空着:下一家若连 `PATH` 都过滤就落它,那一家登记写对了也交不了卷,
@@ -351,7 +351,7 @@ CLI 接 ash 那一下用得到;其余十三家的退路仍是它们自己配置�
 
 - [ ] `npx tsc -p server/tsconfig.json --noEmit` 干净
 - [ ] `npm -w server run test:cli-catalog` 通过
-- [ ] 新执行器在「ash MCP 登记矩阵」里有一行(代码那张表会编译不过;本节表格由
+- [ ] 新执行器在「Navi MCP 登记矩阵」里有一行(代码那张表会编译不过;本节表格由
       `npm -w server run test:ash-mcp-registry` 逐行核对)
 - [ ] 只改了自己的 spec 文件 + `shared/src/cli-presets.ts` 里自己 type 的两行(`git status` 确认)
 - [ ] 实测通过才去掉 `untested`;没通过就把结论写进 `notes`(包括「这个 CLI 不支持非交互,当不了执行器」这种结论 —— 如实说比留个跑不动的配置有用)

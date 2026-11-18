@@ -185,7 +185,7 @@ try {
     const before = timeline(s);
     assert.match(before, /内容损坏/);
     assert.match(before, /记录格式无效/);
-    assert.match(before, /缺少有效进程身份或指向 ash 自身/);
+    assert.match(before, /缺少有效进程身份或指向 Navi 自身/);
     assert.match(before, /未向这些条目对应的 PID 发送停止信号/);
     assert.equal((await retryPreviewStops(s.task.id)).stopped, true);
     assert.equal(timeline(s), before, "失效记录只交代一次，不会无限重试或刷屏");

@@ -33,7 +33,7 @@ import { COMMAND_NOTE_HEAD } from "@ash/shared/command-note";
  * 审查没结论时老服务端唯一会说的那句：一律推断成「报告可能写完了、只是手上没有 report_stage」。
  * 回合其实是中途断掉的那几轮，这句话是错的（reviewNoVerdictCause 据此把它换掉）。
  */
-export const CHANNEL_GAP_GUESS = /^这一轮的审查报告可能已经写完了，只是结论没能上报到 ash/;
+export const CHANNEL_GAP_GUESS = /^这一轮的审查报告可能已经写完了，只是结论没能上报到 (?:Navi|ash)/;
 
 const ALERT_LEADS: readonly RegExp[] = [
   // 验收
@@ -66,7 +66,7 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^验收前置命令未执行/, // accept-gate
   /^验收前置命令尚未确认整棵进程树退出/, // accept-gate-settle
   /^验收前置命令被打断/, // accept-gate-recover
-  /^ash 重启后继续核对验收前置命令/, // accept-gate-recover
+  /^(?:Navi|ash) 重启后继续核对验收前置命令/, // accept-gate-recover
   /^验收前置命令接管降级/, // accept-gate-recover
   /^已显式确认风险并强制释放验收前置命令/, // accept-gate-release
   /^验收前置命令通过了，但当初那一下验收的选择/, // accept-gate-continue
@@ -197,10 +197,10 @@ export function commandVerdict(text: string, commands: readonly string[] = []): 
 /** 结算说明里要你知道的那几句（server/src/settle-status.ts 的落位说明）。 */
 const SETTLEMENT_LEADS: readonly RegExp[] = [
   /^本回合没有交卷/, // 没调 complete_task，记未完成
-  /^本回合被 ash 主动终止/, // 熔断
-  /^本回合是上次 ash 中断时留下的/, // 读不出熔断判决
+  /^本回合被 (?:Navi|ash) 主动终止/, // 熔断
+  /^本回合是上次 (?:Navi|ash) 中断时留下的/, // 读不出熔断判决
   /^后台工作流\/子代理(等到时限还没跑完|还没跑完[,，]智能体进程就退出了)/, // 后台活没跑完
-  /^ash 重启接管时读不出这个进程之前的输出/,
+  /^(?:Navi|ash) 重启接管时读不出这个进程之前的输出/,
   /^持续目标已停止，尚未收到完成确认/,
   /^续聊回合(因上游连不上|是上次中断留下的|等后台工作|的后台工作|异常结束)/, // 续聊这一轮没办成（你自己停的、以提问结束的是回执）
   /^持续目标已(暂停|清除)；/, // 你那条 /goal pause、/goal clear 的结果：怎么续跑写在里面

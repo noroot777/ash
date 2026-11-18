@@ -77,7 +77,7 @@ export function windowsLongPathHint(targetPath: string, stderr = ""): string | n
     `Windows 的 MAX_PATH 是 ${WINDOWS_MAX_PATH},这条路径已经 ${targetPath.length} 字符 —— 深路径是这里最常见的失败原因。两个开关缺一不可:`,
     "  · 管理员 PowerShell:Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' LongPathsEnabled 1",
     "  · git config --global core.longpaths true",
-    "改完要重开终端和 ash;还不行就把项目挪到更短的路径下(比如 C:\\code\\<项目>)。",
+    "改完要重开终端和 Navi;还不行就把项目挪到更短的路径下(比如 C:\\code\\<项目>)。",
   ].join("\n");
 }
 

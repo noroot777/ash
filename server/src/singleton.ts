@@ -88,7 +88,7 @@ export class SingletonConflictError extends Error {
       port: number | null;
       command: string | null;
     },
-    reason = "database is already owned by another live ash server",
+    reason = "database is already owned by another live Navi server",
   ) {
     super(formatConflictMessage(dbFile, lockFile, holder, reason));
     this.name = "SingletonConflictError";
@@ -178,7 +178,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
   // 和「多实例模式」这两种在线写入，离线迁移都探不到（第 3 轮审查 F2）。
   const acquired = withResourceClaim<{ lock: SingletonLock | null; presence: AshPresenceRegistration }>(
     keys,
-    `ash 启动 PID ${process.pid}`,
+    `Navi 启动 PID ${process.pid}`,
     () => {
       // 离线维护（历史回填那类脚本）正在改这份库和它的 trace 时不许起服务:两边各写一半同一条
       // CLI 线程的账，谁都不知道最后落下的是什么。它是独立的一把锁，判据只认 pid 存活 +
@@ -238,7 +238,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
           port: null,
           command: holder.command,
         },
-        "database is already open in another live ash process",
+        "database is already open in another live Navi process",
       );
     }
   } catch (e) {
@@ -496,7 +496,7 @@ function staleLockReason(lock: Partial<LockFile> | null): string | null {
   const info = inspectProcess(pid);
   if (!info) return `PID ${pid} is alive but cannot be inspected`;
   if (!isAshServerCommand(info.command)) {
-    return `PID ${pid} is not a ash server process (${info.command ?? "unknown command"})`;
+    return `PID ${pid} is not a Navi server process (${info.command ?? "unknown command"})`;
   }
   if (typeof lock.processStartedAtMs === "number" && info.startedAtMs !== null) {
     const delta = Math.abs(info.startedAtMs - lock.processStartedAtMs);
@@ -676,7 +676,7 @@ function formatConflictMessage(
     `  Started: ${holder.startedAt ?? "unknown"}`,
     `  Port: ${holder.port ?? "unknown"}`,
     `  Command: ${holder.command ?? "unknown"}`,
-    "Stop the existing ash server first, then retry:",
+    "Stop the existing Navi server first, then retry:",
     `  ${killPidsCommand([holder.pid])}`,
     ...(IS_WINDOWS
       ? []

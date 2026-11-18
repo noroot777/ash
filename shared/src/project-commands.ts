@@ -36,7 +36,7 @@ export function commandScriptDialect(platform: string | null | undefined): Comma
  */
 export function commandScriptDialectText(dialect: CommandScriptDialect): string {
   return dialect === "powershell"
-    ? "这台 ash 在 Windows 上，脚本由 PowerShell 执行（不是 cmd，也没有登录 shell 这一档）：多条命令请分行写或用 `;`，`&&` 要 PowerShell 7 才认。"
+    ? "这台 Navi 在 Windows 上，脚本由 PowerShell 执行（不是 cmd，也没有登录 shell 这一档）：多条命令请分行写或用 `;`，`&&` 要 PowerShell 7 才认。"
     : "脚本由你的登录 shell 执行（`shell -lc`），所以 PATH、nvm、别名这些跟你平时开终端一致。";
 }
 

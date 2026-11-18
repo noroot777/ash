@@ -156,7 +156,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     0,
     "闸拒了就不该有哨兵留下来",
   );
-  assert.match(reason, /替你改挂成 ash 哨兵也没成/, `要说清代办失败，实际：${reason}`);
+  assert.match(reason, /替你改挂成 Navi 哨兵也没成/, `要说清代办失败，实际：${reason}`);
   assert.match(reason, /start_monitor/, `要告诉它自己该怎么挂，实际：${reason}`);
 }
 

@@ -80,7 +80,7 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   launcher_failed: "门禁启动器出了错，分不清停在哪一段",
   timeout: "超时",
   spawn_failed: "命令起不来",
-  server_restarted: "ash 重启,这次没跑完",
+  server_restarted: "Navi 重启,这次没跑完",
   canceled: "你取消了这一次",
   source_changed: "测试修改了被测源码，不能用结果为原版本放行",
   process_unconfirmed: "尚未取得整次运行退出的证据",

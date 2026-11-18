@@ -463,7 +463,7 @@ export async function requireApprovedPeer(c: Context, rawBody: string | Buffer):
   if (!settings.handoffRequireApproval) return peer;
   if (!peer) {
     throw new HandoffError(
-      "目标机开启了接力来源审批,但这次请求没带身份签名 —— 来源机器多半是不支持身份校验的旧版 ash。升级源机,或到目标机「设置 → 默认规则 → 接力来源」临时关掉审批。",
+      "目标机开启了接力来源审批,但这次请求没带身份签名 —— 来源机器多半是不支持身份校验的旧版 Navi。升级源机,或到目标机「设置 → 默认规则 → 接力来源」临时关掉审批。",
       401,
     );
   }

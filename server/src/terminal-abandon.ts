@@ -31,11 +31,11 @@ import type { LaunchAbandonment, TerminalSessionInfo } from "./terminal-session-
 /** 放弃之后 ash **不再做**哪几件事。原样进弹层 —— 用户按之前就该读到解除范围。 */
 function scopeOf(info: TerminalSessionInfo): string[] {
   return [
-    "这条启动记录的删除保护解除：关掉它的日志标签、删掉这个项目都不再被它拦下（只删这条记录，名下的进程 ash 一个都不杀）",
+    "这条启动记录的删除保护解除：关掉它的日志标签、删掉这个项目都不再被它拦下（只删这条记录，名下的进程 Navi 一个都不杀）",
     // 这几行原样进纯文本弹层(web/src/workspace/LaunchAbandonDialog.tsx 的 li),不过 markdown
     // —— 所以别在这里写 `**`,它会原样显示给用户看(第 2 轮自由审查 N5 截图)。
     "启动幂等门不再认它：再点启动会另起一份，上面还活着的那些进程不会被顺手收掉",
-    "关掉 ash 时不再按它的端口和启动记号去收人，退出交代里也不再提它",
+    "关掉 Navi 时不再按它的端口和启动记号去收人，退出交代里也不再提它",
     `只解除「${info.name}」这一次启动（${new Date(info.startedAt).toLocaleString("zh-CN")} 起）——`
       + "同项目其它会话，以及这条命令以后的启动，照旧受全套保护",
   ];
@@ -78,13 +78,13 @@ export async function launchResidue(info: TerminalSessionInfo): Promise<LaunchAb
     else if (probe.state === "unknown") unsure.push(`${where}：${probe.why ?? "上面是谁在听核不上来"}`);
     else if (probe.state === "unavailable") unsure.push(`${where} 在这台机器上没法核验（没有 lsof）`);
   }
-  if (info.portsTruncated) unsure.push("这次启动打印的端口超过了记录额度，多出来的那些 ash 压根没问过");
+  if (info.portsTruncated) unsure.push("这次启动打印的端口超过了记录额度，多出来的那些 Navi 压根没问过");
   // 这一句**必须有**:按启动记号那一问没答全时,上面那份「确定留下的」本身就可能漏人,而用户
   // 正要在它上面签字(第 1 轮审查发现 1 的同一条不变量)。
   if (scan.evidence === "incomplete") {
     unsure.push(scan.unanswered.length
       ? `${pidList(scan.unanswered)} 分不清是不是这次启动的：它们跟这次启动同一个用户、在它之后出生，`
-        + "身上却没有这次启动的记号 —— 多半是系统自己的后台进程，但 ash 证明不了"
+        + "身上却没有这次启动的记号 —— 多半是系统自己的后台进程，但 Navi 证明不了"
       : scan.why ?? "按启动记号那一问没答全，上面那份清单可能有漏");
   }
   return {
@@ -100,12 +100,12 @@ const pidList = (pids: number[]): string =>
 /** 弹层上那段话。导出只为让回归直接钉住「两类分开说」,不必现造一个分不清来路的进程。 */
 export function residueNotice(owned: string[], unsure: string[]): string {
   const doubt = unsure.length
-    ? `${unsure.join("；")}。这些 ash 一个都没动过，放弃之后也不再替你盯着。` : "";
+    ? `${unsure.join("；")}。这些 Navi 一个都没动过，放弃之后也不再替你盯着。` : "";
   if (owned.length) {
-    return `下面这些是这次启动留下的，放弃之后 ash 不再管，得你自己处理：${owned.join("；")}。`
+    return `下面这些是这次启动留下的，放弃之后 Navi 不再管，得你自己处理：${owned.join("；")}。`
       + (doubt ? `另外，${doubt}` : "");
   }
-  if (doubt) return `ash 没找到能确认是这次启动留下的进程。不过，${doubt}`;
+  if (doubt) return `Navi 没找到能确认是这次启动留下的进程。不过，${doubt}`;
   return "此刻探不到任何残留 —— 放弃之后这条记录就只是一条历史了。";
 }
 

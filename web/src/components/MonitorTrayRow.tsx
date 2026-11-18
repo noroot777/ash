@@ -80,7 +80,7 @@ function MonitorNote({ monitor, monitors }: { monitor: TaskMonitor; monitors: Tr
   if (monitor.kind !== "ash") {
     return <p>
       智能体用 claude 自带的 <code>Monitor</code> 起的：进程在它自己那一轮里，通知也只注回那条会话 ——
-      <b>它不会把这个任务叫醒</b>，回合一结束就跟着被收走。要跨回合等一件事，得用 ash 的哨兵（<code>start_monitor</code>）
+      <b>它不会把这个任务叫醒</b>，回合一结束就跟着被收走。要跨回合等一件事，得用 Navi 的哨兵（<code>start_monitor</code>）
       并用 <code>pause_task</code> 收尾那一轮。
     </p>;
   }
@@ -99,7 +99,7 @@ function MonitorNote({ monitor, monitors }: { monitor: TaskMonitor; monitors: Tr
         {reviewArmed && <> 已预约的审查会等这件事落地、任务续跑结束之后再开始。</>}
       </p>}
     {unclaimed && <p className="is-stuck">
-      ash <b>这一刻认不回它的进程</b>：重启恰好打断了起进程那一步，所以它从来没收到过信号。日志和期限照旧有人接着管
+      Navi <b>这一刻认不回它的进程</b>：重启恰好打断了起进程那一步，所以它从来没收到过信号。日志和期限照旧有人接着管
       （有结果会照常叫醒你、到点照常收尾），但在认回来之前<b>点停未必停得掉那个进程</b> —— 那一步要先认得出它的号。
       <q>{monitor.endedReason}</q>
     </p>}

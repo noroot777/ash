@@ -21,12 +21,12 @@ export function claudeEffortUnsupportedMessage(version?: string | null, effort?:
  * ash 不替他注入。
  */
 export function claudeRootBypassMessage(): string {
-  return "Claude Code 拒绝以 root 身份跳过权限确认（ash 无人值守派活，必须带 "
+  return "Claude Code 拒绝以 root 身份跳过权限确认（Navi 无人值守派活，必须带 "
     + "--dangerously-skip-permissions）。三条出路选一条：\n"
-    + "① 换个非 root 用户跑 ash（最干净，推荐）；\n"
-    + "② 确认这台机器是可丢弃的容器/沙箱，就在**启动 ash 的环境**里设 IS_SANDBOX=1"
-    + "（agent 子进程继承 ash 的环境变量），代价是 agent 从此能以 root 无确认地动整台机器；\n"
-    + "③ 把 ash 跑在 bubblewrap 沙箱里（CLAUDE_CODE_BUBBLEWRAP）。";
+    + "① 换个非 root 用户跑 Navi（最干净，推荐）；\n"
+    + "② 确认这台机器是可丢弃的容器/沙箱，就在**启动 Navi 的环境**里设 IS_SANDBOX=1"
+    + "（agent 子进程继承 Navi 的环境变量），代价是 agent 从此能以 root 无确认地动整台机器；\n"
+    + "③ 把 Navi 跑在 bubblewrap 沙箱里（CLAUDE_CODE_BUBBLEWRAP）。";
 }
 
 /** 远端目标或 help 探测失败时，仍把 CLI 的生硬参数错误翻成可操作提示。 */

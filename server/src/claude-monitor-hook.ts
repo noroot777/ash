@@ -58,7 +58,7 @@ const HOW_TO_DIY =
   "你可以自己调 `mcp__harness__start_monitor`（同样的 command/description），再用 `pause_task` 收尾这一轮。";
 
 const WHY_NOT_BUILTIN =
-  "claude 内置的 Monitor 在 ash 里活不过这一轮（它的进程在你自己的进程树里，回合一结束就被收走，"
+  "claude 内置的 Monitor 在 Navi 里活不过这一轮（它的进程在你自己的进程树里，回合一结束就被收走，"
   + "通知也只注回这条随之结束的会话），所以这次调用没有执行。";
 
 /** claude 发过来的 PreToolUse 事件里我们用得上的那几个字段。其余原样忽略。 */
@@ -101,7 +101,7 @@ const deny = (reason: string): ClaudeMonitorHookDecision => ({
  * **代办成功并拒掉原工具**，或者**没能代办、明确拒掉并说清怎么补**。
  */
 export const monitorHookInternalError = (detail: string): ClaudeMonitorHookDecision =>
-  deny(`${WHY_NOT_BUILTIN}本想替你改挂成 ash 哨兵，但 ash 这边处理这次请求时出错了（${detail}）。${HOW_TO_DIY}`);
+  deny(`${WHY_NOT_BUILTIN}本想替你改挂成 Navi 哨兵，但 Navi 这边处理这次请求时出错了（${detail}）。${HOW_TO_DIY}`);
 
 /** 这次 PreToolUse 事件是不是内置 `Monitor` 的调用。不是的话 ash 一律不表态。 */
 export const isMonitorHookCall = (input: ClaudeMonitorHookInput | null | undefined): boolean =>
@@ -131,13 +131,13 @@ export async function claudeMonitorHookDecision(
   // 它挑一个 websocat / node 的写法，那是替 agent 做它自己的技术选择。
   if (!command) {
     const ws = toolInput.ws
-      ? "ash 的哨兵盯的是命令的 stdout，接不了 WebSocket：把它包成一条命令（websocat，或一小段每收一帧打印一行的 node 脚本）再挂。"
+      ? "Navi 的哨兵盯的是命令的 stdout，接不了 WebSocket：把它包成一条命令（websocat，或一小段每收一帧打印一行的 node 脚本）再挂。"
       : "";
     return deny(`${WHY_NOT_BUILTIN}${ws}${HOW_TO_DIY}`);
   }
 
   if (!turn) {
-    return deny(`${WHY_NOT_BUILTIN}本想替你改挂成 ash 哨兵，但这次请求里没有回合身份，挂不了。${HOW_TO_DIY}`);
+    return deny(`${WHY_NOT_BUILTIN}本想替你改挂成 Navi 哨兵，但这次请求里没有回合身份，挂不了。${HOW_TO_DIY}`);
   }
 
   const timeoutMs = typeof toolInput.timeout_ms === "number" && Number.isFinite(toolInput.timeout_ms)
@@ -163,15 +163,15 @@ export async function claudeMonitorHookDecision(
   });
 
   if (!result.ok) {
-    return deny(`${WHY_NOT_BUILTIN}替你改挂成 ash 哨兵也没成：${result.error}。${HOW_TO_DIY}`);
+    return deny(`${WHY_NOT_BUILTIN}替你改挂成 Navi 哨兵也没成：${result.error}。${HOW_TO_DIY}`);
   }
 
   return deny(
-    `已经替你改挂成 ash 哨兵了（monitorId=${result.monitor.id}），盯的是同一条命令`
-    + `${clamped ? "；你写的 timeout 超出 ash 的区间，已经钳到边界" : ""}。`
+    `已经替你改挂成 Navi 哨兵了（monitorId=${result.monitor.id}），盯的是同一条命令`
+    + `${clamped ? "；你写的 timeout 超出 Navi 的区间，已经钳到边界" : ""}。`
     + "换一套的原因：claude 内置的 Monitor 进程在你自己的进程树里，这一轮一结束就被收走，"
     + "它的通知也只注回这条随之结束的会话 —— 没有任何东西会把这个任务叫醒。"
-    + "ash 哨兵的进程由 ash 自己起，活得过这一回合，每吐一行就把这个任务唤醒一次。"
+    + "Navi 哨兵的进程由 Navi 自己起，活得过这一回合，每吐一行就把这个任务唤醒一次。"
     + "**所以这一轮请用 `pause_task` 收尾**（resumePrompt 写清被叫醒后该干什么），别干等、也别就这么结束。",
   );
 }

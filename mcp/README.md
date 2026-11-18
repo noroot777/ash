@@ -1,8 +1,8 @@
 # @ash/mcp
 
-把 ash 的 HTTP API 包成 **MCP 工具**，让智能体（Claude Code / Desktop / Cursor，或被 ash 拉起的 `claude`）能原生编排任务，而不用在 prompt 里教它 curl。
+把 Navi 的 HTTP API 包成 **MCP 工具**，让智能体（Claude Code / Desktop / Cursor，或被 Navi 拉起的 `claude`）能原生编排任务，而不用在 prompt 里教它 curl。
 
-这是一层**薄适配器**：本身不含逻辑，每个工具只转调 ash server 的现有接口。真源始终是 Hono server。
+这是一层**薄适配器**：本身不含逻辑，每个工具只转调 Navi server 的现有接口。真源始终是 Hono server。
 
 ## 工具
 
@@ -21,7 +21,7 @@
 
 ```bash
 npm run build          # 含 mcp 的构建（产出 mcp/dist/index.js）
-npm start              # 起 ash server（默认 :4317）
+npm start              # 起 Navi server（默认 :4317）
 ```
 
 MCP 进程通过 `ASH_URL` 找 server，默认 `http://localhost:4317`。
@@ -74,7 +74,7 @@ env = { ASH_URL = "http://localhost:4317" }
 
 ## 给智能体的话术示例
 
-> 用 ash 在 `/Users/example/code/ash` 建一组依赖任务：先写测试、再实现、最后跑校验，三步串起来（A 完成才做 B），都用 claude，建完就开跑。
+> 用 Navi 在 `/Users/example/code/ash` 建一组依赖任务：先写测试、再实现、最后跑校验，三步串起来（A 完成才做 B），都用 claude，建完就开跑。
 
 智能体会调 `create_task_chain(repoPath, tasks:[…], agentType:"claude", run:true)` 一次搞定。
 

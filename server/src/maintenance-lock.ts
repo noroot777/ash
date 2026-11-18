@@ -69,7 +69,7 @@ export type MaintenanceHolder = {
 /** 取锁时在 claim 内发现这套资源上还有活着的 ash。 */
 export class AshOnlineError extends Error {
   constructor(public readonly detail: string) {
-    super(`拒绝动手：这套资源上还有活着的 ash —— ${detail}\n`
+    super(`拒绝动手：这套资源上还有活着的 Navi —— ${detail}\n`
       + "先停掉它再回填 —— 跑着的回合会跟回填抢同一条线程的累计快照和同一份 trace 文件。");
     this.name = "AshOnlineError";
   }

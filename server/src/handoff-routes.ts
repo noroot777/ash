@@ -121,7 +121,7 @@ async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
     const detail = error instanceof Error ? error.message : String(error);
     if (error instanceof HandoffError && error.remoteStatus === 404 && error.remoteAsh) {
       throw new PendingCancellationError(
-        `这个地址上的新版 ash 没有对应的历史存档，可能地址已经换机或存档已删除，原目标机的任务状态无法核验；本机标记未移除。请先找回原目标机或修正地址；也可显式承担双任务风险后强制恢复。原始原因：${detail}`,
+        `这个地址上的新版 Navi 没有对应的历史存档，可能地址已经换机或存档已删除，原目标机的任务状态无法核验；本机标记未移除。请先找回原目标机或修正地址；也可显式承担双任务风险后强制恢复。原始原因：${detail}`,
         "identity",
       );
     }

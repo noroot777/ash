@@ -199,7 +199,7 @@ export type CandidateBounds = {
  *  「前提立不住就不许封口」这条不变量不能靠那种现场去钉。 */
 export function candidateBounds(launch: LaunchIdentity, clock: FactClock): CandidateBounds {
   // root 的后代一句 setuid 就换掉属主,那时「属主跟 ash 不同」不再是不可能性。
-  const uidProven = SELF_UID === 0 ? "ash 以 root 在跑，后代能 setuid 换掉属主" : true;
+  const uidProven = SELF_UID === 0 ? "Navi 以 root 在跑，后代能 setuid 换掉属主" : true;
   const clocks = launch.clocks;
   if (!clocks) {
     return { uid: SELF_UID, uidProven, oldest: BIRTH_GRACE_MS, ageProven: "这次启动没留下起跑时刻" };
@@ -278,7 +278,7 @@ export async function launchSurvivors(launch: LaunchIdentity | null): Promise<La
   // 「这一趟证不出完整」的前因。枚举没看全跟收窄前提没立住是同一类:都只能说证不出来,不能
   // 改成「没有」。
   const gaps: string[] = [];
-  if (!enumeration.complete) gaps.push("进程表或 ash 的祖先链这一趟没看全，收养目标可能漏了");
+  if (!enumeration.complete) gaps.push("进程表或 Navi 的祖先链这一趟没看全，收养目标可能漏了");
   if (!roots.length) return sealable([], [], gaps, launch);
   const read = await readProcessFacts(roots);
   if (!read) {

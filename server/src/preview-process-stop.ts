@@ -197,7 +197,7 @@ async function retryStopFile(taskId: string, file: string): Promise<PreviewStopR
   }
   let targets = record.targets.filter(recoverableTarget);
   if (targets.length !== record.targets.length) await discardInvalidTargets(taskId, file,
-    `${record.targets.length - targets.length} 个条目缺少有效进程身份或指向 ash 自身`, { ...record, targets });
+    `${record.targets.length - targets.length} 个条目缺少有效进程身份或指向 Navi 自身`, { ...record, targets });
   if (!targets.length && !record.links.length) { rmSync(file, { force: true }); return { stopped: true }; }
   const processes = await listProcesses();
   const signalable: Target[] = [];

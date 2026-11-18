@@ -171,7 +171,7 @@ export async function acceptGateCheck(
     await appendTaskTimeline(
       task.id,
       receiptLine(`本次验收**跳过**了验收前置命令 \`${command}\`：这是你在验收时明确选的，` +
-        `ash 没有跑它，也没有任何它通过的证据。${inFlight ? "正在跑的那一次已经一并收掉。" : ""}`),
+        `Navi 没有跑它，也没有任何它通过的证据。${inFlight ? "正在跑的那一次已经一并收掉。" : ""}`),
     );
     recordBasis("skipped", null);
     return null;

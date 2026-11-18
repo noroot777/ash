@@ -48,7 +48,7 @@ export const NATIVE_WORK_STATUS_LABELS: Record<NativeWorkStatus, string> = {
  * codex 的 `spawn_agent` 正文在上游就被整段加密（父子两份 rollout 里都只有密文），
  * 所以那条路是真拿不到；claude 的 Agent 工具入参是明文，会原样记下来。
  */
-export const NATIVE_WORK_NO_ASSIGNMENT = "未记录主会话给它的输入：codex 的派活正文在上游已加密，ash 取不到；claude 的派活正文会原样记录。";
+export const NATIVE_WORK_NO_ASSIGNMENT = "未记录主会话给它的输入：codex 的派活正文在上游已加密，Navi 取不到；claude 的派活正文会原样记录。";
 
 type Call = Extract<NativeWorkEvent, { type: "call" }>;
 const str = (value: unknown): string => typeof value === "string" ? value : typeof value === "number" ? String(value) : "";

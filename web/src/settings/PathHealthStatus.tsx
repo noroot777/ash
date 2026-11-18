@@ -35,7 +35,7 @@ const OCCUPIED: PathHealthVerdict = {
 
 function existingVerdict(health: ProjectHealth): PathHealthVerdict {
   if (health.occupied) return OCCUPIED;
-  if (!health.exists) return { text: "目录不存在；Ash 不会自动创建它", tone: "bad", blocked: false };
+  if (!health.exists) return { text: "目录不存在；Navi 不会自动创建它", tone: "bad", blocked: false };
   // 非 git 目录不是错，只是能力少一截 —— 而少的那一截（worktree 隔离）用户在新建任务时
   // 根本看不到开关，不在这里说清楚，他只会以为是自己没找到。
   if (!health.isRepo) {

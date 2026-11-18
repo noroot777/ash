@@ -168,7 +168,7 @@ export function launchReply(
   const lines = launched.map((task, index) => `${index + 1}. ${task.id}「${task.title}」→ ${label(task.target)}`);
   return [
     `【答复】`,
-    `用户按了「派出去」：ash 已照派活单此刻的样子建好下面 ${launched.length} 个任务（${DISPATCH_ORDER_LABEL[order]}），`
+    `用户按了「派出去」：Navi 已照派活单此刻的样子建好下面 ${launched.length} 个任务（${DISPATCH_ORDER_LABEL[order]}），`
       + "挂在本任务名下、已交给调度（可能还在等名额、等前置或排队）。不要再调用建任务的工具重复建；要看进度用 list_tasks / get_task。",
     ...lines,
     ...(dropped.length ? [`用户去掉了：${dropped.map((item) => `「${item.title}」`).join("、")}（没有建）`] : []),

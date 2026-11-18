@@ -66,7 +66,7 @@ export type CuaResidualStatus = {
 const statusByScope = new Map<string, CuaResidualStatus>();
 
 const sideEffect =
-  "SkyComputerUseService 是 ChatGPT.app 的全局 computer-use 服务；当前检测只能确认全局进程存在，不能证明它属于这个团队。ash 自动停止只终止自己启动的 agent 进程树，不会强杀该服务；显式强制清理会影响用户在 ChatGPT 桌面版里的其它 computer-use 会话。";
+  "SkyComputerUseService 是 ChatGPT.app 的全局 computer-use 服务；当前检测只能确认全局进程存在，不能证明它属于这个团队。Navi 自动停止只终止自己启动的 agent 进程树，不会强杀该服务；显式强制清理会影响用户在 ChatGPT 桌面版里的其它 computer-use 会话。";
 
 function key(scopeType: "task" | "team", scopeId: string): string {
   return `${scopeType}:${scopeId}`;

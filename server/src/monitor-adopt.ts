@@ -190,7 +190,7 @@ export async function notePendingIntent(
     + (opts.exhausted
       ? "自动重问已经试到最后一档仍然认不回来，这条创建意图原样留着（日志照常收、到点照常收尾），"
         + "号要等下一次启动、点停或删除再问一遍（日志路径见这一行）"
-      : "这条创建意图原样留着：日志和期限已经有人接着管，ash 同时在按间隔重问身份，"
+      : "这条创建意图原样留着：日志和期限已经有人接着管，Navi 同时在按间隔重问身份，"
         + "认回来就把这句话撤掉（日志路径见这一行）");
   try {
     await db.update(monitors).set({ endedReason: note })

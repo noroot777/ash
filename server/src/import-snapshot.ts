@@ -22,7 +22,7 @@ export type ImportPreparation = {
   relocated: number;
 };
 
-const HELD_NOTE = "导入时它还属于原来那份 ash，这份副本没有接管它";
+const HELD_NOTE = "导入时它还属于原来那份 Navi，这份副本没有接管它";
 
 export function prepareImportedSnapshot(file: string, sourceRoots: string[], targetRoot: string): ImportPreparation {
   const db = new DatabaseSync(file);

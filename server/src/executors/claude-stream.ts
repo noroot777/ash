@@ -459,7 +459,7 @@ async function* claudeStreamEvents(
       // 已消费水位之前还是之后的尾流里都一样认(见 claude-recovery.ts 的 SteerJournal)。
       const superseded = !!resident && !claim && resident.takeSend(resident.turns);
       if (claim?.abandoned) {
-        push({ kind: "system", text: "插话打断了这一回合，但 ash 恰在送出插话内容之前重启，那条消息没有送到，需要的话请重新发一次。", at: new Date().toISOString(), level: "notice" });
+        push({ kind: "system", text: "插话打断了这一回合，但 Navi 恰在送出插话内容之前重启，那条消息没有送到，需要的话请重新发一次。", at: new Date().toISOString(), level: "notice" });
       }
       // 我们自己打断的那一回合收尾时,插话那条消息已经(或马上就要)送进去开下一回合:会话
       // 仍算在忙。这里清成空闲,紧跟着的第二次插话就会走「空档直接送」、不再打断第一条。

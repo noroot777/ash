@@ -30,7 +30,7 @@
 
 https://github.com/user-attachments/assets/1197fcee-17e4-4e01-8b29-ee0f267e259b
 
-Ash 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
+Navi 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
 
 一个 Node 进程，一个端口，数据全在本地磁盘。
 
@@ -42,9 +42,9 @@ Ash 是一个自托管的编排控制台，用来管理本地的 AI 编程智能
 
 <!-- 上面两行标记之间由发版脚本（npm run release:mac）在每次发完后改成那一版 dmg 的直链，并单独提交这个文件。 -->
 
-自带 node 和 ash 本体，装好就能用，不用克隆仓库。需要 Apple 芯片（M 系列）的 Mac、macOS 14 以上。
+自带 node 和 Navi 本体，装好就能用，不用克隆仓库。需要 Apple 芯片（M 系列）的 Mac、macOS 14 以上。
 
-1. 下载上面的 dmg，打开后把 **Ash** 拖进 **Applications**（应用程序）。
+1. 下载上面的 dmg，打开后把 **Navi** 拖进 **Applications**（应用程序）。
 2. 第一次打开会被系统拦下（app 没有经过 Apple 公证）：到「系统设置 → 隐私与安全性」，在页面下方点「仍要打开」。
 3. 如果提示「已损坏，无法打开」，在终端里执行下面这行，再打开一次：
 
@@ -52,7 +52,7 @@ Ash 是一个自托管的编排控制台，用来管理本地的 AI 编程智能
    xattr -dr com.apple.quarantine /Applications/Ash.app
    ```
 
-4. 以后的新版本从菜单「ash → 检查更新…」安装（app 也会每 6 小时自己查一次）。
+4. 以后的新版本从菜单「Navi → 检查更新…」安装（app 也会每 6 小时自己查一次）。
 
 ## 快速开始
 
@@ -65,8 +65,8 @@ npm install -g @openai/codex && codex
 ```
 
 ```bash
-# 安装并启动 Ash
-git clone https://github.com/noroot777/ash.git && cd ash
+# 安装并启动 Navi
+git clone https://github.com/noroot777/navi.git && cd navi
 npm run setup        # 环境检查 → 依赖安装 → 构建 → MCP 接入
 npm start            # http://localhost:4317
 ```
@@ -103,7 +103,7 @@ npm start            # http://localhost:4317
 ♻️ **重启存活** — agent 进程与 server 解耦。`npm run restart` 会自动检测在跑的任务：能接管的无感接管，不能接管的拦住不重启。**单飞任务的 agent 进程完全不受重启影响**（输出写文件而非管道），三个平台都是；团队调度台自动 `--resume` 接回。
 
 > [!NOTE]
-> **三个平台同一个契约**：pid + 落盘输出 + 退出码 + 可接管 + 可重连 stdin。实现不同 —— POSIX 套一层 `/bin/sh` + FIFO，Windows 套一层按次生成的 node 壳 + 具名管道（那边必须有个活过 ash 的进程来写退出码、守着 stdin；libuv 还会把每个非 detached 的子进程塞进一个 `KILL_ON_JOB_CLOSE` 的 Job，所以那层壳是 detached 起的）。重启时不要绕过 `npm run restart` 自己 `taskkill /T`：`/T` 按父子关系杀整棵树，会把本该活下来的 agent 一起带走 —— `npm run restart` 那一刀按进程表里的壳记号认人并绕开它们（名单之外新起的 agent 也保得住），只有进程表压根读不出来且显式设置 `FORCE=1` 时才退回整树强杀；判据问不出来（超时/拒答）时它宁可中止也不下刀。
+> **三个平台同一个契约**：pid + 落盘输出 + 退出码 + 可接管 + 可重连 stdin。实现不同 —— POSIX 套一层 `/bin/sh` + FIFO，Windows 套一层按次生成的 node 壳 + 具名管道（那边必须有个活过 Navi 的进程来写退出码、守着 stdin；libuv 还会把每个非 detached 的子进程塞进一个 `KILL_ON_JOB_CLOSE` 的 Job，所以那层壳是 detached 起的）。重启时不要绕过 `npm run restart` 自己 `taskkill /T`：`/T` 按父子关系杀整棵树，会把本该活下来的 agent 一起带走 —— `npm run restart` 那一刀按进程表里的壳记号认人并绕开它们（名单之外新起的 agent 也保得住），只有进程表压根读不出来且显式设置 `FORCE=1` 时才退回整树强杀；判据问不出来（超时/拒答）时它宁可中止也不下刀。
 
 ## 编排模式
 
@@ -121,7 +121,7 @@ npm start            # http://localhost:4317
 
 ## 任务接力
 
-跨机器任务迁移：把一台 Ash 上的任务——连同代码进度、对话历史和附件——接力到另一台 Ash 继续。
+跨机器任务迁移：把一台 Navi 上的任务——连同代码进度、对话历史和附件——接力到另一台 Navi 继续。
 
 ### 接力什么
 
@@ -138,7 +138,7 @@ npm start            # http://localhost:4317
 
 ### 安全
 
-每台 Ash 实例有独立的 **ed25519 密钥对**。接力前校验目标机器指纹，首次配对核对一次即可。多人模式下接力按人授权（对端账号 key），传输可选加密。
+每台 Navi 实例有独立的 **ed25519 密钥对**。接力前校验目标机器指纹，首次配对核对一次即可。多人模式下接力按人授权（对端账号 key），传输可选加密。
 
 ### 退化与兜底
 
@@ -155,12 +155,12 @@ npm start            # http://localhost:4317
 
 ## 实时预览
 
-任务改了前端或 Web 服务的代码后，可以直接在 Ash 里启动预览服务查看效果，不必离开界面手动起开发服务器。
+任务改了前端或 Web 服务的代码后，可以直接在 Navi 里启动预览服务查看效果，不必离开界面手动起开发服务器。
 
 ### 两种模式
 
-- **脚本模式** — 填一条启动命令（如 `npm run dev`），Ash 从端口池分配空闲端口注入 `$PORT`，启动后自动探测服务就绪并生成预览链接。
-- **服务列表模式** — 配置多个预览服务（最多 8 个同时运行），分别标记为 `web`（面向浏览器）或 `service`（后端依赖），Ash 并行启动并独立管理各自的生命周期。支持自动检测仓库中的常见框架脚本。
+- **脚本模式** — 填一条启动命令（如 `npm run dev`），Navi 从端口池分配空闲端口注入 `$PORT`，启动后自动探测服务就绪并生成预览链接。
+- **服务列表模式** — 配置多个预览服务（最多 8 个同时运行），分别标记为 `web`（面向浏览器）或 `service`（后端依赖），Navi 并行启动并独立管理各自的生命周期。支持自动检测仓库中的常见框架脚本。
 
 ### 认证反代
 
@@ -172,7 +172,7 @@ npm start            # http://localhost:4317
 
 ## 多人模式
 
-开启多人模式后，一台 Ash 可以供多人使用，各有独立的账号、CLI 环境、项目可见性和资源隔离。
+开启多人模式后，一台 Navi 可以供多人使用，各有独立的账号、CLI 环境、项目可见性和资源隔离。
 
 - **角色体系** — 管理员 / 成员，实例级与项目级双层权限
 - **CLI 额度隔离** — 可选「隔离」或「共用」两档，首次启动时选一次，设置里随时改
@@ -181,7 +181,7 @@ npm start            # http://localhost:4317
 - **可见性过滤** — 任务、随手记、搜索结果均按归属过滤
 
 > [!WARNING]
-> 默认监听 `0.0.0.0`。自用模式下只有在 Ash 所在的那台机器上直接打开才免登录；别的设备打开后要你在 Ash 这边点一下「允许」完成配对（手机可以扫码），脚本凭访问密钥进，都在「设置 → 默认规则 → 远程访问」里管。连接本身不加密，跨网络访问请走 Tailscale 或带 TLS 的反向代理，细节见 [`docs/install.md`](docs/install.md)。
+> 默认监听 `0.0.0.0`。自用模式下只有在 Navi 所在的那台机器上直接打开才免登录；别的设备打开后要你在 Navi 这边点一下「允许」完成配对（手机可以扫码），脚本凭访问密钥进，都在「设置 → 默认规则 → 远程访问」里管。连接本身不加密，跨网络访问请走 Tailscale 或带 TLS 的反向代理，细节见 [`docs/install.md`](docs/install.md)。
 
 ## 支持的执行器
 
@@ -203,7 +203,7 @@ npm start            # http://localhost:4317
 
 ## MCP 工具
 
-Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **28 个工具**，覆盖任务全生命周期：
+Navi 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **28 个工具**，覆盖任务全生命周期：
 
 | 类别 | 工具 |
 |---|---|
@@ -214,7 +214,7 @@ Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent �
 | 协作 | `ask_question` `answer_question` `report_stage` `dispatch` `dispute_review` `debate_reply` |
 | 旁观 | `read_task_transcript` |
 
-`read_task_transcript` 读的是**别的任务**说过的话：拿到一个任务 id 就能看到它当时的指令、回复和结论，与界面上同一份语料。没有它时，agent 只能从工具清单得出「ash 不提供这个能力」，转去翻各家 CLI 自己的落盘文件 —— 那条路只对单一执行器成立。
+`read_task_transcript` 读的是**别的任务**说过的话：拿到一个任务 id 就能看到它当时的指令、回复和结论，与界面上同一份语料。没有它时，agent 只能从工具清单得出「Navi 不提供这个能力」，转去翻各家 CLI 自己的落盘文件 —— 那条路只对单一执行器成立。
 
 ## 项目结构
 
@@ -290,7 +290,7 @@ PowerShell 可能将裸 `npm` 解析为会吞掉 `--` 的 `npm.ps1`，带选项�
 
 ```bash
 npm run test:web                      # 前端全量回归
-npm run test:accept                   # ash 验收前置命令：前端全量回归
+npm run test:accept                   # Navi 验收前置命令：前端全量回归
 npm run test:accept-gate              # 验收脚本自身的回归
 npm -w server run test:queue          # 队列推进与排序
 npm -w server run test:accept-merge   # 验收合并与冲突处理
@@ -302,7 +302,7 @@ npm -w server run test:handoff        # 跨机器接力
 > [!CAUTION]
 > 端到端测试会实际启动 agent CLI，消耗真实 API 额度。
 
-在 ash 项目设置的「验收前置命令」里填写 `npm run test:accept`，也可直接填写 `node scripts/accept-test.mjs`。入口在自身所在项目（验收时为独立快照）运行 `npm run test:web`，不按 Git diff 筛选，不受旧的 `SKIP_WEB_TEST` 开关影响；测试失败或启动失败都会返回非零退出码，不会因缺少依赖而放行。所需依赖可提前在任务工作区运行 `npm install` 安装，验收快照会复制现有依赖。
+在 Navi 项目设置的「验收前置命令」里填写 `npm run test:accept`，也可直接填写 `node scripts/accept-test.mjs`。入口在自身所在项目（验收时为独立快照）运行 `npm run test:web`，不按 Git diff 筛选，不受旧的 `SKIP_WEB_TEST` 开关影响；测试失败或启动失败都会返回非零退出码，不会因缺少依赖而放行。所需依赖可提前在任务工作区运行 `npm install` 安装，验收快照会复制现有依赖。
 
 `git push` 不再自动运行回归测试；`.githooks/pre-push` 已移除，其它提交钩子保留。
 
@@ -311,7 +311,7 @@ npm -w server run test:handoff        # 跨机器接力
 <details>
 <summary>所有任务运行后均显示 <b>failed</b></summary>
 
-MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 ash 状态为 Connected。
+MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 Navi 状态为 Connected。
 
 </details>
 
@@ -332,11 +332,11 @@ MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` �
 <details>
 <summary>claude 类任务 0 秒退出，报 <code>--dangerously-skip-permissions cannot be used with root/sudo privileges</code></summary>
 
-以 root 跑 ash 时所有 claude 执行器必然 0 秒失败。三条出路：
+以 root 跑 Navi 时所有 claude 执行器必然 0 秒失败。三条出路：
 
-1. **换非 root 用户跑 ash**（推荐）
+1. **换非 root 用户跑 Navi**（推荐）
 2. 启动环境设 `IS_SANDBOX=1`（代价：agent 以 root 无确认地操作整台机器）
-3. 在 bubblewrap 沙箱中跑 ash
+3. 在 bubblewrap 沙箱中跑 Navi
 
 </details>
 

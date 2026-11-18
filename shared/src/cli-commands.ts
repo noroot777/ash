@@ -9,7 +9,7 @@ export const CODEX_COMMANDS = {
   usage: "查看账号 token 用量与额度（供应商不支持时明确提示）",
   mcp: "查看当前 MCP 服务及工具",
   ps: "查看当前会话的后台终端",
-  stop: "停止当前会话的后台终端，不取消 ash 任务",
+  stop: "停止当前会话的后台终端，不取消 Navi 任务",
   "debug-config": "查看有效配置，敏感字段隐藏",
   hooks: "查看当前项目的生命周期 hooks",
   apps: "查看可用连接器",
@@ -19,7 +19,7 @@ export const CODEX_COMMANDS = {
   fork: "在当前任务内分叉会话，保留原会话记录",
   new: "在当前任务内新建会话，保留旧记录",
   clear: "新建会话（/new 的别名，不删除历史）",
-  rename: "重命名当前会话及 ash 任务：/rename 名称",
+  rename: "重命名当前会话及 Navi 任务：/rename 名称",
 } as const;
 
 export type CliCommandName = keyof typeof CODEX_COMMANDS;
@@ -116,7 +116,7 @@ export function goalRequest(command: CliCommand, agentType: AgentType): { object
 export function validateCliCommand(agentType: string, text: string): CliCommand | null {
   const name = /^\/([\w-]+)(?:\s|$)/.exec(text.trim())?.[1];
   if (agentType === "claude" && name === "review") return null;
-  if (name && Object.hasOwn(CODEX_COMMANDS, name) && !Object.hasOwn(cliCommandCatalog(agentType), name)) throw new CliCommandValidationError(`当前执行器的 ash 通道不支持 /${name}`);
+  if (name && Object.hasOwn(CODEX_COMMANDS, name) && !Object.hasOwn(cliCommandCatalog(agentType), name)) throw new CliCommandValidationError(`当前执行器的 Navi 通道不支持 /${name}`);
   const command = parseCliCommand(agentType, text);
   if (!command) return null;
   const flags = command.name === "goal" ? ["--scopes", "--budget"] : command.name === "review" ? ["--base", "--commit"] : [];

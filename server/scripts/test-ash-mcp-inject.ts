@@ -36,7 +36,7 @@ const { IS_WINDOWS } = await import("../src/platform.js");
 const { REPO_DIR } = await import("../src/paths.js");
 
 type ErrorEvent = Extract<AgentEvent, { kind: "error" }>;
-const isAshProblem = (e: AgentEvent): e is ErrorEvent => e.kind === "error" && e.message.startsWith("ash 的工具在这一回合没接上");
+const isAshProblem = (e: AgentEvent): e is ErrorEvent => e.kind === "error" && e.message.startsWith("Navi 的工具在这一回合没接上");
 const realCli = process.env.ASH_TEST_REAL_CLI === "1";
 const msg = (e: AgentEvent | null) => (e as ErrorEvent | null)?.message ?? "";
 const level = (e: AgentEvent | null) => (e as ErrorEvent | null)?.level;

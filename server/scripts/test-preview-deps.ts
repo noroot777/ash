@@ -240,7 +240,7 @@ try {
   // 同样内容的第二次不该再装一遍（内容哈希命中）。
   rmSync(linked, { force: true });
   const again = await prepareNodeDeps(installWt, "cd front && npm run dev", installLog);
-  check("第二次直接复用", again[0]?.detail.startsWith("复用 ash 之前备好的依赖"), true);
+  check("第二次直接复用", again[0]?.detail.startsWith("复用 Navi 之前备好的依赖"), true);
 
   // ③ workspaces 装不出正确的树 —— 认出来就别硬来，如实说。
   const wsRepo = dir("ws-repo");

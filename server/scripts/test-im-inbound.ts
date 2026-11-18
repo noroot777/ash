@@ -97,7 +97,7 @@ try {
     await im.settle();
     assert.equal((await inboundOf(unmentioned)).kind, "ignored", "群里没 @ 机器人不理");
     assert.equal(repliesTo(strangerInGroup).length, 0, "群里没绑定的人不出声");
-    assert.match(textOf(contentOf(repliesTo(unboundGroup)[0]!)), /还没绑定 ash 项目/);
+    assert.match(textOf(contentOf(repliesTo(unboundGroup)[0]!)), /还没绑定 Navi 项目/);
   }
 
   // ── ② 回复任务卡 ─────────────────────────────────────────────────────────

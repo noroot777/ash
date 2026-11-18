@@ -137,7 +137,7 @@ export async function patchSettingsFor(actor: Actor, patch: Partial<AppSettings>
     // 还是要切,只是得有人听见。
     if (instancePart.sharedHostCli === false) {
       const { sweepPersonalAshMcp } = await import("./user-cli.js");
-      await sweepPersonalAshMcp().catch((err) => console.error("[ash] 切档后的 ash MCP 自检失败:", err));
+      await sweepPersonalAshMcp().catch((err) => console.error("[ash] 切档后的 Navi MCP 自检失败:", err));
     }
   }
   return settingsFor(owner);

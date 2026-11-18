@@ -66,7 +66,7 @@ export function ChatMembers({ initial, initialName, onSave, onCancel, onDelete, 
       <button type="button" aria-label={`移除 ${member.name}`} onClick={() => setMembers((current) => current.filter((candidate) => candidate.id !== member.id))}><X size={16} /></button>
     </div>)}</div>
     <button className="chat-add-member" type="button" onClick={add} disabled={!profiles.length || members.length >= 24}><Plus size={16} />添加成员</button>
-    {!profiles.length && <p>暂无可选执行器。请先在 ash「执行器」设置中注册。</p>}
+    {!profiles.length && <p>暂无可选执行器。请先在 Navi「执行器」设置中注册。</p>}
     {error && <p className="chat-error" role="alert">{error}</p>}
     <footer>{onDelete && !creating
       ? <button className="chat-danger" type="button" disabled={saving || deleting} onClick={() => setConfirmingDelete(true)}><Trash size={14} />删除群聊</button>

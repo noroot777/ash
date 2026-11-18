@@ -246,7 +246,7 @@ function switchVerdict(doc, switches, name) {
     const found = at(path);
     if (!found) return null;
     if (!Array.isArray(found.value)) {
-      return { doubt: `根级 ${show(path)} 不是一个数组 —— 这家 CLI 拿它怎么判 ash 没实测过` };
+      return { doubt: `根级 ${show(path)} 不是一个数组 —— 这家 CLI 拿它怎么判 Navi 没实测过` };
     }
     return found.value.map(String);
   };
@@ -466,8 +466,8 @@ export function effectiveState(sources, site) {
   if (read.length > 1 && !site.sourcesMerge && new Set(folded.map((f) => f.state)).size > 1) {
     return {
       state: "unsure",
-      why: "这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
-        + folded.map((f) => f.why || `${f.label}：${f.state === "present" ? "里已经有 ash 登记" : f.state}`).join("；"),
+      why: "这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 Navi 没实测过："
+        + folded.map((f) => f.why || `${f.label}：${f.state === "present" ? "里已经有 Navi 登记" : f.state}`).join("；"),
     };
   }
   const picks = [];
@@ -496,7 +496,7 @@ export function effectiveState(sources, site) {
     }
     if (new Set(winners.map((w) => w.fact.status)).size > 1) {
       picks.push({
-        why: `同一层里好几份配置都写了 ${name} 这条登记、结论还不一致、谁覆盖谁 ash 没实测过（`
+        why: `同一层里好几份配置都写了 ${name} 这条登记、结论还不一致、谁覆盖谁 Navi 没实测过（`
           + winners.map((w) => `${w.source.label}：${w.fact.status === "on" ? "开着" : "关着"}`).join("；") + "）",
       });
       continue;

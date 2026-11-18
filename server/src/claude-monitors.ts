@@ -456,7 +456,7 @@ export class ClaudeMonitorTrace {
     if (!found) {
       // 认不出会话就落不了库。安静跳过是对的（不能因此拖垮事件流），但要留下线索——
       // 否则用户看到的是「agent 说挂上了，面板永远空着」，而日志里什么都没有。
-      this.warn("找不到对应的 ash 会话，这条没有记上", `native=${nativeId}`);
+      this.warn("找不到对应的 Navi 会话，这条没有记上", `native=${nativeId}`);
       return;
     }
     // 同一个 native_id 重复开（流被重放、resume 后 CLI 重发）就不再插一行。唯一索引

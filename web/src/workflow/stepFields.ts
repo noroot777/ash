@@ -59,7 +59,7 @@ export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
     // 每次都借一个空闲端口用 PORT 传进来，命令认它才错得开。
     {
       key: "cmd", label: "启动命令", type: "text", placeholder: "npm run dev", emptyText: "还没填命令",
-      hint: "ash 会把上面的选择作为 $ASH_PREVIEW_MODE 传给命令；项目不识别它时，"
+      hint: "Navi 会把上面的选择作为 $ASH_PREVIEW_MODE 传给命令；项目不识别它时，"
         + "就是普通自定义命令。同时每次借一个空闲端口，用 $PORT 传入。端口写死的话，"
         + "同一个项目已经有一份在跑时必然撞车 —— 写成认 $PORT 的形式（例如 npm run dev -- --port $PORT）才错得开。"
         + SHELL_HINT,

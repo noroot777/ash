@@ -109,7 +109,7 @@ export function scanTomlServers(text) {
       root = false;
       if (path[0] === "mcp_servers") {
         // `[mcp_servers]` 本体底下只能靠点号键给出名字 —— 那一档我们不认,交给「判不准」。
-        if (path.length < 2) return { why: "配置里有一张 [mcp_servers] 总表（名字写在点号键里，ash 认不了）" };
+        if (path.length < 2) return { why: "配置里有一张 [mcp_servers] 总表（名字写在点号键里，Navi 认不了）" };
         seen.push(path[1]);
         if (path.length === 2) tables.push(path[1]);
       }
@@ -126,7 +126,7 @@ export function scanTomlServers(text) {
     rest.push(line);
   }
   const stray = rest.find((l) => /mcp_servers/.test(l));
-  if (stray) return { why: `配置里这一行提到了 mcp_servers，而 ash 读不准它的写法：${stray.slice(0, 60)}` };
+  if (stray) return { why: `配置里这一行提到了 mcp_servers，而 Navi 读不准它的写法：${stray.slice(0, 60)}` };
   const names = [...new Set(seen)];
   const duplicateTables = names.filter((n) => tables.filter((t) => t === n).length > 1);
   return { names, rootArrays, duplicateTables };

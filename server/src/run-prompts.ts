@@ -60,10 +60,10 @@ export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, v
       `只有用户明确说「验收通过/可以合并」时才调 accept_task(taskId="${taskId}")，不要自行 git merge / worktree remove / branch -d。`;
 export const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `【完成协议】本任务在 ash 的 taskId 是 ${taskId}。确定目标已达成时,结束前调用 ash MCP 的 complete_task(taskId="${taskId}", directionToken="<最新【当前方向身份】token>");不确认就结束,本回合按未完成记为 failed。要等外部条件就改用 pause_task,同样传最新 directionToken 并写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)}\n\n`;
+  `【完成协议】本任务在 Navi 的 taskId 是 ${taskId}。确定目标已达成时,结束前调用 Navi MCP 的 complete_task(taskId="${taskId}", directionToken="<最新【当前方向身份】token>");不确认就结束,本回合按未完成记为 failed。要等外部条件就改用 pause_task,同样传最新 directionToken 并写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)}\n\n`;
 export const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(ash 完成协议:taskId=${taskId}。本回合结束时目标已达成就先调 complete_task 并传最新【当前方向身份】directionToken,否则按未完成记 failed;要等外部条件则用 pause_task 并传同一 token。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
+  `\n\n(Navi 完成协议:taskId=${taskId}。本回合结束时目标已达成就先调 complete_task 并传最新【当前方向身份】directionToken,否则按未完成记 failed;要等外部条件则用 pause_task 并传同一 token。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 
 // 跨回合的等待别交给后台 Bash —— 事前那一句。事后那一笔（被收走时落时间线）在
 // claude-background-reaped.ts，事故经过也在那个文件头。
@@ -101,7 +101,7 @@ export const FOLLOW_UP_REMINDER = (
   taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean, rail: string, free = false,
 ) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(ash:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。` +
+  `\n\n(Navi:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。` +
   `不确认不会判这一轮失败 —— 没调 complete_task,状态就原样留在「${FOLLOW_UP_LABEL[from] ?? from}」。` +
   `但**只要这一轮动了代码(改了文件、提交),结束前就必须调用 complete_task(taskId="${taskId}")**:` +
   (free
@@ -147,7 +147,7 @@ export async function followUpRailNote(taskId: string): Promise<string> {
 // the user too (its own timeline bubble), since a silently reset workspace is
 // exactly the kind of thing you must not discover at review time.
 export const WORKSPACE_RESET = (path: string) =>
-  `\n\n〔重要·工作目录已重建〕本任务原来的 worktree 和分支都已不存在(被删除了),ash 刚在 ${path} 建了一个空的工作目录:` +
+  `\n\n〔重要·工作目录已重建〕本任务原来的 worktree 和分支都已不存在(被删除了),Navi 刚在 ${path} 建了一个空的工作目录:` +
   `你在上文里创建或修改过的文件**现在全都不在了**,git 历史也回到了基线。请不要相信上文中「我已经改过某某文件」的记忆——` +
   `动手之前先实际看一遍当前目录(ls / git status / git log),据此重新判断还要做什么。`;
 export const WORKSPACE_RESET_MARKER = "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状";

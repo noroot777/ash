@@ -143,7 +143,7 @@ const isolatedFromSolo = await surfaces();
 assertAgree("自用 → 多人隔离", isolatedFromSolo, false);
 assert.match(
   isolatedFromSolo.reason,
-  /依据：ash 内置规则/,
+  /依据：Navi 内置规则/,
   `隔离档下的拒绝必须说清依据来自内置规则，got: ${isolatedFromSolo.reason}`,
 );
 // 缓存里那份宿主机探测结果**还在**(TTL 6 小时没到) —— 这正是复现 A 的前置条件。

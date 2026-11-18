@@ -56,10 +56,10 @@ export function LoginPage({
           void submit();
         }}
       >
-        <h1>ash</h1>
+        <h1>Navi</h1>
         <p className="auth-note">
           {accessKey
-            ? "粘这台 ash 的访问密钥进入。"
+            ? "粘这台 Navi 的访问密钥进入。"
             : pendingJoin
               ? "先用你的 key 登录，登录后会自动加入这个项目。"
               : "粘贴你的 key 进入。key 就是身份，没有用户名和密码。"}
@@ -86,20 +86,20 @@ export function LoginPage({
         {showHint && accessKey ? (
           <div className="auth-recovery">
             <p>
-              在跑着 ash 的那台机器上打开它，进「设置 → 默认规则 → 远程访问」。在那台机器上打开不需要密钥。
+              在跑着 Navi 的那台机器上打开它，进「设置 → 默认规则 → 远程访问」。在那台机器上打开不需要密钥。
             </p>
           </div>
         ) : showHint ? (
           <div className="auth-recovery">
             <p>
-              <b>丢了 key</b>：找这台 ash 的管理员，让他在「设置 → 用户」里给你重置 —— 会生成一条新的领取链接，
+              <b>丢了 key</b>：找这台 Navi 的管理员，让他在「设置 → 用户」里给你重置 —— 会生成一条新的领取链接，
               旧 key 当场失效。
             </p>
             <p>
-              <b>还没有账号</b>：ash 没有注册入口。管理员建好账号后会给你一条专属领取链接。
+              <b>还没有账号</b>：Navi 没有注册入口。管理员建好账号后会给你一条专属领取链接。
             </p>
             <p>
-              <b>你就是唯一的管理员、而 key 也丢了</b>：在跑着 ash 的那台机器上执行
+              <b>你就是唯一的管理员、而 key 也丢了</b>：在跑着 Navi 的那台机器上执行
             </p>
             <pre className="auth-code">{hint?.command ?? "node scripts/ash-admin.mjs invite-admin"}</pre>
             <p className="auth-note">{hint?.note ?? "它会打印一条新的管理员邀请链接。"}</p>

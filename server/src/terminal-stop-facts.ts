@@ -160,7 +160,7 @@ async function releaseLaunchPorts(session: TerminalSession): Promise<string | nu
     // 残缺(该问的没问全),同样落成 pids 为空的那种 unresolved:不卡删除(没有活号可举,
     // 拦着也多停不掉一个进程),但这次启动到死都带着「没能确认停净」(第 6 轮审查 F1)。
     if (outcome.membersIncomplete) {
-      oweLeftovers(session, [], "这次没能把同组成员列全（进程表或端口查询没答上来）—— 跟它一起起来的还有谁，ash 这一趟没问到", false);
+      oweLeftovers(session, [], "这次没能把同组成员列全（进程表或端口查询没答上来）—— 跟它一起起来的还有谁，Navi 这一趟没问到", false);
     }
   }
   const probe = await probeOwnedPorts(ports, token);

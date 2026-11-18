@@ -116,7 +116,7 @@ export async function finishOffline(
       const hit = base.hitLine ?? fresherHit;
       const outcome = hit !== null && status === "lost" ? "matched" : status;
       const note = hit !== null && status === "lost"
-        ? `${matchedReason(hit)} —— 这一行是 ash 不在期间补读到的：${reason}`
+        ? `${matchedReason(hit)} —— 这一行是 Navi 不在期间补读到的：${reason}`
         : reason;
 
       // 同上:凭证跟终态一条语句落库(第 1 轮审查 F1 的对称面 —— 离线收尾也是「先结束、后通知」)。

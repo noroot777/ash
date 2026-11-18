@@ -55,7 +55,7 @@ export function ConfigTransferSettings({ notify }: { notify: (message: string) =
         if (parsed?.version !== 1 || !parsed.items) throw new Error("bad");
         setStaged({ bundle: parsed, fileName: file.name });
       } catch {
-        notify("这不是一份 ash 配置文件");
+        notify("这不是一份 Navi 配置文件");
       }
     },
     [notify],

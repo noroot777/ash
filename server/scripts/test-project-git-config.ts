@@ -111,7 +111,7 @@ try {
     // 塞一条任意命令」在这一层就没有通道，而不是靠每个调用点都记得先过 checkSshKeyPath。
     await assert.rejects(
       () => writeGitIdentity(repo, { "core.sshCommand": `ssh -i /k -o IdentitiesOnly=yes; touch ${marker}` }),
-      /只接受 ash 拼出来的形状/,
+      /只接受 Navi 拼出来的形状/,
       "陌生形状的 core.sshCommand 必须拒绝",
     );
     assert.equal((await readGitIdentity(repo)).sshCommand.value, null, "被拒的写入不许落进 config");

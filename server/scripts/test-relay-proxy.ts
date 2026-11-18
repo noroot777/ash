@@ -248,7 +248,7 @@ try {
   assert.equal(kdeReversed.http, null);
   assert.deepEqual(kdeReversed.unsupported, ["反向例外列表（只代理列出的地址）"]);
   assert.deepEqual(parseKdeProxy("[Proxy Settings]\nProxyType=1\nhttpProxy=http://p 1\nNoProxyFor=10.0.0.0/8,http://exact.test\n").unsupported,
-    ["网段例外对主机名的匹配（KDE 先解析成 IP 再判，ash 只判 IP 地址）"], "KDE 的网段例外不解析主机名，要明说");
+    ["网段例外对主机名的匹配（KDE 先解析成 IP 再判，Navi 只判 IP 地址）"], "KDE 的网段例外不解析主机名，要明说");
 
   // IPv6 代理主机：单独给端口时补方括号，不拿末段「:1」当端口
   const scutil = (host: string, port: string) => parseScutilProxy(`<dictionary> {\n  HTTPSEnable : 1\n  HTTPSPort : ${port}\n  HTTPSProxy : ${host}\n}`);

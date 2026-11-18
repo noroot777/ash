@@ -297,7 +297,7 @@ async function keyFingerprintForSave(rawUrl: string, peerKey: string, expectedPe
   if (peerKey && (!peerFp || (expectedPeerFp && !sameFingerprint(peerFp, expectedPeerFp)))) {
     throw new HandoffError(peerFp
       ? "地址背后的机器指纹不一致，账号 key 未保存。请先核对来源机器地址。"
-      : "无法核对机器身份，账号 key 未保存。请确认地址和 ash 运行状态后重试。", peerFp ? 409 : 502);
+      : "无法核对机器身份，账号 key 未保存。请确认地址和 Navi 运行状态后重试。", peerFp ? 409 : 502);
   }
   return peerFp;
 }

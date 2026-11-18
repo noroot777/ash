@@ -194,7 +194,7 @@ final class UpdateGate {
     phase = .preparing
     let mine = epoch
     let stale: String? = { if case .staleServer(let from) = purpose { return from } else { return nil } }()
-    let note = stale == nil ? "正在安装更新…" : "正在换成新版的 ash 服务…"
+    let note = stale == nil ? "正在安装更新…" : "正在换成新版的 Navi 服务…"
     holding = true
     onHoldChanged?(note)
     log("放行：停服务、备份库")
@@ -309,17 +309,17 @@ final class UpdateGate {
     let (waitTitle, nowTitle): (String, String)
     switch purpose {
     case .staleServer(let from):
-      title = "ash 服务还在跑旧版（\(from)）"
+      title = "Navi 服务还在跑旧版（\(from)）"
       lines.append("app 已经是新版，换上新版的服务要重启它。")
       (waitTitle, nowTitle) = ("等它们跑完再重启", "现在重启")
     case .update(let version):
-      title = "装新版 \(version) 要重启 ash 服务"
+      title = "装新版 \(version) 要重启 Navi 服务"
       (waitTitle, nowTitle) = ("等它们跑完再装", "现在装")
     case nil:
-      title = "装新版要重启 ash 服务"
+      title = "装新版要重启 Navi 服务"
       (waitTitle, nowTitle) = ("等它们跑完再装", "现在装")
     }
-    if quitting { lines.append("退出 ash 时 Sparkle 会把下好的新版装上。") }
+    if quitting { lines.append("退出 Navi 时 Sparkle 会把下好的新版装上。") }
     switch verdict {
     case .disrupts(_, let items):
       lines.append("会打断 \(items.count) 个任务：")

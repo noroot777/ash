@@ -410,7 +410,7 @@ export async function reportStuckWindDowns(at = Date.now()): Promise<number> {
     if (toldStuck.has(key)) continue;
     toldStuck.add(key);
     const text = stuckWindDownText(windDown, at);
-    console.warn(`[ash] 回合收尾卡住 task=${turn.taskId}（停在「${windDown.step}」约 ${held(at - windDown.stepAt)}），出路是重启 ash`);
+    console.warn(`[ash] 回合收尾卡住 task=${turn.taskId}（停在「${windDown.step}」约 ${held(at - windDown.stepAt)}），出路是重启 Navi`);
     const persisted = await noteSystemNotice(turn.taskId, `stuck-wind-down:${turn.claimedAt}:${turn.seq}:${windDown.index}`,
       "回合收尾卡住", text);
     if (persisted) reported += 1;

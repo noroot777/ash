@@ -105,7 +105,7 @@ const toReviewer = { sessionRole: "reviewer" };
   const html = render([notice, user(combined, toReviewer), reply]);
   assert.equal(count(html, 'class="monitor-wake-input '), 1);
   assert.equal(count(html, 'class="monitor-wake-reply"'), 1);
-  assert.match(html, /ash<\/b>.*自动输入/s);
+  assert.match(html, /Navi<\/b>.*自动输入/s);
   assert.match(html, /2 条消息 → 1 次输入/);
   assert.match(html, /复制完整自动输入/);
   assert.match(html, /<details class="monitor-wake-raw"><summary>/);

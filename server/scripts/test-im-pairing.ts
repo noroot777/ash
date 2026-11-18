@@ -242,7 +242,7 @@ try {
     assert.equal(await im.actions.recover(), 1);
     const after = await fresh(row.id);
     assert.equal(after.state, "resolved");
-    assert.match(textOf(JSON.parse(after.content)), /这张申请作废了：在那台设备上重新打开 ash 再申请一次/);
+    assert.match(textOf(JSON.parse(after.content)), /这张申请作废了：在那台设备上重新打开 Navi 再申请一次/);
     assert.doesNotMatch(textOf(JSON.parse(after.content)), /重新发命令/);
     await im.settle();
   }

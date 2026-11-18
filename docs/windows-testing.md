@@ -144,11 +144,11 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 ## 四、原先「有意不做」的那一档:已经做了(2026-10-23 真机绿)
 
-**「agent 活得过 ash 重启」在 Windows 上不做**曾经是写进支持计划的决策,`reattach.ts` 和
+**「agent 活得过 Navi 重启」在 Windows 上不做**曾经是写进支持计划的决策,`reattach.ts` 和
 `detached.ts` 里各有平台短路。现在那几处短路都删了,`test:detached` / `test:reattach` 在真机上
 **实测绿**(2026-10-23):
 
-- `npm -w server run test:detached` —— 杀掉 ash 之后 agent 还活着、接回后 24 行不丢不重、
+- `npm -w server run test:detached` —— 杀掉 Navi 之后 agent 还活着、接回后 24 行不丢不重、
   **退出码也对**;第二条(`test-controllable-detached`)钉的是重启后 stdin 还能接着引导
 - `npm -w server run test:reattach` —— 真库 + 真进程走一遍接管接线,含 claude / codex 两条
   原生引导回合接回后仍能 interrupt / steer
@@ -171,7 +171,7 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 ### 那一刀本身:**认记号,不认名单**
 
-落盘 + `detached` 只保证「ash 自己退出时 agent 不死」。`npm run restart` 还会**主动**下刀:
+落盘 + `detached` 只保证「Navi 自己退出时 agent 不死」。`npm run restart` 还会**主动**下刀:
 Windows 没有信号,旧版是 `taskkill /PID <server> /T /F`,`/T` 按父子关系把整棵树一起杀。于是这
 一轮先改成「整棵后代减去 `/api/restart-impact` 给的 survives 名单」—— 第 1 轮审查实测证明这还
 不够,两条都是确定性复现:
@@ -236,5 +236,5 @@ failed / closed;接管不再把异步 marker 尚未出现误判成不支持输�
   ConPTY 那条路**实测绿**(2026-08-18,8.6s)。但它会在退出时留一个孤儿:node-pty 的
   `conpty_console_list_agent.ts:13` 抛 `Error: AttachConsole failed` 之后不退,继续攥着 stdout。
   测试本身 exit 0 不受影响,踩到的是**外面**的东西 —— 任何拿「管道关闭」当完成判据的调用方
-  (`<cmd> | Out-File`、CI 收集器)都会永远等不到 EOF。这是环境/上游的问题,不是 ash 的,
+  (`<cmd> | Out-File`、CI 收集器)都会永远等不到 EOF。这是环境/上游的问题,不是 Navi 的,
   暂未处理;`scripts/win-remote/transport.mjs` 改用「进程退出」当判据来绕开它。

@@ -528,7 +528,7 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
       + "dotnet run、Laravel 的 artisan、Rails 的 bin/rails 和明确的静态 HTML 产物都找过了）。\n"
       + "请在「设置 → 项目设置 → 预览 → 自定义脚本」里填写启动脚本 —— 任何语言都行，"
       + "它在任务工作区根目录用你自己的 shell 执行，可以带 cd。\n"
-      + `端口从 ash 借的那个来：命令里写 \`${port}\`，或者让它读这些环境变量之一（${PORT_ENV_ALIASES.map((a) => a.name).join(" / ")}）。`;
+      + `端口从 Navi 借的那个来：命令里写 \`${port}\`，或者让它读这些环境变量之一（${PORT_ENV_ALIASES.map((a) => a.name).join(" / ")}）。`;
   }
   const list = candidates.map((c) => `  · ${c.label}\n    ${c.command}`).join("\n");
   if (candidates.every((c) => c.requiresSelection)) {
@@ -537,7 +537,7 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
       + "到「设置 → 项目设置 → 预览 → 选择服务」点击检测并勾选所需服务，保存后再打开预览。";
   }
   const combined = combinedExample(shell, candidates);
-  return `这个工作区里认出了 ${candidates.length} 个能起服务的东西，ash 不替你挑`
+  return `这个工作区里认出了 ${candidates.length} 个能起服务的东西，Navi 不替你挑`
     + "（挑错的话你会对着另一个服务验收自己的改动）：\n"
     + `${list}\n`
     + "到「设置 → 项目设置 → 预览 → 选择服务」点击检测并勾选所需服务，也可以在「自定义脚本」里填写启动方式。保存后，任务按这份配置打开预览。\n"
@@ -546,7 +546,7 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
         + `要看的那个放最后用 \`${port}\`。\n`
         + `    ${combined}\n`
         + `前端得知道后端地址的话，把 \`${shell.ref("URL2")}\`（= \`http://localhost:${shell.ref("PORT2")}\`）递给它自己认的那个变量，`
-        + `例如 \`${shell.withEnv("VITE_APP_API_URL", shell.ref("URL2"), "pnpm run dev")}\` —— 变量名看你前端读的是哪个，ash 不替你猜。\n`
+        + `例如 \`${shell.withEnv("VITE_APP_API_URL", shell.ref("URL2"), "pnpm run dev")}\` —— 变量名看你前端读的是哪个，Navi 不替你猜。\n`
       : "")
     + "上面的命令是各自最常见的写法，你的项目另有讲究就照着改"
     + "（例如 Maven 多模块首次跑要先把依赖模块装进本地仓库：`mvn -pl <模块> -am install -DskipTests`）。";

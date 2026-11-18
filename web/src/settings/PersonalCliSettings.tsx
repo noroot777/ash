@@ -62,7 +62,7 @@ export function PersonalCliSettings({ notify }: { notify: (message: string) => v
       {sharedHostCli ? (
         <div className="auth-warning auth-warning--strong">
           <b>这一节现在不生效。</b>
-          这台 ash 的「CLI 额度」设成了<b>共用这台机器的 CLI</b>，所以任务跑的是宿主机的{" "}
+          这台 Navi 的「CLI 额度」设成了<b>共用这台机器的 CLI</b>，所以任务跑的是宿主机的{" "}
           <code>~/.claude</code>、<code>~/.codex</code>，不是下面这些个人目录 ——
           在这里装的技能、写的全局指令，CLI 都读不到。
           下面的内容原样留着（改回「每人自带 key」立刻恢复生效）；
@@ -76,7 +76,7 @@ export function PersonalCliSettings({ notify }: { notify: (message: string) => v
             .filter((host) => !host.configured)
             .map((host) => (
               <div key={host.agentType} className="auth-warning auth-warning--strong">
-                <b>宿主机的 {host.agentType} 配置里没有 ash MCP，用它跑的任务交不了卷。</b>
+                <b>宿主机的 {host.agentType} 配置里没有 Navi MCP，用它跑的任务交不了卷。</b>
                 agent 手上不会有 <code>complete_task</code> 这个工具，活干完了也只会显示成「失败」。
                 在这台机器上按 <code>docs/install.md</code> 接一次 MCP（{host.problem ?? "原因不明"}）。
               </div>
@@ -116,16 +116,16 @@ function AshMcpNotice({ env, sharedHostCli }: { env: PersonalCliEnv; sharedHostC
   if (env.ashMcp.configured) {
     return (
       <p className="pcli-path">
-        ash MCP 已登记为 <code>{env.ashMcp.serverName}</code> —— agent 靠它调{" "}
+        Navi MCP 已登记为 <code>{env.ashMcp.serverName}</code> —— agent 靠它调{" "}
         <code>complete_task</code> 交卷。
       </p>
     );
   }
   return (
     <div className="auth-warning auth-warning--strong">
-      <b>这个目录里没有 ash MCP 登记，用它跑的任务交不了卷。</b>
+      <b>这个目录里没有 Navi MCP 登记，用它跑的任务交不了卷。</b>
       agent 手上不会有 <code>complete_task</code> 这个工具，活干完了也只会显示成「失败」。
-      ash 每次起跑都会尝试自动补上，这次没补成：{env.ashMcp.problem ?? "原因不明"}。
+      Navi 每次起跑都会尝试自动补上，这次没补成：{env.ashMcp.problem ?? "原因不明"}。
     </div>
   );
 }

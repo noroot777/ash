@@ -164,10 +164,10 @@ export const ASH_MCP_TABLE = {
       + "另有端到端 `server/scripts/e2e-opencode-ash-mcp.ts`:注册 → 起真任务 → agent 调 "
       + "`ash_complete_task` 交卷,任务落 done(2026-10-31 跑通);"
       + "来源与优先级共八组实测(审查 R3 三组 + F4 五组,全部 `opencode mcp list` 退出 0):"
-      + "① 全局有 ash、`OPENCODE_CONFIG` 那份没有 ⇒ 照样列出 ash;② 两份各放一条不同的 ⇒ 列出 2 条;"
+      + "① 全局有 Navi、`OPENCODE_CONFIG` 那份没有 ⇒ 照样列出 Navi;② 两份各放一条不同的 ⇒ 列出 2 条;"
       + "③ 同名各放一条 ⇒ 列出变量那份的;④ 高优先级那份只写 `{\"enabled\":false}` ⇒ 报 "
-      + "`ash disabled`(所以「任一来源有」不等于「接上了」);⑤ ash 只在 `opencode.jsonc` 里 ⇒ "
-      + "照样生效(默认目录两个文件名都读);⑥ `OPENCODE_CONFIG_DIR` 指到别处、ash 只在默认那份 ⇒ "
+      + "`ash disabled`(所以「任一来源有」不等于「接上了」);⑤ Navi 只在 `opencode.jsonc` 里 ⇒ "
+      + "照样生效(默认目录两个文件名都读);⑥ `OPENCODE_CONFIG_DIR` 指到别处、Navi 只在默认那份 ⇒ "
       + "照样生效(它是再加一个目录,不取代);⑦ 那个目录里写 `enabled:false`、默认那份开着 ⇒ "
       + "报 disabled(它优先级更高);⑧ `OPENCODE_CONFIG_CONTENT` 与文件/全局各写一条相反的 ⇒ "
       + "两次都是它赢(优先级最高、而且没有文件可写);"
@@ -194,10 +194,10 @@ export const ASH_MCP_TABLE = {
       + "`{\"enabled\":false}`、`OPENCODE_CONFIG` 指回那份 `.json` ⇒ 最终 `enabled:true`、"
       + "`ash connected`(指回 `.jsonc` 则相反:`enabled:false`)—— 按路径去重会把最高那次加载删掉;"
       + "⑳ **任何一份读不通整份拒载**:`{BROKEN` 放在最低那层、最高那层、同目录 `.jsonc`、"
-      + "或者放在一份压根没提 ash 的文件里,四种都是 `exit 1`(报那份不是合法 JSON(C))——"
+      + "或者放在一份压根没提 Navi 的文件里,四种都是 `exit 1`(报那份不是合法 JSON(C))——"
       + "所以「低的盖不住高的」在这一档不成立,只要有一份读不准就没有生效的登记可言;"
       + "**本轮审查 F1 又补了十二组**(`opencode debug config --pure`,逐格比对 `mcp.ash.command`):"
-      + "㉑ 默认目录里**只有** `config.json` 写 ash ⇒ 读得出(上一版压根没枚举这个名字,于是答 "
+      + "㉑ 默认目录里**只有** `config.json` 写 Navi ⇒ 读得出(上一版压根没枚举这个名字,于是答 "
       + "absent、派审硬拒,裸 Node 安装器还往 `opencode.json` 新写一条、把真 CLI 的生效 "
       + "`ASH_URL` 从 `:54321` 换成了 `:4317`);㉒ `config.json` + `opencode.json` 同在 ⇒ 后者赢;"
       + "㉓ `config.json` + `opencode.jsonc` ⇒ `.jsonc` 赢;㉔ 三份同在 ⇒ `.jsonc` 赢(所以升序是 "
@@ -270,7 +270,7 @@ export const ASH_MCP_TABLE = {
     evidence: "docs",
     source: "读 npm 包 `@qoder-ai/qodercli@1.1.81` 的 bundle：用户级配置目录 `~/.qoder`"
       + "（目录名可由 `QODER_CONFIG_DIR_NAME` 覆盖），MCP 读 `mcp.json`，`mcpServers` 容器",
-    notes: "**未实测**（本机没装）。它还读项目里的 `.mcp.json`/`mcp.json`，那是仓库文件，ash 不替用户写",
+    notes: "**未实测**（本机没装）。它还读项目里的 `.mcp.json`/`mcp.json`，那是仓库文件，Navi 不替用户写",
   },
 
   copilot: {
@@ -288,11 +288,11 @@ export const ASH_MCP_TABLE = {
     // 末尾。详见 `AshMcpIdentity` 的 `path` 与 `@ash/shared/mcp` 那段约定。
     identity: "path",
     identityNote: "copilot 文档明写「`PATH` 自动继承，其余环境变量必须在这条登记的 `env` 里配」，"
-      + "而回合身份一轮一个值、写死进配置文件就是过期的假身份 —— 所以 ash 每回合在 "
+      + "而回合身份一轮一个值、写死进配置文件就是过期的假身份 —— 所以 Navi 每回合在 "
       + "`<runs>/<taskId>/turn-identity/<turnToken>/` 放一份 `identity.json`、把那个目录追加到 "
       + "`PATH` 末尾（目录里没有可执行文件，盖不掉任何命令），MCP 侧在变量都不在时读它。"
       + "登记本身不需要写任何身份相关的东西",
-    caveat: "copilot 的 MCP 子进程只自动继承 PATH，所以 ash 的回合身份走 `PATH` 上一个一次性目录"
+    caveat: "copilot 的 MCP 子进程只自动继承 PATH，所以 Navi 的回合身份走 `PATH` 上一个一次性目录"
       + "里的文件（约定见 `@ash/shared/mcp`）。**这条桥本机没法实测**（没装 copilot），"
       + "文档依据见 source；万一它连 `PATH` 也改写，表现就回到「交卷被拒」，"
       + "那时请换别的执行器跑需要交卷的任务",

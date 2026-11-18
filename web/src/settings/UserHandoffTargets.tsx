@@ -94,7 +94,7 @@ export function UserHandoffTargets({ notify }: { notify: (message: string) => vo
         <div>
           <b>我的接力目标机</b>
           <small>
-            另一台 ash 的根地址。这份清单只属于你，别人看不到，也用不了你填的 key。
+            另一台 Navi 的根地址。这份清单只属于你，别人看不到，也用不了你填的 key。
             <br />
             目标机也是多人实例时，还要填<b>你在那台机器上的账号 key</b>——
             接力用的是你在对端的身份，能推进哪些项目由对端那边的成员名单决定。没有账号就找对端管理员开一个。

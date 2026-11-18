@@ -388,7 +388,7 @@ try {
   // 换一个这一轮没浏览过的目录：浏览过的那几层还在 hook 的缓存里，不会再问服务端。
   await textarea.type("@docs/");
   await page.waitForFunction(
-    () => document.querySelector(".mention-menu p")?.textContent?.includes("重启 ash 服务"),
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("重启 Navi 服务"),
     null,
     { timeout: WAIT_TIMEOUT_MS },
   );

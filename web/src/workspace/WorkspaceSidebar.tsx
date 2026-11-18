@@ -123,7 +123,7 @@ export function WorkspaceSidebar({
             <SidebarSimple size={17} weight="bold" aria-hidden="true" />
           </button>
           {onAssistant && (
-            <SidebarIconButton className="workspace-assistant-entry" label="ash 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
+            <SidebarIconButton className="workspace-assistant-entry" label="Navi 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
               <AssistantIcon size={18} filled={assistantOpen} />
             </SidebarIconButton>
           )}
@@ -218,7 +218,7 @@ export function WorkspaceSidebar({
           </SidebarIconButton>
         )}
         {onAssistant && (
-          <SidebarIconButton className="workspace-assistant-entry" label="ash 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
+          <SidebarIconButton className="workspace-assistant-entry" label="Navi 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
             <AssistantIcon size={15} filled={assistantOpen} />
           </SidebarIconButton>
         )}

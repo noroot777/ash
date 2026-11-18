@@ -69,7 +69,7 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
     ...await reviewOutcome(view, title),
     run
       ? { kind: "gate", value: `${run.id}:${run.status}`,
-        text: run.status === "passed" ? `验收前置命令通过了：${title}` : `验收前置命令没通过：${title}，详情回 ash 看。` }
+        text: run.status === "passed" ? `验收前置命令通过了：${title}` : `验收前置命令没通过：${title}，详情回 Navi 看。` }
       : { kind: "gate", value: NONE, text: null },
     ...(accepted && isAcceptedStage(accepted.stage as TaskStage | null)
       ? [{ kind: "result" as const, text: `${acceptedLabel(accepted)}：${title}`, value: accepted.identity }] : []),

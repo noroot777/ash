@@ -53,7 +53,7 @@ function refuseSelf(c: Context): Response {
     return c.json({ error: "个人设置只对账号本人开放：回合凭证代表的是那一条任务，不是这个账号" }, 403);
   }
   if (actorOf(c).kind === "im") {
-    return c.json({ error: "个人设置只对账号本人开放：请在 ash 页面上操作，不能经飞书修改" }, 403);
+    return c.json({ error: "个人设置只对账号本人开放：请在 Navi 页面上操作，不能经飞书修改" }, 403);
   }
   return c.json({ error: "请先登录" }, 401);
 }
@@ -238,7 +238,7 @@ function mountConfigTransferRoutes(api: Hono): void {
     const actor = actorOf(c);
     const bundle = await c.req.json<ConfigBundle>().catch(() => null);
     if (!bundle || bundle.version !== 1 || !bundle.items) {
-      return c.json({ error: "这不是一份 ash 配置导出文件（或版本不认识）" }, 400);
+      return c.json({ error: "这不是一份 Navi 配置导出文件（或版本不认识）" }, 400);
     }
     const stamp = ownerStamp(actor);
     const owner = await ownedScope(actor);
@@ -318,7 +318,7 @@ function mountConfigTransferRoutes(api: Hono): void {
         if (state.detail) byDetail.set(state.detail, [...(byDetail.get(state.detail) ?? []), a.name]);
       }
       for (const [detail, names] of byDetail) {
-        notes.push(`${names.map((name) => `执行器「${name}」`).join("、")}的 ash MCP 没确认接上，可能交不了卷：${detail}`);
+        notes.push(`${names.map((name) => `执行器「${name}」`).join("、")}的 Navi MCP 没确认接上，可能交不了卷：${detail}`);
       }
     }
 

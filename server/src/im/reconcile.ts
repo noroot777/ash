@@ -279,7 +279,7 @@ export class Reconciler {
     if (!renew && row.renderKey === renderKeyOf(view, dest, base, titleOnly)) return;
     if (DECISION_KINDS.has(view.turn.kind) && !envelope) envelope = await this.envelopeFor(row.id, view, dest);
     const { content, renderKey } = await this.render(view, dest, envelope, base, titleOnly,
-      renew ? "上一次点下去的那件事办完了，这件事还等着你：可以再点一次，经过在 ash 里。" : undefined);
+      renew ? "上一次点下去的那件事办完了，这件事还等着你：可以再点一次，经过在 Navi 里。" : undefined);
     await db.update(imOutbox).set({
       content,
       renderKey,

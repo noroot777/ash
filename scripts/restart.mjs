@@ -212,7 +212,7 @@ if (old.length) {
 if (!(await waitPortQuiet(PORT))) {
   const answers = Boolean(await localJson(PORT, "/api/health"));
   say(answers
-    ? `  ✕ :${PORT} 上仍有一个 ash 在应答,没能让它下线 —— 已中止,未重启服务端。`
+    ? `  ✕ :${PORT} 上仍有一个 Navi 在应答,没能让它下线 —— 已中止,未重启服务端。`
     : `  ✕ :${PORT} 仍被占着(连得上、但不应答),没能让它下线 —— 已中止,未重启服务端。`);
   say(`     (新代码已 build 进 dist,不会丢;继续跑的是旧代码。)`);
   if (old.length) say(`     试过 kill:${old.join(", ")} —— 它没退,或者占着端口的根本是别的进程。`);
@@ -294,7 +294,7 @@ if (ready) {
   process.exit(1);
 }
 
-say("▶ 3/3 刷新 ash MCP…");
+say("▶ 3/3 刷新 Navi MCP…");
 // 谁手里还握着 MCP 通道。**在服务端重启完之后才问**:此刻接管已经做完,答案是最新的。
 // server 没起来/老版本没这个字段算 0,退回原来的行为;**服务端拒答则当作「有人握着」**
 // —— 掐断在跑的 agent 是不可逆的,不知道就别掐(第 1 轮审查 P1 的同一条判据)。
@@ -304,7 +304,7 @@ const mcpWhy = noVerdictReason(after);
 const mcpUnknown = mcpWhy !== null;
 const holders = countOf(after, "mcpDisrupted");
 if (options.skipMcp) {
-  say("  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 ash MCP 的会话不会被打断。");
+  say("  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 Navi MCP 的会话不会被打断。");
   say("     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 --skip-mcp / SKIP_MCP 再跑一次。)");
 } else if (mcpUnknown && !options.forceMcp && !FORCE) {
   say(`  ⏭ 问不到「谁还握着 MCP 通道」(${mcpWhy}),已跳过刷新 —— 宁可让旧会话跑旧 mcp,也不冒险掐断在跑的 agent。`);
@@ -313,7 +313,7 @@ if (options.skipMcp) {
   // 默认不掐断正在干活的 agent:刷新 MCP 的收益只是"旧会话用上新 mcp 代码",
   // 代价却是它这一轮的交卷调用当场失败(2026-08-06 验证白跑)。收益远小于代价,
   // 所以默认让路,并把出路说清楚。
-  say(`  ⏭ 有 ${holders} 个正在干活的 agent 手里握着 ash MCP 通道,已跳过刷新以免掐断它们的交卷。`);
+  say(`  ⏭ 有 ${holders} 个正在干活的 agent 手里握着 Navi MCP 通道,已跳过刷新以免掐断它们的交卷。`);
   for (const t of after.mcpDisrupted.slice(0, 8)) say(`     · ${t.title} (pid ${t.pid})`);
   say(`     (:${PORT} 已经是新代码;这些会话仍跑旧 mcp/dist。)`);
   say(`     改了 mcp/ 需要立刻生效:  ${restartCommand("--force-mcp")}`);
@@ -328,4 +328,4 @@ if (options.skipMcp) {
   }
 }
 
-say("✅ 完成。提示:已经开着的 Codex/Claude 会话要重连或重开,才会用上新的 ash MCP。");
+say("✅ 完成。提示:已经开着的 Codex/Claude 会话要重连或重开,才会用上新的 Navi MCP。");

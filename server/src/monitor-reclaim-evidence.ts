@@ -608,7 +608,7 @@ export function stateNote(state: ReclaimState): string {
   if (state === "superseded")
     return "原进程已不存在：这个号已被原进程之后才起来的另一个进程占用（号被复用 ⇒ 原进程与原进程组都已结束），"
       + "记号在任何活进程上都读不到 —— 能追的线索到此为止。"
-      + "前提：系统时钟没有被拨动超过一小时（号上进程比 ash 记下这笔账时晚起一小时以上才算换代；"
+      + "前提：系统时钟没有被拨动超过一小时（号上进程比 Navi 记下这笔账时晚起一小时以上才算换代；"
       + "这个前提无法自证，用户 2026-11-13 知情接受，判据见 rootSuperseded）";
   if (state === "not-ours") return "这个号现在是另一个进程，原进程退出无法确认";
   if (state === "suspected")

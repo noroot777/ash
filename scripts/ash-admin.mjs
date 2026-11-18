@@ -24,7 +24,7 @@ const DB_FILE = process.env.ASH_DB
 
 if (!existsSync(DB_FILE)) {
   console.error(`找不到数据库:${DB_FILE}`);
-  console.error("请在跑着 ash 的那台机器上、仓库根目录执行;或用 ASH_DB=<路径> 指定。");
+  console.error("请在跑着 Navi 的那台机器上、仓库根目录执行;或用 ASH_DB=<路径> 指定。");
   process.exit(1);
 }
 
@@ -60,7 +60,7 @@ function requireMulti() {
     process.exit(1);
   }
   if (!tableExists("users")) {
-    console.error("库里还没有 users 表 —— 先启动一次 ash 让它建表。");
+    console.error("库里还没有 users 表 —— 先启动一次 Navi 让它建表。");
     process.exit(1);
   }
 }
@@ -172,14 +172,14 @@ switch (command) {
     break;
   }
   default:
-    console.log("ash 宿主机管理工具(多人模式的逃生门)");
+    console.log("Navi 宿主机管理工具(多人模式的逃生门)");
     console.log("");
     console.log("  node scripts/ash-admin.mjs status          查看模式与用户名单");
     console.log("  node scripts/ash-admin.mjs invite-admin    给第一个管理员发新的领取链接");
     console.log("  node scripts/ash-admin.mjs invite <姓名>   给指定用户发领取链接(作废其旧 key)");
     console.log("  node scripts/ash-admin.mjs promote <姓名>  把某人提升为实例管理员");
     console.log("");
-    console.log("这些命令直接操作数据库文件,不需要停掉 ash。");
+    console.log("这些命令直接操作数据库文件,不需要停掉 Navi。");
     process.exit(command ? 1 : 0);
 }
 

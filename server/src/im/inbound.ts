@@ -168,8 +168,8 @@ export class InboundRouter {
       ? { receiveType: "open_id", receiveId: row.openId, recipientOpenId: row.openId }
       : { receiveType: "chat_id", receiveId: row.chatId, recipientOpenId: null };
     const text = row.state === "dispatching"
-      ? `处理这条消息时${why === "recover" ? " ash 正好重启" : "出了错"}，不确定送到没有：请在 ash 里看一眼，没到的话再发一次。`
-      : why === "recover" ? "ash 停机期间没来得及处理这条消息，请再发一次。" : "处理这条消息时出了错：请在 ash 里看一眼，没办成的话再发一次。";
+      ? `处理这条消息时${why === "recover" ? " Navi 正好重启" : "出了错"}，不确定送到没有：请在 Navi 里看一眼，没到的话再发一次。`
+      : why === "recover" ? "Navi 停机期间没来得及处理这条消息，请再发一次。" : "处理这条消息时出了错：请在 Navi 里看一眼，没办成的话再发一次。";
     const messageId = row.id.replace(/^msg:/, "");
     await this.deps.commands.say({ messageId, dest }, text, SYSTEM_SCOPE, { subject: `r:${messageId}:${why}`, taskId: row.taskId });
   }
@@ -197,12 +197,12 @@ export class InboundRouter {
       await this.record(inboundId, { kind: "bind", detail: claimed.kind });
       return say({
         claimed: claimed.kind === "claimed" && claimed.purpose === "group"
-          ? "收到群绑定码。回到 ash 网页 设置 → 飞书 → 群，点「确认」就绑好了。"
-          : "收到绑定码。回到 ash 网页 设置 → 飞书，核对后点「确认」就绑好了。",
-        unknown: "这串绑定码不对，或已经用过/作废了：在 ash 网页上重新生成一个。",
-        expired: "这串绑定码已过期（10 分钟有效）：在 ash 网页上重新生成一个。",
+          ? "收到群绑定码。回到 Navi 网页 设置 → 飞书 → 群，点「确认」就绑好了。"
+          : "收到绑定码。回到 Navi 网页 设置 → 飞书，核对后点「确认」就绑好了。",
+        unknown: "这串绑定码不对，或已经用过/作废了：在 Navi 网页上重新生成一个。",
+        expired: "这串绑定码已过期（10 分钟有效）：在 Navi 网页上重新生成一个。",
         wrong_place: chatType === "group" ? "这是个人绑定码，请在和我的单聊里发。" : "这是群绑定码，请在要绑定的群里 @ 我发出来。",
-        taken: "这串绑定码已经被别人认领了：在 ash 网页上拒绝那次认领，再重新生成。",
+        taken: "这串绑定码已经被别人认领了：在 Navi 网页上拒绝那次认领，再重新生成。",
         not_owner: "群绑定码要由生成它的那个人自己在群里发（先在单聊里绑好你自己的飞书）。",
       }[claimed.kind]);
     }
@@ -218,8 +218,8 @@ export class InboundRouter {
       )).limit(2);
       if (recent.length > 1) return;
       return say(binding
-        ? "你的 ash 账号已停用或绑定已失效：请在 ash 网页 设置 → 飞书 里重新绑定。"
-        : "你还没绑定 ash：在 ash 网页 设置 → 飞书 → 绑定 里生成绑定码，把它发给我。");
+        ? "你的 Navi 账号已停用或绑定已失效：请在 Navi 网页 设置 → 飞书 里重新绑定。"
+        : "你还没绑定 Navi：在 Navi 网页 设置 → 飞书 → 绑定 里生成绑定码，把它发给我。");
     }
     if (chatType === "p2p" && binding.chatId !== message.chat_id) await updateBinding(principal, { chatId: message.chat_id });
     if (!parsed.supported) {
@@ -276,7 +276,7 @@ export class InboundRouter {
     const group = await groupOf(this.deps.appId, message.chat_id);
     if (!group) {
       await this.record(inboundId, { kind: "group", detail: "unbound" });
-      return say("这个群还没绑定 ash 项目：在 ash 网页 设置 → 飞书 → 群 里绑定。回复任务卡片不受影响。");
+      return say("这个群还没绑定 Navi 项目：在 Navi 网页 设置 → 飞书 → 群 里绑定。回复任务卡片不受影响。");
     }
     const room = await this.deps.relay.groupRoom(ctx, group);
     if ("error" in room) {
@@ -314,14 +314,14 @@ export class InboundRouter {
     const say = (line: string) => this.deps.commands.say(ctx, line, SYSTEM_SCOPE);
     await this.record(row.id, { kind: "form" });
     if (form.kind === "not_yours") return say("这张表单是别人发起的，附件只能由发 /new 的人加。");
-    if (form.kind === "closed") return say("这张表单已经提交过（或过期）了，没带上：在 ash 里给那个任务补上，或者发 /new 重新建。");
+    if (form.kind === "closed") return say("这张表单已经提交过（或过期）了，没带上：在 Navi 里给那个任务补上，或者发 /new 重新建。");
     if (!attachments.length) return say("回复建任务表单只收图片和文件；要做什么写在卡上的输入框里。");
     const room = FORM_ATTACHMENTS_MAX - form.attachments.length;
     if (room <= 0) return say(`这张表单已经带了 ${FORM_ATTACHMENTS_MAX} 个附件，放不下了。`);
     const paths = await this.keep(row, ctx, attachments.slice(0, room), text);
     if (!paths?.length) return;
     const total = await attachToForm(form.envelopeId, paths);
-    if (total === null) return say("这张表单刚提交了，附件没赶上：在 ash 里给那个任务补上，或者发 /new 重新建。");
+    if (total === null) return say("这张表单刚提交了，附件没赶上：在 Navi 里给那个任务补上，或者发 /new 重新建。");
     const skipped = attachments.length > room ? `，另有 ${attachments.length - room} 个超出 ${FORM_ATTACHMENTS_MAX} 个的上限没收` : "";
     await say(`收下 ${paths.length} 个附件（这张表单一共 ${total} 个），提交时一并带上${skipped}。${text.trim() ? "文字没带上：要做什么写在卡上。" : ""}`);
     void this.react(ctx.messageId);
@@ -354,7 +354,7 @@ export class InboundRouter {
     const say = (line: string) => this.deps.commands.say(ctx, line, SYSTEM_SCOPE, { taskId });
     /** 任务接口的报错：他自己这次操作的结局（scope.ts reply），只推标题的项目换成短句。项目按办之前的那一刻。 */
     const answer = await this.deps.commands.answered(ctx, { taskId });
-    const sayError = (line: string) => this.deps.commands.say(ctx, line, answer, { taskId, brief: "没办成，原因见 ash。" });
+    const sayError = (line: string) => this.deps.commands.say(ctx, line, answer, { taskId, brief: "没办成，原因见 Navi。" });
     // 先把回话入队再记结局：中间退出，重办时同一句回话入不了第二次（同 subject）。
     const refuse = async (detail: string, line: string) => {
       await say(line);
@@ -377,7 +377,7 @@ export class InboundRouter {
     }
     if (!explicit && current) {
       const questionKey = await this.questionKeyOf(card);
-      if (!questionKey) return refuse("no_question_key", "认不出这张卡问的是哪道题了：请在 ash 里答复。");
+      if (!questionKey) return refuse("no_question_key", "认不出这张卡问的是哪道题了：请在 Navi 里答复。");
       const items: QuestionItem[] = turn.items;
       const split = text.trim() ? splitNumberedAnswers(text, items.length) : null;
       // 多题没按题号写：整段作为一条答复（与网页上「直接写一段话」同一条路）。只发了附件：答复写明见附件。

@@ -131,7 +131,7 @@ export function ProfileOverridesControl({
           <div className="agent-profile-args-popover-head">
             <div>
               <b>覆盖 CLI 自己的配置</b>
-              <small>{profileName} · 写进 ash 起的这次 CLI 调用，压过它自己的配置文件</small>
+              <small>{profileName} · 写进 Navi 起的这次 CLI 调用，压过它自己的配置文件</small>
             </div>
             <button type="button" onClick={close} aria-label="关闭配置编辑">
               <X size={13} aria-hidden="true" />

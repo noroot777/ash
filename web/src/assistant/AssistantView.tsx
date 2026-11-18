@@ -45,7 +45,7 @@ function AssistantMessage({ message, snapshot, projects, onTask, onSave, saving,
   if (message.role === "system") return <p className="chat-history-note">{message.body}</p>;
   return <article className={`chat-message assistant-message is-${message.role} is-${message.status}`}>
     <span className={`chat-avatar ${message.role === "user" ? "tone-user" : "assistant-avatar"}`}>{message.role === "user" ? "你" : <AssistantIcon size={20} filled />}</span>
-    <div className="chat-message-content"><header><strong>{message.role === "user" ? "你" : "ash 助手"}</strong>{message.role === "agent" && <span className="chat-bot-label">智能体</span>}<time dateTime={message.createdAt}>{localeTime(message.createdAt, [], { hour: "2-digit", minute: "2-digit" })}</time></header>
+    <div className="chat-message-content"><header><strong>{message.role === "user" ? "你" : "Navi 助手"}</strong>{message.role === "agent" && <span className="chat-bot-label">智能体</span>}<time dateTime={message.createdAt}>{localeTime(message.createdAt, [], { hour: "2-digit", minute: "2-digit" })}</time></header>
     {busy ? <p role="status" className="chat-typing"><span><i /><i /><i /></span>{message.status === "queued" ? "已收到，等待回复…" : "正在理解问题、查询资料…"}</p> : <div className="assistant-message-body"><MarkdownBody text={message.body} /></div>}
     {!!result?.queries.length && <p className="assistant-search-note"><MagnifyingGlass size={13} />已检索：{result.queries.join(" · ")}</p>}
     {!!linked.length && <div className="assistant-results" aria-label="相关任务">{linked.map((match) => {
@@ -98,11 +98,11 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
     catch (reason) { setDeleteError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setDeleting(false); }
   };
-  return <section className="chat-shell assistant-shell" aria-label="ash 助手">
+  return <section className="chat-shell assistant-shell" aria-label="Navi 助手">
     <AssistantSidebar rooms={chat.rooms} selectedId={chat.room?.id} ready={chat.ready} sending={chat.sending} projectName={project?.name} onExit={onExit}
       agent={chat.room?.members[0]?.agentType} agentLocked={chat.busy || chat.sending} onConfigure={() => setEditing(true)} onSelect={(id) => { chat.select(id); setEditing(false); setArchiveId(null); }} onNew={() => { setEditing(false); setArchiveId(null); void chat.newConversation(); }} />
     <div className="chat-main assistant-main">
-    {!configure && <header className="chat-header assistant-header"><div className="assistant-heading">{chat.room ? <AssistantConversationTitle key={chat.room.id} name={chat.room.name} onRename={chat.renameConversation}><span className={`chat-connection${chat.connected ? " is-connected" : ""}`} tabIndex={0} role="status" aria-label={chat.connected ? "实时连接" : "连接中，状态可能延迟"} {...connectionTip.anchorProps} /></AssistantConversationTitle> : <h1><AssistantIcon size={23} />ash 助手</h1>}</div>
+    {!configure && <header className="chat-header assistant-header"><div className="assistant-heading">{chat.room ? <AssistantConversationTitle key={chat.room.id} name={chat.room.name} onRename={chat.renameConversation}><span className={`chat-connection${chat.connected ? " is-connected" : ""}`} tabIndex={0} role="status" aria-label={chat.connected ? "实时连接" : "连接中，状态可能延迟"} {...connectionTip.anchorProps} /></AssistantConversationTitle> : <h1><AssistantIcon size={23} />Navi 助手</h1>}</div>
       {chat.room && <button type="button" className="chat-member-count assistant-delete" aria-label={`删除对话：${chat.room.name}`} onClick={() => { setDeleteError(""); setDeleteTarget({ id: chat.room!.id, name: chat.room!.name }); }}><Trash size={17} /></button>}
       <HoverTip at={connectionTip.at}>{chat.connected ? "实时连接" : "连接中，状态可能延迟"}</HoverTip>
     </header>}
@@ -111,7 +111,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
       onConfirm={() => void removeConversation()} onClose={() => { if (!deleting) { setDeleteTarget(null); setDeleteError(""); } }} />}
     {archiveId ? <AssistantArchive key={archiveId} taskId={archiveId} onClose={() => setArchiveId(null)} /> : <>
       <AssistantScroll conversationId={chat.room?.id ?? "assistant"} tailKey={chatTailKey(chat.snapshot?.messages)} followMessages={!!chat.snapshot?.messages.length && !configure}>
-        {!configure && <div className="chat-welcome"><span className="chat-welcome-icon"><AssistantIcon size={32} filled /></span><h2>ash 助手，从一句话开始。</h2><p>问 ash 怎么用，找回一个任务，或搭好起手式。</p>
+        {!configure && <div className="chat-welcome"><span className="chat-welcome-icon"><AssistantIcon size={32} filled /></span><h2>Navi 助手，从一句话开始。</h2><p>问 Navi 怎么用，找回一个任务，或搭好起手式。</p>
           <div>{STARTERS.map(({ label, text }) => <button type="button" key={label} onClick={() => pickStarter(text)}>{label}</button>)}</div>
         </div>}
         {!chat.ready && <p className="assistant-loading" role="status">正在读取助手对话…</p>}
@@ -125,7 +125,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
       {chat.room && !configure && <div className="chat-composer-area">
         <div className="chat-live-line" role="status">{chat.busy ? <><span className="chat-live-dot" />正在回复<button type="button" onClick={() => void chat.stop()}><Stop size={12} weight="fill" />停止回复</button></> : <span>随时可以开始对话</span>}</div>
         <ChatContextNotice context={chat.snapshot?.context} />
-        <div className="chat-composer"><AutoTextarea ref={input} aria-label="给 ash 助手发消息" maxLength={8000} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} placeholder="描述你遇到的问题，或记得的任务内容…" onKeyDown={(event) => { if (isSendKeyEvent(event)) { event.preventDefault(); void chat.send(); } }} />
+        <div className="chat-composer"><AutoTextarea ref={input} aria-label="给 Navi 助手发消息" maxLength={8000} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} placeholder="描述你遇到的问题，或记得的任务内容…" onKeyDown={(event) => { if (isSendKeyEvent(event)) { event.preventDefault(); void chat.send(); } }} />
           <footer><AssistantKnowledge /><span>直接发送，无需 @</span><button type="button" className="chat-send" aria-label="发送给助手" disabled={chat.busy || chat.sending || !chat.draft.trim() || !chat.snapshot} onClick={() => void chat.send()}><ArrowUp size={20} weight="bold" /></button></footer>
         </div><div className="chat-composer-hint">{sendKeys.send} 发送 · {sendKeys.newline} 换行 · /clear 清空上下文</div>
       </div>}

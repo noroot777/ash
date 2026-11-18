@@ -132,13 +132,13 @@ export function silentTurnTripText(facts: StallFacts): string {
  * 队里),这里是用户唯一还能看到它的地方。
  */
 function carriedVerdictText(verdict: StallVerdict, tail: string): string {
-  return "这一回合在上次 ash 运行期间已被判定上游连不上并按失败结算,"
+  return "这一回合在上次 Navi 运行期间已被判定上游连不上并按失败结算,"
     + `${tail}原判决(${verdict.at}):${verdict.reason}`;
 }
 
 /** 「这台 ash 为什么核不了自己的判决」—— 同理,只有一份。 */
 function unverifiableText(why: string, tail: string): string {
-  return "这一回合是上次 ash 中断时留下的,而本次启动读不出熔断判决日志"
+  return "这一回合是上次 Navi 中断时留下的,而本次启动读不出熔断判决日志"
     + `(${why}),无法确认它当时有没有被判定上游连不上并按失败结算。${tail}`;
 }
 
@@ -195,7 +195,7 @@ export function progressUnreadableText(): string {
  */
 export function stallVolatileVerdictText(): string {
   return "注意:这个结论没能写进磁盘(多半是磁盘满或权限问题),"
-    + "如果 ash 在本回合结算完之前重启,它可能重新显示成已完成 —— 以这条诊断为准。";
+    + "如果 Navi 在本回合结算完之前重启,它可能重新显示成已完成 —— 以这条诊断为准。";
 }
 
 /** 兜底档的文案:终止请求没生效,这一轮是被**回收句柄**结束的 —— 如实说,别冒充前一句。 */

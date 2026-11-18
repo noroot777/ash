@@ -39,7 +39,7 @@ export type ChatInvokeOptions =
 
 export class AssistantToolError extends Error {
   constructor(tool: string) {
-    super(`助手调用了未开放的工具（${JSON.stringify(tool.slice(0, 80))}）。查询和配置由 ash 内置能力处理；请重新发送消息重试。`);
+    super(`助手调用了未开放的工具（${JSON.stringify(tool.slice(0, 80))}）。查询和配置由 Navi 内置能力处理；请重新发送消息重试。`);
     this.name = "AssistantToolError";
   }
 }

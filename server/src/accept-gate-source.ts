@@ -268,7 +268,7 @@ async function resolveRecording(base: string, components: string[], record: (lin
 
 export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, "identity.source"),
   prepared = false): Promise<GateSource> {
-  if (physicalPath(cwd) === physicalPath(RUNS_DIR)) throw new Error("项目目录不能与 ash 运行产物目录相同");
+  if (physicalPath(cwd) === physicalPath(RUNS_DIR)) throw new Error("项目目录不能与 Navi 运行产物目录相同");
   const commit = await commitAt(cwd, "HEAD");
   const hash = sourceHash();
   const dependencies: string[] = [];
@@ -297,7 +297,7 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     const { paths, filters } = changes.unverified;
     if (paths.length) {
       throw new Error(`任务工作区里有 ${paths.length} 个文件（${paths.slice(0, 5).join("、")}${paths.length > 5 ? "…" : ""}）`
-        + `要经过项目配置的过滤器（${filters.join("、")}）才能确认改没改，ash 不在验收前置命令之外运行项目程序，`
+        + `要经过项目配置的过滤器（${filters.join("、")}）才能确认改没改，Navi 不在验收前置命令之外运行项目程序，`
         + "所以没法确认工作区就是已提交的那份；请在任务工作区自己运行一次 git status（它按项目配置核对并刷新记录），"
         + "或提交这些文件，再验收");
     }

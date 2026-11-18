@@ -70,13 +70,13 @@
 | `server/scripts/test-monitor-end-owed.ts` | 「还欠着一声结束的哨兵,名下的行谁都领不走」(monitor-end-owed.ts,第 5 轮审查 1)。 | 绿 18s |  |
 | `server/scripts/test-monitor-intent-handover.ts` | **创建意图行的责任接管** —— 第 19 轮审查 F2 的回归。 | 绿 19s |  |
 | `server/scripts/test-monitor-merge-window.ts` | 「最后一批输出 + 结束」并成一次唤醒(monitor-events.ts 的合并窗口),外加哨兵时间线记录带上 monitorId。 | 绿 32s |  |
-| `server/scripts/test-monitor-offline.ts` | 哨兵**跨 ash 重启**那一半的回归:进程活过重启、停服期间跑完的活要补完、补读到的证据要 折进结局。 | 绿 20s |  |
+| `server/scripts/test-monitor-offline.ts` | 哨兵**跨 Navi 重启**那一半的回归:进程活过重启、停服期间跑完的活要补完、补读到的证据要 折进结局。 | 绿 20s |  |
 | `server/scripts/test-monitor-reclaim-debt.ts` | **撤销是一段时间,而「停止函数正常返回」不等于资源已经回收。 | 绿 43s |  |
 | `server/scripts/test-monitor-reclaim-unit.ts` | **记号凭证这一问:每次创建独有的那条资源记号,到底能签发什么。 | 绿 32s |  |
 | `server/scripts/test-monitor-settle-handover.ts` | **收尾交接的那一族回归** —— 第 21、22、23 轮审查钉下来的那几幕,从 `test-monitor-intent-handover.ts` 拆出来(全局约定:单文件不超过 700 行)。 | 绿 33s |  |
 | `server/scripts/test-monitor-unit-proof.ts` | **记号这一问答得有多实,以及最后那份身份有没有真的落盘** —— 第 14 轮审查两条拦验收项的回归。 | 绿 41s |  |
 | `server/scripts/test-monitors.ts` | 哨兵（Monitor）这个功能本身的回归：起、推、合并、停、回看、闸。 | 绿 17s |  |
-| `server/scripts/test-preview-process.ts` | 预览进程的两条生命线：ash 自己的 dev 脚本不能在拉起 vite 后因 TDZ 崩掉； | 绿 18s |  |
+| `server/scripts/test-preview-process.ts` | 预览进程的两条生命线：Navi 自己的 dev 脚本不能在拉起 vite 后因 TDZ 崩掉； | 绿 18s |  |
 | `server/scripts/test-process-identity.ts` | 「这个号此刻还是它吗」—— kill / cleanup 的进程身份判据(第 1 轮审查 F2)。 | 绿 34s |  |
 | `server/scripts/test-project-commands.ts` | 常用命令回归:命令会话的生命周期(活着豁免闲置回收 / 退出落 exitCode / 退出后回到 普通回收轨道)+ parseProjectCommands 的校验 + service 的停止命令(脚本先跑、杀进程兜底、 脚本失败不偷偷强杀、启动脚本自退的形状也停得掉)。 | 绿 37s |  |
 | `server/scripts/test-singleton.ts` | Single-instance startup guard regression test. Requires a built server because it validates the production entrypoint: | 绿 21s |  |
@@ -99,19 +99,19 @@
 
 | 文件 | 保什么 | 11-13 普查 | 备注 |
 |---|---|---|---|
-| `mcp/scripts/test-read-transcript.mjs` | 端到端验证 read_task_transcript：起真实的 mcp/dist/index.js，ASH_URL 指向一个**假 ash**（固定语料，不碰真库），然后按断言逐条核对它拼出来的对话。 | 绿 1s |  |
-| `mcp/scripts/test-reconnect.mjs` | 端到端验证 MCP 的重启重试： 1. 起真实的 mcp/dist/index.js，ASH_URL 指向一个没人监听的端口 2. 立刻发一个 tools/call（此刻必然 ECONNREFUSED） 3. 3 秒后才把一个假 ash 拉起来 4. 断言：调用最终成功（说明它等过去了），且 s… | 绿 4s |  |
+| `mcp/scripts/test-read-transcript.mjs` | 端到端验证 read_task_transcript：起真实的 mcp/dist/index.js，ASH_URL 指向一个**假 Navi**（固定语料，不碰真库），然后按断言逐条核对它拼出来的对话。 | 绿 1s |  |
+| `mcp/scripts/test-reconnect.mjs` | 端到端验证 MCP 的重启重试： 1. 起真实的 mcp/dist/index.js，ASH_URL 指向一个没人监听的端口 2. 立刻发一个 tools/call（此刻必然 ECONNREFUSED） 3. 3 秒后才把一个假 Navi 拉起来 4. 断言：调用最终成功（说明它等过去了），且 s… | 绿 4s |  |
 | `mobile/scripts/test-reply-command-ui.mjs` | （文件头没有说明；跑完打印）screenshots: ${shots} | 绿（已修） 17s | (b) 缺 mobile/dist 时直说先 build:mobile |
 | `mobile/scripts/test-web-smoke.mjs` | SDK 升级后的渲染冒烟：把 worktree 自己的 `mobile/dist`（expo export -p web 的产物） 挂在临时端口上，用 headless Chromium 逐条路由打开，断言「React 真的挂载出了内容」且 控制台没有报错。 | 绿（已修） 17s | (b) 改用系统 Chrome + 自带假后端（原来依赖 playwright 下载的浏览器、反代 live :4317）；需先 build:mobile |
 | `scripts/test-process-ownership.mjs` | （文件头没有说明；跑完打印）process ownership regressions ok | 绿（并发下闪红） 42s | 单并发绿；并行时 setsid 后代先没了 |
 | `server/scripts/test-assistant-live.ts` | （文件头没有说明；跑完打印）assistant live passed: ${cases.length} 个真实 Claude 回合，无工具事件或工具重试 | 有意不跑 | 设计上就要调用真实 Claude 模型（需 ASH_ALLOW_REAL_AGENT=1） |
 | `server/scripts/test-chat-cli.ts` | （文件头没有说明；跑完打印）${agentType} real CLI chat passed: ${answer.reply} | 有意不跑 | 设计上调用真实 CLI 跑模型回合（需 ASH_CHAT_SMOKE=1） |
 | `server/scripts/test-claude-goal-live.ts` | （文件头没有说明；跑完打印）real Claude /goal stayed connected through ${working.length} locally mocked working turns; private context cleaned | 绿 | 真 claude + 本地假上游（禁外网档跑） |
-| `server/scripts/test-claude-relay-settings-live.ts` | 用真 Claude CLI 打本地假上游，验证 ash 供应商配置不会被用户级 settings / CC Switch 覆盖。 | 绿（已修） | 真 claude + 本地假上游；假上游没放行 CLI 的 HEAD /api/hello 探测，崩了还留下真 claude 进程 |
+| `server/scripts/test-claude-relay-settings-live.ts` | 用真 Claude CLI 打本地假上游，验证 Navi 供应商配置不会被用户级 settings / CC Switch 覆盖。 | 绿（已修） | 真 claude + 本地假上游；假上游没放行 CLI 的 HEAD /api/hello 探测，崩了还留下真 claude 进程 |
 | `server/scripts/test-claude-settings-live.ts` | 拿**真 claude** 对一遍 `claude-settings.ts` 里那套分层假设。 | 绿 | 真 claude，钩子在会话初始化就杀，不调模型（禁外网档跑） |
 | `server/scripts/test-codex-archive-live.ts` | （文件头没有说明；跑完打印）✓ 终端 codex unarchive 可恢复归档，不启动模型回合 | 绿 | 真 codex + 本地假 provider；沙箱下 codex 的联网探测被挡，沙箱外绿 |
 | `server/scripts/test-codex-goal-bridge.ts` | （文件头没有说明；跑完打印）Codex multi-turn goal, early completion, late verdict, startup failure, review lifecycle, fork, fast override: passed | 留给用户 1s | 红：/review 完成事件早于 review/start 应答到达时永不结算（aaa2002d 去掉了 completeTurn 对应答的等待）；import 已修 |
-| `server/scripts/test-goal-native-live.ts` | （文件头没有说明；跑完打印）real ash continuation: plan scope, side-turn isolation, native multi-turn goal, durable budget pause and inspection: pas | 绿 | 同上 |
+| `server/scripts/test-goal-native-live.ts` | （文件头没有说明；跑完打印）real Navi continuation: plan scope, side-turn isolation, native multi-turn goal, durable budget pause and inspection: pas | 绿 | 同上 |
 | `server/scripts/test-kimi-live.ts` | （文件头没有说明；跑完打印）kimi ${version} live CLI tests passed: tools, MCP identity, effort, session resume, auth failure | 绿 | 真 kimi + 本地假上游（禁外网档跑） |
 | `server/scripts/test-launch-abandon-races.ts` | （文件头没有说明；跑完打印）test-launch-abandon-races: all assertions passed | 绿（并发下闪红） 3s | 单并发绿；6 路并行时叶子进程组被 SIGKILL，留下 worker.cjs |
 | `server/scripts/test-preview-static.ts` | （文件头没有说明；跑完打印）preview-static 全部通过；临时目录已清理 | 绿（并发下闪红） 1s | 终轮 6 路并行红，单并发复跑绿 |

@@ -119,7 +119,7 @@ export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagno
   const raw = failure.error?.message?.trim() || diagnostics?.failureReason?.trim() || "";
   const quote = raw ? excerpt(raw) : null;
   const judged = failure.verdict?.reason?.trim();
-  const said = quote ? `执行器的原话：「${quote}」` : judged ? `ash 的判断：「${excerpt(judged)}」` : "";
+  const said = quote ? `执行器的原话：「${quote}」` : judged ? `Navi 的判断：「${excerpt(judged)}」` : "";
   const exit = failure.exitStatus !== 0 ? `执行器以 exit ${failure.exitStatus} 结束` : "";
   const model: ModelFailure | null = failure.error?.model ?? (failure.verdict?.kind === "tripped" ? failure.verdict.model ?? null : null);
   if (model) {

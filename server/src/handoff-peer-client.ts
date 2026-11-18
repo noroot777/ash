@@ -96,7 +96,7 @@ export async function fetchPeer<T>(
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new HandoffError(`连不上对端 ash（${url}）：${msg}`, 502, true);
+    throw new HandoffError(`连不上对端 Navi（${url}）：${msg}`, 502, true);
   }
   const payload = (await res.json().catch(() => null)) as
     { error?: string; ash?: boolean; code?: string } | null;
@@ -161,7 +161,7 @@ export async function probePeerIdentity(rawTargetUrl: string, timeoutMs = 2_000)
     response = await fetchReadOnlyProbe(url, {}, timeoutMs);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new HandoffError(`连不上对端 ash（${url}）：${message}`, 502, true);
+    throw new HandoffError(`连不上对端 Navi（${url}）：${message}`, 502, true);
   }
   const body = (await response.json().catch(() => null)) as Partial<HandoffIdentity> | null;
   if (!response.ok || !body || typeof body.fingerprint !== "string"
@@ -232,7 +232,7 @@ export interface HandoffReturnContext {
 }
 
 const identityRecoveryGuidance = (returnContext?: HandoffReturnContext): string => returnContext
-  ? "任务来源指纹保存在这条任务的接力记录里，设置页没有可清除项。确认是同一台来源机时，请先恢复来源机原来的 ash 数据和身份；若身份无法恢复，不要忽略校验直接移回，应在本机继续任务并手工迁移。"
+  ? "任务来源指纹保存在这条任务的接力记录里，设置页没有可清除项。确认是同一台来源机时，请先恢复来源机原来的 Navi 数据和身份；若身份无法恢复，不要忽略校验直接移回，应在本机继续任务并手工迁移。"
   : "确认无误再到「设置 → 默认规则」清掉记住的指纹重新配对。";
 
 /**
@@ -278,7 +278,7 @@ export async function pingPeer(
     ping = await fetchPeer<HandoffPingResponse>(plainPing, { expectedPeerFp: expectedFp });
   }
   if (!ping?.ok || ping.service !== "ash") {
-    throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
+    throw new HandoffError("对端不是 Navi（/api/handoff/ping 应答不对）", 502);
   }
   // 对端是多人实例、而这次没认出我是谁(没配 key 或 key 已失效):在这里就说清楚。
   // 不说的话用户看到的是「对端一个项目都没有」——那是最容易被误读成「对端没建项目」

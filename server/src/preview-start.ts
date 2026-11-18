@@ -24,7 +24,7 @@ export interface PreviewStartOptions {
   proxy?: boolean;
 }
 
-const CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）";
+const CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / Navi 重启）";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function runPreview(

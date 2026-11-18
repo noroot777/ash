@@ -231,7 +231,7 @@ try {
     assert.deepEqual(await tripped.cause(), { kind: "interrupted", reason: "回合长时间没有进展，被自动终止" });
     assert.doesNotMatch(tripped.timeline(), /上游连不上|等上游恢复|限流/, "类型缺了不替它编一个会自己恢复的原因");
     // 执行器一句话都没说：熔断诊断是 ash 自己的判断，进说明但标明是谁说的，不当成执行器的原话。
-    assert.match(tripped.timeline(), /ash 的判断：「15 分钟里只收到重试类错误」/);
+    assert.match(tripped.timeline(), /Navi 的判断：「15 分钟里只收到重试类错误」/);
     assert.match(tripped.timeline(), /先看上面的判断弄清卡在哪里/);
     assert.doesNotMatch(tripped.timeline(), /执行器的原话/);
     assert.equal((await tripped.stored())?.said, undefined, "结构里的原话只放执行器说的");

@@ -143,7 +143,7 @@ try {
   const asked = waiting.output();
   assert.match(asked, /会打断 2 个任务/, "a task in both lists counts once");
   assert.match(asked, /排队的任务 —— 会被判失败：排队中/);
-  assert.match(asked, /握着 MCP 的任务 —— 手里握着 ash MCP/);
+  assert.match(asked, /握着 MCP 的任务 —— 手里握着 Navi MCP/);
   assert.match(asked, /等它们跑完再装,现在装/);
   await delay(800);
   assert.equal(alive(fake), true, "waiting leaves the service alone");
@@ -227,7 +227,7 @@ try {
   const backupsBefore = backups().length;
   result = await drive(["update", "10"], { extraEnv: { LOCK_TIMEOUT: "1" } });
   assert.equal(result.status, 1, result.out);
-  assert.match(result.out, /REPORT 另一处正在起 ash 服务/);
+  assert.match(result.out, /REPORT 另一处正在起 Navi 服务/);
   assert.equal(alive(fake), true, "the service is not stopped while someone else is starting one");
   assert.equal(backups().length, backupsBefore);
   process.kill(-locker.pid, "SIGKILL"); // 整组：只杀 lockf 的话，它里面那个 node 还要再活一分钟
@@ -278,7 +278,7 @@ try {
   setImpact({ ...clear, interrupted: [{ id: "a", title: "排队的任务", reason: "排队中" }] });
   fake = await startFake();
   result = await drive(["quit", "5"], { answers: "cancel" });
-  assert.match(result.out, /ASK .*退出 ash 时 Sparkle 会把下好的新版装上.*\| 等它们跑完再装,现在装,取消/);
+  assert.match(result.out, /ASK .*退出 Navi 时 Sparkle 会把下好的新版装上.*\| 等它们跑完再装,现在装,取消/);
   assert.match(result.out, /REPLY false/);
   assert.equal(alive(fake), true);
   const quitWaiting = driveAsync(["quit", "15", "drain"], "wait");
@@ -433,7 +433,7 @@ try {
   fake = await startFake();
   result = await drive(["stale", "10"]);
   assert.equal(result.status, 0, result.out);
-  assert.match(result.out, /HOLD 正在换成新版的 ash 服务[\s\S]*RELEASE[\s\S]*PROCEED[\s\S]*PHASE idle LAUNCH-HOLD none/,
+  assert.match(result.out, /HOLD 正在换成新版的 Navi 服务[\s\S]*RELEASE[\s\S]*PROCEED[\s\S]*PHASE idle LAUNCH-HOLD none/,
     "after replacing a stale service the gate opens again so the window starts the new one");
   console.log("PASS: a service started by an older build is recognised and replaced through the gate");
 

@@ -394,7 +394,7 @@ api.patch("/tasks/:id", async (c) => {
       // 兼容已启动、尚未带 source-task-id 的本任务 MCP：仍须用目标任务的当前 token。
       if (!turnToken) {
         return c.json({
-          error: "运行中的任务缺少 ash 回合身份；外部 MCP 客户端不能修改运行中任务，请等任务空闲后再试",
+          error: "运行中的任务缺少 Navi 回合身份；外部 MCP 客户端不能修改运行中任务，请等任务空闲后再试",
         }, 409);
       }
       if (!existing.activeTurnToken || turnToken !== existing.activeTurnToken) {

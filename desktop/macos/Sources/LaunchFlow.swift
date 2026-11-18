@@ -34,7 +34,7 @@ extension BrowserWindowController {
     }
     pendingStartingScreen?.cancel()
     let starting = DispatchWorkItem { [weak self] in
-      self?.offlineView.show(title: "正在启动 ash 服务…", detail: AshConfig.baseURL.absoluteString, busy: true)
+      self?.offlineView.show(title: "正在启动 Navi 服务…", detail: AshConfig.baseURL.absoluteString, busy: true)
     }
     pendingStartingScreen = starting
     if !quietly { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: starting) }
@@ -76,7 +76,7 @@ extension BrowserWindowController {
           NSWorkspace.shared.activateFileViewerSelecting([backup])
         }, at: 0)
       }
-      offlineView.show(title: "ash 服务没起来", detail: detail, actions: actions)
+      offlineView.show(title: "Navi 服务没起来", detail: detail, actions: actions)
       startHealthPolling()
     }
   }
@@ -103,7 +103,7 @@ extension BrowserWindowController {
       guard let self else { return }
       switch choice {
       case .fresh:
-        self.firstRunView.setBusy(.fresh, detail: "正在启动 ash…")
+        self.firstRunView.setBusy(.fresh, detail: "正在启动 Navi…")
         ServerLauncher.shared.freshStartApproved = true
         self.loadHome(quietly: true)
       case .importData:
@@ -119,7 +119,7 @@ extension BrowserWindowController {
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.allowsMultipleSelection = false
-    panel.message = "选一份 ash 的数据目录（里面有 ash.db，比如仓库里的 data/）"
+    panel.message = "选一份 Navi 的数据目录（里面有 ash.db，比如仓库里的 data/）"
     panel.prompt = "导入"
     panel.beginSheetModal(for: window) { [weak self] response in
       guard response == .OK, let url = panel.url else { return }
@@ -138,7 +138,7 @@ extension BrowserWindowController {
     }
     guard let pid = source.livePID else { runImport(source); return }
     let alert = NSAlert()
-    alert.messageText = "这份数据正被另一份 ash 用着（进程 \(pid)）"
+    alert.messageText = "这份数据正被另一份 Navi 用着（进程 \(pid)）"
     alert.informativeText = "导入的是它此刻的快照，之后它那边的变化不会过来。它手上在跑的任务仍归它管，"
       + "导进来的那一份只记作暂停，不会去接管。打算从此改用 app 的话，先停掉它（kill \(pid)）再导入更干净。"
     alert.addButton(withTitle: "仍然导入")
@@ -177,7 +177,7 @@ extension BrowserWindowController {
     guard !lines.isEmpty, let window else { return }
     let alert = NSAlert()
     alert.messageText = "导入好了，有些事没有接着做"
-    alert.informativeText = "导入不是接管：原来那份 ash 手上的活仍归它，这里不会替它续跑。\n\n"
+    alert.informativeText = "导入不是接管：原来那份 Navi 手上的活仍归它，这里不会替它续跑。\n\n"
       + lines.joined(separator: "\n") + "\n\n要在这里接着做，到对应的任务里继续或重新打开。"
     alert.beginSheetModal(for: window)
   }
