@@ -7,11 +7,12 @@ import type { Hono } from "hono";
 import { publicSuggestions, type DispatchSuggestionLaunchInput } from "@ash/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { turnIdentity } from "./turn-lock.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { normalizeSuggestions, suggestionRoomError, updateSuggestions, withoutSuggestions } from "./dispatch-suggestion.js";
+import { normalizeSuggestions, suggestionRoomError, turnWriteGuard, updateSuggestions, withoutSuggestions } from "./dispatch-suggestion.js";
 import { launchSuggestions, normalizeSuggestionLaunch } from "./dispatch-suggestion-launch.js";
 
 export function mountDispatchSuggestionRoutes(api: Hono): void {
@@ -46,9 +47,10 @@ api.post("/tasks/:id/dispatch-suggestions", async (c) => {
   const written = await updateSuggestions(taskId, (current) => {
     room = suggestionRoomError(current.length, items.length);
     return room ? null : [...current, ...items];
-  });
+  }, db, turnWriteGuard(r));
   if (room) return c.json({ error: room }, 409);
-  if (!written) return c.json({ error: "not found" }, 404);
+  // 入口核过之后、写进去之前，任务停了、回合结束了或用户换了方向：这一批是旧方向下的，不挂。
+  if (!written) return c.json({ error: "这一轮的回合或方向已经变了（任务停了、回合结束了或用户补了新要求），已拒绝写入" }, 409);
   await publishTaskUpdated(taskId);
   return c.json({
     suggested: items.length, ids: items.map((item) => item.id),
@@ -76,9 +78,12 @@ api.post("/tasks/:id/dispatch-suggestions/launch", async (c) => {
   const blocked = handoffBlockReason(task.handoff);
   if (blocked) return c.json({ error: blocked, handoff: true }, 409);
   if (task.mode !== "single" || task.parentId) return c.json({ error: "只有普通任务能派出可以派出去的活" }, 409);
-  const launch = normalizeSuggestionLaunch(b, await executorScopeForOwner(task.ownerUserId));
+  // 新任务归按「派出去」的这个人（同 POST /tasks）：交给谁按**他**看得见的执行器核，跟建任务用同一个归属人。
+  // 按来源任务的归属人核，共享项目里别人的任务上他选的非默认执行器会被悄悄换成默认。
+  const owner = ownerIdOf(actorOf(c));
+  const launch = normalizeSuggestionLaunch(b, await executorScopeForOwner(owner));
   if ("error" in launch) return c.json({ error: launch.error }, 400);
-  const result = await launchSuggestions(c, task, launch);
+  const result = await launchSuggestions(c, task, owner, launch);
   return c.json(result.body, result.status);
 });
 }

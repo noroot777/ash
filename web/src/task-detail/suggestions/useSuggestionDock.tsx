@@ -24,6 +24,20 @@ import {
 
 const DRAWER_KEY = "suggestion:";
 
+/**
+ * 两种开工起点（同回复框里「派出去」，replyCall.ts），主分支那一种排在前面。这条任务的分支已经没了（验收后清掉）
+ * 时那份 helper 一种都不给，派出去就落到项目此刻检出的那一支；建议本来说的是「从主分支开工」，主分支还在就照它。
+ */
+function suggestionBaseOptions(task: Task, context: Parameters<typeof dispatchBaseOptions>[1]) {
+  const trunkFirst = (id: string) => (id === "trunk" ? 0 : 1);
+  const options = [...dispatchBaseOptions(task, context)].sort((left, right) => trunkFirst(left.id) - trunkFirst(right.id));
+  if (options.length || !context?.isRepo || !context.worktreeDefault) return options;
+  const trunk = task.mergeTargetBranch?.trim() || context.current;
+  return trunk && trunk !== context.current && context.branches.includes(trunk)
+    ? [{ id: "trunk" as const, label: `从 ${trunk} 开工`, worktreeBase: trunk }]
+    : options;
+}
+
 export function useSuggestionDock({ task, enabled, value, setValue, attachments, uploading, snapshotSent, dispatchTarget, focus }: {
   task: Task;
   /** 这个框派得出去（普通任务、没归档）。 */
@@ -50,9 +64,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
 
   const list = enabled ? (task.dispatchSuggestions ?? []).filter((item) => !gone.has(item.id)) : [];
   const baseContext = useDispatchBaseContext(task.projectId, list.length > 0);
-  // 两种开工起点（同回复框里「派出去」，replyCall.ts）；主分支那一种排在前面。
-  const trunkFirst = (id: string) => (id === "trunk" ? 0 : 1);
-  const options = [...dispatchBaseOptions(task, baseContext.value)].sort((left, right) => trunkFirst(left.id) - trunkFirst(right.id));
+  const options = suggestionBaseOptions(task, baseContext.value);
   const bases = options.map((option) => ({ id: option.id as DispatchSuggestionBase, label: option.id === "here" ? "接着这条的代码" : option.label }));
   const fallback: DispatchRunTarget = dispatchDefaultTarget({ ...task, dispatchTarget })
     ?? { agentType: (task.agentType ?? "claude") as AgentType, executorId: null, model: null, reasoningEffort: null };

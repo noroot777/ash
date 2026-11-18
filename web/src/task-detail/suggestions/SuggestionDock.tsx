@@ -7,6 +7,7 @@ import type { KeyboardEvent } from "react";
 import type { AgentExecutorProfile, AgentType } from "@ash/shared";
 import { DISPATCH_ORDER_LABEL, type DispatchOrder, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import type { DispatchSuggestionBase } from "@ash/shared/dispatch-suggestion";
+import { sameExecutor } from "@ash/shared/executors";
 import { ArrowBendUpRight, CaretDown, X } from "@phosphor-icons/react";
 import { RunTargetPicker } from "../../components/RunTargetPicker.tsx";
 import { executorRunSummary } from "../../lib/agentAvailability.ts";
@@ -77,9 +78,11 @@ function Row({ row, at, props }: { row: SuggestionRow; at: number | null; props:
           effort={summary.effort ?? ""}
           variant="chip"
           disabled={busy}
+          // 换了执行器（同类型的另一个 profile 也算）智能水平回到跟随：旧档位在新配置上未必有（同 useReplyCall.ts）。
           onCommit={(next) => props.onRetarget(row.id, {
             agentType: next.agent, executorId: next.executorId, model: next.model,
-            reasoningEffort: next.agent === target.agentType ? target.reasoningEffort : null,
+            reasoningEffort: sameExecutor({ agentType: next.agent, executorId: next.executorId }, { agentType: target.agentType, executorId })
+              ? target.reasoningEffort : null,
           })}
           onEffortChange={(effort) => props.onRetarget(row.id, { ...target, reasoningEffort: effort || null })}
         />

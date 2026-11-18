@@ -9,6 +9,8 @@
 // ③ 好几件：平时一行「N 件可以派出去」，点开一行一件；叉掉一件打 DELETE；「一个接一个」+「全部派出去」；
 //    收起那一段 = 退出选中；
 // ④ 框顶只有一行：叫着人时让给叫人那一行、不叫了回来；有驳回等裁定时让给裁定那一行；
+// ⑥ 这条任务的分支已经清掉了：「接着这条的代码」没了，建议说的从主分支开工照旧落在合入目标上，
+//    不落到项目此刻检出的那一支；
 // ⑤ `/派` 在句中：从菜单里选中只拿掉命令（两边空格并成一个）、光标留在原处、叫上次那个人停在「派出去」；
 //    `/讨论` 句中也出；a/b、web/、http:// 不弹；输入法组字时不弹；句中敲全了 `/派` 没从菜单选、直接发 = 原样发出去。
 // 跑法：npm -w web run test:dispatch-suggestion-dom
@@ -37,7 +39,7 @@ try {
     if (path === "/projects") return json([{ id: "p1", name: "p1", useWorktreeDefault: true }]);
     if (path === "/projects/p1/health") return json({ isRepo: true });
     if (path === "/projects/p1/branches") {
-      return json({ branches: ["main", "ash/t-one", "ash/t-arm", "ash/t-three", "ash/t-ruling", "ash/t-slash"], current: "main" });
+      return json({ branches: ["main", "ash/t-one", "ash/t-arm", "ash/t-three", "ash/t-ruling", "ash/t-slash", "release"], current: "main" });
     }
     let match = /^\/tasks\/([^/]+)\/dispatch-suggestions\/launch$/.exec(path);
     if (match) {
@@ -170,6 +172,16 @@ try {
   // ④ 有驳回等裁定：框顶是裁定那一行。
   await scope("ruling").getByRole("group", { name: "怎么裁定这条驳回" }).waitFor();
   assert.equal(await dock("ruling").count(), 0, "裁定在前，建议让开");
+
+  // ⑥ 分支清掉了：只剩从合入目标开工，没有那一组可选，派出去落在 release 上。
+  const gone = "分支清掉后还挂着的一件";
+  await button("gone", `选中「${gone}」，补一句再派`).click();
+  assert.equal(await scope("gone").getByRole("group", { name: "从哪开工" }).count(), 0, "只剩一种开工起点：不摆那一组");
+  await button("gone", `「${gone}」已选中，再点一下退出`).click();
+  await waitUntil(async () => await button("gone", `把「${gone}」派出去`).isEnabled(), "读到分支后能派");
+  await button("gone", `把「${gone}」派出去`).click();
+  await waitUntil(async () => launches("t-gone").length === 1, "分支清掉后照样派出去");
+  assert.equal(launches("t-gone")[0].body.items[0].worktreeBase, "release", "从合入目标开工，不是项目此刻检出的那一支");
 
   // ⑤ 句中 `/派`：从菜单选中只拿掉命令，光标留在原处，叫上次那个人停在「派出去」。
   await box("slash").fill("前面的话 /派 后面的话");

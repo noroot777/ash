@@ -152,7 +152,7 @@
     "test:dispatched-attention": "tsx scripts/test-dispatched-attention.ts",
     "test:queue-ownership": "tsx scripts/test-queue-ownership-race.ts",
     "test:dispatch-plan": "tsx scripts/test-dispatch-plan.ts",
-    "test:dispatch-suggestion": "tsx scripts/test-dispatch-suggestion.ts",
+    "test:dispatch-suggestion": "tsx scripts/test-dispatch-suggestion.ts && tsx scripts/test-dispatch-suggestion-guards.ts",
     "test:task-list-body": "tsx scripts/test-task-list-body.ts",
     "test:task-event-timestamps": "tsx scripts/test-task-event-timestamps.ts",
     "test:notes": "tsx scripts/test-note-task-history.ts",

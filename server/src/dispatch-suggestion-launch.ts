@@ -12,7 +12,6 @@ import {
 } from "@ash/shared/dispatch-suggestion";
 import type { DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import { groups, queueItems } from "./db/schema.js";
-import { actorOf, ownerIdOf } from "./auth/context.js";
 import type { ExecutorScope } from "./auth/owned-executors.js";
 import { normalizeTarget } from "./dispatch-plan.js";
 import { requestLaunch, sweepLaunchRequests } from "./launch-request.js";
@@ -64,9 +63,10 @@ export function normalizeSuggestionLaunch(
 export async function launchSuggestions(
   c: Context,
   task: TaskRow,
+  /** 新任务归谁：路由按它核过交给谁，这里按它建（两处必须是同一个人）。 */
+  owner: string | null,
   launch: { order: "serial" | "parallel"; items: Picked[]; attachments: string[] },
 ): Promise<{ status: 200; body: Record<string, unknown> } | { status: 409; body: { error: string; missing?: string[] } }> {
-  const owner = ownerIdOf(actorOf(c));
   const creationOrigin = await requestTaskCreationOrigin(c);
   const ids = launch.items.map(() => id());
   // 一件就是一条独立任务（同回复框里「派出去」）；好几件才成一组，「一个接一个」靠这一组的队列。
@@ -109,6 +109,9 @@ export async function launchSuggestions(
           await transaction.insert(queueItems).values(ids.map((taskId, position) => ({ taskId, queueId, position, createdAt: at })));
         }
         await requestLaunch(serial ? ids.slice(0, 1) : ids, { source: "run", actingUserId: owner }, transaction);
+        // 贴的图归给新任务（一份上传只归一条，选中一件派时才有图）：跟建任务同一笔，写不进去整笔不落、建议原样还在，
+        // 不会出现任务建好了、同项目的人却永远读不到图。问的是点「派出去」的这个人手里有没有这几张（uploads.ts）。
+        if (launch.attachments.length) await bindUploadsToTask(launch.attachments, ids[0]!, owner, transaction);
       },
       onCommitted: () => { committed = true; },
     });
@@ -125,9 +128,6 @@ export async function launchSuggestions(
     void Promise.resolve().then(work).catch((error) => console.error(`[ash] 可派出的活已派出，${what}出错 ${task.id}:`, error));
   };
   settle("广播收掉那几件", () => publishTaskUpdated(task.id));
-  // 一份上传只归一条任务（uploads.ts）：贴图只在选中一件派时才有，归给那一条。
-  if (launch.attachments.length) settle("附件归属", () => bindUploadsToTask(launch.attachments, ids[0]!, owner));
   settle("催起跑", () => sweepLaunchRequests());
   return { status: 200, body: { launched: true, groupId, tasks: rows.map((row) => ({ id: row.id, title: row.title })) } };
 }
-

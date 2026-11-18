@@ -170,14 +170,16 @@ export async function bindUploadsToTask(
   paths: string[] | undefined,
   taskId: string,
   actorUserId: string | null,
+  /** 跟建任务同一笔事务时传进来（派出可以派出去的活，dispatch-suggestion-launch.ts）。 */
+  store: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0] = db,
 ): Promise<void> {
   const names = [...new Set((paths ?? []).map(uploadNameOf).filter((name): name is string => !!name))];
   if (!names.length) return;
-  const rows = await db.select().from(uploads).where(inArray(uploads.file, names));
+  const rows = await store.select().from(uploads).where(inArray(uploads.file, names));
   for (const row of rows) {
     if (row.taskId) continue;
     if (row.ownerUserId && row.ownerUserId !== actorUserId) continue;
-    await db.update(uploads).set({ taskId }).where(eq(uploads.file, row.file));
+    await store.update(uploads).set({ taskId }).where(eq(uploads.file, row.file));
   }
 }
 

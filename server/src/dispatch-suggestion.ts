@@ -4,7 +4,7 @@
 //     条件写回，被别处抢先改过就重读重算——智能体在回合里挂新的、用户同时派掉一件，谁都不吞掉谁；
 //   · 回合结束收掉旧的（`turnSuggestionPrune`）：只认这条任务**自己的执行器**跑完的**执行回合**。
 // 路由在 dispatch-suggestion-routes.ts，派出去那一下在 dispatch-suggestion-launch.ts。
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, type SQL } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import {
   MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK, MAX_SUGGESTION_NOTE_LEN, parseDispatchSuggestions,
@@ -69,25 +69,40 @@ const serialized = (items: StoredDispatchSuggestion[]) => (items.length ? JSON.s
 /**
  * 按「读到的那一份还在」条件改这一列。`change` 返回 null = 不用改（返回 null）；改成了返回改前改后两份。
  * 事务里调（派出去那一下）时只试一次：同一笔事务里没有别人插得进来。
+ *
+ * `guard` 是写这一笔还要成立的别的条件，跟内容版本放进**同一条**更新的 where：内容没被别人改过不等于写的权利
+ * 还在。智能体挂新的那一路靠它——入口核过的回合与方向身份，到真写进去那一刻已经换了（用户补了新要求、
+ * 回合结束了），这一笔就不落（返回 null）。叉掉、派出去、回合结束收旧的各有各的授权，不带它。
  */
 export async function updateSuggestions(
   taskId: string,
   change: (items: StoredDispatchSuggestion[]) => StoredDispatchSuggestion[] | null,
   store: Store = db,
+  guard?: SQL,
 ): Promise<{ before: StoredDispatchSuggestion[]; after: StoredDispatchSuggestion[] } | null> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const row = (await store.select({ raw: tasks.dispatchSuggestions }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+    const row = (await store.select({ raw: tasks.dispatchSuggestions }).from(tasks).where(and(eq(tasks.id, taskId), guard))).at(0);
     if (!row) return null;
     const before = parseDispatchSuggestions(row.raw);
     const after = change(before);
     if (!after) return null;
     const written = await store.update(tasks)
       .set({ dispatchSuggestions: serialized(after), updatedAt: now() })
-      .where(and(eq(tasks.id, taskId), row.raw === null ? isNull(tasks.dispatchSuggestions) : eq(tasks.dispatchSuggestions, row.raw)))
+      .where(and(eq(tasks.id, taskId), guard,
+        row.raw === null ? isNull(tasks.dispatchSuggestions) : eq(tasks.dispatchSuggestions, row.raw)))
       .returning({ id: tasks.id });
     if (written.length) return { before, after };
   }
   throw new Error("可以派出去的活被同时改了太多次，没能写进去，请重试");
+}
+
+/** 智能体挂新的那一笔：任务还在跑，回合和方向还是入口核过的那一份（核的时候是空的，写的时候也得是空的）。 */
+export function turnWriteGuard(seen: { activeTurnToken: string | null; activeDirectionToken: string | null }): SQL {
+  return and(
+    eq(tasks.status, "running"),
+    seen.activeTurnToken === null ? isNull(tasks.activeTurnToken) : eq(tasks.activeTurnToken, seen.activeTurnToken),
+    seen.activeDirectionToken === null ? isNull(tasks.activeDirectionToken) : eq(tasks.activeDirectionToken, seen.activeDirectionToken),
+  )!;
 }
 
 /** 去掉这几件；有一件已经不在了就整笔不改，交回不在的那几件。 */
