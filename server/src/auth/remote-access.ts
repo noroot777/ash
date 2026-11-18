@@ -55,6 +55,9 @@ import { LOCAL_ONLY } from "../local-only.js";
 import { isLoopbackAddress } from "../dir-picker.js";
 import { secretsEqual } from "../openai-converter/common.js";
 import { mintKey } from "./store.js";
+import { LEGACY_DEVICE_TOKEN_PREFIX } from "@ash/shared/legacy-names";
+
+const DEVICE_TOKEN_PREFIX = "navid_";
 
 /** 机主身份是怎么证明的。`local`/`cookie` 是浏览器会自动带上的那一类,写操作要过 CSRF。 */
 export type OwnerProof = "local" | "cookie" | "bearer";
@@ -257,7 +260,7 @@ const hashToken = (token: string): string => createHash("sha256").update(token).
 
 /** 登记一台设备,回它的凭证(只此一次)。 */
 export function enrollDevice(input: { name: string; via: RemoteDeviceVia; address: string }): { device: RemoteDevice; token: string } {
-  const token = `ashd_${randomBytes(32).toString("base64url")}`;
+  const token = `${DEVICE_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
   const at = new Date().toISOString();
   const device: RemoteDevice = {
     id: randomBytes(9).toString("base64url"),
@@ -275,7 +278,8 @@ export function enrollDevice(input: { name: string; via: RemoteDeviceVia; addres
 export const listDevices = (): RemoteDevice[] => loadState().devices;
 
 export function deviceByToken(token: string | undefined): RemoteDevice | null {
-  if (!token?.startsWith("ashd_")) return null;
+  // 改名之前配对的设备手里是 `ashd_…`,照样认。
+  if (!token || ![DEVICE_TOKEN_PREFIX, LEGACY_DEVICE_TOKEN_PREFIX].some((prefix) => token.startsWith(prefix))) return null;
   const hash = hashToken(token);
   return loadState().devices.find((d) => d.tokenHash === hash) ?? null;
 }

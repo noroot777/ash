@@ -12,6 +12,9 @@ import type { UserRole, UserStatus, UserView } from "@ash/shared";
 import { db } from "../db/index.js";
 import { users, userSessions, userInvites } from "../db/schema.js";
 import { id, now } from "../util.js";
+import { LEGACY_USER_KEY_PREFIX } from "@ash/shared/legacy-names";
+
+const USER_KEY_PREFIX = "navi_";
 
 export type UserRow = typeof users.$inferSelect;
 
@@ -22,12 +25,12 @@ export const INVITE_DAYS = 7;
 
 // ── key 与 token ────────────────────────────────────────────────────────────
 
-/** `ash_` + 43 字符 base64url(256 bit 熵)。前缀让它在聊天记录里一眼可辨。 */
+/** `navi_` + 43 字符 base64url(256 bit 熵)。前缀让它在聊天记录里一眼可辨(改名之前发的是 `ash_`,照样认)。 */
 export function mintKey(): string {
-  return `ash_${randomBytes(32).toString("base64url")}`;
+  return `${USER_KEY_PREFIX}${randomBytes(32).toString("base64url")}`;
 }
 
-/** 邀请/项目邀请链接里的 token。同样高熵,但不带 `ash_` 前缀 —— 它不是身份。 */
+/** 邀请/项目邀请链接里的 token。同样高熵,但不带 key 前缀 —— 它不是身份。 */
 export function mintToken(): string {
   return randomBytes(24).toString("base64url");
 }
@@ -156,7 +159,7 @@ export async function nameTaken(name: string, exceptUserId?: string): Promise<bo
  * 换成快哈希索引就把「库泄露 = 拿到所有 key」这条路又开回来了。
  */
 export async function findUserByKey(plainKey: string): Promise<UserRow | null> {
-  if (!plainKey.startsWith("ash_")) return null;
+  if (![USER_KEY_PREFIX, LEGACY_USER_KEY_PREFIX].some((prefix) => plainKey.startsWith(prefix))) return null;
   for (const row of await db.select().from(users)) {
     if (verifyKey(plainKey, row.keyHash)) return row;
   }

@@ -46,6 +46,13 @@ export const LEGACY_PREVIEW_DEPS_READY_MARK = ".ash-deps-ready";
 /** 我方 HTTP 头的旧前缀（`x-ash-turn-token` 等）。升级前起的 MCP 子进程、钩子、旧版对端还在发。拆：同上 + 局域网对端都升级之后。 */
 export const LEGACY_HTTP_HEADER_PREFIX = "x-ash-";
 
+/**
+ * 用户 key（`ash_…`）与远程设备令牌（`ashd_…`）的旧前缀。存的是哈希，用户手里拿着的是明文，
+ * 升级前发出去的照样要认。拆：旧 key 都重置过、旧设备都重新配对过之后。
+ */
+export const LEGACY_USER_KEY_PREFIX = "ash_";
+export const LEGACY_DEVICE_TOKEN_PREFIX = "ashd_";
+
 /** 会话 cookie 的旧名。拆：旧 cookie 全部过期之后（登录态有效期）。 */
 export const LEGACY_SESSION_COOKIE = "ash_session";
 export const LEGACY_INSTANCE_COOKIE = "ash_instance";

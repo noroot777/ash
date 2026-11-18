@@ -10,6 +10,7 @@ import { AcceptLayer } from "./AcceptLayer.tsx";
 import { refreshTaskFacts } from "./taskFacts.ts";
 import { acceptTargetOf } from "./acceptTarget.ts";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
+import { hasTaskBranchPrefix } from "@ash/shared/task-branch";
 
 export type RouteData = {
   source: string;
@@ -22,7 +23,6 @@ export type RouteData = {
   diff: TaskDiffResult;
 };
 
-const TASK_BRANCH = /^(ash|harness)\//;
 
 /**
  * 第一行左半：任务分支 → 目标分支 · N 提交 · N 文件 +a −d。「我在看谁的什么改动」一句话说完，
@@ -167,7 +167,7 @@ function TargetMenu({ anchorRef, taskId, projectId, current, source, fingerprint
       {branches && !branches.length && <p className="acc-layer-note">没有别的本地分支</p>}
       {branches?.map((branch) => (
         <button key={branch} type="button" role="menuitemradio" aria-checked={branch === (picked ?? current)} disabled={busy}
-          onClick={() => (TASK_BRANCH.test(branch) && branch !== current ? setPicked(branch) : void save(branch))}>
+          onClick={() => (hasTaskBranchPrefix(branch) && branch !== current ? setPicked(branch) : void save(branch))}>
           <code>{branch}</code>{branch === (picked ?? current) && <Check size={12} aria-hidden="true" />}
         </button>
       ))}

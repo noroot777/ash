@@ -7,6 +7,7 @@ import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resol
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
 import { FROZEN_GIT_REF_NAMESPACE } from "@ash/shared/legacy-names";
+import { taskIdPrefixOfBranch } from "@ash/shared/task-branch";
 import type { BranchPlanReads } from "./branch-plan-reads.js";
 
 export type BranchTask = typeof tasks.$inferSelect;
@@ -64,12 +65,12 @@ export async function containsCommit(repo: string, ancestor: string, descendant:
 export async function branchOwner(repo: string, projectId: string, branch: string,
   resolveBranch = (id: string) => resolveWorktreeBranchName(repo, id)): Promise<BranchTask | undefined> {
   const name = branchName(branch);
-  const match = /^(?:ash|harness)\/([^/]{1,8})$/.exec(name);
-  if (!match) return undefined;
+  const id8 = taskIdPrefixOfBranch(name);
+  if (!id8) return undefined;
   // 分支由任务 ID 前八位派生，先在库中定位；归档记录仍可承载旧任务依赖。
   const [row] = await db.select().from(tasks).where(and(
     eq(tasks.projectId, projectId), eq(tasks.useWorktree, true),
-    eq(sql<string>`substr(${tasks.id}, 1, 8)`, match[1]),
+    eq(sql<string>`substr(${tasks.id}, 1, 8)`, id8),
   )).limit(1);
   return row && await resolveBranch(row.id) === name ? row : undefined;
 }
