@@ -142,7 +142,7 @@ try {
     assert.equal(existsSync(s.path), false);
     assert.equal(readAnyPreview(s.task.id), null);
     assert.equal(git(s.repo, "show", "main:feature.txt"), "committed feature");
-    assert.equal(existsSync(join(s.repo, ".git", "ash-worktree-backups")), false, "正常停止不能依靠半删除备份掩盖竞态");
+    assert.equal(existsSync(join(s.repo, ".git", "navi-worktree-backups")), false, "正常停止不能依靠半删除备份掩盖竞态");
     console.log(`✓ ${mode} preview stops before workspace deletion; late cache writes cannot recreate the directory`);
   }
 
@@ -497,7 +497,7 @@ try {
       assert.equal(isPidAlive(pid), false);
       assert.equal(hasPendingPreviewStops(s.task.id), false);
       assert.equal(existsSync(s.path), false);
-      assert.equal(existsSync(join(s.repo, ".git", "ash-worktree-backups")), false);
+      assert.equal(existsSync(join(s.repo, ".git", "navi-worktree-backups")), false);
     } finally { blocked?.mock.restore(); killTree(record.pid, "SIGKILL"); killTree(pid, "SIGKILL"); }
     console.log(`✓ canceled startup ${denyStop ? "archives failed state and retains a timed-out stop" : "waits for TERM-resistant processes"} before acceptance cleanup`);
   }

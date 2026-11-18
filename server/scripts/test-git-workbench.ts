@@ -321,7 +321,7 @@ try {
         assert.equal(latest.after, before);
         assert.doesNotMatch(latest.message, /Git 操作尚未完成/);
         const events = readFileSync(
-          join(repo, ".git", "ash-workbench", "operations.jsonl"),
+          join(repo, ".git", "navi-workbench", "operations.jsonl"),
           "utf8",
         )
           .trim()

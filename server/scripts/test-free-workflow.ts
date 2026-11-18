@@ -585,7 +585,7 @@ try {
   assert.equal(worktreeAccepted.accepted, true, "自由任务的独立 worktree 应复用统一安全合并与清理");
   assert.notEqual(git(repo, "rev-parse", "main"), mainBeforeAcceptance, "统一验收应推进目标分支");
   assert.equal(existsSync(worktree.path), false, "统一验收应清理自由任务 worktree");
-  assert.equal(git(repo, "branch", "--list", "ash/free-worktree-task"), "", "统一验收应删除已合并任务分支");
+  assert.equal(git(repo, "branch", "--list", worktree.branch!), "", "统一验收应删除已合并任务分支");
   const acceptedRow = (await db.select().from(tasks).where(eq(tasks.id, "free-worktree-task"))).at(0);
   assert.equal(acceptedRow?.acceptedTargetBranch, "main", "验收应结构化记录目标分支");
   assert.equal(acceptedRow?.acceptedBaseCommit, mainBeforeAcceptance, "验收应记录合并前目标 commit");
