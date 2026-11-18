@@ -33,9 +33,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 const root = mkdtempSync(join(tmpdir(), "ash-undriven-turn-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
-// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件跑的是自己装在 PATH 上的
-// 假 codex,显式放行(executors/spawn.ts)。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_LAX_DONE = "1"; // 这里验的是投递与接管,不是严格 done 协议
 // 「拿不到回执」那一档等多久 —— 压到几秒,免得 §4 要等满默认的一分钟。**不能压到几百毫秒**:
 // detached 的「连接关闭」是按 rc 文件轮询发现的(约 400ms 一拍),压过去 §4a 就会读成
@@ -54,6 +51,9 @@ const originalPath = process.env.PATH;
 const { installFakeCodexAppServer, codexMode } = await import("./undriven-turn-fixture.js");
 const fakeBin = installFakeCodexAppServer(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
+// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;只放行自己装在 PATH 上的这个
+// 假 codex(executors/spawn.ts)。
+process.env.ASH_TEST_AGENT_BIN = fakeBin;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const schema = await import("../src/db/schema.js");

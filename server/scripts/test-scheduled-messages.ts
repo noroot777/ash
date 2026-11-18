@@ -32,11 +32,11 @@ process.env.ASH_DB = join(root, "ash.db");
 // transcripts/runs 一并隔离:不设的话落在仓库 data/runs,上一次运行的残留会让
 // 「会话记录里有没有某句话」这类断言读到历史内容(本文件就踩过一次)。
 process.env.ASH_RUNS_DIR = join(root, "runs");
-// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件要跑的是自己装在
-// PATH 上的假 claude,显式放行(executors/spawn.ts)。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
+// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件要跑的是自己装在
+// PATH 上的假 claude,只放行它(executors/spawn.ts)。
+process.env.ASH_TEST_AGENT_BIN = fakeBin;
 // Windows PATH 使用 `;`，必须走 path.delimiter。
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
 

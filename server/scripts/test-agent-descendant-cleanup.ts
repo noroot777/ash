@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { isPidAlive, killTree } from "../src/platform.js";
 import { cleanupAfterRun, spawnAgent } from "../src/executors/spawn.js";
 
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+process.env.ASH_TEST_AGENT_BIN = process.execPath;
 
 const grandchildCode = "setInterval(() => {}, 1000)";
 const rootCode = `

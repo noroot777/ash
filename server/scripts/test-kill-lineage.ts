@@ -38,7 +38,8 @@ const home = mkdtempSync(join(tmpdir(), "ash-kill-lineage-"));
 const tablePath = join(home, "process-table.tsv");
 const shimDir = join(home, "bin");
 process.env.ASH_DB = join(home, "ash.db");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+// 下面当执行器起的只有这一个：本机上是 shim 目录里那个指向 node 的 `node.exe`。
+process.env.ASH_TEST_AGENT_BIN = NATIVE_WINDOWS ? process.execPath : shimDir;
 
 // ── 夹具:三个可执行文件 ──────────────────────────────────────────────────────
 // 进程表那一问走**真实的系统工具边界**(`platform.ts` 的 `runPowerShell` / `powerShellSync`

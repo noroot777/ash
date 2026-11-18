@@ -19,9 +19,10 @@ const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${originalPath ?? ""}`;
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
+process.env.ASH_TEST_AGENT_BIN = fakeBin;
 
 const [{ db, ensureSchema }, schema, pending, runs, runRoutes, { bus }, legacy, notes, transcript, scheduler, status] = await Promise.all([
   import("../src/db/index.js"),

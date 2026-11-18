@@ -228,7 +228,7 @@
     "test:review-resume": "tsx scripts/test-review-resume.ts",
     "//test:free-workflow-preview": "自由工作流的预览那一段(启动期取消、重开与起预览同一道门、打开关闭办成了不往会话里写)。从 test-free-workflow.ts 按行数拆出。",
     "test:free-workflow-preview": "tsx scripts/test-free-workflow-preview.ts",
-    "test:agent-spawn-guard": "tsx scripts/test-agent-spawn-guard.ts",
+    "test:agent-spawn-guard": "tsx scripts/test-agent-spawn-guard.ts && tsx scripts/test-agent-spawn-late.ts",
     "test:agent-cleanup": "tsx scripts/test-agent-descendant-cleanup.ts",
     "test:verify-override": "tsx scripts/test-verify-override.ts",
     "test:foreign-bins": "tsx scripts/test-foreign-bins.ts",
