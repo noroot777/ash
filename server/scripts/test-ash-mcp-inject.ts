@@ -101,7 +101,7 @@ try {
     assert.equal(claudeAshMcpProblem(ok, [injected], ["Bash", ...ALL]), null);
     assert.equal(claudeAshMcpProblem(ok, [{ name: "ash", status: "connected" }], ALL), null, "老版本不报 source:按连上算");
     // 只认注入的那个名字:历史名 harness 连着也不替 ash 作证
-    assert.match(msg(claudeAshMcpProblem(ok, [{ name: "harness", status: "connected", source: "user" }], ALL)), /清单里没有 Navi/);
+    assert.match(msg(claudeAshMcpProblem(ok, [{ name: "harness", status: "connected", source: "user" }], ALL)), /清单里没有 ash（Navi MCP 的登记名）/);
     assert.match(msg(claudeAshMcpProblem(ok, [{ ...injected, status: "failed" }, { name: "harness", status: "connected" }], ALL)), /状态是 failed/);
     // 连上的是用户配置里那条 ⇒ 注入没生效
     assert.match(msg(claudeAshMcpProblem(ok, [{ ...injected, source: "user" }], ALL)), /注入没生效.*来源 user/);
@@ -251,7 +251,7 @@ process.stdin.on("end", () => process.exit(0));
     assert.match(msg(hungSaid), /工具清单没拿到（到回合收尾还没问到）/);
     assert.match(msg(await readied(async () => { throw new Error("Codex mcpServerStatus/list 超时"); }).settle()), /工具清单没拿到（Codex mcpServerStatus\/list 超时）/);
     assert.match(msg(await readied(async () => ({ nope: 1 })).settle()), /应答里没有 data 列表/);
-    assert.match(msg(await readied(async () => page([{ name: "kb", tools: {} }])).settle()), /清单里没有 Navi/);
+    assert.match(msg(await readied(async () => page([{ name: "kb", tools: {} }])).settle()), /清单里没有 ash（Navi MCP 的登记名）/);
     const neverAsked = new CodexAshMcpStatus();
     neverAsked.update({ name: "ash", status: "ready" });
     assert.match(msg(await neverAsked.settle()), /Navi 就绪之后没有问到/);

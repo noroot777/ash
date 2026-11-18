@@ -276,8 +276,8 @@ CLI 接 Navi 那一下用得到;其余十三家的退路仍是它们自己配置
     `enabled: true, disabled_reason: null`)—— 所以它**不许**声明 `switches`。上一版两家共用
     格式族、无条件解释那个键,给 grok 关一次 Navi 会把 codex 这条能用的连接也判成「被关掉了」,
     安装器还说是用户自己关的;
-  - **gemini 还有两个根级名单**:`mcp.excluded` 列着 Navi、或 `mcp.allowed` 这个白名单里没有
-    Navi(**空数组也算「一个都不放行」**),真 CLI 把那条登记直接打成 `⛔ Blocked`。所以它
+  - **gemini 还有两个根级名单**:`mcp.excluded` 列着 `ash`、或 `mcp.allowed` 这个白名单里没有
+    `ash`(**空数组也算「一个都不放行」**),真 CLI 把那条登记直接打成 `⛔ Blocked`。所以它
     **压根没登记时也要如实说「被挡住了」**(没登记的名字里只问规范名 —— 历史名 `harness` 不在
     白名单里是常态,拿它判会把一份完全可用的配置说成关着的),而且绝不替用户改那两个名单。
   格式族只负责**结构读取**:条目上那两个布尔之外的开关一律由逐家声明进来(本轮审查 F2)。
@@ -332,7 +332,7 @@ CLI 接 Navi 那一下用得到;其余十三家的退路仍是它们自己配置
 - **trae 写的是它「另外支持的那种格式」**:原生 `~/.trae/traecli.yaml` 是 YAML(`mcp_servers` 对象
   数组、`env` 是 `{key,value}` 列表),本仓没有保得住注释缩进的 YAML 写入器;但它同样扫描标准
   `mcpServers` JSON(`~/.trae/mcp.json`),所以走后者。**同目录出现 `traecli.yaml` / `mcp.yaml` /
-  `.mcp.yaml` 时一个字都不写、也不下结论**(`site.opaque`):Navi 可能已经被写在那里面了,而同名登记
+  `.mcp.yaml` 时一个字都不写、也不下结论**(`site.opaque`):`ash` 那条登记可能已经被写在那里面了,而同名登记
   同时来自两份配置、谁生效没有文档依据。项目里的 `.trae/mcp.json` 是用户仓库文件,Navi 不碰。
 
 **「回合身份」那一列的几种值**:原样继承 = Navi 起跑时注进 CLI 进程就够了;要声明 = 得在登记里放行

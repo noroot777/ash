@@ -54,9 +54,9 @@ export function purposeOfKind(kind: string): ImPurpose {
 export function cardHeaderOf(content: string): { title: string; subtitle?: string } {
   try {
     const card = JSON.parse(content) as { header?: { title?: { content?: string }; subtitle?: { content?: string } } };
-    return { title: card.header?.title?.content ?? "ash", subtitle: card.header?.subtitle?.content };
+    return { title: card.header?.title?.content ?? "Navi", subtitle: card.header?.subtitle?.content };
   } catch {
-    return { title: "ash" };
+    return { title: "Navi" };
   }
 }
 

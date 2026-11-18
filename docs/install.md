@@ -178,7 +178,7 @@ ASH_URL = "http://localhost:4317"
   其余各家缺登记时 Navi 只说「看不准」、照常放你起跑,顺手在派审提示里说一句 —— 它可能还读着
   一份我们不知道的配置,而「确定没有」在派审那一关是**硬拒**。
 - **这家 CLI 自己的「别用这个 server」开关,Navi 一家一家认,不跨家套用**(2026-10-31 两边真机
-  实测):gemini 的根级 `mcp.excluded: ["ash"]` 或 `mcp.allowed: [...]`(白名单里没有 Navi,**空
+  实测):gemini 的根级 `mcp.excluded: ["ash"]` 或 `mcp.allowed: [...]`(白名单里没有 `ash`,**空
   数组也算**)会让它把那条登记直接判成 `Blocked` —— Navi 如实说「被挡住了」、指出是哪一行,
   **绝不替你改那两个名单**;而根级 `disabled_mcp_servers = ["ash"]` 是 **grok 专有**的,
   同样写 TOML 的 codex 压根不认它,所以 Navi 也不再拿它判 codex。
@@ -188,7 +188,7 @@ ASH_URL = "http://localhost:4317"
 - **trae**:它的原生配置是 YAML(`traecli config edit` 打开 `~/.trae/traecli.yaml`),本仓没有能保住
   注释与缩进的 YAML 写入器 —— 但它同样扫描标准的 `mcpServers` JSON,所以 Navi 写的是
   `~/.trae/mcp.json`。**如果那个目录里已经有 `traecli.yaml` / `mcp.yaml` / `.mcp.yaml`,Navi 一个字
-  都不写也不下结论**(你可能已经把 Navi 写在那里面了,而两份配置里各有一条同名登记、谁生效没有
+  都不写也不下结论**(你可能已经把 `ash` 那条登记写在那里面了,而两份配置里各有一条同名登记、谁生效没有
   文档依据):那种情况请按原生格式自己加一条。
 - **copilot**:它的 MCP 子进程**只自动继承 `PATH`**(官方文档明写其余环境变量必须配在那条登记的
   `env` 里),而 Navi 的回合身份一轮一个值、写死进配置文件就是过期的假身份。所以身份走**一份文件**:

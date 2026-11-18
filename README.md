@@ -44,7 +44,7 @@ Navi 是一个自托管的编排控制台，用来管理本地的 AI 编程智�
 
 自带 node 和 Navi 本体，装好就能用，不用克隆仓库。需要 Apple 芯片（M 系列）的 Mac、macOS 14 以上。
 
-1. 下载上面的 dmg，打开后把 **Navi** 拖进 **Applications**（应用程序）。
+1. 下载上面的 dmg，打开后把 **Ash**（`Ash.app`，Navi 的安装包里暂时还叫这个名字）拖进 **Applications**（应用程序）。
 2. 第一次打开会被系统拦下（app 没有经过 Apple 公证）：到「系统设置 → 隐私与安全性」，在页面下方点「仍要打开」。
 3. 如果提示「已损坏，无法打开」，在终端里执行下面这行，再打开一次：
 
@@ -52,7 +52,7 @@ Navi 是一个自托管的编排控制台，用来管理本地的 AI 编程智�
    xattr -dr com.apple.quarantine /Applications/Ash.app
    ```
 
-4. 以后的新版本从菜单「Navi → 检查更新…」安装（app 也会每 6 小时自己查一次）。
+4. 以后的新版本从菜单「ash → 检查更新…」安装（菜单栏上的应用名暂时还是 ash；app 也会每 6 小时自己查一次）。
 
 ## 快速开始
 
@@ -311,7 +311,7 @@ npm -w server run test:handoff        # 跨机器接力
 <details>
 <summary>所有任务运行后均显示 <b>failed</b></summary>
 
-MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 Navi 状态为 Connected。
+MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 Navi MCP 那一行（登记名是 `ash`）状态为 Connected。
 
 </details>
 

@@ -158,7 +158,7 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
       await db.batch([
         db.insert(workflows).values({ id: workflowId, name: draft.name, description: draft.description, def: JSON.stringify(draft.def), ownerUserId: ownerIdOf(actorOf(c)), createdAt: now(), updatedAt: now() }).onConflictDoNothing(),
         db.update(chatMessages).set({ assistant: JSON.stringify(result), modelReply: JSON.stringify({ reply: message.body, assistant: result }) }).where(eq(chatMessages.id, message.id)),
-        db.insert(chatMessages).values({ id: `workflow-${message.id}`, roomId: room.id, role: "system", author: "ash", body: `已将「${draft.name}」保存到起手式库（${workflowId}）。未更改默认起手式，也未运行任务。`, createdAt: now() }).onConflictDoUpdate({ target: chatMessages.id, set: { createdAt: now() } }),
+        db.insert(chatMessages).values({ id: `workflow-${message.id}`, roomId: room.id, role: "system", author: "Navi", body: `已将「${draft.name}」保存到起手式库（${workflowId}）。未更改默认起手式，也未运行任务。`, createdAt: now() }).onConflictDoUpdate({ target: chatMessages.id, set: { createdAt: now() } }),
       ]);
       return c.json(await snapshot(room, c));
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : "起手式保存失败" }, 400); }

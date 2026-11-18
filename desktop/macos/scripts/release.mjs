@@ -216,7 +216,7 @@ async function main() {
     const put = await putOnRelease(github, config, {
       tag, commit, dmg, length,
       name: `Navi for macOS ${shortVersion}（${version}）`,
-      body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Navi 拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`,
+      body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Ash（Ash.app）拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`,
     });
     url = put.url;
   }

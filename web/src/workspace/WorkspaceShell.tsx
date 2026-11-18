@@ -652,7 +652,7 @@ export function WorkspaceShell() {
           count: `${activeTaskCount} 项${scopeKind === "tasks" ? "还没落地" : "任务"}`,
           onExpand: () => openComposer(),
           below: <HomeTodo rows={homeRows} all={tasks} onOpen={(task) => toContent(selectTask)(task)} />,
-        }) : <><header className="workspace-app-bar"><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span></header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={selectedTask} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section></div></>}
+        }) : <><header className="workspace-app-bar"><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Navi"}</span></header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={selectedTask} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section></div></>}
       </main>
     </div>{terminalDock}{statusBar}</div>{overlays}</>
   );

@@ -30,14 +30,14 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 - 页面在的时候也一直认着人：本机地址的刷新、前进后退、页面自己跳转放行前各认一次，页面在时每秒再认一次。窗口的端口上不再是自己那份（比如服务停了）就把整页撤成空白、盖上说明，自己那份回来后回到原来的路由；自己那份重起过（实例号换了）就换上新的重载一遍。这一道管的是提示和撤页，不是请求归属：撤页之前还在路上的请求由上面两条挡下。
 - server 进自己的会话，**关窗、退出 app 都不停服务**，也不带走在跑的 agent。app 只负责起，不杀、不守护。
 - 端口被**别的 Navi** 占着（比如仓库里 `npm run restart` 起的开发实例）不会连上去，窗口里说清是哪个进程、代码和数据在哪、怎么停；对方一停 app 就接着起自己那份。端口被不是 Navi 的程序占着也一样说明。仓库开发实例以后换端口、用临时库起。
-- 「Navi → 登录时启动 Navi 服务」（装进「应用程序」后第一次打开默认勾上）：`~/Library/LaunchAgents/dev.ash.server.plist`，登录时跑一次 `Ash --start-server`，同一套逻辑、不开窗口。数据根还是空的时它不起（首启要先问用户）。
+- 「ash → 登录时启动 Navi 服务」（菜单栏上的应用名取自 `CFBundleName`，暂时还是 ash）（装进「应用程序」后第一次打开默认勾上）：`~/Library/LaunchAgents/dev.ash.server.plist`，登录时跑一次 `Ash --start-server`，同一套逻辑、不开窗口。数据根还是空的时它不起（首启要先问用户）。
 - 日志在**数据根下的 `logs/`**：`server.log`（服务）、`login.log`（登录项），跟着数据走。起不来时占位页上有「日志」按钮。
 - 重装 app 不会重启已经在跑的服务，也不会换掉它脚下的代码：`install:mac` 先请窗口退出，再换包（`scripts/install-app.sh`）。换包和进程启动共用一把锁（`shared/src/code-lock.ts`）：跑包里代码的服务、Navi MCP 在读任何业务代码之前，以共享锁拿着包里的 `Contents/Resources/app/.in-use`，一直拿到进程结束；安装器对它拿排他锁，从最后一次检查一直拿到两次改名换完——拿不到就是有人在用，不装、列出是谁；换包那几秒里新起来的进程等在锁上，等到时读到的是一整份新代码。锁在文件本身上，包改名、经软链或相对路径拉起都认得出；进程被强杀内核就放锁，不留死登记；锁文件缺了入口拒绝启动，不会悄悄变成「没人用」。锁管不到的（Navi 本身、别的程序拿包里的可执行文件或脚本跑）另按真实文件身份扫（`scripts/bundle-users.sh`）：可执行文件、映射进来的库、工作目录按 lsof 报的真实路径比，命令行里提到的 .app 逐个按真实路径解析。挑没有任务在跑的时候 `kill` 掉服务（agent 不跟着停），等 MCP 那几个任务这一轮结束，再装一次。同一个安装目录同一时刻只有一个安装在换（按目录真实路径加锁）；新版先拷到旁边再换上，拷失败、最后一步失败时旧的那份放回原处。已经装着的是还没有代码锁的旧版 app 时，那一次只能靠扫描。
 - 换了新版 app 而服务还是旧版 app 起的（app 被强杀时 Sparkle 照样装上的那一档、手动换 app）：app 起服务时在数据根里记一笔 pid + 构建号（`.mac-server.json`），新版打开时认得出，走下面「装之前那道闸」把服务换成新版。
 
 ## 自更新
 
-用 [Sparkle](https://sparkle-project.org) 2（版本和 sha256 钉在 `scripts/sparkle.mjs`，框架原样放进 `Contents/Frameworks`）。菜单「Navi → 检查更新…」，另外每 6 小时自己查一次。两个公开仓库，都在 `release.json` 里配：
+用 [Sparkle](https://sparkle-project.org) 2（版本和 sha256 钉在 `scripts/sparkle.mjs`，框架原样放进 `Contents/Frameworks`）。菜单「ash → 检查更新…」，另外每 6 小时自己查一次。两个公开仓库，都在 `release.json` 里配：
 
 - **安装包**在 [noroot777/ash](https://github.com/noroot777/ash)（`releaseRepo`）：tag 为 `ash-mac-v<版本>-<构建号>` 的 GitHub Release 上的 `Ash-<版本>-<构建号>.dmg`。只出 dmg：新用户下载安装的、Sparkle 更新用的是同一个文件。
 - **appcast** 在素材库 [noroot777/materials](https://github.com/noroot777/materials)（`feedRepo`）的 `ash/mac/appcast.xml`，app 的 `SUFeedURL` 是它在 raw.githubusercontent 上的那份；每一版的下载地址指向 noroot777/ash 那个 Release 上的 dmg。
@@ -77,7 +77,7 @@ server 一启动就做不可逆的迁移，所以闸在停掉服务之后、换 
 # 1. 退出 app，停掉服务（数据根里 ash.db.ash.lock 记着 pid）
 kill "$(node -p 'require(process.env.HOME + "/Library/Application Support/dev.ash.mac/ash.db.ash.lock").pid')"
 # 2. 从 noroot777/ash 的 Releases 里下回备份文件名里那个构建号的 dmg（tag ash-mac-v…-<构建号>），
-#    打开后把里面的 Navi 拖进 Applications，选「替换」
+#    打开后把里面的 Ash（`Ash.app`）拖进 Applications，选「替换」
 # 3. 把备份放回去（先把现在这份挪开，别直接覆盖）
 cd ~/Library/Application\ Support/dev.ash.mac
 mkdir -p rolled-back && mv ash.db ash.db-wal ash.db-shm rolled-back/ 2>/dev/null
@@ -199,4 +199,4 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `Sources/AshPalette.swift` | 原生几屏的颜色，取自 web 的浅 / 深两套令牌 |
 | `scripts/make-icon.swift` | 构建时把 `docs/logo/icon.svg` 栅格成图标 |
 
-卸载：菜单里先取消「登录时启动 Navi 服务」，停掉服务，再删 /Applications/Ash.app；数据在 `~/Library/Application Support/dev.ash.mac/`。页面检查器：Safari →「开发」→ 本机 → Navi。
+卸载：菜单里先取消「登录时启动 Navi 服务」，停掉服务，再删 /Applications/Ash.app；数据在 `~/Library/Application Support/dev.ash.mac/`。页面检查器：Safari →「开发」→ 本机 → ash（应用名，下面那一页的标题是 Navi）。

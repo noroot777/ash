@@ -150,6 +150,8 @@ export function ReplyBox({
   const cliCommand = parseCliCommand(target?.agent ?? standing.config.agentType, value);
   const scopeDiscovery = cliCommand?.name === "goal" && cliCommand.args === "--scopes";
   const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing && !scopeDiscovery);
+  // 从没跑过的任务发不出普通的话，但框得能敲：`/goal --scopes` 这类不碰会话的命令要在这里打出来。
+  const inputLocked = task.mode !== "single" || task.archived;
   // 占位只有「回复…」，水印透出来（reply-1）。快捷键在发送键的提示里，「可以粘贴」在附件键的
   // 提示里，「引导会话」在待发送那一条的键上；发不出去的原因指到发送键上才说。只有整个输入框
   // 都用不了（不是单任务、已归档、还没跑过）时，原因才写在占位里——那时没有键可指。
@@ -516,7 +518,7 @@ export function ReplyBox({
           quoteTarget={task.id}
           rows={3}
           hidden={!!take && !takeInput}
-          disabled={disabled && !takeInput}
+          disabled={inputLocked && !takeInput}
           readOnly={takeInput?.readOnly}
           placeholder={takeInput?.placeholder ?? placeholder}
           aria-label={takeInput?.label ?? "回复任务"}

@@ -129,7 +129,7 @@ export function claudeMcpEvidence(text: string): Evidence {
     // 偏掉的诊断 —— 跟派审门禁上那条是同一类（第 3 轮审查 B2）。
     const mine = rows.filter((s) => typeof s.name === "string" && wanted.has(s.name));
     if (!mine.length) {
-      return { connected: false, definite: true, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 Navi。` };
+      return { connected: false, definite: true, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ${ASH_MCP_SERVER_NAME}（Navi MCP 的登记名）。` };
     }
     const connected = mine.some((server) => server.status === "connected");
     const states = mine.map((server) => `${String(server.name)}=${typeof server.status === "string" && server.status ? server.status : "未知"}`).sort().join("、");

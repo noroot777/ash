@@ -74,7 +74,7 @@ export function claudeAshMcpProblem(injection: ClaudeAshMcpInjection, servers: u
   const list = Array.isArray(servers) ? servers as { name?: unknown; status?: unknown; source?: unknown }[] : [];
   const ash = list.find((s) => s?.name === ASH_MCP_SERVER_NAME);
   const failure = injection.failure ? `；${injection.failure}` : "";
-  if (!ash) return unavailable(`claude 启动时的 MCP 清单里没有 Navi${failure}`);
+  if (!ash) return unavailable(`claude 启动时的 MCP 清单里没有 ${ASH_MCP_SERVER_NAME}（Navi MCP 的登记名）${failure}`);
   if (ash.status !== "connected") return unavailable(`claude 启动时报告 Navi MCP 的状态是 ${String(ash.status)}${failure}`);
   if (injection.failure || (ash.source !== undefined && ash.source !== "dynamic")) {
     return unavailable(`Navi 的注入没生效，claude 连上的是它自己配置里那条（来源 ${String(ash.source ?? "未知")}），未必指着这个 Navi${failure}`);
@@ -120,13 +120,13 @@ export class CodexAshMcpStatus {
         if (!Array.isArray(page?.data)) throw new Error("应答里没有 data 列表");
         for (const server of page.data as { name?: unknown; tools?: unknown }[]) {
           if (server?.name !== ASH_MCP_SERVER_NAME) continue;
-          if (!server.tools || typeof server.tools !== "object") throw new Error("Navi 那一项没带工具清单");
+          if (!server.tools || typeof server.tools !== "object") throw new Error(`${ASH_MCP_SERVER_NAME} 那一项没带工具清单`);
           found = true;
           exposed.push(...Object.keys(server.tools));
         }
         cursor = page.nextCursor ?? null;
       } while (cursor);
-      if (!found) throw new Error("清单里没有 Navi");
+      if (!found) throw new Error(`清单里没有 ${ASH_MCP_SERVER_NAME}（Navi MCP 的登记名）`);
       this.tools = { state: "verified" };
       const problem = this.tell(missingTools(exposed, "codex "));
       if (problem) push(problem);
