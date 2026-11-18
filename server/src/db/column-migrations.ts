@@ -426,4 +426,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN dispatch_suggestions TEXT",
   // 智能体收回建议时留下的原因(见 db/schema.ts 同名列)。存量行 NULL = 没收回过。
   "ALTER TABLE tasks ADD COLUMN dispatch_withdrawals TEXT",
+  // 默认审查者(见 db/schema.ts 同名列)。存量行 0 = 谁都不是默认,派出去的任务照旧不带预约。
+  "ALTER TABLE reviewer_profiles ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0",
 ];

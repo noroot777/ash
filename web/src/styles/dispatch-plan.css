@@ -36,6 +36,7 @@ button.dispatch-plan-name { cursor: pointer; }
 button.dispatch-plan-name:hover, button.dispatch-plan-name[aria-pressed="true"] { text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
 .dispatch-plan-text > small { color: var(--muted); font-size: var(--t-xs); line-height: 1.5; overflow-wrap: anywhere; }
 .dispatch-plan-row > .run-target-picker { margin-left: auto; max-width: 100%; }
+.dispatch-plan-row > .run-target-picker + .reviewer-chip { margin-left: 0; }
 .dispatch-plan-drop {
   display: grid; flex: 0 0 auto; width: 24px; height: 24px; place-items: center; border: 0; border-radius: 6px;
   background: transparent; color: var(--muted); opacity: 0; transition: opacity var(--dur-1) var(--ease-out);

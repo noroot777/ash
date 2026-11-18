@@ -372,6 +372,16 @@ export async function ensureSchema() {
   } catch (e) {
     console.warn("[ash] monitors_native_source 索引创建失败,忽略:", e);
   }
+  // 默认审查者每个归属人至多一位(reviewer-profiles.ts 设默认时先清后设,同一笔事务)。排在上面那串 ALTER
+  // 之后:is_default 是靠它补上的。自用模式下归属全是 NULL,COALESCE 成空串让它们彼此互斥。
+  try {
+    await client.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS reviewer_profiles_default_owner"
+      + " ON reviewer_profiles(COALESCE(owner_user_id, '')) WHERE is_default = 1",
+    );
+  } catch (e) {
+    console.warn("[ash] reviewer_profiles_default_owner 索引创建失败,忽略:", e);
+  }
   // 一份结果交接只许对应一条消息（含存量重复时的身份归并，理由在那个文件顶部）。
   await ensureHandoffTokenUnique(client);
   // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给

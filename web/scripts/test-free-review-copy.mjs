@@ -118,6 +118,8 @@ assert.equal(freeReviewView(userReserved, busyTask).reservationMode, true, "任�
 assert.equal(freeReviewView(userReserved, { status: "failed", resumePrompt: "继续" }).reservationMode, true, "停在检查点 = 预约");
 assert.equal(freeReviewView(userReserved, { status: "failed" }).reservationMode, false, "空闲且不等待：挂着预约也是直派");
 assert.equal(freeReviewView(userReserved, { status: "failed" }).reservationArmed, true, "预约本身仍如实报出（弹窗里可取消）");
+// 还没开跑的后面一定还会动：派出去的任务建出来就带着预约，开跑前就得能看、能改、能取消。
+assert.equal(freeReviewView(userReserved, { status: "backlog" }).reservationMode, true, "还没开跑 = 预约");
 
 console.log("free review activity copy tests passed");
 

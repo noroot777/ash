@@ -62,6 +62,12 @@
   color: var(--ink);
 }
 
+/* 默认审查者那颗星：设上了就是实心、正文色，不铺「按下」的底色（它是状态，不是正在展开的东西）。 */
+.settings-default-toggle[aria-pressed="true"] {
+  background: transparent;
+  color: var(--ink);
+}
+
 /* 正在编辑的那一行留在原位当锚点（编辑键保持按下），跟下面展开的表单之间不画线，连成一块。
    不铺底色：有的卡片为了让浮层伸出去是 overflow: visible，底色会盖过圆角。 */
 .settings-item.is-editing {

@@ -257,3 +257,10 @@
 .run-target-picker.is-compact:not(.is-open):not(:has(:focus-visible)) > .effort-picker {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; padding: 0; border: 0;
 }
+
+/* 「谁来审」（free-workflow/ReviewerChip.tsx）：跟「交给谁」并排的一段小胶囊。名字用正文色（同智能体那段），
+   没人审时收成占位色，一眼看得出这条不会被审。 */
+.run-target-picker.is-chip.reviewer-chip { flex: 0 1 auto; }
+.run-target-picker.is-chip.reviewer-chip .run-target-seg { padding: 0 9px; }
+.reviewer-chip .run-target-seg > span { color: var(--ink); }
+.reviewer-chip.is-off .run-target-seg > span { color: var(--faint); }

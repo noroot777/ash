@@ -2,6 +2,7 @@
 // 拆出来只是为了不让那个文件继续长,消费方仍从 "@ash/shared" 导入,路径不变。
 import type { AgentType } from "./index.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
+import type { CreateReviewChoice } from "./review-on-create.ts";
 
 // One call to create a whole batch of single-mode tasks into an EXISTING group,
 // wiring cross-task dependency edges that the in-group scheduler honors. The
@@ -33,6 +34,8 @@ export interface BatchTaskInput {
   resumeDependsOn?: string[];
   // 前置：这条任务建在哪几条上面（shared/src/prerequisites.ts）。先按同一批里的 `key` 认，认不出的当已有任务的 id。
   prerequisites?: string[];
+  // 建出来就带的审查预约（shared/src/review-on-create.ts）。缺省 = 不带；MCP 那一侧缺省落成 "default"。
+  review?: CreateReviewChoice;
 }
 
 export interface BatchCreateTasksBody {
@@ -53,5 +56,6 @@ export interface BatchCreateTasksBody {
     worktreeBase?: string | null;
     mergeTargetBranch?: string | null;
     labels?: string[];
+    review?: CreateReviewChoice;
   };
 }

@@ -5,6 +5,7 @@ import { AGENT_TYPES } from "@ash/shared";
 import { FREE_REVIEW_CHECK_MODES, MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
 import type { Actor } from "./auth/context.js";
 import { executorScope } from "./auth/owned-executors.js";
+import { noticeLine, type TimelineLine } from "./task-timeline.js";
 
 const MAX_REVIEW_NOTE_LENGTH = 2_000;
 
@@ -130,4 +131,21 @@ export function overrideLabel(override: FreeReviewExecutorOverride): string {
 /** 时间线里点明「这次跟审查者存的配置不一样」，否则用户只看到审查者名字，读不出跑的是谁。 */
 export function overrideSuffix(override: FreeReviewExecutorOverride | null): string {
   return override ? `（本次用 ${overrideLabel(override)}）` : "";
+}
+
+/**
+ * 时间线上那句「已预约审查」。审查面板里保存预约（free-workflow.ts `reserveFreeReview`）和派出去的任务建出来
+ * 就带的那条（review-on-create.ts）是同一个东西，说法也只此一份。
+ */
+export function reservationNotice(input: {
+  reviewer: string;
+  override: FreeReviewExecutorOverride | null;
+  mode: FreeReviewCheckMode;
+  retries: number;
+  note: string | null;
+  updated: boolean;
+}): TimelineLine {
+  return noticeLine({ kind: "review.reserved", reviewer: input.reviewer, updated: input.updated },
+    `${input.updated ? "已更新审查预约" : "已预约审查"}：${input.reviewer}${overrideSuffix(input.override)} · ` +
+    `${input.mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${input.retries} 轮${input.note ? " · 含附言" : ""}。执行回合正常结束后自动开始。`);
 }

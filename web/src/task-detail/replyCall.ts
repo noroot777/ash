@@ -1,4 +1,5 @@
 import type { AgentType, DiscussionRounds, Task } from "@ash/shared";
+import type { CreateReviewChoice } from "@ash/shared/review-on-create";
 import { DISCUSSION_ROUND_CHOICES, MAX_DISCUSSION_GUESTS, discussionRoundsOf } from "@ash/shared/discussion";
 import type { DockChoice } from "./ReplyDock.tsx";
 import type { MentionTarget } from "./mentionPicker.ts";
@@ -23,9 +24,13 @@ export type DispatchBase = "here" | "trunk";
 
 /**
  * `target` 是胶囊上那个人；讨论时可以再叫一个（`others`，三方），问一句和派出去只认 `target`，离开讨论就清掉。
- * `rounds` 是讨论来回几轮（记着上次的选择）。
+ * `rounds` 是讨论来回几轮（记着上次的选择）。`review` 是派出去的新任务谁来审，缺省 = 默认审查者
+ * （shared/src/review-on-create.ts）；新建框里叫人不派出去，用不到它。
  */
-export type ReplyCall = { target: MentionTarget; verb: CallVerb; base: DispatchBase; others: MentionTarget[]; rounds: DiscussionRounds };
+export type ReplyCall = {
+  target: MentionTarget; verb: CallVerb; base: DispatchBase; others: MentionTarget[]; rounds: DiscussionRounds;
+  review?: CreateReviewChoice;
+};
 
 export const CALL_COPY: Record<CallVerb, {
   label: string;

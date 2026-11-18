@@ -1,13 +1,13 @@
 import type { AgentType, ReviewerProfile } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
-import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { id, now } from "./util.js";
-import { actorOf } from "./auth/context.js";
+import { actorOf, ownerIdOf, type Actor } from "./auth/context.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { executorScope, type ExecutorScope } from "./auth/owned-executors.js";
 
@@ -60,6 +60,7 @@ async function toProfile(row: ReviewerRow): Promise<ReviewerProfile> {
     executorLabel: label,
     model: row.model,
     reasoningEffort: row.reasoningEffort,
+    isDefault: !!row.isDefault,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -81,6 +82,24 @@ async function parseBody(scope: ExecutorScope, body: Record<string, unknown>, ex
   };
 }
 
+/** 同一个归属人的那几行（自用模式下归属全是 NULL）。 */
+export function ownedBy(owner: string | null): SQL {
+  return owner === null ? isNull(reviewerProfiles.ownerUserId) : eq(reviewerProfiles.ownerUserId, owner);
+}
+
+/**
+ * 设 / 取消默认审查者（shared/src/review-on-create.ts）。只认**自己名下**的那一位：默认是按归属人分的，
+ * 实例管理员看得见的无主行不是他的，设成默认等于替「没有人」设了一位。先清后设同一笔事务，至多一位由
+ * 部分唯一索引兜底（db/index.ts）。不碰 updatedAt：列表按它排，点一下星标不该让这一行跳到最前。
+ */
+async function setDefaultReviewer(row: ReviewerRow, on: boolean, actor: Actor): Promise<void> {
+  if (row.ownerUserId !== ownerIdOf(actor)) throw new Error("只能把自己的审查者设为默认");
+  await db.transaction(async (tx) => {
+    if (on) await tx.update(reviewerProfiles).set({ isDefault: false }).where(and(ownedBy(row.ownerUserId), eq(reviewerProfiles.isDefault, true)));
+    await tx.update(reviewerProfiles).set({ isDefault: on }).where(eq(reviewerProfiles.id, row.id));
+  });
+}
+
 export function mountReviewerProfileRoutes(api: Hono): void {
   // 审查者是**个人面**资源(§八):多人模式下各人只看得到自己那份。
   api.get("/reviewer-profiles", async (c) => {
@@ -93,7 +112,7 @@ export function mountReviewerProfileRoutes(api: Hono): void {
       const scope = await executorScope(actorOf(c));
       const data = await parseBody(scope, await c.req.json<Record<string, unknown>>());
       const at = now();
-      const row: ReviewerRow = { id: id(), ...data, ...ownerStamp(actorOf(c)), createdAt: at, updatedAt: at };
+      const row: ReviewerRow = { id: id(), ...data, ...ownerStamp(actorOf(c)), isDefault: false, createdAt: at, updatedAt: at };
       await db.insert(reviewerProfiles).values(row);
       return c.json(await toProfile(row), 201);
     } catch (error) {
@@ -106,9 +125,15 @@ export function mountReviewerProfileRoutes(api: Hono): void {
     const existing = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0);
     if (!(await canUseOwned(existing, actorOf(c)))) return c.json(notYours("审查者"), 404);
     try {
-      const scope = await executorScope(actorOf(c));
-      const data = await parseBody(scope, await c.req.json<Record<string, unknown>>(), existing);
-      await db.update(reviewerProfiles).set({ ...data, updatedAt: now() }).where(eq(reviewerProfiles.id, profileId));
+      const body = await c.req.json<Record<string, unknown>>();
+      const { isDefault, ...fields } = body;
+      if (isDefault !== undefined && typeof isDefault !== "boolean") throw new Error("isDefault 要是布尔值");
+      if (Object.keys(fields).length) {
+        const scope = await executorScope(actorOf(c));
+        const data = await parseBody(scope, fields, existing);
+        await db.update(reviewerProfiles).set({ ...data, updatedAt: now() }).where(eq(reviewerProfiles.id, profileId));
+      }
+      if (isDefault !== undefined) await setDefaultReviewer(existing!, isDefault, actorOf(c));
       const updated = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0)!;
       return c.json(await toProfile(updated));
     } catch (error) {
@@ -125,29 +150,34 @@ export function mountReviewerProfileRoutes(api: Hono): void {
     //   「已预约」而结算因 reviewerId 为空静默不派审。
     // - 自动续轮（reviewRunId 非空）的配置已冻结在 run 行快照，profile 删了照样能续
     //   → 只清 selectedReviewerId 引用，armed 和 runId 保留。
-    const affected = await db.select({
-      taskId: freeWorkflowStates.taskId,
-      reviewArmed: freeWorkflowStates.reviewArmed,
-      reviewRunId: freeWorkflowStates.reviewRunId,
-    }).from(freeWorkflowStates).where(eq(freeWorkflowStates.selectedReviewerId, profileId));
-    const at = now();
-    await db.update(freeWorkflowStates).set({
-      selectedReviewerId: null,
-      reviewArmed: false,
-      reviewNote: null,
-      reviewSource: null,
-      // 覆盖是「相对这位审查者的这一次改动」，审查者没了它就没有参照系，跟着预约一起清。
-      reviewAgentType: null,
-      reviewExecutorId: null,
-      reviewModel: null,
-      reviewReasoningEffort: null,
-      updatedAt: at,
-    }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNull(freeWorkflowStates.reviewRunId)));
-    await db.update(freeWorkflowStates).set({
-      selectedReviewerId: null,
-      updatedAt: at,
-    }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNotNull(freeWorkflowStates.reviewRunId)));
-    await db.delete(reviewerProfiles).where(eq(reviewerProfiles.id, profileId));
+    // 摘引用和删行同一笔：中间要是空着，正在建的任务（review-on-create.ts，它在自己那笔事务里核这位还在不在）
+    // 能在「摘完、还没删」那一拍挂上这位的新预约，删完就成了指向不存在审查者的预约。
+    const affected = await db.transaction(async (tx) => {
+      const rows = await tx.select({
+        taskId: freeWorkflowStates.taskId,
+        reviewArmed: freeWorkflowStates.reviewArmed,
+        reviewRunId: freeWorkflowStates.reviewRunId,
+      }).from(freeWorkflowStates).where(eq(freeWorkflowStates.selectedReviewerId, profileId));
+      const at = now();
+      await tx.update(freeWorkflowStates).set({
+        selectedReviewerId: null,
+        reviewArmed: false,
+        reviewNote: null,
+        reviewSource: null,
+        // 覆盖是「相对这位审查者的这一次改动」，审查者没了它就没有参照系，跟着预约一起清。
+        reviewAgentType: null,
+        reviewExecutorId: null,
+        reviewModel: null,
+        reviewReasoningEffort: null,
+        updatedAt: at,
+      }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNull(freeWorkflowStates.reviewRunId)));
+      await tx.update(freeWorkflowStates).set({
+        selectedReviewerId: null,
+        updatedAt: at,
+      }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNotNull(freeWorkflowStates.reviewRunId)));
+      await tx.delete(reviewerProfiles).where(eq(reviewerProfiles.id, profileId));
+      return rows;
+    }, { behavior: "immediate" });
     for (const row of affected) {
       if (!row.reviewArmed || row.reviewRunId) continue;
       await appendTaskTimeline(row.taskId, alertLine("完成后审查预约已取消：所选审查者配置已被删除。"));

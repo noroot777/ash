@@ -18,6 +18,7 @@ import { now } from "./util.js";
 import { batchPrerequisiteEdges } from "./prerequisite-routes.js";
 import { newPlan, normalizeLaunch, normalizeProposal, normalizeTarget, planQuestionText, QUESTION_BLOCKS_PLAN } from "./dispatch-plan.js";
 import { launchDispatchPlan, proposedTarget, targetLabeler } from "./dispatch-plan-launch.js";
+import { pinReviewChoice, ReviewOnCreateError } from "./review-on-create.js";
 
 export function mountDispatchPlanRoutes(api: Hono): void {
 api.post("/tasks/:id/dispatch-plan", async (c) => {
@@ -46,6 +47,14 @@ api.post("/tasks/:id/dispatch-plan", async (c) => {
   const scope = await executorScopeForOwner(r.ownerUserId);
   const proposal = normalizeProposal(b, scope);
   if ("error" in proposal) return c.json({ error: proposal.error }, 400);
+  // 指定了审查者的那几条：名字换成 id、找不到当场退回（卡上要画得出是谁）。新任务归按「派出去」的人，
+  // 这里先按这条任务的归属人核 —— 普通情况下是同一个人；不同时派出那一下还会按派的人再认一遍。
+  try {
+    for (const item of proposal.items) item.review = await pinReviewChoice(item.review, r.ownerUserId);
+  } catch (error) {
+    if (error instanceof ReviewOnCreateError) return c.json({ error: error.message }, 400);
+    throw error;
+  }
   // 前置先核一遍形状（同一批里的 key、不重复），派出去那一下还会按留下的几条再核。
   const shape = batchPrerequisiteEdges(proposal.items, proposal.items.map((_item, index) => `#${index}`));
   if (typeof shape === "string") return c.json({ error: shape }, 400);
