@@ -6,7 +6,7 @@ import { join } from "node:path";
 export type RegressionSnapshot = { commit: string; tree: string };
 
 export function regressionSnapshot(cwd: string): RegressionSnapshot | null {
-  const temporary = mkdtempSync(join(tmpdir(), "ash-regression-index-"));
+  const temporary = mkdtempSync(join(tmpdir(), "navi-regression-index-"));
   try {
     const options = { cwd, encoding: "utf8" as const, windowsHide: true, timeout: 30_000,
       env: { ...process.env, GIT_INDEX_FILE: join(temporary, "index") } };

@@ -10,7 +10,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { Agent, request } from "node:http";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
+import { RESTART_KILLED_MARK, windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
 import { FROZEN_WINDOWS_AGENT_WRAP_SUFFIX } from "./legacy-names.mjs";
 
 export const IS_WINDOWS = process.platform === "win32";
@@ -280,7 +280,7 @@ export function killServerProcesses(pids, protect = [], { force = false } = {}) 
   const doomed = plan.targets.filter((row) => row.pid !== process.pid);
   if (!doomed.length) return "gone";
   const result = powerShell(windowsTerminateScript(doomed));
-  if (!result.includes("ASH_RESTART_KILLED")) throw new Error("Windows 进程实例核验或终止失败");
+  if (!result.includes(RESTART_KILLED_MARK)) throw new Error("Windows 进程实例核验或终止失败");
   return "selective";
 }
 

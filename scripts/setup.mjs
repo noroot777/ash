@@ -246,7 +246,7 @@ if (process.env.SKIP_MCP) {
     } else if (r.legacyLeft) {
       warn(`codex:已写入 Navi,但旧条目(${LEGACY_MCP_SERVER_NAMES.join(" / ")} 之一)没删掉(几个名字都能用);可手动执行 codex mcp remove <旧名>`);
     } else {
-      ok(`codex:${r.action === "migrated" ? "旧条目已迁移为 Navi" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
+      ok(`codex:${r.action === "migrated" ? "旧条目已迁移为 Navi" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-navi-setup)" : ""}`);
     }
   } else {
     warn("没装 codex CLI,跳过它的 MCP 注册");

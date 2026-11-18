@@ -35,7 +35,7 @@ export async function preserveRemovedWorktree(repo: string, path: string, branch
       throw new UnreadableWorktreeError(`无法确认工作区 ${path} 已清理：任务分支 ${branch} 不存在或无法解析，无法核对残留源码。目录及文件已保留，请先从已核实的提交恢复该任务分支，再重试清理。`);
     });
 
-  const scratch = await mkdtemp(join(tmpdir(), "ash-worktree-recovery-"));
+  const scratch = await mkdtemp(join(tmpdir(), "navi-worktree-recovery-"));
   try {
     const options = { cwd: path, env: { ...process.env, GIT_INDEX_FILE: join(scratch, "index") } };
     const args = ["--git-dir", common, "--work-tree", path];

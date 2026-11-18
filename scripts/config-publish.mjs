@@ -9,7 +9,7 @@
 //  ① **一律就地写**:换成「临时文件 + rename」会丢掉 Windows DACL / POSIX 扩展 ACL,
 //     断开硬链接,把软链接变成普通文件 —— 而这些文件里装着用户的 key。
 //  ② **就地写没有原子性**,所以恢复手段必须是明确的:写出异常就把这一轮读到的那一版原样
-//     写回去(原来没有这个文件就删掉它)。上一版把「已经留了 `.bak-ash-setup` 备份」当成
+//     写回去(原来没有这个文件就删掉它)。上一版把「已经留了 `.bak-navi-setup` 备份」当成
 //     「失败安全」—— 审查注入一次 ENOSPC 就把用户整份配置留成了半截(`"{\n "userSetting": "k`),
 //     备份完整但活动配置废了,而 CLI 读的是活动那份(本轮审查 R1)。
 //  ③ **提交前先确认盘上还是这一轮读到的那一版**:拼内容、问 CLI 都要时间,这期间用户可能
@@ -75,13 +75,13 @@ export function publishInPlace(file, body, previous, write = writeFileSync) {
     try {
       if (previous === null) rmSync(target, { force: true });
       else write(target, previous, "utf8");
-    } catch { /* 尽力:连回写都失败就只剩那份 .bak-ash-setup 可以手工还原了 */ }
+    } catch { /* 尽力:连回写都失败就只剩那份 .bak-navi-setup 可以手工还原了 */ }
     throw error;
   }
 }
 
 /** 预演产物的名字前缀。后面还要接一段随机值 —— 见 `rehearse` 的「独占创建」。 */
-const PROBE_PREFIX = ".ash-publish-probe-";
+const PROBE_PREFIX = ".navi-publish-probe-";
 
 /**
  * **动用户那份之前,先证明这份正文落得下去**:在同目录(同一个文件系统、同一份配额)写一个
@@ -93,7 +93,7 @@ const PROBE_PREFIX = ".ash-publish-probe-";
  * 完整而活动那份废了,而 CLI 读的是活动那份。预演把这一整类挡在动手之前。
  *
  * 挡不住的有两档,文档和失败话术里都不许瞒着:① 写到一半断电 / 进程被杀;② **只有目标那个
- * inode 坏**的持续故障(同目录预演过得去、真写一直 EIO)。两档都靠 `.bak-ash-setup` 还原。
+ * inode 坏**的持续故障(同目录预演过得去、真写一直 EIO)。两档都靠 `.bak-navi-setup` 还原。
  *
  * **探针一律独占创建**(本轮审查 F1,实测:上一版那个固定名字被指向一个无关文件时,预演把
  * 用户那份正文整份覆盖进去、随后还把它删了)。三条一起才算数:
@@ -132,7 +132,7 @@ function rehearse(target, body, write, create) {
 /**
  * **留一份核对过的、属于我们自己的备份**(本轮审查 F2)。
  *
- * 上一版拿 `copyFileSync` 往 `<配置>.bak-ash-setup` 这个固定名字上直接拷。审查实测:在那个
+ * 上一版拿 `copyFileSync` 往 `<配置>.bak-navi-setup` 这个固定名字上直接拷。审查实测:在那个
  * 名字上摆一条指向用户别的文件的软链接,这一拷就**跟着它**把那份无关文件改成了整份 CLI
  * 配置,而且整条路照样报成功。所以备份跟预演产物同一套所有权约束(见 `rehearse`):
  *  · 用 `wx` 开 —— 路径上此刻有任何东西(普通文件、软链接、目录)都直接 EEXIST;
@@ -145,7 +145,7 @@ function rehearse(target, body, write, create) {
  *
  * 返回 `{ backup }` = 留好了(名字就是我们建的那个);`{ why }` = 没留成。
  */
-function ownBackup(file, previous, suffix = ".bak-ash-setup") {
+function ownBackup(file, previous, suffix = ".bak-navi-setup") {
   const plain = `${file}${suffix}`;
   let backup = plain;
   let fd = null;
@@ -193,7 +193,7 @@ function ownBackup(file, previous, suffix = ".bak-ash-setup") {
  *          **一个字节都没写**(除了「写一半又回写成功」那种,那时 `why` 会说清);
  *          `stale:true` = 盘上那份在这期间被别的程序改过。
  */
-export function publishConfirmed({ file, previous, body, backupSuffix = ".bak-ash-setup", write }) {
+export function publishConfirmed({ file, previous, body, backupSuffix = ".bak-navi-setup", write }) {
   const first = readForWrite(file);
   if (!first) return { ok: false, why: `${file} 读不出来了，这次什么都没写` };
   // 早一道:已经被改过就别白做后面那些慢活(真正作数的是写盘前那一道)。

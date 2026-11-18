@@ -49,7 +49,7 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
   const legacy = before.servers.filter((s) => legacyNames.includes(s.name)).map((s) => s.name);
 
   const existing = existsSync(configFile) ? readFileSync(configFile, "utf8") : null;
-  const sandbox = mkdtempSync(join(tmpdir(), "ash-setup-codex-"));
+  const sandbox = mkdtempSync(join(tmpdir(), "navi-setup-codex-"));
   const sandboxCfg = join(sandbox, "config.toml");
   try {
     // 迁移、追加、确认全在副本上做,用户那份这期间一个字节都不动。

@@ -92,7 +92,7 @@ function resolveTarget(file: string): string {
  * 所有者(uid/gid)没抄:配置在谁的目录里就该由谁这个进程写。
  */
 /** 预演产物的名字前缀。后面还要接一段随机值 —— 见 `rehearse` 的「独占创建」。 */
-const PROBE_PREFIX = ".ash-publish-probe-";
+const PROBE_PREFIX = ".navi-publish-probe-";
 
 /**
  * **动用户那份之前,先证明这份正文落得下去**:在同目录(同一个文件系统、同一份配额)写一个
@@ -139,14 +139,14 @@ function rehearse(target: string, body: string, create: boolean): string | null 
 
 
 /** 备份文件的后缀。跟安装器那份同名:同一个用途,用户只需要记住一个名字。 */
-export const BACKUP_SUFFIX = ".bak-ash-setup";
+export const BACKUP_SUFFIX = ".bak-navi-setup";
 
 /**
  * **改写已有文件之前,先留一份核对过的备份**(上一轮审查 F2 的可修部分)。
  *
  * 为什么非留不可:就地写没有原子替换,而「写出异常就回写旧正文」这条退路在**只有目标那个
  * inode 坏**的持续故障下同样失败 —— 审查在裸 Node 那侧实测过:活动配置留成 `{"other":{"`,
- * 而这条路**一份备份都没有**,用户手里什么都不剩。安装器那侧一直有 `.bak-ash-setup`,服务端
+ * 而这条路**一份备份都没有**,用户手里什么都不剩。安装器那侧一直有 `.bak-navi-setup`,服务端
  * 这条(每次起跑、每次读设置页都会走)原来没有。
  *
  * **备份也是发布产物,所以同样独占创建**(本轮审查 F2):上一版拿 `copyFileSync` 往那个固定
@@ -312,7 +312,7 @@ const commit: Commit = (read, body) => {
   return null;
 };
 
-/** 没写成就别留一份白备份:用户看见 `.bak-ash-setup` 会以为我们动过手。只删自己建的那份。 */
+/** 没写成就别留一份白备份:用户看见 `.bak-navi-setup` 会以为我们动过手。只删自己建的那份。 */
 function dropBackup(saved: { backup: string | null; created: boolean }, why: string): string {
   if (saved.backup && saved.created) { try { rmSync(saved.backup, { force: true }); } catch { /* 尽力 */ } }
   return why;

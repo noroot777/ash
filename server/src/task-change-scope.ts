@@ -42,6 +42,7 @@
 // 同一组提交号的答案不会变，分支头、目标分支头、开工点任何一个动了，键就变了。
 import { execFileText as exec } from "./exec.js";
 import { expandHome, isGitRepo, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
+import { SYNTHETIC_COMMIT_IDENTITY_ENV, SYNTHETIC_COMMIT_MESSAGE } from "./navi-commit-identity.js";
 
 /** 定口径要用到的任务字段；直接把任务行递进来即可。 */
 export interface ChangeScopeTask {
@@ -142,11 +143,6 @@ async function readShape(repo: string, head: string, start: string | null, targe
 type Combined = { ok: true; commit: string; synthesized: boolean } | { ok: false; reason: "base_conflict" };
 const combinations = remembered<Combined>();
 
-// 合成的提交由 ash 落款、日期写死：同样的两边永远合出同一个提交号。
-const ASH_FIXED_IDENTITY = {
-  GIT_AUTHOR_NAME: "ash", GIT_AUTHOR_EMAIL: "ash@localhost", GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
-  GIT_COMMITTER_NAME: "ash", GIT_COMMITTER_EMAIL: "ash@localhost", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
-};
 
 /** 把几版代码合成一个提交；被别的包含的不重复合。合不拢 = base_conflict。 */
 async function combine(repo: string, picks: string[]): Promise<Combined> {
@@ -168,8 +164,8 @@ async function combine(repo: string, picks: string[]): Promise<Combined> {
       if (conflicted) return { ok: false, reason: "base_conflict" };
       throw error;
     }
-    acc = await git(repo, ["commit-tree", tree, "-p", acc, "-p", next, "-m", "ash: 任务改动的对比基准"],
-      { ...process.env, ...ASH_FIXED_IDENTITY });
+    acc = await git(repo, ["commit-tree", tree, "-p", acc, "-p", next, "-m", SYNTHETIC_COMMIT_MESSAGE],
+      { ...process.env, ...SYNTHETIC_COMMIT_IDENTITY_ENV });
   }
   return { ok: true, commit: acc, synthesized: kept.length > 1 };
 }

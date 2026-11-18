@@ -86,7 +86,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   // repoPath 按用户写的原样存（`~/code/x` 保持可读、可搬机器），所以每个消费点都得自己
   // 展开——少这一步，watchChatWorkspace 的 realpath 会直接 ENOENT，被 @ 的成员一个不剩
   // 全报同一条错，而且错在 CLI 起来之前，看着像「智能体坏了」。
-  const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : sideCwd ?? expandHome(project!.repoPath);
+  const cwd = temporary ? await mkdtemp(join(tmpdir(), "navi-chat-")) : sideCwd ?? expandHome(project!.repoPath);
   if (!temporary && !await stat(cwd).then((entry) => entry.isDirectory()).catch(() => false)) {
     throw new Error(`群聊项目的工作目录不存在：${project!.repoPath}。请在项目设置里改成这台机器上真实存在的目录，再重新 @。`);
   }

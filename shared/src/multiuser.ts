@@ -3,6 +3,8 @@
 // 纯类型 + 几个两端都要用的判据函数(目录名 slug 校验、角色比较)。运行时函数只能走
 // 子路径 `@ash/shared/multiuser` 引用 —— index.ts 不能转发运行时值(服务端直跑 .ts 源码)。
 
+import { FROZEN_DEFAULT_GIT_EMAIL_DOMAIN } from "./legacy-names.ts";
+
 /**
  * 实例模式。`single` = 自用,一行鉴权都不拦,与本功能上线前完全一致;
  * `multi` = 多人,闸生效。**只能单向转换**。
@@ -209,7 +211,7 @@ export function suggestDirName(displayName: string): string {
 }
 
 /**
- * 按姓名生成默认 git 署名邮箱。域名固定用 `ash.local` —— 不是真邮箱,只求可归属。
+ * 按姓名生成默认 git 署名邮箱。域名固定用 `FROZEN_DEFAULT_GIT_EMAIL_DOMAIN`(为什么不随改名换,见那里)—— 不是真邮箱,只求可归属。
  *
  * 姓名推不出 slug 时(中文名)退到 `dirName`,**不是**退到字面量 `user`:后者会让
  * 每一个中文名用户都拿到同一个 `user@ash.local`,而这一列存在的全部理由就是让
@@ -217,7 +219,7 @@ export function suggestDirName(displayName: string): string {
  */
 export function suggestGitEmail(displayName: string, dirName?: string): string {
   const local = suggestDirName(displayName) || (dirName ?? "").trim() || "user";
-  return `${local}@ash.local`;
+  return `${local}@${FROZEN_DEFAULT_GIT_EMAIL_DOMAIN}`;
 }
 
 // ── 权限判据 ────────────────────────────────────────────────────────────────

@@ -36,7 +36,7 @@ try {
   writeFileSync(file, quoted);
   assert.deepEqual(registerCodexMcp({ ...base, listServers: answers(listed("ash")) }), { action: "kept", enabled: true });
   assert.equal(readFileSync(file, "utf8"), quoted);
-  assert.equal(existsSync(`${file}.bak-ash-setup`), false);
+  assert.equal(existsSync(`${file}.bak-navi-setup`), false);
 
   // codex 读不动现在这份配置 → 不写、不备份(写了只会让它更坏)。
   const broken = `[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.ash]\ncommand = "b"\n`;
@@ -44,7 +44,7 @@ try {
   const blocked = registerCodexMcp({ ...base, listServers: answers({ ok: false, why: "codex mcp list 退出码 1" }) });
   assert.equal(blocked.action, "blocked");
   assert.equal(readFileSync(file, "utf8"), broken);
-  assert.equal(existsSync(`${file}.bak-ash-setup`), false);
+  assert.equal(existsSync(`${file}.bak-navi-setup`), false);
 
   // 确实没有 → 追加;Windows 路径的反斜杠要成对。
   writeFileSync(file, `model = "x"\n`);
@@ -52,7 +52,7 @@ try {
   assert.equal(added.action, "added");
   const written = readFileSync(file, "utf8");
   assert.ok(written.startsWith(`model = "x"\n`) && written.includes(`args = ["C:\\\\ash\\\\mcp\\\\dist\\\\index.js"]`));
-  assert.equal(readFileSync(`${file}.bak-ash-setup`, "utf8"), `model = "x"\n`);
+  assert.equal(readFileSync(`${file}.bak-navi-setup`, "utf8"), `model = "x"\n`);
 
   // **批准在写之前**:拼完那份 codex 读不动(或者仍看不到 ash) → 用户那份一个字节都没动,
   // 也不留备份、不留临时副本。上一版是「先写进去、读不动再还原」,审查第 2/3 轮的 F1 都出在
@@ -63,11 +63,11 @@ try {
   ]) {
     const before = `model = "y"\n`;
     writeFileSync(file, before);
-    rmSync(`${file}.bak-ash-setup`, { force: true });
+    rmSync(`${file}.bak-navi-setup`, { force: true });
     const r = registerCodexMcp({ ...base, listServers: answers(listed(), second) });
     assert.equal(r.action, "blocked", why);
     assert.equal(readFileSync(file, "utf8"), before, `${why}:一个字节都不许动`);
-    assert.equal(existsSync(`${file}.bak-ash-setup`), false, `${why}:没写就不该留备份`);
+    assert.equal(existsSync(`${file}.bak-navi-setup`), false, `${why}:没写就不该留备份`);
     assert.equal(existsSync(`${file}.ash-tmp`), false, `${why}:不留临时副本`);
   }
   // 原来没有这个文件 → 批准不过就不该凭空造一个。
@@ -79,7 +79,7 @@ try {
   // 侧是 publishFresh 的「只替换我们读到的那一版」(审查第 2 轮 F1)。
   {
     writeFileSync(file, `model = "mine"\n`);
-    rmSync(`${file}.bak-ash-setup`, { force: true });
+    rmSync(`${file}.bak-navi-setup`, { force: true });
     const foreign = `model = "someone-else"\n[mcp_servers.user_added]\ncommand = "x"\n`;
     let asked = 0;
     const r = registerCodexMcp({
@@ -94,7 +94,7 @@ try {
     assert.match(r.why, /被别的程序改过/);
     assert.equal(readFileSync(file, "utf8"), foreign, "别人那次改动必须原样留着");
     assert.equal(r.backup, null, "我们一个字节都没动它,给备份路径只会让人以为改了");
-    assert.equal(existsSync(`${file}.bak-ash-setup`), false);
+    assert.equal(existsSync(`${file}.bak-navi-setup`), false);
   }
 
   // 只有历史名 → 让 codex 在**沙盘**里删旧的,再在那份结果上补规范名。
@@ -116,7 +116,7 @@ try {
   writeFileSync(file, `[mcp_servers.harness]\ncommand = "node"\n`);
   // 上一格那次成功发布已经在固定名字上留了一份备份。**它是用户手里的旧版本,不许被盖掉**
   // (本轮审查 F2:备份也是独占创建的自有对象,名字被占住就换一个唯一名字)。
-  const plainBackup = `${file}.bak-ash-setup`;
+  const plainBackup = `${file}.bak-navi-setup`;
   const keptEarlier = readFileSync(plainBackup, "utf8");
   const kept = registerCodexMcp({
     ...base,
@@ -148,7 +148,7 @@ try {
     chmodSync(priv, 0o600);
     assert.equal(registerCodexMcp({ ...base, configFile: priv, listServers: answers(listed(), listed("ash")) }).action, "added");
     assert.equal(statSync(priv).mode & 0o777, 0o600, "写完还得是 0600");
-    assert.equal(statSync(`${priv}.bak-ash-setup`).mode & 0o777, 0o600, "备份也不许比原文件宽");
+    assert.equal(statSync(`${priv}.bak-navi-setup`).mode & 0o777, 0o600, "备份也不许比原文件宽");
     // ② 软链(dotfiles/集中管理)要写它指向的那份,别把链接换成普通文件。
     const managed = join(directory, "managed.toml");
     const link = join(directory, "linked.toml");

@@ -1,0 +1,24 @@
+import { FROZEN_SYNTHETIC_COMMIT_EMAIL, FROZEN_SYNTHETIC_COMMIT_MESSAGE, FROZEN_SYNTHETIC_COMMIT_NAME } from "@ash/shared/legacy-names";
+
+/**
+ * Navi 替任务落款的提交（合前置的开工点、门禁的合并预览、接力前的 WIP 保存）用的身份：项目没配
+ * 身份时 commit-tree / commit 也不至于失败。这些提交带真实时间，已经写下的不改写，新的署新名。
+ */
+export const NAVI_GIT_NAME = "navi";
+export const NAVI_GIT_EMAIL = "navi@localhost";
+export const NAVI_GIT_IDENTITY_ENV = {
+  GIT_AUTHOR_NAME: NAVI_GIT_NAME, GIT_AUTHOR_EMAIL: NAVI_GIT_EMAIL,
+  GIT_COMMITTER_NAME: NAVI_GIT_NAME, GIT_COMMITTER_EMAIL: NAVI_GIT_EMAIL,
+};
+/** 同一个身份的 `git -c` 写法。 */
+export const NAVI_GIT_IDENTITY_ARGS = ["-c", `user.name=${NAVI_GIT_NAME}`, "-c", `user.email=${NAVI_GIT_EMAIL}`];
+
+/**
+ * 合成「任务改动的对比基准」用的落款：日期也写死，同样的两边永远合出同一个提交号。落款冻结在旧名上，
+ * 理由见 `FROZEN_SYNTHETIC_COMMIT_NAME`。
+ */
+export const SYNTHETIC_COMMIT_IDENTITY_ENV = {
+  GIT_AUTHOR_NAME: FROZEN_SYNTHETIC_COMMIT_NAME, GIT_AUTHOR_EMAIL: FROZEN_SYNTHETIC_COMMIT_EMAIL, GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+  GIT_COMMITTER_NAME: FROZEN_SYNTHETIC_COMMIT_NAME, GIT_COMMITTER_EMAIL: FROZEN_SYNTHETIC_COMMIT_EMAIL, GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+};
+export const SYNTHETIC_COMMIT_MESSAGE = FROZEN_SYNTHETIC_COMMIT_MESSAGE;

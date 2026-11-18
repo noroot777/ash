@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileText } from "./exec.js";
+import { GATE_NATIVE_CACHE_DIR } from "./accept-gate-confinement-supervisor.js";
 
 let compiling: Promise<string> | null = null;
 
@@ -13,12 +14,12 @@ export function gateMacScannerExecutable(): Promise<string> {
 
 export function cachedGateMacScannerExecutable(): string | null {
   const digest = createHash("sha256").update(MAC_SCANNER_SOURCE).digest("hex");
-  const executable = join(tmpdir(), "ash-accept-gate", `macos-scanner-${process.arch}-${digest}`);
+  const executable = join(tmpdir(), GATE_NATIVE_CACHE_DIR, `macos-scanner-${process.arch}-${digest}`);
   return existsSync(executable) ? executable : null;
 }
 
 async function compileScanner(): Promise<string> {
-  const directory = join(tmpdir(), "ash-accept-gate");
+  const directory = join(tmpdir(), GATE_NATIVE_CACHE_DIR);
   mkdirSync(directory, { recursive: true });
   const digest = createHash("sha256").update(MAC_SCANNER_SOURCE).digest("hex");
   const executable = join(directory, `macos-scanner-${process.arch}-${digest}`);

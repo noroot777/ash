@@ -111,6 +111,20 @@ export const LEGACY_HOST_MCP_SETUP_PATH = "/ash-mcp/host-setup";
 /** 注入给 claude 的 MCP 配置文件所在子目录（runs/<任务>/ 与数据目录下）的旧名。写新回合时顺手删旧目录里的。拆：升级前的任务目录都被回收之后。 */
 export const LEGACY_INJECTED_MCP_DIR = "ash-mcp";
 
+/**
+ * claude `/goal` 的目标上下文文件（系统临时目录下 `<前缀><pid>-<uuid>.md`）与命令行里指着它的那段记号
+ * （`<记号:"路径">`）。记号随命令行落库，服务重启后收尾时按它找回文件删掉。拆：升级前起的 `/goal` 回合
+ * 都收完尾之后。
+ */
+export const LEGACY_CLAUDE_GOAL_FILE_PREFIX = "ash-claude-goal-";
+export const LEGACY_CLAUDE_GOAL_CONTEXT_TAG = "ash-goal-context";
+
+/**
+ * Windows 上验收门禁 Job 对象的名字前缀。整串名字记在门禁的启动记录里，接回时按前缀认出它是 Job
+ * 而不是 cgroup。拆：升级前开跑的门禁都收完尾之后。
+ */
+export const LEGACY_WINDOWS_GATE_JOB_PREFIX = "Local\\ash-accept-gate-";
+
 // ── 冻结：协议版本号与哈希盐，当前版本照旧写 ────────────────────────────────────────────
 
 /** 接力签名/加密的域标签。换了它，旧版对端验不了签、解不了封，库里已存的签名也作废。拆：接力协议升 v2 时。 */
@@ -164,3 +178,44 @@ export const FROZEN_MONITOR_KIND_OWN = "ash";
 
 /** codex 中转供应商 id。codex 把它记进会话存档，换了它，升级前的会话续跑时对不上供应商。拆：不拆。 */
 export const FROZEN_CODEX_RELAY_PROVIDER_ID = "ash_relay";
+
+/**
+ * 配了准备命令的验收门禁，其测试快照所在的独立根（系统临时目录下 `<前缀><库路径摘要>`）。它不是用完
+ * 即弃的临时目录：启动清扫、任务了结时回收、收尾核验都按这个根去找升级前留下的快照；而且根的路径
+ * 进了门禁的环境摘要（`accept-gate-deps.ts` 的 ambientDigest），换了它，所有「跑过就沿用」的通过
+ * 记录在升级那一刻一起失效、全部重跑。用户看不见它（要挪用 `NAVI_GATE_ISOLATED_DIR`），所以冻结。
+ * 拆：不拆。
+ */
+export const FROZEN_GATE_ISOLATED_DIR_PREFIX = "ash-accept-gate-";
+
+/**
+ * 多人模式下没填 git 邮箱的用户，替他署名用的默认域名（`<目录名>@ash.local`）。这些用户此前的每一个
+ * 提交都署着它；换了它，同一个人在 git log / blame / 代码托管的作者映射里从升级那天起变成两个人。
+ * 设置页给出的建议值也必须是它（建议值就是不填时的实际值）。拆：给空邮箱的用户补写一次显式邮箱之后。
+ */
+export const FROZEN_DEFAULT_GIT_EMAIL_DOMAIN = "ash.local";
+
+/**
+ * 合成「任务改动的对比基准」提交时用的落款与说明（`task-change-scope.ts`）。日期也是写死的，目的就是
+ * 同样的两边永远合出同一个提交号 —— 审查提示、报告里引用的对比基准靠这个号前后对得上。换了落款，
+ * 同一个基准升级前后是两个提交号。这个提交没有引用指着、用户看不到，所以冻结。拆：不拆。
+ */
+export const FROZEN_SYNTHETIC_COMMIT_NAME = "ash";
+export const FROZEN_SYNTHETIC_COMMIT_EMAIL = "ash@localhost";
+export const FROZEN_SYNTHETIC_COMMIT_MESSAGE = "ash: 任务改动的对比基准";
+
+// ── 只写新名、没有旧名读取方的落盘字样（不在这里定义，列出来备查）──────────────────────────
+//
+// 下面这些在改名时直接换成了新名：旧名产物只是升级前留下的、谁都不再按名字去找的东西，所以不认旧名。
+//  · CLI 配置发布的备份 `.bak-navi-setup`（升级前留下的 `.bak-ash-setup` 原样留在用户手里，没人删它）
+//    与预演文件 `.navi-publish-probe-`：`scripts/config-publish.mjs`、`server/src/auth/config-publish.ts`；
+//  · 原生验收工具的编译缓存 `navi-accept-gate/`（按源码摘要命中，换目录只是重编一次）；
+//  · 用完即删的临时目录：`navi-merge-preview-`、`navi-sealed-`、`navi-accept-`、`navi-worktree-recovery-`、
+//    `navi-preview-trial-`、`navi-regression-index-`、`navi-base-update-`、`navi-chat-`、`navi-setup-codex-`、
+//    `navi-mcp-ask-`；
+//  · Windows 重启终止脚本的回复行 `NAVI_RESTART_*`（同一次调用生成、同一次调用解析）；终端停止命令的
+//    圈定记号 `stop-<id>`（只活在那条命令的生命期里）；
+//  · Navi 替任务落款的提交身份 `navi <navi@localhost>`（`server/src/navi-commit-identity.ts`，提交带真实时间，
+//    已写下的提交不改写）；
+//  · 模型目录请求的 User-Agent `navi/model-catalog`、中转诊断错误码 `NAVI_*`（同一进程里产生和消费）、
+//    终端包装壳的 `$0` `navi-terminal`、分发包名 `navi-<日期>-<版本>`。

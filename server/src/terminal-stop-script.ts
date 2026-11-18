@@ -170,7 +170,7 @@ export function runStopScript(cwd: string, script: string, timeoutMs: number): P
     }
     // 圈定只在 Windows 用:POSIX 那边 detached 起的进程组本身就是内核级的容器,而这台设备
     // 在 macOS 上没有等价物(openConfinement 会返回 null 并打一句弃权)。
-    const confine = IS_WINDOWS && child.pid !== undefined ? openConfinement(`ash-stop-${id()}`) : null;
+    const confine = IS_WINDOWS && child.pid !== undefined ? openConfinement(`stop-${id()}`) : null;
     if (child.pid !== undefined) confine?.enroll(child.pid);
     let out = "";
     let err = "";

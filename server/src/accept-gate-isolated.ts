@@ -18,6 +18,7 @@
 //
 // 没配准备命令的那一档不动：它的依赖计划（ambient）就是按 RUNS_DIR 那条祖先链登记的。
 import { readEnv } from "@ash/shared/env-names";
+import { FROZEN_GATE_ISOLATED_DIR_PREFIX } from "@ash/shared/legacy-names";
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -62,7 +63,7 @@ export function isolatedGateEnv(env: NodeJS.ProcessEnv, cwd: string): NodeJS.Pro
 const gateIsolatedOverride = readEnv(process.env, "NAVI_GATE_ISOLATED_DIR");
 export const GATE_ISOLATED_DIR = gateIsolatedOverride
   ? resolve(gateIsolatedOverride)
-  : join(tmpdir(), `ash-accept-gate-${createHash("sha256").update(resolve(RUNS_DIR)).digest("hex").slice(0, 12)}`);
+  : join(tmpdir(), `${FROZEN_GATE_ISOLATED_DIR_PREFIX}${createHash("sha256").update(resolve(RUNS_DIR)).digest("hex").slice(0, 12)}`);
 
 /**
  * 快照向上能找到的第一个 `node_modules`（不含快照自己那一层）；找不到 = null。读不动就抛（optionalRead

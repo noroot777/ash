@@ -27,7 +27,7 @@ const { mountProjectRoutes } = await import("../src/project-routes.js");
 const { mountAcceptMemoryRoutes } = await import("../src/accept-memory.js");
 const { branchDependency, branchDeletionBlock, dependentTasks, baseUpdateBackupPrefix } = await import("../src/task-branch-plan.js");
 const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
-const { updateTaskBase } = await import("../src/task-base-update.js");
+const { updateTaskBase, BASE_UPDATE_TMP_PREFIX } = await import("../src/task-base-update.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
 await ensureSchema();
 const api = new Hono();
@@ -570,7 +570,7 @@ try {
     assert.equal((await updateTaskBase(s.child.id, before)).ok, false);
     assert.equal(git(s.childWs.path, "rev-parse", "HEAD"), before);
     assert.equal(git(s.childWs.path, "status", "--porcelain"), "");
-    assert.equal(git(s.repo, "worktree", "list").includes("ash-base-update-"), false);
+    assert.equal(git(s.repo, "worktree", "list").includes(BASE_UPDATE_TMP_PREFIX), false);
     console.log("✓ failed rebase preserves child and cleans temporary checkout");
   }
   {

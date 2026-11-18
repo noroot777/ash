@@ -21,6 +21,7 @@
 // 不用 worktree 的下游不在这里定起点：它在项目目录里干活，能拿到的只有那里检出的代码（`checkoutHasPrerequisites`）。
 import { execFileText as exec } from "./exec.js";
 import { expandHome, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
+import { NAVI_GIT_IDENTITY_ENV } from "./navi-commit-identity.js";
 import { commitAt, containsCommit, versionDelivery } from "./task-branch-plan.js";
 import { deliveredCommit } from "./prerequisite-standing.js";
 import { isAcceptedStage, type TaskStage } from "@ash/shared";
@@ -41,12 +42,6 @@ async function mergeTree(repo: string, ours: string, theirs: string): Promise<st
     return stdout.split("\n")[0]!.trim() || null;
   } catch { return null; }
 }
-
-// 这一个提交是 ash 替任务合的，署 ash 的名：项目没配身份时 commit-tree 也不至于失败。
-const ASH_IDENTITY = {
-  GIT_AUTHOR_NAME: "ash", GIT_AUTHOR_EMAIL: "ash@localhost",
-  GIT_COMMITTER_NAME: "ash", GIT_COMMITTER_EMAIL: "ash@localhost",
-};
 
 /** 一条前置，连同站稳判定核实过的那一版（没有就是 null）。 */
 export type CertifiedPrerequisite = { task: TaskRow; commit: string | null };
@@ -115,8 +110,8 @@ export async function prerequisiteStart(repoPath: string, task: TaskRow, prerequ
       return { ok: false, reason: `${named(next)}的改动和前面几条合在一起时有冲突` };
     }
     const names = kept.slice(0, index + 1).map(named).join("、");
-    acc = (await exec("git", ["-C", repo, "commit-tree", tree, "-p", acc, "-p", next.commit, "-m", `ash: 合并前置 ${names}`],
-      { env: { ...process.env, ...ASH_IDENTITY } })).stdout.trim();
+    acc = (await exec("git", ["-C", repo, "commit-tree", tree, "-p", acc, "-p", next.commit, "-m", `navi: 合并前置 ${names}`],
+      { env: { ...process.env, ...NAVI_GIT_IDENTITY_ENV } })).stdout.trim();
   }
   return { ok: true, commit: acc, baseBranch: null, inherited };
 }

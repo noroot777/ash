@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, rmdir, stat, w
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { type CheckoutSettings, cloneSealedSnapshot, isSealedSnapshot, readOnlyGit, sealedGit } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
+import { NAVI_GIT_IDENTITY_ARGS } from "./navi-commit-identity.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
@@ -507,9 +508,9 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
  * 预演写进主仓对象库的，本地克隆整份带过来（worktree 与主仓共用一份）。
  */
 async function materializePreview(target: string, targetCommit: string, tree: string): Promise<string> {
-  const commit = (await sealedGit(target, ["-c", "user.name=ash", "-c", "user.email=ash@localhost",
+  const commit = (await sealedGit(target, [...NAVI_GIT_IDENTITY_ARGS,
     "commit-tree", "--no-gpg-sign", tree, "-p", "HEAD", "-p", targetCommit,
-    "-m", `ash 验收门禁合并预览：合入 ${targetCommit}`])).trim();
+    "-m", `Navi 验收门禁合并预览：合入 ${targetCommit}`])).trim();
   await sealedGit(target, ["checkout", "--detach", commit]);
   return commit;
 }

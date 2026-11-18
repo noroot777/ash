@@ -5,6 +5,7 @@ import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
 import { runDataMigrations } from "./migrations.js";
 import { COLUMN_MIGRATIONS } from "./column-migrations.js";
+import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
 import { ensureChatSchema } from "./schema-chat.js";
 import { ensureHandoffTokenUnique } from "./handoff-token-index.js";
 import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
@@ -171,7 +172,7 @@ export async function ensureSchema() {
       events INTEGER NOT NULL DEFAULT 0, exit_code INTEGER,
       started_at TEXT NOT NULL, expires_at TEXT NOT NULL,
       ended_at TEXT, ended_reason TEXT, owner_user_id TEXT,
-      kind TEXT NOT NULL DEFAULT 'ash', native_id TEXT, cli_session_id TEXT,
+      kind TEXT NOT NULL DEFAULT '${OWN_MONITOR_KIND}', native_id TEXT, cli_session_id TEXT,
       source_lifetime TEXT NOT NULL DEFAULT 'unknown',
       lifetime_evidence TEXT, source_pid INTEGER, source_pid_started_at TEXT,
       start_evidence TEXT, timeout_ms INTEGER,
@@ -378,13 +379,13 @@ export async function ensureSchema() {
   // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来；证据列同理补 'self'
   // （新列对存量行一律 NULL,而 NULL 的语义是「旧算法推的、不可信」,对 ash 行不成立）。幂等。
   try {
-    await client.execute("UPDATE monitors SET source_lifetime='bounded' WHERE kind='ash' AND source_lifetime<>'bounded'");
-    await client.execute("UPDATE monitors SET lifetime_evidence='self' WHERE kind='ash' AND lifetime_evidence IS NULL");
+    await client.execute(`UPDATE monitors SET source_lifetime='bounded' WHERE kind='${OWN_MONITOR_KIND}' AND source_lifetime<>'bounded'`);
+    await client.execute(`UPDATE monitors SET lifetime_evidence='self' WHERE kind='${OWN_MONITOR_KIND}' AND lifetime_evidence IS NULL`);
     // ash 行的起点就是 ash 自己 spawn 那一刻,从来没有不确定性 —— 档位 'observed'、误差界 0。
     // **这两句必须成对**:只补档位不补误差界的话,存量 ash 行会因为「无法重验」而丢掉期限
     // (第 7 轮把起点判据从结论字符串换成了可重验的误差界)。
-    await client.execute("UPDATE monitors SET start_evidence='observed' WHERE kind='ash' AND start_evidence IS NULL");
-    await client.execute("UPDATE monitors SET start_anchor_width_ms=0 WHERE kind='ash' AND start_anchor_width_ms IS NULL");
+    await client.execute(`UPDATE monitors SET start_evidence='observed' WHERE kind='${OWN_MONITOR_KIND}' AND start_evidence IS NULL`);
+    await client.execute(`UPDATE monitors SET start_anchor_width_ms=0 WHERE kind='${OWN_MONITOR_KIND}' AND start_anchor_width_ms IS NULL`);
   } catch {
     /* 列还不存在 */
   }

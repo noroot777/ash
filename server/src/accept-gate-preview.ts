@@ -55,7 +55,7 @@ async function scratch(): Promise<{ root: string; empty: string }> {
   const current = await scratchRoot?.catch(() => null);
   if (current && existsSync(current.empty)) return current;
   scratchRoot = (async () => {
-    const root = await mkdtemp(join(tmpdir(), "ash-merge-preview-"));
+    const root = await mkdtemp(join(tmpdir(), "navi-merge-preview-"));
     const empty = join(root, "empty");
     await writeFile(empty, "");
     return { root, empty };
@@ -102,7 +102,7 @@ export async function sealedGitDir(checkout: string, entries: [string, string][]
   const ask = async (args: string[]) => outputLine((await git(checkout, args)).stdout);
   const format = await ask(["rev-parse", "--show-object-format"]) || "sha1";
   const common = await ask(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  const dir = await mkdtemp(join(tmpdir(), "ash-sealed-"));
+  const dir = await mkdtemp(join(tmpdir(), "navi-sealed-"));
   const dispose = () => rm(dir, { recursive: true, force: true });
   try {
     const gitDir = join(dir, "git");

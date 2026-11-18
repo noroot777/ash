@@ -102,7 +102,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TestDirectory, directoryOwnershipError } from "./test-process-directory.mjs";
 import { scopes, cleanupFailures } from "./test-process-registry.mjs";
-import { windowsTerminateScript } from "./windows-restart.mjs";
+import { RESTART_SKIPPED_MARK, windowsTerminateScript } from "./windows-restart.mjs";
 // 「此刻系统里有些什么」全在那边答(ps / lsof / CIM 的输出、实例身份的比较),这边只下所有权
 // 与清场的判据 —— 两种问题分开,见 test-process-probe.mjs 文件头。
 import {
@@ -200,7 +200,7 @@ function windowsSignalInstance(row) {
   let output;
   try { output = powerShellSync(windowsTerminateScript([{ pid: row.pid, created: row.created }], { tolerant: true })); }
   catch (error) { return { pid: row.pid, verdict: "unverifiable", error }; }
-  const skipped = output.split("\n").some((line) => new RegExp(`^ASH_RESTART_SKIPPED ${row.pid}$`).test(line.trim()));
+  const skipped = output.split("\n").some((line) => new RegExp(`^${RESTART_SKIPPED_MARK} ${row.pid}$`).test(line.trim()));
   return { pid: row.pid, verdict: skipped ? "unverifiable" : "same" };
 }
 

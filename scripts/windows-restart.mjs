@@ -57,9 +57,13 @@ export function windowsRestartTargets(rows, rootPid, protectedPids) {
  *    见 test-process-scope.mjs 的「先砍一刀」)。
  *
  * `tolerant` 决定代次对不上时怎么办:默认**整批抛**(生产重启要么全对要么一个都不动);
- * 开了则跳过那一个、把号码打在 `ASH_RESTART_SKIPPED <pid>` 上继续 —— 清场时一个号码换了
+ * 开了则跳过那一个、把号码打在 `NAVI_RESTART_SKIPPED <pid>` 上继续 —— 清场时一个号码换了
  * 主人不该把其余真该停的一起拦下。
  */
+/** 终止脚本回给调用方的两种行：全部做完、以及代次对不上而跳过的那个号码（`<标记> <pid>`）。 */
+export const RESTART_KILLED_MARK = "NAVI_RESTART_KILLED";
+export const RESTART_SKIPPED_MARK = "NAVI_RESTART_SKIPPED";
+
 export function windowsTerminateScript(targets, options = {}) {
   const identities = targets.map((row) => `${row.pid}:${row.created}`).join(",");
   return `$ErrorActionPreference='Stop'
@@ -68,7 +72,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-public static class AshRestartHandles {
+public static class NaviRestartHandles {
   [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr handle, out long born, out long exit, out long kernel, out long user);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr handle, uint code);
@@ -114,10 +118,10 @@ public static class AshRestartHandles {
     } finally {
       foreach (var handle in handles) CloseHandle(handle);
     }
-    foreach (var pid in skipped) Console.Out.WriteLine("ASH_RESTART_SKIPPED " + pid);
+    foreach (var pid in skipped) Console.Out.WriteLine("${RESTART_SKIPPED_MARK} " + pid);
   }
 }
 '@
-[AshRestartHandles]::Kill('${identities}', $${options.tolerant ? "true" : "false"})
-[Console]::Out.WriteLine('ASH_RESTART_KILLED')`;
+[NaviRestartHandles]::Kill('${identities}', $${options.tolerant ? "true" : "false"})
+[Console]::Out.WriteLine('${RESTART_KILLED_MARK}')`;
 }

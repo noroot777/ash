@@ -101,7 +101,7 @@ export async function codexAccepts(
   //
   // (当初搬去 `data/tmp` 是为了躲 codex 在 `%TEMP%` 下那句「拒绝在临时目录里建 PATH
   // 别名」的告警 —— 那只是噪音,现在在下面按 `WARNING:` 滤掉,不该拿判决的正确性去换。)
-  const sandbox = mkdtempSync(join(tmpdir(), "ash-mcp-ask-"));
+  const sandbox = mkdtempSync(join(tmpdir(), "navi-mcp-ask-"));
   try {
     writeFileSync(join(sandbox, "config.toml"), candidate, { encoding: "utf8", mode: TMP_MODE });
     const outcome = await ask(sandbox);

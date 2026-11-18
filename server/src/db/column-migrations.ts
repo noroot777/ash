@@ -1,6 +1,8 @@
 // ensureSchema 的容错加列清单(从 db/index.ts 拆出,文件 700 行闸;语义原样):
 // 每条独立执行、"column already exists" 一律吞掉 —— 顺序只在**同表同列有依赖**时才要紧,
 // 列的语义注释全部住在这里,改列先读上下文。真正的一次性数据搬运在 migrations.ts。
+import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
+
 export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN queue_advance_request TEXT",
   "ALTER TABLE tasks ADD COLUMN queue_seat_token TEXT",
@@ -22,7 +24,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
   // 那一次在快照里先跑的准备命令。旧行 NULL = 没配过（依赖借用工作区那一份）。
   "ALTER TABLE accept_gate_runs ADD COLUMN prepare_command TEXT",
-  "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
+  `ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT '${OWN_MONITOR_KIND}'`,
   // 身份还没补全时,把「那一刻 spawn 的」这个时间锚留在债上:哨兵行和身份边条都可能先没了,
   // 而缺了锚,一次查询失败就被永久固化成「这条证不出身份」(第 10 轮审查 F2-B)。
   "ALTER TABLE monitor_reclaim_debts ADD COLUMN spawn_anchor_ms INTEGER",

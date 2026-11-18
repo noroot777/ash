@@ -22,7 +22,7 @@ try {
   });
   assert.equal(registerKimiMcp({ ...options, url: "http://localhost:9999" }).added, false);
   assert.equal(readFileSync(file, "utf8"), created);
-  assert.equal(existsSync(`${file}.bak-ash-setup`), false);
+  assert.equal(existsSync(`${file}.bak-navi-setup`), false);
 
   for (const name of [ASH, "ash", "harness"]) {
     const existing = JSON.stringify({ mcpServers: { [name]: { command: "custom", args: ["keep"] } } });
@@ -34,7 +34,7 @@ try {
   const original = JSON.stringify({ extra: true, mcpServers: { other: { url: "https://example.invalid/mcp" } } });
   writeFileSync(file, original);
   assert.equal(registerKimiMcp(options).added, true);
-  assert.equal(readFileSync(`${file}.bak-ash-setup`, "utf8"), original);
+  assert.equal(readFileSync(`${file}.bak-navi-setup`, "utf8"), original);
   const merged = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(merged.extra, true);
   assert.deepEqual(merged.mcpServers.other, { url: "https://example.invalid/mcp" });

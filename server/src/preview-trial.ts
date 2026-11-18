@@ -82,7 +82,7 @@ export async function trialPreviewScript(options: PreviewTrialOptions): Promise<
   const banner = `$ ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none NAVI_PREVIEW=1 NAVI_PREVIEW_MODE=${mode} ${script}\n`;
   // Windows 的多行脚本要落成 .cmd 才跑得起来（previewScriptLaunch），那个文件写在 ash 自己
   // 的临时目录里 —— 写进用户仓库就是往人家的 git status 里塞垃圾。
-  const dir = mkdtempSync(join(tmpdir(), "ash-preview-trial-"));
+  const dir = mkdtempSync(join(tmpdir(), "navi-preview-trial-"));
   let text = banner;
   let outcome: PreviewTrialOutcome | null = null;
   let pid = 0;

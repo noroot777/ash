@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
-import { closeRelayDispatchers, relayErrorResponse, relayFetch, RelayRequestError } from "../src/llm-relay.js";
+import { closeRelayDispatchers, relayErrorResponse, relayFetch, RelayRequestError, RELAY_HEADERS_TIMEOUT_CODE, RELAY_PROXY_UNAVAILABLE_CODE } from "../src/llm-relay.js";
 import { parseGnomeProxy, refreshSystemProxy, setSystemProxyReaderForTests, type SystemProxySettings } from "../src/system-proxy.js";
 
 const warnings: string[] = [];
@@ -168,7 +168,7 @@ try {
   const hungFailure = assert.rejects(hung, (error: unknown) => {
     assert(error instanceof RelayRequestError);
     assert.equal(error.diagnostic.status, 504);
-    assert.deepEqual(error.diagnostic.codes, ["ASH_RELAY_HEADERS_TIMEOUT"]);
+    assert.deepEqual(error.diagnostic.codes, [RELAY_HEADERS_TIMEOUT_CODE]);
     assert.match(error.message, /等待响应头超过 150ms/);
     assert.equal(relayErrorResponse(error).status, 504);
     return true;
@@ -399,14 +399,14 @@ try {
   await assert.rejects(relayFetch(mappedUrl, { method: "POST", body: "inference-request" }), (error: unknown) => {
     assert(error instanceof RelayRequestError);
     assert.equal(error.diagnostic.status, 502);
-    assert.deepEqual(error.diagnostic.codes, ["ASH_SYSTEM_PROXY_UNAVAILABLE"]);
+    assert.deepEqual(error.diagnostic.codes, [RELAY_PROXY_UNAVAILABLE_CODE]);
     assert.equal(error.diagnostic.proxy, "blocked", "没发出去的请求诊断里不写成直连");
     assert.match(error.message, /系统代理不可用，未转发（读取系统代理失败（EACCES）/);
     return true;
   });
   await assert.rejects(relayFetch(`${origin}/redirect?to=${encodeURIComponent(mappedUrl)}`, {}), (error: unknown) => {
     assert(error instanceof RelayRequestError);
-    assert(error.diagnostic.codes.includes("ASH_SYSTEM_PROXY_UNAVAILABLE"), "重定向到远端的那一跳同样拒绝");
+    assert(error.diagnostic.codes.includes(RELAY_PROXY_UNAVAILABLE_CODE), "重定向到远端的那一跳同样拒绝");
     return true;
   });
   assert.deepEqual(calls.slice(callsBeforeBlocked).map((entry) => entry.path), [`/redirect?to=${encodeURIComponent(mappedUrl)}`], "首次读取失败时远端请求一个都没直连出去");
@@ -429,7 +429,7 @@ try {
   assert(!lastCallViaProxy(), "系统绕过列表照常直连");
   await assert.rejects(relayFetch(`https://provider.test:${address.port}/healthy`, {}), (error: unknown) => {
     assert(error instanceof RelayRequestError);
-    assert.deepEqual(error.diagnostic.codes, ["ASH_SYSTEM_PROXY_UNAVAILABLE"]);
+    assert.deepEqual(error.diagnostic.codes, [RELAY_PROXY_UNAVAILABLE_CODE]);
     assert.match(error.message, /未转发（系统 HTTPS 代理地址无法解析/);
     return true;
   });

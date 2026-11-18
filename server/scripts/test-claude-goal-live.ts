@@ -58,7 +58,7 @@ try {
   assert.equal(events.find((event) => event.kind === "done")?.exitStatus, 0, JSON.stringify(events.filter((event) => event.kind === "error")));
   assert.equal(handle.goalStarted?.(), true);
   assert.ok(working.every((request) => JSON.stringify(request.system).includes("ash-native-goal-context-direction")));
-  const contextPath = /<ash-goal-context:("(?:[^"\\]|\\.)*")>/.exec(handle.commandLine)?.[1];
+  const contextPath = /<navi-goal-context:("(?:[^"\\]|\\.)*")>/.exec(handle.commandLine)?.[1];
   assert.ok(contextPath);
   await assert.rejects(readFile(JSON.parse(contextPath), "utf8"), /ENOENT/);
   const sessionId = events.find((event) => event.kind === "session")?.cliSessionId ?? handle.sessionId;

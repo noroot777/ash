@@ -21,6 +21,9 @@ import { publishTaskUpdated } from "./task-store.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { now } from "./util.js";
 
+/** 换基线时临时检出所在目录的前缀（系统临时目录下，用完即删）。 */
+export const BASE_UPDATE_TMP_PREFIX = "navi-base-update-";
+
 // 先记录目标提交再移动 Git；中断后的重试只完成同一份意图，不再次 rebase。
 async function finishBaseUpdate(task: typeof tasks.$inferSelect, repo: string, held = false): Promise<{ ok: boolean; error?: string }> {
   const intent = parseBaseUpdateIntent(task.baseUpdateIntent!);
@@ -80,7 +83,7 @@ export async function updateTaskBase(taskId: string, expectedHead: string): Prom
       const release = claimWorkspaceTurn(peers.map(p => p.id));
       if (!release) return { ok: false, error: "工作区刚被其它任务占用，请稍后重试" };
       let root: string;
-      try { root = await mkdtemp(join(tmpdir(), "ash-base-update-")); } catch (e) { release(); throw e; }
+      try { root = await mkdtemp(join(tmpdir(), BASE_UPDATE_TMP_PREFIX)); } catch (e) { release(); throw e; }
       const temp = join(root, "worktree");
       try {
         await exec("git", ["-C", repo, "worktree", "add", "--detach", temp, head]);

@@ -12,6 +12,7 @@ import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowState
 import type { sessions, tasks } from "./db/schema.js";
 import { isGateLogFile } from "./accept-gate-diagnosis.js";
 import { execFileText } from "./exec.js";
+import { NAVI_GIT_IDENTITY_ARGS } from "./navi-commit-identity.js";
 import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
@@ -234,7 +235,7 @@ export async function packGitState(
       notes.push("worktree 处于 detached HEAD,无法按分支打包,代码不随任务迁移");
       return null;
     }
-    // WIP 提交:porcelain 非空才提交;身份缺失时补一个 ash 落款,别让接力卡在
+    // WIP 提交:porcelain 非空才提交;身份缺失时补一个 Navi 落款,别让接力卡在
     // 一台没配 git identity 的机器上。
     if (await git(wt, ["status", "--porcelain"])) {
       await git(wt, ["add", "-A"]);
@@ -242,7 +243,7 @@ export async function packGitState(
         await git(wt, ["commit", "-m", "chore(handoff): 接力前自动保存未提交改动"]);
       } catch {
         await git(wt, [
-          "-c", "user.name=ash", "-c", "user.email=ash@localhost",
+          ...NAVI_GIT_IDENTITY_ARGS,
           "commit", "-m", "chore(handoff): 接力前自动保存未提交改动",
         ]);
       }

@@ -232,7 +232,7 @@ export class TerminalSessionManager {
     const wrapper = options.command ? TTY_COMMAND_WRAPPER : TTY_REAPER_WRAPPER;
     const spawnSpec = IS_WINDOWS
       ? { file: shell, args }
-      : { file: "/bin/sh", args: ["-c", wrapper, "ash-terminal", shell, ...args] };
+      : { file: "/bin/sh", args: ["-c", wrapper, "navi-terminal", shell, ...args] };
     // 记号必须在 spawn **之前**生成:它要进这次启动的环境,才能被后代继承。
     const launchToken = options.command ? id() : null;
     // 各个钟的起跑读数同样在 spawn 之前取:事后补取,创建子进程到取样之间那段停顿会让真后代
