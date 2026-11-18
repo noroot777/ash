@@ -69,11 +69,11 @@ const boot = `
   const { ClaudeExecutor } = await import("./server/dist/executors/claude.js");
   const { CodexNativeCommands } = await import("./server/dist/executors/codex-native-commands.js");
   function fixture(options) {
-    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, turnToken: options.env.ASH_TURN_TOKEN, sessionId: options.sessionId, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
-    const sessionId = (options.cliCommand?.name === "fork" ? "fork-" : "") + (options.sessionId || "ui-" + options.env.ASH_TASK_ID);
+    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.NAVI_TASK_ID, turnToken: options.env.NAVI_TURN_TOKEN, sessionId: options.sessionId, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
+    const sessionId = (options.cliCommand?.name === "fork" ? "fork-" : "") + (options.sessionId || "ui-" + options.env.NAVI_TASK_ID);
     let goal = options.cliState?.goal ? { ...options.cliState.goal, status: "budgetLimited" } : null;
-    const snapshotMismatch = options.env.ASH_TASK_ID.startsWith("goal-snapshot-");
-    if (snapshotMismatch) goal = options.env.ASH_TASK_ID.endsWith("missing") ? null : { objective: "另一个原生目标", status: "active", tokenBudget: 300, tokensUsed: 12 };
+    const snapshotMismatch = options.env.NAVI_TASK_ID.startsWith("goal-snapshot-");
+    if (snapshotMismatch) goal = options.env.NAVI_TASK_ID.endsWith("missing") ? null : { objective: "另一个原生目标", status: "active", tokenBudget: 300, tokensUsed: 12 };
     const goalStarted = !snapshotMismatch && !!goal;
     const liveGoal = goal?.objective === "等待实时目标控制";
     if (liveGoal) goal.status = "active";
@@ -92,7 +92,7 @@ const boot = `
     } });
     return {
       sessionId, cliCommand: options.cliCommand, commandLine: "UI fixture; no CLI or model request",
-      goal: liveGoal && options.env.ASH_TASK_ID === "live-claude-goal" ? undefined : () => snapshotMismatch ? native.goal : goal, goalStarted: () => goalStarted,
+      goal: liveGoal && options.env.NAVI_TASK_ID === "live-claude-goal" ? undefined : () => snapshotMismatch ? native.goal : goal, goalStarted: () => goalStarted,
       command: (command) => native.control(command),
       kill() { finish(); },
       events: (async function* () {
@@ -104,7 +104,7 @@ const boot = `
           yield { kind: "done", exitStatus: 0 };
           return;
         }
-        if (options.env.ASH_TASK_ID === "ordinary-ui-task" && options.sessionId) {
+        if (options.env.NAVI_TASK_ID === "ordinary-ui-task" && options.sessionId) {
           native.notification("thread/goal/cleared", { threadId: sessionId });
         }
         for (const event of notices) yield event;
@@ -112,8 +112,8 @@ const boot = `
         if (options.cliCommand?.name === "fork" || options.cliCommand?.name === "goal" && !goal) {
           text = await native.control(options.cliCommand);
         }
-        if (liveGoal) text += "；测试回合 " + options.env.ASH_TURN_TOKEN;
-        if (options.env.ASH_TASK_ID === "ordinary-ui-task") text = "普通回合：" + options.env.ASH_TURN_TOKEN;
+        if (liveGoal) text += "；测试回合 " + options.env.NAVI_TURN_TOKEN;
+        if (options.env.NAVI_TASK_ID === "ordinary-ui-task") text = "普通回合：" + options.env.NAVI_TURN_TOKEN;
         yield { kind: "text", text };
         if (liveGoal) await interrupted;
         yield { kind: "done", exitStatus: 0 };
@@ -126,7 +126,7 @@ const boot = `
     const prepareResume = Executor.prototype.prepareResume;
     Executor.prototype.prepareResume = async function(options) {
       await prepareResume?.call(this, options);
-      if (/^live-(codex|claude)-goal$/.test(options.env?.ASH_TASK_ID ?? "")) {
+      if (/^live-(codex|claude)-goal$/.test(options.env?.NAVI_TASK_ID ?? "")) {
         // 夹具模拟「续跑前的准备有点慢」。后面每一步都按事实等（调用记录、页面文案、任务空闲），
         // 没有断言依赖它恰好是 1 秒，负载下更慢也只是晚点到。
         await new Promise((resolve) => setTimeout(resolve, 1000));

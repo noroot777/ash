@@ -65,7 +65,7 @@ const boot = `
   const { CodexExecutor } = await import("./server/dist/executors/codex.js");
   const { ClaudeExecutor } = await import("./server/dist/executors/claude.js");
   function fixture(options) {
-    const taskId = options.env.ASH_TASK_ID;
+    const taskId = options.env.NAVI_TASK_ID;
     const isGoal = options.cliCommand?.name === "goal";
     appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId, cliCommand: options.cliCommand, goal: options.cliState?.goal }) + "\\n");
     const goal = options.cliState?.goal ? { ...options.cliState.goal, status: "active" } : null;
