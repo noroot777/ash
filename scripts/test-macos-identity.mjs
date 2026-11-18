@@ -6,7 +6,7 @@
 // 演练包标识不认旧的；网页数据——WebKit 与 cookie 目录整份复制（不挪）、每项先拷到本进程自己的暂存位置再一次
 // 放上去，写不进去时报错、不留半截、不记已接且下次再来（上次拷到一半留下的暂存也清掉），只接一次；几份 Navi
 // 同时第一次打开时只有一份在复制，别的等它接完才放行，放行时看到的一定是完整的一份；复制到一半被杀掉，重开补齐；
-// 持锁那一份卡住时等满时限交出原因；登录自启——旧登录项换成新的只做一次，用户关掉之后后台重试只清理、不再打开，
+// 持锁那一份卡住时等满时限交出原因，这时选「不接了」什么都不记、窗口照样不开，锁放掉后才记得下；登录自启——旧登录项换成新的只做一次，用户关掉之后后台重试只清理、不再打开，
 // 关掉时旧登录项删不掉要报错，新的装不上下一轮再来；建窗口之前那道闸——
 // 旧 app 不肯退、复制失败都挡着不放（什么都不复制、不记已接），没有可接的、用户选了不接就放行；旧包让位——
 // 只认包标识对得上的真目录（软链、别的包不算），旧登录项还没换成 Navi 的时不动（它跑的是旧包里的可执行文件），
@@ -147,11 +147,23 @@ try {
   // 持锁那一份卡住了：这一份等满时限就交出原因（走「重试 / 不接了 / 退出」），不无限僵在启动上。
   const stuckHolder = hold("/usr/bin/lockf", ["-k", join(raceLibrary, "WebKit/.stuck.id.adopting.lock"), "/bin/sleep", "60"]);
   await delay(500);
-  cleanups.push(() => forgetDomain(`${domain}.lockwait`));
-  assert.equal(run("lock-wait", raceLibrary, "old.race", "stuck.id", `${domain}.lockwait`), "OK lock-wait");
-  await stop(stuckHolder);
+  cleanups.push(() => ["", ".skip"].forEach((suffix) => forgetDomain(`${domain}.lockwait${suffix}`)));
+  // 驱动等满时限、确认这时点「不接了」被拒之后打一行 WAITING；这边放掉锁，再让它点一次。
+  const waiter = spawn(driver, ["lock-wait", raceLibrary, "old.race", "stuck.id", `${domain}.lockwait`], { stdio: ["pipe", "pipe", "pipe"] });
+  children.add(waiter);
+  let waiterOut = "";
+  waiter.stdout.on("data", (chunk) => { waiterOut += chunk; });
+  waiter.stderr.on("data", (chunk) => { waiterOut += chunk; });
+  const waitDeadline = Date.now() + 30_000;
+  while (!waiterOut.includes("WAITING") && waiter.exitCode === null && Date.now() < waitDeadline) await delay(50);
+  assert.ok(waiterOut.includes("WAITING"), waiterOut);
   assert.ok(!existsSync(join(raceLibrary, "WebKit/stuck.id")), "nothing copied without the lock");
-  console.log("PASS: a stuck holder of the adoption lock makes the waiting launch give up with a reason after the time limit");
+  await stop(stuckHolder);
+  waiter.stdin.end("\n");
+  const [code] = await once(waiter, "exit");
+  assert.equal(code, 0, waiterOut);
+  assert.match(waiterOut, /OK lock-wait/);
+  console.log("PASS: a stuck holder of the adoption lock makes the waiting launch give up with a reason after the time limit; skipping without the lock records nothing and keeps the window closed, and works once the lock is free");
 
   // ── 登录自启：用户的决定压过残留的旧登录项 ──
   const loginPolicyPlist = join(temporary, "LoginPolicy", "dev.ash.server.plist");

@@ -95,14 +95,18 @@ enum LegacyIdentity {
     try withAdoptionLock(library: library, current: current) { try commitWebData(library, current, defaults) }
   }
 
-  /// AppDelegate 那个「不接了，直接打开」。
-  static func skipWebData() {
+  /// AppDelegate 那个「不接了，直接打开」。返回 nil = 记下了、可以开窗口；否则是记不下的原因，窗口照样不开。
+  ///
+  /// 拿不到迁移锁（另一份 Navi 还在复制）就**什么都不记**：那一份还会接着往同一个位置放数据，这时开窗口，页面读到的
+  /// 是只接了一半的旧数据，还会跟它交错。只有拿到锁、确认没人在复制了，才记「不接了」。
+  static func skipWebData(library: URL? = nil, current: String = successor, defaults: UserDefaults = .standard) -> String? {
     do {
-      try settleWebData(library: userLibrary, current: successor, defaults: .standard)
+      try settleWebData(library: library ?? userLibrary, current: current, defaults: defaults)
+      return nil
     } catch {
-      // 标记文件落不下：defaults 那一笔照样记上，这一份 Navi 照新的样子开。
-      UserDefaults.standard.set(true, forKey: adoptedWebDataKey)
       logger.error("记不下「不接了」：\(error.localizedDescription, privacy: .public)")
+      // 锁拿到了、只是标记文件落不下：defaults 那一笔已经在锁里记上了（commitWebData 先记它），照新的样子开。
+      return webDataSettled(library: library ?? userLibrary, current: current, defaults: defaults) ? nil : error.localizedDescription
     }
   }
 
@@ -111,9 +115,10 @@ enum LegacyIdentity {
     library.appendingPathComponent("WebKit/.\(current).adopted-from-ash")
   }
 
+  /// 只在迁移锁里调。defaults 先记：标记文件落不下时，这一笔「锁里定下的已接」也不会丢。
   private static func commitWebData(_ library: URL, _ current: String, _ defaults: UserDefaults) throws {
-    try Data().write(to: webDataMarker(library, current), options: .atomic)
     defaults.set(true, forKey: adoptedWebDataKey)
+    try Data().write(to: webDataMarker(library, current), options: .atomic)
   }
 
   private static func webDataPairs(library: URL, from legacy: String, to current: String) -> [(URL, URL)] {
@@ -147,12 +152,13 @@ enum LegacyIdentity {
       throw AdoptionError(errorDescription: "打不开迁移锁 \(path)：\(String(cString: strerror(errno)))")
     }
     defer { close(descriptor) }
-    let deadline = Date().addingTimeInterval(timeout)
+    // 按开机以来的时间算，不按墙钟：系统时间被往回调也不会多等。
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
     while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
       guard errno == EWOULDBLOCK else {
         throw AdoptionError(errorDescription: "拿不到迁移锁 \(path)：\(String(cString: strerror(errno)))")
       }
-      guard Date() < deadline else {
+      guard ProcessInfo.processInfo.systemUptime < deadline else {
         throw AdoptionError(errorDescription: "另一份 Navi 正在接 Ash 的网页数据，等了 \(Int(timeout)) 秒还没接完。等它接完再点「重试」，或者先把那一份退出。")
       }
       usleep(50_000)
@@ -240,8 +246,8 @@ enum LegacyIdentity {
     let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
     guard !running.isEmpty else { return true }
     running.forEach { $0.terminate() }
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline && running.contains(where: { !$0.isTerminated }) {
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout // 不按墙钟，见 withAdoptionLock
+    while ProcessInfo.processInfo.systemUptime < deadline && running.contains(where: { !$0.isTerminated }) {
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
     return running.allSatisfy { $0.isTerminated }

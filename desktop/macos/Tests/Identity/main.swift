@@ -190,7 +190,21 @@ case "lock-wait":
                                               defaults: scratchDefaults(args[5]), quitLegacy: { true })
   require(blocked?.contains("另一份 Navi") == true, "blocked: \(blocked ?? "nil")")
   require(Date().timeIntervalSince(started) < 10, "gave up after the time limit")
-  UserDefaults.standard.removePersistentDomain(forName: args[5])
+  // 这时用户点「不接了」：锁还在别人手里，什么都不记，窗口照样不开（那一份还会接着往同一个位置放数据）。
+  let library = URL(fileURLWithPath: args[2], isDirectory: true)
+  let skipDefaults = scratchDefaults(args[5] + ".skip")
+  let refused = LegacyIdentity.skipWebData(library: library, current: args[4], defaults: skipDefaults)
+  require(refused?.contains("另一份 Navi") == true, "skip without the lock is refused: \(refused ?? "nil")")
+  require(!LegacyIdentity.webDataSettled(library: library, current: args[4], defaults: skipDefaults), "nothing recorded")
+  require(LegacyIdentity.prepareWebData(library: library, from: args[3], to: args[4], defaults: skipDefaults, quitLegacy: { true }) != nil,
+          "the gate still blocks")
+  // 测试接着放掉锁（见 test-macos-identity.mjs），再来一次就记得下。
+  print("WAITING")
+  fflush(stdout)
+  _ = readLine()
+  require(LegacyIdentity.skipWebData(library: library, current: args[4], defaults: skipDefaults) == nil, "skip with the lock is recorded")
+  require(LegacyIdentity.webDataSettled(library: library, current: args[4], defaults: skipDefaults), "settled once skipped under the lock")
+  for suffix in ["", ".skip"] { UserDefaults.standard.removePersistentDomain(forName: args[5] + suffix) }
   print("OK lock-wait")
 
 case "is-legacy":

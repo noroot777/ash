@@ -32,7 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       alert.addButton(withTitle: "退出")
       switch alert.runModal() {
       case .alertFirstButtonReturn: continue
-      case .alertSecondButtonReturn: LegacyIdentity.skipWebData()
+      case .alertSecondButtonReturn:
+        // 记不下（另一份 Navi 还在复制）就不开窗口，回到上面重新判断、再问一次。
+        _ = LegacyIdentity.skipWebData()
       default:
         NSApp.terminate(nil)
         return false
