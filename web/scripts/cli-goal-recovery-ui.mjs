@@ -55,6 +55,14 @@ export async function runGoalRecoveryUi({ page, base, screenshots, sessionEnds, 
   await trackFetches(page, "/api/tasks/goal-empty-ui/reply$");
   await page.goto(`${base}/?project=cli-ui&task=goal-empty-ui`);
   const beforeEmpty = await (await fetch(`${base}/api/tasks/goal-empty-ui`)).json();
+  // 还没跑过的任务：字照样能打；斜杠菜单里只留没有会话也答得了的那条，敲全了回车是补全（好接着写参数），不是发送。
+  const unstarted = page.getByRole("textbox", { name: "回复任务" });
+  await unstarted.fill("/");
+  await page.getByRole("option", { name: /^\/goal\b/ }).waitFor();
+  assert.equal(await page.getByRole("option").count(), 1, "a never-run task offers only the session-less command");
+  await unstarted.fill("/goal");
+  await unstarted.press("Enter");
+  assert.equal(await unstarted.inputValue(), "/goal ");
   const emptyScopes = await send("goal-empty-ui", "/goal --scopes", 200);
   assert.equal(emptyScopes.recorded, false);
   const localResult = page.getByRole("status", { name: "命令结果" });
