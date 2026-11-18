@@ -170,7 +170,7 @@
   color: var(--muted);
   font: var(--w-medium) var(--t-xs)/1 var(--font-mono);
   letter-spacing: .15em;
-  content: "ASH ACCESS";
+  content: "NAVI ACCESS";
 }
 
 .auth-shell .auth-card.auth-card--service > h1::before {

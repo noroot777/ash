@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { testCleanupViolations } from "./test-process-conventions.mjs";
+import { brandTextHits } from "./check-brand-text.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "web/src");
@@ -211,6 +212,14 @@ if (nativeTitle > NATIVE_TITLE_BASELINE) {
   console.error("   任务列表这类每秒重渲染的界面会不断打断原生 tooltip 的悬停计时器，气泡永远弹不出来。\n");
 } else if (nativeTitle < NATIVE_TITLE_BASELINE) {
   console.log(`[conventions] 原生 title 已降到 ${nativeTitle} 处（基线 ${NATIVE_TITLE_BASELINE}），把 scripts/check-conventions.mjs 里的基线调下来锁住成果。`);
+}
+
+const brandHits = brandTextHits(ROOT);
+if (brandHits.length) {
+  failed = true;
+  console.error(`\n✗ 给人看的文字里还有旧产品名 ash（${brandHits.length} 处）：`);
+  for (const h of brandHits) console.error("   " + h);
+  console.error("   界面上的产品名是 Navi（全大写的字标写 NAVI）；仍叫 ash 的标识符照写，判据见 scripts/check-brand-text.mjs。\n");
 }
 
 if (failed) process.exit(1);
