@@ -4,8 +4,7 @@
 //   POST   /tasks/:id/dispatch-suggestions/launch   用户按「派出去」：照那一行此刻的样子建任务，这条任务的智能体不被叫醒
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import type { AgentType } from "@ash/shared";
-import { publicSuggestions, withdrawnSuggestionsText, type DispatchSuggestionLaunchInput } from "@ash/shared/dispatch-suggestion";
+import { publicSuggestions, type DispatchSuggestionLaunchInput } from "@ash/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -13,7 +12,6 @@ import { executorScopeForOwner } from "./auth/owned-executors.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { turnIdentity } from "./turn-lock.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 import {
   agentChange, normalizeSuggestions, normalizeWithdrawals, turnWriteGuard, updateSuggestions, withoutSuggestions,
   type AgentSuggestionChange,
@@ -52,25 +50,20 @@ api.post("/tasks/:id/dispatch-suggestions", async (c) => {
   if ("error" in withdrawing) return c.json({ error: withdrawing.error }, 400);
   if (!adding.length && !withdrawing.length) return c.json({ error: "tasks（要挂的）和 withdraw（要收回的）至少给一样" }, 400);
   let change = null as AgentSuggestionChange | null;
+  // 收回的那几件和各自的原因同一条更新落库（dispatch-suggestion.ts）：框顶那一行不见了，原因就一定读得到。
   const written = await updateSuggestions(taskId, (current) => {
     change = agentChange(current, withdrawing, adding);
     return change.room ? null : change.after;
-  }, db, turnWriteGuard(r));
+  }, db, turnWriteGuard(r), () => change?.withdrawn ?? []);
   if (change?.room) return c.json({ error: change.room }, 409);
   // 入口核过之后、写进去之前，任务停了、回合结束了或用户换了方向：这一批是旧方向下的，不落。
   if (!written || !change) return c.json({ error: "这一轮的回合或方向已经变了（任务停了、回合结束了或用户补了新要求），已拒绝写入" }, 409);
   const { added, withdrawn, gone, already, after } = change;
-  // 收回的那几件从框顶拿掉了：为什么不在了记在会话里这一回合下面（用户知道的唯一去处，所以记不上要让智能体自己说）。
-  const noted = !withdrawn.length || await appendTaskTimeline(taskId,
-    noticeLine({ kind: "suggestion.withdrawn", items: withdrawn.map(({ title, reason }) => ({ title, reason })) }, withdrawnSuggestionsText(withdrawn)),
-    { agentType: (turn?.agent ?? r.agentType ?? undefined) as AgentType | undefined, role: "single" });
   await publishTaskUpdated(taskId);
   const next = [
     added.length && "新挂的在回复框顶上，会一直留到用户派掉或点叉，之后的回合不用重挂；照常往下做、照常结束本回合，不要再自己建这几条任务",
     already.length && `${already.map((item) => `「${item.title}」`).join("")}已经挂着、用户还没处理，这次没有重挂；要换说明就在同一次调用里先 withdraw 那一件再挂`,
-    withdrawn.length && (noted
-      ? "收回的已经从回复框顶上拿掉，你写的原因记在了会话里"
-      : "收回的已经从回复框顶上拿掉，但原因没能记进会话：请在回复里告诉用户你收回了哪几件、为什么"),
+    withdrawn.length && "收回的已经从回复框顶上拿掉，你写的原因用户在会话里看得到",
     gone.length && "gone 里那几件已经不在了（用户派掉或叉掉了），不用再收回",
   ].filter(Boolean).join("。");
   return c.json({

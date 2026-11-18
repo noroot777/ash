@@ -2,13 +2,16 @@
 //   · 智能体交来的一批怎么收（`normalizeSuggestions`，形状照派活单的一条，多一样「从哪开工」）；
 //   · 这一列怎么改（`updateSuggestions`）：挂、收回、派、叉，四处都改同一列，按「读到的那一份还在」
 //     条件写回，被别处抢先改过就重读重算——智能体在回合里挂新的、用户同时派掉一件，谁都不吞掉谁；
-//   · 智能体那一笔怎么落（`agentChange`）：先收回、再挂新的，同名的不挂第二件。
+//   · 智能体那一笔怎么落（`agentChange`）：先收回、再挂新的，同名的不挂第二件；
+//   · 收回的原因跟拿掉那一件**同一条更新**落库（`updateSuggestions` 的 `withdrawn`）：不变量是「建议不见了 ⇒
+//     原因读得到」。原因不另走会话正文——那样是两步，中间进程退了、会话文件写不进去，用户就只看到它没了。
 // 这里没有「回合结束收掉旧的」：用户还没处理的那几件只有他自己（派、叉）和挂它的智能体（收回并说明）能拿掉。
 // 路由在 dispatch-suggestion-routes.ts，派出去那一下在 dispatch-suggestion-launch.ts。
 import { and, eq, isNull, type SQL } from "drizzle-orm";
 import {
-  MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK, MAX_SUGGESTION_NOTE_LEN, MAX_WITHDRAW_REASON_LEN, parseDispatchSuggestions,
-  type DispatchSuggestion, type DispatchSuggestionWithdrawal,
+  MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK, MAX_SUGGESTION_NOTE_LEN, MAX_WITHDRAWN_KEPT, MAX_WITHDRAW_REASON_LEN,
+  parseDispatchSuggestions, parseWithdrawnSuggestions,
+  type DispatchSuggestion, type DispatchSuggestionWithdrawal, type WithdrawnSuggestion,
 } from "@ash/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -86,8 +89,8 @@ export type AgentSuggestionChange = {
   /** 改完以后挂着的那一列；room 非空时这一笔不落，它就是原来那一列。 */
   after: DispatchSuggestion[];
   added: DispatchSuggestion[];
-  /** 真收回了的那几件，带着各自的原因。 */
-  withdrawn: (DispatchSuggestion & { reason: string })[];
+  /** 真收回了的那几件留下的记录（标题、原因、时刻）：跟 after 同一笔写进库。 */
+  withdrawn: WithdrawnSuggestion[];
   /** 要收回、却已经不在了的（用户派掉或叉掉了）。 */
   gone: string[];
   /** 要挂、却已经有同名的挂着的：指向挂着的那一件。 */
@@ -108,7 +111,9 @@ export function agentChange(
   adding: readonly DispatchSuggestion[],
 ): AgentSuggestionChange {
   const reasons = new Map(withdrawals.map((item) => [item.id, item.reason]));
-  const withdrawn = current.filter((item) => reasons.has(item.id)).map((item) => ({ ...item, reason: reasons.get(item.id)! }));
+  const at = now();
+  const withdrawn = current.filter((item) => reasons.has(item.id))
+    .map((item) => ({ id: item.id, title: item.title, reason: reasons.get(item.id)!, at }));
   const gone = withdrawals.map((item) => item.id).filter((suggestion) => !current.some((item) => item.id === suggestion));
   const after = current.filter((item) => !reasons.has(item.id));
   const added: DispatchSuggestion[] = [];
@@ -132,21 +137,33 @@ const serialized = (items: DispatchSuggestion[]) => (items.length ? JSON.stringi
  * `guard` 是写这一笔还要成立的别的条件，跟内容版本放进**同一条**更新的 where：内容没被别人改过不等于写的权利
  * 还在。智能体挂和收回的那一路靠它——入口核过的回合与方向身份，到真写进去那一刻已经换了（用户补了新要求、
  * 回合结束了），这一笔就不落（返回 null）。叉掉、派出去各有各的授权，不带它。
+ *
+ * `withdrawn` 交回这一笔里智能体收回的那几件的记录（在 `change` 之后问）：接在收回记录那一列后面，跟拿掉
+ * 它们的是**同一条**更新——要么都落、要么都不落。收回必然改了挂着的那一列，所以内容版本那一个条件就够把
+ * 两处同时收回排开。
  */
 export async function updateSuggestions(
   taskId: string,
   change: (items: DispatchSuggestion[]) => DispatchSuggestion[] | null,
   store: Store = db,
   guard?: SQL,
+  withdrawn?: () => WithdrawnSuggestion[],
 ): Promise<{ before: DispatchSuggestion[]; after: DispatchSuggestion[] } | null> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const row = (await store.select({ raw: tasks.dispatchSuggestions }).from(tasks).where(and(eq(tasks.id, taskId), guard))).at(0);
+    const row = (await store.select({ raw: tasks.dispatchSuggestions, withdrawals: tasks.dispatchWithdrawals })
+      .from(tasks).where(and(eq(tasks.id, taskId), guard))).at(0);
     if (!row) return null;
     const before = parseDispatchSuggestions(row.raw);
     const after = change(before);
     if (!after) return null;
+    const records = withdrawn?.() ?? [];
     const written = await store.update(tasks)
-      .set({ dispatchSuggestions: serialized(after), updatedAt: now() })
+      .set({
+        dispatchSuggestions: serialized(after), updatedAt: now(),
+        ...(records.length ? {
+          dispatchWithdrawals: JSON.stringify([...parseWithdrawnSuggestions(row.withdrawals), ...records].slice(-MAX_WITHDRAWN_KEPT)),
+        } : {}),
+      })
       .where(and(eq(tasks.id, taskId), guard,
         row.raw === null ? isNull(tasks.dispatchSuggestions) : eq(tasks.dispatchSuggestions, row.raw)))
       .returning({ id: tasks.id });

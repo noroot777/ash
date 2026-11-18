@@ -189,14 +189,6 @@ assert.deepEqual(attached.receipts.get("a2")?.map((r) => r.id), ["r3"]);
 assert.equal(sentence(attached.footnotes.get("a1")), "已验收，合并到 main");
 assert.equal(attached.footnotes.get("a1")?.live, false, "后面有你的话，它就是过去的事");
 
-// 智能体收回了挂在回复框顶上的建议任务：那一行不在了，为什么不在就是它收回的那一回合的尾注（不占行）。
-const withdrew = conversationSystemRows([
-  user("u0"), agent("a1"),
-  ev("w1", "收回了建议任务「修红测试」：已经顺手修了", { kind: "suggestion.withdrawn", items: [{ title: "修红测试", reason: "已经顺手修了" }] }),
-]);
-assert.deepEqual(rowIds(withdrew), ["u0", "a1"]);
-assert.equal(sentence(withdrew.footnotes.get("a1")), "收回了建议任务「修红测试」：已经顺手修了");
-
 // 图三：审查通过以后验收。收了口的审查轮不再把段切开，是被审那一回合之后单独一行的审查结论；
 // 结论之后才发生的那几句贴在它下面，不回到回合的尾注里。每一句（连同结论）都在那一回合的记录里。
 const lane = (id, round, conclusion, extra = {}) => ({

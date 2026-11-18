@@ -8,7 +8,7 @@ import type { ReviewWaitReason } from "@ash/shared/timeline-notice";
 
 export type NoticeIcon =
   | "monitor" | "review" | "dispute" | "accept" | "gate" | "preview" | "workflow"
-  | "branch" | "workspace" | "message" | "executor" | "pause" | "command" | "dispatch" | "alert" | "info";
+  | "branch" | "workspace" | "message" | "executor" | "pause" | "command" | "alert" | "info";
 
 /**
  * 按这一句的主语认图标：几类说法谁在句子里**最先**出现就归谁（「合并结果审查……」归验收，

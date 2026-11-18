@@ -199,14 +199,6 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
       return view("receipt", "neutral", "other", "monitor", "哨兵结果在这一回合里交给了它", raw);
     case "complete.held":
       return view("receipt", "neutral", "other", "monitor", completeHeldText(notice.after), raw);
-    // 智能体收回了挂在回复框顶上的建议任务：那一行不在了，为什么不在只在这一句里，所以归明面、原因直接写出来
-    // （好几件时原因点开看）。不是坏消息，不带颜色。
-    case "suggestion.withdrawn": {
-      const [only] = notice.items;
-      return notice.items.length === 1 && only
-        ? view("alert", "neutral", "other", "dispatch", `收回了建议任务「${only.title}」：${only.reason}`, raw)
-        : view("alert", "neutral", "other", "dispatch", `收回了 ${notice.items.length} 条建议任务`, raw);
-    }
     case "command.output": {
       // 是你要看的东西：输出整段摆出来（命令本身那一行拿掉，指到这一行时写在时刻前面）。
       const output = raw.split("\n")

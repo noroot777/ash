@@ -30,7 +30,9 @@ import { replyDispatch } from "./replyDispatch.ts";
 import { launchPlan, saveDispatchTarget } from "./dispatchPlanActions.ts";
 import { replyDiscuss } from "./replyDiscuss.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
+import { withdrawalNotes } from "./suggestions/withdrawalNotes.ts";
 import { DispatchNoteLine } from "./DispatchNoteLine.tsx";
+import { FootnoteLine } from "./FootnoteLine.tsx";
 import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
 import { useDisputeRulingDock } from "../free-workflow/DisputeRulingDock.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
@@ -144,9 +146,15 @@ export function TaskDetail({
   const derivationAllowed = canDeriveTask(task);
   // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字（dispatchNotes.ts）。
   // 子任务后来来问、失败，这里一概不画：提示在侧栏和任务头那颗「子任务」键的数、右侧那一格里。
-  const asides = useMemo(() => dispatchNotes(task.id, allTasks).map((note) => ({
-    key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
-  })), [allTasks, onOpenTask, task.id]);
+  // 智能体收回的建议任务：收回的那一刻留一句为什么（suggestions/withdrawalNotes.ts），跟尾注同一种小灰字。
+  const asides = useMemo(() => [
+    ...dispatchNotes(task.id, allTasks).map((note) => ({
+      key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
+    })),
+    ...withdrawalNotes(task.dispatchWithdrawals).map((note) => ({
+      key: note.key, at: note.at, node: <FootnoteLine footnote={note.footnote} placement="standalone" />,
+    })),
+  ], [allTasks, onOpenTask, task.id, task.dispatchWithdrawals]);
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);

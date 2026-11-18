@@ -6,9 +6,13 @@
 // 一条（标题、完整说明、一行为什么、交给谁），多一样「从哪开工」。
 //
 // 活多久（server/src/dispatch-suggestion.ts）：落库，一直挂到有人明着处理它，只有三种去处——用户派出去、
-// 用户点了叉、挂它的智能体收回（`withdraw`，要写一句为什么；这句话记在会话里那一回合下面，用户看得到它
-// 为什么不在了）。没有按回合数、按时间自动收掉的：用户还没处理的东西不在他不知情时消失，会话里那句
-// 「挂在回复框顶上了」也就一直对得上。过时靠智能体自己收回或用户点叉；同一个标题不挂第二件。
+// 用户点了叉、挂它的智能体收回（`withdraw`，要写一句为什么）。没有按回合数、按时间自动收掉的：用户还没
+// 处理的东西不在他不知情时消失，会话里那句「挂在回复框顶上了」也就一直对得上。过时靠智能体自己收回或
+// 用户点叉；同一个标题不挂第二件。
+//
+// 收回的那一件和它的原因是**同一笔**落库的（`WithdrawnSuggestion`，同一行、同一条更新）：那一行从框顶
+// 不见了，原因就一定读得到，中间没有「拿掉了、还没来得及记」的空档。页面按时刻把它写在会话里收回的那一处
+// （web/src/task-detail/suggestions/withdrawalNotes.tsx），不经过会话正文，所以不看有没有会话、写不写得进文件。
 import type { DispatchRunTarget } from "./dispatch-plan.ts";
 
 /** 新任务从哪开工：从主分支开工 / 接着这条任务的代码。 */
@@ -29,6 +33,9 @@ export type DispatchSuggestion = {
 
 /** 智能体收回一件：哪一件、为什么（这句话原样给用户看）。 */
 export type DispatchSuggestionWithdrawal = { id: string; reason: string };
+
+/** 收回过的一件留下的记录：是哪一件、叫什么、为什么、什么时候。跟拿掉那一件同一笔落库，随任务下发。 */
+export type WithdrawnSuggestion = { id: string; title: string; reason: string; at: string };
 
 /** 用户按「派出去」时交给 ash 的那一件：此刻那一行上的样子。 */
 export type DispatchSuggestionLaunchItem = {
@@ -54,6 +61,8 @@ export const MAX_SUGGESTIONS_PER_CALL = 6;
 export const MAX_SUGGESTIONS_PER_TASK = 12;
 export const MAX_SUGGESTION_NOTE_LEN = 120;
 export const MAX_WITHDRAW_REASON_LEN = 120;
+/** 一条任务上留多少条收回记录：只留最近的这些（一条任务总共才挂得下 12 件，收回过这么多次的极少）。 */
+export const MAX_WITHDRAWN_KEPT = 24;
 
 /** 补的话接在说明后面，标明是用户说的，跟智能体写的说明分得开。 */
 export const SUGGESTION_EXTRA_HEADING = "## 用户补充";
@@ -83,7 +92,14 @@ export function publicSuggestions(items: DispatchSuggestion[]): DispatchSuggesti
   }));
 }
 
-/** 收回那一下记进会话的原文（时间线旁注的 text；页面按 notice 的参数另写说法，手机和读转录的看这一份）。 */
-export function withdrawnSuggestionsText(items: readonly { title: string; reason: string }[]): string {
-  return items.map((item) => `收回了建议任务「${item.title}」：${item.reason}`).join("\n");
+export function parseWithdrawnSuggestions(raw: string | null | undefined): WithdrawnSuggestion[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is WithdrawnSuggestion =>
+      !!item && typeof item.id === "string" && typeof item.title === "string" && typeof item.reason === "string" && typeof item.at === "string");
+  } catch {
+    return [];
+  }
 }

@@ -1,5 +1,5 @@
 import {
-  ArrowBendUpRight, Browser, ChatText, FolderOpen, GitBranch, GitMerge, Info, MagnifyingGlass, Pause, Pulse, Robot, Scales,
+  Browser, ChatText, FolderOpen, GitBranch, GitMerge, Info, MagnifyingGlass, Pause, Pulse, Robot, Scales,
   ShieldCheck, Terminal, WarningCircle,
 } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
@@ -7,7 +7,7 @@ import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { NoticeIcon } from "./noticePhrases.ts";
 
 // 跟检查器里同一件事的那一格同一枚（taskInspectors：哨兵 Pulse、审查 MagnifyingGlass、预览指正
-// Browser、工作流 WorkflowIcon、改动的分支一类走 git 那几枚）；建议任务跟回复框顶上那一行同一枚。
+// Browser、工作流 WorkflowIcon、改动的分支一类走 git 那几枚）。
 const GLYPHS: Record<NoticeIcon, (size: number) => ReactElement> = {
   monitor: (size) => <Pulse size={size} />,
   review: (size) => <MagnifyingGlass size={size} />,
@@ -22,7 +22,6 @@ const GLYPHS: Record<NoticeIcon, (size: number) => ReactElement> = {
   executor: (size) => <Robot size={size} />,
   pause: (size) => <Pause size={size} />,
   command: (size) => <Terminal size={size} />,
-  dispatch: (size) => <ArrowBendUpRight size={size} />,
   alert: (size) => <WarningCircle size={size} />,
   info: (size) => <Info size={size} />,
 };

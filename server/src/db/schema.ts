@@ -255,6 +255,9 @@ export const tasks = sqliteTable("tasks", {
   // 挂在回复框顶上、可以派出去的活（JSON 的 DispatchSuggestion[]，server/src/dispatch-suggestion.ts）。
   // 不占提问那一格，跟 question / dispatchPlan 互不相干。NULL = 一件都没有。
   dispatchSuggestions: text("dispatch_suggestions"),
+  // 智能体收回过的那几件和原因（JSON 的 WithdrawnSuggestion[]）。跟从上一列拿掉那一件**同一条更新**写：
+  // 建议不见了，原因就一定在。NULL = 没收回过。
+  dispatchWithdrawals: text("dispatch_withdrawals"),
   // 这一条名下（dispatchedBy 整棵往下）全部停着：用户在「派出的任务」格头按了「全部停下」的那一刻。
   // 空 = 没停。判据与停/续的手法见 dispatch-hold.ts。
   dispatchHoldAt: text("dispatch_hold_at"),
