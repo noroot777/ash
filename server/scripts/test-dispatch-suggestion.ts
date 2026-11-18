@@ -298,16 +298,28 @@ try {
   assert.equal((await kidsOf(S)).at(-1)?.title, "提问那一回合挂的");
   assert.equal((await kidsOf(S)).length, kidsBefore + 1, "照样派得出去");
   assert.deepEqual(await shown(S), []);
+  // 刚派出去的那条等它跑完（假 CLI 一轮就退）再收场：它是异步起跑的，留到收尾里才起就跟还原 PATH 抢先后。
+  const lateKid = (await kidsOf(S)).at(-1)!.id;
+  await waitFor(async () => !runs.isRunning(lateKid) && !["backlog", "queued", "running"].includes((await taskOf(lateKid)).status),
+    "最后派出去的那条没有跑完");
   console.log("✓ 端到端：挂建议 → 同回合提问停下 → 答题 → 续跑回合结束，那一件还在、照样派得出去");
 } catch (error) {
   failure = error;
   console.error(error);
 } finally {
-  if (originalPath === undefined) delete process.env.PATH;
-  else process.env.PATH = originalPath;
+  // 先收回「可以起真执行器」的放行，再动 PATH：PATH 一还原，上面排着还没起跑的任务拿到的就是机器上真的
+  // claude（实测漏出过，带着 --dangerously-skip-permissions 在后台跑）。放行收回后晚到的起跑一律被闸住
+  // （executors/spawn.ts 的 guardAgentSpawn）。PATH 等全部停下之后才还原。
+  delete process.env.ASH_ALLOW_REAL_AGENT;
   const started = (await db.select({ id: tasks.id }).from(tasks)).map((task) => task.id);
   for (const id of started) if (runs.isRunning(id)) runs.stopTask(id);
-  await waitFor(() => started.every((id) => !runs.isRunning(id)), "收尾：还有没停下的假 CLI").catch((error) => { failure ??= error; });
+  await waitFor(() => started.every((id) => !runs.isRunning(id)), "收尾：还有没停下的假 CLI").catch((error) => {
+    // 收尾失败也要说出来：否则前面全是 ✓、退出码却是 1，看不出红在哪。
+    console.error(error, "还在跑：", started.filter((id) => runs.isRunning(id)));
+    failure ??= error;
+  });
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
   process.exit(failure ? 1 : 0);
