@@ -190,7 +190,7 @@ export function probeClaudeModels(bin: string): Promise<ClaudeModelProbe | null>
     try {
       child.stdin?.write(`${JSON.stringify({
         type: "control_request",
-        request_id: "ash_models_1",
+        request_id: "navi_models_1",
         request: { subtype: "initialize" },
       })}\n`);
     } catch {

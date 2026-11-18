@@ -1,4 +1,12 @@
+import { LEGACY_CLAUDE_INTERRUPT_ID_PREFIX } from "@ash/shared/legacy-names";
 import { loadSteerJournal, saveSteerJournal, type SteerEntry } from "./claude-recovery.js";
+
+/**
+ * 打断请求号的前缀（`<前缀><序号>`）。请求号记进打断记录、重启接管时读回来：整串对回执，序号接着编。
+ * 升级前记下的是旧前缀，两代都认。
+ */
+export const INTERRUPT_ID_PREFIX = "navi_int_";
+const INTERRUPT_ID_PREFIXES = [INTERRUPT_ID_PREFIX, LEGACY_CLAUDE_INTERRUPT_ID_PREFIX];
 
 type PendingControl = {
   resolve(): void;
@@ -67,7 +75,8 @@ export class ClaudeControlBridge {
     this.inheritedSends = new Set(this.sends);
     this.unclaimed = this.entries.map((entry) => ({ ...entry, inherited: true }));
     for (const entry of this.entries) {
-      const n = Number(entry.id.replace(/^ash_int_/, ""));
+      const prefix = INTERRUPT_ID_PREFIXES.find((candidate) => entry.id.startsWith(candidate));
+      const n = prefix ? Number(entry.id.slice(prefix.length)) : NaN;
       if (Number.isInteger(n) && n > this.sequence) this.sequence = n;
     }
   }
@@ -144,7 +153,7 @@ export class ClaudeControlBridge {
   private readonly pending = new Map<string, PendingControl>();
 
   request(): { requestId: string; line: string } {
-    const requestId = `ash_int_${++this.sequence}`;
+    const requestId = `${INTERRUPT_ID_PREFIX}${++this.sequence}`;
     return {
       requestId,
       line: `${JSON.stringify({

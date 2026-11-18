@@ -15,6 +15,8 @@ import { releaseTmpDb } from "./tmp-db.js";
 
 const { baselineHarness } = await import("./accept-gate-baseline-fixture.js");
 const h = await baselineHarness("ash-gate-baseline-");
+// 产品模块要在夹具定好临时库与运行目录之后才加载。
+const { ACCEPT_REFLOG_PREFIX } = await import("../src/git-accept-tested.js");
 const { root, git, sleep, passesOn, db, projects, acceptTask, acceptGateState, bus, previewMerge, mergeTaskBranch, api,
   runs, taskRow, projectRow, wouldRun, commitOnMain, fixture, settled } = h;
 
@@ -432,7 +434,7 @@ try {
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     const marker = join(root, "race-fired");
     const real = `'${realGit}' -C '${sample.repo}'`;
-    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ash accept"*) fire=1 ;; esac\nif [ ! -e '${marker}' ] && [ -n "$fire" ]; then\n`
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ${ACCEPT_REFLOG_PREFIX}"*) fire=1 ;; esac\nif [ ! -e '${marker}' ] && [ -n "$fire" ]; then\n`
       + `  touch '${marker}'; c=$(${real} commit-tree main^{tree} -p main -m external) || exit 1\n`
       + `  ${real} update-ref refs/heads/main "$c" || exit 1\nfi\n`
       + `exec '${realGit}' "$@"\n`, { mode: 0o755 });

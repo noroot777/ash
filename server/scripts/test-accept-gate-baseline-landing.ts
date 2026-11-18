@@ -10,6 +10,8 @@ import { releaseTmpDb } from "./tmp-db.js";
 const { baselineHarness } = await import("./accept-gate-baseline-fixture.js");
 const { root, git, passesOn, acceptTask, acceptGateState, previewMerge, mergeTaskBranch, runs, taskRow, wouldRun,
   commitOnMain, fixture, settled, testedPhysical } = await baselineHarness("ash-gate-landing-");
+// 产品模块要在夹具定好临时库与运行目录之后才加载。
+const { ACCEPT_REFLOG_PREFIX } = await import("../src/git-accept-tested.js");
 
 /** 一次带全部落地约束的最终合并（像验收那样：被测的目标提交、预演出来的树、测过的物理内容）。 */
 const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }, afterTest?: () => void,
@@ -236,7 +238,7 @@ try {
     mkdirSync(bin);
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     const real = `'${realGit}' -C '${sample.repo}'`;
-    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ash accept"*) '${realGit}' "$@"; rc=$?\n`
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ${ACCEPT_REFLOG_PREFIX}"*) '${realGit}' "$@"; rc=$?\n`
       + `  c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"; exit $rc ;; esac\n`
       + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
     const path = process.env.PATH;
@@ -482,7 +484,7 @@ try {
     const acl = process.platform === "darwin";
     if (acl) execFileSync("chmod", ["+a", `user:${userInfo().username} deny execute`, tool]);
     const real = `GIT -C '${sample.repo}'`;
-    const bin = wrapGit("restore-whole", " update-ref -m ash accept",
+    const bin = wrapGit("restore-whole", ` update-ref -m ${ACCEPT_REFLOG_PREFIX}`,
       `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`);
     const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
     assert.equal(landed.ok, false, JSON.stringify(landed));

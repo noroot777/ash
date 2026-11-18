@@ -23,10 +23,11 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const HOLD_MS = 60_000;
 process.env.ASH_BACKGROUND_HOLD_MS = String(HOLD_MS);
-const [{ ensureSchema, dbClient }, { ClaudeExecutor }, { consumedEvents }] = await Promise.all([
+const [{ ensureSchema, dbClient }, { ClaudeExecutor }, { consumedEvents }, { INTERRUPT_ID_PREFIX }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/executors/claude.js"),
   import("../src/executors/claude-recovery.js"),
+  import("../src/executors/claude-control.js"),
 ]);
 await ensureSchema();
 
@@ -187,8 +188,8 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
   assert.deepEqual(inputs, ["INPUT control_request", "INPUT user", "INPUT control_request", "INPUT user"],
     "第二次插话也要先打断第一条开的那一回合");
   assert.deepEqual(JSON.parse(readFileSync(`${out}.steer.json`, "utf8")).entries, [
-    { id: "ash_int_1", result: 1, sent: true },
-    { id: "ash_int_2", result: 2, sent: true },
+    { id: `${INTERRUPT_ID_PREFIX}1`, result: 1, sent: true },
+    { id: `${INTERRUPT_ID_PREFIX}2`, result: 2, sent: true },
   ], "每次打断认领下一个结尾,正文送出前记下");
   handle.kill();
   await consuming.catch(() => {});
@@ -291,6 +292,7 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
 
 // ③f 插话打断出来的那个 result 在水位附近:不许拿它收台,插话开的那一回合结尾才收。回执与 result
 // 两种先后都有,回执还可能落在水位之后、晚到一秒多、前面插进后台进度 —— 都不影响,身份看打断记录。
+// 这一组的打断记录用的是改名之前的请求号 `ash_int_1`:升级前插过话的智能体,接管时照样认得出那个结尾。
 const steered = (out: string, sent = true) =>
   writeFileSync(`${out}.steer.json`, JSON.stringify({ entries: [{ id: "ash_int_1", result: 1, sent }] }));
 const followUp = [{ type: "system", subtype: "init", session_id: "sess-r" }, ...say("插话之后的答复"), result];

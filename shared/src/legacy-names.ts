@@ -125,6 +125,26 @@ export const LEGACY_CLAUDE_GOAL_CONTEXT_TAG = "ash-goal-context";
  */
 export const LEGACY_WINDOWS_GATE_JOB_PREFIX = "Local\\ash-accept-gate-";
 
+/**
+ * Git 工作台贮藏标题里的所有权标记 `[<标签>:<用户摘要>]`。它写进**用户仓库**的贮藏里，工作台按它判断
+ * 「这是谁存的」（只有本人能 pop/drop），界面显示时把它剥掉。升级前存的贮藏带旧标签，照样认是本人的。
+ * 拆：不再有升级前存下、还没弹出或丢弃的贮藏之后。
+ */
+export const LEGACY_STASH_OWNER_TAG = "ash";
+
+/**
+ * 给 claude 发打断用的 `control_request` 请求号前缀（`<前缀><序号>`）。请求号连同序号记进打断记录
+ * （`<输出>.steer.json`），服务重启后接管还在跑的智能体时读回来：按整串请求号对上回执，按序号接着往下编。
+ * 拆：升级前起、插过话的智能体都结束之后。
+ */
+export const LEGACY_CLAUDE_INTERRUPT_ID_PREFIX = "ash_int_";
+
+/**
+ * 飞书绑定码的旧前缀（`ASH-XXXX-XXXX`）。用户从网页抄下来发给机器人，机器人从消息里认出它；升级前
+ * 生成、还没发出去的那一张照样要认。拆：升级后过了绑定码的有效期（10 分钟）即可。
+ */
+export const LEGACY_IM_BIND_CODE_PREFIX = "ASH";
+
 // ── 冻结：协议版本号与哈希盐，当前版本照旧写 ────────────────────────────────────────────
 
 /** 接力签名/加密的域标签。换了它，旧版对端验不了签、解不了封，库里已存的签名也作废。拆：接力协议升 v2 时。 */
@@ -218,4 +238,9 @@ export const FROZEN_SYNTHETIC_COMMIT_MESSAGE = "ash: 任务改动的对比基准
 //  · Navi 替任务落款的提交身份 `navi <navi@localhost>`（`server/src/navi-commit-identity.ts`，提交带真实时间，
 //    已写下的提交不改写）；
 //  · 模型目录请求的 User-Agent `navi/model-catalog`、中转诊断错误码 `NAVI_*`（同一进程里产生和消费）、
-//    终端包装壳的 `$0` `navi-terminal`、分发包名 `navi-<日期>-<版本>`。
+//    终端包装壳的 `$0` `navi-terminal`、分发包名 `navi-<日期>-<版本>`；
+//  · claude 模型探测的 `control_request` 请求号 `navi_models_1`（同一次探测里发出、回执不按它对）；
+//  · 验收移动分支时写进用户仓库 reflog 的说明 `navi accept: <来源分支>`（没有读取方）。
+//
+// 不算约定、所以没动的：只活在本进程一个数据库连接里的 TEMP 触发器与自定义函数名（`ash_actions_*`），
+// 生成器内部占位符、shell 函数名、内部 Symbol、进程内派发用的假域名，以及测试入口的环境变量。

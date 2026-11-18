@@ -40,7 +40,9 @@ try {
   const mode = await import("../src/auth/mode.js");
   const store = await import("../src/auth/store.js");
   const visibility = await import("../src/auth/visibility.js");
-  const { claimCode, confirmUserCode, createBindCode, bindingView } = await import("../src/im/binding.js");
+  const { claimCode, confirmUserCode, createBindCode, bindingView, BIND_CODE_PREFIX } = await import("../src/im/binding.js");
+  /** 网页上给的绑定码去掉前缀和分隔符，剩下的就是认领用的那 8 位。 */
+  const BIND_CODE_DECOR = new RegExp(`^${BIND_CODE_PREFIX}-|-`, "g");
   const { confirmGroupCode, deleteGroup, GROUP_CHANGED, groupOf, patchGroup } = await import("../src/im/groups.js");
   const { writeCredentials } = await import("../src/im/config.js");
   const { api } = await import("../src/routes.js");
@@ -152,7 +154,7 @@ try {
   // ── ⑥ 绑定码 ─────────────────────────────────────────────────────────────
   {
     const fresh = await createBindCode("", "user", null);
-    const core = fresh.code.replace(/^ASH-|-/g, "");
+    const core = fresh.code.replace(BIND_CODE_DECOR, "");
     const p2p = { appId: APP, openId: "ou_new", chatId: "oc_p2p", chatType: "p2p" as const };
     assert.deepEqual(await claimCode(core, { ...p2p, chatType: "group" }), { kind: "wrong_place", purpose: "user" }, "个人码发到群里不认");
     assert.equal((await claimCode(core, p2p)).kind, "claimed");
@@ -170,7 +172,7 @@ try {
     assert.equal((await claimCode(core, p2p)).kind, "unknown", "确认过的码不再认");
 
     const group = await createBindCode("", "group", "p1");
-    const groupCore = group.code.replace(/^ASH-|-/g, "");
+    const groupCore = group.code.replace(BIND_CODE_DECOR, "");
     const inGroup = { appId: APP, openId: "ou_somebody", chatId: "oc_group", chatType: "group" as const, name: "研发群" };
     assert.equal((await claimCode(groupCore, inGroup)).kind, "not_owner", "群码必须是码主本人发");
     assert.equal((await claimCode(groupCore, { ...inGroup, openId: "ou_new" })).kind, "claimed");
@@ -181,7 +183,7 @@ try {
     // 确认那一刻重核：每一种不该生效的都不许动群绑定、不许清群聊房间。
     const claimFor = async (chatId: string) => {
       const code = await createBindCode("", "group", "p1");
-      assert.equal((await claimCode(code.code.replace(/^ASH-|-/g, ""), { ...inGroup, chatId, openId: "ou_new" })).kind, "claimed");
+      assert.equal((await claimCode(code.code.replace(BIND_CODE_DECOR, ""), { ...inGroup, chatId, openId: "ou_new" })).kind, "claimed");
       return code.codeId;
     };
     const groupRow = async (chatId: string) => (await db.select().from(imGroups).where(and(eq(imGroups.appId, APP), eq(imGroups.chatId, chatId)))).at(0);
@@ -213,7 +215,7 @@ try {
     }
     const raced = await Promise.all(["racer-a", "racer-b"].map(async (who) => {
       const code = await createBindCode(who, "group", `p-${who}`);
-      assert.equal((await claimCode(code.code.replace(/^ASH-|-/g, ""), { ...inGroup, chatId: "oc_shared", openId: `ou_${who}` })).kind, "claimed");
+      assert.equal((await claimCode(code.code.replace(BIND_CODE_DECOR, ""), { ...inGroup, chatId: "oc_shared", openId: `ou_${who}` })).kind, "claimed");
       return { who, codeId: code.codeId };
     })).then((codes) => Promise.all(codes.map(async ({ who, codeId }) => ({
       who, result: await confirmGroupCode(who, codeId, APP, { canSeeProject: async (projectId) => projectId === `p-${who}`, admin: false }),
@@ -255,7 +257,7 @@ try {
     // 确认覆盖同理：判资格读到群之后、写入之前，群被移去了别的项目 → 不覆盖，码还在。
     const admin = { canSeeProject: async () => true, admin: true };
     const takeover = await createBindCode(loser.who, "group", `p-${loser.who}`);
-    assert.equal((await claimCode(takeover.code.replace(/^ASH-|-/g, ""), { ...inGroup, chatId: "oc_shared", openId: `ou_${loser.who}` })).kind, "claimed");
+    assert.equal((await claimCode(takeover.code.replace(BIND_CODE_DECOR, ""), { ...inGroup, chatId: "oc_shared", openId: `ou_${loser.who}` })).kind, "claimed");
     const midway = await confirmGroupCode(loser.who, takeover.codeId, APP, {
       admin: true,
       canSeeProject: async (projectId) => {

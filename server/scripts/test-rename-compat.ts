@@ -9,7 +9,8 @@
 //   ⑥ 接力线:旧版对端的 ping/错误标记照认,旧版对端 + 新前缀分支在打包之前就拒;
 //   ⑦ setup 把 codex 里旧名的登记迁成 navi;真执行器开关的闸三代名字都拦。
 //   (④b–④g 是两轮审查补上的其余落盘/跨进程约定:验收标签、资源记号、回合身份、旧表头登记、
-//    封存标记、本机补接接口、哨兵出身、/goal 上下文、门禁 Job、冻结的 Git 落款与快照根。)
+//    封存标记、本机补接接口、哨兵出身、/goal 上下文、门禁 Job、冻结的 Git 落款与快照根、
+//    贮藏所有权标记、claude 打断请求号、飞书绑定码。)
 //
 // 跑:`npm -w server run test:rename-compat`
 import assert from "node:assert/strict";
@@ -284,6 +285,43 @@ try {
     const { GATE_ISOLATED_DIR } = await import("../src/accept-gate-isolated.js");
     assert.ok(GATE_ISOLATED_DIR.split(/[\\/]/).pop()!.startsWith(legacyNames.FROZEN_GATE_ISOLATED_DIR_PREFIX));
     console.log("✓ 第二轮清点:/goal 新旧记号都收得了尾,门禁 Job 新旧名都认,对比基准落款/默认署名域/快照根冻结");
+  }
+
+  // ── ④h 第三轮清点:贮藏所有权标记、claude 打断请求号 ─────────────────────────────────────────
+  {
+    // 贮藏:新存的写新标记;升级前存的(旧标记)照样认作本人的,别人的不认;界面上两代标记都剥掉。
+    const { runRefAction } = await import("../src/git-workbench/refs.js");
+    const { readStashes } = await import("../src/git-workbench/read.js");
+    const { digest } = await import("../src/git-workbench/core.js");
+    const { stashSubjectForDisplay, STASH_OWNER_TAG } = await import("@ash/shared/git-workbench");
+    const repo = repoWithCommit("stash-owner");
+    writeFileSync(join(repo, "a.txt"), "1\n");
+    git(repo, "add", "a.txt");
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a");
+    writeFileSync(join(repo, "a.txt"), "old\n");
+    git(repo, "stash", "push", "-q", "-m", `[${legacyNames.LEGACY_STASH_OWNER_TAG}:${digest("alice").slice(0, 12)}] 升级前存的`);
+    writeFileSync(join(repo, "a.txt"), "new\n");
+    await runRefAction(repo, repo, { kind: "stash-save", message: "升级后存的", untracked: false }, "alice");
+    const stashes = await readStashes(repo, "alice");
+    assert.equal(stashes.length, 2, JSON.stringify(stashes));
+    assert.ok(stashes[0]!.subject.includes(`[${STASH_OWNER_TAG}:`), stashes[0]!.subject);
+    assert.ok(stashes.every((stash) => stash.owned), "两代标记都认作本人的");
+    assert.ok((await readStashes(repo, "bob")).every((stash) => !stash.owned), "别人的不认");
+    assert.deepEqual(stashes.map((stash) => stashSubjectForDisplay(stash.subject).replace(/^On \S+: /, "")), ["升级后存的", "升级前存的"]);
+    // 打断请求号:新发的写新前缀;接管时读回升级前的旧记录,序号接着往下编、不撞号。
+    const { ClaudeControlBridge, INTERRUPT_ID_PREFIX } = await import("../src/executors/claude-control.js");
+    const { saveSteerJournal } = await import("../src/executors/claude-recovery.js");
+    const out = join(root, "steer-legacy.jsonl");
+    saveSteerJournal(out, { entries: [{ id: `${legacyNames.LEGACY_CLAUDE_INTERRUPT_ID_PREFIX}2`, result: 1, sent: true }] });
+    const bridge = new ClaudeControlBridge(false, out);
+    bridge.restore();
+    assert.equal(bridge.request().requestId, `${INTERRUPT_ID_PREFIX}3`);
+    // 飞书绑定码:新发的带新前缀;升级前发出、用户还没发给机器人的旧前缀那张照样认得出。
+    const { extractCode, BIND_CODE_PREFIX } = await import("../src/im/binding.js");
+    assert.equal(BIND_CODE_PREFIX, "NAVI");
+    assert.equal(extractCode("请绑定 NAVI-ABCD-EFGH"), "ABCDEFGH");
+    assert.equal(extractCode(`${legacyNames.LEGACY_IM_BIND_CODE_PREFIX}-abcd-efgh`), "ABCDEFGH");
+    console.log("✓ 第三轮清点:旧标记的贮藏照样是本人的、新存的写新标记;旧打断记录接管后序号接着编;新旧绑定码都认");
   }
 
   // ── ⑤ 互斥:改名之前的服务留下的锁、占有锁、在线登记都要挡得住新版 ─────────────

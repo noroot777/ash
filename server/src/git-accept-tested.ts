@@ -29,6 +29,9 @@ import { gitError } from "./git.js";
 import { registeredCheckout } from "./git-worktree-state.js";
 import type { TaskMergeResult } from "./git-accept.js";
 
+/** 验收移动目标分支时写进 reflog 的说明开头（后面接来源分支）。没有读取方，只给人翻 reflog 时看。 */
+export const ACCEPT_REFLOG_PREFIX = "navi accept:";
+
 /** 落地约束：落下来的必须是这棵树，目标分支得还在被测时那个提交上，检出里的字节得是测过的那份。 */
 export type LandingGuard = { tree: string; target: string; physical: GatePhysical | null };
 type Names = { sourceBranch: string; targetBranch: string };
@@ -192,7 +195,7 @@ export async function publishInCheckout(cwd: string, method: Published, guard: L
   const branch = `refs/heads/${names.targetBranch}`;
   const failed = await sealedLanding(cwd, guard, names, result, async () => {
     try {
-      await landingGit(cwd, ["update-ref", "-m", `ash accept: ${names.sourceBranch}`, branch, result, guard.target]);
+      await landingGit(cwd, ["update-ref", "-m", `${ACCEPT_REFLOG_PREFIX} ${names.sourceBranch}`, branch, result, guard.target]);
       return null;
     } catch {
       return movedTarget(names.targetBranch, guard.target, await rev(cwd, branch));
@@ -217,7 +220,7 @@ export async function publishRefOnly(repo: string, method: Published, guard: Lan
   names: Names): Promise<TaskMergeResult> {
   const ref = `refs/heads/${names.targetBranch}`;
   try {
-    await landingGit(repo, ["update-ref", "-m", `ash accept: ${names.sourceBranch}`, ref, result, guard.target]);
+    await landingGit(repo, ["update-ref", "-m", `${ACCEPT_REFLOG_PREFIX} ${names.sourceBranch}`, ref, result, guard.target]);
   } catch {
     return refusal(names, movedTarget(names.targetBranch, guard.target, await rev(repo, ref)));
   }

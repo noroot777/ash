@@ -16,14 +16,16 @@ import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imBindCodes, imBindings } from "../db/schema-im.js";
 import { id, now } from "../util.js";
-import { FROZEN_IM_BIND_SALT } from "@ash/shared/legacy-names";
+import { FROZEN_IM_BIND_SALT, LEGACY_IM_BIND_CODE_PREFIX } from "@ash/shared/legacy-names";
 
 export const CHANNEL = "feishu" as const;
 export const BIND_CODE_TTL_MS = 10 * 60_000;
 
 // 去掉 0/O、1/I/L 这几个看错就输错的字符。8 位 × 32 种 ≈ 1.1e12，10 分钟内猜不中。
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-const CODE_RE = /ASH[\s-]*([A-Z0-9]{4})[\s-]*([A-Z0-9]{4})/i;
+/** 绑定码的前缀（`NAVI-XXXX-XXXX`）。认的时候升级前发出的旧前缀也算，见 legacy-names.ts。 */
+export const BIND_CODE_PREFIX = "NAVI";
+const CODE_RE = new RegExp(`(?:${BIND_CODE_PREFIX}|${LEGACY_IM_BIND_CODE_PREFIX})[\\s-]*([A-Z0-9]{4})[\\s-]*([A-Z0-9]{4})`, "i");
 
 export type BindPurpose = "user" | "group";
 export type CodeRow = typeof imBindCodes.$inferSelect;
@@ -70,7 +72,7 @@ export async function createBindCode(owner: string, purpose: BindPurpose, projec
     ));
     await tx.insert(imBindCodes).values(row);
   });
-  return { codeId: row.id, code: `ASH-${core.slice(0, 4)}-${core.slice(4)}`, expiresAt };
+  return { codeId: row.id, code: `${BIND_CODE_PREFIX}-${core.slice(0, 4)}-${core.slice(4)}`, expiresAt };
 }
 
 export type ClaimInput = {
