@@ -16,7 +16,7 @@ import {
 import { questionKey, type QuestionAnswerInput } from "@ash/shared/questions";
 import { concreteReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
 import { ReviewerChip } from "../free-workflow/ReviewerChip.tsx";
-import { useReviewerList } from "../free-workflow/useReviewerList.ts";
+import { reviewHold, useReviewerList } from "../free-workflow/useReviewerList.ts";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { useLeftDrawer } from "../components/LeftDrawer.tsx";
@@ -72,7 +72,9 @@ export function DispatchPlanCard({ task, plan, onLaunch, onAnswer, collapsed, on
   const settling = task.status === "running" || task.status === "queued";
   const unavailable = settling || sending || sent;
   const returning = !!note.trim();
-  const canSend = !unavailable && (returning || rows.length > 0);
+  // 有哪一行看不出交给谁审（清单没读到），就先不派；发一句回去不受影响。
+  const reviewHeld = rows.map((row) => reviewHold(row.review, reviewers)).find(Boolean) ?? null;
+  const canSend = !unavailable && (returning || (rows.length > 0 && !reviewHeld));
 
   const drop = (index: number, at: number) => {
     setDropped((list) => [...list, index]);
@@ -100,9 +102,11 @@ export function DispatchPlanCard({ task, plan, onLaunch, onAnswer, collapsed, on
     setError(null);
     try {
       if (returning) await onAnswer(note.trim(), { questionKey: questionKey(task) });
-      else await onLaunch({ planId: plan.id, order, items: rows.map((row) => ({
-        index: row.index, target: row.target, review: concreteReviewChoice(row.review, reviewers),
-      })) });
+      else {
+        const items = rows.map((row) => ({ index: row.index, target: row.target, review: concreteReviewChoice(row.review, reviewers.reviewers) }));
+        if (items.some((item) => !item.review)) return;
+        await onLaunch({ planId: plan.id, order, items: items.map((item) => ({ ...item, review: item.review! })) });
+      }
       setSent(true);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -181,7 +185,7 @@ export function DispatchPlanCard({ task, plan, onLaunch, onAnswer, collapsed, on
                 })}
                 onEffortChange={(effort) => retarget(index, { ...target, reasoningEffort: effort || null })}
               />
-              <ReviewerChip value={review} reviewers={reviewers} label={`第 ${at + 1} 条「${item.title}」`} disabled={unavailable}
+              <ReviewerChip value={review} list={reviewers} label={`第 ${at + 1} 条「${item.title}」`} disabled={unavailable}
                 onChange={(next) => setReviews((map) => ({ ...map, [index]: next }))} />
               <button type="button" className="dispatch-plan-drop" disabled={unavailable}
                 aria-label={`第 ${at + 1} 条「${item.title}」不派`} onClick={() => drop(index, at)}>
@@ -207,10 +211,13 @@ export function DispatchPlanCard({ task, plan, onLaunch, onAnswer, collapsed, on
           {sendLabel}
         </button>
         <span id={keyId} className="task-visually-hidden">
-          {returning ? "把这句话发回去，一条任务都不建" : rows.length ? `按卡上的样子派出 ${rows.length} 个任务，${DISPATCH_ORDER_LABEL[order]}` : "全去掉了，写一句发回去"}
+          {returning ? "把这句话发回去，一条任务都不建" : reviewHeld ?? (rows.length ? `按卡上的样子派出 ${rows.length} 个任务，${DISPATCH_ORDER_LABEL[order]}` : "全去掉了，写一句发回去")}
         </span>
       </div>
-      {error && <p className="question-card-error" role="alert">{error}</p>}
+      {/* 审查者清单读失败了：派出键停着的原因写出来（还在读那一下不写，胶囊上就是「读取中」）。 */}
+      {(error ?? (reviewers.failed && !returning ? reviewHeld : null)) && (
+        <p className="question-card-error" role="alert">{error ?? reviewHeld}</p>
+      )}
     </section>
   );
 }

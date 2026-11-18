@@ -4,7 +4,7 @@
 // 好几件时平时只占一行「N 件可以派出去」，点开一行一件，多一组「同时 / 一个接一个」和「全部派出去」。
 // 状态和派出去那一下都在 useSuggestionDock.tsx，这里只画。
 import type { KeyboardEvent } from "react";
-import type { AgentExecutorProfile, AgentType, ReviewerProfile } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@ash/shared";
 import { DISPATCH_ORDER_LABEL, type DispatchOrder, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import type { DispatchSuggestionBase } from "@ash/shared/dispatch-suggestion";
 import type { CreateReviewChoice } from "@ash/shared/review-on-create";
@@ -12,6 +12,7 @@ import { sameExecutor } from "@ash/shared/executors";
 import { ArrowBendUpRight, CaretDown, X } from "@phosphor-icons/react";
 import { RunTargetPicker } from "../../components/RunTargetPicker.tsx";
 import { ReviewerChip } from "../../free-workflow/ReviewerChip.tsx";
+import type { ReviewerList } from "../../free-workflow/useReviewerList.ts";
 import { executorRunSummary } from "../../lib/agentAvailability.ts";
 
 export type SuggestionRow = {
@@ -23,6 +24,8 @@ export type SuggestionRow = {
   base: DispatchSuggestionBase;
   /** 标题和说明都还在：派得出去。 */
   filled: boolean;
+  /** 看不出交给谁审（审查者清单没读到）时派不出去的原因（useReviewerList.ts `reviewHold`）。 */
+  reviewHeld: string | null;
 };
 
 export type SuggestionDockProps = {
@@ -40,8 +43,7 @@ export type SuggestionDockProps = {
   error: string | null;
   types: AgentType[];
   profiles: AgentExecutorProfile[];
-  /** null = 审查者清单还没读到。 */
-  reviewers: ReviewerProfile[] | null;
+  reviewers: ReviewerList;
   onArm: (id: string) => void;
   onGo: (id: string) => void;
   onDrop: (id: string) => void;
@@ -92,10 +94,10 @@ function Row({ row, at, props }: { row: SuggestionRow; at: number | null; props:
           })}
           onEffortChange={(effort) => props.onRetarget(row.id, { ...target, reasoningEffort: effort || null })}
         />
-        <ReviewerChip value={row.review} reviewers={props.reviewers} label={`「${title}」`} disabled={busy}
+        <ReviewerChip value={row.review} list={props.reviewers} label={`「${title}」`} disabled={busy}
           onChange={(review) => props.onReview(row.id, review)} />
         {!armed && (
-          <button type="button" className="sg-go" disabled={busy || !!props.held || !row.filled} onClick={() => props.onGo(row.id)}
+          <button type="button" className="sg-go" disabled={busy || !!props.held || !row.filled || !!row.reviewHeld} onClick={() => props.onGo(row.id)}
             aria-label={`把「${title}」派出去`}>派出去</button>
         )}
         <button type="button" className="sg-drop" disabled={busy} aria-label={`不派「${title}」`} onClick={() => props.onDrop(row.id)}>
@@ -152,7 +154,7 @@ export function SuggestionDock(props: SuggestionDockProps) {
                   onClick={() => props.onOrder(value)}>{DISPATCH_ORDER_LABEL[value]}</button>
               ))}
             </div>
-            <button type="button" className="sg-go" disabled={busy || !!props.held || !rows.every((row) => row.filled)} onClick={props.onAll}>全部派出去</button>
+            <button type="button" className="sg-go" disabled={busy || !!props.held || !rows.every((row) => row.filled && !row.reviewHeld)} onClick={props.onAll}>全部派出去</button>
           </>
         )}
       </div>

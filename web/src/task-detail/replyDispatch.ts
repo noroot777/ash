@@ -6,8 +6,6 @@
 // 「谁来审」，缺省默认审查者，shared/src/review-on-create.ts）。
 import type { Task } from "@ash/shared";
 import { provisionalTitle } from "@ash/shared/provisional-title";
-import { concreteReviewChoice } from "@ash/shared/review-on-create";
-import { reviewerProfilesStore } from "../free-workflow/reviewerProfilesStore.ts";
 import { api } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";
 import type { ReplyBoxProps } from "./replyBoxProps.ts";
@@ -37,8 +35,8 @@ export function replyDispatch({ task, onCreated, notify }: {
       reasoningEffort: target.reasoningEffort,
       dispatchedBy: task.id,
       worktreeBase,
-      // 照胶囊上此刻画着的那一位派（清单就是那颗胶囊读进缓存的那一份）。
-      review: concreteReviewChoice(review, reviewerProfilesStore.current()),
+      // 已经是按下那一刻胶囊上画着的那一位（ReplyBox.tsx 定好才交过来），这里不再从缓存重认。
+      review,
     });
     onCreated(created);
     // 起跑没成不算派失败：任务已经在「子任务」里了，框照常清掉，说清楚去那里重试。

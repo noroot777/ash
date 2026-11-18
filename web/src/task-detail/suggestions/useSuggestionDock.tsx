@@ -18,7 +18,7 @@ import type { ReplyOverride } from "../replyOverride.ts";
 import { dispatchBaseOptions } from "../replyCall.ts";
 import { useDispatchBaseContext } from "../useReplyCall.ts";
 import { useExecutorProfiles } from "../useExecutorProfiles.ts";
-import { useReviewerList } from "../../free-workflow/useReviewerList.ts";
+import { reviewHold, useReviewerList } from "../../free-workflow/useReviewerList.ts";
 import { SuggestionDock, type SuggestionRow } from "./SuggestionDock.tsx";
 import { SuggestionDrawerBody, SuggestionDrawerEdit, SuggestionDrawerKind, SuggestionDrawerTitle } from "./SuggestionReader.tsx";
 import {
@@ -78,9 +78,10 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
     const body = edit.body ?? item.body;
     const wanted = edit.base ?? item.base;
     const base = bases.some((option) => option.id === wanted) ? wanted : bases[0]?.id ?? wanted;
+    const review = edit.review ?? "default";
     return {
-      id: item.id, title, body, note: item.note, target: edit.target ?? item.target ?? fallback, review: edit.review ?? "default",
-      base, filled: !!title.trim() && !!body.trim(),
+      id: item.id, title, body, note: item.note, target: edit.target ?? item.target ?? fallback, review,
+      base, filled: !!title.trim() && !!body.trim(), reviewHeld: reviewHold(review, reviewers),
     };
   });
   const storedArmed = armedOf(task.id);
@@ -119,14 +120,16 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
   const launch = async (ids: string[], extra?: string): Promise<boolean> => {
     if (busy || held) return false;
     const picked = rows.filter((row) => ids.includes(row.id));
-    if (!picked.length || picked.some((row) => !row.filled)) return false;
+    if (!picked.length || picked.some((row) => !row.filled || row.reviewHeld)) return false;
+    const reviews = picked.map((row) => concreteReviewChoice(row.review, reviewers.reviewers));
+    if (reviews.some((review) => !review)) return false;
     setBusy(true);
     setError(null);
     try {
       await api.launchSuggestions(task.id, {
         order: several ? order : "parallel",
-        items: picked.map((row) => ({
-          id: row.id, title: row.title.trim(), body: row.body, extra, target: row.target, review: concreteReviewChoice(row.review, reviewers),
+        items: picked.map((row, index) => ({
+          id: row.id, title: row.title.trim(), body: row.body, extra, target: row.target, review: reviews[index]!,
           worktreeBase: options.find((option) => option.id === row.base)?.worktreeBase ?? options[0]?.worktreeBase ?? null,
         })),
         ...(extra !== undefined && attachments.length ? { attachments } : {}),
@@ -178,7 +181,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
 
   if (!rows.length) return undefined;
   const label = armedRow ? `「${armedRow.title || "没写标题"}」` : "";
-  const reason = !armedRow ? null : !armedRow.filled ? "标题或说明是空的，派不出去" : uploading ? "附件传完才能派" : held;
+  const reason = !armedRow ? null : !armedRow.filled ? "标题或说明是空的，派不出去" : uploading ? "附件传完才能派" : held ?? armedRow.reviewHeld;
   return {
     head: (
       <SuggestionDock
@@ -190,7 +193,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
         readingId={readingId}
         busy={busy}
         held={held}
-        error={error ?? (baseContext.status === "failed" ? held : null)}
+        error={error ?? (baseContext.status === "failed" ? held : reviewers.failed ? rows.map((row) => row.reviewHeld).find(Boolean) ?? null : null)}
         types={registeredAgentTypes(profiles)}
         profiles={profiles}
         reviewers={reviewers}

@@ -43,10 +43,14 @@ export function reviewerOfChoice(choice: CreateReviewChoice | undefined, reviewe
 
 /**
  * 派出去那一下交给 ash 的那一份：照此刻画面上那一格的样子落成明确的一位或「不审」，不让服务端再替你挑一次
- * （按下之前你看到的默认就是派出去用的那位）。清单还没读到时原样交回，由服务端按派出那一刻的默认认。
+ * （按下之前你看到的默认就是派出去用的那位）。
+ *
+ * 清单还没读到（null：还在读，或者读失败了）时只有「不审」定得下来，其余给 null = **还不能派** —— 画面上
+ * 看不出交给谁，就不能拿这个选择派出去（服务端会照样按默认带上预约，用户却没确认过是谁）。调用方据此拦住派出。
  */
-export function concreteReviewChoice(choice: CreateReviewChoice, reviewers: readonly ReviewerProfile[] | null): CreateReviewChoice {
-  if (!reviewers || choice === "none") return choice;
+export function concreteReviewChoice(choice: CreateReviewChoice, reviewers: readonly ReviewerProfile[] | null): CreateReviewChoice | null {
+  if (choice === "none") return "none";
+  if (!reviewers) return null;
   const reviewer = reviewerOfChoice(choice, reviewers);
   return reviewer ? { reviewer: reviewer.id } : "none";
 }

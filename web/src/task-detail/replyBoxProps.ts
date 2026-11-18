@@ -75,7 +75,7 @@ export type ReplyBoxProps = {
    */
   onDispatch?: (input: {
     text: string; attachments: string[]; target: MentionTarget; worktreeBase: string | null;
-    /** 新任务谁来审（shared/src/review-on-create.ts）。 */
+    /** 新任务谁来审：已定成按下那一刻画着的那一位或不审（shared/src/review-on-create.ts `concreteReviewChoice`）。 */
     review: CreateReviewChoice;
   }) => Promise<void>;
   /** 托盘里「某某名下已全部停下」点过去打开那一条。 */
