@@ -12,7 +12,8 @@
 //
 // 收回的那一件和它的原因是**同一笔**落库的（`WithdrawnSuggestion`，同一行、同一条更新）：那一行从框顶
 // 不见了，原因就一定读得到，中间没有「拿掉了、还没来得及记」的空档。页面按时刻把它写在会话里收回的那一处
-// （web/src/task-detail/suggestions/withdrawalNotes.tsx），不经过会话正文，所以不看有没有会话、写不写得进文件。
+// （web/src/task-detail/suggestions/withdrawalNotes.ts），不经过会话正文，所以不看有没有会话、写不写得进文件。
+// 这份记录只增不减（见 `WithdrawnSuggestion`）。
 import type { DispatchRunTarget } from "./dispatch-plan.ts";
 
 /** 新任务从哪开工：从主分支开工 / 接着这条任务的代码。 */
@@ -34,7 +35,11 @@ export type DispatchSuggestion = {
 /** 智能体收回一件：哪一件、为什么（这句话原样给用户看）。 */
 export type DispatchSuggestionWithdrawal = { id: string; reason: string };
 
-/** 收回过的一件留下的记录：是哪一件、叫什么、为什么、什么时候。跟拿掉那一件同一笔落库，随任务下发。 */
+/**
+ * 收回过的一件留下的记录：是哪一件、叫什么、为什么、什么时候。跟拿掉那一件同一笔落库，随任务下发。
+ * 每一件都留着、跟任务同寿：没有条数上限、没有过期——这里没有任何东西知道用户看没看过，清掉哪一条都可能
+ * 清掉他还没看到的那一句。一条记录要智能体先挂、再收回一次才有，两百来字节，量由它调用的次数定。
+ */
 export type WithdrawnSuggestion = { id: string; title: string; reason: string; at: string };
 
 /** 用户按「派出去」时交给 ash 的那一件：此刻那一行上的样子。 */
@@ -61,8 +66,6 @@ export const MAX_SUGGESTIONS_PER_CALL = 6;
 export const MAX_SUGGESTIONS_PER_TASK = 12;
 export const MAX_SUGGESTION_NOTE_LEN = 120;
 export const MAX_WITHDRAW_REASON_LEN = 120;
-/** 一条任务上留多少条收回记录：只留最近的这些（一条任务总共才挂得下 12 件，收回过这么多次的极少）。 */
-export const MAX_WITHDRAWN_KEPT = 24;
 
 /** 补的话接在说明后面，标明是用户说的，跟智能体写的说明分得开。 */
 export const SUGGESTION_EXTRA_HEADING = "## 用户补充";

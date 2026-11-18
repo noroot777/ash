@@ -51,10 +51,15 @@ api.post("/tasks/:id/dispatch-suggestions", async (c) => {
   if (!adding.length && !withdrawing.length) return c.json({ error: "tasks（要挂的）和 withdraw（要收回的）至少给一样" }, 400);
   let change = null as AgentSuggestionChange | null;
   // 收回的那几件和各自的原因同一条更新落库（dispatch-suggestion.ts）：框顶那一行不见了，原因就一定读得到。
+  // 写不进去（原因接不到收回记录后面、被同时改了太多次）就是整笔没落：如实告诉智能体，别让它以为收回了。
   const written = await updateSuggestions(taskId, (current) => {
     change = agentChange(current, withdrawing, adding);
     return change.room ? null : change.after;
-  }, db, turnWriteGuard(r), () => change?.withdrawn ?? []);
+  }, db, turnWriteGuard(r), () => change?.withdrawn ?? []).catch((error: unknown) => {
+    console.error(`[ash] 可以派出去的活没能写进去 task=${taskId}:`, error instanceof Error ? error.message : error);
+    return "failed" as const;
+  });
+  if (written === "failed") return c.json({ error: "没能写进去，这一笔一样都没落：要收回的还挂着，要挂的没挂上" }, 500);
   if (change?.room) return c.json({ error: change.room }, 409);
   // 入口核过之后、写进去之前，任务停了、回合结束了或用户换了方向：这一批是旧方向下的，不落。
   if (!written || !change) return c.json({ error: "这一轮的回合或方向已经变了（任务停了、回合结束了或用户补了新要求），已拒绝写入" }, 409);

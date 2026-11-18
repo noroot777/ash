@@ -4,13 +4,15 @@
 //     条件写回，被别处抢先改过就重读重算——智能体在回合里挂新的、用户同时派掉一件，谁都不吞掉谁；
 //   · 智能体那一笔怎么落（`agentChange`）：先收回、再挂新的，同名的不挂第二件；
 //   · 收回的原因跟拿掉那一件**同一条更新**落库（`updateSuggestions` 的 `withdrawn`）：不变量是「建议不见了 ⇒
-//     原因读得到」。原因不另走会话正文——那样是两步，中间进程退了、会话文件写不进去，用户就只看到它没了。
+//     原因读得到」，对**每一件**都成立、一直成立。原因不另走会话正文——那样是两步，中间进程退了、会话文件写
+//     不进去，用户就只看到它没了。收回记录只往后接（`appendWithdrawn`），没有任何一处删它、截它、重写它：
+//     「留最近 N 条」这类上限等于替用户认定更早的他已经看过了，而这里没有任何东西知道他看没看过。它跟任务
+//     同寿，任务删了才没。
 // 这里没有「回合结束收掉旧的」：用户还没处理的那几件只有他自己（派、叉）和挂它的智能体（收回并说明）能拿掉。
 // 路由在 dispatch-suggestion-routes.ts，派出去那一下在 dispatch-suggestion-launch.ts。
-import { and, eq, isNull, type SQL } from "drizzle-orm";
+import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import {
-  MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK, MAX_SUGGESTION_NOTE_LEN, MAX_WITHDRAWN_KEPT, MAX_WITHDRAW_REASON_LEN,
-  parseDispatchSuggestions, parseWithdrawnSuggestions,
+  MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK, MAX_SUGGESTION_NOTE_LEN, MAX_WITHDRAW_REASON_LEN, parseDispatchSuggestions,
   type DispatchSuggestion, type DispatchSuggestionWithdrawal, type WithdrawnSuggestion,
 } from "@ash/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
@@ -139,8 +141,7 @@ const serialized = (items: DispatchSuggestion[]) => (items.length ? JSON.stringi
  * 回合结束了），这一笔就不落（返回 null）。叉掉、派出去各有各的授权，不带它。
  *
  * `withdrawn` 交回这一笔里智能体收回的那几件的记录（在 `change` 之后问）：接在收回记录那一列后面，跟拿掉
- * 它们的是**同一条**更新——要么都落、要么都不落。收回必然改了挂着的那一列，所以内容版本那一个条件就够把
- * 两处同时收回排开。
+ * 它们的是**同一条**更新——要么都落、要么都不落。
  */
 export async function updateSuggestions(
   taskId: string,
@@ -150,8 +151,7 @@ export async function updateSuggestions(
   withdrawn?: () => WithdrawnSuggestion[],
 ): Promise<{ before: DispatchSuggestion[]; after: DispatchSuggestion[] } | null> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const row = (await store.select({ raw: tasks.dispatchSuggestions, withdrawals: tasks.dispatchWithdrawals })
-      .from(tasks).where(and(eq(tasks.id, taskId), guard))).at(0);
+    const row = (await store.select({ raw: tasks.dispatchSuggestions }).from(tasks).where(and(eq(tasks.id, taskId), guard))).at(0);
     if (!row) return null;
     const before = parseDispatchSuggestions(row.raw);
     const after = change(before);
@@ -160,9 +160,7 @@ export async function updateSuggestions(
     const written = await store.update(tasks)
       .set({
         dispatchSuggestions: serialized(after), updatedAt: now(),
-        ...(records.length ? {
-          dispatchWithdrawals: JSON.stringify([...parseWithdrawnSuggestions(row.withdrawals), ...records].slice(-MAX_WITHDRAWN_KEPT)),
-        } : {}),
+        ...(records.length ? { dispatchWithdrawals: appendWithdrawn(records) } : {}),
       })
       .where(and(eq(tasks.id, taskId), guard,
         row.raw === null ? isNull(tasks.dispatchSuggestions) : eq(tasks.dispatchSuggestions, row.raw)))
@@ -170,6 +168,16 @@ export async function updateSuggestions(
     if (written.length) return { before, after };
   }
   throw new Error("可以派出去的活被同时改了太多次，没能写进去，请重试");
+}
+
+/**
+ * 收回记录那一列的新值：在库里现有的那一份后面接上这几条。在 SQL 里接（json_insert 的 `$[#]` = 接在末尾，
+ * 几对路径和值从左到右依次生效），不读出来改完再整份写回——已有的记录这一笔碰都不碰，所以不存在「读的时候
+ * 认不出就丢了」「写回时被截短」这两种丢法；库里那一份坏了（不是 JSON）这条更新整个失败，建议也不会被拿掉。
+ */
+function appendWithdrawn(records: readonly WithdrawnSuggestion[]): SQL {
+  const pairs = records.map((record) => sql`'$[#]', json(${JSON.stringify(record)})`);
+  return sql`json_insert(coalesce(${tasks.dispatchWithdrawals}, '[]'), ${sql.join(pairs, sql`, `)})`;
 }
 
 /** 智能体挂和收回的那一笔：任务还在跑，回合和方向还是入口核过的那一份（核的时候是空的，写的时候也得是空的）。 */

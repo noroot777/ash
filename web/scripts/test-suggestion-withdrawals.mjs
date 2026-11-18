@@ -27,4 +27,12 @@ const rows = [{ id: "u0", at: "2026-11-18T07:30:00.000Z" }, { id: "a1", at: "202
 const feed = interleaveAsides(rows, notes.map((note) => ({ key: note.key, at: note.at, node: null })), (row) => row.at);
 assert.deepEqual(feed.map((entry) => entry.row?.id ?? entry.aside.key), ["u0", "a1", "withdrawn:s1", "u1", "withdrawn:s3"]);
 
+// 这一层不截、不折叠：服务端给多少条就写多少句——离开很久、期间收回过很多次，回来时最早那一句也还在。
+const many = withdrawalNotes(Array.from({ length: 60 }, (_, index) => ({
+  id: `m${index}`, title: `第 ${index} 件`, reason: `原因 ${index}`, at: new Date(Date.UTC(2026, 10, 18, 9, 0, index)).toISOString(),
+})));
+assert.equal(many.length, 60);
+assert.equal(many[0].footnote.parts[0].view.text, "收回了建议任务「第 0 件」：原因 0");
+assert.equal(interleaveAsides(rows, many.map((note) => ({ key: note.key, at: note.at, node: null })), (row) => row.at).filter((entry) => entry.aside).length, 60);
+
 console.log("suggestion-withdrawals ok");
