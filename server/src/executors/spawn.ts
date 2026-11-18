@@ -111,39 +111,48 @@ export function failedChild(message: string): ChildProcess {
  * ASH_ALLOW_REAL_AGENT=1 整个放行，只留给就是要起真 CLI 的 live 脚本；谁可以写它由
  * scripts/test-process-conventions.mjs 的名单管着。
  *
- * **放行时交回的 `bin` 就是通过校验的那一个，调用方必须拿它去起**，不能回头再用原来的名字解析
- * 一遍。解析结果可以是相对路径（命令写成 `bin/claude`，或 PATH 里有相对目录）：校验按本进程的
- * cwd 认，子进程却按任务的 cwd 找，两处一分开，验的是一个文件、起的是另一个。所以按路径放行的
- * 那一档交回绝对路径；没进这一档的（生产、整体放行）原样交回，起法一个字不变。
+ * **隔离环境里放行只有一种含义：交回的 `bin` 是一条核验过的绝对路径，调用方拿它去起。**
+ * 验的和起的是同一个字符串，所以调用方之后怎么解析它，结果只能是它自己或「没了」，换不成别的：
+ *   - 解析结果是相对路径（命令写成 `bin/claude`，或 PATH 里有相对目录）：校验按本进程的 cwd 认，
+ *     子进程却按任务的 cwd 找 —— 交回绝对路径，两处就分不开；
+ *   - 交回的是父目录走过 realpath 的那个写法，也就是拿去比放行范围的那一个，而不是另一种等价写法：
+ *     路径中途的软链之后改指别处，起的仍是验过的位置；
+ *   - 此刻解析不到，就在这里报「找不到」，不把原名交回去让调用方再找一遍 —— 再找的那一遍若找到了
+ *     （文件正好这时装上），起的就是一个没人验过的东西。
+ * 闸认的是**位置**不是内容：能往放行范围里写文件的人本来就能决定起什么，那正是「测试自己铺的」的意思。
+ * 没进隔离这一档的（生产、整体放行）原样交回，起法一个字不变。
  */
 export type SpawnGate = { blocked: ChildProcess } | { blocked: null; bin: string };
 
 export function guardAgentSpawn(bin: string): SpawnGate {
   if (!process.env.ASH_RUNS_DIR || process.env.ASH_ALLOW_REAL_AGENT === "1") return { blocked: null, bin };
-  const staged = splitPathList(process.env.ASH_TEST_AGENT_BIN).map(stagedRoot);
+  const vetted = vetStagedLaunch(bin);
+  return "launch" in vetted ? { blocked: null, bin: vetted.launch } : { blocked: failedChild(vetted.refusal) };
+}
+
+/** 隔离环境里唯一能产出放行的地方：要么一条核验过的绝对路径，要么拒绝的理由，没有「原名照过」这一支。 */
+function vetStagedLaunch(bin: string): { launch: string } | { refusal: string } {
+  const staged = splitPathList(process.env.ASH_TEST_AGENT_BIN).map(stagedRoot).filter((root) => root !== null);
   if (!staged.length) {
-    return { blocked: failedChild(
-      `测试隔离环境禁止启动真执行器 ${bin}；`
-      + "这个测试若就是要验证进程管理，把自己铺的假 CLI 所在目录列进 ASH_TEST_AGENT_BIN",
-    ) };
+    return { refusal: `测试隔离环境禁止启动真执行器 ${bin}；`
+      + "这个测试若就是要验证进程管理，把自己铺的假 CLI 所在目录列进 ASH_TEST_AGENT_BIN" };
   }
   const resolved = resolveBin(bin);
-  if (!resolved) return { blocked: null, bin }; // 交给调用方照常报「找不到」
-  const launch = resolve(resolved);
-  if (staged.some((root) => isInsidePath(root, anchored(launch), sep))) return { blocked: null, bin: launch };
-  return { blocked: failedChild(
-    `测试隔离环境禁止启动真执行器 ${bin}：它此刻解析到 ${launch}，`
-    + "不在这个测试自己铺的那几处（ASH_TEST_AGENT_BIN）之内",
-  ) };
+  const launch = resolved && anchored(resolve(resolved));
+  if (!resolved || !launch) return { refusal: `找不到 ${bin} 命令(不在 PATH，也不在常见目录)` };
+  if (staged.some((root) => isInsidePath(root, launch, sep))) return { launch };
+  return { refusal: `测试隔离环境禁止启动真执行器 ${bin}：它此刻解析到 ${resolved}，`
+    + "不在这个测试自己铺的那几处（ASH_TEST_AGENT_BIN）之内" };
 }
 
 // 父目录走 realpath（macOS 的临时目录是 /var → /private/var 的软链），文件名原样留着：
 // 测试铺的桩本身可以是指向 node 的软链，认的是「铺在哪」而不是「指向哪」。
-function anchored(abs: string): string {
-  try { return join(realpathSync(dirname(abs)), basename(abs)); } catch { return abs; }
+// 父目录读不出来就是 null：说不清它在哪，就不拿一个没核过的写法去比。
+function anchored(abs: string): string | null {
+  try { return join(realpathSync(dirname(abs)), basename(abs)); } catch { return null; }
 }
 
-function stagedRoot(entry: string): string {
+function stagedRoot(entry: string): string | null {
   try { if (statSync(entry).isDirectory()) return realpathSync(entry); } catch { /* 当成文件认 */ }
   return anchored(resolve(entry));
 }
