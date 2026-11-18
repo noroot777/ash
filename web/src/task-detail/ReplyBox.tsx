@@ -46,6 +46,8 @@ import { parseAttachmentText } from "./utils.ts";
 import { clearSentDraft, dropSentAttachments, sentSelections, withdrawIntoBox } from "./withdrawDraft.ts";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
+/** 只能查目标时那颗键的发送方式：永远是立即发，改不动（真正的发送方式留在草稿里不碰）。 */
+const NOW_ONLY = { later: null, setLater: () => {} };
 // 菜单顶行只给第一组起名:原生命令和排在后面的技能各有 SlashMenu 画的分隔线。
 const MENU_HEADING: Record<SlashItem["kind"], string> = { ash: "叫人 · ", native: "", skill: "技能 · " };
 
@@ -87,6 +89,7 @@ export function ReplyBox({
   const currentTaskId = useRef(task.id);
   currentTaskId.current = task.id;
   const later = useLaterSend(draft);
+  const nowOnly = useLaterSend(NOW_ONLY);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // null = 没拖过;拖过的高度只当下限,照样跟着行数长高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
@@ -150,8 +153,12 @@ export function ReplyBox({
   const cliCommand = parseCliCommand(target?.agent ?? standing.config.agentType, value);
   const scopeDiscovery = cliCommand?.name === "goal" && cliCommand.args === "--scopes";
   const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing && !scopeDiscovery);
-  // 从没跑过的任务发不出普通的话，但框得能敲：`/goal --scopes` 这类不碰会话的命令要在这里打出来。
-  const inputLocked = task.mode !== "single" || task.archived;
+  // 从没跑过的任务发不出普通的话，但执行器查得了目标时框得能敲：`/goal --scopes` 不碰会话，要在这里打出来。
+  // 那一下只带字、立即发（服务端不收附件和稍后发送，task-cli-command.ts）：粘贴、附件、批注、发送设置都关着，
+  // 草稿里原有的附件和发送方式也不动，留给以后真正回复时用。
+  const queryOnly = !hasConversation && !queueing;
+  const canQueryGoal = parseCliCommand(target?.agent ?? standing.config.agentType, "/goal --scopes") !== null;
+  const inputLocked = task.mode !== "single" || task.archived || (queryOnly && !canQueryGoal);
   // 占位只有「回复…」，水印透出来（reply-1）。快捷键在发送键的提示里，「可以粘贴」在附件键的
   // 提示里，「引导会话」在待发送那一条的键上；发不出去的原因指到发送键上才说。只有整个输入框
   // 都用不了（不是单任务、已归档、还没跑过）时，原因才写在占位里——那时没有键可指。
@@ -344,7 +351,7 @@ export function ReplyBox({
     const askCall = call?.verb === "ask" ? call : null;
     const askTarget = askCall?.target ?? null;
     if (disabled || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
-    const choice = annotation ? {} : later.resolve();
+    const choice = annotation || queryOnly ? {} : later.resolve();
     // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
     if (!choice) {
       setSendError(`${later.submitLabel}：${later.blockerOf(choice)}`);
@@ -358,9 +365,9 @@ export function ReplyBox({
     const draftAtSend = { text: value, textVersion: draft.value.textVersion };
     const laterAtSend = draft.later;
     const sentText = annotation?.text ?? value.trim();
-    const sentPaths = annotation?.attachments ?? uploads.attachments.map((attachment) => attachment.path);
+    const sentPaths = annotation?.attachments ?? (queryOnly ? [] : uploads.attachments.map((attachment) => attachment.path));
     // 发送结算只摘这一次提交的那几次选择（路径 + 选择记号），途中又放回的同一张图留着。
-    const sentSelection = sentSelections(uploads.attachments);
+    const sentSelection = sentSelections(queryOnly ? [] : uploads.attachments);
     try {
       // 改完执行器立刻按发送时，PATCH 可能还在飞 —— 回复的 POST 先到，服务端读到的
       // 仍是旧执行器，这一句照旧由旧的跑。先等写回落地，落不下去就别发：静默按旧
@@ -396,7 +403,7 @@ export function ReplyBox({
       if (!annotation) {
         clearSent(draftAtSend, sentSelection);
         // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
-        draft.setLater((current) => (current === laterAtSend ? null : current));
+        if (!queryOnly) draft.setLater((current) => (current === laterAtSend ? null : current));
       }
       if (askCall) calling.sent(askCall);
       return true;
@@ -531,7 +538,7 @@ export function ReplyBox({
             mention.onValueChange();
           }}
           {...slash.caret.inputProps}
-          onPaste={take && !activeOverride?.attachable ? undefined : uploads.onPaste}
+          onPaste={take ? (activeOverride?.attachable ? uploads.onPaste : undefined) : queryOnly ? undefined : uploads.onPaste}
           onKeyDown={(event) => {
             if (overrideKeyDown(activeOverride, event)) return;
             if (slash.onKeyDown(event, () => void send(), () => setValue(""))) return;
@@ -551,17 +558,17 @@ export function ReplyBox({
         />
         {take && "body" in take && take.body}
         <div className="task-reply-actions">
-          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive || (!!take && !activeOverride?.attachable)} />
+          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive || (take ? !activeOverride?.attachable : queryOnly)} />
           {actions}
           {/* 截图批注、预览日志用得少，收进「更多」。 */}
           <IconMenu side="above" buttonRef={moreButton} className="task-reply-more" items={[
             { label: draft.screenshot ? "继续批注" : "截图批注", icon: <PencilSimple size={15} />,
-              disabled: disabled || sending || uploads.uploading || commandActive, onPick: () => setAnnotating(true) },
+              disabled: disabled || queryOnly || sending || uploads.uploading || commandActive, onPick: () => setAnnotating(true) },
             ...moreItems,
           ]} />
           <ScreenshotAnnotation key={task.id} taskId={task.id} open={annotating} onOpenChange={setAnnotating} returnFocusRef={moreButton}
             candidates={screenshotCandidates(conversationItems, [...parseAttachmentText(task.body).paths, ...uploads.attachments.map((attachment) => attachment.path)])}
-            disabled={disabled || sending || uploads.uploading || commandActive} queueing={queueing}
+            disabled={disabled || queryOnly || sending || uploads.uploading || commandActive} queueing={queueing}
             executorLabel={activeExecutorLabel} onSend={(reply) => runSend(reply)} />
           <span className="task-reply-actions-gap" aria-hidden="true" />
           {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后向右接着配置；跟新建
@@ -597,9 +604,9 @@ export function ReplyBox({
             call={call}
             callHeld={call?.verb === "discuss" ? discussHold : baseContext.status === "loading" ? "正在确认新任务从哪开工"
               : baseContext.status === "failed" ? "确认不了新任务从哪开工，先重试" : null}
-            later={later}
+            later={queryOnly ? nowOnly : later}
             text={value}
-            attachments={uploads.attachments.length}
+            attachments={queryOnly ? 0 : uploads.attachments.length}
             uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
             queueing={queueing}
             sending={sending}
@@ -616,7 +623,7 @@ export function ReplyBox({
             stopTip={["queued", "paused", "backlog"].includes(task.status) ? "不排了" : "停止这一轮"}
             stopBlocked={stopBlocked}
             stopping={stopping}
-            configDisabled={disabled || sending || uploads.uploading || commandActive || mention.open}
+            configDisabled={disabled || queryOnly || sending || uploads.uploading || commandActive || mention.open}
             tasks={tasks}
             projectId={task.projectId}
             taskId={task.id}
