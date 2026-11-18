@@ -5,7 +5,9 @@
 // 数据根——全新机器用新目录，升级上来的机器原地用旧目录并记下来（之后新目录被谁建出来也不换成空数据根），
 // 演练包标识不认旧的；网页数据——WebKit 与 cookie 目录整份复制（不挪）、每项先拷到本进程自己的暂存位置再一次
 // 放上去，写不进去时报错、不留半截、不记已接且下次再来（上次拷到一半留下的暂存也清掉），只接一次；几份 Navi
-// 同时第一次打开时只有一份在复制，别的等它接完才放行，放行时看到的一定是完整的一份；复制到一半被杀掉，重开补齐；建窗口之前那道闸——
+// 同时第一次打开时只有一份在复制，别的等它接完才放行，放行时看到的一定是完整的一份；复制到一半被杀掉，重开补齐；
+// 持锁那一份卡住时等满时限交出原因；登录自启——旧登录项换成新的只做一次，用户关掉之后后台重试只清理、不再打开，
+// 关掉时旧登录项删不掉要报错，新的装不上下一轮再来；建窗口之前那道闸——
 // 旧 app 不肯退、复制失败都挡着不放（什么都不复制、不记已接），没有可接的、用户选了不接就放行；旧包让位——
 // 只认包标识对得上的真目录（软链、别的包不算），旧登录项还没换成 Navi 的时不动（它跑的是旧包里的可执行文件），
 // 判「有没有人在用」走安装器同一份 bundle-users.sh：有进程拿着
@@ -141,6 +143,25 @@ try {
   assert.deepEqual(staging(), [], "no staging left behind");
   assert.equal(readdirSync(join(raceLibrary, "WebKit/new.race"), { recursive: true }).length, expected);
   console.log("PASS: several first launches at once — one copies under the adoption lock, the others wait and open on the whole copy; one killed mid-copy is completed by the next");
+
+  // 持锁那一份卡住了：这一份等满时限就交出原因（走「重试 / 不接了 / 退出」），不无限僵在启动上。
+  const stuckHolder = hold("/usr/bin/lockf", ["-k", join(raceLibrary, "WebKit/.stuck.id.adopting.lock"), "/bin/sleep", "60"]);
+  await delay(500);
+  cleanups.push(() => forgetDomain(`${domain}.lockwait`));
+  assert.equal(run("lock-wait", raceLibrary, "old.race", "stuck.id", `${domain}.lockwait`), "OK lock-wait");
+  await stop(stuckHolder);
+  assert.ok(!existsSync(join(raceLibrary, "WebKit/stuck.id")), "nothing copied without the lock");
+  console.log("PASS: a stuck holder of the adoption lock makes the waiting launch give up with a reason after the time limit");
+
+  // ── 登录自启：用户的决定压过残留的旧登录项 ──
+  const loginPolicyPlist = join(temporary, "LoginPolicy", "dev.ash.server.plist");
+  mkdirSync(join(loginPolicyPlist, ".."), { recursive: true });
+  cleanups.push(() => {
+    spawnSync("chflags", ["nouchg", loginPolicyPlist]);
+    ["", ".retry"].forEach((suffix) => forgetDomain(`${domain}.login${suffix}`));
+  });
+  assert.equal(run("login", loginPolicyPlist, `${domain}.login`), "OK login");
+  console.log("PASS: login item — the old one is replaced once; after the user turns it off, retries only clean up and never turn it back on; a failed enable is retried");
 
   // ── 旧包让位 ──
   const apps = join(temporary, "Applications");

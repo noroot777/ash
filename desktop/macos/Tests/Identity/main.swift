@@ -149,6 +149,50 @@ case "race":
   let files = FileManager.default.enumerator(atPath: target)?.allObjects.count ?? -1
   print("OPEN blocked=\(blocked ?? "nil") files=\(files)")
 
+case "login":
+  // 参数：旧登录项 plist 路径（临时的）、defaults 域。LoginService 用替身：记开了几次，不碰 launchctl。
+  let item = URL(fileURLWithPath: args[2])
+  let fm = FileManager.default
+  var defaults = scratchDefaults(args[3])
+  var enables = 0
+  let enable: () throws -> Void = { enables += 1 }
+  let quiet: (String) -> Void = { _ in }
+  // 旧登录项删不掉（Finder 里「已锁定」）：新的开上了，旧的留着。
+  fm.createFile(atPath: item.path, contents: Data("<plist/>".utf8))
+  try! fm.setAttributes([.immutable: true], ofItemAtPath: item.path)
+  LegacyIdentity.adoptLoginItem(item, defaults: defaults, enable: enable, bootout: quiet)
+  require(enables == 1 && fm.fileExists(atPath: item.path), "enabled once, the locked old item stays")
+  // 用户在菜单里关掉：记下决定；旧的删不掉要报出来，不能报个关掉了。
+  var threw = false
+  do { try LegacyIdentity.userTurnedLoginOff(item, defaults: defaults, bootout: quiet) } catch { threw = true }
+  require(threw, "turning it off says the old item could not be removed")
+  // 后台下一轮：只清理，不替用户再打开。
+  LegacyIdentity.adoptLoginItem(item, defaults: defaults, enable: enable, bootout: quiet)
+  require(enables == 1, "a retry never turns the user's choice back on")
+  try! fm.setAttributes([.immutable: false], ofItemAtPath: item.path)
+  LegacyIdentity.adoptLoginItem(item, defaults: defaults, enable: enable, bootout: quiet)
+  require(enables == 1 && !fm.fileExists(atPath: item.path), "once removable, the old item is cleaned up and nothing is turned on")
+  // 新的那条装不上：还没有决定，旧的留着，下一轮再开。
+  defaults = scratchDefaults(args[3] + ".retry")
+  fm.createFile(atPath: item.path, contents: Data("<plist/>".utf8))
+  LegacyIdentity.adoptLoginItem(item, defaults: defaults, enable: { throw CocoaError(.fileWriteUnknown) }, bootout: quiet)
+  require(fm.fileExists(atPath: item.path), "a failed enable keeps the old item")
+  LegacyIdentity.adoptLoginItem(item, defaults: defaults, enable: enable, bootout: quiet)
+  require(enables == 2 && !fm.fileExists(atPath: item.path), "the next round enables and cleans up")
+  for suffix in ["", ".retry"] { UserDefaults.standard.removePersistentDomain(forName: args[3] + suffix) }
+  print("OK login")
+
+case "lock-wait":
+  // 参数：library 旧 id 新 id defaults 域。迁移锁被别人一直拿着：等满时限就交出原因，不无限僵住。
+  LegacyIdentity.lockTimeout = 1
+  let started = Date()
+  let blocked = LegacyIdentity.prepareWebData(library: URL(fileURLWithPath: args[2], isDirectory: true), from: args[3], to: args[4],
+                                              defaults: scratchDefaults(args[5]), quitLegacy: { true })
+  require(blocked?.contains("另一份 Navi") == true, "blocked: \(blocked ?? "nil")")
+  require(Date().timeIntervalSince(started) < 10, "gave up after the time limit")
+  UserDefaults.standard.removePersistentDomain(forName: args[5])
+  print("OK lock-wait")
+
 case "is-legacy":
   // 参数：路径 期望(yes/no)
   require(LegacyIdentity.isLegacyBundle(URL(fileURLWithPath: args[2])) == (args[3] == "yes"), "isLegacyBundle(\(args[2])) should be \(args[3])")

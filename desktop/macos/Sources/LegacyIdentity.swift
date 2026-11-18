@@ -124,6 +124,9 @@ enum LegacyIdentity {
     ].map { (library.appendingPathComponent($0.0), library.appendingPathComponent($0.1)) }
   }
 
+  /// 等迁移锁最多等多久（测试里调短）。
+  static var lockTimeout: TimeInterval = 30
+
   struct AdoptionError: LocalizedError {
     let errorDescription: String?
   }
@@ -131,7 +134,11 @@ enum LegacyIdentity {
   /// 整次接班（查已接、复制、放上去、记已接）同一时刻只有一个进程在做：同时开着的两份 Navi（构建目录里的、
   /// 「应用程序」里的、`open -n` 多开的）各自按路径判断，就会一份把另一份还没拷完的目录放上去、还记了已接。
   /// 另一份在锁上等，等到时已经接完，它也就不会在接完之前建窗口。
-  private static func withAdoptionLock<T>(library: URL, current: String, _ body: () throws -> T) throws -> T {
+  ///
+  /// 等锁有时限：持锁那一份卡住了（被挂起、在等什么）的时候，这一份不能没完没了地僵在启动上 —— 等满了就把原因
+  /// 交给 AppDelegate 那个「重试 / 不接了 / 退出」的弹窗。
+  private static func withAdoptionLock<T>(library: URL, current: String, timeout: TimeInterval = lockTimeout,
+                                          _ body: () throws -> T) throws -> T {
     let directory = library.appendingPathComponent("WebKit", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let path = directory.appendingPathComponent(".\(current).adopting.lock").path
@@ -140,8 +147,15 @@ enum LegacyIdentity {
       throw AdoptionError(errorDescription: "打不开迁移锁 \(path)：\(String(cString: strerror(errno)))")
     }
     defer { close(descriptor) }
-    guard flock(descriptor, LOCK_EX) == 0 else {
-      throw AdoptionError(errorDescription: "拿不到迁移锁 \(path)：\(String(cString: strerror(errno)))")
+    let deadline = Date().addingTimeInterval(timeout)
+    while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+      guard errno == EWOULDBLOCK else {
+        throw AdoptionError(errorDescription: "拿不到迁移锁 \(path)：\(String(cString: strerror(errno)))")
+      }
+      guard Date() < deadline else {
+        throw AdoptionError(errorDescription: "另一份 Navi 正在接 Ash 的网页数据，等了 \(Int(timeout)) 秒还没接完。等它接完再点「重试」，或者先把那一份退出。")
+      }
+      usleep(50_000)
     }
     return try body()
   }
@@ -238,26 +252,54 @@ enum LegacyIdentity {
     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(loginLabel).plist")
   }
 
-  /// 旧登录项还在（= 用户开着）就换成自己的：**先把自己的装好、确认生效，再卸旧的**。反过来的话，新的那条装不上时
-  /// 旧的已经没了，而抄过来的 LoginServiceConfigured 让之后的启动以为是用户关掉的，再也不会补上。装不上就两条都
-  /// 原样留着，旧的 plist 在就是「还没换」：旧包也就不让位（`retire` 认它），旧登录项指着的 Ash 可执行文件一直在，
-  /// 登录时照样起服务；让位的后台重试每一轮都先再换一次。
-  private static func adoptLoginItem() {
-    let plist = legacyLoginItem
-    guard FileManager.default.fileExists(atPath: plist.path) else { return }
+  /// 登录自启已经有了 Navi 这边的决定：接班开上了，或者用户在菜单里开 / 关过（LoginService 每次开关成功都记）。
+  /// 记过之后旧登录项那边只剩清理，**不再替用户开** —— 旧 plist 还在只说明上一轮没删掉，不说明用户现在还想开着。
+  private static let loginChoiceKey = "LoginItemChoiceAfterAsh"
+
+  static func noteLoginChoice(_ defaults: UserDefaults = .standard) { defaults.set(true, forKey: loginChoiceKey) }
+
+  /// 卸掉并删除旧登录项（不在就算了）。删不掉抛错。
+  static func removeLegacyLoginItem(_ item: URL = legacyLoginItem, bootout: (String) -> Void = { LoginService.bootout(label: $0) }) throws {
+    bootout(loginLabel)
+    guard FileManager.default.fileExists(atPath: item.path) else { return }
+    try FileManager.default.removeItem(at: item)
+  }
+
+  /// 用户在菜单里关掉登录自启：先记下这个决定（后台重试从此不会再打开它），再连旧登录项一起卸掉删掉 —— 只关新的、
+  /// 旧的还在，下次登录照样会起服务。旧的删不掉就抛错，让菜单那头说清楚，而不是报个关掉了。
+  static func userTurnedLoginOff(_ item: URL = legacyLoginItem, defaults: UserDefaults = .standard,
+                                 bootout: (String) -> Void = { LoginService.bootout(label: $0) }) throws {
+    noteLoginChoice(defaults)
     do {
-      try LoginService.setEnabled(true)
+      try removeLegacyLoginItem(item, bootout: bootout)
     } catch {
-      logger.error("换登录项没成，\(loginLabel, privacy: .public) 先留着、旧 app 也先不让位：\(error.localizedDescription, privacy: .public)")
-      return
+      throw AdoptionError(errorDescription: "改名前的登录项 \(item.path) 删不掉，下次登录它还会起服务：\(error.localizedDescription)")
     }
-    LoginService.bootout(label: loginLabel)
+  }
+
+  /// 旧登录项还在（= 用户在 Ash 里开着）就换成自己的：**先把自己的装好、确认生效，再卸旧的**。反过来的话，新的那条
+  /// 装不上时旧的已经没了，而抄过来的 LoginServiceConfigured 让之后的启动以为是用户关掉的，再也不会补上。装不上就两条
+  /// 都原样留着，旧的 plist 在就是「还没换」：旧包也就不让位（`retire` 认它），旧登录项指着的 Ash 可执行文件一直在，
+  /// 登录时照样起服务；让位的后台重试每一轮都再来一次。只有还没有过决定（`loginChoiceKey`）时才开新的。
+  static func adoptLoginItem(_ item: URL = legacyLoginItem, defaults: UserDefaults = .standard,
+                             enable: () throws -> Void = { try LoginService.setEnabled(true) },
+                             bootout: (String) -> Void = { LoginService.bootout(label: $0) }) {
+    guard FileManager.default.fileExists(atPath: item.path) else { return }
+    if !defaults.bool(forKey: loginChoiceKey) {
+      do {
+        try enable()
+      } catch {
+        logger.error("换登录项没成，\(loginLabel, privacy: .public) 先留着、旧 app 也先不让位：\(error.localizedDescription, privacy: .public)")
+        return
+      }
+      noteLoginChoice(defaults)
+      logger.notice("登录项从 \(loginLabel, privacy: .public) 换成了 \(LoginService.label, privacy: .public)")
+    }
     do {
-      try FileManager.default.removeItem(at: plist)
+      try removeLegacyLoginItem(item, bootout: bootout)
     } catch {
-      logger.error("删不掉 \(plist.path, privacy: .public)，下一轮再删：\(error.localizedDescription, privacy: .public)")
+      logger.error("删不掉 \(item.path, privacy: .public)，下一轮再删：\(error.localizedDescription, privacy: .public)")
     }
-    logger.notice("登录项从 \(loginLabel, privacy: .public) 换成了 \(LoginService.label, privacy: .public)")
   }
 
   // MARK: 旧 app 让位

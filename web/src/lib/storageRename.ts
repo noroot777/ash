@@ -11,6 +11,8 @@
 // 写不进去（存储快满）时**旧键一个字都不动**：先删旧的再写新的，一旦新的也写不进、旧的又放不回去，
 // 用户存下的唯一一份就只剩这一页的内存，一刷新就没了。所以只有新键确实写进去了才删旧键；写不进就把这一条
 // 暂缓改名，由 `keepLegacyReadable` 让读新键的地方读旧键、写新键写不下时在旧键原地更新，下次启动再挪。
+// 按前缀枚举键的地方要用 `storageKeys`：它把这些暂缓的旧键按新名列出来，`Object.keys(localStorage)` 列的是
+// 物理上的旧名，拿新前缀一过滤就漏了。
 //
 // 下面这张表里的旧前缀是兼容值：批量改名时别把它们也换成 navi，不然旧数据就没人认了。
 export const LEGACY_STORAGE_PREFIXES: readonly (readonly [legacy: string, current: string])[] = [
@@ -120,4 +122,15 @@ export function keepLegacyReadable(storage: object, stuck: readonly StuckKey[], 
     pending.get(this)?.delete(String(key));
     removeItem.call(this, entry.legacyKey);
   };
+}
+
+/** 这份存储里的键，按新名列：还没挪成、暂留在旧键上的那几条列成新键名（同 `getItem` 看到的一致）。 */
+export function storageKeys(storage: Pick<Storage, "length" | "key">): string[] {
+  const renamed = new Map([...(pending.get(storage)?.values() ?? [])].map((entry) => [entry.legacyKey, entry.key]));
+  const keys = new Set<string>();
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (key !== null) keys.add(renamed.get(key) ?? key);
+  }
+  return [...keys];
 }

@@ -6,7 +6,7 @@
 // 认得旧键。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { keepLegacyReadable, LEGACY_STORAGE_PREFIXES, renameLegacyStorageKeys } from "../src/lib/storageRename.ts";
+import { keepLegacyReadable, LEGACY_STORAGE_PREFIXES, renameLegacyStorageKeys, storageKeys } from "../src/lib/storageRename.ts";
 
 /** 跟浏览器一样按「键 + 值」的字符数计配额；order 指定枚举顺序（浏览器的枚举顺序不是写入顺序）。 */
 class MemoryStorage {
@@ -132,6 +132,25 @@ class MemoryStorage {
   removing.removeItem("navi:note");
   assert.equal(removing.getItem("navi:note"), null, "删掉就是删掉，不会冒出旧值");
   assert.equal(removing.map.has("ash:note"), false);
+}
+
+// 按前缀枚举键的地方（清退 Inspector 默认面板）：没挪成、暂留在旧名下的面板状态按新名列出来，照样被清退；
+// 不然清退记了「做过了」，以后挪成了也不会再清。
+{
+  class Panels extends MemoryStorage {}
+  const state = JSON.stringify({ openTabs: ["monitors", "files"], activeTab: "monitors", visible: true, pad: "p".repeat(200) });
+  const storage = new Panels({ "ash:inspector:task:t1": state, "navi:other": "1" });
+  storage.capacity = storage.used() + 40; // 清退记账那一条写得下，面板状态挪不过去
+  const { stuck } = renameLegacyStorageKeys(storage);
+  assert.deepEqual(stuck, [{ key: "navi:inspector:task:t1", legacyKey: "ash:inspector:task:t1" }]);
+  keepLegacyReadable(storage, stuck, Panels.prototype);
+  assert.deepEqual(storageKeys(storage).sort(), ["navi:inspector:task:t1", "navi:other"], "按新名列");
+  globalThis.window = { localStorage: storage };
+  const { retireInspectorTab } = await import("../src/inspector/retiredTabs.ts");
+  retireInspectorTab("monitors-off", /^navi:inspector:task:/, "monitors");
+  delete globalThis.window;
+  const after = JSON.parse(storage.getItem("navi:inspector:task:t1"));
+  assert.deepEqual([after.openTabs, after.activeTab], [["files"], "files"], "暂留在旧名下的面板状态也清退了");
 }
 
 // 写什么都失败（不只是配额满）：旧值从头到尾都在存储里，刷新后照样读得到；写新键整个失败时把错抛给调用方、旧内容不动。

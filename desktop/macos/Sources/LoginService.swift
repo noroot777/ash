@@ -9,8 +9,11 @@ enum LoginService {
   /// 正式那份叫 dev.navi.server；演练用的 app（别的 bundle id）各登记各的，碰不到日常那条。改名前那条
   /// （dev.ash.server）由 LegacyIdentity 卸掉、换成这一条。
   static var label: String {
-    AshConfig.bundleID == LegacyIdentity.successor ? "dev.navi.server" : "\(AshConfig.bundleID).server"
+    isSuccessor ? "dev.navi.server" : "\(AshConfig.bundleID).server"
   }
+
+  /// 正式那份才跟改名前的登录项打交道；演练用的 app 碰不到日常那条。
+  private static var isSuccessor: Bool { AshConfig.bundleID == LegacyIdentity.successor }
 
   /// 装在「应用程序」里（不是从构建目录直接打开的那份）：登录项、旧 app 的软链只指向这种位置。
   static var isInstalledLocation: Bool {
@@ -62,6 +65,8 @@ enum LoginService {
         try FileManager.default.removeItem(at: plistURL)
       }
       UserDefaults.standard.set(true, forKey: "LoginServiceConfigured")
+      // 改名前的那条（dev.ash.server）也得关掉，不然下次登录它照样起服务；同时记下「用户关了」，接班的后台重试不再打开。
+      if isSuccessor { try LegacyIdentity.userTurnedLoginOff() }
       return
     }
     guard let executable = Bundle.main.executablePath else {
@@ -85,6 +90,7 @@ enum LoginService {
     try checkedLaunchctl(["bootstrap", domain, plistURL.path])
     guard isEnabled else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO)) }
     UserDefaults.standard.set(true, forKey: "LoginServiceConfigured")
+    if isSuccessor { LegacyIdentity.noteLoginChoice() }
   }
 
   /// 卸掉一条（可能已经不在了的）登录项，不管结果。
