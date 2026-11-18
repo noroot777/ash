@@ -166,6 +166,37 @@ try {
   await flush();
   assert.equal((await metrics()).distance, 0, "藏着的时候来的新消息,切回来没有跟过去");
 
+  /* ⑮ 按 ↑ 回到侧栏上一条任务（子任务的上一行就是它的父任务）：这颗键被工作区快捷键认下、
+     preventDefault 了，它没有滚这条会话，不能算「往回看」。算了的话，换任务时内容先缩成
+     读取中、scrollTop 被夹回 0 的那一下就被当成读者自己滚走，正文到了也不跟，父任务停在最上面。 */
+  const settleRoom = async () => { await page.waitForTimeout(400); await flush(); };
+  await press("arrow-switch");
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement) && document.activeElement.blur());
+  await page.keyboard.press("ArrowUp");
+  await settleRoom();
+  assert.ok((await metrics()).height > 1000, "夹具假设有误：换过去的会话没有读完");
+  assert.equal((await metrics()).distance, 0, "按 ↑ 换到上一条任务，会话停在了上面");
+
+  /* ⑯ 被别处吃掉、什么也没滚的 ↑ 同样不算往回看：停在离底一小段（仍在跟）时按一下，接着来的
+     思考续写照常跟。用等高续写来判，是因为内容一长高，浏览器的 scroll anchoring 会顺手把视口
+     带回去，判不出贴底逻辑自己还跟不跟。 */
+  await press("arrow-swallow");
+  const beforeSwallow = await parkByWheel(40);
+  assert.ok(beforeSwallow.distance > 2, `没能停在离底一小段：${beforeSwallow.distance}`);
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement) && document.activeElement.blur());
+  await page.keyboard.press("ArrowUp");
+  await flush();
+  assert.equal((await metrics()).top, beforeSwallow.top, "夹具假设有误：被吃掉的 ↑ 滚动了会话");
+  await press("stream-thinking");
+  assert.equal((await metrics()).distance, 0, "被别处吃掉的 ↑ 让会话不再跟随");
+
+  /* ⑰ 刚在这条会话里往回滚了一下就换任务：那一下往回看属于上一条会话，不能带进新的那条。 */
+  await feed.hover();
+  await page.mouse.wheel(0, -120);
+  await press("switch-room");
+  await settleRoom();
+  assert.equal((await metrics()).distance, 0, "换任务前的往回看带进了新会话，新会话停在了上面");
+
   assert.deepEqual(errors, [], "页面抛了异常");
   console.log("stick-to-bottom DOM regression passed");
 } finally {
