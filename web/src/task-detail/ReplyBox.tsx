@@ -15,12 +15,14 @@ import {
 } from "./ReplyResizeHandle.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useReplyLayout } from "./useReplyLayout.ts";
-import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InputMentionMenu } from "../components/MentionMenu.tsx";
 import { useReplyMention } from "./replyMention.ts";
-import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
+import type { SlashItem } from "../lib/useSkills.ts";
+import { useReplySlash } from "./useReplySlash.ts";
+import { useSuggestionDock } from "./suggestions/useSuggestionDock.tsx";
 import type { AgentModelSelection } from "./mentionPicker.ts";
 import {
   CALL_COPY, DISCUSS_SLASH_ITEM, DISPATCH_SLASH_ITEM, callCommandVerb, discussPeople, dispatchBaseOptions, parseCallCommand,
@@ -84,8 +86,6 @@ export function ReplyBox({
   const [commandResult, setCommandResult] = useState<{ taskId: string; text: string } | null>(null);
   const currentTaskId = useRef(task.id);
   currentTaskId.current = task.id;
-  const [commandIndex, setCommandIndex] = useState(0);
-  const [menuDismissed, setMenuDismissed] = useState(false);
   const later = useLaterSend(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // null = 没拖过;拖过的高度只当下限,照样跟着行数长高(useAutoGrowTextarea)
@@ -116,9 +116,6 @@ export function ReplyBox({
   const baseContext = useDispatchBaseContext(task.projectId, dispatching);
   const baseOptions = dispatchBaseOptions(task, baseContext.value);
   const worktreeBase = baseOptions.find((option) => option.id === call?.base)?.worktreeBase ?? baseOptions[0]?.worktreeBase ?? null;
-  // 叫着人时框顶是做法那一行，裁定那一行让开（不叫了就换回来）：框顶任何时候只有一行。
-  const callDock = !!call && (ability.dispatchable || ability.discussable);
-  const activeOverride = callDock ? undefined : override;
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -126,6 +123,22 @@ export function ReplyBox({
     pending: draft.pendingUploads,
     onPendingChange: draft.setPendingUploads,
   });
+  // 发出去的是这一份：记下此刻的字和图，成了再清（框里途中又写了的照留，withdrawDraft.ts）。
+  const snapshotSent = () => {
+    const draftAtSend = { text: value, textVersion: draft.value.textVersion };
+    const sentSelection = sentSelections(uploads.attachments);
+    return () => clearSent(draftAtSend, sentSelection);
+  };
+  // 可以派出去的活（suggestions/useSuggestionDock.tsx）：框顶那一行，选中一件时这个框就是「补一句」。
+  const suggestion = useSuggestionDock({
+    task, enabled: dispatchable && !task.archived, value, setValue,
+    attachments: uploads.attachments.map((attachment) => attachment.path), uploading: uploads.uploading,
+    snapshotSent, dispatchTarget: dispatchDefault.value, focus: () => textareaRef.current?.focus(),
+  });
+  // 框顶任何时候只有一行：叫着人时是做法那一行，否则有驳回在等裁定是裁定那一行，都没有才是可以派出去的活
+  // （让开不是丢掉，前面的事了了它再回来）。
+  const callDock = !!call && (ability.dispatchable || ability.discussable);
+  const activeOverride = callDock ? undefined : override ?? suggestion;
   // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
   const { take, takeInput } = overrideTake(activeOverride);
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
@@ -150,8 +163,7 @@ export function ReplyBox({
   const placeholder = disabled && reason ? reason : call ? CALL_COPY[call.verb].placeholder(call.target.agent) : "回复…";
 
   const resetComposerState = () => {
-    setCommandIndex(0);
-    setMenuDismissed(false);
+    slash.reset();
     mention.reset();
     calling.cancel();
   };
@@ -181,8 +193,6 @@ export function ReplyBox({
     ...(ability.discussable && discussTypes.length ? [DISCUSS_SLASH_ITEM] : []),
     ...(dispatchable ? [DISPATCH_SLASH_ITEM] : []),
   ].map((item) => ({ ...item, kind: "ash" }));
-  const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
-  const candidates = commandCandidates(value);
   // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
   // 之后选模型）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
@@ -191,18 +201,20 @@ export function ReplyBox({
   useEffect(() => {
     if (covering) setAnnotating(false);
   }, [covering]);
-  const menuOpen = !take && !covering && !menuDismissed && candidates.length > 0;
-  const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
-  // 敲全了的 `/派 …`、`/讨论 …`：发送 = 叫上次那个人、停在那一种，后面那段留在框里。
+  const slash = useReplySlash({
+    value, setValue, ash: ashItems, skills, blocked: !!take || covering, inputRef: textareaRef,
+    onCall: (verb, text, caret) => startCallCommand(verb, text, caret),
+  });
+  const menuOpen = slash.open;
+  const candidates = slash.candidates;
+  // 正文**开头**敲全了的 `/派 …`、`/讨论 …`：发送 = 叫上次那个人、停在那一种，后面那段留在框里。写在句中的
+  // 不算（那是在话里提到这个命令），原样当普通消息发。
   const typedCall = take || call ? null : parseCallCommand(value);
   const callTyped = !!typedCall && (typedCall.verb === "dispatch" ? dispatchable : ability.discussable);
-  const selected = candidates[selectedIndex];
-  // 菜单开着时回车做什么:叫人的命令叫上次那个人;技能和原生命令补全进正文;
-  // 原生命令已经敲全就直接发(它本来就是发给 CLI 的一句话)。
-  const menuSends = menuOpen && slashSendsAsTyped(selected, value);
-  const menuCompletes = menuOpen && !menuSends && selected?.kind !== "ash";
+  const menuSends = slash.sends;
+  const menuCompletes = slash.completes;
   const commandActive = menuOpen || callTyped;
-  const pickingCall = menuOpen ? callCommandVerb(selected?.command) : callTyped ? typedCall!.verb : null;
+  const pickingCall = menuOpen ? callCommandVerb(slash.selected?.command) : callTyped ? typedCall!.verb : null;
   const mention = useReplyMention({
     value,
     setValue,
@@ -246,40 +258,22 @@ export function ReplyBox({
   const configDisabled = task.mode !== "single" || task.archived || sending || commandActive
     || (!target && !onStandingExecutorChange);
 
-  const pickCommand = (item: SlashItem) => {
-    // 技能不是命令:它只是**补全**。`/名字` 原样留在正文里跟着这一轮发下去,
-    // server 会据此注入 SKILL.md，所以这里绝不能把它截走。
-    // 原生命令同理:`/compact` 是正文本身,发送时由 server 识别后交给 CLI 执行。
-    const verb = item.kind === "ash" ? callCommandVerb(item.command) : null;
-    if (verb) return startCallCommand(verb, parseCallCommand(value)?.rest ?? "");
-    const next = applySlashPick(value, item.command);
-    setValue(next);
-    setCommandIndex(0);
-    setMenuDismissed(false);
-    textareaRef.current?.focus();
-  };
-
-  // `/派`、`/讨论`：叫上次叫过的那个人，停在那一种；后面写了话就留在框里。从没叫过人（或那个执行器已经
-  // 没了，讨论时上次叫的就是这条任务自己的执行器）就先开 `@` 菜单让选，选中的直接停在那一种。
-  const startCallCommand = (verb: CallVerb, rest: string) => {
-    setCommandIndex(0);
-    setMenuDismissed(false);
+  // `/派`、`/讨论`：叫上次叫过的那个人，停在那一种；框里其余的话原样留着、光标留在原处。从没叫过人（或那个
+  // 执行器已经没了，讨论时上次叫的就是这条任务自己的执行器）就在末尾开 `@` 菜单让选，选中的直接停在那一种。
+  const startCallCommand = (verb: CallVerb, text: string, caret = text.length) => {
+    slash.reset();
     const last = readCallMemory().last;
     if (last && (verb === "discuss" ? discussTypes : registeredTypes).includes(last)) {
-      setValue(rest);
+      setValue(text);
       calling.start(last, verb);
+      slash.caret.place(textareaRef.current, text, caret);
     } else {
       calling.pend(verb);
-      setValue(rest ? `${rest} @` : "@");
+      const next = !text ? "@" : /\s$/.test(text) ? `${text}@` : `${text} @`;
+      setValue(next);
       mention.onValueChange();
+      slash.caret.place(textareaRef.current, next, next.length);
     }
-    textareaRef.current?.focus();
-  };
-
-  const cancelCommand = () => {
-    setValue("");
-    setCommandIndex(0);
-    setMenuDismissed(true);
   };
 
   // 不叫人了：胶囊回到这条任务自己的执行器，框顶换回裁定那一行（有的话），写的字一个不动。
@@ -335,7 +329,7 @@ export function ReplyBox({
   // 截图批注是另一条入口，照旧立即发；正文这条按回复框当前的发送方式发。
   const runSend = async (annotation?: AnnotationReply): Promise<boolean> => {
     if (!annotation && menuOpen && !menuSends) {
-      pickCommand(candidates[selectedIndex]!);
+      slash.pick(slash.selected!);
       return false;
     }
     if (!annotation && callTyped) {
@@ -469,10 +463,10 @@ export function ReplyBox({
           ariaLabel="斜杠命令与技能"
           hint={`${MENU_HEADING[candidates[0]!.kind]}↑↓ 选择，回车${menuSends ? "发送" : menuCompletes ? "补全" : "确认"}，Esc 取消`}
           items={candidates}
-          selectedIndex={selectedIndex}
-          token={slashToken(value)}
-          onHover={setCommandIndex}
-          onPick={pickCommand}
+          selectedIndex={slash.selectedIndex}
+          token={slash.token}
+          onHover={slash.setIndex}
+          onPick={slash.pick}
         />
       )}
       {mention.open && !menuOpen && !covering && (
@@ -528,41 +522,17 @@ export function ReplyBox({
           aria-label={takeInput?.label ?? "回复任务"}
           onChange={(event) => {
             const next = event.target.value;
+            slash.caret.read(event.target);
             if (takeInput) return takeInput.onChange(next);
             setValue(next);
-            setMenuDismissed(false);
-            setCommandIndex(0);
+            slash.reset();
             mention.onValueChange();
           }}
-          onPaste={take ? undefined : uploads.onPaste}
+          {...slash.caret.inputProps}
+          onPaste={take && !activeOverride?.attachable ? undefined : uploads.onPaste}
           onKeyDown={(event) => {
             if (overrideKeyDown(activeOverride, event)) return;
-            if (menuOpen) {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setCommandIndex((selectedIndex + 1) % candidates.length);
-                return;
-              }
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setCommandIndex((selectedIndex - 1 + candidates.length) % candidates.length);
-                return;
-              }
-              if (isMenuPickKeyEvent(event)) {
-                event.preventDefault();
-                if (menuSends) void send();
-                else pickCommand(selected!);
-                return;
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                // 斜杠接在已写好的正文后面时只收起菜单:那是在给这句话点技能,
-                // 不是在敲命令,整段清空等于把用户写的话扔了。
-                if (slashQuery(value)?.leading) cancelCommand();
-                else setMenuDismissed(true);
-                return;
-              }
-            }
+            if (slash.onKeyDown(event, () => void send(), () => setValue(""))) return;
             if (mention.onKeyDown(event)) return;
             // 叫着人：空框里退格、或 Esc，就是不叫了（字一个不动）。Esc 只退这一层，外面的抽屉不跟着关。
             if (call && (event.key === "Escape" || (event.key === "Backspace" && !value && !event.repeat))) {
@@ -579,7 +549,7 @@ export function ReplyBox({
         />
         {take && "body" in take && take.body}
         <div className="task-reply-actions">
-          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive || !!take} />
+          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive || (!!take && !activeOverride?.attachable)} />
           {actions}
           {/* 截图批注、预览日志用得少，收进「更多」。 */}
           <IconMenu side="above" buttonRef={moreButton} className="task-reply-more" items={[
@@ -595,7 +565,7 @@ export function ReplyBox({
           {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后向右接着配置；跟新建
               面板、工作流站点用同一组件。没叫人时改它 = 改任务的常设配置，之后每条消息都按新的跑；叫着人时
               它就是被叫的那个人（改的是这一次），派出去时最后多一段「从哪开工」，小叉 = 不叫了。 */}
-          {call?.verb === "discuss" ? (
+          {take && activeOverride?.bare ? null : call?.verb === "discuss" ? (
             <DiscussCapsule call={call} types={registeredTypes.length ? registeredTypes : [activeAgent]} profiles={profiles}
               ownAgent={standing.config.agentType} disabled={configDisabled} model={activeModel ?? null} effort={activeEffort ?? ""}
               onToggle={calling.togglePerson} onRounds={calling.setRounds} onCommit={calling.commitTarget} onEffortChange={calling.commitEffort} />

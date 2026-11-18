@@ -68,3 +68,15 @@ export const planTaskShape = taskShape.omit({ workflowMode: true }).extend({
   body: z.string().min(1).describe("完整说明，建出的任务正文就是它（目标、背景、约束、验收标准）"),
   note: z.string().max(120).describe("标题下那一行小字：一句话说这条为什么、要注意什么"),
 });
+
+// 可以派出去的活的一件（suggest_dispatch）：只要挂一行、一按就派，所以只留建任务最少的那几样。
+export const suggestionShape = z.object({
+  title: z.string().min(1),
+  body: z.string().min(1).describe("新任务的完整正文：目标、背景、约束、验收标准"),
+  note: z.string().max(120).describe("一句话：为什么该做、为什么不属于本任务"),
+  base: z.enum(["trunk", "here"]).optional().describe("trunk=从主分支开工(默认)；here=接着本任务的代码"),
+  agentType: AGENT_TYPE.optional().describe("交给谁；不填=本任务的默认"),
+  executorId: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});

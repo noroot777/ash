@@ -15,10 +15,11 @@ export interface SlashItem {
   alsoIn?: AgentType[];
 }
 
-/** 正文末尾正在敲的那个斜杠 token;start 是斜杠的下标,leading = 斜杠前面只有空白。 */
+/** 光标前正在敲的那个斜杠 token;start 是斜杠的下标、end 是光标,leading = 斜杠前面只有空白。 */
 export interface SlashQuery {
   token: string;
   start: number;
+  end: number;
   leading: boolean;
 }
 
@@ -27,21 +28,44 @@ export interface SlashQuery {
 // 一定被认得,而 `a/b`、`用/x` 这类句中斜杠不弹菜单。token 里不许再有 `/`:那是在敲路径。
 const SLASH_TAIL = /(^|[^\p{L}\p{N}_./:\-])(\/[^\s/]*)$/u;
 
-export function slashQuery(text: string): SlashQuery | null {
-  const match = SLASH_TAIL.exec(text);
+/**
+ * 按**光标前**那一段认:开头、两句话中间、引用块后面、文末都弹。`caret` 缺省 = 文末(没有光标可读的地方)。
+ */
+export function slashQuery(text: string, caret = text.length): SlashQuery | null {
+  const before = text.slice(0, caret);
+  const match = SLASH_TAIL.exec(before);
   if (!match) return null;
   const start = match.index + match[1]!.length;
-  return { token: match[2]!.toLowerCase(), start, leading: !text.slice(0, start).trim() };
+  return { token: match[2]!.toLowerCase(), start, end: caret, leading: !text.slice(0, start).trim() };
 }
 
-export function slashToken(text: string): string | null {
-  return slashQuery(text)?.token ?? null;
+export function slashToken(text: string, caret = text.length): string | null {
+  return slashQuery(text, caret)?.token ?? null;
 }
 
-/** 选中一条:只换掉末尾那个 token,前面已经写好的正文原样留着。 */
-export function applySlashPick(text: string, command: string): string {
-  const query = slashQuery(text);
-  return `${query && !query.leading ? text.slice(0, query.start) : ""}${command} `;
+/** 选中一条技能 / 原生命令:只换掉光标前那个 token,前后已经写好的正文原样留着;交回新正文和光标该落在哪。 */
+export function slashPickAt(text: string, command: string, caret = text.length): { text: string; caret: number } {
+  const query = slashQuery(text, caret);
+  const head = query && !query.leading ? text.slice(0, query.start) : query ? "" : text.slice(0, caret);
+  const tail = text.slice(query?.end ?? caret).replace(/^ /, "");
+  const inserted = `${head}${command} `;
+  return { text: inserted + tail, caret: inserted.length };
+}
+
+export function applySlashPick(text: string, command: string, caret = text.length): string {
+  return slashPickAt(text, command, caret).text;
+}
+
+/**
+ * 选中叫人的命令(`/派`、`/讨论`):**只拿掉命令本身**,前后的话和引用都留着;命令两边都是空格时并成一个,
+ * 拿掉之后前面只剩空白就连那点空白一起去掉。交回新正文和光标(停在命令原来的位置)。
+ */
+export function removeSlashToken(text: string, query: Pick<SlashQuery, "start" | "end">): { text: string; caret: number } {
+  let head = text.slice(0, query.start);
+  let tail = text.slice(query.end);
+  if (!head.trim()) { head = ""; tail = tail.replace(/^[ \t]+/, ""); }
+  else if (/[ \t]$/.test(head) && /^[ \t]/.test(tail)) tail = tail.slice(1);
+  return { text: head + tail, caret: head.length };
 }
 
 /**
@@ -81,16 +105,16 @@ export function toSlashItems(skills: SkillEntry[]): SlashItem[] {
  * (派生一个团队/一场讨论),技能只是给当前这轮加一句提示词 —— 前者点错了代价大得多,
  * 不能让某个 CLI 装了个叫 team 的技能就把它挤下去。命中位置排序只在各自组内进行。
  *
- * 斜杠写在已有正文后面时只给技能:ash 命令和原生命令都得是整条消息的开头才生效,
- * 句中补一个进去 server 和 CLI 都不认。
+ * 斜杠写在已有正文后面时,原生命令不给:它得是整条消息的开头才生效,句中补一个进去 CLI 不认。ash 的命令
+ * 照给——选中它只是叫人,命令本身从正文里拿掉(removeSlashToken),写在哪儿都一样。
  */
 export function mergeSlashItems(ash: SlashItem[], skills: SkillEntry[], query: SlashQuery | null): SlashItem[] {
   if (!query) return [];
   const { token, leading } = query;
   const items = toSlashItems(skills);
   const skillItems = rankByMatch(items.filter((item) => item.kind === "skill"), token);
-  if (!leading) return skillItems;
-  return [...rankByMatch(ash, token), ...rankByMatch(items.filter((item) => item.kind === "native"), token), ...skillItems];
+  const natives = leading ? rankByMatch(items.filter((item) => item.kind === "native"), token) : [];
+  return [...rankByMatch(ash, token), ...natives, ...skillItems];
 }
 
 /**

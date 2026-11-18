@@ -403,6 +403,8 @@ export interface Task {
   dispatchPlan?: import("./dispatch-plan.ts").DispatchPlan | null;
   // 「派出去的活交给谁」：null = 同这里（这条任务自己的执行器）。
   dispatchTarget?: import("./dispatch-plan.ts").DispatchRunTarget | null;
+  // 挂在回复框顶上、可以派出去的活（shared/src/dispatch-suggestion.ts）；没有 = []。
+  dispatchSuggestions?: import("./dispatch-suggestion.ts").DispatchSuggestion[];
   // 任务接力标记（见 TaskHandoff）。null = 从未接力。
   handoff?: TaskHandoff | null;
   // 强制恢复清掉 handoff 后仍保留的风险审计；刷新后必须持续可见。

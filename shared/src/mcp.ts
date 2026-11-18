@@ -41,6 +41,7 @@ export const ASH_MCP_TOOLS = [
   "start_monitor",
   "stop_monitor",
   "stop_task",
+  "suggest_dispatch",
 ] as const;
 
 /**

@@ -42,6 +42,10 @@
       "types": "./src/dispatch-plan.ts",
       "default": "./src/dispatch-plan.ts"
     },
+    "./dispatch-suggestion": {
+      "types": "./src/dispatch-suggestion.ts",
+      "default": "./src/dispatch-suggestion.ts"
+    },
     "./scheduled-message-wait": {
       "types": "./src/scheduled-message-wait.ts",
       "default": "./src/scheduled-message-wait.ts"

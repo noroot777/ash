@@ -30,7 +30,7 @@ export function SideDrawer({
   /** 抽屉里装的是谁。换人时把正在播的关闭动画取消掉 —— 否则关到一半点开下一个，
       那次点击会被动画尾声吞掉（抽屉照旧滑走，新选的那个一起没了）。 */
   contentKey: string;
-  kind: string;
+  kind: ReactNode;
   title: ReactNode;
   ariaLabel: string;
   closeLabel: string;

@@ -290,6 +290,11 @@ export const api = {
   // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
   launchDispatchPlan: (taskId: string, input: import("@ash/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
     request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
+  // 可以派出去的活：「派出去」照那一行此刻的样子建任务（这条任务的智能体不被叫醒）；叉 = 这一件不派。
+  launchSuggestions: (taskId: string, input: import("@ash/shared/dispatch-suggestion").DispatchSuggestionLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
+    request(`/tasks/${id(taskId)}/dispatch-suggestions/launch`, json("POST", input)),
+  dropSuggestion: (taskId: string, suggestionId: string): Promise<{ dropped: boolean }> =>
+    request(`/tasks/${id(taskId)}/dispatch-suggestions/${id(suggestionId)}`, { method: "DELETE" }),
   // 「派出去的活交给谁」：null = 同这里。
   setDispatchTarget: (taskId: string, target: import("@ash/shared/dispatch-plan").DispatchRunTarget | null): Promise<Task> =>
     request(`/tasks/${id(taskId)}/dispatch-target`, json("PUT", { target })),

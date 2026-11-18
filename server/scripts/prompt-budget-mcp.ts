@@ -45,4 +45,7 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   "mcp/start_monitor": 5100,
   "mcp/stop_monitor": 850,
   "mcp/stop_task": 480,
+  // 2026-11-18 新增（654 实测）：挂出「该做但不属于本任务」的活，不停任务。说明里只留什么时候用、跟
+  // propose_dispatch 怎么分、什么不挂、body 要自带上下文；字段是一件活的标题、说明、为什么、交给谁、从哪开工。
+  "mcp/suggest_dispatch": 700,
 };

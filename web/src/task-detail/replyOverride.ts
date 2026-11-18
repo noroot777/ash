@@ -19,6 +19,10 @@ export type ReplyOverride = {
   submit: () => void;
   /** Esc：回到平常的回复框。 */
   cancel: () => void;
+  /** 选了一档时照样能贴图、加附件（补一句再派出去，图随新任务走）。 */
+  attachable?: boolean;
+  /** 选了一档时收起底栏那颗「这条任务由谁跑」的胶囊（交给谁写在框顶那一行上）。 */
+  bare?: boolean;
 };
 
 /** 选了哪一档（`take`），以及那一档是不是借用框里的正文（`takeInput`）。 */

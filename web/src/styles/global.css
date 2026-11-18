@@ -39,6 +39,7 @@
 @import "./monitor-wake.css";
 @import "./reviewer-turn.css";
 @import "./reply-dock.css";
+@import "./dispatch-suggestion.css";
 @import "./dispute-ruling.css";
 @import "./discussion.css";
 @import "./inspector.css";

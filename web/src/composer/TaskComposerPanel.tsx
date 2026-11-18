@@ -22,7 +22,8 @@ import {
   registeredAgentTypes,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
-import { applySlashPick, mergeSlashItems, slashQuery, type SlashItem } from "../lib/useSkills.ts";
+import { mergeSlashItems, slashPickAt, slashQuery, type SlashItem } from "../lib/useSkills.ts";
+import { useCaret } from "../lib/useCaret.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
 import { InputMentionMenu } from "../components/MentionMenu.tsx";
@@ -229,7 +230,8 @@ export function TaskComposerPanel({
   };
   // `/` 补的是这条任务执行器的技能：正文是发给它的。
   const skills = useSkills({ agentType: singleRun.agentType, projectId: project.id, enabled: true });
-  const slash = slashDismissed ? null : slashQuery(body);
+  const caret = useCaret(body);
+  const slash = slashDismissed || caret.at === null ? null : slashQuery(body, caret.at);
   const slashCandidates = mergeSlashItems([], skills.skills, slash);
   // `@` 还能引用随手记或项目里的文件。文件：任务还不存在，所以按项目仓库搜，选中的路径原样
   // 写进正文，跑起来之后 agent 在自己的工作目录（worktree 或主仓）里按同一条相对路径找得到；
@@ -266,7 +268,9 @@ export function TaskComposerPanel({
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
   const pickSlash = (item: SlashItem) => {
     // 技能只是补全:命令留在正文里，server 运行前据此注入 SKILL.md。
-    setBody(applySlashPick(body, item.command));
+    const next = slashPickAt(body, item.command, caret.at ?? body.length);
+    setBody(next.text);
+    caret.place(textareaRef.current, next.text, next.caret);
     setSlashIndex(0);
   };
 
@@ -448,7 +452,7 @@ export function TaskComposerPanel({
             onEscape={home ? () => textareaRef.current?.blur() : undefined}
             onChange={(value) => { setBody(value); setSlashIndex(0); setSlashDismissed(false); mention.onValueChange(); }}
             onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slash?.token ?? null}
-            onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()}
+            caret={caret} onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()}
             mention={{
               onKeyDown: mention.onKeyDown,
               menu: mention.open && (

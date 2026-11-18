@@ -26,8 +26,9 @@ import {
 } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { callWithMonitorResults } from "./monitor-results.js";
-import { MODE, RECURS, TASK_STAGE, planTaskShape } from "../schemas.js";
+import { MODE, RECURS, TASK_STAGE, planTaskShape, suggestionShape } from "../schemas.js";
 import { MAX_DISPATCH_PLAN_ITEMS } from "@ash/shared/dispatch-plan";
+import { MAX_SUGGESTIONS_PER_CALL } from "@ash/shared/dispatch-suggestion";
 
 export function registerTaskTurnTools(server: McpServer): void {
 server.registerTool(
@@ -252,6 +253,26 @@ server.registerTool(
   },
   async ({ taskId, tasks, order, directionToken }) => {
     try { return ok(await call("POST", `/tasks/${taskId}/dispatch-plan`, { tasks, order: order ?? "serial" }, directionToken)); }
+    catch (e) { return fail(e); }
+  },
+);
+
+// 门槛写在说明里：每个回合都带着它，卡不住就每次回复挂两三条。
+server.registerTool(
+  "suggest_dispatch",
+  {
+    title: "挂出可以另开的任务(不停下)",
+    description:
+      "只在你本来就要写「建议另开任务」时用：那件事该做、但不属于本任务。说明写好挂在用户回复框顶上，用户一按就派成新任务。"
+      + "不停任务，调完照常往下做、照常结束。拆自己的活用 propose_dispatch；顺手能做完的、想法没成形的不挂。新任务看不到这场对话，body 要自带上下文。",
+    inputSchema: {
+      taskId: z.string(),
+      tasks: z.array(suggestionShape).min(1).max(MAX_SUGGESTIONS_PER_CALL),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken，原样传入"),
+    },
+  },
+  async ({ taskId, tasks, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-suggestions`, { tasks }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

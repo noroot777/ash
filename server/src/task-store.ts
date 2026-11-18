@@ -21,6 +21,7 @@ import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
 import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
 import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@ash/shared/dispatch-plan";
+import { parseDispatchSuggestions, publicSuggestions } from "@ash/shared/dispatch-suggestion";
 import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
 
 export type TaskRow = typeof tasks.$inferSelect;
@@ -144,6 +145,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   // 只在它绑的那一问还在时下发（shared/src/dispatch-plan.ts `activeDispatchPlan`）。
   dispatchPlan: activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) }),
   dispatchTarget: parseDispatchTarget(r.dispatchTarget),
+  dispatchSuggestions: publicSuggestions(parseDispatchSuggestions(r.dispatchSuggestions)),
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
 });

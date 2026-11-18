@@ -17,11 +17,13 @@ export type LeftDrawerEntry = {
   /** 装的是谁。同一个 key 再开 = 换停的位置，不重播推出动画。 */
   key: string;
   /** 抽屉头上那一小块：「审查报告」「辩论」。 */
-  kind: string;
+  kind: ReactNode;
   title: ReactNode;
   ariaLabel: string;
   closeLabel: string;
   body: ReactNode;
+  /** 抽屉头上关闭键前面的键（可以派出去的活那一屉的「改」）。 */
+  actions?: ReactNode;
   /** 贴着底边的那一段（报告的截图证据）：正文单独滚动，截图再多也不挤掉报告。 */
   footer?: ReactNode;
 };
@@ -68,6 +70,7 @@ export function useLeftDrawerHost({ resetKey, onOpen }: { resetKey: string; onOp
       title={entry.title}
       ariaLabel={entry.ariaLabel}
       closeLabel={entry.closeLabel}
+      actions={entry.actions}
       onClose={close}
     >
       <div className="side-drawer__scroll">{entry.body}</div>

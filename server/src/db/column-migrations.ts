@@ -422,4 +422,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN dispatch_hold_at TEXT",
   "ALTER TABLE tasks ADD COLUMN hold_owed_by TEXT",
   "ALTER TABLE tasks ADD COLUMN dispatch_hold_pending_at TEXT",
+  // 可以派出去的活(见 db/schema.ts 同名列)。存量行 NULL = 一件都没有。
+  "ALTER TABLE tasks ADD COLUMN dispatch_suggestions TEXT",
 ];
