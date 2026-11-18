@@ -225,12 +225,13 @@ try {
   const js = await (await request(content + "entry.js")).text();
   assert(js.includes(`from "${content}chunk.js"`));
   assert(js.includes('const slash="/"'), "普通字符串不应被 URL 改写破坏");
-  const echo = await request(content + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Basic YXNoOnNlY3JldA==", "x-ash-turn-token": "SECRET", origin: "null", "sec-fetch-site": "cross-site" });
+  const echo = await request(content + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Basic YXNoOnNlY3JldA==", "x-ash-turn-token": "SECRET", "x-navi-turn-token": "SECRET", origin: "null", "sec-fetch-site": "cross-site" });
   assert.equal(echo.status, 200);
   const echoed = await echo.json();
   assert.deepEqual(JSON.parse(echoed.body), { message: "你好" });
   assert.equal(echoed.headers.cookie, undefined);
   assert.equal(echoed.headers["x-ash-turn-token"], undefined);
+  assert.equal(echoed.headers["x-navi-turn-token"], undefined, "新旧两代的 Navi 头都不许转给预览的后端");
   // `Authorization` 转不转发，判据是**这个请求是不是预览页自己发的**，不是它的 scheme：
   // 预览页在 opaque origin 里，运行期发出的带鉴权头的请求必然是 `Origin: null` +
   // `Sec-Fetch-Site: cross-site`（两个头都是浏览器盖的，页面伪造不了）。

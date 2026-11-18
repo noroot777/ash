@@ -9,6 +9,7 @@
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { FeishuBinding, FeishuGroups, FeishuStatus, ProjectView } from "@ash/shared";
+import { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "@ash/shared/human-action";
 import "../../src/styles/global.css";
 import { FeishuSettings } from "../../src/settings/FeishuSettings.tsx";
 
@@ -81,7 +82,7 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 function reply(body: unknown, status = 200, human = false) {
   const headers: Record<string, string> = { "content-type": "application/json" };
   // 真服务端的闸在每个真人动作的响应上发下一份凭据；这里照做，页面才会拿新的那份发下一次。
-  if (human) headers["x-ash-human-action-token-next"] = `tok-${++server.token}`;
+  if (human) headers[HUMAN_ACTION_TOKEN_NEXT_HEADER] = `tok-${++server.token}`;
   return new Response(JSON.stringify(body), { status, headers });
 }
 
@@ -186,7 +187,7 @@ window.fetch = async (input, init) => {
   const method = (init?.method ?? "GET").toUpperCase();
   const headers = new Headers(init?.headers);
   const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-  server.calls.push({ method, path, token: headers.get("x-ash-human-action-token"), body });
+  server.calls.push({ method, path, token: headers.get(HUMAN_ACTION_TOKEN_HEADER), body });
   return handle(method, path, body);
 };
 

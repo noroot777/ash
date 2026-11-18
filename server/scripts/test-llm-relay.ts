@@ -145,7 +145,7 @@ try {
     const isolated = await relayFetch(`${origin}/healthy`, {});
     assert.equal(isolated.status, 200);
     assert.deepEqual(await isolated.json(), { ok: true });
-    assert.match(isolated.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
+    assert.match(isolated.headers.get("x-navi-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
   } finally {
     setGlobalDispatcher(globalDispatcher);
     await blocked.close();

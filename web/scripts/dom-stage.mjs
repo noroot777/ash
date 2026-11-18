@@ -42,7 +42,7 @@ if (!process.env.ASH_PROXY && !process.env.HARNESS_PROXY) {
     } else {
       // meta 名即 @ash/shared/human-action 的 HUMAN_ACTION_TOKEN_META；对不上只是少盖这一份。
       response.writeHead(200, { "content-type": "text/html" });
-      response.end('<!doctype html><meta name="ash-human-action-token" content="ash-test-page-token">');
+      response.end('<!doctype html><meta name="navi-human-action-token" content="ash-test-page-token">');
     }
   });
   await new Promise((resolve, reject) => emptyBackend.once("error", reject).listen(0, "127.0.0.1", resolve));
