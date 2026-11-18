@@ -27,6 +27,7 @@ import { FIRST_RUN_STEPS, STEP_LABEL, stepGap, stepSettled, type FirstRunStep } 
 import { ExecutorStep } from "./ExecutorStep.tsx";
 import { ProjectStep } from "./ProjectStep.tsx";
 import { ProviderStep } from "./ProviderStep.tsx";
+import { NaviMark } from "../brand/NaviMark.tsx";
 
 /**
  * 每一站的抬头。供应商那句分两种说法 —— **隔离档下第一句是假话**:多人模式关掉
@@ -148,7 +149,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
       <div className="onboarding-card">
         <aside className="onboarding-aside">
           <div className="onboarding-brand">
-            <span className="onboarding-mark" aria-hidden="true">a</span>
+            <span className="onboarding-mark"><NaviMark size={26} /></span>
             <b>ash</b>
             <p>把活派给本机的 claude、codex，<br />进度、审查、验收都在这一处。</p>
           </div>

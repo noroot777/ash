@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 import { ArrowsLeftRight, GitBranch, ShieldCheck } from "@phosphor-icons/react";
+import { NaviMark } from "../brand/NaviMark.tsx";
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <div className="auth-shell">
       <div className="auth-stage">
         <aside className="auth-brand">
-          <div className="auth-brand-mark" aria-label="ash">a</div>
+          <div className="auth-brand-mark"><NaviMark size={28} label="Navi" /></div>
           <div className="auth-brand-copy">
             <span>LOCAL AGENT OPERATIONS</span>
             <h2>把复杂的协作，留在一张清楚的工作台里。</h2>

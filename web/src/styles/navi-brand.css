@@ -1,0 +1,39 @@
+/* navi 的标（brand/NaviMark.tsx）和它的加载动画「找北」（brand/NaviLoader.tsx）。
+   墨色跟文字色走；指北那半截是品牌自己的朱红 --navi-north，只给这个标用，不拿它当强调色或报错色。
+   颜色的出处是 brand/naviMark.ts 的 COLORS，这里照抄浅、深两份。
+   docs/logo/build.mjs 把这个文件原样嵌进 loader.svg，所以这里只认 currentColor 和 --navi-north。
+   减少动效不用另写：全应用那一条（motion-text.css）让它跑一遍就停，停下来针正好竖着，就是静止的标。 */
+:root {
+  --navi-north: #e5484d;
+}
+:root[data-theme="dark"] {
+  --navi-north: #ff6b6b;
+}
+
+.navi-mark {
+  flex: none;
+  display: inline-block;
+  vertical-align: -0.2em;
+  fill: currentColor;
+}
+.navi-mark__north {
+  fill: var(--navi-north);
+}
+.navi-mark__needle {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+}
+
+/* 一圈 1800ms：从正北甩到右边、晃回来，一下比一下小，最后两成时间竖着歇。正数是顺时针。
+   37.29° 是算过的：甩到最远时针尖离右杠还留着缝，别加大。 */
+.navi-loader .navi-mark__needle {
+  animation: navi-seek 1800ms cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes navi-seek {
+  0% { transform: rotate(0deg); }
+  20% { transform: rotate(37.29deg); }
+  40% { transform: rotate(-2.6deg); }
+  56% { transform: rotate(14.9deg); }
+  69% { transform: rotate(-1.5deg); }
+  80%, 100% { transform: rotate(0deg); }
+}
