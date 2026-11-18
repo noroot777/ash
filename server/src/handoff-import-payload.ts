@@ -27,6 +27,7 @@ import { assertWorktreeHeadCanAdvance, untrackedOverwriteConflicts } from "./han
 import { execFileText as exec } from "./exec.js";
 import { validateWaitOrigins } from "./handoff-wait.js";
 import { validateGatePayload } from "./handoff-accept-gate.js";
+import { validateSuggestionPayload } from "./handoff-suggestions.js";
 
 // 导入只接受**已结算**的状态;running/queued 混进来(理论上不该有)一律落 canceled,
 // 假 running 会骗过所有「在跑」判断却没有任何进程。
@@ -67,6 +68,7 @@ export function validate(input: unknown): HandoffManifest {
   validateGatePayload(m);
   if (!isStr(t.title) || !isStr(t.body) || !isStr(t.createdAt)) throw new HandoffError("task 关键字段缺失");
   validateWaitOrigins(t.waitOrigins);
+  validateSuggestionPayload(t);
   if (!Array.isArray(m.sessions) || m.sessions.length > 200) throw new HandoffError("sessions 非法");
   if (m.sessions.some((s) => s.contextRebuildAt != null && !isStr(s.contextRebuildAt))) throw new HandoffError("session.contextRebuildAt 非法");
   if (!Array.isArray(m.files) || m.files.length > 500) throw new HandoffError("files 非法(最多 500 个)");

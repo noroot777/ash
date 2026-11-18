@@ -3,7 +3,7 @@
 //
 // 跟派活单「派出去」（dispatch-plan-launch.ts）同一套建法——同一笔事务里摘建议、建分组、建任务、串队列、
 // 挂开工请求，任何一步失败整笔回滚、建议原样还在，再按一次不会多建；摘的时候那几件已经不在了（别处刚派掉、
-// 回合结束刚收掉）整笔不落。少的是两样：不认领提问（建议不占那一格），也不往这条任务的会话里送答复——
+// 叉掉、智能体刚收回）整笔不落。少的是两样：不认领提问（建议不占那一格），也不往这条任务的会话里送答复——
 // **这条任务的智能体不被叫醒**，所以它在跑时也照派。会话里那一句「开了新任务」由页面从任务列表里认
 // （web/src/task-detail/dispatchNotes.ts：dispatchedBy 指向这条、创建来源是用户）。
 import type { Context } from "hono";
@@ -117,7 +117,7 @@ export async function launchSuggestions(
     });
   } catch (error) {
     if (error instanceof SuggestionClaimLost) {
-      return { status: 409, body: { error: "这件已经派出去或收掉了，请看最新的那一行", missing: error.missing } };
+      return { status: 409, body: { error: "这件已经派出去、叉掉或被智能体收回了，请看最新的那一行", missing: error.missing } };
     }
     if (!committed) return { status: 409, body: { error: `没能派出去：${error instanceof Error ? error.message : String(error)}` } };
     console.error(`[ash] 可派出的活已派出，读回或广播新任务时出错 ${task.id}:`, error);
