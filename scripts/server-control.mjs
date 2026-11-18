@@ -12,15 +12,15 @@ const HOST_TOKEN_HEADER = "x-navi-host-token";
 
 /**
  * server 用的库文件,口径跟 server/src/db/path.ts 一致:`NAVI_DB`(旧名 `ASH_DB` 同样认)覆盖;
- * 不然 `navi.db` 在就是它,改名之前的安装接着用 `ash.db`。
+ * 不然 `navi.db` 在就是它,否则 `ash.db`。
  */
 export function dbFileFor(repo, env = process.env) {
   const explicit = readEnv(env, "NAVI_DB");
   if (explicit) return resolve(explicit);
   const current = join(repo, "data", "navi.db");
   if (existsSync(current)) return current;
-  const legacy = join(repo, "data", LEGACY_DB_FILE);
-  return existsSync(legacy) ? legacy : current;
+  // 新安装暂时也是 `ash.db`(理由见 server/src/db/path.ts)。
+  return join(repo, "data", LEGACY_DB_FILE);
 }
 
 /**

@@ -25,9 +25,12 @@ export const LEGACY_TASK_BRANCH_PREFIXES = ["ash/", "harness/"] as const;
 /** 「只打标签不合并」验收的旧标签前缀。拆：同上，且没人再按旧标签找东西。 */
 export const LEGACY_ACCEPT_TAG_PREFIX = "ash-accepted/";
 
-/** 默认库文件的旧名（数据目录下）。老安装继续用它，直到本地目录迁移脚本把它改名。 */
+/**
+ * 默认库文件的旧名（数据目录下）。老安装继续用它，直到本地目录迁移脚本把它改名；**新安装暂时也建
+ * 它**（mac 应用只认这个名字，见 `server/src/db/path.ts`）。拆：mac 应用认得 `navi.db`、迁移脚本交付之后。
+ */
 export const LEGACY_DB_FILE = "ash.db";
-/** 再上一代的库文件名：启动时就地改名成当前名（老逻辑，保留）。 */
+/** 再上一代的库文件名：启动时就地改名成 `LEGACY_DB_FILE`（老逻辑，保留）。 */
 export const LEGACY_HARNESS_DB_FILE = "harness.db";
 
 /**
