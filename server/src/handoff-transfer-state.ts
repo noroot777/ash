@@ -1,4 +1,4 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readStorageEnv } from "@ash/shared/env-names";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -16,7 +16,7 @@ const SAFE_TASK_ID = /^[A-Za-z0-9_-]{6,64}$/;
 const SAFE_TRANSFER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 const stateRoot = (() => {
-  const dbPath = readEnv(process.env, "NAVI_DB")?.trim();
+  const dbPath = readStorageEnv(process.env, "NAVI_DB");
   return dbPath && dbPath !== ":memory:"
     ? join(dirname(resolve(dbPath)), "handoff-canceled")
     : join(DATA_DIR, "handoff-canceled");

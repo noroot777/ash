@@ -19,6 +19,20 @@ export function readEnv(env, name) {
   return undefined;
 }
 
+/** 指向数据的变量（库、数据根……）：几代都设了且值不同就拒绝，空串当没设。理由见 shared 那份的 `readStorageEnv`。 */
+export function readStorageEnv(env, name) {
+  let found;
+  for (const key of envNameGenerations(name)) {
+    const value = env[key]?.trim();
+    if (!value) continue;
+    if (!found) found = { key, value };
+    else if (value !== found.value) {
+      throw new Error(`${found.key}=${found.value} 和 ${key}=${value} 同时设了、指向不同的地方，不知道该用哪一个：擦掉其中一个再起`);
+    }
+  }
+  return found?.value;
+}
+
 /** 各代一起擦（大小写不敏感：Windows 的环境变量名不分大小写）。 */
 export function clearEnv(env, name) {
   const names = envNameGenerations(name);

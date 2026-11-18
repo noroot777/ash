@@ -11,6 +11,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { envNameGenerations, readEnv } from "@ash/shared/env-names";
 import { IS_WINDOWS, PATH_SEP, isInsidePath } from "../src/platform.js";
 
 // `resolve` 顺手把 Windows 上的正斜杠写法(`C:/…/Temp/x.db`)归一成反斜杠,
@@ -47,16 +48,20 @@ function ownTempDir(name: string): string {
  * `name` 用来给临时目录起名，给测试自己的名字即可。
  */
 export function requireTmpDb(name: string): void {
-  const dbPath = process.env.ASH_DB;
-  if (dbPath && !underTemp(dbPath)) {
-    console.error(`ASH_DB 必须在临时目录下(防止误改真实数据):${tmpdir()}${IS_WINDOWS ? "" : " 或 /tmp"}`);
-    console.error(`当前值:${dbPath}`);
+  // 各代名字都要查：服务端新名优先，只查自己设的旧名 `ASH_DB` 的话，继承来的一个 `NAVI_DB` 就能
+  // 绕过这道闸开到真库上。
+  const named = envNameGenerations("NAVI_DB").flatMap((key) => (process.env[key]?.trim() ? [{ key, path: process.env[key]! }] : []));
+  const outside = named.find(({ path }) => !underTemp(path));
+  if (outside) {
+    console.error(`${outside.key} 必须在临时目录下(防止误改真实数据):${tmpdir()}${IS_WINDOWS ? "" : " 或 /tmp"}`);
+    console.error(`当前值:${outside.path}`);
     process.exit(1);
   }
-  if (dbPath && process.env.ASH_RUNS_DIR) return;
+  const runsSet = !!readEnv(process.env, "NAVI_RUNS_DIR");
+  if (named.length && runsSet) return;
   const root = ownTempDir(name);
-  process.env.ASH_DB ||= join(root, "ash.db");
-  process.env.ASH_RUNS_DIR ||= join(root, "runs");
+  if (!named.length) process.env.ASH_DB = join(root, "ash.db");
+  if (!runsSet) process.env.ASH_RUNS_DIR = join(root, "runs");
 }
 
 /**

@@ -3,7 +3,7 @@
 // 同一份 —— 停止命令要是另写一套,「问不出来就当 0」那类旧错就会在新入口上重演一遍。
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { readEnv } from "./env.mjs";
+import { readStorageEnv } from "./env.mjs";
 import { LEGACY_DB_FILE, LEGACY_HTTP_HEADER_PREFIX, LEGACY_SINGLETON_LOCK_SUFFIX } from "./legacy-names.mjs";
 import { isNotListening, killServerProcesses, localGet, sleep } from "./platform.mjs";
 
@@ -15,7 +15,7 @@ const HOST_TOKEN_HEADER = "x-navi-host-token";
  * 不然 `navi.db` 在就是它,否则 `ash.db`。
  */
 export function dbFileFor(repo, env = process.env) {
-  const explicit = readEnv(env, "NAVI_DB");
+  const explicit = readStorageEnv(env, "NAVI_DB");
   if (explicit) return resolve(explicit);
   const current = join(repo, "data", "navi.db");
   if (existsSync(current)) return current;

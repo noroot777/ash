@@ -31,7 +31,7 @@ import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { readEnv, setEnv } from "./env.mjs";
+import { readEnv, readStorageEnv, setEnv } from "./env.mjs";
 import { LEGACY_DB_FILE, LEGACY_LOG_TAG } from "./legacy-names.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
@@ -118,7 +118,7 @@ async function startPreviewStack(webPort, mode) {
   const mainData = mainRepoDataDir();
   const apiUrl = `http://127.0.0.1:${apiPort}`;
   const ownDb = mode === "full" ? "preview-empty.db" : "preview.db";
-  const dbFile = readEnv(process.env, "NAVI_DB") || fileURLToPath(new URL(`../data/${ownDb}`, import.meta.url));
+  const dbFile = readStorageEnv(process.env, "NAVI_DB") || fileURLToPath(new URL(`../data/${ownDb}`, import.meta.url));
   const firstBoot = !existsSync(dbFile);
   const seedFrom = readEnv(process.env, "NAVI_SEED_FROM")
     ?? (firstBoot ? mainDbFile(mainData) : "");

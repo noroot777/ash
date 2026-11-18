@@ -36,6 +36,27 @@ export function readEnv(env: EnvLike, name: NaviEnvName): string | undefined {
   return undefined;
 }
 
+/**
+ * 读一个**指向数据**的变量（库文件、数据根、运行记录目录……）。跟 `readEnv` 只差一处：几代名字都设了、
+ * 值又不一样时**拒绝**，不按新名优先挑一个。空串当没设。
+ *
+ * 为什么这一类要拒：最常见的形状是环境里继承了一个新名，测试或启动命令又拿旧名改指别处 —— 预览实例
+ * （`NAVI_DB=preview.db`）底下的智能体跑 `ASH_DB=/tmp/x npm test`。新名优先的话测试开的就是预览库，
+ * 而测试闸只看它自己设的那个名字，一声不吭。挑哪个都可能挑错，挑错的代价是往真库里写测试数据。
+ */
+export function readStorageEnv(env: EnvLike, name: NaviEnvName): string | undefined {
+  let found: { key: string; value: string } | undefined;
+  for (const key of envNameGenerations(name)) {
+    const value = env[key]?.trim();
+    if (!value) continue;
+    if (!found) found = { key, value };
+    else if (value !== found.value) {
+      throw new Error(`${found.key}=${found.value} 和 ${key}=${value} 同时设了、指向不同的地方，不知道该用哪一个：擦掉其中一个再起`);
+    }
+  }
+  return found?.value;
+}
+
 /** 这个键是不是某个变量（任一代）的名字。Windows 的环境变量名不分大小写，这里也不分。 */
 export function isEnvNameOf(key: string, name: NaviEnvName): boolean {
   const upper = key.toUpperCase();

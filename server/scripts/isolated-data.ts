@@ -6,8 +6,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { clearEnv } from "@ash/shared/env-names";
 
 const root = mkdtempSync(join(tmpdir(), "ash-test-data-"));
+// 先把继承来的各代名字擦掉：环境里留着一个 `NAVI_DB`（比如从预览实例底下起的），新名优先，这里设的
+// 就白设了。设的仍是旧名，因为后面的测试正文还拿旧名改指（见下）。
+for (const name of ["NAVI_DB", "NAVI_DATA_DIR"] as const) clearEnv(process.env, name);
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_DATA_DIR = join(root, "data");
 // 进程退出那一刻库还开着（测试自己另开的句柄也一样）：Windows 上删不掉打开着的文件（EBUSY），在 exit

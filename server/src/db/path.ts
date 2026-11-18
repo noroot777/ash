@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { readEnv } from "@ash/shared/env-names";
+import { readStorageEnv } from "@ash/shared/env-names";
 import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@ash/shared/legacy-names";
 import { DATA_DIR } from "../paths.js";
 
@@ -42,7 +42,7 @@ function defaultDbFile(): string {
 }
 
 export function resolveAshDbFile() {
-  const explicit = readEnv(process.env, "NAVI_DB");
+  const explicit = readStorageEnv(process.env, "NAVI_DB");
   if (explicit) return resolve(explicit);
   return resolve(defaultDbFile());
 }

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { clearEnv, readEnv, type NaviEnvName } from "@ash/shared/env-names";
+import { clearEnv, readEnv, readStorageEnv, type NaviEnvName } from "@ash/shared/env-names";
 import { CODE_DIR, dataRootFor } from "./data-root.js";
 
 export { CODE_DIR };
@@ -18,7 +18,7 @@ clearEnv(process.env, "NAVI_DATA_DIR");
 // 只给真库测试用：流程测试会写时间线/验证证据，不能污染正式 data/runs。
 /** 单项覆盖的目录：设了（任一代名字）就用它，没设就落在数据根底下的 `fallback`。 */
 const dirOverride = (name: NaviEnvName, fallback: string): string => {
-  const explicit = readEnv(process.env, name);
+  const explicit = readStorageEnv(process.env, name);
   return explicit ? resolve(explicit) : join(DATA_DIR, fallback);
 };
 export const RUNS_DIR = dirOverride("NAVI_RUNS_DIR", "runs");
