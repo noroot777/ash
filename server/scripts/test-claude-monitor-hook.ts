@@ -191,10 +191,10 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
   // 回合身份靠 CLI 的 header 插值,token 因此不进 argv。`allowedEnvVars` 漏一个,那个
   // header 会被替换成空串 —— 代办会静默退化成「没有回合身份」那一档(⑤)。
   assert.deepEqual(handler.headers, {
-    "x-ash-source-task-id": "$ASH_TASK_ID",
-    "x-ash-turn-token": "$ASH_TURN_TOKEN",
+    "x-navi-source-task-id": "$NAVI_TASK_ID",
+    "x-navi-turn-token": "$NAVI_TURN_TOKEN",
   });
-  assert.deepEqual(handler.allowedEnvVars, ["ASH_TASK_ID", "ASH_TURN_TOKEN"]);
+  assert.deepEqual(handler.allowedEnvVars, ["NAVI_TASK_ID", "NAVI_TURN_TOKEN"]);
 }
 
 // ── ⑧b 装配**接到了真实出入口上**：三条路各自该不该带这个 hook ────────────────
@@ -258,6 +258,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     method: "POST",
     headers: {
       "content-type": "application/json",
+      // 旧名请求头:升级之前起的 claude 手里那份 hook 配置还是这么发的,照样要认。
       "x-ash-source-task-id": taskId,
       "x-ash-turn-token": token,
     },
@@ -371,8 +372,8 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-ash-source-task-id": multiTask,
-          "x-ash-turn-token": "TURN-OK",
+          "x-navi-source-task-id": multiTask,
+          "x-navi-turn-token": "TURN-OK",
         },
         body: JSON.stringify(body),
       });

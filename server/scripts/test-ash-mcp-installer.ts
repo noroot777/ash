@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AGENT_TYPES, type AgentType } from "@ash/shared";
+import { ASH_MCP_SERVER_NAME as NAME } from "@ash/shared/mcp";
 import { cliSpec } from "../src/executors/catalog/index.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-registry/catalog.js";
 import * as edit from "../src/mcp-registry/json-edit.js";
@@ -163,7 +164,7 @@ try {
     assert.ok(r.added, `第三方表在也要接上:${r.why ?? ""}`);
     const after = readFileSync(f, "utf8");
     assert.match(after, /\[mcp_servers\.other\]/, "别人那张表留着");
-    assert.match(after, /\[mcp_servers\.ash\]\n/, "自己那张接上了");
+    assert.match(after, new RegExp(`\\[mcp_servers\\.${NAME}\\]\\n`), "自己那张接上了");
     assert.match(after, /enabled = true/, "grok 那一行照它自己 mcp add 的写法");
 
     // ② 带引号的名字也算「已经有了」—— 认不出来就会追加一份重名表,CLI 整份拒载。
@@ -197,7 +198,7 @@ try {
     ].join("\n"));
     const added = install("grok", ml);
     assert.ok(added.added, `多行字符串里的文本不该挡住追加:${added.why ?? ""}`);
-    assert.match(readFileSync(mlFile, "utf8"), /\[mcp_servers\.ash\]\n/);
+    assert.match(readFileSync(mlFile, "utf8"), new RegExp(`\\[mcp_servers\\.${NAME}\\]\\n`));
 
     // ⑤ **注释里的三引号不是字符串定界符**(本轮审查 R2,实测复现过):上一版按行先找
     //     `"""` 再剔 `#`,顺序反了,于是夹在两行注释之间的真 `[mcp_servers.ash]` 被当成多行
@@ -218,7 +219,7 @@ try {
       const r2 = install("grok", h2);
       assert.ok(r2.added, `注释不该挡住追加:${r2.why ?? ""}`);
       const after = readFileSync(f2, "utf8");
-      assert.equal((after.match(/\[mcp_servers\.ash\]/g) ?? []).length, 1, "恰好一张 ash 表");
+      assert.equal((after.match(new RegExp(`\\[mcp_servers\\.${NAME}\\]`, "g")) ?? []).length, 1, "恰好一张规范名的表");
       assert.match(after, /\[mcp_servers\.other\]/, "别人那张还在");
     }
 
@@ -244,7 +245,7 @@ try {
       assert.ok(r.added, `非根级的同名键不该挡住补接:${r.why ?? ""}`);
       const after = readFileSync(file, "utf8");
       assert.ok(after.startsWith(body), "用户原来那几行一个字节都不许动");
-      assert.equal((after.match(/\[mcp_servers\.ash\]/g) ?? []).length, 1, "恰好一张 ash 表");
+      assert.equal((after.match(new RegExp(`\\[mcp_servers\\.${NAME}\\]`, "g")) ?? []).length, 1, "恰好一张规范名的表");
     }
     group("TOML:第三方表在也接得上、重名认得出、判不准就不写、非根级同名键不当全局开关");
   }
@@ -260,7 +261,7 @@ try {
     assert.equal(r.file, qwenFile(fresh), "qwen 的落点是 $QWEN_HOME/settings.json 这一层");
     const doc = JSON.parse(readFileSync(qwenFile(fresh), "utf8")) as
       { mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> };
-    assert.deepEqual(doc.mcpServers.ash, { command: "node", args: [ENTRY], env: { ASH_URL: URL_BASE } });
+    assert.deepEqual(doc.mcpServers[NAME], { command: "node", args: [ENTRY], env: { NAVI_URL: URL_BASE } });
 
     // 覆盖变量指到的目录就是最终配置目录(默认值路径正确掩盖不了这一条)。
     const over = home("json-override");
@@ -270,7 +271,7 @@ try {
     assert.equal(r2.file, join(profile, "settings.json"), "QWEN_HOME 底下不许再接一层 .qwen");
 
     // 已有 ash/harness:一个字节都不动。
-    for (const name of ["ash", "harness"]) {
+    for (const name of [NAME, "ash", "harness"]) {
       const h = home(`json-keep-${name}`);
       mkdirSync(dirname(qwenFile(h)), { recursive: true });
       const mine = `${JSON.stringify({ mcpServers: { [name]: { command: "mine" } } }, null, 2)}\n`;
@@ -333,7 +334,7 @@ try {
     assert.ok(ok.added, ok.why ?? "");
     const doc = JSON.parse(readFileSync(join(clean, ".trae", "mcp.json"), "utf8")) as
       { mcpServers: Record<string, { type: string }> };
-    assert.equal(doc.mcpServers.ash!.type, "stdio", "trae 的示例里 stdio 条目带 type");
+    assert.equal(doc.mcpServers[NAME]!.type, "stdio", "trae 的示例里 stdio 条目带 type");
     group("trae:撞上原生 YAML 就不写,干净时写标准 JSON");
   }
 
@@ -351,7 +352,7 @@ try {
     const text = readFileSync(file, "utf8");
     // 判据用 `JSON.parse` —— 它就是 CLI 看到的那一份。
     const live = (JSON.parse(text) as { mcpServers: Record<string, unknown> }).mcpServers;
-    assert.ok(Object.hasOwn(live, "ash"), `生效的那个容器里必须有 ash:${text}`);
+    assert.ok(Object.hasOwn(live, NAME), `生效的那个容器里必须有规范名那条:${text}`);
     assert.ok(Object.hasOwn(live, "other"), "用户原来那条也要还在");
 
     // opencode 那一族同理(容器叫 `mcp`)。
@@ -362,7 +363,7 @@ try {
     const r2 = install("opencode", dup2);
     assert.ok(r2.added, `重复容器也该补得上:${r2.why ?? ""}`);
     const live2 = (JSON.parse(readFileSync(file2, "utf8")) as { mcp: Record<string, unknown> }).mcp;
-    assert.ok(Object.hasOwn(live2, "ash"), "生效的那个 mcp 容器里必须有 ash");
+    assert.ok(Object.hasOwn(live2, NAME), "生效的那个 mcp 容器里必须有规范名那条");
 
     // N1:**空容器里的注释也要留着**。上一版那条空对象分支把 `{` 和 `}` 之间的原文整段截掉,
     //     ash 能生效,但用户写在里面的说明没了 —— 补接的边界是「只插入,不删不改」。
@@ -375,7 +376,7 @@ try {
     const text3 = readFileSync(file3, "utf8");
     assert.match(text3, /这句说明要留着/, `空容器里的注释不许被删:${text3}`);
     assert.ok(Object.hasOwn((JSON.parse(text3.replace(/^\s*\/\/.*$/gm, "")) as
-      { mcpServers: Record<string, unknown> }).mcpServers, "ash"), "ash 也确实写进去了");
+      { mcpServers: Record<string, unknown> }).mcpServers, NAME), "规范名那条也确实写进去了");
 
     // 根对象只有注释、连容器都没有的那一档(同一条分支的另一入口)。
     const keep2 = home("empty-root-comment");

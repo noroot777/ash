@@ -4,7 +4,7 @@ import { readSource } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ASH_MCP_SERVER_NAME, ASH_MCP_TOOLS } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAME, ASH_MCP_TOOLS, ASH_TURN_IDENTITY_ENV as ID } from "@ash/shared/mcp";
 import type { AgentEvent } from "@ash/shared";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { IS_WINDOWS } from "../src/platform.js";
@@ -21,10 +21,10 @@ process.env.ASH_FAKE_MCP_TOOLS = JSON.stringify(ASH_MCP_TOOLS);
 delete process.env.ASH_FAKE_EXEC_CALL;
 
 try {
-  assert.equal(ASH_MCP_SERVER_NAME, "ash", "安装器约定的规范 MCP 名必须是 ash");
+  assert.equal(ASH_MCP_SERVER_NAME, "navi", "安装器约定的规范 MCP 名必须是 navi");
   const setupSource = readSource(fileURLToPath(new URL("../../scripts/setup.mjs", import.meta.url)));
   assert.doesNotMatch(setupSource, /from\s+["'][^"']+\.ts["']/, "setup 必须兼容不能裸导入 TS 的 Node 22.16");
-  assert.match(setupSource, /const ASH_MCP_SERVER_NAME = "ash"/, "安装器的规范名必须与运行时一致");
+  assert.match(setupSource, /const ASH_MCP_SERVER_NAME = "navi"/, "安装器的规范名必须与运行时一致");
   writeFileSync(probe, `
 import { writeFileSync } from "node:fs";
 writeFileSync(process.argv[2], JSON.stringify(process.env));
@@ -56,7 +56,7 @@ for (let i = 0; i < args.length - 1; i += 1) {
 for (const [name, server] of Object.entries(servers)) {
   if (!server.command && !config.includes("[mcp_servers." + name + "]")) process.exit(17);
 }
-const configured = Object.fromEntries((servers.ash?.envVars ?? []).map((key) => [key, process.env[key]]));
+const configured = Object.fromEntries((servers[${JSON.stringify(ASH_MCP_SERVER_NAME)}]?.envVars ?? []).map((key) => [key, process.env[key]]));
 
 // 模拟 codex 0.144 的 MCP 环境白名单：父进程里的 ASH_* 全丢，只把 -c 中显式配置的
 // env_vars 按变量名选中的值加回来，再真正跨一层子进程启动 MCP probe。
@@ -83,7 +83,7 @@ if (args.includes("app-server")) {
       // "silent" = 这一问永远不答
       if (process.env.ASH_FAKE_MCP_TOOLS === "silent") return;
       const tools = JSON.parse(process.env.ASH_FAKE_MCP_TOOLS);
-      send({ id: message.id, result: { data: [{ name: "ash", tools: Object.fromEntries(tools.map((t) => [t, {}])) }] } });
+      send({ id: message.id, result: { data: [{ name: ${JSON.stringify(ASH_MCP_SERVER_NAME)}, tools: Object.fromEntries(tools.map((t) => [t, {}])) }] } });
     }
     else if (message.method === "thread/start") {
       send({ id: message.id, result: { thread: { id: "fake-thread" } } });
@@ -91,7 +91,7 @@ if (args.includes("app-server")) {
       // ash 的 MCP 启动状态:ASH_FAKE_MCP_STATUS 不设 = codex 根本没加载 ash(一条都不报)。
       const status = process.env.ASH_FAKE_MCP_STATUS;
       const update = (s, error = null) => send({ method: "mcpServer/startupStatus/updated", params: {
-        threadId: "fake-thread", name: "ash", status: s, error, failureReason: null,
+        threadId: "fake-thread", name: ${JSON.stringify(ASH_MCP_SERVER_NAME)}, status: s, error, failureReason: null,
       } });
       if (status) { update("starting"); update(status, status === "failed" ? "handshake closed" : null); }
     } else if (message.method === "turn/start") {
@@ -118,7 +118,7 @@ if (args.includes("app-server")) {
   runProbe();
   process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread" }) + "\\n");
   if (process.env.ASH_FAKE_EXEC_CALL) process.stdout.write(JSON.stringify({ type: "item.completed", item: {
-    id: "item_1", type: "mcp_tool_call", server: "ash", tool: "complete_task", status: "completed",
+    id: "item_1", type: "mcp_tool_call", server: ${JSON.stringify(ASH_MCP_SERVER_NAME)}, tool: "complete_task", status: "completed",
   } }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
 }
@@ -135,7 +135,7 @@ if (args.includes("app-server")) {
   // CODEX_HOME 里**没有任何 ash 登记**:ash 起跑时自己注入(executors/ash-mcp-inject.ts)。
   const unconfigured = join(root, "unconfigured");
   mkdirSync(unconfigured);
-  const identity = { CODEX_HOME: unconfigured, ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
+  const identity = { CODEX_HOME: unconfigured, [ID.taskId]: taskId, [ID.turnToken]: turnToken, [ID.directionToken]: directionToken };
   const drain = async (events: AsyncIterable<AgentEvent>) => {
     const seen: AgentEvent[] = [];
     for await (const event of events) seen.push(event);
@@ -149,20 +149,20 @@ if (args.includes("app-server")) {
     cwd: root,
     prompt: "probe",
     // 用户自己带了一条残缺白名单:注入排在它后面,同 key 以注入为准。
-    extraArgs: ["-c", `mcp_servers.${ASH_MCP_SERVER_NAME}.env_vars=["ASH_TASK_ID"]`],
+    extraArgs: ["-c", `mcp_servers.${ASH_MCP_SERVER_NAME}.env_vars=["${ID.taskId}"]`],
     env: identity,
   });
   const readyEvents = await drain(handle.events);
   await handle.cleanup?.();
 
   const childEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
-  assert.equal(childEnv.ASH_TASK_ID, taskId, "Codex MCP 子进程应收到发起任务 id");
-  assert.equal(childEnv.ASH_TURN_TOKEN, turnToken, "最终 env_vars 必须覆盖用户 extraArgs 的残缺白名单");
-  assert.equal(childEnv.ASH_DIRECTION_TOKEN, directionToken, "Codex MCP 子进程应收到当前方向身份");
+  assert.equal(childEnv[ID.taskId], taskId, "Codex MCP 子进程应收到发起任务 id");
+  assert.equal(childEnv[ID.turnToken], turnToken, "最终 env_vars 必须覆盖用户 extraArgs 的残缺白名单");
+  assert.equal(childEnv[ID.directionToken], directionToken, "Codex MCP 子进程应收到当前方向身份");
   assert.ok(!handle.commandLine.includes(turnToken), "sessions.commandLine 不得泄露回合 token");
   assert.ok(!handle.commandLine.includes(directionToken), "sessions.commandLine 不得泄露方向 token");
-  assert.match(handle.commandLine, /mcp_servers\.ash=\{command=/, "整条 ash 登记由 ash 注入,不依赖 CODEX_HOME 里有没有");
-  assert.ok(!handle.commandLine.includes("mcp_servers.harness"), "规范安装不能被历史 harness 名盖回去");
+  assert.match(handle.commandLine, new RegExp(`mcp_servers\\.${ASH_MCP_SERVER_NAME}=\\{command=`), "整条 ash 登记由 ash 注入,不依赖 CODEX_HOME 里有没有");
+  assert.ok(!/mcp_servers\.(ash|harness)[.=]/.test(handle.commandLine), "规范安装不能被历史名盖回去");
   assert.deepEqual(ashProblems(readyEvents), [], "codex 报 ready 时不出声");
 
   // exec 那条路(profile 带了 app-server 不认的参数时走它)注入同一份。
@@ -172,8 +172,8 @@ if (args.includes("app-server")) {
   const execEvents = await drain(execHandle.events);
   await execHandle.cleanup?.();
   const execEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
-  assert.equal(execEnv.ASH_TURN_TOKEN, turnToken, "exec 那条路同样透传回合身份");
-  assert.match(execHandle.commandLine, /mcp_servers\.ash=\{command=/);
+  assert.equal(execEnv[ID.turnToken], turnToken, "exec 那条路同样透传回合身份");
+  assert.match(execHandle.commandLine, new RegExp(`mcp_servers\\.${ASH_MCP_SERVER_NAME}=\\{command=`));
   assert.ok(!execHandle.commandLine.includes(turnToken), "exec 那条路同样不得泄露 token");
   // exec 这条路 codex 不报 MCP 启动状态:这一回合一次 ash 工具都没调成 ⇒ 一句「核实不了」(提示级)
   const execNotice = execEvents.filter((e): e is Extract<AgentEvent, { kind: "error" }> => e.kind === "error" && /codex exec/.test(e.message));

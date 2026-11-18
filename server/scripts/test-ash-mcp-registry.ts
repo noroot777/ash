@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AGENT_TYPES, type AgentType } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+const NAME = ASH_MCP_SERVER_NAME;
 import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
 import { cliSpec } from "../src/executors/catalog/index.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-registry/catalog.js";
@@ -137,7 +138,7 @@ try {
     assert.ok(r.ok && r.serverName === ASH_MCP_SERVER_NAME, "gemini:该写进去");
     const doc = JSON.parse(readFileSync(fileIn("gemini", g.dir), "utf8")) as
       { mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> };
-    assert.deepEqual(doc.mcpServers.ash, {
+    assert.deepEqual(doc.mcpServers[NAME], {
       command: "node", args: ["/host/mcp/index.js"], env: { ASH_URL: "http://127.0.0.1:4317" },
     }, "gemini:宿主那条原样搬过来");
     assert.equal(ashMcpStateIn(g.dir, "gemini", {}).state, "present");
@@ -148,10 +149,10 @@ try {
     assert.ok((await register("opencode", o.dir, o.host)).ok);
     const oc = JSON.parse(readFileSync(join(o.dir, "opencode.json"), "utf8")) as
       { mcp: Record<string, { type: string; command: string[]; environment: Record<string, string>; enabled: boolean }> };
-    assert.equal(oc.mcp.ash.type, "local");
-    assert.deepEqual(oc.mcp.ash.command, ["node", "/host/mcp/index.js"]);
-    assert.equal(oc.mcp.ash.environment.ASH_URL, "http://127.0.0.1:4317");
-    assert.equal(oc.mcp.ash.enabled, true);
+    assert.equal(oc.mcp[NAME].type, "local");
+    assert.deepEqual(oc.mcp[NAME].command, ["node", "/host/mcp/index.js"]);
+    assert.equal(oc.mcp[NAME].environment.ASH_URL, "http://127.0.0.1:4317");
+    assert.equal(oc.mcp[NAME].enabled, true);
     assert.equal(ashMcpStateIn(o.dir, "opencode", {}).state, "present");
 
     // TOML 族(grok):整段原文照搬,连子表一起。
@@ -159,8 +160,8 @@ try {
     hostToml(k.host, "grok", '\n[mcp_servers.ash.env]\nASH_URL = "http://127.0.0.1:4317"\n\n[mcp_servers.ash.tools.get_task]\napproval_mode = "approve"\n');
     assert.ok((await register("grok", k.dir, k.host)).ok);
     const toml = readFileSync(join(k.dir, "config.toml"), "utf8");
-    assert.match(toml, /\[mcp_servers\.ash\]/);
-    assert.match(toml, /\[mcp_servers\.ash\.tools\.get_task\]/, "TOML:子表不许丢");
+    assert.match(toml, new RegExp(`\\[mcp_servers\\.${NAME}\\]`));
+    assert.match(toml, new RegExp(`\\[mcp_servers\\.${NAME}\\.tools\\.get_task\\]`), "TOML:子表不许丢(表头改成规范名)");
     assert.equal(ashMcpStateIn(k.dir, "grok", {}).state, "present");
 
     // 搬宿主那条是**原值照搬**,所以不会凭空多出一个 type(本轮审查 R5)。
@@ -169,8 +170,8 @@ try {
     assert.ok((await register("cursor", c.dir, c.host)).ok);
     const cur = JSON.parse(readFileSync(join(c.dir, "mcp.json"), "utf8")) as
       { mcpServers: Record<string, Record<string, unknown>> };
-    assert.equal(cur.mcpServers.ash!.type, undefined, "搬宿主那条:原值照搬,不加字段");
-    assert.equal(doc.mcpServers.ash!.type, undefined, "gemini:没人要求就不塞 type");
+    assert.equal(cur.mcpServers[NAME]!.type, undefined, "搬宿主那条:原值照搬,不加字段");
+    assert.equal(doc.mcpServers[NAME]!.type, undefined, "gemini:没人要求就不塞 type");
     group("三个格式族 + 子层目录 + 子表/原值都写对");
   }
 
@@ -184,8 +185,8 @@ try {
         const doc = JSON.parse(readFileSync(fileIn(type as AgentType, b.dir), "utf8")) as
           { mcpServers: Record<string, Record<string, unknown>> };
         // copilot 的本地服务在文件里叫 `local`、cursor 叫 `stdio` —— 值不许互相套用。
-        assert.equal(doc.mcpServers.ash!.type, expect, `${type}:type 得是 ${expect ?? "不写"}`);
-        assert.deepEqual(doc.mcpServers.ash!.args, [ENTRY], `${type}:登记的是本仓那个入口`);
+        assert.equal(doc.mcpServers[NAME]!.type, expect, `${type}:type 得是 ${expect ?? "不写"}`);
+        assert.deepEqual(doc.mcpServers[NAME]!.args, [ENTRY], `${type}:登记的是本仓那个入口`);
       }
       group("自己现渲染那条:type 按各家文档的字面值写");
     } else {
@@ -215,7 +216,7 @@ try {
 
   // ── ④ 已有登记一律不覆盖,第三方条目一个字节不动 ───────────────────────────
   {
-    for (const name of ["ash", "harness"]) {
+    for (const name of [NAME, "ash", "harness"]) {
       const b = bench(`keep-${name}`);
       const file = fileIn("qwen", b.dir);
       mkdirSync(dirname(file), { recursive: true });
@@ -242,7 +243,7 @@ try {
       { extra: boolean; mcpServers: Record<string, unknown> };
     assert.equal(doc.extra, true, "别的顶层键留着");
     assert.deepEqual(doc.mcpServers.other, { command: "third-party" }, "别人的 server 留着");
-    assert.ok(doc.mcpServers.ash, "自己那条补上了");
+    assert.ok(doc.mcpServers[NAME], "自己那条补上了");
     group("不覆盖已有(含 harness)、不碰第三方条目");
   }
 
@@ -351,7 +352,7 @@ try {
     assert.ok((await register("kiro", b.dir, b.host)).ok);
     assert.ok(lstatSync(link).isSymbolicLink(), "软链还得是软链");
     if (ino !== 0) assert.equal(Number(statSync(real).ino), ino, "写的是它指的那份,inode 不换");
-    assert.ok((JSON.parse(readFileSync(real, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.ash);
+    assert.ok((JSON.parse(readFileSync(real, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers[NAME]);
     group("就地写:软链不被换成普通文件");
   }
 
@@ -415,7 +416,7 @@ try {
     hostJson(http.host, "claude", { type: "http", url: "https://ash.example.com/mcp", headers });
     assert.ok((await register("claude", http.dir, http.host)).ok);
     const moved = (JSON.parse(readFileSync(fileIn("claude", http.dir), "utf8")) as
-      { mcpServers: Record<string, Record<string, unknown>> }).mcpServers.ash!;
+      { mcpServers: Record<string, Record<string, unknown>> }).mcpServers[NAME]!;
     assert.deepEqual(moved, { type: "http", url: "https://ash.example.com/mcp", headers },
       "远程那条要原样搬过去(不许退回内置 stdio)");
 
@@ -426,7 +427,7 @@ try {
     });
     assert.ok((await register("claude", extra.dir, extra.host)).ok);
     const kept = (JSON.parse(readFileSync(fileIn("claude", extra.dir), "utf8")) as
-      { mcpServers: Record<string, Record<string, unknown>> }).mcpServers.ash!;
+      { mcpServers: Record<string, Record<string, unknown>> }).mcpServers[NAME]!;
     assert.equal(kept.cwd, "/host/repo", "cwd 不许丢");
     assert.equal(kept.timeout, 30_000, "timeout 不许丢");
 
@@ -437,7 +438,7 @@ try {
     if (existsSync(ENTRY)) {
       assert.ok(r.ok, r.ok ? "" : r.why);
       const built = (JSON.parse(readFileSync(fileIn("kimi", off.dir), "utf8")) as
-        { mcpServers: Record<string, Record<string, unknown>> }).mcpServers.ash!;
+        { mcpServers: Record<string, Record<string, unknown>> }).mcpServers[NAME]!;
       assert.equal(built.disabled, undefined, "关着的那条不许搬过来");
       assert.deepEqual(built.args, [ENTRY], "改用本仓那个入口");
     } else {

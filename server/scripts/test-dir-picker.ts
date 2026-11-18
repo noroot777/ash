@@ -98,7 +98,7 @@ assert.ok(
   win.includes("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8"),
   "不钉 UTF-8 的话中文目录名会被 OEM 代码页变成乱码",
 );
-assert.ok(win.includes("$env:ASH_DIR_PICKER_START"), "起始目录经环境变量传入,绕开 PowerShell 引号规则");
+assert.ok(win.includes("$env:NAVI_DIR_PICKER_START"), "起始目录经环境变量传入,绕开 PowerShell 引号规则");
 assert.ok(win.includes("$dialog.ShowDialog($owner)"), "必须带 owner 窗口调用,否则会被前台窗口规则挡在后面");
 assert.ok(win.includes("$owner.TopMost = $true"), "owner 要置顶");
 assert.ok(win.includes("$owner.Show()") && win.includes("$owner.Activate()"), "owner 得先显示并激活才算前台");

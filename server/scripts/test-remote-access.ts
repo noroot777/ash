@@ -197,7 +197,7 @@ try {
   assert.equal(shown.status, 200);
   assert.equal(shown.body.local, true);
   const key = String(shown.body.key);
-  assert.match(key, /^ash_[\w-]{43}$/, "和个人 key 同一种形状,手机端那一栏照填");
+  assert.match(key, /^navi_[\w-]{43}$/, "和个人 key 同一种形状,手机端那一栏照填");
   assert.equal((await call("/api/remote-access")).body.key, key, "再看一次还是这一把,不是每看一次换一把");
   const keyFile = `${process.env.ASH_DB}.remote-access.json`;
   assert.equal(existsSync(keyFile), true, "密钥落在库文件旁边,不进库");

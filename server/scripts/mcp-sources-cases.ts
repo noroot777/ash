@@ -23,6 +23,7 @@ import {
   ashMcpHostFile, ashMcpHostSources, effectiveConfigState, resolveAshMcp,
 } from "../src/mcp-registry/sources.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir } from "../src/mcp-registry/catalog.js";
+import { ASH_MCP_SERVER_NAME as NAME } from "@ash/shared/mcp";
 
 const OC_ENTRY = {
   type: "local", command: ["node", "/host/mcp/index.js"],
@@ -185,7 +186,7 @@ export async function checkSourceModel(
     const built = readFileSync(join(isolated, "config.toml"), "utf8");
     assert.match(built, /args = \["\/live\.js"\]/, `搬的必须是开着那条:\n${built}`);
     assert.ok(!/enabled = false/.test(built), `那条关着的一个字都不该搬过来:\n${built}`);
-    assert.match(built, /\[mcp_servers\.ash\.tools\.get_task\]/, "子表照搬(表头改成规范名)");
+    assert.match(built, new RegExp(`\\[mcp_servers\\.${NAME}\\.tools\\.get_task\\]`), "子表照搬(表头改成规范名)");
     assert.ok(!/off\.js/.test(built), "关着那条的启动参数也不该出现");
 
     // ⒞ 诊断提示跟判定取**同一条**登记:`ash` 关着(/old.js)、`harness` 开着(/live.js)
@@ -291,8 +292,8 @@ export async function checkSourceModel(
     assert.ok(rB.ok, rB.ok ? "" : rB.why);
     const built = JSON.parse(readFileSync(join(isolated, "opencode.json"), "utf8")) as
       { mcp: Record<string, Record<string, unknown>> };
-    assert.deepEqual(built.mcp.ash?.command, ["node", "/GLOBAL.js"], "继承来的启动命令要在");
-    assert.deepEqual(built.mcp.ash?.environment, { WHO: "GLOBAL", KEEP: "1" }, "继承来的环境变量也要在");
+    assert.deepEqual(built.mcp[NAME]?.command, ["node", "/GLOBAL.js"], "继承来的启动命令要在");
+    assert.deepEqual(built.mcp[NAME]?.environment, { WHO: "GLOBAL", KEEP: "1" }, "继承来的环境变量也要在");
 
     // ⒞ 同一个目录里两份都开着、命令不同 ⇒ 真 CLI 用 `.jsonc` 那条。上一版同目录几份同级,
     //    取的是数组里第一个(`.json`),于是提示指向一个根本没在跑的命令。
@@ -387,9 +388,9 @@ export async function checkSourceModel(
     assert.ok(rA.ok, rA.ok ? "" : rA.why);
     const built = JSON.parse(readFileSync(join(isolated, "opencode.json"), "utf8")) as
       { mcp: Record<string, Record<string, unknown>> };
-    assert.deepEqual(built.mcp.ash?.command, ["node", "/live.js"], "搬的是能连上那条命令");
-    assert.ok(!("environment" in (built.mcp.ash ?? {})),
-      `真 CLI 丢掉的字段不许跟着搬过去:${JSON.stringify(built.mcp.ash)}`);
+    assert.deepEqual(built.mcp[NAME]?.command, ["node", "/live.js"], "搬的是能连上那条命令");
+    assert.ok(!("environment" in (built.mcp[NAME] ?? {})),
+      `真 CLI 丢掉的字段不许跟着搬过去:${JSON.stringify(built.mcp[NAME])}`);
     //    开关跨来源继承照旧成立:低那份写成 `{enabled:false}`(没 type)+ 高那份完整不写
     //    开关 ⇒ 真 CLI `enabled:false`,所以这种不许替用户打开。
     const b = bench("f1a-switch-off-inherits");
@@ -479,7 +480,7 @@ export async function checkSourceModel(
     const backup = `${file}${BACKUP_SUFFIX}`;
     assert.ok(existsSync(backup), "改写已有配置之前必须留一份备份");
     assert.equal(readFileSync(backup, "utf8"), before, "备份必须逐字节是改之前那一版");
-    assert.match(readFileSync(file, "utf8"), /"ash"/, "正事也办成了");
+    assert.match(readFileSync(file, "utf8"), new RegExp(`"${NAME}"`), "正事也办成了");
 
     // 新建的那一路没什么可备份的(原来就没有这个文件),不许凭空留一份空备份。
     const c = bench("server-backup-new");
@@ -509,7 +510,7 @@ export async function checkSourceModel(
     assert.equal(own.length, 1, `被占住就换一个自己的唯一名字:${readdirSync(d.dir).join("、")}`);
     assert.equal(readFileSync(join(d.dir, own[0]!), "utf8"), before2, "备份必须逐字节是改之前那一版");
     assert.equal(statSync(join(d.dir, own[0]!)).mode & 0o777, 0o600, "备份一出生就只有自己能读");
-    assert.match(readFileSync(file2, "utf8"), /"ash"/, "正事也办成了");
+    assert.match(readFileSync(file2, "utf8"), new RegExp(`"${NAME}"`), "正事也办成了");
     group("服务端这条路也留备份:改写前那一版逐字节在、新建那一路不留白备份、占住的名字不碰");
   }
 }

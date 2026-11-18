@@ -23,8 +23,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
-import { ASH_MCP_TOOLS, ASH_MCP_TURN_EXITS } from "@ash/shared/mcp";
-import { turnFingerprint } from "@ash/shared/turn-fingerprint";
+import { ASH_MCP_SERVER_NAME as NAME, ASH_MCP_TOOLS, ASH_TURN_IDENTITY_ENV, ASH_MCP_TURN_EXITS } from "@ash/shared/mcp";
+import { ASH_TURN_FINGERPRINT_ENV, turnFingerprint } from "@ash/shared/turn-fingerprint";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-inject-"));
@@ -57,12 +57,12 @@ try {
     assert.equal(first.failure, null);
     assert.equal(first.args[0], "--mcp-config");
     const body = JSON.parse(readFileSync(first.args[1]!, "utf8"));
-    assert.deepEqual(body, { mcpServers: { ash: { type: "stdio", ...entry, env: { ...entry.env, ASH_TURN_FINGERPRINT: "none" } } } },
+    assert.deepEqual(body, { mcpServers: { [NAME]: { type: "stdio", ...entry, env: { ...entry.env, [ASH_TURN_FINGERPRINT_ENV]: "none" } } } },
       "文件里就是这份 ash 的那一条(非任务回合写明无身份,回合指纹那一段见 test-turn-fingerprint.ts)");
     assert.deepEqual(claudeAshMcpInjection(undefined, { dir, entry }), first, "同内容复用同一个文件");
     const other = claudeAshMcpInjection(undefined, { dir, entry: { ...entry, env: { ASH_URL: "http://127.0.0.1:14999" } } });
     assert.notEqual(other.args[1], first.args[1], "另一个端口的实例各写各的,谁也盖不掉谁");
-    assert.equal(JSON.parse(readFileSync(first.args[1]!, "utf8")).mcpServers.ash.env.ASH_URL, "http://127.0.0.1:4317");
+    assert.equal(JSON.parse(readFileSync(first.args[1]!, "utf8")).mcpServers[NAME].env.ASH_URL, "http://127.0.0.1:4317");
     // 写不出来(目录被同名文件占住):结果只属于这一次,之前那次照旧是好的(第 2 轮审查发现 3)
     const blocked = join(root, "blocked");
     writeFileSync(blocked, "");
@@ -95,13 +95,15 @@ try {
   // ── 3. claude:init 的判据 + 经 ClaudeExecutor 的接线 ──────────────────────
   {
     const ok = { args: ["--mcp-config", "/x.json"], failure: null };
-    const ALL = ASH_MCP_TOOLS.map((t) => `mcp__ash__${t}`);
-    const without = (...names: string[]) => ALL.filter((t) => !names.some((n) => t === `mcp__ash__${n}`));
-    const injected = { name: "ash", status: "connected", source: "dynamic" };
+    const ALL = ASH_MCP_TOOLS.map((t) => `mcp__${NAME}__${t}`);
+    const without = (...names: string[]) => ALL.filter((t) => !names.some((n) => t === `mcp__${NAME}__${n}`));
+    const injected = { name: NAME, status: "connected", source: "dynamic" };
     assert.equal(claudeAshMcpProblem(ok, [injected], ["Bash", ...ALL]), null);
-    assert.equal(claudeAshMcpProblem(ok, [{ name: "ash", status: "connected" }], ALL), null, "老版本不报 source:按连上算");
-    // 只认注入的那个名字:历史名 harness 连着也不替 ash 作证
-    assert.match(msg(claudeAshMcpProblem(ok, [{ name: "harness", status: "connected", source: "user" }], ALL)), /清单里没有 ash（Navi MCP 的登记名）/);
+    assert.equal(claudeAshMcpProblem(ok, [{ name: NAME, status: "connected" }], ALL), null, "老版本不报 source:按连上算");
+    // 只认注入的那个名字:历史名(ash、harness)连着也不替它作证
+    for (const legacy of ["ash", "harness"]) {
+      assert.match(msg(claudeAshMcpProblem(ok, [{ name: legacy, status: "connected", source: "user" }], ALL)), new RegExp(`清单里没有 ${NAME}（Navi MCP 的登记名）`));
+    }
     assert.match(msg(claudeAshMcpProblem(ok, [{ ...injected, status: "failed" }, { name: "harness", status: "connected" }], ALL)), /状态是 failed/);
     // 连上的是用户配置里那条 ⇒ 注入没生效
     assert.match(msg(claudeAshMcpProblem(ok, [{ ...injected, source: "user" }], ALL)), /注入没生效.*来源 user/);
@@ -119,7 +121,7 @@ try {
     assert.equal(level(minor), "notice", "只缺非收尾工具 ⇒ 提示级");
     assert.match(msg(minor), /list_groups 不在 agent 手上/);
     assert.equal(level(claudeAshMcpProblem(ok, [injected])), "notice", "init 里没有工具清单 ⇒ 核实不了(提示),不冒充没问题");
-    const failedOne = claudeAshMcpProblem(ok, [{ name: "ash", status: "failed" }]) as ErrorEvent;
+    const failedOne = claudeAshMcpProblem(ok, [{ name: NAME, status: "failed" }]) as ErrorEvent;
     assert.match(failedOne.message, /状态是 failed/);
     assert.equal(failedOne.affectsTurn, false, "诊断不改本回合成败");
     process.env.ASH_LAX_DONE = "1";
@@ -180,14 +182,14 @@ process.stdin.on("end", () => process.exit(0));
       args: ["D:\\ai_workspace\\ash\\mcp\\dist\\index.js"],
       env: { ASH_URL: "http://127.0.0.1:4317" },
     };
-    const turn = { ASH_TASK_ID: "task-1", ASH_TURN_TOKEN: "turn-1" };
+    const turn = { [ASH_TURN_IDENTITY_ENV.taskId]: "task-1", [ASH_TURN_IDENTITY_ENV.turnToken]: "turn-1" };
     const fingerprint = turnFingerprint({ taskId: "task-1", turnToken: "turn-1", directionToken: "" });
     const [flag, value] = codexAshMcpArgs(turn, winEntry);
     assert.equal(flag, "-c");
-    assert.equal(value, 'mcp_servers.ash={command="C:\\\\Program Files\\\\nodejs\\\\node.exe",'
+    assert.equal(value, `mcp_servers.${NAME}={command="C:\\\\Program Files\\\\nodejs\\\\node.exe",`
       + 'args=["D:\\\\ai_workspace\\\\ash\\\\mcp\\\\dist\\\\index.js"],'
-      + `env={ASH_URL="http://127.0.0.1:4317",ASH_TURN_FINGERPRINT="${fingerprint}"},`
-      + 'enabled=true,env_vars=["ASH_TASK_ID","ASH_TURN_TOKEN"]}');
+      + `env={ASH_URL="http://127.0.0.1:4317",${ASH_TURN_FINGERPRINT_ENV}="${fingerprint}"},`
+      + `enabled=true,env_vars=["${ASH_TURN_IDENTITY_ENV.taskId}","${ASH_TURN_IDENTITY_ENV.turnToken}"]}`);
     assert.ok(!value!.includes("turn-1"), "令牌值不进 argv,进的只是它的单向摘要");
     assert.ok(!codexAshMcpArgs({}, winEntry)[1]!.includes("env_vars"), "没有回合身份(非任务回合)就不写 env_vars");
     const plan = realCli ? resolveLaunch("codex", ["-c", value!, "mcp", "list", "--json"]) : null;
@@ -201,12 +203,12 @@ process.stdin.on("end", () => process.exit(0));
       });
       assert.equal(res.status, 0, `真 codex 读得通这条覆盖:${res.stderr}`);
       const listed = (JSON.parse(res.stdout) as { name: string; enabled: boolean; transport: Record<string, unknown> }[])
-        .find((s) => s.name === "ash");
-      assert.ok(listed?.enabled, "真 codex 列出了开着的 ash");
+        .find((s) => s.name === NAME);
+      assert.ok(listed?.enabled, `真 codex 列出了开着的 ${NAME}`);
       assert.equal(listed!.transport.command, winEntry.command, "反斜杠和空格原样往返");
       assert.deepEqual(listed!.transport.args, winEntry.args);
-      assert.deepEqual(listed!.transport.env, { ...winEntry.env, ASH_TURN_FINGERPRINT: fingerprint });
-      assert.deepEqual(listed!.transport.env_vars, ["ASH_TASK_ID", "ASH_TURN_TOKEN"]);
+      assert.deepEqual(listed!.transport.env, { ...winEntry.env, [ASH_TURN_FINGERPRINT_ENV]: fingerprint });
+      assert.deepEqual(listed!.transport.env_vars, [ASH_TURN_IDENTITY_ENV.taskId, ASH_TURN_IDENTITY_ENV.turnToken]);
       console.log("✓ codex 注入的 TOML:Windows 路径与空格经真 codex 解析原样往返");
     } else {
       console.log("⚠ 没交给真 codex 解析(要跑:ASH_TEST_REAL_CLI=1,且装了 codex),TOML 往返只核了字面量");
@@ -221,8 +223,8 @@ process.stdin.on("end", () => process.exit(0));
     const push = (e: AgentEvent) => said.push(e);
     const readied = (request: (m: string, p: unknown) => Promise<unknown>) => {
       const s = new CodexAshMcpStatus();
-      s.update({ name: "ash", status: "starting" });
-      assert.equal(s.update({ name: "ash", status: "ready" }), null);
+      s.update({ name: NAME, status: "starting" });
+      assert.equal(s.update({ name: NAME, status: "ready" }), null);
       s.checkTools(request, "thread-1", push);
       return s;
     };
@@ -231,14 +233,14 @@ process.stdin.on("end", () => process.exit(0));
     const asked: unknown[] = [];
     const paged = readied(async (_m, p) => {
       asked.push(p);
-      return (p as { cursor: unknown }).cursor ? page([{ name: "ash", tools: tools(ASH_MCP_TOOLS) }]) : page([{ name: "kb", tools: {} }], "c2");
+      return (p as { cursor: unknown }).cursor ? page([{ name: NAME, tools: tools(ASH_MCP_TOOLS) }]) : page([{ name: "kb", tools: {} }], "c2");
     });
     assert.equal(await paged.settle(), null, "翻到第二页找到 ash、工具齐全 ⇒ 不出声");
     assert.deepEqual(asked.map((p) => (p as { cursor: unknown }).cursor), [null, "c2"], "跟着 nextCursor 翻完");
     assert.deepEqual(said, []);
 
     // 缺收尾出口 ⇒ 问到当场说,收尾不再重复
-    const narrowed = readied(async () => page([{ name: "ash", tools: tools(ASH_MCP_TOOLS.filter((t) => t !== "debate_reply")) }]));
+    const narrowed = readied(async () => page([{ name: NAME, tools: tools(ASH_MCP_TOOLS.filter((t) => t !== "debate_reply")) }]));
     assert.equal(await narrowed.settle(), null, "问到时已经说过,收尾不重复");
     assert.equal(said.length, 1);
     assert.match(msg(said[0]!), /codex 连上了 Navi，但 debate_reply 不在 agent 手上.*辩论里交不了发言/);
@@ -251,34 +253,37 @@ process.stdin.on("end", () => process.exit(0));
     assert.match(msg(hungSaid), /工具清单没拿到（到回合收尾还没问到）/);
     assert.match(msg(await readied(async () => { throw new Error("Codex mcpServerStatus/list 超时"); }).settle()), /工具清单没拿到（Codex mcpServerStatus\/list 超时）/);
     assert.match(msg(await readied(async () => ({ nope: 1 })).settle()), /应答里没有 data 列表/);
-    assert.match(msg(await readied(async () => page([{ name: "kb", tools: {} }])).settle()), /清单里没有 ash（Navi MCP 的登记名）/);
+    assert.match(msg(await readied(async () => page([{ name: "kb", tools: {} }])).settle()), new RegExp(`清单里没有 ${NAME}（Navi MCP 的登记名）`));
     const neverAsked = new CodexAshMcpStatus();
-    neverAsked.update({ name: "ash", status: "ready" });
+    neverAsked.update({ name: NAME, status: "ready" });
     assert.match(msg(await neverAsked.settle()), /Navi 就绪之后没有问到/);
     assert.deepEqual(said, [], "问不到时不当场乱说");
 
     // 启动状态:失败带原话、只说一次;没加载 / 没启动完;别家与历史名不归这里说
     const failed = new CodexAshMcpStatus();
     assert.equal(failed.update({ name: "kb", status: "failed" }), null, "别家的 MCP 不归这里说");
-    const told = failed.update({ name: "ash", status: "failed", error: "MCP client for `ash` timed out after 30 seconds." });
+    const told = failed.update({ name: NAME, status: "failed", error: "MCP client for `ash` timed out after 30 seconds." });
     assert.match(msg(told), /启动失败：MCP client for `ash` timed out/, "带上 codex 的原话");
     assert.equal(await failed.settle(), null, "说过了就不再说");
     assert.match(msg(await new CodexAshMcpStatus().settle()), /没有加载 Navi MCP/);
     const stuck = new CodexAshMcpStatus();
-    stuck.update({ name: "ash", status: "starting" });
+    stuck.update({ name: NAME, status: "starting" });
     assert.match(msg(await stuck.settle()), /一直没启动完成/);
     const legacyFirst = new CodexAshMcpStatus();
     legacyFirst.update({ name: "harness", status: "ready" });
-    assert.match(msg(legacyFirst.update({ name: "ash", status: "failed", error: "handshake" })), /启动失败/, "历史名先 ready 也不替 ash 作证");
+    assert.match(msg(legacyFirst.update({ name: NAME, status: "failed", error: "handshake" })), /启动失败/, "历史名先 ready 也不替 ash 作证");
     const legacyFailed = new CodexAshMcpStatus();
     assert.equal(legacyFailed.update({ name: "harness", status: "failed", error: "gone" }), null, "历史名坏了不说 ash 的事");
 
     // exec 那条路:按本回合记录判
     const used = new CodexExecAshMcp();
-    used.item({ type: "mcp_tool_call", server: "ash", tool: "complete_task", status: "completed" });
-    assert.equal(used.settle(), null, "调成过 ash 的工具 ⇒ 接上了");
+    used.item({ type: "mcp_tool_call", server: NAME, tool: "complete_task", status: "completed" });
+    assert.equal(used.settle(), null, "调成过 Navi 的工具 ⇒ 接上了");
+    const usedLegacy = new CodexExecAshMcp();
+    usedLegacy.item({ type: "mcp_tool_call", server: "ash", tool: "complete_task", status: "completed" });
+    assert.equal(usedLegacy.settle(), null, "用户配置里旧版 setup 登记的 ash 调成过也算接上");
     const crashed = new CodexExecAshMcp();
-    crashed.stderr("2026-11-14T08:00:00Z ERROR codex_core::mcp: MCP client for `ash` failed to start: handshake closed\n");
+    crashed.stderr(`2026-11-14T08:00:00Z ERROR codex_core::mcp: MCP client for \`${NAME}\` failed to start: handshake closed\n`);
     const crashedSaid = crashed.settle();
     assert.match(msg(crashedSaid), /^Navi 的工具在这一回合没接上（codex 报告 Navi MCP 启动失败：.*handshake closed/);
     assert.equal(level(crashedSaid), undefined, "点名失败的是红色诊断");
@@ -288,9 +293,9 @@ process.stdin.on("end", () => process.exit(0));
     assert.equal(level(unknown), "notice", "没有证据只说核实不了,提示级");
     assert.match(msg(unknown), /codex exec，这条路上 codex 不报 Navi MCP 连没连上/);
     const split = new CodexExecAshMcp();
-    split.stderr("MCP server `ash` failed to st");
+    split.stderr(`MCP server \`${NAME}\` failed to st`);
     split.stderr("art and is unavailable. Continue without it.");
-    assert.match(msg(split.settle()), /启动失败：MCP server `ash` failed to start/, "跨块切开、没有换行收尾的那一行也认");
+    assert.match(msg(split.settle()), new RegExp(`启动失败：MCP server \`${NAME}\` failed to start`), "跨块切开、没有换行收尾的那一行也认");
     console.log("✓ codex 确认:翻页、缺哪样说哪样、问不到说核实不了、只认注入的名字、只说一次;exec 按本回合记录判");
   }
 

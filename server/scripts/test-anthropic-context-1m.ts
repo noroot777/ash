@@ -180,6 +180,6 @@ const disconnected = await app.request("/llm-providers/provider-1/context-1m/v1/
 });
 assert.equal(disconnected.status, 502);
 assert.match(await disconnected.text(), /ECONNREFUSED|ECONNRESET|UND_ERR_SOCKET/);
-assert.match(disconnected.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
+assert.match(disconnected.headers.get("x-navi-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
 for (const suffix of ["", "-shm", "-wal"]) rmSync(dbPath + suffix, { force: true });
 console.log("anthropic context 1m tests passed");

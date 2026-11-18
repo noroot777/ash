@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { ASH_MCP_SERVER_NAME as NAME } from "@ash/shared/mcp";
 
 /** 这一组要用到的那几件外部家当(都由入口文件给,见那边的同名定义)。 */
 export interface MultiSourceDeps {
@@ -56,7 +57,7 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     const r2 = install("opencode", h2, { OPENCODE_CONFIG: custom2 });
     assert.ok(r2.added, `两份都没有就该补上:${r2.why ?? ""}`);
     assert.equal(r2.file, custom2, "写的就是变量指的那一份");
-    assert.match(readFileSync(custom2, "utf8"), /"ash"/, "确实写进去了");
+    assert.match(readFileSync(custom2, "utf8"), new RegExp(`"${NAME}"`), "确实写进去了");
     assert.equal(readFileSync(g2, "utf8"), empty, "全局那份仍然不许动");
 
     // ⒞ 高优先级那份只把同名 ash **关掉**:真 opencode 报 `ash disabled`(本轮实测)。
@@ -319,8 +320,8 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
       mcpServers: { other: { command: "node", args: ["/o.js"] } }, ...extra,
     }, null, 2)}\n`;
     for (const [tag, extra] of [
-      ["excluded 列着 ash", { mcp: { excluded: ["ash"] } }],
-      ["allowed 白名单里没有 ash", { mcp: { allowed: ["other"] } }],
+      ["excluded 列着规范名", { mcp: { excluded: [NAME] } }],
+      ["allowed 白名单里没有规范名(只有历史名 ash)", { mcp: { allowed: ["ash", "other"] } }],
     ] as const) {
       const h = home("switch-gemini");
       const file = join(h, ".gemini", "settings.json");
@@ -334,13 +335,13 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
       assert.match(r.why ?? "", /没有替你打开|mcp\.(excluded|allowed)/, `${tag}:要说清为什么(${r.why ?? ""})`);
       assert.equal(readFileSync(file, "utf8"), body, `${tag}:那份一个字节都不许动`);
     }
-    // 白名单里有 ash ⇒ 照常补(闸不许开大)。
+    // 白名单里有规范名 ⇒ 照常补(闸不许开大)。
     const ok = home("switch-gemini-ok");
     const okFile = join(ok, ".gemini", "settings.json");
     mkdirSync(dirname(okFile), { recursive: true });
-    writeFileSync(okFile, geminiBody({ mcp: { allowed: ["ash", "other"] } }), "utf8");
+    writeFileSync(okFile, geminiBody({ mcp: { allowed: [NAME, "other"] } }), "utf8");
     const rOk = install("gemini", ok);
-    assert.ok(rOk.added, `白名单里有 ash ⇒ 照常补:${rOk.why ?? ""}`);
+    assert.ok(rOk.added, `白名单里有规范名 ⇒ 照常补:${rOk.why ?? ""}`);
 
     // grok 的根级数组是它专有的:认它(而同格式的 codex 不认 —— codex 走它自己那条带 CLI
     // 批准的路,不在这张表里,TS 那侧有逐家对打的那一格)。

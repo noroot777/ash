@@ -374,7 +374,7 @@ const adminKey = await store.resetUserKey(adminRow.id);
   const rotated = await call("/api/auth/rotate-key", "POST", adminKey);
   assert.equal(rotated.status, 200, `本人轮换要成:${JSON.stringify(rotated.body)}`);
   const freshKey = String(rotated.body.key ?? "");
-  assert.ok(freshKey.startsWith("ash_"), "轮换要当场把新 key 交到本人手里,不是发一条链接");
+  assert.ok(freshKey.startsWith("navi_"), "轮换要当场把新 key 交到本人手里,不是发一条链接");
   assert.ok(rotated.cookie, "轮换必须补发会话 cookie,不然点完「重新生成」就把自己踢到登录页");
   assert.equal((await call("/api/users", "GET", freshKey)).status, 200, "新 key 立刻能用");
   assert.equal((await call("/api/users", "GET", adminKey)).status, 401, "旧 key 当场失效");

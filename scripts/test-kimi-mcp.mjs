@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ASH } from "./mcp-host-sources.mjs";
 import { registerHostMcp } from "./mcp-hosts.mjs";
 
 // kimi 这一家在装机脚本里怎么登记：setup.mjs 对各家统一走 registerHostMcp，落点由 KIMI_CODE_HOME 定。
@@ -14,16 +15,16 @@ const options = { configDir: directory, mcpEntry: "/ash/mcp/dist/index.js", url:
 try {
   assert.equal(registerKimiMcp(options).added, true);
   const created = readFileSync(file, "utf8");
-  assert.deepEqual(JSON.parse(created).mcpServers.ash, {
+  assert.deepEqual(JSON.parse(created).mcpServers[ASH], {
     command: process.execPath,
     args: [options.mcpEntry],
-    env: { ASH_URL: options.url },
+    env: { NAVI_URL: options.url },
   });
   assert.equal(registerKimiMcp({ ...options, url: "http://localhost:9999" }).added, false);
   assert.equal(readFileSync(file, "utf8"), created);
   assert.equal(existsSync(`${file}.bak-ash-setup`), false);
 
-  for (const name of ["ash", "harness"]) {
+  for (const name of [ASH, "ash", "harness"]) {
     const existing = JSON.stringify({ mcpServers: { [name]: { command: "custom", args: ["keep"] } } });
     writeFileSync(file, existing);
     assert.equal(registerKimiMcp(options).added, false);
@@ -37,7 +38,7 @@ try {
   const merged = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(merged.extra, true);
   assert.deepEqual(merged.mcpServers.other, { url: "https://example.invalid/mcp" });
-  assert.ok(merged.mcpServers.ash);
+  assert.ok(merged.mcpServers[ASH]);
 
   // 读不通 / 根不是对象 / 容器不是对象:**不写 + 如实回一句**,文件一个字节不动。
   // (2026-10-31 统一到十五家同一个契约:原来这里是抛错,而 setup 全家都走 `registerHostMcp`

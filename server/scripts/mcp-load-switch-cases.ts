@@ -14,6 +14,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { ASH_MCP_SERVER_NAME as NAME } from "@ash/shared/mcp";
 import { ASH_MCP_TABLE, ashMcpConfigDir } from "../src/mcp-registry/catalog.js";
 import { registerAshMcp } from "../src/mcp-registry/register.js";
 import {
@@ -201,10 +202,12 @@ async function checkSwitches(bench: Bench, group: Group): Promise<void> {
       mcpServers: { other: { command: "node", args: ["/o.js"] } }, ...extra,
     }, null, 2)}\n`;
     for (const [tag, extra, want] of [
-      ["excluded 列着 ash、压根没登记", { mcp: { excluded: ["ash"] } }, "disabled"],
-      ["白名单里没有 ash、压根没登记", { mcp: { allowed: ["other"] } }, "disabled"],
-      ["白名单里有 ash、压根没登记", { mcp: { allowed: ["ash"] } }, "absent"],
-      ["白名单里有 ash,历史名不在", { mcp: { allowed: ["ash", "other"] } }, "absent"],
+      ["excluded 列着规范名、压根没登记", { mcp: { excluded: [NAME] } }, "disabled"],
+      ["白名单里没有规范名、压根没登记", { mcp: { allowed: ["other"] } }, "disabled"],
+      ["白名单里有规范名、压根没登记", { mcp: { allowed: [NAME] } }, "absent"],
+      ["白名单里有规范名,历史名不在", { mcp: { allowed: [NAME, "other"] } }, "absent"],
+      ["excluded 只列着历史名 ash、压根没登记", { mcp: { excluded: ["ash"] } }, "absent"],
+      ["白名单里只有历史名 ash、压根没登记", { mcp: { allowed: ["ash"] } }, "disabled"],
     ] as const) {
       const b = bench("switch-gemini-bare");
       write(geminiFile(b.dir), bare(extra));

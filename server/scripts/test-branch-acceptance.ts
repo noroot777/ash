@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { makeStep } from "@ash/shared/workflow";
 import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
+import { TASK_BRANCH_PREFIX } from "@ash/shared/task-branch";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-branch-acceptance-"));
@@ -119,7 +120,7 @@ try {
     await db.update(tasks).set({ mergeTargetBranch: stale.parentWs.branch }).where(eq(tasks.id, stale.child.id));
     rmSync(stale.parentWs.path, { recursive: true, force: true });
     const legacySource = await setup(); // case11: own source filtering also follows harness/*.
-    git(legacySource.childWs.path, "branch", "-m", legacySource.childWs.branch!.replace("ash/", "harness/"));
+    git(legacySource.childWs.path, "branch", "-m", legacySource.childWs.branch!.replace(TASK_BRANCH_PREFIX, "harness/"));
     const broken = await setup(); // case12: directory and WIP survive a broken .git backlink.
     await db.update(tasks).set({ mergeTargetBranch: broken.parentWs.branch }).where(eq(tasks.id, broken.child.id));
     writeFileSync(join(broken.parentWs.path, "PARENT_WIP.txt"), "keep parent WIP\n");

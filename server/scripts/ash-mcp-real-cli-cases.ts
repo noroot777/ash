@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { AgentEvent } from "@ash/shared";
-import { ASH_MCP_TOOLS } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAME as NAME, ASH_MCP_TOOLS } from "@ash/shared/mcp";
 import { CodexAshMcpStatus } from "../src/executors/ash-mcp-confirm.js";
 import { codexAshMcpArgs } from "../src/executors/ash-mcp-inject.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
@@ -38,7 +38,7 @@ const startedTags = (file: string) => (existsSync(file) ? readFileSync(file, "ut
 
 /**
  * 真 claude:同名 server 以**最后一个** `--mcp-config` 为准 —— 注入排在最后靠的就是这条。
- * 用户配置里的同名 ash、profile 里更早的 `--mcp-config`、`--strict-mcp-config` 都压不过它。
+ * 用户配置里的同名登记、profile 里更早的 `--mcp-config`、`--strict-mcp-config` 都压不过它。
  */
 export async function checkRealClaudePrecedence(root: string): Promise<void> {
   const launch = resolveLaunch("claude", ["--version"]);
@@ -49,10 +49,10 @@ export async function checkRealClaudePrecedence(root: string): Promise<void> {
     const home = join(dir, "home");
     mkdirSync(home);
     const server = (tag: string) => ({ type: "stdio", command: process.execPath, args: [stub, tag, "complete_task"] });
-    writeFileSync(join(home, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, mcpServers: { ash: server("user-scope") } }));
+    writeFileSync(join(home, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, mcpServers: { [NAME]: server("user-scope") } }));
     const config = (tag: string) => {
       const file = join(dir, `${tag}.json`);
-      writeFileSync(file, JSON.stringify({ mcpServers: { ash: server(tag) } }));
+      writeFileSync(file, JSON.stringify({ mcpServers: { [NAME]: server(tag) } }));
       return file;
     };
     const args = ["-p", "--output-format", "stream-json", "--verbose", "--max-turns", "1",
@@ -73,10 +73,10 @@ export async function checkRealClaudePrecedence(root: string): Promise<void> {
     const init = out.split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } })
       .find((e) => e.type === "system" && e.subtype === "init");
     assert.ok(init, `真 claude 没给出 init:${out.slice(0, 500)}`);
-    assert.deepEqual(init.mcp_servers.filter((s: { name: string }) => s.name === "ash").map((s: { source?: string }) => s.source), ["dynamic"]);
+    assert.deepEqual(init.mcp_servers.filter((s: { name: string }) => s.name === NAME).map((s: { source?: string }) => s.source), ["dynamic"]);
     assert.deepEqual(startedTags(started), ["injected"], `${variant.join(" ") || "默认"}:只拉起排在最后的那份`);
   }
-  console.log("✓ 真 claude:同名 ash 以最后一个 --mcp-config 为准(压过用户配置、profile 里更早的那份、--strict-mcp-config)");
+  console.log("✓ 真 claude:同名登记以最后一个 --mcp-config 为准(压过用户配置、profile 里更早的那份、--strict-mcp-config)");
 }
 
 /**
@@ -116,7 +116,7 @@ export async function checkRealCodexAppServer(root: string): Promise<void> {
       const e = status.update(m.params!);
       if (e) push(e);
       status.checkTools(request, m.params!.threadId ?? threadId, push);
-      if (m.params!.name === "ash" && m.params!.status !== "starting") ashSettled();
+      if (m.params!.name === NAME && m.params!.status !== "starting") ashSettled();
     });
     try {
       await request("initialize", { clientInfo: { name: "ash-test", version: "1" }, capabilities: { experimentalApi: true } });
@@ -133,18 +133,18 @@ export async function checkRealCodexAppServer(root: string): Promise<void> {
   };
   const full = entry([...ASH_MCP_TOOLS]);
   assert.deepEqual(await probe("", full), [], "空配置:注入的那条 ready、工具齐全 ⇒ 不出声");
-  const narrowed = await probe('[mcp_servers.ash]\ncommand = "node"\ndisabled_tools = ["complete_task", "debate_reply"]\n', full);
+  const narrowed = await probe(`[mcp_servers.${NAME}]\ncommand = "node"\ndisabled_tools = ["complete_task", "debate_reply"]\n`, full);
   assert.equal(narrowed.length, 1, `用户配置里的 disabled_tools 被深合并保留 ⇒ 一条诊断:${JSON.stringify(narrowed)}`);
   assert.match(narrowed[0]!.message, /complete_task、debate_reply 不在 agent 手上/);
   assert.match(narrowed[0]!.message, /辩论里交不了发言/, "辩论要的那一样也在核对范围里");
-  const others = await probe('[mcp_servers.ash]\ncommand = "node"\ndisabled_tools = ["list_groups"]\n', full);
+  const others = await probe(`[mcp_servers.${NAME}]\ncommand = "node"\ndisabled_tools = ["list_groups"]\n`, full);
   assert.equal(others[0]?.level, "notice", "只缺非收尾工具 ⇒ 提示级");
-  const empty = await probe('[mcp_servers.ash]\ncommand = "node"\nenabled_tools = []\n', full);
+  const empty = await probe(`[mcp_servers.${NAME}]\ncommand = "node"\nenabled_tools = []\n`, full);
   assert.match(empty[0]?.message ?? "", /complete_task 缺了/, "空白名单 ⇒ 收尾出口全缺");
   const legacy = `[mcp_servers.harness]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(stub)}, "legacy", "get_task"]\n`;
   const masked = await probe(legacy, entry(["--die", "600"]));
-  assert.equal(masked.length, 1, `历史名先 ready、注入的 ash 后失败 ⇒ 照样说 ash 没接上:${JSON.stringify(masked)}`);
+  assert.equal(masked.length, 1, `历史名先 ready、注入的那条后失败 ⇒ 照样说没接上:${JSON.stringify(masked)}`);
   assert.match(masked[0]!.message, /codex 报告 Navi MCP 启动失败/);
-  assert.deepEqual(await probe('[mcp_servers.harness]\ncommand = "/nonexistent/legacy-mcp"\n', full), [], "历史名起不来、注入的 ash 好好的 ⇒ 不出声");
+  assert.deepEqual(await probe('[mcp_servers.harness]\ncommand = "/nonexistent/legacy-mcp"\n', full), [], "历史名起不来、注入的那条好好的 ⇒ 不出声");
   console.log("✓ 真 codex app-server:工具名单被保留时按缺了哪样出声(含辩论/驳回)、历史名先后到达不改结论");
 }
