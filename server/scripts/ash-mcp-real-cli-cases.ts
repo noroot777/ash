@@ -144,7 +144,7 @@ export async function checkRealCodexAppServer(root: string): Promise<void> {
   const legacy = `[mcp_servers.harness]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(stub)}, "legacy", "get_task"]\n`;
   const masked = await probe(legacy, entry(["--die", "600"]));
   assert.equal(masked.length, 1, `历史名先 ready、注入的 ash 后失败 ⇒ 照样说 ash 没接上:${JSON.stringify(masked)}`);
-  assert.match(masked[0]!.message, /codex 报告 ash MCP 启动失败/);
+  assert.match(masked[0]!.message, /codex 报告 Navi MCP 启动失败/);
   assert.deepEqual(await probe('[mcp_servers.harness]\ncommand = "/nonexistent/legacy-mcp"\n', full), [], "历史名起不来、注入的 ash 好好的 ⇒ 不出声");
   console.log("✓ 真 codex app-server:工具名单被保留时按缺了哪样出声(含辩论/驳回)、历史名先后到达不改结论");
 }

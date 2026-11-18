@@ -244,7 +244,7 @@ try {
     healthBody = "<h1>nginx</h1>";
     result = await launch(binary, ["start-fresh", "2"], env).done;
     assert.equal(result.status, 2, result.output);
-    assert.match(result.output, /不是 ash/);
+    assert.match(result.output, /不是 Navi/);
     assert.equal(existsSync(marker), false, "an occupied port must not get a second service");
   });
   assert.equal(await probe(200, ""), "DOWN", "nobody listening");

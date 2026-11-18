@@ -25,7 +25,7 @@
 // 一律没有类型，按同一个办法认：没交卷、被 ash 判失败的那几句要你知道；其余（等哨兵改落暂停、
 // 以提问暂停、你自己停的）界面别处已经在说，是回执。
 
-import { ACCEPT_GATE_FAILURE_LABELS } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_FAILURE_LABELS, ACCEPT_GATE_FAILURE_LEGACY_LABELS } from "@ash/shared/accept-gate";
 import { COMMAND_NOTE_HEAD } from "@ash/shared/command-note";
 
 /** 判法 1：只有提醒才这么起头（注释是写它的文件，便于对照）。 */
@@ -141,7 +141,7 @@ const ALERT_ENDINGS: readonly RegExp[] = [
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** 门禁没跑绿时摘要里的原因（shared/accept-gate 的标签；查不到标签的旧类别照实写「未通过」）。 */
-const GATE_WHY = [...Object.values(ACCEPT_GATE_FAILURE_LABELS), "未通过"].map(escape).join("|");
+const GATE_WHY = [...Object.values(ACCEPT_GATE_FAILURE_LABELS), ...ACCEPT_GATE_FAILURE_LEGACY_LABELS, "未通过"].map(escape).join("|");
 /** 摘要里紧跟在命令后面、没跑绿的那个成败：「` 未通过：<原因>（rc=N）」，后面是句号、空白或结尾。 */
 const GATE_FAILED = new RegExp(`\` (?:未通过|被打断|已取消)：(?:${GATE_WHY})(?:（rc=-?\\d+）)?(?=。|\\s|$)`);
 

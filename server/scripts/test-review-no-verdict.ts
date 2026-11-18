@@ -262,7 +262,7 @@ try {
   {
     const written = await scene({ report: true });
     assert.equal(await written.note(), true);
-    assert.match(written.timeline(), /审查报告已经写完了，只是结论没能上报到 ash/, "报告在：说写完了");
+    assert.match(written.timeline(), /审查报告已经写完了，只是结论没能上报到 Navi/, "报告在：说写完了");
     assert.match(written.timeline(), /report_stage/, "仍是通道那套说法");
     assert.deepEqual(await written.cause(), { kind: "unreported", reason: "报告写完了，结论没报上来" });
 

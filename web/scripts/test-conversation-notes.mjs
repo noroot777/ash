@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   NEUTRAL_SESSION_NOTES,
   SESSION_DROP_PERSISTENCE_FAILED_NOTE,
+  SESSION_LOST_NOTE,
   SESSION_POISONED_NOTE,
   normalizeSessionNoteText,
 } from "@ash/shared/session-notes";
@@ -94,6 +95,7 @@ for (const text of [
   // 成败在引文紧后面的那两种：命令里引了「通过」也不改变真的那个。
   "验收前置命令 `printf '` 通过（rc=0）'` 未通过：命令退出码非 0（rc=1）。",
   "验收前置命令 `sleep 999` 被打断：ash 重启,这次没跑完。 命令跑了 30 分钟才退出",
+  "验收前置命令 `sleep 999` 被打断：Navi 重启,这次没跑完。 命令跑了 30 分钟才退出",
   "跑了一条命令：`npm test`（没通过）\n输出里有一行：`（没通过）",
   "这条线卡在「自定义」这一站，停下等你处理。",
   "「自定义」已经打回重做 3 次仍没过，按线上写的上限停下等你处理。",
@@ -354,6 +356,13 @@ assert.equal(
   "旧文案要就地换成当前文案，前后文原样保留",
 );
 assert.equal(normalizeSessionNoteText("跟轮换无关的一句话"), "跟轮换无关的一句话", "认不出来的文本必须原样返回");
+// 改名 Navi 之前落盘的那一版：措辞跟现在一样，只是产品名还叫 ash。
+for (const current of [SESSION_POISONED_NOTE, SESSION_LOST_NOTE]) {
+  const preRename = current.split("Navi 已").join("ash 已");
+  assert.notEqual(preRename, current, "夹具得真的是改名前的写法");
+  assert.equal(normalizeSessionNoteText(preRename), current, "改名前落盘的轮换旁注要归一成现在的文案");
+  assert.equal(noteTone(`更正上面那条：CLI 会话接不回了。${preRename}`), "neutral", "改名前落盘的轮换旁注不该变红");
+}
 
 const session = {
   id: "s1",

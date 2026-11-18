@@ -184,7 +184,7 @@ if (args.includes("app-server")) {
   const calledEvents = await drain(execCalled.events);
   await execCalled.cleanup?.();
   delete process.env.ASH_FAKE_EXEC_CALL;
-  assert.ok(!calledEvents.some((e) => e.kind === "error" && /ash/.test(e.message)), "调成过 ash 的工具 ⇒ 不出声");
+  assert.ok(!calledEvents.some((e) => e.kind === "error" && /Navi/.test(e.message)), "调成过 ash 的工具 ⇒ 不出声");
   const untracked = executor.run({ cwd: root, prompt: "probe exec chat", env: { CODEX_HOME: unconfigured } });
   const untrackedEvents = await drain(untracked.events);
   await untracked.cleanup?.();

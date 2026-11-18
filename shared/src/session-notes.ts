@@ -83,7 +83,7 @@ export const NEUTRAL_SESSION_NOTES: readonly string[] = [
 const LEGACY_SESSION_LOST_NOTE =
   "上一轮记下的 CLI 会话 id 在 CLI 那边已经不存在了（多半是第一次起跑就失败、"
   + "会话压根没建起来，也可能是 CLI 的会话记录被清过或换了机器/目录）。"
-  + "Navi 已经把这个失效的 id 清掉：再点一次运行会开一条**全新会话**，"
+  + "ash 已经把这个失效的 id 清掉：再点一次运行会开一条**全新会话**，"
   + "之前的上下文不会带过来，任务正文和历史记录都还在。";
 
 /** 带 Markdown 标记的那一版 poisoned 说明。 */
@@ -91,14 +91,19 @@ const LEGACY_SESSION_POISONED_STARRED =
   "Codex 已在本轮 stderr 中报告这条 thread 的回合关联、world-state 或 rollout 落盘异常；"
   + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话；"
   + "会话轮换不改变本回合真实的退出原因。"
-  + "Navi 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
+  + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
   + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
 
 /** 星号已经去掉、但「落盘异常」还在的那一版（`639b5775` 到本次归并之间写下的）。 */
 const LEGACY_SESSION_POISONED_PLAIN = LEGACY_SESSION_POISONED_STARRED.split("**").join("");
 
+/** 改名 Navi 之前写下的同一句：只有产品名不同。 */
+const preRename = (note: string) => note.split("Navi 已").join("ash 已");
+
 const LEGACY_REWRITES: ReadonlyArray<readonly [string, string]> = [
   [LEGACY_SESSION_LOST_NOTE, SESSION_LOST_NOTE],
+  [preRename(SESSION_LOST_NOTE), SESSION_LOST_NOTE],
+  [preRename(SESSION_POISONED_NOTE), SESSION_POISONED_NOTE],
   // 长的排在前面:短的那条是长的去掉星号,先换长的才不会把星号版切成两半。
   [LEGACY_SESSION_POISONED_STARRED, SESSION_POISONED_NOTE],
   [LEGACY_SESSION_POISONED_PLAIN, SESSION_POISONED_NOTE],

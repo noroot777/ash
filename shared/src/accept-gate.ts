@@ -88,6 +88,9 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   entry_missing: "入口不在被测的树里，没有起跑",
 };
 
+/** 改名 Navi 之前落盘的门禁摘要里写的旧标签：认老记录用，不再生成。 */
+export const ACCEPT_GATE_FAILURE_LEGACY_LABELS: readonly string[] = ["ash 重启,这次没跑完"];
+
 /**
  * 把存下来的 failure 归一到**当前**的联合里。认不出的(撤掉的 `command_missing`、将来再撤的
  * 任何一档)一律 null = 「未通过,没有具体分类」 —— 旧类别本身就是旧判据下的结论,不能靠

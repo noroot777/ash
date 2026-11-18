@@ -326,7 +326,7 @@ async function windDownTurn(taskId: string) {
   const stuck = notes.find((row) => row.action === "回合收尾卡住");
   assert.ok(stuck, "提示要落库(刷新页面后还在)");
   assert.match(stuck.reason, /收尾停在「写执行记录与会话收尾\(closeExecution \/ recordTurnSpan\)」已经约/);
-  assert.match(stuck.reason, /出路是重启 ash/);
+  assert.match(stuck.reason, /出路是重启 Navi/);
   assert.match(stuck.reason, /不提供手动放开/);
   {
     const response = await api.request(`/tasks/${taskId}/notices`);
@@ -337,7 +337,7 @@ async function windDownTurn(taskId: string) {
   assert.ok(!suspectTurns().some((suspect) => suspect.taskId === taskId), "不进可放开的名单");
   const late = turnReclaimStatus(taskId);
   assert.equal(late.kind, "blocked", "人工放开照样拒绝");
-  assert.match(late.kind === "blocked" ? late.reason : "", /收尾停在「写执行记录与会话收尾.*出路是重启 ash/,
+  assert.match(late.kind === "blocked" ? late.reason : "", /收尾停在「写执行记录与会话收尾.*出路是重启 Navi/,
     "拒绝的话里带同样的说明");
   assert.equal(turnIdentity(taskId)?.seq, turn.seq, "锁原样在原回合手上");
 

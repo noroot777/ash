@@ -78,7 +78,7 @@ try {
     const [sent] = fake.sends();
     assert.ok(sent, "卡发出去了");
     const said = textOf(contentOf(sent!));
-    assert.match(said, /新设备想连接这台 ash/);
+    assert.match(said, /新设备想连接这台 Navi/);
     assert.match(said, /iPhone · Safari/);
     assert.match(said, /192\.168\.1\.23/);
     assert.ok(said.includes(first.code), "卡上有配对码");
