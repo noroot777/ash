@@ -54,7 +54,7 @@ Navi 是一个自托管的编排控制台，用来管理本地的 AI 编程智�
 
 4. 以后的新版本从菜单「Navi → 检查更新…」安装（app 也会每 6 小时自己查一次）。
 
-装过改名前的 **Ash.app**：它没法自己更新成 Navi（换了应用标识），按上面装一次 Navi 再打开就好 —— Navi 第一次打开时会退出 Ash、接过它的设置、数据和登录项，等 Ash 的服务停下后把 `Ash.app` 移到废纸篓（原位置留一个指向 Navi 的替身）。细节和没法自动接的几样见 [desktop/macos/README.md](desktop/macos/README.md#从-ashapp-升级)。
+装过改名前的 **Ash.app**：它没法自己更新成 Navi（换了应用标识），按上面装一次 Navi 再打开就好 —— Navi 第一次打开时会退出 Ash、接过它的设置、数据和登录项（Ash 不肯退或者复制失败时先弹窗问你，不会悄悄丢掉），等 Ash 的服务和别的进程都不再用它后把 `Ash.app` 移到废纸篓（原位置留一个指向 Navi 的替身）。细节和没法自动接的几样见 [desktop/macos/README.md](desktop/macos/README.md#从-ashapp-升级)。
 
 ## 快速开始
 

@@ -20,7 +20,7 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Navi
 
 下载的 node 和装好的依赖缓存在 `build/cache/`，lockfile、各 workspace 的 package.json 或 node 版本变了才重装。
 
-版本：`CFBundleShortVersionString` 是给人看的（`build.sh` 里的 `VERSION`）；`CFBundleVersion` 严格递增：样子是 UTC `日期.时分秒`，但每次构建都要比账本里上一个号大，不比它大（同一秒、从旧提交重打、时钟回拨）就在它上面加一，并发构建按锁排队（`scripts/build-number.mjs`）。账本是仓库 git 公共目录下的 `navi-mac-build-number`，各个 worktree 共用（改名前叫 `ash-mac-build-number`，新账本还没有时从它抄过来接着发号）。
+版本：`CFBundleShortVersionString` 是给人看的（`build.sh` 里的 `VERSION`）；`CFBundleVersion` 严格递增：样子是 UTC `日期.时分秒`，但每次构建都要比账本里上一个号大，不比它大（同一秒、从旧提交重打、时钟回拨）就在它上面加一，并发构建按锁排队（`scripts/build-number.mjs`）。账本是仓库 git 公共目录下的 `navi-mac-build-number`，各个 worktree 共用（改名前叫 `ash-mac-build-number`：发号时在锁里把它当底读一下，只读不写，号从它往上接着发）。
 
 ## 服务怎么起
 
@@ -137,17 +137,17 @@ open /tmp/r/Navi.app                                                         # �
 
 1. 旧版的「检查更新…」会提示有新版（改名前那份 appcast 里是一条「仅通知」的条目），点「了解更多」打开下载页；或者直接从仓库首页下载 dmg。
 2. 把 dmg 里的 `Navi.app` 拖进「应用程序」，打开一次（第一次被系统拦下的处理同首页）。
-3. 不用先退出 Ash，也不用停服务：Navi 第一次打开时自己做下面这些（`Sources/LegacyIdentity.swift`）。
+3. 不用先退出 Ash，也不用停服务：Navi 第一次打开时自己做下面这些（`Sources/LegacyIdentity.swift`）。Ash 要是不肯退（正弹着「等任务跑完再装更新」之类的对话框），Navi 不开窗口、先弹窗说明，让你选「重试」「不接了，直接打开」或「退出」。
 
 | 旧的 | 新的 | 怎么接 | 接不了的后果 |
 |---|---|---|---|
 | defaults 域 `dev.ash.mac` | `dev.navi.mac` | 每一项抄过来（新域已有的不盖）；`AshURL` / `AshDataDir` / 窗口位置 `NSWindow Frame AshMainWindow` 换成 `NaviURL` / `NaviDataDir` / `…NaviMainWindow`；只抄一次 | — |
 | 数据根 `~/Library/Application Support/dev.ash.mac/` | 原地继续用 | 新的那块地还不存在、旧的在，就一直用旧的（记在 defaults 里，之后哪个组件建出了新目录也不会换成空数据根）。不搬：数据根的路径决定窗口专用端口，端口一变页面的源就变，页面存在本机的设置全丢 | 目录名里还是 `dev.ash.mac`。要挪得自己动手：退出 Navi、停服务、`mv` 目录、`defaults write dev.navi.mac NaviDataDir <新目录>`，代价是窗口里页面本地的设置（主题、草稿、布局）回到默认 |
-| WebKit 网站数据 `~/Library/WebKit/dev.ash.mac`、cookie `~/Library/HTTPStorages/dev.ash.mac{,.binarycookies}` | `…/dev.navi.mac` | 第一个窗口建出来之前整份复制（复制不挪，旧的留着）；新的已经有了就不动 | 复制失败时这一次页面按全新的样子开（主题、草稿回到默认），下次启动再试 |
-| 登录项 `~/Library/LaunchAgents/dev.ash.server.plist`（跑 `Ash.app/…/Ash --start-server`） | `dev.navi.server.plist`（跑 `Navi.app/…/Navi --start-server`） | 旧的卸掉；原来开着就开上新的，原来关着的保持关着 | — |
-| 正在跑的旧窗口 | — | 请它退出（最多等 8 秒） | 没退的（比如它正弹着对话框）：旧包先不动，隔 15 秒再试 |
+| WebKit 网站数据 `~/Library/WebKit/dev.ash.mac`、cookie `~/Library/HTTPStorages/dev.ash.mac{,.binarycookies}` | `…/dev.navi.mac` | 等旧窗口退了，在第一个窗口建出来之前整份复制（复制不挪，旧的留着）；每一项先拷到旁边再一次放上去，放上去的一定是完整的一份。**没接完之前不开窗口**：窗口一开，WebKit 就在新身份下建出自己那份，之后再也分不清、接不回来 | 旧窗口不肯退、复制失败（比如盘满了）时弹窗说清原因：腾出地方或退掉 Ash 后点「重试」；点「不接了，直接打开」就按全新的样子开（登录、主题、草稿回到默认），之后不再接 |
+| 登录项 `~/Library/LaunchAgents/dev.ash.server.plist`（跑 `Ash.app/…/Ash --start-server`） | `dev.navi.server.plist`（跑 `Navi.app/…/Navi --start-server`） | 原来开着就先装好新的、确认生效，再卸旧的；原来关着的保持关着 | 新的装不上时旧的原样留着（登录时照样起服务，旧包让位后它指的路径就是指向 Navi 的软链），下次打开 Navi 再换 |
+| 正在跑的旧窗口 | — | 请它退出（最多等 8 秒） | 没退的（比如它正弹着对话框）：网页数据先不接（见上），旧包先不动，隔 15 秒再试 |
 | 旧版起的服务（在 :4317、同一个数据根上） | Navi 自带的服务 | 认成「旧版 app 起的服务」，走装更新那道闸换掉（会打断任务就先问你，见「装之前那道闸」），换之前备份库 | — |
-| `/Applications/Ash.app`（或 `~/Applications/`、别处 LaunchServices 认得的） | 废纸篓里；原位置是一个指向 `Navi.app` 的软链 | 等旧服务、旧版拉起的 MCP 都不在用它的代码了（对包里的代码锁拿排他锁，同 `install-app.sh`）才挪；还有人在用就隔 15 秒再试 | 软链留着是为了让 CLI 的 MCP 登记、脚本里写死的 `Ash.app/Contents/Resources/app/…` 路径照样走得通（MCP 登记按真实路径比，指着软链的登记算「指向这个 app」）；确认没东西再指着它可以删 |
+| `/Applications/Ash.app`（或 `~/Applications/`、别处 LaunchServices 认得的） | 废纸篓里；原位置是一个指向 `Navi.app` 的软链 | 等旧服务、旧版拉起的 MCP 和别的进程都不在用它的代码了才挪，判据与 `install-app.sh` 同一份（包里的代码锁拿排他锁一直拿到挪完，再用随 app 带着的 `bundle-users.sh` 按真实文件身份扫一遍；挪进废纸篓后再扫一遍）；还有人在用就挪回原处、隔 15 秒再试。原位置放软链失败也挪回原处，下次打开 Navi 再来 | 软链留着是为了让 CLI 的 MCP 登记、脚本里写死的 `Ash.app/Contents/Resources/app/…` 路径照样走得通（MCP 登记按真实路径比，指着软链的登记算「指向这个 app」）；确认没东西再指着它可以删 |
 
 系统层面绕不过去的：
 

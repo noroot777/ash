@@ -32,11 +32,9 @@ else
 fi
 [[ -n "${ASH_MAC_BUILD_NUMBER_FILE:-}" ]] && BOOK="$ASH_MAC_BUILD_NUMBER_FILE" LEGACY_BOOK=""
 mkdir -p "$(dirname "$BOOK")"
-# 改名前的账本（ash-mac-build-number）接着用：号只能往上走，换一本空账本就丢了「上一个号」这条底。
-[[ -e "$BOOK" || -z "$LEGACY_BOOK" || ! -e "$LEGACY_BOOK" ]] || cp "$LEGACY_BOOK" "$BOOK"
 touch "$BOOK"
-# ASH_MAC_BUILD_NUMBER 指定时不碰账本（演练造一新一旧两版用）。
-BUILD_NUMBER="${ASH_MAC_BUILD_NUMBER:-$(lockf -k "$BOOK" node "$HERE/scripts/build-number.mjs" "$BOOK")}"
+# ASH_MAC_BUILD_NUMBER 指定时不碰账本（演练造一新一旧两版用）。改名前的账本（ash-mac-build-number）在锁里当底读，见 build-number.mjs。
+BUILD_NUMBER="${ASH_MAC_BUILD_NUMBER:-$(lockf -k "$BOOK" node "$HERE/scripts/build-number.mjs" "$BOOK" ${LEGACY_BOOK:+"$LEGACY_BOOK"})}"
 # 包标识改名前是 dev.ash.mac：已装的旧版怎么接到这一版，见 Sources/LegacyIdentity.swift 和 README「从 Ash.app 升级」。
 BUNDLE_ID="${ASH_MAC_BUNDLE_ID:-dev.navi.mac}"
 
@@ -78,6 +76,8 @@ if [[ ! -f "$ICNS" || "$HERE/scripts/make-icon.swift" -nt "$ICNS" || "$ICON_SVG"
   iconutil -c icns "$BUILD/AppIcon.iconset" -o "$ICNS"
 fi
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
+# 改名前的 Ash.app 让位时判「还有没有人在用」，用的是安装器同一份判据（LegacyIdentity.retire）。
+cp "$HERE/scripts/bundle-users.sh" "$APP/Contents/Resources/bundle-users.sh"
 
 # 自带的那份 Navi：node、产物、生产依赖 → Contents/Resources/app。
 node "$HERE/scripts/bundle-runtime.mjs" "$APP/Contents/Resources"

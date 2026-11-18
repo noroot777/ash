@@ -15,7 +15,12 @@ export interface KeyValueStore {
   removeItem(key: string): Promise<void>;
 }
 
-/** 读一个键；新键没有时从旧键里取，取到就挪到新键（新键已经有了，旧的直接作废）。 */
+/**
+ * 读一个键；新键没有时从旧键里取，取到就挪到新键（新键已经有了，旧的直接作废）。
+ *
+ * 挪和删只是顺手的兼容清理，失败了不能拖住启动：读到的值照样返回，写不进新键时旧键留着（它就是「下次
+ * 再挪」的记号），删不掉的旧键下次再删。只有读本身出错才往外抛。
+ */
 export async function readStoredKey(
   store: KeyValueStore,
   { current, legacy }: { current: string; legacy: readonly string[] },
@@ -24,11 +29,15 @@ export async function readStoredKey(
   for (const key of legacy) {
     const old = await store.getItem(key);
     if (old === null) continue;
-    if (value === null) {
-      await store.setItem(current, old);
-      value = old;
+    try {
+      if (value === null) {
+        value = old;
+        await store.setItem(current, old);
+      }
+      await store.removeItem(key);
+    } catch (error) {
+      console.warn(`[navi] ${key} → ${current} 这次没挪成，下次启动再挪`, error);
     }
-    await store.removeItem(key);
   }
   return value;
 }

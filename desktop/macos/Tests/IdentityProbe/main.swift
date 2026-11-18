@@ -28,7 +28,7 @@ final class Probe: NSObject, WKNavigationDelegate {
   override init() {
     if probeMode == "read", let legacy = info["LegacyID"] as? String, let own = Bundle.main.bundleIdentifier {
       let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-      let copied = LegacyIdentity.adoptWebData(library: library, from: legacy, to: own, defaults: .standard)
+      let copied = (try? LegacyIdentity.adoptWebData(library: library, from: legacy, to: own, defaults: .standard)) ?? []
       emit("COPIED \(copied.count)")
     }
     let config = WKWebViewConfiguration()

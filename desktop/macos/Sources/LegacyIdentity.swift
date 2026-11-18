@@ -7,16 +7,17 @@ import os
 ///  · 设置：旧 defaults 域里的每一项抄进新域（新域已有的不盖），改了名的几个键换成新名；
 ///  · 数据根：不搬。新的那块地还不存在、旧的在，就一直用旧的那块（`supportDirectory`）—— 服务、锁、窗口专用
 ///    端口（按数据根路径算）都还是原来那一份，页面的源不变，页面存在本机的设置也就跟着留下；
-///  · 网页数据：WebKit 的网站数据按包标识存，新的还没有时整份复制过来（复制，不挪：旧的留着能退回去）；
-///  · 登录项：旧的那条 LaunchAgent（dev.ash.server，指着 Ash.app 里的可执行文件）卸掉，开着的就换成自己的；
-///  · 旧 app：退出它的窗口；等没有进程在用它的代码了（服务、MCP 都拿着包里的代码锁，见 install-app.sh），
+///  · 网页数据：WebKit 的网站数据按包标识存。先请旧 app 退出，再整份复制过来（复制，不挪：旧的留着能退回去）；
+///    接完之前不建窗口 —— 旧 app 不肯退、复制失败时由 AppDelegate 问用户重试、不接了还是退出；
+///  · 登录项：旧的那条 LaunchAgent（dev.ash.server，指着 Ash.app 里的可执行文件）开着就先装好自己的，再卸旧的；
+///  · 旧 app：等它的窗口退了、也没有进程在用它的代码了（与 install-app.sh 同一份判据 bundle-users.sh），
 ///    把它移到废纸篓、原地留一个指向 Navi.app 的软链 —— CLI 的 MCP 登记、脚本里写死的 Ash.app 路径照样走得通，
 ///    也不会再有第二个 app 在同一个端口、同一份数据上起服务。旧服务由 UpdateGate 的 staleServer 那一档换掉，
-///    换掉之前代码锁还被它拿着，这里隔一会儿再试。
+///    换掉之前它还在用旧包，这里在后台隔一会儿再试。
 ///
 /// 只有正式那份（dev.navi.mac）认旧身份；演练用的 app（别的 bundle id）和测试驱动（不是 bundle）都不碰日常
-/// 那一份。会动别的 app 的几步（退出旧 app、换登录项、移走旧包）只在装进「应用程序」的那份上做：从构建目录
-/// 里直接打开的那份随时会被删，不能让旧包的软链、登录项指到它身上。
+/// 那一份。换登录项、移走旧包只在装进「应用程序」的那份上做：从构建目录里直接打开的那份随时会被删，不能让
+/// 旧包的软链、登录项指到它身上。接网页数据两边都做，所以两边都要先请旧 app 退出。
 ///
 /// 下面这些旧名是兼容值：批量改名时别把它们也换成 navi。
 enum LegacyIdentity {
@@ -80,76 +81,127 @@ enum LegacyIdentity {
 
   // MARK: 网页数据
 
-  /// WebKit 的网站数据、cookie 按包标识存（`library` 是 ~/Library）。新的那份还没有时把旧的复制过来，
-  /// 只做一次。必须在第一个 WKWebView 建出来之前调 —— 建出来它就有自己那份了。返回复制了的路径。
-  @discardableResult
-  static func adoptWebData(library: URL, from legacy: String, to current: String, defaults: UserDefaults) -> [String] {
-    guard !defaults.bool(forKey: adoptedWebDataKey) else { return [] }
-    let fm = FileManager.default
-    var copied: [String] = []
-    let pairs = [
+  /// 网页数据接完了，或者用户说了不接。**没走到这一步之前不能建 WKWebView**：它一建出来就在新身份下建好
+  /// 自己那份目录，「目标在不在」从此分不清是接过来的还是它建的，旧的登录和草稿就再也接不回来了。
+  static func webDataSettled(_ defaults: UserDefaults = .standard) -> Bool { defaults.bool(forKey: adoptedWebDataKey) }
+
+  /// 用户选了「不接了」（或者压根没有可接的）：之后照新的样子开。
+  static func settleWebData(_ defaults: UserDefaults = .standard) { defaults.set(true, forKey: adoptedWebDataKey) }
+
+  private static func webDataPairs(library: URL, from legacy: String, to current: String) -> [(URL, URL)] {
+    [
       ("WebKit/\(legacy)", "WebKit/\(current)"),
       ("HTTPStorages/\(legacy)", "HTTPStorages/\(current)"),
       ("HTTPStorages/\(legacy).binarycookies", "HTTPStorages/\(current).binarycookies"),
-    ]
-    for (from, to) in pairs {
-      let source = library.appendingPathComponent(from)
-      let target = library.appendingPathComponent(to)
+    ].map { (library.appendingPathComponent($0.0), library.appendingPathComponent($0.1)) }
+  }
+
+  struct AdoptionError: LocalizedError {
+    let errorDescription: String?
+  }
+
+  /// WebKit 的网站数据、cookie 按包标识存（`library` 是 ~/Library）。把旧的复制过来（复制，不挪：旧的留着能退回去）。
+  /// 每一项先整份拷到旁边的暂存位置、拷完一次改名放上去，所以放上去的一定是完整的一份；目标已经在就是上一次放上去的
+  /// （没接完之前不建 WKWebView，没有别人会建它），跳过。三项都放上去才记「已接」。失败抛错：暂存的半截删掉、
+  /// 不记已接，下次再来。返回这一次复制了的路径。
+  @discardableResult
+  static func adoptWebData(library: URL, from legacy: String, to current: String, defaults: UserDefaults) throws -> [String] {
+    guard !webDataSettled(defaults) else { return [] }
+    let fm = FileManager.default
+    var copied: [String] = []
+    for (source, target) in webDataPairs(library: library, from: legacy, to: current) {
       guard fm.fileExists(atPath: source.path), !fm.fileExists(atPath: target.path) else { continue }
+      let staging = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).adopting")
+      try? fm.removeItem(at: staging) // 上一次拷到一半进程没了留下的
       do {
         try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try fm.copyItem(at: source, to: target)
-        copied.append(target.path)
+        try fm.copyItem(at: source, to: staging)
+        try fm.moveItem(at: staging, to: target)
       } catch {
-        // 复制到一半：删掉半截，下次启动再来（标记不落）。页面这次按全新的样子开，不影响别的。
-        try? fm.removeItem(at: target)
-        logger.error("复制 \(source.path, privacy: .public) 没成：\(error.localizedDescription, privacy: .public)")
-        return copied
+        try? fm.removeItem(at: staging)
+        throw AdoptionError(errorDescription: "复制 \(source.path) 没成：\(error.localizedDescription)")
       }
+      copied.append(target.path)
     }
-    defaults.set(true, forKey: adoptedWebDataKey)
+    settleWebData(defaults)
     return copied
+  }
+
+  /// 建窗口之前把网页数据接过来。返回 nil = 可以建窗口了；否则是还不能建的原因。没有可接的直接记已接。
+  /// 旧 app 还开着就不复制：它的 WebKit 还在往那几个库里写，拷下来的不是一份一致的快照，而且只接一次。
+  static func prepareWebData(library: URL, from legacy: String, to current: String, defaults: UserDefaults,
+                             quitLegacy: () -> Bool) -> String? {
+    guard !webDataSettled(defaults) else { return nil }
+    let fm = FileManager.default
+    guard webDataPairs(library: library, from: legacy, to: current).contains(where: { fm.fileExists(atPath: $0.0.path) }) else {
+      settleWebData(defaults)
+      return nil
+    }
+    guard quitLegacy() else {
+      return "Ash 还开着（可能在等你确认装更新，或者在等手上的任务停下来）。先把 Ash 退出，再点「重试」。"
+    }
+    do {
+      let copied = try adoptWebData(library: library, from: legacy, to: current, defaults: defaults)
+      if !copied.isEmpty { logger.notice("接过网页数据：\(copied.joined(separator: ", "), privacy: .public)") }
+      return nil
+    } catch {
+      logger.error("\(error.localizedDescription, privacy: .public)")
+      return error.localizedDescription
+    }
   }
 
   // MARK: 启动时接班（窗口建出来之前调）
 
-  /// 正式那份每次启动都调；接过的不再接，旧 app 还在用就排一个隔一会儿再试。
-  static func adoptAtLaunch() {
-    guard isSuccessor else { return }
-    let installed = LoginService.isInstalledLocation
-    if installed { quitLegacyApps(timeout: 8) }
+  /// 正式那份每次启动、建窗口之前都调。返回 nil 就可以建窗口了；否则是网页数据还接不过来的原因，由调用方问用户
+  /// 重试、不接了（`settleWebData`）还是退出。接过的不再接；旧 app 还在用就在后台隔一会儿再试。
+  static func adoptAtLaunch() -> String? {
+    guard isSuccessor else { return nil }
     let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-    let copied = adoptWebData(library: library, from: bundleID, to: successor, defaults: .standard)
-    if !copied.isEmpty { logger.notice("接过网页数据：\(copied.joined(separator: ", "), privacy: .public)") }
-    guard installed else { return }
+    if let blocked = prepareWebData(library: library, from: bundleID, to: successor, defaults: .standard,
+                                    quitLegacy: { quitLegacyApps(timeout: 8) }) {
+      return blocked
+    }
+    guard LoginService.isInstalledLocation else { return nil }
+    _ = quitLegacyApps(timeout: 8) // 让位时窗口进程得已经退了；退不了就等下一轮重试
     adoptLoginItem()
     retireWhenIdle()
+    return nil
   }
 
-  /// 退出旧 app 的窗口，等它退干净（最多 timeout 秒）；服务不跟着退，那由 UpdateGate 换。
-  private static func quitLegacyApps(timeout: TimeInterval) {
+  /// 请旧 app 的窗口退出，等它退干净（最多 timeout 秒）。返回是不是都退了：它可能在等用户确认装更新、等任务停下，
+  /// 或者用户点了取消。服务不跟着退，那由 UpdateGate 换。
+  private static func quitLegacyApps(timeout: TimeInterval) -> Bool {
     let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-    guard !running.isEmpty else { return }
+    guard !running.isEmpty else { return true }
     running.forEach { $0.terminate() }
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline && running.contains(where: { !$0.isTerminated }) {
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
+    return running.allSatisfy { $0.isTerminated }
   }
 
-  /// 旧登录项卸掉；它原来开着就把自己的开上（用户关掉过的，抄过来的 LoginServiceConfigured 让它保持关着）。
+  /// 旧登录项还在（= 用户开着）就换成自己的：**先把自己的装好、确认生效，再卸旧的**。反过来的话，新的那条装不上时
+  /// 旧的已经没了，而抄过来的 LoginServiceConfigured 让之后的启动以为是用户关掉的，再也不会补上。装不上就两条都
+  /// 原样留着（旧的那条照样在登录时起服务；旧包让位之后它指的路径是指向 Navi 的软链），旧的 plist 在就是「还没换」，
+  /// 下次启动再换。
   private static func adoptLoginItem() {
     let plist = FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/LaunchAgents/\(loginLabel).plist")
     guard FileManager.default.fileExists(atPath: plist.path) else { return }
+    do {
+      try LoginService.setEnabled(true)
+    } catch {
+      logger.error("换登录项没成，\(loginLabel, privacy: .public) 先留着、下次启动再换：\(error.localizedDescription, privacy: .public)")
+      return
+    }
     LoginService.bootout(label: loginLabel)
     do {
       try FileManager.default.removeItem(at: plist)
-      try LoginService.setEnabled(true)
-      logger.notice("登录项从 \(loginLabel, privacy: .public) 换成了 \(LoginService.label, privacy: .public)")
     } catch {
-      logger.error("换登录项没成：\(error.localizedDescription, privacy: .public)")
+      logger.error("删不掉 \(plist.path, privacy: .public)，下次启动再删：\(error.localizedDescription, privacy: .public)")
     }
+    logger.notice("登录项从 \(loginLabel, privacy: .public) 换成了 \(LoginService.label, privacy: .public)")
   }
 
   // MARK: 旧 app 让位
@@ -162,18 +214,16 @@ enum LegacyIdentity {
     case failed(String)
   }
 
-  private static var retryTimer: Timer?
+  /// 判「有没有人在用」要扫整张进程表（lsof），得花一两秒：放在后台，别卡住启动和窗口。
+  private static let retireQueue = DispatchQueue(label: "dev.navi.mac.retire-legacy", qos: .utility)
 
   private static func retireWhenIdle() {
-    let results = legacyBundles().map { retire($0, successor: Bundle.main.bundleURL) }
-    for result in results { logger.notice("旧 app：\(String(describing: result), privacy: .public)") }
-    guard results.contains(where: { if case .busy = $0 { return true } else { return false } }) else {
-      retryTimer?.invalidate()
-      retryTimer = nil
-      return
+    retireQueue.async {
+      let results = legacyBundles().map { retire($0, successor: Bundle.main.bundleURL) }
+      for result in results { logger.notice("旧 app：\(String(describing: result), privacy: .public)") }
+      guard results.contains(where: { if case .busy = $0 { return true } else { return false } }) else { return }
+      retireQueue.asyncAfter(deadline: .now() + 15) { retireWhenIdle() }
     }
-    guard retryTimer == nil else { return }
-    retryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in retireWhenIdle() }
   }
 
   /// 机器上装着的旧 app：LaunchServices 认得的、加上两个「应用程序」目录里那个名字的，只认包标识对得上、
@@ -195,14 +245,25 @@ enum LegacyIdentity {
     return Bundle(url: url)?.bundleIdentifier == bundleID
   }
 
-  /// 没人在用就移到废纸篓、原地放一个指向 `successor` 的软链。判「有没有人在用」与 install-app.sh 同一套：
-  /// 对包里的代码锁拿排他锁，拿到了就一直拿到挪完（这期间想起来的进程在锁上等，等到时包已经不在原处）；
-  /// 没有代码锁的更早版本只能按命令行扫一遍。窗口进程不拿锁，单独认。
-  static func retire(_ bundle: URL, successor: URL) -> Retirement {
+  /// 没人在用就移到废纸篓、原地放一个指向 `successor` 的软链。判「有没有人在用」与 install-app.sh 是同一套，用的
+  /// 就是同一份 bundle-users.sh（随 app 带在 Resources 里）：
+  ///  · 有代码锁就对它拿排他锁，拿到了一直拿到挪完（这期间想起来的进程在锁上等，等到时包已经不在原处）；
+  ///  · 代码锁只管得到参加它的入口：别的进程直接跑包里的可执行文件、工作目录在包里、命令行经软链或相对路径提到它，
+  ///    都按真实文件身份再扫一遍；
+  ///  · 挪进废纸篓之后按打开着的文件再扫一遍，有人就挪回原处；原地放软链失败也挪回原处，免得写死旧路径的命令落空。
+  /// 窗口进程不拿锁，单独认。扫不了就当有人在用。
+  static func retire(
+    _ bundle: URL, successor: URL,
+    usersScript: URL? = Bundle.main.url(forResource: "bundle-users", withExtension: "sh"),
+    placeLink: (URL, URL) throws -> Void = { try FileManager.default.createSymbolicLink(at: $0, withDestinationURL: $1) }
+  ) -> Retirement {
     let fm = FileManager.default
     if let gui = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
       .first(where: { $0.bundleURL?.standardizedFileURL == bundle.standardizedFileURL && !$0.isTerminated }) {
       return .busy("旧 app 的窗口进程 \(gui.processIdentifier) 还没退")
+    }
+    guard let usersScript, fm.fileExists(atPath: usersScript.path) else {
+      return .failed("app 里没有 bundle-users.sh，判断不了旧 app 还有没有人在用")
     }
     let lock = bundle.appendingPathComponent("Contents/Resources/app/.in-use")
     var descriptor: Int32 = -1
@@ -213,34 +274,52 @@ enum LegacyIdentity {
         close(descriptor)
         return .busy("有进程拿着 \(lock.path)（旧版的服务或 MCP 还在跑）")
       }
-    } else if let user = processRunning(inside: bundle) {
-      return .busy("进程还在用旧 app 的代码：\(user)")
     }
     defer { if descriptor >= 0 { close(descriptor) } }
+    if let users = bundleUsers(bundle, script: usersScript) { return .busy("还有进程在用旧 app：\(users)") }
+    var trashedURL: NSURL?
     do {
-      var trashed: NSURL?
-      try fm.trashItem(at: bundle, resultingItemURL: &trashed)
-      try fm.createSymbolicLink(at: bundle, withDestinationURL: successor)
-      return .retired(trashedAt: trashed?.path ?? "")
+      try fm.trashItem(at: bundle, resultingItemURL: &trashedURL)
     } catch {
-      return .failed(error.localizedDescription)
+      return .failed("移不进废纸篓：\(error.localizedDescription)")
+    }
+    guard let trashed = trashedURL as URL? else { return .failed("移进废纸篓之后找不到它了") }
+    if let users = bundleUsers(trashed, script: usersScript) {
+      return putBack(trashed, to: bundle) ?? .busy("还有进程在用旧 app：\(users)")
+    }
+    do {
+      try placeLink(bundle, successor)
+    } catch {
+      return putBack(trashed, to: bundle) ?? .failed("原地放不了指向 Navi 的软链，旧 app 已放回原处：\(error.localizedDescription)")
+    }
+    return .retired(trashedAt: trashed.path)
+  }
+
+  /// 挪回原处。返回 nil = 放回去了；放不回去时说清它在哪。
+  private static func putBack(_ trashed: URL, to bundle: URL) -> Retirement? {
+    do {
+      try FileManager.default.moveItem(at: trashed, to: bundle)
+      return nil
+    } catch {
+      return .failed("旧 app 在废纸篓里（\(trashed.path)），放不回 \(bundle.path)：\(error.localizedDescription)")
     }
   }
 
-  /// 命令行里带着这个包路径的进程（没有代码锁的旧版只能这么认）。
-  private static func processRunning(inside bundle: URL) -> String? {
+  /// bundle-users.sh 认出来的、还在用这个包的进程（每行「pid 命令行」）；没人用是 nil，扫不了也算有人。
+  private static func bundleUsers(_ bundle: URL, script: URL) -> String? {
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/ps")
-    process.arguments = ["-axww", "-o", "pid=,command="]
+    process.executableURL = URL(fileURLWithPath: "/bin/bash")
+    process.arguments = [script.path, bundle.path]
+    // 自己拿着代码锁的排他锁，lsof 会把自己也列出来：跟安装器一样告诉它这一个不算。
+    process.environment = ProcessInfo.processInfo.environment.merging(["ASH_LOCK_HOLDER": String(getpid())]) { $1 }
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = FileHandle.nullDevice
     guard (try? process.run()) != nil else { return "（查不了进程表）" }
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
-    let needle = bundle.standardizedFileURL.path + "/"
-    return String(decoding: data, as: UTF8.self).split(separator: "\n")
-      .first { $0.contains(needle) }
-      .map { $0.trimmingCharacters(in: .whitespaces) }
+    guard process.terminationStatus == 0 else { return "（查进程表出错：\(process.terminationStatus)）" }
+    let users = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    return users.isEmpty ? nil : users.replacingOccurrences(of: "\n", with: "；")
   }
 }
