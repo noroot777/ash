@@ -12,7 +12,7 @@ import { AcceptConfirm } from "./AcceptConfirm.tsx";
 import { AcceptReject, type ReturnOutcome } from "./AcceptReject.tsx";
 import { acceptMessage, gateNotice } from "./acceptMessages.ts";
 import { BaselineCheck } from "./BaselineCheck.tsx";
-import { CheckAction, CheckRow } from "./CheckRow.tsx";
+import { CheckAction, CheckRow, RetryAction } from "./CheckRow.tsx";
 import { confirmView, type ConfirmGate } from "./confirmPlan.ts";
 import { DependencyChecks, dependencyBlocked, selectionBlockOf } from "./DependencyChecks.tsx";
 import { FailureCheck } from "./FailureCheck.tsx";
@@ -25,6 +25,7 @@ import { acceptTargetOf, sameBranch } from "./acceptTarget.ts";
 import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
 import { useReviewFacts, type FactRow } from "./useReviewFacts.ts";
 import { AutoCommitCheck, WorkspaceCheck } from "./WorkspaceCheck.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /** 宿主自己知道、这里不知道的那一道关（团队：共享执行者还没跑完）。 */
 export type HostBlock = { text: string; detail?: string };
@@ -86,7 +87,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const verification = useAcceptanceVerification(task, confirming);
   // 动作成功之后这个任务的事实要整份追平（taskFacts.ts）：追平之前不许确认，读失败那一行给重试。
   const taskFacts = useTaskFacts(task.id, task.updatedAt);
-  const retryTaskFacts = () => void refreshTaskFacts(task, onTaskUpdated);
+  const retryTaskFacts = () => refreshTaskFacts(task, onTaskUpdated);
   useEffect(() => { setChecked([]); setFailure(null); setLayer(null); }, [task.id]);
   // 版本一推，前置命令那份状态（基准对照的目标分支跟着合入目标走）也重读一次。
   useEffect(() => { if (taskFacts.version) void gate.reload(); }, [taskFacts.version]);
@@ -119,7 +120,9 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     || (worktreeChecks && dependencyBlocked(plan.view, plan.error))
     || !!selectionBlock
     || (!settled && gate.occupied);
-  const loading = busy || checkingDependencies || gateLoading || facts.loading || taskFacts.pending;
+  // 读前提（依赖、门禁、事实）和这一按自己在跑是两回事：前者画「找北」，后者是键上的转圈。
+  const reading = checkingDependencies || gateLoading || facts.loading || taskFacts.pending;
+  const loading = busy || reading;
   const acceptDisabled = blocked || loading || gateUnread;
   useEffect(() => { if (blocked && confirming) setLayer(null); }, [blocked, confirming]);
 
@@ -267,7 +270,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
             </button>
             <button ref={acceptRef} type="button" className="acc-btn is-primary" aria-expanded={confirming} disabled={acceptDisabled}
               aria-busy={loading || undefined} onClick={() => (confirming ? setLayer(null) : openConfirm())}>
-              {loading ? <i className="acc-spin" aria-hidden="true" /> : <Check size={13} weight="bold" aria-hidden="true" />}{mainLabel}
+              {busy ? <i className="acc-spin" aria-hidden="true" /> : reading ? <NaviLoader size={14} className="navi-inverse" /> : <Check size={13} weight="bold" aria-hidden="true" />}{mainLabel}
             </button>
           </>}
           {trailing}
@@ -277,7 +280,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         {factBlocks.map((row) => (
           <CheckRow key={row.key} check={row.key} tone={row.tone} text={row.text}
             detail={row.key === "host" && block?.detail ? <p className="acc-detail-text">{block.detail}</p> : undefined}
-            tools={row.retry ? <CheckAction onClick={row.retry}>重试</CheckAction> : undefined} />
+            tools={row.retry ? <RetryAction onRetry={row.retry} /> : undefined} />
         ))}
         {failure?.taskId === task.id && (!settled || !!failure.completedMerge || !!failure.completedTag)
           && failure.reason !== issue?.reason && <FailureCheck failure={failure} gateReadable={!!gate.state && !gate.error} />}
@@ -312,6 +315,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           source={plan.view?.task.sourceBranch ?? "任务分支"}
           family={family.map((row) => row.title)}
           waiting={acceptDisabled}
+          submitting={busy}
           canSetGate={!midGate && canManage === true && !!gate.state && !gate.state.command}
           onRun={setRunChoice}
           onCommit={setCommitChoice}

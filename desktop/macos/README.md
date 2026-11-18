@@ -197,6 +197,6 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `Sources/OfflineView.swift` | 页面载不进来时的那一屏 |
 | `Sources/FirstRunView.swift` | 首启那一屏：全新开始 / 导入已有数据 |
 | `Sources/AshPalette.swift` | 原生几屏的颜色，取自 web 的浅 / 深两套令牌 |
-| `scripts/make-icon.swift` | 构建时现画图标 |
+| `scripts/make-icon.swift` | 构建时把 `docs/logo/icon.svg` 栅格成图标 |
 
 卸载：菜单里先取消「登录时启动 ash 服务」，停掉服务，再删 /Applications/Ash.app；数据在 `~/Library/Application Support/dev.ash.mac/`。页面检查器：Safari →「开发」→ 本机 → ash。

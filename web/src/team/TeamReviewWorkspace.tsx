@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task, TaskListItem } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
-import { CaretDown, SpinnerGap } from "@phosphor-icons/react";
+import { CaretDown } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { commitListFailure } from "../lib/branch-diff-reason.ts";
@@ -16,6 +16,7 @@ import { AcceptRoute, type RouteData } from "../acceptance/AcceptRoute.tsx";
 import { ChangesLeadNote, ChangesNote } from "../acceptance/ChangesNotice.tsx";
 import { useTaskFacts } from "../acceptance/taskFacts.ts";
 import { useVersionedRead } from "../acceptance/useVersionedRead.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 
 type ReviewData = {
@@ -57,7 +58,7 @@ function ChangesBody({ changes }: { changes: ReturnType<typeof useReviewChanges>
       <ChangesNote stale={!!changes.previous} error={changes.error} retry={changes.retry} />
       {shown
         ? <div className={changes.current ? undefined : "acc-stale"} aria-busy={!changes.current || undefined}><ReviewDiffViewer result={shown.diff} /></div>
-        : !changes.error && <p className="team-review-loading"><SpinnerGap size={13} className="is-spinning" />正在读取分支与提交…</p>}
+        : !changes.error && <p className="team-review-loading"><NaviLoader />正在读取分支与提交…</p>}
     </>
   );
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned, notify }: {
   taskId: string;
@@ -33,7 +34,8 @@ export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned, notif
   };
   return <>
     <button type="button" className="acc-btn is-sm" disabled={disabled || busy} aria-busy={busy || undefined} onClick={() => void open()}>
-      {busy && !proposal && <i className="acc-spin" aria-hidden="true" />}处理
+      {/* 按下先读恢复方案（找北）；确认层里的那一按另有它自己的反馈。 */}
+      {busy && !proposal && <NaviLoader size={14} />}处理
     </button>
     {proposal && <ConfirmDialog title={proposal.resolution === "blocked" ? "暂时无法读取恢复差异" : proposal.resolution === "manual" ? "核对基点并手动解除挂起？" : proposal.resolution === "complete" ? "完成已生效的基线更新？" : "放弃本次基线更新？"}
       confirmLabel={proposal.resolution === "blocked" ? "暂时无法处理" : proposal.resolution === "manual" ? "保留代码并解除挂起" : proposal.resolution === "complete" ? "确认完成基线更新" : "确认放弃基线更新"}

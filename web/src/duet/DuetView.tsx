@@ -42,6 +42,7 @@ import { turnImageMarkdown } from "../task-detail/turnImages.ts";
 import { conversationInputAnchor, conversationInputs } from "../task-detail/conversationInputs.ts";
 import { formatDuration, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import { DuetGateControls, DuetProgressBar } from "./DuetControls.tsx";
 import { DuetHandoffBar, DuetHandoffModal } from "./DuetHandoff.tsx";
 import { buildDuetHandoffBody, duetHandoffTaskInput, latestDuetGate, type HandoffChoice } from "./duetHandoff.ts";
@@ -375,7 +376,7 @@ export function DuetView({
       <ImagePreviewGroup isolated>
         <div className="conversation-scroll-region">
           <div className="duet-stream" ref={scrollRef}>
-            {duet.loading && !turns.length && <p className="duet-empty"><SpinnerGap size={14} className="is-spinning" />正在读取讨论记录…</p>}
+            {duet.loading && !turns.length && <p className="duet-empty"><NaviLoader />正在读取讨论记录…</p>}
             {!duet.loading && duet.error && !turns.length && <p className="duet-empty is-error">讨论记录读取失败：{duet.error}</p>}
             {!duet.loading && !duet.error && !turns.length && (activityPhase
               ? <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />

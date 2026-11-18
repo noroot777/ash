@@ -1,5 +1,6 @@
 import type { HandoffPeerIdentity } from "@ash/shared";
-import { Fingerprint, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { Fingerprint, Warning } from "@phosphor-icons/react";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 // 移回的对话框刻意做得比接力短:移回没有任何可选项——目标机被任务记录的来源指纹
 // 锁死,落哪个项目由原机的历史存档决定,连"选来源机地址"都该是系统自己探出来的。
@@ -80,7 +81,7 @@ export function HandoffReturnView({
       )}
       {phase === "locating" && (
         <p className="handoff-probing">
-          <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+          <NaviLoader size={14} />
           正在联系来源机器…
         </p>
       )}

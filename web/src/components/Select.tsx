@@ -1,8 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { CaretDown, Check, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { CaretDown, Check, Warning } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { selectPanelPlacement, type SelectPlacement } from "./selectPlacement.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /**
  * 全应用的下拉选择器：一个组件，两档长相。
@@ -330,7 +331,7 @@ export function Select<V extends string = string>({
         onClick={() => (open ? close() : openPanel())}
       >
         <span className={shown ? "" : "is-placeholder"}>{shown || placeholder}</span>
-        {status === "loading" && <SpinnerGap size={12} className="is-spinning" aria-hidden="true" />}
+        {status === "loading" && <NaviLoader size={14} />}
         {status === "failed" && <Warning size={12} className="ui-dropdown-warn" aria-hidden="true" />}
         <CaretDown size={12} weight="bold" className="ui-select-caret" aria-hidden="true" />
       </button>

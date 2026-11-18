@@ -9,6 +9,7 @@ import { useBranchPlan } from "../review/useBranchPlan.ts";
 import { AcceptLayer } from "./AcceptLayer.tsx";
 import { refreshTaskFacts } from "./taskFacts.ts";
 import { acceptTargetOf } from "./acceptTarget.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 export type RouteData = {
   source: string;
@@ -161,7 +162,7 @@ function TargetMenu({ anchorRef, taskId, projectId, current, source, fingerprint
   };
   return (
     <AcceptLayer open anchorRef={anchorRef} onClose={onClose} label="合入目标" role="menu" className="acc-layer-menu">
-      {!branches && !error && <p className="acc-layer-note"><i className="acc-spin is-ink" aria-hidden="true" />读取分支</p>}
+      {!branches && !error && <p className="acc-layer-note"><NaviLoader size={14} />读取分支</p>}
       {error && <p className="acc-layer-note is-red">{error}</p>}
       {branches && !branches.length && <p className="acc-layer-note">没有别的本地分支</p>}
       {branches?.map((branch) => (

@@ -64,11 +64,12 @@ swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
 # 框架原样放进去（ditto 保住里面的软链和 Sparkle 自己的签名）。
 ditto "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
-# 图标现画现转，结果缓存在 build/ 里；改了 make-icon.swift 就重画。
+# 图标现画现转，结果缓存在 build/ 里；改了 make-icon.swift 或它画的那张 icon.svg 就重画。
 ICNS="$BUILD/AppIcon.icns"
-if [[ ! -f "$ICNS" || "$HERE/scripts/make-icon.swift" -nt "$ICNS" ]]; then
+ICON_SVG="$HERE/../../docs/logo/icon.svg"
+if [[ ! -f "$ICNS" || "$HERE/scripts/make-icon.swift" -nt "$ICNS" || "$ICON_SVG" -nt "$ICNS" ]]; then
   rm -rf "$BUILD/AppIcon.iconset"
-  swift "$HERE/scripts/make-icon.swift" "$BUILD/AppIcon.iconset"
+  swift "$HERE/scripts/make-icon.swift" "$ICON_SVG" "$BUILD/AppIcon.iconset"
   iconutil -c icns "$BUILD/AppIcon.iconset" -o "$ICNS"
 fi
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"

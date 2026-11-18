@@ -1,8 +1,14 @@
-// 画 app 图标：纯黑圆角方块 + 白色小写 a。用法：swift make-icon.swift <输出的 .iconset 目录>
-// 不入库位图，构建时现画，改样式只改这一份。
+// 画 app 图标：把 docs/logo/icon.svg（米白圆角块 + navi 的标）摆进 macOS 图标网格，底下垫一层阴影。
+// 用法：swift make-icon.swift <icon.svg> <输出的 .iconset 目录>
+// 标本身不在这里画：icon.svg 是 docs/logo/build.mjs 从 web/src/brand/naviMark.ts 生成的，改标只改那一份。
+// SVG 交给 AppKit 解析；它不认 CSS 变量，所以 icon.svg 的颜色是直接写在属性里的。
 import AppKit
 
-let out = URL(fileURLWithPath: CommandLine.arguments[1])
+guard CommandLine.arguments.count == 3, let icon = NSImage(contentsOfFile: CommandLine.arguments[1]) else {
+  FileHandle.standardError.write("用法：swift make-icon.swift <icon.svg> <输出的 .iconset 目录>\n".data(using: .utf8)!)
+  exit(2)
+}
+let out = URL(fileURLWithPath: CommandLine.arguments[2])
 try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
 func render(_ px: Int) -> Data {
@@ -15,22 +21,12 @@ func render(_ px: Int) -> Data {
   // macOS 图标网格：1024 画布里内容占 824，四周留 100 的边给阴影。
   let inset = s * 100 / 1024
   let body = NSRect(x: inset, y: inset, width: s - inset * 2, height: s - inset * 2)
-  let path = NSBezierPath(roundedRect: body, xRadius: body.width * 0.225, yRadius: body.width * 0.225)
   let shadow = NSShadow()
   shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
   shadow.shadowBlurRadius = s * 0.02
   shadow.shadowOffset = NSSize(width: 0, height: -s * 0.01)
   shadow.set()
-  NSColor.black.setFill()
-  path.fill()
-  NSShadow().set()
-
-  let font = NSFont.systemFont(ofSize: body.height * 0.62, weight: .semibold)
-  let text = NSAttributedString(string: "a", attributes: [.font: font, .foregroundColor: NSColor.white])
-  let size = text.size()
-  // 按 x 高居中，而不是按行高：小写字母按行高放会偏下。draw(at:) 的点是行框左下角，基线在它上方 |descender| 处。
-  let baseline = body.midY - font.xHeight / 2
-  text.draw(at: NSPoint(x: body.midX - size.width / 2, y: baseline + font.descender))
+  icon.draw(in: body)
   NSGraphicsContext.restoreGraphicsState()
   return rep.representation(using: .png, properties: [:])!
 }

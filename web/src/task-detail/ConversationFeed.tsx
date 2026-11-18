@@ -44,6 +44,7 @@ import {
 } from "./TurnReceipts.tsx";
 import { reviewLocked } from "../free-workflow/freeReviewCopy.ts";
 import { openDisputeTarget, sameDisputeTarget } from "../free-workflow/disputeRuling.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import { footnoteActions } from "./footnoteActions.ts";
 import { RetryCta } from "./RetryCta.tsx";
 import { laneNoVerdicts } from "./reviewNoVerdictCause.ts";
@@ -621,7 +622,7 @@ export function ConversationFeed({
               <p>点击「运行」开始，执行输出会实时显示在这里。</p>
             </div>
           )}
-          {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
+          {loading && !items.length && <p className="task-conversation-note"><NaviLoader />正在读取会话…</p>}
           {forkBlockedReason && <p className="task-conversation-error" role="status">{forkBlockedReason}</p>}
           {error && <p className="task-conversation-error">{error.message}</p>}
           {/* 回合占位占着不动时,界面上得真有那个开关 —— 不然诊断说了「手动放开」,用户
