@@ -32,7 +32,13 @@ type Store = Pick<typeof db, "select">;
 
 const FIELDS = ["dispatchSuggestions", "dispatchWithdrawals"] as const;
 
-/** 带了就得是 JSON 数组的文本：坏值整份拒收，不当成「一件都没有」落下去。没带和 null 都放行。 */
+const PARSED = { dispatchSuggestions: parseDispatchSuggestions, dispatchWithdrawals: parseWithdrawnSuggestions };
+
+/**
+ * 带了就得是 JSON 数组的文本，里面每一条都得认得出（跟读这一列的地方同一个判据）。坏值整份拒收：当成「一件都
+ * 没有」落下去、或者只落认得出的那几条，都是替用户悄悄少搬了几件——移回时还会连本机存档里的一起换掉。
+ * 没带和 null 都放行。
+ */
 export function validateSuggestionPayload(task: Partial<Record<(typeof FIELDS)[number], unknown>>): void {
   for (const field of FIELDS) {
     const raw = task[field];
@@ -40,6 +46,8 @@ export function validateSuggestionPayload(task: Partial<Record<(typeof FIELDS)[n
     let list: unknown = null;
     try { list = typeof raw === "string" ? JSON.parse(raw) : null; } catch { /* 下面按非法报 */ }
     if (!Array.isArray(list)) throw new HandoffError(`task.${field} 非法`);
+    const unreadable = list.length - PARSED[field](raw as string).length;
+    if (unreadable) throw new HandoffError(`task.${field} 非法：有 ${unreadable} 条认不出`);
   }
 }
 

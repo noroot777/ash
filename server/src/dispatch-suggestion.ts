@@ -171,13 +171,20 @@ export async function updateSuggestions(
 }
 
 /**
- * 收回记录那一列的新值：在库里现有的那一份后面接上这几条。在 SQL 里接（json_insert 的 `$[#]` = 接在末尾，
- * 几对路径和值从左到右依次生效），不读出来改完再整份写回——已有的记录这一笔碰都不碰，所以不存在「读的时候
- * 认不出就丢了」「写回时被截短」这两种丢法；库里那一份坏了（不是 JSON）这条更新整个失败，建议也不会被拿掉。
+ * 收回记录那一列的新值：在库里现有的那一份后面接上这几条。在 SQL 里接，不读出来改完再整份写回——已有的记录
+ * 这一笔只是原样带过去（`json()` 只核它是 JSON、去掉多余空白），所以不存在「读的时候认不出就丢了」「写回时被
+ * 截短」这两种丢法；库里那一份坏了（不是 JSON）这条更新整个失败，建议也不会被拿掉。
+ *
+ * 新记录整批是**一个**参数（一段 JSON 数组的文本），接在现有数组的文本后面：现有那份去掉末尾的 `]`，新的那份
+ * 去掉开头的 `[`，中间一个逗号。不用 json_insert 逐条给路径和值：那样函数的实参个数跟着条数涨，而 SQLite 对
+ * 实参个数有编译期上限（各版本不同，127 或 1000）。回合里一次收回几件碰不到它；任务从别的机器移回时要一次接上
+ * 对端攒下的全部记录（handoff-suggestions.ts），条数没有上限，撞上了整次移回就落不了库。
  */
 export function appendWithdrawn(records: readonly WithdrawnSuggestion[]): SQL {
-  const pairs = records.map((record) => sql`'$[#]', json(${JSON.stringify(record)})`);
-  return sql`json_insert(coalesce(${tasks.dispatchWithdrawals}, '[]'), ${sql.join(pairs, sql`, `)})`;
+  if (!records.length) return sql`${tasks.dispatchWithdrawals}`;
+  const added = JSON.stringify(records);
+  const current = sql`json(coalesce(${tasks.dispatchWithdrawals}, '[]'))`;
+  return sql`CASE WHEN json_array_length(${current}) = 0 THEN ${added} ELSE substr(${current}, 1, length(${current}) - 1) || ',' || substr(${added}, 2) END`;
 }
 
 /** 智能体挂和收回的那一笔：任务还在跑，回合和方向还是入口核过的那一份（核的时候是空的，写的时候也得是空的）。 */

@@ -5,7 +5,8 @@
 //     收回记录一条不少、也不重；
 //   · 老版本对端的清单没有这两个键：第一次导入落成空的，移回时本机那两列一个字节都不动；
 //   · 收回记录只增不减：对端带回来的比本机少（途中丢过），本机的不变少，新的接在后面；
-//   · 带了但不是 JSON 数组：整份拒收，本机的不动；不认识的智能体类型按没指明交给谁落；
+//   · 对端攒下的收回记录再多也移得回来（追加那条 SQL 的参数个数不跟条数涨），本机空着和已有记录两种都接得上；
+//   · 带了但不是 JSON 数组、或者数组里有认不出的条目：整份拒收，本机的不动；不认识的智能体类型按没指明交给谁落；
 //   · 说明里引用的上传附件路径落地时改写成本机路径。
 //
 // 第一段起两台真服务走完整的接力与移回；后几段单进程直调 importHandoff 喂手写的清单（老版本对端、途中丢
@@ -281,12 +282,37 @@ try {
   );
   assert.equal(afterOnlyHung.dispatchWithdrawals, JSON.stringify([beforeLeaving]));
 
-  // 带了但不是 JSON 数组：整份拒收，本机的不动（当成「一件都没有」落下去就是替用户清掉了）。
+  // 对端攒了很多条收回记录（挂了收、收了挂，条数没有上限）：一次移回全接上，顺序不乱；本机那一列空着的、已经
+  // 有记录的两种都走一遍。3000 条 = 逐条给路径和值时 6001 个函数实参，SQLite 各版本的上限（127 / 1000）都过了。
+  const manyAway: WithdrawnSuggestion[] = Array.from({ length: 3000 }, (_, at) => ({
+    id: `sgMany${String(at).padStart(5, "0")}`, title: `对端收回的第 ${at + 1} 件`, reason: "对端攒下的",
+    at: new Date(Date.UTC(2026, 10, 18, 6, 0, at)).toISOString(),
+  }));
+  await archiveOnLocal("sgtmanynone", [local], []);
+  await importHandoff(manifestFor("sgtmanynone", {
+    dispatchSuggestions: null, dispatchWithdrawals: JSON.stringify(manyAway),
+  }), { sourceUrl: "http://holder.test:4317" });
+  const afterManyNone = await localRow("sgtmanynone");
+  assert.equal(afterManyNone.title, "从持有机回来", "收回记录再多，移回也要落得了库");
+  assert.deepEqual(JSON.parse(afterManyNone.dispatchWithdrawals!), manyAway, "本机那一列空着：带回来的全部落下，照带来的先后");
+  await archiveOnLocal("sgtmanysome", [local], [beforeLeaving]);
+  await importHandoff(manifestFor("sgtmanysome", {
+    dispatchSuggestions: null, dispatchWithdrawals: JSON.stringify([beforeLeaving, ...manyAway]),
+  }), { sourceUrl: "http://holder.test:4317" });
+  assert.deepEqual(
+    JSON.parse((await localRow("sgtmanysome")).dispatchWithdrawals!), [beforeLeaving, ...manyAway],
+    "本机已有记录：原来那条还在最前面，带回来的新记录一条不少接在后面",
+  );
+
+  // 带了但不是 JSON 数组、或者数组里有认不出的条目：整份拒收，本机的不动（当成「一件都没有」落下去、或者只落
+  // 认得出的那几条，都是替用户悄悄少搬了几件）。
   await archiveOnLocal("sgtbadvalue", [local], [beforeLeaving]);
   const beforeBad = await localRow("sgtbadvalue");
   for (const carried of [
     { dispatchSuggestions: "{坏掉的" }, { dispatchSuggestions: "{}" }, { dispatchSuggestions: 42 },
     { dispatchWithdrawals: "\"不是数组\"" },
+    { dispatchSuggestions: JSON.stringify([suggestion("sgGoodOne01", "认得出的那件"), { id: "sgNoBody001", title: "缺说明的那件" }]) },
+    { dispatchWithdrawals: JSON.stringify([whileAway, { id: "sgNoAt00001", title: "缺时刻的那条", reason: "不知道什么时候收回的" }]) },
   ]) {
     await assert.rejects(
       importHandoff(manifestFor("sgtbadvalue", carried), { sourceUrl: "http://holder.test:4317" }),
@@ -299,7 +325,7 @@ try {
   assert.equal(afterBad.dispatchSuggestions, beforeBad.dispatchSuggestions);
   assert.equal(afterBad.dispatchWithdrawals, beforeBad.dispatchWithdrawals);
 
-  console.log("handoff suggestions: 接力带走 / 对端派得出去 / 移回带回 / 老清单不清本机 / 收回记录只增不减 / 坏值拒收 / 附件路径改写 全部通过");
+  console.log("handoff suggestions: 接力带走 / 对端派得出去 / 移回带回 / 老清单不清本机 / 收回记录只增不减 / 记录再多也移得回 / 坏值拒收 / 附件路径改写 全部通过");
 } finally {
   for (const port of serverPorts) {
     for (const pid of listenerPidsSync(port)) killOne(pid, "SIGKILL");
