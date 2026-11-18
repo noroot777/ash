@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentType, ScheduledMessage, SkillEntry } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
+import { concreteReviewChoice } from "@ash/shared/review-on-create";
 import { PencilSimple } from "@phosphor-icons/react";
 import { IconMenu } from "../components/IconMenu.tsx";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
@@ -29,7 +30,8 @@ import {
   readCallMemory, type CallVerb, type ReplyCall,
 } from "./replyCall.ts";
 import { useDispatchBaseContext, useReplyCall } from "./useReplyCall.ts";
-import { CallCancelKey, DispatchBaseSegment, ReplyCallDock } from "./ReplyCallDock.tsx";
+import { CallCancelKey, CallReviewerChip, DispatchBaseSegment, ReplyCallDock } from "./ReplyCallDock.tsx";
+import { reviewHold, useReviewerList } from "../free-workflow/useReviewerList.ts";
 import { ReplySendKey } from "./ReplySendKey.tsx";
 import { DispatchDefaultRow, DispatchDefaultSegment, useDispatchDefault } from "./ReplyDispatchDefault.tsx";
 import { DiscussCapsule } from "./ReplyDiscussSegments.tsx";
@@ -120,6 +122,10 @@ export function ReplyBox({
   const baseContext = useDispatchBaseContext(task.projectId, dispatching);
   const baseOptions = dispatchBaseOptions(task, baseContext.value);
   const worktreeBase = baseOptions.find((option) => option.id === call?.base)?.worktreeBase ?? baseOptions[0]?.worktreeBase ?? null;
+  // 谁来审：照胶囊此刻画着的那一位派（按下那一刻就定，不等派出途中缓存再变）；清单没读到时只有「不审查」派得出去。
+  const reviewerList = useReviewerList(dispatching);
+  const dispatchReview = concreteReviewChoice(call?.review ?? "default", reviewerList.reviewers);
+  const dispatchReviewHold = dispatching ? reviewHold(call?.review ?? "default", reviewerList) : null;
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -416,8 +422,8 @@ export function ReplyBox({
 
   // 派出去：开一条新任务交给叫的那个人。这条任务的智能体不被叫醒、不占回合，所以它在跑时也照派不误
   // （不排队）。讨论：各方来回几段，开不开得了看 `discussHold`。失败时人、做法、正文和附件全留着，说清楚哪儿没成。
-  const runDispatch = (current: ReplyCall) => !onDispatch || baseContext.status !== "ready" ? Promise.resolve(false)
-    : runCall(current, (text, attachments) => onDispatch({ text, attachments, target: current.target, worktreeBase }));
+  const runDispatch = (current: ReplyCall) => !onDispatch || baseContext.status !== "ready" || !dispatchReview ? Promise.resolve(false)
+    : runCall(current, (text, attachments) => onDispatch({ text, attachments, target: current.target, worktreeBase, review: dispatchReview }));
   // 讨论里这条任务的执行器按发起那一刻的常设配置说话（服务端记进参与者）：刚改完执行器就开，先等写回落地。
   const runDiscuss = (current: ReplyCall) => !onDiscuss || discussHold ? Promise.resolve(false)
     : runCall(current, async (topic, attachments) => {
@@ -587,11 +593,12 @@ export function ReplyBox({
               disabled={configDisabled} onChange={dispatchDefault.commit} /> : undefined}
           />}
           {target && <CallCancelKey agent={target.agent} onCancel={cancelCall} />}
+          {call && dispatching && !(take && activeOverride?.bare) && <CallReviewerChip call={call} list={reviewerList} disabled={configDisabled} onChange={calling.setReview} />}
           <ReplySendKey
             overrideSend={take ? activeOverride!.send : null}
             call={call}
             callHeld={call?.verb === "discuss" ? discussHold : baseContext.status === "loading" ? "正在确认新任务从哪开工"
-              : baseContext.status === "failed" ? "确认不了新任务从哪开工，先重试" : null}
+              : baseContext.status === "failed" ? "确认不了新任务从哪开工，先重试" : dispatchReviewHold}
             later={gate.unstarted ? nowOnly : later}
             text={value}
             attachments={gate.unstarted ? 0 : uploads.attachments.length}

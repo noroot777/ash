@@ -29,6 +29,8 @@ import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executor
 import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { dispatcherRefusal } from "./task-dispatch.js";
+import { ReviewOnCreateError } from "./review-on-create.js";
+import { parseCreateReviewChoice } from "@ash/shared/review-on-create";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
 import { mountTaskReadRoutes } from "./task-read-routes.js";
 import { mountPrerequisiteRoutes, prerequisiteRefusal, stringList } from "./prerequisite-routes.js";
@@ -90,7 +92,10 @@ api.post("/tasks", async (c) => {
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
     workflowId?: string | null; // 内部建的 preset 任务挑哪条起手式;省略则按项目→全局默认解析
     prerequisites?: string[]; // 前置:这条任务建在哪几条已有任务上面(prerequisite-store.ts)
+    review?: unknown; // 建出来就带的审查预约(review-on-create.ts);缺省 = 不带,新建面板不传
   }>();
+  const review = parseCreateReviewChoice(b.review);
+  if (review && typeof review === "object" && "error" in review) return c.json({ error: review.error }, 400);
   // 建任务是**往一个项目里写东西**,所以先过可见性(§十二)。resourceGate 拦的是
   // `/tasks/:id/…`,建任务这条路上还没有 id,只有请求体里那个 projectId —— 漏了这一句,
   // 猜中一个 projectId 就能把任务塞进别人的项目。
@@ -277,6 +282,7 @@ api.post("/tasks", async (c) => {
     // 派生任务(团队执行者/审查/就地验证)继承父任务,那条路在各自的创建点上。
     // 上面那句 executorScopeForOwner 用的就是这个值 —— 两者必须同源,别各算各的。
     ownerUserId: taskOwner,
+    review,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在、跟新 task **同项目**,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400/404,不静默)。
@@ -323,7 +329,9 @@ api.post("/tasks", async (c) => {
       prerequisiteIds.map((prerequisiteId) => ({ taskId, prerequisiteId })),
       b.appendToQueue ? { after: joinQueueOnCreate(b.appendToQueue, [taskId], { existing: true }) } : undefined);
   } catch (error) {
-    if (error instanceof CliCommandValidationError || error instanceof QueueJoinRefused) return c.json({ error: error.message }, 400);
+    if (error instanceof CliCommandValidationError || error instanceof QueueJoinRefused || error instanceof ReviewOnCreateError) {
+      return c.json({ error: error.message }, 400);
+    }
     const refused = prerequisiteRefusal(error);
     if (refused) return c.json(refused.body, refused.status);
     // 上面那一句只是早点拒；真正关住窗口的是落库那一下（createTasks 占着「加成员」的位，team-admission.ts）。

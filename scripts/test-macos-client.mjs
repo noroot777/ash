@@ -41,7 +41,8 @@ copyFileSync(join(root, "scripts/start-detached.mjs"), join(runtime, "scripts/st
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
   ...["AshConfig", "AshHealth", "DataImport", "DatabaseBackup", "DownloadTransaction", "ServerControl", "ServerStartLock", "ServerLauncher",
-    "WindowChrome", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "FirstRunView", "AshPalette", "HostMcpSetup", "UpdateGate", "RestartImpact"]
+    "WindowChrome", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "FirstRunView", "AshPalette", "HostMcpSetup", "UpdateGate", "RestartImpact",
+    "LegacyIdentity", "LoginService"]
     .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
   ...["main", "WindowChromeProbe", "InstanceGuardProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)),
   "-o", binary], { encoding: "utf8" });
@@ -353,7 +354,18 @@ try {
   assert.equal(new Set(numbers).size, numbers.length, "concurrent builds never share a number");
   assert.deepEqual(numbers.slice(0, 3), ordered.slice(0, 3));
   assert.equal(readFileSync(book, "utf8").trim(), ordered.at(-1), "the book keeps the largest number handed out");
-  console.log("PASS: build numbers strictly increase across same-second, backdated and concurrent builds");
+  // 改名后第一次构建：新账本是空的，改名前那本当底（只读）；几份首次构建同时跑也不撞号、不倒退。
+  const renamedBook = join(temporary, "navi-build-number");
+  const legacyBook = join(temporary, "ash-build-number");
+  writeFileSync(renamedBook, "");
+  writeFileSync(legacyBook, "29991231.000005\n");
+  const firsts = await Promise.all(Array.from({ length: 6 }, () => launch("/usr/bin/lockf",
+    ["-k", renamedBook, process.execPath, join(root, "desktop/macos/scripts/build-number.mjs"), renamedBook, legacyBook], {})
+    .done.then((r) => { assert.equal(r.status, 0, r.output); return r.output.trim(); })));
+  assert.equal(new Set(firsts).size, firsts.length, "first builds after the rename never share a number");
+  assert.ok(firsts.every((n) => key(n)[0] === 29991231 && key(n)[1] > 5), `all above the old book: ${firsts}`);
+  assert.equal(readFileSync(legacyBook, "utf8").trim(), "29991231.000005", "the old book is only read");
+  console.log("PASS: build numbers strictly increase across same-second, backdated and concurrent builds, and continue from the pre-rename book without a race");
 
   // ── 安装：旧 bundle 还有进程在用就不换（scripts/macos-client-install.mjs）──
   await testInstall({ root, temporary, launch, children, until, delay });

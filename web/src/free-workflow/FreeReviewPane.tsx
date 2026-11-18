@@ -157,7 +157,8 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
 
   const openWorkspace: InspMoreItem[] = onOpenReview ? [{ key: "workspace", label: "打开改动工作区", onSelect: onOpenReview }] : [];
   const canDispatch = !locked && !!notify;
-  const dispatchDisabled = !taskReady || !notify || (!reviewing && waiting && !reservationMode);
+  // 还没开跑的只能预约（reservationMode 含 backlog）：派出去的任务建出来就带着，开跑前就能改、能取消。
+  const dispatchDisabled = (!taskReady && !reservationMode) || !notify || (!reviewing && waiting && !reservationMode);
   const dispatchLabel = reservationMode
     ? (reservationArmed ? "调整预约复审" : "预约复审")
     : stale ? "审查新改动" : workspace.length ? "再审一轮" : "派审查";
@@ -313,7 +314,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
     }
     return {
       tone: "none",
-      text: locked ? "验收前没有做过审查" : reservationMode ? "还没审过 · 任务还在动" : "还没审过",
+      text: locked ? "验收前没有做过审查" : !taskReady ? "还没开跑" : reservationMode ? "还没审过 · 任务还在动" : "还没审过",
       main: canDispatch ? dispatch() : undefined,
       more: openWorkspace,
     };

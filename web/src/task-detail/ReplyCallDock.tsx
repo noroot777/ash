@@ -1,4 +1,7 @@
 import { X } from "@phosphor-icons/react";
+import type { CreateReviewChoice } from "@ash/shared/review-on-create";
+import { ReviewerChip } from "../free-workflow/ReviewerChip.tsx";
+import type { ReviewerList } from "../free-workflow/useReviewerList.ts";
 import { ReplyDockRow } from "./ReplyDock.tsx";
 import { callChoices, type BaseOption, type CallAbility, type CallVerb, type DispatchBase, type ReplyCall } from "./replyCall.ts";
 
@@ -58,4 +61,15 @@ export function CallCancelKey({ agent, onCancel }: { agent: string; onCancel: ()
       <X size={10} weight="bold" />
     </button>
   );
+}
+
+/** 派出去时跟胶囊并排的「谁来审」：缺省是默认审查者，可换可关（free-workflow/ReviewerChip.tsx）。 */
+export function CallReviewerChip({ call, list, disabled, onChange }: {
+  call: ReplyCall;
+  /** 由回复框读（它要拿同一份清单拦派出、定派给谁，ReplyBox.tsx）。 */
+  list: ReviewerList;
+  disabled?: boolean;
+  onChange: (review: CreateReviewChoice) => void;
+}) {
+  return <ReviewerChip value={call.review ?? "default"} list={list} label="新任务" disabled={disabled} onChange={onChange} />;
 }

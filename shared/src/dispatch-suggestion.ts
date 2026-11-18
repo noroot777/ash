@@ -15,6 +15,7 @@
 // （web/src/task-detail/suggestions/withdrawalNotes.ts），不经过会话正文，所以不看有没有会话、写不写得进文件。
 // 这份记录只增不减（见 `WithdrawnSuggestion`）。
 import type { DispatchRunTarget } from "./dispatch-plan.ts";
+import type { CreateReviewChoice } from "./review-on-create.ts";
 
 /** 新任务从哪开工：从主分支开工 / 接着这条任务的代码。 */
 export type DispatchSuggestionBase = "trunk" | "here";
@@ -50,6 +51,8 @@ export type DispatchSuggestionLaunchItem = {
   /** 用户补的那句话（只有选中着派时才有）。 */
   extra?: string;
   target: DispatchRunTarget;
+  /** 谁来审（review-on-create.ts）；缺省 = 默认审查者。 */
+  review?: CreateReviewChoice;
   /** 落到 worktreeBase 上的开工起点；null = 项目目录此刻的 HEAD。 */
   worktreeBase: string | null;
 };

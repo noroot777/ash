@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import type { AgentType, DiscussionRounds, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import type { QuestionAnswerInput } from "@ash/shared/questions";
 import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import type { CreateReviewChoice } from "@ash/shared/review-on-create";
 import type { TrayMonitors } from "../components/MonitorTrayRow.tsx";
 import type { IconMenuItem } from "../components/IconMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
@@ -72,7 +73,11 @@ export type ReplyBoxProps = {
    * `@` 了人之后的「派出去」：开一条新任务交给他（replyDispatch.ts）。失败就抛，框里的人、做法和字都留着。
    * 不给 = 这里派不出去（团队执行者、审查任务），`@` 只剩问一句，框顶那一行不出。
    */
-  onDispatch?: (input: { text: string; attachments: string[]; target: MentionTarget; worktreeBase: string | null }) => Promise<void>;
+  onDispatch?: (input: {
+    text: string; attachments: string[]; target: MentionTarget; worktreeBase: string | null;
+    /** 新任务谁来审：已定成按下那一刻画着的那一位或不审（shared/src/review-on-create.ts `concreteReviewChoice`）。 */
+    review: CreateReviewChoice;
+  }) => Promise<void>;
   /** 托盘里「某某名下已全部停下」点过去打开那一条。 */
   onOpenTask?: (taskId: string) => void;
   /**

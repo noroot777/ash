@@ -163,12 +163,12 @@ for (const activeTab of ["side-chat", "memos"]) {
   assert.equal(preserved.activeTab, activeTab);
   assert.equal(preserved.visible, false);
 }
-memory.set("ash:inspector:task:root", JSON.stringify({ activeTab: "files", visible: true }));
+memory.set("navi:inspector:task:root", JSON.stringify({ activeTab: "files", visible: true }));
 const childPolicy = { ...policy, stateKey: "child:v9", defaultActiveTabId: "review", focusOnEntry: undefined };
-const childEntry = readState("ash:inspector:task:leaf", descriptors, true, childPolicy);
+const childEntry = readState("navi:inspector:task:leaf", descriptors, true, childPolicy);
 assert.equal(childEntry.activeTab, "review", "进入子任务按子任务阶段落格，不复制父任务文件格");
-memory.set("ash:inspector:task:leaf", JSON.stringify({ ...childEntry, activeTab: "dispatched", policyKey: "child:v8" }));
-assert.equal(readState("ash:inspector:task:leaf", descriptors, true, childPolicy).activeTab, "review", "迁移旧的父任务面板落点");
+memory.set("navi:inspector:task:leaf", JSON.stringify({ ...childEntry, activeTab: "dispatched", policyKey: "child:v8" }));
+assert.equal(readState("navi:inspector:task:leaf", descriptors, true, childPolicy).activeTab, "review", "迁移旧的父任务面板落点");
 assert.equal(dispatchedWord({ ...run, status: "queued", queueId: "q", queuePosition: 3 }).word, "排第 4");
 assert.equal(dispatchedMeta(leaf, now), "选哪个？");
 assert.equal(dispatchedMeta(accepted, now), "");

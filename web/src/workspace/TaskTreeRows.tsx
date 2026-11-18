@@ -5,7 +5,6 @@ import { CaretRight, ChatsCircle, PaperPlaneTilt, PushPin, Robot, UsersThree, ty
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
 import { taskCreationLabel } from "@ash/shared/task-origin";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import type { TaskLook, TaskPhrase } from "../lib/taskLook.ts";
 import { type LookForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
@@ -17,7 +16,7 @@ import { advanceHiddenReveal } from "./taskTreeModel.ts";
 // 分节、排序和「哪些行进来」在 TaskTree.tsx / taskTreeModel.ts。
 
 export const TASK_PREVIEW_LIMIT = 12;
-const COLLAPSED_SECTIONS_STORAGE_KEY = "ash:task-tree:collapsed-sections";
+const COLLAPSED_SECTIONS_STORAGE_KEY = "navi:task-tree:collapsed-sections";
 
 // TaskRow 埋在几种列表里，行上要用的表和入口用 context 递，免得每层组件都多几个 props。
 // 行首那枚项目徽标只在「任务模式」出现，给的是 id→项目 的表；没有表就是单项目态，不画徽标。
@@ -42,7 +41,7 @@ export function useRevealHiddenSelection(revealKey: string | null, onReveal: () 
 
 function readCollapsedSections(): Set<string> {
   try {
-    const raw = readRenamedStorage(COLLAPSED_SECTIONS_STORAGE_KEY);
+    const raw = window.localStorage.getItem(COLLAPSED_SECTIONS_STORAGE_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
     return new Set(Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : []);
   } catch {

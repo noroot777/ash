@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { AgentExecutorProfile, AgentType, DiscussionRounds } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
+import type { CreateReviewChoice } from "@ash/shared/review-on-create";
 import { api } from "../lib/api.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import {
@@ -68,6 +69,7 @@ export function useReplyCall({ ownAgent, ability, profiles, state }: {
     setCall((current) => (current ? { ...current, rounds } : current));
   };
   const setBase = (base: DispatchBase) => setCall((current) => (current ? { ...current, base } : current));
+  const setReview = (review: CreateReviewChoice) => setCall((current) => (current ? { ...current, review } : current));
   // 胶囊上换人 / 换模型：执行器没换就把已选的智能水平留着，换了执行器才清成「跟随」（旧档位在新 CLI 上
   // 多半根本不存在）。换成这条任务自己的执行器，就只剩「派出去」。
   const commitTarget = (next: AgentModelSelection) => setCall((current) => {
@@ -114,7 +116,7 @@ export function useReplyCall({ ownAgent, ability, profiles, state }: {
   return {
     call,
     self: !!call && (dispatchable || ability.discussable) && selfOf(call.target.agent),
-    start, pend, picking, pickingVerb, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, drop, sent,
+    start, pend, picking, pickingVerb, restore, setVerb, setBase, setReview, togglePerson, setRounds, commitTarget, commitEffort, cancel, drop, sent,
     /** 只记住这一套、不动叫着的人（新建框：叫的人跟草稿一起由提交结算去清，见 DraftStore 的 settleSubmission）。 */
     remember,
   };

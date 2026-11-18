@@ -8,7 +8,7 @@ import type { SettingsSection } from "../../src/settings/SettingsPage.tsx";
 import { HandoffReturnView } from "../../src/task-detail/HandoffReturnView.tsx";
 import "../../src/styles/global.css";
 
-const STORAGE_KEY = "ash:fixture:handoff-source-address";
+const STORAGE_KEY = "navi:fixture:handoff-source-address";
 const FINGERPRINT = "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0011223344556677";
 const ORIGINAL_URL = "http://192.168.1.51:4317";
 

@@ -53,8 +53,8 @@ function headlineOf(step: FirstRunStep, isolated: boolean): { title: string; hin
   };
 }
 
-/** 在 mac app 里(壳在 UA 里留了 `AshMac/`):数据那一站已经在原生那一屏走过了,导轨上补一格打勾的。 */
-const IN_MAC_APP = typeof navigator !== "undefined" && navigator.userAgent.includes("AshMac/");
+/** 在 mac app 里(壳在 UA 里留了 `NaviMac/`,改名前的壳留的是 `AshMac/`):数据那一站已经在原生那一屏走过了,导轨上补一格打勾的。 */
+const IN_MAC_APP = typeof navigator !== "undefined" && /\b(?:Navi|Ash)Mac\//.test(navigator.userAgent);
 
 export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
   const { toasts, notify, dismiss } = useToast();

@@ -1,6 +1,6 @@
 import Foundation
 
-/// 这个 app 连哪台、自带的那份 ash 在 bundle 里哪儿、数据和日志放哪。
+/// 这个 app 连哪台、自带的那份 Navi 在 bundle 里哪儿、数据和日志放哪。
 ///
 /// 环境变量那几个口子是给验证用的：把 app 拷到别处、用临时数据根和临时端口起一份，碰不到
 /// 日常那一份（`ASH_URL` + `ASH_DATA_DIR` 就够了；`ASH_MAC_RUNTIME` / `ASH_MAC_DOWNLOAD_JOURNAL`
@@ -8,9 +8,9 @@ import Foundation
 enum AshConfig {
   private static let env = ProcessInfo.processInfo.environment
 
-  /// 优先级：环境变量 ASH_URL > `defaults write dev.ash.mac AshURL <url>` > 本机 4317。
+  /// 优先级：环境变量 ASH_URL > `defaults write dev.navi.mac NaviURL <url>` > 本机 4317。
   static let baseURL: URL = {
-    for raw in [env["ASH_URL"], UserDefaults.standard.string(forKey: "AshURL")] {
+    for raw in [env["ASH_URL"], UserDefaults.standard.string(forKey: "NaviURL")] {
       if let raw, let url = URL(string: raw.trimmingCharacters(in: .whitespaces)), url.host != nil {
         return url
       }
@@ -62,26 +62,27 @@ enum AshConfig {
   /// 导入旧数据时洗副本的那一段（server/src/import-snapshot.ts）。
   static var importToolURL: URL { runtimeURL.appendingPathComponent("server/dist/import-snapshot-cli.js") }
 
-  /// 正式那份是 dev.ash.mac。演练用的 app 换一个（build.sh 的 ASH_MAC_BUNDLE_ID），defaults、
-  /// 数据根、登录项就都跟日常那份分开；测试驱动不是 bundle，退回正式那个名字。
-  static var bundleID: String { Bundle.main.bundleIdentifier ?? "dev.ash.mac" }
+  /// 正式那份是 dev.navi.mac（改名前是 dev.ash.mac，接班见 LegacyIdentity）。演练用的 app 换一个
+  /// （build.sh 的 ASH_MAC_BUNDLE_ID），defaults、数据根、登录项就都跟日常那份分开；测试驱动不是 bundle，
+  /// 退回正式那个名字。
+  static var bundleID: String { Bundle.main.bundleIdentifier ?? LegacyIdentity.successor }
 
   /// 这份 app 的构建号（CFBundleVersion，单调递增，Sparkle 比的就是它）。
   static var bundleVersion: String {
     Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "dev"
   }
 
-  /// app 自己的那块地。
+  /// app 自己的那块地。从 Ash.app 升级上来的机器上还是改名前那块（dev.ash.mac），见 LegacyIdentity。
   static var supportURL: URL {
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent(bundleID, isDirectory: true)
+    LegacyIdentity.supportDirectory(
+      in: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0], bundleID: bundleID)
   }
 
   /// server 的数据根（库、runs、uploads……整份交给 `ASH_DATA_DIR`）。缺省就是 app 自己那块地；
-  /// `ASH_DATA_DIR` 或 `defaults write dev.ash.mac AshDataDir <目录>` 可以改指。
+  /// `ASH_DATA_DIR` 或 `defaults write dev.navi.mac NaviDataDir <目录>` 可以改指。
   static let dataURL: URL = {
     let raw = env["ASH_DATA_DIR"].flatMap { $0.isEmpty ? nil : $0 }
-      ?? UserDefaults.standard.string(forKey: "AshDataDir").flatMap { $0.isEmpty ? nil : $0 }
+      ?? UserDefaults.standard.string(forKey: "NaviDataDir").flatMap { $0.isEmpty ? nil : $0 }
     return raw.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL } ?? supportURL
   }()
 

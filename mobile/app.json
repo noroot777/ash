@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Ash",
-    "slug": "ash",
+    "name": "Navi",
+    "slug": "navi",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "ash",
+    "scheme": "navi",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",

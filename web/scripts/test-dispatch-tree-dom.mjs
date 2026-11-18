@@ -20,7 +20,7 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-task-id="lead"]')?.getAttribute("aria-selected") === "true");
   await row("lead").click();
   assert.equal(await row("grand").count(), 0);
-  assert.equal(await page.evaluate(() => localStorage.getItem("ash:task-tree:dispatch-open")), null);
+  assert.equal(await page.evaluate(() => localStorage.getItem("navi:task-tree:dispatch-open")), null);
   await page.evaluate(() => window.__scope("tasks"));
   await page.locator(".workspace-task-project-group").waitFor();
   const more = page.locator(".workspace-task-project-group .workspace-task-more:not(.workspace-task-more--collapse)");

@@ -83,7 +83,10 @@ export type FreeReviewView = {
    *  **槽里挂着预约不算**:任务空闲、也不在等什么时,没有哪个回合会来触发它。把它也算进来
    *  的话,按钮只剩「调整预约」,用户想审只能先取消预约再派——裁定「这一轮不用改了」之后
    *  正是这个形状(用户 2026-11-10)。此时按钮回到直派语义,弹窗里仍可取消预约,直派会
-   *  顺带清掉槽(后端 clearReservationForDispatch)。 */
+   *  顺带清掉槽(后端 clearReservationForDispatch)。
+   *
+   *  **还没开跑(backlog)的也算**:它后面一定还会动,派出去的任务建出来就带着预约
+   *  (shared/src/review-on-create.ts),开跑之前就得能看、能改、能取消。 */
   reservationMode: boolean;
   /** armed 且挂着 runId = 自动复审链的续轮预约 */
   autoRereview: boolean;
@@ -201,7 +204,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     reviewTurn: !!state?.reviewTurn,
     waiting,
     reservationArmed,
-    reservationMode: taskBusy || waiting,
+    reservationMode: taskBusy || waiting || task.status === "backlog",
     autoRereview,
     repairing: taskBusy && (!!stoppedRun || autoRereview),
     freshness,

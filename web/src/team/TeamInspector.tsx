@@ -45,7 +45,7 @@ export interface TeamInspectorContext {
 // 团队模式的默认面板里不放子智能体：调度台自己那点工具调用远不如「谁跟谁在并行」有用，
 // 时间轴顶上它的位置。这一摘是一次性的历史迁移（当时它还是无条件默认开）；现在的开合统一
 // 走「用过才浮现」——调度台真派过子智能体才上条，否则从「+」或 I S 打开。
-retireInspectorTab("team-subagents-default", /^(?:ash|harness-next):inspector:team:/, "subagents");
+retireInspectorTab("team-subagents-default", /^navi:inspector:team:/, "subagents");
 
 export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>[] = [
   {

@@ -36,23 +36,25 @@ Navi 是一个自托管的编排控制台，用来管理本地的 AI 编程智�
 
 ## 下载 mac 版
 
-<!-- ash-mac-download -->
+<!-- navi-mac-download -->
 第一版还没发布，现在请按下面的「快速开始」从源码运行。
-<!-- /ash-mac-download -->
+<!-- /navi-mac-download -->
 
 <!-- 上面两行标记之间由发版脚本（npm run release:mac）在每次发完后改成那一版 dmg 的直链，并单独提交这个文件。 -->
 
 自带 node 和 Navi 本体，装好就能用，不用克隆仓库。需要 Apple 芯片（M 系列）的 Mac、macOS 14 以上。
 
-1. 下载上面的 dmg，打开后把 **Ash**（`Ash.app`，Navi 的安装包里暂时还叫这个名字）拖进 **Applications**（应用程序）。
+1. 下载上面的 dmg，打开后把 **Navi**（`Navi.app`）拖进 **Applications**（应用程序）。
 2. 第一次打开会被系统拦下（app 没有经过 Apple 公证）：到「系统设置 → 隐私与安全性」，在页面下方点「仍要打开」。
 3. 如果提示「已损坏，无法打开」，在终端里执行下面这行，再打开一次：
 
    ```bash
-   xattr -dr com.apple.quarantine /Applications/Ash.app
+   xattr -dr com.apple.quarantine /Applications/Navi.app
    ```
 
-4. 以后的新版本从菜单「ash → 检查更新…」安装（菜单栏上的应用名暂时还是 ash；app 也会每 6 小时自己查一次）。
+4. 以后的新版本从菜单「Navi → 检查更新…」安装（app 也会每 6 小时自己查一次）。
+
+装过改名前的 **Ash.app**：它没法自己更新成 Navi（换了应用标识），按上面装一次 Navi 再打开就好 —— Navi 第一次打开时会退出 Ash、接过它的设置、数据和登录项（Ash 不肯退或者复制失败时先弹窗问你，不会悄悄丢掉），等 Ash 的服务和别的进程都不再用它后把 `Ash.app` 移到废纸篓（原位置留一个指向 Navi 的替身）。细节和没法自动接的几样见 [desktop/macos/README.md](desktop/macos/README.md#从-ashapp-升级)。
 
 ## 快速开始
 

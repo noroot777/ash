@@ -4,6 +4,9 @@ import AppKit
 //
 // `--start-server` 是无窗口的一档：确保服务在跑就退出，给登录时的 LaunchAgent 用（见 LoginService）。
 // 数据根还是空的时候它不起：首启要问用户「全新开始还是导入」，抢先建一份空库就没得导了。
+// 改名前（Ash.app）的设置先接过来：下面不管哪一档，读到的都是同一份设置（见 LegacyIdentity）。
+LegacyIdentity.adoptDefaultsAtLaunch()
+
 if CommandLine.arguments.contains("--start-server") {
   switch ServerLauncher.shared.ensureRunningSync(timeout: 60) {
   case .ready:

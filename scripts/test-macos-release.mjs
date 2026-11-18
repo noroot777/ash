@@ -1,7 +1,7 @@
 // mac 发版脚本（desktop/macos/scripts/release.mjs）的定点回归（仅 macOS）。不碰 GitHub、不碰钥匙串：
-// 用现生成的演练密钥和一个假的 Ash.app。
+// 用现生成的演练密钥和一个假的 Navi.app。
 //
-// 本地演练（--local）：只出 dmg 不出 zip；dmg 是只读压缩镜像，卷里是 Ash.app（就是给的那份）、指向
+// 本地演练（--local）：只出 dmg 不出 zip；dmg 是只读压缩镜像，卷里是 Navi.app（就是给的那份）、指向
 // /Applications 的软链和入库的 Finder 布局；dmg 与 appcast 都验得过签、被篡改的（长度不变地改一个字节）
 // dmg 和 appcast 验不过；同一版、更旧的版本拒发；app 里的公钥和签名私钥不是一对时拒发；第二版排在第一
 // 版前面、第一版原样保留；`--notes` 进 appcast（转义过）；同一构建号缓存的 dmg 来自另一份 app 时拒发，
@@ -16,6 +16,9 @@
 // 打在这次的构建提交上。全都发完、只是 README 没提交上：重跑只补 README，不碰 GitHub；补的是旧版的收尾时
 // README 不倒回旧版。README 那一步只动自己写的内容：提交失败且期间别处改过 README 时保留现场，README 已经指向
 // 更新的一版时不倒回去。
+// 改名：改名前的 Ash.app 看的那份 appcast 里换成一条签过名、不带安装包的「仅通知」条目，指向这一版的下载页；
+// 已经指着这一版或更新的就不动（重跑、补旧版收尾都不倒回去）；app 里只记着改名前的 AshSourceCommit 也认；
+// 装包仓库还没从旧名改过来时拦下、什么都不写（别去 --init-repo 建一个撞名的新仓库）。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
@@ -47,15 +50,15 @@ const makeKey = (name) => {
 const key = makeKey("rehearsal");
 const wrong = makeKey("wrong");
 
-function fakeApp(version, publicKey, { feed = "http://127.0.0.1:1/appcast.xml", commit = "unknown", tag = version } = {}) {
-  const app = join(temporary, `apps-${tag}`, "Ash.app");
+function fakeApp(version, publicKey, { feed = "http://127.0.0.1:1/appcast.xml", commit = "unknown", tag = version, commitKey = "NaviSourceCommit" } = {}) {
+  const app = join(temporary, `apps-${tag}`, "Navi.app");
   mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
-  writeFileSync(join(app, "Contents/MacOS/Ash"), `binary ${tag}`);
+  writeFileSync(join(app, "Contents/MacOS/Navi"), `binary ${tag}`);
   writeFileSync(join(app, "Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
   <key>CFBundleVersion</key><string>${version}</string>
   <key>CFBundleShortVersionString</key><string>0.2.0</string>
-  <key>AshSourceCommit</key><string>${commit}</string>
+  <key>${commitKey}</key><string>${commit}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>SUFeedURL</key><string>${feed}</string>
   <key>SUPublicEDKey</key><string>${publicKey}</string>
@@ -84,7 +87,7 @@ function dmgContents(dmg) {
       entries,
       applications: applications.isSymbolicLink() ? readlinkSync(join(mount, "Applications")) : null,
       layout: readFileSync(join(mount, ".DS_Store")),
-      binary: readFileSync(join(mount, "Ash.app/Contents/MacOS/Ash"), "utf8"),
+      binary: readFileSync(join(mount, "Navi.app/Contents/MacOS/Navi"), "utf8"),
     };
   } finally {
     spawnSync("hdiutil", ["detach", mount, "-force"], { encoding: "utf8" });
@@ -106,7 +109,7 @@ async function readmeOwnership() {
     return out.stdout.trim();
   };
   const readme = join(dir, "README.md");
-  const original = "# ash\n<!-- ash-mac-download -->\n**[下载 ash 0.2.0（20000102.0002）](https://example.invalid/2.dmg)**\n<!-- /ash-mac-download -->\n";
+  const original = "# navi\n<!-- navi-mac-download -->\n**[下载 Navi 0.2.0（20000102.0002）](https://example.invalid/2.dmg)**\n<!-- /navi-mac-download -->\n";
   git("init", "-q", "-b", "main");
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "test");
@@ -176,22 +179,28 @@ async function localRehearsal() {
 
   let result = release(fakeApp("20000101.0001", key.publicKey), key.file);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  const first = join(feed, "Ash-0.2.0-20000101.0001.dmg");
+  const first = join(feed, "Navi-0.2.0-20000101.0001.dmg");
   assert.ok(existsSync(first));
-  assert.deepEqual(readdirSync(feed).sort(), ["Ash-0.2.0-20000101.0001.dmg", "appcast.xml"], "only a dmg, no zip");
+  assert.deepEqual(readdirSync(feed).sort(), ["Navi-0.2.0-20000101.0001.dmg", "appcast.xml", "legacy-appcast.xml"], "only a dmg, no zip (plus the notice for pre-rename apps)");
   assert.ok(!readdirSync(join(artifacts, "v0.2.0-20000101.0001")).some((name) => name.endsWith(".zip")));
   const format = spawnSync("hdiutil", ["imageinfo", first], { encoding: "utf8" }).stdout;
   assert.match(format, /^Format: UDZO$/m, "a compressed read-only image");
   const contents = dmgContents(first);
-  assert.deepEqual(contents.entries, [".DS_Store", "Applications", "Ash.app"], "the app, a link to drop it on, the Finder layout — nothing else");
+  assert.deepEqual(contents.entries, [".DS_Store", "Applications", "Navi.app"], "the app, a link to drop it on, the Finder layout — nothing else");
   assert.equal(contents.applications, "/Applications");
   assert.deepEqual(contents.layout, readFileSync(join(mac, "dmg/DS_Store")), "the checked-in layout");
   assert.equal(contents.binary, "binary 20000101.0001", "the app that was given");
   const signature = appcast().match(/sparkle:edSignature="([^"]+)"/)[1];
   assert.equal(verify(first, signature), 0, "the dmg verifies against the signature in the appcast");
   assert.equal(verify(join(feed, "appcast.xml")), 0, "the appcast itself is signed");
-  assert.match(appcast(), /url="http:\/\/127\.0\.0\.1:1\/Ash-0\.2\.0-20000101\.0001\.dmg"/);
+  assert.match(appcast(), /url="http:\/\/127\.0\.0\.1:1\/Navi-0\.2\.0-20000101\.0001\.dmg"/);
   assert.equal(Number(appcast().match(/length="(\d+)"/)[1]), readFileSync(first).length);
+  const legacy = () => readFileSync(join(feed, "legacy-appcast.xml"), "utf8");
+  assert.equal(verify(join(feed, "legacy-appcast.xml")), 0, "the notice for pre-rename apps is signed too (they require a signed feed)");
+  assert.match(legacy(), /<sparkle:informationalUpdate><\/sparkle:informationalUpdate>/);
+  assert.doesNotMatch(legacy(), /<enclosure/, "nothing to install: Ash.app cannot install a bundle with another identifier");
+  assert.match(legacy(), /<link>http:\/\/127\.0\.0\.1:1\/Navi-0\.2\.0-20000101\.0001\.dmg<\/link>/);
+  assert.match(legacy(), /xmlns:ash="https:\/\/github\.com\/noroot777\/ash"/, "pre-rename <ash:commit> items carried along still parse");
 
   result = release(fakeApp("20000101.0001", key.publicKey), key.file);
   assert.notEqual(result.status, 0);
@@ -207,10 +216,12 @@ async function localRehearsal() {
   assert.deepEqual(versions, ["20000101.0002", "20000101.0001"], "newest first, the earlier item kept");
   assert.equal(appcast().match(/sparkle:edSignature="([^"]+)"/g).length, 2);
   assert.equal(verify(join(feed, "appcast.xml")), 0, "re-signed after adding the item");
+  assert.deepEqual([...legacy().matchAll(/<sparkle:version>([^<]+)<\/sparkle:version>/g)].map((m) => m[1]), ["20000101.0002"],
+    "the notice always names just the newest version");
   const descriptions = [...appcast().matchAll(/<description>([^<]*)<\/description>/g)].map((m) => unescapeXml(m[1]));
   assert.deepEqual(descriptions, ["<p>第二版</p>", "<p>演练</p>"], "--notes reaches the appcast");
 
-  const second = join(feed, "Ash-0.2.0-20000101.0002.dmg");
+  const second = join(feed, "Navi-0.2.0-20000101.0002.dmg");
   const newest = appcast().match(/sparkle:edSignature="([^"]+)"/)[1];
   flipByte(second);
   assert.notEqual(verify(second, newest), 0, "a tampered dmg fails verification");
@@ -220,8 +231,8 @@ async function localRehearsal() {
   // 同一构建号：上次封的 dmg 来自另一份 app → 拒发
   const cached = join(artifacts, "v0.2.0-20990101.0003");
   mkdirSync(cached, { recursive: true });
-  writeFileSync(join(cached, "Ash-0.2.0-20990101.0003.dmg"), "dmg of some other build");
-  writeFileSync(join(cached, "Ash-0.2.0-20990101.0003.dmg.source"), "0000\n");
+  writeFileSync(join(cached, "Navi-0.2.0-20990101.0003.dmg"), "dmg of some other build");
+  writeFileSync(join(cached, "Navi-0.2.0-20990101.0003.dmg.source"), "0000\n");
   result = release(fakeApp("20990101.0003", key.publicKey), key.file);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /是上次从另一份 app 封的/, "a cached dmg of a different app is never signed for this one");
@@ -232,7 +243,7 @@ async function localRehearsal() {
   result = release(again, key.file, "演练", join(temporary, "feed-b"));
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   assert.match(result.stdout, /沿用上次没发完的/);
-  const name = "Ash-0.2.0-20990101.0004.dmg";
+  const name = "Navi-0.2.0-20990101.0004.dmg";
   assert.deepEqual(readFileSync(join(temporary, "feed-b", name)), readFileSync(join(temporary, "feed-a", name)), "the very same bytes");
   console.log("PASS: release --local ships only a signed drag-to-install dmg; refuses re-releases, older versions and mismatched keys; tampering is detected; notes kept; cached dmg bound to its app and reused for it");
 }
@@ -244,7 +255,7 @@ async function localRehearsal() {
  * drafts 是事先就在的草稿（[{ tag, target }]），newer 是排在它们前面的别的 Release 数（列表按页给，每页 100）。
  * 草稿的附件只能经 API 下，公开之后才有公开地址。
  */
-async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules = [], protectedBranch = false, feedPut = 200, drafts = [], newer = 0 }) {
+async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules = [], protectedBranch = false, feedPut = 200, drafts = [], newer = 0, missing = [] }) {
   const state = { calls: [], files: new Map(), releases: [], downloads: new Map(), assets: new Map(), tags: { ...tags }, feedPut };
   let base = "";
   let ids = 0;
@@ -274,9 +285,11 @@ async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules =
       release.assets.push(asset);
       return json(201, asset);
     }
-    const route = url.pathname.match(/^\/repos\/(o\/(?:app|feed))(\/.*)?$/);
+    const route = url.pathname.match(/^\/repos\/(o\/(?:app|feed|old))(\/.*)?$/);
     if (!route) return json(404, {});
     const [, repo, rest = ""] = route;
+    // o/old 是装包仓库改名前的名字：只在测「还没改名」时（o/app 缺着）存在。
+    if (missing.includes(repo) || (repo === "o/old" && !missing.includes("o/app"))) return json(404, {});
     if (req.method === "GET" && rest === "") return json(200, { default_branch: "main", permissions: { push: push.includes(repo) } });
     if (req.method === "POST" && rest === "/git/blobs") return token.includes(repo) ? json(201, { sha: "b".repeat(40) }) : json(403, { message: "Resource not accessible by personal access token" });
     if (req.method === "GET" && rest === "/branches/main") return json(200, { name: "main", protected: repo === "o/feed" && protectedBranch });
@@ -353,7 +366,7 @@ function readmeRepo() {
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "test");
   git("config", "core.hooksPath", "/dev/null");
-  writeFileSync(join(dir, "README.md"), "# ash\n\n## 下载 mac 版\n\n<!-- ash-mac-download -->\n第一版还没发布。\n<!-- /ash-mac-download -->\n\n装法……\n");
+  writeFileSync(join(dir, "README.md"), "# navi\n\n## 下载 mac 版\n\n<!-- navi-mac-download -->\n第一版还没发布。\n<!-- /navi-mac-download -->\n\n装法……\n");
   writeFileSync(join(dir, "other.txt"), "committed\n");
   git("add", ".");
   git("commit", "-q", "-m", "init");
@@ -363,9 +376,9 @@ function readmeRepo() {
 
 async function formalRehearsal() {
   const configFile = join(temporary, "release.json");
-  const config = { releaseRepo: "o/app", feedRepo: "o/feed", feedBranch: "main", appcastPath: "ash/mac/appcast.xml",
-    tagPrefix: "ash-mac-v", keychainAccount: "unused", publicKey: key.publicKey };
-  const feed = "https://raw.githubusercontent.com/o/feed/main/ash/mac/appcast.xml";
+  const config = { releaseRepo: "o/app", legacyReleaseRepo: "o/old", feedRepo: "o/feed", feedBranch: "main", appcastPath: "navi/mac/appcast.xml",
+    legacyAppcastPath: "ash/mac/appcast.xml", tagPrefix: "navi-mac-v", keychainAccount: "unused", publicKey: key.publicKey };
+  const feed = "https://raw.githubusercontent.com/o/feed/main/navi/mac/appcast.xml";
   const { readme, git } = readmeRepo();
   const publish = async (github, app, { conf = config, artifacts = "formal-artifacts" } = {}) => new Promise((done) => {
     writeFileSync(configFile, JSON.stringify(conf));
@@ -404,9 +417,10 @@ async function formalRehearsal() {
   await refused({ rules: [{ type: "deletion" }, { type: "pull_request" }] }, /ruleset 规则 pull_request/, "the feed branch only takes pull requests");
   await refused({ protectedBranch: true }, /开着分支保护/, "the feed branch is protected");
   await refused({ commits: {} }, /还没有提交 abc1234.*先 git push/, "the build commit is not pushed");
-  await refused({ tags: { "o/app:ash-mac-v0.2.0-20000102.0001": "f".repeat(40) } }, /已经有 tag .*不是这份 app 的构建提交/, "a same-named tag points elsewhere");
+  await refused({ tags: { "o/app:navi-mac-v0.2.0-20000102.0001": "f".repeat(40) } }, /已经有 tag .*不是这份 app 的构建提交/, "a same-named tag points elsewhere");
   await refused({}, /没记构建提交/, "the app does not know its build commit", fakeApp("20000102.0002", key.publicKey, { feed }));
   await refused({}, /旧格式/, "a single-repo config is refused, not guessed", app, { ...config, repo: "o/feed" });
+  await refused({ missing: ["o/app"] }, /先在 GitHub 上把 o\/old 改名为 o\/app/, "the app repo has not been renamed on GitHub yet");
 
   // 预检都过、提交 appcast 时才被拒（比如权限在这期间被收回）：公开不撤回 —— 撤回之前要确认没有哪份
   // appcast 引用它，而读和撤之间别的发版进程可能刚提交了 appcast。只靠重跑往前补完。
@@ -417,7 +431,7 @@ async function formalRehearsal() {
   assert.match(result.out, /公开不撤回/);
   const id = github.state.releases[0].id;
   assert.deepEqual(writes(github), ["POST /repos/o/app/releases", `POST /uploads/${id}`, `PATCH /repos/o/app/releases/${id}`,
-    "PUT /repos/o/feed/contents/ash/mac/appcast.xml"], "draft, upload, publish, appcast refused — and nothing is taken back");
+    "PUT /repos/o/feed/contents/navi/mac/appcast.xml"], "draft, upload, publish, appcast refused — and nothing is taken back");
   assert.equal(github.state.releases[0].draft, false, "the release stays public");
   assert.equal(github.state.files.size, 0);
   // 修好后重跑：认出已公开的 Release 和上面的包，只补 appcast。
@@ -427,18 +441,19 @@ async function formalRehearsal() {
   await github.close();
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /沿用 o\/app 里已有的 Release/);
-  assert.deepEqual(writes(github), ["PUT /repos/o/feed/contents/ash/mac/appcast.xml"], "no second release, no second upload, no second publish");
+  assert.deepEqual(writes(github), ["PUT /repos/o/feed/contents/navi/mac/appcast.xml", "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
+    "no second release, no second upload, no second publish; the appcast, then the notice for pre-rename apps");
   assert.equal(github.state.releases.length, 1);
   console.log("PASS: when the appcast is refused after the release went public, the release stays public and a rerun only adds the appcast");
 
   // 沿用一个旧草稿：它排在 150 个更新的 Release 后面（第二页），还记着别的提交、没有 tag。
-  github = await fakeGitHub({ push: both, commits: { abc1234: sha }, drafts: [{ tag: "ash-mac-v0.2.0-20000102.0001", target: "e".repeat(40) }], newer: 150 });
+  github = await fakeGitHub({ push: both, commits: { abc1234: sha }, drafts: [{ tag: "navi-mac-v0.2.0-20000102.0001", target: "e".repeat(40) }], newer: 150 });
   result = await publish(github, app, { artifacts: "draft-artifacts" });
   await github.close();
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /沿用 o\/app 里已有的草稿 Release/, "the draft is found past the first page");
   assert.deepEqual(writes(github).filter((c) => c.startsWith("POST /repos")), [], "no second release is created");
-  assert.equal(github.state.tags["o/app:ash-mac-v0.2.0-20000102.0001"], sha, "publishing writes this build's commit as the target, so the tag lands on it");
+  assert.equal(github.state.tags["o/app:navi-mac-v0.2.0-20000102.0001"], sha, "publishing writes this build's commit as the target, so the tag lands on it");
   console.log("PASS: an old draft is found on a later page and published with this build's commit as its tag");
 
   const initial = git("rev-list", "--max-parents=0", "HEAD");
@@ -450,18 +465,19 @@ async function formalRehearsal() {
   assert.match(result.out, /GitHub 凭证：GH_TOKEN/);
   const [release] = github.state.releases;
   assert.deepEqual(writes(github), ["POST /repos/o/app/releases", `POST /uploads/${release.id}`, `PATCH /repos/o/app/releases/${release.id}`,
-    "PUT /repos/o/feed/contents/ash/mac/appcast.xml"], "release and dmg go to the app repo (as a draft, then public), then the appcast to the feed repo");
+    "PUT /repos/o/feed/contents/navi/mac/appcast.xml", "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
+    "release and dmg go to the app repo (as a draft, then public), then the appcast to the feed repo, then the notice for pre-rename apps");
   assert.ok(github.state.calls.includes(`GET /assets/${release.assets[0].id}`), "the uploaded dmg is read back before the release goes public");
   assert.equal(release.target, sha, "the tag is created on the commit the app was built from");
-  assert.equal(github.state.tags["o/app:ash-mac-v0.2.0-20000102.0001"], sha);
+  assert.equal(github.state.tags["o/app:navi-mac-v0.2.0-20000102.0001"], sha);
   assert.match(release.name, /macOS/);
-  assert.equal(release.assets[0].name, "Ash-0.2.0-20000102.0001.dmg");
+  assert.equal(release.assets[0].name, "Navi-0.2.0-20000102.0001.dmg");
   assert.equal(release.assets[0].contentType, "application/x-apple-diskimage");
   assert.ok(release.body.startsWith("正式 & <b>演练</b>\n\n"), "the release body starts with the notes as given");
-  const committed = github.state.files.get("o/feed:ash/mac/appcast.xml");
+  const committed = github.state.files.get("o/feed:navi/mac/appcast.xml");
   assert.equal(committed.branch, "main");
   assert.match(committed.text, /<sparkle:version>20000102\.0001<\/sparkle:version>/);
-  const url = `${github.base}/download/o/app/ash-mac-v0.2.0-20000102.0001/Ash-0.2.0-20000102.0001.dmg`;
+  const url = `${github.base}/download/o/app/navi-mac-v0.2.0-20000102.0001/Navi-0.2.0-20000102.0001.dmg`;
   assert.ok(committed.text.includes(`url="${url}"`), "the appcast in the feed repo points at the public dmg in the app repo");
   writeFileSync(join(temporary, "committed-appcast.xml"), committed.text);
   assert.equal(verify(join(temporary, "committed-appcast.xml")), 0, "the committed appcast is signed");
@@ -470,7 +486,13 @@ async function formalRehearsal() {
   assert.equal(unescapeXml(committed.text.match(/<description>([^<]*)<\/description>/)[1]), "<p>正式 &amp; &lt;b&gt;演练&lt;/b&gt;</p>",
     "in the appcast the notes are HTML-escaped");
 
-  const link = `<!-- ash-mac-download -->\n**[下载 ash 0.2.0（20000102.0001）](${url})**\n<!-- /ash-mac-download -->`;
+  const notice = github.state.files.get("o/feed:ash/mac/appcast.xml");
+  writeFileSync(join(temporary, "committed-notice.xml"), notice.text);
+  assert.equal(verify(join(temporary, "committed-notice.xml")), 0, "the notice for pre-rename apps is signed");
+  assert.match(notice.text, /<sparkle:informationalUpdate><\/sparkle:informationalUpdate>/);
+  assert.ok(notice.text.includes("<link>https://github.com/o/app/releases/tag/navi-mac-v0.2.0-20000102.0001</link>"), "it points at this release's page");
+  assert.doesNotMatch(notice.text, /<enclosure/);
+  const link = `<!-- navi-mac-download -->\n**[下载 Navi 0.2.0（20000102.0001）](${url})**\n<!-- /navi-mac-download -->`;
   assert.ok(readFileSync(readme, "utf8").includes(link), "the README download link names this very dmg");
   assert.match(result.out, /README 的下载链接已改成这一版并提交/);
   assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0001）");
@@ -491,15 +513,17 @@ async function formalRehearsal() {
   assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0001）");
 
   // 再发一版，README 指向它；之后补旧版的收尾不把 README 倒回旧版。
-  result = await publish(github, fakeApp("20000102.0003", key.publicKey, { feed, commit: "abc1234" }), { artifacts: "formal-artifacts-2" });
+  result = await publish(github, fakeApp("20000102.0003", key.publicKey, { feed, commit: "abc1234", commitKey: "AshSourceCommit" }), { artifacts: "formal-artifacts-2" });
   assert.equal(result.status, 0, result.out);
+  assert.match(github.state.files.get("o/feed:ash/mac/appcast.xml").text, /<sparkle:version>20000102\.0003<\/sparkle:version>/, "the notice moves on to the newer version");
   assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0003）");
   github.state.calls.length = 0;
   result = await publish(github, app, { artifacts: "formal-artifacts-2" });
   await github.close();
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /README 的下载链接留在更新的 20000102\.0003/);
-  assert.deepEqual(writes(github), []);
+  assert.match(result.out, /改名前的更新源已经指着 20000102\.0003/);
+  assert.deepEqual(writes(github), [], "finishing an older version moves neither the README nor the notice back");
   assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0003）", "the README keeps the newer version");
   console.log("PASS: rerunning a fully published version only finishes the README link, and never moves it back to an older version");
 }

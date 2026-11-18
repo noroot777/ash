@@ -49,7 +49,8 @@
     "test:reply-command-ui": "node scripts/test-reply-command-ui.mjs",
     "test:monitor-strip": "node scripts/test-monitor-strip.mjs",
     "test:task-branches": "node scripts/test-task-branches.mjs",
-    "test:markdown-inline": "node --experimental-strip-types scripts/test-markdown-inline.mjs"
+    "test:markdown-inline": "node --experimental-strip-types scripts/test-markdown-inline.mjs",
+    "test:stored-keys": "node --experimental-strip-types scripts/test-stored-keys.mjs"
   },
   "private": true
 }

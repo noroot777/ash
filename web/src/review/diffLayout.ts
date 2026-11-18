@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
 
 /**
  * diff 怎么摆：`unified` 是单栏行内对比（增删行前后相邻），`split` 是左右并排（旧的在
@@ -11,7 +10,7 @@ import { readRenamedStorage } from "../lib/renamedStorage.ts";
  */
 export type DiffLayout = "unified" | "split";
 
-const STORAGE_KEY = "ash:diff-layout";
+const STORAGE_KEY = "navi:diff-layout";
 
 export const DIFF_LAYOUT_LABEL: Record<DiffLayout, string> = {
   unified: "单栏",
@@ -26,7 +25,7 @@ export const DIFF_LAYOUT_TITLE: Record<DiffLayout, string> = {
 
 function stored(): DiffLayout {
   try {
-    return readRenamedStorage(STORAGE_KEY) === "split" ? "split" : "unified";
+    return window.localStorage.getItem(STORAGE_KEY) === "split" ? "split" : "unified";
   } catch {
     // 隐私模式下读 localStorage 会抛，回落到默认即可。
     return "unified";
@@ -41,10 +40,10 @@ export function useDiffLayout(): [DiffLayout, (next: DiffLayout) => void] {
   useEffect(() => {
     const sync = () => setLayout(stored());
     window.addEventListener("storage", sync);
-    window.addEventListener("ash:diff-layout", sync);
+    window.addEventListener("navi:diff-layout", sync);
     return () => {
       window.removeEventListener("storage", sync);
-      window.removeEventListener("ash:diff-layout", sync);
+      window.removeEventListener("navi:diff-layout", sync);
     };
   }, []);
 
@@ -55,7 +54,7 @@ export function useDiffLayout(): [DiffLayout, (next: DiffLayout) => void] {
     } catch {
       // 存不下也不该影响这一次切换。
     }
-    window.dispatchEvent(new Event("ash:diff-layout"));
+    window.dispatchEvent(new Event("navi:diff-layout"));
   }, []);
 
   return [layout, change];

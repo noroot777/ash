@@ -1,5 +1,4 @@
 import type { TaskListItem } from "@ash/shared";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { indexWorkers, inTaskMode, workersFrom } from "../lib/taskAttention.ts";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { dispatchEdges, dispatchSubtree } from "../lib/dispatchTree.ts";
@@ -23,7 +22,7 @@ export type TaskScope =
 
 export type TaskScopeKind = TaskScope["kind"];
 
-export const SCOPE_STORAGE_KEY = "ash:task-scope";
+export const SCOPE_STORAGE_KEY = "navi:task-scope";
 // 注意别跟 Task["mode"]（单飞 / 团队 / 讨论）搞混：那个字段内部也叫 mode，但从不对用户
 // 露出「模式」两个字（它显示成「任务 / 团队 / 讨论」）。这里的「任务模式」说的是侧栏作用域。
 export const TASK_MODE_LABEL = "任务模式";
@@ -97,7 +96,7 @@ export function resolveScopeKind(search: string, stored: TaskScopeKind | null): 
 
 export function readStoredScopeKind(): TaskScopeKind | null {
   try {
-    return normalizeScopeKind(readRenamedStorage(SCOPE_STORAGE_KEY));
+    return normalizeScopeKind(window.localStorage.getItem(SCOPE_STORAGE_KEY));
   } catch {
     return null;
   }

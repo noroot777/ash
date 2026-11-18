@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 const defaultRatio = 5 / 9;
-const storageKey = "ash:git-history-split";
+const storageKey = "navi:git-history-split";
 
 function readRatio() {
   try {

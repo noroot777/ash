@@ -20,7 +20,7 @@ import { clearReservationForDispatch, noteReservationStillWaiting, readFreeRevie
 import {
   checkMode,
   overrideLabel,
-  overrideSuffix,
+  reservationNotice,
   reservedOverride,
   retryLimit,
   reviewNote,
@@ -157,6 +157,8 @@ export async function freeReviewReminder(taskId: string): Promise<TurnReminder> 
 }
 
 // 预约在下一次执行回合正常结束时消费；任务完成确认仍由 complete_task 单独记账。
+// 还没开跑（backlog）的同样能约、能改：派出去的任务建出来就带着预约（review-on-create.ts），用户要在开跑之前
+// 换人、改轮数，走的就是这里。它第一个执行回合正常结束时照常触发。
 // 不论那个回合是在预约之前还是之后开跑的——任务正在跑（含已 claim、status 尚未落 running 的窗口）时挂
 // 预约，本回合完成即触发审查，这正是「修复中先把复审预约上」的常规用法。所以这里刻意
 // **不与 turn 互斥**；预约不动工作区、不投消息，写入本身没有并发危害。
@@ -172,7 +174,6 @@ export async function reserveFreeReview(
   if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");
   if (task.workflowMode !== "free") throw new Error("当前任务不是自由工作流");
   if (task.archived) throw new Error("归档任务不能预约审查");
-  if (task.status === "backlog") throw new Error("任务尚未运行，开始执行后再预约审查");
   assertBeforeAcceptance(task);
   if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {
@@ -213,9 +214,9 @@ export async function reserveFreeReview(
         reviewHeldToken: sql`CASE WHEN ${freeWorkflowStates.reviewArmed} = 1 AND ${freeWorkflowStates.reviewHeldToken} = ${freeWorkflowStates.updatedAt} THEN ${at} ELSE NULL END`,
       },
     });
-    await appendTaskTimeline(taskId, noticeLine({ kind: "review.reserved", reviewer: profile.name, updated: !!existing?.reviewArmed },
-      `${existing?.reviewArmed ? "已更新审查预约" : "已预约审查"}：${profile.name}${overrideSuffix(override)} · ` +
-      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。执行回合正常结束后自动开始。`));
+    await appendTaskTimeline(taskId, reservationNotice({
+      reviewer: profile.name, override, mode, retries, note, updated: !!existing?.reviewArmed,
+    }));
     bus.publish({ type: "task.review", taskId });
     return freeWorkflowState(taskId);
   } finally {

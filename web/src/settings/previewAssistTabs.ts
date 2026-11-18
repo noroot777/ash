@@ -46,9 +46,15 @@
 // 「这一页自己点过按钮」同理是副本复制不走的证据:它只活在这一份文档的内存里。
 //
 // BroadcastChannel 不会把消息投回给发送方自己,所以「自己应答自己」这种事不会发生。
+//
+// 锁名和频道名**沿用改名前的 `ash:`**,是兼容值,批量改名时别换:它们是同一时刻活着的几份文档之间
+// 对话用的,而升级那一刻新旧两版页面会同时活着(老页面里点的按钮还在跑,复制出来的标签已经是新版,
+// 它那份 sessionStorage 里的 claim 也被 storageRename 挪到了新名下)。名字一换两边就各拿各的锁、
+// 各听各的频道,新页面拿到「新名字的锁没人拿」当成「没有正主」,两份都会往输入框里填。
+// sessionStorage 里的接力凭据不在此列:它是存储,启动时随别的键一起挪到新名下。
 const CHANNEL = "ash:preview-assist-claims";
 const LOCK = (projectId: string, claim: string) => `ash:preview-assist:${projectId}:${claim}`;
-const HANDOFF_KEY = (projectId: string) => `ash:preview-assist-handoff:${projectId}`;
+const HANDOFF_KEY = (projectId: string) => `navi:preview-assist-handoff:${projectId}`;
 /** 接力凭据的有效期。刷新是一瞬间的事,给足加载时间就够;过期只是退回「摆出来让用户拍板」。 */
 const HANDOFF_MS = 60_000;
 /** 这一页的身份。只活在内存里 —— sessionStorage 里的东西会被复制,这个不会。 */

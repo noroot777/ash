@@ -79,7 +79,7 @@ final class ServerLauncher {
     if let failure = Self.backUpBeforeMigration() { return .failed(failure) }
     let parts = [AshConfig.nodeURL, AshConfig.serverEntryURL, AshConfig.detachScriptURL]
     if let missing = parts.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
-      return .failed("app 里自带的 Navi 不完整（缺 \(missing.path)）。重新装一次 Ash.app。")
+      return .failed("app 里自带的 Navi 不完整（缺 \(missing.path)）。重新装一次 Navi.app。")
     }
     do {
       try FileManager.default.createDirectory(at: AshConfig.logURL, withIntermediateDirectories: true)

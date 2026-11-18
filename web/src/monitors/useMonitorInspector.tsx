@@ -10,7 +10,7 @@ import { monitorUsedCount, useTaskMonitors } from "./useTaskMonitors.ts";
 // 治不了存量：旧默认早把它钉进了每个任务的 `openTabs`，而 `applyTabPolicy` 是并集语义，
 // 钉进去的就再也摘不掉。按 migrationId 摘一次——真挂过哨兵的任务下次进去它会自己再冒
 // 出来，之后用户手动开的也不会被下一次语义换挡又关掉。
-retireInspectorTab("monitors-surface-on-use", /^(?:ash|harness-next):inspector:/, "monitors");
+retireInspectorTab("monitors-surface-on-use", /^navi:inspector:/, "monitors");
 
 /**
  * 「哨兵」那一格的开合与活信号。

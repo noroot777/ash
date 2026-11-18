@@ -11,6 +11,7 @@ import {
   suggestionTaskBody, type DispatchSuggestionLaunchInput, type DispatchSuggestionLaunchItem,
 } from "@ash/shared/dispatch-suggestion";
 import type { DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import { parseCreateReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
 import { groups, queueItems } from "./db/schema.js";
 import type { ExecutorScope } from "./auth/owned-executors.js";
 import { normalizeTarget } from "./dispatch-plan.js";
@@ -25,7 +26,7 @@ class SuggestionClaimLost extends Error {
   constructor(readonly missing: string[]) { super("suggestion gone"); }
 }
 
-type Picked = DispatchSuggestionLaunchItem & { target: DispatchRunTarget };
+type Picked = DispatchSuggestionLaunchItem & { target: DispatchRunTarget; review: CreateReviewChoice };
 
 /** 用户交来的派出清单核一遍：每件写得齐、不重复、交给谁写得对。 */
 export function normalizeSuggestionLaunch(
@@ -50,8 +51,11 @@ export function normalizeSuggestionLaunch(
     if (raw.worktreeBase !== null && raw.worktreeBase !== undefined && typeof raw.worktreeBase !== "string") {
       return { error: `${where}.worktreeBase 要是分支名或 null` };
     }
+    // 谁来审（review-on-create.ts）：没交 = 默认审查者，跟别的派出去的入口一样。
+    const review = parseCreateReviewChoice(raw.review, `${where}.review`);
+    if (review && typeof review === "object" && "error" in review) return review;
     items.push({
-      id: raw.id, title, body: text, target,
+      id: raw.id, title, body: text, target, review: review ?? "default",
       extra: typeof raw.extra === "string" ? raw.extra : undefined,
       worktreeBase: raw.worktreeBase?.trim() || null,
     });
@@ -85,7 +89,7 @@ export async function launchSuggestions(
       agentType: item.target.agentType, executorId: item.target.executorId,
       model: item.target.model, reasoningEffort: item.target.reasoningEffort,
       autoTitle: false, duet: null as string | null, scheduleId: null as string | null, createdAt: ts, updatedAt: ts,
-      worktreeBase: item.worktreeBase, workflowMode: "free", ownerUserId: owner, dispatchedBy: task.id,
+      worktreeBase: item.worktreeBase, workflowMode: "free", ownerUserId: owner, dispatchedBy: task.id, review: item.review,
     };
   });
   const claim = withoutSuggestions(launch.items.map((item) => item.id));

@@ -36,7 +36,7 @@ export function ConfigTransferSettings({ notify }: { notify: (message: string) =
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `ash-config-${bundle.exportedAt.slice(0, 10)}.json`;
+      a.download = `navi-config-${bundle.exportedAt.slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
       notify("已导出");

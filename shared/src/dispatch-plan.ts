@@ -6,6 +6,7 @@
 // 所以派活单只在「那一问还是它」的时候算数（`activeDispatchPlan`）：提问被答掉、被新消息撤下、
 // 被新的提问换掉，它就跟着作废，不必在每一处清提问的地方另清一遍。
 import type { AgentType } from "./index.ts";
+import type { CreateReviewChoice } from "./review-on-create.ts";
 
 export type DispatchOrder = "serial" | "parallel";
 
@@ -29,6 +30,8 @@ export type DispatchPlanItem = {
   note: string;
   /** 智能体指明了交给谁；null = 用这条任务「派出去的活交给谁」的默认值。 */
   target: DispatchRunTarget | null;
+  /** 谁来审（review-on-create.ts）；缺省 = 默认审查者（这一项上线前摆的单同样按默认）。 */
+  review?: CreateReviewChoice;
   useWorktree?: boolean;
   worktreeBase?: string | null;
   mergeTargetBranch?: string | null;
@@ -49,7 +52,8 @@ export type DispatchPlan = {
 export type DispatchLaunchInput = {
   planId: string;
   order: DispatchOrder;
-  items: { index: number; target: DispatchRunTarget }[];
+  /** review 缺省 = 照单子上那一格（再缺省就是默认审查者）。 */
+  items: { index: number; target: DispatchRunTarget; review?: CreateReviewChoice }[];
 };
 
 export const MAX_DISPATCH_PLAN_ITEMS = 12;

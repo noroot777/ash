@@ -4,7 +4,8 @@ import WebKit
 /// 把标题栏那一条还给页面：内容铺到窗口顶，红绿灯直接浮在页面左上角，不再单占一行。
 ///
 /// 页面与壳的约定（页面那一半在 web/index.html 和 web/src/styles/window-shell.css）：
-///  · 页面先表态：文档里有 `<meta name="ash-window-chrome" content="overlay">` 才铺上去。没有这一行的
+///  · 页面先表态：文档里有 `<meta name="navi-window-chrome" content="overlay">`（改名前的页面写的是
+///    `ash-window-chrome`，连旧版服务时两个都认）才铺上去。没有这一行的
 ///    文档（旧版本的 ash、同源的 /mobile 之类别的页面）不知道要给红绿灯让位，壳就退回普通标题栏。
 ///  · 壳在 `<html>` 上写 `data-window-shell="mac"`，外加两个长度：`--window-titlebar-height`
 ///    （红绿灯那一条多高）、`--window-controls-width`（红绿灯占掉左边多宽）。全屏时红绿灯收起、
@@ -152,7 +153,7 @@ final class WindowChrome: NSObject, WKScriptMessageHandler {
     };
     const post = (kind) => window.webkit.messageHandlers.ashWindowChrome.postMessage(kind);
     // 这份文档认不认这套约定，读完 <head> 才知道。
-    const declare = () => post(document.querySelector("meta[name='ash-window-chrome'][content='overlay']") ? "overlay" : "titlebar");
+    const declare = () => post(document.querySelector("meta[name='navi-window-chrome'][content='overlay'], meta[name='ash-window-chrome'][content='overlay']") ? "overlay" : "titlebar");
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", declare, { once: true });
     else declare();
     // 这一屏要多大的窗：页面（AuthGate）写在 <html data-window-size> 上，变一次报一次。

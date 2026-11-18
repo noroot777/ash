@@ -220,7 +220,7 @@ export function useFreeWorkflowActions({ task, notify, returnFocusRef }: {
           notify={notify}
         />
       ) : null}
-      <button type="button" className={`reply-act is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} aria-label={reviewLabel} disabled={!taskReady || locked || (!reviewing && waiting && !reservationMode)} onClick={() => setReviewOpen(reviewing ? "rounds" : "review")}>
+      <button type="button" className={`reply-act is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} aria-label={reviewLabel} disabled={(!taskReady && !reservationMode) || locked || (!reviewing && waiting && !reservationMode)} onClick={() => setReviewOpen(reviewing ? "rounds" : "review")}>
         {reviewing ? <SpinnerGap size={14} className="is-spinning" /> : <MagnifyingGlass size={14} weight="regular" />}
         <span>{reviewLabel}</span>
         {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}

@@ -1,7 +1,6 @@
-// 右侧面板记在 localStorage 里的那份状态（`ash:inspector:<contextKey>`）：条上有哪几格、停在哪一格、
+// 右侧面板记在 localStorage 里的那份状态（`navi:inspector:<contextKey>`）：条上有哪几格、停在哪一格、
 // 多宽、开没开，以及用户亲手摘掉过哪几格。读、写、按任务状态补格子的规则都在这里，宿主
 // （InspectorHost.tsx）只管交互。
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import type { InspectorDescriptor, InspectorTabPolicy } from "./types.ts";
 
 export const INSPECTOR_MIN_WIDTH = 280;
@@ -101,7 +100,7 @@ export function readState<Context>(
   const fallback = { ...defaultState(descriptors, defaultVisible), focusKey };
   const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
   try {
-    const raw = readRenamedStorage(storageKey);
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) return onEntry(tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback);
     const parsed = JSON.parse(raw) as Partial<InspectorState>;
     const storedTabs = Array.isArray(parsed.openTabs)
@@ -150,5 +149,5 @@ export function applyInspectorEntry<Context>(
 }
 
 export function storageKeyFor(contextKey: string) {
-  return `ash:inspector:${contextKey}`;
+  return `navi:inspector:${contextKey}`;
 }

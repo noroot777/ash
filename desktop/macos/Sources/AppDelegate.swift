@@ -5,6 +5,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var windowController: BrowserWindowController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // 第一个 WKWebView 建出来之前：要先让旧 app 退出、把改名前的网页数据复制过来（见 LegacyIdentity）。
+    guard adoptLegacyIdentity() else { return }
     AppUpdater.shared.start()
     NSApp.mainMenu = MainMenu.build()
     let controller = BrowserWindowController()
@@ -16,6 +18,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSApp.activate(ignoringOtherApps: true)
     do { try LoginService.reconcileAtLaunch() } catch { NSAlert(error: error).runModal() }
     DispatchQueue.global(qos: .utility).async { DownloadTransaction.reclaimAbandoned() }
+  }
+
+  /// 网页数据没接过来就不建窗口（建了就再也接不回来，见 LegacyIdentity.webDataSettled）：说清卡在哪，让用户选。
+  /// 返回 false = 用户选了退出。
+  private func adoptLegacyIdentity() -> Bool {
+    while let blocked = LegacyIdentity.adoptAtLaunch() {
+      let alert = NSAlert()
+      alert.messageText = "还没接过 Ash 的登录和页面设置"
+      alert.informativeText = "\(blocked)\n\n现在不接直接打开的话，Ash 里的登录、草稿和页面设置就不再接过来了（Ash 那份原样留着）。"
+      alert.addButton(withTitle: "重试")
+      alert.addButton(withTitle: "不接了，直接打开")
+      alert.addButton(withTitle: "退出")
+      switch alert.runModal() {
+      case .alertFirstButtonReturn: continue
+      case .alertSecondButtonReturn:
+        // 记不下（另一份 Navi 还在复制）就不开窗口，回到上面重新判断、再问一次。
+        _ = LegacyIdentity.skipWebData()
+      default:
+        NSApp.terminate(nil)
+        return false
+      }
+    }
+    return true
   }
 
   /// 退出时 Sparkle 会把下好的新版装上：先过 UpdateGate（会不会打断任务、停服务、备份库）。

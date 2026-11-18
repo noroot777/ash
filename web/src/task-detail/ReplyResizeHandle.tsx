@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState, type RefObject } from "react";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
 
 /**
  * 一个回复框一套:拖出来的高度存在哪、这个框最矮能到多少(跟各自 CSS 里的
@@ -7,10 +6,10 @@ import { readRenamedStorage } from "../lib/renamedStorage.ts";
  * 共用一个值会让其中一边一打开就是另一边拖出来的样子。
  */
 export type ReplyPin = { storageKey: string; minHeight: number };
-export const SINGLE_REPLY_PIN: ReplyPin = { storageKey: "ash:reply-pin-height", minHeight: 58 };
-export const TEAM_REPLY_PIN: ReplyPin = { storageKey: "ash:team-reply-pin-height", minHeight: 44 };
+export const SINGLE_REPLY_PIN: ReplyPin = { storageKey: "navi:reply-pin-height", minHeight: 58 };
+export const TEAM_REPLY_PIN: ReplyPin = { storageKey: "navi:team-reply-pin-height", minHeight: 44 };
 // 自动撑高上线前那把旧钥匙,存的是当年的固定高度,只清不读。
-const LEGACY_HEIGHT_KEY = "ash:reply-height";
+const LEGACY_HEIGHT_KEY = "navi:reply-height";
 const DEFAULT_MIN_HEIGHT = SINGLE_REPLY_PIN.minHeight;
 
 /** 上限跟着窗口走:再怎么拖也要给上面的会话留出地方。 */
@@ -26,9 +25,8 @@ export function clampReplyHeight(value: number, minHeight = DEFAULT_MIN_HEIGHT):
 function readStoredHeight({ storageKey, minHeight }: ReplyPin): number | null {
   if (storageKey === SINGLE_REPLY_PIN.storageKey) {
     window.localStorage.removeItem(LEGACY_HEIGHT_KEY);
-    window.localStorage.removeItem(`harness-next:${LEGACY_HEIGHT_KEY.slice("ash:".length)}`);
   }
-  const stored = Number(readRenamedStorage(storageKey));
+  const stored = Number(window.localStorage.getItem(storageKey));
   return Number.isFinite(stored) && stored > 0 ? clampReplyHeight(stored, minHeight) : null;
 }
 

@@ -41,7 +41,7 @@ export function ChatView({ project, onTask, onExit }: {
   const selected = useRef(roomId);
   selected.current = roomId;
   const selectRoom = useCallback((nextId: string) => {
-    window.localStorage.setItem(`ash:chat:${project.id}`, nextId);
+    window.localStorage.setItem(`navi:chat:${project.id}`, nextId);
     setEditor(null);
     setError("");
     setMentionOpen(false);
@@ -51,14 +51,14 @@ export function ChatView({ project, onTask, onExit }: {
     request.current = null;
     setRoomId(nextId);
     setSnapshot(null);
-    setDraft(window.sessionStorage.getItem(`ash:chat-draft:${nextId}`) ?? "");
+    setDraft(window.sessionStorage.getItem(`navi:chat-draft:${nextId}`) ?? "");
   }, [project.id]);
   useEffect(() => {
     let alive = true;
     chatApi.rooms(project.id).then((rows) => {
       if (!alive) return;
       setRooms(rows);
-      const saved = window.localStorage.getItem(`ash:chat:${project.id}`);
+      const saved = window.localStorage.getItem(`navi:chat:${project.id}`);
       const first = rows.find((room) => room.id === saved) ?? rows[0];
       if (first) selectRoom(first.id);
       else setEditor("create");
@@ -68,7 +68,7 @@ export function ChatView({ project, onTask, onExit }: {
   }, [project.id, selectRoom]);
   useEffect(() => {
     if (!roomId) return;
-    window.sessionStorage.setItem(`ash:chat-draft:${roomId}`, draft);
+    window.sessionStorage.setItem(`navi:chat-draft:${roomId}`, draft);
   }, [draft, roomId]);
   useEffect(() => {
     if (!roomId) return;
@@ -115,13 +115,13 @@ export function ChatView({ project, onTask, onExit }: {
     dismissed.current.add(targetId);
     try { await chatApi.remove(targetId); }
     catch (reason) { dismissed.current.delete(targetId); throw reason; }
-    window.sessionStorage.removeItem(`ash:chat-draft:${targetId}`);
+    window.sessionStorage.removeItem(`navi:chat-draft:${targetId}`);
     const rest = rooms.filter((item) => item.id !== targetId);
     setRooms(rest);
     setEditor(null);
     if (selected.current !== targetId) return;
     if (rest[0]) { selectRoom(rest[0].id); return; }
-    window.localStorage.removeItem(`ash:chat:${project.id}`);
+    window.localStorage.removeItem(`navi:chat:${project.id}`);
     selected.current = null;
     request.current = null;
     setRoomId(null);

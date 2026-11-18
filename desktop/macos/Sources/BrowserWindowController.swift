@@ -33,7 +33,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // 默认数据仓：cookie（多人模式的 ash_session）、localStorage（主题、草稿）跨启动保留。
     config.websiteDataStore = .default()
     // 服务端和前端日后要按壳区分行为时有个抓手，不影响现有判断。
-    config.applicationNameForUserAgent = "Version/26.0 Safari/605.1.15 AshMac/\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0")"
+    config.applicationNameForUserAgent = "Version/26.0 Safari/605.1.15 NaviMac/\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0")"
     config.preferences.isElementFullscreenEnabled = true
 
     webView = WKWebView(frame: .zero, configuration: config)
@@ -114,7 +114,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
   // MARK: 首次配置那扇小窗
 
-  static let frameName = "AshMainWindow"
+  static let frameName = "NaviMainWindow"
   /// 首次配置时窗口开多大：原生那一屏（FirstRunView）和随后 web 的三步向导都正好铺满它。
   static let welcomeSize = NSSize(width: 980, height: 660)
   /// 工作窗第一次打开时的大小（之后按用户拖成的样子记住）。

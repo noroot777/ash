@@ -350,7 +350,7 @@ function OtherProject({
 }
 
 // 「其他项目」那一行开没开，记在本机：点开过的人多半还想下次一进来就看得见。没存过 = 折着。
-const OTHER_PROJECTS_OPEN_KEY = "ash:other-projects:open";
+const OTHER_PROJECTS_OPEN_KEY = "navi:other-projects:open";
 
 function useOtherProjectsOpen() {
   const [open, setOpen] = useState(() => {

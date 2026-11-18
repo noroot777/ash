@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type RefObject } from "react";
 import { ArrowsDownUp } from "@phosphor-icons/react";
 import { isSearchSort, type SearchSort } from "@ash/shared/search";
 
-const SORT_STORAGE_KEY = "ash:palette:sort";
+const SORT_STORAGE_KEY = "navi:palette:sort";
 
 export const SEARCH_SORT_LABEL: Record<SearchSort, string> = {
   relevance: "相关度",
