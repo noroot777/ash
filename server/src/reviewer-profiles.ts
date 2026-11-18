@@ -150,29 +150,34 @@ export function mountReviewerProfileRoutes(api: Hono): void {
     //   「已预约」而结算因 reviewerId 为空静默不派审。
     // - 自动续轮（reviewRunId 非空）的配置已冻结在 run 行快照，profile 删了照样能续
     //   → 只清 selectedReviewerId 引用，armed 和 runId 保留。
-    const affected = await db.select({
-      taskId: freeWorkflowStates.taskId,
-      reviewArmed: freeWorkflowStates.reviewArmed,
-      reviewRunId: freeWorkflowStates.reviewRunId,
-    }).from(freeWorkflowStates).where(eq(freeWorkflowStates.selectedReviewerId, profileId));
-    const at = now();
-    await db.update(freeWorkflowStates).set({
-      selectedReviewerId: null,
-      reviewArmed: false,
-      reviewNote: null,
-      reviewSource: null,
-      // 覆盖是「相对这位审查者的这一次改动」，审查者没了它就没有参照系，跟着预约一起清。
-      reviewAgentType: null,
-      reviewExecutorId: null,
-      reviewModel: null,
-      reviewReasoningEffort: null,
-      updatedAt: at,
-    }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNull(freeWorkflowStates.reviewRunId)));
-    await db.update(freeWorkflowStates).set({
-      selectedReviewerId: null,
-      updatedAt: at,
-    }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNotNull(freeWorkflowStates.reviewRunId)));
-    await db.delete(reviewerProfiles).where(eq(reviewerProfiles.id, profileId));
+    // 摘引用和删行同一笔：中间要是空着，正在建的任务（review-on-create.ts，它在自己那笔事务里核这位还在不在）
+    // 能在「摘完、还没删」那一拍挂上这位的新预约，删完就成了指向不存在审查者的预约。
+    const affected = await db.transaction(async (tx) => {
+      const rows = await tx.select({
+        taskId: freeWorkflowStates.taskId,
+        reviewArmed: freeWorkflowStates.reviewArmed,
+        reviewRunId: freeWorkflowStates.reviewRunId,
+      }).from(freeWorkflowStates).where(eq(freeWorkflowStates.selectedReviewerId, profileId));
+      const at = now();
+      await tx.update(freeWorkflowStates).set({
+        selectedReviewerId: null,
+        reviewArmed: false,
+        reviewNote: null,
+        reviewSource: null,
+        // 覆盖是「相对这位审查者的这一次改动」，审查者没了它就没有参照系，跟着预约一起清。
+        reviewAgentType: null,
+        reviewExecutorId: null,
+        reviewModel: null,
+        reviewReasoningEffort: null,
+        updatedAt: at,
+      }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNull(freeWorkflowStates.reviewRunId)));
+      await tx.update(freeWorkflowStates).set({
+        selectedReviewerId: null,
+        updatedAt: at,
+      }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNotNull(freeWorkflowStates.reviewRunId)));
+      await tx.delete(reviewerProfiles).where(eq(reviewerProfiles.id, profileId));
+      return rows;
+    }, { behavior: "immediate" });
     for (const row of affected) {
       if (!row.reviewArmed || row.reviewRunId) continue;
       await appendTaskTimeline(row.taskId, alertLine("完成后审查预约已取消：所选审查者配置已被删除。"));

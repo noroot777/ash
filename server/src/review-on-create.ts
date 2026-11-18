@@ -6,6 +6,10 @@
 //     找不到就整批不建（`ReviewOnCreateError`），不悄悄当成不审；没设默认就不带，跟以前一样。
 //   · 预约槽跟任务行同一笔落库（`reservationRows`），提交之后补那句「已预约审查」和广播（`announceCreateReviews`）。
 //
+// 解析要做两遍：进门一遍是为了早点退回（指错了人，分支计划都不用算）；**落库那笔事务里再一遍才作数** —— 两遍之间
+// 隔着执行器快照、repo 锁、分支计划好几个 await，那位审查者可能已经被删（删除那一侧整笔在事务里，reviewer-profiles.ts），
+// 「刚才查到过」证明不了落库时它还在。第二遍里指定的那位没了照样整批不建，「默认」按那一刻的默认重新认。
+//
 // 带上的就是一条普通的手动预约（来源记 `user`）：结算、自动复审、驳回裁定、取消、改预约全走现有那一套，这里
 // 不另起一条。预约本来就不适用的任务（团队执行者、审查任务、非自由工作流、归档的 —— 门跟 free-workflow.ts
 // `reserveFreeReview` 是同一道）照旧不带，也不因此让创建失败。
@@ -39,12 +43,15 @@ export type CreateReviewSlot = { taskId: string; reviewerId: string; reviewerNam
 const reservable = (row: Candidate) =>
   (row.mode ?? "single") === "single" && !row.parentId && !row.reviewOf && row.workflowMode === "free" && !row.archived;
 
-export async function resolveCreateReviews(rows: Candidate[]): Promise<CreateReviewSlot[]> {
+/** 读审查者表用的那一头：缺省根 `db`，落库那一遍传事务（见顶部）。 */
+type Reader = Pick<typeof db, "select">;
+
+export async function resolveCreateReviews(rows: Candidate[], reader: Reader = db): Promise<CreateReviewSlot[]> {
   const wanted = rows.filter((row) => row.review && row.review !== "none" && reservable(row));
   if (!wanted.length) return [];
   const owners = [...new Set(wanted.map((row) => row.ownerUserId ?? null))];
   const named = owners.filter((owner): owner is string => owner !== null);
-  const profiles = await db.select().from(reviewerProfiles).where(or(
+  const profiles = await reader.select().from(reviewerProfiles).where(or(
     ...(owners.includes(null) ? [isNull(reviewerProfiles.ownerUserId)] : []),
     ...(named.length ? [inArray(reviewerProfiles.ownerUserId, named)] : []),
   ));

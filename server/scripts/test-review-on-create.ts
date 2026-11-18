@@ -7,13 +7,15 @@
 //  R4 没设默认 / 明确不审 / 新建面板（不传）：都不带预约；指定一位不存在的 → 400，一条都不建；
 //  R5 别人名下的审查者既当不了我的默认，也指定不了；
 //  R6 派活单与可以派出去的活：卡上那一格换了人 / 关掉，照这一格；没交就照单子上的（再缺省是默认）。
+//  R7 任务和预约同一笔：预约写不进去时报错、任务也不留（单建和不串队的批次都是）；解析完、落库前那位审查者被删：
+//     指定的那位 → 整批不建，「默认」→ 按落库那一刻的默认（已经没有了）不带，都不留指向不存在审查者的预约。
 // 跑：npm -w server run test:review-on-create
 import {
-  api, db, freeReviewRounds, freeReviewRuns, freeWorkflowStates, hasStarted, notePrerequisiteProgress, project, request, row,
+  api, createTasks, db, freeReviewRounds, freeReviewRuns, freeWorkflowStates, hasStarted, notePrerequisiteProgress, project, request, row,
   setup, sleep, started, step, tasks, teardown, until, arm, review,
 } from "./prerequisite-fixture.js";
 import assert from "node:assert/strict";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 const { reviewerProfiles } = await import("../src/db/schema.js");
 const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
@@ -186,6 +188,42 @@ try {
     ] }, scope);
     assert.ok(!("error" in suggested));
     assert.deepEqual(suggested.items.map((item) => item.review), ["default", "none"]);
+  }
+
+  // ── R7 同一笔落库；落库前审查者被删 ──
+  {
+    const titled = async (title: string) => (await db.select().from(tasks).where(eq(tasks.title, title))).length;
+    await db.run(sql.raw("CREATE TRIGGER reject_reservation BEFORE INSERT ON free_workflow_states BEGIN SELECT RAISE(ABORT, 'injected'); END"));
+    try {
+      let res = await request("POST", "/tasks", { projectId: p.key, title: "预约写不进去", body: "x", mode: "single", review: "default" });
+      assert.notEqual(res.status, 201, "预约写不进去：报错");
+      assert.equal(await titled("预约写不进去"), 0, "单建：任务也不留");
+      res = await request("POST", `/groups/${p.group}/tasks/batch`, { tasks: [{ title: "批次预约写不进去", body: "x", review: "default" }] });
+      assert.notEqual(res.status, 201);
+      assert.equal(await titled("批次预约写不进去"), 0, "不串队的批次：任务也不留");
+    } finally {
+      await db.run(sql.raw("DROP TRIGGER reject_reservation"));
+    }
+
+    const at = new Date().toISOString();
+    const draft = (id: string, review: "default" | { reviewer: string }) => ({
+      id, projectId: p.key, title: id, body: "x", mode: "single" as const, status: "backlog" as const, agentType: "claude" as const,
+      workflowMode: "free" as const, useWorktree: false, review, createdAt: at, updatedAt: at,
+    });
+    const doomed = await reviewer("doomed");
+    const removeDoomed = async () => assert.equal((await request("DELETE", `/reviewer-profiles/${doomed}`)).status, 200);
+    await assert.rejects(createTasks([draft("race-explicit", { reviewer: doomed })], undefined, removeDoomed), ReviewOnCreateError,
+      "指定的那位在落库前被删：整批不建");
+    assert.equal(await titled("race-explicit"), 0);
+    const fleeting = await reviewer("fleeting");
+    await request("PATCH", `/reviewer-profiles/${fleeting}`, { isDefault: true });
+    const [created] = await createTasks([draft("race-default", "default")], undefined, async () => {
+      assert.equal((await request("DELETE", `/reviewer-profiles/${fleeting}`)).status, 200);
+    });
+    assert.equal(await slot(created!.id), null, "默认那位在落库前被删：按那一刻的默认（没有）不带");
+    const dangling = await db.all<{ n: number }>(sql.raw(
+      "SELECT count(*) AS n FROM free_workflow_states s LEFT JOIN reviewer_profiles r ON r.id = s.selected_reviewer_id WHERE s.review_armed = 1 AND s.selected_reviewer_id IS NOT NULL AND r.id IS NULL"));
+    assert.equal(dangling[0]?.n, 0, "没有指向不存在审查者的预约");
   }
 
   console.log("review-on-create: ok");

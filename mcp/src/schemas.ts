@@ -47,12 +47,13 @@ export const QUEUE_VS_PREREQUISITES =
 export const REVIEWER_GUIDE =
   "谁来审：缺省 = 用户设的默认审查者，建出来就带审查预约、完成后自动开审（没设默认就不审）；"
   + "写审查者名字或 id = 交给那一位；null = 不审查 —— 只有用户明确说「不用审」才传 null，别自己判断「这条不用审」就关掉";
-export const REVIEWER = z.string().nullable().optional().describe(REVIEWER_GUIDE);
+// 空白不是一位审查者，也不是「不审」（关掉只认 null）：当参数错退回去，跟 HTTP 那一侧对显式空名的处理一样。
+export const REVIEWER = z.string().trim().min(1, "reviewer 不能是空白；不审查请传 null").nullable().optional().describe(REVIEWER_GUIDE);
 
 /** 工具参数里的 reviewer 落成建任务请求里的 review：缺省带默认，null 不审，其余按名字或 id 指定。 */
 export function reviewChoiceOf(reviewer: string | null | undefined): "default" | "none" | { reviewer: string } {
   if (reviewer === undefined) return "default";
-  if (reviewer === null || !reviewer.trim()) return "none";
+  if (reviewer === null) return "none";
   return { reviewer: reviewer.trim() };
 }
 

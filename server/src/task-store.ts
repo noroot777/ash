@@ -24,7 +24,7 @@ import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@ash
 import { parseDispatchSuggestions, publicSuggestions } from "@ash/shared/dispatch-suggestion";
 import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
 import type { CreateReviewChoice } from "@ash/shared/review-on-create";
-import { announceCreateReviews, reservationRows, resolveCreateReviews } from "./review-on-create.js";
+import { announceCreateReviews, reservationRows, resolveCreateReviews, type CreateReviewSlot } from "./review-on-create.js";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
@@ -377,8 +377,9 @@ export async function createTasks(
   const dispatchedBy = await resolveDispatchedBy(sourced);
   // 没指明交给谁、又收在某条任务名下的：交给那条任务「派出去的活交给谁」的默认值（task-dispatch.ts）。
   const assigned = await withDispatchDefaults(sourced, dispatchedBy);
-  // 建出来就带的审查预约：落库前定成具体的一位（指定了却找不到整批不建），槽跟任务行同一笔落（review-on-create.ts）。
-  const reviewSlots = await resolveCreateReviews(assigned);
+  // 建出来就带的审查预约：先核一遍（指定了却找不到整批不建，早退），落库那笔事务里再定一遍才作数（review-on-create.ts）。
+  await resolveCreateReviews(assigned);
+  let reviewSlots: CreateReviewSlot[] = [];
   const normalizedRows = await Promise.all(assigned.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
     const requested = row.useWorktree ?? worktreeDefaultByProject.get(row.projectId) ?? false;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
@@ -421,23 +422,20 @@ export async function createTasks(
       }
       // 合入目标要等分支计划算出来才判得了（prerequisite-store.ts），所以排在它后面、落库前面。
       // 判环与落边在整张图上排队（prerequisite-store.ts `withPrerequisiteGraph`）；不带前置的照旧直接落。
-      // 带 `atomic` 的：任务行、前置边和调用方那几笔同一笔事务，在认领链上（见上）。锁序是图 → 认领链：链上的人不会回头等图。
+      // 任务行、预约槽、前置边**始终同一笔事务**（分开落时预约一失败，报错之后库里留着一条没预约的任务）。带 `atomic`
+      // 的再把调用方那几笔放进来、整笔排在认领链上（见上）。锁序是图 → 认领链：链上的人不会回头等图。
+      const write = async (transaction: TaskTransaction) => {
+        await atomic?.before?.(transaction);
+        await transaction.insert(tasks).values(normalizedRows);
+        reviewSlots = await resolveCreateReviews(assigned, transaction);
+        if (reviewSlots.length) await transaction.insert(freeWorkflowStates).values(reservationRows(reviewSlots, now()));
+        await insertPrerequisiteEdges(prerequisites, transaction);
+        await atomic?.after?.(transaction);
+      };
       const land = async () => {
         await assertPrerequisiteEdges(prerequisites, normalizedRows.map(edgeTaskOf));
-        const reservations = reservationRows(reviewSlots, now());
-        if (!atomic) {
-          await db.insert(tasks).values(normalizedRows);
-          if (reservations.length) await db.insert(freeWorkflowStates).values(reservations);
-          await insertPrerequisiteEdges(prerequisites);
-          return;
-        }
-        await serializeQueueClaims(() => db.transaction(async (transaction) => {
-          await atomic.before?.(transaction);
-          await transaction.insert(tasks).values(normalizedRows);
-          if (reservations.length) await transaction.insert(freeWorkflowStates).values(reservations);
-          await insertPrerequisiteEdges(prerequisites, transaction);
-          await atomic.after?.(transaction);
-        }, { behavior: "immediate" }));
+        if (!atomic) return db.transaction(write, { behavior: "immediate" });
+        await serializeQueueClaims(() => db.transaction(write, { behavior: "immediate" }));
         atomic.onCommitted?.();
       };
       await (prerequisites.length ? withPrerequisiteGraph(land) : land());
