@@ -85,19 +85,21 @@ case "webdata":
   do { try LegacyIdentity.adoptWebData(library: library, from: "old.id", to: "new.id", defaults: defaults) } catch { failed = true }
   try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path("HTTPStorages"))
   require(failed, "a failed copy is reported")
-  require(!LegacyIdentity.webDataSettled(defaults), "not marked adopted after a failure")
+  let settled = { LegacyIdentity.webDataSettled(library: library, current: "new.id", defaults: defaults) }
+  require(!settled(), "not marked adopted after a failure")
   require(read("WebKit/new.id/WebsiteData/LocalStorage/origin.sqlite3") == "local-storage", "WebKit data copied")
   require(!fm.fileExists(atPath: path("HTTPStorages/new.id")), "no half copy left behind")
-  require(try! fm.contentsOfDirectory(atPath: path("HTTPStorages")).allSatisfy { !$0.hasSuffix(".adopting") }, "no staging left behind")
-  // 上一次拷到一半进程没了：暂存位置里留着半截。这一次清掉重拷，放上去的是完整的。
-  try! fm.createDirectory(atPath: path("HTTPStorages/.new.id.adopting/half"), withIntermediateDirectories: true)
+  require(try! fm.contentsOfDirectory(atPath: path("HTTPStorages")).allSatisfy { !$0.contains(".adopting") }, "no staging left behind")
+  // 上一次拷到一半进程没了：它自己那个暂存位置里留着半截。这一次清掉重拷，放上去的是完整的。
+  try! fm.createDirectory(atPath: path("HTTPStorages/.new.id.adopting-99999/half"), withIntermediateDirectories: true)
   let copied = try! LegacyIdentity.adoptWebData(library: library, from: "old.id", to: "new.id", defaults: defaults)
   require(copied == [path("HTTPStorages/new.id"), path("HTTPStorages/new.id.binarycookies")], "retry copied \(copied)")
   require(read("HTTPStorages/new.id/httpstorages.sqlite") == "cookies", "cookie store copied")
-  require(!fm.fileExists(atPath: path("HTTPStorages/new.id/half")) && !fm.fileExists(atPath: path("HTTPStorages/.new.id.adopting")), "stale staging cleared")
+  require(!fm.fileExists(atPath: path("HTTPStorages/new.id/half")) && !fm.fileExists(atPath: path("HTTPStorages/.new.id.adopting-99999")), "stale staging cleared")
   require(read("HTTPStorages/new.id.binarycookies") == "binary-cookies", "binary cookies copied")
   require(read("WebKit/old.id/WebsiteData/LocalStorage/origin.sqlite3") == "local-storage", "copied, not moved: the old data is still there")
-  require(LegacyIdentity.webDataSettled(defaults), "marked adopted once everything is in place")
+  require(settled(), "marked adopted once everything is in place")
+  require(fm.fileExists(atPath: path("WebKit/.new.id.adopted-from-ash")), "the marker other processes trust is on disk")
   // 接过之后：新 app 自己的数据不会再被旧的盖掉。
   try! "changed-by-old-app".write(toFile: path("WebKit/old.id/WebsiteData/LocalStorage/origin.sqlite3"), atomically: true, encoding: .utf8)
   try! fm.removeItem(atPath: path("HTTPStorages/new.id.binarycookies"))
@@ -115,24 +117,37 @@ case "gate":
   var asked = 0
   require(LegacyIdentity.prepareWebData(library: library, from: "absent.id", to: "gate.id", defaults: defaults,
                                         quitLegacy: { asked += 1; return false }) == nil, "nothing to adopt → open")
-  require(asked == 0 && LegacyIdentity.webDataSettled(defaults), "nothing to adopt → never asks the old app, settled")
+  require(asked == 0 && LegacyIdentity.webDataSettled(library: library, current: "gate.id", defaults: defaults), "nothing to adopt → never asks the old app, settled")
+  try! fm.removeItem(atPath: path("WebKit/.gate.id.adopted-from-ash"))
   defaults = scratchDefaults(args[3] + ".busy")
   let busy = LegacyIdentity.prepareWebData(library: library, from: "old.id", to: "gate.id", defaults: defaults, quitLegacy: { false })
   require(busy?.contains("Ash 还开着") == true, "old app still running → blocked: \(busy ?? "nil")")
-  require(!LegacyIdentity.webDataSettled(defaults) && !fm.fileExists(atPath: path("WebKit/gate.id")), "nothing copied while it runs")
-  try! fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: path("WebKit"))
+  let gateSettled = { LegacyIdentity.webDataSettled(library: library, current: "gate.id", defaults: defaults) }
+  require(!gateSettled() && !fm.fileExists(atPath: path("WebKit/gate.id")), "nothing copied while it runs")
+  // 旧数据读不出来（比如权限、坏盘）：复制失败。
+  try! fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path("WebKit/old.id/WebsiteData"))
   let failed = LegacyIdentity.prepareWebData(library: library, from: "old.id", to: "gate.id", defaults: defaults, quitLegacy: { true })
-  try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path("WebKit"))
-  require(failed?.contains("没成") == true && !LegacyIdentity.webDataSettled(defaults), "copy failure → blocked: \(failed ?? "nil")")
+  try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path("WebKit/old.id/WebsiteData"))
+  require(failed?.contains("没成") == true && !gateSettled(), "copy failure → blocked: \(failed ?? "nil")")
   require(LegacyIdentity.prepareWebData(library: library, from: "old.id", to: "gate.id", defaults: defaults, quitLegacy: { true }) == nil, "retry → open")
-  require(fm.fileExists(atPath: path("WebKit/gate.id")) && LegacyIdentity.webDataSettled(defaults), "copied and settled")
+  require(fm.fileExists(atPath: path("WebKit/gate.id")) && gateSettled(), "copied and settled")
   defaults = scratchDefaults(args[3] + ".skip")
-  LegacyIdentity.settleWebData(defaults)
+  try! LegacyIdentity.settleWebData(library: library, current: "gate.skip", defaults: defaults)
   require(LegacyIdentity.prepareWebData(library: library, from: "old.id", to: "gate.skip", defaults: defaults, quitLegacy: { false }) == nil,
           "the user chose to skip → open without copying")
   require(!fm.fileExists(atPath: path("WebKit/gate.skip")), "skipping copies nothing")
   for suffix in ["", ".busy", ".skip"] { UserDefaults.standard.removePersistentDomain(forName: args[3] + suffix) }
   print("OK gate")
+
+case "race":
+  // 参数：library 旧 id 新 id defaults 域。几份同时跑的 Navi 之一：走真的 prepareWebData，返回时（这一份要建窗口了）
+  // 报一下目标里有几个文件、这一份复制了没有。
+  let library = URL(fileURLWithPath: args[2], isDirectory: true)
+  let defaults = UserDefaults(suiteName: args[5])!
+  let blocked = LegacyIdentity.prepareWebData(library: library, from: args[3], to: args[4], defaults: defaults, quitLegacy: { true })
+  let target = library.appendingPathComponent("WebKit/\(args[4])").path
+  let files = FileManager.default.enumerator(atPath: target)?.allObjects.count ?? -1
+  print("OPEN blocked=\(blocked ?? "nil") files=\(files)")
 
 case "is-legacy":
   // 参数：路径 期望(yes/no)
@@ -140,12 +155,13 @@ case "is-legacy":
   print("OK is-legacy")
 
 case "retire", "retire-link-fails":
-  // 参数：旧包路径 新包路径 bundle-users.sh；打出结果给测试判。retire-link-fails：原地放软链那一步失败。
+  // 参数：旧包路径 新包路径 bundle-users.sh 旧登录项 plist 路径；打出结果给测试判。retire-link-fails：原地放软链那一步失败。
+  // 登录项路径一定由测试给：默认那一份是这台机器上真的 ~/Library/LaunchAgents/dev.ash.server.plist。
   let failLink: (URL, URL) throws -> Void = { _, _ in throw CocoaError(.fileWriteNoPermission) }
+  let (bundle, successor, users, login) = (URL(fileURLWithPath: args[2]), URL(fileURLWithPath: args[3]), URL(fileURLWithPath: args[4]), URL(fileURLWithPath: args[5]))
   let result = mode == "retire"
-    ? LegacyIdentity.retire(URL(fileURLWithPath: args[2]), successor: URL(fileURLWithPath: args[3]), usersScript: URL(fileURLWithPath: args[4]))
-    : LegacyIdentity.retire(URL(fileURLWithPath: args[2]), successor: URL(fileURLWithPath: args[3]), usersScript: URL(fileURLWithPath: args[4]),
-                            placeLink: failLink)
+    ? LegacyIdentity.retire(bundle, successor: successor, usersScript: users, loginItem: login)
+    : LegacyIdentity.retire(bundle, successor: successor, usersScript: users, loginItem: login, placeLink: failLink)
   switch result {
   case .retired(let trashedAt): print("RETIRED \(trashedAt)")
   case .busy(let why): print("BUSY \(why)")

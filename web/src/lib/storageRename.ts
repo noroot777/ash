@@ -8,8 +8,9 @@
 // 的标签页先写过）就以新的为准。挪完旧键就删掉：还开着的老版本标签页读到的会是空值，只是那一页的偏好
 // 回到默认，刷新一下就是新版本、读得到挪过来的那份。
 //
-// 写不进去（存储快满）时先腾出旧键自己那块地方再写；还是写不进去，旧值留在原处等下次启动再挪，这一次
-// 由 `keepLegacyReadable` 让读新键的地方照样读到它 —— 只留着不让读，草稿在用户眼里就是没了。
+// 写不进去（存储快满）时**旧键一个字都不动**：先删旧的再写新的，一旦新的也写不进、旧的又放不回去，
+// 用户存下的唯一一份就只剩这一页的内存，一刷新就没了。所以只有新键确实写进去了才删旧键；写不进就把这一条
+// 暂缓改名，由 `keepLegacyReadable` 让读新键的地方读旧键、写新键写不下时在旧键原地更新，下次启动再挪。
 //
 // 下面这张表里的旧前缀是兼容值：批量改名时别把它们也换成 navi，不然旧数据就没人认了。
 export const LEGACY_STORAGE_PREFIXES: readonly (readonly [legacy: string, current: string])[] = [
@@ -21,11 +22,10 @@ export const LEGACY_STORAGE_PREFIXES: readonly (readonly [legacy: string, curren
 
 type KeyValueStorage = Pick<Storage, "length" | "key" | "getItem" | "setItem" | "removeItem">;
 
-/** 这一次没挪成的那一条：新键名、旧值还在的旧键名，以及值本身（连旧键都写不回去时只剩这一份）。 */
+/** 这一次没挪成的那一条：新键名，和旧值原样留着的旧键名。 */
 export interface StuckKey {
   key: string;
   legacyKey: string;
-  value: string;
 }
 
 export interface RenameResult {
@@ -64,26 +64,16 @@ export function renameLegacyStorageKeys(storage: KeyValueStorage): RenameResult 
       result.moved++;
     }
     if (!winner) continue;
-    if (move(storage, winner.key, target, winner.value)) result.moved++;
-    else result.stuck.push({ key: target, legacyKey: winner.key, value: winner.value });
+    try {
+      storage.setItem(target, winner.value);
+    } catch {
+      result.stuck.push({ key: target, legacyKey: winner.key }); // 写不进去：旧键原样留着，见文件头
+      continue;
+    }
+    storage.removeItem(winner.key);
+    result.moved++;
   }
   return result;
-}
-
-function move(storage: KeyValueStorage, from: string, to: string, value: string): boolean {
-  try {
-    storage.setItem(to, value);
-    storage.removeItem(from);
-    return true;
-  } catch { /* 写不进去：腾出旧键那块地方再试一次 */ }
-  storage.removeItem(from);
-  try {
-    storage.setItem(to, value);
-    return true;
-  } catch {
-    try { storage.setItem(from, value); } catch { /* 连原处都放不回去：只剩 StuckKey 里那份，这一次照样读得到 */ }
-    return false;
-  }
 }
 
 type StoragePrototype = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -91,9 +81,10 @@ const pending = new WeakMap<object, Map<string, StuckKey>>();
 const patched = new WeakSet<object>();
 
 /**
- * 这一次没挪成的那几条，让读新键的地方照样读到旧值，直到这个新键被写过或删过（那时用户已经在旧值上
- * 动过手了，旧值随之作废）。各处读存储都直接调 `localStorage.getItem`，所以垫在 Storage 的原型上；
- * 只有这一次真的有没挪成的键才垫，垫的也只是那几个键，别的键一概原样。
+ * 这一次没挪成的那几条：读新键的地方照样读到旧键里的值；写新键时能写进新键就写进去、旧键随之作废，写不下
+ * 就在旧键原地更新（旧键本来就占着那块地方，名字还短一点）；原地也写不下就照常把错抛给调用方，旧内容不动。
+ * 删新键连旧键一起删。各处读存储都直接调 `localStorage.getItem`，所以垫在 Storage 的原型上；只有这一次真的
+ * 有没挪成的键才垫，垫的也只是那几个键，别的键一概原样。
  */
 export function keepLegacyReadable(storage: object, stuck: readonly StuckKey[], proto: StoragePrototype = Storage.prototype): void {
   if (stuck.length === 0) return;
@@ -103,28 +94,28 @@ export function keepLegacyReadable(storage: object, stuck: readonly StuckKey[], 
   if (patched.has(proto)) return;
   patched.add(proto);
   const { getItem, setItem, removeItem } = proto;
+  const entryFor = (self: object, key: string) => pending.get(self)?.get(String(key));
   proto.getItem = function (this: Storage, key: string) {
     const value = getItem.call(this, key);
     if (value !== null) return value;
-    const entry = pending.get(this)?.get(String(key));
-    return entry ? (getItem.call(this, entry.legacyKey) ?? entry.value) : null;
+    const entry = entryFor(this, key);
+    return entry ? getItem.call(this, entry.legacyKey) : null;
   };
   proto.setItem = function (this: Storage, key: string, value: string) {
-    const entry = pending.get(this)?.get(String(key));
+    const entry = entryFor(this, key);
     if (!entry) return setItem.call(this, key, value);
-    // 存储本来就快满了，旧值自己占着那块地方：先让出来再写；写不进去就放回去，照常把错抛给调用方。
-    removeItem.call(this, entry.legacyKey);
     try {
       setItem.call(this, key, value);
-    } catch (error) {
-      try { setItem.call(this, entry.legacyKey, entry.value); } catch { /* 还有内存里那份 */ }
-      throw error;
+    } catch {
+      setItem.call(this, entry.legacyKey, value); // 新键写不下：旧键原地更新；这也写不下就抛给调用方
+      return;
     }
     pending.get(this)?.delete(String(key));
+    removeItem.call(this, entry.legacyKey);
   };
   proto.removeItem = function (this: Storage, key: string) {
     removeItem.call(this, key);
-    const entry = pending.get(this)?.get(String(key));
+    const entry = entryFor(this, key);
     if (!entry) return;
     pending.get(this)?.delete(String(key));
     removeItem.call(this, entry.legacyKey);

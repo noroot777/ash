@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       alert.addButton(withTitle: "退出")
       switch alert.runModal() {
       case .alertFirstButtonReturn: continue
-      case .alertSecondButtonReturn: LegacyIdentity.settleWebData()
+      case .alertSecondButtonReturn: LegacyIdentity.skipWebData()
       default:
         NSApp.terminate(nil)
         return false

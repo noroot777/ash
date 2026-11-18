@@ -83,10 +83,38 @@ enum LegacyIdentity {
 
   /// 网页数据接完了，或者用户说了不接。**没走到这一步之前不能建 WKWebView**：它一建出来就在新身份下建好
   /// 自己那份目录，「目标在不在」从此分不清是接过来的还是它建的，旧的登录和草稿就再也接不回来了。
-  static func webDataSettled(_ defaults: UserDefaults = .standard) -> Bool { defaults.bool(forKey: adoptedWebDataKey) }
+  ///
+  /// 「接完了」除了记在 defaults 里，还落一个标记文件：同时开着两份 Navi 时，一份写的 defaults 另一份未必
+  /// 马上看得到，锁里认的是文件。
+  static func webDataSettled(library: URL, current: String, defaults: UserDefaults) -> Bool {
+    defaults.bool(forKey: adoptedWebDataKey) || FileManager.default.fileExists(atPath: webDataMarker(library, current).path)
+  }
 
-  /// 用户选了「不接了」（或者压根没有可接的）：之后照新的样子开。
-  static func settleWebData(_ defaults: UserDefaults = .standard) { defaults.set(true, forKey: adoptedWebDataKey) }
+  /// 用户选了「不接了」：之后照新的样子开。也在锁里记，免得另一份正在复制的 Navi 跟它交错。
+  static func settleWebData(library: URL, current: String, defaults: UserDefaults) throws {
+    try withAdoptionLock(library: library, current: current) { try commitWebData(library, current, defaults) }
+  }
+
+  /// AppDelegate 那个「不接了，直接打开」。
+  static func skipWebData() {
+    do {
+      try settleWebData(library: userLibrary, current: successor, defaults: .standard)
+    } catch {
+      // 标记文件落不下：defaults 那一笔照样记上，这一份 Navi 照新的样子开。
+      UserDefaults.standard.set(true, forKey: adoptedWebDataKey)
+      logger.error("记不下「不接了」：\(error.localizedDescription, privacy: .public)")
+    }
+  }
+
+  private static var userLibrary: URL { FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0] }
+  private static func webDataMarker(_ library: URL, _ current: String) -> URL {
+    library.appendingPathComponent("WebKit/.\(current).adopted-from-ash")
+  }
+
+  private static func commitWebData(_ library: URL, _ current: String, _ defaults: UserDefaults) throws {
+    try Data().write(to: webDataMarker(library, current), options: .atomic)
+    defaults.set(true, forKey: adoptedWebDataKey)
+  }
 
   private static func webDataPairs(library: URL, from legacy: String, to current: String) -> [(URL, URL)] {
     [
@@ -100,47 +128,72 @@ enum LegacyIdentity {
     let errorDescription: String?
   }
 
+  /// 整次接班（查已接、复制、放上去、记已接）同一时刻只有一个进程在做：同时开着的两份 Navi（构建目录里的、
+  /// 「应用程序」里的、`open -n` 多开的）各自按路径判断，就会一份把另一份还没拷完的目录放上去、还记了已接。
+  /// 另一份在锁上等，等到时已经接完，它也就不会在接完之前建窗口。
+  private static func withAdoptionLock<T>(library: URL, current: String, _ body: () throws -> T) throws -> T {
+    let directory = library.appendingPathComponent("WebKit", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let path = directory.appendingPathComponent(".\(current).adopting.lock").path
+    let descriptor = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else {
+      throw AdoptionError(errorDescription: "打不开迁移锁 \(path)：\(String(cString: strerror(errno)))")
+    }
+    defer { close(descriptor) }
+    guard flock(descriptor, LOCK_EX) == 0 else {
+      throw AdoptionError(errorDescription: "拿不到迁移锁 \(path)：\(String(cString: strerror(errno)))")
+    }
+    return try body()
+  }
+
   /// WebKit 的网站数据、cookie 按包标识存（`library` 是 ~/Library）。把旧的复制过来（复制，不挪：旧的留着能退回去）。
-  /// 每一项先整份拷到旁边的暂存位置、拷完一次改名放上去，所以放上去的一定是完整的一份；目标已经在就是上一次放上去的
-  /// （没接完之前不建 WKWebView，没有别人会建它），跳过。三项都放上去才记「已接」。失败抛错：暂存的半截删掉、
-  /// 不记已接，下次再来。返回这一次复制了的路径。
+  /// 都在迁移锁里做：每一项拷到**这个进程自己**的暂存位置、拷完一次改名放上去，放上去的一定是自己拷完整的那一份；
+  /// 目标已经在就是之前哪一次放上去的（只有持锁的进程会放，没接完之前也没人建 WKWebView），跳过。三项都放上去
+  /// 才记「已接」。失败抛错：暂存的半截删掉、不记已接，下次再来。返回这一次复制了的路径。
   @discardableResult
   static func adoptWebData(library: URL, from legacy: String, to current: String, defaults: UserDefaults) throws -> [String] {
-    guard !webDataSettled(defaults) else { return [] }
-    let fm = FileManager.default
-    var copied: [String] = []
-    for (source, target) in webDataPairs(library: library, from: legacy, to: current) {
-      guard fm.fileExists(atPath: source.path), !fm.fileExists(atPath: target.path) else { continue }
-      let staging = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).adopting")
-      try? fm.removeItem(at: staging) // 上一次拷到一半进程没了留下的
-      do {
-        try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try fm.copyItem(at: source, to: staging)
-        try fm.moveItem(at: staging, to: target)
-      } catch {
-        try? fm.removeItem(at: staging)
-        throw AdoptionError(errorDescription: "复制 \(source.path) 没成：\(error.localizedDescription)")
+    try withAdoptionLock(library: library, current: current) {
+      guard !webDataSettled(library: library, current: current, defaults: defaults) else { return [] }
+      let fm = FileManager.default
+      var copied: [String] = []
+      for (source, target) in webDataPairs(library: library, from: legacy, to: current) {
+        let parent = target.deletingLastPathComponent()
+        let prefix = ".\(target.lastPathComponent).adopting"
+        // 之前拷到一半进程没了留下的暂存：持锁的只有自己，别人的都是死的。
+        for leftover in (try? fm.contentsOfDirectory(atPath: parent.path)) ?? [] where leftover.hasPrefix(prefix) && !leftover.hasSuffix(".lock") {
+          try? fm.removeItem(at: parent.appendingPathComponent(leftover))
+        }
+        guard fm.fileExists(atPath: source.path), !fm.fileExists(atPath: target.path) else { continue }
+        let staging = parent.appendingPathComponent("\(prefix)-\(getpid())")
+        do {
+          try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+          try fm.copyItem(at: source, to: staging)
+          try fm.moveItem(at: staging, to: target)
+        } catch {
+          try? fm.removeItem(at: staging)
+          throw AdoptionError(errorDescription: "复制 \(source.path) 没成：\(error.localizedDescription)")
+        }
+        copied.append(target.path)
       }
-      copied.append(target.path)
+      try commitWebData(library, current, defaults)
+      return copied
     }
-    settleWebData(defaults)
-    return copied
   }
 
   /// 建窗口之前把网页数据接过来。返回 nil = 可以建窗口了；否则是还不能建的原因。没有可接的直接记已接。
   /// 旧 app 还开着就不复制：它的 WebKit 还在往那几个库里写，拷下来的不是一份一致的快照，而且只接一次。
   static func prepareWebData(library: URL, from legacy: String, to current: String, defaults: UserDefaults,
                              quitLegacy: () -> Bool) -> String? {
-    guard !webDataSettled(defaults) else { return nil }
+    guard !webDataSettled(library: library, current: current, defaults: defaults) else { return nil }
     let fm = FileManager.default
-    guard webDataPairs(library: library, from: legacy, to: current).contains(where: { fm.fileExists(atPath: $0.0.path) }) else {
-      settleWebData(defaults)
-      return nil
-    }
-    guard quitLegacy() else {
-      return "Ash 还开着（可能在等你确认装更新，或者在等手上的任务停下来）。先把 Ash 退出，再点「重试」。"
-    }
     do {
+      guard webDataPairs(library: library, from: legacy, to: current).contains(where: { fm.fileExists(atPath: $0.0.path) }) else {
+        try settleWebData(library: library, current: current, defaults: defaults)
+        return nil
+      }
+      guard quitLegacy() else {
+        return "Ash 还开着（可能在等你确认装更新，或者在等手上的任务停下来）。先把 Ash 退出，再点「重试」。"
+      }
       let copied = try adoptWebData(library: library, from: legacy, to: current, defaults: defaults)
       if !copied.isEmpty { logger.notice("接过网页数据：\(copied.joined(separator: ", "), privacy: .public)") }
       return nil
@@ -153,17 +206,16 @@ enum LegacyIdentity {
   // MARK: 启动时接班（窗口建出来之前调）
 
   /// 正式那份每次启动、建窗口之前都调。返回 nil 就可以建窗口了；否则是网页数据还接不过来的原因，由调用方问用户
-  /// 重试、不接了（`settleWebData`）还是退出。接过的不再接；旧 app 还在用就在后台隔一会儿再试。
+  /// 重试、不接了（`skipWebData`）还是退出。接过的不再接；旧 app 还在用就在后台隔一会儿再试。
   static func adoptAtLaunch() -> String? {
     guard isSuccessor else { return nil }
-    let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-    if let blocked = prepareWebData(library: library, from: bundleID, to: successor, defaults: .standard,
+    if let blocked = prepareWebData(library: userLibrary, from: bundleID, to: successor, defaults: .standard,
                                     quitLegacy: { quitLegacyApps(timeout: 8) }) {
       return blocked
     }
     guard LoginService.isInstalledLocation else { return nil }
     _ = quitLegacyApps(timeout: 8) // 让位时窗口进程得已经退了；退不了就等下一轮重试
-    adoptLoginItem()
+    adoptLoginItem() // 第一次在主线程上换，赶在 LoginService.reconcileAtLaunch 之前
     retireWhenIdle()
     return nil
   }
@@ -181,25 +233,29 @@ enum LegacyIdentity {
     return running.allSatisfy { $0.isTerminated }
   }
 
+  /// 旧的登录项（指着 Ash.app 里的 `Contents/MacOS/Ash`）。
+  static var legacyLoginItem: URL {
+    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(loginLabel).plist")
+  }
+
   /// 旧登录项还在（= 用户开着）就换成自己的：**先把自己的装好、确认生效，再卸旧的**。反过来的话，新的那条装不上时
   /// 旧的已经没了，而抄过来的 LoginServiceConfigured 让之后的启动以为是用户关掉的，再也不会补上。装不上就两条都
-  /// 原样留着（旧的那条照样在登录时起服务；旧包让位之后它指的路径是指向 Navi 的软链），旧的 plist 在就是「还没换」，
-  /// 下次启动再换。
+  /// 原样留着，旧的 plist 在就是「还没换」：旧包也就不让位（`retire` 认它），旧登录项指着的 Ash 可执行文件一直在，
+  /// 登录时照样起服务；让位的后台重试每一轮都先再换一次。
   private static func adoptLoginItem() {
-    let plist = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/LaunchAgents/\(loginLabel).plist")
+    let plist = legacyLoginItem
     guard FileManager.default.fileExists(atPath: plist.path) else { return }
     do {
       try LoginService.setEnabled(true)
     } catch {
-      logger.error("换登录项没成，\(loginLabel, privacy: .public) 先留着、下次启动再换：\(error.localizedDescription, privacy: .public)")
+      logger.error("换登录项没成，\(loginLabel, privacy: .public) 先留着、旧 app 也先不让位：\(error.localizedDescription, privacy: .public)")
       return
     }
     LoginService.bootout(label: loginLabel)
     do {
       try FileManager.default.removeItem(at: plist)
     } catch {
-      logger.error("删不掉 \(plist.path, privacy: .public)，下次启动再删：\(error.localizedDescription, privacy: .public)")
+      logger.error("删不掉 \(plist.path, privacy: .public)，下一轮再删：\(error.localizedDescription, privacy: .public)")
     }
     logger.notice("登录项从 \(loginLabel, privacy: .public) 换成了 \(LoginService.label, privacy: .public)")
   }
@@ -219,6 +275,7 @@ enum LegacyIdentity {
 
   private static func retireWhenIdle() {
     retireQueue.async {
+      DispatchQueue.main.sync { adoptLoginItem() } // 上一轮没换成的登录项先再换一次；跟菜单开关同在主线程，不交错
       let results = legacyBundles().map { retire($0, successor: Bundle.main.bundleURL) }
       for result in results { logger.notice("旧 app：\(String(describing: result), privacy: .public)") }
       guard results.contains(where: { if case .busy = $0 { return true } else { return false } }) else { return }
@@ -252,15 +309,23 @@ enum LegacyIdentity {
   ///    都按真实文件身份再扫一遍；
   ///  · 挪进废纸篓之后按打开着的文件再扫一遍，有人就挪回原处；原地放软链失败也挪回原处，免得写死旧路径的命令落空。
   /// 窗口进程不拿锁，单独认。扫不了就当有人在用。
+  ///
+  /// 「没人在用」还得包括**登记在外面、以后才会跑的**：旧登录项写死的是 `Ash.app/Contents/MacOS/Ash`，留下的
+  /// 软链指向 Navi.app，那里只有 `MacOS/Navi`，旧登录项就落空了。所以旧登录项还在（还没换成 Navi 的）时不让位。
+  /// 别处登记的都指着 `Contents/Resources/app/…`（CLI 的 MCP 登记），经软链照样走得通。
   static func retire(
     _ bundle: URL, successor: URL,
     usersScript: URL? = Bundle.main.url(forResource: "bundle-users", withExtension: "sh"),
+    loginItem: URL? = legacyLoginItem,
     placeLink: (URL, URL) throws -> Void = { try FileManager.default.createSymbolicLink(at: $0, withDestinationURL: $1) }
   ) -> Retirement {
     let fm = FileManager.default
     if let gui = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
       .first(where: { $0.bundleURL?.standardizedFileURL == bundle.standardizedFileURL && !$0.isTerminated }) {
       return .busy("旧 app 的窗口进程 \(gui.processIdentifier) 还没退")
+    }
+    if let loginItem, fm.fileExists(atPath: loginItem.path) {
+      return .busy("旧的登录项 \(loginItem.path) 还没换成 Navi 的，它跑的是旧包里的 Ash 可执行文件")
     }
     guard let usersScript, fm.fileExists(atPath: usersScript.path) else {
       return .failed("app 里没有 bundle-users.sh，判断不了旧 app 还有没有人在用")

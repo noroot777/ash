@@ -3,10 +3,12 @@
 //
 // 覆盖：设置——旧域每一项抄进新域、改了名的键（AshURL / AshDataDir / 窗口位置）换成新名、新域已有的不盖、只接一次；
 // 数据根——全新机器用新目录，升级上来的机器原地用旧目录并记下来（之后新目录被谁建出来也不换成空数据根），
-// 演练包标识不认旧的；网页数据——WebKit 与 cookie 目录整份复制（不挪）、每项先拷到暂存位置再一次放上去，
-// 写不进去时报错、不留半截、不记已接且下次再来（上次拷到一半留下的暂存也清掉），只接一次；建窗口之前那道闸——
+// 演练包标识不认旧的；网页数据——WebKit 与 cookie 目录整份复制（不挪）、每项先拷到本进程自己的暂存位置再一次
+// 放上去，写不进去时报错、不留半截、不记已接且下次再来（上次拷到一半留下的暂存也清掉），只接一次；几份 Navi
+// 同时第一次打开时只有一份在复制，别的等它接完才放行，放行时看到的一定是完整的一份；复制到一半被杀掉，重开补齐；建窗口之前那道闸——
 // 旧 app 不肯退、复制失败都挡着不放（什么都不复制、不记已接），没有可接的、用户选了不接就放行；旧包让位——
-// 只认包标识对得上的真目录（软链、别的包不算），判「有没有人在用」走安装器同一份 bundle-users.sh：有进程拿着
+// 只认包标识对得上的真目录（软链、别的包不算），旧登录项还没换成 Navi 的时不动（它跑的是旧包里的可执行文件），
+// 判「有没有人在用」走安装器同一份 bundle-users.sh：有进程拿着
 // 代码锁、代码锁之外有进程拿包里的可执行文件跑且工作目录在包里、命令行里带着它（更早的无锁版本）时都不动；
 // 没人用时移到废纸篓并原地留一个指向新包的软链，放软链失败就把旧包放回原处。
 // 再用真 WebKit 走一遍：旧身份的空壳 app 往本机页面的 localStorage 和 cookie 里各存一样，新身份的空壳 app
@@ -15,7 +17,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,11 +107,48 @@ try {
   assert.equal(run("gate", gateLibrary, `${domain}.gate`), "OK gate");
   console.log("PASS: no window before the web data is in — an old app that will not quit or a failed copy blocks with a reason; nothing to adopt or a skip lets it open");
 
+  // 几份 Navi 同时第一次打开：同一时刻只有一份在复制；每一份放行（要建窗口）时，目标都已经是完整的。
+  const raceLibrary = join(temporary, "RaceLibrary");
+  const raceSource = join(raceLibrary, "WebKit/old.race/WebsiteData");
+  mkdirSync(raceSource, { recursive: true });
+  for (let i = 0; i < 20000; i++) writeFileSync(join(raceSource, `f${i}`), "x");
+  const expected = readdirSync(join(raceLibrary, "WebKit/old.race"), { recursive: true }).length;
+  const raceDomain = `${domain}.race`;
+  cleanups.push(() => forgetDomain(raceDomain));
+  const race = () => new Promise((done) => {
+    const child = spawn(driver, ["race", raceLibrary, "old.race", "new.race", raceDomain], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stderr.on("data", (chunk) => { out += chunk; });
+    child.once("exit", (code, signal) => done({ code, signal, out: out.trim(), child }));
+    children.add(child);
+  });
+  const staging = () => readdirSync(join(raceLibrary, "WebKit")).filter((name) => name.includes(".new.race.adopting-"));
+  // 先来的那份复制到一半被杀掉（进程没了）：重开那份清掉它的半截、补齐。
+  const doomed = spawn(driver, ["race", raceLibrary, "old.race", "new.race", raceDomain], { stdio: "ignore" });
+  children.add(doomed);
+  const deadline = Date.now() + 20_000;
+  while (staging().length === 0 && Date.now() < deadline) await delay(5);
+  assert.ok(staging().length > 0, "the first one started copying");
+  doomed.kill("SIGKILL");
+  await once(doomed, "exit");
+  assert.ok(!existsSync(join(raceLibrary, "WebKit/new.race")), "killed mid-copy: nothing published");
+  const opened = await Promise.all([race(), race(), race()]);
+  for (const { code, out } of opened) {
+    assert.equal(code, 0, out);
+    assert.equal(out, `OPEN blocked=nil files=${expected}`, "every instance opens only once the copy is whole");
+  }
+  assert.deepEqual(staging(), [], "no staging left behind");
+  assert.equal(readdirSync(join(raceLibrary, "WebKit/new.race"), { recursive: true }).length, expected);
+  console.log("PASS: several first launches at once — one copies under the adoption lock, the others wait and open on the whole copy; one killed mid-copy is completed by the next");
+
   // ── 旧包让位 ──
   const apps = join(temporary, "Applications");
   const successor = fakeBundle(join(apps, "Navi.app"), "dev.navi.mac");
   const legacy = fakeBundle(join(apps, "Ash.app"), "dev.ash.mac");
   const other = fakeBundle(join(temporary, "elsewhere", "Ash.app"), "com.example.ash");
+  const loginPlist = join(temporary, "LaunchAgents", "dev.ash.server.plist"); // 默认那份是这台机器上真的，测试一律给临时路径
+  mkdirSync(join(loginPlist, ".."), { recursive: true });
   run("is-legacy", legacy, "yes");
   run("is-legacy", other, "no");
   run("is-legacy", successor, "no");
@@ -117,7 +156,7 @@ try {
   // 旧版服务 / MCP 以共享锁拿着代码锁（shared/src/code-lock.ts）：拿着的时候不动。
   const holder = hold("/usr/bin/lockf", ["-s", join(legacy, "Contents/Resources/app/.in-use"), "/bin/sleep", "60"]);
   await delay(500);
-  let outcome = run("retire", legacy, successor, usersScript);
+  let outcome = run("retire", legacy, successor, usersScript, loginPlist);
   assert.match(outcome, /^BUSY .*\.in-use/, outcome);
   assert.ok(lstatSync(legacy).isDirectory() && !lstatSync(legacy).isSymbolicLink(), "a bundle in use stays where it is");
   await stop(holder);
@@ -127,19 +166,26 @@ try {
   spawnSync("cp", ["/bin/sleep", join(appDir, "node")]);
   const outsider = hold("./node", ["60"], { cwd: appDir });
   await delay(500);
-  outcome = run("retire", legacy, successor, usersScript);
+  outcome = run("retire", legacy, successor, usersScript, loginPlist);
   assert.match(outcome, new RegExp(`^BUSY .*${outsider.pid}`), outcome);
   assert.ok(!lstatSync(legacy).isSymbolicLink(), "a bundle something runs from stays where it is, code lock or not");
   await stop(outsider);
   rmSync(join(appDir, "node"));
 
   // 原地放软链失败：旧包放回原处，写死旧路径的命令不会落空，下次启动再来。
-  outcome = run("retire-link-fails", legacy, successor, usersScript);
+  // 旧登录项还没换成 Navi 的：它写死的是旧包里的 MacOS/Ash，留下的软链那头只有 MacOS/Navi —— 不让位。
+  writeFileSync(loginPlist, "<plist/>");
+  outcome = run("retire", legacy, successor, usersScript, loginPlist);
+  assert.match(outcome, /^BUSY .*登录项/, outcome);
+  assert.ok(!lstatSync(legacy).isSymbolicLink(), "the old executable the login item runs stays in place");
+  rmSync(loginPlist);
+
+  outcome = run("retire-link-fails", legacy, successor, usersScript, loginPlist);
   assert.match(outcome, /^FAILED .*放回原处/, outcome);
   assert.ok(lstatSync(legacy).isDirectory() && !lstatSync(legacy).isSymbolicLink() && existsSync(join(legacy, "Contents/Info.plist")), "put back in place");
   run("is-legacy", legacy, "yes");
 
-  outcome = run("retire", legacy, successor, usersScript);
+  outcome = run("retire", legacy, successor, usersScript, loginPlist);
   assert.match(outcome, /^RETIRED \//, outcome);
   const trashed = outcome.slice("RETIRED ".length);
   cleanups.push(() => rmSync(trashed, { recursive: true, force: true }));
@@ -148,16 +194,16 @@ try {
   assert.equal(readlinkSync(legacy), successor, "… to the new app, so absolute paths into Ash.app keep working");
   assert.equal(realpathSync(join(legacy, "Contents/Resources/app/.in-use")), realpathSync(join(successor, "Contents/Resources/app/.in-use")));
   run("is-legacy", legacy, "no");
-  console.log("PASS: the old bundle waits while its code lock is held or anything runs from it by real file identity, goes back in place if the link cannot be made, then goes to the Trash and leaves a link to Navi.app behind");
+  console.log("PASS: the old bundle waits while its code lock is held, anything runs from it by real file identity or the old login item still points into it, goes back in place if the link cannot be made, then goes to the Trash and leaves a link to Navi.app behind");
 
   // 更早的、没有代码锁的旧版：只能按命令行认。
   const lockless = fakeBundle(join(temporary, "Applications-2", "Ash.app"), "dev.ash.mac", { lock: false });
   const runner = hold(process.execPath, ["-e", "setTimeout(() => {}, 60000)", join(lockless, "Contents/Resources/app/server/dist/index.js")]);
   await delay(300);
-  outcome = run("retire", lockless, successor, usersScript);
+  outcome = run("retire", lockless, successor, usersScript, loginPlist);
   assert.match(outcome, /^BUSY .*Ash\.app/, outcome);
   await stop(runner);
-  outcome = run("retire", lockless, successor, usersScript);
+  outcome = run("retire", lockless, successor, usersScript, loginPlist);
   assert.match(outcome, /^RETIRED \//, outcome);
   cleanups.push(() => rmSync(outcome.slice("RETIRED ".length), { recursive: true, force: true }));
   assert.ok(lstatSync(lockless).isSymbolicLink());

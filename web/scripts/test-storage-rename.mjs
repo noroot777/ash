@@ -1,7 +1,7 @@
 // 改名之后的本机存储：老版本页面挂在 ash: / ash. / harness-next: 下的键，一启动就整批挪到 navi 前缀，
 // 之后各处只认新键。钉住：三种旧前缀都挪、值原样带过去；同一个新键有好几代旧值时按代数定胜负（新键 > ash >
-// harness-next），跟存储枚举的先后无关；不认识的键不碰；存储快满时先腾出旧键那块地方再写，实在写不进去
-// 旧值留在原处、读新键的地方照样读得到，直到新键被写过或删过；重复跑没有副作用；两份存储（local / session）
+// harness-next），跟存储枚举的先后无关；不认识的键不碰；写不进新键时旧键一个字不动（刷新之后照样在、照样
+// 读得到），写新键写不下就在旧键原地更新，写进新键后旧键才作废；重复跑没有副作用；两份存储（local / session）
 // 都挪；而且挪键先于任何模块读存储 —— main.tsx 的第一个 import 就是它，index.html 首帧那段读配色的脚本也
 // 认得旧键。
 import assert from "node:assert/strict";
@@ -72,46 +72,85 @@ class MemoryStorage {
   assert.deepEqual(storage.snapshot(), { "navi:sidebar-collapsed": "0", "navi:sidebar-width": "420" }, "取最近那一代，更早的丢掉");
 }
 
-// 存储快满：新键名比旧键长一个字，先写会超；腾出旧键那块地方就写得下。
+// 存储快满：新键要和旧键同时放得下才挪（先写新的、写进去了才删旧的）；放不下就暂缓改名，旧键一个字不动。
 {
   const draft = "草".repeat(1000);
-  const storage = new MemoryStorage({ "ash:assistant-draft:r1": draft, filler: "x".repeat(50) });
-  storage.capacity = storage.used() + 1;
-  assert.deepEqual(renameLegacyStorageKeys(storage), { moved: 1, stuck: [] });
-  assert.deepEqual(storage.snapshot(), { filler: "x".repeat(50), "navi:assistant-draft:r1": draft }, "腾出地方后挪成了");
+  const roomy = new MemoryStorage({ "ash:assistant-draft:r1": draft });
+  roomy.capacity = roomy.used() + "navi:assistant-draft:r1".length + draft.length;
+  assert.deepEqual(renameLegacyStorageKeys(roomy), { moved: 1, stuck: [] });
+  assert.deepEqual(roomy.snapshot(), { "navi:assistant-draft:r1": draft }, "放得下两份就挪成");
+
+  const tight = new MemoryStorage({ "ash:assistant-draft:r1": draft });
+  tight.capacity = tight.used() + 1;
+  assert.deepEqual(renameLegacyStorageKeys(tight).stuck, [{ key: "navi:assistant-draft:r1", legacyKey: "ash:assistant-draft:r1" }]);
+  assert.deepEqual(tight.snapshot(), { "ash:assistant-draft:r1": draft }, "放不下两份：旧键原样留着，不先删");
 }
 
-// 腾出地方也写不下（差一个字）：旧值放回原处，读新键的地方照样读到它；新键被写过或删过，旧值才作废。
+// 没挪成的那条：读新键读得到旧值；刷新（新的一份文档、同一块存储）之后旧值还在、照样读得到；新键写不下时在旧键
+// 原地更新，刷新后读到的是改过的那份；腾出地方后写新键，旧键随之作废；删新键连旧键一起删。
 {
   class StorageLike extends MemoryStorage {}
+  const reload = (storage) => {
+    const fresh = new StorageLike();
+    fresh.map = storage.map;
+    fresh.capacity = storage.capacity;
+    const { stuck } = renameLegacyStorageKeys(fresh);
+    keepLegacyReadable(fresh, stuck, StorageLike.prototype);
+    return fresh;
+  };
   const draft = "长草稿".repeat(300);
-  // 草稿排在前面先挪，差一个字；后面那条新名更短，照样挪得过去。
-  const local = new StorageLike({ "ash:assistant-draft:r1": draft, "harness-next:small": "1", filler: "y".repeat(40) });
-  local.capacity = local.used();
-  const { stuck } = renameLegacyStorageKeys(local);
-  assert.deepEqual(stuck, [{ key: "navi:assistant-draft:r1", legacyKey: "ash:assistant-draft:r1", value: draft }]);
-  assert.equal(local.getItem("ash:assistant-draft:r1"), draft, "旧值放回了原处，下次启动再挪");
-  assert.equal(local.getItem("navi:small"), "1");
+  // 草稿差一大截放不下；后面那条新名更短、值也小，照样挪得过去。
+  const first = new StorageLike({ "ash:assistant-draft:r1": draft, "harness-next:small": "1", filler: "y".repeat(40) });
+  first.capacity = first.used() + "navi:small".length + 1;
+  const { stuck } = renameLegacyStorageKeys(first);
+  assert.deepEqual(stuck, [{ key: "navi:assistant-draft:r1", legacyKey: "ash:assistant-draft:r1" }]);
+  assert.equal(first.getItem("navi:small"), "1");
+  keepLegacyReadable(first, stuck, StorageLike.prototype);
   const other = new StorageLike({ "ash:assistant-draft:r1": "别的存储" });
-  keepLegacyReadable(local, stuck, StorageLike.prototype);
-  assert.equal(local.getItem("navi:assistant-draft:r1"), draft, "读新键读得到没挪成的旧值");
+  assert.equal(first.getItem("navi:assistant-draft:r1"), draft, "读新键读得到没挪成的旧值");
   assert.equal(other.getItem("navi:assistant-draft:r1"), null, "只垫这一份存储的这几个键");
-  assert.equal(local.getItem("navi:unrelated"), null);
-  local.setItem("navi:assistant-draft:r1", "在旧草稿上改过");
-  assert.equal(local.getItem("navi:assistant-draft:r1"), "在旧草稿上改过");
-  assert.equal(local.getItem("ash:assistant-draft:r1"), null, "新键写过之后旧值作废，下次启动不会拿它盖掉新的");
-  local.removeItem("navi:assistant-draft:r1");
-  assert.equal(local.getItem("navi:assistant-draft:r1"), null, "删掉就是删掉，不会冒出旧值");
+  assert.equal(first.getItem("navi:unrelated"), null);
 
-  // 连原处都放不回去：这一次靠内存里那份照样读得到。
-  const tight = new StorageLike({ "ash:note": "要留下的字" });
-  const original = tight.setItem.bind(tight);
-  tight.setItem = (key, value) => { if (key.endsWith(":note")) throw new Error("QuotaExceededError"); original(key, value); };
-  const lost = renameLegacyStorageKeys(tight).stuck;
-  assert.equal(tight.getItem("ash:note"), null);
-  delete tight.setItem;
-  keepLegacyReadable(tight, lost, StorageLike.prototype);
-  assert.equal(tight.getItem("navi:note"), "要留下的字");
+  let page = reload(first);
+  assert.equal(page.getItem("ash:assistant-draft:r1"), draft, "刷新之后旧值还在存储里");
+  assert.equal(page.getItem("navi:assistant-draft:r1"), draft, "刷新之后照样读得到");
+
+  const edited = "改过稿".repeat(300); // 跟旧草稿一样长：原地放得下
+  page.setItem("navi:assistant-draft:r1", edited);
+  assert.equal(page.getItem("navi:assistant-draft:r1"), edited);
+  assert.equal(page.map.has("navi:assistant-draft:r1"), false, "新键写不下");
+  page = reload(page);
+  assert.equal(page.getItem("navi:assistant-draft:r1"), edited, "在旧键原地更新过，刷新后读到改过的那份");
+
+  page.capacity = Infinity;
+  page.setItem("navi:assistant-draft:r1", "放得下了");
+  assert.deepEqual([page.getItem("navi:assistant-draft:r1"), page.map.has("ash:assistant-draft:r1")], ["放得下了", false], "写进新键之后旧键作废");
+  page = reload(page);
+  assert.equal(page.getItem("navi:assistant-draft:r1"), "放得下了", "刷新之后也不会被旧值盖掉");
+
+  const removing = reload(new StorageLike({ "ash:note": "x".repeat(50) }, { capacity: 60 }));
+  removing.removeItem("navi:note");
+  assert.equal(removing.getItem("navi:note"), null, "删掉就是删掉，不会冒出旧值");
+  assert.equal(removing.map.has("ash:note"), false);
+}
+
+// 写什么都失败（不只是配额满）：旧值从头到尾都在存储里，刷新后照样读得到；写新键整个失败时把错抛给调用方、旧内容不动。
+{
+  class Broken extends MemoryStorage {
+    setItem(key, value) { if (this.broken) throw new Error("QuotaExceededError"); super.setItem(key, value); }
+  }
+  const storage = new Broken({ "ash:note": "要留下的字" });
+  storage.broken = true;
+  const { stuck } = renameLegacyStorageKeys(storage);
+  assert.equal(storage.getItem("ash:note"), "要留下的字", "迁移失败不删旧键");
+  keepLegacyReadable(storage, stuck, Broken.prototype);
+  assert.throws(() => storage.setItem("navi:note", "新写的"), /QuotaExceededError/, "写不进就照常报错");
+  assert.equal(storage.getItem("navi:note"), "要留下的字", "旧内容不动、照样读得到");
+  const reloaded = new Broken();
+  reloaded.map = storage.map;
+  reloaded.broken = true;
+  keepLegacyReadable(reloaded, renameLegacyStorageKeys(reloaded).stuck, Broken.prototype);
+  assert.equal(reloaded.getItem("navi:note"), "要留下的字", "刷新之后照样在");
 }
 
 assert.deepEqual(LEGACY_STORAGE_PREFIXES.map(([, current]) => current).every((current) => current.startsWith("navi")), true);
@@ -128,7 +167,7 @@ assert.deepEqual(LEGACY_STORAGE_PREFIXES.map(([, current]) => current).every((cu
   // 浏览器里两份存储共用 Storage.prototype：启动模块垫的就是它。
   globalThis.Storage = class Storage extends MemoryStorage {};
   const session = new Storage({ "ash:chat-draft:r1": "半句话", "ash:chat-draft:r2": "放不下的草稿" });
-  session.capacity = session.used();
+  session.capacity = session.used() + "navi:chat-draft:r1".length + "半句话".length; // r1 放得下两份，r2 放不下
   globalThis.window = { localStorage: new Storage({ "ash:task-scope": "mine" }), sessionStorage: session };
   const warn = console.warn;
   console.warn = () => {};
