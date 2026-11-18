@@ -181,7 +181,7 @@ async function installRecord(tree: string, project: ProjectSources, origin = tre
 const commandRemedy = (item: Entry, tree: string) => `命令入口 ${join(tree, item.entry)} 不是包名。请检查这条入口：`
   + `若为遗留或损坏项，删除该入口后重试；若仍需使用，在任务工作区重新安装提供该命令的工具`
   + `并使入口被就近遮蔽，或把工作区里不完整的依赖目录整个移走、让门禁按同仓参考检出整棵克隆进快照`
-  + `（见 accept-gate-supply），或将 ASH_RUNS_DIR 移出 ${tree} 的解析祖先链`;
+  + `（见 accept-gate-supply），或将 NAVI_RUNS_DIR 移出 ${tree} 的解析祖先链`;
 
 
 /**
@@ -437,7 +437,7 @@ export async function confineOwnPackages(target: string, sourceRoot: string, ori
         + `或在任务工作区安装提供 ${outsider.entry} 的依赖，使该入口被快照就近遮蔽；`
         + `或把任务工作区里那几个**不完整**的依赖目录整个移走 —— 某个位置上完全没有依赖目录时，`
         + `门禁会按同仓参考检出把整棵树克隆进快照（见 accept-gate-supply），解析根就落在快照内，`
-        + `这一条不再适用；或将 ASH_RUNS_DIR 移到解析祖先链不经过 ${tree} 的目录后验收`;
+        + `这一条不再适用；或将 NAVI_RUNS_DIR 移到解析祖先链不经过 ${tree} 的目录后验收`;
     }
   }
   for (const binding of plan) {

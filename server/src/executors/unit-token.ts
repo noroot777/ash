@@ -27,6 +27,7 @@
 import { randomBytes } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } from "../monitor-unit-scan.js";
+import { FROZEN_AGENT_UNIT_PREFIX } from "@ash/shared/legacy-names";
 
 /**
  * 这一次运行独有的记号。
@@ -37,7 +38,7 @@ import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } from "../monitor-unit-sca
  * 是它必须落库才能跨重启认回来(`sessions.agent_unit_token`)。
  */
 export function mintUnitToken(): string {
-  return `ash-agent-${process.pid.toString(36)}-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
+  return `${FROZEN_AGENT_UNIT_PREFIX}${process.pid.toString(36)}-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
 }
 
 /**

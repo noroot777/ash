@@ -290,7 +290,7 @@ api.post("/tasks/:id/pause", async (c) => {
     return c.json({
       error: pauseToken
         ? "检查点来自已结束的回合，已拒绝写入当前会话"
-        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），检查点已拒绝写入",
+        : "MCP 未携带当前回合身份（执行器可能过滤了 NAVI_TURN_TOKEN），检查点已拒绝写入",
     }, 409);
   }
   const pauseDirection = requestHeader(c, NAVI_HEADERS.directionToken);
@@ -351,7 +351,7 @@ api.post("/tasks/:id/complete", async (c) => {
     return c.json({
       error: completeToken
         ? "完成确认来自已结束的回合，已拒绝写入当前会话"
-        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），完成确认已拒绝写入",
+        : "MCP 未携带当前回合身份（执行器可能过滤了 NAVI_TURN_TOKEN），完成确认已拒绝写入",
     }, 409);
   }
   const completeDirection = requestHeader(c, NAVI_HEADERS.directionToken);

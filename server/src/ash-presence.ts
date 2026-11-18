@@ -3,11 +3,14 @@
 // 为什么单例锁不够用来回答「这套资源现在有没有人在线写」（第 3 轮审查 F2）：
 // ① 单例锁按**库文件**命名。共享同一份 `runs` 的另一个库路径（副本、别名）看不见它，
 //    而回填真正要改的 trace 文件就在那份 runs 里；
-// ② `ASH_ALLOW_MULTI=1` 起的实例**压根不写单例锁**（那是它的语义：放弃排他）。于是离线
+// ② `NAVI_ALLOW_MULTI=1` 起的实例**压根不写单例锁**（那是它的语义：放弃排他）。于是离线
 //    迁移探不到它，两边同时写同一条线程的账，谁都不知道最后落下的是什么。
 //
 // 所以登记和单例锁是两件事：**登记是存在证明，不是排他锁**。允许同时有多份（ALLOW_MULTI
 // 就会有），所以一个实例一份文件（名字带 pid），读的时候扫同目录。
+//
+// 文件名前缀改过名（`.ash-online.` → `.navi-online.`）：**两个名字都写、两个名字都扫**。改名之前的
+// 离线脚本只扫旧名，只写新名的话它就看不见我们在线；改名之前起的服务只写旧名，只扫新名就看不见它。
 //
 // 判「还活着」只认两条硬事实：pid 还在 + 进程启动时刻对得上（pid 被复用就不算）。主人已死的记录
 // 顺手清掉 —— 留着只会让下一次迁移永远被一份残骸挡在外面。
@@ -18,11 +21,13 @@
 // `AshPresenceUnknownError`，由调用方按拒绝处理。
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { LEGACY_PRESENCE_PREFIX } from "@ash/shared/legacy-names";
 import { isPidAlive } from "./platform.js";
 import { inspectProcess } from "./proc.js";
 import { atomicCreateWithContent, canonicalResourceKey } from "./resource-claim.js";
 
-const PREFIX = ".ash-online.";
+const PREFIX = ".navi-online.";
+const PREFIXES = [PREFIX, LEGACY_PRESENCE_PREFIX];
 const SUFFIX = ".json";
 /** 进程启动时刻的比较余量：ps 的精度到秒。 */
 const START_TIME_TOLERANCE_MS = 10_000;
@@ -35,12 +40,15 @@ export type AshPresence = {
   command: string | null;
   /** 这份登记落在哪个资源键上。 */
   key: string;
-  /** `exclusive` = 同时也拿着单例锁；`shared` = ASH_ALLOW_MULTI 起的实例。 */
+  /** `exclusive` = 同时也拿着单例锁；`shared` = NAVI_ALLOW_MULTI 起的实例。 */
   mode: "exclusive" | "shared";
 };
 
 export const presenceFileFor = (key: string, pid = process.pid): string =>
   `${key}${PREFIX}${pid}${SUFFIX}`;
+/** 一个键上的全部登记文件名（当前名在前）。 */
+const presenceFilesFor = (key: string, pid = process.pid): string[] =>
+  PREFIXES.map((prefix) => `${key}${prefix}${pid}${SUFFIX}`);
 
 /** 这套资源上「有没有人在线」没答上来。调用方必须按「可能有」处理。 */
 export class AshPresenceUnknownError extends Error {
@@ -94,7 +102,7 @@ export function liveAshPresenceFor(key: string): AshPresence | null {
 /**
  * 这个资源键上**除了我之外**还有没有活着的 ash。
  *
- * 跟上面那一问分开给:拿着单例锁只证明「没有别的**守锁的**实例」,`ASH_ALLOW_MULTI=1` 起的
+ * 跟上面那一问分开给:拿着单例锁只证明「没有别的**守锁的**实例」,`NAVI_ALLOW_MULTI=1` 起的
  * 那种压根不写锁、只留在线登记 —— 所以「这台机器上就我一个」必须连这一问一起答
  * (checkpoint-ownership.ts:接管一张滞留凭证之前要拿它当证据)。答不出来照旧抛
  * AshPresenceUnknownError,调用方按「可能有」处理。
@@ -111,7 +119,7 @@ export function otherLiveAshPresenceForAny(keys: readonly string[]):
 function liveAshPresenceIn(key: string, skipPid: number | null): AshPresence | null {
   const canonical = canonicalResourceKey(key);
   const dir = dirname(canonical);
-  const head = `${basename(canonical)}${PREFIX}`;
+  const heads = PREFIXES.map((prefix) => `${basename(canonical)}${prefix}`);
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -122,7 +130,7 @@ function liveAshPresenceIn(key: string, skipPid: number | null): AshPresence | n
     throw new AshPresenceUnknownError(dir, `枚举目录失败（${code}）`);
   }
   for (const name of names) {
-    if (!name.startsWith(head) || !name.endsWith(SUFFIX)) continue;
+    if (!heads.some((head) => name.startsWith(head)) || !name.endsWith(SUFFIX)) continue;
     const file = join(dir, name);
     const read = readPresence(file);
     // 读不懂的那份**既不清也不放过**:清掉它等于把一个可能活着的写入者抹成不存在。
@@ -174,7 +182,6 @@ export function registerAshPresence(
   // 起来。部分登记不算成功占用。
   try {
     for (const key of [...new Set(keys.map(canonicalResourceKey))]) {
-      const file = presenceFileFor(key);
       const record: AshPresence = {
         pid: process.pid,
         startedAt: new Date(processStartedAtMs).toISOString(),
@@ -184,17 +191,19 @@ export function registerAshPresence(
         key,
         mode: info.mode,
       };
-      mkdirSync(dirname(file), { recursive: true });
-      if (!atomicCreateWithContent(file, JSON.stringify(record, null, 2))) {
-        // 同一个 pid 的旧记录（上一个同号进程留下的残骸）：清掉再登记。
-        try {
-          unlinkSync(file);
-        } catch { /* 别人清了 */ }
+      for (const file of presenceFilesFor(key)) {
+        mkdirSync(dirname(file), { recursive: true });
         if (!atomicCreateWithContent(file, JSON.stringify(record, null, 2))) {
-          throw new Error(`在线登记写不下去：${file} 这个名字反复被占`);
+          // 同一个 pid 的旧记录（上一个同号进程留下的残骸）：清掉再登记。
+          try {
+            unlinkSync(file);
+          } catch { /* 别人清了 */ }
+          if (!atomicCreateWithContent(file, JSON.stringify(record, null, 2))) {
+            throw new Error(`在线登记写不下去：${file} 这个名字反复被占`);
+          }
         }
+        files.push(file);
       }
-      files.push(file);
     }
   } catch (error) {
     drop();
@@ -205,8 +214,9 @@ export function registerAshPresence(
 
 /** 给人看的一句话。 */
 export const describeAshPresence = (found: { key: string; presence: AshPresence }): string =>
-  `PID ${found.presence.pid}（${found.presence.mode === "shared" ? "ASH_ALLOW_MULTI 实例" : "持单例锁"}`
+  `PID ${found.presence.pid}（${found.presence.mode === "shared" ? "NAVI_ALLOW_MULTI 实例" : "持单例锁"}`
   + `${found.presence.port === null ? "" : `，端口 ${found.presence.port}`}，起于 ${found.presence.startedAt ?? "不详"}）`
   + ` 正在线占用 ${found.key}`;
 
-export const presenceExists = (key: string, pid: number): boolean => existsSync(presenceFileFor(key, pid));
+export const presenceExists = (key: string, pid: number): boolean =>
+  presenceFilesFor(key, pid).some((file) => existsSync(file));

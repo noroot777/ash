@@ -75,7 +75,7 @@ export function resolveTurnIdentity(env: Env): ResolvedTurnIdentity & { refused:
 
   const fingerprint = readEnv(env, ASH_TURN_FINGERPRINT_ENV as NaviEnvName)?.trim();
   if (!fingerprint) {
-    // 逐项取，不整组取：有的 CLI 只删带 TOKEN 字样的那两个（gemini），`ASH_TASK_ID` 是过得去的。
+    // 逐项取，不整组取：有的 CLI 只删带 TOKEN 字样的那两个（gemini），`NAVI_TASK_ID` 是过得去的。
     return { taskId: taskIds[0] ?? "", turnToken: turnTokens[0] ?? "", directionToken: directionTokens[0] ?? "", refused: null };
   }
   if (fingerprint === ASH_TURN_FINGERPRINT_NONE) return { ...EMPTY, refused: null };

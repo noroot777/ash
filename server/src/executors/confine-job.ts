@@ -68,9 +68,10 @@ import { join } from "node:path";
 import { IS_WINDOWS, powerShell, powerShellSync } from "../platform.js";
 import { processGenerationsAsync, processGenerationsSync } from "../process-generation.js";
 import type { ConfineMember, ConfineRead, Confinement } from "./kernel-confine.js";
+import { FROZEN_AGENT_UNIT_PREFIX, FROZEN_CONFINE_TMP_DIR } from "@ash/shared/legacy-names";
 
 /** Job Object 的名字。`Local\` = 当前登录会话的命名空间(跨会话不可见,正是我们要的边界)。 */
-const jobName = (token: string): string => `Local\\ash-agent-${token.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+const jobName = (token: string): string => `Local\\${FROZEN_AGENT_UNIT_PREFIX}${token.replace(/[^A-Za-z0-9._-]/g, "_")}`;
 
 /**
  * 「这个圈**建起来过**」的就绪文件。常驻守圈进程在 assign 成功之后写它。
@@ -82,7 +83,7 @@ const jobName = (token: string): string => `Local\\ash-agent-${token.replace(/[^
  * 名字又查不到 ⇒ 句柄那一侧出事了(集合再也查不回来),如实记成这一问没答出来。
  */
 const readyPath = (name: string): string =>
-  join(tmpdir(), "ash-confine", `${name.replace(/[^A-Za-z0-9._-]/g, "_")}.ready`);
+  join(tmpdir(), FROZEN_CONFINE_TMP_DIR, `${name.replace(/[^A-Za-z0-9._-]/g, "_")}.ready`);
 
 export function openJobConfinement(token: string): Confinement | null {
   if (!IS_WINDOWS) return null;
@@ -163,7 +164,7 @@ function sweepStaleReady(): void {
   if (sweptStale) return;
   sweptStale = true;
   try {
-    const dir = join(tmpdir(), "ash-confine");
+    const dir = join(tmpdir(), FROZEN_CONFINE_TMP_DIR);
     const cutoff = Date.now() - 24 * 3600_000;
     for (const name of readdirSync(dir)) {
       const f = join(dir, name);
@@ -268,7 +269,7 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
       // (接口注释写着幂等,而上一版第二次一律答 false,第 2 轮审查指出口径不一致)。
       if (asked) return pid === heldPid;
       try {
-        mkdirSync(join(tmpdir(), "ash-confine"), { recursive: true });
+        mkdirSync(join(tmpdir(), FROZEN_CONFINE_TMP_DIR), { recursive: true });
         rmSync(ready, { force: true });             // 上一次运行留下的同名就绪信号不许认下来
       } catch { /* 目录建不出来:退化成「建没建起来分不清」,仍然不误判 */ }
       if (!askHolder(["hold", name, String(pid), readyBase(name)].join("\t"))) return false;

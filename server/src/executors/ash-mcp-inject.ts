@@ -14,7 +14,7 @@
 //    之后 —— 早先把它排在最前，profile 里后置的同名配置就把它整条换掉了，init 里照样是
 //    `connected`、`source=dynamic`，看不出差别（第 2 轮审查发现 1）。
 //  · codex：`-c` 后者覆盖前者，同样装在用户 extraArgs 之后。`-c` 是**深合并**进用户那张表的
-//    —— 我们写的 command/args/env.ASH_URL/enabled/env_vars 一律以注入为准，用户在那张表里另加
+//    —— 我们写的 command/args/env.NAVI_URL/enabled/env_vars 一律以注入为准，用户在那张表里另加
 //    的键（`enabled_tools`、`tools.*.approval_mode`、别的 env 变量）保留，工具名单因此要在确认
 //    那一半核对；用户把 ash 登记成 `url` 型时 codex 整份配置会拒载（回合当场失败、报原话，不静默）。
 //    历史名 `harness` 不碰：给不存在的表写 `enabled=false` 会让 codex 拒载整份配置。

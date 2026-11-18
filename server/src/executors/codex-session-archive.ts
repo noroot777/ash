@@ -126,7 +126,7 @@ async function updateCodexThreadArchive(
   const timer = setTimeout(() => rejectAll(new Error(`Codex 会话${action}超时`)), CODEX_ARCHIVE_TIMEOUT_MS);
   try {
     await request("initialize", {
-      clientInfo: { name: "ash", title: "ash", version: "0.0.0" },
+      clientInfo: { name: "navi", title: "Navi", version: "0.0.0" },
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
     child.stdin?.write(`${JSON.stringify({ method: "initialized" })}\n`);

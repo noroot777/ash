@@ -7,7 +7,7 @@
 //     本机没装,凭直觉写一条路径出来,最后收获的是「登记写了、CLI 不读、任务照样失败」,
 //     正是这轮要治的病(用户 2026-10-30 实测:换别的 agent 跑任务全是 failed)。
 //  ② **`identity` 比 `shape` 更要紧**:登记写对了只代表 CLI 连得上 ash MCP;交卷还需要
-//     回合身份(`ASH_TASK_ID` / 两套 token)真的进到 MCP 子进程里。gemini 就是现成的坑 ——
+//     回合身份(`NAVI_TASK_ID` / 两套 token)真的进到 MCP 子进程里。gemini 就是现成的坑 ——
 //     登记完全正确、工具列得出来,但它按**变量名**把 `*_TOKEN` 从子进程环境里删了,于是
 //     `complete_task` 永远报「这不是当前回合」。所以这一列拿不准时写 `unknown` 并在
 //     `identityNote` 里说明,别默认它通。
@@ -84,7 +84,7 @@ export const ASH_MCP_TABLE = {
     identity: "inherit",
     identityNote: "gemini 把交给 MCP 子进程的环境按**变量名**过滤（命中 /TOKEN|KEY|SECRET|AUTH/i 一类的删掉），"
       + "所以回合身份另按 `*_TICKET` 别名导一份（`shared/src/mcp.ts` 的 `ASH_TURN_IDENTITY_ENV`）；"
-      + "只注 `ASH_TURN_TOKEN` 那一套的话登记再对也交不了卷",
+      + "只注 `NAVI_TURN_TOKEN` 那一套的话登记再对也交不了卷",
     evidence: "tested",
     source: "`GEMINI_CLI_HOME=<沙盘> gemini mcp add ash node <entry> -s user -e ASH_URL=…` 实测写出 "
       + "`$GEMINI_CLI_HOME/.gemini/settings.json`；环境过滤用只 dump 环境的假 MCP server 取证",
@@ -199,7 +199,7 @@ export const ASH_MCP_TABLE = {
       + "**本轮审查 F1 又补了十二组**(`opencode debug config --pure`,逐格比对 `mcp.ash.command`):"
       + "㉑ 默认目录里**只有** `config.json` 写 Navi ⇒ 读得出(上一版压根没枚举这个名字,于是答 "
       + "absent、派审硬拒,裸 Node 安装器还往 `opencode.json` 新写一条、把真 CLI 的生效 "
-      + "`ASH_URL` 从 `:54321` 换成了 `:4317`);㉒ `config.json` + `opencode.json` 同在 ⇒ 后者赢;"
+      + "`NAVI_URL` 从 `:54321` 换成了 `:4317`);㉒ `config.json` + `opencode.json` 同在 ⇒ 后者赢;"
       + "㉓ `config.json` + `opencode.jsonc` ⇒ `.jsonc` 赢;㉔ 三份同在 ⇒ `.jsonc` 赢(所以升序是 "
       + "`config.json` < `.json` < `.jsonc`);㉕ `config.json` 读不通 ⇒ 整份 `exit 1`(⑳ 同一条规矩);"
       + "㉖ 这个名字**只在默认目录**算:`~/.opencode/config.json` 和 `$OPENCODE_CONFIG_DIR/config.json` "

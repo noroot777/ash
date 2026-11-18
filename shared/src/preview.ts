@@ -7,7 +7,7 @@ export interface PreviewServiceConfig {
 }
 
 /**
- * 启动命令跑起来之后，**它自己**该起多大一摊。ash 只把这个选择作为 `$ASH_PREVIEW_MODE`
+ * 启动命令跑起来之后，**它自己**该起多大一摊。ash 只把这个选择作为 `$NAVI_PREVIEW_MODE`
  * 递给命令，起不起后端是命令自己的事 —— 不认这个变量的项目，四档全都一样。
  *
  * 值域里那几个「独立新库 / 测试库快照」的说法是照 ash 自带的 `scripts/dev.mjs` 写的：
@@ -28,7 +28,7 @@ export interface ProjectPreviewConfig {
   primaryServiceId: string | null;
   services: PreviewServiceConfig[];
   /**
-   * 递给启动命令的 `$ASH_PREVIEW_MODE`。**老配置里没有这个字段**，读出来一律补
+   * 递给启动命令的 `$NAVI_PREVIEW_MODE`。**老配置里没有这个字段**，读出来一律补
    * `"frontend"` —— 那是这个字段存在之前写死的值，补别的会让所有存量项目的预览
    * 在一次升级里悄悄换一种起法。
    */
@@ -84,7 +84,7 @@ export function previewProxyEnabled(setting: ProjectPreviewConfig["proxy"] | und
  *
  * 两种都认是被咬过一口才加的（第 3 轮审查）：AI 协助的端点递的是请求体里那个字符串，
  * 而当时这里只从对象上取 `.launch`，于是 `command`/`full`/`test` 三档**静默**变成
- * `frontend` —— 试跑时注入的 `ASH_PREVIEW_MODE` 跟用户在页面上选的不是一回事，而判出来的
+ * `frontend` —— 试跑时注入的 `NAVI_PREVIEW_MODE` 跟用户在页面上选的不是一回事，而判出来的
  * 那条脚本照样填进输入框，保存之后开预览才发现对不上。少一层包装就错一档，这种签名
  * 不该留着等下一个调用方踩。
  *

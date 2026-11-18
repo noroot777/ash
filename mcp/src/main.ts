@@ -2,7 +2,7 @@
 // tools so an LLM agent (Claude Code / Desktop / Cursor / a spawned `claude`)
 // can orchestrate tasks natively. It holds no logic of its own: every tool just
 // calls an existing endpoint on the ash server (default http://localhost:4317,
-// override with ASH_URL). The Hono server stays the single source of truth.
+// override with NAVI_URL). The Hono server stays the single source of truth.
 //
 // 这份文件只负责**接线**：起 server、挂上各组工具、连上 stdio。工具本体按作用对象分在
 // tools/ 下（orchestrate = 安排活，read-transcript = 旁观别的任务说过的话，task-turn =

@@ -4,6 +4,7 @@ import type { GitWorkbenchState } from "@ash/shared/git-workbench";
 import { fail, git } from "./core.js";
 import { journalDirectory } from "./journal.js";
 import { worktreePorcelain } from "../git-worktree-state.js";
+import { FROZEN_GIT_BACKUP_REF_NAMESPACE } from "@ash/shared/legacy-names";
 
 export async function readBackups(
   root: string,
@@ -11,7 +12,7 @@ export async function readBackups(
   const raw = await git(root, [
     "for-each-ref",
     "--format=%(refname)%00%(objectname)%00%(subject)",
-    "refs/ash-backup/",
+    FROZEN_GIT_BACKUP_REF_NAMESPACE,
   ]);
   return raw
     .trimEnd()
@@ -29,7 +30,7 @@ export async function deleteBackup(
   sha: string,
 ): Promise<void> {
   if (
-    !ref.startsWith("refs/ash-backup/") ||
+    !ref.startsWith(FROZEN_GIT_BACKUP_REF_NAMESPACE) ||
     !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha)
   )
     fail("备份引用不合法", 400);

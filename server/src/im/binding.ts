@@ -16,6 +16,7 @@ import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imBindCodes, imBindings } from "../db/schema-im.js";
 import { id, now } from "../util.js";
+import { FROZEN_IM_BIND_SALT } from "@ash/shared/legacy-names";
 
 export const CHANNEL = "feishu" as const;
 export const BIND_CODE_TTL_MS = 10 * 60_000;
@@ -34,7 +35,7 @@ export function ownerKeyOf(userId: string | null): string {
 }
 
 function hashCode(core: string): string {
-  return createHash("sha256").update(`ash-im-bind:${core.toUpperCase()}`).digest("hex");
+  return createHash("sha256").update(`${FROZEN_IM_BIND_SALT}${core.toUpperCase()}`).digest("hex");
 }
 
 function mintCore(): string {

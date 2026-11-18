@@ -2,8 +2,8 @@
 //
 // 为什么不进 app_settings：`GET /settings` 会把整份设置回给任何已登录的人，preview-seed 还会把
 // 它复制进预览库。为什么不进环境变量：agentBaseEnv() 只在隔离宿主 CLI 那一档才清理环境变量
-// （executors/spawn.ts），自用模式下所有 agent 都会继承。挂在库文件旁还顺带保证「不同 ASH_DB
-// = 不同实例」：预览实例和 `ASH_DB=… PORT=…` 起的测试实例拿不到这份文件，天然不会去连飞书 ——
+// （executors/spawn.ts），自用模式下所有 agent 都会继承。挂在库文件旁还顺带保证「不同 NAVI_DB
+// = 不同实例」：预览实例和 `NAVI_DB=… PORT=…` 起的测试实例拿不到这份文件，天然不会去连飞书 ——
 // 飞书长连接是集群模式，同一应用连上两个客户端，事件会被随机分走一半。
 //
 // 要如实写给用户的边界：agent 与 server 是同一个 OS 用户，读得到这个文件；Windows 上 chmod 不生效。

@@ -1,5 +1,6 @@
 import type { Session, Task } from "@ash/shared";
 import { TASK_STATUS_LABELS } from "@ash/shared";
+import { taskBranchName, taskBranchNames } from "@ash/shared/task-branch";
 
 // 回复框里「派出去」的新任务从这条任务的哪儿接着来：能不能派、从哪个分支开工、正文怎么带上这场对话。
 
@@ -7,8 +8,10 @@ export function canDeriveTask(task: Pick<Task, "parentId" | "reviewOf">): boolea
   return task.parentId === null && !task.reviewOf;
 }
 
-export function sourceWorktreeBranch(task: Pick<Task, "id" | "useWorktree">): string | null {
-  return task.useWorktree ? `ash/${task.id.slice(0, 8)}` : null;
+/** 这条任务自己的分支：改名之前建的叫 `ash/<id8>`，在 `branches`（仓库现有分支）里找实际存在的那个，都不在就是当前名。 */
+export function sourceWorktreeBranch(task: Pick<Task, "id" | "useWorktree">, branches: readonly string[]): string | null {
+  if (!task.useWorktree) return null;
+  return taskBranchNames(task.id).find((name) => branches.includes(name)) ?? taskBranchName(task.id);
 }
 
 function latestTranscriptPath(sessions: Session[]): string | null {

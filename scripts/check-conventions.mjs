@@ -155,7 +155,7 @@ if (realAgentHits.length) {
   console.error(`\n✗ 测试脚本把执行器隔离闸整个打开了（${realAgentHits.length} 处）：`);
   for (const hit of realAgentHits) console.error("   " + hit);
   console.error("   整体放行下，收尾还原 PATH 后才轮到的起跑会起机器上真的 CLI。");
-  console.error("   起的是自己铺的假 CLI 就写 process.env.ASH_TEST_AGENT_BIN = <假目录或可执行文件>；");
+  console.error("   起的是自己铺的假 CLI 就写 process.env.NAVI_TEST_AGENT_BIN = <假目录或可执行文件>；");
   console.error("   就是要起真 CLI 的 live 脚本，登记进 scripts/test-process-conventions.mjs 的 REAL_AGENT_SCRIPTS。\n");
 }
 

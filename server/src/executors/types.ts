@@ -31,7 +31,7 @@ export interface RunOpts {
   model?: string;
   extraArgs?: string[];
   trace?: RunTracePaths;
-  // 只作用于这一回合的进程环境（例如 ASH_TURN_TOKEN）；真实值不得拼进 commandLine。
+  // 只作用于这一回合的进程环境（例如 NAVI_TURN_TOKEN）；真实值不得拼进 commandLine。
   env?: Record<string, string | undefined>;
   // 非空 = 用「活得过 server 重启」的跑法：stdout/stderr 落到这几个文件而不是
   // 匿名管道（见 executors/detached.ts）。只有一次性 run() 该传；常驻会话

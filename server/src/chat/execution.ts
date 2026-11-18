@@ -138,7 +138,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
         // 让它「去核查一下」时就是要它跑命令、必要时动手改。闸门的分类器只认白名单里的裸命令，
         // 一个 `git log --oneline | head` 就被判成「无法确认只读」，把整次咨询连回复一起中止。
         // 群聊/助手/摘要仍受闸门约束——那些跑在项目主仓或临时目录里，和任务无绑定关系。
-        // 任务结算类写入不靠这条闸门挡：侧聊的 env 不带 ASH_TURN_TOKEN，complete_task 一类
+        // 任务结算类写入不靠这条闸门挡：侧聊的 env 不带 NAVI_TURN_TOKEN，complete_task 一类
         // MCP 写入在服务端就会被拒。
         if (event.kind === "tool" && purpose !== "side" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
         signal.throwIfAborted();

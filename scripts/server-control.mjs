@@ -1,14 +1,41 @@
 // restart.mjs 与 stop.mjs 共用的「让 :PORT 上的 ash 下线」那半截:问判据、等排空、
 // 认准监听者下刀、等端口彻底安静。两个入口只在「下线之后做什么」上不同,安全闸必须是
 // 同一份 —— 停止命令要是另写一套,「问不出来就当 0」那类旧错就会在新入口上重演一遍。
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { readEnv } from "./env.mjs";
+import { LEGACY_DB_FILE, LEGACY_HTTP_HEADER_PREFIX, LEGACY_SINGLETON_LOCK_SUFFIX } from "./legacy-names.mjs";
 import { isNotListening, killServerProcesses, localGet, sleep } from "./platform.mjs";
 
-/** 单实例锁:server 自己写的「谁占着这个 DB」,路径口径跟 server/src/singleton.ts 一致。 */
-export function lockFileFor(repo, env = process.env) {
-  return `${env.ASH_DB ? resolve(env.ASH_DB) : join(repo, "data", "ash.db")}.ash.lock`;
+const LOCK_SUFFIX = ".navi.lock";
+const HOST_TOKEN_HEADER = "x-navi-host-token";
+
+/**
+ * server 用的库文件,口径跟 server/src/db/path.ts 一致:`NAVI_DB`(旧名 `ASH_DB` 同样认)覆盖;
+ * 不然 `navi.db` 在就是它,改名之前的安装接着用 `ash.db`。
+ */
+export function dbFileFor(repo, env = process.env) {
+  const explicit = readEnv(env, "NAVI_DB");
+  if (explicit) return resolve(explicit);
+  const current = join(repo, "data", "navi.db");
+  if (existsSync(current)) return current;
+  const legacy = join(repo, "data", LEGACY_DB_FILE);
+  return existsSync(legacy) ? legacy : current;
 }
+
+/**
+ * 单实例锁:server 自己写的「谁占着这个 DB」,路径口径跟 server/src/singleton.ts 一致。新版服务
+ * 新旧两个名字都写(内容相同),改名之前的服务只写旧名 —— 升级那一刻对面正是它,所以哪个在就给哪个。
+ */
+export function lockFileFor(repo, env = process.env) {
+  const db = dbFileFor(repo, env);
+  return [`${db}${LOCK_SUFFIX}`, `${db}${LEGACY_SINGLETON_LOCK_SUFFIX}`].find((file) => existsSync(file))
+    ?? `${db}${LOCK_SUFFIX}`;
+}
+
+/** 同一份库的退出账本(server/src/exit-ledger.ts)。 */
+export const exitLedgerFor = (lockFile) =>
+  `${lockFile.slice(0, lockFile.endsWith(LOCK_SUFFIX) ? -LOCK_SUFFIX.length : -LEGACY_SINGLETON_LOCK_SUFFIX.length)}.exits.jsonl`;
 
 /**
  * 宿主机运维者的凭证:锁文件里那串 token(server 自己写的,文件 0600)。
@@ -28,6 +55,16 @@ function hostToken(lockFile, port) {
 }
 
 /**
+ * 带凭证的请求头。新旧两代头名各带一份:升级那一刻听着端口的是改名之前的服务,它只认旧名头
+ * (`x-ash-host-token`)。新版服务两代都认、新名优先。
+ */
+function hostTokenHeaders(lockFile, port) {
+  const token = hostToken(lockFile, port);
+  if (!token) return undefined;
+  return { [HOST_TOKEN_HEADER]: token, [`${LEGACY_HTTP_HEADER_PREFIX}${HOST_TOKEN_HEADER.slice("x-navi-".length)}`]: token };
+}
+
+/**
  * 「现在让 server 下线会真正打断几个任务」。**不是** running/queued 的个数 —— agent 的
  * 输出走文件之后（server/src/executors/detached.ts），单飞任务的进程压根不随 server 死，
  * 下次起来按 pid+offset 接管；团队调度台进程会断但会自动 --resume 接回。判据单点在
@@ -43,13 +80,8 @@ function hostToken(lockFile, port) {
  * **「问不出来」不等于「没有」**,所以这里把它单独报出来,由调用方 fail closed。
  */
 export async function queryImpact(port, lockFile) {
-  const token = hostToken(lockFile, port);
-  const ask = (timeoutMs) => localGet(
-    port,
-    "/api/restart-impact",
-    timeoutMs,
-    token ? { "x-ash-host-token": token } : undefined,
-  );
+  const headers = hostTokenHeaders(lockFile, port);
+  const ask = (timeoutMs) => localGet(port, "/api/restart-impact", timeoutMs, headers);
   let probe = await ask(2000);
   // 慢一次不代表问不出来(这台机器往往正忙):再给一次、时限放宽。两次都没拿到仍然算 unknown。
   if (!probe.json && probe.status === null && !isNotListening(probe.error)) probe = await ask(6000);

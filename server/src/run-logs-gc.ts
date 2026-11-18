@@ -28,7 +28,7 @@ const MONITOR_PREFIX = "monitor-";
 const MONITOR_SUFFIX = ".log";
 
 // 默认保留一天。跑完就没用了，留一天纯粹是给「任务刚挂、想翻原始输出查一眼」
-// 留窗口。ASH_RUNLOG_KEEP_H 可调，0 = 结束即删。
+// 留窗口。NAVI_RUNLOG_KEEP_H 可调，0 = 结束即删。
 const KEEP_HOURS = Number(readEnv(process.env, "NAVI_RUNLOG_KEEP_H") ?? 24);
 
 // 可引导回合的 stdin 具名管道（executors/control-fifo.ts）不看年龄：根一走它就没用了，正常

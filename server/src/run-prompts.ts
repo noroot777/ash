@@ -48,7 +48,7 @@ export const SYS_MARKER = "〔系统〕继续（从中断处）";
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
-// 宽松模式(ASH_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 ash
+// 宽松模式(NAVI_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 ash
 // 的 MCP 对 agent 不可达,交代了它也做不到,理由见 single-run.ts 的 STRICT_DONE_PROTOCOL。
 export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
   ? "验收辅路:验证回合不适用 accept_task；这一轮只给验证结论并留证。"

@@ -17,7 +17,7 @@
 // 还会撞(记录 `sleep 1`、现存 `sleep 120` ⇒ 包含判断认作自己的后代,实测被杀的是审查自己起
 // 的测试组)。
 //
-// 现在的凭证是 `ASH_MONITOR_UNIT=<记号>`:起进程之前就随意图行落库,并作为环境变量种进那个
+// 现在的凭证是 `NAVI_MONITOR_UNIT=<记号>`:起进程之前就随意图行落库,并作为环境变量种进那个
 // 壳 —— 环境随 exec 继承、后代各自带一份,所以它跨 exec、跨组长死亡、跨 server 重启都认得
 // 回来(判定 `reclaimEvidence`,扫描 monitor-unit-scan.ts 的 `liveMonitorUnitsSync`)。两问一次答完:
 //   · 带着记号的进程还在 ⇒ 归属已证明,**下刀只打这几个**;
@@ -69,7 +69,7 @@
 //
 // 记号这条线索在两个平台上**答得实不实不一样**(实测见 monitor-unit-scan.ts 的
 // `MONITOR_UNIT_ENV`):Linux 的 `/proc/<pid>/environ` 是 NUL 分隔的真实环境项,精确可答;
-// macOS 的 `ps -E` 只给无边界展示文本,**任何变量的值里都能包含 `ASH_MONITOR_UNIT=<记号>`
+// macOS 的 `ps -E` 只给无边界展示文本,**任何变量的值里都能包含 `NAVI_MONITOR_UNIT=<记号>`
 // 这段文字**,审查据此让一个毫不相干的诊断进程挨了刀。
 //
 // 所以这一层把两档分开:`ours`(真实环境项)签发下刀凭证;`suspected`(只看见文字)只授权

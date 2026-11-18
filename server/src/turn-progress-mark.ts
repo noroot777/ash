@@ -64,6 +64,7 @@ import {
   closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, writeSync,
 } from "node:fs";
 import { join } from "node:path";
+import { LEGACY_TURN_PROGRESS_WATCH_HEAD } from "@ash/shared/legacy-names";
 import { RUNS_DIR } from "./paths.js";
 import { verifyUntilKnown, type VerifyPace } from "./verify-until-known.js";
 
@@ -71,7 +72,9 @@ import { verifyUntilKnown, type VerifyPace } from "./verify-until-known.js";
  * 参与证明的**完整性标记**。第一行认版本与回合身份,末行认「写完了」:
  * 半张证明(截断后写失败)、以及上一代没有版本行的证明,都读不出它 → `unreadable`。
  */
-const WATCH_HEAD = "ash-turn-progress-watch/v2";
+const WATCH_HEAD = "navi-turn-progress-watch/v2";
+/** 版本行只改了名字、格式没变：升级那一刻正在跑的回合手里是旧名写的证明，照样认。 */
+const WATCH_HEADS = [WATCH_HEAD, LEGACY_TURN_PROGRESS_WATCH_HEAD];
 const WATCH_TAIL = "complete";
 
 /** 读出来的三档。`none` 是**确证**没有过进展(目录在、这一轮的记号不在)。 */
@@ -134,7 +137,7 @@ export function openTurnProgress(taskId: string, sessionId: string, turnStartedA
 function watchIsComplete(dir: string, sessionId: string, turnStartedAt: string): boolean {
   try {
     const lines = readFileSync(join(dir, watchName(sessionId, turnStartedAt)), "utf8").split("\n");
-    return lines[0] === `${WATCH_HEAD} ${turnStartedAt}` && lines.includes(WATCH_TAIL);
+    return WATCH_HEADS.some((head) => lines[0] === `${head} ${turnStartedAt}`) && lines.includes(WATCH_TAIL);
   } catch {
     return false; // 读不动也是「说不上来」,不是「它没产出」
   }

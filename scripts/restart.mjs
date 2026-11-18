@@ -35,13 +35,13 @@
 // 2026-08-14 从 restart.sh 改写成 .mjs:Windows 上没有 bash/lsof/pkill,而这条命令是
 // 「改完代码怎么让它生效」的唯一入口,不能只有一半机器跑得动。平台差异集中在
 // scripts/platform.mjs。
-import "./env.mjs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localJson, pidsRunningScript, sleep } from "./platform.mjs";
-import { countOf, drainWait as drainUntilSafe, explainNoVerdict, killListeners, lockFileFor, noVerdictReason, queryImpact, waitPortQuiet } from "./server-control.mjs";
+import { countOf, drainWait as drainUntilSafe, exitLedgerFor, explainNoVerdict, killListeners, lockFileFor, noVerdictReason, queryImpact, waitPortQuiet } from "./server-control.mjs";
+import { readEnv } from "./env.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 import { parseRestartOptions, restartCommand, RESTART_USAGE } from "./restart-options.mjs";
@@ -62,7 +62,7 @@ const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
 
 const PORT = Number(process.env.PORT || 4317);
-const LOG = process.env.ASH_LOG || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `ash-${PORT}.log`);
+const LOG = readEnv(process.env, "NAVI_LOG") || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `navi-${PORT}.log`);
 const START_TIMEOUT = Number(process.env.START_TIMEOUT || 30);
 const SERVER_NODE = process.env.SERVER_NODE || process.execPath;
 // 起哪个入口。默认就是编译产物;留一个口子是为了 test-restart.mjs 能拿一个假 server
@@ -74,7 +74,7 @@ const WAIT_TIMEOUT = process.env.WAIT_TIMEOUT ? Number(process.env.WAIT_TIMEOUT)
 
 const say = (line) => process.stdout.write(`${line}\n`);
 
-// 单实例锁的路径口径跟 server 一致(ASH_DB 覆盖,默认 data/ash.db),否则找错文件。
+// 单实例锁的路径口径跟 server 一致(NAVI_DB 覆盖,默认 data 下的库),否则找错文件。
 const LOCK_FILE = lockFileFor(REPO);
 const impact = () => queryImpact(PORT, LOCK_FILE);
 
@@ -263,7 +263,7 @@ if (ready) {
   // 只读就 EACCES),而「记完账、释放锁的路上又被强杀」留下的是同一个现场 —— 第 2 轮
   // 审查实测过。所以这里不说「是正常停的」,也不说「是被强杀的」。
   const residual = readyHealth?.previousResidualLock;
-  const ledgerPath = LOCK_FILE.replace(/\.ash\.lock$/, ".exits.jsonl");
+  const ledgerPath = exitLedgerFor(LOCK_FILE);
   if (residual?.evidence === "exit_intent") {
     const intent = residual.observedIntent;
     const how = intent?.signal ? `收到 ${intent.signal}` : `退出码 ${intent?.code ?? "未知"}`;

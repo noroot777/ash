@@ -27,6 +27,7 @@
 // gitignore 不等于 install 不写跟踪文件。
 import { spawn } from "node:child_process";
 import { withLegacyEnvNames } from "@ash/shared/env-names";
+import { LEGACY_PREVIEW_DEPS_READY_MARK } from "@ash/shared/legacy-names";
 import { createHash } from "node:crypto";
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync,
@@ -80,7 +81,7 @@ const INSTALL_TIMEOUT_MS = 6 * 60_000;
  * 树会被并发的另一个任务当成可用（见 build 的说明）。标记在 rename 之前写进临时目录，
  * 所以它出现在缓存位置的那一刻，整棵树已经是完整的。
  */
-const READY_MARK = ".ash-deps-ready";
+const READY_MARK = ".navi-deps-ready";
 
 /** 装到一半的那份长这样 —— 前缀固定，好让 pruneNodeDeps 认出崩溃留下的残骸。 */
 const TEMP_SUFFIX = ".installing.";
@@ -88,7 +89,9 @@ let tempSeq = 0;
 
 /** 这个缓存目录装完了吗。 */
 function ready(cache: string): boolean {
-  return existsSync(join(cache, READY_MARK)) && populated(join(cache, "node_modules"));
+  // 改名之前装好的缓存带的是旧名标记，照样算装完（不然升级后每份缓存都要重装一遍）。
+  return [READY_MARK, LEGACY_PREVIEW_DEPS_READY_MARK].some((mark) => existsSync(join(cache, mark)))
+    && populated(join(cache, "node_modules"));
 }
 
 /**

@@ -20,6 +20,8 @@ import {
   sameFingerprint, sha256Hex, shortFingerprint, signWithLocalKey, verifyWithPeerKey,
 } from "./handoff-identity.js";
 import { PEER_HEADERS } from "./handoff-peers.js";
+import { hasHandoffTrustedMark, isHandoffService } from "./handoff-wire.js";
+import { headerNameGenerations, withLegacyHeaderNames } from "@ash/shared/http-headers";
 import { sealForPeer } from "./handoff-crypto.js";
 import { handoffActorId, peerUserKeyHeader } from "./auth/handoff-outbound.js";
 import { localModeTag, PEER_USER_KEY_HEADER } from "./auth/handoff-peer-user.js";
@@ -48,7 +50,8 @@ export function peerRequestHeaders(url: string, method: string, body: string | B
     nonce,
     bodyHash: sha256Hex(body),
   });
-  return {
+  // 新旧两代名字各发一份:对端可能还是改名之前的版本,它只认旧名(见 handoff-wire.ts)。
+  return withLegacyHeaderNames({
     [PEER_HEADERS.key]: identity.publicKey,
     [PEER_HEADERS.sig]: signWithLocalKey(canonical),
     [PEER_HEADERS.ts]: ts,
@@ -56,7 +59,7 @@ export function peerRequestHeaders(url: string, method: string, body: string | B
     // HTTP 头只装 ByteString:主机名里有中文(中文 Windows 上是常态)直接 percent
     // 编码,不然 fetch 在构造请求头那一刻就抛,整条接力起都起不来。
     [PEER_HEADERS.host]: encodeURIComponent(hostname()).slice(0, 180),
-  };
+  });
 }
 
 export async function fetchPeer<T>(
@@ -69,7 +72,7 @@ export async function fetchPeer<T>(
   // 信封是二进制帧(不再 base64),所以 content-type 也要跟着换。
   const body = init?.sealTo ? sealForPeer(init.sealTo.kx, init.sealTo.fingerprint, plain) : plain;
   const suppliedHeaders = new Headers(init?.headers);
-  suppliedHeaders.delete(PEER_USER_KEY_HEADER);
+  for (const name of headerNameGenerations(PEER_USER_KEY_HEADER)) suppliedHeaders.delete(name);
   const headers: Record<string, string> = {
     ...Object.fromEntries(suppliedHeaders),
     // 多人模式:带上「我在对端的账号 key」。机器级签名只证明「哪台机器」,这一头才
@@ -77,7 +80,7 @@ export async function fetchPeer<T>(
     ...(await peerUserKeyHeader(url, init?.expectedPeerFp ?? init?.sealTo?.fingerprint)),
     // 自报实例模式,好让对端**知情批准**(§十一)。不进签名:它本来就是自报的,
     // 签了也只是"经过完整性校验的自我声明",拿它当权限判据仍旧不成立。
-    [PEER_HEADERS.mode]: await localModeTag(),
+    ...withLegacyHeaderNames({ [PEER_HEADERS.mode]: await localModeTag() }),
   };
   // Buffer 不在 fetch 的 BodyInit 里(DOM 的 BufferSource 只收非共享的 ArrayBuffer),
   // 套一层零拷贝视图交出去 —— 签名仍按同一串字节算。
@@ -99,7 +102,7 @@ export async function fetchPeer<T>(
     throw new HandoffError(`连不上对端 Navi（${url}）：${msg}`, 502, true);
   }
   const payload = (await res.json().catch(() => null)) as
-    { error?: string; ash?: boolean; code?: string } | null;
+    { error?: string; code?: string; [mark: string]: unknown } | null;
   if (!res.ok) {
     // 只有带 ash 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
     // 没有标记的非 2xx 可能是中间网关在对端已处理成功后伪造的(上游读超时回 502 等),
@@ -109,10 +112,10 @@ export async function fetchPeer<T>(
     const error = new HandoffError(
       `对端返回 ${res.status}：${payload?.error ?? "未知错误"}`,
       502,
-      payload?.ash !== true,
+      !hasHandoffTrustedMark(payload),
     );
     error.remoteStatus = res.status;
-    error.remoteAsh = payload?.ash === true;
+    error.remoteAsh = hasHandoffTrustedMark(payload);
     // 原因码穿透这一跳:「对端不认识你这把 key」是对端才知道的事实,可本机的界面才是
     // 能补 key 的地方。只认白名单里的码 —— 对端是外部输入,不能让它往前端塞任意字符串。
     // 能力握手的拒绝同样要穿透:一键移回是**对端**在跑导出,而能勾「仍然接力」的界面
@@ -201,7 +204,7 @@ export async function probeSignedPeerFingerprint(
     }, timeoutMs);
     if (!response.ok) return null;
     const ping = (await response.json().catch(() => null)) as HandoffPingResponse | null;
-    if (!ping?.ok || ping.service !== "ash") return null;
+    if (!ping?.ok || !isHandoffService(ping.service)) return null;
     const identity = ping.identity;
     if (!identity?.publicKey || !identity.sig) return null;
     if (!verifyWithPeerKey(identity.publicKey, canonicalPingChallenge(nonce, identity.kxPublicKey), identity.sig)) {
@@ -277,7 +280,7 @@ export async function pingPeer(
     taskScopedReturn = false;
     ping = await fetchPeer<HandoffPingResponse>(plainPing, { expectedPeerFp: expectedFp });
   }
-  if (!ping?.ok || ping.service !== "ash") {
+  if (!ping?.ok || !isHandoffService(ping.service)) {
     throw new HandoffError("对端不是 Navi（/api/handoff/ping 应答不对）", 502);
   }
   // 对端是多人实例、而这次没认出我是谁(没配 key 或 key 已失效):在这里就说清楚。

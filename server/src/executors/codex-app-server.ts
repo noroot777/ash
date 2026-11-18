@@ -518,7 +518,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
 
   const ready = opts.reattach ? ((adopted || unverifiable) ? Promise.resolve() : Promise.reject(new Error(ADOPT_NEVER_STARTED))) : (async () => {
     await request("initialize", {
-      clientInfo: { name: "ash", title: "ash", version: "0.0.0" },
+      clientInfo: { name: "navi", title: "Navi", version: "0.0.0" },
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
     notify("initialized");

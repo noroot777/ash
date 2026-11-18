@@ -24,7 +24,7 @@ export const monitors = sqliteTable("monitors", {
   // ps 的 lstart 原文。只有 pid 对上**而且**这个也对上,才算还是当初那个进程。
   pidStartedAt: text("pid_started_at"),
   /**
-   * **这一次创建独有的资源记号**(`ASH_MONITOR_UNIT`,见 monitor-unit-scan.ts 的 `MONITOR_UNIT_ENV`)。
+   * **这一次创建独有的资源记号**(`NAVI_MONITOR_UNIT`,见 monitor-unit-scan.ts 的 `MONITOR_UNIT_ENV`)。
    *
    * 它是「这些进程属于这一次创建」的凭证:起进程之前就随意图行落库(所以跨重启认得回来),
    * 并且作为环境变量种进那个壳 —— 环境随 exec 继承、后代各自带一份,所以组长死了之后留在

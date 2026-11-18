@@ -1,4 +1,4 @@
-import { PREVIEW_ANNOTATION_PROTOCOL } from "@ash/shared/page-annotation";
+import { PREVIEW_ANNOTATION_PROTOCOLS } from "@ash/shared/page-annotation";
 import { previewAnnotationReviewRuntime } from "./preview-annotation-review-runtime.js";
 import { previewAnnotationImageRuntime } from "./preview-annotation-image.js";
 
@@ -6,7 +6,7 @@ import { previewAnnotationImageRuntime } from "./preview-annotation-image.js";
 export function previewAnnotationRuntime(): string {
   return String.raw`(() => {
   if (window.parent === window) return;
-  const protocol = ${JSON.stringify(PREVIEW_ANNOTATION_PROTOCOL)};
+  const protocols = ${JSON.stringify(PREVIEW_ANNOTATION_PROTOCOLS)};
   const bind = Function.prototype.call.bind(Function.prototype.bind);
   const call = (fn) => Function.prototype.call.bind(fn);
   const add = call(EventTarget.prototype.addEventListener);
@@ -364,7 +364,7 @@ export function previewAnnotationRuntime(): string {
     port = null;
   };
   add(window, 'message', (event) => {
-    if (event.source !== window.parent || event.data?.protocol !== protocol || event.ports.length !== 1) return;
+    if (event.source !== window.parent || !protocols.includes(event.data?.protocol) || event.ports.length !== 1) return;
     stop(event);
     if (port) disconnect();
     if (typeof event.data.nextNumber === 'number' && event.data.nextNumber > 0 && event.data.nextNumber < 1e9) nextNumber = Math.ceil(event.data.nextNumber);

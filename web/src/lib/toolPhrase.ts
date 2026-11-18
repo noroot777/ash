@@ -11,7 +11,7 @@
 //   原生子智能体调用                             → nativeWork.input 里有结构化参数
 //   catalog 那几家在工具报错时会再补一条同名事件,detail 以「失败：」开头
 // 认不出的工具一律「调用 <工具名>」,后面跟上能挑出来的那个值 —— 宁可说得笨,不能把它弄丢。
-import { ASH_MCP_SERVER_NAMES } from "@ash/shared/mcp";
+import { isAshMcpServerName } from "@ash/shared/mcp";
 import { shortenPath, traceSummary, type ExecutionEvent } from "./executionTrace.ts";
 
 /** 摘要里分得开的那几类;其余的(调用 MCP、记待办、看目录……)都算 other,摘要里并成「另有 N 步」。 */
@@ -313,7 +313,7 @@ export function describeTool(event: ExecutionEvent): StepPhrase {
 
   const parsed = parseDetail(event);
   const input = parsed.input;
-  const isAsh = ASH_MCP_SERVER_NAMES.includes(server);
+  const isAsh = isAshMcpServerName(server);
   const kind: StepKind = isAsh ? "other" : KIND_BY_KEY[key] ?? "other";
 
   if (kind === "read") {

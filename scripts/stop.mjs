@@ -12,7 +12,7 @@
 //  - 问不出判据(拒答 / 没按时答)一律中止,不按 0 处理。
 //  - 停完必须等到端口**彻底安静**才报成功:查不到监听者、或者它不肯退,都如实失败。
 //  - ash MCP 是各会话自己 spawn 的 stdio 子进程,不归这里管;server 起来之前它们的调用会失败。
-import "./env.mjs";
+import { readEnv } from "./env.mjs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { IS_WINDOWS, listenerPids, localJson } from "./platform.mjs";
@@ -35,7 +35,7 @@ const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
 
 const PORT = Number(process.env.PORT || 4317);
-const LOG = process.env.ASH_LOG || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `ash-${PORT}.log`);
+const LOG = readEnv(process.env, "NAVI_LOG") || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `navi-${PORT}.log`);
 const LOCK_FILE = lockFileFor(REPO);
 const FORCE = options.force;
 const WAIT = options.wait;

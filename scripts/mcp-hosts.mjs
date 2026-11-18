@@ -20,7 +20,10 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { publishConfirmed, readForWrite } from "./config-publish.mjs";
-import { ASH, HOST_SITES, LEGACY, effectiveState, hostMcpFile, hostMcpSources } from "./mcp-host-sources.mjs";
+import { ASH, HOST_SITES, LEGACY_NAMES, effectiveState, hostMcpFile, hostMcpSources } from "./mcp-host-sources.mjs";
+
+/** 已经算登记过的名字:规范名,以及改名之前的登记名(那条照样能用,不另补一条)。 */
+const KNOWN = [ASH, ...LEGACY_NAMES];
 import { readJsonLoose, spliceJsonMember } from "./json-edit.mjs";
 import { scanTomlServers } from "./toml-scan.mjs";
 
@@ -70,7 +73,7 @@ export function registerHostMcp({ agentType, mcpEntry, url, nodeBin = process.ex
   // **先拿到一次成功的读**:读不动不是「空」(见 config-publish.mjs 的 readForWrite)。
   const read = readForWrite(file);
   if (!read) return { file, added: false, why: `${file} 读不出来，没有自动补写` };
-  const entry = { command: nodeBin, args: [mcpEntry], env: { ASH_URL: url } };
+  const entry = { command: nodeBin, args: [mcpEntry], env: { NAVI_URL: url } };
   const written = site.shape === "toml"
     ? composeToml(read.text, entry, site)
     : composeJson(read.text, entry, site, file);
@@ -89,7 +92,7 @@ function composeJson(text, entry, site, file) {
   if (servers !== undefined && (!servers || typeof servers !== "object" || Array.isArray(servers))) {
     return { why: `${file} 的 ${container} 不是对象，没动它` };
   }
-  const taken = [ASH, LEGACY].filter((n) => servers && Object.hasOwn(servers, n));
+  const taken = KNOWN.filter((n) => servers && Object.hasOwn(servers, n));
   if (taken.length) return { why: `${file} 里已经有 ${taken.join(" / ")} 登记，不动它` };
   const value = site.shape === "opencode"
     ? { type: "local", command: [entry.command, ...entry.args], environment: { ...entry.env }, enabled: true }
@@ -117,12 +120,12 @@ function composeToml(text, entry, site) {
   const scan = scanTomlServers(current);
   // 判不准一律不写:TOML 里重复一张同名表会让 CLI 整份配置都读不出来,连用户别的 MCP 一起没了。
   if (scan.why) return { why: `${scan.why}，所以没敢自动追加（写重了会让整份配置读不出来）` };
-  const taken = scan.names.filter((n) => n === ASH || n === LEGACY);
+  const taken = scan.names.filter((n) => KNOWN.includes(n));
   if (taken.length) return { why: `配置里已经有 ${taken.join(" / ")} 这条登记了，不动它` };
   // 根级那个开关**只在声明了它的那家才算**(本轮审查 F2:grok 认、codex 不认,都是实测)。
   const rootKey = site.switches?.off?.length === 1 ? site.switches.off[0] : null;
   const rootOff = rootKey ? scan.rootArrays[rootKey] || [] : [];
-  if (rootOff.some((n) => n === ASH || n === LEGACY)) {
+  if (rootOff.some((n) => KNOWN.includes(n))) {
     return { why: `配置里的 ${rootKey} 关掉了 ${rootOff.join(" / ")}，没有替你打开` };
   }
   const lines = [

@@ -42,6 +42,7 @@ import { rebasePlan } from "./rebase.js";
 import { displayCommand, safeGitMessage } from "./command.js";
 import { runRemoteAction } from "./remotes.js";
 import { cleanupRebaseHelpers, deleteBackup } from "./maintenance.js";
+import { FROZEN_GIT_BACKUP_REF_NAMESPACE } from "@ash/shared/legacy-names";
 
 const historyActions = new Set([
   "merge",
@@ -74,7 +75,7 @@ async function runAction(
   if (action.kind === "branch-delete" || action.kind === "tag-delete") {
     const kind = action.kind === "branch-delete" ? "heads" : "tags";
     const sha = await exactRef(root, action.name, action.sha, kind);
-    entry.backup = `refs/ash-backup/${entry.id}`;
+    entry.backup = `${FROZEN_GIT_BACKUP_REF_NAMESPACE}${entry.id}`;
     entry.recovery = action.kind === "branch-delete" ? "branch" : "tag";
     entry.targetName = action.name;
     await git(repo, ["update-ref", entry.backup, sha, ""]);

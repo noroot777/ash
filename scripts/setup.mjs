@@ -24,11 +24,13 @@ import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
 import { HOST_SITES, registerHostMcp } from "./mcp-hosts.mjs";
 import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
+import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.mjs";
 
 // setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
-// 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把规范名钉为 ash。
-const ASH_MCP_SERVER_NAME = "ash";
-const LEGACY_ASH_MCP_SERVER_NAME = "harness";
+// 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把两边钉成同一个。
+// 改名之前的登记（`ash`、更早的 `harness`）在这里迁成规范名：Navi 起 claude/codex 时注入的是规范名，
+// 用户级配置里再留一条旧名，那两家每一回合都会多挂一套同样的工具。
+const ASH_MCP_SERVER_NAME = "navi";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
@@ -189,22 +191,22 @@ if (process.env.SKIP_MCP) {
     if (new RegExp(`^${ASH_MCP_SERVER_NAME}:`, "m").test(listed.stdout)) {
       ok("claude:Navi 已注册,不动它");
     } else {
-      const legacy = new RegExp(`^${LEGACY_ASH_MCP_SERVER_NAME}:`, "m").test(listed.stdout);
+      const legacy = LEGACY_MCP_SERVER_NAMES.filter((old) => new RegExp(`^${old}:`, "m").test(listed.stdout));
       const added = run("claude", [
-        "mcp", "add", ASH_MCP_SERVER_NAME, "--scope", "user", "-e", `ASH_URL=${URL_BASE}`, "--", "node", mcpEntry,
+        "mcp", "add", ASH_MCP_SERVER_NAME, "--scope", "user", "-e", `NAVI_URL=${URL_BASE}`, "--", "node", mcpEntry,
       ]);
       if (added.status === 0) {
-        if (legacy) {
-          const removed = run("claude", ["mcp", "remove", LEGACY_ASH_MCP_SERVER_NAME, "--scope", "user"]);
-          if (removed.status === 0) ok("claude:旧 harness 条目已迁移为 Navi");
-          else warn("claude:Navi 已接好,但旧 harness 条目没删掉;可手动执行 claude mcp remove harness --scope user");
+        if (legacy.length) {
+          const left = legacy.filter((old) => run("claude", ["mcp", "remove", old, "--scope", "user"]).status !== 0);
+          if (!left.length) ok(`claude:旧 ${legacy.join(" / ")} 条目已迁移为 Navi`);
+          else warn(`claude:Navi 已接好,但旧 ${left.join(" / ")} 条目没删掉;可手动执行 ${left.map((old) => `claude mcp remove ${old} --scope user`).join("、")}`);
         } else {
           ok("claude:已注册 Navi(user 作用域,编排别的仓库时也在)");
         }
       }
       else {
         warn("claude mcp add 失败,手动跑:");
-        say(`      claude mcp add ash --scope user -e ASH_URL=${URL_BASE} -- node ${mcpEntry}`);
+        say(`      claude mcp add ${ASH_MCP_SERVER_NAME} --scope user -e NAVI_URL=${URL_BASE} -- node ${mcpEntry}`);
       }
     }
   } else {
@@ -231,7 +233,7 @@ if (process.env.SKIP_MCP) {
       }).status === 0;
     const r = registerCodexMcp({
       configFile: codexCfg, mcpEntry, url: URL_BASE,
-      name: ASH_MCP_SERVER_NAME, legacyName: LEGACY_ASH_MCP_SERVER_NAME, listServers, removeServer,
+      name: ASH_MCP_SERVER_NAME, legacyNames: LEGACY_MCP_SERVER_NAMES, listServers, removeServer,
     });
     if (r.action === "kept") {
       if (r.enabled) ok(`codex:Navi 已在 ${codexCfg} 里,不动它`);
@@ -242,9 +244,9 @@ if (process.env.SKIP_MCP) {
       // 现在「批准」发生在写之前(整条迁移在沙盘里做),所以没写成只有一种收场:一个字节都没动。
       warn(`codex:${r.why};没有动 ${codexCfg};先跑 codex mcp list 看它报什么、修好再重跑 setup`);
     } else if (r.legacyLeft) {
-      warn(`codex:已写入 Navi,但旧 harness 条目没删掉(两个名字都能用);可手动执行 codex mcp remove harness`);
+      warn(`codex:已写入 Navi,但旧条目(${LEGACY_MCP_SERVER_NAMES.join(" / ")} 之一)没删掉(几个名字都能用);可手动执行 codex mcp remove <旧名>`);
     } else {
-      ok(`codex:${r.action === "migrated" ? "旧 harness 条目已迁移为 Navi" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
+      ok(`codex:${r.action === "migrated" ? "旧条目已迁移为 Navi" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
     }
   } else {
     warn("没装 codex CLI,跳过它的 MCP 注册");
@@ -304,7 +306,7 @@ if (!found) {
 say();
 say("✅ 装完了。起服务:");
 say(`     npm start                 # 前台跑,:${PORT} 同时托管界面和 API`);
-say(`     npm run restart           # 或:构建+后台常驻(日志 ${IS_WINDOWS ? "%TEMP%" : "/tmp"}/ash-${PORT}.log)`);
+say(`     npm run restart           # 或:构建+后台常驻(日志 ${IS_WINDOWS ? "%TEMP%" : "/tmp"}/navi-${PORT}.log)`);
 say();
 say(`  然后浏览器开 ${URL_BASE} —— 第一件事是「新建项目」,填一个 git 仓库的绝对路径。`);
 say(`  数据全在 ${join(REPO, "data")}(SQLite + run 产物),备份就备份这个目录。`);

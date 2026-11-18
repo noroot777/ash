@@ -179,7 +179,7 @@ export const sessions = sqliteTable("sessions", {
   // tailFile）。重启后从这里接着读 → 不丢行也不重行。
   agentOffset: integer("agent_offset"),
   /**
-   * **这一次运行独有的资源记号**(`ASH_MONITOR_UNIT`,种法见 executors/spawn.ts,判定见
+   * **这一次运行独有的资源记号**(`NAVI_MONITOR_UNIT`,种法见 executors/spawn.ts,判定见
    * proc.ts 的 `processUnitEvidence`)。
    *
    * 为什么 `agent_pid` 之外还要这一列:pid 只认得出**根**那一个进程,而漏停的从来不是根。

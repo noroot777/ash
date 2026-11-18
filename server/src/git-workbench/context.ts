@@ -7,7 +7,8 @@ import {
 } from "../auth/visibility.js";
 import { db } from "../db/index.js";
 import { projects, tasks } from "../db/schema.js";
-import { repoKey, worktreeBranchName, worktreePathFor } from "../git.js";
+import { repoKey, worktreePathFor } from "../git.js";
+import { isTaskBranchOf } from "@ash/shared/task-branch";
 import { taskFileRoot } from "../file-browser.js";
 import {
   isolatedWorkspaceOwner,
@@ -62,7 +63,7 @@ export async function decorateState(
       (task) =>
         repoKey(worktreePathFor(state.repo, task.id)) ===
           repoKey(worktree.path) ||
-        (task.useWorktree && worktreeBranchName(task.id) === worktree.branch),
+        (task.useWorktree && isTaskBranchOf(worktree.branch, task.id)),
     );
     worktree.taskId = owner?.id || null;
     worktree.taskTitle = owner?.title || null;
@@ -93,7 +94,7 @@ export async function claimWorkbench(
   const owner = rows.find(
     (t) =>
       repoKey(worktreePathFor(repo, t.id)) === repoKey(root) ||
-      (t.useWorktree && worktreeBranchName(t.id) === status.branch.head),
+      (t.useWorktree && isTaskBranchOf(status.branch.head, t.id)),
   );
   if (owner?.archived) fail("任务已归档，工作区只读，请先取消归档");
   if (owner && action.kind === "pull" && action.strategy === "rebase")
@@ -104,7 +105,7 @@ export async function claimWorkbench(
     (action.kind === "branch-delete" || action.kind === "branch-rename") &&
     rows.some(
       (t) =>
-        worktreeBranchName(t.id) === action.name ||
+        isTaskBranchOf(action.name, t.id) ||
         t.worktreeBase === action.name ||
         t.mergeTargetBranch === action.name,
     )

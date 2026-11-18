@@ -11,6 +11,7 @@ import { Agent, request } from "node:http";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
+import { FROZEN_WINDOWS_AGENT_WRAP_SUFFIX } from "./legacy-names.mjs";
 
 export const IS_WINDOWS = process.platform === "win32";
 
@@ -214,7 +215,7 @@ $rows=@(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {
  * 两份不能合并(这些脚本要在 build 之前就能跑,见本文件顶部),所以拿回归把它们钉在
  * 一起:`server/scripts/test-win-launch.ts` 最后一节会比对这两个常量。
  */
-export const WINDOWS_AGENT_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
+export const WINDOWS_AGENT_WRAP_SUFFIX = FROZEN_WINDOWS_AGENT_WRAP_SUFFIX;
 
 /**
  * 进程表里哪些行是 agent 壳。**按命令行里的记号认,不靠外部名单** —— 这是

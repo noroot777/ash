@@ -1,6 +1,10 @@
 import type { AnnotationMatch } from "./page-annotation-review.ts";
 
-export const PREVIEW_ANNOTATION_PROTOCOL = "ash-preview-annotation-v1";
+import { LEGACY_PREVIEW_ANNOTATION_PROTOCOL } from "./legacy-names.ts";
+
+export const PREVIEW_ANNOTATION_PROTOCOL = "navi-preview-annotation-v1";
+/** 预览页里的批注脚本认的协议名：升级前打开、还没刷新的主界面发的是旧名，一并认。 */
+export const PREVIEW_ANNOTATION_PROTOCOLS = [PREVIEW_ANNOTATION_PROTOCOL, LEGACY_PREVIEW_ANNOTATION_PROTOCOL] as const;
 
 export type PreviewAnnotationMode = "browse" | "annotate";
 export type PreviewAnnotationTool = "element" | "rectangle" | "pen" | "pin";

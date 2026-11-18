@@ -6,12 +6,13 @@ import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
 import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
+import { FROZEN_GIT_REF_NAMESPACE } from "@ash/shared/legacy-names";
 import type { BranchPlanReads } from "./branch-plan-reads.js";
 
 export type BranchTask = typeof tasks.$inferSelect;
-export const baseRef = (id: string) => `refs/ash/task-bases/${encodeURIComponent(id)}`;
-export const acceptedHeadRef = (id: string) => `refs/ash/accepted-heads/${encodeURIComponent(id)}`;
-export const baseUpdateBackupPrefix = (id: string) => `refs/ash/base-update-backups/${encodeURIComponent(id)}/`;
+export const baseRef = (id: string) => `${FROZEN_GIT_REF_NAMESPACE}task-bases/${encodeURIComponent(id)}`;
+export const acceptedHeadRef = (id: string) => `${FROZEN_GIT_REF_NAMESPACE}accepted-heads/${encodeURIComponent(id)}`;
+export const baseUpdateBackupPrefix = (id: string) => `${FROZEN_GIT_REF_NAMESPACE}base-update-backups/${encodeURIComponent(id)}/`;
 export const branchName = (ref: string) => ref.trim().replace(/^refs\/heads\//, "");
 
 export async function commitAt(repo: string, ref: string): Promise<string | null> {

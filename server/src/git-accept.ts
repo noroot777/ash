@@ -27,6 +27,7 @@ import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistration
 import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
 import type { GatePhysical } from "./accept-gate-physical.js";
 import { alreadyLandedUntested, guardedDirtyFiles, movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
+import { LEGACY_ACCEPT_TAG_PREFIX } from "@ash/shared/legacy-names";
 
 function sameFilesystemPath(a: string, b: string): boolean {
   try { return realpathSync(resolve(a)) === realpathSync(resolve(b)); }
@@ -455,7 +456,13 @@ async function mergeWithoutCommit(
 
 /** 「只打标签不合并」那一档的标签名。 */
 export function acceptTagName(taskId: string): string {
-  return `ash-accepted/${taskId.slice(0, 8)}`;
+  return `${ACCEPT_TAG_PREFIX}${taskId.slice(0, 8)}`;
+}
+const ACCEPT_TAG_PREFIX = "navi-accepted/";
+
+/** 改名之前打的标签（`ash-accepted/<id8>`）：重复验收时它已经指着同一个提交就算打过了，不再打一个新名的。 */
+function legacyAcceptTagName(taskId: string): string {
+  return `${LEGACY_ACCEPT_TAG_PREFIX}${taskId.slice(0, 8)}`;
 }
 
 async function mergeTaskBranchLocked(
@@ -496,10 +503,15 @@ async function mergeTaskBranchLocked(
   // 看它现在指着谁：指着同一个 commit 就是重复验收，当成功；指着别处就报错让人处理。
   if (strategy === "tag") {
     const tag = acceptTagName(taskId);
-    const [head, tagged] = await Promise.all([
+    const legacyTag = legacyAcceptTagName(taskId);
+    const [head, tagged, legacyTagged] = await Promise.all([
       commitOf(repo, sourceRef),
       commitOf(repo, `refs/tags/${tag}`),
+      commitOf(repo, `refs/tags/${legacyTag}`),
     ]);
+    if (!tagged && legacyTagged && legacyTagged === head) {
+      return { ok: true, sourceBranch, targetBranch, method: "tagged", tag: legacyTag };
+    }
     if (tagged) {
       if (tagged === head) return { ok: true, sourceBranch, targetBranch, method: "tagged", tag };
       return {

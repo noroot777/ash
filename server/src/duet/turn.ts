@@ -203,7 +203,7 @@ export async function runTurn(args: {
     // 由这条流水线自己做,凭空发一个没登记进 tasks.activeTurnToken 的令牌只会让每个
     // 消费者都拒收。但「不设」不等于「没有」—— 子进程默认继承 server 自己的环境,
     // 而 ash 从一个 ash 任务里启动时那几个变量是有值的(实测:duet 的假 CLI 收到了
-    // **另一个任务**的 ASH_TASK_ID)。借来的身份比没有身份更糟,所以显式清掉 ——
+    // **另一个任务**的 NAVI_TASK_ID)。借来的身份比没有身份更糟,所以显式清掉 ——
     // 清哪几个由 `withoutTurnIdentity` 一处说了算(别在这里自己列名字)。
     env: withoutTurnIdentity({ ...runEnv }),
   });

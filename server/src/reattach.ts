@@ -193,7 +193,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimOwnTurn 落下的），
       // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
       //
-      // **令牌和审查来源一起恢复**:接回的 agent 手里拿的还是上一轮那个 `ASH_TURN_TOKEN`,
+      // **令牌和审查来源一起恢复**:接回的 agent 手里拿的还是上一轮那个 `NAVI_TURN_TOKEN`,
       // 它挂哨兵时要靠「内存这一轮 = 库里那个令牌」才核验得过(见 runs.ts `bindTurnToken`)。
       // 审查来源在这一刻按库里**正在进行**的那次审查认:启动期是串行的,没有派审交接在飞,
       // 所以这一问不会落到第 10 轮审查 F1 那个窗口里。

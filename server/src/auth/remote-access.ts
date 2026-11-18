@@ -169,7 +169,7 @@ interface State {
 
 const stateFilePath = (): string => `${resolveAshDbFile()}.remote-access.json`;
 
-// 按路径缓存:同一个进程里换了 ASH_DB(回归测试模拟两台机器)就得重读。
+// 按路径缓存:同一个进程里换了 NAVI_DB(回归测试模拟两台机器)就得重读。
 let cached: { path: string; state: State } | null = null;
 
 function loadState(): State {

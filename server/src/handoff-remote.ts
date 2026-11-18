@@ -28,6 +28,7 @@ import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-
 import { enrichTasks } from "./task-store.js";
 import { returnTargetForMarker } from "./handoff-return-address.js";
 import { cancelPendingInboundTransfer } from "./handoff-transfer-state.js";
+import { HANDOFF_TRUSTED_MARK } from "./handoff-wire.js";
 
 type ProxyBody = TaskReplyBody & TaskAnswerBody & {
   taskId?: string;
@@ -52,7 +53,7 @@ function fail(c: Context, error: unknown) {
   // (远程任务视图的一键移回曾因此成为死路)。
   const code = error instanceof HandoffError ? error.code : null;
   return c.json(
-    { error: message, ash: true, ...(code ? { code } : {}) },
+    { error: message, ...HANDOFF_TRUSTED_MARK, ...(code ? { code } : {}) },
     status as 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502,
   );
 }

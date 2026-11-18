@@ -44,7 +44,7 @@ function forcePassMessage(def: WorkflowDef, stationId: string, task: Task): stri
     const target = task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定的合入目标（验收时解析）";
     const branch = task.useWorktree ? "任务分支" : "当前工作区的改动";
     const merge = accept.p.strategy === "tag"
-      ? `不合并，只在${branch}头上打一个 ash-accepted 标签（${target} 一动不动）`
+      ? `不合并，只在${branch}头上打一个 navi-accepted 标签（${target} 一动不动）`
       : accept.p.strategy === "squash"
         ? `把${branch} squash 成一个提交合并回 ${target}`
         : `把${branch}合并回 ${target}`;

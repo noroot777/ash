@@ -191,7 +191,7 @@ export async function importGitBundle(
           409,
         );
       }
-      const tempRef = `refs/ash-handoff/import/${taskId}-${Date.now().toString(36)}`;
+      const tempRef = `refs/navi-handoff/import/${taskId}-${Date.now().toString(36)}`;
       try {
         await exec("git", ["-C", repo, "fetch", bundlePath, `+refs/heads/${git.branch}:${tempRef}`], { maxBuffer: 4 * MB });
         const { stdout: fetchedHead } = await exec("git", ["-C", repo, "rev-parse", tempRef]);

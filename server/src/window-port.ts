@@ -1,4 +1,4 @@
-// mac app 窗口专用的那个端口（`ASH_WINDOW_PORT`，只在本机自用模式下生效）。
+// mac app 窗口专用的那个端口（`NAVI_WINDOW_PORT`，只在本机自用模式下生效）。
 //
 // 窗口原来直接连 :4317。app 那份服务停掉、端口被另一份 ash 接手的那一秒里，页面还在发的请求
 // 会落到新来的那一份上：新版 ash 见到别人的实例号会拒收（instance-binding.ts），可旧版 ash 不认

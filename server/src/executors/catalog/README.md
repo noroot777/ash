@@ -267,7 +267,7 @@ CLI 接 Navi 那一下用得到;其余十三家的退路仍是它们自己配置
 
 - **gemini 两道门**。① 未信任的目录连**用户级** MCP server 都不加载 —— 所以 `gemini.ts` 的
   `baseArgs` 带 `--skip-trust`,别去掉;② 它把交给 MCP 子进程的环境按**变量名**过滤(命中
-  `/TOKEN|KEY|SECRET|AUTH/i` 一类的直接删),于是回合身份 `ASH_TURN_TOKEN` 根本到不了子进程 ——
+  `/TOKEN|KEY|SECRET|AUTH/i` 一类的直接删),于是回合身份 `NAVI_TURN_TOKEN` 根本到不了子进程 ——
   这就是为什么 `shared/src/mcp.ts` 另按 `*_TICKET` 别名导了一份(用只 dump 环境的假 MCP server 取证)。
 - **启停策略一家一家认,不跨家套用**(机制上的 `switches`,2026-10-31 两边真机实测):
   - **grok 有两种关法**:条目上的 `enabled = false`,和根级 `disabled_mcp_servers = ["ash"]`
@@ -308,7 +308,7 @@ CLI 接 Navi 那一下用得到;其余十三家的退路仍是它们自己配置
   有没有提到 Navi),所以 `resolveAshMcp` 只要见到一份读不准就回 unknown,不能靠「优先级比它低
   的影响不到」放行 —— 那时压根没有生效的登记可言。
   来源**入口**那一侧还有两条(本轮审查 F1,三行实测里真 CLI 全是 `ash connected`、而 Navi 答
-  absent 并据此硬拒、安装器还新写一条把生效 `ASH_URL` 换掉了):
+  absent 并据此硬拒、安装器还新写一条把生效 `NAVI_URL` 换掉了):
   ④ **指到文件的变量给相对路径时按 CLI 自己的工作目录解** —— 所以 `ashMcpHostSources` 吃一个
   `cwd`:知道那个目录就解准,不知道就把这份来源标成**证不出来**(`AshMcpSource.unprovable`),
   整体回 unknown(不写,也永不当写入落点)。

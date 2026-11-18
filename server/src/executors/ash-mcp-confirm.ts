@@ -25,7 +25,7 @@ import type { ClaudeAshMcpInjection } from "./ash-mcp-inject.js";
 
 type Problem = AgentEvent | null;
 
-/** 宽松完成协议（ASH_LAX_DONE）就是给「agent 够不着 ash MCP」的环境准备的，这些话只会是噪音。 */
+/** 宽松完成协议（NAVI_LAX_DONE）就是给「agent 够不着 ash MCP」的环境准备的，这些话只会是噪音。 */
 const lax = () => !!readEnv(process.env, "NAVI_LAX_DONE");
 
 function unbuiltHint(): string {

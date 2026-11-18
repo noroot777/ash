@@ -198,7 +198,7 @@ async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelC
 }
 
 /**
- * 只给测试用的开关:`ASH_TEST_NO_MODEL_PROBE=1` 时不去问本机 CLI、也不抓官方文档,一律端内置
+ * 只给测试用的开关:`NAVI_TEST_NO_MODEL_PROBE=1` 时不去问本机 CLI、也不抓官方文档,一律端内置
  * 快照。服务一启动就会预热 claude 那份目录(`startClaudeModelRefreshLoop`):握手探针是一个真的
  * `claude -p` 子进程,测试收掉服务时它还活着 —— 起真服务的测试每跑一次就留下一个。门禁执行器
  * (scripts/test-runner.mjs)给每条测试都带上它;要测探测本身的那几条自己把它拿掉。

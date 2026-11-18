@@ -171,7 +171,7 @@ type ContinueOpts = import("./task-continue-options.js").ContinueTaskOptions;
  * 数**(排队消息投递、队列补推、这一条审查)。输五次意味着每一次释放都有人比我们先注册,那不
  * 是运气,是系统性的,该让用户看见而不是继续静静重排。
  *
- * 可调(`ASH_REVIEW_DISPATCH_ATTEMPTS`):回归要测「次数用尽」那一条,照 `ASH_SUSPECT_TURN_MS`
+ * 可调(`NAVI_REVIEW_DISPATCH_ATTEMPTS`):回归要测「次数用尽」那一条,照 `NAVI_SUSPECT_TURN_MS`
  * 同一口径从环境读。
  */
 export const MAX_REVIEW_DISPATCH_ATTEMPTS = (() => {

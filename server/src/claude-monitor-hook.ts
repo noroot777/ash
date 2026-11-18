@@ -183,7 +183,7 @@ export async function claudeMonitorHookDecision(
  * 内置 Monitor 是好用的（见文件头，以及它跟 `--input-format stream-json` 的区别）。
  *
  * 用 `http` 而不是 `command`：见文件头。`headers` 里的 `$VAR` 由 CLI 从进程环境里取，
- * 而 `ASH_TASK_ID` / `ASH_TURN_TOKEN` 正是 ash 起跑时注进去给 MCP 用的那两个
+ * 而 `NAVI_TASK_ID` / `NAVI_TURN_TOKEN` 正是 ash 起跑时注进去给 MCP 用的那两个
  * （`auth/run-env.ts` 旁边的调用点），所以这里不必自己传一遍。
  *
  * **不设 `onFailure: "block"`**：那是 v2.1.295+ 才有的字段，而 ash 支持的 CLI 版本跨度

@@ -27,7 +27,7 @@ import { turnIdentity, type TurnOwner } from "./turn-lock.js";
  * 为什么按「停在同一步」计:收尾一直在往前走,哪怕走得慢,也说明它会自己放锁;只有原地不动
  * 才是卡住。为什么 10 分钟:各步正常是秒级;最慢的是回收 CLI 甩出去的后台后代(自带等待上界,
  * executors/kill.ts)和工作区快照那几条 git(各自有时限,见 `WIND_DOWN_COMMAND_TIMEOUT_MS`)。
- * 取到 10 分钟,有界的步骤够不着。可用 `ASH_STUCK_WIND_DOWN_MS`(毫秒)调,回归测试靠它压窗口。
+ * 取到 10 分钟,有界的步骤够不着。可用 `NAVI_STUCK_WIND_DOWN_MS`(毫秒)调,回归测试靠它压窗口。
  */
 export const STUCK_WIND_DOWN_MS = (() => {
   const configured = Number(readEnv(process.env, "NAVI_STUCK_WIND_DOWN_MS"));
@@ -44,7 +44,7 @@ export const LONG_WIND_DOWN_STEP_MS = 6 * STUCK_WIND_DOWN_MS;
 /**
  * 收尾里每一条外部命令(git 之类)的时限。到点按进程组杀掉,那一步按它自己的「取不到」处理
  * (exec.ts `execFileText` 的 `timeoutMs`)。正常是毫秒到秒级;2 分钟只为兜住超大仓库的
- * `git diff HEAD`。可用 `ASH_WIND_DOWN_COMMAND_TIMEOUT_MS` 调。
+ * `git diff HEAD`。可用 `NAVI_WIND_DOWN_COMMAND_TIMEOUT_MS` 调。
  */
 export const WIND_DOWN_COMMAND_TIMEOUT_MS = (() => {
   const configured = Number(readEnv(process.env, "NAVI_WIND_DOWN_COMMAND_TIMEOUT_MS"));

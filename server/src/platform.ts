@@ -402,7 +402,7 @@ export function killOne(pid: number, sig: NodeJS.Signals): void {
 }
 
 // 这一摊里**两件事搬走了**,因为它们各自是一个独立的概念,不是「怎么问操作系统」的单问:
-//  · 「资源单位」那条记号(`ASH_MONITOR_UNIT`)的扫描 → monitor-unit-scan.ts(要读整张进程表、
+//  · 「资源单位」那条记号(`NAVI_MONITOR_UNIT`)的扫描 → monitor-unit-scan.ts(要读整张进程表、
 //    分证据等级、还带一份备忘);
 //  · **代次**(「这个号上还是不是那一代」)和按代次枚举组成员 → process-generation.ts
 //    (事实与它那一代必须同源,见那个文件的头注)。

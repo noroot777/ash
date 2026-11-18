@@ -16,15 +16,13 @@ import { DatabaseSync } from "node:sqlite";
 import { randomBytes, createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { dbFileFor } from "./server-control.mjs";
 
-const DB_FILE = process.env.ASH_DB
-  ? resolve(process.env.ASH_DB)
-  : fileURLToPath(new URL("../data/ash.db", import.meta.url));
+const DB_FILE = dbFileFor(fileURLToPath(new URL("..", import.meta.url)));
 
 if (!existsSync(DB_FILE)) {
   console.error(`找不到数据库:${DB_FILE}`);
-  console.error("请在跑着 Navi 的那台机器上、仓库根目录执行;或用 ASH_DB=<路径> 指定。");
+  console.error("请在跑着 Navi 的那台机器上、仓库根目录执行;或用 NAVI_DB=<路径> 指定。");
   process.exit(1);
 }
 

@@ -269,7 +269,7 @@ export interface AshMcpConfigSite {
    * 2026-10-31 真 opencode 1.19.3 实测:`config.json` < `opencode.json` < `opencode.jsonc`,
    * 三份**都读**、合起来看。上一版只枚举后两个,于是用户的 ash 只写在 `config.json` 里时
    * (真 CLI `ash connected`)ash 答 absent、派审硬拒,裸 Node 安装器还往 `opencode.json`
-   * 里新写一条 —— 那份优先级更高,**真 CLI 的生效 `ASH_URL` 当场被换掉**(本轮审查 F1)。
+   * 里新写一条 —— 那份优先级更高,**真 CLI 的生效 `NAVI_URL` 当场被换掉**(本轮审查 F1)。
    *
    * 没有这一项的家走 `alternates`:同目录几份算同一级,谁覆盖谁没实测。
    */
@@ -331,7 +331,7 @@ export type AshMcpIdentity =
    * `ASH_TURN_IDENTITY_PATH_DIR`,两侧实现在 `server/src/turn-identity.ts` 与
    * `mcp/src/turn-identity.ts`。
    *
-   * 这一档**不需要在登记里写任何东西**(写进 `env` 的只有静态的 `ASH_URL`)。
+   * 这一档**不需要在登记里写任何东西**(写进 `env` 的只有静态的 `NAVI_URL`)。
    */
   | "path"
   /** 还没验过。按 inherit 走(多数 CLI 如此),矩阵里如实标出来。 */

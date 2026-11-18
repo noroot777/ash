@@ -85,7 +85,7 @@ export function acceptanceMessage(task: TaskListItem, commit = true): string {
     ? "自由工作流没有预设合并站，手动验收按默认规矩来："
     : steps.offScript === "unscripted" ? "这条线上没画「合并并清理」，但手动验收按默认规矩来：" : "";
   const merge = steps.merge === "tag"
-    ? `不合并，只在${branch}头上打一个 ash-accepted 标签（${target} 一动不动）`
+    ? `不合并，只在${branch}头上打一个 navi-accepted 标签（${target} 一动不动）`
     : !steps.commit
       ? `${branch}的改动将合进 ${target} 的工作区并暂存，但不提交（${target} 的提交历史一动不动，提交或丢弃由你自己决定）`
       : steps.merge === "squash"

@@ -80,7 +80,7 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
   const contains = (tree: string, path: string) => path === tree || path.startsWith(`${tree}${sep}`);
   // ash 自己写进项目里的东西不值得附注：群聊的项目常常**就是 ash 仓库本身**，server.log 每个
   // 请求都动，还有 ash.db 的 -wal/-shm/.ash.lock、scratch/、task-artifacts/、uploads/、runs/。
-  // 位置可由 env 改，所以逐个解析而不是只看 DATA_DIR；反过来把项目整个罩住的（比如 ASH_DB
+  // 位置可由 env 改，所以逐个解析而不是只看 DATA_DIR；反过来把项目整个罩住的（比如 NAVI_DB
   // 指到项目根）只能当它不存在，否则等于把观察关掉。
   const owned = [...new Set(await Promise.all([DATA_DIR, dirname(dbFile), RUNS_DIR, UPLOADS_DIR].map(canonicalPath)))]
     .filter((tree) => !contains(tree, root));

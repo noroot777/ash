@@ -25,6 +25,7 @@
 
 import { createHash } from "node:crypto";
 import type { DetachedPaths } from "./detached-child.js";
+import { FROZEN_WINDOWS_AGENT_WRAP_SUFFIX } from "@ash/shared/legacy-names";
 
 /**
  * 壳脚本的文件名后缀。**这不只是个文件名,它是一个对外可见的记号**:壳的路径原样挂在它自己
@@ -35,7 +36,7 @@ import type { DetachedPaths } from "./detached-child.js";
  * (第 1 轮审查 F2)。两份常量由 `server/scripts/test-win-launch.ts` 钉在一起,改名字那边
  * 会当场红。
  */
-export const WINDOWS_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
+export const WINDOWS_WRAP_SUFFIX = FROZEN_WINDOWS_AGENT_WRAP_SUFFIX;
 
 /** 壳用到的三个派生路径。都从 rc 派生,所以不往 DB 加列(跟 POSIX 的 FIFO 同一套做法)。 */
 export function windowsWrapPaths(paths: DetachedPaths): {

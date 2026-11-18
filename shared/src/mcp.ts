@@ -86,8 +86,8 @@ export const ASH_MCP_TURN_EXITS: Readonly<Record<string, string>> = {
  * gemini-cli 实测(2026-10-31,本机装机版):MCP stdio 子进程的环境过
  * `sanitizeEnvironment(..., { enableEnvironmentVariableRedaction: true })`,名字命中
  * `/TOKEN/i /SECRET/i /KEY/i /AUTH/i /PASSWORD/i /CREDENTIAL/i /CREDS/i /PRIVATE/i /CERT/i`
- * 的一律删掉 —— `ASH_TURN_TOKEN` / `ASH_DIRECTION_TOKEN` 正好撞上第一条。实测用一个只
- * dump 环境的假 MCP server 取过证:子进程里 `ASH_TASK_ID` 在、两个 `*_TOKEN` 不在。
+ * 的一律删掉 —— `NAVI_TURN_TOKEN` / `NAVI_DIRECTION_TOKEN` 正好撞上第一条。实测用一个只
+ * dump 环境的假 MCP server 取过证:子进程里 `NAVI_TASK_ID` 在、两个 `*_TOKEN` 不在。
  * 而它的 `allowedEnvironmentVariables` 这条白名单自己也被同一组正则过滤,所以**没有**
  * 配置层面的出路;登记里的 `env` 不受过滤,但只放得下静态值,装不了每回合都换的令牌。
  *

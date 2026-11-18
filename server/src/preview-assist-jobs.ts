@@ -3,7 +3,7 @@
 // 为什么从 preview-assist.ts 拆出来：那份要 `resolveExecutorFor`，顺着它会把整个
 // `db/index.ts` 拉进来（import 一下就打开真的 ash 库并跑迁移）。而这里全是内存里的判断，
 // 恰好又是**最该被回归测试钉住**的那一块（预占的原子性），所以留成一个不碰 DB 的模块，
-// `test:preview-assist` 才能不带 ASH_DB、不起 CLI 智能体地测它。
+// `test:preview-assist` 才能不带 NAVI_DB、不起 CLI 智能体地测它。
 import type { PreviewAssistState } from "@ash/shared/preview-assist";
 import { PREVIEW_ASSIST_MAX_ROUNDS } from "@ash/shared/preview-assist";
 import type { RunHandle } from "./executors/types.js";

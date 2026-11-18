@@ -17,7 +17,7 @@ const BACKGROUND_HOLD_MS = (() => {
   if (!raw) return fallback;
   const value = Number(raw);
   if (Number.isFinite(value) && value > 0 && value <= 2 ** 31 - 1) return value;
-  console.warn(`[ash] ASH_BACKGROUND_HOLD_MS=${raw} 不是有效的毫秒数，按缺省 ${fallback} 处理`);
+  console.warn(`[ash] NAVI_BACKGROUND_HOLD_MS=${raw} 不是有效的毫秒数，按缺省 ${fallback} 处理`);
   return fallback;
 })();
 

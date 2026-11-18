@@ -73,8 +73,8 @@ import { stuckWindDownText, windDownStuck, heldFor, type WindDown } from "./turn
  * 过 7 秒)。等待无上界的那几种角色不走年龄判据,见 `UNBOUNDED_WAIT_ROLES`。
  */
 export const SUSPECT_TURN_MS = (() => {
-  // 可调(`ASH_SUSPECT_TURN_MS`,毫秒):回归测试要把这个窗口压到毫秒级才测得动真实的
-  // HTTP 救援路径,照 `ASH_MONITOR_SCAN_MAX_BYTES` 等数值常量同一口径从环境读。
+  // 可调(`NAVI_SUSPECT_TURN_MS`,毫秒):回归测试要把这个窗口压到毫秒级才测得动真实的
+  // HTTP 救援路径,照 `NAVI_MONITOR_SCAN_MAX_BYTES` 等数值常量同一口径从环境读。
   const configured = Number(readEnv(process.env, "NAVI_SUSPECT_TURN_MS"));
   return Number.isFinite(configured) && configured > 0 ? configured : 60_000;
 })();

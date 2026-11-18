@@ -105,7 +105,7 @@ api.post("/tasks/:id/ask", async (c) => {
     return c.json({
       error: askToken
         ? "提问来自已结束的回合，已拒绝写入当前会话"
-        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），提问已拒绝写入",
+        : "MCP 未携带当前回合身份（执行器可能过滤了 NAVI_TURN_TOKEN），提问已拒绝写入",
     }, 409);
   }
   const askDirection = requestHeader(c, NAVI_HEADERS.directionToken);

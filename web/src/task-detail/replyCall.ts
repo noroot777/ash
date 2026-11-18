@@ -161,7 +161,7 @@ export function dispatchBaseOptions(
   context: BaseContext | null,
 ): BaseOption[] {
   if (!context?.isRepo || !context.worktreeDefault) return [];
-  const source = sourceWorktreeBranch(task);
+  const source = sourceWorktreeBranch(task, context.branches);
   if (source && !context.branches.includes(source)) return [];
   const here: BaseOption = { id: "here", label: "接着这里的代码", worktreeBase: source };
   const trunk = task.mergeTargetBranch?.trim() || context.current;

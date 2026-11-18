@@ -57,7 +57,7 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitCh
           <Step verb="运行" what={<ReadStatus what="运行状态" error={gateRead.error} onRetry={onRetryGate} />} />
         )}
         {merge && (merge.merge === "tag"
-          ? <Step verb="打标签" what={<><code>ash-accepted</code><em><code>{merge.target}</code> 不动</em></>} />
+          ? <Step verb="打标签" what={<><code>navi-accepted</code><em><code>{merge.target}</code> 不动</em></>} />
           : <Step verb="合并" what={<>{family.length > 1 ? `${family.length} 个任务` : <code>{source}</code>} → <code>{merge.target}</code>
             {merge.merge === "squash" && <em>squash</em>}</>} />)}
         {merge && family.length > 1 && <li className="acc-step-family"><ul>{family.map((title) => <li key={title}>{title}</li>)}</ul></li>}

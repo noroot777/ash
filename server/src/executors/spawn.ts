@@ -103,13 +103,13 @@ export function failedChild(message: string): ChildProcess {
  * 真库流程测试会把 RUNS_DIR 指到临时目录。这种进程默认绝不起真 CLI：测试只想
  * 验证游标/状态却误走生产副作用，就是 2026-08-07 一次泄漏 19 个 Claude 回合的根因。
  *
- * 要验证进程管理的测试用 ASH_TEST_AGENT_BIN 列出**自己铺的**执行器（目录或可执行文件，
+ * 要验证进程管理的测试用 NAVI_TEST_AGENT_BIN 列出**自己铺的**执行器（目录或可执行文件，
  * PATH 分隔符分开），只有此刻解析结果落在其中的才放行。按路径认而不按开关认，是因为起跑是
  * 异步的：收尾把 PATH 还原之后才轮到的起跑，解析到的就是机器上真的那个 —— 2026-11-18
  * test-dispatch-suggestion 这样漏出 4 个 PPID=1 的真 `claude -p`。开关分不出这两种，路径分得出，
  * 所以收尾顺序写错、某个名字忘了铺桩，都只会得到一条禁启错误。
  *
- * ASH_ALLOW_REAL_AGENT=1 整个放行，只留给就是要起真 CLI 的 live 脚本；谁可以写它由
+ * NAVI_ALLOW_REAL_AGENT=1 整个放行，只留给就是要起真 CLI 的 live 脚本；谁可以写它由
  * scripts/test-process-conventions.mjs 的名单管着。
  *
  * **隔离环境里放行只有一种含义：交回的 `bin` 是一条核验过的绝对路径，调用方拿它去起。**
@@ -136,14 +136,14 @@ function vetStagedLaunch(bin: string): { launch: string } | { refusal: string } 
   const staged = splitPathList(readEnv(process.env, "NAVI_TEST_AGENT_BIN")).map(stagedRoot).filter((root) => root !== null);
   if (!staged.length) {
     return { refusal: `测试隔离环境禁止启动真执行器 ${bin}；`
-      + "这个测试若就是要验证进程管理，把自己铺的假 CLI 所在目录列进 ASH_TEST_AGENT_BIN" };
+      + "这个测试若就是要验证进程管理，把自己铺的假 CLI 所在目录列进 NAVI_TEST_AGENT_BIN" };
   }
   const resolved = resolveBin(bin);
   const launch = resolved && anchored(resolve(resolved));
   if (!resolved || !launch) return { refusal: `找不到 ${bin} 命令(不在 PATH，也不在常见目录)` };
   if (staged.some((root) => isInsidePath(root, launch, sep))) return { launch };
   return { refusal: `测试隔离环境禁止启动真执行器 ${bin}：它此刻解析到 ${resolved}，`
-    + "不在这个测试自己铺的那几处（ASH_TEST_AGENT_BIN）之内" };
+    + "不在这个测试自己铺的那几处（NAVI_TEST_AGENT_BIN）之内" };
 }
 
 // 父目录走 realpath（macOS 的临时目录是 /var → /private/var 的软链），文件名原样留着：

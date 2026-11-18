@@ -149,7 +149,7 @@ api.get("/restart-impact", async (c) => {
     const { liveLockToken } = await import("./singleton.js");
     const expected = liveLockToken();
     const given = requestHeader(c, NAVI_HEADERS.hostToken)?.trim() ?? "";
-    // 没拿到锁(ASH_ALLOW_MULTI=1)时这条凭证根本不存在 —— 拒绝,别拿空串对空串放行。
+    // 没拿到锁(NAVI_ALLOW_MULTI=1)时这条凭证根本不存在 —— 拒绝,别拿空串对空串放行。
     if (!expected || !secretsEqual(given, expected)) {
       return c.json({ error: "请先登录", needsAuth: true }, 401);
     }

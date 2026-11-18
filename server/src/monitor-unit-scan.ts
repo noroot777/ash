@@ -9,7 +9,7 @@
 //  · Linux:`/proc/<pid>/environ` 是 **NUL 分隔的真实环境项**,所以「有没有 `KEY=VALUE` 这一项」
 //    是精确可答的 ⇒ `exact`,可以当归属凭证(下刀);
 //  · macOS:`ps -E` 把 argv 和环境**无分隔地拼成一行展示文本**,任何变量的值里都可以包含
-//    `ASH_MONITOR_UNIT=<记号>` 这段文字(实测见下),所以这一问**只能答「看见了这段文字」**
+//    `NAVI_MONITOR_UNIT=<记号>` 这段文字(实测见下),所以这一问**只能答「看见了这段文字」**
 //    ⇒ `ambiguous`:够用来拒绝说「已经没了」,**不够用来签发杀进程的凭证**;
 //  · win32:读别的进程的环境块要 ReadProcessMemory 那一套,零依赖拿不到 ⇒ 整问失败。
 //
@@ -40,9 +40,9 @@ import { processGenerationSync, type ProcessGeneration, type ProcessMember } fro
  * 陌生进程挨刀。第 13 轮的修法是「两次快照相减切出环境段」,第 14 轮实测它仍然不够:
  *
  * ```
- * $ env -i PATH=… AAA="x BBB=2 y" ASH_MONITOR_UNIT=realtok CCC="pre ASH_MONITOR_UNIT=faketok post" sleep 40
+ * $ env -i PATH=… AAA="x BBB=2 y" NAVI_MONITOR_UNIT=realtok CCC="pre NAVI_MONITOR_UNIT=faketok post" sleep 40
  * $ ps -p <pid> -E -ww -o command=
- * sleep 40 PATH=… AAA=x BBB=2 y ASH_MONITOR_UNIT=realtok CCC=pre ASH_MONITOR_UNIT=faketok post
+ * sleep 40 PATH=… AAA=x BBB=2 y NAVI_MONITOR_UNIT=realtok CCC=pre NAVI_MONITOR_UNIT=faketok post
  * ```
  *
  * 环境段自己也**没有边界**:`AAA` 的值里那个 `BBB=2` 和真正的 `BBB=2` 长得一模一样,`CCC` 的
@@ -263,7 +263,7 @@ function scanMonitorUnits(): MonitorUnitScan | null {
 
 /**
  * Linux:`/proc/<pid>/environ` 是 **NUL 分隔的真实环境项** —— 逐项取精确的键,所以这一问
- * 「有没有 `ASH_MONITOR_UNIT=X` 这一项」是精确可答的(`exact`)。
+ * 「有没有 `NAVI_MONITOR_UNIT=X` 这一项」是精确可答的(`exact`)。
  *
  * **上一版在这里把 NUL 换成空格再跑那条正则,等于主动把唯一的真实边界丢掉**(第 14 轮审查
  * F1 指出的同类退化)。边界在手就必须用:按 `\0` 切项、`item.startsWith("KEY=")`,别的变量的

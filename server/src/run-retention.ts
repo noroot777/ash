@@ -45,7 +45,7 @@ const KINDS = { traces: rawTraces, screenshots: reviewImages } satisfies Record<
 export type RetentionSweep = Record<keyof typeof KINDS, Reclaimed>;
 
 /**
- * ASH_TRACE_KEEP_DAYS：有限且不为负的天数，0 = 一了结就删。填错（`7d`、负数、空白）一律按
+ * NAVI_TRACE_KEEP_DAYS：有限且不为负的天数，0 = 一了结就删。填错（`7d`、负数、空白）一律按
  * 默认值并告警——这是一个删文件的开关，配置读不懂时的方向只能是多留，不能是立刻删。名字带
  * TRACE 是因为它先管的是原始事件流，截图沿用同一个开关。
  */
@@ -54,7 +54,7 @@ export function retentionKeepDays(): number {
   if (!raw) return DEFAULT_KEEP_DAYS;
   const days = Number(raw);
   if (Number.isFinite(days) && days >= 0) return days;
-  console.warn(`[ash] ASH_TRACE_KEEP_DAYS=${JSON.stringify(readEnv(process.env, "NAVI_TRACE_KEEP_DAYS"))} 不是有效天数，按 ${DEFAULT_KEEP_DAYS} 天处理`);
+  console.warn(`[ash] NAVI_TRACE_KEEP_DAYS=${JSON.stringify(readEnv(process.env, "NAVI_TRACE_KEEP_DAYS"))} 不是有效天数，按 ${DEFAULT_KEEP_DAYS} 天处理`);
   return DEFAULT_KEEP_DAYS;
 }
 

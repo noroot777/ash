@@ -69,7 +69,7 @@ node scripts/setup.mjs
 ```bash
 npm start            # 前台跑,Ctrl-C 停
 # 或
-npm run restart      # 构建 + 后台常驻,日志 /tmp/ash-4317.log(Windows 是 %TEMP%\ash-4317.log)
+npm run restart      # 构建 + 后台常驻,日志 /tmp/navi-4317.log(Windows 是 %TEMP%\navi-4317.log;改名之前是 ash-4317.log)
 ```
 
 浏览器开 **http://localhost:4317** —— 同一个端口既是界面也是 API。

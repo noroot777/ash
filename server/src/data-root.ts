@@ -12,8 +12,8 @@ export const CODE_DIR = fileURLToPath(new URL("../..", import.meta.url));
 /**
  * 运行时写出的一切（库、锁、exits 账、runs、uploads、deps……）的根。
  *
- * `ASH_DATA_DIR` 整体指定；不设时锚在 `<代码根>/data`，不随启动 cwd 漂移（`npm start`、
- * `npm -w server`、`tsx` 落在同一处）。`ASH_DB`、`ASH_RUNS_DIR` 这些单项覆盖照旧优先，
+ * `NAVI_DATA_DIR` 整体指定；不设时锚在 `<代码根>/data`，不随启动 cwd 漂移（`npm start`、
+ * `npm -w server`、`tsx` 落在同一处）。`NAVI_DB`、`NAVI_RUNS_DIR` 这些单项覆盖照旧优先，
  * 由各自的读取点处理。
  */
 export function dataRootFor(env: Readonly<Record<string, string | undefined>>): string {

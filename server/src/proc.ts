@@ -149,7 +149,7 @@ export function isSameProcess(pid: number, expectedStartedAt?: string | null): b
  * 身份;它每次创建新生成,所以认不到别人身上。
  *
  * **但读到这段文字和「真有这一项」是两件事,所以答案分四档**(第 14 轮审查 F1 实测:一个只在
- * 另一个变量的**值**里写了 `ASH_MONITOR_UNIT=<记号>` 的诊断进程被当成我们的后代挨了刀):
+ * 另一个变量的**值**里写了 `NAVI_MONITOR_UNIT=<记号>` 的诊断进程被当成我们的后代挨了刀):
  *
  *  · `ours` —— **真实环境项**里就有这一项(只有 Linux 的 `/proc/<pid>/environ` 给得出这份
  *    精确边界),而且它们是谁都已经知道:`members` 带着各自的**代次**,而那个代次是

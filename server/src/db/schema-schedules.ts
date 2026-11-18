@@ -78,7 +78,7 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // + 这一笔认领/接管独有的随机串)。只有续跑凭证用它。
   //
   // 为什么租约时刻不够:它既要当「这条租约多久了」又要当身份,于是同毫秒接管不保证换值,
-  // 更证不出「原发送方还在不在」。多开实例(ASH_ALLOW_MULTI)时后者是硬要求 —— 两个独立进程
+  // 更证不出「原发送方还在不在」。多开实例(NAVI_ALLOW_MULTI)时后者是硬要求 —— 两个独立进程
   // 实测:接管方按「没送出去」把交代还给任务,而原发送方照旧送了出去,同一段话执行两遍
   // (第 2 轮自由审查 F1)。旧行 NULL = 那一代还没有身份,接管资格另按单例锁判(同上文件头)。
   deliveringOwner: text("delivering_owner"),

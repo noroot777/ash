@@ -9,7 +9,7 @@ export type ImDomain = "feishu" | "lark";
  *   unconfigured  没配凭证
  *   broken        凭证文件坏了（原因在 configError）
  *   preview       预览实例，按设计不连
- *   not_exclusive 同一个库起了多个实例（ASH_ALLOW_MULTI），连上会和另一个实例随机分走事件
+ *   not_exclusive 同一个库起了多个实例（NAVI_ALLOW_MULTI），连上会和另一个实例随机分走事件
  *   disabled      总开关关着
  */
 export type ImConnectionState =

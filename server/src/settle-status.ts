@@ -81,7 +81,7 @@ export async function afterSettlement(
 // 协议：agent 必须在回合内调过 complete_task 确认
 // 「目标真的达成了」才落 done —— exit 0 只证明 CLI 进程正常退出,agent 报错后
 // 退出照样 exit 0,假 done 会误推进队列、错误唤醒下游。未确认 → failed(重试
-// 会 resume 续跑,代价低)。逃生口:ASH_LAX_DONE=1 退回「exit 0 即 done」
+// 会 resume 续跑,代价低)。逃生口:NAVI_LAX_DONE=1 退回「exit 0 即 done」
 // (接没配 ash MCP 的 agent 时用)。一处算清楚,run / continue 共用。
 // 队列推进：done / canceled / failed / paused 进 setTaskStatus 后会触发同 queue 推进。
 // 返回落位状态 + note(未确认降级的说明,调用方写进时间线让用户知道为什么)。
@@ -260,7 +260,7 @@ export async function settleTaskStatus(
   // **按需问、问一次**:它有副作用(落检查点 + 时间线 + 置闩),而这一轮可能根本不往终态走
   // (提问、组暂停、恢复一个非终态的原状态)—— 那些落位本来就留着哨兵,不该被这一段碰。
   // 每个落位各自判「我这一笔会不会收走哨兵」,判据是 shared 里那一份(`monitorSweepingStatus`,
-  // 跟终态清理、唤醒闸同源),不是「交了卷没有」:`ASH_LAX_DONE` 下没交卷也会落 done,一样连坐。
+  // 跟终态清理、唤醒闸同源),不是「交了卷没有」:`NAVI_LAX_DONE` 下没交卷也会落 done,一样连坐。
   let landing: string | null | undefined;
   const monitorGate = async (): Promise<string | null> => {
     if (landing === undefined) landing = await beginTerminalLanding(taskId);

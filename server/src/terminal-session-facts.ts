@@ -159,7 +159,7 @@ export type TerminalSession = Omit<TerminalSessionInfo, "stoppedByUser"> & {
    */
   portScanner: { feed(chunk: string): number[]; flush(): number[] };
   /**
-   * 这次启动独有的随机记号,注入进 pty 的环境(`ASH_LAUNCH_ID`)。它被这次启动 fork 出来
+   * 这次启动独有的随机记号,注入进 pty 的环境(`NAVI_LAUNCH_ID`)。它被这次启动 fork 出来
    * 的每一个进程继承 —— 双 fork + setsid 的守护进程也带着 —— 于是「端口上坐着的是不是
    * 这次起来的」有了**可核验**的归属证据,而不是时间窗口的推断。只给命令会话发
    * (交互 shell 不长停止按钮,也就没有按端口动手的路);不进 DTO,服务端内部用。

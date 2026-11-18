@@ -65,7 +65,7 @@ async function turnIdentityError(c: Context, taskId: string, what: string): Prom
   if (task.activeTurnToken && turnToken !== task.activeTurnToken) {
     return turnToken
       ? `${what}来自已结束的回合，已拒绝写入当前会话`
-      : `MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），${what}已拒绝写入`;
+      : `MCP 未携带当前回合身份（执行器可能过滤了 NAVI_TURN_TOKEN），${what}已拒绝写入`;
   }
   const direction = requestHeader(c, NAVI_HEADERS.directionToken);
   if (task.activeDirectionToken && direction !== task.activeDirectionToken) {

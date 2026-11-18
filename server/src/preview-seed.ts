@@ -1,6 +1,6 @@
 // 预览实例的开局播种：从**你正在用的那个库**里搬一份数据进预览的空库。
 //
-// 两档，由 `ASH_SEED_MODE` 选（默认 snapshot）：
+// 两档，由 `NAVI_SEED_MODE` 选（默认 snapshot）：
 //
 //   · `snapshot` —— 配置 + 运行态一起搬，搬完把运行态**洗一遍**（见 sanitize）。
 //     打开预览看到的就是你现在这台 ash 的样子：一样的任务列表、一样的分组、一样的
@@ -191,7 +191,7 @@ export async function sanitizeSnapshot(dest: Client): Promise<string[]> {
 }
 
 /**
- * 启动期入口，只有 `ASH_SEED_FROM` 非空时才走（也就是只有预览会走）。
+ * 启动期入口，只有 `NAVI_SEED_FROM` 非空时才走（也就是只有预览会走）。
  *
  * 源库是**用户正在用的那份**，所以这里只 SELECT，绝不写。（libsql 的 file: URL 不认
  * `?mode=ro`，拦不住的那一层只能靠这一条自律 + 上面的白名单。）

@@ -291,12 +291,12 @@ function putJson(
 // ── ① `mcpServers` 这一族(claude / gemini / kimi / cursor / qwen / copilot / kiro / qoder / antigravity)──
 //
 // 同一个形状:顶层 `mcpServers` 对象,每条 `{ command, args, env }`。本轮在 gemini 上
-// 用真 CLI 验过一遍(`gemini mcp add ash node <entry> -s user -e ASH_URL=…` 写出来的
+// 用真 CLI 验过一遍(`gemini mcp add ash node <entry> -s user -e NAVI_URL=…` 写出来的
 // 就是这个形状),其余几家按各自官方文档(出处记在 `catalog.ts` 的 `source`)。
 
 /**
  * 登记里写的 MCP 服务地址。各代变量名都认、新名优先 —— 跟 MCP 服务自己读的顺序一致
- * （mcp/src/runtime.ts）：旧版 setup 写的登记里是 `ASH_URL`。
+ * （mcp/src/runtime.ts）：旧版 setup 写的登记里是 `NAVI_URL`。
  */
 export function mcpUrlOf(env: Record<string, unknown>): string | null {
   for (const key of envNameGenerations("NAVI_URL")) {

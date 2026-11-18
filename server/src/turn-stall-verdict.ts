@@ -145,7 +145,7 @@ export function setStallVerdictPersister(fn: StallVerdictPersister | null): void
  *   · 第 2 轮是条数水位(KEEP=64,超了扔最老的)—— 扔掉的恰恰是还没结算那一条。断网会同时
  *     波及很多台,实测 65 个回合先全部熔断、再统一收到结束回执时,最早那一轮的判决已经被挤掉,
  *     `endTurn` 读不到于是记成 `completed`(1 completed / 64 failed)。
- *   · 第 3 轮换成纯年龄 TTL —— **老不等于孤立**。`ASH_STALL_TRIP_GRACE_MS=0`(产品允许的配置)
+ *   · 第 3 轮换成纯年龄 TTL —— **老不等于孤立**。`NAVI_STALL_TRIP_GRACE_MS=0`(产品允许的配置)
  *     关掉了强制回收,于是一个熔断过、`interrupt` 没人理的回合可以继续活着;跨过 6 小时、或者
  *     主机休眠把墙钟往前一跳,下一次熔断的写入就会把那条**仍然有人要读**的判决扫掉,旧回合
  *     后来真收到 turnEnd 时读到 null,照样写 `completed`(第 3 轮审查 F3,已实测)。

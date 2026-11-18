@@ -49,6 +49,8 @@ import { peerActor, peerOwnerId, peerUserFor, peerUserSoft } from "./auth/handof
 import { canSeeProject, visibleProjectsFor } from "./auth/visibility.js";
 import { actorOf } from "./auth/context.js";
 import { addTarget, deleteTarget, listTargets, patchTarget, setPeerKey } from "./auth/handoff-scope.js";
+import { HANDOFF_TRUSTED_MARK, HANDOFF_WIRE_SERVICE } from "./handoff-wire.js";
+import { TASK_BRANCH_PREFIX } from "@ash/shared/task-branch";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
@@ -66,7 +68,7 @@ const fail = (c: Context, e: unknown) => {
     return c.json(
       {
         error: e.message,
-        ...(e.unsettled ? {} : { ash: true }),
+        ...(e.unsettled ? {} : HANDOFF_TRUSTED_MARK),
         ...(e.code ? { code: e.code } : {}),
       },
       e.status as ErrorStatus,
@@ -74,7 +76,7 @@ const fail = (c: Context, e: unknown) => {
   }
   const msg = e instanceof Error ? e.message : String(e);
   console.error("[handoff]", e);
-  return c.json({ error: `接力失败:${msg}`, ash: true }, 500);
+  return c.json({ error: `接力失败:${msg}`, ...HANDOFF_TRUSTED_MARK }, 500);
 };
 
 class PendingCancellationError extends HandoffError {
@@ -173,7 +175,8 @@ function pingPayload(
   const identity = localIdentity();
   return {
     ok: true,
-    service: "ash",
+    service: HANDOFF_WIRE_SERVICE,
+    taskBranchPrefix: TASK_BRANCH_PREFIX,
     host: hostname(),
     identity: {
       publicKey: identity.publicKey,
@@ -201,7 +204,7 @@ async function handleImport(c: Context, returning: boolean) {
     bytes = await readCappedBody(c.req.raw, (await getAppSettings()).handoffMaxBodyMb);
   } catch (e) {
     if (e instanceof HandoffError) return fail(c, e);
-    return c.json({ error: "导入体读取失败", ash: true }, 400);
+    return c.json({ error: "导入体读取失败", ...HANDOFF_TRUSTED_MARK }, 400);
   }
   let peer: ReturnType<typeof verifyPeerSignature> = null;
   try {
@@ -215,13 +218,13 @@ async function handleImport(c: Context, returning: boolean) {
     raw = looksSealed(bytes) ? openSealed(bytes, localIdentity().fingerprint) : bytes.toString("utf8");
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return c.json({ error: `加密的接力载荷解不开(${msg})——多半是源机封给了别的机器,或者路上被改过`, ash: true }, 400);
+    return c.json({ error: `加密的接力载荷解不开(${msg})——多半是源机封给了别的机器,或者路上被改过`, ...HANDOFF_TRUSTED_MARK }, 400);
   }
   let body: HandoffManifest;
   try {
     body = JSON.parse(raw) as HandoffManifest;
   } catch {
-    return c.json({ error: "导入体不是合法 JSON", ash: true }, 400);
+    return c.json({ error: "导入体不是合法 JSON", ...HANDOFF_TRUSTED_MARK }, 400);
   }
   try {
     if (peer && body.sourceFingerprint && !sameFingerprint(peer.fingerprint, body.sourceFingerprint)) {
@@ -350,9 +353,9 @@ export function mountHandoffRoutes(api: Hono): void {
       return fail(c, e);
     }
     const row = (await db.select().from(projects)).find((p) => p.id === c.req.param("id"));
-    if (!row) return c.json({ error: "项目不存在", ash: true }, 404);
+    if (!row) return c.json({ error: "项目不存在", ...HANDOFF_TRUSTED_MARK }, 404);
     if (peerUser.kind === "user" && !(await canSeeProject(peerActor(peerUser), row.id))) {
-      return c.json({ error: "项目不存在", ash: true }, 404);
+      return c.json({ error: "项目不存在", ...HANDOFF_TRUSTED_MARK }, 404);
     }
     if (!projectHealthLight(row.repoPath).isRepo) return c.json({ refs: [] });
     try {

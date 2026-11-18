@@ -22,7 +22,7 @@ const dirOverride = (name: NaviEnvName, fallback: string): string => {
   return explicit ? resolve(explicit) : join(DATA_DIR, fallback);
 };
 export const RUNS_DIR = dirOverride("NAVI_RUNS_DIR", "runs");
-// 预览实例专用的**只读**回退目录（`ASH_RUNS_FALLBACK`，指向主仓的 data/runs）。
+// 预览实例专用的**只读**回退目录（`NAVI_RUNS_FALLBACK`，指向主仓的 data/runs）。
 //
 // 为什么需要它：会话正文和 trace 是**文件**，不在库里。预览库是主库的快照，所以任务和
 // 会话行都在，点开却是一片空白——而 token 芯片、每回合用时这些恰恰都长在正文里。
@@ -33,9 +33,9 @@ export const RUNS_DIR = dirOverride("NAVI_RUNS_DIR", "runs");
 export const RUNS_FALLBACK_DIR = readEnv(process.env, "NAVI_RUNS_FALLBACK")?.trim() || null;
 // Pasted/uploaded images. Agents can't take binary on stdin, so we persist the
 // file here and pass its absolute path in the prompt for the agent to Read.
-// ASH_UPLOADS_DIR 只给测试用:接力测试的两个实例各需一份隔离的 uploads 目录。
+// NAVI_UPLOADS_DIR 只给测试用:接力测试的两个实例各需一份隔离的 uploads 目录。
 export const UPLOADS_DIR = dirOverride("NAVI_UPLOADS_DIR", "uploads");
 // ash 自己给预览备的 node 依赖（见 preview-deps.ts 顶部）。**关键是它在用户项目之外**：
 // 依赖装在这儿，任务工作区只挂一条软链，用户的检出一个字节都不会被写。
-// ASH_DEPS_DIR 只给测试用。
+// NAVI_DEPS_DIR 只给测试用。
 export const DEPS_DIR = dirOverride("NAVI_DEPS_DIR", "deps");

@@ -57,12 +57,12 @@ export async function runPreview(
   // 实际在读写那一台；对方是单人模式还不用登录），而且它自述的端口跟我们绑着的对不上，
   // 登录态直连也就永远开不起来（第 5 轮审查 P1）。
   //
-  // 单开一个变量、不复用通用的 `ASH_PROXY`，是因为这两件事的分量不一样：这一条是 ash 说
-  // 「我在这儿」，**只当默认值**；`ASH_PROXY` 是脚本作者说「前端连我指的那个后端」，那是命令。
-  // 顺序在 dev.mjs 那边（`ASH_PROXY` 在前），压掉它就废掉了「一条整栈脚本」这种受支持的写法
+  // 单开一个变量、不复用通用的 `NAVI_PROXY`，是因为这两件事的分量不一样：这一条是 ash 说
+  // 「我在这儿」，**只当默认值**；`NAVI_PROXY` 是脚本作者说「前端连我指的那个后端」，那是命令。
+  // 顺序在 dev.mjs 那边（`NAVI_PROXY` 在前），压掉它就废掉了「一条整栈脚本」这种受支持的写法
   // ——用户以为在验分支后端，实际是拿自己的身份读写主库（第 6 轮审查 P1）。
   //
-  // 那个顺序**只在「能到 dev.mjs 的 `ASH_PROXY` 一定是命令现场写的」时才站得住**，靠的是
+  // 那个顺序**只在「能到 dev.mjs 的 `NAVI_PROXY` 一定是命令现场写的」时才站得住**，靠的是
   // 下面 previewBaseEnv() 把继承来的那份擦掉。
   const hostApiUrl = boundListeningPort() === null ? null : `http://127.0.0.1:${boundListeningPort()}`;
   const envs = services.map((s, index) => {

@@ -57,6 +57,7 @@ import { collectUploads, isTextRel } from "./handoff-uploads.js";
 import { readableUploads, taskUploadNames } from "./uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { capabilityReportFor } from "./handoff-capability.js";
+import { legacyPeerBranchRefusal } from "./handoff-wire.js";
 import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/handoff";
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
@@ -290,6 +291,8 @@ export async function preflightHandoff(
   // (详见 handoff-capability.ts 顶部)。它永不抛,读不出来就是 unknown 不拦。
   const capability = await capabilityReportFor(taskId, ping.capabilities);
   if (capability.status === "unknown" && capability.unknownReason) notes.push(capability.unknownReason);
+  const branchRefusal = await legacyPeerBranchRefusal(ping, task, project.repoPath);
+  if (branchRefusal) notes.push(branchRefusal);
   return {
     ok: true,
     target: { url: targetUrl, host: ping.host },
@@ -403,6 +406,8 @@ export async function exportHandoff(
         throw error;
       }
     }
+    const branchRefusal = pendingRetry ? null : await legacyPeerBranchRefusal(ping, task, project.repoPath);
+    if (branchRefusal) throw new HandoffError(branchRefusal, 409);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
 

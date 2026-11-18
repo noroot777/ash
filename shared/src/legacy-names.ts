@@ -42,11 +42,6 @@ export const LEGACY_PRESENCE_PREFIX = ".ash-online.";
 /** 预览依赖目录「装好了」的旧标记文件。拆：旧标记全部被新标记替换之后（重装一次依赖即可）。 */
 export const LEGACY_PREVIEW_DEPS_READY_MARK = ".ash-deps-ready";
 
-/** 执行器进程单元令牌的旧前缀（`ash-agent-…`，写进进程环境与临时目录登记）。拆：升级前起的智能体都已退出。 */
-export const LEGACY_AGENT_UNIT_PREFIX = "ash-agent-";
-
-/** Windows 上智能体包装脚本的旧后缀（命令行里认它找智能体进程）。拆：同上。 */
-export const LEGACY_WINDOWS_AGENT_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
 
 /** 我方 HTTP 头的旧前缀（`x-ash-turn-token` 等）。升级前起的 MCP 子进程、钩子、旧版对端还在发。拆：同上 + 局域网对端都升级之后。 */
 export const LEGACY_HTTP_HEADER_PREFIX = "x-ash-";
@@ -62,8 +57,6 @@ export const LEGACY_INSTANCE_COOKIE = "ash_instance";
  */
 export const LEGACY_HANDOFF_SERVICE = "ash";
 
-/** 人工审批令牌签名里的用途串（旧版 `scripts/human-approval.mjs` 签出来的）。拆：旧令牌都已过期（几分钟）。 */
-export const LEGACY_HUMAN_APPROVAL_PURPOSE = "ash-human-approval-v1";
 
 /** 预览批注 postMessage 协议名。升级前打开的预览页里注入的还是旧脚本。拆：那些页面都刷新过之后。 */
 export const LEGACY_PREVIEW_ANNOTATION_PROTOCOL = "ash-preview-annotation-v1";
@@ -92,6 +85,32 @@ export const FROZEN_HANDOFF_ENCRYPTION_MAGIC = "ash-enc1";
 
 /** IM 绑定码摘要的盐。库里存的是加了它的摘要，换了它已绑定的会话全部失效。拆：绑定表重做时。 */
 export const FROZEN_IM_BIND_SALT = "ash-im-bind:";
+
+/**
+ * 用户仓库里的隐藏 ref 命名空间：任务开工点 / 验收头 / 基线更新备份（`refs/ash/…`）、Git 工作台的
+ * 操作备份（`refs/ash-backup/…`）。它们落在**用户的每一个仓库里**，读写点很多而且多是比较交换
+ * （`update-ref <ref> <new> <old>`），改名要么双读双写每一处、要么挨个仓库搬 ref，换来的只是一段
+ * 用户平常看不见的路径。所以冻结：当前版本照旧读写它。拆：哪天要动，先写一个逐仓库搬 ref 的离线迁移。
+ */
+export const FROZEN_GIT_REF_NAMESPACE = "refs/ash/";
+export const FROZEN_GIT_BACKUP_REF_NAMESPACE = "refs/ash-backup/";
+
+/**
+ * 人工授权申请里的用途串（服务端签发、离机签名脚本 `scripts/human-approval.mjs` 严格比对）。签名脚本
+ * 跑在**离机设备**上，那份拷贝多半是改名之前的版本，换了它，管理员手里的脚本就拒签。拆：签名协议升版时。
+ */
+export const FROZEN_HUMAN_APPROVAL_PURPOSE = "ash-human-approval-v1";
+
+/**
+ * 智能体运行在操作系统里留下的对象名：进程单元记号的前缀（落库在 `sessions.agent_unit_token`）、
+ * Linux cgroup 目录名与 Windows Job Object 名的前缀、守圈就绪文件所在的临时目录、Windows 上包装脚本的
+ * 后缀（`scripts/platform.mjs` 重启时靠它认出智能体进程、不误杀）。智能体**活得过服务重启和升级**，
+ * 重启后接回、清扫残留都按这些名字去找；换了名字，升级那一刻正在跑的智能体就认不回来（Windows 上
+ * 还会在重启时被当成陌生进程）。用户看不见它们，所以冻结。拆：不拆。
+ */
+export const FROZEN_AGENT_UNIT_PREFIX = "ash-agent-";
+export const FROZEN_CONFINE_TMP_DIR = "ash-confine";
+export const FROZEN_WINDOWS_AGENT_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
 
 /** codex 中转供应商 id。codex 把它记进会话存档，换了它，升级前的会话续跑时对不上供应商。拆：不拆。 */
 export const FROZEN_CODEX_RELAY_PROVIDER_ID = "ash_relay";

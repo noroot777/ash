@@ -126,7 +126,7 @@ function filesInDir(dir: string, site: AshMcpConfigSite, create = true): string[
  *    这个(上一版「找到第一个就只认它」,于是 ash 写在 `.json`、目录里又有一份 `.jsonc` 时
  *    判成 absent,安装器还往 `.jsonc` 里再补一条 —— 上一轮审查 F4 的第二格;`config.json`
  *    整个名字到本轮审查 F1 才补上,在那之前「只有 config.json 里有 ash」被判成 absent、
- *    派审硬拒,安装器还往更高优先级那份写一条、把真 CLI 的生效 `ASH_URL` 换掉了);
+ *    派审硬拒,安装器还往更高优先级那份写一条、把真 CLI 的生效 `NAVI_URL` 换掉了);
  *  · `~/.opencode/` 是**另一层全局配置**(`opencode.json` < `opencode.jsonc`),它压过默认
  *    目录、压过上面那个文件变量、也压过任务目录里的项目配置(本轮审查 F1 实测);
  *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**,优先级高于默认目录,**也高于上面那个文件**

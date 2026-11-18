@@ -222,6 +222,10 @@
       "types": "./src/http-headers.ts",
       "default": "./src/http-headers.ts"
     },
+    "./task-branch": {
+      "types": "./src/task-branch.ts",
+      "default": "./src/task-branch.ts"
+    },
     "./repo-url": {
       "types": "./src/repo-url.ts",
       "default": "./src/repo-url.ts"

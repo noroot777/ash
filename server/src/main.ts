@@ -1,5 +1,4 @@
 import { readEnv } from "@ash/shared/env-names";
-import "./env.js";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
@@ -449,7 +448,7 @@ app.all("/api/*", (c) =>
 // Range;视频大且要拖动进度,所以这里单独用 createReadStream 流式 + 解析 Range 返回 206。
 // createReadStream 跟随软链,所以 review 目录放软链即可,无需拷贝原片。
 // 根目录默认跟随 ash 仓库(review/ 在仓库根下,迁机器也不失效);代码不在仓库里(独立 app,
-// bundle 只读、放不进软链)时落到数据目录下。可用 ASH_REVIEW_ROOT 覆盖。
+// bundle 只读、放不进软链)时落到数据目录下。可用 NAVI_REVIEW_ROOT 覆盖。
 const REVIEW_ROOT = normalize(readEnv(process.env, "NAVI_REVIEW_ROOT") ?? join(REPO_DIR ?? DATA_DIR, "review"));
 app.get("/review", (c) => c.redirect("/review/"));
 app.get("/review/*", async (c) => {

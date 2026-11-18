@@ -358,6 +358,8 @@ export interface HandoffPingResponse {
   // 与 projects 同档,未获批准时故意不报:装了哪些 CLI 也是本机布局的一部分,而且
   // 那时接力本来就进行不下去,报了只是白白多讲一句自己的事。
   capabilities?: HandoffPeerCapabilities;
+  /** 任务分支的前缀（`navi/`）。改名之前的版本不报这一项，发起方据此知道它只认 `ash/`（见 handoff-wire.ts）。 */
+  taskBranchPrefix?: string;
   // 任务级免审批移回时，只返回该任务原项目的 refs，供持有机生成增量 bundle。
   returnRefs?: { name: string; commit: string }[];
 }

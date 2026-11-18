@@ -44,14 +44,16 @@ import { extname, join, resolve, sep } from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { Plugin, ResolvedConfig } from "vite";
 import { HUMAN_ACTION_TOKEN_META } from "@ash/shared/human-action";
+import { readEnv } from "@ash/shared/env-names";
 
 /**
  * dev / preview 把 `/api` 代理到哪个后端。凭据要从**同一个实例**取,所以这一份解析由
- * 代理配置和本插件共用 —— 两边各写一份的话,`ASH_PROXY` 指到别的实例上时,页面拿着 A 的
+ * 代理配置和本插件共用 —— 两边各写一份的话,`NAVI_PROXY` 指到别的实例上时,页面拿着 A 的
  * 凭据去按 B 的开关,403 的原因还查不出来。
  */
 export function ashBackendUrl(): string {
-  return process.env.ASH_PROXY ?? process.env.HARNESS_PROXY ?? "http://localhost:4317";
+  // 改名之前的写法（`ASH_PROXY=… npm run dev`、更早的 `HARNESS_PROXY`）照样认，见 env-names.ts。
+  return readEnv(process.env, "NAVI_PROXY") ?? "http://localhost:4317";
 }
 
 /** 取凭据的超时。页面文档等不起 —— 后端卡住时宁可不盖(开关会如实 403),不要让整个页面打不开。 */

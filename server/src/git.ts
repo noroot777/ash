@@ -1,6 +1,7 @@
 import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { mkdirSync, statSync, existsSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@ash/shared";
+import { taskBranchName, taskBranchNames } from "@ash/shared/task-branch";
 import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, expandHome, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
@@ -283,7 +284,7 @@ export async function resolveWorkspace(repoPath: string, taskId: string): Promis
 // ── Opt-in per-task worktree (§4) ────────────────────────────────────────────
 // The global factory default is ON; creation callers may explicitly override it.
 // When ON, runTask materializes
-// `<repoPath>/.worktrees/<taskId>` on branch `ash/<id8>` branched off the
+// `<repoPath>/.worktrees/<taskId>` on branch `navi/<id8>` branched off the
 // user-picked `base` (null = current HEAD) BEFORE handing the cwd to the agent.
 // ash creates worktrees but never removes them on its own — cleanup is a
 // one-click UI action.
@@ -291,19 +292,16 @@ export async function resolveWorkspace(repoPath: string, taskId: string): Promis
 // Stable derived branch name. taskId is opaque to users but unique; the first
 // 8 chars are enough entropy in practice and keep the ref short/legible.
 export function worktreeBranchName(taskId: string): string {
-  return `ash/${taskId.slice(0, 8)}`;
+  return taskBranchName(taskId);
 }
 
-function legacyWorktreeBranchName(taskId: string): string {
-  return `harness/${taskId.slice(0, 8)}`;
-}
-
+/** 这条任务的分支在仓库里实际叫什么：改名之前建的还是 `ash/<id8>`（再早 `harness/`），沿用它；都没有才用当前名。 */
 export async function resolveWorktreeBranchName(repoPath: string, taskId: string): Promise<string> {
   const repo = expandHome(repoPath);
-  const current = worktreeBranchName(taskId);
-  if (await localBranchExists(repo, current)) return current;
-  const legacy = legacyWorktreeBranchName(taskId);
-  return await localBranchExists(repo, legacy) ? legacy : current;
+  for (const name of taskBranchNames(taskId)) {
+    if (await localBranchExists(repo, name)) return name;
+  }
+  return worktreeBranchName(taskId);
 }
 
 // Conventional location for ash-managed worktrees: a dotfile dir at the repo

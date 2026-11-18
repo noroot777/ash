@@ -14,6 +14,7 @@ import { isAbsolute, join } from "node:path";
 import { readForWrite } from "./config-publish.mjs";
 import { readJsonLoose } from "./json-edit.mjs";
 import { scanTomlServers } from "./toml-scan.mjs";
+import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.mjs";
 
 const atHome = (_env, home) => home;
 const underHome = (...segments) => (_env, home) => join(home, ...segments);
@@ -115,8 +116,9 @@ export const HOST_SITES = {
     shape: "mcpServers", type: "stdio",
   },
 };
-export const ASH = "ash";
-export const LEGACY = "harness";
+/** 规范登记名;改名之前的登记名(`ash`、更早的 `harness`)见 legacy-names.mjs,照样认作已登记。 */
+export const ASH = "navi";
+export const LEGACY_NAMES = LEGACY_MCP_SERVER_NAMES;
 
 /** 某个配置目录里该写哪一份(`alternates` 存在哪个就用哪个,免得多出一份两边都生效)。 */
 function fileInDir(dir, site) {
@@ -339,8 +341,8 @@ function mergeFactsFor(site) {
   };
 }
 
-/** 认的那两个服务名 —— **两条独立登记**,顺序就是优先。跟 TS 那份 `ASH_MCP_NAMES` 同口径。 */
-const NAMES = [ASH, LEGACY];
+/** 认的那几个服务名 —— **各是独立登记**,顺序就是优先。跟 TS 那份 `ASH_MCP_NAMES` 同口径。 */
+const NAMES = [ASH, ...LEGACY_NAMES];
 
 /**
  * 一份来源扫出来的**逐名事实**:`{ doubt?, missing?, names: Map<名, { status, detail }> }`,

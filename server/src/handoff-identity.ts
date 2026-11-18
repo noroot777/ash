@@ -12,7 +12,7 @@
 //
 // 私钥落在 DB 文件旁边的 `<db>.identity.json`(0600),**不进 DB**:库会被 preview-seed
 // 快照、被用户备份来回搬,私钥跟着走就等于身份被复制成两份。挂 DB 路径而不是 DATA_DIR
-// 还顺带保证「不同 ASH_DB = 不同机器」,接力回归测试的源机/对端才能在同一台电脑上跑。
+// 还顺带保证「不同 NAVI_DB = 不同机器」,接力回归测试的源机/对端才能在同一台电脑上跑。
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
@@ -20,9 +20,10 @@ import {
   randomBytes, sign, timingSafeEqual, verify, type KeyObject,
 } from "node:crypto";
 import { resolveAshDbFile } from "./db/path.js";
+import { FROZEN_HANDOFF_SIGNATURE_DOMAIN } from "@ash/shared/legacy-names";
 
 /** 签名覆盖的协议版本串:换算法/换字段就换它,老签名天然验不过,不会被静默接受。 */
-const SIG_V1 = "ash-handoff-v1";
+const SIG_V1 = FROZEN_HANDOFF_SIGNATURE_DOMAIN;
 
 export interface LocalIdentity {
   /** 公钥 SPKI DER 的 sha256,小写 hex 64 位。机器身份的规范形式,比对一律用它。 */
@@ -130,7 +131,7 @@ export function localKxPrivateKey(): KeyObject {
   return loadOrCreate().kxKey;
 }
 
-/** 只给测试用:换 ASH_DB 之后强制重读身份(同进程里模拟两台机器)。 */
+/** 只给测试用:换 NAVI_DB 之后强制重读身份(同进程里模拟两台机器)。 */
 export function resetIdentityCache(): void {
   cached = null;
 }

@@ -1,4 +1,4 @@
-// 「本机自用」启动开关（`ASH_LOCAL_ONLY=1`）的单点。独立打包的 app 带着它起 server。
+// 「本机自用」启动开关（`NAVI_LOCAL_ONLY=1`）的单点。独立打包的 app 带着它起 server。
 //
 // 打开之后三件事一起成立，缺一件都不叫「只给坐在这台机器前的人用」：
 //   · 只监听 127.0.0.1 —— 别的机器连端口都连不上，不靠鉴权兜底；
@@ -14,4 +14,4 @@ clearEnv(process.env, "NAVI_LOCAL_ONLY");
 
 export const LOCAL_ONLY_HOSTNAME = "127.0.0.1";
 
-export const LOCAL_ONLY_REFUSAL = "这台 Navi 以本机自用模式启动（ASH_LOCAL_ONLY）：只接受本机直连，不提供远程配对、多人和邀请";
+export const LOCAL_ONLY_REFUSAL = "这台 Navi 以本机自用模式启动（NAVI_LOCAL_ONLY）：只接受本机直连，不提供远程配对、多人和邀请";

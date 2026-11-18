@@ -27,7 +27,7 @@ export interface HostAshMcp {
   state: "added" | "ours" | "elsewhere" | "failed";
   /** elsewhere:现在那条怎么起。 */
   current?: string;
-  /** elsewhere:要指向这里,command / args / ASH_URL 该是什么。 */
+  /** elsewhere:要指向这里,command / args / NAVI_URL 该是什么。 */
   wanted?: string;
   /** failed:没补成的原因(原样来自补接那一层)。 */
   detail?: string;
@@ -68,7 +68,7 @@ export async function setUpHostAshMcp(): Promise<HostAshMcp[]> {
 
 /**
  * 这条登记起的是不是这份 ash 的 MCP、连的是不是这一台：node 真正执行的那个脚本是这里的入口、
- * 命令是同一个 node、NAVI_URL(旧登记里是 ASH_URL)规范化之后是同一个地址。
+ * 命令是同一个 node、NAVI_URL(旧登记里是 NAVI_URL)规范化之后是同一个地址。
  */
 export function pointsAt(launch: AshMcpLaunch | null, wanted: AshMcpEntry): boolean {
   if (!launch?.command) return false;

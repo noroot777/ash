@@ -102,7 +102,7 @@ export class ClaudeExecutor implements AgentExecutor {
   /** 恢复参数按会话 cwd 现算；构造时提前冻结会漏掉项目 settings。 */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
     // **不含 Monitor 改道那段钩子**:那条命令是给人复制到自己终端里手跑的,钩子头上那两个
-    // `$ASH_TASK_ID` / `$ASH_TURN_TOKEN` 只在 ash 起的进程里有(auth/run-env.ts),手跑时它们
+    // `$NAVI_TASK_ID` / `$NAVI_TURN_TOKEN` 只在 ash 起的进程里有(auth/run-env.ts),手跑时它们
     // 是空的 —— 于是那一次会话里每一次 Monitor 调用都会拿空身份去敲 ash 的回调端点,既帮不上
     // 他,还得靠服务端那道兜底把它挡回去。这一截也不是他的「覆盖项」:界面上那条命令是用来
     // 说明「要带上哪些配置才跟 ash 里跑的一样」的,ash 自己的观测钩子不属于这个范围。

@@ -347,7 +347,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     const inherited = source.prepared ? await ancestorDependencyDir(target) : null;
     if (inherited) {
       throw new Error(`测试快照 ${target} 往上能找到依赖目录 ${inherited}：准备命令漏装的包会从那里被解析到，`
-        + "测出来的不是准备命令装出来的那一份。把它移走，或用 ASH_GATE_ISOLATED_DIR 把快照根指到没有依赖目录的位置");
+        + "测出来的不是准备命令装出来的那一份。把它移走，或用 NAVI_GATE_ISOLATED_DIR 把快照根指到没有依赖目录的位置");
     }
     if (await gateAmbient(cwd, target, roots, source.prepared) !== source.ambient) {
       // 对不上一律拒绝（这一条不打折），但**说法得对得上**，因为出路不是同一条：

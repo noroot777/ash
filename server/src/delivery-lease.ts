@@ -53,7 +53,7 @@ import type { InputAcceptance } from "./executors/types.js";
  * 退避节奏:前几拍快(多半是一瞬的库忙),后面压到 15 秒一拍。**最后一拍之后按那一拍一直补**
  * (见 `attemptDispose`:不设上限、不自行退场)。
  *
- * `ASH_DELIVERY_RETRY_MS`(逗号分隔的毫秒)只给回归脚本:真实调用点一个都不传 `retryMs`,
+ * `NAVI_DELIVERY_RETRY_MS`(逗号分隔的毫秒)只给回归脚本:真实调用点一个都不传 `retryMs`,
  * 而「accepted 在补偿失败很多次之后仍然不许退回重投」这条不变量得接着真实投递链钉,按真实
  * 节奏钉一次要一分多钟(审查的端到端复现用了 63.7 秒)。真实运行一律用下面这份默认。
  */

@@ -1,11 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { runSteps } from "./test-runner.mjs";
+import { clearEnv } from "./env.mjs";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const environment = { ...process.env };
-for (const key of Object.keys(environment)) {
-  if (/^ASH_(?:DB|RUNS_DIR|DATA_DIR)$/i.test(key)) delete environment[key];
-}
+// 各代名字一起擦(`NAVI_DB`、改名之前的 `ASH_DB`……):擦漏一代,测试就会打到那份库上。
+for (const name of ["NAVI_DB", "NAVI_RUNS_DIR", "NAVI_DATA_DIR"]) clearEnv(environment, name);
 
 // 验收前置命令跑哪几条。加一条的判据：它拦的是**无声退化**——不跑就没有任何人会发现的
 // 那一类。提示词体积属于这一类：注入给模型的字数涨上去不会报任何错，只会在几个月后变成

@@ -41,12 +41,12 @@ export function parseCodexList(status, stdout) {
  *          foreignChange（批准期间用户那份被别的程序改过，所以没写）；added 带
  *          legacyLeft = 历史名没删掉
  */
-export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, listServers, removeServer }) {
+export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, legacyNames = legacyName ? [legacyName] : [], listServers, removeServer }) {
   const before = listServers();
   if (!before.ok) return { action: "blocked", why: before.why };
   const current = before.servers.find((s) => s.name === name);
   if (current) return { action: "kept", enabled: current.enabled };
-  const legacy = before.servers.some((s) => s.name === legacyName);
+  const legacy = before.servers.filter((s) => legacyNames.includes(s.name)).map((s) => s.name);
 
   const existing = existsSync(configFile) ? readFileSync(configFile, "utf8") : null;
   const sandbox = mkdtempSync(join(tmpdir(), "ash-setup-codex-"));
@@ -55,12 +55,12 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
     // 迁移、追加、确认全在副本上做,用户那份这期间一个字节都不动。
     writeFileSync(sandboxCfg, existing ?? "", { mode: TMP_MODE });
     // 删不掉就留着：两个名字 ash 都认，名字不同不会重复定义；下面如实报「没删掉」。
-    const legacyRemoved = legacy ? removeServer(legacyName, sandbox) : false;
+    const legacyRemoved = legacy.length > 0 && legacy.map((old) => removeServer(old, sandbox)).every(Boolean);
     const base = readFileSync(sandboxCfg, "utf8");
     // TOML 的字符串是转义的,Windows 路径里的 `\` 必须成对写,否则 `\d`、`\n`
     // 会被当转义序列吞掉 —— 装完看着成功,codex 起 MCP 时才报路径不存在。
     const written = `${base}\n[mcp_servers.${name}]\ncommand = "node"\nargs = [${JSON.stringify(mcpEntry)}]\n\n`
-      + `[mcp_servers.${name}.env]\nASH_URL = "${url}"\n`;
+      + `[mcp_servers.${name}.env]\nNAVI_URL = "${url}"\n`;
     writeFileSync(sandboxCfg, written, { mode: TMP_MODE });
 
     // 批准:拼完这份,codex 本人读得动吗、ash 真的列出来了吗。
@@ -80,8 +80,8 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
         ? { action: "foreignChange", why: published.why, backup: null }
         : { action: "blocked", why: published.why };
     }
-    const legacyLeft = after.servers.some((s) => s.name === legacyName);
-    if (legacy && legacyRemoved && !legacyLeft) return { action: "migrated", backup: published.backup };
+    const legacyLeft = after.servers.some((s) => legacy.includes(s.name));
+    if (legacy.length && legacyRemoved && !legacyLeft) return { action: "migrated", backup: published.backup };
     return { action: "added", backup: published.backup, legacyLeft };
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
