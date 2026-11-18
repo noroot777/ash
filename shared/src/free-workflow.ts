@@ -371,6 +371,8 @@ export interface ReviewerProfile {
   executorLabel: string | null;
   model: string | null;
   reasoningEffort: string | null;
+  /** 派出去的任务默认交给这一位审查（每人至多一位，shared/src/review-on-create.ts）。 */
+  isDefault: boolean;
   createdAt: string;
   updatedAt: string;
 }

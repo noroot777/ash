@@ -29,7 +29,7 @@ import {
   readCallMemory, type CallVerb, type ReplyCall,
 } from "./replyCall.ts";
 import { useDispatchBaseContext, useReplyCall } from "./useReplyCall.ts";
-import { CallCancelKey, DispatchBaseSegment, ReplyCallDock } from "./ReplyCallDock.tsx";
+import { CallCancelKey, CallReviewerChip, DispatchBaseSegment, ReplyCallDock } from "./ReplyCallDock.tsx";
 import { ReplySendKey } from "./ReplySendKey.tsx";
 import { DispatchDefaultRow, DispatchDefaultSegment, useDispatchDefault } from "./ReplyDispatchDefault.tsx";
 import { DiscussCapsule } from "./ReplyDiscussSegments.tsx";
@@ -420,7 +420,7 @@ export function ReplyBox({
   // 派出去：开一条新任务交给叫的那个人。这条任务的智能体不被叫醒、不占回合，所以它在跑时也照派不误
   // （不排队）。讨论：各方来回几段，开不开得了看 `discussHold`。失败时人、做法、正文和附件全留着，说清楚哪儿没成。
   const runDispatch = (current: ReplyCall) => !onDispatch || baseContext.status !== "ready" ? Promise.resolve(false)
-    : runCall(current, (text, attachments) => onDispatch({ text, attachments, target: current.target, worktreeBase }));
+    : runCall(current, (text, attachments) => onDispatch({ text, attachments, target: current.target, worktreeBase, review: current.review ?? "default" }));
   // 讨论里这条任务的执行器按发起那一刻的常设配置说话（服务端记进参与者）：刚改完执行器就开，先等写回落地。
   const runDiscuss = (current: ReplyCall) => !onDiscuss || discussHold ? Promise.resolve(false)
     : runCall(current, async (topic, attachments) => {
@@ -590,6 +590,7 @@ export function ReplyBox({
               disabled={configDisabled} onChange={dispatchDefault.commit} /> : undefined}
           />}
           {target && <CallCancelKey agent={target.agent} onCancel={cancelCall} />}
+          {call && dispatching && !(take && activeOverride?.bare) && <CallReviewerChip call={call} disabled={configDisabled} onChange={calling.setReview} />}
           <ReplySendKey
             overrideSend={take ? activeOverride!.send : null}
             call={call}

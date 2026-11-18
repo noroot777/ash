@@ -26,7 +26,7 @@ import {
 } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { callWithMonitorResults } from "./monitor-results.js";
-import { MODE, RECURS, TASK_STAGE, planTaskShape, suggestionShape } from "../schemas.js";
+import { MODE, RECURS, TASK_STAGE, planTaskShape, reviewChoiceOf, suggestionShape } from "../schemas.js";
 import { MAX_DISPATCH_PLAN_ITEMS } from "@ash/shared/dispatch-plan";
 import { MAX_SUGGESTIONS_PER_CALL } from "@ash/shared/dispatch-suggestion";
 
@@ -252,7 +252,9 @@ server.registerTool(
     },
   },
   async ({ taskId, tasks, order, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-plan`, { tasks, order: order ?? "serial" }, directionToken)); }
+    // 卡上每一行都摆着谁来审（缺省默认审查者），用户按「派出去」前能换、能关。
+    const items = tasks.map(({ reviewer, ...task }) => ({ ...task, review: reviewChoiceOf(reviewer) }));
+    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-plan`, { tasks: items, order: order ?? "serial" }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

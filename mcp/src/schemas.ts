@@ -42,6 +42,20 @@ export const PREREQUISITES_GUIDE =
 export const QUEUE_VS_PREREQUISITES =
   "只要一个接一个跑、不要对方的代码，用 chain（队列）；要前一条的代码，用 prerequisites 或 stack（前置），只依赖同一条前置的会同时起";
 
+// 谁来审：建出来就带审查预约，执行回合正常结束后自动开审（shared/src/review-on-create.ts）。
+// MCP 这一侧**缺省就带**（落成 "default" = 用户在设置里设的默认审查者），关掉只认用户的原话。
+export const REVIEWER_GUIDE =
+  "谁来审：缺省 = 用户设的默认审查者，建出来就带审查预约、完成后自动开审（没设默认就不审）；"
+  + "写审查者名字或 id = 交给那一位；null = 不审查 —— 只有用户明确说「不用审」才传 null，别自己判断「这条不用审」就关掉";
+export const REVIEWER = z.string().nullable().optional().describe(REVIEWER_GUIDE);
+
+/** 工具参数里的 reviewer 落成建任务请求里的 review：缺省带默认，null 不审，其余按名字或 id 指定。 */
+export function reviewChoiceOf(reviewer: string | null | undefined): "default" | "none" | { reviewer: string } {
+  if (reviewer === undefined) return "default";
+  if (reviewer === null || !reviewer.trim()) return "none";
+  return { reviewer: reviewer.trim() };
+}
+
 // One task spec, reused by batch_create_tasks and create_task_chain.
 // 注意:不再接受 dependsOn / resumeDependsOn —— 顺序依赖统一走 queue,
 // chain:true 是创建队列的语法糖。要细调队列请用 queue_* 工具。
@@ -59,6 +73,7 @@ export const taskShape = z.object({
   workflowMode: WORKFLOW_MODE.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
   prerequisites: z.array(z.string()).optional().describe(PREREQUISITES_GUIDE),
+  reviewer: REVIEWER,
 });
 
 // 派活单上的一条（propose_dispatch）：建任务那几个参数照旧（去掉 workflowMode —— 一律自由工作流），

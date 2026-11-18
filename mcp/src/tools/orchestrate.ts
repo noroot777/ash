@@ -10,7 +10,13 @@ import { createWorkflowMode } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import type { TaskPrerequisites } from "@ash/shared/prerequisites";
 import { prerequisiteStepText } from "@ash/shared/prerequisites";
-import { AGENT_TYPE, MODE, QUEUE_VS_PREREQUISITES, TASK_STATUS, WORKFLOW_MODE, taskShape } from "../schemas.js";
+import { AGENT_TYPE, MODE, QUEUE_VS_PREREQUISITES, REVIEWER, REVIEWER_GUIDE, TASK_STATUS, WORKFLOW_MODE, reviewChoiceOf, taskShape } from "../schemas.js";
+
+type ToolTask = z.infer<typeof taskShape>;
+
+/** 每条任务的 reviewer 落成请求里的 review：任务自己写了用它，没写用批次的，都没写 = 默认审查者。 */
+const withReviews = (tasks: ToolTask[], batchReviewer: string | null | undefined) =>
+  tasks.map(({ reviewer, ...task }) => ({ ...task, review: reviewChoiceOf(reviewer !== undefined ? reviewer : batchReviewer) }));
 
 // list_tasks 里那一格只留派活要看的：每条前置到哪一步（附一句人话），在不在等，卡在哪。
 const prerequisiteSummary = (view: TaskPrerequisites) => ({
@@ -92,11 +98,14 @@ server.registerTool(
         mergeTargetBranch: z.string().nullable().optional().describe("默认最终合入分支，独立于开工起点"),
         workflowMode: WORKFLOW_MODE.optional(),
         labels: z.array(z.string()).optional(),
+        reviewer: REVIEWER,
       }).optional().describe("每个任务的兜底值，任务自身同名字段可覆盖"),
     },
   },
-  async ({ groupId, ...body }) => {
-    try { return ok(await call("POST", `/groups/${groupId}/tasks/batch`, body)); }
+  async ({ groupId, tasks, defaults, ...body }) => {
+    const { reviewer, ...rest } = defaults ?? {};
+    const request = { ...body, ...(defaults ? { defaults: rest } : {}), tasks: withReviews(tasks, reviewer) };
+    try { return ok(await call("POST", `/groups/${groupId}/tasks/batch`, request)); }
     catch (e) { return fail(e); }
   },
 );
@@ -230,10 +239,11 @@ server.registerTool(
       worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref"),
       mergeTargetBranch: z.string().nullable().optional().describe("默认最终合入分支"),
       workflowMode: WORKFLOW_MODE.optional(),
+      reviewer: REVIEWER.describe(`批次默认（任务可逐个覆盖）。${REVIEWER_GUIDE}`),
       run: z.boolean().optional(),
     },
   },
-  async ({ repoPath, tasks, groupName, mode, chain, stack, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode, run }) => {
+  async ({ repoPath, tasks, groupName, mode, chain, stack, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode, reviewer, run }) => {
     try {
       // 先用服务端那份判据（`createWorkflowMode`）预检一遍：批量接口才是拒绝的地方，但走到那一步
       // 之前项目和分组已经建好了，被拒时会留下一个空分组。
@@ -253,7 +263,7 @@ server.registerTool(
         defaults: [agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode].some((v) => v !== undefined)
           ? { agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode }
           : undefined,
-        tasks,
+        tasks: withReviews(tasks, reviewer),
       })) as { tasks: unknown[]; warning?: string };
       return ok({
         project: { id: project.id, name: project.name },

@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import type { AgentType, Task } from "@ash/shared";
 import { dispatchDefaultTarget, type DispatchOrder, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import type { DispatchSuggestionBase } from "@ash/shared/dispatch-suggestion";
+import { concreteReviewChoice } from "@ash/shared/review-on-create";
 import { api } from "../../lib/api.ts";
 import { useLeftDrawer } from "../../components/LeftDrawer.tsx";
 import { registeredAgentTypes } from "../../lib/agentAvailability.ts";
@@ -16,6 +17,7 @@ import type { ReplyOverride } from "../replyOverride.ts";
 import { dispatchBaseOptions } from "../replyCall.ts";
 import { useDispatchBaseContext } from "../useReplyCall.ts";
 import { useExecutorProfiles } from "../useExecutorProfiles.ts";
+import { useReviewerList } from "../../free-workflow/useReviewerList.ts";
 import { SuggestionDock, type SuggestionRow } from "./SuggestionDock.tsx";
 import { SuggestionDrawerBody, SuggestionDrawerEdit, SuggestionDrawerKind, SuggestionDrawerTitle } from "./SuggestionReader.tsx";
 import {
@@ -63,6 +65,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
   useEffect(() => { setOpen(false); setError(null); }, [task.id]);
 
   const list = enabled ? (task.dispatchSuggestions ?? []).filter((item) => !gone.has(item.id)) : [];
+  const reviewers = useReviewerList(list.length > 0);
   const baseContext = useDispatchBaseContext(task.projectId, list.length > 0);
   const options = suggestionBaseOptions(task, baseContext.value);
   const bases = options.map((option) => ({ id: option.id as DispatchSuggestionBase, label: option.id === "here" ? "接着这条的代码" : option.label }));
@@ -74,7 +77,10 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
     const body = edit.body ?? item.body;
     const wanted = edit.base ?? item.base;
     const base = bases.some((option) => option.id === wanted) ? wanted : bases[0]?.id ?? wanted;
-    return { id: item.id, title, body, note: item.note, target: edit.target ?? item.target ?? fallback, base, filled: !!title.trim() && !!body.trim() };
+    return {
+      id: item.id, title, body, note: item.note, target: edit.target ?? item.target ?? fallback, review: edit.review ?? "default",
+      base, filled: !!title.trim() && !!body.trim(),
+    };
   });
   const storedArmed = armedOf(task.id);
   const several = rows.length > 1;
@@ -119,7 +125,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
       await api.launchSuggestions(task.id, {
         order: several ? order : "parallel",
         items: picked.map((row) => ({
-          id: row.id, title: row.title.trim(), body: row.body, extra, target: row.target,
+          id: row.id, title: row.title.trim(), body: row.body, extra, target: row.target, review: concreteReviewChoice(row.review, reviewers),
           worktreeBase: options.find((option) => option.id === row.base)?.worktreeBase ?? options[0]?.worktreeBase ?? null,
         })),
         ...(extra !== undefined && attachments.length ? { attachments } : {}),
@@ -186,10 +192,12 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
         error={error ?? (baseContext.status === "failed" ? held : null)}
         types={registeredAgentTypes(profiles)}
         profiles={profiles}
+        reviewers={reviewers}
         onArm={arm}
         onGo={(id) => void launch([id])}
         onDrop={(id) => void drop(id)}
         onRetarget={(id, target) => { editSuggestion(id, { target }); if (armedRow) refocus(); }}
+        onReview={(id, review) => { editSuggestion(id, { review }); if (armedRow) refocus(); }}
         onBase={(id, base) => { editSuggestion(id, { base }); refocus(); }}
         onRead={read}
         onToggle={() => {

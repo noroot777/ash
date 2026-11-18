@@ -8,6 +8,7 @@
 // 活多久（server/src/dispatch-suggestion.ts）：落库；派出去、点了叉，那一件就没了；这条任务自己的执行器
 // 又跑完一个执行回合时，之前挂着、还没处理的收掉（那一回合新挂的留下）。
 import type { DispatchRunTarget } from "./dispatch-plan.ts";
+import type { CreateReviewChoice } from "./review-on-create.ts";
 
 /** 新任务从哪开工：从主分支开工 / 接着这条任务的代码。 */
 export type DispatchSuggestionBase = "trunk" | "here";
@@ -36,6 +37,8 @@ export type DispatchSuggestionLaunchItem = {
   /** 用户补的那句话（只有选中着派时才有）。 */
   extra?: string;
   target: DispatchRunTarget;
+  /** 谁来审（review-on-create.ts）；缺省 = 默认审查者。 */
+  review?: CreateReviewChoice;
   /** 落到 worktreeBase 上的开工起点；null = 项目目录此刻的 HEAD。 */
   worktreeBase: string | null;
 };

@@ -42,6 +42,10 @@
       "types": "./src/dispatch-plan.ts",
       "default": "./src/dispatch-plan.ts"
     },
+    "./review-on-create": {
+      "types": "./src/review-on-create.ts",
+      "default": "./src/review-on-create.ts"
+    },
     "./dispatch-suggestion": {
       "types": "./src/dispatch-suggestion.ts",
       "default": "./src/dispatch-suggestion.ts"

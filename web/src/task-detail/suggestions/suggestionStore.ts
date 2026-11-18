@@ -1,11 +1,14 @@
-// 可以派出去的活在页面上的那几份可变状态：用户改过的标题 / 说明 / 交给谁 / 从哪开工，此刻选中的是哪一件，
+// 可以派出去的活在页面上的那几份可变状态：用户改过的标题 / 说明 / 交给谁 / 谁来审 / 从哪开工，此刻选中的是哪一件，
 // 抽屉里是不是在改。放在模块里而不是组件里：切到别的任务再回来，改过的东西还在（派出去之前别丢）；读全文的
 // 抽屉是开的那一刻交出去的元素（components/LeftDrawer.tsx），它里面的标题、正文要跟着那一行变，就按身份订阅这里。
 import { useSyncExternalStore } from "react";
 import type { DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import type { DispatchSuggestionBase } from "@ash/shared/dispatch-suggestion";
+import type { CreateReviewChoice } from "@ash/shared/review-on-create";
 
-export type SuggestionEdit = { title?: string; body?: string; target?: DispatchRunTarget; base?: DispatchSuggestionBase };
+export type SuggestionEdit = {
+  title?: string; body?: string; target?: DispatchRunTarget; review?: CreateReviewChoice; base?: DispatchSuggestionBase;
+};
 
 /** 那一行此刻的样子，抽屉照着它画（由回复框里那一行发布，见 useSuggestionDock）。 */
 export type SuggestionView = {

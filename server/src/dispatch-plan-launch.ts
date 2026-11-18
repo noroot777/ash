@@ -97,7 +97,7 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
       model: pick.target.model, reasoningEffort: pick.target.reasoningEffort,
       autoTitle: false, duet: null as string | null, scheduleId: null as string | null, createdAt: ts, updatedAt: ts,
       useWorktree: item.useWorktree, worktreeBase: item.worktreeBase ?? null, mergeTargetBranch: item.mergeTargetBranch ?? null,
-      workflowMode: "free", ownerUserId: owner, dispatchedBy: task.id,
+      workflowMode: "free", ownerUserId: owner, dispatchedBy: task.id, review: pick.review,
     };
   });
   const dropped = plan.items.filter((_item, index) => !kept.has(index));

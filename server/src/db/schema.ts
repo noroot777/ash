@@ -459,6 +459,9 @@ export const reviewerProfiles = sqliteTable("reviewer_profiles", {
   model: text("model"),
   reasoningEffort: text("reasoning_effort"),
   ownerUserId: text("owner_user_id"), // 个人面资源(§八)
+  // 派出去的任务默认交给这一位审查(shared/src/review-on-create.ts)。同一个归属人至多一行为真,
+  // 由 db/index.ts 里的 reviewer_profiles_default_owner 部分唯一索引兜住;行删掉默认就跟着没了。
+  isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

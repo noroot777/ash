@@ -3,6 +3,7 @@ import { AGENT_TYPES } from "@ash/shared";
 import { CliCommandValidationError } from "@ash/shared/cli-commands";
 import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import { createWorkflowMode } from "@ash/shared/free-workflow";
+import { parseCreateReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -14,6 +15,7 @@ import { repoKey } from "./git.js";
 import { pauseGroup, runGroupInBackground } from "./scheduler.js";
 import { writingGroupMembership } from "./launch-capacity.js";
 import { createTasks } from "./task-store.js";
+import { ReviewOnCreateError } from "./review-on-create.js";
 import { id, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
@@ -139,6 +141,15 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     if ("error" in resolved) return c.json({ error: `tasks[${i}]: ${resolved.error}` }, resolved.status);
   }
 
+  // 建出来就带的审查预约(review-on-create.ts):任务自己的那一格优先,再看 defaults;都没给 = 不带
+  // (MCP 那一侧缺省落成 "default",别的调用方不变)。形状不对整批打回。
+  const reviews: (CreateReviewChoice | undefined)[] = [];
+  for (const [i, s] of specs.entries()) {
+    const review = parseCreateReviewChoice(s.review !== undefined ? s.review : b.defaults?.review, `tasks[${i}].review`);
+    if (review && typeof review === "object" && "error" in review) return c.json({ error: review.error }, 400);
+    reviews.push(review);
+  }
+
   // 拒绝 legacy 字段:本版本不再接受 dependsOn / resumeDependsOn。
   // 想串行就用 chain:true,想跨组依赖就用 queue API。
   for (const [i, s] of specs.entries()) {
@@ -232,6 +243,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       mergeTargetBranch: s.mergeTargetBranch ?? b.defaults?.mergeTargetBranch ?? null,
       workflowMode: "free",
       ownerUserId: batchOwner,
+      review: reviews[i],
     };
   });
 
@@ -244,7 +256,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     created = await createTasks(rows, undefined, undefined, [], prerequisites.edges,
       queueId ? { after: joinQueueOnCreate(queueId, ids, { existing: false }) } : undefined);
   } catch (error) {
-    if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    if (error instanceof CliCommandValidationError || error instanceof ReviewOnCreateError) return c.json({ error: error.message }, 400);
     const refused = prerequisiteRefusal(error);
     if (refused) return c.json(refused.body, refused.status);
     throw error;

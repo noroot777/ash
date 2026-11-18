@@ -10,7 +10,7 @@
 |------|------|----------|
 | `resolve_project` | 按 repoPath 找到/创建项目（幂等） | `POST /projects/resolve` |
 | `create_group` | 在项目里建分组（projectId 或 repoPath 定位） | `POST /groups` |
-| `batch_create_tasks` | 往已有分组批量建任务（`chain` 串依赖、`run` 开跑） | `POST /groups/:id/tasks/batch` |
+| `batch_create_tasks` | 往已有分组批量建任务（`chain` 串依赖、`run` 开跑；`reviewer` 缺省 = 带默认审查者的预约，`null` = 不审） | `POST /groups/:id/tasks/batch` |
 | `run_group` | 运行分组（按 groupId） | `POST /groups/:id/run` |
 | `list_groups` | 列分组（按 project/repoPath，含任务状态汇总） | `GET /groups` |
 | `list_tasks` | 列任务（可按 project/group 过滤） | `GET /tasks` |

@@ -234,6 +234,8 @@ export const api = {
       attachments?: string[];
       /** 建在哪几条任务上面（和任务同一次请求写进去，服务端判不成立就整条不建）。 */
       prerequisites?: string[];
+      /** 建出来就带的审查预约（shared/src/review-on-create.ts）；不传 = 不带（新建面板）。 */
+      review?: import("@ash/shared/review-on-create").CreateReviewChoice;
       // 挑哪条起手式；task.workflow 非空时它已经是就地改过的快照，服务端直接落库
       workflowId?: string | null;
     },
@@ -568,7 +570,7 @@ export const api = {
   ): Promise<ReviewerProfile> => request("/reviewer-profiles", json("POST", profile)),
   patchReviewerProfile: (
     profileId: string,
-    patch: Partial<Pick<ReviewerProfile, "name" | "agentType" | "executorId" | "model" | "reasoningEffort">>,
+    patch: Partial<Pick<ReviewerProfile, "name" | "agentType" | "executorId" | "model" | "reasoningEffort" | "isDefault">>,
   ): Promise<ReviewerProfile> => request(`/reviewer-profiles/${id(profileId)}`, json("PATCH", patch)),
   deleteReviewerProfile: (profileId: string): Promise<{ deleted: true }> =>
     request(`/reviewer-profiles/${id(profileId)}`, { method: "DELETE" }),

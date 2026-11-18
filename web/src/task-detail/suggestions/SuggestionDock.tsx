@@ -1,15 +1,17 @@
 // 回复框顶上那一行「可以派出去的活」：位置和画法同「等你裁定」那一行（ReplyDock.tsx 的骨架、reply-dock.css）。
-// 一件时：记号、标题（点它 = 选中）、交给谁那颗胶囊、描边的「派出去」、指到才出的叉。选中时下面多一段：一句为什么、
+// 一件时：记号、标题（点它 = 选中）、交给谁那颗胶囊、谁来审、描边的「派出去」、指到才出的叉。选中时下面多一段：一句为什么、
 // 从哪开工、完整说明；这时下面的输入区是「补一句」，右下角那颗写着「派出去」，所以行尾那颗不重复出现。
 // 好几件时平时只占一行「N 件可以派出去」，点开一行一件，多一组「同时 / 一个接一个」和「全部派出去」。
 // 状态和派出去那一下都在 useSuggestionDock.tsx，这里只画。
 import type { KeyboardEvent } from "react";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, ReviewerProfile } from "@ash/shared";
 import { DISPATCH_ORDER_LABEL, type DispatchOrder, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import type { DispatchSuggestionBase } from "@ash/shared/dispatch-suggestion";
+import type { CreateReviewChoice } from "@ash/shared/review-on-create";
 import { sameExecutor } from "@ash/shared/executors";
 import { ArrowBendUpRight, CaretDown, X } from "@phosphor-icons/react";
 import { RunTargetPicker } from "../../components/RunTargetPicker.tsx";
+import { ReviewerChip } from "../../free-workflow/ReviewerChip.tsx";
 import { executorRunSummary } from "../../lib/agentAvailability.ts";
 
 export type SuggestionRow = {
@@ -17,6 +19,7 @@ export type SuggestionRow = {
   title: string;
   note: string;
   target: DispatchRunTarget;
+  review: CreateReviewChoice;
   base: DispatchSuggestionBase;
   /** 标题和说明都还在：派得出去。 */
   filled: boolean;
@@ -37,10 +40,13 @@ export type SuggestionDockProps = {
   error: string | null;
   types: AgentType[];
   profiles: AgentExecutorProfile[];
+  /** null = 审查者清单还没读到。 */
+  reviewers: ReviewerProfile[] | null;
   onArm: (id: string) => void;
   onGo: (id: string) => void;
   onDrop: (id: string) => void;
   onRetarget: (id: string, target: DispatchRunTarget) => void;
+  onReview: (id: string, review: CreateReviewChoice) => void;
   onBase: (id: string, base: DispatchSuggestionBase) => void;
   onRead: (id: string) => void;
   onToggle: () => void;
@@ -86,6 +92,8 @@ function Row({ row, at, props }: { row: SuggestionRow; at: number | null; props:
           })}
           onEffortChange={(effort) => props.onRetarget(row.id, { ...target, reasoningEffort: effort || null })}
         />
+        <ReviewerChip value={row.review} reviewers={props.reviewers} label={`「${title}」`} disabled={busy}
+          onChange={(review) => props.onReview(row.id, review)} />
         {!armed && (
           <button type="button" className="sg-go" disabled={busy || !!props.held || !row.filled} onClick={() => props.onGo(row.id)}
             aria-label={`把「${title}」派出去`}>派出去</button>

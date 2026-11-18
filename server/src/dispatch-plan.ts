@@ -10,6 +10,7 @@ import {
   DISPATCH_ORDER_LABEL, MAX_DISPATCH_NOTE_LEN, MAX_DISPATCH_PLAN_ITEMS,
   type DispatchOrder, type DispatchPlan, type DispatchPlanItem, type DispatchRunTarget,
 } from "@ash/shared/dispatch-plan";
+import { parseCreateReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
 import type { ExecutorScope } from "./auth/owned-executors.js";
 import { id, now } from "./util.js";
 
@@ -22,6 +23,7 @@ type RawTarget = { agentType?: unknown; executorId?: unknown; model?: unknown; r
 type RawItem = RawTarget & {
   key?: unknown; title?: unknown; body?: unknown; note?: unknown;
   useWorktree?: unknown; worktreeBase?: unknown; mergeTargetBranch?: unknown; labels?: unknown; prerequisites?: unknown;
+  review?: unknown;
 };
 
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
@@ -100,9 +102,11 @@ export function normalizeProposal(
     if (raw.useWorktree !== undefined && typeof raw.useWorktree !== "boolean") return { error: `${where}.useWorktree 要是布尔值` };
     const worktreeBase = optionalText(raw.worktreeBase);
     const mergeTargetBranch = optionalText(raw.mergeTargetBranch);
+    const review = parseCreateReviewChoice(raw.review, `${where}.review`);
+    if (review && typeof review === "object" && "error" in review) return review;
     items.push({
       ...(key ? { key } : {}),
-      title, body: taskBody, note, target,
+      title, body: taskBody, note, target, review: review ?? "default",
       ...(raw.useWorktree !== undefined ? { useWorktree: raw.useWorktree as boolean } : {}),
       ...(worktreeBase !== undefined ? { worktreeBase } : {}),
       ...(mergeTargetBranch !== undefined ? { mergeTargetBranch } : {}),
@@ -135,7 +139,8 @@ const sameTarget = (left: DispatchRunTarget | null, right: DispatchRunTarget | n
   !!left && !!right && left.agentType === right.agentType && (left.executorId ?? null) === (right.executorId ?? null)
   && (left.model ?? null) === (right.model ?? null) && (left.reasoningEffort ?? null) === (right.reasoningEffort ?? null);
 
-export type LaunchPick = { index: number; target: DispatchRunTarget };
+/** review：用户在卡上那一格的样子；没交 = 照单子上的（再缺省是默认审查者）。 */
+export type LaunchPick = { index: number; target: DispatchRunTarget; review: CreateReviewChoice };
 
 /**
  * 用户那颗气泡里留下的话：「派出这 N 个任务」，下一行一句改动——一个接一个还是同时、第几条换了人、
@@ -187,7 +192,7 @@ export function normalizeLaunch(
   if (!Array.isArray(body.items) || !body.items.length) return { error: "一条都没留，派不出去；写一句发回去改", status: 400 };
   const seen = new Set<number>();
   const picks: LaunchPick[] = [];
-  for (const [at, raw] of (body.items as { index?: unknown; target?: RawTarget }[]).entries()) {
+  for (const [at, raw] of (body.items as { index?: unknown; target?: RawTarget; review?: unknown }[]).entries()) {
     const index = raw?.index;
     if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= plan.items.length || seen.has(index)) {
       return { error: `items[${at}].index 不在这张派活单里`, status: 400 };
@@ -196,7 +201,9 @@ export function normalizeLaunch(
     const target = normalizeTarget(raw.target ?? {}, scope, `items[${at}].target`);
     if (!target) return { error: `items[${at}].target 要写明交给谁`, status: 400 };
     if ("error" in target) return { ...target, status: 400 };
-    picks.push({ index, target });
+    const review = parseCreateReviewChoice(raw.review, `items[${at}].review`);
+    if (review && typeof review === "object" && "error" in review) return { ...review, status: 400 };
+    picks.push({ index, target, review: review ?? plan.items[index]!.review ?? "default" });
   }
   return { order, picks };
 }

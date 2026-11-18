@@ -1,13 +1,13 @@
 import type { AgentType, ReviewerProfile } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
-import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { id, now } from "./util.js";
-import { actorOf } from "./auth/context.js";
+import { actorOf, ownerIdOf, type Actor } from "./auth/context.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { executorScope, type ExecutorScope } from "./auth/owned-executors.js";
 
@@ -60,6 +60,7 @@ async function toProfile(row: ReviewerRow): Promise<ReviewerProfile> {
     executorLabel: label,
     model: row.model,
     reasoningEffort: row.reasoningEffort,
+    isDefault: !!row.isDefault,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -81,6 +82,24 @@ async function parseBody(scope: ExecutorScope, body: Record<string, unknown>, ex
   };
 }
 
+/** 同一个归属人的那几行（自用模式下归属全是 NULL）。 */
+export function ownedBy(owner: string | null): SQL {
+  return owner === null ? isNull(reviewerProfiles.ownerUserId) : eq(reviewerProfiles.ownerUserId, owner);
+}
+
+/**
+ * 设 / 取消默认审查者（shared/src/review-on-create.ts）。只认**自己名下**的那一位：默认是按归属人分的，
+ * 实例管理员看得见的无主行不是他的，设成默认等于替「没有人」设了一位。先清后设同一笔事务，至多一位由
+ * 部分唯一索引兜底（db/index.ts）。不碰 updatedAt：列表按它排，点一下星标不该让这一行跳到最前。
+ */
+async function setDefaultReviewer(row: ReviewerRow, on: boolean, actor: Actor): Promise<void> {
+  if (row.ownerUserId !== ownerIdOf(actor)) throw new Error("只能把自己的审查者设为默认");
+  await db.transaction(async (tx) => {
+    if (on) await tx.update(reviewerProfiles).set({ isDefault: false }).where(and(ownedBy(row.ownerUserId), eq(reviewerProfiles.isDefault, true)));
+    await tx.update(reviewerProfiles).set({ isDefault: on }).where(eq(reviewerProfiles.id, row.id));
+  });
+}
+
 export function mountReviewerProfileRoutes(api: Hono): void {
   // 审查者是**个人面**资源(§八):多人模式下各人只看得到自己那份。
   api.get("/reviewer-profiles", async (c) => {
@@ -93,7 +112,7 @@ export function mountReviewerProfileRoutes(api: Hono): void {
       const scope = await executorScope(actorOf(c));
       const data = await parseBody(scope, await c.req.json<Record<string, unknown>>());
       const at = now();
-      const row: ReviewerRow = { id: id(), ...data, ...ownerStamp(actorOf(c)), createdAt: at, updatedAt: at };
+      const row: ReviewerRow = { id: id(), ...data, ...ownerStamp(actorOf(c)), isDefault: false, createdAt: at, updatedAt: at };
       await db.insert(reviewerProfiles).values(row);
       return c.json(await toProfile(row), 201);
     } catch (error) {
@@ -106,9 +125,15 @@ export function mountReviewerProfileRoutes(api: Hono): void {
     const existing = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0);
     if (!(await canUseOwned(existing, actorOf(c)))) return c.json(notYours("审查者"), 404);
     try {
-      const scope = await executorScope(actorOf(c));
-      const data = await parseBody(scope, await c.req.json<Record<string, unknown>>(), existing);
-      await db.update(reviewerProfiles).set({ ...data, updatedAt: now() }).where(eq(reviewerProfiles.id, profileId));
+      const body = await c.req.json<Record<string, unknown>>();
+      const { isDefault, ...fields } = body;
+      if (isDefault !== undefined && typeof isDefault !== "boolean") throw new Error("isDefault 要是布尔值");
+      if (Object.keys(fields).length) {
+        const scope = await executorScope(actorOf(c));
+        const data = await parseBody(scope, fields, existing);
+        await db.update(reviewerProfiles).set({ ...data, updatedAt: now() }).where(eq(reviewerProfiles.id, profileId));
+      }
+      if (isDefault !== undefined) await setDefaultReviewer(existing!, isDefault, actorOf(c));
       const updated = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0)!;
       return c.json(await toProfile(updated));
     } catch (error) {
