@@ -175,7 +175,7 @@ export async function updateSuggestions(
  * 几对路径和值从左到右依次生效），不读出来改完再整份写回——已有的记录这一笔碰都不碰，所以不存在「读的时候
  * 认不出就丢了」「写回时被截短」这两种丢法；库里那一份坏了（不是 JSON）这条更新整个失败，建议也不会被拿掉。
  */
-function appendWithdrawn(records: readonly WithdrawnSuggestion[]): SQL {
+export function appendWithdrawn(records: readonly WithdrawnSuggestion[]): SQL {
   const pairs = records.map((record) => sql`'$[#]', json(${JSON.stringify(record)})`);
   return sql`json_insert(coalesce(${tasks.dispatchWithdrawals}, '[]'), ${sql.join(pairs, sql`, `)})`;
 }
