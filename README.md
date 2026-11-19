@@ -28,7 +28,7 @@
      整份工程和成片在素材库 noroot777/materials 的 navi/promo 下,不进本仓库(放进来每个 clone 要多下
      五十 MB)。重渲之后跑那边的 scripts/github_upload.sh、重传一次,把这条地址换掉。 -->
 
-https://github.com/user-attachments/assets/1197fcee-17e4-4e01-8b29-ee0f267e259b
+https://github.com/user-attachments/assets/9c9c559f-bf5d-4043-913d-7b065f875a2b
 
 Navi 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
 
