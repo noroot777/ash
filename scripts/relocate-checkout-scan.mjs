@@ -1,20 +1,17 @@
 // 本地目录迁移的清点：只读，不改任何东西。演练（默认）打印它，真做（--apply）照它做，
 // 核对（--verify）拿它看还剩什么。每一项都按「此刻磁盘上的样子」现算，所以搬到一半中断之后
 // 再跑一遍，算出来的就是还没做完的那部分（脚本可重复执行靠的就是这一点）。
-import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, openSync, readFileSync, readSync, closeSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+//
+// 读不到的东西不当成「没有」：命令失败、目录列不了、锁文件读不动都记进 plan.errors，
+// 有一条就不许真做、核对不算干净（见 relocate-checkout-fs.mjs 顶部）。
+import { readFileSync, readlinkSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { LEGACY_DB_FILE, LEGACY_REPO_DIR_NAMES, LEGACY_SINGLETON_LOCK_SUFFIX } from "./legacy-names.mjs";
-import { claudeSlug, CLAUDE_SLUG_MAX, countRefs, grokDirName, isUnder, mapPath, rewriteRules, rewriteText } from "./relocate-checkout-paths.mjs";
-
-const isDirNoFollow = (p) => { try { return lstatSync(p).isDirectory(); } catch { return false; } };
-const isLink = (p) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
-const readText = (p) => { try { return readFileSync(p, "utf8"); } catch { return null; } };
-const sh = (cmd, args, opts = {}) => {
-  try { return execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024, ...opts }); }
-  catch (error) { return opts.allowFail ? (error.stdout ?? "") : null; }
-};
+import { LEGACY_DB_FILE, LEGACY_REPO_DIR_NAMES } from "./legacy-names.mjs";
+import { agentDirs, claudeNameMap, configProblems, memoryFiles, opencodeDbFile, refsIn, scanClaude, scanConfigs, scanGrok, scanOpencode } from "./relocate-checkout-agents.mjs";
+import { isDirNoFollow, isLink, lexists, listDir, readTextOr, sh } from "./relocate-checkout-fs.mjs";
+import { liveHolders } from "./relocate-checkout-lock.mjs";
+import { countAmbiguous, countRefs, isUnder, mapPath, rewriteRules } from "./relocate-checkout-paths.mjs";
 
 /** 目录树此刻在哪：旧位置是真目录 → 还没搬；旧位置没了或是指向新位置的链接、新位置是真目录 → 已搬。 */
 export function locateTree({ from, to }) {
@@ -22,9 +19,9 @@ export function locateTree({ from, to }) {
   const toDir = isDirNoFollow(to);
   const fromLink = isLink(from);
   const linkTarget = fromLink ? resolve(dirname(from), readlinkSync(from)) : null;
-  if (fromDir && !toDir && !existsSync(to) && !isLink(to)) return { state: "pending", root: from };
-  if (fromDir && (toDir || existsSync(to) || isLink(to))) return { state: "conflict", root: from, why: `${to} 已经存在，不会覆盖` };
-  if (toDir && (!existsSync(from) && !fromLink)) return { state: "moved", root: to, link: "absent" };
+  if (fromDir && !lexists(to)) return { state: "pending", root: from };
+  if (fromDir) return { state: "conflict", root: from, why: `${to} 已经存在，不会覆盖` };
+  if (toDir && !lexists(from)) return { state: "moved", root: to, link: "absent" };
   if (toDir && fromLink) {
     return linkTarget === to
       ? { state: "moved", root: to, link: "ours" }
@@ -37,70 +34,76 @@ export function locateTree({ from, to }) {
 export function dbFileIn(root, explicit) {
   if (explicit) return resolve(explicit);
   const navi = join(root, "data", "navi.db");
-  return existsSync(navi) ? navi : join(root, "data", LEGACY_DB_FILE);
+  return lexists(navi) ? navi : join(root, "data", LEGACY_DB_FILE);
 }
 
-/** 库里每个文本列还有几处旧路径。只读打开，不碰 -wal（服务停着时本来就没有）。 */
-export function scanDb(dbFile, rules) {
-  if (!existsSync(dbFile)) return { file: dbFile, missing: true, refs: [], total: 0 };
-  const db = new DatabaseSync(dbFile, { readOnly: true });
+function openReadOnly(file, errors) {
+  try { return new DatabaseSync(file, { readOnly: true }); }
+  catch (error) { errors.push(`打不开库 ${file}（${error.message}）`); return null; }
+}
+
+/** 库里每个文本列还有几处旧路径，以及旧根后面紧跟文字、分不清归属的有几处（不改，只报）。 */
+export function scanDb(dbFile, rules, errors) {
+  const out = { file: dbFile, refs: [], total: 0, ambiguous: 0, ambiguousSamples: [] };
+  if (!lexists(dbFile)) return { ...out, missing: true };
+  const db = openReadOnly(dbFile, errors);
+  if (!db) return out;
   try {
-    const refs = [];
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-    for (const { name: table } of tables) {
+    for (const { name: table } of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()) {
       for (const { name: column } of db.prepare(`PRAGMA table_info("${table}")`).all()) {
         const probe = rules.map(() => `instr("${column}", ?) > 0`).join(" OR ");
-        const rows = db.prepare(`SELECT "${column}" AS v FROM "${table}" WHERE typeof("${column}") = 'text' AND (${probe})`)
-          .all(...rules.map((r) => r.old));
+        const rows = db.prepare(`SELECT "${column}" AS v FROM "${table}" WHERE typeof("${column}") = 'text' AND (${probe})`).all(...rules.map((r) => r.old));
         let count = 0;
-        for (const { v } of rows) count += countRefs(v, rules);
-        if (count) refs.push({ table, column, rows: rows.length, count });
+        for (const { v } of rows) {
+          count += countRefs(v, rules);
+          const a = countAmbiguous(v, rules);
+          out.ambiguous += a;
+          if (a && out.ambiguousSamples.length < 5) out.ambiguousSamples.push(`${table}.${column}`);
+        }
+        if (count) out.refs.push({ table, column, rows: rows.length, count });
       }
     }
-    return { file: dbFile, refs, total: refs.reduce((n, r) => n + r.count, 0) };
-  } finally {
-    db.close();
-  }
-}
-
-/** 库里登记的、跟这棵树有关的东西：在跑的任务、在盯的哨兵、claude 的配置目录。 */
-export function scanDbState(dbFile) {
-  const out = { running: [], monitors: [], claudeConfigDirs: [] };
-  if (!existsSync(dbFile)) return out;
-  const db = new DatabaseSync(dbFile, { readOnly: true });
-  const has = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
-  try {
-    if (has("tasks")) out.running = db.prepare("SELECT id, title, status FROM tasks WHERE status IN ('running','queued')").all();
-    if (has("monitors")) out.monitors = db.prepare("SELECT id, task_id AS taskId FROM monitors WHERE status = 'running'").all();
-    if (has("sessions")) {
-      const cols = db.prepare("PRAGMA table_info(sessions)").all().map((c) => c.name);
-      if (cols.includes("cli_config_dir")) {
-        out.claudeConfigDirs = db.prepare("SELECT DISTINCT cli_config_dir AS d FROM sessions WHERE agent_type = 'claude' AND cli_config_dir IS NOT NULL AND cli_config_dir <> ''")
-          .all().map((r) => r.d);
-      }
-    }
+    out.total = out.refs.reduce((n, r) => n + r.count, 0);
+  } catch (error) {
+    errors.push(`读库 ${dbFile} 失败（${error.message}）`);
   } finally {
     db.close();
   }
   return out;
 }
 
-/** 服务还开着这份库吗：单例锁里的进程活着、或者有进程开着库文件。 */
-export function scanService(dbFile) {
-  const reasons = [];
-  for (const suffix of [".navi.lock", LEGACY_SINGLETON_LOCK_SUFFIX]) {
-    const lock = `${dbFile}${suffix}`;
-    const text = readText(lock);
-    if (text === null) continue;
-    let pid = null;
-    try { pid = JSON.parse(text).pid; } catch { /* 读不懂的锁按活着算 */ }
-    if (!Number.isInteger(pid)) { reasons.push(`单例锁 ${lock} 读不懂，按服务仍在运行处理`); continue; }
-    try { process.kill(pid, 0); reasons.push(`单例锁 ${lock} 的持有进程 ${pid} 还活着`); }
-    catch (error) { if (error.code === "EPERM") reasons.push(`单例锁 ${lock} 的持有进程 ${pid} 还活着`); }
+/** 库里登记的、跟这棵树有关的东西：在跑的任务、在盯的哨兵、执行器的配置目录。 */
+export function scanDbState(dbFile, errors) {
+  const out = { running: [], monitors: [], configDirs: { claude: [], codex: [] } };
+  if (!lexists(dbFile)) return out;
+  const db = openReadOnly(dbFile, errors);
+  if (!db) return out;
+  const has = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
+  try {
+    if (has("tasks")) out.running = db.prepare("SELECT id, title, status FROM tasks WHERE status IN ('running','queued')").all();
+    if (has("monitors")) out.monitors = db.prepare("SELECT id, task_id AS taskId FROM monitors WHERE status = 'running'").all();
+    if (has("sessions") && db.prepare("PRAGMA table_info(sessions)").all().some((c) => c.name === "cli_config_dir")) {
+      for (const agent of ["claude", "codex"]) {
+        out.configDirs[agent] = db.prepare("SELECT DISTINCT cli_config_dir AS d FROM sessions WHERE agent_type = ? AND cli_config_dir IS NOT NULL AND cli_config_dir <> ''").all(agent).map((r) => r.d);
+      }
+    }
+  } catch (error) {
+    errors.push(`读库 ${dbFile} 失败（${error.message}）`);
+  } finally {
+    db.close();
   }
-  if (existsSync(dbFile)) {
-    const out = sh("lsof", ["-Fpc", "--", dbFile], { allowFail: true }) ?? "";
-    for (const pid of out.split("\n").filter((l) => l.startsWith("p")).map((l) => Number(l.slice(1)))) {
+  return out;
+}
+
+/** 服务还开着这份库吗：单例锁、在线登记、维护锁（见 relocate-checkout-lock.mjs），以及开着库文件的进程。 */
+export function scanService(dbFile, errors) {
+  const { reasons, errors: unknown } = liveHolders(dbFile);
+  errors.push(...unknown);
+  if (lexists(dbFile)) {
+    // lsof 没找到任何进程时退出码也是 1（且不出声）；出声的 1 才是没查成。
+    const r = sh("lsof", ["-Fp", "--", dbFile], errors, { what: "查谁开着库文件", okCodes: [0, 1] });
+    if (r?.status === 1 && r.stderr.trim()) errors.push(`查谁开着库文件失败：${r.stderr.trim().split("\n")[0]}`);
+    for (const pid of (r?.stdout ?? "").split("\n").filter((l) => l.startsWith("p")).map((l) => Number(l.slice(1)))) {
       if (pid !== process.pid) reasons.push(`进程 ${pid} 开着库文件 ${dbFile}`);
     }
   }
@@ -112,8 +115,8 @@ function ancestors() {
   let pid = process.ppid;
   for (let i = 0; i < 64 && pid > 1 && !out.has(pid); i += 1) {
     out.add(pid);
-    const next = Number((sh("ps", ["-o", "ppid=", "-p", String(pid)]) ?? "").trim());
-    if (!Number.isInteger(next)) break;
+    const next = Number((sh("ps", ["-o", "ppid=", "-p", String(pid)], []) ?? { stdout: "" }).stdout.trim());
+    if (!Number.isInteger(next) || next <= 0) break;
     pid = next;
   }
   return out;
@@ -125,16 +128,16 @@ const SHELLS = new Set(["zsh", "-zsh", "bash", "-bash", "sh", "fish", "-fish", "
  * 工作目录在树里的进程会拦下真做：agent、哨兵、预览、构建……搬目录时它们手里的路径全会失效。
  * 例外是本脚本和它的祖先，以及纯交互 shell（搬完它们的 `$PWD` 只是显示旧路径，留着链接时照样能用）。
  * 命令行里带旧路径、但工作目录不在树里的（别的会话拉起的 navi MCP）只提示：它们已经把文件读进内存，
- * 留着链接时新起的也找得到。
+ * 留着链接时新起的也找得到。lsof / ps 没跑成就记错误 —— 不知道谁在树里，不等于没人在树里。
  */
-export function scanProcesses(roots) {
+export function scanProcesses(roots, errors) {
   const self = ancestors();
   const blocking = [];
   const shells = [];
   const argvRefs = [];
-  const lsof = sh("lsof", ["-a", "-d", "cwd", "-FpRcn"], { allowFail: true }) ?? "";
+  const lsof = sh("lsof", ["-a", "-d", "cwd", "-FpRcn"], errors, { what: "列进程的工作目录" });
   let cur = null;
-  for (const line of lsof.split("\n")) {
+  for (const line of (lsof?.stdout ?? "").split("\n")) {
     if (line.startsWith("p")) cur = { pid: Number(line.slice(1)) };
     else if (line.startsWith("R") && cur) cur.ppid = Number(line.slice(1));
     else if (line.startsWith("c") && cur) cur.command = line.slice(1);
@@ -145,8 +148,8 @@ export function scanProcesses(roots) {
       if (!ours && roots.some((r) => isUnder(cur.cwd, r))) (SHELLS.has(cur.command) ? shells : blocking).push({ pid: cur.pid, command: cur.command, cwd: cur.cwd });
     }
   }
-  const ps = sh("ps", ["-axww", "-o", "pid=,command="]) ?? "";
-  for (const line of ps.split("\n")) {
+  const ps = sh("ps", ["-axww", "-o", "pid=,command="], errors, { what: "列进程的命令行" });
+  for (const line of (ps?.stdout ?? "").split("\n")) {
     const m = /^\s*(\d+)\s+(.*)$/.exec(line);
     if (!m || self.has(Number(m[1]))) continue;
     if (roots.some((r) => m[2].includes(r + sep) || m[2].endsWith(r)) && !blocking.some((p) => p.pid === Number(m[1]))) {
@@ -156,284 +159,159 @@ export function scanProcesses(roots) {
   return { blocking, shells, argvRefs };
 }
 
+const findIn = (root, args, errors, what) => {
+  const r = sh("find", [root, "-name", "node_modules", "-prune", "-o", ...args, "-print0"], errors, { what });
+  return r ? r.stdout.split("\0").filter(Boolean) : [];
+};
+
 /**
  * git 工作区的两头：仓库里 `.git/worktrees/<名>/gitdir` 记着工作区的 `.git` 在哪，工作区里的 `.git`
- * 文件记着 `gitdir: <仓库>/.git/worktrees/<名>`。两头都是绝对路径，搬完都要换（等价于
- * `git worktree repair`，只是直接改这两份文件，好记账、好退回）。树里的嵌套仓库、登记在树外的工作区、
- * 树里那些属于树外仓库的工作区都算。返回此刻的文件位置和要换成的内容。
+ * 文件记着 `gitdir: <仓库>/.git/worktrees/<名>`。两头可以是绝对路径，也可以是相对路径（`git worktree add
+ * --relative-paths`，各自相对**文件所在目录**）。搬完都要指对：绝对的换前缀；相对的按新位置重算相对路径
+ * （等价于 `git worktree repair`，只是直接改这两份文件，好记账、好退回）。树里的嵌套仓库、登记在树外的
+ * 工作区、树里那些属于树外仓库的工作区都算。
  */
-export function scanWorktrees(root, { from, to }) {
-  const pathRule = rewriteRules({ from, to }).filter((r) => r.kind === "path");
-  const find = (args) => (sh("find", [root, "-name", "node_modules", "-prune", "-o", ...args, "-print"]) ?? "").split("\n").filter(Boolean);
-  const now = (p) => (root === to ? mapPath(p, from, to) ?? p : p);
+export function scanWorktrees(root, { from, to, errors }) {
+  const moved = root === to;
+  const after = (p) => mapPath(p, from, to) ?? p; // 搬完之后在哪
+  const now = (p) => (moved ? after(p) : mapPath(p, to, from) ?? p); // 此刻在哪（p 是任一侧的写法）
+  const before = (p) => mapPath(p, to, from) ?? p; // 搬之前在哪
+  const recorded = (file, dotGit) => {
+    const text = readTextOr(file, errors);
+    if (text === null) return null;
+    const m = dotGit ? /^gitdir:\s*(.+?)\s*$/m.exec(text) : /^(.+?)\s*$/m.exec(text);
+    return m ? { text, value: m[1] } : null;
+  };
+  /** 记录下来的路径**搬完之后**该指向哪；指的东西此刻不在了返回 null。相对路径先按文件此刻所在目录解析，
+   *  解析不到再按它搬之前所在的目录解析（上级目录变了的那种）。 */
+  const target = (file, value) => {
+    if (isAbsolute(value)) return lexists(now(value)) ? after(value) : null;
+    const here = resolve(dirname(file), value);
+    if (lexists(here)) return after(here);
+    const then = resolve(before(dirname(file)), value);
+    return lexists(now(then)) ? after(then) : null;
+  };
   const adminFiles = new Set();
-  const dotGitFiles = new Set(find(["-type", "f", "-name", ".git"]));
-  const items = [];
-  for (const admin of find(["-type", "d", "-path", "*/.git/worktrees"])) {
-    let names = [];
-    try { names = readdirSync(admin); } catch { continue; }
-    for (const name of names) adminFiles.add(join(admin, name, "gitdir"));
+  const dotGitFiles = new Set(findIn(root, ["-type", "f", "-name", ".git"], errors, "在树里找工作区的 .git"));
+  for (const admin of findIn(root, ["-type", "d", "-path", "*/.git/worktrees"], errors, "在树里找工作区登记")) {
+    for (const name of listDir(admin, errors)) adminFiles.add(join(admin, name, "gitdir"));
   }
   for (const file of [...dotGitFiles]) {
-    const target = /^gitdir:\s*(.+)$/m.exec(readText(file) ?? "")?.[1]?.trim();
-    if (target && isAbsolute(target)) adminFiles.add(join(now(target), "gitdir"));
+    const r = recorded(file, true);
+    const t = r && target(file, r.value);
+    if (t) adminFiles.add(join(now(t), "gitdir"));
   }
-  for (const file of adminFiles) {
-    const recorded = readText(file)?.trim();
-    if (!recorded || !isAbsolute(recorded)) continue;
-    const dotGit = now(recorded);
-    const missing = !existsSync(dotGit);
-    if (!missing) dotGitFiles.add(dotGit);
-    items.push({ admin: dirname(file), worktree: mapPath(dirname(recorded), from, to) ?? dirname(recorded), missing });
-  }
+  const items = [];
   const edits = [];
-  for (const file of [...adminFiles, ...dotGitFiles]) {
-    const text = readText(file);
-    if (text === null) continue;
-    const { text: next, count } = rewriteText(text, pathRule);
-    if (count) edits.push({ file, text, next });
+  const edit = (file, r, t) => {
+    if (!t) return;
+    const next = isAbsolute(r.value) ? t : relative(dirname(after(file)), t);
+    if (next !== r.value) edits.push({ file, text: r.text, next: r.text.replace(r.value, next) });
+  };
+  for (const file of adminFiles) {
+    const r = recorded(file, false);
+    if (!r) continue;
+    const t = target(file, r.value);
+    if (t) dotGitFiles.add(now(t));
+    const guess = isAbsolute(r.value) ? after(r.value) : after(resolve(dirname(file), r.value));
+    items.push({ admin: after(dirname(file)), repoGitDir: after(dirname(dirname(dirname(file)))), worktree: dirname(t ?? guess), missing: !t });
+    // 已经不在了的工作区（git 当可清理的那种）：绝对路径照样换前缀，相对的原样留着。
+    edit(file, r, t ?? (isAbsolute(r.value) ? after(r.value) : null));
+  }
+  for (const file of dotGitFiles) {
+    if (adminFiles.has(file)) continue;
+    const r = recorded(file, true);
+    if (r) edit(file, r, target(file, r.value));
   }
   return { items, edits };
 }
 
+/** 搬完之后的硬核对：每个工作区 git 都认得，而且认回的是它登记所在的那个仓库。 */
+export function checkWorktrees(items) {
+  const problems = [];
+  const git = (cwd, args) => sh("git", ["-C", cwd, ...args], problems, { what: `${cwd}：git ${args.join(" ")} ` })?.stdout.trim();
+  for (const w of items) {
+    if (w.missing) {
+      if (isDirNoFollow(w.worktree)) problems.push(`${w.worktree}：目录在，但 git 两头的登记对不上`);
+      continue;
+    }
+    const top = git(w.worktree, ["rev-parse", "--show-toplevel"]);
+    const common = git(w.worktree, ["rev-parse", "--git-common-dir"]);
+    if (top !== undefined && top !== w.worktree) problems.push(`${w.worktree}：git 认成了 ${top}`);
+    if (common !== undefined && resolve(w.worktree, common) !== w.repoGitDir) problems.push(`${w.worktree}：仓库指向 ${resolve(w.worktree, common)}`);
+  }
+  return problems;
+}
+
 /** 树里指向旧根的绝对链接（工作区借主仓 node_modules 的那批都是）；以及跨出树、换了上级目录会断的相对链接。 */
-export function scanSymlinks(root, { from, to }) {
-  const out = (sh("find", [root, "-type", "l", "-print0"]) ?? "").split("\0").filter(Boolean);
+export function scanSymlinks(root, { from, to, errors }) {
   const retarget = [];
   const escaping = [];
-  for (const path of out) {
+  for (const path of (sh("find", [root, "-type", "l", "-print0"], errors, { what: "在树里找链接" })?.stdout ?? "").split("\0").filter(Boolean)) {
     let target;
-    try { target = readlinkSync(path); } catch { continue; }
+    try { target = readlinkSync(path); } catch (error) { errors.push(`读不了链接 ${path}（${error.code}）`); continue; }
     if (isAbsolute(target)) {
       const next = mapPath(target, from, to);
       if (next) retarget.push({ path, target, next });
-    } else if (dirname(from) !== dirname(to)) {
-      const resolved = resolve(dirname(path), target);
-      if (!isUnder(resolved, root)) escaping.push({ path, target });
+    } else if (dirname(from) !== dirname(to) && !isUnder(resolve(dirname(path), target), root)) {
+      escaping.push({ path, target });
     }
   }
   return { retarget, escaping };
 }
 
-/** 读一个 claude 会话目录里随便几份记录的 cwd，用来认「这个目录名是不是这棵树的」。 */
-function claudeEvidence(dir) {
-  let files = [];
-  try { files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).slice(0, 4); } catch { return null; }
-  for (const f of files) {
-    const buf = Buffer.alloc(256 * 1024);
-    let n = 0;
-    try { const fd = openSync(join(dir, f), "r"); n = readSync(fd, buf, 0, buf.length, 0); closeSync(fd); } catch { continue; }
-    const m = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(buf.subarray(0, n).toString("utf8"));
-    if (m) { try { return JSON.parse(`"${m[1]}"`); } catch { /* 下一份 */ } }
-  }
-  return null;
-}
-
-/** 两棵目录树能不能合并：同名的子项都是目录就往下比，都是文件且内容相同算不冲突。 */
-function mergeConflicts(src, dst, rel = "") {
-  const conflicts = [];
-  for (const name of readdirSync(src)) {
-    const s = join(src, name);
-    const d = join(dst, name);
-    if (!existsSync(d) && !isLink(d)) continue;
-    const ss = lstatSync(s);
-    const ds = lstatSync(d);
-    if (ss.isDirectory() && ds.isDirectory()) conflicts.push(...mergeConflicts(s, d, join(rel, name)));
-    else if (!(ss.isFile() && ds.isFile() && readFileSync(s).equals(readFileSync(d)))) conflicts.push(join(rel, name));
-  }
-  return conflicts;
-}
-
-/**
- * claude 按工作目录起的会话目录（以及主仓那个目录里的长期记忆 memory/）。目录名是有损的：
- * `/x/harness-old` 和 `/x/harness/old` 都叫 `-x-harness-old`，所以除了主目录本身，都要拿目录里
- * 会话记录的 cwd，或者「这条路径确实在树里」来认，认不出的不动、列出来。
- */
-export function scanClaude(configDirs, { from, to, knownPaths }) {
-  const oldSlug = claudeSlug(from);
-  const newSlug = claudeSlug(to);
-  const known = new Map([...knownPaths].map((p) => [claudeSlug(p), p]));
-  // 没有会话记录可认的目录（子代理/工作流的脚本目录）：`<旧名>--…` 只能来自树里的 `/.xxx`；
-  // 其余的只要旁边没有名字以旧根开头的兄弟目录（`harness-old`、`harness.bak`），也只能是树里的。
-  let siblings = [];
-  try { siblings = readdirSync(dirname(from)).filter((n) => n !== basename(from) && claudeSlug(n).startsWith(`${claudeSlug(basename(from))}-`)); } catch { /* 上级目录读不了就当有歧义 */ siblings = [null]; }
-  const byName = (name) => name === oldSlug || known.has(name) || name.startsWith(`${oldSlug}--`) || siblings.length === 0;
-  const moves = [];
-  const unclassified = [];
-  for (const configDir of configDirs) {
-    const projects = join(configDir, "projects");
-    let names = [];
-    try { names = readdirSync(projects); } catch { continue; }
-    for (const name of names) {
-      if (name !== oldSlug && !name.startsWith(`${oldSlug}-`)) continue;
-      const src = join(projects, name);
-      if (!isDirNoFollow(src)) continue;
-      const cwd = claudeEvidence(src);
-      const ours = cwd !== null ? isUnder(cwd, from) || isUnder(cwd, to) : byName(name);
-      if (!ours) {
-        if (cwd === null) unclassified.push({ path: src, why: `目录里没有会话记录可认，旁边又有 ${siblings.filter(Boolean).join("、") || "读不了的上级目录"}，分不清是哪一个的` });
-        continue;
-      }
-      const next = `${newSlug}${name.slice(oldSlug.length)}`;
-      if (next.length > CLAUDE_SLUG_MAX || name.length > CLAUDE_SLUG_MAX) {
-        unclassified.push({ path: src, why: "目录名超过 claude 的长度上限（会截断再拼哈希），没法按前缀换" });
-        continue;
-      }
-      const dst = join(projects, next);
-      const merge = existsSync(dst);
-      moves.push({ configDir, from: src, to: dst, merge, conflicts: merge ? mergeConflicts(src, dst) : [], evidence: cwd ?? "（按目录名认）" });
-    }
-  }
-  return { moves, unclassified };
-}
-
-/** grok 的会话目录：目录名是 encodeURIComponent(工作目录)，可以精确解回来。 */
-export function scanGrok(home, { from, to }) {
-  const dir = join(home, ".grok", "sessions");
-  const moves = [];
-  const odd = [];
-  let names = [];
-  try { names = readdirSync(dir); } catch { return { dir, moves, odd }; }
-  for (const name of names) {
-    let decoded;
-    try { decoded = decodeURIComponent(name); } catch { continue; }
-    const next = mapPath(decoded, from, to);
-    if (!next) continue;
-    if (grokDirName(decoded) !== name) { odd.push({ path: join(dir, name), why: "目录名不是标准编码，解不回同一个名字" }); continue; }
-    const dst = join(dir, grokDirName(next));
-    moves.push({ from: join(dir, name), to: dst, merge: existsSync(dst), conflicts: existsSync(dst) ? mergeConflicts(join(dir, name), dst) : [] });
-  }
-  return { dir, moves, odd };
-}
-
-/** opencode 的库：会话按 directory 认工作目录，目录不在了续跑直接报错（实测），要改它。 */
-export function opencodeDbFile(home, env = process.env) {
-  return join(env.XDG_DATA_HOME || join(home, ".local", "share"), "opencode", "opencode.db");
-}
-
-export function scanOpencode(file, { from, to }) {
-  if (!existsSync(file)) return { file, missing: true, rows: [] };
-  const db = new DatabaseSync(file, { readOnly: true });
-  try {
-    const rows = [];
-    for (const table of ["session", "workspace"]) {
-      const cols = db.prepare(`PRAGMA table_info("${table}")`).all().map((c) => c.name);
-      if (!cols.includes("id") || !cols.includes("directory")) continue;
-      for (const r of db.prepare(`SELECT id, directory FROM "${table}" WHERE instr(directory, ?) = 1`).all(from)) {
-        const next = mapPath(r.directory, from, to);
-        if (next) rows.push({ table, id: r.id, directory: r.directory, next });
-      }
-    }
-    return { file, rows };
-  } finally {
-    db.close();
-  }
-}
-
-/** 各家 CLI 与 navi 自己的配置文件：MCP 登记（mcp/dist/index.js 的绝对路径）、按路径的项目信任表。 */
-export function configFiles(home, env = process.env) {
-  const xdg = env.XDG_CONFIG_HOME || join(home, ".config");
-  return [
-    { file: join(home, ".claude.json"), kind: "json" },
-    { file: join(home, ".claude", "settings.json"), kind: "json" },
-    { file: join(home, ".claude", "settings.local.json"), kind: "json" },
-    { file: join(env.CODEX_HOME || join(home, ".codex"), "config.toml"), kind: "toml" },
-    { file: join(xdg, "opencode", "opencode.json"), kind: "json" },
-    { file: join(xdg, "opencode", "opencode.jsonc"), kind: "text" },
-    { file: join(home, ".grok", "config.toml"), kind: "toml" },
-    { file: join(home, ".gemini", "settings.json"), kind: "json" },
-    { file: join(home, ".qwen", "settings.json"), kind: "json" },
-    { file: join(home, ".kimi", "config.toml"), kind: "toml" },
-    { file: join(home, ".cursor", "mcp.json"), kind: "json" },
-  ];
-}
-
-/** 只报不改的地方：用户自己的 shell 配置、登录项、定时任务。 */
-export function reportOnlyFiles(home) {
-  const files = [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".config/fish/config.fish"].map((f) => join(home, f));
-  const agents = join(home, "Library", "LaunchAgents");
-  try { for (const f of readdirSync(agents)) if (f.endsWith(".plist")) files.push(join(agents, f)); } catch { /* 不是 macOS */ }
-  return files;
-}
-
-export function scanConfigs(home, rules, env = process.env) {
-  const rewrite = [];
-  for (const { file, kind } of configFiles(home, env)) {
-    const text = readText(file);
-    if (text === null) continue;
-    const count = countRefs(text, rules);
-    if (!count) continue;
-    const problems = [];
-    if (kind === "json") { try { JSON.parse(text); } catch { problems.push("不是合法 JSON，不改"); } }
-    if (kind === "toml") {
-      // 表头换完跟已有的表头同名，codex 会整份配置读不起来。
-      const headers = new Set(text.match(/^\s*\[[^\]\n]+\]\s*$/gm)?.map((h) => h.trim()) ?? []);
-      for (const h of headers) {
-        const next = h.replace(rules[0].re, rules[0].new);
-        if (next !== h && headers.has(next)) problems.push(`改完会和已有的 ${next} 重名`);
-      }
-    }
-    rewrite.push({ file, kind, count, problems });
-  }
-  const reportOnly = [];
-  for (const file of reportOnlyFiles(home)) {
-    const text = readText(file);
-    if (text === null) continue;
-    const lines = text.split("\n").map((l, i) => [i + 1, l]).filter(([, l]) => countRefs(l, rules));
-    if (lines.length) reportOnly.push({ file, lines: lines.slice(0, 8) });
-  }
-  const cron = sh("crontab", ["-l"], { allowFail: true }) ?? "";
-  const cronLines = cron.split("\n").filter((l) => countRefs(l, rules));
-  if (cronLines.length) reportOnly.push({ file: "crontab -l", lines: cronLines.map((l, i) => [i + 1, l]) });
-  return { rewrite, reportOnly };
-}
-
 /** 数据目录里按路径做键的小文件（技能校准按「执行器 + 工作目录」记）。 */
-export function scanDataFiles(root, rules) {
+export function scanDataFiles(root, rules, errors) {
   const out = [];
   for (const name of ["skill-calibrations.json"]) {
     const file = join(root, "data", name);
-    const text = readText(file);
+    const text = readTextOr(file, errors);
     if (text === null) continue;
-    const count = countRefs(text, rules);
-    if (count) out.push({ file, count });
+    const count = refsIn(text, "json", rules);
+    if (count) out.push({ file, count, problems: configProblems(text, "json", rules) });
   }
   return out;
 }
 
 /** 远端：仓库在 GitHub 上改名之后要换的地址。 */
 export function scanRemote(root) {
-  const url = (sh("git", ["-C", root, "remote", "get-url", "origin"]) ?? "").trim() || null;
+  const url = (sh("git", ["-C", root, "remote", "get-url", "origin"], []) ?? { stdout: "" }).stdout.trim() || null;
   const m = url && new RegExp(`^(.*github\\.com[:/][^/]+\\/)(?:${LEGACY_REPO_DIR_NAMES.join("|")})(\\.git)?$`).exec(url);
   return { url, suggested: m ? `${m[1]}navi${m[2] ?? ""}` : null };
 }
 
-/** 整份清点。 */
-export function scan({ from, to, home, db: dbExplicit, env = process.env }) {
+/** 旧根的上级目录里，名字是「旧根名 + 后缀」的兄弟目录的后缀（`" copy"`、`"-old"`）。 */
+function siblingSuffixes({ from, to }, errors) {
+  const name = basename(from);
+  return listDir(dirname(from), errors).filter((n) => n !== name && n !== basename(to) && n.startsWith(name)).map((n) => n.slice(name.length));
+}
+
+/** 整份清点。claims 是 --claude-claim / --claude-skip 点名的 claude 目录名。 */
+export function scan({ from, to, home, db: dbExplicit, env = process.env, claims }) {
+  const errors = [];
   const where = locateTree({ from, to });
-  const rules = rewriteRules({ from, to, home });
-  const plan = { from, to, home, where, rules };
-  const roots = [from, to];
+  const plan = { from, to, home, where, errors, rules: rewriteRules({ from, to, home }) };
   if (!where.root) return plan;
   const root = where.root;
-  const sameDevice = (() => { try { return statSync(root).dev === statSync(dirname(to)).dev; } catch { return false; } })();
-  plan.sameDevice = sameDevice;
+  try { plan.sameDevice = statSync(root).dev === statSync(dirname(to)).dev; } catch { plan.sameDevice = false; }
   plan.dbFile = dbFileIn(root, dbExplicit);
-  plan.db = scanDb(plan.dbFile, rules);
-  plan.dbState = scanDbState(plan.dbFile);
-  plan.service = scanService(plan.dbFile);
-  plan.processes = scanProcesses(roots);
-  plan.worktrees = scanWorktrees(root, { from, to });
-  plan.symlinks = scanSymlinks(root, { from, to });
+  plan.dbState = scanDbState(plan.dbFile, errors);
+  plan.worktrees = scanWorktrees(root, { from, to, errors });
+  plan.dirs = agentDirs({ home, env, root, from, to, dbDirs: plan.dbState.configDirs, errors });
   const knownPaths = new Set([from, ...plan.worktrees.items.map((w) => mapPath(w.worktree, to, from) ?? w.worktree)]);
-  const claudeDirs = [...new Set([join(home, ".claude"), ...plan.dbState.claudeConfigDirs.map((d) => resolve(d))])];
-  plan.claude = scanClaude(claudeDirs, { from, to, knownPaths });
-  plan.memoryDirs = claudeDirs.map((d) => join(d, "projects", claudeSlug(to), "memory"));
-  plan.grok = scanGrok(home, { from, to });
-  plan.opencode = scanOpencode(opencodeDbFile(home, env), { from, to });
-  plan.configs = scanConfigs(home, rules, env);
-  plan.dataFiles = scanDataFiles(root, rules);
+  plan.claude = scanClaude(plan.dirs.claude, { from, to, knownPaths, claims, errors });
+  const rules = rewriteRules({ from, to, home, siblings: siblingSuffixes({ from, to }, errors), claudeName: claudeNameMap(plan.dirs.claude, plan.claude.moves, { from, to }) });
+  plan.rules = rules;
+  plan.db = scanDb(plan.dbFile, rules, errors);
+  plan.service = scanService(plan.dbFile, errors);
+  plan.processes = scanProcesses([from, to], errors);
+  plan.symlinks = scanSymlinks(root, { from, to, errors });
+  plan.memory = memoryFiles(plan.dirs.claude, { to, errors }).map((file) => ({ file, count: countRefs(readFileSync(file, "utf8"), rules) })).filter((m) => m.count);
+  plan.grok = scanGrok(home, { from, to, errors });
+  plan.opencode = scanOpencode(opencodeDbFile(home, env), { from, to, errors });
+  plan.configs = scanConfigs(home, rules, { env, dirs: plan.dirs, from, to, errors });
+  plan.dataFiles = scanDataFiles(root, rules, errors);
   plan.remote = scanRemote(root);
-  try { plan.realFrom = realpathSync(dirname(from)) === dirname(from); } catch { plan.realFrom = false; }
   return plan;
 }
+
