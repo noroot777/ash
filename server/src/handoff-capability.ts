@@ -6,7 +6,7 @@
 // 降级,于是两种坏事都只可能在**任务已经不在本机之后**才暴露:
 //   ① 对端没装那个 CLI  → 一起跑就是 ENOENT,结算成 failed,得有人去翻日志才知道原因;
 //   ② 对端 CLI 在、模型不在 → 更坏,有的 CLI/网关会**静默降级**到默认模型,回合照常
-//      exit 0 跑完,从 ash 这一层完全看不出跑的已经不是你选的那个模型了。
+//      exit 0 跑完,从 navi 这一层完全看不出跑的已经不是你选的那个模型了。
 //
 // 握手把这两件事提到打包之前,判据与 `handoff-peer-client.ts` 的身份核对同档:**能在
 // 打包前拦下的就别等推出去**。
@@ -17,7 +17,7 @@
 //     跟对端不报身份时的处理同哲学:升级路径不能被新功能一刀切断。
 //   · 对端**故意没探**(多人模式不碰宿主机 CLI,见 model-probe.ts §八)→ 那份清单
 //     整个不作数,模型落差和 available 都不拿来判。
-//   · 模型清单 `source==="preset"` 同理:那是发版时抄下的快照,各家上新跟 ash 发版无关,
+//   · 模型清单 `source==="preset"` 同理:那是发版时抄下的快照,各家上新跟 navi 发版无关,
 //     它**不权威**。只有 `source==="probe"`(现问 CLI 的实时目录)才有资格说「没这个模型」。
 // 只有「对端明确报了它没装这个 CLI」才是硬结论 —— 那一档才拦。
 //
@@ -194,7 +194,7 @@ async function needsOf(taskId: string): Promise<Need[]> {
   const seenMsg = new Set<string>();
   for (const msg of msgs) {
     const agentType = msg.agent ?? mainType;
-    const key = `${agentType} ${msg.model ?? ""}`;
+    const key = `${agentType}\u0000${msg.model ?? ""}`;
     if (seenMsg.has(key)) continue;
     seenMsg.add(key);
     needs.push({ slot: "message", agentType, model: msg.model, where: "待发送消息指定的执行器" });
@@ -243,7 +243,7 @@ export function compareCapabilities(
   const gaps: HandoffCapabilityGap[] = [];
   const seen = new Set<string>();
   for (const need of needs) {
-    const key = `${need.slot} ${need.agentType} ${need.model ?? ""}`;
+    const key = `${need.slot}\u0000${need.agentType}\u0000${need.model ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const cap = byType.get(need.agentType);
@@ -265,7 +265,7 @@ export function compareCapabilities(
       continue;
     }
     // 模型:只有实时目录才有资格否定一个模型。preset 是发版时的快照、skipped 是压根没探,
-    // 拿它们报「没这个模型」就是假警报(各家上新模型跟 ash 发版毫无关系)。
+    // 拿它们报「没这个模型」就是假警报(各家上新模型跟 navi 发版毫无关系)。
     if (!need.model || cap.modelSource !== "probe" || peerCaps.skipped) continue;
     if (cap.models.includes(need.model)) continue;
     gaps.push({

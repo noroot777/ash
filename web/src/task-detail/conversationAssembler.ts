@@ -133,7 +133,7 @@ export function createAssembler(sessions: readonly Session[]) {
     bubble.steps.push({ entry, anchor: step.textAt });
     // 此刻还在不在等上游：跟老读法实时那一路同一个口径（conversationLiveTurns 的 appendAgentAux 等）。
     const awaiting = event.kind === "usage" || event.kind === "attachment" ? false
-      : event.kind === "tool" || event.kind === "thinking" || event.kind === "error"
+      : event.kind === "plan" || event.kind === "tool" || event.kind === "thinking" || event.kind === "error"
         ? awaitingAfterEvent(auxEvent(event as Parameters<typeof auxEvent>[0]) as AgentAuxEvent) : undefined;
     if (step.envelope) noteLive(bubble, step.envelope, awaiting);
   }
@@ -296,7 +296,8 @@ export function createAssembler(sessions: readonly Session[]) {
         return;
       }
       if (event.kind === "system") {
-        apply({ kind: "note", sessionId, turn, seq, item: liveSystemNote(recordId(sessionId, seq), sessionId, event) }, out);
+        const role = envelope.role ?? sessionOf.get(sessionId)?.role ?? null;
+        apply({ kind: "note", sessionId, turn, seq, item: liveSystemNote(recordId(sessionId, seq), sessionId, event, role) }, out);
       } else if (event.kind === "text") {
         apply({ kind: "prose", sessionId, turn, seq, raw: event.text, offset: envelope.textOffset ?? 0, envelope }, out);
       } else if (event.kind !== "done" && event.kind !== "turnEnd") {

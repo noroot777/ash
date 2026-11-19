@@ -28,6 +28,7 @@ import { isNaviHeaderName, readHeader, withLegacyHeaderNames } from "@navi/share
 import {
   hasTaskBranchPrefix, isTaskBranchOf, taskBranchName, taskBranchNames, taskIdPrefixOfBranch,
 } from "@navi/shared/task-branch";
+import { removeTmpStage } from "./tmp-db.js";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const root = mkdtempSync(join(tmpdir(), "navi-rename-compat-"));
@@ -471,6 +472,7 @@ try {
   }
 } finally {
   sleeper?.kill();
-  rmSync(root, { recursive: true, force: true });
+  // 库在舞台里、一直开着:先松开再删,否则 Windows 上断言全过却在这一步 EBUSY(见 tmp-db.ts)。
+  await removeTmpStage(root);
 }
 console.log("rename compat: 全部通过");

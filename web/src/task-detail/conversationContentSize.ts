@@ -46,6 +46,7 @@ const EXECUTION_EVENT_SIZE: SizeTable<ExecutionEvent> = {
   label: (value) => value.length,
   // 连续思考就是往这里拼 —— 第 4 轮审查漏的正是它。
   detail: (value) => value.length,
+  plan: (value) => value.text.length,
   at: () => 0,
   /* 子智能体那一格:只有 `type === "call"` 且没有 parentId 的才渲染成一行入口
      (shared 的 isVisibleExecutionEvent),那一行的字由上面的 label/detail 带出;
@@ -152,6 +153,7 @@ const EVENT_SIZE: SizeTable<EventItem> = {
   id: () => 0,
   at: () => 0,
   sessionId: () => 0,
+  sessionRole: () => 0,
   tone: () => 0,
   variant: () => 0,
   verify: () => 0,

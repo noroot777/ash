@@ -4,6 +4,8 @@ import type { Group, Task, TaskListItem } from "@navi/shared";
 import { isUserFollowUp } from "@navi/shared";
 import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
+import { RuntimeAutoOpen } from "../task-runtime/RuntimeAutoOpen.tsx";
+import { PlanModeChip } from "./PlanModeChip.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { TaskFileLinks } from "../components/TaskFileLink.tsx";
@@ -112,7 +114,7 @@ export function TaskDetail({
   const holder = useDispatchHolder(task.id, allTasks, task.status === "paused" || task.status === "backlog");
   const conversation = useConversation(task.id);
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, runtime, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
     task, allTasks, tasksReady, conversation,
   });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
@@ -351,6 +353,7 @@ export function TaskDetail({
           },
           onTasksSynced: applySnapshots,
           reviewRetry,
+          runtime,
           onOpenFile: openFileInCenter,
           onOpenFolder: openFolderInCenter,
           activeFilePath: fileView.activePath,
@@ -393,15 +396,12 @@ export function TaskDetail({
                 onDelete={() => setDeleteOpen(true)}
                 onOpenTask={onOpenTask}
                 inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
+                planChip={<PlanModeChip task={task} onOff={(executorId) => {
+                  replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })("/plan off", [], { agent: "codex", executorId })
+                    .catch((reason) => notify(reason instanceof Error ? reason.message : String(reason)));
+                }} />}
                 notify={notify}
               />
-              {task.mode === "single" && task.codexPlanMode && (
-                <div className="task-plan-mode-notice" role="status" aria-label="Codex 计划模式">
-                  <strong>Codex 计划模式</strong>
-                  <span>已开启：{task.codexPlanScopes?.map((scope) => `${scope.executorLabel}（${scope.isTaskOwner ? "任务归属人" : "其他发起人"}）`).join("、") || task.executorLabel || "Codex"}。仅对应 Codex 执行器与发起人的普通回复只讨论方案，不实施或确认完成。</span>
-                  <span>由同一发起人使用对应 Codex 执行器发送 <code>/plan off</code> 退出该作用域，或运行/重试任务退出全部计划模式。</span>
-                </div>
-              )}
               {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
               {task.handoff && (
                 <HandoffBanner
@@ -621,6 +621,7 @@ export function TaskDetail({
                   </section>
                 </div>
               )}
+              <RuntimeAutoOpen taskId={task.id} browser={runtime.state.browser} openTab={openTab} />
               {markDoneOpen && (
                 <ConfirmDialog
                   title="标记为已完成"

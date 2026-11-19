@@ -148,6 +148,11 @@ export type ConversationItem =
       at?: string;
       /** 这条旁注是写在哪条会话上的。验证区间靠它认「时间线走到别人家了」（见 conversationReviewer）。 */
       sessionId?: string;
+      /**
+       * 那条会话的角色（落盘那一路取自会话行，直播事件自带）。审查者那条会话给自己那一回合写的结算说明
+       * 是审查的话，不许落进执行者回合的尾注（见 conversationSystemRows 的 reviewerTurnNote）。
+       */
+      sessionRole?: string | null;
       tone?: ConversationEventTone;
       variant?: ConversationEventVariant;
       /** 这条旁注在讲验证轮的事（开始 / 未通过 / 打回修复）：跟审查者的气泡同一套配色。 */

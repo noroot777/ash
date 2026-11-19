@@ -54,6 +54,7 @@ import { settleSingleRunTurn } from "./single-run-settle.js";
 import { windDownStep } from "./turn-wind-down.js";
 import type { TurnOwner } from "./turn-lock.js";
 import { settleContextRebuild } from "./history-reseed.js";
+import { setTaskQuestion } from "./task-question.js";
 
 const STEERED_NOTE = "〔系统〕当前回合已由“引导会话”结束。";
 
@@ -129,7 +130,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // verify_round 同理**从库里读**而不是让调用方传:三条起跑路径(fresh run / continueTask /
   // 重启接回)都汇到这儿,由库来答就不会漏标其中一条。验证中途提问、答复回来续跑的那一
   // 回合库里仍挂着轮次号,于是它照样归这一轮验证——跟 orchestrator 的 sideTurn 判据同源。
-  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound, goalTurn: tasks.goalTurn })
+  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound, goalTurn: tasks.goalTurn,
+    activeTurnToken: tasks.activeTurnToken, activeDirectionToken: tasks.activeDirectionToken })
     .from(tasks).where(eq(tasks.id, taskId))).at(0);
   const nativeTurn = !!taskRow?.nativeTurn;
   let goalStartPending = !!taskRow?.goalTurn;
@@ -355,6 +357,16 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       watchTurnSilence(sessId, a.handle, a.turnStart, stallActions, progressFact);
     }
     for await (const event of a.handle.events) {
+      if (event.kind === "userInput") {
+        if (!taskRow || !await setTaskQuestion({
+          taskId,
+          question: event.questions.length === 1 ? event.questions[0]!.question : "请确认以下问题",
+          options: event.questions.length === 1 ? event.questions[0]!.options : undefined,
+          items: event.questions.length > 1 ? event.questions : undefined,
+          currentTurn: { token: taskRow.activeTurnToken, directionToken: taskRow.activeDirectionToken },
+        })) throw new Error("Codex 的澄清问题未能保存，请重试当前回合");
+        continue;
+      }
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
       // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
       trackSessionWaiting(sessId, a.handle, a.turnStart, event);

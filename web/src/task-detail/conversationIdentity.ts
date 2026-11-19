@@ -86,6 +86,7 @@ function persistedNote(session: Session, index: number, seg: Extract<ConvSeg, { 
     text,
     at: seg.at,
     sessionId: session.id,
+    sessionRole: session.role,
     tone: eventTone(text, seg.notice, seg.level),
     variant: "note",
     verify: isVerifyNote(text, seg.notice),

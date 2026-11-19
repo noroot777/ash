@@ -197,6 +197,7 @@ export function commandVerdict(text: string, commands: readonly string[] = []): 
 /** 结算说明里要你知道的那几句（server/src/settle-status.ts 的落位说明）。 */
 const SETTLEMENT_LEADS: readonly RegExp[] = [
   /^本回合没有交卷/, // 没调 complete_task，记未完成
+  /^回合正常结束,但 ?(本回合内没有收到|agent 未调用) ?complete_task/, // 同上，2026-08-31 之前的说法（老会话写在正文里）
   /^本回合被 (?:Navi|ash) 主动终止/, // 熔断
   /^本回合是上次 (?:Navi|ash) 中断时留下的/, // 读不出熔断判决
   /^后台工作流\/子代理(等到时限还没跑完|还没跑完[,，]智能体进程就退出了)/, // 后台活没跑完

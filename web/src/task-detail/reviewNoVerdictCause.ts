@@ -70,8 +70,29 @@ export function noVerdictCauseView(cause: ReviewNoVerdict): NoticeView {
 }
 
 /**
+ * 这条旁注说的是某一轮审查**为什么没给出结论**：带类型的原因旁注，或者老服务端那句「报告可能写完了…」。
+ * 它跟结论气泡下面那一句原因是同一件事，是审查的话（见 conversationSystemRows 的 reviewOwned）。
+ */
+export function saysWhyNoVerdict(event: EventItem): boolean {
+  const notice = event.notice;
+  return notice?.kind === "review.no_verdict" || ((!notice || notice.kind === "alert") && CHANNEL_GAP_GUESS.test(noticeRawText(event.text)));
+}
+
+/**
+ * 服务端那条带类型的原因旁注说的正是这一张卡那一场那一轮（按它带的 runId、轮号认，不按挨着谁）。那一轮
+ * 为什么没结论，审查状态里有同一份（`FreeReviewRound.noVerdict`），点结论那一条去那一轮看得到。
+ */
+export function namesLane(lane: Pick<ConversationReviewLane, "runId" | "round">, event: EventItem): boolean {
+  const notice = event.notice;
+  return notice?.kind === "review.no_verdict" && !!lane.runId && notice.runId === lane.runId
+    && (lane.round === null || notice.round === lane.round);
+}
+
+/**
  * 同一个位置上原来说这件事的那一条，这一句出现以后它就不再单独说：这一轮自己那条带类型的原因旁注；
  * 老服务端那句「报告可能写完了…report_stage」（回合中断时它是错的，没上报时它的说明还在理，点开看）。
+ * 审查者那一回合自己的结算说明不在此列：「任务状态保持…不变」那几句哪儿都不画（reviewerRestoredNote），
+ * 其余的（改落检查点暂停、会话轮换…）说的是别的事，各自照说。
  * 返回 null = 不是它；`detail` = 它的原文能不能拿来当点开的说明。
  */
 export function absorbs(entry: LaneNoVerdict, event: EventItem): { detail: string | null } | null {

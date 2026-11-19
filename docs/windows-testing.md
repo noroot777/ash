@@ -10,6 +10,9 @@
 
 ## 〇、当前基线
 
+**2026-11-19 改名 navi 之后又测了一轮**（32 绿 / 9 红，红的逐条拿改名前的版本对照过）：清单、分类和叶子环境的
+跑法见 `docs/rename-navi-windows.md` 第一、二节。下面 10-23 那一段是改名之前的记录。
+
 **2026-10-23 实测这 7 条绿**:`win-launch`、`path-boundary`、`openers-windows`、`terminal`
 (含 `test-project-commands` 的 Windows 生命周期一节)、`detached`、`reattach`、
 `scheduled-messages`(含 `test-native-steer` —— 它的两个假 CLI 这一轮才换成 Windows 也能启动的
