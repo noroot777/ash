@@ -3,7 +3,8 @@
 //   ② 镜像：scripts/db-file.mjs 与 server/src/db/path.ts 常量相同、认法相同；跟着库名走的派生文件都在迁移清单里；
 //   ③ 迁移命令：改名带上 -wal 与状态文件、留路标、旧版对着路标起不来；中途失败照原样退回；进程被杀之后接着做 / 撤销；
 //      有服务在用（新旧两代的锁）就不动；退回再改名来回都不丢东西；
-//   ③b 被杀矩阵：改名、退回、撤回途中，每一步之前 / 之后真杀进程，再 --apply / --rollback，都落在「做完」或「原样」上；
+//   ③b 被杀矩阵：改名、退回、撤回途中，每一步之前 / 之后真杀进程、路标写到一半（按字节切）被杀，再 --apply / --rollback，
+//      都落在「做完」或「原样」上；
 //   ④ 真起服务（本机自用模式、临时 HOME、随机端口）：新目录起出来是 navi.db；两份都是库时不起；只有 ash.db 的目录
 //      照常起，迁移之后再起，库里的数据、接力身份、远程访问密钥都还是原来那份。
 //   ①里另有：显式 NAVI_DB 也不许开改名做到一半的、不许开路标；启动拿锁时重认一遍，选库之后库改了名就不起。
@@ -96,6 +97,27 @@ try {
     assert.match(String(explicit(join(halfway, LEGACY_DB_FILE))), /上次没做完/, "显式 NAVI_DB 指着改名做到一半的目录：不起");
     assert.match(String(explicit(join(moved, LEGACY_DB_FILE))), /路标.*NAVI_DB 改成/, "显式 NAVI_DB 指着路标：不起、说清改成哪份");
     assert.equal(explicit(join(legacy, LEGACY_DB_FILE)), join(legacy, LEGACY_DB_FILE), "显式指着一份正常的库：照开");
+    // 显式路径同样在锁里认身份：选中时在、拿锁时被挪走（并发退回），或选中时不在、拿锁时冒出来，都不起。
+    const viaEnv = (file: string, fn: () => void) => { process.env.NAVI_DB = file; try { fn(); } finally { clearEnv(process.env, "NAVI_DB"); } };
+    const explicitDir = dir("explicit-race");
+    makeDb(join(explicitDir, "navi.db")).close();
+    viaEnv(join(explicitDir, "navi.db"), () => {
+      const picked = path.resolveNaviDbFile();
+      path.recheckDbFileChoice(picked);
+      renameSync(picked, join(explicitDir, LEGACY_DB_FILE)); // 拿锁之前，退回把它挪成了旧名
+      assert.throws(() => path.recheckDbFileChoice(picked), /现在不见了/, "显式路径：选中时在、拿锁时不在，不当成新安装去建空库");
+    });
+    viaEnv(join(explicitDir, "late.db"), () => {
+      const picked = path.resolveNaviDbFile();
+      makeDb(picked).close();
+      assert.throws(() => path.recheckDbFileChoice(picked), /现在有了/, "显式路径：选中时不在、拿锁时冒出来，也不开");
+    });
+    viaEnv(join(explicitDir, LEGACY_DB_FILE), () => {
+      const picked = path.resolveNaviDbFile();
+      renameSync(picked, join(explicitDir, "swap.db"));
+      makeDb(picked).close(); // 同一个名字换成了另一个文件
+      assert.throws(() => path.recheckDbFileChoice(picked), /换成了另一个文件/);
+    });
     // 启动在锁里重认：选完之后（拿锁之前）库被退回成旧名，记住的 navi.db 已经不是那份数据。
     const chosen = path.resolveNaviDbFile();
     path.recheckDbFileChoice(chosen);
@@ -234,19 +256,25 @@ try {
   // ── ③b 被杀矩阵 ──────────────────────────────────────────────────────────
   {
     // 子进程照常跑生产的 start()，在第 killAt 次文件操作之前 / 之后 SIGKILL 自己（failAt：那一次操作抛错，好走进撤回）。
+    // when=partial:N：第 killAt 次是写路标时只落下前 N 个字节就被杀（磁盘满、写到一半断掉的样子）。
     const child = join(root, "crash-child.mjs");
     writeFileSync(child, `import { renameSync, unlinkSync, writeFileSync } from "node:fs";
 const core = await import(${JSON.stringify(pathToFileURL(join(REPO, "scripts", "rename-db-core.mjs")).href)});
 const [data, direction, when, killAt, failAt] = process.argv.slice(2);
 let n = 0;
-const wrap = (f) => (...a) => {
+const wrap = (kind, f) => (...a) => {
   n += 1;
+  console.log("KIND " + n + " " + kind);
   if (n === Number(failAt)) throw new Error("注入的失败");
   if (n === Number(killAt) && when === "before") process.kill(process.pid, "SIGKILL");
+  if (n === Number(killAt) && when.startsWith("partial:")) {
+    writeFileSync(a[0], Buffer.from(a[1]).subarray(0, Number(when.slice(8))), { flag: "wx" });
+    process.kill(process.pid, "SIGKILL");
+  }
   f(...a);
   if (n === Number(killAt) && when === "after") process.kill(process.pid, "SIGKILL");
 };
-const ops = { rename: wrap(renameSync), writeNew: wrap((p, t) => writeFileSync(p, t, { flag: "wx" })), unlink: wrap(unlinkSync) };
+const ops = { rename: wrap("rename", renameSync), writeNew: wrap("write", (p, t) => writeFileSync(p, t, { flag: "wx" })), unlink: wrap("unlink", unlinkSync) };
 try { core.start(data, core.planSteps(data, { direction, stamp: "crash" }), { ops }); } catch {}
 console.log("OPS " + n);
 `);
@@ -265,25 +293,33 @@ console.log("OPS " + n);
     cpSync(legacyBase, renamedBase, { recursive: true });
     assert.equal(run(renamedBase, "--apply").status, 0);
     let cases = 0;
+    const markerBytes = Buffer.byteLength(core.markerText(new Date().toISOString()));
+    assert.equal(Buffer.from(core.markerText("t")).subarray(14, 15)[0] >= 0xe0, true, "第 15 个字节是一个汉字的头一个字节");
     for (const [direction, base] of [["forward", legacyBase], ["backward", renamedBase]] as const) {
       const scratch = dir(`crash-${direction}-clean`);
       cpSync(base, scratch, { recursive: true });
-      const total = Number(/OPS (\d+)/.exec(crash(scratch, direction).stdout)![1]);
+      const clean = crash(scratch, direction).stdout;
+      const total = Number(/OPS (\d+)/.exec(clean)![1]);
+      const kinds = new Map([...clean.matchAll(/KIND (\d+) (\w+)/g)].map((m) => [Number(m[1]), m[2]]));
       const finished = shape(scratch);
       const original = shape(base);
       assert.notEqual(finished, original);
       // 最后一步失败时，撤回要做几次操作
       const failing = dir(`crash-${direction}-fail`);
       cpSync(base, failing, { recursive: true });
-      const undoOps = Number(/OPS (\d+)/.exec(crash(failing, direction, "none", 0, total).stdout)![1]) - total;
+      const failed = crash(failing, direction, "none", 0, total).stdout;
+      const undoOps = Number(/OPS (\d+)/.exec(failed)![1]) - total;
+      for (const m of failed.matchAll(/KIND (\d+) (\w+)/g)) if (Number(m[1]) > total) kinds.set(Number(m[1]), m[2]);
       assert.equal(shape(failing), original, `${direction}：最后一步失败，照原样退回`);
       const points = [
         ...Array.from({ length: total }, (_, i) => ({ killAt: i + 1, failAt: 0 })),
         ...Array.from({ length: undoOps }, (_, i) => ({ killAt: total + 1 + i, failAt: total })),
       ];
       for (const { killAt, failAt } of points) {
-        for (const when of ["before", "after"]) {
-          const label = `${direction} ${failAt ? "撤回途中" : ""}第 ${killAt} 次操作${when === "before" ? "之前" : "之后"}被杀`;
+        // 写路标的那几次另外切在半路：空文件、头一个字节、ASCII 首行刚完、汉字的第一个字节（UTF-8 解出来已不是原文前缀）、差最后一个字节
+        const cuts = kinds.get(killAt) === "write" ? [0, 1, 13, 15, markerBytes - 1].map((b) => `partial:${b}`) : [];
+        for (const when of ["before", "after", ...cuts]) {
+          const label = `${direction} ${failAt ? "撤回途中" : ""}第 ${killAt} 次操作${when === "before" ? "之前" : when === "after" ? "之后" : `写到第 ${when.slice(8)} 个字节时`}被杀`;
           // 账本里记的是绝对路径：每种接着处理的办法各自从头造一次现场，就地处理。
           const kill = (tag: string) => {
             const crashed = dir(`crash-${direction}-${killAt}-${when}-${tag}`);
@@ -313,7 +349,7 @@ console.log("OPS " + n);
         }
       }
     }
-    console.log(`✓ 被杀矩阵：改名、退回、撤回途中每一步前后被杀，${cases} 种接着处理都落在「做完」或「原样」上`);
+    console.log(`✓ 被杀矩阵：改名、退回、撤回途中每一步前后被杀、路标写到一半被杀，${cases} 种接着处理都落在「做完」或「原样」上`);
   }
 
   // ── ④ 真起服务 ───────────────────────────────────────────────────────────

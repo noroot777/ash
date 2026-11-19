@@ -8,9 +8,9 @@
 //
 // 做到哪一步记在账本里（phase + progress），每做完 / 撤完一步先落盘再往下走。**不能光看盘面猜哪步做过**：
 // 同一个路径前后被几步用到（退回时先撤掉旧名的路标、最后又把库挪到旧名上；改名时先把库挪走、再在原处写路标），
-// 拿后一步的结果去判前一步，会把真库当成路标删掉。所以盘面只用来判**账本记到的那一步**（它做了、进度还没来得及
-// 落盘的那一刻被杀）：那一刻前面的步骤都做完了、后面的都没动，单看这一步的源和目标就判得准。
-// 撤路标、撤自己写的路标之前都核对内容是这一次的那份路标，对不上就停手 —— 不凭「有个文件在」就删。
+// 不按顺序拿后一步的结果去判前一步，会把真库当成路标删掉。所以严格按账本的顺序一步一步走，每一步动手之前正面认出
+// 它在哪一头（做完 / 没动过 / 路标写到一半），两头都不像就停手、账本留着 —— 不拿「不是做完」当「撤完了」。
+// 路标按原始字节认，撤、写之前都核对是这一次的那份；删账本之前再核对一遍整个盘面是该有的样子。
 // 账本在，服务就不起（server/src/db/path.ts）。
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -72,69 +72,105 @@ export function planSteps(dataDir, { direction, stamp, at = new Date().toISOStri
   return { direction, leftovers, steps, taken };
 }
 
-/** path 上是不是这一次的那份路标（整份内容逐字一致）；pending=true 时连写到一半的那种也算。 */
-function isMarker(path, text, { pending = false } = {}) {
-  let size;
-  try { size = statSync(path).size; } catch { return false; }
-  if (size > Buffer.byteLength(text)) return false;
-  const now = readFileSync(path, "utf8");
-  return pending ? text.startsWith(now) : now === text;
+/**
+ * path 上那份路标此刻的样子，按**原始字节**比（路标里有中文，写到一半可能停在一个字的中间，按 UTF-8 解出来就不是
+ * 原文的前缀了）：absent 不在 / full 整份就是这一次的路标 / partial 是它写到一半的那段 / other 别的东西。
+ */
+function markerState(path, text) {
+  const want = Buffer.from(text, "utf8");
+  const st = statSync(path, { throwIfNoEntry: false });
+  if (!st) return "absent";
+  if (!st.isFile() || st.size > want.length) return "other";
+  const bytes = readFileSync(path);
+  if (bytes.equals(want)) return "full";
+  return want.subarray(0, bytes.length).equals(bytes) ? "partial" : "other";
 }
 
 /**
- * 这一步按盘上此刻的样子算不算已经做过。**只对账本记到的那一步用**：前面的都做完了、后面的都还没动（或撤到这一步时，
- * 后面的都撤完了、前面的都还在），这一步的源和目标此刻只可能被它自己动过。
+ * 一步此刻在盘上处于哪一头，**两头都要正面证明**，不拿「不是做完」当「撤完了」：
+ *  done 做完的样子 / undone 动手之前的样子 / partial 写路标写到一半 / unknown 两头都不像 —— 遇到它就停手、账本留着。
+ * 判一步时，它前面的步骤都处在做完的样子、后面的都处在动手之前的样子（做和撤都按顺序一步一步走、每步记账），
+ * 所以同一个路径被前后几步用到也不会认错：用到它的另一步此刻是哪一头是确定的。
  */
-function done(step) {
-  if (step.op === "move") return !existsSync(step.from) && existsSync(step.to);
-  if (step.op === "mark") return isMarker(step.path, step.text);
-  return !existsSync(step.path); // unmark：路标撤掉了
+function stepState(step) {
+  if (step.op === "move") {
+    const from = existsSync(step.from), to = existsSync(step.to);
+    return !from && to ? "done" : from && !to ? "undone" : "unknown";
+  }
+  const m = markerState(step.path, step.text);
+  if (m === "partial") return "partial";
+  if (m === "other") return "unknown";
+  if (step.op === "mark") return m === "full" ? "done" : "undone";
+  return m === "absent" ? "done" : "undone"; // unmark：撤掉了是做完，路标整份在是没动过
 }
 
-/**
- * 撤回时同样只对记到的那一步用：这一步此刻还算不算「做过、要撤」。写到一半的路标也算自己写的（要撤）；
- * 退回时撤掉的路标没有逐字写回去之前都算还撤着。
- */
-function stillDone(step) {
-  if (step.op === "mark") return isMarker(step.path, step.text, { pending: true });
-  if (step.op === "unmark") return !isMarker(step.path, step.text);
-  return done(step);
-}
+const where = (step) => (step.op === "move" ? `${step.from} → ${step.to}` : step.path);
+const unknownState = (step) => new Error(`${where(step)} 盘上的样子跟账本对不上（既不像做完、也不像没动过），停手了`);
 
 function doStep(step, ops) {
-  if (step.op === "move") {
-    if (existsSync(step.to)) throw new Error(`${step.to} 已经有了，没把 ${step.from} 挪过去`);
-    ops.rename(step.from, step.to);
-  } else if (step.op === "mark") writeMarker(step, ops);
-  else {
-    if (!isMarker(step.path, step.text)) throw new Error(`${step.path} 不是这一次要撤的那份路标，没删它`);
-    ops.unlink(step.path);
-  }
+  const state = stepState(step);
+  if (state === "done") return;
+  // 写路标写到一半：mark 接着写；unmark 不写东西，盘上却有半份路标 —— 认不准，停手
+  if (state === "unknown" || (state === "partial" && step.op !== "mark")) throw unknownState(step);
+  if (step.op === "move") ops.rename(step.from, step.to);
+  else if (step.op === "mark") writeMarker(step, ops);
+  else ops.unlink(step.path);
 }
 
 function undoStep(step, ops) {
-  if (step.op === "move") {
-    if (existsSync(step.from)) throw new Error(`${step.from} 已经有了，没把 ${step.to} 挪回去`);
-    ops.rename(step.to, step.from);
-  } else if (step.op === "mark") {
-    if (!isMarker(step.path, step.text, { pending: true })) throw new Error(`${step.path} 不是这一次写的路标，没删它`);
-    ops.unlink(step.path);
-  } else writeMarker(step, ops);
+  const state = stepState(step);
+  if (state === "undone") return;
+  if (state === "unknown") throw unknownState(step);
+  if (step.op === "move") ops.rename(step.to, step.from);
+  else if (step.op === "mark") ops.unlink(step.path); // 整份或写到一半的这一次的路标
+  else writeMarker(step, ops); // 把撤掉的路标写回去（上次写到一半的重写）
 }
 
 /** 在 step.path 写路标。那里有东西的话，只认上次写到一半的这份路标（先删掉重写），别的一律停手。 */
 function writeMarker(step, ops) {
-  if (existsSync(step.path)) {
-    if (!isMarker(step.path, step.text, { pending: true })) throw new Error(`${step.path} 已经有了，没在那里写路标`);
-    ops.unlink(step.path);
-  }
+  const m = markerState(step.path, step.text);
+  if (m === "other" || m === "full") throw new Error(`${step.path} 已经有了，没在那里写路标`);
+  if (m === "partial") ops.unlink(step.path);
   ops.writeNew(step.path, step.text);
 }
 
-/** 把 dir 的目录项落盘（POSIX；Windows 打不开目录，跳过）：改名的先后要比账本的进度先到盘上。 */
+/**
+ * 删账本之前核对整个盘面：每个路径都得是「最后动它的那一步」留下的样子（做完时按顺序数，撤完时倒着数、取反）。
+ * 对不上就不删账本 —— 宁可让服务因账本起不来、让人来认，也不报一句「回到原样」。
+ */
+function verifyFinal(journal, phase) {
+  const want = new Map();
+  const steps = phase === "do" ? journal.steps : [...journal.steps].reverse();
+  for (const s of steps) {
+    if (s.op === "move") {
+      want.set(phase === "do" ? s.from : s.to, ["absent"]);
+      want.set(phase === "do" ? s.to : s.from, ["present"]);
+    } else {
+      const marked = (s.op === "mark") === (phase === "do");
+      want.set(s.path, [marked ? "marker" : "absent", s.text]);
+    }
+  }
+  for (const [path, [kind, text]] of want) {
+    const ok = kind === "absent" ? !existsSync(path) : kind === "present" ? existsSync(path) : markerState(path, text) === "full";
+    if (!ok) throw new Error(`${phase === "do" ? "做完" : "撤完"}之后 ${path} 不是该有的样子（应当${kind === "absent" ? "不在" : kind === "present" ? "在" : "是路标"}），账本留着`);
+  }
+}
+
+/**
+ * 把 dir 的目录项落盘：改名的先后要比账本的进度先到盘上。Windows 打不开目录、有的文件系统不支持给目录 fsync —— 这两种
+ * 跳过；别的错误（EIO 之类）是真的没落盘，照实抛出去，不当成落好了往下记进度。
+ */
 function syncDir(dir) {
+  if (process.platform === "win32") return;
   let fd;
-  try { fd = openSync(dir, "r"); fsyncSync(fd); } catch { /* Windows / 不支持 */ } finally { if (fd !== undefined) closeSync(fd); }
+  try {
+    fd = openSync(dir, "r");
+    fsyncSync(fd);
+  } catch (error) {
+    if (!["EINVAL", "ENOTSUP", "EOPNOTSUPP"].includes(error.code)) throw error;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 function saveJournal(dataDir, journal) {
@@ -190,8 +226,7 @@ export function runJournal(dataDir, journal, { ops = realOps, log = () => {} } =
     }
     for (let i = journal.progress; i < journal.steps.length; i += 1) {
       const step = journal.steps[i];
-      // 只有接着上次做时，记到的这一步才可能已经做了（做完、没来得及记就被杀）
-      if (!(i === journal.progress && done(step))) doStep(step, ops);
+      doStep(step, ops); // 做完、没来得及记就被杀的那一步，盘上已是做完的样子，这里认出来就跳过
       journal.progress = i + 1;
       synced(dataDir, journal, step);
       log(step);
@@ -203,25 +238,30 @@ export function runJournal(dataDir, journal, { ops = realOps, log = () => {} } =
     }
     throw new Error(`${error.message}（已照账本退回原样）`);
   }
+  verifyFinal(journal, "do");
   dropJournal(dataDir, journal);
 }
 
-/** 照账本倒着撤回：做过的每一步反着做一遍（每撤一步记一笔），然后删掉账本。 */
+/** 照账本倒着撤回：做过的每一步反着做一遍（每撤一步记一笔），核对盘面回到了动手之前，然后删掉账本。 */
 export function undoJournal(dataDir, journal, { ops = realOps } = {}) {
   if (journal.phase === "do") {
-    // 记到的那一步可能已经做了：此刻判一次，记成「做过」就一起撤
+    // 记到的那一步可能已经做了（或路标写到一半）：此刻判一次，做过的一起撤；认不出就停手
     const k = journal.progress;
-    journal.progress = k < journal.steps.length && stillDone(journal.steps[k]) ? k + 1 : k;
+    if (k < journal.steps.length) {
+      const state = stepState(journal.steps[k]);
+      if (state === "unknown") throw unknownState(journal.steps[k]);
+      if (state !== "undone") journal.progress = k + 1;
+    }
     journal.phase = "undo";
     saveJournal(dataDir, journal);
   }
   for (let j = journal.progress - 1; j >= 0; j -= 1) {
     const step = journal.steps[j];
-    // 接着上次撤时，记到的这一步可能已经撤了（撤完、没来得及记就被杀）
-    if (!(j === journal.progress - 1 && !stillDone(step))) undoStep(step, ops);
+    undoStep(step, ops); // 撤完、没来得及记就被杀的那一步，盘上已是动手之前的样子，认出来就跳过
     journal.progress = j;
     synced(dataDir, journal, step);
   }
+  verifyFinal(journal, "undo");
   dropJournal(dataDir, journal);
 }
 

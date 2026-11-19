@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readStorageEnv } from "@navi/shared/env-names";
 import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@navi/shared/legacy-names";
@@ -98,14 +98,30 @@ export function chooseDbFileIn(dataDir: string): { file: string; legacy: boolean
 // 放了一份 `ash.db`，后半程的派生文件指到另一份库上去。
 let chosenDefault: string | null = null;
 
+/**
+ * 选中那一刻库文件是哪一个（不在就是 null）。改名、退回都是 rename，文件身份（设备号 + inode / 文件号）跟着文件走：
+ * 拿锁时还是这个身份，才证明开的是选中时那份数据；原来在、后来不见了，跟「本来就是新安装」不是一回事。
+ */
+const identityAtChoice = new Map<string, string | null>();
+
+function fileIdentity(file: string): string | null {
+  const st = statSync(file, { bigint: true, throwIfNoEntry: false });
+  return st ? `${st.dev}:${st.ino}` : null;
+}
+
+function remember(file: string): string {
+  if (!identityAtChoice.has(file)) identityAtChoice.set(file, fileIdentity(file));
+  return file;
+}
+
 function defaultDbFile(): string {
   if (chosenDefault) return chosenDefault;
   const { file, legacy } = chooseDbFileIn(DATA_DIR);
   if (legacy) {
     console.warn(`[navi] 库还叫 ${LEGACY_DB_FILE}（${file}）。照常能用；想改成 ${DB_FILE_NAME}，停掉服务后跑 \`${RENAME_COMMAND}\`（docs/rename-db.md）。`);
   }
-  chosenDefault = file;
-  return file;
+  chosenDefault = remember(resolve(file));
+  return chosenDefault;
 }
 
 /**
@@ -121,29 +137,35 @@ function checkExplicitDbFile(file: string) {
   }
 }
 
-const checkedExplicit = new Set<string>();
-
 export function resolveNaviDbFile() {
   const explicit = readStorageEnv(process.env, "NAVI_DB");
   if (explicit) {
     const file = resolve(explicit);
-    if (!checkedExplicit.has(file)) { checkExplicitDbFile(file); checkedExplicit.add(file); }
+    if (!identityAtChoice.has(file)) { checkExplicitDbFile(file); remember(file); }
     return file;
   }
   return resolve(defaultDbFile());
 }
 
 /**
- * 在启动的占有锁里（singleton.ts，跟 `rename-db` 抢的是同一把）重新认一遍：`resolveNaviDbFile` 选库发生在拿锁之前，
- * 两步之间改名或退回做完了的话，记住的那个名字已经不是那份数据 —— 照它开就是对着一份新建的空库起来。
- * 认出来不一样就不起，重启一次会按此刻的样子重选。
+ * 在启动的占有锁里（singleton.ts，跟 `rename-db` 抢的是同一把）证明「选中的还是那份数据」：`resolveNaviDbFile` 选库发生在
+ * 拿锁之前，两步之间改名或退回做完了的话，记住的那个名字已经不是那份数据 —— 照它开就是对着一份新建的空库起来。
+ * 默认目录和显式路径（三代变量名都走这里）一样：选库那一刻的安全闸再过一遍，文件身份也得跟选中时一致（原来在、
+ * 现在不在，原来不在、现在冒出来，或者换成了另一个文件，都不算）。认不准就不起，重启一次会按此刻的样子重选。
  */
 export function recheckDbFileChoice(dbFile: string) {
-  const explicit = readStorageEnv(process.env, "NAVI_DB");
-  if (explicit) return checkExplicitDbFile(resolve(explicit));
-  const now = resolve(chooseDbFileIn(DATA_DIR).file);
-  if (now !== resolve(dbFile)) {
-    throw new DbFileChoiceError(`启动途中库文件改了名：先选的是 ${dbFile}，现在该开的是 ${now}。没有启动，重新启动一次即可。`);
+  const file = resolve(dbFile);
+  if (readStorageEnv(process.env, "NAVI_DB")) checkExplicitDbFile(file);
+  else {
+    const now = resolve(chooseDbFileIn(DATA_DIR).file);
+    if (now !== file) throw new DbFileChoiceError(`启动途中库文件改了名：先选的是 ${file}，现在该开的是 ${now}。没有启动，重新启动一次即可。`);
+  }
+  if (!identityAtChoice.has(file)) throw new DbFileChoiceError(`${file} 没经过选库就要开，没有启动。`);
+  const then = identityAtChoice.get(file) ?? null;
+  const now = fileIdentity(file);
+  if (then !== now) {
+    const what = then === null ? "选库时不在、现在有了" : now === null ? "选库时在、现在不见了" : "换成了另一个文件";
+    throw new DbFileChoiceError(`启动途中库文件 ${file} ${what}（多半是同时在改名或退回）。没有启动，重新启动一次即可。`);
   }
 }
 
