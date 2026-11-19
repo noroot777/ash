@@ -173,7 +173,8 @@ try {
     assert.ok(readdirSync(join(data, "backups")).some((d) => readdirSync(join(data, "backups", d)).includes(`${LEGACY_DB_FILE}.ash.lock`)), "挪进留底");
     assert.equal(mirror.legacyDbState(join(data, LEGACY_DB_FILE)), "moved", "原地留了路标");
     // 改名之前的服务对着路标：SQLite 当场拒绝，路标原样不动。
-    assert.throws(() => new DatabaseSync(join(data, LEGACY_DB_FILE)).exec("pragma journal_mode = wal"), /file is not a database/);
+    const oldServer = new DatabaseSync(join(data, LEGACY_DB_FILE));
+    try { assert.throws(() => oldServer.exec("pragma journal_mode = wal"), /file is not a database/); } finally { oldServer.close(); }
     assert.equal(mirror.legacyDbState(join(data, LEGACY_DB_FILE)), "moved");
     assert.equal(run(data, "--apply").status, 0, "再跑一次：没有要做的");
 
@@ -251,8 +252,12 @@ async function fingerprint(port: number): Promise<string> {
 /** 在 data 上起一次真服务，等到它报就绪，跑完 body 再停掉、等它退干净。 */
 async function withServer<T>(data: string, body: (port: number) => Promise<T>): Promise<T> {
   const port = await freePort();
-  // 环境从零拼：不带门禁或本机 shell 里的库/数据目录变量，也不去问本机真装着的 CLI。
-  const env = { HOME: home, PATH: "/usr/bin:/bin", PORT: String(port), NAVI_LOCAL_ONLY: "1", NAVI_DATA_DIR: data, NAVI_TEST_NO_MODEL_PROBE: "1" };
+  // 环境从零拼：不带门禁或本机 shell 里的库/数据目录变量，也不去问本机真装着的 CLI。Windows 上子进程离了
+  // SystemRoot、PATH 起不来，那边照抄这几项。
+  const win = process.platform === "win32"
+    ? Object.fromEntries(["SystemRoot", "PATH", "Path", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "PATHEXT", "ComSpec"].flatMap((k) => process.env[k] ? [[k, process.env[k]!]] : []))
+    : { PATH: "/usr/bin:/bin" };
+  const env = { ...win, HOME: home, USERPROFILE: home, PORT: String(port), NAVI_LOCAL_ONLY: "1", NAVI_DATA_DIR: data, NAVI_TEST_NO_MODEL_PROBE: "1" };
   const child = spawn(process.execPath, ["--import", tsx, "src/index.ts"], { cwd: serverRoot, env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", (d) => { output += d; });
