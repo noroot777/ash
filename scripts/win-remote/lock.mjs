@@ -17,7 +17,7 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { rexec } from "./transport.mjs";
-import { psq } from "./ps.mjs";
+import { psq, psReadText } from "./ps.mjs";
 
 const LOCK_REL = ".worktrees\\win-remote.lock";
 const STALE_MS = 25 * 60_000;
@@ -80,7 +80,7 @@ export function lockGuardPs(repoPath, owner) {
     `  if ($__i -gt 0) { Start-Sleep -Milliseconds 400 }`,
     `  $__r = Set-WinRemoteBeat ${psq(lock)} ${psq(owner)}`,
     `}`,
-    `if ($__r -eq 'lost') { throw ('[win-remote] 对端工作区的锁已易主或已被删除(现在是: ' + [string](Get-Content ${psq(lock)} -Raw -ErrorAction SilentlyContinue) + '),本次结果不可信,已中止') }`,
+    `if ($__r -eq 'lost') { throw ('[win-remote] 对端工作区的锁已易主或已被删除(现在是: ' + ${psReadText(psq(lock))} + '),本次结果不可信,已中止') }`,
     `if ($__r -ne 'ok') { throw '[win-remote] 对端工作区的锁一直被别人独占着,刷不上心跳,本次结果不可信,已中止' }`,
     `if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) {`,
     `  $null = Start-ThreadJob -ArgumentList ${psq(lock)},${psq(owner)} -ScriptBlock {`,
@@ -111,7 +111,10 @@ async function tryAcquire(repoPath, owner, opts) {
     `function New-WinRemoteLock { try { $f = [IO.File]::Open($__l,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); $b = [Text.Encoding]::UTF8.GetBytes((New-WinRemoteMe)); $f.Write($b,0,$b.Length); $f.Close(); $true } catch { $false } }`,
     `if (New-WinRemoteLock) { Write-Output 'LOCK=acquired' }`,
     `else {`,
-    `  $__was = [string](Get-Content $__l -Raw -ErrorAction SilentlyContinue)`,
+    // 必须和下面句柄里的 UTF8.GetString 同一种解码:接管靠两份逐字节相等(-ceq)来判「owner 没变」,
+    // 一份按代码页、一份按 UTF-8 解的话,锁内容里只要有一个非 ASCII 字符(主机名)就永远判不等,
+    // 过期锁永远接管不了。
+    `  $__was = ${psReadText("$__l")}`,
     `  $__it = Get-Item $__l -Force -ErrorAction SilentlyContinue`,
     `  $__state = 'busy'`,
     `  if ((Get-WinRemoteAgeMs $__was $__it) -gt ${STALE_MS}) {`,

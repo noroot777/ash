@@ -218,7 +218,7 @@ if (Test-Path -LiteralPath $wt) {
   if ($__gd -eq $__gc) { throw ('拒绝使用:' + $wt + ' 是主工作区(git-dir = common-dir = ' + $__gd + '),win-remote 绝不往主工作区上检出') }
   if ($__gc.TrimEnd('\','/') -ne $__rc.TrimEnd('\','/')) { throw ('拒绝使用:' + $wt + ' 不属于 ' + $repo + '(common-dir=' + $__gc + ')') }
   $__own = Join-Path $__gd 'win-remote-owner'
-  if (Test-Path -LiteralPath $__own) { $__tag = ([string](Get-Content -LiteralPath $__own -TotalCount 1 -ErrorAction SilentlyContinue)).Trim() } else { $__tag = '' }
+  if (Test-Path -LiteralPath $__own) { $__tag = ([string](Get-Content -LiteralPath $__own -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim() } else { $__tag = '' }
   if ($__tag -ne $__magic) {
     if (-not $__adopt) {
       throw ('拒绝接管:' + $wt + ' 是个已经存在的 worktree,但没有 win-remote 的所有权标记(' + $__own + ') —— 不知道是谁在上面干活,而同步会强制检出并 git clean 掉里面所有未提交内容。确认这个目录可以整个覆盖,就带 WIN_REMOTE_ADOPT=1 跑一次接管它;否则换个目录,或先 git worktree remove 它。')
