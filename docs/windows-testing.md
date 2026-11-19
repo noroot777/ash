@@ -11,8 +11,9 @@
 ## 〇、当前基线
 
 **2026-11-19 改名 navi 之后的第一轮**(32 绿 / 9 红,红的逐条拿改名前的版本对照过)记录在
-`docs/rename-navi-windows.md` 第一、二节。那 9 红在同一天修掉,修完重测的结果是下面这一段;
-再往下 10-23 那一段是改名之前的记录。
+`docs/rename-navi-windows.md` 第一、二节。同一天修了其中 7 条(`test:handoff` 修到对端 server 起得来,
+仍有 3 条红;`test-rename-navi.mjs` 是只在开发机上跑的改名脚本回归,没在 Windows 上修),修完重测的
+结果是下面这一段;再往下 10-23 那一段是改名之前的记录。
 
 **2026-11-19 实测(改名 navi 之后,Windows PowerShell 5.1 / node v22.20.0)。** 叶子环境照
 `scripts/test-runner.mjs` 的 `leafEnv`(擦掉各代库/运行目录/数据目录,每条自己的 `NAVI_DATA_DIR`
