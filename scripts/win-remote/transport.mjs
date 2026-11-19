@@ -16,7 +16,7 @@ import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
 import { jobPreludeLines, jobAssignLine, jobCloseLine, killTreeLines } from "./kill-tree.mjs";
-import { psq } from "./ps.mjs";
+import { psq, psReadText } from "./ps.mjs";
 import { LEGACY_REPO_DIR_NAMES } from "../legacy-names.mjs";
 
 const DEFAULT_HOST = process.env.WIN_REMOTE_HOST ?? "http://192.168.1.187:4317";
@@ -190,6 +190,80 @@ const echoFilter = (sent) => (line) => {
 };
 
 /**
+ * 拼出发进 PTY 的那一行 wrapper:把 cmd 落成对端临时 .ps1、起独立进程跑、超时杀树、
+ * 读回输出并 PUT 到开发机 `http://<self>:<port>/<token>`。纯函数,不碰网络。
+ */
+export function remoteWrapper({ cmd, cwd = null, token, timeout, self, port }) {
+  // `pwsh -File x.ps1` **不会**把脚本里最后一条外部命令的退出码当成自己的退出码 ——
+  // 脚本正常跑完就是 0。不显式收尾的话,`npm test` 明明断言失败(exit 1),这里照样报 0,
+  // 于是整批回归全绿而实际全红 —— 比假超时更坏,因为它不吵。
+  // 开头先把 $LASTEXITCODE 清零(没跑过外部命令时它是 $null),末尾原样交出去;
+  // 中途 throw 走不到这行,pwsh 自己会退 1。
+  const script = `$LASTEXITCODE=0\n${cmd}\nexit $LASTEXITCODE`;
+  const b64 = Buffer.from(script, "utf8").toString("base64");
+  // 对端那条命令的期限 = 调用者要的那个。收尾时间由开发机那头的 hardMs 额外让出来,
+  // 不从这里扣 —— 扣出来的下限(旧版是 5 秒)正是短 timeout 那条漏网路径的根。
+  const secs = Math.max(1, Math.round(timeout / 1000));
+  // 为什么起独立进程而不是 `<cmd> *>&1 | Out-File`:管道要等**所有**持有 stdout 的句柄关闭
+  // 才算结束,而 Windows 上留一个孙进程是常事 —— node-pty 的 conpty_console_list_agent
+  // 崩了却不退,整条命令就永远等不到 EOF。实测 `npm run test:terminal` 明明 exit 0,
+  // 管道模式却挂满 10 分钟报假超时。改成 Start-Process 之后,结束判据是**进程退出**,
+  // 跟残留句柄无关;超时还能 Kill 掉并把已经写下的输出捞回来。
+  // 代价是 stdout/stderr 只能分开重定向(Start-Process 不许两路指向同一个文件),
+  // 所以下面把 stderr 单独拼在后面,而不是交错。
+  return [
+    `$ErrorActionPreference='Continue'`,
+    // 外部程序(npm/node/tsx)吐的是 UTF-8 字节,PowerShell 默认按活动代码页(中文机器是 936)解,
+    // 中文输出会变成「鉁?璺緞」这种乱码 —— 测试断言里的中文全糊掉。这两行把两端都钉成 UTF-8。
+    `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8`,
+    // 顺手扫掉一小时前的同格式残留:wrapper 中途崩了、机器断电、会话被掐,下面那套「上传前
+    // 就删干净」都执行不到,总得有个不依赖任何一次会话的兜底。名字是 18 位 hex + 三种固定
+    // 后缀,不会碰到别人的东西;一小时的门槛保证不会误删**正在跑**的另一条命令(单条上限 10 分钟)。
+    `Get-ChildItem -LiteralPath $env:TEMP -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[0-9a-f]{18}\\.(ps1|out|err)$' -and $_.LastWriteTime -lt (Get-Date).AddHours(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue`,
+    `$__d=${psq(cwd ?? "")}`,
+    `$__o=Join-Path $env:TEMP ${psq(`${token}.out`)}; $__r=Join-Path $env:TEMP ${psq(`${token}.err`)}; $__s=Join-Path $env:TEMP ${psq(`${token}.ps1`)}`,
+    // 这个 .ps1 **必须带 BOM**:对端是 Windows PowerShell 5.1(doctor 报 5.1.x),
+    // `-File` 读无 BOM 的脚本时按活动代码页(中文机器 936)解码,命令里但凡有一个中文字
+    // 就会被拆成两个 GBK 字节再错解成别的字符 —— 实测 `win-remote sync` 的那句中文守卫
+    // 提示直接把脚本解析崩了(Unexpected token ')'),而且报错指向的是乱码后的行,
+    // 看不出跟编码有关。写上 BOM 之后 5.1 和 7 都按 UTF-8 读。
+    `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(${psq(b64)})),(New-Object Text.UTF8Encoding $true))`,
+    `$__x=[Diagnostics.Process]::GetCurrentProcess().Path`,
+    `$__nl=[Environment]::NewLine`,
+    // 容器要在起进程**之前**建好(见 kill-tree.mjs 顶部:事后按父链补拍快照够不着脱链后代)。
+    ...jobPreludeLines(),
+    `$__p=Start-Process -FilePath $__x -ArgumentList '-NoProfile','-NonInteractive','-File',$__s -RedirectStandardOutput $__o -RedirectStandardError $__r -PassThru -NoNewWindow` + (cwd ? ` -WorkingDirectory $__d` : ``),
+    jobAssignLine(),
+    `$null=$__p|Wait-Process -Timeout ${secs} -ErrorAction SilentlyContinue`,
+    // 超时收尾要**连整棵进程树一起杀,而且确认它真的退干净了**再往下走。
+    // 只 Kill 直接子进程是不够的:那条命令下面挂着 npm→node→tsx 一长串后代,它们活过这一刀,
+    // 而 rexec 一返回,外面那把工作区锁当场就还回去了 —— 下一个人开始在同一个 worktree 上
+    // checkout/clean,上一条命令的孙子还在里面写文件。两边都各自「正常」,谁也看不出结果为什么
+    // 是错的。三刀(容器 / 父链 / 逐个补刀)和三种结论措辞都在 kill-tree.mjs 里。
+    ...killTreeLines(secs),
+    `Start-Sleep -Milliseconds 300`,
+    // 上面钉的 OutputEncoding 只管控制台流,读文件这一步要自己按 UTF-8 解(见 psReadText)。
+    `$__t=${psReadText("$__o")}`,
+    `$__g=${psReadText("$__r")}`,
+    `if($__g){ $__t = $__t + $__nl + '--- stderr ---' + $__nl + $__g }`,
+    // 没杀干净就照实说 —— 这时候「工作区已经没人碰了」这个前提不成立,后面那次同步/测试
+    // 的结果都得存疑,咽下去比报错更坏。
+    `if($__e -eq 124){ $__t = $__t + $__nl + '[win-remote] 超时 ${secs}s,已杀掉进程树' + $__km }`,
+    // 三个临时文件在**上传之前**就删光,上传改从内存发字节(而不是 `-InFile` 指着磁盘)。
+    // 原来的顺序是「先上传、再 Remove-Item」,而开发机一收到 body 就往下走、随手把终端
+    // 会话 DELETE 掉 —— 删文件那句和杀会话是在赛跑,输的时候 `%TEMP%` 里就留下一份
+    // **明文的远程命令**(`.ps1` 里是完整脚本,不只是磁盘垃圾)。现在删在前、发在后,
+    // 本地收到回传时对端磁盘上已经一个 token 文件都没有,竞争这件事从根上不存在。
+    `Remove-Item -LiteralPath $__o,$__r,$__s -Force -ErrorAction SilentlyContinue`,
+    // 关容器 —— 正常跑完那条路径也要关:命令回来了就意味着「对端工作区没人碰了」,
+    // 留个后台后代在里面写文件,下一次同步的 git clean 会跟它撞上(见 kill-tree.mjs)。
+    jobCloseLine(),
+    `$__b=[Text.Encoding]::UTF8.GetBytes([string]$__t)`,
+    `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -Body $__b -ContentType 'text/plain; charset=utf-8' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
+  ].filter(Boolean).join("; ");
+}
+
+/**
  * 在对端 Windows 上跑一条命令。
  *
  * @param cmd      PowerShell 命令(可多行)
@@ -238,72 +312,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       signal: ac.signal,
     }, host);
 
-    // `pwsh -File x.ps1` **不会**把脚本里最后一条外部命令的退出码当成自己的退出码 ——
-    // 脚本正常跑完就是 0。不显式收尾的话,`npm test` 明明断言失败(exit 1),这里照样报 0,
-    // 于是整批回归全绿而实际全红 —— 比假超时更坏,因为它不吵。
-    // 开头先把 $LASTEXITCODE 清零(没跑过外部命令时它是 $null),末尾原样交出去;
-    // 中途 throw 走不到这行,pwsh 自己会退 1。
-    const script = `$LASTEXITCODE=0\n${cmd}\nexit $LASTEXITCODE`;
-    const b64 = Buffer.from(script, "utf8").toString("base64");
-    // 对端那条命令的期限 = 调用者要的那个。收尾时间由开发机那头的 hardMs 额外让出来,
-    // 不从这里扣 —— 扣出来的下限(旧版是 5 秒)正是短 timeout 那条漏网路径的根。
-    const secs = Math.max(1, Math.round(timeout / 1000));
-    // 为什么起独立进程而不是 `<cmd> *>&1 | Out-File`:管道要等**所有**持有 stdout 的句柄关闭
-    // 才算结束,而 Windows 上留一个孙进程是常事 —— node-pty 的 conpty_console_list_agent
-    // 崩了却不退,整条命令就永远等不到 EOF。实测 `npm run test:terminal` 明明 exit 0,
-    // 管道模式却挂满 10 分钟报假超时。改成 Start-Process 之后,结束判据是**进程退出**,
-    // 跟残留句柄无关;超时还能 Kill 掉并把已经写下的输出捞回来。
-    // 代价是 stdout/stderr 只能分开重定向(Start-Process 不许两路指向同一个文件),
-    // 所以下面把 stderr 单独拼在后面,而不是交错。
-    const wrapper = [
-      `$ErrorActionPreference='Continue'`,
-      // 外部程序(npm/node/tsx)吐的是 UTF-8 字节,PowerShell 默认按活动代码页(中文机器是 936)解,
-      // 中文输出会变成「鉁?璺緞」这种乱码 —— 测试断言里的中文全糊掉。这两行把两端都钉成 UTF-8。
-      `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8`,
-      // 顺手扫掉一小时前的同格式残留:wrapper 中途崩了、机器断电、会话被掐,下面那套「上传前
-      // 就删干净」都执行不到,总得有个不依赖任何一次会话的兜底。名字是 18 位 hex + 三种固定
-      // 后缀,不会碰到别人的东西;一小时的门槛保证不会误删**正在跑**的另一条命令(单条上限 10 分钟)。
-      `Get-ChildItem -LiteralPath $env:TEMP -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[0-9a-f]{18}\\.(ps1|out|err)$' -and $_.LastWriteTime -lt (Get-Date).AddHours(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue`,
-      `$__d=${psq(cwd ?? "")}`,
-      `$__o=Join-Path $env:TEMP ${psq(`${token}.out`)}; $__r=Join-Path $env:TEMP ${psq(`${token}.err`)}; $__s=Join-Path $env:TEMP ${psq(`${token}.ps1`)}`,
-      // 这个 .ps1 **必须带 BOM**:对端是 Windows PowerShell 5.1(doctor 报 5.1.x),
-      // `-File` 读无 BOM 的脚本时按活动代码页(中文机器 936)解码,命令里但凡有一个中文字
-      // 就会被拆成两个 GBK 字节再错解成别的字符 —— 实测 `win-remote sync` 的那句中文守卫
-      // 提示直接把脚本解析崩了(Unexpected token ')'),而且报错指向的是乱码后的行,
-      // 看不出跟编码有关。写上 BOM 之后 5.1 和 7 都按 UTF-8 读。
-      `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(${psq(b64)})),(New-Object Text.UTF8Encoding $true))`,
-      `$__x=[Diagnostics.Process]::GetCurrentProcess().Path`,
-      `$__nl=[Environment]::NewLine`,
-      // 容器要在起进程**之前**建好(见 kill-tree.mjs 顶部:事后按父链补拍快照够不着脱链后代)。
-      ...jobPreludeLines(),
-      `$__p=Start-Process -FilePath $__x -ArgumentList '-NoProfile','-NonInteractive','-File',$__s -RedirectStandardOutput $__o -RedirectStandardError $__r -PassThru -NoNewWindow` + (cwd ? ` -WorkingDirectory $__d` : ``),
-      jobAssignLine(),
-      `$null=$__p|Wait-Process -Timeout ${secs} -ErrorAction SilentlyContinue`,
-      // 超时收尾要**连整棵进程树一起杀,而且确认它真的退干净了**再往下走。
-      // 只 Kill 直接子进程是不够的:那条命令下面挂着 npm→node→tsx 一长串后代,它们活过这一刀,
-      // 而 rexec 一返回,外面那把工作区锁当场就还回去了 —— 下一个人开始在同一个 worktree 上
-      // checkout/clean,上一条命令的孙子还在里面写文件。两边都各自「正常」,谁也看不出结果为什么
-      // 是错的。三刀(容器 / 父链 / 逐个补刀)和三种结论措辞都在 kill-tree.mjs 里。
-      ...killTreeLines(secs),
-      `Start-Sleep -Milliseconds 300`,
-      `$__t=[string](Get-Content $__o -Raw -ErrorAction SilentlyContinue)`,
-      `$__g=[string](Get-Content $__r -Raw -ErrorAction SilentlyContinue)`,
-      `if($__g){ $__t = $__t + $__nl + '--- stderr ---' + $__nl + $__g }`,
-      // 没杀干净就照实说 —— 这时候「工作区已经没人碰了」这个前提不成立,后面那次同步/测试
-      // 的结果都得存疑,咽下去比报错更坏。
-      `if($__e -eq 124){ $__t = $__t + $__nl + '[win-remote] 超时 ${secs}s,已杀掉进程树' + $__km }`,
-      // 三个临时文件在**上传之前**就删光,上传改从内存发字节(而不是 `-InFile` 指着磁盘)。
-      // 原来的顺序是「先上传、再 Remove-Item」,而开发机一收到 body 就往下走、随手把终端
-      // 会话 DELETE 掉 —— 删文件那句和杀会话是在赛跑,输的时候 `%TEMP%` 里就留下一份
-      // **明文的远程命令**(`.ps1` 里是完整脚本,不只是磁盘垃圾)。现在删在前、发在后,
-      // 本地收到回传时对端磁盘上已经一个 token 文件都没有,竞争这件事从根上不存在。
-      `Remove-Item -LiteralPath $__o,$__r,$__s -Force -ErrorAction SilentlyContinue`,
-      // 关容器 —— 正常跑完那条路径也要关:命令回来了就意味着「对端工作区没人碰了」,
-      // 留个后台后代在里面写文件,下一次同步的 git clean 会跟它撞上(见 kill-tree.mjs)。
-      jobCloseLine(),
-      `$__b=[Text.Encoding]::UTF8.GetBytes([string]$__t)`,
-      `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -Body $__b -ContentType 'text/plain; charset=utf-8' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
-    ].filter(Boolean).join("; ");
+    const wrapper = remoteWrapper({ cmd, cwd, token, timeout, self, port });
 
     // 我们往 PTY 里塞的全部字符 —— 回显判定拿它当原文比对(见 echoFilter)。
     const psreadline = "Set-PSReadLineOption -PredictionSource None";

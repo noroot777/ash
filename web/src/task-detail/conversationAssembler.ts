@@ -133,7 +133,7 @@ export function createAssembler(sessions: readonly Session[]) {
     bubble.steps.push({ entry, anchor: step.textAt });
     // 此刻还在不在等上游：跟老读法实时那一路同一个口径（conversationLiveTurns 的 appendAgentAux 等）。
     const awaiting = event.kind === "usage" || event.kind === "attachment" ? false
-      : event.kind === "tool" || event.kind === "thinking" || event.kind === "error"
+      : event.kind === "plan" || event.kind === "tool" || event.kind === "thinking" || event.kind === "error"
         ? awaitingAfterEvent(auxEvent(event as Parameters<typeof auxEvent>[0]) as AgentAuxEvent) : undefined;
     if (step.envelope) noteLive(bubble, step.envelope, awaiting);
   }

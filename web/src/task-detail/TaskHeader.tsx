@@ -71,6 +71,7 @@ export function TaskHeader({
   onPostMergeReview,
   onDelete,
   inspectorToggle,
+  planChip,
   notify,
 }: {
   task: Task;
@@ -95,6 +96,8 @@ export function TaskHeader({
   onPostMergeReview?: () => void;
   onDelete: () => void;
   inspectorToggle?: ReactNode;
+  /** 标题后面那枚「计划」（PlanModeChip）：开着 Codex 计划模式时常驻，回复框被接管时也看得到。 */
+  planChip?: ReactNode;
   notify: (message: string) => void;
 }) {
   const [title, setTitle] = useState(task.title);
@@ -195,6 +198,7 @@ export function TaskHeader({
         )}
         {taskParentLink(task, allTasks)?.kind !== "dispatch" && <TaskSourceGlyph task={task} allTasks={allTasks} onOpen={onOpenTask} />}
         {task.parentId === null && <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />}
+        {planChip}
       </div>
       <span className="task-head-grow" />
       <span className="task-head-acts" ref={acts}>

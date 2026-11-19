@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { launchChrome } from "./dom-stage.mjs";
 import { waitUntil } from "./wait-until.mjs";
 import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi, seedGoalRecoveryTranscripts } from "./cli-goal-recovery-ui.mjs";
+import { clarifyPlanUi, implementPlanUi } from "./cli-plan-ui.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "navi-cli-ui-"));
 const workspace = join(root, "workspace");
@@ -115,6 +116,17 @@ const boot = `
         if (liveGoal) text += "；测试回合 " + options.env.NAVI_TURN_TOKEN;
         if (options.env.NAVI_TASK_ID === "ordinary-ui-task") text = "普通回合：" + options.env.NAVI_TURN_TOKEN;
         yield { kind: "text", text };
+        if (options.cliCommand?.name === "plan" && options.cliCommand.args === "clarify-ui") {
+          yield { kind: "userInput", questions: [
+            { question: "什么时候重置？", options: ["每周一"] },
+            { question: "什么时候生效？", options: ["立即生效"] },
+          ] };
+        } else if (options.cliState?.plan) {
+          const id = "plan-" + options.env.NAVI_TURN_TOKEN;
+          yield { kind: "plan", id, text: "", status: "streaming" };
+          yield { kind: "plan", id, text: "尚未定稿", status: "streaming", delta: true };
+          yield { kind: "plan", id, text: "# 计划 UI 验证\\n\\n| 步骤 | 结果 |\\n| --- | --- |\\n| 实施 | 保留作用域 |", status: "complete" };
+        }
         if (liveGoal) await interrupted;
         yield { kind: "done", exitStatus: 0 };
       })(),
@@ -192,13 +204,25 @@ try {
     const completed = recorded.some((session) => session.endedAt && session.endedAt !== previousEnds.get(session.id));
     return completed && !["running", "queued"].includes(task.status) && task;
   }, { interval: 50, message: `任务 ${taskId} 跑完这一回合、回到空闲（task remained busy）` });
+  // 计划模式下的回合以一份定稿计划收尾（上面的假执行器照此产出），「实施此计划？」随即占住回复框
+  // （PlanReadyCard）。接着要用回复框的步骤先把它收起；收起按这一份计划记着，刷新后仍收着。
+  const settlePlanCard = async (task) => {
+    if (!page.url().includes(`task=${task.id}`)) return task;
+    const invocation = await lastInvocation();
+    const planned = invocation.taskId === task.id && invocation.cliState?.plan === true && invocation.cliCommand?.args !== "clarify-ui";
+    if (!planned || !task.codexPlanMode || task.question || !task.codexPlanScopes.some((scope) => scope.executorId === invocation.cliState.profileId)) return task;
+    const collapse = page.getByRole("button", { name: "收起，先看计划", exact: true });
+    await collapse.click();
+    await page.getByRole("textbox", { name: "回复任务" }).waitFor();
+    return task;
+  };
   const sendCodex = async (text) => {
     const previousEnds = await sessionEnds("codex-ui-task");
     await codexReply.fill(`${text} `);
     const replied = page.waitForResponse((value) => value.url().endsWith("/tasks/codex-ui-task/reply") && value.request().method() === "POST");
     await page.getByRole("button", { name: "发送回复", exact: true }).click();
     assert.equal((await replied).status(), 202);
-    return idleTask("codex-ui-task", previousEnds);
+    return settlePlanCard(await idleTask("codex-ui-task", previousEnds));
   };
   const planNotice = page.getByRole("status", { name: "Codex 计划模式" });
   const replyAs = async (text, agent, executorId, taskId = "codex-ui-task") => {
@@ -207,7 +231,7 @@ try {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, agent, executorId }),
     });
     assert.equal(response.status, 202);
-    return idleTask(taskId, previousEnds);
+    return settlePlanCard(await idleTask(taskId, previousEnds));
   };
   const lastInvocation = async () => JSON.parse((await readFile(traceFile, "utf8")).trim().split("\n").at(-1));
 
@@ -255,6 +279,9 @@ try {
   await page.screenshot({ path: join(screenshots, "plan-mode-reloaded.png"), fullPage: true });
   assert.equal((await sendCodex("继续拆解方案")).codexPlanMode, true);
   await page.getByText("测试执行器：只讨论计划", { exact: true }).first().waitFor();
+  await clarifyPlanUi({ page, base, sendCodex, sessionEnds, idleTask, lastInvocation, screenshots });
+  await implementPlanUi({ page, base, sessionEnds, idleTask, lastInvocation, screenshots });
+  await sendCodex("/plan");
   assert.equal((await sendCodex("/plan off")).codexPlanMode, false);
   await planNotice.waitFor({ state: "hidden" });
   await page.reload();
@@ -272,7 +299,7 @@ try {
     assert.notEqual((await lastInvocation()).cliState.plan, true);
     await page.reload();
     await planNotice.waitFor();
-    assert.match(await planNotice.innerText(), /codex@验证（任务归属人）/);
+    assert.match(await planNotice.innerText(), /codex@验证/);
   }
   assert.equal((await sendCodex("照方案动手改吧")).codexPlanMode, true);
   assert.equal((await lastInvocation()).cliState.plan, true);
@@ -313,7 +340,7 @@ try {
   assert.equal(claudeStandingTask.codexPlanMode, true);
   assert.equal(claudeStandingTask.codexPlanScopes.length, 2);
   await planNotice.waitFor();
-  assert.match(await planNotice.innerText(), /codex@验证（任务归属人）.*codex@验证备用（任务归属人）/);
+  assert.match(await planNotice.innerText(), /codex@验证.*codex@验证备用/);
   await page.reload();
   await page.getByRole("textbox", { name: "回复任务" }).waitFor();
   await planNotice.waitFor();
@@ -333,7 +360,7 @@ try {
     assert.equal(replied.status(), 202);
     assert.equal(replied.request().postDataJSON().agent, "codex");
     assert.equal(replied.request().postDataJSON().executorId, "codex-ui");
-    const task = await idleTask("codex-ui-task", previousEnds);
+    const task = await settlePlanCard(await idleTask("codex-ui-task", previousEnds));
     assert.equal(task.agentType, claudeStandingTask.agentType);
     assert.equal(task.executorId, claudeStandingTask.executorId);
     return task;
@@ -380,7 +407,7 @@ try {
   await page.goto(`${base}/?project=cli-ui&task=fresh-claude-plan-task`);
   await page.getByRole("textbox", { name: "回复任务" }).waitFor();
   await planNotice.waitFor();
-  assert.match(await planNotice.innerText(), /codex@验证（任务归属人）.*codex@验证备用（任务归属人）/);
+  assert.match(await planNotice.innerText(), /codex@验证.*codex@验证备用/);
   const beforeClaudeRun = await sessionEnds("fresh-claude-plan-task");
   const claudeRunResponse = page.waitForResponse((value) => value.url().endsWith("/tasks/fresh-claude-plan-task/run") && value.request().method() === "POST");
   await page.getByRole("button", { name: "运行", exact: true }).click();

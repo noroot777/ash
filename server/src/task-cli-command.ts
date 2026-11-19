@@ -1,5 +1,5 @@
 import type { AgentType } from "@navi/shared";
-import { isGoalExecution, validateCliCommand } from "@navi/shared/cli-commands";
+import { isGoalExecution, isPlanImplementation, validateCliCommand } from "@navi/shared/cli-commands";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { ownerIdOf, actorOf } from "./auth/context.js";
@@ -14,6 +14,7 @@ import { enqueueMessage, flushPendingWhenTurnIdle } from "./pending-messages.js"
 import { cliGoalScopeLabel, cliGoalScopeSelector, cliGoalScopes, formatCliGoalScopes, runnableCliGoalScope, selectCliGoalScope } from "./task-cli-goal-scopes.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { advanceQueueFromTask } from "./scheduler.js";
+import { assertCodexPlanReady } from "./task-plan.js";
 
 const LIVE_COMMANDS = new Set(["goal", "status", "usage", "mcp", "ps", "stop", "debug-config", "hooks", "apps", "plugins", "rename"]);
 
@@ -29,6 +30,13 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   const clear = command.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(command.args);
   // 稍后发送(定时 / 等任务完成)的命令留到投递那一刻执行:这里只做预检,不当场执行。
   const deferred = !!(body.sendAt || body.afterTaskId);
+  if (isPlanImplementation(command)) {
+    if (running || deferred) throw new Error("请等计划回合结束后直接确认实施，不支持排队或定时确认");
+    const state = await resolvedCliState(task, agentType, body.agent ? body.executorId ?? null : task.executorId, userId);
+    if (!state.plan) throw new Error("当前作用域的计划模式已关闭，请重新确认计划");
+    await assertCodexPlanReady(task.id, state.profileId ?? null, userId, command.args.split(/\s+/)[1]);
+    return null;
+  }
   if (deferred && command.name === "goal" && (command.goalScope || command.args === "--scopes")) throw new Error("目标作用域查询与显式选择不支持稍后发送，请直接发送斜杠命令");
   if (command.name === "goal" && command.args === "--scopes") {
     const text = await formatCliGoalScopes(task, userId);

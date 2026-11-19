@@ -11,7 +11,7 @@ import { textAnchorOf, type RecordIdentity, type TextAnchor } from "@navi/shared
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 import { closeProse, sentinelIdentity, traceRecord } from "./transcript-identity.js";
 
-type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
+type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" | "plan" }>;
 type TraceTextEvent = { kind: "text"; text: string };
 // 本回合的 token 用量。落 trace 而不是只落库,是因为**会话行只有累计值**——刷新
 // 后要按回合把「这一轮花了多少」放回各自的气泡,就得有一份按 turnStartedAt 分组
@@ -225,6 +225,9 @@ function validTraceEvent(event: unknown): boolean {
     case "text":
     case "thinking":
       return isString(e.text);
+    case "plan":
+      return isString(e.id) && isString(e.text) && (e.status === "streaming" || e.status === "complete")
+        && (e.delta === undefined || (e.delta === true && e.status === "streaming"));
     case "tool":
       return isString(e.name) && optionalString(e.detail)
         && (e.nativeWork === undefined || validNativeWork(e.nativeWork));

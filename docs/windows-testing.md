@@ -10,6 +10,10 @@
 
 ## 〇、当前基线
 
+**2026-11-19 改名 navi 之后的第一轮**(32 绿 / 9 红,红的逐条拿改名前的版本对照过)记录在
+`docs/rename-navi-windows.md` 第一、二节。那 9 红在同一天修掉,修完重测的结果是下面这一段;
+再往下 10-23 那一段是改名之前的记录。
+
 **2026-11-19 实测(改名 navi 之后,Windows PowerShell 5.1 / node v22.20.0)。** 叶子环境照
 `scripts/test-runner.mjs` 的 `leafEnv`(擦掉各代库/运行目录/数据目录,每条自己的 `NAVI_DATA_DIR`
 与 `TEMP`/`TMP`,`NAVI_TEST_NO_MODEL_PROBE=1`),`PATH` 最前另放一组一调就失败的假 CLI。

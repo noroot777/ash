@@ -1,0 +1,88 @@
+/* 计划书（ProposedPlan）：会话里一份独立的文档，不是一段回复。纸面感——白底、细边、宽松的行距、
+   墨色正文；动作（下载、复制、全屏）指到才出。正在拟定时顶边一道流动的细线，定稿后线消失。 */
+.proposed-plan {
+  position: relative; margin: 14px 0; min-width: 0; overflow: hidden;
+  border: 1px solid var(--line2); border-radius: 14px; background: var(--panel);
+  box-shadow: var(--surface-shadow);
+}
+.proposed-plan.is-writing::before {
+  position: absolute; inset: 0 0 auto; height: 2px; content: "";
+  background: linear-gradient(90deg, transparent, var(--ink) 50%, transparent) 0 0 / 40% 100% no-repeat;
+  opacity: .5; animation: proposed-plan-writing 1.4s var(--ease-out) infinite;
+}
+@keyframes proposed-plan-writing { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+
+.proposed-plan-head { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 6px 10px 0 20px; }
+.proposed-plan-head > span { display: inline-flex; flex: 1 1 auto; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: var(--t-xs); }
+.proposed-plan-head > span svg { flex: none; color: var(--faint); }
+.proposed-plan.is-writing .proposed-plan-head > span { color: var(--ink); }
+.proposed-plan-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.proposed-plan:hover .proposed-plan-actions, .proposed-plan-actions:focus-within { opacity: 1; }
+@media (hover: none) { .proposed-plan-actions { opacity: 1; } }
+.proposed-plan-actions button, .proposed-plan-dialog > header button {
+  display: inline-grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.proposed-plan-actions button:hover:not(:disabled), .proposed-plan-dialog > header button:hover { background: var(--hover-bg); color: var(--ink); }
+.proposed-plan-actions button:disabled { opacity: .4; cursor: default; }
+
+/* 正文：比会话里的回复大一号、墨色，读起来像文档。 */
+.proposed-plan-body { padding: 2px 28px 26px; overflow-wrap: anywhere; }
+.proposed-plan-body .task-markdown { color: color-mix(in oklab, var(--ink) 86%, var(--muted)); font-size: 13.5px; line-height: 1.8; }
+.proposed-plan-body .task-markdown > :first-child { margin-top: 0; }
+.proposed-plan-body .task-markdown h1 { margin: 6px 0 14px; font-size: 20px; letter-spacing: -.01em; }
+.proposed-plan-body .task-markdown h2 { margin: 26px 0 8px; font-size: 15px; }
+.proposed-plan-body .task-markdown h3 { margin: 18px 0 6px; font-size: 13.5px; font-weight: var(--w-strong); }
+.proposed-plan-body .task-markdown p, .proposed-plan-body .task-markdown ul, .proposed-plan-body .task-markdown ol { margin: 8px 0; }
+.proposed-plan-body .task-markdown li + li { margin-top: 4px; }
+.proposed-plan-body pre { max-width: 100%; overflow-x: auto; }
+.proposed-plan-pending { display: block; padding: 4px 0 2px; color: var(--faint); font-size: var(--t-sm); }
+
+.proposed-plan-backdrop {
+  position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 32px;
+  background: lch(0 0 0 / .32); animation: proposed-plan-fade var(--dur-2) var(--ease-out);
+}
+.proposed-plan-dialog {
+  display: flex; width: min(860px, 100%); max-height: 92dvh; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--line2); border-radius: 16px; background: var(--panel); color: var(--ink);
+  box-shadow: 0 30px 90px -20px lch(0 0 0 / .35);
+}
+.proposed-plan-dialog:focus-visible { outline: none; }
+.proposed-plan-dialog > header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 6px 28px; }
+.proposed-plan-dialog > header strong { color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.proposed-plan-dialog > .proposed-plan-body { flex: 1 1 auto; overflow-y: auto; padding: 4px 48px 44px; }
+.proposed-plan-dialog .task-markdown { font-size: 14.5px; }
+.proposed-plan-dialog .task-markdown h1 { font-size: 24px; }
+.proposed-plan-dialog .task-markdown h2 { font-size: 17px; }
+@keyframes proposed-plan-fade { from { opacity: 0; } }
+
+/* 「实施此计划？」：答题卡的同一副外形（question-card.css），这里只补它特有的几处。 */
+.plan-ready-title { min-width: 0; flex: 1 1 auto; padding-top: 3px; font-size: 13.5px; font-weight: var(--w-strong); }
+.question-card-options .plan-ready-go { align-items: center; background: var(--hover-bg); font-weight: var(--w-medium); }
+.question-card-options .plan-ready-go:hover:not(:disabled) { background: color-mix(in oklab, var(--ink) 8%, var(--panel)); }
+.plan-ready-go > .question-card-key { background: var(--action); color: var(--on-action); }
+.plan-ready-go > span:nth-child(2) { flex: 1 1 auto; }
+.plan-ready-go > svg { flex: none; color: var(--muted); transition: transform var(--dur-1) var(--ease-out); }
+.plan-ready-go:hover:not(:disabled) > svg { color: var(--ink); transform: translateX(2px); }
+.question-card-note > .plan-ready-pen { margin-bottom: 7px; background: transparent; color: var(--faint); }
+
+@media (max-width: 600px) {
+  .proposed-plan-head { padding-left: 14px; }
+  .proposed-plan-body { padding: 0 16px 18px; }
+  .proposed-plan-backdrop { padding: 8px; }
+  .proposed-plan-dialog { max-height: 96dvh; }
+  .proposed-plan-dialog > .proposed-plan-body { padding: 0 18px 24px; }
+}
+
+/* 标题行里那枚「计划」（PlanModeChip）。 */
+.plan-mode-chip {
+  display: inline-flex; flex: none; align-items: center; gap: 4px; height: 22px; margin-left: 6px; padding: 0 9px 0 8px;
+  border-radius: var(--r-full); background: var(--accent-soft); color: var(--accent);
+  font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap;
+}
+.plan-mode-chip:has(button) { padding-right: 3px; }
+.plan-mode-chip button {
+  display: grid; width: 18px; height: 18px; place-items: center; border: 0; border-radius: 50%;
+  background: transparent; color: inherit; opacity: .65;
+}
+.plan-mode-chip button:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 14%, transparent); opacity: 1; }

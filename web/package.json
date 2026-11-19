@@ -6,7 +6,7 @@
   "//testStage": "test 链被 scripts/test-runner.mjs 并行跑时，先用它起一份共用的 Chrome 和 vite 交给所有 DOM 回归（单独跑某条测试时不经过它）。",
   "testStage": "scripts/dom-stage.mjs",
   "scripts": {
-    "test:cli-commands": "node scripts/test-cli-commands-ui.mjs && node scripts/test-cli-goal-lifecycle-ui.mjs",
+    "test:cli-commands": "node scripts/test-cli-commands-ui.mjs && node scripts/test-cli-goal-lifecycle-ui.mjs && node scripts/test-codex-plan-dom.mjs",
     "test:native-work": "npm -w @navi/server run test:native-work && tsx --import ./scripts/ignore-css-hooks.mjs scripts/test-native-work-metadata.ts && tsx --import ./scripts/ignore-css-hooks.mjs scripts/test-native-work-presentation.tsx && node scripts/test-native-work-dom.mjs",
     "//test:upstream-retry-placement": "上游重试这类过程提示排在执行过程里它发生的那一步下面，而不是会话结尾那一坨；落盘/直播/折叠/duet 四路一致。",
     "test:native-agent-segments": "node --experimental-strip-types scripts/test-native-agent-segments.mjs",

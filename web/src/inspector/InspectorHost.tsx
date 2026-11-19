@@ -21,7 +21,11 @@ import {
   applyInspectorEntry,
   requestedInspectorFocus,
   clampWidth,
+  clampWideRatio,
   INSPECTOR_DEFAULT_WIDTH,
+  INSPECTOR_WIDE_DEFAULT,
+  INSPECTOR_WIDE_MAX,
+  INSPECTOR_WIDE_MIN,
   INSPECTOR_MAX_WIDTH,
   INSPECTOR_MIN_WIDTH,
   orderedValidTabs,
@@ -106,7 +110,9 @@ function InspectorHostState<Context>({
     if (narrow) setNarrowOpen(state.visible);
   }
   const panelVisible = (narrow ? narrowOpen : state.visible) && activeDescriptor !== null;
-  const dragStart = useRef<{ x: number; width: number } | null>(null);
+  // 宽格（descriptor.wide）按整块布局的比例算宽；窄屏上整栏本来就盖满，不分宽窄。
+  const wide = !!activeDescriptor?.wide && !narrow;
+  const dragStart = useRef<{ x: number; width: number; total: number; wide: boolean } | null>(null);
   const previousBodyStyle = useRef<{ cursor: string; userSelect: string } | null>(null);
   const instanceId = useId();
   const panelId = `${safeDomId(instanceId)}-inspector`;
@@ -179,8 +185,11 @@ function InspectorHostState<Context>({
     };
     const resize = (event: MouseEvent) => {
       if (!dragStart.current) return;
-      const nextWidth = dragStart.current.width + dragStart.current.x - event.clientX;
-      setState((current) => ({ ...current, width: clampWidth(nextWidth) }));
+      const { width, x, total, wide: dragWide } = dragStart.current;
+      const nextWidth = width + x - event.clientX;
+      setState((current) => dragWide
+        ? { ...current, wideRatio: clampWideRatio(nextWidth / total) }
+        : { ...current, width: clampWidth(nextWidth) });
     };
     window.addEventListener("mousemove", resize);
     window.addEventListener("mouseup", stopResizing);
@@ -337,7 +346,7 @@ function InspectorHostState<Context>({
         <aside
           id={panelId}
           className={`inspector-host${resizing ? " inspector-host--resizing" : ""}`}
-          style={{ "--inspector-width": `${state.width}px` } as CSSProperties}
+          style={{ "--inspector-width": wide ? `${state.wideRatio * 100}%` : `${state.width}px` } as CSSProperties}
           aria-label="Inspector 侧边栏"
         >
           <div
@@ -345,13 +354,18 @@ function InspectorHostState<Context>({
             role="separator"
             aria-label="调整 Inspector 宽度，双击恢复默认宽度"
             aria-orientation="vertical"
-            aria-valuemin={INSPECTOR_MIN_WIDTH}
-            aria-valuemax={INSPECTOR_MAX_WIDTH}
-            aria-valuenow={state.width}
+            aria-valuemin={wide ? INSPECTOR_WIDE_MIN * 100 : INSPECTOR_MIN_WIDTH}
+            aria-valuemax={wide ? INSPECTOR_WIDE_MAX * 100 : INSPECTOR_MAX_WIDTH}
+            aria-valuenow={wide ? Math.round(state.wideRatio * 100) : state.width}
             onMouseDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();
-              dragStart.current = { x: event.clientX, width: state.width };
+              const host = event.currentTarget.parentElement!;
+              dragStart.current = {
+                x: event.clientX, wide,
+                width: wide ? host.getBoundingClientRect().width : state.width,
+                total: host.parentElement?.getBoundingClientRect().width || window.innerWidth,
+              };
               previousBodyStyle.current = {
                 cursor: document.body.style.cursor,
                 userSelect: document.body.style.userSelect,
@@ -360,7 +374,9 @@ function InspectorHostState<Context>({
               document.body.style.userSelect = "none";
               setResizing(true);
             }}
-            onDoubleClick={() => setState((current) => ({ ...current, width: INSPECTOR_DEFAULT_WIDTH }))}
+            onDoubleClick={() => setState((current) => wide
+              ? { ...current, wideRatio: INSPECTOR_WIDE_DEFAULT }
+              : { ...current, width: INSPECTOR_DEFAULT_WIDTH })}
           />
           <InspectorRail
             items={openedDescriptors}

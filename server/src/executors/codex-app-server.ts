@@ -32,6 +32,7 @@ import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 import { isGoalExecution } from "@navi/shared/cli-commands";
 import { codexTurnError } from "./model-failure.js";
 import { CodexNaviMcpStatus } from "./navi-mcp-confirm.js";
+import { CodexPlanStream } from "./codex-plan.js";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
@@ -42,6 +43,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const seenReasoningDeltas = new Set<string>();
   const seenImages: ImageStore = imageStore();
   const nativeWork = new NativeWorkTrace();
+  const proposal = new CodexPlanStream();
   let requestId = opts.reattach ? Date.now() : 0;
   let threadId = opts.reattach?.threadId ?? opts.sessionId ?? "";
   let turnId = opts.reattach?.turnId ?? "";
@@ -235,6 +237,11 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       || message.method === "item/fileChange/requestApproval") {
       write({ id: message.id, result: { decision: "decline" } });
     } else if (message.method === "item/tool/requestUserInput") {
+      const question = proposal.questions(message.params ?? {});
+      if (question) {
+        push(question);
+        void request("turn/interrupt", { threadId, turnId }).catch((error) => finish(1, String(error)));
+      }
       write({ id: message.id, result: { answers: {} } });
     } else {
       write({ id: message.id, error: { code: -32601, message: `Navi 不处理 App Server 请求 ${message.method}` } });
@@ -315,7 +322,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (status === "failed" && error) {
       structuredErrors.push(error);
       push(codexTurnError(error));
-    } else if (status === "interrupted" && !stopRequested && !native.expectedInterruption) {
+    } else if (status === "interrupted" && !stopRequested && !native.expectedInterruption && !proposal.awaitingInput) {
       push({ kind: "error", message: "Codex 当前回合被意外中断" });
     }
     // 本回合的 navi 工具在不在:清单那一问还没回来就有界地等一下,等不到就如实说核实不了(navi-mcp-confirm.ts)。
@@ -330,7 +337,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (latestUsage) {
       push({ kind: "usage", usage: timed ? { ...usageEvent(latestUsage.total), timed } : usageEvent(latestUsage.total) });
     }
-    finish(status === "completed" || (status === "interrupted" && native.expectedInterruption) ? 0 : 1);
+    finish(status === "completed" || (status === "interrupted" && (native.expectedInterruption || proposal.awaitingInput)) ? 0 : 1);
   };
 
   const handleNotification = (message: any) => {
@@ -379,6 +386,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       for (const activity of codexChildWork(message.method, p)) push(activity);
       return;
     }
+    const plan = proposal.notification(message.method, p);
+    if (plan) push(plan);
     switch (message.method) {
       case "turn/plan/updated": {
         push(nativePlanSnapshot(`plan:${p.turnId}`, p.plan, p.explanation));
@@ -401,9 +410,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         seenReasoningDeltas.add(p.itemId);
         pushDelta("thinking", p.delta);
         break;
-      case "item/plan/delta":
-        if (p.delta) push({ kind: "thinking", text: p.delta });
-        break;
+      case "item/reasoning/summaryPartAdded": pushDelta("thinking", "\n\n"); break;
       case "error": {
         // 判据(重试中 = notice、重试完了还是错 = 裸 error)在 codex-error-event.ts ——
         // 子智能体那条路(native-agent-activity.ts)读的是同一份,别在这儿再内联一次。

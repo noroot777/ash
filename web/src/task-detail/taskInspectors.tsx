@@ -1,5 +1,5 @@
 import type { Group, Session, Task, TaskListItem } from "@navi/shared";
-import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TreeView } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitPullRequest, Globe, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TerminalWindow, TreeView } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { InspButton, InspNone } from "../inspector/parts.tsx";
@@ -25,6 +25,9 @@ import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 import type { InfoRunFacts } from "./info/infoRunFacts.ts";
 import { reviewPanelSources } from "../review/reviewTarget.ts";
 import type { ReviewRetryAction } from "./turnRetry.ts";
+import type { TaskRuntime } from "../task-runtime/useTaskRuntime.ts";
+import { ServiceInspector } from "../task-runtime/ServiceInspector.tsx";
+import { BrowserInspector } from "../task-runtime/TaskBrowserPane.tsx";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -56,6 +59,8 @@ export interface TaskInspectorContext {
   onOpenScmDiff: (target: ScmDiffTarget) => void;
   /** 此刻能「继续本轮审查」的那一轮和那个动作（会话尾注上那颗同一份，见 turnRetry.ts）。 */
   reviewRetry: ReviewRetryAction | null;
+  /** 托管服务与共享浏览器（「服务」「浏览器」两格），由 useTaskInspectorStack 拉。 */
+  runtime: TaskRuntime;
 
   notify: Notify;
 }
@@ -88,7 +93,7 @@ function MonitorInspectorPane({ context }: { context: TaskInspectorContext }) {
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
-// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 子任务 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
+// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 子任务 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 服务 · 浏览器 · 哨兵。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 //
 // 子智能体和哨兵这两格的 `defaultOpen` 是动态的（见 inspector/usedTabs.tsx）：全部面板一直
@@ -242,6 +247,24 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
         </InspNone>
       </div>
     ),
+  },
+  {
+    // 服务、浏览器也走「用过才浮现」（开合由 useTaskInspectorStack 按运行环境翻）：智能体托管过服务、
+    // 开过共享浏览器才冒到图标条上。浏览器是宽格，智能体一开它就自动切过去（RuntimeAutoOpen）。
+    id: "service",
+    cluster: 3,
+    title: "服务",
+    icon: <TerminalWindow size={14} />,
+    render: (context) => <ServiceInspector runtime={context.runtime}
+      taskRunning={context.task.status === "running" || context.task.status === "queued"} />,
+  },
+  {
+    id: "browser",
+    cluster: 3,
+    title: "浏览器",
+    icon: <Globe size={14} />,
+    wide: true,
+    render: (context) => <BrowserInspector runtime={context.runtime} />,
   },
   {
     // 和子智能体同一条「用过才浮现」：开合由 useMonitorInspector 按「这个任务挂过哨兵没有」

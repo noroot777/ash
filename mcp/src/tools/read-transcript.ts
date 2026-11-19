@@ -15,6 +15,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { parseSessionOutput } from "@navi/shared/session-output";
 import { call, callText, fail, ok } from "../runtime.js";
+import { planTranscript } from "../plan-transcript.js";
 
 type TaskRow = Record<string, unknown>;
 type SessionRow = {
@@ -217,14 +218,19 @@ server.registerTool(
         const meta = [s.role, s.executor, s.turnModel, s.sideTurn ? "旁路回合" : "",
           `${local(s.startedAt)}${s.endedAt ? ` → ${local(s.endedAt)}` : " → 进行中"}`].filter(Boolean).join(" · ");
         let trace = "";
-        if (includeTrace) {
+        let plans = "";
+        {
           // 老会话(trace 2026-08-01 才加)服务端已经给成功的 `[]` 了,所以这里 catch 到的
           // **一定是真失败**。把它说成「多半跑在该功能上线之前」等于把故障粉饰成历史
           // 遗留,读的人连重试的念头都不会有 —— 原样把错误带出来。
-          try { trace = renderTrace((await call("GET", `/sessions/${s.id}/trace`)) as TraceEntry[]); }
+          try {
+            const entries = await call("GET", `/sessions/${s.id}/trace`) as TraceEntry[];
+            if (includeTrace) trace = renderTrace(entries);
+            plans = planTranscript(entries);
+          }
           catch (e) { trace = `### 执行过程\n（读不到:${e instanceof Error ? e.message : String(e)}）\n\n`; }
         }
-        bodies.push({ id: s.id, title: `## 会话 ${i + 1}/${rows.length} · ${s.id} · ${meta}`, body: `${trace}${renderSegments(raw)}` });
+        bodies.push({ id: s.id, title: `## 会话 ${i + 1}/${rows.length} · ${s.id} · ${meta}`, body: `${trace}${renderSegments(raw)}${plans ? `\n\n${plans}` : ""}` });
       }
 
       const full = `${head}\n\n${bodies.map((b) => `${b.title}\n\n${b.body}`).join(SEP)}`;
