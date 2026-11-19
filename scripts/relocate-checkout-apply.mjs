@@ -1,19 +1,27 @@
 // 本地目录迁移的执行。每个会改盘的动作都经 journal.step：先把「怎么退回它」落盘，再动手（协议与退回
 // 见 relocate-checkout-journal.mjs）。中途出错时账本里就是做到哪儿了：--rollback 照账本倒着退，或者修好
 // 原因再跑一遍 —— 搬完目录之后整份重新清点一次再往下做，做过的不会再做。
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, symlinkSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { memoryFiles, scanConfigs } from "./relocate-checkout-agents.mjs";
+import { configProblems, memoryFiles, scanConfigs, tomlValid } from "./relocate-checkout-agents.mjs";
 import { lexists } from "./relocate-checkout-fs.mjs";
 import { relinkAtomic, writeAtomic } from "./relocate-checkout-journal.mjs";
-import { mapPath, rewriteJson, rewriteText } from "./relocate-checkout-paths.mjs";
+import { rewriteJson, rewriteText } from "./relocate-checkout-paths.mjs";
+import { afterPath } from "./relocate-checkout-roots.mjs";
 import { scan } from "./relocate-checkout-scan.mjs";
 
-/** 把 src 整个挪到 dst；dst 已经有了就逐项并进去（同名目录往下并，内容相同的文件丢掉 src 那份）。 */
+const modeOf = (p) => statSync(p).mode & 0o7777;
+
+/**
+ * 把 src 整个挪到 dst；dst 已经有了就逐项并进去（同名目录往下并，内容相同的文件丢掉 src 那份）。
+ * 替 dst 建的上级目录、删掉的源目录（连同它的权限）、丢掉的文件（连同它的权限）都记进账本，退回时原样建回。
+ */
 function moveTree(src, dst, journal, kind) {
   if (!lexists(dst)) {
-    mkdirSync(dirname(dst), { recursive: true });
+    const missing = [];
+    for (let d = dirname(dst); !lexists(d); d = dirname(d)) missing.unshift(d);
+    for (const d of missing) journal.step({ kind, op: "mkdir", dir: d }, () => mkdirSync(d));
     journal.step({ kind, op: "rename", from: src, to: dst }, () => renameSync(src, dst));
     return;
   }
@@ -25,13 +33,13 @@ function moveTree(src, dst, journal, kind) {
     } else if (lstatSync(s).isDirectory() && lstatSync(d).isDirectory()) {
       moveTree(s, d, journal, kind);
     } else if (lstatSync(s).isFile() && readFileSync(s).equals(readFileSync(d))) {
-      const { backup } = journal.backup(s);
-      journal.step({ kind, op: "drop-identical", file: s, backup }, () => unlinkSync(s));
+      const { backup, mode } = journal.backup(s);
+      journal.step({ kind, op: "drop-identical", file: s, backup, mode }, () => unlinkSync(s));
     } else {
       throw new Error(`合并 ${src} → ${dst} 时撞上不同内容的 ${name}（演练时没有这个冲突，期间被改过）`);
     }
   }
-  journal.step({ kind, op: "rmdir", dir: src }, () => rmdirSync(src));
+  journal.step({ kind, op: "rmdir", dir: src, mode: modeOf(src) }, () => rmdirSync(src));
 }
 
 /**
@@ -62,9 +70,9 @@ function rewriteDb(file, rules, journal, log) {
       }
     }
     if (!work.length) return;
-    const { backup } = journal.backup(file);
+    const { backup, mode } = journal.backup(file);
     let changed = 0;
-    journal.step({ kind: "db", op: "restore", file, backup }, () => {
+    journal.step({ kind: "db", op: "restore", file, backup, mode }, () => {
       db.exec("BEGIN IMMEDIATE");
       try {
         for (const w of work) {
@@ -84,22 +92,29 @@ function rewriteDb(file, rules, journal, log) {
   }
 }
 
-/** JSON 文件逐层改写（键也换），文本文件按行内前缀换。JSON 键改完撞名就停下：哪份该留只有人知道。 */
+/**
+ * JSON 文件逐层改写（键也换），其余按前缀换。写之前就着**此刻的正文**再判一次能不能安全改（与清点
+ * 同一个 configProblems），改完的 JSON / TOML 再解析一遍：任何一样不过就停下，这份文件一个字节不动。
+ */
 function rewriteFile(file, kind, rules, journal, log, label) {
   if (!existsSync(file)) return false;
   const text = readFileSync(file, "utf8");
+  if (kind !== "text") {
+    const problems = configProblems(text, kind, rules);
+    if (problems.length) throw new Error(`${file}：${problems.join("；")}（演练时没有，期间被改过）`);
+  }
   let next;
   if (kind === "json") {
     const value = JSON.parse(text);
-    const collisions = [];
-    const rewritten = rewriteJson(value, rules, collisions);
-    if (collisions.length) throw new Error(`${file}：键改完会和已有的重名（${collisions.map((c) => c.existing).join("、")}），演练时没有，期间被改过`);
+    const rewritten = rewriteJson(value, rules);
     if (JSON.stringify(rewritten) === JSON.stringify(value)) return false;
     next = JSON.stringify(rewritten, null, /^\{\n(\s+)/.exec(text)?.[1] ?? 2) + (text.endsWith("\n") ? "\n" : "");
+    JSON.parse(next);
   } else {
     const r = rewriteText(text, rules);
     if (!r.count) return false;
     next = r.text;
+    if (kind === "toml" && tomlValid(next) === false) throw new Error(`${file}：改完不是合法 TOML，没改`);
   }
   const { backup, mode } = journal.backup(file);
   journal.step({ kind: label, op: "restore", file, backup, mode }, () => writeAtomic(file, next, mode));
@@ -131,8 +146,14 @@ export function apply(plan, { journal, link, log, home, env, claims, db: dbExpli
     log(`  链接：${from} → ${target}`);
   }
 
-  const now = scan({ from, to, home, env, claims, db: dbExplicit && (mapPath(dbExplicit, from, to) ?? dbExplicit) });
-  if (now.errors.length) throw new Error(`搬完目录后重新清点时有读不到的东西：${now.errors.slice(0, 3).join("；")}`);
+  // 显式 --db 的换算在 resolveRoots 里（按树此刻的位置），这里原样传。
+  const now = scan({ from, to, home, env, claims, db: dbExplicit });
+  const stop = [
+    ...now.errors,
+    ...(now.service?.running ? now.service.reasons : []),
+    ...(now.processes?.blocking ?? []).map((p) => `进程 ${p.pid}（${p.command}）的工作目录在 ${p.cwd}`),
+  ];
+  if (stop.length) throw new Error(`搬完目录后重新清点时发现：${stop.slice(0, 3).join("；")}`);
   const { rules } = now;
 
   // 3. git 工作区两头的路径。
@@ -155,10 +176,17 @@ export function apply(plan, { journal, link, log, home, env, claims, db: dbExpli
   for (const f of now.dataFiles) rewriteFile(f.file, "json", rules, journal, log, "数据文件");
 
   // 7. claude 的会话目录，然后是所有已认领目录里的长期记忆（含工作区自己的、子目录里的）。
-  for (const m of now.claude.moves) moveTree(m.from, m.to, journal, "claude");
+  //    先记一笔改名映射（账本里的这一笔是以后改文本引用的依据：改过名的目录磁盘上证明不了归属）。
+  for (const m of now.claude.moves) {
+    journal.step({ kind: "claude", op: "map", key: `${afterPath(m.configDir, { from, to })}/projects/${basename(m.from)}`, next: basename(m.to) });
+    moveTree(m.from, m.to, journal, "claude");
+  }
   if (now.claude.moves.length) log(`  claude 会话目录：${now.claude.moves.length} 个`);
   let memory = 0;
-  for (const file of memoryFiles(now.dirs.claude, { to, errors: [] })) if (rewriteFile(file, "text", rules, journal, null, "记忆")) memory += 1;
+  const memoryDirs = [...now.claude.moves.map((m) => m.to), ...now.memoryDirs.filter((d) => !now.claude.moves.some((m) => m.from === d))];
+  const memoryErrors = [];
+  for (const file of memoryFiles(memoryDirs, memoryErrors)) if (rewriteFile(file, "text", rules, journal, null, "记忆")) memory += 1;
+  if (memoryErrors.length) throw new Error(memoryErrors.slice(0, 3).join("；"));
   if (memory) log(`  claude 长期记忆：改了 ${memory} 份`);
 
   // 8. grok 的会话目录。
@@ -188,9 +216,8 @@ export function apply(plan, { journal, link, log, home, env, claims, db: dbExpli
   }
 
   // 10. 各家 CLI 的配置（MCP 登记、项目信任表）。链接改指之后再清点一次，正文按链接此刻指着的那份改。
-  const configs = scanConfigs(home, rules, { env, dirs: now.dirs, from, to, errors: [] });
-  for (const c of configs.rewrite) {
-    if (c.problems.length) throw new Error(`${c.file}：${c.problems.join("；")}（演练时没有，期间被改过）`);
-    rewriteFile(c.file, c.kind, rules, journal, log, "配置");
-  }
+  const configErrors = [];
+  const configs = scanConfigs(home, rules, { files: now.roots.configFiles, from, to, errors: configErrors });
+  if (configErrors.length) throw new Error(configErrors.slice(0, 3).join("；"));
+  for (const c of configs.rewrite) rewriteFile(c.file, c.kind, rules, journal, log, "配置");
 }

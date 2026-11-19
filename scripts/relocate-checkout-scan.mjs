@@ -4,14 +4,16 @@
 //
 // 读不到的东西不当成「没有」：命令失败、目录列不了、锁文件读不动都记进 plan.errors，
 // 有一条就不许真做、核对不算干净（见 relocate-checkout-fs.mjs 顶部）。
-import { readFileSync, readlinkSync, statSync } from "node:fs";
+import { readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { LEGACY_DB_FILE, LEGACY_REPO_DIR_NAMES } from "./legacy-names.mjs";
-import { agentDirs, claudeNameMap, configProblems, memoryFiles, opencodeDbFile, refsIn, scanClaude, scanConfigs, scanGrok, scanOpencode } from "./relocate-checkout-agents.mjs";
+import { LEGACY_REPO_DIR_NAMES } from "./legacy-names.mjs";
+import { configProblems, memoryFiles, refsIn, scanClaude, scanConfigs, scanGrok, scanOpencode } from "./relocate-checkout-agents.mjs";
 import { isDirNoFollow, isLink, lexists, listDir, readTextOr, sh } from "./relocate-checkout-fs.mjs";
+import { Journal } from "./relocate-checkout-journal.mjs";
 import { liveHolders } from "./relocate-checkout-lock.mjs";
-import { countAmbiguous, countRefs, isUnder, mapPath, rewriteRules } from "./relocate-checkout-paths.mjs";
+import { countAmbiguous, countRefs, isUnder, mapPath, otherDirSuffix, rewriteRules, stringLiterals } from "./relocate-checkout-paths.mjs";
+import { afterPath, claudePrefixes, currentPath, resolveRoots } from "./relocate-checkout-roots.mjs";
 
 /** 目录树此刻在哪：旧位置是真目录 → 还没搬；旧位置没了或是指向新位置的链接、新位置是真目录 → 已搬。 */
 export function locateTree({ from, to }) {
@@ -28,13 +30,6 @@ export function locateTree({ from, to }) {
       : { state: "conflict", root: to, why: `${from} 是指向 ${linkTarget} 的链接，不是指向 ${to}` };
   }
   return { state: "missing", root: null, why: `${from} 和 ${to} 都不是目录` };
-}
-
-/** 库文件：显式给的优先；否则数据目录里 navi.db 在就用它，不然用旧库名（与 scripts/server-control.mjs 同口径）。 */
-export function dbFileIn(root, explicit) {
-  if (explicit) return resolve(explicit);
-  const navi = join(root, "data", "navi.db");
-  return lexists(navi) ? navi : join(root, "data", LEGACY_DB_FILE);
 }
 
 function openReadOnly(file, errors) {
@@ -72,6 +67,51 @@ export function scanDb(dbFile, rules, errors) {
   return out;
 }
 
+/**
+ * 库里以旧写法开头、后面却不是 `/` 的整值路径（含 JSON 文本里的字符串值）：那是另一个目录（`<旧根> copy`），
+ * 不管它此刻在不在磁盘上，正文里也不许把它当成这棵树换掉。返回它们的名字后缀。
+ */
+export function dbSiblingSuffixes(dbFile, rules, errors) {
+  const out = new Set();
+  if (!lexists(dbFile)) return out;
+  const db = openReadOnly(dbFile, errors);
+  if (!db) return out;
+  const visit = (v) => {
+    if (typeof v === "string") { for (const r of rules) { const x = otherDirSuffix(v, r.old); if (x !== null) out.add(x); } }
+    else if (Array.isArray(v)) v.forEach(visit);
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { visit(k); visit(x); }
+  };
+  try {
+    for (const { name: table } of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()) {
+      for (const { name: column } of db.prepare(`PRAGMA table_info("${table}")`).all()) {
+        const probe = rules.map(() => `instr("${column}", ?) > 0`).join(" OR ");
+        for (const { v } of db.prepare(`SELECT "${column}" AS v FROM "${table}" WHERE typeof("${column}") = 'text' AND (${probe})`).all(...rules.map((r) => r.old))) {
+          visit(v);
+          if (/^\s*[[{]/.test(v)) { try { visit(JSON.parse(v)); } catch { /* 不是 JSON */ } }
+        }
+      }
+    }
+  } catch (error) {
+    errors.push(`读库 ${dbFile} 失败（${error.message}）`);
+  } finally {
+    db.close();
+  }
+  return out;
+}
+
+/** 配置文件里的字面量同理（JSON 的键和值、TOML 的字符串）。 */
+function configSiblingSuffixes(files, rules, errors) {
+  const out = new Set();
+  for (const { file } of files) {
+    const text = readTextOr(file, errors);
+    if (text === null) continue;
+    for (const v of stringLiterals(text)) {
+      for (const r of rules) { const x = otherDirSuffix(v, r.old); if (x !== null) out.add(x); }
+    }
+  }
+  return out;
+}
+
 /** 库里登记的、跟这棵树有关的东西：在跑的任务、在盯的哨兵、执行器的配置目录。 */
 export function scanDbState(dbFile, errors) {
   const out = { running: [], monitors: [], configDirs: { claude: [], codex: [] } };
@@ -96,8 +136,8 @@ export function scanDbState(dbFile, errors) {
 }
 
 /** 服务还开着这份库吗：单例锁、在线登记、维护锁（见 relocate-checkout-lock.mjs），以及开着库文件的进程。 */
-export function scanService(dbFile, errors) {
-  const { reasons, errors: unknown } = liveHolders(dbFile);
+export function scanService(dbFile, runsDirs, errors) {
+  const { reasons, errors: unknown } = liveHolders(dbFile, runsDirs);
   errors.push(...unknown);
   if (lexists(dbFile)) {
     // lsof 没找到任何进程时退出码也是 1（且不出声）；出声的 1 才是没查成。
@@ -261,10 +301,10 @@ export function scanSymlinks(root, { from, to, errors }) {
 }
 
 /** 数据目录里按路径做键的小文件（技能校准按「执行器 + 工作目录」记）。 */
-export function scanDataFiles(root, rules, errors) {
+export function scanDataFiles(dataRoot, rules, errors) {
   const out = [];
   for (const name of ["skill-calibrations.json"]) {
-    const file = join(root, "data", name);
+    const file = join(dataRoot, name);
     const text = readTextOr(file, errors);
     if (text === null) continue;
     const count = refsIn(text, "json", rules);
@@ -281,37 +321,58 @@ export function scanRemote(root) {
 }
 
 /** 旧根的上级目录里，名字是「旧根名 + 后缀」的兄弟目录的后缀（`" copy"`、`"-old"`）。 */
-function siblingSuffixes({ from, to }, errors) {
+function diskSiblingSuffixes({ from, to }, errors) {
   const name = basename(from);
   return listDir(dirname(from), errors).filter((n) => n !== name && n !== basename(to) && n.startsWith(name)).map((n) => n.slice(name.length));
 }
 
-/** 整份清点。claims 是 --claude-claim / --claude-skip 点名的 claude 目录名。 */
+/**
+ * 整份清点。claims 是 --claude-claim / --claude-skip 点名的 claude 目录。资源位置全部来自 resolveRoots
+ * （此刻的位置），搬前搬后、重跑、加锁、核对看的是同一份。
+ */
 export function scan({ from, to, home, db: dbExplicit, env = process.env, claims }) {
   const errors = [];
   const where = locateTree({ from, to });
   const plan = { from, to, home, where, errors, rules: rewriteRules({ from, to, home }) };
   if (!where.root) return plan;
   const root = where.root;
+  const pair = { from, to };
   try { plan.sameDevice = statSync(root).dev === statSync(dirname(to)).dev; } catch { plan.sameDevice = false; }
-  plan.dbFile = dbFileIn(root, dbExplicit);
-  plan.dbState = scanDbState(plan.dbFile, errors);
+  const rootsArgs = { home, env, from, to, root, dbExplicit, errors };
+  // 库里登记的配置目录也是资源根，先用不带它的那份找到库，再带上它整份解析。
+  plan.dbState = scanDbState(resolveRoots({ ...rootsArgs, errors: [] }).dbFile, errors);
+  const roots = resolveRoots({ ...rootsArgs, dbDirs: plan.dbState.configDirs });
+  plan.roots = roots;
+  plan.dbFile = roots.dbFile;
   plan.worktrees = scanWorktrees(root, { from, to, errors });
-  plan.dirs = agentDirs({ home, env, root, from, to, dbDirs: plan.dbState.configDirs, errors });
-  const knownPaths = new Set([from, ...plan.worktrees.items.map((w) => mapPath(w.worktree, to, from) ?? w.worktree)]);
-  plan.claude = scanClaude(plan.dirs.claude, { from, to, knownPaths, claims, errors });
-  const rules = rewriteRules({ from, to, home, siblings: siblingSuffixes({ from, to }, errors), claudeName: claudeNameMap(plan.dirs.claude, plan.claude.moves, { from, to }) });
+  plan.claude = scanClaude(roots.claude, { from, to, claims, errors });
+
+  // claude 会话目录改名的映射：本次认领的，加上账本里记过的（改过名的目录磁盘上已经证明不了归属）。
+  let history = new Map();
+  try { history = Journal.claudeHistory(home, pair); } catch (error) { errors.push(error.message); }
+  const moves = new Map(history);
+  for (const m of plan.claude.moves) moves.set(`${afterPath(m.configDir, pair)}/projects/${basename(m.from)}`, basename(m.to));
+  plan.claudeMap = moves;
+
+  const base = rewriteRules({ from, to, home });
+  const siblings = new Set([...diskSiblingSuffixes(pair, errors), ...dbSiblingSuffixes(plan.dbFile, base, errors), ...configSiblingSuffixes(roots.configFiles, base, errors)]);
+  const rules = rewriteRules({ from, to, home, siblings: [...siblings], claude: { prefixes: claudePrefixes(roots.claude, { from, to, home }), moves } });
   plan.rules = rules;
   plan.db = scanDb(plan.dbFile, rules, errors);
-  plan.service = scanService(plan.dbFile, errors);
+  plan.service = scanService(plan.dbFile, roots.runsDirs, errors);
   plan.processes = scanProcesses([from, to], errors);
   plan.symlinks = scanSymlinks(root, { from, to, errors });
-  plan.memory = memoryFiles(plan.dirs.claude, { to, errors }).map((file) => ({ file, count: countRefs(readFileSync(file, "utf8"), rules) })).filter((m) => m.count);
-  plan.grok = scanGrok(home, { from, to, errors });
-  plan.opencode = scanOpencode(opencodeDbFile(home, env), { from, to, errors });
-  plan.configs = scanConfigs(home, rules, { env, dirs: plan.dirs, from, to, errors });
-  plan.dataFiles = scanDataFiles(root, rules, errors);
+  // 长期记忆：本次要搬的目录（此刻还在旧名下）和账本里搬过的目录（此刻在新名下）。
+  const memoryDirs = [
+    ...plan.claude.moves.map((m) => m.from),
+    ...[...history].map(([key, next]) => join(currentPath(dirname(key), { ...pair, moved: roots.moved }), next)),
+  ];
+  plan.memoryDirs = memoryDirs;
+  plan.memory = memoryFiles(memoryDirs, errors).map((file) => ({ file, count: countRefs(readTextOr(file, errors) ?? "", rules) })).filter((m) => m.count);
+  plan.grok = scanGrok(roots.grokSessions, { from, to, errors });
+  plan.opencode = scanOpencode(roots.opencodeDb, { from, to, errors });
+  plan.configs = scanConfigs(home, rules, { files: roots.configFiles, from, to, errors });
+  plan.dataFiles = scanDataFiles(roots.dataRoot, rules, errors);
   plan.remote = scanRemote(root);
   return plan;
 }
-

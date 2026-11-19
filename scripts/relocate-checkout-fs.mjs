@@ -4,11 +4,19 @@
 import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 
-const absent = (error) => error?.code === "ENOENT" || error?.code === "ENOTDIR";
+export const absent = (error) => error?.code === "ENOENT" || error?.code === "ENOTDIR";
 
-export const lexists = (p) => { try { lstatSync(p); return true; } catch { return false; } };
-export const isDirNoFollow = (p) => { try { return lstatSync(p).isDirectory(); } catch { return false; } };
-export const isLink = (p) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
+/** lstat；确实不存在返回 null，读不动（权限、I/O）直接抛 —— 调用方不许把它当成「没有」。 */
+function lstatOrNull(p) {
+  try { return lstatSync(p); }
+  catch (error) {
+    if (absent(error)) return null;
+    throw new Error(`读不了 ${p} 的元数据（${error.code ?? error.message}）`);
+  }
+}
+export const lexists = (p) => lstatOrNull(p) !== null;
+export const isDirNoFollow = (p) => lstatOrNull(p)?.isDirectory() ?? false;
+export const isLink = (p) => lstatOrNull(p)?.isSymbolicLink() ?? false;
 
 /** 文件正文；不存在返回 null，读不动记一条错误再返回 null。 */
 export function readTextOr(file, errors) {

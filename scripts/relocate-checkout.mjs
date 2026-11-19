@@ -8,9 +8,11 @@
 //   node scripts/relocate-checkout.mjs --from … --to … --unlink                                           # 核对干净后拿掉过渡链接
 //   node scripts/relocate-checkout.mjs --from … --to … --set-remote [地址]                                # GitHub 改名之后换远端
 //
-// 其它选项：--no-link（不留 旧路径 → 新路径 的过渡链接）、--claude-claim <目录名> / --claude-skip <目录名>
-// （认不出归属的 claude 会话目录，点名算这棵树的 / 不是，可重复）、--db <库文件>、--home <家目录>（只给回归用）。
-// 退出码：0 做完/核对干净；1 演练或核对发现还有要处理的；2 预检拦下，什么都没动；3 做到一半失败（看账本）。
+// 其它选项：--no-link（不留 旧路径 → 新路径 的过渡链接）、--claude-claim <完整路径>（认不出归属的 claude
+// 会话目录，点名算这棵树的）/ --claude-skip <目录名或完整路径>（点名不是，优先于一切证据），都可重复；
+// --accept-ambiguous（库里分不清归属、没换的那几处看过了，核对不再因它们不算干净）；--db <库文件>、
+// --home <家目录>（只给回归用）。
+// 退出码：0 做完/核对干净；1 演练或核对发现还有要处理的；2 预检拦下或读不到东西，什么都没动；3 做到一半失败（看账本）。
 //
 // 操作单、做了什么、为什么留链接、哪些覆盖不到：docs/relocate-checkout.md。
 import { execFileSync } from "node:child_process";
@@ -21,7 +23,8 @@ import { apply } from "./relocate-checkout-apply.mjs";
 import { isLink, lexists } from "./relocate-checkout-fs.mjs";
 import { Journal, rollback } from "./relocate-checkout-journal.mjs";
 import { acquire, release } from "./relocate-checkout-lock.mjs";
-import { checkWorktrees, dbFileIn, locateTree, scan } from "./relocate-checkout-scan.mjs";
+import { resolveRoots } from "./relocate-checkout-roots.mjs";
+import { checkWorktrees, locateTree, scan, scanProcesses } from "./relocate-checkout-scan.mjs";
 
 function parseArgs(argv) {
   const o = { link: true, claims: { ours: [], skip: [] } };
@@ -43,9 +46,11 @@ function parseArgs(argv) {
     else if (a === "--rollback") { o.mode = "rollback"; o.journal = val(); }
     else if (a === "--set-remote") { o.mode = "remote"; o.remote = val(); }
     else if (a === "--no-link") o.link = false;
+    else if (a === "--accept-ambiguous") o.acceptAmbiguous = true;
     else if (a === "--claude-claim" || a === "--claude-skip") {
       const v = val();
-      if (!v) { console.error(`${a} 后面要写目录名`); process.exit(2); }
+      if (!v) { console.error(`${a} 后面要写目录${a === "--claude-claim" ? "的完整路径" : "名"}`); process.exit(2); }
+      if (a === "--claude-claim" && !isAbsolute(v)) { console.error("--claude-claim 要写完整路径（演练列出来的那条）：同名的目录在别的配置目录里可能是别人的"); process.exit(2); }
       o.claims[a === "--claude-claim" ? "ours" : "skip"].push(v);
     } else if (a === "-h" || a === "--help") o.help = true;
     else { console.error(`认不得的参数：${a}`); process.exit(2); }
@@ -55,7 +60,7 @@ function parseArgs(argv) {
 
 const opts = parseArgs(process.argv.slice(2));
 if (opts.help || !opts.from || !opts.to) {
-  console.log("用法：node scripts/relocate-checkout.mjs --from <旧目录> --to <新目录> [--apply|--verify|--rollback [账本]|--unlink|--set-remote [地址]] [--no-link] [--claude-claim <名>] [--claude-skip <名>]");
+  console.log("用法：node scripts/relocate-checkout.mjs --from <旧目录> --to <新目录> [--apply|--verify|--rollback [账本]|--unlink|--set-remote [地址]] [--no-link] [--claude-claim <完整路径>] [--claude-skip <名>] [--accept-ambiguous]");
   process.exit(opts.help ? 0 : 2);
 }
 for (const k of ["from", "to"]) {
@@ -147,7 +152,10 @@ function report(plan, { verify = false } = {}) {
   say(`  旧路径 ${plan.db.total} 处`);
   list(plan.db.refs.sort((a, b) => b.count - a.count), (r) => `${r.table}.${r.column}：${r.count} 处 / ${r.rows} 行`, verify ? 40 : 10);
   todo += plan.db.total;
-  if (plan.db.ambiguous) say(`  · 另有 ${plan.db.ambiguous} 处旧路径后面紧跟着文字（${plan.db.ambiguousSamples.join("、")}），分不清是正文还是别的目录，不改`);
+  if (plan.db.ambiguous) {
+    say(`  ${opts.acceptAmbiguous ? "·" : "!"} 另有 ${plan.db.ambiguous} 处旧路径后面紧跟着文字（${plan.db.ambiguousSamples.join("、")}），分不清是正文还是别的目录，不改${opts.acceptAmbiguous ? "（--accept-ambiguous：已看过）" : "；看过确认不用管的话核对时加 --accept-ambiguous"}`);
+    if (!opts.acceptAmbiguous) unresolved.push(`库里 ${plan.db.ambiguous} 处分不清归属的旧路径`);
+  }
   for (const f of plan.dataFiles) {
     say(`  ${f.problems.length ? "✗" : "·"} ${f.file}：${f.count} 处${f.problems.length ? `（${f.problems.join("；")}）` : ""}`);
     todo += f.count;
@@ -163,8 +171,8 @@ function report(plan, { verify = false } = {}) {
     blockers.push("会话目录合并有冲突");
   }
   if (c.unclassified.length) {
-    say(`  ! ${c.unclassified.length} 个目录认不出是不是这棵树的，不动（确认是的话加 --claude-claim <目录名>，不是的话加 --claude-skip <目录名>）：`);
-    list(c.unclassified, (u) => `${u.path}（${u.why}）`, 8);
+    say(`  ! ${c.unclassified.length} 个目录认不出是不是这棵树的，不动（确认是的话加 --claude-claim <完整路径>，不是的话加 --claude-skip <目录名>）：`);
+    list(c.unclassified, (u) => `${u.path}（${u.why}${u.claimable ? "" : "；--claude-claim 对它无效"}）`, 8);
     unresolved.push(`${c.unclassified.length} 个认不出归属的 claude 会话目录`);
   }
   if (plan.memory.length) { say(`  claude 长期记忆里的旧路径：${plan.memory.length} 份`); todo += plan.memory.length; }
@@ -195,108 +203,132 @@ function report(plan, { verify = false } = {}) {
   return { blockers: [...new Set(blockers)], todo, unresolved };
 }
 
-/** 库此刻在哪（树搬了没搬都算得出），用来拿维护锁。 */
-function currentDb() {
+/** 库与 runs 此刻在哪（树搬了没搬都算得出，换算与清点同一份 resolveRoots），用来拿维护锁。 */
+function currentResources() {
   const where = locateTree({ from, to });
   const root = where.root ?? (lexists(join(to, "data")) ? to : from);
-  return opts.db ? resolve(opts.db) : dbFileIn(root);
+  const errors = [];
+  const roots = resolveRoots({ home, env, from, to, root, dbExplicit: opts.db, errors });
+  if (errors.length) throw new Error(errors.join("；"));
+  return { dbFile: roots.dbFile, runsDirs: roots.runsDirs };
 }
 
-/** 在维护锁里跑 fn：迁移 / 退回期间 navi 起不来，另一次迁移也进不来。 */
+/** 在维护锁里跑 fn，返回它的退出码：迁移 / 退回期间 navi 起不来，另一次迁移也进不来。拿不到锁就不跑。 */
 function locked(note, fn) {
   let lock;
-  try { lock = acquire(currentDb(), note); }
-  catch (error) { say(`✗ 拿不到维护锁，什么都没动：${error.message}`); process.exit(2); }
+  try { lock = acquire(currentResources(), note); }
+  catch (error) { say(`✗ 拿不到维护锁，什么都没动：${error.message}`); return 2; }
   try { return fn(); } finally { release(lock, { from, to }); }
 }
 
-if (opts.mode === "rollback") {
+/** 退回之前跟迁移一样查一遍：工作目录在树里的程序（编辑器、agent、预览）手里的路径会被这一退弄失效。 */
+function rollbackBlockers() {
+  const errors = [];
+  const { blocking } = scanProcesses([from, to], errors);
+  return [...errors, ...blocking.map((p) => `进程 ${p.pid}（${p.command}）的工作目录在 ${p.cwd}`)];
+}
+
+function runRollback() {
   const journals = opts.journal ? [new Journal(resolve(opts.journal))] : Journal.pending(home, { from, to });
-  if (!journals.length) { say("没有要退回的账本（~/.navi-relocate/*/journal.json）"); process.exit(0); }
-  locked(`relocate-checkout --rollback ${from} ${to}`, () => {
+  if (!journals.length) { say("没有要退回的账本（~/.navi-relocate/*/journal.json）"); return 0; }
+  const blockers = rollbackBlockers();
+  if (blockers.length) { say("✗ 不能退回，什么都没动："); list(blockers, (b) => b); return 2; }
+  const code = locked(`relocate-checkout --rollback ${from} ${to}`, () => {
     for (const journal of journals) {
       if (!journal.data.steps.some((s) => !s.undone)) { say(`这份账本已经退回过：${journal.dir}`); continue; }
       say(`照账本退回：${journal.dir}`);
       try { rollback(journal, say); }
-      catch (error) { say(`✗ 退回中途失败：${error.message}\n  账本里标了 undone 的已经退回；修好原因再跑一次 --rollback 接着退（每一步都按盘上此刻的样子判断，重复跑是安全的）`); process.exit(3); }
+      catch (error) { say(`✗ 退回中途失败：${error.message}\n  账本里标了 undone 的已经退回；修好原因再跑一次 --rollback 接着退（每一步都按盘上此刻的样子判断，重复跑是安全的）`); return 3; }
     }
+    return 0;
   });
-  say("已退回。");
-  process.exit(0);
+  if (!code) say("已退回。");
+  return code;
 }
 
-if (opts.mode === "remote") {
+function runRemote() {
   const plan = scanNow();
   const url = opts.remote ?? plan.remote?.suggested;
-  if (!url) { say("算不出新地址，请写明：--set-remote <地址>"); process.exit(2); }
+  if (!url) { say("算不出新地址，请写明：--set-remote <地址>"); return 2; }
   try { execFileSync("git", ["ls-remote", "--heads", url], { stdio: ["ignore", "ignore", "pipe"], timeout: 60_000 }); }
-  catch { say(`✗ ${url} 现在连不上（GitHub 上还没改名？），没改远端`); process.exit(2); }
+  catch { say(`✗ ${url} 现在连不上（GitHub 上还没改名？），没改远端`); return 2; }
   execFileSync("git", ["-C", plan.where.root, "remote", "set-url", "origin", url]);
   say(`origin → ${url}`);
-  process.exit(0);
+  return 0;
 }
 
 /** 核对的结论：没有要改的、没有要人处理的、没有读不到的，才算干净。 */
 function verdict(plan) {
   const r = report(plan, { verify: true });
-  const left = [...(r.todo ? [`还有 ${r.todo} 处没换完（重跑 --apply 会接着做）`] : []), ...r.unresolved];
-  return left;
+  return [...(r.todo ? [`还有 ${r.todo} 处没换完（重跑 --apply 会接着做）`] : []), ...r.unresolved];
 }
 
-if (opts.mode === "unlink") {
+function runUnlink() {
   const plan = scanNow();
-  if (plan.where.state !== "moved" || plan.where.link !== "ours") { say("没有可拿掉的过渡链接"); process.exit(plan.where.state === "moved" ? 0 : 2); }
+  if (plan.where.state !== "moved" || plan.where.link !== "ours") { say("没有可拿掉的过渡链接"); return plan.where.state === "moved" ? 0 : 2; }
   const left = verdict(plan);
   if (plan.processes.argvRefs.length) left.push(`${plan.processes.argvRefs.length} 个进程的命令行里还写着旧路径`);
-  if (left.length) { say(`\n✗ 链接先留着：${left.join("；")}`); process.exit(1); }
+  if (left.length) { say(`\n✗ 链接先留着：${left.join("；")}`); return 1; }
   unlinkSync(from);
   say(`\n✓ 已拿掉 ${from}`);
-  process.exit(0);
+  return 0;
 }
 
-if (opts.mode === "verify") {
+function runVerify() {
   const plan = scanNow();
-  if (plan.where.state !== "moved") { report(plan); say("\n✗ 还没搬"); process.exit(1); }
+  if (plan.where.state !== "moved") { report(plan); say("\n✗ 还没搬"); return 1; }
   const left = verdict(plan);
   say(left.length ? `\n✗ 还没完：${left.join("；")}` : "\n✓ 记着旧路径的地方都换完了");
-  process.exit(left.length ? 1 : 0);
+  return left.length ? 1 : 0;
 }
 
-if (opts.mode !== "apply") {
+function runDryRun() {
   const { blockers, todo } = report(scanNow());
-  if (blockers.length) { say(`\n✗ 不能真做：${blockers.join("；")}`); process.exit(1); }
+  if (blockers.length) { say(`\n✗ 不能真做：${blockers.join("；")}`); return 1; }
   say(todo ? `\n演练完毕：以上 ${todo} 项会在 --apply 时处理${opts.link ? `，并留一个 ${from} → ${to} 的过渡链接` : ""}。什么都没改。` : "\n演练完毕：没有要做的。");
-  process.exit(todo ? 1 : 0);
+  return todo ? 1 : 0;
 }
 
 // 真做：先拿维护锁（锁里复查过服务不在线），再在锁里清点一遍，这一遍过了预检才动手。
-const code = locked(`relocate-checkout --apply ${from} ${to}`, () => {
-  const plan = scanNow();
-  const { blockers } = report(plan);
-  if (blockers.length) { say(`\n✗ 不能真做：${blockers.join("；")}`); return 2; }
-  const journal = Journal.create(home, { from, to });
-  say(`\n开始真做；账本：${journal.dir}`);
-  try {
-    apply(plan, { journal, link: opts.link, log: say, home, env, claims: opts.claims, db: opts.db && resolve(opts.db) });
-  } catch (error) {
-    journal.data.failedAt = new Date().toISOString();
-    journal.data.error = String(error.stack ?? error);
-    try { journal.save(); } catch { /* 账本落不了盘：已经做的每一步在动手前都记过意图，退回照样找得到 */ }
-    say(`\n✗ 做到一半失败：${error.message}`);
-    say(`  做到哪一步记在 ${journal.dir}/journal.json。两条路：`);
-    say("  · 修好原因后原样再跑一次 --apply（做过的不会再做）");
-    say(`  · 或者退回：node ${lexists(to) ? to : from}/scripts/relocate-checkout.mjs --from ${from} --to ${to} --rollback`);
-    return 3;
-  }
-  journal.data.finishedAt = new Date().toISOString();
-  journal.save();
-  return 0;
-});
-if (code) process.exit(code);
+function runApply() {
+  const code = locked(`relocate-checkout --apply ${from} ${to}`, () => {
+    const plan = scanNow();
+    const { blockers } = report(plan);
+    if (blockers.length) { say(`\n✗ 不能真做：${blockers.join("；")}`); return 2; }
+    const journal = Journal.create(home, { from, to });
+    say(`\n开始真做；账本：${journal.dir}`);
+    try {
+      apply(plan, { journal, link: opts.link, log: say, home, env, claims: opts.claims, db: opts.db && resolve(opts.db) });
+    } catch (error) {
+      journal.data.failedAt = new Date().toISOString();
+      journal.data.error = String(error.stack ?? error);
+      try { journal.save(); } catch { /* 账本落不了盘：已经做的每一步在动手前都记过意图，退回照样找得到 */ }
+      say(`\n✗ 做到一半失败：${error.message}`);
+      say(`  做到哪一步记在 ${journal.dir}/journal.json。两条路：`);
+      say("  · 修好原因后原样再跑一次 --apply（做过的不会再做）");
+      say(`  · 或者退回：node ${lexists(to) ? to : from}/scripts/relocate-checkout.mjs --from ${from} --to ${to} --rollback`);
+      return 3;
+    }
+    journal.data.finishedAt = new Date().toISOString();
+    journal.save();
+    return 0;
+  });
+  if (code) return code;
+  say("\n核对：");
+  const left = verdict(scanNow());
+  if (isLink(from)) say(`\n过渡链接 ${from} 留着；处理完上面的、过几天确认没人再用旧路径后：node ${to}/scripts/relocate-checkout.mjs --from ${from} --to ${to} --unlink`);
+  say(`下一步：cd ${to}，按 docs/relocate-checkout.md 往下做（装依赖、构建、启动、核对）。`);
+  say(left.length ? `\n✗ 搬完了，但还没完：${left.join("；")}` : "\n✓ 搬完了，记着旧路径的地方都换完了。");
+  return left.length ? 1 : 0;
+}
 
-say("\n核对：");
-const left = verdict(scanNow());
-if (isLink(from)) say(`\n过渡链接 ${from} 留着；处理完上面的、过几天确认没人再用旧路径后：node ${to}/scripts/relocate-checkout.mjs --from ${from} --to ${to} --unlink`);
-say(`下一步：cd ${to}，按 docs/relocate-checkout.md 往下做（装依赖、构建、启动、核对）。`);
-say(left.length ? `\n✗ 搬完了，但还没完：${left.join("；")}` : "\n✓ 搬完了，记着旧路径的地方都换完了。");
-process.exit(left.length ? 1 : 0);
+const modes = { rollback: runRollback, remote: runRemote, unlink: runUnlink, verify: runVerify, apply: runApply };
+let exitCode;
+try {
+  exitCode = (modes[opts.mode] ?? runDryRun)();
+} catch (error) {
+  // 读不到账本、解析不了资源的真实落点……：说清楚是哪一样，什么都不动。
+  say(`\n✗ ${error.message}`);
+  exitCode = 2;
+}
+process.exit(exitCode);

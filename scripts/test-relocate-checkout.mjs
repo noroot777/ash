@@ -26,8 +26,9 @@ const test = (name, fn) => { fn(); passed += 1; console.log(`ok - ${name}`); };
 
 // ── 路径规则 ─────────────────────────────────────────────────────────────
 test("边界：兄弟目录（含中文名、空格后缀）、同名前缀、别的路径里的一段都不换；正文里紧挨汉字的照换", () => {
-  const claudeName = (n) => (n.startsWith("-u-code-harness--worktrees-A") ? `-u-code-navi${n.slice("-u-code-harness".length)}` : null);
-  const rules = rewriteRules({ from: "/u/code/harness", to: "/u/code/navi", home: "/u", siblings: [" copy"], claudeName });
+  // claude 会话目录只按有来源的映射换：映射里有的那个换，同前缀但没认领的（-harness-old）不换。
+  const claude = { prefixes: [{ text: "/u/.claude", dir: "/u/.claude" }, { text: "~/.claude", dir: "/u/.claude" }], moves: new Map([["/u/.claude/projects/-u-code-harness--worktrees-A", "-u-code-navi--worktrees-A"]]) };
+  const rules = rewriteRules({ from: "/u/code/harness", to: "/u/code/navi", home: "/u", siblings: [" copy"], claude });
   const r = (s) => rewriteText(s, rules).text;
   assert.equal(r("cd /u/code/harness && ls /u/code/harness/x"), "cd /u/code/navi && ls /u/code/navi/x");
   assert.equal(r("/u/code/harness-old /u/code/harness2 /u/code/harness.bak/a /u/code/harness@b"), "/u/code/harness-old /u/code/harness2 /u/code/harness.bak/a /u/code/harness@b");
@@ -41,6 +42,8 @@ test("边界：兄弟目录（含中文名、空格后缀）、同名前缀、�
   assert.equal(r("file:///u/code/harness/a.png"), "file:///u/code/navi/a.png");
   assert.equal(r("~/code/harness/data ~/code/harnessX ~/code/harness中文"), "~/code/navi/data ~/code/harnessX ~/code/harness中文");
   assert.equal(r("/u/.claude/projects/-u-code-harness--worktrees-A/x /u/.claude/projects/-u-code-harness-old/y -u-code-harness"), "/u/.claude/projects/-u-code-navi--worktrees-A/x /u/.claude/projects/-u-code-harness-old/y -u-code-harness");
+  assert.equal(r("~/.claude/projects/-u-code-harness--worktrees-A/x /w/.claude/projects/-u-code-harness--worktrees-A/y"), "~/.claude/projects/-u-code-navi--worktrees-A/x /w/.claude/projects/-u-code-harness--worktrees-A/y", "映射绑在配置目录上，别的配置目录里同名的不换");
+  assert.equal(r("/u/code/harness 下面"), "/u/code/harness 下面", "整值以旧根加空格开头：按整条路径看是另一个目录（真库里没有这种值）");
 });
 
 test("JSON 键改完撞名：两份都原样留着，记进 collisions", () => {
@@ -119,6 +122,7 @@ function build() {
   // claude：主目录（带长期记忆）、工作区会话（自己也有记忆）、按会话号挂在工作区下的工作流目录、兄弟目录的会话、
   // 目标已存在要合并的，以及兄弟目录 harness中文 只留了记忆、没有会话记录的那个（认不出，不许动）
   write(join(projects, claudeSlug(from), "memory", "a.md"), `仓库在 ${from}，记忆在 ${projects}/${claudeSlug(from)}/memory\n`);
+  write(join(projects, claudeSlug(from), "m0.jsonl"), `${JSON.stringify({ cwd: from, type: "user" })}\n`);
   write(join(projects, claudeSlug(`${from}/.worktrees/T1`), "s1.jsonl"), `${JSON.stringify({ cwd: `${from}/.worktrees/T1`, type: "user" })}\n`);
   write(join(projects, claudeSlug(`${from}/.worktrees/T1`), "memory", "notes", "b.md"), `工作区在 ${from}/.worktrees/T1\n`);
   write(join(projects, `${claudeSlug(`${from}/.worktrees/T1`)}-server`, "s1", "workflows", "x.js"), "1\n");
