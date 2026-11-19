@@ -197,6 +197,7 @@ export function verifyData(baseline, liveFile) {
 /**
  * 升级做到哪了,记在数据目录里(跟着这份数据走;不进 git):
  *   built      最后一次构建成功时的 { commit, stamp }(stamp 见 buildStamp)
+ *   forgotten  [{ …那条记录, what, forgottenAt }] --forget-others 挪开的、认不出是这份库的记录(备份文件原样留着,不再核对)
  *   verifyPending [{ backupFile, backupDigest, db }] 数据核对还没过的那几份基线(读不出来、或者有缺;老格式是单个对象):往后每一次
  *              升级这份库(db,见 dbIdentity)的成功出口都得先把它们亲自补核过(pendingBaselines),后来留的底顶替不了
  *   servedDb   servedPid 那个服务开的是哪份库(dbIdentity)
@@ -233,7 +234,7 @@ export function readState(dataDir) {
 
 /**
  * 还欠着的数据核对(verifyPending 老格式是单个对象),按库分开:mine = 这份库(db)自己的 [{ file, digest }],拿现在的库补核;
- * others = 别的库的(没记是哪份库的也算别人的 —— 拿谁比都证明不了),原样留着。
+ * others = 认不出是这份库的。升级在动服务之前已经让 progressOwnership 把每一条认领 / 挪开 / 拦下,others 照理是空的。
  */
 export function pendingBaselines(state, db) {
   const p = state.verifyPending;
@@ -263,8 +264,11 @@ export function dbIdentity(file) {
     const st = statSync(abs, { bigint: true });
     if (st.isFile() && st.ino > 0n) return `file:${st.dev}:${st.ino}`;
   } catch { /* 不在:按路径 */ }
-  return `path:${canonical(abs)}`;
+  return pathIdentity(abs);
 }
+
+/** 「这个路径上的库」:库还不在时记的身份;等库在这个路径上建出来,记着它的记录就归那份库(upgrade-ownership.mjs)。 */
+export const pathIdentity = (file) => `path:${canonical(resolve(file))}`;
 
 export function writeState(dataDir, state) {
   mkdirSync(dataDir, { recursive: true });

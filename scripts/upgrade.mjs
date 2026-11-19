@@ -105,7 +105,7 @@ async function preflight(pkg, abort) {
     try { saved = readState(data.dataDir); } catch (error) { problems.push(error.message); }
   }
   // 进度里跟库绑着的记录归不归这份库(别的库没做完的、没记是哪份库的旧记录):对不上就在这里拦下(upgrade-ownership.mjs)。
-  if (db) problems.push(...progressOwnership(saved, { db, dbPath: data.db, takeOver: options.takeOver }).problems);
+  if (db) problems.push(...progressOwnership(saved, { db, dbPath: data.db, takeOver: options.takeOver, forgetOthers: options.forgetOthers }).problems);
   // 库留不了底的(软链指着的东西不在了之类),在停服务之前就拦下。
   if (!data.problems.length) problems.push(...backupSources({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit }).problems);
   // 库改名做到一半(账本在)、而这次升级之前没留过底:那一刻库和它的 -wal 可能分在新旧两个名字下,做不出一份可靠的快照。
@@ -262,12 +262,13 @@ async function apply() {
   dataDir = data.dataDir;
   // 进度在锁里重读、重认一遍归属(preflight 那一眼是拿锁之前看的);--take-over 认领 / 搁置的结果在动服务之前先写下。
   try { state = readState(dataDir); } catch (error) { say(`  ✕ ${error.message}`); undoPull(2); }
-  const own = progressOwnership(state, { db: ctx.db, dbPath: ctx.dbPath, takeOver: options.takeOver });
+  const own = progressOwnership(state, { db: ctx.db, dbPath: ctx.dbPath, takeOver: options.takeOver, forgetOthers: options.forgetOthers });
   if (own.problems.length) { for (const p of own.problems) say(`  ✕ ${p}`); undoPull(2); }
   if (own.changed) {
     state = own.state;
     try { writeState(dataDir, state); } catch (error) { say(`  ✕ 升级进度写不进 ${dataDir}(${error.message})`); undoPull(2); }
-    say("  · --take-over:进度里对不上的记录已经认领 / 搁置好了");
+    if (options.takeOver) say("  · --take-over:进度里认不出归属的记录都认作这份库的了");
+    if (options.forgetOthers) say(`  · --forget-others:认不出是这份库的记录挪到了 ${join(dataDir, "upgrade.json")} 的 forgotten 里(备份文件原样留着),不再核对`);
   }
   const log = logFor(port);
   const resumed = state.inProgress ?? null;
@@ -280,16 +281,14 @@ async function apply() {
   const built = state.built?.commit === head && entries.every(existsSync) && state.built.stamp === buildStamp(products);
   const renameNow = ["todo", "resume"].includes(data.rename);
   const serving = ctx.server.running && state.servedPid && ctx.server.health?.pid === state.servedPid && state.servedDb === ctx.db;
+  // 走到这里进度里每一条都归这份库了(progressOwnership 在锁里认过);还冒出认不出的就不往下做,不拿它当别人的跳过。
   const debts = pendingBaselines(state, ctx.db);
-  /** 欠着的核对记回去:这份库还没过的 + 别的库的原样。 */
+  if (debts.others.length) { say("  ✕ 升级进度里还有认不出是这份库的待核对记录(刚才认领之后又被改过?),再跑一次"); undoPull(2); }
+  /** 这份库还没过的那几份记回去。 */
   const keepDebts = (left) => {
-    const all = [...debts.others, ...left];
-    if (all.length) state.verifyPending = all;
+    if (left.length) state.verifyPending = left;
     else delete state.verifyPending;
   };
-  for (const o of debts.others) {
-    say(`  ⚠ ${o?.db ? `另一份库 ${o.dbPath ?? o.db} ` : "一份没记是哪份的库"}还欠着一次数据核对(升级前的库在 ${o?.backupFile}):选它再跑一次 npm run upgrade 补核;这一次只核对 ${data.db}`);
-  }
   /** MCP 登记收拾成只有 navi(setup 那份逻辑):幂等,迁不了不算升级失败,说一句就行。 */
   const registerMcp = () => {
     if (options.skipMcp) return;
@@ -461,7 +460,15 @@ async function apply() {
       await fail(`新服务没起来:${why}`);
     }
     state.servedPid = launched.pid;
-    state.servedDb = dbIdentity(dbFileFor(REPO, env)); // 新装的库是服务刚建的:这时候才有它
+    state.servedDb = dbIdentity(dbFileFor(REPO, env));
+    // 库是这一次服务刚建出来的(之前只能按路径记):记着「这个路径上的库」的,现在就是这个文件,身份跟着换过来,
+    // 免得下次拿它当另一份库(审查实测:认领过的欠账因此失联,空库 0 → 0 报了升好)。
+    if (ctx.db.startsWith("path:") && state.servedDb !== ctx.db) {
+      const was = ctx.db;
+      ctx.db = state.servedDb;
+      if (state.inProgress?.db === was) state.inProgress.db = ctx.db;
+      for (const r of Array.isArray(state.verifyPending) ? state.verifyPending : []) if (r?.db === was) r.db = ctx.db;
+    }
     save();
     say(`  ✓ :${port} 已就绪(pid ${launched.pid},日志 ${log})`);
 

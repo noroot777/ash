@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPidAlive, sleep } from "./platform.mjs";
 import { selfStartedAtMs } from "./relocate-checkout-lock.mjs";
-import { backupDb, backupSources, dbIdentity, fileDigest, readIds, verifyData } from "./upgrade-data.mjs";
+import { backupDb, backupSources, dbIdentity, fileDigest, pathIdentity, readIds, verifyData } from "./upgrade-data.mjs";
 import { progressOwnership } from "./upgrade-ownership.mjs";
 import { processBirth } from "./process-birth.mjs";
 import { acquireUpgradeLock, dataLockDirs } from "./upgrade-lock.mjs";
@@ -224,34 +224,44 @@ console.log(JSON.stringify(acquireUpgradeLock(dataLockDirs(${JSON.stringify(join
   }
 
   // ── 进度归谁 ────────────────────────────────────────────────────────────────────
+  // 每一条要么认得出是这份库的,要么拦下等人选 --take-over / --forget-others;没有「当成别的库跳过」。
   {
-    const me = { db: "file:1:1", dbPath: "/d/navi.db" };
+    const dbPath = join(dir, "d", "navi.db");
+    const me = { db: "file:1:1", dbPath };
+    const here = pathIdentity(dbPath);
     const run = (extra) => ({ from: "f", to: "t", backup: "/bk", backupFile: "/bk/navi.db", backupDigest: "d", ...extra });
-    const own = (state, takeOver = false) => progressOwnership(state, { ...me, takeOver });
-    assert.deepEqual(own({ inProgress: run({ db: me.db }) }).problems, []);
-    // 别的库那次没做完、已经留了底:拦下;--take-over 改记成那份库欠着的核对、这一次从头来。
-    const other = { inProgress: run({ db: "file:1:2", dbPath: "/x/other.db" }) };
-    assert.match(own(other).problems.join(), /另一份库 \/x\/other\.db.*不能接着用.*--take-over/);
-    const t1 = own(other, true);
-    assert.deepEqual(t1.problems, []);
-    assert.equal(t1.state.inProgress, undefined);
-    assert.deepEqual(t1.state.verifyPending, [{ backupFile: "/bk/navi.db", backupDigest: "d", db: "file:1:2", dbPath: "/x/other.db" }]);
-    assert.ok(other.inProgress, "认领 / 搁置不该改调用方手里那一份");
-    assert.match(own({ inProgress: run({ db: "file:1:2", dbPath: me.dbPath }) }).problems.join(), /现在指着的已经是另一份了/, "同一个路径换了库,得说出来");
-    // 还没留底的那次:里面没有跟库绑着的东西,直接归这份库。
-    assert.deepEqual(own({ inProgress: run({ db: "file:1:2", backup: null }) }).state.inProgress.db, me.db);
-    // 没记 db 的旧记录:拦下;--take-over 认领成这份库的(没做完的接着用它的备份,欠着的拿这份库补核)。
-    const legacy = { inProgress: run({}), verifyPending: { backupFile: "/old/navi.db", backupDigest: "e" } };
-    const p = own(legacy).problems.join("\n");
-    assert.match(p, /旧格式的进度,没记是哪份库的/);
-    assert.match(p, /1 条旧格式的待核对记录/);
-    const t2 = own(legacy, true);
-    assert.equal(t2.state.inProgress.db, me.db);
-    assert.equal(t2.state.inProgress.backup, "/bk", "认领的那次该接着用它自己的备份");
-    assert.deepEqual(t2.state.verifyPending, [{ backupFile: "/old/navi.db", backupDigest: "e", ...me }]);
-    // 别的库欠着的核对:不归这份库,也不拦(upgrade.mjs 提一句、原样留着)。
-    assert.deepEqual(own({ verifyPending: [{ backupFile: "/x", backupDigest: "f", db: "file:9:9" }] }).problems, []);
-    console.log("✓ 进度归谁:别的库没做完的拦下、--take-over 改记成它欠的核对;旧格式的拦下、--take-over 认领;没留过底的直接归这份库");
+    const debt = (db) => ({ backupFile: "/old/navi.db", backupDigest: "e", ...(db === undefined ? {} : { db }) });
+    const own = (state, flags = {}) => progressOwnership(state, { ...me, ...flags });
+    assert.deepEqual(own({ inProgress: run({ db: me.db }), verifyPending: [debt(me.db)] }).problems, []);
+    // 按路径记的(当时库还不在)、这个路径上现在就是这份库:直接归它,身份换成文件的。
+    const born = own({ inProgress: run({ db: here }), verifyPending: [debt(here)] });
+    assert.deepEqual(born.problems, []);
+    assert.equal(born.state.inProgress.db, me.db);
+    assert.equal(born.state.verifyPending[0].db, me.db);
+    // 还没留过底的那次:里面没有跟库绑着的东西,直接归这份库。
+    assert.equal(own({ inProgress: run({ db: "file:1:2", backup: null }) }).state.inProgress.db, me.db);
+    // 认不出的三种(没记、上一版的裸路径、另一个文件),没做完的和欠着的都一样:拦下,两条出路都写在提示里。
+    for (const id of [undefined, "/some/old/navi.db", "file:1:2"]) {
+      const state = { inProgress: run(id === undefined ? {} : { db: id }), verifyPending: [debt(id)] };
+      const r = own(state);
+      assert.equal(r.problems.length, 2, `${id}:没做完的、欠着的各该拦一条\n${r.problems.join("\n")}`);
+      for (const p of r.problems) assert.match(p, /--take-over.*--forget-others/);
+      assert.equal(r.state, state, "拦下时不该改进度");
+      const t = own(state, { takeOver: true });
+      assert.deepEqual(t.problems, []);
+      // 认领:那次的备份记成这份库欠的核对(拿它补核),这一次从头再留一份底 —— 认错了也不拿别人的备份冒充这份库的留底。
+      assert.equal(t.state.inProgress, undefined);
+      assert.deepEqual(t.state.verifyPending, [{ ...debt(), ...me }, { backupFile: "/bk/navi.db", backupDigest: "d", ...me }]);
+      const f = own(state, { forgetOthers: true });
+      assert.deepEqual(f.problems, []);
+      assert.equal(f.state.inProgress, undefined);
+      assert.equal(f.state.verifyPending, undefined);
+      assert.deepEqual(f.state.forgotten.map((x) => x.what), ["没做完的那次升级", "欠着的数据核对"]);
+      assert.ok(state.inProgress && state.verifyPending.length, "认领 / 挪开不该改调用方手里那一份");
+    }
+    assert.match(own({ inProgress: run({ db: "file:1:2", dbPath }) }).problems.join(), /现在指着的已经是另一个文件了/, "同一个路径换了库,得说出来");
+    assert.match(own({}, { takeOver: true, forgetOthers: true }).problems.join(), /只能选一个/);
+    console.log("✓ 进度归谁:认得出的直接归这份库(含按路径记、后来才建出来的);认不出的(没记、旧裸路径、另一个文件)一律拦下,--take-over 认领成这份库的欠账、--forget-others 挪开");
   }
 
   // ── stop.mjs --pid ──────────────────────────────────────────────────────────────

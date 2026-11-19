@@ -40,7 +40,7 @@ assert.equal(satisfiesRange("24.1.0", ">=22.16.0"), true);
 assert.equal(satisfiesRange("11.10.0", ">=11.9.0"), true);
 assert.equal(satisfiesRange("11.8.3", ">=11.9.0"), false);
 assert.equal(satisfiesRange("22.0.0", "^22"), null, "认不出的范围不替人猜");
-assert.deepEqual(parseUpgradeOptions([], {}), { force: false, wait: false, keepDbName: false, skipMcp: false, takeOver: false, help: false, continue: false, pulledFrom: null });
+assert.deepEqual(parseUpgradeOptions([], {}), { force: false, wait: false, keepDbName: false, skipMcp: false, takeOver: false, forgetOthers: false, help: false, continue: false, pulledFrom: null });
 assert.equal(parseUpgradeOptions(["--keep-db-name", "--wait"], {}).keepDbName, true);
 assert.equal(parseUpgradeOptions(["--take-over"], {}).takeOver, true);
 assert.deepEqual(userArgs(["--take-over", "--continue"]), ["--take-over"], "--take-over 要带进第二段");
@@ -409,7 +409,8 @@ for (const pending of [
   out = await upgrade([], 1, { PORT: String(PORT) });
   assert.match(out, /数据核对还是没过/, out);
   assert.equal((await health())?.pid, pid, "补核不该重启服务");
-  assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, pending, "没核对成却清掉了待核对");
+  // 记回去的可能换成了数组、补上了给人看的 dbPath(认领时写的),比的是那份基线还在不在。
+  assert.deepEqual([JSON.parse(readFileSync(stateFile, "utf8")).verifyPending].flat().map(({ dbPath, ...x }) => x), [pending], "没核对成却清掉了待核对");
 }
 assert.ok(!existsSync(join(firstBackup, "gone.db")), "补核替不见了的备份建了一份空库");
 withState({ verifyPending: { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest, db: dbId } });
@@ -448,7 +449,7 @@ writeFileSync(stateFile, stateText);
 console.log("✓ 升级进度读不懂:停服务之前拦下");
 
 // 同一个数据目录、经 NAVI_DB 换了一份库(审查实测:A 库升到一半失败,换 B 库再跑接着用了 A 的备份、拿 A 的数字核对 B):
-// 上次没做完的那次是别的库的 → 停服务之前拦下;别的库欠的核对不拿这份库比,原样留着。
+// 上次没做完的那次是别的库的 → 停服务之前拦下。
 {
   const other = join(TMP, "other.sqlite");
   writeFileSync(other, "");
@@ -456,42 +457,69 @@ console.log("✓ 升级进度读不懂:停服务之前拦下");
   withState({ inProgress: half });
   pid = (await health())?.pid;
   out = await upgrade([], 2, { PORT: String(PORT), NAVI_DB: other });
-  assert.match(out, /上次没做完的那次升级升的是另一份库 .*不是这份库的,不能接着用/, out);
+  assert.match(out, /上次没做完的那次升级升的是另一份库 .*--take-over.*--forget-others/, out);
   assert.equal((await health())?.pid, pid, "换了库却动了服务");
   assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).inProgress, half, "别的库的进度被动了");
   withState({ inProgress: undefined });
-  // 别的库欠的核对:那份基线拿这份库比恰好都在,也不能替它清掉。
-  const theirs = { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest, db: realpathSync(TMP) + "/elsewhere/navi.db" };
+  console.log("✓ 换了一份库:别的库没做完的升级在停服务之前拦下");
+
+  // 进度里认不出是这份库的记录:一律在停服务之前拦下,等人选 --take-over(就是这份库)或 --forget-others(那份库不在了)。
+  // 没有「当成别的库、提一句就跳过」—— 那样欠着的核对就失联了,少了东西也报升好(审查实测,两轮)。
+  const blocked = async (args, re) => {
+    const before = readFileSync(stateFile, "utf8");
+    const o = await upgrade(args, 2, { PORT: String(PORT) });
+    assert.match(o, re, o);
+    assert.equal((await health())?.pid, pid, "拦下却动了服务");
+    assert.equal(readFileSync(stateFile, "utf8"), before, "拦下却改了进度");
+    return o;
+  };
+  const stateNow = () => JSON.parse(readFileSync(stateFile, "utf8"));
+  const sameData = { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest }; // 拿这份库比都在的那份基线
+
+  // ① 明确是另一个文件的欠账(恰好都在也不替它清):拦下;--forget-others 挪到 forgotten,不再核对,这一次照常。
+  const theirs = { ...sameData, db: "file:0:1", dbPath: join(TMP, "elsewhere", "navi.db") };
   withState({ verifyPending: [theirs] });
-  out = await upgrade([], 0, { PORT: String(PORT) });
-  assert.match(out, /另一份库 .*elsewhere.*还欠着一次数据核对/, out);
+  await blocked([], /1 条欠着的数据核对认不出是这份库.*elsewhere.*--take-over.*--forget-others/);
+  out = await upgrade(["--forget-others"], 0, { PORT: String(PORT) });
   assert.doesNotMatch(out, /补核过了/, out);
-  assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, [theirs], "别的库欠的核对被这份库清掉了");
-  withState({ verifyPending: undefined });
-  console.log("✓ 换了一份库:别的库没做完的升级在停服务之前拦下,别的库欠的核对不拿这份库比");
+  assert.equal(stateNow().verifyPending, undefined, out);
+  assert.equal(stateNow().forgotten?.at(-1)?.backupFile, theirs.backupFile, "挪开的记录没留在 forgotten 里");
 
-  // 别的库那次没做完、那份库已经不在了:拦下时给的出路(--take-over)真走得通 —— 那次改记成那份库欠的核对,这一次照常升。
-  const gone = { ...half, db: "file:0:0", dbPath: join(TMP, "gone", "other.sqlite") };
-  withState({ inProgress: gone });
-  out = await upgrade([], 2, { PORT: String(PORT) });
-  assert.match(out, /另一份库 .*other\.sqlite.*--take-over/, out);
-  assert.equal((await health())?.pid, pid, "拦下却动了服务");
-  out = await upgrade(["--take-over"], 0, { PORT: String(PORT) });
-  let st = JSON.parse(readFileSync(stateFile, "utf8"));
-  assert.equal(st.inProgress, undefined, out);
-  assert.deepEqual(st.verifyPending, [{ backupFile: half.backupFile, backupDigest: half.backupDigest, db: gone.db, dbPath: gone.dbPath }], `那次的进度没改记成那份库欠的核对\n${out}`);
-  withState({ verifyPending: undefined });
+  // ② 别的库那次没做完、那份库已经不在了:拦下;--forget-others 挪开,这一次从头来。
+  withState({ inProgress: { ...half, db: "file:0:0", dbPath: join(TMP, "gone", "other.sqlite") }, forgotten: undefined });
+  await blocked([], /另一份库 .*other\.sqlite.*--forget-others/);
+  out = await upgrade(["--forget-others"], 0, { PORT: String(PORT) });
+  assert.equal(stateNow().inProgress, undefined, out);
+  assert.equal(stateNow().forgotten?.at(-1)?.what, "没做完的那次升级");
+  withState({ forgotten: undefined });
 
-  // 旧格式(没记 db)的记录:拦下、说清怎么认领;--take-over 认领成这份库的、拿它补核。
-  withState({ verifyPending: { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest } });
-  out = await upgrade([], 2, { PORT: String(PORT) });
-  assert.match(out, /1 条旧格式的待核对记录.*--take-over/, out);
-  assert.equal((await health())?.pid, pid, "拦下却动了服务");
+  // ②' 认领那次没做完的(--take-over,链接改指之后人说「就是这份库」也走这里):那份备份记成这份库欠的核对、拿它补核,
+  //     这一次照常再给这份库留一份底 —— 认错了也不会拿别人的备份冒充这份库的留底。
+  withState({ inProgress: { ...half, db: "file:0:0", dbPath: join(TMP, "gone", "other.sqlite") } });
+  const backupsBefore = readdirSync(join(DATA, "backups")).length;
+  rmSync(join(INSTALL, "web", "dist", "assets", "app.js")); // 产物要重建:走一遍真的停、留底、起
   out = await upgrade(["--take-over"], 0, { PORT: String(PORT) });
+  assert.match(out, /上次没核对成的数据补核过了:项目 2 → 2/, out);
+  assert.equal(readdirSync(join(DATA, "backups")).length, backupsBefore + 1, `认领之后没给这份库另留一份底\n${out}`);
+  assert.equal(stateNow().inProgress, undefined, out);
+  assert.equal(stateNow().verifyPending, undefined, out);
+  pid = (await health())?.pid;
+
+  // ③ 旧格式:没记 db 的、上一版记的裸路径 —— 认不出归属:拦下;--take-over 认领、拿这份库补核。
+  for (const legacy of [sameData, { ...sameData, db: join(realpathSync(DATA), "navi.db") }]) {
+    withState({ verifyPending: [legacy] });
+    await blocked([], /认不出是这份库.*--take-over/);
+    out = await upgrade(["--take-over"], 0, { PORT: String(PORT) });
+    assert.match(out, /补核过了:项目 2 → 2/, out);
+    assert.equal(stateNow().verifyPending, undefined, out);
+  }
+
+  // ④ 当时库还不在、按路径记的(path:),这个路径上现在就是这份库:不用参数,直接归它、补核。
+  withState({ verifyPending: [{ ...sameData, db: `path:${join(realpathSync(DATA), "navi.db")}` }] });
+  out = await upgrade([], 0, { PORT: String(PORT) });
   assert.match(out, /补核过了:项目 2 → 2/, out);
-  st = JSON.parse(readFileSync(stateFile, "utf8"));
-  assert.equal(st.verifyPending, undefined, out);
-  console.log("✓ 对不上这份库的进度都有出路:别的库没做完的 --take-over 改记成它欠的核对;旧格式的 --take-over 认领、拿这份库补核");
+  assert.equal(stateNow().verifyPending, undefined, out);
+  console.log("✓ 认不出是这份库的记录一律停服务之前拦下:--forget-others 挪开、--take-over 认领补核;按路径记的库建出来后直接归它");
 }
 
 // ── 已是最新也收拾 MCP 登记:navi 在、旧名 ash 起的也是 Navi 的脚本 → 删掉旧名 ─────────────────────
