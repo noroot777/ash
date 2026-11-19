@@ -209,7 +209,11 @@ try {
   assert.equal(await executionOf("fu-legacy-e2"), true, "答复对不上提问记录,不算证据");
   assert.equal(await executionOf("fu-legacy-e3"), true, "会话里有解析不了的回合行,不算证据");
   assert.equal(await legacy.restoreFollowUpAnswers(), 0, "认过一次就写进行里,再跑不重复");
-  assert.equal((await trayOf(D))[0]?.wait, null, "D 那条按续聊判,没有挡着它的东西");
+  // 「已经有人在送」也算没挡着:认回那一趟在慢机器上要好几秒(逐条读会话记录),这期间后台的投递
+  // 扫描可能已经按续聊把它领走、开了续聊回合(2026-11-19 Windows 真机上每次都这样:领走时 execution
+  // 已是 false)。要钉的是「不再被队列挡着」,不是「此刻还没人动它」。
+  const dWait = (await trayOf(D))[0]?.wait ?? null;
+  assert.ok(dWait === null || dWait.kind === "delivering", `D 那条按续聊判,没有挡着它的东西(实得 ${JSON.stringify(dWait)})`);
 
   await pending.deliverPendingMessages(D);
   await waitFor(() => countIn(dText) > 0, "认回续聊的旧答复没有被扫描送出去");
