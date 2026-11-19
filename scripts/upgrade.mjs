@@ -43,6 +43,7 @@ import {
   showFile, untrackedCollisions,
 } from "./upgrade-git.mjs";
 import { acquireUpgradeLock, checkoutLockDir, dataLockDirs, UPGRADE_LOCK_ENV } from "./upgrade-lock.mjs";
+import { progressOwnership } from "./upgrade-ownership.mjs";
 import { parseUpgradeOptions, upgradeCommand, UPGRADE_USAGE, userArgs } from "./upgrade-options.mjs";
 import { checkDataCommand, envLines, printRollback, printSummary, rollbackCommands, shellArg } from "./upgrade-report.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
@@ -99,15 +100,12 @@ async function preflight(pkg, abort) {
   const data = inspectData({ repo: REPO, env, keepDbName: options.keepDbName, stamp });
   const problems = [...runtimeProblems(pkg), ...data.problems];
   let saved = {};
-  const db = data.problems.length ? null : dbIdentity(data);
+  const db = data.problems.length ? null : dbIdentity(data.db);
   if (!data.problems.length) {
     try { saved = readState(data.dataDir); } catch (error) { problems.push(error.message); }
   }
-  // 上次没做完的那次升的是另一份库(同一个数据目录,经 NAVI_DB 选了别的):它的备份、核对基线都是那份库的,不能拿来接着升这份。
-  if (saved.inProgress && saved.inProgress.db !== db) {
-    problems.push(`上次没做完的那次升级升的是${saved.inProgress.db ? `另一份库 ${saved.inProgress.db}` : "哪份库没记下来"},这一次选的是 ${db};`
-      + `它的备份(${saved.inProgress.backup ?? "还没留"})不是这份库的,不能接着用。先照那次的 NAVI_DB / NAVI_DATA_DIR 再跑一次 npm run upgrade 把它做完,再来升这份`);
-  }
+  // 进度里跟库绑着的记录归不归这份库(别的库没做完的、没记是哪份库的旧记录):对不上就在这里拦下(upgrade-ownership.mjs)。
+  if (db) problems.push(...progressOwnership(saved, { db, dbPath: data.db, takeOver: options.takeOver }).problems);
   // 库留不了底的(软链指着的东西不在了之类),在停服务之前就拦下。
   if (!data.problems.length) problems.push(...backupSources({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit }).problems);
   // 库改名做到一半(账本在)、而这次升级之前没留过底:那一刻库和它的 -wal 可能分在新旧两个名字下,做不出一份可靠的快照。
@@ -123,7 +121,7 @@ async function preflight(pkg, abort) {
     return abort(2);
   }
   for (const w of data.warnings) say(`  ⚠ ${w}`);
-  return { data, db, port, portFrom, server };
+  return { data, db, dbPath: data.db, port, portFrom, server };
 }
 
 /** 核对出来少了的那几张表,逐张说清少了哪几条。 */
@@ -139,7 +137,7 @@ function reportMissing(v) {
  * 顶替 —— 后来那份是从已经少了东西的库留的,拿它比只能证明「没再少」(审查实测:第一次少了一条,第二次改口说都在)。
  * 返回 { ok, line, left }:left = 还没过的那几份(照 verifyPending 的格式记回去)。
  */
-function settleChecks(owed, current, live, db) {
+function settleChecks(owed, current, live, { db, dbPath }) {
   const left = [];
   const lines = [];
   for (const b of [...owed, ...(current && !owed.some((o) => o.file === current.file) ? [current] : [])]) {
@@ -153,16 +151,16 @@ function settleChecks(owed, current, live, db) {
     } else {
       say(`  ⚠ 上次升级的数据核对还是没过:${v.line}。升级前的库在 ${b.file},先别删它。`);
     }
-    if (v.state !== "ok") left.push({ backupFile: b.file, backupDigest: b.digest, db });
+    if (v.state !== "ok") left.push({ backupFile: b.file, backupDigest: b.digest, db, dbPath });
   }
   // 小结里那一行:有没过的说头一份没过的,都过了说最后一份(这一次的基线排在最后)。
   const line = (lines.find((l) => !l.ok) ?? lines.at(-1))?.text ?? "没核对(升级前没有库)";
   return { ok: !left.length, line, left };
 }
 
-/** 数据那一头的锁(upgrade-lock.mjs 的 dataLockDirs:按库和 runs 的真实落点);落点解析不了也算没拿到。 */
-function lockData(db, token) {
-  try { return acquireUpgradeLock(dataLockDirs(db, env), { token, note: "升级" }); } catch (error) { return { ok: false, why: error.message }; }
+/** 数据那一头的锁(upgrade-lock.mjs 的 dataLockDirs:库、runs、升级进度各自的真实落点);落点解析不了也算没拿到。 */
+function lockData(data, token) {
+  try { return acquireUpgradeLock(dataLockDirs(data.db, data.dataDir, env), { token, note: "升级" }); } catch (error) { return { ok: false, why: error.message }; }
 }
 
 const takeDownArgs = (ctx, extra) => ({
@@ -200,7 +198,7 @@ async function prepare() {
   catch { block(["新版的 package.json 读不出来,不知道它要什么版本的 Node/npm"]); }
   const ctx = await preflight(pkg, stopHere);
   // 数据那一头也锁上(别的检出可以经 NAVI_DATA_DIR / NAVI_DB 指到同一份数据)。
-  const dataLock = lockData(ctx.data.db, lock.token);
+  const dataLock = lockData(ctx.data, lock.token);
   if (!dataLock.ok) block([dataLock.why]);
   process.on("exit", dataLock.release);
   // 有任务在跑就在这里拦下(--wait 在这里等):还没拉代码,什么都没变。
@@ -258,11 +256,19 @@ async function apply() {
   }
   const ctx = await preflight(JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")), undoPull);
   const { data, port } = ctx;
-  const dataLock = lockData(data.db, lock.token);
+  const dataLock = lockData(data, lock.token);
   if (!dataLock.ok) { say(`  ✕ ${dataLock.why}`); undoPull(2); }
   process.on("exit", dataLock.release);
   dataDir = data.dataDir;
+  // 进度在锁里重读、重认一遍归属(preflight 那一眼是拿锁之前看的);--take-over 认领 / 搁置的结果在动服务之前先写下。
   try { state = readState(dataDir); } catch (error) { say(`  ✕ ${error.message}`); undoPull(2); }
+  const own = progressOwnership(state, { db: ctx.db, dbPath: ctx.dbPath, takeOver: options.takeOver });
+  if (own.problems.length) { for (const p of own.problems) say(`  ✕ ${p}`); undoPull(2); }
+  if (own.changed) {
+    state = own.state;
+    try { writeState(dataDir, state); } catch (error) { say(`  ✕ 升级进度写不进 ${dataDir}(${error.message})`); undoPull(2); }
+    say("  · --take-over:进度里对不上的记录已经认领 / 搁置好了");
+  }
   const log = logFor(port);
   const resumed = state.inProgress ?? null;
   const lastTo = state.last?.to && state.last.to !== head && isAncestor(REPO, state.last.to, head) ? state.last.to : null;
@@ -282,7 +288,7 @@ async function apply() {
     else delete state.verifyPending;
   };
   for (const o of debts.others) {
-    say(`  ⚠ ${o?.db ? `另一份库 ${o.db}` : "一份没记是哪份的库"}还欠着一次数据核对(升级前的库在 ${o?.backupFile}):选它再跑一次 npm run upgrade 补核;这一次只核对 ${data.db}`);
+    say(`  ⚠ ${o?.db ? `另一份库 ${o.dbPath ?? o.db} ` : "一份没记是哪份的库"}还欠着一次数据核对(升级前的库在 ${o?.backupFile}):选它再跑一次 npm run upgrade 补核;这一次只核对 ${data.db}`);
   }
   /** MCP 登记收拾成只有 navi(setup 那份逻辑):幂等,迁不了不算升级失败,说一句就行。 */
   const registerMcp = () => {
@@ -296,7 +302,7 @@ async function apply() {
   if (!resumed && built && !renameNow && serving) {
     say(`✓ 已是最新:代码 ${short(head)},库 ${data.db},服务 http://localhost:${port}(pid ${state.servedPid})在跑。代码、依赖、服务都没动。`);
     // 上次升级没核对过的数据补核一次(只读现在的库,不重启)。
-    const v = settleChecks(debts.mine, null, dbFileFor(REPO, env), ctx.db);
+    const v = settleChecks(debts.mine, null, dbFileFor(REPO, env), ctx);
     if (v.left.length !== debts.mine.length) {
       keepDebts(v.left);
       try { writeState(dataDir, state); } catch { /* 记不下来,下次再补核一遍而已 */ }
@@ -305,7 +311,7 @@ async function apply() {
     process.exit(v.ok ? 0 : 1);
   }
   if (resumed) say(`  · 上次升级(从 ${short(resumed.from)} 起)没做完,接着做`);
-  state.inProgress = { ...(resumed ?? { from, db: ctx.db, startedAt: new Date().toISOString() }), to: head };
+  state.inProgress = { ...(resumed ?? { from, db: ctx.db, dbPath: ctx.dbPath, startedAt: new Date().toISOString() }), to: head };
   state.port = port;
   createdProgress = !resumed;
   try {
@@ -455,19 +461,19 @@ async function apply() {
       await fail(`新服务没起来:${why}`);
     }
     state.servedPid = launched.pid;
-    state.servedDb = ctx.db;
+    state.servedDb = dbIdentity(dbFileFor(REPO, env)); // 新装的库是服务刚建的:这时候才有它
     save();
     say(`  ✓ :${port} 已就绪(pid ${launched.pid},日志 ${log})`);
 
     say("▶ 6/6 核对数据、收尾…");
     // 核对有三种结局:都在 / 有缺 / 没核对成。后两种都不算升好:记进 verifyPending,往后每次升级都先补核它(settleChecks)。
-    const v = settleChecks(debts.mine, baseline, dbFileFor(REPO, env), ctx.db);
+    const v = settleChecks(debts.mine, baseline, dbFileFor(REPO, env), ctx);
     keepDebts(v.left);
     await refreshMcp({ repo: REPO, port, lockFile: lockFileFor(REPO, env), skip: options.skipMcp, force: false, say, command: restartCommand });
     registerMcp();
 
     const backup = state.inProgress.backup;
-    state.last = { from, to: head, at: new Date().toISOString(), db: ctx.db, backup };
+    state.last = { from, to: head, at: new Date().toISOString(), db: state.servedDb, backup };
     delete state.inProgress;
     save();
     const branch = inspectCheckout(REPO).branch ?? "?";

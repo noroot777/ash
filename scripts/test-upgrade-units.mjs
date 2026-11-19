@@ -7,14 +7,15 @@
 //     只是参数里含着入口路径、已经在端口上应答的,一律不动。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPidAlive, sleep } from "./platform.mjs";
 import { selfStartedAtMs } from "./relocate-checkout-lock.mjs";
-import { backupDb, backupSources, fileDigest, readIds, verifyData } from "./upgrade-data.mjs";
+import { backupDb, backupSources, dbIdentity, fileDigest, readIds, verifyData } from "./upgrade-data.mjs";
+import { progressOwnership } from "./upgrade-ownership.mjs";
 import { processBirth } from "./process-birth.mjs";
 import { acquireUpgradeLock, dataLockDirs } from "./upgrade-lock.mjs";
 
@@ -172,19 +173,85 @@ holdOrExit({ repo: ${JSON.stringify(inst)}, note: "setup" }); console.log("got i
     }
     if (linked) {
       const env = {};
-      assert.deepEqual(dataLockDirs(join(homes[0], "navi.db"), env).filter((d) => dataLockDirs(join(homes[1], "navi.db"), env).includes(d)),
+      assert.deepEqual(dataLockDirs(join(homes[0], "navi.db"), homes[0], env).filter((d) => dataLockDirs(join(homes[1], "navi.db"), homes[1], env).includes(d)),
         [join(realpathSync(shared), ".navi-upgrade.lock.d")], "两份安装经软链用同一份库,却没有共同的锁");
-      const a = acquireUpgradeLock(dataLockDirs(join(homes[0], "navi.db"), env), { note: "升级" });
+      const a = acquireUpgradeLock(dataLockDirs(join(homes[0], "navi.db"), homes[0], env), { note: "升级" });
       assert.ok(a.ok, a.why);
       const b = JSON.parse(spawnSync(process.execPath, ["--input-type=module", "-e",
         `import { acquireUpgradeLock, dataLockDirs } from ${JSON.stringify(new URL("./upgrade-lock.mjs", import.meta.url).href)};
-console.log(JSON.stringify(acquireUpgradeLock(dataLockDirs(${JSON.stringify(join(homes[1], "navi.db"))}, {}), { note: "升级" })));`], { encoding: "utf8" }).stdout);
+console.log(JSON.stringify(acquireUpgradeLock(dataLockDirs(${JSON.stringify(join(homes[1], "navi.db"))}, ${JSON.stringify(homes[1])}, {}), { note: "升级" })));`], { encoding: "utf8" }).stdout);
       assert.equal(b.ok, false, "另一份安装经自己的软链照样拿到了同一份库的锁");
       a.release();
       console.log("✓ 数据锁按库文件的真实落点:两份安装经各自的软链用同一份库,只有一个拿得到");
     } else {
       console.log("⚠ 建不了软链,跳过数据锁的软链那一格");
     }
+    // 两份安装共用一个数据目录、各选各的库(NAVI_DB 在不同地方):共用的是升级进度和 runs,也得是同一把锁。
+    const commonData = join(dir, "common-data");
+    const dbs = ["disk-a", "disk-b"].map((d) => { mkdirSync(join(dir, d)); writeFileSync(join(dir, d, "x.sqlite"), ""); return join(dir, d, "x.sqlite"); });
+    mkdirSync(commonData);
+    const shared2 = dataLockDirs(dbs[0], commonData, {}).filter((d) => dataLockDirs(dbs[1], commonData, {}).includes(d));
+    assert.deepEqual(shared2, [join(realpathSync(commonData), ".navi-upgrade.lock.d")], "共用数据目录(进度文件、runs)却没有共同的锁");
+    const runsElsewhere = join(dir, "runs-elsewhere", "runs");
+    assert.ok(dataLockDirs(dbs[0], commonData, { NAVI_RUNS_DIR: runsElsewhere }).includes(join(realpathSync(dir), "runs-elsewhere", ".navi-upgrade.lock.d")),
+      "NAVI_RUNS_DIR 指到别处时,那份 runs 没锁上");
+    console.log("✓ 数据锁也锁升级进度所在的数据目录和服务实际用的 runs:共用数据目录、各选各库的两份安装只有一个拿得到");
+  }
+
+  // ── 库是谁:按文件本身认 ──────────────────────────────────────────────────────────
+  {
+    const box = join(dir, "identity");
+    mkdirSync(box);
+    const a = join(box, "a.sqlite");
+    const b = join(box, "b.sqlite");
+    writeFileSync(a, "A");
+    writeFileSync(b, "B");
+    const idA = dbIdentity(a);
+    assert.match(idA, /^file:/);
+    assert.notEqual(idA, dbIdentity(b), "两份库认成了同一份");
+    renameSync(a, join(box, "renamed.sqlite"));
+    assert.equal(dbIdentity(join(box, "renamed.sqlite")), idA, "库改名(rename)之后认不出是同一份了");
+    assert.match(dbIdentity(a), /^path:/, "不在的库按路径认,不该撞上哪份真库");
+    let linked = true;
+    try { symlinkSync(join(box, "renamed.sqlite"), join(box, "link.sqlite")); } catch { linked = false; }
+    if (linked) {
+      assert.equal(dbIdentity(join(box, "link.sqlite")), idA, "经软链选同一份库,认成了另一份");
+      rmSync(join(box, "link.sqlite"));
+      symlinkSync(b, join(box, "link.sqlite"));
+      assert.equal(dbIdentity(join(box, "link.sqlite")), dbIdentity(b), "链接改指另一份库,身份没跟着变");
+    }
+    console.log(`✓ 库按文件本身认:改名不变${linked ? "、经软链选的是同一份、链接改指别的库就是别的库" : "(建不了软链,软链那几格跳过)"}`);
+  }
+
+  // ── 进度归谁 ────────────────────────────────────────────────────────────────────
+  {
+    const me = { db: "file:1:1", dbPath: "/d/navi.db" };
+    const run = (extra) => ({ from: "f", to: "t", backup: "/bk", backupFile: "/bk/navi.db", backupDigest: "d", ...extra });
+    const own = (state, takeOver = false) => progressOwnership(state, { ...me, takeOver });
+    assert.deepEqual(own({ inProgress: run({ db: me.db }) }).problems, []);
+    // 别的库那次没做完、已经留了底:拦下;--take-over 改记成那份库欠着的核对、这一次从头来。
+    const other = { inProgress: run({ db: "file:1:2", dbPath: "/x/other.db" }) };
+    assert.match(own(other).problems.join(), /另一份库 \/x\/other\.db.*不能接着用.*--take-over/);
+    const t1 = own(other, true);
+    assert.deepEqual(t1.problems, []);
+    assert.equal(t1.state.inProgress, undefined);
+    assert.deepEqual(t1.state.verifyPending, [{ backupFile: "/bk/navi.db", backupDigest: "d", db: "file:1:2", dbPath: "/x/other.db" }]);
+    assert.ok(other.inProgress, "认领 / 搁置不该改调用方手里那一份");
+    assert.match(own({ inProgress: run({ db: "file:1:2", dbPath: me.dbPath }) }).problems.join(), /现在指着的已经是另一份了/, "同一个路径换了库,得说出来");
+    // 还没留底的那次:里面没有跟库绑着的东西,直接归这份库。
+    assert.deepEqual(own({ inProgress: run({ db: "file:1:2", backup: null }) }).state.inProgress.db, me.db);
+    // 没记 db 的旧记录:拦下;--take-over 认领成这份库的(没做完的接着用它的备份,欠着的拿这份库补核)。
+    const legacy = { inProgress: run({}), verifyPending: { backupFile: "/old/navi.db", backupDigest: "e" } };
+    const p = own(legacy).problems.join("\n");
+    assert.match(p, /旧格式的进度,没记是哪份库的/);
+    assert.match(p, /1 条旧格式的待核对记录/);
+    const t2 = own(legacy, true);
+    assert.equal(t2.state.inProgress.db, me.db);
+    assert.equal(t2.state.inProgress.backup, "/bk", "认领的那次该接着用它自己的备份");
+    assert.deepEqual(t2.state.verifyPending, [{ backupFile: "/old/navi.db", backupDigest: "e", ...me }]);
+    // 别的库欠着的核对:不归这份库,也不拦(upgrade.mjs 提一句、原样留着)。
+    assert.deepEqual(own({ verifyPending: [{ backupFile: "/x", backupDigest: "f", db: "file:9:9" }] }).problems, []);
+    console.log("✓ 进度归谁:别的库没做完的拦下、--take-over 改记成它欠的核对;旧格式的拦下、--take-over 认领;没留过底的直接归这份库");
   }
 
   // ── stop.mjs --pid ──────────────────────────────────────────────────────────────

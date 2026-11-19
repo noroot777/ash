@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, listenerPids, localJson } from "./platform.mjs";
-import { countOf, dbFileFor, drainWait as drainUntilSafe, exitLedgerFor, explainNoVerdict, killListeners, lockFileFor, noVerdictReason, queryImpact, waitPortQuiet } from "./server-control.mjs";
+import { countOf, dataDirFor, dbFileFor, drainWait as drainUntilSafe, exitLedgerFor, explainNoVerdict, killListeners, lockFileFor, noVerdictReason, queryImpact, waitPortQuiet } from "./server-control.mjs";
 import { launchServer, refreshMcp } from "./server-start.mjs";
 import { readEnv } from "./env.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
@@ -63,7 +63,7 @@ if (options.help) {
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
 // 跟 upgrade / setup 互斥(upgrade-lock.mjs):它们也在装依赖、构建、起服务,插进来就是两边一起踩。
-holdOrExit({ repo: REPO, dbFile: dbFileFor(REPO), note: "restart" });
+holdOrExit({ repo: REPO, dbFile: dbFileFor(REPO), dataDir: dataDirFor(REPO), note: "restart" });
 
 const PORT = Number(process.env.PORT || 4317);
 const LOG = readEnv(process.env, "NAVI_LOG") || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `navi-${PORT}.log`);

@@ -10,7 +10,7 @@
 //   · 放下之后再看目录:还有别的 token 的登记、而它的主人活着(pid + 进程启动时刻对得上,查不准按活着算)⇒ 撤掉自己那份、
 //     不做。两个同时到的会互相看见、都退下 —— 只会「都没拿到」,不会「都拿到了」;
 //   · 主人已死的登记不算数,顺手删掉(它的主人不会再回来写它,删它跟谁都不冲突);读不懂的按活着算,交给人删。
-// 锁两处:这份检出的 git 目录(依赖、产物;worktree 各有各的;解包装的没有 git 目录,放安装目录下)、库和 runs 的真实落点所在的目录
+// 锁两处:这份检出的 git 目录(依赖、产物;worktree 各有各的;解包装的没有 git 目录,放安装目录下)、库 / runs / 升级进度的真实落点所在的目录
 // (两份检出可以经 NAVI_DATA_DIR / NAVI_DB / 软链指到同一份数据,见 dataLockDirs)。升级第一段拿到锁,拉完代码交给第二段时把 token 经环境变量递过去,第二段用同一个 token 放自己的登记 —— 同一次操作;
 // 认的是「父进程放的那份」,不是字符串本身(othersIn)。第二段一接到就把它从环境里抹掉,不往装依赖、起服务那些子进程里传。
 import { randomBytes } from "node:crypto";
@@ -32,14 +32,16 @@ export function checkoutLockDir(repo) {
 }
 
 /**
- * 数据那一头的锁目录:按**资源的真实落点**定,跟离线维护锁同一套资源键(relocate-checkout-lock 的 resourceKeys:库文件和 runs
- * 目录各取 realpath)—— 库文件本身是软链时,两份安装的数据目录不同、指着的却是同一份库,只按数据目录(链接所在的地方)上锁就
- * 各锁各的(审查第 4 轮实测)。每个键的真实所在目录放一把,去重;库改名(ash.db → navi.db)不挪目录,锁不跟着变。
+ * 数据那一头的锁目录:按**资源的真实落点**定,跟离线维护锁同一套资源键(relocate-checkout-lock 的 resourceKeys:各取 realpath)。
+ * 锁的是这次要动的全部共享资源 —— 库文件、服务的 runs 目录(NAVI_RUNS_DIR,不设就是数据目录下的 runs,口径同 server/src/paths.ts)、
+ * 升级进度 upgrade.json(在数据目录里,读改写整段要互斥)。库本身是软链时,两份安装的数据目录不同、指着的却是同一份库;
+ * 两份安装共用一个数据目录、各选各的库时,共用的是进度文件和 runs —— 只锁其中一样就各锁各的(审查第 4 轮、复审第 3 轮)。
+ * 每个键的真实所在目录放一把,去重;库改名(ash.db → navi.db)不挪目录,锁不跟着变。
  * 解析不了真实落点(权限、链接成环)就抛出去:证明不了是哪份资源,不凭字面路径放行。
  */
-export function dataLockDirs(dbFile, env = process.env) {
+export function dataLockDirs(dbFile, dataDir, env = process.env) {
   const runs = readStorageEnv(env, "NAVI_RUNS_DIR");
-  const keys = resourceKeys(resolve(dbFile), [runs ? resolve(runs) : join(dirname(resolve(dbFile)), "runs")]);
+  const keys = resourceKeys(resolve(dbFile), [runs ? resolve(runs) : join(resolve(dataDir), "runs"), join(resolve(dataDir), "upgrade.json")]);
   return [...new Set(keys.map((k) => join(dirname(k), ".navi-upgrade.lock.d")))].sort();
 }
 
@@ -106,10 +108,10 @@ export function acquireUpgradeLock(dirs, { token = null, note }) {
  * restart / setup 用:拿这份检出(和数据)的锁,拿不到就说清楚退出 2。进程退出时自动放掉。
  * 一律现开 token:升级不会叫它们,环境里带着的 token 只可能是漏出来的(老版本升级起的服务、它的终端)。
  */
-export function holdOrExit({ repo, dbFile = null, note, env = process.env }) {
+export function holdOrExit({ repo, dbFile = null, dataDir = null, note, env = process.env }) {
   let lock;
   try {
-    const dirs = [checkoutLockDir(repo), ...(dbFile ? dataLockDirs(dbFile, env) : [])];
+    const dirs = [checkoutLockDir(repo), ...(dbFile ? dataLockDirs(dbFile, dataDir, env) : [])];
     lock = acquireUpgradeLock(dirs, { note });
   } catch (error) {
     lock = { ok: false, why: error.message };

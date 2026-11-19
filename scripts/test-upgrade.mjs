@@ -40,8 +40,10 @@ assert.equal(satisfiesRange("24.1.0", ">=22.16.0"), true);
 assert.equal(satisfiesRange("11.10.0", ">=11.9.0"), true);
 assert.equal(satisfiesRange("11.8.3", ">=11.9.0"), false);
 assert.equal(satisfiesRange("22.0.0", "^22"), null, "认不出的范围不替人猜");
-assert.deepEqual(parseUpgradeOptions([], {}), { force: false, wait: false, keepDbName: false, skipMcp: false, help: false, continue: false, pulledFrom: null });
+assert.deepEqual(parseUpgradeOptions([], {}), { force: false, wait: false, keepDbName: false, skipMcp: false, takeOver: false, help: false, continue: false, pulledFrom: null });
 assert.equal(parseUpgradeOptions(["--keep-db-name", "--wait"], {}).keepDbName, true);
+assert.equal(parseUpgradeOptions(["--take-over"], {}).takeOver, true);
+assert.deepEqual(userArgs(["--take-over", "--continue"]), ["--take-over"], "--take-over 要带进第二段");
 assert.equal(parseUpgradeOptions([], { FORCE: "1", SKIP_MCP: "1" }).force, true);
 assert.throws(() => parseUpgradeOptions(["--keep-db"], {}));
 assert.throws(() => parseUpgradeOptions(["--pulled-from", "x; rm -rf /"], {}));
@@ -424,12 +426,14 @@ rmSync(join(INSTALL, "web", "dist", "assets", "app.js"));
 out = await upgrade([], 1, { PORT: String(PORT) });
 assert.doesNotMatch(out, /已是最新|✅ 升好了/, out);
 assert.match(out, /上次升级的数据核对还是没过/, out);
-assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, [owed], `欠着的核对被这一次的基线顶掉了\n${out}`);
+/** 记回去的欠账(dbPath 是给人看的路径,不比)。 */
+const debtsNow = () => JSON.parse(readFileSync(stateFile, "utf8")).verifyPending?.map(({ dbPath, ...x }) => x);
+assert.deepEqual(debtsNow(), [owed], `欠着的核对被这一次的基线顶掉了\n${out}`);
 withState({ verifyPending: [owed, { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest, db: dbId }] });
 rmSync(join(INSTALL, "web", "dist", "assets", "app.js"));
 out = await upgrade([], 1, { PORT: String(PORT) });
 assert.match(out, /上次没核对成的数据补核过了:项目 2 → 2/, out);
-assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, [owed], "过了的那份该清掉、没过的留着");
+assert.deepEqual(debtsNow(), [owed], "过了的那份该清掉、没过的留着");
 withState({ verifyPending: undefined });
 console.log("✓ 欠着核对时走重起那条路:欠的那份照样补核,没过就不算升好、账留着,过了的才清掉");
 
@@ -465,6 +469,29 @@ console.log("✓ 升级进度读不懂:停服务之前拦下");
   assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, [theirs], "别的库欠的核对被这份库清掉了");
   withState({ verifyPending: undefined });
   console.log("✓ 换了一份库:别的库没做完的升级在停服务之前拦下,别的库欠的核对不拿这份库比");
+
+  // 别的库那次没做完、那份库已经不在了:拦下时给的出路(--take-over)真走得通 —— 那次改记成那份库欠的核对,这一次照常升。
+  const gone = { ...half, db: "file:0:0", dbPath: join(TMP, "gone", "other.sqlite") };
+  withState({ inProgress: gone });
+  out = await upgrade([], 2, { PORT: String(PORT) });
+  assert.match(out, /另一份库 .*other\.sqlite.*--take-over/, out);
+  assert.equal((await health())?.pid, pid, "拦下却动了服务");
+  out = await upgrade(["--take-over"], 0, { PORT: String(PORT) });
+  let st = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.equal(st.inProgress, undefined, out);
+  assert.deepEqual(st.verifyPending, [{ backupFile: half.backupFile, backupDigest: half.backupDigest, db: gone.db, dbPath: gone.dbPath }], `那次的进度没改记成那份库欠的核对\n${out}`);
+  withState({ verifyPending: undefined });
+
+  // 旧格式(没记 db)的记录:拦下、说清怎么认领;--take-over 认领成这份库的、拿它补核。
+  withState({ verifyPending: { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest } });
+  out = await upgrade([], 2, { PORT: String(PORT) });
+  assert.match(out, /1 条旧格式的待核对记录.*--take-over/, out);
+  assert.equal((await health())?.pid, pid, "拦下却动了服务");
+  out = await upgrade(["--take-over"], 0, { PORT: String(PORT) });
+  assert.match(out, /补核过了:项目 2 → 2/, out);
+  st = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.equal(st.verifyPending, undefined, out);
+  console.log("✓ 对不上这份库的进度都有出路:别的库没做完的 --take-over 改记成它欠的核对;旧格式的 --take-over 认领、拿这份库补核");
 }
 
 // ── 已是最新也收拾 MCP 登记:navi 在、旧名 ash 起的也是 Navi 的脚本 → 删掉旧名 ─────────────────────

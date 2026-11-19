@@ -206,8 +206,9 @@ export function verifyData(baseline, liveFile) {
  *   last       上一次升好的那次:{ from, to, at, db, backup }
  *
  * 文件按数据目录放,而一个数据目录底下可以经 NAVI_DB 选不同的库 —— 所以凡是跟某一份库绑着的(进度、备份、欠着的核对、起着的服务)
- * 都记上 db,读的时候只认这份库自己的(审查实测:A 库升到一半失败,换 B 库再跑接着用了 A 的备份,B 少了任务还报都在)。
- * built / port 是检出和端口的事,不分库。
+ * 都记上 db(dbIdentity)和人看的 dbPath,读的时候只认这份库自己的(审查实测:A 库升到一半失败,换 B 库再跑接着用了 A 的备份,
+ * B 少了任务还报都在);没记 db 的旧记录和别的库那次没做完的,怎么认领见 upgrade-ownership.mjs。
+ * built / port 是检出和端口的事,不分库。读改写整段在数据锁里(upgrade-lock 的 dataLockDirs 锁着这份文件所在的目录)。
  */
 export const stateFile = (dataDir) => join(dataDir, "upgrade.json");
 
@@ -252,11 +253,17 @@ function canonical(p) {
 }
 
 /**
- * 这一次升的是哪份库(升级进度里 db 记的就是它)。没设 NAVI_DB:数据目录的真实落点 + 规范库名 —— 库改名(ash.db → navi.db)
- * 不换身份,库文件本身是软链也不影响;设了 NAVI_DB:那个文件的真实落点(两个路径指着同一份库就是同一份)。
+ * 一份库是谁(升级进度里 db 记的就是它):**文件本身** —— 设备号 + 文件编号(stat 跟着软链走)。按路径认靠不住(审查实测):
+ * 同一份库经软链、经 NAVI_DB、经默认选法是几个不同的路径,链接改指另一份库路径却不变。文件编号这几种都认得对,库改名
+ * (rename-db 用的是 rename,ash.db → navi.db)也不变。库还不在(新装)就退到路径的真实落点,前缀不同,不会跟哪份库撞上。
  */
-export function dbIdentity({ db, explicit, dataDir }) {
-  return explicit ? canonical(resolve(db)) : join(canonical(resolve(dataDir)), DB_FILE_NAME);
+export function dbIdentity(file) {
+  const abs = resolve(file);
+  try {
+    const st = statSync(abs, { bigint: true });
+    if (st.isFile() && st.ino > 0n) return `file:${st.dev}:${st.ino}`;
+  } catch { /* 不在:按路径 */ }
+  return `path:${canonical(abs)}`;
 }
 
 export function writeState(dataDir, state) {

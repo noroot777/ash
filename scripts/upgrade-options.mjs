@@ -15,6 +15,9 @@ export const UPGRADE_USAGE = `用法: ${upgradeCommand()} [选项]
   --force         明知有任务在跑也要升(在跑的任务交给新版接管,这条路没在真机上验过)
   --keep-db-name  不把 ${LEGACY_DB_FILE} 改成 ${DB_FILE_NAME}(想留着随时退回改名之前的版本时用;以后去掉它再跑一次就会改)
   --skip-mcp      不动各家 CLI 里的 MCP 登记,也不收旧的 MCP 进程
+  --take-over     升级进度里有对不上这一次所选库的记录时(另一份库没做完的那次、没记是哪份库的旧记录),由这一次接管:
+                  没记归属的认作这份库的(接着用它的备份、拿这份库补核);另一份库没做完的那次改记成那份库欠着的一次核对、
+                  这一次从头留底。被拦下时提示里会说用不用加
   --help, -h      显示帮助,什么都不做
 
 按启动服务时那套环境变量跑:PORT(不设就按锁文件里记的端口,服务停着就按上次升级记下的,都没有才是 4317)、
@@ -39,6 +42,7 @@ export function parseUpgradeOptions(args = process.argv.slice(2), env = process.
       wait: { type: "boolean" },
       "keep-db-name": { type: "boolean" },
       "skip-mcp": { type: "boolean" },
+      "take-over": { type: "boolean" },
       help: { type: "boolean", short: "h" },
       continue: { type: "boolean" },
       "pulled-from": { type: "string" },
@@ -52,6 +56,7 @@ export function parseUpgradeOptions(args = process.argv.slice(2), env = process.
     wait: !!(values.wait || env.WAIT),
     keepDbName: !!values["keep-db-name"],
     skipMcp: !!(values["skip-mcp"] || env.SKIP_MCP),
+    takeOver: !!values["take-over"],
     help: !!values.help,
     continue: !!values.continue,
     pulledFrom: values["pulled-from"] ?? null,
