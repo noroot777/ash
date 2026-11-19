@@ -84,6 +84,7 @@ export type SessionTraceEntry = {
   event:
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
+    | Extract<import("@ash/shared").AgentEvent, { kind: "plan" }>
     | Extract<import("@ash/shared").AgentEvent, { kind: "tool" }>
     // source/ref/path:一处正文引用的保存结果(见 shared/src/events.ts)。配对靠 source+ref,
     // 不靠文件名;path 缺省 = 这处引用确实没有副本,`lost: true` 进一步说明「字节当时读到了、

@@ -2,7 +2,7 @@ import type { AgentType } from "./index.ts";
 
 export const CODEX_COMMANDS = {
   goal: "持续目标：/goal 描述；pause / resume / clear；--scopes 查看作用域；--budget 数量",
-  plan: "计划模式：/plan [问题]；/plan off 退出",
+  plan: "计划模式：/plan [问题]；/plan implement 实施计划；/plan off 退出",
   compact: "原生压缩当前会话",
   review: "原生代码审查：/review [--base 分支 | --commit SHA | 要求]",
   status: "查看当前会话、模型及上下文状态",
@@ -99,6 +99,9 @@ export function isGoalExecution(command: CliCommand | null): boolean {
 }
 export function isGoalRecovery(command: CliCommand | null): boolean {
   return command?.name === "goal" && command.args === "resume";
+}
+export function isPlanImplementation(command: CliCommand | null | undefined): boolean {
+  return command?.name === "plan" && /^implement(?:\s+\S+)?$/.test(command.args);
 }
 export function goalRequest(command: CliCommand, agentType: AgentType): { objective?: string; status?: CliGoal["status"]; tokenBudget?: number } {
   if (command.args === "resume") return { status: "active" };

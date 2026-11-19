@@ -15,7 +15,7 @@ import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync,
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { expandHome } from "./platform.js";
-import { cliCommandCatalog, isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { cliCommandCatalog, isGoalExecution, isPlanImplementation, parseCliCommand } from "@ash/shared/cli-commands";
 import { configDirEnvVar, userCliDir } from "./auth/user-cli.js";
 import { isHostCliIsolatedSync } from "./auth/multi-flag.js";
 import {
@@ -79,7 +79,7 @@ const isNativeCommandName = (agentType: string, name: string) =>
  * `/compact 重点保留 X`)。是的话返回命令名,调用方必须原样发出去,并按旁路回合处理。
  */
 export function nativeCliCommand(agentType: string, text: string): string | null {
-  if (isGoalExecution(parseCliCommand(agentType, text))) return null;
+  if (isGoalExecution(parseCliCommand(agentType, text)) || isPlanImplementation(parseCliCommand(agentType, text))) return null;
   const name = /^\/([a-zA-Z][\w-]*)(?:\s|$)/.exec(text.trim())?.[1];
   return name && isNativeCommandName(agentType, name) ? name : null;
 }

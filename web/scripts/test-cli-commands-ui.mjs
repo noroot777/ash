@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { launchChrome } from "./dom-stage.mjs";
 import { waitUntil } from "./wait-until.mjs";
 import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi, seedGoalRecoveryTranscripts } from "./cli-goal-recovery-ui.mjs";
+import { clarifyPlanUi, implementPlanUi } from "./cli-plan-ui.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "ash-cli-ui-"));
 const workspace = join(root, "workspace");
@@ -115,6 +116,17 @@ const boot = `
         if (liveGoal) text += "；测试回合 " + options.env.NAVI_TURN_TOKEN;
         if (options.env.NAVI_TASK_ID === "ordinary-ui-task") text = "普通回合：" + options.env.NAVI_TURN_TOKEN;
         yield { kind: "text", text };
+        if (options.cliCommand?.name === "plan" && options.cliCommand.args === "clarify-ui") {
+          yield { kind: "userInput", questions: [
+            { question: "什么时候重置？", options: ["每周一"] },
+            { question: "什么时候生效？", options: ["立即生效"] },
+          ] };
+        } else if (options.cliState?.plan) {
+          const id = "plan-" + options.env.NAVI_TURN_TOKEN;
+          yield { kind: "plan", id, text: "", status: "streaming" };
+          yield { kind: "plan", id, text: "尚未定稿", status: "streaming", delta: true };
+          yield { kind: "plan", id, text: "# 计划 UI 验证\\n\\n| 步骤 | 结果 |\\n| --- | --- |\\n| 实施 | 保留作用域 |", status: "complete" };
+        }
         if (liveGoal) await interrupted;
         yield { kind: "done", exitStatus: 0 };
       })(),
@@ -255,6 +267,9 @@ try {
   await page.screenshot({ path: join(screenshots, "plan-mode-reloaded.png"), fullPage: true });
   assert.equal((await sendCodex("继续拆解方案")).codexPlanMode, true);
   await page.getByText("测试执行器：只讨论计划", { exact: true }).first().waitFor();
+  await clarifyPlanUi({ page, base, sendCodex, sessionEnds, idleTask, lastInvocation, screenshots });
+  await implementPlanUi({ page, base, sessionEnds, idleTask, lastInvocation, screenshots });
+  await sendCodex("/plan");
   assert.equal((await sendCodex("/plan off")).codexPlanMode, false);
   await planNotice.waitFor({ state: "hidden" });
   await page.reload();
@@ -272,7 +287,7 @@ try {
     assert.notEqual((await lastInvocation()).cliState.plan, true);
     await page.reload();
     await planNotice.waitFor();
-    assert.match(await planNotice.innerText(), /codex@验证（任务归属人）/);
+    assert.match(await planNotice.innerText(), /codex@验证/);
   }
   assert.equal((await sendCodex("照方案动手改吧")).codexPlanMode, true);
   assert.equal((await lastInvocation()).cliState.plan, true);
@@ -313,7 +328,7 @@ try {
   assert.equal(claudeStandingTask.codexPlanMode, true);
   assert.equal(claudeStandingTask.codexPlanScopes.length, 2);
   await planNotice.waitFor();
-  assert.match(await planNotice.innerText(), /codex@验证（任务归属人）.*codex@验证备用（任务归属人）/);
+  assert.match(await planNotice.innerText(), /codex@验证.*codex@验证备用/);
   await page.reload();
   await page.getByRole("textbox", { name: "回复任务" }).waitFor();
   await planNotice.waitFor();
@@ -380,7 +395,7 @@ try {
   await page.goto(`${base}/?project=cli-ui&task=fresh-claude-plan-task`);
   await page.getByRole("textbox", { name: "回复任务" }).waitFor();
   await planNotice.waitFor();
-  assert.match(await planNotice.innerText(), /codex@验证（任务归属人）.*codex@验证备用（任务归属人）/);
+  assert.match(await planNotice.innerText(), /codex@验证.*codex@验证备用/);
   const beforeClaudeRun = await sessionEnds("fresh-claude-plan-task");
   const claudeRunResponse = page.waitForResponse((value) => value.url().endsWith("/tasks/fresh-claude-plan-task/run") && value.request().method() === "POST");
   await page.getByRole("button", { name: "运行", exact: true }).click();

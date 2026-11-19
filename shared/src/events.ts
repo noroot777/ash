@@ -46,6 +46,8 @@ export interface ModelFailure { kind: ModelFailureKind; status: number | null }
 
 export type AgentEvent =
   | { kind: "thinking"; text: string }
+  | { kind: "plan"; id: string; text: string; status: "streaming" | "complete"; delta?: true }
+  | { kind: "userInput"; questions: import("./index.ts").QuestionItem[] }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; detail?: string; nativeWork?: NativeWorkEvent }
   // 一张图,或者**正文里一处引用的保存结果**。三个字段合起来才是完整的一条交代:

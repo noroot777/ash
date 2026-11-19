@@ -1,0 +1,20 @@
+.proposed-plan { margin: 18px 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; min-width: 0; }
+.proposed-plan-head, .proposed-plan-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; }
+.proposed-plan-head > span { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.proposed-plan-actions { display: flex; align-items: center; gap: 6px; }
+.proposed-plan-actions button, .proposed-plan-dialog > header button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
+.proposed-plan-actions button:hover, .proposed-plan-dialog > header button:hover { background: var(--hover-bg); color: var(--ink); }
+.proposed-plan-body { padding: 4px 24px 24px; overflow-wrap: anywhere; }
+.proposed-plan-body .task-markdown > :first-child { margin-top: 0; }
+.proposed-plan-body pre { max-width: 100%; overflow-x: auto; }
+.proposed-plan-pending { color: var(--muted); font-size: 14px; }
+.proposed-plan.is-writing { border-color: var(--muted); }
+.proposed-plan-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: #0006; }
+.proposed-plan-dialog { width: min(900px, 100%); max-height: 90dvh; overflow: auto; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); color: var(--ink); box-shadow: 0 24px 80px #0003; }
+.plan-ready-dock { margin-bottom: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.plan-ready-dock > strong { display: block; font-size: 14px; margin-bottom: 12px; }
+.plan-ready-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.plan-ready-actions button { min-height: 38px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; background: transparent; color: var(--ink); }
+.plan-ready-actions button:first-child { color: var(--canvas); background: var(--ink); border-color: var(--ink); }
+.plan-ready-actions button:disabled { opacity: .5; cursor: default; }
+@media (max-width: 600px) { .proposed-plan-body { padding: 0 16px 18px; } .proposed-plan-head { padding: 10px 12px; } .proposed-plan-backdrop { padding: 10px; } .proposed-plan-dialog { max-height: 96dvh; } }

@@ -83,7 +83,7 @@ export function createRunVoice(a: {
     persistTrace: (event: AgentEvent, at?: string): { seq: number; textAt: TextAnchor | null } | null => {
       // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
       // 此刻、只有最后一个值有意义，它的家在 sessions 行上（setSessionContext）。
-      if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
+      if (event.kind === "plan" || event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
         // agent 自己产出的图(工具结果截图之类)也躺在 uploads 目录里,归属跟着这个任务走 ——
         // 不登记的话多人模式下它是「无主资产」,同项目的人在会话里打不开(uploads.ts)。
         // 团队那条链的同一处在 team/session-consumer.ts 的 traceLead:改一处记得看另一处。

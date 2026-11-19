@@ -1,5 +1,5 @@
 import type { AgentEvent, ContextUsage } from "@ash/shared";
-import { goalRequest, isGoalExecution, type CliCommand, type CliGoal, type CliSessionState } from "@ash/shared/cli-commands";
+import { goalRequest, isGoalExecution, isPlanImplementation, type CliCommand, type CliGoal, type CliSessionState } from "@ash/shared/cli-commands";
 
 type Transport = {
   request(method: string, params: Record<string, unknown>): Promise<any>;
@@ -108,9 +108,10 @@ export class CodexNativeCommands {
     }
     if (command.name === "plan" && command.args && command.args !== "off") {
       const result = await this.transport.request("turn/start", {
-        threadId: this.transport.threadId(), input: [{ type: "text", text: command.args }],
+        threadId: this.transport.threadId(), input: [{ type: "text", text: isPlanImplementation(command)
+          ? `${this.transport.prompt}\n\n用户已确认最新计划，现在按此计划开始实施。` : this.transport.prompt }],
         ...this.transport.turnOptions,
-        collaborationMode: this.collaborationMode(),
+        collaborationMode: this.collaborationMode(isPlanImplementation(command) ? "default" : "plan"),
       });
       return { immediate: false, turnId: result.turn?.id };
     }

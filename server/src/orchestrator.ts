@@ -269,7 +269,7 @@ export async function continueTask(
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
     const preserveCliState = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
     const resetPlan = !!opts.system && !preserveCliState;
-    const planning = !resetPlan && !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
+    const planning = !resetPlan && !goalExecution && !inputExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
     if (planning) {
       sideTurn = true;
       if (sessionRole === "single") reclaimTurn(taskId, turn, "side");

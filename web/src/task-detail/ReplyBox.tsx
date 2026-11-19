@@ -36,6 +36,7 @@ import { ReplySendKey } from "./ReplySendKey.tsx";
 import { DispatchDefaultRow, DispatchDefaultSegment, useDispatchDefault } from "./ReplyDispatchDefault.tsx";
 import { DiscussCapsule } from "./ReplyDiscussSegments.tsx";
 import type { ReplyBoxProps } from "./replyBoxProps.ts";
+import { PlanReadyDock, readyPlanFor, type ReadyPlan } from "./PlanReadyDock.tsx";
 import { useStandingExecutor } from "./useStandingExecutor.ts";
 import { useExecutorProfiles } from "./useExecutorProfiles.ts";
 import { ComposerInput } from "./ComposerInput.tsx";
@@ -89,6 +90,17 @@ export function ReplyBox({
   const [stopping, setStopping] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [commandResult, setCommandResult] = useState<{ taskId: string; text: string } | null>(null);
+  const readyPlan = readyPlanFor(task, conversationItems ?? []);
+  const [revisingPlan, setRevisingPlan] = useState<string | null>(null);
+  const implementPlan = async (ready: ReadyPlan) => {
+    if (sending) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      await onSend(`/plan implement ${ready.plan.id}`, [], { agent: "codex", executorId: ready.executorId, model: ready.model, reasoningEffort: ready.reasoningEffort });
+    } catch (error) { setSendError(error instanceof Error ? error.message : String(error)); }
+    finally { setSending(false); }
+  };
   const currentTaskId = useRef(task.id);
   currentTaskId.current = task.id;
   const later = useLaterSend(draft);
@@ -501,6 +513,12 @@ export function ReplyBox({
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
+      {readyPlan && revisingPlan !== `${task.id}:${readyPlan.plan.id}` && !covering && !take && (
+        <PlanReadyDock ready={readyPlan} busy={sending} onImplement={(ready) => void implementPlan(ready)} onRevise={() => {
+          setRevisingPlan(`${task.id}:${readyPlan.plan.id}`);
+          textareaRef.current?.focus();
+        }} />
+      )}
       </div>
       {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
         dispatchTarget={dispatchDefault.value} />}

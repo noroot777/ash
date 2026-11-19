@@ -79,7 +79,7 @@ export function turnDocument(
   // 跑的过程中干这件事，agent 一说话就收编、下一个工具调用又吐回来，用户正读的内容来回闪。
   // 闸只看**这一条回合**结束没有（会话行的 `endedAt`），不看整个任务停没停：任务往下还有换轮、
   // 就地验证、审查门要走，拿任务状态当闸，讲完的回合会一直摊着不收（用户 2026-09-01 反馈）。
-  if (live) return flat();
+  if (live || segments.some((segment) => segment.events.some((event) => event.kind === "plan"))) return flat();
 
   // `process` 为空 = 这一回合没得折(没动过手),或者折完一个字都不剩 —— 两种都维持平铺。
   const { process, conclusion } = splitTurnSegments(segments);

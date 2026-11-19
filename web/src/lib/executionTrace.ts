@@ -16,7 +16,8 @@ export type ExecutionEvent = {
   // notice = 过程里的一句**提示**(上游在重试、还在等回话):它跟这一轮成败正交,所以既不
   // 算异常、也不让折叠条标红,只是留在它发生的那个位置上。来源是 `level:"notice"` 的
   // error 事件(见 shared/src/events.ts)。
-  kind: "tool" | "thinking" | "error" | "notice";
+  kind: "tool" | "thinking" | "error" | "notice" | "plan";
+  plan?: Extract<import("@ash/shared").AgentEvent, { kind: "plan" }>;
   label: string;
   detail?: string;
   at?: string;
@@ -175,6 +176,11 @@ export function hasMoreThanSummary(event: ExecutionEvent, summary: string): bool
  * 返回新数组而不是就地改:调用方里既有可变的段落对象,也有 duet 那种 React state。
  */
 export function appendExecutionEvent(events: ExecutionEvent[], event: ExecutionEvent): ExecutionEvent[] {
+  if (event.kind === "plan") {
+    const index = events.findIndex((previous) => previous.plan?.id === event.plan?.id);
+    const normalized = event.plan?.delta ? { ...event, plan: { ...event.plan, text: `${events[index]?.plan?.text ?? ""}${event.plan.text}`, delta: undefined } } : event;
+    return index < 0 ? [...events, normalized] : events.map((previous, at) => at === index ? normalized : previous);
+  }
   if (event.kind !== "thinking") return mergeCompaction(events, event) ?? [...events, event];
   let index = events.length - 1;
   while (index >= 0 && !isVisibleExecutionEvent(events[index]!)) index -= 1;

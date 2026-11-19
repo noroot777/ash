@@ -87,6 +87,15 @@ export function appendAgentText(agent: AgentItem, text: string): void {
 }
 
 export function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
+  if (event.kind === "plan") {
+    for (const previous of agent.segments) {
+      if (previous.events.some((entry) => entry.plan?.id === event.id)) {
+        previous.events = appendExecutionEvent(previous.events, auxEvent(event));
+        currentSegment(agent).awaiting = false;
+        return;
+      }
+    }
+  }
   let segment = currentSegment(agent);
   const normalized = auxEvent(event);
   /* 正文之后另起一段,只为**画得出来**的那一步(口径见 segmentHasVisibleContent)。
@@ -323,7 +332,7 @@ export function appendLiveEntry(
   }
   // 水位是覆盖不是累加：后到的那条就是此刻，跟它前面报过什么无关。
   if (event.kind === "context") liveContext.set(entry.event.sessionId, event.context);
-  if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
+  if (event.kind === "plan" || event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
     appendAgentAux(agent, event);
   }
 }

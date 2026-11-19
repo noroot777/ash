@@ -1,6 +1,6 @@
 import { desc, eq, sql } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
-import { cliStateScopeKey, goalRequest, hasCliGoalHold, isGoalExecution, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@ash/shared/cli-commands";
+import { cliStateScopeKey, goalRequest, hasCliGoalHold, isGoalExecution, isPlanImplementation, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import type { RunHandle } from "./executors/types.js";
@@ -9,6 +9,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 import { cliGoalRoute, cliGoalScopeSelector, currentCliGoalProfile, selectCliGoalScope } from "./task-cli-goal-scopes.js";
 import { taskStartStatus } from "./task-start-status.js";
+import { assertCodexPlanReady } from "./task-plan.js";
 
 export { readCliState };
 
@@ -74,7 +75,11 @@ export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agen
     if (cliCommand?.args !== "resume") delete cliState.goalSessionId;
   }
   if (!cliCommand || isGoalExecution(cliCommand)) cliState.goalHold = false;
-  if (cliCommand?.name === "plan") cliState.plan = cliCommand.args !== "off";
+  if (isPlanImplementation(cliCommand)) {
+    if (!cliState.plan) throw new Error("该执行器的计划模式已关闭，请先重新确认计划");
+    await assertCodexPlanReady(task.id, profileId, ownerUserId, cliCommand!.args.split(/\s+/)[1]);
+  }
+  if (cliCommand?.name === "plan") cliState.plan = cliCommand.args !== "off" && !isPlanImplementation(cliCommand);
   if (cliCommand?.name === "personality" && cliCommand.args) cliState.personality = cliCommand.args as CliSessionState["personality"];
   if (cliCommand?.name === "fast") cliState.serviceTier = (cliCommand.args ? cliCommand.args === "on" : cliState.serviceTier !== "priority") ? "priority" : "default";
   if (isGoalExecution(cliCommand)) {
