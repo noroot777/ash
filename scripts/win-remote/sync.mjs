@@ -247,7 +247,7 @@ if ($__fresh) {
   if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
 }
 # 那个 worktree 是**跨所有调用复用的固定目录**,而 checkout --force 只管 Git 跟踪的文件:
-# 上一次跑测试/构建留下的未跟踪与 ignored 产物(data\ash.db、dist\、*.tsbuildinfo)
+# 上一次跑测试/构建留下的未跟踪与 ignored 产物(data\navi.db、dist\、*.tsbuildinfo)
 # 原样活到下一次快照里。SHA 和 junction 全绿也照不出这类污染 —— 而 server 的生产入口直接跑
 # server\dist\index.js,验的可能是上一版构建产物,「测的就是这份快照」对文件树并不成立。
 # 两个前提缺一不可:
