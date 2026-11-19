@@ -75,7 +75,7 @@ function scheduleIntentSettle(row: Row, settle: IntentSettlement, attempt = 0): 
   const delay = INTENT_LADDER_MS[attempt];
   if (delay === undefined) {
     console.error(
-      `[ash] 哨兵 ${row.id} 创建失败的收口始终落不进库，这一行会一直写着 running（pid=${row.pid}），`
+      `[navi] 哨兵 ${row.id} 创建失败的收口始终落不进库，这一行会一直写着 running（pid=${row.pid}），`
       + "下一次开机接回会把它判掉",
     );
     return;
@@ -84,7 +84,7 @@ function scheduleIntentSettle(row: Row, settle: IntentSettlement, attempt = 0): 
     void settleIntentRow(row, settle)
       .then(() => { publish(row.taskId); })
       .catch((e) => {
-        console.error(`[ash] 哨兵 ${row.id} 创建失败的收口第 ${attempt + 1} 次还是落不进库:`, detail(e));
+        console.error(`[navi] 哨兵 ${row.id} 创建失败的收口第 ${attempt + 1} 次还是落不进库:`, detail(e));
         scheduleIntentSettle(row, settle, attempt + 1);
       });
   }, delay);
@@ -105,7 +105,7 @@ export async function settleIntent(row: Row, settle: IntentSettlement): Promise<
   try {
     await settleIntentRow(row, settle);
   } catch (e) {
-    console.error(`[ash] 哨兵 ${row.id} 的创建失败状态没能落进库,已排重试:`, detail(e));
+    console.error(`[navi] 哨兵 ${row.id} 的创建失败状态没能落进库,已排重试:`, detail(e));
     scheduleIntentSettle(row, settle);
   }
 }
@@ -172,11 +172,11 @@ export async function abortRegistration(
       opts.handle,
     );
   } catch (e) {
-    console.error(`[ash] 哨兵创建没走完,收进程这一步自己抛了 monitor=${row.id} pid=${row.pid}:`, detail(e));
+    console.error(`[navi] 哨兵创建没走完,收进程这一步自己抛了 monitor=${row.id} pid=${row.pid}:`, detail(e));
   }
   if (verdict === "owed" || verdict === "unaccounted") {
     console.error(
-      `[ash] 哨兵创建没走完,进程未确认退出 monitor=${row.id} pid=${row.pid}（${verdict}）：${why}`,
+      `[navi] 哨兵创建没走完,进程未确认退出 monitor=${row.id} pid=${row.pid}（${verdict}）：${why}`,
     );
   }
   const note = verdict === "closed"

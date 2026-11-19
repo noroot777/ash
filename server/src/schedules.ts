@@ -168,7 +168,7 @@ export async function tick() {
     // 收尾卡住的那一档:同样只报告,出路是重启(turn-wind-down.ts)。
     await reportStuckWindDowns();
   } catch (error) {
-    console.error("[ash] 回合占位巡检这一趟出错:", error);
+    console.error("[navi] 回合占位巡检这一趟出错:", error);
   }
 
   // ── 待发送消息(定时发送 + 排队追问)──────────────────────────────────────
@@ -178,10 +178,10 @@ export async function tick() {
   await deliverPendingMessages();
   await replayQueueAdvances();
   // 等过哨兵、放开了却没人推的队列成员:事件那一路漏掉时由这里接住(queue-monitor-hold.ts)。
-  await sweepReleasedQueueMembers().catch((error) => console.error("[ash] 欠着的队列推进巡检出错:", error));
+  await sweepReleasedQueueMembers().catch((error) => console.error("[navi] 欠着的队列推进巡检出错:", error));
   // 按了「全部停下」、中途出错没停完的:接着停完(dispatch-hold.ts)。排在兑现欠账之前,停完记下的账同一趟就能兑现。
-  await sweepPendingHolds().catch((error) => console.error("[ash] 没停完的「全部停下」巡检出错:", error));
-  await sweepOwedStarts().catch((error) => console.error("[ash] 欠着的起跑巡检出错:", error));
+  await sweepPendingHolds().catch((error) => console.error("[navi] 没停完的「全部停下」巡检出错:", error));
+  await sweepOwedStarts().catch((error) => console.error("[navi] 欠着的起跑巡检出错:", error));
 }
 
 // Catch-up on startup: missed one-shots (at < now, never fired) fire once via the
@@ -193,9 +193,9 @@ export function startScheduler(intervalMs = 30_000) {
   // 中间那一步把旧版落下的、其实是续聊的执行型答复认回来(legacy-answer-intent.ts),
   // 第一次 tick 就按续聊送出去,不再等整条队列。
   void reclaimStaleDeliveries()
-    .catch((err) => console.error("[ash] reclaimStaleDeliveries failed:", err))
+    .catch((err) => console.error("[navi] reclaimStaleDeliveries failed:", err))
     .then(() => restoreFollowUpAnswers())
-    .catch((err) => console.error("[ash] restoreFollowUpAnswers failed:", err))
+    .catch((err) => console.error("[navi] restoreFollowUpAnswers failed:", err))
     .then(() => tick());
   setInterval(() => void tick(), intervalMs);
   console.log(SCHEDULER_STARTED);

@@ -5,10 +5,10 @@
 //
 // 这里只收**确定性**的事实：库里的行、同队成员、审查链、有没有活进程。回合锁、验收锁、加成员锁
 // 这些转瞬即逝的占位不在这里，由各路由在判据之后自己查（撞车被拒时照样回一句原因）。
-import type { ActionVerdict, PrimaryAction, TaskStatus } from "@ash/shared";
-import { canArchive, canSingleRun } from "@ash/shared";
-import { queueBlockedText, type QueueBlocker } from "@ash/shared/scheduled-message-wait";
-import { teamNeverStarted } from "@ash/shared/team";
+import type { ActionVerdict, PrimaryAction, TaskStatus } from "@navi/shared";
+import { canArchive, canSingleRun } from "@navi/shared";
+import { queueBlockedText, type QueueBlocker } from "@navi/shared/scheduled-message-wait";
+import { teamNeverStarted } from "@navi/shared/team";
 import { handoffBlockReason } from "./handoff-guard.js";
 
 /** 判据要的那几列（任务行的子集，回归脚本直接喂字面量）。 */

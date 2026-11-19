@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import type { SkillEntry, SkillSource } from "@ash/shared";
+import type { SkillEntry, SkillSource } from "@navi/shared";
 import { api } from "@/lib/api";
 import { useTheme, radius, fonts } from "@/lib/theme";
 

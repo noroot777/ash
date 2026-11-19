@@ -3,8 +3,8 @@
 // 为什么单独一个文件:流式搜索那一段不是「一行一个端点」的清单内容,它自带一套读流、
 // 拼半行、认 marker 的解析逻辑(四十来行),混在端点总清单里既挤占那份清单的 700 行
 // 上限,也让人读清单时不得不翻过它。契约不变:调用点仍然只认 `api.searchStream`。
-import type { SearchHit } from "@ash/shared";
-import type { SearchSort, SearchStreamLine } from "@ash/shared/search";
+import type { SearchHit } from "@navi/shared";
+import type { SearchSort, SearchStreamLine } from "@navi/shared/search";
 import { apiPath } from "./apiClient.ts";
 
 // 搜索的查询串。界面只走流式那条(`/search/stream`);服务端另有一条整份返回的

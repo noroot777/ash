@@ -8,7 +8,7 @@
 // **这个文件里还住着上下文水位（setSessionContext），它是覆盖式的**——两组列摆在
 // 一起是为了让下一个人一眼看见「有两种账，加法只适用于其中一种」。
 import { and, eq, sql } from "drizzle-orm";
-import type { AgentEvent, AgentType, ContextUsage, TokenUsage, UsageAccountingMark } from "@ash/shared";
+import type { AgentEvent, AgentType, ContextUsage, TokenUsage, UsageAccountingMark } from "@navi/shared";
 import {
   COMPACT_SNAPSHOT_ENV_KEYS,
   type CompactSnapshot,
@@ -17,7 +17,7 @@ import {
   parseStoredCompactSnapshot,
   serializeCompactSnapshot,
   UNKNOWN_COMPACT_SNAPSHOT,
-} from "@ash/shared/usage";
+} from "@navi/shared/usage";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, usageCumulativeSnapshots } from "./db/schema.js";
 import { boundMonitorWake } from "./session-turns.js";
@@ -103,8 +103,8 @@ export function cumulativeUsageDelta(current: TokenUsage, previous: TokenUsage |
 const CUMULATIVE_RESULT_CLIS: ReadonlySet<AgentType> = new Set<AgentType>(["claude", "codex"]);
 
 /**
- * sourceId 按 **CLI 自己的线程 id** 而不是 ash 会话行分组：同一条 CLI 线程可能跨多个
- * ash 行（讨论模式的各声部、审查旁路回合），只有按线程才算得出正确的本轮差值。
+ * sourceId 按 **CLI 自己的线程 id** 而不是 navi 会话行分组：同一条 CLI 线程可能跨多个
+ * navi 行（讨论模式的各声部、审查旁路回合），只有按线程才算得出正确的本轮差值。
  *
  * 拿不到 cliSessionId 时退回逐轮相加 —— 没有线程身份就没有「上一份快照」可言，求差
  * 会把别人的账算到自己头上。
@@ -198,7 +198,7 @@ export async function addSessionUsage(
   } catch (error) {
     // 账本坏了只好把执行器报的原值透传。**标记跟着退回 incremental**:这一份没走过累计
     // 结算,不能冒充 delta 骗过下游的求差。
-    console.warn(`[ash] failed to record token usage for session ${sessId}:`, error);
+    console.warn(`[navi] failed to record token usage for session ${sessId}:`, error);
     return { usage: reported, accounting: "incremental" };
   }
 }
@@ -246,13 +246,13 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
       })
       .where(eq(sessions.id, sessId));
   } catch (error) {
-    console.warn(`[ash] failed to record context usage for session ${sessId}:`, error);
+    console.warn(`[navi] failed to record context usage for session ${sessId}:`, error);
   }
 }
 
 /**
- * 从会话固化的 resume_args(ash 自己那份 `--settings`)里读当时注入的那几个 env。
- * **只说明 ash 注入了什么,不说明 CLI 最终用了什么** —— 额外参数里另带的 `--settings` 不在
+ * 从会话固化的 resume_args(navi 自己那份 `--settings`)里读当时注入的那几个 env。
+ * **只说明 navi 注入了什么,不说明 CLI 最终用了什么** —— 额外参数里另带的 `--settings` 不在
  * 这里,CLI 从用户/项目配置里继承的也不在。**不许拿它当启动事实**(见 sessionLaunchCompact)。
  */
 export function sessionCompactSnapshot(resumeArgs: string | null | undefined): CompactSnapshot {
@@ -269,7 +269,7 @@ export function sessionCompactSnapshot(resumeArgs: string | null | undefined): C
  * 起跑方把「这个进程是怎么起的」落库时用的那一组列:展示用命令行 + 最终生效的压缩配置。
  * 两样出自同一个句柄、必须同一笔写 —— 所有写 commandLine 的起跑入口都走这里(单飞首轮、
  * 续聊、团队调度台、duet),重启接管才读得到旧进程**真正**的配置,而不是从 resume_args
- * 反推(那份不含额外参数,也不知道 ash 的 --settings 有没有被盖掉)。
+ * 反推(那份不含额外参数,也不知道 navi 的 --settings 有没有被盖掉)。
  */
 export function launchFields(handle: { commandLine: string; launchCompact?: CompactSnapshot | null }): {
   commandLine: string;
@@ -285,9 +285,9 @@ export function launchFields(handle: { commandLine: string; launchCompact?: Comp
  * 重启接管时这个旧进程的压缩配置:只认起跑时随 command_line 同一笔落下、带当前版本来源标记的那份。
  *
  * 证明不了来源的(这一列上线前起的进程、旧版本口径写下的)**没有退路**:resume_args / command_line
- * 只记得 ash 注入了什么,记不得 CLI 当时从用户/项目配置里继承了什么(审查 SaouXWB_jEuw F1),拿它们
+ * 只记得 navi 注入了什么,记不得 CLI 当时从用户/项目配置里继承了什么(审查 SaouXWB_jEuw F1),拿它们
  * 拼出来的快照缺项,面板就按默认触发点报一个错数。claude 的老进程如实标「不知道」,下一次起跑就有
- * 完整快照了;别的 CLI 从来没有 ash 注入的压缩配置,没有可说的。跟水位那一侧同一条判据。
+ * 完整快照了;别的 CLI 从来没有 navi 注入的压缩配置,没有可说的。跟水位那一侧同一条判据。
  */
 export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "agentType">): CompactSnapshot {
   return parseStoredCompactSnapshot(row.launchCompact) ?? unprovenCompactSnapshot(row.agentType);
@@ -303,7 +303,7 @@ function unprovenCompactSnapshot(agentType: string): CompactSnapshot {
  * 证明不了来源的(这一列上线前的老行、没有标记的旧写入)**没有退路**:能拿来推的 resume_args /
  * command_line / launch_compact 都是「最近一次起跑」写的,续跑一改它们就变,而水位要等新进程报上来
  * 才换 —— 拿它们解释旧水位,等于把新配置套在上一轮头上(第 6 轮审查 F1)。claude 的老水位就如实
- * 标「不知道」;别的 CLI 从来没有 ash 注入的压缩配置,没有可说的。重读、接力导出都走这里。
+ * 标「不知道」;别的 CLI 从来没有 navi 注入的压缩配置,没有可说的。重读、接力导出都走这里。
  */
 export function sessionContextCompact(row: Pick<SessionRow, "contextCompact" | "agentType">): CompactSnapshot {
   return parseStoredCompactSnapshot(row.contextCompact) ?? unprovenCompactSnapshot(row.agentType);

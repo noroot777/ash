@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent, type RefObject } from "react";
-import type { SkillEntry } from "@ash/shared";
+import type { SkillEntry } from "@navi/shared";
 import { isMenuPickKeyEvent } from "../lib/sendKey.ts";
 import { useCaret } from "../lib/useCaret.ts";
 import { mergeSlashItems, removeSlashToken, slashPickAt, slashQuery, slashSendsAsTyped, type SlashItem } from "../lib/useSkills.ts";
@@ -13,10 +13,10 @@ import { callCommandVerb, type CallVerb } from "./replyCall.ts";
  * 选中叫人的命令：**只拿掉命令本身**，前后的话和引用都留着，交给 `onCall` 叫人。文中敲全了 `/派` 却没从菜单里
  * 选、接着往下写的，是普通正文——用户会在话里提到这个命令，那句话得能原样发出去。
  */
-export function useReplySlash({ value, setValue, ash, skills, blocked, sendable = true, inputRef, onCall }: {
+export function useReplySlash({ value, setValue, navi, skills, blocked, sendable = true, inputRef, onCall }: {
   value: string;
   setValue: (next: string) => void;
-  ash: SlashItem[];
+  navi: SlashItem[];
   skills: SkillEntry[];
   /** 此刻不弹（框被借用着、答题卡盖着）。 */
   blocked: boolean;
@@ -30,13 +30,13 @@ export function useReplySlash({ value, setValue, ash, skills, blocked, sendable 
   const [dismissed, setDismissed] = useState(false);
   const caret = useCaret(value);
   const query = blocked || dismissed || caret.at === null ? null : slashQuery(value, caret.at);
-  const candidates = mergeSlashItems(ash, skills, query);
+  const candidates = mergeSlashItems(navi, skills, query);
   const open = candidates.length > 0;
   const selectedIndex = Math.min(index, Math.max(0, candidates.length - 1));
   const selected = candidates[selectedIndex];
   // 回车做什么：原生命令已经敲全就直接发（它本来就是发给 CLI 的一句话）；技能和原生命令补全进正文；叫人的命令叫人。
   const sends = open && sendable && slashSendsAsTyped(selected, value);
-  const completes = open && !sends && selected?.kind !== "ash";
+  const completes = open && !sends && selected?.kind !== "navi";
   const reset = () => {
     setIndex(0);
     setDismissed(false);
@@ -44,7 +44,7 @@ export function useReplySlash({ value, setValue, ash, skills, blocked, sendable 
 
   const pick = (item: SlashItem) => {
     reset();
-    const verb = item.kind === "ash" ? callCommandVerb(item.command) : null;
+    const verb = item.kind === "navi" ? callCommandVerb(item.command) : null;
     if (verb) {
       const next = query ? removeSlashToken(value, query) : { text: value, caret: value.length };
       onCall(verb, next.text, next.caret);

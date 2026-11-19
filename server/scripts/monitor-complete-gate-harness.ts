@@ -116,9 +116,9 @@ export function writeLostCompleteCall(taskId: string, sessId: string, turnStart:
   const stream = JSON.stringify({
     type: "item.completed",
     item: {
-      id: "item_1", type: "mcp_tool_call", server: "ash", tool: "complete_task",
+      id: "item_1", type: "mcp_tool_call", server: "navi", tool: "complete_task",
       arguments: { taskId }, result: null,
-      error: { message: "tool call error: tool call failed for `ash/complete_task`\n\nCaused by:\n    Transport closed" },
+      error: { message: "tool call error: tool call failed for `navi/complete_task`\n\nCaused by:\n    Transport closed" },
       status: "failed",
     },
   });

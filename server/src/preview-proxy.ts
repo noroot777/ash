@@ -11,7 +11,7 @@ import { rewritePreviewText, rewritePreviewUrl } from "./preview-proxy-rewrite.j
 import { connectionOf, forwardedFor, originOfIncoming, requestOrigin } from "./auth/remote-access.js";
 import { grantFor, canUsePreview, claimGrant, forkGrant, holdPreviewChannel } from "./preview-access.js";
 import { addressedElsewhere, INSTANCE_HEADER } from "./instance-binding.js";
-import { isNaviHeaderName, readHeader } from "@ash/shared/http-headers";
+import { isNaviHeaderName, readHeader } from "@navi/shared/http-headers";
 import { attributeName, cookieAttribute, cookieHeaderFor, defaultPath, rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
 
 const httpAgent = new Agent({ keepAlive: true });
@@ -24,8 +24,8 @@ const HOSTS = ["127.0.0.1", "::1"];
  * 请求落在这张 grant 的哪条道上。`nav` 是地址栏里那个 token —— **不带罐子**；`content`
  * 只出现在已认领客户端拿到的那份页面内容里，罐子只认它。缘由写在 preview-access.ts 顶部。
  *
- * `ownApi` 非空时这一跳**不去被预览的服务**，直接连本机 ash：预览的是 ash 自己的前端那一档
- * 时，`/api` 本来就是打回本机 ash 的（vite 只是中间转一手），而那条会话绝不能从分支启动的
+ * `ownApi` 非空时这一跳**不去被预览的服务**，直接连本机 navi：预览的是 navi 自己的前端那一档
+ * 时，`/api` 本来就是打回本机 navi 的（vite 只是中间转一手），而那条会话绝不能从分支启动的
  * dev server 身上过。判据在 open 那一刻定死（见 preview-access.ts 顶部），这里只按上游路径
  * 分流。
  */
@@ -59,8 +59,8 @@ function targetOf(requestPath: string) {
 
 /**
  * 浏览器**自己**会给请求盖上的那几种 `Authorization`：401 质询之后的 Basic/Digest，
- * 企业环境里的 Negotiate/NTLM，以及 `http://user:pass@host/` 这种 URL 带出来的。ash 挂在
- * 一道 Basic 认证的反代后面是常见部署，那串密码是**用户对 ash 这个入口**的凭证，转给被
+ * 企业环境里的 Negotiate/NTLM，以及 `http://user:pass@host/` 这种 URL 带出来的。navi 挂在
+ * 一道 Basic 认证的反代后面是常见部署，那串密码是**用户对 navi 这个入口**的凭证，转给被
  * 预览的应用等于把它交出去。代价是被预览的应用自己要用 Basic/Digest 时也走不通（设置页
  * 里如实写着，要用就直连）—— 这个方向上宁可错杀。
  */
@@ -68,23 +68,23 @@ const BROWSER_ATTACHED_AUTH = /^(?:basic|digest|negotiate|ntlm)\b/i;
 
 /**
  * 应用自己的鉴权头能不能转发，判据是**这个请求是不是预览页自己发出来的**，光看 scheme
- * 不行。第 2 轮审查 P1 实测过一条真实的泄漏路径：拿 `Authorization: Bearer <ash 用户 key>`
+ * 不行。第 2 轮审查 P1 实测过一条真实的泄漏路径：拿 `Authorization: Bearer <navi 用户 key>`
  * 打 `/api/tasks/:id/preview/open/:svc`（`bearerActor` 本来就支持这种调用形态，
  * `preview-access.ts` 还专门为它记了 keyHash），302 是**同源**跳转，浏览器会把这个头原样
  * 带到 `/preview/…` 上 —— 只看 scheme 就等于把用户的长期 key 交给被预览的应用，它记一行
- * 访问日志就拿到了这个人的整个 ash 账号。
+ * 访问日志就拿到了这个人的整个 navi 账号。
  *
  * 预览页在 opaque origin 里，它运行期发出的每个带鉴权头的请求都盖着 `Origin: null` +
  * `Sec-Fetch-Site: cross-site`（带 `Authorization` 的请求必然是 cors 模式，Origin 一定在）。
- * 上面那条泄漏链是 **ash 自己的页面**发的，盖的是 ash 的 Origin 和 `same-origin`；顶层导航
+ * 上面那条泄漏链是 **navi 自己的页面**发的，盖的是 navi 的 Origin 和 `same-origin`；顶层导航
  * 两个头都没有；curl / 手机端更是一个都没有。这两个头是**浏览器**盖的、页面伪造不了，
  * 所以「两个都对上」才算「这是预览页运行期自己产生的凭证」。
  *
  * **`Sec-Fetch-Site` 缺席时只认 `Origin`。** 它只发给可信来源，明文 http + 局域网 IP 一个
  * 都收不到（同 `forwardedHeaders` 那段），要求它必须等于 `cross-site` 就等于在用户最常见的
  * 部署里**永远不转发** —— 用 `Authorization` 而不是 cookie 的被预览应用，在预览里一律登不上。
- * 放开这一档不动摇上面那条保证，因为拦住泄漏的一直是 `Origin: null` 那一半：ash 自己的页面
- * 盖的是 ash 的 Origin，顶层导航（302 把 key 带过来的那条路）压根没有 Origin，两种都不是
+ * 放开这一档不动摇上面那条保证，因为拦住泄漏的一直是 `Origin: null` 那一半：navi 自己的页面
+ * 盖的是 navi 的 Origin，顶层导航（302 把 key 带过来的那条路）压根没有 Origin，两种都不是
  * `null`。`null` 只有 opaque origin 的文档产生得出来，而那正是「预览页自己发的」。
  */
 function sandboxOriginated(origin: string | undefined, site: string | undefined): boolean {
@@ -92,14 +92,14 @@ function sandboxOriginated(origin: string | undefined, site: string | undefined)
 }
 
 /**
- * 转发给被代理应用的请求头。除了摘掉逐跳头和 ash 自己的凭证，还有一件**必须**做的：
+ * 转发给被代理应用的请求头。除了摘掉逐跳头和 navi 自己的凭证，还有一件**必须**做的：
  * `Sec-Fetch-Site` 得跟着下面重写的 `Origin`/`Host` 一起改，不能原样转发。
  *
  * 预览页是 CSP `sandbox`（无 `allow-same-origin`）出来的 **opaque origin**，浏览器给它
  * 发出的每一个请求盖的章都是 `cross-site`。被代理的应用只要照通行做法拿这个头做 CSRF
- * 判据，预览里的**任何写操作**都会被它自己拒掉 —— 2026-09-09 真出过：预览的是 ash 前端
- * 那一档（`/api` 打回本机 ash），用户在预览里粘 key 登录，换来一句「跨站请求已被拒绝
- * （写操作只接受本站发起）」，而他明明就在自己这台 ash 上。Origin 早就重写成了应用自己
+ * 判据，预览里的**任何写操作**都会被它自己拒掉 —— 2026-09-09 真出过：预览的是 navi 前端
+ * 那一档（`/api` 打回本机 navi），用户在预览里粘 key 登录，换来一句「跨站请求已被拒绝
+ * （写操作只接受本站发起）」，而他明明就在自己这台 navi 上。Origin 早就重写成了应用自己
  * 的地址，却因为 `Sec-Fetch-Site` 的优先级更高（见 auth/middleware.ts 的
  * `crossSiteRejection`）而完全不起作用。
  *
@@ -113,7 +113,7 @@ function sandboxOriginated(origin: string | undefined, site: string | undefined)
  * 的预览里粘 key 登录，又吃了一次「跨站请求已被拒绝（写操作只接受本站发起）」。这一次不是
  * 章盖错了，是**根本没有章**，于是判据落到下一档：我们自己重写的那个 `Origin`。它写的是
  * 上游自己的地址（`localhost:<上游端口>`），直连上游时跟 `Host` 对得上；可上游是 vite，
- * `/api` 还要再转一跳回 ash，vite 的 `changeOrigin` 只改 `Host` 不改 `Origin` —— 到 ash 手上
+ * `/api` 还要再转一跳回 navi，vite 的 `changeOrigin` 只改 `Host` 不改 `Origin` —— 到 navi 手上
  * 就成了「Origin=localhost:42651、Host=127.0.0.1:4317」，一对不上就拒。
  *
  * 所以 `Origin` 和这个章是一对，要造一起造：只造 `Origin` 而把章留空，等于亲手把一个对不上
@@ -121,11 +121,11 @@ function sandboxOriginated(origin: string | undefined, site: string | undefined)
  * 这两个是例外，因为它们描述的是「谁发的」，而这件事在这一层已经由 token + grant 判定过了。
  *
  * **改写之前先把原样的 `Origin`/`Sec-Fetch-Site` 留给 `sandboxOriginated` 用**：鉴权头转不
- * 转发全靠这两个头认来源，归一化之后就再也分不出「预览页自己发的」和「ash 页面发的」了。
+ * 转发全靠这两个头认来源，归一化之后就再也分不出「预览页自己发的」和「navi 页面发的」了。
  *
  * **`client` 非空 = 这个请求不是本机直连进来的，如实盖上 `X-Forwarded-For`（值是我们自己看到的
  * 对端地址）。** 客户端自己带的转发头照旧摘掉（那是它说的，不作数），但我们这一跳确实是在替别人转：到上游走的是回环，
- * 被预览的服务又多半把 `/api` 再转回这台 ash，而 ash 自用模式下认「回环 + 没有转发头」为机主
+ * 被预览的服务又多半把 `/api` 再转回这台 navi，而 navi 自用模式下认「回环 + 没有转发头」为机主
  * 本人（auth/remote-access.ts）。不盖这个章，别的设备经预览绕一圈回来就成了本机直连 —— 比它
  * 自己的凭证拿到的还多。盖上之后那一跳只认它自己带得出的凭证（`/api` 直连那条路的罐子里是它
  * 的设备凭证，设备被请出去就跟着失效）。本机直连的不盖：机主在自己机器上开预览，照旧。
@@ -229,7 +229,7 @@ function securityHeaders(origin: string, bases: readonly string[]): Record<strin
 }
 
 export function mountPreviewProxy(app: Hono): void {
-  // 地址里的随机凭证只授予这一代预览；HTML 的 opaque origin 与受限 connect-src 隔离 ash 会话。
+  // 地址里的随机凭证只授予这一代预览；HTML 的 opaque origin 与受限 connect-src 隔离 navi 会话。
   app.all("/preview/*", async (c) => {
     const requested = new URL(c.req.url);
     const target = targetOf(requested.pathname);
@@ -270,7 +270,7 @@ export function mountPreviewProxy(app: Hono): void {
     // 导航在上面就分叉走了，走不到这里）。其余的 —— 地址栏那条道上的 XHR、fetch、SSE、
     // WebSocket —— 一律配一个空罐子：它们证明不了自己是谁，而地址是可以被复制走的。
     const trusted = target.lane === "content" || navigation;
-    // 走 `/api` 那一跳的用它自己的罐子（那条 ash 会话只活在那里）；其余照旧。两条道的规矩
+    // 走 `/api` 那一跳的用它自己的罐子（那条 navi 会话只活在那里）；其余照旧。两条道的规矩
     // 不变：没验过客户端的请求一律配空罐子，`/api` 也不例外。
     const jar = trusted ? target.ownApi?.jar ?? target.grant.jar : new Map();
     // 页面内容改写到内容 token 上（认领之后才有），Location 留在请求自己这条道上。

@@ -4,7 +4,7 @@
 // （到点重跑任务 / 到点或空闲时往会话里送一句），搬出来不牵扯别的表。`schema.ts` 原样转发，
 // 所有 `from "./db/schema.js"` 的导入不受影响。
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { MonitorWakeData } from "@navi/shared/monitor-wake";
 
 export const schedules = sqliteTable("schedules", {
   id: text("id").primaryKey(),

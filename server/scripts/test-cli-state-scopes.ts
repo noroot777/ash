@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { hasCliGoalHold, readCliState, type CliGoal } from "@ash/shared/cli-commands";
+import { hasCliGoalHold, readCliState, type CliGoal } from "@navi/shared/cli-commands";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-cli-scopes-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-cli-scopes-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents, projects, tasks } = await import("../src/db/schema.js");
 const { prepareCliInvocation, saveCliState, markCliGoalStarted, persistRunGoal, interruptCliGoal } = await import("../src/task-cli-state.js");

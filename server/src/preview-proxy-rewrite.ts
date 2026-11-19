@@ -46,9 +46,9 @@ export function rewritePreviewText(text: string, contentType: string, base: stri
  *
  * `history.pushState/replaceState` 也在这张单子里，理由跟前几个不一样，是**地址栏不许
  * 说谎**：预览页在 CSP sandbox 的 opaque origin 里，而 `replaceState` 换的只是地址栏，
- * 文档还是原来那一份。不拦的话，任何做「URL 归一化」的前端（ash 自己的
+ * 文档还是原来那一份。不拦的话，任何做「URL 归一化」的前端（navi 自己的
  * `normalizedWorkspaceUrl` 就是，开屏第一件事就把非 `/` 的路径 replace 成 `/`）会让地址栏
- * 变成 ash 本尊的地址，页面却还是那份沙箱里的预览 —— 2026-09-09 用户就是这样对着
+ * 变成 navi 本尊的地址，页面却还是那份沙箱里的预览 —— 2026-09-09 用户就是这样对着
  * 「172.x.x.x:4317」的地址栏，把自己的 key 粘进了一个预览页里的登录框。改写之后地址栏
  * 始终留在 `/preview/<task>/<token>/<service>/` 底下，「我在看预览」这件事看得见。
  *
@@ -58,7 +58,7 @@ export function rewritePreviewText(text: string, contentType: string, base: stri
  * 2026-09-09 一个 Vue/Java 项目的预览就是这么卡死的：HTTP 200、标题都出来了，Pinia 初始化
  * 抛在第一行，页面永远停在转圈——用户看到的只是「预览打不开」，控制台之外没有一点线索。
  * 这里给它们换上一份**只活在这份文档里**的实现：应用照常读写，读到的永远是自己写的那份，
- * 隔离没有松一寸（`allow-same-origin` 一加，预览页就直接拿到 ash 的 cookie 和 /api）。
+ * 隔离没有松一寸（`allow-same-origin` 一加，预览页就直接拿到 navi 的 cookie 和 /api）。
  *
  * 已知的边界，别当成 bug 去「修」：① 存储不跨刷新、不跨标签页，重开就是空的；② 服务端下发
  * 的 cookie 由代理按 `ashpv_` 前缀转发，浏览器这边看不见，页面自己写的 cookie 也只留在页面

@@ -37,7 +37,7 @@ import { optionalRead, requiredRead } from "./accept-gate-fs.js";
 //   · 被借包的传递导入：node_modules/plain/index.mjs 里 `from "@demo/lib"`，plain 的 realpath 在
 //     工作区，于是它按工作区的包映射解析，照样落在活的源码上。
 //   · 整个 node_modules 指向**另一个检出**（worktree 借主仓那份，本仓就是这个形状）：主仓的
-//     @ash/shared -> ../../shared 落在主仓源码上，于是快照里跑的是**主仓的旧代码**，而任务自己
+//     @navi/shared -> ../../shared 落在主仓源码上，于是快照里跑的是**主仓的旧代码**，而任务自己
 //     的源码明明已经checkout 在快照里。这一条不需要任何并发修改就会把错的代码判成通过。
 // 三条的共同根因是一个：**只要依赖树的解析根还在快照外，源码隔离就是空话**。克隆把解析根搬进快
 // 照，三条一起消失：目录项在快照里，相对原文在快照内解析，文件是真文件所以 realpath 也在快照内。

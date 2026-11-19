@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Session, Task } from "@ash/shared";
-import { readMonitorWake, type MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { Session, Task } from "@navi/shared";
+import { readMonitorWake, type MonitorWakeData } from "@navi/shared/monitor-wake";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type ConversationItem } from "../src/task-detail/conversationModel.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
@@ -152,7 +152,7 @@ assert.match(renderToStaticMarkup(<SystemAuthoredMessage item={user({ text: "【
 // 归属的细则（按段、按哨兵身份、直播与刷新一致）在 test-monitor-wake-fold.ts。
 {
   // 等它的那一回合挂过这两条哨兵（start_monitor 的描述就是叫醒时报的来源）。
-  const startMonitor = (source: string) => ({ kind: "tool" as const, label: "mcp__ash__start_monitor", detail: JSON.stringify({ description: source, command: "npm test" }) });
+  const startMonitor = (source: string) => ({ kind: "tool" as const, label: "mcp__navi__start_monitor", detail: JSON.stringify({ description: source, command: "npm test" }) });
   const waiting = { ...agent("waiting"), markdown: "挂上哨兵等回归。", segments: [{ id: "waiting:body", markdown: "挂上哨兵等回归。", events: [startMonitor(outputEvent.source), startMonitor(endEvent.source)], attachments: [] }] };
   for (const render of [renderTask, renderTeam]) {
     const joined = render([waiting, notice, user(combined), reply]);
@@ -203,7 +203,7 @@ assert.deepEqual(reviewerLane?.kind === "review-lane" ? reviewerLane.items.map((
 const session = { id: "session", taskId: task.id, agentType: "claude", role: "single", executor: "claude@nodemach", startedAt: "2026-10-21T04:18:00.000Z", endedAt: "2026-10-21T04:25:27.000Z" } as unknown as Session;
 const sentinel = `\n\x1e${JSON.stringify({ t: "user", ...combined, at, by: "system" })}\n`;
 const persisted = buildConversationItems([{ session, output: "等待全量回归。" + sentinel + "收到回归结果。", trace: [
-  { at: "2026-10-21T04:18:30.000Z", turnStartedAt: session.startedAt, event: { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: outputEvent.source }) } },
+  { at: "2026-10-21T04:18:30.000Z", turnStartedAt: session.startedAt, event: { kind: "tool", name: "mcp__navi__start_monitor", detail: JSON.stringify({ description: outputEvent.source }) } },
 ] }], [session], []);
 const live = buildConversationItems([], [{ ...session, endedAt: null }], [
   { kind: "user", id: "wake-live", ...combined, attachments: [], at, bySystem: true },

@@ -1,5 +1,5 @@
-import type { WorkspacePreviewInput, WorkspacePreviewLaunch } from "@ash/shared/preview";
-import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
+import type { WorkspacePreviewInput, WorkspacePreviewLaunch } from "@navi/shared/preview";
+import type { FreeWorkflowPreviewState } from "@navi/shared/free-workflow";
 import { json, request } from "../lib/apiClient.ts";
 
 export interface PreviewLaunchState {

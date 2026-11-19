@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentExecutorProfile, LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProtocol, LlmProvider, ProviderModelListMode } from "@navi/shared";
 import {
   ArrowsClockwise,
   PencilSimple,
@@ -461,7 +461,7 @@ function ProviderRow({
             {provider.context1mModels.length ? ` · ${provider.context1mModels.length} 个 1M` : ""}
           </small>
         </div>
-        {/* 一家供应商能用,要 Key 和「被某条执行器挂上」两件事同时成立 —— ash 自己不直连
+        {/* 一家供应商能用,要 Key 和「被某条执行器挂上」两件事同时成立 —— navi 自己不直连
             大模型,供应商只是执行器启动时注入的 base_url + key(server executors/index.ts)。
             所以这两件事是同一级别的前置条件,并排摆、各自一颗状态点,缺哪个一眼看得见。
             没人挂它时任务里**根本列不出**它的模型(lib/modelCatalog.ts 的 groupSeeds),

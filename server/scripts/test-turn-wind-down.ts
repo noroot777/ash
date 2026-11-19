@@ -16,12 +16,12 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "ash-turn-wind-down-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_STUCK_WIND_DOWN_MS = "150";
-process.env.ASH_WIND_DOWN_COMMAND_TIMEOUT_MS = "500";
-assert.ok(process.env.ASH_ALLOW_REAL_AGENT !== "1", "结算钩子失手续跑时不许真拉起 CLI");
+const root = mkdtempSync(join(tmpdir(), "navi-turn-wind-down-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_STUCK_WIND_DOWN_MS = "150";
+process.env.NAVI_WIND_DOWN_COMMAND_TIMEOUT_MS = "500";
+assert.ok(process.env.NAVI_ALLOW_REAL_AGENT !== "1", "结算钩子失手续跑时不许真拉起 CLI");
 process.on("exit", () => {
   try { rmSync(root, { recursive: true, force: true }); } catch {}
 });

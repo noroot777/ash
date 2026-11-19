@@ -10,10 +10,10 @@
 //   · 说明里引用的上传附件路径落地时改写成本机路径。
 //
 // 第一段起两台真服务走完整的接力与移回；后几段单进程直调 importHandoff 喂手写的清单（老版本对端、途中丢
-// 记录、坏值都没法靠真服务造出来）。对端与本进程都把 ASH_RUNS_DIR 指到临时目录：对端派出去的那条新任务
+// 记录、坏值都没法靠真服务造出来）。对端与本进程都把 NAVI_RUNS_DIR 指到临时目录：对端派出去的那条新任务
 // 起跑时撞 guardAgentSpawn，不会真拉起 CLI。
 //
-// 跑：npm -w @ash/server run test:handoff-suggestions
+// 跑：npm -w @navi/server run test:handoff-suggestions
 import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
@@ -22,22 +22,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { eq } from "drizzle-orm";
-import type { Task } from "@ash/shared";
-import type { DispatchSuggestion, WithdrawnSuggestion } from "@ash/shared/dispatch-suggestion";
+import type { Task } from "@navi/shared";
+import type { DispatchSuggestion, WithdrawnSuggestion } from "@navi/shared/dispatch-suggestion";
 import { api, makeRepo, startPeer } from "./handoff-test-utils.js";
 import { releaseTmpDb } from "./tmp-db.js";
 import { killOne, listenerPidsSync } from "../src/platform.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-suggestions-"));
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-suggestions-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.ASH_DB = join(root, "local.db");
-process.env.ASH_RUNS_DIR = join(root, "runs-local");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads-local");
+process.env.NAVI_DB = join(root, "local.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs-local");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads-local");
 assert.ok(
-  process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "本测试靠 guardAgentSpawn 拦真 CLI（对端会起跑派出去的那条任务）；拦截器一失效就会烧用户的真额度",
 );
 
@@ -85,10 +85,10 @@ try {
   execFileSync("git", ["clone", "--quiet", repoA, repoB]);
   const remember = (proc: ChildProcess) => children.push(proc);
   const machineA = await startPeer({
-    ASH_DB: join(root, "a.db"), ASH_RUNS_DIR: join(root, "runs-a"), ASH_UPLOADS_DIR: join(root, "uploads-a"),
+    NAVI_DB: join(root, "a.db"), NAVI_RUNS_DIR: join(root, "runs-a"), NAVI_UPLOADS_DIR: join(root, "uploads-a"),
   }, remember);
   const machineB = await startPeer({
-    ASH_DB: join(root, "b.db"), ASH_RUNS_DIR: join(root, "runs-b"), ASH_UPLOADS_DIR: join(root, "uploads-b"),
+    NAVI_DB: join(root, "b.db"), NAVI_RUNS_DIR: join(root, "runs-b"), NAVI_UPLOADS_DIR: join(root, "uploads-b"),
   }, remember);
   serverPorts.push(Number(new URL(machineA).port), Number(new URL(machineB).port));
 
@@ -237,7 +237,7 @@ try {
 
   // 说明里引用的上传附件：附件本体随任务落到本机，说明里的源机路径改成本机路径（新任务照着它读得到）。
   const uploadName = "sgtupload01-shot.txt";
-  const holderPath = `/Users/holder/ash/data/uploads/${uploadName}`;
+  const holderPath = `/Users/holder/navi/data/uploads/${uploadName}`;
   const withUpload = manifestFor("sgtuploaded", {
     dispatchSuggestions: JSON.stringify([suggestion("sgUpload001", "说明里带着一张图", { body: `照这张图改：${holderPath}` })]),
   });

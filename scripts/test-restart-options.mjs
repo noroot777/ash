@@ -50,7 +50,7 @@ for (const argument of ["--froce", "force"]) {
   assert.doesNotMatch(invalid.stdout, /▶|✅ 完成/);
 }
 
-const temporary = mkdtempSync(join(tmpdir(), "ash-restart-argv-"));
+const temporary = mkdtempSync(join(tmpdir(), "navi-restart-argv-"));
 try {
   const guard = join(temporary, "argv-guard.cjs");
   writeFileSync(guard, `if (/[/\\\\]restart\\.mjs$/.test(process.argv[1] || '')) {

@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { DEFAULT_APP_SETTINGS, type ProjectView } from "@ash/shared";
+import { DEFAULT_APP_SETTINGS, type ProjectView } from "@navi/shared";
 import "@fontsource-variable/inter";
 import "../../src/styles/global.css";
 import { api } from "../../src/lib/api.ts";

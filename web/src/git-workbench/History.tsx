@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { GitDiff, GitHistoryCommit } from "@ash/shared/git-workbench";
+import type { GitDiff, GitHistoryCommit } from "@navi/shared/git-workbench";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { workbenchApi } from "./api.ts";

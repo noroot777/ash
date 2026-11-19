@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, dbClient, root, runs, schema, status, tasks, teardown } from "./monitors-fixture.js";
 import { setupRegressionReviews, type ReviewMode } from "./regression-review-fixture.js";
 
@@ -22,7 +22,7 @@ const recoveryProcess = () => execFileSync(process.execPath, ["--import", "tsx/e
 const taskRow = async (taskId: string) => (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
 const clearNotices = async (taskId: string) => db.delete(schema.scheduledMessages).where(eq(schema.scheduledMessages.taskId, taskId));
 const ordinaryStage = (taskId: string) => api.request(`/tasks/${taskId}/stage`, { method: "POST",
-  headers: { "content-type": "application/json", "x-ash-turn-token": `next-${taskId}`, "x-ash-direction-token": "next-direction", "x-ash-source-task-id": taskId },
+  headers: { "content-type": "application/json", "x-navi-turn-token": `next-${taskId}`, "x-navi-direction-token": "next-direction", "x-navi-source-task-id": taskId },
   body: JSON.stringify({ stage: "implemented" }) });
 
 try {
@@ -132,7 +132,7 @@ try {
   const repair = await open("free");
   await db.update(schema.freeReviewRuns).set({ retryLimit: 1 }).where(eq(schema.freeReviewRuns.id, repair.runId));
   const rejected = await api.request(`/tasks/${repair.taskId}/stage`, { method: "POST",
-    headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${repair.taskId}` },
+    headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${repair.taskId}` },
     body: JSON.stringify({ stage: "verify_failed" }) });
   assert.equal(rejected.status, 200);
   await dbClient.execute("CREATE TEMP TRIGGER repair_fault BEFORE INSERT ON scheduled_messages WHEN NEW.origin LIKE 'review-settlement:%' BEGIN SELECT RAISE(ABORT,'INJECTED_REPAIR_INSERT_FAILURE'); END");
@@ -154,7 +154,7 @@ try {
   const outdated = await open("free");
   await db.update(schema.freeReviewRuns).set({ retryLimit: 1 }).where(eq(schema.freeReviewRuns.id, outdated.runId));
   assert.equal((await api.request(`/tasks/${outdated.taskId}/stage`, { method: "POST",
-    headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${outdated.taskId}` },
+    headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${outdated.taskId}` },
     body: JSON.stringify({ stage: "verify_failed" }) })).status, 200);
   await clearNotices(outdated.taskId);
   await status.setTaskStatus(outdated.taskId, "done");
@@ -178,7 +178,7 @@ try {
     await db.update(tasks).set({ workflow: JSON.stringify({ workspace: "shared", steps: [makeStep("run", "run"),
       { ...makeStep("verify", "verify"), fail: { mode: "ask" } }] }) }).where(eq(tasks.id, review.taskId));
     const response = await api.request(`/tasks/${review.taskId}/stage`, { method: "POST",
-      headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${review.taskId}`, "x-ash-source-task-id": review.taskId },
+      headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${review.taskId}`, "x-navi-source-task-id": review.taskId },
       body: JSON.stringify({ stage: "verify_failed" }) });
     assert.equal(response.status, 200);
     await dbClient.execute(afterQuestion
@@ -257,7 +257,7 @@ try {
     const sessionId = `later-${review.taskId}`, turnStart = new Date().toISOString();
     await db.insert(schema.sessions).values({ id: sessionId, taskId: review.taskId, agentType: "codex", role: "single", executor: "test", cwd: root, startedAt: turnStart });
     const { out } = detachedPathsFor(join(root, "runs", review.taskId), sessionId, turnStart);
-    writeFileSync(out, JSON.stringify({ type: "item.completed", item: { id: sessionId, type: "mcp_tool_call", server: "ash", tool: "report_stage",
+    writeFileSync(out, JSON.stringify({ type: "item.completed", item: { id: sessionId, type: "mcp_tool_call", server: "navi", tool: "report_stage",
       arguments: { taskId: review.taskId, stage: "implemented", directionToken: "next-direction" },
       result: null, error: { message: "Transport closed" }, status: "failed" } }) + "\n");
     assert.equal(await replayUndeliveredMcpCalls({ taskId: review.taskId, sessId: sessionId, turnStart, agentType: "codex", directionToken: "next-direction" }), 1);

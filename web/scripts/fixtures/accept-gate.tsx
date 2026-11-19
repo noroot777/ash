@@ -1,6 +1,6 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { AcceptanceControls } from "../../src/acceptance/AcceptanceControls.tsx";
 import { AcceptGateWaitCard } from "../../src/review/AcceptGateWaitCard.tsx";
 import { TaskStatusDot } from "../../src/components/TaskStatusDot.tsx";

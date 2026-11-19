@@ -41,7 +41,7 @@ export function scheduleResultHandoffRetry(monitorId: string, step = 0): void {
       // `failed` 那一支自己会排下一跳（它知道自己是第几跳吗——不知道，所以这里补排）。
       if (outcome === "failed") scheduleResultHandoffRetry(monitorId, step + 1);
     })().catch((e) => {
-      console.error(`[ash] 重投哨兵结束通知这一跳自己出错 monitor=${monitorId}:`, e);
+      console.error(`[navi] 重投哨兵结束通知这一跳自己出错 monitor=${monitorId}:`, e);
       scheduleResultHandoffRetry(monitorId, step + 1);
     });
   }, RETRY_LADDER_MS[step]);
@@ -90,7 +90,7 @@ export async function sweepResultHandoffs(): Promise<HandoffSweep> {
       // `already` 不计数：那一笔早就送过了，这一趟只是把残留的凭证销掉。
     } catch (e) {
       // `deliverResultHandoff` 自己不抛，所以走到这里是它之外的意外（库关了/模块加载失败）。
-      console.error(`[ash] 巡检重投这一条时出错 monitor=${id}（凭证留着,下一趟再试）:`, e);
+      console.error(`[navi] 巡检重投这一条时出错 monitor=${id}（凭证留着,下一趟再试）:`, e);
       out.failed += 1;
       scheduleResultHandoffRetry(id);
     }
@@ -113,15 +113,15 @@ export function startResultHandoffSweeper(intervalMs = SWEEP_INTERVAL_MS): void 
     void sweepResultHandoffs().then((s) => {
       if (s.delivered || s.dropped || s.failed) {
         console.log(
-          `[ash] 结束通知巡检：补发 ${s.delivered} 条`
+          `[navi] 结束通知巡检：补发 ${s.delivered} 条`
           + (s.dropped ? `，${s.dropped} 条已无人可收（任务终态/归档）` : "")
           + (s.failed ? `，${s.failed} 条这一趟仍没送出去（已排重试）` : ""),
         );
       }
-    }).catch((e) => console.error("[ash] 结束通知巡检这一趟出错:", e));
+    }).catch((e) => console.error("[navi] 结束通知巡检这一趟出错:", e));
     // 同一趟顺手兜住回合内交付的残留:那一轮的结算没能结清它(写失败),它就一直藏在 sent 里。
     void import("./monitor-turn-handoff.js").then((m) => m.returnOrphanTurnHandoffs())
-      .catch((e) => console.error("[ash] 回合内交付巡检这一趟出错:", e));
+      .catch((e) => console.error("[navi] 回合内交付巡检这一趟出错:", e));
   }, intervalMs);
   (sweeper as { unref?: () => void }).unref?.();
 }

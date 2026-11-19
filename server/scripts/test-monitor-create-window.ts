@@ -330,7 +330,7 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
 
 // ── ⑫ **pid 空着的行:身份边条按代次认回来**(第 9 轮审查 F3-B)───────────────────
 //
-// ash 死在「落了身份」和「回填 pid」之间时,库里只剩一行没有 pid 的记录。win32 那一侧没有放行
+// navi 死在「落了身份」和「回填 pid」之间时,库里只剩一行没有 pid 的记录。win32 那一侧没有放行
 // 闸,命令可能已经在跑 —— 而上一版到这里只能说一句「认不回来」:id、命令、日志路径都在,却没有
 // 任何能定位那个进程的身份。现在 `spawn` 一返回就同步写下 `{pid, 这一刻}`,接回那一侧拿它
 // **按代次**认(不是「这个号上有人」就算)。
@@ -345,7 +345,7 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   assert.ok(existsSync(monitorSpawnIdentityPath(armed.logPath)), "台子前提:身份边条也在盘上");
   await until("命令真的开工了", async () => existsSync(m.path));
 
-  // 模拟「ash 恰好死在 spawn 和回填 pid 之间」:行回到 pid 空着的样子,运行时全撤掉。
+  // 模拟「navi 恰好死在 spawn 和回填 pid 之间」:行回到 pid 空着的样子,运行时全撤掉。
   detachAllMonitors();
   await db.update(monitors).set({ pid: null, pidStartedAt: null }).where(eq(monitors.id, monitorId));
   const { attached } = await reattachMonitors();
@@ -354,7 +354,7 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   // **只认号,不认启动时刻**(第 18 轮审查 F1)。这台机器上记号那一问只到展示文本那一档
   // (`suspected`),所以归属证不出来 —— 而时间锚只是「这个号上的进程大约在那一刻起来、命令
   // 文本也对得上」,它配投否决票,不配往 `pid_started_at` 里写值:那一列是 `reclaimEvidence`
-  // 第 ② 步的归属凭证,猜出来的值在那里跟 ash 自己 spawn 时读来的长得一模一样。
+  // 第 ② 步的归属凭证,猜出来的值在那里跟 navi 自己 spawn 时读来的长得一模一样。
   // 第 9 轮审查 F3-B 要的「要有能用来定位那个进程的身份」留着:号认回来了,行照旧 running、
   // 看得见、停得掉、追得回。
   assert.equal(back.pidStartedAt, null, "**启动时刻不许靠时间锚猜** —— 它会被下游当成下刀凭证");
@@ -410,7 +410,7 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   //    边条要落的那个路径上先摆一个目录,`writeFileSync` 必然 EISDIR。
   const logPath = join(root, `handover-${process.pid}.log`);
   mkdirSync(monitorSpawnIdentityPath(logPath), { recursive: true });
-  const token = `ash-handover-probe-${process.pid}`;
+  const token = `navi-handover-probe-${process.pid}`;
   const touched = join(root, `${token}.touched`);
   // 后代用 `( … ) &` 起:那个子壳跟父壳**同一份 argv**,所以 `pgrep -f` 数得到它 —— 于是
   // 「只打根进程」和「打整组/整棵树」两种实现在下面那句断言上分得开。
@@ -453,7 +453,7 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
 {
   const taskId = await makeTask();
   const logPath = join(root, `rooted-${process.pid}.log`);
-  const token = `ash-rooted-probe-${process.pid}`;
+  const token = `navi-rooted-probe-${process.pid}`;
   // 资源记号跟生产同源:创建入口在起进程之前生成它、随意图行落库,再种进环境(这里就是
   // 下面那条 `unitToken`)。后代的 argv 早就不含这条命令了,认得出它们全靠这个记号。
   const unitToken = `unit-rooted-${process.pid}-${Date.now()}`;

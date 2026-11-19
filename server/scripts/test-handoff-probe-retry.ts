@@ -6,18 +6,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-// 对端 ash 刚重启时，本机连接池里还留着通往旧进程的长连接：第一次探测写进一条对面已经关掉的
+// 对端 navi 刚重启时，本机连接池里还留着通往旧进程的长连接：第一次探测写进一条对面已经关掉的
 // 连接，拿到「other side closed」而不是应答，界面上就报「无法核对目标机的签名身份」，再点一次
 // 才好。两个只读探测遇到这类连接层错误要换条新连接再试一次；验签不过、连接层错误一直不消，
 // 都不能因为重试被放过去。
 //
 // 假对端用裸 TCP 写：它把每条连接上的第二个请求当场掐断（不回一个字节），跟「连接池里那条
 // 连接其实早断了」在客户端看来是同一件事，而且每次都撞得上，不赌时序。
-const stage = mkdtempSync(join(tmpdir(), "ash-probe-retry-"));
-process.env.ASH_DB = join(stage, "local.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-requireTmpDb("ash-probe-retry");
+const stage = mkdtempSync(join(tmpdir(), "navi-probe-retry-"));
+process.env.NAVI_DB = join(stage, "local.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
+requireTmpDb("navi-probe-retry");
 
 const machine = generateKeyPairSync("ed25519");
 const publicKey = machine.publicKey.export({ type: "spki", format: "der" }).toString("base64");
@@ -39,7 +39,7 @@ try {
     const body = url.pathname.endsWith("/identity")
       ? JSON.stringify({ fingerprint, host: "fixture" })
       : JSON.stringify({
-          ok: true, service: "ash", host: "fixture", projects: [], peerStatus: "approved",
+          ok: true, service: "navi", host: "fixture", projects: [], peerStatus: "approved",
           identity: {
             publicKey,
             sig: sign(null, Buffer.from(canonicalPingChallenge(mode.wrongSignature ? "wrong-nonce" : nonce)), machine.privateKey).toString("base64"),

@@ -15,14 +15,14 @@ import { basename, dirname, join } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-accept-gate-test-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-accept-gate-test-"));
+process.env.NAVI_DB = join(root, "ash.db");
 // RUNS_DIR 指到临时目录，顺带把 guardAgentSpawn 打开：门禁红了会**真的发起一轮**去叫醒
 // agent，拦截器保证那一轮不会起真 CLI（验的是「有没有发起」，不是 CLI 本身）。
-process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
 assert.ok(
-  process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "门禁失败那一条会叫醒任务；拦截器一失效，测试就会拿用户的真额度跑 agent",
 );
 
@@ -32,7 +32,7 @@ const git = (cwd: string, ...args: string[]) =>
 function makeRepo(name: string): string {
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Gate Test");
+  git(repo, "config", "user.name", "Navi Gate Test");
   git(repo, "config", "user.email", "gate@example.test");
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
@@ -305,7 +305,7 @@ try {
     assert.equal((await acceptGateState(taskId)).running, null);
   }
 
-  // 6. ash 重启时命令还在跑：接管它，不打断、不重跑（真跨进程的四条分流在
+  // 6. navi 重启时命令还在跑：接管它，不打断、不重跑（真跨进程的四条分流在
   //    test-accept-gate-takeover.ts；被打断那一档只留给拿不到真实结果的情形）。
   {
     const repo = makeRepo("gate-restart");

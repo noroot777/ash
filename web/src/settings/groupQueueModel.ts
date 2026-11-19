@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 
 export interface ResumeQueueModel {
   ordered: TaskListItem[];

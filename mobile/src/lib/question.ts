@@ -1,4 +1,4 @@
-import type { QuestionItem } from "@ash/shared";
+import type { QuestionItem } from "@navi/shared";
 
 export function appendQuestionOption(value: string, option: string): string {
   return value.trim() ? `${value.trimEnd()}\n${option}` : option;

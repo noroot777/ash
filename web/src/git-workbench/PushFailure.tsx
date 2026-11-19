@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Check, Copy, Warning } from "@phosphor-icons/react";
-import type { GitJournalEntry } from "@ash/shared/git-workbench";
+import type { GitJournalEntry } from "@navi/shared/git-workbench";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { WorkbenchMenu } from "./WorkbenchMenu.tsx";

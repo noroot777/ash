@@ -147,7 +147,7 @@ try {
     assert.deepEqual(value.header, { x: 0, y: 0, width: 1440, height: 46 });
     assert.deepEqual(value.shell, { x: 0, y: 46, width: 1440, height: stage - 46 });
     assert.equal(value.document.width, viewport.width, "workbench must not overflow horizontally");
-    assert.equal(value.workspaceSidebarCount, 0, "Git route must not render the ash task sidebar");
+    assert.equal(value.workspaceSidebarCount, 0, "Git route must not render the navi task sidebar");
   }
   assert.equal(report.views.changes.changesList.width, 340);
   assert.equal(report.views.changes.diffPane.width, 950);

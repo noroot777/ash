@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { GateAction, TaskListItem } from "@ash/shared";
+import type { GateAction, TaskListItem } from "@navi/shared";
 import { CheckCircle, Question, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { isSendKeyEvent } from "../lib/sendKey.ts";

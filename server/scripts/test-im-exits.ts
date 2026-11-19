@@ -3,7 +3,7 @@
 // 钉住的几件事（理由见 server/src/im/scope.ts、exits.ts、outbox.ts、actions.ts 的文件头）：
 // ① 删了任务：挂着它的通知不发；
 // ② 解绑：助手回复、/tasks 任务列表、/new 表单、/todo 清单、决策卡的原文一条都不发（回给请求的换成一句固定说明），
-//    不含 ash 数据的静态句照发；
+//    不含 navi 数据的静态句照发；
 // ③ 解绑重绑（同一个飞书账号、新的一次绑定）：替旧那一次做的个人回执不发；任务的决策卡按此刻的资格照发；
 // ④ 改卡也过出口：排着的结果回写，项目改成只推标题 → 改上去的是短的那一版；收件人没资格了 → 改成
 //    中性的收起卡；这两种改卡在额度见底时照发，「没办成」的原因回复也照发；
@@ -16,9 +16,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-im-exits-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-im-exits-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-im-exits");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -88,7 +88,7 @@ try {
     im.sender.start();
     await im.settle();
     const sent = sentText();
-    assert.match(sent, /STATIC-HINT/, "不含 ash 数据的静态句照发");
+    assert.match(sent, /STATIC-HINT/, "不含 navi 数据的静态句照发");
     for (const secret of ["PRIVATE-ASSISTANT-REPLY", "PRIVATE-QUESTION", "PRIVATE-NEW", "飞书项目", "排队时解绑的提问"]) {
       assert.equal(sent.includes(secret), false, `解绑后不发：${secret}`);
     }

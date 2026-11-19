@@ -11,9 +11,9 @@
 import { Fragment, useRef, useState, type ReactNode } from "react";
 import { View, Text, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { Session } from "@ash/shared";
-import { mergeFeed } from "@ash/shared/team";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import type { Session } from "@navi/shared";
+import { mergeFeed } from "@navi/shared/team";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import type { LogLine } from "@/lib/log";
 import { useTheme, radius, fonts, type Theme } from "@/lib/theme";
 import { formatInstant, Duration } from "@/lib/time";

@@ -1,6 +1,6 @@
-import type { AgentType, SessionRole } from "@ash/shared";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
-import type { SystemResume } from "@ash/shared/system-resume";
+import type { AgentType, SessionRole } from "@navi/shared";
+import type { MonitorWakeData } from "@navi/shared/monitor-wake";
+import type { SystemResume } from "@navi/shared/system-resume";
 import { bus } from "./bus.js";
 import { SYS_MARKER } from "./run-prompts.js";
 import { writeTurn } from "./transcript.js";

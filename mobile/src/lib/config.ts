@@ -19,14 +19,14 @@ export function getBaseURL(): string | null {
   return cached;
 }
 
-/** 自用模式的 ash 不需要它,留空即可 —— 服务端那边根本不看这个头。 */
+/** 自用模式的 navi 不需要它,留空即可 —— 服务端那边根本不看这个头。 */
 export function getApiKey(): string | null {
   return cachedKey;
 }
 
 export async function loadBaseURL(): Promise<string | null> {
   cached = await readStoredKey(AsyncStorage, STORED_KEYS.baseURL);
-  // On web (the desktop preview, served from the ash itself) default to the
+  // On web (the desktop preview, served from the navi itself) default to the
   // serving origin so the preview talks to that same backend with zero setup.
   // Native is left untouched — a phone can't assume the server's origin.
   if (!cached && Platform.OS === "web" && typeof window !== "undefined" && window.location?.origin) {

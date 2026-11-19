@@ -22,14 +22,14 @@
 // 团队调度台用 MCP 另建的任务不收进来：团队行底下已经是它的执行者，再挂一层就改了团队在
 // 侧栏的样子（这一轮团队、讨论两种模式不动）。
 import { eq, inArray } from "drizzle-orm";
-import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
+import { parseTaskCreationOrigin } from "@navi/shared/task-origin";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { Actor } from "./auth/context.js";
 import { canSeeProject } from "./auth/visibility.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
-import { dispatchDefaultTarget, parseDispatchTarget } from "@ash/shared/dispatch-plan";
-import type { AgentType } from "@ash/shared";
+import { dispatchDefaultTarget, parseDispatchTarget } from "@navi/shared/dispatch-plan";
+import type { AgentType } from "@navi/shared";
 
 type DispatchCandidate = {
   id: string;

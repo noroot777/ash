@@ -8,7 +8,7 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
-import { TEAM_DEFAULTS } from "@ash/shared";
+import { TEAM_DEFAULTS } from "@navi/shared";
 import { installFakeClaude, settleFakeClaudes } from "./scheduled-messages-fixture.js";
 import { runHandoffCases } from "./scheduled-handoff-cases.js";
 import { runQueueGateCases } from "./scheduled-queue-gate-cases.js";
@@ -17,7 +17,7 @@ import { runReplyWakeCases } from "./scheduled-reply-wake-cases.js";
 import { runSteerCases } from "./scheduled-steer-cases.js";
 
 // 子进程抢下投递租约后 SIGKILL，留下可由重启回收的「pending + 租约」现场。
-const crashMessageId = process.env.ASH_TEST_CRASH_MESSAGE;
+const crashMessageId = process.env.NAVI_TEST_CRASH_MESSAGE;
 if (crashMessageId) {
   const { beginDelivery } = await import("../src/pending-messages.js");
   if (!(await beginDelivery(crashMessageId))) process.exit(3); // 没抢到 = 测试前提就不成立
@@ -25,18 +25,18 @@ if (crashMessageId) {
 }
 
 const selfPath = fileURLToPath(import.meta.url);
-const root = mkdtempSync(join(tmpdir(), "ash-scheduled-messages-"));
+const root = mkdtempSync(join(tmpdir(), "navi-scheduled-messages-"));
 const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
-process.env.ASH_DB = join(root, "ash.db");
+process.env.NAVI_DB = join(root, "ash.db");
 // transcripts/runs 一并隔离:不设的话落在仓库 data/runs,上一次运行的残留会让
 // 「会话记录里有没有某句话」这类断言读到历史内容(本文件就踩过一次)。
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_TEST_LEAD_LOG = leadLog;
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
-// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件要跑的是自己装在
+// 设了 NAVI_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件要跑的是自己装在
 // PATH 上的假 claude,只放行它(executors/spawn.ts)。
-process.env.ASH_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 // Windows PATH 使用 `;`，必须走 path.delimiter。
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
 
@@ -592,7 +592,7 @@ try {
   // 提前把状态改成 sent:后者一断电就是一条永远没人管的 sent 行(2026-08-07 那条就是)。
   await db.insert(scheduledMessages).values([messageRow("scheduled-crashed", crashTaskId, "重启也不许弄丢这句话", "queued")]);
   const crash = spawnSync(process.execPath, [...process.execArgv, selfPath], {
-    env: { ...process.env, ASH_TEST_CRASH_MESSAGE: "scheduled-crashed" },
+    env: { ...process.env, NAVI_TEST_CRASH_MESSAGE: "scheduled-crashed" },
     encoding: "utf8",
   });
   // 「它确实是被硬杀的」这件事,两个平台的证据不一样:POSIX 下父进程拿得到 signal='SIGKILL',
@@ -657,7 +657,7 @@ try {
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
-  delete process.env.ASH_TEST_LEAD_LOG;
+  delete process.env.NAVI_TEST_LEAD_LOG;
   const taskIds = [
     deliveredTaskId, unavailableTaskId, closingTaskId, queuedTaskId, lockedTaskId, pausedChatTaskId, pausedCompleteTaskId,
     crashTaskId, blockedTaskId, steerTaskId, steerUnavailableTaskId, steerLockedTaskId, steerLateTaskId,

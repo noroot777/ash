@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
-import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
+import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@navi/shared";
+import { MAX_FREE_REVIEW_RETRIES } from "@navi/shared/free-workflow";
 import { SlidersHorizontal, WarningCircle } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { RoundsStepper } from "../components/RoundsStepper.tsx";

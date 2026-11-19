@@ -14,16 +14,16 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { parseSessionOutput, parseSessionSpans, segmentFingerprint, traceSpanFingerprint } from "@ash/shared/session-output";
-import { pairAnswerMessages, type QuestionRecord } from "@ash/shared/questions";
+import { parseSessionOutput, parseSessionSpans, segmentFingerprint, traceSpanFingerprint } from "@navi/shared/session-output";
+import { pairAnswerMessages, type QuestionRecord } from "@navi/shared/questions";
 import { IS_WINDOWS } from "../src/platform.js";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-conversation-redact-"));
-process.env.ASH_DB = join(stage, "ash.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-conversation-redact-"));
+process.env.NAVI_DB = join(stage, "ash.db");
 requireTmpDb("test-conversation-redact");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 const ok = (m: string) => console.log("   ✓ " + m);
 
 // ── 假 claude：把 argv 和 stdin 收到的每一行记下来，回一个成功的 result ─────────────
@@ -36,10 +36,10 @@ writeFileSync(probeJs, `const fs=require("fs"),path=require("path");
 const argv=process.argv.slice(2);
 const pick=(flag)=>{const i=argv.indexOf(flag);return i<0?null:argv[i+1];};
 const sid=pick("--resume")||pick("--session-id");
-const file=path.join(process.env.ASH_TEST_PROBES,process.pid+"-"+process.hrtime.bigint()+".json");
+const file=path.join(process.env.NAVI_TEST_PROBES,process.pid+"-"+process.hrtime.bigint()+".json");
 const out={argv,stdin:[]};
 // 失败开关：在吐出 init 之前就退出（认证/供应商连接失败那一类），只失败一次。
-const failOnce=process.env.ASH_TEST_FAIL_ONCE;
+const failOnce=process.env.NAVI_TEST_FAIL_ONCE;
 if(failOnce&&fs.existsSync(failOnce)){fs.unlinkSync(failOnce);fs.writeFileSync(file,JSON.stringify(out));process.exit(1);}
 let buf="";let answered=false;
 process.stdin.on("data",(d)=>{buf+=d;let i;while((i=buf.indexOf("\\n"))>=0){const line=buf.slice(0,i);buf=buf.slice(i+1);
@@ -56,10 +56,10 @@ writeFileSync(fakeBin, IS_WINDOWS ? `@node "${probeJs}" %*\r\n` : `#!/bin/sh\nex
 chmodSync(fakeBin, 0o755);
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
 // spawn 的测试隔离闸只放行上面种的这个假 claude。
-process.env.ASH_TEST_AGENT_BIN = bin;
-process.env.ASH_TEST_PROBES = probes;
+process.env.NAVI_TEST_AGENT_BIN = bin;
+process.env.NAVI_TEST_PROBES = probes;
 const failOnce = join(stage, "fail-once");
-process.env.ASH_TEST_FAIL_ONCE = failOnce;
+process.env.NAVI_TEST_FAIL_ONCE = failOnce;
 type Probe = { argv: string[]; stdin: string[] };
 const readProbes = (): Probe[] => readdirSync(probes).filter((f) => f.endsWith(".json"))
   .map((f) => JSON.parse(readFileSync(join(probes, f), "utf8")) as Probe);

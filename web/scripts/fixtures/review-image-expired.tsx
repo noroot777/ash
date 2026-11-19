@@ -31,7 +31,7 @@ const REPORT = [
   "",
   "对照见 [第二张](shots/b.png)。",
   "",
-  "![绝对路径](/Users/demo/ash/data/runs/T9/free-review/R9/round-1/c.png)",
+  "![绝对路径](/Users/demo/navi/data/runs/T9/free-review/R9/round-1/c.png)",
   "",
   "![还在](kept.png)",
   "",

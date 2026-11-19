@@ -1,4 +1,4 @@
-// claude 自带 `Monitor` 的只读投影：认得出、列得全、停不掉、不被 ash 的进程管理碰。
+// claude 自带 `Monitor` 的只读投影：认得出、列得全、停不掉、不被 navi 的进程管理碰。
 //
 // 这份回归钉的是**两种哨兵共用一张表之后，边界有没有守住**。投影行的 pid 是 null、
 // log_path 是空串，一旦漏过某一道 `kind` 过滤，症状都很安静：
@@ -6,7 +6,7 @@
 // - `reattachMonitors` 把它们当自己的进程去认 → 一重启就整批误判成 lost（它们明明还在
 //   agent 那边跑着）；
 // - `liveMonitorsOf` 把它们算进每任务 4 个的配额 → agent 挂了 4 个内置 Monitor 之后，
-//   ash 这边一个哨兵都起不了，而拒绝理由完全看不懂；
+//   navi 这边一个哨兵都起不了，而拒绝理由完全看不懂；
 // - `stopMonitor` 假装停掉 → 进程还在跑、还会继续唤醒任务，界面上却写着「已停止」。
 //
 // 认人那一侧（哪些 local_bash 是 Monitor 起的）用真实录下的 stream 回放验证，见
@@ -48,8 +48,8 @@ async function projectClaudeMonitor(
 async function main(): Promise<void> {
   // ── 两种一起列出来 ────────────────────────────────────────────────────────
   const taskId = await makeTask();
-  const started = await startMonitor({ taskId, command: "echo ash-side; sleep 30", description: "ash 自己的" });
-  check(started.ok, "ash 哨兵起得来", started.ok ? "" : started.error);
+  const started = await startMonitor({ taskId, command: "echo navi-side; sleep 30", description: "navi 自己的" });
+  check(started.ok, "navi 哨兵起得来", started.ok ? "" : started.error);
   const claudeId = await projectClaudeMonitor(taskId, "b69ym4qzv");
 
   const listed = await listMonitors(taskId);
@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   const native = listed.find((m) => m.kind === "ash");
   check(shadow?.kind === "claude", "投影行的 kind 是 claude");
   check(shadow?.nativeId === "b69ym4qzv", "投影行带着 claude 侧的原生 id");
-  check(native?.kind === "ash" && native?.nativeId === null, "ash 那种 kind=ash 且没有原生 id");
+  check(native?.kind === "ash" && native?.nativeId === null, "navi 那种 kind=navi 且没有原生 id");
 
   // ── 停不掉，而且要说明白为什么 ────────────────────────────────────────────
   const refused = await stopMonitorChecked(claudeId);
@@ -70,10 +70,10 @@ async function main(): Promise<void> {
   const afterRefuse = (await db.select().from(monitors).where(eq(monitors.id, claudeId))).at(0);
   check(afterRefuse?.status === "running", "被拒之后状态一个字没动", `实际 ${afterRefuse?.status}`);
 
-  // ash 自己那种照常停得掉——别为了挡住投影把正常路也挡了。
+  // navi 自己那种照常停得掉——别为了挡住投影把正常路也挡了。
   if (started.ok) {
     const stopped = await stopMonitorChecked(started.monitor.id);
-    check(stopped.ok, "ash 哨兵照常停得掉", stopped.ok ? "" : stopped.error);
+    check(stopped.ok, "navi 哨兵照常停得掉", stopped.ok ? "" : stopped.error);
   }
 
   // ── 没有日志文件：返回空，不去读那个空路径 ────────────────────────────────
@@ -87,16 +87,16 @@ async function main(): Promise<void> {
   check(afterReattach?.status === "running", "重启接管不碰投影行", `实际 ${afterReattach?.status}（lost 说明漏了 kind 过滤）`);
   check(recovered.lost === 0, "投影行没有被算进 lost 统计", `lost=${recovered.lost}`);
 
-  // ── 投影不占 ash 的创建配额 ───────────────────────────────────────────────
+  // ── 投影不占 navi 的创建配额 ───────────────────────────────────────────────
   const quotaTask = await makeTask();
   for (let i = 0; i < 4; i += 1) await projectClaudeMonitor(quotaTask, `native-${i}`);
   const underQuota = await startMonitor({ taskId: quotaTask, command: "sleep 30", description: "配额不该被投影占掉" });
-  check(underQuota.ok, "4 个投影之后 ash 照样起得了哨兵", underQuota.ok ? "" : underQuota.error);
+  check(underQuota.ok, "4 个投影之后 navi 照样起得了哨兵", underQuota.ok ? "" : underQuota.error);
   if (underQuota.ok) await stopMonitorChecked(underQuota.monitor.id);
 
   // ── 开机这一轮：按**来源进程死活**裁决，不是「本进程账本里没有就算死」 ──────────
   //
-  // agent 活得过 ash 重启（detached）。无条件把 running 的投影标 lost，用户看到的就是
+  // agent 活得过 navi 重启（detached）。无条件把 running 的投影标 lost，用户看到的就是
   // 「任务还在输出、哨兵却说进程已不在」——第 1 轮审查用真实 detached 接管复现过，这里
   // 用「会话的 agent_pid 还是不是当初那个进程」把两边都钉住。
   const sweepTask = await makeTask();
@@ -125,14 +125,14 @@ async function main(): Promise<void> {
   // sourceAlive=true 却被标 lost，升级之后一批还活着的旧投影会被一次性误判）。
   const legacyRow = await projectClaudeMonitor(sweepTask, "blegacy", "running", null);
 
-  const liveAsh = await startMonitor({ taskId: sweepTask, command: "sleep 30", description: "ash 的不该被它碰" });
+  const liveNavi = await startMonitor({ taskId: sweepTask, command: "sleep 30", description: "navi 的不该被它碰" });
   const sweep = await loseDeadClaudeMonitors();
 
   const kept = (await db.select().from(monitors).where(eq(monitors.id, keptRow))).at(0);
   check(kept?.status === "running", "来源 agent 还活着的投影留着不动", `实际 ${kept?.status}（lost = 又在拿本地账本当死活判据）`);
   const dead = (await db.select().from(monitors).where(eq(monitors.id, deadRow))).at(0);
   check(dead?.status === "lost", "来源 agent 确实没了的落 lost", String(dead?.status));
-  check(/进程已经不在/.test(dead?.endedReason ?? ""), "结束原因说的是来源进程，不是 ash 自己重启", dead?.endedReason ?? "");
+  check(/进程已经不在/.test(dead?.endedReason ?? ""), "结束原因说的是来源进程，不是 navi 自己重启", dead?.endedReason ?? "");
   const legacy = (await db.select().from(monitors).where(eq(monitors.id, legacyRow))).at(0);
   check(legacy?.status === "running", "缺来源凭据但任务还有活 agent → 留着（未知不等于已死）",
     `实际 ${legacy?.status}（lost = 又在拿「不知道」当「已经死了」）`);
@@ -150,10 +150,10 @@ async function main(): Promise<void> {
   const gone = (await db.select().from(monitors).where(eq(monitors.id, goneRow))).at(0);
   check(gone?.status === "lost", "缺凭据且任务里没有活着的 agent → 确实收掉", String(gone?.status));
 
-  if (liveAsh.ok) {
-    const ashRow = (await db.select().from(monitors).where(eq(monitors.id, liveAsh.monitor.id))).at(0);
-    check(ashRow?.status === "running", "ash 自己的哨兵不受这轮收拾影响", String(ashRow?.status));
-    await stopMonitorChecked(liveAsh.monitor.id);
+  if (liveNavi.ok) {
+    const naviRow = (await db.select().from(monitors).where(eq(monitors.id, liveNavi.monitor.id))).at(0);
+    check(naviRow?.status === "running", "navi 自己的哨兵不受这轮收拾影响", String(naviRow?.status));
+    await stopMonitorChecked(liveNavi.monitor.id);
   }
 
   if (failures) {

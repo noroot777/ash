@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, viteCacheDir } from "./dom-stage.mjs";
 import { createServer } from "vite";
-import { markdownImageRefs } from "@ash/shared/markdown-images";
+import { markdownImageRefs } from "@navi/shared/markdown-images";
 import { IMAGE_SHAPES } from "./fixtures/markdown-shapes.ts";
 
 // uploads 接口在这个夹具里吐**真字节**：只断言 src 长什么样，证明不了那个地址真能取到图
@@ -101,7 +101,7 @@ try {
       "/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=shot.png",
       `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent("第一屏 空.png")}`,
       `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent("shots/deep.png")}`,
-      "/api/tasks/T1/file/raw?path=%2FUsers%2Fdemo%2Fcode%2Fash%2F.worktrees%2Fx%2Foutput%2Fshot.svg&workspaceOnly=1",
+      "/api/tasks/T1/file/raw?path=%2FUsers%2Fdemo%2Fcode%2Fnavi%2F.worktrees%2Fx%2Foutput%2Fshot.svg&workspaceOnly=1",
     ],
     // 子目录那张曾经画不出来:两边都只认 basename,审查者把截图归进 shots/ 就等于没放
     // (审查第 1 轮非阻塞项 2)。证据接口现在服务证据目录内的相对路径。
@@ -289,7 +289,7 @@ try {
   );
   assert.match(
     await protocol.locator(".task-markdown-image-missing").innerText(),
-    /图取不到[\s\S]*\/Users\/demo\/code\/ash\/output\/vanished\.svg/,
+    /图取不到[\s\S]*\/Users\/demo\/code\/navi\/output\/vanished\.svg/,
     // react-markdown 默认会把它不认的协议整个清空,于是这一张连「哪个文件」都报不出来。
     "解不出来的 file: 要报出那个本机路径,而不是被清成空串后无声消失",
   );

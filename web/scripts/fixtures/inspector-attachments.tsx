@@ -12,7 +12,7 @@ const followUps = [
       "检查第一条追问里的图片链接。",
       "",
       "[用户附带的文件，请用 Read 工具查看以下本地文件]",
-      "- /Users/example/code/ash/data/uploads/KxOxbl42hcRf-image.png",
+      "- /Users/example/code/navi/data/uploads/KxOxbl42hcRf-image.png",
     ].join("\n"),
     attachments: [],
     at: "2026-11-13T02:00:00.000Z",
@@ -20,8 +20,8 @@ const followUps = [
   {
     text: "检查第二条追问里的图片链接。",
     attachments: [
-      "/Users/example/code/ash/data/uploads/R4nd0mAbC123-follow-up.jpg",
-      "/Users/example/code/ash/data/uploads/D0cumentAb12-spec.pdf",
+      "/Users/example/code/navi/data/uploads/R4nd0mAbC123-follow-up.jpg",
+      "/Users/example/code/navi/data/uploads/D0cumentAb12-spec.pdf",
     ],
     at: "2026-11-13T02:05:00.000Z",
   },

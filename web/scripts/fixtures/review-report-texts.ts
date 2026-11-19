@@ -438,7 +438,7 @@ const findingsReport = `# Z7OFKHcfagfx round-1 logic review
 ## Verification
 
 \`\`\`text
-npm -w @ash/web test
+npm -w @navi/web test
 \`\`\`
 
 ## Cleanup
@@ -481,7 +481,7 @@ const severityFirst = `# 第 1 轮逻辑审查结论：未通过
 ## 验证记录
 
 \`\`\`text
-npm -w @ash/web test
+npm -w @navi/web test
 \`\`\`
 
 ## 浏览器验证
@@ -496,7 +496,7 @@ npm -w @ash/web test
 const metadataFirst = [
   "# 第 1 轮逻辑审查报告",
   "",
-  "## 任务：查询 Claude 模型 (ash 中增加 Claude CLI 模型指定功能)",
+  "## 任务：查询 Claude 模型 (navi 中增加 Claude CLI 模型指定功能)",
   "",
   "### 被审提交范围",
   "",
@@ -505,8 +505,8 @@ const metadataFirst = [
   "## 1. 编译验证",
   "",
   "```text",
-  "npm -w @ash/web run build",
-  "npm -w @ash/server run build",
+  "npm -w @navi/web run build",
+  "npm -w @navi/server run build",
   "```",
   "",
   "两条命令都真实运行并退出 0。",
@@ -575,7 +575,7 @@ ${Array.from({ length: 5 }, (_, k) => `### ${k + 1}. 导出内容仍是旧版本
 
 ## 技术明细
 
-\`npm -w @ash/web test\` 通过。
+\`npm -w @navi/web test\` 通过。
 `;
 
 
@@ -605,7 +605,7 @@ ${Array.from({ length: count }, (_, k) => `### ${k + 1}. 第 ${k + 1} 处操作�
 
 ## 技术明细
 
-基线 \`abc1234\`；\`npm -w @ash/web test\` 退出 0；临时服务已停，无残留监听。
+基线 \`abc1234\`；\`npm -w @navi/web test\` 退出 0；临时服务已停，无残留监听。
 `;
 
 const sixProblems = graded(6);

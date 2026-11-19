@@ -4,7 +4,7 @@
 //   POST   /tasks/:id/dispatch-suggestions/launch   用户按「派出去」：照那一行此刻的样子建任务，这条任务的智能体不被叫醒
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { publicSuggestions, type DispatchSuggestionLaunchInput } from "@ash/shared/dispatch-suggestion";
+import { publicSuggestions, type DispatchSuggestionLaunchInput } from "@navi/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -57,7 +57,7 @@ api.post("/tasks/:id/dispatch-suggestions", async (c) => {
     change = agentChange(current, withdrawing, adding);
     return change.room ? null : change.after;
   }, db, turnWriteGuard(r), () => change?.withdrawn ?? []).catch((error: unknown) => {
-    console.error(`[ash] 可以派出去的活没能写进去 task=${taskId}:`, error instanceof Error ? error.message : error);
+    console.error(`[navi] 可以派出去的活没能写进去 task=${taskId}:`, error instanceof Error ? error.message : error);
     return "failed" as const;
   });
   if (written === "failed") return c.json({ error: "没能写进去，这一笔一样都没落：要收回的还挂着，要挂的没挂上" }, 500);

@@ -19,13 +19,13 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 const indexSource = readSource(new URL("../index.html", import.meta.url));
 
 // ④ 预热脚本必须还在,而且两头对得上:全局名一致、路径就是 authApi 打的那一条。
-assert.match(indexSource, /window\.__ashAuthProbe\s*=\s*fetch\(\s*"\/api\/auth\/state"/,
+assert.match(indexSource, /window\.__naviAuthProbe\s*=\s*fetch\(\s*"\/api\/auth\/state"/,
   "index.html 里的身份预热请求没了 —— 没有它,首屏那一个 RTT 又会串回 bundle 后面");
-assert.ok(indexSource.indexOf("__ashAuthProbe") < indexSource.indexOf('src="/src/main.tsx"'),
+assert.ok(indexSource.indexOf("__naviAuthProbe") < indexSource.indexOf('src="/src/main.tsx"'),
   "预热脚本必须排在 bundle 那条 script 之前,否则它就不是并行的");
 // 装它的必须是**同步的经典脚本**:带上 type="module" 就成了 defer,跟 bundle 一起排到
 // 解析之后跑,提前量当场归零 —— 而这种改法从渲染结果上完全看不出来。
-const probeAt = indexSource.indexOf("window.__ashAuthProbe");
+const probeAt = indexSource.indexOf("window.__naviAuthProbe");
 const tagStart = indexSource.lastIndexOf("<script", probeAt);
 assert.ok(tagStart >= 0, "没在 index.html 里找到装预热请求的那个 <script>");
 const probeAttrs = indexSource.slice(tagStart + "<script".length, indexSource.indexOf(">", tagStart));

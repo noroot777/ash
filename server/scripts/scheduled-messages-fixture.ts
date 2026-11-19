@@ -32,7 +32,7 @@ export function installFakeClaude(root: string): string {
 // 常驻档只在 stdin 结束时退出，而 detached 起法的壳用读写方式打开 fifo，stdin 永远等不到 EOF；
 // 测试中途收场时没人来关它，它就成了 PPID=1 的孤儿。测试收尾会删掉整个临时目录，所以以
 // 「日志所在目录没了」为准自行退出。
-const stage = process.env.ASH_TEST_LEAD_LOG && require("path").dirname(process.env.ASH_TEST_LEAD_LOG);
+const stage = process.env.NAVI_TEST_LEAD_LOG && require("path").dirname(process.env.NAVI_TEST_LEAD_LOG);
 if (stage) setInterval(() => { if (!fs.existsSync(stage)) process.exit(0); }, 500).unref();
 let buf = "";
 const resident = process.argv.includes("--input-format");
@@ -55,7 +55,7 @@ function delta(text) {
   }) + "\\n");
 }
 function succeed(input, exit = true) {
-  fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, input + "\\n");
+  fs.appendFileSync(process.env.NAVI_TEST_LEAD_LOG, input + "\\n");
   init();
   result();
   if (exit) process.exit(0);
@@ -71,7 +71,7 @@ function handleResident(line) {
     return result("error_during_execution");
   }
   const text = message.message?.content?.map((part) => part.text || "").join("") || "";
-  fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, line + "\\n");
+  fs.appendFileSync(process.env.NAVI_TEST_LEAD_LOG, line + "\\n");
   init();
   if (text.includes("保持运行等待引导")) {
     delta("旧方向最后一段正文。\\n");
@@ -81,8 +81,8 @@ function handleResident(line) {
   if (text.includes("先停下旧方案")) delta("新方向第一段正文。\\n");
   result();
   // 团队调度台夹具沿用原行为：一轮结束后进程退出，方便验证收台与补送。
-  // 测试进程本身可能继承外层任务的 ASH_TURN_TOKEN，按本测试的任务类型区分才可靠。
-  if (!String(process.env.ASH_TASK_ID).startsWith("scheduled-single-")) process.exit(0);
+  // 测试进程本身可能继承外层任务的 NAVI_TURN_TOKEN，按本测试的任务类型区分才可靠。
+  if (!String(process.env.NAVI_TASK_ID).startsWith("scheduled-single-")) process.exit(0);
 }
 process.stdin.on("data", (d) => {
   buf += d;
@@ -97,15 +97,15 @@ process.stdin.on("data", (d) => {
 });
 process.stdin.on("end", () => {
   if (resident) return process.exit(0);
-  if (!process.env.ASH_TURN_TOKEN) return process.exit(9);
+  if (!process.env.NAVI_TURN_TOKEN) return process.exit(9);
   if (buf.includes("保持运行等待引导")) {
-    fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, buf + "\\n");
+    fs.appendFileSync(process.env.NAVI_TEST_LEAD_LOG, buf + "\\n");
     process.stdout.write(JSON.stringify({ type: "system", session_id: "scheduled-steer-cli-session" }) + "\\n");
     setInterval(() => {}, 1000);
     return;
   }
   if (buf.includes("保持新方向运行")) {
-    fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, buf + "\\n");
+    fs.appendFileSync(process.env.NAVI_TEST_LEAD_LOG, buf + "\\n");
     process.stdout.write(JSON.stringify({ type: "system", session_id: "scheduled-steer-cli-session" }) + "\\n");
     setInterval(() => {}, 1000);
     return;
@@ -129,7 +129,7 @@ process.stdin.on("end", () => {
  *
  * 只铺假 claude 时，交给别家的任务会解析到机器上真装着的那家 CLI：找可执行文件除了 PATH 还会看
  * /opt/homebrew/bin 这些常见安装目录（executors/bin-resolve.ts 的 extraPaths）。隔离闸按路径放行
- * （ASH_TEST_AGENT_BIN 只列假目录）之后那一步得到的是一条禁启错误；用例要的是「起得来、一起就退」
+ * （NAVI_TEST_AGENT_BIN 只列假目录）之后那一步得到的是一条禁启错误；用例要的是「起得来、一起就退」
  * 才铺这些垫片。闸还是整体放行的时候没有这层保护：test-dispatch-plan 在 2026-11-15～16 拿着测试
  * 正文起过 54 个真 codex 会话。
  */

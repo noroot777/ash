@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-outbound-key-"));
-process.env.ASH_DB = join(stage, "local.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-requireTmpDb("ash-outbound-key");
+const stage = mkdtempSync(join(tmpdir(), "navi-outbound-key-"));
+process.env.NAVI_DB = join(stage, "local.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
+requireTmpDb("navi-outbound-key");
 let peer: Server | undefined;
 try {
   const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
@@ -37,7 +37,7 @@ try {
   const start = async (machine: number, port = 0) => {
     peer = createServer(async (req, res) => {
       const url = new URL(req.url!, "http://localhost");
-      seen.push({ path: url.pathname, key: req.headers["x-ash-peer-user-key"] as string | undefined, signature: req.headers["x-ash-peer-key"] as string | undefined });
+      seen.push({ path: url.pathname, key: req.headers["x-navi-peer-user-key"] as string | undefined, signature: req.headers["x-navi-peer-key"] as string | undefined });
       // 每个请求一条连接：这台假机器在同一个端口上关了又开（换机那一档），本进程里的 fetch 要是留着上一台的
       // 长连接，下一次探测会撞上「对端已关」而不是真的去问新机器（并行 16 份里四份闪红）。
       res.setHeader("connection", "close");
@@ -50,7 +50,7 @@ try {
       const publicKey = machines[machine].publicKey.export({ type: "spki", format: "der" }).toString("base64");
       const sig = sign(null, Buffer.from(canonicalPingChallenge(invalidSignature ? "wrong-nonce" : nonce)), machines[machine].privateKey).toString("base64");
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ ok: true, service: "ash", host: "fixture", projects: [], peerStatus: "approved", identity: { publicKey, sig } }));
+      res.end(JSON.stringify({ ok: true, service: "navi", host: "fixture", projects: [], peerStatus: "approved", identity: { publicKey, sig } }));
     });
     await new Promise<void>((resolve) => peer!.listen(port, "127.0.0.1", resolve));
     return (peer.address() as { port: number }).port;
@@ -69,7 +69,7 @@ try {
     const actor = multi ? { kind: "user" as const, userId: "alice", role: "member" as const, name: "Alice" } : SINGLE_ACTOR;
     const owner = multi ? "alice" : null;
     const port = await start(1);
-    const url = `http://127.0.0.1:${port}/ash`;
+    const url = `http://127.0.0.1:${port}/navi`;
     await scope.addTarget(actor, { name: "机器 B", url });
     await scope.setPeerKey(actor, url, "machine-b-account-key", fingerprints[1]);
     await scope.rememberPeerFingerprint(owner, url, fingerprints[1]);
@@ -98,7 +98,7 @@ try {
       seen.length = 0;
       await assert.rejects(perform(action), (error: unknown) => error instanceof HandoffError && error.status === 409 && /身份/.test(error.message));
       assert.ok(seen.every((row) => row.key === undefined && row.signature === undefined), "同 IP/端口换成 A 后，每条请求都在泄露 B key 之前被拒绝");
-      assert.ok(seen.every((row) => row.path === "/ash/api/handoff/ping"), "正文和任务标识在核对失败时也不发送");
+      assert.ok(seen.every((row) => row.path === "/navi/api/handoff/ping"), "正文和任务标识在核对失败时也不发送");
     }
     await stop();
     await start(1, port);
@@ -122,10 +122,10 @@ try {
     redirectRequest = true;
     seen.length = 0;
     await assert.rejects(perform(() => fetchPeer(`${url}/api/handoff/import`, { method: "POST", body: "{}" })), HandoffError);
-    assert.deepEqual(seen.map((row) => row.path), ["/ash/api/handoff/ping", "/ash/api/handoff/import"], "带 key 的请求不跟随重定向");
+    assert.deepEqual(seen.map((row) => row.path), ["/navi/api/handoff/ping", "/navi/api/handoff/import"], "带 key 的请求不跟随重定向");
     redirectRequest = false;
     seen.length = 0;
-    await perform(() => fetchPeer(`${url}-other/api/handoff/import`, { method: "POST", body: "{}", headers: { "X-Ash-Peer-User-Key": "unverified-header-key" } }));
+    await perform(() => fetchPeer(`${url}-other/api/handoff/import`, { method: "POST", body: "{}", headers: { "X-Navi-Peer-User-Key": "unverified-header-key" } }));
     assert.deepEqual(seen.map((row) => row.key), [undefined], "相似路径不匹配 key，也不能用自定义请求头绕过核对");
     redirect = true;
     seen.length = 0;

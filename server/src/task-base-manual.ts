@@ -1,4 +1,4 @@
-import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
+import type { BaseUpdateRecovery } from "@navi/shared/branch-plan";
 import { recoveryDiff } from "./task-base-diff.js";
 import { commitAt, containsCommit } from "./task-branch-plan.js";
 import { execFileText as exec } from "./exec.js";

@@ -6,11 +6,11 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { mock } from "node:test";
-import type { GitWorkbenchState } from "@ash/shared/git-workbench";
+import type { GitWorkbenchState } from "@navi/shared/git-workbench";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const directory = realpathSync(mkdtempSync(join(tmpdir(), "ash-worktree-porcelain-")));
-process.env.ASH_DB = join(directory, "ash.db");
+const directory = realpathSync(mkdtempSync(join(tmpdir(), "navi-worktree-porcelain-")));
+process.env.NAVI_DB = join(directory, "ash.db");
 process.env.GIT_CONFIG_GLOBAL = join(directory, "gitconfig");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 writeFileSync(process.env.GIT_CONFIG_GLOBAL,
@@ -23,8 +23,8 @@ const fault = mock.method(childProcess, "execFile", (...args: Parameters<typeof 
   if (args[0] === "git" && Array.isArray(argv) && argv.includes("worktree") && argv.includes("list")) {
     if (argv.includes("-z")) {
       nulReads++;
-      if (process.env.ASH_TEST_NATIVE_GIT !== "1")
-        args[1] = argv.map(arg => arg === "-z" ? "--ash-test-unsupported-z" : arg);
+      if (process.env.NAVI_TEST_NATIVE_GIT !== "1")
+        args[1] = argv.map(arg => arg === "-z" ? "--navi-test-unsupported-z" : arg);
     } else legacyReads++;
   }
   return realExecFile(...args);
@@ -122,7 +122,7 @@ try {
   assert.deepEqual(await cleanupRebaseHelpers(repo), { removed: 1, blocked: null });
   assert.ok(!existsSync(helper));
   assert.ok(nulReads > 0);
-  if (process.env.ASH_TEST_NATIVE_GIT !== "1") assert.ok(legacyReads > 0);
+  if (process.env.NAVI_TEST_NATIVE_GIT !== "1") assert.ok(legacyReads > 0);
   console.log(`ok · helper cleanup protects active rebase; NUL attempts=${nulReads}, legacy reads=${legacyReads}`);
 } finally {
   fault.mock.restore();

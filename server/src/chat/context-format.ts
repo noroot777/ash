@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@ash/shared/chat";
+import type { ChatMessage } from "@navi/shared/chat";
 import { parseLastJsonObject } from "./json-object.js";
 
 export const CHAT_CONTEXT_POLICY = {

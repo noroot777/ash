@@ -3,13 +3,13 @@ import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
-import { validateCliCommand } from "@ash/shared/cli-commands";
+import type { AgentEvent } from "@navi/shared";
+import { validateCliCommand } from "@navi/shared/cli-commands";
 
-const root = await realpath(await mkdtemp(join(tmpdir(), "ash-claude-goal-live-")));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+const root = await realpath(await mkdtemp(join(tmpdir(), "navi-claude-goal-live-")));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_ALLOW_REAL_AGENT = "1";
 const { ClaudeExecutor } = await import("../src/executors/claude.js");
 const home = join(root, "claude");
 const workspace = join(root, "workspace");
@@ -45,19 +45,19 @@ try {
   await mkdir(workspace);
   await writeFile(join(home, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
   const executor = new ClaudeExecutor({ model: "claude-sonnet-4-6", extraArgs: ["--max-turns", "5"] });
-  const handle = executor.runSteerable({ cwd: workspace, prompt: "ash-native-goal-context-direction:fixture-only; verify the native goal keeps running", cliCommand: validateCliCommand("claude", "/goal perform at least three fixture steps")!, env: { CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: "local-fixture-key", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
+  const handle = executor.runSteerable({ cwd: workspace, prompt: "navi-native-goal-context-direction:fixture-only; verify the native goal keeps running", cliCommand: validateCliCommand("claude", "/goal perform at least three fixture steps")!, env: { CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: "local-fixture-key", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
   const events: AgentEvent[] = [];
   const deadline = setTimeout(() => handle.kill(), 45_000);
   try { for await (const event of handle.events) events.push(event); }
   finally { clearTimeout(deadline); await handle.cleanup?.(); }
-  assert.ok(!handle.commandLine.includes("ash-native-goal-context-direction"));
+  assert.ok(!handle.commandLine.includes("navi-native-goal-context-direction"));
   assert.ok(requests.length >= 3, JSON.stringify({ requests: requests.length, events: events.filter((event) => event.kind === "error" || event.kind === "text" || event.kind === "done") }));
   const working = requests.filter((request) => request.model.includes("sonnet"));
   assert.equal(working.length, 3, JSON.stringify(requests.map((request) => request.model)));
   assert.ok(requests.some((request) => request.model.includes("haiku")));
   assert.equal(events.find((event) => event.kind === "done")?.exitStatus, 0, JSON.stringify(events.filter((event) => event.kind === "error")));
   assert.equal(handle.goalStarted?.(), true);
-  assert.ok(working.every((request) => JSON.stringify(request.system).includes("ash-native-goal-context-direction")));
+  assert.ok(working.every((request) => JSON.stringify(request.system).includes("navi-native-goal-context-direction")));
   const contextPath = /<navi-goal-context:("(?:[^"\\]|\\.)*")>/.exec(handle.commandLine)?.[1];
   assert.ok(contextPath);
   await assert.rejects(readFile(JSON.parse(contextPath), "utf8"), /ENOENT/);

@@ -28,7 +28,7 @@ export async function handOffCleanupDebt(
     const layer = await import("./cleanup-debt.js");
     return await layer.noteCleanupDebt(input);
   } catch (error) {
-    console.error("[ash] 清理责任这一层加载失败,这一笔先留在内存里等重试:", error);
+    console.error("[navi] 清理责任这一层加载失败,这一笔先留在内存里等重试:", error);
     keepUndelivered(input);
     scheduleRedelivery();
     return "failed";

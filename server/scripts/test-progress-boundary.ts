@@ -19,12 +19,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-const root = mkdtempSync(join(tmpdir(), "ash-progress-boundary-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const root = mkdtempSync(join(tmpdir(), "navi-progress-boundary-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.env.CODEX_HOME = join(root, "codex-home");
-process.env.ASH_LAX_DONE = "1";
+process.env.NAVI_LAX_DONE = "1";
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");

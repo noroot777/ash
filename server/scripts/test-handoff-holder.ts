@@ -1,13 +1,13 @@
 // 出站行的持有机怎么认（shared 的 outboundHolder）。
 //
 // 起因：mac-mini 重装后 tailscale 换了 IP，接力设置里那条 url 还写着旧地址，于是侧栏
-// 一直说「联系不上 mac-mini」——而那台机器的 ash 好好跑着。用户去设置里把地址改对之后
+// 一直说「联系不上 mac-mini」——而那台机器的 navi 好好跑着。用户去设置里把地址改对之后
 // 问题**更隐蔽**了：历史出站行的 marker 里冻的还是旧地址，按 url 匹配 target 匹配不上，
 // 整台机器被轮询**静默跳过** —— 既不显示实时状态、也不再说「联系不上」，屏幕上只剩一份
 // 冻住的旧状态在冒充实时。这个测试钉住的就是「改完地址，历史行跟着走」。
 import assert from "node:assert/strict";
-import type { HandoffTarget, TaskHandoff } from "@ash/shared";
-import { normalizedPeerUrl, outboundHolder } from "@ash/shared/handoff";
+import type { HandoffTarget, TaskHandoff } from "@navi/shared";
+import { normalizedPeerUrl, outboundHolder } from "@navi/shared/handoff";
 
 const marker = (
   peerUrl: string | null,

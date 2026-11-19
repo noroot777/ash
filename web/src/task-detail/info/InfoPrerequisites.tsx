@@ -7,9 +7,9 @@
 // 加减之后服务端重发这条任务的快照（prerequisite-view.ts），这几行、会话里「在等谁」、侧栏都跟着换。
 // 「下游」只看不改：要改去下游那条任务里改。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Group, Task } from "@ash/shared";
-import type { PrerequisiteCandidates } from "@ash/shared/prerequisites";
-import { prerequisiteNeedsUser, prerequisiteStepText } from "@ash/shared/prerequisites";
+import type { Group, Task } from "@navi/shared";
+import type { PrerequisiteCandidates } from "@navi/shared/prerequisites";
+import { prerequisiteNeedsUser, prerequisiteStepText } from "@navi/shared/prerequisites";
 import { ArrowSquareOut, X } from "@phosphor-icons/react";
 import { Dropdown } from "../../components/Dropdown.tsx";
 import { InspRow } from "../../inspector/parts.tsx";

@@ -1,5 +1,5 @@
-import type { HandoffTarget, TaskListItem } from "@ash/shared";
-import { normalizedPeerUrl, outboundHolder } from "@ash/shared/handoff";
+import type { HandoffTarget, TaskListItem } from "@navi/shared";
+import { normalizedPeerUrl, outboundHolder } from "@navi/shared/handoff";
 import type { TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 
 export type BulkHandoffSkip = {

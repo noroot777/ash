@@ -43,7 +43,7 @@ export async function ensureHandoffTokenUnique(client: Pick<Client, "execute">):
   );
   if (merged.rowsAffected) {
     console.warn(
-      `[ash] 存量库里有 ${merged.rowsAffected} 条消息跟别人认着同一笔结果交接`
+      `[navi] 存量库里有 ${merged.rowsAffected} 条消息跟别人认着同一笔结果交接`
       + "（上一版那个竞态真的发生过）：已把这笔交接的身份归给最早那一条，正文一条都没动。",
     );
   }

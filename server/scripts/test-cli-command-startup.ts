@@ -7,11 +7,11 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-cli-startup-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-cli-startup-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { groups, projects, tasks, sessions, queueItems } = await import("../src/db/schema.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");

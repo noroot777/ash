@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { parseTaskCreationOrigin, taskCreationLabel } from "@ash/shared/task-origin";
+import { parseTaskCreationOrigin, taskCreationLabel } from "@navi/shared/task-origin";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-origin-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-origin-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, sessions, groups, chatRooms, chatMessages } = await import("../src/db/schema.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
@@ -23,7 +23,7 @@ mountTaskRoutes(api);
 mountGroupRoutes(api);
 const at = new Date().toISOString();
 const source = "source-agent";
-const headers = { "x-ash-source-task-id": source, "x-ash-turn-token": "source-turn" };
+const headers = { "x-navi-source-task-id": source, "x-navi-turn-token": "source-turn" };
 const create = (body: Record<string, unknown> = {}, identity: Record<string, string> = {}) => api.request("/tasks", {
   method: "POST", headers: { "content-type": "application/json", ...identity },
   body: JSON.stringify({ projectId: "project", title: "用户新建", useWorktree: false, ...body }),
@@ -39,16 +39,16 @@ try {
   const derived = await (await create({ title: "Codex 派生的任务", agentType: "claude" }, headers)).json();
   assert.deepEqual(derived.creationOrigin, { kind: "agent", taskId: source, taskTitle: "父任务", agentType: "codex", executorLabel: "Codex Dev" });
   assert.equal(derived.agentType, "claude", "worker identity stays independent of its creator");
-  const stale = await create({}, { ...headers, "x-ash-turn-token": "stale" });
+  const stale = await create({}, { ...headers, "x-navi-turn-token": "stale" });
   assert.equal(stale.status, 409);
   assert.match(stale.headers.get("content-type")!, /application\/json/);
   assert.match((await stale.json()).error, /回合身份已过期/);
-  const missing = await create({}, { ...headers, "x-ash-source-task-id": "missing-source" });
+  const missing = await create({}, { ...headers, "x-navi-source-task-id": "missing-source" });
   assert.equal(missing.status, 404);
   assert.deepEqual(await missing.json(), { error: "来源任务不存在" });
   const external = await (await create({ title: "外部智能体创建", creationOrigin: {
     kind: "agent", agentType: "codex", chatRoomId: "origin-chat", chatMemberId: "chat-codex",
-  } }, { "x-ash-client": "mcp" })).json();
+  } }, { "x-navi-client": "mcp" })).json();
   assert.deepEqual(external.creationOrigin, { kind: "agent" });
   assert.equal(taskCreationLabel(external.creationOrigin), "智能体创建（自报）");
   assert.equal(taskCreationLabel({ kind: "agent", taskId: source }), "智能体派生");

@@ -12,9 +12,9 @@
 //    能撤）`pending-messages.ts` 全都已经做对了，而且每一条都踩过坑。
 // ② **一条事件 = 唤醒一次 = 一个真实的模型回合。** 所以合并是第一位的。
 import { and, asc, eq, inArray, isNotNull, isNull, like, notInArray } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { handoffToken, mergeMonitorEventText, MONITOR_END_GRACE_MS, monitorMessageOrigin } from "@ash/shared/monitor";
-import { appendMonitorWake, readMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
+import type { AgentType } from "@navi/shared";
+import { handoffToken, mergeMonitorEventText, MONITOR_END_GRACE_MS, monitorMessageOrigin } from "@navi/shared/monitor";
+import { appendMonitorWake, readMonitorWake, type MonitorWakeEvent } from "@navi/shared/monitor-wake";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, scheduledMessages, tasks } from "./db/schema.js";
@@ -38,7 +38,7 @@ export async function pushToTask(
   handoffToken?: string,
   event?: MonitorWakeEvent,
 ): Promise<boolean> {
-  // **库关了就什么都送不出去**:ash 退出时会关库,而这一侧的调用方有几个是「放后台跑」的
+  // **库关了就什么都送不出去**:navi 退出时会关库,而这一侧的调用方有几个是「放后台跑」的
   // (探活那一问判出结束之后的 `void finish`),所以这一刻完全可能撞上关库。那时这里不该抛
   // —— 抛出去就是一个没人接的 rejection,把正在退出的进程变成异常退出。
   // 丢的那几行不会真丢:读取位置只在消息落库之后才推进,所以重启接回时会从同一处再读一遍。
@@ -98,7 +98,7 @@ export async function pushToTask(
     flushNow(row.id, row.taskId);
     return true;
   }
-  // 收尾正在进行(进程已经退了,ash 还在记账)时不必另压:欠着结束的哨兵名下谁都领不走(monitor-end-owed.ts)。
+  // 收尾正在进行(进程已经退了,navi 还在记账)时不必另压:欠着结束的哨兵名下谁都领不走(monitor-end-owed.ts)。
   const holdUntil = new Date(at + MONITOR_END_GRACE_MS).toISOString();
   const backlog = waiting.at(-2);
   // 已经有积压那一行:最新那一行并进它、腾出来装这一批。没有(或者腾的那一下落空):这一批另起一行,
@@ -301,7 +301,7 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
     if (sentAlready || duplicate) return "already";
     if (!delivered) {
       console.error(
-        `[ash] 哨兵结束通知无人可收 monitor=${monitorId} task=${row.taskId}：`
+        `[navi] 哨兵结束通知无人可收 monitor=${monitorId} task=${row.taskId}：`
         + "任务已经是终态或已归档，这条通知作废（凭证已销，不再拦着完成）",
       );
       return "dropped";
@@ -311,7 +311,7 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
     // 凭证还在 ⇒ 完成闸继续拦着。**而且这一趟必须留下一个还会再试的人**：上一版只打一行日志,
     // 唯一的补发入口在开机那一趟,于是一次瞬时写失败之后,结果要等到下次重启才送得出去,
     // agent 这期间反复 complete 只会一直吃 409(第 2 轮审查 F3 实测 `F3_NO_LIVE_RESULT_RETRY`)。
-    console.error(`[ash] 哨兵结束通知这一趟没送出去 monitor=${monitorId}（凭证留着,已排重试）:`, e);
+    console.error(`[navi] 哨兵结束通知这一趟没送出去 monitor=${monitorId}（凭证留着,已排重试）:`, e);
     const { scheduleResultHandoffRetry } = await import("./monitor-handoff-retry.js");
     scheduleResultHandoffRetry(monitorId);
     return "failed";

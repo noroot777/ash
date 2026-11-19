@@ -2,7 +2,7 @@
 // 单独成文件守 TaskDetail 的 700 行，跟「问一句」（replySend.ts）、「派出去」（replyDispatch.ts）对称。
 //
 // 发出去的话不进这条任务的会话：它是讨论的话题，落在讨论那一场的记录里，会话里由讨论气泡上方那一句画出来。
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import type { ReplyBoxProps } from "./replyBoxProps.ts";
 

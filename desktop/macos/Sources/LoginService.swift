@@ -9,11 +9,11 @@ enum LoginService {
   /// 正式那份叫 dev.navi.server；演练用的 app（别的 bundle id）各登记各的，碰不到日常那条。改名前那条
   /// （dev.ash.server）由 LegacyIdentity 卸掉、换成这一条。
   static var label: String {
-    isSuccessor ? "dev.navi.server" : "\(AshConfig.bundleID).server"
+    isSuccessor ? "dev.navi.server" : "\(NaviConfig.bundleID).server"
   }
 
   /// 正式那份才跟改名前的登录项打交道；演练用的 app 碰不到日常那条。
-  private static var isSuccessor: Bool { AshConfig.bundleID == LegacyIdentity.successor }
+  private static var isSuccessor: Bool { NaviConfig.bundleID == LegacyIdentity.successor }
 
   /// 装在「应用程序」里（不是从构建目录直接打开的那份）：登录项、旧 app 的软链只指向这种位置。
   static var isInstalledLocation: Bool {
@@ -25,7 +25,7 @@ enum LoginService {
       .appendingPathComponent("Library/LaunchAgents/\(label).plist")
   }
 
-  static var loginLog: URL { AshConfig.logURL.appendingPathComponent("login.log") }
+  static var loginLog: URL { NaviConfig.logURL.appendingPathComponent("login.log") }
 
   static var isEnabled: Bool {
     FileManager.default.fileExists(atPath: plistURL.path)
@@ -83,7 +83,7 @@ enum LoginService {
       "StandardErrorPath": loginLog.path,
     ]
     // launchd 不替你建日志所在的目录。
-    try FileManager.default.createDirectory(at: AshConfig.logURL, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: NaviConfig.logURL, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     try data.write(to: plistURL, options: .atomic)
@@ -101,7 +101,7 @@ enum LoginService {
   private static func checkedLaunchctl(_ args: [String]) throws {
     let status = launchctl(args)
     guard status == 0 else {
-      throw NSError(domain: "AshLoginService", code: Int(status), userInfo: [
+      throw NSError(domain: "NaviLoginService", code: Int(status), userInfo: [
         NSLocalizedDescriptionKey: "登录项操作失败：launchctl \(args.joined(separator: " "))（\(status)）",
       ])
     }

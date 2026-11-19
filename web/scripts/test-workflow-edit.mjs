@@ -7,7 +7,7 @@
 //
 // 跑法：npm -w web run test:workflow-edit
 import assert from "node:assert/strict";
-import { MAX_WORKFLOW_STEPS, isWorkflowUsable, makeStep } from "@ash/shared/workflow";
+import { MAX_WORKFLOW_STEPS, isWorkflowUsable, makeStep } from "@navi/shared/workflow";
 import {
   canAddKind, canAddStep, failText, insertStep, moveStep, nextStepId, patchFail, patchParams, removeStep,
 } from "../src/workflow/workflowEdit.ts";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, tasks, schema, runs, teardown } from "./monitors-fixture.js";
 import { setupRegressionReviews, type ReviewMode } from "./regression-review-fixture.js";
 
@@ -48,7 +48,7 @@ function holdArchive(taskId: string) {
   return { release, ready, response, restore: () => { db.update = update; } };
 }
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 try {
   const { open } = await setupRegressionReviews();
   const repair = async (mode: ReviewMode) => {
@@ -59,8 +59,8 @@ try {
     else await db.update(tasks).set({ workflow: JSON.stringify({ workspace: "shared", steps: [makeStep("run", "run"),
       { ...makeStep("verify", "verify"), fail: { mode: "back", max: 2 } }] }) }).where(eq(tasks.id, review.taskId));
     const result = await api.request(`/tasks/${review.taskId}/stage`, { method: "POST",
-      headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${review.ownerTaskId}`,
-        "x-ash-source-task-id": review.ownerTaskId }, body: JSON.stringify({ stage: "verify_failed" }) });
+      headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${review.ownerTaskId}`,
+        "x-navi-source-task-id": review.ownerTaskId }, body: JSON.stringify({ stage: "verify_failed" }) });
     assert.equal(result.status, 200, await result.text());
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, review.taskId));
     await review.settle(true);

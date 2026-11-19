@@ -6,7 +6,7 @@
 //   lane-cause   这一轮收了口、没出结论：结论气泡下面的原因句 + 「继续本轮审查」，后面又来三件不同的事；
 //   turn-live    开着页面看到的崩溃：直播的异常边界 + 「重试这一回合」，后面又来三件不同的事；
 //   turn-reload  刷新以后从会话行补出来的那一句 + 「重试这一回合」，后面同样三件事。
-import type { FreeReviewRound, FreeReviewRun, RetryTurnAction, Session, TaskListItem } from "@ash/shared";
+import type { FreeReviewRound, FreeReviewRun, RetryTurnAction, Session, TaskListItem } from "@navi/shared";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../../src/task-detail/conversationModel.ts";
 import { retryTurnActions, type ReviewRetryAction, type TurnRetryAction } from "../../src/task-detail/turnRetry.ts";
 
@@ -29,7 +29,7 @@ const line = (turn: Record<string, unknown>) => `\x1e${JSON.stringify(turn)}`;
 const aside = (second: number, text: string, notice: unknown) => line({ t: "system", text, aside: true, notice, at: at(second) });
 const CAUSE = { kind: "interrupted", reason: "模型上游连不上（503）" } as const;
 const NO_VERDICT = "这一轮审查是中途断掉的：模型上游连不上（状态码 503），执行器以 exit 1 结束。等上游恢复后点「继续本轮审查」。";
-const UNSUBMITTED = "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。";
+const UNSUBMITTED = "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 navi 的完成协议记为未完成。";
 /** 挂动作的那一句之后又落的三件不同的事（其余要你知道的、验收、一轮审查没能开始）。 */
 const LATER = (from: number) => [
   aside(from, "验收暂缓：工作区有未提交的改动", { kind: "alert" }),

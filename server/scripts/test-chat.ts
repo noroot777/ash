@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { AGENT_TYPES } from "@ash/shared";
-import type { ChatMember, ChatSnapshot } from "@ash/shared/chat";
-import { isAllMention, mentionedMembers } from "@ash/shared/chat";
+import { AGENT_TYPES } from "@navi/shared";
+import type { ChatMember, ChatSnapshot } from "@navi/shared/chat";
+import { isAllMention, mentionedMembers } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-test-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-test-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, tasks, chatMessages, chatRooms, agents } = await import("../src/db/schema.js");
 const { ChatService } = await import("../src/chat/service.js");
@@ -115,7 +115,7 @@ try {
   assert.equal((await request("/chats", { projectId: "missing", name: "群", members })).status, 404);
   assert.equal((await request("/chats", { projectId: "project", name: "群", members: [members[0], members[0]] })).status, 400);
   assert.equal((await request(`/chats/${room.id}/messages`, { body: "@codex hi", id: "agent-message" }, { "x-test-agent": "1" })).status, 403);
-  assert.equal((await request(`/chats/${room.id}/messages`, { body: "@codex hi", id: "agent-message" }, { "x-ash-source-task-id": "source" })).status, 403);
+  assert.equal((await request(`/chats/${room.id}/messages`, { body: "@codex hi", id: "agent-message" }, { "x-navi-source-task-id": "source" })).status, 403);
   assert.equal((await request(`/chats/${room.id}/messages`, { body: "@codex hi", id: "fake-role", role: "user" })).status, 400);
   await send("没有点名的私有背景：紫色频道栏");
   assert.equal(invoked.length, 0);
@@ -161,7 +161,7 @@ try {
   value = await snapshot();
   assert.equal(value.tasks[0]!.status, "done");
   assert.ok(value.messages.some((message) => message.taskId === task.id));
-  console.log("✓ 委派创建真实 ash 任务，关联持久化，状态更新可读");
+  console.log("✓ 委派创建真实 navi 任务，关联持久化，状态更新可读");
   failStart = true;
   await send("@codex 请实现功能，测试启动失败");
   await settled();

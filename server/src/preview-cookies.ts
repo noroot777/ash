@@ -1,7 +1,7 @@
 // 预览代理自己的那个 cookie 罐子。
 //
 // 为什么要有它：预览文档带 `CSP: sandbox`（没有 `allow-same-origin`），origin 是 `null`，
-// 浏览器把它发出的每个请求都当跨站。明文 http + 局域网 IP（用户访问 ash 的常态）下
+// 浏览器把它发出的每个请求都当跨站。明文 http + 局域网 IP（用户访问 navi 的常态）下
 // `SameSite` 的五种写法 —— Lax / Strict / 不写 / None（缺 Secure 被丢）/ None+Secure
 // （非可信来源同样被丢）—— **一条都带不回来**。也就是说「把 cookie 改写一下发回浏览器、
 // 指望它下次带上」这条路在用户的部署形态里根本走不通，预览里的应用永远保不住会话。

@@ -19,7 +19,7 @@
 // result / gate 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
 // 待验收卡本身负责（新卡就是一条新消息），这里不重复发。
 // 事件丢了（重启、通道重启正好落在对账前）由全量对账按「账和现状对不上」补（staleOutcomeTasks）。
-import { isAcceptedStage, type TaskStage } from "@ash/shared";
+import { isAcceptedStage, type TaskStage } from "@navi/shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { acceptGateRuns } from "../db/schema-accept-gate.js";

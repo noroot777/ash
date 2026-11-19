@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mergeFeed, timeMs } from "@ash/shared/team";
+import { mergeFeed, timeMs } from "@navi/shared/team";
 import { ApiError, api } from "../src/lib/api.ts";
 import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
@@ -35,11 +35,11 @@ try {
   assert.equal(localDiskPath("/api/tasks/demo/file"), null);
   assert.equal(localDiskPath("https://example.com/index.html"), null);
   const terminalTabs = [
-    createTerminalTab("cli-1", 1, "ash", "/repo"),
-    createTerminalTab("cli-2", 2, "ash", "/repo"),
-    createTerminalTab("cli-3", 3, "ash", "/repo"),
+    createTerminalTab("cli-1", 1, "navi", "/repo"),
+    createTerminalTab("cli-2", 2, "navi", "/repo"),
+    createTerminalTab("cli-3", 3, "navi", "/repo"),
   ];
-  assert.deepEqual(terminalTabs.map((tab) => tab.label), ["ash", "ash 2", "ash 3"]);
+  assert.deepEqual(terminalTabs.map((tab) => tab.label), ["navi", "navi 2", "navi 3"]);
   assert.deepEqual(withoutTerminalTab(terminalTabs, "cli-2", "cli-2"), {
     tabs: [terminalTabs[0], terminalTabs[2]],
     activeId: "cli-3",
@@ -259,7 +259,7 @@ try {
   );
   assert.deepEqual(liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].run : null, { model: "gpt-5.6-sol", reasoningEffort: "high" });
 
-  const persistedAttachmentPath = "/tmp/ash/data/uploads/persisted-agent-image.png";
+  const persistedAttachmentPath = "/tmp/navi/data/uploads/persisted-agent-image.png";
   const attachmentConversation = buildConversationItems(
     [{
       session: { ...session, endedAt: "2026-07-30T01:00:10.000Z" },
@@ -279,7 +279,7 @@ try {
     [persistedAttachmentPath],
   );
 
-  const liveAttachmentPath = "/tmp/ash/data/uploads/live-agent-image.jpg";
+  const liveAttachmentPath = "/tmp/navi/data/uploads/live-agent-image.jpg";
   const liveAttachmentConversation = buildConversationItems([], [session], [
     { kind: "server", id: "live-text", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "实时图片。" } } },
     { kind: "server", id: "live-image", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "attachment", path: liveAttachmentPath } } },

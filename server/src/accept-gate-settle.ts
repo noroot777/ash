@@ -2,7 +2,7 @@
 // 从 accept-gate.ts 拆出来，起跑（accept-gate.ts）、取消/超时、重启恢复（accept-gate-recover.ts）
 // 共用这一份 —— 「第一个到的说了算」只有一个实现才说得算。
 import { and, eq, isNull } from "drizzle-orm";
-import { ACCEPT_GATE_TIMEOUT_MS, summarizeAcceptGate } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_TIMEOUT_MS, summarizeAcceptGate } from "@navi/shared/accept-gate";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { acceptGateRuns } from "./db/schema.js";
@@ -40,7 +40,7 @@ export async function cleanupGateSnapshot(taskId: string, runId: string): Promis
   const logPath = acceptGateLogPath(taskId, runId);
   const launch = readGateLaunch(logPath);
   if (launch?.confinementEnrolled && gateScopeNotice(launch.confinementId)) {
-    appendGateLog(logPath, `\n[ash] macOS 兼容监督已收尾；独立测试快照保留到任务验收、归档或删除：${existingGateSnapshotPath(taskId, runId)}\n`);
+    appendGateLog(logPath, `\n[navi] macOS 兼容监督已收尾；独立测试快照保留到任务验收、归档或删除：${existingGateSnapshotPath(taskId, runId)}\n`);
     return;
   }
   await removeGateSnapshot(taskId, runId);
@@ -56,7 +56,7 @@ export async function cleanupGateSnapshot(taskId: string, runId: string): Promis
 export function announceGate(taskId: string): void {
   bus.publish({ type: "task.acceptGate", taskId });
   void publishTaskUpdated(taskId).catch((error) => {
-    console.error(`[ash] 门禁状态广播失败（${taskId}）:`, error);
+    console.error(`[navi] 门禁状态广播失败（${taskId}）:`, error);
   });
 }
 
@@ -77,7 +77,7 @@ export function superviseGate(taskId: string, runId: string, logPath: string, pi
     const recorded = readGateExit(logPath, pid);
     const exited = recorded ? gateExitOutcome(recorded) : null;
     if (exited && exited.failure !== "timeout") { await settleGate(runId, exited); return; }
-    appendGateLog(logPath, `\n[ash] 超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理，正在收掉它。\n`);
+    appendGateLog(logPath, `\n[navi] 超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理，正在收掉它。\n`);
     // **先认领终态、再动刀**（同取消那条路）：反过来的话，刀落下去触发的退出回调会先把
     // 这一次收成「命令被外人杀了」，连带把日志当成一条红交给 agent 去修 —— 而它其实是
     // 超时。占用不会因此漏空：stopAcceptGate 从进场就立起「还没确认退出」那条记号。
@@ -91,7 +91,7 @@ export function superviseGate(taskId: string, runId: string, logPath: string, pi
 /** 停不掉就**如实说**：工作区仍被占着，用户刷新后也看得见这句（根 AGENTS.md 那条）。 */
 export async function noteIfStillAlive(taskId: string, logPath: string, stopped: boolean): Promise<void> {
   if (stopped) return;
-  appendGateLog(logPath, `\n[ash] 尚未取得整棵进程树退出的证据；身份未核实时不会盲发信号。\n`);
+  appendGateLog(logPath, `\n[navi] 尚未取得整棵进程树退出的证据；身份未核实时不会盲发信号。\n`);
   await appendTaskTimeline(
     taskId,
     alertLine("验收前置命令尚未确认整棵进程树退出：可能是进程身份或归属暂时读不出，也可能仍有进程存活。"
@@ -104,7 +104,7 @@ export async function noteIfStillAlive(taskId: string, logPath: string, stopped:
  * 后到的原样丢掉 —— 否则「自动把验收接着做完」会跑两遍。
  *
  * 「第一个」是**落了库的那一个**（settlement 列）：认领下来的结论在动刀、清理之前就写进库，
- * 绿了要做的续验收、红了要做的交修办完才清掉。中间任何一步 ash 被重启，新实例照这一份续完，
+ * 绿了要做的续验收、红了要做的交修办完才清掉。中间任何一步 navi 被重启，新实例照这一份续完，
  * 不会把一个已经观察到的结论改判成「被打断」，也不会让一个已经亮出来的绿永远等不到合并
  * （第 1 轮审查 F2/F3）。
  */
@@ -140,7 +140,7 @@ export async function settleGate(
     // 到这一句为止我们已经独占了这次结算（settling + 上面那句 running 核对），所以存下来的
     // 现场不会是某个没赢的判定留下的。
     const sceneFailure = outcome.scene ? freezeGateScene(row.logPath, outcome.scene) : null;
-    if (sceneFailure) appendGateLog(row.logPath, `\n[ash] ${sceneFailure}\n${outcome.scene}\n`);
+    if (sceneFailure) appendGateLog(row.logPath, `\n[navi] ${sceneFailure}\n${outcome.scene}\n`);
     const stopped = await stopGateRun(runId, false);
     await noteIfStillAlive(row.taskId, row.logPath, stopped);
     if (outcome.status === "passed" && !stopped) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "process_unconfirmed" };
@@ -165,14 +165,14 @@ export async function settleGate(
     // 删不掉快照是磁盘上的事（EACCES/EPERM 实测会发生），不该把一条已经判完的门禁连同
     // 它的结论、时间线、交接一起甩进 catch（第 3 轮审查 F1）。
     if (stopped) await cleanupGateSnapshot(row.taskId, runId).catch((error) => appendGateLog(row.logPath,
-      `\n[ash] 快照没能删掉，它还留在 ${existingGateSnapshotPath(row.taskId, runId)}：${String(error)}\n`));
+      `\n[navi] 快照没能删掉，它还留在 ${existingGateSnapshotPath(row.taskId, runId)}：${String(error)}\n`));
     if (watching?.runId === runId) { watching.watch.stop(); live.delete(row.taskId); }
     const settled = { ...row, ...outcome, finishedAt };
     const view = gateView(settled);
     // 入口那句话（accept-gate-entry.ts）跟摘要放在同一行：核得准的那一档它就是「为什么没起跑」，
     // 核不准的那一档它是起跑前看到的事实，原始输出就在日志里它的上面。
     const entry = view.entryNote ? ` ${view.entryNote}` : "";
-    appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}${entry}\n`);
+    appendGateLog(row.logPath, `\n[navi] ${finishedAt} ${summarizeAcceptGate(view)}${entry}\n`);
     await appendTaskTimeline(row.taskId,
       (view.status === "passed" ? receiptLine : alertLine)(`${summarizeAcceptGate(view)}。${entry}${outcome.note ? ` ${outcome.note}` : ""}${sceneFailure ? ` ${sceneFailure}` : ""}`));
     announceGate(row.taskId);
@@ -180,8 +180,8 @@ export async function settleGate(
     if (owed) await followUpGate({ ...settled, settlement: null }, view);
   })().catch((error) => {
     if (rowForFailure && !outcomeSaved) appendGateLog(rowForFailure.logPath,
-      `\n[ash] 终态写入失败，本次尚未结算；请重试取消，工作区仍受保护：${String(error)}\n`);
-    console.error(`[ash] 验收前置命令收尾失败（${runId}）:`, error);
+      `\n[navi] 终态写入失败，本次尚未结算；请重试取消，工作区仍受保护：${String(error)}\n`);
+    console.error(`[navi] 验收前置命令收尾失败（${runId}）:`, error);
   }).finally(() => { finishOutcome(); settling.delete(runId); });
   settlements.set(runId, settle);
   // 内存账本只给「等这一次收完」用，留着历史没有意义，满了就把最老的挤掉。**两个账本

@@ -23,8 +23,8 @@ const SNIFF_BYTES = 8192;
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg", "heic", "tif", "tiff"]);
 // `text/html` **故意不在这张表里**：这个端点带 `content-disposition: inline`，给 html 配上
-// text/html 就等于让工作区里任何一份 html 以 ash 自己的源跑脚本（读得到登录态、能带着
-// cookie 调 ash 的接口）。要看网页走 `task-page.ts` 那条——它把文档钉在 sandbox 里。
+// text/html 就等于让工作区里任何一份 html 以 navi 自己的源跑脚本（读得到登录态、能带着
+// cookie 调 navi 的接口）。要看网页走 `task-page.ts` 那条——它把文档钉在 sandbox 里。
 const MIME_BY_EXTENSION: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
   webp: "image/webp", avif: "image/avif", bmp: "image/bmp", ico: "image/x-icon",

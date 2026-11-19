@@ -12,11 +12,11 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { ChatMember } from "@ash/shared/chat";
+import type { ChatMember } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-delete-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-delete-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, chatRooms, chatMessages, chatContextEntries, chatSummaries, chatContextStates, chatContextResets } = await import("../src/db/schema.js");
 const { ChatService } = await import("../src/chat/service.js");
@@ -66,7 +66,7 @@ try {
   await started;
 
   // 删群聊是用户操作：带任务身份的 agent 请求被 /chats/* 的人类闸挡在门外。
-  const byAgent = await app.request(`/chats/${room.id}`, { method: "DELETE", headers: { "x-ash-source-task-id": "task" } });
+  const byAgent = await app.request(`/chats/${room.id}`, { method: "DELETE", headers: { "x-navi-source-task-id": "task" } });
   assert.equal(byAgent.status, 403, await byAgent.text());
   assert.equal((await db.select().from(chatRooms).where(eq(chatRooms.id, room.id))).length, 1, "agent 删不掉用户的群");
 

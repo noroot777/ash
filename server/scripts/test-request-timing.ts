@@ -14,13 +14,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-request-timing-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-request-timing-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const { ClaudeRequestTimer } = await import("../src/executors/request-timing.js");
 const { codexTurnTiming, readCodexTurnTiming } = await import("../src/executors/codex-rollout-timing.js");
-const { addUsage, isTokenUsage, outputRate } = await import("@ash/shared/usage");
+const { addUsage, isTokenUsage, outputRate } = await import("@navi/shared/usage");
 
 try {
   // ── ① codex:rollout 行(形状取自 2026-11-13 的真实 rollout,时间换成从 0 起的秒数)

@@ -1,10 +1,10 @@
 // 「AI 协助填写」这块面板的浏览器回归。
 //
 // 要钉的是**每一种结局在界面上都留得下痕迹、而且说的是实话**，因为这颗按钮要跑几分钟，
-// 用户在这几分钟里会换页面、会刷新、会自己动手写脚本，还可能碰上 ash 重启或者网断一下：
+// 用户在这几分钟里会换页面、会刷新、会自己动手写脚本，还可能碰上 navi 重启或者网断一下：
 //   ① 点下去 → 看得见第几轮、看得见「停止」；
 //   ② 点停止 → 留下「已取消」（不是悄悄退回初始按钮）；
-//   ③ ash 重启把内存态吞了 → 「已随 Navi 重启中断」，而且**刷新之后还在**
+//   ③ navi 重启把内存态吞了 → 「已随 Navi 重启中断」，而且**刷新之后还在**
 //      （项目约定：停止/中断必须留下持久可见的状态，判据就是刷新后还看得见）；
 //   ④ 作业正常跑完、终态过了 10 分钟被清掉 → 说的是「过期」，**不能说成重启**
 //      （服务端回的都是 job: null，靠它自报的实例身份分辨）；
@@ -119,7 +119,7 @@ try {
   await stopAssist.waitFor({ state: "detached" });
   assert.equal(await assistButton.isDisabled(), false, "停下来之后要能重新点");
 
-  // ③ ash 重启：服务端只回 job: null，界面不能装作没点过
+  // ③ navi 重启：服务端只回 job: null，界面不能装作没点过
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   await page.getByTestId("assist-restart").click();
@@ -137,13 +137,13 @@ try {
   await assistGetsSettled(page, 1, "刷新后的首次状态读取已被页面消费完");
   assert.equal(await progress.count(), 0, "收掉的提示不该在刷新后又冒出来");
 
-  // ④ 同样是 job: null，但 ash 没重启过：那是作业跑完之后终态自己过期了
+  // ④ 同样是 job: null，但 navi 没重启过：那是作业跑完之后终态自己过期了
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   await page.getByTestId("assist-expire").click();
   await progress.getByText("已经过期", { exact: false }).waitFor();
   const expired = await progress.innerText();
-  assert.doesNotMatch(expired, /重启/, "ash 没重启过就不能说它重启了");
+  assert.doesNotMatch(expired, /重启/, "navi 没重启过就不能说它重启了");
   assert.match(expired, /只保留 10 分钟/, "要说清结果为什么没了");
   await dismiss();
   await progress.waitFor({ state: "detached" });
@@ -181,7 +181,7 @@ try {
   // 摆出来的那条脚本要看得见，而且换不换由用户点
   assert.match(await progress.innerText(), /npm run dev -- --port \$PORT/, "AI 试出来的那条要摆出来给人看");
   // 点完「保留我写的」，卡片得说准：说成「已填进上面的输入框」，用户就会以为框里这条手写的
-  // 是 ash 验证过的（第 3 轮审查）。
+  // 是 navi 验证过的（第 3 轮审查）。
   await progress.getByRole("button", { name: "保留我写的" }).click();
   await progress.getByText("保留你自己写的那条", { exact: false }).waitFor();
   const kept = await progress.innerText();

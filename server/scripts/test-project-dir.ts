@@ -8,8 +8,8 @@ import { existsSync, mkdirSync, readdirSync, mkdtempSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-project-dir-test-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-project-dir-test-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 try {
   const { ensureProjectDir } = await import("../src/project-dir.js");
@@ -82,7 +82,7 @@ try {
 
   // 带 createDir:连同缺失的上级一起建出来,项目正常登记
   {
-    const target = join(root, "made", "by", "ash");
+    const target = join(root, "made", "by", "navi");
     const res = await create({ name: "建目录", repoPath: target, createDir: true });
     assert.equal(res.status, 201);
     assert.equal((await res.json() as { repoPath: string }).repoPath, target);

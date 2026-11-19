@@ -8,11 +8,11 @@
 // 宿主能收附件时（attachable），最后一行跟平常的回复框一样能贴图：粘贴或点回形针，图跟着整份答复
 // 一起走（服务端 /answer 的 attachments，与回复同一条路拼进提示词）。附件是整张卡的、不分题。
 import { useId, useRef, useState, type ClipboardEvent, type KeyboardEvent, type RefObject } from "react";
-import type { QuestionItem, TaskListItem } from "@ash/shared";
+import type { QuestionItem, TaskListItem } from "@navi/shared";
 import { CaretDown, Check } from "@phosphor-icons/react";
 import {
   formatQuestionAnswers, joinQuestionAnswer, questionItems, questionKey, type QuestionAnswerInput,
-} from "@ash/shared/questions";
+} from "@navi/shared/questions";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";

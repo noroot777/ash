@@ -41,7 +41,7 @@ import { cliConfigDirForOwner } from "./auth/run-env.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
-import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
+import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@navi/shared";
 import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns, returningAcceptanceId } from "./handoff-accept-gate.js";
 import { newHumanGate } from "./task-human-gate.js";
@@ -641,7 +641,7 @@ async function importValidated(
     const err = rollbackFailed
       ? new HandoffError(`导入落库失败,且补偿回滚也失败了——本机可能留有半截任务 ${m.task.id},请先在本机检查/清理再重试。原始错误:${msg.slice(0, 300)}`, 500)
       : new HandoffError(`导入落库失败,已回滚,本机没有留下半截任务,可直接重试。原始错误:${msg.slice(0, 300)}`, 500);
-    // 回滚失败 = 不能再向源机保证「本机没落库」,应答不带 ash 标记(见 handoff-routes)。
+    // 回滚失败 = 不能再向源机保证「本机没落库」,应答不带 navi 标记(见 handoff-routes)。
     err.unsettled = rollbackFailed;
     throw err;
   }

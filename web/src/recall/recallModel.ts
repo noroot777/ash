@@ -1,7 +1,7 @@
 // R 键那张「我说过的话」的纯逻辑：左边哪些任务、各自连带哪几条（执行者、派出去的子任务）、筛的时候
 // 留谁；右边一串发言怎么按天、按子任务分段。拆出来是为了能脱 DOM 钉住（scripts/test-recall.ts）。
-import type { TaskListItem } from "@ash/shared";
-import type { UserMessage } from "@ash/shared/user-messages";
+import type { TaskListItem } from "@navi/shared";
+import type { UserMessage } from "@navi/shared/user-messages";
 
 const two = (value: number) => String(value).padStart(2, "0");
 

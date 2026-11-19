@@ -67,7 +67,7 @@ export function recordPorts(session: TerminalSession, ports: number[]): void {
 export function sessionRunning(session: TerminalSession): boolean {
   // 显式放弃过的一律不算「还在跑」:这一格的全部用途就是解除悲观判据造成的死局
   // (端口归属核不上 ⇒ 起不动也停不掉也删不掉,terminal-abandon.ts 文件头)。注意它
-  // **不改 stop 账** —— 「还有什么活着」照旧看 `abandoned`/`stop`,只有「ash 还管不管它」
+  // **不改 stop 账** —— 「还有什么活着」照旧看 `abandoned`/`stop`,只有「navi 还管不管它」
   // 认这一格。
   if (session.abandoned) return false;
   return sessionAlive(session) || session.portsAlive || session.portUncertain === true || liveLeftovers(session.stop).length > 0;

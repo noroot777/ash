@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task } from "@navi/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import type { ComposerDraft } from "../../src/composer/composerDraft.ts";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
@@ -10,15 +10,15 @@ import "../../src/styles/global.css";
 // 这里用一个开关复现那一下 —— 草稿必须活在面板外面，回来时原样还在。
 const project: ProjectView = {
   id: "p1",
-  name: "ash",
-  repoPath: "/tmp/ash",
+  name: "navi",
+  repoPath: "/tmp/navi",
   workflowId: null,
   useWorktreeDefault: false,
   createdAt: "2026-08-28T00:00:00.000Z",
   health: { exists: true, isRepo: false },
 };
 
-function Ash() {
+function Navi() {
   const [open, setOpen] = useState(true);
   const [seed, setSeed] = useState<ComposerDraft | null>(null);
   const [created, setCreated] = useState<string[]>([]);
@@ -69,7 +69,7 @@ function Ash() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <DraftProvider>
-      <Ash />
+      <Navi />
     </DraftProvider>
   </StrictMode>,
 );

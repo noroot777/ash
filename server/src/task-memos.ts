@@ -10,9 +10,9 @@
 // 批量摘要 `POST /tasks/memos` 是**同级集合端点**(第二段是字面量不是 id),必须登记进
 // resource-gate.ts 的 NOT_AN_ID,否则 "memos" 会被当成 taskId 查库。它自己逐任务过一遍
 // 可见性 + 归属。
-import { TASK_MEMO_MAX_ATTACHMENTS, TASK_MEMO_MAX_COUNT, TASK_MEMO_MAX_LEN, taskMemoDigestText } from "@ash/shared/task-memo";
-import type { TaskMemo, TaskMemoDigest } from "@ash/shared/task-memo";
-import { TASK_BATCH_LIMIT } from "@ash/shared";
+import { TASK_MEMO_MAX_ATTACHMENTS, TASK_MEMO_MAX_COUNT, TASK_MEMO_MAX_LEN, taskMemoDigestText } from "@navi/shared/task-memo";
+import type { TaskMemo, TaskMemoDigest } from "@navi/shared/task-memo";
+import { TASK_BATCH_LIMIT } from "@navi/shared";
 import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { join } from "node:path";

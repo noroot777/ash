@@ -1,8 +1,8 @@
 import type { ReactNode, RefObject } from "react";
-import type { AgentType, DiscussionRounds, SkillEntry, Task, TaskListItem } from "@ash/shared";
-import type { QuestionAnswerInput } from "@ash/shared/questions";
-import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
-import type { CreateReviewChoice } from "@ash/shared/review-on-create";
+import type { AgentType, DiscussionRounds, SkillEntry, Task, TaskListItem } from "@navi/shared";
+import type { QuestionAnswerInput } from "@navi/shared/questions";
+import type { DispatchLaunchInput, DispatchRunTarget } from "@navi/shared/dispatch-plan";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import type { TrayMonitors } from "../components/MonitorTrayRow.tsx";
 import type { IconMenuItem } from "../components/IconMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
@@ -65,7 +65,7 @@ export type ReplyBoxProps = {
   override?: ReplyOverride;
   /** 这条任务自己有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
   onAnswer?: (answer: string, input: QuestionAnswerInput, attachments?: string[]) => Promise<void>;
-  /** 那一问是这条任务自己摆的派活单时，「派出去」交给 ash 照卡建（DispatchPlanCard.tsx）。 */
+  /** 那一问是这条任务自己摆的派活单时，「派出去」交给 navi 照卡建（DispatchPlanCard.tsx）。 */
   onLaunchPlan?: (input: DispatchLaunchInput) => Promise<void>;
   /** 「派出去的活交给谁」（胶囊点开那一层里的一行）：null = 同这里。不给就不出这一行。 */
   onDispatchTargetChange?: (target: DispatchRunTarget | null) => Promise<void>;

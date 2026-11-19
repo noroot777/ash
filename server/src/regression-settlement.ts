@@ -1,4 +1,4 @@
-import type { ReviewConclusion } from "@ash/shared";
+import type { ReviewConclusion } from "@navi/shared";
 import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
@@ -166,7 +166,7 @@ export async function completeRegressionSettlement(directory: string, checked: C
     // 上半场声明的落笔条件在这里**再核一遍**:两段之间还隔着结论复核、时间线这些 await,
     // 而这一笔写的是 round/run 的终态(见 `SettlementFence`)。
     if (!await fenceHeld(transaction, checked.fence)) {
-      console.error(`[ash] 审查结算撤回 ${directory}：判断之后这条任务又起过回合`);
+      console.error(`[navi] 审查结算撤回 ${directory}：判断之后这条任务又起过回合`);
       return false;
     }
     const owner = (await transaction.select().from(tasks).where(eq(tasks.id, state.settlement.ownerTaskId)))[0];
@@ -206,7 +206,7 @@ export async function recordInterruptedRegressionReview(task: typeof tasks.$infe
 export async function reconcileRegressionSettlements(ownerTaskId?: string): Promise<void> {
   await reconcileReviewStarts(ownerTaskId);
   await (await import("./free-review-reconcile.js")).reconcileFreeReviews(ownerTaskId)
-    .catch((error) => console.error("[ash] 自由审查发现待重试:", error));
+    .catch((error) => console.error("[navi] 自由审查发现待重试:", error));
   const candidates = await db.select().from(tasks).where(or(isNotNull(tasks.verifyRound), isNotNull(tasks.reviewOf)));
   for (const task of candidates) {
     if (ownerTaskId && task.id !== ownerTaskId) continue;
@@ -218,7 +218,7 @@ export async function reconcileRegressionSettlements(ownerTaskId?: string): Prom
     if (state?.settlement || (!task.verifyRound && !state)) continue;
     if (await db.transaction((transaction) => reviewContinuationPending(transaction, task, state), { behavior: "immediate" })) continue;
     const { handleTaskSettlement } = await import("./review.js");
-    await handleTaskSettlement(task.id, "failed", false, null).catch((error) => console.error(`[ash] 审查恢复待重试 ${task.id}:`, error));
+    await handleTaskSettlement(task.id, "failed", false, null).catch((error) => console.error(`[navi] 审查恢复待重试 ${task.id}:`, error));
   }
   const states = await db.select().from(regressionEvidence).where(isNotNull(regressionEvidence.settlement));
   for (const state of states) {
@@ -233,7 +233,7 @@ export async function reconcileRegressionSettlements(ownerTaskId?: string): Prom
       const held = turnIdentity(owner.id);
       if (held ? held.role === "reviewer" : owner.status === "running" || owner.status === "queued") continue;
       await (await import("./free-workflow.js")).handleFreeWorkflowSettlement(owner.id, "failed", false, null, "reviewer")
-        .catch((error) => console.error(`[ash] 自由审查恢复待重试 ${owner.id}:`, error));
+        .catch((error) => console.error(`[navi] 自由审查恢复待重试 ${owner.id}:`, error));
       continue;
     }
     if (owner.status === "running" || owner.status === "queued" || isTurnClaimed(owner.id)) continue;
@@ -241,7 +241,7 @@ export async function reconcileRegressionSettlements(ownerTaskId?: string): Prom
       : owner.id !== state.taskId || owner.verifyRound !== settlement.round) continue;
     const { handleTaskSettlement } = await import("./review.js");
     await handleTaskSettlement(owner.id, settlement.outcome, false, null)
-      .catch((error) => console.error(`[ash] 审查结算待重试 ${owner.id}:`, error));
+      .catch((error) => console.error(`[navi] 审查结算待重试 ${owner.id}:`, error));
   }
   await reconcileRegressionFinalizations(ownerTaskId);
   const waiting = await db.select().from(tasks).where(ownerTaskId ? eq(tasks.id, ownerTaskId)
@@ -261,7 +261,7 @@ export function startRegressionSettlementRecovery(): void {
     if (retrying) return;
     retrying = true;
     try { await reconcileRegressionSettlements(); }
-    catch (error) { console.error("[ash] 审查结算重试失败:", error); }
+    catch (error) { console.error("[navi] 审查结算重试失败:", error); }
     finally { retrying = false; }
   }, 30_000);
   timer.unref();

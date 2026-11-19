@@ -11,7 +11,7 @@ import { localeDateTime } from "../lib/localeFormat.ts";
 //   agent 在 worktree 里提交、用户在终端里 `git config user.email`，读到的都是这一份，
 //   所以界面必须如实标出「这个值是本仓库设的，还是从全局继承来的」——否则用户会以为
 //   自己在项目上改的东西没生效，实际上他只是看着一个继承值。
-// · 「远端凭证」（HTTPS 用户名 + 令牌）只进 ash 自己的库，且**只写不读**：`.git/config`
+// · 「远端凭证」（HTTPS 用户名 + 令牌）只进 navi 自己的库，且**只写不读**：`.git/config`
 //   是明文、被所有 worktree 共享、agent 读得到，令牌不该躺在那儿。
 //
 // 令牌框永远是空的，这是设计而不是加载失败，所以卡片里必须有一句话说清楚它，并且

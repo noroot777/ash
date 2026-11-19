@@ -19,8 +19,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-turn-output-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-turn-output-"));
+process.env.NAVI_DB = join(root, "ash.db");
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });

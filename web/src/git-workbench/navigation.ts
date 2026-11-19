@@ -1,4 +1,4 @@
-import type { GitView } from "@ash/shared/git-workbench";
+import type { GitView } from "@navi/shared/git-workbench";
 
 export interface GitLocation {
   projectId: string;

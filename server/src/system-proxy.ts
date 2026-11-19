@@ -4,7 +4,7 @@
 // - macOS：`scutil --proxy`（系统设置里「网络 → 代理」的那份，Clash 等工具的「设置系统代理」也写这里）
 // - Windows：WinINET 的 `Internet Settings`（系统设置「代理」页）；WinHTTP 那份是给服务用的，不是用户眼里的系统代理
 // - Linux：KDE 读 kioslaverc，其它桌面读 GNOME gsettings；都没有就是没配
-// PAC、自动发现（WPAD）、只有 SOCKS 这几种 ash 不解析，记进 unsupported 由调用方明说「未生效」，
+// PAC、自动发现（WPAD）、只有 SOCKS 这几种 navi 不解析，记进 unsupported 由调用方明说「未生效」，
 // 而不是装作走了系统代理。
 //
 // 读一次要起子进程，所以结果缓存 SYSTEM_PROXY_TTL_MS：过期后的请求先用旧值、后台刷新（不让任何一次
@@ -38,7 +38,7 @@ export type SystemProxySettings = {
   /** 系统里写的绕过规则原文，按 bypassSyntax 解释 */
   bypass: string[];
   bypassSyntax?: BypassSyntax;
-  /** 读到了但 ash 不支持、因而没有生效的设置 */
+  /** 读到了但 navi 不支持、因而没有生效的设置 */
   unsupported: string[];
   /**
    * 整份配置没读到（第一次读就失败）：不知道系统要走哪个代理，也不知道绕过列表，

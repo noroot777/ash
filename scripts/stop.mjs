@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 停掉 :4317 上的 ash 服务端。
+// 停掉 :4317 上的 navi 服务端。
 //
 //   npm run stop              # 或直接 node scripts/stop.mjs
 //   node scripts/stop.mjs --wait  # 等会被打断的任务排空再停
@@ -11,7 +11,7 @@
 //    接回。真会被判 failed 的只剩接管不了的那些,有就默认中止。
 //  - 问不出判据(拒答 / 没按时答)一律中止,不按 0 处理。
 //  - 停完必须等到端口**彻底安静**才报成功:查不到监听者、或者它不肯退,都如实失败。
-//  - ash MCP 是各会话自己 spawn 的 stdio 子进程,不归这里管;server 起来之前它们的调用会失败。
+//  - navi MCP 是各会话自己 spawn 的 stdio 子进程,不归这里管;server 起来之前它们的调用会失败。
 import { readEnv } from "./env.mjs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";

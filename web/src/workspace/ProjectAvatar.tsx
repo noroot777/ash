@@ -1,4 +1,4 @@
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 
 function toneFor(value: string): number {
   let hash = 0;

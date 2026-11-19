@@ -1,5 +1,5 @@
-import type { HandoffTarget, TaskHandoff } from "@ash/shared";
-import type { HandoffSourceAddress } from "@ash/shared/handoff";
+import type { HandoffTarget, TaskHandoff } from "@navi/shared";
+import type { HandoffSourceAddress } from "@navi/shared/handoff";
 import { desc, inArray, isNotNull } from "drizzle-orm";
 import type { Actor } from "./auth/context.js";
 import { isAccountHolder } from "./auth/context.js";

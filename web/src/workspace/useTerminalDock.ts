@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { api, type TerminalSessionInfo } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import {

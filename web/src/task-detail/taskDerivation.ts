@@ -1,6 +1,6 @@
-import type { Session, Task } from "@ash/shared";
-import { TASK_STATUS_LABELS } from "@ash/shared";
-import { taskBranchName, taskBranchNames } from "@ash/shared/task-branch";
+import type { Session, Task } from "@navi/shared";
+import { TASK_STATUS_LABELS } from "@navi/shared";
+import { taskBranchName, taskBranchNames } from "@navi/shared/task-branch";
 
 // 回复框里「派出去」的新任务从这条任务的哪儿接着来：能不能派、从哪个分支开工、正文怎么带上这场对话。
 

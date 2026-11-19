@@ -1,7 +1,7 @@
 // 安装器那一侧的回归:`scripts/mcp-hosts.mjs` + `scripts/mcp-host-sources.mjs`
 // + `scripts/config-publish.mjs`(裸 Node)。
 //
-// 为什么跟 `test-ash-mcp-registry.ts` 分开:那边测的是 server 里那条通用补接链(TS),
+// 为什么跟 `test-navi-mcp-registry.ts` 分开:那边测的是 server 里那条通用补接链(TS),
 // 这边测的是 **setup 在裸 Node 上跑的那一份**。同一条规矩在这个仓库里有两份实现(setup
 // 跑在 `npm run setup` 时,那会儿还没 build,导不进 TS),所以这里盯两件事:
 //
@@ -10,19 +10,19 @@
 //      `writeFileSync`,注入一次 ENOSPC 之后活动配置只剩 `{\n  "userSetting": "k`,
 //      备份完整但 CLI 读的是活动那份。有备份 ≠ 失败安全。
 //
-// 跑:`npm -w server run test:ash-mcp-registry`(它串起这两条 + kimi 那条)
+// 跑:`npm -w server run test:navi-mcp-registry`(它串起这两条 + kimi 那条)
 import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { AGENT_TYPES, type AgentType } from "@ash/shared";
-import { ASH_MCP_SERVER_NAME as NAME } from "@ash/shared/mcp";
+import { AGENT_TYPES, type AgentType } from "@navi/shared";
+import { NAVI_MCP_SERVER_NAME as NAME } from "@navi/shared/mcp";
 import { cliSpec } from "../src/executors/catalog/index.js";
-import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-registry/catalog.js";
+import { NAVI_MCP_TABLE, naviMcpConfigDir, canRegisterNaviMcp } from "../src/mcp-registry/catalog.js";
 import * as edit from "../src/mcp-registry/json-edit.js";
-import { ashMcpConfigFile } from "../src/mcp-registry/sources.js";
+import { naviMcpConfigFile } from "../src/mcp-registry/sources.js";
 import { REPO_DIR } from "../src/paths.js";
 import { checkMultiSource } from "./mcp-multi-source-cases.js";
 import { checkPublishCases, type BarePublish } from "./mcp-publish-cases.js";
@@ -50,7 +50,7 @@ const publish = await import(
   pathToFileURL(join(REPO_DIR, "scripts", "config-publish.mjs")).href
 ) as unknown as BarePublish;
 
-const root = mkdtempSync(join(tmpdir(), "ash-mcp-installer-"));
+const root = mkdtempSync(join(tmpdir(), "navi-mcp-installer-"));
 let done = 0;
 const group = (name: string) => { done++; process.stdout.write(`  ✓ ${name}\n`); };
 
@@ -86,10 +86,10 @@ try {
     };
     // claude 走它自己的 `mcp add`(那是它的原生入口),codex 走 `codex-mcp.mjs`(发布前要
     // codex 本人点头)—— 其余每一家都必须在裸 Node 那份表里有落点。
-    const expected = AGENT_TYPES.filter((t) => canRegisterAshMcp(t) && t !== "claude" && t !== "codex");
+    const expected = AGENT_TYPES.filter((t) => canRegisterNaviMcp(t) && t !== "claude" && t !== "codex");
     assert.deepEqual(Object.keys(hosts.HOST_SITES).sort(), [...expected].sort(), "两边覆盖的家数要一致");
     for (const [type, site] of Object.entries(hosts.HOST_SITES)) {
-      const mechanism = ASH_MCP_TABLE[type as AgentType];
+      const mechanism = NAVI_MCP_TABLE[type as AgentType];
       assert.equal(mechanism.kind, "file", `${type}:裸 Node 那份只该有能自动写的`);
       if (mechanism.kind !== "file") continue;
       assert.equal(SHAPE_ID[site.shape], mechanism.shape.id, `${type}:格式族要对上`);
@@ -132,7 +132,7 @@ try {
           hosts.hostMcpFile(type, { env, home: "/h" }),
           mechanism.site.dirEnvIsFile && env[mechanism.site.dirEnv ?? ""]
             ? env[mechanism.site.dirEnv ?? ""]
-            : ashMcpConfigFile(ashMcpConfigDir(type, env, "/h")!, mechanism.site),
+            : naviMcpConfigFile(naviMcpConfigDir(type, env, "/h")!, mechanism.site),
           `${type}:路径要算出同一个(env=${JSON.stringify(env)})`,
         );
       }
@@ -194,26 +194,26 @@ try {
     const ml = home("toml-multiline");
     const mlFile = seed(ml, [
       "[mcp_servers.other]", 'command = "x"', "",
-      "[mcp_servers.other.env]", 'NOTE = """', '[mcp_servers.ash]', 'mcp_servers = { }', '"""', "",
+      "[mcp_servers.other.env]", 'NOTE = """', '[mcp_servers.navi]', 'mcp_servers = { }', '"""', "",
     ].join("\n"));
     const added = install("grok", ml);
     assert.ok(added.added, `多行字符串里的文本不该挡住追加:${added.why ?? ""}`);
     assert.match(readFileSync(mlFile, "utf8"), new RegExp(`\\[mcp_servers\\.${NAME}\\]\\n`));
 
     // ⑤ **注释里的三引号不是字符串定界符**(本轮审查 R2,实测复现过):上一版按行先找
-    //     `"""` 再剔 `#`,顺序反了,于是夹在两行注释之间的真 `[mcp_servers.ash]` 被当成多行
+    //     `"""` 再剔 `#`,顺序反了,于是夹在两行注释之间的真 `[mcp_servers.navi]` 被当成多行
     //     字符串正文吞掉 —— 安装器追加第二张同名表并报「已接好」,真 grok 那边 `duplicate key`
     //     让整份配置都读不出来(连用户自己的 MCP 一起),而它的退出码还是 0。
     {
       const h = home("toml-comment-quotes");
-      const file = seed(h, '# 示例 """\n[mcp_servers.ash]\ncommand = "node"\nargs = ["/old.js"]\n# 结束 """\n');
+      const file = seed(h, '# 示例 """\n[mcp_servers.navi]\ncommand = "node"\nargs = ["/old.js"]\n# 结束 """\n');
       const before = readFileSync(file, "utf8");
       const r = install("grok", h);
       assert.ok(!r.added && /已经有/.test(r.why ?? ""), `注释里的三引号不该吞掉真表:${r.why ?? ""}`);
       assert.equal(readFileSync(file, "utf8"), before, "一个字节都不许动");
-      assert.equal((readFileSync(file, "utf8").match(/\[mcp_servers\.ash\]/g) ?? []).length, 1, "不许多出一张同名表");
+      assert.equal((readFileSync(file, "utf8").match(/\[mcp_servers\.navi\]/g) ?? []).length, 1, "不许多出一张同名表");
 
-      // 同样的注释形状、但本来没有 ash:照样该接上(注释不是「判不准」)。
+      // 同样的注释形状、但本来没有 navi:照样该接上(注释不是「判不准」)。
       const h2 = home("toml-comment-quotes-empty");
       const f2 = seed(h2, '# 示例 """\n[mcp_servers.other]\ncommand = "x"\n# 结束 """\n');
       const r2 = install("grok", h2);
@@ -223,20 +223,20 @@ try {
       assert.match(after, /\[mcp_servers\.other\]/, "别人那张还在");
     }
 
-    // ⑥ 根级关掉了 ash ⇒ 不替他打开(`disabled_mcp_servers` 必须在表头之前才是根级)。
+    // ⑥ 根级关掉了 navi ⇒ 不替他打开(`disabled_mcp_servers` 必须在表头之前才是根级)。
     const off = home("toml-off");
-    const offFile = seed(off, 'disabled_mcp_servers = ["ash"]\n\n[mcp_servers.other]\ncommand = "x"\n');
+    const offFile = seed(off, 'disabled_mcp_servers = ["navi"]\n\n[mcp_servers.other]\ncommand = "x"\n');
     const offBefore = readFileSync(offFile, "utf8");
     const offR = install("grok", off);
     assert.ok(!offR.added && /disabled_mcp_servers/.test(offR.why ?? ""), `关着的要说清:${offR.why ?? ""}`);
     assert.equal(readFileSync(offFile, "utf8"), offBefore, "也不动它");
 
     // ⑥b **别人表里同名的那个键不是这个全局开关**(本轮审查 F2,真 grok 实测:这份配置
-    //     `grok mcp list` 读得通、照样能加 ash)。上一版裸 Node 那侧不记表作用域,任意表里
+    //     `grok mcp list` 读得通、照样能加 navi)。上一版裸 Node 那侧不记表作用域,任意表里
     //     的 `disabled_mcp_servers` 都当成根级事实 —— 自动补接当场被拒,理由还说是用户关的。
     //     TS 那侧(`codex-toml.ts` 的 `tomlRootStringArray`)本来就记作用域,这里钉的是并口径。
     for (const body of [
-      '[plugins.demo]\ndisabled_mcp_servers = ["ash"]\n',
+      '[plugins.demo]\ndisabled_mcp_servers = ["navi"]\n',
       '[mcp_servers.other]\ncommand = "x"\n\n[plugins.demo]\ndisabled_mcp_servers = ["ash", "harness"]\n',
     ]) {
       const h = home("toml-scoped-off");
@@ -285,7 +285,7 @@ try {
     for (const value of [null, "node /x.js"]) {
       const h = home("json-weird");
       mkdirSync(dirname(qwenFile(h)), { recursive: true });
-      const mine = `${JSON.stringify({ mcpServers: { ash: value } }, null, 2)}\n`;
+      const mine = `${JSON.stringify({ mcpServers: { navi: value } }, null, 2)}\n`;
       writeFileSync(qwenFile(h), mine, "utf8");
       const keep = install("qwen", h);
       assert.ok(!keep.added, `${JSON.stringify(value)}:认不出来就不写`);
@@ -324,7 +324,7 @@ try {
   {
     const h = home("trae-yaml");
     mkdirSync(join(h, ".trae"), { recursive: true });
-    writeFileSync(join(h, ".trae", "traecli.yaml"), "mcp_servers:\n  - name: ash\n", "utf8");
+    writeFileSync(join(h, ".trae", "traecli.yaml"), "mcp_servers:\n  - name: navi\n", "utf8");
     const r = install("trae", h);
     assert.ok(!r.added && /traecli\.yaml/.test(r.why ?? ""), `有那份 YAML 就不写:${r.why ?? ""}`);
     assert.ok(!existsSync(join(h, ".trae", "mcp.json")), "也不许另建一份 mcp.json");
@@ -341,7 +341,7 @@ try {
   // ── ⑥b 同名容器重复 / 空容器里的注释(本轮审查 F5、N1)──────────────────────
   {
     // F5:`JSON.parse` 的语义是**最后一个同名键赢**,所以生效的容器是后面那个。上一版编辑器
-    //     按 `.find()` 插进**第一个**,于是「写进去了」而最终生效的那个容器里仍然没有 ash,
+    //     按 `.find()` 插进**第一个**,于是「写进去了」而最终生效的那个容器里仍然没有 navi,
     //     安装日志还报 added。两族(`mcpServers` / opencode 的 `mcp`)都算。
     const dup = home("dup-container");
     const file = join(dup, ".kimi-code", "mcp.json");
@@ -366,7 +366,7 @@ try {
     assert.ok(Object.hasOwn(live2, NAME), "生效的那个 mcp 容器里必须有规范名那条");
 
     // N1:**空容器里的注释也要留着**。上一版那条空对象分支把 `{` 和 `}` 之间的原文整段截掉,
-    //     ash 能生效,但用户写在里面的说明没了 —— 补接的边界是「只插入,不删不改」。
+    //     navi 能生效,但用户写在里面的说明没了 —— 补接的边界是「只插入,不删不改」。
     const keep = home("empty-comment");
     const file3 = join(keep, ".kimi-code", "mcp.json");
     mkdirSync(dirname(file3), { recursive: true });
@@ -407,7 +407,7 @@ try {
       '{\n  "userSetting": "k",\n}\n',                               // 尾逗号
       '{\n  "big": 9007199254740993,\n  "inf": 1e999,\n  "neg": -0\n}\n', // 原值不许被序列化碾平
       '{\n  "dup": 1,\n  "dup": 2\n}\n',                             // 重复键
-      '{\n  "mcpServers": {\n    "ash": { "command": "old" }\n  }\n}\n',  // 已有 ⇒ 两边都该拒
+      '{\n  "mcpServers": {\n    "navi": { "command": "old" }\n  }\n}\n',  // 已有 ⇒ 两边都该拒
       '{\n  "mcpServers": [1, 2]\n}\n',                               // 容器不是对象 ⇒ 两边都该拒
       '[1, 2]\n',                                                      // 根不是对象
       '{ "a": 1 ',                                                      // 截断
@@ -420,11 +420,11 @@ try {
       '   \n',
     ];
     const bare = await import(pathToFileURL(join(REPO_DIR, "scripts", "json-edit.mjs")).href) as typeof edit;
-    const value = { command: "node", args: [ENTRY], env: { ASH_URL: URL_BASE } };
+    const value = { command: "node", args: [ENTRY], env: { NAVI_URL: URL_BASE } };
     for (const text of corpus) {
       const label = JSON.stringify(text.slice(0, 40));
-      const a = edit.spliceJsonMember(text, "mcpServers", "ash", value);
-      const b = bare.spliceJsonMember(text, "mcpServers", "ash", value);
+      const a = edit.spliceJsonMember(text, "mcpServers", "navi", value);
+      const b = bare.spliceJsonMember(text, "mcpServers", "navi", value);
       assert.deepEqual(b, a, `spliceJsonMember 两侧不一致(${label})`);
       const tag = (v: unknown) => (v === undefined ? "<undefined>" : JSON.stringify(v));
       assert.equal(tag(bare.readJsonLoose(text)), tag(edit.readJsonLoose(text)), `readJsonLoose 两侧不一致(${label})`);
@@ -437,8 +437,8 @@ try {
         const back = edit.readJsonLoose(a.body) as Record<string, unknown> | null | undefined;
         const live = back && typeof back === "object" && !Array.isArray(back) ? back.mcpServers : undefined;
         assert.ok(
-          live && typeof live === "object" && !Array.isArray(live) && Object.hasOwn(live, "ash"),
-          `ash 没落在最终生效的那个容器里(${label})`,
+          live && typeof live === "object" && !Array.isArray(live) && Object.hasOwn(live, "navi"),
+          `navi 没落在最终生效的那个容器里(${label})`,
         );
       }
     }

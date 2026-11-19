@@ -1,8 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { AgentEvent, AgentType } from "@ash/shared";
-import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
-import type { ModelEffortMap } from "@ash/shared/cli-presets";
+import type { AgentEvent, AgentType } from "@navi/shared";
+import { cliConfigOverrideEnvPatch } from "@navi/shared/cli-overrides";
+import type { ModelEffortMap } from "@navi/shared/cli-presets";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
@@ -191,8 +191,8 @@ export class GenericCliExecutor implements AgentExecutor {
 
 /**
  * 这个 CLI 的 sessionId **是不是 CLI 真实认得的 id**。判定与上面 `session()` 的三档
- * 一一对应:`newIdFlag` = ash 自己发的 id 已经告诉了 CLI;`resumeArgs` = id 只可能
- * 来自 parser 回报的 `{kind:"session"}`。两者都没有时,`session()` 发的是个**纯 ash
+ * 一一对应:`newIdFlag` = navi 自己发的 id 已经告诉了 CLI;`resumeArgs` = id 只可能
+ * 来自 parser 回报的 `{kind:"session"}`。两者都没有时,`session()` 发的是个**纯 navi
  * 侧运行记录**的 UUID,CLI 压根没听说过它 —— 拿它拼 `--resume` 就是给用户一条引用
  * 不存在会话的命令(第 1 轮审查抓到的 antigravity 就是这种)。
  */

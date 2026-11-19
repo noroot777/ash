@@ -8,7 +8,7 @@
 //     两种读法，不替人断言。
 //  F2 现场必须**冻结存盘**：日志里谁最后写不由我们说了算（停止期的清理输出、结算摘要，
 //     尤其是没能停下来的那个进程），所以它存在日志旁边，由读口给它留固定位置。
-//  F3 谁写的日志**不靠内容判断来源**：按 `[ash]` 前缀猜、按两次 stat 推区间、按原文剔除
+//  F3 谁写的日志**不靠内容判断来源**：按 `[navi]` 前缀猜、按两次 stat 推区间、按原文剔除
 //     自己写过的行，三种全被实测推翻（第 1 轮 F3 → 第 2 轮 R2-F1 → 第 3 轮 F2）。现在
 //     看门狗一个字节都不写进门禁日志，所以这里钉的是**字节数一字不差**这个硬条件。
 //  第 3 轮 F1 现场必须排在所有可能失败的事情前面存盘：快照删不掉（EACCES）不许把它带走，
@@ -25,17 +25,17 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-gate-watch-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-gate-watch-"));
+process.env.NAVI_DB = join(root, "ash.db");
 // RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn：门禁红了会**真的发起一轮**去叫醒 agent，
 // 拦截器保证那一轮不会起真 CLI。
-process.env.ASH_RUNS_DIR = join(root, "runs");
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1", "门禁红了会叫醒任务，拦截器一失效就会烧真额度");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1", "门禁红了会叫醒任务，拦截器一失效就会烧真额度");
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 /**
- * 等一段现场。看门狗的定时器是 `unref` 的（ash 不该被它吊着不退），所以在只有它一个
+ * 等一段现场。看门狗的定时器是 `unref` 的（navi 不该被它吊着不退），所以在只有它一个
  * 待办事项的测试进程里 Node 会直接退出 —— 这里自己撑一根活的定时器把事件循环留住。
  */
 async function awaitScene(start: (resolve: (verdict: { scene: string; note: string }) => void) => void) {
@@ -104,41 +104,41 @@ try {
     const log = readFileSync(logPath, "utf8");
     const notes = readFileSync(gateNotesPath(logPath), "utf8");
     assert.equal(fired, false, "静默只许报，不许收 —— 本来能跑完的安静命令会被这一刀判死");
-    assert.match(notes, /\[ash\] 注意 · 已经连续 \d+\.\d 分钟没有任何输出；命令仍在跑，没有被收掉。/);
-    assert.equal(notes.match(/\[ash\] 注意 ·/g)?.length, 1, "同一段静默只喊一次，不要刷屏");
-    assert.match(notes, /\[ash\] 进度 · 开跑后 /, "进度要真的记下来，不然事后没有时间轴");
+    assert.match(notes, /\[navi\] 注意 · 已经连续 \d+\.\d 分钟没有任何输出；命令仍在跑，没有被收掉。/);
+    assert.equal(notes.match(/\[navi\] 注意 ·/g)?.length, 1, "同一段静默只喊一次，不要刷屏");
+    assert.match(notes, /\[navi\] 进度 · 开跑后 /, "进度要真的记下来，不然事后没有时间轴");
     assert.equal(log, "QUIET_WORK_STARTED\n", "这份文件只许命令自己写（第 3 轮 F2）");
-    assert.match(acceptGateLogTail(logPath), /\[ash\] 进度 · 开跑后 /,
+    assert.match(acceptGateLogTail(logPath), /\[navi\] 进度 · 开跑后 /,
       "分开存不等于看不见：回显的那一段仍要带着最近的进度");
   }
 
   // ② 撞上限：现场要同时给得出「停在哪一行」和「静了多久」，外加一串产出节奏。
-  //    这一条同时钉 F3（命令打的就是 `[ash]` 前缀）和 N1（累计产出不含开跑前的启动说明）。
+  //    这一条同时钉 F3（命令打的就是 `[navi]` 前缀）和 N1（累计产出不含开跑前的启动说明）。
   {
     const logPath = join(root, "timeout.log");
-    writeFileSync(logPath, `[ash] 这是开跑前就在的启动说明，一共若干字节，不该算成命令的产出\n`, "utf8");
+    writeFileSync(logPath, `[navi] 这是开跑前就在的启动说明，一共若干字节，不该算成命令的产出\n`, "utf8");
     overrideGateWatchTimings({ silenceMs: 100, progressMs: 60, sampleMs: 15, timeoutMs: 450 });
     // 命令那一行要在看门狗起来**之后**才写：开跑前就在文件里的都算启动说明，不是产出。
     const verdict = await awaitScene((resolve) => {
       startGateWatch({ logPath, onVerdict: resolve });
-      appendFileSync(logPath, "[ash] real-suite: case-27 started\n", "utf8"); // 34 字节，命令自己打的
+      appendFileSync(logPath, "[navi] real-suite: case-27 started\n", "utf8"); // 35 字节，命令自己打的
     });
-    assert.match(verdict.scene, /停在这一行：`\[ash\] real-suite: case-27 started`/,
+    assert.match(verdict.scene, /停在这一行：`\[navi\] real-suite: case-27 started`/,
       "按前缀猜来源会把命令自己的输出当心跳删掉（F3）");
     assert.match(verdict.scene, /最后一次有输出在 \d+\.\d 分钟前，即开跑后第 \d+\.\d 分钟。/);
     assert.match(verdict.scene, /产出节奏（开跑第几分钟 \/ 累计输出）：\d/);
-    assert.match(verdict.scene, /命令自己的输出累计 34B。/, "累计产出不含开跑前的启动说明（N1）");
-    assert.match(verdict.note, /停在 `\[ash\] real-suite: case-27 started`/);
+    assert.match(verdict.scene, /命令自己的输出累计 35B。/, "累计产出不含开跑前的启动说明（N1）");
+    assert.match(verdict.note, /停在 `\[navi\] real-suite: case-27 started`/);
     assert.match(verdict.note, /最近一次输出在 \d+\.\d 分钟前/);
   }
 
-  // ③ 第 3 轮 F2：命令停在半行上（没写换行）时，ash 的提示绝不能被当成它的末行。
+  // ③ 第 3 轮 F2：命令停在半行上（没写换行）时，navi 的提示绝不能被当成它的末行。
   //    老做法是「写之前读最后一个字节，不是换行就补一个」—— 命令可以正好插在这两步中间，
-  //    两段粘成 `...[ash] 进度 · …`，按原文剔除也比不上（审查实测复现）。现在**连粘的
+  //    两段粘成 `...[navi] 进度 · …`，按原文剔除也比不上（审查实测复现）。现在**连粘的
   //    机会都不存在**：日志的字节数必须一字不差地等于「开跑前的说明 + 命令自己写的」。
   {
     const logPath = join(root, "no-newline.log");
-    const header = "[ash] $ half-line-command\n";
+    const header = "[navi] $ half-line-command\n";
     const half = "case-27 started"; // 没有换行，命令就停在这儿
     writeFileSync(logPath, header, "utf8");
     overrideGateWatchTimings({ silenceMs: 60, progressMs: 40, sampleMs: 10, timeoutMs: 500 });
@@ -148,11 +148,11 @@ try {
     });
     assert.equal(readFileSync(logPath, "utf8"), header + half, "看门狗一个字节都不许写进命令的日志");
     assert.match(verdict.scene, /停在这一行：`case-27 started`/);
-    assert.doesNotMatch(verdict.scene, /停在这一行：[^\n]*\[ash\] (进度|注意)/, "ash 的提示不是命令的末行（F2）");
-    assert.doesNotMatch(verdict.note, /\[ash\] (进度|注意)/);
+    assert.doesNotMatch(verdict.scene, /停在这一行：[^\n]*\[navi\] (进度|注意)/, "navi 的提示不是命令的末行（F2）");
+    assert.doesNotMatch(verdict.note, /\[navi\] (进度|注意)/);
     const notes = readFileSync(gateNotesPath(logPath), "utf8");
-    assert.match(notes, /\[ash\] 进度 · /);
-    assert.match(notes, /\[ash\] 注意 · /);
+    assert.match(notes, /\[navi\] 进度 · /);
+    assert.match(notes, /\[navi\] 注意 · /);
   }
 
   // ④ R2-F1：命令和我们**跨进程**交错写同一份日志。靠「写前写后两次 stat」推自己那几个
@@ -160,7 +160,7 @@ try {
   //    反倒漏出半行进度行，连「它到底有没有输出过」都会判反。
   {
     const logPath = join(root, "race.log");
-    writeFileSync(logPath, "[ash] $ racing-command\n", "utf8"); // 开跑前的启动说明
+    writeFileSync(logPath, "[navi] $ racing-command\n", "utf8"); // 开跑前的启动说明
     const rounds = 20;
     const line = "ACTUAL_CHILD_CASE_STARTED\n"; // 26 字节 × 20 = 520B，故意压在 1KB 以内好精确比对
     // 时限要盖过另一个 node 进程的冷启动 + 它写完 20 行的 600ms：压在 1 秒时，机器一忙子进程就写不完。
@@ -176,11 +176,11 @@ try {
     });
     const log = readFileSync(logPath, "utf8");
     assert.equal(log.split("ACTUAL_CHILD_CASE_STARTED").length - 1, rounds, "子进程得在收场前写完，不然这条比不出什么");
-    assert.equal(Buffer.byteLength(log), Buffer.byteLength("[ash] $ racing-command\n") + line.length * rounds,
+    assert.equal(Buffer.byteLength(log), Buffer.byteLength("[navi] $ racing-command\n") + line.length * rounds,
       "交错着写了一整轮，日志里也只该有启动说明和子进程写的那些字节");
     assert.match(verdict.scene, /命令自己的输出累计 520B。/, "字节数要按「自己写了多少」记账，不受交错影响");
     assert.match(verdict.scene, /停在这一行：`ACTUAL_CHILD_CASE_STARTED`/);
-    assert.doesNotMatch(verdict.scene, /停在这一行：`\[ash\] 进度/, "推错区间会漏出半行进度行");
+    assert.doesNotMatch(verdict.scene, /停在这一行：`\[navi\] 进度/, "推错区间会漏出半行进度行");
     assert.doesNotMatch(verdict.scene, /从头到尾没往门禁日志里写过东西/, "它明明写了 20 行");
     assert.doesNotMatch(verdict.note, /一个字节都没往门禁日志里写过/);
   }
@@ -192,7 +192,7 @@ try {
   {
     for (let round = 0; round < 12; round++) {
       const logPath = join(root, `first-write-${round}.log`);
-      writeFileSync(logPath, "[ash] $ racing-first-write\n", "utf8");
+      writeFileSync(logPath, "[navi] $ racing-first-write\n", "utf8");
       overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 10_000, sampleMs: 1, timeoutMs: 40 + round * 3 });
       const verdict = await awaitScene((resolve) => {
         startGateWatch({ logPath, onVerdict: resolve });
@@ -263,7 +263,7 @@ try {
     await sleep(500);
     watch.stop();
     const notes = readFileSync(gateNotesPath(logPath), "utf8");
-    assert.match(notes, /\[ash\] 注意 · 这份日志读不到了/, "读不到要如实说一声，这正是该查的事");
+    assert.match(notes, /\[navi\] 注意 · 这份日志读不到了/, "读不到要如实说一声，这正是该查的事");
     assert.equal(notes.match(/这份日志读不到了/g)?.length, 1, "一段瞎掉只喊一次，不要刷屏");
     assert.doesNotMatch(notes, /连续 \d+\.\d 分钟没有任何输出/, "读不到推不出没有输出（第 5 轮 F1）");
     assert.match(notes, /读不到这份日志，产出和静默时长都看不到/, "进度行也得跟着失效，不许报旧数字");
@@ -276,7 +276,7 @@ try {
     const dir = join(root, "blind-start");
     mkdirSync(dir);
     const logPath = join(dir, "blind-start.log");
-    writeFileSync(logPath, "[ash] $ blind-start-command\n", "utf8");
+    writeFileSync(logPath, "[navi] $ blind-start-command\n", "utf8");
     // 只写不可读：看门狗这段时间什么都看不见。探不出「读被拒」就没有「看不见」这个舞台。
     if (!denyRead(logPath)) {
       skipStage("⑩d 开跑时读不到日志", "这台机器上只写权限拦不住读（Windows 实测如此）");
@@ -323,17 +323,17 @@ try {
     await sleep(300);
     watch.stop();
     const notes = readFileSync(gateNotesPath(logPath), "utf8");
-    assert.equal(notes.match(/\[ash\] 注意 ·/g)?.length, 2, "恢复输出之后的第二段静默也要喊（N1）");
+    assert.equal(notes.match(/\[navi\] 注意 ·/g)?.length, 2, "恢复输出之后的第二段静默也要喊（N1）");
   }
 
   // ④b R2-F1 的第二个实例：全程没有命令输出时，不许把**开跑前**的启动说明（里面有
-  //    `[ash] $ <命令原文>`）当成「停在这一行」，更不能一边说 0B 一边指着它。
+  //    `[navi] $ <命令原文>`）当成「停在这一行」，更不能一边说 0B 一边指着它。
   {
     const logPath = join(root, "baseline-only.log");
-    writeFileSync(logPath, "[ash] 2026-10-26T00:00:00Z 验收前置命令开跑\n[ash] $ quiet-command\n\n", "utf8");
+    writeFileSync(logPath, "[navi] 2026-10-26T00:00:00Z 验收前置命令开跑\n[navi] $ quiet-command\n\n", "utf8");
     overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 40, sampleMs: 10, timeoutMs: 250 });
     const verdict = await awaitScene((resolve) => { startGateWatch({ logPath, onVerdict: resolve }); });
-    assert.doesNotMatch(verdict.scene, /停在这一行：`\[ash\] \$ quiet-command`/, "那是 ash 写的，不是命令写的");
+    assert.doesNotMatch(verdict.scene, /停在这一行：`\[navi\] \$ quiet-command`/, "那是 navi 写的，不是命令写的");
     assert.match(verdict.scene, /停在这一行：（这条命令没有往门禁日志里写过任何东西）/);
     assert.match(verdict.scene, /命令自己的输出累计 0B。/);
   }
@@ -431,14 +431,14 @@ try {
       skipStage("⑧ 现场存不下去", "这台机器上只读目录拦不住建文件（Windows 实测如此）");
     } else {
       try {
-        const failure = freezeGateScene(logPath, "[ash] 现场");
+        const failure = freezeGateScene(logPath, "[navi] 现场");
         assert.ok(failure && /没能单独存下来/.test(failure), "存不下要给一句人话的降级说明，不许无声吞掉");
         assert.equal(existsSync(gateScenePath(logPath)), false);
       } finally { chmodSync(dir, 0o700); }
     }
-    assert.equal(freezeGateScene(join(root, "ok.log"), "[ash] 现场"), null, "存下了就不该报降级");
+    assert.equal(freezeGateScene(join(root, "ok.log"), "[navi] 现场"), null, "存下了就不该报降级");
     // 第 4 轮 N2：先写 .part 再改名，所以最终路径要么没有、要么是完整的一份。
-    assert.equal(readFileSync(gateScenePath(join(root, "ok.log")), "utf8"), "[ash] 现场");
+    assert.equal(readFileSync(gateScenePath(join(root, "ok.log")), "utf8"), "[navi] 现场");
     assert.equal(existsSync(`${gateScenePath(join(root, "ok.log"))}.part`), false, "改完名不许留下半截临时文件");
   }
 
@@ -586,7 +586,7 @@ try {
 
   overrideGateWatchTimings(null);
   if (unstaged.length) console.log(`ℹ️  这台机器造不出的故障（上面已跳过 ${unstaged.length} 段）：\n   - ${unstaged.join("\n   - ")}`);
-  console.log("✅ 门禁看门狗：静默只报不杀 / 一拍一次有界观测、裁定自洽 / 现场先于一切可能失败的事存盘 / 命令日志里没有 ash 的字节 通过");
+  console.log("✅ 门禁看门狗：静默只报不杀 / 一拍一次有界观测、裁定自洽 / 现场先于一切可能失败的事存盘 / 命令日志里没有 navi 的字节 通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

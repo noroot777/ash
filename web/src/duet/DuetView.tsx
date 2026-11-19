@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { normalizeDuetConfig } from "@ash/shared/duet";
-import { DUET_TIMELINE_SESSION } from "@ash/shared/user-messages";
-import type { GateAction, Session, Task, TaskActions, TaskListItem } from "@ash/shared";
-import { runActivityPhase } from "@ash/shared/run-activity";
-import { taskDisplayStatus } from "@ash/shared";
+import { normalizeDuetConfig } from "@navi/shared/duet";
+import { DUET_TIMELINE_SESSION } from "@navi/shared/user-messages";
+import type { GateAction, Session, Task, TaskActions, TaskListItem } from "@navi/shared";
+import { runActivityPhase } from "@navi/shared/run-activity";
+import { taskDisplayStatus } from "@navi/shared";
 import {
   Archive,
   CaretDown,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TaskFollowUp, TaskListItem } from "@ash/shared";
-import type { TaskMemoDigest } from "@ash/shared/task-memo";
-import { TASK_BATCH_LIMIT } from "@ash/shared";
+import type { TaskFollowUp, TaskListItem } from "@navi/shared";
+import type { TaskMemoDigest } from "@navi/shared/task-memo";
+import { TASK_BATCH_LIMIT } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { useSpreadFollowUps } from "./useSpreadFollowUps.ts";
 import { onTaskMemoWrite, taskMemoWrites } from "../task-memos/taskMemoStore.ts";

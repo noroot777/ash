@@ -1,10 +1,10 @@
 // 合并预览档最终发布的执行边界：把目标检出的文件改成测过的那份时，git 读到的配置、属性与环境
-// 只能是 ash 定下的那一份，不能是仓库此刻的样子（第 5 轮复审第 2 轮 F2：门禁核对之后另一个窗口给
+// 只能是 navi 定下的那一份，不能是仓库此刻的样子（第 5 轮复审第 2 轮 F2：门禁核对之后另一个窗口给
 // 仓库配了 `filter.<名>.smudge`，最终的 `merge --ff-only` 照样把它跑了起来 —— 只关钩子封不住，
 // 再扫一遍配置也封不住，扫完之后照样能改）。
 //
 // 做法与测试快照同一个思路（accept-gate-preview.ts 的 cloneSealedSnapshot）：
-//  · 一份临时 git 目录，对象库借项目的（alternates，只读），本地配置只有 ash 写的那几项 —— 门禁测的
+//  · 一份临时 git 目录，对象库借项目的（alternates，只读），本地配置只有 navi 写的那几项 —— 门禁测的
 //    时候用的检出语义（换行 / 链接 / 路径，进凭据的那份身份核过才用）、空钩子目录、空属性文件、
 //    fsmonitor 关；系统 / 全局配置与属性不读（sealedGitDir）。没有任何一项能指向程序：过滤器驱动
 //    没定义，带 `filter=` 属性的文件就原样写出 —— 测试快照也正是这么写的。
@@ -26,7 +26,7 @@
 //    的索引，`git status` 显示的正是还没写成的那些（测过那棵里有的 `git checkout HEAD -- <路径>` 补齐，
 //    没有的是该删没删掉的，手动删）；不提交那一档
 //    分支和索引都没动，交付动过的那些。每个路径按「还是原样 / 已是测过那份 / 两样都不是 / 核不出来」
-//    分开报（classify），只有核实了都还是原样才说没写。ash 不删检出里的任何东西。
+//    分开报（classify），只有核实了都还是原样才说没写。navi 不删检出里的任何东西。
 import { constants } from "node:fs";
 import { access, copyFile, lstat, open, rename, rm } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -204,7 +204,7 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
   // 清理失败不改变回执（走到哪一步的事实已定），但留一条看得见的记录。
   const done = sealed as Awaited<ReturnType<typeof sealedCheckout>> | null;
   await done?.dispose().catch((error: unknown) =>
-    console.warn(`[ash] 验收发布的临时目录没能删掉：${done.dir}（${failure(error)}），可以手动删掉`));
+    console.warn(`[navi] 验收发布的临时目录没能删掉：${done.dir}（${failure(error)}），可以手动删掉`));
   if (!lockStuck || outcome.ok) return outcome;
   return { ...outcome, message: `${outcome.message}（另外 ${lock} 没能删掉，它在的时候这个检出里的 git 命令都会拒绝，请手动删掉）` };
 }

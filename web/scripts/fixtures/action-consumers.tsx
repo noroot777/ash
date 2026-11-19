@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task, TaskListItem, TaskReviewRound } from "@ash/shared";
+import type { Task, TaskListItem, TaskReviewRound } from "@navi/shared";
 import { LaterSendKey, useLaterSend } from "../../src/components/LaterSend.tsx";
 import { ReviewDispatchControl } from "../../src/review/ReviewDispatchControl.tsx";
 import { TaskReviewInspector } from "../../src/task-detail/TaskReviewInspector.tsx";

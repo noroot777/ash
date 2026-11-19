@@ -18,9 +18,9 @@ import type {
   HandoffReturnGrant,
   HandoffTarget,
   Task,
-} from "@ash/shared";
+} from "@navi/shared";
 import type { RemoteTaskSnapshot, ReplyTaskResult } from "./apiTypes.ts";
-import type { HandoffSourceAddress } from "@ash/shared/handoff";
+import type { HandoffSourceAddress } from "@navi/shared/handoff";
 import { id, json, request } from "./apiClient.ts";
 
 export type TaskScopedHandoffPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
@@ -52,7 +52,7 @@ export const handoffApi = {
     request(`/tasks/${id(taskId)}/remote-snapshot`, json("POST", { targetUrl })),
   remoteTaskReply: (taskId: string, targetUrl: string, text: string): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/remote-reply`, json("POST", { targetUrl, text })),
-  remoteTaskAnswer: (taskId: string, targetUrl: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
+  remoteTaskAnswer: (taskId: string, targetUrl: string, answer: string, input?: import("@navi/shared/questions").QuestionAnswerInput): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer, ...input })),
   remoteTaskReturn: (
     taskId: string,

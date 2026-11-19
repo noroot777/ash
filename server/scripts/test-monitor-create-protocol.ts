@@ -1,6 +1,6 @@
 // **命令开工 ⇒ 身份已经可恢复。** 等价说法:身份没落库 ⇒ 那条命令一个字都没跑过。
 //
-// 第 7 轮审查 F3 的现场:原来的顺序是「先 spawn 再 insert」—— 命令已经独立跑起来了 ash 才去
+// 第 7 轮审查 F3 的现场:原来的顺序是「先 spawn 再 insert」—— 命令已经独立跑起来了 navi 才去
 // 登记,登记失败时只能事后追(落责任 → 发信号 → 追到线索空 → 收档)。而当身份查询那一刻也不可用、
 // 责任表又写不进去时,那个进程的唯一线索只剩 `scheduleReclaimPersist` 的内存参数(unref 定时器,
 // 活不过服务退出);重启恢复只枚举 monitors 和债表,两张表都没有它 —— 命令还在后台跑着,谁都
@@ -14,7 +14,7 @@
 //    需要交接,所以收得干净(行删掉、无债),而不是留一个追不回来的后台进程。
 // ③ **收不干净时不许冒充收干净。** 同一个失败点上让身份查询也不可用:那一刻什么都证明不了,
 //    于是**身份行必须留着**(它是唯一线索)、回收责任必须落盘,措辞照实说。
-// ④ **闸本身的两面**:写端关闭(= ash 在放行前没了)⇒ 壳在 exec 之前退出(97),命令从未开工;
+// ④ **闸本身的两面**:写端关闭(= navi 在放行前没了)⇒ 壳在 exec 之前退出(97),命令从未开工;
 //    放行 ⇒ 命令照常跑起来。少了后半句,一个「永远不放行」的实现也能骗过前三条。
 // ⑤ **重启接回一条 pid 还空着的意图行**:它是「身份先落库」唯一的用处 —— 接回时照实说。
 //
@@ -100,7 +100,7 @@ const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.
   const unitToken = `unit-backfill-${process.pid}-${Date.now()}`;
   const stubborn = spawn("sh", ["-lc", "trap '' TERM HUP INT; while :; do sleep 0.2; done"], {
     detached: true, stdio: "ignore",
-    env: { PATH: process.env.PATH ?? "", ASH_MONITOR_UNIT: unitToken },
+    env: { PATH: process.env.PATH ?? "", NAVI_MONITOR_UNIT: unitToken },
   });
   stubborn.unref();
   invalidateMonitorUnitScan();   // 台子在替 `spawnMonitor` 起进程
@@ -143,7 +143,7 @@ const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.
   spawned.onExit((c) => { code = c; });
   assert.equal(psCount(m.token), 1, "此刻壳已经在了 —— 但它停在闸前面");
   assert.equal(existsSync(m.path), false, "闸前:用户的命令还没开始");
-  spawned.abandon();   // = ash 在放行之前没了:写端关闭,壳读到 EOF
+  spawned.abandon();   // = navi 在放行之前没了:写端关闭,壳读到 EOF
   await until("壳自己退出", async () => code !== undefined);
   assert.equal(code, 97, "它在 exec 用户命令之前就按约定的退出码退了");
   assert.equal(existsSync(m.path), false, "所以那条命令一个字都没跑过");
@@ -162,7 +162,7 @@ const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.
 // ── ⑤ 重启接回一条 pid 还空着的意图行:照实说,别冒充「它已经不在了」 ─────────────
 {
   const taskId = await makeTask();
-  // ash 恰好死在「落了身份」与「回填 pid」之间留下的就是这样一行。
+  // navi 恰好死在「落了身份」与「回填 pid」之间留下的就是这样一行。
   const monId = await insertMonitorRow(taskId);
   const before = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0);
   assert.equal(before?.pid, null, "台子前提:这一行的 pid 还空着");
@@ -171,7 +171,7 @@ const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.
   const row = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0);
   assert.equal(row?.status, "lost");
   assert.match(row?.endedReason ?? "", /没有真正开工/,
-    "POSIX 上这等于命令从未开工(壳停在闸前,ash 一死写端就关了)");
+    "POSIX 上这等于命令从未开工(壳停在闸前,navi 一死写端就关了)");
   assert.doesNotMatch(row?.endedReason ?? "", /这个进程已经不在了/,
     "**不许**跟「确认它退了」共用一句话 —— 我们手里连 pid 都没有,证明不了任何事");
   assert.equal((await db.select().from(schema.monitorReclaimDebts)

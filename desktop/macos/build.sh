@@ -9,9 +9,10 @@
 #
 # 自更新（Sparkle）的更新源和 EdDSA 公钥取自 release.json；公钥还空着时编出来的 app 不带更新源，
 # 「检查更新…」不出现。演练与测试用的口子（正式发版不用）：
-#   ASH_MAC_FEED_URL / ASH_MAC_ED_PUBLIC_KEY  换更新源和公钥（本机 http 托的 appcast + 演练密钥）
-#   ASH_MAC_BUNDLE_ID                         换 bundle id：defaults、数据根、登录项都跟着分开
-#   ASH_MAC_BUILD_NUMBER                      指定 CFBundleVersion，造一新一旧两个版本
+#   NAVI_MAC_FEED_URL / NAVI_MAC_ED_PUBLIC_KEY  换更新源和公钥（本机 http 托的 appcast + 演练密钥）
+#   NAVI_MAC_BUNDLE_ID                         换 bundle id：defaults、数据根、登录项都跟着分开
+#   NAVI_MAC_BUILD_NUMBER                      指定 CFBundleVersion，造一新一旧两个版本
+# 这几个口子改名前叫 ASH_MAC_*，旧名照样认、新名优先（下面读的时候各退一档）。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -30,13 +31,16 @@ if COMMON="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 else
   BOOK="$BUILD/.build-number"
 fi
-[[ -n "${ASH_MAC_BUILD_NUMBER_FILE:-}" ]] && BOOK="$ASH_MAC_BUILD_NUMBER_FILE" LEGACY_BOOK=""
+BOOK_OVERRIDE="${NAVI_MAC_BUILD_NUMBER_FILE:-${ASH_MAC_BUILD_NUMBER_FILE:-}}"
+[[ -n "$BOOK_OVERRIDE" ]] && BOOK="$BOOK_OVERRIDE" LEGACY_BOOK=""
 mkdir -p "$(dirname "$BOOK")"
 touch "$BOOK"
-# ASH_MAC_BUILD_NUMBER 指定时不碰账本（演练造一新一旧两版用）。改名前的账本（ash-mac-build-number）在锁里当底读，见 build-number.mjs。
-BUILD_NUMBER="${ASH_MAC_BUILD_NUMBER:-$(lockf -k "$BOOK" node "$HERE/scripts/build-number.mjs" "$BOOK" ${LEGACY_BOOK:+"$LEGACY_BOOK"})}"
+# NAVI_MAC_BUILD_NUMBER 指定时不碰账本（演练造一新一旧两版用）。改名前的账本（ash-mac-build-number）在锁里当底读，见 build-number.mjs。
+BUILD_NUMBER="${NAVI_MAC_BUILD_NUMBER:-${ASH_MAC_BUILD_NUMBER:-}}"
+BUILD_NUMBER="${BUILD_NUMBER:-$(lockf -k "$BOOK" node "$HERE/scripts/build-number.mjs" "$BOOK" ${LEGACY_BOOK:+"$LEGACY_BOOK"})}"
 # 包标识改名前是 dev.ash.mac：已装的旧版怎么接到这一版，见 Sources/LegacyIdentity.swift 和 README「从 Ash.app 升级」。
-BUNDLE_ID="${ASH_MAC_BUNDLE_ID:-dev.navi.mac}"
+BUNDLE_ID="${NAVI_MAC_BUNDLE_ID:-${ASH_MAC_BUNDLE_ID:-}}"
+BUNDLE_ID="${BUNDLE_ID:-dev.navi.mac}"
 
 # 更新源：release.json 里放 appcast 的那个仓库（feedRepo，不是放安装包的 releaseRepo）→
 # raw.githubusercontent 上那份 appcast。
@@ -45,8 +49,10 @@ RELEASE_CONFIG="$(node -e '
   if (!c.feedRepo) { console.error("✕ release.json 里没有 feedRepo"); process.exit(1); }
   console.log(c.feedRepo, c.feedBranch || "main", c.appcastPath || "appcast.xml", c.publicKey || "-");' "$HERE/release.json")"
 read -r FEED_REPO FEED_BRANCH FEED_APPCAST RELEASE_KEY <<< "$RELEASE_CONFIG"
-FEED_URL="${ASH_MAC_FEED_URL:-https://raw.githubusercontent.com/$FEED_REPO/$FEED_BRANCH/$FEED_APPCAST}"
-ED_KEY="${ASH_MAC_ED_PUBLIC_KEY:-$RELEASE_KEY}"
+FEED_URL="${NAVI_MAC_FEED_URL:-${ASH_MAC_FEED_URL:-}}"
+FEED_URL="${FEED_URL:-https://raw.githubusercontent.com/$FEED_REPO/$FEED_BRANCH/$FEED_APPCAST}"
+ED_KEY="${NAVI_MAC_ED_PUBLIC_KEY:-${ASH_MAC_ED_PUBLIC_KEY:-}}"
+ED_KEY="${ED_KEY:-$RELEASE_KEY}"
 [[ "$ED_KEY" == "-" ]] && ED_KEY=""
 
 # 自带的 node 是 darwin-arm64 那一份，node-pty 也按本机架构现编，所以只在 Apple 芯片上出包。

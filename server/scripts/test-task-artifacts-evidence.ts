@@ -17,8 +17,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
-const tmp = mkdtempSync(join(tmpdir(), "ash-artifacts-evidence-"));
-process.env.ASH_DB = join(tmp, "ash.db");
+const tmp = mkdtempSync(join(tmpdir(), "navi-artifacts-evidence-"));
+process.env.NAVI_DB = join(tmp, "ash.db");
 requireTmpDb("task-artifacts-evidence");
 const stage = realpathSync(tmp);
 
@@ -158,7 +158,7 @@ try {
   const S5 = sceneAt(5);
   const branch = await gitRepoAt("branchrepo");
   branch.commit("README.md", "base", minutes(S5, -10));
-  branch.git(["checkout", "-q", "-b", "ash/Branch00"]);
+  branch.git(["checkout", "-q", "-b", "navi/Branch00"]);
   branch.put("a/report.html", "<p>A version</p>");
   branch.put("a/keep.png", "keep");
   branch.git(["add", "."]);
@@ -173,7 +173,7 @@ try {
   assert.equal(await branch.conf("Branch000007", "a/report.html"), "version", "磁盘上是别人提交的另一版：内容对不上就不能算确定");
   // 三态，且一个读不出来的（不存在）不连累同批的其它文件。
   assert.deepEqual(
-    Object.fromEntries(await checkBranchVersions(branch.repo, "", "ash/Branch00", ["a/keep.png", "a/report.html", "a/gone.png"])),
+    Object.fromEntries(await checkBranchVersions(branch.repo, "", "navi/Branch00", ["a/keep.png", "a/report.html", "a/gone.png"])),
     { "a/keep.png": "match", "a/report.html": "mismatch", "a/gone.png": "unknown" },
   );
 

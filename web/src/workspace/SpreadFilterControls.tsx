@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { scopeHasFilters, type TaskScope } from "./taskScope.ts";
 import {

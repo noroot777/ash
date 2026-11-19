@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
-const directory = await mkdtemp(join(tmpdir(), "ash-git-stats-"));
+const directory = await mkdtemp(join(tmpdir(), "navi-git-stats-"));
 const root = join(directory, "repo");
-process.env.ASH_DB = join(directory, "test.db");
+process.env.NAVI_DB = join(directory, "test.db");
 process.env.GIT_CONFIG_GLOBAL = join(directory, "gitconfig");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 await writeFile(process.env.GIT_CONFIG_GLOBAL, "[commit]\ngpgsign = false\n");

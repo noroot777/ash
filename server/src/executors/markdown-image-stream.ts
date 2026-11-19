@@ -3,8 +3,8 @@
 // 从 catalog/parsers.ts 拆出来:现在它不只服务 generic 那条链,三家专用适配器
 // (claude-stream / codex / codex-app-server)也要从同一个出口走,所以它不能再住在
 // 「目录自带的解析器」里(claude-stream 反过来被 parsers 依赖,放那儿是循环导入)。
-import type { AgentEvent } from "@ash/shared";
-import { scanMarkdownImages } from "@ash/shared/markdown-images";
+import type { AgentEvent } from "@navi/shared";
+import { scanMarkdownImages } from "@navi/shared/markdown-images";
 import {
   captureMarkdownImages,
   discardUnclaimedImages,

@@ -45,7 +45,7 @@ for (const baseUrl of ["https://provider.invalid", "https://provider.invalid/v1/
     assert.equal(config.env().NAVI_RELAY_KEY, relay.apiKey);
     const appServer = config.appServerArgs({});
     assert.deepEqual(appServer.ignored, []);
-    // 后面还跟着 ash 自己那份 MCP 的 `-c mcp_servers.navi=…`（test-ash-mcp-inject 管），这里只认供应商这一段。
+    // 后面还跟着 navi 自己那份 MCP 的 `-c mcp_servers.navi=…`（test-navi-mcp-inject 管），这里只认供应商这一段。
     assert.deepEqual(appServer.args.slice(0, 2 + wiring.args!.length), ["app-server", "--stdio", ...wiring.args!]);
     for (const sessionId of ["", "fixture-session"]) {
       const execArgs = config.execArgs({ cwd: "/fixture" }, sessionId);

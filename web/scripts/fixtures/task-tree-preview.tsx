@@ -1,6 +1,6 @@
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, Task } from "@navi/shared";
 import { TaskTree } from "../../src/workspace/TaskTree.tsx";
 import type { SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";
 import "../../src/styles/global.css";
@@ -13,8 +13,8 @@ const old = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
 
 const project: ProjectView = {
   id: "p1",
-  name: "ash",
-  repoPath: "/tmp/ash",
+  name: "navi",
+  repoPath: "/tmp/navi",
   workflowId: null,
   useWorktreeDefault: false,
   createdAt: recent,
@@ -100,7 +100,7 @@ const idleSpread: SidebarSpread = {
   close: () => {},
 };
 
-function Ash() {
+function Navi() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const spread = useMemo(() => idleSpread, []);
   return (
@@ -121,6 +121,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

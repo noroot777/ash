@@ -3,14 +3,14 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { readCodexAppServerState } from "../src/executors/codex-app-server-state.js";
 import { archiveCodexThread } from "../src/executors/codex-session-archive.js";
 import { spawnAgent } from "../src/executors/spawn.js";
 import { findArchivedRollout, findRollout, readCodexCliVersion, readCodexContext, rolloutExportPath } from "../src/executors/codex-rollout.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-codex-archive-"));
+const root = mkdtempSync(join(tmpdir(), "navi-codex-archive-"));
 const home = join(root, "user-codex");
 const otherHome = join(root, "other-user-codex");
 const id = "archive-fixture-thread";
@@ -37,12 +37,12 @@ const home = process.env.CODEX_HOME;
 const id = ${JSON.stringify(id)};
 const active = path.join(home, 'sessions', '2026', '09', '11', ${JSON.stringify(name)});
 const archived = path.join(home, 'archived_sessions', ${JSON.stringify(name)});
-const mode = process.env.ASH_ARCHIVE_FIXTURE_MODE;
+const mode = process.env.NAVI_ARCHIVE_FIXTURE_MODE;
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
 const complete = (status) => send({ method: 'turn/completed', params: { threadId: id, turn: { id: 'turn', status } } });
 rl.on('line', (line) => {
   const m = JSON.parse(line);
-  fs.appendFileSync(process.env.ASH_ARCHIVE_FIXTURE_CALLS, JSON.stringify({ method: m.method, params: m.params, home }) + '\\n');
+  fs.appendFileSync(process.env.NAVI_ARCHIVE_FIXTURE_CALLS, JSON.stringify({ method: m.method, params: m.params, home }) + '\\n');
   if (m.id === undefined) return;
   if (m.method === 'initialize') return send({ id: m.id, result: {} });
   if (m.method === 'thread/unarchive') {
@@ -84,7 +84,7 @@ function open(mode = "success", resume = false) {
   return openCodexAppServer({
     bin: process.execPath, args: [fixture], cwd: root, prompt: resume ? "SECOND" : "FIRST",
     sessionId: resume ? id : undefined,
-    env: { CODEX_HOME: home, ASH_ARCHIVE_FIXTURE_MODE: mode, ASH_ARCHIVE_FIXTURE_CALLS: callsFile },
+    env: { CODEX_HOME: home, NAVI_ARCHIVE_FIXTURE_MODE: mode, NAVI_ARCHIVE_FIXTURE_CALLS: callsFile },
   });
 }
 async function consume(handle: ReturnType<typeof open>) {
@@ -175,7 +175,7 @@ try {
 
   writeFileSync(callsFile, "");
   const brokenPipeOpts = { bin: process.execPath, args: [fixture], cwd: root, prompt: "BROKEN PIPE", sessionId: id,
-    env: { CODEX_HOME: home, ASH_ARCHIVE_FIXTURE_MODE: "hold", ASH_ARCHIVE_FIXTURE_CALLS: callsFile } };
+    env: { CODEX_HOME: home, NAVI_ARCHIVE_FIXTURE_MODE: "hold", NAVI_ARCHIVE_FIXTURE_CALLS: callsFile } };
   const brokenPipeChild = spawnAgent(root, process.execPath, [fixture], "", brokenPipeOpts.env, { keepStdin: true });
   const brokenPipeResult = consume(openCodexAppServer({ ...brokenPipeOpts, startProcess: () => brokenPipeChild }));
   await waitFor(() => calls().some((row) => row.method === "turn/start"));
@@ -201,7 +201,7 @@ try {
   writeFileSync(callsFile, "");
   const reattached = await consume(openCodexAppServer({
     bin: process.execPath, args: [fixture], cwd: root, prompt: "", sessionId: id,
-    env: { CODEX_HOME: home, ASH_ARCHIVE_FIXTURE_CALLS: callsFile },
+    env: { CODEX_HOME: home, NAVI_ARCHIVE_FIXTURE_CALLS: callsFile },
     reattach: { threadId: id, turnId: "turn", completedTurn: recovered.completedTurn },
   }));
   assert.deepEqual(calls().map((row) => row.method), ["thread/archive"]);
@@ -228,7 +228,7 @@ try {
   console.log("✓ 归档连接无响应时有界退出，保留成功状态");
 
   await archiveCodexThread({ bin: process.execPath, args: [fixture], cwd: root,
-    env: { CODEX_HOME: home, ASH_ARCHIVE_FIXTURE_CALLS: callsFile } }, id);
+    env: { CODEX_HOME: home, NAVI_ARCHIVE_FIXTURE_CALLS: callsFile } }, id);
   const nested = join(home, "archived_sessions", "2026", "09", "11", name);
   mkdirSync(join(home, "archived_sessions", "2026", "09", "11"), { recursive: true });
   renameSync(archived, nested);

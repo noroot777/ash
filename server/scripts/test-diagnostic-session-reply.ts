@@ -6,18 +6,18 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import type { RunHandle, RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-diagnostic-reply-"));
+const root = mkdtempSync(join(tmpdir(), "navi-diagnostic-reply-"));
 const repo = join(root, "repo");
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.env.CODEX_HOME = join(root, "codex");
 process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, sessions } = await import("../src/db/schema.js");
@@ -53,7 +53,7 @@ const create = (taskId: string, agentType: AgentType, extra: Partial<typeof task
   });
 
 function captureRun(this: { type: AgentType }, opts: RunOpts): RunHandle {
-  const taskId = opts.env?.ASH_TASK_ID;
+  const taskId = opts.env?.NAVI_TASK_ID;
   assert.ok(taskId);
   captures.push({ ...opts, agentType: this.type });
   writeFileSync(join(opts.cwd, `probe-${taskId}.txt`), opts.prompt);
@@ -126,8 +126,8 @@ async function assertDiagnosticVisible(taskId: string, sessionId: string, expect
 
 try {
   execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
-  git("config", "user.name", "Ash Test");
-  git("config", "user.email", "ash@example.test");
+  git("config", "user.name", "Navi Test");
+  git("config", "user.email", "navi@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
   git("add", ".");

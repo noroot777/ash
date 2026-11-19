@@ -1,4 +1,4 @@
-import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@ash/shared/markdown-images";
+import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@navi/shared/markdown-images";
 
 // 正文里一处「像路径的东西」指的是工作区里哪条路径——只管把字符串摆正，**不判有没有**：
 // 那一问只有服务端答得了（lib/taskFileLocate.ts）。这里返回 null 只表示「它连路径都不像，
@@ -21,7 +21,7 @@ const EXTENSION = /\.[A-Za-z][\w-]{0,9}$/;
 const NOT_PATH = /[\n`'"<>|*?{}$;,=]/;
 const DRIVE = /^[A-Za-z]:[\\/]/;
 const HOME = /^~[\\/]/;
-/** ash 自己建的任务工作区：`<仓库>/.worktrees/<任务>/<相对路径>`。 */
+/** navi 自己建的任务工作区：`<仓库>/.worktrees/<任务>/<相对路径>`。 */
 const WORKTREE = /(?:^|[/\\])\.worktrees[/\\]([^/\\]+)[/\\](.+)$/;
 
 /** 相对路径按 `baseDir` 摆正；`..` 爬出工作区根的不要。 */
@@ -45,7 +45,7 @@ function placed(taskId: string, path: string, baseDir: string): string | null {
   const worktree = WORKTREE.exec(path);
   if (worktree) return worktree[1] === taskId ? joinRelative("", worktree[2]!) : path;
   if (path.startsWith("/") || path.startsWith("\\") || DRIVE.test(path)) return path;
-  // `~/…` 原样交给服务端：agent 跟 ash 在同一台机器上，家目录由它展开（成片常落在 `~/Movies`）。
+  // `~/…` 原样交给服务端：agent 跟 navi 在同一台机器上，家目录由它展开（成片常落在 `~/Movies`）。
   // `~user/…` 不认。
   if (path.startsWith("~")) return HOME.test(path) ? path : null;
   return joinRelative(baseDir, path);

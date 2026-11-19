@@ -1,4 +1,4 @@
-import type { FreeReviewRun } from "@ash/shared";
+import type { FreeReviewRun } from "@navi/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import type { ConversationFeedRow } from "./conversationReviewLanes.ts";
 import { debateCandidatesOf, type DebateCandidate } from "../free-workflow/debateModel.ts";

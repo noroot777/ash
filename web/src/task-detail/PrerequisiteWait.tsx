@@ -2,8 +2,8 @@
 // 跳过去；前置都齐了（或者没有前置，分组运行、派活单要它开工）就写服务端说的那件事（同组名额满了、分组暂停着…）。
 // 一变服务端就把这条任务重发一遍（prerequisite-view.ts），这一行跟着换字，不用自己轮询。
 // 只有要你动手的那几步上色（prerequisiteNeedsUser）；前置都齐了却开不了工的，写原因。
-import type { TaskPrerequisites } from "@ash/shared/prerequisites";
-import { prerequisiteNeedsUser, prerequisiteStepText } from "@ash/shared/prerequisites";
+import type { TaskPrerequisites } from "@navi/shared/prerequisites";
+import { prerequisiteNeedsUser, prerequisiteStepText } from "@navi/shared/prerequisites";
 import "./prerequisite-wait.css";
 
 export function PrerequisiteWait({ view, onOpenTask }: { view: TaskPrerequisites; onOpenTask?: (taskId: string) => void }) {

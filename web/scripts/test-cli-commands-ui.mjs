@@ -10,12 +10,12 @@ import { launchChrome } from "./dom-stage.mjs";
 import { waitUntil } from "./wait-until.mjs";
 import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi, seedGoalRecoveryTranscripts } from "./cli-goal-recovery-ui.mjs";
 
-const root = await mkdtemp(join(tmpdir(), "ash-cli-ui-"));
+const root = await mkdtemp(join(tmpdir(), "navi-cli-ui-"));
 const workspace = join(root, "workspace");
-const screenshots = process.env.ASH_CLI_SCREENSHOTS || join(root, "screenshots");
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const screenshots = process.env.NAVI_CLI_SCREENSHOTS || join(root, "screenshots");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { db, dbClient, ensureSchema } = await import("../../server/dist/db/index.js");
 const { appSettings, projects, tasks, agents, sessions, groups, queueItems } = await import("../../server/dist/db/schema.js");
 await ensureSchema();
@@ -135,7 +135,7 @@ const boot = `
   }
   await import("./server/dist/index.js");
 `;
-const backend = spawn(process.execPath, ["--input-type=module", "-e", boot], { cwd: repo, env: { ...process.env, ASH_UPLOADS_DIR: join(root, "uploads"), ASH_PREVIEW: "1", ASH_SEED_FROM: "", PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
+const backend = spawn(process.execPath, ["--input-type=module", "-e", boot], { cwd: repo, env: { ...process.env, NAVI_UPLOADS_DIR: join(root, "uploads"), NAVI_PREVIEW: "1", NAVI_SEED_FROM: "", PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
 let log = "";
 backend.stdout.on("data", (chunk) => { log += chunk; });
 backend.stderr.on("data", (chunk) => { log += chunk; });

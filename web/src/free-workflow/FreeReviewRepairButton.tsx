@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FreeReviewRun } from "@ash/shared";
+import type { FreeReviewRun } from "@navi/shared";
 import { SpinnerGap, Wrench } from "@phosphor-icons/react";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 

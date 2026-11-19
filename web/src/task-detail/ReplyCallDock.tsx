@@ -1,5 +1,5 @@
 import { X } from "@phosphor-icons/react";
-import type { CreateReviewChoice } from "@ash/shared/review-on-create";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { ReviewerChip } from "../free-workflow/ReviewerChip.tsx";
 import type { ReviewerList } from "../free-workflow/useReviewerList.ts";
 import { ReplyDockRow } from "./ReplyDock.tsx";

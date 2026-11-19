@@ -25,13 +25,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-duet-image-ownership-"));
-process.env.ASH_DB ||= join(stage, "duet-image-ownership.db");
-process.env.ASH_RUNS_DIR ||= join(stage, "runs");
-process.env.ASH_UPLOADS_DIR ||= join(stage, "uploads");
+const stage = mkdtempSync(join(tmpdir(), "navi-duet-image-ownership-"));
+process.env.NAVI_DB ||= join(stage, "duet-image-ownership.db");
+process.env.NAVI_RUNS_DIR ||= join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR ||= join(stage, "uploads");
 requireTmpDb("test-duet-image-ownership");
 
-// 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前。
+// 碰库的模块一律 await import:静态 import 会被提升到设 NAVI_DB 之前。
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks, uploads } = await import("../src/db/schema.js");
 const { RUNS_DIR, UPLOADS_DIR } = await import("../src/paths.js");

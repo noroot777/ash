@@ -1,12 +1,12 @@
 // 飞书通道端到端测试的公共台子：假飞书开放平台 + 真路由栈 + 通道各部件（不起长连接）。
-// test-im-cards.ts / test-im-inbound.ts 共用。调用方先设好 ASH_DB / ASH_RUNS_DIR 再 import 这里。
+// test-im-cards.ts / test-im-inbound.ts 共用。调用方先设好 NAVI_DB / NAVI_RUNS_DIR 再 import 这里。
 import { Hono } from "hono";
 import { authGate } from "../src/auth/middleware.js";
 import { resourceGate } from "../src/auth/resource-gate.js";
 import { personalWriteGate } from "../src/auth/personal-gate.js";
 import { api as apiRoutes } from "../src/routes.js";
 import { CardActions } from "../src/im/actions.js";
-import { AshClient } from "../src/im/ash-client.js";
+import { NaviClient } from "../src/im/navi-client.js";
 import { CommandRunner } from "../src/im/commands.js";
 import { FeishuApi } from "../src/im/feishu/api.js";
 import { InboundRouter, type MessageEvent } from "../src/im/inbound.js";
@@ -60,7 +60,7 @@ export class FakeFeishu {
     if (path.includes("/resources/")) {
       return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), { headers: { "content-type": "image/png" } });
     }
-    if (path.startsWith("/open-apis/bot/v3/info")) return json({ code: 0, bot: { open_id: "ou_bot", app_name: "ash 机器人" } });
+    if (path.startsWith("/open-apis/bot/v3/info")) return json({ code: 0, bot: { open_id: "ou_bot", app_name: "navi 机器人" } });
     if (path.startsWith("/open-apis/im/v1/chats/")) return json({ code: 0, data: { name: "研发群" } });
     return json({ code: 404, msg: `fake: 没有 ${method} ${path}` });
   }) as unknown as typeof fetch;
@@ -139,13 +139,13 @@ export async function assemble(app: Hono, fake: FakeFeishu) {
   await meter.load();
   meter.setQuota(1_000_000);
   const api = new FeishuApi({ appId: APP, appSecret: "s", domain: "https://open.fake", beforeCall: (kind, purpose) => meter.take(kind, purpose), deps: { fetch: fake.fetch } });
-  const ash = new AshClient(app.fetch);
+  const navi = new NaviClient(app.fetch);
   const reconciler = new Reconciler(APP, api, { now: () => Date.now(), sleep: async () => {} });
   const sender = reconciler.sender;
-  const commands = new CommandRunner({ appId: APP, ash, reconciler });
-  const actions = new CardActions({ appId: APP, ash, reconciler, sender, commands });
-  const relay = new RoomRelay({ appId: APP, ash, commands });
-  const inbound = new InboundRouter({ appId: APP, api, ash, commands, relay, reconciler, botOpenId: () => "ou_bot" });
+  const commands = new CommandRunner({ appId: APP, navi, reconciler });
+  const actions = new CardActions({ appId: APP, navi, reconciler, sender, commands });
+  const relay = new RoomRelay({ appId: APP, navi, commands });
+  const inbound = new InboundRouter({ appId: APP, api, navi, commands, relay, reconciler, botOpenId: () => "ou_bot" });
   let events = 0;
   /** 等防抖的对账跑完、发件队列排空。 */
   const settle = async () => {
@@ -175,11 +175,11 @@ export async function assemble(app: Hono, fake: FakeFeishu) {
     await inbound.handle(event);
     return messageId;
   };
-  return { meter, api, ash, sender, reconciler, commands, actions, relay, inbound, settle, click, say };
+  return { meter, api, navi, sender, reconciler, commands, actions, relay, inbound, settle, click, say };
 }
 
 /**
- * 等后台的回合收尾（答复/重试会真去起执行器，ASH_RUNS_DIR 下 spawn 被拦、很快落 failed）。
+ * 等后台的回合收尾（答复/重试会真去起执行器，NAVI_RUNS_DIR 下 spawn 被拦、很快落 failed）。
  * 传了 from 就先等它离开这个状态：点完按钮那一刻任务多半还停在 paused，续跑还没排上。
  */
 export async function waitIdle(read: () => Promise<string | undefined>, from?: string, ms = 8000): Promise<void> {

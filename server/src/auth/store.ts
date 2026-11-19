@@ -8,11 +8,11 @@
 // 走就等于身份被复制成两份(理由同 handoff-identity.ts 的私钥不进库)。
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from "node:crypto";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
-import type { UserRole, UserStatus, UserView } from "@ash/shared";
+import type { UserRole, UserStatus, UserView } from "@navi/shared";
 import { db } from "../db/index.js";
 import { users, userSessions, userInvites } from "../db/schema.js";
 import { id, now } from "../util.js";
-import { LEGACY_USER_KEY_PREFIX } from "@ash/shared/legacy-names";
+import { LEGACY_USER_KEY_PREFIX } from "@navi/shared/legacy-names";
 
 const USER_KEY_PREFIX = "navi_";
 

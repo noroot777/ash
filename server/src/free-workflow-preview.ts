@@ -10,7 +10,7 @@ import { assertBeforeAcceptance } from "./free-workflow.js";
 import { acquireFreeWorkflowAction, releaseFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { resolvePreviewCommand } from "./preview-command.js";
-import { parsePreviewConfig, previewLaunchOf, previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/preview";
+import { parsePreviewConfig, previewLaunchOf, previewProxyEnabled, type WorkspacePreviewInput } from "@navi/shared/preview";
 import { workspacePreviewDirectory, workspacePreviewInput } from "./preview-workspace.js";
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
@@ -74,7 +74,7 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
       : resolvePreviewCommand(workspace.path, input?.command ?? project.previewCommand).command;
     const proxy = !!input || previewProxyEnabled(config?.proxy, await isMultiUser());
     // 起多大一摊照**项目配置**来，别在这儿替项目宣称意图。这里曾经写死 `"frontend"`：
-    // 自由预览于是永远只起前端、`/api` 接回本机这台 ash，用户改完后端来预览里验，看到的
+    // 自由预览于是永远只起前端、`/api` 接回本机这台 navi，用户改完后端来预览里验，看到的
     // 是主实例上的旧行为 —— 而界面上没有一个字提过这件事，症状只是「我改的东西没生效」。
     // 跟这次跑哪条命令无关，所以任务里临时填的命令也照项目配的来。
     const launch = config?.launch ?? previewLaunchOf(project.previewConfig);

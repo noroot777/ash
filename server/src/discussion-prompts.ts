@@ -8,8 +8,8 @@
 // 不同的只有交卷方式：表态不再写成三行暗号让程序去解析，而是交卷时的一格 `agreed`（审查辩论那一套，
 // 发言只认 debate_reply 那次调用）。
 import { join } from "node:path";
-import type { DiscussionParticipant, DiscussionRounds } from "@ash/shared";
-import { discussionRoundsLabel, isBlindSeq } from "@ash/shared/discussion";
+import type { DiscussionParticipant, DiscussionRounds } from "@navi/shared";
+import { discussionRoundsLabel, isBlindSeq } from "@navi/shared/discussion";
 import type { BackgroundFile } from "./discussion-background.js";
 import { RUNS_DIR } from "./paths.js";
 

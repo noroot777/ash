@@ -4,7 +4,7 @@
 // terminal-process-tree.ts。
 import { existsSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { clearEnv, withLegacyEnvNames } from "@ash/shared/env-names";
+import { clearEnv, withLegacyEnvNames } from "@navi/shared/env-names";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { expandHome } from "./git.js";
 import { IS_WINDOWS, encodePowerShellCommand } from "./platform.js";
@@ -148,7 +148,7 @@ export function ptyEnvironment(extra: Record<string, string> = {}): Record<strin
     // 「我在 Navi 的终端里」：给用户自己的 shell 配置读的，旧名照旧导一份（他的 profile 里写的可能还是 $ASH_TERMINAL）。
     ...withLegacyEnvNames({ NAVI_TERMINAL: "1" }),
     // wrapper 清杀/守护时排除 server 自己(它持有全部 pty master,macOS 的 lsof
-    // 会把 master 端也列进 /dev/ttysN 的持有者 —— 不排除等于让 wrapper 杀掉 ash)。
+    // 会把 master 端也列进 /dev/ttysN 的持有者 —— 不排除等于让 wrapper 杀掉 navi)。
     NAVI_PTY_PARENT: String(process.pid),
     // ps/lsof 的绝对路径(启动时解析,含 /bin、/usr/sbin 兜底):wrapper 不吃运行时 PATH。
     NAVI_PS: PS_PATH ?? "",

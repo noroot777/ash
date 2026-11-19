@@ -27,9 +27,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-im-outcomes-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-im-outcomes-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-im-outcomes");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -96,10 +96,10 @@ try {
   const timelineOf = async (taskId: string) => (await db.select({ id: sessions.id }).from(sessions).where(eq(sessions.taskId, taskId)))
     .map((session) => sessionTranscriptPath(taskId, session.id)).filter(existsSync).map((path) => readFileSync(path, "utf8")).join("\n");
   const buttonOf = (row: { content: string }, op: string) => buttonsOf(JSON.parse(row.content)).find((button) => button.value?.op === op)!;
-  /** 一份卡片动作：按钮按下去、请求发进 ash 之前停在 hold 上。 */
+  /** 一份卡片动作：按钮按下去、请求发进 navi 之前停在 hold 上。 */
   const heldActions = (hold: ReturnType<typeof gate>) => new CardActions({
     appId: APP, reconciler: im.reconciler, sender: im.sender, commands: im.commands,
-    ash: { post: async (who: typeof principal, path: `/api/${string}`, body: unknown) => { hold.reached(); await hold.opened; return im.ash.post(who, path, body); } } as never,
+    navi: { post: async (who: typeof principal, path: `/api/${string}`, body: unknown) => { hold.reached(); await hold.opened; return im.navi.post(who, path, body); } } as never,
   });
   let events = 0;
   const press = (actions: InstanceType<typeof CardActions>, value: Record<string, unknown>) =>
@@ -382,8 +382,8 @@ try {
   {
     const repo = join(stage, "repo");
     execFileSync("git", ["init", "-b", "main", repo]);
-    git(repo, "config", "user.name", "Ash Test");
-    git(repo, "config", "user.email", "ash@example.test");
+    git(repo, "config", "user.name", "Navi Test");
+    git(repo, "config", "user.email", "navi@example.test");
     writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
     writeFileSync(join(repo, "seed.txt"), "seed\n");
     git(repo, "add", "-A");
@@ -398,7 +398,7 @@ try {
         id: taskId, projectId, title: `门禁 ${taskId}`, body: "", mode: "single", status: "done", agentType: "claude",
         useWorktree: true, worktreeBase: "main", mergeTargetBranch: "main", workflowMode: "free", endedAt: at, createdAt: at, updatedAt: at,
       } as never);
-      // 门禁红了要叫醒任务，那一轮往会话里写（spawn 在 ASH_RUNS_DIR 下被拦）。
+      // 门禁红了要叫醒任务，那一轮往会话里写（spawn 在 NAVI_RUNS_DIR 下被拦）。
       await db.insert(sessions).values({ id: `s-${taskId}`, taskId, role: "single", agentType: "claude", executor: "claude", cwd: ws.path, startedAt: at, endedAt: at, activeMs: 0 } as never);
       await im.reconciler.reconcile([taskId]);
       await im.settle();
@@ -456,9 +456,9 @@ try {
     let flaky = false;
     const relay = new RoomRelay({
       appId: APP, commands: im.commands,
-      ash: {
+      navi: {
         get: async (who: typeof principal, path: string) => {
-          if (path.startsWith("/api/chats?")) { await meet(); return im.ash.get(who, path as `/api/${string}`); }
+          if (path.startsWith("/api/chats?")) { await meet(); return im.navi.get(who, path as `/api/${string}`); }
           if (flaky) return { ok: false, status: 500, error: "database is locked", data: {} };
           const id = decodeURIComponent(path.split("/").pop()!);
           const room = (await db.select().from(chatRooms).where(eq(chatRooms.id, id))).at(0);

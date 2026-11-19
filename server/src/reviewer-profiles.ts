@@ -1,5 +1,5 @@
-import type { AgentType, ReviewerProfile } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
+import type { AgentType, ReviewerProfile } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
 import { and, desc, eq, isNotNull, isNull, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";

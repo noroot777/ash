@@ -104,7 +104,7 @@ async function reviewInFlight(
   // 审查者按提示用 pause_task 收尾这一轮（走真实路由，连带写 resumePrompt）。
   const pause = await app.request(`/api/tasks/${taskId}/pause`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-ash-turn-token": "tok", "x-ash-direction-token": "dir" },
+    headers: { "content-type": "application/json", "x-navi-turn-token": "tok", "x-navi-direction-token": "dir" },
     body: JSON.stringify({ resumePrompt: "套件完成后继续审查并交报告" }),
   });
   assert.equal(pause.status, 200, "pause 应该成功：旁路回合跑的时候任务是 running");

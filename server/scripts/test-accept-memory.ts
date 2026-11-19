@@ -16,12 +16,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-accept-memory-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-accept-memory-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 requireTmpDb("accept-memory");
 
 const [{ db, dbClient, ensureSchema }, schema, memory, gateRoutes, { bus }, context, mode, store, visibility, personalGate, projectRoutes, arrival] = await Promise.all([

@@ -15,13 +15,13 @@
 // CodeMirror（web/src/settings/ShellScriptEditor.tsx）。脚本里可以写 `{{占位符}}`，
 // 点执行时先让用户填 —— 见下。
 //
-// **方言跟着 ash 所在的机器**：macOS/Linux 上是 `shell -lc <script>`（跟预览脚本同一套），
+// **方言跟着 navi 所在的机器**：macOS/Linux 上是 `shell -lc <script>`（跟预览脚本同一套），
 // Windows 上是 PowerShell（`-EncodedCommand`，见 server/src/terminal-shell.ts 的
 // `commandLaunch`）—— 那边没有登录 shell 这一档，`&&` 要 PowerShell 7 才认。
 export type CommandScriptDialect = "posix" | "powershell";
 
 /**
- * 这段脚本会被哪个 shell 执行。**跟着 ash 所在的那台机器**,浏览器所在的系统不算数
+ * 这段脚本会被哪个 shell 执行。**跟着 navi 所在的那台机器**,浏览器所在的系统不算数
  * (跟 preview.ts 的 previewPortDialect 同一条口径)。
  */
 export function commandScriptDialect(platform: string | null | undefined): CommandScriptDialect {
@@ -43,7 +43,7 @@ export function commandScriptDialectText(dialect: CommandScriptDialect): string 
 export interface ProjectCommandConfig {
   id: string;
   name: string;
-  /** 在项目主仓根目录执行。方言跟着 ash 所在的机器,见 commandScriptDialect。 */
+  /** 在项目主仓根目录执行。方言跟着 navi 所在的机器,见 commandScriptDialect。 */
   command: string;
 }
 
@@ -63,7 +63,7 @@ export interface ProjectServiceConfig {
    * 三条线索全切了,端口是它自报的、也是仅剩能杀到它的那条。
    *
    * 填了它就改成「先跑这段脚本,再确认启动会话退了」。两档都够不着的服务才需要它 ——
-   * `docker compose up -d` 这类连端口都未必打在本机(容器里、远端),ash 无从下手。
+   * `docker compose up -d` 这类连端口都未必打在本机(容器里、远端),navi 无从下手。
    *
    * **不支持占位符**:停的是已经起来的那一份,再弹一次收值框只会让人停错东西,所以这里直接拦
    * (parseServiceConfig),而不是等点停止时才 400。

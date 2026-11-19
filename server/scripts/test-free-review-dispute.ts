@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-free-review-dispute-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-free-review-dispute-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 let failure: unknown = null;
 try {
@@ -41,7 +41,7 @@ try {
   const {
     CLASS_PROBLEM_BOUNDARY, DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
     MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE,
-  } = await import("@ash/shared/free-workflow");
+  } = await import("@navi/shared/free-workflow");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
 
   await ensureSchema();

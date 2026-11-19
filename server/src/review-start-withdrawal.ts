@@ -1,5 +1,5 @@
 import { and, eq, isNotNull } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
 import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import type { ReviewDelivery, ReviewTargetIdentity } from "./db/schema-regression-evidence.js";

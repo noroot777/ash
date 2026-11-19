@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { View, Animated } from "react-native";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { STATUS_META } from "@/lib/constants";
 import { useTheme } from "@/lib/theme";
 

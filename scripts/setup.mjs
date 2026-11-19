@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// 在**新机器**上把 ash 装好:装依赖 → 构建 → 接好 MCP → 告诉你怎么起。
+// 在**新机器**上把 navi 装好:装依赖 → 构建 → 接好 MCP → 告诉你怎么起。
 //
 //   node scripts/setup.mjs           # 或 npm run setup
 //   PORT=4317 node scripts/setup.mjs      # 换端口(MCP 里写的 URL 会跟着变)
 //   SKIP_MCP=1 node scripts/setup.mjs     # 不动 ~/.claude.json 和 ~/.codex/config.toml
 //   SKIP_BUILD=1 node scripts/setup.mjs   # 只装依赖、接 MCP,不构建
 //
-// 幂等:重复跑不会重复写配置,也不会覆盖已有的 ash MCP 条目。
+// 幂等:重复跑不会重复写配置,也不会覆盖已有的 navi MCP 条目。
 //
-// 为什么 MCP 这一步不能省:ash 起的 agent 是靠 ash MCP 的 complete_task 交卷的。
+// 为什么 MCP 这一步不能省:navi 起的 agent 是靠 navi MCP 的 complete_task 交卷的。
 // 没接上 = 每个任务跑完都被判 failed(它压根没有那个工具可调)。
 //
 // 2026-08-14 从 setup.sh 改写成 .mjs:新机器上第一条命令必须是**每个平台都跑得动**的,
@@ -30,7 +30,7 @@ import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.mjs";
 // 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把两边钉成同一个。
 // 改名之前的登记（`ash`、更早的 `harness`）在这里迁成规范名：Navi 起 claude/codex 时注入的是规范名，
 // 用户级配置里再留一条旧名，那两家每一回合都会多挂一套同样的工具。
-const ASH_MCP_SERVER_NAME = "navi";
+const NAVI_MCP_SERVER_NAME = "navi";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
@@ -72,10 +72,10 @@ say("▶ 1/5 检查运行环境");
 // scripts/platform.mjs / server/src/platform.ts 里分了平台。
 ok(`系统 ${process.platform} (${process.arch})`);
 
-// Node 不比版本号,直接问能力:ash 的数据库是 Node 内置的 `node:sqlite`,而它到位的
+// Node 不比版本号,直接问能力:navi 的数据库是 Node 内置的 `node:sqlite`,而它到位的
 // 时间比大版本号细得多 —— 22.13~22.15 有模块却没有 `StatementSync.setReturnArrays`
 // (缺了它 join 出的重名列会**静默**读错),23.x 一路到 23.7 也还不行,22.16 和 24 才是全的。
-// 所以这里当场跑一遍 ash 真正用到的调用;版本号只在报错时出场,给个说得出口的目标。
+// 所以这里当场跑一遍 navi 真正用到的调用;版本号只在报错时出场,给个说得出口的目标。
 //
 // 另外这段必须用 createRequire 而不是 import:ESM 的静态 import 在链接期就解析,Node 20
 // 上整个脚本一行都执行不到就先抛 ERR_UNKNOWN_BUILTIN_MODULE —— 那正是这条检查要替用户
@@ -129,7 +129,7 @@ if (fail) {
 say();
 say("▶ 2/5 安装依赖(npm install,首次要几分钟)");
 
-// 先自查 workspace 齐不齐,再开始下载。不齐的话 npm 会把 `@ash/*` 当公共包去
+// 先自查 workspace 齐不齐,再开始下载。不齐的话 npm 会把 `@navi/*` 当公共包去
 // registry 上找,报一条读起来像断网的 E404 —— 于是人去查代理、换镜像源,方向全反。
 // 详见 scripts/workspace-check.mjs 顶部。
 const ws = inspectWorkspaces(REPO);
@@ -188,12 +188,12 @@ if (process.env.SKIP_MCP) {
   // ── claude ────────────────────────────────────────────────────────────────
   if (which("claude")) {
     const listed = run("claude", ["mcp", "list"]);
-    if (new RegExp(`^${ASH_MCP_SERVER_NAME}:`, "m").test(listed.stdout)) {
+    if (new RegExp(`^${NAVI_MCP_SERVER_NAME}:`, "m").test(listed.stdout)) {
       ok("claude:Navi 已注册,不动它");
     } else {
       const legacy = LEGACY_MCP_SERVER_NAMES.filter((old) => new RegExp(`^${old}:`, "m").test(listed.stdout));
       const added = run("claude", [
-        "mcp", "add", ASH_MCP_SERVER_NAME, "--scope", "user", "-e", `NAVI_URL=${URL_BASE}`, "--", "node", mcpEntry,
+        "mcp", "add", NAVI_MCP_SERVER_NAME, "--scope", "user", "-e", `NAVI_URL=${URL_BASE}`, "--", "node", mcpEntry,
       ]);
       if (added.status === 0) {
         if (legacy.length) {
@@ -206,7 +206,7 @@ if (process.env.SKIP_MCP) {
       }
       else {
         warn("claude mcp add 失败,手动跑:");
-        say(`      claude mcp add ${ASH_MCP_SERVER_NAME} --scope user -e NAVI_URL=${URL_BASE} -- node ${mcpEntry}`);
+        say(`      claude mcp add ${NAVI_MCP_SERVER_NAME} --scope user -e NAVI_URL=${URL_BASE} -- node ${mcpEntry}`);
       }
     }
   } else {
@@ -233,7 +233,7 @@ if (process.env.SKIP_MCP) {
       }).status === 0;
     const r = registerCodexMcp({
       configFile: codexCfg, mcpEntry, url: URL_BASE,
-      name: ASH_MCP_SERVER_NAME, legacyNames: LEGACY_MCP_SERVER_NAMES, listServers, removeServer,
+      name: NAVI_MCP_SERVER_NAME, legacyNames: LEGACY_MCP_SERVER_NAMES, listServers, removeServer,
     });
     if (r.action === "kept") {
       if (r.enabled) ok(`codex:Navi 已在 ${codexCfg} 里,不动它`);

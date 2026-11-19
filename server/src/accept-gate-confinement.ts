@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { openConfinement, reopenConfinement, type Confinement, type ConfineRead } from "./executors/kernel-confine.js";
 import { IS_MAC, IS_WINDOWS } from "./platform.js";
 import { gateJobConfinement } from "./accept-gate-confinement-job.js";
-import { LEGACY_WINDOWS_GATE_JOB_PREFIX } from "@ash/shared/legacy-names";
+import { LEGACY_WINDOWS_GATE_JOB_PREFIX } from "@navi/shared/legacy-names";
 import { isMacGateScope, macGateBootstrap, macGateConfinement, MAC_GATE_NOTICE } from "./accept-gate-confinement-macos.js";
 
 export type GateConfinement = Omit<Confinement, "enroll" | "read"> & {
@@ -23,7 +23,7 @@ export const gateExecutionNotice = (): string | null => IS_MAC ? MAC_GATE_NOTICE
 export const gateSupervisorBootstrap = async (logPath: string) => IS_MAC ? macGateBootstrap(logPath) : {};
 /**
  * 这台机器上能不能跨重启接管一条还在跑的门禁（accept-gate-exit.ts）。不能就**显式降级**为
- * 重启前的老结局「被打断」，不是漏了：Windows 上 Job 监督器跨 ash 重启重开、以及启动器退出档
+ * 重启前的老结局「被打断」，不是漏了：Windows 上 Job 监督器跨 navi 重启重开、以及启动器退出档
  * 在那边的落盘语义都还没在真机上验过，而接管的终点可能是一次不可逆的自动合并。
  */
 export const gateTakeoverUnavailable = (): string | null =>

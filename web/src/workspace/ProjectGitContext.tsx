@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ProjectHealth, ProjectView } from "@ash/shared";
+import type { ProjectHealth, ProjectView } from "@navi/shared";
 import { ArrowsClockwise, GitBranch } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";

@@ -220,7 +220,7 @@ export function containmentAvailable(): boolean {
 // ── wrapper 脚本 ────────────────────────────────────────────────────────────────
 // 共享 prelude。navi_members 产出 " pid:pgid" 清单,成员判定 = 会话成员 ∪ pty fd 持有者
 // (为什么是这两条、为什么必须在 leader 存活期间枚举,见文件头)。两个硬性排除,少一个
-// 都出事故:`$$`(wrapper 自己,不排除就自杀)与 `$NAVI_PTY_PARENT`(ash server:macOS
+// 都出事故:`$$`(wrapper 自己,不排除就自杀)与 `$NAVI_PTY_PARENT`(navi server:macOS
 // 的 lsof 把 pty **master** 端也解析成同一个 /dev/ttysN,不排除会把 server TERM 掉,
 // probe4 实测 exit 143)。
 // 枚举工具自身的防呆(各卡死过一次 KEEPER 等待循环):

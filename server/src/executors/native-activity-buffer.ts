@@ -1,4 +1,4 @@
-import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
+import type { AgentEvent, NativeAgentActivity } from "@navi/shared";
 import { childActivity } from "./native-agent-activity.js";
 
 type TextActivity = Extract<NativeAgentActivity, { kind: "text" | "thinking" }>;

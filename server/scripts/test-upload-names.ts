@@ -16,14 +16,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-upload-names-"));
+const root = mkdtempSync(join(tmpdir(), "navi-upload-names-"));
 const uploads = join(root, "uploads");
-process.env.ASH_DB ||= join(root, "upload-names.db");
-process.env.ASH_UPLOADS_DIR = uploads;
+process.env.NAVI_DB ||= join(root, "upload-names.db");
+process.env.NAVI_UPLOADS_DIR = uploads;
 requireTmpDb("test-upload-names");
 mkdirSync(uploads, { recursive: true });
 
-// 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
+// 碰库的模块一律 await import:静态 import 会被提升到设 NAVI_DB 之前,那样连的是真库。
 const { MAX_STORED_NAME_BYTES, isSafeUploadName, newUploadName, sanitizeUploadName, sanitizeUploadStem } = await import("../src/upload-names.js");
 const { applyUploadRewrites, buildUploadRewrites, collectUploads, scanUploadNames, writeUploads } = await import("../src/handoff-uploads.js");
 const { uploadNameOf } = await import("../src/uploads.js");

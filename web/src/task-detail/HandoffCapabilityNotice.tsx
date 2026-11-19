@@ -9,7 +9,7 @@
 //   · gaps 非 blocking —— 模型对不上:黄,只提示不拦(那边可能报错,也可能静默换模型跑完);
 //   · unknown          —— 对端旧版报不出能力:灰,如实说无从核对,不拦。
 import { Warning, WarningCircle, Info } from "@phosphor-icons/react";
-import type { HandoffCapabilityReport } from "@ash/shared";
+import type { HandoffCapabilityReport } from "@navi/shared";
 
 export function HandoffCapabilityNotice({
   capability,

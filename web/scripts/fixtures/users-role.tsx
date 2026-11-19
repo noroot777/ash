@@ -6,7 +6,7 @@
 // 真的打过一次网络之后才算数。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AuthState, UserRole, UserView } from "@ash/shared";
+import type { AuthState, UserRole, UserView } from "@navi/shared";
 // global.css 必须排在组件之前 —— `main.tsx` 就是这个顺序，而 `.ui-input`(width:100%)
 // 与各屏自己那份样式是同级选择器，排错了层叠方向就反过来，夹具里看到的布局是假的。
 import "../../src/styles/global.css";
@@ -81,8 +81,8 @@ const authState = (role: UserRole): AuthState => ({
   mode: "multi",
   needsSetup: false,
   user: users.find((u) => u.id === SELF_ID) ? { ...users.find((u) => u.id === SELF_ID)!, role } : null,
-  rootDir: "D:/ash-root",
-  homeDir: "D:/ash-root/admin",
+  rootDir: "D:/navi-root",
+  homeDir: "D:/navi-root/admin",
 });
 
 function Fixture() {

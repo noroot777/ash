@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { isReasoningEffortSupported, resolveReasoningEfforts } from "@ash/shared/cli-presets";
-import { readCliConfigOverrides } from "@ash/shared/cli-overrides";
+import type { AgentType } from "@navi/shared";
+import { isReasoningEffortSupported, resolveReasoningEfforts } from "@navi/shared/cli-presets";
+import { readCliConfigOverrides } from "@navi/shared/cli-overrides";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
@@ -158,7 +158,7 @@ async function build(
   const reasoningEffort = overrides.reasoningEffort || profile?.reasoningEffort || undefined;
   // 档位能力优先用**已探到的** CLI 原话(见 cachedModelEfforts:不触发探测,拿不到就
   // 退回规则表)。报错文案带上来源,因为「谁说这个组合不行」直接决定用户下一步怎么办:
-  // 是改配置,还是去查 ash 的规则表写错了。
+  // 是改配置,还是去查 navi 的规则表写错了。
   const probed = cachedModelEfforts(type);
   if (!isReasoningEffortSupported(type, model, reasoningEffort, probed)) {
     const resolution = resolveReasoningEfforts(type, model, probed);

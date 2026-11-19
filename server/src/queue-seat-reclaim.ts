@@ -15,7 +15,7 @@
 // 带着凭证就说明它有主」那一道上把**自己那份**凭证误读成别人的,直接 return —— 遗留从此
 // 再没有负责人,正是这条路存在要防的那个结局。
 import { eq } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { SEAT_ROLLBACK_ROLE, claimNonTurn, whenTurnIdle } from "./runs.js";
@@ -132,7 +132,7 @@ async function reclaimSeat(job: SeatReclaim): Promise<void> {
   const releaseLock = claimNonTurn(taskId, SEAT_ROLLBACK_ROLE);
   if (!releaseLock) {
     if (job.deferrals >= MAX_DEFERRALS) {
-      console.warn(`[ash] 队列占位守卫重排已达上限(${taskId}),改为 ${job.deferMs}ms 后再试一趟`);
+      console.warn(`[navi] 队列占位守卫重排已达上限(${taskId}),改为 ${job.deferMs}ms 后再试一趟`);
       laterSeatReclaim(job, job.deferMs);
       return;
     }
@@ -153,7 +153,7 @@ async function reclaimSeat(job: SeatReclaim): Promise<void> {
       || row.resumePromptGeneration !== reservation.advanceRequest.resumePromptGeneration)) return;
     const stranded = !!reservation && await restoreQueuedTask(reservation);
     if (!stranded) {
-      console.warn(`[ash] 队列占位守卫未提交(${taskId}):库里不再是我这一份凭证的 queued`);
+      console.warn(`[navi] 队列占位守卫未提交(${taskId}):库里不再是我这一份凭证的 queued`);
     }
     if (repush === "never" || (repush === "stranded" && !stranded)) return;
     if (row && !stranded && (row.status !== prevStatus || row.directionEpoch !== reservation?.epoch)) return;
@@ -166,7 +166,7 @@ async function reclaimSeat(job: SeatReclaim): Promise<void> {
   } catch (err) {
     // 补偿自己也可能撞上还没放开的写锁:不放弃,退避后重试 —— 这正是「数据库恢复后
     // 再补办交接」的那一等(第 7 轮审查:一次短暂锁故障不许变成永久停滞)。
-    console.error(`[ash] 队列占位补偿失败(${taskId}),${RETRY_MS}ms 后重试:`, err);
+    console.error(`[navi] 队列占位补偿失败(${taskId}),${RETRY_MS}ms 后重试:`, err);
     laterSeatReclaim(job, RETRY_MS);
   } finally {
     releaseLock();

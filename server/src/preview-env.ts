@@ -1,18 +1,18 @@
 // 预览子进程的**环境卫生**与启动包装。从 preview-start.ts 搬出来，因为现在有两个人要用
 // 同一份：正式预览（preview-start.ts）和「AI 协助」的试跑（preview-trial.ts）。抄成两份的
 // 代价不是重复代码，是下面这几条来之不易的判断只会在其中一份里生效——而漏掉的那一份
-// 恰恰是「看起来起来了、实际连着另一台 ash」这种最难查的症状。
+// 恰恰是「看起来起来了、实际连着另一台 navi」这种最难查的症状。
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { userShellLaunch } from "./platform.js";
 import { augmentedEnv, withoutForeignNodeBins } from "./executors/spawn.js";
 import { previewShell } from "./preview-shell.js";
-import { envNameGenerations, withLegacyEnvNames } from "@ash/shared/env-names";
+import { envNameGenerations, withLegacyEnvNames } from "@navi/shared/env-names";
 
 /**
  * 预览命令的环境：基座之上叠这一次的变量。`NAVI_` 开头的那几个（`NAVI_PREVIEW_BASE`、
  * `NAVI_HOST_API`…）连旧名一起给 —— 读它们的是**用户自己写的启动脚本**，还有预览的任务分支上
- * 改名之前那一版的 `scripts/dev.mjs`，它们只认 `ASH_`。
+ * 改名之前那一版的 `scripts/dev.mjs`，它们只认 `NAVI_`。
  */
 export function previewSpawnEnv(cwd: string, vars: Readonly<Record<string, string>>): NodeJS.ProcessEnv {
   return { ...previewBaseEnv(cwd), ...withLegacyEnvNames(vars) };
@@ -21,15 +21,15 @@ export function previewSpawnEnv(cwd: string, vars: Readonly<Record<string, strin
 /**
  * 预览子进程的基座环境。
  *
- * 除了去掉别人家的 `node_modules/.bin`（见 withoutForeignNodeBins），还要**擦掉从宿主 ash
+ * 除了去掉别人家的 `node_modules/.bin`（见 withoutForeignNodeBins），还要**擦掉从宿主 navi
  * 进程继承下来的这两个**（连同它们的各代旧名 `ASH_*`、`HARNESS_*` —— dev.mjs 各代都认，留着等于
- * 绕道）：`NAVI_PROXY`，以及 `NAVI_HOST_API`（嵌套预览时那份指的是外层那台 ash）。
+ * 绕道）：`NAVI_PROXY`，以及 `NAVI_HOST_API`（嵌套预览时那份指的是外层那台 navi）。
  *
- * 因为「/api 打哪台」这件事上，**继承来的值一个都不是当事人的意思**：ash 是被谁怎么起的
+ * 因为「/api 打哪台」这件事上，**继承来的值一个都不是当事人的意思**：navi 是被谁怎么起的
  * （`NAVI_PROXY=… npm run start`、systemd 里带一行、上一层预览传下来的）跟这次预览要连谁
  * 毫无关系。dev.mjs 又只看得见环境变量、分不清哪份是命令现场写的，于是照它的顺序，
  * 一个遗留值就能压掉我们确知的监听端口：默认「只起前端」的 /api 整个打去别处——端口关着
- * 是一页 500，端口上坐着另一台 ash 就是拿用户的身份静默读写错实例（第 7 轮审查 P1）。
+ * 是一页 500，端口上坐着另一台 navi 就是拿用户的身份静默读写错实例（第 7 轮审查 P1）。
  *
  * 擦掉不影响脚本自己写的那份：`NAVI_PROXY=$URL2 npm run dev` 是 shell 在命令现场重新设的，
  * 照旧最大（第 6 轮审查 P1）。名字按大小写不敏感比对——Windows 的环境变量本来就不分大小写。
@@ -56,7 +56,7 @@ const INHERITED_API_TARGETS = new Set([...envNameGenerations("NAVI_PROXY"), ...e
  * 会**在我们擦完之后**去读 `/etc/profile`、`~/.profile`。谁为日常开发在 profile 里写了一行
  * `export NAVI_PROXY=…`，它就原样复活，dev.mjs 那边照样分不清是不是命令现场写的——默认
  * 「只起前端」的 /api 又整个打去那个地址（第 8 轮审查 P1，症状同第 7 轮：一页 500，或者
- * 静默读写另一台 ash）。
+ * 静默读写另一台 navi）。
  *
  * 只管 POSIX：Windows 那条是 `cmd /d`，`/d` 明着跳过 AutoRun，cmd 也没有 profile 这种东西，
  * 没有「擦完之后又冒出来」的口子；win32 分支不看真机不改（根 AGENTS.md）。

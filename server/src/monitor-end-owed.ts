@@ -1,6 +1,6 @@
 // **这条哨兵还欠着一声「结束」吗** —— 欠着,它名下的待发行就谁都领不走(第 5 轮审查 1)。
 //
-// 进程退了之后,ash 还要排干最后几行、写终态、把「结束」入队。上一版让这段时间靠**行上的期限**
+// 进程退了之后,navi 还要排干最后几行、写终态、把「结束」入队。上一版让这段时间靠**行上的期限**
 // 撑着(收尾开始时推到 30 秒后、收尾函数退出时解除):期限到了、或者收尾函数退出了,都只是在
 // **推断**「结束已经准备好」—— 实测两条都推断错:库慢过 30 秒,扫描先把末批单独送走;结束入队
 // 失败一次,收尾的 finally 照样解除,末批被扫描送走,补发的「结束」另起一行再叫一次。
@@ -22,7 +22,7 @@
 // 领取那条 CAS 里再带一次 `endNotOwed` —— 后者是同一条语句里的原子判据,挑完之后凭证才落下的
 // 那种也绕不过去;槽位那一份只在内存里,调用方在发出 CAS 之前同步问 `finishingNow`。
 import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
-import { monitorIdFromOrigin, monitorMessageOrigin } from "@ash/shared/monitor";
+import { monitorIdFromOrigin, monitorMessageOrigin } from "@navi/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { monitors, scheduledMessages } from "./db/schema.js";
 import { now } from "./util.js";
@@ -65,12 +65,12 @@ export async function markFinishing(monitorId: string): Promise<void> {
   if (dbClient.closed) return;
   await db.update(monitors).set({ finishingSince: now() })
     .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running"), isNull(monitors.finishingSince)))
-    .catch((e) => console.error(`[ash] 收尾开始的记号没落上 monitor=${monitorId}（这一进程里槽位照样挡着）:`, e));
+    .catch((e) => console.error(`[navi] 收尾开始的记号没落上 monitor=${monitorId}（这一进程里槽位照样挡着）:`, e));
 }
 
 /**
- * ② 撤掉:开机接回时确认**它当初那个进程还活着**(收尾做到一半 ash 没了,进程却没被杀掉 —— 推满
- * 上限、点到期那几种是 ash 自己去杀)。它又回到在盯,不欠结束;不撤的话它此后的每一批都要等到下一次
+ * ② 撤掉:开机接回时确认**它当初那个进程还活着**(收尾做到一半 navi 没了,进程却没被杀掉 —— 推满
+ * 上限、点到期那几种是 navi 自己去杀)。它又回到在盯,不欠结束;不撤的话它此后的每一批都要等到下一次
  * 收尾。只在这一处撤:进程退了、收尾失败后监督被交回来的那种,记号留着,下一次收尾接着用。
  */
 export async function clearFinishing(monitorId: string): Promise<void> {

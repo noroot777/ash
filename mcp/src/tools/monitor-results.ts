@@ -5,7 +5,7 @@
 // 返回里还带着一个回执号(服务端 monitor-turn-ack.ts):agent 下一次调用时原样带回来才算收到,这里
 // 不替它确认 —— MCP 拿到返回不等于执行器拿到。请求里带 `monitorAck: true` 是在声明「我这边的
 // pause_task / complete_task 带得回回执号」;不带的调用方,服务端不在回合里交结果。
-import { answeredMcpError } from "@ash/shared/mcp-delivery";
+import { answeredMcpError } from "@navi/shared/mcp-delivery";
 import { call, fail, ok } from "../runtime.js";
 
 type Handed = { note?: unknown; error?: unknown; monitorResults?: unknown; monitorResultsReceipt?: unknown };
@@ -25,7 +25,7 @@ function okWithMonitorResults(data: unknown) {
 
 /**
  * 拒绝返回:带着结果就摊开(仍是 isError —— 这一次没有生效),否则照常。摊开之后仍写成
- * 「ash 已应答」那个形状:结果正文里出现 `ECONNRESET` 之类,补捞那一侧也认得出这是业务返回、不是通道断了。
+ * 「navi 已应答」那个形状:结果正文里出现 `ECONNRESET` 之类,补捞那一侧也认得出这是业务返回、不是通道断了。
  */
 function failWithMonitorResults(e: unknown) {
   const { body, status, method, path } = (e ?? {}) as { body?: unknown; status?: number; method?: string; path?: string };

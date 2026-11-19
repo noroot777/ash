@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import type { Group, Session, Task, TaskListItem, TaskStatus } from "@ash/shared";
-import { isUserSettableStatus, TASK_STATUS_LABELS, taskDisplayStatus } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem, TaskStatus } from "@navi/shared";
+import { isUserSettableStatus, TASK_STATUS_LABELS, taskDisplayStatus } from "@navi/shared";
 import { ArrowSquareOut, Warning } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";

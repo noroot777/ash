@@ -18,9 +18,9 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-session-read-"));
-process.env.ASH_DB ||= join(stage, "session-read.db");
-process.env.ASH_RUNS_DIR ||= join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-session-read-"));
+process.env.NAVI_DB ||= join(stage, "session-read.db");
+process.env.NAVI_RUNS_DIR ||= join(stage, "runs");
 requireTmpDb("test-session-read-errors");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -51,7 +51,7 @@ const get = async (path: string) => {
   return { status: res.status, text: await res.text() };
 };
 
-mkdirSync(join(process.env.ASH_RUNS_DIR!, taskId), { recursive: true });
+mkdirSync(join(process.env.NAVI_RUNS_DIR!, taskId), { recursive: true });
 let locked: string[] = [];
 try {
   // ① 还没落第一笔：空正文是这条会话此刻的真相，200 就对了。

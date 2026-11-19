@@ -10,7 +10,7 @@
 //  ⑧ 第 1 轮审查:挑完候选之后方向换了 ⇒ 一行都领不到(F2);扫描读到之后行换了领取者 ⇒ 不碰(F3);
 //    老行认结束(N1)
 //  ⑨ 领取之后出错、什么都没补上 ⇒ 拦着完成、回合里不再交、收口时退回(第 2 轮 1 / 第 4 轮 2);业务
-//    拒绝里的结果正文写着 ECONNRESET ⇒ 补捞认得出是 ash 应答过的,不退回、不补录(第 2 轮 2)
+//    拒绝里的结果正文写着 ECONNRESET ⇒ 补捞认得出是 navi 应答过的,不退回、不补录(第 2 轮 2)
 //  ⑩ 第 3 轮审查:并发的两次 pause 不重复交、不换回执号(1);明确放弃了的「交过没确认」不拦完成、
 //    审查等待那一侧同一份集合(2);不分执行器,带不回回执号的调用方不交(4)
 //  ⑪ 第 4 轮审查:MCP 拿到了返回不算 agent 收到 —— 不带回回执号,完成照样拦着(1);过多久都不在回合里
@@ -22,14 +22,14 @@ import { serve } from "@hono/node-server";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
-import { ASH_TURN_IDENTITY_ENV } from "@ash/shared/mcp";
+import { NAVI_TURN_IDENTITY_ENV } from "@navi/shared/mcp";
 import { db, monitors, now, pending, pendingOf, reviewInFlight, root, runs, scheduledMessages, tasks, teardown } from "./monitors-fixture.js";
 import { api, liveTurn, notices, onSelect, post, queuedResult, rowOf, sleep, taskOf } from "./monitor-turn-handoff-fixture.js";
 import {
   handMonitorResultsOnPause, returnOrphanTurnHandoffs, settleTurnHandoffs,
 } from "../src/monitor-turn-handoff.js";
 import { confirmHandoffs } from "../src/monitor-turn-ack.js";
-import { answeredMcpError, isUndeliveredMcpFailure } from "@ash/shared/mcp-delivery";
+import { answeredMcpError, isUndeliveredMcpFailure } from "@navi/shared/mcp-delivery";
 import { detachedPathsFor } from "../src/executors/detached.js";
 import { replayUndeliveredMcpCalls } from "../src/mcp-handoff.js";
 import { RUNS_DIR } from "../src/paths.js";
@@ -240,7 +240,7 @@ try {
     runs.releaseTurn(taskId, owner);
   }
 
-  // ── ⑨-2 业务拒绝里的结果正文写着 ECONNRESET ⇒ 补捞认得出是 ash 应答过的 ───────────────
+  // ── ⑨-2 业务拒绝里的结果正文写着 ECONNRESET ⇒ 补捞认得出是 navi 应答过的 ───────────────
   {
     const { taskId, token, owner, sessionId } = await liveTurn();
     const result = await queuedResult(taskId, "ECONNRESET while running remote command");
@@ -250,11 +250,11 @@ try {
     assert.equal(await confirmHandoffs(taskId, token, [body.monitorResultsReceipt]), 1);
     // MCP 端交给 agent 的那段话(`failWithMonitorResults` 的形状),agent 随后调了 pause_task、成功了。
     const rendered = answeredMcpError(409, "POST", `/tasks/${taskId}/complete`, `${body.error}\n\n${body.monitorResults}`);
-    assert.equal(isUndeliveredMcpFailure({ message: rendered }), false, "ash 应答过的拒绝不算没送达");
+    assert.equal(isUndeliveredMcpFailure({ message: rendered }), false, "navi 应答过的拒绝不算没送达");
     const turnStart = now();
     const out = detachedPathsFor(join(RUNS_DIR, taskId), sessionId, turnStart).out;
     const call = (useId: string, name: string) => JSON.stringify({ type: "assistant", message: { content: [
-      { type: "tool_use", id: useId, name: `mcp__ash__${name}`, input: { taskId, resumePrompt: "继续" } }] } });
+      { type: "tool_use", id: useId, name: `mcp__navi__${name}`, input: { taskId, resumePrompt: "继续" } }] } });
     const reply = (useId: string, isError: boolean, text: string) => JSON.stringify({ type: "user", message: { content: [
       { type: "tool_result", tool_use_id: useId, is_error: isError, content: text }] } });
     mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
@@ -337,8 +337,8 @@ try {
     const token = `turn-${id()}`;
     const server = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });
     await new Promise((resolve) => server.once("listening", resolve));
-    process.env.ASH_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    process.env[ASH_TURN_IDENTITY_ENV.turnToken] = token;
+    process.env.NAVI_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    process.env[NAVI_TURN_IDENTITY_ENV.turnToken] = token;
     const { taskId, owner } = await liveTurn({ token, agentType: "opencode" });
     const result = await queuedResult(taskId, "VIA_REAL_MCP");
     const handlers = new Map<string, (args: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>>();
@@ -372,10 +372,10 @@ try {
     const out = detachedPathsFor(join(RUNS_DIR, taskId), sessionId, turnStart).out;
     mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
     appendFileSync(out, [
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "c1", name: "mcp__ash__complete_task",
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "c1", name: "mcp__navi__complete_task",
         input: { taskId, monitorReceipt: handed!.hand } }] } }),
       JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "c1", is_error: true,
-        content: "连不上 ash server：fetch failed ECONNREFUSED" }] } }),
+        content: "连不上 navi server：fetch failed ECONNREFUSED" }] } }),
     ].join("\n") + "\n");
     assert.equal(await replayUndeliveredMcpCalls({ taskId, sessId: sessionId, turnStart, agentType: "claude" }), 1);
     assert.ok((await rowOf(result.id)).turnHandoff?.ackedAt, "补录的那次调用里带着的回执号照样认");
@@ -397,7 +397,7 @@ try {
       }
       return rows;
     });
-    const res = await post(`/tasks/${taskId}/pause`, token, { resumePrompt: "继续" }, { "x-ash-direction-token": "dir-A" });
+    const res = await post(`/tasks/${taskId}/pause`, token, { resumePrompt: "继续" }, { "x-navi-direction-token": "dir-A" });
     restore();
     assert.ok(steered, "方向是在资格那一问之后换的");
     const body = await res.json() as { paused?: boolean; monitorResults?: string };

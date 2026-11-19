@@ -67,7 +67,7 @@ export async function sendToLead(lead: Lead, text: string, opts: { steer?: boole
       }
       return { sent, interrupted, at: sent ? at : null };
     } catch (error) {
-      console.error(`[ash] team send(${lead.taskId}) failed:`, error);
+      console.error(`[navi] team send(${lead.taskId}) failed:`, error);
       return { sent: false, interrupted: false, at: null };
     }
   });

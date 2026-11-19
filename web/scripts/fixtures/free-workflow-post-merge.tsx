@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
 import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";
 
@@ -64,7 +64,7 @@ window.fetch = (input, init) => {
   if (!hit || (init?.method ?? "GET") !== "GET") return innerFetch(input, init);
   const [, taskId, what] = hit;
   if (what === "free-workflow") return json(states[taskId]);
-  if (what === "commits") return json({ branch: `ash/${taskId}`, commits: [] });
+  if (what === "commits") return json({ branch: `navi/${taskId}`, commits: [] });
   if (what === "diff") {
     return json({ available: true, sourceBranch: "main@11111111", targetBranch: "main@33333333", mergeBase: "11111111aaaaaaaa",
       diff: "", files: [], truncated: false, limitBytes: 1024 });
@@ -72,7 +72,7 @@ window.fetch = (input, init) => {
   if (what === "accept-gate") return json({ command: null, running: null, latest: null, basis: null });
   return json({ state: {
     taskId, kind: "staged", message: "改动还暂存在 main 的索引里，没有落成提交。", repoPath: "/repo",
-    targetBranch: "main", sourceBranch: `ash/${taskId}`, sourceBranchExists: true,
+    targetBranch: "main", sourceBranch: `navi/${taskId}`, sourceBranchExists: true,
     stagedFiles: ["src/a.ts"], dirtyFiles: [], canCommit: true, canRemerge: false,
   } });
 };

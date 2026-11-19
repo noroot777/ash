@@ -28,7 +28,7 @@ const worker = fileURLToPath(new URL("./accept-gate-process-worker.ts", import.m
 const runWorker = (mode: string, directory: string, allowFailure = false) => new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
   const child = spawn(process.execPath, ["--import", "tsx", worker, mode, directory], {
     stdio: ["ignore", "pipe", "pipe"], env: mode === "macos-flow" || mode === "macos-release" || mode === "macos-takeover"
-      ? { ...process.env, ASH_DB: join(directory, "ash.db"), ASH_RUNS_DIR: join(directory, "runs") } : process.env,
+      ? { ...process.env, NAVI_DB: join(directory, "ash.db"), NAVI_RUNS_DIR: join(directory, "runs") } : process.env,
     windowsHide: true,
   });
   let stdout = "";
@@ -39,7 +39,7 @@ const runWorker = (mode: string, directory: string, allowFailure = false) => new
   child.once("exit", code => code === 0 || allowFailure ? resolve({ code, stdout }) : reject(new Error(stderr || stdout || `worker exit ${code}`)));
 });
 
-const root = mkdtempSync(join(tmpdir(), "ash-gate-process-"));
+const root = mkdtempSync(join(tmpdir(), "navi-gate-process-"));
 const results: object[] = [];
 try {
   const isolated = gateBootstrapEnvironment({ PATH: "preserved", NODE_OPTIONS: "--require=preload.cjs",

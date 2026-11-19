@@ -17,7 +17,7 @@
 // 只打「起跑前撤回」的内存标记，不记账（`shiftAdmissionPending`）；过了放行那一关、在最后一道闸上才
 // 被撤回的，班次照常消费，只剩欠账这一份（turn-freeze.ts abortFrozen）。
 import { and, eq, sql } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 

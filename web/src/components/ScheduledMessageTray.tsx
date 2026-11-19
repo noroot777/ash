@@ -1,8 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { ScheduledMessage, TaskListItem } from "@ash/shared";
+import type { ScheduledMessage, TaskListItem } from "@navi/shared";
 import { CaretDown, CaretRight, Pulse } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
 import { monitorsBrief } from "../monitors/monitorTray.ts";
 import { MonitorTrayRow, type TrayMonitors } from "./MonitorTrayRow.tsx";
 import { ScheduledMessageRow, scheduledMessageLabel, SteerButton, WithdrawButton } from "./ScheduledMessageRow.tsx";

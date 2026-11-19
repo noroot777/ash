@@ -13,11 +13,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-file-raw-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-file-raw-"));
 const repo = join(stage, "repo");
 const work = join(stage, "work");
 const home = join(stage, "home");
-process.env.ASH_DB = join(stage, "ash.db");
+process.env.NAVI_DB = join(stage, "ash.db");
 // 家目录指到舞台里：⑦ 的「家目录里的成片」不碰真家目录
 process.env.HOME = home;
 process.env.USERPROFILE = home;

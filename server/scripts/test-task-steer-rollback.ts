@@ -16,9 +16,9 @@ import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-steer-rollback-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-steer-rollback-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const [{ db, dbClient, ensureSchema }, schema, runs, tickets, steer, directionState, epoch, status, util] =
   await Promise.all([

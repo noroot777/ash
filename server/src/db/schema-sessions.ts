@@ -91,7 +91,7 @@ export const sessions = sqliteTable("sessions", {
    *
    * 落库的理由只有一个:任务列表要在卡片上一眼看出「这个任务其实在干等」,而内存里那份
    * (`session-waiting.ts`)是转瞬状态、重启就没。读侧(`task-store.ts`)再叠一道
-   * `ended_at IS NULL` + 任务仍 running —— 于是 ash 被硬杀留下的残值不会永久挂在卡片上。
+   * `ended_at IS NULL` + 任务仍 running —— 于是 navi 被硬杀留下的残值不会永久挂在卡片上。
    */
   upstreamStalledSince: text("upstream_stalled_since"),
   /**
@@ -279,7 +279,7 @@ export const sessionTurns = sqliteTable(
      * null = 没被熔断过。
      *
      * 为什么判决非得存在进程之外(第 3 轮审查 F3,已实测):判决原先只活在进程内存里,而
-     * **detached 执行器活得过 server 重启**(`executors/detached.ts`,这是 ash 的既有能力)。
+     * **detached 执行器活得过 server 重启**(`executors/detached.ts`,这是 navi 的既有能力)。
      * 于是:熔断已经作出、终止请求还没兑现时 server 退出 → 重启接管那个仍然存活的进程 →
      * 新进程的 Map 是空的 → 上游恰好恢复并正常答完,这一轮就按 `completed` 结算、任务落
      * `done`,看门狗说过的话一句都没兑现。退出码重建不出这个事实(被我们杀掉的进程多半 exit 0)。

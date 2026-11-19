@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or } from "drizzle-orm";
-import type { ChatContextStatus, ChatMessage } from "@ash/shared/chat";
+import type { ChatContextStatus, ChatMessage } from "@navi/shared/chat";
 import { db } from "../db/index.js";
 import { chatContextEntries as entries, chatContextStates as states, chatContextResets as resets, chatMessages, chatRooms, chatSummaries as summaries } from "../db/schema.js";
 import { id, now } from "../util.js";

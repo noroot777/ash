@@ -36,6 +36,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSy
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { readEnv } from "../../../scripts/env.mjs";
 import { compareVersions, latestVersion, parseItems, previousCommit, renderAppcast, renderInformationalItem, renderItem } from "./appcast.mjs";
 import { commitLink, LINK_COMMIT_PREFIX } from "./download-link.mjs";
 import { GitHub, NO_TOKEN_HINT, resolveToken } from "./github.mjs";
@@ -44,10 +45,10 @@ import { ensureSparkle } from "./sparkle.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAC = resolve(HERE, "..");
 const REPO = resolve(MAC, "../..");
-// ASH_MAC_RELEASE_CONFIG 只给回归测试换一份发版配置（配合 github.mjs 的 ASH_MAC_GITHUB_API 演练正式发版）。
-const CONFIG_PATH = process.env.ASH_MAC_RELEASE_CONFIG || join(MAC, "release.json");
-// ASH_MAC_README 同理：换掉发完要改下载链接的那份 README（测试指向一个临时仓库）。
-const README = process.env.ASH_MAC_README || join(REPO, "README.md");
+// NAVI_MAC_RELEASE_CONFIG 只给回归测试换一份发版配置（配合 github.mjs 的 NAVI_MAC_GITHUB_API 演练正式发版）。
+const CONFIG_PATH = readEnv(process.env, "NAVI_MAC_RELEASE_CONFIG") || join(MAC, "release.json");
+// NAVI_MAC_README 同理：换掉发完要改下载链接的那份 README（测试指向一个临时仓库）。
+const README = readEnv(process.env, "NAVI_MAC_README") || join(REPO, "README.md");
 
 const say = (line) => process.stdout.write(`${line}\n`);
 class Stop extends Error {}
@@ -178,7 +179,7 @@ async function main() {
   if (!local) {
     if (info.SUPublicEDKey !== config.publicKey) die("app 里的公钥和 release.json 的 publicKey 不一样：正式发版只能用 release.json 那一把。");
     const feed = feedOf(config);
-    if (info.SUFeedURL !== feed) die(`app 的更新源是 ${info.SUFeedURL}，不是 ${feed}：构建时是不是设了 ASH_MAC_FEED_URL？`);
+    if (info.SUFeedURL !== feed) die(`app 的更新源是 ${info.SUFeedURL}，不是 ${feed}：构建时是不是设了 NAVI_MAC_FEED_URL？`);
   }
 
   // ── 3. appcast 那一头 ──
@@ -191,8 +192,8 @@ async function main() {
   const items = parseItems(current);
   const latest = latestVersion(items);
   const tag = `${local ? "v" : config.tagPrefix}${shortVersion}-${version}`;
-  // ASH_MAC_RELEASE_ARTIFACTS 只给回归测试换地方，免得演练的包落进 build/releases。
-  const artifacts = join(process.env.ASH_MAC_RELEASE_ARTIFACTS || join(MAC, "build", "releases"), tag);
+  // NAVI_MAC_RELEASE_ARTIFACTS 只给回归测试换地方，免得演练的包落进 build/releases。
+  const artifacts = join(readEnv(process.env, "NAVI_MAC_RELEASE_ARTIFACTS") || join(MAC, "build", "releases"), tag);
   const dmg = join(artifacts, `Navi-${shortVersion}-${version}.dmg`);
   const source = `${dmg}.source`;
   // appcast 里已经有这一版：只有正式发版、上次签进去的那个包本地还在时才往下走（签名对上了只补收尾）。
@@ -350,7 +351,7 @@ async function publishLegacyFeed({ github, config, local, keyArgs, tool, notes, 
     version, shortVersion, link: page, pubDate: new Date(),
     minimumSystemVersion: info.LSMinimumSystemVersion || "14.0",
     notes: `<p>Ash 改名为 Navi。新版换了应用标识，没法从 Ash 里直接更新：点「了解更多」下载 Navi，拖进「应用程序」后打开一次，`
-      + "它会接过 Ash 的设置、数据和登录项，并把旧的 Ash.app 移到废纸篓。</p>" + notes.html,
+      + "它会接过 Navi 的设置、数据和登录项，并把旧的 Ash.app 移到废纸篓。</p>" + notes.html,
   });
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, renderAppcast({ title: "Navi for macOS", link: `https://github.com/${config.releaseRepo}`, items: [item] }));

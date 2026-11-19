@@ -124,7 +124,7 @@ export async function noteReclaimDebt(debt: DebtInput & { error?: unknown }): Pr
     return true;
   } catch (error) {
     // 连责任都记不下来:那就只剩日志了,但至少把 pid 打全,人工还能收。
-    console.error(`[ash] 回收责任落库失败 monitor=${debt.monitorId} pid=${debt.pid}:`, error);
+    console.error(`[navi] 回收责任落库失败 monitor=${debt.monitorId} pid=${debt.pid}:`, error);
     return false;
   }
 }
@@ -166,7 +166,7 @@ export async function closeReclaimDebt(monitorId: string, note: string): Promise
       .where(and(eq(monitorReclaimDebts.monitorId, monitorId), isNull(monitorReclaimDebts.closedAt)));
     return true;
   } catch (err) {
-    console.error(`[ash] 回收责任收档失败 ${monitorId}（行还在，下一遍清扫会把戳补上）:`, err);
+    console.error(`[navi] 回收责任收档失败 ${monitorId}（行还在，下一遍清扫会把戳补上）:`, err);
     scheduleReclaimRetry(monitorId);
     return false;
   }
@@ -240,10 +240,10 @@ async function ensureIdentityArchived(
       .from(monitorReclaimDebts)
       .where(eq(monitorReclaimDebts.monitorId, debt.monitorId))).at(0);
     if (after) return "written";
-    console.error(`[ash] 哨兵身份留档写进去了又读不回来 monitor=${debt.monitorId} pid=${debt.pid}`);
+    console.error(`[navi] 哨兵身份留档写进去了又读不回来 monitor=${debt.monitorId} pid=${debt.pid}`);
     return "failed";
   } catch (err) {
-    console.error(`[ash] 哨兵身份留档失败 monitor=${debt.monitorId} pid=${debt.pid}:`, err);
+    console.error(`[navi] 哨兵身份留档失败 monitor=${debt.monitorId} pid=${debt.pid}:`, err);
     return "failed";
   }
 }
@@ -276,7 +276,7 @@ export type ReclaimTicket = {
 };
 
 /**
- * 原进程**最晚**在哪一刻之前已经起来 —— 手里 ash 自己落盘的绝对时刻里取最早的那个:spawn
+ * 原进程**最晚**在哪一刻之前已经起来 —— 手里 navi 自己落盘的绝对时刻里取最早的那个:spawn
  * 返回那一刻的锚,以及债行的创建时刻(这个号是 spawn 返回的,债一定记在它之后)。都是纪元
  * 时刻,不吃 ps 那串不带时区的展示时间(见 evidence 的 `rootSuperseded`)。
  */
@@ -355,7 +355,7 @@ export type ReclaimOutcome =
  * **但只有那一问签得出身份**(第 18 轮审查 F1):时间锚(身份边条或债上那一份)现在只剩两个
  * 用途 —— 留在债上当这个进程最后的线索,以及在重启认领那一侧投否决票。它**不许**再把启动
  * 时刻写进 `pid_started_at`:那一列是 `reclaimEvidence` 第 ② 步的归属凭证,猜出来的值在那里
- * 跟 ash 自己 spawn 时读来的长得一模一样。
+ * 跟 navi 自己 spawn 时读来的长得一模一样。
  */
 async function completeIdentity(m: {
   id: string; pid: number; pidStartedAt: string | null; command: string;
@@ -378,7 +378,7 @@ async function completeIdentity(m: {
   // **只有「已证明属于这次创建」那一档签得出身份**(第 18 轮审查 F1)。上一版把展示文本那一档
   // (`suspected`)、问不出来、以及存量行一律当成「没拿到反证」,放它们走时间锚 + 命令包含把
   // 启动时刻补进 `pid_started_at` —— 而 `reclaimEvidence` 第 ② 步拿这一列当归属凭证,分不出
-  // 这个值是 ash 自己 spawn 那一刻读来的还是事后猜的,于是一个只在别的变量值里抄着记号文字
+  // 这个值是 navi 自己 spawn 那一刻读来的还是事后猜的,于是一个只在别的变量值里抄着记号文字
   // 的陌生进程被真实的停止链杀掉(`identity-ambiguous.log`)。
   //
   // 签不出就照旧落在 `unverifiable` 档:**记责任、留锚、留边条、一刀不发**。锚和边条都还在,
@@ -391,7 +391,7 @@ async function completeIdentity(m: {
     await Promise.all([
       db.update(monitors).set({ pidStartedAt: startedAt })
         .where(and(eq(monitors.id, m.id), eq(monitors.pid, m.pid), isNull(monitors.pidStartedAt)))
-        .catch((e) => console.error(`[ash] 哨兵身份补全写不进库 monitor=${m.id}:`, e)),
+        .catch((e) => console.error(`[navi] 哨兵身份补全写不进库 monitor=${m.id}:`, e)),
       db.update(monitorReclaimDebts).set({ pidStartedAt: startedAt })
         .where(and(eq(monitorReclaimDebts.monitorId, m.id), isNull(monitorReclaimDebts.pidStartedAt)))
         .catch(() => { /* 这一笔还没落盘,下面记账时会带上补全后的身份 */ }),
@@ -405,7 +405,7 @@ async function completeIdentity(m: {
  *
  * 上一版这里一句 `if (pid === null) return { state: "closed" }` 把两件事混成了一件:claude 的
  * 投影行(真的没有进程、也没有责任)和**创建意图行** —— 身份先落库、进程后起、pid 回填(见
- * monitor-create.ts 文件头),ash 恰好死在中间时库里剩下的就是这个样子。于是点停、归档、删除
+ * monitor-create.ts 文件头),navi 恰好死在中间时库里剩下的就是这个样子。于是点停、归档、删除
  * 走到这里都拿到「没什么要负责的」,而那条命令可能正在跑(审查实测:任务行和哨兵行都删干净
  * 了、债表为空,诊断进程仍然活着)。
  *
@@ -477,7 +477,7 @@ export async function reclaimMonitorProcess(
     // (`risk.log:33`)。「线索追空」是资源观测,「身份在盘上」是持久记录 —— 两件事。
     // 调用方按自己的后果决定:销毁身份那条路整笔中止,普通收尾出声 + 继续重试落盘。
     if (await ensureIdentityArchived(debt, stateNote(state)) !== "failed") return { state: "closed" };
-    console.error(`[ash] 收档记录落不下来 monitor=${m.id} pid=${pid}（${stateNote(state)}）`);
+    console.error(`[navi] 收档记录落不下来 monitor=${m.id} pid=${pid}（${stateNote(state)}）`);
     return { state: "unaccounted", debt };
   }
   const accounted = await noteReclaimDebt(debt);
@@ -532,7 +532,7 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
     if (traceless) {
       if (await ensureIdentityArchived(debt, stateNote(traceless)) !== "failed") return "closed";
       console.error(
-        `[ash] 线索已追空,但最后一份身份留不下来 monitor=${debt.monitorId} pid=${debt.pid}`
+        `[navi] 线索已追空,但最后一份身份留不下来 monitor=${debt.monitorId} pid=${debt.pid}`
         + ` 命令：${debt.command} —— 继续重试落盘`,
       );
       scheduleReclaimPersist(debt);
@@ -543,7 +543,7 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
       return "owed";
     }
     console.error(
-      `[ash] **回收责任落不下来、退出也确认不了** monitor=${debt.monitorId} pid=${debt.pid}`
+      `[navi] **回收责任落不下来、退出也确认不了** monitor=${debt.monitorId} pid=${debt.pid}`
       + ` 命令：${debt.command}（${debt.reason}）—— 继续重试落盘`,
     );
     scheduleReclaimPersist(debt);
@@ -556,7 +556,7 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
     return "closed";
   }
   console.error(
-    `[ash] 哨兵进程还没确认退出,回收责任留在表上 monitor=${ticket.monitorId} pid=${ticket.pid}`,
+    `[navi] 哨兵进程还没确认退出,回收责任留在表上 monitor=${ticket.monitorId} pid=${ticket.pid}`,
   );
   scheduleReclaimRetry(ticket.monitorId);
   return "owed";
@@ -583,7 +583,7 @@ function scheduleReclaimPersist(debt: DebtInput, step = 0): void {
         return;
       }
       if (await noteReclaimDebt(debt)) {
-        console.error(`[ash] 回收责任补记成功 monitor=${debt.monitorId} pid=${debt.pid}`);
+        console.error(`[navi] 回收责任补记成功 monitor=${debt.monitorId} pid=${debt.pid}`);
         scheduleReclaimRetry(debt.monitorId);
         return;
       }
@@ -646,7 +646,7 @@ async function settleDebt(monitorId: string): Promise<boolean> {
     const traceless = await confirmTraceless(debt.pid, debt.pidStartedAt, 1_000, unit);
     if (traceless) {
       await closeDebtAndAnchor(monitorId, stateNote(traceless));
-      console.error(`[ash] 回收责任已收档 monitor=${monitorId} pid=${debt.pid}（补杀成功,线索已空）`);
+      console.error(`[navi] 回收责任已收档 monitor=${monitorId} pid=${debt.pid}（补杀成功,线索已空）`);
       return true;
     }
   }
@@ -682,12 +682,12 @@ export async function sweepMonitorReclaimDebts(): Promise<{ settled: number; lef
     try {
       if (await settleDebt(row.monitorId)) { settled += 1; continue; }
       console.error(
-        `[ash] 开机仍有收不掉的哨兵进程 pid=${row.pid} monitor=${row.monitorId} task=${row.taskId}`
+        `[navi] 开机仍有收不掉的哨兵进程 pid=${row.pid} monitor=${row.monitorId} task=${row.taskId}`
         + ` 命令：${row.command}（${row.reason}）`,
       );
       scheduleReclaimRetry(row.monitorId);
     } catch (error) {
-      console.error(`[ash] 清扫回收责任失败 monitor=${row.monitorId}:`, error);
+      console.error(`[navi] 清扫回收责任失败 monitor=${row.monitorId}:`, error);
     }
   }
   return { settled, left: rows.length - settled };

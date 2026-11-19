@@ -12,9 +12,9 @@
 //   ⑧ 独立的续跑不被当成重复记录丢掉：同一会话十几秒内又续跑一次、几条会话同一毫秒起续跑，开着页面
 //      看都各有起因；真正的重复（刷新快照与直播各到一份同一条记录）仍只留一份。
 import assert from "node:assert/strict";
-import type { Session } from "@ash/shared";
-import { appendMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
-import { RESUME_REASONS, type ResumeReason, type SystemResume } from "@ash/shared/system-resume";
+import type { Session } from "@navi/shared";
+import { appendMonitorWake, type MonitorWakeEvent } from "@navi/shared/monitor-wake";
+import { RESUME_REASONS, type ResumeReason, type SystemResume } from "@navi/shared/system-resume";
 import { readSource } from "../../scripts/read-source.mjs";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";

@@ -4,9 +4,9 @@
 //
 // 排法照「排在某任务之后」那一份（lib/queueAfter.ts）：全部列出不过滤；能选的在上，右边灰字写它此刻到哪一步了；
 // 不能选的置灰沉底，右边灰字写为什么。已经选进来的不再列。
-import type { Group } from "@ash/shared";
-import type { PrerequisiteCandidate } from "@ash/shared/prerequisites";
-import { prerequisiteStepText } from "@ash/shared/prerequisites";
+import type { Group } from "@navi/shared";
+import type { PrerequisiteCandidate } from "@navi/shared/prerequisites";
+import { prerequisiteStepText } from "@navi/shared/prerequisites";
 import type { DropdownOption } from "../components/Dropdown.tsx";
 
 export function prerequisiteOptions(candidates: PrerequisiteCandidate[], groups: Group[], picked: string[] = []): DropdownOption[] {

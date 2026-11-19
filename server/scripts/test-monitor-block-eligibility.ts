@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { neverExitsOnItsOwn, neverExitsVerdict } from "@ash/shared/command-never-exits";
+import { neverExitsOnItsOwn, neverExitsVerdict } from "@navi/shared/command-never-exits";
 import { readSource } from "../../scripts/read-source.mjs";
 import { HERE, root, startMonitor, stopMonitor, makeTask, teardown } from "./monitors-fixture.js";
 import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
@@ -397,8 +397,8 @@ const judged = (command: string, what: string, why: string) =>
     // 新一轮审查 F1 实测的那三条（真 shell 里分别退出 0 / 1 / 0）。
     "while true; do printf 'DONE\\n'; done | head -n 1",
     "set -e; while true; do false; done",
-    `tail -f ${join(root, "definitely-missing-ash-review")}; printf 'DONE\\n'`,
-    "tail -f definitely-missing-ash-review",               // 相对路径按这条哨兵的工作目录解析
+    `tail -f ${join(root, "definitely-missing-navi-review")}; printf 'DONE\\n'`,
+    "tail -f definitely-missing-navi-review",               // 相对路径按这条哨兵的工作目录解析
     // 新一轮审查 F1 实测的那几条:前提谁都核不了 ⇒ 只配做提示（见 ⑤b）。
     "tail -f $LOG",
     "tail -f *.log",
@@ -442,7 +442,7 @@ const judged = (command: string, what: string, why: string) =>
   // **一个前提都不压**的那一档照旧 409 —— 闸剩下的牙全在这里,少了这一组上面那一整节就是
   // 「把闸拆了」。判据是「这边自己证明得出」,不是「那个文件在不在」（后者没人核得了）。
   for (const [command, why] of [
-    ["tail -F definitely-missing-ash-review", "`-F` 没了也一直重试 ⇒ 不压前提"],
+    ["tail -F definitely-missing-navi-review", "`-F` 没了也一直重试 ⇒ 不压前提"],
     ["tail -F really-here.log", "`-F` 指着真在的文件也一样 ⇒ 不压前提"],
     ["while true; do :; done", "恒真循环什么都不要"],
     ["until false; do :; done", "同上"],
@@ -501,7 +501,7 @@ if (IS_WINDOWS) {
     );
 
   const taskId = await makeTask();
-  const missing = join(root, "definitely-missing-ash-review");
+  const missing = join(root, "definitely-missing-navi-review");
   // 这一节的 `rm` 用例**真的会删文件**,而每条命令要跑两趟(真 shell 一趟、创建闸一趟)——
   // 所以每趟之前重建一次,不然第二趟核的就不是同一个初始状态（审查那份探针也是这么做的）。
   const reseed = (): void => {
@@ -541,7 +541,7 @@ if (IS_WINDOWS) {
     "while true; do eval 'break'; done; printf 'DONE\\n'",
     "set -n; while true; do :; done",
     "while true; do kill -TERM $$; done",
-    "PATH=/definitely-missing-ash-review; tail -F /dev/null",
+    "PATH=/definitely-missing-navi-review; tail -F /dev/null",
   ]) {
     reseed();
     await measured(command, true);

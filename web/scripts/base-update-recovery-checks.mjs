@@ -51,13 +51,13 @@ export function acceptanceDesk(page, fixtureUrl) {
 }
 
 // 改合入目标：菜单里点一条，发 `POST merge-target {branch, fingerprint}`，指纹是**打开菜单那一刻**的。
-// 任务分支（ash/ harness/ 前缀）点下去只在层里出警告，要再点「改到这里」才发。
+// 任务分支（navi/ harness/ 前缀）点下去只在层里出警告，要再点「改到这里」才发。
 export async function changeTarget(d, task, branch) {
   const { fingerprint } = (await d.plan(task)).task;
   await d.openMenu();
   const sent = d.posted("/merge-target");
   await d.option(branch).click();
-  if (/^(ash|harness)\//.test(branch)) {
+  if (/^(navi|harness)\//.test(branch)) {
     await d.menu.getByRole("status").filter({ hasText: "这是一条任务分支" }).waitFor({ state: "visible" });
     await d.button(d.menu, "改到这里").click();
   }
@@ -153,7 +153,7 @@ export async function checkManualBaseRecovery(page, fixtureUrl, checkpoint = asy
     ensure(await d.option("main").getAttribute("aria-checked") === "true", "menu must mark the current target");
     await page.keyboard.press("Escape");
     await d.menu.waitFor({ state: "detached" });
-    await changeTarget(d, task, `ash/${task.replace("-child", "-parent").slice(0, 8)}`);
+    await changeTarget(d, task, `navi/${task.replace("-child", "-parent").slice(0, 8)}`);
   }
 }
 

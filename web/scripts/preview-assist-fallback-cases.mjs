@@ -1,4 +1,4 @@
-// 「AI 协助」所有权裁决的**降级路**回归：没有 Web Locks 的环境（ash 常开在裸 http 的局域网
+// 「AI 协助」所有权裁决的**降级路**回归：没有 Web Locks 的环境（navi 常开在裸 http 的局域网
 // 地址上，那不是安全上下文）只能靠跨页点名，于是这一整档都得另开 context 才测得着。
 //
 // 这里装 ⑭–⑰ 四组（⑬ 及之前那些共用主 context 的用例在 test-preview-assist-ui.mjs 里）：
@@ -16,7 +16,7 @@ import {
 } from "./preview-assist-shared.mjs";
 
 export async function fallbackArbitrationCases({ browser, origin, caseId }) {
-  // ⑭ 没有 Web Locks 的那一档（裸 http 的局域网地址不是安全上下文，ash 常这么开）：只能点名，
+  // ⑭ 没有 Web Locks 的那一档（裸 http 的局域网地址不是安全上下文，navi 常这么开）：只能点名，
   //    于是「暂且算我的」必须可撤回 —— 正主的应答迟到，晚过副本的 300ms 静默超时。
   const lanContext = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
   await lanContext.addInitScript(() => {

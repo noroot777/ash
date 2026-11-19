@@ -6,7 +6,7 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { resizeViewport } from "./wait-until.mjs";
 
 const web = await startWebServer();
-const artifacts = await mkdtemp(join(tmpdir(), "ash-conversation-fork-"));
+const artifacts = await mkdtemp(join(tmpdir(), "navi-conversation-fork-"));
 let browser;
 try {
   browser = await launchChrome();

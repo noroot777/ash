@@ -1,4 +1,4 @@
-import type { NativeAgentActivity } from "@ash/shared";
+import type { NativeAgentActivity } from "@navi/shared";
 import { appendExecutionEvent } from "../lib/executionTrace.ts";
 import { eventSplitAt } from "./conversationSegments.ts";
 import type { AgentContentSegment } from "./conversationModel.ts";

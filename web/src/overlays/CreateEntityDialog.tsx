@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { GroupMode } from "@ash/shared";
+import type { GroupMode } from "@navi/shared";
 import { StackPlus } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 

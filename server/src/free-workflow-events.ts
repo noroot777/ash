@@ -1,4 +1,4 @@
-import type { FreeWorkflowExecutionStatus } from "@ash/shared";
+import type { FreeWorkflowExecutionStatus } from "@navi/shared";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -75,7 +75,7 @@ export function createExecutionCloser(
       await finishFreeTaskExecution(executionEventId, intended.status, intended.endedAt);
       finished = true;
     } catch (error) {
-      console.warn(`[ash] failed to record free workflow execution end for ${taskId}:`, error);
+      console.warn(`[navi] failed to record free workflow execution end for ${taskId}:`, error);
     }
   };
 }

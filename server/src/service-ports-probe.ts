@@ -11,7 +11,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { promisify } from "node:util";
-import { envNameGenerations } from "@ash/shared/env-names";
+import { envNameGenerations } from "@navi/shared/env-names";
 import { IS_WINDOWS } from "./platform.js";
 import { HAS_PROC, LSOF_PATH, PS_PATH, processAlive, readProcessTableSync } from "./terminal-process-tree.js";
 
@@ -249,12 +249,12 @@ async function processCwd(pid: number, timeoutMs: number): Promise<string | null
  * 为什么要单独问这两样:记号那一问(`readLineage`)在 macOS 上有一处天生的盲区 —— `ps -E`
  * 分不出「这份环境本来就是空的」和「这份环境不给你看」,两种都只打出一行光杆命令。早先据
  * 此断言「读不到环境的必然是别人家的号」,被自由审查用一个同用户、`env:{}` + setsid 的工人
- * 当场证伪(uid 跟 ash 相同、PPID=1,`ps -E` 一个变量都不打),于是那个工人被当成陌生人跳
+ * 当场证伪(uid 跟 navi 相同、PPID=1,`ps -E` 一个变量都不打),于是那个工人被当成陌生人跳
  * 过,停止报了「已停止」而它还在跑。
  *
  * 补救不能靠猜环境,得换**跟环境无关**的两条事实先把候选圈小:
  *
- *  · `uid`   —— 子进程继承属主。属主跟 ash 不同的号不可能是这次启动直接创造的;
+ *  · `uid`   —— 子进程继承属主。属主跟 navi 不同的号不可能是这次启动直接创造的;
  *  · `ageMs` —— 这次启动之前就活着的号不可能带这次的记号:那枚记号是启动时现生成的,它
  *               那会儿还不存在,一个已经在跑的进程也无从把它塞进自己的环境。
  *
@@ -425,7 +425,7 @@ export async function readProcessCwd(
  * 一个号跟这次启动的关系。**两档「核不上」是分开的** —— 它们的成因完全不同,给用户的
  * 说法也不该一样:
  *
- *  · `unmarked`   —— 环境读出来了,里面**一枚 ash 启动记号都没有**。它不是「不是这次的」的
+ *  · `unmarked`   —— 环境读出来了,里面**一枚 navi 启动记号都没有**。它不是「不是这次的」的
  *    证明:启动脚本完全可以给自己 fork 出去的工人现搭一份环境(`spawn(..., {env:{PATH,…}})`),
  *    那个号是这次启动创造的,只是记号没跟过去(第 2 轮自由审查 F2 真实复现)。端口那一档
  *    把它跟 `stranger` 同等处理(都是「别动它」),启动闭包那一档必须分开 —— 一个是否证,
@@ -436,7 +436,7 @@ export async function readProcessCwd(
  *
  * 两档都不动它,也都不许折叠成「不在了」。
  *
- *  · `stranger`   —— 环境读出来了,里面带着**另一次** ash 启动的记号。那枚号码确实是 ash 生成
+ *  · `stranger`   —— 环境读出来了,里面带着**另一次** navi 启动的记号。那枚号码确实是 navi 生成
  *    的,但**环境是可复制的**:启动脚本把上一次启动时存下的环境原样拿来派工人,这个号就带着
  *    旧记号、却确凿是这次创造的(第 4 轮自由审查真实复现)。所以它跟 `unmarked` 一样**只是
  *    没有证据,不是反证** —— 端口那一档据它拒绝动手(没有杀它的凭据),启动闭包那一档据它判
@@ -627,7 +627,7 @@ function lineageFromProc(pids: number[], token: string): Map<number, Lineage> {
  * 跟这个号同进程组的全部号(含它自己)。**同时交接这份清单全不全** —— 退回「只认它自己」
  * 有两种成因,不能都当成「它就是光杆一个」:
  *
- *  · 组号是 0/1 或者就是 ash 自己那组 → 这是**有意**不枚举:那不是血缘,组里坐着一堆无关
+ *  · 组号是 0/1 或者就是 navi 自己那组 → 这是**有意**不枚举:那不是血缘,组里坐着一堆无关
  *    进程(文件头)。清单按设计就到这儿,算全的;
  *  · 进程表问不出来(ps 失灵)→ 清单**不全**,「这次启动还有谁」这一问没答上来。把它当成
  *    「没有别人」,同组那个工人就连进不了 leftovers,端口一空就被判停净(第 5 轮审查发现 1)。
@@ -653,7 +653,7 @@ export function groupMembers(pid: number, pgid: number, selfPgid: number | null)
  * `complete=false` 同义:进程表没答上来,这份清单不全,不许拿它的「没人剩下」当证据。
  */
 export function membersOfGroup(pgid: number, selfPgid: number | null): { members: number[]; complete: boolean } {
-  // 0/1 号组和 ash 自己那组按设计不枚举(组不是血缘,见总纲文件头) —— 清单到这儿就是全的。
+  // 0/1 号组和 navi 自己那组按设计不枚举(组不是血缘,见总纲文件头) —— 清单到这儿就是全的。
   if (pgid <= 1 || pgid === selfPgid) return { members: [], complete: true };
   const table = readProcessTableSync();
   if (!table) return { members: [], complete: false };

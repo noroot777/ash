@@ -14,7 +14,7 @@ import { IS_MAC } from "./platform.js";
 //
 // What did work: stopTask's normal killChild path killed the agent process;
 // SkyComputerUseService then exited on its own, matching its
-// `shouldTerminateWhenNoClientsRemain` behavior. Ash therefore only kills
+// `shouldTerminateWhenNoClientsRemain` behavior. Navi therefore only kills
 // processes it spawned and relies on the CUA service to notice that its client
 // disappeared. This module intentionally contains no automatic cleanup hook.
 //

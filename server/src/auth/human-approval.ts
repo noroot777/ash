@@ -1,7 +1,7 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto";
 import { configuredHumanApprovalKey, humanApprovalPublicKeyFile } from "./human-approval-key.js";
-import { FROZEN_HUMAN_APPROVAL_PURPOSE } from "@ash/shared/legacy-names";
+import { FROZEN_HUMAN_APPROVAL_PURPOSE } from "@navi/shared/legacy-names";
 export { humanApprovalPublicKeyFile } from "./human-approval-key.js";
 
 export type HumanApprovalScope = {
@@ -74,7 +74,7 @@ export class HumanApprovalAuthority {
     this.keyFingerprint = key
       ? createHash("sha256").update(key.export({ type: "spki", format: "der" })).digest("hex")
       : null;
-    console.warn(`[ash] 人工授权信任锚变化：${previous ?? "关闭"} → ${this.keyFingerprint ?? "关闭"}；${sourceError ?? (key ? "公钥已加载" : publicKey ? "公钥格式或算法无效" : "未配置公钥")}；在途申请已失效`);
+    console.warn(`[navi] 人工授权信任锚变化：${previous ?? "关闭"} → ${this.keyFingerprint ?? "关闭"}；${sourceError ?? (key ? "公钥已加载" : publicKey ? "公钥格式或算法无效" : "未配置公钥")}；在途申请已失效`);
   }
 
   issue(scope: HumanApprovalScope, taskTitle: string): HumanApprovalChallenge | null {

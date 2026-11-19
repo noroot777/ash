@@ -1,4 +1,4 @@
-import type { AgentType, SkillEntry, SkillSource } from "@ash/shared";
+import type { AgentType, SkillEntry, SkillSource } from "@navi/shared";
 
 // `/` 补全的纯逻辑:哪些候选、按什么顺序、命中在第几位。
 // 从 useSkills.ts 拆出来是为了能被 node 直接跑(那份带 react hooks,拉不进测试脚本)。
@@ -8,8 +8,8 @@ export interface SlashItem {
   command: string;
   label: string;
   hint?: string;
-  /** ash 自己的叫人命令(/讨论、/派)vs CLI 已装的技能。 */
-  kind: "ash" | "native" | "skill";
+  /** navi 自己的叫人命令(/讨论、/派)vs CLI 已装的技能。 */
+  kind: "navi" | "native" | "skill";
   source?: SkillSource;
   /** 同一份技能还装在哪些别的 CLI 上(按物理路径认)。 */
   alsoIn?: AgentType[];
@@ -101,20 +101,20 @@ export function toSlashItems(skills: SkillEntry[]): SlashItem[] {
 }
 
 /**
- * 合成候选:**ash 自己的命令永远排在最前**。它们改变的是「谁来干这件事」
+ * 合成候选:**navi 自己的命令永远排在最前**。它们改变的是「谁来干这件事」
  * (派生一个团队/一场讨论),技能只是给当前这轮加一句提示词 —— 前者点错了代价大得多,
  * 不能让某个 CLI 装了个叫 team 的技能就把它挤下去。命中位置排序只在各自组内进行。
  *
- * 斜杠写在已有正文后面时,原生命令不给:它得是整条消息的开头才生效,句中补一个进去 CLI 不认。ash 的命令
+ * 斜杠写在已有正文后面时,原生命令不给:它得是整条消息的开头才生效,句中补一个进去 CLI 不认。navi 的命令
  * 照给——选中它只是叫人,命令本身从正文里拿掉(removeSlashToken),写在哪儿都一样。
  */
-export function mergeSlashItems(ash: SlashItem[], skills: SkillEntry[], query: SlashQuery | null): SlashItem[] {
+export function mergeSlashItems(navi: SlashItem[], skills: SkillEntry[], query: SlashQuery | null): SlashItem[] {
   if (!query) return [];
   const { token, leading } = query;
   const items = toSlashItems(skills);
   const skillItems = rankByMatch(items.filter((item) => item.kind === "skill"), token);
   const natives = leading ? rankByMatch(items.filter((item) => item.kind === "native"), token) : [];
-  return [...rankByMatch(ash, token), ...natives, ...skillItems];
+  return [...rankByMatch(navi, token), ...natives, ...skillItems];
 }
 
 /**

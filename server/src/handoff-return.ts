@@ -1,6 +1,6 @@
 // 移回的**授权**一侧:哪台机器有资格把一条任务免审批地移回本机,落回哪个项目。
 // 「该往哪个地址移回」是另一件事,在 handoff-return-address.ts。
-import type { HandoffPingProject, HandoffReturnGrant, TaskHandoff } from "@ash/shared";
+import type { HandoffPingProject, HandoffReturnGrant, TaskHandoff } from "@navi/shared";
 import { isAdminActor, type Actor } from "./auth/context.js";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";

@@ -2,21 +2,21 @@
 // 导出/导入/HTTP 面三处共用;业务流程见 handoff.ts 顶部注释)。
 import { isAbsolute } from "node:path";
 import type { HandoffGateRun } from "./handoff-accept-gate.js";
-import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@ash/shared";
+import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@navi/shared";
 import type { HandoffWaitOrigins } from "./handoff-wait.js";
 import type { FreeReviewReservationSource } from "./db/schema-free-workflow.js";
 
 export class HandoffError extends Error {
   // 导入侧专用:true = 这次失败**不证明**本机没留下半截产物(补偿回滚自身失败)。
-  // HTTP 面据此决定应答上还带不带「可证明业务拒绝」的 ash 标记——不带,源机就会
+  // HTTP 面据此决定应答上还带不带「可证明业务拒绝」的 navi 标记——不带,源机就会
   // 按「送达未知」保留 pending,不敢在本机重新起跑。
   unsettled = false;
   // network=true:请求没送达或应答没读全 —— 对端**可能已经**处理成功,调用方不能
   // 当「确认失败」处理(exportHandoff 靠它决定保留 pending 标记还是回滚)。
-  // remoteStatus / remoteAsh 只由 fetchPeer 填：兼容逻辑据此区分「旧版没有这个路由」
+  // remoteStatus / remoteNavi 只由 fetchPeer 填：兼容逻辑据此区分「旧版没有这个路由」
   // 和「新版路由明确返回业务错误」，避免靠错误文案做宽泛匹配。
   remoteStatus: number | null = null;
-  remoteAsh = false;
+  remoteNavi = false;
   // 机器可读的原因码,随应答体的 `code` 字段发到前端(定义在 shared/src/handoff.ts)。
   // 前端据此把「缺对端账号 key」渲染成一个当场能填的输入框,而不是一句让人去别处找的话。
   // 出站链路上它还要**穿透一跳**:对端 401 的 code 由 fetchPeer 原样挂回来(见那里)。
@@ -224,7 +224,7 @@ export interface HandoffSessionRow {
 export interface HandoffManifest {
   version: 1;
   sourceHost: string;
-  // 源 ash 的监听端口。接收机只把它和真实 TCP 来源地址组合成回程候选地址；回程前仍会
+  // 源 navi 的监听端口。接收机只把它和真实 TCP 来源地址组合成回程候选地址；回程前仍会
   // 用任务里钉住的公钥指纹做双向核对，所以地址被改写也拿不到任务载荷。
   sourcePort?: number | null;
   // 源机身份指纹；manifest 整体有签名保护。老版本没有，导入照常接受但无法安全“移回”。

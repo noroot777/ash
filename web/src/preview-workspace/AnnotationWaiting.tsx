@@ -1,4 +1,4 @@
-import { batchStateLabels } from "@ash/shared/page-annotation-batch";
+import { batchStateLabels } from "@navi/shared/page-annotation-batch";
 import type { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import type { useAnnotationReview } from "./useAnnotationReview.ts";
 import { AnnotationFollowup, AnnotationRecord } from "./AnnotationRecord.tsx";

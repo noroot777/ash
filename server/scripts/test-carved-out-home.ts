@@ -11,7 +11,7 @@
 //   · 存量补记：这两条路建的补上；只带来源回链的手动派生不动；已有归属的不改写；审查记录和回链
 //     对不上的不补；重复跑不出新变化；规则上线之后建的（落在边界之后）不碰。
 //
-// 跑：npm -w @ash/server run test:carved-out-home
+// 跑：npm -w @navi/server run test:carved-out-home
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,10 +20,10 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-carved-out-home-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-carved-out-home-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { appSettings, freeReviewRounds, freeReviewRuns, projects, tasks } = await import("../src/db/schema.js");

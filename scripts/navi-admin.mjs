@@ -6,12 +6,12 @@
 // 一切(可以直接改库、可以读所有仓库),所以给他一条正门不削弱任何东西,只是省掉手写
 // SQL 时把 scrypt 参数记错的风险。
 //
-// 用法(在跑着 ash 的那台机器上、仓库根目录):
-//   node scripts/ash-admin.mjs status          # 当前模式、用户名单
-//   node scripts/ash-admin.mjs invite-admin    # 给第一个管理员发一条新的领取链接
-//   node scripts/ash-admin.mjs invite <姓名>   # 给指定用户发链接(重置他的 key)
+// 用法(在跑着 navi 的那台机器上、仓库根目录):
+//   node scripts/navi-admin.mjs status          # 当前模式、用户名单
+//   node scripts/navi-admin.mjs invite-admin    # 给第一个管理员发一条新的领取链接
+//   node scripts/navi-admin.mjs invite <姓名>   # 给指定用户发链接(重置他的 key)
 //
-// **不需要停 ash**:它只写 users / user_invites 两张表,ash 每次请求都现读。
+// **不需要停 navi**:它只写 users / user_invites 两张表,navi 每次请求都现读。
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes, createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -142,7 +142,7 @@ switch (command) {
     requireMulti();
     const name = rest.join(" ").trim();
     if (!name) {
-      console.error("用法:node scripts/ash-admin.mjs invite <姓名>");
+      console.error("用法:node scripts/navi-admin.mjs invite <姓名>");
       process.exit(1);
     }
     const user = one("SELECT * FROM users WHERE name = ?", name);
@@ -162,7 +162,7 @@ switch (command) {
     const name = rest.join(" ").trim();
     const user = name ? one("SELECT * FROM users WHERE name = ?", name) : null;
     if (!user) {
-      console.error("用法:node scripts/ash-admin.mjs promote <姓名>");
+      console.error("用法:node scripts/navi-admin.mjs promote <姓名>");
       process.exit(1);
     }
     run("UPDATE users SET role='admin' WHERE id = ?", user.id);
@@ -172,10 +172,10 @@ switch (command) {
   default:
     console.log("Navi 宿主机管理工具(多人模式的逃生门)");
     console.log("");
-    console.log("  node scripts/ash-admin.mjs status          查看模式与用户名单");
-    console.log("  node scripts/ash-admin.mjs invite-admin    给第一个管理员发新的领取链接");
-    console.log("  node scripts/ash-admin.mjs invite <姓名>   给指定用户发领取链接(作废其旧 key)");
-    console.log("  node scripts/ash-admin.mjs promote <姓名>  把某人提升为实例管理员");
+    console.log("  node scripts/navi-admin.mjs status          查看模式与用户名单");
+    console.log("  node scripts/navi-admin.mjs invite-admin    给第一个管理员发新的领取链接");
+    console.log("  node scripts/navi-admin.mjs invite <姓名>   给指定用户发领取链接(作废其旧 key)");
+    console.log("  node scripts/navi-admin.mjs promote <姓名>  把某人提升为实例管理员");
     console.log("");
     console.log("这些命令直接操作数据库文件,不需要停掉 Navi。");
     process.exit(command ? 1 : 0);

@@ -1,10 +1,10 @@
-// mac app 的定点回归（仅 macOS）。编进测试驱动的是真的 AshConfig / AshHealth / ServerLauncher /
+// mac app 的定点回归（仅 macOS）。编进测试驱动的是真的 NaviConfig / NaviHealth / ServerLauncher /
 // DataImport，配置全走环境变量：临时数据根、临时端口、一份假的「自带运行时」（node 就是跑这个
 // 测试的 node，server 是几行假服务），日常那一份 app 的数据与 :4317 一概不碰。
 //
-// 覆盖：下载事务；红绿灯下的页面；「端口上是谁」的判据（自己那份 / 别的 ash / 不是 ash）；空数据根
+// 覆盖：下载事务；红绿灯下的页面；「端口上是谁」的判据（自己那份 / 别的 navi / 不是 navi）；空数据根
 // 不起服务、首启选了才起；起服务用自带 node、数据根/端口/窗口专用端口/本机自用开关传对（终端配置盖不掉）、不漏启动器自己的变量；
-// 别的 ash 或别的程序占着端口时不起、说清是谁；窗口只连专用端口、在线后服务换了人就撤下页面（导航与定时两道）；并发起服务只起一份；锁超时与重试；请求合并；
+// 别的 navi 或别的程序占着端口时不起、说清是谁；窗口只连专用端口、在线后服务换了人就撤下页面（导航与定时两道）；并发起服务只起一份；锁超时与重试；请求合并；
 // 进程起来就退时不干等；应答的 PID 对不上不算；启动器报错可见；运行时缺件；构建号严格递增；安装不换正被用着的旧包；导入旧数据（WAL 里
 // 没落盘的写入也带过来、在暂存里洗过再发布、和起服务同一把锁、只往空数据根里放、失败与抢跑不留
 // 痕迹、上次发布到一半的残留先收掉、只复制不动源、互相包含与多人库拒绝、锁与缓存不搬）。
@@ -20,10 +20,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { testInstanceGuard } from "./macos-client-guard.mjs";
 import { testInstall } from "./macos-client-install.mjs";
+import { LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
-const temporary = mkdtempSync(join(tmpdir(), "ash-macos-client-"));
+const temporary = mkdtempSync(join(tmpdir(), "navi-macos-client-"));
 const runtime = join(temporary, "runtime");
 const data = join(temporary, "data");
 const binary = join(temporary, "client-tests");
@@ -40,8 +41,8 @@ symlinkSync(process.execPath, join(runtime, "node/bin/node"));
 copyFileSync(join(root, "scripts/start-detached.mjs"), join(runtime, "scripts/start-detached.mjs"));
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
-  ...["AshConfig", "AshHealth", "DataImport", "DatabaseBackup", "DownloadTransaction", "ServerControl", "ServerStartLock", "ServerLauncher",
-    "WindowChrome", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "FirstRunView", "AshPalette", "HostMcpSetup", "UpdateGate", "RestartImpact",
+  ...["NaviConfig", "NaviHealth", "DataImport", "DatabaseBackup", "DownloadTransaction", "ServerControl", "ServerStartLock", "ServerLauncher",
+    "WindowChrome", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "FirstRunView", "NaviPalette", "HostMcpSetup", "UpdateGate", "RestartImpact",
     "LegacyIdentity", "LoginService"]
     .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
   ...["main", "WindowChromeProbe", "InstanceGuardProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)),
@@ -57,9 +58,13 @@ async function freePort() {
   return port;
 }
 
+// app 的配置变量，两代名字都算。旧前缀取自旧名登记处：批量改名不会把这里的旧名也换掉。
+const OLD = LEGACY_ENV_PREFIXES[0];
+const APP_ENV = new RegExp(`^(?:(?:NAVI_|${OLD})(?:DATA_DIR|URL|LOCAL_ONLY|MAC_\\w+)|PORT)$`);
+
 function launch(command, args, env = {}) {
-  const base = { ...process.env };
-  for (const key of ["ASH_DATA_DIR", "ASH_URL", "ASH_LOCAL_ONLY", "PORT"]) delete base[key];
+  // 跑测试的这个进程自己带着的配置（两代名字都算：app 新旧都认）一概不往下传，只认这里给的。
+  const base = Object.fromEntries(Object.entries(process.env).filter(([key]) => !APP_ENV.test(key)));
   const child = spawn(command, args, { env: { ...base, ...env }, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
   let output = "";
@@ -93,7 +98,7 @@ function serviceSource({ pidOffset = 0, exitAtOnce = false } = {}) {
 fs.appendFileSync(${JSON.stringify(marker)},process.pid+'\\n');
 const dataDir=process.env.ASH_DATA_DIR;
 fs.writeFileSync(${JSON.stringify(seen)},JSON.stringify({cwd:process.cwd(),dataDir,localOnly:process.env.ASH_LOCAL_ONLY??null,
-  port:process.env.PORT??null,windowPort:process.env.ASH_WINDOW_PORT??null,leaked:Object.keys(process.env).filter(k=>k.startsWith('ASH_MAC_'))}));
+  port:process.env.PORT??null,windowPort:process.env.ASH_WINDOW_PORT??null,leaked:Object.keys(process.env).filter(k=>k.startsWith('NAVI_MAC_'))}));
 ${exitAtOnce ? "process.exit(1);" : ""}
 fs.writeFileSync(path.join(dataDir,'ash.db'),'');
 http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');
@@ -136,16 +141,41 @@ try {
   const windowPort = await freePort();
   const journal = join(temporary, "journal");
   const env = {
-    ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data, ASH_MAC_RUNTIME: runtime, ASH_MAC_DOWNLOAD_JOURNAL: journal,
-    ASH_MAC_WINDOW_PORT: String(windowPort),
+    NAVI_URL: `http://127.0.0.1:${port}`, NAVI_DATA_DIR: data, NAVI_MAC_RUNTIME: runtime, NAVI_MAC_DOWNLOAD_JOURNAL: journal,
+    NAVI_MAC_WINDOW_PORT: String(windowPort),
   };
+
+  // ── 环境变量：改名前的旧名照样认、新名优先；指向数据的两代打架就不打开 ──
+  const config = async (vars) => {
+    const r = await launch(binary, ["config"], vars).done;
+    return { status: r.status, values: Object.fromEntries(r.output.trim().split("\n").map((line) => line.split(/=(.*)/s).slice(0, 2))), output: r.output };
+  };
+  const legacyData = join(temporary, "legacy-data");
+  const legacyOnly = await config({ [`${OLD}URL`]: "http://192.0.2.123:14977", [`${OLD}DATA_DIR`]: legacyData, [`${OLD}MAC_WINDOW_PORT`]: "44997",
+    [`${OLD}MAC_RUNTIME`]: runtime, [`${OLD}MAC_DOWNLOAD_JOURNAL`]: journal });
+  assert.equal(legacyOnly.status, 0, legacyOnly.output);
+  assert.deepEqual(legacyOnly.values, { url: "http://192.0.2.123:14977", data: legacyData, window: "44997", runtime, journal },
+    "a launch configured with the pre-rename names keeps pointing at the same service, data root, port, runtime and journal");
+  const both = await config({ NAVI_URL: env.NAVI_URL, [`${OLD}URL`]: env.NAVI_URL, NAVI_DATA_DIR: data, [`${OLD}DATA_DIR`]: data,
+    NAVI_MAC_WINDOW_PORT: String(windowPort), [`${OLD}MAC_WINDOW_PORT`]: "44997", [`${OLD}MAC_RUNTIME`]: join(temporary, "elsewhere"), NAVI_MAC_RUNTIME: runtime });
+  assert.equal(both.status, 0, both.output);
+  assert.deepEqual([both.values.url, both.values.data, both.values.window, both.values.runtime], [env.NAVI_URL, data, String(windowPort), runtime],
+    "the new name wins when both generations are set");
+  const emptyNew = await config({ NAVI_DATA_DIR: "", [`${OLD}DATA_DIR`]: legacyData });
+  assert.equal(emptyNew.values.data, legacyData, "an empty new name counts as unset");
+  for (const [name, a, b] of [["DATA_DIR", data, legacyData], ["URL", env.NAVI_URL, "http://192.0.2.123:14977"]]) {
+    const clash = await config({ [`NAVI_${name}`]: a, [`${OLD}${name}`]: b });
+    assert.equal(clash.status, 1, clash.output);
+    assert.match(clash.output, new RegExp(`^CONFLICT NAVI_${name}=.* ${OLD}${name}=`), `NAVI_${name} and ${OLD}${name} pointing at different places refuse to open`);
+  }
+  console.log("PASS: pre-rename environment names (URL / data root / mac test hooks) still configure the app; new names win; conflicting data roots or services refuse to open");
 
   // ── 下载事务 ──
   const destination = join(temporary, "export.md");
   let result = await launch(binary, ["transactions", destination], env).done;
   assert.equal(result.status, 0, result.output);
   assert.deepEqual(readdirSync(journal), [], "finished and failed transactions leave no journal entry");
-  const staged = () => readdirSync(temporary).filter((name) => name.startsWith(".ash-download-"));
+  const staged = () => readdirSync(temporary).filter((name) => name.startsWith(".navi-download-"));
   assert.deepEqual(staged(), [], "finished and failed transactions leave no staging directory");
   writeFileSync(destination, "original");
   const pending = launch(binary, ["pending", destination], env);
@@ -171,7 +201,7 @@ try {
   writeFileSync(join(journal, "11111111-1111-1111-1111-111111111111"), victim);
   writeFileSync(join(journal, "22222222-2222-2222-2222-222222222222"), "");
   const unplugged = join(journal, "33333333-3333-3333-3333-333333333333");
-  writeFileSync(unplugged, join(temporary, "unplugged-volume", ".ash-download-33333333-3333-3333-3333-333333333333"));
+  writeFileSync(unplugged, join(temporary, "unplugged-volume", ".navi-download-33333333-3333-3333-3333-333333333333"));
   result = await launch(binary, ["reclaim"], env).done;
   assert.equal(result.status, 0, result.output);
   assert.equal(readFileSync(join(victim, "keep"), "utf8"), "keep", "a journal entry cannot make reclaim delete a foreign path");
@@ -207,12 +237,12 @@ try {
     response.statusCode = healthStatus;
     response.end(healthBody);
   }, async () => {
-    assert.equal(await probe(200, "<h1>Bad Gateway</h1>"), "NOT ASH", "an HTTP 200 error page is not ash");
-    assert.equal(await probe(200, { ok: false, pid: 1 }), "NOT ASH", "ok:false is not a ready ash");
-    assert.equal(await probe(503, { ok: true, pid: 1 }), "NOT ASH", "non-200 is not ready");
-    assert.equal(await probe(200, { ok: true, pid: 1 }), "FOREIGN", "an ash that does not say where its data lives is not ours");
+    assert.equal(await probe(200, "<h1>Bad Gateway</h1>"), "NOT NAVI", "an HTTP 200 error page is not navi");
+    assert.equal(await probe(200, { ok: false, pid: 1 }), "NOT NAVI", "ok:false is not a ready navi");
+    assert.equal(await probe(503, { ok: true, pid: 1 }), "NOT NAVI", "non-200 is not ready");
+    assert.equal(await probe(200, { ok: true, pid: 1 }), "FOREIGN", "a navi that does not say where its data lives is not ours");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: join(temporary, "elsewhere"), codeDir: "/repo/" } }),
-      "FOREIGN", "another data root is another ash");
+      "FOREIGN", "another data root is another navi");
     const ours = { id: "inst-1", dataDir: `${dataAlias}/`, codeDir: `${runtimeAlias}/`, localOnly: true, windowPort };
     assert.equal(await probe(200, { ok: true, pid: 1, instance: ours }), "READY",
       "same data root and same bundled code by realpath, local-only");
@@ -221,26 +251,26 @@ try {
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, localOnly: false } }), "FOREIGN",
       "the bundled code without local-only mode was not started by the app");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: ours.dataDir, codeDir: ours.codeDir } }), "FOREIGN",
-      "an ash that does not report its mode is not ours");
+      "a navi that does not report its mode is not ours");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, id: undefined } }), "FOREIGN",
-      "an ash without an instance id cannot be bound to, so it is not ours");
+      "a navi without an instance id cannot be bound to, so it is not ours");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, windowPort: null } }), "FOREIGN",
       "our service that could not listen on the window's dedicated port cannot serve the window");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, windowPort: windowPort + 1 } }), "FOREIGN",
       "a dedicated port other than the one the app derives is not this app's");
 
     // 仓库里的服务指着 app 的数据根：一样不连，说清哪一样对不上。
-    healthBody = JSON.stringify({ ok: true, pid: 4343, instance: { ...ours, codeDir: "/Users/someone/code/ash/", localOnly: false } });
+    healthBody = JSON.stringify({ ok: true, pid: 4343, instance: { ...ours, codeDir: "/Users/someone/code/navi/", localOnly: false } });
     result = await launch(binary, ["start", "2"], env).done;
     assert.equal(result.status, 2, result.output);
     assert.match(result.output, /用的是 app 的数据，跑的却不是 app 自带的代码/);
 
-    // 被别的 ash 占着：不起、不连，说清是谁。
-    healthBody = JSON.stringify({ ok: true, pid: 4242, instance: { dataDir: "/Users/someone/code/ash/data", codeDir: "/Users/someone/code/ash/" } });
+    // 被别的 navi 占着：不起、不连，说清是谁。
+    healthBody = JSON.stringify({ ok: true, pid: 4242, instance: { dataDir: "/Users/someone/code/navi/data", codeDir: "/Users/someone/code/navi/" } });
     result = await launch(binary, ["start-fresh", "2"], env).done;
     assert.equal(result.status, 2, result.output);
     assert.match(result.output, /4242/);
-    assert.match(result.output, /\/Users\/someone\/code\/ash\//);
+    assert.match(result.output, /\/Users\/someone\/code\/navi\//);
     assert.match(result.output, /kill 4242/);
     healthBody = "<h1>nginx</h1>";
     result = await launch(binary, ["start-fresh", "2"], env).done;
@@ -249,7 +279,7 @@ try {
     assert.equal(existsSync(marker), false, "an occupied port must not get a second service");
   });
   assert.equal(await probe(200, ""), "DOWN", "nobody listening");
-  console.log("PASS: own instance is recognised by data root + bundled code + local-only; another ash or a non-ash on the port is reported, never joined");
+  console.log("PASS: own instance is recognised by data root + bundled code + local-only; another navi or a non-navi on the port is reported, never joined");
 
   // ── 窗口在线之后服务换了人（scripts/macos-client-guard.mjs）──
   await testInstanceGuard({ binary, env, port, windowPort, data, runtime, children, until });
@@ -345,7 +375,7 @@ try {
   const book = join(temporary, "build-number");
   writeFileSync(book, "");
   const allocate = (clock) => launch("/usr/bin/lockf", ["-k", book, process.execPath, join(root, "desktop/macos/scripts/build-number.mjs"), book],
-    clock ? { ASH_MAC_BUILD_CLOCK: clock } : {}).done.then((r) => { assert.equal(r.status, 0, r.output); return r.output.trim(); });
+    clock ? { NAVI_MAC_BUILD_CLOCK: clock } : {}).done.then((r) => { assert.equal(r.status, 0, r.output); return r.output.trim(); });
   const numbers = [await allocate("2026-11-14T09:05:12Z"), await allocate("2026-11-14T09:05:12Z"), await allocate("2026-11-13T23:00:00Z")];
   assert.deepEqual(numbers, ["20261114.090512", "20261114.090513", "20261114.090514"], "same second and a clock gone back still go up");
   numbers.push(...await Promise.all(Array.from({ length: 8 }, () => allocate())));
@@ -369,7 +399,7 @@ try {
 
   // ── 安装：旧 bundle 还有进程在用就不换（scripts/macos-client-install.mjs）──
   await testInstall({ root, temporary, launch, children, until, delay });
-  console.log("PASS: install refuses while anything still runs from the old bundle (ash entries by the code lock they hold, others by real file identity, whatever path spelling started them); an entry started mid-swap waits on the lock and then runs the whole new bundle; dead holders never block; no lock, no run and no install; keeps the old app on failure, serialises racing installs, still replaces a lockless older bundle");
+  console.log("PASS: install refuses while anything still runs from the old bundle (navi entries by the code lock they hold, others by real file identity, whatever path spelling started them); an entry started mid-swap waits on the lock and then runs the whole new bundle; dead holders never block; no lock, no run and no install; keeps the old app on failure, serialises racing installs, still replaces a lockless older bundle");
 
   // ── 导入旧数据 ──
   // 假的洗副本工具：记下参数，在它拿到的库上留个记号，按约定回一行 JSON；摆了 import-fail 就失败。
@@ -504,22 +534,22 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   live.exec("insert into tasks values ('after')");
   assert.equal(live.prepare("select count(*) as n from tasks").get().n, 51, "the source server keeps writing");
   live.close();
-  assert.equal(existsSync(join(source, "ash.db-shm")), false, "fixture: the source ash stopped cleanly");
+  assert.equal(existsSync(join(source, "ash.db-shm")), false, "fixture: the source navi stopped cleanly");
   result = await launch(binary, ["import", source], env).done;
   assert.match(result.output, /已经有一份 Navi 数据/, "an initialised data root never takes a second import");
   // 源实例正常停掉（-wal、-shm 都收了）之后也导得了，源目录仍旧不多一个文件。
   const stoppedTarget = join(temporary, "data-from-stopped");
   const stoppedBefore = readdirSync(source).sort();
-  result = await launch(binary, ["import", source], { ...env, ASH_DATA_DIR: stoppedTarget }).done;
+  result = await launch(binary, ["import", source], { ...env, NAVI_DATA_DIR: stoppedTarget }).done;
   assert.equal(result.status, 0, result.output);
   const fromStopped = new DatabaseSync(join(stoppedTarget, "ash.db"), { readOnly: true });
   assert.equal(fromStopped.prepare("select count(*) as n from tasks").get().n, 51, "a stopped source is read whole");
   fromStopped.close();
   assert.deepEqual(readdirSync(source).sort(), stoppedBefore, "reading a stopped source leaves no -shm behind");
 
-  result = await launch(binary, ["import", source], { ...env, ASH_DATA_DIR: source }).done;
+  result = await launch(binary, ["import", source], { ...env, NAVI_DATA_DIR: source }).done;
   assert.match(result.output, /app 自己的数据目录/);
-  result = await launch(binary, ["import-inspect", source], { ...env, ASH_DATA_DIR: join(source, "nested") }).done;
+  result = await launch(binary, ["import-inspect", source], { ...env, NAVI_DATA_DIR: join(source, "nested") }).done;
   assert.match(result.output, /一个在另一个里面/, "a data root inside the source is refused");
   result = await launch(binary, ["import-inspect", join(dataAlias, "runs")], env).done;
   assert.match(result.output, /没有 ash\.db/);

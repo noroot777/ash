@@ -1,6 +1,6 @@
 // 真人专属动作的页面凭据（服务端那一侧与能力边界:server/src/auth/human-action-token.ts）。
 //
-// 凭据随**页面文档**下发（`<meta name="ash-human-action-token">`），发那几个只有用户按得动
+// 凭据随**页面文档**下发（`<meta name="navi-human-action-token">`），发那几个只有用户按得动
 // 的开关时带在头上。服务端用一次就烧掉，并在响应头里给回下一份 —— 所以这里要把它存住、
 // 按响应轮换，不能每次都去读那个 meta（第二次读到的还是已经烧掉的那一份，开关就按不动了）。
 //
@@ -11,7 +11,7 @@
 // 串废号,同一个页面的下一次点击必然 403「需要页面凭据」,而那句话读起来像是开关坏了。
 // 现在服务端改成由闸统一在响应头上发（不分状态码）,这边也相应改成**看每一个响应**:凡是带
 // 着那个头的就换上,不管请求成不成、也不管它是从哪条路发出去的 —— 漏一处的可能性没有了。
-import { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "@ash/shared";
+import { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "@navi/shared";
 import { observeResponses, request } from "./apiClient.ts";
 
 let current: string | null = null;

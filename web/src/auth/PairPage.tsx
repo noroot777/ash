@@ -1,11 +1,11 @@
-// 自用模式下,一台还没被放进来的设备打开 ash 时看到的那一屏。
+// 自用模式下,一台还没被放进来的设备打开 navi 时看到的那一屏。
 //
-// 默认什么都不用填:打开就自动递一张申请,机主在 ash 那边点「允许」,这边自己跳进去。
+// 默认什么都不用填:打开就自动递一张申请,机主在 navi 那边点「允许」,这边自己跳进去。
 // 两边各显示同一个四位数 —— 机主靠它认出「就是我手上这台」。
 // 另外两条路:地址里带着机主出示的一次性码(扫二维码进来的)就直接兑;脚本用的访问密钥
 // 也能粘(LoginPage 的 `accessKey` 那一档)。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PairTicket } from "@ash/shared";
+import type { PairTicket } from "@navi/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
 import { AuthShell } from "./AuthShell.tsx";

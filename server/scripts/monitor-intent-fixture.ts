@@ -23,7 +23,7 @@ export const strays: number[] = [];
 /** 生产同形的被盯进程:**真的带着这次创建的记号**,所以记号那一问认得出它(见 proc.ts)。 */
 export function markedProcess(unitToken: string): number {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    detached: true, stdio: "ignore", env: { PATH: process.env.PATH!, ASH_MONITOR_UNIT: unitToken },
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH!, NAVI_MONITOR_UNIT: unitToken },
   });
   child.unref();
   invalidateMonitorUnitScan();   // 起了新进程 ⇒ 上一份全表扫描的备忘作废(生产里由 spawn 负责)

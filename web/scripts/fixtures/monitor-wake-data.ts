@@ -1,4 +1,4 @@
-import { appendMonitorWake, type MonitorWakeData, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
+import { appendMonitorWake, type MonitorWakeData, type MonitorWakeEvent } from "@navi/shared/monitor-wake";
 
 export const outputEvent: MonitorWakeEvent = {
   kind: "output", source: "全量回归（补完第六处闸之后）", monitorId: "monitor-new",

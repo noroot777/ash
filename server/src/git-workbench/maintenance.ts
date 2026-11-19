@@ -1,10 +1,10 @@
 import { lstat, readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { GitWorkbenchState } from "@ash/shared/git-workbench";
+import type { GitWorkbenchState } from "@navi/shared/git-workbench";
 import { fail, git } from "./core.js";
 import { journalDirectory } from "./journal.js";
 import { worktreePorcelain } from "../git-worktree-state.js";
-import { FROZEN_GIT_BACKUP_REF_NAMESPACE } from "@ash/shared/legacy-names";
+import { FROZEN_GIT_BACKUP_REF_NAMESPACE } from "@navi/shared/legacy-names";
 
 export async function readBackups(
   root: string,

@@ -3,7 +3,7 @@
 // 那一轮报告之后是驳回、辩论、裁定（FreeReviewDisputeRecord）——这里只留记录，裁定在回复框顶上那一行。派审、预约、调整预约走的是回复框那颗键同一张对话框
 // （FreeReviewDialog），叫法也取自同一份判据（freeReviewCopy 的 freeReviewView）。
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FreeReviewRound, FreeReviewRun, Task } from "@ash/shared";
+import type { FreeReviewRound, FreeReviewRun, Task } from "@navi/shared";
 import { InspActions, InspConclusion, InspMainButton, InspMore, type InspMainAction, type InspMoreItem, type InspTone } from "../inspector/InspHead.tsx";
 import { useInspectorRequest, type InspectorRequest } from "../inspector/nav.tsx";
 import { RequestMissNote } from "../inspector/RequestMissNote.tsx";

@@ -13,7 +13,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
-import type { TaskHandoff } from "@ash/shared";
+import type { TaskHandoff } from "@navi/shared";
 
 /** 从 tasks.handoff 原始 JSON 里取出待投递的接力前言;没有就返回空串。 */
 export function handoffNoticeFrom(raw: string | null | undefined): string {
@@ -46,6 +46,6 @@ export async function clearHandoffNotice(taskId: string): Promise<void> {
     await publishTaskUpdated(taskId);
   } catch (error) {
     // 清不掉最坏是下一回合再收到同一段前言,不值得让整个回合起不来。
-    console.warn(`[ash] 接力前言清理失败 ${taskId}:`, error);
+    console.warn(`[navi] 接力前言清理失败 ${taskId}:`, error);
   }
 }

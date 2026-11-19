@@ -6,9 +6,9 @@ import { getHeapStatistics } from "node:v8";
 import { readRunCorpus, SearchCorpus } from "../src/search-corpus.js";
 import { SearchLogText } from "../src/search-log-text.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-search-stream-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-search-stream-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const expectedSnippet = (text: string, terms: string[]) => {
   const lower = text.toLowerCase();

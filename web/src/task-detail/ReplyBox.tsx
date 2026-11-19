@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentType, ScheduledMessage, SkillEntry } from "@ash/shared";
-import { sameExecutor } from "@ash/shared/executors";
-import { parseCliCommand } from "@ash/shared/cli-commands";
-import { concreteReviewChoice } from "@ash/shared/review-on-create";
+import type { AgentType, ScheduledMessage, SkillEntry } from "@navi/shared";
+import { sameExecutor } from "@navi/shared/executors";
+import { parseCliCommand } from "@navi/shared/cli-commands";
+import { concreteReviewChoice } from "@navi/shared/review-on-create";
 import { PencilSimple } from "@phosphor-icons/react";
 import { IconMenu } from "../components/IconMenu.tsx";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
@@ -52,7 +52,7 @@ const EMPTY_SKILLS: SkillEntry[] = [];
 /** 还没跑过时那颗键的发送方式：永远是立即发，改不动（真正的发送方式留在草稿里不碰）。 */
 const NOW_ONLY = { later: null, setLater: () => {} };
 // 菜单顶行只给第一组起名:原生命令和排在后面的技能各有 SlashMenu 画的分隔线。
-const MENU_HEADING: Record<SlashItem["kind"], string> = { ash: "叫人 · ", native: "", skill: "技能 · " };
+const MENU_HEADING: Record<SlashItem["kind"], string> = { navi: "叫人 · ", native: "", skill: "技能 · " };
 
 export function ReplyBox({
   task,
@@ -190,10 +190,10 @@ export function ReplyBox({
   const discussTypes = registeredTypes.filter((type) => type !== standing.config.agentType);
   // 叫人的命令（`/讨论`、`/派`）排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
-  const ashItems: SlashItem[] = gate.mute ? [] : [
+  const naviItems: SlashItem[] = gate.mute ? [] : [
     ...(ability.discussable && discussTypes.length ? [DISCUSS_SLASH_ITEM] : []),
     ...(dispatchable ? [DISPATCH_SLASH_ITEM] : []),
-  ].map((item) => ({ ...item, kind: "ash" }));
+  ].map((item) => ({ ...item, kind: "navi" }));
   // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
   // 之后选模型）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
@@ -203,7 +203,7 @@ export function ReplyBox({
     if (covering) setAnnotating(false);
   }, [covering]);
   const slash = useReplySlash({
-    value, setValue, ash: ashItems, skills: gate.unstarted ? sessionlessSkills(skills) : skills,
+    value, setValue, navi: naviItems, skills: gate.unstarted ? sessionlessSkills(skills) : skills,
     blocked: !!take || covering, sendable: !gate.held, inputRef: textareaRef,
     onCall: (verb, text, caret) => startCallCommand(verb, text, caret),
   });

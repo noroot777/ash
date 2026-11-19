@@ -7,10 +7,10 @@
 // 不看这条会话别处有没有号、这份快照里有没有正文 —— 一回合刚开头只动了手还没说话时，快照里只有带号的
 // 执行过程，它照样归身份这一路。没号的 trace 条目同样归老读法；服务端读的时候补出来的那几条（`origin`）
 // 例外：它们说的是带身份那几个回合的事，挂回那几个回合的气泡上。
-import { ANSWER_PREFIX, type Session } from "@ash/shared";
-import { parseSessionTranscript, segmentFingerprint, type ConvSeg, type TextAnchor } from "@ash/shared/session-output";
-import { normalizeSessionNoteText } from "@ash/shared/session-notes";
-import type { TurnInterruption, TurnOutcome } from "@ash/shared";
+import { ANSWER_PREFIX, type Session } from "@navi/shared";
+import { parseSessionTranscript, segmentFingerprint, type ConvSeg, type TextAnchor } from "@navi/shared/session-output";
+import { normalizeSessionNoteText } from "@navi/shared/session-notes";
+import type { TurnInterruption, TurnOutcome } from "@navi/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationEventItem, ConversationItem, PersistedOrigin, TimelineEntry } from "./conversationModel.ts";
 import { eventTone, isVerifyNote } from "./conversationNotes.ts";

@@ -1,5 +1,5 @@
-import type { AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
-import { ACCEPT_GATE_BASELINE_LABELS } from "@ash/shared/accept-gate";
+import type { AcceptGateState, AcceptGateView } from "@navi/shared/accept-gate";
+import { ACCEPT_GATE_BASELINE_LABELS } from "@navi/shared/accept-gate";
 import type { CheckTone } from "./CheckRow.tsx";
 
 /**

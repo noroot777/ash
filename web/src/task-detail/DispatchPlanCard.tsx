@@ -4,17 +4,17 @@
 // 点标题在左抽屉里读完整说明。
 // 最后一行写了字，那颗键就从「派出去」变成「发回去改」。
 //
-// 派出去的就是卡上此刻的样子：留下的几行、各交给谁、一个接一个还是同时，原样交给 ash 去建
+// 派出去的就是卡上此刻的样子：留下的几行、各交给谁、一个接一个还是同时，原样交给 navi 去建
 // （api.launchDispatchPlan），不经智能体再转一手。没碰过的那一格跟着「派出去的活交给谁」的默认值走。
 import { useId, useRef, useState, type KeyboardEvent } from "react";
-import type { AgentType, TaskListItem } from "@ash/shared";
+import type { AgentType, TaskListItem } from "@navi/shared";
 import { CaretDown, Check, X } from "@phosphor-icons/react";
 import {
   DISPATCH_ORDER_LABEL, dispatchDefaultTarget,
   type DispatchLaunchInput, type DispatchOrder, type DispatchPlan, type DispatchRunTarget,
-} from "@ash/shared/dispatch-plan";
-import { questionKey, type QuestionAnswerInput } from "@ash/shared/questions";
-import { concreteReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
+} from "@navi/shared/dispatch-plan";
+import { questionKey, type QuestionAnswerInput } from "@navi/shared/questions";
+import { concreteReviewChoice, type CreateReviewChoice } from "@navi/shared/review-on-create";
 import { ReviewerChip } from "../free-workflow/ReviewerChip.tsx";
 import { reviewHold, useReviewerList } from "../free-workflow/useReviewerList.ts";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";

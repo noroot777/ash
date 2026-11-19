@@ -3,7 +3,7 @@
 //   · 决策卡先按现状对一次账（收件人此刻还在不在、内容是不是此刻该有的样子）—— 对账会重渲染或收卡；
 //   · 汇总类（汇总卡、/todo 清单）列着的卡有几张已经不能再给他看了：只用剩下的重排，一张不剩就不发；
 //   · 还不能发：发件的作废；改卡的换成一张中性的收起卡（原卡上的正文还留在对方飞书里，不改就一直露着）；
-//     回给一次请求的（scope.ts answersRequest：回执、确认卡、清单、房间回复、报错）不作废，换成一句不含 ash 数据的
+//     回给一次请求的（scope.ts answersRequest：回执、确认卡、清单、房间回复、报错）不作废，换成一句不含 navi 数据的
 //     固定文字再发：不然他只会以为没收到；
 //   · 项目此刻设成了只推标题、这一行又带着只推标题版：换成那一版。
 // 改卡时这两种换法是在收回已经露出去的内容，按回写结果（result）的用途改，额度见底也照改。
@@ -129,7 +129,7 @@ async function useBrief(row: OutboxRow, redact = false): Promise<OutboxRow | nul
   return swapped.at(0) ?? null;
 }
 
-/** 回给请求的核不过：原文不发，换成一句固定文字（卡片也换成文字；来源随之改成 system —— 那句话里已经没有 ash 的数据）。 */
+/** 回给请求的核不过：原文不发，换成一句固定文字（卡片也换成文字；来源随之改成 system —— 那句话里已经没有 navi 的数据）。 */
 async function withhold(row: OutboxRow, why: string): Promise<OutboxRow | null> {
   const swapped = await db.update(imOutbox).set({
     msgType: "text", content: JSON.stringify({ text: WITHHELD_TEXT(why) }), brief: null, scope: JSON.stringify(SYSTEM_SCOPE), updatedAt: now(),

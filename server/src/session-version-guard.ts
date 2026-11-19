@@ -1,4 +1,4 @@
-import type { AgentType, SessionRole } from "@ash/shared";
+import type { AgentType, SessionRole } from "@navi/shared";
 import { readCodexCliVersion } from "./executors/codex-rollout.js";
 import { affectedCodexSessionReplacementNote, isAffectedCodexVersion } from "./executors/version-policy.js";
 import { announceSessionNote } from "./session-notice.js";

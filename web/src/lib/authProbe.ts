@@ -4,12 +4,12 @@
 //
 // index.html 里那段内联脚本让这个请求在 HTML 解析阶段就起飞,与 bundle 的下载/解析并行;
 // 这里只负责把它的结果接住。
-import type { AuthState } from "@ash/shared";
+import type { AuthState } from "@navi/shared";
 
 declare global {
   interface Window {
     /** index.html 内联脚本预热的那一发;失败时兑现成 null,不会 reject。 */
-    __ashAuthProbe?: Promise<AuthState | null>;
+    __naviAuthProbe?: Promise<AuthState | null>;
   }
 }
 
@@ -20,9 +20,9 @@ declare global {
  * 拿不到就返回 null(脚本被裁掉、模板被换、请求本身失败),调用方照常走一次正常请求。
  */
 export async function takeAuthProbe(): Promise<AuthState | null> {
-  const probe = window.__ashAuthProbe;
+  const probe = window.__naviAuthProbe;
   if (!probe) return null;
-  window.__ashAuthProbe = undefined;
+  window.__naviAuthProbe = undefined;
   try {
     return await probe;
   } catch {

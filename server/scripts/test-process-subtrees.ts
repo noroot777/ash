@@ -21,8 +21,8 @@ import { closeSync, existsSync, mkdtempSync, openSync, unlinkSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-process-subtrees-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-process-subtrees-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const { cleanupAfterRun, markAdoptedChild } = await import("../src/executors/spawn.js");
 const { IS_WINDOWS, isPidAlive } = await import("../src/platform.js");

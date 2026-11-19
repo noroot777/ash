@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
+import type { HandoffTarget, ProjectView, TaskListItem } from "@navi/shared";
 import { CaretRight, DesktopTower, PaperPlaneTilt } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { BulkHandoffDialog } from "./BulkHandoffDialog.tsx";

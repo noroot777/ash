@@ -1,4 +1,4 @@
-import type { RetryTurnAction, ReviewRetryIdentity } from "@ash/shared";
+import type { RetryTurnAction, ReviewRetryIdentity } from "@navi/shared";
 
 // 「上一回合崩了、此刻能重来」的那颗键：普通回合是失败那句话后面的「重试这一回合」，审查档是审查格
 // 结论行的主按钮和会话尾注后面的「继续本轮审查」。

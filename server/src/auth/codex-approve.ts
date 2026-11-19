@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
 import { resolveLaunch } from "../executors/bin-resolve.js";
 import { TMP_MODE } from "./config-publish.js";
 
@@ -30,7 +30,7 @@ export type CodexAskOutcome =
   | { kind: "unqueryable" }
   | { kind: "not-started"; why: string };
 
-/** 问一次 codex 本人:给它一个只放着候选配置的 `CODEX_HOME`。**测试会换成替身**(见 `ensureAshMcp`)。 */
+/** 问一次 codex 本人:给它一个只放着候选配置的 `CODEX_HOME`。**测试会换成替身**(见 `ensureNaviMcp`)。 */
 export type CodexAsk = (sandbox: string) => Promise<CodexAskOutcome>;
 
 /** 问 codex 本人花多久算问不动。它只是个只读子命令,本机实测几百毫秒。 */
@@ -51,7 +51,7 @@ export const askCodexHere: CodexAsk = (sandbox) => new Promise((resolve) => {
   execFile(plan.file, plan.args, {
     env: { ...process.env, CODEX_HOME: sandbox },
     // `cwd` 刻意也设成沙盘:`codex mcp list` 会把**项目级** `.codex/config.toml` 合进来,
-    // 在仓库里问的话,别人项目配置里的毛病会算到这份候选头上,项目里的 ash 登记又会给一份
+    // 在仓库里问的话,别人项目配置里的毛病会算到这份候选头上,项目里的 navi 登记又会给一份
     // 其实不成立的候选背书。
     cwd: sandbox,
     timeout: CODEX_ASK_MS,
@@ -92,10 +92,10 @@ export async function codexAccepts(
   candidate: string,
   ask: CodexAsk,
 ): Promise<ApprovalVerdict> {
-  // 沙盘必须落在**任何项目配置的祖先链之外**(本轮审查 F2)。上一版把它放进 ash 自己的
-  // `data/tmp`,那还在 ash 这个检出目录里 —— `codex mcp list` 会按 cwd 往上找项目级
-  // `.codex/config.toml` 并合进来,于是真机上出现过:候选本身好得很,只因 ash 仓库的祖先
-  // 配置里写了一句 `[mcp_servers.ash] enabled = false`,判决就成了「你的个人配置里 ash 是
+  // 沙盘必须落在**任何项目配置的祖先链之外**(本轮审查 F2)。上一版把它放进 navi 自己的
+  // `data/tmp`,那还在 navi 这个检出目录里 —— `codex mcp list` 会按 cwd 往上找项目级
+  // `.codex/config.toml` 并合进来,于是真机上出现过:候选本身好得很,只因 navi 仓库的祖先
+  // 配置里写了一句 `[mcp_servers.navi] enabled = false`,判决就成了「你的个人配置里 navi 是
   // 关着的」,一份本该发布的配置被拒掉。系统临时目录没有这条祖先链,同一份字节在那里问
   // 出来的才是候选自己的答案。
   //
@@ -120,10 +120,10 @@ export async function codexAccepts(
     let listed: unknown;
     try { listed = JSON.parse(outcome.stdout); } catch { return { state: "unasked", why: "codex mcp list 的输出看不懂" }; }
     if (!Array.isArray(listed)) return { state: "unasked", why: "codex mcp list 的输出不是列表" };
-    const hit = listed.find((e) => (e as { name?: unknown } | null)?.name === ASH_MCP_SERVER_NAME) as
+    const hit = listed.find((e) => (e as { name?: unknown } | null)?.name === NAVI_MCP_SERVER_NAME) as
       { enabled?: unknown } | undefined;
-    if (!hit) return { state: "bad", why: `codex 读完这份配置，仍然没列出 ${ASH_MCP_SERVER_NAME}` };
-    if (hit.enabled === false) return { state: "bad", why: `codex 说这份配置里的 ${ASH_MCP_SERVER_NAME} 是关着的` };
+    if (!hit) return { state: "bad", why: `codex 读完这份配置，仍然没列出 ${NAVI_MCP_SERVER_NAME}` };
+    if (hit.enabled === false) return { state: "bad", why: `codex 说这份配置里的 ${NAVI_MCP_SERVER_NAME} 是关着的` };
     return { state: "ok", why: "" };
   } finally {
     await discardSandbox(sandbox);
@@ -146,7 +146,7 @@ async function discardSandbox(dir: string): Promise<void> {
       return;
     } catch (e) {
       if (left === 1) {
-        console.warn(`[ash] 问 codex 用的临时目录没删掉（${(e as Error).message}），残留在 ${dir}；这次的结论不受影响`);
+        console.warn(`[navi] 问 codex 用的临时目录没删掉（${(e as Error).message}），残留在 ${dir}；这次的结论不受影响`);
         return;
       }
       await new Promise((r) => setTimeout(r, 150));

@@ -39,9 +39,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-open-ide-"));
-process.env.ASH_DB ||= join(stage, "open-ide.db");
-process.env.ASH_RUNS_DIR ||= join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-open-ide-"));
+process.env.NAVI_DB ||= join(stage, "open-ide.db");
+process.env.NAVI_RUNS_DIR ||= join(stage, "runs");
 requireTmpDb("test-open-in-ide");
 
 const { db, ensureSchema } = await import("../src/db/index.js");

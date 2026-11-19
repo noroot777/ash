@@ -5,6 +5,6 @@ export default defineConfig({
   out: "./drizzle",
   dialect: "sqlite",
   dbCredentials: {
-    url: process.env.ASH_DB ?? process.env.HARNESS_DB ?? "./data/ash.db",
+    url: process.env.NAVI_DB ?? process.env.ASH_DB ?? process.env.HARNESS_DB ?? "./data/ash.db",
   },
 });

@@ -9,9 +9,9 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-watch-load-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-watch-load-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { watchChatWorkspace } = await import("../src/chat/boundary.js");
 
 const ROUNDS = 6;

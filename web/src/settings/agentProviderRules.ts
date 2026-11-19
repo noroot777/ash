@@ -1,4 +1,4 @@
-import type { AgentType, LlmProtocol, LlmProvider } from "@ash/shared";
+import type { AgentType, LlmProtocol, LlmProvider } from "@navi/shared";
 
 // Mirrors the executor catalog until /agents/catalog exposes relay protocol support.
 const PROVIDER_PROTOCOL: Record<AgentType, LlmProtocol | null> = {

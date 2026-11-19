@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { DotsSixVertical, Lock, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";

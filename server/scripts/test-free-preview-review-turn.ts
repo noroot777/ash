@@ -20,9 +20,9 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-free-preview-review-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-free-preview-review-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -42,7 +42,7 @@ try {
   mkdirSync(repo, { recursive: true });
   git(repo, "init", "-b", "main");
   git(repo, "config", "user.email", "test@example.com");
-  git(repo, "config", "user.name", "Ash Test");
+  git(repo, "config", "user.name", "Navi Test");
   writeFileSync(join(repo, "base.txt"), "base\n");
   git(repo, "add", "base.txt");
   git(repo, "commit", "-m", "base");

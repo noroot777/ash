@@ -1,4 +1,4 @@
-// 「这个请求是发给哪一份 ash 的」（mac app 第 2 轮审查 F2）。
+// 「这个请求是发给哪一份 navi 的」（mac app 第 2 轮审查 F2）。
 //
 // mac app 的窗口开着页面时，端口上的服务可能换了人（app 那份停了，仓库里的开发实例接着占了
 // :4317）。窗口定时认人、导航前认人都只能**事后**撤页：已经载好的页面自己发的 fetch、SSE 重连
@@ -16,8 +16,8 @@
 // Hono，在 preview-proxy.ts 里用同一个判据。
 import { randomUUID } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
-import { NAVI_HEADERS, readHeader } from "@ash/shared/http-headers";
-import { LEGACY_INSTANCE_COOKIE } from "@ash/shared/legacy-names";
+import { NAVI_HEADERS, readHeader } from "@navi/shared/http-headers";
+import { LEGACY_INSTANCE_COOKIE } from "@navi/shared/legacy-names";
 
 export const INSTANCE_ID = randomUUID();
 export const INSTANCE_COOKIE = "navi_instance";
@@ -36,7 +36,7 @@ function claimed(cookie: string | undefined, header: string | undefined): string
   return values;
 }
 
-/** 请求明说了自己要的是另一份 ash。 */
+/** 请求明说了自己要的是另一份 navi。 */
 export function addressedElsewhere(cookie: string | undefined, header: string | undefined): boolean {
   const values = claimed(cookie, header);
   return values.length > 0 && !values.every((value) => value === INSTANCE_ID);

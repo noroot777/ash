@@ -3,12 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, sym
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-preview-cache-path-"));
+const root = mkdtempSync(join(tmpdir(), "navi-preview-cache-path-"));
 const physical = join(root, "physical");
 const alias = join(root, "alias");
 mkdirSync(physical);
 symlinkSync(physical, alias, process.platform === "win32" ? "junction" : "dir");
-process.env.ASH_DEPS_DIR = join(alias, "deps");
+process.env.NAVI_DEPS_DIR = join(alias, "deps");
 const { heldCacheOf, pruneNodeDeps } = await import("../src/preview-deps.js");
 try {
   const cache = join(alias, "deps", "fixture-cache");

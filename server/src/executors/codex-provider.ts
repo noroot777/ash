@@ -1,4 +1,4 @@
-import { FROZEN_CODEX_RELAY_PROVIDER_ID } from "@ash/shared/legacy-names";
+import { FROZEN_CODEX_RELAY_PROVIDER_ID } from "@navi/shared/legacy-names";
 import { relayApi } from "../llm.js";
 import { protocolConverterBaseUrl } from "../openai-converter/common.js";
 import type { CliRelayWiring } from "./catalog/types.js";

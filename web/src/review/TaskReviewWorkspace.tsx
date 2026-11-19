@@ -1,4 +1,4 @@
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { GitBranch, X } from "@phosphor-icons/react";
 import { IconButton } from "../components/IconButton.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";

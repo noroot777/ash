@@ -5,7 +5,7 @@
 // 再派一层。
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, Task, TaskListItem } from "@ash/shared";
+import type { ProjectView, Task, TaskListItem } from "@navi/shared";
 import { api } from "../../src/lib/api.ts";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { InspectorHost } from "../../src/inspector/index.ts";
@@ -25,11 +25,11 @@ import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
 import "../../src/styles/task-tree.css";
 
-const KEY = "ash-dispatched-attention-fixture";
+const KEY = "navi-dispatched-attention-fixture";
 const base = Date.now() - 60 * 60_000;
 const at = (minutes: number) => new Date(base + minutes * 60_000).toISOString();
 const project: ProjectView = {
-  id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, useWorktreeDefault: false, createdAt: at(0),
+  id: "p1", name: "navi", repoPath: "/tmp/navi", workflowId: null, useWorktreeDefault: false, createdAt: at(0),
   health: { exists: true, isRepo: true },
 };
 function task(id: string, title: string, extra: Partial<Task> = {}): Task {

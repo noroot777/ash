@@ -2,23 +2,23 @@ import { envNameGenerations } from "./env-names.ts";
 import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.ts";
 
 /** 当前安装器、Codex 配置与 CLI 事件共同使用的 Navi MCP 服务名。注入和新登记一律写它。 */
-export const ASH_MCP_SERVER_NAME = "navi";
+export const NAVI_MCP_SERVER_NAME = "navi";
 
 /**
  * 认得出的全部登记名，当前名在前。用户 CLI 配置里旧版 setup 登记的那条（`ash`、更早的 `harness`）、
  * 升级前起的会话里 CLI 报出来的工具名（`mcp__ash__complete_task`），都按这一份认。
  */
-export const ASH_MCP_SERVER_NAMES: readonly string[] = [ASH_MCP_SERVER_NAME, ...LEGACY_MCP_SERVER_NAMES];
+export const NAVI_MCP_SERVER_NAMES: readonly string[] = [NAVI_MCP_SERVER_NAME, ...LEGACY_MCP_SERVER_NAMES];
 
 /** setup 会迁移、执行器在迁移前仍兼容的历史服务名（不含当前名）。 */
-export const LEGACY_ASH_MCP_SERVER_NAMES: readonly string[] = LEGACY_MCP_SERVER_NAMES;
+export const LEGACY_NAVI_MCP_SERVER_NAMES: readonly string[] = LEGACY_MCP_SERVER_NAMES;
 
-export const isAshMcpServerName = (name: unknown): boolean =>
-  typeof name === "string" && ASH_MCP_SERVER_NAMES.includes(name);
+export const isNaviMcpServerName = (name: unknown): boolean =>
+  typeof name === "string" && NAVI_MCP_SERVER_NAMES.includes(name);
 
 /** claude 的 MCP 工具名 `mcp__<登记名>__<工具>` → 工具名；不是本服务（任一代名字）的返回 null。 */
-export function ashMcpToolOf(toolName: string): string | null {
-  for (const server of ASH_MCP_SERVER_NAMES) {
+export function naviMcpToolOf(toolName: string): string | null {
+  for (const server of NAVI_MCP_SERVER_NAMES) {
     const prefix = `mcp__${server}__`;
     if (toolName.startsWith(prefix) && toolName.length > prefix.length) return toolName.slice(prefix.length);
   }
@@ -26,10 +26,10 @@ export function ashMcpToolOf(toolName: string): string | null {
 }
 
 /**
- * ash MCP 注册的全部工具（`mcp/src` 里每一处 `registerTool` 逐个对得上，`test-ash-mcp-inject.ts`
+ * navi MCP 注册的全部工具（`mcp/src` 里每一处 `registerTool` 逐个对得上，`test-navi-mcp-inject.ts`
  * 静态核对）。执行器起跑后拿 CLI 报的工具清单跟它比：用户配置里的工具白/黑名单会把其中几样挡掉。
  */
-export const ASH_MCP_TOOLS = [
+export const NAVI_MCP_TOOLS = [
   "accept_task",
   "answer_question",
   "ask_question",
@@ -66,10 +66,10 @@ export const ASH_MCP_TOOLS = [
 ] as const;
 
 /**
- * 回合靠它们**收尾**的那几样：缺一样，那一类回合就交不了卷（ash 的提示词按回合类型指名要它们）。
+ * 回合靠它们**收尾**的那几样：缺一样，那一类回合就交不了卷（navi 的提示词按回合类型指名要它们）。
  * 值 = 缺了它会怎样，原样进诊断。
  */
-export const ASH_MCP_TURN_EXITS: Readonly<Record<string, string>> = {
+export const NAVI_MCP_TURN_EXITS: Readonly<Record<string, string>> = {
   complete_task: "需要确认完成的回合会记未完成",
   pause_task: "要停在检查点等续跑的回合停不下来",
   ask_question: "要等人拍板的回合问不出来",
@@ -96,7 +96,7 @@ export const ASH_MCP_TURN_EXITS: Readonly<Record<string, string>> = {
  * 别的 MCP server** 也可见 —— 它本来就只是「某条任务某一回合」的一次性凭据(claude 那条路
  * 上一直如此:claude 把整份环境原样传给每个 MCP 子进程),换来的是那几家 CLI 交得了卷。
  */
-export const ASH_TURN_IDENTITY_ENV = {
+export const NAVI_TURN_IDENTITY_ENV = {
   taskId: "NAVI_TASK_ID",
   turnToken: "NAVI_TURN_TOKEN",
   directionToken: "NAVI_DIRECTION_TOKEN",
@@ -106,14 +106,14 @@ export const ASH_TURN_IDENTITY_ENV = {
 } as const;
 
 /** 回合身份的全部变量名(当前名)—— 设按这一份,别在某处只写三个。 */
-export const ASH_TURN_IDENTITY_ENV_KEYS = Object.values(ASH_TURN_IDENTITY_ENV) as readonly string[];
+export const NAVI_TURN_IDENTITY_ENV_KEYS = Object.values(NAVI_TURN_IDENTITY_ENV) as readonly string[];
 
 /**
  * 同上,连旧名(`ASH_TASK_ID`…)一起 —— **清**按这一份:升级前起的智能体、它们留下的子进程环境里
  * 是旧名,只清新名等于留了一份别的任务的身份。读的一侧(MCP)也按各代逐个认。
  */
-export const ASH_TURN_IDENTITY_ENV_ALL_KEYS: readonly string[] =
-  ASH_TURN_IDENTITY_ENV_KEYS.flatMap((key) => envNameGenerations(key as `NAVI_${string}`));
+export const NAVI_TURN_IDENTITY_ENV_ALL_KEYS: readonly string[] =
+  NAVI_TURN_IDENTITY_ENV_KEYS.flatMap((key) => envNameGenerations(key as `NAVI_${string}`));
 
 /**
  * 回合身份的**第二条通路**:搭 `PATH` 这班车的一次性目录。
@@ -136,10 +136,10 @@ export const ASH_TURN_IDENTITY_ENV_ALL_KEYS: readonly string[] =
  *  · 不是任务回合的那几条路(侧聊、预览助手、duet)必须把这几段从 `PATH` 里**摘掉**,跟清
  *    那几个变量是同一件事、同一处代码。
  */
-export const ASH_TURN_IDENTITY_PATH_DIR = "turn-identity";
+export const NAVI_TURN_IDENTITY_PATH_DIR = "turn-identity";
 
 /** 那份身份文件的名字(`<...>/turn-identity/<turnToken>/identity.json`)。 */
-export const ASH_TURN_IDENTITY_FILE = "identity.json";
+export const NAVI_TURN_IDENTITY_FILE = "identity.json";
 
 /**
  * `PATH` 里这一段是不是上面那种身份目录。判据是**倒数第二段的目录名**,所以认的是
@@ -151,5 +151,5 @@ export const ASH_TURN_IDENTITY_FILE = "identity.json";
  */
 export function isTurnIdentityPathEntry(entry: string): boolean {
   const parts = entry.replace(/[\\/]+$/, "").split(/[\\/]/);
-  return parts.length >= 2 && parts[parts.length - 2] === ASH_TURN_IDENTITY_PATH_DIR;
+  return parts.length >= 2 && parts[parts.length - 2] === NAVI_TURN_IDENTITY_PATH_DIR;
 }

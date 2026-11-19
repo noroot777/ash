@@ -1,7 +1,7 @@
 // ensureSchema 的容错加列清单(从 db/index.ts 拆出,文件 700 行闸;语义原样):
 // 每条独立执行、"column already exists" 一律吞掉 —— 顺序只在**同表同列有依赖**时才要紧,
 // 列的语义注释全部住在这里,改列先读上下文。真正的一次性数据搬运在 migrations.ts。
-import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
+import { OWN_MONITOR_KIND } from "@navi/shared/monitor";
 
 export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN queue_advance_request TEXT",
@@ -32,7 +32,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
   // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的
   // expires_at 是拿 Monitor 入参那个 timeout_ms（请求值）算的，来源侧真钳了就是错的。
-  // 填 'bounded' 等于声称「来源确认过这个期限」，把编出来的时刻变成事实。ash 自己起的
+  // 填 'bounded' 等于声称「来源确认过这个期限」，把编出来的时刻变成事实。navi 自己起的
   // 哨兵期限确实是自己定的，由紧随其后的那条 UPDATE 刷回 'bounded'（见下）。
   "ALTER TABLE monitors ADD COLUMN source_lifetime TEXT NOT NULL DEFAULT 'unknown'",
   // 期限的**证据**,不是期限本身。新列 ⇒ 旧行必然 NULL,这才是「哪些期限由旧算法推出来」

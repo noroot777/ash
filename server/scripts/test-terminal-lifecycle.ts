@@ -5,9 +5,9 @@ import { isAbsolute, join, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
-const temporary = realpathSync(mkdtempSync(join(tmpdir(), "ash-terminal-lifecycle-")));
-const previousDb = process.env.ASH_DB;
-process.env.ASH_DB = join(temporary, "test.db");
+const temporary = realpathSync(mkdtempSync(join(tmpdir(), "navi-terminal-lifecycle-")));
+const previousDb = process.env.NAVI_DB;
+process.env.NAVI_DB = join(temporary, "test.db");
 const { TerminalSessionManager, terminalSessions } = await import("../src/terminal.js");
 const { spawnWindowsPty } = await import("../src/terminal-pty.js");
 const { startCommand, restartCommand } = await import("../src/terminal-commands.js");
@@ -215,8 +215,8 @@ try {
   for (const manager of managers) manager.shutdown();
   terminalSessions.shutdown();
   dbClient.close();
-  if (previousDb === undefined) delete process.env.ASH_DB;
-  else process.env.ASH_DB = previousDb;
+  if (previousDb === undefined) delete process.env.NAVI_DB;
+  else process.env.NAVI_DB = previousDb;
   await delay(250);
   const location = relative(realpathSync(tmpdir()), temporary);
   assert.ok(location && !location.startsWith("..") && !isAbsolute(location));

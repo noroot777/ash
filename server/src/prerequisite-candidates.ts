@@ -8,7 +8,7 @@
 //     只有**自己就能选**的已选项才参与定合入分支：已归档、不能当前置、已经不可见的那条不能反过来把别的挤掉。
 //     因为跟这个合入分支对不上才不能选的，标 `conflict`（单独拿出来是能选的）——面板恢复草稿时只去掉自己就不成立的。
 import { desc, eq } from "drizzle-orm";
-import type { PrerequisiteCandidates } from "@ash/shared/prerequisites";
+import type { PrerequisiteCandidates } from "@navi/shared/prerequisites";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";

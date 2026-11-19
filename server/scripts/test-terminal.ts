@@ -10,7 +10,7 @@ import { resolveTerminalDirectory, TerminalSessionManager } from "../src/termina
 
 // realpath 一次:Windows 的 %TEMP% 常常是 8.3 短名(`C:\Users\RUNNER~1\…`),而
 // cmd 的 `cd` 回的是长名 —— 不展开的话下面那句 output.includes(cwd) 永远不成立。
-const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ash-terminal-")));
+const cwd = realpathSync(mkdtempSync(join(tmpdir(), "navi-terminal-")));
 const manager = new TerminalSessionManager();
 
 // 起一个**确定的** shell(不走 shellCommand() 的回退链):这条测试要验的是会话管理
@@ -18,8 +18,8 @@ const manager = new TerminalSessionManager();
 // cmd 里 `printf`/`pwd` 都不存在,得换成 `echo` 和 `cd`(cmd 的 `cd` 不带参数就是打印当前目录)。
 const shell = IS_WINDOWS ? "cmd.exe" : "/bin/sh";
 const probeCommand = IS_WINDOWS
-  ? "echo __ASH_TERMINAL_OK__& cd\r\n"
-  : "printf '__ASH_TERMINAL_OK__\\n'; pwd\n";
+  ? "echo __NAVI_TERMINAL_OK__& cd\r\n"
+  : "printf '__NAVI_TERMINAL_OK__\\n'; pwd\n";
 
 try {
   assert.equal(resolveTerminalDirectory("~"), homedir());
@@ -38,7 +38,7 @@ try {
     unsubscribe = manager.subscribe(session.id, "project-test", (event) => {
       if (event.type !== "data") return;
       output += event.data;
-      if (output.includes("__ASH_TERMINAL_OK__") && output.includes(cwd)) {
+      if (output.includes("__NAVI_TERMINAL_OK__") && output.includes(cwd)) {
         clearTimeout(timeout);
         resolve();
       }
@@ -85,7 +85,7 @@ try {
       const stop = manager.subscribe(victim.id, "project-destroy", (event) => {
         if (event.type !== "data") return;
         pidOutput += event.data;
-        const match = pidOutput.match(/__ASH_PID_(\d+)__/);
+        const match = pidOutput.match(/__NAVI_PID_(\d+)__/);
         if (match) {
           clearTimeout(timeout);
           stop?.();
@@ -95,7 +95,7 @@ try {
       // 先关掉 history expansion(交互态 bash 会把双引号里的 `$!__` 当历史引用炸掉;
       // 必须单独一行 —— 展开发生在整行执行之前,同一行里 set +H 救不了自己)。
       manager.write(victim.id, "project-destroy", "set +H 2>/dev/null\n");
-      manager.write(victim.id, "project-destroy", "trap '' TERM HUP; sleep 300 & echo \"__ASH_PID_$!__\"\n");
+      manager.write(victim.id, "project-destroy", "trap '' TERM HUP; sleep 300 & echo \"__NAVI_PID_$!__\"\n");
     });
     const destroyed = await manager.destroy(victim.id, "project-destroy", { termMs: 250, killMs: 2000 });
     assert.equal(destroyed.ok, true, "destroy 应确认整组清空");
@@ -139,13 +139,13 @@ try {
       const stop = manager.subscribe(idle.id, "project-idle", (event) => {
         if (event.type !== "data") return;
         seen += event.data;
-        if (seen.includes("__ASH_IDLE_OK__")) {
+        if (seen.includes("__NAVI_IDLE_OK__")) {
           clearTimeout(timeout);
           stop?.();
           resolve();
         }
       });
-      manager.write(idle.id, "project-idle", "printf '__ASH_IDLE_OK__\\n'\n");
+      manager.write(idle.id, "project-idle", "printf '__NAVI_IDLE_OK__\\n'\n");
     });
     await new Promise((resolve) => setTimeout(resolve, 3200));
     const idleStart = Date.now();
@@ -282,7 +282,7 @@ try {
     // ── 第 5/6 轮:ps/lsof 解析与 containment gate ────────────────────────────────
     // [P1] 关键命令缺失/不可执行:必须解析成 null(下面的 gate 用例接手「拒绝承诺」);
     // 不在 PATH(非交互 PATH 常丢 /usr/sbin 等目录):必须仍经兜底候选找到绝对路径 ——
-    // 解析结果经 ASH_PS / ASH_LSOF 传给 wrapper,两侧都不吃运行时 PATH。
+    // 解析结果经 NAVI_PS / NAVI_LSOF 传给 wrapper,两侧都不吃运行时 PATH。
     assert.equal(resolveLsofPath("/definitely/not/here", []), null, "lsof 不存在时必须解析为 null,不得假装可用");
     assert.equal(resolveLsofPath("", []), null, "空 PATH + 无兜底必须解析为 null");
     assert.equal(resolvePsPath("/definitely/not/here", []), null, "ps 不存在时必须解析为 null");
@@ -313,7 +313,7 @@ try {
     }
 
     // [P1·e2e] 复刻第 5 轮探针「PATH=…:/usr/bin:/bin(去掉 /usr/sbin)」:wrapper 与
-    // manager 侧枚举都必须仍能清场 —— 靠启动时解析好的 ASH_LSOF 绝对路径(macOS)或
+    // manager 侧枚举都必须仍能清场 —— 靠启动时解析好的 NAVI_LSOF 绝对路径(macOS)或
     // /proc(Linux),不吃会话运行时的 PATH。时序与 IMM1 相同:毫秒级 disown;exit。
     {
       const savedPath = process.env.PATH;
@@ -323,7 +323,7 @@ try {
         try {
           const { session: s, pid } = await spawnImmediateOrphan(stripped, "project-no-sbin", "IMM3");
           const res = await stripped.destroy(s.id, "project-no-sbin", { termMs: 500, killMs: 2000 });
-          assert.equal(res.ok, true, "PATH 缺 /usr/sbin 时 destroy 仍应确认清场(ASH_LSOF 绝对路径/procfs)");
+          assert.equal(res.ok, true, "PATH 缺 /usr/sbin 时 destroy 仍应确认清场(NAVI_LSOF 绝对路径/procfs)");
           await waitDead(pid, "PATH 缺 /usr/sbin 时独立组孤儿仍应被确定性清杀");
         } finally {
           stripped.shutdown();

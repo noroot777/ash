@@ -1,5 +1,5 @@
-import { GATE_FAILURE_REGRESSION_CARVE_OUT } from "@ash/shared/free-workflow";
-import { summarizeAcceptGate, type AcceptGateFailure, type AcceptGateView } from "@ash/shared/accept-gate";
+import { GATE_FAILURE_REGRESSION_CARVE_OUT } from "@navi/shared/free-workflow";
+import { summarizeAcceptGate, type AcceptGateFailure, type AcceptGateView } from "@navi/shared/accept-gate";
 
 export const gateStoppedSummary = (executionMode: string | null): string => executionMode === "macos-observed"
   ? "已识别进程已收尾，快照保留；不代表未观察后代全部退出" : "残留进程已收掉";

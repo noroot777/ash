@@ -1,39 +1,39 @@
-// ash 的工具这一回合到底在不在 agent 手上 —— 以 CLI 启动后自己报的为准（注入那一半在
-// `ash-mcp-inject.ts`）。三件事都要成立才算接上：
+// navi 的工具这一回合到底在不在 agent 手上 —— 以 CLI 启动后自己报的为准（注入那一半在
+// `navi-mcp-inject.ts`）。三件事都要成立才算接上：
 //
-//  1. **连上的是注入的那一份**。只认本名 `ash`：历史名 `harness` 是用户自己配置里的登记，指着
-//     哪个实例、连没连上都不说明这一回合注入的 ash 怎样，拿它作证会被到达先后左右结论。claude
+//  1. **连上的是注入的那一份**。只认本名 `navi`：历史名 `harness` 是用户自己配置里的登记，指着
+//     哪个实例、连没连上都不说明这一回合注入的 navi 怎样，拿它作证会被到达先后左右结论。claude
 //     再认 `source`：注入的那份是 `dynamic`，连上的若是 `user` / `project` 那条，就是注入没生效；
-//     注入文件写失败的原因由**这一回合自己的**注入结果带进来（`ClaudeAshMcpInjection`）。
-//  2. **ash 的工具一样不少**。用户配置里的工具名单（codex 的 `enabled_tools` / `disabled_tools`
-//     被 `-c` 深合并保留，claude 的 `--disallowedTools`）能把其中几样挡掉。比的是 ash 注册的
-//     **全部**工具（`ASH_MCP_TOOLS`），不替回合挑「这回合要哪几样」—— 那份挑法写在各处提示词里，
+//     注入文件写失败的原因由**这一回合自己的**注入结果带进来（`ClaudeNaviMcpInjection`）。
+//  2. **navi 的工具一样不少**。用户配置里的工具名单（codex 的 `enabled_tools` / `disabled_tools`
+//     被 `-c` 深合并保留，claude 的 `--disallowedTools`）能把其中几样挡掉。比的是 navi 注册的
+//     **全部**工具（`NAVI_MCP_TOOLS`），不替回合挑「这回合要哪几样」—— 那份挑法写在各处提示词里，
 //     在这里再枚举一遍迟早漏一样（第 2 轮审查发现 2 漏的就是辩论要的 `debate_reply`）。缺的里有
-//     收尾出口（`ASH_MCP_TURN_EXITS`）就是红色诊断、逐样说缺了会怎样；只缺别的是提示。
+//     收尾出口（`NAVI_MCP_TURN_EXITS`）就是红色诊断、逐样说缺了会怎样；只缺别的是提示。
 //  3. **核实不了就说核实不了**，不折回「没问题」：codex 的工具清单要另问一次（异步、可能超时、
 //     分页），回合收尾时还没问到就留一句提示；codex exec 那条路根本不报启动状态（2026-11-14
 //     codex 0.153.4 实测：stdout 的 JSON 流和 stderr 里都没有），按本回合自己的记录判 ——
-//     调成过 ash 的工具就是接上了，stderr 点名 ash 启动失败就照原话说，都没有就说核实不了。
+//     调成过 navi 的工具就是接上了，stderr 点名 navi 启动失败就照原话说，都没有就说核实不了。
 //
 // 诊断都落 trace 与 .md（刷新后仍在），`affectsTurn: false`：不改本回合成败，成败照旧由交卷判。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { existsSync } from "node:fs";
-import type { AgentEvent } from "@ash/shared";
-import { ASH_MCP_SERVER_NAME, ASH_MCP_TOOLS, ASH_MCP_TURN_EXITS, isAshMcpServerName } from "@ash/shared/mcp";
-import { ashMcpEntry } from "../mcp-registry/register.js";
-import type { ClaudeAshMcpInjection } from "./ash-mcp-inject.js";
+import type { AgentEvent } from "@navi/shared";
+import { NAVI_MCP_SERVER_NAME, NAVI_MCP_TOOLS, NAVI_MCP_TURN_EXITS, isNaviMcpServerName } from "@navi/shared/mcp";
+import { naviMcpEntry } from "../mcp-registry/register.js";
+import type { ClaudeNaviMcpInjection } from "./navi-mcp-inject.js";
 
 type Problem = AgentEvent | null;
 
-/** 宽松完成协议（NAVI_LAX_DONE）就是给「agent 够不着 ash MCP」的环境准备的，这些话只会是噪音。 */
+/** 宽松完成协议（NAVI_LAX_DONE）就是给「agent 够不着 navi MCP」的环境准备的，这些话只会是噪音。 */
 const lax = () => !!readEnv(process.env, "NAVI_LAX_DONE");
 
 function unbuiltHint(): string {
-  const entry = ashMcpEntry().args[0]!;
+  const entry = naviMcpEntry().args[0]!;
   return existsSync(entry) ? "" : `。Navi 的 MCP 入口 ${entry} 不存在，先在仓库根跑一次 npm run build`;
 }
 
-/** 整条 ash 没接上（没连上 / 连上的不是注入那份）。 */
+/** 整条 navi 没接上（没连上 / 连上的不是注入那份）。 */
 function unavailable(detail: string): Problem {
   if (lax()) return null;
   return {
@@ -44,12 +44,12 @@ function unavailable(detail: string): Problem {
   };
 }
 
-/** 连上了，`exposed` 是 CLI 报的 ash 工具名（不带前缀）；缺了哪几样就说哪几样。 */
+/** 连上了，`exposed` 是 CLI 报的 navi 工具名（不带前缀）；缺了哪几样就说哪几样。 */
 function missingTools(exposed: readonly string[], who: string): Problem {
   if (lax()) return null;
-  const missing = ASH_MCP_TOOLS.filter((t) => !exposed.includes(t));
+  const missing = NAVI_MCP_TOOLS.filter((t) => !exposed.includes(t));
   if (!missing.length) return null;
-  const exits = missing.filter((t) => t in ASH_MCP_TURN_EXITS);
+  const exits = missing.filter((t) => t in NAVI_MCP_TURN_EXITS);
   const head = `${who}连上了 Navi，但 ${missing.join("、")} 不在 agent 手上 —— 执行器配置限制了 Navi 的工具清单`;
   if (!exits.length) {
     return { kind: "error", level: "notice", affectsTurn: false, message: `${head}；用到它们的那一步做不了，回合收尾不受影响。` };
@@ -57,7 +57,7 @@ function missingTools(exposed: readonly string[], who: string): Problem {
   return {
     kind: "error",
     affectsTurn: false,
-    message: `Navi 的工具在这一回合没接上（${head}）：${exits.map((t) => `${t} 缺了，${ASH_MCP_TURN_EXITS[t]}`).join("；")}。`,
+    message: `Navi 的工具在这一回合没接上（${head}）：${exits.map((t) => `${t} 缺了，${NAVI_MCP_TURN_EXITS[t]}`).join("；")}。`,
   };
 }
 
@@ -71,17 +71,17 @@ function unverified(detail: string): Problem {
  * claude `init` 事件 → 没注入上 / 没连上 / 工具不全就给一条诊断，都好返回 null。老版本不报
  * `source` 时只能按连没连上判。
  */
-export function claudeAshMcpProblem(injection: ClaudeAshMcpInjection, servers: unknown, tools?: unknown): Problem {
+export function claudeNaviMcpProblem(injection: ClaudeNaviMcpInjection, servers: unknown, tools?: unknown): Problem {
   const list = Array.isArray(servers) ? servers as { name?: unknown; status?: unknown; source?: unknown }[] : [];
-  const ash = list.find((s) => s?.name === ASH_MCP_SERVER_NAME);
+  const navi = list.find((s) => s?.name === NAVI_MCP_SERVER_NAME);
   const failure = injection.failure ? `；${injection.failure}` : "";
-  if (!ash) return unavailable(`claude 启动时的 MCP 清单里没有 ${ASH_MCP_SERVER_NAME}（Navi MCP 的登记名）${failure}`);
-  if (ash.status !== "connected") return unavailable(`claude 启动时报告 Navi MCP 的状态是 ${String(ash.status)}${failure}`);
-  if (injection.failure || (ash.source !== undefined && ash.source !== "dynamic")) {
-    return unavailable(`Navi 的注入没生效，claude 连上的是它自己配置里那条（来源 ${String(ash.source ?? "未知")}），未必指着这个 Navi${failure}`);
+  if (!navi) return unavailable(`claude 启动时的 MCP 清单里没有 ${NAVI_MCP_SERVER_NAME}（Navi MCP 的登记名）${failure}`);
+  if (navi.status !== "connected") return unavailable(`claude 启动时报告 Navi MCP 的状态是 ${String(navi.status)}${failure}`);
+  if (injection.failure || (navi.source !== undefined && navi.source !== "dynamic")) {
+    return unavailable(`Navi 的注入没生效，claude 连上的是它自己配置里那条（来源 ${String(navi.source ?? "未知")}），未必指着这个 Navi${failure}`);
   }
   if (!Array.isArray(tools)) return unverified("claude 的 init 事件里没有工具清单");
-  const prefix = `mcp__${ASH_MCP_SERVER_NAME}__`;
+  const prefix = `mcp__${NAVI_MCP_SERVER_NAME}__`;
   return missingTools(tools.filter((t): t is string => typeof t === "string" && t.startsWith(prefix)).map((t) => t.slice(prefix.length)), "claude ");
 }
 
@@ -92,18 +92,18 @@ type CodexRequest = (method: string, params: unknown, timeoutMs?: number) => Pro
 const SETTLE_WAIT_MS = 3_000;
 
 /**
- * codex app-server 一个回合里的 ash。`update` 收 `mcpServer/startupStatus/updated`（失败当场给
- * 诊断）；ash 一 ready 就 `checkTools` 去问 `mcpServerStatus/list`（跟着 `nextCursor` 翻完），
+ * codex app-server 一个回合里的 navi。`update` 收 `mcpServer/startupStatus/updated`（失败当场给
+ * 诊断）；navi 一 ready 就 `checkTools` 去问 `mcpServerStatus/list`（跟着 `nextCursor` 翻完），
  * 问到就当场说；`settle` 在回合收尾时有界地等那一问，再按 未加载 / 没启动完 / 清单核实不了 收口。
  * 每个回合只说一次。
  */
-export class CodexAshMcpStatus {
+export class CodexNaviMcpStatus {
   private last: string | null = null;
   private told = false;
   private tools: { state: "unasked" } | { state: "pending"; done: Promise<void> } | { state: "verified" } | { state: "unknown"; why: string } = { state: "unasked" };
 
   update(params: { name?: unknown; status?: unknown; error?: unknown }): Problem {
-    if (params.name !== ASH_MCP_SERVER_NAME || this.last === "ready") return null;
+    if (params.name !== NAVI_MCP_SERVER_NAME || this.last === "ready") return null;
     this.last = String(params.status);
     if (this.last !== "failed" && this.last !== "cancelled") return null;
     return this.tell(unavailable(`codex 报告 Navi MCP 启动${this.last === "failed" ? "失败" : "被取消"}`
@@ -120,14 +120,14 @@ export class CodexAshMcpStatus {
         const page = await request("mcpServerStatus/list", { threadId, cursor, limit: 100 }, 10_000) as { data?: unknown; nextCursor?: unknown } | null;
         if (!Array.isArray(page?.data)) throw new Error("应答里没有 data 列表");
         for (const server of page.data as { name?: unknown; tools?: unknown }[]) {
-          if (server?.name !== ASH_MCP_SERVER_NAME) continue;
-          if (!server.tools || typeof server.tools !== "object") throw new Error(`${ASH_MCP_SERVER_NAME} 那一项没带工具清单`);
+          if (server?.name !== NAVI_MCP_SERVER_NAME) continue;
+          if (!server.tools || typeof server.tools !== "object") throw new Error(`${NAVI_MCP_SERVER_NAME} 那一项没带工具清单`);
           found = true;
           exposed.push(...Object.keys(server.tools));
         }
         cursor = page.nextCursor ?? null;
       } while (cursor);
-      if (!found) throw new Error(`清单里没有 ${ASH_MCP_SERVER_NAME}（Navi MCP 的登记名）`);
+      if (!found) throw new Error(`清单里没有 ${NAVI_MCP_SERVER_NAME}（Navi MCP 的登记名）`);
       this.tools = { state: "verified" };
       const problem = this.tell(missingTools(exposed, "codex "));
       if (problem) push(problem);
@@ -158,34 +158,34 @@ export class CodexAshMcpStatus {
   }
 }
 
-const CODEX_ASH_START_FAILED = new RegExp(`MCP (?:client|server)(?: for)? [\`'"]${ASH_MCP_SERVER_NAME}[\`'"].*failed to (?:start|initialize)`, "i");
+const CODEX_NAVI_START_FAILED = new RegExp(`MCP (?:client|server)(?: for)? [\`'"]${NAVI_MCP_SERVER_NAME}[\`'"].*failed to (?:start|initialize)`, "i");
 
 /**
- * codex exec 一个回合里的 ash：那条路上 codex 不推启动状态、也没有工具清单可问 —— `item` 收
- * `mcp_tool_call`（调成过一次 ash 的工具就是接上了），`stderr` 收原始输出（点名 ash 启动失败的
+ * codex exec 一个回合里的 navi：那条路上 codex 不推启动状态、也没有工具清单可问 —— `item` 收
+ * `mcp_tool_call`（调成过一次 navi 的工具就是接上了），`stderr` 收原始输出（点名 navi 启动失败的
  * 那一行），`settle` 在回合收尾时给结论。
  */
-export class CodexExecAshMcp {
+export class CodexExecNaviMcp {
   private worked = false;
   private failedLine: string | null = null;
   private tail = "";
 
   item(it: { type?: unknown; server?: unknown; status?: unknown }): void {
     // 调成过任一代登记名的那条都算接上（用户配置里旧版 setup 登记的 `ash` 也是这个 MCP）。
-    if (it.type === "mcp_tool_call" && isAshMcpServerName(it.server) && it.status !== "failed") this.worked = true;
+    if (it.type === "mcp_tool_call" && isNaviMcpServerName(it.server) && it.status !== "failed") this.worked = true;
   }
 
   stderr(chunk: string): void {
     if (this.failedLine) return;
     const lines = (this.tail + chunk).split("\n");
     this.tail = lines.pop()!.slice(-4096);
-    const hit = lines.find((l) => CODEX_ASH_START_FAILED.test(l));
+    const hit = lines.find((l) => CODEX_NAVI_START_FAILED.test(l));
     if (hit) this.failedLine = clean(hit);
   }
 
   settle(): Problem {
     if (this.worked) return null;
-    if (!this.failedLine && CODEX_ASH_START_FAILED.test(this.tail)) this.failedLine = clean(this.tail);
+    if (!this.failedLine && CODEX_NAVI_START_FAILED.test(this.tail)) this.failedLine = clean(this.tail);
     if (this.failedLine) return unavailable(`codex 报告 Navi MCP 启动失败：${this.failedLine}`);
     return unverified("这一回合走的是 codex exec，这条路上 codex 不报 Navi MCP 连没连上，这一回合也没调成过 Navi 的工具"
       + "（让这个执行器走 app-server 就能看到 codex 报的启动状态和工具清单）");

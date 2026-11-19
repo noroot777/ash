@@ -7,13 +7,27 @@ import AppKit
 // 改名前（Ash.app）的设置先接过来：下面不管哪一档，读到的都是同一份设置（见 LegacyIdentity）。
 LegacyIdentity.adoptDefaultsAtLaunch()
 
+// 新旧两代环境变量指着不同的服务或数据根：不替用户挑，说明白了就退（见 LegacyIdentity.environmentConflict）。
+if let conflict = NaviConfig.environmentConflict {
+  FileHandle.standardError.write(Data("Navi 没有打开：\(conflict)\n".utf8))
+  if !CommandLine.arguments.contains("--start-server") {
+    NSApplication.shared.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+    let alert = NSAlert()
+    alert.messageText = "Navi 没有打开"
+    alert.informativeText = conflict
+    alert.runModal()
+  }
+  exit(1)
+}
+
 if CommandLine.arguments.contains("--start-server") {
   switch ServerLauncher.shared.ensureRunningSync(timeout: 60) {
   case .ready:
-    print("Navi 服务已就绪：\(AshConfig.baseURL.absoluteString)")
+    print("Navi 服务已就绪：\(NaviConfig.baseURL.absoluteString)")
     exit(0)
   case .needsSetup:
-    print("\(AshConfig.dataURL.path) 里还没有数据：先打开一次 Navi 选「全新开始」或「导入已有数据」。")
+    print("\(NaviConfig.dataURL.path) 里还没有数据：先打开一次 Navi 选「全新开始」或「导入已有数据」。")
     exit(0)
   case .occupied(let explanation):
     print(explanation)

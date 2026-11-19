@@ -4,27 +4,27 @@ import { readSource } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ASH_MCP_SERVER_NAME, ASH_MCP_TOOLS, ASH_TURN_IDENTITY_ENV as ID } from "@ash/shared/mcp";
-import type { AgentEvent } from "@ash/shared";
+import { NAVI_MCP_SERVER_NAME, NAVI_MCP_TOOLS, NAVI_TURN_IDENTITY_ENV as ID } from "@navi/shared/mcp";
+import type { AgentEvent } from "@navi/shared";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { IS_WINDOWS } from "../src/platform.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-codex-mcp-token-"));
+const root = mkdtempSync(join(tmpdir(), "navi-codex-mcp-token-"));
 const fakeCodexScript = join(root, "fake-codex.mjs");
 const fakeCodex = IS_WINDOWS ? join(root, "fake-codex.cmd") : fakeCodexScript;
 const probe = join(root, "mcp-probe.mjs");
 const output = join(root, "mcp-env.json");
-const oldProbe = process.env.ASH_FAKE_MCP_PROBE;
-const oldOutput = process.env.ASH_FAKE_MCP_OUTPUT;
-const oldStatus = process.env.ASH_FAKE_MCP_STATUS;
-process.env.ASH_FAKE_MCP_TOOLS = JSON.stringify(ASH_MCP_TOOLS);
-delete process.env.ASH_FAKE_EXEC_CALL;
+const oldProbe = process.env.NAVI_FAKE_MCP_PROBE;
+const oldOutput = process.env.NAVI_FAKE_MCP_OUTPUT;
+const oldStatus = process.env.NAVI_FAKE_MCP_STATUS;
+process.env.NAVI_FAKE_MCP_TOOLS = JSON.stringify(NAVI_MCP_TOOLS);
+delete process.env.NAVI_FAKE_EXEC_CALL;
 
 try {
-  assert.equal(ASH_MCP_SERVER_NAME, "navi", "安装器约定的规范 MCP 名必须是 navi");
+  assert.equal(NAVI_MCP_SERVER_NAME, "navi", "安装器约定的规范 MCP 名必须是 navi");
   const setupSource = readSource(fileURLToPath(new URL("../../scripts/setup.mjs", import.meta.url)));
   assert.doesNotMatch(setupSource, /from\s+["'][^"']+\.ts["']/, "setup 必须兼容不能裸导入 TS 的 Node 22.16");
-  assert.match(setupSource, /const ASH_MCP_SERVER_NAME = "navi"/, "安装器的规范名必须与运行时一致");
+  assert.match(setupSource, /const NAVI_MCP_SERVER_NAME = "navi"/, "安装器的规范名必须与运行时一致");
   writeFileSync(probe, `
 import { writeFileSync } from "node:fs";
 writeFileSync(process.argv[2], JSON.stringify(process.env));
@@ -56,16 +56,16 @@ for (let i = 0; i < args.length - 1; i += 1) {
 for (const [name, server] of Object.entries(servers)) {
   if (!server.command && !config.includes("[mcp_servers." + name + "]")) process.exit(17);
 }
-const configured = Object.fromEntries((servers[${JSON.stringify(ASH_MCP_SERVER_NAME)}]?.envVars ?? []).map((key) => [key, process.env[key]]));
+const configured = Object.fromEntries((servers[${JSON.stringify(NAVI_MCP_SERVER_NAME)}]?.envVars ?? []).map((key) => [key, process.env[key]]));
 
-// 模拟 codex 0.144 的 MCP 环境白名单：父进程里的 ASH_* 全丢，只把 -c 中显式配置的
+// 模拟 codex 0.144 的 MCP 环境白名单：父进程里的 NAVI_* 全丢，只把 -c 中显式配置的
 // env_vars 按变量名选中的值加回来，再真正跨一层子进程启动 MCP probe。
 const runProbe = () => {
   const filtered = {};
   for (const key of ["HOME", "LANG", "PATH", "SHELL", "TMPDIR", "USER"]) {
     if (process.env[key]) filtered[key] = process.env[key];
   }
-  const child = spawnSync(process.execPath, [process.env.ASH_FAKE_MCP_PROBE, process.env.ASH_FAKE_MCP_OUTPUT], {
+  const child = spawnSync(process.execPath, [process.env.NAVI_FAKE_MCP_PROBE, process.env.NAVI_FAKE_MCP_OUTPUT], {
     env: { ...filtered, ...configured },
   });
   if (child.status !== 0) process.exit(child.status ?? 2);
@@ -79,19 +79,19 @@ if (args.includes("app-server")) {
     if (message.method === "initialize") send({ id: message.id, result: { userAgent: "fake" } });
     else if (message.method === "thread/archive") send({ id: message.id, result: {} });
     else if (message.method === "mcpServerStatus/list") {
-      // ASH_FAKE_MCP_TOOLS = ash 这一回合真正暴露的工具(用户配置里的工具名单深合并保留下来之后);
+      // NAVI_FAKE_MCP_TOOLS = navi 这一回合真正暴露的工具(用户配置里的工具名单深合并保留下来之后);
       // "silent" = 这一问永远不答
-      if (process.env.ASH_FAKE_MCP_TOOLS === "silent") return;
-      const tools = JSON.parse(process.env.ASH_FAKE_MCP_TOOLS);
-      send({ id: message.id, result: { data: [{ name: ${JSON.stringify(ASH_MCP_SERVER_NAME)}, tools: Object.fromEntries(tools.map((t) => [t, {}])) }] } });
+      if (process.env.NAVI_FAKE_MCP_TOOLS === "silent") return;
+      const tools = JSON.parse(process.env.NAVI_FAKE_MCP_TOOLS);
+      send({ id: message.id, result: { data: [{ name: ${JSON.stringify(NAVI_MCP_SERVER_NAME)}, tools: Object.fromEntries(tools.map((t) => [t, {}])) }] } });
     }
     else if (message.method === "thread/start") {
       send({ id: message.id, result: { thread: { id: "fake-thread" } } });
       send({ method: "thread/started", params: { thread: { id: "fake-thread" } } });
-      // ash 的 MCP 启动状态:ASH_FAKE_MCP_STATUS 不设 = codex 根本没加载 ash(一条都不报)。
-      const status = process.env.ASH_FAKE_MCP_STATUS;
+      // navi 的 MCP 启动状态:NAVI_FAKE_MCP_STATUS 不设 = codex 根本没加载 navi(一条都不报)。
+      const status = process.env.NAVI_FAKE_MCP_STATUS;
       const update = (s, error = null) => send({ method: "mcpServer/startupStatus/updated", params: {
-        threadId: "fake-thread", name: ${JSON.stringify(ASH_MCP_SERVER_NAME)}, status: s, error, failureReason: null,
+        threadId: "fake-thread", name: ${JSON.stringify(NAVI_MCP_SERVER_NAME)}, status: s, error, failureReason: null,
       } });
       if (status) { update("starting"); update(status, status === "failed" ? "handshake closed" : null); }
     } else if (message.method === "turn/start") {
@@ -117,22 +117,22 @@ if (args.includes("app-server")) {
 } else {
   runProbe();
   process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread" }) + "\\n");
-  if (process.env.ASH_FAKE_EXEC_CALL) process.stdout.write(JSON.stringify({ type: "item.completed", item: {
-    id: "item_1", type: "mcp_tool_call", server: ${JSON.stringify(ASH_MCP_SERVER_NAME)}, tool: "complete_task", status: "completed",
+  if (process.env.NAVI_FAKE_EXEC_CALL) process.stdout.write(JSON.stringify({ type: "item.completed", item: {
+    id: "item_1", type: "mcp_tool_call", server: ${JSON.stringify(NAVI_MCP_SERVER_NAME)}, tool: "complete_task", status: "completed",
   } }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
 }
 `);
   if (IS_WINDOWS) writeFileSync(fakeCodex, `@node "%~dp0fake-codex.mjs" %*\r\n`);
   else chmodSync(fakeCodex, 0o755);
-  process.env.ASH_FAKE_MCP_PROBE = probe;
-  process.env.ASH_FAKE_MCP_OUTPUT = output;
+  process.env.NAVI_FAKE_MCP_PROBE = probe;
+  process.env.NAVI_FAKE_MCP_OUTPUT = output;
 
   const turnToken = "turn-token-secret-123456";
   const directionToken = "direction-token-secret-123456";
   const taskId = "task-codex-boundary";
   const executor = new CodexExecutor({ bin: fakeCodex });
-  // CODEX_HOME 里**没有任何 ash 登记**:ash 起跑时自己注入(executors/ash-mcp-inject.ts)。
+  // CODEX_HOME 里**没有任何 navi 登记**:navi 起跑时自己注入(executors/navi-mcp-inject.ts)。
   const unconfigured = join(root, "unconfigured");
   mkdirSync(unconfigured);
   const identity = { CODEX_HOME: unconfigured, [ID.taskId]: taskId, [ID.turnToken]: turnToken, [ID.directionToken]: directionToken };
@@ -141,15 +141,15 @@ if (args.includes("app-server")) {
     for await (const event of events) seen.push(event);
     return seen;
   };
-  const ashProblems = (events: AgentEvent[]) =>
+  const naviProblems = (events: AgentEvent[]) =>
     events.filter((e): e is Extract<AgentEvent, { kind: "error" }> => e.kind === "error" && e.message.startsWith("Navi 的工具在这一回合没接上"));
 
-  process.env.ASH_FAKE_MCP_STATUS = "ready";
+  process.env.NAVI_FAKE_MCP_STATUS = "ready";
   const handle = executor.runSteerable({
     cwd: root,
     prompt: "probe",
     // 用户自己带了一条残缺白名单:注入排在它后面,同 key 以注入为准。
-    extraArgs: ["-c", `mcp_servers.${ASH_MCP_SERVER_NAME}.env_vars=["${ID.taskId}"]`],
+    extraArgs: ["-c", `mcp_servers.${NAVI_MCP_SERVER_NAME}.env_vars=["${ID.taskId}"]`],
     env: identity,
   });
   const readyEvents = await drain(handle.events);
@@ -161,55 +161,55 @@ if (args.includes("app-server")) {
   assert.equal(childEnv[ID.directionToken], directionToken, "Codex MCP 子进程应收到当前方向身份");
   assert.ok(!handle.commandLine.includes(turnToken), "sessions.commandLine 不得泄露回合 token");
   assert.ok(!handle.commandLine.includes(directionToken), "sessions.commandLine 不得泄露方向 token");
-  assert.match(handle.commandLine, new RegExp(`mcp_servers\\.${ASH_MCP_SERVER_NAME}=\\{command=`), "整条 ash 登记由 ash 注入,不依赖 CODEX_HOME 里有没有");
+  assert.match(handle.commandLine, new RegExp(`mcp_servers\\.${NAVI_MCP_SERVER_NAME}=\\{command=`), "整条 navi 登记由 navi 注入,不依赖 CODEX_HOME 里有没有");
   assert.ok(!/mcp_servers\.(ash|harness)[.=]/.test(handle.commandLine), "规范安装不能被历史名盖回去");
-  assert.deepEqual(ashProblems(readyEvents), [], "codex 报 ready 时不出声");
+  assert.deepEqual(naviProblems(readyEvents), [], "codex 报 ready 时不出声");
 
   // exec 那条路(profile 带了 app-server 不认的参数时走它)注入同一份。
-  delete process.env.ASH_FAKE_MCP_STATUS;
+  delete process.env.NAVI_FAKE_MCP_STATUS;
   rmSync(output, { force: true });
   const execHandle = executor.run({ cwd: root, prompt: "probe exec", env: identity });
   const execEvents = await drain(execHandle.events);
   await execHandle.cleanup?.();
   const execEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
   assert.equal(execEnv[ID.turnToken], turnToken, "exec 那条路同样透传回合身份");
-  assert.match(execHandle.commandLine, new RegExp(`mcp_servers\\.${ASH_MCP_SERVER_NAME}=\\{command=`));
+  assert.match(execHandle.commandLine, new RegExp(`mcp_servers\\.${NAVI_MCP_SERVER_NAME}=\\{command=`));
   assert.ok(!execHandle.commandLine.includes(turnToken), "exec 那条路同样不得泄露 token");
-  // exec 这条路 codex 不报 MCP 启动状态:这一回合一次 ash 工具都没调成 ⇒ 一句「核实不了」(提示级)
+  // exec 这条路 codex 不报 MCP 启动状态:这一回合一次 navi 工具都没调成 ⇒ 一句「核实不了」(提示级)
   const execNotice = execEvents.filter((e): e is Extract<AgentEvent, { kind: "error" }> => e.kind === "error" && /codex exec/.test(e.message));
-  assert.equal(execNotice.length, 1, `exec 回合没调成过 ash 的工具 ⇒ 一句核实不了:${JSON.stringify(execEvents.map((e) => e.kind))}`);
+  assert.equal(execNotice.length, 1, `exec 回合没调成过 navi 的工具 ⇒ 一句核实不了:${JSON.stringify(execEvents.map((e) => e.kind))}`);
   assert.equal(execNotice[0]!.level, "notice");
-  process.env.ASH_FAKE_EXEC_CALL = "1";
+  process.env.NAVI_FAKE_EXEC_CALL = "1";
   const execCalled = executor.run({ cwd: root, prompt: "probe exec called", env: identity });
   const calledEvents = await drain(execCalled.events);
   await execCalled.cleanup?.();
-  delete process.env.ASH_FAKE_EXEC_CALL;
-  assert.ok(!calledEvents.some((e) => e.kind === "error" && /Navi/.test(e.message)), "调成过 ash 的工具 ⇒ 不出声");
+  delete process.env.NAVI_FAKE_EXEC_CALL;
+  assert.ok(!calledEvents.some((e) => e.kind === "error" && /Navi/.test(e.message)), "调成过 navi 的工具 ⇒ 不出声");
   const untracked = executor.run({ cwd: root, prompt: "probe exec chat", env: { CODEX_HOME: unconfigured } });
   const untrackedEvents = await drain(untracked.events);
   await untracked.cleanup?.();
   assert.ok(!untrackedEvents.some((e) => e.kind === "error" && /codex exec/.test(e.message)), "不是任务回合(没有回合身份)不说这句");
 
-  // codex 报 ash 启动失败 ⇒ 当场一条诊断(带上 codex 的原话),不改本回合成败。
-  process.env.ASH_FAKE_MCP_STATUS = "failed";
+  // codex 报 navi 启动失败 ⇒ 当场一条诊断(带上 codex 的原话),不改本回合成败。
+  process.env.NAVI_FAKE_MCP_STATUS = "failed";
   const failedHandle = executor.runSteerable({ cwd: root, prompt: "probe failed", env: identity });
-  const failed = ashProblems(await drain(failedHandle.events));
+  const failed = naviProblems(await drain(failedHandle.events));
   await failedHandle.cleanup?.();
   assert.equal(failed.length, 1, "失败只说一次");
   assert.match(failed[0]!.message, /codex 报告 Navi MCP 启动失败：handshake closed/);
   assert.equal(failed[0]!.affectsTurn, false, "这条是诊断,成败照旧由交卷判");
 
   // ready 了但用户配置里的工具名单把协议工具挡掉 ⇒ 经执行器问 mcpServerStatus/list 后出声。
-  process.env.ASH_FAKE_MCP_STATUS = "ready";
-  process.env.ASH_FAKE_MCP_TOOLS = JSON.stringify(ASH_MCP_TOOLS.filter((t) => t !== "complete_task"));
+  process.env.NAVI_FAKE_MCP_STATUS = "ready";
+  process.env.NAVI_FAKE_MCP_TOOLS = JSON.stringify(NAVI_MCP_TOOLS.filter((t) => t !== "complete_task"));
   const narrowedHandle = executor.runSteerable({ cwd: root, prompt: "probe narrowed", env: identity });
-  const narrowed = ashProblems(await drain(narrowedHandle.events));
+  const narrowed = naviProblems(await drain(narrowedHandle.events));
   await narrowedHandle.cleanup?.();
   assert.equal(narrowed.length, 1, "工具清单缺了 complete_task ⇒ 一条诊断");
   assert.match(narrowed[0]!.message, /codex 连上了 Navi，但 complete_task 不在 agent 手上/);
 
   // 清单那一问到回合收尾都没回来 ⇒ 有界地等一下,然后说核实不了(提示级),不折回没问题
-  process.env.ASH_FAKE_MCP_TOOLS = "silent";
+  process.env.NAVI_FAKE_MCP_TOOLS = "silent";
   const hungHandle = executor.runSteerable({ cwd: root, prompt: "probe hung", env: identity });
   const hungEvents = await drain(hungHandle.events);
   await hungHandle.cleanup?.();
@@ -218,22 +218,22 @@ if (args.includes("app-server")) {
   assert.equal(hung[0]!.level, "notice");
   assert.match(hung[0]!.message, /工具清单没拿到（到回合收尾还没问到）/);
   assert.ok(hungEvents.some((e) => e.kind === "done" && e.exitStatus === 0), "核实不了不改本回合成败");
-  process.env.ASH_FAKE_MCP_TOOLS = JSON.stringify(ASH_MCP_TOOLS);
+  process.env.NAVI_FAKE_MCP_TOOLS = JSON.stringify(NAVI_MCP_TOOLS);
 
   // 一条状态都没报 ⇒ 回合收尾时说「没有加载」。
-  delete process.env.ASH_FAKE_MCP_STATUS;
+  delete process.env.NAVI_FAKE_MCP_STATUS;
   const silentHandle = executor.runSteerable({ cwd: root, prompt: "probe silent", env: identity });
-  const silent = ashProblems(await drain(silentHandle.events));
+  const silent = naviProblems(await drain(silentHandle.events));
   await silentHandle.cleanup?.();
   assert.equal(silent.length, 1);
   assert.match(silent[0]!.message, /codex 这一回合没有加载 Navi MCP/);
-  console.log("✓ Codex 起跑注入 ash MCP(不依赖配置登记)、env_vars 透传回合身份、argv 无 token,ash 没连上 / 工具不全 / exec 核实不了时如实出声");
+  console.log("✓ Codex 起跑注入 navi MCP(不依赖配置登记)、env_vars 透传回合身份、argv 无 token,navi 没连上 / 工具不全 / exec 核实不了时如实出声");
 } finally {
-  if (oldProbe === undefined) delete process.env.ASH_FAKE_MCP_PROBE;
-  else process.env.ASH_FAKE_MCP_PROBE = oldProbe;
-  if (oldOutput === undefined) delete process.env.ASH_FAKE_MCP_OUTPUT;
-  else process.env.ASH_FAKE_MCP_OUTPUT = oldOutput;
-  if (oldStatus === undefined) delete process.env.ASH_FAKE_MCP_STATUS;
-  else process.env.ASH_FAKE_MCP_STATUS = oldStatus;
+  if (oldProbe === undefined) delete process.env.NAVI_FAKE_MCP_PROBE;
+  else process.env.NAVI_FAKE_MCP_PROBE = oldProbe;
+  if (oldOutput === undefined) delete process.env.NAVI_FAKE_MCP_OUTPUT;
+  else process.env.NAVI_FAKE_MCP_OUTPUT = oldOutput;
+  if (oldStatus === undefined) delete process.env.NAVI_FAKE_MCP_STATUS;
+  else process.env.NAVI_FAKE_MCP_STATUS = oldStatus;
   rmSync(root, { recursive: true, force: true });
 }

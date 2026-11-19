@@ -1,7 +1,7 @@
 // 新建框里 `@` 一个人（test-composer-call-dom.mjs）：真的 TaskComposerPanel，接口由测试那边拦。
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task } from "@navi/shared";
 import type { ComposerDraft } from "../../src/composer/composerDraft.ts";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
@@ -9,8 +9,8 @@ import "../../src/styles/global.css";
 
 const project: ProjectView = {
   id: "p1",
-  name: "ash",
-  repoPath: "/tmp/ash",
+  name: "navi",
+  repoPath: "/tmp/navi",
   workflowId: null,
   useWorktreeDefault: false,
   createdAt: "2026-11-15T00:00:00.000Z",

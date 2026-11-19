@@ -10,15 +10,15 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
 import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
-import { ensureAshMcp, type CodexAsk } from "../src/auth/user-cli-mcp.js";
+import { ensureNaviMcp, type CodexAsk } from "../src/auth/user-cli-mcp.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
 import { REPO_DIR } from "../src/paths.js";
 import { REAL_HOST_CLI } from "./host-cli-stubs.js";
 
 
-export const stage = mkdtempSync(join(tmpdir(), "ash-user-cli-mcp-"));
+export const stage = mkdtempSync(join(tmpdir(), "navi-user-cli-mcp-"));
 process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
 
 /** 每一格都拿一副全新的「假 HOME + 个人目录」,免得前一格的写入影响后一格。 */
@@ -42,8 +42,8 @@ export const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"))
 // 替身把那几条路逐个驱动起来。
 
 /** codex 收下了(列出的是写进去的那条,也就是当前名)。多数格子钉的是**写出来的内容**,不是 codex 的判决,用这个。 */
-export const LISTS_ASH: CodexAskOutcome = {
-  kind: "answer", code: 0, stdout: JSON.stringify([{ name: ASH_MCP_SERVER_NAME, enabled: true }]), stderr: "",
+export const LISTS_NAVI: CodexAskOutcome = {
+  kind: "answer", code: 0, stdout: JSON.stringify([{ name: NAVI_MCP_SERVER_NAME, enabled: true }]), stderr: "",
 };
 
 /** 按固定答案应付,并把「它拿什么去问的、问的时候用户那份文件长什么样」记下来。 */
@@ -80,11 +80,11 @@ export const askRealCodex: CodexAsk = async (sandbox) => {
   return { kind: "answer", code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 };
 
-// 拿本机真 codex 当判官的那一格要明说才跑(ASH_TEST_REAL_CLI=1):结论跟着这台机器装的是哪一版走。
+// 拿本机真 codex 当判官的那一格要明说才跑(NAVI_TEST_REAL_CLI=1):结论跟着这台机器装的是哪一版走。
 export const HAS_CODEX = REAL_HOST_CLI && !!resolveLaunch("codex", ["mcp", "list", "--json"]);
 
 /** 默认替身 = 「codex 收下了」。只有明确要考 codex 判决的格子才自己传。 */
-export const ensure = (dir: string, agent: string, host: string, ask: CodexAsk = canned(LISTS_ASH)) =>
-  ensureAshMcp(dir, agent, host, ask);
+export const ensure = (dir: string, agent: string, host: string, ask: CodexAsk = canned(LISTS_NAVI)) =>
+  ensureNaviMcp(dir, agent, host, ask);
 /** 宿主真的没登记过、仓库也没 build 过 mcp 时,唯一诚实的答案是「补不上」。 */
 export const HAS_BUILT_MCP = existsSync(join(REPO_DIR, "mcp", "dist", "index.js"));

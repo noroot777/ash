@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 
-const root = mkdtempSync(join(tmpdir(), "ash-pending-wait-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-pending-wait-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
 const { projects, scheduledMessages } = await import("../src/db/schema.js");

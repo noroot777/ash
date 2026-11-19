@@ -3,7 +3,7 @@
 //
 // 验的是侧栏那一圈:签名代理批量问持有机、逐个任务鉴权、pending 不问、联系不上如实进
 // offline、设置里删掉的机器当不存在。跑在**源机进程内**(测试进程自己就是源机),
-// 所以按调用时机动态 import 那些吃 ASH_DB 的模块 —— 主文件早就把环境变量设好了。
+// 所以按调用时机动态 import 那些吃 NAVI_DB 的模块 —— 主文件早就把环境变量设好了。
 import assert from "node:assert/strict";
 import { api } from "./handoff-test-utils.js";
 
@@ -91,7 +91,7 @@ export async function checkOutboundStates(opts: {
   );
 
   // 指纹对不上(地址填错了、或这个地址后面已经换了别的机器):**任务 id 一个都不发出去**,
-  // 如实进 offline。不验的话,一台恰好也批准过本机的 ash 会回 200 + 空 rows —— 侧栏既
+  // 如实进 offline。不验的话,一台恰好也批准过本机的 navi 会回 200 + 空 rows —— 侧栏既
   // 没有实时状态、也不说「联系不上」,正是这次要修的那种「不是实时却没有提示」。
   await setMarker({ peerUrl: deadUrl, peerName: "刚改过地址的机器", peerFp: "0".repeat(64) });
   const impostor = await outboundRemoteStates(SINGLE_ACTOR);

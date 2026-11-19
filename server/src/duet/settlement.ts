@@ -1,4 +1,4 @@
-import type { DuetConsensusBy } from "@ash/shared";
+import type { DuetConsensusBy } from "@navi/shared";
 
 export type DuetSettlementState = {
   raisedA: boolean;

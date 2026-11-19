@@ -2,14 +2,14 @@
 //
 // ── 为什么要有这份东西 ──────────────────────────────────────────────────────
 //
-// 「哨兵」这个词在 ash 里有两个所指，而用户看不出区别：
+// 「哨兵」这个词在 navi 里有两个所指，而用户看不出区别：
 //
-// - ash 的哨兵（MCP `start_monitor`）：进程由 ash server 起，全功能。
-// - claude 自带的 `Monitor` 工具：进程在 agent 自己的进程树里，ash 原本一无所知。
+// - navi 的哨兵（MCP `start_monitor`）：进程由 navi server 起，全功能。
+// - claude 自带的 `Monitor` 工具：进程在 agent 自己的进程树里，navi 原本一无所知。
 //
 // claude 的提示词会主动把长等待引导到它自己那个 `Monitor` 上（Bash 里的长 `sleep` 直接
 // 被拦，拦截文案就写着「use Monitor with an until-loop」），所以 claude 执行器几乎必然
-// 用内置的那个。2026-10-14 实测的任务挂了 12 个内置 Monitor、ash 一个都没记上，面板上
+// 用内置的那个。2026-10-14 实测的任务挂了 12 个内置 Monitor、navi 一个都没记上，面板上
 // 写着「这个任务上还没有哨兵」——而 agent 在对话里反复说「等 Monitor 通知」。用户对不上
 // 账，只能得出「这功能坏了」。
 //
@@ -33,8 +33,8 @@
 //
 // 按 `description` 之类的内容去猜一律不行：两种后台任务的 description 长得一模一样。
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
-import { monitorExactExpiry, monitorStatusCorrectable, parseMonitorStartReceipt, type MonitorLifetime, type MonitorStatus } from "@ash/shared/monitor";
-import { claudeMonitorEndedReason, claudeMonitorStatus } from "@ash/shared/monitor-claude";
+import { monitorExactExpiry, monitorStatusCorrectable, parseMonitorStartReceipt, type MonitorLifetime, type MonitorStatus } from "@navi/shared/monitor";
+import { claudeMonitorEndedReason, claudeMonitorStatus } from "@navi/shared/monitor-claude";
 import { bus } from "./bus.js";
 import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitor-call.js";
 import { matchBySource } from "./claude-monitor-identity.js";
@@ -98,7 +98,7 @@ export class ClaudeMonitorTrace {
 
   /** 取消 bus 订阅。`finishAll` 里调用，别让实例跟着事件总线泄漏。 */
   private unsubscribe: (() => void) | null = null;
-  /** claude 的后台任务 id → ash 这边那一行的主键。只在队列里读写。 */
+  /** claude 的后台任务 id → navi 这边那一行的主键。只在队列里读写。 */
   private rows = new Map<string, string>();
   /**
    * tool_use_id → claude 的后台任务 id。
@@ -112,7 +112,7 @@ export class ClaudeMonitorTrace {
   /**
    * 来源侧**自己盖的**最后一个时刻（`assistant`/`user` 事件上的 `timestamp`）。
    *
-   * 起点那一刻只有 ash 的墙上时钟可用——`system` 事件不带 timestamp（本机 2.1.283 实测：
+   * 起点那一刻只有 navi 的墙上时钟可用——`system` 事件不带 timestamp（本机 2.1.283 实测：
    * assistant 1592 条、user 877 条全带，system/stream_event 一条不带）。但「我现在读到了
    * 这条事件」不等于「这件事刚刚发生」：**接管回来那一刻是从文件已消费位置之后接着读的**
    * （见 executors/detached.ts），积压的事件会一口气涌进来，那时的 `Date.now()` 比真实起点
@@ -139,7 +139,7 @@ export class ClaudeMonitorTrace {
   /**
    * 本会话遗留的投影有没有认回来。
    *
-   * **agent 进程活得过 ash 重启**（detached），重启后 `reattachRunningTasks` 把它接回来、
+   * **agent 进程活得过 navi 重启**（detached），重启后 `reattachRunningTasks` 把它接回来、
    * 新建一个 parser，于是也新建一个本类的实例——而上一轮认领的那些投影只存在于上一个进程
    * 的内存里。不认回来的话，来源侧后续的 `task_notification` 会因为「没认领过」被直接丢掉，
    * 卡片永远停在旧状态；开机清扫再把它们当成死的标掉，用户看到的是「任务还在跑、哨兵说
@@ -220,7 +220,7 @@ export class ClaudeMonitorTrace {
   private warn(what: string, detail: unknown): void {
     if (this.warned >= 3) return;
     this.warned += 1;
-    console.warn(`[ash] 内置 Monitor 投影${what}（session=${this.cliSessionId || "未知"}）:`, detail);
+    console.warn(`[navi] 内置 Monitor 投影${what}（session=${this.cliSessionId || "未知"}）:`, detail);
   }
 
   /**
@@ -355,7 +355,7 @@ export class ClaudeMonitorTrace {
    * 事件到达这一刻能给出的起点锚点：时刻本体 + 这个区间有多宽。
    *
    * 宽度 = 到达时刻 − 来源盖的上一个时刻。实时流里它是「CLI 吐出那条 assistant 消息」到
-   * 「ash 的 readline 回调跑起来」之间那点开销（实测同量级的 tool_use→回执区间是
+   * 「navi 的 readline 回调跑起来」之间那点开销（实测同量级的 tool_use→回执区间是
    * 22~59ms）；接管积压重放时它等于那批事件积压了多久，于是自动落到容差之外。
    */
   private startAnchor(): { at: string; widthMs: number } {
@@ -378,7 +378,7 @@ export class ClaudeMonitorTrace {
     const cliSessionId = this.cliSessionId;
     const job = (async () => {
       if (dbClient.closed || !cliSessionId) return;
-      // **`lost` 也要认回来。** 那是 ash 推断的死亡，可能判错了（agent 活得过 ash 重启），
+      // **`lost` 也要认回来。** 那是 navi 推断的死亡，可能判错了（agent 活得过 navi 重启），
       // 来源侧后续照常报完成。只认 running 的话，这些行连 `close` 都到不了，而 `close` 里
       // 那条「lost 让位于来源事实」的规则就永远用不上（第 4 轮审查实测 lostReclaim）。
       const rows = await db
@@ -580,7 +580,7 @@ export class ClaudeMonitorTrace {
       return;
     }
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
-    // `lost` 也要让路：那是 ash 推断的，来源侧后到的真终态是事实（见 monitorStatusCorrectable）。
+    // `lost` 也要让路：那是 navi 推断的，来源侧后到的真终态是事实（见 monitorStatusCorrectable）。
     if (!row || !monitorStatusCorrectable(row.status)) return;
     // **条件更新**：WHERE 里再查一次旧状态，不是只按 id 写。读和写之间隔着 await，期间另一个
     // writer（接管前后的另一个实例）可能已经落了一个来源终态；只按 id 写会把它覆盖掉。
@@ -600,7 +600,7 @@ export class ClaudeMonitorTrace {
    * agent 进程结束了：把**这一代**名下还挂着 `running` 的投影落 `lost`。
    *
    * 不收这个尾的话，面板上会永远留着几张「正在盯着」的卡，而那些进程早就随 agent 一起
-   * 没了——这正是 ash 哨兵当初要解决的问题，不该在投影这一侧原样复刻一遍。
+   * 没了——这正是 navi 哨兵当初要解决的问题，不该在投影这一侧原样复刻一遍。
    *
    * 注意这跟 `reattachMonitors` 的分工：那边只认 `kind='ash'`（有 pid 可以验），claude 的
    * 投影没有 pid，唯一可靠的死亡信号就是「它所属的 agent 进程结束了」，也就是这里。

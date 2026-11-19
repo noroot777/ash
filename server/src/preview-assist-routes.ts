@@ -4,8 +4,8 @@
 // 「短命作业」的控制面，两者的生命周期和权限判据都不一样（这里每一条都要项目管理员）。
 import type { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { previewLaunchOf } from "@ash/shared/preview";
-import type { AgentType } from "@ash/shared";
+import { previewLaunchOf } from "@navi/shared/preview";
+import type { AgentType } from "@navi/shared";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { actorOf, authErrorResponse, ownerIdOf } from "./auth/context.js";
@@ -22,7 +22,7 @@ export function mountPreviewAssistRoutes(api: Hono): void {
     try {
       await requireProjectAdmin(actorOf(c), c.req.param("id"));
       c.header("cache-control", "no-store");
-      // instance:「我是哪一台 ash」。前端拿它把「重启吞了」和「终态过期了」分开 —— 两种
+      // instance:「我是哪一台 navi」。前端拿它把「重启吞了」和「终态过期了」分开 —— 两种
       // 情况服务端回的都是 job: null（见 preview-assist-jobs.ts 的 ASSIST_INSTANCE）。
       return c.json({ job: previewAssistState(c.req.param("id")), instance: ASSIST_INSTANCE });
     } catch (error) {

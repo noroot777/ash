@@ -1,9 +1,9 @@
-// 首启向导(§二)。它只管一次性的分叉:这台 ash 是给一个人用,还是给几个人用。
+// 首启向导(§二)。它只管一次性的分叉:这台 navi 是给一个人用,还是给几个人用。
 //
 // 「切到多人」的表单本体在 `MultiModeForm.tsx` —— 设置页危险区走的是同一份,
 // 那几条警告(转不回、根目录锁死)以及「CLI 额度」那一档只能有一份拷贝。
 import { useCallback, useState } from "react";
-import type { AuthState } from "@ash/shared";
+import type { AuthState } from "@navi/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
 import { AuthShell } from "./AuthShell.tsx";

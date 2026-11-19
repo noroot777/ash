@@ -11,7 +11,7 @@
 
 ```bash
 # 1) 起后端（在 Navi 根目录）
-cd /Users/example/code/ash
+cd /Users/example/code/navi
 npm run dev          # 或 npm run build && npm start，监听 :4317（0.0.0.0）
 
 # 2) 起手机端
@@ -53,7 +53,7 @@ src/
 
 ## 复用 Navi 共享类型（零漂移）
 
-`@ash/shared` 经 `file:../shared` 依赖（`node_modules/@ash/shared` 符号链接）指向
+`@navi/shared` 经 `file:../shared` 依赖（`node_modules/@navi/shared` 符号链接）指向
 `shared/src/index.ts`，Metro 直接转译其 TS 源码 —— 无构建步骤，类型与后端永不漂移。
 对应 `metro.config.js`：`watchFolders=[repo 根]` + `unstable_enableSymlinks`。
 
@@ -63,7 +63,7 @@ src/
 ## 已验证
 
 - `npx tsc --noEmit` 类型零报错。
-- `npx expo export --platform ios` 干净打包（含 `@ash/shared` 解析与转译）。
+- `npx expo export --platform ios` 干净打包（含 `@navi/shared` 解析与转译）。
 - 对照线上后端核对了 `/api/projects`、`/api/tasks`、`/api/agents`、`/api/tasks/:id/sessions`、
   `/api/sessions/:id/output`、SSE `/api/events` 的返回形态。
 - **待用户在真机（Expo Go）上跑一遍**：连后端 → 列表 → 新建并运行 → 看实时流 → 回复续接。

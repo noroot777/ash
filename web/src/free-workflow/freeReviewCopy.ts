@@ -1,5 +1,5 @@
-import type { FreeReviewDebate, FreeReviewRound, FreeReviewRun, FreeWorkflowState, Task } from "@ash/shared";
-import { reviewAnchorMatches } from "@ash/shared/free-workflow";
+import type { FreeReviewDebate, FreeReviewRound, FreeReviewRun, FreeWorkflowState, Task } from "@navi/shared";
+import { reviewAnchorMatches } from "@navi/shared/free-workflow";
 
 // 审查链只有四个持久状态；「修复中 / 等待复审 / 结论过期」全部在这里**推导**出来：
 // - 修复中 = 任务本身 running/queued 且最近一轮停在未通过（或挂着预约）

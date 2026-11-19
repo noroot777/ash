@@ -22,7 +22,7 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
     ensure(!/accepted_snapshot_unreadable|source_branch_missing|start_commit_unreadable/.test(await page.locator("main").innerText()), "internal diff reason leaked to UI");
   }
   await go("case6-parent");
-  await child("case6-child").filter({ hasText: /目标分支 ash\/case6-pa 仍在工作区/ }).waitFor({ state: "visible" });
+  await child("case6-child").filter({ hasText: /目标分支 navi\/case6-pa 仍在工作区/ }).waitFor({ state: "visible" });
   ensure(!await childBox("case6-child").isEnabled(), "occupied legacy merge target must block selection");
   await blocked("legacy child must not be merged after its parent");
   ensure(await desk.getByRole("link", { name: "看改动", exact: true }).count() === 1, "legacy child has no navigation entry");
@@ -58,9 +58,9 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   // 换合入目标：自己的任务分支不出现在菜单里；任务分支先在层里警告，「取消」不发请求，「改到这里」才发。
   await go("case9-child");
   await d.openMenu();
-  ensure(await d.option("ash/case9-ch").count() === 0, "own task branch must not be offered as a merge target");
+  ensure(await d.option("navi/case9-ch").count() === 0, "own task branch must not be offered as a merge target");
   const before = posts.length;
-  await d.option("ash/case9-pa").click();
+  await d.option("navi/case9-pa").click();
   const warning = d.menu.getByRole("status");
   await warning.filter({ hasText: "不能和它一起统一验收" }).waitFor({ state: "visible" });
   await button(d.menu, "取消").click();
@@ -68,10 +68,10 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   ensure(!posts.slice(before).some(path => path.endsWith("/merge-target")), "picking a task branch must not save before the warning is confirmed");
   await page.keyboard.press("Escape");
   await d.menu.waitFor({ state: "detached" });
-  await changeTarget(d, "case9-child", "ash/case9-pa");
+  await changeTarget(d, "case9-child", "navi/case9-pa");
   const occupied = row("blocker", "目标工作区仍被占用").and(page.locator(".is-block"));
   await occupied.waitFor({ state: "visible" });
-  ensure((await detail(occupied)).includes("目标分支 ash/case9-pa 仍在工作区"), "occupied target must explain itself");
+  ensure((await detail(occupied)).includes("目标分支 navi/case9-pa 仍在工作区"), "occupied target must explain itself");
   await blocked("occupied target must block individual acceptance");
   await go("case9-parent");
   await release().click();
@@ -105,7 +105,7 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   // 挡路的原文收在 blocker 那一行的展开层里：要修什么、怎么修，一个字不少。
   await go("case12-child");
   const broken = (await detail(row("blocker", "目标工作区仍被占用"))).trim();
-  ensure(broken.includes("目标分支 ash/case12-p 仍在工作区") && broken.includes("git worktree repair"), "broken target must explain how to repair the link");
+  ensure(broken.includes("目标分支 navi/case12-p 仍在工作区") && broken.includes("git worktree repair"), "broken target must explain how to repair the link");
   await blocked("broken backlink with surviving files must block child acceptance");
   await go("case12-parent");
   await release().click();
@@ -139,7 +139,7 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   const tagged = row("failure", "标签已打，清理没做完");
   await tagged.waitFor({ state: "visible" });
   const tagText = await detail(tagged);
-  ensure(tagText.includes("ash-accepted/"), "tag partial success must name the created tag");
+  ensure(tagText.includes("navi-accepted/"), "tag partial success must name the created tag");
   ensure(!/合并已完成|验收没完成/.test(await tagged.innerText()), "tag result must agree with its actual completed action");
   ensure(await desk.locator(".acc-done").count() === 0, "tag partial success must not report acceptance");
 

@@ -1,8 +1,8 @@
 import { useRef } from "react";
-import type { ChatSnapshot } from "@ash/shared/chat";
-import { ALL_MENTION_ALIASES, isAllMention } from "@ash/shared/chat";
-import type { TaskListItem } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
+import type { ChatSnapshot } from "@navi/shared/chat";
+import { ALL_MENTION_ALIASES, isAllMention } from "@navi/shared/chat";
+import type { TaskListItem } from "@navi/shared";
+import { taskDisplayStatus } from "@navi/shared";
 import { ArrowDown, ArrowUpRight, CheckCircle, Hash, Lightning } from "@phosphor-icons/react";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { motionReduced } from "../lib/useSwapText.ts";

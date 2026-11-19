@@ -1,5 +1,5 @@
-import type { Session, Task, TaskListItem } from "@ash/shared";
-import { agentMix } from "@ash/shared/team";
+import type { Session, Task, TaskListItem } from "@navi/shared";
+import { agentMix } from "@navi/shared/team";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { InspKv, InspRow } from "../inspector/parts.tsx";
 import { InfoBaseRow, InfoRunRows, InfoSessionRows } from "../task-detail/info/InfoRunRows.tsx";

@@ -1,4 +1,4 @@
-import type { HandoffPeerOffline, HandoffRemoteState, TaskListItem } from "@ash/shared";
+import type { HandoffPeerOffline, HandoffRemoteState, TaskListItem } from "@navi/shared";
 
 // 出站存档行的状态合并 —— 纯函数那部分（React 那半在 useOutboundState.ts）。
 // 拆出来是为了能直接钉住：这里错一次，侧栏就会拿着上一轮的旧状态当实时状态用。

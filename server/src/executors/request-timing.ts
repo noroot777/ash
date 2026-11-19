@@ -4,7 +4,7 @@
 //
 // 起点算到「请求发出」而不是「第一个 token 到达」:codex 不报首字时间,两家要放在一起比,
 // 就只能都按端到端算。起止有一头没看见的请求整次不计,宁缺不估。
-import type { OutputTiming } from "@ash/shared";
+import type { OutputTiming } from "@navi/shared";
 
 class TimingTotal {
   private output = 0;
@@ -30,7 +30,7 @@ class TimingTotal {
  * `ttft_ms`)→ `message_delta`(带这次的输出 token)→ `message_stop`。起点 = message_start
  * 到达时刻倒推 ttft_ms。子智能体的请求跟主线程交错着到,按 parent_tool_use_id 分开记。
  *
- * 用的是 ash 读到这一行的时刻,所以**接管重放的那段不能喂进来**(那是一口气读完的旧输出)。
+ * 用的是 navi 读到这一行的时刻,所以**接管重放的那段不能喂进来**(那是一口气读完的旧输出)。
  */
 export class ClaudeRequestTimer {
   private readonly open = new Map<string, { start: number; output: number }>();

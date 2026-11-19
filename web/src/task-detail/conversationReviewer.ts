@@ -1,7 +1,7 @@
 // 「这一回合是审查者在说话吗、是第几轮」——会话里认审查者的全部判据。
 // 从 conversationModel 里分出来的一块：那边管的是「把落盘与直播拼成一条时间线」,
 // 这里只管在那条线上认人。类型是单向借用（`import type` 编译后不留引用）。
-import { LEGACY_SYS_MARKER } from "@ash/shared";
+import { LEGACY_SYS_MARKER } from "@navi/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { stageOf, verifyMarkOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import type { ConversationItem } from "./conversationModel.ts";

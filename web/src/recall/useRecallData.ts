@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { UserMessage } from "@ash/shared/user-messages";
+import type { UserMessage } from "@navi/shared/user-messages";
 import { api } from "../lib/api.ts";
 
 /** 打字停下这么久才去问：每敲一个字问一次没必要，服务端那边是一次全量筛。 */

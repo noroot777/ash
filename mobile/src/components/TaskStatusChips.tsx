@@ -6,7 +6,7 @@
 import type { ComponentProps } from "react";
 import { View, Text } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { STAGE_LABELS, hasPendingAcceptCommit, taskDisplayStatus, type TaskListItem } from "@ash/shared";
+import { STAGE_LABELS, hasPendingAcceptCommit, taskDisplayStatus, type TaskListItem } from "@navi/shared";
 import { attentionKind, type AttentionKind } from "@/lib/taskAttention";
 import { fonts, radius, useTheme, type Theme } from "@/lib/theme";
 

@@ -2,7 +2,7 @@
 // 和 HandoffError → HTTP 状态码的翻译。
 //
 // 两类端点,别混:
-//  ① **机器对机器**(/handoff/ping、/projects/:id/refs、/import):由源机的 ash 服务端来调,
+//  ① **机器对机器**(/handoff/ping、/projects/:id/refs、/import):由源机的 navi 服务端来调,
 //     不给浏览器用——server→server 顺带绕开了 CORS。这三个走身份签名:/refs 和 /import
 //     要求来源机器已被批准(handoff-peers.ts requireApprovedPeer),/ping 是配对入口
 //     本身,谁都能敲,但没获批准就不报项目清单。
@@ -10,12 +10,12 @@
 //     拉一次,把用户填的主机名映射成指纹),回的只有公钥指纹和主机名,本来就是拿去两边
 //     肉眼核对的东西。
 //  ② **本机设置面**(/handoff/peers*、/handoff/targets*、/handoff/request):给自己的网页用。
-//     自用模式下和 ash 其它端点一样没有鉴权(整机在可信网络里用的既定取舍);**多人模式下
+//     自用模式下和 navi 其它端点一样没有鉴权(整机在可信网络里用的既定取舍);**多人模式下
 //     它们必须先登录** —— 它们管的是「谁能把任务推进来」和「我在对端的账号 key」,不是
 //     「谁能打开这个网页」。豁免名单在 auth/middleware.ts,只列 ① 那几条(refs 带路径参数,
 //     写成路径形状的正则),别把 `/api/handoff/` 整个前缀放进去。
 import { hostname } from "node:os";
-import type { HandoffAudit, HandoffPeerCapabilities, TaskHandoff } from "@ash/shared";
+import type { HandoffAudit, HandoffPeerCapabilities, TaskHandoff } from "@navi/shared";
 import type { Hono } from "hono";
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
@@ -50,11 +50,11 @@ import { canSeeProject, visibleProjectsFor } from "./auth/visibility.js";
 import { actorOf } from "./auth/context.js";
 import { addTarget, deleteTarget, listTargets, patchTarget, setPeerKey } from "./auth/handoff-scope.js";
 import { HANDOFF_TRUSTED_MARK, HANDOFF_WIRE_SERVICE } from "./handoff-wire.js";
-import { TASK_BRANCH_PREFIX } from "@ash/shared/task-branch";
+import { TASK_BRANCH_PREFIX } from "@navi/shared/task-branch";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
-// 错误应答带 ash:true = 「ash 业务层的明确拒绝,本机可证明没留下这次接力的
+// 错误应答带 navi:true = 「navi 业务层的明确拒绝,本机可证明没留下这次接力的
 // 任务」——importHandoff 里任务行插入之后的失败都会补偿回滚再抛 HandoffError,没插
 // 之前的失败(含非 HandoffError 逃逸)本来就没落任何行,所以两个分支都能安全带标记。
 // 唯一的例外是补偿回滚自身失败(e.unsettled):那时本机可能留有半截任务,故意不带
@@ -114,14 +114,14 @@ async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
     });
     return returning;
   } catch (error) {
-    if (error instanceof HandoffError && error.remoteAsh && error.remoteStatus === 409) {
+    if (error instanceof HandoffError && error.remoteNavi && error.remoteStatus === 409) {
       throw new HandoffError(
         "对端已经收到或正在导入这份任务，不能恢复本机旧副本；请关闭确认框，重新打开接力弹窗并原样重试以幂等收口",
         409,
       );
     }
     const detail = error instanceof Error ? error.message : String(error);
-    if (error instanceof HandoffError && error.remoteStatus === 404 && error.remoteAsh) {
+    if (error instanceof HandoffError && error.remoteStatus === 404 && error.remoteNavi) {
       throw new PendingCancellationError(
         `这个地址上的新版 Navi 没有对应的历史存档，可能地址已经换机或存档已删除，原目标机的任务状态无法核验；本机标记未移除。请先找回原目标机或修正地址；也可显式承担双任务风险后强制恢复。原始原因：${detail}`,
         "identity",
@@ -256,7 +256,7 @@ async function handleImport(c: Context, returning: boolean) {
 
 export function mountHandoffRoutes(api: Hono): void {
   mountHandoffRemoteRoutes(api);
-  // 对端探活 + **配对入口**:证明「我是一台 ash、我是哪一台」,并报出可作为接力目的地
+  // 对端探活 + **配对入口**:证明「我是一台 navi、我是哪一台」,并报出可作为接力目的地
   // 的项目清单。源机带 ?nonce= 来,本机用私钥签它 —— 只报公钥证明不了持有私钥(公钥
   // 是公开的,谁都能复制一份复读)。源机没批准过的话,项目清单故意为空:仓库布局不该
   // 报给还没被认可的机器,而这次来访已经落进待批准列表,用户点一下就能放行。

@@ -10,7 +10,7 @@ import { ScmOperationError } from "./scm-paths.js";
 //
 // ① **不写进仓库的 .git/config。** 提交署名和 SSH key 走那条路（`git-identity.ts`），
 //    因为它们本来就该被 agent 和用户的终端看见。令牌相反：`.git/config` 是明文，被所有
-//    worktree 共享，`git config --list` 一打就出来，agent 读得到。所以它只存 ash 自己的库。
+//    worktree 共享，`git config --list` 一打就出来，agent 读得到。所以它只存 navi 自己的库。
 //
 // ② **令牌只写不读。** 读侧只报用户名和「配没配」（`ProjectGitCredentialView`）。前端
 //    没有任何路径能把它取回来 —— 一个存下去就再也拿不回来的密码框，比一个能被截图、被

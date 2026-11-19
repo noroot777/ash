@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { HandoffTarget, Task, TaskListItem } from "@ash/shared";
-import { isAcceptedStage, TASK_STATUS_LABELS } from "@ash/shared";
+import type { HandoffTarget, Task, TaskListItem } from "@navi/shared";
+import { isAcceptedStage, TASK_STATUS_LABELS } from "@navi/shared";
 import { ArrowCounterClockwise, ArrowUp, DesktopTower, SpinnerGap } from "@phosphor-icons/react";
 import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
 import type { RemoteReturns } from "./useRemoteReturns.ts";

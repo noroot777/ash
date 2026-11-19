@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { cliStateScopeKey, isGoalExecution, readCliState, readCliStateScopes, type CliCommand, type CliSessionState } from "@ash/shared/cli-commands";
+import type { AgentType } from "@navi/shared";
+import { cliStateScopeKey, isGoalExecution, readCliState, readCliStateScopes, type CliCommand, type CliSessionState } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { agents, sessions, tasks } from "./db/schema.js";
 import { executorOwnerScope } from "./auth/dispatch-gate.js";

@@ -1,4 +1,4 @@
-import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider } from "@navi/shared";
 import { executorProfileFor, executorRunSummary, type ExecutorSelection } from "../lib/agentAvailability.ts";
 
 export type ComposerRunSummary = {

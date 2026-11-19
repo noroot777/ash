@@ -14,9 +14,9 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
-import { markdownImageRefs } from "@ash/shared/markdown-images";
-import { childResultTexts, sameSnapshotIdentity, snapshotVersion } from "@ash/shared/native-work";
+import type { AgentEvent, NativeAgentActivity } from "@navi/shared";
+import { markdownImageRefs } from "@navi/shared/markdown-images";
+import { childResultTexts, sameSnapshotIdentity, snapshotVersion } from "@navi/shared/native-work";
 import { externalImageDestination } from "./agent-attachments.js";
 import { markdownTextHash } from "./executors/markdown-image-ledger.js";
 import { metaSeedKey, type MetaImageField } from "./executors/markdown-image-meta.js";

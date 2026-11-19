@@ -4,7 +4,7 @@ import type {
   ScheduledMessageMode,
   ScheduledMessageStatus,
   TaskStatus,
-} from "@ash/shared";
+} from "@navi/shared";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
@@ -316,7 +316,7 @@ api.post("/tasks/:id/pause", async (c) => {
       : eq(tasks.activeDirectionToken, r.activeDirectionToken),
   ];
   // 托盘里已经有本来会把这一轮叫醒的哨兵结果 ⇒ 不暂停、不记检查点,当场交出去(monitor-turn-handoff.ts)。
-  // 只交给带得回回执号的调用方(`monitorAck`,ash 的 MCP;带不回就永远算没送到,见 monitor-turn-ack.ts);
+  // 只交给带得回回执号的调用方(`monitorAck`,navi 的 MCP;带不回就永远算没送到,见 monitor-turn-ack.ts);
   // 这一次带回来的回执号先确认。
   const handed = await handMonitorResultsOnPause(taskId, r.activeTurnToken, identity,
     { receipts: receiptHands(b.monitorReceipt), take: b.monitorAck === true });

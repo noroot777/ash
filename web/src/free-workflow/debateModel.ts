@@ -1,4 +1,4 @@
-import type { FreeReviewDebate, FreeReviewDebateSide, FreeReviewDebateTurn, FreeReviewRun } from "@ash/shared";
+import type { FreeReviewDebate, FreeReviewDebateSide, FreeReviewDebateTurn, FreeReviewRun } from "@navi/shared";
 
 /**
  * 辩论的读取侧模型：会话里那颗辩论气泡、审查格那一轮下面的辩论那一段、左侧抽屉里的完整记录，三处共用。

@@ -15,14 +15,14 @@ import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installFakeClaude, settleFakeClaudes } from "./scheduled-messages-fixture.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-agent-spawn-late-"));
+const root = mkdtempSync(join(tmpdir(), "navi-agent-spawn-late-"));
 const leadLog = join(root, "lead-input.jsonl");
 const IS_WINDOWS = process.platform === "win32";
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_LAX_DONE = "1"; // 验的是起没起，不是完成协议
-process.env.ASH_TEST_LEAD_LOG = leadLog;
-delete process.env.ASH_ALLOW_REAL_AGENT;
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_LAX_DONE = "1"; // 验的是起没起，不是完成协议
+process.env.NAVI_TEST_LEAD_LOG = leadLog;
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 // 机器上那份的替身：一跑就留下记号。它所在的目录算进「原来的 PATH」。
 const host = join(root, "host-bin");
@@ -36,7 +36,7 @@ writeFileSync(
 const originalPath = `${host}${delimiter}${process.env.PATH ?? ""}`;
 const fakeBin = installFakeClaude(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath}`;
-process.env.ASH_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 
 const [{ db, ensureSchema }, schema, runs, runRoutes] = await Promise.all([
   import("../src/db/index.js"),

@@ -1,6 +1,6 @@
-import type { AgentType, Session, Task, TaskStatus } from "@ash/shared";
-import { normalizeDuetConfig } from "@ash/shared/duet";
-import { taskDisplayStatus } from "@ash/shared";
+import type { AgentType, Session, Task, TaskStatus } from "@navi/shared";
+import { normalizeDuetConfig } from "@navi/shared/duet";
+import { taskDisplayStatus } from "@navi/shared";
 import type { DuetGate, DuetTurn } from "./duetState.ts";
 
 /** 「交给任务落实」那张表里选的：谁来跑这条落实任务，外加一段可选附言。 */

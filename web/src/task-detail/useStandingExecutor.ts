@@ -1,4 +1,4 @@
-import type { AgentType, Task } from "@ash/shared";
+import type { AgentType, Task } from "@navi/shared";
 import { useOrderedSave } from "./useOrderedSave.ts";
 
 /**

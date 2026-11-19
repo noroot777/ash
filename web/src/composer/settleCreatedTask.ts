@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import type { Draft, DraftHandle } from "../lib/DraftStore.tsx";
 import type { LaunchMode } from "./ComposerLaunchControl.tsx";

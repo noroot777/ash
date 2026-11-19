@@ -16,8 +16,8 @@ import { chromium } from "playwright-core";
 import { createServer } from "vite";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 
-export const SHARED_BROWSER_ENV = "ASH_TEST_BROWSER_WS";
-export const SHARED_WEB_ENV = "ASH_TEST_WEB_ORIGIN";
+export const SHARED_BROWSER_ENV = "NAVI_TEST_BROWSER_WS";
+export const SHARED_WEB_ENV = "NAVI_TEST_WEB_ORIGIN";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -27,12 +27,12 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 // 含 /api/events、/api/settings），测试页拿到的是用户的真设置和真事件流，结果跟着线上那台走。
 //
 // 所以没有显式指到别处时（test-page-token-delivery 指到自己的假后端），后端一律是下面这个
-// 「什么都没有的 ash」：事件流连得上但永远安静，其余接口一律 404，页面文档上有一份占位凭据。
+// 「什么都没有的 navi」：事件流连得上但永远安静，其余接口一律 404，页面文档上有一份占位凭据。
 // 它要排在任何 vite 起来之前，所以放在模块顶上——起 vite 的测试都先引这个文件，它们各自 spawn 的
 // 夹具进程、执行器起的叶子，环境是继承的，用的是同一个。unref：不替任何进程续命。
-if (!process.env.ASH_PROXY && !process.env.HARNESS_PROXY) {
+if (!process.env.NAVI_PROXY && !process.env.HARNESS_PROXY) {
   const emptyBackend = createHttpServer((request, response) => {
-    const path = new URL(request.url ?? "/", "http://ash.test").pathname;
+    const path = new URL(request.url ?? "/", "http://navi.test").pathname;
     if (path === "/api/events") {
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       response.write(":\n\n");
@@ -40,7 +40,7 @@ if (!process.env.ASH_PROXY && !process.env.HARNESS_PROXY) {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "测试页没有后端：这条请求没有打桩" }));
     } else {
-      // meta 名即 @ash/shared/human-action 的 HUMAN_ACTION_TOKEN_META；对不上只是少盖这一份。
+      // meta 名即 @navi/shared/human-action 的 HUMAN_ACTION_TOKEN_META；对不上只是少盖这一份。
       response.writeHead(200, { "content-type": "text/html" });
       response.end('<!doctype html><meta name="navi-human-action-token" content="ash-test-page-token">');
     }
@@ -48,7 +48,7 @@ if (!process.env.ASH_PROXY && !process.env.HARNESS_PROXY) {
   await new Promise((resolve, reject) => emptyBackend.once("error", reject).listen(0, "127.0.0.1", resolve));
   emptyBackend.unref();
   emptyBackend.on("connection", (socket) => socket.unref());
-  process.env.ASH_PROXY = `http://127.0.0.1:${emptyBackend.address().port}`;
+  process.env.NAVI_PROXY = `http://127.0.0.1:${emptyBackend.address().port}`;
 }
 
 /**

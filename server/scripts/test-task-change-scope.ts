@@ -15,9 +15,9 @@ import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
 for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) delete process.env[key];
-const root = mkdtempSync(join(tmpdir(), "ash-change-scope-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-change-scope-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, taskBranchReceipts, taskPrerequisites, tasks } = await import("../src/db/schema.js");
 const { mountTaskDiffRoutes } = await import("../src/task-diff-routes.js");

@@ -10,8 +10,8 @@ import type {
   FreeWorkflowExecutionStatus,
   FreeWorkflowState,
   TaskStatus,
-} from "@ash/shared";
-import { FREE_REVIEW_CHECK_MODES } from "@ash/shared/free-workflow";
+} from "@navi/shared";
+import { FREE_REVIEW_CHECK_MODES } from "@navi/shared/free-workflow";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { bus } from "./bus.js";
