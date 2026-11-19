@@ -2,7 +2,7 @@ import type { ConversationItem } from "./conversationModel.ts";
 import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
 import { conflictContextEvent, isConflictHandoff } from "./systemNoticeModel.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
-import { reviewerTurnNote } from "./conversationReviewer.ts";
+import { reviewerRestoredNote, reviewerTurnNote } from "./conversationReviewer.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { isUnshownNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
 import type { CrashedTurn } from "./turnFailure.ts";
@@ -184,11 +184,17 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
     out.push(orphan.row);
     return orphan;
   };
+  // 有审查结论那一行时，审查自己的话（reviewOwned）不再单记一条：记录里那一轮已经有结论那一条（点它去
+  // 那一轮），这句话贴在结论下面；再记进执行者那一回合的「N 条记录」，读起来就是执行者那一回合的事。
+  const record = (receipt: TurnReceipt, part: FootnotePart | null) => {
+    if (verdict && !reviewerTurn && part && reviewOwned(part)) return;
+    if (turn) give(turn, [receipt]);
+    else (orphan ?? openOrphan(receipt.id)).row.receipts.push(receipt);
+  };
   const note = (part: FootnotePart, receipt: TurnReceipt | null) => {
     if (verdict) {
       verdict.parts.push(part);
-      if (receipt && turn) give(turn, [receipt]);
-      else if (receipt) (orphan ?? openOrphan(receipt.id)).row.receipts.push(receipt);
+      if (receipt) record(receipt, part);
       return;
     }
     if (turn) {
@@ -240,8 +246,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       const absorbed = verdict?.cause ? absorbs(verdict.cause.entry, event) : null;
       if (absorbed && verdict?.cause) {
         if (absorbed.detail && !verdict.cause.part.view.detail) verdict.cause.part.view = { ...verdict.cause.part.view, detail: absorbed.detail };
-        if (turn) give(turn, [receipt]);
-        else (orphan ?? openOrphan(receipt.id)).row.receipts.push(receipt);
+        record(receipt, verdict.cause.part);
         return;
       }
       if (view.tier !== "receipt") note({ kind: "event", id: event.id, at: event.at, view, item: event }, receipt);
@@ -337,10 +342,11 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
 
 /**
  * 认归属之前就拿掉、哪儿都不出现的：预览开关那几种老记录、题目另有一处看得见的提问结算说明（见
- * isUnshownNotice），以及缘由已经写到它起头的回合头上的系统续跑记录（见 turnCause）。
+ * isUnshownNotice），缘由已经写到它起头的回合头上的系统续跑记录（见 turnCause），以及审查回合交代
+ * 「任务状态保持不变」的老结算说明（见 reviewerRestoredNote）。
  */
 function shown(item: ConversationItem, onScreen?: ReadonlySet<string>): boolean {
-  return item.kind !== "event" || (!item.onTurnHead && !isUnshownNotice(item.text, onScreen));
+  return item.kind !== "event" || (!item.onTurnHead && !isUnshownNotice(item.text, onScreen) && !reviewerRestoredNote(item));
 }
 
 export function conversationSystemRows(

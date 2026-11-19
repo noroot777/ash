@@ -6,13 +6,13 @@
 // 根因在归属（conversationSystemRows 的 attach）：同一回合上又出一轮结论时，被盖过的那一行撤掉、贴在它
 // 下面的那几句**整组**回到执行者回合的尾注，里面恰好有审查自己的话——为什么没结论（那一句原因、服务端说同
 // 一件事的旁注）和审查者会话给它自己那一回合写的结算说明。夹具照那条任务的会话录压缩。这份回归盯：
-//   ① 刷新后从落盘重建：执行者回合的尾注里没有审查的话，它们都还在那一回合的「N 条记录」里；
-//   ② 重跑还没开始时（最后那一轮的结论气泡还在）：气泡下面只有原因那一句，审查者的结算说明并进原因，
-//      被盖过的第 4 轮那几句不回执行者回合；
+//   ① 刷新后从落盘重建：执行者回合的尾注和「N 条记录」里都没有审查的话，记录里只剩每一轮的结论那一条
+//      （点它去那一轮）；审查者会话那句「任务状态保持不变」哪儿都不画；
+//   ② 重跑还没开始时（最后那一轮的结论气泡还在）：气泡下面只有原因那一句，被盖过的第 4 轮那几句不回执行者回合；
 //   ③ 被盖过的那一轮此刻还挂着动作（「继续本轮审查」）：那一句跟到这一回合的下一行结论下面，不落执行者回合；
 //   ④ 开着页面看：审查者会话的结算说明是直播到的，同样认得出是审查者的话（条目带着会话角色）；
 //   ⑤ 任务的事（验收暂缓之类）照旧：被盖过的那一行下面的它们回到执行者回合的尾注；
-//   ⑥ 认不出审查段的老记录：原因旁注照旧落在执行者回合上（「继续本轮审查」退回挂在它上面），结算说明只进记录。
+//   ⑥ 认不出审查段的老记录：原因旁注照旧落在执行者回合上（「继续本轮审查」退回挂在它上面），结算说明不进尾注。
 // 跑：npm -w web run test:review-voice-footnote
 import assert from "node:assert/strict";
 import type { FreeReviewRun, Session } from "@ash/shared";
@@ -149,10 +149,13 @@ const reviewish = (text: string) => /中断|模型上游|续聊回合|没有给�
   assert.deepEqual(footnote.filter(reviewish), [], `执行者回合的尾注里出现了审查的话：${JSON.stringify(footnote)}`);
   const last = shown.rows.at(-1)!;
   assert.equal(last.kind, "review-lane", "会话最后是正在审的那一轮（右边那颗进行中的气泡）");
-  const receipts = (shown.receipts.get(turnId) ?? []).map((receipt) => receipt.view.text);
-  assert.ok(receipts.some((text) => text.startsWith("续聊回合异常结束")), "审查者的结算说明还在那一回合的记录里");
-  assert.ok(receipts.some((text) => /第 4 轮审查中断/.test(text)), "第 4 轮的原因旁注还在那一回合的记录里");
+  const receipts = shown.receipts.get(turnId) ?? [];
+  const loose = receipts.filter((receipt) => !receipt.lane).map((receipt) => receipt.view.text);
+  assert.deepEqual(loose.filter(reviewish), [], `执行者回合的记录里出现了审查的话：${JSON.stringify(loose)}`);
+  assert.equal(receipts.filter((receipt) => receipt.lane).length, 3, "被盖过的三行结论都还在那一回合的记录里（点它去那一轮）");
   assert.equal(shown.rows.filter((row) => row.kind === "verdict").length, 0, "被重跑盖过的结论都撤了");
+  const everywhere = JSON.stringify(shown.rows);
+  assert.ok(!everywhere.includes("任务状态保持"), "审查者会话那句「任务状态保持不变」哪儿都不画（审查段的经过里也没有）");
 }
 
 // ② 重跑还没开始：新一场第 1 轮的结论气泡在，原因只说一句，审查者那句结算说明并进原因。
@@ -227,6 +230,9 @@ const reviewish = (text: string) => /中断|模型上游|续聊回合|没有给�
   const { footnote } = display(items, [], new Set([why.id]));
   assert.ok(footnote.some((text) => /第 4 轮审查中断/.test(text)), `挂着「继续本轮审查」的那一句不许被拿掉：${JSON.stringify(footnote)}`);
   assert.ok(!footnote.some((text) => text.startsWith("续聊回合")), "审查者那句结算说明不进执行者回合的尾注");
+  const { shown, turnId } = display(items, [], new Set([why.id]));
+  const records = (shown.receipts.get(turnId) ?? []).map((receipt) => receipt.view.text);
+  assert.ok(records.some((text) => /第 4 轮审查中断/.test(text)), "没有结论那一行可代表这一轮：原因旁注照旧记在这一回合上，删除在这里");
 }
 
 console.log("✓ review voice stays off the executor's footnote");

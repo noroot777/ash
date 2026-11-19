@@ -65,6 +65,15 @@ export function reviewerTurnNote(item: Extract<ConversationItem, { kind: "event"
   return item.sessionRole === "reviewer" && !item.aside && (item.tone === "notice" || item.variant === "boundary");
 }
 
+/**
+ * 审查回合没办成时结算顺手交代的「任务状态保持「X」不变」（异常退出、被停、熔断那几支）：任务状态本来就
+ * 不归审查回合管，这句话放在哪儿都只会让人以为执行者那一回合出了事。服务端已经不再给审查回合写它
+ * （single-run-settle.ts 的 sessionSettlementNote），这里认的是那之前落下的老记录，哪儿都不画。
+ */
+export function reviewerRestoredNote(item: Extract<ConversationItem, { kind: "event" }>): boolean {
+  return reviewerTurnNote(item) && item.variant !== "boundary" && /任务状态保持「[^」]+」不变。?$/.test(item.text.trim());
+}
+
 export function traceVerifyRound(entries: SessionTraceEntry[]): number | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const event = entries[index]?.event;

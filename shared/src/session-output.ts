@@ -115,6 +115,30 @@ const answerIdsOf = (value: unknown): { answerIds?: string[] } => {
   return ids.length ? { answerIds: ids } : {};
 };
 
+/**
+ * 老会话专用：2026-08-31 之前，结算说明（「这一轮为什么落成这个状态」）是直接写进正文的一段引用块，
+ * 紧贴在回合收口那一行（agentEnd）前面。它是 Navi 说的话，不是智能体的：照正文解析，页面就把它画成
+ * 执行者（或审查者）自己说的一段，审查者那条会话里还会单独冒出一颗不在审查段里的气泡。这里只认当年
+ * 服务端写死的那几种起头（settle-status.ts 的落位说明），并且要求这一段（当年是 `\n> ${note}\n`，说明
+ * 里带换行时续行没有引用符号）后面隔着空行就是收口那一行 —— 智能体自己引的一段话后面还有别的话。认出来
+ * 就落成跟新会话同一种结算旁注（`level:"notice"`）。
+ */
+const LEGACY_SETTLEMENT_QUOTE = /^> (续聊回合(异常结束|被手动停止|分组被暂停|以提问结束)|分组被暂停,本回合被中止|本回合以提问暂停|回合正常结束,但(本回合内没有收到|agent 未调用) complete_task)/;
+
+/** 从 `from` 起这一段老结算说明到哪一行为止（收口那一行的前一行）；后面不是收口就不是它。 */
+function legacySettlementQuote(lines: readonly string[], from: number): { last: number; at?: string } | null {
+  if (!LEGACY_SETTLEMENT_QUOTE.test(lines[from]!.trim())) return null;
+  let last = from;
+  while (last + 1 < lines.length && lines[last + 1]!.trim() && !lines[last + 1]!.startsWith("\x1e")) last += 1;
+  let end = last + 1;
+  while (end < lines.length && !lines[end]!.trim()) end += 1;
+  if (!lines[end]?.startsWith("\x1e")) return null;
+  let close: Sentinel | null = null;
+  try { close = JSON.parse(lines[end]!.slice(1)) as Sentinel; } catch { /* 不是记录行 */ }
+  if (close?.t !== "agentEnd") return null;
+  return { last, ...(close.at ? { at: close.at } : {}) };
+}
+
 export function parseSessionSpans(out: string): SessionSegmentSpan[] {
   return parseSessionTranscript(out).spans;
 }
@@ -149,7 +173,12 @@ export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan
     bufFirst = -1;
     marker = null;
   };
-  out.split("\n").forEach((line, index) => {
+  const lines = out.split("\n");
+  let skipThrough = -1;
+  // 从正文里认出来的老结算说明：收口那一行照旧盖在它前面那段正文上（从前它就是那段正文的一部分）。
+  const legacyNotes = new Set<ConvSeg>();
+  lines.forEach((line, index) => {
+    if (index <= skipThrough) return;
     const trimmed = line.trim();
     // Backend failure diagnostics are persisted beside the conversation so they
     // remain available in the raw run artifacts. They are not agent speech,
@@ -168,9 +197,18 @@ export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan
       if (!line.startsWith("\x1e")) return;
       skippingDiagnostic = false;
     }
-    // 老会话专用：2026-08-31 之前，结算说明是直接写进正文的一段引用块，于是「续聊回合
-    // 异常结束(…)」这句会糊在 agent 的话里当正文渲染 —— 只能按前缀藏掉。现在结算说明落成
-    // 独立的 system 旁注行（带 level:"notice"），根本不进气泡，新会话不需要这道过滤。
+    // 老会话里写进正文的结算说明（见 LEGACY_SETTLEMENT_QUOTE）：落成结算旁注，不进气泡。
+    const quote = legacySettlementQuote(lines, index);
+    if (quote) {
+      flush();
+      const text = lines.slice(index, quote.last + 1).join("\n").replace(/^> /, "").trim();
+      const seg: ConvSeg = { kind: "system", text, level: "notice", ...(quote.at ? { at: quote.at } : {}) };
+      legacyNotes.add(seg);
+      push(seg, index, quote.last);
+      skipThrough = quote.last;
+      return;
+    }
+    // 认不出段落边界的那一句（后面不是收口）照旧只能按前缀藏掉。
     if (trimmed.startsWith("> 续聊回合异常结束(")) return;
     if (line.startsWith("\x1e")) {
       let j: Sentinel | null = null;
@@ -181,7 +219,7 @@ export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan
         if (j.t === "agentEnd") {
           // Not a new bubble — it stamps where the agent turn that just flushed
           // actually finished, so per-turn 用时 excludes the idle wait that follows.
-          const last = spans[spans.length - 1]?.seg;
+          const last = spans.findLast((span) => !legacyNotes.has(span.seg))?.seg;
           if (last?.kind === "agent") last.endedAt = j.at;
           agentEnds.push({ ...identityFields(identity), ...(j.at ? { at: j.at } : {}) });
           return;
