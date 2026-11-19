@@ -31,13 +31,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 
-const root = mkdtempSync(join(tmpdir(), "ash-queue-ownership-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_LAX_DONE = "1";
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-queue-ownership-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_LAX_DONE = "1";
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const schema = await import("../src/db/schema.js");
@@ -66,7 +66,7 @@ mountGroupRoutes(api);
 const gates = new Map<string, () => void>();
 const launches: string[] = [];
 const run = (opts: { prompt: string; sessionId?: string; env?: Record<string, string | undefined> }) => {
-  const taskId = opts.env!.ASH_TASK_ID!;
+  const taskId = opts.env!.NAVI_TASK_ID!;
   launches.push(taskId);
   const native = opts.sessionId ?? `native-${taskId}`;
   let release!: () => void;

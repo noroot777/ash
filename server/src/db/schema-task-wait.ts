@@ -1,5 +1,5 @@
 import type { ReviewDelivery, ReviewTargetIdentity } from "./schema-regression-evidence.js";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import type { InputAcceptance } from "../executors/types.js";
 
 export type WaitOrigin = { kind: "ordinary" } | {

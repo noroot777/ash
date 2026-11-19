@@ -1,10 +1,10 @@
 // 任务上挂着的哨兵：界面这一侧的数据源。
 //
-// 为什么它必须有界面：哨兵的进程是**故意脱离 ash** 的（agent 回合结束、会话结束、
+// 为什么它必须有界面：哨兵的进程是**故意脱离 navi** 的（agent 回合结束、会话结束、
 // server 重启都带不走它），代价就是「有个进程在后台跑着」这件事再没有别的地方看得见。
 // 只在 agent 的对话里说一句「已起哨兵」不算数——刷新页面后就什么都不剩了。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MonitorWakeTarget, TaskMonitor } from "@ash/shared/monitor";
+import type { MonitorWakeTarget, TaskMonitor } from "@navi/shared/monitor";
 import { ApiError, api } from "../lib/api.ts";
 import { catchUpAbortKind } from "../lib/catchUp.ts";
 import { useServerEvents } from "../lib/events.ts";
@@ -22,8 +22,8 @@ export const MONITOR_ENDED_LABEL: Record<string, string> = {
 /**
  * 「这个任务用过哨兵没有」——图标条浮现与否的判据，**两种来源一起算**。
  *
- * 只数 ash 自己那种的话，claude 执行器的任务会永远不浮现：它们几乎全程用 claude 自带的
- * Monitor（CLI 提示词把长等待主动往那边引），ash 这一侧一条记录都没有。而那恰恰是最需要
+ * 只数 navi 自己那种的话，claude 执行器的任务会永远不浮现：它们几乎全程用 claude 自带的
+ * Monitor（CLI 提示词把长等待主动往那边引），navi 这一侧一条记录都没有。而那恰恰是最需要
  * 这一格的场景——agent 在对话里说「等 Monitor 通知」，用户得有地方对账。
  */
 export const monitorUsedCount = (monitors: readonly TaskMonitor[]) => monitors.length;

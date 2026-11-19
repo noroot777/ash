@@ -18,8 +18,8 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-artifact-scope-"));
-process.env.ASH_DB = join(stage, "ash.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-artifact-scope-"));
+process.env.NAVI_DB = join(stage, "ash.db");
 requireTmpDb("task-artifact-scope");
 
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -341,7 +341,7 @@ try {
   // 它们的 owner 是**领队**，那只证明隔离于项目主仓,不证明隔离于兄弟执行者——按目录独占判,
   // 三页会显示同样的三张图,「按任务区分」在团队上整个失效(第 2 轮审查 F2)。
   const crewRoot = join(shared, ".worktrees", "LeadWithCrew");
-  git(shared, ["worktree", "add", "-q", "-b", "ash/LeadWithCrew", crewRoot, "main"]);
+  git(shared, ["worktree", "add", "-q", "-b", "navi/LeadWithCrew", crewRoot, "main"]);
   await addTask("LeadWithCrew", { mode: "team", useWorktree: true, status: "done" });
   await addSession("s-crew-lead", "LeadWithCrew", crewRoot, 600, 760, { turnStartedAt: iso(740) });
   await addTurn("t-crew-lead", "s-crew-lead", "LeadWithCrew", crewRoot, 740, 760);
@@ -362,7 +362,7 @@ try {
   write(crewRoot, "output/B 两小时后画的红图.png");
   touch(crewRoot, "output/B 两小时后画的红图.png", at(705));
   const crewRootArg = {
-    path: crewRoot, branch: "ash/LeadWithCrew", gitRepo: true, source: "worktree" as const,
+    path: crewRoot, branch: "navi/LeadWithCrew", gitRepo: true, source: "worktree" as const,
     repo: shared, projectId: "p",
   };
   const crewA = await read("CrewA000001", crewRootArg);
@@ -395,7 +395,7 @@ try {
   // 会把独占目录降级成共享、重新吃上时间上限，第 1 轮 F3 修好的延迟产物又漏回去。
   await addTask("AliasTask01", { useWorktree: true });
   const aliasRoot = join(shared, ".worktrees", "AliasTask01");
-  git(shared, ["worktree", "add", "-q", "-b", "ash/AliasTask01", aliasRoot, "main"]);
+  git(shared, ["worktree", "add", "-q", "-b", "navi/AliasTask01", aliasRoot, "main"]);
   await addSession("s-alias", "AliasTask01", aliasRoot, 800, 810);
   await addTurn("t-alias", "s-alias", "AliasTask01", aliasRoot, 800, 810);
   write(aliasRoot, "output/收尾很久之后渲染出来的.png");
@@ -409,7 +409,7 @@ try {
   const sharedLink = join(stage, "shared-link");
   symlinkSync(shared, sharedLink, "dir");
   const aliased = await read("AliasTask01", {
-    path: join(sharedLink, ".worktrees", "AliasTask01"), branch: "ash/AliasTask01", gitRepo: true,
+    path: join(sharedLink, ".worktrees", "AliasTask01"), branch: "navi/AliasTask01", gitRepo: true,
     source: "worktree" as const, repo: realpathSync(shared), projectId: "p",
   });
   assert.notEqual(
@@ -550,7 +550,7 @@ try {
   // 剩一条回合就当成「这个目录缺了历史」去放宽清单。
   await addTask("MovedTask01");
   const movedAway = join(shared, ".worktrees", "MovedTask01");
-  git(shared, ["worktree", "add", "-q", "-b", "ash/MovedTask01", movedAway, "main"]);
+  git(shared, ["worktree", "add", "-q", "-b", "navi/MovedTask01", movedAway, "main"]);
   await addSession("s-moved", "MovedTask01", shared, 1500, 1560, { turnStartedAt: iso(1550), turnsStarted: 2 });
   await addTurn("t-moved-1", "s-moved", "MovedTask01", movedAway, 1500, 1510);
   await addTurn("t-moved-2", "s-moved", "MovedTask01", shared, 1550, 1560);
@@ -570,7 +570,7 @@ try {
     path: swing, branch, gitRepo: true, source: "worktree" as const,
     repo: realpathSync(shared), projectId: "p",
   });
-  assert.equal((await read("AliasTask01", swingRoot("ash/AliasTask01"))).scope, "exclusive");
+  assert.equal((await read("AliasTask01", swingRoot("navi/AliasTask01"))).scope, "exclusive");
   rmSync(swing);
   symlinkSync(shared, swing, "dir"); // 同一个字符串,现在指向共享主仓
   assert.equal(
@@ -588,7 +588,7 @@ try {
   );
 
   // ── F3：迁移没跑完的那种会话,不许继续拿旧计数做精确对账 ────────────────────────
-  // 那条迁移自己 catch 掉一切只 warn（抛出去 = 整台 ash 起不来）,所以「跑成了没有」只能靠
+  // 那条迁移自己 catch 掉一切只 warn（抛出去 = 整台 navi 起不来）,所以「跑成了没有」只能靠
   // 库里那件可核验的事实:`turns_base_approx` 还是 NULL = 没确认过。那种行上的 `turns_started`
   // 是上一版口径（会漏起跑入口、又会重复加数）,拿它做精确减法就会出现「两条偏小的旧计数
   // 正好抵掉两条已存行」,中间真缺的那一轮一句话都不说,它做出来的图静默漏列（第 1 轮审查 F3）。

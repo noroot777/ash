@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { CaretRight } from "@phosphor-icons/react";
 
 // 助手页的右栏：只放这段对话关联到的任务（助手找出来的、它建的），一条一个入口。

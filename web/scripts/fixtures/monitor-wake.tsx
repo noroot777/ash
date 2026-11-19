@@ -1,7 +1,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Session, Task } from "@ash/shared";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { Session, Task } from "@navi/shared";
+import type { MonitorWakeData } from "@navi/shared/monitor-wake";
 import { endEvent, outputEvent, wakePayload } from "./monitor-wake-data.ts";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type TimelineEntry } from "../../src/task-detail/conversationModel.ts";

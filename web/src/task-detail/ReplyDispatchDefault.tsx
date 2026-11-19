@@ -2,8 +2,8 @@
 // 同这里 = 这条任务自己的那一套；或者指定一个（同一颗三段胶囊）。派活单上没指明的那几条、智能体绕过派活单
 // 直接建任务又没给执行器的，都交给它（服务端 task-dispatch.ts `withDispatchDefaults`）。
 // 设成了非默认值时，底栏胶囊最后多一段「派活 codex」，不点开也看得出来。
-import type { AgentExecutorProfile, AgentType, Task } from "@ash/shared";
-import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import type { AgentExecutorProfile, AgentType, Task } from "@navi/shared";
+import type { DispatchLaunchInput, DispatchRunTarget } from "@navi/shared/dispatch-plan";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { executorRunSummary } from "../lib/agentAvailability.ts";
 import { useOrderedSave } from "./useOrderedSave.ts";

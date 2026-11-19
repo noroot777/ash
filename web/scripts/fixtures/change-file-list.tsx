@@ -1,6 +1,6 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { GitFile, GitStatus } from "@ash/shared/git-workbench";
+import type { GitFile, GitStatus } from "@navi/shared/git-workbench";
 import { ChangeFileList, type ChangeSource } from "../../src/git-workbench/ChangeFileList.tsx";
 import type { Workbench } from "../../src/git-workbench/useWorkbench.ts";
 import "../../src/styles/global.css";

@@ -369,7 +369,7 @@
   }
 }
 
-/* 窄屏（手机、飞书里点开 ash 链接）：列表和内容一次只给一样（useNarrowPane.ts），不再挤成三栏。 */
+/* 窄屏（手机、飞书里点开 navi 链接）：列表和内容一次只给一样（useNarrowPane.ts），不再挤成三栏。 */
 .workspace-narrow-back {
   display: flex;
   height: 36px;

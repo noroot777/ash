@@ -5,7 +5,7 @@
 // 执行器盖回去——现象正是「选了 grok，模型变成 grok-4.5，智能体却弹回 codex」。
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
 import {
   createReviewerDraft,
   ReviewerProfileFields,

@@ -1,6 +1,6 @@
 // §Team 的所有文案:调度者前言、执行者前言、入站消息模板。
 // 只放纯模板(不碰 DB),读库的包装在 dispatch.ts / inbox.ts。
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { craftRulesFor, type CraftContext } from "../craft-rules.js";
 
 // 调度者前言。只在 fresh run 注入(第一条消息);之后进程常驻/--resume 接回,
@@ -78,7 +78,7 @@ export const LEAD_AFTER_ACCEPTANCE =
 export const LEAD_RESUMED =
   `〔系统〕你的进程之前被中断过(服务重启、被手动停止、或长时间空闲被回收),现在已经用同一个会话把你接回来了。上下文都还在,接着下面这条消息处理即可。\n\n`;
 
-// 团队共享 worktree 连同分支一起被删掉之后,ash 会重建一个空的。CLI 会话
+// 团队共享 worktree 连同分支一起被删掉之后,navi 会重建一个空的。CLI 会话
 // 记在工作目录之外,所以调度者接回来时记忆完好、文件却全没了 —— 必须明说,否则
 // 它会照着记忆继续派活(派出去的执行者也在同一个空目录里)。
 export const LEAD_WORKSPACE_RESET = (path: string) =>

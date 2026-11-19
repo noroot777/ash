@@ -11,9 +11,9 @@
 //   failed    —— 撤回、抢占、启动失败、协议层拒收或说不清，一个字都没送到（或者说不上来送到没有）。
 //
 // 认的是**同一份冲突**：任务分支头和目标分支头都没动。任务把目标分支合进来并提交之后分支头就变了，
-// 这份记忆自然作废（那时冲突多半已经没了，状态接口会重判）。只放内存：ash 重启后只是那一行回到
+// 这份记忆自然作废（那时冲突多半已经没了，状态接口会重判）。只放内存：navi 重启后只是那一行回到
 // 「与 X 冲突」，再按一次照样交得出去，不需要落库。
-import type { AcceptGateState } from "@ash/shared/accept-gate";
+import type { AcceptGateState } from "@navi/shared/accept-gate";
 
 type Handoff = NonNullable<NonNullable<AcceptGateState["baselineIssue"]>["handoff"]>;
 

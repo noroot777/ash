@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, ReviewerProfile } from "@ash/shared";
+import type { AgentExecutorProfile, ReviewerProfile } from "@navi/shared";
 import { PencilSimple, Plus, Star, Trash } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";

@@ -2,11 +2,11 @@
 //
 // claude 投影没有自己的 pid（进程在 agent 的进程树里，`reattachMonitors` 按 kind 整批跳过
 // 它们），所以判它是不是还在盯着，只能去问**它所属的那条 agent 会话**。调用点是开机清扫
-// （`loseDeadClaudeMonitors`）：ash 重启了，重新判一次谁还活着。
+// （`loseDeadClaudeMonitors`）：navi 重启了，重新判一次谁还活着。
 //
 // 第 1、2、3 轮审查在这一点上连着栽了三次，每次都是**同一个错**换个地方犯：拿「我手上没有
 // 它的凭据」当「它已经死了」。
-//   ① 第 1 轮：开机无条件把 running 投影标 lost —— 可 agent 活得过 ash 重启（detached），
+//   ① 第 1 轮：开机无条件把 running 投影标 lost —— 可 agent 活得过 navi 重启（detached），
 //      于是「任务还在输出、哨兵却说进程已不在」。
 //   ② 第 2 轮：`cli_session_id` 为空的存量行直接判死 —— 实测 sourceAlive=true 却被标 lost。
 //   ③ 第 3 轮：没读到终态的一律写 lost —— 实测来源还活着，卡片却写「早已结束」。

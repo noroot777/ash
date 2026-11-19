@@ -19,7 +19,7 @@
 // 来源审查这两条规则也跟第二类同一份 —— 写在同一个集合里,两个提问者自然一起认。
 import { and, eq, isNotNull, isNull, like, or, sql, type SQL } from "drizzle-orm";
 import { unionAll } from "drizzle-orm/sqlite-core";
-import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
+import { OWN_MONITOR_KIND } from "@navi/shared/monitor";
 import { db } from "./db/index.js";
 import { monitors, scheduledMessages } from "./db/schema.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";

@@ -161,7 +161,7 @@ try {
   await page.getByRole("button", {name:"other",exact:true}).waitFor();
   await page.evaluate(() => window.mock.pending[1].resolve());
   assert.equal(await automatic.getAttribute("aria-pressed"), "true");
-  if (process.env.ASH_BROWSER_SCREENSHOT) await page.screenshot({path:process.env.ASH_BROWSER_SCREENSHOT,fullPage:true});
+  if (process.env.NAVI_BROWSER_SCREENSHOT) await page.screenshot({path:process.env.NAVI_BROWSER_SCREENSHOT,fullPage:true});
   const changed = await create();
   assert.equal(changed.projectId, "B");
   assert.equal(changed.worktreeBase, null);

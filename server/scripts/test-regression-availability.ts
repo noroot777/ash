@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, makeTask, runs, schema, tasks, teardown } from "./monitors-fixture.js";
 import { setupRegression } from "./regression-fixture.js";
 
@@ -19,7 +19,7 @@ try {
   const api = new Hono();
   mountTaskStageRoutes(api);
   const stage = () => api.request(`/tasks/${taskId}/stage`, {
-    method: "POST", headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${taskId}` },
+    method: "POST", headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${taskId}` },
     body: JSON.stringify({ stage: "verified" }),
   });
   const independentlyVerify = () => execFileSync(process.execPath, ["-e",

@@ -2,7 +2,7 @@
 //
 // 为什么不能只靠进程内那张 Set 加一个墙钟租约戳(第 2 轮自由审查 F1,两个独立进程实测):
 // `deliveringNow` 只覆盖本进程;条件更新把接管**线性化**了,但它证明不了「原发送方已经不在
-// 送」—— 另一份 ash(`NAVI_ALLOW_MULTI=1`)读到的租约跟「有租约、没人管」长得一模一样。
+// 送」—— 另一份 navi(`NAVI_ALLOW_MULTI=1`)读到的租约跟「有租约、没人管」长得一模一样。
 // 现场:实例 A 刚问过「这张票还是我的吗」、还没 spawn,实例 B 的对账接管它、按「没送出去」
 // 把交代还给任务;A 照旧把原文送了出去 —— 于是同一段话既已送达、又重新变成待执行输入,
 // 下一次继续再送一遍(CLI 收到次数 1 → 2)。
@@ -29,8 +29,8 @@
 // 代价说明白:代次在某台机器上**一直**问不出来时,一张「持有者已经崩了、号又正好被别人复用」
 // 的票就只能滞留着(启动被拒的理由里会如实说它挂在谁名下,不是一句没有出路的死信)。方向是
 // 有意选的 —— 滞留等得起,重复投递等不起。
-import { otherLiveAshPresenceForAny } from "./ash-presence.js";
-import { resolveAshDbFile } from "./db/path.js";
+import { otherLiveNaviPresenceForAny } from "./navi-presence.js";
+import { resolveNaviDbFile } from "./db/path.js";
 import { RUNS_DIR } from "./paths.js";
 import { isPidAlive } from "./platform.js";
 import { processGenerationSync, sameGenerationSource } from "./process-generation.js";
@@ -73,7 +73,7 @@ export type CheckpointSeizure = "exclusive" | "mine" | "gone";
 
 export function checkpointSeizureReason(token: string | null): CheckpointSeizure | null {
   const owner = parseCheckpointOwner(token);
-  // ① 老库那种没有身份的行(或者身份读不懂):只有「这台机器上确实就我一个 ash」才接得走。
+  // ① 老库那种没有身份的行(或者身份读不懂):只有「这台机器上确实就我一个 navi」才接得走。
   //    这一条排在身份之后:**不能**反过来用单例锁给有身份的行放行 —— 那把锁只证明「没有
   //    别的守锁实例」,而 NAVI_ALLOW_MULTI 起的那种压根不写锁(它恰好就是这条缝的现场)。
   if (!owner) return soleLiveInstance() ? "exclusive" : null;
@@ -86,7 +86,7 @@ export function checkpointSeizureReason(token: string | null): CheckpointSeizure
 }
 
 /**
- * 「这份库此刻只有我这一个 ash 在用」—— 两半都要:单例锁在我手里(没有别的守锁实例),
+ * 「这份库此刻只有我这一个 navi 在用」—— 两半都要:单例锁在我手里(没有别的守锁实例),
  * 而且在线登记里没有别人(`NAVI_ALLOW_MULTI=1` 的实例不写锁,只留登记)。
  *
  * 任一半答不出来就按「可能有别人」处理:这一问只用来给**没有身份的旧凭证**放行,宁可让它
@@ -95,7 +95,7 @@ export function checkpointSeizureReason(token: string | null): CheckpointSeizure
 function soleLiveInstance(): boolean {
   if (liveLockToken() === null) return false;
   try {
-    return otherLiveAshPresenceForAny(resourceKeysFor(resolveAshDbFile(), RUNS_DIR)) === null;
+    return otherLiveNaviPresenceForAny(resourceKeysFor(resolveNaviDbFile(), RUNS_DIR)) === null;
   } catch {
     return false;
   }

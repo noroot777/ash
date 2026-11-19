@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, Trash } from "@phosphor-icons/react";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import {
   MAX_PROJECT_COMMAND_LENGTH,
   MAX_PROJECT_COMMANDS,
@@ -10,7 +10,7 @@ import {
   parseProjectCommands,
   type ProjectCommandConfig,
   type ProjectCommandsConfig,
-} from "@ash/shared/project-commands";
+} from "@navi/shared/project-commands";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";

@@ -1,9 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { normalizeDuetConfig } from "@ash/shared/duet";
-import { parseAttachmentText } from "@ash/shared/attachments";
+import { normalizeDuetConfig } from "@navi/shared/duet";
+import { parseAttachmentText } from "@navi/shared/attachments";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { DuetConfig, DuetConsensusBy, GateAction, TaskStatus } from "@ash/shared";
+import type { DuetConfig, DuetConsensusBy, GateAction, TaskStatus } from "@navi/shared";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";

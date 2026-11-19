@@ -20,27 +20,27 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-delivery-receipt-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_LAX_DONE = "1";
-process.env.ASH_TURN_INPUT_ACK_MS = "5000";
-process.env.ASH_CODEX_TURN_START_ACK_MS = "5000";
-// **补偿退避压到毫秒级**(delivery-lease.ts 的 ASH_DELIVERY_RETRY_MS,只给回归脚本)。
+const root = mkdtempSync(join(tmpdir(), "navi-delivery-receipt-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_LAX_DONE = "1";
+process.env.NAVI_TURN_INPUT_ACK_MS = "5000";
+process.env.NAVI_CODEX_TURN_START_ACK_MS = "5000";
+// **补偿退避压到毫秒级**(delivery-lease.ts 的 NAVI_DELIVERY_RETRY_MS,只给回归脚本)。
 // §② 要的是「补偿失败很多次之后 accepted 仍然不许退回重投」,按真实节奏钉这一条要一分多钟
 // (审查那次端到端复现用了 63.7 秒)。压的是节奏,判据一个字没动。
 // 节奏不能压得比回合本身还快:②要钉的是「回合已经跑完、记账还欠着」那一刻调用点怎么办 ——
 // 补偿要是在回合结束前就补完了,那一刻压根不会被问到(上一版的缺陷也就钉不住)。
-process.env.ASH_DELIVERY_RETRY_MS = "100,100,100";
+process.env.NAVI_DELIVERY_RETRY_MS = "100,100,100";
 const originalPath = process.env.PATH;
 
 const { installFakeCodexAppServer, codexMode, resetTurnStarts, turnStarts } =
   await import("./undriven-turn-fixture.js");
 const fakeBin = installFakeCodexAppServer(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
-// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;只放行自己装在 PATH 上的这个
+// 设了 NAVI_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;只放行自己装在 PATH 上的这个
 // 假 codex(executors/spawn.ts)。
-process.env.ASH_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
@@ -166,7 +166,7 @@ console.log("② 真实投递入口:记账失败很多次,也绝不能把同一�
       injected += 1;
       // 连续失败约 3 秒(100ms 一拍)—— 比这一轮跑完还久,所以调用点被问到时欠账还在。
       if (injected >= 30) faulting = false; // 存储恢复:补偿下一拍就该把它补上
-      throw new Error("ASH_TEST_INJECT_TRANSIENT_MARK_SENT_IO_FAILURE");
+      throw new Error("NAVI_TEST_INJECT_TRANSIENT_MARK_SENT_IO_FAILURE");
     }
     return execute(statement);
   };
@@ -201,7 +201,7 @@ console.log("③ 初次 unknown、最终拒收:行必须回到可领取状态(�
   const taskId = "t-late-refuse";
   await seedTask(taskId, "验证迟到的拒收归还租约");
   codexMode(fakeBin, "resume-silent");
-  process.env.ASH_TURN_INPUT_ACK_MS = "800"; // 有界等待要先到期,迟到的那一次才有「迟到」可言
+  process.env.NAVI_TURN_INPUT_ACK_MS = "800"; // 有界等待要先到期,迟到的那一次才有「迟到」可言
   const row = pendingMessageRow({ taskId, text: "继续:这一条不许卡在在途", mode: "queued" });
   await db.insert(scheduledMessages).values(row as never);
   await deliverPendingMessages(taskId);
@@ -213,7 +213,7 @@ console.log("③ 初次 unknown、最终拒收:行必须回到可领取状态(�
   const after = await current();
   // 断言完立刻收掉:挡回那条路会自排重投(pending-redelivery.ts),留着它会再起一轮真 CLI。
   await db.delete(scheduledMessages).where(eq(scheduledMessages.id, row.id));
-  process.env.ASH_TURN_INPUT_ACK_MS = "5000";
+  process.env.NAVI_TURN_INPUT_ACK_MS = "5000";
   check(!after.deliveringSince,
     `迟到的拒收归还了租约(deliveringSince=${after.deliveringSince ?? "已清"}),下一轮扫描领得走它`);
   check(after.status === "pending" && !after.sentAt,
@@ -350,7 +350,7 @@ console.log("⑥ 真实投递入口:调用点还掉之后,旧补偿不再去碰�
       if (stamp === firstLease) {
         const fromCompensation = (new Error().stack ?? "").includes("attemptDispose");
         if (fromCompensation && callerReturned) staleAfterCaller += 1;
-        if (fromCompensation && !callerReturned) throw new Error("ASH_TEST_INJECT_TRANSIENT_RETURN_FAILURE");
+        if (fromCompensation && !callerReturned) throw new Error("NAVI_TEST_INJECT_TRANSIENT_RETURN_FAILURE");
         if (!fromCompensation) callerReturned = true;
       }
     }

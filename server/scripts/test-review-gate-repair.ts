@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, tasks, schema, runs, until, teardown } from "./monitors-fixture.js";
 import { setupRegressionReviews } from "./regression-review-fixture.js";
 

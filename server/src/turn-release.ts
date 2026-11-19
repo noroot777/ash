@@ -66,7 +66,7 @@ export function afterStatusLanded(taskId: string, effects: StatusFollowUps): voi
 export function oweQueueAdvance(taskId: string, queueId: string): void {
   const staged = isTurnClaimed(taskId)
     ? Promise.resolve(upsertIntent(db, queueId)).catch((error) =>
-      console.error(`[ash] 欠下的队列推进没能落库 task=${taskId} queue=${queueId}:`, error))
+      console.error(`[navi] 欠下的队列推进没能落库 task=${taskId} queue=${queueId}:`, error))
     : Promise.resolve();
   owe(taskId, queueId, staged);
 }
@@ -81,7 +81,7 @@ function owe(taskId: string, queueId: string, staged: Promise<unknown>): void {
 
 function settle(taskId: string): void {
   for (const listener of alsoOnRelease) {
-    try { listener(taskId); } catch (error) { console.error(`[ash] 放锁后的登记回调失败 task=${taskId}:`, error); }
+    try { listener(taskId); } catch (error) { console.error(`[navi] 放锁后的登记回调失败 task=${taskId}:`, error); }
   }
   const owed = owedAdvance.get(taskId);
   if (owed) {
@@ -89,14 +89,14 @@ function settle(taskId: string): void {
     // 动态 import:scheduler / pending-messages 都静态依赖 status.ts,而 status.ts 依赖本文件。
     // void 不 await:放锁可能发生在推进的认领临界区里,推进排到链尾即可,await 会死等自己。
     void owed.staged.then(async () => (await import("./scheduler.js")).advanceQueue(owed.queueId))
-      .catch((error) => console.error(`[ash] 放锁后的队列推进失败 task=${taskId}:`, error));
+      .catch((error) => console.error(`[navi] 放锁后的队列推进失败 task=${taskId}:`, error));
   }
   flushPending(taskId);
 }
 
 function flushPending(taskId: string): void {
   void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId))
-    .catch((error) => console.error(`[ash] 放锁后的待发送扫描失败 task=${taskId}:`, error));
+    .catch((error) => console.error(`[navi] 放锁后的待发送扫描失败 task=${taskId}:`, error));
 }
 
 /** 放锁时还要做的事（launch-request.ts：名额可能空出来了，被名额挡住的补放）。只登记、不在这里 import。 */

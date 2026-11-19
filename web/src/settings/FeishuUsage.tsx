@@ -1,4 +1,4 @@
-import type { FeishuStatus, ImApiKind } from "@ash/shared";
+import type { FeishuStatus, ImApiKind } from "@navi/shared";
 import { API_KIND_LABELS, QUOTA_LEVELS } from "./feishuText.ts";
 import { localeNumber } from "../lib/localeFormat.ts";
 

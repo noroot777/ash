@@ -12,7 +12,7 @@
 // 它只证明「那张表还在」，证明不了「表**外**的那些算未知」—— 而 D1 要的恰恰是后者:那张表当年
 // 就在，`unset PATH; tail -F /dev/null`（实测退出 0）照旧吃 409。
 import assert from "node:assert/strict";
-import { neverExitsOnItsOwn, neverExitsVerdict } from "@ash/shared/command-never-exits";
+import { neverExitsOnItsOwn, neverExitsVerdict } from "@navi/shared/command-never-exits";
 
 const passes = (command: string, why: string) =>
   assert.equal(neverExitsOnItsOwn(command), null, `${why}，这一条不许硬拦：${command}`);
@@ -32,13 +32,13 @@ assert.equal(
     ["while true; do eval 'break'; done; printf 'DONE\\n'", "`break` 在引号里，词表扫不进 eval 的字符串（实测 0 + DONE）"],
     ["set -n; while true; do :; done", "`-n` 是「读完一条都不执行」（实测 0）"],
     ["while true; do kill -TERM $$; done", "能终止这个 shell 的不只有 break/exit/return（实测 SIGTERM）"],
-    ["PATH=/definitely-missing-ash-review; tail -F /dev/null", "跟随型压着「那个工具找得到」（实测 127）"],
+    ["PATH=/definitely-missing-navi-review; tail -F /dev/null", "跟随型压着「那个工具找得到」（实测 127）"],
     ["unset PATH; tail -F /dev/null; printf 'DONE\\n'", "赋值那一侧早认了，**取消**那一侧没人认（实测 0 + DONE）"],
     ["hash -p /usr/bin/true tail; tail -F /dev/null; printf 'DONE\\n'", "`hash -p` 把这个名字钉到了别的可执行文件上（实测 0 + DONE）"],
     // 报告原文给的那两条反例（它们是 D1 的起点:21 轮审查都没过的那一条）。
     ["action=break; while true; do \"$action\"; done; printf 'DONE\\n'", "要跑的那个命令词是个展开，这一层读不出它是 `break`（实测 0 + DONE）"],
     ["unset X; : \"${X:?required}\"; while true; do :; done", "`${…:?…}` 在变量没定义时当场让 shell 走人（实测 127）"],
-    [": \"${ASH_REVIEW_UNDEFINED:?required}\"; while true; do :; done", "同上，而「这个变量定义过没有」这一层答不出来（实测 127）"],
+    [": \"${NAVI_REVIEW_UNDEFINED:?required}\"; while true; do :; done", "同上，而「这个变量定义过没有」这一层答不出来（实测 127）"],
     // 第 4 轮审查 F3 的三条:上面那两条 `${…:?…}` 当年之所以是绿的，是因为它们恰好**都写了引号**
     // —— 引号里的内容原样留在 `text` 里，正则正好扫得到。不带引号的那一半，词法层按设计抹成了
     // 占位符，三条判据一条都看不见（见下面 ②c）。
@@ -130,8 +130,8 @@ assert.equal(
     ["$(which tail) -F build.log", "命令词是段命令替换"],
     ["`which tail` -F build.log", "反引号同判"],
     ['tail -F "$(printf build.log)"', "参数里有命令替换 —— 括号里是另一层读不进去的执行"],
-    [': "${ASH_X:?boom}"; ' + BASE, "带退出语义的展开，哪一段里出现都算"],
-    [BASE + '; : "${ASH_X?boom}"', "`${X?…}` 这一种同判"],
+    [': "${NAVI_X:?boom}"; ' + BASE, "带退出语义的展开，哪一段里出现都算"],
+    [BASE + '; : "${NAVI_X?boom}"', "`${X?…}` 这一种同判"],
     ["set $FLAGS; while true; do :; done", "`set` 的开关是个展开（FLAGS=-n 就是 noexec）"],
     ["sudo -X tail -F build.log", "包装命令的开关认不出来 ⇒ 剥不出真正要跑的是谁"],
   ] as const) passes(command, `要跑的是谁/怎么跑答不出来（${why}）`);
@@ -163,7 +163,7 @@ assert.equal(
   const spellings: readonly (readonly [string, readonly string[]])[] = [
     ["命令替换", ["$(printf build.log)", "`printf build.log`", '"$(printf build.log)"']],
     ["算术展开", ["$((1/0))", '"$((1/0))"', "$(( 1 / 0 ))"]],
-    ["带退出语义的展开（命名变量）", ["${ASH_X:?boom}", '"${ASH_X:?boom}"', "${ASH_X?boom}"]],
+    ["带退出语义的展开（命名变量）", ["${NAVI_X:?boom}", '"${NAVI_X:?boom}"', "${NAVI_X?boom}"]],
     ["带退出语义的展开（位置参数）", ["${1:?boom}", '"${1:?boom}"', "${1?boom}"]],
     ["带退出语义的展开（特殊参数）", ["${@:?boom}", "${#:?boom}"]],
     // **套在参数展开里面的那一层也算**（第 2 轮审查第 2 条）。整段马上要被抹成一个占位符,
@@ -173,13 +173,13 @@ assert.equal(
     // 对照组里只有不带引号的那一侧会红 —— 这正是「按拼写列对照」要抓的那种偏科。
     // 实测（/bin/sh -lc）:`: ${CK_REVIEW_UNSET:-$((1/0))}` 报 division by 0、退 127;
     // `: ${CK_A:-${CK_B:?boom}}` 报 CK_B: boom、退 127。
-    ["嵌套在参数展开里的算术", ["${ASH_X:-$((1/0))}", '"${ASH_X:-$((1/0))}"', "${ASH_X-$((1/0))}"]],
-    ["嵌套在参数展开里的命令替换", ["${ASH_X:-$(printf x)}", '"${ASH_X:-$(printf x)}"', "${ASH_X:+`printf x`}"]],
-    ["嵌套在参数展开里的退出语义", ["${ASH_X:-${ASH_Y:?boom}}", '"${ASH_X:-${ASH_Y:?boom}}"']],
+    ["嵌套在参数展开里的算术", ["${NAVI_X:-$((1/0))}", '"${NAVI_X:-$((1/0))}"', "${NAVI_X-$((1/0))}"]],
+    ["嵌套在参数展开里的命令替换", ["${NAVI_X:-$(printf x)}", '"${NAVI_X:-$(printf x)}"', "${NAVI_X:+`printf x`}"]],
+    ["嵌套在参数展开里的退出语义", ["${NAVI_X:-${NAVI_Y:?boom}}", '"${NAVI_X:-${NAVI_Y:?boom}}"']],
     // 自由工作流第 1 轮审查 F1:参数展开那一道也得是**封闭**的(见 shared 的 parameterForm)。
     // 赋值只有名字赋得上,位置参数和特殊参数当场报错走人;而这一层没正面证明过的形式一律未知。
     ["往位置/特殊参数上赋值", ["${1:=v}", '"${1:=v}"', "${1=v}", "${@:=v}", "${#=v}"]],
-    ["没正面证明过的参数形式", ["${ASH_X!}", '"${ASH_X!}"', "${ASH_X@Q}", "${!ASH_X}", "${ASH_X/a/b}", "${ASH_X:1:2}", "${ASH_X^^}", "${}"]],
+    ["没正面证明过的参数形式", ["${NAVI_X!}", '"${NAVI_X!}"', "${NAVI_X@Q}", "${!NAVI_X}", "${NAVI_X/a/b}", "${NAVI_X:1:2}", "${NAVI_X^^}", "${}"]],
   ];
   for (const [kind, forms] of spellings) {
     for (const form of forms) {
@@ -272,7 +272,7 @@ assert.equal(
     [": $[1/0]; while true; do :; done", "旧式算术除零（实测 127）"],
     [`: $[1+1]; ${BASE}`, "同一种形式，算得出来也一样:读不懂的是形式本身"],
     [`: "$[1/0]"; ${BASE}`, "双引号里的展开真的会执行，同判"],
-    [`: ${"${ASH_X:-$[1/0]}"}; ${BASE}`, "套在参数展开里的那一层也要带上来（②c 同一条不变量）"],
+    [`: ${"${NAVI_X:-$[1/0]}"}; ${BASE}`, "套在参数展开里的那一层也要带上来（②c 同一条不变量）"],
     [`: $'\\n'; ${BASE}`, "`$'…'` 是 bash 的 ANSI-C 引用，POSIX sh 里没有这一种"],
     [`: $"x"; ${BASE}`, "`$\"…\"` 是 locale 翻译，同样随 shell 而变"],
     [`tail -F $[1]`, "参数位上也算:它展开成什么、会不会出错，这一层都读不出来"],

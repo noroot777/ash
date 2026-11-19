@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { indexWorkers, inTaskMode, workersFrom } from "../lib/taskAttention.ts";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { dispatchEdges, dispatchSubtree } from "../lib/dispatchTree.ts";

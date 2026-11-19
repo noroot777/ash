@@ -1,5 +1,5 @@
 import { Tag, TreeStructure, Plus } from "@phosphor-icons/react";
-import type { GitView } from "@ash/shared/git-workbench";
+import type { GitView } from "@navi/shared/git-workbench";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { openGitWorkbench } from "./navigation.ts";

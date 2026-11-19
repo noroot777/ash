@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { spawnWindowsPty } from "../src/terminal-pty.js";
 
-const temporary = mkdtempSync(join(tmpdir(), "ash-terminal-pty-"));
+const temporary = mkdtempSync(join(tmpdir(), "navi-terminal-pty-"));
 const worker = join(temporary, "worker.mjs");
 const marker = join(temporary, "worker.pid");
 const options = { cwd: temporary, env: process.env as Record<string, string> };

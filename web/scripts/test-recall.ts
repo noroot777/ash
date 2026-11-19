@@ -4,8 +4,8 @@
 //   recallBlocks / dayLabel / highlightParts —— 右边一串话怎么分段、命中的词画得对
 // 跑：npm -w web run test:recall
 import assert from "node:assert/strict";
-import type { TaskListItem } from "@ash/shared";
-import type { UserMessage } from "@ash/shared/user-messages";
+import type { TaskListItem } from "@navi/shared";
+import type { UserMessage } from "@navi/shared/user-messages";
 import { REQUIREMENT_INPUT_ID, conversationInputs, type ConversationInput } from "../src/task-detail/conversationInputs.ts";
 import { pickRevealInput, type MessageRevealRequest } from "../src/search/messageReveal.ts";
 import { dayLabel, highlightParts, messageMatches, openDecision, recallBlocks, recallMembers, recallOrder, recallTaskRows } from "../src/recall/recallModel.ts";

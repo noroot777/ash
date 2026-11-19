@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { TaskListItem } from "@ash/shared";
-import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
+import type { TaskListItem } from "@navi/shared";
+import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 import { api, type ScmOverview } from "../lib/api.ts";
 import { announceWorkspaceCommit, workspaceCommitBlock, workspaceCommitPaths } from "../review/workspaceCommit.ts";
 import { CheckAction, CheckRow, FileList, RetryAction } from "./CheckRow.tsx";

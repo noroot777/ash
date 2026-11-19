@@ -1,4 +1,4 @@
-import type { AgentExecutorProfile, LlmProvider, ProjectView } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider, ProjectView } from "@navi/shared";
 
 /**
  * 首启向导的三站,按**依赖顺序**排:供应商挂到执行器上,执行器在项目目录里干活。

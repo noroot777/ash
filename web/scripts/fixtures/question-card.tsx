@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
-import type { QuestionAnswerInput, QuestionRecord } from "@ash/shared/questions";
+import type { Task } from "@navi/shared";
+import type { QuestionAnswerInput, QuestionRecord } from "@navi/shared/questions";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
 import { TeamReplyBox } from "../../src/team/TeamReplyBox.tsx";
@@ -10,7 +10,7 @@ import type { ConversationItem } from "../../src/task-detail/conversationModel.t
 import "../../src/styles/global.css";
 import { longLegacyReply } from "./question-card-long-answer.ts";
 
-const storageKey = "ash-question-card-fixture-v2";
+const storageKey = "navi-question-card-fixture-v2";
 // `?host=team`：回复框那一格换成团队页的 TeamReplyBox（调度台是常驻会话，没有「那一轮还没结束」）。
 const teamHost = new URLSearchParams(location.search).get("host") === "team";
 const initial = {

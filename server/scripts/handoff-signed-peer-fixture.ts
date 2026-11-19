@@ -9,7 +9,7 @@ export async function startSignedHandoffPeer() {
   let held: { received(): void; released: Promise<void> } | undefined;
   const credentials: (string | undefined)[] = [];
   const server = createServer(async (req, res) => {
-    credentials.push(req.headers["x-ash-peer-user-key"] as string | undefined);
+    credentials.push(req.headers["x-navi-peer-user-key"] as string | undefined);
     const gate = held;
     held = undefined;
     if (gate) { gate.received(); await gate.released; }
@@ -17,7 +17,7 @@ export async function startSignedHandoffPeer() {
     const sig = sign(null, Buffer.from(canonicalPingChallenge(mode === "invalid" ? "wrong-nonce" : nonce)), keys.privateKey).toString("base64");
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({
-      ok: true, service: "ash", host: "fixture", projects: [], peerStatus: "approved",
+      ok: true, service: "navi", host: "fixture", projects: [], peerStatus: "approved",
       ...(mode === "missing" ? {} : { identity: { publicKey, sig } }),
     }));
   });

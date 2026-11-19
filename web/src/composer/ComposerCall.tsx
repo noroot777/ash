@@ -4,7 +4,7 @@
 // 叫谁、来做什么存在新建框的草稿里（跟正文同生共死），切走再回来还在。叫来的人只在用户亲手把胶囊换成他时拿掉
 // （面板上的 changeExecutor）——不跟着 host 的值走：重开面板、注册表还没读回或读失败时 host 只是个临时值，
 // 拿它删人就把安排删了（新建框第 2、3 轮审查）。
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";

@@ -68,8 +68,8 @@
 // 这条语句本身住在 `monitor-responsibility.ts`：第 3 轮审查 F2 发现审查等待那一侧只认了第一
 // 类，而它问的正是同一个集合，所以搬出去共用一份（那边只多一道「限定本轮 run+round」的过滤）。
 import { and, desc, eq, isNull } from "drizzle-orm";
-import { monitorEventTally } from "@ash/shared/monitor-silence";
-import { OWN_MONITOR_KIND, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorEventTally } from "@navi/shared/monitor-silence";
+import { OWN_MONITOR_KIND, monitorIdFromOrigin } from "@navi/shared/monitor";
 import { db } from "./db/index.js";
 import { monitorLogBytes } from "./monitors.js";
 import { monitors, sessions } from "./db/schema.js";
@@ -328,6 +328,6 @@ export async function noteMonitorsDropped(taskId: string): Promise<void> {
       { sessionId: turn.sessionId },
     );
   } catch (e) {
-    console.error(`[ash] 记录「撤哨兵后完成」失败 task=${taskId}:`, e);
+    console.error(`[navi] 记录「撤哨兵后完成」失败 task=${taskId}:`, e);
   }
 }

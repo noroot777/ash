@@ -29,7 +29,7 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /**
  * 「把记号那条线索弄断」的环境。POSIX 上直接空着(= `env -i`);Windows 上留住系统那几项
  * (少了 `SystemRoot` 一类,node 自己起不来 —— 那就不是「后代躲过了设备」,是夹具没起来),
- * 但**一项 `ASH_` 都不带**,所以资源记号那条线索照样是断的。
+ * 但**一项 `NAVI_` 都不带**,所以资源记号那条线索照样是断的。
  */
 export function cleanEnv(): Record<string, string> {
   if (!IS_WIN) return {};

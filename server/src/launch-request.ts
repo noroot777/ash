@@ -22,7 +22,7 @@
 // （prerequisite-launch.ts）；分组恢复 / 名下放开时；每分钟兜底扫一遍。进程内的定时器只决定「什么时候再看
 // 一眼」，「该不该起」永远读库里的请求。
 import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
-import { hasCliGoalHold } from "@ash/shared/cli-commands";
+import { hasCliGoalHold } from "@navi/shared/cli-commands";
 import { db, dbClient } from "./db/index.js";
 import { queueItems, scheduledMessages, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
 import { prerequisiteStandings } from "./prerequisite-standing.js";
@@ -247,13 +247,13 @@ async function noteStartFailure(taskId: string, requestId: string | null, reason
     await db.update(taskPrerequisiteLaunches)
       .set({ giveUp: `连着 ${failures} 次没能自动开工（${reason}），不再自动重试。处理好之后点运行。`, retryAt: null })
       .where(generation(taskId, requestId));
-    console.error(`[ash] task=${taskId} 连着 ${failures} 次没能自动开工（${reason}），不再自动重试`);
+    console.error(`[navi] task=${taskId} 连着 ${failures} 次没能自动开工（${reason}），不再自动重试`);
     return publishGiveUp(taskId);
   }
   const at = new Date(Date.now() + retryDelay(failures)).toISOString();
   await db.update(taskPrerequisiteLaunches).set({ retryAt: at }).where(and(generation(taskId, requestId),
     eq(taskPrerequisiteLaunches.startFailures, failures), isNull(taskPrerequisiteLaunches.giveUp)));
-  console.warn(`[ash] 自动开工没起来 task=${taskId}（第 ${failures} 次，${at} 再试）：${reason}`);
+  console.warn(`[navi] 自动开工没起来 task=${taskId}（第 ${failures} 次，${at} 再试）：${reason}`);
   await republishPrerequisiteView([taskId]);
   retryAt(taskId, at);
 }
@@ -283,7 +283,7 @@ function retryAt(taskId: string, at: string): void {
   if (retryTimers.has(taskId)) return;
   const timer = setTimeout(() => {
     retryTimers.delete(taskId);
-    void releaseLaunch(taskId).catch((error) => console.error(`[ash] 自动开工重试失败 task=${taskId}:`, error));
+    void releaseLaunch(taskId).catch((error) => console.error(`[navi] 自动开工重试失败 task=${taskId}:`, error));
   }, Math.max(0, new Date(at).getTime() - Date.now()) + 50);
   timer.unref();
   retryTimers.set(taskId, timer);
@@ -297,7 +297,7 @@ const lastHoldup = new Map<string, string | null>();
 function noteHoldup(taskId: string, holdup: "held" | "queue" | "full" | "prerequisites" | "gave-up" | null): void {
   if ((lastHoldup.get(taskId) ?? null) === holdup) return;
   if (holdup) lastHoldup.set(taskId, holdup); else lastHoldup.delete(taskId);
-  void republishPrerequisiteView([taskId]).catch((error) => console.error(`[ash] 开工等待说明重发失败 task=${taskId}:`, error));
+  void republishPrerequisiteView([taskId]).catch((error) => console.error(`[navi] 开工等待说明重发失败 task=${taskId}:`, error));
 }
 
 // ── 停止 ─────────────────────────────────────────────────────────────────────
@@ -355,7 +355,7 @@ export async function sweepLaunchRequests(): Promise<void> {
     .where(isNotNull(taskPrerequisiteLaunches.requestedAt))
     .orderBy(asc(taskPrerequisiteLaunches.requestedAt), asc(tasks.createdAt), asc(taskPrerequisiteLaunches.taskId));
   await Promise.all(rows.map(({ taskId }) => releaseLaunch(taskId)
-    .catch((error) => { if (!dbClient.closed) console.error(`[ash] 自动开工判定失败 task=${taskId}:`, error); })));
+    .catch((error) => { if (!dbClient.closed) console.error(`[navi] 自动开工判定失败 task=${taskId}:`, error); })));
 }
 
 let sweepTimer: NodeJS.Timeout | null = null;
@@ -364,7 +364,7 @@ export function sweepSoon(): void {
   if (sweepTimer) return;
   sweepTimer = setTimeout(() => {
     sweepTimer = null;
-    void sweepLaunchRequests().catch((error) => console.error("[ash] 自动开工扫描失败:", error));
+    void sweepLaunchRequests().catch((error) => console.error("[navi] 自动开工扫描失败:", error));
   }, 200);
   sweepTimer.unref();
 }
@@ -385,7 +385,7 @@ export async function startLaunchRequests(intervalMs = 60_000): Promise<void> {
   started = true;
   booting = false;
   await sweepLaunchRequests();
-  setInterval(() => void sweepLaunchRequests().catch((error) => console.error("[ash] 自动开工扫描失败:", error)), intervalMs).unref();
+  setInterval(() => void sweepLaunchRequests().catch((error) => console.error("[navi] 自动开工扫描失败:", error)), intervalMs).unref();
 }
 
 // 任何一把回合锁放开：名额可能空出来了，被名额挡住的当场补放，不等每分钟那一扫。加载本模块就装上。

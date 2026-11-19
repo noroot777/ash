@@ -12,8 +12,8 @@ import { join } from "node:path";
 import type { HandoffFreeWorkflowPayload } from "../src/handoff-types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-fw-rows-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-fw-rows-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const [{ db, ensureSchema }, { reviewerProfiles }, { buildFreeWorkflowRows }] = await Promise.all([
   import("../src/db/index.js"),

@@ -2,13 +2,13 @@
 // test-macos-release.mjs，真 Sparkle 从 dmg 装新版在 test-macos-sparkle-dmg.mjs。
 //
 // 闸：编进测试驱动的是真的 UpdateGate / RestartImpact / ServerShutdown / DatabaseBackup /
-// ServerRecord；端口上摆一个假的 ash（独立进程，按 health 协议报 pid 和数据根，restart-impact
+// ServerRecord；端口上摆一个假的 navi（独立进程，按 health 协议报 pid 和数据根，restart-impact
 // 的答复从一个状态文件里读，收到 SIGTERM 才退），数据根里放一份 WAL 还没落盘的真 SQLite 库。
 // 覆盖：没人会被打断 → 不问、停服务、备份、放行；会打断（判失败 + 握着 MCP，同一个任务只算
 // 一次）→ 先问；选「等」→ 排空后自己放行；选「现在」→ 立刻放行；问不出来 → 当成会打断；
 // 等的时候服务一时回 503 / 不应答 → 确认不了、接着等，不停服务；停服务只停评估过的那个进程；
 // 服务停不下来 → 不放行、不备份、松开启动闸；另一处攥着启动锁 → 不停服务；维护期里别的进程起
-// 不了服务、维护方没了就作废；端口上是别的 ash → 不碰它；退出那一档的取消 / 等 / 现在、备份失败
+// 不了服务、维护方没了就作废；端口上是别的 navi → 不碰它；退出那一档的取消 / 等 / 现在、备份失败
 // 时的说法；Sparkle 放弃（放行后 / 等待中）→ 闸收回、作废的安装回调不再跑、重试再备份；库上次是
 // 别的构建号在用、又没备份过 → 起服务前先备份并固定成恢复点，备份不成不起；没有服务记录、新版连着
 // 起不来时重试不再备份，迁移前的原件一直留着；起它的启动器没等到、服务后来起来了 → 之后谁看到它
@@ -24,18 +24,19 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
 const mac = join(root, "desktop/macos");
-const temporary = mkdtempSync(join(tmpdir(), "ash-macos-update-"));
+const temporary = mkdtempSync(join(tmpdir(), "navi-macos-update-"));
 const data = join(temporary, "data");
 const binary = join(temporary, "update-tests");
 const fakes = new Set();
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
-  ...["AshConfig", "AshHealth", "DatabaseBackup", "LegacyIdentity", "LoginService", "RestartImpact", "ServerControl", "ServerLauncher", "ServerStartLock", "UpdateGate"]
+  ...["NaviConfig", "NaviHealth", "DatabaseBackup", "LegacyIdentity", "LoginService", "RestartImpact", "ServerControl", "ServerLauncher", "ServerStartLock", "UpdateGate"]
     .map((name) => join(mac, `Sources/${name}.swift`)),
   join(mac, "Tests/Update/main.swift"), "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
@@ -52,8 +53,10 @@ async function freePort() {
 const port = await freePort();
 const runtime = join(temporary, "no-runtime");
 const windowPort = await freePort();
-const env = { ...process.env, ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data, ASH_MAC_RUNTIME: runtime,
-  ASH_MAC_WINDOW_PORT: String(windowPort) };
+// 跑测试的这个进程自己带着的 app 配置（两代名字都算）不往下传。
+const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !new RegExp(`^(?:NAVI_|${LEGACY_ENV_PREFIXES[0]})(?:DATA_DIR|URL|LOCAL_ONLY|MAC_\\w+)$`).test(key)));
+const env = { ...inherited, NAVI_URL: `http://127.0.0.1:${port}`, NAVI_DATA_DIR: data, NAVI_MAC_RUNTIME: runtime,
+  NAVI_MAC_WINDOW_PORT: String(windowPort) };
 const impactFile = join(temporary, "impact.json");
 const setImpact = (value) => writeFileSync(impactFile, typeof value === "string" ? value : JSON.stringify(value));
 const healthFile = join(temporary, "health.txt");
@@ -61,7 +64,7 @@ const healthFile = join(temporary, "health.txt");
 const setHealth = (value) => writeFileSync(healthFile, value);
 const clear = { survives: [{ id: "s", title: "接管得了的", pid: 1 }], resumes: [{ id: "lead", title: "调度台" }], interrupted: [], mcpDisrupted: [] };
 
-/** 假 ash：独立进程，pid 就是它自己。stubborn = 不理 SIGTERM。 */
+/** 假 navi：独立进程，pid 就是它自己。stubborn = 不理 SIGTERM。 */
 async function startFake({ dataDir = data, stubborn = false } = {}) {
   const source = `
     const http = require('node:http'); const fs = require('node:fs');
@@ -263,16 +266,16 @@ try {
   await once(fake, "exit");
   console.log("PASS: a service that will not stop blocks the install and releases the launch hold");
 
-  // ── 端口上是别的 ash：不碰它 ──
+  // ── 端口上是别的 navi：不碰它 ──
   setImpact({ ...clear, interrupted: [{ id: "x", title: "别人的任务", reason: "r" }] });
   fake = await startFake({ dataDir: join(temporary, "someone-else") });
   result = await drive(["update", "10"]);
   assert.equal(result.status, 0, result.out);
   assert.doesNotMatch(result.out, /ASK/);
-  assert.equal(alive(fake), true, "another ash on the port is not ours to stop");
+  assert.equal(alive(fake), true, "another navi on the port is not ours to stop");
   fake.kill("SIGKILL");
   await once(fake, "exit");
-  console.log("PASS: another ash on the port is neither asked about nor stopped");
+  console.log("PASS: another navi on the port is neither asked about nor stopped");
 
   // ── 退出那一档：取消 / 等 / 现在 ──
   setImpact({ ...clear, interrupted: [{ id: "a", title: "排队的任务", reason: "排队中" }] });

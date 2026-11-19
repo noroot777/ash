@@ -53,10 +53,10 @@ const chatty = "I'll look at the image first.\n\n标题：调整任务卡副标�
 check("寒暄之后的标题也认", title(chatty), "调整任务卡副标题样式");
 check("摘掉标题行不留空洞", body(chatty), "I'll look at the image first.\n\n改完了。\n");
 
-// ── 现场三：codex 重连诊断（12cTzubGoOQT）。那是 ash 自己注入的引用块，不该吃额度 ──
+// ── 现场三：codex 重连诊断（12cTzubGoOQT）。那是 navi 自己注入的引用块，不该吃额度 ──
 const diagnostics =
-  "> **执行诊断**\n> Reconnecting... 1/5\n\n> **执行诊断**\n> Reconnecting... 2/5\n\n标题：用脚本重启 ash\n\n好的。\n";
-check("引用块不计入行数预算", title(diagnostics), "用脚本重启 ash");
+  "> **执行诊断**\n> Reconnecting... 1/5\n\n> **执行诊断**\n> Reconnecting... 2/5\n\n标题：用脚本重启 navi\n\n好的。\n";
+check("引用块不计入行数预算", title(diagnostics), "用脚本重启 navi");
 
 // ── 窗口上限：越过就放弃，正文原样放行 ───────────────────────────────────────
 const late = "a\nb\nc\nd\ne\nf\n标题：太晚了\n";

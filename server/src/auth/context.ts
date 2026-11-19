@@ -12,7 +12,7 @@
 // Actor 挂在 Hono 的 context vars 上,取用一律走 `actorOf(c)` —— 别在别处再解析一遍
 // cookie/header,那就是第二份判据。
 import type { Context } from "hono";
-import type { UserRole } from "@ash/shared";
+import type { UserRole } from "@navi/shared";
 
 /**
  * 自用模式下那个隐式本地用户的 id。**不进 users 表**,归属列也一律写 null ——
@@ -79,7 +79,7 @@ export const ANONYMOUS_ACTOR: Actor = {
 };
 
 // Hono 的 c.set/c.get 是无类型的字符串键。收敛成两个函数,别在调用点写裸字符串。
-const ACTOR_KEY = "ashActor";
+const ACTOR_KEY = "naviActor";
 
 export function setActor(c: Context, actor: Actor): void {
   c.set(ACTOR_KEY as never, actor as never);

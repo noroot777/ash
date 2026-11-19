@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { FileText, ListBullets, Trash } from "@phosphor-icons/react";
 import { useLeftDrawer } from "../components/LeftDrawer.tsx";
 import { DiscussionOverview, discussionDrawerEntry, type DiscussionDrawerSource } from "../free-workflow/DiscussionRecord.tsx";

@@ -15,10 +15,10 @@ const { verifyProtocolFor, verifyReminderFor, reviewReminderFor } = await import
 const { freeReviewReminder } = await import("../src/free-workflow.js");
 const { SWEEP_RULES } = await import("../src/review-sweep.js");
 const { EXECUTOR_REGRESSION_RECORDING, GATE_FAILURE_REGRESSION_CARVE_OUT, REGRESSION_POLICY,
-  REVIEW_VALIDATION_REQUIREMENT, REVIEWER_REGRESSION_CLAUSE } = await import("@ash/shared/free-workflow");
+  REVIEW_VALIDATION_REQUIREMENT, REVIEWER_REGRESSION_CLAUSE } = await import("@navi/shared/free-workflow");
 const { gateFailurePrompt } = await import("../src/accept-gate-messages.js");
 const { ACCEPTANCE_REMINDER } = await import("../src/run-prompts.js");
-const { MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS } = await import("@ash/shared/monitor");
+const { MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS } = await import("@navi/shared/monitor");
 const { previewShell } = await import("../src/preview-shell.js");
 const { userShellLaunch } = await import("../src/platform.js");
 
@@ -43,7 +43,7 @@ try {
   const manifest = () => JSON.parse(readFileSync(join(evidenceDir, "regression-evidence.json"), "utf8")) as {
     records: Array<{ reusable: boolean; passed: boolean | null; command: string; exitCode: number; logPath: string; reason: string; latest: boolean }>;
   };
-  const command = `node -e "console.log('OUTPUT'.repeat(30000));process.exit(Number(process.env.ASH_TEST_REGRESSION_FAIL||0))"`;
+  const command = `node -e "console.log('OUTPUT'.repeat(30000));process.exit(Number(process.env.NAVI_TEST_REGRESSION_FAIL||0))"`;
   const runTest = async (originalCommand = command) => {
     const result = await startMonitor({ taskId, command: originalCommand, cwd: repo, regression: true, caller, timeoutMs: 30_000 });
     assert.equal(result.ok, true, JSON.stringify(result));
@@ -99,9 +99,9 @@ try {
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records.length, 0, "带旁路代次的记录也不能冒充执行者结果");
   await db.update(monitors).set({ sourceReviewRun: null }).where(eq(monitors.id, first));
-  process.env.ASH_TEST_REGRESSION_FAIL = "1";
+  process.env.NAVI_TEST_REGRESSION_FAIL = "1";
   await runTest();
-  delete process.env.ASH_TEST_REGRESSION_FAIL;
+  delete process.env.NAVI_TEST_REGRESSION_FAIL;
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records.length, 2, "同一命令保留全部历史，不能吞掉失败");
   assert.equal(manifest().records[0]?.latest, true);
@@ -190,7 +190,7 @@ try {
   assert.equal(absolute.exitCode, 0);
   assert.match(readFileSync(absolute.logPath, "utf8"), /ABSOLUTE_NODE_OK/);
 
-  const environmentScript = Buffer.from("console.log('COMMAND_ENV=' + JSON.stringify(Object.keys(process.env).filter(key => /^ASH_(?:DB|RUNS_DIR)$/i.test(key))))").toString("base64");
+  const environmentScript = Buffer.from("console.log('COMMAND_ENV=' + JSON.stringify(Object.keys(process.env).filter(key => /^NAVI_(?:DB|RUNS_DIR)$/i.test(key))))").toString("base64");
   const environmentCommand = `${previewShell().quote(originalNode)} -e "eval(Buffer.from('${environmentScript}','base64').toString())"`;
   const isolatedCommand = await prepareRegressionCommand(taskId, "isolated-environment", environmentCommand, repo, "single");
   const isolatedLaunch = userShellLaunch(isolatedCommand);
@@ -314,6 +314,6 @@ try {
   assert.equal((await db.select().from(schema.regressionChecks).where(eq(schema.regressionChecks.monitorId, first))).length, 1);
   console.log("✓ regression evidence: real command/output/exit, tree identity, provenance, failure, post-merge, prompts and MCP");
 } finally {
-  delete process.env.ASH_TEST_REGRESSION_FAIL;
+  delete process.env.NAVI_TEST_REGRESSION_FAIL;
   await teardown();
 }

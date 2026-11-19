@@ -178,7 +178,7 @@ try {
     "点停止就发 stop,默认停法(杀进程组)由服务端决定",
   );
 
-  // ⑩ `docker compose up -d` 形状:启动脚本自己正常退了,服务活在 ash 的进程树之外。
+  // ⑩ `docker compose up -d` 形状:启动脚本自己正常退了,服务活在 navi 的进程树之外。
   //    配了停止命令才敢这么推断,否则那条停止命令永远按不到。
   await page.evaluate(() => { window.__service = "detached"; });
   await reopen();
@@ -241,7 +241,7 @@ try {
   );
   await page.evaluate(() => { delete window.__plainDaemon; });
 
-  // ⑬-中 「停了但没停净」:端口让出来了,同组还有核不上归属、ash 没敢杀的进程还活着。
+  // ⑬-中 「停了但没停净」:端口让出来了,同组还有核不上归属、navi 没敢杀的进程还活着。
   //   既不是「运行中」也不是「已停止」—— 混进「已停止」就是拿端口空闲核销了整次运行
   //   (第 2 轮审查发现 2)。停止按钮必须留着,让用户还能再按一次。
   await page.evaluate(() => { window.__service = "unknown"; });

@@ -1,4 +1,4 @@
-// 几个测试会 `ensureSchema()` 并往库里真写数据。ASH_DB 指错地方 = 直接改用户
+// 几个测试会 `ensureSchema()` 并往库里真写数据。NAVI_DB 指错地方 = 直接改用户
 // 的真实任务库,所以每个都在入口挡一道「这个库必须是临时的」。
 //
 // 判据以前写死 `startsWith("/tmp/")`,那在 Windows 上是**永远为假**:那边根本没有
@@ -7,11 +7,11 @@
 // 以为自己命令写错了。
 //
 // 同时 `/tmp` 也不能删:macOS 的 `os.tmpdir()` 返回的是 `$TMPDIR`(`/var/folders/…`),
-// 跟 `/tmp` 不是一个目录,而现有的跑法全是 `ASH_DB=/tmp/xxx.db`。两个都认。
+// 跟 `/tmp` 不是一个目录,而现有的跑法全是 `NAVI_DB=/tmp/xxx.db`。两个都认。
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { envNameGenerations, readEnv } from "@ash/shared/env-names";
+import { envNameGenerations, readEnv } from "@navi/shared/env-names";
 import { IS_WINDOWS, PATH_SEP, isInsidePath } from "../src/platform.js";
 
 // `resolve` 顺手把 Windows 上的正斜杠写法(`C:/…/Temp/x.db`)归一成反斜杠,
@@ -37,10 +37,10 @@ function ownTempDir(name: string): string {
 /**
  * 保证这条测试接下来开的库是临时的、起不了真执行器。放在任何碰库的 import **之前**调。
  *
- * - `ASH_DB` 指到了临时目录之外：打印原因并 `exit(1)`（那多半是用户的真实任务库）。
- * - 没设 `ASH_DB`：自己备一个临时库。验收门禁会先把宿主的 `ASH_DB` 剥掉再跑测试，
+ * - `NAVI_DB` 指到了临时目录之外：打印原因并 `exit(1)`（那多半是用户的真实任务库）。
+ * - 没设 `NAVI_DB`：自己备一个临时库。验收门禁会先把宿主的 `NAVI_DB` 剥掉再跑测试，
  *   以前这里的做法是拒跑并让人手动带上变量 —— 等于这条测试进不了门禁。
- * - 没设 `ASH_RUNS_DIR`：一并指到临时目录。不指的话，测试写的会话记录落在检出自己的
+ * - 没设 `NAVI_RUNS_DIR`：一并指到临时目录。不指的话，测试写的会话记录落在检出自己的
  *   `data/runs/`，而且「测试隔离环境禁止启动真执行器」那道闸（executors/spawn.ts 的
  *   guardAgentSpawn）认的就是这个变量：test-queue 只设了库没设它，2026-08～10 月先后五次
  *   拿夹具里的字符串当 prompt 真起了 `claude -p`。测试自己随后再指到别处的，以它的为准。
@@ -60,14 +60,14 @@ export function requireTmpDb(name: string): void {
   const runsSet = !!readEnv(process.env, "NAVI_RUNS_DIR");
   if (named.length && runsSet) return;
   const root = ownTempDir(name);
-  if (!named.length) process.env.ASH_DB = join(root, "ash.db");
-  if (!runsSet) process.env.ASH_RUNS_DIR = join(root, "runs");
+  if (!named.length) process.env.NAVI_DB = join(root, "ash.db");
+  if (!runsSet) process.env.NAVI_RUNS_DIR = join(root, "runs");
 }
 
 /**
  * 删临时舞台**之前**先松开数据库文件。
  *
- * Windows 删不掉「还开着的文件」,而这些测试的 ASH_DB 就落在舞台目录里 ——
+ * Windows 删不掉「还开着的文件」,而这些测试的 NAVI_DB 就落在舞台目录里 ——
  * import 任何碰库的模块时就连上了,收尾那句 `rmSync(stage)` 于是必然 EBUSY:
  * 断言全过,却在最后一步把整条测试判红。POSIX 上删已打开的文件是合法的,所以这句
  * 在开发机上是空转,只有真 Windows 上才救得到命(2026-08-18 实测:file-browser、

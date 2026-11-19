@@ -19,7 +19,7 @@
 //   - 即便这一步选错了地址,真正打包前的预检还会用同一份指纹做签名挑战
 //     (handoff-peer-client.ts 的 pingPeer,trust === "mismatch" 直接 409),
 //     第三台机器过不了这一关,拿不到仓库和会话历史。
-import type { HandoffTarget, TaskHandoff } from "@ash/shared";
+import type { HandoffTarget, TaskHandoff } from "@navi/shared";
 import { isIP } from "node:net";
 import { domainToASCII } from "node:url";
 import { eq } from "drizzle-orm";
@@ -31,7 +31,7 @@ import { sameFingerprint } from "./handoff-identity.js";
 import { probeSignedPeerFingerprint } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
 
-/** 绝大多数 ash 都听这个口;探测候选里必须有它,否则换过端口的机器一个都探不到。 */
+/** 绝大多数 navi 都听这个口;探测候选里必须有它,否则换过端口的机器一个都探不到。 */
 const DEFAULT_PORT = 4317;
 /** 探测是打开移回弹窗时的同步等待,全部并行发出,总耗时约等于一次超时。 */
 const PROBE_TIMEOUT_MS = 1_500;
@@ -91,7 +91,7 @@ function candidateHosts(marker: TaskHandoff, lastAddr: string, registeredUrls: s
   return hosts;
 }
 
-/** 候选端口:本机监听口(两台 ash 多半同构)、默认口,再加设置里登记过的那些。 */
+/** 候选端口:本机监听口(两台 navi 多半同构)、默认口,再加设置里登记过的那些。 */
 function candidatePorts(registeredUrls: string[]): number[] {
   const ports: number[] = [];
   const push = (value: number | null) => {

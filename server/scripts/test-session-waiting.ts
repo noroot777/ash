@@ -9,7 +9,7 @@
 // 顺序维护,这里钉的就是那个状态机。
 import "./isolated-data.js";
 import assert from "node:assert/strict";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import {
   clearSessionWaiting,
   failedTurnNotices,

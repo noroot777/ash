@@ -11,7 +11,7 @@
 //      任务的回合凭证(`agentActor` 明确不给它管理员权限)—— 反而拿到了不受钳制的
 //      路径能力(第 1 轮审查 P1)。HTTP 那一侧的复现在 test-multi-user-agent.ts ⑦。
 //
-// 跑法(不设 ASH_DB 时自己开一个临时库):
+// 跑法(不设 NAVI_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-paths
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
@@ -19,8 +19,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-multi-user-paths-"));
-process.env.ASH_DB ||= join(stage, "multi-user-paths.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-multi-user-paths-"));
+process.env.NAVI_DB ||= join(stage, "multi-user-paths.db");
 requireTmpDb("test-multi-user-paths");
 
 const { ensureSchema } = await import("../src/db/index.js");

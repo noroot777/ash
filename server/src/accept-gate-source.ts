@@ -71,7 +71,7 @@ const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
 const git = async (cwd: string, args: string[]) => (await readOnlyGit(cwd, args)).stdout;
 
 // 准备命令现装的快照里，依赖解析图只剩**执行位置向上那条链**（node 对没装进快照的包名照旧一级级
-// 往上找 node_modules）。这一档的快照住在 ash 与项目目录树之外、起跑前还核过那条链上没有依赖树
+// 往上找 node_modules）。这一档的快照住在 navi 与项目目录树之外、起跑前还核过那条链上没有依赖树
 // （accept-gate-isolated.ts），源码那一侧（工作区、主检出）不在它的解析路径上，再摘它只会让无关的
 // 安装变化作废凭据。所以把执行位置的父目录同时当作两个根传进去。
 const gateAmbient = (cwd: string, executionCwd: string, roots: string[], prepared: boolean | undefined) =>
@@ -83,7 +83,7 @@ async function nonGitFiles(cwd: string): Promise<string[]> {
   return (await readdir(cwd)).filter(name => name !== ".git").sort();
 }
 
-// 运行目录(ash 的 runs)落在项目内时,它既不是测试输入、也不能跟着进副本——快照自己就住在那
+// 运行目录(navi 的 runs)落在项目内时,它既不是测试输入、也不能跟着进副本——快照自己就住在那
 // 里面,复制它等于让快照把自己复制进自己。但排除**只在源侧做**不行:clone/checkout 会把运行目录
 // 里被跟踪的文件照样写进副本,副本回算再不过滤就必然看到源摘要里没有的输入,项目什么也没改也会
 // 被判「没能按原样复现」。所以排除项按**相对路径**记一次,源摘要、复制、副本回算各按自己的根
@@ -324,7 +324,7 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     ambient: await gateAmbient(cwd, executionCwd, supplyRoots(supplied), prepared), executionCwd, ...(prepared ? { prepared } : {}) };
 }
 
-/** 快照住在哪。配了准备命令的那一档放在 ash 与项目目录树之外（理由见 accept-gate-isolated.ts）。 */
+/** 快照住在哪。配了准备命令的那一档放在 navi 与项目目录树之外（理由见 accept-gate-isolated.ts）。 */
 export const gateSnapshotPath = (taskId: string, runId: string, prepared = false) =>
   join(prepared ? GATE_ISOLATED_DIR : RUNS_DIR, taskId, `accept-gate-${runId}.source`);
 

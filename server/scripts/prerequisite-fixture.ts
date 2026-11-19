@@ -1,7 +1,7 @@
 // test-prerequisites*.ts 共用的台子：临时库、临时 git 仓库、装在 PATH 上的假 claude、几样小工具。
 //
-// **必须是测试文件的第一个 import**：环境变量要在任何 src 模块加载之前设好（db 一加载就按 ASH_DB 开库）。
-// 执行器是装在 PATH 上的假 claude：收到输入就记一行，等用例放行那个任务再以成功退出（ASH_LAX_DONE 下即 done）。
+// **必须是测试文件的第一个 import**：环境变量要在任何 src 模块加载之前设好（db 一加载就按 NAVI_DB 开库）。
+// 执行器是装在 PATH 上的假 claude：收到输入就记一行，等用例放行那个任务再以成功退出（NAVI_LAX_DONE 下即 done）。
 // git 夹具在临时目录里，进程里所有 GIT_* 环境变量先清掉，免得漏进夹具改到别的仓库。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -10,39 +10,39 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) delete process.env[key];
-// 跨进程的用例（重启那一档）让后一个进程接着用前一个进程的台子：ASH_TEST_FIXTURE_ROOT 指过来。
-export const root = process.env.ASH_TEST_FIXTURE_ROOT || mkdtempSync(join(tmpdir(), "ash-prerequisites-"));
+// 跨进程的用例（重启那一档）让后一个进程接着用前一个进程的台子：NAVI_TEST_FIXTURE_ROOT 指过来。
+export const root = process.env.NAVI_TEST_FIXTURE_ROOT || mkdtempSync(join(tmpdir(), "navi-prerequisites-"));
 const inputLog = join(root, "inputs.jsonl");
 const releaseDir = join(root, "release");
 mkdirSync(releaseDir, { recursive: true });
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_LAX_DONE = "1";
-process.env.ASH_TEST_INPUT_LOG = inputLog;
-process.env.ASH_TEST_RELEASE_DIR = releaseDir;
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_LAX_DONE = "1";
+process.env.NAVI_TEST_INPUT_LOG = inputLog;
+process.env.NAVI_TEST_RELEASE_DIR = releaseDir;
 
 const bin = join(root, "bin");
 mkdirSync(bin, { recursive: true });
 writeFileSync(join(bin, "fake-claude.js"), `const fs = require("fs");
 const path = require("path");
-const task = String(process.env.ASH_TASK_ID);
+const task = String(process.env.NAVI_TASK_ID);
 const resident = process.argv.includes("--input-format");
 let buf = "";
 let started = false;
 function start(input) {
-  fs.appendFileSync(process.env.ASH_TEST_INPUT_LOG, JSON.stringify({ task, input }) + "\\n");
+  fs.appendFileSync(process.env.NAVI_TEST_INPUT_LOG, JSON.stringify({ task, input }) + "\\n");
   if (started) return;
   started = true;
   process.stdout.write(JSON.stringify({ type: "system", session_id: "prereq-" + task }) + "\\n");
   const timer = setInterval(() => {
     // 台子被拆了（测试中途失败、被杀）就别再等放行文件：没人会来放它了。
-    if (!fs.existsSync(process.env.ASH_TEST_RELEASE_DIR)) process.exit(0);
-    if (!fs.existsSync(path.join(process.env.ASH_TEST_RELEASE_DIR, task))) return;
+    if (!fs.existsSync(process.env.NAVI_TEST_RELEASE_DIR)) process.exit(0);
+    if (!fs.existsSync(path.join(process.env.NAVI_TEST_RELEASE_DIR, task))) return;
     clearInterval(timer);
     process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: "prereq-" + task }) + "\\n");
     process.exit(0);
@@ -66,7 +66,7 @@ writeFileSync(
   { mode: 0o755 },
 );
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
-process.env.ASH_TEST_AGENT_BIN = bin;
+process.env.NAVI_TEST_AGENT_BIN = bin;
 
 export const { db, ensureSchema } = await import("../src/db/index.js");
 export const schema = await import("../src/db/schema.js");

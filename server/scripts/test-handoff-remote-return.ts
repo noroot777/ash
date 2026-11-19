@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import type { Task, TaskHandoff } from "@ash/shared";
+import type { Task, TaskHandoff } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-handoff-remote-return-"));
-process.env.ASH_DB = join(stage, "local.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+const stage = mkdtempSync(join(tmpdir(), "navi-handoff-remote-return-"));
+process.env.NAVI_DB = join(stage, "local.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 requireTmpDb("handoff-remote-return");
 const { startSignedHandoffPeer } = await import("./handoff-signed-peer-fixture.js");
 const peer = await startSignedHandoffPeer();

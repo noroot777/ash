@@ -5,7 +5,7 @@ import { now } from "./util.js";
 // 为什么这半截必须在内存里：库里「开始了没收口」这一个事实下面压着两种完全相反的情况——
 // 正在写，和当初崩了没来得及收口。任务状态分不出它们（同一个任务后来又跑起来时，`running`
 // 对两者都成立），所以活动身份只能由写端自己登记：`markTurnActive` / `clearTurnActive`，
-// 进程一重启就全部清空——那正是语义所要的，ash 重启后确实没有任何回合还在跑，旧的未收口
+// 进程一重启就全部清空——那正是语义所要的，navi 重启后确实没有任何回合还在跑，旧的未收口
 // 身份一律回到「未知」（第 5 轮审查必须修 1）。
 //
 // 为什么从 `session-turns.ts` 里搬出来：那个文件把「登记」和「落账」两件事合在一处,每轮审查
@@ -143,7 +143,7 @@ export async function primeTurnStarts(sessionId: string): Promise<void> {
     const last = seen.rows[0]?.last;
     if (typeof last === "string" && last) noteStartSeen(sessionId, last);
   } catch (error) {
-    console.warn(`[ash] 回合起点水位没从库里接回（真撞上历史身份时照未知披露）: ${String(error)}`);
+    console.warn(`[navi] 回合起点水位没从库里接回（真撞上历史身份时照未知披露）: ${String(error)}`);
   }
 }
 
@@ -192,7 +192,7 @@ function rememberClosed(sessionId: string, startedAt: string): void {
 /**
  * **这一行开始记录是本进程写的吗** —— 由 `openTurn` 登记,`clearTurnActive` 注销。
  *
- * 为什么要这么一张册子:判决恢复那一路要分「全新起跑的回合」和「上一个 ash 进程留下来的回合」,
+ * 为什么要这么一张册子:判决恢复那一路要分「全新起跑的回合」和「上一个 navi 进程留下来的回合」,
  * 而这两者的差别只有一个客观事实 —— **那一行开始记录是谁写的**。`activeTurns` 分不出来:
  * `reattach.ts` 接回一个存活回合时也会 `markTurnActive`(它必须,否则起点分配器会重发那个起点)。
  *

@@ -22,7 +22,7 @@ import { runTestProcess } from "./test-process.mjs";
 
 const windows = process.platform === "win32";
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const tempDirs = () => new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("ash-test-")));
+const tempDirs = () => new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("navi-test-")));
 const python = (() => {
   try { return execFileSync(process.platform === "win32" ? "where" : "/bin/sh", windows ? ["python3"] : ["-c", "command -v python3"], { encoding: "utf8" }).trim().split("\n")[0]; }
   catch { return ""; }
@@ -35,7 +35,7 @@ const python = (() => {
   const scope = new TestProcessScope();
   // 走真实脚本而不是 `-e`:自登记记的是 `process.argv[1]`,`-e` 下它是空的,
   // 「保住自登记那一条」就无从验起(而保留服务的判据正是靠这个 script)。
-  const stage = mkdtempSync(join(tmpdir(), "ash-probe-"));
+  const stage = mkdtempSync(join(tmpdir(), "navi-probe-"));
   const sleeper = join(stage, "sleeper.mjs");
   writeFileSync(sleeper, "setTimeout(() => {}, 1500);\n");
   const child = scope.spawn(process.execPath, [sleeper], { stdio: "ignore" });
@@ -64,7 +64,7 @@ const python = (() => {
 if (!python || windows) {
   console.log(`- 跳过原生后代一节(${windows ? "Windows 没有 fork/setsid 语义" : "本机没有 python3"})`);
 } else {
-  const directory = mkdtempSync(join(tmpdir(), "ash-native-probe-"));
+  const directory = mkdtempSync(join(tmpdir(), "navi-native-probe-"));
   try {
     for (const timed of [false, true]) {
       const pidPath = join(directory, `child-${timed}.pid`);
@@ -106,7 +106,7 @@ if (!python || windows) {
 if (!python || windows) {
   console.log(`- 跳过清空环境一节(${windows ? "Windows 走父子链" : "本机没有 python3"})`);
 } else {
-  const directory = mkdtempSync(join(tmpdir(), "ash-native-env-probe-"));
+  const directory = mkdtempSync(join(tmpdir(), "navi-native-env-probe-"));
   try {
     const pidPath = join(directory, "child.pid");
     const marker = join(directory, "late");
@@ -145,7 +145,7 @@ if (windows) {
   // 用 node 而不是 `sleep`:多给一个参数时 `sleep` 自己就按「时间间隔非法」退掉了,那样这一条
   // 验的就不是「没被杀」而是「它自己死了」。
   const outsider = spawn(process.execPath,
-    ["-e", "setTimeout(() => {}, 5000)", `ASH_TEST_PROCESS_SCOPE=${scope.directory}`], { stdio: "ignore" });
+    ["-e", "setTimeout(() => {}, 5000)", `NAVI_TEST_PROCESS_SCOPE=${scope.directory}`], { stdio: "ignore" });
   await delay(300);
   const owned = await scope.active();
   assert.ok(!owned.some((row) => row.pid === outsider.pid),
@@ -169,7 +169,7 @@ if (windows) {
   const boundaryPath = join(scope.directory, "boundary");
   assert.ok(!existsSync(boundaryPath),
     "边界 inode 不许留下名字 —— 有名字就等于把「冒领它」的门开着");
-  const stage = mkdtempSync(join(tmpdir(), "ash-probe-"));
+  const stage = mkdtempSync(join(tmpdir(), "navi-probe-"));
   const grabber = join(stage, "grab.mjs");
   // 域外程序:**按名字**去抓那个边界,抓到就一直握着。它既不是本域的后代,也没有本域的环境。
   writeFileSync(grabber, `
@@ -223,7 +223,7 @@ if (windows) {
 
 // ── ②f 所有权:**名字相邻的另一个执行域,一个进程都不许碰** ────────────────────────
 // 第 1 轮审查 F4 的直接复现。判据原先是 `environment.includes(标记)`,而另一个域的**真实**
-// 环境 `ASH_TEST_PROCESS_SCOPE=<我这个>-other` 把我这一段整段包住 —— 于是 A 的 `stop()` 会对
+// 环境 `NAVI_TEST_PROCESS_SCOPE=<我这个>-other` 把我这一段整段包住 —— 于是 A 的 `stop()` 会对
 // B 正在用的进程发终止信号。并行跑同一套测试、目录名按用途加后缀,这是常态而不是巧合输入。
 if (windows) {
   console.log("- 跳过相邻执行域一节(POSIX 专属:判据里的环境段线索)");
@@ -256,10 +256,10 @@ if (windows) {
   const sleeper = ["-e", "setTimeout(() => {}, 5000)"];
   // 反向:标记原样嵌在**另一个变量的值**里(左边没有收口)。
   const outsider = spawn(process.execPath, sleeper,
-    { stdio: "ignore", env: { OTHER: `prefix-ASH_TEST_PROCESS_SCOPE=${scope.directory}` } });
+    { stdio: "ignore", env: { OTHER: `prefix-NAVI_TEST_PROCESS_SCOPE=${scope.directory}` } });
   // 正向:真的带着这个变量(没有 NODE_OPTIONS ⇒ 没有登记,认它的只能是环境段这一条)。
   const descendant = spawn(process.execPath, sleeper,
-    { stdio: "ignore", env: { ASH_TEST_PROCESS_SCOPE: scope.directory } });
+    { stdio: "ignore", env: { NAVI_TEST_PROCESS_SCOPE: scope.directory } });
   await delay(400);
   const owned = await scope.active();
   assert.ok(!owned.some((row) => row.pid === outsider.pid),
@@ -291,7 +291,7 @@ if (windows) {
 if (!python || windows) {
   console.log(`- 跳过边界位置一节(${windows ? "Windows 没有 fork/setsid 语义" : "本机没有 python3"})`);
 } else {
-  const stage = mkdtempSync(join(tmpdir(), "ash-probe-"));
+  const stage = mkdtempSync(join(tmpdir(), "navi-probe-"));
   const scope = new TestProcessScope();
   await withTestResources(async () => {
     const pidPath = join(stage, "grandchild.pid");
@@ -376,7 +376,7 @@ if (windows) {
 {
   // 动态 import 的说明符必须是 **file:// URL**:Windows 上 `D:\...` 这种绝对路径不是合法
   // URL,ESM 加载器直接 ERR_UNSUPPORTED_ESM_URL_SCHEME(真机实测)。
-  const probe = join(mkdtempSync(join(tmpdir(), "ash-probe-")), "probe.mjs");
+  const probe = join(mkdtempSync(join(tmpdir(), "navi-probe-")), "probe.mjs");
   writeFileSync(probe, `
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";

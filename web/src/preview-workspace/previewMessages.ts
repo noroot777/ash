@@ -1,5 +1,5 @@
-import type { PreviewAnnotationEvent } from "@ash/shared/page-annotation";
-import { parsePreviewMessage as parseAnnotationMessage } from "@ash/shared/page-annotation-parse";
+import type { PreviewAnnotationEvent } from "@navi/shared/page-annotation";
+import { parsePreviewMessage as parseAnnotationMessage } from "@navi/shared/page-annotation-parse";
 
 export type WorkspaceAnnotationEvent = PreviewAnnotationEvent | { type: "undo" | "escape" } | { type: "gesture"; active: boolean };
 

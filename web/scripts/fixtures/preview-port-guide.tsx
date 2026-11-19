@@ -1,14 +1,14 @@
 // 打开预览的现场，$PORT 到底教没教会（断言在 test-preview-port-guide.mjs）。
 //
 // 现场：新用户点「打开预览」，仓库里认不出候选，于是「自填启动命令」自动展开。他要在这儿
-// 写下第一条命令 —— 而在这次改动之前，这儿关于端口只有一句「端口使用 ash 提供的 PORT
-// 环境变量」。那句话读起来像「ash 会替你处理」，真实意思却是「你得把它写进命令」。
+// 写下第一条命令 —— 而在这次改动之前，这儿关于端口只有一句「端口使用 navi 提供的 PORT
+// 环境变量」。那句话读起来像「navi 会替你处理」，真实意思却是「你得把它写进命令」。
 //
 // 这里挂的是真组件（PreviewLaunchOptions），断言的是**新用户在这一屏里能不能不读文档就
 // 写对**：判据看得见、起手式点一下就进输入框、方言跟着服务端那台机器走。
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { PreviewPortDialect, PreviewServiceState, WorkspacePreviewLaunch } from "@ash/shared/preview";
+import type { PreviewPortDialect, PreviewServiceState, WorkspacePreviewLaunch } from "@navi/shared/preview";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
 import "../../src/preview-workspace/preview-workspace.css";

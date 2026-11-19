@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
-import type { FreeReviewDisputeTarget, FreeReviewRun, TaskListItem } from "@ash/shared";
-import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
+import type { FreeReviewDisputeTarget, FreeReviewRun, TaskListItem } from "@navi/shared";
+import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@navi/shared/free-workflow";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { focusReplyInput } from "../task-detail/replyQuote.ts";
@@ -59,7 +59,7 @@ function ExchangesPicker({ value, busy, onChange, onCancel }: {
  * - 让它接着改（记为维持审查意见）：驳回不被采纳，接着发起修复；写的话压过报告。
  * - 这一轮不用改了（记为采纳执行者）：这条未通过意见作废；审查记录与证据原样留着，那一场也**不会**被
  *   改写成「已通过」——替审查者签字比留一条「用户裁定作废」的记录危险得多。
- * - 转为独立任务：意见**成立**，只是偏离了本任务要做的那件事（判据见 `@ash/shared/free-workflow` 的
+ * - 转为独立任务：意见**成立**，只是偏离了本任务要做的那件事（判据见 `@navi/shared/free-workflow` 的
  *   `DEFER_BOUNDARY_CRITERION`）。建一个待办派生任务把它带走。只在执行者逐条写明越界依据时才出现。
  * - 让双方辩论：先听几段再决定，**不改变任何结论**，辩完还是回到这一行拍板。
  *

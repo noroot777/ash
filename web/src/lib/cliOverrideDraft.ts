@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import {
   cliConfigOverrideErrors,
   cliConfigOverridesFor,
   type CliConfigOverride,
-} from "@ash/shared/cli-overrides";
+} from "@navi/shared/cli-overrides";
 
 /**
- * 「ash 替你写进 CLI 的配置」那几个数的**草稿态**:解析、夹范围、算脏、算错。
+ * 「navi 替你写进 CLI 的配置」那几个数的**草稿态**:解析、夹范围、算脏、算错。
  *
  * 抽出来是因为这一档配置有两个入口 —— 设置页执行器行上的 `ProfileOverridesControl`,
  * 和会话尾栏那颗上下文胶囊里的 `ContextCompactQuickSettings`。两处填的是同一个

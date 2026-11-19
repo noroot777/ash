@@ -1,4 +1,4 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { currentListeningPort } from "../listening-port.js";
 

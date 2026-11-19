@@ -37,7 +37,7 @@
 // 「按来源排队、取空了退当前文件」老路 —— 那条路恰恰是 F1 的原形。逐目的地对账对两种数据
 // 同样成立(只需要「展示的正文是记录那段正文的子集」,投影重建只会丢句子、不会重排),于是
 // 新老数据共用一套判据,宽松那条路可以整条删掉。
-import { markdownImageRefs } from "@ash/shared/markdown-images";
+import { markdownImageRefs } from "@navi/shared/markdown-images";
 import { imagePreviewTarget, taskFilePath, unavailableImage } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
 import type { AgentContentSegment, AttachmentSource } from "./conversationModel.ts";

@@ -1,6 +1,6 @@
 // 新建面板里「谁来跑这条任务」的状态变换。UI 在 TaskComposerPanel，纯数据在这里
 // ——一是给主文件腾行数（全局 700 行硬限），二是开局人选、拉回可用值都是同一份 configs 的整体替换。
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
 import {
   executorValue,
   isExecutorPickable,

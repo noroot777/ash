@@ -3,9 +3,9 @@
 // 照旧（会话行上的账本 + 会话流里最新那条气泡的直播值，见 infoRunFacts.ts），只是换成「标签 值」。
 // 每一回合各自烧了多少收在那一回合尾的「更多」菜单里（TurnActions）。
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Session, Task, TokenUsage } from "@ash/shared";
-import { addUsage, formatTokens, formatTokensExact, hasContext, hasUsage, usageTotal } from "@ash/shared/usage";
-import { taskCreationLabel } from "@ash/shared/task-origin";
+import type { Session, Task, TokenUsage } from "@navi/shared";
+import { addUsage, formatTokens, formatTokensExact, hasContext, hasUsage, usageTotal } from "@navi/shared/usage";
+import { taskCreationLabel } from "@navi/shared/task-origin";
 import { createPortal } from "react-dom";
 import { AgentIcon } from "../../components/AgentIcon.tsx";
 import { ContextMeterPanel, contextMeterView } from "../../components/ContextMeterChip.tsx";

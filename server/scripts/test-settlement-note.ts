@@ -2,7 +2,7 @@
 //
 // 病症（用户 2026-08-31 报的）：agent 没调 complete_task 就结束，任务照严格完成协议记
 // failed，而那句说明被写成「.md 一段引用 + trace 一条 error」——界面上是一条红色的
-// 「执行过程 · 22 工具 · 1 异常」，第一次用 ash 的人读到的结论是「它崩了」。现在它落成
+// 「执行过程 · 22 工具 · 1 异常」，第一次用 navi 的人读到的结论是「它崩了」。现在它落成
 // 带 level:"notice" 的 system 旁注行。两件事在这里钉住：
 //   ① 往返不丢标记：writeTurn 写下的 level，parseSessionOutput 读得回来（展示端的语气
 //      靠它，而不是靠关键词猜 —— 说明里天然带着「未完成」，猜出来永远是红的）；
@@ -12,11 +12,11 @@
 import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import { writeTurn } from "../src/transcript.js";
 import { lastInputOf } from "../src/task-retry-turn.js";
 
-const NOTE = "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。";
+const NOTE = "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 navi 的完成协议记为未完成。";
 
 function persisted(write: (out: NodeJS.WritableStream) => void): string {
   const stream = new PassThrough();

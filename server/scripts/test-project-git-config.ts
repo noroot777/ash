@@ -15,8 +15,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-project-git-config-test-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-project-git-config-test-"));
+process.env.NAVI_DB = join(root, "ash.db");
 const globalConfig = join(root, "gitconfig-global");
 writeFileSync(globalConfig, "[user]\n\tname = Global Person\n\temail = global@example.com\n");
 process.env.GIT_CONFIG_GLOBAL = globalConfig;

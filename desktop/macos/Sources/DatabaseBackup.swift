@@ -112,7 +112,7 @@ enum SQLiteFile {
 /// 的底。恢复点写不进去就算备份失败：没有它就没人记得哪一份才是原件。
 enum DatabaseBackup {
   static let keep = 5
-  private static var pinsURL: URL { AshConfig.backupURL.appendingPathComponent("recovery-points.json") }
+  private static var pinsURL: URL { NaviConfig.backupURL.appendingPathComponent("recovery-points.json") }
 
   private struct Pin: Codable {
     let file: String
@@ -125,9 +125,9 @@ enum DatabaseBackup {
   /// 起过服务）就什么都不做，返回 nil。
   @discardableResult
   static func beforeUpdate(fromVersion: String, now: Date = Date()) throws -> URL? {
-    let db = AshConfig.dataURL.appendingPathComponent("ash.db")
+    let db = NaviConfig.dataURL.appendingPathComponent("ash.db")
     guard FileManager.default.fileExists(atPath: db.path) else { return nil }
-    let dir = AshConfig.backupURL
+    let dir = NaviConfig.backupURL
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let stamp = DateFormatter()
     stamp.locale = Locale(identifier: "en_US_POSIX")
@@ -157,7 +157,7 @@ enum DatabaseBackup {
 
   /// 还固定着的恢复点（之后没有服务确认起来过），新的在前。第一个就是离现在最近的那次更新前的底。
   static func recoveryPoints() -> [URL] {
-    validPins().reversed().map { AshConfig.backupURL.appendingPathComponent($0.file) }
+    validPins().reversed().map { NaviConfig.backupURL.appendingPathComponent($0.file) }
   }
 
   /// 这一次（库最后交给 `lastServedBy` 那一版起）是不是已经备过了。
@@ -175,13 +175,13 @@ enum DatabaseBackup {
     guard let data = try? Data(contentsOf: pinsURL), let pins = try? JSONDecoder().decode([Pin].self, from: data) else { return [] }
     let confirmed = ServerRecord.read()?.confirmedAt ?? .distantPast
     return pins.filter {
-      $0.since > confirmed && FileManager.default.fileExists(atPath: AshConfig.backupURL.appendingPathComponent($0.file).path)
+      $0.since > confirmed && FileManager.default.fileExists(atPath: NaviConfig.backupURL.appendingPathComponent($0.file).path)
     }
   }
 
   /// 全部备份，新的在前（按生成先后；同一秒的几份名字排不出先后）。
   static func existing() -> [URL] {
-    let dir = AshConfig.backupURL
+    let dir = NaviConfig.backupURL
     let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
     let made = { (url: URL) -> Date in (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast }
     return names.filter { $0.hasSuffix(".db") }.map { dir.appendingPathComponent($0) }

@@ -24,7 +24,7 @@ import { expandHome, resolveTaskMergeTarget, resolveWorktreeBranchName } from ".
 import { NAVI_GIT_IDENTITY_ENV } from "./navi-commit-identity.js";
 import { commitAt, containsCommit, versionDelivery } from "./task-branch-plan.js";
 import { deliveredCommit } from "./prerequisite-standing.js";
-import { isAcceptedStage, type TaskStage } from "@ash/shared";
+import { isAcceptedStage, type TaskStage } from "@navi/shared";
 import type { tasks } from "./db/schema.js";
 
 type TaskRow = typeof tasks.$inferSelect;

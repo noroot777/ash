@@ -190,7 +190,7 @@ try {
   assert.equal(await fileView.count(), 0, "有改动的文件不该同时摊出全文视图");
   assert.equal(await row("changed.ts").getAttribute("class").then((value) => value?.includes("is-active")), true,
     "摊的是 diff，文件树里这一行照样要高亮");
-  await page.screenshot({ path: "/tmp/ash-file-diff-view-diff.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-diff-view-diff.png", fullPage: true });
 
   // 单栏 ↔ 并排。默认单栏（统一视图），切过去左右各一栏。
   const code = center.locator(".single-review-code");
@@ -232,7 +232,7 @@ try {
   for (const noise of ["@@", "diff --git", "index 1111111", "--- a/", "+++ b/"]) {
     assert(!splitText.includes(noise), `diff 的格式行还印在正文里：${noise}`);
   }
-  await page.screenshot({ path: "/tmp/ash-file-diff-view-split.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-diff-view-split.png", fullPage: true });
 
   // 中间的段头 → 一条分隔条：只写 git 给的上下文（所在函数），不印 `@@ -20,4 +20,4 @@`。
   await row("twohunks.ts").click();
@@ -241,7 +241,7 @@ try {
   assert.equal(await splitDividers.count(), 1, "两个 hunk 里只有中间那个该摆分隔条");
   assert.equal(await splitDividers.locator("code").innerText(), "⋯ function tail() {");
   assert(!(await code.innerText()).includes("@@"), "分隔条上还印着 `@@` 区间");
-  await page.screenshot({ path: "/tmp/ash-file-diff-view-hunk-split.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-diff-view-hunk-split.png", fullPage: true });
   await row("changed.ts").click();
   await center.getByText("export const gone = 3;", { exact: false }).waitFor();
 
@@ -254,7 +254,7 @@ try {
   assert.equal(await sideText(0, 1), "new value无尾换行", "右栏丢了改之后那一行或它的无尾换行标记");
   assert.equal(await center.locator(".single-review-line.is-span.is-meta code")
     .filter({ hasText: "No newline" }).count(), 0, "无尾换行标记不该再单独占一行");
-  await page.screenshot({ path: "/tmp/ash-file-diff-view-no-newline.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-diff-view-no-newline.png", fullPage: true });
   await row("changed.ts").click();
   await center.getByText("const keep = 0;", { exact: false }).first().waitFor();
 
@@ -279,7 +279,7 @@ try {
   assert.equal((await unifiedDividers.locator("code").innerText()).trim(), "function tail() {");
   assert.equal((await unifiedDividers.locator("span").first().innerText()).trim(), "⋯");
   assert(!(await code.innerText()).includes("@@"), "单栏的分隔条上还印着 `@@` 区间");
-  await page.screenshot({ path: "/tmp/ash-file-diff-view-hunk-unified.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-diff-view-hunk-unified.png", fullPage: true });
 
   // 只有文件头的 diff（纯重命名）：摘掉格式行就空了，得摆一句话而不是留白。
   await row("renamed.ts").click();
@@ -294,7 +294,7 @@ try {
   assert.equal(await center.locator(".scm-diff__counts i").innerText(), "+1", "内容行没被算进新增数");
   assert.equal(await center.locator(".scm-diff__counts em").innerText(), "−1", "内容行没被算进删除数");
   assert(!(await code.innerText()).includes("a/flags.txt"), "真正的文件头反而漏出来了");
-  await page.screenshot({ path: "/tmp/ash-file-diff-view-flags.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-diff-view-flags.png", fullPage: true });
   await row("changed.ts").click();
   await center.getByText("-export const gone = 3;", { exact: false }).waitFor();
 
@@ -302,7 +302,7 @@ try {
   await showFullText.click();
   await fileView.waitFor();
   await center.getByText(FILE_TEXT.trim(), { exact: false }).waitFor();
-  await page.screenshot({ path: "/tmp/ash-file-diff-view-file.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-diff-view-file.png", fullPage: true });
   assert.equal(await row("changed.ts").getAttribute("class").then((value) => value?.includes("is-active")), true,
     "切到全文后文件树丢了高亮");
   await showDiff.click();

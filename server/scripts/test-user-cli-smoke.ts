@@ -1,6 +1,6 @@
 // 个人 CLI 环境的**零交互冒烟测试**(计划 §九 探针③ / 审查修订 D12 的硬前置)。
 //
-// 要回答的问题只有一个:**把 CLI 的配置目录换成一个 ash 新建的空目录之后,headless
+// 要回答的问题只有一个:**把 CLI 的配置目录换成一个 navi 新建的空目录之后,headless
 // 首跑还能不能直接出活**——不弹引导、不问信任、不等任何一次回车。
 //
 // 为什么必须真跑一次:2026-08-27 的探针到这一步卡住了(带 key 的首跑挂起 >120s,
@@ -9,7 +9,7 @@
 // 才现形。所以这条测试不是补充材料,它就是 seed 能不能发的判据本身。
 //
 // 跑法(需要一把真 key,会消耗少量额度):
-//   ASH_DB=/tmp/test-user-cli-smoke.db \
+//   NAVI_DB=/tmp/test-user-cli-smoke.db \
 //   ANTHROPIC_BASE_URL=… ANTHROPIC_AUTH_TOKEN=… \
 //   npx tsx server/scripts/test-user-cli-smoke.ts
 //
@@ -23,20 +23,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const BASE_URL = process.env.ANTHROPIC_BASE_URL?.trim() ?? "";
-const TOKEN = (process.env.ASH_SMOKE_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "").trim();
-const MODEL = process.env.ASH_SMOKE_MODEL?.trim() || "";
+const TOKEN = (process.env.NAVI_SMOKE_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "").trim();
+const MODEL = process.env.NAVI_SMOKE_MODEL?.trim() || "";
 // 探针③ 的挂起阈值是 120s。超过它就是复现了那个问题,不是「机器慢」。
-const TIMEOUT_MS = Number(process.env.ASH_SMOKE_TIMEOUT_MS ?? 120_000);
+const TIMEOUT_MS = Number(process.env.NAVI_SMOKE_TIMEOUT_MS ?? 120_000);
 
 if (!TOKEN) {
   console.log("SKIPPED test-user-cli-smoke:没有可用的 key。");
-  console.log("  这条测试要真起一次 claude 才有意义(§九 探针③);设 ASH_SMOKE_KEY 或 ANTHROPIC_AUTH_TOKEN 再跑。");
+  console.log("  这条测试要真起一次 claude 才有意义(§九 探针③);设 NAVI_SMOKE_KEY 或 ANTHROPIC_AUTH_TOKEN 再跑。");
   process.exit(0);
 }
 
 const { ensureUserCliDir, cliConfigEnvFor, configDirEnvVar, USER_CLI_ROOT } = await import("../src/auth/user-cli.js");
 
-const stage = mkdtempSync(join(tmpdir(), "ash-user-cli-smoke-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-user-cli-smoke-"));
 // ensureUserCliDir 写的是**真的** data/user-cli/(它按 DATA_DIR 定位,没有 env 开关)。
 // 断言挂了也得把这条测试用户扫干净,否则下一次跑就不是「首跑」了 —— 而首跑正是要验的东西。
 process.on("exit", () => {
@@ -51,7 +51,7 @@ mkdirSync(fakeHome, { recursive: true });
 writeFileSync(hostMarker, '{"sentinel":"host"}\n', "utf8");
 const hostBefore = readFileSync(hostMarker, "utf8");
 
-// ash 真正会建的那个目录(走产品代码,不是测试自己拼一份)。
+// navi 真正会建的那个目录(走产品代码,不是测试自己拼一份)。
 const userId = "smoke-user";
 const dir = await ensureUserCliDir(userId, "claude");
 assert.ok(dir, "claude 应该有个人配置目录");

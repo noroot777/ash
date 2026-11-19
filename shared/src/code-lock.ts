@@ -1,4 +1,4 @@
-// 「这份 ash 代码正被这个进程用着」—— mac app 换包与进程启动共用的那把锁
+// 「这份 navi 代码正被这个进程用着」—— mac app 换包与进程启动共用的那把锁
 // （desktop/macos/scripts/install-app.sh，第 4 轮审查 F2）。
 //
 // 上一版是进程启动时往 /tmp 写一条登记、安装器去扫登记。查登记和换包之间没有互斥：最后一次检查
@@ -27,7 +27,7 @@ function pause(milliseconds: number): void {
 }
 
 function refuse(file: string, why: string): never {
-  process.stderr.write(`[ash] 拿不到代码锁 ${file}（${why}），不启动：不拿锁就跑，换包时会被当成没人在用。\n`);
+  process.stderr.write(`[navi] 拿不到代码锁 ${file}（${why}），不启动：不拿锁就跑，换包时会被当成没人在用。\n`);
   process.exit(78);
 }
 

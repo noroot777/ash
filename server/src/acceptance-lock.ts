@@ -24,7 +24,7 @@ export function endAccepting(taskId: string): void {
   // 动态 import:pending-messages 那条链路会回头读任务/回合状态,静态引会绕回来成环。
   void import("./pending-messages.js")
     .then(({ flushPendingForTask }) => flushPendingForTask(taskId))
-    .catch((error) => console.error(`[ash] 验收结束后补送排队消息失败 task=${taskId}:`, error));
+    .catch((error) => console.error(`[navi] 验收结束后补送排队消息失败 task=${taskId}:`, error));
 }
 
 /** 验收（含尾段）是否正在进行。 */

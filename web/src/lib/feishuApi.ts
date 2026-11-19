@@ -6,7 +6,7 @@
 //    这台机器」，自用模式下本机 agent 裸 curl 拿到的也是机主身份，所以服务端只认带页面凭据的
 //    真人请求（方案 §6.2 / §6.5）。走它还顺带排队串行，凭据是一次性的。
 //  · `request` —— 其余的读和改。拒绝、解绑这类只会让绑定**变少**的动作不需要真人凭据。
-import type { FeishuBinding, FeishuGroups, FeishuStatus, ImBindCode, ImDomain, ImOptions } from "@ash/shared";
+import type { FeishuBinding, FeishuGroups, FeishuStatus, ImBindCode, ImDomain, ImOptions } from "@navi/shared";
 import { id, json, request } from "./apiClient.ts";
 import { humanAction } from "./humanActionToken.ts";
 

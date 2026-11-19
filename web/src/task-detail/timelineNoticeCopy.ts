@@ -1,4 +1,4 @@
-// 会话里「ash 自己说的话」的那一张表：每一类事摆在哪一档、说的是哪件事、写成哪句话。
+// 会话里「navi 自己说的话」的那一张表：每一类事摆在哪一档、说的是哪件事、写成哪句话。
 //
 // 类型由服务端写时间线时给（shared/src/timeline-notice.ts）。这里**写结果，不写机制**：
 // 「已验收，合并到 main」「不再等回归测试了，它已经跑完」—— 分支名、退出码、理由这些细节
@@ -15,10 +15,10 @@
 // 没有类型的老记录（这份类型出现之前落盘的、线上老服务端写的、以及回合里那几种不走时间线的
 // 系统注记）退回老读法：认原文里的几个固定说法，再按起头表（legacyNoticeTable）认要你知道的
 // 那几句，其余一律是回执。只有这一处还在读原文。
-import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage, type TurnInterruption } from "@ash/shared";
-import { normalizeSessionNoteText } from "@ash/shared/session-notes";
-import { settleNoteQuestion, type QuestionRecord, type QuestionSource } from "@ash/shared/questions";
-import type { TimelineNotice, TimelineReviewSource } from "@ash/shared/timeline-notice";
+import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage, type TurnInterruption } from "@navi/shared";
+import { normalizeSessionNoteText } from "@navi/shared/session-notes";
+import { settleNoteQuestion, type QuestionRecord, type QuestionSource } from "@navi/shared/questions";
+import type { TimelineNotice, TimelineReviewSource } from "@navi/shared/timeline-notice";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import { isWorkspaceRecoveryNote, verifyNoteOf } from "./conversationNotes.ts";

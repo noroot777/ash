@@ -12,15 +12,15 @@
 // 按钮已经放回去的卡，才不会把它当成办完了收起来。
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
-import type { FeishuConnection, ImConnectionState, ImHealthState, ImUsage } from "@ash/shared";
+import type { FeishuConnection, ImConnectionState, ImHealthState, ImUsage } from "@navi/shared";
 import { bus } from "../bus.js";
-import { resolveAshDbFile } from "../db/path.js";
+import { resolveNaviDbFile } from "../db/path.js";
 import { IS_PREVIEW_INSTANCE } from "../preview-instance.js";
 import { isMultiUser } from "../auth/mode.js";
 import { getUser } from "../auth/store.js";
 import type { AppFetch } from "../auth/im-actor.js";
 import { CardActions, type CallbackEvent } from "./actions.js";
-import { AshClient } from "./ash-client.js";
+import { NaviClient } from "./navi-client.js";
 import { bindingsOfApp } from "./binding.js";
 import { CommandRunner } from "./commands.js";
 import { domainUrl, readCredentials, type FeishuCredentials } from "./config.js";
@@ -81,7 +81,7 @@ const announced = new Set<string>();
 
 /** 本机实例的短指纹：主机名 + 库文件路径。两台机器连了同一个应用时，上线消息里能看出来。 */
 export const instanceTag = (): string =>
-  createHash("sha256").update(`${hostname()}\n${resolveAshDbFile()}`).digest("hex").slice(0, 8).toUpperCase().replace(/^(.{4})/, "$1-");
+  createHash("sha256").update(`${hostname()}\n${resolveNaviDbFile()}`).digest("hex").slice(0, 8).toUpperCase().replace(/^(.{4})/, "$1-");
 
 /** index.ts 在拿到单实例锁、路由就绪之后调一次（预览实例不调）。 */
 export function startFeishuChannel(input: { fetch: AppFetch; exclusive: boolean }): Promise<void> {
@@ -94,7 +94,7 @@ export function restartFeishuChannel(): Promise<void> {
   chain = chain.then(bringUp).catch((error) => {
     gate = "failed";
     configError = error instanceof Error ? error.message : String(error);
-    console.error("[ash] 飞书通道启动失败:", error);
+    console.error("[navi] 飞书通道启动失败:", error);
     retryLater();
   });
   return chain;
@@ -163,15 +163,15 @@ async function bringUp(): Promise<void> {
   const self = running;
   // 三件事各自兜底：取机器人信息、接管按钮失败了也照样对账（对账不靠它们）。
   void (async () => {
-    self.bot = await botOf(self).catch((error) => { console.error("[ash] 飞书取机器人信息出错:", error); return null; });
+    self.bot = await botOf(self).catch((error) => { console.error("[navi] 飞书取机器人信息出错:", error); return null; });
     // 没查到不等于没有：这一下没查到（网络、令牌），过一会儿再查，直到查到或这套通道拆掉。查到之前群里按
     // 「@ 了谁都算 @ 我」认（只订阅了群里 @ 机器人的消息，见 docs/feishu-integration.md 权限一节）。
     if (!self.bot) retryBot(self);
-    await self.actions.recover().catch((error) => console.error("[ash] 飞书接管没收尾的按钮出错:", error));
+    await self.actions.recover().catch((error) => console.error("[navi] 飞书接管没收尾的按钮出错:", error));
     // 补办消息要下载附件、调接口，不让它挡着对账。
     await Promise.all([
-      self.inbound.recover().catch((error) => console.error("[ash] 飞书接管未办完的消息出错:", error)),
-      self.reconciler.full().catch((error) => console.error("[ash] 飞书通道初次对账出错:", error)),
+      self.inbound.recover().catch((error) => console.error("[navi] 飞书接管未办完的消息出错:", error)),
+      self.reconciler.full().catch((error) => console.error("[navi] 飞书通道初次对账出错:", error)),
     ]);
   })();
 }
@@ -182,15 +182,15 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
     appId, appSecret: credentials.appSecret, domain: domainUrl(credentials.domain),
     beforeCall: (kind, purpose) => meter.take(kind, purpose),
   });
-  const ash = new AshClient(fetch);
+  const navi = new NaviClient(fetch);
   const reconciler = new Reconciler(appId, api);
   const sender = reconciler.sender;
-  const commands = new CommandRunner({ appId, ash, reconciler });
-  const actions = new CardActions({ appId, ash, reconciler, sender, commands });
-  const relay = new RoomRelay({ appId, ash, commands });
+  const commands = new CommandRunner({ appId, navi, reconciler });
+  const actions = new CardActions({ appId, navi, reconciler, sender, commands });
+  const relay = new RoomRelay({ appId, navi, commands });
   const pairing = new PairingCards({ appId, reconciler });
   let runtime: Running | null = null;
-  const inbound = new InboundRouter({ appId, api, ash, commands, relay, reconciler, botOpenId: () => runtime?.bot?.openId ?? null });
+  const inbound = new InboundRouter({ appId, api, navi, commands, relay, reconciler, botOpenId: () => runtime?.bot?.openId ?? null });
   const ws = new FeishuWsClient({
     appId, appSecret: credentials.appSecret, domain: domainUrl(credentials.domain),
     onEvent: (envelope) => dispatch(envelope, inbound, actions),
@@ -215,7 +215,7 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
         break;
     }
   });
-  const sweep = setInterval(() => void reconciler.full().catch((error) => console.error("[ash] 飞书定时对账出错:", error)), FULL_SWEEP_MS);
+  const sweep = setInterval(() => void reconciler.full().catch((error) => console.error("[navi] 飞书定时对账出错:", error)), FULL_SWEEP_MS);
   sweep.unref?.();
   const config = { appId, domain: credentials.domain, updatedAt: credentials.updatedAt };
   runtime = { appId, config, api, ws, sender, reconciler, relay, inbound, actions, pairing, bot: null, sweep, unsubscribe };
@@ -230,7 +230,7 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
 async function dispatch(envelope: FeishuEnvelope, inbound: InboundRouter, actions: CardActions): Promise<unknown> {
   if (envelope.eventType === "im.message.receive_v1") {
     const inboundId = await inbound.accept(envelope.event as MessageEvent);
-    if (inboundId) void inbound.process(inboundId).catch((error) => console.error("[ash] 飞书消息处理出错:", error));
+    if (inboundId) void inbound.process(inboundId).catch((error) => console.error("[navi] 飞书消息处理出错:", error));
     return undefined;
   }
   if (envelope.eventType === "card.action.trigger") {
@@ -255,7 +255,7 @@ function acked(envelope: FeishuEnvelope, result: unknown, delivered: boolean, ac
   const card = (result as { card?: { data?: unknown } }).card?.data;
   const envelopeId = callbackOf(envelope)?.value.e;
   void actions.acknowledged({ messageId, envelopeId: typeof envelopeId === "string" ? envelopeId : null, card, delivered })
-    .catch((error) => console.error("[ash] 飞书回执确认出错:", error));
+    .catch((error) => console.error("[navi] 飞书回执确认出错:", error));
 }
 
 export function callbackOf(envelope: FeishuEnvelope): CallbackEvent | null {

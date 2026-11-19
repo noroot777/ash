@@ -1,5 +1,5 @@
-import { readEnv } from "@ash/shared/env-names";
-import type { PreviewPageImage } from "@ash/shared/page-annotation";
+import { readEnv } from "@navi/shared/env-names";
+import type { PreviewPageImage } from "@navi/shared/page-annotation";
 import { readPreview } from "./preview-store.js";
 
 const unavailable = (reason: string): PreviewPageImage => ({ capturedAt: Date.now(), missing: ["非用户现场；无用户登录态、输入或交互状态", reason] });

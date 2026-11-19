@@ -4,7 +4,7 @@
 import { useRef } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { ScheduledMessage, TaskListItem } from "@ash/shared";
+import type { ScheduledMessage, TaskListItem } from "@navi/shared";
 import { useAndroidKeyboardOverlap, useKeyboardVisible } from "@/lib/keyboard";
 import { fonts, radius, useTheme } from "@/lib/theme";
 import { DateTimeButton } from "@/components/DateTimeField";

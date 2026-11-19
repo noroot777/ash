@@ -1,7 +1,7 @@
 // 讨论收尾后「把结论交出去落实」：建一条普通任务（议题、共同方案和完整转写路径写进它的正文）。
 // 新任务只有一种（只叫一个执行器来跑），所以这里不再挑调度者和执行者；以前接力出来的团队照旧列在这儿。
 import { useEffect, useMemo, useRef, useState } from "react";
-import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type TaskListItem } from "@ash/shared";
+import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type TaskListItem } from "@navi/shared";
 import { ArrowRight, ArrowSquareOut, UsersThree, Warning } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {

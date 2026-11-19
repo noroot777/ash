@@ -2,8 +2,8 @@
 // 「派出去」「发回去改」「派出去的活交给谁」交出来的东西原样写在页面底下，回归照着它断言。
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
-import type { DispatchPlan, DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import type { Task } from "@navi/shared";
+import type { DispatchPlan, DispatchRunTarget } from "@navi/shared/dispatch-plan";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";

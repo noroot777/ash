@@ -2,10 +2,10 @@
 // 未登录访问会先把工作台渲染出来、再由一堆 401 把它打成一片错误提示,而用户看到的是
 // 「这个应用坏了」而不是「我该登录」。
 //
-// 自用模式下在 ash 所在的那台机器上打开,这一层**整体透明**:直接渲染 children,不多一个
+// 自用模式下在 navi 所在的那台机器上打开,这一层**整体透明**:直接渲染 children,不多一个
 // DOM 节点。从别的设备打开时先过配对那一屏(`needsAccessKey`)。
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { AuthState } from "@ash/shared";
+import type { AuthState } from "@navi/shared";
 import { authApi } from "../lib/authApi.ts";
 import { ApiError } from "../lib/apiClient.ts";
 import { bindTaskReadsOwner } from "../lib/taskReadSync.ts";
@@ -74,7 +74,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   // 本机自用模式没有邀请这回事:领取 / 加入链接一律回工作台。领取页因此要等身份状态到了
-  // 再出(多一个 RTT),否则本机模式下会先闪一下「领取你的 ash 账号」。
+  // 再出(多一个 RTT),否则本机模式下会先闪一下「领取你的 navi 账号」。
   const ignoreRoute = route !== null && state?.localOnly === true;
   useEffect(() => {
     if (ignoreRoute) {

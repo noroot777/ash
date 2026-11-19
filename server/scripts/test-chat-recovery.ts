@@ -19,8 +19,8 @@ const stopMarker = "STOP-BEFORE-NOTICE-CRASH";
 const member = { id: "codex", name: "codex", agentType: "codex" as const, executorId: null, model: null, reasoningEffort: null };
 
 async function seedEnvironment(stage: string) {
-  process.env.ASH_DB = join(stage, "test.db");
-  process.env.ASH_RUNS_DIR = join(stage, "runs");
+  process.env.NAVI_DB = join(stage, "test.db");
+  process.env.NAVI_RUNS_DIR = join(stage, "runs");
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, chatRooms, chatMessages } = await import("../src/db/schema.js");
   const { setInstanceMode } = await import("../src/auth/mode.js");
@@ -94,8 +94,8 @@ if (process.argv[2] === "check-stop") {
   // 场景 ② 校验进程：全新进程跑真实 recover()（它只处理 queued/running，不该碰这行），
   // 停止正文必须已带附注——证明可见性来自崩溃前那条原子 UPDATE，而非任何存活闭包。
   const stage = process.env.CHAT_RECOVERY_STAGE!;
-  process.env.ASH_DB = join(stage, "test.db");
-  process.env.ASH_RUNS_DIR = join(stage, "runs");
+  process.env.NAVI_DB = join(stage, "test.db");
+  process.env.NAVI_RUNS_DIR = join(stage, "runs");
   const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
   const { chatMessages } = await import("../src/db/schema.js");
   const { ChatService } = await import("../src/chat/service.js");
@@ -127,7 +127,7 @@ function assertHardKilled(result: SpawnSyncReturns<string>, when: string) {
 }
 
 // —— 场景 ②：stop 终态在先、notice 落列在后的崩溃（子进程种下 + 子进程校验，互不共享连接）——
-const stopStage = mkdtempSync(join(tmpdir(), "ash-chat-stop-crash-"));
+const stopStage = mkdtempSync(join(tmpdir(), "navi-chat-stop-crash-"));
 mkdirSync(join(stopStage, "project"), { recursive: true });
 try {
   const stopEnv = { ...process.env, CHAT_RECOVERY_STAGE: stopStage };
@@ -141,9 +141,9 @@ try {
 }
 
 // —— 场景 ①：running 消息在任务创建时点崩溃，新进程 recover() 拼回附注 ——
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-recovery-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-recovery-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 process.env.CHAT_RECOVERY_STAGE = stage;
 mkdirSync(join(stage, "project"), { recursive: true });
 assertHardKilled(spawnSync(process.execPath, ["--import", "tsx/esm", script, "seed"], { env: process.env, timeout: 60000, encoding: "utf8" }), "task.created 时点");

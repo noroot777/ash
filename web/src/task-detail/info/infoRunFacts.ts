@@ -1,4 +1,4 @@
-import type { ContextUsage, Session } from "@ash/shared";
+import type { ContextUsage, Session } from "@navi/shared";
 import type { ConversationItem } from "../conversationModel.ts";
 import { COMPACTING, isCompactionEvent } from "../../lib/compaction.ts";
 

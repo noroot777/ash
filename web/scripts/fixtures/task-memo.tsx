@@ -9,8 +9,8 @@
 import { StrictMode, useEffect, useMemo, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { Info, NotePencil } from "@phosphor-icons/react";
-import type { TaskListItem, TaskFollowUp, TaskFollowUpList } from "@ash/shared";
-import type { TaskMemoDigest } from "@ash/shared/task-memo";
+import type { TaskListItem, TaskFollowUp, TaskFollowUpList } from "@navi/shared";
+import type { TaskMemoDigest } from "@navi/shared/task-memo";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { MemoSelectionScope } from "../../src/task-memos/MemoSelectionScope.tsx";
 import { setMemoDraft, useTaskMemoDrafts } from "../../src/task-memos/taskMemoDrafts.ts";

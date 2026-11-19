@@ -106,11 +106,11 @@ async function settleDebtRow(unitToken: string, version: number): Promise<boolea
       eq(agentCleanupDebts.unitToken, unitToken), eq(agentCleanupDebts.version, version),
     ));
     if (rowsAffectedOf(result) > 0) return true;
-    console.warn(`[ash] 销账没删到行(unit=${unitToken}、判的是第 ${version} 版):`
+    console.warn(`[navi] 销账没删到行(unit=${unitToken}、判的是第 ${version} 版):`
       + "这个键上的证据在判定之后被人动过,这一刀不下,下一轮重新取证");
     return false;
   } catch (error) {
-    console.error(`[ash] 销账写失败 unit=${unitToken}:`, error);
+    console.error(`[navi] 销账写失败 unit=${unitToken}:`, error);
     return false;
   }
 }
@@ -137,11 +137,11 @@ async function closeDebtRow(debt: DebtRow, result: CleanupResult): Promise<boole
         isNull(agentCleanupDebts.closedAt),
       ));
     if (rowsAffectedOf(written) > 0) return true;
-    console.warn(`[ash] 收档没盖到戳(unit=${debt.unitToken}、判的是第 ${debt.version} 版):`
+    console.warn(`[navi] 收档没盖到戳(unit=${debt.unitToken}、判的是第 ${debt.version} 版):`
       + "要么这个键上的证据被人动过、要么已经收过档,这一轮不动它");
     return false;
   } catch (error) {
-    console.error(`[ash] 收档写失败 unit=${debt.unitToken}:`, error);
+    console.error(`[navi] 收档写失败 unit=${debt.unitToken}:`, error);
     return false;
   }
 }
@@ -181,7 +181,7 @@ async function touchDebtRow(
     if (rowsAffectedOf(written) <= 0) return "failed";
     return held ? "written" : "open-not-taken";
   } catch (error) {
-    console.error(`[ash] 这一笔清理责任的进展没记上(unit=${debt.unitToken}):`, error);
+    console.error(`[navi] 这一笔清理责任的进展没记上(unit=${debt.unitToken}):`, error);
     return "failed";
   }
 }

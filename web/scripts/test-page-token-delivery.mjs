@@ -63,7 +63,7 @@ const backend = createHttpServer((req, res) => {
   }
   if (!serving) { // 后端起着但交不出文档(它那边没有 web/dist)
     res.writeHead(503, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Ash web build not found — run `npm -w web run build`.");
+    res.end("Navi web build not found — run `npm -w web run build`.");
     return;
   }
   served += 1;
@@ -71,11 +71,11 @@ const backend = createHttpServer((req, res) => {
   res.end(stampHumanActionToken("<!doctype html><html><head><title>backend</title></head><body></body></html>"));
 });
 await new Promise((done) => backend.listen(0, "127.0.0.1", done));
-process.env.ASH_PROXY = `http://127.0.0.1:${backend.address().port}`;
+process.env.NAVI_PROXY = `http://127.0.0.1:${backend.address().port}`;
 
 const { createServer, preview, resolveConfig } = await import("vite");
 
-const dist = mkdtempSync(join(tmpdir(), "ash-page-token-"));
+const dist = mkdtempSync(join(tmpdir(), "navi-page-token-"));
 writeFileSync(join(dist, "index.html"), "<!doctype html><html><head><title>built</title></head><body></body></html>");
 mkdirSync(join(dist, "assets"));
 writeFileSync(join(dist, "assets", "app.js"), "export const built = true;\n");
@@ -173,9 +173,9 @@ try {
   // 打进 `web/dist/index.html` 的凭据是一份死号,而它排在 `serveSpa` 追加的那一份**前面**,
   // 页面读到的就是它 —— 那会把后端自己交付的每一个页面也一起弄坏。
   const forBuild = await resolveConfig({ root, logLevel: "error" }, "build");
-  assert.equal(forBuild.plugins.some((p) => p.name === "ash-page-token"), false, "build 里不许有这个插件");
+  assert.equal(forBuild.plugins.some((p) => p.name === "navi-page-token"), false, "build 里不许有这个插件");
   const forServe = await resolveConfig({ root, logLevel: "error" }, "serve");
-  assert.equal(forServe.plugins.some((p) => p.name === "ash-page-token"), true, "serve 里必须有");
+  assert.equal(forServe.plugins.some((p) => p.name === "navi-page-token"), true, "serve 里必须有");
 
   console.log("✓ 页面凭据交付面:dev / preview 两条文档路都接上了后端那一份;代理该拿到的请求原样穿过;build 一个字不盖");
 } finally {

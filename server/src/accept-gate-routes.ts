@@ -52,7 +52,7 @@ export function mountAcceptGateRoutes(api: Hono): void {
     return c.text(acceptGateLogText(run.logPath) || "（日志为空）");
   });
 
-  // 「再交给智能体去修」。红了的时候 ash 已经自动交过一次，这条是补救与再推一把：那一次
+  // 「再交给智能体去修」。红了的时候 navi 已经自动交过一次，这条是补救与再推一把：那一次
   // 可能没投递成功（回合被抢占），也可能 agent 那一轮跑完了还没修好。
   api.post("/tasks/:id/accept-gate/handoff", async (c) => {
     const result = await rehandOffAcceptGate(c.req.param("id"));

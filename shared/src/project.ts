@@ -80,12 +80,12 @@ export interface ProjectView extends Project {
   myRole: ProjectRole;
 }
 
-// ── 任务留在磁盘上的工作区(worktree 目录 + ash/<id8> 分支) ──────────────
+// ── 任务留在磁盘上的工作区(worktree 目录 + navi/<id8> 分支) ──────────────
 // 删除任务前先问一次服务端「这两样还在不在」,在的话删除对话框才提示要不要连它们
 // 一起删。两个字段各自独立:目录被手删过、分支还留着是常见状态。
 export interface TaskWorkspaceLeftover {
   path: string | null; // worktree 目录,不存在为 null
-  branch: string | null; // 任务分支 ash/<id8>,本地不存在为 null
+  branch: string | null; // 任务分支 navi/<id8>,本地不存在为 null
 }
 
 // 一次清理的逐项结果。git 拒绝(worktree 有未提交改动 / 分支未合并)不是异常,

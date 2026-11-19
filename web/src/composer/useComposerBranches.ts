@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { projectGitEpoch, readProjectGitRun } from "../workspace/projectGitRuns.ts";
 import { useProjectGit } from "../workspace/useProjectGit.ts";

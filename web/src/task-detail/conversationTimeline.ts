@@ -4,7 +4,7 @@
 // 带身份那一截交给 conversationAssembler。会话之间按时刻排序；实时事件按到达顺序逐条分派 —— 带身份的
 // 进归并器（跟落盘那一路同一份状态，同一套归属与去重），没身份的交给 conversationLiveTurns 的老读法；
 // 两路交错的先后照到达顺序，不按来路重排。
-import type { ContextUsage, Session } from "@ash/shared";
+import type { ContextUsage, Session } from "@navi/shared";
 import type { ConversationItem, PersistedConversation, TimelineEntry } from "./conversationModel.ts";
 import { createAssembler } from "./conversationAssembler.ts";
 import { liveInput, splitPersistedSession, type IdentityRecord } from "./conversationIdentity.ts";

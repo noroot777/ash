@@ -1,4 +1,4 @@
-// ash MCP 登记表 + 通用补接器的回归。
+// navi MCP 登记表 + 通用补接器的回归。
 //
 // 这一条盯的是 2026-10-30 那个病:claude / codex 之外的十三家执行器一行注册逻辑都没有,
 // 换它们跑任务 MCP 调不到、卷交不了,界面上只看得到「失败」。所以除了「写得对」,这里更要
@@ -10,25 +10,25 @@
 //   ④ 两份实现不许漂 —— TS 那张表和 `scripts/mcp-host-sources.mjs`(setup 在裸 Node 上跑,导不进 TS)
 //      逐项比对。
 //
-// 跑:`npm -w server run test:ash-mcp-registry`
+// 跑:`npm -w server run test:navi-mcp-registry`
 import assert from "node:assert/strict";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { AGENT_TYPES, type AgentType } from "@ash/shared";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-const NAME = ASH_MCP_SERVER_NAME;
-import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
+import { AGENT_TYPES, type AgentType } from "@navi/shared";
+import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
+const NAME = NAVI_MCP_SERVER_NAME;
+import { ensureNaviMcp } from "../src/auth/user-cli-mcp.js";
 import { cliSpec } from "../src/executors/catalog/index.js";
-import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-registry/catalog.js";
-import { ashMcpUnsupported, registerAshMcp } from "../src/mcp-registry/register.js";
-import { ashMcpConfigFile, ashMcpHostFile, ashMcpStateIn } from "../src/mcp-registry/sources.js";
+import { NAVI_MCP_TABLE, naviMcpConfigDir, canRegisterNaviMcp } from "../src/mcp-registry/catalog.js";
+import { naviMcpUnsupported, registerNaviMcp } from "../src/mcp-registry/register.js";
+import { naviMcpConfigFile, naviMcpHostFile, naviMcpStateIn } from "../src/mcp-registry/sources.js";
 import { REPO_DIR } from "../src/paths.js";
 import { checkSourceModel } from "./mcp-sources-cases.js";
 import { checkLoadAndSwitches } from "./mcp-load-switch-cases.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-mcp-registry-"));
+const root = mkdtempSync(join(tmpdir(), "navi-mcp-registry-"));
 let done = 0;
 const group = (name: string) => { done++; process.stdout.write(`  ✓ ${name}\n`); };
 
@@ -49,33 +49,33 @@ const ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
  * 把宿主那条搬过来。
  */
 const hostJson = (host: string, agentType: AgentType, entry: Record<string, unknown> = {
-  command: "node", args: ["/host/mcp/index.js"], env: { ASH_URL: "http://127.0.0.1:4317" },
+  command: "node", args: ["/host/mcp/index.js"], env: { NAVI_URL: "http://127.0.0.1:4317" },
 }): string => {
-  const mechanism = ASH_MCP_TABLE[agentType];
+  const mechanism = NAVI_MCP_TABLE[agentType];
   assert.equal(mechanism.kind, "file");
-  const dir = ashMcpConfigDir(agentType, {}, host)!;
-  const file = ashMcpConfigFile(dir, (mechanism as { site: Parameters<typeof ashMcpConfigFile>[1] }).site);
+  const dir = naviMcpConfigDir(agentType, {}, host)!;
+  const file = naviMcpConfigFile(dir, (mechanism as { site: Parameters<typeof naviMcpConfigFile>[1] }).site);
   mkdirSync(dirname(file), { recursive: true });
   const container = mechanism.kind === "file" && mechanism.shape.id === "opencode-json" ? "mcp" : "mcpServers";
   const body = container === "mcp"
-    ? { mcp: { ash: { type: "local", command: ["node", "/host/mcp/index.js"], environment: { ASH_URL: "http://127.0.0.1:4317" }, enabled: true } } }
-    : { mcpServers: { ash: entry } };
+    ? { mcp: { navi: { type: "local", command: ["node", "/host/mcp/index.js"], environment: { NAVI_URL: "http://127.0.0.1:4317" }, enabled: true } } }
+    : { mcpServers: { navi: entry } };
   writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
   return file;
 };
 
 const hostToml = (host: string, agentType: AgentType, extra = ""): string => {
-  const mechanism = ASH_MCP_TABLE[agentType];
+  const mechanism = NAVI_MCP_TABLE[agentType];
   assert.equal(mechanism.kind, "file");
-  const dir = ashMcpConfigDir(agentType, {}, host)!;
+  const dir = naviMcpConfigDir(agentType, {}, host)!;
   const file = join(dir, "config.toml");
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `[mcp_servers.ash]\ncommand = "node"\nargs = ["/host/mcp/index.js"]\n${extra}`, "utf8");
+  writeFileSync(file, `[mcp_servers.navi]\ncommand = "node"\nargs = ["/host/mcp/index.js"]\n${extra}`, "utf8");
   return file;
 };
 
-/** 一条启用着的 ash 登记(TOML 族)。根级开关的用例要在它**前面**插自己那一行。 */
-const TOML_ASH = '[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\n';
+/** 一条启用着的 navi 登记(TOML 族)。根级开关的用例要在它**前面**插自己那一行。 */
+const TOML_NAVI = '[mcp_servers.navi]\ncommand = "node"\nargs = ["/x.js"]\n';
 
 /**
  * **只插入,没改没删**:新文本 = 原文的公共前缀 + 插进去那一段 + 原文的公共后缀。
@@ -91,19 +91,19 @@ function onlyInserted(before: string, after: string): boolean {
 }
 
 const register = (agentType: string, dir: string, host: string) =>
-  registerAshMcp({ agentType, dir, hostHome: host, env: {} });
+  registerNaviMcp({ agentType, dir, hostHome: host, env: {} });
 
 const fileIn = (agentType: AgentType, dir: string) => {
-  const mechanism = ASH_MCP_TABLE[agentType];
+  const mechanism = NAVI_MCP_TABLE[agentType];
   assert.equal(mechanism.kind, "file");
-  return ashMcpConfigFile(dir, (mechanism as { site: Parameters<typeof ashMcpConfigFile>[1] }).site);
+  return naviMcpConfigFile(dir, (mechanism as { site: Parameters<typeof naviMcpConfigFile>[1] }).site);
 };
 
 try {
   // ── ① 表自己要交代清楚 ──────────────────────────────────────────────────
   {
     for (const type of AGENT_TYPES) {
-      const mechanism = ASH_MCP_TABLE[type];
+      const mechanism = NAVI_MCP_TABLE[type];
       assert.ok(mechanism, `${type}:表里必须有一条`);
       assert.ok(mechanism.source.trim(), `${type}:依据(source)不能空`);
       if (mechanism.evidence === "docs") {
@@ -124,7 +124,7 @@ try {
       }
     }
     // 真机实测过的那几家别悄悄退档成 docs(退了要在提交信息里说清为什么)。
-    const tested = AGENT_TYPES.filter((t) => ASH_MCP_TABLE[t].evidence === "tested");
+    const tested = AGENT_TYPES.filter((t) => NAVI_MCP_TABLE[t].evidence === "tested");
     assert.deepEqual([...tested].sort(), ["claude", "codex", "gemini", "grok", "kimi", "opencode"]);
     group("表完整、依据齐、实测档没缩水");
   }
@@ -135,13 +135,13 @@ try {
     const g = bench("gemini");
     hostJson(g.host, "gemini");
     const r = await register("gemini", g.dir, g.host);
-    assert.ok(r.ok && r.serverName === ASH_MCP_SERVER_NAME, "gemini:该写进去");
+    assert.ok(r.ok && r.serverName === NAVI_MCP_SERVER_NAME, "gemini:该写进去");
     const doc = JSON.parse(readFileSync(fileIn("gemini", g.dir), "utf8")) as
       { mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> };
     assert.deepEqual(doc.mcpServers[NAME], {
-      command: "node", args: ["/host/mcp/index.js"], env: { ASH_URL: "http://127.0.0.1:4317" },
+      command: "node", args: ["/host/mcp/index.js"], env: { NAVI_URL: "http://127.0.0.1:4317" },
     }, "gemini:宿主那条原样搬过来");
-    assert.equal(ashMcpStateIn(g.dir, "gemini", {}).state, "present");
+    assert.equal(naviMcpStateIn(g.dir, "gemini", {}).state, "present");
 
     // opencode 族:容器叫 `mcp`、argv 是数组、环境变量键叫 `environment`。
     const o = bench("opencode");
@@ -151,18 +151,18 @@ try {
       { mcp: Record<string, { type: string; command: string[]; environment: Record<string, string>; enabled: boolean }> };
     assert.equal(oc.mcp[NAME].type, "local");
     assert.deepEqual(oc.mcp[NAME].command, ["node", "/host/mcp/index.js"]);
-    assert.equal(oc.mcp[NAME].environment.ASH_URL, "http://127.0.0.1:4317");
+    assert.equal(oc.mcp[NAME].environment.NAVI_URL, "http://127.0.0.1:4317");
     assert.equal(oc.mcp[NAME].enabled, true);
-    assert.equal(ashMcpStateIn(o.dir, "opencode", {}).state, "present");
+    assert.equal(naviMcpStateIn(o.dir, "opencode", {}).state, "present");
 
     // TOML 族(grok):整段原文照搬,连子表一起。
     const k = bench("grok");
-    hostToml(k.host, "grok", '\n[mcp_servers.ash.env]\nASH_URL = "http://127.0.0.1:4317"\n\n[mcp_servers.ash.tools.get_task]\napproval_mode = "approve"\n');
+    hostToml(k.host, "grok", '\n[mcp_servers.navi.env]\nNAVI_URL = "http://127.0.0.1:4317"\n\n[mcp_servers.navi.tools.get_task]\napproval_mode = "approve"\n');
     assert.ok((await register("grok", k.dir, k.host)).ok);
     const toml = readFileSync(join(k.dir, "config.toml"), "utf8");
     assert.match(toml, new RegExp(`\\[mcp_servers\\.${NAME}\\]`));
     assert.match(toml, new RegExp(`\\[mcp_servers\\.${NAME}\\.tools\\.get_task\\]`), "TOML:子表不许丢(表头改成规范名)");
-    assert.equal(ashMcpStateIn(k.dir, "grok", {}).state, "present");
+    assert.equal(naviMcpStateIn(k.dir, "grok", {}).state, "present");
 
     // 搬宿主那条是**原值照搬**,所以不会凭空多出一个 type(本轮审查 R5)。
     const c = bench("cursor-host");
@@ -203,13 +203,13 @@ try {
     const first = readFileSync(file, "utf8");
     const ino = Number(statSync(file).ino);
     const again = await register("kimi", b.dir, b.host);
-    assert.ok(again.ok && again.serverName === ASH_MCP_SERVER_NAME);
+    assert.ok(again.ok && again.serverName === NAVI_MCP_SERVER_NAME);
     assert.equal(readFileSync(file, "utf8"), first, "第二遍不改内容");
     if (ino !== 0) assert.equal(Number(statSync(file).ino), ino, "也不换文件");
     // **新建的那一份只给自己读**:它装着 MCP 接法。裸 Node 那份(安装器)同口径,
     // 两边都由回归钉着 —— 一边退成 umask 另一边没退,正是这种事上一轮漏掉的。
     if (process.platform !== "win32") {
-      assert.equal(statSync(file).mode & 0o777, 0o600, "ash 新建的配置文件只给本人读");
+      assert.equal(statSync(file).mode & 0o777, 0o600, "navi 新建的配置文件只给本人读");
     }
     group("幂等:补过了就只是读;新建那份权限 0600");
   }
@@ -222,7 +222,7 @@ try {
       mkdirSync(dirname(file), { recursive: true });
       const mine = `${JSON.stringify({
         mcpServers: {
-          [name]: { command: "my-node", args: ["/my/entry.js"], env: { ASH_URL: "http://127.0.0.1:9999" } },
+          [name]: { command: "my-node", args: ["/my/entry.js"], env: { NAVI_URL: "http://127.0.0.1:9999" } },
           other: { command: "third-party" },
         },
       }, null, 2)}\n`;
@@ -232,7 +232,7 @@ try {
       assert.equal(r.ok && r.serverName, name, `${name}:报的是实际那个名字`);
       assert.equal(readFileSync(file, "utf8"), mine, `${name}:一个字节都不许动`);
     }
-    // 没有 ash、但有别人的 server:补一条进去,别人的原样留着。
+    // 没有 navi、但有别人的 server:补一条进去,别人的原样留着。
     const b = bench("keep-third-party");
     hostJson(b.host, "qoder");
     const file = fileIn("qoder", b.dir);
@@ -252,20 +252,20 @@ try {
     const b = bench("disabled-json");
     const file = fileIn("copilot", b.dir);
     mkdirSync(dirname(file), { recursive: true });
-    const off = `${JSON.stringify({ mcpServers: { ash: { command: "node", args: ["/x.js"], disabled: true } } }, null, 2)}\n`;
+    const off = `${JSON.stringify({ mcpServers: { navi: { command: "node", args: ["/x.js"], disabled: true } } }, null, 2)}\n`;
     writeFileSync(file, off, "utf8");
     const r = await register("copilot", b.dir, b.host);
     assert.ok(!r.ok && /没有替你打开/.test(r.why), `关着的要如实说:${r.ok ? "" : r.why}`);
     assert.equal(readFileSync(file, "utf8"), off, "关着的也不动它");
-    assert.equal(ashMcpStateIn(b.dir, "copilot", {}).state, "disabled");
+    assert.equal(naviMcpStateIn(b.dir, "copilot", {}).state, "disabled");
 
     // grok 的两种关法都要认出来,而且说清是哪一种(用户照着去改的就是那一行)。
     // 根级那个开关**必须写在所有表头之前** —— TOML 里写在表头之后就属于那张表,不是根级事实。
     for (const [body, expect] of [
-      [`${TOML_ASH}enabled = false\n`, /enabled = false/],
-      [`disabled_mcp_servers = ["ash"]\n\n${TOML_ASH}`, /disabled_mcp_servers/],
+      [`${TOML_NAVI}enabled = false\n`, /enabled = false/],
+      [`disabled_mcp_servers = ["navi"]\n\n${TOML_NAVI}`, /disabled_mcp_servers/],
       // 多行写法也要读得出来(上一版那条单行正则漏读它 ⇒ 当成「开着」)。
-      [`disabled_mcp_servers = [\n  "ash",\n]\n\n${TOML_ASH}`, /disabled_mcp_servers/],
+      [`disabled_mcp_servers = [\n  "navi",\n]\n\n${TOML_NAVI}`, /disabled_mcp_servers/],
     ] as const) {
       const g = bench("disabled-toml");
       writeFileSync(join(g.dir, "config.toml"), body, "utf8");
@@ -278,15 +278,15 @@ try {
   // ── ⑤' 根级开关的作用域(本轮审查 R7)──────────────────────────────────────
   {
     // 判据必须认得表作用域和多行字符串:上一版拿全文正则扫,下面这两份都会把一条**启用着**的
-    // ash 判成「已关闭」,而 disabled 在派审预检里是硬拒。
+    // navi 判成「已关闭」,而 disabled 在派审预检里是硬拒。
     const multiline = [
-      `${TOML_ASH}`,
+      `${TOML_NAVI}`,
       '[mcp_servers.other]',
       'command = "x"',
       '',
       '[mcp_servers.other.env]',
       'NOTE = """',
-      'disabled_mcp_servers = ["ash"]',
+      'disabled_mcp_servers = ["navi"]',
       '"""',
       '',
     ].join("\n");
@@ -294,12 +294,12 @@ try {
       // ① 别人的 env 里有个三引号多行字符串,里面恰好有这么一行
       multiline,
       // ② 同一行写在表头**之后** ⇒ 它是那张表的字段,不是根级开关
-      `${TOML_ASH}disabled_mcp_servers = ["ash"]\n`,
+      `${TOML_NAVI}disabled_mcp_servers = ["navi"]\n`,
     ];
     for (const body of fakes) {
       const g = bench("root-scope");
       writeFileSync(join(g.dir, "config.toml"), body, "utf8");
-      const state = ashMcpStateIn(g.dir, "grok", {});
+      const state = naviMcpStateIn(g.dir, "grok", {});
       assert.equal(state.state, "present", `不许把文本当成根级事实:${state.detail}`);
     }
     group("TOML 根级开关:只认根级、不认字符串里的同名行");
@@ -336,7 +336,7 @@ try {
     assert.match(doc, /1e999/, "`1e999` 不许变成 null");
     assert.match(doc, /-0/, "`-0` 不许变成 0");
     assert.ok(onlyInserted(precise, doc), `除了插进去那一段,原文一个字节都不许动：\n${doc}`);
-    group("改写是文本插入:注释/大整数/键序全原样,只多出 ash 那一条");
+    group("改写是文本插入:注释/大整数/键序全原样,只多出 navi 那一条");
   }
 
   // ── ⑦ 就地写:软链还是软链 ───────────────────────────────────────────────
@@ -356,13 +356,13 @@ try {
     group("就地写:软链不被换成普通文件");
   }
 
-  // ── ⑧ 隔离档那条路(`ensureAshMcp`)对新家也成立 ──────────────────────────
+  // ── ⑧ 隔离档那条路(`ensureNaviMcp`)对新家也成立 ──────────────────────────
   {
     const b = bench("isolated");
     hostJson(b.host, "gemini");
-    const state = await ensureAshMcp(b.dir, "gemini", b.host);
+    const state = await ensureNaviMcp(b.dir, "gemini", b.host);
     assert.equal(state.configured, true, state.problem ?? "");
-    assert.equal(state.serverName, ASH_MCP_SERVER_NAME);
+    assert.equal(state.serverName, NAVI_MCP_SERVER_NAME);
     assert.ok(existsSync(fileIn("gemini", b.dir)), "个人目录里真写出来了");
     group("隔离档起跑补齐:十三家也走同一条路");
   }
@@ -370,21 +370,21 @@ try {
   // ── ⑨ 能力分档:现在十五家全都能自动写,两档措辞仍要分得开 ─────────────────
   {
     assert.deepEqual(
-      AGENT_TYPES.filter((t) => !canRegisterAshMcp(t)),
+      AGENT_TYPES.filter((t) => !canRegisterNaviMcp(t)),
       [],
-      "十五家都该能自动登记 ash MCP(新增一家不能写的,要在这里登记并说明为什么)",
+      "十五家都该能自动登记 navi MCP(新增一家不能写的,要在这里登记并说明为什么)",
     );
     // 所以两档措辞只能拿合成的机制驱动(表里暂时没有 none / manual 这两档)。
-    const none = ashMcpUnsupported("fakecli", {
+    const none = naviMcpUnsupported("fakecli", {
       kind: "none", why: "它压根没有 MCP", evidence: "tested", source: "实测",
     });
     assert.equal(none?.tier, "refuse");
     assert.match(none!.why, /上报不了结论/);
-    const manual = ashMcpUnsupported("fakecli", {
+    const manual = naviMcpUnsupported("fakecli", {
       kind: "manual", howTo: "自己往 x.yaml 里加一条", evidence: "docs", source: "文档",
     });
     assert.equal(manual?.tier, "hint", "有 MCP、只是我们不写 ⇒ 不许拦");
-    assert.equal(ashMcpUnsupported("gemini", ASH_MCP_TABLE.gemini), null, "能写的归常规判据管");
+    assert.equal(naviMcpUnsupported("gemini", NAVI_MCP_TABLE.gemini), null, "能写的归常规判据管");
     group("能力分档:十五家全能写,none 拦得住、manual 只提示");
   }
 
@@ -394,16 +394,16 @@ try {
     hostJson(b.host, "trae");
     assert.ok((await register("trae", b.dir, b.host)).ok, "trae:该写进 ~/.trae/mcp.json");
     assert.equal(join(b.dir, "mcp.json"), fileIn("trae", b.dir));
-    assert.equal(ashMcpStateIn(b.dir, "trae", {}).state, "present");
+    assert.equal(naviMcpStateIn(b.dir, "trae", {}).state, "present");
 
     // 它的原生 YAML 我们读不了 —— 存在就不许写,也不许据此说「没有」。
     const y = bench("trae-yaml");
     hostJson(y.host, "trae");
-    writeFileSync(join(y.dir, "traecli.yaml"), "mcp_servers:\n  - name: ash\n    type: stdio\n", "utf8");
+    writeFileSync(join(y.dir, "traecli.yaml"), "mcp_servers:\n  - name: navi\n    type: stdio\n", "utf8");
     const r = await register("trae", y.dir, y.host);
     assert.ok(!r.ok && /traecli\.yaml/.test(r.why), `有那份 YAML 就不写:${r.ok ? "" : r.why}`);
     assert.ok(!existsSync(join(y.dir, "mcp.json")), "也不许另建一份 mcp.json");
-    assert.equal(ashMcpStateIn(y.dir, "trae", {}).state, "unknown", "读不了它的格式 ⇒ 不下结论");
+    assert.equal(naviMcpStateIn(y.dir, "trae", {}).state, "unknown", "读不了它的格式 ⇒ 不下结论");
     group("trae:写标准 JSON、撞上原生 YAML 就不写也不下结论");
   }
 
@@ -413,16 +413,16 @@ try {
     // `cwd`/`timeout` 静默消失,而函数照样报「已接好」—— 这是审查在沙盘里实测到的。
     const http = bench("host-http");
     const headers = { Authorization: "Bearer abc" };
-    hostJson(http.host, "claude", { type: "http", url: "https://ash.example.com/mcp", headers });
+    hostJson(http.host, "claude", { type: "http", url: "https://navi.example.com/mcp", headers });
     assert.ok((await register("claude", http.dir, http.host)).ok);
     const moved = (JSON.parse(readFileSync(fileIn("claude", http.dir), "utf8")) as
       { mcpServers: Record<string, Record<string, unknown>> }).mcpServers[NAME]!;
-    assert.deepEqual(moved, { type: "http", url: "https://ash.example.com/mcp", headers },
+    assert.deepEqual(moved, { type: "http", url: "https://navi.example.com/mcp", headers },
       "远程那条要原样搬过去(不许退回内置 stdio)");
 
     const extra = bench("host-extra");
     hostJson(extra.host, "claude", {
-      type: "stdio", command: "./node", args: ["entry.js"], env: { ASH_URL: "http://127.0.0.1:4317" },
+      type: "stdio", command: "./node", args: ["entry.js"], env: { NAVI_URL: "http://127.0.0.1:4317" },
       cwd: "/host/repo", timeout: 30_000,
     });
     assert.ok((await register("claude", extra.dir, extra.host)).ok);
@@ -454,11 +454,11 @@ try {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, `${JSON.stringify({
       mcpServers: {
-        ash: { command: "node", args: ["/old.js"], disabled: true },
+        navi: { command: "node", args: ["/old.js"], disabled: true },
         harness: { command: "node", args: ["/live.js"] },
       },
     }, null, 2)}\n`, "utf8");
-    const state = ashMcpStateIn(b.dir, "antigravity", {});
+    const state = naviMcpStateIn(b.dir, "antigravity", {});
     assert.equal(state.state, "present", `有一个开着就是接好了:${state.detail}`);
     assert.equal(state.serverName, "harness", "报的是实际开着的那个名字");
     const r = await register("antigravity", b.dir, b.host);
@@ -471,29 +471,29 @@ try {
     writeFileSync(bf, `${JSON.stringify({
       mcpServers: { ash: { command: "a", disabled: true }, harness: { command: "b", enabled: false } },
     }, null, 2)}\n`, "utf8");
-    const offState = ashMcpStateIn(both.dir, "antigravity", {});
+    const offState = naviMcpStateIn(both.dir, "antigravity", {});
     assert.equal(offState.state, "disabled");
     assert.match(offState.detail, /ash 这条登记是关着的、harness 这条登记是关着的/,
       "两个名字各自说一遍 —— 逐名扫描之后每条登记自带一句话(本轮审查 F3)");
     // 诊断提示也得指到**活着**那一条:上一版 `launch` 按名字取第一条,于是这里拿的是
-    // `ash` 那条关着的 `/old.js` —— 用户照着提示去查一个根本没在跑的命令,而状态明明是
+    // `navi` 那条关着的 `/old.js` —— 用户照着提示去查一个根本没在跑的命令,而状态明明是
     // present(本轮审查不拦项:`shapes.ts` 的 launch 与 read 不同源)。
-    const json = ASH_MCP_TABLE.antigravity;
+    const json = NAVI_MCP_TABLE.antigravity;
     assert.equal(json.kind, "file");
     if (json.kind === "file") {
       const live = json.shape.launch?.(readFileSync(file, "utf8"));
       assert.deepEqual(live?.args, ["/live.js"], "提示要指到开着那条");
     }
-    const toml = ASH_MCP_TABLE.grok;
+    const toml = NAVI_MCP_TABLE.grok;
     assert.equal(toml.kind, "file");
     if (toml.kind === "file") {
       // TOML 的两种关法,`read` 两种都看,launch 也必须 —— 根级那种是上一版漏掉的。
-      const rootOff = 'disabled_mcp_servers = ["ash"]\n\n[mcp_servers.ash]\ncommand = "node"\nargs = ["/off.js"]\n';
+      const rootOff = 'disabled_mcp_servers = ["navi"]\n\n[mcp_servers.navi]\ncommand = "node"\nargs = ["/off.js"]\n';
       assert.equal(toml.shape.launch?.(rootOff, toml.switches) ?? null, null,
         "根级关掉的那条不该拿去当提示(根级那个键只在声明了它的那家才算 —— 本轮审查 F2)");
       assert.deepEqual(toml.shape.launch?.(rootOff)?.args, ["/off.js"],
         "同一份原文、不带那家的启停声明 ⇒ 格式族只读结构、不解释那个键");
-      const live = toml.shape.launch?.('[mcp_servers.ash]\ncommand = "node"\nargs = ["/live.js"]\n');
+      const live = toml.shape.launch?.('[mcp_servers.navi]\ncommand = "node"\nargs = ["/live.js"]\n');
       assert.deepEqual(live?.args, ["/live.js"], "开着的照常给提示");
     }
     group("兼容名:有一个开着就算接好,都关着才说关着;诊断提示也指到活着那条");
@@ -505,15 +505,15 @@ try {
       const b = bench("weird-value");
       const file = fileIn("pi", b.dir);
       mkdirSync(dirname(file), { recursive: true });
-      const mine = `${JSON.stringify({ mcpServers: { ash: value } }, null, 2)}\n`;
+      const mine = `${JSON.stringify({ mcpServers: { navi: value } }, null, 2)}\n`;
       writeFileSync(file, mine, "utf8");
-      const state = ashMcpStateIn(b.dir, "pi", {});
+      const state = naviMcpStateIn(b.dir, "pi", {});
       assert.equal(state.state, "unknown", `${JSON.stringify(value)}:认不出来就说认不出来`);
       const r = await register("pi", b.dir, b.host);
       assert.ok(!r.ok, "认不出来就不写");
       assert.equal(readFileSync(file, "utf8"), mine, "一个字节都不许动");
     }
-    group("ash 那个键的值认不出来:不下结论、不覆盖");
+    group("navi 那个键的值认不出来:不下结论、不覆盖");
   }
 
   // ── ⑬ 覆盖变量的层级契约(本轮审查 R3)+ 指到文件的那几家(R4)───────────────
@@ -531,11 +531,11 @@ try {
       pi: "/profile/mcp.json",
     };
     for (const [type, expect] of Object.entries(contract) as [AgentType, string][]) {
-      const mechanism = ASH_MCP_TABLE[type];
+      const mechanism = NAVI_MCP_TABLE[type];
       assert.equal(mechanism.kind, "file");
       if (mechanism.kind !== "file") continue;
       const env = { [mechanism.site.dirEnv!]: "/profile" } as NodeJS.ProcessEnv;
-      assert.equal(ashMcpHostFile(type, env, "/h"), expect, `${type}:覆盖变量指到的那一层`);
+      assert.equal(naviMcpHostFile(type, env, "/h"), expect, `${type}:覆盖变量指到的那一层`);
     }
     // `dirEnvIsFile` 的那两家:**写、判、提示必须是同一个路径**(上一版三处消费者各自把
     // 文件名丢掉再按默认名拼回来,于是真 CLI 连得上、派审却报没接好)。
@@ -544,19 +544,19 @@ try {
     // `XDG_CONFIG_HOME` 也给上:判定那一问内部用的是真 `homedir()`,不给就会去看这台机器上
     // 真实的 `~/.config/opencode`(来源集合里的全局那份)。
     const env = { OPENCODE_CONFIG: custom, XDG_CONFIG_HOME: join(b.host, ".config") } as NodeJS.ProcessEnv;
-    assert.equal(ashMcpHostFile("opencode", env, b.host), custom, "解析口认那个文件名");
-    const dirOf = (home: string, e: NodeJS.ProcessEnv) => ashMcpConfigDir("opencode", e, home)!;
+    assert.equal(naviMcpHostFile("opencode", env, b.host), custom, "解析口认那个文件名");
+    const dirOf = (home: string, e: NodeJS.ProcessEnv) => naviMcpConfigDir("opencode", e, home)!;
 
-    // 全局那份**也有 ash** 时:`OPENCODE_CONFIG` 是「再加一份」而不是「取代」,所以这家
+    // 全局那份**也有 navi** 时:`OPENCODE_CONFIG` 是「再加一份」而不是「取代」,所以这家
     // 已经接好了 —— 不许再往更高优先级那份补一条(那会把本来连得上的那条顶掉,本轮审查 R3)。
     const globalFile = hostJson(b.host, "opencode");
     const globalBefore = readFileSync(globalFile, "utf8");
-    const merged = await registerAshMcp({ agentType: "opencode", dir: dirOf(b.host, env), hostHome: b.host, env });
+    const merged = await registerNaviMcp({ agentType: "opencode", dir: dirOf(b.host, env), hostHome: b.host, env });
     assert.ok(merged.ok, merged.ok ? "" : merged.why);
     assert.equal(existsSync(custom), false, "全局那份已经有了,就不该再写变量那份");
     assert.equal(readFileSync(globalFile, "utf8"), globalBefore, "全局那份也一个字节都不许动");
 
-    // 全局那份**没有** ash 时:写的、判的、提示的都得是变量指的那一份。
+    // 全局那份**没有** navi 时:写的、判的、提示的都得是变量指的那一份。
     const c = bench("config-is-file-empty");
     const target = join(c.dir, "my-profile.json");
     const env2 = { OPENCODE_CONFIG: target, XDG_CONFIG_HOME: join(c.host, ".config") } as NodeJS.ProcessEnv;
@@ -564,7 +564,7 @@ try {
     mkdirSync(dirname(emptyGlobal), { recursive: true });
     writeFileSync(emptyGlobal, '{\n  "$schema": "x"\n}\n', "utf8");
     if (existsSync(ENTRY)) {           // 没 build 过 MCP 产物时通用补接器按设计拒写
-      const r2 = await registerAshMcp({ agentType: "opencode", dir: dirOf(c.host, env2), hostHome: c.host, env: env2 });
+      const r2 = await registerNaviMcp({ agentType: "opencode", dir: dirOf(c.host, env2), hostHome: c.host, env: env2 });
       assert.ok(r2.ok, r2.ok ? "" : r2.why);
       assert.ok(existsSync(target), "写的就是变量指的那个文件");
     }
@@ -602,9 +602,9 @@ try {
     );
     for (const cells of rows) {
       const type = cells[0] as AgentType;
-      const mechanism = ASH_MCP_TABLE[type];
+      const mechanism = NAVI_MCP_TABLE[type];
       const auto = cells[1]!.replace(/\*/g, "");
-      assert.equal(auto, canRegisterAshMcp(type) ? "是" : "否", `${type}:「ash 自动写」那一列对不上`);
+      assert.equal(auto, canRegisterNaviMcp(type) ? "是" : "否", `${type}:「navi 自动写」那一列对不上`);
       const tier = cells[6]!;
       // 「未实测」里也含「实测」两个字,所以先判否,顺序不能换。
       const claimsTested = !tier.includes("未实测");
@@ -616,7 +616,7 @@ try {
     group("README 矩阵与代码逐行对齐");
   }
 
-  console.log(`✅ ash MCP 登记表 + 通用补接器:${done} 组全过`);
+  console.log(`✅ navi MCP 登记表 + 通用补接器:${done} 组全过`);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

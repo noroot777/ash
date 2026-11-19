@@ -5,16 +5,16 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { hasCliGoalHold, readCliState, type CliGoal } from "@ash/shared/cli-commands";
+import { hasCliGoalHold, readCliState, type CliGoal } from "@navi/shared/cli-commands";
 import type { RunOpts } from "../src/executors/types.js";
 import { CodexNativeCommands } from "../src/executors/codex-native-commands.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-goal-recovery-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-goal-recovery-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents, groups, projects, queueItems, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
@@ -42,12 +42,12 @@ const nativeCalls = new Map<string, string[]>();
 const originalCodex = CodexExecutor.prototype.runSteerable;
 const originalClaude = ClaudeExecutor.prototype.runSteerable;
 const fixtureRun: typeof originalCodex = function (options) {
-  const taskId = options.env!.ASH_TASK_ID!;
+  const taskId = options.env!.NAVI_TASK_ID!;
   invocations.set(taskId, [...invocations.get(taskId) ?? [], options]);
   if (failStarts.has(taskId)) throw new Error("fixture startup failure after scoped preparation");
   const saved = options.cliState?.goal;
   const reported = saved && options.cliCommand?.args.startsWith("budget ") ? { ...saved, tokenBudget: Number(options.cliCommand.args.slice(7)) } : saved;
-  const output: import("@ash/shared").AgentEvent[] = [];
+  const output: import("@navi/shared").AgentEvent[] = [];
   const native = nativeGoals.has(taskId) ? new CodexNativeCommands({
     threadId: () => options.sessionId!, turnId: () => "unrelated-turn", model: () => "fixture", cwd: options.cwd, prompt: "", state: options.cliState, push: (event) => output.push(event),
     request: async (method) => { nativeCalls.set(taskId, [...nativeCalls.get(taskId) ?? [], method]); return { goal: nativeGoals.get(taskId) }; },

@@ -15,14 +15,14 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import {
   HERE, continueTask, db, insertMonitorRow, monitors, now, root, runs, schema, sleep, startMonitor, tasks, teardown, until,
 } from "./monitors-fixture.js";
 import type { RunHandle, RunOpts } from "../src/executors/types.js";
 
-delete process.env.ASH_LAX_DONE;
-delete process.env.ASH_ALLOW_REAL_AGENT;
+delete process.env.NAVI_LAX_DONE;
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { ClaudeExecutor } = await import("../src/executors/claude.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
@@ -49,8 +49,8 @@ async function identity(taskId: string): Promise<Record<string, string>> {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
   return {
     "content-type": "application/json",
-    ...(row.activeTurnToken ? { "x-ash-turn-token": row.activeTurnToken } : {}),
-    ...(row.activeDirectionToken ? { "x-ash-direction-token": row.activeDirectionToken } : {}),
+    ...(row.activeTurnToken ? { "x-navi-turn-token": row.activeTurnToken } : {}),
+    ...(row.activeDirectionToken ? { "x-navi-direction-token": row.activeDirectionToken } : {}),
   };
 }
 async function pause(taskId: string, resumePrompt: string): Promise<void> {
@@ -72,7 +72,7 @@ async function complete(taskId: string): Promise<void> {
 }
 
 const run = (opts: RunOpts): RunHandle => {
-  const taskId = opts.env!.ASH_TASK_ID!;
+  const taskId = opts.env!.NAVI_TASK_ID!;
   inputs.set(taskId, [...inputsOf(taskId), opts.prompt]);
   const turn = scripts.get(taskId)?.shift();
   const native = `native-${taskId}`;
@@ -314,7 +314,7 @@ try {
     console.log("PASS: 暂停期间点继续 / 再发话 —— 都按续聊结算");
   }
 
-  // ⑦ 暂停等哨兵期间重启 ash:换一个全新进程接着同一个库,哨兵结果把它叫醒
+  // ⑦ 暂停等哨兵期间重启 navi:换一个全新进程接着同一个库,哨兵结果把它叫醒
   {
     const taskId = await makeTask("done");
     let monitorId = "";
@@ -364,7 +364,7 @@ try {
       assert.equal(tail(held), tail(plain), `⑧ ${label}:说明一致`);
       assert.ok(!(await settledTranscript(held)).includes(UNCONFIRMED));
     }
-    // ash 判了失败(熔断)造不出来,直接调结算:同一份行状态,两边结论一致。
+    // navi 判了失败(熔断)造不出来,直接调结算:同一份行状态,两边结论一致。
     for (const from of ["done", "failed"]) {
       const held = await makeTask(from);
       const plain = await makeTask(from);

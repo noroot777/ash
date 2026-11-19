@@ -15,7 +15,7 @@
 import type { Context } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { eq } from "drizzle-orm";
-import type { HandoffPeer } from "@ash/shared";
+import type { HandoffPeer } from "@navi/shared";
 import { db } from "./db/index.js";
 import { handoffPeers, users } from "./db/schema.js";
 import { getAppSettings } from "./app-settings.js";
@@ -27,7 +27,7 @@ import type { Actor } from "./auth/context.js";
 import { isAccountHolder, ownerIdOf } from "./auth/context.js";
 import { canRevokeReturnGrant, returnGrantOwners } from "./handoff-return.js";
 import { now } from "./util.js";
-import { readHeader, type NaviHeaderName } from "@ash/shared/http-headers";
+import { readHeader, type NaviHeaderName } from "@navi/shared/http-headers";
 
 export const PEER_HEADERS = {
   key: "x-navi-peer-key",
@@ -242,7 +242,7 @@ const toPeer = (
  *
  * **agent 回合凭证一律不算本人**。它身上挂的 owner userId 是归属戳,不是「它就是这个
  * 人」(auth/context.ts `isAccountHolder`)。不判这一条的话,任意一条正在跑的任务只凭
- * `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,还把操作人
+ * `x-navi-source-task-id` + `x-navi-turn-token` 就能替 owner 放行一台陌生机器,还把操作人
  * 记成 owner 本人(第 1 轮审查 P1 实测复现)。写侧另有 `personal-gate.ts` 的中间件兜底,
  * 两道都要 —— 判据自己立不住的话,中间件那份路径名单迟早会漏掉一条。
  *

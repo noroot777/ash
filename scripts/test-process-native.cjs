@@ -24,7 +24,7 @@ function invoke(executable, args) {
 function executable() {
   requirePlatform();
   if (build) return build.executable;
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ash-test-native-"));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "navi-test-native-"));
   const target = path.join(directory, "test-process-native.exe");
   const source = path.join(__dirname, "test-process-native.cs");
   const quote = (value) => "'" + value.replaceAll("'", "''") + "'";

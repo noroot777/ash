@@ -7,7 +7,7 @@
 //
 // 判据全是前端已有的事实：任务的状态与问题、哨兵与上游停滞两个后台位，以及这一轮是不是会话里
 // 最后那一件事（`current`：它后面有人接了话，这一轮就不是「此刻」了）。
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import { liveLabel } from "../lib/executionWords.ts";
 import type { ConversationItem } from "./conversationModel.ts";

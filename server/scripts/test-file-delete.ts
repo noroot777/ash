@@ -23,9 +23,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-file-delete-"));
-process.env.ASH_DB ||= join(stage, "file-delete.db");
-process.env.ASH_RUNS_DIR ||= join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-file-delete-"));
+process.env.NAVI_DB ||= join(stage, "file-delete.db");
+process.env.NAVI_RUNS_DIR ||= join(stage, "runs");
 requireTmpDb("test-file-delete");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -41,8 +41,8 @@ const repo = join(stage, "repo");
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 
 execFileSync("git", ["init", "-b", "main", repo]);
-git("config", "user.name", "Ash Test");
-git("config", "user.email", "ash@example.test");
+git("config", "user.name", "Navi Test");
+git("config", "user.email", "navi@example.test");
 
 // 一份有代表性的工作目录：跟踪过的、改过没提交的、压根没进过 git 的、还有一条软链。
 mkdirSync(join(repo, "src"), { recursive: true });

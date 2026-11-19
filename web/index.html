@@ -47,7 +47,7 @@
       // **必须是同步的经典脚本**：加上 type="module" 它就变成 defer，跟 bundle 一起排到
       // 解析之后跑，这里争取的那点提前量当场归零。
       // 接它的是 src/lib/authProbe.ts；接不住就照常自己请求一次，那条路径永远能工作。
-      window.__ashAuthProbe = fetch("/api/auth/state", { credentials: "same-origin" })
+      window.__naviAuthProbe = fetch("/api/auth/state", { credentials: "same-origin" })
         .then(function (r) { return r.ok ? r.json() : null; })
         .catch(function () { return null; });
     </script>

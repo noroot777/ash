@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
-import { acceptPlan } from "@ash/shared/workflow-policy";
-import type { AcceptBy } from "@ash/shared/workflow-policy";
+import { acceptPlan } from "@navi/shared/workflow-policy";
+import type { AcceptBy } from "@navi/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { tasks, projects } from "./db/schema.js";
 import { now } from "./util.js";

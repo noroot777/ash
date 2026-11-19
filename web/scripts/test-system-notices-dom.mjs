@@ -5,7 +5,7 @@ import { createServer } from "vite";
 import { resizeViewport } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", define: { "import.meta.env.VITE_ASH_PREVIEW": '"1"' },
+const server = await createServer({ root, logLevel: "error", define: { "import.meta.env.VITE_NAVI_PREVIEW": '"1"' },
   server: { host: "127.0.0.1", port: 0, strictPort: false } });
 
 let browser;
@@ -36,7 +36,7 @@ try {
   await action.getByText("流程记录 3 条", { exact: true }).click();
   assert.match(await action.innerText(), /开始验收.*验收未完成.*冲突交接/s, "原始流程记录仍可展开核对");
 
-  // —— 会话里占行的只有你说的、它说的；ash 的话是所属回合最后那一句小灰字（尾注） ——
+  // —— 会话里占行的只有你说的、它说的；navi 的话是所属回合最后那一句小灰字（尾注） ——
   const owner = page.locator(".task-message--agent").filter({ hasText: "冲突已经解决并提交。" });
   const footnotes = page.locator(".turn-footnote");
   assert.equal(await footnotes.count(), 1, "回执、明面的话都不在会话里另占一行");

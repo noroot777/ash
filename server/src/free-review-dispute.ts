@@ -37,8 +37,8 @@
 // ③ 不能变成逃避修复的捷径——没写 `deferReason` 就拒绝这个裁定（判据是**边界**不是
 //    **工作量**，措辞见 free-review-prompts.ts 的 disputeOption）；
 // ④ 提出之后停下来等人——与驳回共用同一条停顿，撤自动复审预约的规矩也共用。
-import type { FreeReviewDisputeResolution, FreeReviewDisputeTarget, Task } from "@ash/shared";
-import { MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE } from "@ash/shared/free-workflow";
+import type { FreeReviewDisputeResolution, FreeReviewDisputeTarget, Task } from "@navi/shared";
+import { MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE } from "@navi/shared/free-workflow";
 import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -438,7 +438,7 @@ async function releaseHeldReservation(taskId: string): Promise<void> {
     const { releaseReservationAfterRuling } = await import("./free-review-ruling-release.js");
     await releaseReservationAfterRuling(taskId);
   } catch (error) {
-    console.error(`[ash] 裁定后兑现预约审查失败 task=${taskId}:`, error);
+    console.error(`[navi] 裁定后兑现预约审查失败 task=${taskId}:`, error);
   }
 }
 

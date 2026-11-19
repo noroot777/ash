@@ -5,7 +5,7 @@
 // 路由**，整个漏在多人模式的横切闸外面（定时消息、哨兵都栽过这一跤），所以客户端这边
 // 也一并要求调用方把 taskId 带上。
 import { id, json, request } from "./apiClient.ts";
-import type { TaskMemo, TaskMemoDigest } from "@ash/shared/task-memo";
+import type { TaskMemo, TaskMemoDigest } from "@navi/shared/task-memo";
 
 /**
  * 一条备忘写进去的内容：正文 + 附件路径（`POST /uploads` 回的 path）。改的时候没给的那一样

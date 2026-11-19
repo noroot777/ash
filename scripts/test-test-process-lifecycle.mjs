@@ -11,7 +11,7 @@ import { runTestProcess } from "./test-process.mjs";
 import native from "./test-process-native.cjs";
 import { cleanupTestResources, withTestResources } from "./test-process-resources.mjs";
 
-const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-lifecycle-"));
+const temporary = fs.mkdtempSync(join(tmpdir(), "navi-test-lifecycle-"));
 const original = { invoke: native.invoke, spawn: childProcess.spawn, existsSync: fs.existsSync, now: Date.now };
 const owned = [];
 const makeScope = () => { const scope = new TestProcessScope(); owned.push(scope); return scope; };
@@ -239,7 +239,7 @@ await withTestResources(async () => {
     const remove = fs.rmSync;
     let retryOptions;
     fs.rmSync = (target, options) => {
-      if (String(target).includes("ash-test-process-")) { retryOptions = options; if (!options.maxRetries) throw busy; }
+      if (String(target).includes("navi-test-process-")) { retryOptions = options; if (!options.maxRetries) throw busy; }
       return remove(target, options);
     };
     syncBuiltinESMExports();

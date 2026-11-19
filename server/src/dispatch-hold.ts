@@ -24,7 +24,7 @@
 // 派活的那条被删掉：停着的标记跟着那一行没了，名下的任务不再被按住；欠账一并清掉、原地留着
 // （已暂停 / 排着），不替用户把它们跑起来 —— 删一条任务不等于要它名下的活接着干。
 import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
-import { hasCliGoalHold } from "@ash/shared/cli-commands";
+import { hasCliGoalHold } from "@navi/shared/cli-commands";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
@@ -135,7 +135,7 @@ export async function sweepPendingHolds(): Promise<void> {
     try {
       await settleHold(id, pendingAt!);
     } catch (error) {
-      console.error(`[ash] 没停完的「全部停下」补停失败 holder=${id}(下一次 tick 再来):`, error);
+      console.error(`[navi] 没停完的「全部停下」补停失败 holder=${id}(下一次 tick 再来):`, error);
     }
   }
 }
@@ -162,8 +162,8 @@ export async function releaseDispatched(holderId: string): Promise<HoldResult> {
 
 /** 停 / 续之后，别的窗口要跟着变：派活那条的标记、名下各条托盘上的等待说法。 */
 async function settleAnnouncements(holderId: string, tree: readonly string[]): Promise<void> {
-  await publishTaskUpdated(holderId).catch((error) => console.error(`[ash] 广播停 / 续失败 task=${holderId}:`, error));
-  await republishWaitsOf(tree).catch((error) => console.error(`[ash] 托盘等待说法刷新失败 holder=${holderId}:`, error));
+  await publishTaskUpdated(holderId).catch((error) => console.error(`[navi] 广播停 / 续失败 task=${holderId}:`, error));
+  await republishWaitsOf(tree).catch((error) => console.error(`[navi] 托盘等待说法刷新失败 holder=${holderId}:`, error));
 }
 
 /**
@@ -213,7 +213,7 @@ export async function sweepOwedStarts(): Promise<void> {
     try {
       await honorOwedStart(id);
     } catch (error) {
-      console.error(`[ash] 欠着的起跑兑现失败 task=${id}(下一次 tick 再来):`, error);
+      console.error(`[navi] 欠着的起跑兑现失败 task=${id}(下一次 tick 再来):`, error);
     }
   }
 }
@@ -229,5 +229,5 @@ async function canResume(row: TaskRow): Promise<boolean> {
 // 可能已经放开了：当场兑现，不等下一次 tick。**加载本模块就装上**（路由与删除都静态依赖它）。
 bus.subscribe((event) => {
   if (event.type !== "task.status" || (event.status !== "paused" && event.status !== "backlog")) return;
-  void honorOwedStart(event.taskId).catch((error) => console.error(`[ash] 欠着的起跑兑现失败 task=${event.taskId}:`, error));
+  void honorOwedStart(event.taskId).catch((error) => console.error(`[navi] 欠着的起跑兑现失败 task=${event.taskId}:`, error));
 });

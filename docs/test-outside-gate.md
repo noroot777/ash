@@ -99,13 +99,13 @@
 
 | 文件 | 保什么 | 11-13 普查 | 备注 |
 |---|---|---|---|
-| `mcp/scripts/test-read-transcript.mjs` | 端到端验证 read_task_transcript：起真实的 mcp/dist/index.js，ASH_URL 指向一个**假 Navi**（固定语料，不碰真库），然后按断言逐条核对它拼出来的对话。 | 绿 1s |  |
-| `mcp/scripts/test-reconnect.mjs` | 端到端验证 MCP 的重启重试： 1. 起真实的 mcp/dist/index.js，ASH_URL 指向一个没人监听的端口 2. 立刻发一个 tools/call（此刻必然 ECONNREFUSED） 3. 3 秒后才把一个假 Navi 拉起来 4. 断言：调用最终成功（说明它等过去了），且 s… | 绿 4s |  |
+| `mcp/scripts/test-read-transcript.mjs` | 端到端验证 read_task_transcript：起真实的 mcp/dist/index.js，NAVI_URL 指向一个**假 Navi**（固定语料，不碰真库），然后按断言逐条核对它拼出来的对话。 | 绿 1s |  |
+| `mcp/scripts/test-reconnect.mjs` | 端到端验证 MCP 的重启重试： 1. 起真实的 mcp/dist/index.js，NAVI_URL 指向一个没人监听的端口 2. 立刻发一个 tools/call（此刻必然 ECONNREFUSED） 3. 3 秒后才把一个假 Navi 拉起来 4. 断言：调用最终成功（说明它等过去了），且 s… | 绿 4s |  |
 | `mobile/scripts/test-reply-command-ui.mjs` | （文件头没有说明；跑完打印）screenshots: ${shots} | 绿（已修） 17s | (b) 缺 mobile/dist 时直说先 build:mobile |
 | `mobile/scripts/test-web-smoke.mjs` | SDK 升级后的渲染冒烟：把 worktree 自己的 `mobile/dist`（expo export -p web 的产物） 挂在临时端口上，用 headless Chromium 逐条路由打开，断言「React 真的挂载出了内容」且 控制台没有报错。 | 绿（已修） 17s | (b) 改用系统 Chrome + 自带假后端（原来依赖 playwright 下载的浏览器、反代 live :4317）；需先 build:mobile |
 | `scripts/test-process-ownership.mjs` | （文件头没有说明；跑完打印）process ownership regressions ok | 绿（并发下闪红） 42s | 单并发绿；并行时 setsid 后代先没了 |
-| `server/scripts/test-assistant-live.ts` | （文件头没有说明；跑完打印）assistant live passed: ${cases.length} 个真实 Claude 回合，无工具事件或工具重试 | 有意不跑 | 设计上就要调用真实 Claude 模型（需 ASH_ALLOW_REAL_AGENT=1） |
-| `server/scripts/test-chat-cli.ts` | （文件头没有说明；跑完打印）${agentType} real CLI chat passed: ${answer.reply} | 有意不跑 | 设计上调用真实 CLI 跑模型回合（需 ASH_CHAT_SMOKE=1） |
+| `server/scripts/test-assistant-live.ts` | （文件头没有说明；跑完打印）assistant live passed: ${cases.length} 个真实 Claude 回合，无工具事件或工具重试 | 有意不跑 | 设计上就要调用真实 Claude 模型（需 NAVI_ALLOW_REAL_AGENT=1） |
+| `server/scripts/test-chat-cli.ts` | （文件头没有说明；跑完打印）${agentType} real CLI chat passed: ${answer.reply} | 有意不跑 | 设计上调用真实 CLI 跑模型回合（需 NAVI_CHAT_SMOKE=1） |
 | `server/scripts/test-claude-goal-live.ts` | （文件头没有说明；跑完打印）real Claude /goal stayed connected through ${working.length} locally mocked working turns; private context cleaned | 绿 | 真 claude + 本地假上游（禁外网档跑） |
 | `server/scripts/test-claude-relay-settings-live.ts` | 用真 Claude CLI 打本地假上游，验证 Navi 供应商配置不会被用户级 settings / CC Switch 覆盖。 | 绿（已修） | 真 claude + 本地假上游；假上游没放行 CLI 的 HEAD /api/hello 探测，崩了还留下真 claude 进程 |
 | `server/scripts/test-claude-settings-live.ts` | 拿**真 claude** 对一遍 `claude-settings.ts` 里那套分层假设。 | 绿 | 真 claude，钩子在会话初始化就杀，不调模型（禁外网档跑） |
@@ -119,7 +119,7 @@
 | `server/scripts/test-service-ports-script.ts` | 端口兜底那一档里**用户自己写了停止命令**的那条路。 | 绿（并发下闪红） 23s | 单并发 4/5 绿；6 路并行时 'unresolved' !== 'verified' |
 | `server/scripts/test-service-ports.ts` | 「停止命令留空 = 杀掉启动起来的东西」最后一档的回归:**端口兜底**(server/src/service-ports.ts)。 | 绿（并发下闪红） 15s | 单并发绿；6 路并行时叶子进程组被 SIGTERM，留下 serve.js |
 | `server/scripts/test-session-turn-identity.ts` | 回合身份与完整性：**走真实起跑链路**（`runTask` / `continueTask` + PATH 上的假 CLI）， 不是往库里种好看的数字。 | 绿 93s |  |
-| `server/scripts/test-side-authorization-cli.ts` | （文件头没有说明；跑完打印）✓ 真实 Codex CLI 独立语义核验 ${records.length} 条通过；未调用投递层。 | 有意不跑 | 同上，真实 CLI + 真实模型（需 ASH_CHAT_SMOKE=1） |
+| `server/scripts/test-side-authorization-cli.ts` | （文件头没有说明；跑完打印）✓ 真实 Codex CLI 独立语义核验 ${records.length} 条通过；未调用投递层。 | 有意不跑 | 同上，真实 CLI + 真实模型（需 NAVI_CHAT_SMOKE=1） |
 | `server/scripts/test-user-cli-smoke.ts` | 个人 CLI 环境的**零交互冒烟测试**(计划 §九 探针③ / 审查修订 D12 的硬前置)。 | 有意不跑 1s | 真起一次带 key 的 claude headless 首跑，要真模型出活 |
 | `server/scripts/test-user-shell-powershell.ts` | （文件头没有说明；跑完打印）PowerShell file semantics passed (${shell}): instrumentation-fails-closed | 有意不跑 1s | Windows 专属：非 Windows 只打印 `skipped: requires Windows` 就退出，全部用例在 else 里，Mac 上一条没执行；退出码 0 不算绿 |
 | `web/scripts/test-chat-browser.mjs` | （文件头没有说明；跑完打印）chat review browser passed: running 停止文案精确校验、短群无虚构整理状态、三成员前台整理时停止和 /clear 刷新后均无内部英文异常。 | 绿 76s |  |
@@ -131,7 +131,7 @@
 
 | 文件 | 保什么 | 11-13 普查 | 备注 |
 |---|---|---|---|
-| `scripts/test-process-cleanup.mjs` | （文件头没有说明；跑完打印）ASH_TEST_SCOPE_CLEANUP=${JSON.stringify(retired)} | 拆分模块 | 随 test-test-process-lifecycle.mjs 一起跑 |
+| `scripts/test-process-cleanup.mjs` | （文件头没有说明；跑完打印）NAVI_TEST_SCOPE_CLEANUP=${JSON.stringify(retired)} | 拆分模块 | 随 test-test-process-lifecycle.mjs 一起跑 |
 | `scripts/test-process-conventions.mjs` | （文件头没有说明） | 拆分模块 | 随 check-conventions.mjs、test-test-process-conventions.mjs 一起跑 |
 | `scripts/test-process-directory.mjs` | （文件头没有说明） | 拆分模块 | 随 test-process-job.mjs、test-process-ownership.mjs、test-process-posix.mjs 一起跑 |
 | `scripts/test-process-job.mjs` | （文件头没有说明） | 拆分模块 | Windows Job 执行域：Mac 上只经桩化的 native 跑模拟路径；随 test-process-scope.mjs、test-test-process-cleanup.mjs、test-test-process-directory.mjs、test-test-process-lifecycle.mjs 一 |

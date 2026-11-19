@@ -6,7 +6,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { HighlightStyle, StreamLanguage, bracketMatching, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { tags } from "@lezer/highlight";
-import { MAX_PREVIEW_SCRIPT_LENGTH } from "@ash/shared/preview";
+import { MAX_PREVIEW_SCRIPT_LENGTH } from "@navi/shared/preview";
 import { localeNumber } from "../lib/localeFormat.ts";
 import "./shell-script-editor.css";
 

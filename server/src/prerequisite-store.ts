@@ -11,7 +11,7 @@
 //   · 已经钉在父任务分支上开工的（`worktreeBase` 填父任务分支、`baseTaskId` 非空）不再加前置：那是另一种
 //     写法，两套依赖叠在一条任务上，验收时就说不清该等谁。
 import { and, asc, eq, inArray, or } from "drizzle-orm";
-import { isAcceptedStage, type TaskStage } from "@ash/shared";
+import { isAcceptedStage, type TaskStage } from "@navi/shared";
 import { db } from "./db/index.js";
 import { sessions, taskPrerequisiteLaunches, taskPrerequisites, tasks } from "./db/schema.js";
 import { now } from "./util.js";

@@ -4,8 +4,8 @@
 //  ① **永远不含 API key** —— 这份文件会在聊天工具里传,带 key 就是现成的泄露渠道。
 //  ② 导入是**并入**不是覆盖:同名的一律跳过并如实列出,不静默改掉对方已有的配置。
 import { useCallback, useRef, useState } from "react";
-import type { ConfigBundle, ConfigBundleKind } from "@ash/shared";
-import { CONFIG_BUNDLE_KINDS, CONFIG_BUNDLE_LABELS } from "@ash/shared/multiuser";
+import type { ConfigBundle, ConfigBundleKind } from "@navi/shared";
+import { CONFIG_BUNDLE_KINDS, CONFIG_BUNDLE_LABELS } from "@navi/shared/multiuser";
 import { ApiError } from "../lib/apiClient.ts";
 import { configTransferApi } from "../lib/authApi.ts";
 import { Button } from "../components/ui.tsx";

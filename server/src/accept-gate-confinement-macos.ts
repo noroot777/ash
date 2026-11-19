@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { cachedGateMacScannerExecutable, gateMacScannerExecutable } from "./accept-gate-macos-native.js";
 import { inspectProcessSync, isPidAlive } from "./platform.js";
-import { envNameGenerations } from "@ash/shared/env-names";
+import { envNameGenerations } from "@navi/shared/env-names";
 import type { GateConfinement } from "./accept-gate-confinement.js";
 
 export const MAC_GATE_ENV = "NAVI_ACCEPT_GATE_UNIT";

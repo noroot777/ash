@@ -1,8 +1,8 @@
 // 没有类型的老记录里，夹着你写的字的那几句（工作流跑的命令、验收前置命令的摘要）怎么认成败。
-// 记录一律拿服务端那份生成函数（@ash/shared/command-note）造，再走一遍读进来、展示前归一的整条链：
+// 记录一律拿服务端那份生成函数（@navi/shared/command-note）造，再走一遍读进来、展示前归一的整条链：
 // 引文写什么都只能让结果变成「认不出」，不会把成败认反，也不会被认成审查轮、待裁定这些别的事。
 import assert from "node:assert/strict";
-import { commandFailedNote, commandPassedNote } from "@ash/shared/command-note";
+import { commandFailedNote, commandPassedNote } from "@navi/shared/command-note";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { commandVerdict, legacyTier } from "../src/task-detail/legacyNoticeTable.ts";
 import { noticeView } from "../src/task-detail/timelineNoticeCopy.ts";

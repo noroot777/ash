@@ -6,13 +6,13 @@
 // 网络就看不出拼错。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AuthState, ProjectHealth, UserRole } from "@ash/shared";
+import type { AuthState, ProjectHealth, UserRole } from "@navi/shared";
 // global.css 必须排在组件之前 —— `main.tsx` 就是这个顺序。
 import "../../src/styles/global.css";
 import { AuthContext } from "../../src/auth/authContext.ts";
 import { CreateProjectDialog } from "../../src/overlays/CreateProjectDialog.tsx";
 
-const HOME = "/srv/ash-root/xiaocai";
+const HOME = "/srv/navi-root/xiaocai";
 
 const reply = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -47,7 +47,7 @@ const authState = (role: UserRole): AuthState => ({
     lastActiveAt: null,
     hasKey: true,
   },
-  rootDir: role === "admin" ? "/srv/ash-root" : null,
+  rootDir: role === "admin" ? "/srv/navi-root" : null,
   homeDir: HOME,
 });
 

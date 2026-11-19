@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import type { BranchPlanEntry, BranchPlanView, FamilyAcceptanceResult } from "@ash/shared";
-import { familySelectionBlock } from "@ash/shared/branch-plan";
-import { acceptPlan, isFinalHumanGate } from "@ash/shared/workflow-policy";
+import type { BranchPlanEntry, BranchPlanView, FamilyAcceptanceResult } from "@navi/shared";
+import { familySelectionBlock } from "@navi/shared/branch-plan";
+import { acceptPlan, isFinalHumanGate } from "@navi/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { branchDependency, branchName, branchRelationship, type BranchTask } from "./task-branch-plan.js";

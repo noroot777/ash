@@ -1,5 +1,5 @@
-import type { TaskListItem } from "@ash/shared";
-import { isListedTopLevel, sortByUpdated, sortPinned, visibleOnThisMachine } from "@ash/shared/task-order";
+import type { TaskListItem } from "@navi/shared";
+import { isListedTopLevel, sortByUpdated, sortPinned, visibleOnThisMachine } from "@navi/shared/task-order";
 import { hasFailed, needsYourCommand } from "../lib/taskAttention.ts";
 import type { TaskStatusIndicator } from "../lib/taskLook.ts";
 

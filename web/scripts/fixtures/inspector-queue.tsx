@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { TaskInspector } from "../../src/task-detail/TaskInspector.tsx";
 import { mergeTaskSnapshot } from "../../src/workspace/createdTaskMerge.ts";
 import "../../src/styles/global.css";
@@ -40,7 +40,7 @@ const initialTasks: TaskListItem[] = [
   row("t-k2", "主体K2", {}),
 ];
 
-function Ash() {
+function Navi() {
   const [tasks, setTasks] = useState<TaskListItem[]>(initialTasks);
   const [subjectId, setSubjectId] = useState("t-k1");
   const [notices, setNotices] = useState<string[]>([]);
@@ -105,6 +105,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

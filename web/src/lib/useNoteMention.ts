@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Note } from "@ash/shared";
+import type { Note } from "@navi/shared";
 import { api } from "./api.ts";
 
 /**

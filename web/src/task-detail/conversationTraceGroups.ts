@@ -1,5 +1,5 @@
-import type { Session, TokenUsage } from "@ash/shared";
-import { sumUsage } from "@ash/shared/usage";
+import type { Session, TokenUsage } from "@navi/shared";
+import { sumUsage } from "@navi/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 
 export function groupedTrace(trace: SessionTraceEntry[]): Map<string, SessionTraceEntry[]> {
@@ -53,7 +53,7 @@ function rederive(trace: SessionTraceEntry[]): SessionTraceEntry[] {
  * `incremental`,标记在这里没有分辨力。上一版曾改用数据自身的形状判(整串不下降 + 末条
  * 等于会话汇总),被审查当场证伪:那个恒等式只对「已回填且此后没再续聊」的会话成立,
  * 随便续一轮新回合,汇总就不再等于末条,**整条历史的气泡会集体弹回累计值**(实测第 2 个
- * 气泡从正确的 81.9 万弹回 1726 万),而且跨 ash 会话行的线程永远凑不出这个恒等式。
+ * 气泡从正确的 81.9 万弹回 1726 万),而且跨 navi 会话行的线程永远凑不出这个恒等式。
  * 一条旧记录的含义不能随「以后会不会续聊」改变 —— 所以判据必须逐条落在数据里,
  * 而不是在读侧推断。
  */

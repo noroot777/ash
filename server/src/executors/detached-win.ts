@@ -1,4 +1,4 @@
-// **Windows 上「活得过 ash 重启」的那条路。**
+// **Windows 上「活得过 navi 重启」的那条路。**
 //
 // POSIX 那边的做法是套一层 `/bin/sh -c '"$@" >>out 2>>err; printf %s $? >rc'`:shell 既做
 // 重定向、又在 CLI 跑完之后把退出码写进 rc。Windows 上这一层**不需要 shell** —— Node 的
@@ -6,14 +6,14 @@
 // **字节原样**。这比 cmd.exe / PowerShell 的重定向可靠得多:前者要在命令行里再解析一轮
 // 引号(`win-command.ts` 顶部那三条),后者会插手编码(PS 5.1 的 `>>` 写 UTF-16)。
 //
-// 落盘同时断掉了 POSIX 那边那条生死绑定(stdout 匿名管道:ash 一死读端关闭,CLI 下次写就吃
+// 落盘同时断掉了 POSIX 那边那条生死绑定(stdout 匿名管道:navi 一死读端关闭,CLI 下次写就吃
 // EPIPE 当场毙命)。但**那不是 Windows 上的死因** —— 这边还有一条更硬的,见下面
 // `detached: true` 那一节:libuv 的全局 Job。两条都断掉了才叫「活得过重启」。
 //
 // ── 退出码与可重连 stdin:套一层壳,跟 POSIX 同一个契约 ──────────────────────────
 //
-// 落盘输出不需要壳,但另外两件事只有「一个活过 ash 的进程」做得到:rc 得由观察到退出的那个
-// 人写,stdin 得有个不随 ash 消失的持有者。所以这边也套一层 —— 不是 shell,是一个按次生成
+// 落盘输出不需要壳,但另外两件事只有「一个活过 navi 的进程」做得到:rc 得由观察到退出的那个
+// 人写,stdin 得有个不随 navi 消失的持有者。所以这边也套一层 —— 不是 shell,是一个按次生成
 // 的 node 壳(`detached-win-wrap.ts`,那边写着为什么不用 cmd.exe / PowerShell、以及代价)。
 //
 // 于是两个平台的契约逐字相同:**pid + 落盘输出 + 退出码 + 可接管 + 可重连 stdin**。
@@ -27,8 +27,8 @@
 //
 // libuv 在 Windows 上给**每一个非 detached 的子进程**都做一次
 // `AssignProcessToJobObject`,塞进它自己的一个全局 Job —— 那个 Job 带着
-// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`。于是父进程(ash)一退出,句柄由内核回收,
-// 圈里的进程**全部被杀**:这就是「Windows 上 agent 活不过 ash 重启」的真正机制,跟
+// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`。于是父进程(navi)一退出,句柄由内核回收,
+// 圈里的进程**全部被杀**:这就是「Windows 上 agent 活不过 navi 重启」的真正机制,跟
 // `taskkill /T`、跟 stdout 管道都无关。`UV_PROCESS_DETACHED` 恰好是 libuv 唯一跳过那次
 // assign 的分支,所以这边必须开。
 //
@@ -41,7 +41,7 @@
 //
 // 代价是 `DETACHED_PROCESS`:壳自己没有控制台 —— 它是 node,不在乎(powershell.exe 那种
 // 控制台应用会当场空退,见 confine-job.ts 的同一组实测)。CLI 由壳用
-// `windowsHide` 起,拿到的是自己的无窗控制台,不跟 ash 共用 —— 顺带把「终端会话
+// `windowsHide` 起,拿到的是自己的无窗控制台,不跟 navi 共用 —— 顺带把「终端会话
 // (ConPTY)一关就把 agent 带走」这条路也断了。
 
 import { spawn } from "node:child_process";
@@ -65,7 +65,7 @@ export { reopenWindowsControlStdin } from "./windows-control-stdin.js";
 
 /**
  * 起一个输出落盘的 agent(Windows)。`keepStdin` = 原生引导回合:首条消息写完不关 stdin,
- * 调用方继续往里塞后续回合(见上面那段关于「ash 一死 stdin 收 EOF」的说明)。
+ * 调用方继续往里塞后续回合(见上面那段关于「navi 一死 stdin 收 EOF」的说明)。
  */
 export function spawnWindowsDetachedAgent(
   cwd: string,
@@ -151,7 +151,7 @@ export function spawnWindowsDetachedAgent(
     cwd,
     stdio,
     env,
-    // 见上:不开这个,libuv 的全局 Job 会在 ash 退出时把整棵树一起带走。
+    // 见上:不开这个,libuv 的全局 Job 会在 navi 退出时把整棵树一起带走。
     detached: true,
     windowsHide: true,
   });

@@ -11,7 +11,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Info, Pulse } from "@phosphor-icons/react";
-import type { TaskMonitor } from "@ash/shared/monitor";
+import type { TaskMonitor } from "@navi/shared/monitor";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { MonitorInspector } from "../../src/monitors/MonitorInspector.tsx";
 import { ScheduledMessageTray } from "../../src/components/ScheduledMessageTray.tsx";
@@ -50,7 +50,7 @@ const WAIT_PENDING: TaskMonitor = {
   ...WAIT_BASE, pid: null, events: 0,
   endedReason: "server 重启后这一刻认不回它：起进程时没来得及记下 pid（身份边条这一刻读不出来："
     + "读盘报错：EIO），所以一个信号都没发；这条创建意图原样留着：日志和期限已经有人接着管，"
-    + "ash 同时在按间隔重问身份，认回来就把这句话撤掉（日志路径见这一行）",
+    + "navi 同时在按间隔重问身份，认回来就把这句话撤掉（日志路径见这一行）",
 };
 
 function WaitFixture({ mode }: { mode: string }) {

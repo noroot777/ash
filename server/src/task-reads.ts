@@ -12,7 +12,7 @@
 import {
   TASK_READS_MAX, parseTaskReads, taskReadRound,
   type TaskReads, type TaskReadsSnapshot, type TaskReadsWriteResult,
-} from "@ash/shared/task-reads";
+} from "@navi/shared/task-reads";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { actorOf, ownerIdOf, type Actor } from "./auth/context.js";

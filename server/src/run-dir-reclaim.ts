@@ -33,7 +33,7 @@ export function reclaimDeletedTaskDisk(taskId: string): Promise<boolean> {
         return true;
       }
     } catch (error) {
-      console.error(`[ash] 没能确认任务 ${taskId} 是否还在，这一趟不动它的目录:`, error);
+      console.error(`[navi] 没能确认任务 ${taskId} 是否还在，这一趟不动它的目录:`, error);
       return false;
     }
     const failures: string[] = [];
@@ -47,13 +47,13 @@ export function reclaimDeletedTaskDisk(taskId: string): Promise<boolean> {
     try {
       if (!failures.length) await db.delete(taskDiskCleanups).where(eq(taskDiskCleanups.taskId, taskId));
       else {
-        console.error(`[ash] 已删除任务的目录没能收掉，稍后重试（${taskId}）:\n${failures.join("\n")}`);
+        console.error(`[navi] 已删除任务的目录没能收掉，稍后重试（${taskId}）:\n${failures.join("\n")}`);
         await db.update(taskDiskCleanups).set({ attempts: sql`${taskDiskCleanups.attempts} + 1`, lastError: failures.join("\n") })
           .where(eq(taskDiskCleanups.taskId, taskId));
       }
     } catch (error) {
       // 账没记上：行还在，下一趟照样会重试，只是少了这一次的次数和原因。
-      console.error(`[ash] 磁盘清理的账没记上（${taskId}）:`, error);
+      console.error(`[navi] 磁盘清理的账没记上（${taskId}）:`, error);
     }
     return failures.length === 0;
   });

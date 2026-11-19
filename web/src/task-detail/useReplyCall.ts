@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { AgentExecutorProfile, AgentType, DiscussionRounds } from "@ash/shared";
-import { sameExecutor } from "@ash/shared/executors";
-import type { CreateReviewChoice } from "@ash/shared/review-on-create";
+import type { AgentExecutorProfile, AgentType, DiscussionRounds } from "@navi/shared";
+import { sameExecutor } from "@navi/shared/executors";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { api } from "../lib/api.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import {

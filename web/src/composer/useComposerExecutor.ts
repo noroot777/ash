@@ -2,7 +2,7 @@
 // 叫来的人算不算「叫自己」由它定，面板关了再开要是退回默认值，叫来的人就会被当成叫自己删掉。
 // 任务已经建好、在等重发第一回合时，以那条任务的实际配置为准，而且不让改——改了也落不到已建好的任务上。
 import { useMemo } from "react";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
 import { executorValue, parseExecutorValue } from "../lib/agentAvailability.ts";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import {

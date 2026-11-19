@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Task, TaskHandoff } from "@ash/shared";
+import type { Task, TaskHandoff } from "@navi/shared";
 import { PaperPlaneTilt, Warning } from "@phosphor-icons/react";
 import { api, ApiError } from "../lib/api.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";

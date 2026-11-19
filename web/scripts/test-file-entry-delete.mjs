@@ -167,7 +167,7 @@ try {
     true,
     "摊的是文件夹详情，文件树里这一行照样要高亮",
   );
-  await page.screenshot({ path: "/tmp/ash-file-delete-folder.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-delete-folder.png", fullPage: true });
 
   // ── ② 文件夹的确认框：摆后果、要求抄名字 ─────────────────────────────────
   await folderView.getByRole("button", { name: "删除文件夹 src" }).click();
@@ -188,7 +188,7 @@ try {
   assert.equal(await confirmButton().isDisabled(), false);
   // 开场动画落定再截图（否则存下来的是半透明的中间帧）。
   await animationsSettled(page);
-  await page.screenshot({ path: "/tmp/ash-file-delete-dialog.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-delete-dialog.png", fullPage: true });
 
   const listingBefore = listingCalls;
   await confirmButton().click();
@@ -236,7 +236,7 @@ try {
   assert.equal(await dialog.locator(".file-delete__type").count(), 1, "没有废纸篓时必须抄名字");
   assert.equal(await dialog.locator(".file-delete__fact ul").count(), 0, "单个文件不必再列一遍它自己");
   await animationsSettled(page);
-  await page.screenshot({ path: "/tmp/ash-file-delete-permanent.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-delete-permanent.png", fullPage: true });
   await dialog.locator(".file-delete__type input").fill("scratch.log");
   await confirmButton().click();
   await page.getByTestId("center-empty").waitFor();

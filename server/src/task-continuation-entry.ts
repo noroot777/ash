@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { isGoalExecution, isGoalRecovery, parseCliCommand, type CliCommand } from "@ash/shared/cli-commands";
+import type { AgentType } from "@navi/shared";
+import { isGoalExecution, isGoalRecovery, parseCliCommand, type CliCommand } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { withTurnPreflight } from "./turn-entry-guard.js";

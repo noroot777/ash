@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
-import type { PreviewServiceState } from "@ash/shared/preview";
-import { previewPortDialect } from "@ash/shared/preview";
+import type { FreeWorkflowPreviewState } from "@navi/shared/free-workflow";
+import type { PreviewServiceState } from "@navi/shared/preview";
+import { previewPortDialect } from "@navi/shared/preview";
 import { useHostInfo } from "../lib/useHostInfo.ts";
 import { PreviewLauncher } from "./PreviewLauncher.tsx";
 import { PreviewPortDriftNotice } from "./PreviewPortDriftNotice.tsx";

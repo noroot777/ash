@@ -1,7 +1,7 @@
 // 一轮审查没给出结论时，**它到底是怎么没的**：回合自己中途断了，还是正常收尾了却没上报。
 //
 // 2026-11-13 现场（任务 EhQtqns9fnG2 第 1 轮）：codex 审查者跑到最后一步，模型上游开始回
-// 503（auth_unavailable），重连 5 次后放弃、exit 1，report.md 一个字没写。ash 当时只会说一种话
+// 503（auth_unavailable），重连 5 次后放弃、exit 1，report.md 一个字没写。navi 当时只会说一种话
 // ——「报告可能已经写完了，只是结论没能上报；最可能是手上没有 report_stage」——三处全错：报告
 // 没写、原因是上游、页面上也没有那颗按钮。那句话的判据从没看过「这一回合是不是自己崩的」，
 // 而 single-run 手上明明有退出码、执行故障、看门狗判决。
@@ -17,8 +17,8 @@
 // 按盘上的事实用同一套判法现算。
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentEvent, ModelFailure } from "@ash/shared";
-import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
+import type { AgentEvent, ModelFailure } from "@navi/shared";
+import type { ReviewNoVerdict } from "@navi/shared/timeline-notice";
 import type { RunDiagnostics } from "./executors/diagnostics.js";
 import { freeReviewFile } from "./free-review-files.js";
 import { RUNS_DIR } from "./paths.js";
@@ -114,7 +114,7 @@ const VERDICT_REASON: Record<Exclude<StallVerdictKind, "tripped">, string> = {
  * 也可能根本没有错误（静默档），叫人干等就是替它编了一个会自己恢复的原因（第 3 轮审查第 1 条）。
  */
 export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagnostics, "failureReason" | "exitSignal"> | null): Interruption {
-  // 原话只认执行器自己说的（它报的错、诊断里记的那段）。判决的原文是 ash 自己的话（看门狗的熔断
+  // 原话只认执行器自己说的（它报的错、诊断里记的那段）。判决的原文是 navi 自己的话（看门狗的熔断
   // 诊断、核实不了的说明）：执行器一句都没说过的时候它照样进说明，但标明是谁说的，不进 `quote`。
   const raw = failure.error?.message?.trim() || diagnostics?.failureReason?.trim() || "";
   const quote = raw ? excerpt(raw) : null;

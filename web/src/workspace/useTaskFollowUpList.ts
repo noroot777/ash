@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { TaskFollowUpList } from "@ash/shared";
+import type { TaskFollowUpList } from "@navi/shared";
 import { api } from "../lib/api.ts";
 
 /**

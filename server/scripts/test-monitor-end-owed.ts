@@ -9,7 +9,7 @@
 //  ⑬-1b 收尾记号写不进库 ⇒ 这一进程里的收尾槽位照样挡着
 //  ⑬-2 「结束」入队失败(收尾函数已经退出、凭证还在):照样谁都领不走;重投成功 ⇒ 一行送走
 //  ⑬-3 「结束」落进最新那一行、解除窗口那一笔失败:两行都领不走;重投补做解除才放行(原 ⑫-2)
-//  ⑬-4 收尾记号落了库、ash 没了(这一进程里没有槽位)⇒ 照样挡着;放弃了结果 / 接回确认进程还在 ⇒ 放行
+//  ⑬-4 收尾记号落了库、navi 没了(这一进程里没有槽位)⇒ 照样挡着;放弃了结果 / 接回确认进程还在 ⇒ 放行
 import assert from "node:assert/strict";
 import { and, eq } from "drizzle-orm";
 import {
@@ -221,14 +221,14 @@ try {
     await until("回合都跑完", async () => !runs.isTurnClaimed(taskId));
   }
 
-  // ── ⑬-4 收尾记号落了库、这一进程里没有槽位(ash 死在收尾中间)⇒ 照样挡着 ────────────────────
+  // ── ⑬-4 收尾记号落了库、这一进程里没有槽位(navi 死在收尾中间)⇒ 照样挡着 ────────────────────
   {
     const { taskId, owner } = await liveTurn();
     const started = await startMonitor({ taskId, command: "echo BEFORE_CRASH; sleep 30", description: "crashed-mid-finish" });
     assert.ok(started.ok);
     const monitorId = started.ok ? started.monitor.id : "";
     await until("输出进了托盘", async () => (await rowsOf(monitorId)).some((m) => m.text.includes("BEFORE_CRASH")), 10_000);
-    // 上一辈子的 ash 开始收尾、落下记号就没了:库里是这个样子,内存里什么都没有。
+    // 上一辈子的 navi 开始收尾、落下记号就没了:库里是这个样子,内存里什么都没有。
     await db.update(monitors).set({ finishingSince: new Date().toISOString() }).where(eq(monitors.id, monitorId));
     runs.releaseTurn(taskId, owner);
     await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, taskId));

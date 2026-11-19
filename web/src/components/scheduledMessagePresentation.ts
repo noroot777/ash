@@ -1,8 +1,8 @@
-import type { ScheduledMessage, TaskListItem } from "@ash/shared";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
-import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
-import { scheduledWaitText } from "@ash/shared/scheduled-message-wait";
+import type { ScheduledMessage, TaskListItem } from "@navi/shared";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
+import { isUserAuthoredMessage } from "@navi/shared/scheduled-message-author";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
+import { scheduledWaitText } from "@navi/shared/scheduled-message-wait";
 import { sendAfterState } from "../lib/sendAfter.ts";
 import { formatInstant } from "../task-detail/utils.ts";
 

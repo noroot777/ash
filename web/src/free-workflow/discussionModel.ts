@@ -1,5 +1,5 @@
-import type { TaskDiscussion } from "@ash/shared";
-import { discussionRoundsLabel, discussionTotalSegments, isBlindSeq, speakerAt } from "@ash/shared/discussion";
+import type { TaskDiscussion } from "@navi/shared";
+import { discussionRoundsLabel, discussionTotalSegments, isBlindSeq, speakerAt } from "@navi/shared/discussion";
 import { turnGist } from "./debateModel.ts";
 import type { TalkSegment } from "./TalkOverview.tsx";
 
@@ -7,7 +7,7 @@ import type { TalkSegment } from "./TalkOverview.tsx";
  * 讨论的读取侧模型：会话里那颗讨论气泡、「审议」格里那一段、左侧抽屉里的完整记录，三处共用。
  *
  * 同辩论：**记录是每一段交卷落库的 statement**，不是各方在会话里随口说了什么（server/src/discussion.ts）。
- * 谁在第几段说、哪几段是各写各的，按 @ash/shared/discussion 那几条算，跟服务端同一份。
+ * 谁在第几段说、哪几段是各写各的，按 @navi/shared/discussion 那几条算，跟服务端同一份。
  */
 
 const host = (discussion: TaskDiscussion) => discussion.participants.find((item) => item.host)?.agentType ?? "";

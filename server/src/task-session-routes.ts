@@ -5,7 +5,7 @@
 // 是里面唯一一块「只读、不碰回合所有权」的东西，切走对那边的并发不变量零影响。
 import { readFile } from "node:fs/promises";
 import { mergeImageJournal } from "./agent-image-journal.js";
-import type { Session } from "@ash/shared";
+import type { Session } from "@navi/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { actorOf } from "./auth/context.js";
@@ -64,7 +64,7 @@ async function toSession(
     // 「此刻还在等上游」跟着会话行一起出门:刷新重建要用它,而不是去 trace 的末条上猜
     // (判据与窄出口同一份,见 Session.awaitingUpstream 与 session-waiting.ts)。
     awaitingUpstream: sessionWaiting(r.id, r.turnStartedAt).length > 0,
-    // 这一轮**自己**的结局也跟着出门:进程退出码答不了「ash 判这一轮成没成」,而重试入口
+    // 这一轮**自己**的结局也跟着出门:进程退出码答不了「navi 判这一轮成没成」,而重试入口
     // 要的恰恰是后者(见 Session.turnOutcome;被看门狗终止的回合多半 exit 0)。
     turnOutcome: turnOutcomes[r.turnStartedAt ?? r.startedAt] ?? null,
     // 每一回合的也带上:会话一续跑,只剩最后一回合的那一位就答不了「前一回合崩没崩」,
@@ -266,7 +266,7 @@ export function mountTaskSessionRoutes(api: Hono): void {
       const entries = await readRecentTraceEntries(row.taskId, sid);
       return c.json(failedTurnNotices(entries, { turnStartedAt: row.turnStartedAt, outcome }));
     } catch (error) {
-      console.warn(`[ash] 读 ${sid} 的过程提示失败:`, error);
+      console.warn(`[navi] 读 ${sid} 的过程提示失败:`, error);
       return c.json({ error: "trace unreadable" }, 500);
     }
   });

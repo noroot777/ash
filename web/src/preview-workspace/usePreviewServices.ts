@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
+import type { FreeWorkflowPreviewState } from "@navi/shared/free-workflow";
 import { request } from "../lib/apiClient.ts";
 
 export function usePreviewServices(taskId: string) {

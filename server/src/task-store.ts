@@ -1,6 +1,6 @@
 import { eq, inArray, sql } from "drizzle-orm";
-import { normalizeDuetConfig } from "@ash/shared/duet";
-import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
+import { normalizeDuetConfig } from "@navi/shared/duet";
+import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
 import { serializeQueueClaims } from "./queue-claim-chain.js";
 import { acceptGateRuns, agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, monitors, projects, queueItems, sessions, taskBackgroundRevisions, tasks } from "./db/schema.js";
@@ -18,12 +18,12 @@ import { assertPrerequisiteEdges, insertPrerequisiteEdges, withPrerequisiteGraph
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
-import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
+import { parseTaskCreationOrigin } from "@navi/shared/task-origin";
 import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
-import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@ash/shared/dispatch-plan";
-import { parseDispatchSuggestions, parseWithdrawnSuggestions, publicSuggestions } from "@ash/shared/dispatch-suggestion";
-import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
-import type { CreateReviewChoice } from "@ash/shared/review-on-create";
+import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@navi/shared/dispatch-plan";
+import { parseDispatchSuggestions, parseWithdrawnSuggestions, publicSuggestions } from "@navi/shared/dispatch-suggestion";
+import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { announceCreateReviews, reservationRows, resolveCreateReviews, type CreateReviewSlot } from "./review-on-create.js";
 
 export type TaskRow = typeof tasks.$inferSelect;
@@ -213,7 +213,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       and ${monitors.status} = 'running')`.mapWith(Boolean),
     // 「这个任务其实在干等上游」(回合级停滞看门狗,见 turn-stall.ts)。四个条件缺一不可:
     // 标记在、那条会话还没收尾、任务此刻真的在跑、而且**那条会话就是此刻这一轮用的那条** ——
-    // 后三条是残值闸:ash 被硬杀时标记留在库里没人撤,少了它们那颗点会永久亮在卡片上。
+    // 后三条是残值闸:navi 被硬杀时标记留在库里没人撤,少了它们那颗点会永久亮在卡片上。
     //
     // 最后一条是第 5 轮审查 F5:前三条挡不住「旧行还挂着标记、新回合已经在跑」。换执行器重试
     // 或者旧执行器不能复用时会**新建一条会话行**(task-run.ts / orchestrator.ts),旧行一个字

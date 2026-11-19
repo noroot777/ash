@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ProjectHealth } from "@ash/shared";
+import type { ProjectHealth } from "@navi/shared";
 import { api } from "../lib/api.ts";
 
 export type PathHealthState = {

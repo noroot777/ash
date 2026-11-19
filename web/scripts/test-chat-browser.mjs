@@ -9,7 +9,7 @@ import { launchChrome } from "./dom-stage.mjs";
 import { resizeViewport } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
-const output = await mkdtemp(join(tmpdir(), "ash-chat-browser-"));
+const output = await mkdtemp(join(tmpdir(), "navi-chat-browser-"));
 console.log(`Chat screenshots: ${output}`);
 const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/chat-browser-fixture.ts"], {
   cwd: root, env: { ...process.env, PORT: "0" }, stdio: ["ignore", "pipe", "pipe"],

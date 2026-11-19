@@ -16,7 +16,7 @@
 //    真按钮同一条规矩——stage 可能是 agent 自报的，也可能属于线上另一站。
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { STEP_LABELS } from "@ash/shared/workflow";
+import { STEP_LABELS } from "@navi/shared/workflow";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";

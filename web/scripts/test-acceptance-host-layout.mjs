@@ -25,7 +25,7 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 const web = await startWebServer();
 
 const LONG_BLOCKER = "父任务「重写验收台」的分支还没合入 main，本任务基于它开工：web/src/acceptance/AcceptanceControls.tsx/web/src/acceptance/DependencyChecks.tsx/web/src/acceptance/CheckRow.tsx 这几处改动都还没进目标分支，请先验收父任务，或把开工起点改到 main 之后重新跑一遍再来验收。";
-const LONG_DEP = "等父任务「验收台精简样机」先验收：它的成果还没合进 main，这一按会把它的提交一起带进去；ash/l7nJ0-ITgdY9-acceptance-page-redesign-mockup-with-a-very-long-branch-name 合入后这一行会自己变绿。";
+const LONG_DEP = "等父任务「验收台精简样机」先验收：它的成果还没合进 main，这一按会把它的提交一起带进去；navi/l7nJ0-ITgdY9-acceptance-page-redesign-mockup-with-a-very-long-branch-name 合入后这一行会自己变绿。";
 const GATE_COMMAND = "npm -w web run build && node scripts/test-acceptance-host-layout.mjs && node scripts/test-free-workflow-inspector.mjs --reporter=verbose";
 const GONE_TEXT = ["改动与提交", "派生与验收", "验收快照", "这次跳过它，直接合并", "重跑一次", "刷新依赖", "重新核对"];
 const GONE_SELECTORS = [".review-meta-bar", ".accepted-snapshot-card", ".branch-acceptance-panel", ".accept-gate-card", ".acceptance-host", ".team-accept-actions"];
@@ -58,11 +58,11 @@ const gateOf = (taskId) => ({
 });
 const change = (path) => ({ path, status: "M" });
 const scmOf = (taskId) => ({
-  root: { path: `/repo/.worktrees/${taskId}`, branch: `ash/${taskId}`, source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
+  root: { path: `/repo/.worktrees/${taskId}`, branch: `navi/${taskId}`, source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
   acceptanceCommitBlock: null,
   acceptanceAutoCommit: { action: "skip", reason: "工作目录里有不归这个任务管的文件（嵌套仓库 vendor/very-long-nested-repository-name），验收时不会替你提交" },
   status: {
-    branch: { head: `ash/${taskId}`, detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
+    branch: { head: `navi/${taskId}`, detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
     staged: [], untracked: [], merge: [], operation: null, truncated: false,
     // 只有单任务那张台子工作区是脏的：多出一行琥珀的「N 个文件未提交」，状态那半句是一长串预检理由。
     unstaged: taskId === "single-task" ? [change("web/src/a.ts"), change("web/src/b.ts"), change("web/src/c.ts")] : [],
@@ -96,7 +96,7 @@ function api(hold, unexpected) {
       if (degraded.mode === "unreadable" && taskId === "conflict-task") {
         if (what === "commits") return reply({ branch: null, commits: [], total: null, reason: "start_commit_unreadable" });
         if (what === "diff") {
-          return reply({ available: false, sourceBranch: `ash/${taskId}`, targetBranch: "main", mergeBase: null, diff: "", files: [],
+          return reply({ available: false, sourceBranch: `navi/${taskId}`, targetBranch: "main", mergeBase: null, diff: "", files: [],
             truncated: false, limitBytes: 1048576, reason: "start_commit_unreadable" });
         }
       }
@@ -104,18 +104,18 @@ function api(hold, unexpected) {
         return reply({ branch: null, commits: [], total: null, reason: "commit_list_unreadable" });
       }
       if (degraded.mode === "legacy" && taskId === "conflict-task" && what === "commits") {
-        return reply({ branch: `ash/${taskId}`, commits: Array.from({ length: LISTED_COMMITS }, (_, index) => commit(index)) });
+        return reply({ branch: `navi/${taskId}`, commits: Array.from({ length: LISTED_COMMITS }, (_, index) => commit(index)) });
       }
       if (what === "commits") {
         // 冲突那张台子的清单是截断的：列 50 条，实际 185 条。其余的一条就是全部。
         const listed = taskId === "conflict-task" ? LISTED_COMMITS : 1;
         return reply({
-          branch: `ash/${taskId}`, total: taskId === "conflict-task" ? TOTAL_COMMITS : 1,
+          branch: `navi/${taskId}`, total: taskId === "conflict-task" ? TOTAL_COMMITS : 1,
           commits: Array.from({ length: listed }, (_, index) => commit(index)),
         });
       }
       if (what === "diff") {
-        return reply({ available: true, sourceBranch: `ash/${taskId}`, targetBranch: "main", mergeBase: "0123456789abcdef", diff: DIFF,
+        return reply({ available: true, sourceBranch: `navi/${taskId}`, targetBranch: "main", mergeBase: "0123456789abcdef", diff: DIFF,
           files: [{ path: "a.ts", additions: 1, deletions: 1, origPath: null }], truncated: false, limitBytes: 1048576 });
       }
       if (what === "sessions") return reply([]);

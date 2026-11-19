@@ -7,10 +7,10 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-gate-readonly-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+const root = mkdtempSync(join(tmpdir(), "navi-gate-readonly-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 const git = (repo: string, ...args: string[]) =>
   execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 

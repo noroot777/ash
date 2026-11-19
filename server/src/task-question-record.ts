@@ -1,14 +1,14 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { formatQuestionAnswers, questionItems, questionKey } from "@ash/shared/questions";
-import type { QuestionAnswerInput, QuestionRecord, QuestionSource } from "@ash/shared/questions";
+import { formatQuestionAnswers, questionItems, questionKey } from "@navi/shared/questions";
+import type { QuestionAnswerInput, QuestionRecord, QuestionSource } from "@navi/shared/questions";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { TaskRow } from "./task-store.js";
 import { now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { questionOccurrenceOf } from "./task-wait-ownership.js";
-import { activeDispatchPlan, parseDispatchPlan } from "@ash/shared/dispatch-plan";
+import { activeDispatchPlan, parseDispatchPlan } from "@navi/shared/dispatch-plan";
 
 /** 派活单被发回来改时，答复最前面那一句（智能体据此知道一条都没建）。 */
 export const DISPATCH_PLAN_RETURNED = "（派活单没有派出，一条任务都没建。用户的意见如下，按它改完可以再摆一次。）";

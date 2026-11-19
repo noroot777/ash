@@ -16,9 +16,9 @@
 //
 // 删除按同一个定义指名（server/src/conversation-redact.ts 的 identityWindow / traceStepsWindow）：有正文的
 // 报正文那几段，只有执行过程的报「这个回合里号落在前后两句输入之间的那几步」。
-import type { ContextUsage, Session, TurnInterruption, TurnOutcome } from "@ash/shared";
-import { segmentFingerprint, traceKeptOnDelete, traceStepsFingerprint, type TextAnchor } from "@ash/shared/session-output";
-import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
+import type { ContextUsage, Session, TurnInterruption, TurnOutcome } from "@navi/shared";
+import { segmentFingerprint, traceKeptOnDelete, traceStepsFingerprint, type TextAnchor } from "@navi/shared/session-output";
+import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem, TimelineEntry } from "./conversationModel.ts";
 import { reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";

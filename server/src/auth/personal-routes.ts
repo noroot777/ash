@@ -10,8 +10,8 @@
 // (walk + fingerprintOf 每次现算),写完文件下一次扫描自然错开,不存在陈旧列表。
 import type { Context, Hono } from "hono";
 import { eq } from "drizzle-orm";
-import type { AgentType, ConfigBundle, ConfigBundleKind, PersonalAshMcp } from "@ash/shared";
-import { CONFIG_BUNDLE_KINDS } from "@ash/shared/multiuser";
+import type { AgentType, ConfigBundle, ConfigBundleKind, PersonalNaviMcp } from "@navi/shared";
+import { CONFIG_BUNDLE_KINDS } from "@navi/shared/multiuser";
 import { db } from "../db/index.js";
 import { agents, llmProviders, reviewerProfiles, teamPresets, workflows } from "../db/schema.js";
 import { id, now } from "../util.js";
@@ -29,9 +29,9 @@ import {
   writePersonalSkill,
   PERSONAL_CLI_TYPES,
 } from "./user-cli.js";
-import { injectsAshMcp } from "../executors/ash-mcp-inject.js";
-import { hostAshMcp, INJECTED_ASH_MCP } from "./user-cli-mcp.js";
-import { ensureExecutorAshMcp, registeredExecutorAshMcp, storedExtraArgs } from "./executor-ash-mcp.js";
+import { injectsNaviMcp } from "../executors/navi-mcp-inject.js";
+import { hostNaviMcp, INJECTED_NAVI_MCP } from "./user-cli-mcp.js";
+import { ensureExecutorNaviMcp, registeredExecutorNaviMcp, storedExtraArgs } from "./executor-navi-mcp.js";
 
 /**
  * 个人 CLI 环境只对**本人**开放 —— 连实例管理员也看不了别人的(§八 个人面)。
@@ -70,15 +70,15 @@ export function mountPersonalCliRoutes(api: Hono): void {
     // **不生效**:目录还在盘上、编辑器也还能写,但 CLI 根本不会去读它。不说清楚的话,
     // 用户会在这里装一个技能然后发现补全里没有 —— 而界面上一切正常。
     const sharedHostCli = await isHostCliShared();
-    // 共用档下真正生效的是**宿主机**那份配置,所以「ash MCP 登记了没有」这一问也得问
+    // 共用档下真正生效的是**宿主机**那份配置,所以「navi MCP 登记了没有」这一问也得问
     // 到那边去(个人目录的答案在这一档下毫无意义)。只读:那是用户自己的 ~/.claude.json。
-    // 起跑时由 ash 注入的那几家不看配置(executors/ash-mcp-inject.ts)。
-    const hostAsh = sharedHostCli
+    // 起跑时由 navi 注入的那几家不看配置(executors/navi-mcp-inject.ts)。
+    const hostNavi = sharedHostCli
       ? PERSONAL_CLI_TYPES.map((agentType) => ({
-          agentType, ...(injectsAshMcp(agentType) ? INJECTED_ASH_MCP : hostAshMcp(agentType)),
+          agentType, ...(injectsNaviMcp(agentType) ? INJECTED_NAVI_MCP : hostNaviMcp(agentType)),
         }))
       : [];
-    return c.json({ mode: "multi", sharedHostCli, hostAshMcp: hostAsh, envs: await listPersonalCliEnv(userId) });
+    return c.json({ mode: "multi", sharedHostCli, hostNaviMcp: hostNavi, envs: await listPersonalCliEnv(userId) });
   });
 
   api.get("/me/cli-env/:agentType", async (c) => {
@@ -305,14 +305,14 @@ function mountConfigTransferRoutes(api: Hono): void {
       }
       imported.executors = n;
       if (unlinked) notes.push(`${unlinked} 个执行器原本挂的供应商在这边找不到同名的，已落成「未挂供应商」`);
-      // 导入也是注册,同样当场接 ash MCP(理由见 `ensureExecutorAshMcp`):补接按 CLI 类型、同一家
-      // 只接一次;接没接上按**每个执行器**判 —— 它自己的参数可能把 ash 关掉,跟注册那条同一个判据
-      // (`registeredExecutorAshMcp`)。同一句原因只说一次,后面列上是哪几个执行器。
-      const ensured = new Map<string, Promise<PersonalAshMcp>>();
+      // 导入也是注册,同样当场接 navi MCP(理由见 `ensureExecutorNaviMcp`):补接按 CLI 类型、同一家
+      // 只接一次;接没接上按**每个执行器**判 —— 它自己的参数可能把 navi 关掉,跟注册那条同一个判据
+      // (`registeredExecutorNaviMcp`)。同一句原因只说一次,后面列上是哪几个执行器。
+      const ensured = new Map<string, Promise<PersonalNaviMcp>>();
       const byDetail = new Map<string, string[]>();
       for (const a of added) {
-        if (!ensured.has(a.type)) ensured.set(a.type, ensureExecutorAshMcp(a.type as AgentType, stamp.ownerUserId));
-        const state = await registeredExecutorAshMcp(
+        if (!ensured.has(a.type)) ensured.set(a.type, ensureExecutorNaviMcp(a.type as AgentType, stamp.ownerUserId));
+        const state = await registeredExecutorNaviMcp(
           await ensured.get(a.type)!, a.type, stamp.ownerUserId, storedExtraArgs(a.extraArgs),
         );
         if (state.detail) byDetail.set(state.detail, [...(byDetail.get(state.detail) ?? []), a.name]);

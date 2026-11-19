@@ -9,9 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-gate-reclaim-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-gate-reclaim-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
@@ -68,7 +68,7 @@ try {
   await task("archived", { archived: true, archivedAt: stamp });
   const archived = await snapshot("archived", "old-run", { status: "passed" });
   const orphan = await snapshot("deleted-long-ago", "old-run");
-  const transcript = join(process.env.ASH_RUNS_DIR!, "deleted-long-ago", "session.md");
+  const transcript = join(process.env.NAVI_RUNS_DIR!, "deleted-long-ago", "session.md");
   writeFileSync(transcript, "正文");
   assert.equal(await sweepGateSnapshots(), 2);
   assert.equal(existsSync(archived), false, "已归档任务的快照在启动清扫里收掉");
@@ -89,7 +89,7 @@ try {
   // ── 单删任务：整个 runs 目录一起收（以前只有删项目才收） ──
   await task("to-delete");
   await snapshot("to-delete", "some-run", { status: "passed" });
-  const deleteDir = join(process.env.ASH_RUNS_DIR!, "to-delete");
+  const deleteDir = join(process.env.NAVI_RUNS_DIR!, "to-delete");
   writeFileSync(join(deleteDir, "session.md"), "正文");
   await deleteTaskCompletely("to-delete");
   assert.equal(existsSync(deleteDir), false, "删任务连 runs 目录一起收");

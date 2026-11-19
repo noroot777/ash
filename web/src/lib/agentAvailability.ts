@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
 import { api } from "./api.ts";
 
 export type DetectedAgent = Awaited<ReturnType<typeof api.detectAgents>>[number];

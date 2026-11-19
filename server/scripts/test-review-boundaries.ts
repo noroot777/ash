@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, runs, schema, tasks, teardown, until } from "./monitors-fixture.js";
 import { setupRegressionReviews } from "./regression-review-fixture.js";
 
@@ -24,7 +24,7 @@ api.post("/tasks/:id/answer", (context) => answerTask(context, context.req.param
 const answer = (taskId: string) => api.request(`/tasks/${taskId}/answer`, { method: "POST",
   headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: "Continue implementation" }) });
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 try {
   const { open } = await setupRegressionReviews();
   for (const entry of ["continue", "checkpoint", "answer", "storage-failure"] as const) {

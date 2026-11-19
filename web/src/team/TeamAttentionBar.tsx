@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { TaskListItem } from "@ash/shared";
-import type { Waiting } from "@ash/shared/team";
+import type { TaskListItem } from "@navi/shared";
+import type { Waiting } from "@navi/shared/team";
 import { ChatCircleDots, SpinnerGap } from "@phosphor-icons/react";
 import { formatDuration } from "../task-detail/utils.ts";
 

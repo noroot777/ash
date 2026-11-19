@@ -40,7 +40,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-public static class AshGateJob {
+public static class NaviGateJob {
   public static void Main(string[] args) {
     if (args.Length == 5) Run(args[0], int.Parse(args[1]), args[2], args[3], args[4]);
   }

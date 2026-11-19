@@ -1,5 +1,5 @@
-import type { TaskReadEntry, TaskReads } from "@ash/shared/task-reads";
-import { TASK_READS_MAX, coversRead, parseTaskReads } from "@ash/shared/task-reads";
+import type { TaskReadEntry, TaskReads } from "@navi/shared/task-reads";
+import { TASK_READS_MAX, coversRead, parseTaskReads } from "@navi/shared/task-reads";
 import { safeStorage } from "./safeStorage.ts";
 
 // 「看过、还没被服务端收下」的那几眼（lib/taskReadSync.ts 文件头 ②）。两条不变量，各守一类毛病：
@@ -26,7 +26,7 @@ export function createOutbox(prefix: string) {
     if (safeStorage.set(key, JSON.stringify(entry))) return true;
     if (!warned) {
       warned = true;
-      console.warn("[ash] 已读记录写不进浏览器存储：这一页照常同步，但没送到就关掉页面的那几眼补不回来了");
+      console.warn("[navi] 已读记录写不进浏览器存储：这一页照常同步，但没送到就关掉页面的那几眼补不回来了");
     }
     return false;
   }

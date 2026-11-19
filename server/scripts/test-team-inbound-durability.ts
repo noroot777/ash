@@ -17,7 +17,7 @@ import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 
 const HERE = fileURLToPath(import.meta.url);
 const TASK = "task-inbound-durability";
@@ -33,7 +33,7 @@ else await child(role, root);
 
 // ── 父进程:依次跑两个子进程,再对它们各自留下的实测结果下断言 ────────────────────────
 async function parent(): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "ash-team-inbound-"));
+  const dir = mkdtempSync(join(tmpdir(), "navi-team-inbound-"));
   try {
     const stage = await run("stage", dir);
     assert.equal(stage.sent, 0, "进程 A 的调度台正忙,这条汇报不该被塞进 CLI");
@@ -81,9 +81,9 @@ function run(which: string, dir: string): Promise<Record<string, number | boolea
 
 // ── 子进程 ──────────────────────────────────────────────────────────────────────
 async function child(which: string, dir: string): Promise<void> {
-  process.env.ASH_DB = join(dir, "ash.db");
-  process.env.ASH_RUNS_DIR = join(dir, "runs");
-  process.env.ASH_TEAM_IDLE_MS = "0"; // 别在测试里挂一个 30 分钟的回收计时
+  process.env.NAVI_DB = join(dir, "ash.db");
+  process.env.NAVI_RUNS_DIR = join(dir, "runs");
+  process.env.NAVI_TEAM_IDLE_MS = "0"; // 别在测试里挂一个 30 分钟的回收计时
   // env 要在这些模块被求值之前定好(db/paths 在模块顶层就读它们),所以走动态 import。
   const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");

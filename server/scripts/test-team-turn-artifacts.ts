@@ -5,7 +5,7 @@
 // 时候跑过」这份账,而它唯一的出口就是生成物面板。所以判据只能架在 `readTaskArtifacts` 的
 // 返回值上：图在不在清单里、面板说没说实话。
 //
-//   ① 用户插话:ash 先 interrupt 再 send,新一轮当场开跑,而被打断那一轮的进程过一会儿才吐
+//   ① 用户插话:navi 先 interrupt 再 send,新一轮当场开跑,而被打断那一轮的进程过一会儿才吐
 //      出它的 turnEnd。按「此刻的 lead.turnStart」结算那个结束事件,就等于把**新**回合提前
 //      收口 —— 它真正干活那段落进两条记录之间的空洞,那一轮的图永久漏在清单外（第 1 轮 F1）。
 //   ② 开始状态那次写库失败:活动身份已经登记在册,可会话行上还留着上一轮的 ended_at、任务
@@ -30,19 +30,19 @@ import { execFileSync } from "node:child_process";
 import { createWriteStream, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 requireTmpDb("team-turn-artifacts");
-const stage = realpathSync(mkdtempSync(join(tmpdir(), "ash-team-turn-artifacts-")));
+const stage = realpathSync(mkdtempSync(join(tmpdir(), "navi-team-turn-artifacts-")));
 process.on("exit", () => {
   try { rmSync(stage, { recursive: true, force: true }); } catch { /* 文件还开着就留给下次 */ }
 });
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-process.env.ASH_TEAM_IDLE_MS = "600000"; // 别让空闲回收在断言中间把台收掉
-process.env.ASH_TEAM_STATUS_RETRY_MS = "40";
-mkdirSync(process.env.ASH_RUNS_DIR, { recursive: true });
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
+process.env.NAVI_TEAM_IDLE_MS = "600000"; // 别让空闲回收在断言中间把台收掉
+process.env.NAVI_TEAM_STATUS_RETRY_MS = "40";
+mkdirSync(process.env.NAVI_RUNS_DIR, { recursive: true });
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");

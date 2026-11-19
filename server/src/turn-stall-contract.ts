@@ -7,7 +7,7 @@
 // 判据那个文件已经贴着单文件上限(根 CLAUDE.md 700 行),合同留在里面只会把它顶破。
 //
 // 这里一行运行时代码都没有(纯 interface),所以从哪边 import 都不会制造循环。
-import type { ModelFailure } from "@ash/shared";
+import type { ModelFailure } from "@navi/shared";
 
 /** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
 export type StallOwner = object;

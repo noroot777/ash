@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Group, ProjectView, TaskListItem } from "@ash/shared";
+import type { Group, ProjectView, TaskListItem } from "@navi/shared";
 import { Stack, X } from "@phosphor-icons/react";
 import { GroupManager } from "../settings/GroupsSettings.tsx";
 

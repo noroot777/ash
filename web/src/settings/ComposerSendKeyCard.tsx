@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ComposerSendKey } from "@ash/shared";
+import type { ComposerSendKey } from "@navi/shared";
 import { sendKeyLabels } from "../lib/sendKey.ts";
 import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
 import { Select } from "../components/Select.tsx";

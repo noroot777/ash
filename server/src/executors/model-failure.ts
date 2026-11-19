@@ -10,7 +10,7 @@
 // 两类说「等一会儿再继续」，所以这两类只给**确知会自行恢复**的那种：同是 429，「账户额度用完了、
 // 去看套餐和账单」等多久都不会好（审查 I2TbHFxtSVAv 第 2 轮第 1 条）。判定顺序因此是「原话里说清了
 // 要用户处理的（超长、额度）」先于「状态码」，状态码先于「原话里的宽泛字眼」。
-import type { ModelFailure } from "@ash/shared";
+import type { ModelFailure } from "@navi/shared";
 
 /** 原话里说的是「对话 / 输入超出模型长度上限」。 */
 const OVERFLOW = /prompt is too long|context[ _-]?(?:length|window)|maximum context|too many tokens|exceeds? (?:the )?(?:context|token|max)|input (?:is )?too long|context_length_exceeded/i;

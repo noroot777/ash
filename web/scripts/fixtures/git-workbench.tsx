@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectHealth } from "@ash/shared";
+import type { ProjectHealth } from "@navi/shared";
 import { GitWorkbench } from "../../src/git-workbench/GitWorkbench.tsx";
 import { readGitLocation } from "../../src/git-workbench/navigation.ts";
 import { ProjectGitContext } from "../../src/workspace/ProjectGitContext.tsx";
@@ -19,7 +19,7 @@ const health: ProjectHealth = {
   dirty: true,
 };
 
-function Ash() {
+function Navi() {
   const [locationKey, setLocationKey] = useState(() => location.href);
   const [notice, setNotice] = useState("");
   const [openedTask, setOpenedTask] = useState("");
@@ -68,6 +68,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

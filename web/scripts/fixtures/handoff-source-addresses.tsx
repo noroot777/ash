@@ -1,8 +1,8 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import type { AppSettings, HandoffTarget } from "@ash/shared";
-import type { HandoffSourceAddress } from "@ash/shared/handoff";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
+import type { AppSettings, HandoffTarget } from "@navi/shared";
+import type { HandoffSourceAddress } from "@navi/shared/handoff";
 import { SettingsPage } from "../../src/settings/SettingsPage.tsx";
 import type { SettingsSection } from "../../src/settings/SettingsPage.tsx";
 import { HandoffReturnView } from "../../src/task-detail/HandoffReturnView.tsx";
@@ -135,7 +135,7 @@ function TaskFixture() {
           taskScopedReturn={true}
           running={false}
           notes={[]}
-          errorMessage={`连不上对端 ash（${ORIGINAL_URL}）：fetch failed`}
+          errorMessage={`连不上对端 navi（${ORIGINAL_URL}）：fetch failed`}
           identityMissing={false}
           autoResume={false}
           autoResumeLocked={false}

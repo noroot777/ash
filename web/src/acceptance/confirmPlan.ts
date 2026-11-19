@@ -1,5 +1,5 @@
-import type { AcceptanceSteps } from "@ash/shared/accept-message";
-import type { AcceptMemoryWrite } from "@ash/shared/accept-gate";
+import type { AcceptanceSteps } from "@navi/shared/accept-message";
+import type { AcceptMemoryWrite } from "@navi/shared/accept-gate";
 
 /**
  * 确认层「这一按会做什么」的推导。纯函数：画法在 AcceptConfirm.tsx，这里只管

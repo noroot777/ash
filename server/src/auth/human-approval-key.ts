@@ -1,4 +1,4 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { accessSync, constants, lstatSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 

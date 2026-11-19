@@ -16,7 +16,7 @@ export function scopedTail(name: string, typedTail: string, tailTouched: boolean
   return tailTouched ? typedTail : dirNameFromProjectName(name);
 }
 
-/** 家目录自己的形状说了算：`D:\ash-root\me` → `\`。手机端没有 /host 那条端点。 */
+/** 家目录自己的形状说了算：`D:\navi-root\me` → `\`。手机端没有 /host 那条端点。 */
 export function separatorOf(home: string): string {
   return home.includes("\\") ? "\\" : "/";
 }

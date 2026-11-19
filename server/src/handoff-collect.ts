@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { eq, inArray } from "drizzle-orm";
-import { ASH_TURN_IDENTITY_PATH_DIR } from "@ash/shared/mcp";
+import { NAVI_TURN_IDENTITY_PATH_DIR } from "@navi/shared/mcp";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
 import type { sessions, tasks } from "./db/schema.js";
@@ -31,8 +31,8 @@ const exec = execFileText;
 
 /**
  * claude CLI 存会话的项目目录名:cwd 中所有非字母数字字符替换成 `-`。
- * 路径示例:/Users/example/code/ash/.worktrees/KJN0ESTe5uBw
- *   → -Users-example-code-ash--worktrees-KJN0ESTe5uBw
+ * 路径示例:/Users/example/code/navi/.worktrees/KJN0ESTe5uBw
+ *   → -Users-example-code-navi--worktrees-KJN0ESTe5uBw
  * claude 代码里没有公开这个函数,格式一旦变化,后果只是对端找不到会话文件 →
  * 干净退化成全新起跑,不会出错误状态。
  */
@@ -176,9 +176,9 @@ async function enumerateRunArtifacts(taskId: string, notes: string[]): Promise<{
       // 控制文件和保留快照一律留在本机 —— 判据在 accept-gate-diagnosis.ts 一处。
       if (entry.name.startsWith("accept-gate-") && !isGateLogFile(entry.name)) continue;
       // 回合身份那个目录**绝不出本机**:里面是这一回合的 taskId + 两个令牌(给只继承 PATH
-      // 的 CLI 搭的那条桥,见 `@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_PATH_DIR`)。接力是把
+      // 的 CLI 搭的那条桥,见 `@navi/shared/mcp` 的 `NAVI_TURN_IDENTITY_PATH_DIR`)。接力是把
       // 产物打包发到**另一台机器**,一起带走就等于把一张还能用的身份递出去了。
-      if (entry.isDirectory() && entry.name === ASH_TURN_IDENTITY_PATH_DIR) continue;
+      if (entry.isDirectory() && entry.name === NAVI_TURN_IDENTITY_PATH_DIR) continue;
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) { await walk(abs); continue; }
       if (!entry.isFile()) continue;

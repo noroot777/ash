@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Group, Task, TaskActions } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
+import type { Group, Task, TaskActions } from "@navi/shared";
+import { taskDisplayStatus } from "@navi/shared";
 import {
   Archive,
   ArrowCounterClockwise,

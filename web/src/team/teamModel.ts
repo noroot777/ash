@@ -1,6 +1,6 @@
-import type { Group, Session, Task, TaskListItem, TaskStatus } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
-import { mergeFeed, timeMs, type Batch, type FeedRow as SharedFeedRow } from "@ash/shared/team";
+import type { Group, Session, Task, TaskListItem, TaskStatus } from "@navi/shared";
+import { taskDisplayStatus } from "@navi/shared";
+import { mergeFeed, timeMs, type Batch, type FeedRow as SharedFeedRow } from "@navi/shared/team";
 import type { ConversationItem } from "../task-detail/conversationModel.ts";
 import { foldMonitorWakes } from "../task-detail/monitorWakeTurns.ts";
 

@@ -1,4 +1,4 @@
-import { FROZEN_SYNTHETIC_COMMIT_EMAIL, FROZEN_SYNTHETIC_COMMIT_MESSAGE, FROZEN_SYNTHETIC_COMMIT_NAME } from "@ash/shared/legacy-names";
+import { FROZEN_SYNTHETIC_COMMIT_EMAIL, FROZEN_SYNTHETIC_COMMIT_MESSAGE, FROZEN_SYNTHETIC_COMMIT_NAME } from "@navi/shared/legacy-names";
 
 /**
  * Navi 替任务落款的提交（合前置的开工点、门禁的合并预览、接力前的 WIP 保存）用的身份：项目没配

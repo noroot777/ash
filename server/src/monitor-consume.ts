@@ -25,8 +25,8 @@ import {
   MONITOR_MAX_LINES_PER_FLUSH,
   MONITOR_MAX_LINES_PER_PUSH,
   MONITOR_RETRY_FLUSH_MS,
-} from "@ash/shared/monitor";
-import { endConditionHit, parseEndCondition } from "@ash/shared/monitor-end-condition";
+} from "@navi/shared/monitor";
+import { endConditionHit, parseEndCondition } from "@navi/shared/monitor-end-condition";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { pushToTask } from "./monitor-events.js";
@@ -63,7 +63,7 @@ export async function commitProgress(monitorId: string, offset: number, rtOverri
   } catch (error) {
     // 落不下去是安全的那一侧（游标偏小 ⇒ 重读 ⇒ 最多重推一次），但不静默:静默会让
     // 「一直推不动的游标」看起来跟「没有新内容」一模一样。
-    console.error(`[ash] 哨兵 ${monitorId} 的读取位置没落下去（offset=${offset}）:`, error);
+    console.error(`[navi] 哨兵 ${monitorId} 的读取位置没落下去（offset=${offset}）:`, error);
     return false;
   }
 }
@@ -302,7 +302,7 @@ export async function drainOwed(monitorId: string, rt: Runtime): Promise<string[
   // 只能当场出声（静默的话它就是下一次「结果再也收不到」）。
   if (rt.inflight > 0) {
     console.error(
-      `[ash] 哨兵 ${monitorId} 排干之后还有 ${rt.inflight} 批在途:有推送没走 serialize 队列,`
+      `[navi] 哨兵 ${monitorId} 排干之后还有 ${rt.inflight} 批在途:有推送没走 serialize 队列,`
       + `这一批的归宿没人答得出来（已交出 ${owed.length} 行）`,
     );
   }
@@ -320,14 +320,14 @@ async function flushLocked(
   try {
     row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   } catch (error) {
-    console.error(`[ash] 哨兵 ${monitorId} 读不到自己那一行,这一批 ${lines.length} 行放回缓冲重试:`, error);
+    console.error(`[navi] 哨兵 ${monitorId} 读不到自己那一行,这一批 ${lines.length} 行放回缓冲重试:`, error);
     return returnToBuffer(rt, monitorId, lines, readTo);
   }
   if (!row || row.status !== "running") {
     // **明确放弃**:结局已经被别人写下了。那条路径自己负责交代这一批（`finish` 把尚欠的
     // 那一批附在结束通知里),这里只留一行日志 —— 静默返回会让「放弃」和「推完了」同形。
     console.error(
-      `[ash] 哨兵 ${monitorId} 已经不是运行态（${row?.status ?? "行没了"}），这一批 ${lines.length} 行不再单独推送`,
+      `[navi] 哨兵 ${monitorId} 已经不是运行态（${row?.status ?? "行没了"}），这一批 ${lines.length} 行不再单独推送`,
     );
     return "abandoned";
   }
@@ -343,7 +343,7 @@ async function flushLocked(
   try {
     events = await pushLines(row, lines, readTo, hit);
   } catch (error) {
-    console.error(`[ash] 哨兵 ${monitorId} 这一批 ${lines.length} 行没推出去,放回缓冲重试:`, error);
+    console.error(`[navi] 哨兵 ${monitorId} 这一批 ${lines.length} 行没推出去,放回缓冲重试:`, error);
     return returnToBuffer(rt, monitorId, lines, readTo);
   }
 

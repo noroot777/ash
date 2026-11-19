@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { TaskListItem } from "@ash/shared";
-import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
+import type { TaskListItem } from "@navi/shared";
+import type { UnexecutedVerification } from "@navi/shared/workflow-policy";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 

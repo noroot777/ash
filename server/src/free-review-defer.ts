@@ -7,7 +7,7 @@
 // 形状照 `post-merge-review.ts` 的 `createPostMergeRepairTask`：同样是「一轮审查未通过
 // → 建一个 backlog 派生任务承接」，同样用 `createTasks`、同样 `originTaskId` 回链、
 // 同样在 run/round 上记下 taskId 做幂等。差别只在**开工起点怎么选**，见下面 baseOf。
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { and, eq, isNull } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -27,7 +27,7 @@ type TaskRow = typeof tasks.$inferSelect;
  * 派生任务的开工起点：**被审查的那一版代码的 commit**（`round.reviewedCommit`）。
  *
  * 三个候选里为什么是它：
- * - 分支名 `ash/xxxxxxxx`：原任务一旦验收，worktree 会被删、分支被 `git branch -d`。
+ * - 分支名 `navi/xxxxxxxx`：原任务一旦验收，worktree 会被删、分支被 `git branch -d`。
  *   这个任务是 backlog、可能几周后才起跑，那时 base 已经悬空。
  * - 缺省（跟随目标分支最新）：这几条意见是对着**那一版**代码提的，从别处开工连复现
  *   都做不到，接手的人第一件事就是怀疑报告写错了。

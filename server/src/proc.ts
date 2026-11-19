@@ -37,7 +37,7 @@ function parseStartedAt(raw: string): number | null {
 
 // ps 一次拿到启动时间和完整命令行。查不到(进程没了 / ps 不可用)一律 null,
 // 调用方按「不存在」处理 —— 宁可误判成死了(最多多做一次恢复),不能误判成活着
-// (那会让 ash 一直等一个永远不会有输出的进程)。
+// (那会让 navi 一直等一个永远不会有输出的进程)。
 export function inspectProcess(pid: number): ProcessInfo | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   const raw = inspectProcessSync(pid);
@@ -205,7 +205,7 @@ export function processUnitEvidence(
  * 手里只有「我在这一刻 spawn 了它」,还没来得及问 ps 要启动时刻。
  *
  * 用在哨兵创建协议的恢复那一侧(第 9 轮审查 F3):`spawn` 返回 pid 的那一刻先把
- * `{pid, 这一刻}` 同步写到盘上,所以就算 ash 在回填 pid 之前整个没了,重启后仍然能拿这个
+ * `{pid, 这一刻}` 同步写到盘上,所以就算 navi 在回填 pid 之前整个没了,重启后仍然能拿这个
  * 锚去认它 —— **而且是真的认代次**,不是退化成「这个号上有人」。
  *
  * `toleranceMs` 的来历:`ps -o lstart` 的精度是秒,spawn 到写盘之间还隔着几毫秒,所以 ±2 秒

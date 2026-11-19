@@ -1,7 +1,7 @@
 // 在开发机上执行「那台 Windows 上的命令」,并拿回干净的输出和退出码。
 //
-// 为什么不是 SSH:那台机器只开了两个入站端口 —— 445(SMB,要凭证)和 4317(ash 自己)。
-// 装 OpenSSH Server 要管理员提权,无人值守时点不动 UAC。所以通道只能是 ash 自己的
+// 为什么不是 SSH:那台机器只开了两个入站端口 —— 445(SMB,要凭证)和 4317(navi 自己)。
+// 装 OpenSSH Server 要管理员提权,无人值守时点不动 UAC。所以通道只能是 navi 自己的
 // 终端 API(POST /projects/:id/terminal/sessions),它在 Windows 上起的是 ConPTY + pwsh。
 //
 // 为什么输出不直接从 PTY 读:PTY 回给你的是**终端画面**,不是程序输出 —— 命令本身会被
@@ -17,10 +17,11 @@ import { networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
 import { jobPreludeLines, jobAssignLine, jobCloseLine, killTreeLines } from "./kill-tree.mjs";
 import { psq } from "./ps.mjs";
+import { LEGACY_REPO_DIR_NAMES } from "../legacy-names.mjs";
 
 const DEFAULT_HOST = process.env.WIN_REMOTE_HOST ?? "http://192.168.1.187:4317";
 
-// 对端 ash 的访问密钥。自用模式的 ash 只认本机直连和这把密钥(server/src/auth/remote-access.ts),
+// 对端 navi 的访问密钥。自用模式的 navi 只认本机直连和这把密钥(server/src/auth/remote-access.ts),
 // 而这套脚本正是从另一台机器去调它的终端 API —— 不带就是 401。每一跳都要带,所以收在这一处。
 const authHeaders = () => (process.env.WIN_REMOTE_KEY ? { authorization: `Bearer ${process.env.WIN_REMOTE_KEY}` } : {});
 
@@ -44,7 +45,7 @@ export function detectLocalAddress() {
 // 控制面单跳的兜底期限。**不存在「没有期限」的调用路径**:上一版把「带 signal」写成调用方的
 // 义务,于是漏一个调用点就等于漏一条永不返回的路 —— CLI 的 `target()` 正是那个漏网的:
 // 它在进 rexec 之前先查一次项目,对端只接连接不回包时,`doctor/sync/exec/test` 四个子命令
-// 全都停在「对端 ash」那一行不动,只能外面 kill。义务型的约定挡不住这种事,默认值可以。
+// 全都停在「对端 navi」那一行不动,只能外面 kill。义务型的约定挡不住这种事,默认值可以。
 const CONTROL_TIMEOUT = Number(process.env.WIN_REMOTE_CONTROL_TIMEOUT ?? 15_000);
 /** 一次控制面调用的期限。给不出更长命的 signal 时(CLI 的单发请求)就用它。 */
 export const controlSignal = () => AbortSignal.timeout(CONTROL_TIMEOUT);
@@ -79,7 +80,16 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
   return res.status === 204 ? null : res.json();
 }
 
-/** 找到对端 ash 里指向 ash 仓库自己的那个项目(终端会话必须挂在某个项目上)。 */
+// 本仓库检出的目录名,新名在前。改名不挪目录:那台机器上的检出还是旧名,几代都得认。
+const REPO_DIR_NAMES = ["navi", ...LEGACY_REPO_DIR_NAMES];
+const dirName = (repoPath) => (repoPath ?? "").split(/[\\/]+/).filter(Boolean).at(-1)?.toLowerCase() ?? "";
+
+/**
+ * 找到对端 navi 里指向 navi 仓库自己的那个项目(终端会话必须挂在某个项目上)。
+ *
+ * 没指定就按目录名认,而且必须**恰好认出一个**:认不出或认出好几个都拒绝、列出全部让人指定。
+ * 退到「列表第一项」等于把同步、执行搬进别人的仓库 —— 选错了不会报错,只会在错的目录里干活。
+ */
 export async function resolveProject(host = DEFAULT_HOST, signal = controlSignal()) {
   const projects = await api("/projects", { signal }, host);
   if (!projects.length) throw new Error("对端 Navi 里一个项目都没有,先在它的界面上添加 Navi 仓库");
@@ -98,8 +108,15 @@ export async function resolveProject(host = DEFAULT_HOST, signal = controlSignal
     }
     return { id: hit.id, repoPath: hit.repoPath };
   }
-  const hit = projects.find((p) => /ash/i.test(p.repoPath ?? "")) ?? projects[0];
-  return { id: hit.id, repoPath: hit.repoPath };
+  const hits = projects.filter((p) => REPO_DIR_NAMES.includes(dirName(p.repoPath)));
+  if (hits.length !== 1) {
+    throw new Error(
+      `${hits.length ? "对端 Navi 里有好几个项目像是 Navi 仓库" : "对端 Navi 里认不出哪个项目是 Navi 仓库"}`
+        + `(按目录名认:${REPO_DIR_NAMES.join(" / ")}),用 WIN_REMOTE_PROJECT=<项目 id> 指定。现有项目:\n`
+        + projects.map((p) => `  ${p.id}  ${p.repoPath ?? "(无路径)"}`).join("\n"),
+    );
+  }
+  return { id: hits[0].id, repoPath: hits[0].repoPath };
 }
 
 /** 收 Windows 回传的一次性 HTTP 服务:一个请求,收完即关。 */
@@ -187,7 +204,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
   const sink = collector(token);
 
   // deadline 从**第一次远端请求之前**开始,而且只有这一个。
-  // 原来它是在 session 建成之后才起算的,于是「对端 ash 卡死、代理只接连接不回包、
+  // 原来它是在 session 建成之后才起算的,于是「对端 navi 卡死、代理只接连接不回包、
   // 半开连接」这类**永不返回**的失败全都漏在保护之外:查项目、建会话、两次 /input 用的都是
   // 裸 fetch,调用者传的 timeout 一点约束力都没有,进程能挂到底层 TCP 自己想通为止。
   // 上一轮只修了「fetch 立刻抛错之后要清理」,没修「fetch 根本不返回」。

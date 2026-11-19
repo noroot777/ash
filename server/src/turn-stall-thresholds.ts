@@ -2,7 +2,7 @@
 // 那道解析闸。判据与动手住在 ./turn-stall.ts;拆出来是因为那份文件贴着 700 行上限。
 
 /** 配过一次的坏值只报一次,别让看门狗自己变成刷屏源。 */
-import { readEnv, type NaviEnvName } from "@ash/shared/env-names";
+import { readEnv, type NaviEnvName } from "@navi/shared/env-names";
 const badEnvReported = new Set<string>();
 
 /**
@@ -19,7 +19,7 @@ function num(name: NaviEnvName, fallback: number): number {
   if (Number.isFinite(value)) return value;
   if (!badEnvReported.has(name)) {
     badEnvReported.add(name);
-    console.warn(`[ash] ${name}=${JSON.stringify(raw)} 不是数字,这一档按默认值 ${fallback} 走`);
+    console.warn(`[navi] ${name}=${JSON.stringify(raw)} 不是数字,这一档按默认值 ${fallback} 走`);
   }
   return fallback;
 }

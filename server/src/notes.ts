@@ -1,4 +1,4 @@
-import type { Note, NoteTaskLink, TaskStatus } from "@ash/shared";
+import type { Note, NoteTaskLink, TaskStatus } from "@navi/shared";
 import { desc, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";

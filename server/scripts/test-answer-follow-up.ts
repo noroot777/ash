@@ -10,19 +10,19 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { ScheduledMessage } from "@ash/shared";
+import type { ScheduledMessage } from "@navi/shared";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-answer-follow-up-"));
+const root = mkdtempSync(join(tmpdir(), "navi-answer-follow-up-"));
 const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_TEST_LEAD_LOG = leadLog;
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
-process.env.ASH_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 
 const [{ db, ensureSchema }, schema, pending, runs, runRoutes, { bus }, legacy, notes, transcript, scheduler, status] = await Promise.all([
   import("../src/db/index.js"),

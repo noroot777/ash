@@ -7,13 +7,13 @@
 //
 // 跑法：npm -w web run test:workflow-rail
 //
-// 注意这里**不 import @ash/shared/workflow-presets**：它对 "./workflow.js" 是运行时
+// 注意这里**不 import @navi/shared/workflow-presets**：它对 "./workflow.js" 是运行时
 // import，而 node --experimental-strip-types 不把 .js 说明符映射回 .ts（同 AGENTS.md 里
 // 那条 shared 铁律，server 侧用 tsx 所以碰不到）。线在这儿自己拼，反正 presets 的内容
 // 由 server 的 test:workflow 管。
 import assert from "node:assert/strict";
-import { STAGE_LABELS, TASK_STATUS_LABELS } from "@ash/shared";
-import { STEP_KINDS, STEP_RUNTIME, makeStep } from "@ash/shared/workflow";
+import { STAGE_LABELS, TASK_STATUS_LABELS } from "@navi/shared";
+import { STEP_KINDS, STEP_RUNTIME, makeStep } from "@navi/shared/workflow";
 import { railStops, resolveCursor, stepStatusLabel, verifyStationAtCursor, workflowSummary } from "../src/workflow/workflowModel.ts";
 
 const line = (...kinds) => ({

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, tasks, schema, runs, until, isPidAlive, killTree, teardown } from "./monitors-fixture.js";
 import { setupRegressionReviews } from "./regression-review-fixture.js";
 
@@ -45,8 +45,8 @@ try {
       .where(eq(tasks.id, review.taskId));
     if (mode === "accepted-tail") assert.equal((await review.stage()).status, 200);
     else assert.equal((await api.request(`/tasks/${review.taskId}/stage`, { method: "POST",
-      headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${review.ownerTaskId}`,
-        "x-ash-source-task-id": review.ownerTaskId }, body: JSON.stringify({ stage: "verify_failed" }) })).status, 200);
+      headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${review.ownerTaskId}`,
+        "x-navi-source-task-id": review.ownerTaskId }, body: JSON.stringify({ stage: "verify_failed" }) })).status, 200);
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, review.taskId));
     if (mode === "accepted-tail") runs.releaseTurn(review.ownerTaskId);
     await review.settle(true);

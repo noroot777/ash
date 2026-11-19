@@ -7,9 +7,9 @@ import type {
   Group,
   LlmProvider,
   LlmProtocol,
-} from "@ash/shared";
-import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
-import { isSearchQueryReady, isSearchSort } from "@ash/shared/search";
+} from "@navi/shared";
+import type { SearchStreamLine, SearchSort } from "@navi/shared/search";
+import { isSearchQueryReady, isSearchSort } from "@navi/shared/search";
 import { db } from "./db/index.js";
 import { projects, groups, agents, llmProviders } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -21,7 +21,7 @@ import { LOCAL_ONLY } from "./local-only.js";
 import { INSTANCE_ID } from "./instance-binding.js";
 import { windowPort } from "./window-port.js";
 import { isLocalDirect } from "./auth/remote-access.js";
-import { mountHostAshMcpRoutes } from "./host-ash-mcp-routes.js";
+import { mountHostNaviMcpRoutes } from "./host-navi-mcp-routes.js";
 import { mountQueueRoutes } from "./queues.js";
 import { searchAll } from "./search.js";
 import { repoKey } from "./git.js";
@@ -99,7 +99,7 @@ mountProjectRoutes(api);
 mountProjectCloneRoutes(api);
 mountUploadRoutes(api);
 mountPageAnnotationRoutes(api);
-mountHostAshMcpRoutes(api);
+mountHostNaviMcpRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 // `pid` 是给 scripts/restart.mjs 认人用的:它重启完要确认「端口上应答的是我刚起的
@@ -122,7 +122,7 @@ api.get("/health", (c) => c.json({
   // 飞书长连接连没连上（只这一档，不带应用标识与错误原文：这个端点免登录）。
   feishu: feishuHealthPublic(),
   // 「端口上这份是谁」：数据根和代码根。mac app 靠它认出 :4317 上是不是它自己起的那份（别的
-  // ash —— 比如仓库里的开发实例 —— 占着时不能悄悄连上去当成自己的）。路径只答本机直连：
+  // navi —— 比如仓库里的开发实例 —— 占着时不能悄悄连上去当成自己的）。路径只答本机直连：
   // 这个端点免登录，别的机器不该从这里读到这台机器的目录结构。
   // `id` 是这个进程的实例号：认过人的窗口拿它给页面请求打上记号，换了人的那一份据此拒收
   // （instance-binding.ts）。
@@ -138,7 +138,7 @@ api.get("/health", (c) => c.json({
 // 打这条的是**宿主机上的运维者**,多人模式下他手里没有任何网页登录态,所以闸把它按
 // 「路径形状放行、凭证在路由内校验」处理(同 provider relay 的先例,见
 // auth/middleware.ts `HOST_MAINTENANCE_PATHS`)。凭证是单实例锁文件里那串 token:
-// 文件 0600,读得到它 = 读得到 ash 数据目录 = 本来就能直接读库,所以这里回任务标题
+// 文件 0600,读得到它 = 读得到 navi 数据目录 = 本来就能直接读库,所以这里回任务标题
 // 不额外扩大暴露面。反过来,**登录用户照常能打**:前端也会用这条。
 //
 // 匿名那一档两种模式都要校验:自用模式下匿名 = 别的机器没带访问密钥就来打(本机跑
@@ -371,7 +371,7 @@ mountProjectGitRoutes(api);
 mountGitWorkbenchRoutes(api);
 // 任务分支相对合入目标的只读 diff:整份 + 单文件(从 task-accept.ts 拆出,它管的是验收本身)。
 mountTaskDiffRoutes(api);
-// ── 供应商 (relay, system-level) — 挂给执行器用,ash 不直连它跑推理 ────────
+// ── 供应商 (relay, system-level) — 挂给执行器用,navi 不直连它跑推理 ────────
 const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   id: r.id,
   name: r.name,
@@ -551,7 +551,7 @@ mountFreeWorkflowRoutes(api);
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>
   streamSSE(c, async (stream) => {
-    // 可见性过滤(§十二 的验收基准):不做的话,同一台 ash 上另一个人的任务标题、
+    // 可见性过滤(§十二 的验收基准):不做的话,同一台 navi 上另一个人的任务标题、
     // 提问原文、agent 正文会实时推到这条连接上 —— 界面看不见,Network 面板一条不落。
     const filter = makeEventFilter(actorOf(c));
     await filter.refresh();

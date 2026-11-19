@@ -1,5 +1,5 @@
-import type { SkillEntry, Task } from "@ash/shared";
-import type { CliCommand } from "@ash/shared/cli-commands";
+import type { SkillEntry, Task } from "@navi/shared";
+import type { CliCommand } from "@navi/shared/cli-commands";
 
 /**
  * 回复框此刻接得住什么。分两层，各有各的去处：

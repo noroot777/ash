@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const HOME = "/srv/ash-root/xiaocai";
+const HOME = "/srv/navi-root/xiaocai";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const web = await startWebServer();
 

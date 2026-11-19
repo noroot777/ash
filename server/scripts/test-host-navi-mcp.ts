@@ -1,12 +1,12 @@
-// 独立 app 首启「替本机 CLI 接好 ash MCP」(mcp-registry/host-setup.ts)：
+// 独立 app 首启「替本机 CLI 接好 navi MCP」(mcp-registry/host-setup.ts)：
 //  · 只碰 PATH 上装了的那几家，没装的配置目录一个字节都不写；
-//  · 没登记的补一条指向这份 ash 的（added），再问一次就是 ours；
+//  · 没登记的补一条指向这份 navi 的（added），再问一次就是 ours；
 //  · 已有登记指向别处（别的 MCP 入口 / 别的端口）一律不改，原样交回「现在指向哪、该改成什么」；
 //  · pointsAt 的判据：node 真正执行的入口、命令、规范化后的完整地址三样都对上才算指向这里。
 //
 // 每个场景一个子进程、一个临时 HOME：homedir() 认 HOME，碰不到用户的真 ~/.claude.json。
 //
-// Run: npm -w server run test:host-ash-mcp
+// Run: npm -w server run test:host-navi-mcp
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
@@ -19,9 +19,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 // realpath：macOS 的临时目录是条软链，而模块自己的位置（代码根由它算）是解析过的那一个。
-const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-host-mcp-")));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "navi-host-mcp-")));
 
-// 被测代码认的「这份 ash 的 MCP 入口」是 `<代码根>/mcp/dist/index.js`，一份构建产物：验收门禁的快照里
+// 被测代码认的「这份 navi 的 MCP 入口」是 `<代码根>/mcp/dist/index.js`，一份构建产物：验收门禁的快照里
 // 没有它，开发机上有没有也看人。所以不拿真仓库当代码根，另摆一份：server/src 抄过去（代码根是按源文件
 // 自己的位置算的，软链会被解析回原处）、依赖用链借、入口放一个占位文件 —— 补接只认它在不在，不跑它。
 const codeRoot = join(root, "code");
@@ -42,7 +42,7 @@ writeFileSync(mcpEntry, "// 占位：测试只要这个入口存在\n");
 function run(home: string, bin: string, body: string): Record<string, unknown> {
   const script = `${body}\nconsole.log("PROBE=" + JSON.stringify(out));`;
   const env: Record<string, string> = {
-    HOME: home, PATH: `${bin}:/usr/bin:/bin`, ASH_DATA_DIR: join(home, "data"), ASH_DB: join(home, "data", "ash.db"),
+    HOME: home, PATH: `${bin}:/usr/bin:/bin`, NAVI_DATA_DIR: join(home, "data"), NAVI_DB: join(home, "data", "ash.db"),
   };
   const stdout = execFileSync(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], { env, encoding: "utf8" });
   const line = stdout.split("\n").find((l) => l.startsWith("PROBE="));
@@ -53,13 +53,13 @@ function run(home: string, bin: string, body: string): Record<string, unknown> {
 // resolveBin 除了 PATH 还会找 Homebrew、~/.local/bin 这些常见位置，所以开发机上真装着的 CLI 也会
 // 被认出来（它们的配置照样落在临时 HOME 里）。断言只钉 claude 这一家，其余按「装没装」对账。
 const setUp = `
-const { setUpHostAshMcp } = await import(${JSON.stringify(new URL("mcp-registry/host-setup.js", src).href)});
-const { AGENT_TYPES } = await import("@ash/shared");
+const { setUpHostNaviMcp } = await import(${JSON.stringify(new URL("mcp-registry/host-setup.js", src).href)});
+const { AGENT_TYPES } = await import("@navi/shared");
 const { resolveBin } = await import(${JSON.stringify(new URL("executors/bin-resolve.js", src).href)});
 const { cliSpec } = await import(${JSON.stringify(new URL("executors/catalog/index.js", src).href)});
 const { hostCliConfigFile } = await import(${JSON.stringify(new URL("auth/user-cli-mcp.js", src).href)});
 const { existsSync } = await import("node:fs");
-const hosts = await setUpHostAshMcp();
+const hosts = await setUpHostNaviMcp();
 const reported = new Set(hosts.map((h) => h.agentType));
 const untouched = AGENT_TYPES.filter((t) => !cliSpec(t).bins.some((b) => resolveBin(b)))
   .every((t) => { const f = hostCliConfigFile(t); return !f || !existsSync(f); });
@@ -78,7 +78,7 @@ try {
   chmodSync(join(bin, "claude"), 0o755);
   const claudeJson = join(home, ".claude.json");
 
-  // ── 没登记：补一条指向这份 ash，只动装了的那家 ──
+  // ── 没登记：补一条指向这份 navi，只动装了的那家 ──
   let result = run(home, bin, setUp) as unknown as SetUp;
   assert.equal(result.claude?.state, "added", JSON.stringify(result));
   assert.ok(result.onlyInstalled, "只问装了的那几家");
@@ -94,13 +94,13 @@ try {
   // ── 指向别处：不改，原样交回 ──
   const foreign = JSON.stringify({
     keep: "user stuff",
-    mcpServers: { ash: { type: "stdio", command: "node", args: ["/Users/someone/code/ash/mcp/dist/index.js"], env: { ASH_URL: "http://127.0.0.1:4317" } } },
+    mcpServers: { navi: { type: "stdio", command: "node", args: ["/Users/someone/code/navi/mcp/dist/index.js"], env: { NAVI_URL: "http://127.0.0.1:4317" } } },
   }, null, 2);
   writeFileSync(claudeJson, foreign);
   result = run(home, bin, setUp) as unknown as SetUp;
   const claude = result.claude!;
   assert.equal(claude.state, "elsewhere");
-  assert.ok(claude.current!.includes("/Users/someone/code/ash/mcp/dist/index.js"), claude.current);
+  assert.ok(claude.current!.includes("/Users/someone/code/navi/mcp/dist/index.js"), claude.current);
   assert.ok(claude.wanted!.includes(new URL(mcpEntry).pathname), claude.wanted);
   assert.equal(claude.file, claudeJson);
   assert.equal(readFileSync(claudeJson, "utf8"), foreign, "指向别处的登记一个字节都不许改");
@@ -111,22 +111,22 @@ const { pointsAt } = await import(${JSON.stringify(new URL("mcp-registry/host-se
 const wanted = { command: "/app/node", args: [${JSON.stringify(new URL(mcpEntry).pathname)}], env: { NAVI_URL: "http://127.0.0.1:4317" } };
 const entry = wanted.args[0];
 const out = {
-  same: pointsAt({ command: "/app/node", args: [entry], ashUrl: "http://localhost:4317" }, wanted),
-  defaultUrl: pointsAt({ command: "/app/node", args: [entry], ashUrl: null }, wanted),
-  otherPort: pointsAt({ command: "/app/node", args: [entry], ashUrl: "http://127.0.0.1:14317" }, wanted),
-  otherNode: pointsAt({ command: "node", args: [entry], ashUrl: null }, wanted),
-  otherEntry: pointsAt({ command: "/app/node", args: ["/elsewhere/mcp/dist/index.js"], ashUrl: null }, wanted),
-  bareNode: pointsAt({ command: "node", args: [entry], ashUrl: null }, { ...wanted, command: "node" }),
-  withOptions: pointsAt({ command: "/app/node", args: ["--import", "/x/hook.mjs", "--no-warnings", entry], ashUrl: "http://[::1]:4317/" }, wanted),
-  otherHost: pointsAt({ command: "/app/node", args: [entry], ashUrl: "http://192.0.2.1:4317" }, wanted),
-  otherScheme: pointsAt({ command: "/app/node", args: [entry], ashUrl: "https://127.0.0.1:4317" }, wanted),
-  otherPath: pointsAt({ command: "/app/node", args: [entry], ashUrl: "http://127.0.0.1:4317/another-ash" }, wanted),
-  sameHostName: pointsAt({ command: "/app/node", args: [entry], ashUrl: "http://remote.example:4317" },
+  same: pointsAt({ command: "/app/node", args: [entry], naviUrl: "http://localhost:4317" }, wanted),
+  defaultUrl: pointsAt({ command: "/app/node", args: [entry], naviUrl: null }, wanted),
+  otherPort: pointsAt({ command: "/app/node", args: [entry], naviUrl: "http://127.0.0.1:14317" }, wanted),
+  otherNode: pointsAt({ command: "node", args: [entry], naviUrl: null }, wanted),
+  otherEntry: pointsAt({ command: "/app/node", args: ["/elsewhere/mcp/dist/index.js"], naviUrl: null }, wanted),
+  bareNode: pointsAt({ command: "node", args: [entry], naviUrl: null }, { ...wanted, command: "node" }),
+  withOptions: pointsAt({ command: "/app/node", args: ["--import", "/x/hook.mjs", "--no-warnings", entry], naviUrl: "http://[::1]:4317/" }, wanted),
+  otherHost: pointsAt({ command: "/app/node", args: [entry], naviUrl: "http://192.0.2.1:4317" }, wanted),
+  otherScheme: pointsAt({ command: "/app/node", args: [entry], naviUrl: "https://127.0.0.1:4317" }, wanted),
+  otherPath: pointsAt({ command: "/app/node", args: [entry], naviUrl: "http://127.0.0.1:4317/another-navi" }, wanted),
+  sameHostName: pointsAt({ command: "/app/node", args: [entry], naviUrl: "http://remote.example:4317" },
     { ...wanted, env: { NAVI_URL: "http://REMOTE.example:4317/" } }),
-  evalMode: pointsAt({ command: "/app/node", args: ["--eval", "1", entry], ashUrl: null }, wanted),
-  entryAsArgument: pointsAt({ command: "/app/node", args: ["/elsewhere/proxy.js", entry], ashUrl: null }, wanted),
-  entryAfterValueOption: pointsAt({ command: "/app/node", args: ["--require", entry, "/elsewhere/index.js"], ashUrl: null }, wanted),
-  garbageUrl: pointsAt({ command: "/app/node", args: [entry], ashUrl: "not a url" }, wanted),
+  evalMode: pointsAt({ command: "/app/node", args: ["--eval", "1", entry], naviUrl: null }, wanted),
+  entryAsArgument: pointsAt({ command: "/app/node", args: ["/elsewhere/proxy.js", entry], naviUrl: null }, wanted),
+  entryAfterValueOption: pointsAt({ command: "/app/node", args: ["--require", entry, "/elsewhere/index.js"], naviUrl: null }, wanted),
+  garbageUrl: pointsAt({ command: "/app/node", args: [entry], naviUrl: "not a url" }, wanted),
 };`);
   assert.deepEqual(points, {
     same: true, defaultUrl: true, otherPort: false, otherNode: false, otherEntry: false, bareNode: true,
@@ -134,7 +134,7 @@ const out = {
     evalMode: false, entryAsArgument: false, entryAfterValueOption: false, garbageUrl: false,
   });
 
-  console.log("test-host-ash-mcp: ok");
+  console.log("test-host-navi-mcp: ok");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

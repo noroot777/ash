@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { TaskListItem, TaskWorkspaceLeftover } from "@ash/shared";
+import type { TaskListItem, TaskWorkspaceLeftover } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { CheckAction, CheckRow, RetryAction } from "./CheckRow.tsx";

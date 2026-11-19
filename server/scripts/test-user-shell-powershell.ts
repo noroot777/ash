@@ -10,7 +10,7 @@ import { powerShellCommandCases } from "./project-command-powershell-cases.js";
 if (!IS_WINDOWS) {
   console.log("PowerShell file semantics skipped: requires Windows");
 } else {
-  const root = mkdtempSync(join(tmpdir(), "ash-user-shell-powershell-"));
+  const root = mkdtempSync(join(tmpdir(), "navi-user-shell-powershell-"));
   const directory = join(root, "scripts with spaces");
   mkdirSync(directory);
   const scriptPath = join(directory, "case.ps1");

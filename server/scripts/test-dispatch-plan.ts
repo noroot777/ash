@@ -3,7 +3,7 @@
 //   · 同一时刻只等用户一样东西：有提问在等时摆不出来，摆了单之后也问不出来，两边的拒绝说得清；
 //     同一回合里同时发出提问和派活单，只有一个写得进去，另一个明说被谁占了（不是两边都说成功）；
 //   · 「发回去改」就是对那一问的普通答复：一条任务都不建，智能体收到的是那句话（带一句「没有派出」）；
-//   · 「派出去」由 ash 照卡上此刻的样子建（换的人、去掉的条、一个接一个 / 同时、顺序），挂在这条任务名下；
+//   · 「派出去」由 navi 照卡上此刻的样子建（换的人、去掉的条、一个接一个 / 同时、顺序），挂在这条任务名下；
 //     建任务的不是智能体（来源记的是用户），续上会话的那段答复里有建好的任务号、标题、交给了谁；
 //   · 派过一次的单子再按一次、拿着旧单子的号来按，都不再建；
 //   · 派出中途写库失败（队列那一笔）：整笔回滚，一条任务、一个分组都不留，单子原样还在；再按还是那样，修好再按只建一批；
@@ -16,26 +16,26 @@
 //
 // 跑的是 PATH 上的假 CLI（scheduled-messages-fixture.ts），不起真实 CLI：claude 是会应答的那份，
 // 「换人」那几条交给的 codex / gemini 是一起就退的垫片——它们只用来看建出来的任务照不照卡上那一格。
-// 跑：npm -w @ash/server run test:dispatch-plan
+// 跑：npm -w @navi/server run test:dispatch-plan
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { asc, eq, inArray, like, sql } from "drizzle-orm";
 import { Hono } from "hono";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installExitingClis, installFakeClaude } from "./scheduled-messages-fixture.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-dispatch-plan-"));
+const root = mkdtempSync(join(tmpdir(), "navi-dispatch-plan-"));
 const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_TEST_LEAD_LOG = leadLog;
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
-process.env.ASH_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 await installExitingClis(fakeBin, ["codex", "gemini"]);
 
 const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan, launch] = await Promise.all([
@@ -92,7 +92,7 @@ let turn = 0;
 const inTurn = async (id: string) => {
   turn += 1;
   await db.update(tasks).set({ status: "running", activeTurnToken: `turn-${turn}`, activeDirectionToken: `dir-${turn}` }).where(eq(tasks.id, id));
-  return { "x-ash-client": "mcp", "x-ash-source-task-id": id, "x-ash-turn-token": `turn-${turn}`, "x-ash-direction-token": `dir-${turn}` };
+  return { "x-navi-client": "mcp", "x-navi-source-task-id": id, "x-navi-turn-token": `turn-${turn}`, "x-navi-direction-token": `dir-${turn}` };
 };
 /** 那一回合结束：照真结算的判据落位（提问 / 派活单在等就是 paused）。 */
 const endTurn = async (id: string) => {
@@ -219,7 +219,7 @@ try {
   assert.deepEqual(kids.map((kid) => kid.agentType), ["codex", "gemini"], "交给的正是卡上那一格");
   assert.deepEqual(kids.map((kid) => kid.model), ["gpt-5.6", null]);
   assert.ok(kids[0]!.body.includes("完整说明 A") && kids[1]!.body.includes("完整说明 C"), "正文是单子上的完整说明");
-  assert.ok(kids.every((kid) => JSON.parse(kid.creationOrigin ?? "{}").kind === "user"), "建任务的是 ash 照用户按下的那一下建的，不是智能体又调了一次工具");
+  assert.ok(kids.every((kid) => JSON.parse(kid.creationOrigin ?? "{}").kind === "user"), "建任务的是 navi 照用户按下的那一下建的，不是智能体又调了一次工具");
   const group = (await db.select().from(groups).where(eq(groups.id, kids[0]!.groupId!))).at(0)!;
   assert.equal(group.mode, "parallel", "同时");
   assert.equal((await db.select().from(queueItems).where(inArray(queueItems.taskId, kids.map((kid) => kid.id)))).length, 0, "同时：不排队");

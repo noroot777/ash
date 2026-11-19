@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { canStopMonitor, type TaskMonitor } from "@ash/shared/monitor";
+import { canStopMonitor, type TaskMonitor } from "@navi/shared/monitor";
 import { api } from "@/lib/api";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
 /**
  * 哨兵条（手机端）。只做两件事：看见还有谁在盯，以及把跑飞了的那个停掉。
  *
- * 为什么手机上也要有：哨兵的进程是故意脱离 ash 的，它的每一条事件都会唤醒任务跑一轮
+ * 为什么手机上也要有：哨兵的进程是故意脱离 navi 的，它的每一条事件都会唤醒任务跑一轮
  * 真回合（花真钱）。人不在电脑前的时候，恰恰最需要一个「叫停」的入口——否则只能等回到
  * 桌面前才按得到，中间这段时间它一直在烧。
  *
  * 起哨兵没有手动入口：那是 agent 在自己回合里做的决定。
  *
- * **两种来源要分开画**（`kind`，语义见 shared/src/monitor.ts）：列表 API 同时返回 ash 自己
- * 起的和 claude 内置 Monitor 的只读投影。后者 ash 停不掉（进程在智能体自己的进程树里），
+ * **两种来源要分开画**（`kind`，语义见 shared/src/monitor.ts）：列表 API 同时返回 navi 自己
+ * 起的和 claude 内置 Monitor 的只读投影。后者 navi 停不掉（进程在智能体自己的进程树里），
  * 事件数也数不到（恒为 0）。不分流的话，手机上会给一张投影卡画出停止按钮和「0 条」——
  * 按下去只会弹一句「停不掉」，而那条哨兵照跑不误。**别展示一个注定失败的操作。**
  *
@@ -150,7 +150,7 @@ export function MonitorStrip({ taskId, visible }: { taskId: string; visible: boo
               </>
             )
             : (
-              // 只读投影：标明来源，不画事件数（ash 数不到）、不画停止按钮（ash 停不掉）。
+              // 只读投影：标明来源，不画事件数（navi 数不到）、不画停止按钮（navi 停不掉）。
               <Text style={{ color: theme.faint, fontSize: 11 }}>智能体自带 · 只能看</Text>
             )}
         </View>

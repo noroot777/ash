@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Sliders, X } from "@phosphor-icons/react";
-import type { AgentType, LlmProvider } from "@ash/shared";
+import type { AgentType, LlmProvider } from "@navi/shared";
 import {
   cliConfigOverrideConflict,
   cliConfigOverrideHints,
   ineffectiveCliConfigOverrides,
-} from "@ash/shared/cli-overrides";
-import { clampedCompactWindow, claudeModelWindow } from "@ash/shared/context-1m";
+} from "@navi/shared/cli-overrides";
+import { clampedCompactWindow, claudeModelWindow } from "@navi/shared/context-1m";
 import { Context1mNotice } from "../components/Context1mNotice.tsx";
 import { Button } from "../components/ui.tsx";
 import { fmtOverrideValue, useCliOverrideDraft } from "../lib/cliOverrideDraft.ts";
@@ -14,7 +14,7 @@ import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { useCliHostEnv } from "../lib/useCliHostEnv.ts";
 
-// 「ash 替你写进 CLI 的配置」的编辑入口。这一档配置跟旁边那些(模型、档位、
+// 「navi 替你写进 CLI 的配置」的编辑入口。这一档配置跟旁边那些(模型、档位、
 // 额外参数)有个本质区别:它**盖掉的是用户自己配置文件里的值**。所以这里的重点
 // 不是表单好不好填,而是那行 `shadows` —— 不写明白「这一项盖掉了 xxx」,用户在
 // settings.json 里改了不生效,只会以为 CLI 坏了。

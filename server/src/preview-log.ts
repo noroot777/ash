@@ -22,9 +22,9 @@ import { PREVIEW_API_HOST_RE } from "./log-signals.js";
 /**
  * 提示里给出的命令**也是要被粘进 shell 执行的**，所以路径一律按方言引好。
  *
- * 这不是洁癖：`/tmp/ash review path/front app` 这种带空格的合法路径，不引就是
+ * 这不是洁癖：`/tmp/navi review path/front app` 这种带空格的合法路径，不引就是
  * `cd: too many arguments`；带 `$`、`&`、`;` 的还会改变命令语义。生成的预览命令早就走
- * preview-shell.ts 引用了（那儿有整段说明），诊断建议是同一类东西 —— 一样是 ash 写给
+ * preview-shell.ts 引用了（那儿有整段说明），诊断建议是同一类东西 —— 一样是 navi 写给
  * shell 的字 —— 却漏在了外面。
  */
 const POSIX = previewShell("linux");
@@ -107,10 +107,10 @@ export function portHint(port: number | null): string {
  * 命令是用户的，他有权让服务听一个固定端口。
  */
 export function lentPortIgnoredHint(lent: number, actual: number): string {
-  return `[ash] 注意：这个服务起在 ${actual}，不是 Navi 借给它的 ${lent}。\n`
-    + "[ash] 预览这次能接上（照日志里印的地址接的），但端口是命令自己写死的：同一个项目再开一份"
+  return `[navi] 注意：这个服务起在 ${actual}，不是 Navi 借给它的 ${lent}。\n`
+    + "[navi] 预览这次能接上（照日志里印的地址接的），但端口是命令自己写死的：同一个项目再开一份"
     + "预览、或者你本机已经有一份在跑，两边就会抢同一个端口。\n"
-    + "[ash] 把启动命令改成认 Navi 借的那个端口即可，例如 `npm run dev -- --port $PORT`"
+    + "[navi] 把启动命令改成认 Navi 借的那个端口即可，例如 `npm run dev -- --port $PORT`"
     + "（Windows 上写 `%PORT%`）；服务自己读 PORT 环境变量的（Next / Nest / Express / Spring Boot / Go…）"
     + "则不用改命令，检查一下它有没有被配置文件里写死的端口盖掉。\n";
 }
@@ -179,7 +179,7 @@ const MISSING_MODULE_LINES = [
 ];
 
 /**
- * ash **会**替他备依赖，但备在自己的地盘上：`data/deps/<内容哈希>`，只读项目里的
+ * navi **会**替他备依赖，但备在自己的地盘上：`data/deps/<内容哈希>`，只读项目里的
  * package.json 和锁文件，用户的检出一个字节都不会被写（怎么备见 preview-deps.ts 顶部）。
  * 走到这个函数说明那一步没成 —— 没网、私有源没凭据、workspaces 装不出正确的树，或者
  * 用户的命令压根不是这么个跑法。
@@ -204,8 +204,8 @@ function nodeModulesHint(
   const details = tried.map((one) => `· \`${one.rel}\`：${one.detail}`).join("\n")
     || "· 这条命令没找到要备依赖的 node 包目录";
   // 「试了没成」和「压根不会去做」得说成两句话。后者是这个任务**没开 worktree** ——
-  // 工作区就是用户自己的检出，ash 一条软链都不会往里挂（见 preview-deps.ts 的 ashWorktree），
-  // 那时再说一句「ash 会自己备一份、这次没成」是误导：他会去等一个永远不会发生的自动补救。
+  // 工作区就是用户自己的检出，navi 一条软链都不会往里挂（见 preview-deps.ts 的 naviWorktree），
+  // 那时再说一句「navi 会自己备一份、这次没成」是误导：他会去等一个永远不会发生的自动补救。
   const blocked = tried.length > 0 && tried.every((one) => one.blocked === "workspace");
   const head = blocked
     ? `${what} —— 这个任务直接跑在项目检出里（没有开 worktree）。\n`
@@ -393,13 +393,13 @@ function announcedPort(log: string, skip: ReadonlySet<number>): number | null {
  * `lent` 这个标记还兼着第二个用处，见 preview.ts 里撞车判定的那个例外。
  *
  * `excluded` 是「**按定义就不可能是预览本尊**」的那些端口，两类：
- * ① ash 借给**配角**的那几个（`$PORT2…`，见 preview.ts 的 portEnv）——一条同时起前后端的
+ * ① navi 借给**配角**的那几个（`$PORT2…`，见 preview.ts 的 portEnv）——一条同时起前后端的
  *    命令里，后端多半比前端先起来并印一句「Tomcat started on port 35725」，不排除的话预览
  *    就会稳定地指到后端上：前端还在编译，用户已经被领到一个返回 JSON 的地址前面了；
- * ② **ash 自己监听的那个端口**——预览的日志里出现它只有一种可能，就是命令在说「我的 /api
- *    打到 ash 那边」（scripts/dev.mjs 的 frontend 档正是这么印的）。认了它，用户点开预览
- *    看到的是 ash 本尊，而代理还得自己转给自己。
- * 两类都不靠猜：端口是 ash 自己借出去 / 自己绑上的，谁拿了它一清二楚。
+ * ② **navi 自己监听的那个端口**——预览的日志里出现它只有一种可能，就是命令在说「我的 /api
+ *    打到 navi 那边」（scripts/dev.mjs 的 frontend 档正是这么印的）。认了它，用户点开预览
+ *    看到的是 navi 本尊，而代理还得自己转给自己。
+ * 两类都不靠猜：端口是 navi 自己借出去 / 自己绑上的，谁拿了它一清二楚。
  *
  * 日志里一个地址都没有时，退而求其次认「起在某个端口」的自述（见 announcedPort）——
  * 非 Node 的服务常常只说端口不说地址。
@@ -436,13 +436,13 @@ export function pickPreviewUrl(
 }
 
 /**
- * 被预览的服务自述「我的 `/api` 打到那台 ash 上」时说的那个端口；没说就是 null。
+ * 被预览的服务自述「我的 `/api` 打到那台 navi 上」时说的那个端口；没说就是 null。
  *
- * 这句话是**唯一**能让反代把 `/api` 那一跳接回本机 ash、并替用户带上登录态的凭据
+ * 这句话是**唯一**能让反代把 `/api` 那一跳接回本机 navi、并替用户带上登录态的凭据
  * （缘由和三个前提在 preview-access.ts 顶部）。所以它必须是被预览的服务**自己说的**：
- * ash 递过去的 `NAVI_PREVIEW_MODE=frontend` 只表示「我们希望你只起前端」，任意项目脚本
+ * navi 递过去的 `NAVI_PREVIEW_MODE=frontend` 只表示「我们希望你只起前端」，任意项目脚本
  * 都可以不理它——自由工作流对自定义整栈脚本和多服务配置一律写死这个值。拿它当拓扑证据，
- * 「前端 + 分支后端」那种预览的 `/api` 就会被静默改接到正在用的主 ash 上：用户以为在验
+ * 「前端 + 分支后端」那种预览的 `/api` 就会被静默改接到正在用的主 navi 上：用户以为在验
  * 分支后端，实际是拿自己的身份读写主库（第 2 轮审查 P1）。
  *
  * 只认回环主机名：反代无论如何只会拨回环，写着别处地址的自述对不上它将要做的事。

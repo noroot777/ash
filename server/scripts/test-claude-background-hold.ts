@@ -4,7 +4,7 @@
 // test-claude-reattach-background.ts。从 test-native-steer.ts 拆出来(那份逼近 700 行)。
 import "./isolated-data.js";
 import assert from "node:assert/strict";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { singleRunFromResident } from "../src/executors/claude.js";
 import type { ResidentHandle } from "../src/executors/types.js";
 
@@ -74,7 +74,7 @@ const expiryResident: ResidentHandle = {
   kill: () => { expiryCalls.push("kill"); expiryEvents.push({ kind: "done", exitStatus: 0 }); expiryEvents.end(); },
   cleanup: async () => ({ kind: "empty" } as const),
 };
-// 收台定时器 unref 了(不替 ash 拖住退出),测试进程里得另有东西撑着事件循环。
+// 收台定时器 unref 了(不替 navi 拖住退出),测试进程里得另有东西撑着事件循环。
 const keepAlive = setInterval(() => {}, 1000);
 const expiry = singleRunFromResident(expiryResident, undefined, 30);
 const expiryIterator = expiry.events[Symbol.asyncIterator]();

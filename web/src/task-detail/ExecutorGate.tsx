@@ -14,8 +14,8 @@
 // 对话框活在 App 上,不跟着调用方一起卸载。
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 // 运行时值只能走子路径(index.ts 只转发类型 —— 服务端直跑 .ts 源码)。
-import type { ExecutorDowngradeItem } from "@ash/shared";
-import { EXECUTOR_SLOT_LABELS } from "@ash/shared/multiuser";
+import type { ExecutorDowngradeItem } from "@navi/shared";
+import { EXECUTOR_SLOT_LABELS } from "@navi/shared/multiuser";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 

@@ -1,10 +1,10 @@
 {
-  "name": "@ash/mcp",
+  "name": "@navi/mcp",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "ash-mcp": "./dist/index.js"
+    "navi-mcp": "./dist/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -14,8 +14,8 @@
     "test:read-transcript": "npm run build && node scripts/test-read-transcript.mjs"
   },
   "dependencies": {
-    "@ash/shared": "*",
     "@modelcontextprotocol/sdk": "^1.13.0",
+    "@navi/shared": "*",
     "zod": "^3.23.8"
   },
   "devDependencies": {

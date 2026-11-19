@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
+import type { ProjectView, ScheduledMessage, Task, TaskListItem } from "@navi/shared";
 import type { ScmOverview } from "../../src/lib/api.ts";
 import { ScheduledMessageTray } from "../../src/components/ScheduledMessageTray.tsx";
 import { WorkspaceCheck } from "../../src/acceptance/WorkspaceCheck.tsx";

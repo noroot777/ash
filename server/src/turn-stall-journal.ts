@@ -42,8 +42,8 @@
 import {
   closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
-import type { ModelFailure } from "@ash/shared";
-import { resolveAshDbFile } from "./db/path.js";
+import type { ModelFailure } from "@navi/shared";
+import { resolveNaviDbFile } from "./db/path.js";
 import { now } from "./util.js";
 
 const JOURNAL_SUFFIX = ".stall-verdicts.jsonl";
@@ -93,7 +93,7 @@ export type StallJournalRead =
   | { status: "ok"; verdicts: StallVerdictRecord[]; discharges: StallDischargeRecord[] }
   | { status: "unavailable"; why: string; verdicts: StallVerdictRecord[]; discharges: StallDischargeRecord[] };
 
-export function stallJournalFileForDb(dbFile = resolveAshDbFile()): string {
+export function stallJournalFileForDb(dbFile = resolveNaviDbFile()): string {
   return `${dbFile}${JOURNAL_SUFFIX}`;
 }
 
@@ -105,7 +105,7 @@ export function stallJournalFileForDb(dbFile = resolveAshDbFile()): string {
  * fsync 自己失败不让整笔作废 —— 字节已经交给内核了,下一个进程照样读得到;挡不住的是机器
  * 掉电那一瞬,而那一刻连 SQLite 的 WAL 也一样暴露,这里不冒充更强的保证。
  */
-export function appendStallVerdict(record: StallVerdictRecord, dbFile = resolveAshDbFile()): boolean {
+export function appendStallVerdict(record: StallVerdictRecord, dbFile = resolveNaviDbFile()): boolean {
   return appendLine(record, dbFile);
 }
 
@@ -119,11 +119,11 @@ export function appendStallVerdict(record: StallVerdictRecord, dbFile = resolveA
 export function appendStallDischarge(
   sessionId: string,
   turnStartedAt: string,
-  dbFile = resolveAshDbFile(),
+  dbFile = resolveNaviDbFile(),
 ): boolean {
   const ok = appendLine({ kind: "discharged", at: now(), sessionId, turnStartedAt }, dbFile);
   if (!ok) {
-    console.warn(`[ash] 熔断判决的销账没能落盘(会话 ${sessionId} 回合 ${turnStartedAt}):`
+    console.warn(`[navi] 熔断判决的销账没能落盘(会话 ${sessionId} 回合 ${turnStartedAt}):`
       + "这一条判决会留在日志里,下次启动还会被读回来");
   }
   return ok;
@@ -151,7 +151,7 @@ function appendLine(record: StallVerdictRecord | StallDischargeRecord, dbFile: s
     }
     return true;
   } catch (error) {
-    console.warn(`[ash] 熔断判决日志没能追加(会话 ${record.sessionId} 回合 ${record.turnStartedAt}):`, error);
+    console.warn(`[navi] 熔断判决日志没能追加(会话 ${record.sessionId} 回合 ${record.turnStartedAt}):`, error);
     return false;
   }
 }
@@ -196,7 +196,7 @@ function parseRecords(file: string): ParseResult {
  * 任何一代读不出来,整次读都是 `unavailable`:读得出来的那部分照样带上(能救一条算一条),
  * 但「有东西核实不了」这件事必须传出去。
  */
-export function readStallJournal(dbFile = resolveAshDbFile()): StallJournalRead {
+export function readStallJournal(dbFile = resolveNaviDbFile()): StallJournalRead {
   const file = stallJournalFileForDb(dbFile);
   const old = parseRecords(`${file}${ROTATED_SUFFIX}`);
   const current = parseRecords(file);
@@ -227,18 +227,18 @@ export function pendingStallVerdicts(read: StallJournalRead): StallVerdictRecord
  *
  * 这里是读-改-写,而 `exit-ledger.ts` 明令禁止那种写法 —— 差别在**有没有并发追加者**:
  * 那个账本是跨进程追加的(启动失败那条路先松锁、退出记录后到;取锁前的残留记账也不持锁),
- * 所以它只能改名。这个日志只有 ash 自己在追加,而 ash 对同一个库文件是单实例的
+ * 所以它只能改名。这个日志只有 navi 自己在追加,而 navi 对同一个库文件是单实例的
  * (`singleton.ts`,锁在 index.ts 里排在这之前),并且压缩只在启动期跑、那一刻连一条消费链都
  * 还没有。两条前提缺一不可,挪动调用点之前先回来看这一段。
  *
  * 不抛:压缩失败只是日志偏大,一个字节都没丢。
  */
-export function compactStallJournal(dbFile = resolveAshDbFile()): { kept: number; dropped: number } | null {
+export function compactStallJournal(dbFile = resolveNaviDbFile()): { kept: number; dropped: number } | null {
   const file = stallJournalFileForDb(dbFile);
   const read = readStallJournal(dbFile);
   // 有东西读不出来就别重写:那会把读不出来的那部分真正抹掉(把「核实不了」变成「没有」)。
   if (read.status === "unavailable") {
-    console.warn(`[ash] 熔断判决日志有内容读不出来,这次不压缩:${read.why}`);
+    console.warn(`[navi] 熔断判决日志有内容读不出来,这次不压缩:${read.why}`);
     return null;
   }
   const survivors = pendingStallVerdicts(read);
@@ -258,7 +258,7 @@ export function compactStallJournal(dbFile = resolveAshDbFile()): { kept: number
     }
     return { kept: survivors.length, dropped: total - survivors.length };
   } catch (error) {
-    console.warn("[ash] 压缩熔断判决日志失败(内容没动):", error);
+    console.warn("[navi] 压缩熔断判决日志失败(内容没动):", error);
     try {
       unlinkSync(temp);
     } catch { /* 临时文件可能压根没建出来 */ }

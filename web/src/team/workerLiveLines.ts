@@ -3,7 +3,7 @@
 // 从 TeamView 拆出来（那份文件已经顶到 700 行的单文件上限）：它是一块自洽的职责 ——
 // 订阅 agent.event，把每条事件压成一行给看板用，别的什么都不做。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentEvent, TaskListItem } from "@ash/shared";
+import type { AgentEvent, TaskListItem } from "@navi/shared";
 import { useServerEvents } from "../lib/events.ts";
 
 /** 一条事件压成一行；返回 null = 这条不值得占那一格（心跳、用量、水位…）。 */

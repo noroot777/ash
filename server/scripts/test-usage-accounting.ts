@@ -21,9 +21,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-usage-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-usage-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { appSettings, sessions } = await import("../src/db/schema.js");
@@ -55,7 +55,7 @@ assert.equal(isAffectedCodexVersion("0.148.0"), false);
 assert.match(affectedCodexSessionWarning("0.147.0") ?? "", /全新会话/);
 const { appendSessionTrace, parseSessionTrace, sessionTracePath } = await import("../src/transcript.js");
 const { addUsage, sumUsage, usageTotal, hasUsage, formatTokens, formatCost, contextRatio, hasContext, guessContextWindow, serializeCompactSnapshot } =
-  await import("@ash/shared/usage");
+  await import("@navi/shared/usage");
 
 /** 拿假 CLI stdout 真跑一遍解析器,把它吐出的 context 事件取回来(同 test-claude-stream-errors 的套路)。 */
 async function parseFakeClaude(lines: unknown[], compactWindow: number | null = null) {

@@ -1,4 +1,4 @@
-import type { FreeReviewRound, FreeReviewRun, TaskListItem } from "@ash/shared";
+import type { FreeReviewRound, FreeReviewRun, TaskListItem } from "@navi/shared";
 import { ArrowSquareOut, ArrowsOutSimple } from "@phosphor-icons/react";
 import { FoldedProse } from "../components/FoldedProse.tsx";
 import { useLeftDrawer } from "../components/LeftDrawer.tsx";

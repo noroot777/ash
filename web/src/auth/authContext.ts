@@ -1,12 +1,12 @@
 import { createContext, useContext } from "react";
-import type { AuthState } from "@ash/shared";
+import type { AuthState } from "@navi/shared";
 
 export interface AuthContextValue {
   state: AuthState;
   /**
    * 重新确认身份。**回 false = 这一次没问到**(服务端不可达 / 比前端旧)。
    *
-   * 返回值不是装饰:吞掉失败的那一版让首启向导的「进入 ash」在一次 503 之后永久停在
+   * 返回值不是装饰:吞掉失败的那一版让首启向导的「进入 navi」在一次 503 之后永久停在
    * 「正在进入…」—— 状态已经有旧的那份,`AuthGate` 的错误屏不出来,子组件也看不见
    * 失败,服务恢复了按钮还是灰的(第 1 轮审查实测)。调用方据此恢复自己的入口。
    */
@@ -32,7 +32,7 @@ export function useIsInstanceAdmin(): boolean {
   return state.mode !== "multi" || state.user?.role === "admin";
 }
 
-/** 本机自用模式(`ASH_LOCAL_ONLY`)吗。远程配对、转多人这些入口都看它藏起来。 */
+/** 本机自用模式(`NAVI_LOCAL_ONLY`)吗。远程配对、转多人这些入口都看它藏起来。 */
 export function useIsLocalOnly(): boolean {
   return useAuth().state.localOnly;
 }

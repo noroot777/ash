@@ -3,7 +3,7 @@ import AppKit
 /// 原生几屏（首启、启动中、起不来）用的颜色，取自 web/src/styles/global.css 的浅 / 深两套令牌，
 /// 换算成 sRGB。页面载进来之前和之后是同一张底色、同一种卡片，接上时不跳色。
 /// 跟着系统外观翻面；页面那边用户另选了主题的话，以页面为准（窗口底色跟页面的 theme-color 走）。
-enum AshPalette {
+enum NaviPalette {
   static let chrome = color(light: 0xEFEFF0, dark: 0x151518)   // --chrome，= index.html 的 theme-color
   static let panel = color(light: 0xFFFFFF, dark: 0x202023)    // --panel，卡片
   static let raised = color(light: 0xF6F6F6, dark: 0x262729)   // --raised，卡片里的选项

@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { View, Text, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { useTheme, fonts } from "./theme";
 
 // ── 格式化(与 web 一致)────────────────────────────────────────────────────

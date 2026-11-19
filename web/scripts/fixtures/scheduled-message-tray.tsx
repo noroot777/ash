@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ScheduledMessage } from "@ash/shared";
-import type { TaskMonitor } from "@ash/shared/monitor";
+import type { ScheduledMessage } from "@navi/shared";
+import type { TaskMonitor } from "@navi/shared/monitor";
 import { ScheduledMessageTray, useScheduledMessages } from "../../src/components/ScheduledMessages.tsx";
 import { joinDraftText } from "../../src/task-detail/withdrawDraft.ts";
 import { useReplyLayout } from "../../src/task-detail/useReplyLayout.ts";

@@ -25,7 +25,7 @@
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
-import { isSilentWaitLoop, monitorEventTally, silentWaitNotice, spanWords } from "@ash/shared/monitor-silence";
+import { isSilentWaitLoop, monitorEventTally, silentWaitNotice, spanWords } from "@navi/shared/monitor-silence";
 import { checkpointGroups } from "./monitor-complete-checkpoint-groups.js";
 import { settleLandingGroups } from "./monitor-settle-landing-groups.js";
 import { resultHandoffGroups } from "./monitor-result-handoff-groups.js";

@@ -1,4 +1,4 @@
-// 「一条任务在自己回合里对 ash 说的话」那一组工具：阶段上报、驳回审查意见（含把越界
+// 「一条任务在自己回合里对 navi 说的话」那一组工具：阶段上报、驳回审查意见（含把越界
 // 的那几条提出来转独立任务）、辩论与讨论发言、验收、确认完成、到检查点暂停、停止、提问与答复。
 //
 // 这几段 description 是**注入给 agent 的规则本体**，不是文档：完成协议（exit 0 ≠ done）、
@@ -11,7 +11,7 @@
 // 想写长就得先显式改那张预算表。
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@ash/shared";
+import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@navi/shared";
 // 越界转出的判据只有一份源,而且**只挂这一个运行时表面**:修复交接消息
 // (server/src/free-review-prompts.ts 的 disputeOption)那边现在只留一句指针。两边都写
 // 全文时漂过一次 —— server 那侧已经改成三种形态,这里仍要求「为什么越界(是哪一轮的哪次
@@ -23,12 +23,12 @@ import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAG
 import {
   DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
   PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE, RECURS_FIELD_GUIDE, REVIEW_VALIDATION_REQUIREMENT,
-} from "@ash/shared/free-workflow";
+} from "@navi/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { callWithMonitorResults } from "./monitor-results.js";
 import { MODE, RECURS, TASK_STAGE, planTaskShape, reviewChoiceOf, suggestionShape, suggestionWithdrawShape } from "../schemas.js";
-import { MAX_DISPATCH_PLAN_ITEMS } from "@ash/shared/dispatch-plan";
-import { MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK } from "@ash/shared/dispatch-suggestion";
+import { MAX_DISPATCH_PLAN_ITEMS } from "@navi/shared/dispatch-plan";
+import { MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK } from "@navi/shared/dispatch-suggestion";
 
 export function registerTaskTurnTools(server: McpServer): void {
 server.registerTool(

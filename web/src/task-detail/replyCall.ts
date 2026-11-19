@@ -1,6 +1,6 @@
-import type { AgentType, DiscussionRounds, Task } from "@ash/shared";
-import type { CreateReviewChoice } from "@ash/shared/review-on-create";
-import { DISCUSSION_ROUND_CHOICES, MAX_DISCUSSION_GUESTS, discussionRoundsOf } from "@ash/shared/discussion";
+import type { AgentType, DiscussionRounds, Task } from "@navi/shared";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
+import { DISCUSSION_ROUND_CHOICES, MAX_DISCUSSION_GUESTS, discussionRoundsOf } from "@navi/shared/discussion";
 import type { DockChoice } from "./ReplyDock.tsx";
 import type { MentionTarget } from "./mentionPicker.ts";
 import { sourceWorktreeBranch } from "./taskDerivation.ts";

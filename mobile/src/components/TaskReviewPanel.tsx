@@ -24,7 +24,7 @@ import type {
   TaskListItem,
   TaskReviewInfo,
   TaskReviewRound,
-} from "@ash/shared";
+} from "@navi/shared";
 import { api } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
 import { fonts, radius, useTheme, type Theme } from "@/lib/theme";

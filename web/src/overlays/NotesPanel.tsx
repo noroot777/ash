@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { Note, ProjectView } from "@ash/shared";
+import type { Note, ProjectView } from "@navi/shared";
 import { ArrowSquareOut, CheckCircle, CornersIn, CornersOut, File, MagnifyingGlass, NotePencil, Plus, Trash, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";

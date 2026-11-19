@@ -21,7 +21,7 @@
 // 那一行恰好没写上时拿到的是上一扇门的方案 —— 人看着旧方案按下放行,放行的却是没给他看过的新方案(审查实测)。
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DuetConsensusBy } from "@ash/shared";
+import type { DuetConsensusBy } from "@navi/shared";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";

@@ -47,7 +47,7 @@ export type KillResult = { ok: true; complete: boolean } | { ok: false; reason: 
  * 这条会话**此刻**还占着的 pty 设备路径;leader 退了就是 null。
  *
  * 设备号(/dev/ttysNNN、/dev/pts/N)只在 leader 活着时指着这条会话:leader 一退内核就收回那个号,
- * 下一个开 pty 的 —— 另一条会话、另一份 ash、用户自己的终端 app —— 马上领到同一个号。退了以后还按
+ * 下一个开 pty 的 —— 另一条会话、另一份 navi、用户自己的终端 app —— 马上领到同一个号。退了以后还按
  * 记下的那个号去枚举「会话成员」,点到的是别人,连同它整个进程组一起吃 TERM+KILL(关服清场对**每条**
  * 还留在表里的已退会话都这么干过)。退了的会话本来也枚举不出自己人(ctty 已 revoke,见
  * terminal-process-tree.ts 顶部),所以这里不丢任何线索:它名下还活着的只能靠 ppid 树和存续期累积的
@@ -219,7 +219,7 @@ function waitForGroupExit(target: KillTarget, timeoutMs: number, descendants?: D
  *
  * 无条件连发,不按 exitCode 筛:组长退了组不一定空(daemonize 形状),而对已空的组发信号
  * 只是 ESRCH —— 少一个条件就少一类漏杀。命令会话跑的是 dev server/watch 这类可随时重启的
- * 进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,ash 重启后会话表(内存态)清零、
+ * 进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,navi 重启后会话表(内存态)清零、
  * UI 显示「未启动」,旧进程却继续占着端口。
  */
 export function killAllSessionTrees(all: KillTarget[]): void {

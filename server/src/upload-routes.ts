@@ -2,7 +2,7 @@ import type { Hono } from "hono";
 import { readFile } from "node:fs/promises";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, basename, extname } from "node:path";
-import { maxBytesFor, attachmentKind } from "@ash/shared";
+import { maxBytesFor, attachmentKind } from "@navi/shared";
 import { UPLOADS_DIR } from "./paths.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canReadUpload, registerUpload, repairUploadClaim, watchAgentUploads } from "./uploads.js";

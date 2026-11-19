@@ -9,7 +9,7 @@
 // 进程照样活不过这一轮,到点没有任何东西会把任务叫醒,正是这个 hook 要堵的那一幕
 // (第 2 轮审查 F3 实测:注入一次身份查库异常,端点回 500 `Internal Server Error`)。
 //
-// **收口成 deny 不等于放宽权限**:deny 是安全的那一边 —— 原生工具不执行、ash 也没代办,
+// **收口成 deny 不等于放宽权限**:deny 是安全的那一边 —— 原生工具不执行、navi 也没代办,
 // agent 拿到的是一句说清了怎么自己补的拒绝。鉴权真的判这次请求没权限(401/403)时同样
 // 落在这里:不放行、不代办,与「服务端出错」只差 reason 里那句话。
 import type { MiddlewareHandler } from "hono";
@@ -47,7 +47,7 @@ export const guardMonitorHook = (inner: MiddlewareHandler): MiddlewareHandler =>
   const detail = thrown !== null
     ? (thrown instanceof Error ? thrown.message : String(thrown))
     : `服务端回了 HTTP ${status}`;
-  console.error(`[ash] Monitor 改道 hook 没能给出决定（${detail}），已按拒绝收口`, thrown ?? "");
+  console.error(`[navi] Monitor 改道 hook 没能给出决定（${detail}），已按拒绝收口`, thrown ?? "");
   c.res = new Response(JSON.stringify(monitorHookInternalError(detail)), {
     status: 200,
     headers: { "content-type": "application/json" },

@@ -1,7 +1,7 @@
 // 删掉会话里的某几段（发错的话、跑偏的回复、哨兵的自动输入、答复、系统注记、只剩执行过程
 // 的回合…），并保证**之后的回合里没有哪个 agent 读得到它们**。
 //
-// 难点不在界面：续聊时 agent 读的不是 ash 这份 .md，而是 CLI 自己的会话文件（claude 的
+// 难点不在界面：续聊时 agent 读的不是 navi 这份 .md，而是 CLI 自己的会话文件（claude 的
 // jsonl、codex 的 rollout），`--resume` 一接就是删之前那份完整上下文 —— 只把气泡藏起来
 // 等于没删。所以删除分三处：
 //  ① 盘上抹掉。.md 里那一段换成一行带 `deleted:true` 的 sentinel（只留时刻与回合身份，
@@ -32,11 +32,11 @@
 // 不改（哨兵对账要逐字节读它们，改了会把那条链读坏）；它们不进任何 prompt。
 import { existsSync, readFileSync } from "node:fs";
 import { and, eq, isNotNull } from "drizzle-orm";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { QuestionRecord } from "@navi/shared/questions";
 import {
   parseSessionSpans, segmentFingerprint, traceKeptOnDelete, traceSpanFingerprint, traceStepsFingerprint, type ConvSeg,
   type SessionSegmentSpan,
-} from "@ash/shared/session-output";
+} from "@navi/shared/session-output";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { backgroundCopiesOf, syncBackgroundCopies } from "./discussion-background.js";
@@ -323,14 +323,14 @@ export async function deleteConversationSegments(sessionId: string, targets: rea
         if (traceNext !== null && traceNext !== traceRaw) replaceFileAtomically(tracePath, traceNext);
         if (redacted && redacted.text !== raw) replaceFileAtomically(mdPath, redacted.text);
       } catch (error) {
-        console.warn(`[ash] 删除消息写盘失败 session=${sessionId}:`, error);
+        console.warn(`[navi] 删除消息写盘失败 session=${sessionId}:`, error);
         throw unfinished(error);
       }
     });
   } finally {
     release();
     // 问答墓碑写成了就要让开着的页面知道，哪怕后面换文件失败（页面据此不再把它当成未删）。
-    if (answersTouched) await publishTaskUpdated(task.id).catch((error) => console.warn(`[ash] 删除消息后推送任务失败 ${task.id}:`, error));
+    if (answersTouched) await publishTaskUpdated(task.id).catch((error) => console.warn(`[navi] 删除消息后推送任务失败 ${task.id}:`, error));
   }
   bus.publish({ type: "conversation.redacted", taskId: task.id, sessionId });
   return { deleted: targets.length };

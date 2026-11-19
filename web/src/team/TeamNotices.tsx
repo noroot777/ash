@@ -5,8 +5,8 @@
 // 可见的状态」），所以它们都是刷新后仍在的常驻条，而不是一次性提示。
 import { useState } from "react";
 import { Broom, WarningCircle } from "@phosphor-icons/react";
-import type { TaskListItem } from "@ash/shared";
-import { workerHaltStats } from "@ash/shared/team";
+import type { TaskListItem } from "@navi/shared";
+import { workerHaltStats } from "@navi/shared/team";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
 

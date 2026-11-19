@@ -280,7 +280,7 @@
   color: var(--amber);
   font-size: var(--t-xs);
   line-height: 1.5;
-  /* 补不上 ash MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
+  /* 补不上 navi MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
   white-space: pre-wrap;
 }
 

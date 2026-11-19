@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliSpec } from "./types.js";
@@ -253,7 +253,7 @@ export const antigravitySpec: CliSpec = {
     // --dangerously-skip-permissions:不给会被软拒绝工具,agent 静默改不了文件。
     // --add-dir .:agy 不隐式纳入 cwd(默认空列表),不给等于让 agent 空手干活。
     // --print-timeout 24h:默认 5m 会把长任务从中间截断(且截断后拿不到产物);
-    //   ash 自己有停止/超时机制,这里等于把 CLI 侧的闸让开。想收紧的在执行器
+    //   navi 自己有停止/超时机制,这里等于把 CLI 侧的闸让开。想收紧的在执行器
     //   profile 的固定参数里补一个 `--print-timeout 10m` 即可 —— 用户参数排在最后。
     baseArgs: [
       "--output-format",

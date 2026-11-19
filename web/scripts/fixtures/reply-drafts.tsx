@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
@@ -24,7 +24,7 @@ const task = (id: string, title: string): Task => ({
 
 const TASKS = [task("task-a", "任务 A"), task("task-b", "任务 B")];
 
-function Ash() {
+function Navi() {
   const [active, setActive] = useState(0);
   return (
     <main style={{ width: 720, margin: "40px auto" }}>
@@ -44,6 +44,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <DraftProvider>
-    <Ash />
+    <Navi />
   </DraftProvider>,
 );

@@ -9,8 +9,8 @@
 // 这边只按它们的公开判据组合。**公开面照旧从 monitors.ts 出**(那边 re-export 这几个名字,
 // 调用方一个都不用改)。
 import { and, eq } from "drizzle-orm";
-import { OWN_MONITOR_KIND, type MonitorStatus } from "@ash/shared/monitor";
-import { monitorEventTally } from "@ash/shared/monitor-silence";
+import { OWN_MONITOR_KIND, type MonitorStatus } from "@navi/shared/monitor";
+import { monitorEventTally } from "@navi/shared/monitor-silence";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { drainOwed, hitOf, linesBody, matchedReason, renderLines } from "./monitor-consume.js";
@@ -32,7 +32,7 @@ import { now } from "./util.js";
 function reportOwedDropped(monitorId: string, owed: string[], why: string): void {
   if (!owed.length) return;
   console.error(
-    `[ash] 哨兵 ${monitorId} 收尾放手时还欠着 ${owed.length} 行没送出去（${why}）：`
+    `[navi] 哨兵 ${monitorId} 收尾放手时还欠着 ${owed.length} 行没送出去（${why}）：`
     + JSON.stringify(owed.slice(0, 3)),
   );
 }
@@ -111,7 +111,7 @@ export async function finish(
     // 放手**不等于放行**:终态落定了还欠着入队的,凭证照旧挡着(③),由交接那一笔做完再送。
     // 这里只把不再欠的那几行触发一次(扫描到点也会捡)。
     release();
-    void flushMonitorRows(monitorId).catch((e) => console.error(`[ash] 收尾后触发投递失败 monitor=${monitorId}:`, e));
+    void flushMonitorRows(monitorId).catch((e) => console.error(`[navi] 收尾后触发投递失败 monitor=${monitorId}:`, e));
   }
 }
 
@@ -273,7 +273,7 @@ async function finishHeld(
       })
       .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
     if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
-      console.error(`[ash] 哨兵收尾放手 monitor=${monitorId}：条件更新没落上，结局已经有人写过了（${reason}）`);
+      console.error(`[navi] 哨兵收尾放手 monitor=${monitorId}：条件更新没落上，结局已经有人写过了（${reason}）`);
       // 放手这一支手上还攥着尚欠批次时,**那几行就是真丢了**:结局归别人写,这条 UPDATE 带着
       // 的交接凭证一个字都没落上。概率很窄(得正好是「排干时撞上推满上限/点停」加「那一批
       // 又没交付」),但静默丢弃和明确放弃必须分得开 —— 所以这里报出来,游标那一侧照旧没动,
@@ -297,7 +297,7 @@ async function finishHeld(
     const verdict = await settleReclaim(outcome);
     if (verdict === "unaccounted") {
       console.error(
-        `[ash] 哨兵收尾时既没确认退出、回收责任也没落库 monitor=${monitorId} pid=${row.pid}`
+        `[navi] 哨兵收尾时既没确认退出、回收责任也没落库 monitor=${monitorId} pid=${row.pid}`
         + `（哨兵行还留着它的身份，开机会再问一遍）`,
       );
     }
@@ -321,7 +321,7 @@ async function finishHeld(
  * 它的结果,所以**它的失败只能进日志**。
  *
  * 不接住的话就是一个没人管的 rejection:Node 默认把那个当致命错误,于是「一次收尾里的某笔
- * 读写失败」会把整个 ash 带下去。撞上关库是最常见的一种(判出结束的那一刻 ash 可能正在退出,
+ * 读写失败」会把整个 navi 带下去。撞上关库是最常见的一种(判出结束的那一刻 navi 可能正在退出,
  * 实测:审查生命周期那份回归在 teardown 之后收到一条 `database is not open`)。
  */
 export function settleInBackground(
@@ -329,5 +329,5 @@ export function settleInBackground(
   opts?: Parameters<typeof finish>[4],
 ): void {
   void finish(monitorId, status, reason, code, opts)
-    .catch((e) => console.error(`[ash] 后台收尾失败 monitor=${monitorId}（${reason}）:`, e));
+    .catch((e) => console.error(`[navi] 后台收尾失败 monitor=${monitorId}（${reason}）:`, e));
 }

@@ -18,12 +18,12 @@ import { removeTmpStage } from "./tmp-db.js";
 //   ③ 「路径后缀 + package.json.name 相同」不证明来源相同——两个同名包是合法的,把第三方那份换成
 //      项目自己那份等于换掉被测代码。
 //
-// 快照必须落在 fixture 项目**内部**(ASH_RUNS_DIR),否则向上查找那一条根本走不到。RUNS_DIR 在模块
+// 快照必须落在 fixture 项目**内部**(NAVI_RUNS_DIR),否则向上查找那一条根本走不到。RUNS_DIR 在模块
 // 加载时就固定了,所以这组用例必须独占一个进程、在 import 之前设好环境变量。
-const root = mkdtempSync(join(tmpdir(), "ash-gate-confine-"));
+const root = mkdtempSync(join(tmpdir(), "navi-gate-confine-"));
 // 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
-process.env.ASH_DB = join(root, "ash-test.db");
-process.env.ASH_RUNS_DIR = join(root, "host", "data", "runs");
+process.env.NAVI_DB = join(root, "navi-test.db");
+process.env.NAVI_RUNS_DIR = join(root, "host", "data", "runs");
 const { readGateSource, createGateSnapshot, verifyGateSnapshot, gateSnapshotPath } =
   await import(pathToFileURL(join(import.meta.dirname, "..", "src", "accept-gate-source.ts")).href);
 const { workspacePackages } =
@@ -69,7 +69,7 @@ const dependOn = (directory: string, dependencies: Record<string, string>) => {
 
 let sequence = 0;
 // 快照必须落在**被测项目自己**内部,否则 node 的向上查找走不到它那棵依赖树:gateSnapshotPath 用的
-// ASH_RUNS_DIR 在模块加载时就固定在 host 项目里,只对前面那些以 host 为被测项目的用例成立。
+// NAVI_RUNS_DIR 在模块加载时就固定在 host 项目里,只对前面那些以 host 为被测项目的用例成立。
 const targetIn = (directory: string) => join(directory, "data", "runs", `case${++sequence}.source`);
 const snapshotOf = async (cwd: string) => {
   const target = gateSnapshotPath("confine", `case${++sequence}`);

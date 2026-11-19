@@ -3,9 +3,9 @@
 // 同一批**，各写一份迟早会一边标着「等你答复」一边把它折进「显示另外 N 条」。
 // 判据本体是 shared/src/task-attention.ts 的 needsYourCommand（web 与 server 的飞书推送
 // 同读那一份）；这里只多一层 mobile 的展示口径：归档任务不再等任何人，一律不标。
-import type { TaskListItem } from "@ash/shared";
-import { isTeamLead, needsYourCommand as stuckOnYou } from "@ash/shared/task-attention";
-import { workersOf } from "@ash/shared/team";
+import type { TaskListItem } from "@navi/shared";
+import { isTeamLead, needsYourCommand as stuckOnYou } from "@navi/shared/task-attention";
+import { workersOf } from "@navi/shared/team";
 
 export type AttentionKind = "question" | "verify_failed";
 

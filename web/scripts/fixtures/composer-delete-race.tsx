@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task, TaskListItem } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task, TaskListItem } from "@navi/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { useTasks } from "../../src/lib/useTasks.ts";
@@ -19,15 +19,15 @@ import "../../src/styles/global.css";
 // 放行旧响应后断言既不回插也不自动选中;对照轮确认正常创建不受影响。
 const project: ProjectView = {
   id: "p1",
-  name: "ash",
-  repoPath: "/tmp/ash",
+  name: "navi",
+  repoPath: "/tmp/navi",
   workflowId: null,
   useWorktreeDefault: false,
   createdAt: "2026-08-28T00:00:00.000Z",
   health: { exists: true, isRepo: true },
 } as unknown as ProjectView;
 
-function Ash() {
+function Navi() {
   const { tasks, setTasks, refetch, confirmedDeleteIds } = useTasks();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notices, setNotices] = useState<string[]>([]);
@@ -107,7 +107,7 @@ function Ash() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <DraftProvider>
-      <Ash />
+      <Navi />
     </DraftProvider>
   </StrictMode>,
 );

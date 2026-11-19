@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
-import { clearEnv } from "@ash/shared/env-names";
+import { clearEnv } from "@navi/shared/env-names";
 import { dirname } from "node:path";
 import { and, eq, isNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";

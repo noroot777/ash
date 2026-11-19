@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { FreeReviewRun } from "@ash/shared";
-import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
+import type { FreeReviewRun } from "@navi/shared";
+import { MAX_FREE_REVIEW_RETRIES } from "@navi/shared/free-workflow";
 import { Repeat } from "@phosphor-icons/react";
 import { RoundsStepper } from "../components/RoundsStepper.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";

@@ -1,4 +1,4 @@
-import type { FeishuBinding, FeishuGroups, FeishuStatus } from "@ash/shared";
+import type { FeishuBinding, FeishuGroups, FeishuStatus } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { FeishuBindingCard } from "./FeishuBindingCard.tsx";
 import { FeishuConnectionCard } from "./FeishuConnectionCard.tsx";

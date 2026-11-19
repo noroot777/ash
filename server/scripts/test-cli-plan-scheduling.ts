@@ -4,15 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
-import { readCliState } from "@ash/shared/cli-commands";
+import { makeStep } from "@navi/shared/workflow";
+import { readCliState } from "@navi/shared/cli-commands";
 import type { RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-plan-scheduling-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-plan-scheduling-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents, projects, tasks, sessions, groups, queueItems } = await import("../src/db/schema.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
@@ -27,7 +27,7 @@ await ensureSchema();
 const originalRun = CodexExecutor.prototype.runSteerable;
 const invocations = new Map<string, RunOpts>();
 CodexExecutor.prototype.runSteerable = function (options) {
-  const taskId = options.env!.ASH_TASK_ID!;
+  const taskId = options.env!.NAVI_TASK_ID!;
   invocations.set(taskId, options);
   return {
     sessionId: options.sessionId ?? taskId, commandLine: "plan scheduling fixture; no CLI/model",

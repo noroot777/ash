@@ -1,6 +1,6 @@
-import type { AppSettings } from "@ash/shared";
-import { COLOR_THEMES, COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "@ash/shared";
-import { ACCEPT_CLEAN } from "@ash/shared/workflow";
+import type { AppSettings } from "@navi/shared";
+import { COLOR_THEMES, COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "@navi/shared";
+import { ACCEPT_CLEAN } from "@navi/shared/workflow";
 import { db } from "./db/index.js";
 import { MAX_BODY_MB } from "./handoff-body.js";
 import { appSettings } from "./db/schema.js";
@@ -82,7 +82,7 @@ const SETTING_SPECS = {
   // 只让实例管理员改 —— 不需要在这里再写一道权限。
   sharedHostCli: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
   // 首启向导走完没有。个人面的键,所以多人模式下各人各一份(personal-settings.ts)。
-  // 写它的只有向导自己那一下「进入 ash」,所以不校验内容,只拦住长度。
+  // 写它的只有向导自己那一下「进入 navi」,所以不校验内容,只拦住长度。
   onboardedAt: {
     ok: (v: unknown) => typeof v === "string" && v.length <= 40,
     hint: "必须是不超过 40 字符的字符串（ISO 时间串，空串 = 还没走完向导）",

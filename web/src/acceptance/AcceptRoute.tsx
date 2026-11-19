@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { ArrowRight, CaretDown, Check, GitBranch } from "@phosphor-icons/react";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { branchDiffReason } from "../lib/branch-diff-reason.ts";
 import { openGitWorkbench } from "../git-workbench/navigation.ts";
@@ -10,7 +10,7 @@ import { AcceptLayer } from "./AcceptLayer.tsx";
 import { refreshTaskFacts } from "./taskFacts.ts";
 import { acceptTargetOf } from "./acceptTarget.ts";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
-import { hasTaskBranchPrefix } from "@ash/shared/task-branch";
+import { hasTaskBranchPrefix } from "@navi/shared/task-branch";
 
 export type RouteData = {
   source: string;

@@ -2,7 +2,7 @@
 // 这页不说,用户就只能得出「加了但用不了」。
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider } from "@navi/shared";
 import { ProvidersSection } from "../../src/settings/ProvidersSection.tsx";
 import "../../src/styles/global.css";
 

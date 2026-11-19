@@ -26,9 +26,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-im-gates-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-im-gates-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-im-gates");
 
 let failure: unknown = null;
@@ -54,7 +54,7 @@ try {
   const { acceptedLabel, settledCard, turnCard } = await import("../src/im/cards.js");
   const { acceptedOutcome } = await import("../src/im/actions.js");
   const { patchOptions } = await import("../src/im/meta.js");
-  const { makeStep } = await import("@ash/shared/workflow");
+  const { makeStep } = await import("@navi/shared/workflow");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf } = await import("./im-fixture.js");
 
   await ensureSchema();
@@ -124,7 +124,7 @@ try {
     assert.match(textOf(done.card?.data), /已验收：改动就在原工作区里/, JSON.stringify(done));
     assert.equal((await row("g2")).stage, "accepted");
     const last = acceptIdentityOf(next.subject!);
-    const again = await im.ash.post(principal, "/api/tasks/g2/accept", { expectedResultVersion: last.resultVersion, expectedHumanGate: last.humanGate });
+    const again = await im.navi.post(principal, "/api/tasks/g2/accept", { expectedResultVersion: last.resultVersion, expectedHumanGate: last.humanGate });
     assert.equal(again.ok && again.data.kind, "already_accepted", `最后一道关点第二下照实回「验收过了」：${JSON.stringify(again)}`);
     fake.reset();
     await im.reconciler.reconcile(["g2"]);
@@ -151,12 +151,12 @@ try {
     assert.equal(now.stage, "awaiting_acceptance");
 
     const resultVersion = await resultVersionOf(now);
-    const older = await im.ash.post(principal, "/api/tasks/g3/accept", { expectedResultVersion: resultVersion, expectedHumanGate: firstGate });
+    const older = await im.navi.post(principal, "/api/tasks/g3/accept", { expectedResultVersion: resultVersion, expectedHumanGate: firstGate });
     assert.equal(!older.ok && older.data.reason, "gate_changed", JSON.stringify(older));
     now = await row("g3");
     assert.equal(now.workflowAt, "second", "没放");
     assert.equal(now.stage, "awaiting_acceptance");
-    const current = await im.ash.post(principal, "/api/tasks/g3/accept", { expectedResultVersion: resultVersion, expectedHumanGate: humanGateOf(now) });
+    const current = await im.navi.post(principal, "/api/tasks/g3/accept", { expectedResultVersion: resultVersion, expectedHumanGate: humanGateOf(now) });
     assert.equal(current.ok && current.data.kind, "gate_released", "带着此刻这道关照常放");
     assert.equal((await row("g3")).workflowAt, "third");
   }
@@ -213,7 +213,7 @@ try {
     await im.settle();
     assert.equal((await cards("g7")).length, 1, "这一段不冒新卡");
     assert.equal(fake.sends().length, 0);
-    const twice = await im.ash.post(principal, "/api/tasks/g7/accept", {
+    const twice = await im.navi.post(principal, "/api/tasks/g7/accept", {
       expectedResultVersion: acceptIdentityOf(card!.subject!).resultVersion, expectedHumanGate: acceptIdentityOf(card!.subject!).humanGate,
     });
     assert.equal(twice.ok && twice.data.kind, "gate_released", `同一段的卡再点就是重走：${JSON.stringify(twice)}`);
@@ -294,7 +294,7 @@ try {
     const staged = acceptedOutcome({ kind: "isolated_worktree", merge: "no_commit", targetBranch: secret });
     assert.ok(staged.text!.includes(secret) && !staged.brief!.includes(secret));
     const tagged = acceptedOutcome({ kind: "isolated_worktree", merge: "tagged", tag: "ash-accepted/abc123" });
-    assert.ok(tagged.text!.includes("ash-accepted/abc123") && !tagged.brief!.includes("ash-accepted"), "只推标题：不带标签名");
+    assert.ok(tagged.text!.includes("ash-accepted/abc123") && !tagged.brief!.includes("navi-accepted"), "只推标题：不带标签名");
     const broken = acceptedOutcome({ kind: "isolated_worktree", merge: "fast_forward", targetBranch: secret, tail: { ok: false, step: "跑一条命令", reason: "npm ERR! token=abc" } });
     assert.equal(broken.tone, "orange");
     assert.ok(broken.text!.includes("npm ERR!"));

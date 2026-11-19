@@ -53,7 +53,7 @@ export async function recoverPendingDelivery(
       forget();
     } catch (error) {
       const delay = Math.min(200 * 2 ** Math.min(attempts++, 8), 30_000);
-      console.warn(`[ash] 未送达消息补偿失败 task=${anchor.taskId} message=${anchor.id}，${delay}ms 后继续补偿:`, error);
+      console.warn(`[navi] 未送达消息补偿失败 task=${anchor.taskId} message=${anchor.id}，${delay}ms 后继续补偿:`, error);
       const timer = setTimeout(() => void attempt(), delay);
       timer.unref?.();
     }

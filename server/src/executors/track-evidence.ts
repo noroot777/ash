@@ -3,7 +3,7 @@
 //
 // 从 kill.ts 搬出来的理由同 child-identity.ts:三摊各自顶着 700 行,而这一摊的使用方
 // (击杀、逃逸枚举、清理责任)谁都只用得到它的几个入口。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { execFile } from "node:child_process";
 import type { ChildProcess, ExecFileException } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -13,7 +13,7 @@ import { IS_WINDOWS, isPidAlive } from "../platform.js";
 import { processUnitEvidence } from "../proc.js";
 import { childStillOurs } from "./child-identity.js";
 import { unitTokenOf } from "./unit-token.js";
-import { LEGACY_TRACK_FILE_PREFIX } from "@ash/shared/legacy-names";
+import { LEGACY_TRACK_FILE_PREFIX } from "@navi/shared/legacy-names";
 
 // ── 逃逸进程追踪(继承 fd,systemd 同款思路)──────────────────────────────
 // 进程组击杀(kill -pid)只覆盖「还留在 agent 进程组里」的后代。但 codex/claude
@@ -259,7 +259,7 @@ function lsofFault(stderr: string): string | null {
 /**
  * `-F pfan` 的输出:`p<pid>` 起一个进程段,段内每个 fd 一组 `f<fd>` / `a<模式>` / `n<路径>`。
  *
- * 自己这个进程一律剔掉(追踪文件的父侧 fd 在 `registerTrackFd` 里就关了,输出文件却是 ash
+ * 自己这个进程一律剔掉(追踪文件的父侧 fd 在 `registerTrackFd` 里就关了,输出文件却是 navi
  * 自己在读 —— 把它算成持有者会让每一次清理都答「还有残留」)。
  *
  * **`a` 字段缺席时这个持有者照样要出列,模式记 `unknown`**(第 4 轮审查 N10)。上一版只在
@@ -438,11 +438,11 @@ export function shareTrackFdRegistration(source: ChildProcess, target: ChildProc
 }
 
 /**
- * 启动时清掉**上一个 ash 留下的**追踪文件。
+ * 启动时清掉**上一个 navi 留下的**追踪文件。
  *
  * 租约没有硬期限了(见上面那段),所以「进程整个没了、内存里的租约跟着没了」这条路必须有人
  * 收 —— 否则 tmpdir 里会慢慢积空文件(第 3 轮审查 N4:实测攒到了三千多个)。判据两条,都不猜:
- *  · 文件名里那个创建者 pid **已经不在了**(还在就可能是另一个 ash 实例正用着它,
+ *  · 文件名里那个创建者 pid **已经不在了**(还在就可能是另一个 navi 实例正用着它,
  *    多实例共用同一个 tmpdir);
  *  · 此刻**没有持有者**(有就说明那一摊后代还在,证据得留着让人能查)。
  *

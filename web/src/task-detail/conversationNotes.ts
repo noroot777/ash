@@ -5,13 +5,13 @@
 // 结构由 conversationModel 统一决定：
 //   note     旁注,贴着上一段说话继续,不重复头像/执行器名(system 时间线通告都归这档)
 //   boundary 回合边界(本轮执行结束 / 执行异常结束 / 本回合结束),保留整宽横线
-import { SESSION_POISON_DIAGNOSIS_PREFIX, stripSessionNotes } from "@ash/shared/session-notes";
-import type { TimelineNotice } from "@ash/shared/timeline-notice";
+import { SESSION_POISON_DIAGNOSIS_PREFIX, stripSessionNotes } from "@navi/shared/session-notes";
+import type { TimelineNotice } from "@navi/shared/timeline-notice";
 import { legacyReviewMark } from "./legacyNoticeTable.ts";
 
 // notice = 结算说明（「这一轮为什么落成这个状态」）。它由服务端**显式标记**（事件和落盘
 // 行上的 level:"notice"），不参与下面的关键词推断 —— 这类说明里天然带着「未完成」，猜出
-// 来永远是红的，而一条红字对第一次用 ash 的人只有一个读法：它崩了。
+// 来永远是红的，而一条红字对第一次用 navi 的人只有一个读法：它崩了。
 export type ConversationEventTone = "neutral" | "error" | "notice";
 export type ConversationEventVariant = "note" | "boundary";
 // 只收「这件事没办成」的词。「未通过」是审查结论、也确实要显眼,归红;
@@ -35,11 +35,11 @@ const FAILED_HINTS = [
 export function noteTone(text: string): ConversationEventTone {
   // poisoned 诊断整条都在**转述** Codex 报的 rollout/world-state 异常,自己带着「异常」
   // 二字,讲的却是「为什么判这条会话坏了」——不是这一轮失败。它的正文由 stderr 指纹拼
-  // 出来、以后还会加新指纹,摘不干净,所以认前缀先拦一道(@ash/shared/session-notes)。
+  // 出来、以后还会加新指纹,摘不干净,所以认前缀先拦一道(@navi/shared/session-notes)。
   if (text.includes(SESSION_POISON_DIAGNOSIS_PREFIX)) return "neutral";
   // 会话轮换旁注（「这条 CLI 会话接不回了，下次开新的」）是中性事实，不是本回合失败：
   // 它照样会出现在一个 exit 0 的成功回合、甚至用户自己点的「停止全组」上。文案里带着
-  // 「异常」这类词，蹭上关键词表就成了红的。判据用 @ash/shared/session-notes 那份**同一
+  // 「异常」这类词，蹭上关键词表就成了红的。判据用 @navi/shared/session-notes 那份**同一
   // 源文本**，不靠「写文案时记得绕开那几个词」。
   // 摘掉再判、而不是「含轮换旁注就中性」：收尾那句是拼出来的，后半段可能正是「恢复字段
   // 写入数据库失败」这类真失败，整句判中性会把它一起洗白。

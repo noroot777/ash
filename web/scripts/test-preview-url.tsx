@@ -7,12 +7,12 @@ import { noticeView } from "../src/task-detail/timelineNoticeCopy.ts";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
 
 const path = "/api/tasks/preview-task/preview/open/web";
-const remotePage = "https://ash.example:8443/tasks/preview-task?view=chat";
-const expected = "https://ash.example:8443" + path;
+const remotePage = "https://navi.example:8443/tasks/preview-task?view=chat";
+const expected = "https://navi.example:8443" + path;
 assert.equal(browserPreviewUrl(path, remotePage), expected);
 assert.equal(browserPreviewUrl(path, "http://localhost:4317/"), "http://localhost:4317" + path);
-assert.equal(browserPreviewUrl("http://localhost:5173/nested/?q=1#part", remotePage), "http://ash.example:5173/nested/?q=1#part");
-assert.equal(browserPreviewUrl("http://[::1]:5173/", remotePage), "http://ash.example:5173/");
+assert.equal(browserPreviewUrl("http://localhost:5173/nested/?q=1#part", remotePage), "http://navi.example:5173/nested/?q=1#part");
+assert.equal(browserPreviewUrl("http://[::1]:5173/", remotePage), "http://navi.example:5173/");
 assert.equal(browserPreviewUrl("http://localhost:5173/", "http://127.0.0.1:4317/"), "http://localhost:5173/");
 assert.equal(browserPreviewUrl("https://preview.example/app/", remotePage), "https://preview.example/app/");
 assert.equal(browserPreviewUrl(path, "invalid page"), path);
@@ -20,7 +20,7 @@ assert.equal(browserPreviewUrl(path, "invalid page"), path);
 const freeText = `预览进程已自行退出：${path}`;
 const presetText = `预览异常：${path} 没有响应（\`npm run dev\`）`;
 const directUrl = "http://localhost:51234/nested/?q=1#part";
-const directExpected = "http://ash.example:51234/nested/?q=1#part";
+const directExpected = "http://navi.example:51234/nested/?q=1#part";
 const directFree = `预览进程已自行退出：${directUrl}`;
 const directPreset = `预览异常：${directUrl} 没有响应（\`npm run dev\`）`;
 for (const text of [freeText, presetText]) {
@@ -31,10 +31,10 @@ for (const text of [directFree, directPreset]) {
   assert.equal(previewNoticeText(text, "http://localhost:4317/"), text, "本地入口保留直连回环地址");
 }
 for (const host of ["localhost", "LOCALHOST", "127.0.0.1", "0.0.0.0", "[::1]", "[::]"]) {
-  assert.equal(previewNoticeText(`预览进程已自行退出：https://${host}:51234/`, remotePage), "预览进程已自行退出：https://ash.example:51234/");
+  assert.equal(previewNoticeText(`预览进程已自行退出：https://${host}:51234/`, remotePage), "预览进程已自行退出：https://navi.example:51234/");
 }
-assert.equal(previewNoticeText("预览进程已自行退出：http://localhost:51234（npm run dev）", remotePage), "预览进程已自行退出：http://ash.example:51234/（npm run dev）");
-assert.equal(previewNoticeText("预览进程已自行退出：http://localhost:51234/。", remotePage), "预览进程已自行退出：http://ash.example:51234/。");
+assert.equal(previewNoticeText("预览进程已自行退出：http://localhost:51234（npm run dev）", remotePage), "预览进程已自行退出：http://navi.example:51234/（npm run dev）");
+assert.equal(previewNoticeText("预览进程已自行退出：http://localhost:51234/。", remotePage), "预览进程已自行退出：http://navi.example:51234/。");
 assert.equal(previewNoticeText(directFree, "http://192.168.1.8:4317/"), directFree.replace("localhost", "192.168.1.8"));
 assert.equal(previewNoticeText(directFree, "http://[2001:db8::8]:4317/"), directFree.replace("localhost", "[2001:db8::8]"));
 for (const url of ["http://localhost.example:51234/", "http://127.0.0.10:51234/", "http://localhost@external.example/"]) {
@@ -65,9 +65,9 @@ try {
       assert(!markup.includes("localhost"), "远程入口的直连时间线不残留回环地址");
     }
   }
-  Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "https://another-ash.example/" } });
-  assert.equal(previewNoticeText(freeText), freeText.replace(path, "https://another-ash.example" + path), "历史记录跟随当前访问入口");
-  assert.equal(previewNoticeText(directFree), directFree.replace("localhost", "another-ash.example"), "直连历史记录也跟随当前入口");
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "https://another-navi.example/" } });
+  assert.equal(previewNoticeText(freeText), freeText.replace(path, "https://another-navi.example" + path), "历史记录跟随当前访问入口");
+  assert.equal(previewNoticeText(directFree), directFree.replace("localhost", "another-navi.example"), "直连历史记录也跟随当前入口");
   Reflect.deleteProperty(globalThis, "location");
   assert.equal(previewNoticeText(freeText), freeText, "无浏览器上下文时仍能安全渲染");
   assert.equal(previewNoticeText(directFree), directFree, "无浏览器上下文时保留原始直连地址");

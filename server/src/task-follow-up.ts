@@ -1,9 +1,9 @@
 import { open, stat } from "node:fs/promises";
-import type { ConvSeg, TaskFollowUp, TaskFollowUpList } from "@ash/shared";
-import { isUserFollowUp } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
-import { parseAttachmentText } from "@ash/shared/attachments";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import type { ConvSeg, TaskFollowUp, TaskFollowUpList } from "@navi/shared";
+import { isUserFollowUp } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
+import { parseAttachmentText } from "@navi/shared/attachments";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";

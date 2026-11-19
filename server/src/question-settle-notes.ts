@@ -2,7 +2,7 @@
 // 读端(legacy-answer-intent.ts)要靠它认出「这道题是在续聊回合里问的,还是执行回合里问的」——
 // 那是这件事唯一不会被后续回合改写的持久记录,两边的字必须是同一份。界面也认这两句(认出就不画),
 // 所以起头本身放在 shared。
-import { FOLLOW_UP_QUESTION_HEAD, PAUSED_QUESTION_HEAD } from "@ash/shared/questions";
+import { FOLLOW_UP_QUESTION_HEAD, PAUSED_QUESTION_HEAD } from "@navi/shared/questions";
 
 export { FOLLOW_UP_QUESTION_HEAD, PAUSED_QUESTION_HEAD };
 

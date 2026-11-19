@@ -2,7 +2,7 @@
 //
 // 回放 2026-11-04 v9Ps5S1vbnKt 的三份真实 payload（审查者照清单旁那句「填它行首编号」交的裸编号数组，
 // 原始调用参数取自那个任务的 codex-events.jsonl）：
-// - 走 MCP 必须被拒，错误里带正确形状示例，且一个请求都没打到 ash；
+// - 走 MCP 必须被拒，错误里带正确形状示例，且一个请求都没打到 navi；
 // - 服务端 `parseCarries` 仍是第二道、语义不变：同样的 payload 直接打 HTTP，结论照收、承接按没填；
 // - 正确形状 `{"1":"1.1.1"}` 走同一条路（MCP → HTTP 路由 → 结论入口）落成 carries 并计入谱系。
 //
@@ -16,15 +16,15 @@ import { tmpdir } from "node:os";
 import { serve } from "@hono/node-server";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { ASH_TURN_IDENTITY_ENV_KEYS, isTurnIdentityPathEntry } from "@ash/shared/mcp";
+import { NAVI_TURN_IDENTITY_ENV_KEYS, isTurnIdentityPathEntry } from "@navi/shared/mcp";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-recurs-boundary-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_LAX_DONE;
-// 这个测试自己就可能跑在一条 ash 任务里：把那条任务的回合身份清干净，否则 MCP 层会带着它去打夹具服务。
-for (const key of ASH_TURN_IDENTITY_ENV_KEYS) delete process.env[key];
+const root = mkdtempSync(join(tmpdir(), "navi-recurs-boundary-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_LAX_DONE;
+// 这个测试自己就可能跑在一条 navi 任务里：把那条任务的回合身份清干净，否则 MCP 层会带着它去打夹具服务。
+for (const key of NAVI_TURN_IDENTITY_ENV_KEYS) delete process.env[key];
 process.env.PATH = (process.env.PATH ?? "").split(delimiter).filter((entry) => !isTurnIdentityPathEntry(entry)).join(delimiter);
 
 /** v9Ps5S1vbnKt 三轮审查者交的原样参数。 */
@@ -41,10 +41,10 @@ try {
   const { claimOwnTurn } = await import("../src/runs.js");
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
   const { parseCarries, recurrenceKey, taskRecurrences } = await import("../src/review-recurrence.js");
-  const { RECURS_SHAPE_ERROR } = await import("@ash/shared/free-workflow");
+  const { RECURS_SHAPE_ERROR } = await import("@navi/shared/free-workflow");
   await ensureSchema();
 
-  // 夹具 ash：只挂结论入口，记下每一个打进来的请求。
+  // 夹具 navi：只挂结论入口，记下每一个打进来的请求。
   const hits: string[] = [];
   const api = new Hono();
   api.use("*", async (c, next) => { hits.push(`${c.req.method} ${c.req.path}`); await next(); });
@@ -53,13 +53,13 @@ try {
   const port = await new Promise<number>((resolve) => {
     server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" }, (info: AddressInfo) => resolve(info.port));
   });
-  process.env.ASH_URL = `http://127.0.0.1:${port}`;
+  process.env.NAVI_URL = `http://127.0.0.1:${port}`;
 
   const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
   const { registerTaskTurnTools } = await import("../../mcp/src/tools/task-turn.js");
-  const mcp = new McpServer({ name: "ash", version: "test" });
+  const mcp = new McpServer({ name: "navi", version: "test" });
   registerTaskTurnTools(mcp);
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await mcp.connect(serverSide);
@@ -128,14 +128,14 @@ try {
     assert.ok(text.includes(example), `错误里要带正确形状示例：${text}`);
     assert.ok(text.includes("report_stage"), `错误要指明是哪个工具：${text}`);
   }
-  assert.deepEqual(hits, [], "被拒的调用一个都没打到 ash");
+  assert.deepEqual(hits, [], "被拒的调用一个都没打到 navi");
   assert.equal((await round2()).conclusion, null, "结论没被半截写进去");
 
   // ② 服务端是第二道，语义不变：同样的裸数组直接打 HTTP，结论照收、承接按没填。
   for (const payload of REAL_PAYLOADS) {
     assert.deepEqual(parseCarries(payload, 3, new Set(["1.1.1", "1.1.2", "1.1.3", "2.1.1", "2.2.1", "3.1.3"])), [],
       `parseCarries 读不懂的仍按没填：${JSON.stringify(payload)}`);
-    const res = await fetch(`${process.env.ASH_URL}/api/tasks/${id}/stage`, {
+    const res = await fetch(`${process.env.NAVI_URL}/api/tasks/${id}/stage`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ stage: "verify_failed", recurs: payload }),
     });

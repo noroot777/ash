@@ -3,8 +3,8 @@ import { once } from "node:events";
 import { rmSync } from "node:fs";
 import { createServer } from "node:http";
 
-const dbPath = `/tmp/ash-anthropic-context-1m-${process.pid}.db`;
-process.env.ASH_DB = dbPath;
+const dbPath = `/tmp/navi-anthropic-context-1m-${process.pid}.db`;
+process.env.NAVI_DB = dbPath;
 process.env.PORT = "54322";
 
 const {

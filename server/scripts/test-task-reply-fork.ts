@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { forkTaskBody, snapshotConversationFork } from "../../web/src/task-detail/conversationFork.ts";
 import type { ConversationItem } from "../../web/src/task-detail/conversationModel.ts";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-reply-fork-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-reply-fork-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, sessions } = await import("../src/db/schema.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");

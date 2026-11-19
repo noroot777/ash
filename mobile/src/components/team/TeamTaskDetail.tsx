@@ -17,13 +17,13 @@ import {
   type Group,
   type Session,
   type TaskListItem,
-} from "@ash/shared";
+} from "@navi/shared";
 import {
   batchesOf,
   isTeamSettled,
   teamGroupsOf,
   workersOf,
-} from "@ash/shared/team";
+} from "@navi/shared/team";
 import { api, type TeamCuaStatus } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
 import {

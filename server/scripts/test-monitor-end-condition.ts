@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { endConditionNote } from "@ash/shared/monitor-end-condition";
+import { endConditionNote } from "@navi/shared/monitor-end-condition";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
   HERE, root, db, schema, isPidAlive,

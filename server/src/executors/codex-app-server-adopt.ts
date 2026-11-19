@@ -254,12 +254,12 @@ export function wireAdoptionRecovery(
       if (w.settled()) return true;                  // 已经收口,不必再恢复
       if (w.claimed()) return true;                  // 中途已经认回来了:凭据优先于这一问
       if (state.evidence === "never-started") {
-        console.warn(`[ash] 接管会话 ${w.sessionId ?? ""} 的协议日志现在读得动了：`
+        console.warn(`[navi] 接管会话 ${w.sessionId ?? ""} 的协议日志现在读得动了：`
           + "逐行扫完没有任何「回合已开始」的凭据，按确证未启动收口");
         w.neverStarted();
         return true;
       }
-      console.warn(`[ash] 接管会话 ${w.sessionId ?? ""} 的回合身份已经重读回来（turn=${state.turnId}）`);
+      console.warn(`[navi] 接管会话 ${w.sessionId ?? ""} 的回合身份已经重读回来（turn=${state.turnId}）`);
       w.claim(state);
       return true;
     },

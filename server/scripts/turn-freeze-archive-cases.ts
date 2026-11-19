@@ -28,12 +28,12 @@ async function until(predicate: () => boolean, message: string): Promise<void> {
 }
 
 export async function freezeArchiveCases(root: string): Promise<void> {
-  const environment = { path: process.env.PATH, staged: process.env.ASH_TEST_AGENT_BIN, log: process.env.ASH_TEST_LEAD_LOG };
+  const environment = { path: process.env.PATH, staged: process.env.NAVI_TEST_AGENT_BIN, log: process.env.NAVI_TEST_LEAD_LOG };
   const inputLog = join(root, "archive-retry-input.log");
   const fakeBin = installFakeClaude(root);
   process.env.PATH = `${fakeBin}${delimiter}${environment.path ?? ""}`;
-  process.env.ASH_TEST_AGENT_BIN = fakeBin;
-  process.env.ASH_TEST_LEAD_LOG = inputLog;
+  process.env.NAVI_TEST_AGENT_BIN = fakeBin;
+  process.env.NAVI_TEST_LEAD_LOG = inputLog;
   await db.insert(appSettings).values({ key: "archiveClean", value: JSON.stringify("none") })
     .onConflictDoUpdate({ target: appSettings.key, set: { value: JSON.stringify("none") } });
   const api = new Hono();
@@ -119,9 +119,9 @@ export async function freezeArchiveCases(root: string): Promise<void> {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     if (environment.path === undefined) delete process.env.PATH;
     else process.env.PATH = environment.path;
-    if (environment.staged === undefined) delete process.env.ASH_TEST_AGENT_BIN;
-    else process.env.ASH_TEST_AGENT_BIN = environment.staged;
-    if (environment.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
-    else process.env.ASH_TEST_LEAD_LOG = environment.log;
+    if (environment.staged === undefined) delete process.env.NAVI_TEST_AGENT_BIN;
+    else process.env.NAVI_TEST_AGENT_BIN = environment.staged;
+    if (environment.log === undefined) delete process.env.NAVI_TEST_LEAD_LOG;
+    else process.env.NAVI_TEST_LEAD_LOG = environment.log;
   }
 }

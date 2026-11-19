@@ -44,7 +44,7 @@ export type TerminalSessionInfo = {
     | { kind: "unresolved"; pids: number[]; complete: boolean; why: string; memberReasons?: Record<string, string>; incompleteReasons?: string[] };
   /**
    * 用户**显式放弃**了这次启动的管理责任（「我自己处理了」）。非 null = 他已经看过残留事实、
-   * 按过那颗带风险确认的按钮：ash 不再把这条记录当「还在跑」，删除保护一并解除。
+   * 按过那颗带风险确认的按钮：navi 不再把这条记录当「还在跑」，删除保护一并解除。
    *
    * **它不是核销** —— 停没停净的结论仍原样留在 `stop` 上，这一格另记「放弃那一刻还有什么
    * 活着」。界面照实说「已放弃管理」，不说「已停止」（判据在 server/src/terminal-abandon.ts）。
@@ -66,7 +66,7 @@ export type LaunchAbandonment = {
   /** 原样显示给用户的那一段残留交代。 */
   notice: string;
   /**
-   * 那段话说的是哪一种:有确定是这次启动留下的(owned)/只有 ash 分不清来路的(unsure)/
+   * 那段话说的是哪一种:有确定是这次启动留下的(owned)/只有 navi 分不清来路的(unsure)/
    * 什么都探不到(none)。界面据它挑「已放弃管理（…）」的说法,别去认 notice 的措辞。
    */
   left: "owned" | "unsure" | "none";
@@ -78,7 +78,7 @@ export type LaunchResidueView = {
   name: string;
   startedAt: number;
   residue: LaunchAbandonment;
-  /** 放弃之后 ash **不再做**哪几件事，原样逐条显示 —— 用户按之前就该读到。 */
+  /** 放弃之后 navi **不再做**哪几件事，原样逐条显示 —— 用户按之前就该读到。 */
   scope: string[];
   /** 非 null = 已经放弃过，弹层直接显示当时那一份。 */
   abandoned: LaunchAbandonment | null;

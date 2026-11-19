@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { api, type TaskCommitList, type TaskDiffResult } from "../../src/lib/api.ts";
 import { json, request } from "../../src/lib/apiClient.ts";
 import { commitListFailure } from "../../src/lib/branch-diff-reason.ts";
@@ -70,7 +70,7 @@ function Fixture() {
   const checkCreationError = async () => {
     try {
       await request("/tasks", { ...json("POST", { projectId: task.projectId, title: "过期来源", useWorktree: false }),
-        headers: { "content-type": "application/json", "x-ash-source-task-id": task.id, "x-ash-turn-token": "stale-fixture-turn" } });
+        headers: { "content-type": "application/json", "x-navi-source-task-id": task.id, "x-navi-turn-token": "stale-fixture-turn" } });
     } catch (e) { setCreationError(e instanceof Error ? e.message : String(e)); }
   };
   const shown = { ...task, archived: guard === "archived", status: guard === "running" || guard === "queued" ? guard : task.status };

@@ -1,11 +1,11 @@
-// ash 在门禁跑着的时候死掉，新实例起来之后的四条分流（server/src/accept-gate-exit.ts 顶部）：
+// navi 在门禁跑着的时候死掉，新实例起来之后的四条分流（server/src/accept-gate-exit.ts 顶部）：
 //  (a) 命令还在跑 → 接管：看门的重挂、时限从开跑那一刻算，最后按真实 rc 结算；
 //  (b) 已经 rc=0 退出 → 结算 passed，并照常自动把验收做完；
 //  (c) 已经 rc≠0 退出 → 结算 failed，照常交回任务去修；
 //  (d) 没有退出档 → 维持老结局「被打断」，文案不变。
 // 外加身份核验：pid 被复用时绝不接管、绝不误杀、绝不拿别人的退出结算。
 //
-// 「ash 死掉」是真的：门禁由另一个进程（accept-gate-crash-worker.ts）发起，命令放行后它
+// 「navi 死掉」是真的：门禁由另一个进程（accept-gate-crash-worker.ts）发起，命令放行后它
 // SIGKILL 自己，内存里的退出回调、看门的、进程表全部跟着没了，本进程只剩库和盘上的文件。
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -77,7 +77,7 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     const row = await runOf(taskId);
     assert.equal(row.status, "running");
     assert.equal(readGateLaunch(row.logPath)?.phase, "armed", "旧实例死前命令已经放行");
-    assert.equal(hasLiveAcceptGate(taskId), false, "本进程从没见过这条运行：跟一个新起来的 ash 一样");
+    assert.equal(hasLiveAcceptGate(taskId), false, "本进程从没见过这条运行：跟一个新起来的 navi 一样");
     return row;
   }
 
@@ -205,7 +205,7 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     assert.equal(main(s.repo), s.before);
   }
 
-  // 身份核验：pid 被复用、退出档对不上、ash 自己喊过停 —— 一律不接管、不结算。
+  // 身份核验：pid 被复用、退出档对不上、navi 自己喊过停 —— 一律不接管、不结算。
   const stranger = spawn("sleep", ["60"], { stdio: "ignore", detached: true });
   const strangerPid = stranger.pid!;
   try {
@@ -229,7 +229,7 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     assert.deepEqual(gateRecoveryFate(run), { kind: "exited", exit: { code: 0, signal: null, elapsedMs: 1_000 } },
       "这一次的启动器留下的完整退出档，不受之后 pid 被谁复用影响");
     writeFileSync(gateAbortPath(log), "abort");
-    assert.equal(gateRecoveryFate(run).kind, "lost", "ash 自己喊过停：退出档里的不是命令自己的结论");
+    assert.equal(gateRecoveryFate(run).kind, "lost", "navi 自己喊过停：退出档里的不是命令自己的结论");
     rmSync(gateAbortPath(log));
     writeGateLaunch(log, { ...readGateLaunch(log)!, phase: "stopped" });
     assert.equal(gateRecoveryFate(run).kind, "lost");

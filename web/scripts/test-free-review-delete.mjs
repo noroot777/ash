@@ -132,7 +132,7 @@ try {
       // 等到没有在飞的清单读（在飞时资源层会复用那一条，就分不清是谁发的），然后在同一个
       // 页面任务里派发 focus 并当场数新发出的读 —— 轮询的定时器插不进一段同步代码里。
       refocusIssuesRead: () => waitUntil(() => page.evaluate(() => {
-        const log = window.__ashFetches ?? [];
+        const log = window.__naviFetches ?? [];
         if (log.some((entry) => entry.state === "pending")) return false;
         const before = log.length;
         window.dispatchEvent(new Event("focus"));
@@ -161,7 +161,7 @@ try {
     await panel.waitFor();
     assert.deepEqual(await panel.locator(".ui-dropdown-row b").allInnerTexts(), ["顶级审查", "opus5", "grok4.6"]);
     assert.match(await panel.locator(".ui-dropdown-row").first().innerText(), /codex@local · gpt-5\.6-sol · high/, "每位审查者带一行它会怎么跑");
-    await page.screenshot({ path: "/tmp/ash-free-review-dialog.png", fullPage: true });
+    await page.screenshot({ path: "/tmp/navi-free-review-dialog.png", fullPage: true });
     await panel.getByRole("button", { name: "管理审查者…" }).click();
     await page.getByTestId("closed").waitFor();
     const url = new URL(page.url());

@@ -1,9 +1,9 @@
 // 工具入参里反复出现的取值域与形状。单独一份是为了**只有一份**：以前 agent 类型在
 // 各处写死，新增一个执行器后 MCP 侧会莫名 400（见下面那段注释）。
 import { z } from "zod";
-import { AGENT_TYPES, STAGE_ORDER } from "@ash/shared";
-import { RECURS_SHAPE_ERROR } from "@ash/shared/free-workflow";
-import { MAX_WITHDRAW_REASON_LEN } from "@ash/shared/dispatch-suggestion";
+import { AGENT_TYPES, STAGE_ORDER } from "@navi/shared";
+import { RECURS_SHAPE_ERROR } from "@navi/shared/free-workflow";
+import { MAX_WITHDRAW_REASON_LEN } from "@navi/shared/dispatch-suggestion";
 
 export const AGENT_TYPE = z.enum(AGENT_TYPES);
 export const MODE = z.enum(["parallel", "serial"]);

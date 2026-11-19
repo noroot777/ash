@@ -6,7 +6,7 @@
 // 反应」—— 而真实服务端从来没有这个窗口。所以这不是给测试开的后门,是让夹具跟真服务端
 // 在这一点上一致。
 import type { Hono } from "hono";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
 
 export function mountFixtureSettings(api: Hono): void {
   api.get("/settings", (c) => c.json(DEFAULT_APP_SETTINGS));

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FeishuBinding, ImBindCode } from "@ash/shared";
+import type { FeishuBinding, ImBindCode } from "@navi/shared";
 import { Button } from "../components/ui.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { api } from "../lib/api.ts";

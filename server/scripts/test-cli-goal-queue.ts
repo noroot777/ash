@@ -5,16 +5,16 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AgentType, TaskStatus } from "@ash/shared";
-import { hasCliGoalHold, readCliState, type CliSessionState } from "@ash/shared/cli-commands";
+import type { AgentType, TaskStatus } from "@navi/shared";
+import { hasCliGoalHold, readCliState, type CliSessionState } from "@navi/shared/cli-commands";
 import type { RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-goal-queue-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-goal-queue-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents, groups, projects, queueItems, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
@@ -48,10 +48,10 @@ function failStart(taskId: string, phase: "prepare" | "run") {
   throw new Error(`fixture goal startup failure: ${phase}`);
 }
 const fixturePrepare: typeof originalPrepare = async function (options) {
-  failStart(options.env!.ASH_TASK_ID!, "prepare");
+  failStart(options.env!.NAVI_TASK_ID!, "prepare");
 };
 const fixtureRun: typeof originalCodex = function (options) {
-  const taskId = options.env!.ASH_TASK_ID!;
+  const taskId = options.env!.NAVI_TASK_ID!;
   invocations.set(taskId, [...invocations.get(taskId) ?? [], options]);
   failStart(taskId, "run");
   const nativeId = options.sessionId ?? `${taskId}-native`;

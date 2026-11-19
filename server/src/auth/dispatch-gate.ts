@@ -13,8 +13,8 @@
 // `isHostCliIsolated()`,不是 `isMultiUser()`。自用模式下同样一律不成立,行为与本
 // 功能上线前逐字节一致。
 import { and, eq, isNull, type SQL } from "drizzle-orm";
-import type { AgentType, ExecutorDowngradeItem, ExecutorSlot } from "@ash/shared";
-import { MULTI_USER_CLI_BLOCKED, MULTI_USER_NO_PROVIDER_HINT } from "@ash/shared/multiuser";
+import type { AgentType, ExecutorDowngradeItem, ExecutorSlot } from "@navi/shared";
+import { MULTI_USER_CLI_BLOCKED, MULTI_USER_NO_PROVIDER_HINT } from "@navi/shared/multiuser";
 import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 import { cliSpec } from "../executors/catalog/index.js";

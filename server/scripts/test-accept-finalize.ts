@@ -7,7 +7,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { mock } from "node:test";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db } from "../src/db/index.js";
 import { freeWorkflowStates, projects, sessions, tasks } from "../src/db/schema.js";
 import { createTasks } from "../src/task-store.js";

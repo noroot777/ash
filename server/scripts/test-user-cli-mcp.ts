@@ -14,18 +14,18 @@ import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-import { LEGACY_MCP_SERVER_NAMES } from "@ash/shared/legacy-names";
-import { extractTomlTables, hostAshMcp, readAshMcp } from "../src/auth/user-cli-mcp.js";
+import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
+import { LEGACY_MCP_SERVER_NAMES } from "@navi/shared/legacy-names";
+import { extractTomlTables, hostNaviMcp, readNaviMcp } from "../src/auth/user-cli-mcp.js";
 import { REPO_DIR } from "../src/paths.js";
 import { checkCodexApprove } from "./codex-approve-cases.js";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 import { bench, ensure, HAS_BUILT_MCP, readJson, stage } from "./user-cli-mcp-bench.js";
 
 // 改名之前的登记名：宿主机上旧版 setup 写的是 `ash`（再早是 `harness`）。已有这条就不再补；搬进个人目录、
-// 或者从表里抠出来的时候，落成当前名（`ASH_MCP_SERVER_NAME`）。
+// 或者从表里抠出来的时候，落成当前名（`NAVI_MCP_SERVER_NAME`）。
 const [ASH, HARNESS] = LEGACY_MCP_SERVER_NAMES;
-const NAME = ASH_MCP_SERVER_NAME;
+const NAME = NAVI_MCP_SERVER_NAME;
 
 
 // 宿主那条故意写成**用户自定义**的形状(不是 `node …/mcp/dist/index.js`):标准本机登记不照搬、
@@ -43,7 +43,7 @@ const HOST_CLAUDE = JSON.stringify({
   writeFileSync(join(dir, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, projects: {} }), "utf8");
   const state = await ensure(dir, "claude", host);
   assert.equal(state.configured, true);
-  assert.equal(state.serverName, ASH_MCP_SERVER_NAME);
+  assert.equal(state.serverName, NAVI_MCP_SERVER_NAME);
   const doc = readJson(join(dir, ".claude.json"));
   assert.equal(doc.hasCompletedOnboarding, true, "seed 里原有的键不能被冲掉");
   assert.deepEqual(doc.mcpServers[NAME].args, ["/opt/ash/custom/ash-mcp.js"], "定义要照搬宿主那条，名字落成当前名");
@@ -185,21 +185,21 @@ const HOST_CLAUDE = JSON.stringify({
 // ⑫ 只读版**一个字都不许写** —— 共用档拿它去问宿主机那份配置,那是用户自己的文件。
 {
   const { dir } = bench();
-  const state = readAshMcp(dir, "claude");
+  const state = readNaviMcp(dir, "claude");
   assert.equal(state.configured, false, "空目录里当然没有登记");
   assert.ok(!existsSync(join(dir, ".claude.json")), "只读版不许把文件建出来");
   writeFileSync(join(dir, ".claude.json"), JSON.stringify({ mcpServers: { ash: {} } }), "utf8");
-  assert.equal(readAshMcp(dir, "claude").serverName, ASH, "旧名登记也认得出");
+  assert.equal(readNaviMcp(dir, "claude").serverName, ASH, "旧名登记也认得出");
 }
 
 // ⑬ 宿主视角的路径差一层:claude 读 ~/.claude.json,codex 读 ~/.codex/config.toml。
 {
   const { host } = bench({ claude: HOST_CLAUDE, codex: `[mcp_servers.ash]\ncommand = "node"\n` });
-  assert.equal(hostAshMcp("claude", host).configured, true, "claude 的用户级配置在 home 根");
-  assert.equal(hostAshMcp("codex", host).configured, true, "codex 的在 ~/.codex/ 里");
+  assert.equal(hostNaviMcp("claude", host).configured, true, "claude 的用户级配置在 home 根");
+  assert.equal(hostNaviMcp("codex", host).configured, true, "codex 的在 ~/.codex/ 里");
   const bare = bench();
-  assert.equal(hostAshMcp("claude", bare.host).configured, false);
-  assert.equal(hostAshMcp("codex", bare.host).configured, false);
+  assert.equal(hostNaviMcp("claude", bare.host).configured, false);
+  assert.equal(hostNaviMcp("codex", bare.host).configured, false);
   // 问完之后宿主那边不该多出任何东西(只读的判据就是这个)。
   assert.ok(!existsSync(join(bare.host, ".claude.json")), "问一句不许把宿主配置建出来");
   assert.ok(!existsSync(join(bare.host, ".codex", "config.toml")), "codex 侧同理");
@@ -207,9 +207,9 @@ const HOST_CLAUDE = JSON.stringify({
 
 // ⑭ **档位是运行中能切的**:从「共用宿主机 CLI」切回隔离档那一下,个人目录就地建出来。
 // 个人目录里**不再补** ash MCP 登记:有个人目录的 claude / codex 起跑时由 ash 注入自己的 MCP
-// (executors/ash-mcp-inject.ts),设置页照实说「接得上」。
+// (executors/navi-mcp-inject.ts),设置页照实说「接得上」。
 {
-  process.env.ASH_DB ||= join(stage, "switch.db");
+  process.env.NAVI_DB ||= join(stage, "switch.db");
   requireTmpDb("test-user-cli-mcp");
   const { ensureSchema } = await import("../src/db/index.js");
   const mode = await import("../src/auth/mode.js");
@@ -233,12 +233,12 @@ const HOST_CLAUDE = JSON.stringify({
     { sharedHostCli: false },
   );
   assert.ok(existsSync(claudeDir), "切到隔离档就该把个人配置目录建出来");
-  assert.equal(readAshMcp(claudeDir, "claude").configured, false, "切档不往个人目录里写 ash MCP 登记");
+  assert.equal(readNaviMcp(claudeDir, "claude").configured, false, "切档不往个人目录里写 ash MCP 登记");
   const { personalCliEnv } = await import("../src/auth/user-cli.js");
   for (const agent of ["claude", "codex"] as const) {
-    assert.equal((await personalCliEnv(admin.id, agent)).ashMcp?.configured, true, `${agent}:起跑时注入,设置页说接得上`);
+    assert.equal((await personalCliEnv(admin.id, agent)).naviMcp?.configured, true, `${agent}:起跑时注入,设置页说接得上`);
   }
-  assert.equal(readAshMcp(claudeDir, "claude").configured, false, "设置页那一问也不写");
+  assert.equal(readNaviMcp(claudeDir, "claude").configured, false, "设置页那一问也不写");
 }
 
 // ⑮ 写那一侧跟读那一侧问同一个扫描器（新链第 2 轮审查第 5 条）：引号表头、缩进表头都算

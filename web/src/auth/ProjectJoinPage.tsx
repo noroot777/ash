@@ -1,7 +1,7 @@
 // 项目邀请链接的加入页(§六)。**没有「接受」这个中间态** —— 点了就是成员,
 // 因为发链接的人已经在决定「谁能进」了,再加一道审批只是多一次点击。
 import { useCallback, useEffect, useState } from "react";
-import type { ProjectInviteInfo } from "@ash/shared";
+import type { ProjectInviteInfo } from "@navi/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
 import { AuthShell } from "./AuthShell.tsx";

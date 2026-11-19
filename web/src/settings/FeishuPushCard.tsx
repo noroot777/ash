@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { FeishuStatus, ImOptions, ProjectView } from "@ash/shared";
+import type { FeishuStatus, ImOptions, ProjectView } from "@navi/shared";
 import { Button, Checkbox, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { localeNumber } from "../lib/localeFormat.ts";

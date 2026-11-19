@@ -53,7 +53,7 @@ export function scheduleRedelivery(message: { id: string; taskId: string }, why:
     // 结算钩子触发的扫描照样立刻取走它再撞一次。
     nextRetryAt.set(message.id, at + RETRY_BACKSTOP_MS);
     console.warn(
-      `[ash] 排队消息连挡 ${attempt} 次仍没送成 task=${message.taskId} message=${message.id}`
+      `[navi] 排队消息连挡 ${attempt} 次仍没送成 task=${message.taskId} message=${message.id}`
       + `（${why};已等 ${secs(waited)}）—— 交给 30s 兜底扫描`,
     );
     return;
@@ -62,7 +62,7 @@ export function scheduleRedelivery(message: { id: string; taskId: string }, why:
   redeliveryAttempts.set(message.id, attempt + 1);
   nextRetryAt.set(message.id, at + delay);
   console.warn(
-    `[ash] 排队消息这一次没送成 task=${message.taskId} message=${message.id}`
+    `[navi] 排队消息这一次没送成 task=${message.taskId} message=${message.id}`
     + `（${why};已等 ${secs(waited)}）—— ${delay}ms 后重投（第 ${attempt + 1} 次）`,
   );
   const prev = redeliveryTimers.get(message.id);
@@ -72,7 +72,7 @@ export function scheduleRedelivery(message: { id: string; taskId: string }, why:
     void import("./pending-messages.js").then(({ deliverPendingMessages }) =>
       deliverPendingMessages(message.taskId).catch((err) => {
         if (dbClient.closed) return; // 进程收尾时被掐,不是投递故障
-        console.error(`[ash] 排队消息重投失败 task=${message.taskId}:`, err);
+        console.error(`[navi] 排队消息重投失败 task=${message.taskId}:`, err);
       }));
   }, delay);
   timer.unref?.();

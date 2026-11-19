@@ -2,20 +2,20 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ASH } from "./mcp-host-sources.mjs";
+import { NAVI } from "./mcp-host-sources.mjs";
 import { registerHostMcp } from "./mcp-hosts.mjs";
 
 // kimi 这一家在装机脚本里怎么登记：setup.mjs 对各家统一走 registerHostMcp，落点由 KIMI_CODE_HOME 定。
 const registerKimiMcp = ({ configDir, mcpEntry, url }) =>
   registerHostMcp({ agentType: "kimi", mcpEntry, url, nodeBin: process.execPath, env: { KIMI_CODE_HOME: configDir } });
 
-const directory = mkdtempSync(join(tmpdir(), "ash-kimi-mcp-"));
+const directory = mkdtempSync(join(tmpdir(), "navi-kimi-mcp-"));
 const file = join(directory, "mcp.json");
-const options = { configDir: directory, mcpEntry: "/ash/mcp/dist/index.js", url: "http://localhost:4317" };
+const options = { configDir: directory, mcpEntry: "/navi/mcp/dist/index.js", url: "http://localhost:4317" };
 try {
   assert.equal(registerKimiMcp(options).added, true);
   const created = readFileSync(file, "utf8");
-  assert.deepEqual(JSON.parse(created).mcpServers[ASH], {
+  assert.deepEqual(JSON.parse(created).mcpServers[NAVI], {
     command: process.execPath,
     args: [options.mcpEntry],
     env: { NAVI_URL: options.url },
@@ -24,7 +24,7 @@ try {
   assert.equal(readFileSync(file, "utf8"), created);
   assert.equal(existsSync(`${file}.bak-navi-setup`), false);
 
-  for (const name of [ASH, "ash", "harness"]) {
+  for (const name of [NAVI, "ash", "harness"]) {
     const existing = JSON.stringify({ mcpServers: { [name]: { command: "custom", args: ["keep"] } } });
     writeFileSync(file, existing);
     assert.equal(registerKimiMcp(options).added, false);
@@ -38,7 +38,7 @@ try {
   const merged = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(merged.extra, true);
   assert.deepEqual(merged.mcpServers.other, { url: "https://example.invalid/mcp" });
-  assert.ok(merged.mcpServers[ASH]);
+  assert.ok(merged.mcpServers[NAVI]);
 
   // 读不通 / 根不是对象 / 容器不是对象:**不写 + 如实回一句**,文件一个字节不动。
   // (2026-10-31 统一到十五家同一个契约:原来这里是抛错,而 setup 全家都走 `registerHostMcp`

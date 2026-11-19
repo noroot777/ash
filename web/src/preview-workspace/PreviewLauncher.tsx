@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
-import { MAX_PREVIEW_SCRIPT_LENGTH, previewPortDialect, previewPortRef, type PreviewPortDialect, type WorkspacePreviewInput } from "@ash/shared/preview";
+import type { FreeWorkflowPreviewState } from "@navi/shared/free-workflow";
+import { MAX_PREVIEW_SCRIPT_LENGTH, previewPortDialect, previewPortRef, type PreviewPortDialect, type WorkspacePreviewInput } from "@navi/shared/preview";
 import { request } from "../lib/apiClient.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
 import { PreviewPortGuide } from "./PreviewPortGuide.tsx";

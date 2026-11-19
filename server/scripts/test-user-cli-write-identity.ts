@@ -15,23 +15,23 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
 import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
-import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
+import { ensureNaviMcp } from "../src/auth/user-cli-mcp.js";
 import { REPO_DIR } from "../src/paths.js";
 
 // 不用临时库:这条 import 链(写入器 → 探测层 / TOML 扫描器 / 端口)一个字都不碰数据库,
 // 要是在这里 `releaseTmpDb()` 反而会把真的 data/ash.db 连上。
-const stage = mkdtempSync(join(tmpdir(), "ash-write-identity-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-write-identity-"));
 process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
 
 /** 「codex 收下了」—— 这几格钉的是**写出来那个文件的身份**,不是 codex 的判决。 */
-const LISTS_ASH: CodexAskOutcome = {
-  kind: "answer", code: 0, stdout: JSON.stringify([{ name: ASH_MCP_SERVER_NAME, enabled: true }]), stderr: "",
+const LISTS_NAVI: CodexAskOutcome = {
+  kind: "answer", code: 0, stdout: JSON.stringify([{ name: NAVI_MCP_SERVER_NAME, enabled: true }]), stderr: "",
 };
 // 宿主机上是改名之前 setup 写的旧名；搬进个人目录落的是当前名。
-const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
-const TABLE_RE = new RegExp(`\\[mcp_servers\\.${ASH_MCP_SERVER_NAME}\\]`);
+const HOST = `[mcp_servers.navi]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+const TABLE_RE = new RegExp(`\\[mcp_servers\\.${NAVI_MCP_SERVER_NAME}\\]`);
 const BEFORE = `model = "gpt"\n`;
 
 let seq = 0;
@@ -44,7 +44,7 @@ function bench() {
   writeFileSync(join(host, ".codex", "config.toml"), HOST, "utf8");
   return { host, dir };
 }
-const ensure = (dir: string, host: string) => ensureAshMcp(dir, "codex", host, async () => LISTS_ASH);
+const ensure = (dir: string, host: string) => ensureNaviMcp(dir, "codex", host, async () => LISTS_NAVI);
 
 /**
  * ACL 怎么探测、怎么比,在 `scripts/acl-probe.mjs` 里只有一份 —— 安装器那一侧的
@@ -68,7 +68,7 @@ if (process.platform === "win32") {
   assert.equal(state.configured, true);
   assert.match(readFileSync(file, "utf8"), TABLE_RE);
   if (ino !== 0) assert.equal(Number(statSync(file).ino), ino, "就地写：不许换文件");
-  assert.equal(existsSync(`${file}.ash-tmp`), false, "就地写不该产生临时副本");
+  assert.equal(existsSync(`${file}.navi-tmp`), false, "就地写不该产生临时副本");
 } else {
   // ① 0600 的配置写完还得是 0600：临时文件按 umask 建出来是 0644，rename 上去就把私密
   //    配置对同机器上别的账号放开了。
@@ -126,7 +126,7 @@ if (process.platform === "win32") {
   // ⑤ 原来没有这个文件：新建那一路**只给自己读**(0600)。这一档没有「原来那份」可抄,所以
   //    不是就地写那条规矩在管 —— 是「这个文件装着 MCP 接法,别按 umask 摊开给同机器上别的
   //    账号」。裸 Node 那侧(安装器)同口径,`mcp-publish-cases.ts` 第 ③ 组 ⒟ 和
-  //    `test-ash-mcp-registry.ts` 第 ③ 组各钉着自己那一边。
+  //    `test-navi-mcp-registry.ts` 第 ③ 组各钉着自己那一边。
   {
     const { host, dir } = bench();
     const file = join(dir, "config.toml");

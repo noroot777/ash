@@ -7,7 +7,7 @@
 import type { scheduledMessages, tasks } from "./db/schema.js";
 import { isCanceling, turnRole } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
+import { isUserAuthoredMessage } from "@navi/shared/scheduled-message-author";
 
 type MessageRow = typeof scheduledMessages.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
