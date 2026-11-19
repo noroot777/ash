@@ -16,7 +16,7 @@ import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const { baselineHarness } = await import("./accept-gate-baseline-fixture.js");
-const h = await baselineHarness("ash-gate-conflict-handoff-");
+const h = await baselineHarness("navi-gate-conflict-handoff-");
 const { root, git, db, tasks, acceptGateState, runs, commitOnMain, fixture } = h;
 const { handOffPreviewConflict } = await import("../src/accept-gate-conflict.js");
 const { conflictHandoffTicket, settleConflictHandoff } = await import("../src/accept-gate-conflict-registry.js");

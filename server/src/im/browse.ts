@@ -1,7 +1,7 @@
 // /tasks：在飞书里翻看一个项目的任务。
 //
 // 一张卡在原地翻：单聊先给一张项目选单，点一个项目 → 这张卡换成它的任务列表（先 5 个，「再显示 5 个」往下加），
-// 每一行点一下就打开那个任务的 ash 链接；「在这里建任务」把这张卡换成落在这个项目上的建任务表单。群里只看这个群
+// 每一行点一下就打开那个任务的 navi 链接；「在这里建任务」把这张卡换成落在这个项目上的建任务表单。群里只看这个群
 // 绑定的项目，直接给列表。先后跟网页侧栏同一份规则（shared/src/task-order.ts）。
 //
 // 这张卡上的按钮只读不写，所以信封不占用（browse 这一种可以反复点）：点的那一刻照样过信封的前三关（是不是发给
@@ -11,14 +11,14 @@
 // 从此只有表单的按钮，翻看信封随之用掉。
 // 换上去的卡和发件表里那一行同一份（actions.ts 文件头的约定：库里那份是卡上最终该有的样子），来源也跟着换成
 // 卡上此刻列着的东西，出口按它核。
-import { taskDisplayStatus, type Project, type TaskListItem } from "@ash/shared";
-import { orderedListTasks } from "@ash/shared/task-order";
+import { taskDisplayStatus, type Project, type TaskListItem } from "@navi/shared";
+import { orderedListTasks } from "@navi/shared/task-order";
 import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imActions, imOutbox } from "../db/schema-im.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
 import { now } from "../util.js";
-import type { AshClient } from "./ash-client.js";
+import type { NaviClient } from "./navi-client.js";
 import { newTaskCard, taskLink } from "./cards.js";
 import { createEnvelope, type EnvelopeRow } from "./envelopes.js";
 import { renderCard, type CardBlock, type CardButton, type CardModel } from "./feishu/cards.js";
@@ -29,7 +29,7 @@ import { originOfScope, requestScope, scopeOfRow, type Origin, type ScopeBody } 
 import { scrubText, scrubTitle } from "./scrub.js";
 
 export const BROWSE_PAGE = 5;
-/** 一张卡最多列这么多个任务（再多卡片就太长了，剩下的去 ash 里看）。 */
+/** 一张卡最多列这么多个任务（再多卡片就太长了，剩下的去 navi 里看）。 */
 const BROWSE_MAX = 30;
 /** 选单一张卡放几个项目（每个一颗按钮）。 */
 export const PICK_LIMIT = 30;
@@ -98,11 +98,11 @@ export function browseScope(view: BrowseView): ScopeBody {
 }
 
 export class Browser {
-  constructor(private readonly deps: { appId: string; ash: AshClient; reconciler: Reconciler }) {}
+  constructor(private readonly deps: { appId: string; navi: NaviClient; reconciler: Reconciler }) {}
 
   /** 以他的身份读他看得到的项目；没读到返回报错原文。 */
   async projectsOf(principal: ImPrincipal): Promise<Project[] | { error: string }> {
-    const result = await this.deps.ash.get<Project[]>(principal, "/api/projects");
+    const result = await this.deps.navi.get<Project[]>(principal, "/api/projects");
     if (!result.ok) return { error: result.error };
     return Array.isArray(result.data) ? result.data : [];
   }
@@ -111,7 +111,7 @@ export class Browser {
   async tasksView(
     principal: ImPrincipal, project: Project, index: number, shown: number, picker: boolean,
   ): Promise<BrowseView | { error: string }> {
-    const result = await this.deps.ash.get<TaskListItem[]>(principal, "/api/tasks");
+    const result = await this.deps.navi.get<TaskListItem[]>(principal, "/api/tasks");
     if (!result.ok) return { error: result.error };
     const tasks = orderedListTasks((Array.isArray(result.data) ? result.data : []).filter((task) => task.projectId === project.id));
     const base = await readOptions().then((options) => options.publicBaseUrl, () => null);

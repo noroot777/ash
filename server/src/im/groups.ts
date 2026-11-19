@@ -3,11 +3,11 @@
 // 绑法与个人绑定同一套三步（见 ./binding.ts 顶部）：网页上选好项目生成码 → 在群里 @ 机器人
 // 发出这串码 → 回网页确认。绑上之后：
 //   · 群里 @ 机器人的话进这个项目的群聊房间（每个说话人各自一间，见 schema-im.ts 的
-//     im_group_rooms）。说话人必须自己绑定过 ash，否则不处理 —— 群里的人不一定都是 ash 用户，
+//     im_group_rooms）。说话人必须自己绑定过 navi，否则不处理 —— 群里的人不一定都是 navi 用户，
 //     不能让他们借绑群那个人的身份派活。
 //   · 打开「卡片推到群里」后，这个项目任务的决策卡改发到群里（话题里回复 = 回复任务），
 //     不再发到各人单聊。群卡片上的按钮按**点击人自己的绑定**执行，权限照他本人的算。
-import type { FeishuGroup, FeishuGroupClaim, FeishuGroups } from "@ash/shared";
+import type { FeishuGroup, FeishuGroupClaim, FeishuGroups } from "@navi/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imBindCodes, imGroupRooms, imGroups } from "../db/schema-im.js";

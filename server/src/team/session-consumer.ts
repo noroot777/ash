@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
-import type { AgentEvent, TurnOutcome } from "@ash/shared";
-import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
+import type { AgentEvent, TurnOutcome } from "@navi/shared";
+import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@navi/shared/session-notes";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
 import { recordTurnSpan } from "../session-turns.js";
@@ -114,7 +114,7 @@ async function consume(lead: Lead): Promise<void> {
   const traceInTurn = (event: SessionTraceEvent): void => {
     const turnStart = lead.turnStart;
     if (!turnStart) {
-      console.warn(`[ash] 团队 ${lead.taskId} 的 ${event.kind} 事件没有回合身份,这一行不落执行过程`);
+      console.warn(`[navi] 团队 ${lead.taskId} 的 ${event.kind} 事件没有回合身份,这一行不落执行过程`);
       return;
     }
     traceLead(lead, turnStart, event);
@@ -303,7 +303,7 @@ async function consume(lead: Lead): Promise<void> {
       publish(lead, event);
     }
   } catch (error) {
-    console.error(`[ash] team consume(${lead.taskId}) aborted:`, error);
+    console.error(`[navi] team consume(${lead.taskId}) aborted:`, error);
     aborted = true;
     // 事件流被掀翻时我们从没拿到过 done —— 那个初值 0 是「还没人报过退出码」,不是
     // 「正常收尾」。照原样落库就是把异常中断记成成功退出(第 3 轮审查)。
@@ -436,7 +436,7 @@ async function deliverPendingNow(lead: Lead): Promise<boolean> {
 }
 
 // 中途已经播过完整轮换说明后,收尾那两句只补一个指路,不重复整段。文案与前端判色的
-// 共同真相源在 @ash/shared/session-notes(见那份文件顶部)。
+// 共同真相源在 @navi/shared/session-notes(见那份文件顶部)。
 // 事件流被掀翻时,没有任何进程报过退出码。落 0 等于把异常中断记成成功收尾;落 null 又会
 // 让这条会话看起来还在跑(openLead 就是拿 null 表示「进行中」)。所以记一个明确的非零码,
 // 真正的原因写在时间线和 trace 里。
@@ -602,7 +602,7 @@ async function closeLead(
   // 这是**用户自己点的停止/自然回收**,本回合没有任何失败:所以是 system 旁注,不是
   // 红色执行诊断(2026-08-26 第 7 轮审查)。真失败仍然红 —— 恢复字段没清成那一路,
   // persistOrReport 已经把写库失败如实报过一笔,`why` 里那句也带着「失败」二字,前端
-  // 摘掉中性文案后照样判红(见 @ash/shared/session-notes)。
+  // 摘掉中性文案后照样判红(见 @navi/shared/session-notes)。
   if (lead.closing && !canResume) {
     // dropNote 与 dropSession 同生同灭(见上面它的声明),所以这一支里它一定有值。
     const why = dropSession ? (rotation.announced ? ROTATION_ALREADY_ANNOUNCED : dropNote!) : NO_RESUMABLE_SESSION_NOTE;
@@ -622,7 +622,7 @@ async function closeLead(
       await setTaskStatus(lead.taskId, "idle");
       lead.wantedStatus = null;
     } catch (error) {
-      console.error(`[ash] closeLead(${lead.taskId}) idle status failed:`, error);
+      console.error(`[navi] closeLead(${lead.taskId}) idle status failed:`, error);
       publish(lead, {
         kind: "error",
         message: `调度台待命状态写入数据库失败：${error instanceof Error ? error.message : String(error)}`,

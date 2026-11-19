@@ -49,7 +49,7 @@ export default function NewProject() {
     return () => { alive = false; };
   }, []);
 
-  // 分隔符从家目录自己的形状认（Windows 的 `D:\ash-root\me`）——手机端没有 /host 那条
+  // 分隔符从家目录自己的形状认（Windows 的 `D:\navi-root\me`）——手机端没有 /host 那条
   // 端点，而这一段是服务端给的绝对路径，它长什么样就跟着什么样。
   const prefix = home ? `${home.replace(/[\\/]+$/, "")}${separatorOf(home)}` : "";
   // 没手动改过就一直**跟着项目名算**，跟身份什么时候回来无关。

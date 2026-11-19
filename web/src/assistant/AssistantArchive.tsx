@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Session, Task } from "@ash/shared";
+import type { Session, Task } from "@navi/shared";
 import { ArrowLeft } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";

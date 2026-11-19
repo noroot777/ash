@@ -636,13 +636,13 @@ async function main(): Promise<void> {
   // ── ⑥ 事前那一句：判据 + 去重 ─────────────────────────────────────────────
   check(backgroundWaitFor("claude") === BACKGROUND_WAIT_WARNING, "claude 的回合（执行、审查、验证）都带警告句");
   check(backgroundWaitFor("codex") === "", "codex 没有这两样内置后台，不带");
-  // 宽松模式（ASH_LAX_DONE）在模块求值时定，只能另起一个进程量：事实照说，只省掉 ash 的工具。
+  // 宽松模式（NAVI_LAX_DONE）在模块求值时定，只能另起一个进程量：事实照说，只省掉 navi 的工具。
   const lax = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
     `const m = await import(${JSON.stringify(new URL("../src/run-prompts.ts", import.meta.url).href)});`
     + `process.stdout.write(m.backgroundWaitFor("claude"));`],
-  { env: { ...process.env, ASH_LAX_DONE: "1" }, encoding: "utf8" });
+  { env: { ...process.env, NAVI_LAX_DONE: "1" }, encoding: "utf8" });
   check(lax.status === 0 && lax.stdout.includes("唤不醒任务") && !lax.stdout.includes("start_monitor"),
-    "宽松模式仍说「别交给内置后台」，只是不指 ash 的工具", `${lax.stdout}${lax.stderr.slice(-300)}`);
+    "宽松模式仍说「别交给内置后台」，只是不指 navi 的工具", `${lax.stdout}${lax.stderr.slice(-300)}`);
   const turnParts = {
     invite: "", brief: "", handoffNotice: "", peerNotice: "",
     craft: { freshContext: false, verifying: false }, workspaceReset: "",

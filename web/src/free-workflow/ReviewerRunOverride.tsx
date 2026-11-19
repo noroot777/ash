@@ -1,4 +1,4 @@
-import type { AgentExecutorProfile, AgentType, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, FreeReviewExecutorOverride, ReviewerProfile } from "@navi/shared";
 import { executorValue, parseExecutorValue } from "../lib/agentAvailability.ts";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 

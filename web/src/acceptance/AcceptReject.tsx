@@ -1,5 +1,5 @@
 import { useState, type RefObject } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";

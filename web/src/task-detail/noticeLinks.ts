@@ -3,7 +3,7 @@
 // 在两处点出来去的是同一个地方。
 //
 // 认不出去哪儿就不给路（同 reviewTargetLocatable）：那一句照旧在原处摊开原文。
-import type { FreeReviewRun } from "@ash/shared";
+import type { FreeReviewRun } from "@navi/shared";
 import type { ConversationEventItem } from "./conversationModel.ts";
 import { reviewPanelSources, reviewTargetLocatable, type ReviewTarget } from "../review/reviewTarget.ts";
 

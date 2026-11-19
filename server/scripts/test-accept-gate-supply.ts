@@ -23,10 +23,10 @@ import { removeTmpStage } from "./tmp-db.js";
 // 跑仓库内(生产默认形状),再 spawn 自己一次跑仓库外(路线①的摆法)。后者是为了证明这个修法**不依赖
 // 快照恰好落在仓库内**那条偶然的祖先链 —— 那条链一旦移走,旧实现连第三方包都解析不到。
 const outside = process.env.GATE_SUPPLY_OUTSIDE === "1";
-const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-supply-")));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "navi-gate-supply-")));
 // 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
-process.env.ASH_DB = join(root, "ash-test.db");
-const runsHome = outside ? realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-supply-runs-"))) : null;
+process.env.NAVI_DB = join(root, "navi-test.db");
+const runsHome = outside ? realpathSync(mkdtempSync(join(tmpdir(), "navi-gate-supply-runs-"))) : null;
 
 const save = (path: string, content: string) => {
   mkdirSync(dirname(path), { recursive: true });
@@ -69,7 +69,7 @@ const probe = (cwd: string, spec: string) => execFileSync(process.execPath,
   ["--input-type=module", "-e", `import(${JSON.stringify(spec)}).then(m=>console.log(m.value))`],
   { cwd, encoding: "utf8" }).trim();
 
-process.env.ASH_RUNS_DIR = join(runsHome ?? join(root, "monorepo"), "data", "runs");
+process.env.NAVI_RUNS_DIR = join(runsHome ?? join(root, "monorepo"), "data", "runs");
 const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, verifyGateSnapshot } =
   await import("../src/accept-gate-source.js");
 const { referenceCheckout, dependencySupply } = await import("../src/accept-gate-supply.js");
@@ -181,7 +181,7 @@ try {
   install(linked);
   commit(linked);
   // 任务工作区放在项目**外面**(同仓兄弟目录,`git worktree add` 支持的正常布局)。这一笔是必须的:
-  // ash 自己建的 worktree 在 `<仓库>/.worktrees/<任务>` 里,从那儿向上走本来就会撞到参考检出那棵
+  // navi 自己建的 worktree 在 `<仓库>/.worktrees/<任务>` 里,从那儿向上走本来就会撞到参考检出那棵
   // 树,于是 cwd 的解析图顺带盖住了补给来源 —— 夹具照那个摆法写,这一条测不出任何东西(修复前也绿)。
   const linkedTask = join(root, "external-task");
   git(linked, "worktree", "add", "--detach", "-q", linkedTask, "HEAD");

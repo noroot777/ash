@@ -16,7 +16,7 @@
  *   - 不算：身份、时刻、用量、折叠状态、会话元信息 —— 它们要么不渲染，要么渲染成不随
  *     阅读推进的角标。把它们算进来，复制按钮闪一下、账目数字刷新就会把人拽到底。
  */
-import { isVisibleExecutionEvent } from "@ash/shared/native-work";
+import { isVisibleExecutionEvent } from "@navi/shared/native-work";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -153,6 +153,7 @@ const EVENT_SIZE: SizeTable<EventItem> = {
   id: () => 0,
   at: () => 0,
   sessionId: () => 0,
+  sessionRole: () => 0,
   tone: () => 0,
   variant: () => 0,
   verify: () => 0,

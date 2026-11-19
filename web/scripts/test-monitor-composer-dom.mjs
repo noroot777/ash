@@ -73,8 +73,8 @@ try {
     for (const command of [
       String.raw`command -v tail -F /dev/null; printf 'DONE\n'`,
       String.raw`printf "literal \"; tail -F /dev/null; #\n"`,
-      "while true; do :; done > /definitely-missing-ash-review-file/out; printf 'DONE'",
-      "tail -F /dev/null < /definitely-missing-ash-review-file; printf 'DONE'",
+      "while true; do :; done > /definitely-missing-navi-review-file/out; printf 'DONE'",
+      "tail -F /dev/null < /definitely-missing-navi-review-file; printf 'DONE'",
     ]) {
       await cmd.fill(command);
       assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);

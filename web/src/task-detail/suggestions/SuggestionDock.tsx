@@ -4,11 +4,11 @@
 // 好几件时平时只占一行「N 件可以派出去」，点开一行一件，多一组「同时 / 一个接一个」和「全部派出去」。
 // 状态和派出去那一下都在 useSuggestionDock.tsx，这里只画。
 import type { KeyboardEvent } from "react";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
-import { DISPATCH_ORDER_LABEL, type DispatchOrder, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
-import type { DispatchSuggestionBase } from "@ash/shared/dispatch-suggestion";
-import type { CreateReviewChoice } from "@ash/shared/review-on-create";
-import { sameExecutor } from "@ash/shared/executors";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
+import { DISPATCH_ORDER_LABEL, type DispatchOrder, type DispatchRunTarget } from "@navi/shared/dispatch-plan";
+import type { DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
+import { sameExecutor } from "@navi/shared/executors";
 import { ArrowBendUpRight, CaretDown, X } from "@phosphor-icons/react";
 import { RunTargetPicker } from "../../components/RunTargetPicker.tsx";
 import { ReviewerChip } from "../../free-workflow/ReviewerChip.tsx";

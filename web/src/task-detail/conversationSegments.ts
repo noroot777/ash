@@ -12,8 +12,8 @@
 // 则压根不切段。
 //
 // 从 conversationModel 拆出来的一族:那边管「会话 → 气泡」,这里管「事件 → 段落」。
-import type { AgentEvent } from "@ash/shared";
-import { stableBlockBoundary } from "@ash/shared/markdown-images";
+import type { AgentEvent } from "@navi/shared";
+import { stableBlockBoundary } from "@navi/shared/markdown-images";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 import { compactionEvent, isCompactionEvent } from "../lib/compaction.ts";

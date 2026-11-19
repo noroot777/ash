@@ -47,7 +47,7 @@ export const hasRunOrigin = (origin: MonitorRunOrigin | null | undefined): boole
 /**
  * 从这条流自己的 child 上取来源身份。
  *
- * `ashPaths` 是 detached 形态自带的那组落盘路径（`executors/detached.ts`：out/err/rc，
+ * `naviPaths` 是 detached 形态自带的那组落盘路径（`executors/detached.ts`：out/err/rc，
  * 其中 out 就是 `sessions.agent_out_path` 这一轮的值），非 detached（Windows、常驻调度台）
  * 没有这一组，那就只剩 pid —— 而那种会话 `sessions.agent_out_path` 本来也是 NULL，两边说的
  * 是同一件事。
@@ -56,13 +56,13 @@ export const hasRunOrigin = (origin: MonitorRunOrigin | null | undefined): boole
  * `inspectProcess` 返回 null，代次凭据就只剩一个会被复用的 pid。
  */
 export function runOriginOfChild(
-  child: { pid?: number | null; ashPaths?: { out?: string } } | null | undefined,
+  child: { pid?: number | null; naviPaths?: { out?: string } } | null | undefined,
 ): MonitorRunOrigin {
   const pid = child?.pid ?? null;
   return {
     pid,
     pidStartedAt: pid ? inspectProcess(pid)?.startedAt ?? null : null,
-    runPath: child?.ashPaths?.out ?? "",
+    runPath: child?.naviPaths?.out ?? "",
   };
 }
 
@@ -71,7 +71,7 @@ export const runOriginOfSession = (
   home: { pid: number | null; pidStartedAt: string | null; outPath: string },
 ): MonitorRunOrigin => ({ pid: home.pid, pidStartedAt: home.pidStartedAt, runPath: home.outPath });
 
-/** 这条 CLI 会话落在哪个 ash 任务上，以及（**只给绑定层**）它当下那一代的凭据。 */
+/** 这条 CLI 会话落在哪个 navi 任务上，以及（**只给绑定层**）它当下那一代的凭据。 */
 export type SessionHome = {
   taskId: string;
   cwd: string;
@@ -81,7 +81,7 @@ export type SessionHome = {
 };
 
 /**
- * cli 会话 id → ash 的任务 id、工作目录，以及**当代** agent 进程身份。
+ * cli 会话 id → navi 的任务 id、工作目录，以及**当代** agent 进程身份。
  *
  * `taskId`/`cwd` 随时问都对（会话行的归属不变），**后三列只有来源绑定层那一次能用**：它们
  * 每回合被下一轮覆盖，拿落库那一刻的值当「起它的是哪一代」就是文件头说的那个 F1。

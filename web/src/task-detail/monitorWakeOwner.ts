@@ -12,7 +12,7 @@
 //   3. 都没有：更老的叫醒没有结构化来源（只剩一段【哨兵事件】原文），这一段里挂过哨兵就算。
 import type { ConversationItem } from "./conversationModel.ts";
 import type { MonitorWakeInput } from "./monitorWakeModel.ts";
-import { ashMcpTool } from "../lib/executionTrace.ts";
+import { naviMcpTool } from "../lib/executionTrace.ts";
 
 type AgentItem = Extract<ConversationItem, { kind: "agent" }>;
 
@@ -30,14 +30,14 @@ export const emptyClaims = (): MonitorClaims => ({ ids: new Set(), unbound: new 
 const normalized = (text: string) => text.replace(/\s+/g, " ").trim();
 
 /**
- * 回合里挂了哪几条哨兵：ash 的 `start_monitor`，以及 claude 内置 `Monitor`——后者被服务端改道成同一份
- * 描述、命令的 ash 哨兵（server/src/claude-monitor-hook.ts），叫醒时报的就是这份描述。
+ * 回合里挂了哪几条哨兵：navi 的 `start_monitor`，以及 claude 内置 `Monitor`——后者被服务端改道成同一份
+ * 描述、命令的 navi 哨兵（server/src/claude-monitor-hook.ts），叫醒时报的就是这份描述。
  */
 export function monitorStarts(item: AgentItem): MonitorStart[] {
   const out: MonitorStart[] = [];
   for (const segment of item.segments) {
     for (const event of segment.events) {
-      if (event.kind !== "tool" || !(ashMcpTool(event.label) === "start_monitor" || event.label === "Monitor")) continue;
+      if (event.kind !== "tool" || !(naviMcpTool(event.label) === "start_monitor" || event.label === "Monitor")) continue;
       out.push({ source: startSource(event.detail) });
     }
   }

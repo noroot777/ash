@@ -6,7 +6,7 @@
 // 安全不能靠「事先把属性文件找全」—— 第 1 轮那份文本扫描漏掉了被忽略的属性文件。这里换成
 // **执行环境本身就没有程序可调**：
 //
-//  · 预演在一个 ash 自己建的空 git 目录里跑（GIT_DIR），对象库指向项目的那一份（GIT_OBJECT_DIRECTORY，
+//  · 预演在一个 navi 自己建的空 git 目录里跑（GIT_DIR），对象库指向项目的那一份（GIT_OBJECT_DIRECTORY，
 //    预演写出的树要留给快照用）；系统 / 全局配置、系统 / 全局属性文件一律换成空的，环境里继承来的
 //    GIT_* 全部丢掉。这个目录的配置里**没有任何驱动和过滤器的定义**，属性点名一个没定义的驱动时
 //    git 退回内置合并 —— 想执行程序也没有程序可执行；
@@ -31,7 +31,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileText } from "./exec.js";
 import { expandHome } from "./platform.js";
-import { LEGACY_SEALED_SNAPSHOT_MARK } from "@ash/shared/legacy-names";
+import { LEGACY_SEALED_SNAPSHOT_MARK } from "@navi/shared/legacy-names";
 
 const MAX_BUFFER = 32 * 1024 * 1024;
 /**
@@ -149,7 +149,7 @@ const sealed = (empty: string) => ["-c", `core.attributesFile=${empty}`, "-c", `
 // 检出会跑过滤器（smudge/process），`git diff` 会跑 clean，所以门禁命令之外快照里的每一条 git 都
 // 得是没有程序可调的。光把系统 / 全局配置置空不够：克隆自己的 `.git/config` 也是配置，而它的来源
 // 不止 clone 本身（`init.templateDir` 能把模板里的 config 抄进去，第 2 轮复审 F1）。所以不去推断
-// 「新克隆里应该有什么」，而是**克隆完就把它的本地配置整份换成 ash 写的那一份**：只留仓库格式
+// 「新克隆里应该有什么」，而是**克隆完就把它的本地配置整份换成 navi 写的那一份**：只留仓库格式
 // 必需的几项（白名单），再加上从项目有效配置带过来的内置转换选项和封口的几项。之后这份快照里
 // 跑的 git —— 物化预演树、收尾核验 —— 都用这一份配置，检出时的换行转换与核验时解释文件的口径
 // 也就天然是同一份（第 2 轮复审 F2：检出临时 `-c` 带配置、核验却读另一份，CRLF 被判成改了源码）。
@@ -270,7 +270,7 @@ export async function isSealedSnapshot(cwd: string): Promise<boolean> {
 }
 
 /**
- * 在封好的快照里跑一条 git：系统 / 全局配置与属性置空、`GIT_*` 不继承，本地配置就是 ash 写的那一份，
+ * 在封好的快照里跑一条 git：系统 / 全局配置与属性置空、`GIT_*` 不继承，本地配置就是 navi 写的那一份，
  * 属性点名的过滤器一个都没有定义，git 按原样读写 blob —— 想执行也没有程序可执行。这是硬边界，
  * 不靠事先扫描；`checkoutFilters` 只负责把「这样写出来的跟平时检出的不一样」提前说清楚。
  */

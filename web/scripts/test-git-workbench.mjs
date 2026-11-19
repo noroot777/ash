@@ -435,7 +435,7 @@ try {
       mobileHeader.sync.bottom <= mobileHeader.repo.top,
     "mobile repository selector and sync controls must not overlap",
   );
-  if (!screenshotDirectory) screenshotDirectory = await mkdtemp(join(tmpdir(), "ash-git-workbench-browser-"));
+  if (!screenshotDirectory) screenshotDirectory = await mkdtemp(join(tmpdir(), "navi-git-workbench-browser-"));
   await page.screenshot({ path: join(screenshotDirectory, "mobile.png"), fullPage: true });
 
   assert.deepEqual(browserErrors, [], `浏览器控制台错误：\n${browserErrors.join("\n")}`);

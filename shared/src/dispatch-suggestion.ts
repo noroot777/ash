@@ -43,7 +43,7 @@ export type DispatchSuggestionWithdrawal = { id: string; reason: string };
  */
 export type WithdrawnSuggestion = { id: string; title: string; reason: string; at: string };
 
-/** 用户按「派出去」时交给 ash 的那一件：此刻那一行上的样子。 */
+/** 用户按「派出去」时交给 navi 的那一件：此刻那一行上的样子。 */
 export type DispatchSuggestionLaunchItem = {
   id: string;
   title: string;

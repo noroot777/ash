@@ -1,6 +1,6 @@
 // 自用模式的身份判定回归。要钉住的只有一句话:
 //
-//   **连得上端口不算机主。** 机主 = 请求确实从 ash 所在的那台机器直接发出,或者是机主
+//   **连得上端口不算机主。** 机主 = 请求确实从 navi 所在的那台机器直接发出,或者是机主
 //   放进来的设备,或者拿得出访问密钥(server/src/auth/remote-access.ts)。
 //
 // 这条原先不成立:自用模式下鉴权闸整条穿透,而服务监听所有网卡 —— 局域网里任何一台机器
@@ -21,7 +21,7 @@
 //   ⑧ 免登录名单里「路由自己验凭证」的那条(/restart-impact):自用模式的匿名同样要验。
 //   ⑨ 多人模式没有设备配对。
 //
-// 跑法(不设 ASH_DB 时自己开一个临时库):
+// 跑法(不设 NAVI_DB 时自己开一个临时库):
 //   npm -w server run test:remote-access
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -30,8 +30,8 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-remote-access-"));
-process.env.ASH_DB ||= join(stage, "remote-access.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-remote-access-"));
+process.env.NAVI_DB ||= join(stage, "remote-access.db");
 requireTmpDb("test-remote-access");
 
 const { ensureSchema } = await import("../src/db/index.js");
@@ -199,7 +199,7 @@ try {
   const key = String(shown.body.key);
   assert.match(key, /^navi_[\w-]{43}$/, "和个人 key 同一种形状,手机端那一栏照填");
   assert.equal((await call("/api/remote-access")).body.key, key, "再看一次还是这一把,不是每看一次换一把");
-  const keyFile = `${process.env.ASH_DB}.remote-access.json`;
+  const keyFile = `${process.env.NAVI_DB}.remote-access.json`;
   assert.equal(existsSync(keyFile), true, "密钥落在库文件旁边,不进库");
   assert.equal((JSON.parse(readFileSync(keyFile, "utf8")) as { key: string }).key, key);
   if (process.platform !== "win32") assert.equal(statSync(keyFile).mode & 0o777, 0o600);
@@ -213,7 +213,7 @@ try {
     );
     assert.equal((await call("/api/auth/state", { ...remote, headers: bearer })).body.needsAccessKey, false);
 
-    const wrong = await call("/api/auth/login", { ...remote, method: "POST", body: { key: "ash_nope" } });
+    const wrong = await call("/api/auth/login", { ...remote, method: "POST", body: { key: "navi_nope" } });
     assert.equal(wrong.status, 401);
     assert.equal(wrong.cookie, null, "登录失败不许种 cookie");
     const login = await call("/api/auth/login", { ...remote, method: "POST", body: { key } });
@@ -246,7 +246,7 @@ try {
   }
   // 本机直连同理:机主的浏览器替别的站点打进回环,和带着 cookie 是一回事。
   const driveBy = await call("/api/canary", { method: "POST", body: {}, headers: { "sec-fetch-site": "cross-site" } });
-  assert.equal(driveBy.status, 403, "别的站点驱动机主的浏览器写本机 ash");
+  assert.equal(driveBy.status, 403, "别的站点驱动机主的浏览器写本机 navi");
   assert.match(String(driveBy.body.error), /跨站请求已被拒绝/);
   assert.equal(
     (await call("/api/canary", { method: "POST", body: {}, headers: { origin: "https://evil.example" } })).status,
@@ -324,7 +324,7 @@ try {
   assert.equal(reboundAsk.status, 403, `不认得的域名递不了申请 ${reboundAsk.text}`);
   assert.equal(((await call("/api/remote-access/requests")).body.requests as unknown[]).length, 0, "机主那边不该多出一张");
   // 这样的名字不是进不来:扫码(要机主手里的码)照样行,用过一次之后就认得了。
-  const viaName = { headers: { ...phone.headers, host: `my-ash.example:${port}` } };
+  const viaName = { headers: { ...phone.headers, host: `my-navi.example:${port}` } };
   assert.equal((await call("/api/auth/pair", { ...viaName, method: "POST", body: {} })).status, 403);
   const nameCode = await call("/api/remote-access/pair-code", { method: "POST" });
   const nameScan = await call("/api/auth/pair/redeem", { ...viaName, method: "POST", body: { code: nameCode.body.code } });
@@ -337,7 +337,7 @@ try {
   assert.equal((await call("/api/auth/pair", { ...rebound, method: "POST", body: {} })).status, 403, "别的域名照旧不认");
   const nameId = (await call("/api/remote-access", { headers: nameHeaders })).body.devices as Device[];
   assert.equal((await call(`/api/remote-access/devices/${nameId.find((d) => d.current)!.id}`, { method: "DELETE" })).status, 200);
-  // 机主填的对外地址(飞书链接指向它)不用先带凭证来过一次:从 ash 自己发出的链接打开就能申请。
+  // 机主填的对外地址(飞书链接指向它)不用先带凭证来过一次:从 navi 自己发出的链接打开就能申请。
   const viaPublic = { headers: { ...phone.headers, host: `my-mac.tail-x.ts.net:${port}` } };
   assert.equal((await call("/api/auth/pair", { ...viaPublic, method: "POST", body: {} })).status, 403);
   assert.ok(!("error" in await patchImOptions({ publicBaseUrl: `http://My-Mac.tail-x.ts.net:${port}/` })));

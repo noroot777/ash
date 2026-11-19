@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { FeishuStatus, ImDomain } from "@ash/shared";
+import type { FeishuStatus, ImDomain } from "@navi/shared";
 import { Button, PillTabs } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";

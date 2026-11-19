@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { Clock } from "@phosphor-icons/react";
 import { formatInstant, taskDurationInfo } from "./utils.ts";
 

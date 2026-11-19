@@ -14,10 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-file-browser-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-file-browser-"));
 const repo = join(stage, "repo");
 const outside = join(stage, "outside");
-process.env.ASH_DB = join(stage, "ash.db");
+process.env.NAVI_DB = join(stage, "ash.db");
 
 const status = (error: unknown) => (error as { status?: number }).status;
 

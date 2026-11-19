@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Session, Task } from "@ash/shared";
+import type { Session, Task } from "@navi/shared";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
@@ -48,27 +48,27 @@ const output = [
   "数据方案已经收敛：复用现有自由工作流事件表记录每次主任务回合的开始/结束，不新增数据库列；审查者旁路回合不会被误记成“任务执行”。",
   turn("system", "自由工作流第 2 轮审查通过（5.5审查）。", "2026-08-10T05:51:00.000Z"),
   turn("system", "验收阶段更新：验收完成（accepted）", "2026-08-10T05:52:00.000Z"),
-  turn("system", "自由工作流合并&清理完成：已安全合并 ash/mpgFKC41 → feat/free-pipeline，并清理任务 worktree与分支", "2026-08-10T05:52:30.000Z"),
+  turn("system", "自由工作流合并&清理完成：已安全合并 navi/mpgFKC41 → feat/free-pipeline，并清理任务 worktree与分支", "2026-08-10T05:52:30.000Z"),
   turn("system", "升级迁移：上一版「合并&清理」已记录合并完成，验收标记已补上（合并区间无从考证，未伪造）。", "2026-08-10T05:52:40.000Z"),
   "实现已落到产品代码，现有视觉类名和卡片样式都保留。",
   turn("system", "自由工作流第 3 轮审查未通过，意见已发回会话；修复完成后自动复审。", "2026-08-10T06:10:00.000Z"),
   // 会话轮换旁注：中性事实（这条 CLI 会话接不回了），不是本回合失败。渲染上有两条硬要求
-  // —— 不能是红的，也不能把 Markdown 标记原样露出来（服务端文案见 @ash/shared/session-notes）。
+  // —— 不能是红的，也不能把 Markdown 标记原样露出来（服务端文案见 @navi/shared/session-notes）。
   // 这里用的是**修复前落盘的原文**：历史记录刷新后同样要满足这两条。
   turn("system", LEGACY_SESSION_LOST_NOTE, "2026-08-10T06:10:30.000Z"),
   turn("system", "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状", "2026-08-10T06:11:00.000Z"),
   "收到审查意见，开始修复。",
-  // ash 自己插在 agent 输出里的注记走 markdown 引用块，视觉上要跟系统旁注同档。
+  // navi 自己插在 agent 输出里的注记走 markdown 引用块，视觉上要跟系统旁注同档。
   "\n> 正在压缩上下文…\n",
   "\n> 上下文已压缩。\n",
   turn("user", "这块再改一下，右边留白太挤了", "2026-08-10T06:30:00.000Z"),
   "好的，我调整右侧留白。",
   // 结算说明（level:"notice"）跟上面那些旁注同族，但它讲的是「这一轮为什么落成这个状态」，
   // 语气由服务端的标记决定而不是关键词猜 —— 这句话里带着「未完成」，猜出来永远是红的，
-  // 而一条红字对第一次用 ash 的人只有一个读法：它崩了。
+  // 而一条红字对第一次用 navi 的人只有一个读法：它崩了。
   turn(
     "system",
-    "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。这不是崩溃 —— 产物都还在,核对后可直接把状态改成已完成;点重试会从中断处接着跑。",
+    "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 navi 的完成协议记为未完成。这不是崩溃 —— 产物都还在,核对后可直接把状态改成已完成;点重试会从中断处接着跑。",
     "2026-08-10T06:40:00.000Z",
     "notice",
   ),

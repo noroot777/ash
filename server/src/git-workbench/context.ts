@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { GitAction, GitWorkbenchState } from "@ash/shared/git-workbench";
+import type { GitAction, GitWorkbenchState } from "@navi/shared/git-workbench";
 import type { Actor } from "../auth/context.js";
 import {
   requireProjectAccess,
@@ -8,7 +8,7 @@ import {
 import { db } from "../db/index.js";
 import { projects, tasks } from "../db/schema.js";
 import { repoKey, worktreePathFor } from "../git.js";
-import { isTaskBranchOf } from "@ash/shared/task-branch";
+import { isTaskBranchOf } from "@navi/shared/task-branch";
 import { taskFileRoot } from "../file-browser.js";
 import {
   isolatedWorkspaceOwner,

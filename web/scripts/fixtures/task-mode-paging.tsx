@@ -1,6 +1,6 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, Task, TaskListItem } from "@ash/shared";
+import type { ProjectView, Task, TaskListItem } from "@navi/shared";
 import { TaskTree } from "../../src/workspace/TaskTree.tsx";
 import { useSidebarTaskNavigation } from "../../src/workspace/sidebarNavigation.ts";
 import { spreadVisibleTasks, type SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";

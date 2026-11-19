@@ -10,6 +10,9 @@
 
 ## 〇、当前基线
 
+**2026-11-19 改名 navi 之后又测了一轮**（32 绿 / 9 红，红的逐条拿改名前的版本对照过）：清单、分类和叶子环境的
+跑法见 `docs/rename-navi-windows.md` 第一、二节。下面 10-23 那一段是改名之前的记录。
+
 **2026-10-23 实测这 7 条绿**:`win-launch`、`path-boundary`、`openers-windows`、`terminal`
 (含 `test-project-commands` 的 Windows 生命周期一节)、`detached`、`reattach`、
 `scheduled-messages`(含 `test-native-steer` —— 它的两个假 CLI 这一轮才换成 Windows 也能启动的
@@ -21,7 +24,7 @@
 夹具此后改过,没有重测就不作数** —— 别把下表当成「现在还是 14/14」。
 
 不作数的原因很具体:`test-accept-merge` / `test-review-flow` 的假 claude 已经删掉,改成
-「`ASH_RUNS_DIR` 一设就必须 fail-closed」的断言(见第三节);`test-scheduled-messages`
+「`NAVI_RUNS_DIR` 一设就必须 fail-closed」的断言(见第三节);`test-scheduled-messages`
 当时那条绿更是假的 —— 它断言 `crash.signal === "SIGKILL"`,而 Windows 没有 POSIX 信号,
 `signal` 恒为 `null`,这条在真机上**只可能红**。它现在按平台分:Windows 断 `status === 1`,
 POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`)这个伪前提。
@@ -85,7 +88,7 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
   产品逻辑(`win-command.ts` 的 `process.env.COMSPEC || "cmd.exe"`)两边都对。第 6 节早就把 COMSPEC
   钉死了,第 5 节漏了。
 - `path-boundary` 断言全过,却在 `finally` 里 `EBUSY: unlink …ash.db` —— Windows 删不掉还开着的
-  文件,而 `ASH_DB` 指向的那个库是 import 时连上的。POSIX 上删已打开的文件合法,所以这条只在
+  文件,而 `NAVI_DB` 指向的那个库是 import 时连上的。POSIX 上删已打开的文件合法,所以这条只在
   真机上现形。现在收尾前先 `dbClient.close()`。
 
 ## 二、需要先满足一个前提
@@ -105,12 +108,12 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 值,据此报过一次假警。要回答的问题其实是「symlink 建不建得出来」—— 直接建一个再删掉最准
 (`scripts/win-remote.mjs` 的 doctor 就是这么做的)。
 
-**`ASH_DB` 指向临时目录**:下面几条会真写库,入口有守卫(`server/scripts/tmp-db.ts`)——
+**`NAVI_DB` 指向临时目录**:下面几条会真写库,入口有守卫(`server/scripts/tmp-db.ts`)——
 
 `test-queue.ts`、`test-answer-routing.ts`、`test-executor-resolution.ts`、`test-cli-overrides.ts`
 
-守卫认 `os.tmpdir()`(POSIX 上额外认 `/tmp`)。Windows 上**别再照抄注释里的 `ASH_DB=/tmp/x.db`**:
-那会落到当前盘的 `\tmp\`,多半不存在。改用 `ASH_DB=%TEMP%\test-queue.db`。`win-remote.mjs test`
+守卫认 `os.tmpdir()`(POSIX 上额外认 `/tmp`)。Windows 上**别再照抄注释里的 `NAVI_DB=/tmp/x.db`**:
+那会落到当前盘的 `\tmp\`,多半不存在。改用 `NAVI_DB=%TEMP%\test-queue.db`。`win-remote.mjs test`
 已经统一代跑的人给一个临时库并在跑完删掉 —— 不给的话,红出来的样子是「Windows 上失败了」,
 而其实 mac 上不设照样红。
 
@@ -131,11 +134,11 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 **`test-accept-merge.ts` 和 `test-review-flow.ts` 已经不摆假 CLI 了**,别再照着上面那张表去找。
 它们要的只是「别真起 claude」,而这件事 `spawn.ts` 的 `guardAgentSpawn` 已经在做:设了
-`ASH_RUNS_DIR` 时,执行器启动一律被换成一个立刻失败的假 child —— 除非解析到的可执行文件落在
-测试自己列出的假 CLI 里(`ASH_TEST_AGENT_BIN`),或者是 live 脚本显式给了 `ASH_ALLOW_REAL_AGENT=1`。于是这两条改成在开头断言这个隔离确实生效 —— 假 CLI 是「挡住了就没人知道有没有
+`NAVI_RUNS_DIR` 时,执行器启动一律被换成一个立刻失败的假 child —— 除非解析到的可执行文件落在
+测试自己列出的假 CLI 里(`NAVI_TEST_AGENT_BIN`),或者是 live 脚本显式给了 `NAVI_ALLOW_REAL_AGENT=1`。于是这两条改成在开头断言这个隔离确实生效 —— 假 CLI 是「挡住了就没人知道有没有
 挡住」,fail-closed 断言是「没挡住就当场炸」。断言故意会响,所以这两条的临时目录清理挂在
-`process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`ASH_ALLOW_REAL_AGENT=1`
-跑一次就在 `os.tmpdir()` 留一个 `ash-review-flow-*`)。
+`process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`NAVI_ALLOW_REAL_AGENT=1`
+跑一次就在 `os.tmpdir()` 留一个 `navi-review-flow-*`)。
 
 光挂钩子还不够,**断言本身要排在打开数据库之前**。exit 钩子是同步的,`await` 不了
 `releaseTmpDb()`;断言要是排在开库之后才响,Windows 上 `rmSync` 撞的是「文件还开着」的 EBUSY,
@@ -228,9 +231,9 @@ failed / closed;接管不再把异步 marker 尚未出现误判成不支持输�
 
 - 团队 / duet 那批长链路测试只做了静态阅读,没有逐条推演会不会间接踩到上面几类前提。
   其中**有一批会真 spawn `claude -p` 烧真额度** —— 判据不是「名字看着像端到端」,而是
-  **它有没有设 `ASH_RUNS_DIR`**:设了的那批被 `guardAgentSpawn` fail-closed 挡着
+  **它有没有设 `NAVI_RUNS_DIR`**:设了的那批被 `guardAgentSpawn` fail-closed 挡着
   (`review`、`accept-merge`、`free-workflow*`、`workflow-*`、`turn-*` 等),不设的那批没人挡
-  (`test:queue` 就是,`grep -L ASH_RUNS_DIR server/scripts/test-*.ts` 能列全)。
+  (`test:queue` 就是,`grep -L NAVI_RUNS_DIR server/scripts/test-*.ts` 能列全)。
   要无人值守地全量扫,先按这条筛一遍。
 - `test-terminal.ts` 已按平台分了 shell(Windows 走 `cmd.exe`,探针命令换成 `echo` + `cd`),
   ConPTY 那条路**实测绿**(2026-08-18,8.6s)。但它会在退出时留一个孤儿:node-pty 的

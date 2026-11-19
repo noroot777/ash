@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Group, Task, TaskListItem } from "@ash/shared";
-import { STAGE_LABELS } from "@ash/shared";
-import { isTeamSettled, timeMs } from "@ash/shared/team";
+import type { Group, Task, TaskListItem } from "@navi/shared";
+import { STAGE_LABELS } from "@navi/shared";
+import { isTeamSettled, timeMs } from "@navi/shared/team";
 import { CaretDown } from "@phosphor-icons/react";
 import { formatDuration, formatInstant } from "../task-detail/utils.ts";
 import { statusTone, teamLeadLabel, type LeadTurn } from "./teamModel.ts";

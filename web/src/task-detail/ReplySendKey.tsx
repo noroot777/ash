@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { LaterSendKey, type LaterSend } from "../components/LaterSend.tsx";
 import { ReplyDockSend } from "./ReplyDock.tsx";
 import { CALL_COPY, type ReplyCall } from "./replyCall.ts";

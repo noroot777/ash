@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { GitHistoryCommit } from "@ash/shared/git-workbench";
+import type { GitHistoryCommit } from "@navi/shared/git-workbench";
 
 const colors = [
   "#5e6ad2",

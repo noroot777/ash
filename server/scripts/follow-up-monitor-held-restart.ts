@@ -1,4 +1,4 @@
-// test-follow-up-monitor-held.ts ⑦ 的后半段:**一个全新的进程**接着同一个库,模拟 ash 在任务暂停等
+// test-follow-up-monitor-held.ts ⑦ 的后半段:**一个全新的进程**接着同一个库,模拟 navi 在任务暂停等
 // 哨兵期间重启。进程级的东西(内存里的回合锁、队列占位前的状态表、投递账本)一律从零开始,
 // 「续聊前是哪个状态」只能从库里读回来。
 //
@@ -6,17 +6,17 @@
 // 换成假执行器(醒来那一回合什么都不做、正常结束)。最后一行打印结果给父进程断言。
 //
 // 用法(父进程替你传):node --import tsx follow-up-monitor-held-restart.ts <taskId> <monitorId>,
-// ASH_DB / ASH_RUNS_DIR 指向父进程那份临时库。
+// NAVI_DB / NAVI_RUNS_DIR 指向父进程那份临时库。
 import { eq } from "drizzle-orm";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { RunHandle, RunOpts } from "../src/executors/types.js";
 import { requireTmpDb } from "./tmp-db.js";
 
 const [taskId, monitorId] = process.argv.slice(2);
 if (!taskId || !monitorId) throw new Error("用法:follow-up-monitor-held-restart.ts <taskId> <monitorId>");
 requireTmpDb("follow-up-held-restart");
-delete process.env.ASH_LAX_DONE;
-delete process.env.ASH_ALLOW_REAL_AGENT;
+delete process.env.NAVI_LAX_DONE;
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { tasks } = await import("../src/db/schema.js");

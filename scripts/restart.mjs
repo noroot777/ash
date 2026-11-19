@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// 一条龙:重建全部 → 重启 :4317 服务端 → 刷新 ash MCP。
+// 一条龙:重建全部 → 重启 :4317 服务端 → 刷新 navi MCP。
 //
 //   npm run restart            # 或直接 node scripts/restart.mjs
 //   node scripts/restart.mjs --force # 强制重启并刷新 MCP(被打断的任务标为 failed)
 //   node scripts/restart.mjs --wait  # 等会被打断的任务排空再重启,而不是中止
-//   node scripts/restart.mjs --skip-mcp # 只重建+重启 :4317,不刷新 MCP(不打断正在用 ash MCP 的会话)
+//   node scripts/restart.mjs --skip-mcp # 只重建+重启 :4317,不刷新 MCP(不打断正在用 navi MCP 的会话)
 //   node scripts/restart.mjs --force-mcp # 明知有 agent 正握着 MCP 通道,也照样刷新(会掐断它们的交卷)
 //
 // 跑法说明:
@@ -23,13 +23,13 @@
 //    真正关死这个窗口需要服务端的 drain 模式(停止启动新任务并如实报告已排空),这里
 //    够不着。但那只影响「等没等干净」这个账:抢跑的那个 agent **不会被这一刀杀掉**
 //    (Windows 那边按壳记号认人,见 platform.mjs 的 killServerProcess)。
-//  - ash MCP 是每个 Codex/Claude 会话各自 spawn 的 stdio 子进程(node mcp/dist/index.js),
+//  - navi MCP 是每个 Codex/Claude 会话各自 spawn 的 stdio 子进程(node mcp/dist/index.js),
 //    不是常驻端口。第 3 步杀掉这些"旧代码"子进程;客户端下次用到时会用新的 mcp/dist 重新拉起。
 //    **这一刀是本脚本唯一真能伤到正在干活的 agent 的地方**(重启 :4317 它们无感,见上一条):
 //    通道一断,它那轮的 report_stage/complete_task 就撞 `Transport closed`。所以第 3 步之前
 //    再问一次服务端「谁手里还握着 MCP」(restart-impact 的 mcpDisrupted),有人握着就**默认
 //    跳过刷新**并说明——改了 mcp/ 非要立刻生效再 FORCE_MCP=1 跑一遍。
-//    (兜底另有一层:ash 会在回合结算时补录那些"确定没送达"的交卷调用,见
+//    (兜底另有一层:navi 会在回合结算时补录那些"确定没送达"的交卷调用,见
 //     server/src/mcp-handoff.ts;但白名单只有三个工具,能不掐断还是不掐断。)
 //
 // 2026-08-14 从 restart.sh 改写成 .mjs:Windows 上没有 bash/lsof/pkill,而这条命令是
@@ -156,9 +156,9 @@ npm(["run", "build"], "✕ 构建失败,已中止——服务端未重启,跑的
 built = true;
 
 say(`▶ 2/3 重启 :${PORT} 服务端…`);
-// 停谁**只认系统说的「谁在监听这个端口」**。单实例锁里的号码不当线索:ash 没正常退出时
+// 停谁**只认系统说的「谁在监听这个端口」**。单实例锁里的号码不当线索:navi 没正常退出时
 // 锁留在原地,号码随后被别的进程复用(Windows 上重启过机器几乎必然)—— 2026-11-16 那台
-// Windows 上旧 ash 11-12 就死了,号码被一个系统服务占着,拿它下刀于是报「无法安全终止
+// Windows 上旧 navi 11-12 就死了,号码被一个系统服务占着,拿它下刀于是报「无法安全终止
 // Windows 旧实例: <pid> 的进程身份不完整」。想从锁里把号码「认回来」也走不通:命令行比对会
 // 认错,出生时刻早于心跳的证明扛不住系统时间回拨(第 1~4 轮审查)。
 // 代价是 lsof/ss/fuser 都没装的机器上找不到旧进程 —— 那种情况下面「端口必须安静」那道闸
@@ -242,7 +242,7 @@ const deadline = Date.now() + START_TIMEOUT * 1000;
 while (Date.now() < deadline) {
   const health = await localJson(PORT, "/api/health");
   // 认「就绪」之前先认人:health 带 pid 是为了让这里能分辨「新进程起来了」和「端口
-  // 上还坐着另一个 ash」。旧版本 server 没有这个字段(undefined),那就退回只看通不通
+  // 上还坐着另一个 navi」。旧版本 server 没有这个字段(undefined),那就退回只看通不通
   // —— 上面那道「必须先安静」的闸已经保证了此刻端口上不会有别人。
   if (health && (!health.pid || health.pid === serverPid)) {
     ready = true;

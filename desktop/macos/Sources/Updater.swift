@@ -13,7 +13,7 @@ import Sparkle
 /// 装更新的三条路，都过同一道闸：
 ///  · 用户点了「安装并重新启动」→ `shouldPostponeRelaunchForUpdate` 先压住，闸放行再继续
 ///  · 用户勾了自动安装、Sparkle 悄悄下好了 → `willInstallUpdateOnQuit`：接过安装权，闸放行就装、
-///    装完重开（ash 是常驻的，等它「退出时装」可能要等好几天）
+///    装完重开（navi 是常驻的，等它「退出时装」可能要等好几天）
 ///  · 下好了但还没装、用户按了 ⌘Q → 退出时 Sparkle 照样会装：AppDelegate 的
 ///    applicationShouldTerminate 走 `requestForQuit`
 final class AppUpdater: NSObject, SPUUpdaterDelegate {

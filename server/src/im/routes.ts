@@ -7,7 +7,7 @@
 //   · 换凭证、生成绑定码、确认绑定另有一道「只认页面凭据」的闸（auth/personal-gate.ts）。
 //   · 其余写操作也只放账号本人：这几下改的都是「飞书那头的人能指挥什么」。
 // im 身份本身进不来：/im/* 不在 IM 通道的路由白名单里（auth/im-actor.ts）。
-import type { FeishuStatus } from "@ash/shared";
+import type { FeishuStatus } from "@navi/shared";
 import type { Context, Hono } from "hono";
 import { actorOf, isAccountHolder, isAdminActor, ownerIdOf, type Actor } from "../auth/context.js";
 import { isMultiUser } from "../auth/mode.js";
@@ -71,7 +71,7 @@ async function statusOf(actor: Actor): Promise<FeishuStatus> {
 
 /** 绑定/群绑定变了：卡片该推给谁跟着变，整体对一遍。 */
 function refreshPushes(): void {
-  void feishuRuntime()?.reconciler.full().catch((error) => console.error("[ash] 飞书对账出错:", error));
+  void feishuRuntime()?.reconciler.full().catch((error) => console.error("[navi] 飞书对账出错:", error));
 }
 
 const bodyOf = async (c: Context) => (await c.req.json().catch(() => ({}))) as Record<string, unknown>;

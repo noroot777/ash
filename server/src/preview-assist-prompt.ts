@@ -1,13 +1,13 @@
 // AI 协助填预览脚本的提示词。单独一份，理由是它要说的三件事各有各的出处，混在流程代码
 // 里迟早会跟出处漂开：
 //   ① 端口怎么进到命令里 —— 跟界面上那句小字同源（shared 的 previewPortRuleText）；
-//   ② ash 怎么判定「起来了」—— 跟 preview-trial.ts 的判据同源（进程活着 + 端口有响应）；
+//   ② navi 怎么判定「起来了」—— 跟 preview-trial.ts 的判据同源（进程活着 + 端口有响应）；
 //   ③ 不许动用户的仓库 —— 跟 preview-deps.ts 顶部那条线同源。
 //
 // 结论格式只有一种写法（PREVIEW_ASSIST_MARKER + 围栏块），解析器就认它，见
 // shared/src/preview-assist.ts 的 parseAssistScript。
-import { PREVIEW_ASSIST_MARKER } from "@ash/shared/preview-assist";
-import { PREVIEW_MODE_LABELS, previewPortDialect, previewPortRuleText, previewPortRef, type PreviewMode } from "@ash/shared/preview";
+import { PREVIEW_ASSIST_MARKER } from "@navi/shared/preview-assist";
+import { PREVIEW_MODE_LABELS, previewPortDialect, previewPortRuleText, previewPortRef, type PreviewMode } from "@navi/shared/preview";
 
 /** 每一档 `$NAVI_PREVIEW_MODE` 对脚本作者的意思。四档只有认这个变量的脚本才有区别。 */
 const MODE_NOTE: Record<PreviewMode, string> = {

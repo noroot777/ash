@@ -2,22 +2,22 @@
 // 不了的四条:非空目录一律拒绝、失败不留半个坑(且只收拾自己造的,连上级目录一起)、
 // 克隆成功才写库、克隆当场用上的凭证要留在新项目上。
 //
-// 自带临时 bare 仓当远端,不联网、不碰 ash 自己的仓库。
+// 自带临时 bare 仓当远端,不联网、不碰 navi 自己的仓库。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-project-clone-test-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-project-clone-test-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 /** 一个能被克隆的本地 bare 仓,带 main 和 side 两条分支。 */
 function makeOrigin(name: string): string {
   const work = join(root, `${name}-work`);
   execFileSync("git", ["init", "-b", "main", work]);
   const git = (...args: string[]) => execFileSync("git", ["-C", work, ...args], { encoding: "utf8" });
-  git("config", "user.name", "Ash Clone Test");
+  git("config", "user.name", "Navi Clone Test");
   git("config", "user.email", "clone@example.test");
   writeFileSync(join(work, "seed.txt"), "seed\n");
   git("add", "-A");

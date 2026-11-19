@@ -1,6 +1,6 @@
 import { desc, eq, sql } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { cliStateScopeKey, goalRequest, hasCliGoalHold, isGoalExecution, isPlanImplementation, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@ash/shared/cli-commands";
+import type { AgentType } from "@navi/shared";
+import { cliStateScopeKey, goalRequest, hasCliGoalHold, isGoalExecution, isPlanImplementation, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import type { RunHandle } from "./executors/types.js";

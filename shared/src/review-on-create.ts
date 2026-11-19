@@ -42,7 +42,7 @@ export function reviewerOfChoice(choice: CreateReviewChoice | undefined, reviewe
 }
 
 /**
- * 派出去那一下交给 ash 的那一份：照此刻画面上那一格的样子落成明确的一位或「不审」，不让服务端再替你挑一次
+ * 派出去那一下交给 navi 的那一份：照此刻画面上那一格的样子落成明确的一位或「不审」，不让服务端再替你挑一次
  * （按下之前你看到的默认就是派出去用的那位）。
  *
  * 清单还没读到（null：还在读，或者读失败了）时只有「不审」定得下来，其余给 null = **还不能派** —— 画面上

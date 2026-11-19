@@ -19,7 +19,7 @@
 //   · 两条会话都查得到活 ⇒ 分不清 ⇒ 同上。
 //
 // 现在的判据有两截,都不猜:
-//   ① **这次调用是不是本任务当前这一回合**——`x-ash-source-task-id` + `x-ash-turn-token`
+//   ① **这次调用是不是本任务当前这一回合**——`x-navi-source-task-id` + `x-navi-turn-token`
 //      对上 `tasks.active_turn_token`(agent 回连那条既有通道,`auth/middleware.ts`),由创建
 //      入口核验后以 `MonitorCaller` 交上来;
 //   ② **这一回合是什么角色**——`turnRole()`,`claimOwnTurn` 落下的**运行时事实**(审查结论的
@@ -32,7 +32,7 @@
 // 输入(实测 `originalRequest.reviewRound=1` → `monitor.source_review_round=2`)。
 // 三截都答不出来时**一律不静默当执行者**:要么由调用方显式指定唤醒目标,要么拒绝这次创建。
 import { and, eq } from "drizzle-orm";
-import { MONITOR_WAKE_TARGETS, OWN_MONITOR_KIND, monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { MONITOR_WAKE_TARGETS, OWN_MONITOR_KIND, monitorBlockedReason, monitorIdFromOrigin } from "@navi/shared/monitor";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { freeReviewRuns, monitors, regressionEvidence } from "./db/schema.js";
@@ -59,7 +59,7 @@ const WAKEABLE_ROLES = new Set<string>(MONITOR_WAKE_TARGETS);
  * 不重算**:核验失败就拒,拒绝有出路(在新的那一轮里重挂一次),换绑没有任何人能发现。
  */
 export type VerifiedTurn = {
-  /** 核验通过的那条任务(请求头 `x-ash-source-task-id`)。 */
+  /** 核验通过的那条任务(请求头 `x-navi-source-task-id`)。 */
   taskId: string;
   /** 那一轮的令牌(`tasks.active_turn_token`,每起一轮换一个,见 orchestrator.ts)。 */
   token: string;

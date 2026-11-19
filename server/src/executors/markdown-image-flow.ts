@@ -1,6 +1,6 @@
 // 「正文里的图」那条流的**收口**:withMarkdownImages / settleMarkdownImages。
 // 从 markdown-image-stream.ts 拆出来只为守 700 行上限;账本本体与出口语义都在那边。
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { markdownImageSink, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 
 /**

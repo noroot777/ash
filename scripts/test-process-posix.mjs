@@ -23,7 +23,7 @@
 //     文件的诊断工具就够了)自己 open 一下就会被 `owned.add` 收养,随后被 `stop()` 终止。
 //     「继承了受监管资源」和「碰巧打开同一个文件」是两件事,而没有名字的 inode 只剩前一种。
 //
-// 上一版的第四条线索是**环境变量继承**(`ASH_TEST_PROCESS_SCOPE`),两处都塌了(第 4 轮审查
+// 上一版的第四条线索是**环境变量继承**(`NAVI_TEST_PROCESS_SCOPE`),两处都塌了(第 4 轮审查
 // F1/F2,都有实测):
 //   · **它伪造得了**:判据是 `ps -E` 那一整行 `includes(标记)`,而那一行是「命令行 + 环境块」
 //     拼起来的 —— 随便一个把这段文字当**普通 argv 参数**传进去的外部进程都会被认领,然后被
@@ -346,7 +346,7 @@ export class TestProcessScope {
       ...options, detached: !windows, windowsHide: true,
       stdio: boundary === null ? stdio
         : [...(Array.isArray(stdio) ? stdio : [stdio, stdio, stdio]), boundary],
-      env: { ...environment, ASH_TEST_PROCESS_SCOPE: this.directory,
+      env: { ...environment, NAVI_TEST_PROCESS_SCOPE: this.directory,
         NODE_OPTIONS: `--require ${JSON.stringify(registerPath)} ${environment.NODE_OPTIONS ?? ""}`.trim() },
     });
     child.on("error", () => {});

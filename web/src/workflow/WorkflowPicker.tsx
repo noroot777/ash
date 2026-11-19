@@ -7,7 +7,7 @@
 // 「存成起手式」，改完都得让**已经挂着的**每个下拉都跟上。只把缓存置空是不够的——那只
 // 对下一次挂载生效，当前这个下拉里照样没有刚存进去的那条（于是刚存完就选不中它）。
 import { useEffect, useState } from "react";
-import type { WorkflowItem } from "@ash/shared/workflow";
+import type { WorkflowItem } from "@navi/shared/workflow";
 import { Select } from "../components/Select.tsx";
 import { api } from "../lib/api.ts";
 import { workflowSummary } from "./workflowModel.ts";

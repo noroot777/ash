@@ -18,14 +18,14 @@ import assert from "node:assert/strict";
 import { appendFileSync, chmodSync, createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { parseSessionSpans, parseSessionTranscript, traceStepsFingerprint } from "@ash/shared/session-output";
+import { parseSessionSpans, parseSessionTranscript, traceStepsFingerprint } from "@navi/shared/session-output";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-record-identity-"));
-process.env.ASH_DB = join(stage, "ash.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-record-identity-"));
+process.env.NAVI_DB = join(stage, "ash.db");
 requireTmpDb("test-record-identity");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 const ok = (message: string) => console.log("   ✓ " + message);
 
 const { appendSessionTrace, parseSessionTrace, sessionTracePath, sessionTranscriptPath, writeRunError, writeTurn, writeTurnEnd } = await import("../src/transcript.js");

@@ -5,7 +5,7 @@
 // 这份草稿；传失败了，切回来也还看得见、能重试或移除。
 import { useEffect, useRef, type SetStateAction } from "react";
 import { Paperclip } from "@phosphor-icons/react";
-import { TASK_MEMO_MAX_LEN } from "@ash/shared/task-memo";
+import { TASK_MEMO_MAX_LEN } from "@navi/shared/task-memo";
 import { InspButton, InspTool } from "../inspector/parts.tsx";
 import { isModEnterEvent } from "../lib/sendKey.ts";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";

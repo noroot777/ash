@@ -1,6 +1,6 @@
-import { isUserFollowUp } from "@ash/shared";
-import type { TaskCreationOrigin } from "@ash/shared/task-origin";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import { isUserFollowUp } from "@navi/shared";
+import type { TaskCreationOrigin } from "@navi/shared/task-origin";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import { attachmentView, parseAttachmentText } from "./utils.ts";
 
 /**

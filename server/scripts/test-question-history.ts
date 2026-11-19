@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { formatQuestionAnswers, joinQuestionAnswer, questionKey, questionOptionSelected, legacyQuestionRecord } from "@ash/shared/questions";
+import { formatQuestionAnswers, joinQuestionAnswer, questionKey, questionOptionSelected, legacyQuestionRecord } from "@navi/shared/questions";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-question-history-"));
-process.env.ASH_DB = join(stage, "ash.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-question-history-"));
+process.env.NAVI_DB = join(stage, "ash.db");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { tasks } = await import("../src/db/schema.js");
 const { prepareQuestionRecord, claimQuestionAnswer } = await import("../src/task-question-record.js");
@@ -63,7 +63,7 @@ try {
   assert.deepEqual(JSON.parse(saved.questionHistory!), [record]);
   assert.equal((await answerRequest("q1", { answer: "again" })).status, 409);
 
-  const independent = new DatabaseSync(process.env.ASH_DB!);
+  const independent = new DatabaseSync(process.env.NAVI_DB!);
   try {
     assert.deepEqual(JSON.parse(independent.prepare("SELECT question_history FROM tasks WHERE id='q1'").get()!.question_history as string), [record], "独立连接仍可读到完整问答");
   } finally { independent.close(); }

@@ -12,12 +12,12 @@
 //   · 收尾里**等外部东西**的那几步各自有时限,到点由这一轮自己放弃那一步、留痕、继续走到
 //     自己的放锁出口(时限住在各步自己那里,例如 turn-baseline.ts 的工作区快照);
 //   · 这里记下**走到了哪一步、什么时候进的**,巡检据此在同一步停太久时写一条持久提示,说清
-//     卡在哪、出路是重启 ash(turn-lock-reclaim.ts `reportStuckWindDowns`);
+//     卡在哪、出路是重启 navi(turn-lock-reclaim.ts `reportStuckWindDowns`);
 //   · 人工放开对这类锁继续拒绝,拒绝的话里带同样的说明。
 //
 // 记录**挂在那把锁的身份上**(`TurnIdentity.windDown`),跟锁同生同死:放锁即带走,换了主人
 // 的锁上读不到上一轮的记录。依赖单向:这里读写 turn-lock 交出来的身份,turn-lock 只借类型。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { turnIdentity, type TurnOwner } from "./turn-lock.js";
 

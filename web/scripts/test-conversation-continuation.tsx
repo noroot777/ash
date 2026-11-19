@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
 import { takeTraceGroup } from "../src/task-detail/conversationTraceGroups.ts";

@@ -19,7 +19,7 @@
 //
 // 计数在内存里加、异步落库（im_meta 的 `usage:<月份>`）。崩溃时最多丢最后几次，偏少不偏多；
 // 月份按北京时间切，与飞书后台的口径一致。
-import type { ImApiKind, ImQuotaLevel, ImUsage } from "@ash/shared";
+import type { ImApiKind, ImQuotaLevel, ImUsage } from "@navi/shared";
 import { readMeta, readOptions, writeMeta } from "./meta.js";
 
 export type ImPurpose =
@@ -104,7 +104,7 @@ export class QuotaMeter {
     const key = `usage:${counter.month}`;
     this.persisting = this.persisting
       .then(() => writeMeta(key, snapshot))
-      .catch((error) => console.error("[ash] 飞书调用计数落库失败:", error));
+      .catch((error) => console.error("[navi] 飞书调用计数落库失败:", error));
     return true;
   }
 

@@ -2,7 +2,7 @@
 // 和**默认开哪几格**（tabPolicy）。单独一个文件是为了守住 700 行，顺带把这条叠法
 // 集中到一处 —— 顺序错了症状很隐晦（下一层拿到的是上一层没加工过的表）。
 import { createElement, useMemo, useRef } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
 import { endedMonitorIds } from "../monitors/monitorTray.ts";
@@ -85,7 +85,7 @@ export function useTaskInspectorStack(
       : descriptor));
   }, [dispatchedTab, reviewing, serviceUsed, browserUsed, serviceDot, browserDot]);
 
-  // 回复框上方那块里还在盯的哨兵（MonitorTrayRow）：两种来源都列、ash 的排前面。ash 那几个才会把任务
+  // 回复框上方那块里还在盯的哨兵（MonitorTrayRow）：两种来源都列、navi 的排前面。navi 那几个才会把任务
   // 叫醒 —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那条已经
   // 结束的会话）。但内置那几个也不能当不存在：agent 明明在对话里说了「已挂监听」，那一行要替它说清
   // 那句话到底成不成立。

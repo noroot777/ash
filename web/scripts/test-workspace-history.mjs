@@ -54,7 +54,7 @@ const browser = {
   location,
   history: {
     pushState(_state, _unused, url) {
-      const parsed = new URL(String(url), "http://ash.test");
+      const parsed = new URL(String(url), "http://navi.test");
       location.pathname = parsed.pathname;
       location.search = parsed.search;
       entries.push(`${location.pathname}${location.search}`);

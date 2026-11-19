@@ -3,10 +3,10 @@
 // 规矩本体与来历在 `server/src/mcp-registry/json-edit.ts` 的文件头,这里不复述,只留一句:
 // **不许 `JSON.parse` → 改 → `JSON.stringify`**。那条往返会悄悄改掉用户保存的值
 // (`9007199254740993` → `…992`、`1e999` → `null`、`-0` → `0`、重复键只剩最后一个、注释和
-// 键序全丢),而本任务的硬约束是「只在缺 ash 条目时追加,绝不动其它条目」(本轮审查 R4)。
+// 键序全丢),而本任务的硬约束是「只在缺 navi 条目时追加,绝不动其它条目」(本轮审查 R4)。
 //
 // 两边各一份实现是因为 setup 在 build 之前跑、导不进 TS;行为对齐由
-// `server/scripts/test-ash-mcp-installer.ts` 的对齐组钉着。
+// `server/scripts/test-navi-mcp-installer.ts` 的对齐组钉着。
 
 function skipTrivia(text, i) {
   for (;;) {
@@ -88,7 +88,7 @@ export function parseJsonDoc(text) {
 
 /**
  * 同名键取**最后一条** —— `JSON.parse` 就是这么取的(后来的覆盖先前的)。取第一条会让读和写
- * 指向不同的容器:文件写出去了、语法也对,生效的那个容器里却没有 ash(本轮审查 F5)。
+ * 指向不同的容器:文件写出去了、语法也对,生效的那个容器里却没有 navi(本轮审查 F5)。
  */
 const member = (node, key) => (node.members || []).filter((m) => m.key === key).at(-1);
 

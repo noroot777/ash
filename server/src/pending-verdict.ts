@@ -4,13 +4,13 @@
 // 什么(deliveryOptions)、哨兵唤醒的最后一道闸(monitorWakeGuard)。租约、冷却、
 // 重投、扫描那些带共享状态的机器仍在 pending-messages.ts。
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
-import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import type { AgentType } from "@navi/shared";
+import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@navi/shared/cli-commands";
+import { monitorBlockedReason, monitorIdFromOrigin } from "@navi/shared/monitor";
 import { monitorEventSource, monitorWakeGate, type MonitorSourceState } from "./monitor-session.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
-import { monitorWakeForDelivery } from "@ash/shared/monitor-wake";
+import { monitorWakeForDelivery } from "@navi/shared/monitor-wake";
 import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
 
 type Row = typeof scheduledMessages.$inferSelect;

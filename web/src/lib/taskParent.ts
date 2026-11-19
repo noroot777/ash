@@ -1,4 +1,4 @@
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 
 // 一条任务「上面那一条」是谁、怎么称呼这层关系。任务头、侧栏那颗来源图标、命令面板都读这一份
 // （画法在 components/TaskOrigin.tsx）。

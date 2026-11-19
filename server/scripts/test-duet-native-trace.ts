@@ -3,21 +3,21 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { AgentExecutor } from "../src/executors/types.js";
 import { applyDuetEvent, emptyDuet, rebuildDuetState, type PersistedDuetEntry } from "../../web/src/duet/duetState.ts";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-duet-native-trace-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-duet-native-trace-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-duet-native-trace");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks } = await import("../src/db/schema.js");
 const { runTurn } = await import("../src/duet/turn.js");
 const { parseClaudeStream } = await import("../src/executors/claude.js");
-// 这两个也必须走动态 import:静态 import 会在上面那几行设 ASH_RUNS_DIR **之前**求值,
+// 这两个也必须走动态 import:静态 import 会在上面那几行设 NAVI_RUNS_DIR **之前**求值,
 // 而 transcript.js 在模块初始化时就定下 RUNS_DIR —— 于是夹具的产物会落进真实的 data/runs。
 const { failedTurnNotices } = await import("../src/session-waiting.js");
 const { parseSessionTrace } = await import("../src/transcript.js");

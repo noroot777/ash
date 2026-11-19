@@ -12,9 +12,9 @@ import { Hono } from "hono";
 
 export async function baselineHarness(prefix: string) {
   const root = mkdtempSync(join(tmpdir(), prefix));
-  process.env.ASH_DB = join(root, "ash.db");
-  process.env.ASH_RUNS_DIR = join(root, "runs");
-  assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+  process.env.NAVI_DB = join(root, "ash.db");
+  process.env.NAVI_RUNS_DIR = join(root, "runs");
+  assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   // 门禁命令：载入每个 use-*.js，有一个抛错就红。`delay` 让它跑得够久，好在跑的期间动一下 main。

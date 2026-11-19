@@ -11,14 +11,14 @@ import { Hono } from "hono";
 // 钉的是两件事,一件都不能少:
 //   ① **死局真的存在**,而且放弃之后真的解开了 —— 账上挂着一个核不上归属、没敢动的活号时,
 //      启动被幂等门顶回、删记录被拒,界面上没有任何出路(第 1 轮审查发现 1 的形状);
-//   ② 放弃**不是核销** —— `stop` 账原样留着 `unresolved`,只是 ash 不再把它当「还在跑」的
+//   ② 放弃**不是核销** —— `stop` 账原样留着 `unresolved`,只是 navi 不再把它当「还在跑」的
 //      东西管。两者混成一格就会凭空多出一句「已停止」,那是停止语义里最不许出现的谎。
 //
 // 残留事实用一个**外部的**活进程扮演(不是这次启动起来的),于是不依赖 lsof、也不依赖
 // 守护化形状,在 CI 和 Windows 上都是确定性的。
 
-const temporary = realpathSync(mkdtempSync(join(tmpdir(), "ash-launch-abandon-")));
-process.env.ASH_DB = join(temporary, "test.db");
+const temporary = realpathSync(mkdtempSync(join(tmpdir(), "navi-launch-abandon-")));
+process.env.NAVI_DB = join(temporary, "test.db");
 const { terminalSessions } = await import("../src/terminal.js");
 const { startCommand } = await import("../src/terminal-commands.js");
 const { launchResidue, mountLaunchAbandonRoutes, residueNotice } = await import("../src/terminal-abandon.js");
@@ -94,14 +94,14 @@ try {
   assert.equal((await post("/abandon", { sessionId: "nope" })).status, 404);
   console.log("PASS: 没带会话 id / 带了个不存在的都签不下去");
 
-  // ④ 放弃本体:ash 不再管它,但账一个字都不改。
+  // ④ 放弃本体:navi 不再管它,但账一个字都不改。
   const signed = await post("/abandon", { sessionId });
   assert.equal(signed.status, 200);
   const after = terminalSessions.get(sessionId, projectId)!;
   assert.ok(after.abandoned, "放弃那一刻的快照要落在会话事实上");
   assert.deepEqual(after.abandoned!.owedPids, [strayPid]);
   assert.equal(after.stop.kind, "unresolved", "放弃不是核销：停没停净的结论原样留着");
-  assert.equal(after.running, false, "ash 不再把它当还在跑的东西管");
+  assert.equal(after.running, false, "navi 不再把它当还在跑的东西管");
   assert.ok(await processAlive(strayPid), "放弃不杀任何进程");
   console.log("PASS: 放弃落成一格快照，stop 账仍是 unresolved、进程一个没杀");
 
@@ -163,7 +163,7 @@ try {
   assert.ok(await processAlive(strayPid), "删掉记录也不等于杀进程：那个号仍然活着，只是从此由用户自己处理");
   console.log("PASS: 同一条闸在放弃之后放行，而它名下那个活号一个字都没动");
 
-  // ⑨ 签过字的活物,ash 之后**哪条路都不杀**(第 1 轮自由审查必须修 1:闲置回收把放弃过的读成
+  // ⑨ 签过字的活物,navi 之后**哪条路都不杀**(第 1 轮自由审查必须修 1:闲置回收把放弃过的读成
   // 「死透了」,半小时后连树 SIGKILL、连「我放过手」的记录一起抹掉)。形状取守护化启动真正
   // 有用的那一种:组里还活着东西,用户签字接手。
   const pidFile = join(temporary, "daemon.pid");

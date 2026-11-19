@@ -12,15 +12,15 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
-import { markdownImageRefs } from "@ash/shared/markdown-images";
+import type { AgentEvent } from "@navi/shared";
+import { markdownImageRefs } from "@navi/shared/markdown-images";
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const red = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 1)]);
 const blue = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 2)]);
-const root = mkdtempSync(join(tmpdir(), "ash-image-journal-"));
-process.env.ASH_UPLOADS_DIR = join(root, "data", "uploads");
-process.env.ASH_RUNS_DIR = join(root, "data", "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-image-journal-"));
+process.env.NAVI_UPLOADS_DIR = join(root, "data", "uploads");
+process.env.NAVI_RUNS_DIR = join(root, "data", "runs");
 const { markdownImageSink, withMarkdownImages } = await import("../src/executors/markdown-image-stream.js");
 const { eventQueue } = await import("../src/executors/event-queue.js");
 const { childActivity } = await import("../src/executors/native-agent-activity.js");
@@ -237,7 +237,7 @@ try {
     const sessId = "sess-lost";
     const green = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 3)]);
     writeFileSync(join(root, "lost.png"), green);
-    const uploadsDir = process.env.ASH_UPLOADS_DIR!;
+    const uploadsDir = process.env.NAVI_UPLOADS_DIR!;
     mkdirSync(uploadsDir, { recursive: true });
     chmodSync(uploadsDir, 0o500);
     try {

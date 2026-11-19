@@ -11,7 +11,7 @@ import { previewBase } from "./preview-public.js";
 import { rewritePreviewUrl } from "./preview-proxy-rewrite.js";
 import { rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
 import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
-import { LEGACY_SESSION_COOKIE } from "@ash/shared/legacy-names";
+import { LEGACY_SESSION_COOKIE } from "@navi/shared/legacy-names";
 
 /**
  * `jar` 是这一趟预览自己的 cookie 罐子（存在服务端，规矩和缘由都在 preview-cookies.ts）。
@@ -32,43 +32,43 @@ import { LEGACY_SESSION_COOKIE } from "@ash/shared/legacy-names";
  * 分出去的那些，多到一定数量就回收最早的：应用里的同源 iframe 在明文 http 下跟顶层导航长得
  * 一模一样（见 preview-proxy.ts 的 looksLikeNavigation），每加载一次就要分一张。
  *
- * ## 预览的是这台 ash 自己时：`/api` 单独走一跳，会话只活在那一跳上
+ * ## 预览的是这台 navi 自己时：`/api` 单独走一跳，会话只活在那一跳上
  *
- * 代理一个 cookie 都不转，所以预览里的 ash 前端开屏就是未登录态，只能让用户**在预览页里粘
+ * 代理一个 cookie 都不转，所以预览里的 navi 前端开屏就是未登录态，只能让用户**在预览页里粘
  * 一次 key**。那个动作才是这条链上最危险的一步：key 是长期凭证、能外带、从任何机器都登得
  * 进来，2026-09-09 已经真发生过一次。所以反过来做——由代理替他带上登录态（用户 2026-09-10
  * 拍板的 A 档）。
  *
  * **但绝不能把这条会话放进那个通用罐子。**通用罐子是发给「被预览的服务」的，而在这一档里
  * 那个服务是**任务分支自己启动的 vite**（`/api` 只是由它再转一跳回 4317）。分支里加一个
- * 中间件就能把原始 `ash_session` 记下来外带，之后脱离预览直接登进 ash —— 那就不是「借身份
+ * 中间件就能把原始 `ash_session` 记下来外带，之后脱离预览直接登进 navi —— 那就不是「借身份
  * 调一次 API」，而是交出一份可外带的凭证了（第 1 轮审查 P1）。
  *
- * 所以 `ownApi` 是一条**独立的路**：只有上游路径落在 `/api` 底下时才走，直接连本机 ash 的
+ * 所以 `ownApi` 是一条**独立的路**：只有上游路径落在 `/api` 底下时才走，直接连本机 navi 的
  * 监听端口，绕开被预览的 dev server；会话装在它自己的罐子里，只在这一跳上出现。分支代码
  * 一个字都收不到，它能做的仅止于「让页面去调那些 API」—— 那正是用户认下的那份代价。
  *
- * 三个前提缺一不可，少一个就变成「把你的 ash 会话送给一个陌生上游」：
- *  · **仓库是这台 ash 自己的**（项目的 repoPath == REPO_DIR）；
- *  · **被预览的服务自己说了「我的 `/api` 打到那台 ash 上」**，而且说的正是我们此刻真绑着的
+ * 三个前提缺一不可，少一个就变成「把你的 navi 会话送给一个陌生上游」：
+ *  · **仓库是这台 navi 自己的**（项目的 repoPath == REPO_DIR）；
+ *  · **被预览的服务自己说了「我的 `/api` 打到那台 navi 上」**，而且说的正是我们此刻真绑着的
  *    那个端口（`record.hostApi`，判读在 preview-log.ts 的 declaredHostApiPort）。**不能拿启动
  *    方式当证据**：自由工作流对任意自定义脚本和多服务配置一律写死 `frontend`，那只是我们
  *    「希望它只起前端」的意图。照那个判，「前端 + 分支后端」的预览的 `/api` 会被静默改接到
- *    正在用的主 ash 上——用户以为在验分支后端，实际是拿自己的身份读写主库（第 2 轮审查 P1）。
+ *    正在用的主 navi 上——用户以为在验分支后端，实际是拿自己的身份读写主库（第 2 轮审查 P1）。
  *  · **分叉不继承**（`forkGrant` 一律配空的，`ownApi` 也置空）。分叉的触发条件就是「另一个
  *    客户端拿同一个地址开页面」，而地址是可以被复制走的。
  *
  * 端口取 `boundListeningPort()`（确知绑上了才有值），不取会退到 `PORT ?? 4317` 的那个——猜出来
- * 的 4317 上可能坐着另一台 ash。ash 重启后可能换了端口，所以开预览时还要再核一次：记录里
+ * 的 4317 上可能坐着另一台 navi。navi 重启后可能换了端口，所以开预览时还要再核一次：记录里
  * 那个数只有等于此刻绑着的那个才认。
  *
- * 剩下的代价说在明处：页面能借这条路用你的身份调 ash 的 API —— 包括那些会吐出凭证的端点
+ * 剩下的代价说在明处：页面能借这条路用你的身份调 navi 的 API —— 包括那些会吐出凭证的端点
  * （`/api/auth/rotate-key` 换一把新 key 就是）。要再收窄只能给这一跳加白名单，那是另一件事。
  *
  * ## 凭证活不过签发它的那件凭证，连接活不过凭证
  *
  * 地址里那串随机数自己不认人：签发它的设备被请出去、登出了、那把访问密钥换了，它要是还作数，
- * 开着预览页的那台设备就还在里面（预览的是 ash 自己时，能一路用到 `/api`）。所以自用模式下
+ * 开着预览页的那台设备就还在里面（预览的是 navi 自己时，能一路用到 `/api`）。所以自用模式下
  * 每张 grant 记着签发它的那件凭证（`holder`，auth/remote-access.ts），两头都接上：
  *  · **每次用之前现核**（`canUsePreview`）：那件凭证不在了，这张就不作数；
  *  · **那件凭证一被收回就连根作废**（`onCredentialRevoked`），不等下一次请求。
@@ -119,7 +119,7 @@ let channelSweep: ReturnType<typeof setInterval> | null = null;
 export function holdPreviewChannel(grant: PreviewGrant, close: () => void): () => void {
   if (grants.get(grant.nav) !== grant) { close(); return () => {}; }
   grant.live.add(close);
-  channelSweep ??= setInterval(() => void sweepChannels().catch((error) => console.error("[ash] 预览连接复核出错:", error)), CHANNEL_SWEEP_MS);
+  channelSweep ??= setInterval(() => void sweepChannels().catch((error) => console.error("[navi] 预览连接复核出错:", error)), CHANNEL_SWEEP_MS);
   channelSweep.unref?.();
   return () => void grant.live.delete(close);
 }
@@ -173,8 +173,8 @@ function samePlace(a: string, b: string): boolean {
 }
 
 /**
- * 被预览的仓库就是**这台 ash 自己**吗 —— 播不播那条会话就看它（缘由见文件顶部）。
- * 判仓库而不是判「预览模式」：模式是页面上选的，而「/api 打回本机 4317」这件事只有 ash
+ * 被预览的仓库就是**这台 navi 自己**吗 —— 播不播那条会话就看它（缘由见文件顶部）。
+ * 判仓库而不是判「预览模式」：模式是页面上选的，而「/api 打回本机 4317」这件事只有 navi
  * 自己的 `scripts/dev.mjs` 干得出来；别的项目哪怕也选「只启动前端」，上游也是它自己的东西。
  */
 async function previewsOwnRepo(taskId: string): Promise<boolean> {
@@ -226,11 +226,11 @@ export function mountPreviewOpenRoutes(api: Hono): void {
     // 也不知道重开一次预览就好了。
     let target: URL;
     try { target = new URL(service.url); } catch { return c.text("预览记录里的地址不合法，请关掉预览重开一次。", 502); }
-    // 代理永远打回环上的 `service.port`，所以这个端口等于 ash 自己监听的那个 = 预览指到了
-    // ash 本尊：代理自己转给自己，用户点开预览看到的是自己这台 ash（未登录态，因为代理按
+    // 代理永远打回环上的 `service.port`，所以这个端口等于 navi 自己监听的那个 = 预览指到了
+    // navi 本尊：代理自己转给自己，用户点开预览看到的是自己这台 navi（未登录态，因为代理按
     // 设计不转 cookie）。判读那侧已经不认自己的端口了（preview-log.ts 的 `excluded`），这里
     // 是**兜底**：存量记录、手填的服务端口照样能绕过判读，而这条路一旦走通，用户面对的就是
-    // 一个长得跟 ash 一模一样、却要他重新粘 key 的页面。
+    // 一个长得跟 navi 一模一样、却要他重新粘 key 的页面。
     const self = currentListeningPort();
     if (self !== null && service.port === self) return c.text("预览记录指到了 Navi 自己，请关掉预览重开一次。", 502);
     const actor = actorOf(c);
@@ -244,8 +244,8 @@ export function mountPreviewOpenRoutes(api: Hono): void {
       jar: new Map(), client: null, nav: "", content: null, forks: [], ownApi: null,
     };
     if (!(await canUsePreview(grant))) return c.text("预览不存在或无权访问", 404);
-    // 被预览的服务自己说了「我的 `/api` 打到这台 ash 上」、说的就是我们此刻绑着的端口、
-    // 而且这就是这台 ash 自己的仓库 → 给 `/api` 单独开一条直连本机 ash 的路，把你这条会话
+    // 被预览的服务自己说了「我的 `/api` 打到这台 navi 上」、说的就是我们此刻绑着的端口、
+    // 而且这就是这台 navi 自己的仓库 → 给 `/api` 单独开一条直连本机 navi 的路，把你这条会话
     // 放在**那条路自己的罐子**里。为什么不能放进通用罐子（分支启动的 dev server 会原样收到
     // 它）、为什么不能拿启动方式当证据，见文件顶部。
     const bound = boundListeningPort();

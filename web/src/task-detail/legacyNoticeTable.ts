@@ -22,11 +22,11 @@
 // 判据由此有一条不变量：引进来的那一截改成什么，都不会把一条记录从回执翻成提醒、或者反过来；
 // 最多让它从「认得出」变成「认不出」。
 // 另一张是结算说明（服务端带 `level:"notice"` 落的那种，「这一轮为什么落成这个状态」）。它们
-// 一律没有类型，按同一个办法认：没交卷、被 ash 判失败的那几句要你知道；其余（等哨兵改落暂停、
+// 一律没有类型，按同一个办法认：没交卷、被 navi 判失败的那几句要你知道；其余（等哨兵改落暂停、
 // 以提问暂停、你自己停的）界面别处已经在说，是回执。
 
-import { ACCEPT_GATE_FAILURE_LABELS, ACCEPT_GATE_FAILURE_LEGACY_LABELS } from "@ash/shared/accept-gate";
-import { COMMAND_NOTE_HEAD } from "@ash/shared/command-note";
+import { ACCEPT_GATE_FAILURE_LABELS, ACCEPT_GATE_FAILURE_LEGACY_LABELS } from "@navi/shared/accept-gate";
+import { COMMAND_NOTE_HEAD } from "@navi/shared/command-note";
 
 /** 判法 1：只有提醒才这么起头（注释是写它的文件，便于对照）。 */
 /**
@@ -108,7 +108,7 @@ const ALERT_LEADS: readonly RegExp[] = [
   // 起跑与回合
   /^这一轮没能起跑[：:]/, // turn-failure（含刚发的消息没送达）
   /^任务登记的基线分支 /, // base-fallback-notice
-  /^起跑预检提示/, // ash-mcp-launch-gate / ash-mcp-turn-hint
+  /^起跑预检提示/, // navi-mcp-launch-gate / navi-mcp-turn-hint
   /^本次启动失败，未能继续执行/, // queue-seat
   /^续聊未能启动/, // task-reply
   /^(重试这一回合|重跑上一回合)(未能启动：回合被其它执行抢占|启动失败：)/, // task-retry-turn（「重跑上一回合」是老记录的说法）
@@ -163,7 +163,7 @@ export type CommandVerdict = "passed" | "failed" | "unknown";
 
 /**
  * workflow-steps：「跑了一条命令：`<命令>`（通过|没通过）」，后面换行接命令的输出（生成那一头在
- * @ash/shared/command-note，格式以它为准）。命令和输出都是任意文字（命令可以跨行、可以引一段
+ * @navi/shared/command-note，格式以它为准）。命令和输出都是任意文字（命令可以跨行、可以引一段
  * 「`（没通过）」），开头结尾都夹着引文，单看字面切不准命令在哪儿结束。
  *
  * 所以把每一种切法都列出来：命令在某个「`（通过）/（没通过）」之前结束、后面是换行或者整句到头。真的
@@ -197,6 +197,7 @@ export function commandVerdict(text: string, commands: readonly string[] = []): 
 /** 结算说明里要你知道的那几句（server/src/settle-status.ts 的落位说明）。 */
 const SETTLEMENT_LEADS: readonly RegExp[] = [
   /^本回合没有交卷/, // 没调 complete_task，记未完成
+  /^回合正常结束,但 ?(本回合内没有收到|agent 未调用) ?complete_task/, // 同上，2026-08-31 之前的说法（老会话写在正文里）
   /^本回合被 (?:Navi|ash) 主动终止/, // 熔断
   /^本回合是上次 (?:Navi|ash) 中断时留下的/, // 读不出熔断判决
   /^后台工作流\/子代理(等到时限还没跑完|还没跑完[,，]智能体进程就退出了)/, // 后台活没跑完

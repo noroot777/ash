@@ -9,9 +9,9 @@
 // 的接法挂在一起，中间只换掉 fetch：断言的是「点了之后到没到那张卡」。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AuthState, ProjectView } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import type { ProjectPreviewConfig } from "@ash/shared/preview";
+import type { AuthState, ProjectView } from "@navi/shared";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
+import type { ProjectPreviewConfig } from "@navi/shared/preview";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
 import { AuthContext } from "../../src/auth/authContext.ts";
@@ -38,7 +38,7 @@ const project: ProjectView = {
 };
 
 /** 后端认出多个候选时说的那段话（server/src/preview-command.ts 的 ambiguousMessage 形状）。 */
-export const AMBIGUOUS = "这个工作区里认出了 2 个能起服务的东西，ash 不替你挑：\n"
+export const AMBIGUOUS = "这个工作区里认出了 2 个能起服务的东西，navi 不替你挑：\n"
   + "  · a4sms-back/a4sms-imds（Maven 模块 · Spring Boot）\n"
   + "  · a4sms-front（Node · pnpm dev）\n"
   + "到「设置 → 项目设置 → 预览 → 选择服务」点击检测并勾选所需服务，也可以在「自定义脚本」里填写启动方式。";

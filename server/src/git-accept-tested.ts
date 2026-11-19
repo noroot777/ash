@@ -144,7 +144,7 @@ function repair(paths: readonly PathState[], toTested: boolean): string {
 }
 
 /**
- * 写文件写到一半失败：ash 不放回、不删任何东西（git-accept-publish.ts 文件头），照实说每个路径现在是什么样、
+ * 写文件写到一半失败：navi 不放回、不删任何东西（git-accept-publish.ts 文件头），照实说每个路径现在是什么样、
  * 怎么收拾。只有核实了都还是原样才说「没写」；核不出来就把可能动过的全部交出来。
  */
 function halfWritten(moved: Extract<SealedMove, { stage: "partial" }>, cwd: string, names: Names, to: string, base: string): string {

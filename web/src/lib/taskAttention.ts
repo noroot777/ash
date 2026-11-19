@@ -1,7 +1,7 @@
-import { isAcceptedStage as sharedIsAcceptedStage, type Task, type TaskListItem } from "@ash/shared";
+import { isAcceptedStage as sharedIsAcceptedStage, type Task, type TaskListItem } from "@navi/shared";
 import {
   awaitsRuling, awaitsYourWord, hasFailed, isTaskAwaitingAcceptance, isTaskLive, isTeamLead, isTeamSettledLead,
-} from "@ash/shared/task-attention";
+} from "@navi/shared/task-attention";
 
 // 「轮到谁动」的判据本体在 shared/src/task-attention.ts（mobile 与 server 的飞书推送读的
 // 也是那一份）；这里只放 web 自己的分堆与任务模式口径，并把 shared 的谓词原样转出，
@@ -11,7 +11,7 @@ import {
 export {
   awaitsAcceptance, awaitsRuling, awaitsYourWord, hasFailed, isTaskAwaitingAcceptance, isTaskLive, isTeamSettledLead,
   needsYourCommand,
-} from "@ash/shared/task-attention";
+} from "@navi/shared/task-attention";
 
 export type SpreadBucket = "todo" | "run" | "wait" | "done" | "accepted";
 

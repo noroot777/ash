@@ -199,7 +199,7 @@ async function changeBase(repo: string, taskId: string, head: string, start: str
 
 export async function taskChangeScope(repoPath: string, task: ChangeScopeTask): Promise<TaskChangeScope> {
   const repo = expandHome(repoPath);
-  // 分支名走 resolveWorktreeBranchName：改名成 ash 之后新任务是 `ash/xxx`，改名前建的
+  // 分支名走 resolveWorktreeBranchName：改名成 navi 之后新任务是 `navi/xxx`，改名前建的
   // 老任务还挂在 `harness/xxx` 上，这里得两边都认，否则老任务一律报 source_branch_missing。
   const sourceBranch = await resolveWorktreeBranchName(repo, task.id);
   const fail = (targetBranch: string | null, reason: ChangeScopeFailure): TaskChangeScope =>

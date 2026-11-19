@@ -44,9 +44,9 @@ try {
   await objective.fill("新建面板打开后切换到升级分支");
   await checkout("version-upgrade");
   await expectAutomatic();
-  if (process.env.ASH_BROWSER_SCREENSHOT) {
+  if (process.env.NAVI_BROWSER_SCREENSHOT) {
     await directory.click();
-    await page.screenshot({ path: process.env.ASH_BROWSER_SCREENSHOT, fullPage: true });
+    await page.screenshot({ path: process.env.NAVI_BROWSER_SCREENSHOT, fullPage: true });
     await page.keyboard.press("Escape");
   }
   const automatic = await create("默认分支跟随侧栏切换");
@@ -144,8 +144,8 @@ try {
     const message = await dialog.innerText();
     assert(message.includes(`合并回 ${target}`), message);
     assert(!message.includes("项目当前分支"), message);
-    if (process.env.ASH_FROZEN_BRANCH_SCREENSHOT && !frozenCaptured) {
-      await page.screenshot({path:process.env.ASH_FROZEN_BRANCH_SCREENSHOT,fullPage:true,animations:"disabled"});
+    if (process.env.NAVI_FROZEN_BRANCH_SCREENSHOT && !frozenCaptured) {
+      await page.screenshot({path:process.env.NAVI_FROZEN_BRANCH_SCREENSHOT,fullPage:true,animations:"disabled"});
       frozenCaptured = true;
     }
     await page.keyboard.press("Escape");

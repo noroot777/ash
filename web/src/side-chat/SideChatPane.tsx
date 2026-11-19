@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { ArrowDown } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { InspNone } from "../inspector/parts.tsx";

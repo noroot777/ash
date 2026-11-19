@@ -4,8 +4,8 @@
 // 各自是一个独立的不变量:
 //
 // ⑬-1 **「展示文本里看得见这段文字」不是凭证**(F1 实测 `risk.log:1`)。审查起了一个自己的
-//     诊断进程:**根本没有 `ASH_MONITOR_UNIT` 这个环境键**,只是另一个变量的**值**里写着
-//     `saved old monitor: ASH_MONITOR_UNIT=<旧记号> end`。上一版的取证答 `ours`,真实的重复点停
+//     诊断进程:**根本没有 `NAVI_MONITOR_UNIT` 这个环境键**,只是另一个变量的**值**里写着
+//     `saved old monitor: NAVI_MONITOR_UNIT=<旧记号> end`。上一版的取证答 `ours`,真实的重复点停
 //     入口当场把它杀了(`actualUnitVariablePresent=false`、`diagnosticAliveAfter=false`)。
 //     第 13 轮「把 argv 和环境切开」修不掉这一条:**环境段自己也没有边界**(`ps -E` 把各项用
 //     空格拼起来,值里有空格、有 `KEY=` 都看不出区别)。所以现在按证据等级分档:
@@ -73,13 +73,13 @@ async function deadPid(): Promise<number> {
   const taskId = await makeTask({ status: "done" });
   const unitToken = `unit-valuetext-${process.pid}-${Date.now()}`;
   const historical = await deadPid();
-  // 诊断进程:**没有 `ASH_MONITOR_UNIT` 这个键**,只有另一个变量的值里写着这段文字。
+  // 诊断进程:**没有 `NAVI_MONITOR_UNIT` 这个键**,只有另一个变量的值里写着这段文字。
   const diagnostic = spawn("sh", ["-lc", STUBBORN], {
     detached: true,
     stdio: "ignore",
     env: {
       PATH: process.env.PATH ?? "",
-      MONITOR_DIAGNOSTIC: `saved old monitor: ${"ASH_MONITOR_UNIT"}=${unitToken} end`,
+      MONITOR_DIAGNOSTIC: `saved old monitor: ${"NAVI_MONITOR_UNIT"}=${unitToken} end`,
     },
   });
   diagnostic.unref();
@@ -89,7 +89,7 @@ async function deadPid(): Promise<number> {
 
   const evidence = processUnitEvidence(unitToken, { fresh: true });
   assert.notEqual(evidence.verdict, "ours",
-    "**值里的那段文字不是凭证** —— 这个进程根本没有 ASH_MONITOR_UNIT 这一项");
+    "**值里的那段文字不是凭证** —— 这个进程根本没有 NAVI_MONITOR_UNIT 这一项");
   assert.equal(evidence.verdict, EXACT_MARKS ? "none" : "suspected",
     EXACT_MARKS
       ? "真实环境项读得出来 ⇒ 这一问答「没有这一项」"
@@ -240,7 +240,7 @@ async function deadPid(): Promise<number> {
 
 {
   // ⑬-5 **边条认领走同一条规矩**(同一条不变量的第二个消费点)。台子:一行 pid 还空着的意图行
-  //     —— ash 恰好死在「落了身份」和「回填 pid」之间;边条指着一个刚起来的陌生进程,时间锚
+  //     —— navi 恰好死在「落了身份」和「回填 pid」之间;边条指着一个刚起来的陌生进程,时间锚
   //     与命令文本都对得上。而记号那一问是**精确可答**的那一档,它的回答是「这个号上没有这条
   //     记号」:那是反证,不是「问不出来」,所以这一行只能照实判成认不回来。
   const taskId = await makeTask();
@@ -389,18 +389,18 @@ async function deadPid(): Promise<number> {
   //    本来就没有可打的对象;这里**行上的 pid 就是那个活着的陌生进程**,时间锚贴着它真实的
   //    启动时刻、记录的命令文本也真的包含它的命令 —— 弱判据这一刻全部成立。上一版于是把它
   //    真实的启动时刻补进 `pid_started_at`,而 `reclaimEvidence` 第 ② 步拿这一列当归属凭证
-  //    (根活着 + 时刻对得上 ⇒ `ours-alive` ⇒ 可以下刀),它分不出这个值是 ash 自己 spawn 那
+  //    (根活着 + 时刻对得上 ⇒ `ours-alive` ⇒ 可以下刀),它分不出这个值是 navi 自己 spawn 那
   //    一刻读来的还是事后猜出来的,于是产品真实的停止链把陌生进程杀了
   //    (`cgtxRDWnCNVp/round-1/identity-ambiguous.log`)。
   const taskId = await makeTask({ status: "done" });
   const unitToken = `unit-textonly-${process.pid}-${Date.now()}`;
-  // 诊断进程:**没有 `ASH_MONITOR_UNIT` 这个键**,只是另一个变量的值里抄着这段文字。
+  // 诊断进程:**没有 `NAVI_MONITOR_UNIT` 这个键**,只是另一个变量的值里抄着这段文字。
   const stranger = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     detached: true,
     stdio: "ignore",
     env: {
       PATH: process.env.PATH ?? "",
-      MONITOR_DIAGNOSTIC: `saved old monitor: ${"ASH_MONITOR_UNIT"}=${unitToken} end`,
+      MONITOR_DIAGNOSTIC: `saved old monitor: ${"NAVI_MONITOR_UNIT"}=${unitToken} end`,
     },
   });
   stranger.unref();
@@ -588,7 +588,7 @@ async function deadPid(): Promise<number> {
   const born = (marked: boolean) => spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     detached: true,
     stdio: "ignore",
-    env: { PATH: process.env.PATH ?? "", ...(marked ? { ASH_MONITOR_UNIT: unitToken } : {}) },
+    env: { PATH: process.env.PATH ?? "", ...(marked ? { NAVI_MONITOR_UNIT: unitToken } : {}) },
   });
   // 两个背靠背起的进程,`lstart` 读数绝大多数时候落在同一秒;跨秒就重来(审查脚本同一招)。
   let original = born(true); original.unref();

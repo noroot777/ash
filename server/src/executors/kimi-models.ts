@@ -1,4 +1,4 @@
-import { modelEffortKey, resolveReasoningEfforts } from "@ash/shared/cli-presets";
+import { modelEffortKey, resolveReasoningEfforts } from "@navi/shared/cli-presets";
 import type { CliExecSpec, CliModelsSpec } from "./catalog/types.js";
 
 export const kimiEffortPreflight: NonNullable<CliExecSpec["preflight"]> = ({ args, reasoningEffort, modelEfforts }) => {

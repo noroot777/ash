@@ -16,7 +16,7 @@
 //
 // 换任务或卸下时整个调度作废，还在路上的那一发回来也不认。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
+import type { FreeWorkflowPreviewState } from "@navi/shared/free-workflow";
 import { request } from "../lib/apiClient.ts";
 import { useServerEvents } from "../lib/events.ts";
 

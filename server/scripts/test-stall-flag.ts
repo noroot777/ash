@@ -21,7 +21,7 @@
 //   ⑤ **④那道闸的判据一开始错了**(第 1 轮审查 F3,已实测):它问的是「这个任务里还有没有起得
 //      更晚的会话」,而 duet 的两个声部**本来就并行**。于是 A 卡着、B 这一轮先答完,A 那个仍然
 //      有效的警告被 B 的时间戳盖掉 —— 恰恰是「上游连不上」最该亮的那段时间里一声不响。
-//      所有权在 ash 里从来是 `sessions.role` 说的(每个角色至多一条在跑),不是时间先后,所以
+//      所有权在 navi 里从来是 `sessions.role` 说的(每个角色至多一条在跑),不是时间先后,所以
 //      那道闸必须限定在**同一个角色**内比。duet 的 voiceA / voiceB 因此互不遮蔽,而④那条
 //      「换执行器另起一条 single」照旧被挡住。
 //
@@ -31,9 +31,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-stall-flag-"));
-process.env.ASH_DB = join(stage, "t.db");
-process.env.HARNESS_DB = process.env.ASH_DB;
+const stage = mkdtempSync(join(tmpdir(), "navi-stall-flag-"));
+process.env.NAVI_DB = join(stage, "t.db");
+process.env.HARNESS_DB = process.env.NAVI_DB;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
@@ -114,7 +114,7 @@ markSessionStalled(TASK, SESS, SINCE);
 await settles(SINCE, "夹具不对:这一步之后标记该是在的");
 
 // ── ③ 残值闸:会话收了尾 / 任务不在跑,那颗点都不许亮 ─────────────────────────────
-// ash 被硬杀时没人来撤标记,少了这两条它会永久亮在卡片上。
+// navi 被硬杀时没人来撤标记,少了这两条它会永久亮在卡片上。
 await db.update(sessions).set({ endedAt: T2 }).where(eq(sessions.id, SESS));
 assert.equal(await stalled(), false, "会话都收尾了,停滞点还亮着");
 await db.update(sessions).set({ endedAt: null }).where(eq(sessions.id, SESS));
@@ -205,7 +205,7 @@ markSessionStalled(DUET, VOICE_A, SINCE);
 for (let i = 0; i < 100 && !(await duetStalled()); i += 1) await new Promise((r) => { setTimeout(r, 10); });
 assert.equal(await duetStalled(), true,
   "另一个声部起得更晚,就把这个声部仍然有效的停滞警告盖掉了 —— duet 的两个声部本来就并行,"
-  + "遮蔽只能在同一个角色内算(所有权在 ash 里是 sessions.role 说的,不是时间先后)");
+  + "遮蔽只能在同一个角色内算(所有权在 navi 里是 sessions.role 说的,不是时间先后)");
 // 同一个角色内照旧遮蔽:A 这一轮收了尾、新开一条 voiceA,旧行那个没人撤的标记不许再点灯。
 await db.insert(sessions).values({
   id: "sess-duet-a2", taskId: DUET, role: "voiceA", agentType: "codex", executor: "codex",

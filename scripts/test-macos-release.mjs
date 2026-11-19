@@ -174,7 +174,7 @@ async function localRehearsal() {
   const artifacts = join(temporary, "artifacts");
   const release = (app, keyFile, notes = "演练", target = feed) => spawnSync(process.execPath,
     [releaseScript, "--local", target, "--app", app, "--ed-key-file", keyFile, "--notes", notes],
-    { encoding: "utf8", env: { ...cleanEnv, ASH_MAC_RELEASE_ARTIFACTS: artifacts } });
+    { encoding: "utf8", env: { ...cleanEnv, NAVI_MAC_RELEASE_ARTIFACTS: artifacts } });
   const appcast = () => readFileSync(join(feed, "appcast.xml"), "utf8");
 
   let result = release(fakeApp("20000101.0001", key.publicKey), key.file);
@@ -383,8 +383,8 @@ async function formalRehearsal() {
   const publish = async (github, app, { conf = config, artifacts = "formal-artifacts" } = {}) => new Promise((done) => {
     writeFileSync(configFile, JSON.stringify(conf));
     const child = spawn(process.execPath, [releaseScript, "--app", app, "--ed-key-file", key.file, "--notes", "正式 & <b>演练</b>"], {
-      env: { ...cleanEnv, GH_TOKEN: "test-token", GITHUB_TOKEN: "", ASH_MAC_GITHUB_API: github.base,
-        ASH_MAC_RELEASE_CONFIG: configFile, ASH_MAC_RELEASE_ARTIFACTS: join(temporary, artifacts), ASH_MAC_README: readme },
+      env: { ...cleanEnv, GH_TOKEN: "test-token", GITHUB_TOKEN: "", NAVI_MAC_GITHUB_API: github.base,
+        NAVI_MAC_RELEASE_CONFIG: configFile, NAVI_MAC_RELEASE_ARTIFACTS: join(temporary, artifacts), NAVI_MAC_README: readme },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";

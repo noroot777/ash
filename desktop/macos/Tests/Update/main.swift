@@ -2,8 +2,8 @@ import Foundation
 
 // scripts/test-macos-update.mjs 的驱动：编进来的是真的 UpdateGate / RestartImpact / ServerShutdown /
 // Maintenance / DatabaseBackup / ServerRecord / ServerLauncher，问用户那一下换成照脚本作答
-// （ANSWERS=wait,now,…），每一步打一行给测试读。配置全走环境变量（ASH_URL、ASH_DATA_DIR、
-// ASH_MAC_RUNTIME），碰不到日常那一份。
+// （ANSWERS=wait,now,…），每一步打一行给测试读。配置全走环境变量（NAVI_URL、NAVI_DATA_DIR、
+// NAVI_MAC_RUNTIME），碰不到日常那一份。
 
 let env = ProcessInfo.processInfo.environment
 var answers = (env["ANSWERS"] ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }

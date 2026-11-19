@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AgentExecutorProfile, AgentType, DiscussionRounds } from "@ash/shared";
-import { MAX_DISCUSSION_GUESTS, discussionRoundsLabel } from "@ash/shared/discussion";
+import type { AgentExecutorProfile, AgentType, DiscussionRounds } from "@navi/shared";
+import { MAX_DISCUSSION_GUESTS, discussionRoundsLabel } from "@navi/shared/discussion";
 import { CaretDown, Check } from "@phosphor-icons/react";
 import { AgentIcon } from "../components/AgentIcon.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";

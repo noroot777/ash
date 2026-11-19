@@ -10,7 +10,7 @@
  *
  * 一台调度台就是一个 CLI 进程，它**串行**跑回合：第 N 次投入（开台随 spawn 送进去的首轮
  * prompt、用户插话、执行者汇报）对应第 N 个 `turnEnd`。而**投入与它的结束之间是可以交错
- * 的** —— 用户插话时 ash 先 `interrupt()` 再 `send()`，新一轮当场就算开跑（`sendToLead`
+ * 的** —— 用户插话时 navi 先 `interrupt()` 再 `send()`，新一轮当场就算开跑（`sendToLead`
  * 里那一句 `holdTurn`），可被打断那一轮的进程要再过一会儿才吐出它的 `turnEnd`。于是同一
  * 瞬间手上有两个未结束的身份。
  *
@@ -99,7 +99,7 @@ function adoptFront(lead: Lead): void {
       lead.onFrontTurn?.(front);
     } catch (error) {
       // 挂观察失败不该掀掉所有权层:所有权本身已经算完了,这一笔只是「谁来盯它」。
-      console.warn(`[ash] 给团队 ${lead.taskId} 的新队首挂静默观察失败:`, error);
+      console.warn(`[navi] 给团队 ${lead.taskId} 的新队首挂静默观察失败:`, error);
     }
   }
 }

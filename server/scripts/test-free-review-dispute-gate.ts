@@ -22,9 +22,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-free-review-dispute-gate-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-free-review-dispute-gate-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 let failure: unknown = null;
 try {
@@ -161,7 +161,7 @@ try {
 
   // 现场原样：驳回回合已经结束、回合空着，用户裁定「这一轮不用改了」——没有执行回合会再来，
   // 被闸扣住的预约当场开审（审查的是执行者驳回前改掉的那几条）。投递起真执行器由测试隔离闸
-  // 拦着（ASH_ALLOW_REAL_AGENT 没设），这里只看新链开出来、槽被消费。
+  // 拦着（NAVI_ALLOW_REAL_AGENT 没设），这里只看新链开出来、槽被消费。
   for (const resolution of ["withdrawn", "deferred"] as const) {
     const id = `g-idle-${resolution}`;
     const seeded = await seed(id);

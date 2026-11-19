@@ -9,9 +9,9 @@
 import type { Context } from "hono";
 import {
   suggestionTaskBody, type DispatchSuggestionLaunchInput, type DispatchSuggestionLaunchItem,
-} from "@ash/shared/dispatch-suggestion";
-import type { DispatchRunTarget } from "@ash/shared/dispatch-plan";
-import { parseCreateReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
+} from "@navi/shared/dispatch-suggestion";
+import type { DispatchRunTarget } from "@navi/shared/dispatch-plan";
+import { parseCreateReviewChoice, type CreateReviewChoice } from "@navi/shared/review-on-create";
 import { groups, queueItems } from "./db/schema.js";
 import type { ExecutorScope } from "./auth/owned-executors.js";
 import { normalizeTarget } from "./dispatch-plan.js";
@@ -124,12 +124,12 @@ export async function launchSuggestions(
       return { status: 409, body: { error: "这件已经派出去、叉掉或被智能体收回了，请看最新的那一行", missing: error.missing } };
     }
     if (!committed) return { status: 409, body: { error: `没能派出去：${error instanceof Error ? error.message : String(error)}` } };
-    console.error(`[ash] 可派出的活已派出，读回或广播新任务时出错 ${task.id}:`, error);
+    console.error(`[navi] 可派出的活已派出，读回或广播新任务时出错 ${task.id}:`, error);
   }
 
   // —— 提交之后：只剩「让人看见」和「催一下」，各自兜底，都不改变「已经派出」。
   const settle = (what: string, work: () => unknown) => {
-    void Promise.resolve().then(work).catch((error) => console.error(`[ash] 可派出的活已派出，${what}出错 ${task.id}:`, error));
+    void Promise.resolve().then(work).catch((error) => console.error(`[navi] 可派出的活已派出，${what}出错 ${task.id}:`, error));
   };
   settle("广播收掉那几件", () => publishTaskUpdated(task.id));
   settle("催起跑", () => sweepLaunchRequests());

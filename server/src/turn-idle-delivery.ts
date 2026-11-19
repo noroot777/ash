@@ -124,7 +124,7 @@ function trackVerdict(taskId: string, hooks: IdleDeliveryVerdict | undefined) {
   let unconfirmed = false;
   const report = async (what: string, hook: (() => void | Promise<unknown>) | undefined): Promise<void> => {
     try { await hook?.(); } catch (error) {
-      console.error(`[ash] continueWhenIdle(${taskId}) ${what}的处置失败:`, error);
+      console.error(`[navi] continueWhenIdle(${taskId}) ${what}的处置失败:`, error);
     }
   };
   const conclude = async (): Promise<void> => {
@@ -136,12 +136,12 @@ function trackVerdict(taskId: string, hooks: IdleDeliveryVerdict | undefined) {
     if (!turnOver) return; // 拒收 / 说不上来:等这一轮自己收完尾再交代
     if (fact === "refused") {
       concluded = true;
-      console.error(`[ash] continueWhenIdle(${taskId}) 输入被拒收：${REFUSED_MESSAGE}`);
+      console.error(`[navi] continueWhenIdle(${taskId}) 输入被拒收：${REFUSED_MESSAGE}`);
       return report("「协议层拒收」", hooks && (() => hooks.onRefused(REFUSED_MESSAGE, input)));
     }
     if (unconfirmed) return;
     unconfirmed = true;
-    console.error(`[ash] continueWhenIdle(${taskId}) 交付说不清：${UNCONFIRMED_MESSAGE}`);
+    console.error(`[navi] continueWhenIdle(${taskId}) 交付说不清：${UNCONFIRMED_MESSAGE}`);
     return report("「交付说不清」", hooks && (() => hooks.onUnconfirmed(UNCONFIRMED_MESSAGE)));
   };
   const hear = (word: InputAcceptance, from?: ReviewStartReceipt): void => {
@@ -216,7 +216,7 @@ export function continueWhenIdle(
     // `endOwnTurn`)。按任务 id 还锁撤掉的就是后来者那把。
     const owner = claimOwnTurn(taskId, turnSourceRole(source), turnSourceReview(source));
     if (!owner) {
-      console.error(`[ash] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
+      console.error(`[navi] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
       // **瞬时**:锁此刻在别人手上,而这一侧一个字节都没动。分类交给调用方决定要不要重排
       // (见 `TurnDeliveryFailure`);不想重排的照旧按失败收场,行为与老签名一致。
       //
@@ -224,7 +224,7 @@ export function continueWhenIdle(
       // try/catch 过,只有这一条漏着 —— 重排路上任何一步抛出来就是一条没人接的 rejection
       // (进程级 unhandledRejection),而那一侧的清理也跟着跳过(第 3 轮审查 F3)。
       void Promise.resolve(onError?.("回合被其它执行抢占，消息未能投递", "turn-taken"))
-        .catch((error) => console.error(`[ash] continueWhenIdle(${taskId}) 抢占后的重排处理失败:`, error));
+        .catch((error) => console.error(`[navi] continueWhenIdle(${taskId}) 抢占后的重排处理失败:`, error));
       return;
     }
     const tracked = trackVerdict(taskId, verdict);
@@ -235,7 +235,7 @@ export function continueWhenIdle(
         const superseded = ownership ? await ownership() : null;
         if (superseded) {
           releaseTurn(taskId, owner);
-          console.error(`[ash] continueWhenIdle(${taskId}) superseded: ${superseded}`);
+          console.error(`[navi] continueWhenIdle(${taskId}) superseded: ${superseded}`);
           return { failure: "superseded" as const, message: superseded };
         }
         // 这条路上的启动**全是系统发起的**（就地验证、自由派审、修复、验收冲突叫醒），
@@ -265,7 +265,7 @@ export function continueWhenIdle(
               onInputSettled: async (acceptance, reviewInput) => {
                 tracked.hear(acceptance, reviewInput);
                 try { await opts.onInputSettled?.(acceptance, reviewInput); } catch (error) {
-                  console.error(`[ash] continueWhenIdle(${taskId}) 调用方的投递记账(${acceptance})失败:`, error);
+                  console.error(`[navi] continueWhenIdle(${taskId}) 调用方的投递记账(${acceptance})失败:`, error);
                 }
                 await tracked.conclude();
               },
@@ -280,7 +280,7 @@ export function continueWhenIdle(
           if (delivered === false) {
             const classified: TurnStartDecline | null = declined;
             const mapped = classified ? DELIVERY_FAILURE[classified] : null;
-            console.error(`[ash] continueWhenIdle(${taskId}) not delivered: ${classified ?? "原因未报"}`);
+            console.error(`[navi] continueWhenIdle(${taskId}) not delivered: ${classified ?? "原因未报"}`);
             return mapped ?? { failure: "not-delivered" as const, message: "回合被其它执行抢占，消息未能投递" };
           }
           return null;
@@ -290,7 +290,7 @@ export function continueWhenIdle(
         // 回滚（清 verifyRound、复位 stage、写时间线）才跑得到——不然任务会永久卡在
         // 「正在验证」而验证从未开始。
         releaseTurn(taskId, owner);
-        console.error(`[ash] continueWhenIdle(${taskId}) withdrawn: ${freeze.reason}`);
+        console.error(`[navi] continueWhenIdle(${taskId}) withdrawn: ${freeze.reason}`);
         // **撤回不再冒充 delivered**:老代码在这儿先 `onError` 再 `return true`,靠「true 不等于
         // false」绕过下面那道判定 —— 于是「送出去了」和「被撤回了」在返回值上长得一模一样,
         // 新接进来的成功回调会在撤回时也被叫一次(那正是持久意图被误了结的形状)。
@@ -313,7 +313,7 @@ export function continueWhenIdle(
           // 失败路径都由它自己释放，不会落到这个分支）。
           releaseTurn(taskId, owner);
           const message = error instanceof Error ? error.message : String(error);
-          console.error(`[ash] continueWhenIdle(${taskId}) failed:`, error);
+          console.error(`[navi] continueWhenIdle(${taskId}) failed:`, error);
           try { await onError?.(message, "failed"); } catch { /* 上报失败不再连锁 */ }
         },
       );

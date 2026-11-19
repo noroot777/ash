@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { HandoffTarget } from "@ash/shared";
+import type { HandoffTarget } from "@navi/shared";
 import { Key, SpinnerGap } from "@phosphor-icons/react";
 import { Button, TextInput } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
@@ -64,7 +64,7 @@ export function HandoffPeerKeyField({
         <TextInput
           id="handoff-peer-key"
           type="password"
-          placeholder="ash_…"
+          placeholder="navi_…"
           value={value}
           autoComplete="off"
           disabled={locked}
@@ -93,7 +93,7 @@ export function HandoffPeerKeyField({
         <>
           <TextInput
             type="password"
-            placeholder="ash_… （你在对端的账号 key）"
+            placeholder="navi_… （你在对端的账号 key）"
             value={value}
             autoComplete="off"
             disabled={locked}

@@ -1,4 +1,4 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { randomUUID } from "node:crypto";
 import { Agent, ProxyAgent, type Dispatcher } from "undici";
 import {
@@ -221,7 +221,7 @@ function upstreamOrigin(url: string): string {
 export const RELAY_REQUEST_ID_HEADER = "x-navi-relay-request-id";
 
 function logDiagnostic(diagnostic: RelayDiagnostic): void {
-  console.warn(`[ash][llm-relay] ${JSON.stringify(diagnostic)}`);
+  console.warn(`[navi][llm-relay] ${JSON.stringify(diagnostic)}`);
 }
 
 export function relayErrorResponse(error: unknown): Response {

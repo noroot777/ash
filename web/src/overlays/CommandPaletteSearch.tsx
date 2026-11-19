@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import type { SearchHit, TaskListItem } from "@ash/shared";
+import type { SearchHit, TaskListItem } from "@navi/shared";
 import { taskAncestryLabel } from "../components/TaskAncestry.tsx";
-import type { SearchSort } from "@ash/shared/search";
+import type { SearchSort } from "@navi/shared/search";
 import { NotePencil } from "@phosphor-icons/react";
 import { formatInstant } from "../task-detail/utils.ts";
 import { highlightTerms } from "../search/searchTerms.ts";

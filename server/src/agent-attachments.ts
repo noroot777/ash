@@ -2,13 +2,13 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { maxBytesFor } from "@ash/shared";
+import { maxBytesFor } from "@navi/shared";
 import {
   destinationFilePath,
   isNetworkDestination,
   markdownImageRefs,
   type MarkdownImageRef,
-} from "@ash/shared/markdown-images";
+} from "@navi/shared/markdown-images";
 import { UPLOADS_DIR } from "./paths.js";
 import { newUploadName, sanitizeUploadStem } from "./upload-names.js";
 
@@ -133,7 +133,7 @@ function storeImage(
     } catch {
       /* 压根没写出来过 */
     }
-    console.warn(`[ash] failed to persist agent image ${path}:`, error);
+    console.warn(`[navi] failed to persist agent image ${path}:`, error);
     return { path: null, failed: true };
   }
   seen.copies.set(hash, path);

@@ -9,7 +9,7 @@ import {
   isNetworkDestination,
   markdownImageRefs,
   scanMarkdownImages,
-} from "@ash/shared/markdown-images";
+} from "@navi/shared/markdown-images";
 import {
   imageStore,
   persistMarkdownImages,
@@ -22,7 +22,7 @@ const GENERATED_BASE64 = Buffer.concat([
   Buffer.from(PNG_BASE64, "base64"),
   Buffer.alloc(64),
 ]).toString("base64");
-const root = mkdtempSync(join(tmpdir(), "ash-agent-attachments-"));
+const root = mkdtempSync(join(tmpdir(), "navi-agent-attachments-"));
 const uploads = join(root, "data", "uploads");
 const localImage = join(root, "local screenshot.png");
 

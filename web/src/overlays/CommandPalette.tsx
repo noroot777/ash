@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
-import type { Group, ProjectView, TaskListItem } from "@ash/shared";
-import { TASK_STATUS_LABELS } from "@ash/shared";
-import { isSearchQueryReady, SEARCH_MAX_HITS } from "@ash/shared/search";
+import type { Group, ProjectView, TaskListItem } from "@navi/shared";
+import { TASK_STATUS_LABELS } from "@navi/shared";
+import { isSearchQueryReady, SEARCH_MAX_HITS } from "@navi/shared/search";
 import {
   Archive,
   ArrowCounterClockwise,

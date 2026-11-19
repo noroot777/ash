@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider } from "@navi/shared";
 import { Plus } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";

@@ -1,4 +1,4 @@
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { freeReviewBlockingLabel, freeReviewView } from "../free-workflow/freeReviewCopy.ts";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 

@@ -1,7 +1,7 @@
 import { setReopenDismissed } from "../preview-workspace/reopenPreference.ts";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";

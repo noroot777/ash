@@ -114,12 +114,12 @@ export async function holdCheckpointOwnership(receipt: Row): Promise<CheckpointH
       receipt.deliveringSince = stamp;
       return "mine";
     }
-    console.warn(`[ash] 续跑凭证已被接管 task=${receipt.taskId} message=${receipt.id}`
+    console.warn(`[navi] 续跑凭证已被接管 task=${receipt.taskId} message=${receipt.id}`
       + `（这一趟不起跑，本地投递登记交回，这张票由新持有者处置）`);
     forgetCheckpointDelivering(receipt.id);
     return "lost";
   } catch (error) {
-    console.error(`[ash] 续跑凭证所有权复查失败 task=${receipt.taskId} message=${receipt.id}`
+    console.error(`[navi] 续跑凭证所有权复查失败 task=${receipt.taskId} message=${receipt.id}`
       + `（这一趟不起跑）:`, error);
     // 交回 + 退避重排都在这里头(它一个字都不消费)。
     rescheduleCheckpointSettle(receipt, "本轮续跑起跑资格复查失败", 0, error);
@@ -163,11 +163,11 @@ export async function acknowledgeCheckpointRun(receipt: Row, attempts = 0): Prom
     await markSent(receipt);
     forgetCheckpointDelivering(receipt.id);
     forgetDeliveryCrossing(receipt.taskId, [receipt.id]);
-    if (attempts) console.log(`[ash] 续跑交代确认已补记 task=${receipt.taskId} message=${receipt.id}（第 ${attempts + 1} 次尝试）`);
+    if (attempts) console.log(`[navi] 续跑交代确认已补记 task=${receipt.taskId} message=${receipt.id}（第 ${attempts + 1} 次尝试）`);
   } catch (error) {
     if (dbClient.closed) return;
     const delay = Math.min(200 * 2 ** Math.min(attempts, 8), 30_000);
-    console.warn(`[ash] 续跑交代确认写入失败 task=${receipt.taskId} message=${receipt.id}`
+    console.warn(`[navi] 续跑交代确认写入失败 task=${receipt.taskId} message=${receipt.id}`
       + `（原文已送达，${delay}ms 后补记第 ${attempts + 2} 次）:`, error);
     const timer = setTimeout(() => void acknowledgeCheckpointRun(receipt, attempts + 1), delay);
     timer.unref?.();
@@ -213,7 +213,7 @@ export async function settleUncertainCheckpointRun(receipt: Row, attempts = 0): 
     await markSent(receipt);
     forgetCheckpointDelivering(receipt.id);
     forgetDeliveryCrossing(receipt.taskId, [receipt.id]);
-    console.warn(`[ash] 续跑交代交付不明 task=${receipt.taskId} message=${receipt.id}：`
+    console.warn(`[navi] 续跑交代交付不明 task=${receipt.taskId} message=${receipt.id}：`
       + `越过 spawn 但没落下会话行，已就地结成可见记录，不自动重投${attempts ? `（第 ${attempts + 1} 次尝试）` : ""}`);
   } catch (error) {
     if (dbClient.closed) return;
@@ -221,7 +221,7 @@ export async function settleUncertainCheckpointRun(receipt: Row, attempts = 0): 
     // 「越过线了」的唯一凭据)。退避重试;进程要是在重试中被换掉,开机那一拍与每次启动前的
     // 对账会按同一判据接着办(verdict 仍是 uncertain)。
     const delay = Math.min(200 * 2 ** Math.min(attempts, 8), 30_000);
-    console.warn(`[ash] 续跑交代交付不明的可见记录没发布成功 task=${receipt.taskId} message=${receipt.id}`
+    console.warn(`[navi] 续跑交代交付不明的可见记录没发布成功 task=${receipt.taskId} message=${receipt.id}`
       + `（凭证原样留着，${delay}ms 后重试第 ${attempts + 2} 次）:`, error);
     const timer = setTimeout(() => void settleUncertainCheckpointRun(receipt, attempts + 1), delay);
     timer.unref?.();
@@ -251,7 +251,7 @@ async function publishUncertainRecord(receipt: Row): Promise<boolean> {
   if (opened.length) return false;
   const task = (await db.select().from(tasks).where(eq(tasks.id, receipt.taskId))).at(0);
   if (!task) {
-    console.error(`[ash] 续跑交代交付不明、又无处落账 task=${receipt.taskId}，原文:`, text);
+    console.error(`[navi] 续跑交代交付不明、又无处落账 task=${receipt.taskId}，原文:`, text);
     return true;
   }
   return appendTaskTimeline(receipt.taskId, alertLine(note), { ...await freshRunFailureTarget(task, null), ...target });
@@ -279,7 +279,7 @@ function rescheduleCheckpointSettle(receipt: Row, why: string, attempts: number,
   const attempt = Math.max(attempts, settleRetries.get(receipt.id) ?? 0);
   settleRetries.set(receipt.id, attempt + 1);
   const delay = Math.min(200 * 2 ** Math.min(attempt, 8), 30_000);
-  const head = `[ash] ${why} task=${receipt.taskId} message=${receipt.id}：`;
+  const head = `[navi] ${why} task=${receipt.taskId} message=${receipt.id}：`;
   console.warn(`${head}这一问读不出来（所有权已交回，${delay}ms 后第 ${attempt + 2} 次对账）:`, error);
   const timer = setTimeout(() => void (async () => {
     const { reconcileCheckpointDeliveries } = await import("./pending-checkpoint-recovery.js");
@@ -311,7 +311,7 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string,
    * 送达,补记这一笔确认」)。
    *
    * **`unknown` 现在走不到 `delivered` 那一支了,除非协议层真的确认过**(第 2 轮自由审查 F1):
-   * 上一版拿「越线 + 会话行 + 回合行」当送达证据,可那三样全是 ash 自己的记账 —— 它们只证明
+   * 上一版拿「越线 + 会话行 + 回合行」当送达证据,可那三样全是 navi 自己的记账 —— 它们只证明
    * 「可能已经产生外部效果」,证明不了那串字进了 agent 手里。说不上来就得结成「交付不明」的
    * 可见记录,交给人看一眼,而不是替 agent 点头(也不盲目归还重放)。
    */
@@ -321,7 +321,7 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string,
   // 已经按别的结论处置过了,再写一遍就是「原文既被归还、又被标成已送达」。
   const held = await checkpointOwnershipState(receipt);
   if (held === "lost") {
-    console.warn(`[ash] ${why} task=${receipt.taskId} message=${receipt.id}：`
+    console.warn(`[navi] ${why} task=${receipt.taskId} message=${receipt.id}：`
       + `这张续跑凭证已经由 ${describeCheckpointOwner(receipt.deliveringOwner)} 之外的人接管，这一趟不再处置它`);
     forgetCheckpointDelivering(receipt.id);
     return;
@@ -332,14 +332,14 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string,
     return;
   }
   if (fact !== "unknown") {
-    console.warn(`[ash] ${why} task=${receipt.taskId} message=${receipt.id}：`
+    console.warn(`[navi] ${why} task=${receipt.taskId} message=${receipt.id}：`
       + (fact === "not-launched"
         ? "这一轮在 spawn 之前就撤回了，归还给任务"
         : "协议层明确拒收（回合输入一个字都没写出去），归还给任务"));
     await returnCheckpointRun(receipt);
     return;
   }
-  const head = `[ash] ${why} task=${receipt.taskId} message=${receipt.id}：`;
+  const head = `[navi] ${why} task=${receipt.taskId} message=${receipt.id}：`;
   let verdict: Awaited<ReturnType<typeof checkpointDeliveryVerdict>>;
   try {
     verdict = await checkpointDeliveryVerdict(receipt);

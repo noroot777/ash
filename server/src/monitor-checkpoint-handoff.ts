@@ -14,7 +14,7 @@
 // 第 2 轮审查 F2 的双向实测）。代次（`resume_prompt_generation`）是归属本体：代次变了，这张凭
 // 证就此过期，那段文字不许再填回去。
 import { and, eq, exists, isNull, ne, sql } from "drizzle-orm";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import {
@@ -174,7 +174,7 @@ async function unwindHalfTake(
 ): Promise<void> {
   const checkpoint = receipt.text;
   console.error(
-    `[ash] 续跑交代转手出现单侧命中 ${message.taskId}/${message.id}(${loggedOnly ? "只落账" : "只腾空"}),`
+    `[navi] 续跑交代转手出现单侧命中 ${message.taskId}/${message.id}(${loggedOnly ? "只落账" : "只腾空"}),`
     + "这说明两条语句的互相引用被改坏了",
   );
   try {
@@ -189,7 +189,7 @@ async function unwindHalfTake(
         .where(and(eq(tasks.id, message.taskId), ...resumePromptSlotFor(receipt)));
     }
   } catch (error) {
-    console.error(`[ash] 单侧命中退回也失败 ${message.taskId}:`, error);
+    console.error(`[navi] 单侧命中退回也失败 ${message.taskId}:`, error);
   }
 }
 
@@ -263,7 +263,7 @@ async function restoreCheckpoint(
     ).catch(() => {});
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error(`[ash] 续跑交代回填失败 ${message.taskId}:`, error);
+    console.error(`[navi] 续跑交代回填失败 ${message.taskId}:`, error);
     await appendTaskTimeline(
       message.taskId,
       receiptLine(`续跑交代没能放回任务行（${detail}）。它仍记在那条待发送的哨兵事件的账本列上，下一次投递会带着它走。`),

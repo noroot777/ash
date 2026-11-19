@@ -1,6 +1,6 @@
 // 回合开头那几条〔系统〕提示(工作目录重建、基线换掉):落进会话正文(刷新后还在),
 // 同时发一条一样的实时事件(开着的页面当场看见)。两件事总是一起做,拆成两句就会只做一半。
-import type { AgentType, SessionRole } from "@ash/shared";
+import type { AgentType, SessionRole } from "@navi/shared";
 import { bus } from "./bus.js";
 import { writeTurn } from "./transcript.js";
 

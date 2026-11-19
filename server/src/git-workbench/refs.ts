@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { realpath } from "node:fs/promises";
-import type { GitAction } from "@ash/shared/git-workbench";
+import type { GitAction } from "@navi/shared/git-workbench";
 import { getGitOverview } from "../git-overview.js";
 import { readScmStatus } from "../git-status.js";
 import { checkoutProjectBranch } from "../git-project-ops.js";

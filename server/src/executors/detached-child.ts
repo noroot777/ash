@@ -134,8 +134,8 @@ export function makeDetachedChild(opts: {
     opts.kill();
     return true;
   };
-  child.ashCommitted = () => out.committed();
-  child.ashPaths = opts.paths;
+  child.naviCommitted = () => out.committed();
+  child.naviPaths = opts.paths;
 
   const timer = setInterval(() => {
     out.pump();
@@ -164,7 +164,7 @@ export function makeDetachedChild(opts: {
 
 export type DetachedChild = ChildProcess & {
   /** 已安全消费到的 stdout 字节位置(换行边界),存进 DB 供重启后接着读。 */
-  ashCommitted: () => number;
+  naviCommitted: () => number;
   /** 可重连 stdin 与 App Server 恢复都从同一组路径派生，不另加数据库列。 */
-  ashPaths: DetachedPaths;
+  naviPaths: DetachedPaths;
 };

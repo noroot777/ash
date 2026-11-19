@@ -3,7 +3,7 @@ import { claimTranscript } from "./transcript-identity.js";
 import { markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -34,7 +34,7 @@ import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnStart } from "./turn-output.js";
 import { abortFrozen, freezeFacts, startGuard, takeFreeze, type StartOrigin } from "./turn-freeze.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
-import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { isGoalExecution, parseCliCommand } from "@navi/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
@@ -83,7 +83,7 @@ async function runHeldTask(
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
     if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
-    console.warn(`[ash] 任务 ${taskId} 未启动：${checkpointBlocked}`);
+    console.warn(`[navi] 任务 ${taskId} 未启动：${checkpointBlocked}`);
     return;
   }
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,

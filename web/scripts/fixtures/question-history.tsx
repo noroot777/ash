@@ -1,7 +1,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { Task } from "@navi/shared";
+import type { QuestionRecord } from "@navi/shared/questions";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
 import { useServerEvents } from "../../src/lib/events.ts";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";

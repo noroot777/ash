@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@navi/shared";
 import { bus } from "../bus.js";
 import { RUNS_DIR } from "../paths.js";
 import { now } from "../util.js";

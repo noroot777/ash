@@ -3,7 +3,7 @@
 // 为什么抽出来:判据那一组(什么算「上游真回话了」、什么解除停滞)和两档动手那一组各自都长到
 // 够一个文件了,而 `configure` 这种「每段各自设口径」的东西**不能有两份** —— 两份就会漂,
 // 而那正是这套判据最怕的事(整个 `shared/src/waiting.ts` 存在的理由就是不让判据分叉)。
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { __resetTurnStalls, type StallActions, type StallFacts } from "../src/turn-stall.js";
 import { __resetStallFailures } from "../src/turn-stall-verdict.js";
 
@@ -87,11 +87,11 @@ export function configure(opts: {
 }) {
   __resetTurnStalls();
   __resetStallFailures();
-  process.env.ASH_STALL_WARN_ERRORS = String(opts.warnErrors ?? 0);
-  process.env.ASH_STALL_WARN_MS = String(opts.warnMs ?? 0);
-  process.env.ASH_STALL_TRIP_MS = String(opts.tripMs ?? 0);
-  process.env.ASH_STALL_TRIP_GRACE_MS = String(opts.graceMs ?? 0);
-  process.env.ASH_STALL_SILENT_WARN_MS = String(opts.silentWarnMs ?? 0);
-  process.env.ASH_STALL_SILENT_TRIP_MS = String(opts.silentTripMs ?? 0);
-  process.env.ASH_STALL_POLL_MS = String(opts.pollMs ?? 20);
+  process.env.NAVI_STALL_WARN_ERRORS = String(opts.warnErrors ?? 0);
+  process.env.NAVI_STALL_WARN_MS = String(opts.warnMs ?? 0);
+  process.env.NAVI_STALL_TRIP_MS = String(opts.tripMs ?? 0);
+  process.env.NAVI_STALL_TRIP_GRACE_MS = String(opts.graceMs ?? 0);
+  process.env.NAVI_STALL_SILENT_WARN_MS = String(opts.silentWarnMs ?? 0);
+  process.env.NAVI_STALL_SILENT_TRIP_MS = String(opts.silentTripMs ?? 0);
+  process.env.NAVI_STALL_POLL_MS = String(opts.pollMs ?? 20);
 }

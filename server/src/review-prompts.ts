@@ -13,8 +13,8 @@ import { repairCoverageGuard } from "./review-coverage.js";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { VERIFY_CHECK_LABELS } from "@ash/shared/workflow";
-import { workflowPolicy } from "@ash/shared/workflow-policy";
+import { VERIFY_CHECK_LABELS } from "@navi/shared/workflow";
+import { workflowPolicy } from "@navi/shared/workflow-policy";
 import { taskWorkflowDef } from "./workflows.js";
 import { NO_REMINDER, type TurnReminder } from "./turn-prompt.js";
 import { reviewRoundDir } from "./review-evidence.js";
@@ -23,7 +23,7 @@ import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { verifyHistorySection } from "./review-history.js";
 import type { Workspace } from "./git.js";
-import { REVIEW_VALIDATION_REQUIREMENT } from "@ash/shared/free-workflow";
+import { REVIEW_VALIDATION_REQUIREMENT } from "@navi/shared/free-workflow";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { CHANGE_SCOPE_FAILURE_TEXT, taskChangeScope } from "./task-change-scope.js";
 
@@ -55,7 +55,7 @@ function verifyRules(evidenceDir: string): string {
     // 「要等一件慢事」这一条必须就在验证义务旁边：2026-10-16 实测的那一轮审查挂了监听、
     // 说了「套件结束会叫我」，然后就这么结束了回合 —— 结算按「没给结论」把整条链停掉，
     // 而它挂的内置 Monitor 本来就活不过那一轮（它的进程在 agent 自己的进程树里）。现在
-    // 那一下会被改道成 ash 哨兵（claude-monitor-hook.ts），但改道只换得掉进程归属，换不掉
+    // 那一下会被改道成 navi 哨兵（claude-monitor-hook.ts），但改道只换得掉进程归属，换不掉
     // 「回合就这么结束了」——所以这一句照样要说：挂完得用 pause_task 收尾。
     `要等的那件事以分钟计（长构建、接口冒烟、长转码）时，别干等、也别就这么结束这一轮：` +
     `用 Navi 的 start_monitor 挂一条盯它的命令（过滤到你真会据此做事的那几行，成功与失败两类标记都要覆盖），` +

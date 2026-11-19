@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
+import type { HandoffTarget, ProjectView, TaskListItem } from "@navi/shared";
 import { BulkHandoffDialog } from "../../src/workspace/BulkHandoffDialog.tsx";
 import "../../src/styles/global.css";
 
@@ -18,8 +18,8 @@ const preflight = (overrides: Record<string, unknown> = {}) => ({
     peerStatus: "approved",
     encrypted: true,
   },
-  projects: [{ id: "ash", name: "ash", repoPath: "/Users/example/code/ash", isRepo: true }],
-  suggestedProjectId: "ash",
+  projects: [{ id: "navi", name: "navi", repoPath: "/Users/example/code/navi", isRepo: true }],
+  suggestedProjectId: "navi",
   // 能力握手:这个夹具验的是信息层级,让它落在「对得上」那一档,别把握手的红块
   // 混进排版断言里(握手自己的用例在 server 的 test-handoff-capability*)。
   capability: { status: "ok", unknownReason: null, gaps: [], blocking: false },
@@ -71,7 +71,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     handoffCalls.push(taskId);
     // t-git 一次就过;t-plain 在补上 key 之前一直被对端挡回来。
     if (taskId === "t-plain" && !peerKeySaved) {
-      return json(401, { error: "对端是多人实例，但它不认识你", ash: true, code: "peer-key-required" });
+      return json(401, { error: "对端是多人实例，但它不认识你", navi: true, code: "peer-key-required" });
     }
     return json(200, { taskId, remoteTaskId: `r-${taskId}`, remoteUrl: "http://mac-mini:4317", host: "mac-mini" });
   }

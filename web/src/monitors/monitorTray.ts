@@ -1,9 +1,9 @@
 // 回复框上方那块「排队 · 哨兵」里，哨兵那几行要说的话（components/MonitorTrayRow.tsx、ScheduledMessageTray.tsx）。
 //
-// 只算还在盯的那几个：结束了的是存档，在右侧哨兵格里看。两种出身都列：ash 自己起的会把任务叫醒，
+// 只算还在盯的那几个：结束了的是存档，在右侧哨兵格里看。两种出身都列：navi 自己起的会把任务叫醒，
 // claude 内置 Monitor 的只读投影不会（它的通知只注回它那一轮的会话），这一点在那一行上要说清，
 // 不能当它不存在——agent 明明在对话里说了「已挂监听」。
-import type { TaskMonitor } from "@ash/shared/monitor";
+import type { TaskMonitor } from "@navi/shared/monitor";
 import { liveDeadline } from "./monitorCopy.ts";
 
 /** 盯了多久 / 等了多久：只到分钟，不让这一格每秒跳一次。 */
@@ -39,7 +39,7 @@ export function monitorStart(monitor: TaskMonitor): number | null {
 
 /**
  * 那一行「什么时候」那一格：盯了多久（任务在跑）/ 等了多久（任务停下来等它）· 最迟几点。
- * 内置的那种只说它不会叫醒任务——它的期限是来源说了算，ash 只是转述。
+ * 内置的那种只说它不会叫醒任务——它的期限是来源说了算，navi 只是转述。
  */
 export function monitorWhen(monitor: TaskMonitor, running: boolean, now: number): string {
   if (monitor.kind !== "ash") return "不会叫醒任务";

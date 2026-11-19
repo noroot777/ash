@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import { parseAttachmentText } from "./utils.ts";
 

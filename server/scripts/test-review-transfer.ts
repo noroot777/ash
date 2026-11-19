@@ -16,7 +16,7 @@ const row = async (taskId: string) => (await db.select().from(tasks).where(eq(ta
 const messageRow = async (messageId: string) => (await db.select().from(schema.scheduledMessages)
   .where(eq(schema.scheduledMessages.id, messageId)))[0]!;
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 try {
   const { open } = await setupRegressionReviews();
   const source = await open("preset");

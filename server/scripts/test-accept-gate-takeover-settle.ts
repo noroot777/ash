@@ -1,6 +1,6 @@
-// 接管之外的另一半：结论**已经有了**，ash 却在把它办完之前死掉（第 1 轮审查 F1/F2/F3）。
-//  F1  停机期间越过了时限：命令在 ash 不在场时 rc=0 退出，但已经跑过上限 —— 照样按超时收，
-//      不能因为 ash 当时不在就把一个超时的结果当成通过合进去；
+// 接管之外的另一半：结论**已经有了**，navi 却在把它办完之前死掉（第 1 轮审查 F1/F2/F3）。
+//  F1  停机期间越过了时限：命令在 navi 不在场时 rc=0 退出，但已经跑过上限 —— 照样按超时收，
+//      不能因为 navi 当时不在就把一个超时的结果当成通过合进去；
 //  F2  结算到一半（结论已认领、进程已收、终态还没落）死掉：新实例照认领下来的那一份收完，
 //      不改判成「被打断」；
 //  F3  终态落了、续验收 / 交修还没办就死掉：新实例补办，绿了照常合并、红了照常交回，
@@ -22,7 +22,7 @@ import { gateExitPath, readGateLaunch } from "../src/accept-gate-launch.js";
 import { gateExitOutcome } from "../src/accept-gate-exit.js";
 import { overrideGateWatchTimings } from "../src/accept-gate-watch.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { isTurnClaimed, releaseTurn } from "../src/turn-lock.js";
 import type { GateFixture } from "./test-accept-gate-lifecycle.js";
 
@@ -59,7 +59,7 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
   }
 
   /**
-   * 旧 ash 发起验收；`phase` 决定它死在哪：armed = 命令放行之后立刻死；before-final / after-final =
+   * 旧 navi 发起验收；`phase` 决定它死在哪：armed = 命令放行之后立刻死；before-final / after-final =
    * 活着等命令按 `code` 退出、自己去结算，死在终态那一句之前 / 之后。
    */
   async function crash(s: Awaited<ReturnType<typeof stage>>,
@@ -105,7 +105,7 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
   assert.equal(gateExitOutcome({ code: 0, signal: null, elapsedMs: 3_000 }, 3_000).failure, "timeout");
   assert.equal(gateExitOutcome({ code: 3, signal: null, elapsedMs: 9_000 }, 3_000).exitCode, null, "过了时限的退出码不作数");
 
-  // F1：ash 不在场的时候命令越过了时限才 rc=0 退出 → 超时，不合并。
+  // F1：navi 不在场的时候命令越过了时限才 rc=0 退出 → 超时，不合并。
   {
     const s = await stage("deadline");
     const row = await crash(s, "armed");

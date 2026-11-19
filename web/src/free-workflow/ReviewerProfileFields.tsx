@@ -1,5 +1,5 @@
 import { useId } from "react";
-import type { AgentExecutorProfile, AgentType, ReviewerProfile } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, ReviewerProfile } from "@navi/shared";
 import { executorProfileFor, executorRunSummary, executorValue, parseExecutorValue } from "../lib/agentAvailability.ts";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 

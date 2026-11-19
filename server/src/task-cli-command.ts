@@ -1,5 +1,5 @@
-import type { AgentType } from "@ash/shared";
-import { isGoalExecution, isPlanImplementation, validateCliCommand } from "@ash/shared/cli-commands";
+import type { AgentType } from "@navi/shared";
+import { isGoalExecution, isPlanImplementation, validateCliCommand } from "@navi/shared/cli-commands";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { ownerIdOf, actorOf } from "./auth/context.js";
@@ -68,7 +68,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
           return c.json({ started: false, command: true, text, recorded });
         } finally {
           releaseTurn(task.id, turn);
-          void advanceQueueFromTask(task.id).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
+          void advanceQueueFromTask(task.id).catch((error) => console.error("[navi] 清除目标后的队列推进失败:", error));
         }
       }
     }

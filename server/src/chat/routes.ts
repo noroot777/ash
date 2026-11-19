@@ -15,7 +15,7 @@ import { visibleRoom, visibleProject, isHumanRequest, parseMembers } from "./rou
 import { deleteChatRoom } from "./lifecycle.js";
 import { mountSideChatRoutes } from "./side-routes.js";
 import { forwardSideAnswer } from "./side-delivery.js";
-import type { AssistantResult } from "@ash/shared/chat";
+import type { AssistantResult } from "@navi/shared/chat";
 
 async function snapshot(room: RoomRow, c: Context) {
   const messages = await roomMessages(room.id);

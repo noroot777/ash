@@ -12,7 +12,7 @@ const originalLog = console.log;
 const logs: string[] = [];
 console.log = (...args: unknown[]) => {
   const line = args.map(String).join(" ");
-  if (line.startsWith("[ash]")) logs.push(line);
+  if (line.startsWith("[navi]")) logs.push(line);
   else originalLog(...args);
 };
 const clearEnv = () => { for (const key of envKeys) delete process.env[key]; };
@@ -267,7 +267,7 @@ try {
 
   // ---- Windows：经真实读取通道读一个临时键，非 ASCII 值原样到达（本机真实设置只读不改） ----
   if (process.platform === "win32") {
-    const tempKey = `Software\\AshProxyTest_${process.pid}`;
+    const tempKey = `Software\\NaviProxyTest_${process.pid}`;
     const reg = (args: string[]) => execFileSync("reg.exe", args, { windowsHide: true, stdio: "ignore" });
     try {
       reg(["add", `HKCU\\${tempKey}`, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"]);

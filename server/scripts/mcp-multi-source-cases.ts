@@ -1,7 +1,7 @@
 // 一家 CLI 会读好几份配置时,裸 Node 那份安装器怎么判 —— 「几份**合起来**生效的那一条」。
 //
 // 为什么单独一个文件:这一组要搭的沙盘最多(层级对打、字段继承、同目录先后、同路径两个
-// 加载阶段、坏文件在哪一层),而 `test-ash-mcp-installer.ts` 已经接近单文件 700 行上限。
+// 加载阶段、坏文件在哪一层),而 `test-navi-mcp-installer.ts` 已经接近单文件 700 行上限。
 // 由那个文件调用,不是独立的回归入口;TS 那侧对应的几组住在 `mcp-sources-cases.ts`。
 //
 // 判据全是真 opencode 1.19.3 逐格实测的(结论记在 `mcp-registry/catalog.ts` 那家的
@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ASH_MCP_SERVER_NAME as NAME } from "@ash/shared/mcp";
+import { NAVI_MCP_SERVER_NAME as NAME } from "@navi/shared/mcp";
 
 /** 这一组要用到的那几件外部家当(都由入口文件给,见那边的同名定义)。 */
 export interface MultiSourceDeps {
@@ -27,11 +27,11 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
   // ── ⑦ 一家 CLI 会读好几份配置:判「有没有」要看全(本轮审查 R3)─────────────
   {
     const mk = (url: string) => `${JSON.stringify({
-      mcp: { ash: { type: "local", command: ["node", "/old.js"], environment: { ASH_URL: url }, enabled: true } },
+      mcp: { navi: { type: "local", command: ["node", "/old.js"], environment: { NAVI_URL: url }, enabled: true } },
     }, null, 2)}\n`;
     const empty = '{\n  "$schema": "x"\n}\n';
 
-    // ⒜ 全局那份已经有 ash、`OPENCODE_CONFIG` 那份没有:**不写**。那个变量是「再加一份」而
+    // ⒜ 全局那份已经有 navi、`OPENCODE_CONFIG` 那份没有:**不写**。那个变量是「再加一份」而
     //    不是「取代」(真 opencode 三组实测),全局那条照样生效 —— 往更高优先级那份补一条就是
     //    把它顶掉(上一版实测把 URL 从用户那条换成了默认那条)。
     const h = home("merge-global-has");
@@ -60,21 +60,21 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     assert.match(readFileSync(custom2, "utf8"), new RegExp(`"${NAME}"`), "确实写进去了");
     assert.equal(readFileSync(g2, "utf8"), empty, "全局那份仍然不许动");
 
-    // ⒞ 高优先级那份只把同名 ash **关掉**:真 opencode 报 `ash disabled`(本轮实测)。
+    // ⒞ 高优先级那份只把同名 navi **关掉**:真 opencode 报 `navi disabled`(本轮实测)。
     //    上一版「任一份里有就算有」判成已接好 —— 执行器一路跑到交卷才发现工具根本不在。
     const h3 = home("merge-disabled");
     const g3 = join(h3, ".config", "opencode", "opencode.json");
     mkdirSync(dirname(g3), { recursive: true });
     writeFileSync(g3, mk("http://127.0.0.1:54321"), "utf8");
     const off = join(h3, "custom.json");
-    const offBody = `${JSON.stringify({ $schema: "x", mcp: { ash: { enabled: false } } }, null, 2)}\n`;
+    const offBody = `${JSON.stringify({ $schema: "x", mcp: { navi: { enabled: false } } }, null, 2)}\n`;
     writeFileSync(off, offBody, "utf8");
     const r3 = install("opencode", h3, { OPENCODE_CONFIG: off });
     assert.ok(!r3.added, "被关着就不该当成已接好、也不该替用户打开");
     assert.match(r3.why ?? "", /关着|没有替你打开/, `要说清是被关掉了:${r3.why ?? ""}`);
     assert.equal(readFileSync(off, "utf8"), offBody, "那份也不许被我们改");
 
-    // ⒟ 默认目录里 `.json` 和 `.jsonc` **两份都读**(本轮实测):ash 在 `.json` 里,`.jsonc`
+    // ⒟ 默认目录里 `.json` 和 `.jsonc` **两份都读**(本轮实测):navi 在 `.json` 里,`.jsonc`
     //    不含 MCP ⇒ 真 CLI 报 connected。上一版「找到第一个 alternate 就只认它」只看
     //    `.jsonc`,判成没有、还往它里面再补一条,把本来生效那条顶掉。
     const h4 = home("merge-two-files");
@@ -86,22 +86,22 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     const jsonc4 = join(dir4, "opencode.jsonc");
     writeFileSync(jsonc4, empty, "utf8");
     const r4 = install("opencode", h4, {});
-    assert.ok(!r4.added, "另一份已经有生效的 ash 就不该再补");
+    assert.ok(!r4.added, "另一份已经有生效的 navi 就不该再补");
     assert.equal(readFileSync(g4, "utf8"), body4, "`.json` 那份不许动");
     assert.equal(readFileSync(jsonc4, "utf8"), empty, "`.jsonc` 那份也不许被补一条");
 
-    // ⒠ 只有 `OPENCODE_CONFIG_CONTENT` 里那整段 JSON 有 ash:真 CLI 报 connected,而它
+    // ⒠ 只有 `OPENCODE_CONFIG_CONTENT` 里那整段 JSON 有 navi:真 CLI 报 connected,而它
     //    **没有文件可写** ⇒ 一个字都不许写(上一版判成没有、还去改全局文件)。
     const h5 = home("merge-inline");
     const g5 = join(h5, ".config", "opencode", "opencode.json");
     mkdirSync(dirname(g5), { recursive: true });
     writeFileSync(g5, empty, "utf8");
     const r5 = install("opencode", h5, { OPENCODE_CONFIG_CONTENT: mk("http://127.0.0.1:54321") });
-    assert.ok(!r5.added, "变量里那段已经有 ash 了就不该写");
+    assert.ok(!r5.added, "变量里那段已经有 navi 了就不该写");
     assert.equal(readFileSync(g5, "utf8"), empty, "全局那份一个字节都不许动");
 
     // ⒡ `OPENCODE_CONFIG_DIR` 再加一个目录、优先级高于默认目录(本轮实测):它里面关掉了
-    //    ash ⇒ 最终就是关着的。
+    //    navi ⇒ 最终就是关着的。
     const h6 = home("merge-altdir");
     const g6 = join(h6, ".config", "opencode", "opencode.json");
     mkdirSync(dirname(g6), { recursive: true });
@@ -131,12 +131,12 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     //    四格的真 CLI 结论都在 `catalog.ts` 那家的 `source` 里(⑨⑫⑬⑭),这里钉裸 Node 这侧
     //    跟它一致 —— TS 那侧同样四格在 `mcp-sources-cases.ts` 第 ⑲ 组。
     const ocFull = (tag: string, enabled: boolean) => `${JSON.stringify({
-      mcp: { ash: { type: "local", command: ["node", `/${tag}.js`], environment: { WHO: tag }, enabled } },
+      mcp: { navi: { type: "local", command: ["node", `/${tag}.js`], environment: { WHO: tag }, enabled } },
     }, null, 2)}\n`;
-    const ocRaw = (ash: Record<string, unknown>) => `${JSON.stringify({ mcp: { ash } }, null, 2)}\n`;
+    const ocRaw = (navi: Record<string, unknown>) => `${JSON.stringify({ mcp: { navi } }, null, 2)}\n`;
 
     // ⒤ **层级对打**:`OPENCODE_CONFIG` 那个文件写完整条目 + `enabled:false`,
-    //    `OPENCODE_CONFIG_DIR` 那个目录里只写 `{"enabled":true}` ⇒ 真 CLI `ash connected`。
+    //    `OPENCODE_CONFIG_DIR` 那个目录里只写 `{"enabled":true}` ⇒ 真 CLI `navi connected`。
     //    上一版把文件排在目录上面(排反了),于是报「被关掉了,没有替你打开」。
     const h8 = home("merge-dir-beats-file");
     mkdirSync(join(h8, ".config", "opencode"), { recursive: true });
@@ -222,7 +222,7 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     assert.deepEqual([readFileSync(g13, "utf8"), readFileSync(f13, "utf8")], [off13, live13], "两份都不许动");
 
     // ⒩ **阶段才是单位**:`OPENCODE_CONFIG` 指回默认目录那份 ⇒ 真 CLI 在同目录 `.jsonc`
-    //    之后再读一遍它,开关翻回来(`ash connected`)。上一版按路径去重,于是判成关着、
+    //    之后再读一遍它,开关翻回来(`navi connected`)。上一版按路径去重,于是判成关着、
     //    落点还指向 `.jsonc`。
     const h14 = home("merge-same-path");
     const dir14 = join(h14, ".config", "opencode");
@@ -236,9 +236,9 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     assert.equal(hosts.hostMcpFile("opencode", { env: { OPENCODE_CONFIG: json14 }, home: h14 }), json14,
       "落点是最高那个阶段指的那份,不是 .jsonc");
 
-    // ⒪ **任何一份读不通就整份拒载**(实测:坏文件在哪一层都 exit 1,哪怕它没提 ash)⇒
-    //    只能答看不准、一个字不写。上一版「低的盖不住高的」会说「已经有生效的 ash 登记」。
-    for (const where of ["lowest", "highest", "no-ash"] as const) {
+    // ⒪ **任何一份读不通就整份拒载**(实测:坏文件在哪一层都 exit 1,哪怕它没提 navi)⇒
+    //    只能答看不准、一个字不写。上一版「低的盖不住高的」会说「已经有生效的 navi 登记」。
+    for (const where of ["lowest", "highest", "no-navi"] as const) {
       const h15 = home(`merge-broken-${where}`);
       const g15 = join(h15, ".config", "opencode", "opencode.json");
       mkdirSync(dirname(g15), { recursive: true });
@@ -267,9 +267,9 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
   {
     const full = (tag: string) => `${JSON.stringify({
       mcp: {
-        ash: {
+        navi: {
           type: "local", command: ["node", `/${tag}.js`],
-          environment: { ASH_URL: "http://127.0.0.1:54321" }, enabled: true,
+          environment: { NAVI_URL: "http://127.0.0.1:54321" }, enabled: true,
         },
       },
     }, null, 2)}\n`;
@@ -282,11 +282,11 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
 
     // ⒜ 默认目录里的 `config.json`(真 CLI 也读、优先级最低)。**审查那一行的复现**:上一版
     //    压根没枚举这个名字,于是这里 `added:true`、新建一份 `opencode.json`,而它优先级更
-    //    高 —— 真 CLI 的生效 `ASH_URL` 当场从用户那条 `:54321` 换成了 ash 那条 `:4317`。
+    //    高 —— 真 CLI 的生效 `NAVI_URL` 当场从用户那条 `:54321` 换成了 navi 那条 `:4317`。
     const h = home("load-config-json");
     const low = put(join(h, ".config", "opencode", "config.json"), full("CONFIGJSON"));
     const r = install("opencode", h);
-    assert.ok(!r.added, `config.json 里已经有生效的 ash ⇒ 不许再写一条顶掉它:${r.why ?? ""}`);
+    assert.ok(!r.added, `config.json 里已经有生效的 navi ⇒ 不许再写一条顶掉它:${r.why ?? ""}`);
     assert.equal(readFileSync(low, "utf8"), full("CONFIGJSON"), "那份一个字节都不许动");
 
     // ⒝ `~/.opencode/`(另一层全局配置,压过默认目录):同理不写。
@@ -294,7 +294,7 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     put(join(h2, ".config", "opencode", "opencode.json"), empty);
     const dot = put(join(h2, ".opencode", "opencode.json"), full("DOT"));
     const r2 = install("opencode", h2);
-    assert.ok(!r2.added, `~/.opencode 那份里已经有 ash ⇒ 不写:${r2.why ?? ""}`);
+    assert.ok(!r2.added, `~/.opencode 那份里已经有 navi ⇒ 不写:${r2.why ?? ""}`);
     assert.equal(readFileSync(dot, "utf8"), full("DOT"), "那份一个字节都不许动");
 
     // ⒞ `OPENCODE_CONFIG` 给**相对路径**:它按 CLI 自己的工作目录解,安装器这边压根算不出
@@ -329,7 +329,7 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
       const body = geminiBody(extra);
       writeFileSync(file, body, "utf8");
       const r = install("gemini", h);
-      // 真 gemini 0.60.0 实测:这两种写法都把 ash 打成 `Blocked`。写进去也是一条用不上的
+      // 真 gemini 0.60.0 实测:这两种写法都把 navi 打成 `Blocked`。写进去也是一条用不上的
       // 登记,而用户看到的是「已接好」—— 所以如实拒,别碰那两个名单。
       assert.ok(!r.added, `${tag} ⇒ 不写:${r.why ?? ""}`);
       assert.match(r.why ?? "", /没有替你打开|mcp\.(excluded|allowed)/, `${tag}:要说清为什么(${r.why ?? ""})`);
@@ -348,10 +348,10 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     const g = home("switch-grok");
     const gFile = join(g, ".grok", "config.toml");
     mkdirSync(dirname(gFile), { recursive: true });
-    const gBody = 'disabled_mcp_servers = ["ash"]\n\nmodel = "x"\n';
+    const gBody = 'disabled_mcp_servers = ["navi"]\n\nmodel = "x"\n';
     writeFileSync(gFile, gBody, "utf8");
     const rg = install("grok", g);
-    assert.ok(!rg.added, `grok:根级那行关着 ash ⇒ 不写:${rg.why ?? ""}`);
+    assert.ok(!rg.added, `grok:根级那行关着 navi ⇒ 不写:${rg.why ?? ""}`);
     assert.match(rg.why ?? "", /disabled_mcp_servers/, `要说清是哪一行:${rg.why ?? ""}`);
     assert.equal(readFileSync(gFile, "utf8"), gBody, "那份一个字节都不许动");
     group("逐家启停策略:gemini 的根级名单挡住就不写、grok 的根级数组照旧认(都不替用户打开)");

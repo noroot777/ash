@@ -1,9 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { TaskFollowUp, TaskListItem } from "@ash/shared";
-import type { TaskMemoDigest } from "@ash/shared/task-memo";
-import { memoIsNewer } from "@ash/shared/task-memo";
-import { parseAttachmentText } from "@ash/shared/attachments";
+import type { TaskFollowUp, TaskListItem } from "@navi/shared";
+import type { TaskMemoDigest } from "@navi/shared/task-memo";
+import { memoIsNewer } from "@navi/shared/task-memo";
+import { parseAttachmentText } from "@navi/shared/attachments";
 import { Image as ImageIcon, NotePencil } from "@phosphor-icons/react";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";

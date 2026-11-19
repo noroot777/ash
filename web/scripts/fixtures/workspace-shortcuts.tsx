@@ -7,7 +7,7 @@ import { useWorkspaceShortcuts } from "../../src/workspace/useWorkspaceShortcuts
 // 全局快捷键只有在**真的按下键**时才算数：序列的时序在 test-key-chord 里已经钉住，
 // 这里钉的是它挂到 window 捕获阶段之后的那一半 —— 谁先吃到 t、输入框里按键还算不算数、
 // 两条序列交叉连打会不会串味。
-function Ash() {
+function Navi() {
   const [log, setLog] = useState<string[]>([]);
   const [scope, setScope] = useState<"project" | "tasks">("project");
   // 聊天 / 助手 / 设置页把列表导航键关掉（enabled=false），但 `G …` 一族在那儿照样按得到。
@@ -76,6 +76,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

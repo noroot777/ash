@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
-import type { ProjectView } from "@ash/shared";
-import type { GitActionRequest, GitView } from "@ash/shared/git-workbench";
-import { emptyCommitGuidance, gitChangeCount } from "@ash/shared/git-workbench";
+import type { ProjectView } from "@navi/shared";
+import type { GitActionRequest, GitView } from "@navi/shared/git-workbench";
+import { emptyCommitGuidance, gitChangeCount } from "@navi/shared/git-workbench";
 import {
   ActionDialog,
   initialActionValues,

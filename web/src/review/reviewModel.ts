@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 
 // Mirrors the deterministic server guard: a child without its own worktree is
 // part of the parent team's shared acceptance boundary, never a mergeable task.

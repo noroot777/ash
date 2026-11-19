@@ -4,12 +4,12 @@
 // **只给老记录**：没有身份（`seq`）的那一截 —— 升级前写下的、团队调度台与 duet 的会话。带身份的由
 // conversationAssembler 按身份归位，不走这里。下面那些按时刻切 trace、按旁注落点判并不并的推断，全是
 // 因为老记录没有身份才不得不猜的，别再往上加。
-import { ANSWER_PREFIX } from "@ash/shared";
-import { segmentFingerprint, type ConvSeg } from "@ash/shared/session-output";
-import { addUsage } from "@ash/shared/usage";
-import { normalizeSessionNoteText } from "@ash/shared/session-notes";
+import { ANSWER_PREFIX } from "@navi/shared";
+import { segmentFingerprint, type ConvSeg } from "@navi/shared/session-output";
+import { addUsage } from "@navi/shared/usage";
+import { normalizeSessionNoteText } from "@navi/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
-import type { Session } from "@ash/shared";
+import type { Session } from "@navi/shared";
 import type { ConversationItem, PersistedOrigin } from "./conversationModel.ts";
 import { eventTone, isVerifyNote, verifyMark } from "./conversationNotes.ts";
 import { reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
@@ -249,7 +249,7 @@ export function appendPersistedSession(
     } else if (segment.kind === "system") {
       recordPersistedTurn(persistedTurns, "system", segment.text, segment.at, session.id);
       // 旧版轮换文案落在用户 .md 里的原文带 Markdown 标记、措辞也不一样；旁注是纯文本
-      // 渲染，不归一就会把星号原样露出来（@ash/shared/session-notes）。
+      // 渲染，不归一就会把星号原样露出来（@navi/shared/session-notes）。
       const text = normalizeSessionNoteText(segment.text);
       const resume = resumeNoteOf(text, segment.resume);
       items.push({
@@ -258,6 +258,7 @@ export function appendPersistedSession(
         text,
         at: segment.at,
         sessionId: session.id,
+        sessionRole: session.role,
         // 服务端标了 notice 就照它的，别再去猜（见 conversationNotes 的 tone 注释）。
         tone: eventTone(text, segment.notice, segment.level),
         variant: "note",

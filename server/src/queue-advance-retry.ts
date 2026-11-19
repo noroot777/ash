@@ -76,7 +76,7 @@ export async function replayQueueAdvances(queueId?: string): Promise<void> {
     try {
       await (await import("./scheduler.js")).advanceQueue(request.queueId, { ...request, taskId: task.id });
     } catch (error) {
-      console.error(`[ash] 续跑交接补推失败 queue=${request.queueId}:`, error);
+      console.error(`[navi] 续跑交接补推失败 queue=${request.queueId}:`, error);
       deferQueueAdvance(request.queueId);
     }
   }
@@ -96,7 +96,7 @@ export function deferQueueAdvance(queueId: string, retry?: () => Promise<void>):
       for (const attempt of retries) await attempt();
       await replayQueueAdvances(queueId);
     })().catch((error) => {
-      console.error(`[ash] 续跑交接请求读取失败 queue=${queueId}:`, error);
+      console.error(`[navi] 续跑交接请求读取失败 queue=${queueId}:`, error);
       deferQueueAdvance(queueId);
       for (const attempt of retries) deferQueueAdvance(queueId, attempt);
     });

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, inTurnCaller, makeTask, runs, schema, tasks, teardown } from "./monitors-fixture.js";
 import { setupRegression } from "./regression-fixture.js";
 
@@ -18,7 +18,7 @@ const { handleTaskSettlement } = await import("../src/review.js");
 const { replayUndeliveredMcpCalls } = await import("../src/mcp-handoff.js");
 const { detachedPathsFor } = await import("../src/executors/detached.js");
 const { evidenceState, refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
-const { REVIEWER_REGRESSION_CLAUSE } = await import("@ash/shared/free-workflow");
+const { REVIEWER_REGRESSION_CLAUSE } = await import("@navi/shared/free-workflow");
 
 try {
   const { taskId, task, repo, evidenceDir, manifest, run } = await setupRegression();
@@ -64,7 +64,7 @@ try {
   mountTaskStageRoutes(api);
   let sourceTaskId = taskId;
   const stage = () => api.request(`/tasks/${taskId}/stage`, {
-    method: "POST", headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${sourceTaskId}`, "x-ash-source-task-id": sourceTaskId },
+    method: "POST", headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${sourceTaskId}`, "x-navi-source-task-id": sourceTaskId },
     body: JSON.stringify({ stage: "verified" }),
   });
   stale(evidenceDir);
@@ -102,7 +102,7 @@ try {
     executor: "test", startedAt: turnStart });
   const { out } = detachedPathsFor(join(evidenceDir, "..", ".."), "legacy-proof-session", turnStart);
   writeFileSync(out, JSON.stringify({ type: "item.completed", item: {
-    id: "lost-conclusion", type: "mcp_tool_call", server: "ash", tool: "report_stage",
+    id: "lost-conclusion", type: "mcp_tool_call", server: "navi", tool: "report_stage",
     arguments: { taskId, stage: "verified" }, result: null, error: { message: "Transport closed" }, status: "failed",
   } }) + "\n");
   stale(legacyDir);

@@ -35,7 +35,7 @@
 //   ⑩ 「烧谁的 key、落谁的目录」对了还不够:**接着谁的会话**也得对。CLI 的 transcript
 //      躺在开它的那个人的配置目录里,拿别人的会话 id 去 `--resume` 只会扑空。
 //
-// 跑法(不设 ASH_DB 时自己开一个临时库):
+// 跑法(不设 NAVI_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -44,25 +44,25 @@ import { delimiter, join } from "node:path";
 import { IS_WINDOWS } from "../src/platform.js";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-mu-run-"));
-process.env.ASH_DB ||= join(stage, "mu-run.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-mu-run-"));
+process.env.NAVI_DB ||= join(stage, "mu-run.db");
 requireTmpDb("test-multi-user-run");
 // 产物一律留在舞台里,别写进真实 data/runs(必须在 import paths.js 之前设)。
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-process.env.ASH_DATA_DIR ??= join(stage, "data");
-// 故意让**测试进程自己**带一个别的任务的身份:子进程默认继承 server 环境,而 ash 从
-// 一个 ash 任务里启动时这个变量真的有值。不在这里钉死,这条判据就只在「跑测试的人
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
+process.env.NAVI_DATA_DIR ??= join(stage, "data");
+// 故意让**测试进程自己**带一个别的任务的身份:子进程默认继承 server 环境,而 navi 从
+// 一个 navi 任务里启动时这个变量真的有值。不在这里钉死,这条判据就只在「跑测试的人
 // 恰好也在一个任务里」时才成立。
-process.env.ASH_TASK_ID = "some-other-task";
-mkdirSync(process.env.ASH_RUNS_DIR, { recursive: true });
+process.env.NAVI_TASK_ID = "some-other-task";
+mkdirSync(process.env.NAVI_RUNS_DIR, { recursive: true });
 
 // ── 假 claude:把它看到的环境写进探针目录,一次调用一份 ──────────────────────
 const probes = join(stage, "probes");
 mkdirSync(probes, { recursive: true });
 const bin = join(stage, "bin");
 mkdirSync(bin, { recursive: true });
-const KEYS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "ASH_TASK_ID"];
+const KEYS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "NAVI_TASK_ID"];
 // 探针本体写成独立的 .cjs 文件,壳只负责 `node <它>`。塞进 `node -e "…"` 里会被两层
 // 引号绞碎(sh 一层、cmd 一层),而那种碎法的症状是「假 CLI 起来了但立刻 exit 1」,
 // 排查成本远高于多写一个文件。
@@ -74,7 +74,7 @@ writeFileSync(
   + `const out={};for(const k of keys)out[k]=process.env[k]??null;\n`
   // 命令行也留一份:「有没有拿别人的会话 id 去 --resume」只有 argv 答得了(⑩)。
   + `out.ARGV=process.argv.slice(2).join(" ");\n`
-  + `fs.writeFileSync(path.join(process.env.ASH_TEST_PROBES,process.pid+"-"+process.hrtime.bigint()+".json"),JSON.stringify(out));\n`,
+  + `fs.writeFileSync(path.join(process.env.NAVI_TEST_PROBES,process.pid+"-"+process.hrtime.bigint()+".json"),JSON.stringify(out));\n`,
 );
 // 假 claude 按平台换壳:Windows 内核不认 `#!/bin/sh`,PATH 查找只认 PATHEXT 里的后缀。
 // 两边都要把参数原样转给探针(`%*` / `"$@"`)—— 少了它 argv 恒为空,⑩ 那条「有没有拿
@@ -86,8 +86,8 @@ chmodSync(fakeBin, 0o755);
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
 // spawn.ts 的隔离闸默认不许起执行器。这条测试要的恰恰是真走完 spawn 链路,只放行上面亲手种的
 // 这个假 `claude`。
-process.env.ASH_TEST_AGENT_BIN = bin;
-process.env.ASH_TEST_PROBES = probes;
+process.env.NAVI_TEST_AGENT_BIN = bin;
+process.env.NAVI_TEST_PROBES = probes;
 
 const readProbes = () =>
   readdirSync(probes)
@@ -250,8 +250,8 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   for (const env of readProbes()) {
     expectBob(env, "duet 发言回合");
     // 讨论者没有回合身份,而且不能从 server 自己的环境里**继承**一个别的任务的
-    // (ash 从一个 ash 任务里启动时就会有值;借来的身份比没有身份更糟)。
-    assert.equal(env.ASH_TASK_ID, null, `duet 发言回合不该带任务身份,实际 ${env.ASH_TASK_ID}`);
+    // (navi 从一个 navi 任务里启动时就会有值;借来的身份比没有身份更糟)。
+    assert.equal(env.NAVI_TASK_ID, null, `duet 发言回合不该带任务身份,实际 ${env.NAVI_TASK_ID}`);
   }
   await until("duet 结算", async () => settled(await statusOf(taskId)));
   const sess = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
@@ -452,8 +452,8 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   const gitRepo = join(stage, "git-repo");
   mkdirSync(gitRepo, { recursive: true });
   execFileSync("git", ["init", "-b", "main", gitRepo]);
-  execFileSync("git", ["-C", gitRepo, "config", "user.name", "Ash Test"]);
-  execFileSync("git", ["-C", gitRepo, "config", "user.email", "ash@example.test"]);
+  execFileSync("git", ["-C", gitRepo, "config", "user.name", "Navi Test"]);
+  execFileSync("git", ["-C", gitRepo, "config", "user.email", "navi@example.test"]);
   writeFileSync(join(gitRepo, "seed.txt"), "seed\n");
   execFileSync("git", ["-C", gitRepo, "add", "-A"]);
   execFileSync("git", ["-C", gitRepo, "commit", "-m", "seed"]);

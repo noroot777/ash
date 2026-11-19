@@ -64,9 +64,9 @@ assert.equal(duplicateCapacity.hasSlot("duplicates", "unrelated"), true,
   "extra old records become available only after replacement commits");
 console.log("terminal duplicate-record capacity passed: cancellation, startup failure, committed reclamation");
 
-const temporary = realpathSync(mkdtempSync(join(tmpdir(), "ash-terminal-capacity-")));
-const previousDb = process.env.ASH_DB;
-process.env.ASH_DB = join(temporary, "test.db");
+const temporary = realpathSync(mkdtempSync(join(tmpdir(), "navi-terminal-capacity-")));
+const previousDb = process.env.NAVI_DB;
+process.env.NAVI_DB = join(temporary, "test.db");
 const { terminalSessions: manager } = await import("../src/terminal.js");
 const { startCommand, restartCommand, stopCommand } = await import("../src/terminal-commands.js");
 const { dbClient } = await import("../src/db/index.js");
@@ -117,7 +117,7 @@ try {
     assert.equal((await restartCommand(projectId, temporary, command)).status, 201,
       "restart must replace its own record even when all sixteen slots are occupied");
     assert.notEqual(manager.liveCommandSession(projectId, command.id)?.id, previous.id);
-    // 这条命令的进程组是 ash 自己起的,停止时 terminate 把成员列全了、组也确实探不到了,
+    // 这条命令的进程组是 navi 自己起的,停止时 terminate 把成员列全了、组也确实探不到了,
     // 所以照旧是干净的「已停止」 —— 不留历史记录,这个数稳定在 16(判据见
     // terminal-stop-notices.ts 的 processStopVerdict ②)。
     assert.equal(occupying().length, 16);
@@ -259,8 +259,8 @@ try {
   await manager.destroyProject(projectId);
   manager.shutdown();
   dbClient.close();
-  if (previousDb === undefined) delete process.env.ASH_DB;
-  else process.env.ASH_DB = previousDb;
+  if (previousDb === undefined) delete process.env.NAVI_DB;
+  else process.env.NAVI_DB = previousDb;
   await delay(250);
   rmSync(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

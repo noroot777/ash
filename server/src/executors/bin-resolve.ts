@@ -27,7 +27,7 @@ import { cmdExeLaunch } from "./win-command.js";
 // **`scripts/platform.mjs` 的 `extraPaths` 必须给出同一个列表**:装机脚本要在构建之前
 // 跑(那时 `server/dist` 还不存在、`src` 又只有 TypeScript),所以那边只能复刻一份。
 // 两份漂移的代价是实测过的 —— 2026-10-28 一台机器上 `setup.mjs` 的 `which("codex")`
-// 只扫 PATH、判成「没装 codex CLI,跳过它的 MCP 注册」,而 ash 自己靠这里的候选目录
+// 只扫 PATH、判成「没装 codex CLI,跳过它的 MCP 注册」,而 navi 自己靠这里的候选目录
 // 照样派得出 codex 任务:于是**每个 codex 任务都是活干完、交不了卷、记 failed**,
 // 一轮审查更是跑满 35 分钟才在最后一句说「未提供 report_stage 工具」。
 // 靠 `server/scripts/test-win-launch.ts` 最后一节钉住(两个平台分支都比)。
@@ -49,7 +49,7 @@ export function extraPaths(env: NodeJS.ProcessEnv = process.env, home: string = 
   const { APPDATA, LOCALAPPDATA, ProgramFiles, ChocolateyInstall } = env;
   // `Program Files` 在 Windows 上不止一个:ARM64 机器上原生 ARM 程序在 `Program Files`、
   // x64 程序在 `Program Files (x86)`、32 位 ARM 在 `Program Files (Arm)`,而 `%ProgramFiles%`
-  // 只指向**与当前进程架构相同**的那一个 —— 一个 x64 版 node 起的 ash,看不见装在
+  // 只指向**与当前进程架构相同**的那一个 —— 一个 x64 版 node 起的 navi,看不见装在
   // 原生 ARM 目录里的 node/CLI。三个都扫,不存在的目录 resolveBin 自会跳过。
   const programFiles = [ProgramFiles, env["ProgramFiles(x86)"], env["ProgramFiles(Arm)"]];
   return [
@@ -92,18 +92,18 @@ export function augmentedEnv(): NodeJS.ProcessEnv {
 /**
  * 去掉 PATH 里**别人家的** `node_modules/.bin`。
  *
- * ash 自己是被 npm 起来的(`npm run start`),而 npm 会把自己那条依赖链上的
+ * navi 自己是被 npm 起来的(`npm run start`),而 npm 会把自己那条依赖链上的
  * `node_modules/.bin` 塞到 PATH 最前面。server 进程原样继承,`augmentedEnv()` 又原样
- * 传给每一个子进程 —— 于是**在别的项目里跑的命令，第一优先级是 ash 自己的依赖**。
+ * 传给每一个子进程 —— 于是**在别的项目里跑的命令，第一优先级是 navi 自己的依赖**。
  *
  * 这不是洁癖，是一次会「谎报成功」的实测：一个依赖没装的前端项目，预览命令 `npm run dev`
- * (脚本是 `vite`)照样起来了 —— 用的是 `<ash>/node_modules/.bin/vite`。用户拿到一个
- * 能打开的页面，验收的却是用 ash 的 vite 版本、ash 的插件跑出来的东西，而项目自己
+ * (脚本是 `vite`)照样起来了 —— 用的是 `<navi>/node_modules/.bin/vite`。用户拿到一个
+ * 能打开的页面，验收的却是用 navi 的 vite 版本、navi 的插件跑出来的东西，而项目自己
  * 一个依赖都没有。宁可报「起不来」，也不能给他这个。
  *
  * 判据跟 node 自己找 bin 的语义一致：`<某目录>/node_modules/.bin` 只有在
- * **它属于这次要跑的目录或其祖先**时才留着。所以在 ash 仓库里干活的任务照旧用得到
- * ash 的 `tsx`(那时它正是「本项目的」),在别人的仓库里就一条都不剩。
+ * **它属于这次要跑的目录或其祖先**时才留着。所以在 navi 仓库里干活的任务照旧用得到
+ * navi 的 `tsx`(那时它正是「本项目的」),在别人的仓库里就一条都不剩。
  */
 export function withoutForeignNodeBins(env: NodeJS.ProcessEnv, cwd: string): NodeJS.ProcessEnv {
   const kept = splitPathList(env.PATH ?? "").filter((entry) => {
@@ -202,9 +202,9 @@ export function resolveBin(bin: string): string | null {
 // 把那条脚本路径挖出来,就能 `node <script>` 直接跑,cmd.exe 全程不参与 ——
 // 没有二次解析,也就没有转义风险。挖不出来才退到 cmd.exe(见 win-command.ts)。
 //
-// 用的是**本 ash 进程的 node**(process.execPath),不是垫片里那个 `%_prog%`。
+// 用的是**本 navi 进程的 node**(process.execPath),不是垫片里那个 `%_prog%`。
 // 绝大多数情况下两者是同一个(Node 官方安装器把 node.exe 和 npm 全局 bin 放在同
-// 一个目录);不同的话,CLI 会跑在 ash 的 node 版本上 —— 记在这里,真出现
+// 一个目录);不同的话,CLI 会跑在 navi 的 node 版本上 —— 记在这里,真出现
 // 版本不兼容时先查这一条。
 const SHIM_SCRIPT = /"%~?dp0%?\\{1,2}([^"]+\.(?:js|mjs|cjs))"/i;
 const shimCache = new Map<string, string | null>();

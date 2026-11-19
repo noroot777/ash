@@ -11,14 +11,14 @@
 //   ⑨ 请求体里带 id 的端点(建任务/建队列/随手记/挂供应商):横切闸拦不到,各自补。
 //   ⑩ 全局 id 路由(queues / sessions)必须进横切闸。
 //   ⑪ 免登录名单只放机器对机器那几条,本机设置面不在其中。
-//   ⑫ 宿主机逃生门脚本(scripts/ash-admin.mjs)真能发出一条可领取的邀请。
+//   ⑫ 宿主机逃生门脚本(scripts/navi-admin.mjs)真能发出一条可领取的邀请。
 //   ⑬ 执行器归属:写侧存不进别人的 id,读侧回退不出别人的名字。
 //   ⑭ 穿过完整 authGate 的 HTTP 回归:供应商 relay 打得通、供应商 CRUD 仍要登录、
 //      `/llm-providers/test` 用不了别人的 key。
 //   ⑮ 「选谁干活」的另外两个表面 —— duet 两位讨论者、团队派活 —— 同样按人收窄。
 //   ⑯ 收窄按谁:锚在**任务归属人**,不是这次点它的人(共享项目 / 继承父任务)。
 //
-// 跑法(不设 ASH_DB 时自己开一个临时库):
+// 跑法(不设 NAVI_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
@@ -28,9 +28,9 @@ import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 // 自带临时舞台:这条测试不碰真库,没有任何理由要求调用者先想好一个路径
-// (test-handoff-auth.ts 同样的做法)。显式给了 ASH_DB 就用给的那个。
-const stage = mkdtempSync(join(tmpdir(), "ash-multi-user-"));
-process.env.ASH_DB ||= join(stage, "multi-user.db");
+// (test-handoff-auth.ts 同样的做法)。显式给了 NAVI_DB 就用给的那个。
+const stage = mkdtempSync(join(tmpdir(), "navi-multi-user-"));
+process.env.NAVI_DB ||= join(stage, "multi-user.db");
 requireTmpDb("test-multi-user");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -189,13 +189,13 @@ const bobActor = actorOf(bob);
   const peer = await startSignedHandoffPeer();
   const movedUrl = `${peer.url}/moved`;
   try {
-    await scope.addTarget(aliceActor, { name: "家里", url: peer.url, peerKey: "ash_secret" });
+    await scope.addTarget(aliceActor, { name: "家里", url: peer.url, peerKey: "navi_secret" });
     const aliceTargets = await scope.listTargets(aliceActor);
     assert.equal(aliceTargets.length, 1);
     assert.equal(aliceTargets[0].hasKey, true);
     assert.equal((aliceTargets[0] as { peerKey?: string }).peerKey, undefined, "key 绝不回显");
     assert.deepEqual(await scope.listTargets(bobActor), [], "目标机清单按人隔离");
-    assert.equal(await scope.peerKeyForRequest(alice.id, `${peer.url}/`), "ash_secret", "尾斜杠不该影响匹配");
+    assert.equal(await scope.peerKeyForRequest(alice.id, `${peer.url}/`), "navi_secret", "尾斜杠不该影响匹配");
     assert.equal(await scope.peerKeyForRequest(bob.id, peer.url), "");
 
     // 换地址要把记住的指纹一起清掉。
@@ -207,14 +207,14 @@ const bobActor = actorOf(bob);
 
     // 按**地址**配 key(接力对话框里就地补 key 走的是这条路:那里只有地址,没有行 id)。
     // 它必须仍然钉在「这个人自己的清单」上 —— 否则拿一个地址就能改别人的对端凭证。
-    await scope.setPeerKey(aliceActor, `${movedUrl}/`, "ash_by_url");
-    assert.equal(await scope.peerKeyForRequest(alice.id, movedUrl), "ash_by_url");
+    await scope.setPeerKey(aliceActor, `${movedUrl}/`, "navi_by_url");
+    assert.equal(await scope.peerKeyForRequest(alice.id, movedUrl), "navi_by_url");
     await assert.rejects(
       () => scope.setPeerKey(bobActor, movedUrl, "bob_tries"),
       /先把这台目标机加进/,
       "地址不在自己的清单里就该被拒,不能落到别人那一行上",
     );
-    assert.equal(await scope.peerKeyForRequest(alice.id, movedUrl), "ash_by_url", "别人的写入没有污染");
+    assert.equal(await scope.peerKeyForRequest(alice.id, movedUrl), "navi_by_url", "别人的写入没有污染");
   } finally { await peer.close(); }
 }
 
@@ -316,14 +316,14 @@ const bobActor = actorOf(bob);
   ]) {
     assert.equal(open(path), true, `${path} 到不了登录态,必须在名单里`);
   }
-  // 供应商 relay:CLI 只带得出供应商 API key,带不出 ash 身份 —— 豁口钉死到 /v1 那一段。
+  // 供应商 relay:CLI 只带得出供应商 API key,带不出 navi 身份 —— 豁口钉死到 /v1 那一段。
   for (const path of [
     "/api/llm-providers/prov-1/convert/v1",
     "/api/llm-providers/prov-1/convert/v1/chat/completions",
     "/api/llm-providers/prov-1/context-1m/v1",
     "/api/llm-providers/prov-1/context-1m/v1/messages",
   ]) {
-    assert.equal(open(path), true, `${path} 是 CLI 回连本机的 relay,带不上 ash 身份`);
+    assert.equal(open(path), true, `${path} 是 CLI 回连本机的 relay,带不上 navi 身份`);
   }
   for (const path of [
     "/api/llm-providers",
@@ -351,8 +351,8 @@ const bobActor = actorOf(bob);
 {
   const { execFileSync } = await import("node:child_process");
   const { fileURLToPath } = await import("node:url");
-  const script = fileURLToPath(new URL("../../scripts/ash-admin.mjs", import.meta.url));
-  const env = { ...process.env, ASH_DB: process.env.ASH_DB! };
+  const script = fileURLToPath(new URL("../../scripts/navi-admin.mjs", import.meta.url));
+  const env = { ...process.env, NAVI_DB: process.env.NAVI_DB! };
 
   const status = execFileSync("node", [script, "status"], { env, encoding: "utf8" });
   assert.match(status, /实例模式:multi/, "app_settings 存的是 JSON,裸比字符串会永远判成不是多人");
@@ -434,7 +434,7 @@ const { personalWriteGate } = await import("../src/auth/personal-gate.js");
   app.use("/api/*", resourceGate());
 app.use("/api/*", personalWriteGate());
   app.route("/api", api);
-  // relay 路由回的是 OpenAI 风格的 `{message,type}`,ash 自己的路由回 `{error}` ——
+  // relay 路由回的是 OpenAI 风格的 `{message,type}`,navi 自己的路由回 `{error}` ——
   // 这条测试恰好要跨过这条边界,所以两种都读。
   const call = async (path: string, init?: RequestInit) => {
     const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, init));

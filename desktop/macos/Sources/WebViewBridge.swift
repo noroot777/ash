@@ -20,15 +20,15 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
       return
     }
     let scheme = url.scheme?.lowercased() ?? ""
-    if ["about", "blob", "data"].contains(scheme) || (AshConfig.isSameOrigin(url) && !AshConfig.isLocal) {
+    if ["about", "blob", "data"].contains(scheme) || (NaviConfig.isSameOrigin(url) && !NaviConfig.isLocal) {
       decisionHandler(.allow)
       return
     }
-    if AshConfig.isSameOrigin(url) {
+    if NaviConfig.isSameOrigin(url) {
       // 本机地址：端口上可能已经换了人，放行之前认一次（见 BrowserWindowController 的 instanceLost）。
-      AshHealth.probe(AshConfig.windowHealthURL) { probe in
+      NaviHealth.probe(NaviConfig.windowHealthURL) { probe in
         DispatchQueue.main.async { [weak self] in
-          guard let self, let instance = AshHealth.ours(probe) else {
+          guard let self, let instance = NaviHealth.ours(probe) else {
             decisionHandler(.cancel)
             self?.instanceLost()
             return
@@ -39,7 +39,7 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
       }
       return
     }
-    // 外站、预览地址、mailto: 之类一律交给系统默认程序，壳里只留 ash 自己。
+    // 外站、预览地址、mailto: 之类一律交给系统默认程序，壳里只留 navi 自己。
     NSWorkspace.shared.open(url)
     decisionHandler(.cancel)
   }
@@ -88,7 +88,7 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
   func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
     guard let url = action.request.url else { return nil }
-    if AshConfig.isSameOrigin(url) {
+    if NaviConfig.isSameOrigin(url) {
       webView.load(action.request)
     } else {
       NSWorkspace.shared.open(url)

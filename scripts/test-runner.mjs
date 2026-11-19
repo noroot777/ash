@@ -11,6 +11,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, 
 import { availableParallelism, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { clearEnv, readEnv, setEnv } from "./env.mjs";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { descendants, marked, pause, signal } from "./test-runner-processes.mjs";
 
@@ -116,7 +117,7 @@ function binPath(repo, cwd, base) {
 // 上一次每条叶子用了多久、红没红。排队时上次红的先跑（修完再跑最快知道修没修好），其余按
 // 用时从长到短（最长的那条要是排在最后，整轮就得干等它一条）；没见过的新叶子当成最长。
 // 叶子按仓库内相对路径记，各 worktree 和验收快照共用一份。
-const HISTORY = join(tmpdir(), "ash-test-runner-history.json");
+const HISTORY = join(tmpdir(), "navi-test-runner-history.json");
 
 function readHistory() {
   try {
@@ -137,16 +138,31 @@ function writeHistory(updates) {
   }
 }
 
-// 每条叶子一个自己的临时数据目录（`ASH_DATA_DIR`）和系统临时目录（`TMPDIR`/`TMP`/`TEMP`）。
+// 每条叶子一个自己的临时数据目录（`NAVI_DATA_DIR`）和系统临时目录（`TMPDIR`/`TMP`/`TEMP`）。
 // 只指定了库和 runs 目录的测试，产品模块一加载，数据目录就落在代码根的 `data/` —— 也就是这份
 // 检出自己的（走假 claude 的那批会往 `data/navi-mcp/` 写配置）；测试自己 mkdtemp 出来的目录、
 // 起的浏览器留下的 profile，红了或忘了删就一直堆在系统临时目录里，每跑一遍门禁多几百个。由
 // 执行器统一给，叶子不必各自记得设；自己另指数据目录的测试照旧以它自己的为准。两个目录跟着
 // 这条叶子的进程一起收：收完进程再删，删不掉只多留一个临时目录，收尾时整棵根还会再删一次。
-// 每条叶子都带着的环境。`ASH_TEST_NO_MODEL_PROBE`：测试里起的真服务不去预热模型目录 —— 那是
+// 每条叶子都带着的环境。`NAVI_TEST_NO_MODEL_PROBE`：测试里起的真服务不去预热模型目录 —— 那是
 // 在问本机真装着的 CLI，其中握手探针是一个活得比服务久的 `claude -p`（开关的说明在
 // server/src/executors/model-probe.ts）。测探测本身的那几条自己把它拿掉、换成假 CLI。
-const LEAF_ENV = { ASH_TEST_NO_MODEL_PROBE: "1" };
+const LEAF_ENV = { NAVI_TEST_NO_MODEL_PROBE: "1" };
+
+// 叶子的环境（并行、串行两条路都从这里出）：宿主带进来的库、运行目录、数据目录不往下传，各代名字一起擦
+// （同验收入口 accept-test.mjs 和回归 worker）；这一条自己的临时目录用 setEnv 写 —— 只写新名、不擦旧名的话，
+// 从外面继承来的 ASH_DATA_DIR 和新写的 NAVI_DATA_DIR 同时出现、值又不同，读的那头（readStorageEnv）拒绝启动。
+// 叶子里的测试自己再写 NAVI_DB 之类，也就不会撞上一个继承来的旧名。
+const HOST_STORAGE_ENV = ["NAVI_DB", "NAVI_RUNS_DIR", "NAVI_DATA_DIR"];
+function leafEnv(base, scratch) {
+  const env = { ...base, ...LEAF_ENV };
+  for (const name of HOST_STORAGE_ENV) clearEnv(env, name);
+  for (const [name, value] of Object.entries(scratch)) {
+    if (name.startsWith("NAVI_")) setEnv(env, name, value);
+    else env[name] = value;
+  }
+  return env;
+}
 
 // 系统临时目录认的变量。`MAC_CHROMIUM_TMPDIR`：macOS 上的 Chrome 不看 TMPDIR，单例套接字的目录
 // （`com.google.Chrome.XXXXXX`）按它找、没有就落到系统默认的临时目录；测试关浏览器是直接杀的，
@@ -173,7 +189,7 @@ function leafScratch(root, name) {
     symlinkSync(shared, join(tmp, TSX_CACHE), "dir");
   }
   return {
-    env: { ASH_DATA_DIR: data, ...Object.fromEntries(TMP_ENV_KEYS.map((key) => [key, tmp])) },
+    env: { NAVI_DATA_DIR: data, ...Object.fromEntries(TMP_ENV_KEYS.map((key) => [key, tmp])) },
     remove: () => rmSync(base, { recursive: true, force: true, maxRetries: 3 }),
   };
 }
@@ -181,7 +197,7 @@ function leafScratch(root, name) {
 // 这些目录的根放在短路径下：macOS 的 `$TMPDIR` 本身就有 49 个字符，再往下套两层，Chrome 在
 // 临时目录里建的单例套接字（`com.google.Chrome.XXXXXX/SingletonSocket`）就超过 Unix 套接字
 // 104 字节的上限。Windows 没有这个限制，照旧用系统临时目录。
-const scratchRoot = () => mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "ash-test-"));
+const scratchRoot = () => mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "navi-test-"));
 
 function schedule(leaves, history) {
   const rank = (leaf) => {
@@ -201,17 +217,17 @@ function schedule(leaves, history) {
  * 不变量：无论怎么结束（全绿、某条红、执行器自己出错、收到信号），返回之前这一轮认得出来的
  * 进程都已经收干净 —— 包括已经退出的叶子留下的后台进程；看不全或收不掉就判红，不报通过。
  * 认得出来的边界见 test-runner-processes.mjs 开头：macOS 上清空环境、脱离进程组、父进程又
- * 先退的后代认不出来（用户 2026-11-05 接受这个限制，与 ash 验收门禁在 macOS 上同口径）。
+ * 先退的后代认不出来（用户 2026-11-05 接受这个限制，与 navi 验收门禁在 macOS 上同口径）。
  */
 export async function runSteps(repo, steps, { jobs = defaultJobs(), env = process.env, log = console.log } = {}) {
-  if (process.platform === "win32" || env.ASH_TEST_RUNNER === "serial") return runSequentially(repo, steps, env, log);
+  if (process.platform === "win32" || readEnv(env, "NAVI_TEST_RUNNER") === "serial") return runSequentially(repo, steps, env, log);
   const queue = schedule(steps.flatMap((step, index) => expandChain(repo, step.workspace, step.script)
     .map((leaf) => ({ ...leaf, step: index }))), readHistory());
   const timings = {};
   const remaining = steps.map((_, index) => queue.filter((leaf) => leaf.step === index).length);
-  const logs = mkdtempSync(join(tmpdir(), "ash-test-runner-"));
+  const logs = mkdtempSync(join(tmpdir(), "navi-test-runner-"));
   const dataRoot = scratchRoot();
-  const owner = `ASH_TEST_RUNNER_${process.pid}_${Date.now().toString(36)}`;
+  const owner = `NAVI_TEST_RUNNER_${process.pid}_${Date.now().toString(36)}`;
   const stages = new Map();
   const running = new Map();
   let failure = null;
@@ -271,7 +287,7 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
           cwd: leaf.cwd,
           detached: true,
           stdio: ["ignore", output, output],
-          env: { ...env, ...extra, [owner]: String(index), ...LEAF_ENV, ...data.env, npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
+          env: { ...leafEnv({ ...env, ...extra, [owner]: String(index) }, data.env), npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
         });
       } finally {
         closeSync(output);
@@ -415,7 +431,7 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
 }
 
 // Windows 上没有 /bin/sh 和 ps，进程组也是另一套语义：照旧按链一步一步交给 npm 跑。
-// 其它平台设 ASH_TEST_RUNNER=serial 也走这条，门禁自检靠它在本机核对这份契约。
+// 其它平台设 NAVI_TEST_RUNNER=serial 也走这条，门禁自检靠它在本机核对这份契约。
 // 这条路上叶子是 npm 自己一条条起的，临时数据目录和系统临时目录只能按步给：一步一个，跑完删。
 function runSequentially(repo, steps, env, log) {
   const dataRoot = scratchRoot();
@@ -423,7 +439,7 @@ function runSequentially(repo, steps, env, log) {
     for (const step of steps) {
       const args = step.workspace === "." ? ["run", step.script] : ["-w", step.workspace, "run", step.script];
       const data = leafScratch(dataRoot, String(steps.indexOf(step)));
-      const result = spawnSync(NPM, args, { ...NPM_SPAWN_OPTS, cwd: repo, stdio: "inherit", env: { ...env, ...LEAF_ENV, ...data.env } });
+      const result = spawnSync(NPM, args, { ...NPM_SPAWN_OPTS, cwd: repo, stdio: "inherit", env: leafEnv(env, data.env) });
       if (result.error) log(`[test-runner] 无法启动 ${step.workspace} ${step.script}：${result.error.message}`);
       if (result.signal) log(`[test-runner] ${step.workspace} ${step.script} 被信号 ${result.signal} 终止。`);
       if (result.status !== 0) return { leaf: { label: `${step.workspace} ${step.script}`, step: steps.indexOf(step) }, code: result.status || 1 };
@@ -440,7 +456,7 @@ function runSequentially(repo, steps, env, log) {
 }
 
 export function defaultJobs() {
-  const requested = Number(process.env.ASH_TEST_JOBS);
+  const requested = Number(readEnv(process.env, "NAVI_TEST_JOBS"));
   if (Number.isInteger(requested) && requested > 0) return requested;
   return Math.max(2, Math.min(8, Math.floor(availableParallelism() / 2)));
 }

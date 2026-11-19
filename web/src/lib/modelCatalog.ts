@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, LlmProvider } from "@navi/shared";
 import { api } from "./api.ts";
 import { cliCatalogNote, useCliModelCatalog } from "./cliModelCatalog.ts";
 
@@ -26,7 +26,7 @@ export interface ModelGroup {
   /**
    * 「现问一次」。缺省 = 这一块没有可刷新的来源（固定清单是用户自己填的，没什么好问的）。
    * 有它的两块：CLI 官方账号（问 CLI 自己）和 api 模式的供应商（问 /v1/models）——
-   * 它们的清单都会在 ash 之外变化，所以必须给用户一个不重启就能拿到新模型的动作。
+   * 它们的清单都会在 navi 之外变化，所以必须给用户一个不重启就能拿到新模型的动作。
    */
   onRefresh?: () => void;
   refreshing?: boolean;

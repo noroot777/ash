@@ -39,7 +39,7 @@ try {
     if (path === "/projects") return json([{ id: "p1", name: "p1", useWorktreeDefault: true }]);
     if (path === "/projects/p1/health") return json({ isRepo: true });
     if (path === "/projects/p1/branches") {
-      return json({ branches: ["main", "ash/t-one", "ash/t-arm", "ash/t-three", "ash/t-ruling", "ash/t-slash", "release"], current: "main" });
+      return json({ branches: ["main", "navi/t-one", "navi/t-arm", "navi/t-three", "navi/t-ruling", "navi/t-slash", "release"], current: "main" });
     }
     let match = /^\/tasks\/([^/]+)\/dispatch-suggestions\/launch$/.exec(path);
     if (match) {
@@ -129,7 +129,7 @@ try {
   await waitUntil(async () => launches("t-arm").length === 1, "回车派出去");
   assert.deepEqual(launches("t-arm")[0].body.items, [{
     id: "s-arm", title: "改过的标题", body: "## 改过的说明", extra: "高度要按任务记",
-    target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, worktreeBase: "ash/t-arm",
+    target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, worktreeBase: "navi/t-arm",
   }], "派出去的是改过的标题、正文、补的话和选的开工起点");
   await waitUntil(async () => (await box("arm").inputValue()) === "", "派完框清空");
   assert.equal(await dock("arm").count(), 0);

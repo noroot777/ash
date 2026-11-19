@@ -1,4 +1,4 @@
-// 首启向导的**版本边界**:这台 ash 在向导出现之前就已经在干活了吗。
+// 首启向导的**版本边界**:这台 navi 在向导出现之前就已经在干活了吗。
 //
 // 向导出不出,判据只有一条持久记录(`onboardedAt`,个人面)。但这个键是这一版才有的,
 // 老库里一个字都没有 —— 只认它的话,每台升上来的实例都会被糊一屏「欢迎,先加供应商」。
@@ -58,6 +58,6 @@ export async function stampOnboardingBaseline(client: Client): Promise<void> {
       });
     }
   } catch (e) {
-    console.warn("[ash] 首启向导版本边界标定失败,忽略:", e);
+    console.warn("[navi] 首启向导版本边界标定失败,忽略:", e);
   }
 }

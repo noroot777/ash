@@ -17,9 +17,9 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-verify-override-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_DATA_DIR ??= join(root, "data");
+const root = mkdtempSync(join(tmpdir(), "navi-verify-override-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_DATA_DIR ??= join(root, "data");
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 
@@ -136,7 +136,7 @@ const repo2 = join(root, "repo2");
 execFileSync("git", ["init", "-q", "-b", "main", repo2]);
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-git(repo2, "config", "user.name", "Ash Override Test");
+git(repo2, "config", "user.name", "Navi Override Test");
 git(repo2, "config", "user.email", "override@example.test");
 writeFileSync(join(repo2, ".gitignore"), ".worktrees/\n");
 git(repo2, "add", "-A");

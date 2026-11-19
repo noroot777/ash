@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 
 // 主工作区里开着的这一条归档了要不要退出。打开时就已归档的（按停者的链接、地址栏）照常开着 ——
 // 「子任务」停着、派活那条又归档了，只有打开它才按得到「接着跑」。只有开着的时候**被**归档了，

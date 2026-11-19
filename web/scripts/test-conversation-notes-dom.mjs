@@ -54,7 +54,7 @@ try {
   const rotation = rotationLog.locator(".turn-receipt").filter({ hasText: "CLI 会话" });
   assert.equal(await rotation.evaluate((el) => el.classList.contains("tone-neutral")), true, "会话轮换旁注被渲染成异常");
   if (await rotation.locator(".turn-receipt-more").count()) await rotation.locator(".turn-receipt-more").click();
-  assert.match(await rotation.innerText(), /ash 已经把这个失效的 id 清掉/, "会话轮换的原文点开看得到");
+  assert.match(await rotation.innerText(), /Navi 已经把这个失效的 id 清掉/, "会话轮换的原文点开看得到");
   assert.doesNotMatch(await rotation.textContent(), /\*\*/, "旁注是纯文本，Markdown 标记会原样露给用户");
 
   // 结算说明（level:"notice"）：是那一回合尾注里的一句，字是灰的（它讲的是流程，不是故障）。

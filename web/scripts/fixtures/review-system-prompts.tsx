@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
 import { TeamFeed } from "../../src/team/TeamFeed.tsx";

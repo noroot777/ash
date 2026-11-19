@@ -39,7 +39,7 @@ for (const [what, shape] of Object.entries(openings)) {
     const where = `${what} / ${how}`;
     const abandoned = session({ ...shape, ...authority, abandoned: residue() });
     assert.equal(sessionRunning(abandoned), false, `放弃之后不该还算在跑(${where})`);
-    assert.equal(managedOpen(abandoned, "npm stop"), null, `放弃之后不该还算被 ash 管着(${where})`);
+    assert.equal(managedOpen(abandoned, "npm stop"), null, `放弃之后不该还算被 navi 管着(${where})`);
     assert.equal(needsHandoff(abandoned), false, `已经放弃过,不该再给第二次「我自己处理了」(${where})`);
     assert.equal(sessionState(abandoned, managedOpen(abandoned, "npm stop") !== null, true).text,
       "已放弃管理（残留自理）", `放弃之后的文案只能说放弃(${where})`);

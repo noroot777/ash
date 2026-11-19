@@ -9,7 +9,7 @@
 // 上限本身是**硬的** —— 它防的是一场几千步的讨论把一行 transcript 撑成几兆,那个理由还在。
 // 腾不出普通过程时(整份都是关键事件)挤掉最早的那条关键事件,而不是让数组超出上限:上限如果
 // 能被「关键」这个标记突破,它的大小就由调用方有多自觉决定,而那正是这一轮审查反复拆掉的形状。
-import type { TurnTraceEvent } from "@ash/shared";
+import type { TurnTraceEvent } from "@navi/shared";
 
 /** 一条 transcript 行里最多留多少条过程事件。 */
 export const TRACE_CAP = 200;

@@ -2,7 +2,7 @@
 // 跑:npm -w server run test:stall-restart
 //
 // 起因(第 3 轮审查 F3,已实测):判决原先只活在进程内存里,而 **detached 的 agent 活得过 server
-// 重启**(executors/detached.ts,ash 的既有能力)。于是有这样一条路 —— 看门狗判了熔断、终止请求
+// 重启**(executors/detached.ts,navi 的既有能力)。于是有这样一条路 —— 看门狗判了熔断、终止请求
 // 还没兑现(codex 的 kill 先发 interrupt、另设 2 秒回收)时 server 退出;重启接管那个仍然存活的
 // 进程,新进程的 Map 空着;上游恰好恢复并正常答完,这一轮就按 `completed` 结算、任务落 `done`。
 // 用户那边早已看到「已自动终止本回合并按失败结算」,而最后显示的是「已完成」。
@@ -21,7 +21,7 @@
 //      没有。所以这一段钉的是「只说不杀、照样落 failed」。
 //   ④ **全新起跑的回合 + 日志读不出来**:这一档必须**什么都不发生**。「核实不了」只对上一个
 //      进程留下来的回合成立 —— 全新起跑的身份此刻刚生成,盘上不可能有它的判决,读不出来推不出
-//      任何结论。少了这一条,一次日志权限故障就会把这台 ash 上每一轮都打成失败。
+//      任何结论。少了这一条,一次日志权限故障就会把这台 navi 上每一轮都打成失败。
 //      「是不是留下来的」由事实认(本进程开过那一行开始记录没有,见 session-turn-registry.ts 的
 //      `openedHere`),不由调用方申报 —— 申报的默认值落在不安全那一侧,忘了传就退回 F1。
 //   ⑤ 原进程**没活到接管**,走启动对账(第 5 轮审查 F3,已实测):持续目标原先在这条路上被
@@ -35,7 +35,7 @@
 //      熔断并把判决落了盘。恢复身份集合如果只由「现有的开放区间」决定,这一类压根没人问。
 //   ⑨ **已完成任务的一次失败续聊**(第 1 轮审查 F2,已实测):正常收尾保住 `done`(续聊只能变好
 //      不会变差),而启动对账原先另写了一行三元表达式,无条件把整个任务降成 failed —— 用户那边
-//      唯一的区别只是 ash 有没有重启。
+//      唯一的区别只是 navi 有没有重启。
 //   ⑩ **落位那一笔没写成**(第 2 轮审查 F1+F2,已实测):上面⑦⑨修的是「盘上留下半截状态」,
 //      这一条修的是**同一件事的另一半** —— 恢复链自己在算出落位之前就把两样东西消费掉了:
 //      失败义务(提前 `clearStallFailure`)和续聊前的原终态(单独一条 UPDATE 先清 `followUpFrom`)。
@@ -71,8 +71,8 @@ import { join } from "node:path";
 
 const phase = process.argv[2];
 const AT = "2026-10-31T01:00:00.000Z";
-const HOLD_TX = "ASH_STALL_RESTART_HOLD_TX";
-const UNREADABLE = "ASH_STALL_RESTART_UNREADABLE";
+const HOLD_TX = "NAVI_STALL_RESTART_HOLD_TX";
+const UNREADABLE = "NAVI_STALL_RESTART_UNREADABLE";
 
 if (!phase) {
   // ── 调度:两个场景各一个临时库,每个场景两个独立进程依次跑 ──────────────────────
@@ -102,13 +102,13 @@ if (!phase) {
     { what: "团队任务回待命时的回合结局", hold: false, unreadable: false, mode: "team", expectTask: "idle", phases: ["before-restart", "after-restart"] },
   ] as const;
   for (const scene of scenes) {
-    const stage = mkdtempSync(join(tmpdir(), "ash-stall-restart-"));
+    const stage = mkdtempSync(join(tmpdir(), "navi-stall-restart-"));
     const lines: string[] = [];
     for (const next of scene.phases) {
       const child = spawnSync(process.execPath, ["--import", "tsx", import.meta.filename, next], {
         encoding: "utf8",
         env: {
-          ...process.env, ASH_STALL_RESTART_STAGE: stage, ASH_STALL_RESTART_MODE: scene.mode,
+          ...process.env, NAVI_STALL_RESTART_STAGE: stage, NAVI_STALL_RESTART_MODE: scene.mode,
           ...(scene.hold ? { [HOLD_TX]: "1" } : {}),
           ...(scene.unreadable ? { [UNREADABLE]: "1" } : {}),
         },
@@ -129,8 +129,8 @@ if (!phase) {
       const settledFresh = say("settled");
       assert.ok(settledFresh, where("这一段没走到结算"));
       assert.equal(settledFresh.kindAtConsume, null,
-        where("全新起跑的回合被登记成「结局核实不了」—— 一次日志故障会把这台 ash 上每一轮都打成失败"));
-      // **这一轮自己的结局**才是判据:`completed`。任务那一行照 ash 的完成协议落 `failed`
+        where("全新起跑的回合被登记成「结局核实不了」—— 一次日志故障会把这台 navi 上每一轮都打成失败"));
+      // **这一轮自己的结局**才是判据:`completed`。任务那一行照 navi 的完成协议落 `failed`
       // (这个合成回合没调过 complete_task,exit 0 ≠ done),跟日志故障无关 —— 所以这里不拿它
       // 当断言,免得测出一个假的「没被冤枉」。
       assert.equal(settledFresh.turn, "completed",
@@ -243,17 +243,17 @@ if (!phase) {
   console.log("test:stall-restart ok：判决落盘;库排队、日志读不出来、原进程没活到接管三条路都不会把一轮失败说成成功,全新起跑也不会被冤枉");
 } else {
   // ── 两段共用的一段:合成上游 + 真 consumeSingleRun ───────────────────────────
-  const stage = process.env.ASH_STALL_RESTART_STAGE!;
-  process.env.ASH_DB = join(stage, "restart.db");
-  process.env.HARNESS_DB = process.env.ASH_DB;
-  process.env.ASH_RUNS_DIR = join(stage, "runs");
-  process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-  process.env.ASH_STALL_WARN_ERRORS = "3";
-  process.env.ASH_STALL_WARN_MS = "80";
-  process.env.ASH_STALL_TRIP_MS = "160";
-  process.env.ASH_STALL_POLL_MS = "20";
+  const stage = process.env.NAVI_STALL_RESTART_STAGE!;
+  process.env.NAVI_DB = join(stage, "restart.db");
+  process.env.HARNESS_DB = process.env.NAVI_DB;
+  process.env.NAVI_RUNS_DIR = join(stage, "runs");
+  process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
+  process.env.NAVI_STALL_WARN_ERRORS = "3";
+  process.env.NAVI_STALL_WARN_MS = "80";
+  process.env.NAVI_STALL_TRIP_MS = "160";
+  process.env.NAVI_STALL_POLL_MS = "20";
 
-  const mode = process.env.ASH_STALL_RESTART_MODE ?? "consume";
+  const mode = process.env.NAVI_STALL_RESTART_MODE ?? "consume";
   const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
   const { sessions, tasks } = await import("../src/db/schema.js");
   const { openTurn } = await import("../src/session-turns.js");
@@ -262,7 +262,7 @@ if (!phase) {
   // 场景③:第二段开始前把日志改成不可读 —— 必须在 turn-stall-persist 装载之前动手(装载就在
   // 那个模块的模块初始化里),所以这几句排在下面那些 import 前面。
   if (process.env[UNREADABLE] && (phase === "after-restart" || mode === "fresh-unreadable")) {
-    const journal = stallJournalFileForDb(process.env.ASH_DB);
+    const journal = stallJournalFileForDb(process.env.NAVI_DB);
     writeFileSync(journal, "", { flag: "a" }); // 全新那一档盘上压根还没有这个文件
     chmodSync(journal, 0o000);
   }

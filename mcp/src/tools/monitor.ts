@@ -20,9 +20,9 @@ import {
   MONITOR_MAX_TIMEOUT_MS,
   MONITOR_MIN_TIMEOUT_MS,
   MONITOR_WAKE_TARGETS,
-} from "@ash/shared/monitor";
-import { END_CONDITION_SYNTAX } from "@ash/shared/monitor-end-condition";
-import { REGRESSION_POLICY } from "@ash/shared/free-workflow";
+} from "@navi/shared/monitor";
+import { END_CONDITION_SYNTAX } from "@navi/shared/monitor-end-condition";
+import { REGRESSION_POLICY } from "@navi/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 
 const minutes = (ms: number) => `${Math.round(ms / 60_000)} 分钟`;

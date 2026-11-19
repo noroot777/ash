@@ -1,7 +1,7 @@
 // **重启接回,以及「这一刻认不回来」那一行的恢复接管** —— 从 monitors.ts 拆出来的那一摊。
 //
 // 拆出来有两个理由:行数(单文件 700 行的约定,monitors.ts 已经顶到 658 行),以及它自己就是
-// 一件完整的事 —— **一条哨兵在 ash 不在的那段时间里发生了什么,现在归谁管**。运行时那一摊
+// 一件完整的事 —— **一条哨兵在 navi 不在的那段时间里发生了什么,现在归谁管**。运行时那一摊
 // (tail、缓冲、定时器、推事件)仍然只有 monitors.ts 一份,这里只调它的 `attach`/`finish`。
 //
 // 这个文件里的不变量:
@@ -32,7 +32,7 @@ import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./mon
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
 import { monitorWakeGate } from "./monitor-session.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
-import { attach, ensureSupervised, finish, finishOffline, isAshKind, serialize, type Row }
+import { attach, ensureSupervised, finish, finishOffline, isNaviKind, serialize, type Row }
   from "./monitors.js";
 import { IS_WINDOWS } from "./platform.js";
 import { clearFinishing } from "./monitor-end-owed.js";
@@ -82,10 +82,10 @@ const owingNote = (verdict: ReclaimVerdict): string =>
 export async function reattachMonitors(): Promise<
   { attached: number; lost: number; pending: number; failed: number; handoff: HandoffSweep }
 > {
-  // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
+  // 只认 navi 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
   // `loseClaudeMonitorsOfSession` 在 agent 进程真的结束时统一收口。
-  const rows = await db.select().from(monitors).where(and(eq(monitors.status, "running"), isAshKind));
+  const rows = await db.select().from(monitors).where(and(eq(monitors.status, "running"), isNaviKind));
   let attached = 0;
   let lost = 0;
   let pending = 0;
@@ -106,7 +106,7 @@ export async function reattachMonitors(): Promise<
       // 一行日志就继续启动(index.ts),于是这一次启动期间它们完全没人管(审查实测:两条
       // 哨兵都 `supervised=false`、期限早就过了、结果已经写进日志却一条通知都没有)。
       // 现在这一条的失败只影响这一条:监督上面已经立好,接管那一趟交给有界的恢复重试。
-      console.error(`[ash] 接回这一行时出错,交给恢复重试 monitor=${stored.id}:`, e);
+      console.error(`[navi] 接回这一行时出错,交给恢复重试 monitor=${stored.id}:`, e);
       scheduleRecoveryRetry(stored.id);
       failed += 1;
     }
@@ -149,9 +149,9 @@ async function recoverOne(stored: Row): Promise<"attached" | "lost" | "pending" 
     // 查询,**第二次**失败时被写成确证的 `not-ours`(第 7 轮审查 F1,现在判定收在
     // `processIdentity` 一次快照里)。
     // **pid 是空的**:那是创建协议留下的意图行 —— 身份先落库、进程后起、pid 回填(见
-    // monitor-create.ts 文件头)。重启后还能看见它,说明 ash 恰好死在「落了身份」和「回填
+    // monitor-create.ts 文件头)。重启后还能看见它,说明 navi 恰好死在「落了身份」和「回填
     // pid」之间。这一档**既不能按「线索追空」一笔带过,也不能冒充已经收干净**:
-    //  · POSIX:命令从未开工 —— 它停在放行闸前等 ash 写一个字节,ash 一死写端就关了,壳
+    //  · POSIX:命令从未开工 —— 它停在放行闸前等 navi 写一个字节,navi 一死写端就关了,壳
     //    读到 EOF 在 exec 之前自己退掉(exit 97)。所以这条行可以干净地判掉。
     //  · win32:那一侧没有闸(`cmd.exe` 里没有可靠的「从第 3 号句柄读一行」写法),命令可能
     //    已经在跑,而我们手里没有任何 pid 可以去认它 —— 照实说成「认不回来」。**未在
@@ -220,7 +220,7 @@ async function takeOver(row: Row): Promise<"attached" | "lost" | "ended"> {
       await finish(row.id, "expired", "盯满了约定的时长（server 重启期间到期）", null);
       return "ended";
     }
-    // 收尾做到一半 ash 没了、进程却还是那一个:它回到在盯,不再欠结束(monitor-end-owed.ts ②)。
+    // 收尾做到一半 navi 没了、进程却还是那一个:它回到在盯,不再欠结束(monitor-end-owed.ts ②)。
     if (state === "ours-alive" && row.finishingSince) await clearFinishing(row.id);
     attach(row);
     return "attached";
@@ -238,7 +238,7 @@ async function takeOver(row: Row): Promise<"attached" | "lost" | "ended"> {
   // 的推进交给紧随其后的 `reclaimUnconfirmedStops` / `sweepMonitorReclaimDebts` 和梯子。
   const verdict = await settleReclaim(outcome, 0);
   if (verdict === "unaccounted") {
-    console.error(`[ash] 接回时既没确认退出、回收责任也没落库 monitor=${row.id} pid=${row.pid}`);
+    console.error(`[navi] 接回时既没确认退出、回收责任也没落库 monitor=${row.id} pid=${row.pid}`);
   }
   await finishOffline(row, "lost", offlineReason(state, owingNote(verdict)));
   return "lost";
@@ -308,7 +308,7 @@ export function scheduleRecoveryRetry(monitorId: string, step = 0): void {
   const timer = setTimeout(() => {
     ladders.delete(monitorId);
     void retryRecovery(monitorId, step).catch((e) => {
-      console.error(`[ash] 待认领哨兵重问身份时自己出错 monitor=${monitorId}:`, e);
+      console.error(`[navi] 待认领哨兵重问身份时自己出错 monitor=${monitorId}:`, e);
       // **这一跳抛错不许把日志和期限一起带走**(第 23 轮审查 F1)。这一跳里可能已经走到离线
       // 收尾、把运行时撤了,随后那一步才抛 —— 而下面这个档位有界,最后一档抛完就不再有下一跳:
       // 两件事凑在一起,行留在 running 而日志、期限、探活和梯子同时为空。所以先把监督接回去
@@ -357,7 +357,7 @@ async function retryRecovery(monitorId: string, step: number): Promise<void> {
     // 所以**下结论之前再读一遍**,三个出口共用这一次重读。
     const after = await readRow(monitorId);
     if (!after || after.status !== "running") {
-      console.error(`[ash] 待认领哨兵的身份问出来了,但这一刻它已经有结局了 monitor=${monitorId}`
+      console.error(`[navi] 待认领哨兵的身份问出来了,但这一刻它已经有结局了 monitor=${monitorId}`
         + `（状态 ${after?.status ?? "行已不在"}）：这一跳什么都不写`);
       return;
     }

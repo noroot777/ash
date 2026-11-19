@@ -28,7 +28,7 @@
 // 的 10M token。所以「只在开工时有意义」的规则写 null，**但必须写出来**：可选字段会让新加的
 // 规则默认不进提醒，那正是上面那份文件栽过两次的坑。
 
-import { CLASS_PROBLEM_BOUNDARY } from "@ash/shared/free-workflow";
+import { CLASS_PROBLEM_BOUNDARY } from "@navi/shared/free-workflow";
 
 export type SweepRule = {
   /** 出问题时报给人看的名字，也是回归测试里的标识。 */
@@ -148,7 +148,7 @@ export const REVIEW_SWEEP_PROTOCOL = "【一次查全（这一轮的扫描义务
  * 但「怎么修」不等于「该不该在这里修」：**边界由任务目标定，不由报告给的那个标签定**。
  * 这一句最初写成了无条件的「报告点名的根因层级属于本任务边界之内」，于是整条意见——
  * 哪怕根因和全部实例都落在与任务无关的管线里——也被判成界内。判据本体现在只有一份，
- * 在 `@ash/shared/free-workflow` 的 `CLASS_PROBLEM_BOUNDARY`（三种处置、不写具体出口；
+ * 在 `@navi/shared/free-workflow` 的 `CLASS_PROBLEM_BOUNDARY`（三种处置、不写具体出口；
  * 这段话被预设/旧验证那条线共用，那边没有 `dispute_review`）。
  */
 export const CLASS_REPAIR_NOTE =

@@ -1,4 +1,4 @@
-import type { FreeReviewDebate, FreeReviewDisputeTarget, FreeReviewRun, TaskListItem } from "@ash/shared";
+import type { FreeReviewDebate, FreeReviewDisputeTarget, FreeReviewRun, TaskListItem } from "@navi/shared";
 import type { LeftDrawerEntry } from "../components/LeftDrawer.tsx";
 import { DEBATE_SIDE_LABEL, DEBATE_VERDICT_LABEL, debateSpeaking, debateTotalSegments } from "./debateModel.ts";
 import { QuoteKey } from "./TalkOverview.tsx";

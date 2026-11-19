@@ -150,7 +150,7 @@ async function decideTurnEntry(input: TurnEntryInput): Promise<TurnIdentity | Tu
         ?? null;
     } catch (error) {
       // 出声：咽下去的话，「读不到状态」和「状态说不该起」在日志里长得一模一样。
-      console.error(`[ash] 起跑前的资格检查读失败 task=${taskId}:`, error);
+      console.error(`[navi] 起跑前的资格检查读失败 task=${taskId}:`, error);
       blocked = "读不到这个任务此刻的状态";
     }
     if (blocked) {
@@ -224,7 +224,7 @@ export async function enterLeadDelivery(input: {
       // 审查实测:只拒一次资格 SELECT,消息当场 canceled,恢复并等过冷却也不再补送)。
       // 所以照单飞那侧的同一口径:这一轮先不起、**不填拒绝理由**,调用方据此归还租约、
       // 把消息留在托盘里重投。
-      console.error(`[ash] 起跑前的资格检查读失败 task=${taskId}:`, error);
+      console.error(`[navi] 起跑前的资格检查读失败 task=${taskId}:`, error);
       blocked = "读不到这个任务此刻的状态";
     }
     if (blocked) {

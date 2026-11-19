@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AppSettings, ComposerSendKey } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import type { AppSettings, ComposerSendKey } from "@navi/shared";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
 import "../../src/styles/global.css";
 import { ComposerObjective } from "../../src/composer/ComposerObjective.tsx";
 import { ComposerSendKeyCard } from "../../src/settings/ComposerSendKeyCard.tsx";

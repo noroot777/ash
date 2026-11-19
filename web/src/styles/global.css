@@ -456,7 +456,7 @@ code,
   color: var(--ink);
 }
 
-/* 预览实例角标（`VITE_ASH_PREVIEW`，只在预览起的前端上出现）。
+/* 预览实例角标（`VITE_NAVI_PREVIEW`，只在预览起的前端上出现）。
    `pointer-events: none` 是必须的：它盖在右下角，谁也不该因为它点不到底下的按钮。 */
 .preview-badge {
   position: fixed;

@@ -1,6 +1,6 @@
 // 「落盘那一路」和「直播那一路」都要用的几件小东西。放这儿只是为了两边共用同一份判据,
 // 别在这里堆逻辑:结构在 conversationModel(落盘 + 收口),直播增量在 conversationLiveTurns。
-import type { ServerEvent, Session } from "@ash/shared";
+import type { ServerEvent, Session } from "@navi/shared";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
 

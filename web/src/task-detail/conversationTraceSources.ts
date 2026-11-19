@@ -5,9 +5,9 @@
 // 画在这颗气泡里，却落在它那段正文的时间窗外面。光报正文段，回合删了、这几步却还留在 trace
 // 里（命令和输出原样都在），哪天不再被那段已删的正文领走，就冒成一颗只有过程的气泡。所以
 // 窗外那几步另报成 trace 时间段（服务端一次删除两种出处都收，见 server/src/conversation-redact.ts）。
-import type { Session } from "@ash/shared";
-import type { ConvSeg } from "@ash/shared/session-output";
-import { traceKeptOnDelete, traceSpanFingerprint } from "@ash/shared/session-output";
+import type { Session } from "@navi/shared";
+import type { ConvSeg } from "@navi/shared/session-output";
+import { traceKeptOnDelete, traceSpanFingerprint } from "@navi/shared/session-output";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationSource } from "./conversationModel.ts";
 

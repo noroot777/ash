@@ -20,10 +20,10 @@ import type {
   TaskStage,
   TaskStatus,
   TeamConfig,
-} from "@ash/shared";
-import { AGENT_TYPES, TEAM_DEFAULTS } from "@ash/shared";
-import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
-import { anchorAt } from "@ash/shared/workflow-policy";
+} from "@navi/shared";
+import { AGENT_TYPES, TEAM_DEFAULTS } from "@navi/shared";
+import { inheritExecutorOverrides, pickExecutor } from "@navi/shared/executors";
+import { anchorAt } from "@navi/shared/workflow-policy";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";

@@ -25,8 +25,8 @@
 // `test-free-review-dispatch-ownership.ts`,台子是同一个。两份分开是因为单文件七百行封顶。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
-// (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。PATH 上那个立刻退出的 `codex` 桩管的是
-// 另一段 —— ash MCP 预检会去问 CLI,有了桩这份用例就跟这台机器装没装 codex 无关。
+// (`NAVI_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。PATH 上那个立刻退出的 `codex` 桩管的是
+// 另一段 —— navi MCP 预检会去问 CLI,有了桩这份用例就跟这台机器装没装 codex 无关。
 //
 // 跑：npm -w server run test:free-review-dispatch-retry
 import assert from "node:assert/strict";

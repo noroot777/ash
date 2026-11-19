@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import type { FreeReviewDebate, FreeReviewRun, TaskListItem } from "@ash/shared";
+import type { FreeReviewDebate, FreeReviewRun, TaskListItem } from "@navi/shared";
 import { FileText, ListBullets } from "@phosphor-icons/react";
 import { useLeftDrawer } from "../components/LeftDrawer.tsx";
 import { DebateOverview } from "../free-workflow/DebateOverview.tsx";

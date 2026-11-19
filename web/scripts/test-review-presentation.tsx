@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Session } from "@ash/shared";
+import type { Session } from "@navi/shared";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import {
   conversationFeedRows,

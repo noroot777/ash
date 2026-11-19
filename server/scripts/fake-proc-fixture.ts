@@ -58,7 +58,7 @@ export function install(pid: number, answers: FakeAnswers): void {
     if (path === `/proc/${pid}/environ`) {
       counters.env += 1;
       const items = ["PATH=/usr/bin", "HOME=/root"];
-      for (const mark of answers.tokensOnEnvRead(counters.env)) items.push(`ASH_MONITOR_UNIT=${mark}`);
+      for (const mark of answers.tokensOnEnvRead(counters.env)) items.push(`NAVI_MONITOR_UNIT=${mark}`);
       return `${items.join("\0")}\0`;
     }
     if (path === `/proc/${pid}/stat`) {

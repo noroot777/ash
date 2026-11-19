@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 
 /**
  * 会话里靠右那一句小灰字「开了新任务〈标题〉，交给 codex」：你在回复框里派出去的每一条各一句。

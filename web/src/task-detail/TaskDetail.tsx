@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Group, Task, TaskListItem } from "@ash/shared";
-import { isUserFollowUp } from "@ash/shared";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import type { Group, Task, TaskListItem } from "@navi/shared";
+import { isUserFollowUp } from "@navi/shared";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { RuntimeAutoOpen } from "../task-runtime/RuntimeAutoOpen.tsx";
 import { PlanModeChip } from "./PlanModeChip.tsx";

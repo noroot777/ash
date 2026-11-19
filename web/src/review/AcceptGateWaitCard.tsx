@@ -13,7 +13,7 @@
 import { useId, useState } from "react";
 import { ArrowClockwise, CaretDown, FileText, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
-import { acceptGateCancelMessage } from "@ash/shared/accept-gate";
+import { acceptGateCancelMessage } from "@navi/shared/accept-gate";
 import { useAcceptGate } from "./useAcceptGate.ts";
 import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 

@@ -15,3 +15,15 @@
 
 /** 转义并**连引号一起**返回,所以模板里写 `${psq(x)}` 而不是 `'${psq(x)}'`。 */
 export const psq = (s) => `'${String(s ?? "").replace(/'/g, "''")}'`;
+
+/**
+ * 读对端一个文本文件的全文,按 UTF-8 解码,读不到给空串。`path` 是 PS 表达式(`$__o` 或 `psq(...)`)。
+ *
+ * 不带 `-Encoding` 的 `Get-Content` 在 Windows PowerShell 5.1 上按活动代码页(中文机器 936)解码,
+ * 而这里读的东西 —— npm/node/tsx 重定向出来的输出、锁文件 —— 落盘的都是 UTF-8 字节,
+ * 中文就回成「鉁?璺緞」。7 默认是 UTF-8,所以只在 5.1 上坏,开发机上看不出来。
+ * 显式写 UTF8 两代行为一致(有 BOM 也会剥掉)。仍用 `Get-Content` 而不是 `[IO.File]::ReadAllText`:
+ * 后者按 FileShare.Read 打开,而超时被杀之后可能还有脱链的孙进程握着输出文件的写句柄,
+ * 那样它会直接抛共享冲突、把已经写下的输出整份丢掉;`Get-Content` 允许别人同时在写。
+ */
+export const psReadText = (path) => `[string](Get-Content -LiteralPath ${path} -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)`;

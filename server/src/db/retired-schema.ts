@@ -12,9 +12,9 @@ export async function dropRetiredTables(
       });
       if (!found.rows.length) continue;
       await client.execute(`DROP TABLE IF EXISTS ${table}`);
-      console.log(`[ash] 清理退役表 ${table}(${why})`);
+      console.log(`[navi] 清理退役表 ${table}(${why})`);
     } catch (e) {
-      console.warn(`[ash] 退役表 ${table} 没能清掉,忽略:`, e);
+      console.warn(`[navi] 退役表 ${table} 没能清掉,忽略:`, e);
     }
   }
 }
@@ -35,9 +35,9 @@ export async function dropRetiredTriggers(
       });
       if (!found.rows.length) continue;
       await client.execute(`DROP TRIGGER IF EXISTS ${trigger}`);
-      console.log(`[ash] 清理退役触发器 ${trigger}(${why})`);
+      console.log(`[navi] 清理退役触发器 ${trigger}(${why})`);
     } catch (e) {
-      console.warn(`[ash] 退役触发器 ${trigger} 没能清掉,忽略:`, e);
+      console.warn(`[navi] 退役触发器 ${trigger} 没能清掉,忽略:`, e);
     }
   }
 }

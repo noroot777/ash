@@ -6,7 +6,7 @@
 //
 // ① 删除**一进门就关闸**（在第一条 DELETE 之前）；
 // ② 落库前都问一句，关着就不写 —— 内置 Monitor 的实时投影、claude 后台任务的留痕、
-//    ash 哨兵的创建（monitor-create.ts / monitor-session.ts）；
+//    navi 哨兵的创建（monitor-create.ts / monitor-session.ts）；
 // ③ **闸的开和关都绑在删除的结果上**：删完了（任务行真的没了）才 `confirm`，删到一半失败、
 //    任务还在，就必须 `release` —— 否则任务还在列表里，它却再也写不进任何监听（第 5 轮审查
 //    实测）。闸只能是**删除中**的临时状态或**已删除**的终态，不存在「关着但没人知道结果」
@@ -92,7 +92,7 @@ export async function settleTaskRevocation(taskId: string): Promise<void> {
   } catch (e) {
     // 连「它还在不在」都查不出来：按**还在**处理。把一个仍存在的任务永久封死是用户看得见
     // 的损坏；反过来多开一会儿闸，最坏也只是几行孤儿（落库资格同批那一道仍然挡着）。
-    console.warn(`[ash] task=${taskId} 删除后核对任务是否还在失败，按「还在」放开闸:`, e);
+    console.warn(`[navi] task=${taskId} 删除后核对任务是否还在失败，按「还在」放开闸:`, e);
     alive = true;
   }
   if (alive) releaseTaskRevocation(taskId);

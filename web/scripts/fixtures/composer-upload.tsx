@@ -1,14 +1,14 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task, TaskListItem } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task, TaskListItem } from "@navi/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
 
 const initialProject: ProjectView = {
   id: "p1",
-  name: "ash",
-  repoPath: "/tmp/ash",
+  name: "navi",
+  repoPath: "/tmp/navi",
   workflowId: null,
   useWorktreeDefault: false,
   createdAt: "2026-08-28T00:00:00.000Z",
@@ -35,7 +35,7 @@ const listTasks: TaskListItem[] = [
   listTask("t-team", "常驻团队任务", { mode: "team", status: "running" }),
 ];
 
-function Ash() {
+function Navi() {
   const [created, setCreated] = useState<string[]>([]);
   const [notices, setNotices] = useState<string[]>([]);
   // 入队响应带回的全体成员快照(含前驱)是否整批上交(第 5 轮审查)。
@@ -84,7 +84,7 @@ function Ash() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <DraftProvider>
-      <Ash />
+      <Navi />
     </DraftProvider>
   </StrictMode>,
 );

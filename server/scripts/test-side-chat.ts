@@ -6,12 +6,12 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
-import type { ChatMember, ChatSnapshot, ChatTraceEvent } from "@ash/shared/chat";
-import { CHAT_TRACE_LIMITS } from "@ash/shared/chat";
+import type { ChatMember, ChatSnapshot, ChatTraceEvent } from "@navi/shared/chat";
+import { CHAT_TRACE_LIMITS } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-side-chat-test-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-side-chat-test-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, tasks, sessions, chatRooms, chatMessages, scheduledMessages, chatContextEntries, users, projectMembers } = await import("../src/db/schema.js");
 const { ChatService, roomMessages } = await import("../src/chat/service.js");

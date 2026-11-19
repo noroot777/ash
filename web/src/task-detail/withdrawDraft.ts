@@ -1,4 +1,4 @@
-import type { ScheduledMessage } from "@ash/shared";
+import type { ScheduledMessage } from "@navi/shared";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import type { UploadAttachment } from "./Attachments.tsx";
 import type { MentionTarget } from "./mentionPicker.ts";

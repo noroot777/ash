@@ -51,9 +51,9 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { TaskStage } from "@ash/shared";
-import { STAGE_LABELS } from "@ash/shared";
-import { firstAnchor } from "@ash/shared/workflow-policy";
+import type { TaskStage } from "@navi/shared";
+import { STAGE_LABELS } from "@navi/shared";
+import { firstAnchor } from "@navi/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
@@ -173,7 +173,7 @@ export async function recordTurnBaseline(
     return true;
   } catch (error) {
     // 拍照失败不该拖垮起跑：没有基线 = 这一轮不做任何判断，退回改动前的行为。
-    console.warn(`[ash] failed to record turn baseline for ${taskId}:`, error);
+    console.warn(`[navi] failed to record turn baseline for ${taskId}:`, error);
     return false;
   }
 }
@@ -381,6 +381,6 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     if (!staged && base.ledger) await appendTaskTimeline(taskId, receiptLine(RESTORE_NOTE));
     if (base.fresh) await discardEmptyShellWithin(taskId);
   } catch (error) {
-    console.warn(`[ash] failed to reconcile turn baseline for ${taskId}:`, error);
+    console.warn(`[navi] failed to reconcile turn baseline for ${taskId}:`, error);
   }
 }

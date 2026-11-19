@@ -1,7 +1,7 @@
 import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
+import type { AgentEvent, NativeAgentActivity } from "@navi/shared";
 import { parseClaudeStream } from "../src/executors/claude.js";
 import { CodexChildActivity, childActivity } from "../src/executors/native-agent-activity.js";
 import { NativeActivityBuffer } from "../src/executors/native-activity-buffer.js";

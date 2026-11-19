@@ -1,23 +1,23 @@
-// 预览要跑的那条命令缺 node 依赖时，**由 ash 在用户项目之外备一份**，再挂进任务工作区。
+// 预览要跑的那条命令缺 node 依赖时，**由 navi 在用户项目之外备一份**，再挂进任务工作区。
 //
 // 这是整件事的落点，所以把来龙去脉写完整：
 //
 // 目标项目（a4sms-allinone，Java 多模块 + 一个 vue 前端）点预览起不来，因为任务 worktree
-// 是一份干净检出，`node_modules` 被 gitignore，`vite` 当然找不到。第一版的答复是让 ash
-// 或用户在项目里 install —— 用户明确否掉了：「这个肯定不可以啊，怎么能因为 ash 去『污染』
+// 是一份干净检出，`node_modules` 被 gitignore，`vite` 当然找不到。第一版的答复是让 navi
+// 或用户在项目里 install —— 用户明确否掉了：「这个肯定不可以啊，怎么能因为 navi 去『污染』
 // 正常的项目呢？」，并要求「从这个根基出发解决问题」。
 //
-// 后来几版都没跳出那个圈：先是让用户自己去主仓 install（只是把同一次污染从 ash 手里换到
+// 后来几版都没跳出那个圈：先是让用户自己去主仓 install（只是把同一次污染从 navi 手里换到
 // 用户手里），再是让他软链主仓那份（可主仓那份也不存在，建议指向一条断链）。**两条都还是
 // 在用户的检出里做事**。
 //
-// 所以这版把依赖装到 ash 自己的地盘：`data/deps/<包名>-<内容哈希>/`，只从项目里**读**
+// 所以这版把依赖装到 navi 自己的地盘：`data/deps/<包名>-<内容哈希>/`，只从项目里**读**
 // `package.json` 和锁文件（复制过去，install 改写的是那份拷贝，用户的锁文件一个字节不动），
 // 装完在任务工作区里挂一条 `node_modules` 软链。用户的项目全程只被读，没有被写。
 // 哈希是清单 + 锁文件 + 一起复制过去的那几份配置 + 平台/ABI（见 cacheDir），所以同一份
 // 依赖多个任务、多次点预览都只装一次，而其中任何一样一改就自动重装。
 //
-// 挂软链而不是拷贝：`node_modules` 动辄几百兆，每个任务拷一份是纯浪费；ash 也早就认得
+// 挂软链而不是拷贝：`node_modules` 动辄几百兆，每个任务拷一份是纯浪费；navi 也早就认得
 // 这条软链（工作区脏判定不会因此把它算成改动）。
 //
 // 仍然会失败的几种情况（没网、私有 registry 没凭据、package.json 声明了 workspaces 或者
@@ -26,8 +26,8 @@
 // 有没有断链（见 danglingLink）。那几条建议里「去主仓装一次」仍然要提醒 lock 文件可能被改写：node_modules 被
 // gitignore 不等于 install 不写跟踪文件。
 import { spawn } from "node:child_process";
-import { withLegacyEnvNames } from "@ash/shared/env-names";
-import { LEGACY_PREVIEW_DEPS_READY_MARK } from "@ash/shared/legacy-names";
+import { withLegacyEnvNames } from "@navi/shared/env-names";
+import { LEGACY_PREVIEW_DEPS_READY_MARK } from "@navi/shared/legacy-names";
 import { createHash } from "node:crypto";
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync,
@@ -123,22 +123,22 @@ function samePath(a: string, b: string): boolean {
 }
 
 /**
- * 这个工作区**是不是 ash 自己建出来的隔离工作区**（`<主仓>/.worktrees/<taskId>`）。
+ * 这个工作区**是不是 navi 自己建出来的隔离工作区**（`<主仓>/.worktrees/<taskId>`）。
  *
  * 这是「能不能往里挂 node_modules」的唯一判据，而且必须严到这个程度：
  *
  * 任务默认是**不开 worktree** 的（`tasks.use_worktree` 默认 false），那种任务的工作区
  * 就是项目仓库本身 —— 也就是用户自己的检出。往那儿挂一条软链，哪怕最后撤得掉，也是
- * ash 在用户的项目里写东西：他自己敲 `git status` 就会看见（前端的 `.gitignore` 写的是
+ * navi 在用户的项目里写东西：他自己敲 `git status` 就会看见（前端的 `.gitignore` 写的是
  * 带尾斜杠的 `node_modules/`，只匹配目录，匹配不上软链），而 `life: "task"` 的预览可以
- * 挂上好几天。用户当初的原话是「怎么能因为 ash 去『污染』正常的项目呢？」，「最终会撤」
+ * 挂上好几天。用户当初的原话是「怎么能因为 navi 去『污染』正常的项目呢？」，「最终会撤」
  * 不等于「没有写」。
  *
  * 光看「`.git` 是不是文件」不够：用户自己 `git worktree add` 出来的检出也是 worktree，
- * 那同样是他的目录。所以还要求它就住在主仓的 `.worktrees/` 下面 —— 那是 ash 建的，
- * 也只有 ash 会往里放东西。
+ * 那同样是他的目录。所以还要求它就住在主仓的 `.worktrees/` 下面 —— 那是 navi 建的，
+ * 也只有 navi 会往里放东西。
  */
-export function ashWorktree(workspace: string): boolean {
+export function naviWorktree(workspace: string): boolean {
   const repo = mainRepoOf(workspace);
   return repo !== null && samePath(dirname(workspace), join(repo, ".worktrees"));
 }
@@ -218,7 +218,7 @@ export function nodeDepsAdvice(workspace: string, command = "", want: string | n
   });
 }
 
-/** ash 替某个包目录备依赖的结果。失败也要留下**能读**的理由，那是下一步建议的依据。 */
+/** navi 替某个包目录备依赖的结果。失败也要留下**能读**的理由，那是下一步建议的依据。 */
 export interface NodeDepsPrepared {
   rel: string;
   ok: boolean;
@@ -227,21 +227,21 @@ export interface NodeDepsPrepared {
   /** 这次**我们自己挂上去**的那条软链；预览收掉时要按原样撤掉（见 removePreparedLinks）。 */
   link: string | null;
   /**
-   * 「压根没去备」的那一种，以及为什么。目前只有一个值：`"workspace"` = 工作区不是 ash
-   * 自己的隔离 worktree，所以一条软链都不挂（见 ashWorktree）。
+   * 「压根没去备」的那一种，以及为什么。目前只有一个值：`"workspace"` = 工作区不是 navi
+   * 自己的隔离 worktree，所以一条软链都不挂（见 naviWorktree）。
    *
-   * 它跟「试了没成」要分开：给用户的下一步开头那句话完全不同 —— 一个是「ash 备依赖这次
-   * 没成」，另一个是「ash 根本不会往你的项目里放东西」。
+   * 它跟「试了没成」要分开：给用户的下一步开头那句话完全不同 —— 一个是「navi 备依赖这次
+   * 没成」，另一个是「navi 根本不会往你的项目里放东西」。
    */
   blocked?: "workspace";
 }
 
 /**
- * 撤掉 ash 自己挂上去的那几条软链。
+ * 撤掉 navi 自己挂上去的那几条软链。
  *
  * 为什么要撤：任务 worktree 是用户的检出，`git status` 会把这条软链列成未跟踪 ——
  * 前端项目的 `.gitignore` 几乎都写成带尾斜杠的 `node_modules/`，那条**只匹配目录，匹配不上
- * 软链**（git 把软链当文件）。ash 自己的脏判定认得这种条目（git.ts 的 workspaceDirty 专门
+ * 软链**（git 把软链当文件）。navi 自己的脏判定认得这种条目（git.ts 的 workspaceDirty 专门
  * 滤掉了），但用户自己敲 `git status` 是会看见的，而这套东西的前提就是「不在人家项目里留
  * 东西」。所以预览一收，我们挂的就撤干净，只在预览活着的这段时间存在。
  *
@@ -258,7 +258,7 @@ export function removePreparedLinks(paths: readonly string[]): void {
 
 /** 把一段话写进预览日志（用户在弹窗里实时看得见这几行）。 */
 function note(logPath: string, line: string): void {
-  try { appendFileSync(logPath, `[ash] ${line}\n`); } catch { /* 日志写不动不该拖垮启动 */ }
+  try { appendFileSync(logPath, `[navi] ${line}\n`); } catch { /* 日志写不动不该拖垮启动 */ }
 }
 
 /**
@@ -301,8 +301,8 @@ function readIfPresent(path: string): string | null {
  *   · **一起复制过去的那几份配置**（`.npmrc` / `.yarnrc*` …）。registry、私服凭据、
  *     `omit=dev`、hoist 规则全写在里面。漏掉它们的后果是实打实的：`.npmrc` 里写着
  *     `omit=dev` 时装出来的树没有 devDependency（vite 就在那儿），用户发现后把配置改对、
- *     再点预览 —— 键没变，命中的还是那棵缺东西的旧树，而且 ash 还告诉他「复用之前备好的
- *     依赖」。他要么等三十天，要么自己去翻 ash 的私有缓存目录。
+ *     再点预览 —— 键没变，命中的还是那棵缺东西的旧树，而且 navi 还告诉他「复用之前备好的
+ *     依赖」。他要么等三十天，要么自己去翻 navi 的私有缓存目录。
  *   · **平台、架构、Node 大版本** —— 依赖树里有原生模块（esbuild / sharp / better-sqlite3
  *     都是），换了平台或 ABI 就装不同的二进制。同一个 data 目录被换台机器接手（备份还原、
  *     换 Node 大版本）时，复用一份 ABI 不对的树只会得到一句看不懂的加载错误。
@@ -440,7 +440,7 @@ function closeLater(fd: number): void {
 }
 
 /**
- * 起预览**之前**：这条命令要的 node 依赖不齐就由 ash 自己备一份，挂进任务工作区。
+ * 起预览**之前**：这条命令要的 node 依赖不齐就由 navi 自己备一份，挂进任务工作区。
  *
  * 只管这次命令点名的那个包目录（没点名就只管工作区根）—— 为了看一眼前端去装一个无关的
  * 子项目，等于把「点一下预览」变成一次十分钟的仪式。
@@ -449,10 +449,10 @@ function closeLater(fd: number): void {
  *   ① 主仓里已经有一份**能用的**，而且清单、锁文件和安装配置跟工作区里这份完全一致 →
  *      直接软链。不用联网、瞬间完成，也不写主仓（只读它）。有一样对不上就不借：这个任务
  *      很可能刚加了依赖或者刚升过锁，借一份旧树轻则报错、重则拿错版本跑给用户看。
- *   ② ash 自己在 `data/deps` 里装过同样内容的一份 → 直接软链。
+ *   ② navi 自己在 `data/deps` 里装过同样内容的一份 → 直接软链。
  *   ③ 都没有 → 复制 package.json + 锁文件到 `data/deps` 装一次，再软链。
  *
- * 前提是工作区得是 ash 自己的隔离 worktree —— 不是的话一条也不挂，见 ashWorktree。
+ * 前提是工作区得是 navi 自己的隔离 worktree —— 不是的话一条也不挂，见 naviWorktree。
  *
  * 任何一步失败都不抛：如实记一笔，让预览命令照常去跑（它会以 `vite: not found` 失败），
  * 由 preview-log.ts 拿着这些理由给下一步建议。**装不上不是不能预览的理由**——用户可能
@@ -468,11 +468,11 @@ export async function prepareNodeDeps(
   const all = nodeDepsAdvice(workspace, command);
   const targets = all.filter((one) => one.mentioned);
   if (!targets.length) targets.push(...all.filter((one) => one.rel === "."));
-  // 不是 ash 自己的隔离工作区就**一条软链都不挂**（判据和理由见 ashWorktree）。这条在
+  // 不是 navi 自己的隔离工作区就**一条软链都不挂**（判据和理由见 naviWorktree）。这条在
   // 最前面：依赖装在项目外只解决了「依赖本体」，入口那条软链照样是写进用户的检出。
   // 如实记一笔，让 preview-log.ts 拿着它给人工的下一步（自己装一次，或者给这个任务
   // 打开 worktree），预览命令照常去跑。
-  if (targets.length && !ashWorktree(workspace)) {
+  if (targets.length && !naviWorktree(workspace)) {
     return targets.map((one) => {
       const detail = "这个任务直接跑在项目检出里（没有开 worktree），Navi 不往用户的项目里挂东西，"
         + "所以没有代备依赖：给这个任务打开 worktree，或者自己在项目里装一次";
@@ -528,8 +528,8 @@ async function prepareOne(
     return fail("package.json 声明了 workspaces，隔离安装装不出正确的依赖树，Navi 没有代装");
   }
   // 同一类毛病的另一半，而且更阴：`"shared": "file:../shared"` 这种**相对**路径依赖。
-  // 隔离目录不在项目里，`../shared` 于是指到 ash 缓存目录的隔壁 —— npm 照样退出码 0，
-  // 只是给你留一条指向虚空的软链。等到应用真去 import 那个本地包才炸，而那时 ash 已经
+  // 隔离目录不在项目里，`../shared` 于是指到 navi 缓存目录的隔壁 —— npm 照样退出码 0，
+  // 只是给你留一条指向虚空的软链。等到应用真去 import 那个本地包才炸，而那时 navi 已经
   // 报过「依赖装好了」。宁可现在说清楚，也不要给一句会被后面拆穿的成功。
   const relativeDep = relativeFileDep(manifest);
   if (relativeDep) {
@@ -617,7 +617,7 @@ async function build(
  * 同一个进程里对同一个缓存目录只跑一趟。
  *
  * rename 那一层已经保证了正确性（谁先装完算谁的），这一层只是别做无用功：两个任务同时
- * 点预览时不必把同一份依赖装两遍。跨进程（两个 ash 实例）仍然靠 rename 收口。
+ * 点预览时不必把同一份依赖装两遍。跨进程（两个 navi 实例）仍然靠 rename 收口。
  */
 const running = new Map<string, Promise<string | null>>();
 

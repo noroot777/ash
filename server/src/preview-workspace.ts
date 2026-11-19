@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { MAX_PREVIEW_SCRIPT_LENGTH, parsePreviewConfig, type WorkspacePreviewInput, type WorkspacePreviewLaunch } from "@ash/shared/preview";
+import { MAX_PREVIEW_SCRIPT_LENGTH, parsePreviewConfig, type WorkspacePreviewInput, type WorkspacePreviewLaunch } from "@navi/shared/preview";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { taskFileRoot } from "./file-browser.js";

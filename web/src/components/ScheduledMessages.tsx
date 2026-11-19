@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ScheduledMessage } from "@ash/shared";
+import type { ScheduledMessage } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { bySendTime } from "./scheduledMessagePresentation.ts";

@@ -1,8 +1,8 @@
 import { forwardRef, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Gauge } from "@phosphor-icons/react";
-import type { ContextUsage, Session } from "@ash/shared";
-import { contextCompactTrigger, contextRatio, effectiveContextWindow, formatTokens, formatTokensExact, hasContext } from "@ash/shared/usage";
+import type { ContextUsage, Session } from "@navi/shared";
+import { contextCompactTrigger, contextRatio, effectiveContextWindow, formatTokens, formatTokensExact, hasContext } from "@navi/shared/usage";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 import { ContextCompactQuickSettings } from "./ContextCompactQuickSettings.tsx";

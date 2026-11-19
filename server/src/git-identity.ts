@@ -5,9 +5,9 @@ import { ScmOperationError } from "./scm-paths.js";
 // 项目的 git **身份**：提交署名（user.name / user.email）和走 SSH 时用哪把私钥
 // （core.sshCommand）。
 //
-// 贯穿这个文件的一条决定：**这三样存在仓库自己的 `.git/config` 里，ash 不另存一份。**
+// 贯穿这个文件的一条决定：**这三样存在仓库自己的 `.git/config` 里，navi 不另存一份。**
 // 理由不是省事，是「只能有一份真相」——
-//   · agent 在 worktree 里跑 `git commit` 用的是仓库 config，ash 存在自己库里的值它读不到；
+//   · agent 在 worktree 里跑 `git commit` 用的是仓库 config，navi 存在自己库里的值它读不到；
 //   · 用户在终端里 `git config user.email` 看到的必须和界面上写的是同一个值；
 //   · worktree 共享主仓的 `.git/config`，所以在项目上配一次，所有任务工作区都跟着生效。
 // 反过来说，这里的写操作是**真的在改用户的仓库**，所以只认白名单里这三个键，值也由这边
@@ -38,7 +38,7 @@ export interface ProjectGitIdentity {
   isRepo: boolean;
   userName: GitConfigValue;
   userEmail: GitConfigValue;
-  /** 私钥路径。仓库里的 core.sshCommand 不是 ash 拼的那种形状时为 null，见 `sshKeyPath`。 */
+  /** 私钥路径。仓库里的 core.sshCommand 不是 navi 拼的那种形状时为 null，见 `sshKeyPath`。 */
   sshKeyPath: string | null;
   /** core.sshCommand 的原文；认不出形状时前端照原样只读展示，不假装能编辑它。 */
   sshCommand: GitConfigValue;
@@ -106,7 +106,7 @@ export async function readRemotes(root: string): Promise<GitRemoteInfo[]> {
 }
 
 /**
- * ash 拼出来的 sshCommand 长这样，反过来也只认这一种形状。
+ * navi 拼出来的 sshCommand 长这样，反过来也只认这一种形状。
  * `IdentitiesOnly=yes` 不是可选项：不加它，ssh 会先把 agent 里已加载的所有身份挨个试一遍，
  * 「配了这把 key 却仍然用着另一个账号推上去」就是这么来的。
  *
@@ -118,7 +118,7 @@ export function sshCommandFor(keyPath: string): string {
   return `ssh -i "${checkSshKeyPath(keyPath)}" -o IdentitiesOnly=yes`;
 }
 
-/** 从 core.sshCommand 里认出私钥路径；不是 ash 拼的那种形状就返回 null（原样保留，不动它）。 */
+/** 从 core.sshCommand 里认出私钥路径；不是 navi 拼的那种形状就返回 null（原样保留，不动它）。 */
 export function sshKeyPath(command: string | null): string | null {
   if (!command) return null;
   const match = /^ssh -i "([^"]+)" -o IdentitiesOnly=yes$/.exec(command.trim());

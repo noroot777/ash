@@ -2,15 +2,15 @@
 // 「优化」掉的三条：脏工作区不动手且绝不 stash、分支被别的 worktree 占着要拦在前面、
 // 拉取失败不许把主仓留在 merge/rebase 中途。
 //
-// 每个用例自带临时仓库 + 一个本地 bare 当远端,不联网、不碰 ash 自己的仓库。
+// 每个用例自带临时仓库 + 一个本地 bare 当远端,不联网、不碰 navi 自己的仓库。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-project-git-test-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-project-git-test-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -30,7 +30,7 @@ function makeRepo(name: string): { repo: string; origin: string; peer: string } 
   execFileSync("git", ["init", "--bare", "-b", "main", origin]);
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Project Git Test");
+  git(repo, "config", "user.name", "Navi Project Git Test");
   git(repo, "config", "user.email", "project-git@example.test");
   write(repo, "seed.txt", "seed\n");
   commit(repo, "seed");
@@ -39,7 +39,7 @@ function makeRepo(name: string): { repo: string; origin: string; peer: string } 
 
   const peer = join(root, `${name}-peer`);
   execFileSync("git", ["clone", origin, peer]);
-  git(peer, "config", "user.name", "Ash Project Git Peer");
+  git(peer, "config", "user.name", "Navi Project Git Peer");
   git(peer, "config", "user.email", "peer@example.test");
   return { repo, origin, peer };
 }

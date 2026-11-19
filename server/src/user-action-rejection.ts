@@ -131,8 +131,8 @@ export async function noteUserActionOutcome(
   } catch (error) {
     // 去重记账要撤回,否则这条挡回会被静默吞掉整个 DEDUPE_MS。
     lastNoted.delete(key);
-    console.warn(`[ash] 用户操作留痕写表失败 task=${taskId}（${action}/${outcome}）:`, error);
-    console.warn(`[ash] 用户操作${outcome === "rejected" ? "被挡回" : "没到位"}（${action}）task=${taskId}：${reason}`);
+    console.warn(`[navi] 用户操作留痕写表失败 task=${taskId}（${action}/${outcome}）:`, error);
+    console.warn(`[navi] 用户操作${outcome === "rejected" ? "被挡回" : "没到位"}（${action}）task=${taskId}：${reason}`);
     return false;
   }
 }
@@ -154,7 +154,7 @@ export async function noteSystemNotice(
     if (inserted.length) bus.publish({ type: "task.notices", taskId });
     return true;
   } catch (error) {
-    console.warn(`[ash] 系统诊断留痕写表失败 task=${taskId}（${action}）:`, error);
+    console.warn(`[navi] 系统诊断留痕写表失败 task=${taskId}（${action}）:`, error);
     return false;
   }
 }

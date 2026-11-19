@@ -12,7 +12,7 @@
 //
 // **两个平台跑的是同一份断言**：POSIX 的壳是 `/bin/sh`，Windows 的壳是一个按次生成的 node
 // 壳（executors/detached-win-wrap.ts），两边都由壳写 rc —— 所以「重启后还拿得到退出码」
-// 这一条在哪边都该是绿的。要是哪天 Windows 退回「ash 自己写 rc」，③ 立刻红。
+// 这一条在哪边都该是绿的。要是哪天 Windows 退回「navi 自己写 rc」，③ 立刻红。
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,7 +23,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // 内嵌脚本里的 import 说明符必须是 **file:// URL**:Windows 上一个裸路径的 `D:` 会被当成
 // 协议,动态 import 直接 ERR_UNSUPPORTED_ESM_URL_SCHEME(docs/windows-testing.md 记着这坑)。
 const mod = (rel: string) => JSON.stringify(pathToFileURL(join(HERE, rel)).href);
-const dir = mkdtempSync(join(tmpdir(), "ash-detached-"));
+const dir = mkdtempSync(join(tmpdir(), "navi-detached-"));
 const TOTAL = 24;
 const EXIT_CODE = 7;
 
@@ -75,11 +75,11 @@ if (mode === "v1") {
   const info = inspectProcess(child.pid);
   writeFileSync(stateFile, JSON.stringify({
     pid: child.pid, startedAt: info?.startedAt ?? null,
-    offset: child.ashCommitted(), lines,
+    offset: child.naviCommitted(), lines,
   }));
   process.exit(0); // 模拟 kill：不给任何收尾机会
 } else {
-  const prev = JSON.parse(process.env.ASH_PREV_STATE);
+  const prev = JSON.parse(process.env.NAVI_PREV_STATE);
   const child = reattachDetachedAgent({ pid: prev.pid, startedAt: prev.startedAt, paths, offset: prev.offset });
   if (!child) { clearInterval(keepAlive); writeFileSync(stateFile, JSON.stringify({ reattached: false })); process.exit(0); }
   const how = await consume(child, 0);
@@ -116,7 +116,7 @@ try { process.kill(a.pid, 0); } catch { alive = false; }
 console.log(`   agent 还活着 = ${alive}   ← 管道模式下这里必然是 false`);
 
 console.log("③ 起 server-v2，按 pid+offset 接管…");
-await run(["v2", dir, agentScript, stateB], { ASH_PREV_STATE: JSON.stringify(a) });
+await run(["v2", dir, agentScript, stateB], { NAVI_PREV_STATE: JSON.stringify(a) });
 const b = JSON.parse(readFileSync(stateB, "utf8"));
 console.log(`   接管成功 = ${b.reattached}，又读到 ${b.lines?.length ?? 0} 行，退出码 = ${b.exitCode}`);
 

@@ -2,7 +2,7 @@
 //
 // 判据本体在 `sendKey.ts`(它不认识 React,也不 import api);这里只做两件 React 的事。
 import { useEffect, useState } from "react";
-import type { ComposerSendKey } from "@ash/shared";
+import type { ComposerSendKey } from "@navi/shared";
 import { api } from "./api.ts";
 import {
   composerSendKey,

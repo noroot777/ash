@@ -10,13 +10,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { GitAction } from "@ash/shared/git-workbench";
+import type { GitAction } from "@navi/shared/git-workbench";
 
 const directory = realpathSync(
-  mkdtempSync(join(tmpdir(), "ash-partial-discard-")),
+  mkdtempSync(join(tmpdir(), "navi-partial-discard-")),
 );
 const root = join(directory, "repo");
-process.env.ASH_DB = join(directory, "test.db");
+process.env.NAVI_DB = join(directory, "test.db");
 process.env.GIT_CONFIG_GLOBAL = join(directory, "gitconfig");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 writeFileSync(

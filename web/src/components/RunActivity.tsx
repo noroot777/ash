@@ -1,5 +1,5 @@
-import type { TaskMode, TaskStatus } from "@ash/shared";
-import { runActivityCopy, type RunActivityCopy, type RunActivityPhase } from "@ash/shared/run-activity";
+import type { TaskMode, TaskStatus } from "@navi/shared";
+import { runActivityCopy, type RunActivityCopy, type RunActivityPhase } from "@navi/shared/run-activity";
 
 export function RunActivity({
   status,

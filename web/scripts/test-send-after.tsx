@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ScheduledMessage, TaskListItem } from "@ash/shared";
+import type { ScheduledMessage, TaskListItem } from "@navi/shared";
 import { ScheduledMessageTray } from "../src/components/ScheduledMessageTray.tsx";
 import { sendAfterOptions, sendAfterState } from "../src/lib/sendAfter.ts";
 

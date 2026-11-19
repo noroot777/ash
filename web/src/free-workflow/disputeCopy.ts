@@ -1,4 +1,4 @@
-import type { FreeReviewDispute } from "@ash/shared";
+import type { FreeReviewDispute } from "@navi/shared";
 
 /**
  * 裁定这一段所有**写给用户的字**，集中在这里。

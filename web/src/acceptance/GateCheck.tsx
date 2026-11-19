@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { SlidersHorizontal, Stop } from "@phosphor-icons/react";
-import type { AcceptGateBaseline } from "@ash/shared/accept-gate";
-import { acceptGateCancelMessage } from "@ash/shared/accept-gate";
-import type { TaskListItem } from "@ash/shared";
+import type { AcceptGateBaseline } from "@navi/shared/accept-gate";
+import { acceptGateCancelMessage } from "@navi/shared/accept-gate";
+import type { TaskListItem } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { useCatchUp } from "../lib/useCatchUp.ts";
 import { localeTime } from "../lib/localeFormat.ts";

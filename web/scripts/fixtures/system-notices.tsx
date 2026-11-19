@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Session, Task } from "@ash/shared";
+import type { Session, Task } from "@navi/shared";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import { SystemBoundary } from "../../src/task-detail/SystemNotice.tsx";

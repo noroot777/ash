@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { ActionVerdict } from "@ash/shared";
+import type { ActionVerdict } from "@navi/shared";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 
 /**

@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
-import type { ChatMember } from "@ash/shared/chat";
+import type { ChatMember } from "@navi/shared/chat";
 
-if (process.env.ASH_ALLOW_REAL_AGENT !== "1") throw new Error("此验证会调用真实 Claude；请设置 ASH_ALLOW_REAL_AGENT=1 后运行。");
-const rounds = Number(process.env.ASH_ASSISTANT_LIVE_ROUNDS ?? 8);
+if (process.env.NAVI_ALLOW_REAL_AGENT !== "1") throw new Error("此验证会调用真实 Claude；请设置 NAVI_ALLOW_REAL_AGENT=1 后运行。");
+const rounds = Number(process.env.NAVI_ASSISTANT_LIVE_ROUNDS ?? 8);
 assert.ok(Number.isInteger(rounds) && rounds >= 1 && rounds <= 10);
-const stage = mkdtempSync(join(tmpdir(), "ash-assistant-live-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-assistant-live-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { agents, chatMessages, chatRooms, projects, tasks } = await import("../src/db/schema.js");
 const { ChatService } = await import("../src/chat/service.js");
@@ -34,7 +34,7 @@ const service = new ChatService(async (...args) => {
 const timestamp = new Date().toISOString();
 const member: ChatMember = {
   id: "claude", name: "助手", agentType: "claude", executorId: "claude-live",
-  model: process.env.ASH_ASSISTANT_LIVE_MODEL ?? "sonnet", reasoningEffort: null,
+  model: process.env.NAVI_ASSISTANT_LIVE_MODEL ?? "sonnet", reasoningEffort: null,
 };
 
 try {

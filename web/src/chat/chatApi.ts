@@ -1,4 +1,4 @@
-import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
+import type { ChatMember, ChatRoom, ChatSnapshot } from "@navi/shared/chat";
 import { request } from "../lib/apiClient.ts";
 
 const json = (body: unknown, method = "POST"): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

@@ -38,7 +38,7 @@ import { root, startHarness } from "./free-review-dispatch-harness.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 // 初次有界等待压短:说不清那几条要等它超时。回合结束时那「最后一句」的 2 秒照真实口径。
-process.env.ASH_TURN_INPUT_ACK_MS = "100";
+process.env.NAVI_TURN_INPUT_ACK_MS = "100";
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 const deferred = <T>(): Deferred<T> => {

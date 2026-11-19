@@ -23,7 +23,7 @@ const PLACEMENT: Array<{ name: "RECURS_FIELD_GUIDE" | "RECURRENCE_HINT" | "RECUR
 ];
 
 export async function assertRecurrenceBudget(samples: PromptSample[]): Promise<void> {
-  const shared = await import("@ash/shared/free-workflow");
+  const shared = await import("@navi/shared/free-workflow");
   // 三处讲的是同一个形状：清单旁那一句和字段说明各教一种写法时，审查者照字面交了裸编号数组。
   for (const { name } of PLACEMENT) {
     assert.ok(shared[name].includes(shared.RECURS_SHAPE_EXAMPLE), `${name} 里没有那个形状示例 ${shared.RECURS_SHAPE_EXAMPLE}`);

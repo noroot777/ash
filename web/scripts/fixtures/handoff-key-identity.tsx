@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { HandoffDialog } from "../../src/task-detail/HandoffDialog.tsx";
 import { HandoffPeerKeyField } from "../../src/settings/HandoffPeerKeyField.tsx";
 import "../../src/styles/global.css";
@@ -20,7 +20,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (path === "/api/handoff/targets") return response(200, { targets: [] });
   if (path.endsWith("/handoff/return-target")) return response(200, { target });
   if (path.endsWith("/handoff/preflight")) return response(401, {
-    error: "测试来源机需要账号 key", ash: true, code: "peer-key-required",
+    error: "测试来源机需要账号 key", navi: true, code: "peer-key-required",
   });
   if (path === "/api/handoff/targets/key" && init?.method === "PUT") {
     const body = JSON.parse(String(init.body));

@@ -4,7 +4,7 @@
 // 直接给；这里管的是没有专门类型的那一大片——服务端的 `receipt` / `alert` 通用档、以及类型出现
 // 之前落盘的老记录。图标跟检查器里同一件事的那一格用同一枚（哨兵 = 哨兵格的那枚），看见图标
 // 就知道该去哪一格看。
-import type { ReviewWaitReason } from "@ash/shared/timeline-notice";
+import type { ReviewWaitReason } from "@navi/shared/timeline-notice";
 
 export type NoticeIcon =
   | "monitor" | "review" | "dispute" | "accept" | "gate" | "preview" | "workflow"

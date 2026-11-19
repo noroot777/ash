@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { ProjectView } from "@ash/shared";
-import { MAX_BROWSER_CDP_DOMAINS, browserCdpHostOf, normalizeBrowserCdpDomains } from "@ash/shared/project";
+import type { ProjectView } from "@navi/shared";
+import { MAX_BROWSER_CDP_DOMAINS, browserCdpHostOf, normalizeBrowserCdpDomains } from "@navi/shared/project";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import "./project-browser-access.css";

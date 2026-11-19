@@ -1,7 +1,7 @@
 import { type MouseEvent } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { FileText, ChatsCircle, UsersThree, Robot } from "@phosphor-icons/react";
-import { taskCreationLabel } from "@ash/shared/task-origin";
+import { taskCreationLabel } from "@navi/shared/task-origin";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 import { taskParentLink, taskParentMode, taskParentRelation } from "../lib/taskParent.ts";
 

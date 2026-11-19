@@ -1,4 +1,4 @@
-import type { PreviewServiceState } from "@ash/shared/preview";
+import type { PreviewServiceState } from "@navi/shared/preview";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";

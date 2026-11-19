@@ -4,7 +4,7 @@
 // 点不点得过去也走会话流同一个判据（laneRoundOpener）。
 import { StrictMode, useCallback, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewRun, Task, TaskReviewInfo } from "@ash/shared";
+import type { FreeReviewRun, Task, TaskReviewInfo } from "@navi/shared";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { InspectorNavProvider, type InspectorNav, type InspectorRequest } from "../../src/inspector/nav.tsx";
 import { api } from "../../src/lib/api.ts";

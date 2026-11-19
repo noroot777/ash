@@ -2,7 +2,7 @@ import { splitProfileExtraArgs } from "./cli-args.ts";
 import type { LlmProvider } from "./index.ts";
 
 // ── claude 的模型窗口:200k 还是 1M ─────────────────────────────────────────────
-// claude CLI 只在模型名带 `[1m]` 后缀时按 1M 算窗口,否则一律 200k。ash 这边的开关是
+// claude CLI 只在模型名带 `[1m]` 后缀时按 1M 算窗口,否则一律 200k。navi 这边的开关是
 // 供应商上的 `context1mModels`:列在里面的模型,起 CLI 时自动补上后缀并改走本机的 1M
 // 转发(server/src/anthropic-context-1m.ts)。
 //
@@ -41,7 +41,7 @@ export type Context1mBlocker =
   | { kind: "official" }
   /** 挂了供应商但没填 key:执行器起跑时会退回官方账号(server executors/index.ts loadRelay)。 */
   | { kind: "no-key"; provider: { id: string; name: string } }
-  /** 额外参数里自带 `--model`,排在 ash 那份之后,覆盖了这里判的模型。 */
+  /** 额外参数里自带 `--model`,排在 navi 那份之后,覆盖了这里判的模型。 */
   | { kind: "extra-args-model"; model: string };
 
 export interface ClaudeModelWindow {
@@ -68,10 +68,10 @@ export function lastModelArg(args: readonly string[]): string | null {
 /**
  * 这个 claude 执行器**下一次起跑**时 CLI 认的窗口是多大。判据必须跟起跑那一侧逐条对齐
  * (第 1 轮审查 F2):供应商得是 anthropic 协议**且有 key** 才真的挂上,否则退回官方账号;
- * 额外参数里的 `--model` 排在后面、会覆盖选中的模型,而 ash 只给选中的模型补 `[1m]`。
+ * 额外参数里的 `--model` 排在后面、会覆盖选中的模型,而 navi 只给选中的模型补 `[1m]`。
  *
  * `model` 为空 = 跟随执行器默认,挂了供应商就退到供应商的默认模型;都没有就判不出来,返回 null
- * (官方账号的别名 `opus`/`sonnet` 指向哪个具体模型、窗口多大,ash 这边不知道 —— 不猜)。
+ * (官方账号的别名 `opus`/`sonnet` 指向哪个具体模型、窗口多大,navi 这边不知道 —— 不猜)。
  */
 export function claudeModelWindow(
   model: string | null | undefined,

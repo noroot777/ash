@@ -5,8 +5,8 @@
 // 哪一回合自己的结局是失败（或者会话**最后一回合**的会话行报的是异常收口），就在那一回合后面补同一句，
 // 原因取那一回合自己的（Session.turnInterruptions）。老记录没有原因，就还是「这一轮异常结束」。失败要
 // 一直看得见：此刻能重试时，「重试这一回合」就挂在可重试那一回合的这句话后面（ConversationFeed）。
-import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
-import type { Session, TurnInterruption, TurnOutcome } from "@ash/shared";
+import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
+import type { Session, TurnInterruption, TurnOutcome } from "@navi/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { legacyTier } from "./legacyNoticeTable.ts";
@@ -121,7 +121,7 @@ export function persistedTurnFacts(
  *
  * 只认两样：直播那一路的异常回合边界（「执行异常结束 · exit 1」），以及结算说明里「这一轮没办成」的那几句
  * （legacyNoticeTable 的 SETTLEMENT_LEADS，照服务端 settle-status 的落位说明抄的）。后者两路都有——服务端
- * 收口时写进会话、同时播出来——也覆盖进程 exit 0 却被 ash 判失败的那种（被终止的续聊、没交卷）。回合边界
+ * 收口时写进会话、同时播出来——也覆盖进程 exit 0 却被 navi 判失败的那种（被终止的续聊、没交卷）。回合边界
  * 只在直播里有，落盘那一路没有，单凭它判，开着页面看和刷新以后就是两个样子。
  */
 export function endsTurnAbnormally(item: Extract<ConversationItem, { kind: "event" }>): boolean {

@@ -27,10 +27,10 @@ import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-archive-cleanup-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-archive-cleanup-"));
 const repo = join(stage, "repo");
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -41,8 +41,8 @@ const branchExists = (name: string) => {
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Test");
-  git(repo, "config", "user.email", "ash@example.test");
+  git(repo, "config", "user.name", "Navi Test");
+  git(repo, "config", "user.email", "navi@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "seed");
@@ -52,7 +52,7 @@ try {
   const { setInstanceMode } = await import("../src/auth/mode.js");
   const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
   const { mountTaskArchiveRoutes } = await import("../src/task-archive-routes.js");
-  const { summarizeArchiveCleanup } = await import("@ash/shared/project");
+  const { summarizeArchiveCleanup } = await import("@navi/shared/project");
   await ensureSchema();
   await setInstanceMode("single", stage);
 
@@ -63,7 +63,7 @@ try {
   const ts = new Date().toISOString();
   await db.insert(projects).values({ id: "project", name: "归档清理", repoPath: repo, createdAt: ts });
 
-  // 分支名是 `ash/<id 前 8 位>`（worktreeBranchName），所以各用例的 id 前 8 位必须互不
+  // 分支名是 `navi/<id 前 8 位>`（worktreeBranchName），所以各用例的 id 前 8 位必须互不
   // 相同 —— 撞了的话第二个 prepareWorktree 直接报 "already used by worktree"。
   type TaskSeed = { id: string; status?: string; mode?: string; parentId?: string; worktreeBase?: string };
   const seed = async ({ id, status = "done", mode = "single", parentId, worktreeBase }: TaskSeed) => {
@@ -595,7 +595,7 @@ try {
   }
 
   // ── 17. 只删任务分支这个名字本身,不顺着符号引用删到别的分支 ─────────────
-  // `git symbolic-ref refs/heads/ash/<id8> refs/heads/main` 是合法状态。update-ref -d 默认
+  // `git symbolic-ref refs/heads/navi/<id8> refs/heads/main` 是合法状态。update-ref -d 默认
   // 解引用,删掉的会是 main;检出保护按别名查也查不到 main 正被主仓检出着。
   {
     await setClean("all");

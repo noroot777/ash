@@ -70,7 +70,7 @@ export class TestProcessScope {
 
   initializeDomain() {
     const executable = native.executable();
-    const name = `Local\\ash-test-${randomUUID()}`;
+    const name = `Local\\navi-test-${randomUUID()}`;
     const owner = native.invoke(executable, ["identity", String(process.pid)]);
     const domain = { name, executable };
     this.domain = domain;
@@ -133,7 +133,7 @@ export class TestProcessScope {
       ...(shell ? ["--shell", typeof shell === "string" ? shell : process.env.ComSpec ?? "cmd.exe", [commandName, ...args].join(" ")]
         : [commandName, ...args])], {
       ...spawnOptions, detached: false, windowsHide: true,
-      env: { ...environment, ASH_TEST_PROCESS_SCOPE: this.directory,
+      env: { ...environment, NAVI_TEST_PROCESS_SCOPE: this.directory,
         NODE_OPTIONS: `--require ${JSON.stringify(registerPath)} ${environment.NODE_OPTIONS ?? ""}`.trim() },
     });
     child.on("error", () => {});

@@ -17,10 +17,10 @@ import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 requireTmpDb("session-turn-persist");
-const stage = realpathSync(mkdtempSync(join(tmpdir(), "ash-turn-persist-")));
-process.env.ASH_DB = join(stage, "persist.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+const stage = realpathSync(mkdtempSync(join(tmpdir(), "navi-turn-persist-")));
+process.env.NAVI_DB = join(stage, "persist.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");

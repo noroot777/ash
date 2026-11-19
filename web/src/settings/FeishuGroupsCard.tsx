@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FeishuGroup, FeishuGroupClaim, FeishuGroups, ProjectView } from "@ash/shared";
+import type { FeishuGroup, FeishuGroupClaim, FeishuGroups, ProjectView } from "@navi/shared";
 import { Button, Toggle } from "../components/ui.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { api } from "../lib/api.ts";

@@ -1,4 +1,4 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
@@ -35,11 +35,11 @@ let startupExitInProgress = false;
 // unhandled error means the server never became usable and must be fatal.
 process.on("unhandledRejection", (e) => {
   if (!startupComplete) exitAfterStartupFailure("unhandled rejection during startup", e);
-  console.error("[ash] unhandledRejection:", e);
+  console.error("[navi] unhandledRejection:", e);
 });
 process.on("uncaughtException", (e) => {
   if (!startupComplete) exitAfterStartupFailure("uncaught exception during startup", e);
-  console.error("[ash] uncaughtException:", e);
+  console.error("[navi] uncaughtException:", e);
 });
 
 const port = Number(process.env.PORT ?? 4317);
@@ -47,7 +47,7 @@ const port = Number(process.env.PORT ?? 4317);
 function exitAfterStartupFailure(message: string, error?: unknown): never {
   if (!startupExitInProgress) {
     startupExitInProgress = true;
-    console.error(`[ash] Refusing to start: ${message}`);
+    console.error(`[navi] Refusing to start: ${message}`);
     if (error) console.error(error);
 
     // The scheduler starts only after listen succeeds. If starting it throws
@@ -56,7 +56,7 @@ function exitAfterStartupFailure(message: string, error?: unknown): never {
       try {
         activeServer.close();
       } catch (closeError) {
-        console.error("[ash] failed to close server during startup cleanup:", closeError);
+        console.error("[navi] failed to close server during startup cleanup:", closeError);
       }
     }
     // release() verifies this process' PID + token before unlinking, so this
@@ -136,7 +136,7 @@ async function initializeServer() {
   if (instance.mode === "multi") {
     const { sweepExpiredSessions } = await import("./auth/store.js");
     await sweepExpiredSessions();
-    console.log(`[ash] 多人模式：根目录 ${instance.rootDir}`);
+    console.log(`[navi] 多人模式：根目录 ${instance.rootDir}`);
   }
   // 测试库档第一次从主库播种，之后复用这个 worktree 自己的副本。
   const seedFrom = readEnv(process.env, "NAVI_SEED_FROM");
@@ -149,12 +149,12 @@ async function initializeServer() {
   if (IS_PREVIEW_INSTANCE) {
     const { sanitizeSnapshot } = await import("./preview-seed.js");
     const washed = await sanitizeSnapshot((await import("./db/index.js")).dbClient);
-    console.log(`[ash] 预览库已洗运行态：${washed.join("、") || "无"}`);
+    console.log(`[navi] 预览库已洗运行态：${washed.join("、") || "无"}`);
   }
   const usageRepair = await (await import("./usage-repair.js")).repairLegacyUsageAccounting();
   if (!usageRepair.alreadyApplied) {
     console.log(
-      `[ash] Token 历史账已校正：Codex ${usageRepair.repairedCodexSessions} 条，`
+      `[navi] Token 历史账已校正：Codex ${usageRepair.repairedCodexSessions} 条，`
       + `Claude ${usageRepair.repairedClaudeSessions} 条，证据不足跳过 ${usageRepair.skippedSessions} 条`,
     );
   }
@@ -162,11 +162,11 @@ async function initializeServer() {
   try {
     const wakes = await (await import("./monitor-wake-turns-backfill.js")).backfillMonitorWakeTurns();
     if (!wakes.alreadyApplied) {
-      console.log(`[ash] 哨兵唤醒回合已回填：${wakes.sessions} 条会话、${wakes.turns} 轮`
+      console.log(`[navi] 哨兵唤醒回合已回填：${wakes.sessions} 条会话、${wakes.turns} 轮`
         + (wakes.retry ? `；${wakes.retry} 条会话这次没读到证据，下次启动再补` : ""));
     }
   } catch (error) {
-    console.warn(`[ash] 哨兵唤醒回合回填失败（下次启动重试）: ${String(error)}`);
+    console.warn(`[navi] 哨兵唤醒回合回填失败（下次启动重试）: ${String(error)}`);
   }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   // 回合级停滞看门狗的判决从此自动落库:**加载那个模块就等于装上了**(理由见它顶部 ——
@@ -178,7 +178,7 @@ async function initializeServer() {
   // 一句 `clearStallFailure` 追加),不是任何代理指标 —— 为什么不能是条数、年龄,或者「回合区间
   // 收口了」,见 turn-stall-journal.ts 文件头那四条(四个都是审查实测打回来的)。
   await stallPersist.compactStallVerdicts().catch((error) => {
-    console.warn("[ash] 判决日志压缩跳过(内容一个字没动):", error);
+    console.warn("[navi] 判决日志压缩跳过(内容一个字没动):", error);
     return null;
   });
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
@@ -193,20 +193,20 @@ async function initializeServer() {
     // 回合里交出去、那一轮却没被接回来的哨兵结果退回待发送 —— 必须夹在这两步之间
     // (顺序的理由见 monitor-turn-handoff.ts 的 `returnOrphanTurnHandoffs`)。
     await (await import("./monitor-turn-handoff.js")).returnOrphanTurnHandoffs()
-      .catch((err) => console.error("[ash] 退回孤儿回合内交付失败（不影响启动）:", err));
+      .catch((err) => console.error("[navi] 退回孤儿回合内交付失败（不影响启动）:", err));
     await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
 
     // 撞在故障窗口里丢掉的那次队列推进补回来(判据与边界见 scheduler.ts 的
     // recoverQueueAdvances)。**必须排在 reconcileInterrupted 之后**:被打断的
     // running/queued 要先落 failed,这里读到的才是结算完的现场。
     await (await import("./scheduler.js")).recoverQueueAdvances()
-      .catch((err) => console.error("[ash] 队列推进补办失败（不影响启动）:", err));
+      .catch((err) => console.error("[navi] 队列推进补办失败（不影响启动）:", err));
 
     // 哨兵接回来。它们的进程本来就没跟着死（那是整件事的全部意义），这里只是把 tail
     // 和定时器重新挂上；认不出来的落 lost，不冒充还在盯。
     const { reattachMonitors } = await import("./monitors.js");
     const monitorRecovery = await reattachMonitors().catch((err) => {
-      console.error("[ash] 哨兵接回失败（不影响启动）:", err);
+      console.error("[navi] 哨兵接回失败（不影响启动）:", err);
       return null;
     });
     const handoff = monitorRecovery?.handoff;
@@ -215,7 +215,7 @@ async function initializeServer() {
       // `pending` 单独说一句:那几条**既没接回来、也没判没**(pid 还空着、这一刻又认不回来),
       // 行原样留着等下一次问 —— 并进任何一边都是撒谎(第 19 轮审查 F2)。
       console.log(
-        `[ash] 哨兵：接回 ${monitorRecovery?.attached ?? 0} 个，${monitorRecovery?.lost ?? 0} 个进程已不在`
+        `[navi] 哨兵：接回 ${monitorRecovery?.attached ?? 0} 个，${monitorRecovery?.lost ?? 0} 个进程已不在`
         + (monitorRecovery?.pending ? `，${monitorRecovery?.pending ?? 0} 个这一刻认不回身份（创建意图留着）` : "")
         // `failed` 也要报出来:那几条的**监督已经立好**(日志照收、到点照收),欠的只是接管
         // 那一趟结论,已经排了有界重试(第 22 轮审查 F1-A)。不说一句就只有 server 日志里
@@ -240,38 +240,38 @@ async function initializeServer() {
     // (第 5 轮审查 F1)。**排在债务清扫之前**:这里新记下的责任由它在同一次开机里接着推。
     const { reclaimUnconfirmedStops } = await import("./monitor-reclaim.js");
     await reclaimUnconfirmedStops().catch((err) => {
-      console.error("[ash] 「已停止但没确认退出」的哨兵重收失败（不影响启动）:", err);
+      console.error("[navi] 「已停止但没确认退出」的哨兵重收失败（不影响启动）:", err);
       return 0;
     });
     // 上一个 server 没能收掉的哨兵进程:停止失败时留下的**回收责任**,现在是最后一次机会
     // (它们的任务多半已经被删掉了,`monitors` 里也没有行,所以接回那一步看不见它们)。
     const { sweepMonitorReclaimDebts } = await import("./monitor-reclaim-debts.js");
     const debts = await sweepMonitorReclaimDebts().catch((err) => {
-      console.error("[ash] 哨兵回收责任清扫失败（不影响启动）:", err);
+      console.error("[navi] 哨兵回收责任清扫失败（不影响启动）:", err);
       return null;
     });
     if (debts?.settled || debts?.left) {
-      console.log(`[ash] 哨兵回收责任：收档 ${debts.settled} 笔，仍收不掉 ${debts.left} 笔`);
+      console.log(`[navi] 哨兵回收责任：收档 ${debts.settled} 笔，仍收不掉 ${debts.left} 笔`);
     }
     // claude 自带 Monitor 的投影没有 pid，上面那一步按 kind 整批跳过了它们，得单独判一次。
     // **必须排在 reattachRunningTasks 之后**：它按「来源 agent 进程还在不在」裁决，而那些
     // 进程正是上面那一步接回来的；提前跑会把一批还活着的投影误判成死的。
     const { loseDeadClaudeMonitors } = await import("./claude-monitor-startup.js");
     const claudeMonitorSweep = await loseDeadClaudeMonitors().catch((err) => {
-      console.error("[ash] 内置 Monitor 投影收尾失败（不影响启动）:", err);
+      console.error("[navi] 内置 Monitor 投影收尾失败（不影响启动）:", err);
       return { kept: 0, lost: 0 };
     });
     if (claudeMonitorSweep.kept || claudeMonitorSweep.lost) {
-      console.log(`[ash] 内置 Monitor 投影：${claudeMonitorSweep.kept} 个来源仍在跑，${claudeMonitorSweep.lost} 个来源已不在`);
+      console.log(`[navi] 内置 Monitor 投影：${claudeMonitorSweep.kept} 个来源仍在跑，${claudeMonitorSweep.lost} 个来源已不在`);
     }
     // 上一轮留在「正在跑」的验收前置命令：还在跑的接管、已经跑完的按退出档结算，
     // 拿不到真实结果的才如实落成「被打断」—— 留一个永远转圈的幽灵最坑人。
     const { recoverAcceptGates } = await import("./accept-gate.js");
     const gates = await recoverAcceptGates().catch((err) => {
-      console.error("[ash] 验收前置命令对账失败（不影响启动）:", err);
+      console.error("[navi] 验收前置命令对账失败（不影响启动）:", err);
       return { interrupted: 0, resumed: 0, settled: 0 };
     });
-    if (gates.interrupted || gates.resumed || gates.settled) console.log(`[ash] 验收前置命令：接管 ${gates.resumed} 条，`
+    if (gates.interrupted || gates.resumed || gates.settled) console.log(`[navi] 验收前置命令：接管 ${gates.resumed} 条，`
       + `按退出结果结算 ${gates.settled} 条，被重启打断 ${gates.interrupted} 条`);
     // 已了结任务的验收快照、过了保留期的原始事件流，启动后每 6 小时回收一次。排在门禁对账之后：
     // 快照的判据要看门禁行的最终状态。
@@ -280,28 +280,28 @@ async function initializeServer() {
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-review-reconcile.ts）。
     const { reconcileFreeReviews } = await import("./free-review-reconcile.js");
-    await reconcileFreeReviews().catch((err) => console.error("[ash] 自由审查对账失败（不影响启动）:", err));
+    await reconcileFreeReviews().catch((err) => console.error("[navi] 自由审查对账失败（不影响启动）:", err));
     const { reconcileRegressionSettlements, startRegressionSettlementRecovery } = await import("./regression-settlement.js");
-    await reconcileRegressionSettlements().catch((err) => console.error("[ash] 延期验证结算对账失败（不影响启动）:", err));
+    await reconcileRegressionSettlements().catch((err) => console.error("[navi] 延期验证结算对账失败（不影响启动）:", err));
     startRegressionSettlementRecovery();
     // 驳回后的辩论同理：`running` 落库，而推进它的投递链只活在内存里（见 free-review-debate.ts）。
     const { reconcileFreeReviewDebates } = await import("./free-review-debate.js");
-    await reconcileFreeReviewDebates().catch((err) => console.error("[ash] 审查辩论对账失败（不影响启动）:", err));
+    await reconcileFreeReviewDebates().catch((err) => console.error("[navi] 审查辩论对账失败（不影响启动）:", err));
     const { reconcileDiscussions } = await import("./discussion.js");
-    await reconcileDiscussions().catch((err) => console.error("[ash] 讨论对账失败（不影响启动）:", err));
+    await reconcileDiscussions().catch((err) => console.error("[navi] 讨论对账失败（不影响启动）:", err));
     // 裁定已落账、预约还没来得及当场兑现就重启了的那几条（见 free-review-ruling-release.ts）。
     // 排在审查对账之后：它要先看清哪些审查链还在 reviewing。
     const { releaseHeldReservations } = await import("./free-review-ruling-release.js");
-    await releaseHeldReservations().catch((err) => console.error("[ash] 裁定后预约补发失败（不影响启动）:", err));
+    await releaseHeldReservations().catch((err) => console.error("[navi] 裁定后预约补发失败（不影响启动）:", err));
     // 开工请求是持久的（分组运行、派活单、接着跑、前置站齐，launch-request.ts）：重启前没起的、重启期间
     // 站稳的在这里补办，之后每分钟兜底扫一遍。排在接回之后：同组名额数的是此刻占着执行回合的条数，接回来
     // 的那几条要先占上锁。排在审查对账之后：前置站没站稳要看审查链收拾完的现场。
     const { startPrerequisiteLaunches } = await import("./prerequisite-launch.js");
-    await startPrerequisiteLaunches().catch((err) => console.error("[ash] 等齐就起补办失败（不影响启动）:", err));
+    await startPrerequisiteLaunches().catch((err) => console.error("[navi] 等齐就起补办失败（不影响启动）:", err));
   }
-  // ash MCP 登记自检。放在这里是因为它跟任务能不能交卷直接相关：缺了它 agent 干完活
+  // navi MCP 登记自检。放在这里是因为它跟任务能不能交卷直接相关：缺了它 agent 干完活
   // 也记 failed，而这一趟能在第一个任务起跑之前就说出来。两档各做一件事：隔离档的目录
-  // 是 ash 自己建的，缺了直接补上；自用/共用档读的是用户自己的 CLI 配置，**一个字节都
+  // 是 navi 自己建的，缺了直接补上；自用/共用档读的是用户自己的 CLI 配置，**一个字节都
   // 不改**，只把缺口点名到文件路径。best-effort，出错只出声不拦启动。
   //
   // **不 await**：确认缺口要问 CLI 本人（起一次子进程，CLI 挂住时要等到预算用完），排在
@@ -310,19 +310,19 @@ async function initializeServer() {
   // （`ensureUserCliDir`），告警晚几秒出来不改变任何结论。
   if (!IS_PREVIEW_INSTANCE) {
     void (async () => {
-      const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
-      await sweepPersonalAshMcp();
-    })().catch((err) => console.error("[ash] 个人 CLI 的 Navi MCP 自检失败（不影响启动）:", err));
+      const { sweepPersonalNaviMcp } = await import("./auth/user-cli.js");
+      await sweepPersonalNaviMcp();
+    })().catch((err) => console.error("[navi] 个人 CLI 的 Navi MCP 自检失败（不影响启动）:", err));
   }
-  // 上一个 ash 留下的逃逸追踪文件(tmpdir 里的空文件)。证据的寿命跟着「还能不能取到人」
+  // 上一个 navi 留下的逃逸追踪文件(tmpdir 里的空文件)。证据的寿命跟着「还能不能取到人」
   // 走、不再有硬期限(见 executors/kill.ts),所以「进程整个没了、内存里的租约也没了」这条
   // 路得有人收。只删「创建者 pid 已经不在 + 此刻没有活着的持有者」的那些,所以不会碰到
-  // 另一个 ash 实例正用着的文件。best-effort。
+  // 另一个 navi 实例正用着的文件。best-effort。
   void (async () => {
     const { sweepOrphanTrackFiles } = await import("./executors/kill.js");
     const removed = await sweepOrphanTrackFiles();
-    if (removed) console.log(`[ash] 回收 ${removed} 个上一轮遗留的逃逸追踪文件`);
-  })().catch((err) => console.error("[ash] 逃逸追踪文件回收失败（不影响运行）:", err));
+    if (removed) console.log(`[navi] 回收 ${removed} 个上一轮遗留的逃逸追踪文件`);
+  })().catch((err) => console.error("[navi] 逃逸追踪文件回收失败（不影响运行）:", err));
   // 上一辈子没收干净的 agent 后代:那一轮的清理明确答出「还有残留」或者「没问清楚」,
   // 责任落在 `agent_cleanup_debts` 上(见那张表的注释)。**排在接管之后**:接回来的那些
   // 运行自己还会再走一次清理,这里只追真正没人管的。best-effort,不影响启动。
@@ -331,47 +331,47 @@ async function initializeServer() {
     const swept = await sweepAgentCleanupDebts();
     // **问不出来要说问不出来**:报成 0/0/0 跟「扫完了,一笔都没有」长得一样(第 2 轮审查 N3)。
     if (!swept.ok) {
-      console.warn(`[ash] agent 清理责任这一问没答出来(${swept.reason}):这一轮没能确认有没有`
+      console.warn(`[navi] agent 清理责任这一问没答出来(${swept.reason}):这一轮没能确认有没有`
         + "没收干净的后代,POST /api/cleanup-debts/sweep 可以再追一次");
       return;
     }
     if (swept.settled || swept.left || swept.closed || swept.vanished || swept.stuck) {
-      console.log(`[ash] agent 清理责任:销账 ${swept.settled} 笔,仍没收干净 ${swept.left} 笔,`
+      console.log(`[navi] agent 清理责任:销账 ${swept.settled} 笔,仍没收干净 ${swept.left} 笔,`
         + `追不下去 ${swept.closed} 笔,清理路径自己销掉 ${swept.vanished} 笔,`
         + `这一轮连行都读不出来 ${swept.stuck} 笔`);
     }
     // 只在内存里扛着的那几笔**跨不过重启**,所以单独说一句:这是真正的责任丢失风险,
     // 混在上面那一串计数里看不出来。
     if (swept.pendingNotes) {
-      console.warn(`[ash] 还有 ${swept.pendingNotes} 笔清理责任只在内存里(落库失败,这一轮`
+      console.warn(`[navi] 还有 ${swept.pendingNotes} 笔清理责任只在内存里(落库失败,这一轮`
         + `补投成功 ${swept.landedNotes} 笔):这几笔跨不过重启`);
     }
     // 还没收干净的那几笔**逐条如实报出来**:静默只会让用户得出「停止按钮坏了」。
     const listing = await listOpenCleanupDebts();
     if (!listing.ok) {
-      console.warn(`[ash] 没收干净的那几笔读不出来(${listing.reason}):别把这当成没有`);
+      console.warn(`[navi] 没收干净的那几笔读不出来(${listing.reason}):别把这当成没有`);
       return;
     }
     for (const debt of listing.debts) {
-      console.warn(`[ash] 这一次运行的后代还没收干净(记号 ${debt.unitToken}、根 pid=${debt.rootPid ?? "?"}):`
+      console.warn(`[navi] 这一次运行的后代还没收干净(记号 ${debt.unitToken}、根 pid=${debt.rootPid ?? "?"}):`
         + `${debt.detail}。可在 /api/cleanup-debts 查看,POST /api/cleanup-debts/sweep 再追一次`);
     }
-  })().catch((err) => console.error("[ash] agent 清理责任清扫失败（不影响运行）:", err));
+  })().catch((err) => console.error("[navi] agent 清理责任清扫失败（不影响运行）:", err));
   // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
   // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
   void sweepRunLogs()
     .then(({ removed, bytes, fifos }) => {
-      if (removed) console.log(`[ash] 回收 ${removed} 个已结束运行的原始输出文件（${(bytes / 1048576).toFixed(1)} MB）`);
-      if (fifos) console.log(`[ash] 回收 ${fifos} 根已经没人开着的 agent stdin 管道`);
+      if (removed) console.log(`[navi] 回收 ${removed} 个已结束运行的原始输出文件（${(bytes / 1048576).toFixed(1)} MB）`);
+      if (fifos) console.log(`[navi] 回收 ${fifos} 根已经没人开着的 agent stdin 管道`);
     })
-    .catch((err) => console.error("[ash] 原始输出文件回收失败（不影响运行）:", err));
+    .catch((err) => console.error("[navi] 原始输出文件回收失败（不影响运行）:", err));
   stageModule.mountTaskStageRoutes(routesModule.api);
   acceptanceRoutesModule.mountTaskAcceptanceRoutes(routesModule.api);
   reviewModule.mountReviewRoutes(routesModule.api);
   // 人工替一站「自动验证」签字放行（验证器不认账时唯一的出路）。
   verifyOverrideModule.mountVerifyOverrideRoutes(routesModule.api);
   mountPreviewOpenRoutes(routesModule.api);
-  // 预览进程是 ash 主动起的长驻服务，判据全落在盘上（data/runs/<task>/preview.json），
+  // 预览进程是 navi 主动起的长驻服务，判据全落在盘上（data/runs/<task>/preview.json），
   // 所以重启后照样收得掉：先扫一遍孤儿，之后定时收 idle 那一档。
   const { startPreviewSweeper } = await import("./preview.js");
   startPreviewSweeper();
@@ -401,7 +401,7 @@ async function initializeServer() {
 }
 
 const app = new Hono();
-// 最先一道：请求点名要的是另一份 ash（端口换过人）就什么都不执行，预览代理、静态页面一起
+// 最先一道：请求点名要的是另一份 navi（端口换过人）就什么都不执行，预览代理、静态页面一起
 // （为什么非得在服务端做见 instance-binding.ts）。
 app.use("*", instanceBinding());
 // 预览资源凭证在已认证的任务入口签发；资源侧再核对有效期、运行代和项目权限。
@@ -447,7 +447,7 @@ app.all("/api/*", (c) =>
 // catch-all "/*" 之前,否则被 SPA 兜底截走。SPA 那条 readFile 把整文件读进内存、不支持
 // Range;视频大且要拖动进度,所以这里单独用 createReadStream 流式 + 解析 Range 返回 206。
 // createReadStream 跟随软链,所以 review 目录放软链即可,无需拷贝原片。
-// 根目录默认跟随 ash 仓库(review/ 在仓库根下,迁机器也不失效);代码不在仓库里(独立 app,
+// 根目录默认跟随 navi 仓库(review/ 在仓库根下,迁机器也不失效);代码不在仓库里(独立 app,
 // bundle 只读、放不进软链)时落到数据目录下。可用 NAVI_REVIEW_ROOT 覆盖。
 const REVIEW_ROOT = normalize(readEnv(process.env, "NAVI_REVIEW_ROOT") ?? join(REPO_DIR ?? DATA_DIR, "review"));
 app.get("/review", (c) => c.redirect("/review/"));
@@ -650,30 +650,30 @@ await listenWindowPort(app.fetch, attachPreviewUpgrades);
 activeServer = serve({ fetch: app.fetch, port, ...(LOCAL_ONLY ? { hostname: LOCAL_ONLY_HOSTNAME } : {}) }, (info) => {
   // PORT=0 的测试/临时实例在绑定后才知道真实端口；接力清单读取这个动态值，才能把
   // 可回连地址带给对端，而不是把不可用的 0 端口写进任务历史。只写模块内状态，不能
-  // 改 process.env.PORT：应用内终端和 agent 都会继承它，前端 dev server 会误抢 ash 端口。
+  // 改 process.env.PORT：应用内终端和 agent 都会继承它，前端 dev server 会误抢 navi 端口。
   recordListeningPort(info.port);
   // 预览实例**不跑调度器**：它连的是主库的快照，一条 cron 到点就会拿真项目目录去派活。
   // 快照压根没搬 schedules / scheduled_messages，这里是同一件事的第二道保险（成本一行）。
   if (IS_PREVIEW_INSTANCE) {
-    console.log("[ash] 预览实例：调度器没启动（不会到点派活、不会到点发消息）");
+    console.log("[navi] 预览实例：调度器没启动（不会到点派活、不会到点发消息）");
   } else {
     try {
       startScheduler();
       void import("./executors/model-probe.js")
         .then(({ startClaudeModelRefreshLoop }) => startClaudeModelRefreshLoop())
-        .catch((error) => console.error("[ash] Claude 模型目录定时检查启动失败:", error));
+        .catch((error) => console.error("[navi] Claude 模型目录定时检查启动失败:", error));
       // 飞书长连接（没配凭证就什么都不做）。同一个库起了多个实例（没拿到单实例锁）时不连：
       // 飞书长连接是集群模式，两个客户端会随机分走事件。通道以绑定者身份调本进程的路由，
-      // 所以要传 app.fetch —— 走完整的鉴权与可见性中间件（im/ash-client.ts）。
+      // 所以要传 app.fetch —— 走完整的鉴权与可见性中间件（im/navi-client.ts）。
       void import("./im/channel.js")
         .then(({ startFeishuChannel }) => startFeishuChannel({ fetch: app.fetch, exclusive: singletonLock !== null }))
-        .catch((error) => console.error("[ash] 飞书通道启动失败:", error));
+        .catch((error) => console.error("[navi] 飞书通道启动失败:", error));
     } catch (e) {
       exitAfterStartupFailure("scheduler failed to start", e);
     }
   }
   startupComplete = true;
-  console.log(`[ash] server on http://${LOCAL_ONLY ? LOCAL_ONLY_HOSTNAME : "localhost"}:${info.port}${LOCAL_ONLY ? "（本机自用模式）" : ""}`);
+  console.log(`[navi] server on http://${LOCAL_ONLY ? LOCAL_ONLY_HOSTNAME : "localhost"}:${info.port}${LOCAL_ONLY ? "（本机自用模式）" : ""}`);
 });
 
 attachPreviewUpgrades(activeServer as import("node:http").Server);

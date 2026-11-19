@@ -5,7 +5,7 @@ import {
   MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS,
   canStopMonitor, monitorDurationOptions, normalizeMonitorDto, normalizeMonitorTimeout,
   type TaskMonitor,
-} from "@ash/shared/monitor";
+} from "@navi/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { formatInstant } from "../src/task-detail/utils.ts";
@@ -141,7 +141,7 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
 }
 
 // ── 在盯的那个必须给得出「停」，并把花掉的回合数摆在明面上 ────────────────────
-// 哨兵的进程是故意脱离 ash 的：agent 的回合、会话、甚至 server 重启都带不走它。代价
+// 哨兵的进程是故意脱离 navi 的：agent 的回合、会话、甚至 server 重启都带不走它。代价
 // 就是「后台有个进程在跑、每吐一行烧一个回合」这件事再没有第二个地方看得见。所以这一条
 // 不是装饰：没有它，用户对一个跑飞的哨兵束手无策。
 {
@@ -226,7 +226,7 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
 }
 
 // ── 两种出身的卡不一样，而且差别必须看得见 ──────────────────────────────────
-// claude 自带 Monitor 的投影是只读的：进程在智能体自己的进程树里，ash 停不掉、拿不到日志、
+// claude 自带 Monitor 的投影是只读的：进程在智能体自己的进程树里，navi 停不掉、拿不到日志、
 // 也数不到事件数。画成和 ash 哨兵一样的后果是用户去点一个注定失败的停止按钮，再把恒为 0
 // 的事件数读成「我的过滤条件写错了」。
 {
@@ -234,9 +234,9 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
   assert.match(html, /最终全量回归结果/, "投影的说明照样要露在外面");
   assert.match(html, /claude 自带 Monitor/, "出身要标出来：两种卡按来源分段，段头写明是谁起的");
   assert.match(html, /只能看不能停/, "要解释清楚它为什么没有停止按钮");
-  assert.doesNotMatch(html, /停掉哨兵/, "ash 停不掉它，就不该画一个注定失败的停止按钮");
-  assert.doesNotMatch(html, /条事件/, "事件数 ash 根本数不到，画出来只会被读成「过滤写错了」");
-  assert.doesNotMatch(html, />输出<\/button>/, "它的输出进了智能体自己的会话，ash 这边没有日志可看");
+  assert.doesNotMatch(html, /停掉哨兵/, "navi 停不掉它，就不该画一个注定失败的停止按钮");
+  assert.doesNotMatch(html, /条事件/, "事件数 navi 根本数不到，画出来只会被读成「过滤写错了」");
+  assert.doesNotMatch(html, />输出<\/button>/, "它的输出进了智能体自己的会话，navi 这边没有日志可看");
 }
 
 // ── 结束之后那半句要分档说 ──────────────────────────────────────────────────
@@ -280,9 +280,9 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
 // 两种混排时各画各的，不会互相串味。
 {
   const html = panel([base, projected]);
-  assert.match(html, /停掉哨兵“盯构建日志”/, "混排时 ash 那张照常给停止入口");
+  assert.match(html, /停掉哨兵“盯构建日志”/, "混排时 navi 那张照常给停止入口");
   assert.match(html, /claude 自带/, "混排时投影那张照常标出身");
-  assert.equal(html.match(/停掉哨兵/g)?.length, 1, "两张卡里只有 ash 那张有停止按钮");
+  assert.equal(html.match(/停掉哨兵/g)?.length, 1, "两张卡里只有 navi 那张有停止按钮");
 }
 
 // ── 已结束的如实说明结局，并且不再给停止入口 ─────────────────────────────────
@@ -527,7 +527,7 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
   const stuck: TaskMonitor = {
     ...base, id: "m-stuck", pid: null, events: 0,
     endedReason: "server 重启后这一刻认不回它：起进程时没来得及记下 pid（身份边条这一刻读不出来：读盘报错：EIO），"
-      + "所以一个信号都没发；这条创建意图原样留着，ash 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）",
+      + "所以一个信号都没发；这条创建意图原样留着，navi 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）",
   };
   const tray = (live: TaskMonitor[]) => renderToStaticMarkup(
     <ScheduledMessageTray
@@ -593,7 +593,7 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
     ["exited", /命令自己跑完了（退出码 0）/],
     ["expired", /一直到盯满时长/],
     ["stopped", /被停掉之前没有输出/],
-    // `lost` 只说得出两件事：ash 认不回它了、没有一条输出送到。**不许编一次重启**（第 2 轮
+    // `lost` 只说得出两件事：navi 认不回它了、没有一条输出送到。**不许编一次重启**（第 2 轮
     // 审查 R2-4：创建期补偿失败也写 lost，那一路压根没有重启，也证明不了进程已经不在）。
     ["lost", /认不回这个进程/],
   ] as const) {

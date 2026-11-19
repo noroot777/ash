@@ -36,7 +36,7 @@ export async function stopStartingTurn(taskId: string, timeoutMs = 3_000): Promi
       void persisted.then(() => noteSystemNotice(
         taskId, `stop-released:${key}`, "停止后的回合占位已释放",
         "停止请求等待的那次回合占位已经释放；先前“仍被持有”的状态已结束。若又开始了新回合，请以当前任务状态为准。",
-      )).catch((error) => console.warn(`[ash] 停止后的占位释放留痕失败 task=${taskId}:`, error));
+      )).catch((error) => console.warn(`[navi] 停止后的占位释放留痕失败 task=${taskId}:`, error));
     });
   }
   await persisted;

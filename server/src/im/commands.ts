@@ -1,4 +1,4 @@
-// 飞书里的斜杠命令。全部以发命令那个人的身份执行（ash-client.ts），能做的事不超过他在网页上能做的。
+// 飞书里的斜杠命令。全部以发命令那个人的身份执行（navi-client.ts），能做的事不超过他在网页上能做的。
 //
 // 会改东西、而且改了收不回来的先要他再点一下 —— 手机上误触、输入法联想补全都很常见：/stop 回一张确认卡（10 分钟
 // 有效），/new 回一张建任务表单（选项目、填好再点提交，提交本身就是确认）。
@@ -6,17 +6,17 @@
 // 飞书里没有「当前项目」：建任务时在表单上选，看任务时 /tasks 先选项目，助手派活由它按你说的话挑项目
 // （chat/assistant.ts）。都只在他此刻看得见的项目里挑。
 //
-// 每一句回执都要说清凭什么能发给这个人（scope.ts）：不含 ash 数据的静态句是 system，他自己这次操作的
+// 每一句回执都要说清凭什么能发给这个人（scope.ts）：不含 navi 数据的静态句是 system，他自己这次操作的
 // 结局（接口报错）是 reply，带着任务、项目的按各自来源记、列着的项目逐个记，出口照此现核；都按消息进来
 // 那一刻的绑定实例盖（scope.ts requestScope），不按办完时的现状。个人的东西（能看哪些项目）不进群；
 // 群里看任务、建任务都只落在这个群绑定的项目上。
-import type { Project } from "@ash/shared";
-import { provisionalTitle } from "@ash/shared/provisional-title";
+import type { Project } from "@navi/shared";
+import { provisionalTitle } from "@navi/shared/provisional-title";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
-import { failureOf, taskPath, type AshClient } from "./ash-client.js";
+import { failureOf, taskPath, type NaviClient } from "./navi-client.js";
 import type { BindingRow } from "./binding.js";
 import { BROWSE_PAGE, browseCard, Browser, browseScope, PICK_LIMIT, type BrowseView } from "./browse.js";
 import { confirmCard, newTaskCard, taskLink, todoText } from "./cards.js";
@@ -89,7 +89,7 @@ export class CommandRunner {
   /** /tasks 那张卡上的翻页、建任务（actions.ts 按信封的 browse 交给它）。 */
   readonly browser: Browser;
 
-  constructor(private readonly deps: { appId: string; ash: AshClient; reconciler: Reconciler }) {
+  constructor(private readonly deps: { appId: string; navi: NaviClient; reconciler: Reconciler }) {
     this.browser = new Browser(deps);
   }
 
@@ -109,7 +109,7 @@ export class CommandRunner {
     this.deps.reconciler.kick();
   }
 
-  /** 回给他这次请求的、带着 ash 数据的内容：按消息进来那一刻的来源（群里的还记着是他发起的），正文里有什么记什么。 */
+  /** 回给他这次请求的、带着 navi 数据的内容：按消息进来那一刻的来源（群里的还记着是他发起的），正文里有什么记什么。 */
   scoped(ctx: Pick<InboundContext, "origin">, body: ScopeBody): OutboxScope {
     return requestScope(ctx.origin, body);
   }
@@ -161,7 +161,7 @@ export class CommandRunner {
         const answer = await this.answered(ctx, { taskId });
         // 确认卡带着任务标题、按任务记来源：任务删了或他看不到时出口会把它拦下，所以先以他的身份问一句，
         // 不行就把原因回给他（否则只剩沉默）。
-        const seen = await this.deps.ash.get(ctx.principal, taskPath(taskId));
+        const seen = await this.deps.navi.get(ctx.principal, taskPath(taskId));
         if (!seen.ok) return this.say(ctx, `停不了：${scrubText(seen.error, 300)}`, answer,
           { taskId, brief: "停不了，原因见 Navi。" });
         const title = cardHeaderOf(ctx.card.content).title;
@@ -174,7 +174,7 @@ export class CommandRunner {
         const taskId = ctx.card.taskId;
         await ctx.commit?.(taskId);
         const answer = await this.answered(ctx, { taskId });
-        const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/retry"), { expectedFailure: versionOf(ctx.card.subject) });
+        const result = await this.deps.navi.post(ctx.principal, taskPath(taskId, "/retry"), { expectedFailure: versionOf(ctx.card.subject) });
         return this.say(ctx, result.ok ? "已重试，任务重新开始跑了。" : `没能重试：${scrubText(result.error, 300)}`, answer,
           { taskId, ...(result.ok ? {} : { brief: "没能重试，原因见 Navi。" }) });
       }
@@ -203,7 +203,7 @@ export class CommandRunner {
 
   /** 他看得到的项目。没读到就是没读到（返回 null，已回过一句说明）：不能当成「一个都看不到」去答。 */
   private async projects(ctx: InboundContext): Promise<Project[] | null> {
-    const result = await this.deps.ash.get<Project[]>(ctx.principal, "/api/projects");
+    const result = await this.deps.navi.get<Project[]>(ctx.principal, "/api/projects");
     if (result.ok) return Array.isArray(result.data) ? result.data : [];
     await this.say(ctx, `这一下没读到你的项目列表（${scrubText(result.error, 120)}）：请稍后再试。`, await this.answered(ctx, {}));
     return null;
@@ -288,7 +288,7 @@ export class CommandRunner {
   /** 确认卡上点了「确定」（/stop；/new 早先也走确认卡，升级前发出的那几张照样认）。 */
   async confirmed(principal: ImPrincipal, payload: Record<string, unknown>): Promise<Outcome> {
     if (payload.command === "stop" && typeof payload.taskId === "string") {
-      const result = await this.deps.ash.post(principal, taskPath(payload.taskId, "/stop"));
+      const result = await this.deps.navi.post(principal, taskPath(payload.taskId, "/stop"));
       return result.ok ? { ok: true, text: "已停止。", final: true, tone: "grey" } : { ok: false, text: scrubText(result.error, 300), final: false };
     }
     if (payload.command === "new" && typeof payload.projectId === "string" && typeof payload.title === "string") {
@@ -300,7 +300,7 @@ export class CommandRunner {
   /** 配对卡上的「允许 / 拒绝」（pairing.ts）。申请不在了（过期、别处处理过）不是没办成：收起来，照实说。 */
   async paired(principal: ImPrincipal, payload: Record<string, unknown>, decision: "approve" | "deny"): Promise<Outcome> {
     const id = typeof payload.requestId === "string" ? payload.requestId : "";
-    const result = await this.deps.ash.post<{ name?: string }>(principal, `/api/remote-access/requests/${encodeURIComponent(id)}/${decision}`);
+    const result = await this.deps.navi.post<{ name?: string }>(principal, `/api/remote-access/requests/${encodeURIComponent(id)}/${decision}`);
     if (result.ok) {
       return decision === "approve"
         ? { ok: true, final: true, text: `已允许「${scrubTitle(result.data.name ?? "", 40)}」连接。` }
@@ -314,16 +314,16 @@ export class CommandRunner {
   private async createAndRun(
     principal: ImPrincipal, projectId: string, title: string, body: unknown, autoTitle = false, attachments: string[] = [],
   ): Promise<Outcome> {
-    const created = await this.deps.ash.post<{ id: string }>(principal, "/api/tasks",
+    const created = await this.deps.navi.post<{ id: string }>(principal, "/api/tasks",
       { projectId, title, body, autoTitle, ...(attachments.length ? { attachments } : {}) });
     // 请求本身被拒（参数、权限）才放回信封让他再点；5xx、没调通的任务可能已经建出来了，再点一下就是第二个：
-    // 按「办完了、结局不明」收起，跟 ash 重启打断确认卡同一个说法（actions.ts recoverOne）。
+    // 按「办完了、结局不明」收起，跟 navi 重启打断确认卡同一个说法（actions.ts recoverOne）。
     if (!created.ok && failureOf(created) === "transient") {
       return { ok: true, final: true, tone: "orange", text: `不确定建成没有（${scrubText(created.error, 120)}）：请在 Navi 里看一眼，需要的话重新发 /new。` };
     }
     if (!created.ok) return { ok: false, text: scrubText(created.error, 300), final: false };
     // 任务已经建出来了：后面再出什么错都不能算「没办成」—— 那会放回信封，再点一下就又建一个。
-    const run = await this.deps.ash.post(principal, taskPath(created.data.id, "/run"));
+    const run = await this.deps.navi.post(principal, taskPath(created.data.id, "/run"));
     const base = await readOptions().then((options) => options.publicBaseUrl, () => null);
     const link = taskLink(base, { task: { id: created.data.id, projectId } });
     return {

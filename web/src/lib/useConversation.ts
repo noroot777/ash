@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ANSWER_PREFIX, type Session } from "@ash/shared";
+import { ANSWER_PREFIX, type Session } from "@navi/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 import {

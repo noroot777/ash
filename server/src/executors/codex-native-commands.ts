@@ -1,5 +1,5 @@
-import type { AgentEvent, ContextUsage } from "@ash/shared";
-import { goalRequest, isGoalExecution, isPlanImplementation, type CliCommand, type CliGoal, type CliSessionState } from "@ash/shared/cli-commands";
+import type { AgentEvent, ContextUsage } from "@navi/shared";
+import { goalRequest, isGoalExecution, isPlanImplementation, type CliCommand, type CliGoal, type CliSessionState } from "@navi/shared/cli-commands";
 
 type Transport = {
   request(method: string, params: Record<string, unknown>): Promise<any>;

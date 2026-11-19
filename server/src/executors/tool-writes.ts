@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { kindOf } from "../artifact-kind.js";
 import { contentDigest } from "../file-digest.js";
 

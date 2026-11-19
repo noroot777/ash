@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
+import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@navi/shared/accept-gate";
 import { api } from "../lib/api.ts";
 import { type CatchUpOptions, catchUpAbortKind } from "../lib/catchUp.ts";
 import { useServerEvents } from "../lib/events.ts";

@@ -1,5 +1,5 @@
 // test-handoff 第 8 节:并发导入互斥。从主文件拆出来只为压体积(700 行硬线),断言原样搬过来。
-// 跑在**源机进程内**,所以按调用时机动态 import 那些吃 ASH_DB 的模块(同 handoff-state-check.ts)。
+// 跑在**源机进程内**,所以按调用时机动态 import 那些吃 NAVI_DB 的模块(同 handoff-state-check.ts)。
 //
 // 缺陷形态(第 2 轮审查实测):两个并发 import 都过了 existing 预检,输家撞
 // tasks.id UNIQUE 后补偿回滚按公共 task id 把赢家的行也删了(req1 200、req2 500、

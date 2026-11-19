@@ -13,13 +13,13 @@ import { Hono } from "hono";
 import type { InputAcceptance, RunHandle, RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-question-supersede-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const root = mkdtempSync(join(tmpdir(), "navi-question-supersede-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
-process.env.ASH_TURN_INPUT_ACK_MS = "200";
-delete process.env.ASH_ALLOW_REAL_AGENT;
+process.env.NAVI_TURN_INPUT_ACK_MS = "200";
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks } = await import("../src/db/schema.js");

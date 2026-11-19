@@ -8,7 +8,7 @@ import {
   scheduledMessages, schema, tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
-import { appendMonitorWake } from "@ash/shared/monitor-wake";
+import { appendMonitorWake } from "@navi/shared/monitor-wake";
 import { occupyResumePrompt } from "../src/task-resume-prompt.js";
 import { dispatchPendingMessage } from "../src/pending-dispatch.js";
 import { hasPendingDeliveryRecovery } from "../src/pending-delivery-recovery.js";
@@ -20,11 +20,11 @@ export type Row = typeof scheduledMessages.$inferSelect;
 export const api = new Hono();
 mountTaskRunRoutes(api);
 const log = join(root, "checkpoint-input.log");
-const environment = { path: process.env.PATH, staged: process.env.ASH_TEST_AGENT_BIN, log: process.env.ASH_TEST_LEAD_LOG };
+const environment = { path: process.env.PATH, staged: process.env.NAVI_TEST_AGENT_BIN, log: process.env.NAVI_TEST_LEAD_LOG };
 const fakeBin = installFakeClaude(root);
 process.env.PATH = `${fakeBin}${delimiter}${environment.path ?? ""}`;
-process.env.ASH_TEST_AGENT_BIN = fakeBin;
-process.env.ASH_TEST_LEAD_LOG = log;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_LEAD_LOG = log;
 const created: string[] = [];
 export const input = () => existsSync(log) ? readFileSync(log, "utf8") : "";
 export const hits = (text: string) => input().split(text).length - 1;
@@ -169,10 +169,10 @@ export async function cleanup(): Promise<void> {
     } finally {
       if (environment.path === undefined) delete process.env.PATH;
       else process.env.PATH = environment.path;
-      if (environment.staged === undefined) delete process.env.ASH_TEST_AGENT_BIN;
-      else process.env.ASH_TEST_AGENT_BIN = environment.staged;
-      if (environment.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
-      else process.env.ASH_TEST_LEAD_LOG = environment.log;
+      if (environment.staged === undefined) delete process.env.NAVI_TEST_AGENT_BIN;
+      else process.env.NAVI_TEST_AGENT_BIN = environment.staged;
+      if (environment.log === undefined) delete process.env.NAVI_TEST_LEAD_LOG;
+      else process.env.NAVI_TEST_LEAD_LOG = environment.log;
     }
   }
 }

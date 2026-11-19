@@ -55,7 +55,7 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
     if (fact !== "accepted") return;
     for (const effect of acceptedEffects.splice(0)) {
       try { await effect(); } catch (error) {
-        console.error(`[ash] 任务 ${taskId} 输入确认送达后的收尾出错，这一轮照常继续:`, error);
+        console.error(`[navi] 任务 ${taskId} 输入确认送达后的收尾出错，这一轮照常继续:`, error);
       }
     }
   };
@@ -94,7 +94,7 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
       // 留下痕迹 —— 租约那条路自己带退避补偿(delivery-lease.ts),能走到这儿的是**它之外**
       // 的记账炸了,咽下去就等于「消息永久卡在待发送」这类现场连一行线索都没有。
       try { await settled?.(acceptance, reviewReceipt?.()); } catch (error) {
-        console.error(`[ash] 任务 ${taskId} 的投递记账(${acceptance})出错，这一轮照常继续:`, error);
+        console.error(`[navi] 任务 ${taskId} 的投递记账(${acceptance})出错，这一轮照常继续:`, error);
       }
       await runAccepted(acceptance);
       if (acceptance === "unknown") {
@@ -104,7 +104,7 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
         settleLateTurnInput(handle, `任务 ${taskId}`, async (late) => {
           await noteFact(late);
           try { await settled?.(late, reviewReceipt?.()); } catch (error) {
-            console.error(`[ash] 任务 ${taskId} 的迟到投递记账(${late})出错:`, error); // 同上,不静默
+            console.error(`[navi] 任务 ${taskId} 的迟到投递记账(${late})出错:`, error); // 同上,不静默
           }
           await runAccepted(late);
         });

@@ -1,4 +1,4 @@
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { useLeftDrawerHost } from "../components/LeftDrawer.tsx";
 import type { useConversation } from "../lib/useConversation.ts";
 import { useTaskInspectorStack } from "./useTaskInspectorStack.ts";

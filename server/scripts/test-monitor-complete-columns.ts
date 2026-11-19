@@ -1,7 +1,7 @@
 // 这一版新加的三列，在**存量库**上补得上吗 —— 而且补上之后不改写任何既有事实。
 //
 // 为什么单独一条：这三列是「挂着哨兵不许收工」那条不变量的凭证，而它们都走 `ensureSchema()`
-// 里那串宽容 `ALTER`（已经有了就 catch 掉）。那条路上一旦抛异常，整台 ash 起不来，所以它
+// 里那串宽容 `ALTER`（已经有了就 catch 掉）。那条路上一旦抛异常，整台 navi 起不来，所以它
 // 只能宽容；代价是**补不上会很安静** —— 列不在，闸读到的永远是 undefined，于是：
 //  · `tasks.resume_prompt_auto` 缺 ⇒ 分不出「系统写的等待」和「agent 自己 pause 的」；
 //  · `monitors.results_abandoned_at/-_reason` 缺 ⇒ 「这个结果我不要了」永远落不下来，
@@ -34,11 +34,11 @@ import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 // **先把库指到自己的临时目录,再过安全检查**（第 1 轮审查 N1）：反过来的话,没有预设
-// `ASH_DB` 的人直接跑 `npm -w server run test:monitors` 会在这一条上 exit 1,而它自己
+// `NAVI_DB` 的人直接跑 `npm -w server run test:monitors` 会在这一条上 exit 1,而它自己
 // 本来就要造一个临时库 —— 那道检查是拦「别写到真实任务库上」,不是要求调用方代劳。
-const stage = mkdtempSync(join(tmpdir(), "ash-monitor-columns-"));
-process.env.ASH_DB = join(stage, "legacy.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-monitor-columns-"));
+process.env.NAVI_DB = join(stage, "legacy.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("monitor-complete-columns");
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");

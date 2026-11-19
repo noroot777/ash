@@ -7,7 +7,7 @@
 // 每一份都摆成线上的样子：中间那一栏（`.task-detail`，抽屉的定位基准）+ 右边一条审查格。
 import { StrictMode, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewDebate, FreeReviewDispute, FreeReviewRun, Session, Task } from "@ash/shared";
+import type { FreeReviewDebate, FreeReviewDispute, FreeReviewRun, Session, Task } from "@navi/shared";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
 import { useDisputeRulingDock } from "../../src/free-workflow/DisputeRulingDock.tsx";
 import { FreeReviewRoundBody } from "../../src/free-workflow/FreeReviewRoundBody.tsx";

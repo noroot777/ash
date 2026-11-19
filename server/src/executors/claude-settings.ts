@@ -6,9 +6,9 @@ import { dirname, join, resolve, sep } from "node:path";
 //   企业策略 managed-settings.json > `--settings` > 项目 .claude/settings.local.json
 //   > 项目 .claude/settings.json > 用户配置目录 settings.json > 继承来的环境变量
 // 每一层的 `env` 对象在 CLI 初始化时会被**写回它自己的 process.env**,所以文件里的
-// 同名变量压过 ash 注入的环境变量(第 1 轮审查 finding 1 的根因)。
+// 同名变量压过 navi 注入的环境变量(第 1 轮审查 finding 1 的根因)。
 //
-// 「项目」和「用户配置目录」各有一条反直觉的实测事实,而且**两条都正打在 ash 的
+// 「项目」和「用户配置目录」各有一条反直觉的实测事实,而且**两条都正打在 navi 的
 // 主路径上**(第 3 轮审查 finding 3):
 //
 //   ① linked worktree 不是一个独立项目。测法:主仓 /tmp/probe/repo、linked worktree
@@ -19,7 +19,7 @@ import { dirname, join, resolve, sep } from "node:path";
 //        主仓 settings=8888 vs worktree settings=5000 → 5000(这一档反过来,就近赢)
 //        主仓 local=8000  vs worktree settings=5000   → 8000(local 整体高于 settings)
 //      数值对调重测结论不变。即 `settings.local.json` 认 canonical repo、
-//      `settings.json` 认当前目录,两档各自成对。ash 默认在 worktree 里干活,
+//      `settings.json` 认当前目录,两档各自成对。navi 默认在 worktree 里干活,
 //      只读 cwd 直下的话,主仓那份 `settings.local.json` 完全看不见 —— 而那正是
 //      「本机私有配置」最常写的地方。
 //   ② `CLAUDE_CONFIG_DIR` 设了就**整个取代** `~/.claude`,不回落:
@@ -27,7 +27,7 @@ import { dirname, join, resolve, sep } from "node:path";
 //        CLAUDE_CONFIG_DIR 指向空目录               → 读不到值(不会退回 HOME 的那份)
 //
 // 这里只解一件事:`CLAUDE_CODE_MAX_OUTPUT_TOKENS` 最终是多少。它是自动压缩换算的分母
-// (有效窗口 = 声明窗口 − min(它, 20000)),ash 必须按 CLI 真正会用的那个值换算,
+// (有效窗口 = 声明窗口 − min(它, 20000)),navi 必须按 CLI 真正会用的那个值换算,
 // 否则设置页写的触发点跟实际差一截 —— 用户 settings.json 里写 10000 时,填 80% 实际
 // 会在 ~84% 才压(第 2 轮审查 finding 3)。
 //
@@ -65,10 +65,10 @@ function managedSettingsPath(): string {
 }
 
 /**
- * 这次 CLI 子进程看到的 `CLAUDE_CONFIG_DIR`。**必须按本次起跑的环境算**,不能拿 ash 自己进程的:
+ * 这次 CLI 子进程看到的 `CLAUDE_CONFIG_DIR`。**必须按本次起跑的环境算**,不能拿 navi 自己进程的:
  * 多人隔离档下每个用户的任务都带着自己的配置目录起跑(auth/run-env.ts),拿宿主那份去读,解出来
  * 的就是宿主的配置(审查 SaouXWB_jEuw 第 2 轮 F1)。
- *   undefined = 本次起跑没动这个变量,子进程继承 ash 进程的;
+ *   undefined = 本次起跑没动这个变量,子进程继承 navi 进程的;
  *   null      = 本次起跑把它删了(env 里显式给 undefined);
  *   string    = 本次起跑给的那个目录。
  */
@@ -131,7 +131,7 @@ function projectLayers(cwd: string): string[] {
     : [local(root), shared(root)];
 }
 
-/** 比 ash 那份 `--settings` 低的那几层(项目两档 + 用户配置目录),按实测优先级从高到低。 */
+/** 比 navi 那份 `--settings` 低的那几层(项目两档 + 用户配置目录),按实测优先级从高到低。 */
 function lowerLayers(cwd: string | undefined, configDir: ClaudeConfigDir): string[] {
   return [...(cwd ? projectLayers(cwd) : []), join(userConfigDir(configDir), "settings.json")];
 }
@@ -163,14 +163,14 @@ export interface ClaudeCompactFacts {
 
 /**
  * 各层配置里跟自动压缩有关的事实,给「这次起跑最终按什么压」那道判定用(cli-env.ts
- * claudeLaunchCompact)。ash 只注入用户在 profile 上填了的项,**留空的项照样从下面这几层
+ * claudeLaunchCompact)。navi 只注入用户在 profile 上填了的项,**留空的项照样从下面这几层
  * 继承** —— 用户 settings.json 里写了 50%、profile 只填窗口,CLI 就按 50% 压(审查 SaouXWB_jEuw F1)。
  *
  *   maxOutputTokens  CLI 最终会看到的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`(没有任何一层写过 = null)
- *   managedTouches   企业策略那层碰过任一压缩输入:它压在 `--settings` 之上,ash 注入的数也未必算数
- *   lowerTouches     项目/用户那几层碰过任一压缩输入:ash 没配压缩时,CLI 就按它们走
+ *   managedTouches   企业策略那层碰过任一压缩输入:它压在 `--settings` 之上,navi 注入的数也未必算数
+ *   lowerTouches     项目/用户那几层碰过任一压缩输入:navi 没配压缩时,CLI 就按它们走
  *   inheritedPercent 那几层里赢下来的百分比(env 原值,占有效窗口);同名变量在子进程环境里已被
- *                    ash 删掉(cliConfigOverrideEnvPatch),所以不看 process.env
+ *                    navi 删掉(cliConfigOverrideEnvPatch),所以不看 process.env
  *
  * 每份文件只读一次、四项出自同一次读取:起跑时注入的 settings/env 与启动快照都从这一份来,
  * 中途有人改配置也不会一边按旧值注入、一边按新值记快照(审查 rGyEqSY4VO6F N1)。

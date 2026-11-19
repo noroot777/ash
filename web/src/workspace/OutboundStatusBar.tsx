@@ -1,4 +1,4 @@
-import type { HandoffPeerOffline } from "@ash/shared";
+import type { HandoffPeerOffline } from "@navi/shared";
 import { ArrowClockwise, SpinnerGap } from "@phosphor-icons/react";
 
 /** 出站行的状态说明所需的一切。整块传，免得四层组件各自摊平成五个 prop。 */

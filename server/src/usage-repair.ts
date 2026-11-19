@@ -9,8 +9,8 @@
 // 之前的那段历史账不回填（用户 2026-11-13 拍板放弃）。
 import { readFileSync } from "node:fs";
 import { eq, isNotNull } from "drizzle-orm";
-import type { TokenUsage } from "@ash/shared";
-import { addUsage } from "@ash/shared/usage";
+import type { TokenUsage } from "@navi/shared";
+import { addUsage } from "@navi/shared/usage";
 import { db } from "./db/index.js";
 import { appSettings, sessions, usageCumulativeSnapshots } from "./db/schema.js";
 import { readableRunPath, parseSessionTrace, sessionTracePath } from "./transcript.js";

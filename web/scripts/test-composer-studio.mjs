@@ -28,7 +28,7 @@ try {
     if (path === "/api/projects/p1" && request.method() === "PATCH") {
       const patch = request.postDataJSON();
       projectPatches.push(patch);
-      data = { id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, createdAt: "2026-08-28T00:00:00.000Z",
+      data = { id: "p1", name: "navi", repoPath: "/tmp/navi", workflowId: null, createdAt: "2026-08-28T00:00:00.000Z",
         health: { exists: true, isRepo: true }, ...patch };
     }
     if (path === "/api/tasks" && request.method() === "POST") {

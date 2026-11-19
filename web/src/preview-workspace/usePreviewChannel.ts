@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PREVIEW_ANNOTATION_PROTOCOL } from "@ash/shared/page-annotation";
-import type { PreviewAnnotationCommand, PreviewAnnotationHandshake, PreviewAnnotationMode, PreviewAnnotationTool } from "@ash/shared/page-annotation";
+import { PREVIEW_ANNOTATION_PROTOCOL } from "@navi/shared/page-annotation";
+import type { PreviewAnnotationCommand, PreviewAnnotationHandshake, PreviewAnnotationMode, PreviewAnnotationTool } from "@navi/shared/page-annotation";
 import { createClientId } from "../lib/clientId.ts";
 import { parsePreviewMessage, type WorkspaceAnnotationEvent } from "./previewMessages.ts";
 

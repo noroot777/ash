@@ -4,18 +4,18 @@
 // (`settle-status.ts`)用分支顺序表达,启动对账(`task-reconcile.ts`)用一行三元表达式。
 // 两份一漂,同一个事实就按进了哪个入口给出两种结论:一个已完成的任务被一次失败续聊打断,
 // 不重启收尾保住 `done`,重启收尾却整个降成 `failed`(第 1 轮审查 F2,已实测)。用户那边唯一的
-// 区别只是「ash 有没有重启」,而那不该是任务结论的输入。
+// 区别只是「navi 有没有重启」,而那不该是任务结论的输入。
 //
 // 所以这里只放**纯函数**:它不碰库、不写状态、没有副作用,两个入口把各自手里的事实交进来,
 // 拿回同一个答案。恢复层只提供事实,不自己定优先级。
 //
 // 字段**一个都不给默认值**,这是刻意的:将来多一个轴(比如「审查旁路回合」),加进这个类型
 // 就会让两个调用点同时编译不过 —— 比在某一侧补一个分支、另一侧忘掉要安全。
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 
 export interface FailedTurnFacts {
-  /** 这一轮被 **ash 自己**判了失败(看门狗熔断,或者上次中断留下的回合结局核实不了)。 */
-  ashFailed: boolean;
+  /** 这一轮被 **navi 自己**判了失败(看门狗熔断,或者上次中断留下的回合结局核实不了)。 */
+  naviFailed: boolean;
   /**
    * 续聊前那个状态 —— 非空 = 这一轮是**终态之后的一次对话**,不是任务的执行。
    * 旁路回合(就地验证)恢复的可能是 `paused`/`backlog` 一类,不止三个终态。
@@ -37,7 +37,7 @@ export interface FailedTurnFacts {
  *    `failed`。**回合失败和任务此前的成果是两个轴** —— 这一轮的失败记在回合区间上
  *    (`session_turns.outcome`)和时间线里,任务那一行不动。
  *
- * ② **ash 判的失败压过下面两条。** 它压过残留的队列占位(第 1 轮审查 F2 的同类实例:起跑回执
+ * ② **navi 判的失败压过下面两条。** 它压过残留的队列占位(第 1 轮审查 F2 的同类实例:起跑回执
  *    之后 `clearQueueAdvance` 没写成,旧请求还在,于是「还有请求」被当成「尚未起跑」,把一轮确凿
  *    的失败落回 `paused`/`backlog`),也压过持续目标的「暂停」—— 那句话替用户表达了「它在等你」,
  *    而这一轮是我们自己判失败的(第 5 轮审查 F3)。
@@ -50,7 +50,7 @@ export interface FailedTurnFacts {
  */
 export function failedTurnLanding(facts: FailedTurnFacts): TaskStatus {
   if (facts.followUpFrom) return facts.followUpFrom;
-  if (facts.ashFailed) return "failed";
+  if (facts.naviFailed) return "failed";
   if (facts.queueAdvancePrev) return facts.queueAdvancePrev;
   if (facts.goalHeld) return "paused";
   return "failed";

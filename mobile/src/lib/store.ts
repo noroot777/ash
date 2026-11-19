@@ -5,7 +5,7 @@
 // Conversation content is NOT here: the task screen owns it locally, polled from
 // the session .md (see app/task/[id].tsx).
 import { create } from "zustand";
-import type { ProjectView, TaskListItem, Group } from "@ash/shared";
+import type { ProjectView, TaskListItem, Group } from "@navi/shared";
 
 interface State {
   online: boolean;

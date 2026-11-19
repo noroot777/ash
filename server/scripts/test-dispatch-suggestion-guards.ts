@@ -6,7 +6,7 @@
 //   · 补了图再派：图的归属跟建任务同一笔。归属写不进去整笔不落（没有新任务、建议还在）；写得进去时回包之前
 //     就已经归到新任务上。
 //
-// 跑：npm -w @ash/server run test:dispatch-suggestion（跟主链路那份串着跑）
+// 跑：npm -w @navi/server run test:dispatch-suggestion（跟主链路那份串着跑）
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,11 +16,11 @@ import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installExitingClis } from "./scheduled-messages-fixture.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-dispatch-suggestion-guards-"));
+const root = mkdtempSync(join(tmpdir(), "navi-dispatch-suggestion-guards-"));
 const originalPath = process.env.PATH;
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 const fakeBin = join(root, "bin");
 mkdirSync(fakeBin);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
@@ -131,7 +131,7 @@ try {
   assert.equal(second?.executorId ?? null, null, "别人的执行器 id 不跟着落进自己名下的任务");
 
   // —— 二、挂建议：核过身份之后方向换了 / 任务停了，这一批不挂 ——
-  const turnHeaders = { "x-ash-turn-token": "turn-old", "x-ash-direction-token": "dir-old" };
+  const turnHeaders = { "x-navi-turn-token": "turn-old", "x-navi-direction-token": "dir-old" };
   const post = (id: string) => send(`/tasks/${id}/dispatch-suggestions`, { tasks: [{ title: "旧方向下的建议", body: "不该挂出来", note: "边界" }] }, turnHeaders);
   const running = { status: "running", activeTurnToken: "turn-old", activeDirectionToken: "dir-old" } as const;
 

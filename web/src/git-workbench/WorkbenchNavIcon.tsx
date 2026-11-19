@@ -1,4 +1,4 @@
-import type { GitView } from "@ash/shared/git-workbench";
+import type { GitView } from "@navi/shared/git-workbench";
 
 const shapes = {
   changes: <><path d="M3 5.5h7M3 8h10M3 10.5h6" /><circle cx="12.5" cy="5.5" r="1.6" /></>,

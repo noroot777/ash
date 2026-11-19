@@ -12,27 +12,27 @@
 //   · 端到端复现用户遇到的顺序（假 CLI 真跑一个回合）：挂建议 → 同一回合提问停下 → 用户答题 → 续跑回合结束，
 //     那一件还在、照样派得出去。
 //
-// 跑：npm -w @ash/server run test:dispatch-suggestion
+// 跑：npm -w @navi/server run test:dispatch-suggestion
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { Task } from "@ash/shared";
-import { SUGGESTION_EXTRA_HEADING } from "@ash/shared/dispatch-suggestion";
+import type { Task } from "@navi/shared";
+import { SUGGESTION_EXTRA_HEADING } from "@navi/shared/dispatch-suggestion";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installExitingClis, installFakeClaude } from "./scheduled-messages-fixture.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-dispatch-suggestion-"));
+const root = mkdtempSync(join(tmpdir(), "navi-dispatch-suggestion-"));
 const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_TEST_LEAD_LOG = leadLog;
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
-process.env.ASH_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 await installExitingClis(fakeBin, ["codex", "gemini"]);
 
 const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, settle] = await Promise.all([
@@ -77,7 +77,7 @@ let turn = 0;
 const inTurn = async (id: string) => {
   turn += 1;
   await db.update(tasks).set({ status: "running", activeTurnToken: `turn-${turn}`, activeDirectionToken: `dir-${turn}` }).where(eq(tasks.id, id));
-  return { "x-ash-client": "mcp", "x-ash-source-task-id": id, "x-ash-turn-token": `turn-${turn}`, "x-ash-direction-token": `dir-${turn}` };
+  return { "x-navi-client": "mcp", "x-navi-source-task-id": id, "x-navi-turn-token": `turn-${turn}`, "x-navi-direction-token": `dir-${turn}` };
 };
 /** 那一回合结束：照真结算的判据落位（confirm = 结束前确认过完成）。 */
 const endTurn = async (id: string, confirm: boolean) => {
@@ -107,7 +107,7 @@ try {
   // —— 没在跑、方向身份过期：挂不上。
   assert.equal((await suggest(S, {}, [RED])).status, 409, "没在跑时挂不上");
   let headers = await inTurn(S);
-  assert.equal((await suggest(S, { ...headers, "x-ash-direction-token": "dir-old" }, [RED])).status, 409, "方向身份过期");
+  assert.equal((await suggest(S, { ...headers, "x-navi-direction-token": "dir-old" }, [RED])).status, 409, "方向身份过期");
   assert.equal((await suggest(S, headers, [{ title: "", body: "x", note: "" }])).status, 400, "标题不能空");
   // 审查回合、被 @ 来问一句的回合：不能挂。
   const reviewer = runs.claimOwnTurn(S, "reviewer");
@@ -252,7 +252,7 @@ try {
   assert.deepEqual([(await shown(B)).map((item) => item.title), (await withdrawnOf(B)).length], [["方向换了以后还在的"], 1], "没拿掉，也没多记一条");
   // 收回记录只增不减：没有任何东西知道用户看没看过，所以挂了收、收了挂多少轮，最早那一条的原因都还在
   // （一次收回好几件的也一条不少、先后不乱）。
-  bare = { ...bare, "x-ash-direction-token": "dir-moved" };
+  bare = { ...bare, "x-navi-direction-token": "dir-moved" };
   const ROUNDS = 40;
   for (let round = 0; round < ROUNDS; round += 1) {
     const hung = await suggest(B, bare, [{ ...RED, title: `第 ${round} 轮甲` }, { ...RED, title: `第 ${round} 轮乙` }]);
@@ -310,7 +310,7 @@ try {
   // 先收回「可以起真执行器」的放行，再动 PATH：PATH 一还原，上面排着还没起跑的任务拿到的就是机器上真的
   // claude（实测漏出过，带着 --dangerously-skip-permissions 在后台跑）。放行收回后晚到的起跑一律被闸住
   // （executors/spawn.ts 的 guardAgentSpawn）。PATH 等全部停下之后才还原。
-  delete process.env.ASH_ALLOW_REAL_AGENT;
+  delete process.env.NAVI_ALLOW_REAL_AGENT;
   const started = (await db.select({ id: tasks.id }).from(tasks)).map((task) => task.id);
   for (const id of started) if (runs.isRunning(id)) runs.stopTask(id);
   await waitFor(() => started.every((id) => !runs.isRunning(id)), "收尾：还有没停下的假 CLI").catch((error) => {

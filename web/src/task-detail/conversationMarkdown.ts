@@ -1,5 +1,5 @@
-import type { Task } from "@ash/shared";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import type { Task } from "@navi/shared";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import type { ConversationItem } from "./conversationModel.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 

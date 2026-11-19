@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-background-"));
-process.env.ASH_DB = join(root, "test.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-background-"));
+process.env.NAVI_DB = join(root, "test.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, monitors, acceptGateRuns, taskBackgroundRevisions } = await import("../src/db/schema.js");
 const { createClient } = await import("../src/db/node-sqlite-client.js");
@@ -82,7 +82,7 @@ try {
   assert.equal((await row("single")).backgroundRevision, 6);
   await ensureSchema();
   assert.equal((await row("single")).backgroundRevision, 6);
-  const reopened = createClient({ url: process.env.ASH_DB! });
+  const reopened = createClient({ url: process.env.NAVI_DB! });
   try {
     await ensureTaskBackgroundSchema(reopened);
     const persisted = await reopened.execute("SELECT revision FROM task_background_revisions WHERE task_id = 'single'");

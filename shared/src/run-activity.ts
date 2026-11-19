@@ -78,7 +78,7 @@ export function runActivityExecutor({
 /**
  * 此刻有回合在跑的那条会话(endedAt 为空;多条取回合最新的那条),没有就是 null。
  * 不往任务常设执行器上退:进行条拿它说「是这家在干活」,会话行还没开出这一回合时那段
- * 准备时间是 ash 自己的,不能算到智能体头上。
+ * 准备时间是 navi 自己的,不能算到智能体头上。
  */
 export function liveRunActor<T extends RunActivityActor>(sessions: readonly T[]): T | null {
   let live: T | null = null;

@@ -1,4 +1,4 @@
-// 重启接管:把上一个 ash 进程已经消费掉的那段 claude 输出重新走一遍解析,让接回来的这一代
+// 重启接管:把上一个 navi 进程已经消费掉的那段 claude 输出重新走一遍解析,让接回来的这一代
 // 和「从没中断过」处在同一个状态上(claude-stream.ts 的 `consumed`)。
 //
 // 不变量:**接回后的状态 = 把整条输出从头到尾不间断读一遍的状态。** 所以重放走的是直播
@@ -6,7 +6,7 @@
 // 两套判据迟早分叉:上一版只补了后台账本,回合识别、忙闲、打断标志全是空的,于是通知回合
 // 的结果被当成孤儿回执吞掉、请求中途接回的插话不打断(自由审查 KqmEd8oQLV5_ 第 2 轮)。
 //
-// 输出流里**看不见**的是 ash 自己写进 stdin 的那一侧:哪个回合结尾是我们打断出来的、插话正文送
+// 输出流里**看不见**的是 navi 自己写进 stdin 的那一侧:哪个回合结尾是我们打断出来的、插话正文送
 // 没送进去、空档里直接送进去的消息(它开的回合可能还一个字都没吐)。它们在写 stdin 之前就落在输出文件旁的 steer journal 里(`loadSteerJournal`,由
 // ClaudeControlBridge 记),重放按它认。上一版拿输出里的回执先后去猜(回执可以晚到、前面可以
 // 插进后台进度),猜错就把被打断的结尾当成自然结束、提前收台(自由审查 i8RAcPM3zvgD R1)。
@@ -58,7 +58,7 @@ export function startsTurn(ev: any): boolean {
 }
 
 /**
- * 一条 ash 发出的打断:它认领第 `result` 个回合结尾(孤儿回执不算)。插话那种带 `sent`,正文写进
+ * 一条 navi 发出的打断:它认领第 `result` 个回合结尾(孤儿回执不算)。插话那种带 `sent`,正文写进
  * stdin 之前置 true;纯打断不带。
  */
 export interface SteerEntry {
@@ -131,7 +131,7 @@ export function holdSince(outPath: string | undefined, turn: number): string {
   try {
     writeFileSync(path, JSON.stringify({ turn, since: now }));
   } catch (error) {
-    console.warn(`[ash] 记不下等后台的起点（${path}），重启接管后期限会从接回时重新起算:`, error);
+    console.warn(`[navi] 记不下等后台的起点（${path}），重启接管后期限会从接回时重新起算:`, error);
   }
   return now;
 }

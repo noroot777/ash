@@ -1,4 +1,4 @@
-import type { TaskDiscussion } from "@ash/shared";
+import type { TaskDiscussion } from "@navi/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
 

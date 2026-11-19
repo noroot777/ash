@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentEvent, ProjectView, Session, Task, TaskListItem } from "@ash/shared";
+import type { AgentEvent, ProjectView, Session, Task, TaskListItem } from "@navi/shared";
 import { InspectorHost, InspectorHeadActions } from "../../src/inspector/index.ts";
 import { LeftDrawerProvider } from "../../src/components/LeftDrawer.tsx";
 import { useTaskDrawers } from "../../src/task-detail/useTaskDrawers.tsx";
@@ -29,7 +29,7 @@ const initial = [
 ];
 let currentTasks = initial;
 const mutations: string[] = [];
-const project = { id: "p1", name: "ash", repoPath: "/tmp/ash", health: { exists: true, isRepo: true } } as ProjectView;
+const project = { id: "p1", name: "navi", repoPath: "/tmp/navi", health: { exists: true, isRepo: true } } as ProjectView;
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -43,7 +43,7 @@ window.fetch = async (input, init) => {
   if (url.includes("/search/stream")) {
     const query = new URL(url, location.origin).searchParams.get("q") ?? "";
     const hits = currentTasks.filter((item) => item.title.includes(query) || item.id === query).map((item) => ({
-      kind: "task", ...item, projectName: "ash", archived: false, field: "title", snippet: "", preview: item.title,
+      kind: "task", ...item, projectName: "navi", archived: false, field: "title", snippet: "", preview: item.title,
     }));
     return new Response(hits.map((hit) => JSON.stringify(hit)).join("\n"));
   }

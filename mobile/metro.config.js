@@ -1,14 +1,14 @@
 // Expo Metro config for this monorepo. The mobile app keeps its OWN node_modules
 // (it is NOT an npm workspace) to avoid React / React-Native hoisting conflicts
 // with the web/server packages. It only reaches OUT to `shared/` for the shared
-// domain types, resolved via the repo-root `node_modules/@ash/shared`
+// domain types, resolved via the repo-root `node_modules/@navi/shared`
 // workspace symlink so types never drift (no build step — Metro transpiles the
 // .ts that the symlink points at).
 const { getDefaultConfig } = require("expo/metro-config");
 const path = require("path");
 
 const projectRoot = __dirname;
-const repoRoot = path.resolve(projectRoot, ".."); // ash/ monorepo root
+const repoRoot = path.resolve(projectRoot, ".."); // navi/ monorepo root
 
 const config = getDefaultConfig(projectRoot);
 
@@ -16,13 +16,13 @@ const config = getDefaultConfig(projectRoot);
 // into Metro's file map.
 config.watchFolders = [repoRoot];
 
-// Resolve dependencies from the app's OWN node_modules only — its `@ash/shared`
+// Resolve dependencies from the app's OWN node_modules only — its `@navi/shared`
 // entry is a symlink (declared as a `file:../shared` dependency) that Metro follows
 // out to the shared TS source. Keeping the repo-root tree out of resolution avoids
 // pulling a conflicting React from the web/server packages.
 config.resolver.nodeModulesPaths = [path.resolve(projectRoot, "node_modules")];
 
-// Follow the `@ash/shared` symlink out to shared/src.
+// Follow the `@navi/shared` symlink out to shared/src.
 // (SDK 57 起 symlink 解析已是 Metro 默认，`resolver.unstable_enableSymlinks` 显式置 true
 // 会被 expo-doctor 报为多余覆盖，故移除。)
 

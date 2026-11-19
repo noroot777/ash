@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, eq, isNull } from "drizzle-orm";
-import type { TaskCreationOrigin } from "@ash/shared/task-origin";
+import type { TaskCreationOrigin } from "@navi/shared/task-origin";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { actorOf } from "./auth/context.js";

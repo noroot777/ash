@@ -9,7 +9,7 @@
 //   merge   合并结果审查中断、能续：同样按轮次身份给「继续本轮审查」，「再审一次」退到更多里。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewRound, FreeReviewRun, RetryTurnAction, Session, Task } from "@ash/shared";
+import type { FreeReviewRound, FreeReviewRun, RetryTurnAction, Session, Task } from "@navi/shared";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
@@ -62,7 +62,7 @@ window.fetch = (input, init) => {
 const log = window as unknown as { __retried: string[] };
 log.__retried = [];
 
-// 会话：审查者说了两句、跑了构建，然后 ash 落下没结论那句和原因那句（同 server 写的形状）。
+// 会话：审查者说了两句、跑了构建，然后 navi 落下没结论那句和原因那句（同 server 写的形状）。
 const session = (taskId: string) => ({
   id: "rev", taskId, agentType: "codex", role: "main", executor: "codex", startedAt: at, endedAt: end, exitStatus: 1,
 }) as unknown as Session;

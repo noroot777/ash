@@ -9,9 +9,9 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-branch-plan-scale-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-branch-plan-scale-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks } = await import("../src/db/schema.js");
@@ -58,10 +58,10 @@ try {
     row("old-done-task", { stage: "accepted", acceptedTargetBranch: "main" }),
     row("new-main-task", { mergeTargetBranch: "main" }),
     row("parent-owner", { archived: true }),
-    row("child-legacy", { worktreeBase: "refs/heads/ash/parent-o" }),
+    row("child-legacy", { worktreeBase: "refs/heads/navi/parent-o" }),
     row("no-wt-owner", { useWorktree: false }),
   ]);
-  for (const id of ["old-main", "new-main", "parent-o", "child-le", "no-wt-ow"]) git("branch", `ash/${id}`);
+  for (const id of ["old-main", "new-main", "parent-o", "child-le", "no-wt-ow"]) git("branch", `navi/${id}`);
   const small = new Map<string, number>();
   for (const id of ["old-main-task", "old-done-task", "new-main-task", "child-legacy"]) {
     small.set(id, (await measurePlan(id)).gitCalls);
@@ -80,27 +80,27 @@ try {
     }
   }
   const before = gitCalls;
-  for (const branch of ["main", "refs/heads/main", "feature/topic", "ash/unknown", "ash/parent-owner", "ash/parent-o/nested"]) {
+  for (const branch of ["main", "refs/heads/main", "feature/topic", "navi/unknown", "navi/parent-owner", "navi/parent-o/nested"]) {
     assert.equal(await branchOwner(root, "project", branch), undefined);
   }
   assert.equal(gitCalls, before, "ordinary branches and unmatched IDs need no Git calls");
-  assert.equal(await branchOwner(root, "other", "ash/parent-o"), undefined);
-  assert.equal(await branchOwner(root, "project", "ash/no-wt-ow"), undefined);
-  assert.equal((await branchOwner(root, "project", " refs/heads/ash/parent-o "))?.id, "parent-owner");
+  assert.equal(await branchOwner(root, "other", "navi/parent-o"), undefined);
+  assert.equal(await branchOwner(root, "project", "navi/no-wt-ow"), undefined);
+  assert.equal((await branchOwner(root, "project", " refs/heads/navi/parent-o "))?.id, "parent-owner");
   assert.match((await branchDeletionBlock(root, "parent-owner"))!, /child-legacy/);
   git("branch", "harness/parent-o");
   assert.equal(await branchOwner(root, "project", "harness/parent-o"), undefined, "ash branch wins when both namespaces exist");
-  git("branch", "-D", "ash/parent-o");
+  git("branch", "-D", "navi/parent-o");
   assert.equal((await branchOwner(root, "project", "refs/heads/harness/parent-o"))?.id, "parent-owner");
   await db.update(tasks).set({ worktreeBase: "harness/parent-o" }).where(eq(tasks.id, "child-legacy"));
   assert.equal((await measurePlan("child-legacy")).plan.task.dependency?.taskId, "parent-owner");
   assert.match((await branchDeletionBlock(root, "parent-owner"))!, /child-legacy/);
   git("branch", "-D", "harness/parent-o");
-  assert.equal((await branchOwner(root, "project", "ash/parent-o"))?.id, "parent-owner", "missing branches retain existing ash ownership fallback");
+  assert.equal((await branchOwner(root, "project", "navi/parent-o"))?.id, "parent-owner", "missing branches retain existing navi ownership fallback");
   assert.equal(await branchOwner(root, "project", "harness/parent-o"), undefined);
   await db.insert(tasks).values(row("a_%", { archived: true }));
-  git("branch", "ash/a_%");
-  assert.equal((await branchOwner(root, "project", "ash/a_%"))?.id, "a_%", "short IDs and SQL wildcard characters match literally");
+  git("branch", "navi/a_%");
+  assert.equal((await branchOwner(root, "project", "navi/a_%"))?.id, "a_%", "short IDs and SQL wildcard characters match literally");
   const fingerprint = (await measurePlan("old-main-task")).plan.task.fingerprint;
   git("commit", "--allow-empty", "-m", "advance main");
   assert.notEqual((await measurePlan("old-main-task")).plan.task.fingerprint, fingerprint, "target advancement must be visible immediately");
@@ -108,11 +108,11 @@ try {
   const seed = git("rev-parse", "main");
   const tree = git("rev-parse", "main^{tree}");
   const parentHead = git("commit-tree", tree, "-p", seed, "-m", "family parent");
-  git("branch", "ash/family-p", parentHead);
+  git("branch", "navi/family-p", parentHead);
   await db.insert(tasks).values(row("family-parent", { mergeTargetBranch: "main", worktreeStartCommit: seed }));
   const children = Array.from({ length: 40 }, (_, i) => `kin${String(i).padStart(5, "0")}`);
   for (const child of children) {
-    git("branch", `ash/${child}`, git("commit-tree", tree, "-p", parentHead, "-m", child));
+    git("branch", `navi/${child}`, git("commit-tree", tree, "-p", parentHead, "-m", child));
     await db.insert(tasks).values(row(child, { baseTaskId: "family-parent", mergeTargetBranch: "main", worktreeStartCommit: parentHead }));
   }
   let first: Awaited<ReturnType<typeof measurePlan>> | undefined;
@@ -127,7 +127,7 @@ try {
       assert.ok(family.gitCalls <= 140, `family repeats shared Git reads: ${family.gitCalls}`);
     }
   }
-  git("merge", "--ff-only", "ash/family-p");
+  git("merge", "--ff-only", "navi/family-p");
   const integrated = await measurePlan("family-parent");
   assert.ok(integrated.plan.descendants.every((entry: { dependency: { state: string } }) => entry.dependency.state === "ready"));
   assert.notEqual(integrated.plan.task.fingerprint, first!.plan.task.fingerprint, "next request sees a new target commit");

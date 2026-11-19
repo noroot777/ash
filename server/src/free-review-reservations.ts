@@ -5,7 +5,7 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeWorkflowStates, type FreeReviewReservationSource } from "./db/schema.js";
 import { withRulingGate } from "./free-review-ruling-gate.js";
-import type { ReviewWaitReason } from "@ash/shared/timeline-notice";
+import type { ReviewWaitReason } from "@navi/shared/timeline-notice";
 import { appendTaskTimeline, alertLine, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -425,5 +425,5 @@ async function startReservedFreeReviewHeld(
     }
     return;
   }
-  console.error(`[ash] free review reservation for ${taskId} kept being rewritten; left armed`);
+  console.error(`[navi] free review reservation for ${taskId} kept being rewritten; left armed`);
 }

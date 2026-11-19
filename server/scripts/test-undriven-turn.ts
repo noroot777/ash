@@ -30,30 +30,30 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 
-const root = mkdtempSync(join(tmpdir(), "ash-undriven-turn-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_LAX_DONE = "1"; // 这里验的是投递与接管,不是严格 done 协议
+const root = mkdtempSync(join(tmpdir(), "navi-undriven-turn-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_LAX_DONE = "1"; // 这里验的是投递与接管,不是严格 done 协议
 // 「拿不到回执」那一档等多久 —— 压到几秒,免得 §4 要等满默认的一分钟。**不能压到几百毫秒**:
 // detached 的「连接关闭」是按 rc 文件轮询发现的(约 400ms 一拍),压过去 §4a 就会读成
 // `unknown` 而不是 `refused` —— 红的是夹具而不是判据。有界等待本身在 §3 里单独钉。
-process.env.ASH_TURN_INPUT_ACK_MS = "5000";
+process.env.NAVI_TURN_INPUT_ACK_MS = "5000";
 // `turn/start` 的**应答期限**(codex-app-server.ts 的 CODEX_TURN_START_ACK_MS;真实默认一分钟)。
 // §⑰ 两段都按它定位:a 段要在期限**之前**就凭完成事件收口(所以断言给 2.5 秒),b 段要的正是
 // 期限本身到期。压成 5 秒 = 两边各留一半余量,谁跑到期限之外都读得出来。
-process.env.ASH_CODEX_TURN_START_ACK_MS = "5000";
+process.env.NAVI_CODEX_TURN_START_ACK_MS = "5000";
 // 接管后**重读协议日志**的节奏(codex-app-server-contract.ts 的 CODEX_ADOPT_REREAD_MS;真实
 // 默认 2 秒)。§⑩b 要的是「两头都读不出来时那条可见提示按节奏出现」,20ms 一拍 ⇒ 第 5 拍开口
 // 大约 100ms,不必为了一条提示等满十秒。
-process.env.ASH_CODEX_ADOPT_REREAD_MS = "20";
+process.env.NAVI_CODEX_ADOPT_REREAD_MS = "20";
 const originalPath = process.env.PATH;
 
 const { installFakeCodexAppServer, codexMode } = await import("./undriven-turn-fixture.js");
 const fakeBin = installFakeCodexAppServer(root);
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
-// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;只放行自己装在 PATH 上的这个
+// 设了 NAVI_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;只放行自己装在 PATH 上的这个
 // 假 codex(executors/spawn.ts)。
-process.env.ASH_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const schema = await import("../src/db/schema.js");
@@ -151,15 +151,15 @@ console.log("③ 输入回执三态(turn-input-acceptance.ts)");
   // 回执自己抛了 = 适配器炸了,**不是**「没送达」:这一层不许替它下 refused 的结论(F4)。
   assert.equal(await awaitTurnInput({ inputAccepted: Promise.reject(new Error("适配器自己炸了")) }), "unknown");
   ok("回执抛了 → unknown,不冒充 refused");
-  process.env.ASH_TURN_INPUT_ACK_MS = "400"; // 阈值每次现读,所以这一段能单独换口径
+  process.env.NAVI_TURN_INPUT_ACK_MS = "400"; // 阈值每次现读,所以这一段能单独换口径
   const started = Date.now();
   assert.equal(await awaitTurnInput({ inputAccepted: new Promise(() => {}) }), "unknown");
   assert.ok(Date.now() - started >= 300, `有界等待该真的等到期限(配的是 400ms,实测 ${Date.now() - started}ms)`);
-  process.env.ASH_TURN_INPUT_ACK_MS = "5000";
+  process.env.NAVI_TURN_INPUT_ACK_MS = "5000";
 // `turn/start` 的**应答期限**(codex-app-server.ts 的 CODEX_TURN_START_ACK_MS;真实默认一分钟)。
 // §⑰ 两段都按它定位:a 段要在期限**之前**就凭完成事件收口(所以断言给 2.5 秒),b 段要的正是
 // 期限本身到期。压成 5 秒 = 两边各留一半余量,谁跑到期限之外都读得出来。
-process.env.ASH_CODEX_TURN_START_ACK_MS = "5000";
+process.env.NAVI_CODEX_TURN_START_ACK_MS = "5000";
   ok("一直不落定 → unknown(有界等待,不许挂死调用方)");
 }
 
@@ -306,7 +306,7 @@ console.log("⑩ 接管·日志读不出来 → 不按失败结算(交给静默�
       if (event.kind === "error" && event.level === "notice") notices.push(event.message);
     }
   })();
-  // 重读节奏压到 20ms(ASH_CODEX_ADOPT_REREAD_MS,见文件头),第 5 拍开口 ⇒ 100ms 上下。
+  // 重读节奏压到 20ms(NAVI_CODEX_ADOPT_REREAD_MS,见文件头),第 5 拍开口 ⇒ 100ms 上下。
   for (let i = 0; i < 60 && notices.length === 0; i += 1) await sleep(50);
   check(notices.length >= 1,
     `核实不了的回合会按节奏报出可见提示(收到 ${notices.length} 条);上一版只打一行 console,`
@@ -322,7 +322,7 @@ console.log("⑩ 接管·日志读不出来 → 不按失败结算(交给静默�
 console.log("⑪ 拿不到回执时不许落终态 sent,也不许退回重投(真实 CLI 路径,F3)");
 {
   // 垫片把握手答完、收下 `turn/start` 之后**一声不吭也不断线** —— 这就是审查实测到的那个
-  // 现场:ash 等不到「agent 收下了」。旧代码把 unknown 提升成 `sent`(终态),而补发扫描只看
+  // 现场:navi 等不到「agent 收下了」。旧代码把 unknown 提升成 `sent`(终态),而补发扫描只看
   // `pending`,那句话从此永久消失;看门狗后来能终止坏回合,却不会把 sent 变回 pending。
   const taskId = "t-stall-ack";
   codexMode(fakeBin, "stall");
@@ -393,7 +393,7 @@ console.log("⑫ 协议层拒收 → 续跑交代必须归还,不许凭本地回
 console.log("⑬ 回合已开跑、应答还在路上就断链 → accepted,不许退回重投(F4)");
 {
   // 这一段钉的是**协议层那个判定本身**(§11 钉的是 unknown 的记账)。垫片发完 `turn/started`
-  // 就断线,应答永远回不来:ash 侧 `ready` 会被「连接已关闭」拒掉。把那次 reject 一律读成
+  // 就断线,应答永远回不来:navi 侧 `ready` 会被「连接已关闭」拒掉。把那次 reject 一律读成
   // 「一个字都没进去」的那一版会让投递侧把同一段输入再送一遍 —— 而 agent 那边可能已经跑起来了。
   codexMode(fakeBin, "started-then-drop");
   const child = spawn(join(fakeBin, "codex"), [], { stdio: ["pipe", "pipe", "pipe"] });
@@ -449,7 +449,7 @@ console.log("⑭ 拒收事实活过重启:记号在就不许被对账判成已�
     crossingProtocol: CROSSING_PROTOCOL,
   };
   recordDeliveryCrossing(taskId, [receipt.id], { sessionId, turnStart }, true);
-  // **F1 的根因那一条**:越线 + 会话行 + 回合行是 ash 自己的记账,它只证明「可能已经产生
+  // **F1 的根因那一条**:越线 + 会话行 + 回合行是 navi 自己的记账,它只证明「可能已经产生
   // 外部效果」。上一版拿这三样判「已送达」并把交代消费掉,而那串字到没到 agent 手里压根
   // 不在这三样里 —— 说不上来就得是说不上来。
   const crossedOnly = await checkpointDeliveryVerdict(receipt);

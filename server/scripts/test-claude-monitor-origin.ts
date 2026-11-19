@@ -21,9 +21,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-monitor-origin-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-monitor-origin-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitor-origin");
 
 const [
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
     const f = await twoGenerations("stream-origin");
     await f.nextGeneration();
     // 生产路径就是这么取的：从 child 上读 pid 和那组落盘路径（见 runOriginOfChild）。
-    const child = { pid: f.gen1.pid, ashPaths: { out: f.oldRun } };
+    const child = { pid: f.gen1.pid, naviPaths: { out: f.oldRun } };
     const origin = runOriginOfChild(child);
     check(origin.pid === f.gen1.pid && origin.runPath === f.oldRun
       && origin.pidStartedAt === f.gen1.startedAt, "②child 上就能取到完整来源身份",
@@ -181,7 +181,7 @@ async function main(): Promise<void> {
     await seed("m-gen2", f.newRun);
     await seed("m-legacy", null);
     const gen2Stream = new ClaudeMonitorTrace(f.cli, runOriginOfChild({
-      pid: f.gen2.pid, ashPaths: { out: f.newRun },
+      pid: f.gen2.pid, naviPaths: { out: f.newRun },
     }));
     await gen2Stream.finishAll();
     const statusOf = async (id: string) =>

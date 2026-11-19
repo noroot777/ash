@@ -20,8 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-mu-members-"));
-process.env.ASH_DB ||= join(stage, "mu-members.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-mu-members-"));
+process.env.NAVI_DB ||= join(stage, "mu-members.db");
 requireTmpDb("test-multi-user-members");
 
 const { db, ensureSchema } = await import("../src/db/index.js");

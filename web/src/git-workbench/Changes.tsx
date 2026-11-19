@@ -5,8 +5,8 @@ import {
   Sparkle,
   Trash,
 } from "@phosphor-icons/react";
-import type { GitDiff, GitFile } from "@ash/shared/git-workbench";
-import { gitChangeCount, emptyCommitGuidance } from "@ash/shared/git-workbench";
+import type { GitDiff, GitFile } from "@navi/shared/git-workbench";
+import { gitChangeCount, emptyCommitGuidance } from "@navi/shared/git-workbench";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { workbenchApi } from "./api.ts";

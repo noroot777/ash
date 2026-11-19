@@ -94,7 +94,7 @@ try {
   assert.match(await chip(1).getAttribute("aria-label"), /交给 codex/);
   await page.getByLabel("模拟派出失败").uncheck();
 
-  // 派出去：交给 ash 的就是卡上此刻的样子。
+  // 派出去：交给 navi 的就是卡上此刻的样子。
   await send.click();
   await card.waitFor({ state: "detached" });
   const launch = await handed();

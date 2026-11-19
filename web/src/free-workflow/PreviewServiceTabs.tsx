@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { PreviewServiceState } from "@ash/shared/preview";
+import type { PreviewServiceState } from "@navi/shared/preview";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { PreviewServiceStrip } from "./PreviewServiceStrip.tsx";
 import { previewServiceLabels, previewServiceStatus } from "./previewServices.ts";

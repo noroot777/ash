@@ -5,9 +5,9 @@
 //   claude/qwen/qoder → JSON.stringify(tool_use.input),超 1500 字会被截断成半截 JSON
 //   codex             → 命令原文 / 文件路径(纯文本)
 // 所以先按工具名挑字段,JSON 解析失败(截断)时退回正则取值,再退回首行文本。
-import { ASH_MCP_SERVER_NAMES } from "@ash/shared/mcp";
-import { isVisibleExecutionEvent } from "@ash/shared/native-work";
-import type { NativeWorkEvent } from "@ash/shared";
+import { NAVI_MCP_SERVER_NAMES } from "@navi/shared/mcp";
+import { isVisibleExecutionEvent } from "@navi/shared/native-work";
+import type { NativeWorkEvent } from "@navi/shared";
 import { mergeCompaction } from "./compaction.ts";
 
 export { isVisibleExecutionEvent };
@@ -193,7 +193,7 @@ export function appendExecutionEvent(events: ExecutionEvent[], event: ExecutionE
   ];
 }
 
-// ash 强加给 agent 的回合结算协议。它们跟任务内容无关 —— agent 是被系统要求调的,
+// navi 强加给 agent 的回合结算协议。它们跟任务内容无关 —— agent 是被系统要求调的,
 // 不是为了把活干完才调的。
 const TURN_PROTOCOL = new Set(["complete_task", "pause_task", "report_stage", "ask_question", "accept_task"]);
 
@@ -202,9 +202,9 @@ const TURN_PROTOCOL = new Set(["complete_task", "pause_task", "report_stage", "a
 // 是同一件事的不同叫法。
 const PLAN_BOOKKEEPING = new Set(["taskcreate", "taskupdate", "tasklist", "todowrite", "update_plan"]);
 
-/** `mcp__ash__complete_task`(claude)/ `ash/complete_task`(codex)→ `complete_task`。 */
-export function ashMcpTool(label: string): string | null {
-  for (const server of ASH_MCP_SERVER_NAMES) {
+/** `mcp__navi__complete_task`(claude)/ `navi/complete_task`(codex)→ `complete_task`。 */
+export function naviMcpTool(label: string): string | null {
+  for (const server of NAVI_MCP_SERVER_NAMES) {
     if (label.startsWith(`mcp__${server}__`)) return label.slice(`mcp__${server}__`.length);
     if (label.startsWith(`${server}/`)) return label.slice(server.length + 1);
   }
@@ -218,13 +218,13 @@ export function ashMcpTool(label: string): string | null {
  * 之后才发生(complete_task 尤其 —— 全库 22% 的回合切点是它)。拿它当切点会把整篇回答
  * 折进「过程」,外面只剩收尾那一句。
  *
- * 判据是「这一步有没有改变现场」而不是「它属不属于本项目的 MCP」:同一个 ash MCP 里的
- * dispatch / run_task / create_task_chain 是 agent 拿 ash 干活,照旧算数。
+ * 判据是「这一步有没有改变现场」而不是「它属不属于本项目的 MCP」:同一个 navi MCP 里的
+ * dispatch / run_task / create_task_chain 是 agent 拿 navi 干活,照旧算数。
  */
 export function isBookkeepingEvent(event: ExecutionEvent): boolean {
   if (event.kind !== "tool") return false;
   if (!isVisibleExecutionEvent(event)) return true;
-  const ash = ashMcpTool(event.label);
-  if (ash !== null) return TURN_PROTOCOL.has(ash);
+  const navi = naviMcpTool(event.label);
+  if (navi !== null) return TURN_PROTOCOL.has(navi);
   return PLAN_BOOKKEEPING.has(event.label.toLowerCase());
 }

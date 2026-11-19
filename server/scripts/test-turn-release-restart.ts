@@ -20,19 +20,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { RunHandle, RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
 const phase = process.argv[2] ?? "main";
-const root = phase === "main" ? mkdtempSync(join(tmpdir(), "ash-release-restart-")) : process.env.RESTART_ROOT!;
+const root = phase === "main" ? mkdtempSync(join(tmpdir(), "navi-release-restart-")) : process.env.RESTART_ROOT!;
 if (phase === "main") {
-  process.env.ASH_DB = join(root, "ash.db");
-  process.env.ASH_RUNS_DIR = join(root, "runs");
+  process.env.NAVI_DB = join(root, "ash.db");
+  process.env.NAVI_RUNS_DIR = join(root, "runs");
 }
 requireTmpDb("turn-release-restart");
-delete process.env.ASH_LAX_DONE;
-delete process.env.ASH_ALLOW_REAL_AGENT;
+delete process.env.NAVI_LAX_DONE;
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 const { ensureSchema, db } = await import("../src/db/index.js");
 const { agents, projects, queueAdvanceIntents, queueItems, tasks } = await import("../src/db/schema.js");

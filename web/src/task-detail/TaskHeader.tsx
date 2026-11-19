@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { PrimaryActionKind, Task, TaskActions, TaskListItem } from "@ash/shared";
-import { hasPendingAcceptCommit } from "@ash/shared";
-import { taskCreationLabel } from "@ash/shared/task-origin";
+import type { PrimaryActionKind, Task, TaskActions, TaskListItem } from "@navi/shared";
+import { hasPendingAcceptCommit } from "@navi/shared";
+import { taskCreationLabel } from "@navi/shared/task-origin";
 import {
   Archive,
   ArrowCounterClockwise,

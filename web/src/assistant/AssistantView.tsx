@@ -1,10 +1,10 @@
 import "../chat/chat.css";
 import { AssistantIcon } from "./AssistantIcon.tsx";
 import { useMemo, useRef, useState } from "react";
-import type { ProjectView, TaskListItem } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
-import type { ChatMessage, ChatSnapshot } from "@ash/shared/chat";
-import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
+import type { ProjectView, TaskListItem } from "@navi/shared";
+import { taskDisplayStatus } from "@navi/shared";
+import type { ChatMessage, ChatSnapshot } from "@navi/shared/chat";
+import { STEP_LABELS, WORKSPACE_LABELS } from "@navi/shared/workflow";
 import { ArrowUp, ArrowUpRight, MagnifyingGlass, Stop, Trash } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { AssistantConnection } from "./AssistantConnection.tsx";

@@ -12,7 +12,7 @@
  * 为什么是工厂而不是一组裸函数：这几件事都要问「此刻 leads 里登记的是不是我」—— 那张表
  * 归 `session.js` 持有,只能注进来。
  */
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { Writable } from "node:stream";
 import { clearSessionWaiting } from "../session-waiting.js";
 import { clearTurnStall } from "../turn-stall.js";

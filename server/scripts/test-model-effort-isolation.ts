@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-effort-isolation-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-effort-isolation-"));
 // 不读开发机真实的 `~/.cache/opencode/models.json`:那份文件装没装、是哪天的快照都
 // 不在测试掌控内。XDG_CACHE_HOME 是 opencode-model-efforts.ts 认的那个入口。
 const cacheHome = join(stage, "cache");
@@ -43,8 +43,8 @@ writeFileSync(
   }),
 );
 process.env.XDG_CACHE_HOME = cacheHome;
-process.env.ASH_DB ||= join(stage, "effort-isolation.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DB ||= join(stage, "effort-isolation.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-model-effort-isolation");
 // 目录那一面要真走一遍探测(档位来自上面那份 models.json),但问的不该是本机真装着的 opencode。
 const { shadowHostClis } = await import("./host-cli-stubs.js");

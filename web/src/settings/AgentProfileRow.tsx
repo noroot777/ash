@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
-import { hasCliConfigOverrides, cliSpeedOverrideConflict } from "@ash/shared/cli-overrides";
+import type { AgentExecutorProfile, LlmProvider } from "@navi/shared";
+import { hasCliConfigOverrides, cliSpeedOverrideConflict } from "@navi/shared/cli-overrides";
 import { Star } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { Select, type SelectOption } from "../components/Select.tsx";
@@ -267,8 +267,8 @@ export function AgentProfileRow({
         {profile.dispatchBlocked && (
           <p className="agent-profile-row-warning is-blocked">{profile.dispatchBlocked}</p>
         )}
-        {/* ash MCP 没接上或判不准：不说的话，用户要等第一个任务交不了卷才知道。 */}
-        {profile.ashMcp?.detail && <p className="agent-profile-row-warning">{profile.ashMcp.detail}</p>}
+        {/* navi MCP 没接上或判不准：不说的话，用户要等第一个任务交不了卷才知道。 */}
+        {profile.naviMcp?.detail && <p className="agent-profile-row-warning">{profile.naviMcp.detail}</p>}
       </article>
       {confirmDelete && (
         <ConfirmDialog

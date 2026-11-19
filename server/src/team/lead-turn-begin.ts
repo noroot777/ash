@@ -86,7 +86,7 @@ export function createLeadTurnStart({ setLeadStatus }: Deps) {
     if (!stamped && !lead.retired) {
       // 会话行上的回合起点没刷上。第一手证据是下面那行回合记录,所以照落;产物面板判「还在
       // 写」用的是内存里登记的活动身份、区间起点也从那儿取,都不靠这一列,所以这里只报一句。
-      console.warn(`[ash] 团队 ${lead.taskId} 的回合起点没写进会话行（产物区间按逐回合记录算）`);
+      console.warn(`[navi] 团队 ${lead.taskId} 的回合起点没写进会话行（产物区间按逐回合记录算）`);
     }
     // 摘牌的台一个字都不写（同 `updateOwnSession` 顶部那道闸）：旧台晚到的事件要是落下一行
     // 回合记录,接管那条会话的新台名下就凭空多出一段运行区间,把那期间别人的产出收进来。

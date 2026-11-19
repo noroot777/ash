@@ -1,14 +1,14 @@
 import {
   coversRead, parseTaskReads,
   type TaskReads, type TaskReadsSnapshot, type TaskReadsWrite, type TaskReadsWriteResult,
-} from "@ash/shared/task-reads";
+} from "@navi/shared/task-reads";
 import { ApiError, json, request } from "./apiClient.ts";
 import { subscribeConnection, subscribeEvents } from "./events.ts";
 import { safeStorage } from "./safeStorage.ts";
 import { createOutbox, type OutboxEntry } from "./taskReadOutbox.ts";
 
 // 「看过哪些任务」的那一份记录：真值在服务端（按人存，server/src/task-reads.ts），这里是它在本页的样子。
-// 从前只存 localStorage，每个浏览器各记各的 —— 飞书内置浏览器里打开 ash，桌面上看过的任务全亮着绿点。
+// 从前只存 localStorage，每个浏览器各记各的 —— 飞书内置浏览器里打开 navi，桌面上看过的任务全亮着绿点。
 //
 // 本页的样子 = 服务端那份（known，按 rev 只认新回执）+ 还没被服务端收下的那几眼（待发队列）。
 //

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
-import type { Schedule } from "@ash/shared";
+import type { Schedule } from "@navi/shared";
 import { ArrowsClockwise, Clock, Lightning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { Button } from "./ui.tsx";

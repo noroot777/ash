@@ -11,7 +11,7 @@
 // 职责（续聊/原生/手停/提问/检查点/严格完成协议/哨兵闸），而且被引导、重试、测试直接调。
 import { cleanupSettled, nothingToCollect, type CleanupResult } from "./executors/kill.js";
 import type { WriteStream } from "node:fs";
-import type { AgentEvent, AgentType, SessionRole, TurnOutcome } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionRole, TurnOutcome } from "@navi/shared";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -138,7 +138,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   const verifyRound = taskRow?.verifyRound ?? null;
   const executionEventId = role === "single" && !nativeTurn
     ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
-        console.warn(`[ash] failed to record free workflow execution start for ${taskId}:`, error);
+        console.warn(`[navi] failed to record free workflow execution start for ${taskId}:`, error);
         return null;
       })
     : null;
@@ -342,14 +342,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       recoverTurnProgress(taskId, sessId, watchedTurn, (progress) => {
         if (progress === "none") {
           if (confirmTurnSilence(sessId, a.handle, watchedTurn)) {
-            console.warn(`[ash] 会话 ${sessId} 本轮的进展证明后来读出来了「确证零进展」，`
+            console.warn(`[navi] 会话 ${sessId} 本轮的进展证明后来读出来了「确证零进展」，`
               + "那条按「核实不了」开的观察换回正常静默档(含熔断)");
           }
           return;
         }
         progressSecured = true;
         if (withdrawTurnSilence(sessId, a.handle, watchedTurn)) {
-          console.warn(`[ash] 会话 ${sessId} 本轮的进展证明后来读出来了「有过产出」，`
+          console.warn(`[navi] 会话 ${sessId} 本轮的进展证明后来读出来了「有过产出」，`
             + "撤掉那条按「核实不了」开的静默观察");
         }
       }, () => turnLive);
@@ -464,7 +464,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 事件流到此结束 = 进入收尾段:从这里到起跑方放锁,每个 await 之前记一步(turn-wind-down.ts)。
     step("回收 CLI 的后台后代进程(cleanup)");
     const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {
-      console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
+      console.warn(`[navi] failed to clean descendants after task ${taskId}:`, error);
       // 清理整个抛了:这一轮一个号都没点上来 ⇒ 名单只能是空的,但结论不是空的(见
       // cleanup-result.ts 的闸二:`open` 必填,逼这里显式说一句「我手上没有」)。
       return { kind: "unknown", detail: "cleanup 抛错", open: [] };
@@ -578,7 +578,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   }
   if (dropSession) {
     const note = sessionResumeFaultNote(sessionFault!);
-    // 只弹一句话不算数：用户看不出 ash 已经替他把坏 id 清了、也看不出重试会丢上下文。
+    // 只弹一句话不算数：用户看不出 navi 已经替他把坏 id 清了、也看不出重试会丢上下文。
     // 落成持久 system 旁注（.md 原始产物 + SSE），刷新后还在；**不落 error** —— 换会话
     // 不等于这一轮失败，真正的失败自有它自己的 error 和退出码（见 session-notice.ts）。
     // 落盘仍走缓冲：这里已经在收尾链上，正文早写完了，夹在 writeTurnEnd 前面会让重建

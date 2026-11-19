@@ -137,7 +137,7 @@ export async function reconcileRegressionFinalizations(ownerTaskId?: string): Pr
     const task = (await db.select().from(tasks).where(eq(tasks.id, state.settlement?.ownerTaskId ?? state.taskId)))[0];
     if (!task || task.status === "running" || task.status === "queued" || isTurnClaimed(task.id)) continue;
     try { await drainRegressionFinalization(state.directory); }
-    catch (error) { console.error(`[ash] 审查收尾待重试 ${state.directory}:`, error); }
+    catch (error) { console.error(`[navi] 审查收尾待重试 ${state.directory}:`, error); }
   }
 }
 

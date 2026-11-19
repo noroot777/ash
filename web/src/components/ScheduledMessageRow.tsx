@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { ScheduledMessage, TaskListItem } from "@ash/shared";
+import type { ScheduledMessage, TaskListItem } from "@navi/shared";
 import { ArrowUUpLeft, ChatsCircle, PaperPlaneRight, SpinnerGap, X } from "@phosphor-icons/react";
 import { formatInstant } from "../task-detail/utils.ts";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";

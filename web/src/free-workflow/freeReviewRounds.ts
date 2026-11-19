@@ -1,7 +1,7 @@
 // 自由审查各轮的叫法：右侧「审议」「工作流」两格和它们点开的正文共用这一份，免得同一轮
 // 在两处各说各的。
-import type { FreeReviewRound, FreeReviewRun } from "@ash/shared";
-import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
+import type { FreeReviewRound, FreeReviewRun } from "@navi/shared";
+import type { ReviewNoVerdict } from "@navi/shared/timeline-notice";
 
 const TIME_FORMAT = new Intl.DateTimeFormat("zh-CN", {
   month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,

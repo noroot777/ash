@@ -6,7 +6,7 @@
 // 按钮」和驳回那一段的读法。在问你的那一份跟任务页一样接着答题卡（给了 `onAnswer`）。
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewDebate, FreeReviewDispute, FreeReviewRun, Task } from "@ash/shared";
+import type { FreeReviewDebate, FreeReviewDispute, FreeReviewRun, Task } from "@navi/shared";
 import { useDisputeRulingDock } from "../../src/free-workflow/DisputeRulingDock.tsx";
 import { FreeReviewRoundBody } from "../../src/free-workflow/FreeReviewRoundBody.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";

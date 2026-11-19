@@ -14,7 +14,7 @@
 // **之前**比对 transcript 里最近一次开门,对不上回 409 stale(先占锁再比的话,stale 那条出路
 // 就得自己还锁,漏一处就是一把永远不放的锁);③门已经关了,带版本的点击必然来自一张旧卡,
 // 一律 409 stale —— 否则旧卡上的「注入」会把一场已经结束的讨论重新拉起来。
-import type { GateAction } from "@ash/shared";
+import type { GateAction } from "@navi/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { isAcceptingTask } from "../acceptance-lock.js";

@@ -10,7 +10,7 @@
 //  ⑥ 面板能回看它的原始输出：事件正文里被略去的行（单批超限、合并超长）只剩日志里有
 //  ⑦ 四道闸真的挡得住：并发创建不绕过每任务上限、坏参数不留下无主进程
 //  ⑧ 位置只在事件落库之后才前进（先走位置再推消息 = 重启那一下静默吞掉几行）
-//  ⑫ 起不来只失败这一条请求：坏 cwd 不许把 ash 自己的进程组 SIGTERM 掉
+//  ⑫ 起不来只失败这一条请求：坏 cwd 不许把 navi 自己的进程组 SIGTERM 掉
 //
 // **跨重启那一半在 test-monitor-offline.ts**（单文件 700 行的约定）:接回活着的哨兵、补完停服
 // 期间跑完的活、两条离线收尾怎么折证据 —— 那几条每一条都要另起一个进程才成立,这边全部跑在
@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
   MONITOR_MAX_EVENTS, MONITOR_MAX_MERGED_CHARS, MONITOR_MAX_PER_TASK, MONITOR_TAIL_MAX_BYTES,
-} from "@ash/shared/monitor";
+} from "@navi/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
   HERE, root, db, dbClient, monitorsModule, status, isPidAlive,
@@ -459,7 +459,7 @@ setInterval(() => {}, 1000); // 吐完不退出：停下来必须是「到顶了
   const running = (await listMonitors(taskId)).filter((m) => m.status === "running");
   assert.equal(running.length, MONITOR_MAX_PER_TASK, "真起来的进程数也要受同一个上限约束");
 
-  // 坏参数：必须在**起进程之前**就被挡住。挡晚了进程已经脱离 ash 跑起来、记录却没落，
+  // 坏参数：必须在**起进程之前**就被挡住。挡晚了进程已经脱离 navi 跑起来、记录却没落，
   // 那个 shell 从此谁也看不见、谁也停不掉。
   const bad = await startMonitor({ taskId, command: idle, description: 7 as unknown as string });
   assert.equal(bad.ok, false, "description 不是字符串就该被拒");
@@ -501,10 +501,10 @@ setInterval(() => {}, 1000); // 吐完不退出：停下来必须是「到顶了
   await stopMonitor(monitorId, "测试收尾");
   console.log("✓ 读取位置只跟在事件落库之后走");
 }
-// ── ⑫ 起不来不许外溢：一次失败的创建不能把整个 ash 带走 ───────────────────────
+// ── ⑫ 起不来不许外溢：一次失败的创建不能把整个 navi 带走 ───────────────────────
 // 这一段最该守的断言是「**本进程还活着**」。`spawn` 对坏 cwd 的报错是异步的，而旧代码
 // 在没拿到 pid 的分支上调了 `child.kill()` —— 那一步走到 `uv_process_kill(0, SIGTERM)`，
-// 而 POSIX 的 `kill(0, …)` 是「发给自己所在的整个进程组」：ash 自己当场 SIGTERM
+// 而 POSIX 的 `kill(0, …)` 是「发给自己所在的整个进程组」：navi 自己当场 SIGTERM
 // （第 2 轮审查实测：隔离服务退出码 143，首页从此不响应，所有任务页一起下线）。
 // 所以这里不写 try/catch 也不另起进程 —— 真塌了，这条测试就是被信号打死的那个。
 {
@@ -543,13 +543,13 @@ setInterval(() => {}, 1000); // 吐完不退出：停下来必须是「到顶了
   assert.doesNotMatch(
     spawnSrc,
     /^\s*child\.kill\(/m, // 只认语句，注释里引用这个名字不算
-    "没有 pid 就没有进程可杀，`child.kill()` 打的是 ash 自己所在的进程组",
+    "没有 pid 就没有进程可杀，`child.kill()` 打的是 navi 自己所在的进程组",
   );
   assert.ok(
     spawnSrc.indexOf('child.on("error"') < spawnSrc.indexOf("if (!child.pid)"),
     "`error` 监听必须挂在拿 pid 之前：spawn 的失败是异步报的，没人听就是 uncaughtException",
   );
-  console.log("✓ 起不来只失败这一条请求，不动 ash 自己");
+  console.log("✓ 起不来只失败这一条请求，不动 navi 自己");
 }
 
 await teardown();

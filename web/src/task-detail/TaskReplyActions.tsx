@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { PaperPlaneTilt } from "@phosphor-icons/react";
 import type { Notify } from "../lib/notify.ts";
 import { useFreeWorkflowActions } from "../free-workflow/useFreeWorkflowActions.tsx";

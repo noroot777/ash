@@ -1,6 +1,6 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { FreeWorkflowInspector } from "../../src/free-workflow/FreeWorkflowInspector.tsx";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
@@ -408,7 +408,7 @@ window.fetch = (input, init) => {
     }));
   }
   if (url.pathname === "/api/tasks/free-accept-ui/commits" || url.pathname === "/api/tasks/free-reviewing-ui/commits" || url.pathname === "/api/tasks/post-merge-ui/commits") {
-    return Promise.resolve(new Response(JSON.stringify({ branch: "ash/free-accept-ui", commits: [] }), {
+    return Promise.resolve(new Response(JSON.stringify({ branch: "navi/free-accept-ui", commits: [] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
@@ -416,7 +416,7 @@ window.fetch = (input, init) => {
   if (url.pathname === "/api/tasks/free-accept-ui/diff" || url.pathname === "/api/tasks/free-reviewing-ui/diff" || url.pathname === "/api/tasks/post-merge-ui/diff") {
     return Promise.resolve(new Response(JSON.stringify({
       available: true,
-      sourceBranch: url.pathname.includes("post-merge-ui") ? "main@11111111" : "ash/free-accept-ui",
+      sourceBranch: url.pathname.includes("post-merge-ui") ? "main@11111111" : "navi/free-accept-ui",
       targetBranch: url.pathname.includes("post-merge-ui") ? "main@22222222" : "main",
       mergeBase: url.pathname.includes("post-merge-ui") ? "11111111aaaaaaaa" : "0123456789abcdef",
       diff: "",
@@ -450,10 +450,10 @@ window.fetch = (input, init) => {
     const body = acceptanceRead[2] === "accept-gate"
       ? { command: null, running: null, latest: null, basis: null }
       : {
-        root: { path: "/repo", branch: "ash/free-accept-ui", source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
+        root: { path: "/repo", branch: "navi/free-accept-ui", source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
         acceptanceCommitBlock: null, acceptanceAutoCommit: { action: "skip", reason: "工作目录没有待提交改动" },
         status: {
-          branch: { head: "ash/free-accept-ui", detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
+          branch: { head: "navi/free-accept-ui", detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
           staged: [], unstaged: [], untracked: [], merge: [], operation: null, truncated: false,
         },
         commits: [],

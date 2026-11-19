@@ -9,13 +9,13 @@
 //
 // 一条纪律：**不替用户装依赖、不在他的仓库里留东西**。这里跑的 cwd 是用户的项目目录本身
 // （不是任务 worktree），正式预览那套 `prepareNodeDeps` 会在工作区里挂 node_modules 软链，
-// 放到这儿就成了「ash 往人家仓库里写东西」——那条线用户划得很清楚（见 preview-deps.ts
+// 放到这儿就成了「navi 往人家仓库里写东西」——那条线用户划得很清楚（见 preview-deps.ts
 // 顶部）。缺依赖就如实报回去，由人决定装不装。
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PreviewMode } from "@ash/shared/preview";
+import type { PreviewMode } from "@navi/shared/preview";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { isPidAlive, isProcessGroupAlive, killTree } from "./platform.js";
 import { afterLoginShell, previewScriptLaunch, previewSpawnEnv } from "./preview-env.js";
@@ -54,8 +54,8 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
  *
  * 必须有这一份：试跑的子进程是 detached 起的（要整组杀才带得走 `sh -lc` 的孙子），而
  * 正式预览那套「重启后照记录收尾」的机制（preview-store 的记录文件 + reconcile）它一概
- * 没有——试跑不属于任何任务，不写记录。ash 在试跑中途被关掉的话，那个 dev server 就成了
- * 谁也不认识的孤儿：占着端口、吃着 CPU，界面上一点痕迹都没有。所以 ash 自己退出前把它们
+ * 没有——试跑不属于任何任务，不写记录。navi 在试跑中途被关掉的话，那个 dev server 就成了
+ * 谁也不认识的孤儿：占着端口、吃着 CPU，界面上一点痕迹都没有。所以 navi 自己退出前把它们
  * 带走，这是唯一的兜底。
  */
 const liveTrials = new Set<number>();
@@ -75,12 +75,12 @@ export async function trialPreviewScript(options: PreviewTrialOptions): Promise<
   const lent = ports[0] ?? null;
   const env = portEnv(ports);
   env.NAVI_PREVIEW_BASE = "/";
-  // 「只起前端」那一档的脚本要把 /api 打回这台 ash，正式预览给的就是这个值（不猜，绑上了
+  // 「只起前端」那一档的脚本要把 /api 打回这台 navi，正式预览给的就是这个值（不猜，绑上了
   // 才有）。试跑不给它，那一档的脚本会在启动时就连不上后端，判出来的失败跟真实预览对不上。
   const hostApiUrl = boundListeningPort() === null ? null : `http://127.0.0.1:${boundListeningPort()}`;
   if (hostApiUrl) env.NAVI_HOST_API = hostApiUrl;
   const banner = `$ ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none NAVI_PREVIEW=1 NAVI_PREVIEW_MODE=${mode} ${script}\n`;
-  // Windows 的多行脚本要落成 .cmd 才跑得起来（previewScriptLaunch），那个文件写在 ash 自己
+  // Windows 的多行脚本要落成 .cmd 才跑得起来（previewScriptLaunch），那个文件写在 navi 自己
   // 的临时目录里 —— 写进用户仓库就是往人家的 git status 里塞垃圾。
   const dir = mkdtempSync(join(tmpdir(), "navi-preview-trial-"));
   let text = banner;
@@ -109,8 +109,8 @@ export async function trialPreviewScript(options: PreviewTrialOptions): Promise<
     pid = child.pid ?? 0;
     if (pid) { hookProcessExit(); liveTrials.add(pid); }
     const deadline = Date.now() + timeoutMs;
-    // ash 自己绑着的端口永远不是这条脚本本尊（它就在上面跑着）。日志里出现它只可能是脚本
-    // 在说「我的 /api 打到 ash 那边」——认了它，就会把 ash 自己判成「脚本起来了」。
+    // navi 自己绑着的端口永远不是这条脚本本尊（它就在上面跑着）。日志里出现它只可能是脚本
+    // 在说「我的 /api 打到 navi 那边」——认了它，就会把 navi 自己判成「脚本起来了」。
     const self = currentListeningPort();
     const others = [...ports.slice(1), ...(self === null ? [] : [self])];
     while (Date.now() < deadline) {

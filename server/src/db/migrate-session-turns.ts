@@ -9,7 +9,7 @@
 //   ① `ended_at` 放开 NOT NULL —— 老形状存不下「开始了还没收口」这个事实,而整套完整性
 //      判据就架在它上面。SQLite 改不了列约束,只能重建表。
 //   ② 同一 (session_id, started_at) 的重复行去掉,然后才建得上唯一索引 —— 先建索引会在
-//      有重复数据的库上直接抛,而这里抛出去等于整台 ash 起不来。
+//      有重复数据的库上直接抛,而这里抛出去等于整台 navi 起不来。
 //   ③ `turns_base` 回填成「迁移那一刻已知的历史回合数」,并标明那是下界。只认
 //      `turns_base_approx` 还是 NULL 的行(= 没经过本版写端的行),所以天然只做一次：升级后
 //      新建的会话在 insert 时把这一列写成 0。详见 `backfillTurnsBase` 的注释。
@@ -132,7 +132,7 @@ export async function migrateSessionTurnIdentity(client: Client): Promise<void> 
     );
     await backfillTurnsBase(client);
   } catch (e) {
-    // **绝不往外抛**：抛出去的代价是 ensureSchema 崩掉 = 整台 ash 起不来（db/index.ts 里那条
+    // **绝不往外抛**：抛出去的代价是 ensureSchema 崩掉 = 整台 navi 起不来（db/index.ts 里那条
     // 2026-10-14 实测过的教训）。下次启动还会再试一遍。
     //
     // 代价是**失败很安静**,所以「跑成了没有」不能靠这句日志,得是一件**读端查得到的事实**:
@@ -146,6 +146,6 @@ export async function migrateSessionTurnIdentity(client: Client): Promise<void> 
     //     冒充不了「多跑了一轮」。
     // 三条出口都落在可核验的库内事实上,所以这里只补一句日志就够了——别再往上加「全局迁移
     // 成功标记」那种第二份真相。
-    console.warn(`[ash] session_turns 身份迁移没跑完（产物归属按保守档披露）: ${String(e)}`);
+    console.warn(`[navi] session_turns 身份迁移没跑完（产物归属按保守档披露）: ${String(e)}`);
   }
 }

@@ -11,7 +11,7 @@
 // 为什么不能猜：上一版按数据形状判（整串不降 + 末条等于会话汇总），被第 1 轮审查当场
 // 证伪 —— 那个恒等式只对「已回填且此后没再续聊」的会话成立，随便续一轮新回合，汇总就
 // 不再等于末条，**整条历史的气泡会集体弹回累计值**（实测第 2 个气泡从正确的 81.9 万弹回
-// 1726 万，页面底部合计 81.09M 与右侧库里的 24.91M 自相矛盾）；跨 ash 会话行的线程更是
+// 1726 万，页面底部合计 81.09M 与右侧库里的 24.91M 自相矛盾）；跨 navi 会话行的线程更是
 // 永远凑不出这个恒等式。一条旧记录的含义不能随「以后会不会续聊」改变。
 import assert from "node:assert/strict";
 import { normalizedPersistedTrace } from "../src/task-detail/conversationTraceGroups.ts";
@@ -86,7 +86,7 @@ const usages = (trace) => trace.flatMap((item) => (item.event.kind === "usage" ?
   );
 }
 
-// 4. 跨 ash 会话行续聊的那一半 trace：它永远凑不出任何恒等式，照样原样返回。
+// 4. 跨 navi 会话行续聊的那一半 trace：它永远凑不出任何恒等式，照样原样返回。
 {
   const trace = traceOf(REAL.slice(2), "delta");
   assert.equal(normalizedPersistedTrace(trace, session("claude", summed(REAL))), trace);

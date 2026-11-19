@@ -19,15 +19,16 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as legacyNames from "@ash/shared/legacy-names";
+import * as legacyNames from "@navi/shared/legacy-names";
 import {
   clearEnv, envNameGenerations, readEnv, readStorageEnv, setEnv, withLegacyEnvNames,
-} from "@ash/shared/env-names";
-import { ASH_MCP_SERVER_NAME, ashMcpToolOf, isAshMcpServerName } from "@ash/shared/mcp";
-import { isNaviHeaderName, readHeader, withLegacyHeaderNames } from "@ash/shared/http-headers";
+} from "@navi/shared/env-names";
+import { NAVI_MCP_SERVER_NAME, naviMcpToolOf, isNaviMcpServerName } from "@navi/shared/mcp";
+import { isNaviHeaderName, readHeader, withLegacyHeaderNames } from "@navi/shared/http-headers";
 import {
   hasTaskBranchPrefix, isTaskBranchOf, taskBranchName, taskBranchNames, taskIdPrefixOfBranch,
-} from "@ash/shared/task-branch";
+} from "@navi/shared/task-branch";
+import { removeTmpStage } from "./tmp-db.js";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const root = mkdtempSync(join(tmpdir(), "navi-rename-compat-"));
@@ -98,14 +99,14 @@ try {
 
   // ── ③ MCP 登记名 / 工具名 ──────────────────────────────────────────────────
   {
-    assert.equal(ASH_MCP_SERVER_NAME, "navi");
+    assert.equal(NAVI_MCP_SERVER_NAME, "navi");
     for (const name of ["navi", "ash", "harness"]) {
-      assert.ok(isAshMcpServerName(name), `${name}:用户配置里旧版 setup 登记的名字也是这个 MCP`);
-      assert.equal(ashMcpToolOf(`mcp__${name}__complete_task`), "complete_task", `${name}:升级之前起的会话报的是旧工具名`);
+      assert.ok(isNaviMcpServerName(name), `${name}:用户配置里旧版 setup 登记的名字也是这个 MCP`);
+      assert.equal(naviMcpToolOf(`mcp__${name}__complete_task`), "complete_task", `${name}:升级之前起的会话报的是旧工具名`);
     }
-    assert.ok(!isAshMcpServerName("kb") && !isAshMcpServerName(undefined));
-    assert.equal(ashMcpToolOf("mcp__kb__kb_search"), null, "别家的 MCP 工具不算");
-    assert.equal(ashMcpToolOf("mcp__navi__"), null, "只有前缀没有工具名不算");
+    assert.ok(!isNaviMcpServerName("kb") && !isNaviMcpServerName(undefined));
+    assert.equal(naviMcpToolOf("mcp__kb__kb_search"), null, "别家的 MCP 工具不算");
+    assert.equal(naviMcpToolOf("mcp__navi__"), null, "只有前缀没有工具名不算");
     console.log("✓ MCP:登记名与工具名 navi / ash / harness 三代都认");
   }
 
@@ -230,9 +231,9 @@ try {
     // 处理器就真去改这台机器上各家 CLI 的用户配置了。
     await (await import("../src/db/index.js")).ensureSchema();
     const { Hono } = await import("hono");
-    const { HOST_MCP_SETUP_PATH, mountHostAshMcpRoutes } = await import("../src/host-ash-mcp-routes.js");
+    const { HOST_MCP_SETUP_PATH, mountHostNaviMcpRoutes } = await import("../src/host-navi-mcp-routes.js");
     const api = new Hono();
-    mountHostAshMcpRoutes(api);
+    mountHostNaviMcpRoutes(api);
     // 同一个处理:两条路径的应答逐字一样,而且是处理器自己的拒绝(不是 404、也不是半路出错的 500)。
     const answers = await Promise.all([HOST_MCP_SETUP_PATH, legacyNames.LEGACY_HOST_MCP_SETUP_PATH].map(async (path) => {
       const response = await api.request(`http://remote.example${path}`, { method: "POST" });
@@ -242,7 +243,7 @@ try {
     assert.match(answers[0]!.body, /只接受本机直连/);
     assert.deepEqual(answers[1], answers[0], "旧路径接的是同一个处理");
     // 哨兵出身的值冻结:每一行记录、每一个客户端都按它认「Navi 自己起的」。
-    const { MONITOR_KINDS, OWN_MONITOR_KIND, canStopMonitor } = await import("@ash/shared/monitor");
+    const { MONITOR_KINDS, OWN_MONITOR_KIND, canStopMonitor } = await import("@navi/shared/monitor");
     assert.equal(OWN_MONITOR_KIND, legacyNames.FROZEN_MONITOR_KIND_OWN);
     assert.deepEqual([...MONITOR_KINDS], ["ash", "claude"], "落库的值不许跟着改名变");
     assert.ok(canStopMonitor("ash"));
@@ -253,7 +254,7 @@ try {
   {
     // /goal:新回合写新名的文件和记号;升级前落库的命令行里是旧记号 + 旧文件名,收尾照样删得掉。
     const { claudeGoalInvocation, cleanupClaudeGoalContext } = await import("../src/executors/claude-goal.js");
-    const { validateCliCommand } = await import("@ash/shared/cli-commands");
+    const { validateCliCommand } = await import("@navi/shared/cli-commands");
     const goal = claudeGoalInvocation({ prompt: "fixture", cwd: root, cliCommand: validateCliCommand("claude", "/goal fixture")! } as Parameters<typeof claudeGoalInvocation>[0]);
     const fresh = goal.args[1]!;
     assert.match(fresh.split(/[\\/]/).pop()!, /^navi-claude-goal-\d+-/);
@@ -280,7 +281,7 @@ try {
     assert.equal(SYNTHETIC_COMMIT_IDENTITY_ENV.GIT_COMMITTER_EMAIL, "ash@localhost");
     assert.equal(SYNTHETIC_COMMIT_MESSAGE, "ash: 任务改动的对比基准");
     assert.equal(NAVI_GIT_IDENTITY_ENV.GIT_AUTHOR_NAME, "navi");
-    const { suggestGitEmail } = await import("@ash/shared/multiuser");
+    const { suggestGitEmail } = await import("@navi/shared/multiuser");
     assert.equal(suggestGitEmail("Zhang San"), "zhang-san@ash.local", "没填邮箱的人一直署这个域,不随改名换");
     const { GATE_ISOLATED_DIR } = await import("../src/accept-gate-isolated.js");
     assert.ok(GATE_ISOLATED_DIR.split(/[\\/]/).pop()!.startsWith(legacyNames.FROZEN_GATE_ISOLATED_DIR_PREFIX));
@@ -293,7 +294,7 @@ try {
     const { runRefAction } = await import("../src/git-workbench/refs.js");
     const { readStashes } = await import("../src/git-workbench/read.js");
     const { digest } = await import("../src/git-workbench/core.js");
-    const { stashSubjectForDisplay, STASH_OWNER_TAG } = await import("@ash/shared/git-workbench");
+    const { stashSubjectForDisplay, STASH_OWNER_TAG } = await import("@navi/shared/git-workbench");
     const repo = repoWithCommit("stash-owner");
     writeFileSync(join(repo, "a.txt"), "1\n");
     git(repo, "add", "a.txt");
@@ -370,9 +371,9 @@ try {
     const pid = sleeper.pid!;
     await new Promise((r) => setTimeout(r, 300));
 
-    const { acquireDbSingletonLock, liveAshHolderForDb, singletonLockFilesForDb, SingletonConflictError } = await import("../src/singleton.js");
+    const { acquireDbSingletonLock, liveNaviHolderForDb, singletonLockFilesForDb, SingletonConflictError } = await import("../src/singleton.js");
     const { canonicalResourceKey, withResourceClaim, ResourceClaimError } = await import("../src/resource-claim.js");
-    const { liveAshPresenceFor } = await import("../src/ash-presence.js");
+    const { liveNaviPresenceFor } = await import("../src/navi-presence.js");
 
     const [lockFile, legacyLock] = singletonLockFilesForDb(dbFile);
     assert.equal(lockFile, `${dbFile}.navi.lock`);
@@ -381,7 +382,7 @@ try {
     writeFileSync(legacyLock, JSON.stringify({
       version: 1, pid, acquiredAt: new Date().toISOString(), port: 4317, dbFile, cwd: root, argv: [fakeServer], token: "old-server",
     }));
-    assert.equal(liveAshHolderForDb(dbFile)?.pid, pid, "旧名锁上活着的旧版服务认得出来");
+    assert.equal(liveNaviHolderForDb(dbFile)?.pid, pid, "旧名锁上活着的旧版服务认得出来");
     assert.throws(() => acquireDbSingletonLock({ port: null }),
       (e: unknown) => e instanceof SingletonConflictError && e.lockFile === legacyLock && e.holder.pid === pid,
       "旧版服务占着这份库 ⇒ 新版起不来,而且挡下它的正是那把旧名锁");
@@ -408,7 +409,7 @@ try {
     // 在线登记:旧版只写 `.ash-online.<pid>.json`。
     const legacyPresence = `${key}${legacyNames.LEGACY_PRESENCE_PREFIX}${pid}.json`;
     writeFileSync(legacyPresence, JSON.stringify({ pid, port: 4317, startedAt: new Date().toISOString() }));
-    assert.equal(liveAshPresenceFor(key)?.pid, pid, "旧名在线登记照样算「有人在用」");
+    assert.equal(liveNaviPresenceFor(key)?.pid, pid, "旧名在线登记照样算「有人在用」");
     rmSync(legacyPresence);
     console.log("✓ 互斥:旧版服务的 .ash.lock / .ash-claim.lock / .ash-online. 都挡得住新版;新版两代都持有、两代都放");
   }
@@ -447,11 +448,11 @@ try {
     writeFileSync(file, `[mcp_servers.ash]\ncommand = "node"\n[other]\nk = 1\n`);
     const answers = [
       { ok: true, servers: [{ name: "ash", enabled: true }] },
-      { ok: true, servers: [{ name: ASH_MCP_SERVER_NAME, enabled: true }] },
+      { ok: true, servers: [{ name: NAVI_MCP_SERVER_NAME, enabled: true }] },
     ];
     const result = registerCodexMcp({
       configFile: file, mcpEntry: "/x/mcp/dist/index.js", url: "http://localhost:4317",
-      name: ASH_MCP_SERVER_NAME, legacyNames: legacyNames.LEGACY_MCP_SERVER_NAMES,
+      name: NAVI_MCP_SERVER_NAME, legacyNames: legacyNames.LEGACY_MCP_SERVER_NAMES,
       listServers: () => answers.shift() ?? assert.fail("多问了一次 codex"),
       // codex 在沙盘里删旧名:模拟成那份配置只剩 [other]。
       removeServer: (_name: string, home: string) => { writeFileSync(join(home, "config.toml"), "[other]\nk = 1\n"); return true; },
@@ -471,6 +472,7 @@ try {
   }
 } finally {
   sleeper?.kill();
-  rmSync(root, { recursive: true, force: true });
+  // 库在舞台里、一直开着:先松开再删,否则 Windows 上断言全过却在这一步 EBUSY(见 tmp-db.ts)。
+  await removeTmpStage(root);
 }
 console.log("rename compat: 全部通过");

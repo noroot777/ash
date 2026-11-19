@@ -5,7 +5,7 @@ import {
   MAX_PLACEHOLDER_VALUE_LENGTH,
   missingCommandValues,
   parseCommandPlaceholders,
-} from "@ash/shared/project-commands";
+} from "@navi/shared/project-commands";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import "./command-args-dialog.css";
 

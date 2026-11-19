@@ -1,4 +1,4 @@
-import type { AnnotationReview, AnnotationReviewStatus, AnnotationVerdict } from "@ash/shared/page-annotation-review";
+import type { AnnotationReview, AnnotationReviewStatus, AnnotationVerdict } from "@navi/shared/page-annotation-review";
 import { dbClient } from "./db/index.js";
 import { isRunning, isTurnClaimed } from "./runs.js";
 import { rerunGateClosed } from "./rerun-gate.js";

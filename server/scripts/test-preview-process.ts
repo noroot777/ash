@@ -1,4 +1,4 @@
-// 预览进程的两条生命线：ash 自己的 dev 脚本不能在拉起 vite 后因 TDZ 崩掉；
+// 预览进程的两条生命线：navi 自己的 dev 脚本不能在拉起 vite 后因 TDZ 崩掉；
 // 外层组长即使先死，preview.ts 也必须把同组的长驻子进程收干净。
 // Run: npm -w server run test:preview-process
 import assert from "node:assert/strict";
@@ -9,12 +9,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = mkdtempSync(join(tmpdir(), "ash-preview-process-"));
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_DEPS_DIR = join(root, "deps");
+const root = mkdtempSync(join(tmpdir(), "navi-preview-process-"));
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
 // 这条测试会调 sweepPreviews()，而清扫会读库（「这个任务还在不在」）。指一份空库过去：
 // 拿正式库跑既会打出一串 SQL 报错，也没道理让一条预览测试碰用户的数据。
-process.env.ASH_DB = join(root, "ash.db");
+process.env.NAVI_DB = join(root, "ash.db");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const { startPreview, stopPreview, stopPreviewOnRerun, sweepPreviews, readPreview, isPreviewStarting }
@@ -83,8 +83,8 @@ try {
     env: {
       ...process.env,
       PORT: String(devPort),
-      ASH_PREVIEW: "1",
-      ASH_PREVIEW_MODE: "frontend",
+      NAVI_PREVIEW: "1",
+      NAVI_PREVIEW_MODE: "frontend",
       BROWSER: "none",
     },
   });
@@ -94,7 +94,7 @@ try {
   try {
     await waitFor(
       () => reachable(`http://127.0.0.1:${devPort}/`),
-      `ash 前端预览没有起来：\n${devOutput}`,
+      `navi 前端预览没有起来：\n${devOutput}`,
     );
     assert.equal(dev.exitCode, null, `dev 管理进程不该先退出：\n${devOutput}`);
     assert.doesNotMatch(devOutput, /Cannot access 'tracked' before initialization/);
@@ -121,8 +121,8 @@ try {
     env: {
       ...process.env,
       PORT: String(strictPort),
-      ASH_PREVIEW: "1",
-      ASH_PREVIEW_MODE: "frontend",
+      NAVI_PREVIEW: "1",
+      NAVI_PREVIEW_MODE: "frontend",
       BROWSER: "none",
     },
   });
@@ -178,7 +178,7 @@ try {
   }
 
   // 一条命令同时起前后端：这是多模块项目的常态，而它卡住的地方不是命令怎么写，是端口
-  // —— 两边都是 ash 随机借的，前端要在**启动那一刻**就知道后端落在哪。所以 ash 一次借
+  // —— 两边都是 navi 随机借的，前端要在**启动那一刻**就知道后端落在哪。所以 navi 一次借
   // 一串：`$PORT` 给要看的那个，`$PORT2…` 给配角。这一例真起两个进程，后端只听 $PORT2，
   // 前端先连上后端再开自己的 $PORT —— 少注入一个变量它就起不来。
   if (process.platform !== "win32") {
@@ -232,7 +232,7 @@ try {
 
   // 一行日志都不印的服务照样得算「起来了」。从日志里认地址那条路只对肯打印、且是行缓冲
   // 打印的命令成立（Node 的 dev server 一贯如此，`python3 -m http.server` 在非 tty 下就
-  // 不是，Go/Rust 写的服务可以什么都不印）。端口是 ash 借出去的，连得上就是它。
+  // 不是，Go/Rust 写的服务可以什么都不印）。端口是 navi 借出去的，连得上就是它。
   {
     const quietCode = "require('http').createServer((q,r)=>r.end('quiet')).listen(process.env.PORT)";
     const step = {
@@ -243,7 +243,7 @@ try {
     const result = await startPreview("quiet-task", step as never, repo);
     try {
       assert.equal(result.ok, true, "不吭声的服务被判成没起来（只认日志里的地址就会这样）");
-      assert.ok(result.ok && result.record.port, "认下来的必须是 ash 借出去的那个端口");
+      assert.ok(result.ok && result.record.port, "认下来的必须是 navi 借出去的那个端口");
       assert.equal(result.ok && result.record.url, `http://localhost:${result.ok && result.record.port}/`);
       assert.equal(await reachable(`http://127.0.0.1:${result.ok && result.record.port}/`), true);
     } finally {
@@ -316,10 +316,10 @@ try {
       if (result.ok) killGroup(result.record.pid);
     }
   }
-  // 「把主仓那份 node_modules 软链进任务工作区」——这是缺依赖时 ash 给的唯一一条不写用户
+  // 「把主仓那份 node_modules 软链进任务工作区」——这是缺依赖时 navi 给的唯一一条不写用户
   // 项目的路。它必须**真的能把预览起起来**，否则那句建议就只是句好听的话。这里照它说的
   // 做一遍：主仓里有一份装好的依赖（.bin 里一个假的 dev server），任务工作区软链过去，
-  // 然后走完整启动链。ash 会把自己的 node_modules/.bin 从 PATH 上摘掉
+  // 然后走完整启动链。navi 会把自己的 node_modules/.bin 从 PATH 上摘掉
   // （withoutForeignNodeBins），所以这一条同时钉住「摘的时候别把项目自己那份也摘了」。
   if (process.platform !== "win32") {
     const repo = join(root, "borrow-repo");
@@ -332,9 +332,9 @@ try {
 
     const wt = join(repo, ".worktrees", "borrow-wt");
     mkdirSync(join(wt, "front"), { recursive: true });
-    // ash 建出来的任务 worktree 就长这样：住在 `<主仓>/.worktrees/<taskId>`，`.git` 是个
-    // 文件、写着主仓在哪。位置是判据的一半 —— 只有 ash 自己建的这种目录才允许被挂
-    // node_modules，用户自己的检出（哪怕也是 worktree）一律不碰，见 ashWorktree。
+    // navi 建出来的任务 worktree 就长这样：住在 `<主仓>/.worktrees/<taskId>`，`.git` 是个
+    // 文件、写着主仓在哪。位置是判据的一半 —— 只有 navi 自己建的这种目录才允许被挂
+    // node_modules，用户自己的检出（哪怕也是 worktree）一律不碰，见 naviWorktree。
     writeFileSync(join(wt, ".git"), `gitdir: ${join(repo, ".git", "worktrees", "borrow-wt")}\n`);
     writeFileSync(join(wt, "front", "package.json"), JSON.stringify({ name: "front", scripts: { dev: "fakevite" } }));
     symlinkSync(join(front, "node_modules"), join(wt, "front", "node_modules"));
@@ -356,10 +356,10 @@ try {
   }
 
   // 整件事的落点：**任务工作区里什么依赖都没有**，点一下预览就该能起来，而且用户的项目
-  // 一个字节都不被写。ash 在起进程之前把依赖装进自己的 data/deps（这里指到临时目录），
+  // 一个字节都不被写。navi 在起进程之前把依赖装进自己的 data/deps（这里指到临时目录），
   // 只从项目里读 package.json 和锁文件，再挂一条软链。这条用 `file:` 依赖，全程不联网 ——
   // 要证的是链路，不是 npm 会不会下包。收掉预览后那条软链也必须消失（用户敲 git status
-  // 不该看见 ash 留下的东西）。
+  // 不该看见 navi 留下的东西）。
   if (process.platform !== "win32") {
     const dep = join(root, "fakedep");
     mkdirSync(dep, { recursive: true });
@@ -368,7 +368,7 @@ try {
     }));
     writeFileSync(
       join(dep, "cli.js"),
-      "#!/usr/bin/env node\nrequire('http').createServer((q,r)=>r.end('installed by ash')).listen(process.env.PORT)\n",
+      "#!/usr/bin/env node\nrequire('http').createServer((q,r)=>r.end('installed by navi')).listen(process.env.PORT)\n",
     );
 
     const repo2 = join(root, "fresh-repo");
@@ -389,18 +389,18 @@ try {
     const result = await startPreview("fresh-task", step as never, wt2);
     try {
       const log = readFileSync(join(root, "runs", "fresh-task", "preview.log"), "utf8");
-      assert.equal(result.ok, true, `干净检出没能靠 ash 备的依赖起起来：\n${log}`);
+      assert.equal(result.ok, true, `干净检出没能靠 navi 备的依赖起起来：\n${log}`);
       assert.ok(result.ok);
-      assert.equal(await fetch(result.record.url ?? "").then((r) => r.text()), "installed by ash");
-      // 依赖装在 ash 自己的地盘，项目里只多了一条软链。
-      assert.ok(readdirSync(join(root, "deps")).length > 0, "依赖没装进 ASH_DEPS_DIR");
+      assert.equal(await fetch(result.record.url ?? "").then((r) => r.text()), "installed by navi");
+      // 依赖装在 navi 自己的地盘，项目里只多了一条软链。
+      assert.ok(readdirSync(join(root, "deps")).length > 0, "依赖没装进 NAVI_DEPS_DIR");
       assert.ok(lstatSync(join(wt2, "front", "node_modules")).isSymbolicLink(), "项目里被塞了实体目录");
       assert.deepEqual(result.record.links, [join(wt2, "front", "node_modules")]);
     } finally {
       if (result.ok) killGroup(result.record.pid);
     }
     await stopPreview("fresh-task", null);
-    assert.equal(existsSync(join(wt2, "front", "node_modules")), false, "收掉预览后 ash 挂的软链还在");
+    assert.equal(existsSync(join(wt2, "front", "node_modules")), false, "收掉预览后 navi 挂的软链还在");
 
     // 撤软链这件事**每一条出口都要做到**，不是只有「正常停止」那一条。下面两条原来是漏的，
     // 而它们漏掉的后果比一般失败更重：链会永久留在用户的工作区里，而且没有任何线索能补撤。
@@ -412,7 +412,7 @@ try {
     writeFileSync(join(unsafeWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "unsafe-wt")}\n`);
     writeFileSync(join(unsafeWt, "front", "package.json"), JSON.stringify({
       name: "front", version: "1.0.0", private: true,
-      scripts: { dev: "node -e \"console.log('[ash] scheduler started');setInterval(()=>{},1000)\"" },
+      scripts: { dev: "node -e \"console.log('[navi] scheduler started');setInterval(()=>{},1000)\"" },
       dependencies: { fakedep: `file:${dep}` },
     }));
     const unsafe = await startPreview("unsafe-task", {
@@ -423,7 +423,7 @@ try {
     assert.equal(
       existsSync(join(unsafeWt, "front", "node_modules")),
       false,
-      "安全拒绝这条出口也必须把 ash 挂的软链撤掉",
+      "安全拒绝这条出口也必须把 navi 挂的软链撤掉",
     );
 
     // 同一条保护，换成**它会真的遇到的那种日志**：警告打完之后，旧分支后端还会接着刷迁移、
@@ -436,7 +436,7 @@ try {
     writeFileSync(join(buriedWt, "front", "package.json"), JSON.stringify({
       name: "front", version: "1.0.0", private: true,
       scripts: {
-        dev: "node -e \"console.log('[ash] scheduler started');console.log('x'.repeat(12000));"
+        dev: "node -e \"console.log('[navi] scheduler started');console.log('x'.repeat(12000));"
           + "require('http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\"",
       },
       dependencies: { fakedep: `file:${dep}` },
@@ -450,7 +450,7 @@ try {
     assert.equal(
       existsSync(join(buriedWt, "front", "node_modules")),
       false,
-      "这条出口同样要把 ash 挂的软链撤掉",
+      "这条出口同样要把 navi 挂的软链撤掉",
     );
 
     // ② 起来之后服务自己退出，由清扫收尾。清扫会**删掉 preview.json**——`record.links` 是
@@ -500,7 +500,7 @@ try {
       await sweepPreviews();
       assert.ok(existsSync(liveCache), "清扫把活着的预览正用着的依赖删了");
       assert.ok(existsSync(join(liveLink, "fakedep")), "工作区那条软链被清成了断链");
-      assert.equal(await fetch(live.record.url ?? "").then((r) => r.text()), "installed by ash");
+      assert.equal(await fetch(live.record.url ?? "").then((r) => r.text()), "installed by navi");
     } finally {
       killGroup(live.record.pid);
       await stopPreview("live-task", null);
@@ -707,7 +707,7 @@ try {
     assert.equal(
       existsSync(join(exitWt, "front", "node_modules")),
       false,
-      "清扫删记录的同时必须撤掉 ash 挂的软链（记录一删就没有第二次机会了）",
+      "清扫删记录的同时必须撤掉 navi 挂的软链（记录一删就没有第二次机会了）",
     );
   }
 } finally {

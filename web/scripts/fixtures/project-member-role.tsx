@@ -8,7 +8,7 @@
 //   ③ 加完一轮角色回落到「成员」——下一次加人不会继承上一次那个更高的权限。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AuthState, ProjectMemberView, ProjectRole, ProjectView, UserView } from "@ash/shared";
+import type { AuthState, ProjectMemberView, ProjectRole, ProjectView, UserView } from "@navi/shared";
 // global.css 必须排在组件之前 —— `main.tsx` 就是这个顺序（见 users-role 夹具）。
 import "../../src/styles/global.css";
 import { AuthContext } from "../../src/auth/authContext.ts";
@@ -80,7 +80,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
 const project: ProjectView = {
   id: PROJECT_ID,
   name: "示例项目",
-  repoPath: "D:/ash-root/demo",
+  repoPath: "D:/navi-root/demo",
   workflowId: null,
   useWorktreeDefault: false,
   createdAt: "2026-08-01T00:00:00.000Z",
@@ -92,8 +92,8 @@ const authState: AuthState = {
   mode: "multi",
   needsSetup: false,
   user: users.find((u) => u.id === SELF_ID) ?? null,
-  rootDir: "D:/ash-root",
-  homeDir: "D:/ash-root/admin",
+  rootDir: "D:/navi-root",
+  homeDir: "D:/navi-root/admin",
 };
 
 function Fixture() {

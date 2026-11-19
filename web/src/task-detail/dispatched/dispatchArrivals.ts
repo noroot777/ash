@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { dispatchedOf } from "../../lib/dispatchTree.ts";
 
 export type DispatchArrivals = {

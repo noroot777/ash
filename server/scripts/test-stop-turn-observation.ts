@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-stop-observation-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_SUSPECT_TURN_MS = "60000";
+const root = mkdtempSync(join(tmpdir(), "navi-stop-observation-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_SUSPECT_TURN_MS = "60000";
 
 const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
 const { projects } = await import("../src/db/schema.js");

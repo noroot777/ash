@@ -38,7 +38,7 @@ import { CLOCK_SLACK_MS, birthOf, environmentHasMarker, instanceVerdict, process
 // 环境把 `/tmp/check-ABC` 那一域的标记整段包住 —— 它被当成域内进程认领,随后被那一域的
 // `stop()` 终止。临时目录名带后缀是常态,这不是巧合输入。
 {
-  const marker = "ASH_TEST_PROCESS_SCOPE=/tmp/check-ABC";
+  const marker = "NAVI_TEST_PROCESS_SCOPE=/tmp/check-ABC";
   for (const [segment, why] of [
     [` ${marker}`, "段尾收口"],
     [` ${marker} OTHER=1`, "后面还有别的变量"],

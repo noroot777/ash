@@ -1,13 +1,13 @@
 import { HTTPException } from "hono/http-exception";
 import { and, eq, sql } from "drizzle-orm";
-import type { BranchDependency } from "@ash/shared/branch-plan";
+import type { BranchDependency } from "@navi/shared/branch-plan";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
 import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
-import { FROZEN_GIT_REF_NAMESPACE } from "@ash/shared/legacy-names";
-import { taskIdPrefixOfBranch } from "@ash/shared/task-branch";
+import { FROZEN_GIT_REF_NAMESPACE } from "@navi/shared/legacy-names";
+import { taskIdPrefixOfBranch } from "@navi/shared/task-branch";
 import type { BranchPlanReads } from "./branch-plan-reads.js";
 
 export type BranchTask = typeof tasks.$inferSelect;
@@ -118,7 +118,7 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
   await exec("git", ["-C", expandHome(repo), "update-ref", baseRef(row.id), start, ""]);
 }
 
-export type { BranchDependency } from "@ash/shared/branch-plan";
+export type { BranchDependency } from "@navi/shared/branch-plan";
 
 export function branchRelationship(task: BranchTask, parentId: string, parentBranch: string): "pinned" | "legacy" | "target" | null {
   if (task.id === parentId) return null;

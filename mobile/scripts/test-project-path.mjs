@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { projectPathOf, scopedTail, separatorOf } from "../src/lib/projectPath.ts";
 
-const HOME = "/srv/ash-root/xiaocai";
+const HOME = "/srv/navi-root/xiaocai";
 
 /** 把这一屏的状态机跑一遍：事件按数组顺序发生，最后给出会提交的那条路径。 */
 function run(events) {
@@ -50,10 +50,10 @@ assert.equal(run([{ home: HOME }]).path, "");
 assert.equal(run([{ name: "Frontend" }, { repoPath: " ~/code/foo " }]).path, "~/code/foo");
 
 // ⑦ Windows 的家目录用反斜杠拼。
-assert.equal(separatorOf("D:\\ash-root\\me"), "\\");
+assert.equal(separatorOf("D:\\navi-root\\me"), "\\");
 assert.equal(
-  projectPathOf("D:\\ash-root\\me", "foo", ""),
-  "D:\\ash-root\\me\\foo",
+  projectPathOf("D:\\navi-root\\me", "foo", ""),
+  "D:\\navi-root\\me\\foo",
 );
 
 console.log("mobile project path: ok");

@@ -46,7 +46,7 @@
 // 归还;欠账是本地账,只能靠补偿往前推,补不动就一直补 —— 不设上限、不自行退场。进程真的没了
 // 也有交接:协议事实在调用这条路之前就已经落盘(orchestrator 的 `noteDeliveryAccepted`),
 // 开机对账按那张记号判「已送达」并补记,不会把它当成未送达重投(pending-checkpoint-recovery.ts)。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import type { InputAcceptance } from "./executors/types.js";
 
 /**
@@ -132,14 +132,14 @@ export function createDeliveryLease(opts: {
       else await opts.onReturn(WHY_RETURN);
       owed = null;
       if (what === "refused") returned = true;
-      if (attempt > 0) console.warn(`[ash] ${opts.label} 的${what === "accepted" ? "送达确认" : "租约归还"}`
+      if (attempt > 0) console.warn(`[navi] ${opts.label} 的${what === "accepted" ? "送达确认" : "租约归还"}`
         + `在第 ${attempt + 1} 次重试时补上了`);
     } catch (error) {
       const label = what === "accepted" ? "送达确认" : "租约归还";
       const wait = delayFor(attempt);
       // 前三拍每拍都说,之后每十拍说一次:既不瞒着,也不把日志刷爆。
       if (attempt < 3 || (attempt + 1) % 10 === 0) {
-        console.warn(`[ash] ${opts.label} 的${label}第 ${attempt + 1} 次没落盘，${wait}ms 后继续补`
+        console.warn(`[navi] ${opts.label} 的${label}第 ${attempt + 1} 次没落盘，${wait}ms 后继续补`
           + `${what === "accepted" ? "（协议层已经收下这一轮，这条绝不会被退回重投）" : ""}:`, error);
       }
       const timer = setTimeout(() => { void attemptDispose(attempt + 1); }, wait);
@@ -186,7 +186,7 @@ export function createDeliveryLease(opts: {
         // 再走一遍都只是空转 —— 真正重要的是它**不会**发生在 accepted 上。
         if (returned) return;
         if (owed === null) owed = "refused";
-        console.warn(`[ash] ${opts.label} 协议层明确拒收（回合输入一个字都没写出去），归还租约并重投`);
+        console.warn(`[navi] ${opts.label} 协议层明确拒收（回合输入一个字都没写出去），归还租约并重投`);
       }
       // 只等**第一次**尝试:后面几拍由 attemptDispose 自己排(调用方是正在跑的那一轮)。
       await attemptDispose(0);

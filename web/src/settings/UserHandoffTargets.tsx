@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { HandoffApprovalResult, HandoffTarget } from "@ash/shared";
+import type { HandoffApprovalResult, HandoffTarget } from "@navi/shared";
 import { Fingerprint, PaperPlaneTilt, Plus, SpinnerGap, Trash } from "@phosphor-icons/react";
 import { Button, TextInput } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";

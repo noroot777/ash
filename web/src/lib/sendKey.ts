@@ -10,8 +10,8 @@
 //
 // 这个文件**不 import `api.ts`**:它要被 api 那条链调(读到设置的那一刻把新档位交进来),
 // 夹在中间才不会把那两个绕成环。那一次性的拉取在 `useComposerSendKey.ts` 里。
-import type { ComposerSendKey } from "@ash/shared";
-import { COMPOSER_SEND_KEYS } from "@ash/shared";
+import type { ComposerSendKey } from "@navi/shared";
+import { COMPOSER_SEND_KEYS } from "@navi/shared";
 
 const isSendKey = (value: unknown): value is ComposerSendKey =>
   typeof value === "string" && (COMPOSER_SEND_KEYS as readonly string[]).includes(value);

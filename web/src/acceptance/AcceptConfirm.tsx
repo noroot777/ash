@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from "react";
-import type { AcceptanceSteps } from "@ash/shared/accept-message";
+import type { AcceptanceSteps } from "@navi/shared/accept-message";
 import { AcceptLayer } from "./AcceptLayer.tsx";
 import { cleanText, type ConfirmGate, type ConfirmView } from "./confirmPlan.ts";
 import { NaviLoader } from "../brand/NaviLoader.tsx";

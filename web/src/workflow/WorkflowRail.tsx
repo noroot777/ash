@@ -4,9 +4,9 @@
 // 去向，全程不用先选中再去别处的面板找。给了 onChange 才可编辑，不给就是只读展示
 // （任务详情里看这条线长什么样）。给了 task 就按它此刻的真实状态把走到的那一站点亮。
 import { Fragment, useRef, useState } from "react";
-import type { Task } from "@ash/shared";
-import type { StepKind, WorkflowDef, WorkflowIssue, WorkflowStep } from "@ash/shared/workflow";
-import { STEP_KINDS, STEP_LABELS, hasFailBranch } from "@ash/shared/workflow";
+import type { Task } from "@navi/shared";
+import type { StepKind, WorkflowDef, WorkflowIssue, WorkflowStep } from "@navi/shared/workflow";
+import { STEP_KINDS, STEP_LABELS, hasFailBranch } from "@navi/shared/workflow";
 import { ArrowUUpLeft, Plus } from "@phosphor-icons/react";
 import { Popover } from "./Popover.tsx";
 import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./executorCatalog.ts";
