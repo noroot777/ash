@@ -132,6 +132,5 @@
 
 @media(max-width:700px) {
   .is-studio .composer-inner { width:calc(100% - 28px); }
-  .studio-inline-executor .run-target-seg--agent > span { display:none; }
   .studio-popover .run-target-seg { padding:0 6px; }
 }

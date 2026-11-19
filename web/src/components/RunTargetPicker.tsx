@@ -138,8 +138,6 @@ export function RunTargetPicker({
       >
         <AgentIcon agent={selection?.agentType} size={12} />
         {selection ? <b>{selection.agentType}</b> : <span className="is-placeholder">{unsetText}</span>}
-        {/* 执行器名是「选了哪个模型」的结果，挤在对话框底部那排时先让位给模型本身。 */}
-        {selection && profile && variant === "field" && <span>{profile.name}</span>}
         <CaretDown size={9} weight="bold" className="run-target-caret" aria-hidden="true" />
       </button>}
 

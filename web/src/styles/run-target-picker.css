@@ -46,11 +46,7 @@
   font-size: 12px;
   text-align: left;
 }
-/* 挤不下时谁先让：模型名是这颗胶囊最要紧的那个答案，最后才省略。智能体那段先让——段内又是执行器名
-   先于类型名——一直让到只剩图标和箭头（图标已说明是谁；min-width 托底，overflow 裁掉残字）。按比例一起
-   缩的话，派审对话框里选了命名执行器，模型名会跟着被压成「gpt-6.…」。 */
-.run-target-seg--agent { flex: 0 1000 auto; min-width: 4.5em; overflow: hidden; }
-.run-target-seg.run-target-seg--agent > span { flex-shrink: 1000; }
+.run-target-seg--agent { flex: 0 1 auto; }
 .run-target-seg--model { flex: 1 1 auto; }
 /* 尾段（回复框里派出去时的「从哪开工」）：字放在 span 里，跟执行器名同一套省略（长分支名窄屏下先省略）。 */
 .run-target-seg--tail { flex: 0 1 auto; }
