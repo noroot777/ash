@@ -3,7 +3,7 @@
 // 不放进回复框：计划定稿后「实施此计划？」会占住回复框，模式标得一直看得到。
 // 叉只在单一作用域时给：/plan off 要由那个执行器自己跑一回合，多个作用域没法一键退干净。
 import { Lightbulb, X } from "@phosphor-icons/react";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import "../components/proposed-plan.css";
 

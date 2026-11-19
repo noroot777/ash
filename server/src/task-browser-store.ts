@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { TaskBrowserState } from "@ash/shared/task-runtime";
+import type { TaskBrowserState } from "@navi/shared/task-runtime";
 import { RUNS_DIR } from "./paths.js";
 
 export const browserFile = (taskId: string, extension: "json" | "png") => join(RUNS_DIR, taskId, `browser.${extension}`);

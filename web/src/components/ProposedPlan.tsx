@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowsOutSimple, DownloadSimple, Lightbulb, X } from "@phosphor-icons/react";
 import { createPortal } from "react-dom";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { CopyButton } from "./CopyButton.tsx";
 import { MarkdownBody } from "./MarkdownBody.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";

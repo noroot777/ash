@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { NAVI_HEADERS } from "@ash/shared/http-headers";
-import type { BrowserObservation } from "@ash/shared/task-runtime";
+import { NAVI_HEADERS } from "@navi/shared/http-headers";
+import type { BrowserObservation } from "@navi/shared/task-runtime";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-runtime-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_DEPS_DIR = join(root, "deps");
+const root = mkdtempSync(join(tmpdir(), "navi-task-runtime-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks } = await import("../src/db/schema.js");
 const { mountTaskRuntimeRoutes } = await import("../src/task-runtime-routes.js");
@@ -24,7 +24,7 @@ const { readAnyPreview, alive } = await import("../src/preview-store.js");
 const { taskBrowserState, closeTaskBrowser } = await import("../src/task-browser.js");
 const { browserFile } = await import("../src/task-browser-store.js");
 const { startDevelopmentService } = await import("../src/task-runtime-service.js");
-const screenshots = process.env.ASH_RUNTIME_SCREENSHOTS || join(root, "screenshots");
+const screenshots = process.env.NAVI_RUNTIME_SCREENSHOTS || join(root, "screenshots");
 mkdirSync(screenshots, { recursive: true });
 const repo = join(root, "repo");
 const workspace = join(repo, ".worktrees", "runtime");
@@ -134,7 +134,7 @@ try {
   assert.equal((await request("runtime/browser", "POST", { action: "navigate", id: browserId, path: "http://127.0.0.1:4317/" }, agentHeaders)).status, 409);
   observed = await action({ action: "snapshot", id: browserId });
   assert.equal(observed.state.error, null);
-  if (process.env.ASH_RUNTIME_SERVER_ONLY !== "1") {
+  if (process.env.NAVI_RUNTIME_SERVER_ONLY !== "1") {
     await action({ action: "close", id: browserId });
     const { launchChrome, startWebServer } = await import("../../web/scripts/dom-stage.mjs");
     web = await startWebServer();

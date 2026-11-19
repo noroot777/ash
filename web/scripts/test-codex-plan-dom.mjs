@@ -31,7 +31,7 @@ try {
   await plan.getByRole("heading", { name: "草稿标题" }).waitFor();
   assert.equal(await plan.count(), 1);
   assert.equal(await plan.locator("pre").count(), 0);
-  await page.screenshot({ path: "/tmp/ash-codex-plan-streaming.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-codex-plan-streaming.png", fullPage: true });
   await page.reload();
   await plan.getByRole("heading", { name: "草稿标题" }).waitFor();
   await page.getByRole("button", { name: "完成计划", exact: true }).click();
@@ -46,7 +46,7 @@ try {
   const exported = await page.getByLabel("导出计划").textContent();
   assert.match(exported, /周额度管理台/);
   assert.doesNotMatch(exported, /尚未定稿/);
-  await page.screenshot({ path: "/tmp/ash-codex-plan-ready.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-codex-plan-ready.png", fullPage: true });
   await page.reload();
   await implement.waitFor();
   await page.getByRole("button", { name: "展开计划" }).click();
@@ -73,7 +73,7 @@ try {
   await implement.waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
-  await page.screenshot({ path: "/tmp/ash-codex-plan-mobile.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-codex-plan-mobile.png", fullPage: true });
   await page.setViewportSize({ width: 1200, height: 1100 });
   await page.getByRole("checkbox", { name: "模拟发送失败" }).check();
   await implement.click();
@@ -97,7 +97,7 @@ try {
   const revised = JSON.parse(await page.getByLabel("实施请求").innerText());
   assert.equal(revised.text, "验证一节再补上手机布局");
   assert.equal(revised.executorId, "codex-plan");
-  await page.screenshot({ path: "/tmp/ash-codex-plan-revised.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-codex-plan-revised.png", fullPage: true });
   await page.getByRole("button", { name: "重置计划" }).click();
   await page.getByRole("button", { name: "开始拟定", exact: true }).click();
   await page.getByRole("button", { name: "追加草稿" }).click();

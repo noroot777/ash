@@ -17,7 +17,7 @@ export type ExecutionEvent = {
   // 算异常、也不让折叠条标红,只是留在它发生的那个位置上。来源是 `level:"notice"` 的
   // error 事件(见 shared/src/events.ts)。
   kind: "tool" | "thinking" | "error" | "notice" | "plan";
-  plan?: Extract<import("@ash/shared").AgentEvent, { kind: "plan" }>;
+  plan?: Extract<import("@navi/shared").AgentEvent, { kind: "plan" }>;
   label: string;
   detail?: string;
   at?: string;

@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { MAX_PREVIEW_SCRIPT_LENGTH } from "@ash/shared/preview";
+import { MAX_PREVIEW_SCRIPT_LENGTH } from "@navi/shared/preview";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { taskFileRoot } from "./file-browser.js";

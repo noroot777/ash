@@ -2,7 +2,7 @@
 // 点「接管」后页面能点、能打字、能换尺寸，智能体那边的操作被挡住，「交还」还给它。
 // 这一格是宽格（InspectorDescriptor.wide）：选中时右栏跟会话大约五五开。
 import { useEffect, useRef, useState } from "react";
-import type { BrowserUserAction, TaskBrowserState } from "@ash/shared/task-runtime";
+import type { BrowserUserAction, TaskBrowserState } from "@navi/shared/task-runtime";
 import { ArrowClockwise, ArrowLeft, ArrowRight, CaretDown, CaretUp, DeviceMobile, Monitor } from "@phosphor-icons/react";
 import { apiPath, id } from "../lib/apiClient.ts";
 import { InspectorHeadActions } from "../inspector/index.ts";

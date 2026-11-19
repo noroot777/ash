@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { renameSync, writeFileSync } from "node:fs";
 import type { Browser, Page } from "playwright-core";
-import type { BrowserObservation, BrowserUserAction, TaskBrowserState } from "@ash/shared/task-runtime";
+import type { BrowserObservation, BrowserUserAction, TaskBrowserState } from "@navi/shared/task-runtime";
 import { bus } from "./bus.js";
 import { alive, readAnyPreview } from "./preview-store.js";
 import { browserFile, browserFrame, lastBrowser, saveBrowser } from "./task-browser-store.js";

@@ -1,5 +1,5 @@
 import type { Page } from "playwright-core";
-import type { BrowserTarget, BrowserUserAction } from "@ash/shared/task-runtime";
+import type { BrowserTarget, BrowserUserAction } from "@navi/shared/task-runtime";
 
 export async function inspectBrowserPage(page: Page, prefix: string): Promise<{ text: string; targets: BrowserTarget[] }> {
   return page.evaluate((stamp) => {
@@ -9,7 +9,7 @@ export async function inspectBrowserPage(page: Page, prefix: string): Promise<{ 
       const rect = element.getBoundingClientRect();
       if (!rect.width || !rect.height || getComputedStyle(element).visibility === "hidden" || targets.length >= 200) continue;
       const ref = `${stamp}-${targets.length + 1}`;
-      element.setAttribute("data-ash-browser-ref", ref);
+      element.setAttribute("data-navi-browser-ref", ref);
       const control = element as HTMLInputElement;
       const labels = "labels" in control ? Array.from(control.labels ?? []).map((label) => label.textContent ?? "").join(" ") : "";
       const labelled = (element.getAttribute("aria-labelledby") ?? "").split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
@@ -50,7 +50,7 @@ export async function operateBrowserPage(page: Page, input: BrowserUserAction, b
     await page.mouse.click(input.x, input.y);
   } else if (input.action === "click" || input.action === "fill" || input.action === "select") {
     if (!input.ref.startsWith(`${prefix}-`) || !/^[a-z0-9-]+$/.test(input.ref)) throw new Error("页面目标已过期，请重新 snapshot 后使用新的 ref");
-    const target = page.locator(`[data-ash-browser-ref="${input.ref}"]`);
+    const target = page.locator(`[data-navi-browser-ref="${input.ref}"]`);
     if (input.action === "click") await target.click();
     else if (input.action === "fill") await target.fill(input.text);
     else await target.selectOption(input.value);

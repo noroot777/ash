@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { parseBrowserAction } from "@ash/shared/task-runtime";
+import { parseBrowserAction } from "@navi/shared/task-runtime";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf } from "./auth/context.js";

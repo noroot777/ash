@@ -15,7 +15,7 @@
 // 你再做下一个动作；查询失败是暂时的，下一次查询成功就消失。两格都显示它，动作在哪一格发起、失败时
 // 你停在哪一格都看得到。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TaskBrowserState, TaskRuntimeState } from "@ash/shared/task-runtime";
+import type { TaskBrowserState, TaskRuntimeState } from "@navi/shared/task-runtime";
 import { runtimeApi } from "./runtimeApi.ts";
 
 const EMPTY: TaskRuntimeState = { service: null, browser: null };

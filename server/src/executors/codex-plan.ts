@@ -1,4 +1,4 @@
-import type { AgentEvent, QuestionItem } from "@ash/shared";
+import type { AgentEvent, QuestionItem } from "@navi/shared";
 
 type PlanEvent = Extract<AgentEvent, { kind: "plan" }>;
 

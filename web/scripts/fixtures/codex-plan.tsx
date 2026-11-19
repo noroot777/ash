@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentEvent, Session, Task } from "@ash/shared";
+import type { AgentEvent, Session, Task } from "@navi/shared";
 import { AgentTurnBody } from "../../src/components/AgentTurnBody.tsx";
 import { buildConversationItems, conversationToMarkdown } from "../../src/task-detail/conversationModel.ts";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";

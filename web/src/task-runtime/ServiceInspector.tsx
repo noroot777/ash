@@ -58,7 +58,7 @@ export function ServiceInspector({ runtime, taskRunning }: { runtime: TaskRuntim
           <strong>{name}</strong>
           <span className="runtime-service-state">{status.text}</span>
         </div>
-        {/* 链接走 ash 的代理地址（别的设备也打得开）；写出来的是人认得的本机端口。 */}
+        {/* 链接走 navi 的代理地址（别的设备也打得开）；写出来的是人认得的本机端口。 */}
         {serviceReady && <a className="runtime-service-url" href={service.url!} target="_blank" rel="noreferrer">
           {service.port ? `localhost:${service.port}` : service.url}
         </a>}

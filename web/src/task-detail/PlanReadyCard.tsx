@@ -3,7 +3,7 @@
 // 要怎么改，发出去仍是计划模式下的一句普通回复，由出这份计划的同一个执行器接着改。
 import { useRef, useState, type KeyboardEvent } from "react";
 import { ArrowRight, CaretDown, PencilSimple } from "@phosphor-icons/react";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import type { ProposedPlanData } from "../components/ProposedPlan.tsx";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";

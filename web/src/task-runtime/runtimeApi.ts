@@ -1,4 +1,4 @@
-import type { BrowserObservation, BrowserUserAction, TaskRuntimeState } from "@ash/shared/task-runtime";
+import type { BrowserObservation, BrowserUserAction, TaskRuntimeState } from "@navi/shared/task-runtime";
 import { id, json, request } from "../lib/apiClient.ts";
 
 export const runtimeApi = {

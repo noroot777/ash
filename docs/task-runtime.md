@@ -29,4 +29,4 @@ MCP 调用示例：
 - 当前阶段只覆盖任务 Web 服务的浏览器操作，不镜像 Codex / ChatGPT 的专有浏览器宿主，也不控制桌面全局 CUA 服务。
 - 浏览器使用隔离的临时上下文，不共享用户日常 Chrome 的登录信息。页面导航限制在此任务服务的源内；新窗口、下载和页面原生弹窗不作为交互入口。
 - 服务器使用已有可选依赖 `playwright-core`，优先尝试本机 Chrome、Edge，再尝试 Playwright Chromium。可用 `CHROME_BIN` 指定路径；缺少依赖或浏览器时，失败原因会留在任务页，而不是报告验证成功。
-- 此能力由上述 ash 工具提供。旧任务的 shell 后台进程、外部 Playwright 会话和 Codex 私有浏览器不会被追认为已托管资源。
+- 此能力由上述 navi 工具提供。旧任务的 shell 后台进程、外部 Playwright 会话和 Codex 私有浏览器不会被追认为已托管资源。
