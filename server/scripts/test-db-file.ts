@@ -3,13 +3,16 @@
 //   ② 镜像：scripts/db-file.mjs 与 server/src/db/path.ts 常量相同、认法相同；跟着库名走的派生文件都在迁移清单里；
 //   ③ 迁移命令：改名带上 -wal 与状态文件、留路标、旧版对着路标起不来；中途失败照原样退回；进程被杀之后接着做 / 撤销；
 //      有服务在用（新旧两代的锁）就不动；退回再改名来回都不丢东西；
+//   ③b 被杀矩阵：改名、退回、撤回途中，每一步之前 / 之后真杀进程，再 --apply / --rollback，都落在「做完」或「原样」上；
 //   ④ 真起服务（本机自用模式、临时 HOME、随机端口）：新目录起出来是 navi.db；两份都是库时不起；只有 ash.db 的目录
 //      照常起，迁移之后再起，库里的数据、接力身份、远程访问密钥都还是原来那份。
+//   ①里另有：显式 NAVI_DB 也不许开改名做到一半的、不许开路标；启动拿锁时重认一遍，选库之后库改了名就不起。
 //
 // 跑:`npm -w server run test:db-file`
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
@@ -84,7 +87,23 @@ try {
     writeFileSync(join(harness, LEGACY_HARNESS_DB_FILE), "db");
     assert.deepEqual(choose(harness), { file: join(harness, "navi.db"), legacy: false });
     assert.equal(readFileSync(join(harness, "navi.db"), "utf8"), "db", "harness.db 就地改名成 navi.db");
-    console.log("✓ 选库：新建 navi.db、老安装开 ash.db、认不准的三种情形不起、harness.db 改成 navi.db");
+    // 脚本侧要开库前问的那一句（drizzle 配置用），跟服务拒绝启动的情形一一对上。
+    for (const d of [fresh, legacy, both, moved, halfway, harness]) {
+      assert.equal(mirror.unclearDbReason(d) !== null, choose(d) instanceof Error, `${d}：脚本侧认不准的判断跟服务对不上`);
+    }
+    // 显式指定的库：位置照它，改名的安全闸照旧。
+    const explicit = (file: string) => { process.env.NAVI_DB = file; try { return path.resolveNaviDbFile(); } catch (error) { return error as Error; } finally { clearEnv(process.env, "NAVI_DB"); } };
+    assert.match(String(explicit(join(halfway, LEGACY_DB_FILE))), /上次没做完/, "显式 NAVI_DB 指着改名做到一半的目录：不起");
+    assert.match(String(explicit(join(moved, LEGACY_DB_FILE))), /路标.*NAVI_DB 改成/, "显式 NAVI_DB 指着路标：不起、说清改成哪份");
+    assert.equal(explicit(join(legacy, LEGACY_DB_FILE)), join(legacy, LEGACY_DB_FILE), "显式指着一份正常的库：照开");
+    // 启动在锁里重认：选完之后（拿锁之前）库被退回成旧名，记住的 navi.db 已经不是那份数据。
+    const chosen = path.resolveNaviDbFile();
+    path.recheckDbFileChoice(chosen);
+    mkdirSync(defaultData, { recursive: true });
+    makeDb(join(defaultData, LEGACY_DB_FILE)).close();
+    assert.throws(() => path.recheckDbFileChoice(chosen), /启动途中库文件改了名/, "选库之后库改了名：不起");
+    rmSync(join(defaultData, LEGACY_DB_FILE));
+    console.log("✓ 选库：新建 navi.db、老安装开 ash.db、认不准的三种情形不起、harness.db 改成 navi.db；显式路径也过改名的闸；锁里重认");
   }
 
   // ── ② 镜像与派生文件清单 ─────────────────────────────────────────────────
@@ -113,7 +132,21 @@ try {
         `服务端在库名后面拼了 ${suffix}，迁移清单里没有它：改名之后这份文件就丢了`);
     }
     for (const s of mirror.DB_CARRIED_SUFFIXES.filter((x: string) => x.endsWith(".jsonl"))) assert.ok(mirror.DB_CARRIED_SUFFIXES.includes(`${s}.1`), `${s} 轮转出的 .1 也要带上`);
-    console.log(`✓ 镜像一致；服务端在库名后拼的 ${derived.size} 种文件都在迁移清单里`);
+    // 拿锁先于开库：入口先加载 startup-lock、再加载 main；startup-lock 的静态依赖碰不到一加载就开库的 db/index.ts。
+    const src = join(serverRoot, "src");
+    const entry = readFileSync(join(src, "index.ts"), "utf8");
+    assert.ok(entry.indexOf('import("./startup-lock.js")') >= 0 && entry.indexOf('import("./startup-lock.js")') < entry.indexOf('import("./main.js")'), "入口要先拿锁再加载 main");
+    const reach = new Map<string, string | null>([[join(src, "startup-lock.ts"), null]]);
+    for (const [file] of reach) {
+      for (const m of readFileSync(file, "utf8").matchAll(/^\s*import\s+(?!type\b)(?:[^'"]*?from\s*)?["'](\.[^"']+)\.js["']/gm)) {
+        const next = resolve(file, "..", `${m[1]}.ts`);
+        if (existsSync(next) && !reach.has(next)) reach.set(next, file);
+      }
+    }
+    const opener = join(src, "db", "index.ts");
+    const chain = (f: string | null | undefined): string => (f ? `${chain(reach.get(f))} → ${f.slice(src.length + 1)}` : "");
+    assert.ok(!reach.has(opener), `startup-lock 静态引到了开库的模块：${chain(opener)}`);
+    console.log(`✓ 镜像一致；服务端在库名后拼的 ${derived.size} 种文件都在迁移清单里；拿锁先于开库`);
   }
 
   // ── ③ 迁移命令 ───────────────────────────────────────────────────────────
@@ -156,9 +189,10 @@ try {
 
     // 进程在半路被杀：账本留着、服务不起；--apply 接着做完。
     const plan2 = core.planSteps(data, { direction: "forward", stamp: "kill" });
-    writeFileSync(core.journalFile(data), JSON.stringify({ version: 1, direction: "forward", createdAt: "t", leftovers: plan2.leftovers, steps: plan2.steps }));
+    // 被杀之前做了两步（留底那把死锁、-wal），第二步做完还没来得及记进账本
+    writeFileSync(core.journalFile(data), JSON.stringify({ version: 2, direction: "forward", createdAt: "t", leftovers: plan2.leftovers, steps: plan2.steps, phase: "do", progress: 1 }));
     mkdirSync(plan2.leftovers, { recursive: true });
-    for (const step of plan2.steps.slice(0, 2)) renameSync(step.from, step.to); // 被杀之前做了两步（留底那把死锁、-wal）
+    for (const step of plan2.steps.slice(0, 2)) renameSync(step.from, step.to);
     assert.match(String(choose(data)), /上次没做完/, "半路被杀：服务不起");
     const resumed = run(data, "--apply");
     assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr);
@@ -195,6 +229,91 @@ try {
     assert.equal(r.status, 2);
     assert.match(r.stdout, /都是库/);
     console.log("✓ 迁移命令：带上 -wal 与身份/密钥、留路标挡旧版、失败照原样退回、被杀后接着做、有服务在用不动、来回不丢东西");
+  }
+
+  // ── ③b 被杀矩阵 ──────────────────────────────────────────────────────────
+  {
+    // 子进程照常跑生产的 start()，在第 killAt 次文件操作之前 / 之后 SIGKILL 自己（failAt：那一次操作抛错，好走进撤回）。
+    const child = join(root, "crash-child.mjs");
+    writeFileSync(child, `import { renameSync, unlinkSync, writeFileSync } from "node:fs";
+const core = await import(${JSON.stringify(pathToFileURL(join(REPO, "scripts", "rename-db-core.mjs")).href)});
+const [data, direction, when, killAt, failAt] = process.argv.slice(2);
+let n = 0;
+const wrap = (f) => (...a) => {
+  n += 1;
+  if (n === Number(failAt)) throw new Error("注入的失败");
+  if (n === Number(killAt) && when === "before") process.kill(process.pid, "SIGKILL");
+  f(...a);
+  if (n === Number(killAt) && when === "after") process.kill(process.pid, "SIGKILL");
+};
+const ops = { rename: wrap(renameSync), writeNew: wrap((p, t) => writeFileSync(p, t, { flag: "wx" })), unlink: wrap(unlinkSync) };
+try { core.start(data, core.planSteps(data, { direction, stamp: "crash" }), { ops }); } catch {}
+console.log("OPS " + n);
+`);
+    const crash = (data: string, direction: string, when = "none", killAt = 0, failAt = 0) =>
+      spawnSync(process.execPath, [child, data, direction, when, String(killAt), String(failAt)], { encoding: "utf8" });
+    // 数据目录的样子：顶层每个文件的内容摘要（留底目录另算 —— 挪进去的那几份只对死掉的进程有意义；路标里带着时间，只记「是路标」）。
+    const shape = (d: string) => readdirSync(d).filter((f) => f !== "backups").sort()
+      .map((f) => `${f}:${mirror.legacyDbState(join(d, f)) === "moved" ? "路标" : createHash("sha256").update(readFileSync(join(d, f))).digest("hex").slice(0, 12)}`).join(" ");
+    const legacyBase = dir("crash-legacy");
+    makeDb(join(legacyBase, LEGACY_DB_FILE), 4).close();
+    writeFileSync(join(legacyBase, `${LEGACY_DB_FILE}.identity.json`), '{"who":"me"}');
+    writeFileSync(join(legacyBase, `${LEGACY_DB_FILE}.remote-access.json`), '{"key":"k"}');
+    const deadPid = spawnSync(process.execPath, ["-e", "console.log(process.pid)"], { encoding: "utf8" }).stdout.trim();
+    writeFileSync(join(legacyBase, `${LEGACY_DB_FILE}.ash.lock`), JSON.stringify({ pid: Number(deadPid) }));
+    const renamedBase = dir("crash-renamed");
+    cpSync(legacyBase, renamedBase, { recursive: true });
+    assert.equal(run(renamedBase, "--apply").status, 0);
+    let cases = 0;
+    for (const [direction, base] of [["forward", legacyBase], ["backward", renamedBase]] as const) {
+      const scratch = dir(`crash-${direction}-clean`);
+      cpSync(base, scratch, { recursive: true });
+      const total = Number(/OPS (\d+)/.exec(crash(scratch, direction).stdout)![1]);
+      const finished = shape(scratch);
+      const original = shape(base);
+      assert.notEqual(finished, original);
+      // 最后一步失败时，撤回要做几次操作
+      const failing = dir(`crash-${direction}-fail`);
+      cpSync(base, failing, { recursive: true });
+      const undoOps = Number(/OPS (\d+)/.exec(crash(failing, direction, "none", 0, total).stdout)![1]) - total;
+      assert.equal(shape(failing), original, `${direction}：最后一步失败，照原样退回`);
+      const points = [
+        ...Array.from({ length: total }, (_, i) => ({ killAt: i + 1, failAt: 0 })),
+        ...Array.from({ length: undoOps }, (_, i) => ({ killAt: total + 1 + i, failAt: total })),
+      ];
+      for (const { killAt, failAt } of points) {
+        for (const when of ["before", "after"]) {
+          const label = `${direction} ${failAt ? "撤回途中" : ""}第 ${killAt} 次操作${when === "before" ? "之前" : "之后"}被杀`;
+          // 账本里记的是绝对路径：每种接着处理的办法各自从头造一次现场，就地处理。
+          const kill = (tag: string) => {
+            const crashed = dir(`crash-${direction}-${killAt}-${when}-${tag}`);
+            cpSync(base, crashed, { recursive: true });
+            // 被杀 = 没走到最后那句 OPS（Windows 上自杀报的是退出码，不是信号）
+            assert.doesNotMatch(crash(crashed, direction, when, killAt, failAt).stdout, /OPS/, label);
+            assert.ok(existsSync(core.journalFile(crashed)), `${label}：账本留着`);
+            assert.match(String(choose(crashed)), /上次没做完/, `${label}：服务不起`);
+            return crashed;
+          };
+          for (const mode of failAt ? ["--rollback"] : ["--apply", "--rollback"]) {
+            const crashed = kill(mode.slice(2));
+            const r = run(crashed, mode);
+            assert.equal(r.status, 0, `${label} → ${mode}：${r.stdout}${r.stderr}`);
+            assert.equal(shape(crashed), mode === "--apply" ? finished : original, `${label} → ${mode}：没落在${mode === "--apply" ? "做完" : "原样"}上`);
+            assert.equal(existsSync(join(crashed, "backups")), existsSync(join(mode === "--apply" ? scratch : base, "backups")), `${label} → ${mode}：留底目录收拾干净`);
+            assert.equal(existsSync(core.journalFile(crashed)), false);
+            cases += 1;
+          }
+          if (failAt) {
+            const crashed = kill("apply");
+            const r = run(crashed, "--apply");
+            assert.equal(r.status, 2, `${label}：撤到一半时 --apply 不接着往前做`);
+            assert.match(r.stdout, /只能先 --rollback/);
+            assert.ok(existsSync(core.journalFile(crashed)), `${label}：--apply 拒绝时账本原样留着`);
+          }
+        }
+      }
+    }
+    console.log(`✓ 被杀矩阵：改名、退回、撤回途中每一步前后被杀，${cases} 种接着处理都落在「做完」或「原样」上`);
   }
 
   // ── ④ 真起服务 ───────────────────────────────────────────────────────────

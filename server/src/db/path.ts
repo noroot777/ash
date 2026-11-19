@@ -66,13 +66,17 @@ export function migrateLegacyDbFiles(defaultDb: string, legacyDb: string) {
  *
  * 更早的 `harness.db` 就地改名成 `navi.db`（那一代没有并存的旧版服务，也没有跟着库名走的状态文件）。
  */
-export function chooseDbFileIn(dataDir: string): { file: string; legacy: boolean } {
-  const current = join(dataDir, DB_FILE_NAME);
-  const legacy = join(dataDir, LEGACY_DB_FILE);
+function refuseWhileRenaming(dataDir: string) {
   if (existsSync(join(dataDir, DB_RENAME_JOURNAL))) {
     throw new DbFileChoiceError(`${dataDir} 里的库改名（${LEGACY_DB_FILE} → ${DB_FILE_NAME}）上次没做完（${DB_RENAME_JOURNAL} 还在）。`
       + `停着服务跑 \`${RENAME_COMMAND} -- --apply\` 做完它，或 \`${RENAME_COMMAND} -- --rollback\` 退回去，再启动。`);
   }
+}
+
+export function chooseDbFileIn(dataDir: string): { file: string; legacy: boolean } {
+  const current = join(dataDir, DB_FILE_NAME);
+  const legacy = join(dataDir, LEGACY_DB_FILE);
+  refuseWhileRenaming(dataDir);
   const old = legacyDbState(legacy);
   if (existsSync(current)) {
     if (old === "present") {
@@ -104,10 +108,43 @@ function defaultDbFile(): string {
   return file;
 }
 
+/**
+ * 显式指定的库（`NAVI_DB`，旧名也认）只替我们选了位置，不豁免改名的安全闸：跟着它走的身份、访问密钥就在它旁边，
+ * 那个目录里改名做到一半时开它，会把已经挪走的身份当场重建成一台新机器。指着改名留下的路标时也说清楚，
+ * 而不是让 SQLite 报一句「file is not a database」。
+ */
+function checkExplicitDbFile(file: string) {
+  refuseWhileRenaming(dirname(file));
+  if (legacyDbState(file) === "moved") {
+    throw new DbFileChoiceError(`显式指定的库 ${file} 是改名迁移留下的路标，库已经改名成同目录里的 ${DB_FILE_NAME}。`
+      + `把 NAVI_DB 改成 ${join(dirname(file), DB_FILE_NAME)}（或去掉它），再启动。`);
+  }
+}
+
+const checkedExplicit = new Set<string>();
+
 export function resolveNaviDbFile() {
   const explicit = readStorageEnv(process.env, "NAVI_DB");
-  if (explicit) return resolve(explicit);
+  if (explicit) {
+    const file = resolve(explicit);
+    if (!checkedExplicit.has(file)) { checkExplicitDbFile(file); checkedExplicit.add(file); }
+    return file;
+  }
   return resolve(defaultDbFile());
+}
+
+/**
+ * 在启动的占有锁里（singleton.ts，跟 `rename-db` 抢的是同一把）重新认一遍：`resolveNaviDbFile` 选库发生在拿锁之前，
+ * 两步之间改名或退回做完了的话，记住的那个名字已经不是那份数据 —— 照它开就是对着一份新建的空库起来。
+ * 认出来不一样就不起，重启一次会按此刻的样子重选。
+ */
+export function recheckDbFileChoice(dbFile: string) {
+  const explicit = readStorageEnv(process.env, "NAVI_DB");
+  if (explicit) return checkExplicitDbFile(resolve(explicit));
+  const now = resolve(chooseDbFileIn(DATA_DIR).file);
+  if (now !== resolve(dbFile)) {
+    throw new DbFileChoiceError(`启动途中库文件改了名：先选的是 ${dbFile}，现在该开的是 ${now}。没有启动，重新启动一次即可。`);
+  }
 }
 
 export function ensureNaviDbDir(dbFile = resolveNaviDbFile()) {

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 import { LEGACY_SINGLETON_LOCK_SUFFIX } from "@navi/shared/legacy-names";
-import { resolveNaviDbFile, ensureNaviDbDir } from "./db/path.js";
+import { resolveNaviDbFile, ensureNaviDbDir, recheckDbFileChoice } from "./db/path.js";
 import { liveMaintenanceHolderForAny, maintenanceLockFileFor } from "./maintenance-lock.js";
 import { resourceKeysFor, withResourceClaim } from "./resource-claim.js";
 import { type NaviPresenceRegistration, registerNaviPresence } from "./navi-presence.js";
@@ -201,6 +201,8 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
           `database is being migrated by an offline maintenance process (resource ${maintenance.key})`,
         );
       }
+      // 选库在拿这把锁之前；库改名（rename-db）抢的也是这把锁，所以到这里才能确认选中的还是那份数据。
+      recheckDbFileChoice(dbFile);
       if (readEnv(process.env, "NAVI_ALLOW_MULTI") === "1") {
         console.warn(
           `[navi] WARNING: NAVI_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,

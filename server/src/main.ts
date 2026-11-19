@@ -6,11 +6,8 @@ import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { join, extname, normalize, sep } from "node:path";
 import type { Context } from "hono";
-import {
-  acquireDbSingletonLock,
-  SingletonConflictError,
-  type SingletonLock,
-} from "./singleton.js";
+// 单例锁由 startup-lock.ts 在本模块（及它静态引到的、会开库的模块）加载之前拿好。
+import { port, singletonLock } from "./startup-lock.js";
 import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSync } from "./platform.js";
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
 import { stampHumanActionToken } from "./auth/human-action-token.js";
@@ -25,7 +22,6 @@ import { listenWindowPort } from "./window-port.js";
 import { responseCompression } from "./response-compression.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
 
-let singletonLock: SingletonLock | null = null;
 let activeServer: ReturnType<typeof serve> | null = null;
 let startupComplete = false;
 let startupExitInProgress = false;
@@ -41,8 +37,6 @@ process.on("uncaughtException", (e) => {
   if (!startupComplete) exitAfterStartupFailure("uncaught exception during startup", e);
   console.error("[navi] uncaughtException:", e);
 });
-
-const port = Number(process.env.PORT ?? 4317);
 
 function exitAfterStartupFailure(message: string, error?: unknown): never {
   if (!startupExitInProgress) {
@@ -80,15 +74,6 @@ function portConflictMessage(conflictingPort: number) {
   return lines.join("\n");
 }
 
-try {
-  singletonLock = acquireDbSingletonLock({ port });
-} catch (e) {
-  if (e instanceof SingletonConflictError) {
-    console.error(e.message);
-    process.exit(1);
-  }
-  exitAfterStartupFailure("failed to acquire the database singleton lock", e);
-}
 
 const { startScheduler, api, authGate, resourceGate, personalWriteGate, withHandoffActor, actorOf, ownerIdOf } = await initializeServer().catch((e) =>
   exitAfterStartupFailure("server initialization failed", e),

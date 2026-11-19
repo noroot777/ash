@@ -84,9 +84,15 @@ function main() {
   if (now.state === "interrupted") {
     const journal = readJournal(dataDir);
     const what = journal.direction === "forward" ? `改名成 ${DB_FILE_NAME}` : `退回成 ${LEGACY_DB_FILE}`;
-    say(`上次${what}没做完（账本 ${join(dataDir, DB_RENAME_JOURNAL)}，${journal.createdAt}）。服务在它处理掉之前起不来。`);
+    const undoing = journal.phase === "undo";
+    say(`上次${what}没做完（账本 ${join(dataDir, DB_RENAME_JOURNAL)}，${journal.createdAt}），`
+      + `${undoing ? "停在撤回途中" : `做到第 ${journal.progress} / ${journal.steps.length} 步`}。服务在它处理掉之前起不来。`);
     showSteps(journal.steps);
-    if (mode === "dry-run") { say(`\n--apply 接着做完，--rollback 撤销这一次、回到它开始之前。`); return 1; }
+    if (mode === "dry-run") {
+      say(undoing ? "\n--rollback 接着撤完、回到它开始之前（撤到一半的只能撤完）。" : "\n--apply 接着做完，--rollback 撤销这一次、回到它开始之前。");
+      return 1;
+    }
+    if (undoing && mode === "apply") { say("✗ 上次停在撤回途中，只能先 --rollback 撤完，再重新 --apply。什么都没动。"); return 2; }
     return locked(`rename-db ${mode} (resume)`, () => {
       if (mode === "apply") runJournal(dataDir, readJournal(dataDir));
       else undoJournal(dataDir, readJournal(dataDir));
