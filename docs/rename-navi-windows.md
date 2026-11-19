@@ -61,6 +61,11 @@
 
 演练结束后副本和临时家目录都已删掉。
 
+库文件改名（`ash.db` → `navi.db`，`docs/rename-db.md`）另在同一台上用线上库的又一份只读副本（30 个任务）走了一遍，20 项全过：
+新版在 `ash.db` 上照常起、日志提示可以改名；服务起着时 `rename-db --apply` 被在线登记拦下（退出码 2）；另一个进程用 SQLite
+开着库时改名那一步 `EBUSY`，照账本退回、目录逐字节原样（退出码 3）；关掉之后改名成功，新版再起，接力指纹、任务数、远程访问密钥
+都不变；旧版（线上那份 `server\dist`）对着路标报 `file is not a database` 退出，没有建空库；`--rollback` 之后旧版照常起、指纹不变。
+
 ### 回归测试（对端，新版）
 
 叶子环境照 `scripts/test-runner.mjs` 的 `leafEnv`：擦掉各代库/运行目录/数据目录，每条一个自己的
@@ -153,11 +158,15 @@
    - `node_modules\@navi\` 下是四条 junction（mcp / server / shared / web），`node_modules\@ash\` 已经没有了。
 7. **CLI 里的 MCP 登记不用改。** 那两条 `harness` 登记指的入口没变，`HARNESS_URL` 照样认（U13）。Navi 自己起 agent 时注入的是
    新名 `navi`，两者不冲突。
-8. **之后从 Mac 往这台接力**：升级之前，`navi/` 开头的任务分支会被拒，并写明「先把对端升级到 Navi」（H4）；升级之后按设计就能过，但两边都是新版的接力这一轮没在真机上跑通过（第四节），第一次接力时留意结果。
+8. **库文件改名（可选）：** 升完之后库仍叫 `ash.db`，不改也能一直用。要改成 `navi.db` 照 `docs/rename-db.md` 的「Windows 那台」一节：
+   停服务 → 再备份一份 → `node scripts\rename-db.mjs` 演练 → `--apply` → 起服务。
+9. **之后从 Mac 往这台接力**：升级之前，`navi/` 开头的任务分支会被拒，并写明「先把对端升级到 Navi」（H4）；升级之后按设计就能过，但两边都是新版的接力这一轮没在真机上跑通过（第四节），第一次接力时留意结果。
 
 **回退：** `node scripts/stop.mjs` → `git checkout 8abd51552` → `npm install` → `npm run build` → 用原来的方式起
 （PowerShell 里是 `node scripts/start-detached.mjs "$env:TEMP\ash-4317.log" node server/dist/index.js`，`%TEMP%` 只有 cmd 才展开；或 `npm.cmd run restart`）。旧版认得新版留下的
 `ash.db.ash.lock`，也在新版迁移过的库上起得来（M5 就是这个顺序）；真遇到旧版读不了的库，用第 4 步那份备份换回 `data\ash.db`。
+做过第 8 步改名的，`git checkout` 之前先在新版检出里 `node scripts\rename-db.mjs --rollback` 把库换回 `ash.db`；
+不退的话旧版对着路标起不来（报 `file is not a database`），不会对着空库起来。
 
 ## 六、清场
 
