@@ -7,6 +7,7 @@ import { RUNS_DIR } from "./paths.js";
 export type PreviewStep = Extract<WorkflowStep, { kind: "preview" }>;
 
 export interface PreviewRecord {
+  purpose?: "development";
   services?: PreviewServiceRecord[];
   proxyToken?: string;
   primaryServiceId?: string;

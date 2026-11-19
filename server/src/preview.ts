@@ -74,6 +74,8 @@ async function stopPreviewExcept(
   // 记录还没落盘的那一段也要停得掉（见 canceledGens）：标上记号，那一趟到下一个检查点
   // 就自己收摊，而且**永远不会写出记录**。
   const marked = cancelDriving(taskId, exceptGen);
+  const { closeTaskBrowser } = await import("./task-browser.js");
+  await closeTaskBrowser(taskId, reason ?? "托管服务已停止或替换");
   let pending = await retryPreviewStops(taskId);
   if (!record) {
     if (!marked) return stopOutcome(pending, false);

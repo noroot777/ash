@@ -19,6 +19,7 @@ import { mentionsSchedulerStarted } from "./log-signals.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 
 export interface PreviewStartOptions {
+  purpose?: "development";
   beforeStart?: () => Promise<void>;
   services?: PreviewServiceConfig[];
   primaryServiceId?: string | null;
@@ -80,7 +81,7 @@ export async function runPreview(
   services.forEach((s, i) => { if (s.log !== log) writeFileSync(s.log, banners[i]); });
   writeRecord({
     taskId, cmd: step.p.cmd, pid: 0, url: null, port: null, life: step.p.life, startedAt: now(),
-    log, links: [], state: "starting", gen, installPid: null, services, primaryServiceId: primaryId, proxyToken,
+    log, links: [], state: "starting", gen, installPid: null, services, primaryServiceId: primaryId, proxyToken, purpose: options?.purpose,
   });
   prunePreviewArtifacts(taskId, gen);
   bus.publish({ type: "task.review", taskId });

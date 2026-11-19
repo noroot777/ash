@@ -4,6 +4,7 @@ import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
+import { TaskRuntimeWorkspace } from "../task-runtime/TaskRuntimeWorkspace.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { TaskFileLinks } from "../components/TaskFileLink.tsx";
@@ -411,6 +412,7 @@ export function TaskDetail({
                   onTaskUpdate={onTaskUpdate}
                 />
               )}
+              <TaskRuntimeWorkspace key={task.id} taskId={task.id} notify={notify}>
               {previewOpen ? (
                 <PreviewWorkspace key={task.id} taskId={task.id} onClose={() => setPreviewOpen(false)} />
               ) : reviewOpen ? (
@@ -621,6 +623,7 @@ export function TaskDetail({
                   </section>
                 </div>
               )}
+              </TaskRuntimeWorkspace>
               {markDoneOpen && (
                 <ConfirmDialog
                   title="标记为已完成"

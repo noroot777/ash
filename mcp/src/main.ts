@@ -16,6 +16,7 @@ import { registerMonitorTools } from "./tools/monitor.js";
 import { registerOrchestrationTools } from "./tools/orchestrate.js";
 import { registerReadTranscriptTools } from "./tools/read-transcript.js";
 import { registerTaskTurnTools } from "./tools/task-turn.js";
+import { registerTaskRuntimeTools } from "./tools/task-runtime.js";
 
 // 回合身份对不上 ash 注入的指纹:不连。连上了 CLI 就报 connected、工具一样不少,带的却是别的回合
 // 的令牌,要到交卷才被拒;退出则 CLI 当场报 ash 没接上,ash 据此留一条诊断(见 turn-identity.ts)。
@@ -29,6 +30,7 @@ registerOrchestrationTools(server);
 registerReadTranscriptTools(server);
 registerTaskTurnTools(server);
 registerMonitorTools(server);
+registerTaskRuntimeTools(server);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
