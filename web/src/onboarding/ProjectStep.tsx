@@ -1,4 +1,4 @@
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { Check, FolderPlus } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { ProjectAvatar } from "../workspace/ProjectAvatar.tsx";

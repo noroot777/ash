@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Task, Session } from "@ash/shared";
+import type { Task, Session } from "@navi/shared";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { canForkReply, forkTaskBody, forkBodyProblem, forkContextBytes, snapshotConversationFork } from "../src/task-detail/conversationFork.ts";
 
@@ -56,7 +56,7 @@ const steerSession = { ...session, id: "s2", endedAt: "2026-09-16T08:36:00Z" } a
 const steered = buildConversationItems([{
   session: steerSession,
   output: "官方能力边界已确认，我接着核对本地这一段\n"
-    + marker("user", "我的意思是在 ash 的输入框里 / 怎么没有 image-gen 这个 skill", "2026-09-16T08:24:50.564Z")
+    + marker("user", "我的意思是在 navi 的输入框里 / 怎么没有 image-gen 这个 skill", "2026-09-16T08:24:50.564Z")
     + "明白了：你问的是斜杠菜单\n" + marker("agentEnd", "", "2026-09-16T08:27:09.253Z")
     + marker("user", "可以，加上吧", "2026-09-16T08:30:15.783Z")
     + "已加上。\n" + marker("agentEnd", "", "2026-09-16T08:35:53.943Z"),

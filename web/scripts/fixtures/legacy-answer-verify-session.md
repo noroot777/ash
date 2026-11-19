@@ -48,11 +48,11 @@ Chrome 技能目录的缓存路径与目录清单不一致，我正在定位实�
 
 已真实复现：自动验证第 1 轮仍“无结论”时，验收台依然能点“验收通过”，并实际把任务标成 `accepted`。真实 worktree 下会有绕过验证直接合并/清理的风险。
 
-![放行确认](/Users/fjh/code/ash/data/runs/6xhkF69AgfIr/review/round-1/gate-release-confirmation.png)
+![放行确认](/Users/fjh/code/navi/data/runs/6xhkF69AgfIr/review/round-1/gate-release-confirmation.png)
 
-![无结论仍验收完成](/Users/fjh/code/ash/data/runs/6xhkF69AgfIr/review/round-1/accepted-without-verdict.png)
+![无结论仍验收完成](/Users/fjh/code/navi/data/runs/6xhkF69AgfIr/review/round-1/accepted-without-verdict.png)
 
-构建、类型检查和相关回归均已通过；临时服务和浏览器已清理。完整报告在 [report.md](/Users/fjh/code/ash/data/runs/6xhkF69AgfIr/review/round-1/report.md)。
+构建、类型检查和相关回归均已通过；临时服务和浏览器已清理。完整报告在 [report.md](/Users/fjh/code/navi/data/runs/6xhkF69AgfIr/review/round-1/report.md)。
 
 请在上方问题里确认是否按失败进入修复。
 
@@ -92,7 +92,7 @@ Chrome 技能目录的缓存路径与目录清单不一致，我正在定位实�
 - 已真实运行并通过：
   - `npm run build`
   - `npm -w web run typecheck`
-- 已写报告：[report.md](/Users/fjh/code/ash/data/runs/6xhkF69AgfIr/review/round-1/report.md)
+- 已写报告：[report.md](/Users/fjh/code/navi/data/runs/6xhkF69AgfIr/review/round-1/report.md)
 - 已上报验证结论：`verified`
 
 没有调用 `complete_task` 或 `accept_task`，因为这是验证回合，系统要求本轮只上报验证结论。
@@ -104,9 +104,9 @@ Chrome 技能目录的缓存路径与目录清单不一致，我正在定位实�
 
 {"t":"system","agent":"codex","text":"验收阶段更新：已合并（merged）","at":"2026-08-08T06:52:40.197Z"}
 
-{"t":"system","agent":"codex","text":"合并完成：ash/6xhkF69A → feat/issue-center（任务分支此前已合并）。","at":"2026-08-08T06:52:40.198Z"}
+{"t":"system","agent":"codex","text":"合并完成：navi/6xhkF69A → feat/issue-center（任务分支此前已合并）。","at":"2026-08-08T06:52:40.198Z"}
 
-{"t":"system","agent":"codex","text":"清理完成：已删除 worktree /Users/fjh/code/ash/.worktrees/6xhkF69AgfIr；已用 git branch -d 删除 ash/6xhkF69A。","at":"2026-08-08T06:52:41.310Z"}
+{"t":"system","agent":"codex","text":"清理完成：已删除 worktree /Users/fjh/code/navi/.worktrees/6xhkF69AgfIr；已用 git branch -d 删除 navi/6xhkF69A。","at":"2026-08-08T06:52:41.310Z"}
 
 {"t":"system","agent":"codex","text":"验收阶段更新：验收完成（accepted）","at":"2026-08-08T06:52:41.311Z"}
 

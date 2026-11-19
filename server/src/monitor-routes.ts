@@ -6,8 +6,8 @@ import {
   MONITOR_MIN_TIMEOUT_MS,
   MONITOR_WAKE_TARGETS,
   normalizeMonitorTimeout,
-} from "@ash/shared/monitor";
-import { silentWaitNotice } from "@ash/shared/monitor-silence";
+} from "@navi/shared/monitor";
+import { silentWaitNotice } from "@navi/shared/monitor-silence";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -141,7 +141,7 @@ export function mountMonitorRoutes(api: Hono): void {
    * non-blocking error，而那意味着**放行** —— 放过去的监听照样活不过这一轮，到点没人
    * 叫醒，正是这个 hook 要堵的那一幕。所以出了什么事都用 reason 说出来，别用状态码。
    *
-   * 身份走 agent 那条既有的通道（`x-ash-source-task-id` + `x-ash-turn-token`，见
+   * 身份走 agent 那条既有的通道（`x-navi-source-task-id` + `x-navi-turn-token`，见
    * auth/middleware.ts）。认不出来时 actor 不是 agent，taskId 传 null：仍然拦，但只能
    * 让它自己去挂。
    */
@@ -168,7 +168,7 @@ export function mountMonitorRoutes(api: Hono): void {
       // 处理，绝不空手放行。
       return c.json(decision ?? monitorHookInternalError("没能得出处置结论"));
     } catch (error: unknown) {
-      console.error("[ash] Monitor 改道 hook 出错", error);
+      console.error("[navi] Monitor 改道 hook 出错", error);
       return c.json(monitorHookInternalError(error instanceof Error ? error.message : String(error)));
     }
   });

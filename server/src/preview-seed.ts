@@ -3,7 +3,7 @@
 // 两档，由 `NAVI_SEED_MODE` 选（默认 snapshot）：
 //
 //   · `snapshot` —— 配置 + 运行态一起搬，搬完把运行态**洗一遍**（见 sanitize）。
-//     打开预览看到的就是你现在这台 ash 的样子：一样的任务列表、一样的分组、一样的
+//     打开预览看到的就是你现在这台 navi 的样子：一样的任务列表、一样的分组、一样的
 //     会话与 token 账。这是默认档，因为「预览里空无一物」本身就让人验不了东西：
 //     token 计数、列表密度、分组折叠……凡是得有数据才看得见的改动，空库里一概验不出来。
 //   · `config` —— 只搬设置那几张表（老行为）。快照这条路万一出问题时的退路。
@@ -28,7 +28,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { createClient, type Client } from "./db/node-sqlite-client.js";
 import { dbClient } from "./db/index.js";
-import { resolveAshDbFile } from "./db/path.js";
+import { resolveNaviDbFile } from "./db/path.js";
 import { backfillDispatchedByAfterCopy } from "./db/migrate-dispatched-by.js";
 
 export type SeedMode = "snapshot" | "config";
@@ -121,7 +121,7 @@ export async function copyTables(
       }
       copied[table] = rows.length;
     } catch (e) {
-      console.error(`[ash] 预览播种：${table} 没搬成（跳过）:`, e);
+      console.error(`[navi] 预览播种：${table} 没搬成（跳过）:`, e);
     }
   }
   return copied;
@@ -158,7 +158,7 @@ export async function sanitizeSnapshot(dest: Client): Promise<string[]> {
       const res = await dest.execute(sql);
       done.push(`${label} ${res.rowsAffected}`);
     } catch (e) {
-      console.error(`[ash] 预览播种：洗「${label}」没成:`, e);
+      console.error(`[navi] 预览播种：洗「${label}」没成:`, e);
     }
   };
 
@@ -198,9 +198,9 @@ export async function sanitizeSnapshot(dest: Client): Promise<string[]> {
  */
 export async function seedPreviewDb(sourceFile: string, mode: SeedMode = "snapshot"): Promise<void> {
   const src = resolve(sourceFile);
-  if (src === resolveAshDbFile()) return; // 自己搬自己
+  if (src === resolveNaviDbFile()) return; // 自己搬自己
   if (!existsSync(src)) {
-    console.error(`[ash] 预览播种：源库不在（${src}），预览会是个空库。`);
+    console.error(`[navi] 预览播种：源库不在（${src}），预览会是个空库。`);
     return;
   }
   const tables = mode === "snapshot" ? [...CONFIG_TABLES, ...SNAPSHOT_TABLES] : CONFIG_TABLES;
@@ -209,18 +209,18 @@ export async function seedPreviewDb(sourceFile: string, mode: SeedMode = "snapsh
     const copied = await copyTables(source, dbClient, tables);
     const summary = Object.entries(copied).map(([table, n]) => `${table} ${n}`).join("、");
     if (!summary) {
-      console.log("[ash] 预览播种：没有需要搬的（库里已有内容，或主库也是空的）");
+      console.log("[navi] 预览播种：没有需要搬的（库里已有内容，或主库也是空的）");
       return;
     }
-    console.log(`[ash] 预览库已从主库搬来（${mode}）：${summary}`);
+    console.log(`[navi] 预览库已从主库搬来（${mode}）：${summary}`);
     if (mode === "snapshot") {
       const washed = await sanitizeSnapshot(dbClient);
-      console.log(`[ash] 预览快照已洗掉运行态：${washed.join("、") || "无"}（定时任务与定时消息压根没搬）`);
+      console.log(`[navi] 预览快照已洗掉运行态：${washed.join("、") || "无"}（定时任务与定时消息压根没搬）`);
     }
     // 拷进来的任务没经过 createTasks，启动迁移那一遍又跑在拷之前：派活归属按主库的边界当场补上。
     if (copied.tasks) await backfillDispatchedByAfterCopy(dbClient, source);
   } catch (e) {
-    console.error("[ash] 预览播种失败（预览照常起，只是库是空的）:", e);
+    console.error("[navi] 预览播种失败（预览照常起，只是库是空的）:", e);
   } finally {
     source.close();
   }

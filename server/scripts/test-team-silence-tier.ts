@@ -16,23 +16,23 @@
 import { createWriteStream, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 // 库也开在这个临时目录里(自带,不要调用方传);`requireTmpDb` 照旧把「别写进真实任务库」
 // 那道闸留着 —— 这几段是真往库里写的。**库路径用没过 realpath 的那一份**:macOS 上
 // `/var/folders/…` 的真身是 `/private/var/folders/…`,而那道闸是按 `os.tmpdir()` 做前缀
 // 比较的,给它真身它会判「不在临时目录下」并拒跑(路径本身完全没问题)。
-const rawStage = mkdtempSync(join(tmpdir(), "ash-team-silence-"));
-process.env.ASH_DB = join(rawStage, "ash.db");
+const rawStage = mkdtempSync(join(tmpdir(), "navi-team-silence-"));
+process.env.NAVI_DB = join(rawStage, "ash.db");
 requireTmpDb("team-silence-tier");
 const stage = realpathSync(rawStage);
 process.on("exit", () => {
   try { rmSync(stage, { recursive: true, force: true }); } catch { /* 文件还开着就留给下次 */ }
 });
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_TEAM_IDLE_MS = "600000"; // 别让空闲回收在断言中间把台收掉
-mkdirSync(process.env.ASH_RUNS_DIR, { recursive: true });
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_TEAM_IDLE_MS = "600000"; // 别让空闲回收在断言中间把台收掉
+mkdirSync(process.env.NAVI_RUNS_DIR, { recursive: true });
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");

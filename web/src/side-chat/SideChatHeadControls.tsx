@@ -6,7 +6,7 @@ import { InspTool } from "../inspector/parts.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 import { formatInstant } from "../task-detail/utils.ts";
-import { sideChatTitle } from "@ash/shared/chat";
+import { sideChatTitle } from "@navi/shared/chat";
 import type { useSideChat } from "./useSideChat.ts";
 
 type SideChatState = ReturnType<typeof useSideChat>;

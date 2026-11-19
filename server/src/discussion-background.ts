@@ -11,7 +11,7 @@
 import { chmodSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseSessionSpans } from "@ash/shared/session-output";
+import { parseSessionSpans } from "@navi/shared/session-output";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewDebates, sessions } from "./db/schema.js";
@@ -97,7 +97,7 @@ export function syncBackgroundCopies(paths: readonly string[], liveRaw: string):
     const raw = readFileSync(path, "utf8");
     const next = mirrorDeletions(raw, liveRaw);
     if (next === null) {
-      console.warn(`[ash] 讨论背景副本和正文对不上，整份删掉: ${path}`);
+      console.warn(`[navi] 讨论背景副本和正文对不上，整份删掉: ${path}`);
       rmSync(path, { force: true });
     } else if (next !== raw) {
       replaceFileAtomically(path, next);

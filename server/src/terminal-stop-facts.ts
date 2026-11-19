@@ -186,7 +186,7 @@ export function releaseLaunchPortsSync(sessions: Iterable<TerminalSession>): { k
   let killed = 0;
   for (const session of sessions) {
     if (session.commandId === null) continue;
-    // 用户显式放弃过的这次启动:ash 关服时不再按它的端口和记号去收人,退出交代里也不再提它
+    // 用户显式放弃过的这次启动:navi 关服时不再按它的端口和记号去收人,退出交代里也不再提它
     // (那正是放弃的解除范围里写明的一条,terminal-abandon.ts)。
     if (handedOver(session)) continue;
     if (PORT_TIER_AVAILABLE && session.launchToken && session.launchPorts.size > 0) {
@@ -203,7 +203,7 @@ export function releaseLaunchPortsSync(sessions: Iterable<TerminalSession>): { k
     }
     // 补刀之后账上还活着的号:**没有一条路能把它停掉** —— 它们当初就是因为核不上归属才
     // 被放过的,关服这一拍不会突然多出凭据,扩大 kill 范围是明令禁止的(service-ports.ts
-    // 文件头)。能做的是**别让这笔账无声无息地消失**:记录随进程一起没了,用户重启 ash
+    // 文件头)。能做的是**别让这笔账无声无息地消失**:记录随进程一起没了,用户重启 navi
     // 之后既看不到提示、也没有把手,只有靠这行日志才知道机器上还留着什么(第 4 轮审查发现 1)。
     const left = liveLeftovers(session.stop);
     if (left.length) {

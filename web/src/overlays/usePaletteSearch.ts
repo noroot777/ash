@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { SearchHit } from "@ash/shared";
-import { compareSearchHits, isSearchQueryReady, SEARCH_MAX_HITS, type SearchSort } from "@ash/shared/search";
+import type { SearchHit } from "@navi/shared";
+import { compareSearchHits, isSearchQueryReady, SEARCH_MAX_HITS, type SearchSort } from "@navi/shared/search";
 import { api } from "../lib/api.ts";
 
 type SearchState = {

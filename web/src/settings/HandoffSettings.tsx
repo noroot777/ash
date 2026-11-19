@@ -6,7 +6,7 @@ import type {
   HandoffPeer,
   HandoffReturnGrant,
   HandoffTarget,
-} from "@ash/shared";
+} from "@navi/shared";
 import { Check, Fingerprint, PaperPlaneTilt, Plus, Prohibit, SpinnerGap, Trash } from "@phosphor-icons/react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { Button, TextInput, Toggle } from "../components/ui.tsx";

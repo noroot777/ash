@@ -11,7 +11,7 @@ import { entryInCommit } from "../src/accept-gate-entry-target.js";
 
 const PROBE_BY = "被测快照 package.json 的 scripts";
 
-const root = mkdtempSync(join(tmpdir(), "ash-gate-process-"));
+const root = mkdtempSync(join(tmpdir(), "navi-gate-process-"));
 let runNumber = 0;
 const launches: { logPath: string; pid?: number; startedAt?: string | null }[] = [];
 
@@ -256,7 +256,7 @@ try {
   //    这一层读的仍是命令行上解释出来的那份，于是会读出「没有」—— 所以脚本那一档一律 certain:
   //    false，照常起跑，绝不据此拦下。
   if (!IS_WINDOWS) {
-    const tree = mkdtempSync(join(tmpdir(), "ash-gate-probe-"));
+    const tree = mkdtempSync(join(tmpdir(), "navi-gate-probe-"));
     mkdirSync(join(tree, "child"));
     writeFileSync(join(tree, "package.json"), JSON.stringify({ name: "root", private: true,
       workspaces: ["child"], scripts: { build: "echo x" } }));

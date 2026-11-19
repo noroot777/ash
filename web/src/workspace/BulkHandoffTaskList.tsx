@@ -1,5 +1,5 @@
 import { SpinnerGap } from "@phosphor-icons/react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import type { TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 
 // 一行任务要带走什么，用短事实说清楚：这是弹窗里唯一值得用户逐条读的信息。

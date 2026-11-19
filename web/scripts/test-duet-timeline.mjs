@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseAttachmentText } from "@ash/shared/attachments";
+import { parseAttachmentText } from "@navi/shared/attachments";
 import { applyDuetEvent, emptyDuet, rebuildDuetState } from "../src/duet/duetState.ts";
 
 const start = { type: "duet.progress", taskId: "t1", round: 1, speaker: "A", phase: "start", startedAt: "2026-08-06T01:00:00.000Z" };

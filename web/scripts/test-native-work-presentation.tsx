@@ -3,7 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ExecutionDetails, executionSummaryText } from "../src/components/ExecutionTrace.tsx";
 import type { ExecutionEvent } from "../src/lib/executionTrace.ts";
-import type { AgentEvent, ServerEvent } from "@ash/shared";
+import type { AgentEvent, ServerEvent } from "@navi/shared";
 import { applyDuetEvent, emptyDuet, rebuildDuetState } from "../src/duet/duetState.ts";
 import { NativeWorkHeadline } from "../src/task-detail/NativeWorkMeta.tsx";
 import { agentListRows, agentProvenance, agentSideText } from "../src/task-detail/nativeWorkList.ts";

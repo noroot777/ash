@@ -33,15 +33,15 @@ import { MCP_TOOL_BUDGETS } from "./prompt-budget-mcp.js";
 // 根的**长度**也钉住：有几段（历史发现、深挖那几份）按「真实路径下的体积」决定内联几轮，渲染完
 // 再把根换成 `<ROOT>` 计数 —— 根越短，塞进去的轮数越多，量出来反而越大。下面的数是在 macOS
 // 默认临时目录下量定的（那时根是 73 个字符），换到临时目录更短的地方（验收执行器给每条测试的
-// `/tmp/ash-test-…`、Linux 的 `/tmp`）同一份提示词会多出一两百字节、平白红掉。所以不够长就在
+// `/tmp/navi-test-…`、Linux 的 `/tmp`）同一份提示词会多出一两百字节、平白红掉。所以不够长就在
 // 底下垫一层目录把它补到这个长度；临时目录本身就更长时缩不了，只能照实量。
 const ROOT_LENGTH = 73;
-const stage = mkdtempSync(join(tmpdir(), "ash prompt budget "));
+const stage = mkdtempSync(join(tmpdir(), "navi prompt budget "));
 const pad = ROOT_LENGTH - stage.length - 1;
 const root = pad > 0 ? join(stage, "p".repeat(pad)) : stage;
 mkdirSync(root, { recursive: true });
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 /**
  * 每份样本的字节上限（UTF-8；中文一个字三字节）。
@@ -445,7 +445,7 @@ try {
   const tailOf = (kind: TailKind): string => kind === "history"
     ? PRIOR_FINDINGS_TAIL
     : guidanceLines(kind === "settled-reviewer" ? "reviewer" : "executor", true, true, false).at(-1)!;
-  const shared = (await import("@ash/shared/free-workflow")) as unknown as Record<string, string>;
+  const shared = (await import("@navi/shared/free-workflow")) as unknown as Record<string, string>;
   // 单源常量有两窝：审查/修复那一摞住在 shared，执行者开场那两句住在 `craft-rules.ts`
   //（服务端独用，搬进 shared 只多一跳；零依赖独立成文件的理由见那个文件头）。两边都认。
   const craft = (await import("../src/craft-rules.js")) as unknown as Record<string, string>;
@@ -556,7 +556,7 @@ try {
   for (const { name, where } of PLACEMENT) {
     const text = sourceOf(name);
     assert.ok(typeof text === "string" && text.length > 0,
-      `${name} 在 @ash/shared/free-workflow、server/src/craft-rules.ts、server/src/run-prompts.ts 里都找不到`);
+      `${name} 在 @navi/shared/free-workflow、server/src/craft-rules.ts、server/src/run-prompts.ts 里都找不到`);
     const hits = samples.filter((sample) => sample.text.includes(text)).map((sample) => sample.id);
     assert.deepEqual([...hits].sort(), [...where].sort(),
       `${name} 的落脚处变了：现在在 ${hits.join("、") || "(没有任何样本)"}，` +
@@ -633,8 +633,8 @@ try {
   //     就地验证、历史独立审查）共用它 —— 判据塌了就是三个入口一起塌。
   {
     const entryOf = (path: string) => `执行者回归证据清单：${path}。`;
-    const current = entryOf("/tmp/ash。runs/t/free-review/r/round-2/regression-evidence.json");
-    const older = entryOf("/tmp/ash。runs/t/free-review/r/round-1/regression-evidence.json");
+    const current = entryOf("/tmp/navi。runs/t/free-review/r/round-2/regression-evidence.json");
+    const older = entryOf("/tmp/navi。runs/t/free-review/r/round-1/regression-evidence.json");
     const reminder = { text: `审查提醒：${current}清单读法若干。`, manifestEntry: current };
     assert.ok(dedupeReminder(reminder, `上一轮的清单在 ${older}`).includes(current),
       "目录名含「。」时，本轮清单入口被当成重复删掉了：两条路径只共享『第一个句号之前』" +

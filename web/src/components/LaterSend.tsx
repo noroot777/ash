@@ -4,7 +4,7 @@
 // 三档对应服务端待发送消息的 立即 / timed / after(shared/src/schedule.ts)。
 // 普通任务回复框与团队调度台回复框共用这一份,两边长得不一样会被当成 bug 报上来。
 import { useEffect, useState } from "react";
-import type { Group, ScheduledMessage, TaskListItem } from "@ash/shared";
+import type { Group, ScheduledMessage, TaskListItem } from "@navi/shared";
 import { Clock } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { localeDateTime } from "../lib/localeFormat.ts";

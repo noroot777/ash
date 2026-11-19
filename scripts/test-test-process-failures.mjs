@@ -9,7 +9,7 @@ import { runTestProcess } from "./test-process.mjs";
 import { TestProcessScope, delay } from "./test-process-scope.mjs";
 import { IS_WINDOWS, isPidAlive } from "./platform.mjs";
 
-const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-process-failures-"));
+const temporary = fs.mkdtempSync(join(tmpdir(), "navi-test-process-failures-"));
 const cleanup = fileURLToPath(new URL("test-process-cleanup.mjs", import.meta.url));
 await withTestResources(async () => {
   for (const timeout of [false, true]) {

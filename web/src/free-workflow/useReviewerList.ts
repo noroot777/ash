@@ -5,8 +5,8 @@
 // 没读到的时候画面上看不出交给谁审，这时只有「不审查」能派（shared/src/review-on-create.ts `concreteReviewChoice`），
 // 派出键由 `reviewHold` 说清为什么停着；读失败了胶囊里能重新读（ReviewerChip.tsx）。
 import { useCallback, useEffect, useState } from "react";
-import type { ReviewerProfile } from "@ash/shared";
-import { concreteReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
+import type { ReviewerProfile } from "@navi/shared";
+import { concreteReviewChoice, type CreateReviewChoice } from "@navi/shared/review-on-create";
 import { reviewerProfilesStore } from "./reviewerProfilesStore.ts";
 
 export type ReviewerList = {

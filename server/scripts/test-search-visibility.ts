@@ -22,12 +22,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-search-visibility-"));
-process.env.ASH_DB ||= join(stage, "search-visibility.db");
-process.env.ASH_RUNS_DIR ||= join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-search-visibility-"));
+process.env.NAVI_DB ||= join(stage, "search-visibility.db");
+process.env.NAVI_RUNS_DIR ||= join(stage, "runs");
 requireTmpDb("test-search-visibility");
 
-// 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
+// 碰库的模块一律 await import:静态 import 会被提升到设 NAVI_DB 之前,那样连的是真库。
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { noteTasks, notes, projects, tasks } = await import("../src/db/schema.js");
 const mode = await import("../src/auth/mode.js");

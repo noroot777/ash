@@ -39,7 +39,7 @@ export const psCount = (token: string): number => {
 /** 每个用例一个独一无二的记号 + 一个「命令真的开工了才会出现」的文件。 */
 let tokenSeq = 0;
 export const marker = (): { token: string; path: string; command: string } => {
-  const token = `ash-create-probe-${++tokenSeq}-${process.pid}`;
+  const token = `navi-create-probe-${++tokenSeq}-${process.pid}`;
   const path = join(root, `${token}.touched`);
   // `touch` 是命令的第一句:闸放行之后它立刻出现,不放行就永远不出现。
   //

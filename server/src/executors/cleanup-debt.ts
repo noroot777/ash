@@ -71,10 +71,10 @@ async function mergeOpenIntoRow(key: string, open: readonly CleanupOpen[]): Prom
     // **「没抛错」不等于「并上了」**(第 14 轮审查 N1 的同一条边):这个键上没有行、或者这一写
     // 被静默丢掉时改行数是 0,那几个名一个都没并进去。认下来才算交接完成。
     if (rowsAffectedOf(written) > 0) return true;
-    console.warn(`[ash] 这几个未排除的号没并到行上(unit=${key}):这一写没动到任何行,继续扛着`);
+    console.warn(`[navi] 这几个未排除的号没并到行上(unit=${key}):这一写没动到任何行,继续扛着`);
     return false;
   } catch (error) {
-    console.error(`[ash] 这几个未排除的号没并进行里(unit=${key}):`, error);
+    console.error(`[navi] 这几个未排除的号没并进行里(unit=${key}):`, error);
     return false;
   }
 }
@@ -341,14 +341,14 @@ async function noteDebtRow(
     // 待投清单上删掉,于是那几个号既不在库里也不在内存里。审查注入 `RAISE(IGNORE)` 实测过
     // 两支(首次 INSERT 被忽略、冲突 UPDATE 被忽略),心跳 6→12 / 16→22 还在走。
     if (rowsAffectedOf(written) <= 0) {
-      console.warn(`[ash] agent 清理责任这一写没动到任何行 unit=${key}:按没落下处理,继续扛着`);
+      console.warn(`[navi] agent 清理责任这一写没动到任何行 unit=${key}:按没落下处理,继续扛着`);
       return "failed";
     }
     // 行落了;**新身份有没有跟着落下去**要分开答(见 `NoteVerdict`):旧名单读不出来时这一列
     // 一个字没动,于是 `fresh` 里那几个号还在外面 —— 这一档不许冒充 `noted`。
     return held.ok || !fresh.length ? "noted" : "open-not-taken";
   } catch (error) {
-    console.error(`[ash] agent 清理责任落库失败 unit=${key}:`, error);
+    console.error(`[navi] agent 清理责任落库失败 unit=${key}:`, error);
     return "failed";
   }
 }
@@ -373,7 +373,7 @@ export async function settleCleanupDebt(clues: CleanupDebtClues): Promise<void> 
 async function settleIfStillEmpty(key: string): Promise<void> {
   const read = await readDebtRow(key);
   if (!read.ok) {
-    console.warn(`[ash] 这一笔清理责任该销账、但这一刻读不出来(unit=${key}:${read.reason}):`
+    console.warn(`[navi] 这一笔清理责任该销账、但这一刻读不出来(unit=${key}:${read.reason}):`
       + "行留着,下一轮清扫重新取证");
     return;
   }
@@ -384,14 +384,14 @@ async function settleIfStillEmpty(key: string): Promise<void> {
   // `cleanup-debt-write.ts`:写不进去时那几个身份会被放回待投清单)。
   const planned = debtDisposition(judged);
   if (planned === "close") {
-    console.warn(`[ash] 这一笔清理责任追到这里为止(unit=${key}):${cleanupDetail(judged.result)}`
+    console.warn(`[navi] 这一笔清理责任追到这里为止(unit=${key}):${cleanupDetail(judged.result)}`
       + " —— 行留着(最后的可定位身份),不再自动重试");
   } else if (planned === "keep") {
-    console.warn(`[ash] 这一笔清理责任还不能销(unit=${key}):${cleanupDetail(judged.result)}`);
+    console.warn(`[navi] 这一笔清理责任还不能销(unit=${key}):${cleanupDetail(judged.result)}`);
   }
   const outcome = await applyDebtDisposition(row, judged, debtWriteHooks);
   if (planned === "settle" && outcome !== "settled") {
-    console.warn(`[ash] 这一笔清理责任确证空了、销账却没落下(unit=${key}):`
+    console.warn(`[navi] 这一笔清理责任确证空了、销账却没落下(unit=${key}):`
       + "行留着,下一轮清扫会再确证一次");
   }
 }
@@ -558,7 +558,7 @@ async function pushDebtLocked(key: string): Promise<SweepVerdict> {
   // 销掉了这一笔。拿着锁外的旧对象取证,判的就是一份过期证据,而写回去却是当前这一行。
   const read = await readDebtRow(key);
   if (!read.ok) {
-    console.warn(`[ash] 这一笔清理责任读不出来(unit=${key}:${read.reason}):这一轮没动它`);
+    console.warn(`[navi] 这一笔清理责任读不出来(unit=${key}:${read.reason}):这一轮没动它`);
     return "unreadable";
   }
   if (!read.row) return "vanished";               // 清理路径自己确证销掉了 —— 更强的证明

@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     UpdateGate.shared.reconsider()
   }
 
-  // 关窗不退出：ash 是常驻的工作台，像邮件 / Slack 那样点 Dock 图标就回来；⌘Q 才是真退出。
+  // 关窗不退出：navi 是常驻的工作台，像邮件 / Slack 那样点 Dock 图标就回来；⌘Q 才是真退出。
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -85,7 +85,7 @@ extension AppDelegate: NSMenuItemValidation {
       item.state = LoginService.isEnabled ? .on : .off
     }
     // 只有本机那份才有「替这台机器的 CLI 接 MCP」这回事。
-    if item.action == #selector(checkHostMcp(_:)) { return AshConfig.isLocal }
+    if item.action == #selector(checkHostMcp(_:)) { return NaviConfig.isLocal }
     // 只在有一次更新排着（等任务跑完、或上次没装成）时出现。
     if item.action == #selector(installPendingUpdate(_:)) {
       let gate = UpdateGate.shared

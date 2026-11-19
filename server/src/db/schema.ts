@@ -1,6 +1,6 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import type { ProjectPreviewConfig } from "@ash/shared/preview";
-import type { ProjectCommandsConfig } from "@ash/shared/project-commands";
+import type { ProjectPreviewConfig } from "@navi/shared/preview";
+import type { ProjectCommandsConfig } from "@navi/shared/project-commands";
 import type { TaskWaitOwnership } from "./schema-task-wait.js";
 
 // JSON columns are stored as text and parsed in the repository layer.
@@ -79,7 +79,7 @@ export const appSettings = sqliteTable("app_settings", {
 });
 
 // 外部 CLI 报“会话累计值”时的最后一份原始快照。它独立于 sessions：同一个 CLI
-// 会话可能跨多个 ash 行（例如讨论模式），按 source_id 才能正确算本轮差值。
+// 会话可能跨多个 navi 行（例如讨论模式），按 source_id 才能正确算本轮差值。
 export const usageCumulativeSnapshots = sqliteTable("usage_cumulative_snapshots", {
   sourceId: text("source_id").primaryKey(),
   input: integer("input_tokens").notNull(),
@@ -198,7 +198,7 @@ export const tasks = sqliteTable("tasks", {
   archived: integer("archived", { mode: "boolean" }).notNull().default(false),
   archivedAt: text("archived_at"), // when it was archived (orders the archive view)
   // Opt-in per-task worktree. true → orchestrator builds <repoPath>/.worktrees/<id>
-  // on branch `ash/<id8>` based off `worktreeBase` (null = current HEAD) before
+  // on branch `navi/<id8>` based off `worktreeBase` (null = current HEAD) before
   // running. False / missing repo → behaves like before (runs in repoPath).
   useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
   // 这个任务当初挑的那条线，**创建时拷进来的快照**（json WorkflowDef）。之后改起手式
@@ -387,7 +387,7 @@ export const tasks = sqliteTable("tasks", {
   // 布尔位时，崩溃重试会整段重跑——已经执行过的发布/部署命令再来一遍（at-least-once
   // 变 at-least-twice，审查实测复现）。补跑按这份清单跳过已完成的站；随 pending 一起清。
   acceptedTailDone: text("accepted_tail_done").notNull().default("[]"),
-  // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 ash 续跑（本地这份
+  // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 navi 续跑（本地这份
   // 是历史），"in" = 从别的机器接过来的。持久落库,刷新后的横幅靠它,不靠 toast。
   handoff: text("handoff"),
   // 强制恢复会清掉 handoff；风险审计另存，确保无会话任务刷新后也仍能看见双任务警告。
@@ -415,7 +415,7 @@ export const agents = sqliteTable("agents", {
   // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
   providerId: text("provider_id"),
   // 覆盖 CLI 自己配置文件里的设置(json Record<string, number>,以 env 注入)。
-  // 声明表在 @ash/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
+  // 声明表在 @navi/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
   configOverrides: text("config_overrides").notNull().default("{}"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
   // 多人模式:执行器是**个人面**资源(§八),各人各一套,互不可见。
@@ -520,7 +520,7 @@ export const queueItems = sqliteTable(
   }),
 );
 
-// 团队调度台**还没送进 CLI**的入站消息(执行者汇报/提问、ash 的唤醒语)。
+// 团队调度台**还没送进 CLI**的入站消息(执行者汇报/提问、navi 的唤醒语)。
 //
 // 调度台忙着的时候这些消息只能等它这一回合说完再合并送进去(见 team/session.ts 头注),
 // 而「等着」这段时间横跨换台、关台和 server 重启 —— 全放内存里的话,进程一换就什么都

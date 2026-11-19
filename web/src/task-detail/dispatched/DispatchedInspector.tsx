@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import { dispatchBranch, dispatchBranchAccepted, dispatchLevel, createDispatchView } from "../../lib/dispatchFamily.ts";
 import { dispatchHolderOf, dispatchHoldPhrase, dispatchedLive } from "../../lib/dispatchHold.ts";

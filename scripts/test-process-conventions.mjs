@@ -30,7 +30,7 @@ export function testCleanupViolations(source, filename) {
 // 「测试铺的」和「机器上真装着的」：起跑是异步的，收尾把 PATH 还原后才轮到的那一次会起真的
 // （server/src/executors/spawn.ts 的 guardAgentSpawn）。
 export const REAL_AGENT_SCRIPTS = [
-  "server/scripts/e2e-opencode-ash-mcp.ts",
+  "server/scripts/e2e-opencode-navi-mcp.ts",
   "server/scripts/test-agent-spawn-guard.ts", // 钉的是这道闸本身
   "server/scripts/test-chat-cli.ts",
   "server/scripts/test-claude-goal-live.ts",
@@ -40,7 +40,7 @@ export const REAL_AGENT_SCRIPTS = [
 ];
 
 // 闸那一侧各代名字都认（server/src/executors/spawn.ts 走 readEnv），所以这里各代都要拦：
-// 只拦新名，写一句改名之前的 `ASH_ALLOW_REAL_AGENT` 就绕过去了。
+// 只拦新名，写一句改名之前的 `NAVI_ALLOW_REAL_AGENT` 就绕过去了。
 const REAL_AGENT_SWITCHES = envNameGenerations("NAVI_ALLOW_REAL_AGENT");
 
 /**

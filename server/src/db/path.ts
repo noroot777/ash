@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { readStorageEnv } from "@ash/shared/env-names";
-import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@ash/shared/legacy-names";
+import { readStorageEnv } from "@navi/shared/env-names";
+import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@navi/shared/legacy-names";
 import { DATA_DIR } from "../paths.js";
 
 /** 改名之后的库文件名。在就用它（停机时跑本地目录迁移脚本改过名的安装）。 */
@@ -41,12 +41,12 @@ function defaultDbFile(): string {
   return LEGACY_DEFAULT_DB;
 }
 
-export function resolveAshDbFile() {
+export function resolveNaviDbFile() {
   const explicit = readStorageEnv(process.env, "NAVI_DB");
   if (explicit) return resolve(explicit);
   return resolve(defaultDbFile());
 }
 
-export function ensureAshDbDir(dbFile = resolveAshDbFile()) {
+export function ensureNaviDbDir(dbFile = resolveNaviDbFile()) {
   mkdirSync(dirname(dbFile), { recursive: true });
 }

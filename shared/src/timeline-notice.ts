@@ -1,4 +1,4 @@
-// 任务时间线上每一条「ash 自己说的话」是**哪一类事**，连同那件事的几个参数。
+// 任务时间线上每一条「navi 自己说的话」是**哪一类事**，连同那件事的几个参数。
 //
 // 服务端写时间线（server/src/task-timeline.ts 的 appendTaskTimeline）时一并给出，跟原文一起
 // 落进会话 .md 的 sentinel、也跟着直播事件走。展示端据它决定这一条怎么摆、用什么图标、挂不挂
@@ -30,7 +30,7 @@ export type ReviewWaitReason = "monitor" | "question" | "checkpoint" | "queued" 
 /**
  * 一轮审查为什么没给出结论（服务端在审查回合收尾时按真实情况判，见 server/src/review-no-verdict.ts）。
  * interrupted = 回合自己中途断了（模型上游连不上、进程异常退出、被看门狗终止）；
- * unreported = 回合正常收尾了，结论却没上报到 ash。
+ * unreported = 回合正常收尾了，结论却没上报到 navi。
  * `reason` 是一句短话（「模型上游连不上（503）」），展示端原样接在轮次后面，不再回头认原文。
  */
 export interface ReviewNoVerdict {

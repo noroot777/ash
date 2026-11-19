@@ -1,4 +1,4 @@
-// 能力握手的**端到端**回归:真起一台对端 ash,走真 HTTP。
+// 能力握手的**端到端**回归:真起一台对端 navi,走真 HTTP。
 //
 // 判定逻辑本身在 test-handoff-capability.ts 里已经钉死了,这里专管**接线** —— 那部分
 // 纯函数测试一个都抓不到,而它恰恰是最容易错的:
@@ -19,16 +19,16 @@ import { eq } from "drizzle-orm";
 import { api, makeRepo, pairWithPeer, startPeer } from "./handoff-test-utils.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-cap-"));
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-cap-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.ASH_DB = join(root, "source.db");
-process.env.ASH_RUNS_DIR = join(root, "runs-src");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads-src");
+process.env.NAVI_DB = join(root, "source.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs-src");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads-src");
 assert.ok(
-  process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "本测试靠 guardAgentSpawn 兜底拦真 CLI;拦截器一失效就会烧用户的真额度",
 );
 
@@ -62,9 +62,9 @@ try {
   }]);
 
   const peerUrl = await startPeer({
-    ASH_DB: join(root, "target.db"),
-    ASH_RUNS_DIR: join(root, "runs-dst"),
-    ASH_UPLOADS_DIR: join(root, "uploads-dst"),
+    NAVI_DB: join(root, "target.db"),
+    NAVI_RUNS_DIR: join(root, "runs-dst"),
+    NAVI_UPLOADS_DIR: join(root, "uploads-dst"),
   }, (proc) => { peer = proc; });
   const peerProject = await api<{ id: string }>(peerUrl, "/projects", {
     method: "POST",
@@ -84,7 +84,7 @@ try {
   const probe = await preflightHandoff(taskId, peerUrl);
   assert.notEqual(
     probe.capability.status, "unknown",
-    "对端是同版本 ash,应当报得出能力 —— 这里是 unknown 说明 ping 那一环没接上",
+    "对端是同版本 navi,应当报得出能力 —— 这里是 unknown 说明 ping 那一环没接上",
   );
   assert.equal(probe.capability.blocking, false, "任务用的是默认 claude,本机跑得起来对端就该跑得起来");
 

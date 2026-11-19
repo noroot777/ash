@@ -5,13 +5,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import type { AgentEvent } from "@ash/shared";
-import { validateCliCommand, type CliGoal } from "@ash/shared/cli-commands";
+import type { AgentEvent } from "@navi/shared";
+import { validateCliCommand, type CliGoal } from "@navi/shared/cli-commands";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { readCodexAppServerState } from "../src/executors/codex-app-server-state.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-goal-bridge-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-goal-bridge-"));
+process.env.NAVI_DB = join(root, "ash.db");
 type Message = { id?: number; method: string; params: any };
 class GoalServer extends EventEmitter {
   stdout = new PassThrough();
@@ -71,7 +71,7 @@ async function waitFor(predicate: () => boolean) {
   while (!predicate()) { assert.ok(Date.now() < deadline, "fixture timeout"); await new Promise((resolve) => setTimeout(resolve, 5)); }
 }
 function run(fake: GoalServer, text = "/goal 通过测试 --budget 400", state = {}) {
-  const handle = openCodexAppServer({ bin: "codex", args: ["app-server", "--stdio"], cwd: root, prompt: "本轮 ash 完成协议 direction-token", cliCommand: validateCliCommand("codex", text)!, cliState: { goal: { objective: "通过测试", status: "active" }, ...state }, startProcess: () => fake as unknown as ChildProcess });
+  const handle = openCodexAppServer({ bin: "codex", args: ["app-server", "--stdio"], cwd: root, prompt: "本轮 navi 完成协议 direction-token", cliCommand: validateCliCommand("codex", text)!, cliState: { goal: { objective: "通过测试", status: "active" }, ...state }, startProcess: () => fake as unknown as ChildProcess });
   const events: AgentEvent[] = [];
   const consumed = (async () => { for await (const event of handle.events) events.push(event); })();
   return { handle, events, consumed };
@@ -93,7 +93,7 @@ try {
   assert.equal(current.events.filter((event) => event.kind === "done").length, 1);
   assert.equal(current.handle.goal?.()?.status, "complete");
   assert.equal(fake.requests.filter((request) => request.method === "thread/archive").length, 1);
-  assert.equal(fake.requests.find((request) => request.method === "turn/start")!.params.input[0].text, "本轮 ash 完成协议 direction-token");
+  assert.equal(fake.requests.find((request) => request.method === "turn/start")!.params.input[0].text, "本轮 navi 完成协议 direction-token");
 
   const quick = new GoalServer("fast");
   const fast = run(quick);

@@ -1,6 +1,6 @@
 // 按本地习惯格式化日期和数字，格式器按参数缓存复用，替代直接调 `toLocaleString` 那一族。
 //
-// 原因在 JavaScriptCore（Safari / mac 版 ash 的 WKWebView）：`Date#toLocaleString`、
+// 原因在 JavaScriptCore（Safari / mac 版 navi 的 WKWebView）：`Date#toLocaleString`、
 // `toLocaleDateString`、`toLocaleTimeString` 每调一次都现建一个 ICU 日期格式器，用完扔给 GC。
 // 格式器本体约 30KB，落在系统 malloc 里，GC 却只看得到外面那层 JS 对象 —— 它觉得堆还很小，
 // 迟迟不回收，系统 malloc 就一路涨。实测 19020 次调用（317 行的随手记列表渲染 60 遍）把

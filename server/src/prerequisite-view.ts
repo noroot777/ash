@@ -5,7 +5,7 @@
 // 推一格后台水位（`task_background_revisions`），前端那套快照合并据此认新旧（web/src/lib/taskSnapshot.ts）。
 // 判定本身只在 prerequisite-standing.ts 一处，这里只摆形状。
 import { eq, inArray, sql } from "drizzle-orm";
-import type { TaskPrerequisites } from "@ash/shared/prerequisites";
+import type { TaskPrerequisites } from "@navi/shared/prerequisites";
 import { db } from "./db/index.js";
 import { projects, taskBackgroundRevisions, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
 import { prerequisiteStanding, type PrerequisiteStanding } from "./prerequisite-standing.js";

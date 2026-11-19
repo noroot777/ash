@@ -5,7 +5,7 @@
 // 快照、气泡读的是补读之后的那份，补读一到，同一道题就既有气泡又有说明，画了两遍。所以这份合并
 // 住在 hook 里，由会话组件取一次、两边各拿去用，不再藏在只有气泡读得到的 Provider 里。
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { QuestionRecord } from "@navi/shared/questions";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { catchUpAbortKind, type CatchUp } from "../lib/catchUp.ts";

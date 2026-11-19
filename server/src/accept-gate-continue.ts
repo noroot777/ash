@@ -2,7 +2,7 @@
 // 从 accept-gate.ts 拆出来；结算当场（accept-gate-settle.ts）和重启补办（accept-gate-recover.ts）
 // 都走 followUpGate。
 import { eq } from "drizzle-orm";
-import type { AcceptGateView } from "@ash/shared/accept-gate";
+import type { AcceptGateView } from "@navi/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, tasks } from "./db/schema.js";
 import { handOffGateFailure, parseChoices, resolveInterruptedHandoff } from "./accept-gate-handoff.js";

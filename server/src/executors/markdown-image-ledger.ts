@@ -1,7 +1,7 @@
 // markdown-image-stream.ts 的**契约层**:扫描常量、一笔账(Ledger)的形状、子文档判别、
 // 以及对外导出的全部类型。从 stream 拆出来只为守 700 行上限(同 markdown-image-flow.ts);
 // 账本的行为语义仍在 stream 本体,这里只有「账长什么样」。
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type {
   ImageRefSpot,
   ImageSnapshots,

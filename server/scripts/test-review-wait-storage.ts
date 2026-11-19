@@ -21,7 +21,7 @@ const post = (taskId: string, action: "reply" | "answer", body: object) => api.r
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
 });
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 try {
   const { openQuiet: open } = await setupRegressionReviews();
   const columns = await dbClient.execute("PRAGMA table_info(tasks)");

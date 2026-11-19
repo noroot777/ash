@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { HandoffPeerCapabilities } from "@ash/shared";
+import type { HandoffPeerCapabilities } from "@navi/shared";
 import { compareCapabilities } from "../src/handoff-capability.ts";
 
 type Need = Parameters<typeof compareCapabilities>[0][number];
@@ -80,7 +80,7 @@ for (const absent of [null, undefined]) {
 }
 
 // ── 不许拦之三:模型清单只是内置兜底快照 ────────────────────────────────────
-// preset 是发版时抄下来的,各家上新模型跟 ash 发版毫无关系。拿它否定一个模型,等于
+// preset 是发版时抄下来的,各家上新模型跟 navi 发版毫无关系。拿它否定一个模型,等于
 // 因为「我这份名单旧」去说用户的模型不存在。
 {
   const report = compareCapabilities(
@@ -148,7 +148,7 @@ for (const absent of [null, undefined]) {
 // 问到的是这台机器上真装着的 claude / codex / …。假 grok 的目录后加,排在桩前面。
 const { shadowHostClis } = await import("./host-cli-stubs.js");
 await shadowHostClis();
-const fakeCliDir = process.platform === "win32" ? null : mkdtempSync(join(tmpdir(), "ash-fake-cli-"));
+const fakeCliDir = process.platform === "win32" ? null : mkdtempSync(join(tmpdir(), "navi-fake-cli-"));
 const FAKE_MODELS = ["fake-alpha", "fake-beta"];
 if (fakeCliDir) {
   const bin = join(fakeCliDir, "grok");
@@ -168,7 +168,7 @@ if (fakeCliDir) {
   const { ensureSchema } = await import("../src/db/index.ts");
   await ensureSchema();
   const { localCapabilities } = await import("../src/handoff-capability.ts");
-  const { CLI_MODEL_PRESETS } = await import("@ash/shared/cli-presets");
+  const { CLI_MODEL_PRESETS } = await import("@navi/shared/cli-presets");
   const local = await localCapabilities();
   for (const agent of local.agents) {
     if (agent.modelSource === "preset") {

@@ -1,8 +1,8 @@
 // 归档/取消归档（从 task-run-routes.ts 拆出，纯行数拆分）。归档 = 冻结（archived 位，
 // 不动 status），门禁与团队连带见各路由内注释。磁盘上的 worktree/分支按全局设置
 // `archiveClean` 一起收，那一段在 task-archive-cleanup.ts。
-import type { TaskStatus } from "@ash/shared";
-import { summarizeArchiveCleanup } from "@ash/shared/project";
+import type { TaskStatus } from "@navi/shared";
+import { summarizeArchiveCleanup } from "@navi/shared/project";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -92,7 +92,7 @@ export function mountTaskArchiveRoutes(api: Hono): void {
       // 接回时那道出口资格会判出「任务已归档」并当场把它收掉(monitors.ts 的
       // `reattachBlockedReason`)。删除那边必须整笔中止,因为它紧接着就把那行线索抹掉了。
       await stopMonitorsForTask(target, "任务已归档，哨兵一并收回", "destroy")
-        .catch((err) => console.error(`[ash] stopMonitorsForTask(${target}, destroy) failed:`, err));
+        .catch((err) => console.error(`[navi] stopMonitorsForTask(${target}, destroy) failed:`, err));
     }
     // 任务行已经冻结,再收磁盘。顺序刻意如此:清理失败(目录脏/分支未合并/预览没停)
     // 不该把归档一起挡回去,结果如实回给 UI,并写进时间线 —— 刷新页面后还能看出
@@ -106,7 +106,7 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     const cleanup = await cleanupArchivedWorkspaces(await repoPathOf(r.projectId), cleanupTargets);
     // 验收快照同理（见 accept-gate-reclaim.ts）。取回归档也用不上它：快照只在那次门禁结算时读过一次。
     for (const target of cleanupTargets) {
-      await reclaimGateSnapshots(target.id).catch((error) => console.error(`[ash] 归档时回收快照失败（${target.id}）:`, error));
+      await reclaimGateSnapshots(target.id).catch((error) => console.error(`[navi] 归档时回收快照失败（${target.id}）:`, error));
     }
     const summary = summarizeArchiveCleanup(cleanup);
     if (summary) await appendTaskTimeline(r.id, receiptLine(`归档时清理工作区：${summary}。`));

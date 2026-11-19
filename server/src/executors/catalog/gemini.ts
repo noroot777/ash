@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliSpec } from "./types.js";
@@ -200,7 +200,7 @@ export const geminiSpec: CliSpec = {
     // 也没有 1.5x 加速档,故不设 fastArgs。
     session: {
       // (c) 档:id 由 gemini 自己产生,靠上面 parser 从 init 事件带回来,
-      // ash 不发 id(gemini 的 --session-id 只在源码里注册、未进官方 cheatsheet,
+      // navi 不发 id(gemini 的 --session-id 只在源码里注册、未进官方 cheatsheet,
       // 少赌一个 flag)。--resume 接受 latest / 序号 / 完整 uuid,这里只用 uuid。
       resumeArgs: (id) => ["--resume", id],
       interactive: (id) => `gemini --resume ${id}`,

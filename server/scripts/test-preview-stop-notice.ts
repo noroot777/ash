@@ -13,10 +13,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-preview-stop-notice-"));
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_DEPS_DIR = join(root, "deps");
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-preview-stop-notice-"));
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
+process.env.NAVI_DB = join(root, "ash.db");
 
 const { startPreview, stopPreview } = await import("../src/preview.js");
 const { lastPreview } = await import("../src/preview-store.js");

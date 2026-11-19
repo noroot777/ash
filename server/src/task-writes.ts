@@ -1,6 +1,6 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { isAbsolute, resolve } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, taskWrites } from "./db/schema.js";
@@ -21,7 +21,7 @@ export function watchTaskWrites(): void {
   bus.subscribe((event) => {
     if (event.type !== "agent.event" || event.event.kind !== "writes") return;
     void recordTaskWrites(event.taskId, event.sessionId, event.event).catch((error) => {
-      console.warn("[ash] 记录任务写过的位置失败，忽略:", error);
+      console.warn("[navi] 记录任务写过的位置失败，忽略:", error);
     });
   });
 }

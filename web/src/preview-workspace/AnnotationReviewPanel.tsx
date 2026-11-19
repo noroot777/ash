@@ -1,5 +1,5 @@
-import type { AnnotationBatchRecord, AnnotationDraft } from "@ash/shared/page-annotation-batch";
-import type { AnnotationMatch } from "@ash/shared/page-annotation-review";
+import type { AnnotationBatchRecord, AnnotationDraft } from "@navi/shared/page-annotation-batch";
+import type { AnnotationMatch } from "@navi/shared/page-annotation-review";
 import { AnnotationFollowup, AnnotationRecord } from "./AnnotationRecord.tsx";
 import type { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import type { useAnnotationReview } from "./useAnnotationReview.ts";

@@ -21,14 +21,14 @@
 // 发给任务的消息会顶掉它，等于替一道没看过的题作了答（用户 2026-11-06 选定：要捎话就明说 /reply）。
 //
 // 回执各按内容记授权来源（scope.ts）：静态的提示是 system，带着任务接口报错的是 task。
-import type { QuestionItem } from "@ash/shared";
+import type { QuestionItem } from "@navi/shared";
 import { and, desc, eq, gt, inArray, like } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imActions, imInbound, imOutbox } from "../db/schema-im.js";
 import { now } from "../util.js";
 import { imActorFor, type ImPrincipal } from "../auth/im-actor.js";
 import { viewsOf } from "./attention.js";
-import { taskPath, type AshClient } from "./ash-client.js";
+import { taskPath, type NaviClient } from "./navi-client.js";
 import { saveAttachments } from "./attachments.js";
 import { bindingOf, CHANNEL, claimCode, extractCode, updateBinding } from "./binding.js";
 import { parseCommand, type CommandRunner, type InboundContext } from "./commands.js";
@@ -82,7 +82,7 @@ export class InboundRouter {
   constructor(private readonly deps: {
     appId: string;
     api: FeishuApi;
-    ash: AshClient;
+    navi: NaviClient;
     commands: CommandRunner;
     relay: RoomRelay;
     reconciler: Reconciler;
@@ -124,8 +124,8 @@ export class InboundRouter {
       // 一路上没记结局的（命令、认领、提示）到这里才算办完；回执在这之前已经入队了。
       await this.finish(inboundId, { state: "done" });
     } catch (error) {
-      console.error("[ash] 飞书消息处理出错:", error);
-      await this.explain(inboundId, "error").catch((failure) => console.error("[ash] 飞书消息出错后回话失败:", failure));
+      console.error("[navi] 飞书消息处理出错:", error);
+      await this.explain(inboundId, "error").catch((failure) => console.error("[navi] 飞书消息出错后回话失败:", failure));
       await this.finish(inboundId, { state: "failed", detail: String((error as Error).message).slice(0, 500) });
     } finally {
       inFlight.delete(inboundId);
@@ -151,7 +151,7 @@ export class InboundRouter {
         await this.explain(row.id, "recover");
         await this.finish(row.id, { state: "failed", detail: row.state === "dispatching" ? "interrupted" : "expired" });
       } catch (error) {
-        console.error(`[ash] 飞书消息 ${row.id} 补办出错:`, error);
+        console.error(`[navi] 飞书消息 ${row.id} 补办出错:`, error);
       }
     }
     return rows.length;
@@ -186,7 +186,7 @@ export class InboundRouter {
     const dest: Destination = chatType === "p2p"
       ? { receiveType: "open_id", receiveId: openId, recipientOpenId: openId }
       : { receiveType: "chat_id", receiveId: message.chat_id, recipientOpenId: null };
-    // 这一段里的回话都是静态提示（不含 ash 数据）；带着房间、项目内容的由各自的地方另记来源。
+    // 这一段里的回话都是静态提示（不含 navi 数据）；带着房间、项目内容的由各自的地方另记来源。
     const say = (text: string) => this.deps.commands.say({ messageId: message.message_id, dest }, text, SYSTEM_SCOPE);
     const principal: ImPrincipal = { channel: CHANNEL, appId: this.deps.appId, openId };
 
@@ -293,7 +293,7 @@ export class InboundRouter {
   private async keep(row: InboundRow, ctx: InboundContext, attachments: ParsedMessage["attachments"], text: string): Promise<string[] | null> {
     const saved = row.attachments
       ? { paths: JSON.parse(row.attachments) as string[], failures: [] as string[], transient: false }
-      : await saveAttachments(this.deps.api, this.deps.ash, ctx.principal, ctx.messageId, attachments);
+      : await saveAttachments(this.deps.api, this.deps.navi, ctx.principal, ctx.messageId, attachments);
     if (saved.transient) {
       // 不记路径：这一句整句没发，他再发一次是新的一条消息，重新下载。
       const why = `附件这一下没收下（${scrubText(saved.failures.join("；"), 300)}），这句话没发出去：请稍后再发一次。`;
@@ -303,7 +303,7 @@ export class InboundRouter {
     }
     await this.record(row.id, { body: text, attachments: JSON.stringify(saved.paths) });
     if (saved.failures.length) {
-      // 列的是他自己刚发的附件和下载 / 转存的报错，不含 ash 里的数据。
+      // 列的是他自己刚发的附件和下载 / 转存的报错，不含 navi 里的数据。
       await this.deps.commands.say(ctx, `有附件没收下：\n${scrubText(saved.failures.join("\n"), 1500)}`, SYSTEM_SCOPE, { subject: `r:${ctx.messageId}:att` });
     }
     return saved.paths;
@@ -383,7 +383,7 @@ export class InboundRouter {
       // 多题没按题号写：整段作为一条答复（与网页上「直接写一段话」同一条路）。只发了附件：答复写明见附件。
       const body = split ? { answers: split } : { answer: text.trim() || "（见附件）" };
       await this.record(inboundId, { kind: "answer", taskId, state: "dispatching" });
-      const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/answer"), {
+      const result = await this.deps.navi.post(ctx.principal, taskPath(taskId, "/answer"), {
         ...body, questionKey, questionOccurrence: card.subject, ...(paths.length ? { attachments: paths } : {}),
       });
       if (!result.ok) await sayError(`没答上：${scrubText(result.error, 300)}`);
@@ -393,7 +393,7 @@ export class InboundRouter {
       return void this.react(ctx.messageId);
     }
     await this.record(inboundId, { kind: "reply", taskId, state: "dispatching" });
-    const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/reply"), { text, ...(paths.length ? { attachments: paths } : {}) });
+    const result = await this.deps.navi.post(ctx.principal, taskPath(taskId, "/reply"), { text, ...(paths.length ? { attachments: paths } : {}) });
     if (!result.ok) await sayError(`没发进任务：${scrubText(result.error, 300)}`);
     await this.record(inboundId, { state: result.ok ? "done" : "failed", detail: result.ok ? null : result.error });
     if (!result.ok) return;

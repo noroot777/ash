@@ -5,7 +5,7 @@
 // 任何恢复之前,按哨兵行把明摆着在等的那几位先盖上:还在跑的、结局已定通知还没入队的,且不是
 // 审查那边起的(审查哨兵不挡执行,见 task-complete-monitors.ts)。多盖的代价是一次幂等的推进。
 import type { Client } from "./node-sqlite-client.js";
-import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
+import { OWN_MONITOR_KIND } from "@navi/shared/monitor";
 
 export async function backfillMonitorHolds(client: Client): Promise<void> {
   try {
@@ -16,6 +16,6 @@ export async function backfillMonitorHolds(client: Client): Promise<void> {
       args: [new Date().toISOString()],
     });
   } catch (e) {
-    console.warn("[ash] 补记存量「在等哨兵」失败,忽略(队列读成员时还会补):", e);
+    console.warn("[navi] 补记存量「在等哨兵」失败,忽略(队列读成员时还会补):", e);
   }
 }

@@ -1,4 +1,4 @@
-import type { BranchPlanEntry, TaskListItem } from "@ash/shared";
+import type { BranchPlanEntry, TaskListItem } from "@navi/shared";
 
 /**
  * 这一按**真正合到哪**。验收台上凡是说到「合入目标」的地方（确认层的步骤、和顶行走向的一致性核对、

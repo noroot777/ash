@@ -1,4 +1,4 @@
-import type { FreeReviewDispute, FreeReviewDisputeTarget, FreeReviewRound, FreeReviewRun, TaskListItem } from "@ash/shared";
+import type { FreeReviewDispute, FreeReviewDisputeTarget, FreeReviewRound, FreeReviewRun, TaskListItem } from "@navi/shared";
 import { openDisputeEntryIn, reviewLocked } from "./freeReviewCopy.ts";
 import type { DisputeResolutionKind } from "./disputeCopy.ts";
 

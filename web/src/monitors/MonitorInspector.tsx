@@ -5,7 +5,7 @@
 // 下的；而回复框上方那条带每多一行，输入区就矮一行。
 import { useMemo, useRef, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
-import type { MonitorKind, TaskMonitor } from "@ash/shared/monitor";
+import type { MonitorKind, TaskMonitor } from "@navi/shared/monitor";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { useInspectorRequest } from "../inspector/nav.tsx";
 import { RequestMissNote } from "../inspector/RequestMissNote.tsx";
@@ -15,11 +15,11 @@ import { MonitorComposer } from "./MonitorComposer.tsx";
 import type { TaskMonitorsState } from "./useTaskMonitors.ts";
 
 /**
- * 分段的顺序与措辞。ash 那组排在前面：它是这一格的主角（能停、有日志、真的会唤醒任务），
+ * 分段的顺序与措辞。navi 那组排在前面：它是这一格的主角（能停、有日志、真的会唤醒任务），
  * 内置那组是「也让你看得见」的旁证。
  */
 const MONITOR_GROUPS: readonly { kind: MonitorKind; title: string; hint: string | null }[] = [
-  // ash 那组能停、有输出，按钮和折叠就在卡上，不用再解释一遍。
+  // navi 那组能停、有输出，按钮和折叠就在卡上，不用再解释一遍。
   { kind: "ash", title: "Navi 哨兵", hint: null },
   { kind: "claude", title: "claude 自带 Monitor", hint: "只读：进程在智能体自己那一轮里，停不掉、没有输出可看，也不会唤醒任务。" },
 ];
@@ -58,9 +58,9 @@ export function MonitorInspector({
   /**
    * **按来源分段，不混排**（用户 2026-10-16 拍板）。
    *
-   * 两种哨兵的能力不对等到了「同一个词指两件事」的地步：ash 那种的进程由 server 起、跨
+   * 两种哨兵的能力不对等到了「同一个词指两件事」的地步：navi 那种的进程由 server 起、跨
    * 回合活着、停得掉、有日志；claude 内置的那种是一份只读投影，agent 的进程一退就跟着
-   * 没了，ash 连停它的手柄都没有。混在一张列表里的后果不是「不够整齐」，而是用户会对着
+   * 没了，navi 连停它的手柄都没有。混在一张列表里的后果不是「不够整齐」，而是用户会对着
    * 一张 claude 的卡去找停止按钮，或者把「它会叫醒任务」的预期套到一个只在那一轮里有效
    * 的监听上 —— 那正是 Bp2LkwfRO37A 里「监听已挂上、却没人被叫醒」那一幕的读图版本。
    *

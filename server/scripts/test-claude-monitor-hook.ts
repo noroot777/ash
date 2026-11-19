@@ -1,10 +1,10 @@
-// Monitor 改道的回归：agent 调 claude 内置 `Monitor` 时，ash 到底替它做了什么。
+// Monitor 改道的回归：agent 调 claude 内置 `Monitor` 时，navi 到底替它做了什么。
 //
 // 钉住的立论（装配与理由见 src/claude-monitor-hook.ts 文件头）：
 //
 //  ① 一个都不放行。内置 Monitor 在 `-p` 回合里活不过这一轮，放行等于让它等一件不会来
 //     的事 —— 所以连「代办失败」也必须是 deny，只是 reason 不同。
-//  ② 能代办的就真代办：同一条命令变成一条真的 ash 哨兵，monitorId 回给 agent。
+//  ② 能代办的就真代办：同一条命令变成一条真的 navi 哨兵，monitorId 回给 agent。
 //  ③ 代办不了的要说清为什么、以及它自己该怎么挂（ws；没有回合身份；闸拒了）。
 //  ④ 每一条 deny 都要把「这一轮该用 pause_task 收尾」说出口——这是整件事的落点：
 //     哨兵挂上了而回合就这么结束的话，任务照样不会停在那儿等。
@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { MONITOR_MAX_TIMEOUT_MS } from "@ash/shared/monitor";
+import { MONITOR_MAX_TIMEOUT_MS } from "@navi/shared/monitor";
 import { db, inTurnCaller, monitors, tasks, stopMonitor, makeTask, teardown, runs,
 } from "./monitors-fixture.js";
 
@@ -74,7 +74,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
   const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
   assert.equal(rows.length, 1, "应该替它起了一条真哨兵");
   const row = rows[0]!;
-  assert.equal(row.kind, "ash", "代办出来的必须是 ash 自己起的那种——那才是能唤醒任务的");
+  assert.equal(row.kind, "ash", "代办出来的必须是 navi 自己起的那种——那才是能唤醒任务的");
   assert.equal(row.command, "sleep 30", "命令要原样转过去");
   assert.equal(row.description, "等全量 unittest 跑完");
   assert.equal(row.status, "running");
@@ -89,9 +89,9 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
 }
 
 // ── ②b 改道这条路也过结束条件闸（用户 2026-10-21：「你能保证 agent 一定会加吗」）────
-// 这条路是哨兵的**大头**：2026-10-16 起一次性回合里的内置 Monitor 全从这儿改挂成 ash 哨兵。
+// 这条路是哨兵的**大头**：2026-10-16 起一次性回合里的内置 Monitor 全从这儿改挂成 navi 哨兵。
 // 闸要是放过这一路，那条保证就等于没有 —— 而内置 Monitor 压根没有 stopWhen 这个参数，所以
-// 拒绝文案必须把「改写命令」和「改用 ash 的 start_monitor」都说出来，否则 agent 在这儿无路可走。
+// 拒绝文案必须把「改写命令」和「改用 navi 的 start_monitor」都说出来，否则 agent 在这儿无路可走。
 {
   const taskId = await makeTask();
   const reason = reasonOf(await claudeMonitorHookDecision(
@@ -104,7 +104,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     "拦下来就一行都不许留，更不许起进程",
   );
   assert.match(reason, /永远不会结束/, `要说清为什么拦它，实际：${reason}`);
-  assert.match(reason, /stopWhen/, "出路②：改用 ash 的 start_monitor 带上结束条件");
+  assert.match(reason, /stopWhen/, "出路②：改用 navi 的 start_monitor 带上结束条件");
   assert.match(reason, /untilExpiry/, "出路③：本来就是要盯到到期");
   assert.match(reason, /start_monitor/, "内置 Monitor 没有这些参数，必须指明换哪个工具");
 }
@@ -133,7 +133,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     0,
     "ws 那种不该凭空起一条哨兵",
   );
-  assert.match(reason, /WebSocket/, `要说清 ash 哨兵接不了 ws，实际：${reason}`);
+  assert.match(reason, /WebSocket/, `要说清 navi 哨兵接不了 ws，实际：${reason}`);
   assert.match(reason, /start_monitor/, `要告诉它自己该怎么挂，实际：${reason}`);
 }
 
@@ -213,7 +213,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
 {
   const { ClaudeExecutor } = await import("../src/executors/claude.js");
   const executor = new ClaudeExecutor({ bin: process.execPath });
-  const missing = join(tmpdir(), `ash-hook-wiring-${randomUUID()}`);   // 故意不存在
+  const missing = join(tmpdir(), `navi-hook-wiring-${randomUUID()}`);   // 故意不存在
 
   const oneShot = executor.run({ cwd: missing, prompt: "ping" });
   const steerable = executor.runSteerable({ cwd: missing, prompt: "ping" });
@@ -259,8 +259,8 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     headers: {
       "content-type": "application/json",
       // 旧名请求头:升级之前起的 claude 手里那份 hook 配置还是这么发的,照样要认。
-      "x-ash-source-task-id": taskId,
-      "x-ash-turn-token": token,
+      "x-navi-source-task-id": taskId,
+      "x-navi-turn-token": token,
     },
     body: JSON.stringify(event({ command, description: "自用模式也要认出身份" })),
   });

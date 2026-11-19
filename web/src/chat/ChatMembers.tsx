@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile } from "@ash/shared";
-import type { ChatMember } from "@ash/shared/chat";
+import type { AgentExecutorProfile } from "@navi/shared";
+import type { ChatMember } from "@navi/shared/chat";
 import { Plus, Trash, X } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { executorValue, parseExecutorValue, registeredAgentTypes } from "../lib/agentAvailability.ts";

@@ -9,7 +9,7 @@
 // `done` 事件播出去（直播那一路），两路是同一份。
 //
 // 没有诊断文件的执行器（claude 等）按 `interruptionOf` 已有的退路走：回合里报的执行故障、退出码。
-import type { TurnInterruption } from "@ash/shared";
+import type { TurnInterruption } from "@navi/shared";
 import { interruptionOf, readTurnDiagnostics, type TurnFailure } from "./review-no-verdict.js";
 
 /**
@@ -23,7 +23,7 @@ export function turnInterruptionOf(taskId: string, sessId: string, turnStart: st
     const { reason, detail } = interruptionOf(failure, readTurnDiagnostics(taskId, sessId, turnStart));
     return { reason, detail };
   } catch (error) {
-    console.error(`[ash] turnInterruptionOf(${taskId}) failed:`, error);
+    console.error(`[navi] turnInterruptionOf(${taskId}) failed:`, error);
     return null;
   }
 }

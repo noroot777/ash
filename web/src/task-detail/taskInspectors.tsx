@@ -1,4 +1,4 @@
-import type { Group, Session, Task, TaskListItem } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem } from "@navi/shared";
 import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TreeView } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
@@ -17,7 +17,7 @@ import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
 import { FreeReviewPane } from "../free-workflow/FreeReviewPane.tsx";
 import { SideChatPane } from "../side-chat/SideChatPane.tsx";
-import { monitorBlockedReason } from "@ash/shared/monitor";
+import { monitorBlockedReason } from "@navi/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
 import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";

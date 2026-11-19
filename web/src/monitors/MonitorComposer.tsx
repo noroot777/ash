@@ -2,10 +2,10 @@ import { useState } from "react";
 import { SpinnerGap } from "@phosphor-icons/react";
 import {
   MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_WAKE_LABEL, MONITOR_WAKE_TARGETS, monitorDurationOptions,
-} from "@ash/shared/monitor";
-import type { MonitorWakeTarget } from "@ash/shared/monitor";
-import { neverExitsVerdict } from "@ash/shared/command-never-exits";
-import { END_CONDITION_HINT, parseEndCondition } from "@ash/shared/monitor-end-condition";
+} from "@navi/shared/monitor";
+import type { MonitorWakeTarget } from "@navi/shared/monitor";
+import { neverExitsVerdict } from "@navi/shared/command-never-exits";
+import { END_CONDITION_HINT, parseEndCondition } from "@navi/shared/monitor-end-condition";
 import type { StartMonitorInput } from "./useTaskMonitors.ts";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
 import { InspButton } from "../inspector/parts.tsx";

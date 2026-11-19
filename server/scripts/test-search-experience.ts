@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
-import { isSearchQueryReady, searchMatchQuality } from "@ash/shared/search";
+import { isSearchQueryReady, searchMatchQuality } from "@navi/shared/search";
 import { SearchCorpus } from "../src/search-corpus.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-search-experience-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-search-experience-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const [{ db, ensureSchema }, { projects, tasks, notes }, { searchAll }, { SINGLE_ACTOR }] = await Promise.all([
   import("../src/db/index.js"), import("../src/db/schema.js"), import("../src/search.js"), import("../src/auth/context.js"),
 ]);

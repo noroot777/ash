@@ -56,7 +56,7 @@ function probeAtReceiptInsert(taskId: string, probe: () => Promise<void>) {
  * 只选 `delivering_owner` 那一列,所以这条正则碰不到夹具自己的 `select *`)。
  *
  * 原先打的是三态判定的第一笔读(回合表):那一版的送达判据是「记号上那一轮开起来过没有」。
- * 第 2 轮自由审查 F1 把会话行/回合行整个从判据里拿掉了(它们是 ash 自己的记账,证明不了那串
+ * 第 2 轮自由审查 F1 把会话行/回合行整个从判据里拿掉了(它们是 navi 自己的记账,证明不了那串
  * 字进了 agent 手里),于是判定压根不再读库 —— 旧定点从此一次都打不中,这条用例会变成假绿。
  * 要钉的不变量没变:**这一问读不出来时不许把任务钉死**(所有权交回 + 退避重排),所以定点挪到
  * 现存的那一笔读上,两条路在 `settleStrandedCheckpointRun` 里本来就归同一个出口。
@@ -174,7 +174,7 @@ export async function checkpointOwnershipCases(): Promise<void> {
     console.log("PASS: a verdict read failure hands ownership back and reschedules instead of wedging the task");
   }
 
-  // ③ **另一份 ash 正在送它时不许接管**(第 2 轮自由审查 F1,两个独立进程实测)。
+  // ③ **另一份 navi 正在送它时不许接管**(第 2 轮自由审查 F1,两个独立进程实测)。
   //    墙钟租约在接管方眼里跟「有租约、没人管」一模一样,所以旧口径会按「没送出去」把交代
   //    还给任务,而那边照旧把原文送了出去 —— 同一段话执行两遍。放行只认证据,所以这里分两
   //    段判:持有它的那个进程还活着 ⇒ 不接管;它退出了 ⇒ 照常接管下去。

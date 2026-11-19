@@ -8,10 +8,10 @@
 //    准备过了、测试红了仍是 exit_code；三种结果在门禁状态里分得清。
 //  · 快照（连同准备命令装出来的依赖）随门禁收尾回收。
 //  · 没配准备命令的项目原样走老路：记录里没有准备命令、日志里没有那一段。
-//  · 快照住在 ash 与项目目录树之外（accept-gate-isolated.ts）：运行目录和主检出的祖先目录里装着的包，
+//  · 快照住在 navi 与项目目录树之外（accept-gate-isolated.ts）：运行目录和主检出的祖先目录里装着的包，
 //    快照里漏装了就是找不到；快照位置往上一旦能找到依赖目录就拒跑。
-//  · 执行环境同一条不变量：ash 继承来的 PATH 上别人家的 `node_modules/.bin`、NODE_PATH、NODE_OPTIONS 里
-//    的外来预加载、ash 自己那份 npm 包上下文，准备命令和前置命令（含 `npm run`）都看不见；老路不变。
+//  · 执行环境同一条不变量：navi 继承来的 PATH 上别人家的 `node_modules/.bin`、NODE_PATH、NODE_OPTIONS 里
+//    的外来预加载、navi 自己那份 npm 包上下文，准备命令和前置命令（含 `npm run`）都看不见；老路不变。
 //  · 阶段只由退出档说：日志写不进去不打断阶段推进，启动器自己出错记成「分不清」；退出档写不进去时
 //    也按「分不清」收（被打断、不交修），不猜成准备没过或测试红。
 //  · 门禁卡状态里的准备命令是保存着的那一条，不随前置命令撤掉而投影成空；跨机接力搬得动准备那一档。
@@ -24,13 +24,13 @@ import { spawn } from "node:child_process";
 import { desc, eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-accept-gate-prepare-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-// 独立快照根放在 root 之外：root 本身要扮演「祖先目录里装着依赖」的 ash 检出。
+const root = mkdtempSync(join(tmpdir(), "navi-accept-gate-prepare-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+// 独立快照根放在 root 之外：root 本身要扮演「祖先目录里装着依赖」的 navi 检出。
 const isolated = mkdtempSync(join(tmpdir(), "ash-accept-gate-isolated-"));
-process.env.ASH_GATE_ISOLATED_DIR = isolated;
-// 另一个项目的依赖树，经 ash 继承来的环境指过来（ash 被 npm 起时就是这个形状，第 2 轮审查实测）。
+process.env.NAVI_GATE_ISOLATED_DIR = isolated;
+// 另一个项目的依赖树，经 navi 继承来的环境指过来（navi 被 npm 起时就是这个形状，第 2 轮审查实测）。
 const foreign = join(mkdtempSync(join(tmpdir(), "ash-accept-gate-foreign-")), "other", "node_modules");
 const preloaded = join(isolated, "preloaded.txt");
 mkdirSync(join(foreign, ".bin"), { recursive: true });
@@ -42,7 +42,7 @@ writeFileSync(join(foreign, "envghost", "index.js"), "module.exports = 1;\n");
 writeFileSync(join(foreign, "preload.cjs"),
   `if (process.cwd().startsWith(${JSON.stringify(isolated)})) require("fs").appendFileSync(${JSON.stringify(preloaded)}, process.cwd() + "\\n");\n`);
 process.on("exit", () => { for (const dir of [root, isolated, join(foreign, "..", "..")]) try { rmSync(dir, { recursive: true, force: true }); } catch {} });
-assert.ok(process.env.ASH_ALLOW_REAL_AGENT !== "1", "门禁失败那一条会叫醒任务；拦截器一失效，测试就会拿用户的真额度跑 agent");
+assert.ok(process.env.NAVI_ALLOW_REAL_AGENT !== "1", "门禁失败那一条会叫醒任务；拦截器一失效，测试就会拿用户的真额度跑 agent");
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -51,7 +51,7 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 function makeRepo(name: string): string {
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Gate Test");
+  git(repo, "config", "user.name", "Navi Gate Test");
   git(repo, "config", "user.email", "gate@example.test");
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\nnode_modules/\n");
   writeFileSync(join(repo, "package.json"), JSON.stringify({ name: name, version: "1.0.0", private: true, dependencies: { dep: "1.0.0" },
@@ -64,7 +64,7 @@ function makeRepo(name: string): string {
   return repo;
 }
 
-// 环境里看不看得见外来依赖：PATH 上的工具、NODE_PATH 上的包、ash 那份 npm 包上下文。
+// 环境里看不看得见外来依赖：PATH 上的工具、NODE_PATH 上的包、navi 那份 npm 包上下文。
 const sealed = `! command -v ghosttool >/dev/null && ! node -e "require.resolve('envghost')" 2>/dev/null`
   + ` && test -z "$npm_package_json$INIT_CWD$NODE_PATH"`;
 // 准备命令：起跑时快照里必须还没有依赖目录（有就说明借进来了），然后现装一份说 SNAPSHOT 的 dep。
@@ -87,7 +87,7 @@ try {
   const { gateFailureInputFor } = await import("../src/accept-gate-messages.js");
   const { gateScopeNotice } = await import("../src/accept-gate-confinement.js");
   const { readGateLaunch } = await import("../src/accept-gate-launch.js");
-  const { summarizeAcceptGate } = await import("@ash/shared/accept-gate");
+  const { summarizeAcceptGate } = await import("@navi/shared/accept-gate");
   const { GATE_BOOTSTRAP } = await import("../src/accept-gate-launch.js");
   const { GATE_ENV_ISOLATION, isolatedGateEnv } = await import("../src/accept-gate-isolated.js");
   const { collectGateRuns, validateGatePayload } = await import("../src/handoff-accept-gate.js");
@@ -95,7 +95,7 @@ try {
   const { gateExitOutcome, readGateExit, unrecordedGateExit } = await import("../src/accept-gate-exit.js");
   const { userShellLaunch } = await import("../src/platform.js");
   const { createGateSnapshot, readGateSource } = await import("../src/accept-gate-source.js");
-  // root 扮演 ash 检出：运行目录与项目仓库都在它下面，它的 node_modules 里装着快照没装的 ghost。
+  // root 扮演 navi 检出：运行目录与项目仓库都在它下面，它的 node_modules 里装着快照没装的 ghost。
   mkdirSync(join(root, "node_modules", "ghost"), { recursive: true });
   writeFileSync(join(root, "node_modules", "ghost", "index.js"), 'module.exports = "GHOST";\n');
   process.env.PATH = `${join(foreign, ".bin")}${PATH_DELIMITER}${process.env.PATH}`;
@@ -152,7 +152,7 @@ try {
     assert.equal(run.prepareCommand, installCommand(order), "这一次用的准备命令要落进记录");
     assert.equal(readFileSync(order, "utf8"), "prepare\ncommand\n", "先准备、后前置命令，各一次");
     assert.equal(readFileSync(saw, "utf8"), "SNAPSHOT", "测试解析到的是准备命令装进快照的那份依赖，不是主检出那份");
-    assert.ok(run.cwd.startsWith(isolated) && !run.cwd.startsWith(root), `快照要住在 ash 与项目目录树之外（实际 ${run.cwd}）`);
+    assert.ok(run.cwd.startsWith(isolated) && !run.cwd.startsWith(root), `快照要住在 navi 与项目目录树之外（实际 ${run.cwd}）`);
     assert.equal(existsSync(preloaded), false, "NODE_OPTIONS 里的外来预加载不许跟进快照");
     assert.match(log, /准备命令通过，开跑验收前置命令/, "日志里分得出两段");
     assert.equal((await taskRow(stage.taskId)).stage, "accepted", "绿了自动把验收做完");
@@ -229,7 +229,7 @@ try {
     const env = isolatedGateEnv({
       PATH: [join(foreign, ".bin"), npmBins, join(snapshot, "node_modules", ".bin"), "/usr/bin"].join(PATH_DELIMITER),
       NODE_PATH: "/anywhere", NODE_OPTIONS: `--max-old-space-size=4096 --require=${join(foreign, "preload.cjs")}`,
-      npm_package_json: "/ash/package.json", npm_lifecycle_event: "start", INIT_CWD: "/ash", npm_config_local_prefix: "/ash",
+      npm_package_json: "/navi/package.json", npm_lifecycle_event: "start", INIT_CWD: "/navi", npm_config_local_prefix: "/navi",
       npm_config_registry: "https://registry.example", HOME: "/home/someone", OWN: join(snapshot, "node_modules", "x"),
     }, snapshot);
     assert.deepEqual(env, { PATH: [join(snapshot, "node_modules", ".bin"), "/usr/bin"].join(PATH_DELIMITER),
@@ -247,7 +247,7 @@ try {
       const logPath = join(opts.exitWritable ? stageDir : unwritable, `${name}.log`);
       const marker = join(stageDir, `${name}-command-ran`);
       const config = { ...userShellLaunch(`touch ${marker}; ${command}`), prepare: userShellLaunch(prepare), cwd: stageDir, restoreEnv: {},
-        go: join(stageDir, "go"), abort: join(stageDir, "abort"), exit: `${logPath}.exit.json`, prepared: "\n[ash] 准备命令通过\n",
+        go: join(stageDir, "go"), abort: join(stageDir, "abort"), exit: `${logPath}.exit.json`, prepared: "\n[navi] 准备命令通过\n",
         ...(opts.guardFile ? { macGuard: "/usr/bin/true", macGuardFile: opts.guardFile } : {}) };
       // 只读打开的日志 fd：往上写就是真实的 EBADF，跟磁盘满时 writeSync 抛错走同一条路。
       const log = opts.logBroken ? openSync(join(stageDir, "occupied"), "r") : "ignore";

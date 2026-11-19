@@ -11,13 +11,13 @@ import { removeTmpStage } from "./tmp-db.js";
 // 这一份专收「各用一个独立小仓」的链接/输入计划用例 —— 它们要自带 .gitignore、提交历史,甚至自带
 // 一个装在项目内部的运行目录,挤进 test-accept-gate-source.ts 那个共用 repo 会互相污染(根落点那条
 // 会把共用 repo 里全部被忽略的条目都拉进复制计划)。共用 fixture 的那批仍在那边。
-const root = mkdtempSync(join(tmpdir(), "ash-gate-links-"));
+const root = mkdtempSync(join(tmpdir(), "navi-gate-links-"));
 // 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
-process.env.ASH_DB = join(root, "ash-test.db");
-// 运行目录故意放进 runtime-filter 夹具仓库内部:「源侧过滤、副本回算不过滤」只有在「ash 的 runs
+process.env.NAVI_DB = join(root, "navi-test.db");
+// 运行目录故意放进 runtime-filter 夹具仓库内部:「源侧过滤、副本回算不过滤」只有在「navi 的 runs
 // 目录就在项目里」时才复现,而 RUNS_DIR 在模块 import 时就定下来了。其它夹具仓库都不包含它,排除
 // 计划对它们是空的。
-process.env.ASH_RUNS_DIR = join(root, "runtime-filter", "data", "runs");
+process.env.NAVI_RUNS_DIR = join(root, "runtime-filter", "data", "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 // 目录链:Windows 上普通软链要 SeCreateSymbolicLinkPrivilege,包管理器(pnpm 等)改用 junction,
 // 而 junction 只认绝对路径、node 又把它同样报成 isSymbolicLink()。文件链在那台机器上没开发者
@@ -207,7 +207,7 @@ try {
       sourceAmbient: literalSource.ambient }, nestedSource), false, "第2轮发现1: POSIX 上切到另一个真实文件,身份必须跟着变");
   }
 
-  // 第 2 轮发现 2:项目把 ash 的运行目录装在自己里面时,排除项只在源侧生效不行——clone/checkout 会
+  // 第 2 轮发现 2:项目把 navi 的运行目录装在自己里面时,排除项只在源侧生效不行——clone/checkout 会
   // 把运行目录里**被跟踪的**文件照样写进副本,副本回算再不过滤就必然看到源摘要里没有的输入,项目
   // 什么也没改也会被判「没能按原样复现」。源摘要、复制、副本回算必须解释同一份排除计划。
   const filtered = freshRepo("runtime-filter", "node_modules/\ndata/\n");

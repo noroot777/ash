@@ -13,8 +13,8 @@ import { PEER_USER_KEY_HEADER } from "./handoff-peer-user.js";
 import { peerCredentialForRequest } from "./handoff-scope.js";
 import { sameFingerprint } from "../handoff-identity.js";
 import { HandoffError } from "../handoff-types.js";
-import { HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
-import { withLegacyHeaderNames } from "@ash/shared/http-headers";
+import { HANDOFF_PEER_KEY_REQUIRED } from "@navi/shared/handoff";
+import { withLegacyHeaderNames } from "@navi/shared/http-headers";
 
 const store = new AsyncLocalStorage<{ ownerUserId: string | null }>();
 

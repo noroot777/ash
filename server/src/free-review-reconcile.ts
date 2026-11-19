@@ -4,7 +4,7 @@
 // 从 `free-workflow.ts` 切出来的原因:那份文件贴着 700 行上限,而这一串判据自己已经快一百行。
 // 依赖是单向的(本文件 → free-workflow.ts 取结算入口),所以不成环;`index.ts`、
 // `regression-settlement.ts` 都直接从这里取 `reconcileFreeReviews`,不再绕 free-workflow.ts。
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
@@ -101,6 +101,6 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
       status: "reviewing", startedAt: run.createdAt }).onConflictDoNothing();
     await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer",
       true, false, fence)
-      .catch((error) => console.error(`[ash] 孤儿审查收尾待重试 ${run.id}:`, error));
+      .catch((error) => console.error(`[navi] 孤儿审查收尾待重试 ${run.id}:`, error));
   }
 }

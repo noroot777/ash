@@ -14,19 +14,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-reads-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-reads-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 requireTmpDb("task-reads");
 
 const [{ db, ensureSchema }, schema, readRoutes, { TASK_READS_MAX }, { bus }, context, { makeEventFilter }, { deleteTaskCompletely }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/task-reads.js"),
-  import("@ash/shared/task-reads"),
+  import("@navi/shared/task-reads"),
   import("../src/bus.js"),
   import("../src/auth/context.js"),
   import("../src/auth/event-filter.js"),

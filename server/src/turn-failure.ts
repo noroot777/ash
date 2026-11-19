@@ -1,4 +1,4 @@
-import type { AgentType, SessionRole } from "@ash/shared";
+import type { AgentType, SessionRole } from "@navi/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

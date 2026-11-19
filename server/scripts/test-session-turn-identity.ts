@@ -15,16 +15,16 @@ import { delimiter, dirname, join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 requireTmpDb("session-turn-identity");
-const stage = realpathSync(mkdtempSync(join(tmpdir(), "ash-turn-identity-")));
+const stage = realpathSync(mkdtempSync(join(tmpdir(), "navi-turn-identity-")));
 // **自己的舞台自己清**。挂在 `exit` 上而不是包一层 try/finally：这份是顶层 await 平铺的
 // 脚本,而且断言失败走的是未捕获异常那条路——`exit` 钩子两种结局都盖得住。只删这一次
 // 自己建的那个目录,别人留下的不碰。
 process.on("exit", () => {
   try { rmSync(stage, { recursive: true, force: true }); } catch { /* Windows 上文件还开着就留给下次 */ }
 });
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-mkdirSync(process.env.ASH_RUNS_DIR, { recursive: true });
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
+mkdirSync(process.env.NAVI_RUNS_DIR, { recursive: true });
 
 // ── 假 codex：每次运行往 output/ 写一张图,顺便把运行次数记在盘上 ──────────────
 const bin = join(stage, "bin");
@@ -53,7 +53,7 @@ writeFileSync(join(bin, "codex"),
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
 // spawn.ts 的隔离闸默认不许起执行器。这条测试要的就是真走完 spawn 链路，只放行上面亲手种的
 // 这个假 `codex`。
-process.env.ASH_TEST_AGENT_BIN = bin;
+process.env.NAVI_TEST_AGENT_BIN = bin;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { agents, appSettings, projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -342,7 +342,7 @@ const resumeSame = async (taskId: string, text: string) => {
   // 上一次进程里开了一个回合,崩了没收口。库里那一行**就该**停在「开了没收口」——真实的
   // 重启对账只把任务落 failed,不伪造它的收尾时刻,那是合理保留未知。
   await insertSession("session-stale-old", stamp(0));
-  // ash 重启：进程内的活动登记跟着没了（它本来就只代表「这个进程还在跑这个回合」）。
+  // navi 重启：进程内的活动登记跟着没了（它本来就只代表「这个进程还在跑这个回合」）。
   clearTurnActive("session-stale-old", stamp(0));
   // 任务又跑起来了：新开一行会话,新的回合正在跑（这一轮登记在册）。
   await insertSession("session-stale-new", stamp(600));
@@ -528,7 +528,7 @@ const resumeSame = async (taskId: string, text: string) => {
   // **真实的初始化失败**：讨论的日志目录该在的位置先放一个普通文件,`mkdirSync(runDir)` 当场
   // 抛 EEXIST。那一句在 runTurn 里排在 `openTurn` **之后**、消费循环的 try **之前**,所以它
   // 正好打在「身份已经拿到、保护还没开始」那个窗口上（第 7 轮报告的复现用的就是这一手）。
-  const runsDir = process.env.ASH_RUNS_DIR as string;
+  const runsDir = process.env.NAVI_RUNS_DIR as string;
   writeFileSync(join(runsDir, "TiDuetIn0001"), "占住这个位置,让建日志目录那一步真的抛");
   const { runDuet } = await import("../src/duet/index.js");
   const { activeTurnStarts: active } = await import("../src/session-turns.js");

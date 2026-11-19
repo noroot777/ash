@@ -1,4 +1,4 @@
-import type { PreviewServiceState } from "@ash/shared/preview";
+import type { PreviewServiceState } from "@navi/shared/preview";
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";

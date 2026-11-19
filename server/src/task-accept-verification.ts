@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
+import type { UnexecutedVerification } from "@navi/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { taskWorkflowDef } from "./workflows.js";

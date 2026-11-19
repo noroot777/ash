@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Session, Task, TaskListItem } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
+import type { Session, Task, TaskListItem } from "@navi/shared";
+import { taskDisplayStatus } from "@navi/shared";
 import { CaretDown } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";

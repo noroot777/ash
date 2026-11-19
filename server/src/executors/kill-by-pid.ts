@@ -45,7 +45,7 @@ export function killByPid(
   // 证据推不翻一条更强的反证,何况下刀打的是**它那一组**。
   if (refutesRoot(state)) {
     console.warn(
-      `[ash] pid=${pid} 这个号上现在是另一个进程(记录在案的启动时刻对不上),`
+      `[navi] pid=${pid} 这个号上现在是另一个进程(记录在案的启动时刻对不上),`
       + "按「证不出就不下刀」处理:没有发送任何信号 —— 握着输出文件也不改变这个结论",
     );
     return;
@@ -80,7 +80,7 @@ export function killByPid(
       // 不许只有一个认这条反证):这两秒里 ps 可能已经答得出「这个号上现在是另一个进程」,
       // 那一刻即便文件那一问还说得通,也只说明有人握着这个文件,不说明这个号还是当初那个。
       if (refutesRoot(reclaimState(pid, startedAt ?? null, unit))) {
-        console.warn(`[ash] pid=${pid} 在这两秒里换了主人(记录在案的启动时刻对不上),补刀取消`);
+        console.warn(`[navi] pid=${pid} 在这两秒里换了主人(记录在案的启动时刻对不上),补刀取消`);
         signalMembers(held.filter((m) => m.pid !== pid), "SIGKILL");
         return;
       }
@@ -95,7 +95,7 @@ export function killByPid(
   // ③ 两条线索都证不出来:不下刀,但要留下痕迹 —— 根约定「停止/暂停必须留下持久可见的
   // 状态」,静默失败会让用户只能得出「按钮坏了」。
   console.warn(
-    `[ash] 没能证明 pid=${pid} 属于这一次运行(身份这一问停在 ${state}、`
+    `[navi] 没能证明 pid=${pid} 属于这一次运行(身份这一问停在 ${state}、`
     + `输出文件${proof?.outPath ? "上没有它的 stdout" : "未提供"}),`
     + "按「证不出就不下刀」处理:没有发送任何信号",
   );

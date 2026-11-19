@@ -6,7 +6,7 @@ import Darwin
 ///
 /// 暂存目录得跟着目标走（rename 不跨卷），于是散在用户选过的各个文件夹里。进程被强杀或断电时
 /// commit / discard / deinit 一个都跑不到，它就留在原地 —— 所以每笔事务在
-/// `AshConfig.downloadJournalURL` 下留一张登记：文件名是事务 id，内容是暂存目录的路径，事务
+/// `NaviConfig.downloadJournalURL` 下留一张登记：文件名是事务 id，内容是暂存目录的路径，事务
 /// 存续期间一直持着这张登记的 flock。下次启动 `reclaimAbandoned()` 照登记回收。
 ///
 /// 「这笔还在不在写」只看锁：进程一死内核就放锁。不靠 pid（会被复用），也不靠时间（慢下载会被误删）。
@@ -17,7 +17,7 @@ final class DownloadTransaction {
   private let journal: URL
   private var journalDescriptor: Int32
 
-  private static let stagingPrefix = ".ash-download-"
+  private static let stagingPrefix = ".navi-download-"
   /// 目标文件夹一直不在（外接盘再没插回来、文件夹被删）的登记留多久。
   private static let unreachableRetention: TimeInterval = 30 * 24 * 3600
 
@@ -27,8 +27,8 @@ final class DownloadTransaction {
     directory = destination.deletingLastPathComponent()
       .appendingPathComponent(Self.stagingPrefix + id, isDirectory: true)
     temporaryURL = directory.appendingPathComponent("payload")
-    journal = AshConfig.downloadJournalURL.appendingPathComponent(id)
-    try FileManager.default.createDirectory(at: AshConfig.downloadJournalURL, withIntermediateDirectories: true)
+    journal = NaviConfig.downloadJournalURL.appendingPathComponent(id)
+    try FileManager.default.createDirectory(at: NaviConfig.downloadJournalURL, withIntermediateDirectories: true)
     // 先登记、后建目录：反过来的话，两步之间被杀会留下一个没有登记的目录。
     // O_EXLOCK 让「建出来」和「锁上」是同一步，别的实例的回收插不进这道缝。
     journalDescriptor = open(journal.path, O_CREAT | O_EXCL | O_WRONLY | O_EXLOCK | O_CLOEXEC, 0o600)
@@ -67,7 +67,7 @@ final class DownloadTransaction {
   /// 回收没走完的事务留下的暂存目录。启动时调一次；仍在写的事务（包括别的实例的）持着锁，碰不到。
   static func reclaimAbandoned() {
     let entries = (try? FileManager.default.contentsOfDirectory(
-      at: AshConfig.downloadJournalURL, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+      at: NaviConfig.downloadJournalURL, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
     for entry in entries {
       let descriptor = open(entry.path, O_RDONLY | O_CLOEXEC)
       guard descriptor >= 0 else { continue }

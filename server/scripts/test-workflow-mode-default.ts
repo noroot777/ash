@@ -15,9 +15,9 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-workflow-mode-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-workflow-mode-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, groups } = await import("../src/db/schema.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");

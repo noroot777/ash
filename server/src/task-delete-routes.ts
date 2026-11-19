@@ -4,7 +4,7 @@
 // 最高的一块:它跟建任务、改任务不共用任何局部状态,只靠 `mountTaskDeleteRoutes(api)`
 // 挂回去。`deleteTaskCompletely` 跟着一起搬——项目删除那条路(project-routes.ts)也
 // 调它,留在建任务那份文件里只会让人以为它跟建任务有关。
-import type { TaskWorkspaceDiscardResult } from "@ash/shared";
+import type { TaskWorkspaceDiscardResult } from "@navi/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -70,7 +70,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   await deleteTaskSideChats(taskId);
   await deleteTaskBranchRefs(taskId);
   // 哨兵:**先把进程停了再删行**。顺序反过来就再也没人知道那个 pid 是谁的,它会一直
-  // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 ash 的)。
+  // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 navi 的)。
   // 上面那行 `beginTaskRevocation` 必须排在所有删除之前:它关掉监听那几个 writer 的落库
   // 资格(门闸,覆盖整个删除期,见 claude-monitor-revoked.ts)。
   // `destroy`：用户要求这个任务的一切就此结束，审查还在进行也不留 —— 下面那一批删除紧接着
@@ -175,10 +175,10 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     void appendTaskTimeline(dependent, alertLine(`前置任务「${deletedTitle}」已删除，这条前置关系随之解除。`));
   }
   if (dependents.length) notePrerequisiteProgress(taskId, dependents);
-  void republishWaitsOf([...queueMates, ...heldTree]).catch((err) => console.error(`[ash] 删除 ${taskId} 后通知同队托盘失败:`, err));
+  void republishWaitsOf([...queueMates, ...heldTree]).catch((err) => console.error(`[navi] 删除 ${taskId} 后通知同队托盘失败:`, err));
   // 重排失败不改写「已删除」:读的一侧按先后算名次(task-store.ts enrichTasks),缺号不会显示出来。
   if (queue && queueMates.length) {
-    await closeQueueGap(queue.queueId).catch((err) => console.error(`[ash] 删除 ${taskId} 后重排队列 ${queue.queueId} 失败:`, err));
+    await closeQueueGap(queue.queueId).catch((err) => console.error(`[navi] 删除 ${taskId} 后重排队列 ${queue.queueId} 失败:`, err));
   }
 }
 

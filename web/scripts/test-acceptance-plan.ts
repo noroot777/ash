@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import type { AcceptanceSteps } from "@ash/shared/accept-message";
-import type { AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
+import type { AcceptanceSteps } from "@navi/shared/accept-message";
+import type { AcceptGateState, AcceptGateView } from "@navi/shared/accept-gate";
 import { cleanText, confirmView, type ConfirmGate, type ConfirmInput } from "../src/acceptance/confirmPlan.ts";
 import { gateLine, type GateLineInput } from "../src/acceptance/gateLine.ts";
 

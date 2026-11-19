@@ -1,4 +1,4 @@
-import type { Group, ProjectView, Task, TaskListItem } from "@ash/shared";
+import type { Group, ProjectView, Task, TaskListItem } from "@navi/shared";
 import { useEffect } from "react";
 import type { ComponentType } from "react";
 import {

@@ -1,5 +1,5 @@
 import { Fragment, useRef, useState } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { dispatchPath } from "../lib/dispatchFamily.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 

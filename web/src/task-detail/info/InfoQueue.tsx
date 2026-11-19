@@ -2,7 +2,7 @@
 // 一行「排在某任务之后…」；已经结束、进不了队列的任务，这一行不出。
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Group, Task, TaskListItem } from "@ash/shared";
+import type { Group, Task, TaskListItem } from "@navi/shared";
 import { Dropdown } from "../../components/Dropdown.tsx";
 import { InspRow } from "../../inspector/parts.tsx";
 import { InspMainButton } from "../../inspector/InspHead.tsx";

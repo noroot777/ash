@@ -17,7 +17,7 @@ export function createPendingInbox(report: (lead: Lead, text: string, at?: strin
       await enqueueInbound(taskId, text);
     } catch (error) {
       // 跟 queueInbound 同一口径:写不进去也别当场丢掉,退回进程内的最后一档(见 adoptInbound)。
-      console.error(`[ash] team enqueueInbound(${taskId}) failed:`, error);
+      console.error(`[navi] team enqueueInbound(${taskId}) failed:`, error);
       unqueuedFallback.set(taskId, [...(unqueuedFallback.get(taskId) ?? []), text]);
     }
   }
@@ -69,7 +69,7 @@ export function createPendingInbox(report: (lead: Lead, text: string, at?: strin
     try {
       return await enqueueInbound(lead.taskId, text);
     } catch (error) {
-      console.error(`[ash] team enqueueInbound(${lead.taskId}) failed:`, error);
+      console.error(`[navi] team enqueueInbound(${lead.taskId}) failed:`, error);
       report(
         lead,
         `执行者消息写入待送队列失败：${error instanceof Error ? error.message : String(error)}。`

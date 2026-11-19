@@ -13,7 +13,7 @@
 // ⑦ shownAtGate(飞书卡片按卡上的版本取正文):库里那份和版本同一条语句写,开门行没写进文件也取得到;
 //    取的是**这一扇**的,不拿最近一次开门的顶上;老讨论按开门序号认;下一扇门领号时不带方案就清空。
 //
-// 一个执行器都不起:ASH_RUNS_DIR 指向临时目录(executors/spawn.ts 的 guardAgentSpawn 据此
+// 一个执行器都不起:NAVI_RUNS_DIR 指向临时目录(executors/spawn.ts 的 guardAgentSpawn 据此
 // 拦住一切 spawn),走到的动作只有「放行」,它在 resumeAtGate 里只结算、不跑讨论者。
 import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -23,9 +23,9 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-duet-gate-version-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-duet-gate-version-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 let failure: unknown = null;
 try {

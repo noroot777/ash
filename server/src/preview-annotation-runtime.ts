@@ -1,4 +1,4 @@
-import { PREVIEW_ANNOTATION_PROTOCOLS } from "@ash/shared/page-annotation";
+import { PREVIEW_ANNOTATION_PROTOCOLS } from "@navi/shared/page-annotation";
 import { previewAnnotationReviewRuntime } from "./preview-annotation-review-runtime.js";
 import { previewAnnotationImageRuntime } from "./preview-annotation-image.js";
 

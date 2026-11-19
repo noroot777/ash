@@ -1,6 +1,6 @@
-import type { AgentType, ScheduledMessage } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
-import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
+import type { AgentType, ScheduledMessage } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
+import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@navi/shared/cli-commands";
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { db } from "./db/index.js";
@@ -195,9 +195,9 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
         // 回合被别的执行抢占:原话退回托盘,仍按执行型等队列位置,不按续聊放行。
         if (!started) { await stash(); stashed = true; }
       })
-      .catch((err) => console.error(`[ash] 回复续跑 ${taskId} 异常:`, err))
+      .catch((err) => console.error(`[navi] 回复续跑 ${taskId} 异常:`, err))
       .finally(async () => {
-        if (seat) await seat.release().catch((err) => console.error(`[ash] 回复续跑 ${taskId} 释放执行位失败:`, err));
+        if (seat) await seat.release().catch((err) => console.error(`[navi] 回复续跑 ${taskId} 释放执行位失败:`, err));
         // 先放执行位再扫:扫描要重新认领它,自己还占着就会被当成「已有启动路径」挡回。
         if (stashed) flushPendingWhenTurnIdle(taskId);
       });
@@ -208,7 +208,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     await enqueueMessage({ taskId, text, ...route, agent: b.agent ?? null, ownerUserId: route.actingUserId });
     flushPendingWhenTurnIdle(taskId);
   }).catch((error) => {
-    void appendTaskTimeline(taskId, alertLine(`续聊未能启动：${error instanceof Error ? error.message : String(error)}`)).catch((failure) => console.error("[ash] 续聊失败说明写入失败:", failure));
+    void appendTaskTimeline(taskId, alertLine(`续聊未能启动：${error instanceof Error ? error.message : String(error)}`)).catch((failure) => console.error("[navi] 续聊失败说明写入失败:", failure));
   });
   return c.json({ started: true }, 202);
 }

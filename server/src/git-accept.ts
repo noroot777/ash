@@ -9,7 +9,7 @@
 // 工作流快照读出来传进来；不传就是老规矩（安全合并）。
 import { resolve } from "node:path";
 import { realpathSync } from "node:fs";
-import type { AcceptStrategy } from "@ash/shared/workflow";
+import type { AcceptStrategy } from "@navi/shared/workflow";
 import {
   expandHome,
   gitError,
@@ -27,7 +27,7 @@ import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistration
 import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
 import type { GatePhysical } from "./accept-gate-physical.js";
 import { alreadyLandedUntested, guardedDirtyFiles, movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
-import { LEGACY_ACCEPT_TAG_PREFIX } from "@ash/shared/legacy-names";
+import { LEGACY_ACCEPT_TAG_PREFIX } from "@navi/shared/legacy-names";
 
 function sameFilesystemPath(a: string, b: string): boolean {
   try { return realpathSync(resolve(a)) === realpathSync(resolve(b)); }
@@ -333,7 +333,7 @@ async function inTargetCheckout(
 // `commit: false` 是「合并后不提交」那一档（项目设置 / 单次验收的那个勾）走的同一段路：
 // merge --squash 把改动落进目标分支的工作区与暂存区，然后**就停在这儿**，不 commit。
 // 用 `--squash` 而不是 `merge --no-commit` 是有意的：后者会留下 MERGE_HEAD，整个仓库
-// 停在「合并进行中」的状态里，用户自己的终端、别的 agent、ash 的下一次 git 操作全都
+// 停在「合并进行中」的状态里，用户自己的终端、别的 agent、navi 的下一次 git 操作全都
 // 会撞上它；`--squash` 只动工作区和索引，`git commit` 或 `git reset --hard` 一句就收场。
 async function squashInCheckedOutTarget(
   cwd: string,

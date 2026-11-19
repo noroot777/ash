@@ -7,7 +7,7 @@
 // 判据只有 `scope === "session"` 一个（`shared/src/events.ts`），生产方是
 // `executors/codex.ts` 里的 poisoned 诊断。single-run / team / duet 三条链共用下面
 // 这两个函数，别再各自内联判断 —— duet 早先只在自己那条链上分流，另外两条漏了。
-import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionRole } from "@navi/shared";
 import { bus } from "./bus.js";
 import { appendTranscriptLine } from "./task-timeline.js";
 import { writeTurn } from "./transcript.js";

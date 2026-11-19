@@ -65,7 +65,7 @@ export function intentStillOpen(logPath: string): boolean {
 /**
  * **pid 还空着的那一行:拿身份边条把它认回来**(第 9 轮审查 F3)。
  *
- * 边条是 `spawn` 一返回就同步写下的 `{pid, 那一刻}`(见 monitor-spawn.ts 文件头):ash 恰好
+ * 边条是 `spawn` 一返回就同步写下的 `{pid, 那一刻}`(见 monitor-spawn.ts 文件头):navi 恰好
  * 死在「落了身份」和「回填 pid」之间时,库里只剩一行没有 pid 的记录 —— 而 win32 那一侧没有
  * 放行闸,命令可能已经在跑。上一版到这里只能说一句「认不回来」,留下 id、命令、日志路径,
  * 却**没有任何能用来定位那个进程的身份**(审查原话)。
@@ -148,7 +148,7 @@ async function writeAdopted(
       .where(and(eq(monitors.id, subject.id), isNull(monitors.pid)));
   } catch (e) {
     // 回填不进去也要继续:本进程这一轮照旧按这份身份收尾/接回,比当它不存在强。
-    console.error(`[ash] 哨兵身份边条认回来了但写不进库 monitor=${subject.id} pid=${pid}:`, e);
+    console.error(`[navi] 哨兵身份边条认回来了但写不进库 monitor=${subject.id} pid=${pid}:`, e);
   }
   return { pid, pidStartedAt: startedAt };
 }
@@ -166,7 +166,7 @@ async function writeAdopted(
  * 进程仍然活着)。
  *
  * 为什么也不顺手记一笔回收债:债是**补刀授权**(清扫会把能证明的都收掉),而这一行的进程多半
- * 正常跑着,只是 ash 这一刻认不回它的号 —— 候选号一个信号都不授权(见 `candidate`)。责任要在
+ * 正常跑着,只是 navi 这一刻认不回它的号 —— 候选号一个信号都不授权(见 `candidate`)。责任要在
  * 「有人要结束它」的那一刻才记:点停、归档、删除都会走回收层,那时它才是该收的。
  *
  * 话写在 `ended_reason` 上:那一列是卡片上「原因」那一行,**running 的行也照样显示**
@@ -196,9 +196,9 @@ export async function notePendingIntent(
     await db.update(monitors).set({ endedReason: note })
       .where(and(eq(monitors.id, subject.id), eq(monitors.status, "running"), isNull(monitors.pid)));
   } catch (e) {
-    console.error(`[ash] 哨兵认领受阻这件事写不进库 monitor=${subject.id}:`, e);
+    console.error(`[navi] 哨兵认领受阻这件事写不进库 monitor=${subject.id}:`, e);
   }
-  console.error(`[ash] 哨兵这一刻认不回身份，创建意图原样留着 monitor=${subject.id}：${note}`);
+  console.error(`[navi] 哨兵这一刻认不回身份，创建意图原样留着 monitor=${subject.id}：${note}`);
   return note;
 }
 
@@ -219,6 +219,6 @@ export async function clearPendingIntentNote(monitorId: string): Promise<void> {
       like(monitors.endedReason, `${PENDING_NOTE_PREFIX}%`),
     ));
   } catch (e) {
-    console.error(`[ash] 受阻说明撤不掉 monitor=${monitorId}:`, e);
+    console.error(`[navi] 受阻说明撤不掉 monitor=${monitorId}:`, e);
   }
 }

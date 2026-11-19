@@ -6,15 +6,15 @@ import { extname, join } from "node:path";
 import type { Hono } from "hono";
 import { resolveInRoot, taskFileRoot } from "./file-browser.js";
 
-// 在 ash 里直接看任务做出来的**网页**。
+// 在 navi 里直接看任务做出来的**网页**。
 //
 // 为什么不复用 `/tasks/:id/file/raw`：那个端点带 `content-disposition: inline`，一旦给
-// html 配上 `text/html`，工作区里任何一份 html 就能以 ash 自己的源跑脚本——读得到登录态、
-// 能带着 cookie 调 ash 的接口。而这些 html 恰恰是 agent 现写的，正是最不该信的那一类。
+// html 配上 `text/html`，工作区里任何一份 html 就能以 navi 自己的源跑脚本——读得到登录态、
+// 能带着 cookie 调 navi 的接口。而这些 html 恰恰是 agent 现写的，正是最不该信的那一类。
 //
 // 所以单开这一条，三道锁叠着：
 //   ① 响应头 `Content-Security-Policy: sandbox allow-scripts …` —— **直接在地址栏打开
-//      也照样生效**，文档拿到的是不透明源，脚本能跑但碰不到 ash 的 cookie/localStorage，
+//      也照样生效**，文档拿到的是不透明源，脚本能跑但碰不到 navi 的 cookie/localStorage，
 //      也没法用登录态调接口。光靠 iframe 的 sandbox 属性挡不住直接导航。
 //   ② 前端那一侧的 `<iframe sandbox>`（`allow-same-origin` 一律不给）。
 //   ③ 路径里的**预览令牌**（见下）。
@@ -23,7 +23,7 @@ import { resolveInRoot, taskFileRoot } from "./file-browser.js";
 //
 // 第 1 轮审查复现：`web/dist/index.html` 这类构建产物点开是一片空白。两个原因叠在一起：
 //   • Vite / CRA / 绝大多数静态构建写的是 `/assets/index-x.js` 这种**根路径**引用。它不
-//     跟着页面地址走，而是直奔 ash 自己的根，于是取回来的是 ash 的 index.html；
+//     跟着页面地址走，而是直奔 navi 自己的根，于是取回来的是 navi 的 index.html；
 //   • 就算指对了，文档是不透明源，`<script type="module">` **恒定走 CORS**（跟有没有
 //     `crossorigin` 属性无关），没有 `access-control-allow-origin` 一律被拦。
 // 所以这里做三件事：把根路径引用改写到本次预览的站点根、摘掉 `crossorigin`（它只会把
@@ -57,7 +57,7 @@ import { resolveInRoot, taskFileRoot } from "./file-browser.js";
 //     解不出内容也拿不到源文本；`fetch` 一个文件再喂给 `FontFace` 那条路已经被堵死。
 //
 // 代价写在这里，别当成 bug 再修一轮：页面里**模块之间的相对 import**（多文件 ESM 源码、
-// 构建产物的懒加载分块）加载不了。ash 自己那份 dist 的入口块就没有静态 import，只有两处
+// 构建产物的懒加载分块）加载不了。navi 自己那份 dist 的入口块就没有静态 import，只有两处
 // 懒加载路由，所以外壳照常挂得出来。真要完整跑，走「在浏览器中打开」。
 //
 // ## 仍然做不到的事（所以外部打开那颗按钮不能撤）

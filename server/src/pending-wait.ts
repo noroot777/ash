@@ -4,8 +4,8 @@
 // deliveryVerdictOf),只是把判了「等」的那几种按结构说出来。托盘从前按 mode 写死「等待当前一轮
 // 结束」,任务早就不在跑、真正挡着它的是同队另一条任务时,用户只能得出「卡住了」。
 import { and, eq, inArray } from "drizzle-orm";
-import type { ScheduledMessageWait } from "@ash/shared/scheduled-message-wait";
-import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
+import type { ScheduledMessageWait } from "@navi/shared/scheduled-message-wait";
+import { isUserAuthoredMessage } from "@navi/shared/scheduled-message-author";
 import { db } from "./db/index.js";
 import { queueItems, scheduledMessages, tasks } from "./db/schema.js";
 import type { AfterGate } from "./pending-after.js";

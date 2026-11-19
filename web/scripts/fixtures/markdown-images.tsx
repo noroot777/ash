@@ -40,7 +40,7 @@ const REPORT = [
   "",
   "报告里提被审任务工作目录里那一份时写的是**绝对路径** —— 那是显式归属，不是猜的：",
   "",
-  "![工作目录](/Users/demo/code/ash/.worktrees/x/output/shot.svg)",
+  "![工作目录](/Users/demo/code/navi/.worktrees/x/output/shot.svg)",
 ].join("\n");
 
 /**
@@ -72,7 +72,7 @@ const CROSSREF_REPORT = [
 ].join("\n");
 
 // 服务端落盘时留住了源文件的名字（`<12 位 id>-<原名>`）；配对**不靠**它，靠 source 标注。
-const UPLOADS = "/Users/demo/code/ash/data/uploads";
+const UPLOADS = "/Users/demo/code/navi/data/uploads";
 const up = (name: string) => `${UPLOADS}/${name}`;
 
 function segment(id: string, markdown: string, sources: AttachmentSource[] = []): AgentContentSegment {
@@ -102,13 +102,13 @@ const CONCLUSION = turn(
     "",
     "顺手留了一张手机版：",
     "",
-    "![手机版](/Users/demo/code/ash/.worktrees/x/output/playwright/wake-input-mobile.svg)",
+    "![手机版](/Users/demo/code/navi/.worktrees/x/output/playwright/wake-input-mobile.svg)",
   ].join("\n"),
   [
     { path: up("aaaaaaaaaaaa-wake-input-desktop.svg"), source: "output/playwright/wake-input-desktop.svg" },
     {
       path: up("bbbbbbbbbbbb-wake-input-mobile.svg"),
-      source: "/Users/demo/code/ash/.worktrees/x/output/playwright/wake-input-mobile.svg",
+      source: "/Users/demo/code/navi/.worktrees/x/output/playwright/wake-input-mobile.svg",
     },
   ],
   // 正文里没提它（工具结果截图之类），照旧铺成卡片。
@@ -164,13 +164,13 @@ const AWKWARD = turn(
   [
     "![中文](<output/结果 图.svg>)",
     "",
-    "![file](file:///Users/demo/code/ash/output/by-url.svg)",
+    "![file](file:///Users/demo/code/navi/output/by-url.svg)",
     "",
-    "![没来源](file:///Users/demo/code/ash/output/gone.svg)",
+    "![没来源](file:///Users/demo/code/navi/output/gone.svg)",
   ].join("\n"),
   [
     { path: up("iiiiiiiiiiii-结果-图.svg"), source: "output/结果 图.svg" },
-    { path: up("jjjjjjjjjjjj-by-url.svg"), source: "file:///Users/demo/code/ash/output/by-url.svg" },
+    { path: up("jjjjjjjjjjjj-by-url.svg"), source: "file:///Users/demo/code/navi/output/by-url.svg" },
   ],
 );
 
@@ -233,7 +233,7 @@ const PROTOCOL = [segment("protocol:0", [
   "",
   "这张是本机文件、没有副本也不在工作目录里：",
   "",
-  "![没了](file:///Users/demo/code/ash/output/vanished.svg)",
+  "![没了](file:///Users/demo/code/navi/output/vanished.svg)",
 ].join("\n"))];
 
 /**

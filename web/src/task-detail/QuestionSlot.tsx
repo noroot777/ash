@@ -7,9 +7,9 @@
 // 平常的回复框回到它下面。卡从下面升上来，答完原路收回去；收回去那 200ms 里卡片还是答完那一刻的
 // 样子，但点不动（inert），回复框等它走了才出来。
 import { useEffect, useState } from "react";
-import type { TaskListItem } from "@ash/shared";
-import { questionKey, type QuestionAnswerInput } from "@ash/shared/questions";
-import { activeDispatchPlan, type DispatchLaunchInput, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import type { TaskListItem } from "@navi/shared";
+import { questionKey, type QuestionAnswerInput } from "@navi/shared/questions";
+import { activeDispatchPlan, type DispatchLaunchInput, type DispatchRunTarget } from "@navi/shared/dispatch-plan";
 import { motionReduced } from "../lib/useSwapText.ts";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { DispatchPlanCard } from "./DispatchPlanCard.tsx";

@@ -166,7 +166,7 @@ try {
   });
   assert.equal(exitColors.text, "", "return must be icon-only; its name lives in the hover tip");
   assert.match(exitColors.background, /rgba\(0, 0, 0, 0\)|transparent/, "return must not be a filled button");
-  // 出口只有这一颗：工作台选项里不再另放「返回 ash」。
+  // 出口只有这一颗：工作台选项里不再另放「返回 navi」。
   await page.getByLabel("工作台选项", { exact: true }).click();
   const optionsMenu = page.getByRole("menu", { name: "工作台选项" });
   await optionsMenu.waitFor();
@@ -285,7 +285,7 @@ try {
     assert.equal(exited.searchParams.get(name), null, `${name} must be cleared on return`);
   await page.reload();
   await page.locator(".workspace-sidebar").waitFor();
-  assert.equal(await page.locator(".workspace-git-page").count(), 0, "refresh after return must stay in ash");
+  assert.equal(await page.locator(".workspace-git-page").count(), 0, "refresh after return must stay in navi");
 
   const mobilePage = await browser.newPage({ viewport: mobile });
   const mobileUrl = new URL(url);

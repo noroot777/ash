@@ -1,4 +1,4 @@
-// test-ash-mcp-inject.ts 里要真 CLI 的那两段:没装对应 CLI 就跳过(打一行 ⚠)。
+// test-navi-mcp-inject.ts 里要真 CLI 的那两段:没装对应 CLI 就跳过(打一行 ⚠)。
 //
 // MCP 服务都是这里自带的最小桩(只答 initialize / tools/list),不依赖 mcp/dist 有没有 build;
 // 两家都只走到「启动报告」那一步就收手,不调模型、不花额度,也不碰用户的 CLI 配置(各用临时目录)。
@@ -7,10 +7,10 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@ash/shared";
-import { ASH_MCP_SERVER_NAME as NAME, ASH_MCP_TOOLS } from "@ash/shared/mcp";
-import { CodexAshMcpStatus } from "../src/executors/ash-mcp-confirm.js";
-import { codexAshMcpArgs } from "../src/executors/ash-mcp-inject.js";
+import type { AgentEvent } from "@navi/shared";
+import { NAVI_MCP_SERVER_NAME as NAME, NAVI_MCP_TOOLS } from "@navi/shared/mcp";
+import { CodexNaviMcpStatus } from "../src/executors/navi-mcp-confirm.js";
+import { codexNaviMcpArgs } from "../src/executors/navi-mcp-inject.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
 
 /** 一个最小 MCP 桩。`<标记> [--die <ms>] [工具…]`:拉起时把标记追加进 `started`;`--die` = 握手不答、过一会儿退出。 */
@@ -62,7 +62,7 @@ export async function checkRealClaudePrecedence(root: string): Promise<void> {
       cwd: dir, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
       // 模型端点指到死端口、key 是占位:init 一到就收手,不会真发请求。
-      env: { ...process.env, CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: "ash-test-not-a-key", ANTHROPIC_BASE_URL: "http://127.0.0.1:9", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: "navi-test-not-a-key", ANTHROPIC_BASE_URL: "http://127.0.0.1:9", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
     });
     let out = "";
     child.stdout!.on("data", (d) => { out += d; if (out.includes('"subtype":"init"')) child.kill(); });
@@ -81,28 +81,28 @@ export async function checkRealClaudePrecedence(root: string): Promise<void> {
 
 /**
  * 真 codex app-server:startupStatus 与 mcpServerStatus/list 的真实形状,经产品的
- * `CodexAshMcpStatus` 判。只走到 thread/start,不发 turn/start。
+ * `CodexNaviMcpStatus` 判。只走到 thread/start,不发 turn/start。
  */
 export async function checkRealCodexAppServer(root: string): Promise<void> {
   if (!resolveLaunch("codex", ["app-server", "--stdio"])) { console.log("⚠ 没装 codex,跳过真 app-server 那一段"); return; }
   const { stub } = writeStub(root);
-  const entry = (args: string[]) => ({ command: process.execPath, args: [stub, "injected", ...args], env: { ASH_URL: "http://127.0.0.1:9" } });
+  const entry = (args: string[]) => ({ command: process.execPath, args: [stub, "injected", ...args], env: { NAVI_URL: "http://127.0.0.1:9" } });
   const probe = async (config: string, injected: ReturnType<typeof entry>) => {
     const home = mkdtempSync(join(root, "codex-app-"));
     writeFileSync(join(home, "config.toml"), config);
-    const launch = resolveLaunch("codex", ["app-server", "--stdio", ...codexAshMcpArgs(undefined, injected)])!;
+    const launch = resolveLaunch("codex", ["app-server", "--stdio", ...codexNaviMcpArgs(undefined, injected)])!;
     const child = spawn(launch.file, launch.args, {
       cwd: home, env: { ...process.env, CODEX_HOME: home }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
     });
-    const status = new CodexAshMcpStatus();
+    const status = new CodexNaviMcpStatus();
     const said: AgentEvent[] = [];
     const push = (e: AgentEvent) => said.push(e);
     const waiters = new Map<number, (v: unknown) => void>();
     let next = 0;
     let threadId: unknown = null;
-    let ashSettled: () => void = () => {};
-    const ashDone = new Promise<void>((r) => { ashSettled = r; });
+    let naviSettled: () => void = () => {};
+    const naviDone = new Promise<void>((r) => { naviSettled = r; });
     const request = (method: string, params: unknown) => new Promise<unknown>((resolve, reject) => {
       const id = ++next;
       waiters.set(id, (v) => ((v as { __error?: unknown })?.__error ? reject(new Error(String((v as { __error: unknown }).__error))) : resolve(v)));
@@ -116,13 +116,13 @@ export async function checkRealCodexAppServer(root: string): Promise<void> {
       const e = status.update(m.params!);
       if (e) push(e);
       status.checkTools(request, m.params!.threadId ?? threadId, push);
-      if (m.params!.name === NAME && m.params!.status !== "starting") ashSettled();
+      if (m.params!.name === NAME && m.params!.status !== "starting") naviSettled();
     });
     try {
-      await request("initialize", { clientInfo: { name: "ash-test", version: "1" }, capabilities: { experimentalApi: true } });
+      await request("initialize", { clientInfo: { name: "navi-test", version: "1" }, capabilities: { experimentalApi: true } });
       child.stdin!.write('{"method":"initialized"}\n');
       threadId = ((await request("thread/start", { cwd: home, approvalPolicy: "never", sandbox: "danger-full-access" })) as { thread: { id: string } }).thread.id;
-      await Promise.race([ashDone, new Promise((r) => setTimeout(r, 15_000))]);
+      await Promise.race([naviDone, new Promise((r) => setTimeout(r, 15_000))]);
       const e = await status.settle(10_000);
       if (e) push(e);
       return said as Extract<AgentEvent, { kind: "error" }>[];
@@ -131,7 +131,7 @@ export async function checkRealCodexAppServer(root: string): Promise<void> {
       await new Promise((r) => (child.exitCode !== null ? r(null) : child.once("close", r)));
     }
   };
-  const full = entry([...ASH_MCP_TOOLS]);
+  const full = entry([...NAVI_MCP_TOOLS]);
   assert.deepEqual(await probe("", full), [], "空配置:注入的那条 ready、工具齐全 ⇒ 不出声");
   const narrowed = await probe(`[mcp_servers.${NAME}]\ncommand = "node"\ndisabled_tools = ["complete_task", "debate_reply"]\n`, full);
   assert.equal(narrowed.length, 1, `用户配置里的 disabled_tools 被深合并保留 ⇒ 一条诊断:${JSON.stringify(narrowed)}`);

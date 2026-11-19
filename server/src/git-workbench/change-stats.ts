@@ -1,4 +1,4 @@
-import type { GitFile } from "@ash/shared/git-workbench";
+import type { GitFile } from "@navi/shared/git-workbench";
 import { git } from "./core.js";
 
 export async function readChangeStats(root: string, cached: boolean) {

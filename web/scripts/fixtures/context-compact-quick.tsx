@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import type { Session } from "@ash/shared";
+import type { Session } from "@navi/shared";
 import { ContextMeterChip } from "../../src/components/ContextMeterChip.tsx";
 import "../../src/styles/global.css";
 

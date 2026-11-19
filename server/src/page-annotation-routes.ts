@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
-import { parseAnnotationBatch } from "@ash/shared/page-annotation-batch";
+import { parseAnnotationBatch } from "@navi/shared/page-annotation-batch";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -66,7 +66,7 @@ export async function replyWithAnnotationBatch(c: Context, taskId: string, batch
     if (!existing) return c.json({ error: "请先保存批次" }, 409);
     const record = await submitAnnotationBatch(taskId, batchId, revision, ownerIdOf(actorOf(c)));
     // The response records queue acceptance; actual delivery remains owned by the existing queue.
-    void deliverPendingMessages(taskId).catch((error) => console.error("[ash] 批注队列投递失败", error));
+    void deliverPendingMessages(taskId).catch((error) => console.error("[navi] 批注队列投递失败", error));
     return c.json({ annotationBatch: record }, 202);
   } catch (reason) {
     return c.json({ error: reason instanceof Error ? reason.message : "投递失败，草稿仍保留" }, reason instanceof AnnotationConflict ? 409 : 500);

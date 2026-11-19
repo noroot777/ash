@@ -6,7 +6,7 @@
 //   · 漏判（该认出撞车却没认）= 用户干等 120 秒，再收到一句「等了 120 秒还没起来」，
 //     真原因埋在日志末尾要他自己翻。烦，但至少他知道这一站失败了。
 //   · 误判（把「我自己换个端口」当成撞车）= 一个**本来跑起来了**的预览被我们杀掉并
-//     判死。用户看到的是「ash 把好好的服务弄挂了」。
+//     判死。用户看到的是「navi 把好好的服务弄挂了」。
 //
 // 而漏判还有第三种更坏的下场（不在这份测试里，在 preview.ts 的顺序上）：占着端口的
 // 那个进程是活的，连得上、也印着 http://localhost:5173，于是会被误报成「预览已起」，
@@ -35,8 +35,8 @@ check(
   "端口 5173 已经被别的进程占着",
 );
 check(
-  "ash server 自己的拒绝启动",
-  portConflict("[server] [ash] Refusing to start: port 4317 is already in use.\n"),
+  "navi server 自己的拒绝启动",
+  portConflict("[server] [navi] Refusing to start: port 4317 is already in use.\n"),
   "端口 4317 已经被别的进程占着",
 );
 check(
@@ -72,9 +72,9 @@ check("Windows 的写法也说一句，不然照抄的 $PORT 在 cmd 上是字�
 // 「读 PORT 环境变量的那一半不用改命令」必须一起说：少了这句，用户会给 Next 加一个
 // 它不认的 --port，学到一条错规则。
 check("读 PORT 那一半的出路也给", ignored.includes("不用改命令"), true);
-check("每行都带 [ash] 前缀，混在应用日志里认得出", ignored.trimEnd().split("\n").every((line) => line.startsWith("[ash] ")), true);
+check("每行都带 [navi] 前缀，混在应用日志里认得出", ignored.trimEnd().split("\n").every((line) => line.startsWith("[navi] ")), true);
 // 这段会被 logFollower 当成新日志读一遍，不能撞上那两个一次性信号的判据。
-check("不冒充调度器自述", ignored.includes("[ash] scheduler started"), false);
+check("不冒充调度器自述", ignored.includes("[navi] scheduler started"), false);
 check("不冒充 /api 打回本机的自述", declaredHostApiPort(ignored), null);
 
 // —— 日志里哪个地址才是预览本尊 ——
@@ -104,7 +104,7 @@ check("同一份日志问两次答案一样", pickPreviewUrl(both, 54798), pickP
 
 // —— 一条命令同时起前后端：配角的端口不能被当成预览本尊 ——
 // 后端几乎总比前端先起来（前端还在编译），它印的那句「Tomcat started on port …」如果被
-// 采信，用户点开预览看到的是一个返回 JSON 的地址。这几个端口是 ash 自己借给配角的
+// 采信，用户点开预览看到的是一个返回 JSON 的地址。这几个端口是 navi 自己借给配角的
 // （$PORT2…），谁拿了它一清二楚，所以这里不是猜，是排除。
 const pair = "Tomcat started on port 35725 (http) with context path '/'\n";
 check("配角自述的端口不算数（前端还没起来时宁可回 null）", pickPreviewUrl(pair, 34233, [35725]), null);
@@ -120,33 +120,33 @@ check("配角有好几个也一样一个不认", pickPreviewUrl(pairUrl, 34233, 
 // —— 撞车 + 自己的地址同时出现：preview.ts 的那个例外 ——
 // 后端撞上本机已在跑的那份、前端认了 $PORT 好好地起来了。两个纯函数各自照旧回答，
 // 由 preview.ts 组合成「这次不算失败」。这里钉的是它俩的输入。
-const mixed = "[server] [ash] Refusing to start: port 4317 is already in use.\n"
+const mixed = "[server] [navi] Refusing to start: port 4317 is already in use.\n"
   + "[web] ➜  Local:   http://localhost:54798/\n";
 check("撞车行照样认得出来", portConflict(mixed), "端口 4317 已经被别的进程占着");
 check("但预览本尊落在借来的端口上", pickPreviewUrl(mixed, 54798)?.lent, true);
 
-// —— ash 自己的预览：整套起（scripts/dev.mjs）——
+// —— navi 自己的预览：整套起（scripts/dev.mjs）——
 // 预览起的是这个分支的前端 **和** 后端（2026-08-07 改的，理由在 dev.mjs 头部）。于是
 // 日志里必然有两个本机地址，而后端那行往往先打出来。dev.mjs 转发后端日志时把 scheme
 // 去掉就是为这一条：`lent` 优先只在前端那行**已经打出来**之后才管用，在那之前 `first`
 // 会把用户领到 API 上（点开一片 JSON，还以为预览坏了）。所以钉的是更强的一条——
 // 后端那行**根本不该成为候选**，连兜底路径都够不着它。
-const stack = "[api] [ash] server on localhost:62398\n"
+const stack = "[api] [navi] server on localhost:62398\n"
   + "  ➜  Local:   http://127.0.0.1:62396/\n";
 check("后端那行进不了候选（scheme 已被 dev.mjs 去掉）", pickPreviewUrl(stack, null), {
   url: "http://127.0.0.1:62396/", port: 62396, lent: false,
 });
-check("前端那行还没打出来时也不会误挑后端", pickPreviewUrl("[api] [ash] server on localhost:62398\n", 62396), null);
+check("前端那行还没打出来时也不会误挑后端", pickPreviewUrl("[api] [navi] server on localhost:62398\n", 62396), null);
 
-// —— ash 自己的预览：只起前端（scripts/dev.mjs 的 frontend 档）——
-// 2026-09-09 真出过：这一档只起前端，/api 直接打到本机那份 ash，开场那行写的是
+// —— navi 自己的预览：只起前端（scripts/dev.mjs 的 frontend 档）——
+// 2026-09-09 真出过：这一档只起前端，/api 直接打到本机那份 navi，开场那行写的是
 // 「/api 打到 http://127.0.0.1:4317。」。两处一起坏——
-//   ① 它是那几秒里日志中唯一的地址，于是 `first` 认了 4317，预览指到 ash 自己身上；
+//   ① 它是那几秒里日志中唯一的地址，于是 `first` 认了 4317，预览指到 navi 自己身上；
 //   ② 句号被 URL_RE 一起收了进去，存进 preview.json，用户点开预览时 `new URL()` 抛，
 //      Hono 兜底成一句 Internal Server Error（表现就是「预览打不开，还是英文的」）。
 // dev.mjs 那行现在不印 scheme 了，但这里钉的是判读侧：**哪怕它照旧印，也不许认**。
 const frontendOnly = "[dev] 预览：只起前端 37009，/api 打到 http://127.0.0.1:4317。\n";
-check("ash 自己监听的端口不进候选", pickPreviewUrl(frontendOnly, 37009, [4317]), null);
+check("navi 自己监听的端口不进候选", pickPreviewUrl(frontendOnly, 37009, [4317]), null);
 check(
   "排除之后照旧等前端那行",
   pickPreviewUrl(`${frontendOnly}  ➜  Local:   http://127.0.0.1:37009/\n`, 37009, [4317]),
@@ -253,15 +253,15 @@ check("「端口被占」那行不许拿来拼地址", pickPreviewUrl("Error: Po
 check("光有个数字不算自述", pickPreviewUrl("build finished in 8080 ms\n", null), null);
 
 // —— 「没装依赖」得当场说破，而不是甩一段日志尾巴 ——
-// 任务 worktree 是干净检出，node_modules 天生不在里面。ash 会自己在**项目之外**备一份挂
-// 进来（preview-deps.ts），走到这个提示说明那一步没成 —— 于是提示要交代两件事：ash 试过
+// 任务 worktree 是干净检出，node_modules 天生不在里面。navi 会自己在**项目之外**备一份挂
+// 进来（preview-deps.ts），走到这个提示说明那一步没成 —— 于是提示要交代两件事：navi 试过
 // 什么、以及人工那条路的两条真实路径。
 check("npm/sh 找不到可执行文件", !!missingDepsHint("sh: 1: vite: not found\n"), true);
 check("node 找不到模块", !!missingDepsHint("Error: Cannot find module 'vite'\n"), true);
 check("ESM 版说法", !!missingDepsHint("code: 'ERR_MODULE_NOT_FOUND'\n"), true);
 check("pnpm 没有 lock", !!missingDepsHint("ERR_PNPM_NO_LOCKFILE  Cannot install with frozen-lockfile\n"), true);
 check("Windows 的说法", !!missingDepsHint("'vite' is not recognized as an internal or external command\n"), true);
-check("提示里交代 ash 自己在项目外备过一份", missingDepsHint("sh: vite: not found\n")?.includes("data/deps"), true);
+check("提示里交代 navi 自己在项目外备过一份", missingDepsHint("sh: vite: not found\n")?.includes("data/deps"), true);
 check(
   "备依赖失败的理由原样带上",
   missingDepsHint("sh: vite: not found\n", [], [{ rel: "front", ok: false, detail: "没网", link: null }])?.includes("没网"),
@@ -352,25 +352,25 @@ check(
   8080,
 );
 
-// 「我的 /api 打到那台 ash 上」这句自述是 A 档唯一的凭据（见 preview-access.ts 顶部）：
+// 「我的 /api 打到那台 navi 上」这句自述是 A 档唯一的凭据（见 preview-access.ts 顶部）：
 // 它一旦被误认，用户以为在验分支后端、实际是拿自己的身份读写主库（第 2 轮审查 P1）。
-check("自述打给本机 ash", declaredHostApiPort("[ash] preview-api-host 127.0.0.1:4317\n"), 4317);
-check("localhost 也算回环", declaredHostApiPort("[ash] preview-api-host localhost:4317\n"), 4317);
-check("着色的自述照样认", declaredHostApiPort(`${ESC}[36m[ash] preview-api-host 127.0.0.1:4317${ESC}[0m\n`), 4317);
+check("自述打给本机 navi", declaredHostApiPort("[navi] preview-api-host 127.0.0.1:4317\n"), 4317);
+check("localhost 也算回环", declaredHostApiPort("[navi] preview-api-host localhost:4317\n"), 4317);
+check("着色的自述照样认", declaredHostApiPort(`${ESC}[36m[navi] preview-api-host 127.0.0.1:4317${ESC}[0m\n`), 4317);
 check("没说过就是没说过", declaredHostApiPort("[dev] 预览：整套起——后端 5001、前端 5173\n"), null);
 check(
   "说的不是回环地址，不认——反代无论如何只会拨回环",
-  declaredHostApiPort("[ash] preview-api-host evil.example.com:4317\n"),
+  declaredHostApiPort("[navi] preview-api-host evil.example.com:4317\n"),
   null,
 );
 check(
   "夹在别的话里也认得出（前端那行先打出来的情况）",
-  declaredHostApiPort("VITE ready in 300 ms\n[ash] preview-api-host 127.0.0.1:4317\nLocal: http://localhost:5173/\n"),
+  declaredHostApiPort("VITE ready in 300 ms\n[navi] preview-api-host 127.0.0.1:4317\nLocal: http://localhost:5173/\n"),
   4317,
 );
 check(
   "这句自述不能被当成预览本尊的地址",
-  pickPreviewUrl("[ash] preview-api-host 127.0.0.1:4317\n", null),
+  pickPreviewUrl("[navi] preview-api-host 127.0.0.1:4317\n", null),
   null,
 );
 

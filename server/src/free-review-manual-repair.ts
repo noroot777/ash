@@ -5,7 +5,7 @@
 // 的是审查链自己的状态机(预约、结算、换轮、收尾)。两边唯一的接口就是下面这几个 import。
 //
 // 这一段自己的不变量都在各函数的注释里,拆文件没有改动其中任何一条。
-import { reviewAnchorMatches } from "@ash/shared/free-workflow";
+import { reviewAnchorMatches } from "@navi/shared/free-workflow";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

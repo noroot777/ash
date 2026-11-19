@@ -1,4 +1,4 @@
-import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
+import type { ContextUsage, Session, TokenUsage } from "@navi/shared";
 import { ContextMeterChip } from "./ContextMeterChip.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import { TokenUsageChip } from "./TokenUsageChip.tsx";

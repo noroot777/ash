@@ -11,11 +11,11 @@
 //    而你的分支、index、stash 全程没被碰过。
 //
 // 3. **落到对端的 `.worktrees/win-remote`,绝不动它的主工作区。** 那台机器上的
-//    `D:\ai_workspace\ash` 是**正在跑着的 ash 自己**,而且有用户没提交的本地改动
+//    `D:\ai_workspace\ash` 是**正在跑着的 navi 自己**,而且有用户没提交的本地改动
 //    (`server/src/executors/claude.ts` 等)。往那儿 checkout 等于既覆盖别人的活,又把
 //    live 服务的源码换掉。放在主仓内部的 `.worktrees/` 下还白捡一个好处:Node 解析
 //    node_modules 会逐级向上,worktree 里不装依赖也能直接用主仓那份。
-//    唯一要补的是 `node_modules/@ash/*` —— 不补的话 `@ash/shared` 会解析到
+//    唯一要补的是 `node_modules/@navi/*` —— 不补的话 `@navi/shared` 会解析到
 //    **主仓的** shared,于是你改了 shared 却测的是旧代码(docs 里记过这个坑)。
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -43,10 +43,10 @@ const ADOPT = /^(1|true|yes)$/i.test(process.env.WIN_REMOTE_ADOPT ?? "");
  *
  * 拼字符串之前必须先过这一关。上一版直接 `repoPath + '\' + WORKSPACE`,于是
  * `WIN_REMOTE_WORKSPACE=.` 和 `=''` 都解析成 repo 根本身 —— 那台机器上的 repo 根是**正在跑
- * ash、带着用户未提交内容**的 live 主仓。sync 走的那条路会在所有权校验上拒掉它
+ * navi、带着用户未提交内容**的 live 主仓。sync 走的那条路会在所有权校验上拒掉它
  * (git-dir = common-dir),但 exec 和 test --no-sync 不经过 sync,直接把它当 cwd 用,
  * 于是「绝不动主工作区」这句承诺在两个入口上是空的。实测 doctor 报「测试 worktree
- * D:\...\ash\. 已就绪」、exec 报 `CWD=D:\ai_workspace\ash`,都 exit 0。
+ * D:\...\navi\. 已就绪」、exec 报 `CWD=D:\ai_workspace\ash`,都 exit 0。
  *
  * 判据只有一条:**它必须是 repo 下的一个真子目录**。绝对路径、UNC、`.`、`..`、空值一律拒 ——
  * 拒在这里,后面每个入口就都不用再各自想一遍。至于「这个子目录是不是我建的那个 worktree」,
@@ -98,8 +98,8 @@ export const workspaceGuardPs = (repoPath) => {
   ].join("\n");
 };
 
-// 这四个包在 workspace 里互相 import,靠 `node_modules/@ash/<pkg>` 找到对方。
-const ASH_LINKS = ["shared", "server", "web", "mcp"];
+// 这四个包在 workspace 里互相 import,靠 `node_modules/@navi/<pkg>` 找到对方。
+const NAVI_LINKS = ["shared", "server", "web", "mcp"];
 const WORKSPACE_DEP_LINKS = ["server", "web", "mcp"];
 
 const git = (args, opts = {}) =>
@@ -119,7 +119,7 @@ export function snapshotWorkspace(ref = `${WIP_PREFIX}${randomBytes(6).toString(
     // **软链**(见 shared 那条约定),软链在 git 眼里不是目录,于是这条 ignore 一点都不管用,
     // `add -A` 把它当普通文件收进快照。到了 Windows(git 默认不建符号链接)它被还原成一个
     // **内容是路径字符串的普通文件**,名字正好占住 `node_modules` —— 后面 `mklink /J` 要在
-    // 它下面建 `@ash\*`,报的是 "The system cannot find the path specified.",跟软链、
+    // 它下面建 `@navi\*`,报的是 "The system cannot find the path specified.",跟软链、
     // 跟 ignore 规则看着都毫无关系。实测踩过一次,查了半小时。
     // 先正常 add（真目录会被 ignore），再从临时 index 摘掉软链形态；把 ignored 真目录写进
     // exclude pathspec 会让部分 Git 版本反而报「显式添加了 ignored path」，装过依赖就同步不了。
@@ -186,7 +186,7 @@ export async function serveRepo(port = 0) {
   throw lastErr ?? new Error("git daemon 起不来");
 }
 
-/** 对端拉取 + 检出到独立 worktree,并补齐 @ash 软链。返回对端的 HEAD sha。 */
+/** 对端拉取 + 检出到独立 worktree,并补齐 @navi 软链。返回对端的 HEAD sha。 */
 export async function syncToRemote({ repoPath, onLine = null, projectId = null, guard = "" } = {}) {
   const { sha, ref, root } = snapshotWorkspace();
   let daemon = null;
@@ -276,18 +276,18 @@ while ($__stack.Count -gt 0) {
 $__cleaned = @(git -C $wt clean -xdff)
 if ($LASTEXITCODE -ne 0) { throw ('git clean 失败:' + ($__cleaned -join '; ')) }
 Write-Output ('CLEAN=' + $__cleaned.Count + '|' + $__links)
-# 不补这几个软链,@ash/shared 会向上解析到主仓那份 —— 改了 shared 却测旧代码。
+# 不补这几个软链,@navi/shared 会向上解析到主仓那份 —— 改了 shared 却测旧代码。
 # 「缺了就建」不够:junction **在**、却指着主仓,是同一个坑的另一半,而且更隐蔽 —— 检出、
 # SHA 校验全绿,测的却仍是主仓旧代码。所以每次同步都把四个目标读出来核对,并把它们回传给
 # 开发机当成功判据的一部分(见下面的 LINK= 解析)。
-$scope = Join-Path $wt 'node_modules\@ash'
+$scope = Join-Path $wt 'node_modules\@navi'
 New-Item -ItemType Directory -Force -Path $scope | Out-Null
-foreach ($p in @(${ASH_LINKS.map(psq).join(",")})) {
+foreach ($p in @(${NAVI_LINKS.map(psq).join(",")})) {
   $link = Join-Path $scope $p
   $want = ([string](Join-Path $wt $p)).TrimEnd('\')
   $it = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
   # 真目录/真文件占了位置就停手报错:那可能是别人装的依赖或手工放的东西,自动删属于越权。
-  if ($it -and $it.LinkType -ne 'Junction') { throw ('node_modules\@ash\' + $p + ' 已存在且不是 junction(' + $it.LinkType + '),不敢自动删,请人工处理') }
+  if ($it -and $it.LinkType -ne 'Junction') { throw ('node_modules\@navi\' + $p + ' 已存在且不是 junction(' + $it.LinkType + '),不敢自动删,请人工处理') }
   if ($it) {
     $cur = ([string]($it.Target | Select-Object -First 1)) -replace '^\\\\\?\\',''
     if ($cur.TrimEnd('\') -ne $want) {
@@ -348,21 +348,21 @@ Write-Output ('RESIDUE=' + $__st.Count + '|' + (($__st | Select-Object -First 12
           `  已中止:继续测下去,结果会被记在一份并不存在于对端的改动上。\n${res.out}`,
       );
     }
-    // SHA 对上只说明 worktree 自己是对的,不说明 Node 会从这儿解析 `@ash/*`。
-    // junction 指着主仓时:fetch、checkout、SHA 校验全绿,`import '@ash/shared'` 拿到的
+    // SHA 对上只说明 worktree 自己是对的,不说明 Node 会从这儿解析 `@navi/*`。
+    // junction 指着主仓时:fetch、checkout、SHA 校验全绿,`import '@navi/shared'` 拿到的
     // 却是主仓旧代码 —— 一个「全部通过」的假绿。所以四个目标同样是成功判据。
     if (!worktree) throw new Error(`同步没回传 worktree 路径,输出不完整:\n${res.out}`);
     const links = new Map(
       [...res.out.matchAll(/^LINK=([^|\r\n]+)\|([^\r\n]*)/gm)].map((m) => [m[1].trim(), m[2].trim()]),
     );
     const norm = (s) => s.replace(/\\+$/, "").toLowerCase(); // NTFS 不分大小写,比较也别分
-    const bad = ASH_LINKS.map((p) => ({ p, want: `${worktree}\\${p}`, got: links.get(p) ?? "(没回传)" }))
+    const bad = NAVI_LINKS.map((p) => ({ p, want: `${worktree}\\${p}`, got: links.get(p) ?? "(没回传)" }))
       .filter(({ want, got }) => norm(got) !== norm(want));
     if (bad.length) {
       throw new Error(
-        `对端 node_modules/@ash 没指向本次 worktree:\n` +
+        `对端 node_modules/@navi 没指向本次 worktree:\n` +
           bad.map(({ p, want, got }) => `  ${p}: ${got}\n    应为 ${want}`).join("\n") +
-          `\n  已中止:这么跑下去 @ash/* 解析到的是别处的代码,测了也不算数。\n${res.out}`,
+          `\n  已中止:这么跑下去 @navi/* 解析到的是别处的代码,测了也不算数。\n${res.out}`,
       );
     }
     const packageLinks = new Map(

@@ -1,4 +1,4 @@
-// agent 进程与 ash 解绑:输出写**文件**而不是匿名管道。
+// agent 进程与 navi 解绑:输出写**文件**而不是匿名管道。
 //
 // 为什么这一层是必要的:spawn.ts 里的 agent 早就是 `detached: true`(自成进程组),
 // server 重启时那句 `kill $OLD` 根本打不到它们;真正杀死它们的是 **stdout 匿名
@@ -343,10 +343,10 @@ export function detachedInfo(
   child: ChildProcess,
 ): { pid: number; committed: () => number; unitToken: string | null } | undefined {
   const c = child as Partial<DetachedChild>;
-  if (typeof c.ashCommitted !== "function" || !c.pid) return undefined;
+  if (typeof c.naviCommitted !== "function" || !c.pid) return undefined;
   // 记号在这一处取出来是刻意的:九个执行器都从这个函数拿 `handle.detached`,在这里取就
   // 不会有哪条路忘记带上它(忘了的代价是静默的 —— 那一轮的后代只剩 pid 一条线索)。
-  return { pid: c.pid, committed: c.ashCommitted, unitToken: unitTokenOf(child) };
+  return { pid: c.pid, committed: c.naviCommitted, unitToken: unitTokenOf(child) };
 }
 
 // 重启后接管一个还活着的 agent。

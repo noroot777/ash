@@ -39,8 +39,8 @@
 // 没存成的档位正在生效,而裸回车按的是旧档 —— 界面撒谎比显示滞后危险得多
 // (第 4 轮审查问题 1)。在途的选择只经 `publish()` 推给 sendKey,而显示那一档的卡片
 // 直接订阅它(`useComposerSendKey`),所以显示、提示、按键三者同源,不会各说一套。
-import type { AppSettings } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import type { AppSettings } from "@navi/shared";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
 import { json, request } from "./apiClient.ts";
 import { syncHostCliPolicy } from "./hostCliPolicy.ts";
 import { syncComposerSendKey } from "./sendKey.ts";

@@ -17,7 +17,7 @@
 // 会话里渲染出来键挂在哪一句后面，见 test-footnote-actions-dom.mjs。
 // 跑：npm -w web run test:footnote-actions
 import assert from "node:assert/strict";
-import type { FreeReviewDispute, FreeReviewRun, Session, TaskListItem } from "@ash/shared";
+import type { FreeReviewDispute, FreeReviewRun, Session, TaskListItem } from "@navi/shared";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
@@ -38,9 +38,9 @@ const DISPUTE_AT = "2026-11-14T00:29:04.631Z";
 const END_AT = "2026-11-14T00:29:17.502Z";
 const WAKE_AT = "2026-11-14T00:28:44.978Z";
 const DISPUTE = "执行者认可这一轮意见，但说该另开一个任务去改，不在这个任务里改（第 1 轮 · 顶级审查）。\n"
-  + "它的说法：只剩一条要改 ash 服务端的调度，建议单开一个服务端任务。\n"
+  + "它的说法：只剩一条要改 navi 服务端的调度，建议单开一个服务端任务。\n"
   + "现在由你裁定：让它接着改 / 这一轮不用改了 / 把那几条转成独立任务；拿不准就先让双方辩一轮。（自动复审已取消，等你拍板。）";
-const UNSUBMITTED = "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。"
+const UNSUBMITTED = "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 navi 的完成协议记为未完成。"
   + "这不是崩溃 —— 进程正常退出(exit 0)只证明 CLI 没挂,报错后退出也是 exit 0,所以「干完了」只认 agent 亲口确认。";
 const disputeAside = { t: "system", agent: "codex", text: DISPUTE, aside: true, notice: { kind: "review.dispute", round: 1 }, at: DISPUTE_AT };
 const settlement = { t: "system", agent: "claude", text: UNSUBMITTED, level: "notice", at: END_AT };
@@ -101,7 +101,7 @@ function live(): ConversationItem[] {
 }
 
 const dispute = (patch: Partial<FreeReviewDispute> = {}): FreeReviewDispute => ({
-  summary: "只剩一条要改 ash 服务端的调度。", reason: "", deferReason: "F2 的服务端那一半。", at: "2026-11-14T00:29:04.628Z",
+  summary: "只剩一条要改 navi 服务端的调度。", reason: "", deferReason: "F2 的服务端那一半。", at: "2026-11-14T00:29:04.628Z",
   resolution: null, resolvedAt: null, deferredTaskId: null, debates: [], ...patch,
 }) as FreeReviewDispute;
 const review = (value: FreeReviewDispute | null): FreeReviewRun[] => [{

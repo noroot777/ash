@@ -12,13 +12,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { and, eq } from "drizzle-orm";
 
-export const root = mkdtempSync(join(tmpdir(), "ash-review-dispatch-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+export const root = mkdtempSync(join(tmpdir(), "navi-review-dispatch-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 界压到 3:要测「连输到界」就得真的连输到界,默认 5 次每次都要驱动一轮释放点。
-process.env.ASH_REVIEW_DISPATCH_ATTEMPTS = "3";
-delete process.env.ASH_LAX_DONE;
-// 桩放在 PATH 最前:ash MCP 预检会 spawn 这个名字去问登记,桩让它问不出结果而放行(理由
+process.env.NAVI_REVIEW_DISPATCH_ATTEMPTS = "3";
+delete process.env.NAVI_LAX_DONE;
+// 桩放在 PATH 最前:navi MCP 预检会 spawn 这个名字去问登记,桩让它问不出结果而放行(理由
 // 同文件头)。真执行器那一段由测试隔离闸拦着,不靠这个桩。
 const stubBin = join(root, "bin");
 mkdirSync(stubBin, { recursive: true });
@@ -208,7 +208,7 @@ export async function startHarness() {
         await until(`${taskId} 的认领证收摊时还回来`, async () => !reviewDispatchArmed(run.id, 1), 5_000);
       }
     }
-    if (process.env.ASH_DUMP_TIMELINE) {
+    if (process.env.NAVI_DUMP_TIMELINE) {
       for (const taskId of ids) console.log(`\n──── ${taskId} ────\n${timeline(taskId)}`);
     }
   };

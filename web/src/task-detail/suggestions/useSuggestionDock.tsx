@@ -2,14 +2,14 @@
 // 选中一件时这一个框就变成「补一句」，右下角那颗写着「派出去」，回车 = 带着这句话派出去。没选中时框照常发
 // 普通消息。同一时刻框顶只有一行：`@` 了人、有驳回在等裁定时由 ReplyBox 让开它（让开不是丢掉，状态都还在）。
 //
-// 派出去交给 ash 照那一行此刻的样子建（server/src/dispatch-suggestion-launch.ts），这条任务的智能体不被叫醒，
+// 派出去交给 navi 照那一行此刻的样子建（server/src/dispatch-suggestion-launch.ts），这条任务的智能体不被叫醒，
 // 所以它在跑时也照派。派掉、叉掉的那几件先在本地藏起来，不等服务端那一条广播回来。
 // 一行只有三种去处：你派了、你叉了、智能体收回了（为什么收回写在会话里收回的那一刻，withdrawalNotes.ts）——没有自己消失的。
 import { useEffect, useState } from "react";
-import type { AgentType, Task } from "@ash/shared";
-import { dispatchDefaultTarget, type DispatchOrder, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
-import type { DispatchSuggestionBase } from "@ash/shared/dispatch-suggestion";
-import { concreteReviewChoice } from "@ash/shared/review-on-create";
+import type { AgentType, Task } from "@navi/shared";
+import { dispatchDefaultTarget, type DispatchOrder, type DispatchRunTarget } from "@navi/shared/dispatch-plan";
+import type { DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
+import { concreteReviewChoice } from "@navi/shared/review-on-create";
 import { api } from "../../lib/api.ts";
 import { useLeftDrawer } from "../../components/LeftDrawer.tsx";
 import { registeredAgentTypes } from "../../lib/agentAvailability.ts";

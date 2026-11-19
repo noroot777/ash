@@ -7,7 +7,7 @@
 // 投递判定那几条仍留在原文件里,挨着 deliveryVerdict 各自的判据。
 //
 // 共享句柄走参数进来(计时基准 `at`、临时根目录、假执行器的 stdin 日志、三个构造/
-// 等待助手),模块则在函数里**动态 import**:`ASH_DB` 要等主脚本设好才能碰 db 单例,
+// 等待助手),模块则在函数里**动态 import**:`NAVI_DB` 要等主脚本设好才能碰 db 单例,
 // 顶层 import 会在那之前就把库开在错的地方。
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -521,7 +521,7 @@ export async function runHandoffCases(ctx: HandoffCaseContext): Promise<void> {
     );
   }
   // 两种交错的共同收尾:此刻至多一个在跑;rA 的原文送达恰好一次。停进程前必须等原文
-  // 真进了 stdin 日志:onDelivered 在 ash 写完 stdin 那一刻就响,假 claude 还要几百毫秒
+  // 真进了 stdin 日志:onDelivered 在 navi 写完 stdin 那一刻就响,假 claude 还要几百毫秒
   // 才处理到那一行,立刻 stopTask 会把日志杀没,断言只能读到 0。
   {
     const [aLive, bLive] = await runningOf();

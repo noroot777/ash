@@ -86,7 +86,7 @@ const byUser: MonitorCaller = { kind: "external" };
     "投递时要把回合身份整份传给 continueTask");
 
   // 等它自己跑完并把收尾事件也推完,再往下走:fixture 的 teardown 对哨兵是**撒手不杀**
-  // （它们本来就该活过 ash）,这一步不等的话,收尾那一推会落在关库之后刷一串 stack trace。
+  // （它们本来就该活过 navi）,这一步不等的话,收尾那一推会落在关库之后刷一串 stack trace。
   await until("哨兵自己跑完并收尾", async () => {
     const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
     const queue = await pendingOf(taskId);
@@ -343,7 +343,7 @@ const byUser: MonitorCaller = { kind: "external" };
   ]);
 
   const live = await liveMonitorSummary(taskId);
-  assert.equal(live.count, 2, "只数还在盯着的 ash 哨兵");
+  assert.equal(live.count, 2, "只数还在盯着的 navi 哨兵");
   const reason = await reservationWaitReason({ id: taskId, resumePrompt: "等套件" });
   assert.equal(reason.why, "monitor", "挂着哨兵时归到「等哨兵」那一种，展示端据它换说法");
   assert.match(reason.text, /2 个哨兵/, "等待原因里要说清在等几个哨兵");
@@ -385,7 +385,7 @@ const byUser: MonitorCaller = { kind: "external" };
   const ok = await post(
     inTurnTask,
     { command: "sleep 30", description: "审查者挂的" },
-    { "x-ash-source-task-id": inTurnTask, "x-ash-turn-token": "TURN-OK" },
+    { "x-navi-source-task-id": inTurnTask, "x-navi-turn-token": "TURN-OK" },
   );
   assert.equal(ok.status, 200, "凭据对上就该挂得上");
   const okRow = await rowOf(inTurnTask);
@@ -400,7 +400,7 @@ const byUser: MonitorCaller = { kind: "external" };
   const bad = await post(
     inTurnTask,
     { command: "sleep 30" },
-    { "x-ash-source-task-id": inTurnTask, "x-ash-turn-token": "TURN-WRONG" },
+    { "x-navi-source-task-id": inTurnTask, "x-navi-turn-token": "TURN-WRONG" },
   );
   assert.equal(bad.status, 409);
   assert.match((await bad.json() as { error: string }).error, /回合凭据对不上/);
@@ -449,7 +449,7 @@ const byUser: MonitorCaller = { kind: "external" };
   const submitted = post(
     stale,
     { command: "sleep 30", description: "旧审查回合提交的" },
-    { "x-ash-source-task-id": stale, "x-ash-turn-token": "OLD-REVIEW-TURN" },
+    { "x-navi-source-task-id": stale, "x-navi-turn-token": "OLD-REVIEW-TURN" },
   );
   // 它已经过了核验(入口那一问是一次库读),正卡在创建队列上 —— 一行还没落。
   await until("旧请求在队列里等着", async () => {
@@ -489,7 +489,7 @@ const byUser: MonitorCaller = { kind: "external" };
   const fromRound1 = post(
     bumped,
     { command: "sleep 30", description: "第 1 轮提交的" },
-    { "x-ash-source-task-id": bumped, "x-ash-turn-token": "ROUND-1-TURN" },
+    { "x-navi-source-task-id": bumped, "x-navi-turn-token": "ROUND-1-TURN" },
   );
   await until("第 1 轮那个请求在队列里等着", async () => {
     await new Promise((r) => setTimeout(r, 50));
@@ -520,7 +520,7 @@ const byUser: MonitorCaller = { kind: "external" };
   const duringSettle = post(
     settledRun,
     { command: "sleep 30", description: "审查收尾前提交的" },
-    { "x-ash-source-task-id": settledRun, "x-ash-turn-token": "SETTLING-TURN" },
+    { "x-navi-source-task-id": settledRun, "x-navi-turn-token": "SETTLING-TURN" },
   );
   await until("那个请求在队列里等着", async () => {
     await new Promise((r) => setTimeout(r, 50));

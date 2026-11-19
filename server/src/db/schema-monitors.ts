@@ -5,12 +5,12 @@
 //
 // `schema.ts` 原样转发 `monitors`，所有 `from "./db/schema.js"` 的导入不受影响。
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
+import { OWN_MONITOR_KIND } from "@navi/shared/monitor";
 
-// 哨兵（Monitor）：一条绑在任务上的长跑命令，由 **ash server** 起、不在 agent 进程树里，
+// 哨兵（Monitor）：一条绑在任务上的长跑命令，由 **navi server** 起、不在 agent 进程树里，
 // stdout 每一行就是一条事件（语义与上限见 shared/src/monitor.ts）。
 //
-// 为什么必须落库而不是只放内存:它的全部意义就是「活得比一个回合久」。进程脱离了 ash
+// 为什么必须落库而不是只放内存:它的全部意义就是「活得比一个回合久」。进程脱离了 navi
 // (detached + 输出落文件,跟 executors/detached.ts 同一招),所以 server 重启后要靠
 // 库里这几列把它认回来 —— pid 会被复用,认人的判据是 pid + 进程启动时刻一起对上
 // (proc.ts 的 isSameProcess),读到哪一字节则靠 `offset`,重启期间产出的行一条不漏。
@@ -91,10 +91,10 @@ export const monitors = sqliteTable("monitors", {
   resultHandoffAt: text("result_handoff_at"),
   resultHandoffText: text("result_handoff_text"),
   /**
-   * **收尾已经开始**的时刻(进程退了 / 到期了 / 命中了,ash 正在排干、写终态)。NULL = 没开始过。
+   * **收尾已经开始**的时刻(进程退了 / 到期了 / 命中了,navi 正在排干、写终态)。NULL = 没开始过。
    *
    * 它跟上面那对凭证一起回答「这条哨兵还欠着一声结束吗」(monitor-end-owed.ts):收尾开始到终态
-   * 落定这一段归它,终态落定到结束入队那一段归凭证。落库是为了活过重启 —— ash 死在这一段中间,
+   * 落定这一段归它,终态落定到结束入队那一段归凭证。落库是为了活过重启 —— navi 死在这一段中间,
    * 下次开机在接回把它收完之前,名下的末批照样谁都领不走。终态落定之后它就不再被读,不必清。
    */
   finishingSince: text("finishing_since"),
@@ -128,20 +128,20 @@ export const monitors = sqliteTable("monitors", {
   hitLine: text("hit_line"),
   // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
   ownerUserId: text("owner_user_id"),
-  // 出身:'ash' = ash server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的
+  // 出身:'ash' = navi server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的
   // **只读投影**(停不掉、无日志、随 agent 进程消失)。语义见 shared/src/monitor.ts 文件头。
   // 所有「接管进程/杀进程/读日志」的查询都必须按它过滤,否则会拿 pid=null 的投影行去认进程。
   kind: text("kind").notNull().default(OWN_MONITOR_KIND),
-  // 来源侧的原生 id(claude 的后台任务 id,形如 b69ym4qzv)。'ash' 那种恒为 null。
+  // 来源侧的原生 id(claude 的后台任务 id,形如 b69ym4qzv)。'navi' 那种恒为 null。
   nativeId: text("native_id"),
-  // 这条投影是哪条 CLI 会话报上来的('ash' 那种恒为 null)。**它是重启后认领关系的唯一凭据**:
-  // agent 进程活得过 ash 重启(detached),重启后新建的解析器必须靠它把这些行认回来,否则
+  // 这条投影是哪条 CLI 会话报上来的('navi' 那种恒为 null)。**它是重启后认领关系的唯一凭据**:
+  // agent 进程活得过 navi 重启(detached),重启后新建的解析器必须靠它把这些行认回来,否则
   // 来源侧后续的终态通知会因为「没认领过」被丢掉,卡片永远停在旧状态。
   cliSessionId: text("cli_session_id"),
-  // 起它的那个 tool_use 的 id。'ash' 那种恒为 null;存量 claude 行也可能是 null。
+  // 起它的那个 tool_use 的 id。'navi' 那种恒为 null;存量 claude 行也可能是 null。
   toolUseId: text("tool_use_id"),
   // 盯到什么时候:bounded(expires_at 可信) / persistent(持续,无到期) / unknown(还没拿到
-  // 来源回执)。'ash' 那种恒为 bounded。语义见 shared/src/monitor.ts 的 MonitorLifetime。
+  // 来源回执)。'navi' 那种恒为 bounded。语义见 shared/src/monitor.ts 的 MonitorLifetime。
   // expires_at 本身保持 NOT NULL(SQLite 改约束要重建表),非 bounded 时存占位值,由
   // toTaskMonitor 按这一列决定对外给不给 —— 对外契约里它是可空的。
   sourceLifetime: text("source_lifetime").notNull().default("bounded"),
@@ -182,7 +182,7 @@ export const monitors = sqliteTable("monitors", {
   // 只是个无法重验的结论字符串(第 7 轮审查:旧实时投影在写库队列积压 2.2 秒之后取的时刻
   // 同样标着 'observed',光看字符串分不出它和新代码写的那种)。
   //   实时 = [来源盖的上一个时刻, 事件到达时刻] 的宽度;历史 = [tool_use, 回执] 的宽度;
-  //   ash 自己起的 = 0(进程就是它 spawn 的);NULL = 无法重验 ⇒ **不给精确到期时刻**。
+  //   navi 自己起的 = 0(进程就是它 spawn 的);NULL = 无法重验 ⇒ **不给精确到期时刻**。
   // 判定在 shared 的 monitorStartTrusted(容差随时长放宽,所以在**读**的时候算)。
   startAnchorWidthMs: integer("start_anchor_width_ms"),
   // 来源确认的时长(毫秒),与起点无关。用来表达「知道盯多久、但起点不确定」——那时

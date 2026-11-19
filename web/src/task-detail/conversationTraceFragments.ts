@@ -1,6 +1,6 @@
 // 没有正文、只剩执行过程的回合 —— 从 conversationModel.ts 拆出来（单文件 700 行的约定）。
-import type { Session } from "@ash/shared";
-import { traceKeptOnDelete, type ConvSeg } from "@ash/shared/session-output";
+import type { Session } from "@navi/shared";
+import { traceKeptOnDelete, type ConvSeg } from "@navi/shared/session-output";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";

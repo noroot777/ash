@@ -11,7 +11,7 @@
  *   ③ 库里 id + 三件套恢复命令都清了 —— 下一次 /retry 才会开新会话
  *   ④ 返回值里的 cliId 也清了 —— 本次运行的后续轮次不会接着拿死 id 去 --resume
  *   ⑤ 清完之后的下一轮开出新会话,那个新 id 要**写回库** —— 只清不写回,库里就一直是空
- * 跑:ASH_DB=/tmp/t.db npm -w server run test:duet-session-lost
+ * 跑:NAVI_DB=/tmp/t.db npm -w server run test:duet-session-lost
  */
 import "./isolated-data.js";
 import assert from "node:assert/strict";
@@ -25,8 +25,8 @@ import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 requireTmpDb("test-duet-session-lost");
 
 // runTurn 的产物落在 RUNS_DIR 下,必须在 import paths.js 之前指走,别写进真实 data/runs。
-const stage = mkdtempSync(join(tmpdir(), "ash-duet-session-lost-"));
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-duet-session-lost-"));
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 
 const [{ db, ensureSchema }, schema, duet, codex, busModule] = await Promise.all([
   import("../src/db/index.js"),
@@ -101,7 +101,7 @@ ok("整轮跑完,没有未捕获异常");
 // ② 说明真的写进了 .md。用户翻这一轮的正文,得看到「为什么下一次是新会话」。
 // 写流是异步落盘的(runTurn 只 end() 不等 'finish'),所以给它一小段时间,别把
 // 「还没 flush」误判成「没写」。
-const mdPath = join(process.env.ASH_RUNS_DIR!, taskId, `${turn.rowId}.md`);
+const mdPath = join(process.env.NAVI_RUNS_DIR!, taskId, `${turn.rowId}.md`);
 let md = "";
 for (let i = 0; i < 100 && !md.includes("已经把这个失效的 id 清掉"); i++) {
   try { md = readFileSync(mdPath, "utf8"); } catch { /* 还没建出来 */ }
@@ -166,9 +166,9 @@ assert.equal(poisonedTurn.cliId, "", "poisoned exit 0 的返回值仍会让下�
 assert.equal(poisonedTurn.error, undefined, "成功产出正文的 poisoned 回合不应被标成执行失败");
 assert.match(poisonedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条全新会话/);
 // 旁注在会话流里是纯文本一行小字(ConversationFeed 的 conversation-note),文案带 Markdown
-// 标记就会把星号原样露给用户 —— 真相源在 @ash/shared/session-notes。
+// 标记就会把星号原样露给用户 —— 真相源在 @navi/shared/session-notes。
 assert.doesNotMatch(poisonedTurn.notice ?? "", /\*\*/, "会话轮换旁注不能带 Markdown 标记");
-const poisonedMdPath = join(process.env.ASH_RUNS_DIR!, poisonedTaskId, `${poisonedTurn.rowId}.md`);
+const poisonedMdPath = join(process.env.NAVI_RUNS_DIR!, poisonedTaskId, `${poisonedTurn.rowId}.md`);
 let poisonedMd = "";
 for (let i = 0; i < 100 && !poisonedMd.includes("下一次运行会从任务正文自动开启"); i++) {
   try { poisonedMd = readFileSync(poisonedMdPath, "utf8"); } catch { /* 还没建出来 */ }
@@ -240,7 +240,7 @@ const versionTurn = await (async () => {
 assert.equal(versionRunSession, undefined, "0.147 会话仍被传给执行器 resume");
 assert.equal(versionTurn.error, undefined, "版本替换说明不能把成功回合判成失败");
 assert.match(versionTurn.notice ?? "", /受影响的 0\.147\.0.*本轮不再续用/s, "版本替换说明没有进入本回合 notice");
-const versionTranscript = readFileSync(join(process.env.ASH_RUNS_DIR!, versionTaskId, "transcript.jsonl"), "utf8");
+const versionTranscript = readFileSync(join(process.env.NAVI_RUNS_DIR!, versionTaskId, "transcript.jsonl"), "utf8");
 assert.match(versionTranscript, /受影响的 0\.147\.0/, "版本替换说明没有落进 duet transcript，刷新后会消失");
 const versionStart = liveEvents.findIndex((event) => event.type === "duet.progress" && event.taskId === versionTaskId && event.phase === "start");
 const versionNotice = liveEvents.findIndex((event) => event.type === "agent.event" && event.taskId === versionTaskId
@@ -335,7 +335,7 @@ const healthy = {
     sessionId: NEW_ID,
     commandLine: `claude --session-id ${NEW_ID}`,
     events: (async function* () {
-      // 与真机同构:CLI 回报的就是 ash 自己发下去的那个 id。
+      // 与真机同构:CLI 回报的就是 navi 自己发下去的那个 id。
       yield { kind: "session", cliSessionId: NEW_ID };
       yield { kind: "text", text: "接着说。" };
       yield { kind: "done", exitStatus: 0 };
@@ -418,7 +418,7 @@ assert.deepEqual(handed, [undefined], `别人的会话 id 不能交给这一轮�
 // 不 await 它真正结束的话,这个文件此刻可能连 open 都没完成。那个没人听的 'error'
 // 之后炸在谁头上全看时序:这里表现为「断言全过了还是 exit 1」(第 2 轮审查 P2),
 // 在生产里则是删任务/清理工作目录时把 server 掀掉。不轮询,要的就是「已经好了」。
-const crossMd = join(process.env.ASH_RUNS_DIR!, crossTaskId, `${crossTurn.rowId}.md`);
+const crossMd = join(process.env.NAVI_RUNS_DIR!, crossTaskId, `${crossTurn.rowId}.md`);
 assert.ok(
   readFileSync(crossMd, "utf8").includes("换人之后接着说。"),
   "runTurn 返回时这一轮的 .md 必须已经写完,不能把没关的流丢给调用方",
@@ -432,7 +432,7 @@ assert.equal(bobRow.runOwnerUserId, BOB, "新开的这条要记在接手人名�
 assert.equal(bobRow.cliSessionId, BOB_CLI, "新开的这条要记自己的会话 id");
 // 换掉的理由要留在旧会话的时间线上:界面上凭空多一条会话行、旧的再没人续,不说清楚
 // 用户只会读成「会话丢了」(根 AGENTS.md「停止/暂停必须留下持久可见的状态」同一条判据)。
-const aliceMd = join(process.env.ASH_RUNS_DIR!, crossTaskId, "row-alice.md");
+const aliceMd = join(process.env.NAVI_RUNS_DIR!, crossTaskId, "row-alice.md");
 let crossNote = "";
 for (let i = 0; i < 100 && !crossNote.includes("换人接手"); i++) {
   try { crossNote = readFileSync(aliceMd, "utf8"); } catch { /* 还没 flush */ }

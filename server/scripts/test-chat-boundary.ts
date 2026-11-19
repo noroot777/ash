@@ -8,12 +8,12 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import type { AgentEvent } from "@ash/shared";
-import type { ChatMember, ChatSnapshot } from "@ash/shared/chat";
+import type { AgentEvent } from "@navi/shared";
+import type { ChatMember, ChatSnapshot } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-boundary-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-boundary-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const projectDir = join(stage, "project");
 mkdirSync(projectDir);
 mkdirSync(join(projectDir, "node_modules", "pkg"), { recursive: true });
@@ -58,8 +58,8 @@ CLI_SPEC_BY_KEY.codex.factory = () => ({
       events: (async function* (): AsyncGenerator<AgentEvent> {
         if (mode === "runtime-write") {
           await db.update(projects).set({ name: "运行期状态更新" }).where(eq(projects.id, "project"));
-          mkdirSync(process.env.ASH_RUNS_DIR!, { recursive: true });
-          writeFileSync(join(process.env.ASH_RUNS_DIR!, "runtime-event.json"), "{}");
+          mkdirSync(process.env.NAVI_RUNS_DIR!, { recursive: true });
+          writeFileSync(join(process.env.NAVI_RUNS_DIR!, "runtime-event.json"), "{}");
         }
         if (mode === "edit-existing") writeFileSync(source, "after!");
         if (mode === "delete") rmSync(source);
@@ -148,8 +148,8 @@ try {
   }
 
   mode = "runtime-write";
-  await db.insert(projects).values({ id: "runtime", name: "包含 ash 数据的项目", repoPath: stage, createdAt: new Date().toISOString() });
-  assert.equal((await invokeChat(member, null, "只读咨询", AbortSignal.timeout(5000), "runtime")).notice, undefined, "ash 自身写入不附注");
+  await db.insert(projects).values({ id: "runtime", name: "包含 navi 数据的项目", repoPath: stage, createdAt: new Date().toISOString() });
+  assert.equal((await invokeChat(member, null, "只读咨询", AbortSignal.timeout(5000), "runtime")).notice, undefined, "navi 自身写入不附注");
 
   const service = new ChatService(invokeChat, async () => { throw new Error("咨询不应启动任务"); });
   const app = new Hono();
@@ -249,7 +249,7 @@ try {
   assert.equal((await db.select().from(chatMessages).where(eq(chatMessages.id, raceRow!.id))).at(0)!.body.split("race-side-effect").length, 2, "附注只补一次");
   assert.equal((await db.select().from(chatRooms)).length, 2);
   assert.equal(cleanup, runs, "每次咨询都要清理执行器会话");
-  console.log("chat boundary: 只读工具通过；写入/未知命令的工具事件仍硬中止；无工具事件的目录变化（含并发合并）不再中止、附注如实持久展示且不进模型回复；观察器失效时如实附注不可用；解析失败/任务启动失败的终态正文保留附注；ash 自身写入不附注；停止照常生效；咨询不创建任务");
+  console.log("chat boundary: 只读工具通过；写入/未知命令的工具事件仍硬中止；无工具事件的目录变化（含并发合并）不再中止、附注如实持久展示且不进模型回复；观察器失效时如实附注不可用；解析失败/任务启动失败的终态正文保留附注；navi 自身写入不附注；停止照常生效；咨询不创建任务");
 } finally {
   release?.();
   CLI_SPEC_BY_KEY.codex.factory = original;

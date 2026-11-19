@@ -5,7 +5,7 @@
 //  · 实例管理员天然能进任意项目,但他**不是成员行**(`implicit`),所以不能被移除。
 //  · 邀请链接是「谁拿到谁能进」,跟专属邀请链接(一人一条)不是一回事,写明有效期。
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ProjectMemberView, ProjectRole, ProjectView, UserView } from "@ash/shared";
+import type { ProjectMemberView, ProjectRole, ProjectView, UserView } from "@navi/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { projectMemberApi, userApi } from "../lib/authApi.ts";
 import { useAuth } from "../auth/authContext.ts";

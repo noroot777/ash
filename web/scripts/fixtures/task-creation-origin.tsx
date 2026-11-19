@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { TaskRow } from "../../src/workspace/TaskTreeRows.tsx";
 import "../../src/styles/global.css";

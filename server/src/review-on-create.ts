@@ -16,7 +16,7 @@
 import { inArray, isNull, or } from "drizzle-orm";
 import {
   CREATE_REVIEW_CHECK_MODE, CREATE_REVIEW_RETRY_LIMIT, type CreateReviewChoice,
-} from "@ash/shared/review-on-create";
+} from "@navi/shared/review-on-create";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
@@ -113,7 +113,7 @@ export async function announceCreateReviews(slots: CreateReviewSlot[]): Promise<
         reviewer: slot.reviewerName, override: null, mode: CREATE_REVIEW_CHECK_MODE, retries: CREATE_REVIEW_RETRY_LIMIT, note: null, updated: false,
       }));
     } catch (error) {
-      console.error(`[ash] 建任务带的审查预约已落库，写时间线出错 ${slot.taskId}:`, error);
+      console.error(`[navi] 建任务带的审查预约已落库，写时间线出错 ${slot.taskId}:`, error);
     }
     bus.publish({ type: "task.review", taskId: slot.taskId });
   }

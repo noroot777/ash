@@ -93,7 +93,7 @@ export async function runCkptPendingCases(ctx: HandoffCaseContext): Promise<void
     { queueId: "scheduled-ckpt-queue-v", taskId: vA, position: 0, createdAt: at },
   ]);
   const { DatabaseSync } = await import("node:sqlite");
-  const ext = new DatabaseSync(process.env.ASH_DB!);
+  const ext = new DatabaseSync(process.env.NAVI_DB!);
   ext.exec("BEGIN IMMEDIATE");
   const runRes = await api.request(`/tasks/${vA}/run`, { method: "POST" });
   assert.equal(runRes.status, 409, `占位写入失败应按认领失败返回 409,实际 ${runRes.status}`);
@@ -135,7 +135,7 @@ export async function runCkptPendingCases(ctx: HandoffCaseContext): Promise<void
   await db.insert(queueItems).values([
     { queueId: "scheduled-ckpt-queue-w", taskId: wA, position: 0, createdAt: at },
   ]);
-  const ext2 = new DatabaseSync(process.env.ASH_DB!);
+  const ext2 = new DatabaseSync(process.env.NAVI_DB!);
   ext2.exec("BEGIN IMMEDIATE");
   const fireRes = await api.request(`/tasks/${wA}/fire`, { method: "POST" });
   assert.equal(fireRes.status, 409, `/fire 撞写入失败应 409,实际 ${fireRes.status}`);

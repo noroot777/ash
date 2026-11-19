@@ -11,8 +11,8 @@ import { mkdirSync, createWriteStream, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
-import type { AgentEvent, DuetSpeaker, SessionRole, TurnImageRef } from "@ash/shared";
-import { isVisibleExecutionEvent } from "@ash/shared/native-work";
+import type { AgentEvent, DuetSpeaker, SessionRole, TurnImageRef } from "@navi/shared";
+import { isVisibleExecutionEvent } from "@navi/shared/native-work";
 import { db } from "../db/index.js";
 import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { sessions } from "../db/schema.js";
@@ -31,7 +31,7 @@ import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace } from "../transcript.js";
 import { noteAgentEventUpload } from "../uploads.js";
 import { launchFields, recordSessionUsageEvent, setSessionContext } from "../usage.js";
-import type { CompactSnapshot } from "@ash/shared/usage";
+import type { CompactSnapshot } from "@navi/shared/usage";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
@@ -202,7 +202,7 @@ export async function runTurn(args: {
     // **不给讨论者回合身份,并且要确保它是真的没有**:讨论者没有完成协议,duet 的结算
     // 由这条流水线自己做,凭空发一个没登记进 tasks.activeTurnToken 的令牌只会让每个
     // 消费者都拒收。但「不设」不等于「没有」—— 子进程默认继承 server 自己的环境,
-    // 而 ash 从一个 ash 任务里启动时那几个变量是有值的(实测:duet 的假 CLI 收到了
+    // 而 navi 从一个 navi 任务里启动时那几个变量是有值的(实测:duet 的假 CLI 收到了
     // **另一个任务**的 NAVI_TASK_ID)。借来的身份比没有身份更糟,所以显式清掉 ——
     // 清哪几个由 `withoutTurnIdentity` 一处说了算(别在这里自己列名字)。
     env: withoutTurnIdentity({ ...runEnv }),
@@ -464,7 +464,7 @@ export async function runTurn(args: {
     // 'error' 就成了回合之外的一颗雷,炸在谁头上全看时序(第 2 轮审查 P2:测试删掉 runs
     // 目录后进程被它打掉,断言明明全过了还是 exit 1)。
     await finished(out).catch(() => { /* 具体原因在 outFailure 里,下面统一报 */ });
-    if (outFailure) console.warn(`[ash] duet 这一轮的 transcript 没写成 (${rowId}):`, outFailure);
+    if (outFailure) console.warn(`[navi] duet 这一轮的 transcript 没写成 (${rowId}):`, outFailure);
     // 会话行的收尾跟下面的回合收口同一个原子批落(`recordTurnSpan` 的 `alongside`,理由同单飞)。
     const closeRow = db
       .update(sessions)

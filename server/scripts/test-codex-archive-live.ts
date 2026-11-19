@@ -5,13 +5,13 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { findArchivedRollout, findRollout, readCodexCliVersion } from "../src/executors/codex-rollout.js";
 import { spawnAgent, cleanupAfterRun } from "../src/executors/spawn.js";
 
 // 真实 Codex 二进制 + 本地 Responses 替身；不会请求模型服务，用户配置不参与测试。
-const root = await realpath(await mkdtemp(join(tmpdir(), "ash-codex-archive-live-")));
+const root = await realpath(await mkdtemp(join(tmpdir(), "navi-codex-archive-live-")));
 const home = join(root, "codex");
 const workspace = join(root, "workspace");
 const requests: string[] = [];
@@ -119,7 +119,7 @@ async function checkListing(id: string) {
     child.kill();
   }, 10_000);
   try {
-    await request("initialize", { clientInfo: { name: "ash", version: "0.0.0" } });
+    await request("initialize", { clientInfo: { name: "navi", version: "0.0.0" } });
     child.stdin!.write('{"method":"initialized"}\n');
     const normal = await request("thread/list", { limit: 100 });
     const archived = await request("thread/list", { limit: 100, archived: true });

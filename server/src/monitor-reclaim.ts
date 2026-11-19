@@ -36,7 +36,7 @@ import {
 import { isTracelessState, reclaimState } from "./monitor-reclaim-evidence.js";
 import { intentStillOpen } from "./monitor-adopt.js";
 import { isReviewSourceActive } from "./monitor-session.js";
-import { finish, isAshKind, serialize } from "./monitors.js";
+import { finish, isNaviKind, serialize } from "./monitors.js";
 
 /**
  * **为什么来收**。回收入口不能靠 reason 那段自由文本猜语义：
@@ -97,7 +97,7 @@ async function stopMonitorsForTaskLocked(
       sourceReviewGeneration: monitors.sourceReviewGeneration,
     })
     .from(monitors)
-    .where(and(eq(monitors.taskId, taskId), isAshKind));
+    .where(and(eq(monitors.taskId, taskId), isNaviKind));
   // **任务终态 ≠ 审查结束**。自由工作流的审查是旁路回合：它跑的时候任务被写成 running，
   // 回合一退出又被恢复成原来的 done —— 于是这个函数紧接着就被叫起来。照着终态一刀切,
   // 审查者刚按提示挂好的哨兵会在同一瞬间被停掉、待发事件一并作废,而审查链还停在
@@ -165,7 +165,7 @@ async function signalStop(
   } catch (err) {
     // 停止动作本身失败(库忙、行被改走):`finish` 可能连记账那一步都没走到。这里不自己
     // 补刀,交给紧接着的 `accountForLiveProcesses` —— 它按真实状态重判一遍,顺带把责任记上。
-    console.error(`[ash] stop monitor ${m.id} (${intent}) failed:`, err);
+    console.error(`[navi] stop monitor ${m.id} (${intent}) failed:`, err);
     return false;
   }
 }
@@ -196,7 +196,7 @@ async function accountForLiveProcesses(
     return { row: r, state, traceless: isTracelessState(state) };
   });
   // **pid 还空着的创建意图行是最该核的一档**(第 19 轮审查 F2):身份先落库、进程后起、pid
-  // 回填(见 monitor-create.ts),ash 死在中间时库里剩下的就是这个样子 —— 它的结局恰恰从没被
+  // 回填(见 monitor-create.ts),navi 死在中间时库里剩下的就是这个样子 —— 它的结局恰恰从没被
   // 确认过。上一版这里一句 `r.pid !== null` 把它们整批滤掉,于是删除拿到「没什么要负责的」、
   // 把任务和哨兵行一起带走,而那条命令可能还在跑(审查实测:taskRows=0、monitorRows=0、
   // 债表空、诊断进程仍活)。判档和落点都交给 `reclaimMonitorProcess`:它先问一遍认领,真的
@@ -250,7 +250,7 @@ function finishAccounting(
     // 审查收尾那一侧:身份不销毁(哨兵行还在),所以只出声 —— 开机清扫会再问一遍。
     if (lostIdentity.length) {
       console.error(
-        `[ash] 有 ${lostIdentity.length} 条哨兵的最后身份没能留档（${pids(lostIdentity)}）`
+        `[navi] 有 ${lostIdentity.length} 条哨兵的最后身份没能留档（${pids(lostIdentity)}）`
         + `，哨兵行还在，开机会再问一遍`,
       );
     }
@@ -321,7 +321,7 @@ export async function stopMonitorsForReviewRun(
       })
       .from(monitors)
       .where(and(
-        eq(monitors.sourceReviewRun, runId), isAshKind,
+        eq(monitors.sourceReviewRun, runId), isNaviKind,
         // 身份对得上的才收(见上面 `owner`)。NULL = 那一行没有这一维的身份,照旧收。
         ...(owner?.round === undefined || owner.round === null ? []
           : [or(isNull(monitors.sourceReviewRound), eq(monitors.sourceReviewRound, owner.round))]),
@@ -371,7 +371,7 @@ export async function reclaimUnconfirmedStops(): Promise<number> {
       logPath: monitors.logPath,
     })
     .from(monitors)
-    .where(and(isAshKind, ne(monitors.status, "running")));
+    .where(and(isNaviKind, ne(monitors.status, "running")));
   // 先用最便宜的那一问(`kill(-pgid, 0)`)把绝大多数历史行筛掉,ps 只对组还活着的那几条问。
   //
   // **pid 还空着的那几行按边条筛**(第 19 轮审查 F2):它们是创建意图行,结局从没被确认过
@@ -382,7 +382,7 @@ export async function reclaimUnconfirmedStops(): Promise<number> {
     ? intentStillOpen(r.logPath)
     : !isTracelessState(reclaimState(r.pid, r.pidStartedAt, r))));
   if (!live.length) return 0;
-  console.error(`[ash] 开机发现 ${live.length} 条「停了但退出从没被确认」的哨兵（进程组还活着，`
+  console.error(`[navi] 开机发现 ${live.length} 条「停了但退出从没被确认」的哨兵（进程组还活着，`
     + `或者 pid 还空着、创建意图没有结论），按责任重收一遍`);
   await accountForLiveProcesses(live, "上一辈子把它停了，但退出从没被确认", { fatal: false });
   return live.length;

@@ -3,9 +3,9 @@ import type {
   AgentExecutorProfile,
   AgentType,
   LlmProvider,
-} from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
-import { hasCliConfigOverrides } from "@ash/shared/cli-overrides";
+} from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
+import { hasCliConfigOverrides } from "@navi/shared/cli-overrides";
 import { CaretRight, Plus, Trash } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api, type DetectedCli } from "../lib/api.ts";

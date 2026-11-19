@@ -1,8 +1,8 @@
 /**
  * 端口兜底那一档里**用户自己写了停止命令**的那条路。
  *
- * 跟默认停止(test-service-ports.ts)的分界很要紧:那条路是 ash 自己动手,连杀带核验一趟做完;
- * 这条路**我们一个 kill 都不发** —— 用户写那段脚本正是不想让 ash 直接 kill。于是我们手里只有
+ * 跟默认停止(test-service-ports.ts)的分界很要紧:那条路是 navi 自己动手,连杀带核验一趟做完;
+ * 这条路**我们一个 kill 都不发** —— 用户写那段脚本正是不想让 navi 直接 kill。于是我们手里只有
  * 「跑之前照一张相、跑完回头比一遍」这一个办法,而相和比对各有自己的失败分支。真进程夹具与
  * 那边共用 test-service-ports-fixtures.ts(全局约定:单文件不超过 700 行)。
  *
@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
+import { SERVICE_COMMAND_ID } from "@navi/shared/project-commands";
 import { IS_WINDOWS } from "../src/platform.js";
 import { restartCommand, startCommand, stopCommand } from "../src/terminal-commands.js";
 import { launchMembers, survivingMembers } from "../src/service-ports.js";
@@ -60,7 +60,7 @@ const timer = setInterval(() => {
 `);
 
   // ── ⑭ 停止命令只收掉监听者,也不算这次启动停净了 ────────────────────────────────
-  //    脚本这条路 ash 不替用户强杀(他写那段脚本正是不想让 ash 直接 kill),于是默认停止那边
+  //    脚本这条路 navi 不替用户强杀(他写那段脚本正是不想让 navi 直接 kill),于是默认停止那边
   //    「枚举同组成员」的覆盖拿不到 —— 必须拿停止**之前**照的成员相来比:端口空了只说明
   //    监听者走了,它 fork 的工人从来没进过账(发现 1)。
   {

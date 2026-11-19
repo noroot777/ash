@@ -26,7 +26,7 @@ FORMAT=zip npm run package      # 改打 .zip(收件人是 Windows 时更省事:
 
 也可以直接给 git 仓库地址(如果对方有权限访问),`git clone` 等价,而且以后 `git pull` 就能升级。tar 包适合「对方拿不到你的仓库」的场合。
 
-> 想连历史一起给、又没有共享 remote:`git bundle create ash.bundle --all`,对方 `git clone ash.bundle ash`。
+> 想连历史一起给、又没有共享 remote:`git bundle create navi.bundle --all`,对方 `git clone navi.bundle navi`。
 
 ---
 
@@ -96,22 +96,22 @@ Navi 就会把登记写进这个执行器起跑时读的那份配置(缺了才�
 
 ```bash
 # claude(user 作用域,编排别的仓库时也在)
-claude mcp add ash --scope user \
-  -e ASH_URL=http://localhost:4317 \
-  -- node /绝对路径/ash/mcp/dist/index.js
+claude mcp add navi --scope user \
+  -e NAVI_URL=http://localhost:4317 \
+  -- node /绝对路径/navi/mcp/dist/index.js
 
 # codex:追加到 ~/.codex/config.toml
-[mcp_servers.ash]
+[mcp_servers.navi]
 command = "node"
-args = ["/绝对路径/ash/mcp/dist/index.js"]
+args = ["/绝对路径/navi/mcp/dist/index.js"]
 
-[mcp_servers.ash.env]
-ASH_URL = "http://localhost:4317"
+[mcp_servers.navi.env]
+NAVI_URL = "http://localhost:4317"
 ```
 
-路径必须是**绝对路径**,而且指向解包后的那份 `mcp/dist/index.js`(所以要先 build)。改了端口,这里的 `ASH_URL` 要一起改。
+路径必须是**绝对路径**,而且指向解包后的那份 `mcp/dist/index.js`(所以要先 build)。改了端口,这里的 `NAVI_URL` 要一起改。
 
-验证:`claude mcp list` 应该看到 `ash: … ✔ Connected`。
+验证:`claude mcp list` 应该看到 `navi: … ✔ Connected`。
 
 ### 其它 CLI(gemini / grok / kimi / opencode / cursor / qwen / qoder / copilot / kiro / kilo / antigravity / pi / trae)
 
@@ -120,7 +120,7 @@ ASH_URL = "http://localhost:4317"
 `server/src/mcp-registry/catalog.ts`)。规矩一样:
 
 - **只在缺 Navi 条目时追加**,其它条目(含你自己装的第三方 MCP)一个字节都不动;
-- 已有 `ash` 或历史名 `harness` 一律不覆盖,关着的不替你打开,那个键的值我们认不出来时也不动;
+- 已有 `navi` 或历史名 `harness` 一律不覆盖,关着的不替你打开,那个键的值我们认不出来时也不动;
 - 落盘走**文本插入**:只把 Navi 那一条插进去,其余字节(你的注释、缩进、键序,以及像
   `9007199254740993` 这种超出 JS 安全整数的数字原值)全部原样保留。所以带注释的
   `opencode.jsonc` 一类现在也能自动补接;
@@ -153,11 +153,11 @@ ASH_URL = "http://localhost:4317"
   (`opencode.json` < `opencode.jsonc`,**它压过上面那几层**)→ `OPENCODE_CONFIG_DIR` 再加的那个
   目录 → `OPENCODE_CONFIG_CONTENT` 里那整段 JSON。
   合并是**逐字段**的:全局那份写完整的启动命令和环境变量、高优先级那份只写一句
-  `"ash": {"enabled": true}`,真 CLI 用的是两份合起来那一条(照样 `ash connected`),所以
+  `"navi": {"enabled": true}`,真 CLI 用的是两份合起来那一条(照样 `navi connected`),所以
   setup 不会再往别处补一条,搬进隔离档的也是**合完**那一条(只搬高优先级那份的话,隔离档里
   就只剩一个 `enabled` 键,真 CLI 在那边打印 `No MCP servers configured`);反过来,
-  **高优先级那份只写一句 `"ash": {"enabled": false}` 也会把全局那条完整登记关掉**(真 CLI 报
-  `ash disabled`),那种情况 Navi 只如实说「被关着」、不替你打开。另外两条实测结论:一条登记
+  **高优先级那份只写一句 `"navi": {"enabled": false}` 也会把全局那条完整登记关掉**(真 CLI 报
+  `navi disabled`),那种情况 Navi 只如实说「被关着」、不替你打开。另外两条实测结论:一条登记
   **没写 `type` 就不是服务、只是个开关**(单独一句 `{"enabled": true}` 真 CLI 当没有),而
   `disabled: true` 这个键 opencode 压根不认(那是 claude 那一族的写法),Navi 遇到它只说看不准。
   「开关那一支」这条还有两处要留神:**哪一份来源写成开关就只贡献这一个开关**,它同时写的
@@ -179,9 +179,9 @@ ASH_URL = "http://localhost:4317"
   其余各家缺登记时 Navi 只说「看不准」、照常放你起跑,顺手在派审提示里说一句 —— 它可能还读着
   一份我们不知道的配置,而「确定没有」在派审那一关是**硬拒**。
 - **这家 CLI 自己的「别用这个 server」开关,Navi 一家一家认,不跨家套用**(2026-10-31 两边真机
-  实测):gemini 的根级 `mcp.excluded: ["ash"]` 或 `mcp.allowed: [...]`(白名单里没有 `ash`,**空
+  实测):gemini 的根级 `mcp.excluded: ["navi"]` 或 `mcp.allowed: [...]`(白名单里没有 `navi`,**空
   数组也算**)会让它把那条登记直接判成 `Blocked` —— Navi 如实说「被挡住了」、指出是哪一行,
-  **绝不替你改那两个名单**;而根级 `disabled_mcp_servers = ["ash"]` 是 **grok 专有**的,
+  **绝不替你改那两个名单**;而根级 `disabled_mcp_servers = ["navi"]` 是 **grok 专有**的,
   同样写 TOML 的 codex 压根不认它,所以 Navi 也不再拿它判 codex。
 
 装完某家 CLI 之后重新跑一次 `npm run setup` 就会补上。两处例外值得单说:
@@ -189,7 +189,7 @@ ASH_URL = "http://localhost:4317"
 - **trae**:它的原生配置是 YAML(`traecli config edit` 打开 `~/.trae/traecli.yaml`),本仓没有能保住
   注释与缩进的 YAML 写入器 —— 但它同样扫描标准的 `mcpServers` JSON,所以 Navi 写的是
   `~/.trae/mcp.json`。**如果那个目录里已经有 `traecli.yaml` / `mcp.yaml` / `.mcp.yaml`,Navi 一个字
-  都不写也不下结论**(你可能已经把 `ash` 那条登记写在那里面了,而两份配置里各有一条同名登记、谁生效没有
+  都不写也不下结论**(你可能已经把 `navi` 那条登记写在那里面了,而两份配置里各有一条同名登记、谁生效没有
   文档依据):那种情况请按原生格式自己加一条。
 - **copilot**:它的 MCP 子进程**只自动继承 `PATH`**(官方文档明写其余环境变量必须配在那条登记的
   `env` 里),而 Navi 的回合身份一轮一个值、写死进配置文件就是过期的假身份。所以身份走**一份文件**:
@@ -208,15 +208,15 @@ Navi 启动时也会把缺口逐家列在日志里。
 安装并运行 `kimi login` 登录后，重新运行 `npm run setup`，会把 Navi MCP 登记到
 `~/.kimi-code/mcp.json`（设置了 `KIMI_CODE_HOME` 时使用该目录）。
 
-手动配置时，把下面的 `ash` 条目合并进该文件的 `mcpServers`：
+手动配置时，把下面的 `navi` 条目合并进该文件的 `mcpServers`：
 
 ```json
 {
   "mcpServers": {
-    "ash": {
+    "navi": {
       "command": "node",
-      "args": ["/绝对路径/ash/mcp/dist/index.js"],
-      "env": { "ASH_URL": "http://localhost:4317" }
+      "args": ["/绝对路径/navi/mcp/dist/index.js"],
+      "env": { "NAVI_URL": "http://localhost:4317" }
     }
   }
 }
@@ -241,16 +241,16 @@ Kimi Code 账号需有可用的编码订阅；403 订阅错误会显示在任务
 | 变量 | 默认 | 用途 |
 |---|---|---|
 | `PORT` | `4317` | 服务端口 |
-| `ASH_DB` | `<仓库>/data/ash.db` | 库文件位置 |
-| `ASH_HUMAN_APPROVAL_PUBLIC_KEY` | 未配置 | 回合占位人工放开的 Ed25519 公钥（SPKI DER base64），在可信启动环境中预配，优先于公钥文件 |
-| `ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE` | 未配置，无默认路径 | 可信公钥文件的绝对路径，在启动环境中预配；文件及全部父目录由独立账号管理，服务账号无权修改且路径不含符号链接。支持独立属主核验的平台可热加载公钥内容 |
-| `ASH_LOCAL_OPEN_ROOTS` | 作者机器上的两个路径 | 「在本机打开文件」允许的根目录,冒号分隔。**换机器基本都要重设**,否则这个功能不可用 |
+| `NAVI_DB` | `<仓库>/data/ash.db` | 库文件位置 |
+| `NAVI_HUMAN_APPROVAL_PUBLIC_KEY` | 未配置 | 回合占位人工放开的 Ed25519 公钥（SPKI DER base64），在可信启动环境中预配，优先于公钥文件 |
+| `NAVI_HUMAN_APPROVAL_PUBLIC_KEY_FILE` | 未配置，无默认路径 | 可信公钥文件的绝对路径，在启动环境中预配；文件及全部父目录由独立账号管理，服务账号无权修改且路径不含符号链接。支持独立属主核验的平台可热加载公钥内容 |
+| `NAVI_LOCAL_OPEN_ROOTS` | 作者机器上的两个路径 | 「在本机打开文件」允许的根目录,冒号分隔。**换机器基本都要重设**,否则这个功能不可用 |
 
 人工授权的离机密钥生成、部署边界和操作见[回合占位的人工授权](human-approval.md)。未预配公钥或文件路径的实例无法在卡住后直接补文件开启；新增启动配置需要重启，重启会清除内存中的回合占位并中断正在运行的任务。
 
 **常驻**:`npm run restart` 用 detached spawn 起进程,关掉终端也活着。想要开机自启就自己包一层 launchd(macOS)/ systemd(Linux)/ 计划任务(Windows,触发器选「登录时」),`ExecStart` 写 `node <仓库>/server/dist/index.js`,`WorkingDirectory` 写仓库根。
 
-**只能起一个**:同一个库上有单例锁,第二个实例会拒绝启动并告诉你谁占着。想再起一个隔离实例:`PORT=4318 ASH_DB=/tmp/x.db npm start`。
+**只能起一个**:同一个库上有单例锁,第二个实例会拒绝启动并告诉你谁占着。想再起一个隔离实例:`PORT=4318 NAVI_DB=/tmp/x.db npm start`。
 
 ---
 
@@ -263,9 +263,9 @@ Kimi Code 账号需有可用的编码订阅；403 订阅错误会显示在任务
 | 界面打得开但一片空白/样式旧 | `web/dist` 没构建或过期:`npm run build`(server 从磁盘读 dist,**不用重启**) |
 | 派任务立刻 ENOENT | 那个 CLI 没装,或不在 server 进程的 PATH 里(从 GUI 启动的进程 PATH 常常更短——用终端起服务) |
 | `npm install` 卡住/失败 | 网络或 registry;node-pty、libsql 都要下预编译产物 |
-| `npm install` 报 404 找不到 `@ash/shared` | **不是网络问题**。`@ash/*` 是本仓库的 workspace,公共 registry 上没有;npm 拿着这个名字去公网找,只说明它没把 `shared/` 认成本地 workspace ——多半是包没解全、或者不是在仓库根跑的。`node scripts/workspace-check.mjs` 会指出具体缺哪个、目录里还剩什么,并按「git 检出 / 解包目录」给出对应的恢复命令(`npm run setup` 在下载前已自动查这一遍) |
+| `npm install` 报 404 找不到 `@navi/shared` | **不是网络问题**。`@navi/*` 是本仓库的 workspace,公共 registry 上没有;npm 拿着这个名字去公网找,只说明它没把 `shared/` 认成本地 workspace ——多半是包没解全、或者不是在仓库根跑的。`node scripts/workspace-check.mjs` 会指出具体缺哪个、目录里还剩什么,并按「git 检出 / 解包目录」给出对应的恢复命令(`npm run setup` 在下载前已自动查这一遍) |
 | `npm start` 报 `Cannot find module .../server/dist/index.js` | 还没构建过。`npm run build`;要是连 `node_modules` 都没有,说明装机没走完,回去跑 `npm run setup` 并解决它报的那个错——别绕过它直接 `npm start` |
-| 「在本机打开文件」点了没反应 | `ASH_LOCAL_OPEN_ROOTS` 没设成他自己的路径 |
+| 「在本机打开文件」点了没反应 | `NAVI_LOCAL_OPEN_ROOTS` 没设成他自己的路径 |
 | Windows 上建 worktree 报 `Filename too long` | 撞了 MAX_PATH(260)。两个开关缺一不可:管理员 PowerShell 里 `Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled 1`,再 `git config --global core.longpaths true`(Git for Windows 走自带 msys 运行时,**不看**系统开关)。`npm run setup` 会替你查这两条 |
 
 ---

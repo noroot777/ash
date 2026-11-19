@@ -13,7 +13,7 @@
 // 喂事件序列,断言请求**发在显示之前**,而不是等用户去点。
 import assert from "node:assert/strict";
 import { fetchCliCapability, peekCliCapability, resetCliCapabilityCache } from "../src/lib/cliCapability.ts";
-import { isReasoningEffortSupported, reasoningEffortsFor } from "@ash/shared/cli-presets";
+import { isReasoningEffortSupported, reasoningEffortsFor } from "@navi/shared/cli-presets";
 
 const MODEL = "anthropic/claude-opus-4-8";
 // server 那边真实返回过的形状(CLI 原话经 `cachedModelEfforts` 端出来)。

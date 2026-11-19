@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
-import { teamNeverStarted, timeMs } from "@ash/shared/team";
-import { coversRead, taskReadRound, type TaskReadEntry, type TaskReads } from "@ash/shared/task-reads";
+import type { Task, TaskListItem } from "@navi/shared";
+import { teamNeverStarted, timeMs } from "@navi/shared/team";
+import { coversRead, taskReadRound, type TaskReadEntry, type TaskReads } from "@navi/shared/task-reads";
 import { getTaskReads, subscribeTaskReads, updateTaskReads } from "./taskReadSync.ts";
 import { dispatchEdges, dispatchSubtree } from "./dispatchTree.ts";
 import { deriveTaskStatusIndicator, dispatchedRollUp, dispatchedStateOf, taskLook, type DispatchedState, type TaskLook, type TaskStatusIndicator } from "./taskLook.ts";

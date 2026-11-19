@@ -7,7 +7,7 @@ import type {
   ProjectView,
   Task,
   TaskListItem,
-} from "@ash/shared";
+} from "@navi/shared";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,

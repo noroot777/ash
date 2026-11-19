@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
-import { TASK_BATCH_LIMIT } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
+import { TASK_BATCH_LIMIT } from "@navi/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 

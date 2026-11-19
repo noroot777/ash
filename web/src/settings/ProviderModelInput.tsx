@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentType, LlmProvider } from "@ash/shared";
-import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
+import type { AgentType, LlmProvider } from "@navi/shared";
+import { CLI_MODEL_PRESETS } from "@navi/shared/cli-presets";
 import { ArrowsClockwise } from "@phosphor-icons/react";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { EffortPicker } from "../components/EffortPicker.tsx";

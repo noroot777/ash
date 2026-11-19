@@ -14,10 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-mcp-handoff-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-mcp-handoff-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
-const { collectAshMcpCalls, planReplay, replayUndeliveredMcpCalls } = await import("../src/mcp-handoff.js");
+const { collectNaviMcpCalls, planReplay, replayUndeliveredMcpCalls } = await import("../src/mcp-handoff.js");
 const { RUNS_DIR } = await import("../src/paths.js");
 const { sessionTranscriptPath } = await import("../src/transcript.js");
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -30,9 +30,9 @@ const TASK = "handoff00001";
 
 // ── 真实事故的原始流（codex）────────────────────────────────────────────────
 const codexFailed = [
-  `{"type":"item.started","item":{"id":"item_54","type":"mcp_tool_call","server":"ash","tool":"report_stage","arguments":{"taskId":"${TASK}","stage":"verified"},"result":null,"error":null,"status":"in_progress"}}`,
-  `{"type":"item.completed","item":{"id":"item_54","type":"mcp_tool_call","server":"ash","tool":"report_stage","arguments":{"taskId":"${TASK}","stage":"verified"},"result":null,"error":{"message":"tool call error: tool call failed for \`ash/report_stage\`\\n\\nCaused by:\\n    Transport closed"},"status":"failed"}}`,
-  `{"type":"item.completed","item":{"id":"item_55","type":"mcp_tool_call","server":"ash","tool":"report_stage","arguments":{"taskId":"${TASK}","stage":"verified"},"result":null,"error":{"message":"tool call error: tool call failed for \`ash/report_stage\`\\n\\nCaused by:\\n    Transport closed"},"status":"failed"}}`,
+  `{"type":"item.started","item":{"id":"item_54","type":"mcp_tool_call","server":"navi","tool":"report_stage","arguments":{"taskId":"${TASK}","stage":"verified"},"result":null,"error":null,"status":"in_progress"}}`,
+  `{"type":"item.completed","item":{"id":"item_54","type":"mcp_tool_call","server":"navi","tool":"report_stage","arguments":{"taskId":"${TASK}","stage":"verified"},"result":null,"error":{"message":"tool call error: tool call failed for \`navi/report_stage\`\\n\\nCaused by:\\n    Transport closed"},"status":"failed"}}`,
+  `{"type":"item.completed","item":{"id":"item_55","type":"mcp_tool_call","server":"navi","tool":"report_stage","arguments":{"taskId":"${TASK}","stage":"verified"},"result":null,"error":{"message":"tool call error: tool call failed for \`navi/report_stage\`\\n\\nCaused by:\\n    Transport closed"},"status":"failed"}}`,
 ].join("\n");
 
 const writeStream = (taskId: string, sess: string, turn: string, body: string): void => {
@@ -43,7 +43,7 @@ const writeStream = (taskId: string, sess: string, turn: string, body: string): 
 
 // ── ① codex 流：认出失败调用，参数完整 ───────────────────────────────────────
 writeStream(TASK, "sessA", "2026-08-06T04:08:22.911Z", codexFailed);
-const codexCalls = collectAshMcpCalls(
+const codexCalls = collectNaviMcpCalls(
   join(RUNS_DIR, TASK, "sessA-20260806T040822911Z.agent-out.jsonl"), "codex",
 );
 assert.equal(codexCalls.length, 2, "两条 completed 都要认出来（in_progress 那条不算）");
@@ -71,12 +71,12 @@ assert.equal(planReplay(oldStageCalls, TASK, "new-direction", 2).length, 0,
 
 // ── ② claude 流：tool_use 与 tool_result 靠 id 配对 ──────────────────────────
 const claudeStream = [
-  `{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_1","name":"mcp__ash__complete_task","input":{}}}}`,
-  `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__ash__complete_task","input":{"taskId":"${TASK}","directionToken":"old-direction"}}]}}`,
+  `{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_1","name":"mcp__navi__complete_task","input":{}}}}`,
+  `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__navi__complete_task","input":{"taskId":"${TASK}","directionToken":"old-direction"}}]}}`,
   `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":true,"content":"MCP server is not connected"}]}}`,
 ].join("\n");
 writeStream(TASK, "sessB", "2026-08-06T05:00:00.000Z", claudeStream);
-const claudeCalls = collectAshMcpCalls(
+const claudeCalls = collectNaviMcpCalls(
   join(RUNS_DIR, TASK, "sessB-20260806T050000000Z.agent-out.jsonl"), "claude",
 );
 assert.equal(claudeCalls.length, 1, "流式增量那条 tool_use（input 空）不该被当成第二次调用");
@@ -87,7 +87,7 @@ assert.equal(planReplay(claudeCalls, TASK, "new-direction").length, 0,
   "引导前旧方向的失败 complete_task 不得被补录进新方向");
 const noDirectionStream = claudeStream.replace(',"directionToken":"old-direction"', "");
 writeStream(TASK, "sessNoDirection", "2026-08-06T05:00:30.000Z", noDirectionStream);
-const noDirectionCalls = collectAshMcpCalls(
+const noDirectionCalls = collectNaviMcpCalls(
   join(RUNS_DIR, TASK, "sessNoDirection-20260806T050030000Z.agent-out.jsonl"), "claude",
 );
 assert.equal(planReplay(noDirectionCalls, TASK, "new-direction", 1).length, 1,
@@ -222,10 +222,10 @@ assert.equal(
 // 这一段跟上面的补捞是同一件事的两头：能不掐断就别掐断，掐断了才谈补捞。
 const { holdersOf, isMcpProcess, parsePsTable } = await import("../src/mcp-holders.js");
 
-assert.ok(isMcpProcess("node /Users/x/ash/mcp/dist/index.js"));
+assert.ok(isMcpProcess("node /Users/x/navi/mcp/dist/index.js"));
 assert.ok(isMcpProcess("/usr/local/bin/node /repo/mcp/dist/index.js"), "带绝对路径的 node 也算");
 assert.equal(
-  isMcpProcess("claude --mcp-config /Users/x/ash/mcp/dist/index.js"), false,
+  isMcpProcess("claude --mcp-config /Users/x/navi/mcp/dist/index.js"), false,
   "把同一个路径写在参数里的 CLI 本体不算 —— 认错了就会把每个 agent 都报成持有者",
 );
 assert.equal(isMcpProcess("node /repo/server/dist/index.js"), false, "server 自己不算");
@@ -234,7 +234,7 @@ assert.equal(isMcpProcess("node /repo/server/dist/index.js"), false, "server 自
 // (`C:\Program Files\nodejs`),命令行里因此是带引号的。按空白硬切会把它切成两段,
 // 结果一个 MCP 都认不出来 —— 预警于是永远报平安,一种不会有人发现的假阴性。
 assert.ok(
-  isMcpProcess('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\ash\\mcp\\dist\\index.js"'),
+  isMcpProcess('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\navi\\mcp\\dist\\index.js"'),
   "带引号且路径含空格的 Windows 命令行要能认出来",
 );
 assert.ok(isMcpProcess("C:\\nodejs\\node.exe C:\\repo\\mcp\\dist\\index.js"), "不带引号的 Windows 形状同样算");
@@ -246,10 +246,10 @@ assert.equal(
 
 const psTable = parsePsTable([
   "  100     1 codex exec --json",
-  "  101   100 node /Users/x/ash/mcp/dist/index.js",   // 直接子进程
+  "  101   100 node /Users/x/navi/mcp/dist/index.js",   // 直接子进程
   "  150   200 bash -lc npm test",
-  "  151   150 node /Users/x/ash/mcp/dist/index.js",   // 隔了一层 shell
-  "  200     1 claude --mcp-config /Users/x/ash/mcp/dist/index.js",
+  "  151   150 node /Users/x/navi/mcp/dist/index.js",   // 隔了一层 shell
+  "  200     1 claude --mcp-config /Users/x/navi/mcp/dist/index.js",
   "  300     1 node /elsewhere/mcp/dist/index.js",         // 没有 agent 祖先
 ].join("\n"));
 assert.equal(psTable.length, 6, "ps 表逐行解析");
@@ -262,7 +262,7 @@ assert.deepEqual(holdersOf(psTable, []), [], "没有在跑的 agent → 随便�
 // 补捞侧敢认「连上了又断」，是因为它另外叠了幂等白名单；MCP 端的进程内重试对所有
 // 工具一视同仁，认了 ECONNRESET 就等于允许 dispatch 被做两遍。哪天有人图省事把宽的
 // 那份接过去统一口径，这两条会先红。
-const { UNDELIVERED_NET_CODES, isUndeliveredMcpFailure } = await import("@ash/shared/mcp-delivery");
+const { UNDELIVERED_NET_CODES, isUndeliveredMcpFailure } = await import("@navi/shared/mcp-delivery");
 assert.ok(
   isUndeliveredMcpFailure({ message: "socket hang up (ECONNRESET)" }),
   "补捞侧认「连上了又断」——最坏也只是把同一个 stage 再写一遍",

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Task } from "@ash/shared";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { Task } from "@navi/shared";
+import type { QuestionRecord } from "@navi/shared/questions";
 import { QuestionCard } from "../src/task-detail/QuestionCard.tsx";
 import { QuestionDock, useQuestionTakeover } from "../src/task-detail/QuestionSlot.tsx";
 import { isUnshownNotice, questionsOnScreen } from "../src/task-detail/timelineNoticeCopy.ts";
@@ -11,7 +11,7 @@ import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
 import { longAnswer, longLegacyReply, longQuestion } from "./fixtures/question-card-long-answer.ts";
-import { formatQuestionAnswers, joinQuestionAnswer, legacyQuestionRecord, questionOptionSelected, settleNoteQuestion } from "@ash/shared/questions";
+import { formatQuestionAnswers, joinQuestionAnswer, legacyQuestionRecord, questionOptionSelected, settleNoteQuestion } from "@navi/shared/questions";
 
 const task = { id: "question-card", title: "问答卡", body: "问答卡的原始需求", mode: "single", status: "paused", question: "两个细节", questionItems: [
   { question: "放在哪里？", options: ["会话里", "侧栏里"] },
@@ -190,5 +190,5 @@ assert.equal(count(longHtml, 'class="task-user-bubble"'), 0, "不另画一个普
 assert.match(longHtml, /<\/button><p>A\n顺便/, "答案原样在引文下面");
 assert.doesNotMatch(longHtml, /你之前的提问/);
 assert.match(longHtml, /task-question-quote-text">[^<]*跨站那个问题/, "旧题干引在答案上面");
-assert.match(longHtml, /还是在 ash 上预览别的项目/);
+assert.match(longHtml, /还是在 navi 上预览别的项目/);
 console.log("question card: one input + one send key, slot hides the reply box, picks join into compatible answers, settle note hidden only while the question shows elsewhere, collapsed/settling/no-option states, duplicate suppression and legacy/team rendering passed");

@@ -5,7 +5,7 @@
 // 话盖过或者被三句截掉就没了——而那件事还等着你（R8M9Tsn2q0aj：驳回落下 13 秒后同一回合又落了一句
 // 「本回合没有交卷」，「等你裁定」就被盖掉了）。所以它们各占一个位置，不跟别的句子争（`held`）；
 // 事情了了（裁定了、续过了、重试过了），那一句就回到普通规则。
-import type { FreeReviewRun, TaskListItem } from "@ash/shared";
+import type { FreeReviewRun, TaskListItem } from "@navi/shared";
 import { openDisputeIn, reviewLocked } from "../free-workflow/freeReviewCopy.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { noVerdictPartId, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";

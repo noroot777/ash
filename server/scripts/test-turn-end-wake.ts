@@ -29,15 +29,15 @@ import { createWriteStream, mkdirSync, mkdtempSync, rmSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-repair-wake-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_LAX_DONE;
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-repair-wake-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_LAX_DONE;
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 let failure: unknown = null;
 try {

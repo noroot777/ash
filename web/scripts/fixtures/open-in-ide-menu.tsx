@@ -9,7 +9,7 @@ import "../../src/styles/global.css";
 //    工具条挤爆过，标题被压成零宽、「关闭」整个溢出到面板外（第 2 轮审查 N1）。
 //  · 下面那块是单独的菜单，用来验启动回执的措辞和探测卡住时的出路（F2 的界面那一半、N3）。
 // StrictMode 是刻意的：探测那套「在途去重 + 结果缓存」最容易在双跑下露馅。
-function Ash() {
+function Navi() {
   const [toast, setToast] = useState("");
   const [closed, setClosed] = useState(false);
   return (
@@ -39,6 +39,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

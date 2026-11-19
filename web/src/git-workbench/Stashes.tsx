@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CaretDown, CaretRight, Stack } from "@phosphor-icons/react";
-import { stashSubjectForDisplay, type GitDiff } from "@ash/shared/git-workbench";
+import { stashSubjectForDisplay, type GitDiff } from "@navi/shared/git-workbench";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { DiffView } from "./DiffView.tsx";

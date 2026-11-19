@@ -139,7 +139,7 @@
 // 那一侧(CKjeps4QSRTE)治「赢家占着锁不干活」,这一侧治「输家一次就放弃」。两者独立成立:
 // 幽灵修好了,也仍然会有合法的赢家让我们输一次;重排做好了,也仍然需要有人把幽灵锁放开,
 // 否则重排等的那次释放永远不来。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, type FreeReviewDispatchIntent } from "./db/schema.js";
@@ -250,11 +250,11 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
   // 以作废的身份往下写意图、排等待者 —— 而真正的现任也在办同一轮。
   const token = dispatch.claimToken ?? claimReviewDispatch(run.id, run.currentRound, generation, "queued");
   if (!token) {
-    console.error(`[ash] ${label}派发让出 task=${taskId} run=${run.id}：这一轮已经有在途派发`);
+    console.error(`[navi] ${label}派发让出 task=${taskId} run=${run.id}：这一轮已经有在途派发`);
     return "handed-off";
   }
   if (!reviewDispatchOwned(run.id, run.currentRound, token)) {
-    console.error(`[ash] ${label}派发让出 task=${taskId} run=${run.id}：手里这张认领证已经被撤销（这一轮期间被重跑成另一次）`);
+    console.error(`[navi] ${label}派发让出 task=${taskId} run=${run.id}：手里这张认领证已经被撤销（这一轮期间被重跑成另一次）`);
     return "handed-off";
   }
 
@@ -280,7 +280,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
   /** 这一轮不归我们办了(在途意图已经不是手里那一份):认领还回去,一个字都不写。 */
   const handOff = (why: string): ReviewDispatchOutcome => {
     releaseReviewDispatchClaim(run.id, run.currentRound, token);
-    console.error(`[ash] ${label}派发让出 task=${taskId} run=${run.id}：${why}`);
+    console.error(`[navi] ${label}派发让出 task=${taskId} run=${run.id}：${why}`);
     return "handed-off";
   };
 
@@ -296,7 +296,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     } finally {
       await settled();
     }
-    console.error(`[ash] ${label}派发放弃 task=${taskId} run=${run.id} attempts=${attempts}: ${failure}`);
+    console.error(`[navi] ${label}派发放弃 task=${taskId} run=${run.id} attempts=${attempts}: ${failure}`);
   };
 
   /**
@@ -412,7 +412,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
         await hand();
       } catch (error) {
         releaseReviewDispatchClaim(run.id, run.currentRound, token);
-        console.error(`[ash] ${label}派发重排出错 task=${taskId} run=${run.id}（认领已归还，`
+        console.error(`[navi] ${label}派发重排出错 task=${taskId} run=${run.id}（认领已归还，`
           + `库里的意图留着等下一拍对账补办）:`, error);
       }
     };
@@ -429,7 +429,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
       // (回执落定成 unknown、或者进程没了),也照样按住,只是改由用户点「继续本轮审查」决定重投。
       onUnconfirmed: (message) => {
         releaseReviewDispatchClaim(run.id, run.currentRound, token);
-        console.error(`[ash] ${label}派发交付说不清 task=${taskId} run=${run.id}：${message}`
+        console.error(`[navi] ${label}派发交付说不清 task=${taskId} run=${run.id}：${message}`
           + "（认领已归还，意图留给对账按交付凭据裁决）");
       },
     }, ownershipGate);

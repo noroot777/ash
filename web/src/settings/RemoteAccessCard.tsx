@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowClockwise, Check, Eye, EyeSlash, Prohibit, QrCode as QrCodeIcon, SignOut, Trash } from "@phosphor-icons/react";
-import type { PairCode, RemoteAccessView, RemoteDeviceView, RemoteDeviceVia } from "@ash/shared";
+import type { PairCode, RemoteAccessView, RemoteDeviceView, RemoteDeviceVia } from "@navi/shared";
 import { Button, StatusChip } from "../components/ui.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { QrCode } from "../components/QrCode.tsx";
@@ -16,11 +16,11 @@ const VIA_LABEL: Record<RemoteDeviceVia, string> = {
   key: "凭访问密钥加入",
 };
 
-// 自用模式的「远程访问」:哪些设备能从别处连进这台 ash(判据在 server 的
+// 自用模式的「远程访问」:哪些设备能从别处连进这台 navi(判据在 server 的
 // auth/remote-access.ts)。从上到下:等着点头的申请 → 已经放进来的设备 → 再放一台 →
 // 给脚本用的访问密钥。
 //
-// 最后一行只在 **ash 所在的那台机器上**打开时才有:连进来的设备能放别的设备、能请别的
+// 最后一行只在 **navi 所在的那台机器上**打开时才有:连进来的设备能放别的设备、能请别的
 // 设备出去(它本来就开得了终端),但读不到那把长期密钥。
 export function RemoteAccessCard({ notify }: { notify: (message: string) => void }) {
   const [view, setView] = useState<RemoteAccessView | null>(null);

@@ -49,7 +49,7 @@ export function notePrerequisiteProgress(prerequisiteId: string, dependents?: st
   if (pending.has(key)) return;
   pending.set(key, setTimeout(() => {
     pending.delete(key);
-    void progress(prerequisiteId, dependents).catch((error) => console.error(`[ash] 前置 ${prerequisiteId} 推进下游失败:`, error));
+    void progress(prerequisiteId, dependents).catch((error) => console.error(`[navi] 前置 ${prerequisiteId} 推进下游失败:`, error));
   }, 150).unref());
 }
 

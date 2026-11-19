@@ -15,7 +15,7 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Navi
 `scripts/bundle-runtime.mjs` 把下面这些装进 `Contents/Resources/app`（布局与仓库同形）：
 
 - `node/bin/node`：固定版本的 node（版本与 sha256 写死在脚本顶部，下载后校验，对不上就不用）；
-- `shared`、`server/dist`、`mcp/dist`、`web/dist`：先跑一遍 `npm run build`（`ASH_MAC_SKIP_BUILD=1` 跳过）；
+- `shared`、`server/dist`、`mcp/dist`、`web/dist`：先跑一遍 `npm run build`（`NAVI_MAC_SKIP_BUILD=1` 跳过）；
 - `node_modules`：server 与 mcp 的生产依赖，用自带 node 装，node-pty 按它重编。
 
 下载的 node 和装好的依赖缓存在 `build/cache/`，lockfile、各 workspace 的 package.json 或 node 版本变了才重装。
@@ -24,8 +24,8 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Navi
 
 ## 服务怎么起
 
-- 打开 app 先探 `/api/health`。端口上是**自己那份**才载页面：health 报的数据根是 app 的数据根、代码目录是 app 自带的那份、开着本机自用模式，三样都对上（`AshHealth.swift`，只看数据根的话仓库里指着同一份数据的开发实例也会被认成自己）。没人就用自带 node 起自带 server，带 `ASH_DATA_DIR=<数据根>`、`ASH_LOCAL_ONLY=1`。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；数据根、端口、本机模式写成命令里的字面量、由 `env` 在 exec 那一下落定，终端配置里给开发实例 export 的同名变量盖不掉它们。node 不从 PATH 找。
-- 窗口不连 4317，连这份服务**专用的端口**：app 按数据根的真实路径算出一个固定端口（42000–47999，`AshConfig.windowPort`；`ASH_MAC_WINDOW_PORT` 可指定），起服务时用 `ASH_WINDOW_PORT` 交给它，服务在 4317 之外再监听这个端口（只听 127.0.0.1），health 里报出来（`server/src/window-port.ts`）；health 报的专用端口对不上（没监听上、或者不是这一版 app 起的）也不算自己那份。4317 照旧给浏览器、CLI 和 MCP 用，「在浏览器中打开」换回 4317 的地址。这样自己那份一停，窗口的端口就空着：别的 Navi 默认只会去占 4317，撤页之前页面还在发的请求连不上任何人。**剩余风险（用户 2026-11-14 选择接受）**：专用端口只是一个普通的本机端口，不归这份服务独占。有人特意把一份旧版 Navi（不认实例号）用 `PORT` 起在这个端口上，而且恰好赶在窗口撤页之前那一两秒，页面在那一下发出的请求仍会被它执行；新版 Navi 起在这个端口上则会因为实例号对不上而拒收。要彻底堵住得让窗口请求换成旧版接不住的形式（每次起服务都不同的地址前缀，或经 app 转发到只有新版才开的本机连接文件），改动大，没有做。代价：窗口和浏览器是两个来源，主题、草稿这些存在页面本地的设置各管各的。
+- 打开 app 先探 `/api/health`。端口上是**自己那份**才载页面：health 报的数据根是 app 的数据根、代码目录是 app 自带的那份、开着本机自用模式，三样都对上（`NaviHealth.swift`，只看数据根的话仓库里指着同一份数据的开发实例也会被认成自己）。没人就用自带 node 起自带 server，带 `NAVI_DATA_DIR=<数据根>`、`NAVI_LOCAL_ONLY=1`。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；数据根、端口、本机模式写成命令里的字面量、由 `env` 在 exec 那一下落定，终端配置里给开发实例 export 的同名变量盖不掉它们。node 不从 PATH 找。
+- 窗口不连 4317，连这份服务**专用的端口**：app 按数据根的真实路径算出一个固定端口（42000–47999，`NaviConfig.windowPort`；`NAVI_MAC_WINDOW_PORT` 可指定），起服务时用 `NAVI_WINDOW_PORT` 交给它，服务在 4317 之外再监听这个端口（只听 127.0.0.1），health 里报出来（`server/src/window-port.ts`）；health 报的专用端口对不上（没监听上、或者不是这一版 app 起的）也不算自己那份。4317 照旧给浏览器、CLI 和 MCP 用，「在浏览器中打开」换回 4317 的地址。这样自己那份一停，窗口的端口就空着：别的 Navi 默认只会去占 4317，撤页之前页面还在发的请求连不上任何人。**剩余风险（用户 2026-11-14 选择接受）**：专用端口只是一个普通的本机端口，不归这份服务独占。有人特意把一份旧版 Navi（不认实例号）用 `PORT` 起在这个端口上，而且恰好赶在窗口撤页之前那一两秒，页面在那一下发出的请求仍会被它执行；新版 Navi 起在这个端口上则会因为实例号对不上而拒收。要彻底堵住得让窗口请求换成旧版接不住的形式（每次起服务都不同的地址前缀，或经 app 转发到只有新版才开的本机连接文件），改动大，没有做。代价：窗口和浏览器是两个来源，主题、草稿这些存在页面本地的设置各管各的。
 - 认过人之后，页面发的每个请求（页面本身、fetch、SSE、预览）还都带着那一份服务的实例号（cookie `ash_instance`，原生的补接请求放在请求头里）。实例号每次起服务都换；自家服务原地重起过、或者专用端口上换了一份新版 Navi，见到别人的实例号一律 409、什么都不执行（`server/src/instance-binding.ts`）。
 - 页面在的时候也一直认着人：本机地址的刷新、前进后退、页面自己跳转放行前各认一次，页面在时每秒再认一次。窗口的端口上不再是自己那份（比如服务停了）就把整页撤成空白、盖上说明，自己那份回来后回到原来的路由；自己那份重起过（实例号换了）就换上新的重载一遍。这一道管的是提示和撤页，不是请求归属：撤页之前还在路上的请求由上面两条挡下。
 - server 进自己的会话，**关窗、退出 app 都不停服务**，也不带走在跑的 agent。app 只负责起，不杀、不守护。
@@ -117,10 +117,10 @@ GitHub 凭证按顺序找：`GH_TOKEN` / `GITHUB_TOKEN` → `gh auth token` → 
 不碰 GitHub、不碰日常那一份 app：换一个 bundle id（defaults、数据根、登录项都跟着分开）、本机 http 托 appcast，造一旧一新两版：
 
 ```bash
-export ASH_MAC_BUNDLE_ID=dev.navi.mac.rehearsal ASH_MAC_SKIP_BUILD=1 \
-       ASH_MAC_FEED_URL=http://127.0.0.1:8765/appcast.xml ASH_MAC_ED_PUBLIC_KEY=<演练公钥>
-ASH_MAC_BUILD_NUMBER=20000101.0001 bash desktop/macos/build.sh && ditto desktop/macos/build/Navi.app /tmp/r/Navi.app
-ASH_MAC_BUILD_NUMBER=20000101.0002 bash desktop/macos/build.sh
+export NAVI_MAC_BUNDLE_ID=dev.navi.mac.rehearsal NAVI_MAC_SKIP_BUILD=1 \
+       NAVI_MAC_FEED_URL=http://127.0.0.1:8765/appcast.xml NAVI_MAC_ED_PUBLIC_KEY=<演练公钥>
+NAVI_MAC_BUILD_NUMBER=20000101.0001 bash desktop/macos/build.sh && ditto desktop/macos/build/Navi.app /tmp/r/Navi.app
+NAVI_MAC_BUILD_NUMBER=20000101.0002 bash desktop/macos/build.sh
 npm run release:mac -- --local /tmp/r/feed --app desktop/macos/build/Navi.app --ed-key-file <演练私钥文件>
 (cd /tmp/r/feed && python3 -m http.server 8765 --bind 127.0.0.1) &
 defaults write dev.navi.mac.rehearsal NaviURL http://127.0.0.1:14977
@@ -153,9 +153,9 @@ open /tmp/r/Navi.app                                                         # �
 
 - **隐私权限要重新给**：macOS 按包标识记权限（辅助功能、完全磁盘访问、自动化、文件夹访问……）。给过 Ash 的，Navi 第一次用到时会重新问；「系统设置 → 隐私与安全性」里 Ash 那几条要自己删。
 - **第一次打开要再过一次 Gatekeeper**（没经公证，同首页的处理）。
-- 「应用程序」里会多一个叫 Ash 的替身（软链），见上表最后一行。
+- 「应用程序」里会多一个叫 Navi 的替身（软链），见上表最后一行。
 - Dock 里固定的 Ash 图标会跟着旧包进废纸篓（或者失效）：从 Dock 移掉、重新把 Navi 拖上去。**别从废纸篓或那个旧图标打开 Ash**：旧版会把 Navi 的服务当成「旧版 app 起的」换成它自己的、用旧代码跑在已经被新版迁移过的库上；真要退回旧版按「更新前的库备份、回到旧版」那一节走。
-- 钥匙串、通知、登录时打开（「通用 → 登录项」里那一栏）这几样 Ash 没有用过，不涉及；登录时起服务走的是上表的 LaunchAgent。
+- 钥匙串、通知、登录时打开（「通用 → 登录项」里那一栏）这几样 Navi 没有用过，不涉及；登录时起服务走的是上表的 LaunchAgent。
 
 ## 第一次打开
 
@@ -174,14 +174,14 @@ open /tmp/r/Navi.app                                                         # �
 不碰日常那一份：把 app 拷到任何地方，用临时数据根和临时端口直接跑可执行文件——
 
 ```bash
-ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home \
+NAVI_URL=http://127.0.0.1:14977 NAVI_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home \
   /path/to/Navi.app/Contents/MacOS/Navi                 # 带窗口
   /path/to/Navi.app/Contents/MacOS/Navi --start-server  # 不带窗口
 ```
 
 也可以 `defaults write dev.navi.mac NaviDataDir <目录>` 换数据根、`defaults write dev.navi.mac NaviURL http://192.168.1.187:4317` 连别的 Navi（非本机地址不替它起服务，也不做身份判断）。
 
-定点回归（仅 macOS）：`node scripts/test-macos-update.mjs` 覆盖装之前那道闸（不会打断就不问；会打断先问、等到排空自己装、现在装；问不出来按会打断；等的时候一次 503 / 不应答不放行；只停评估过的那个进程；另一处在起服务时不停；维护标记跨进程生效、持有者没了作废；停不下来不装也不备份；别的 Navi 不碰；退出那一档和它备份失败时的说法；Sparkle 放弃后闸收回、重试再备份；起服务前补备份、没有服务记录时连着起不来也留住迁移前的原件、起它的启动器没等到时由之后看到它应答的那一处确认、下一版不拿上一次的底顶替、确认后旧恢复点作废；旧版服务识别）、库备份（WAL 里的写入、确认前不轮换、确认后只留 5 份、同一秒不覆盖且按生成先后认新旧）。`node scripts/test-macos-release.mjs` 覆盖发版脚本：只出 dmg（格式、卷里只有 app + Applications 软链 + 入库的布局）、dmg 与 appcast 的签名、篡改检测、重发 / 旧版本 / 钥匙不配对拒发、`--notes`、缓存 dmg 认 app 且同一份原样沿用；对着本地假 GitHub（装包、清单两个仓库，账号权限和 token 真写得了分开模拟）的正式发版：账号能写但 token 只写得了一个或都写不了、清单分支要 PR 或开着保护、构建提交没推、同名 tag 指着别的提交、app 没记构建提交、旧格式配置，都什么都不公开；都齐了是草稿 → 传包 → 下回核对 → 公开 → appcast 进清单仓库且指向公开的 dmg → README 链接只提交 README；预检都过、提交 appcast 才被拒时 Release 保持公开、重跑只补 appcast；记着别的提交、排在第二页的旧草稿找得到，公开时 tag 打在这次的构建提交上；全发完只差 README 时重跑只补 README，补旧版收尾时 README 不倒回去；README 那一步提交钩子失败时没人动过就还原、期间有人改过就保留他的改动，README 指着更新的一版时旧版不覆盖它。`node scripts/test-macos-sparkle-dmg.mjs` 用真的 Sparkle（`Tests/SparkleDmg` 编的空壳 app，更新配置同 build.sh）走一遍：dmg 被改一个字节 → 下载了但挂载前验签不过、不装；appcast 被改 → 连 dmg 都不下；都对 → 装上新版并由 Sparkle 重开。`node scripts/test-macos-client.mjs` 用真的 AshConfig / AshHealth / ServerLauncher / DataImport / BrowserWindowController 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据（数据根 + 自带代码 + 本机模式）、窗口只连专用端口、在线后换人（自己那份停了、不认实例号的旧版 Navi 接手 4317，页面持续写请求，一条都到不了 4317；导航与定时两道撤页；自家服务重起后换上新实例号）、空数据根不起、起服务的环境（终端配置盖不掉）、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、构建号、安装（别名目录、带正则字符的目录、相对路径起的包内可执行文件、包外软链起的入口靠它拿着的锁认出、最后检查之后改名之前起来的入口等在锁上并读到整份新包、锁文件缺了不启动不安装、两个安装器并发）、导入（WAL 里的写入、命名管道跳过而链接照原样复制、暂存里洗过再发布、和起服务互斥、失败与抢跑不留痕迹、残留清单、停掉的源、互相包含、多人库拒绝）。server 那一半：`npm -w server run test:host-ash-mcp`（MCP 登记归类）、`npm -w server run test:import-snapshot`（导入不是重启：真的接管入口对着洗过的库认不出活着的源进程；同一串开机对账对着没洗/洗过的副本各跑一遍，前者替源实例重投修复、后者一行不动；路径逐字重定位）、`npm -w server run test:instance-binding`（真服务：带着别人实例号的写请求、页面、预览与预览 WebSocket 一律 409 且不执行，health 照答；窗口专用端口上同一套判据，被占着时 health 报 null、服务照常起）。
+定点回归（仅 macOS）：`node scripts/test-macos-update.mjs` 覆盖装之前那道闸（不会打断就不问；会打断先问、等到排空自己装、现在装；问不出来按会打断；等的时候一次 503 / 不应答不放行；只停评估过的那个进程；另一处在起服务时不停；维护标记跨进程生效、持有者没了作废；停不下来不装也不备份；别的 Navi 不碰；退出那一档和它备份失败时的说法；Sparkle 放弃后闸收回、重试再备份；起服务前补备份、没有服务记录时连着起不来也留住迁移前的原件、起它的启动器没等到时由之后看到它应答的那一处确认、下一版不拿上一次的底顶替、确认后旧恢复点作废；旧版服务识别）、库备份（WAL 里的写入、确认前不轮换、确认后只留 5 份、同一秒不覆盖且按生成先后认新旧）。`node scripts/test-macos-release.mjs` 覆盖发版脚本：只出 dmg（格式、卷里只有 app + Applications 软链 + 入库的布局）、dmg 与 appcast 的签名、篡改检测、重发 / 旧版本 / 钥匙不配对拒发、`--notes`、缓存 dmg 认 app 且同一份原样沿用；对着本地假 GitHub（装包、清单两个仓库，账号权限和 token 真写得了分开模拟）的正式发版：账号能写但 token 只写得了一个或都写不了、清单分支要 PR 或开着保护、构建提交没推、同名 tag 指着别的提交、app 没记构建提交、旧格式配置，都什么都不公开；都齐了是草稿 → 传包 → 下回核对 → 公开 → appcast 进清单仓库且指向公开的 dmg → README 链接只提交 README；预检都过、提交 appcast 才被拒时 Release 保持公开、重跑只补 appcast；记着别的提交、排在第二页的旧草稿找得到，公开时 tag 打在这次的构建提交上；全发完只差 README 时重跑只补 README，补旧版收尾时 README 不倒回去；README 那一步提交钩子失败时没人动过就还原、期间有人改过就保留他的改动，README 指着更新的一版时旧版不覆盖它。`node scripts/test-macos-sparkle-dmg.mjs` 用真的 Sparkle（`Tests/SparkleDmg` 编的空壳 app，更新配置同 build.sh）走一遍：dmg 被改一个字节 → 下载了但挂载前验签不过、不装；appcast 被改 → 连 dmg 都不下；都对 → 装上新版并由 Sparkle 重开。`node scripts/test-macos-client.mjs` 用真的 NaviConfig / NaviHealth / ServerLauncher / DataImport / BrowserWindowController 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据（数据根 + 自带代码 + 本机模式）、窗口只连专用端口、在线后换人（自己那份停了、不认实例号的旧版 Navi 接手 4317，页面持续写请求，一条都到不了 4317；导航与定时两道撤页；自家服务重起后换上新实例号）、空数据根不起、起服务的环境（终端配置盖不掉）、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、构建号、安装（别名目录、带正则字符的目录、相对路径起的包内可执行文件、包外软链起的入口靠它拿着的锁认出、最后检查之后改名之前起来的入口等在锁上并读到整份新包、锁文件缺了不启动不安装、两个安装器并发）、导入（WAL 里的写入、命名管道跳过而链接照原样复制、暂存里洗过再发布、和起服务互斥、失败与抢跑不留痕迹、残留清单、停掉的源、互相包含、多人库拒绝）。server 那一半：`npm -w server run test:host-navi-mcp`（MCP 登记归类）、`npm -w server run test:import-snapshot`（导入不是重启：真的接管入口对着洗过的库认不出活着的源进程；同一串开机对账对着没洗/洗过的副本各跑一遍，前者替源实例重投修复、后者一行不动；路径逐字重定位）、`npm -w server run test:instance-binding`（真服务：带着别人实例号的写请求、页面、预览与预览 WebSocket 一律 409 且不执行，health 照答；窗口专用端口上同一套判据，被占着时 health 报 null、服务照常起）。
 
 ## 窗口
 
@@ -197,9 +197,9 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home \
 | `scripts/build-number.mjs` | 严格递增的 CFBundleVersion |
 | `scripts/install-app.sh` | 换进安装目录（按目录加锁）；旧包还有进程在用就不换 |
 | `scripts/bundle-users.sh` | 还有哪些进程在用某个 .app（按真实文件身份认） |
-| `Sources/AshConfig.swift` | 连哪台、自带运行时在哪、数据和日志放哪 |
+| `Sources/NaviConfig.swift` | 连哪台、自带运行时在哪、数据和日志放哪 |
 | `Sources/LegacyIdentity.swift` | 改名前的 Ash.app 怎么交班：设置、网页数据、登录项接过来，旧包让位 |
-| `Sources/AshHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式、窗口专用端口） |
+| `Sources/NaviHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式、窗口专用端口） |
 | `Sources/ServerLauncher.swift` | 起自带的服务；端口被占时说清是谁 |
 | `Sources/ServerStartLock.swift` | 同一数据根同时只有一处在起服务 |
 | `Sources/LaunchFlow.swift` | 窗口回到 Navi 的那条路，首启的全新开始 / 导入 |
@@ -224,7 +224,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home \
 | `Sources/DownloadTransaction.swift` | 另存为的暂存、原子替换与中断后的回收 |
 | `Sources/OfflineView.swift` | 页面载不进来时的那一屏 |
 | `Sources/FirstRunView.swift` | 首启那一屏：全新开始 / 导入已有数据 |
-| `Sources/AshPalette.swift` | 原生几屏的颜色，取自 web 的浅 / 深两套令牌 |
+| `Sources/NaviPalette.swift` | 原生几屏的颜色，取自 web 的浅 / 深两套令牌 |
 | `scripts/make-icon.swift` | 构建时把 `docs/logo/icon.svg` 栅格成图标 |
 
 卸载：菜单里先取消「登录时启动 Navi 服务」，停掉服务，再删 /Applications/Navi.app（升级上来的机器上还有一个指向它的 `Ash.app` 替身，一起删）；数据在 `~/Library/Application Support/dev.navi.mac/`（升级上来的是 `dev.ash.mac/`）。页面检查器：Safari →「开发」→ 本机 → Navi。

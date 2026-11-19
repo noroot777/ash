@@ -1,4 +1,4 @@
-import type { Group, Session, Task, TaskListItem } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem } from "@navi/shared";
 import { Clock, FolderOpen, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, UsersThree } from "@phosphor-icons/react";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "../task-detail/NativeWorkInspector.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
@@ -10,7 +10,7 @@ import type { Notify } from "../lib/notify.ts";
 import { TeamTimeline } from "./TeamTimeline.tsx";
 import { TeamReviewInspector } from "./TeamReviewInspector.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
-import { monitorBlockedReason } from "@ash/shared/monitor";
+import { monitorBlockedReason } from "@navi/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
 import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";

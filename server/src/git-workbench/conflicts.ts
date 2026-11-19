@@ -7,8 +7,8 @@ import {
   realpath,
 } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
-import type { GitAction, GitConflict } from "@ash/shared/git-workbench";
-import { emptyCommitGuidance } from "@ash/shared/git-workbench";
+import type { GitAction, GitConflict } from "@navi/shared/git-workbench";
+import { emptyCommitGuidance } from "@navi/shared/git-workbench";
 import { assertPathShape } from "../scm-paths.js";
 import { literalPathspec, readScmStatus } from "../git-status.js";
 import { cappedGitStdout } from "../git-exec.js";

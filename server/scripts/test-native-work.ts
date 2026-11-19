@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent, Session } from "@ash/shared";
+import type { AgentEvent, Session } from "@navi/shared";
 import { parseClaudeStream } from "../src/executors/claude.js";
 import { ClaudeControlBridge } from "../src/executors/claude-control.js";
 import { parseCodexStream } from "../src/executors/codex.js";
@@ -170,7 +170,7 @@ for await (const event of parseCodexStream(emit([
 ]) as any, undefined, { stopRequested: false }, { initialThreadId: "", contextNotBeforeMs: Date.now() })) codexStream.push(event);
 assert.equal(fromTools(codexStream)[0].status, "completed", "Codex exec JSON与App Server使用同一子智能体状态协议");
 
-const imageDir = mkdtempSync(join(tmpdir(), "ash-native-attachments-"));
+const imageDir = mkdtempSync(join(tmpdir(), "navi-native-attachments-"));
 const sourceImage = join(imageDir, "child.svg");
 const attachments: string[] = [];
 const fieldAttachments: (string | undefined)[] = [];
@@ -325,7 +325,7 @@ assert.deepEqual(wfUnsettled.map((row) => [row.status, row.message]), [["complet
 const wfReaped = fromTools((await workflowRun([])).filter((event) => event.kind === "tool"));
 assert.deepEqual(wfReaped.map((row) => row.status), ["stopped", "stopped"], "进程结束时还在跑的子智能体记停");
 // 单飞：工作流还在跑时回合结尾先不收台（turnEnd 带上还在等的个数），子智能体照旧在跑；
-// 没有要等的后台活时收台，还挂着「进行中」的终态必须赶在 turnEnd 之前（之后 ash 就不读流了）。
+// 没有要等的后台活时收台，还挂着「进行中」的终态必须赶在 turnEnd 之前（之后 navi 就不读流了）。
 const endOfTurn = { type: "result", subtype: "success", result: "工作流已在后台跑起来" };
 const turnSlice = (events: AgentEvent[]) => events.slice(0, events.findIndex((event) => event.kind === "turnEnd") + 1);
 // 结尾还带着回合身份(epoch,单飞据它认过期结尾)和开始等的时刻(since;没有落盘位置时就是这一刻)。

@@ -27,7 +27,7 @@ function copyOwnership(directory, ownership) {
   if (typeof ownership.token !== "string" || !/^[a-f0-9]{64}$/.test(ownership.token)
     || typeof ownership.record !== "string" || basename(ownership.record) !== "ownership.json"
     || dirname(dirname(resolve(ownership.record))) !== resolve(tmpdir())
-    || !/^ash-test-owner-[A-Za-z0-9]{6}$/.test(basename(dirname(ownership.record)))
+    || !/^navi-test-owner-[A-Za-z0-9]{6}$/.test(basename(dirname(ownership.record)))
     || !validIdentity(ownership.directoryIdentity) || !validIdentity(ownership.recordDirectoryIdentity)) {
     throw directoryOwnershipError(directory);
   }
@@ -50,13 +50,13 @@ function verifyOwnership(directory, ownership) {
 export class TestDirectory {
   constructor(directory, ownership, prefix) {
     const owned = directory === undefined;
-    this.path = resolve(directory ?? mkdtempSync(prefix ?? join(tmpdir(), "ash-test-scope-")));
+    this.path = resolve(directory ?? mkdtempSync(prefix ?? join(tmpdir(), "navi-test-scope-")));
     let recordDirectory;
     try {
       const identity = directoryIdentity(this.path);
       if (owned) {
         writeFileSync(join(this.path, "started"), String(Date.now()), { flag: "wx" });
-        recordDirectory = mkdtempSync(join(tmpdir(), "ash-test-owner-"));
+        recordDirectory = mkdtempSync(join(tmpdir(), "navi-test-owner-"));
         this.ownership = copyOwnership(this.path, { token: randomBytes(32).toString("hex"),
           record: join(recordDirectory, "ownership.json"), directoryIdentity: identity,
           recordDirectoryIdentity: directoryIdentity(recordDirectory) });

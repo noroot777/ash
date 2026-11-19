@@ -10,13 +10,13 @@
 import { readFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
+import { SERVICE_COMMAND_ID } from "@navi/shared/project-commands";
 import { listeningPids } from "../src/service-ports.js";
 import { terminalSessions } from "../src/terminal.js";
 import type { RunnableCommand } from "../src/terminal-commands.js";
 
-export const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ash-ports-")));
-export const outside = realpathSync(mkdtempSync(join(tmpdir(), "ash-outside-")));
+export const cwd = realpathSync(mkdtempSync(join(tmpdir(), "navi-ports-")));
+export const outside = realpathSync(mkdtempSync(join(tmpdir(), "navi-outside-")));
 /** 整场跑完都要确认没留下任何活口。 */
 export const strays = new Set<number>();
 
@@ -45,7 +45,7 @@ http.createServer((_, res) => res.end("ok")).listen(Number(port), "127.0.0.1", (
 
 /**
  * 一个什么都不打印、也不听端口的常驻进程:detached + stdio ignore,父进程立刻退出。
- * ash 手里**一条线索都没有** —— 进程归属断了、端口也没有。这一类只能靠「配了停止命令 +
+ * navi 手里**一条线索都没有** —— 进程归属断了、端口也没有。这一类只能靠「配了停止命令 +
  * 上次正常退出又没被停过」认它还开着(openSession 的第四档)。
  */
 writeFileSync(join(cwd, "quiet.js"), `

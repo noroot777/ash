@@ -12,7 +12,7 @@
 //   ④ 多人模式按人算:新来的人有他自己那一套要配,别人的执行器、别人拉他进的项目都
 //      不替他算过 —— 那两样正是他**还没配**的证据,不是配过的证据。
 //
-// 跑法(不设 ASH_DB 时自己开一个临时库):
+// 跑法(不设 NAVI_DB 时自己开一个临时库):
 //   npm -w server run test:onboarding-gate
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -20,8 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-onboarding-gate-"));
-process.env.ASH_DB ||= join(stage, "onboarding-gate.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-onboarding-gate-"));
+process.env.NAVI_DB ||= join(stage, "onboarding-gate.db");
 requireTmpDb("test-onboarding-gate");
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
@@ -66,7 +66,7 @@ assert.equal(await needsOnboarding(SINGLE_ACTOR), true, "边界只认一次,之�
 
 // ③ 三步全跳过也要放行:用户表过态就是表过态。
 await personal.patchSettingsFor(SINGLE_ACTOR, { onboardedAt: nowIso() });
-assert.equal(await needsOnboarding(SINGLE_ACTOR), false, "点过「进入 ash」就不该再弹");
+assert.equal(await needsOnboarding(SINGLE_ACTOR), false, "点过「进入 navi」就不该再弹");
 
 // ── 老实例升上来:边界那一刻库里已经有东西 ────────────────────────────────
 // 模拟升级:把标记和表态都清掉(= 这个库是上一版建的),库里留着执行器和项目,再跑

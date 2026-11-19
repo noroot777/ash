@@ -31,7 +31,7 @@
 //
 // 现场也不往日志里追加，在 accept-gate.ts 的 settleGate 里**第一时间冻结存盘**：日志里
 // 「谁最后写」不由我们说了算，停不掉的进程之后写的每个字节都能把它顶出可回显的那一段。
-import { ACCEPT_GATE_PROGRESS_MS, ACCEPT_GATE_SILENCE_MS, ACCEPT_GATE_TIMEOUT_MS } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_PROGRESS_MS, ACCEPT_GATE_SILENCE_MS, ACCEPT_GATE_TIMEOUT_MS } from "@navi/shared/accept-gate";
 import { appendGateNote } from "./accept-gate-diagnosis.js";
 import { sightGateLog, type GateLogSighting } from "./accept-gate-observe.js";
 
@@ -131,8 +131,8 @@ const size = (bytes: number): string => bytes < 1024 ? `${bytes}B` : `${(bytes /
  * 这次观测里命令**自己**最后吐的那一行。不需要「排掉谁」：这份文件在它跑着的时候只有
  * 它一个写入者。两道截断，都不是来源推断：
  *
- *  · `base` 之前的一概不看 —— 那是开跑前 ash 写的启动说明（命令原文、快照路径…）。
- *    不截断的话，全程没输出的命令会被报成「停在 `[ash] $ <命令>`」（第 2 轮审查 R2-F1）。
+ *  · `base` 之前的一概不看 —— 那是开跑前 navi 写的启动说明（命令原文、快照路径…）。
+ *    不截断的话，全程没输出的命令会被报成「停在 `[navi] $ <命令>`」（第 2 轮审查 R2-F1）。
  *  · 空行和纯 ANSI 控制序列不算一行。
  */
 function lastCommandLine(sight: GateLogSighting, base: number): string | null {
@@ -207,23 +207,23 @@ export function gateWatchReport(scene: GateWatchScene): GateWatchVerdict {
       + `${late ? `（自开跑后第 ${minutes(seen.sinceMs)} 分钟起算）` : ""}`;
   const log = [
     "",
-    "[ash] ──── 被收掉时的现场 ────",
-    `[ash] 跑了 ${minutes(scene.elapsedMs)} 分钟（上限 ${minutes(scene.limitMs)} 分钟），命令自己的输出累计${bytesText}。`,
+    "[navi] ──── 被收掉时的现场 ────",
+    `[navi] 跑了 ${minutes(scene.elapsedMs)} 分钟（上限 ${minutes(scene.limitMs)} 分钟），命令自己的输出累计${bytesText}。`,
     // 没亲眼见过输出时**不存在**「最后一次输出」这个时刻：拿开跑时刻顶上去就是凭空造了
     // 一个事件时间（第 6 轮审查 F1）。只有从头看到尾才敢说「一次都没有过」。
-    !seen ? `[ash] 最后一次有输出在什么时候：读不出来。`
+    !seen ? `[navi] 最后一次有输出在什么时候：读不出来。`
       : seen.everProduced
-        ? `[ash] 最后一次有输出在 ${minutes(confirmedAgoMs)} 分钟前，即开跑后第 ${minutes(scene.elapsedMs - confirmedAgoMs)} 分钟。`
+        ? `[navi] 最后一次有输出在 ${minutes(confirmedAgoMs)} 分钟前，即开跑后第 ${minutes(scene.elapsedMs - confirmedAgoMs)} 分钟。`
         : late || blind
-          ? `[ash] 最后一次有输出在什么时候：未知。能确认的只有 —— `
+          ? `[navi] 最后一次有输出在什么时候：未知。能确认的只有 —— `
             + `${late ? `开跑后第 ${minutes(seen.sinceMs)} 分钟才接上这份日志，接上之后` : "从开跑起"}`
             + `那 ${minutes(seen.silentMs)} 分钟没有新增输出${blind ? `，再往后 ${minutes(seen.agoMs)} 分钟读不到` : ""}。`
-          : `[ash] 最后一次有输出：从开跑到被收掉都没有过。`,
-    `[ash] 停在这一行：${stoppedAt}`,
-    ...(blind ? [`[ash] 注意：末尾 ${minutes(seen.agoMs)} 分钟读不到这份日志，上面这几个数都只到那之前；`
+          : `[navi] 最后一次有输出：从开跑到被收掉都没有过。`,
+    `[navi] 停在这一行：${stoppedAt}`,
+    ...(blind ? [`[navi] 注意：末尾 ${minutes(seen.agoMs)} 分钟读不到这份日志，上面这几个数都只到那之前；`
       + `那一段里有没有输出是未知的。`] : []),
-    `[ash] 产出节奏（开跑第几分钟 / 累计输出）：${scene.marks.length ? scene.marks.join(" ") : "（没跑够一个采样间隔）"}`,
-    `[ash] 怎么读：${reading}`,
+    `[navi] 产出节奏（开跑第几分钟 / 累计输出）：${scene.marks.length ? scene.marks.join(" ") : "（没跑够一个采样间隔）"}`,
+    `[navi] 怎么读：${reading}`,
     "",
   ].join("\n");
   const ran = `跑满 ${minutes(scene.elapsedMs)} 分钟被收掉`;
@@ -321,11 +321,11 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
       nextProgressAt = at + timings.progressMs;
       marks.push(`${minutes(elapsedMs)}m/${ok && seen ? size(seen.bytes) : "?"}`);
       appendGateNote(opts.logPath, ok && seen
-        ? `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 已产出 ${size(seen.bytes)} · `
+        ? `[navi] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 已产出 ${size(seen.bytes)} · `
           + (seen.everProduced ? `最近一次输出在 ${minutes(seen.silentMs)} 分钟前`
             : seen.sinceMs > 0 ? `接上日志之后这 ${minutes(seen.silentMs)} 分钟没见过新增输出`
               : `到现在还没见过它输出`)
-        : `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 读不到这份日志，产出和静默时长都看不到`);
+        : `[navi] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 读不到这份日志，产出和静默时长都看不到`);
     }
     if (ok) {
       noticedBlind = false;
@@ -335,13 +335,13 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
         // ACCEPT_GATE_SILENCE_MS 的注释。
         appendGateNote(opts.logPath, !seen.everProduced && seen.sinceMs > 0
           // 接上之前那段看不见,不能算进「连续没有任何输出」—— 它可能正好在那会儿输出过。
-          ? `[ash] 注意 · 自开跑后第 ${minutes(seen.sinceMs)} 分钟接上这份日志起，连续 ${minutes(seen.silentMs)} 分钟`
+          ? `[navi] 注意 · 自开跑后第 ${minutes(seen.sinceMs)} 分钟接上这份日志起，连续 ${minutes(seen.silentMs)} 分钟`
             + `没有新增输出（更早的看不到）；命令仍在跑，没有被收掉。`
-          : `[ash] 注意 · 已经连续 ${minutes(seen.silentMs)} 分钟没有任何输出；命令仍在跑，没有被收掉。`);
+          : `[navi] 注意 · 已经连续 ${minutes(seen.silentMs)} 分钟没有任何输出；命令仍在跑，没有被收掉。`);
       }
     } else if (!noticedBlind) {
       noticedBlind = true;
-      appendGateNote(opts.logPath, `[ash] 注意 · 这份日志读不到了（被删掉、没权限、路径被换过都长这样）；`
+      appendGateNote(opts.logPath, `[navi] 注意 · 这份日志读不到了（被删掉、没权限、路径被换过都长这样）；`
         + `命令仍在跑，但它之后有没有输出都看不到了。`);
     }
     if (elapsedMs >= timings.timeoutMs) {

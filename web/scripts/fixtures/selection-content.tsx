@@ -6,11 +6,11 @@
  */
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { ConversationSelection } from "../../src/side-chat/ConversationSelection.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { QuestionRecord } from "@navi/shared/questions";
 import "../../src/styles/global.css";
 
 const usage = { input: 1200, output: 340, cacheRead: 9000, cacheWrite: 0, reasoning: 0, costUsd: 0.12, turns: 1 };

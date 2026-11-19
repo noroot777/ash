@@ -8,7 +8,7 @@
 // 没做 SSE 推送：备忘是**人自己写给自己看的**，不会有第二个来源在后台改它（agent 碰不到
 // 这张表）。多开一个标签页的话另一页要刷新才同步 —— 为这点代价开一条实时通道不划算。
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import type { TaskMemo } from "@ash/shared/task-memo";
+import type { TaskMemo } from "@navi/shared/task-memo";
 import { api } from "../lib/api.ts";
 import type { TaskMemoContent } from "../lib/apiTaskMemos.ts";
 

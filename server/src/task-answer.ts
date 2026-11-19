@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { QuestionAnswerInput } from "@ash/shared/questions";
+import type { QuestionAnswerInput } from "@navi/shared/questions";
 import type { Context } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -16,7 +16,7 @@ import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { QuestionRecord } from "@navi/shared/questions";
 import type { TaskRow } from "./task-store.js";
 
 export type TaskAnswerBody = QuestionAnswerInput & { answer?: string; attachments?: string[] };
@@ -94,7 +94,7 @@ export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionR
   } catch (error) {
     if (error instanceof ReviewSuperseded) {
       await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId)
-        .catch((failure) => console.error(`[ash] 失效审查收口待重试 ${taskId}:`, failure));
+        .catch((failure) => console.error(`[navi] 失效审查收口待重试 ${taskId}:`, failure));
       return { status: 409, body: { error: error.message } };
     }
     throw error;
@@ -102,7 +102,7 @@ export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionR
   bus.publish({ type: "task.question", taskId, updatedAt: record.answeredAt, question: null, questionOptions: null, questionItems: null, answeredQuestion: record });
   if (reviewQueued) {
     publishPendingMessages(taskId);
-    void deliverPendingMessages(taskId).catch((error) => console.error(`[ash] 审查答复待投递 ${taskId}:`, error));
+    void deliverPendingMessages(taskId).catch((error) => console.error(`[navi] 审查答复待投递 ${taskId}:`, error));
     return { status: 200, body: { answered: true, resumed: false, queued: true, record } };
   }
   // paused 的提问任务,答复续跑**是任务的执行回合**(selectNextInQueue 对 paused+question
@@ -137,9 +137,9 @@ export async function deliverAnswer(c: Context, task: TaskRow, record: QuestionR
         await enqueueMessage({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, execution: true, answerId: record.id });
         stashed = true;
       })
-      .catch((err) => console.error(`[ash] 答复续跑 ${taskId} 异常:`, err))
+      .catch((err) => console.error(`[navi] 答复续跑 ${taskId} 异常:`, err))
       .finally(async () => {
-        if (seat) await seat.release().catch((err) => console.error(`[ash] 答复续跑 ${taskId} 释放执行位失败:`, err));
+        if (seat) await seat.release().catch((err) => console.error(`[navi] 答复续跑 ${taskId} 释放执行位失败:`, err));
         // 占着回合的多半是**还在收尾**的提问那一轮(状态已落 paused、锁还没放):它放锁时会扫到这一行。
         // 先放执行位再扫:扫描要重新认领它(同 task-reply.ts)。
         if (stashed) flushPendingWhenTurnIdle(taskId);

@@ -1,4 +1,4 @@
-import type { AnnotationReviewStatus } from "@ash/shared/page-annotation-review";
+import type { AnnotationReviewStatus } from "@navi/shared/page-annotation-review";
 
 export function createReviewStatusReader(fetchStatus: () => Promise<AnnotationReviewStatus>) {
   let epoch = 0;

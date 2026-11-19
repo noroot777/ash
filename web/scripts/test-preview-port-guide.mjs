@@ -2,7 +2,7 @@
 // 跑：npm -w web run test:preview-port-guide
 //
 // 这条钉的是**新用户不读文档能不能写对第一条预览命令**。改动之前这一屏关于端口只有一句
-// 「端口使用 ash 提供的 PORT 环境变量」——它读起来像「ash 会替你处理」，可它的意思是
+// 「端口使用 navi 提供的 PORT 环境变量」——它读起来像「navi 会替你处理」，可它的意思是
 // 「你得把它写进命令」；完整说明在设置页的「配置说明与示例」对话框里，而打开预览的人
 // 不路过那儿。
 //
@@ -76,14 +76,14 @@ try {
   await drift.waitFor();
   const driftText = await drift.innerText();
   assert.match(driftText, /起在 5173/, "没说它实际起在哪儿");
-  assert.match(driftText, /借给它的 45843/, "没说 ash 借的是哪个——只给一个数字，用户对不上");
+  assert.match(driftText, /借给它的 45843/, "没说 navi 借的是哪个——只给一个数字，用户对不上");
   assert.match(driftText, /抢 5173/, "没说清后果，这条就只是个红字");
   // 端口写在命令里 → 改写是确定的（那个数字就是它实际绑上的端口），敢给整行让他抄走。
   assert.equal(await drift.locator("code").first().textContent(), "npm run dev -- --port $PORT",
     "没给出改好的整行命令");
   assert.equal(await drift.getByRole("button", { name: /复制改好的启动命令/ }).count(), 1, "改好的命令不能一键带走");
 
-  // 端口写在 vite.config.ts 里 → ash 编不出改法，必须老实改口，不许编一条看着像对的命令。
+  // 端口写在 vite.config.ts 里 → navi 编不出改法，必须老实改口，不许编一条看着像对的命令。
   await page.getByTestId("services-config").click();
   const fromConfig = await drift.innerText();
   assert.match(fromConfig, /来自项目的配置文件/, "编不出改法时没改口");

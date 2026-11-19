@@ -1,6 +1,6 @@
 // 接力搬 CLI 会话文件时,「放哪」和「起跑时 CLI 去哪找」必须是同一个目录。
 //
-// 2026-08-29 现场:一条任务从自用机接力到一台**多用户** ash,导入侧把 claude 的
+// 2026-08-29 现场:一条任务从自用机接力到一台**多用户** navi,导入侧把 claude 的
 // transcript 写死进宿主机 `~/.claude/projects/…`,而多用户模式起跑注入了
 // `CLAUDE_CONFIG_DIR`(它**整个取代** `~/.claude`,不回落)。文件在盘上、CLI 眼里没有,
 // `claude --resume` 换回一句 "No conversation found with session ID",回合 0.9 秒空转,
@@ -33,15 +33,15 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-handoff-cli-dir-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-handoff-cli-dir-"));
 // 产品代码走 os.homedir():POSIX 看 HOME,Windows 看 USERPROFILE,只设一个等于没设。
 const home = join(stage, "home");
 mkdirSync(home, { recursive: true });
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 process.env.CODEX_HOME = join(home, ".codex");
-process.env.ASH_DB ||= join(stage, "handoff-cli-dir.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DB ||= join(stage, "handoff-cli-dir.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-handoff-cli-config-dir");
 
 const CLAUDE_ID = "edb416ee-d4bc-46c2-9bda-f05fbcc84f87";

@@ -5,7 +5,7 @@
 // **整份仍由 schema.ts 原样再导出**:drizzle 的 `import * as schema` 必须看到全部表,
 // 拆文件不能拆掉那个视图。
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
+import type { ReviewNoVerdict } from "@navi/shared/timeline-notice";
 import type { Client } from "./node-sqlite-client.js";
 
 /**

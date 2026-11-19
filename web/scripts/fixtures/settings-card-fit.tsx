@@ -10,8 +10,8 @@
 // 数据一律往**长**里给：短数据下这类毛病看不出来，正是它们能在仓库里反复复发的原因。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentExecutorProfile, AuthState, ProjectView } from "@ash/shared";
-import type { ProjectPreviewConfig } from "@ash/shared/preview";
+import type { AgentExecutorProfile, AuthState, ProjectView } from "@navi/shared";
+import type { ProjectPreviewConfig } from "@navi/shared/preview";
 import "../../src/styles/global.css";
 // 设置页那几节的样式由 SettingsPage 自己引，照它的顺序补齐（providers 必须排在
 // agents 之后，两边有共用的表单基础样式，顺序换了层叠结果就变了）。

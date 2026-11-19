@@ -18,16 +18,16 @@ import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentEvent, ServerEvent } from "@ash/shared";
+import type { AgentEvent, ServerEvent } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-auto-title-run-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-// ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn：万一哪条结算钩子失手触发续跑，
+const root = mkdtempSync(join(tmpdir(), "navi-auto-title-run-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+// NAVI_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn：万一哪条结算钩子失手触发续跑，
 // 也不会真拉起 CLI 烧额度。
 assert.ok(
-  process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "结算钩子一旦失手触发续跑，拦截器失效就会拿用户的真额度跑 agent",
 );
 process.on("exit", () => {

@@ -1,7 +1,7 @@
 // 任务备忘的后端回归：CRUD、校验、批量摘要。自用模式（归属列恒 null）下跑，
 // 多人模式那一层（filterOwned / canUseOwned）复用的是随手记同一组函数，不在这里重测。
 //
-// 跑：ASH_DB=$TMPDIR/task-memos-$$.db npx tsx server/scripts/test-task-memos.ts
+// 跑：NAVI_DB=$TMPDIR/task-memos-$$.db npx tsx server/scripts/test-task-memos.ts
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,10 +10,10 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-memos-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const root = mkdtempSync(join(tmpdir(), "navi-task-memos-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 requireTmpDb("task-memos");
 
 const [
@@ -23,8 +23,8 @@ const [
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/task-memos.js"),
-  import("@ash/shared/task-memo"),
-  import("@ash/shared"),
+  import("@navi/shared/task-memo"),
+  import("@navi/shared"),
   import("../src/paths.js"),
 ]);
 const { projects, taskMemos, tasks } = schema;

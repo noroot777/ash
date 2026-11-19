@@ -19,7 +19,7 @@ const answer = (taskId: string) => api.request(`/tasks/${taskId}/answer`, { meth
 const question = { question: "Review question", options: ["Original option"],
   items: [{ question: "Original item", options: ["Original option"] }] };
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 try {
   const { openQuiet: open } = await setupRegressionReviews();
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {

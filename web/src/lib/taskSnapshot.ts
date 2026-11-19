@@ -5,7 +5,7 @@ type TaskSnapshot = {
   monitorRunning?: boolean;
   upstreamStalled?: boolean;
   disputeOpen?: boolean;
-  prerequisites?: import("@ash/shared/prerequisites").TaskPrerequisites;
+  prerequisites?: import("@navi/shared/prerequisites").TaskPrerequisites;
 };
 
 export function mergeTaskSnapshotFields<T extends TaskSnapshot>(current: T, incoming: T, keepEqual = false): T {

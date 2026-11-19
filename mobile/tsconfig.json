@@ -9,16 +9,16 @@
       "@/assets/*": [
         "./assets/*"
       ],
-      "@ash/shared": [
+      "@navi/shared": [
         "../shared/src/index.ts"
       ],
-      "@ash/shared/duet": [
+      "@navi/shared/duet": [
         "../shared/src/duet.ts"
       ],
-      "@ash/shared/page-annotation-display": [
+      "@navi/shared/page-annotation-display": [
         "../shared/src/page-annotation-display.ts"
       ],
-      "@ash/shared/task-attention": [
+      "@navi/shared/task-attention": [
         "../shared/src/task-attention.ts"
       ]
     },

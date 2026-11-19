@@ -17,7 +17,7 @@ const HEADER = "x-navi-human-action-token";
 // 也归闸,所以不分状态码 —— 原先是各条路由在成功分支里塞进响应体,业务拒绝那几条路径一个
 // 字都不发,于是一次 400/409 之后这个开关就按不动了(第 5 轮审查 N2)。
 const NEXT = "x-navi-human-action-token-next";
-const REFUSAL = "这个动作需要本次会话的页面凭据：请在 ash 页面上点这个开关。凭据随页面下发、用一次就失效，刷新页面可以换一份新的";
+const REFUSAL = "这个动作需要本次会话的页面凭据：请在 navi 页面上点这个开关。凭据随页面下发、用一次就失效，刷新页面可以换一份新的";
 const json = (route, body, status = 200, headers) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body), headers });
 

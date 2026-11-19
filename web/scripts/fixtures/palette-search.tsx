@@ -8,7 +8,7 @@
 // 顺带验了前端没有自己另排一遍。
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, SearchHit, TaskListItem } from "@ash/shared";
+import type { ProjectView, SearchHit, TaskListItem } from "@navi/shared";
 // global.css 必须排在组件之前 —— `main.tsx` 就是这个顺序。
 import "../../src/styles/global.css";
 import "../../src/styles/overlays.css";
@@ -102,10 +102,10 @@ const conversationHits: Record<string, SearchHit> = {
     preview: "不相关的任务正文开头",
   },
   READ_CHUNK_BYTES: {
-    ...taskHits[0]!, title: "排查 ash 意外停止", field: "conversation",
+    ...taskHits[0]!, title: "排查 navi 意外停止", field: "conversation",
     snippet: "…const READ_CHUNK_BYTES = 64 * 1024;…",
     excerpts: ["server/src/search-corpus.ts\n+const READ_CHUNK_BYTES = 64 * 1024;"],
-    preview: "为什么刚才 ash 无故自己停了两次了？",
+    preview: "为什么刚才 navi 无故自己停了两次了？",
   },
 };
 const responseOf = (rows: SearchHit[]) => new Response(`${rows.map((hit) => JSON.stringify(hit)).join("\n")}\n`, {

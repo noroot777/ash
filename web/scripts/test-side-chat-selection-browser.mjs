@@ -15,7 +15,7 @@ const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/side
   cwd: workspace,
   stdio: ["ignore", "pipe", "pipe"],
 });
-const artifacts = await mkdtemp(join(tmpdir(), "ash-side-chat-selection-browser-"));
+const artifacts = await mkdtemp(join(tmpdir(), "navi-side-chat-selection-browser-"));
 let logs = "";
 let browser;
 let server;

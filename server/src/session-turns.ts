@@ -1,6 +1,6 @@
 import { dbClient } from "./db/index.js";
 import type { InValue } from "./db/node-sqlite-client.js";
-import type { TurnInterruption, TurnOutcome } from "@ash/shared";
+import type { TurnInterruption, TurnOutcome } from "@navi/shared";
 import { id } from "./util.js";
 import { clearTurnActive, closedAlready, markTurnActive, markTurnOpenedHere } from "./session-turn-registry.js";
 // 对外的门面：登记层的公开函数在这里原样再导出一遍（理由见下面文件头的最后一段）。
@@ -123,7 +123,7 @@ async function flushUnconfirmed(sessionId: string): Promise<void> {
       await persistTurn({ sessionId, taskId: who.taskId, cwd: who.cwd, startedAt });
     } catch (error) {
       // 还是写不进去：这一笔和它后面那些都留在内存里,读端照样看得见缺口。
-      console.warn(`[ash] 欠着的 ${owed.size} 笔「漏了一个回合」还没补进库（这一段按未知披露）: ${String(error)}`);
+      console.warn(`[navi] 欠着的 ${owed.size} 笔「漏了一个回合」还没补进库（这一段按未知披露）: ${String(error)}`);
       return;
     }
   }
@@ -305,7 +305,7 @@ export async function openTurn(input: {
     );
     if (wrote === "collided") {
       console.warn(
-        `[ash] 回合起点撞上一条已结束的历史记录（重启 + 墙钟回拨?）,这一轮按未知披露: ${input.sessionId} @ ${startedAt}`,
+        `[navi] 回合起点撞上一条已结束的历史记录（重启 + 墙钟回拨?）,这一轮按未知披露: ${input.sessionId} @ ${startedAt}`,
       );
     }
   } catch (error) {
@@ -577,7 +577,7 @@ async function persistTurn(
  * 所以无身份的计数恰好就是它该有的形状。
  */
 async function noteTurnLost(input: TurnStartInput, cause: unknown): Promise<void> {
-  console.warn(`[ash] 回合开始没落盘（这一轮按缺口披露）: ${String(cause)}`);
+  console.warn(`[navi] 回合开始没落盘（这一轮按缺口披露）: ${String(cause)}`);
   // **先记内存,再试库**。顺序反过来就又回到「补写也失败 = 只剩日志」那一步：那一笔账从此
   // 没人记得,下一轮一落账两个数就重新相等（第 6 轮审查必须修 2）。
   rememberUnconfirmed(input);
@@ -649,6 +649,6 @@ export async function recordTurnSpan(input: {
     // 批是同生共死的：批没提交，会话行那一笔也没落。单独补写它，写不成就照旧抛给调用方。
     // 只补没落的：那条 UPDATE 带累加（`active_ms`），批已提交之后再写一次就加了两遍。
     if (side && !side.landed) await dbClient.execute(sideStatement(side.write));
-    console.warn(`[ash] 回合区间没落盘（产物归属降级为按会话寿命认）: ${String(error)}`);
+    console.warn(`[navi] 回合区间没落盘（产物归属降级为按会话寿命认）: ${String(error)}`);
   }
 }

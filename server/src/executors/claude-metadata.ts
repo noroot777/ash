@@ -1,4 +1,4 @@
-import type { TokenUsage } from "@ash/shared";
+import type { TokenUsage } from "@navi/shared";
 
 export function claudeEffortUnsupportedMessage(version?: string | null, effort?: string | null): string {
   const parsedVersion = version?.match(/\d+\.\d+\.\d+/)?.[0] ?? version?.trim() ?? "";
@@ -12,13 +12,13 @@ export function claudeEffortUnsupportedMessage(version?: string | null, effort?:
  *
  * CLI 那侧的判定是 `getuid() === 0 && IS_SANDBOX !== "1" && !CLAUDE_CODE_BUBBLEWRAP`
  * （2.1.220 二进制里的 `isRootOutsideDeliberateSandbox`），报出来只有一行英文，用户
- * 看到的是「0s 用时 + 1 异常」，看不出跟部署身份有关。ash 派活一律带
+ * 看到的是「0s 用时 + 1 异常」，看不出跟部署身份有关。navi 派活一律带
  * `--dangerously-skip-permissions`（无人值守，没有终端能点确认），所以在 root 下跑
- * ash 就是必然撞上这条，跟模型、网络、任务内容都无关。
+ * navi 就是必然撞上这条，跟模型、网络、任务内容都无关。
  *
  * 三条出路里，②等于告诉 claude「这里就是沙箱」——它会以 root 无确认地执行 agent 的
  * 一切命令，是不可逆且会外溢到整台机器的选择，所以只说明怎么做、由用户自己去设，
- * ash 不替他注入。
+ * navi 不替他注入。
  */
 export function claudeRootBypassMessage(): string {
   return "Claude Code 拒绝以 root 身份跳过权限确认（Navi 无人值守派活，必须带 "

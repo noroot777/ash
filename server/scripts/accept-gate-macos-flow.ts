@@ -7,7 +7,7 @@ import { releaseTmpDb } from "./tmp-db.js";
 
 export async function testMacGateFlow(directory: string): Promise<object> {
   assert.equal(process.platform, "darwin");
-  assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+  assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
   mkdirSync(directory, { recursive: true });
   const repo = join(directory, "repo");
   const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();

@@ -1,4 +1,4 @@
-import { annotationBatchPrompt, batchStateLabels, evidenceLabels, sameAnnotationBatch } from "@ash/shared/page-annotation-batch";
+import { annotationBatchPrompt, batchStateLabels, evidenceLabels, sameAnnotationBatch } from "@navi/shared/page-annotation-batch";
 import { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import { AnnotationBatchMismatch } from "./AnnotationBatchMismatch.tsx";
 import "./annotation-batch.css";

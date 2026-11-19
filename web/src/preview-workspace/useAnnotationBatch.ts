@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { PreviewAnnotation, PreviewPageImage } from "@ash/shared/page-annotation";
-import type { AnnotationBatch, AnnotationBatchRecord, AnnotationDraft, AnnotationEvidence } from "@ash/shared/page-annotation-batch";
-import { pageImageMissing, parseAnnotationBatch, sameAnnotationBatch } from "@ash/shared/page-annotation-batch";
+import type { PreviewAnnotation, PreviewPageImage } from "@navi/shared/page-annotation";
+import type { AnnotationBatch, AnnotationBatchRecord, AnnotationDraft, AnnotationEvidence } from "@navi/shared/page-annotation-batch";
+import { pageImageMissing, parseAnnotationBatch, sameAnnotationBatch } from "@navi/shared/page-annotation-batch";
 import { api } from "../lib/api.ts";
 import { json, request } from "../lib/apiClient.ts";
 import { readImageData } from "../page-annotation/image.ts";

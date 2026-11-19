@@ -7,9 +7,9 @@
 // 自己就失效的直接去掉（那是上一次留下的，用户此刻还没看过它们）。只是跟别的已选项合入分支对不上的（`conflict`）
 // 不去：两条都还能用，留哪条由用户定。恢复时判据用的工作目录选择跟已选的前置存在同一份草稿里（lib/DraftStore.tsx）。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Group } from "@ash/shared";
-import type { PrerequisiteCandidate, PrerequisiteCandidates } from "@ash/shared/prerequisites";
-import { prerequisiteNeedsUser } from "@ash/shared/prerequisites";
+import type { Group } from "@navi/shared";
+import type { PrerequisiteCandidate, PrerequisiteCandidates } from "@navi/shared/prerequisites";
+import { prerequisiteNeedsUser } from "@navi/shared/prerequisites";
 import { X } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";

@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { TaskInspector } from "../../src/task-detail/TaskInspector.tsx";
 import { PrerequisiteWait } from "../../src/task-detail/PrerequisiteWait.tsx";
 import { taskLook } from "../../src/lib/taskLook.ts";
@@ -36,7 +36,7 @@ const initialTasks: Task[] = [
   row("t-b", "前置乙", { status: "running" }),
 ];
 
-function Ash() {
+function Navi() {
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [subjectId, setSubjectId] = useState("t-sub");
   const [notices, setNotices] = useState<string[]>([]);
@@ -62,4 +62,4 @@ function Ash() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><Ash /></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><Navi /></StrictMode>);

@@ -1,4 +1,4 @@
-import type { HandoffTarget, TaskHandoff } from "@ash/shared";
+import type { HandoffTarget, TaskHandoff } from "@navi/shared";
 
 const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
 

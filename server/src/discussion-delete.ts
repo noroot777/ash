@@ -16,7 +16,7 @@
 // 都还在，删除入口还在，重试按同样的判据再来一遍（已经抹掉的段不会再算一次）。
 import { existsSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { parseSessionSpans, segmentFingerprint, type ConvSeg } from "@ash/shared/session-output";
+import { parseSessionSpans, segmentFingerprint, type ConvSeg } from "@navi/shared/session-output";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { RedactRefusal, redactTraceWhere, redactTranscript } from "./conversation-redact.js";
@@ -82,7 +82,7 @@ export async function deleteDiscussion(taskId: string, discussionId: string): Pr
         return text !== raw || traceNext !== traceRaw;
       }).catch((error) => {
         if (error instanceof RedactRefusal) throw error;
-        console.warn(`[ash] 删除讨论写盘失败 task=${taskId} session=${row.id}:`, error);
+        console.warn(`[navi] 删除讨论写盘失败 task=${taskId} session=${row.id}:`, error);
         throw new RedactRefusal(`删除没有完成，讨论还在，可以重试（${error instanceof Error ? error.message : String(error)}）`, 500);
       });
       if (changed) touched.push(row.id);

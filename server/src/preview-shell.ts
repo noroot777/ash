@@ -3,12 +3,12 @@
 // 起因是一次漏判：识别出来的命令里把端口写成 `$PORT`，可 Windows 上这些命令是交给
 // `cmd.exe /d /s /c` 跑的（platform.ts 的 userShellLaunch），而 cmd 只认 `%PORT%` ——
 // `$PORT` 在那边是个字面量。于是 Windows 上凡是「端口写在命令行里」的那几门（vite /
-// Angular / Django / FastAPI / Flask / Laravel / Rails）一律吃不到 ash 借的端口：轻则参数
+// Angular / Django / FastAPI / Flask / Laravel / Rails）一律吃不到 navi 借的端口：轻则参数
 // 报错，重则落到框架默认端口上干等 120 秒超时。同一条线上还有后台 `&`、`;` 和
 // `FOO=1 cmd` 这些纯 POSIX 的写法，组合示例整条在 Windows 上都跑不了。
 //
 // 用户**自己填**的命令写成什么方言是他自己的事（platform.ts 顶部已经说明这一点），
-// 但 **ash 自己生成的命令没有这个借口**。所以「怎么引用变量、怎么进目录、怎么丢后台、
+// 但 **navi 自己生成的命令没有这个借口**。所以「怎么引用变量、怎么进目录、怎么丢后台、
 // 怎么把几条接起来」全部收在这里按平台给一份。
 //
 // 全是纯字符串函数，两门方言都测得动（test:preview-command），不必真有一台 Windows

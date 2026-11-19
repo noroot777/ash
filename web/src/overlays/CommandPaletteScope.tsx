@@ -1,4 +1,4 @@
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { Check, X } from "@phosphor-icons/react";
 
 export type SearchScopeType = "tasks" | "notes" | null;

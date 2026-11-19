@@ -1,6 +1,6 @@
 import { View, Text, Pressable } from "react-native";
-import type { TaskListItem } from "@ash/shared";
-import { statusCounts } from "@ash/shared/team";
+import type { TaskListItem } from "@navi/shared";
+import { statusCounts } from "@navi/shared/team";
 import { Ionicons } from "@expo/vector-icons";
 import { SignalBar } from "@/components/SignalBar";
 import {

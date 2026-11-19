@@ -50,7 +50,7 @@
 // 这台设备再权威也不去放松它。一个已经被别的设备点过名、此刻还活着的号,内核圈定可以推出
 // 「它不在我这个集合里 ⇒ 它不是这次运行的」—— 但那是**改核销判据**,不在本次改动的范围内
 // (约束原话:`dischargeOpen` 的语义不要改)。所以名单上还剩一条,这里照样降成 `unknown`。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import type { ChildProcess } from "node:child_process";
 import {
   existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync,
@@ -60,7 +60,7 @@ import { basename, join } from "node:path";
 import { IS_MAC, IS_WINDOWS, killOne } from "../platform.js";
 import { processGenerationSync } from "../process-generation.js";
 import { openJobConfinement, reopenJobConfinement } from "./confine-job.js";
-import { FROZEN_AGENT_UNIT_PREFIX, FROZEN_CONFINE_TMP_DIR } from "@ash/shared/legacy-names";
+import { FROZEN_AGENT_UNIT_PREFIX, FROZEN_CONFINE_TMP_DIR } from "@navi/shared/legacy-names";
 
 /**
  * 圈里的一个成员:号 + **读到这个事实时它是哪一代**。
@@ -120,7 +120,7 @@ export type Confinement = {
   /**
    * **圈号**:Linux 是 cgroup 相对挂载点的路径,Windows 是 Job Object 的名字。
    * 路径/名字本身就是身份,所以**落库之后**清扫侧能原样把圈打开(`reopenConfinement`)。
-   * **目前没落库**:这台设备的有效范围就是 ash 自己这条命之内,跨 server 重启那一档
+   * **目前没落库**:这台设备的有效范围就是 navi 自己这条命之内,跨 server 重启那一档
    * 是「未接」而不是「在」—— 别把这一行读成已经接上了。
    */
   readonly id: string;
@@ -220,7 +220,7 @@ let disclosed: string | null = null;
 
 /**
  * **弃权要说出来。** 任务原话要求把平台边界写在「代码注释和披露面」两处,而注释只给改这块
- * 代码的人看 —— 真正跑着 ash 的那台 macOS 上,得有一句话让使用者知道自己拿不到 Linux 那一档
+ * 代码的人看 —— 真正跑着 navi 的那台 macOS 上,得有一句话让使用者知道自己拿不到 Linux 那一档
  * 的保证。所以这台设备建不出圈时,**每个进程打一次**那句弃权理由。
  *
  * 同一句理由只打一次:它是平台/部署形态决定的,一次运行里不会变,每个回合重复一遍只会把
@@ -232,7 +232,7 @@ function discloseAbstention(): void {
   const why = confineAbstention();
   if (!why || why === disclosed) return;
   disclosed = why;
-  console.warn(`[ash] 内核圈定这台设备在这台机器上弃权:${why}`);
+  console.warn(`[navi] 内核圈定这台设备在这台机器上弃权:${why}`);
 }
 
 /**
@@ -286,15 +286,15 @@ export const confinementOf = (child: ChildProcess): Confinement | null =>
 // 这不是保守,是内核规则:cgroup v2 的 delegation containment 要求「迁移一个进程时,写的人
 // 必须对**源与目标的共同祖先**的 `cgroup.procs` 有写权限」。所以:
 //
-//  · ash 跑在 systemd 的 **user scope / user service** 里(`user@<uid>.service` 整棵子树归
+//  · navi 跑在 systemd 的 **user scope / user service** 里(`user@<uid>.service` 整棵子树归
 //    用户)⇒ 自己的目录可写、共同祖先也在自己子树里 ⇒ **可用**(2026-10-22 在 Ubuntu 24.04
 //    aarch64 实测:`systemd-run --user --scope` 里 mkdir/迁移/`cgroup.kill`/rmdir 全通);
 //  · 容器里(root + 私有 cgroup 命名空间)⇒ `/sys/fs/cgroup` 就是自己这一层 ⇒ **可用**;
-//  · ash 从 **ssh 登录会话**里起(`session-N.scope`,root 所有)⇒ mkdir 当场 EACCES ⇒ 弃权。
+//  · navi 从 **ssh 登录会话**里起(`session-N.scope`,root 所有)⇒ mkdir 当场 EACCES ⇒ 弃权。
 //    这一档**不能**靠「改去 `user@<uid>.service` 下面建」绕过去:目录建得出来,可把进程从
 //    `session-N.scope` 迁进去时共同祖先是 root 所有的 `user-<uid>.slice`,写入 EACCES
 //    (同日实测:`MKDIR_USERAT_OK` 紧跟着 `MIGRATE_FAIL: Permission denied`)。真要在那种
-//    部署下拿到这台设备,得让 ash 自己跑在一个被 delegate 的 scope 里(`systemd-run --user
+//    部署下拿到这台设备,得让 navi 自己跑在一个被 delegate 的 scope 里(`systemd-run --user
 //    --scope`),那是部署方式的选择,代码这一侧只能如实弃权。
 const CGROUP_MOUNTS = ["/sys/fs/cgroup", "/sys/fs/cgroup/unified"];
 
@@ -336,7 +336,7 @@ function openCgroupConfinement(token: string): Confinement | null {
   } catch (error) {
     // EACCES = 这个部署形态下没有可写的 cgroup(见上面那段降级),EEXIST 几乎不可能
     // (名字带着随机记号)。两种都只有一个处置:**弃权**,让判定退回既有那套。
-    console.warn(`[ash] 内核圈定这台设备弃权:建不出 cgroup ${dir}(${describe(error)})`);
+    console.warn(`[navi] 内核圈定这台设备弃权:建不出 cgroup ${dir}(${describe(error)})`);
     return null;
   }
   sweepStaleCgroups(join(mount, `.${own}`), basename(dir));
@@ -418,7 +418,7 @@ function cgroupConfinement(id: string, dir: string): Confinement {
         // 两种都归到同一个处置:这个号没圈住。**但不改 coverage** —— shell 那一侧可能
         // 已经把自己写进去了(进程已经退出的话这里写必然失败,而它当初确实进过集合)。
         if (!enrolledByParent) {
-          console.warn(`[ash] 内核圈定:${pid} 没能写进 ${id}(${describe(error)})`);
+          console.warn(`[navi] 内核圈定:${pid} 没能写进 ${id}(${describe(error)})`);
         }
         return false;
       }

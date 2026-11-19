@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FeishuStatus } from "@ash/shared";
+import type { FeishuStatus } from "@navi/shared";
 import { ArrowClockwise } from "@phosphor-icons/react";
 import { Button, StatusChip } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
@@ -10,7 +10,7 @@ import { localeTime } from "../lib/localeFormat.ts";
 
 // 连接卡：机器人此刻在不在线、为什么不在线、额度还剩多少。
 //
-// ash 一挂机器人就静默下线（飞书那边不会告诉你），所以「连没连上」必须是一眼能看到、刷新后
+// navi 一挂机器人就静默下线（飞书那边不会告诉你），所以「连没连上」必须是一眼能看到、刷新后
 // 仍在的状态，而不是只在出错那一刻弹一句提示。状态拉取本身失败时也如实标出来——否则服务端
 // 停了，这张卡还会一直亮着上一次拿到的「已连接」。
 

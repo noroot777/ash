@@ -237,7 +237,7 @@ export async function holdCompletionForNewMonitor(taskId: string, label: string)
     await revokeConfirmation(taskId);
     return note;
   } catch (e) {
-    console.error(`[ash] 挂哨兵后撤销完成确认失败 task=${taskId}:`, e);
+    console.error(`[navi] 挂哨兵后撤销完成确认失败 task=${taskId}:`, e);
     return null;
   }
 }

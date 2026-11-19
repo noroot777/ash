@@ -24,7 +24,7 @@ async function republish(taskId: string): Promise<void> {
     const { publishTaskUpdated } = await import("./task-store.js");
     await publishTaskUpdated(taskId);
   } catch (error) {
-    console.warn(`[ash] 重发任务 ${taskId} 的快照失败（审查状态变了）:`, error);
+    console.warn(`[navi] 重发任务 ${taskId} 的快照失败（审查状态变了）:`, error);
   }
 }
 

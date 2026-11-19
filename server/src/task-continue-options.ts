@@ -1,15 +1,15 @@
 import type { InputAcceptance } from "./executors/types.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
-import type { AgentType } from "@ash/shared";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { AgentType } from "@navi/shared";
+import type { MonitorWakeData } from "@navi/shared/monitor-wake";
 import type { TurnIdentity, TurnSource } from "./runs.js";
 
 // Why a task is being (re)started — labels the resume (it rides on the 〔系统〕 record,
-// see @ash/shared/system-resume); all reasons behave the same (resume if there's a
+// see @navi/shared/system-resume); all reasons behave the same (resume if there's a
 // resumable session, else fresh). Note: a scheduled cron fire is NOT here — it always
 // starts a fresh run via runTask (schedules.ts), so it never resumes.
-export type { ResumeReason } from "@ash/shared/system-resume";
-import type { ResumeReason } from "@ash/shared/system-resume";
+export type { ResumeReason } from "@navi/shared/system-resume";
+import type { ResumeReason } from "@navi/shared/system-resume";
 import type { FreezeGuard } from "./turn-freeze.js";
 
 /**

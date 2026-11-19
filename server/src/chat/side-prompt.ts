@@ -1,4 +1,4 @@
-import type { ChatMember } from "@ash/shared/chat";
+import type { ChatMember } from "@navi/shared/chat";
 import type { chatPrompt } from "./prompt.js";
 import { hasReply } from "./prompt.js";
 import { authorizationIsFromSource } from "./side-authorization.js";

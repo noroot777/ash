@@ -2,7 +2,7 @@
 // 都跟面板的业务逻辑无关，拆出来是为了让 CommandPalette.tsx 只讲「列表里有什么」。
 import { useCallback, useEffect, useState, type RefObject } from "react";
 import { ArrowsDownUp } from "@phosphor-icons/react";
-import { isSearchSort, type SearchSort } from "@ash/shared/search";
+import { isSearchSort, type SearchSort } from "@navi/shared/search";
 
 const SORT_STORAGE_KEY = "navi:palette:sort";
 

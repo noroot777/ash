@@ -71,7 +71,7 @@ export async function carryRecurrenceBreaker(taskId: string, source: RepairSourc
       await db.update(freeReviewRounds).set({ breakerEpoch: epoch }).where(inArray(freeReviewRounds.id, live.map((row) => row.id)));
     }
   } catch (error) {
-    console.error(`[ash] 熔断修复的方向世代没续上 task=${taskId}:`, error);
+    console.error(`[navi] 熔断修复的方向世代没续上 task=${taskId}:`, error);
   }
 }
 

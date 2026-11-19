@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readEnv } from "../../../scripts/env.mjs";
 
 export const SPARKLE_VERSION = "2.10.1";
 const SPARKLE_SHA256 = "1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27";
@@ -25,7 +26,7 @@ async function sha256Of(file) {
 }
 
 /** 确保缓存里有解开的 Sparkle，返回它的目录（里面有 Sparkle.framework 和 bin/）。 */
-export async function ensureSparkle(cache = resolve(process.env.ASH_MAC_CACHE || join(HERE, "..", "build", "cache"))) {
+export async function ensureSparkle(cache = resolve(readEnv(process.env, "NAVI_MAC_CACHE") || join(HERE, "..", "build", "cache"))) {
   const home = join(cache, `Sparkle-${SPARKLE_VERSION}`);
   if (existsSync(join(home, "bin", "sign_update")) && existsSync(join(home, "Sparkle.framework"))) return home;
   mkdirSync(cache, { recursive: true });

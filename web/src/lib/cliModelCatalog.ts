@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentType } from "@ash/shared";
-import type { CliModelCatalog } from "@ash/shared/cli-presets";
-import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@ash/shared/cli-presets";
+import type { AgentType } from "@navi/shared";
+import type { CliModelCatalog } from "@navi/shared/cli-presets";
+import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@navi/shared/cli-presets";
 import { api } from "./api.ts";
 import { onHostCliPolicyChange } from "./hostCliPolicy.ts";
 import { localeTime } from "./localeFormat.ts";

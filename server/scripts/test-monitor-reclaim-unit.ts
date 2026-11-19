@@ -6,7 +6,7 @@
 //
 // ⑧-7…⑧-12 **记号这一问答得有多实,决定它能签发什么**(第 13、14 两轮审查 F1)。`ps -E` 把
 //    环境无分隔地接在 argv 后面,第 13 轮按「两次快照相减切出环境段」修了一版,第 14 轮实测
-//    那仍然不够:**环境段自己也没有边界**,别的变量的**值**里写着 `ASH_MONITOR_UNIT=<记号>`
+//    那仍然不够:**环境段自己也没有边界**,别的变量的**值**里写着 `NAVI_MONITOR_UNIT=<记号>`
 //    就足以让一个毫不相干的进程挨刀(⑧-11,审查实测 `risk.log:1`)。
 //    所以证据分两档(`monitorUnitProofGrade`):Linux 的 `/proc/<pid>/environ` 是 NUL 分隔的
 //    真实环境项 ⇒ `exact`,可以签发下刀凭证;macOS 只有展示文本 ⇒ `ambiguous`,**只授权
@@ -69,12 +69,12 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
   //
   //    **命令原文是要干的活,不是凭证** —— 两次创建完全可以合法地跑同一条命令,所以整串
   //    相等也不算。凭证只能是**每次创建独有、起进程之前就落库**的那条资源记号
-  //    (`ASH_MONITOR_UNIT`,见 `proc.ts` 的 `processUnitEvidence`)。下面把三种命令关系
+  //    (`NAVI_MONITOR_UNIT`,见 `proc.ts` 的 `processUnitEvidence`)。下面把三种命令关系
   //    一次钉齐:完全不同 / 记录是实际命令的前缀 / 一模一样 —— 都必须是「证不出」。
   const taskId = await makeTask({ status: "done" });
   const stale = "Mon Jan  1 00:00:00 2001";
   const relations: Array<{ what: string; recorded: string }> = [
-    { what: "完全不同的命令", recorded: "ash-identity-probe-毫不相干" },
+    { what: "完全不同的命令", recorded: "navi-identity-probe-毫不相干" },
     { what: "记录的命令是实际命令的前缀", recorded: "sleep 3" },   // 审查实测用的那一组
     { what: "两边命令一模一样", recorded: "sleep 300" },
   ];
@@ -124,7 +124,7 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
   const taskId = await makeTask({ status: "done" });
   const unitToken = `unit-orphan-${process.pid}-${Date.now()}`;
   const leader = spawn("sh", ["-lc", `(${STUBBORN}) & exit 0`],
-    { detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken } });
+    { detached: true, stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: unitToken } });
   leader.unref();
   // 生产里**只有 `spawnMonitor` 会凭空造出一个带记号的进程**,它起完就作废那份扫描备忘
   // (见 monitor-unit-scan.ts 的 `invalidateMonitorUnitScan`:备忘只敢把「还活着」留旧,不敢把
@@ -172,7 +172,7 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
   const escape = "const{spawn}=require('child_process');const c=spawn('sleep',['300'],"
     + "{detached:true,stdio:'ignore'});require('fs').writeFileSync(process.argv[1],String(c.pid));c.unref();";
   const leader = spawn(process.execPath, ["-e", escape, childPidFile],
-    { detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken } });
+    { detached: true, stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: unitToken } });
   leader.unref();
   invalidateMonitorUnitScan();   // 同上:台子在替 `spawnMonitor` 起进程
   const pid = leader.pid!;
@@ -206,7 +206,7 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
   // ⑧-7 **argv 里的那段文字不是凭证 —— 哪怕它逐字就是我们的记号**(第 13 轮审查 F1-A 实测)。
   //
   //    `ps -A -E` 把环境**没有分隔符地接在 argv 后面**,所以上一版那条「整行里找
-  //    `ASH_MONITOR_UNIT=(\S+)`」的正则根本分不出这段文字来自哪一边。审查起了一个诊断进程:
+  //    `NAVI_MONITOR_UNIT=(\S+)`」的正则根本分不出这段文字来自哪一边。审查起了一个诊断进程:
   //    环境里只有 PATH、记号只写在它的参数里,于是 `reclaimEvidence` 认它作「我们的后代」,
   //    真实的重复点停入口当场把它杀了(`R2_ARGV_TEXT_AUTHORIZES_FOREIGN_KILL`:
   //    `actualEnvironmentContainsUnit=false`、`evidence={"verdict":"ours"}`、
@@ -220,7 +220,7 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
   const unitToken = `unit-argvtext-${process.pid}-${Date.now()}`;
   // 记号**只**出现在那个陌生进程的参数里:环境被换成只有 PATH 的一份。
   const stranger = spawn(
-    "sh", ["-lc", `( exec sh -c 'while :; do sleep 0.2; done' ASH_MONITOR_UNIT=${unitToken} ) & exit 0`],
+    "sh", ["-lc", `( exec sh -c 'while :; do sleep 0.2; done' NAVI_MONITOR_UNIT=${unitToken} ) & exit 0`],
     { detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "" } },
   );
   stranger.unref();
@@ -254,14 +254,14 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
   // ⑧-8 **反过来也要成立:argv 里的一段假记号不许遮住环境里的真记号**(同一个歧义的另一面)。
   //
   //    上一版那条正则取的是整行里**第一个**匹配,而 argv 排在环境前面 —— 所以只要命令的参数
-  //    里有一段 `ASH_MONITOR_UNIT=...`,自己的后代就会被读成「另一个记号的成员」,这一次创建
+  //    里有一段 `NAVI_MONITOR_UNIT=...`,自己的后代就会被读成「另一个记号的成员」,这一次创建
   //    于是「一个成员都找不到」⇒ 假的「线索已空」。这一半由「一行里出现几次全收」(全局匹配)
   //    修掉,两档都成立;「假记号算不算成员」那一半由证据等级分档(第 14 轮审查 F1)。
   const unitToken = `unit-realenv-${process.pid}-${Date.now()}`;
   const decoy = `unit-decoy-${process.pid}-${Date.now()}`;
   const leader = spawn(
-    "sh", ["-lc", `( exec sh -c 'while :; do sleep 0.2; done' ASH_MONITOR_UNIT=${decoy} ) & exit 0`],
-    { detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken } },
+    "sh", ["-lc", `( exec sh -c 'while :; do sleep 0.2; done' NAVI_MONITOR_UNIT=${decoy} ) & exit 0`],
+    { detached: true, stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: unitToken } },
   );
   leader.unref();
   invalidateMonitorUnitScan();
@@ -305,7 +305,7 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
     + "{detached:true,stdio:'ignore',env:{PATH:process.env.PATH}});"
     + "require('fs').writeFileSync(process.argv[1],String(c.pid));c.unref();";
   const leader = spawn(process.execPath, ["-e", escape, childPidFile],
-    { detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken } });
+    { detached: true, stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: unitToken } });
   leader.unref();
   invalidateMonitorUnitScan();
   const pid = leader.pid!;
@@ -387,7 +387,7 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
   const taskId = await makeTask({ status: "done" });
   const unitToken = `unit-scrubbed-${process.pid}-${Date.now()}`;
   const leader = spawn("sh", ["-lc", "(env -i sleep 300) & exit 0"],
-    { detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken } });
+    { detached: true, stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: unitToken } });
   leader.unref();
   invalidateMonitorUnitScan();   // 同上
   const pid = leader.pid!;

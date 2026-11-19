@@ -1,4 +1,4 @@
-import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@ash/shared/markdown-images";
+import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@navi/shared/markdown-images";
 import { api } from "../lib/api.ts";
 import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
@@ -383,7 +383,7 @@ export function isLocalDiskImagePath(href: string): boolean {
  * 形状选 `#` 开头的片段:react-markdown 不会把它清空(它是相对地址),浏览器也不会为它发
  * 请求 —— 不像一个假的站内路径那样白跑一趟 404。
  */
-const UNAVAILABLE = "#ash-image-unavailable:";
+const UNAVAILABLE = "#navi-image-unavailable:";
 
 export function unavailableImage(destination: string): string {
   return `${UNAVAILABLE}${encodeURIComponent(destination)}`;

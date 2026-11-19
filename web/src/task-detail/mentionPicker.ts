@@ -1,4 +1,4 @@
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
 import type { ModelGroup } from "../lib/modelCatalog.ts";
 
 /**

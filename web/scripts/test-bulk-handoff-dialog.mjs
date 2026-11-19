@@ -101,7 +101,7 @@ try {
   );
 
   // 补上 key:只重试卡住的那条,已经推过去的 t-git 不能再推一次。
-  await page.locator("#handoff-peer-key").fill("ash_bulk_key");
+  await page.locator("#handoff-peer-key").fill("navi_bulk_key");
   await page.getByRole("button", { name: /保存并接力剩下的 1 个/ }).click();
   await page.locator(".handoff-key-fix").waitFor({ state: "detached" });
   assert.match(await resultPanel.innerText(), /批量接力已完成/);

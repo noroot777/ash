@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TaskFollowUp } from "@ash/shared";
-import { TASK_BATCH_LIMIT } from "@ash/shared";
+import type { TaskFollowUp } from "@navi/shared";
+import { TASK_BATCH_LIMIT } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 

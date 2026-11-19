@@ -9,7 +9,7 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import type { ContextUsage } from "@ash/shared";
+import type { ContextUsage } from "@navi/shared";
 
 /** rollout 可能很大；最新 token_count 通常就在文件尾部。找不到就安全退化成无水位。 */
 const TAIL_BYTES = 512 * 1024;
@@ -55,8 +55,8 @@ export function findArchivedRollout(threadId: string, configDir?: string | null)
 /**
  * 「**codex 自己 resume 得到吗**」的口径,比 `findRollout` 严:活动会话它只认
  * `sessions/YYYY/MM/DD`,平铺在 `sessions` 根上的 rollout 在它眼里等于不存在
- * (`thread/resume` 只拿到 threadId,定位是 codex 那边做的,ash 给不了路径)。
- * 归档目录仍两种布局都认 —— 起跑前 ash 会先 `thread/unarchive`(codex-app-server.ts)。
+ * (`thread/resume` 只拿到 threadId,定位是 codex 那边做的,navi 给不了路径)。
+ * 归档目录仍两种布局都认 —— 起跑前 navi 会先 `thread/unarchive`(codex-app-server.ts)。
  *
  * 上面那个宽松版是「**文件在盘上的哪儿**」:读版本号、搬文件、判桌面可见性都该用它。
  * 两者别混用:接力导入要答的是前一问,用宽松版就会把「盘上有、codex 找不到」的会话
@@ -255,12 +255,12 @@ export async function readCodexContext(
     if (outcome.kind === "context") return outcome.value;
     if (outcome.kind === "incompatible" && !warnedThreads.has(threadId)) {
       warnedThreads.add(threadId);
-      console.warn(`[ash] Codex rollout 格式不兼容，已停用该会话的上下文水位：${outcome.reason}`);
+      console.warn(`[navi] Codex rollout 格式不兼容，已停用该会话的上下文水位：${outcome.reason}`);
     }
     return null;
   } catch (error) {
     // 私有诊断文件读失败不能改变 agent 的执行结果；没有水位比错误水位安全。
-    console.warn(`[ash] failed to read Codex context for thread ${threadId}:`, error);
+    console.warn(`[navi] failed to read Codex context for thread ${threadId}:`, error);
     return null;
   }
 }

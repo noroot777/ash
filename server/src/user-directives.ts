@@ -13,10 +13,10 @@
 // 它自己该去挖的。但用户改的需求跟 `tasks.body` 是同一类东西，它从来就不是「别人的
 // 上下文」；当初把这两样打包成「你自己判断要不要读」，漏的就是这一半。
 import { open, stat } from "node:fs/promises";
-import type { ConvSeg } from "@ash/shared";
-import { isUserFollowUp } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
-import { parseAttachmentText } from "@ash/shared/attachments";
+import type { ConvSeg } from "@navi/shared";
+import { isUserFollowUp } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
+import { parseAttachmentText } from "@navi/shared/attachments";
 import { asc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";

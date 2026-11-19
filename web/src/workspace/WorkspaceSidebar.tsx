@@ -1,5 +1,5 @@
 import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
-import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
+import type { HandoffTarget, ProjectView, TaskListItem } from "@navi/shared";
 import type { TerminalSessionInfo } from "../lib/api.ts";
 import type { OutboundBar } from "./OutboundStatusBar.tsx";
 import {

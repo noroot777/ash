@@ -1,4 +1,4 @@
-// REST client — the single-task subset of the ash web api (web/src/api.ts),
+// REST client — the single-task subset of the navi web api (web/src/api.ts),
 // re-pointed at a configurable base URL. RN's fetch is a native client (no
 // browser CORS), so it talks straight to the backend over Tailscale.
 import type {
@@ -24,11 +24,11 @@ import type {
   TaskWorkspaceDiscardResult,
   TaskReviewInfo,
   ReviewDispatchInput,
-} from "@ash/shared";
-import type { AuthState, PairClaim, PairTicket } from "@ash/shared/multiuser";
-import type { CliModelCatalog } from "@ash/shared/cli-presets";
-import { normalizeMonitorDto } from "@ash/shared/monitor";
-import type { TaskMonitor } from "@ash/shared/monitor";
+} from "@navi/shared";
+import type { AuthState, PairClaim, PairTicket } from "@navi/shared/multiuser";
+import type { CliModelCatalog } from "@navi/shared/cli-presets";
+import { normalizeMonitorDto } from "@navi/shared/monitor";
+import type { TaskMonitor } from "@navi/shared/monitor";
 import { getApiKey, getBaseURL } from "./config";
 
 // 删除任务的返回:`leftover` 是清理之后**仍然剩下**的 worktree/分支(没勾选、或勾

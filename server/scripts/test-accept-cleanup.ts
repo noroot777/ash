@@ -9,10 +9,10 @@ import { mock } from "node:test";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-accept-cleanup-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_DEPS_DIR = join(root, "deps");
+const root = mkdtempSync(join(tmpdir(), "navi-accept-cleanup-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");

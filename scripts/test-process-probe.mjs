@@ -248,7 +248,7 @@ export async function processRows(scopeDirectory) {
   // 办法在这里压根走不通。而 `/proc` 这条路还更准 —— `/proc/<pid>/environ` 是 NUL 分隔的,
   // 一个变量切得出来,不必像 macOS 那样只能按空格两侧收口(见 `environmentHasMarker` 的残留)。
   if (procfs) {
-    const scopeMarker = scopeDirectory ? `ASH_TEST_PROCESS_SCOPE=${scopeDirectory}` : null;
+    const scopeMarker = scopeDirectory ? `NAVI_TEST_PROCESS_SCOPE=${scopeDirectory}` : null;
     const rows = [];
     for (const name of readdirSync("/proc")) {
       const pid = Number(name);
@@ -281,7 +281,7 @@ export async function processRows(scopeDirectory) {
   const snapshot = async (extra) =>
     command("ps", ["-ww", ...extra, "-axo", columns], { env: { LC_ALL: "C" }, timeout: 10_000 });
   const [plain, withEnvironment] = await Promise.all([snapshot([]), snapshot(["-E"])]);
-  const marker = scopeDirectory ? `ASH_TEST_PROCESS_SCOPE=${scopeDirectory}` : null;
+  const marker = scopeDirectory ? `NAVI_TEST_PROCESS_SCOPE=${scopeDirectory}` : null;
   /** pid → 这一行去掉前面那几列之后的「命令行(+环境块)」。 */
   const tails = (text) => {
     const out = new Map();
@@ -320,7 +320,7 @@ export async function processRows(scopeDirectory) {
  * —— Linux 走 `procEnvironHas`,那边是 NUL 分隔、严格相等,没有下面这条残留。
  *
  * 第 1 轮审查 F4 实测形状:上一版是裸 `segment.includes(marker)`,于是另一个执行域
- * `/tmp/check-ABC-other` 的真实环境 `ASH_TEST_PROCESS_SCOPE=/tmp/check-ABC-other` 把
+ * `/tmp/check-ABC-other` 的真实环境 `NAVI_TEST_PROCESS_SCOPE=/tmp/check-ABC-other` 把
  * `/tmp/check-ABC` 那一域的标记整段包住 —— 它被当成域内进程认领,`stop()` 随后对一个**别人
  * 家正在用的执行域**发终止信号。前缀关系在临时目录名里不是巧合:同一套测试并行跑、名字按
  * 用途加后缀,天然就会出现。

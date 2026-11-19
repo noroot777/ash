@@ -1,4 +1,4 @@
-import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
+import type { FreeWorkflowPreviewState } from "@navi/shared/free-workflow";
 import { alive, hasPreviewLog, lastPreview, readAnyPreview, type PreviewRecord } from "./preview-store.js";
 import { starting } from "./preview-start-state.js";
 

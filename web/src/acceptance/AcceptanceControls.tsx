@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUUpLeft, Check, CheckCircle } from "@phosphor-icons/react";
-import type { BranchPlanView, Task, TaskListItem } from "@ash/shared";
-import { hasPendingAcceptCommit } from "@ash/shared";
-import { isFinalHumanGate } from "@ash/shared/workflow-policy";
-import { acceptanceSteps } from "@ash/shared/accept-message";
-import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
+import type { BranchPlanView, Task, TaskListItem } from "@navi/shared";
+import { hasPendingAcceptCommit } from "@navi/shared";
+import { isFinalHumanGate } from "@navi/shared/workflow-policy";
+import { acceptanceSteps } from "@navi/shared/accept-message";
+import type { AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 import { api, type AcceptTaskFailure } from "../lib/api.ts";
 import { useAcceptGate } from "../review/useAcceptGate.ts";
 import { useBranchPlan } from "../review/useBranchPlan.ts";

@@ -33,7 +33,7 @@ import { noteOwnerHolder, ownerProof } from "./remote-access.js";
 import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
 import { resolveSession, touchUser, findUserByKey } from "./store.js";
 import { NAVI_HEADERS, requestHeader } from "../request-headers.js";
-import { LEGACY_SESSION_COOKIE } from "@ash/shared/legacy-names";
+import { LEGACY_SESSION_COOKIE } from "@navi/shared/legacy-names";
 
 export const SESSION_COOKIE = "navi_session";
 
@@ -56,7 +56,7 @@ const PUBLIC_API_PATHS = new Set([
   "/api/auth/pair/claim",
   "/api/auth/pair/redeem",
   // ── 机器对机器的接力端点 ────────────────────────────────────────────────
-  // 它们由**对端的 ash 服务端**来调,拿不到本机的 cookie 也没有本机的 key,所以走
+  // 它们由**对端的 navi 服务端**来调,拿不到本机的 cookie 也没有本机的 key,所以走
   // 不了这道闸;它们自己那套闸更严:ed25519 签名 + 来源机审批 + §十一 的用户级 key。
   // **必须逐条列**,不能放 `/api/handoff/` 整个前缀 —— 那底下还住着本机设置面
   // (来源审批、目标机清单、配对申请),放行整个前缀等于让局域网里任何未登录的人
@@ -82,10 +82,10 @@ const PUBLIC_API_PATHS = new Set([
 const PUBLIC_API_PREFIXES = ["/api/handoff/proxy/", "/api/auth/claim/", "/api/auth/project-invite/"];
 
 /**
- * 供应商 relay 的两条:Codex 协议转换与 Claude 1M 映射会把 CLI 的 `base_url` 指回本机 ash
+ * 供应商 relay 的两条:Codex 协议转换与 Claude 1M 映射会把 CLI 的 `base_url` 指回本机 navi
  * (`openai-converter/common.ts` `protocolConverterBaseUrl`、`anthropic-context-1m.ts`
  * `anthropicContext1mBaseUrl`)。**发请求的是 CLI 子进程,它手上只有供应商 API key,不可能
- * 带 ash 的 cookie 或用户 key** —— 不放行,多人模式下这两条会先被这道闸拦成「请先登录」,
+ * 带 navi 的 cookie 或用户 key** —— 不放行,多人模式下这两条会先被这道闸拦成「请先登录」,
  * 根本到不了路由自己那道更严的闸(`secretsEqual(bearerToken(...), provider.apiKey)`),于是
  * 「多人模式只许派接了 relay 的 CLI」这条前提反过来被自己拦死(第 2 轮审查 P1)。
  *
@@ -99,7 +99,7 @@ const PROVIDER_RELAY_PATH = /^\/api\/llm-providers\/[^/]+\/(?:convert|context-1m
  * 接力协商分支尖:`/api/handoff/projects/:id/refs`。带路径参数,进不了上面那张精确清单,
  * 所以照 relay 的先例写成**路径形状**。
  *
- * 打它的同样是对端的 ash 服务端(`handoff.ts` 打 git bundle 之前问一次「你已经有哪些
+ * 打它的同样是对端的 navi 服务端(`handoff.ts` 打 git bundle 之前问一次「你已经有哪些
  * 提交」),手上只有机器签名和 §十一 的 peer user key,不可能有本机 cookie —— 不放行,
  * 多人目标机会在通用闸上先回 401,路由自己那三道更严的闸(来源机已批准 → 验签 →
  * 那个账号看不看得见这个项目)一条都到不了,多人↔多人的 Git 项目接力整个走不通
@@ -118,7 +118,7 @@ const PEER_REFS_PATH = /^\/api\/handoff\/projects\/[^/]+\/refs$/;
  *
  * 同样只放行**形状**:响应里带着任务标题(多人模式下是跨人数据,自用模式下匿名 = 没带
  * 访问密钥的别的机器),所以路由自己对匿名一律校验
- * `x-ash-host-token` —— 单实例锁文件里那串随机 token,只有读得到 ash 数据目录的人拿得到
+ * `x-navi-host-token` —— 单实例锁文件里那串随机 token,只有读得到 navi 数据目录的人拿得到
  * (见 routes.ts 的 `/restart-impact` 与 singleton.ts `liveLockToken`)。
  */
 const HOST_MAINTENANCE_PATHS = new Set(["/api/restart-impact"]);
@@ -198,7 +198,7 @@ const REMOTE_ACCESS_REFUSAL =
 const requestHost = (c: Context): string => c.req.header("host") ?? new URL(c.req.url).host;
 
 /**
- * agent 回连身份:MCP 带着 `x-ash-source-task-id` + `x-ash-turn-token` 来
+ * agent 回连身份:MCP 带着 `x-navi-source-task-id` + `x-navi-turn-token` 来
  * (mcp/src/index.ts:81-84)。凭证对得上就放行,**不走用户会话** —— 一个 agent 的权限
  * 恰好是它那条任务的权限。
  *

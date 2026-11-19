@@ -20,7 +20,7 @@ const LEDGER = ".entry-assets.json";
 
 export function retainPreviousAssets(): Plugin {
   return {
-    name: "ash:retain-previous-assets",
+    name: "navi:retain-previous-assets",
     apply: "build",
     config: () => ({ build: { emptyOutDir: false } }),
     writeBundle(options, bundle) {

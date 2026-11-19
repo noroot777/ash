@@ -7,13 +7,13 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writ
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-gate-status-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-gate-status-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 用户自己的全局配置（core.autocrlf、全局过滤器…）不许影响用例。
 process.env.GIT_CONFIG_GLOBAL = join(root, "gitconfig");
 writeFileSync(process.env.GIT_CONFIG_GLOBAL, "");
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 // stderr 不收：core.autocrlf 下 `git add` 对上万个文件逐个打换行提醒，会撑爆缓冲区。
 const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args],
   { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();

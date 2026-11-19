@@ -6,10 +6,10 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-gate-identity-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+const root = mkdtempSync(join(tmpdir(), "navi-gate-identity-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 const command = (code: string) => `"${process.execPath}" -e ${JSON.stringify(code)}`;
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));

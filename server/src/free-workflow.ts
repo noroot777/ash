@@ -3,7 +3,7 @@ import type {
   FreeReviewDispatchInput,
   SessionRole,
   TaskStatus,
-} from "@ash/shared";
+} from "@navi/shared";
 import type { TurnReview } from "./runs.js";
 import { and, eq, sql } from "drizzle-orm";
 import { bus } from "./bus.js";

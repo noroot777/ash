@@ -6,7 +6,7 @@
 // （见 ../quota.ts）。
 //
 // 卡片回调的同步回卡不经过这里、不花额度 —— 能在回调里改完的卡，一律在回调里改。
-import type { ImApiKind } from "@ash/shared";
+import type { ImApiKind } from "@navi/shared";
 import type { ImPurpose } from "../quota.js";
 
 type ApiKind = ImApiKind;

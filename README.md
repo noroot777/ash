@@ -25,7 +25,7 @@
 ---
 
 <!-- 下面那条地址是 49 秒的介绍片:GitHub 只给「拖进评论框传上去的附件」出播放器,而且地址得单独占一行。
-     整份工程和成片在素材库 noroot777/materials 的 ash/promo 下,不进本仓库(放进来每个 clone 要多下
+     整份工程和成片在素材库 noroot777/materials 的 navi/promo 下,不进本仓库(放进来每个 clone 要多下
      五十 MB)。重渲之后跑那边的 scripts/github_upload.sh、重传一次,把这条地址换掉。 -->
 
 https://github.com/user-attachments/assets/1197fcee-17e4-4e01-8b29-ee0f267e259b
@@ -76,7 +76,7 @@ npm start            # http://localhost:4317
 启动后：新建项目（填 git 仓库绝对路径，或直接从 Git URL 检出）→ 创建任务 → 选择执行器 → 运行。
 
 > [!IMPORTANT]
-> **MCP 接入不可跳过。** agent 通过 MCP 工具 `complete_task` 提交完成状态。未接入 MCP 的 agent 无法交卷，所有任务将显示为失败。<br>验证：`claude mcp list` 中应显示 `ash: … ✔ Connected`。<br>手动接入方法见 [docs/install.md](docs/install.md)。
+> **MCP 接入不可跳过。** agent 通过 MCP 工具 `complete_task` 提交完成状态。未接入 MCP 的 agent 无法交卷，所有任务将显示为失败。<br>验证：`claude mcp list` 中应显示 `navi: … ✔ Connected`。<br>手动接入方法见 [docs/install.md](docs/install.md)。
 
 ## 核心能力
 
@@ -246,7 +246,7 @@ scripts/  setup / restart / package（.mjs，跨平台）
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `4317` | 服务端口（界面与 API 共用） |
-| `ASH_DB` | `./data/ash.db` | SQLite 数据库路径 |
+| `NAVI_DB` | `./data/ash.db` | SQLite 数据库路径 |
 
 所有持久化数据存放在 `data/` 目录（数据库、运行记录、上传文件），该目录不入 git。备份迁移只需拷贝此目录。
 
@@ -313,7 +313,7 @@ npm -w server run test:handoff        # 跨机器接力
 <details>
 <summary>所有任务运行后均显示 <b>failed</b></summary>
 
-MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 Navi MCP 那一行（登记名是 `ash`）状态为 Connected。
+MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 Navi MCP 那一行（登记名是 `navi`）状态为 Connected。
 
 </details>
 

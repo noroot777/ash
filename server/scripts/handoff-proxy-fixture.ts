@@ -13,7 +13,7 @@ export async function startReturnProxy(upstream: string): Promise<{ url: string;
         const body = Buffer.concat(chunks);
         const headers: Record<string, string> = {};
         for (const [key, value] of Object.entries(req.headers)) {
-          if ((key === "content-type" || key.startsWith("x-ash-peer-")) && typeof value === "string") {
+          if ((key === "content-type" || key.startsWith("x-navi-peer-")) && typeof value === "string") {
             headers[key] = value;
           }
         }
@@ -54,7 +54,7 @@ export async function startOrdinaryImportProxy(
   cutPath = "/api/handoff/import",
 ): Promise<{
   url: string;
-  deliverHeld(): Promise<{ status: number; body: { error?: string; ash?: boolean } }>;
+  deliverHeld(): Promise<{ status: number; body: { error?: string; navi?: boolean } }>;
   setUpstream(url: string): void;
   close(): Promise<void>;
 }> {
@@ -83,7 +83,7 @@ export async function startOrdinaryImportProxy(
       void (async () => {
         const headers: Record<string, string> = {};
         for (const [key, value] of Object.entries(req.headers)) {
-          if ((key === "content-type" || key.startsWith("x-ash-peer-")) && typeof value === "string") {
+          if ((key === "content-type" || key.startsWith("x-navi-peer-")) && typeof value === "string") {
             headers[key] = value;
           }
         }
@@ -119,7 +119,7 @@ export async function startOrdinaryImportProxy(
     deliverHeld: async () => {
       if (!held) throw new Error("没有待投递的 import 请求");
       const response = await forward(held);
-      return { status: response.status, body: JSON.parse(response.bytes.toString("utf8")) as { error?: string; ash?: boolean } };
+      return { status: response.status, body: JSON.parse(response.bytes.toString("utf8")) as { error?: string; navi?: boolean } };
     },
     setUpstream: (url: string) => { activeUpstream = url; },
     close: async () => {

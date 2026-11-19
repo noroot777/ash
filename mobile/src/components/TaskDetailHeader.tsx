@@ -4,7 +4,7 @@
 // 单文件行数上限，且这块与会话/输入框没有耦合，只吃 props）。
 import { Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { STATUS_META } from "@/lib/constants";
 import { canStopTask, type RunAction } from "@/lib/taskActions";
 import { TaskTimeChip } from "@/lib/time";

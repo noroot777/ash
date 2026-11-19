@@ -18,7 +18,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { Hono } from "hono";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { monitorMessageOrigin } from "@ash/shared/monitor";
+import { monitorMessageOrigin } from "@navi/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
   HERE, root, db, schema, monitorsModule, monitorEvents, status, pending, continueTask, runs, mountTaskRoutes,
@@ -397,7 +397,7 @@ import {
   mountTaskRoutes(api);
   const markDone = () => api.request(`/tasks/${taskId}`, {
     method: "PATCH",
-    headers: { "content-type": "application/json", "x-ash-user-action": "1" },
+    headers: { "content-type": "application/json", "x-navi-user-action": "1" },
     body: JSON.stringify({ status: "done" }),
   });
   const statusOf = async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)?.status;
@@ -448,7 +448,7 @@ import {
   mountTaskRoutes(api);
   const markDone = (taskId: string) => api.request(`/tasks/${taskId}`, {
     method: "PATCH",
-    headers: { "content-type": "application/json", "x-ash-user-action": "1" },
+    headers: { "content-type": "application/json", "x-navi-user-action": "1" },
     body: JSON.stringify({ status: "done" }),
   });
   const statusOf = async (taskId: string) =>

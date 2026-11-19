@@ -26,7 +26,7 @@ const traced = (at, event) => ({ at, turnStartedAt: STARTED, event });
 const turnOf = (segments, taskId) => turnDocument(segments, { live: true, taskId });
 const bodyOf = (segments, taskId) => turnOf(segments, taskId).text;
 const cardsOf = (segments, taskId) => turnOf(segments, taskId).stops.flatMap((stop) => stop.attachments);
-const uploads = (name) => `/Users/demo/code/ash/data/uploads/${name}`;
+const uploads = (name) => `/Users/demo/code/navi/data/uploads/${name}`;
 
 // 真实形状：正文 → 附件（服务端收到正文的那一刻就落盘，所以恒在它后面）→ 正文。
 // 同一个路径被重拍过两次，两处引用必须各拿自己那一次。
@@ -141,7 +141,7 @@ const shortQueue = [{
 const short = turnOf(shortQueue, "C0ojRgeQnMsa");
 assert.equal(
   short.text,
-  "![一](#ash-image-unavailable:output%2Fs.png) ![二](#ash-image-unavailable:output%2Fs.png)",
+  "![一](#navi-image-unavailable:output%2Fs.png) ![二](#navi-image-unavailable:output%2Fs.png)",
   "对不上就显式作废:作废**不能**靠「原样留着」表达,否则下一个 resolver 又把它救活成当前文件",
 );
 assert.deepEqual(
@@ -199,7 +199,7 @@ const legacyQueue = [{
 }];
 assert.equal(
   bodyOf(legacyQueue, "C0ojRgeQnMsa"),
-  "![一](#ash-image-unavailable:output%2Fs.png) ![二](#ash-image-unavailable:output%2Fs.png)",
+  "![一](#navi-image-unavailable:output%2Fs.png) ![二](#navi-image-unavailable:output%2Fs.png)",
   "老数据配不上也显式作废,不许按位置顶上去",
 );
 
@@ -236,7 +236,7 @@ const mixed = [{
 const mixedOut = turnOf(mixed, "C0ojRgeQnMsa");
 assert.equal(
   mixedOut.text,
-  "坏的：![A1](#ash-image-unavailable:output%2Fa.png) ![A2](#ash-image-unavailable:output%2Fa.png)\n\n好的：![B](/api/uploads/4d4d4d4d4d4d-b.png)",
+  "坏的：![A1](#navi-image-unavailable:output%2Fa.png) ![A2](#navi-image-unavailable:output%2Fa.png)\n\n好的：![B](/api/uploads/4d4d4d4d4d4d-b.png)",
   "配不上的那个目的地作废,对得上的那个照旧画",
 );
 assert.deepEqual(
@@ -312,7 +312,7 @@ assert.equal(
 );
 assert.match(
   painted.text,
-  /#ash-image-unavailable:/,
+  /#navi-image-unavailable:/,
   "作废要显式表达,这样任何 resolver 都救不活它",
 );
 assert.deepEqual(
@@ -494,7 +494,7 @@ const lostBytes = [{
 }];
 assert.match(
   bodyOf(lostBytes, "C0ojRgeQnMsa"),
-  /#ash-image-unavailable:/,
+  /#navi-image-unavailable:/,
   "字节丢了就显式作废,不退到当前文件",
 );
 

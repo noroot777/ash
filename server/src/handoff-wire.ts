@@ -6,8 +6,8 @@
 //  · 错误应答上的可信标记（「这是对端业务层明确拒绝的，可证明没落库」）：旧版只认 `ash: true`，
 //    新版再写一个 `navi: true`；收的时候认任一个。
 //  · 签名头、账号 key 头：新旧两代名字各发一份（`withLegacyHeaderNames`），收的时候 `readHeader`。
-import { LEGACY_HANDOFF_SERVICE } from "@ash/shared/legacy-names";
-import { TASK_BRANCH_PREFIX } from "@ash/shared/task-branch";
+import { LEGACY_HANDOFF_SERVICE } from "@navi/shared/legacy-names";
+import { TASK_BRANCH_PREFIX } from "@navi/shared/task-branch";
 import { expandHome, localBranchExists, resolveWorktreeBranchName } from "./git.js";
 
 /** ping 应答里写的 `service`（见顶部第一条）。 */

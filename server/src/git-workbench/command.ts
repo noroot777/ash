@@ -1,4 +1,4 @@
-import type { GitAction } from "@ash/shared/git-workbench";
+import type { GitAction } from "@navi/shared/git-workbench";
 
 const quote = (value: string) =>
   /^[a-zA-Z0-9_./:@{}~-]+$/.test(value) ? value : JSON.stringify(value);

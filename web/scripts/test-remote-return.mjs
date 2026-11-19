@@ -20,7 +20,7 @@ try {
     createdAt: "2026-09-08T09:00:00.000Z", updatedAt: "2026-09-08T09:00:00.000Z",
     handoff: { direction: "in" },
   };
-  const networkError = "对端返回 502：连不上对端 ash（http://source.test:4317/api/handoff/return/ping）：fetch failed";
+  const networkError = "对端返回 502：连不上对端 navi（http://source.test:4317/api/handoff/return/ping）：fetch failed";
   let responses = [];
   let requests = [];
   let requestedTaskIds = [];

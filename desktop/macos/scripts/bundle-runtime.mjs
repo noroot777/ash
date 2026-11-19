@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 把「跑起一份 ash 要的一切」装进 Ash.app 的 Contents/Resources/app：固定版本的 node、shared/web/
+// 把「跑起一份 navi 要的一切」装进 Ash.app 的 Contents/Resources/app：固定版本的 node、shared/web/
 // server/mcp 产物、生产依赖，以及按这份 node 重编的 node-pty。装完之后 app 不再依赖任何仓库检出，
 // 也不依赖系统里有没有 node。
 //
@@ -8,12 +8,12 @@
 // 目录布局与仓库同形（server 认代码根 = server/dist 往上两级，见 server/src/data-root.ts）：
 //
 //   app/node/bin/node            自带运行时（只留这一个文件 + LICENSE，不带 npm）
-//   app/package.json             workspaces 根，node_modules 里 @ash/* 的软链指回同级目录
+//   app/package.json             workspaces 根，node_modules 里 @navi/* 的软链指回同级目录
 //   app/node_modules/            server + mcp 的生产依赖
 //   app/shared/{package.json,src}  shared 的导出直接指 .ts 源码，靠 node 的类型擦除跑 ——
 //                                所以它必须在 node_modules **外面**（node 不擦 node_modules 里的 .ts）
 //   app/server/{package.json,dist}
-//   app/mcp/{package.json,dist}  ash MCP 的入口，首启接 MCP 时登记的就是它
+//   app/mcp/{package.json,dist}  navi MCP 的入口，首启接 MCP 时登记的就是它
 //   app/web/dist
 //   app/scripts/start-detached.mjs  app 起服务时让 server 进自己的会话
 //   app/.in-use                  代码锁：跑这份代码的服务、MCP 以共享锁拿着它，换包时安装器拿排他锁
@@ -22,13 +22,14 @@
 // 下载的 node 包按写死在这里的 sha256 校验，不认就不用（缓存里的也每次重验）。依赖按
 // 「lockfile + 各 workspace 的 package.json + node 版本」缓存，没变就不再装一遍。
 //
-// 环境变量：ASH_MAC_SKIP_BUILD=1 跳过 `npm run build`（产物已是最新时省时间）；
-//           ASH_MAC_CACHE=<目录> 换缓存位置（缺省 desktop/macos/build/cache）。
+// 环境变量：NAVI_MAC_SKIP_BUILD=1 跳过 `npm run build`（产物已是最新时省时间）；
+//           NAVI_MAC_CACHE=<目录> 换缓存位置（缺省 desktop/macos/build/cache）。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, createReadStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readEnv } from "../../../scripts/env.mjs";
 
 // 升级 node：改这三行，sha256 取 https://nodejs.org/dist/<版本>/SHASUMS256.txt 里对应那一行。
 // ≥22.16 才有内置的 node:sqlite；shared 跑 .ts 源码还要默认开着的类型擦除。
@@ -43,7 +44,7 @@ if (!resources) {
   console.error("usage: bundle-runtime.mjs <Ash.app/Contents/Resources>");
   process.exit(2);
 }
-const CACHE = resolve(process.env.ASH_MAC_CACHE || join(HERE, "..", "build", "cache"));
+const CACHE = resolve(readEnv(process.env, "NAVI_MAC_CACHE") || join(HERE, "..", "build", "cache"));
 const APP = join(resolve(resources), "app");
 const WORKSPACES = ["shared", "server", "web", "mcp"];
 
@@ -62,7 +63,7 @@ async function sha256Of(file) {
 }
 
 // ── 1. 产物 ────────────────────────────────────────────────────────────────
-if (process.env.ASH_MAC_SKIP_BUILD !== "1") {
+if (readEnv(process.env, "NAVI_MAC_SKIP_BUILD") !== "1") {
   say("▶ npm run build");
   run("npm", ["run", "build"], { cwd: REPO });
 }
@@ -114,7 +115,7 @@ if (!existsSync(join(deps, "node_modules"))) {
   }
   // npm 的生命周期脚本里写的是裸 `node`：让它们用的就是要打进包的这一份。
   const env = { ...process.env, PATH: `${join(nodeHome, "bin")}:/usr/bin:/bin:/usr/sbin:/sbin` };
-  run(node, [npmCli, "ci", "--omit=dev", "--workspace=@ash/server", "--workspace=@ash/mcp", "--no-audit", "--no-fund"], { cwd: stage, env });
+  run(node, [npmCli, "ci", "--omit=dev", "--workspace=@navi/server", "--workspace=@navi/mcp", "--no-audit", "--no-fund"], { cwd: stage, env });
   // node-pty 自带的预编译包先删掉：它的加载器找不到 build/Release 时会退回 prebuilds/，删了才
   // 保证跑起来的一定是下面这份。头文件取自同一个 node 包（--nodedir），不去网上另下一份。
   const pty = join(stage, "node_modules", "node-pty");
@@ -146,14 +147,14 @@ const copies = [
 for (const rel of copies) cpSync(join(REPO, rel), join(APP, rel), { recursive: true, verbatimSymlinks: true });
 writeFileSync(join(APP, ".in-use"), "");
 // web 不进生产依赖，它那条 workspace 软链指向一个没有 package.json 的目录，留着只会让人误会。
-rmSync(join(APP, "node_modules", "@ash", "web"), { force: true });
+rmSync(join(APP, "node_modules", "@navi", "web"), { force: true });
 
 // ── 5. 自检：拿打进去的那份 node，从打进去的那份目录里加载 ──────────────────────
 const smoke = spawnSync(join(APP, "node", "bin", "node"), ["--input-type=module", "-e", `
   await import("node:sqlite");
   const pty = (await import("node-pty")).default;
-  const mcp = await import("@ash/shared/mcp");
-  if (!mcp.ASH_MCP_SERVER_NAME || typeof pty.spawn !== "function") process.exit(3);
+  const mcp = await import("@navi/shared/mcp");
+  if (!mcp.NAVI_MCP_SERVER_NAME || typeof pty.spawn !== "function") process.exit(3);
   console.log(process.version);
 `], { cwd: join(APP, "server"), encoding: "utf8" });
 if (smoke.status !== 0 || smoke.stdout.trim() !== NODE_VERSION) {

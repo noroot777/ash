@@ -1,4 +1,4 @@
-import { firstAnchor } from "@ash/shared/workflow-policy";
+import { firstAnchor } from "@navi/shared/workflow-policy";
 import type { tasks } from "./db/schema.js";
 import { taskWorkflowDef } from "./workflows.js";
 

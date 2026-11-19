@@ -14,7 +14,7 @@
  * 一档停在三分钟一问),直到读到已经落定的终态或者监督重新装好为止。
  *
  * 不变量是**两面**的,所以这一趟两边都调:
- *  · 库里还是运行态(且是 ash 自己起的)⇒ `attach` 回去(它幂等,还会补装缺的那一根探活);
+ *  · 库里还是运行态(且是 navi 自己起的)⇒ `attach` 回去(它幂等,还会补装缺的那一根探活);
  *  · 库里已经是终态、或者行已经不在了 ⇒ **不许还有人盯**。并发收尾会制造这一面:两笔收尾
  *    先后进来,第一笔落终态失败、`finally` 又挂回一个新运行时,第二笔随后写成 stopped ——
  *    那条已经停掉的行还占着文件句柄、还在算自己的期限(第 24 轮审查 N1 实测)。
@@ -24,7 +24,7 @@
  * 现在的顺序 + 一个会重试的接管者,比换一个更难证的顺序便宜。
  */
 import { eq } from "drizzle-orm";
-import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
+import { OWN_MONITOR_KIND } from "@navi/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { attach, serialize, supervisionOf, teardownRuntimeLocked } from "./monitors.js";
@@ -56,7 +56,7 @@ async function reconcile(monitorId: string, step: number): Promise<HandoverOutco
     // 跟 `reattachMonitors` 那一侧同口径。
     if (!row || row.status !== "running" || row.kind !== OWN_MONITOR_KIND) {
       if (supervisionOf(monitorId).watching) {
-        console.error(`[ash] 终态已经落定却还有人在盯,撤掉 monitor=${monitorId}（${row?.status ?? "行已不在"}）`);
+        console.error(`[navi] 终态已经落定却还有人在盯,撤掉 monitor=${monitorId}（${row?.status ?? "行已不在"}）`);
         await teardownRuntimeLocked(monitorId);
       }
       return "settled";
@@ -68,7 +68,7 @@ async function reconcile(monitorId: string, step: number): Promise<HandoverOutco
     return "supervised";
   } catch (e) {
     console.error(
-      `[ash] 把监督交回去这一趟失败了 monitor=${monitorId}（第 ${step + 1} 次，`
+      `[navi] 把监督交回去这一趟失败了 monitor=${monitorId}（第 ${step + 1} 次，`
       + `${HANDOVER_LADDER_MS[Math.min(step, HANDOVER_LADDER_MS.length - 1)]}ms 后再来）:`, e,
     );
     scheduleHandover(monitorId, step);

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ChatRoom } from "@ash/shared/chat";
+import type { ChatRoom } from "@navi/shared/chat";
 import { ArrowLeft, BookOpen, ChatCircle, CheckCircle, MagnifyingGlass, PencilSimple, Plus, Robot, X } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { AssistantIcon } from "./AssistantIcon.tsx";

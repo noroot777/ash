@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 
 /** 验收的那枚章：空心是做完了等你验，实心是验过了；null 是不画。 */
 export function sealState(task: Task): "open" | "done" | null {

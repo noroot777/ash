@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { sideChatBody } from "@ash/shared/chat";
+import { sideChatBody } from "@navi/shared/chat";
 import { createClientId } from "../lib/clientId.ts";
 
 export type SideChatQuote = { id: string; text: string };

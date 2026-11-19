@@ -3,7 +3,7 @@ import { createDeliveryLease } from "./delivery-lease.js";
 import { abortDelivery, cancelPendingMessage, markSent } from "./pending-messages.js";
 import { beginPendingBatch, batchMonitorWake } from "./pending-monitor-batch.js";
 import { recoverPendingDelivery } from "./pending-delivery-recovery.js";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
 import { scheduleRedelivery } from "./pending-redelivery.js";
 import { deliveryOptions, monitorWakeGuard } from "./pending-verdict.js";
 import { monitorWakeCheckpoint } from "./monitor-session.js";

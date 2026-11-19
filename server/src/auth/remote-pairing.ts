@@ -2,7 +2,7 @@
 //
 // 两条不用抄密钥的路,第三条(粘访问密钥)在登录端点里:
 //
-//   ① **申请 → 允许**。新设备打开 ash 就自动递一张申请,机主在任何一处已经进得来的
+//   ① **申请 → 允许**。新设备打开 navi 就自动递一张申请,机主在任何一处已经进得来的
 //      页面上点「允许」。两边各显示同一个四位数:局域网里同时有两台设备在申请时,机主
 //      靠它认出哪张是自己手上那台。递申请不要凭证,所以只收从认得的地址打开的页面递来
 //      的(remote-access.ts `knownHost`,挡 DNS 重绑定)。
@@ -16,7 +16,7 @@
 // 点的卡、在别处处理掉之后把卡收起来(im/pairing.ts)。这里不认识通道,只管报。
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { networkInterfaces } from "node:os";
-import type { PairClaim, PairCode, PairRequestView, PairTicket } from "@ash/shared";
+import type { PairClaim, PairCode, PairRequestView, PairTicket } from "@navi/shared";
 import { deviceByToken, enrollDevice } from "./remote-access.js";
 
 export const PAIR_REQUEST_TTL_MS = 10 * 60_000;
@@ -61,7 +61,7 @@ function emit(event: PairEvent): void {
     try {
       listener(event);
     } catch (error) {
-      console.error("[ash] 配对事件的订阅方出错:", error);
+      console.error("[navi] 配对事件的订阅方出错:", error);
     }
   }
 }

@@ -35,7 +35,7 @@ export const taskPrerequisites = sqliteTable("task_prerequisites", {
  * - `blocked` = 前置都站稳了却起不了跑的原因（几条前置的改动合不到一起），等用户处理；前置一变就重判。
  * - `actingUserId` = 当初要求起跑的人：等齐之后替他起跑，这一轮烧谁的额度照他。
  * - `installJournal` = 开工判定**打算**把工作区换到的每一版（JSON 数组，只增不删），换之前先记、开工落定时清空。
- *   换到一半断掉（哪怕连断几次、中间前置还动过）之后，工作区停在其中任何一版上都认得出是 ash 换的、
+ *   换到一半断掉（哪怕连断几次、中间前置还动过）之后，工作区停在其中任何一版上都认得出是 navi 换的、
  *   不是它自己的提交（../prerequisite-install.ts）。
  */
 export const taskPrerequisiteLaunches = sqliteTable("task_prerequisite_launches", {

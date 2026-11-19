@@ -1,5 +1,5 @@
-import type { TaskListItem } from "@ash/shared";
-import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
+import type { TaskListItem } from "@navi/shared";
+import { isTeamSettled, teamNeverStarted } from "@navi/shared/team";
 import { awaitsAcceptance, awaitsRuling, hasFailed, isAcceptedStage, spreadBucket, type SpreadBucket } from "./taskAttention.ts";
 
 // 一条任务「现在怎么样」的唯一出处：侧栏行首画什么、指上去说什么、行尾那两三个字、算进

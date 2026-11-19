@@ -1,5 +1,5 @@
 import { isAbsolute } from "node:path";
-import type { GitAction, GitWorkbenchState } from "@ash/shared/git-workbench";
+import type { GitAction, GitWorkbenchState } from "@navi/shared/git-workbench";
 import { git, digest, fail, refName } from "./core.js";
 import { readScmRemotes } from "../git-status.js";
 import { network } from "./sync.js";

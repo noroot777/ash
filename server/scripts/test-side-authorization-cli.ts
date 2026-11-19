@@ -3,14 +3,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import type { ChatMember } from "@ash/shared/chat";
+import type { ChatMember } from "@navi/shared/chat";
 import { acceptedSideRequests, rejectedSideRequests, naturalSideRequests, reviewFourRejectedRequests } from "./side-authorization-cases.js";
 
-if (process.env.ASH_CHAT_SMOKE !== "1") throw new Error("此测试调用真实 CLI；显式设置 ASH_CHAT_SMOKE=1 后运行。");
-const stage = mkdtempSync(join(tmpdir(), "ash-side-auth-cli-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+if (process.env.NAVI_CHAT_SMOKE !== "1") throw new Error("此测试调用真实 CLI；显式设置 NAVI_CHAT_SMOKE=1 后运行。");
+const stage = mkdtempSync(join(tmpdir(), "navi-side-auth-cli-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_ALLOW_REAL_AGENT = "1";
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects } = await import("../src/db/schema.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
@@ -45,7 +45,7 @@ try {
       console.log(JSON.stringify(record));
     }
   }));
-  if (process.env.ASH_AUTH_EVIDENCE) writeFileSync(process.env.ASH_AUTH_EVIDENCE, JSON.stringify({ member,
+  if (process.env.NAVI_AUTH_EVIDENCE) writeFileSync(process.env.NAVI_AUTH_EVIDENCE, JSON.stringify({ member,
     promptTemplate: sideAuthorizationPrompt(""), promptSha256: createHash("sha256").update(sideAuthorizationPrompt("")).digest("hex"), records }, null, 2));
   const mismatches = records.filter((record) => {
     try {

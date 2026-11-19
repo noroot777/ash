@@ -59,7 +59,7 @@ export interface Session {
   /**
    * 这一轮**自己**的权威结局(`session_turns.outcome`,服务端收口时写下的那一位)。
    *
-   * 为什么要带出门:`exitStatus` 记的是**进程**最后一次怎么没的,它答不了「ash 判这一轮成
+   * 为什么要带出门:`exitStatus` 记的是**进程**最后一次怎么没的,它答不了「navi 判这一轮成
    * 没成」。被回合级停滞看门狗终止的那一轮正是两者分家的现场 —— 我们判它失败、区间记
    * failed,而被终止的进程往多半以 **exit 0** 收流(claude 走信号退出时是 `code ?? 0`)。
    * 重试入口照退出码判,就会在页面明写「本次续聊因上游连不上被自动终止」的同时,不给任何
@@ -105,7 +105,7 @@ export interface Session {
    * 同一个事实源。
    *
    * 缺省/undefined = 这份快照来自不提供它的地方(接力过来的远端快照、历史客户端),按「不在等」
-   * 处理;ash 重启后在飞的那一轮也会落回这一档(见 session-waiting.ts 的开头)。
+   * 处理;navi 重启后在飞的那一轮也会落回这一档(见 session-waiting.ts 的开头)。
    */
   awaitingUpstream?: boolean;
   // 这条会话行累计的 token 用量(会话可复用,跨多个回合累加)。null = 这家 CLI

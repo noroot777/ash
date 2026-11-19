@@ -7,9 +7,9 @@
 // 生效，于是刚炸的任务被扔到列表最末，找它得一路滚到底。现在不按状态提升任何一档 ——
 // 失败、待验收、等你答复这些靠行内的颜色和标识认（见 TaskStatusChips），不靠位置。
 // 置顶（pinnedAt）是唯一的例外，那是用户手动摁下去的。
-import type { TaskListItem } from "@ash/shared";
-import { isTaskAwaitingAcceptance, isTeamLead } from "@ash/shared/task-attention";
-import { workersOf } from "@ash/shared/team";
+import type { TaskListItem } from "@navi/shared";
+import { isTaskAwaitingAcceptance, isTeamLead } from "@navi/shared/task-attention";
+import { workersOf } from "@navi/shared/team";
 import { needsYourCommand } from "@/lib/taskAttention";
 
 export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;

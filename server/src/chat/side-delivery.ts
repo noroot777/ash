@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
-import type { ChatMessage } from "@ash/shared/chat";
+import type { ChatMessage } from "@navi/shared/chat";
 import { db } from "../db/index.js";
 import { chatMessages, chatRooms, scheduledMessages, tasks, users } from "../db/schema.js";
 import { SINGLE_ACTOR, type Actor } from "../auth/context.js";

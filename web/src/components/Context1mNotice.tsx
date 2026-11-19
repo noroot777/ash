@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
-import type { ContextUsage, LlmProvider, Session } from "@ash/shared";
-import { type CliHostEnv, claudeCompactionPreview } from "@ash/shared/cli-overrides";
-import { type ClaudeModelWindow, clampedCompactWindow, claudeModelWindow } from "@ash/shared/context-1m";
-import { contextCompactTrigger } from "@ash/shared/usage";
+import type { ContextUsage, LlmProvider, Session } from "@navi/shared";
+import { type CliHostEnv, claudeCompactionPreview } from "@navi/shared/cli-overrides";
+import { type ClaudeModelWindow, clampedCompactWindow, claudeModelWindow } from "@navi/shared/context-1m";
+import { contextCompactTrigger } from "@navi/shared/usage";
 import { api } from "../lib/api.ts";
 import { refreshProviders } from "../lib/modelCatalog.ts";
 import "./context-1m-notice.css";

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import type { CliHostEnv } from "@ash/shared/cli-overrides";
+import type { CliHostEnv } from "@navi/shared/cli-overrides";
 import { api } from "../lib/api.ts";
 
-// ash 起 CLI 时子进程会看到的环境事实（只读，不是配置项）。压缩触发点的换算里
+// navi 起 CLI 时子进程会看到的环境事实（只读，不是配置项）。压缩触发点的换算里
 // 有一项（CLAUDE_CODE_MAX_OUTPUT_TOKENS）住在 **server 进程**的环境里，前端算不出来；
 // 不拿真值的话，设置页写的水位会跟 CLI 的实际行为差出几个百分点。
 //

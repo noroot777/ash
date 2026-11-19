@@ -3,7 +3,7 @@ import type {
   GitRef,
   GitStash,
   GitWorkbenchState,
-} from "@ash/shared/git-workbench";
+} from "@navi/shared/git-workbench";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { getGitOverview } from "../git-overview.js";
@@ -23,7 +23,7 @@ import {
 import { cappedGitStdout } from "../git-exec.js";
 import { repoKey } from "../git.js";
 import { lockedRepoKeys } from "../repo-lock.js";
-import { STASH_OWNER_TAG, STASH_OWNER_TAGS, stashOwnerMark } from "@ash/shared/git-workbench";
+import { STASH_OWNER_TAG, STASH_OWNER_TAGS, stashOwnerMark } from "@navi/shared/git-workbench";
 import { git, digest, commitOid, fail, stateVersion } from "./core.js";
 import { readJournal } from "./journal.js";
 import { readRemoteDetails } from "./remotes.js";

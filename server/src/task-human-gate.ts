@@ -19,8 +19,8 @@
 //
 // 飞书的待验收卡把它拼进代次（im/attention.ts），按钮带着它进验收接口；接口在验收互斥里现核（staleAcceptance），
 // 放行那一步再按「还是核过的那一段」条件写（sameGate），核过之后线才离开这一道也放不过去。
-import { STEP_LABELS, type WorkflowDef } from "@ash/shared/workflow";
-import { nextAnchor, type UnexecutedVerification } from "@ash/shared/workflow-policy";
+import { STEP_LABELS, type WorkflowDef } from "@navi/shared/workflow";
+import { nextAnchor, type UnexecutedVerification } from "@navi/shared/workflow-policy";
 import { and, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { tasks } from "./db/schema.js";

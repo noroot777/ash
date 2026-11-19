@@ -4,7 +4,7 @@
 // 有一份带着等裁定的驳回（跟任务页一样把 useDisputeRulingDock 交给回复框），一份在问你（接着答题卡）。
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewDispute, FreeReviewRun, Task } from "@ash/shared";
+import type { FreeReviewDispute, FreeReviewRun, Task } from "@navi/shared";
 import { useDisputeRulingDock } from "../../src/free-workflow/DisputeRulingDock.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
@@ -42,7 +42,7 @@ function Stage({ name, task: patch = {}, reviews: initial = [], dispatch = true 
   /** 这里派不派得出去（团队执行者、审查任务派不出去）。 */
   dispatch?: boolean;
 }) {
-  // id 前 8 个字就是它的 worktree 分支名（ash/<前 8 个字>），测试那一侧按它给分支列表。
+  // id 前 8 个字就是它的 worktree 分支名（navi/<前 8 个字>），测试那一侧按它给分支列表。
   const task = { ...baseTask, ...patch, id: `t-${name}` } as Task;
   const [reviews, setReviews] = useState(initial);
   const override = useDisputeRulingDock({

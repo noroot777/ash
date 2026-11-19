@@ -1,5 +1,5 @@
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
-import { sameExecutor } from "@ash/shared/executors";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
+import { sameExecutor } from "@navi/shared/executors";
 import { WarningCircle } from "@phosphor-icons/react";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import {

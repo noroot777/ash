@@ -1,7 +1,7 @@
 // 个人 CLI 环境:每用户每 CLI 一个独立配置目录(§九)。
 //
 // 位置是 **server 数据目录 `data/user-cli/<userId>/<agentType>/`**,不是用户项目目录内
-// (审查修订 D10):放进去就会撞上「把含 .ash 的目录建成项目」的污染,而且 git 会看见它。
+// (审查修订 D10):放进去就会撞上「把含 .navi 的目录建成项目」的污染,而且 git 会看见它。
 // 放在这里,项目路径永远够不着,git 也永远看不见。
 //
 // 载体是各 CLI 自己的「整体取代配置目录」环境变量:
@@ -19,10 +19,10 @@
 //      `server/scripts/test-user-cli-smoke.ts` 的零交互冒烟测试。
 import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
+import type { AgentType, PersonalCliEnv, PersonalSkill } from "@navi/shared";
 import { DATA_DIR } from "../paths.js";
-import { injectsAshMcp } from "../executors/ash-mcp-inject.js";
-import { ensureAshMcp, ashMcpRegistration, hostCliConfigDir, hostCliConfigFile, INJECTED_ASH_MCP } from "./user-cli-mcp.js";
+import { injectsNaviMcp } from "../executors/navi-mcp-inject.js";
+import { ensureNaviMcp, naviMcpRegistration, hostCliConfigDir, hostCliConfigFile, INJECTED_NAVI_MCP } from "./user-cli-mcp.js";
 
 /** 个人配置目录的根。刻意放 data/ 下 —— 见文件顶部。 */
 export const USER_CLI_ROOT = join(DATA_DIR, "user-cli");
@@ -73,8 +73,8 @@ export function userCliDir(userId: string, agentType: string): string {
  *    **不预置任何 model / permissions / env** —— 那些会改变 CLI 行为,而探针③ 表明
  *    带 key 的首跑本来就有一个未定位的挂起,再加变量只会让排查更难。
  *
- * **不写 ash MCP 登记**:有个人目录的这几家(claude / codex)起跑时由 ash 注入自己的 MCP
- * (`executors/ash-mcp-inject.ts`),个人目录里有没有那条登记都不影响交卷。
+ * **不写 navi MCP 登记**:有个人目录的这几家(claude / codex)起跑时由 navi 注入自己的 MCP
+ * (`executors/navi-mcp-inject.ts`),个人目录里有没有那条登记都不影响交卷。
  */
 export async function ensureUserCliDir(userId: string, agentType: AgentType): Promise<string | null> {
   return seedUserCliDir(userId, agentType);
@@ -105,7 +105,7 @@ export async function initUserCliEnv(userId: string): Promise<void> {
     try {
       await ensureUserCliDir(userId, type);
     } catch (e) {
-      console.warn(`[ash] 初始化 ${userId} 的 ${type} 个人配置目录失败:`, e);
+      console.warn(`[navi] 初始化 ${userId} 的 ${type} 个人配置目录失败:`, e);
     }
   }
 }
@@ -175,7 +175,7 @@ export async function personalCliEnv(userId: string, agentType: AgentType): Prom
       memoryName: null,
       hasMemory: false,
       plugins: [],
-      ashMcp: null,
+      naviMcp: null,
     };
   }
   const dir = seedUserCliDir(userId, agentType)!;
@@ -192,33 +192,33 @@ export async function personalCliEnv(userId: string, agentType: AgentType): Prom
     hasMemory: !!memoryFile && existsSync(memoryFile),
     plugins: readPlugins(dir),
     // 起跑时注入的那几家不看目录里的登记;其余的现问(用户手工改完刷新页面就该看到新状态)。
-    ashMcp: injectsAshMcp(agentType) ? INJECTED_ASH_MCP : await ensureAshMcp(dir, agentType),
+    naviMcp: injectsNaviMcp(agentType) ? INJECTED_NAVI_MCP : await ensureNaviMcp(dir, agentType),
   };
 }
 
 /**
- * 共用宿主 CLI 的那一档（含自用模式）：宿主配置里缺 ash MCP 时**出声，但一个字节都不改**。
+ * 共用宿主 CLI 的那一档（含自用模式）：宿主配置里缺 navi MCP 时**出声，但一个字节都不改**。
  *
- * 只看**不注入**的那几家（claude / codex 起跑时由 ash 注入，见 `executors/ash-mcp-inject.ts`），
+ * 只看**不注入**的那几家（claude / codex 起跑时由 navi 注入，见 `executors/navi-mcp-inject.ts`），
  * 而且只读一次它们自己的配置文件、不起 CLI —— 那几家的退路就是自己配置里的登记，读出来
  * 确实没有（或关着）才说一句。没装的 CLI 不报：配置文件不在、PATH 上也找不到它就跳过。
  */
-async function warnHostAshMcp(): Promise<void> {
+async function warnHostNaviMcp(): Promise<void> {
   const gaps: string[] = [];
-  const { AGENT_TYPES } = await import("@ash/shared");
+  const { AGENT_TYPES } = await import("@navi/shared");
   const { cliSpec } = await import("../executors/catalog/index.js");
   const { resolveBin } = await import("../executors/bin-resolve.js");
   for (const agentType of AGENT_TYPES) {
-    if (injectsAshMcp(agentType)) continue;
+    if (injectsNaviMcp(agentType)) continue;
     const file = hostCliConfigFile(agentType);
     const dir = hostCliConfigDir(agentType);
     if (!file || !dir) continue;
     if (!existsSync(file) && !cliSpec(agentType).bins.some((bin) => resolveBin(bin))) continue;
-    const found = ashMcpRegistration(dir, agentType);
+    const found = naviMcpRegistration(dir, agentType);
     if (found.state === "absent" || found.state === "disabled") gaps.push(`${agentType}（${file}）：${found.detail}`);
   }
   if (!gaps.length) return;
-  console.warn("[ash] 看这台机器的默认配置，这些 CLI 没有可用的 Navi MCP 登记（Navi 不替它们注入），"
+  console.warn("[navi] 看这台机器的默认配置，这些 CLI 没有可用的 Navi MCP 登记（Navi 不替它们注入），"
     + "这么跑起来的 agent 交不了卷（没有 complete_task，干完的活会记 failed）：");
   for (const line of gaps) console.warn(`  · ${line}`);
   console.warn("  接法见 docs/install.md，或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
@@ -226,12 +226,12 @@ async function warnHostAshMcp(): Promise<void> {
 
 /**
  * 启动时那一趟：共用档提示宿主配置的缺口；隔离档的个人目录只有 claude / codex 两家，
- * 都由 ash 起跑时注入，不需要补登记 —— 这里只把目录建好。
+ * 都由 navi 起跑时注入，不需要补登记 —— 这里只把目录建好。
  */
-export async function sweepPersonalAshMcp(): Promise<void> {
+export async function sweepPersonalNaviMcp(): Promise<void> {
   // 动态 import:mode.ts / db 都在 auth 这一圈里绕回来,顶层导入会绕出一个环。
   const { isHostCliIsolated } = await import("./mode.js");
-  if (!(await isHostCliIsolated())) return await warnHostAshMcp();
+  if (!(await isHostCliIsolated())) return await warnHostNaviMcp();
   const { db } = await import("../db/index.js");
   const { users } = await import("../db/schema.js");
   const rows = await db.select({ id: users.id, name: users.name }).from(users);
@@ -239,8 +239,8 @@ export async function sweepPersonalAshMcp(): Promise<void> {
   for (const row of rows) {
     for (const type of PERSONAL_CLI_TYPES) {
       const dir = await ensureUserCliDir(row.id, type);
-      if (!dir || injectsAshMcp(type)) continue;
-      const state = await ensureAshMcp(dir, type);
+      if (!dir || injectsNaviMcp(type)) continue;
+      const state = await ensureNaviMcp(dir, type);
       // 只取第一行:补不上时那句话里会带上「要手工加的那段」(整段 TOML),一台机器上每个用户
       // 都印一遍会把启动日志冲掉。完整的那一份在设置页/`GET /me/cli-env` 里。
       const why = (state.problem ?? "原因不明").split("\n")[0]!;
@@ -248,7 +248,7 @@ export async function sweepPersonalAshMcp(): Promise<void> {
     }
   }
   if (!broken.length) return;
-  console.warn("[ash] 这些个人 CLI 配置目录缺 Navi MCP 登记，它们的 agent 交不了卷（没有 complete_task，干完的活会记 failed）：");
+  console.warn("[navi] 这些个人 CLI 配置目录缺 Navi MCP 登记，它们的 agent 交不了卷（没有 complete_task，干完的活会记 failed）：");
   for (const line of broken) console.warn(`  · ${line}`);
 }
 

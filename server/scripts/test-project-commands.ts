@@ -6,13 +6,13 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProjectCommands, SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
+import { parseProjectCommands, SERVICE_COMMAND_ID } from "@navi/shared/project-commands";
 import {
   fillCommandPlaceholders,
   missingCommandValues,
   parseCommandPlaceholders,
   parseCommandValues,
-} from "@ash/shared/project-commands";
+} from "@navi/shared/project-commands";
 import { IS_WINDOWS } from "../src/platform.js";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
@@ -95,7 +95,7 @@ assert.deepEqual(parseCommandValues(undefined), {});
 // 替换出来的值本身带 `$&` 这类正则替换记号也必须原样(用的是函数式 replace)。
 assert.equal(fillCommandPlaceholders("echo {{a}}", { a: "$& $1" }), "echo $& $1");
 
-const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ash-cmd-")));
+const cwd = realpathSync(mkdtempSync(join(tmpdir(), "navi-cmd-")));
 const manager = new TerminalSessionManager();
 
 // SIGKILL 已生效、PID 1 还没 reap 的窗口里,kill(pid, 0) 对僵尸仍然成功 —— 只用它
@@ -515,7 +515,7 @@ try {
   assert.equal(terminalSessions.liveCommandSession("pcs", "graceful"), null, "脚本没带走的前台进程,仍要被杀掉兜底");
 
   // ② 脚本自己失败:502 + 把最后几行输出带回去,现场**留着** —— 用户写那段脚本正是
-  //    不想让 ash 直接 kill,这时偷偷强杀比停不掉更糟。
+  //    不想让 navi 直接 kill,这时偷偷强杀比停不掉更糟。
   assert.equal((await startCommand("pcs", cwd, graceful)).status, 201);
   const stopFailed = await stopCommand("pcs", "graceful", { script: "echo 停不下来 >&2; exit 3", cwd });
   assert.equal(stopFailed.status, 502);
@@ -525,7 +525,7 @@ try {
   assert.ok(terminalSessions.liveCommandSession("pcs", "graceful"), "停止命令失败时绝不偷偷强杀");
   assertStopBody((await stopCommand("pcs", "graceful")).body, true);
 
-  // ③ `docker compose up -d` 形状:启动脚本自己 exit 0,服务活在 ash 的进程树之外。
+  // ③ `docker compose up -d` 形状:启动脚本自己 exit 0,服务活在 navi 的进程树之外。
   const detached: RunnableCommand = {
     id: SERVICE_COMMAND_ID, // 清扫豁免按 service 认人,回归也得用真身份
     name: "detached",
@@ -552,7 +552,7 @@ try {
   assertStopBody((await stopCommand("pcs", SERVICE_COMMAND_ID)).body, false);
   // 配了停止命令:正常退出、又没被停过的那次启动仍算「开着」—— 否则那条停止命令永远按不到。
   rmSync(stopFlag, { force: true });
-  // 脚本跑了,但这次启动既没有活进程、也没有端口线索,服务本来就在 ash 的进程树之外 ——
+  // 脚本跑了,但这次启动既没有活进程、也没有端口线索,服务本来就在 navi 的进程树之外 ——
   // 于是只能说「按过停止」,不能说「停净了」(terminal-stop-notices.ts 的 processStopVerdict ③)。
   // 这个期望此前钉的是 `{ stopped: true }` 一个字段,在改成三档判定的那次合并里漏改了
   // (HEAD 上实跑同样红),这一轮一并对齐。
@@ -654,7 +654,7 @@ try {
   assert.equal(churnLive.length, 1, "连环重启后同一条命令只有一条活会话");
   assertStopBody((await stopCommand("pc2", "churn")).body, true);
 
-  // server 退出路径:shutdown() 必须整组收割,忽略信号的孤儿也不能漏 —— 否则 ash 重启后
+  // server 退出路径:shutdown() 必须整组收割,忽略信号的孤儿也不能漏 —— 否则 navi 重启后
   // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。三种形状都要盖:组长还活着的
   // (orphan2,& wait)、组长已自然退出而 KEEPER wrapper 还守着 tty 持有者的(daemon2,
   // dchild2 已脱离 ppid 树,第 4 轮的漏杀形状)、以及 stdio 全重定向 + 独立 PGID 的

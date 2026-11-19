@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import { ActivityIndicator, Pressable, Text, View, type StyleProp, type ViewStyle } from "react-native";
-import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, LlmProvider } from "@navi/shared";
 import {
   CLI_MODEL_PRESETS,
   REASONING_EFFORT_DETAIL,
   isReasoningEffortSupported,
   reasoningEffortsFor,
-} from "@ash/shared/cli-presets";
-import { sameExecutor } from "@ash/shared/executors";
+} from "@navi/shared/cli-presets";
+import { sameExecutor } from "@navi/shared/executors";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/lib/api";
 import {

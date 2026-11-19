@@ -1,8 +1,8 @@
 // 任务页回复框里跟派活单有关的两件事（单独成文件守 TaskDetail 的 700 行）：
-//   · 「派出去」：交给 ash 照卡建（卡只会是这条任务自己摆的单）；
+//   · 「派出去」：交给 navi 照卡建（卡只会是这条任务自己摆的单）；
 //   · 「派出去的活交给谁」：写回这条任务。
-import type { Task } from "@ash/shared";
-import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import type { Task } from "@navi/shared";
+import type { DispatchLaunchInput, DispatchRunTarget } from "@navi/shared/dispatch-plan";
 import { api } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";
 

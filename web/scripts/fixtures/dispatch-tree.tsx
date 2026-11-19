@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, Task } from "@navi/shared";
 import { TaskTree } from "../../src/workspace/TaskTree.tsx";
 import type { SidebarSpread, SpreadFilter } from "../../src/workspace/useSidebarSpread.ts";
 import type { TaskScope } from "../../src/workspace/taskScope.ts";
@@ -12,7 +12,7 @@ const now = Date.now();
 const at = (minutes: number) => new Date(now - minutes * 60 * 1000).toISOString();
 
 const project: ProjectView = {
-  id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, useWorktreeDefault: false, createdAt: at(600),
+  id: "p1", name: "navi", repoPath: "/tmp/navi", workflowId: null, useWorktreeDefault: false, createdAt: at(600),
   health: { exists: true, isRepo: true },
 };
 
@@ -55,7 +55,7 @@ declare global {
   }
 }
 
-function Ash() {
+function Navi() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [tasks, setTasks] = useState(initial);
   const [filter, setFilter] = useState<SpreadFilter>("all");
@@ -90,4 +90,4 @@ function Ash() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><Ash /></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><Navi /></StrictMode>);

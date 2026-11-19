@@ -1,6 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
-import type { AnnotationBatch, AnnotationBatchRecord } from "@ash/shared/page-annotation-batch";
-import { annotationBatchPrompt } from "@ash/shared/page-annotation-batch";
+import type { AnnotationBatch, AnnotationBatchRecord } from "@navi/shared/page-annotation-batch";
+import { annotationBatchPrompt } from "@navi/shared/page-annotation-batch";
 import { db, dbClient } from "./db/index.js";
 import { pageAnnotationBatches as batches } from "./db/schema-page-annotation.js";
 import { scheduledMessages } from "./db/schema.js";

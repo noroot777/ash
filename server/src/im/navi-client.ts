@@ -1,7 +1,7 @@
-// 飞书通道调 ash 自己的接口：一律以「绑定的那个人」的身份走完整路由栈（../auth/im-actor.ts）。
+// 飞书通道调 navi 自己的接口：一律以「绑定的那个人」的身份走完整路由栈（../auth/im-actor.ts）。
 import { dispatchAsIm, type AppFetch, type ImCall, type ImPrincipal } from "../auth/im-actor.js";
 
-export type AshResult<T = Record<string, unknown>> =
+export type NaviResult<T = Record<string, unknown>> =
   | { ok: true; status: number; data: T }
   | { ok: false; status: number; error: string; data: Record<string, unknown> };
 
@@ -11,18 +11,18 @@ export type AshResult<T = Record<string, unknown>> =
  * transient = 5xx 或根本没调通（call 把抛出记成 500）。只有 absent 能当「确实没有」处理 —— transient 是结局不明，
  * 不能据此换掉、删掉、收掉任何东西，也不能对人说成确定的原因。
  */
-export type AshFailure = "absent" | "denied" | "rejected" | "transient";
+export type NaviFailure = "absent" | "denied" | "rejected" | "transient";
 
-export function failureOf(result: AshResult & { ok: false }): AshFailure {
+export function failureOf(result: NaviResult & { ok: false }): NaviFailure {
   if (result.status === 404) return "absent";
   if (result.status === 403) return "denied";
   return result.status >= 400 && result.status < 500 ? "rejected" : "transient";
 }
 
-export class AshClient {
+export class NaviClient {
   constructor(private readonly fetch: AppFetch) {}
 
-  async call<T = Record<string, unknown>>(principal: ImPrincipal, call: ImCall): Promise<AshResult<T>> {
+  async call<T = Record<string, unknown>>(principal: ImPrincipal, call: ImCall): Promise<NaviResult<T>> {
     let response: Response;
     try {
       response = await dispatchAsIm(this.fetch, principal, call);

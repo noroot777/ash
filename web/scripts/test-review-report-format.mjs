@@ -1,4 +1,4 @@
-// 一份报告**是不是照 ash 那套格式写的**——纯结构签名判据（`reviewReportFormat.ts`）。
+// 一份报告**是不是照 navi 那套格式写的**——纯结构签名判据（`reviewReportFormat.ts`）。
 // 「哪个 `##` 是分界」在 `test-review-report-boundary.mjs`，认不出格式时折到哪在
 // `test-review-report-fallback.mjs`，折叠按钮**能说什么**在 `test-review-report-claim.mjs`。
 //

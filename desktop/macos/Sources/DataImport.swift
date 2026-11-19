@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 import Darwin
 
-/// 首启时「从一份已有的 ash 数据目录导入」（比如仓库里的 `data/`）。**只复制、不移动**，源目录
+/// 首启时「从一份已有的 navi 数据目录导入」（比如仓库里的 `data/`）。**只复制、不移动**，源目录
 /// 一个字节都不改。
 ///
 /// 源库可能正被另一份 server 开着（WAL 模式、随时在写），所以库文件不能按文件拷：拷到一半的
@@ -48,11 +48,11 @@ enum DataImport {
     guard FileManager.default.fileExists(atPath: db.path) else {
       throw Failure("\(url.path) 里没有 ash.db。要选的是 Navi 的数据目录（仓库里是 data/）。")
     }
-    let source = AshHealth.realPath(url.path), dest = AshHealth.realPath(AshConfig.dataURL.path)
+    let source = NaviHealth.realPath(url.path), dest = NaviHealth.realPath(NaviConfig.dataURL.path)
     guard source != dest else { throw Failure("这就是 app 自己的数据目录。") }
     // 互相包含时，复制的一边会把另一边也卷进去（目标在源里面 = 把自己拷进自己）。
     guard !contains(source, dest) && !contains(dest, source) else {
-      throw Failure("\(url.path) 和 app 的数据目录 \(AshConfig.dataURL.path) 一个在另一个里面，没法导入。")
+      throw Failure("\(url.path) 和 app 的数据目录 \(NaviConfig.dataURL.path) 一个在另一个里面，没法导入。")
     }
     // 多人模式的数据转不回自用（server 的 auth/mode.ts），而 app 只以本机自用模式起服务。
     if try instanceMode(of: db) == "multi" {
@@ -176,13 +176,13 @@ enum DataImport {
 
   /// 自带 node 跑 server 的 import-snapshot：源数据根按选的路径和它的真实路径各给一份。
   private static func prepare(_ db: URL, source: URL, dest: URL) throws -> Report {
-    for part in [AshConfig.nodeURL, AshConfig.importToolURL] where !FileManager.default.fileExists(atPath: part.path) {
+    for part in [NaviConfig.nodeURL, NaviConfig.importToolURL] where !FileManager.default.fileExists(atPath: part.path) {
       throw Failure("app 里自带的 Navi 不完整（缺 \(part.path)）。重新装一次 Navi.app。")
     }
-    let roots = Array(Set([source.standardizedFileURL.path, AshHealth.realPath(source.path)]))
+    let roots = Array(Set([source.standardizedFileURL.path, NaviHealth.realPath(source.path)]))
     let tool = Process()
-    tool.executableURL = AshConfig.nodeURL
-    tool.arguments = [AshConfig.importToolURL.path, db.path, dest.standardizedFileURL.path] + roots
+    tool.executableURL = NaviConfig.nodeURL
+    tool.arguments = [NaviConfig.importToolURL.path, db.path, dest.standardizedFileURL.path] + roots
     tool.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8"]
     let output = Pipe(), errors = Pipe()
     tool.standardOutput = output

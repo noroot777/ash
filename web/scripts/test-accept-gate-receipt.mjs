@@ -136,7 +136,7 @@ export async function testAcceptGateReceipts({ open, run, basis }) {
     if (!logTail) assert.equal(await row.locator(".acc-log pre").count(), 0, "没有日志可读就不摆一个空日志框");
     else {
       assert.match(await row.locator(".acc-log pre").innerText(), /last lines/);
-      if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/handoff-log-unavailable.png`, fullPage: true });
+      if (process.env.NAVI_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.NAVI_TEST_ARTIFACTS}/handoff-log-unavailable.png`, fullPage: true });
     }
     await page.close();
   }

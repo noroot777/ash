@@ -28,7 +28,7 @@ export function pairLink(code: string, host: string | undefined): string | null 
   return `${protocol}//${host}${port ? `:${port}` : ""}/?pair=${encodeURIComponent(code)}`;
 }
 
-/** 这个页面是不是在 ash 所在的那台机器上、用回环地址打开的。 */
+/** 这个页面是不是在 navi 所在的那台机器上、用回环地址打开的。 */
 export function isLoopbackPage(): boolean {
   const { hostname } = window.location;
   return hostname === "localhost" || hostname === "[::1]" || /^127\./.test(hostname);

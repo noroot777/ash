@@ -4,8 +4,8 @@
 // 这条任务自己的智能体不被叫醒、不占回合：只建任务、起跑新任务，不往这条任务的会话里送任何话，
 // 所以它正在跑的时候也照派不误。新任务是普通任务——自己的 worktree 跟随默认；建出来就带审查预约（框里那颗
 // 「谁来审」，缺省默认审查者，shared/src/review-on-create.ts）。
-import type { Task } from "@ash/shared";
-import { provisionalTitle } from "@ash/shared/provisional-title";
+import type { Task } from "@navi/shared";
+import { provisionalTitle } from "@navi/shared/provisional-title";
 import { api } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";
 import type { ReplyBoxProps } from "./replyBoxProps.ts";

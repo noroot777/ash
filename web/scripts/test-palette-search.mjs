@@ -120,9 +120,9 @@ try {
   assert.ok(await preview.getByRole("button", { name: "打开任务" }).isVisible());
   assert.equal(await preview.locator("mark").first().innerText(), "深处");
   assert.equal(await selectedIndex(), "0");
-  if (process.env.ASH_SEARCH_SCREENSHOTS) {
-    mkdirSync(process.env.ASH_SEARCH_SCREENSHOTS, { recursive: true });
-    await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, "search-desktop.png") });
+  if (process.env.NAVI_SEARCH_SCREENSHOTS) {
+    mkdirSync(process.env.NAVI_SEARCH_SCREENSHOTS, { recursive: true });
+    await page.screenshot({ path: join(process.env.NAVI_SEARCH_SCREENSHOTS, "search-desktop.png") });
   }
 
   for (const [query, screenshot] of [["经常搜不出要找的东西", "readable-user-turn.png"], ["READ_CHUNK_BYTES", "readable-code-change.png"]]) {
@@ -136,7 +136,7 @@ try {
       return mark.top >= snippet.top - 1 && mark.bottom <= snippet.bottom + 1;
     });
     assert.ok(visibleMatch, `the list must show the matched words: ${query}`);
-    if (process.env.ASH_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, screenshot) });
+    if (process.env.NAVI_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.NAVI_SEARCH_SCREENSHOTS, screenshot) });
   }
 
   await input.fill("任务");
@@ -182,7 +182,7 @@ try {
   assert.equal(await preview.isVisible(), true, "mobile search must not hide the match preview");
   assert.ok(await preview.locator(".palette-excerpt").first().isVisible());
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-  if (process.env.ASH_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, "search-mobile.png") });
+  if (process.env.NAVI_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.NAVI_SEARCH_SCREENSHOTS, "search-mobile.png") });
   await preview.getByRole("button", { name: "打开任务" }).click();
   assert.equal(await page.locator("#opened").getAttribute("data-opened"), "hit-16,hit-00");
   await page.setViewportSize({ width: 1100, height: 700 });
@@ -205,7 +205,7 @@ try {
     assert.ok((await page.locator("#actions").getAttribute("data-actions")).endsWith(`${action},${action}`));
     assert.equal(await page.locator("#opened").getAttribute("data-opened"), openedBefore);
   }
-  if (process.env.ASH_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, "command-priority.png") });
+  if (process.env.NAVI_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.NAVI_SEARCH_SCREENSHOTS, "command-priority.png") });
   await input.fill("hit-00");
   await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-search-key]").length === 2);
   assert.equal(await rowAt(0).getAttribute("data-search-key"), "task:hit-00", "an exact id stays pinned above commands");

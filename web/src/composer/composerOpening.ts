@@ -3,7 +3,7 @@
 // - 讨论：以一场讨论开头（同回复框的讨论，server/src/discussion.ts），各方是这条任务的执行器加被叫的人，
 //   说完由这条任务的执行器在主会话里写合稿。
 // 没有「派出去」：要他来跑这条任务，在胶囊上选他就是了。
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { forkTaskBody, type ConversationFork } from "../task-detail/conversationFork.ts";
 import { discussPeople, type ReplyCall } from "../task-detail/replyCall.ts";

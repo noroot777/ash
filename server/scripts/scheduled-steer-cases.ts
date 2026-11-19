@@ -7,13 +7,13 @@
 // 投递链路那几条仍留在原文件里,挨着它们各自的判定逻辑。
 //
 // 共享句柄走参数进来(计时基准 `at`、`waitFor`、`messageRow`、两个 bus 事件收集数组
-// 和任务 id),模块则在函数里**动态 import**:`ASH_DB` 要等主脚本设好才能碰 db 单例,
+// 和任务 id),模块则在函数里**动态 import**:`NAVI_DB` 要等主脚本设好才能碰 db 单例,
 // 顶层 import 会在那之前就把库开在错的地方。
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import type { scheduledMessages as scheduledMessagesTable } from "../src/db/schema.js";
 
 export type SteerCaseContext = {
@@ -178,8 +178,8 @@ export async function runSteerCases(ctx: SteerCaseContext): Promise<void> {
   const api = new Hono(); runRoutes.mountTaskRunRoutes(api);
   const ask = (direction?: string) => api.request(`/tasks/${steerLateTaskId}/ask`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-ash-turn-token": oldIdentity.activeTurnToken!,
-      ...(direction ? { "x-ash-direction-token": direction } : {}) },
+    headers: { "content-type": "application/json", "x-navi-turn-token": oldIdentity.activeTurnToken!,
+      ...(direction ? { "x-navi-direction-token": direction } : {}) },
     body: JSON.stringify({ question: "current question after native steer" }),
   });
   assert.equal((await ask(oldIdentity.activeDirectionToken!)).status, 409, "旧方向迟到提问必须被拒绝");

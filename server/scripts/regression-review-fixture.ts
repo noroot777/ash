@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, inTurnCaller, makeTask, runs, schema, startMonitor, tasks } from "./monitors-fixture.js";
 import { setupRegression } from "./regression-fixture.js";
 
@@ -71,7 +71,7 @@ export async function setupRegressionReviews() {
     const state = () => db.select().from(schema.regressionEvidence).where(eq(schema.regressionEvidence.directory, directory)).then((rows) => rows[0]!);
     const generation = (await state()).generation;
     const stage = () => api.request(`/tasks/${taskId}/stage`, { method: "POST",
-      headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${ownerTaskId}`, "x-ash-source-task-id": ownerTaskId },
+      headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${ownerTaskId}`, "x-navi-source-task-id": ownerTaskId },
       body: JSON.stringify({ stage: "verified" }) });
     const conclusion = async () => free
       ? (await db.select().from(schema.freeReviewRounds).where(eq(schema.freeReviewRounds.id, roundId)))[0]!.conclusion

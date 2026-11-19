@@ -23,8 +23,8 @@
 // 为什么现算、不一次性补写进库：这份结构这一版刚多了原话，上一版写进库的那些也缺这一格，补写得
 // 两头都补；而现算的输入（结束了的回合、盘上的文件）不会再变，按回合身份记一份就只读一次盘。
 import { readFileSync } from "node:fs";
-import type { AgentEvent, ModelFailure } from "@ash/shared";
-import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
+import type { AgentEvent, ModelFailure } from "@navi/shared";
+import type { ReviewNoVerdict } from "@navi/shared/timeline-notice";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, sessions, sessionTurns } from "./db/schema.js";
@@ -89,8 +89,8 @@ function consumedEvents(trace: string, turnStartedAt: string): AgentEvent[] {
   });
 }
 
-/** ash 自己说的那几句（熔断红字、警告、接管说明）：落在执行过程里，却不是执行器报的错。 */
-const ashOwn = (event: AgentEvent): boolean => event.kind === "error" && isWatchdogText(event.message);
+/** navi 自己说的那几句（熔断红字、警告、接管说明）：落在执行过程里，却不是执行器报的错。 */
+const naviOwn = (event: AgentEvent): boolean => event.kind === "error" && isWatchdogText(event.message);
 
 /**
  * 这一轮的执行故障，照单飞收尾（single-run.ts 里 `lastExecutionError` 那一处）同一条挑法：不是过程
@@ -101,7 +101,7 @@ const ashOwn = (event: AgentEvent): boolean => event.kind === "error" && isWatch
 function executionErrorOf(events: readonly AgentEvent[]): ExecutionError | null {
   let picked: ExecutionError | null = null;
   for (const event of events) {
-    if (event.kind !== "error" || ashOwn(event) || isExecutionNotice(event) || isSessionScopeNotice(event) || event.affectsTurn === false) continue;
+    if (event.kind !== "error" || naviOwn(event) || isExecutionNotice(event) || isSessionScopeNotice(event) || event.affectsTurn === false) continue;
     if (!picked?.model || event.model) picked = event;
   }
   return picked;

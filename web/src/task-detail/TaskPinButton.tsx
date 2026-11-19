@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { PushPinSimple } from "@phosphor-icons/react";
 import { IconButton } from "../components/IconButton.tsx";
 

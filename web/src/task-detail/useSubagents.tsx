@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { SideDrawer } from "../components/SideDrawer.tsx";
 import { surfaceTabWhenUsed, type InspectorDescriptor } from "../inspector/index.ts";
 import type { ConversationItem } from "./conversationModel.ts";

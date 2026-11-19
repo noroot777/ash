@@ -3,7 +3,7 @@
 //
 // 它只负责「填完 → 拿到 key」;拿到之后展示还是跳转由调用方决定。
 import { useCallback, useEffect, useState } from "react";
-import { suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
+import { suggestDirName, suggestGitEmail, userDirNameError } from "@navi/shared/multiuser";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi, type SetupPreflight } from "../lib/authApi.ts";
 import { HostCliChoice } from "./HostCliChoice.tsx";
@@ -110,7 +110,7 @@ export function MultiModeForm({
           className="ui-input"
           value={rootDir}
           onChange={(e) => setRootDir(e.target.value)}
-          placeholder="~/ash-workspaces"
+          placeholder="~/navi-workspaces"
           readOnly={!!lockedRootDir}
         />
         <small>

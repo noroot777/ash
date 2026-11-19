@@ -295,14 +295,14 @@ try {
     tree: container.querySelector(".file-tree")?.getBoundingClientRect().width ?? 0,
   }));
   assert.equal(widths.tree, widths.content, "文件树本体没有占满容器内容区，fixture 可能误套了双栏布局类");
-  await page.screenshot({ path: "/tmp/ash-file-tree-git-light.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-tree-git-light.png", fullPage: true });
 
   await page.getByTestId("theme-dark").click();
   await page.getByTestId("fixture-state").filter({ hasText: "dark" }).waitFor();
   const darkBox = await host.boundingBox();
   assert.deepEqual(darkBox, lightBox, "深色主题切换导致文件树布局漂移");
   assert.notEqual(await nameColor("staged.ts"), green, "深色主题没有换用自己的 Git 颜色令牌");
-  await page.screenshot({ path: "/tmp/ash-file-tree-git-dark.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/navi-file-tree-git-dark.png", fullPage: true });
 
   // 头部那颗「打开工作目录」：真点一下，回执要落到页面上，且不许留下未捕获异常。
   await page.getByRole("button", { name: "在文件管理器中打开工作目录" }).click();

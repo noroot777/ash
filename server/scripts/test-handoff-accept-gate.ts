@@ -3,13 +3,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
-import { ASH_TURN_IDENTITY_FILE, ASH_TURN_IDENTITY_PATH_DIR } from "@ash/shared/mcp";
+import { NAVI_TURN_IDENTITY_FILE, NAVI_TURN_IDENTITY_PATH_DIR } from "@navi/shared/mcp";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-gate-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-gate-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.env.HOME = join(root, "home");
 process.env.USERPROFILE = join(root, "home");
 mkdirSync(process.env.HOME, { recursive: true });
@@ -48,19 +48,19 @@ try {
   const log = acceptGateLogPath(taskId, "gate-passed");
   mkdirSync(dirname(log), { recursive: true });
   writeFileSync(log, "tested immutable source: passed\n");
-  // 一份门禁日志是**一组文件**：命令自己的输出 + ash 的进度/现场（第 8 轮审查 F1）。
-  writeFileSync(`${log}.notes`, "[ash] 进度 · 开跑后 5.0 分钟，累计 1.2 KB\n");
-  writeFileSync(`${log}.scene`, "[ash] 停在这一行：`FROZEN_LAST_STEP`\n");
+  // 一份门禁日志是**一组文件**：命令自己的输出 + navi 的进度/现场（第 8 轮审查 F1）。
+  writeFileSync(`${log}.notes`, "[navi] 进度 · 开跑后 5.0 分钟，累计 1.2 KB\n");
+  writeFileSync(`${log}.scene`, "[navi] 停在这一行：`FROZEN_LAST_STEP`\n");
   writeFileSync(`${log}.scene.part`, "半截现场，写到一半没落定\n");
   writeFileSync(`${log}.launch.json`, '{"phase":"armed","pid":1234}');
   mkdirSync(join(dirname(log), "accept-gate-gate-passed.source"));
   writeFileSync(join(dirname(log), "accept-gate-gate-passed.source", "private.txt"), "not a transfer artifact");
-  // 回合身份那个目录(给只继承 PATH 的 CLI 搭的桥,见 `@ash/shared/mcp` 的
-  // `ASH_TURN_IDENTITY_PATH_DIR`)里是**这一回合还能用的令牌**,接力是发到另一台机器 ——
+  // 回合身份那个目录(给只继承 PATH 的 CLI 搭的桥,见 `@navi/shared/mcp` 的
+  // `NAVI_TURN_IDENTITY_PATH_DIR`)里是**这一回合还能用的令牌**,接力是发到另一台机器 ——
   // 一起打包就等于把身份递出去。下面那条 deepEqual 就是它的闸。
-  const identityDir = join(dirname(log), ASH_TURN_IDENTITY_PATH_DIR, "turn-abc");
+  const identityDir = join(dirname(log), NAVI_TURN_IDENTITY_PATH_DIR, "turn-abc");
   mkdirSync(identityDir, { recursive: true });
-  writeFileSync(join(identityDir, ASH_TURN_IDENTITY_FILE),
+  writeFileSync(join(identityDir, NAVI_TURN_IDENTITY_FILE),
     JSON.stringify({ taskId, turnToken: "turn-abc", directionToken: "dir-abc" }));
   const history = await collectGateRuns(taskId);
   assert.equal(history.length, 2);

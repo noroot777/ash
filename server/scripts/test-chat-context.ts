@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { ChatMember, ChatSnapshot } from "@ash/shared/chat";
-import { isChatClearCommand } from "@ash/shared/chat";
+import type { ChatMember, ChatSnapshot } from "@navi/shared/chat";
+import { isChatClearCommand } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-context-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-context-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, chatRooms, chatMessages, chatSummaries, chatContextEntries, chatContextStates } = await import("../src/db/schema.js");
 const { ChatService } = await import("../src/chat/service.js");

@@ -20,7 +20,7 @@
 // - **停止键撤回的请求不复活**：放行那一路只认此刻还挂着的那一笔（launch-request.ts releaseLaunch 在锁里
 //   重读、认领回合，再进这里）。
 import { and, eq } from "drizzle-orm";
-import { prerequisiteStepText } from "@ash/shared/prerequisites";
+import { prerequisiteStepText } from "@navi/shared/prerequisites";
 import { db } from "./db/index.js";
 import { projects, taskPrerequisiteLaunches, taskPrerequisites, tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";

@@ -21,9 +21,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "ash-scm-nested-"));
+const root = mkdtempSync(join(tmpdir(), "navi-scm-nested-"));
 const repo = join(root, "repo");
-process.env.ASH_DB = join(root, "ash.db");
+process.env.NAVI_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -38,7 +38,7 @@ function nestedRepo(name: string, committed: boolean) {
   const dir = join(repo, name);
   execFileSync("git", ["init", "-b", "main", dir]);
   git(dir, "config", "user.name", "Nested");
-  git(dir, "config", "user.email", "nested@ash.test");
+  git(dir, "config", "user.email", "nested@navi.test");
   write(dir, "inner.txt", "inner\n");
   if (committed) {
     git(dir, "add", "inner.txt");
@@ -48,8 +48,8 @@ function nestedRepo(name: string, committed: boolean) {
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash SCM Nested Test");
-  git(repo, "config", "user.email", "scm@ash.test");
+  git(repo, "config", "user.name", "Navi SCM Nested Test");
+  git(repo, "config", "user.email", "scm@navi.test");
   write(repo, "seed.txt", "seed\n");
   git(repo, "add", "seed.txt");
   git(repo, "commit", "-m", "seed");

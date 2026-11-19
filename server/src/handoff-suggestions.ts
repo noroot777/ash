@@ -16,11 +16,11 @@
 //   · 说明里引用的上传附件路径由调用方先改写成本机路径（handoff-import.ts，同提问那几列）；收回记录不改写，
 //     它是已经发生的事，改了字就认不出是不是同一条。
 import { eq, type SQL } from "drizzle-orm";
-import { AGENT_TYPES } from "@ash/shared";
-import type { DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import { AGENT_TYPES } from "@navi/shared";
+import type { DispatchRunTarget } from "@navi/shared/dispatch-plan";
 import {
   parseDispatchSuggestions, parseWithdrawnSuggestions, type DispatchSuggestion, type WithdrawnSuggestion,
-} from "@ash/shared/dispatch-suggestion";
+} from "@navi/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { appendWithdrawn } from "./dispatch-suggestion.js";

@@ -62,10 +62,10 @@ export async function reclaimGateSnapshots(taskId: string): Promise<number> {
     try {
       await removeGateSnapshot(taskId, runId);
       const logPath = acceptGateLogPath(taskId, runId);
-      if (existsSync(logPath)) appendGateLog(logPath, `\n[ash] ${now()} 任务已了结，独立测试快照已回收\n`);
+      if (existsSync(logPath)) appendGateLog(logPath, `\n[navi] ${now()} 任务已了结，独立测试快照已回收\n`);
       removed++;
     } catch (error) {
-      console.error(`[ash] 回收验收快照失败（${taskId}/${runId}）:`, error);
+      console.error(`[navi] 回收验收快照失败（${taskId}/${runId}）:`, error);
     }
   }
   return removed;

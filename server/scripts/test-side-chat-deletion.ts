@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { ChatMember } from "@ash/shared/chat";
+import type { ChatMember } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-side-delete-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-side-delete-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, chatRooms, chatMessages, chatContextEntries, chatSummaries, chatContextStates, chatContextResets, scheduledMessages } = await import("../src/db/schema.js");
 const { ChatService } = await import("../src/chat/service.js");

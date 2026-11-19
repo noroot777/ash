@@ -15,9 +15,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-monitor-legacy-lifetime-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-monitor-legacy-lifetime-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitor-legacy-lifetime");
 
 const [{ db, dbClient, ensureSchema }, { monitors, projects, tasks }, { listMonitors }] = await Promise.all([

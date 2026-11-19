@@ -2,7 +2,7 @@ import { createInterface } from "node:readline";
 import { codexChildWork, codexNativeWork, codexSubAgentWork, nativeAgentProfile, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages } from "./markdown-image-stream.js";
@@ -29,9 +29,9 @@ import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 import { CodexNativeCommands } from "./codex-native-commands.js";
 import { readCodexTurnTiming } from "./codex-rollout-timing.js";
 import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
-import { isGoalExecution } from "@ash/shared/cli-commands";
+import { isGoalExecution } from "@navi/shared/cli-commands";
 import { codexTurnError } from "./model-failure.js";
-import { CodexAshMcpStatus } from "./ash-mcp-confirm.js";
+import { CodexNaviMcpStatus } from "./navi-mcp-confirm.js";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
@@ -73,9 +73,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
   const childEvents = new CodexChildActivity(opts.cwd);
-  // ash 的工具连没连上以 codex 自己推的启动状态为准(ash-mcp-inject.ts)。接管来的进程看不到
+  // navi 的工具连没连上以 codex 自己推的启动状态为准(navi-mcp-inject.ts)。接管来的进程看不到
   // 接管之前那几条通知,不在那里下「没加载」的结论。
-  const ashMcp = opts.reattach ? null : new CodexAshMcpStatus();
+  const naviMcp = opts.reattach ? null : new CodexNaviMcpStatus();
   const childImages = new Map<string, ImageStore>();
   const childModelReads = new Set<string>();
   const childModelVersions = new Map<string, number>();
@@ -304,7 +304,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     // 的就是那一个,所以这个 thread 上下一条完成事件只能是它。
     if ((unverifiable || identityUnclaimed) && !turnId && !reviewTurnId && typeof turn?.id === "string" && turn.id) {
       turnId = turn.id;
-      console.warn(`[ash] 会话 ${opts.sessionId ?? ""} 这一轮的身份此前无从得知（${unverifiable ? "接管时协议日志读不出来" : "有开始凭据但应答没给出 turnId"}），`
+      console.warn(`[navi] 会话 ${opts.sessionId ?? ""} 这一轮的身份此前无从得知（${unverifiable ? "接管时协议日志读不出来" : "有开始凭据但应答没给出 turnId"}），`
         + `按「这个 thread 上的完成事件就是这一轮」认领（turn=${turnId}）`);
     }
     if (completedId !== (reviewTurnId || turnId)) return;
@@ -318,9 +318,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     } else if (status === "interrupted" && !stopRequested && !native.expectedInterruption) {
       push({ kind: "error", message: "Codex 当前回合被意外中断" });
     }
-    // 本回合的 ash 工具在不在:清单那一问还没回来就有界地等一下,等不到就如实说核实不了(ash-mcp-confirm.ts)。
-    const ashProblem = stopRequested ? null : await ashMcp?.settle();
-    if (ashProblem) push(ashProblem);
+    // 本回合的 navi 工具在不在:清单那一问还没回来就有界地等一下,等不到就如实说核实不了(navi-mcp-confirm.ts)。
+    const naviProblem = stopRequested ? null : await naviMcp?.settle();
+    if (naviProblem) push(naviProblem);
     if (!(await native.afterTurn())) return;
     const timed = latestUsage && completedId
       ? await readCodexTurnTiming(threadId, { turnId: completedId }, opts.env?.CODEX_HOME, turnRequests)
@@ -414,10 +414,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         break;
       }
       case "mcpServer/startupStatus/updated": {
-        const problem = ashMcp?.update(p);
+        const problem = naviMcp?.update(p);
         if (problem) push(problem);
-        // ready 只说明握手成了：用户配置里的工具名单会被深合并保留，ash 的工具在不在要另问一次。
-        ashMcp?.checkTools(request, p.threadId, push);
+        // ready 只说明握手成了：用户配置里的工具名单会被深合并保留，navi 的工具在不在要另问一次。
+        naviMcp?.checkTools(request, p.threadId, push);
         break;
       }
       case "turn/completed": void completeTurn(p.turn).catch((error) => finish(1, String(error))); break;
@@ -489,7 +489,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   if (adopted) input.reached();
   else if (unverifiable) input.unverifiable();
   if (unverifiable) {
-    console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 时读不出协议日志，`
+    console.warn(`[navi] 接管会话 ${opts.sessionId ?? ""} 时读不出协议日志，`
       + "这一轮有没有真的启动核实不了：不按失败结算，回执按「说不上来」记，身份走持续核验");
     // 这一档往下全在 ./codex-app-server-adopt.ts 的 `wireAdoptionRecovery`:持续重读协议日志
     // 认回身份、读出否证就收口、两头都读不出来时让它可见且有界(为什么非得有第三条出路、
@@ -578,7 +578,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       if (!input.sawStart()) throw error;
       // 有凭据(`turn/started` 已经到了)→ 这一轮**确实在飞**,应答只是迟到或丢了。杀掉它才是
       // 误杀;身份改由通知/完成事件给(见 identityUnclaimed)。
-      console.warn(`[ash] 会话 ${opts.sessionId ?? ""} 的 turn/start 应答没回来，`
+      console.warn(`[navi] 会话 ${opts.sessionId ?? ""} 的 turn/start 应答没回来，`
         + `但这一轮已有开始凭据：按「它在飞」继续，身份改由后续事件认领（${error instanceof Error ? error.message : String(error)}）`);
       return null;
     });
@@ -588,7 +588,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (!turnId) {
       // 凭据在、身份没拿到:不抛(抛 = 杀一个在跑的回合),交给完成事件认领。
       identityUnclaimed = true;
-      console.warn(`[ash] 会话 ${opts.sessionId ?? ""} 这一轮拿不到 turnId，`
+      console.warn(`[navi] 会话 ${opts.sessionId ?? ""} 这一轮拿不到 turnId，`
         + "身份改由「这个 thread 上下一条完成事件就是这一轮」认领");
     }
   })();

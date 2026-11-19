@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
-// 远程访问 ash 时粘一张图，上传要走完整条链路（base64 过网 + 落盘），可能好几秒到十几秒。
+// 远程访问 navi 时粘一张图，上传要走完整条链路（base64 过网 + 落盘），可能好几秒到十几秒。
 // 这条钉住那段时间里界面必须说话：在途卡片 + 百分比 + 创建按钮先挡住（否则刚粘的图会被
 // 悄悄扔掉，因为附件路径是上传成功才有的），以及取消不算失败。
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";

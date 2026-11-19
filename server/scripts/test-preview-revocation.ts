@@ -2,7 +2,7 @@
 // (判据在 server/src/auth/remote-access.ts「凭证作废…」一节与 preview-access.ts 顶部「活不过」一节。)
 //
 // 审查实测过的两条(第 1 轮 F1 / F2),连同它们的同类:
-//   ① 别的设备经预览调 ash 的 `/api`,拿到的是**它自己那台设备**的权限,不是本机直连的:读不到
+//   ① 别的设备经预览调 navi 的 `/api`,拿到的是**它自己那台设备**的权限,不是本机直连的:读不到
 //      访问密钥;被预览的服务收到的请求如实带着 `X-Forwarded-For`。机主在本机开预览照旧。
 //   ② 借来的预览地址(本机开的、被复制到别的设备上)换不来机主身份。
 //   ③ 设备登出:它开过的预览当场不作数(地址、内容两条道都是),别人的预览不受牵连。
@@ -20,9 +20,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-preview-revocation-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-preview-revocation-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-preview-revocation");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -55,7 +55,7 @@ const direct = new Agent();
 /** 别的设备:经同机的一跳转进来的,带着转发头 —— 和从网卡地址连进来走同一条判据。 */
 const REMOTE = { "x-forwarded-for": "192.0.2.25" };
 
-// ── 被预览的服务(替身)。`/api` 学 vite 的样子原样转回这台 ash;其余几条各管一件事 ──
+// ── 被预览的服务(替身)。`/api` 学 vite 的样子原样转回这台 navi;其余几条各管一件事 ──
 const upstreamSockets = new Set<Socket>();
 /** 上游还在往外流的应答。 */
 const streams = new Set<unknown>();
@@ -160,7 +160,7 @@ const quiet = async (check: () => boolean, why: string) => {
 
 try {
   const at = new Date().toISOString();
-  await db.insert(projects).values({ id: "p1", name: "这台 ash 自己", repoPath: REPO_DIR, apiKeys: null, createdAt: at } as never);
+  await db.insert(projects).values({ id: "p1", name: "这台 navi 自己", repoPath: REPO_DIR, apiKeys: null, createdAt: at } as never);
   await db.insert(tasks).values({ id: "t1", projectId: "p1", title: "预览", body: "", status: "done", createdAt: at, updatedAt: at } as never);
   const writePreview = (gen: string) => {
     mkdirSync(join(stage, "runs", "t1"), { recursive: true });
@@ -192,7 +192,7 @@ try {
     assert.ok(content, "页面内容改写到了内容那条道上");
     return { nav, content: content!, client: page.cookie };
   };
-  /** 预览那一侧一个 ash 的凭证都不带(代理本来也不转):只留「从哪来」。 */
+  /** 预览那一侧一个 navi 的凭证都不带(代理本来也不转):只留「从哪来」。 */
   const REMOTE_ONLY = (headers: Record<string, string>) => ("x-forwarded-for" in headers ? REMOTE : {});
 
   // ── ① 经预览绕回来的不是本机 ────────────────────────────────────────────
@@ -241,7 +241,7 @@ try {
     const stream = await openStream(`${preview.content}stream`, REMOTE);
     assert.equal(stream.status, 200);
     const events = await openStream(`${preview.content}api/events`, REMOTE);
-    assert.equal(events.status, 200, "ash 自己的事件流,经预览 /api 那一跳");
+    assert.equal(events.status, 200, "navi 自己的事件流,经预览 /api 那一跳");
     assert.equal(echoes.size, 1);
     assert.equal(streams.size, 1);
 

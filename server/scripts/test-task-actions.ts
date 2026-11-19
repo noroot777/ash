@@ -21,13 +21,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { ActionVerdict, ServerEvent, TaskActions } from "@ash/shared";
+import type { ActionVerdict, ServerEvent, TaskActions } from "@navi/shared";
 import { setTimeout as sleep } from "node:timers/promises";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-actions-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-actions-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const { ensureSchema, db } = await import("../src/db/index.js");
 const { groups, projects, queueItems, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
