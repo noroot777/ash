@@ -37,7 +37,7 @@ Navi 管的不是某一个 AI 编程工具，而是管这些工具怎么干活�
 ## Mac 客户端
 
 <!-- navi-mac-download -->
-第一版还没发布，现在请按下面的「快速开始」从源码运行。
+**[下载 Navi 0.2.0（20261119.224103）](https://github.com/noroot777/navi/releases/download/navi-mac-v0.2.0-20261119.224103/Navi-0.2.0-20261119.224103.dmg)**
 <!-- /navi-mac-download -->
 
 <!-- 标记之间由发版脚本（npm run release:mac）自动替换为 dmg 直链。 -->
