@@ -14,12 +14,20 @@ import { countJsonRefs, countRefs, rewriteJson, rewriteText } from "./relocate-c
 /** 键排好序的序列化：比较两份解析结果是否同一个值。 */
 const canonical = (v) => JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x));
 
-let tomlParser;
+// PATH 上排第一的 python3 不一定带 tomllib（macOS 自带的 /usr/bin/python3 是 3.9）：依次找，用第一个带的。
+const PYTHON_CANDIDATES = ["python3", "python3.14", "python3.13", "python3.12", "python3.11", "/opt/homebrew/bin/python3", "/usr/local/bin/python3"];
+let tomlPython;
+/** 带 tomllib 的 Python；一个都没有返回 null。 */
+export function tomlPythonPath() {
+  if (tomlPython === undefined) tomlPython = PYTHON_CANDIDATES.find((p) => spawnSync(p, ["-c", "import tomllib"], { stdio: "ignore" }).status === 0) ?? null;
+  return tomlPython;
+}
+
 /** TOML → 值（经 JSON 转一道，日期时间转成字符串）；不合法返回 { ok: false }，本机没有 tomllib 返回 null。 */
 export function parseToml(text) {
-  if (tomlParser === undefined) tomlParser = spawnSync("python3", ["-c", "import tomllib"], { stdio: "ignore" }).status === 0;
-  if (!tomlParser) return null;
-  const r = spawnSync("python3", ["-c", "import sys, json, tomllib; print(json.dumps(tomllib.loads(sys.stdin.read()), default=str))"], { input: text, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  const python = tomlPythonPath();
+  if (!python) return null;
+  const r = spawnSync(python, ["-c", "import sys, json, tomllib; print(json.dumps(tomllib.loads(sys.stdin.read()), default=str))"], { input: text, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   return r.status === 0 ? { ok: true, value: JSON.parse(r.stdout) } : { ok: false };
 }
 
@@ -203,7 +211,7 @@ export function analyzeConfig(text, kind, rules) {
     return parseToml(s);
   };
   const before = parse(text);
-  if (before === null) return { count, problems: [...problems, "本机没有 Python 3.11+ 的 tomllib，核对不了改完的 TOML，不改"], next: null };
+  if (before === null) return { count, problems: [...problems, "本机找不到带 tomllib 的 Python（3.11+），核对不了改完的 TOML，不改"], next: null };
   if (!before.ok) return { count, problems: [...problems, `原文就不是合法的 ${kind.toUpperCase()}`], next: null };
   const collisions = [];
   const expected = rewriteJson(before.value, rules, collisions);

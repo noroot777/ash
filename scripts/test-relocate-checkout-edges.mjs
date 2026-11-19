@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { apply } from "./relocate-checkout-apply.mjs";
+import { tomlPythonPath } from "./relocate-checkout-config.mjs";
 import { Journal } from "./relocate-checkout-journal.mjs";
 import { acquire, liveHolders, release } from "./relocate-checkout-lock.mjs";
 import { claudeSlug } from "./relocate-checkout-paths.mjs";
@@ -287,7 +288,7 @@ try {
     assert.equal(r.status, 0, out(r));
     const j = readFileSync(jsonc, "utf8");
     assert.ok(j.includes(`// 工具在 ${t.to}/mcp`) && j.includes(`"${t.to}/mcp/x.js"`), j);
-    const parsed = JSON.parse(spawnSync("python3", ["-c", "import sys, json, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], 'rb'))))", toml], { encoding: "utf8" }).stdout);
+    const parsed = JSON.parse(spawnSync(tomlPythonPath(), ["-c", "import sys, json, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], 'rb'))))", toml], { encoding: "utf8" }).stdout);
     assert.deepEqual(Object.keys(parsed.projects), [t.to]);
     assert.deepEqual(parsed.mcp_servers.navi.args, [`${t.to}/mcp/x.js`]);
     assert.equal(t.cli(["--verify"]).status, 0);
