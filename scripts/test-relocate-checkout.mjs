@@ -17,7 +17,7 @@ import { claudeSlug, rewriteJson, rewriteRules, rewriteText } from "./relocate-c
 import { scan } from "./relocate-checkout-scan.mjs";
 
 const SCRIPT = fileURLToPath(new URL("./relocate-checkout.mjs", import.meta.url));
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(GIT_|CODEX_HOME$|XDG_|CLAUDE_CONFIG_DIR$)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(GIT_|CODEX_HOME$|XDG_|CLAUDE_CONFIG_DIR$|(NAVI|ASH|HARNESS)_(DB|DATA_DIR|RUNS_DIR)$)/.test(k)));
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "user.email=t@t", "-c", "user.name=t", ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const write = (file, text) => { mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, text); };
 
