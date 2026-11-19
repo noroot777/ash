@@ -1,12 +1,13 @@
 // 把 navi MCP 登记进这台机器上装了的各家 CLI(agent 靠它交卷),改名之前的登记(`ash`、更早的 `harness`)
 // 顺手迁成规范名。setup.mjs(装机)和 upgrade.mjs(升级)共用这一份。
 //
-// 幂等:已有 navi 条目的不动,不会重复写配置。
+// 幂等:已有 navi 条目的不重复写;但还留着的旧名条目(起的是 Navi 的 MCP 脚本)照样删掉 —— 不然每一回合
+// 两套一模一样的工具同时挂着。同名却起着别的程序的,是用户自己的东西,不动,报一句。
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WINDOWS, runCli, which } from "./platform.mjs";
 import { HOST_SITES, registerHostMcp } from "./mcp-hosts.mjs";
-import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
+import { parseCodexList, pointsAtNaviMcp, registerCodexMcp } from "./codex-mcp.mjs";
 import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.mjs";
 
 // 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
@@ -15,6 +16,20 @@ import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.mjs";
 // 用户级配置里再留一条旧名，那两家每一回合都会多挂一套同样的工具。
 export const NAVI_MCP_SERVER_NAME = "navi";
 
+/**
+ * `claude mcp list` 的输出(每条一行 `<名字>: <命令行或地址> - <连通状态>`)→ navi 登记过没有、
+ * 还在的旧名里哪些起的是 Navi 的 MCP 脚本(该删)、哪些同名却是别的东西(不动)。
+ */
+export function claudeEntries(stdout) {
+  const line = (name) => String(stdout ?? "").split(/\r?\n/).find((l) => l.startsWith(`${name}: `));
+  const olds = LEGACY_MCP_SERVER_NAMES.filter((old) => line(old) !== undefined);
+  return {
+    registered: line(NAVI_MCP_SERVER_NAME) !== undefined,
+    legacy: olds.filter((old) => pointsAtNaviMcp(line(old))),
+    foreign: olds.filter((old) => !pointsAtNaviMcp(line(old))),
+  };
+}
+
 /** ok / warn / say 是调用方的三种输出(✓ / ⚠ / 原样一行)。 */
 export function registerNaviMcp({ repo, port, ok, warn, say }) {
   const URL_BASE = `http://localhost:${port}`;
@@ -22,18 +37,27 @@ export function registerNaviMcp({ repo, port, ok, warn, say }) {
   // ── claude ────────────────────────────────────────────────────────────────
   if (which("claude")) {
     const listed = runCli("claude", ["mcp", "list"]);
-    if (new RegExp(`^${NAVI_MCP_SERVER_NAME}:`, "m").test(listed.stdout)) {
-      ok("claude:Navi 已注册,不动它");
+    const { registered, legacy, foreign } = claudeEntries(listed.stdout);
+    // 旧名条目删不掉的留着(两个名字都能用),如实报出来、给出手动删的命令;不算失败。
+    const removeLegacy = () => legacy.filter((old) => runCli("claude", ["mcp", "remove", old, "--scope", "user"]).status !== 0);
+    const legacyWarn = (left, lead) =>
+      warn(`claude:${lead},但旧 ${left.join(" / ")} 条目没删掉(每一回合会多挂一套同样的工具);可手动执行 ${left.map((old) => `claude mcp remove ${old} --scope user`).join("、")}`);
+    if (registered) {
+      if (!legacy.length) ok("claude:Navi 已注册,不动它");
+      else {
+        const left = removeLegacy();
+        if (!left.length) ok(`claude:Navi 已注册;旧 ${legacy.join(" / ")} 条目已删掉(和 Navi 是同一套工具,留着每一回合会多挂一套)`);
+        else legacyWarn(left, "Navi 已注册");
+      }
     } else {
-      const legacy = LEGACY_MCP_SERVER_NAMES.filter((old) => new RegExp(`^${old}:`, "m").test(listed.stdout));
       const added = runCli("claude", [
         "mcp", "add", NAVI_MCP_SERVER_NAME, "--scope", "user", "-e", `NAVI_URL=${URL_BASE}`, "--", "node", mcpEntry,
       ]);
       if (added.status === 0) {
         if (legacy.length) {
-          const left = legacy.filter((old) => runCli("claude", ["mcp", "remove", old, "--scope", "user"]).status !== 0);
+          const left = removeLegacy();
           if (!left.length) ok(`claude:旧 ${legacy.join(" / ")} 条目已迁移为 Navi`);
-          else warn(`claude:Navi 已接好,但旧 ${left.join(" / ")} 条目没删掉;可手动执行 ${left.map((old) => `claude mcp remove ${old} --scope user`).join("、")}`);
+          else legacyWarn(left, "Navi 已接好");
         } else {
           ok("claude:已注册 Navi(user 作用域,编排别的仓库时也在)");
         }
@@ -43,6 +67,7 @@ export function registerNaviMcp({ repo, port, ok, warn, say }) {
         say(`      claude mcp add ${NAVI_MCP_SERVER_NAME} --scope user -e NAVI_URL=${URL_BASE} -- node ${mcpEntry}`);
       }
     }
+    if (foreign.length) say(`  · claude:${foreign.join(" / ")} 这个名字的条目起的不是 Navi 的 MCP 脚本,是别的东西,没动它`);
   } else {
     warn("没装 claude CLI,跳过它的 MCP 注册");
   }
@@ -69,19 +94,23 @@ export function registerNaviMcp({ repo, port, ok, warn, say }) {
       configFile: codexCfg, mcpEntry, url: URL_BASE,
       name: NAVI_MCP_SERVER_NAME, legacyNames: LEGACY_MCP_SERVER_NAMES, listServers, removeServer,
     });
+    const legacyHint = (left) => `旧 ${left.join(" / ")} 条目没删掉(每一回合会多挂一套同样的工具);可手动执行 ${left.map((old) => `codex mcp remove ${old}`).join("、")}`;
     if (r.action === "kept") {
-      if (r.enabled) ok(`codex:Navi 已在 ${codexCfg} 里,不动它`);
-      else warn(`codex:${codexCfg} 里的 Navi 写着 enabled = false,没有替你打开`);
+      if (!r.enabled) warn(`codex:${codexCfg} 里的 Navi 写着 enabled = false,没有替你打开`);
+      else if (!r.legacyLeft.length) ok(`codex:Navi 已在 ${codexCfg} 里,不动它`);
+      if (r.legacyLeft.length) warn(`codex:Navi 已在 ${codexCfg} 里,但${legacyHint(r.legacyLeft)}`);
     } else if (r.action === "foreignChange") {
       warn(`codex:${r.why}${r.backup ? `(补写前的备份在 ${r.backup})` : ""};先看一眼 ${codexCfg} 现在的内容,再决定要不要重跑 setup`);
     } else if (r.action === "blocked") {
       // 现在「批准」发生在写之前(整条迁移在沙盘里做),所以没写成只有一种收场:一个字节都没动。
       warn(`codex:${r.why};没有动 ${codexCfg};先跑 codex mcp list 看它报什么、修好再重跑 setup`);
-    } else if (r.legacyLeft) {
-      warn(`codex:已写入 Navi,但旧条目(${LEGACY_MCP_SERVER_NAMES.join(" / ")} 之一)没删掉(几个名字都能用);可手动执行 codex mcp remove <旧名>`);
+    } else if (r.legacyLeft.length) {
+      warn(`codex:${r.action === "cleaned" ? "Navi 已在" : "已写入 Navi"} ${codexCfg},但${legacyHint(r.legacyLeft)}`);
     } else {
-      ok(`codex:${r.action === "migrated" ? "旧条目已迁移为 Navi" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-navi-setup)" : ""}`);
+      const done = { cleaned: "Navi 已在,删掉了还留着的旧条目", migrated: "旧条目已迁移为 Navi", added: "已写入" }[r.action];
+      ok(`codex:${done} ${codexCfg}${r.backup ? `(原文件备份在 ${r.backup})` : ""}`);
     }
+    if (r.foreign?.length) say(`  · codex:${r.foreign.join(" / ")} 这个名字的条目起的不是 Navi 的 MCP 脚本,是别的东西,没动它`);
   } else {
     warn("没装 codex CLI,跳过它的 MCP 注册");
   }
