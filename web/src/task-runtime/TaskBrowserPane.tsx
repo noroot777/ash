@@ -13,10 +13,7 @@ import "./task-runtime.css";
 
 export function BrowserInspector({ runtime }: { runtime: TaskRuntime }) {
   const browser = runtime.state.browser;
-  if (browser) {
-    const owner = runtime.taskId;
-    return <TaskBrowserPane key={browser.id} taskId={owner} state={browser} onChange={(next) => runtime.setBrowser(owner, next)} />;
-  }
+  if (browser) return <TaskBrowserPane key={browser.id} taskId={runtime.taskId} state={browser} beginWrite={runtime.beginBrowserWrite} />;
   const open = () => void runtime.perform(() => runtimeApi.action(runtime.taskId, undefined, { action: "open" }));
   return (
     <div className="insp-pane">
@@ -67,8 +64,9 @@ function useBrowserFrame(taskId: string, state: TaskBrowserState, onError: (text
   return frame;
 }
 
-export function TaskBrowserPane({ taskId, state, onChange }: {
-  taskId: string; state: TaskBrowserState; onChange: (next: TaskBrowserState) => void;
+/** `beginWrite`：真正发出一个动作时领票，结果经它写回（过期的由 useTaskRuntime 丢掉）。 */
+export function TaskBrowserPane({ taskId, state, beginWrite }: {
+  taskId: string; state: TaskBrowserState; beginWrite: () => (next: TaskBrowserState) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -88,7 +86,9 @@ export function TaskBrowserPane({ taskId, state, onChange }: {
     setBusy(true);
     const next = pending.current.then(async () => {
       setError("");
-      try { const result = await runtimeApi.action(taskId, state.id, action); onChange(result.state); }
+      // 票在请求真正发出时领（排队等前一个动作的那段不算），顺序号才对得上发起的先后。
+      const write = beginWrite();
+      try { const result = await runtimeApi.action(taskId, state.id, action); write(result.state); }
       catch (reason) { setError(runtimeErrorText(reason)); }
       finally { pendingCount.current -= 1; setBusy(pendingCount.current > 0); }
     });

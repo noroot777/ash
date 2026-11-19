@@ -146,12 +146,26 @@ try {
     let holdNext = false;
     let releaseHeld: (() => void) | null = null;
     let heldSeen: (() => void) | null = null;
+    let holdAction = false;
+    let releaseAction: (() => void) | null = null;
+    let actionSeen: (() => void) | null = null;
+    let pollGate: Promise<void> | null = null;
     await page.route("**/api/**", async (route: any) => {
       const req = route.request();
       const url = new URL(req.url());
       if (holdNext && req.method() === "GET" && url.pathname === "/api/tasks/runtime/runtime") {
         holdNext = false;
         await new Promise<void>((resolve) => { releaseHeld = resolve; heldSeen?.(); });
+      }
+      if (pollGate && req.method() === "GET" && url.pathname === "/api/tasks/runtime/runtime") await pollGate;
+      if (holdAction && req.method() === "POST" && url.pathname === "/api/tasks/runtime/runtime/browser") {
+        // 动作在后端照常执行，只是把真实响应晚一点交回页面。
+        holdAction = false;
+        const response = await app.request(url.pathname + url.search, { method: req.method(), headers: req.headers(), body: req.postData() ?? undefined });
+        const body = Buffer.from(await response.arrayBuffer());
+        await new Promise<void>((resolve) => { releaseAction = resolve; actionSeen?.(); });
+        await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers.entries()), body });
+        return;
       }
       const response = await app.request(url.pathname + url.search, { method: req.method(), headers: req.headers(), body: req.postData() ?? undefined });
       await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers.entries()), body: Buffer.from(await response.arrayBuffer()) });
@@ -238,6 +252,30 @@ try {
     await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     await pane.getByRole("img").waitFor();
     await page.screenshot({ path: join(screenshots, "shared-browser-continued.png"), fullPage: true });
+    // A→B→A：在 A 点了接管、响应还没回来就切到 B；期间 A 的浏览器被关掉重开成新会话；切回 A 后旧接管的
+    // 响应才到。它属于上一次访问、上一个浏览器会话，不能把新会话画成「你在操作」。
+    const actionHeld = new Promise<void>((resolve) => { actionSeen = resolve; });
+    holdAction = true;
+    await page.getByRole("button", { name: "接管", exact: true }).click();
+    await actionHeld;
+    await page.getByRole("button", { name: "切换任务", exact: true }).click();
+    await pane.waitFor({ state: "hidden" });
+    const replacedId = taskBrowserState("runtime")!.id;
+    await action({ action: "close", id: replacedId }, false);
+    const reopened = (await action({ action: "open" }, false)).state.id;
+    assert.notEqual(reopened, replacedId);
+    await page.getByRole("button", { name: "切换任务", exact: true }).click();
+    await tab("浏览器").click();
+    await page.getByRole("button", { name: "接管", exact: true }).waitFor();
+    let openGate!: () => void;
+    pollGate = new Promise<void>((resolve) => { openGate = resolve; });
+    releaseAction!();
+    await page.waitForTimeout(800);
+    assert.equal(await page.getByRole("button", { name: "交还", exact: true }).count(), 0, "上一次访问的接管结果盖到了新的浏览器会话上");
+    assert.equal(await page.getByText("智能体在操作", { exact: true }).count(), 1);
+    pollGate = null;
+    openGate();
+    await pane.getByRole("img").waitFor();
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "runtime"));
     await tab("服务").click();
     await page.getByRole("button", { name: "停止", exact: true }).click();
