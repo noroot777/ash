@@ -1,15 +1,46 @@
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readStorageEnv } from "@navi/shared/env-names";
 import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@navi/shared/legacy-names";
 import { DATA_DIR } from "../paths.js";
 
-/** 改名之后的库文件名。在就用它（停机时跑本地目录迁移脚本改过名的安装）。 */
-export const DB_FILE_NAME = "navi.db";
+// 库文件叫什么、一个数据目录里认哪一份。`scripts/db-file.mjs`（脚本要裸跑）与 mac 应用的 `NaviConfig.swift`
+// 各有一份同口径的实现，前者由 `server/scripts/test-db-file.ts` 钉住一致。
 
-const DEFAULT_DB = join(DATA_DIR, DB_FILE_NAME);
-const LEGACY_DEFAULT_DB = join(DATA_DIR, LEGACY_DB_FILE);
-const HARNESS_DEFAULT_DB = join(DATA_DIR, LEGACY_HARNESS_DB_FILE);
+/** 库文件名。新安装建它；改名之前的安装用 `ash.db`，停机时跑 `npm run rename-db` 改过来。 */
+export const DB_FILE_NAME = "navi.db";
+/**
+ * 改名迁移把 `ash.db` 搬走之后在原地留的路标的开头。它不是 SQLite 库：改名之前的服务只认 `ash.db`，
+ * 对着它起来会当场报「file is not a database」退出，而不是悄悄建一份空库接着跑。
+ */
+export const DB_MOVED_MARKER = "NAVI-DB-MOVED";
+/** 改名迁移的账本，就放在数据目录里。它在 = 上次迁移没做完，服务不起（见 chooseDbFileIn）。 */
+export const DB_RENAME_JOURNAL = `${DB_FILE_NAME}.renaming`;
+
+const RENAME_COMMAND = "npm run rename-db";
+
+export class DbFileChoiceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DbFileChoiceError";
+  }
+}
+
+/** 旧名那一份是什么：不在 / 迁移留下的路标 / 一份库。认不出的东西一律按库算 —— 替人判它是垃圾的代价是丢数据。 */
+export function legacyDbState(file: string): "absent" | "moved" | "present" {
+  if (!existsSync(file)) return "absent";
+  const head = Buffer.alloc(DB_MOVED_MARKER.length);
+  let fd: number | null = null;
+  try {
+    fd = openSync(file, "r");
+    const read = readSync(fd, head, 0, head.length, 0);
+    return read === head.length && head.toString("latin1") === DB_MOVED_MARKER ? "moved" : "present";
+  } catch {
+    return "present";
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
 
 export function migrateLegacyDbFiles(defaultDb: string, legacyDb: string) {
   if (existsSync(defaultDb) || !existsSync(legacyDb)) return;
@@ -23,22 +54,54 @@ export function migrateLegacyDbFiles(defaultDb: string, legacyDb: string) {
 }
 
 /**
- * 没显式指定库文件时用哪一份：`navi.db` 在就用它，不然是 `ash.db`。**运行时不改库的名字**：
+ * 数据目录里该开哪一份库：`navi.db` 在就是它；不在而 `ash.db` 是一份库，就开 `ash.db`（还没迁的老安装）；
+ * 都没有就建 `navi.db`。**运行时不把 `ash.db` 改成 `navi.db`**：改名要连着 `-wal`、`-shm`、身份、访问密钥一起挪，
+ * 而「此刻没有别的服务开着它」靠的正是挂在库文件名上的那把锁 —— 在拿锁之前挪，正在跑的另一个服务手里的文件就
+ * 被换了名。所以改名只在停机时由 `scripts/rename-db.mjs` 做（它拿维护锁、记账本、做不完就照原样退回）。
  *
- *  · 改名要连着 `-wal`、`-shm`、单例锁、退出账本一起挪，而判断「此刻没有别的服务开着它」靠的
- *    正是挂在库文件名上的那把锁 —— 在拿锁之前挪，正在跑的旧版服务手里的文件就被换了名；
- *  · 旧版服务只认 `ash.db`。新版一旦改了名，回退到旧版就会对着一份空库起来。
+ * 认不准的时候不猜，直接不起，并说清怎么办：
+ *  · 两份都是库：不知道哪份是真的，开错一份就是在旧数据上接着写、新数据被晾在一边；
+ *  · 只剩路标、`navi.db` 不见了：开旧名会对着路标报错，建新库会让人以为数据丢了；
+ *  · 账本还在：上次迁移做到一半，两边的文件可能各剩一半。
  *
- * **新安装暂时也建 `ash.db`**：mac 应用（`desktop/macos`）判断数据目录用没用过、升级前给库留底、
- * 导入数据，都按 `ash.db` 这个名字找 —— 建成 `navi.db` 的话，它每次启动都当这是第一次用，导入的
- * 库也会被晾在一边。拆：mac 应用认得 `navi.db` 之后，新安装改建 `navi.db`。
- *
- * 更早的 `harness.db` 照旧就地改名成 `ash.db`（那一代没有并存的旧版服务）。
+ * 更早的 `harness.db` 就地改名成 `navi.db`（那一代没有并存的旧版服务，也没有跟着库名走的状态文件）。
  */
+export function chooseDbFileIn(dataDir: string): { file: string; legacy: boolean } {
+  const current = join(dataDir, DB_FILE_NAME);
+  const legacy = join(dataDir, LEGACY_DB_FILE);
+  if (existsSync(join(dataDir, DB_RENAME_JOURNAL))) {
+    throw new DbFileChoiceError(`${dataDir} 里的库改名（${LEGACY_DB_FILE} → ${DB_FILE_NAME}）上次没做完（${DB_RENAME_JOURNAL} 还在）。`
+      + `停着服务跑 \`${RENAME_COMMAND} -- --apply\` 做完它，或 \`${RENAME_COMMAND} -- --rollback\` 退回去，再启动。`);
+  }
+  const old = legacyDbState(legacy);
+  if (existsSync(current)) {
+    if (old === "present") {
+      throw new DbFileChoiceError(`${dataDir} 里 ${DB_FILE_NAME} 和 ${LEGACY_DB_FILE} 都是库，分不清该开哪一份，没有启动。`
+        + `确认哪份是在用的数据，把另一份挪出数据目录再启动（跑 \`${RENAME_COMMAND}\` 会列出两边各有什么）。`);
+    }
+    return { file: current, legacy: false };
+  }
+  if (old === "present") return { file: legacy, legacy: true };
+  if (old === "moved") {
+    throw new DbFileChoiceError(`${dataDir} 里的 ${LEGACY_DB_FILE} 是改名迁移留下的路标，说库已经改名成 ${DB_FILE_NAME}，但 ${DB_FILE_NAME} 不在。`
+      + "没有启动，免得对着一份空库起来。把库放回来，或者确认不要了就删掉那份路标。");
+  }
+  migrateLegacyDbFiles(current, join(dataDir, LEGACY_HARNESS_DB_FILE));
+  return { file: current, legacy: false };
+}
+
+// 一个进程只开一份库，跟着库名走的锁、账本、身份也都得是同一份：选一次就记住，免得中途有人往数据目录里
+// 放了一份 `ash.db`，后半程的派生文件指到另一份库上去。
+let chosenDefault: string | null = null;
+
 function defaultDbFile(): string {
-  if (existsSync(DEFAULT_DB)) return DEFAULT_DB;
-  migrateLegacyDbFiles(LEGACY_DEFAULT_DB, HARNESS_DEFAULT_DB);
-  return LEGACY_DEFAULT_DB;
+  if (chosenDefault) return chosenDefault;
+  const { file, legacy } = chooseDbFileIn(DATA_DIR);
+  if (legacy) {
+    console.warn(`[navi] 库还叫 ${LEGACY_DB_FILE}（${file}）。照常能用；想改成 ${DB_FILE_NAME}，停掉服务后跑 \`${RENAME_COMMAND}\`（docs/rename-db.md）。`);
+  }
+  chosenDefault = file;
+  return file;
 }
 
 export function resolveNaviDbFile() {

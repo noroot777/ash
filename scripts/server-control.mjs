@@ -4,7 +4,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { readStorageEnv } from "./env.mjs";
-import { LEGACY_DB_FILE, LEGACY_HTTP_HEADER_PREFIX, LEGACY_SINGLETON_LOCK_SUFFIX } from "./legacy-names.mjs";
+import { dbFileIn } from "./db-file.mjs";
+import { LEGACY_HTTP_HEADER_PREFIX, LEGACY_SINGLETON_LOCK_SUFFIX } from "./legacy-names.mjs";
 import { isNotListening, killServerProcesses, localGet, sleep } from "./platform.mjs";
 
 const LOCK_SUFFIX = ".navi.lock";
@@ -12,15 +13,12 @@ const HOST_TOKEN_HEADER = "x-navi-host-token";
 
 /**
  * server 用的库文件,口径跟 server/src/db/path.ts 一致:`NAVI_DB`(旧名 `ASH_DB` 同样认)覆盖;
- * 不然 `navi.db` 在就是它,否则 `ash.db`。
+ * 不然按数据目录里有什么认(scripts/db-file.mjs)。
  */
 export function dbFileFor(repo, env = process.env) {
   const explicit = readStorageEnv(env, "NAVI_DB");
   if (explicit) return resolve(explicit);
-  const current = join(repo, "data", "navi.db");
-  if (existsSync(current)) return current;
-  // 新安装暂时也是 `ash.db`(理由见 server/src/db/path.ts)。
-  return join(repo, "data", LEGACY_DB_FILE);
+  return dbFileIn(join(repo, "data"));
 }
 
 /**
