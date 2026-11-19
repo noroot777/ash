@@ -1,8 +1,8 @@
 // 网页产物的沙箱预览（server/src/task-page.ts）。
 //
 // 第 1 轮审查复现的就是这块：`web/dist/index.html` 这类构建产物点开一片空白。根因是
-// **根路径引用**（`/assets/index-x.js`）——它不跟着页面地址走，直奔 ash 自己的根，取回来
-// 的是 ash 的 index.html；加上不透明源下模块脚本恒定走 CORS，没有 ACAO 一律被拦。
+// **根路径引用**（`/assets/index-x.js`）——它不跟着页面地址走，直奔 navi 自己的根，取回来
+// 的是 navi 的 index.html；加上不透明源下模块脚本恒定走 CORS，没有 ACAO 一律被拦。
 //
 // 所以这里钉五件事，少一件那个空白页就回来、或者那个洞就回来：
 //   1. 根路径引用改写到**本次预览的站点根**（站点根≠工作区根，也≠html 所在目录）
@@ -20,8 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-task-page-"));
-process.env.ASH_DB = join(stage, "ash.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-task-page-"));
+process.env.NAVI_DB = join(stage, "ash.db");
 requireTmpDb("task-page");
 
 const repo = join(stage, "repo");
@@ -80,7 +80,7 @@ try {
   const app = new Hono();
   app.route("/api", api);
   const get = (path: string, headers: Record<string, string> = {}) =>
-    app.request(`http://ash.test${path}`, { headers });
+    app.request(`http://navi.test${path}`, { headers });
 
   // ── 1. 纯函数：改写规则 ────────────────────────────────────────────────────
   const rewritten = rewriteHtml(
@@ -191,7 +191,7 @@ try {
   assert(notice && notice.includes("在浏览器中打开"), "跑不全就得当面说，并指向外部打开");
 
   // ── 6. 越界 ───────────────────────────────────────────────────────────────
-  for (const bad of ["..%2F..%2Fash.db", "web%2Fdist%2F..%2F..%2F..%2Fetc%2Fpasswd"]) {
+  for (const bad of ["..%2F..%2Fnavi.db", "web%2Fdist%2F..%2F..%2F..%2Fetc%2Fpasswd"]) {
     assert.equal((await get(`${base}/${bad}`)).status, 400, `越界必须拒：${bad}`);
   }
 

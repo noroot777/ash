@@ -10,7 +10,7 @@ import { monitorUsedCount, useTaskMonitors } from "./useTaskMonitors.ts";
 // 治不了存量：旧默认早把它钉进了每个任务的 `openTabs`，而 `applyTabPolicy` 是并集语义，
 // 钉进去的就再也摘不掉。按 migrationId 摘一次——真挂过哨兵的任务下次进去它会自己再冒
 // 出来，之后用户手动开的也不会被下一次语义换挡又关掉。
-retireInspectorTab("monitors-surface-on-use", /^(?:ash|harness-next):inspector:/, "monitors");
+retireInspectorTab("monitors-surface-on-use", /^navi:inspector:/, "monitors");
 
 /**
  * 「哨兵」那一格的开合与活信号。
@@ -19,7 +19,7 @@ retireInspectorTab("monitors-surface-on-use", /^(?:ash|harness-next):inspector:/
  * 没挂过就留在「+」菜单和 `I M` 里等人去开——手动起哨兵仍然只有这一格里那个「+」，所以它
  * 可以不默认开着，但绝不能像上一版的子智能体那样整格不给。
  *
- * **两种来源一起算**（ash 自己起的 + claude 自带 Monitor 的只读投影）：claude 执行器的
+ * **两种来源一起算**（navi 自己起的 + claude 自带 Monitor 的只读投影）：claude 执行器的
  * 任务几乎全程用后者，只数前者的话那些任务永远不浮现——而那正是最需要对账的场景。
  * 两种都没有才是真的「没用过」，这时这一格不该占着图标条。
  *

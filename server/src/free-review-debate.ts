@@ -16,20 +16,21 @@
 //    静默挡回（runs.ts continueWhenIdle 的由来）。所以 `debate_reply` 只落库，
 //    `settleDebateTurn` 才决定「换人说 / 收尾 / 中止」。
 //
+// 这三条连同「开段 / 交卷落库 / 结算三岔路 / 中止 / 对账」那几步，跟回复框里的讨论（discussion.ts）
+// 是同一副底子，住在 talk/segments.ts；这里只剩辩论自己的：谁在第几段说、提示词、收尾立场。
+//
 // 辩论结束**不改写任何结论**：它只是把两边的说法摆到用户面前。裁定仍由用户点
 // （free-review-dispute.ts）。
 import type {
   AgentType,
   FreeReviewDebateSide,
   FreeReviewDebateVerdict,
-} from "@ash/shared";
-import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
+} from "@navi/shared";
+import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@navi/shared/free-workflow";
 import { and, asc, eq, isNull } from "drizzle-orm";
-import { gateAshMcpBeforeLaunch } from "./ash-mcp-launch-gate.js";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import {
-  freeReviewDebateTurns,
   freeReviewDebates,
   freeReviewRounds,
   freeReviewRuns,
@@ -43,16 +44,20 @@ import {
 } from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimOwnTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
+import { claimOwnTurn, continueWhenIdle, releaseTurn, turnRole } from "./runs.js";
+import {
+  activeTalkOf, commitSegment, failTalk, hangingTalks, MAX_SEGMENT_STATEMENT_LEN, openSegment, segmentEnding,
+  speakingTurnOf, statementOf, talkOrphaned, talkTurnsOf, type TalkRow, type TalkTurnRow,
+} from "./talk/segments.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
-export type DebateRow = typeof freeReviewDebates.$inferSelect;
-export type DebateTurnRow = typeof freeReviewDebateTurns.$inferSelect;
+export type DebateRow = TalkRow;
+export type DebateTurnRow = TalkTurnRow;
 
 /** 一段发言的长度上限；够写满一页逐条对质。 */
-export const MAX_DEBATE_STATEMENT_LEN = 20_000;
+export const MAX_DEBATE_STATEMENT_LEN = MAX_SEGMENT_STATEMENT_LEN;
 
 export const DEBATE_SIDE_LABELS: Record<FreeReviewDebateSide, string> = {
   reviewer: "审查者",
@@ -96,15 +101,12 @@ export async function debateOfRound(roundId: string): Promise<DebateRow | null> 
 }
 
 export async function debateTurnsOf(debateId: string): Promise<DebateTurnRow[]> {
-  return db.select().from(freeReviewDebateTurns)
-    .where(eq(freeReviewDebateTurns.debateId, debateId))
-    .orderBy(asc(freeReviewDebateTurns.seq));
+  return talkTurnsOf(debateId);
 }
 
 /** 这个任务身上正在跑的辩论（没有则 null）。验收、派审、裁定都要等它结束。 */
 export async function activeDebateOf(taskId: string): Promise<DebateRow | null> {
-  return (await db.select().from(freeReviewDebates)
-    .where(and(eq(freeReviewDebates.taskId, taskId), eq(freeReviewDebates.status, "running")))).at(0) ?? null;
+  return activeTalkOf(taskId, "review");
 }
 
 /**
@@ -132,21 +134,8 @@ export async function debateClosingOf(roundId: string): Promise<DebateClosing | 
   };
 }
 
-async function speakingTurnOf(debate: DebateRow): Promise<DebateTurnRow | null> {
-  return (await db.select().from(freeReviewDebateTurns).where(and(
-    eq(freeReviewDebateTurns.debateId, debate.id),
-    eq(freeReviewDebateTurns.seq, debate.currentSeq),
-  ))).at(0) ?? null;
-}
-
 async function failDebate(debate: DebateRow, turn: DebateTurnRow | null, note: string): Promise<void> {
-  const at = now();
-  if (turn && turn.status === "speaking") {
-    await db.update(freeReviewDebateTurns).set({ status: "error", endedAt: at })
-      .where(eq(freeReviewDebateTurns.id, turn.id));
-  }
-  await db.update(freeReviewDebates).set({ status: "failed", updatedAt: at, finishedAt: at })
-    .where(eq(freeReviewDebates.id, debate.id));
+  await failTalk(debate, turn);
   await appendTaskTimeline(debate.taskId, alertLine(`${note}辩论已中止；驳回仍在等你裁定，也可以再开一轮辩论。`));
   bus.publish({ type: "task.review", taskId: debate.taskId });
 }
@@ -229,6 +218,8 @@ export async function startFreeReviewDebate(
       if (task.question || task.resumePrompt) throw new Error("任务正等待答复或续跑，处理后再开辩论");
       const open = await targetedOpenDispute(taskId, target, "现在没有等待裁定的驳回，没有可辩的对象");
       if (await activeDebateOf(taskId)) throw new Error("已经有一轮辩论正在进行");
+      const { discussionHolds } = await import("./discussion.js");
+      if (await discussionHolds(taskId)) throw new Error("这条任务上正在讨论，说完再开辩论");
       // 好好辩完的那条挡住再辩：同一份报告挂两条辩完的记录，只会让「到底以哪条为准」
       // 变成新问题——该裁定了，或者再派一轮审查。**中断的不挡**：那是系统没让人说完
       // （回合崩了 / 没交卷），把用户的出路一起关掉是拿自己的失败惩罚他。
@@ -237,17 +228,6 @@ export async function startFreeReviewDebate(
         throw new Error("这一轮意见已经辩完了；先裁定它，或者再派一轮审查");
       }
 
-      // 两边都靠 ash MCP 的 `debate_reply` 交卷，任一边够不着，这场辩论就会在那一段「没说话」
-      // 中止。起跑前两边一起核（并发：各自最多等一个预检预算），排在任何一行落库之前 ——
-      // 拦下时什么都还没写，驳回照旧等裁定。只在开场核这一次，理由见 ash-mcp-launch-gate.ts。
-      // 两边都够不着时两句都说，免得修好一边再撞另一边。
-      const gates = await Promise.allSettled([
-        gateAshMcpBeforeLaunch(task, { agentType: open.run.agentType, executorId: open.run.executorId }, "审查者"),
-        gateAshMcpBeforeLaunch(task, { agentType: task.agentType ?? "claude", executorId: task.executorId }, "执行者"),
-      ]);
-      const blocked = gates.flatMap((g) => g.status === "rejected"
-        ? [g.reason instanceof Error ? g.reason.message : String(g.reason)] : []);
-      if (blocked.length) throw new Error(blocked.join("；"));
       const at = now();
       const debate: typeof freeReviewDebates.$inferInsert = {
         id: id(), roundId: open.round.id, taskId, runId: open.run.id, round: open.round.round,
@@ -255,17 +235,13 @@ export async function startFreeReviewDebate(
         startedAt: at, updatedAt: at, finishedAt: null,
       };
       await db.insert(freeReviewDebates).values(debate);
-      const turn: typeof freeReviewDebateTurns.$inferInsert = {
-        id: id(), debateId: debate.id, seq: 1, side: "reviewer", statement: null,
-        status: "speaking", startedAt: at, endedAt: null,
-      };
-      await db.insert(freeReviewDebateTurns).values(turn);
+      const turn = await openSegment(debate as DebateRow, 1, "reviewer");
       await appendTaskTimeline(taskId,
         receiptLine(`开始辩论第 ${open.round.round} 轮审查意见：${exchanges} 个来回，` +
         `审查者（${open.run.reviewerName}）先答辩，最后由它收尾给出立场；结论仍由你裁定。`));
       await launchSegment(
         task, open.run,
-        debate as DebateRow, turn as DebateTurnRow,
+        debate as DebateRow, turn,
         disputeBriefOf(open.round), [],
       );
       return { debateId: debate.id, exchanges };
@@ -287,8 +263,7 @@ export async function submitDebateStatement(
   taskId: string,
   input: { summary?: unknown; statement?: unknown; verdict?: unknown },
 ): Promise<{ seq: number; side: FreeReviewDebateSide; final: boolean; verdictIgnored: boolean }> {
-  const statement = typeof input.statement === "string" ? input.statement.trim() : "";
-  if (!statement) throw new Error("发言不能为空：把你这一段的意见写进 statement");
+  const statement = statementOf(input.statement);
   // 摘要先校验、后落库：七段发言合起来上万字，用户开辩论是为了裁定，不是为了读完。
   const summary = plainSummaryOf(
     input.summary, "summary", "用户要靠逐段的这一句看懂这场辩论辩到哪了，别让他为了裁定去读一万字",
@@ -313,14 +288,9 @@ export async function submitDebateStatement(
     }
     verdict = input.verdict;
   }
-  const at = now();
-  const written = await db.update(freeReviewDebateTurns)
-    .set({ summary, statement: statement.slice(0, MAX_DEBATE_STATEMENT_LEN), status: "done", endedAt: at })
-    .where(and(eq(freeReviewDebateTurns.id, turn.id), eq(freeReviewDebateTurns.status, "speaking")))
-    .returning({ id: freeReviewDebateTurns.id });
-  if (!written.length) throw new Error("这一段发言已经交过卷了");
+  if (!await commitSegment(turn, { summary, statement })) throw new Error("这一段发言已经交过卷了");
   if (verdict) {
-    await db.update(freeReviewDebates).set({ verdict, updatedAt: at })
+    await db.update(freeReviewDebates).set({ verdict, updatedAt: now() })
       .where(eq(freeReviewDebates.id, debate.id));
   }
   bus.publish({ type: "task.review", taskId });
@@ -338,19 +308,20 @@ export async function submitDebateStatement(
 export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise<boolean> {
   const debate = await activeDebateOf(taskId);
   if (!debate) return false;
-  const turn = await speakingTurnOf(debate);
-  if (!turn) {
+  const ending = await segmentEnding(debate, turnOk);
+  if (ending.kind === "missing") {
     await failDebate(debate, null, "辩论找不到正在发言的那一段；");
     return true;
   }
+  const turn = ending.turn;
   const side = turn.side as FreeReviewDebateSide;
   // 回合没干净收尾（崩了 / 被用户按停）一律中止：即便发言已经落库，「用户按了停止」
   // 的意思也不是「接着让下一位说」。
-  if (!turnOk) {
+  if (ending.kind === "stopped") {
     await failDebate(debate, turn, `${DEBATE_SIDE_LABELS[side]}这一段被停止或异常结束；`);
     return true;
   }
-  if (turn.status !== "done" || !turn.statement) {
+  if (ending.kind === "silent") {
     await failDebate(debate, turn, `${DEBATE_SIDE_LABELS[side]}这一回合结束时没有调用 debate_reply 交卷；`);
     return true;
   }
@@ -382,15 +353,9 @@ export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise
     await failDebate(debate, null, "辩论的被辩对象已经不在了（任务、审查链或驳回被改动）；");
     return true;
   }
-  const next: typeof freeReviewDebateTurns.$inferInsert = {
-    id: id(), debateId: debate.id, seq: turn.seq + 1, side: sideOfSeq(turn.seq + 1),
-    statement: null, status: "speaking", startedAt: at, endedAt: null,
-  };
-  await db.insert(freeReviewDebateTurns).values(next);
-  await db.update(freeReviewDebates).set({ currentSeq: next.seq, updatedAt: at })
-    .where(eq(freeReviewDebates.id, debate.id));
+  const next = await openSegment(debate, turn.seq + 1, sideOfSeq(turn.seq + 1));
   await launchSegment(
-    task, run, { ...debate, currentSeq: next.seq }, next as DebateTurnRow,
+    task, run, { ...debate, currentSeq: next.seq }, next,
     disputeBriefOf(open), await debateTurnsOf(debate.id),
   );
   return true;
@@ -404,16 +369,8 @@ export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise
  * 判据同审查对账：回合还活着（任务在跑 / turn 被占 / 在等答复）就不碰，让它自己收尾。
  */
 export async function reconcileFreeReviewDebates(): Promise<void> {
-  const stuck = await db.select().from(freeReviewDebates).where(eq(freeReviewDebates.status, "running"));
-  for (const debate of stuck) {
-    const task = (await db.select().from(tasks).where(eq(tasks.id, debate.taskId))).at(0);
-    if (!task) {
-      await db.delete(freeReviewDebateTurns).where(eq(freeReviewDebateTurns.debateId, debate.id));
-      await db.delete(freeReviewDebates).where(eq(freeReviewDebates.id, debate.id));
-      continue;
-    }
-    if (task.status === "running" || task.status === "queued" || isTurnClaimed(task.id)) continue;
-    if (task.question || task.resumePrompt) continue;
+  for (const debate of await hangingTalks("review", ["running"])) {
+    if (!await talkOrphaned(debate)) continue;
     await failDebate(debate, await speakingTurnOf(debate), "服务重启时这一段辩论已经没有回合在跑；");
   }
 }

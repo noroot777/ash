@@ -28,7 +28,7 @@ try {
     if (path === "/api/projects/p1" && request.method() === "PATCH") {
       const patch = request.postDataJSON();
       projectPatches.push(patch);
-      data = { id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, createdAt: "2026-08-28T00:00:00.000Z",
+      data = { id: "p1", name: "navi", repoPath: "/tmp/navi", workflowId: null, createdAt: "2026-08-28T00:00:00.000Z",
         health: { exists: true, isRepo: true }, ...patch };
     }
     if (path === "/api/tasks" && request.method() === "POST") {
@@ -54,7 +54,6 @@ try {
   });
   await page.goto(`${web.origin}/scripts/fixtures/composer-upload.html?repo`);
   const objective = page.getByRole("textbox", { name: "任务目标" });
-  const switchMode = (name) => page.getByRole("tab", { name, exact: true }).click();
   const openLaunch = () => page.getByRole("button", { name: /^启动设置：/ }).click();
   const clickOutside = () => page.locator(".composer-scroll").click({ position: { x: 5, y: 5 } });
   const people = page.getByRole("button", { name: /^谁来做：/ });
@@ -71,7 +70,6 @@ try {
   assert.equal(await page.locator(".studio-card .composer-config").count(), 0);
   assert.equal(await page.locator(".studio-starters:visible").count(), 0);
   assert.equal(await page.getByLabel("启动方式").isVisible(), false);
-  assert.equal(await page.getByRole("tablist", { name: "任务模式" }).getByRole("tab").count(), 3);
   // 单任务只剩自由工作流一种做法：「工作方式」这颗入口不再占位置。
   const work = page.getByRole("button", { name: /^工作方式：/ });
   assert.equal(await work.count(), 0, "单任务不该再有「工作方式」入口");
@@ -92,44 +90,19 @@ try {
   assert.equal(await directoryPanel.isVisible(), false);
   assert.equal(await space.evaluate((element) => element === document.activeElement), true);
 
-  await switchMode("团队");
-  assert.equal(await objective.inputValue(), "保留我写好的目标");
-  await people.click();
-  const peoplePanel = page.getByRole("dialog", { name: "谁来做", exact: true });
-  assert.equal(await peoplePanel.locator(".run-target-picker").count(), 3);
-  await page.getByText("正在加载预设…", { exact: true }).waitFor({ state: "hidden" });
-  assert.match(await peoplePanel.innerText(), /调度.*CPA 中转.*claude-opus-4\.6.*high/);
-  assert.match(await peoplePanel.innerText(), /执行.*CPA 中转.*claude-opus-4\.6.*high/);
-  await peoplePanel.getByRole("button", { name: /^智能体：/ }).first().click();
-  await page.keyboard.press("Escape");
-  assert.equal(await peoplePanel.isVisible(), true, "Escape 先关执行器子浮层");
-  await page.keyboard.press("Escape");
-  assert.equal(await peoplePanel.isVisible(), false);
-  const loadedPresetRequests = teamPresetRequests;
-  await people.click();
-  assert.equal(teamPresetRequests, loadedPresetRequests, "重新展开不应重复拉取组合预设");
-  await openLaunch();
-  assert.equal(await peoplePanel.isVisible(), false, "打开另一辅助按钮时收起前一浮层");
-  await flow.click();
-  await page.getByRole("dialog", { name: "如何交付", exact: true }).locator(".composer-toggle-field > span").click();
-  assert.match(await flow.getAttribute("aria-label"), /按需审查/);
-  await switchMode("讨论");
-  assert.equal(await space.count(), 0);
-  await people.click();
-  assert.match(await peoplePanel.innerText(), /A.*CPA 中转.*claude-opus-4\.6.*high/);
-  assert.match(await peoplePanel.innerText(), /B.*CPA 中转.*claude-opus-4\.6.*high/);
-  await page.keyboard.press("Escape");
-  await flow.click();
-  await page.getByRole("dialog", { name: "如何交付", exact: true }).locator(".composer-toggle-field > span").click();
-  assert.match(await flow.getAttribute("aria-label"), /自动结束/);
+  // 新建框只有一种任务：卡片上方没有「单任务 / 团队 / 讨论」那一排，也没有「谁来做」「如何交付」的配置浮层，
+  // 更不会去拉团队预设。
+  assert.equal(await page.getByRole("tablist", { name: "任务模式" }).count(), 0, "新建框不该再有模式那一排");
+  assert.equal(await people.count(), 0, "新建框不该再有团队/讨论的「谁来做」浮层");
+  assert.equal(await flow.count(), 0, "新建框不该再有「如何交付」");
+  assert.equal(teamPresetRequests, 0, "新建框不该再拉团队预设");
   await page.getByRole("button", { name: "更多选项", exact: true }).click();
   await page.getByRole("button", { name: /解决一个问题/ }).click();
   assert.match(await objective.inputValue(), /^保留我写好的目标\n\n请帮我/);
-  assert.equal(await page.getByRole("tab", { name: "单任务", exact: true }).getAttribute("aria-selected"), "true");
   await page.getByRole("button", { name: "更多选项", exact: true }).click();
   await page.getByRole("button", { name: /讨论一个方案/ }).click();
-  assert.equal(await page.getByRole("tab", { name: "讨论", exact: true }).getAttribute("aria-selected"), "true");
-  await switchMode("单任务");
+  assert.match(await objective.inputValue(), /请比较下面的方案/, "写作参考只往框里补字");
+  assert.equal(await page.getByRole("tablist", { name: "任务模式" }).count(), 0, "写作参考不换任务的种类");
   assert.equal(await objective.evaluate((element) => element.value.startsWith("保留我写好的目标")), true);
   await page.getByRole("button", { name: /^组织与标签：/ }).click();
   await page.getByRole("textbox", { name: "添加标签" }).fill("界面优化");
@@ -168,6 +141,9 @@ try {
   assert.equal(created[0].worktreeBase, "develop");
   assert.deepEqual(created[0].labels, ["界面优化"]);
   assert.match(created[0].body, /^保留我写好的目标/);
+  assert.equal(created[0].mode, "single", "新建框建出来的一律是普通任务");
+  assert.equal(created[0].team, undefined, "不能再带团队配置");
+  assert.equal(created[0].duet, undefined, "不能再带讨论配置");
   assert.equal(created[0].workflowMode, "free", "新建单任务一律是自由工作流");
   assert.equal(created[0].workflowId, undefined, "不能再带起手式");
   assert.equal(created[0].workflow, undefined, "不能再带起手式快照");
@@ -198,11 +174,6 @@ try {
   // 第 5 轮回归:响应里的全体成员快照(前驱 + 新任务)整批上交 onTasksSynced——
   // 只同步新任务的话前驱在列表里保持入队前状态(无徽标、计数错位、重复建队)。
   assert.match(await page.getByTestId("synced").innerText(), /同步：t-backlog@q1#0 task-1@q1#1/, "前驱与新任务的入队快照都要上交");
-  // 团队任务不被普通队列调度:团队模式下「创建并排队」置灰。
-  await switchMode("团队");
-  await openLaunch();
-  assert.equal(await page.getByRole("radio", { name: /创建并排队/ }).isDisabled(), true, "团队模式不提供排队");
-  await page.keyboard.press("Escape");
 
   // 「设为本项目默认」：写的是项目行，而且要**把新的项目行交回上层** —— 这块面板一关就
   // 整个卸载，下次打开是按 project 重新初始化的。只更新面板内部那份的话，用户刚设完默认、

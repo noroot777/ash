@@ -1,4 +1,4 @@
-// 飞书里说的话进 ash 的聊天房间（单聊 → 助手房间，群 @ → 项目群聊房间），房间里的回复再
+// 飞书里说的话进 navi 的聊天房间（单聊 → 助手房间，群 @ → 项目群聊房间），房间里的回复再
 // 发回飞书。
 //
 // chat 没有「回复完成」事件，只能轮询房间快照：每 2 秒看一眼还在等回复的那几条（没有在等的
@@ -7,21 +7,21 @@
 //
 // 智能体回复对上用户那条消息靠 chat_messages.reply_to（同一事务里插入的那条回复）。
 //
-// 房间里的回复带着 ash 里的东西：按这句话进来那一刻的来源盖下房间的授权（scope.ts room、requestScope），记在
+// 房间里的回复带着 navi 里的东西：按这句话进来那一刻的来源盖下房间的授权（scope.ts room、requestScope），记在
 // im_inbound 上，回复发回飞书时出口按它现核（还是那一次绑定、房间还在、还归他、群还绑着那个项目，回复下面
 // 列出的任务他也都还看得见）。投不进去、拿不到回复、等超时这几句
 // 说明不带房间里的东西，按他自己这次操作的结局（reply）发 —— 房间没了正是它们要说的事；可报错原文里
 // 可能有项目里的字，照样按那一刻的绑定实例、他此刻还看不看得见项目核（scope.ts reply）。
 import { createHash } from "node:crypto";
-import type { TaskListItem } from "@ash/shared";
-import type { ChatMessage, ChatRoom } from "@ash/shared/chat";
+import type { TaskListItem } from "@navi/shared";
+import type { ChatMessage, ChatRoom } from "@navi/shared/chat";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imInbound } from "../db/schema-im.js";
 import { now } from "../util.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
 import { deleteChatRoom } from "../chat/lifecycle.js";
-import { failureOf, type AshClient, type AshResult } from "./ash-client.js";
+import { failureOf, type NaviClient, type NaviResult } from "./navi-client.js";
 import { bindingOf, CHANNEL, claimAssistantRoom } from "./binding.js";
 import { taskLink } from "./cards.js";
 import type { CommandRunner, InboundContext } from "./commands.js";
@@ -38,18 +38,18 @@ const DONE = new Set<ChatMessage["status"]>(["done", "failed", "stopped"]);
 type Snapshot = { room: ChatRoom; messages: ChatMessage[]; tasks: TaskListItem[] };
 
 /**
- * 读房间没读成功，分清是「确实没有了」还是「这一下没读到」（ash-client.ts failureOf）。只有前者能换房间：映射一换，
+ * 读房间没读成功，分清是「确实没有了」还是「这一下没读到」（navi-client.ts failureOf）。只有前者能换房间：映射一换，
  * 旧房间里还在路上的回复出口就不放行了（scope.ts 只认映射上的那一间），换错了那句话的回复就永远回不来（审查第 2 轮
  * 实测：一次 500 换掉了还在的房间）。GET /api/chats/:id 对没有的、不归他看的都回 404（chat/routes.ts visibleRoom）。
  */
-const roomGone = (result: AshResult) => !result.ok && failureOf(result) === "absent";
-const unreadable = (what: string, result: AshResult & { ok: false }) =>
+const roomGone = (result: NaviResult) => !result.ok && failureOf(result) === "absent";
+const unreadable = (what: string, result: NaviResult & { ok: false }) =>
   ({ error: `这一下没读到${what}（${scrubText(result.error, 120)}），这句没投进去：请稍后再发一次。` });
 
 /** 刚建的房间没领到（别人先领了，或者绑定刚换过）：删掉它，免得网页上多一间空房间。返回该用的那一间。 */
 function settleClaim(created: string, claimed: string | null): string | null {
   if (claimed !== created) {
-    void deleteChatRoom(created).catch((error) => console.warn(`[ash] 飞书多建的房间 ${created} 没删掉:`, (error as Error).message));
+    void deleteChatRoom(created).catch((error) => console.warn(`[navi] 飞书多建的房间 ${created} 没删掉:`, (error as Error).message));
   }
   return claimed;
 }
@@ -60,7 +60,7 @@ export class RoomRelay {
   private timer: ReturnType<typeof setInterval> | null = null;
   private polling = false;
 
-  constructor(private readonly deps: { appId: string; ash: AshClient; commands: CommandRunner }) {}
+  constructor(private readonly deps: { appId: string; navi: NaviClient; commands: CommandRunner }) {}
 
   start(): void {
     this.timer = setInterval(() => void this.poll(), POLL_MS);
@@ -83,17 +83,17 @@ export class RoomRelay {
     const fresh = await bindingOf(this.deps.appId, principal.openId);
     const known = (fresh ? fresh.assistantRoomId : binding.assistantRoomId) ?? null;
     if (known) {
-      const existing = await this.deps.ash.get(principal, `/api/chats/${encodeURIComponent(known)}`);
+      const existing = await this.deps.navi.get(principal, `/api/chats/${encodeURIComponent(known)}`);
       if (existing.ok) return (binding.assistantRoomId = known);
       if (!roomGone(existing)) return unreadable("你的助手房间", existing);
     }
-    const rooms = await this.deps.ash.get<ChatRoom[]>(principal, "/api/chats?kind=assistant");
+    const rooms = await this.deps.navi.get<ChatRoom[]>(principal, "/api/chats?kind=assistant");
     if (!rooms.ok) return unreadable("你的助手配置", rooms);
     const template = Array.isArray(rooms.data)
       ? [...rooms.data].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((room) => room.members[0])
       : undefined;
-    if (!template) return { error: "还没配置过 ash 助手：先在 ash 网页里打开一次助手、选好智能体，之后飞书里就能直接聊。" };
-    const created = await this.deps.ash.post<ChatRoom>(principal, "/api/chats", {
+    if (!template) return { error: "还没配置过 Navi 助手：先在 Navi 网页里打开一次助手、选好智能体，之后飞书里就能直接聊。" };
+    const created = await this.deps.navi.post<ChatRoom>(principal, "/api/chats", {
       kind: "assistant", projectId: "", name: "飞书", members: [template.members[0]],
     });
     if (!created.ok) return { error: `没能建助手房间：${created.error}` };
@@ -111,7 +111,7 @@ export class RoomRelay {
     const userKey = ctx.binding.userId ?? "";
     const known = await groupRoomOf(this.deps.appId, group.chatId, userKey);
     if (known) {
-      const existing = await this.deps.ash.get<Snapshot>(ctx.principal, `/api/chats/${encodeURIComponent(known)}`);
+      const existing = await this.deps.navi.get<Snapshot>(ctx.principal, `/api/chats/${encodeURIComponent(known)}`);
       // 房间得还在这个群绑的项目里：不在了（群换过项目）就另建，话不能投进别的项目。
       if (existing.ok && (existing.data.room?.projectId ?? "") === group.projectId) {
         return { roomId: known, mention: existing.data.room?.members?.[0]?.name ?? null };
@@ -119,13 +119,13 @@ export class RoomRelay {
       if (!existing.ok && !roomGone(existing)) return unreadable("你在这个群的房间", existing);
     }
     // 成员照这个人最近一间助手房间的智能体来：群聊里 @ 机器人，就是让它来答。
-    const rooms = await this.deps.ash.get<ChatRoom[]>(ctx.principal, "/api/chats?kind=assistant");
+    const rooms = await this.deps.navi.get<ChatRoom[]>(ctx.principal, "/api/chats?kind=assistant");
     if (!rooms.ok) return unreadable("你的助手配置", rooms);
     const template = Array.isArray(rooms.data)
       ? [...rooms.data].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((room) => room.members[0])
       : undefined;
-    if (!template) return { error: "还没配置过 ash 助手：先在 ash 网页里打开一次助手、选好智能体。" };
-    const created = await this.deps.ash.post<ChatRoom>(ctx.principal, "/api/chats", {
+    if (!template) return { error: "还没配置过 Navi 助手：先在 Navi 网页里打开一次助手、选好智能体。" };
+    const created = await this.deps.navi.post<ChatRoom>(ctx.principal, "/api/chats", {
       kind: "chat", projectId: group.projectId, name: scrubTitle(`飞书群 ${group.name ?? ""}`.trim(), 60), members: [template.members[0]],
     });
     if (!created.ok) return { error: `没能建群聊房间：${created.error}` };
@@ -148,7 +148,7 @@ export class RoomRelay {
     const messageId = chatMessageIdOf(inboundId);
     const scope = this.deps.commands.scoped(ctx, { kind: "room", roomId, projectId });
     const body = mentionName ? `@${mentionName} ${text}` : text;
-    const sent = await this.deps.ash.post(ctx.principal, `/api/chats/${encodeURIComponent(roomId)}/messages`, {
+    const sent = await this.deps.navi.post(ctx.principal, `/api/chats/${encodeURIComponent(roomId)}/messages`, {
       id: messageId, body, ...(paths.length ? { attachments: paths } : {}),
     });
     if (!sent.ok) {
@@ -156,11 +156,11 @@ export class RoomRelay {
       if (landed !== true) {
         const notice = await this.deps.commands.answered(ctx, { projectId });
         if (landed === false) {
-          await this.deps.commands.say(ctx, `没能送进 ash：${scrubText(sent.error, 300)}`, notice);
+          await this.deps.commands.say(ctx, `没能送进 Navi：${scrubText(sent.error, 300)}`, notice);
           await this.mark(inboundId, "failed", sent.error);
           return false;
         }
-        await this.deps.commands.say(ctx, `不确定这句送进 ash 没有（${scrubText(sent.error, 120)}）：有回复会照常发回来，一直没动静就去 ash 里看一眼。`, notice);
+        await this.deps.commands.say(ctx, `不确定这句送进 Navi 没有（${scrubText(sent.error, 120)}）：有回复会照常发回来，一直没动静就去 Navi 里看一眼。`, notice);
       }
     }
     await db.update(imInbound).set({ state: "sent", roomId, detail: messageId, scope: JSON.stringify(scope), updatedAt: now() })
@@ -170,7 +170,7 @@ export class RoomRelay {
 
   /** 这句在不在房间里：true 在、false 确认不在（房间读得到但没有它，或者房间没了）、null 读不到。 */
   private async landed(principal: ImPrincipal, roomId: string, messageId: string): Promise<boolean | null> {
-    const snapshot = await this.deps.ash.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(roomId)}`);
+    const snapshot = await this.deps.navi.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(roomId)}`);
     if (!snapshot.ok) return roomGone(snapshot) ? false : null;
     return snapshot.data.messages.some((message) => message.id === messageId && message.role === "user");
   }
@@ -188,10 +188,10 @@ export class RoomRelay {
       ));
       // 一行出错（scope 坏了、入队时读库失败）只跳过它自己：没有排序，坏行每圈都可能排第一个，整圈中断会把后面在等的全饿死。
       for (const row of waiting) {
-        await this.check(row).catch((error) => console.error(`[ash] 飞书聊天回复 ${row.id} 没处理成:`, error));
+        await this.check(row).catch((error) => console.error(`[navi] 飞书聊天回复 ${row.id} 没处理成:`, error));
       }
     } catch (error) {
-      console.error("[ash] 飞书聊天回复轮询出错:", error);
+      console.error("[navi] 飞书聊天回复轮询出错:", error);
     } finally {
       this.polling = false;
     }
@@ -209,7 +209,7 @@ export class RoomRelay {
     const origin = { origin: originOfScope(scope, row.openId) };
     const notice = async (text: string) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text,
       await this.deps.commands.answered(origin, { projectId: scope.kind === "room" ? scope.projectId : null }), { subject: `relay:${row.id}` });
-    const snapshot = await this.deps.ash.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(row.roomId)}`);
+    const snapshot = await this.deps.navi.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(row.roomId)}`);
     const timedOut = Date.parse(row.updatedAt) + REPLY_TIMEOUT_MS < Date.now();
     // 先把回复入队、再记结局：中间退出，下一圈还会再看这一行，同一个 subject 的回复入不了第二次。
     // 这一下没读到（不是房间没了）不算结局：下一圈再看，等满时限还读不到才告诉他。
@@ -222,7 +222,7 @@ export class RoomRelay {
     if (!answers.length) {
       // 没有任何成员被点到（群聊里没 @ 到人）就不会有回复。
       if (timedOut || snapshot.data.messages.some((message) => message.id === row.detail && !message.mentions.length)) {
-        if (timedOut) await notice("等了 20 分钟没等到回复，去 ash 里看看吧。");
+        if (timedOut) await notice("等了 20 分钟没等到回复，去 Navi 里看看吧。");
         await this.mark(row.id, "replied", null);
       }
       return;

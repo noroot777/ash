@@ -1,4 +1,4 @@
-// 交卷丢了就回头补捞：把 agent 那些「确定没送达」的 ash MCP 调用，在回合结算前替它重放。
+// 交卷丢了就回头补捞：把 agent 那些「确定没送达」的 navi MCP 调用，在回合结算前替它重放。
 //
 // 起因（2026-08-06）：codex 跑完一轮就地验证，报告写着「通过」，可 `report_stage(verified)`
 // 连调两次都撞上 `Transport closed` —— `scripts/restart.mjs` 那一刻正好重建并杀掉了所有
@@ -6,9 +6,9 @@
 // 处理」，12 分钟的验证白跑。同一条路上更常见的受害者是 `complete_task`：它丢了，严格结算
 // 就把一个**干完了活**的任务记成 failed。
 //
-// 为什么补捞必须在 ash 这一侧：`mcp/src/index.ts` 的 `call()` 早就有退避重试，但那是
+// 为什么补捞必须在 navi 这一侧：`mcp/src/index.ts` 的 `call()` 早就有退避重试，但那是
 // **在 MCP 进程自己肚子里**重试，只救得了「server 在重启、MCP 还活着」；MCP 进程本身被杀
-// 时，重试的代码跟着一起死了。能在事后说清「它想干什么、干成没有」的只剩 ash 自己写的
+// 时，重试的代码跟着一起死了。能在事后说清「它想干什么、干成没有」的只剩 navi 自己写的
 // 那份输出流。
 //
 // 三条口径：
@@ -24,10 +24,10 @@
 import { eq, isNull } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentType } from "@ash/shared";
-import { isTaskStage } from "@ash/shared";
-import { isReplayableMcpTool, isUndeliveredMcpFailure } from "@ash/shared/mcp-delivery";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import type { AgentType } from "@navi/shared";
+import { isTaskStage } from "@navi/shared";
+import { isReplayableMcpTool, isUndeliveredMcpFailure } from "@navi/shared/mcp-delivery";
+import { naviMcpToolOf, isNaviMcpServerName } from "@navi/shared/mcp";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -40,7 +40,7 @@ import { serialize } from "./monitors.js";
 import { reportTaskStage } from "./task-stage.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
-/** 从输出流里认出来的一次 ash MCP 调用。 */
+/** 从输出流里认出来的一次 navi MCP 调用。 */
 export interface McpCallRecord {
   tool: string;
   args: Record<string, unknown>;
@@ -57,7 +57,7 @@ const asRecord = (value: unknown): Record<string, unknown> =>
  * codex：`codex exec --json` 的 item 事件。
  *
  * 形状实测：
- * `{"type":"item.completed","item":{"type":"mcp_tool_call","server":"ash","tool":"report_stage",
+ * `{"type":"item.completed","item":{"type":"mcp_tool_call","server":"navi","tool":"report_stage",
  *   "arguments":{...},"error":{"message":"…Transport closed"},"status":"failed"}}`
  * 同一次调用会先后出现 started/completed 两条（同 id），只认带最终 status 的那条。
  */
@@ -68,7 +68,8 @@ function parseCodexCalls(text: string): McpCallRecord[] {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const item = asRecord(asRecord(parsed).item);
-    if (item.type !== "mcp_tool_call" || item.server !== ASH_MCP_SERVER_NAME) continue;
+    // 登记名各代都认：升级前起的会话、用户配置里旧版 setup 登记的那条，报的是旧名。
+    if (item.type !== "mcp_tool_call" || !isNaviMcpServerName(item.server)) continue;
     if (item.status !== "failed" && item.status !== "completed") continue; // in_progress 那条跳过
     const tool = typeof item.tool === "string" ? item.tool : "";
     if (!tool) continue;
@@ -85,13 +86,12 @@ function parseCodexCalls(text: string): McpCallRecord[] {
   return out;
 }
 
-// claude 的 MCP 工具名形如 `mcp__ash__report_stage`。
-const CLAUDE_TOOL = new RegExp(`^mcp__${ASH_MCP_SERVER_NAME}__(.+)$`);
+// claude 的 MCP 工具名形如 `mcp__navi__report_stage`（旧名 `mcp__ash__…` 同样认，见 `naviMcpToolOf`）。
 
 /**
  * claude：stream-json。调用与结果分在两条消息里，靠 `tool_use_id` 对上。
  *
- * · 调用：`{"type":"assistant","message":{"content":[{"type":"tool_use","id":…,"name":"mcp__ash__x","input":{…}}]}}`
+ * · 调用：`{"type":"assistant","message":{"content":[{"type":"tool_use","id":…,"name":"mcp__navi__x","input":{…}}]}}`
  * · 结果：`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":…,"is_error":true,"content":"…"}]}}`
  *
  * 只认 `type==="assistant"` 那条完整的调用；`stream_event` 里的 `content_block_start` 也带
@@ -101,7 +101,7 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
   const pending = new Map<string, { tool: string; args: Record<string, unknown> }>();
   const out: McpCallRecord[] = [];
   for (const line of text.split("\n")) {
-    if (!line.includes(`mcp__${ASH_MCP_SERVER_NAME}__`) && !line.includes("tool_result")) continue;
+    if (!line.includes("mcp__") && !line.includes("tool_result")) continue;
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const root = asRecord(parsed);
@@ -113,8 +113,8 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
       if (block.type === "tool_use") {
         const name = typeof block.name === "string" ? block.name : "";
         const id = typeof block.id === "string" ? block.id : "";
-        const matched = name.match(CLAUDE_TOOL);
-        if (matched && id) pending.set(id, { tool: matched[1], args: asRecord(block.input) });
+        const tool = naviMcpToolOf(name);
+        if (tool && id) pending.set(id, { tool, args: asRecord(block.input) });
       } else if (block.type === "tool_result") {
         const id = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
         const call = id ? pending.get(id) : undefined;
@@ -134,8 +134,8 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
   return out;
 }
 
-/** 读这一轮的输出流，认出其中所有 ash MCP 调用。文件不在（非 detached 的老路径）就返回空。 */
-export function collectAshMcpCalls(outPath: string, agentType: AgentType): McpCallRecord[] {
+/** 读这一轮的输出流，认出其中所有 navi MCP 调用。文件不在（非 detached 的老路径）就返回空。 */
+export function collectNaviMcpCalls(outPath: string, agentType: AgentType): McpCallRecord[] {
   let text: string;
   try { text = readFileSync(outPath, "utf8"); } catch { return []; }
   return agentType === "claude" ? parseClaudeCalls(text) : parseCodexCalls(text);
@@ -210,7 +210,7 @@ async function applyReplay(
         }
       } catch (error) {
         // 补录不满足业务门禁（比如报告缺失）就如实跳过，让结算按「没有结论」处理。
-        console.warn(`[ash] replay report_stage(${taskId}) rejected:`, error);
+        console.warn(`[navi] replay report_stage(${taskId}) rejected:`, error);
         return null;
       }
     }
@@ -242,7 +242,7 @@ async function applyReplay(
       receipts: await replayedReceipts(taskId, call),
     });
     if (!confirm.ok) {
-      console.warn(`[ash] replay complete_task(${taskId}) rejected: ${confirm.error}`);
+      console.warn(`[navi] replay complete_task(${taskId}) rejected: ${confirm.error}`);
       // 身份过期那一种照旧什么都不说:那笔确认本来就不该生效(换方向了/不是这一回合的),
       // 入口也保证了它一个字都没写。
       return confirm.blockedByMonitors ? confirm.note ?? null : null;
@@ -291,7 +291,7 @@ export async function replayUndeliveredMcpCalls(a: {
   agentType: AgentType;
 }): Promise<number> {
   const { out } = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
-  const calls = collectAshMcpCalls(out, a.agentType);
+  const calls = collectNaviMcpCalls(out, a.agentType);
   if (!calls.length) return 0;
   const direction = (await db.select({
     token: tasks.activeDirectionToken,

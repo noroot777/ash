@@ -11,8 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { parseAttachmentText } from "@ash/shared/attachments";
+import { parseAttachmentText } from "@navi/shared/attachments";
 import { duetTopicText, gateUserMessage } from "../src/duet/user-message.js";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 一句话 + 一张截图:正文在前,附件段在后。
 const withBoth = gateUserMessage("这里的按钮点不动", ["/tmp/uploads/a-image.png"]);
@@ -54,8 +55,8 @@ assert.equal(duetTopicText("  为什么选 B 方案  ", []), "为什么选 B 方
 // 新建面板送的是 body + duet.topic + attachments 三样,附件块要落在**两者**末尾:
 // topic 喂开场 prompt(loadBase 只认它),body 喂详情页顶部的「完整议题」。两边逐字
 // 同一份 —— 差一个兜底句,详情页就解析出一段空正文,议题那一行显示的就不是议题了。
-const root = mkdtempSync(join(tmpdir(), "ash-duet-attachments-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-duet-attachments-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const [{ db, ensureSchema }, schema, { mountTaskRoutes }] = await Promise.all([
   import("../src/db/index.js"),
@@ -123,5 +124,5 @@ try {
 
   console.log("duet attachments ok");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

@@ -39,9 +39,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-open-ide-"));
-process.env.ASH_DB ||= join(stage, "open-ide.db");
-process.env.ASH_RUNS_DIR ||= join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-open-ide-"));
+process.env.NAVI_DB ||= join(stage, "open-ide.db");
+process.env.NAVI_RUNS_DIR ||= join(stage, "runs");
 requireTmpDb("test-open-in-ide");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -355,6 +355,7 @@ if (process.platform === "win32") {
 } else {
   const fakeBin = join(stage, "bin");
   const argsLog = join(stage, "launched-args.txt");
+  const slowPid = join(stage, "slowfail.pid");
   mkdirSync(fakeBin, { recursive: true });
   writeFileSync(
     join(fakeBin, "codium"),
@@ -366,7 +367,7 @@ if (process.platform === "win32") {
       // 自杀式信号退出 = 被安全软件 / OOM killer 打死的那一类
       "  signal) kill -TERM $$; sleep 5 ;;",
       // 活过早夭窗口再失败：这正是「等一会儿没动静就说已打开」会漏掉的那一档
-      "  slowfail) sleep 3; exit 23 ;;",
+      `  slowfail) echo $$ > "${slowPid}"; sleep 3; exit 23 ;;`,
       "  *) exit 0 ;;",
       "esac",
       "",
@@ -407,6 +408,9 @@ if (process.platform === "win32") {
         "这一档服务端什么确认都没拿到，报 opened 就是让页面去说一件没发生的事",
       );
       assert.ok(Date.now() - started < 2500, "只盯早夭窗口，不能一路等到它三秒后失败");
+      // 该看的看完了：那个还要再活三秒的假编辑器（连同它的 sleep）就地收掉，不留到测试退出之后。
+      const pid = Number(readFileSync(slowPid, "utf8"));
+      for (const target of [-pid, pid]) try { process.kill(target, "SIGKILL"); } catch { /* 已经没了 */ }
     });
 
     await check("启动器正常退出 → opened，且收到的就是那个子目录的绝对路径", async () => {

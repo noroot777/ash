@@ -13,8 +13,8 @@ import { repairCoverageGuard } from "./review-coverage.js";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { VERIFY_CHECK_LABELS } from "@ash/shared/workflow";
-import { workflowPolicy } from "@ash/shared/workflow-policy";
+import { VERIFY_CHECK_LABELS } from "@navi/shared/workflow";
+import { workflowPolicy } from "@navi/shared/workflow-policy";
 import { taskWorkflowDef } from "./workflows.js";
 import { NO_REMINDER, type TurnReminder } from "./turn-prompt.js";
 import { reviewRoundDir } from "./review-evidence.js";
@@ -23,8 +23,9 @@ import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { verifyHistorySection } from "./review-history.js";
 import type { Workspace } from "./git.js";
-import { REVIEW_VALIDATION_REQUIREMENT } from "@ash/shared/free-workflow";
+import { REVIEW_VALIDATION_REQUIREMENT } from "@navi/shared/free-workflow";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
+import { CHANGE_SCOPE_FAILURE_TEXT, taskChangeScope } from "./task-change-scope.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -54,11 +55,11 @@ function verifyRules(evidenceDir: string): string {
     // 「要等一件慢事」这一条必须就在验证义务旁边：2026-10-16 实测的那一轮审查挂了监听、
     // 说了「套件结束会叫我」，然后就这么结束了回合 —— 结算按「没给结论」把整条链停掉，
     // 而它挂的内置 Monitor 本来就活不过那一轮（它的进程在 agent 自己的进程树里）。现在
-    // 那一下会被改道成 ash 哨兵（claude-monitor-hook.ts），但改道只换得掉进程归属，换不掉
+    // 那一下会被改道成 navi 哨兵（claude-monitor-hook.ts），但改道只换得掉进程归属，换不掉
     // 「回合就这么结束了」——所以这一句照样要说：挂完得用 pause_task 收尾。
     `要等的那件事以分钟计（长构建、接口冒烟、长转码）时，别干等、也别就这么结束这一轮：` +
-    `用 ash 的 start_monitor 挂一条盯它的命令（过滤到你真会据此做事的那几行，成功与失败两类标记都要覆盖），` +
-    `再用 pause_task 收尾本回合、写清「被叫醒后该干什么」——哨兵的进程由 ash 起，活得过你这一轮，` +
+    `用 Navi 的 start_monitor 挂一条盯它的命令（过滤到你真会据此做事的那几行，成功与失败两类标记都要覆盖），` +
+    `再用 pause_task 收尾本回合、写清「被叫醒后该干什么」——哨兵的进程由 Navi 起，活得过你这一轮，` +
     `事件来了会把你这条会话重新叫醒，你当初写下的那段交代也会一起喂回来。` +
     `**没给结论就结束回合**会被判成「本轮未能给出结论」，整条审查链当场停掉。\n\n` +
     `一旦用了 playwright，验证结束前必须把它落在仓库工作区里的产物删干净（.playwright-cli/、playwright-report/、test-results/ 等），` +
@@ -78,10 +79,17 @@ function verifyRules(evidenceDir: string): string {
     REPORT_SUMMARY_FORMAT;
 }
 
-function comparisonBaseline(target: TaskRow): string {
-  return target.useWorktree
-    ? target.worktreeStartCommit || target.worktreeBase || "未记录任务起点，请先核实历史提交"
-    : "当前工作树的基准提交";
+/**
+ * 告诉审查者「这条任务自己的改动」从哪比起：跟验收台的 diff、提交清单同一份口径（task-change-scope.ts）。
+ * 算不出来就把原因写给它，不退回开工点 —— 分支合过目标分支时，那会把目标分支的进展整个算进审查范围。
+ */
+async function comparisonBaseline(target: TaskRow, repoPath: string): Promise<string> {
+  if (!target.useWorktree) return "当前工作树的基准提交";
+  const scope = await taskChangeScope(repoPath, target).catch(() => null);
+  if (!scope) return "未能确定（读取仓库失败），请先核实历史提交";
+  if (!scope.ok) return `未能确定（${CHANGE_SCOPE_FAILURE_TEXT[scope.reason]}），请先核实历史提交`;
+  return `${scope.base}（任务分支里合进来的目标分支、开工点带来的代码都已扣掉；` +
+    `本任务自己的提交：git log ${scope.sourceBranch} --not ${scope.exclude.join(" ")}）`;
 }
 
 /**
@@ -101,7 +109,7 @@ export async function verifyProtocolFor(
   station: string | null = null,
 ): Promise<string> {
   const evidenceDir = reviewRoundDir(target.id, round);
-  const baseline = comparisonBaseline(target);
+  const baseline = await comparisonBaseline(target, repoPath);
   const requirements = await reviewRequestReference(target, evidenceDir);
   // 口径本体由同一条消息里的 `verifyRules`(`REVIEW_VALIDATION_REQUIREMENT`)讲一遍就够,
   // 清单说明只讲「这份文件怎么读」。每回合提醒那两条没有它,仍走默认的复述。
@@ -150,7 +158,7 @@ export async function reviewProtocolFor(
   const target = (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0);
   if (!target) return `【审查任务】被审任务 ${review.reviewOf} 已不存在，记录问题后结束本轮。\n\n`;
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
-  const baseline = comparisonBaseline(target);
+  const baseline = await comparisonBaseline(target, repoPath);
   const requirements = await reviewRequestReference(target, evidenceDir);
   // 口径本体由同一条消息里的 `verifyRules`(`REVIEW_VALIDATION_REQUIREMENT`)讲一遍就够,
   // 清单说明只讲「这份文件怎么读」。每回合提醒那两条没有它,仍走默认的复述。
@@ -210,5 +218,5 @@ export function repairPrompt(input: {
     (coverageGuard ? `${coverageGuard}\n\n` : "") +
     `证据目录：${dir}\n\n` +
     `修完必须调用 complete_task(taskId="${target.id}") 确认完成；` +
-    (input.autoNext ? "确认后 ash 会自动再验一轮。" : "本轮不自动续验，确认后可由用户手动再验一轮。");
+    (input.autoNext ? "确认后 Navi 会自动再验一轮。" : "本轮不自动续验，确认后可由用户手动再验一轮。");
 }

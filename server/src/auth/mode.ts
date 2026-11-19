@@ -5,8 +5,8 @@
 // server 共用一份库的场景本来就被 singleton.ts 挡死了。
 import { mkdirSync, existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import type { InstanceMode } from "@ash/shared";
-import { userDirNameError } from "@ash/shared/multiuser";
+import type { InstanceMode } from "@navi/shared";
+import { userDirNameError } from "@navi/shared/multiuser";
 import { getAppSettings, writeSystemSetting } from "../app-settings.js";
 import { db } from "../db/index.js";
 import { users } from "../db/schema.js";
@@ -194,7 +194,7 @@ export async function ensureUserHomeDir(dirName: string): Promise<string> {
 /**
  * 路径钳制:`candidate` 必须落在 `home` **之内**,且**不能是 home 本身**。
  *
- * 「不能是 home 本身」是 §七/§九 的硬要求:项目目录里会长出 `.ash`、worktree 这类
+ * 「不能是 home 本身」是 §七/§九 的硬要求:项目目录里会长出 `.navi`、worktree 这类
  * 东西,把用户目录根注册成项目会把整片区域污染成一个仓库,之后每建一个子项目都在
  * 它的工作区里。
  *

@@ -16,7 +16,7 @@
 //  F2 「下一轮会不会是 1M」跟起跑那一侧同一套判据:没 key 的供应商会回退官方账号,额外参数
 //     里的 --model 会覆盖选中的模型。
 //
-// 跑法:ASH_DB=/tmp/test-context-1m-notice-$RANDOM.db npx tsx server/scripts/test-context-1m-notice.ts
+// 跑法:NAVI_DB=/tmp/test-context-1m-notice-$RANDOM.db npx tsx server/scripts/test-context-1m-notice.ts
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { requireTmpDb } from "./tmp-db.js";
@@ -24,10 +24,10 @@ import { requireTmpDb } from "./tmp-db.js";
 requireTmpDb("test-context-1m-notice");
 
 const { claudeModelWindow, clampedCompactWindow, CLAUDE_1M_WINDOW, CLAUDE_STANDARD_WINDOW } =
-  await import("@ash/shared/context-1m");
-const { claudeCompactionPlan, claudeCompactionPreview, claudeCompactionUnprovable, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
+  await import("@navi/shared/context-1m");
+const { claudeCompactionPlan, claudeCompactionPreview, claudeCompactionUnprovable, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@navi/shared/cli-overrides");
 const { effectiveContextWindow, contextRatio, contextCompactTrigger, compactSnapshotFromEnv, parseStoredCompactSnapshot, serializeCompactSnapshot, UNKNOWN_COMPACT_SNAPSHOT } =
-  await import("@ash/shared/usage");
+  await import("@navi/shared/usage");
 const { launchFields, sessionContext, sessionCompactSnapshot, sessionContextCompact, sessionLaunchCompact, setSessionContext } =
   await import("../src/usage.js");
 
@@ -61,7 +61,7 @@ assert.equal(keyless?.provider, null, "没 key 时不给一键开启(开了也�
 assert.deepEqual(keyless?.blocker, { kind: "no-key", provider: { id: "p1", name: "nm-ccb" } });
 assert.equal(claudeModelWindow("", { ...relay, hasKey: false }), null, "没 key 也没模型:退回官方账号,判不出来");
 
-// F2:额外参数里的 --model 排在 ash 那份之后,覆盖选中的模型;ash 只给选中的那个补 [1m]。
+// F2:额外参数里的 --model 排在 navi 那份之后,覆盖选中的模型;navi 只给选中的那个补 [1m]。
 const overridden = claudeModelWindow("claude-opus-5-5", relay, ["--model claude-sonnet-5"]);
 assert.equal(overridden?.model, "claude-sonnet-5", "合并 token 也要拆开认出 --model");
 assert.equal(overridden?.window, CLAUDE_STANDARD_WINDOW, "选中的模型开了 1M 也没用,跑的是额外参数里那个");
@@ -133,7 +133,7 @@ assert.equal(
 // F1:触发点只从会话自己的启动快照算 —— 原形会话固化的 --settings 原样喂进去。
 const frozenArgs = `--settings '{"autoCompactEnabled":true,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"600000",`
   + `"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"82.76","DISABLE_COMPACT":"","DISABLE_AUTO_COMPACT":""}}'`;
-// 原形会话的命令行:只有 ash 那一个 --settings(临时文件路径),resume_args 里的就是生效配置。
+// 原形会话的命令行:只有 navi 那一个 --settings(临时文件路径),resume_args 里的就是生效配置。
 const frozenCommand = "claude -p --model claude-fable-5-2 --settings /tmp/ash-claude-settings-1.json <messages via stdin>";
 // 水位随自己那一轮的启动快照(带来源标记)一起落库,重读时只认这份。
 const frozen = sessionContext({
@@ -169,9 +169,9 @@ const { join } = await import("node:path");
 const { spawn } = await import("node:child_process");
 const { ClaudeExecutor } = await import("../src/executors/claude.js");
 const { cliHostEnv } = await import("../src/executors/cli-env.js");
-const fixtureDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-"));
+const fixtureDir = mkdtempSync(join(tmpdir(), "navi-context-1m-notice-"));
 // 用户配置目录钉到一个空目录:快照要读各层 settings(下面 ③b),不能让本机的 ~/.claude 混进来。
-const emptyConfigDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-cfg-"));
+const emptyConfigDir = mkdtempSync(join(tmpdir(), "navi-context-1m-notice-cfg-"));
 process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
 const frames = [
   { type: "assistant", message: { model: "claude-fable-5-2", content: [], usage: { input_tokens: 143_746, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } },
@@ -180,6 +180,8 @@ const frames = [
 const fakeClaude = join(fixtureDir, "fake-claude");
 writeFileSync(fakeClaude, `#!/bin/sh\ncat <<'EOF'\n${frames}\nEOF\n`);
 chmodSync(fakeClaude, 0o755);
+// 下面每个执行器都显式指着这个假 claude（bin: fakeClaude）；测试环境默认不许起执行器，只放行它。
+process.env.NAVI_TEST_AGENT_BIN = fakeClaude;
 const contextOf = async (events: AsyncIterable<{ kind: string; context?: unknown }>) => {
   let found: unknown = null;
   for await (const event of events) if (event.kind === "context") found = event.context;
@@ -202,7 +204,7 @@ const liveSteer = await contextOf(launched.runSteerable({ prompt: "hi", cwd: fix
 assert.deepEqual(liveSteer, liveRun, "可引导起跑跟普通起跑是同一份快照");
 assert.deepEqual(launched.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, expectedSnapshot, "句柄上带的就是水位上那份");
 
-// 第 3 轮 F1:额外参数里自带 --settings 会整份盖掉 ash 那份,快照必须是「不知道」,不能发布
+// 第 3 轮 F1:额外参数里自带 --settings 会整份盖掉 navi 那份,快照必须是「不知道」,不能发布
 // 被盖掉的 600k / 82.76。profile 的额外参数、本次调用的额外参数,两处来源都算。
 const overriding = `--settings {"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"100000","CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"50"}}`;
 const shadowedByProfile = new ClaudeExecutor({
@@ -244,7 +246,7 @@ const unknown = await contextOf(changed.attach(attachChild(), { sessionId: "fixt
 assert.equal(unknown?.compactWindow, undefined, "不知道旧快照就不带,不拿当前配置去补");
 
 // 接管读的是起跑时随 commandLine 一起落下的那份(launchFields),不是 resume_args 反推:
-// resume_args 里只有 ash 自己那份 --settings,看不出它被额外参数盖掉了。
+// resume_args 里只有 navi 自己那份 --settings,看不出它被额外参数盖掉了。
 const shadowedLaunch = launchFields(shadowedRun);
 assert.equal(shadowedLaunch.commandLine, shadowedRun.commandLine);
 const shadowedReattached = await contextOf(changed.attach(attachChild(), {
@@ -259,8 +261,8 @@ assert.deepEqual(
   expectedSnapshot,
   "正常起跑的那份原样读回",
 );
-// 这一列上线前起的进程:resume_args 里只有 ash 注入的那几项,记不得 CLI 从用户/项目配置里继承了
-// 什么(审查 SaouXWB_jEuw F1)—— 即便命令行证明只有 ash 那份 --settings,也拼不出完整快照。
+// 这一列上线前起的进程:resume_args 里只有 navi 注入的那几项,记不得 CLI 从用户/项目配置里继承了
+// 什么(审查 SaouXWB_jEuw F1)—— 即便命令行证明只有 navi 那份 --settings,也拼不出完整快照。
 assert.deepEqual(
   sessionLaunchCompact({ agentType: "claude", launchCompact: null, resumeArgs: frozenArgs, commandLine: frozenCommand }),
   { compactUnknown: true },
@@ -268,7 +270,7 @@ assert.deepEqual(
 );
 
 // 第 4 轮:升级前起的进程,额外参数里另带了 --settings(命令行里两份)—— resume_args 只有
-// ash 那份,证明不了它生效,接管与重读都必须是「不知道」,不能退回 600k / ~149k。
+// navi 那份,证明不了它生效,接管与重读都必须是「不知道」,不能退回 600k / ~149k。
 const legacyShadowed = { agentType: "claude", launchCompact: null, contextCompact: null, resumeArgs: frozenArgs, commandLine: shadowedRun.commandLine };
 assert.ok(shadowedRun.commandLine.split("--settings").length > 2, "夹具:命令行里确实有两份 --settings");
 assert.deepEqual(sessionLaunchCompact(legacyShadowed), { compactUnknown: true }, "老行接管:证明不了就是不知道");
@@ -292,9 +294,9 @@ assert.deepEqual(
 assert.deepEqual(
   sessionLaunchCompact({ agentType: "codex", launchCompact: null }),
   {},
-  "别的 CLI 从来没有 ash 注入的压缩配置:没有可说的,不标不知道",
+  "别的 CLI 从来没有 navi 注入的压缩配置:没有可说的,不标不知道",
 );
-// 旧口径(launch-final,不带版本)写下的快照:那一版只记 ash 注入的那几项,留空的百分比从下层继承时
+// 旧口径(launch-final,不带版本)写下的快照:那一版只记 navi 注入的那几项,留空的百分比从下层继承时
 // 漏记。照单全收就会按默认算成 ~167k(审查 SaouXWB_jEuw 第 2 轮 F2),三条读侧一律当证明不了。
 const v1Snapshot = JSON.stringify({ provenance: "launch-final", compactWindow: 600_000 });
 assert.equal(parseStoredCompactSnapshot(v1Snapshot), null, "旧版本标记不算数");
@@ -345,7 +347,7 @@ assert.deepEqual(
 assert.deepEqual(
   sessionContextCompact({ agentType: "codex", contextCompact: null }),
   {},
-  "别的 CLI 从来没有 ash 注入的压缩配置,老水位没有可说的",
+  "别的 CLI 从来没有 navi 注入的压缩配置,老水位没有可说的",
 );
 // 接管那一侧读的是当前进程,用当前进程的起跑元数据天经地义,两侧不共用退路。
 assert.equal(sessionLaunchCompact(resumedBeforeNewWater).compactWindow, 100_000, "接管仍按当前进程起跑时那份");
@@ -366,8 +368,8 @@ assert.deepEqual(
 
 // ── ③b 留空的输入照样从下层继承(审查 SaouXWB_jEuw F1) ─────────────────────────
 // 用户 settings.json 里写了 50%,profile 只填 600k 窗口、百分比留空:CLI 按 50% 压。快照只看
-// ash 注入了什么的话就缺了百分比,面板按默认算成 ~167k,真实是 (200k − 20k) × 50% = 90k。
-const inheritedConfigDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-cfg-"));
+// navi 注入了什么的话就缺了百分比,面板按默认算成 ~167k,真实是 (200k − 20k) × 50% = 90k。
+const inheritedConfigDir = mkdtempSync(join(tmpdir(), "navi-context-1m-notice-cfg-"));
 writeFileSync(join(inheritedConfigDir, "settings.json"), JSON.stringify({ env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "50" } }));
 process.env.CLAUDE_CONFIG_DIR = inheritedConfigDir;
 const windowOnly = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude, configOverrides: { autoCompactWindow: 600_000 } });
@@ -381,7 +383,7 @@ const inheritedContext = await contextOf(inheritedRun.events);
 assert.equal(contextCompactTrigger(inheritedContext), 90_000, "按继承的 50% 算,不是默认的 ~167k");
 // 预览不承诺继承来的百分比(审查 rGyEqSY4VO6F F1):设置页那条只读接口没有项目上下文,读得到用户层
 // 50% 也说不准这次起跑继承的是不是它 —— 项目里另写了 20% 的话,真实触发点是 36k。
-const percentProjectDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-proj-"));
+const percentProjectDir = mkdtempSync(join(tmpdir(), "navi-context-1m-notice-proj-"));
 mkdirSync(join(percentProjectDir, ".git"));
 mkdirSync(join(percentProjectDir, ".claude"));
 writeFileSync(join(percentProjectDir, ".claude", "settings.local.json"), JSON.stringify({ env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "20" } }));
@@ -411,7 +413,7 @@ assert.ok(
 // 多人隔离档:这次起跑带着用户自己的配置目录(opts.env.CLAUDE_CONFIG_DIR),宿主进程那份是 50%、
 // 用户那份是 20%、输出预留 10k。各层必须按起跑那份目录读(审查 SaouXWB_jEuw 第 2 轮 F1):快照记 20%,
 // 钉进 --settings 的输出预留也是用户那份 —— 宿主的配置一个数都不许混进来。
-const userConfigDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-user-"));
+const userConfigDir = mkdtempSync(join(tmpdir(), "navi-context-1m-notice-user-"));
 writeFileSync(join(userConfigDir, "settings.json"), JSON.stringify({
   env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "20", CLAUDE_CODE_MAX_OUTPUT_TOKENS: "10000" },
 }));
@@ -428,7 +430,7 @@ const sourcesResident = sourcesByProfile.openResident({ prompt: "hi", cwd: fixtu
 assert.deepEqual(sourcesResident.launchCompact, { compactUnknown: true }, "常驻起跑同理");
 sourcesResident.close();
 // 继承值按 CLI 同一种解码:parseFloat("50%") = 50,CLI 按 50% 压,快照也得记 50。
-const loosePercentDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-loose-"));
+const loosePercentDir = mkdtempSync(join(tmpdir(), "navi-context-1m-notice-loose-"));
 writeFileSync(join(loosePercentDir, "settings.json"), JSON.stringify({ env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "50%" } }));
 assert.equal(
   windowOnly.run({ prompt: "hi", cwd: fixtureDir, env: { CLAUDE_CONFIG_DIR: loosePercentDir } }).launchCompact?.compactPercent,
@@ -474,20 +476,20 @@ assert.deepEqual(
   { compactUnknown: true },
   "起跑快照同一判据",
 );
-// ash 没配压缩、下层却配过:CLI 按下层走,ash 判不全 —— 不知道,而不是「没配」。
+// navi 没配压缩、下层却配过:CLI 按下层走,navi 判不全 —— 不知道,而不是「没配」。
 const unconfigured = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude });
 assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, { compactUnknown: true });
 process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
 assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, {}, "各层都没碰过压缩:跟随 CLI,没有可说的");
 // 项目层同样算一层下层配置。
-const projectDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-proj-"));
+const projectDir = mkdtempSync(join(tmpdir(), "navi-context-1m-notice-proj-"));
 mkdirSync(join(projectDir, ".claude"));
 writeFileSync(join(projectDir, ".claude", "settings.json"), JSON.stringify({ autoCompactWindow: 300_000 }));
 assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: projectDir }).launchCompact, { compactUnknown: true }, "项目层顶层配了窗口");
 assert.deepEqual(
   windowOnly.run({ prompt: "hi", cwd: projectDir }).launchCompact,
   { compactWindow: 600_000 },
-  "配了窗口时 ash 的 --settings 压过项目层的窗口;百分比没人写过就是默认",
+  "配了窗口时 navi 的 --settings 压过项目层的窗口;百分比没人写过就是默认",
 );
 rmSync(inheritedConfigDir, { recursive: true, force: true });
 rmSync(projectDir, { recursive: true, force: true });
@@ -565,7 +567,7 @@ assert.equal((await enable("anthropic-1", ["claude-opus-5"])).status, 400, "数�
 assert.equal((await enable("anthropic-1", undefined, "{not json")).status, 400, "坏 JSON 400");
 assert.equal((await enable("missing", { model: "claude-opus-5" })).status, 404, "不存在的供应商 404");
 
-rmSync(process.env.ASH_DB!, { force: true });
+rmSync(process.env.NAVI_DB!, { force: true });
 rmSync(fixtureDir, { recursive: true, force: true });
 rmSync(emptyConfigDir, { recursive: true, force: true });
 console.log("test-context-1m-notice: ok");

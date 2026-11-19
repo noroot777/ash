@@ -20,7 +20,7 @@
  * 服务,这三种都落在那个窗口里,而杀错进程不可逆。
  *
  * 所以归属证据换成**环境继承**:启动命令会话的 env 里带一枚这次启动独有的随机记号
- * (`ASH_LAUNCH_ID`,terminal.ts 注入),凡是这次启动 fork 出来的进程都带着它,**双 fork +
+ * (`NAVI_LAUNCH_ID`,terminal.ts 注入),凡是这次启动 fork 出来的进程都带着它,**双 fork +
  * setsid 也洗不掉**(实测:PPID=1、自成 sid 的守护进程,`ps -E` 里那枚记号照旧在)。于是
  * 「它是不是这次起来的」有了一条**可核验**的判据,而不是时间窗口的推断:
  *
@@ -32,7 +32,7 @@
  * 认不出来,于是**停不掉**(报给用户让他配一条停止命令),而不是扩大授权去猜。
  * `executors/kernel-confine.ts` 顶部那张表列的就是这几类线索各自的断点。
  *
- * 另外两道硬闸不变:ash 自己的进程/进程组永不碰;低位端口(<1024)一律不碰 —— 那一档住的
+ * 另外两道硬闸不变:navi 自己的进程/进程组永不碰;低位端口(<1024)一律不碰 —— 那一档住的
  * 是 22/80/443 这类系统服务,而开发服务几乎不会落在那里。Windows 没有 lsof,这一档整个不
  * 启用(行为与改动前一致)。
  *
@@ -221,7 +221,7 @@ export async function stopByPorts(
     for (const pid of found.pids) {
       if (seen.has(pid)) continue;
       seen.add(pid);
-      if (pid === process.pid) continue; // 那是 ash 自己
+      if (pid === process.pid) continue; // 那是 navi 自己
       if (left() <= 0) { outcome.unknown.push(port); break; }
       const anchor = (await readLineage([pid], options.launchToken, left())).get(pid);
       if (anchor === undefined) continue;
@@ -236,7 +236,7 @@ export async function stopByPorts(
       }
       const holder = inspected.holder;
       if (selfPgid !== null && holder.pgid === selfPgid) {
-        outcome.spared.push({ holder, reason: "那是 ash 自己所在的进程组" });
+        outcome.spared.push({ holder, reason: "那是 Navi 自己所在的进程组" });
         continue;
       }
       if (anchor !== "ours") {
@@ -330,7 +330,7 @@ export async function launchMembers(
         continue;
       }
       const holder = inspected.holder;
-      if (selfPgid !== null && holder.pgid === selfPgid) { seen.add(pid); continue; } // 那是 ash 自己
+      if (selfPgid !== null && holder.pgid === selfPgid) { seen.add(pid); continue; } // 那是 navi 自己
       groups.add(holder.pgid);
       const group = groupMembers(holder.pid, holder.pgid, selfPgid);
       if (!group.complete) complete = false;
@@ -361,7 +361,7 @@ export type LaunchSnapshot = { members: LaunchMember[]; groups: number[]; comple
  *    工人,那个号出生在照相之后(第 6 轮审查 E2 的脚本路径同形)。新号照样要核归属才敢往
  *    「是这次起来的」里记,核不上的也要记,只是说法不同。
  *
- * 这里**一个 kill 都不发**:用户写那段脚本正是不想让 ash 直接动手。只负责把事实说清楚。
+ * 这里**一个 kill 都不发**:用户写那段脚本正是不想让 navi 直接动手。只负责把事实说清楚。
  */
 export async function survivingMembers(snapshot: LaunchSnapshot, token: string | null): Promise<{ members: LaunchMember[]; complete: boolean }> {
   const left = snapshot.members.filter((one) => processAlive(one.pid));
@@ -421,7 +421,7 @@ async function waitGone(alive: () => boolean, graceMs: number): Promise<boolean>
  * `process.once("exit")` 里不能 await(信号处理器直接 `process.exit()`,见 singleton.ts
  * 的 installCleanup),所以关服清场整条是同步的 —— `killAllSessionTrees` 同步连发
  * TERM+KILL 就是这个缘故。端口这一档被漏在外面时,关服会把会话表连 launchToken 一起丢掉,
- * 而真·守护化的服务只认这一条线索:ash 再起来,它还听着那个端口、却**再没有任何把手能停
+ * 而真·守护化的服务只认这一条线索:navi 再起来,它还听着那个端口、却**再没有任何把手能停
  * 它**(第 3 轮审查发现 2)。
  *
  * 判据与异步版逐字一致(带记号的才动,没记号/核不上的一根汗毛都不碰),区别有两处:同步问

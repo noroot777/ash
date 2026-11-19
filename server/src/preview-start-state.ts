@@ -2,21 +2,24 @@ import { randomUUID } from "node:crypto";
 
 export const starting = new Map<string, Set<string>>();
 const unfinished = new Map<string, Set<string>>();
+const purposes = new Map<string, "development">();
 
 export const hasUnfinishedPreviewStart = (taskId: string): boolean => !!unfinished.get(taskId)?.size;
 
 /** 这一趟（taskId + 代号）开始由本进程驱动。 */
-export function beginDriving(taskId: string, gen: string): void {
+export function beginDriving(taskId: string, gen: string, purpose?: "development"): void {
   const gens = starting.get(taskId) ?? new Set<string>();
   gens.add(gen);
   starting.set(taskId, gens);
   const pending = unfinished.get(taskId) ?? new Set<string>();
   pending.add(gen);
   unfinished.set(taskId, pending);
+  if (purpose) purposes.set(gen, purpose);
 }
 
 /** 这一趟结束了。**只撤自己那一代** —— 见 starting 上面的说明。 */
 export function endDriving(taskId: string, gen: string): void {
+  purposes.delete(gen);
   unfinished.get(taskId)?.delete(gen);
   if (!unfinished.get(taskId)?.size) unfinished.delete(taskId);
   canceledGens.delete(gen);
@@ -64,11 +67,11 @@ const onCancel = new Map<string, () => void>();
  * 说「这个任务正在起预览」的那句话 —— 已经取消掉的一代继续算在里面，用户就会在收到
  * 「已取消」之后刷新出一颗「关闭预览」，再点一次还照样回一句「停到了」。
  */
-export function cancelDriving(taskId: string, exceptGen: string | null): number {
+export function cancelDriving(taskId: string, exceptGen: string | null, preserveDevelopment = false): number {
   const gens = starting.get(taskId);
   let marked = 0;
   for (const gen of [...(gens ?? [])]) {
-    if (gen === exceptGen) continue;
+    if (gen === exceptGen || (preserveDevelopment && purposes.get(gen) === "development")) continue;
     canceledGens.add(gen);
     gens?.delete(gen);
     // 登记方的收口（放掉动作锁之类）在这儿当场做掉，不等那一趟自己回来。
@@ -84,7 +87,7 @@ export function cancelDriving(taskId: string, exceptGen: string | null): number 
 /**
  * 「这一代正在被**我们**收掉」的记号 —— 盖的是「杀进程」到「归档记录」之间那一段。
  *
- * 预览的子进程是 ash 自己 spawn 的，`child.on("exit")` 那条看门狗因此两种情况都会响：服务
+ * 预览的子进程是 navi 自己 spawn 的，`child.on("exit")` 那条看门狗因此两种情况都会响：服务
  * 自己崩了，和用户点「关闭预览」/ 任务重新开跑 / 验收回收把它杀了。两者在事件里长得一模
  * 一样，而记录要等进程确认退出之后才归档 —— 于是「我们杀它」的那一下正落在「记录还挂着
  * ready」的窗口里，被看门狗读成「预览进程已自行退出」：用户主动关掉的预览，回头在会话里
@@ -107,9 +110,9 @@ export async function whileRetiringPreview<T>(gen: string | undefined, run: () =
   try { return await run(); } finally { retiringGens.delete(gen); }
 }
 
-export function beginPreviewStart(taskId: string, whenCanceled?: () => void): string {
+export function beginPreviewStart(taskId: string, whenCanceled?: () => void, purpose?: "development"): string {
   const gen = randomUUID();
-  beginDriving(taskId, gen);
+  beginDriving(taskId, gen, purpose);
   // 取消时要当场做掉的收口（放掉动作锁之类）：见 onCancel。
   if (whenCanceled) onCancel.set(gen, whenCanceled);
   return gen;

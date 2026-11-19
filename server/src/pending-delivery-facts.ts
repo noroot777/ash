@@ -6,13 +6,15 @@
 // 于是一条被分组暂停挡着、永远不会自己送出去的执行型消息，把失败卡撤掉了（第 1 轮审查实测）。
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { groups, scheduledMessages, tasks } from "./db/schema.js";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { groups, scheduledMessages, taskPrerequisiteLaunches, taskPrerequisites, tasks } from "./db/schema.js";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import { withAfterGates, type AfterGate } from "./pending-after.js";
 import { deliveryVerdict, pendingExecutionIntent, type DeliveryVerdict } from "./pending-verdict.js";
 import { queueBlockerDetails, type QueueBlocker } from "./queues.js";
 import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
+import { dispatchHoldOf, type DispatchHold } from "./task-hold.js";
+import { discussionHolds } from "./discussion.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -26,6 +28,15 @@ export interface DeliveryFacts {
   /** 挡路的是哪几条(带标题,在跑的排前);没问队列或没被挡时为空。托盘的等待说明点名用。 */
   queueBlocking: QueueBlocker[];
   groupPaused: boolean;
+  /** 上面派活的那条按了「全部停下」(task-hold.ts);没问或没按住时为 null。 */
+  dispatchHold: DispatchHold | null;
+  /**
+   * 这一次投递会开执行回合，而任务挂着还没兑现的开工请求：等放行那一路连同这条一起起（launch-request.ts）。
+   * `prerequisites` = 在等前置站齐；`launch` = 没有前置（或已经齐了），在等名额、分组恢复这类。false = 没挂着。
+   */
+  prerequisiteWait: false | "prerequisites" | "launch";
+  /** 这条任务上正在讨论（连同写合稿）：讨论期间用户发的话一律排着，说完再发（discussion.ts）。 */
+  discussing: boolean;
 }
 
 /** m.execution 由调用方按 pendingExecutionIntent 定好再传进来（扫描会把它写回库，这里不写）。 */
@@ -49,6 +60,10 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
     t != null && t.mode === "single" && m.execution && t.groupId
       ? !!(await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0)?.paused
       : false;
+  // 只有会开执行回合的那几种才问(判据见 deliveryVerdict 里名下全部停下那一条)。
+  const dispatchHold = t != null && t.mode === "single" && (m.execution || t.status === "paused" || t.status === "backlog")
+    ? await dispatchHoldOf(t.id)
+    : null;
   // 「**起它的那次、那一轮**审查现在是什么状态」——只对哨兵事件查,但**无条件查**,
   // 不按任务状态短路:来源失效是这条消息自己的资格,而审查完全可以跑在一个 paused
   // 任务上、它收尾时也不触发任何终态清理(第 2 轮审查 F5)。只多这一次库查,而且只在
@@ -57,9 +72,21 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
     ? await monitorEventSourceState(m.origin)
     : undefined;
   const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
-  const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
+  const prerequisiteWait = needQueueCheck ? await awaitingPrerequisites(m.taskId) : false;
+  const judged = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, dispatchHeld: !!dispatchHold, monitorSource, reviewBlocked,
     reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
-  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused } };
+  // 讨论只挡「送」：取消（任务没了、来源失效）照旧当场取消。托盘的等待说明也要它（任务在跑时同样在等讨论）。
+  const discussing = t?.mode === "single" && await discussionHolds(m.taskId);
+  const verdict: DeliveryVerdict = (prerequisiteWait || discussing) && judged.action === "deliver" ? { action: "wait" } : judged;
+  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused, dispatchHold, prerequisiteWait, discussing } };
+}
+
+/** 挂着开工请求、起点还没定下：起跑要等放行那一路（见 launch-request.ts）。 */
+async function awaitingPrerequisites(taskId: string): Promise<false | "prerequisites" | "launch"> {
+  const launch = (await db.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, taskId))).at(0);
+  if (!launch?.requestedAt || launch.launchedAt) return false;
+  const edges = await db.select({ id: taskPrerequisites.prerequisiteId }).from(taskPrerequisites).where(eq(taskPrerequisites.taskId, taskId)).limit(1);
+  return edges.length ? "prerequisites" : "launch";
 }
 
 /**

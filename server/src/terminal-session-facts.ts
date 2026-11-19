@@ -64,7 +64,7 @@ export type LaunchAbandonment = {
   /** 原样给用户看的那一段残留交代(弹层里显示的就是它)。 */
   notice: string;
   /**
-   * 那段话说的是哪一种:有确定是这次启动留下的(owned)/只有 ash 分不清来路的(unsure)/
+   * 那段话说的是哪一种:有确定是这次启动留下的(owned)/只有 navi 分不清来路的(unsure)/
    * 什么都探不到(none)。界面据它挑「已放弃管理（…）」的说法,别去认 notice 的措辞。
    */
   left: "owned" | "unsure" | "none";
@@ -115,7 +115,7 @@ export type TerminalSessionInfo = {
   stop: StopFact;
   /**
    * 用户**显式放弃**了这次启动的管理责任(「我自己处理了」)。非 null = 他已经看过残留事实、
-   * 按过那颗带风险确认的按钮:ash 从此不再把这条记录当「还在跑」,删除保护一并解除。
+   * 按过那颗带风险确认的按钮:navi 从此不再把这条记录当「还在跑」,删除保护一并解除。
    *
    * **它不是核销。** 这次启动停没停净的结论仍然原样留在 `stop` 账上(`unresolved` 不会被改成
    * `verified`),这一格另记「放弃那一刻还有什么活着」—— 刷新回来仍看得出「我放过手」以及
@@ -159,7 +159,7 @@ export type TerminalSession = Omit<TerminalSessionInfo, "stoppedByUser"> & {
    */
   portScanner: { feed(chunk: string): number[]; flush(): number[] };
   /**
-   * 这次启动独有的随机记号,注入进 pty 的环境(`ASH_LAUNCH_ID`)。它被这次启动 fork 出来
+   * 这次启动独有的随机记号,注入进 pty 的环境(`NAVI_LAUNCH_ID`)。它被这次启动 fork 出来
    * 的每一个进程继承 —— 双 fork + setsid 的守护进程也带着 —— 于是「端口上坐着的是不是
    * 这次起来的」有了**可核验**的归属证据,而不是时间窗口的推断。只给命令会话发
    * (交互 shell 不长停止按钮,也就没有按端口动手的路);不进 DTO,服务端内部用。
@@ -175,7 +175,7 @@ export type TerminalSession = Omit<TerminalSessionInfo, "stoppedByUser"> & {
    * 把各个钟都留一份,由扫描那一层按候选年龄实际用的钟去配对,配不上、或者取样到 spawn 之间
    * 钟被拨过(`wallSteady`),就判「证不出来」。
    *
-   * 会话表只活在当前这个 ash 进程里(重启即丢,跟 `launchToken` 同寿)。不进 DTO。
+   * 会话表只活在当前这个 navi 进程里(重启即丢,跟 `launchToken` 同寿)。不进 DTO。
    */
   launchClocks: LaunchClocks;
   /**

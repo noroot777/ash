@@ -4,6 +4,7 @@
 // terminal-process-tree.ts。
 import { existsSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { clearEnv, withLegacyEnvNames } from "@navi/shared/env-names";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { expandHome } from "./git.js";
 import { IS_WINDOWS, encodePowerShellCommand } from "./platform.js";
@@ -128,26 +129,30 @@ function withExitCodeBoundary(script: string): string {
 }
 
 /**
- * pty 的环境。`extra` 是**这一条会话**自己的记号(命令会话的 `ASH_LAUNCH_ID`):它会被这次
+ * pty 的环境。`extra` 是**这一条会话**自己的记号(命令会话的 `NAVI_LAUNCH_ID`):它会被这次
  * 启动 fork 出来的每一个进程继承,双 fork + setsid 也洗不掉 —— 停止时据此核验「端口上坐着
  * 的到底是不是这次起来的」(service-ports.ts 顶部)。
  */
 export function ptyEnvironment(extra: Record<string, string> = {}): Record<string, string> {
-  const env = Object.fromEntries(
+  const env: Record<string, string | undefined> = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
+  // 本进程要是从别的 Navi 终端里起的，继承来的这几个是**那一层**的；只覆盖新名的话旧名那份还留着，
+  // 扫描各代都认，就会把这里起的进程算到外层那次启动名下。先各代都擦掉。
+  for (const name of ["NAVI_LAUNCH_ID", "NAVI_PTY_PARENT", "NAVI_PS", "NAVI_LSOF", "NAVI_TERMINAL"] as const) clearEnv(env, name);
   return {
-    ...env,
+    ...(env as Record<string, string>),
     ...extra,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
-    ASH_TERMINAL: "1",
+    // 「我在 Navi 的终端里」：给用户自己的 shell 配置读的，旧名照旧导一份（他的 profile 里写的可能还是 $ASH_TERMINAL）。
+    ...withLegacyEnvNames({ NAVI_TERMINAL: "1" }),
     // wrapper 清杀/守护时排除 server 自己(它持有全部 pty master,macOS 的 lsof
-    // 会把 master 端也列进 /dev/ttysN 的持有者 —— 不排除等于让 wrapper 杀掉 ash)。
-    ASH_PTY_PARENT: String(process.pid),
+    // 会把 master 端也列进 /dev/ttysN 的持有者 —— 不排除等于让 wrapper 杀掉 navi)。
+    NAVI_PTY_PARENT: String(process.pid),
     // ps/lsof 的绝对路径(启动时解析,含 /bin、/usr/sbin 兜底):wrapper 不吃运行时 PATH。
-    ASH_PS: PS_PATH ?? "",
-    ASH_LSOF: LSOF_PATH ?? "",
+    NAVI_PS: PS_PATH ?? "",
+    NAVI_LSOF: LSOF_PATH ?? "",
   };
 }
 

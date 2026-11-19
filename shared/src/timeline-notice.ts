@@ -1,4 +1,4 @@
-// 任务时间线上每一条「ash 自己说的话」是**哪一类事**，连同那件事的几个参数。
+// 任务时间线上每一条「navi 自己说的话」是**哪一类事**，连同那件事的几个参数。
 //
 // 服务端写时间线（server/src/task-timeline.ts 的 appendTaskTimeline）时一并给出，跟原文一起
 // 落进会话 .md 的 sentinel、也跟着直播事件走。展示端据它决定这一条怎么摆、用什么图标、挂不挂
@@ -30,7 +30,7 @@ export type ReviewWaitReason = "monitor" | "question" | "checkpoint" | "queued" 
 /**
  * 一轮审查为什么没给出结论（服务端在审查回合收尾时按真实情况判，见 server/src/review-no-verdict.ts）。
  * interrupted = 回合自己中途断了（模型上游连不上、进程异常退出、被看门狗终止）；
- * unreported = 回合正常收尾了，结论却没上报到 ash。
+ * unreported = 回合正常收尾了，结论却没上报到 navi。
  * `reason` 是一句短话（「模型上游连不上（503）」），展示端原样接在轮次后面，不再回头认原文。
  */
 export interface ReviewNoVerdict {
@@ -71,8 +71,8 @@ export type TimelineNotice =
   /** 验收做完了。`target` = 合进了哪条分支；`noCommit` = 只合进了工作区、等用户自己提交；`tag` = 只打了标签没合并。 */
   | { kind: "accept.done"; target: string | null; noCommit?: boolean; tag?: string | null }
   // ── 要用户拍板（明面）──
-  /** 执行者驳回了这一轮审查意见，等用户裁定。 */
-  | { kind: "review.dispute"; round: number }
+  /** 执行者驳回了这一轮审查意见，等用户裁定。`runId` = 哪一场派审（点它去审议格那一轮靠它认）；老记录没有。 */
+  | { kind: "review.dispute"; round: number; runId?: string }
   // ── 审查段的结构（本身是回执，审查泳道靠它们定起止）──
   /**
    * 一轮审查开始了。`rerun` = 同一轮重跑上一回合 / 从中断处继续，不算新开一轮。`runId` = 这是
@@ -114,9 +114,16 @@ export type TimelineNotice =
   // ── 你那条命令的回答（常显：是你要看的东西）──
   /** 斜杠命令（/goal --scopes、/rename …）就地执行的结果。原文里带着命令本身和全部输出。 */
   | { kind: "command.output"; command: string }
+  // ── 讨论的结构（本身是回执，中止那一句归明面）──
+  /**
+   * 一场讨论开始了 / 轮到某一方说第几段 / 说完了 / 中止了（server/src/discussion.ts）。`discussionId` 认的是
+   * 哪一场：会话里那颗讨论气泡按它配落盘记录，配不上就把原文原样摆出来，不拿另一场顶替。
+   */
+  | { kind: "discussion"; discussionId: string; phase: "start" | "segment" | "end" | "aborted" }
   // ── 通用两档：原文就是它的话 ──
   | { kind: "receipt" }
-  | { kind: "alert" };
+  /** `discussionId`：这句提醒是哪一场讨论的（合稿没写完那一句），删掉整场时按它认（server/src/discussion-delete.ts）。 */
+  | { kind: "alert"; discussionId?: string };
 
 export type TimelineNoticeKind = TimelineNotice["kind"];
 
@@ -124,7 +131,7 @@ const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
   "review.verdict", "review.no_verdict", "accept.done", "review.dispute", "review.start", "review.repair", "stage",
   "review.reserved", "review.unreserved", "review.launch",
   "monitor.started", "monitor.finished", "monitor.released", "monitor.handed", "complete.held", "review.waiting",
-  "command.output", "receipt", "alert",
+  "command.output", "discussion", "receipt", "alert",
 ]);
 
 /**
@@ -134,5 +141,10 @@ const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
 export function timelineNoticeOf(value: unknown): TimelineNotice | undefined {
   if (!value || typeof value !== "object") return undefined;
   const kind = (value as { kind?: unknown }).kind;
-  return typeof kind === "string" && KINDS.has(kind) ? value as TimelineNotice : undefined;
+  if (typeof kind !== "string" || !KINDS.has(kind)) return undefined;
+  // 讨论那几句靠讨论身份配记录：没带身份的当没有，退回按原文读（原文只是一句普通回执）。
+  if (kind === "discussion" && typeof (value as { discussionId?: unknown }).discussionId !== "string") return undefined;
+  // 提醒上的讨论身份是可选的：形状不对就当没带，提醒本身照常认。
+  if (kind === "alert" && "discussionId" in value && typeof (value as { discussionId?: unknown }).discussionId !== "string") return { kind: "alert" };
+  return value as TimelineNotice;
 }

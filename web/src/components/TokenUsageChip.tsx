@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { TokenUsage } from "@ash/shared";
-import { formatTokens, formatTokensExact, hasUsage, outputRate, usageTotal } from "@ash/shared/usage";
+import type { TokenUsage } from "@navi/shared";
+import { formatTokens, formatTokensExact, hasUsage, outputRate, usageTotal } from "@navi/shared/usage";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 

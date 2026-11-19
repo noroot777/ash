@@ -1,25 +1,25 @@
-// 独立 app 首次启动时「替本机 CLI 接好 ash MCP」—— 以及把**接是接了、却指向别的 ash** 的那几家
+// 独立 app 首次启动时「替本机 CLI 接好 navi MCP」—— 以及把**接是接了、却指向别的 navi** 的那几家
 // 如实交回去。
 //
-// 补接本身不另写一份:逐家走的就是注册执行器那一下用的 `ensureAshMcp`(缺了才写、已有一律不覆盖、
+// 补接本身不另写一份:逐家走的就是注册执行器那一下用的 `ensureNaviMcp`(缺了才写、已有一律不覆盖、
 // codex 先问它本人)。这里只多做两件事:
 //  · 只问**这台机器上装了**的那几家(PATH 上找得到它的命令),没装的不碰它的配置目录;
-//  · 补完再读一次最终生效的那条,看它是不是指向**这一份** ash(这份代码里的 MCP 入口 + 这个端口)。
+//  · 补完再读一次最终生效的那条,看它是不是指向**这一份** navi(这份代码里的 MCP 入口 + 这个端口)。
 //    不是的话**不改**:那条可能是用户自己写的、也可能正连着仓库里的开发实例,改不改由用户定 ——
 //    交回去的是「现在指向哪、要指向这里该改成什么」,app 原样摆给用户。
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { AGENT_TYPES } from "@ash/shared";
-import { ensureAshMcp, hostCliConfigDir, hostCliConfigFile } from "../auth/user-cli-mcp.js";
+import { AGENT_TYPES } from "@navi/shared";
+import { ensureNaviMcp, hostCliConfigDir, hostCliConfigFile } from "../auth/user-cli-mcp.js";
 import { resolveBin } from "../executors/bin-resolve.js";
 import { cliSpec } from "../executors/catalog/index.js";
 import { currentListeningPort } from "../listening-port.js";
-import { ashMcpMechanism } from "./catalog.js";
+import { naviMcpMechanism } from "./catalog.js";
 import { builtinEntry } from "./register.js";
-import { ashMcpHostSources, readingFor, resolveAshMcp } from "./sources.js";
-import type { AshMcpEntry, AshMcpLaunch } from "./types.js";
+import { naviMcpHostSources, readingFor, resolveNaviMcp } from "./sources.js";
+import type { NaviMcpEntry, NaviMcpLaunch } from "./types.js";
 
-export interface HostAshMcp {
+export interface HostNaviMcp {
   agentType: string;
   /** 这家的用户级配置文件(给用户看「改哪份」)。 */
   file: string | null;
@@ -27,27 +27,27 @@ export interface HostAshMcp {
   state: "added" | "ours" | "elsewhere" | "failed";
   /** elsewhere:现在那条怎么起。 */
   current?: string;
-  /** elsewhere:要指向这里,command / args / ASH_URL 该是什么。 */
+  /** elsewhere:要指向这里,command / args / NAVI_URL 该是什么。 */
   wanted?: string;
   /** failed:没补成的原因(原样来自补接那一层)。 */
   detail?: string;
 }
 
 /** 逐家补接并归类。幂等:已经接好的机器上只是几次文件读。 */
-export async function setUpHostAshMcp(): Promise<HostAshMcp[]> {
+export async function setUpHostNaviMcp(): Promise<HostNaviMcp[]> {
   const wanted = builtinEntry();
-  const out: HostAshMcp[] = [];
+  const out: HostNaviMcp[] = [];
   for (const agentType of AGENT_TYPES) {
-    const mechanism = ashMcpMechanism(agentType);
+    const mechanism = naviMcpMechanism(agentType);
     if (mechanism?.kind !== "file") continue;
     if (!cliSpec(agentType).bins.some((bin) => resolveBin(bin))) continue;
     const dir = hostCliConfigDir(agentType);
     if (!dir) continue;
     const file = hostCliConfigFile(agentType);
     const reading = readingFor(mechanism);
-    const effective = () => resolveAshMcp(ashMcpHostSources(agentType), reading);
+    const effective = () => resolveNaviMcp(naviMcpHostSources(agentType), reading);
     const before = effective().state;
-    const ensured = await ensureAshMcp(dir, agentType);
+    const ensured = await ensureNaviMcp(dir, agentType);
     if (!ensured.configured) {
       out.push({ agentType, file, state: "failed", detail: ensured.problem ?? "没补成，原因不明" });
       continue;
@@ -58,8 +58,8 @@ export async function setUpHostAshMcp(): Promise<HostAshMcp[]> {
     } else {
       out.push({
         agentType, file, state: "elsewhere",
-        current: launch ? describe(launch.command ?? null, stringArgs(launch.args), launch.ashUrl ?? null) : "认不出它怎么起",
-        ...(wanted ? { wanted: describe(wanted.command, wanted.args, wanted.env.ASH_URL ?? null) } : {}),
+        current: launch ? describe(launch.command ?? null, stringArgs(launch.args), launch.naviUrl ?? null) : "认不出它怎么起",
+        ...(wanted ? { wanted: describe(wanted.command, wanted.args, wanted.env.NAVI_URL ?? null) } : {}),
       });
     }
   }
@@ -67,10 +67,10 @@ export async function setUpHostAshMcp(): Promise<HostAshMcp[]> {
 }
 
 /**
- * 这条登记起的是不是这份 ash 的 MCP、连的是不是这一台：node 真正执行的那个脚本是这里的入口、
- * 命令是同一个 node、ASH_URL 规范化之后是同一个地址。
+ * 这条登记起的是不是这份 navi 的 MCP、连的是不是这一台：node 真正执行的那个脚本是这里的入口、
+ * 命令是同一个 node、NAVI_URL(旧登记里是 ASH_URL、HARNESS_URL)规范化之后是同一个地址。
  */
-export function pointsAt(launch: AshMcpLaunch | null, wanted: AshMcpEntry): boolean {
+export function pointsAt(launch: NaviMcpLaunch | null, wanted: NaviMcpEntry): boolean {
   if (!launch?.command) return false;
   const [entry] = wanted.args;
   const script = scriptOf(stringArgs(launch.args));
@@ -79,11 +79,11 @@ export function pointsAt(launch: AshMcpLaunch | null, wanted: AshMcpEntry): bool
   const commandMatches = wanted.command.includes("/")
     ? samePath(launch.command, wanted.command)
     : launch.command === wanted.command;
-  const target = baseOf(launch.ashUrl ?? DEFAULT_MCP_URL);
-  return commandMatches && target !== null && target === baseOf(wanted.env.ASH_URL ?? localUrl());
+  const target = baseOf(launch.naviUrl ?? DEFAULT_MCP_URL);
+  return commandMatches && target !== null && target === baseOf(wanted.env.NAVI_URL ?? localUrl());
 }
 
-/** MCP 服务自己没拿到 ASH_URL 时连的地址(mcp/src/runtime.ts)。 */
+/** MCP 服务自己没拿到 NAVI_URL(及旧名)时连的地址(mcp/src/runtime.ts)。 */
 const DEFAULT_MCP_URL = "http://localhost:4317";
 const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
 
@@ -128,10 +128,10 @@ function samePath(a: string, b: string): boolean {
 const stringArgs = (args: unknown): string[] =>
   Array.isArray(args) ? args.filter((a): a is string => typeof a === "string") : [];
 
-function describe(command: string | null, args: string[], ashUrl: string | null): string {
+function describe(command: string | null, args: string[], naviUrl: string | null): string {
   return [
     `command = ${JSON.stringify(command ?? "")}`,
     `args = [${args.map((a) => JSON.stringify(a)).join(", ")}]`,
-    `ASH_URL = ${JSON.stringify(ashUrl ?? DEFAULT_MCP_URL)}`,
+    `NAVI_URL = ${JSON.stringify(naviUrl ?? DEFAULT_MCP_URL)}`,
   ].join("\n");
 }

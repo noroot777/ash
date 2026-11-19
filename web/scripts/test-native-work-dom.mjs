@@ -4,7 +4,13 @@ import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { settlePage } from "./wait-until.mjs";
 
-const output = fileURLToPath(new URL("../../output/playwright", import.meta.url));
+const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
+// 要看图再截（SHOT=1）：没有断言读这些图，不必每跑一次往检出的 output/ 里落一批。
+const shot = async (target, name, options = {}) => {
+  if (!process.env.SHOT) return;
+  await mkdir(artifacts, { recursive: true });
+  await target.screenshot({ path: `${artifacts}${name}.png`, ...options });
+};
 const web = await startWebServer();
 let browser;
 try {
@@ -50,13 +56,11 @@ try {
   assert.equal(await side("unknown").innerText(), "状态未知");
   assert.equal(await page.locator(".native-work__doing").count(), 1, "只有在跑的那一行底下多一行它此刻在做什么");
   assert.ok((await page.locator('.native-work__agent[data-status="running"] .native-work__doing').innerText()).trim().length > 0);
-  assert.equal(await page.locator(".native-work__counts, .native-work__intro").count(), 0, "三格统计和那段说明都不要了");
   assert.equal(await page.locator(".native-work__more").count(), 0, "默认都收着");
 
-  await mkdir(output, { recursive: true });
   const inspector = page.locator(".inspector-host");
   const inspectorStyle = await inspector.getAttribute("style");
-  assert.ok((await agentRow("调研 ash").locator(".native-work__title").innerText()).length >= 50, "夹具覆盖超长标题");
+  assert.ok((await agentRow("调研 navi").locator(".native-work__title").innerText()).length >= 50, "夹具覆盖超长标题");
   for (const width of [280, 316, 340, 448, 720]) {
     await inspector.evaluate((el, width) => {
       el.style.setProperty("--inspector-width", `${width}px`);
@@ -66,7 +70,7 @@ try {
       height: item.getBoundingClientRect().height, overflow: item.scrollWidth > item.clientWidth + 1,
     })));
     assert.ok(rows.every((row) => row.height <= 34 && !row.overflow), `每个子智能体一行、不横向溢出：${JSON.stringify({ width, rows })}`);
-    if ([340, 448].includes(width)) await inspector.screenshot({ path: `${output}/native-work-compact-${width}.png` });
+    if ([340, 448].includes(width)) await shot(inspector, `native-work-compact-${width}`);
   }
   await inspector.evaluate((el, style) => {
     if (style === null) el.removeAttribute("style");
@@ -106,7 +110,7 @@ try {
 
   const overflow = await page.locator(".native-work").evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth }));
   assert.ok(overflow.scroll <= overflow.width + 1, `narrow Inspector overflowed: ${JSON.stringify(overflow)}`);
-  await page.screenshot({ path: `${output}/native-work-initial.png`, fullPage: true });
+  await shot(page, `native-work-initial`, { fullPage: true });
 
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   // 执行详情从左侧抽屉推出来（和团队模式点执行者同一套外壳）：只盖住主区那一栏，
@@ -133,10 +137,8 @@ try {
   assert.deepEqual({ width: avatar.width, height: avatar.height, display: avatar.display, border: avatar.border, radius: avatar.radius },
     { width: 30, height: 30, display: "grid", border: "1px", radius: "8px" }, "抽屉抬头保留圆角方块图标");
   assert.notEqual(avatar.background, "rgba(0, 0, 0, 0)");
-  await header.screenshot({ path: `${output}/native-agent-drawer-header.png` });
+  await shot(header, `native-agent-drawer-header`);
   // 模型与时间原本是正文顶上一块要点开的两列表格，现在顺着标题横向摊在抬头里。
-  assert.equal(await conversation.locator(".native-agent__metadata").count(), 0, "正文里不再有单独的「模型与时间」折叠区");
-  assert.equal(await conversation.locator(".native-work__meta").count(), 0, "抬头不复刻列表里那套两列表格");
   // 跨度这里只验形状：运行中的项按真实时钟一直在走，写死「3天 6小时」会随日期自然失效。
   // 具体文案由下面收工后那条（endedAt 固定）钉住。
   assert.match(await headline.innerText(),
@@ -163,7 +165,7 @@ try {
   assert.ok(!parentText.includes("实时进展") && !parentText.includes("子智能体侧栏"));
   const detailSize = await conversation.evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth }));
   assert.ok(detailSize.scroll <= detailSize.width + 1, "execution details fit the drawer");
-  await page.screenshot({ path: `${output}/native-work-live.png`, fullPage: true });
+  await shot(page, `native-work-live`, { fullPage: true });
   // 不关抽屉直接点列表里的下一个：换人不该被关闭动画吞掉。
   await viewRun("用户停止的执行者");
   await page.getByLabel("子智能体执行详情：用户停止的执行者", { exact: true }).waitFor();
@@ -214,7 +216,7 @@ try {
   await page.getByRole("button", { name: "切换空状态" }).click();
   await page.getByText("这个任务没有派过子智能体。", { exact: true }).waitFor();
   assert.equal(await page.locator(".native-work__agent").count(), 0);
-  await page.screenshot({ path: `${output}/native-work-empty.png`, fullPage: true });
+  await shot(page, `native-work-empty`, { fullPage: true });
   // 只有待办、没有子智能体：那一行默认铺开，不再说「没有派过」。
   await page.getByRole("button", { name: "切换计划快照", exact: true }).click();
   await page.locator(".native-work__todo-list").waitFor();
@@ -224,7 +226,7 @@ try {
   assert.deepEqual(await page.locator(".native-work__todo-list li").evaluateAll((items) => items.map((item) => item.dataset.status)),
     ["completed", "running", "pending", "pending"]);
   assert.equal(await page.locator('.native-work__todo-list li[data-status="running"] .insp-live').innerText(), "进行中");
-  await page.screenshot({ path: `${output}/native-work-plan-timing.png`, fullPage: true });
+  await shot(page, `native-work-plan-timing`, { fullPage: true });
   console.log("native work Inspector DOM regression passed");
 } finally {
   await browser?.close();

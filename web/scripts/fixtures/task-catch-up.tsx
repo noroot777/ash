@@ -6,9 +6,9 @@ import { useTasks } from "../../src/lib/useTasks.ts";
 // 的 vite 中间件,不是 page.route 伪造的一次性响应),真 GET /api/tasks,真 useTasks。
 // 屏幕上只摆追平结果本身 —— 哪些任务在列、谁在跑哨兵、连没连上。
 function Board() {
-  const { tasks, connected } = useTasks("p1");
+  const { tasks, connected, snapshotReady, error } = useTasks("p1");
   return (
-    <main data-connected={String(connected)} style={{ padding: 24, font: "14px ui-sans-serif" }}>
+    <main data-connected={String(connected)} data-ready={String(snapshotReady)} data-error={String(!!error)} style={{ padding: 24, font: "14px ui-sans-serif" }}>
       <ul data-rows={String(tasks.length)}>
         {tasks.map((task) => (
           <li key={task.id} data-task={task.id} data-monitor={String(task.monitorRunning)}>

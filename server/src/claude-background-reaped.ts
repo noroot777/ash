@@ -18,9 +18,9 @@
 //           summary "Background agent \"…\" didn't finish before the previous session ended"
 // ```
 //
-// 内置 Monitor 有 PreToolUse hook 改道成 ash 哨兵兜底，这几种没有（它们不是「等」的工具，
+// 内置 Monitor 有 PreToolUse hook 改道成 navi 哨兵兜底，这几种没有（它们不是「等」的工具，
 // 拦不得）。2026-11-06 起单飞回合结尾会等后台子代理 / 工作流跑完再收台（`waiting()`，见
-// executors/claude.ts 的 `singleRunFromResident`），它们只在等超时、被停止、ash 重启接管这类
+// executors/claude.ts 的 `singleRunFromResident`），它们只在等超时、被停止、navi 重启接管这类
 // 场合才会被收走；后台 Bash 照旧不等，事前在每回合提醒里说一句（run-prompts.ts 的
 // `BACKGROUND_WAIT_WARNING`）。事后一律在这里如实记账。
 //
@@ -72,14 +72,14 @@
 //
 // ── 观测不到的档位（降级）──────────────────────────────────────────────────
 //
-// - **接管回来的流**（ash 重启后 detached 续读）从已消费位置之后读起，那之前的
+// - **接管回来的流**（navi 重启后 detached 续读）从已消费位置之后读起，那之前的
 //   `task_started` 不会重放 → 那些任务这里看不见，不记账（宁可少说，不编）。
 // - **记账是尽力而为**：回合边界 / 流结束时写时间线，失败重试一次，仍失败只留日志 —— 事实只在
 //   这个进程的内存里，没有恢复账本（内置 Monitor 那套有，是因为它的投影本来就落库）。
 // - **其它执行器**（codex 等）没有这套结构化的后台任务事件，事后这一笔不做；事前那句警告
 //   也只发 claude（见 run-prompts.ts 的 `backgroundWaitFor`）。
 import { desc, eq } from "drizzle-orm";
-import { claudeMonitorStatus } from "@ash/shared/monitor-claude";
+import { claudeMonitorStatus } from "@navi/shared/monitor-claude";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { sessions } from "./db/schema.js";
@@ -179,7 +179,7 @@ export class ClaudeBackgroundTrace {
   /** 时间线写入串成一条链：回合边界那次和流结束那次不能乱序，`finish` 要等它写完。 */
   private writes: Promise<void> = Promise.resolve();
   private cliSessionId: string;
-  /** 重放已消费的那段输出时只重建账本：那几笔该说的上一个 ash 进程说过了（见 executors/claude-recovery.ts）。 */
+  /** 重放已消费的那段输出时只重建账本：那几笔该说的上一个 navi 进程说过了（见 executors/claude-recovery.ts）。 */
   quiet = false;
 
   constructor(cliSessionId?: string) {
@@ -418,11 +418,11 @@ export class ClaudeBackgroundTrace {
         if (!home || isTaskRevoked(home.taskId)) return;
         if (await appendTaskTimeline(home.taskId, receiptLine(notice), { sessionId: home.id })) return;
       } catch (e) {
-        if (attempt === 2) console.warn(`[ash] 后台任务收尾记账失败（session=${this.cliSessionId}）:`, e);
+        if (attempt === 2) console.warn(`[navi] 后台任务收尾记账失败（session=${this.cliSessionId}）:`, e);
       }
       if (attempt === 1) await new Promise((r) => setTimeout(r, 200));
     }
-    console.warn(`[ash] 后台任务收尾记账没写进时间线（session=${this.cliSessionId}），这条说明丢了`);
+    console.warn(`[navi] 后台任务收尾记账没写进时间线（session=${this.cliSessionId}），这条说明丢了`);
   }
 }
 
@@ -473,5 +473,5 @@ export function backgroundReapedNotice(tally: Partial<Record<BackgroundKind, Bac
   return `这次智能体进程里起了 ${parts.join("；")}。`
     + (reaped ? "还在跑的那些已随智能体进程一并收走——" : "")
     + `它们的完成通知只注回智能体自己的会话，从来不会唤醒任务。`
-    + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
+    + `要跨回合等一件事，得用 Navi 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
 }

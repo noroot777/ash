@@ -3,7 +3,6 @@ import { advanceHiddenReveal, buildTaskTree, groupTaskModeProjects, groupTasksBy
 
 function task(id, mode, {
   pinnedAt = null,
-  starredAt = null,
   status = "done",
   stage = null,
   question = null,
@@ -14,7 +13,6 @@ function task(id, mode, {
     id,
     mode,
     pinnedAt,
-    starredAt,
     status,
     stage,
     question,
@@ -132,34 +130,35 @@ const allOld = previewTasksByAge([
 assert.deepEqual(allOld.visible.map((row) => row.id), ["latest"]);
 assert.deepEqual(allOld.hidden.map((row) => row.id), ["older", "oldest"]);
 
-// —— keepVisible 命中的行永不因为旧被折叠（星标、等你验收的），且不打乱原有顺序。
-const keepVisible = (row) => row.starredAt != null || row.id === "unaccepted-old";
+// —— keepVisible 命中的行永不因为旧被折叠（置顶、等你验收的），且不打乱原有顺序。
+const keepVisible = (row) => row.pinnedAt != null || row.id === "unaccepted-old";
 const withKeeps = previewTasksByAge([
   task("recent", "single", { updatedAt: "2026-08-11T11:00:00.000Z" }),
-  task("starred-old", "single", { starredAt: 7, updatedAt: "2026-08-01T00:00:00.000Z" }),
+  task("pinned-old", "single", { pinnedAt: 7, updatedAt: "2026-08-01T00:00:00.000Z" }),
   task("unaccepted-old", "single", { updatedAt: "2026-08-02T00:00:00.000Z" }),
   task("plain-old", "single", { updatedAt: "2026-08-03T00:00:00.000Z" }),
 ], now, keepVisible);
-assert.deepEqual(withKeeps.visible.map((row) => row.id), ["recent", "starred-old", "unaccepted-old"]);
+assert.deepEqual(withKeeps.visible.map((row) => row.id), ["recent", "pinned-old", "unaccepted-old"]);
 assert.deepEqual(withKeeps.hidden.map((row) => row.id), ["plain-old"]);
 
 // 全是旧行时，被 keepVisible 留下的就够了，不该再额外顶出一条「最新的」。
 const onlyKeeps = previewTasksByAge([
-  task("starred-old", "single", { starredAt: 7, updatedAt: "2026-08-01T00:00:00.000Z" }),
+  task("pinned-old", "single", { pinnedAt: 7, updatedAt: "2026-08-01T00:00:00.000Z" }),
   task("plain-old", "single", { updatedAt: "2026-08-03T00:00:00.000Z" }),
 ], now, keepVisible);
-assert.deepEqual(onlyKeeps.visible.map((row) => row.id), ["starred-old"]);
+assert.deepEqual(onlyKeeps.visible.map((row) => row.id), ["pinned-old"]);
 assert.deepEqual(onlyKeeps.hidden.map((row) => row.id), ["plain-old"]);
 
 // —— 豁免名单的判据本体（TaskTree 的 keepVisible 就是它，别再各写一份）。
 // 摔了的那两条尤其要紧：failed 的行首点走 "error"，而 error 只在未读时才亮，看过一眼
 // 就熄。要是跟着点走，失败的任务只在头 24 小时露个面，之后缩进「显示更多」——
 // 那等于任务模式把它们收进来了、列表里却找不到。
-assert.ok(keepVisibleInPreview(task("x", "single", { starredAt: 7 }), null), "星标");
 assert.ok(keepVisibleInPreview(task("x", "single", { pinnedAt: 7 }), null), "置顶");
 assert.ok(keepVisibleInPreview(task("x", "single"), "unaccepted"), "没盖的章");
 assert.ok(keepVisibleInPreview({ ...task("x", "single"), status: "failed" }, null), "跑挂了，且不靠未读点");
 assert.ok(keepVisibleInPreview({ ...task("x", "single"), stage: "verify_failed" }, null), "验证没过");
+assert.ok(keepVisibleInPreview({ ...task("x", "single"), status: "done", disputeOpen: true }, "attention"), "等你裁定：最该看见的时候不能被年龄闸收进「展开」");
+assert.ok(!keepVisibleInPreview({ ...task("x", "single"), status: "done", stage: "accepted", disputeOpen: true }, null), "验收过的裁不了，不再赖着");
 assert.ok(!keepVisibleInPreview(task("x", "single"), null), "普通的旧行照旧可以被折叠");
 assert.ok(!keepVisibleInPreview({ ...task("x", "single"), status: "done" }, "success"), "干完并盖过章的不赖着不走");
 

@@ -16,7 +16,7 @@
 //
 // 什么时候作废:落终态或 backlog(用户手改状态、停止、归档…)、fresh 起跑(`runTask` 从来不是续聊)。
 // 规则住在 status.ts 的那一笔写入里(`heldFollowUpPatch`),不靠每个入口记得清。
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 
 const TERMINAL = ["done", "failed", "canceled"];
 

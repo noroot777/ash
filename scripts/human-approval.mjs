@@ -3,12 +3,16 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin, stderr, stdout } from "node:process";
 
+// 这个脚本要能单独拷到离机设备上跑，所以不 import 仓库里的别的文件。用途串是冻结的协议值
+// （shared/src/legacy-names.ts 的 FROZEN_HUMAN_APPROVAL_PURPOSE，server/scripts/test-rename-compat.ts 钉住两边一致）。
+const PURPOSE = "ash-human-approval-v1";
+
 const [command, keyPath, requestPath] = process.argv.slice(2);
 try {
   if (command === "generate" && keyPath && !requestPath) {
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     writeFileSync(keyPath, privateKey.export({ type: "pkcs8", format: "pem" }), { flag: "wx", mode: 0o600 });
-    stdout.write(`ASH_HUMAN_APPROVAL_PUBLIC_KEY=${publicKey.export({ type: "spki", format: "der" }).toString("base64")}\n`);
+    stdout.write(`NAVI_HUMAN_APPROVAL_PUBLIC_KEY=${publicKey.export({ type: "spki", format: "der" }).toString("base64")}\n`);
   } else if (command === "sign" && keyPath && requestPath) {
     const key = createPrivateKey(readFileSync(keyPath));
     if (key.asymmetricKeyType !== "ed25519") throw new Error("授权私钥不是 Ed25519");
@@ -16,7 +20,7 @@ try {
     if (typeof request.payload !== "string") throw new Error("申请字段不合法：缺少 payload");
     const payload = JSON.parse(request.payload);
     const fingerprint = createHash("sha256").update(createPublicKey(key).export({ type: "spki", format: "der" })).digest("hex");
-    if (payload.purpose !== "ash-human-approval-v1" || payload.action !== "reclaim-turn"
+    if (payload.purpose !== PURPOSE || payload.action !== "reclaim-turn"
       || payload.challengeId !== request.challengeId
       || typeof payload.taskId !== "string" || !payload.taskId || !Number.isSafeInteger(payload.turnSeq)
       || !Number.isFinite(payload.claimedAt) || !Number.isFinite(payload.issuedAt) || !Number.isFinite(payload.expiresAt)

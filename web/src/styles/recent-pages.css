@@ -80,10 +80,7 @@
   place-items: center;
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 14px;
-  /* 和 app 图标同一张图：米白底上的点阵标。底是定死的浅色，所以墨色和亮的那一格也定死，不跟主题走。 */
-  background: #eceae4;
-  color: #111113;
-  --accent: #5e6ad2;
+  /* 底色和里面标的配色来自 .navi-tile（和应用图标同一块）。 */
   box-shadow: 0 12px 30px rgb(0 0 0 / 22%);
 }
 
@@ -170,7 +167,7 @@
   color: var(--muted);
   font: var(--w-medium) var(--t-xs)/1 var(--font-mono);
   letter-spacing: .15em;
-  content: "ASH ACCESS";
+  content: "NAVI ACCESS";
 }
 
 .auth-shell .auth-card.auth-card--service > h1::before {

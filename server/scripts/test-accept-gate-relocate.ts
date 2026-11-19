@@ -2,17 +2,20 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
-  closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, symlinkSync,
+  closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, symlinkSync,
   writeSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 声明解析与链接搬迁的反例。全部来自 2026-10-26 的独立审查实测,每一条都曾经「快照自证通过、实际
 // 跑的是错的东西」——所以这里钉的不是「有没有报错」,而是**执行等价性**:同一条链在工作区和在快照里
 // 必须落在对应的那一份上,可达的仍可达、不可达的仍不可达、第三方仍是那个第三方。
-const root = mkdtempSync(join(tmpdir(), "ash-gate-relocate-"));
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-gate-relocate-"));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.NAVI_DB = join(root, "navi-test.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
 const linkDir = (target: string, path: string) => (process.platform === "win32"
   ? symlinkSync(resolve(dirname(path), target), path, "junction")
@@ -222,4 +225,4 @@ try {
   }
 
   console.log("accept-gate-relocate: declaration three-state, nested globs, package identity, relative external links, native trailing-separator semantics, self-referential links and block-sharing clones passed");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

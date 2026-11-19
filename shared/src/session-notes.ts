@@ -18,13 +18,13 @@
 /**
  * CLI 说「这条会话我不认识」之后写给用户的那句话。
  *
- * 得说清三件事，少一件用户就会以为是随机失败：id 为什么会失效、ash 替他做了什么、
+ * 得说清三件事，少一件用户就会以为是随机失败：id 为什么会失效、navi 替他做了什么、
  * 下一次运行跟这一次有什么不同（上下文不会带过来——这是他有权提前知道的代价）。
  */
 export const SESSION_LOST_NOTE =
   "上一轮记下的 CLI 会话 id 在 CLI 那边已经不存在了（多半是第一次起跑就失败、"
   + "会话压根没建起来，也可能是 CLI 的会话记录被清过或换了机器/目录）。"
-  + "ash 已经把这个失效的 id 清掉：再点一次运行会开一条全新会话，"
+  + "Navi 已经把这个失效的 id 清掉：再点一次运行会开一条全新会话，"
   + "之前的上下文不会带过来，任务正文和历史记录都还在。";
 
 /** Codex 报出恢复 thread 已不可续（poisoned）之后写给用户的那句话。 */
@@ -32,7 +32,7 @@ export const SESSION_POISONED_NOTE =
   "Codex 已在本轮 stderr 中报告这条 thread 的回合关联、world-state 或 rollout 落盘出了问题；"
   + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话；"
   + "会话轮换不改变本回合真实的退出原因。"
-  + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条全新会话，"
+  + "Navi 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条全新会话，"
   + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
 
 /** 中途已经播过完整轮换说明后，收尾那两句只补一个指路，不重复整段。 */
@@ -51,12 +51,12 @@ export const NO_RESUMABLE_SESSION_NOTE =
  * 该红就红。所以它刻意不进 `NEUTRAL_SESSION_NOTES`，也不进 `isSessionRotationNote`。
  */
 export const SESSION_DROP_PERSISTENCE_FAILED_NOTE =
-  "ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，"
+  "Navi 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，"
   + "下一次重新开台时可能再次尝试旧会话。";
 
 /**
  * `executors/diagnostics.ts` 里 poisoned 诊断的固定前缀 —— 跟上面两条说的是同一件事的
- * 另一半（诊断说「为什么判它坏了」，说明说「ash 替你做了什么」），两条都要中性。
+ * 另一半（诊断说「为什么判它坏了」，说明说「navi 替你做了什么」），两条都要中性。
  *
  * 单拎出来当判据，是因为诊断正文由 stderr 指纹拼出来、以后还会加新指纹：哪天有一条
  * 写了「异常」，这条中性旁注就会无声地变红。认前缀就不吃这个亏。
@@ -97,8 +97,13 @@ const LEGACY_SESSION_POISONED_STARRED =
 /** 星号已经去掉、但「落盘异常」还在的那一版（`639b5775` 到本次归并之间写下的）。 */
 const LEGACY_SESSION_POISONED_PLAIN = LEGACY_SESSION_POISONED_STARRED.split("**").join("");
 
+/** 改名 Navi 之前写下的同一句：只有产品名不同。 */
+const preRename = (note: string) => note.split("Navi 已").join("ash 已");
+
 const LEGACY_REWRITES: ReadonlyArray<readonly [string, string]> = [
   [LEGACY_SESSION_LOST_NOTE, SESSION_LOST_NOTE],
+  [preRename(SESSION_LOST_NOTE), SESSION_LOST_NOTE],
+  [preRename(SESSION_POISONED_NOTE), SESSION_POISONED_NOTE],
   // 长的排在前面:短的那条是长的去掉星号,先换长的才不会把星号版切成两半。
   [LEGACY_SESSION_POISONED_STARRED, SESSION_POISONED_NOTE],
   [LEGACY_SESSION_POISONED_PLAIN, SESSION_POISONED_NOTE],
@@ -131,7 +136,7 @@ export function stripSessionNotes(text: string): string {
 }
 
 /**
- * 这条旁注在讲「ash 已经替你换了一条会话」吗。
+ * 这条旁注在讲「navi 已经替你换了一条会话」吗。
  *
  * 用 `includes` 而不是相等：服务端会在前面接一句上下文（「更正上面那条…」「调度台进程
  * 意外退出(exit 1)。」），说的还是同一件事。先归一，历史文案才认得出来。

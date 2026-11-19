@@ -14,9 +14,9 @@ import {
 } from "./review-sweep-rules.js";
 import { assertCarriesSummaryReminder } from "./review-summary-rules.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-free-workflow-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-free-workflow-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -66,7 +66,7 @@ try {
   mkdirSync(repo, { recursive: true });
   git(repo, "init", "-b", "main");
   git(repo, "config", "user.email", "test@example.com");
-  git(repo, "config", "user.name", "Ash Test");
+  git(repo, "config", "user.name", "Navi Test");
   writeFileSync(join(repo, "base.txt"), "base\n");
   git(repo, "add", "base.txt");
   git(repo, "commit", "-m", "base");
@@ -585,7 +585,7 @@ try {
   assert.equal(worktreeAccepted.accepted, true, "自由任务的独立 worktree 应复用统一安全合并与清理");
   assert.notEqual(git(repo, "rev-parse", "main"), mainBeforeAcceptance, "统一验收应推进目标分支");
   assert.equal(existsSync(worktree.path), false, "统一验收应清理自由任务 worktree");
-  assert.equal(git(repo, "branch", "--list", "ash/free-worktree-task"), "", "统一验收应删除已合并任务分支");
+  assert.equal(git(repo, "branch", "--list", worktree.branch!), "", "统一验收应删除已合并任务分支");
   const acceptedRow = (await db.select().from(tasks).where(eq(tasks.id, "free-worktree-task"))).at(0);
   assert.equal(acceptedRow?.acceptedTargetBranch, "main", "验收应结构化记录目标分支");
   assert.equal(acceptedRow?.acceptedBaseCommit, mainBeforeAcceptance, "验收应记录合并前目标 commit");

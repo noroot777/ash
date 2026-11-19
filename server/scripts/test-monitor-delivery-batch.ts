@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { eq } from "drizzle-orm";
-import { TEAM_DEFAULTS } from "@ash/shared";
-import { appendMonitorWake } from "@ash/shared/monitor-wake";
+import { TEAM_DEFAULTS } from "@navi/shared";
+import { appendMonitorWake } from "@navi/shared/monitor-wake";
 import {
   db, dbClient, makeTask, monitorEvents, monitors, now, pending,
   pendingOf, reviewInFlight, root, runs, scheduledMessages, schema, sessions, tasks,
@@ -24,9 +24,10 @@ import { tick } from "../src/schedules.js";
 type Row = typeof scheduledMessages.$inferSelect;
 const log = join(root, "batch-input.log");
 const originalPath = process.env.PATH;
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${originalPath ?? ""}`;
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_TEST_LEAD_LOG = log;
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_LEAD_LOG = log;
 let sequence = 0;
 const running: string[] = [];
 const off = bus.subscribe((event) => {

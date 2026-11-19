@@ -1,4 +1,4 @@
-// 系统续跑那条记录（「〔系统〕继续（从中断处）」）带着缘由：是谁让它接着跑的（@ash/shared/system-resume）。
+// 系统续跑那条记录（「〔系统〕继续（从中断处）」）带着缘由：是谁让它接着跑的（@navi/shared/system-resume）。
 // 钉住三件事：每种缘由各起一次续跑，落盘的记录和直播发出的事件都带着对应的缘由（原文不变）；旁路回合起的
 // 续跑另标 side；读老记录（没有缘由字段、缘由形状不对）不出错，按老记录读。
 // 跑:npm -w server run test:system-resume
@@ -7,19 +7,19 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { RESUME_REASONS, type SystemResume } from "@ash/shared/system-resume";
-import { LEGACY_SYS_MARKER } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import { RESUME_REASONS, type SystemResume } from "@navi/shared/system-resume";
+import { LEGACY_SYS_MARKER } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import type { RunHandle, RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-system-resume-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const root = mkdtempSync(join(tmpdir(), "navi-system-resume-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
-process.env.ASH_TURN_INPUT_ACK_MS = "200";
-delete process.env.ASH_ALLOW_REAL_AGENT;
+process.env.NAVI_TURN_INPUT_ACK_MS = "200";
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks } = await import("../src/db/schema.js");
@@ -54,7 +54,7 @@ const unsubscribe = bus.subscribe((event) => {
 });
 
 function sessionText(taskId: string): string {
-  const dir = join(process.env.ASH_RUNS_DIR!, taskId);
+  const dir = join(process.env.NAVI_RUNS_DIR!, taskId);
   try {
     return readdirSync(dir).filter((name) => name.endsWith(".md")).map((name) => readFileSync(join(dir, name), "utf8")).join("\n");
   } catch { return ""; }

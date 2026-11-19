@@ -2,7 +2,7 @@
 // 「需要你处理」那一档是同一份（lib/taskAttention.ts 的 spreadBucket），这里只多给一句为什么。
 // 一条都没有就整块不画。
 import { useMemo } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { hasFailed, indexWorkers, spreadBucket, workersFrom } from "../lib/taskAttention.ts";
 import type { TaskStatusIndicator } from "../lib/useTaskReadState.ts";

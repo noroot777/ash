@@ -9,7 +9,7 @@ import "../../src/styles/global.css";
 
 const diff: TaskDiffResult = {
   available: true,
-  sourceBranch: "ash/zoom",
+  sourceBranch: "navi/zoom",
   targetBranch: "main",
   mergeBase: "abcdef0123456789",
   files: [

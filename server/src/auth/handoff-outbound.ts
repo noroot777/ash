@@ -13,7 +13,8 @@ import { PEER_USER_KEY_HEADER } from "./handoff-peer-user.js";
 import { peerCredentialForRequest } from "./handoff-scope.js";
 import { sameFingerprint } from "../handoff-identity.js";
 import { HandoffError } from "../handoff-types.js";
-import { HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
+import { HANDOFF_PEER_KEY_REQUIRED } from "@navi/shared/handoff";
+import { withLegacyHeaderNames } from "@navi/shared/http-headers";
 
 const store = new AsyncLocalStorage<{ ownerUserId: string | null }>();
 
@@ -38,7 +39,7 @@ export async function peerUserKeyHeader(url: string, expectedFp?: string | null)
   if (!credential) return {};
   if (!credential.peerFp) {
     const error = new HandoffError(
-      "这把账号 key 尚未绑定机器身份，未发送。请确认对端运行支持签名核对的 ash，再重新填写并保存 key。", 401,
+      "这把账号 key 尚未绑定机器身份，未发送。请确认对端运行支持签名核对的 Navi，再重新填写并保存 key。", 401,
     );
     error.code = HANDOFF_PEER_KEY_REQUIRED;
     throw error;
@@ -51,5 +52,6 @@ export async function peerUserKeyHeader(url: string, expectedFp?: string | null)
   if (expected.some((fingerprint) => !sameFingerprint(actual, fingerprint))) {
     throw new HandoffError("目标机身份与任务、目标机设置或账号 key 的绑定不一致，账号 key 和请求内容未发送。请先核对来源机器地址。", 409);
   }
-  return { [PEER_USER_KEY_HEADER]: credential.peerKey };
+  // 对端可能还是改名之前的版本、只认旧名头:两代各发一份。
+  return withLegacyHeaderNames({ [PEER_USER_KEY_HEADER]: credential.peerKey });
 }

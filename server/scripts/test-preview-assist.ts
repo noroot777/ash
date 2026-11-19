@@ -7,8 +7,8 @@
 // 试跑那几支是**真的 spawn 进程**（node / sh），但不碰任何 CLI 智能体，不烧额度。
 //
 // 跑法：npm -w server run test:preview-assist
-import { parseAssistScript } from "@ash/shared/preview-assist";
-import { PREVIEW_MODE, previewLaunchOf } from "@ash/shared/preview";
+import { parseAssistScript } from "@navi/shared/preview-assist";
+import { PREVIEW_MODE, previewLaunchOf } from "@navi/shared/preview";
 import { cancelPreviewAssist, previewAssistState, reservePreviewAssistJob } from "../src/preview-assist-jobs.js";
 import { isPidAlive } from "../src/platform.js";
 import { canConnect } from "../src/preview-probe.js";
@@ -83,9 +83,9 @@ check("整份配置对象照旧认", previewLaunchOf({ mode: "script", launch: "
 check("不认识的值才回落 frontend", [previewLaunchOf("nope"), previewLaunchOf(null), previewLaunchOf({})], ["frontend", "frontend", "frontend"]);
 for (const mode of PREVIEW_MODE) {
   const seen = await trialPreviewScript({
-    cwd: process.cwd(), script: "echo MODE=$ASH_PREVIEW_MODE; exit 9", mode, timeoutMs: 20_000,
+    cwd: process.cwd(), script: "echo MODE=$NAVI_PREVIEW_MODE; exit 9", mode, timeoutMs: 20_000,
   });
-  check(`试跑里的 ASH_PREVIEW_MODE 是 ${mode}`, seen.log.includes(`MODE=${mode}\n`), true);
+  check(`试跑里的 NAVI_PREVIEW_MODE 是 ${mode}`, seen.log.includes(`MODE=${mode}\n`), true);
 }
 
 // ── 同一项目只占一格 ────────────────────────────────────────────────────────
@@ -110,8 +110,12 @@ const ok = await trialPreviewScript({ cwd: process.cwd(), script: listen, mode: 
 check("听住借来的端口就算起来了", ok.ok, true);
 check("——并且报出探到的地址", typeof ok.url === "string" && ok.url.includes(String(ok.port)), true);
 // 杀不干净的话这台机器上会留一个谁也管不到的 dev server，界面上连痕迹都没有。
-await new Promise((done) => setTimeout(done, 500));
-check("试跑结束后进程被杀干净，端口空出来", await canConnect(ok.port ?? 0), false);
+let stillListening = true;
+for (const until = Date.now() + 10_000; stillListening && Date.now() < until;) {
+  stillListening = await canConnect(ok.port ?? 0);
+  if (stillListening) await new Promise((done) => setTimeout(done, 50));
+}
+check("试跑结束后进程被杀干净，端口空出来", stillListening, false);
 
 const gone = await trialPreviewScript({ cwd: process.cwd(), script: "echo 我不干了 >&2; exit 3", mode: "command", timeoutMs: 30_000 });
 check("进程自己退了就是没起来", gone.ok, false);

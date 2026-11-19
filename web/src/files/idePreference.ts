@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-const KEY = "ash.open-in-ide";
+const KEY = "navi.open-in-ide";
 
 /**
  * 「上次选的那个 IDE」。

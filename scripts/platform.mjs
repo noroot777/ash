@@ -7,10 +7,11 @@
 // 拿不到不该拖垮调用方。
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { request } from "node:http";
+import { Agent, request } from "node:http";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
+import { RESTART_KILLED_MARK, windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
+import { FROZEN_WINDOWS_AGENT_WRAP_SUFFIX } from "./legacy-names.mjs";
 
 export const IS_WINDOWS = process.platform === "win32";
 
@@ -35,7 +36,7 @@ export function candidates(cmd) {
   // **不含裸名**：跟 `bin-resolve.ts` 的 `candidatesIn` 一致。npm 全局目录里同名的
   // 无后缀文件是给 POSIX shell 用的脚本，Windows 的 CreateProcess 起不来它 —— 把它
   // 排在前面，`which` 会返回那一个、`run` 据此 spawn，拿到 ENOENT（第 1 轮审查 N2，
-  // Windows 真机实测：which 给 `ash-review-cli`、resolveBin 给 `ash-review-cli.cmd`）。
+  // Windows 真机实测：which 给 `navi-review-cli`、resolveBin 给 `navi-review-cli.cmd`）。
   const exts = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   return exts.map((ext) => cmd + ext.toLowerCase());
 }
@@ -77,9 +78,9 @@ export function extraPaths(env = process.env, home = homedir()) {
 /**
  * `command -v` 的跨平台版本：找不到返回 null。
  *
- * **扫 PATH 之后接着扫 `extraPaths()`** —— 跟 ash 自己派活时用的 `resolveBin` 同一套
+ * **扫 PATH 之后接着扫 `extraPaths()`** —— 跟 navi 自己派活时用的 `resolveBin` 同一套
  * 候选目录。少了这一截,装机脚本会把「装了、只是不在这个 shell 的 PATH 里」判成
- * 「没装」:`setup.mjs` 据此跳过 MCP 注册,而 ash 照样派得出任务,结果是每个任务都
+ * 「没装」:`setup.mjs` 据此跳过 MCP 注册,而 navi 照样派得出任务,结果是每个任务都
  * 交不了卷(见 bin-resolve.ts 的 extraPaths 头部)。
  */
 export function which(cmd) {
@@ -142,7 +143,7 @@ function uniquePids(text) {
  * 谁在监听这个端口。查不到（命令不可用 / 竞态）返回空数组。
  *
  * POSIX 上要依次退好几条：**`lsof` 是 macOS 自带、Linux 精简镜像普遍不装**。
- * 2026-08-21 踩到的实例是一台 Rocky 容器里的 ash —— `lsof` 不在，这里返回空，
+ * 2026-08-21 踩到的实例是一台 Rocky 容器里的 navi —— `lsof` 不在，这里返回空，
  * restart.mjs 于是「没找到旧进程」直接放过，新进程撞单实例锁退出，而 `/api/health`
  * 由**老进程**照常回 200，脚本打印「已就绪」。用户完全有理由以为重启成功了，实际
  * 跑了三个多小时的旧代码。所以 lsof → ss(iproute2) → fuser(psmisc) 挨个试。
@@ -207,14 +208,14 @@ $rows=@(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {
 }
 
 /**
- * 「这是一个活得过 ash 的 agent 壳」的记号。跟
+ * 「这是一个活得过 navi 的 agent 壳」的记号。跟
  * `server/src/executors/detached-win-wrap.ts` 的 `WINDOWS_WRAP_SUFFIX` **必须一字不差**
  * —— 那边按这个后缀生成壳脚本的文件名,这边按它在进程表的命令行里把壳认出来。
  *
  * 两份不能合并(这些脚本要在 build 之前就能跑,见本文件顶部),所以拿回归把它们钉在
  * 一起:`server/scripts/test-win-launch.ts` 最后一节会比对这两个常量。
  */
-export const WINDOWS_AGENT_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
+export const WINDOWS_AGENT_WRAP_SUFFIX = FROZEN_WINDOWS_AGENT_WRAP_SUFFIX;
 
 /**
  * 进程表里哪些行是 agent 壳。**按命令行里的记号认,不靠外部名单** —— 这是
@@ -250,7 +251,7 @@ export function agentWrapPids(rows) {
  * 跟「名单」不同,它和 doomed 集合读的是同一份快照,中间没有时间差。
  *
  * 快照之后才出生的进程压根不在 doomed 里,也就一刀都挨不着:它要么是个新壳(该活),要么
- * 是 ash 非 detached 起的子进程 —— 后者会被 libuv 那个 `KILL_ON_JOB_CLOSE` 的全局 Job 在
+ * 是 navi 非 detached 起的子进程 —— 后者会被 libuv 那个 `KILL_ON_JOB_CLOSE` 的全局 Job 在
  * server 一死时连带收掉(机制见 detached-win.ts 顶部),不需要这里补刀。
  *
  */
@@ -279,7 +280,7 @@ export function killServerProcesses(pids, protect = [], { force = false } = {}) 
   const doomed = plan.targets.filter((row) => row.pid !== process.pid);
   if (!doomed.length) return "gone";
   const result = powerShell(windowsTerminateScript(doomed));
-  if (!result.includes("ASH_RESTART_KILLED")) throw new Error("Windows 进程实例核验或终止失败");
+  if (!result.includes(RESTART_KILLED_MARK)) throw new Error("Windows 进程实例核验或终止失败");
   return "selective";
 }
 
@@ -334,9 +335,14 @@ export function isPidAlive(pid) {
  * 走 `node:http` 而不是 fetch 是**故意**的：本机控制面请求绝不能跟着 HTTP_PROXY /
  * ALL_PROXY 绕去代理。这个环境常驻代理却没设 NO_PROXY，服务重启的几秒空窗里代理
  * 会记住一次上游失败，于是 server 已经同秒监听、这里仍连续拿到失败并误报「没起来」。
- * `node:http` 不读任何代理环境变量，这条路是确定的（fetch 在 Node 24 起可以被
- * `NODE_USE_ENV_PROXY` 打开，不确定）。
+ *
+ * 光用 `node:http` 不够：Node 24 起 `NODE_USE_ENV_PROXY=1` 会把**全局 agent** 也换成读代理
+ * 变量的那个，`http.request` 照样被送去代理（本机环境就开着它）。于是请求一个没人监听的端口
+ * 拿到的是代理那头的超时 / 重置，而不是 ECONNREFUSED ——「端口安静」这条判据就永远不成立。
+ * 所以每次请求都显式带一个不认代理的 agent（DIRECT_AGENT），确定性不再取决于环境变量。
  */
+const DIRECT_AGENT = new Agent();
+
 export function localJson(port, path, timeoutMs = 2000, headers = undefined) {
   return localGet(port, path, timeoutMs, headers).then((r) => r.json);
 }
@@ -351,7 +357,7 @@ export function localJson(port, path, timeoutMs = 2000, headers = undefined) {
  *
  * 第三档也得分开:**「端口上没人在听」和「有人在听但没按时答」不是一回事**
  * (第 1 轮审查 F1)。两者的 `status` 都是 null,可前者意味着「本来就没有任务会被打断」,
- * 后者只意味着「问不出来」—— 把后者当前者处理,安全闸就会在 ash 响应慢的时候静默失效。
+ * 后者只意味着「问不出来」—— 把后者当前者处理,安全闸就会在 navi 响应慢的时候静默失效。
  * 所以再带一个 `error`:`null` = 答了,`"timeout"` = 超时,其余是 errno(`ECONNREFUSED`
  * 这类),由 `isNotListening` 判。
  */
@@ -361,7 +367,7 @@ export function localGet(port, path, timeoutMs = 2000, headers = undefined) {
     const done = (value) => { if (!settled) { settled = true; resolve(value); } };
     let timedOut = false;
     const req = request(
-      { host: "127.0.0.1", port, path, timeout: timeoutMs, ...(headers ? { headers } : {}) },
+      { host: "127.0.0.1", port, path, timeout: timeoutMs, agent: DIRECT_AGENT, ...(headers ? { headers } : {}) },
       (res) => {
         let body = "";
         res.setEncoding("utf8");

@@ -12,7 +12,7 @@ import type { NativeWorkEvent } from "./native-work.ts";
 
 /** 收到这些事件 = 上游接着往下走了。 */
 const RESUMES: ReadonlySet<AgentEvent["kind"]> = new Set<AgentEvent["kind"]>([
-  "text", "thinking", "tool", "attachment", "usage", "turnEnd", "done",
+  "text", "thinking", "plan", "userInput", "tool", "attachment", "usage", "turnEnd", "done",
 ]);
 
 /**

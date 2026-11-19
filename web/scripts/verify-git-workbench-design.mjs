@@ -147,7 +147,7 @@ try {
     assert.deepEqual(value.header, { x: 0, y: 0, width: 1440, height: 46 });
     assert.deepEqual(value.shell, { x: 0, y: 46, width: 1440, height: stage - 46 });
     assert.equal(value.document.width, viewport.width, "workbench must not overflow horizontally");
-    assert.equal(value.workspaceSidebarCount, 0, "Git route must not render the ash task sidebar");
+    assert.equal(value.workspaceSidebarCount, 0, "Git route must not render the navi task sidebar");
   }
   assert.equal(report.views.changes.changesList.width, 340);
   assert.equal(report.views.changes.diffPane.width, 950);
@@ -190,7 +190,7 @@ try {
   await page.locator(".workspace-git-context").click();
   await page.getByRole("button", { name: "打开 Git 工作台", exact: true }).click();
   await page.locator(".workspace-git-page").waitFor();
-  await page.getByRole("button", { name: "返回 ash 工作区", exact: true }).click();
+  await page.getByRole("button", { name: "返回 Navi 工作区", exact: true }).click();
   await page.locator(".workspace-sidebar").waitFor();
 
   await writeFile(join(output, "metrics.json"), JSON.stringify(report, null, 2));

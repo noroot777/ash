@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ServerEvent, Task, TaskListItem } from "@ash/shared";
+import type { ServerEvent, TaskListItem } from "@navi/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 import { mergeTaskSnapshotFields } from "./taskSnapshot.ts";
@@ -14,42 +14,14 @@ export function upsertTask(tasks: TaskListItem[], task: TaskListItem, projectId?
     : [task, ...tasks];
 }
 
-// 星标 PATCH 的成功回写只合并 starredAt：HTTP 响应和 SSE 走不同连接，响应里那份
-// Task 快照可能比已经到达的 SSE 旧 —— 整条替换会把完成状态/标题/计时回滚到点星
-// 那一刻。任务已不在列表里（被删了）就什么都不做，旧响应不复活死任务。
-export function applyStarredAt(tasks: TaskListItem[], taskId: string, starredAt: number | null): TaskListItem[] {
-  return tasks.map((task) => (task.id === taskId ? { ...task, starredAt } : task));
-}
-
-// SSE 行带来的 starredAt 变化也要登记 starEdits 保护（这是登记判据）：星标 PATCH 成功
-// 后服务端同时回 HTTP 响应和发 task.updated，两条连接没有顺序保证 —— SSE 先到时
-// PATCH 回写（applyStar）还没登记，这个窗口里晚到的旧 GET 快照（同 updatedAt）会把
-// 星标清回去，直到 PATCH 响应到达才恢复。新行（本地还没有）不算变化，不用保护。
-export function starredAtChanged(current: TaskListItem[], incoming: Task): boolean {
-  const local = current.find((task) => task.id === incoming.id);
-  return local !== undefined && local.starredAt !== incoming.starredAt;
-}
-
 // GET 快照与 SSE/本地回写之间同样没有到达顺序保证：整表替换会让旧快照盖掉新状态。
 // 逐行按 updatedAt 合并，本地行更新就保留本地行。快照里没有的行照快照删（任务删除
 // 没有专门的 SSE 事件，快照是删除的权威来源）。
-// protectStars：这些行的 starredAt 以本地为准。星标 PATCH 特意不推进 updatedAt
-// （不污染最后活动时间），所以「点星前生成、点星后才到达」的旧快照和本地行 updatedAt
-// 完全相同，光比时间分不出新旧 —— 调用方把「快照发起之后本地又改过星标」的行报进来，
-// 字段级保留，其余字段照常按 updatedAt 规则取。
-export function mergeFetchedTasks(
-  current: TaskListItem[],
-  fetched: TaskListItem[],
-  protectStars?: ReadonlySet<string>,
-): TaskListItem[] {
+export function mergeFetchedTasks(current: TaskListItem[], fetched: TaskListItem[]): TaskListItem[] {
   const byId = new Map(current.map((task) => [task.id, task]));
   return fetched.map((task) => {
     const local = byId.get(task.id);
-    if (!local) return task;
-    const merged = mergeTaskSnapshotFields(local, task);
-    return protectStars?.has(task.id) && local.starredAt !== task.starredAt
-      ? { ...merged, starredAt: local.starredAt }
-      : merged;
+    return local ? mergeTaskSnapshotFields(local, task) : task;
   });
 }
 
@@ -99,22 +71,21 @@ export function applyTaskMetadataEvent<T extends TaskListItem>(task: T, event: T
     question: event.question,
     questionOptions: event.questionOptions,
     questionItems: event.questionItems,
+    // 每一次提问的变动都带着这一问是不是派活单：换了题、答了、撤下都让卡跟着走。
+    dispatchPlan: event.dispatchPlan ?? null,
   };
 }
 
 export function useTasks(projectId?: string) {
   const [tasks, setTasks] = useState<TaskListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [snapshotScope, setSnapshotScope] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [settlementVersion, setSettlementVersion] = useState(0);
 
   // silent：追平用。列表已经在屏幕上，不翻 loading（免得依赖它的初始化逻辑重跑）、
   // 失败也不换错误横幅。返回是否成功，追平方失败时好安排重试。
   const fetchGen = useRef(0);
-  // taskId → 最近一次本地星标写入的时刻。写入发生在 PATCH 成功返回之后（服务端已持久
-  // 化），所以发起晚于写入的 GET 一定带着新值；只有发起早于写入的快照才可能是旧的，
-  // merge 时对这些行保留本地 starredAt。
-  const starEdits = useRef(new Map<string, number>());
   // 本页已确认删除的任务 id(共享失效记录):本地删除(WorkspaceShell.deleteTask 直接
   // add)与权威快照确认的删除(refetch 里按 confirmedDeletions 裁决)都记在这里,给
   // 「创建并排队」等迟到的创建完成回写当拒绝依据——SSE 没有删除事件,别的页面删的
@@ -125,7 +96,6 @@ export function useTasks(projectId?: string) {
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
   const refetch = useCallback(async (options?: { silent?: boolean; signal?: AbortSignal }): Promise<boolean> => {
     const gen = ++fetchGen.current;
-    const startedAt = Date.now();
     const idsAtStart = new Set(tasksRef.current.map((task) => task.id));
     if (!options?.silent) {
       setLoading(true);
@@ -137,13 +107,8 @@ export function useTasks(projectId?: string) {
       if (gen === fetchGen.current) {
         const scoped = projectId ? allTasks.filter((task) => task.projectId === projectId) : allTasks;
         for (const id of confirmedDeletions(idsAtStart, scoped)) confirmedDeleteIds.current.add(id);
-        const protectStars = new Set<string>();
-        for (const [taskId, editedAt] of starEdits.current) {
-          if (editedAt >= startedAt) protectStars.add(taskId);
-          // 早于本次发起的记录对之后的快照都不再构成竞态（未来的发起时刻只会更晚），清掉。
-          else starEdits.current.delete(taskId);
-        }
-        setTasks((current) => mergeFetchedTasks(current, scoped, protectStars));
+        setTasks((current) => mergeFetchedTasks(current, scoped));
+        setSnapshotScope(projectId ?? "");
       }
       return true;
     } catch (reason) {
@@ -158,13 +123,6 @@ export function useTasks(projectId?: string) {
   // 实例的稳定、卸载作废、refetch 身份随 projectId 变化都由 useCatchUp 管。
   const catchUp = useCatchUp((signal) => refetch({ silent: true, signal }), projectId ?? "");
 
-  // 星标的本地回写走这里而不是裸 setTasks：除了字段级合并（applyStarredAt），还要记下
-  // 写入时刻，refetch 才知道哪些行的星标可能比 in-flight 快照新。
-  const applyStar = useCallback((taskId: string, starredAt: number | null) => {
-    starEdits.current.set(taskId, Date.now());
-    setTasks((current) => applyStarredAt(current, taskId, starredAt));
-  }, []);
-
   useEffect(() => {
     void refetch();
   }, [refetch]);
@@ -177,14 +135,7 @@ export function useTasks(projectId?: string) {
         return;
       }
       if (event.type === "task.created" || event.type === "task.updated") {
-        setTasks((current) => {
-          // SSE 星标变化的保护登记放在 updater 里（判定需要 current）；updater 可能被
-          // React 调两次，Map.set 幂等无害。
-          if (starredAtChanged(current, event.task)) {
-            starEdits.current.set(event.task.id, Date.now());
-          }
-          return upsertTask(current, event.task, projectId);
-        });
+        setTasks((current) => upsertTask(current, event.task, projectId));
         return;
       }
       if (event.type === "task.status") {
@@ -206,5 +157,5 @@ export function useTasks(projectId?: string) {
   // useCatchUpLink 里（五个消费者原先各写一遍，四处漏了「断线作废」，见那边的文件头）。
   useCatchUpLink(catchUp, connected);
 
-  return { tasks, setTasks, loading, error, connected, settlementVersion, refetch, applyStar, confirmedDeleteIds };
+  return { tasks, setTasks, loading, snapshotReady: snapshotScope === (projectId ?? ""), error, connected, settlementVersion, refetch, confirmedDeleteIds };
 }

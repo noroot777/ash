@@ -4,8 +4,8 @@
 // 候选按用户拍板「全部列出不过滤」:不合法的置灰并在右侧灰字写明原因。
 // 落库语义:目标已在队列 → 紧随其后插入;不在 → 建一条 [目标, 本任务] 的新队列。
 // 推进由服务端 advanceQueue 负责:前驱全是终态时新成员会立刻被拉起。
-import type { Group, Task, TaskListItem, TaskStatus } from "@ash/shared";
-import { TASK_STATUS_LABELS } from "@ash/shared";
+import type { Group, Task, TaskListItem, TaskStatus } from "@navi/shared";
+import { TASK_STATUS_LABELS } from "@navi/shared";
 import type { DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "./api.ts";
 

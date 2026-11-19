@@ -1,4 +1,4 @@
-import type { Group, Session, Task, TaskListItem } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem } from "@navi/shared";
 import { Clock, FolderOpen, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, UsersThree } from "@phosphor-icons/react";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "../task-detail/NativeWorkInspector.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
@@ -10,7 +10,7 @@ import type { Notify } from "../lib/notify.ts";
 import { TeamTimeline } from "./TeamTimeline.tsx";
 import { TeamReviewInspector } from "./TeamReviewInspector.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
-import { monitorBlockedReason } from "@ash/shared/monitor";
+import { monitorBlockedReason } from "@navi/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
 import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
@@ -45,7 +45,7 @@ export interface TeamInspectorContext {
 // 团队模式的默认面板里不放子智能体：调度台自己那点工具调用远不如「谁跟谁在并行」有用，
 // 时间轴顶上它的位置。这一摘是一次性的历史迁移（当时它还是无条件默认开）；现在的开合统一
 // 走「用过才浮现」——调度台真派过子智能体才上条，否则从「+」或 I S 打开。
-retireInspectorTab("team-subagents-default", /^(?:ash|harness-next):inspector:team:/, "subagents");
+retireInspectorTab("team-subagents-default", /^navi:inspector:team:/, "subagents");
 
 export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>[] = [
   {
@@ -103,7 +103,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
   },
   {
     id: "review",
-    title: "审查",
+    title: "审议",
     icon: <MagnifyingGlass size={14} />,
     shortcut: "r",
     render: (context) => (

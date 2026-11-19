@@ -10,10 +10,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-workspace-cleanup-"));
+const root = mkdtempSync(join(tmpdir(), "navi-workspace-cleanup-"));
 const repo = join(root, "repo");
-process.env.ASH_DB = join(root, "ash.db");
+process.env.NAVI_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -29,8 +30,8 @@ const branchExists = (name: string) => {
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Test");
-  git(repo, "config", "user.email", "ash@example.test");
+  git(repo, "config", "user.name", "Navi Test");
+  git(repo, "config", "user.email", "navi@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "seed");
@@ -132,5 +133,5 @@ try {
 
   console.log("删除任务的 worktree/分支清理：全部通过");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

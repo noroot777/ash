@@ -11,8 +11,8 @@
 //  ④ 邀请链接只发给还没领到 key 的人 —— 它是匿名领取入口,对已有 key 的账号开它
 //    等于开一条账号接管链接(第 5 轮审查 P1)。
 import { useCallback, useEffect, useState } from "react";
-import type { UserRole, UserView } from "@ash/shared";
-import { suggestDirName, suggestGitEmail, userDirNameError, USER_DIR_NAME_HINT } from "@ash/shared/multiuser";
+import type { UserRole, UserView } from "@navi/shared";
+import { suggestDirName, suggestGitEmail, userDirNameError, USER_DIR_NAME_HINT } from "@navi/shared/multiuser";
 import { ApiError } from "../lib/apiClient.ts";
 import { userApi } from "../lib/authApi.ts";
 import { useAuth } from "../auth/authContext.ts";
@@ -176,7 +176,7 @@ export function UsersSettings({
         <header className="settings-heading">
           <div>
             <h1>用户</h1>
-            <p>这台 ash 现在是自用模式，没有用户这回事；要几个人一起用，去「默认规则 → 危险区」切到多人模式。</p>
+            <p>这台 Navi 现在是自用模式，没有用户这回事；要几个人一起用，去「默认规则 → 危险区」切到多人模式。</p>
           </div>
         </header>
       </section>

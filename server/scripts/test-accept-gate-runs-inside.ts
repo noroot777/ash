@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-// 运行产物目录(ASH_RUNS_DIR)落在**依赖目录内部**时,依赖那边的复制遍历必须跟源码那边用同一份排除
+// 运行产物目录(NAVI_RUNS_DIR)落在**依赖目录内部**时,依赖那边的复制遍历必须跟源码那边用同一份排除
 // 计划,而且无论如何都不能走进正在建的快照自己。2026-10-26 独立审查实测:不过滤时克隆 node_modules
 // 会进 runs、进本次快照、再把快照里已建好的依赖树拷一遍,一层层嵌套到 ENAMETOOLONG 为止(约 286ms),
 // 一个测试命令都还没开始跑;重试还是同样的失败。
 //
 // 这条用例必须单独一个文件:RUNS_DIR 在模块 import 时就由环境变量固化了,同一个进程里换不掉。
-const root = mkdtempSync(join(tmpdir(), "ash-gate-runs-inside-"));
+const root = mkdtempSync(join(tmpdir(), "navi-gate-runs-inside-"));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.NAVI_DB = join(root, "navi-test.db");
 const repo = join(root, "project");
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 const linkDir = (target: string, path: string) => (process.platform === "win32"
@@ -50,15 +53,15 @@ try {
   // 入口」,而运行产物目录本身就会被数成这样一个入口 —— 点开头的不算(accept-gate-resolution 只对
   // 非点名字和 `@`、`.bin` 建入口),真实工具往依赖目录里放东西也一律这么放(`.vite`、`.cache`、
   // `.bin`)。摆了普通名字的第三方包就凑成「既有自有包又有外来入口」,门禁按设计拒绝整次验收,并
-  // 在拒绝里给出「把 ASH_RUNS_DIR 移到解析祖先链不经过那棵树的目录」这条出路 —— 那条路由
+  // 在拒绝里给出「把 NAVI_RUNS_DIR 移到解析祖先链不经过那棵树的目录」这条出路 —— 那条路由
   // test-accept-gate-plan/confine 负责钉,不在这里。
-  const runs = join(repo, "node_modules", ".ash-runs");
+  const runs = join(repo, "node_modules", ".navi-runs");
   mkdirSync(runs, { recursive: true });
   writeFileSync(join(runs, ".keep"), "runs lives inside the dependency directory\n");
   git("add", "-A");
   git("commit", "-m", "project with runs inside node_modules");
 
-  process.env.ASH_RUNS_DIR = runs;
+  process.env.NAVI_RUNS_DIR = runs;
   const { createGateSnapshot, gateSnapshotPath, readGateSource, verifyGateSnapshot } =
     await import("../src/accept-gate-source.js");
 
@@ -71,7 +74,7 @@ try {
   const elapsed = Date.now() - started;
 
   // 建得出来、而且没把自己拷进去:快照里既不该有 runs,也不该有嵌套的第二层快照。
-  assert.equal(existsSync(join(target, "node_modules", ".ash-runs")), false,
+  assert.equal(existsSync(join(target, "node_modules", ".navi-runs")), false,
     "运行产物目录不该跟着进副本——它既不是测试输入,而且本次快照就住在里面");
   assert.equal(readFileSync(join(target, "packages", "lib", "index.mjs"), "utf8").trim(),
     'export const build = "certified";', "源码照旧冻进快照");
@@ -88,4 +91,4 @@ try {
   assert.equal(readdirSync(runs).includes(".keep"), true, "工作区那份运行产物目录本身不被动");
 
   console.log("accept-gate-runs-inside: runtime directory inside the dependency tree is excluded from both copies");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

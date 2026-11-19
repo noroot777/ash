@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { isReasoningEffortSupported, resolveReasoningEfforts } from "@ash/shared/cli-presets";
-import { readCliConfigOverrides } from "@ash/shared/cli-overrides";
+import type { AgentType } from "@navi/shared";
+import { isReasoningEffortSupported, resolveReasoningEfforts } from "@navi/shared/cli-presets";
+import { readCliConfigOverrides } from "@navi/shared/cli-overrides";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
@@ -148,33 +148,6 @@ export async function resolveExecutorProfileId(opts: ExecutorResolveOpts): Promi
   return (await pickProfile(opts)).profile?.id ?? null;
 }
 
-/**
- * 「这一轮**真正会用**的那份执行上下文」—— 只读、不 build、不碰 relay,给派审前的
- * ash MCP 预检用(`ash-mcp-reachability.ts`)。
- *
- * 为什么非走这里不可:预检自己读 `agents.extraArgs` 被第 3 轮审查用真实 HTTP 打穿 ——
- * 空 id 和悬空 id 它都当「没有额外参数」,而 `pickProfile` 在这两种情况下都会落到该类型
- * **当前默认 profile**,而那条 profile 的 extraArgs 可能正是 ash MCP 的来源
- * (实测:默认执行器带 `-c mcp_servers.ash.command=node`,真 codex 列得出 ash,预检却说
- * 没有,派审 409)。同理它也没走 `normalizeProfileExtraArgs`,库里合法的整段参数
- * (一个元素写着 `-c mcp_servers.ash.command=node`)在运行时会拆成两个 token,预检认不出。
- *
- * 所以默认选择、归属收窄、参数归一这三件事只留这一份实现;预检只消费结果。
- * 返回 null = 这条 profile 的 extraArgs 连 JSON 都不是(真起跑也会在 `build` 里炸),
- * 预检据此放行 —— 判不了就不拦。
- */
-export async function effectiveExecutorContext(
-  opts: ExecutorResolveOpts,
-): Promise<{ type: AgentType; extraArgs: string[] } | null> {
-  const { profile, type } = await pickProfile(opts);
-  if (!profile) return { type, extraArgs: [] };
-  try {
-    return { type, extraArgs: normalizeProfileExtraArgs(JSON.parse(profile.extraArgs)) };
-  } catch {
-    return null;
-  }
-}
-
 async function build(
   profile: AgentRow | null,
   type: AgentType,
@@ -185,7 +158,7 @@ async function build(
   const reasoningEffort = overrides.reasoningEffort || profile?.reasoningEffort || undefined;
   // 档位能力优先用**已探到的** CLI 原话(见 cachedModelEfforts:不触发探测,拿不到就
   // 退回规则表)。报错文案带上来源,因为「谁说这个组合不行」直接决定用户下一步怎么办:
-  // 是改配置,还是去查 ash 的规则表写错了。
+  // 是改配置,还是去查 navi 的规则表写错了。
   const probed = cachedModelEfforts(type);
   if (!isReasoningEffortSupported(type, model, reasoningEffort, probed)) {
     const resolution = resolveReasoningEfforts(type, model, probed);
@@ -195,7 +168,7 @@ async function build(
     const source = resolution.source === "probe"
       ? `${type} CLI 报的`
       : resolution.source === "model-rule"
-        ? `ash 内置规则 ${resolution.ruleId}`
+        ? `Navi 内置规则 ${resolution.ruleId}`
         : `${type} 的档位并集`;
     throw new Error(
       `${type} 模型 ${model ?? "（跟随 CLI）"} 不支持思考强度 ${reasoningEffort}`

@@ -1,23 +1,23 @@
 import AppKit
 
-/// 窗口「回到 ash」的那条路：认清端口上是谁 → 不在就起 → 首启先问数据从哪来 → 都对了才载页面。
+/// 窗口「回到 navi」的那条路：认清端口上是谁 → 不在就起 → 首启先问数据从哪来 → 都对了才载页面。
 extension BrowserWindowController {
   /// 本机地址先认清端口上是不是自己那份（不在就起，被别人占着就说明），确认了才载页面；
-  /// 连别处的 ash 时直接载。
+  /// 连别处的 navi 时直接载。
   ///
   /// `quietly`：不盖「正在启动」那一屏，眼下这一屏自己在说（首启那张卡上选中的那一项在转圈）。
   func loadHome(quietly: Bool = false) {
     stopHealthPolling()
     stopInstanceGuard()
-    guard AshConfig.isLocal else { loadPage(); return }
+    guard NaviConfig.isLocal else { loadPage(); return }
     connect(quietly: quietly)
   }
 
   /// 页面载不进来（导航失败）。本机地址重走一遍 connect —— 服务可能挂了，也可能端口换了人。
   func showOffline(_ error: Error) {
     stopInstanceGuard()
-    if AshConfig.isLocal { connect(); return }
-    offlineView.show(title: "连不上 \(AshConfig.baseURL.absoluteString)",
+    if NaviConfig.isLocal { connect(); return }
+    offlineView.show(title: "连不上 \(NaviConfig.baseURL.absoluteString)",
                      detail: "\(error.localizedDescription)\n服务起来后会自动载入。",
                      actions: [OfflineView.Action(title: "重试") { [weak self] in self?.loadHome() }])
     startHealthPolling()
@@ -34,7 +34,7 @@ extension BrowserWindowController {
     }
     pendingStartingScreen?.cancel()
     let starting = DispatchWorkItem { [weak self] in
-      self?.offlineView.show(title: "正在启动 ash 服务…", detail: AshConfig.baseURL.absoluteString, busy: true)
+      self?.offlineView.show(title: "正在启动 Navi 服务…", detail: NaviConfig.baseURL.absoluteString, busy: true)
     }
     pendingStartingScreen = starting
     if !quietly { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: starting) }
@@ -54,7 +54,7 @@ extension BrowserWindowController {
     case .needsSetup:
       showFirstRun()
     case .occupied(let explanation):
-      offlineView.show(title: "\(AshConfig.port) 端口被占着", detail: explanation, actions: [retry])
+      offlineView.show(title: "\(NaviConfig.port) 端口被占着", detail: explanation, actions: [retry])
       startHealthPolling(takeOverWhenFree: true)
     case .failed(let reason):
       let log = ServerLauncher.shared.logURL
@@ -76,7 +76,7 @@ extension BrowserWindowController {
           NSWorkspace.shared.activateFileViewerSelecting([backup])
         }, at: 0)
       }
-      offlineView.show(title: "ash 服务没起来", detail: detail, actions: actions)
+      offlineView.show(title: "Navi 服务没起来", detail: detail, actions: actions)
       startHealthPolling()
     }
   }
@@ -85,7 +85,7 @@ extension BrowserWindowController {
   private func checkStaleServer() {
     guard UpdateGate.shared.phase == .idle else { return }
     DispatchQueue.global(qos: .utility).async {
-      guard case .ash(let instance) = AshHealth.probeSync(), instance.isOurs,
+      guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
             let from = ServerRecord.staleVersion(servingPID: instance.pid) else { return }
       DispatchQueue.main.async {
         guard UpdateGate.shared.phase == .idle else { return }
@@ -98,12 +98,12 @@ extension BrowserWindowController {
 
   /// `problem`：上一次没成的原因（导入失败、选的目录不对），写在卡片上。
   private func showFirstRun(problem: String? = nil) {
-    firstRunView.reset(dataPath: AshConfig.dataURL.path, problem: problem)
+    firstRunView.reset(dataPath: NaviConfig.dataURL.path, problem: problem)
     firstRunView.onChoose = { [weak self] choice in
       guard let self else { return }
       switch choice {
       case .fresh:
-        self.firstRunView.setBusy(.fresh, detail: "正在启动 ash…")
+        self.firstRunView.setBusy(.fresh, detail: "正在启动 Navi…")
         ServerLauncher.shared.freshStartApproved = true
         self.loadHome(quietly: true)
       case .importData:
@@ -119,7 +119,7 @@ extension BrowserWindowController {
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.allowsMultipleSelection = false
-    panel.message = "选一份 ash 的数据目录（里面有 ash.db，比如仓库里的 data/）"
+    panel.message = "选一份 Navi 的数据目录（里面有 ash.db，比如仓库里的 data/）"
     panel.prompt = "导入"
     panel.beginSheetModal(for: window) { [weak self] response in
       guard response == .OK, let url = panel.url else { return }
@@ -138,7 +138,7 @@ extension BrowserWindowController {
     }
     guard let pid = source.livePID else { runImport(source); return }
     let alert = NSAlert()
-    alert.messageText = "这份数据正被另一份 ash 用着（进程 \(pid)）"
+    alert.messageText = "这份数据正被另一份 Navi 用着（进程 \(pid)）"
     alert.informativeText = "导入的是它此刻的快照，之后它那边的变化不会过来。它手上在跑的任务仍归它管，"
       + "导进来的那一份只记作暂停，不会去接管。打算从此改用 app 的话，先停掉它（kill \(pid)）再导入更干净。"
     alert.addButton(withTitle: "仍然导入")
@@ -151,7 +151,7 @@ extension BrowserWindowController {
   private func runImport(_ source: DataImport.Source) {
     firstRunView.setBusy(.importData, detail: "正在导入 \((source.url.path as NSString).abbreviatingWithTildeInPath)…")
     DispatchQueue.global(qos: .userInitiated).async {
-      let outcome = Result { try DataImport.run(source, into: AshConfig.dataURL) }
+      let outcome = Result { try DataImport.run(source, into: NaviConfig.dataURL) }
       DispatchQueue.main.async { [weak self] in
         switch outcome {
         case .failure(let error): self?.showFirstRun(problem: "导入没成功：\(error.localizedDescription)")
@@ -177,7 +177,7 @@ extension BrowserWindowController {
     guard !lines.isEmpty, let window else { return }
     let alert = NSAlert()
     alert.messageText = "导入好了，有些事没有接着做"
-    alert.informativeText = "导入不是接管：原来那份 ash 手上的活仍归它，这里不会替它续跑。\n\n"
+    alert.informativeText = "导入不是接管：原来那份 Navi 手上的活仍归它，这里不会替它续跑。\n\n"
       + lines.joined(separator: "\n") + "\n\n要在这里接着做，到对应的任务里继续或重新打开。"
     alert.beginSheetModal(for: window)
   }

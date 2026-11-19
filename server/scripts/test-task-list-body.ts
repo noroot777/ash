@@ -11,15 +11,16 @@
 // 那种回退在界面上完全看不出来，只会让响应悄悄涨回两倍——所以在这里钉住。
 // 跑：npm -w server run test:task-list-body
 import assert from "node:assert/strict";
-import { TASK_BATCH_LIMIT } from "@ash/shared";
+import { TASK_BATCH_LIMIT } from "@navi/shared";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { setActor } from "../src/auth/context.js";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-list-body-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-task-list-body-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const [{ db, ensureSchema }, schema, { mountTaskRoutes }] = await Promise.all([
   import("../src/db/index.js"),
@@ -156,5 +157,5 @@ try {
 
   console.log("✓ task list omits body/history; scoped history endpoint returns only question records");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

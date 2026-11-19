@@ -24,9 +24,9 @@
 // **「没有拿到反证」不等于「已经证明属于这次创建」**(第 18 轮审查 F1)。上一版把
 // `suspected` / `unprovable` / 存量行都归成「这一问没答出来」,然后**允许它们走时间锚 + 命令
 // 包含那条弱判据把启动时刻补进 `pid_started_at`** —— 而 `reclaimEvidence` 第 ② 步拿这一列当
-// 归属凭证(根活着 + 启动时刻对得上 ⇒ `ours-alive` ⇒ 可以下刀),它分不出这个值是 ash 自己
+// 归属凭证(根活着 + 启动时刻对得上 ⇒ `ours-alive` ⇒ 可以下刀),它分不出这个值是 navi 自己
 // spawn 那一刻读来的,还是事后凭一个时间窗口猜出来的。实测后果:一个**没有**真实
-// `ASH_MONITOR_UNIT` 环境项、只是另一个变量的值里抄着那串记号文字的陌生进程,被产品真实的
+// `NAVI_MONITOR_UNIT` 环境项、只是另一个变量的值里抄着那串记号文字的陌生进程,被产品真实的
 // 停止链杀掉(`cgtxRDWnCNVp/round-1/identity-ambiguous.log`)。
 //
 // 所以这一层现在只有一条规矩:**弱判据只有拒绝权,没有授权权**。
@@ -135,7 +135,7 @@ async function readIdentityRefutation(monitorId: string): Promise<"clean" | "ref
       .from(monitorReclaimDebts).where(eq(monitorReclaimDebts.monitorId, monitorId))).at(0);
     return row?.at ? "refuted" : "clean";
   } catch (err) {
-    console.error(`[ash] 身份反证记录读不出来 monitor=${monitorId}（这一轮一律不认这个号）:`, err);
+    console.error(`[navi] 身份反证记录读不出来 monitor=${monitorId}（这一轮一律不认这个号）:`, err);
     return "unreadable";
   }
 }
@@ -157,6 +157,6 @@ async function revokeWeakIdentity(monitorId: string, pid: number): Promise<void>
         isNull(monitorReclaimDebts.identityDisprovedAt),
       ));
   } catch (err) {
-    console.error(`[ash] 身份反证记不下来 monitor=${monitorId} pid=${pid}（弱判据这一轮仍被拒）:`, err);
+    console.error(`[navi] 身份反证记不下来 monitor=${monitorId} pid=${pid}（弱判据这一轮仍被拒）:`, err);
   }
 }

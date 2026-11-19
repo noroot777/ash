@@ -7,11 +7,12 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-trace-retention-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_TRACE_KEEP_DAYS;
+const root = mkdtempSync(join(tmpdir(), "navi-trace-retention-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_TRACE_KEEP_DAYS;
 
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
@@ -31,7 +32,7 @@ try {
     id, projectId: "p", title: id, status: "done", createdAt: iso(t0), updatedAt: iso(t0), ...over });
   /** 在任务目录里放一份文件，修改时间设成 t0 往前 ageDays 天。 */
   const file = (taskId: string, name: string, ageDays: number) => {
-    const dir = join(process.env.ASH_RUNS_DIR!, taskId);
+    const dir = join(process.env.NAVI_RUNS_DIR!, taskId);
     mkdirSync(dir, { recursive: true });
     const path = join(dir, name);
     writeFileSync(path, "{}\n");
@@ -44,11 +45,11 @@ try {
 
   // ── 配置：只认有限、不为负的天数，其余回到默认 7 天 ──
   for (const [raw, days] of [[undefined, 7], ["", 7], ["  ", 7], ["7d", 7], ["-1", 7], ["NaN", 7], ["Infinity", 7], ["0", 0], ["3", 3]] as const) {
-    if (raw === undefined) delete process.env.ASH_TRACE_KEEP_DAYS;
-    else process.env.ASH_TRACE_KEEP_DAYS = raw;
-    assert.equal(retentionKeepDays(), days, `ASH_TRACE_KEEP_DAYS=${JSON.stringify(raw)}`);
+    if (raw === undefined) delete process.env.NAVI_TRACE_KEEP_DAYS;
+    else process.env.NAVI_TRACE_KEEP_DAYS = raw;
+    assert.equal(retentionKeepDays(), days, `NAVI_TRACE_KEEP_DAYS=${JSON.stringify(raw)}`);
   }
-  delete process.env.ASH_TRACE_KEEP_DAYS;
+  delete process.env.NAVI_TRACE_KEEP_DAYS;
 
   // 日志都是一个月前写的；任务此刻才了结。
   await task("accepted", { stage: "accepted" });
@@ -67,9 +68,9 @@ try {
   assert.equal(existsSync(archived), true, "刚归档的同理");
 
   // ── 配置填错不能变成立刻删（F2） ──
-  process.env.ASH_TRACE_KEEP_DAYS = "7d";
+  process.env.NAVI_TRACE_KEEP_DAYS = "7d";
   assert.equal((await sweepRawTraces(t0 + DAY)).removed, 0, "填错的天数按默认值，不放行删除");
-  delete process.env.ASH_TRACE_KEEP_DAYS;
+  delete process.env.NAVI_TRACE_KEEP_DAYS;
 
   // ── 宽限期内仍不删，满了才删 ──
   assert.equal((await sweepRawTraces(t0 + 6 * DAY)).removed, 0);
@@ -119,7 +120,7 @@ try {
   events("stuck", 30);
   await sweepRawTraces(t0); // 落下起点
   await db.update(tasks).set({ stage: "verified" }).where(eq(tasks.id, "stuck")); // 重新打开：要撤起点
-  const stuckDir = join(process.env.ASH_RUNS_DIR!, "stuck");
+  const stuckDir = join(process.env.NAVI_RUNS_DIR!, "stuck");
   chmodSync(stuckDir, 0o500); // 起点撤不掉
   await task("after", { stage: "accepted", acceptanceId: "after" });
   const after = events("after", 30);
@@ -134,16 +135,16 @@ try {
   // ── 保留期 0 天：第一次看到了结就删，不等下一趟（第 3 轮审查 N1） ──
   await task("zero", { stage: "accepted", acceptanceId: "zero" });
   const zero = events("zero", 1);
-  process.env.ASH_TRACE_KEEP_DAYS = "0";
+  process.env.NAVI_TRACE_KEEP_DAYS = "0";
   try {
     await sweepRawTraces(t0);
   } finally {
-    delete process.env.ASH_TRACE_KEEP_DAYS;
+    delete process.env.NAVI_TRACE_KEEP_DAYS;
   }
   assert.equal(existsSync(zero), false);
 
   console.log("run trace retention: ok");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 process.exit(0);

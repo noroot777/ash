@@ -15,8 +15,8 @@
 // resolvePreviewCommand 直接抛），根本没有日志文件 —— 那一档乐观按钮必须收回去。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
-import type { PreviewServiceState } from "@ash/shared/preview";
+import type { Task } from "@navi/shared";
+import type { PreviewServiceState } from "@navi/shared/preview";
 import "../../src/styles/global.css";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
 
@@ -133,7 +133,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     canceled = true;
     // cancel-late-success 例外：这一路要复现「DELETE 先赢、POST 还是 200」，所以**不**把
     // 那趟 POST 打成失败，留给页面上那颗控制按钮决定它什么时候成功返回。
-    if (!cancelLate) failStart?.(new Error("预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）"));
+    if (!cancelLate) failStart?.(new Error("预览启动被取消（关闭预览 / 任务重新开跑 / navi 重启）"));
     return reply({ stopped: true });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview` && (init?.method ?? "GET") !== "GET") {
@@ -156,7 +156,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
         return reply({ error: `temporary log error #${removalFailures}` }, 500);
       }
       const currentServices = serviceRemoved ? serviceStates.filter((service) => service.id !== "api")
-        : lateServices && logReads++ < 5 ? (lateShort ? [] : serviceStates.slice(0, 1)) : serviceStates;
+        // 服务列表迟到：扣到测试放行（window.__servicesArrive）之后的那一轮才给全，不按读了几轮算。
+        : lateServices && !(window as unknown as { __servicesArrive?: boolean }).__servicesArrive
+          ? (lateShort ? [] : serviceStates.slice(0, 1)) : serviceStates;
       if (selectedService === "web") {
         // 这一份要**晚过**随后切到的那个服务才回来：扣到测试放行（window.__releaseStaleWeb）为止，
         // 不赌一个固定延迟一定比下一发慢。window.__staleWebHeld 记扣下了几发。

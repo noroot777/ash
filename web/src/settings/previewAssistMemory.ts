@@ -16,18 +16,18 @@
 // 服务端的进度是内存态（server/src/preview-assist.ts 说了
 //    为什么不落库），GET 回来 `job: null` 的原因有三种，而这三种在用户眼里是完全不同的事：
 //      · 从来没点过              → 什么都不该显示
-//      · 点过，ash 重启吞了它    → 「已随 ash 重启中断」（第 1 轮审查：原来这一档什么都不显示，
+//      · 点过，navi 重启吞了它    → 「已随 navi 重启中断」（第 1 轮审查：原来这一档什么都不显示，
 //                                   用户只能得出「按钮坏了」）
 //      · 点过，它正常跑完了，终态过了 10 分钟被清掉 → 说「重启」就是撒谎（第 2 轮审查复现：
 //                                   页面关着的时候跑完，十分钟后回来看到一句从没发生的重启）
 //
 // 分开这三种要两样东西：本地记着的作业身份，以及**服务端自报的实例身份**（ASSIST_INSTANCE，
-// 每次 ash 启动换一个）。实例没变 = 这台 ash 没重启过 = 那条记录是自己过期的。
-import type { PreviewAssistState } from "@ash/shared/preview-assist";
+// 每次 navi 启动换一个）。实例没变 = 这台 navi 没重启过 = 那条记录是自己过期的。
+import type { PreviewAssistState } from "@navi/shared/preview-assist";
 import { claimAssistOwnership, holdAssistClaim } from "./previewAssistTabs.ts";
 
-const EXECUTOR_KEY = (projectId: string) => `ash:preview-assist-executor:${projectId}`;
-const LIVE_KEY = (projectId: string) => `ash:preview-assist-live:${projectId}`;
+const EXECUTOR_KEY = (projectId: string) => `navi:preview-assist-executor:${projectId}`;
+const LIVE_KEY = (projectId: string) => `navi:preview-assist-live:${projectId}`;
 
 /** 两种存储在隐私模式下都会抛，这一整套都是「有就用、没有就算了」。 */
 function get(store: Storage | undefined, key: string): string | null {
@@ -86,7 +86,7 @@ export const rememberExecutor = (projectId: string, target: AssistRunTarget): vo
  * 给这一次点击发一个身份。服务端只把它存进**新建**的那份作业，所以「作业上的 claim 等于我
  * 手里这个」是唯一靠得住的所有权证据（见 AssistTrace.claim）。
  *
- * `crypto.randomUUID` 在非安全上下文里可能没有（ash 常走裸 http 的局域网地址），退一步用
+ * `crypto.randomUUID` 在非安全上下文里可能没有（navi 常走裸 http 的局域网地址），退一步用
  * 时间 + 随机串 —— 这东西只要在同一个项目的几份作业之间不撞就够了。
  */
 export const newAssistClaim = (): string =>
@@ -105,7 +105,7 @@ export interface AssistTrace {
   round: number;
   maxRounds: number;
   startedAt: string;
-  /** 点下去的那一刻，回话的是哪一台 ash。 */
+  /** 点下去的那一刻，回话的是哪一台 navi。 */
   instance: string;
 }
 
@@ -124,7 +124,7 @@ export function readAssistTrace(projectId: string): AssistTrace | null {
  *
  * 服务端是同步预占的（preview-assist-jobs.ts），所以「浏览器没拿到返回」跟「服务端没接单」
  * 完全是两回事：第 2 轮审查把 POST 的响应掐掉，服务端那边智能体已经在跑了，而页面上什么
- * 都没有——按钮弹回原样，停也停不了，之后 ash 一重启更是连一句交代都没有。先写后发，这条
+ * 都没有——按钮弹回原样，停也停不了，之后 navi 一重启更是连一句交代都没有。先写后发，这条
  * 记录才覆盖得住「请求在路上出事」的那一段。
  */
 export function pendingAssistTrace(projectId: string, instance: string, claim: string): void {
@@ -179,19 +179,19 @@ export async function adoptAssistTrace(projectId: string): Promise<void> {
  *
  * 用 `failed` 这一档是有意的：两种情况都确实没跑完、也确实没有可填的脚本，界面该是「出事了」
  * 那个调子而不是灰掉一行。话要说准 —— 用户下一步要决定的是「再点一次」还是「自己手写」，
- * 而**把过期说成重启会让他去查一台根本没重启过的 ash**。
+ * 而**把过期说成重启会让他去查一台根本没重启过的 navi**。
  */
 export function lostAssistState(
   projectId: string,
   trace: AssistTrace,
-  /** 现在回话的这台 ash 还是不是当初那台。 */
+  /** 现在回话的这台 navi 还是不是当初那台。 */
   sameInstance: boolean,
 ): PreviewAssistState {
   const at = trace.round > 0 ? `第 ${trace.round} 轮` : "刚开工";
   const pending = !trace.jobId;
-  const step = sameInstance ? (pending ? "没收到启动结果" : "上一次的结果已经过期") : "已随 ash 重启中断";
+  const step = sameInstance ? (pending ? "没收到启动结果" : "上一次的结果已经过期") : "已随 Navi 重启中断";
   const error = !sameInstance
-    ? `上一次的 AI 协助跑到${at}时 ash 重启了，进度没能留下来（它是内存态的）。要继续就再点一次「AI 协助填写」。`
+    ? `上一次的 AI 协助跑到${at}时 Navi 重启了，进度没能留下来（它是内存态的）。要继续就再点一次「AI 协助填写」。`
     : pending
       ? "上一次点「AI 协助填写」时没收到服务端的回复，现在这个项目上也没有在跑的协助 —— 那一次多半没开起来。要继续就再点一次。"
       : `上一次的 AI 协助在你没看着的时候结束了，结果只保留 10 分钟、现在已经取不回来了（它跑到${at}）。要拿脚本就再点一次「AI 协助填写」。`;

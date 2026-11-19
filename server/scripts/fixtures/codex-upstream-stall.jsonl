@@ -6,7 +6,7 @@
 {"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"xcodebuildmcp","status":"starting","error":null,"failureReason":null},"emittedAtMs":1793345782223}
 {"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"grok-it","status":"starting","error":null,"failureReason":null},"emittedAtMs":1793345782223}
 {"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"linear","status":"starting","error":null,"failureReason":null},"emittedAtMs":1793345782223}
-{"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"ash","status":"starting","error":null,"failureReason":null},"emittedAtMs":1793345782223}
+{"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"navi","status":"starting","error":null,"failureReason":null},"emittedAtMs":1793345782223}
 {"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"openaiDeveloperDocs","status":"starting","error":null,"failureReason":null},"emittedAtMs":1793345782223}
 {"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"node_repl","status":"starting","error":null,"failureReason":null},"emittedAtMs":1793345782223}
 {"method":"warning","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","message":"Configured service tier `priority` is not advertised as supported for model `gpt-6.1-sol` and will be omitted from requests."},"emittedAtMs":1793345782223}
@@ -18,7 +18,7 @@
 {"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"node_repl","status":"ready","error":null,"failureReason":null},"emittedAtMs":1793345782338}
 {"method":"thread/status/changed","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","status":{"type":"active","activeFlags":[]}},"emittedAtMs":1793345782338}
 {"method":"turn/started","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","turn":{"id":"01a18bbd-0235-72a2-a641-2c8c78761e8d","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1793345782,"completedAt":null,"durationMs":null}},"emittedAtMs":1793345782338}
-{"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"ash","status":"ready","error":null,"failureReason":null},"emittedAtMs":1793345782350}
+{"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"navi","status":"ready","error":null,"failureReason":null},"emittedAtMs":1793345782350}
 {"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"cua_repl","status":"ready","error":null,"failureReason":null},"emittedAtMs":1793345782458}
 {"method":"mcpServer/startupStatus/updated","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","name":"kb","status":"ready","error":null,"failureReason":null},"emittedAtMs":1793345782575}
 {"method":"hook/started","params":{"threadId":"01a18ba5-9858-7e21-815e-ccfad819f94a","turnId":"01a18bbd-0235-72a2-a641-2c8c78761e8d"},"emittedAtMs":1793345783453}

@@ -9,7 +9,9 @@ import { releaseTmpDb } from "./tmp-db.js";
 
 const { baselineHarness } = await import("./accept-gate-baseline-fixture.js");
 const { root, git, passesOn, acceptTask, acceptGateState, previewMerge, mergeTaskBranch, runs, taskRow, wouldRun,
-  commitOnMain, fixture, settled, testedPhysical } = await baselineHarness("ash-gate-landing-");
+  commitOnMain, fixture, settled, testedPhysical } = await baselineHarness("navi-gate-landing-");
+// 产品模块要在夹具定好临时库与运行目录之后才加载。
+const { ACCEPT_REFLOG_PREFIX } = await import("../src/git-accept-tested.js");
 
 /** 一次带全部落地约束的最终合并（像验收那样：被测的目标提交、预演出来的树、测过的物理内容）。 */
 const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }, afterTest?: () => void,
@@ -236,7 +238,7 @@ try {
     mkdirSync(bin);
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     const real = `'${realGit}' -C '${sample.repo}'`;
-    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ash accept"*) '${realGit}' "$@"; rc=$?\n`
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ${ACCEPT_REFLOG_PREFIX}"*) '${realGit}' "$@"; rc=$?\n`
       + `  c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"; exit $rc ;; esac\n`
       + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
     const path = process.env.PATH;
@@ -482,7 +484,7 @@ try {
     const acl = process.platform === "darwin";
     if (acl) execFileSync("chmod", ["+a", `user:${userInfo().username} deny execute`, tool]);
     const real = `GIT -C '${sample.repo}'`;
-    const bin = wrapGit("restore-whole", " update-ref -m ash accept",
+    const bin = wrapGit("restore-whole", ` update-ref -m ${ACCEPT_REFLOG_PREFIX}`,
       `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`);
     const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
     assert.equal(landed.ok, false, JSON.stringify(landed));
@@ -540,7 +542,7 @@ try {
   // 是发布之后的事，它失败不能把回执改成「目标分支没动」—— 照常算合进去了。包装在真正写文件的那条
   // `read-tree -m -u` 之后把那个临时目录改成 0555，删它时就是真实的 EACCES。那个目录就是包装器收到的
   // `GIT_DIR`（封好的环境把它设成 `<临时目录>/git`）的上一级 —— 别按名字前缀去 TMPDIR 里猜「最新的那个」：
-  // 前缀改过名（ash-publish- → 共用的 ash-sealed-），并发跑的别的门禁也在建同名前缀的目录。
+  // 前缀改过名（navi-publish- → 共用的 navi-sealed-），并发跑的别的门禁也在建同名前缀的目录。
   // 写成 `G''IT_DIR` 是因为 wrapGit 会把脚本里每个 `GIT` 换成真 git 的路径。
   {
     const sample = await fixture("landing-cleanup-after-publish", { baseline: "merge_preview" });

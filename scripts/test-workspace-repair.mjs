@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 import { inspectWorkspaces } from "./workspace-check.mjs";
 
-const temporary = mkdtempSync(join(tmpdir(), "ash-workspace-repair-"));
+const temporary = mkdtempSync(join(tmpdir(), "navi-workspace-repair-"));
 let number = 0;
 
 function fixture(workspaces = ["shared", "server", "web", "mcp"]) {
@@ -20,7 +20,7 @@ function fixture(workspaces = ["shared", "server", "web", "mcp"]) {
   writeFileSync(join(repo, "package.json"), JSON.stringify({ workspaces }));
   for (const directory of workspaces) {
     mkdirSync(join(repo, directory), { recursive: true });
-    writeFileSync(join(repo, directory, "package.json"), JSON.stringify({ name: `@ash/${directory}` }));
+    writeFileSync(join(repo, directory, "package.json"), JSON.stringify({ name: `@navi/${directory}` }));
     writeFileSync(join(repo, directory, "source.txt"), `source of ${directory}`);
   }
   git("add", ".");

@@ -1,8 +1,8 @@
 import { useRef } from "react";
-import type { ChatSnapshot } from "@ash/shared/chat";
-import { ALL_MENTION_ALIASES, isAllMention } from "@ash/shared/chat";
-import type { TaskListItem } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
+import type { ChatSnapshot } from "@navi/shared/chat";
+import { ALL_MENTION_ALIASES, isAllMention } from "@navi/shared/chat";
+import type { TaskListItem } from "@navi/shared";
+import { taskDisplayStatus } from "@navi/shared";
 import { ArrowDown, ArrowUpRight, CheckCircle, Hash, Lightning } from "@phosphor-icons/react";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { motionReduced } from "../lib/useSwapText.ts";
@@ -41,7 +41,7 @@ export function ChatMessages({ snapshot, onTask, onMention }: { snapshot: ChatSn
             {busy ? <p className="chat-typing"><span><i /><i /><i /></span>{message.status === "queued" ? "已收到点名，等待回复" : "正在组织简短回复"}</p> : <p className="chat-message-body">{message.body.split(/(@[^\s@，。！？,:：;；]+)/gu).map((part, position) => part.startsWith("@") && (snapshot.room.members.some((member) => `@${member.name}` === part) || isAllMention(part.slice(1))) ? <mark key={position}>{part}</mark> : part)}</p>}
             {task && <button type="button" className={`chat-task-card ${task.status === "done" ? "is-done" : ""}`} onClick={() => onTask(task)}>
               <span className="chat-task-symbol">{task.status === "done" ? <CheckCircle size={23} weight="fill" /> : <Lightning size={23} weight="duotone" />}</span>
-              <span className="chat-task-copy"><small>ASH 任务 · {task.agentType}</small><strong>{task.title}</strong><span key={`${task.status}-${task.stage}`}>{taskDisplayStatus(task.status, task.stage, !!task.question).label}{task.question ? ` · ${task.question}` : task.status === "done" ? " · 结果已就绪，点击查看" : " · 点击查看详情与日志"}</span></span><ArrowUpRight size={18} />
+              <span className="chat-task-copy"><small>Navi 任务 · {task.agentType}</small><strong>{task.title}</strong><span key={`${task.status}-${task.stage}`}>{taskDisplayStatus(task.status, task.stage, !!task.question).label}{task.question ? ` · ${task.question}` : task.status === "done" ? " · 结果已就绪，点击查看" : " · 点击查看详情与日志"}</span></span><ArrowUpRight size={18} />
             </button>}
             {message.taskId && !task && <small>关联任务已删除或当前不可访问。</small>}
           </div>

@@ -8,12 +8,13 @@
 //   · 认不出是哪一场的老卡、自由工作流里的就地验证卡不去审查格猜，在原处展开；
 //   · 审查记录还没读到时点过来，这份请求要等记录到了再办，不能切过去就算办完；
 //   · 就地验证的「第 N 轮验证」走验证记录那一格，同样展开那一轮；
+//   · 会话里那颗辩论气泡点过来：展开那一轮、停在它的辩论那一段；
 //   · 去得了审查格的那一轮（审查格里没有经过）另有一颗经过键，在原处摊开，不往审查格发请求；
 //     一句话没说的那一轮不给；「N 条记录」里被盖过的那一条同样有。
 // 跑:npm -w web run test:review-navigation-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { waitUntil } from "./wait-until.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -40,7 +41,8 @@ try {
 
   // ① 记录还没读到就点旧那场启动失败的那张卡：请求挂着等，读到之后展开的是旧那场。
   await milestone("old-failed").click();
-  await page.waitForTimeout(150);
+  await waitUntil(async () => /old-run/.test(await page.evaluate(() => window.__pendingRequest.free()) ?? ""), "free 那一格的请求挂上了");
+  await settlePage(page);
   assert.match(await page.evaluate(() => window.__pendingRequest.free()) ?? "", /old-run/, "记录没读到时这份请求不能被当场收掉");
   await page.evaluate(() => window.__reviews.release("nav-task"));
   await page.locator('[data-pane="free"] [data-record]').first().waitFor();
@@ -57,7 +59,7 @@ try {
 
   // ②' 认不出的两张：不发请求，在原处展开这一轮的经过。
   for (const name of ["legacy", "inline-in-free"]) {
-    assert.doesNotMatch(await milestone(name).getAttribute("aria-label") ?? "", /审查格/, `${name} 不说要去审查格`);
+    assert.doesNotMatch(await milestone(name).getAttribute("aria-label") ?? "", /审议格/, `${name} 不说要去审议格`);
     assert.equal(await milestone(name).getAttribute("aria-expanded"), "false", `${name} 是就地摊开的键`);
     await milestone(name).click();
     await page.locator(`[data-lane="${name}"] .review-verdict > .turn-footnote-lane`).waitFor();
@@ -94,7 +96,8 @@ try {
   await page.locator('[data-pane="stale"] [data-record^="old-run"]').first().waitFor();
   await page.evaluate(() => { window.__reviews.hold("nav-stale"); window.__reviews.set("nav-stale", ["old-run", "new-run"]); });
   await milestone("stale-new").click();
-  await page.waitForTimeout(300);
+  await waitUntil(async () => /new-run/.test(await page.evaluate(() => window.__pendingRequest.stale()) ?? ""), "stale 那一格的请求挂上了");
+  await settlePage(page);
   assert.match(await page.evaluate(() => window.__pendingRequest.stale()) ?? "", /new-run/, "旧快照里没有不等于找不到：请求不能被收掉");
   await page.evaluate(() => window.__reviews.release("nav-stale"));
   const staleKey = async (runId) => page.locator(`[data-pane="stale"] [data-record^="${runId}"]`).first().getAttribute("data-record");
@@ -143,9 +146,22 @@ try {
   const coldKey = await page.locator('[data-pane="cold"] [data-record^="old-run"]').first().getAttribute("data-record");
   await waitUntil(async () => (await expanded("cold", coldKey)) === "true", "恢复后重试就展开");
 
+  // ⑧ 会话里那颗辩论气泡点过来（请求里带着是哪一场辩论）：展开那一轮，停在它的辩论那一段（顶到上沿）。
+  await page.locator("[data-debate-trigger]").click();
+  const debated = page.locator('[data-pane="debated"] [data-record^="debated-run"]').first();
+  await debated.waitFor();
+  const debatedKey = await debated.getAttribute("data-record");
+  await waitUntil(async () => (await expanded("debated", debatedKey)) === "true", "辩论气泡点过来展开那一轮");
+  const debateSection = page.locator('[data-pane="debated"] [data-debate="debate-1"]');
+  await debateSection.waitFor();
+  let top = null;
+  await waitUntil(async () => { top = (await debateSection.boundingBox()).y; return Math.abs(top) < 4; }, { message: () => `停在辩论那一段（上沿在 ${top}）` });
+  assert.equal(await debateSection.locator(".debate-row").count(), 3, "那一段是这场辩论的概览");
+
   // ③ 就地验证：验证记录还在读时点过来也要等，读到了展开第 1 轮（不是最新那轮）。
   await milestone("verify").click();
-  await page.waitForTimeout(150);
+  await waitUntil(async () => /inline/.test(await page.evaluate(() => window.__pendingRequest.verify()) ?? ""), "verify 那一格的请求挂上了");
+  await settlePage(page);
   assert.match(await page.evaluate(() => window.__pendingRequest.verify()) ?? "", /inline/, "验证记录没读到时这份请求等着");
   await page.evaluate(() => window.__releaseRounds());
   await waitUntil(async () => (await expanded("verify", "1-inline")) === "true", "验证记录展开第 1 轮");
@@ -155,7 +171,7 @@ try {
   await page.locator('[data-pane="verify"] [role="alert"]', { hasText: "没找到要打开的第 3 轮验证" }).waitFor();
   assert.equal(await page.evaluate(() => window.__pendingRequest.verify()), null, "确认办不成才收下");
   assert.deepEqual(errors, [], "页面没有报错");
-  console.log("review navigation dom ok: 同号两场（含启动失败的旧卡、升级前没收尾的旧开始）认得出、认不出的在原处展开、记录没读到或是旧快照时请求等着、重读也没有就说出来并能重试、点了别的旧提示当场撤掉、第一次读就失败也能重试、就地验证也展开那一轮、去得了审查格的那一轮经过键就地摊开");
+  console.log("review navigation dom ok: 同号两场（含启动失败的旧卡、升级前没收尾的旧开始）认得出、认不出的在原处展开、记录没读到或是旧快照时请求等着、重读也没有就说出来并能重试、点了别的旧提示当场撤掉、第一次读就失败也能重试、就地验证也展开那一轮、辩论气泡点过来停在辩论那一段、去得了审查格的那一轮经过键就地摊开");
 } finally {
   await browser?.close();
   await web.close();

@@ -1,6 +1,6 @@
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, Task } from "@navi/shared";
 import { TaskTree } from "../../src/workspace/TaskTree.tsx";
 import type { SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";
 import "../../src/styles/global.css";
@@ -13,8 +13,8 @@ const old = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
 
 const project: ProjectView = {
   id: "p1",
-  name: "ash",
-  repoPath: "/tmp/ash",
+  name: "navi",
+  repoPath: "/tmp/navi",
   workflowId: null,
   useWorktreeDefault: false,
   createdAt: recent,
@@ -84,8 +84,8 @@ const tasks: Task[] = [
   task("old-1", "很久以前的任务甲", old),
   task("old-2", "很久以前的任务乙", old),
   task("old-3", "很久以前的任务丙", old),
-  // 这两条是「永不折叠」的两种理由：用户加的星标，和还没盖的章。
-  task("old-starred", "很久以前但加了星", old, { starredAt: now - 5 * 60 * 1000 }),
+  // 这两条是「永不折叠」的两种理由：坏在半路的活，和还没盖的章。
+  task("old-failed", "很久以前但失败了", old, { status: "failed" }),
   task("old-unaccepted", "很久以前但没验收", old, { stage: null }),
 ];
 
@@ -100,7 +100,7 @@ const idleSpread: SidebarSpread = {
   close: () => {},
 };
 
-function Ash() {
+function Navi() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const spread = useMemo(() => idleSpread, []);
   return (
@@ -113,7 +113,6 @@ function Ash() {
         selectedTaskId={selectedTaskId}
         spread={spread}
         onTask={(next) => setSelectedTaskId(next.id)}
-        onTaskStarred={() => {}}
         notify={() => {}}
       />
     </main>
@@ -122,6 +121,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

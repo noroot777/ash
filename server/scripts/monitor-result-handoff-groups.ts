@@ -13,7 +13,7 @@ import {
   uniq, until,
 } from "./monitor-complete-gate-harness.js";
 
-const { handoffToken } = await import("@ash/shared/monitor");
+const { handoffToken } = await import("@navi/shared/monitor");
 const {
   outstandingResultHandoffs, startResultHandoffSweeper, stopResultHandoffSweeper, sweepResultHandoffs,
 } = await import("../src/monitor-handoff-retry.js");

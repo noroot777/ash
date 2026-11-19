@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
-import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
-import { SlidersHorizontal, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@navi/shared";
+import { MAX_FREE_REVIEW_RETRIES } from "@navi/shared/free-workflow";
+import { SlidersHorizontal, WarningCircle } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { RoundsStepper } from "../components/RoundsStepper.tsx";
 import { InspButton, InspTool } from "../inspector/parts.tsx";
@@ -25,6 +25,7 @@ import {
 import { openReviewerSettings } from "./openReviewerSettings.ts";
 import "../styles/free-review-dialog.css";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 const CHECK_MODES = [
   { value: "logic", label: "逻辑检查", detail: "看得见的前端改动会真打开页面截图" },
@@ -345,7 +346,7 @@ export function FreeReviewDialog({
           <div className={`free-review-loading${loadError ? " is-error" : ""}`} role="status">
             {loadError
               ? <><WarningCircle size={14} aria-hidden="true" />{loadError}<InspButton size="sm" onClick={() => { setLoadError(null); setLoading(true); setReloadToken((value) => value + 1); }}>重试</InspButton></>
-              : <><SpinnerGap size={14} className="is-spinning" aria-hidden="true" />{hasState ? "正在读取审查者…" : "正在读取任务状态…"}</>}
+              : <><NaviLoader />{hasState ? "正在读取审查者…" : "正在读取任务状态…"}</>}
           </div>
         ) : (
           <div

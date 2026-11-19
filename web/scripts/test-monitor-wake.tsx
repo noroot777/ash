@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Session, Task } from "@ash/shared";
-import { readMonitorWake, type MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { Session, Task } from "@navi/shared";
+import { readMonitorWake, type MonitorWakeData } from "@navi/shared/monitor-wake";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type ConversationItem } from "../src/task-detail/conversationModel.ts";
+import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
 import { monitorWakeInput, monitorWakePreview, monitorWakeReplyIds } from "../src/task-detail/monitorWakeModel.ts";
+import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { SystemAuthoredMessage } from "../src/task-detail/SystemNotice.tsx";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import { teamFeedRows } from "../src/team/teamModel.ts";
@@ -103,7 +105,7 @@ const toReviewer = { sessionRole: "reviewer" };
   const html = render([notice, user(combined, toReviewer), reply]);
   assert.equal(count(html, 'class="monitor-wake-input '), 1);
   assert.equal(count(html, 'class="monitor-wake-reply"'), 1);
-  assert.match(html, /ash<\/b>.*自动输入/s);
+  assert.match(html, /Navi<\/b>.*自动输入/s);
   assert.match(html, /2 条消息 → 1 次输入/);
   assert.match(html, /复制完整自动输入/);
   assert.match(html, /<details class="monitor-wake-raw"><summary>/);
@@ -121,7 +123,6 @@ const toReviewer = { sessionRole: "reviewer" };
   assert.match(html, /monitor-wake-mark/);
   assert.match(html, /monitor-wake-source-label">来自哨兵/);
   assert.match(html, /monitor-wake-expand">查看完整输入与来源/);
-  assert.doesNotMatch(html, /monitor-wake-avatar|monitor-wake-context|不是普通通知/);
   assert.ok(html.includes(combined.text));
   // 前面那条时间线旁注照常在：一颗「N 条记录」（回执不占行）或一句小灰字。
   assert.match(html, /turn-receipts|turn-footnote/);
@@ -151,7 +152,7 @@ assert.match(renderToStaticMarkup(<SystemAuthoredMessage item={user({ text: "【
 // 归属的细则（按段、按哨兵身份、直播与刷新一致）在 test-monitor-wake-fold.ts。
 {
   // 等它的那一回合挂过这两条哨兵（start_monitor 的描述就是叫醒时报的来源）。
-  const startMonitor = (source: string) => ({ kind: "tool" as const, label: "mcp__ash__start_monitor", detail: JSON.stringify({ description: source, command: "npm test" }) });
+  const startMonitor = (source: string) => ({ kind: "tool" as const, label: "mcp__navi__start_monitor", detail: JSON.stringify({ description: source, command: "npm test" }) });
   const waiting = { ...agent("waiting"), markdown: "挂上哨兵等回归。", segments: [{ id: "waiting:body", markdown: "挂上哨兵等回归。", events: [startMonitor(outputEvent.source), startMonitor(endEvent.source)], attachments: [] }] };
   for (const render of [renderTask, renderTeam]) {
     const joined = render([waiting, notice, user(combined), reply]);
@@ -190,14 +191,19 @@ assert.match(renderToStaticMarkup(<SystemAuthoredMessage item={user({ text: "【
   assert.equal(count(team, "team-feed-agent"), 3);
   assert.equal(count(team, "被哨兵叫醒"), 1);
 }
-const reviewerWake = renderTask([{ ...notice, text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", verify: true }, user(output), { ...reply, reviewer: { round: 1 } }]);
-assert.ok(reviewerWake.includes('class="verify-lane"'));
-assert.equal(count(reviewerWake, 'class="monitor-wake-input '), 1);
-assert.equal(count(reviewerWake, 'class="monitor-wake-reply"'), 1);
+// 喂给审查者自己的叫醒留在那一轮里：会话主流上只有审查者那颗收着的气泡，叫醒那张卡和它醒来的回答
+// 都在点开以后的经过里（点开后的样子由 test-reviewer-turn-dom 钉住）。
+const reviewerWakeItems: ConversationItem[] = [{ ...notice, text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", verify: true }, user(output), { ...reply, reviewer: { round: 1 } }];
+const reviewerWake = renderTask(reviewerWakeItems);
+assert.equal(count(reviewerWake, 'class="review-verdict is-pending"'), 1);
+assert.equal(count(reviewerWake, 'class="monitor-wake-input '), 0, "叫醒不掉进主流");
+assert.equal(count(reviewerWake, "task-message task-message--agent"), 0, "醒来的回答也在那一轮里");
+const reviewerLane = conversationFeedRows(foldMonitorWakes(reviewerWakeItems)).find((row) => row.kind === "review-lane");
+assert.deepEqual(reviewerLane?.kind === "review-lane" ? reviewerLane.items.map((item) => item.kind) : null, ["user", "agent"]);
 const session = { id: "session", taskId: task.id, agentType: "claude", role: "single", executor: "claude@nodemach", startedAt: "2026-10-21T04:18:00.000Z", endedAt: "2026-10-21T04:25:27.000Z" } as unknown as Session;
 const sentinel = `\n\x1e${JSON.stringify({ t: "user", ...combined, at, by: "system" })}\n`;
 const persisted = buildConversationItems([{ session, output: "等待全量回归。" + sentinel + "收到回归结果。", trace: [
-  { at: "2026-10-21T04:18:30.000Z", turnStartedAt: session.startedAt, event: { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: outputEvent.source }) } },
+  { at: "2026-10-21T04:18:30.000Z", turnStartedAt: session.startedAt, event: { kind: "tool", name: "mcp__navi__start_monitor", detail: JSON.stringify({ description: outputEvent.source }) } },
 ] }], [session], []);
 const live = buildConversationItems([], [{ ...session, endedAt: null }], [
   { kind: "user", id: "wake-live", ...combined, attachments: [], at, bySystem: true },
@@ -215,4 +221,4 @@ for (const items of [persisted, live]) {
   if (items === persisted) assert.match(html, /等待全量回归。/);
   else assert.match(html, /被哨兵叫醒/);
 }
-console.log("monitor wake: structured provenance, hostile logs, legacy fallback, default-collapsed card (review session), task/team fold, live/reload passed");
+console.log("monitor wake: structured provenance, hostile logs, legacy fallback, default-collapsed card (review session, kept inside the review round), task/team fold, live/reload passed");

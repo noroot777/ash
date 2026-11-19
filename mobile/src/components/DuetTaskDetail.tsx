@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { normalizeDuetConfig } from "@ash/shared/duet";
+import { normalizeDuetConfig } from "@navi/shared/duet";
 import {
   AppState,
   Pressable,
@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { Stack } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { canArchive, type TaskListItem } from "@ash/shared";
+import { canArchive, type TaskListItem } from "@navi/shared";
 import {
   api,
   type DuetTranscriptEntry,

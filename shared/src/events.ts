@@ -1,7 +1,7 @@
 // SSE / 执行器事件协议(§7 gates、§12 streaming)。
 //
 // 从 index.ts 拆出来的**纯类型**文件:index 只做 `export type { … } from "./events.ts"`
-// 再导出,消费者继续 `import type { AgentEvent } from "@ash/shared"`,零改动。
+// 再导出,消费者继续 `import type { AgentEvent } from "@navi/shared"`,零改动。
 // 之所以只能搬类型:服务端直接跑 shared 的 .ts 源码,Node 的类型擦除不会把
 // "./x.js" 说明符映射回 "./x.ts",index 里**转发运行时值**会让进程起不来
 // (见 server/CLAUDE.md「执行器与模型」最后一条)。`import type` / `export type`
@@ -46,10 +46,12 @@ export interface ModelFailure { kind: ModelFailureKind; status: number | null }
 
 export type AgentEvent =
   | { kind: "thinking"; text: string }
+  | { kind: "plan"; id: string; text: string; status: "streaming" | "complete"; delta?: true }
+  | { kind: "userInput"; questions: import("./index.ts").QuestionItem[] }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; detail?: string; nativeWork?: NativeWorkEvent }
   // 一张图,或者**正文里一处引用的保存结果**。三个字段合起来才是完整的一条交代:
-  //   · `source` = 这处引用的目的地(`![](…)` 里那一段,规范化后的;见 @ash/shared/markdown-images)
+  //   · `source` = 这处引用的目的地(`![](…)` 里那一段,规范化后的;见 @navi/shared/markdown-images)
   //   · `ref`    = 这处引用在这条流里的**身份**(单调递增、不去重、不按回合复位)
   //   · `path`   = 它那一刻的拷贝;**缺省 = 这处引用确实没存下副本**,不是「关联丢了」
   //   · `lost`   = 没副本的那一档再分两种:`lost: true` = **字节当时读到了、写盘失败了**
@@ -68,7 +70,7 @@ export type AgentEvent =
   // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂。
   // level="notice" = 这条是**结算说明**(这一轮为什么落成这个状态),不是出了什么岔子。
   // 展示端据此上「提示」那身琥珀,而不是让关键词表去猜语气(noteTone)——「没交卷」这类
-  // 说明里天然带着「未完成」,猜出来永远是红的,而第一次用 ash 的人读到红字只有一个
+  // 说明里天然带着「未完成」,猜出来永远是红的,而第一次用 navi 的人读到红字只有一个
   // 结论:它崩了。
   // aside=true = 这条只是**任务时间线的一条记录**(预约审查、验收阶段更新、预览起停…),
   // 由 appendTaskTimeline 写下,agent 从没见过它。它既不开一个回合也不结束一个回合,所以
@@ -126,7 +128,7 @@ export type AgentEvent =
   // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
   // `background` = 这一刻还没跑完的后台子代理 / 工作流个数（只在有的时候带）。单飞据此先不
   // 收台：它们跑完 CLI 会自己开下一回合（server/src/executors/claude.ts `singleRunFromResident`）。
-  // `since` = 从哪一刻开始等的（重启接管不重新起算期限）。`interrupted` = 这个结尾是 ash 插话
+  // `since` = 从哪一刻开始等的（重启接管不重新起算期限）。`interrupted` = 这个结尾是 navi 插话
   // 打断出来的，进程还要接着跑下一段。`epoch` = 这个结尾属于第几个回合（ResidentHandle.epoch）：
   // 消费到它时已经开了新回合，它就过期了，不再据它收台或开始等。
   // `turnOutcome`(两种结尾都可能带)= 这一回合自己的结局,跟落进 `session_turns.outcome` 的同一份
@@ -191,6 +193,8 @@ export type ServerEvent =
       question: string | null;
       questionOptions: string[] | null;
       questionItems: QuestionItem[] | null;
+      /** 这一问是一张派活单时带上它；其余一律 null（换了题、答了、撤下都让卡跟着走）。 */
+      dispatchPlan?: import("./dispatch-plan.ts").DispatchPlan | null;
       answeredQuestion?: import("./questions.ts").QuestionRecord;
     }
   // 待发送消息托盘(排队/定时)有变化：入队、真的发出去了、被取消。托盘的真值只能

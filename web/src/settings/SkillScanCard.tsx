@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ProjectView, SkillScanOverview, SkillScanRow, SkillSource } from "@ash/shared";
+import type { ProjectView, SkillScanOverview, SkillScanRow, SkillSource } from "@navi/shared";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { Select } from "../components/Select.tsx";
@@ -147,7 +147,7 @@ export function SkillScanCard({
             </div>
             <div className="skill-scan-what">
               {!row.scannable ? (
-                <span className="skill-scan-note">这个 CLI 没有技能目录约定，菜单里只有 ash 自己的命令</span>
+                <span className="skill-scan-note">这个 CLI 没有技能目录约定，菜单里只有 Navi 自己的命令</span>
               ) : row.count === 0 ? (
                 <span className="skill-scan-note">没扫到技能</span>
               ) : (

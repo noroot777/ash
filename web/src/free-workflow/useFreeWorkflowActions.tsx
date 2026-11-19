@@ -1,7 +1,7 @@
 import { setReopenDismissed } from "../preview-workspace/reopenPreference.ts";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";
@@ -23,7 +23,7 @@ interface PreviewAction {
 }
 
 /**
- * 自由工作流在回复框那一行里的几颗键（docs/ui-ux-audit reply-3）：派审 / 再审、打开预览、
+ * 自由工作流在回复框那一行里的几颗键：派审 / 再审、打开预览、
  * 预览起来以后的服务入口，摆在框里左边那一排；预览日志进「更多」（`logItem`），对话框
  * 由 `dialogs` 挂出来。`returnFocusRef` 是「更多」那颗键：关掉日志时焦点回到它上面。
  */
@@ -220,7 +220,7 @@ export function useFreeWorkflowActions({ task, notify, returnFocusRef }: {
           notify={notify}
         />
       ) : null}
-      <button type="button" className={`reply-act is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} aria-label={reviewLabel} disabled={!taskReady || locked || (!reviewing && waiting && !reservationMode)} onClick={() => setReviewOpen(reviewing ? "rounds" : "review")}>
+      <button type="button" className={`reply-act is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} aria-label={reviewLabel} disabled={(!taskReady && !reservationMode) || locked || (!reviewing && waiting && !reservationMode)} onClick={() => setReviewOpen(reviewing ? "rounds" : "review")}>
         {reviewing ? <SpinnerGap size={14} className="is-spinning" /> : <MagnifyingGlass size={14} weight="regular" />}
         <span>{reviewLabel}</span>
         {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}

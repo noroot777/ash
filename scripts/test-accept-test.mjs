@@ -2,28 +2,62 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
 // Windows 上执行器照旧按链交给 npm 串行跑（见 scripts/test-runner.mjs 的 runSequentially）：
 // 并行池子、历史排队、共用台子、进程收场这些契约那边没有，对应用例只在其它平台跑；串行那份
-// 契约单独有用例，其它平台用 ASH_TEST_RUNNER=serial 在本机也核一遍。
+// 契约单独有用例，其它平台用 NAVI_TEST_RUNNER=serial 在本机也核一遍。
 const parallel = process.platform !== "win32";
 const parallelOnly = parallel ? {} : { skip: "Windows 走串行 npm，没有并行池子" };
-const SERIAL = { ASH_TEST_RUNNER: "serial" };
+const SERIAL = { NAVI_TEST_RUNNER: "serial" };
+// 指向数据的那几个变量，各代名字都算（旧前缀取自旧名登记处）。
+const STORAGE_KEY = new RegExp(`^(?:NAVI_|${LEGACY_ENV_PREFIXES.join("|")})(?:DB|RUNS_DIR|DATA_DIR)$`, "i");
+
+// 入口顺着相对 import 拉进来的全部脚本：手抄清单会在入口多依赖一个文件时漏掉它，夹具里一 import 就找不到模块。
+function importClosure(entry) {
+  const seen = new Set();
+  const visit = (name) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    for (const [, dep] of readFileSync(join(repo, "scripts", name), "utf8").matchAll(/^import [^;]*?from "\.\/([^"]+)";/gm)) visit(dep);
+  };
+  visit(entry);
+  return [...seen];
+}
 
 // 夹具长成真实仓库的形状：根包声明 workspaces，后端那一步的链住在 server 子包、前端那一步
 // 住在 web 子包，链里照真实写法嵌 `npm run` —— 执行器要把它们展开成叶子直接跑。
 function fixture(context, { backend = "node backend.mjs && npm run test:more", web = "node regression.mjs", webExtra = {} } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "ash accept-test "));
+  const root = mkdtempSync(join(tmpdir(), "navi accept-test "));
   context.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const dir of ["scripts", "server", "web"]) mkdirSync(join(root, dir));
-  for (const name of ["accept-test.mjs", "test-runner.mjs", "test-runner-processes.mjs", "npm.mjs"]) {
-    cpSync(join(repo, "scripts", name), join(root, "scripts", name));
-  }
-  writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["server", "web"] }));
+  for (const dir of ["scripts", "server", "web", "mobile"]) mkdirSync(join(root, dir));
+  for (const name of importClosure("accept-test.mjs")) cpSync(join(repo, "scripts", name), join(root, "scripts", name));
+  // 第三步的链住在根包：一条根目录下的脚本，再用 `npm --prefix` 进到一个**不是** workspace 的包（mobile 的形状）。
+  writeFileSync(join(root, "package.json"), JSON.stringify({
+    private: true,
+    workspaces: ["server", "web"],
+    scripts: { "test:accept-scripts": "node scripts/root-leaf.mjs && npm --prefix mobile run test:phone" },
+  }));
+  writeFileSync(join(root, "mobile", "package.json"), JSON.stringify({
+    name: "fixture-mobile",
+    private: true,
+    scripts: { "test:phone": "node phone.mjs" },
+  }));
+  // 这两条只留痕迹、不进 order.txt：下面按先后钉顺序的几条用例只看后端和前端那三条。
+  const quiet = (name) => `
+    import { writeFileSync } from "node:fs";
+    import { join } from "node:path";
+    writeFileSync(join(${JSON.stringify(root)}, ${JSON.stringify(`${name}.json`)}),
+      JSON.stringify({ cwd: process.cwd(), event: process.env.npm_lifecycle_event, data: process.env.NAVI_DATA_DIR ?? null,
+        environment: Object.keys(process.env).filter((key) => /^NAVI_(?:DB|RUNS_DIR)$/i.test(key)) }));
+    process.exit(Number(process.env[${JSON.stringify(`ACCEPT_TEST_${name.toUpperCase()}_EXIT`)}] ?? 0));
+  `;
+  writeFileSync(join(root, "scripts", "root-leaf.mjs"), quiet("root"));
+  writeFileSync(join(root, "mobile", "phone.mjs"), quiet("phone"));
   writeFileSync(join(root, "server", "package.json"), JSON.stringify({
     name: "fixture-server",
     private: true,
@@ -37,13 +71,21 @@ function fixture(context, { backend = "node backend.mjs && npm run test:more", w
   }));
   // 每条叶子留一份「我跑过了」的痕迹：在哪个目录、以哪条脚本的名义、看见了哪些要剥掉的变量。
   const step = (name, exitVar, stdout) => `
-    import { appendFileSync, writeFileSync } from "node:fs";
+    import { appendFileSync, mkdtempSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+    import { tmpdir, userInfo } from "node:os";
     import { join } from "node:path";
     appendFileSync(join(${JSON.stringify(root)}, "order.txt"), ${JSON.stringify(`${name}
 `)});
+    const isDir = (path) => statSync(path ?? "", { throwIfNoEntry: false })?.isDirectory() ?? false;
+    // 往系统临时目录里丢一个不删的目录：测试红了、忘了收，留下的就是这种。
+    const leftover = mkdtempSync(join(tmpdir(), "fixture-leftover-"));
     writeFileSync(join(${JSON.stringify(root)}, ${JSON.stringify(`${name}.json`)}),
       JSON.stringify({ cwd: process.cwd(), event: process.env.npm_lifecycle_event, stage: process.env.FIXTURE_STAGE ?? null,
-        environment: Object.keys(process.env).filter((key) => /^ASH_(?:DB|RUNS_DIR)$/i.test(key)) }));
+        data: process.env.NAVI_DATA_DIR ?? null, dataReady: isDir(process.env.NAVI_DATA_DIR), tmp: tmpdir(), leftover,
+        chromeTmp: process.env.MAC_CHROMIUM_TMPDIR ?? null,
+        tsxCache: (() => { try { return readlinkSync(join(tmpdir(), \`tsx-\${process.geteuid?.() ?? userInfo().username}\`)); } catch { return null; } })(),
+        environment: Object.keys(process.env).filter((key) => /^NAVI_(?:DB|RUNS_DIR)$/i.test(key)),
+        storage: Object.fromEntries(Object.entries(process.env).filter(([key]) => new RegExp(${JSON.stringify(STORAGE_KEY.source)}, "i").test(key))) }));
     console.log(${JSON.stringify(stdout)});
     console.error(${JSON.stringify(`${stdout}_STDERR`)});
     // FIXTURE_IGNORE_TERM_<名字>：不理 SIGTERM，逼执行器走到强杀那一步。
@@ -140,6 +182,26 @@ test("链里嵌的 npm run 展开成叶子，各在自己的包目录、以自�
   assert.match(result.stdout, /验收前置检查全部通过/);
 });
 
+test("第三步：根包的脚本在仓库根跑，npm --prefix 进到不是 workspace 的包里跑", (context) => {
+  const root = fixture(context);
+  const result = run(root);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(seen(root, "root").cwd, realpathSync(root));
+  assert.equal(seen(root, "phone").cwd, realpathSync(join(root, "mobile")));
+  assert.equal(seen(root, "phone").event, "test:phone");
+  assert.match(result.stdout, /脚本与手机端回归通过/);
+  // 这一步的叶子同样一条一个数据目录、同样不带宿主的库。
+  for (const name of ["root", "phone"]) {
+    assert.ok(seen(root, name).data, name);
+    assert.deepEqual(seen(root, name).environment, [], name);
+  }
+  const failed = fixture(context);
+  const red = run(failed, { ACCEPT_TEST_PHONE_EXIT: "5" });
+  assert.equal(red.status, 5, red.stdout + red.stderr);
+  assert.match(red.stdout, /脚本与手机端回归未通过/);
+  assert.doesNotMatch(red.stdout, /验收前置检查全部通过/);
+});
+
 test("跨包的 npm -w 也展开，跟 npm 一样按包名或相对本包目录的路径认", (context) => {
   for (const ref of ["fixture-server", "../server"]) {
     const root = fixture(context, { web: `node regression.mjs && npm -w ${ref} run test:more` });
@@ -156,23 +218,23 @@ test("跨包的 npm -w 也展开，跟 npm 一样按包名或相对本包目录�
 
 test("叶子是并行跑的：两步各一条，互相等到对方起来才退", parallelOnly, (context) => {
   const root = fixture(context, { backend: "node backend.mjs" });
-  const result = run(root, { ASH_TEST_JOBS: "2", FIXTURE_WAIT_BACKEND: "web.started", FIXTURE_WAIT_WEB: "backend.started" });
+  const result = run(root, { NAVI_TEST_JOBS: "2", FIXTURE_WAIT_BACKEND: "web.started", FIXTURE_WAIT_WEB: "backend.started" });
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });
 
 test("排队按上一轮的记录：上次红的先跑，其余用时长的先跑", parallelOnly, (context) => {
   const root = fixture(context);
-  const record = (entries) => writeFileSync(join(root, "ash-test-runner-history.json"), JSON.stringify(entries));
+  const record = (entries) => writeFileSync(join(root, "navi-test-runner-history.json"), JSON.stringify(entries));
   record({ "server: node backend.mjs": { seconds: 1, failed: false }, "server: node more.mjs": { seconds: 5, failed: false },
     "web: node regression.mjs": { seconds: 9, failed: false } });
-  assert.equal(run(root, { ASH_TEST_JOBS: "1" }).status, 0);
+  assert.equal(run(root, { NAVI_TEST_JOBS: "1" }).status, 0);
   assert.deepEqual(order(root), ["web", "more", "backend"]);
   // 这一轮把真实用时写回去了；再把 backend 记成上次红过，它就排到最前。
-  const history = JSON.parse(readFileSync(join(root, "ash-test-runner-history.json"), "utf8"));
+  const history = JSON.parse(readFileSync(join(root, "navi-test-runner-history.json"), "utf8"));
   assert.equal(history["server: node backend.mjs"].failed, false);
   record({ ...history, "server: node backend.mjs": { seconds: 0.1, failed: true } });
   rmSync(join(root, "order.txt"));
-  assert.equal(run(root, { ASH_TEST_JOBS: "1" }).status, 0);
+  assert.equal(run(root, { NAVI_TEST_JOBS: "1" }).status, 0);
   assert.equal(order(root)[0], "backend");
 });
 
@@ -188,7 +250,7 @@ test("一条红就收掉在跑的其余叶子，不等它们跑完", parallelOnl
   const root = fixture(context, { backend: "node backend.mjs" });
   // web 那条一直等一个永远不会出现的文件（最多 10 秒）；后端那条等它起来就红。
   const startedAt = Date.now();
-  const result = run(root, { ASH_TEST_JOBS: "2", FIXTURE_WAIT_WEB: "never", FIXTURE_WAIT_BACKEND: "web.started", ACCEPT_TEST_BACKEND_EXIT: "7" });
+  const result = run(root, { NAVI_TEST_JOBS: "2", FIXTURE_WAIT_WEB: "never", FIXTURE_WAIT_BACKEND: "web.started", ACCEPT_TEST_BACKEND_EXIT: "7" });
   assert.equal(result.status, 7, result.stdout + result.stderr);
   assert.ok(Date.now() - startedAt < 9_000, "红了之后还在等别的叶子跑完");
   assert.match(result.stdout, /后端核心回归未通过/);
@@ -222,8 +284,8 @@ test("旧推送开关和空 stdin 不会绕过验收测试", (context) => {
 test("验收子进程不继承宿主数据库与运行目录，包括大小写变体", (context) => {
   const root = fixture(context);
   const result = run(root, {
-    ASH_DB: join(root, "host.db"), ASH_RUNS_DIR: join(root, "host-runs"),
-    ash_db: join(root, "lower.db"), ash_runs_dir: join(root, "lower-runs"),
+    NAVI_DB: join(root, "host.db"), NAVI_RUNS_DIR: join(root, "host-runs"),
+    navi_db: join(root, "lower.db"), navi_runs_dir: join(root, "lower-runs"),
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   // 每条叶子都要干净：只检查其中一条的话，别的可以带着宿主库跑而没人发现。
@@ -232,9 +294,14 @@ test("验收子进程不继承宿主数据库与运行目录，包括大小写�
 
 test("包声明的共用台子只交给本包的叶子，跑完收掉", parallelOnly, (context) => {
   const root = fixture(context, { webExtra: { testStage: "stage.mjs" } });
+  // 台子跑在执行器进程里：它起的浏览器、临时 profile 落在执行器给的临时目录里，收尾跟着删。
   writeFileSync(join(root, "web", "stage.mjs"), `
-    import { writeFileSync } from "node:fs";
+    import { mkdtempSync, writeFileSync } from "node:fs";
+    import { tmpdir } from "node:os";
+    import { join } from "node:path";
     export async function startSharedStage() {
+      const leftover = mkdtempSync(join(tmpdir(), "fixture-stage-"));
+      writeFileSync(${JSON.stringify(join(root, "stage.json"))}, JSON.stringify({ tmp: tmpdir(), chromeTmp: process.env.MAC_CHROMIUM_TMPDIR ?? null, leftover }));
       return { env: { FIXTURE_STAGE: "shared" }, stop: async () => writeFileSync(${JSON.stringify(join(root, "stopped"))}, "") };
     }
   `);
@@ -243,6 +310,11 @@ test("包声明的共用台子只交给本包的叶子，跑完收掉", parallel
   assert.equal(seen(root, "web").stage, "shared");
   assert.equal(seen(root, "backend").stage, null);
   assert.equal(existsSync(join(root, "stopped")), true);
+  const stage = seen(root, "stage");
+  assert.ok(stage.tmp !== root && !stage.leftover.startsWith(root), `台子用的还是宿主的系统临时目录：${stage.tmp}`);
+  assert.equal(stage.chromeTmp, stage.tmp);
+  assert.equal(existsSync(stage.leftover), false, "台子留在临时目录里的东西跑完还在");
+  assert.notEqual(seen(root, "web").tmp, stage.tmp, "叶子跟台子共用了临时目录");
 });
 
 test("叶子退出后它 detached 出去的后台进程也收掉，红绿都一样", parallelOnly, (context) => {
@@ -253,7 +325,7 @@ test("叶子退出后它 detached 出去的后台进程也收掉，红绿都一�
 
   const failed = fixture(context, { backend: "node backend.mjs" });
   const result = run(failed, {
-    ASH_TEST_JOBS: "2", FIXTURE_ORPHAN_BACKEND: "1", FIXTURE_WAIT_WEB: "never", FIXTURE_WAIT_BACKEND: "web.started", ACCEPT_TEST_BACKEND_EXIT: "7",
+    NAVI_TEST_JOBS: "2", FIXTURE_ORPHAN_BACKEND: "1", FIXTURE_WAIT_WEB: "never", FIXTURE_WAIT_BACKEND: "web.started", ACCEPT_TEST_BACKEND_EXIT: "7",
   });
   assert.equal(result.status, 7, result.stdout + result.stderr);
   assert.equal(alive(Number(readFileSync(join(failed, "backend.orphan"), "utf8"))), false, "红的那条自己留下的后台进程还活着");
@@ -271,7 +343,7 @@ test("共用台子起不来时报红，已经在跑的叶子照样收掉", paral
     }
   `);
   const startedAt = Date.now();
-  const result = run(root, { ASH_TEST_JOBS: "2", FIXTURE_WAIT_BACKEND: "never" });
+  const result = run(root, { NAVI_TEST_JOBS: "2", FIXTURE_WAIT_BACKEND: "never" });
   assert.notEqual(result.status, 0, result.stdout + result.stderr);
   assert.equal(alive(Number(readFileSync(join(root, "backend.started"), "utf8"))), false, "正在跑的后端叶子没被收掉");
   assert.ok(Date.now() - startedAt < 9_000, "台子起不来之后还在等别的叶子跑完");
@@ -308,7 +380,7 @@ test("收到信号时先把在跑的叶子收干净再退出，台子里装的�
     const root = fixture(context, { backend: "node backend.mjs", webExtra: { testStage: "stage.mjs" } });
     writeFileSync(join(root, "web", "stage.mjs"), greedyStage(root));
     const { code, stdout } = await runAndSignal(root, {
-      ASH_TEST_JOBS: "2", FIXTURE_WAIT_BACKEND: "never", FIXTURE_IGNORE_TERM_BACKEND: "1", FIXTURE_WAIT_WEB: "never",
+      NAVI_TEST_JOBS: "2", FIXTURE_WAIT_BACKEND: "never", FIXTURE_IGNORE_TERM_BACKEND: "1", FIXTURE_WAIT_WEB: "never",
     }, () => existsSync(join(root, "backend.started")) && existsSync(join(root, "web.started")), signalName);
     assert.equal(alive(Number(readFileSync(join(root, "backend.started"), "utf8"))), false, `${signalName}：不理 SIGTERM 的叶子没被收掉`);
     assert.equal(existsSync(join(root, "stopped")), true, `${signalName}：台子没被执行器收掉`);
@@ -337,6 +409,46 @@ test("进程清单看不全时不能报通过", { skip: process.platform !== "da
   assert.match(result.stdout, /无法确认这条起的进程已经收干净/);
   assert.doesNotMatch(result.stdout, /验收前置检查全部通过/);
 });
+// 只指定了库和 runs 的测试，数据目录会落在代码根的 data/ —— 被验收的那份检出自己的。执行器
+// 统一给，宿主带进来的那份不许漏给叶子。
+test("每条叶子拿到自己的临时数据目录，跑完删掉，宿主的数据目录不漏进去", parallelOnly, (context) => {
+  const root = fixture(context);
+  const host = join(root, "host-data");
+  const result = run(root, { NAVI_DATA_DIR: host, navi_data_dir: host });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const dirs = ["backend", "more", "web"].map((name) => {
+    const ran = seen(root, name);
+    assert.ok(ran.data && ran.dataReady, `${name} 开跑时数据目录还没备好：${ran.data}`);
+    assert.notEqual(ran.data, host, name);
+    assert.equal(existsSync(ran.data), false, `${name} 的数据目录跑完还留着`);
+    return ran.data;
+  });
+  assert.equal(new Set(dirs).size, 3, "几条叶子共用了同一个数据目录");
+  assert.equal(existsSync(host), false);
+});
+
+// 测试自己 mkdtemp 的目录红了、忘了删，就留在系统临时目录里，每跑一遍门禁多一批。叶子的
+// 系统临时目录由执行器给（夹具这里宿主的系统临时目录就是夹具根），跟着叶子一起收。
+test("每条叶子拿到自己的系统临时目录，留在里面的东西跑完一并删掉", parallelOnly, (context) => {
+  const root = fixture(context);
+  const result = run(root);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const dirs = ["backend", "more", "web"].map((name) => {
+    const ran = seen(root, name);
+    assert.ok(ran.tmp !== root && !ran.leftover.startsWith(root), `${name} 用的还是宿主的系统临时目录：${ran.tmp}`);
+    assert.equal(existsSync(ran.leftover), false, `${name} 留在系统临时目录里的东西跑完还在`);
+    assert.equal(existsSync(ran.tmp), false, `${name} 的系统临时目录跑完还留着`);
+    assert.equal(ran.chromeTmp, ran.tmp, `${name} 起的 Chrome 会把单例目录落到系统默认临时目录`);
+    return ran.tmp;
+  });
+  assert.equal(new Set(dirs).size, 3, "几条叶子共用了同一个系统临时目录");
+  // 只有 tsx 的编译缓存是同一轮叶子共用的一份（不然每条叶子都把 server 从头编一遍），也跟着收。
+  const caches = new Set(["backend", "more", "web"].map((name) => seen(root, name).tsxCache));
+  assert.equal(caches.size, 1, `几条叶子的 tsx 缓存不是同一份：${[...caches]}`);
+  const [cache] = caches;
+  assert.equal(dirname(cache ?? ""), dirname(dirname(dirs[0])), `tsx 缓存没放在这一轮的临时根下：${cache}`);
+  assert.equal(existsSync(cache), false, "tsx 缓存跑完还留着");
+});
 
 // 串行契约：Windows 的默认走法，其它平台显式切过去核对同一份行为。
 test("串行：两步按链依次跑完，各自报通过", (context) => {
@@ -360,10 +472,50 @@ test("串行：第一步红就透传退出码，后一步不跑", (context) => {
 
 test("串行：叶子同样不继承宿主数据库与运行目录", (context) => {
   const root = fixture(context);
-  const result = run(root, { ...SERIAL, ASH_DB: join(root, "host.db"), ash_runs_dir: join(root, "lower-runs") });
+  const result = run(root, { ...SERIAL, NAVI_DB: join(root, "host.db"), navi_runs_dir: join(root, "lower-runs") });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   for (const name of ["backend", "more", "web"]) assert.deepEqual(seen(root, name).environment, [], name);
 });
+
+test("串行：数据目录和系统临时目录一步一个，跑完删掉", (context) => {
+  const root = fixture(context);
+  const host = join(root, "host-data");
+  const result = run(root, { ...SERIAL, NAVI_DATA_DIR: host });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const [backend, more, web] = ["backend", "more", "web"].map((name) => seen(root, name));
+  for (const ran of [backend, more, web]) {
+    assert.ok(ran.data && ran.dataReady && ran.data !== host, JSON.stringify(ran));
+    assert.equal(existsSync(ran.data), false, "数据目录跑完还留着");
+    assert.equal(existsSync(ran.leftover), false, "留在系统临时目录里的东西跑完还在");
+  }
+  assert.equal(backend.data, more.data);
+  assert.notEqual(backend.data, web.data);
+  assert.equal(backend.tmp, more.tmp);
+  assert.notEqual(backend.tmp, web.tmp);
+});
+
+// 直接跑执行器（npm run test:web 这类，不经验收入口）：宿主带进来的改名前旧名（ASH_DATA_DIR 等）同样不漏给
+// 叶子 —— 漏下去的话，叶子里新写的 NAVI_DATA_DIR 和它同时出现、值不同，读的那头拒绝启动。
+for (const [label, mode] of [["并行", {}], ["串行", SERIAL]]) {
+  test(`直接跑执行器（${label}）：宿主带进来的各代库与数据目录不漏给叶子`, (context) => {
+    const root = fixture(context);
+    const host = join(root, "host-data");
+    const OLD = LEGACY_ENV_PREFIXES[0];
+    // 真实路径：执行器按 import.meta.url 认「是不是被直接跑的」，macOS 的临时目录在 /var → /private/var 软链后面。
+    const result = spawnSync(process.execPath, [join(realpathSync(root), "scripts", "test-runner.mjs"), "server", "test:accept"], {
+      cwd: tmpdir(), encoding: "utf8", timeout: 60_000,
+      env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root, ...mode,
+        [`${OLD}DATA_DIR`]: host, [`${OLD}DB`]: join(root, "host.db"), [`${OLD}RUNS_DIR`]: join(root, "host-runs") },
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /server test:accept 全部通过/);
+    for (const name of ["backend", "more"]) {
+      const { storage } = seen(root, name);
+      assert.deepEqual(Object.keys(storage), ["NAVI_DATA_DIR"], `${name} 看见了宿主的库或数据目录：${JSON.stringify(storage)}`);
+      assert.notEqual(storage.NAVI_DATA_DIR, host);
+    }
+  });
+}
 
 test("依赖缺失导致测试无法启动时拒绝放行", (context) => {
   const result = run(fixture(context, { web: "node missing-regression.mjs" }));

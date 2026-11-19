@@ -1,7 +1,8 @@
 // 对外批量建任务 API 的载荷形状(agent 面,§ interfaces)。纯类型模块 —— 从 index.ts
-// 拆出来只是为了不让那个文件继续长,消费方仍从 "@ash/shared" 导入,路径不变。
+// 拆出来只是为了不让那个文件继续长,消费方仍从 "@navi/shared" 导入,路径不变。
 import type { AgentType } from "./index.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
+import type { CreateReviewChoice } from "./review-on-create.ts";
 
 // One call to create a whole batch of single-mode tasks into an EXISTING group,
 // wiring cross-task dependency edges that the in-group scheduler honors. The
@@ -31,12 +32,18 @@ export interface BatchTaskInput {
   dependsOn?: string[];
   // Same resolution as dependsOn, but checked only when resuming a paused task.
   resumeDependsOn?: string[];
+  // 前置：这条任务建在哪几条上面（shared/src/prerequisites.ts）。先按同一批里的 `key` 认，认不出的当已有任务的 id。
+  prerequisites?: string[];
+  // 建出来就带的审查预约（shared/src/review-on-create.ts）。缺省 = 不带；MCP 那一侧缺省落成 "default"。
+  review?: CreateReviewChoice;
 }
 
 export interface BatchCreateTasksBody {
   tasks: BatchTaskInput[];
   chain?: boolean; // true → append the previous task's id to each task's deps (A→B→C→D)
   run?: boolean; // true → kick off the group (runGroup) right after creating
+  // true → 每一条建在上一条上（第 n 条的前置加上第 n-1 条）。跟 chain 是两件事：chain 只排先后，stack 传代码。
+  stack?: boolean;
   defaults?: {
     // applied to every task unless that task overrides the field
     agentType?: AgentType;
@@ -49,5 +56,6 @@ export interface BatchCreateTasksBody {
     worktreeBase?: string | null;
     mergeTargetBranch?: string | null;
     labels?: string[];
+    review?: CreateReviewChoice;
   };
 }

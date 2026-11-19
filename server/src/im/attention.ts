@@ -15,11 +15,11 @@
 //             只认成果的话上一道关的旧卡能放行下一道、下一道关也发不出新卡（审查实测）。不在关口上只有成果身份，
 //             和加关口身份之前发出去的卡同形
 // failed / accept 的代次与验收、重试接口收的期望值是同一份身份，按钮带着它进去（acceptIdentityOf 拆回两样）。
-import type { QuestionItem, Task } from "@ash/shared";
-import { questionItems, questionKey } from "@ash/shared/questions";
-import { humanTurnOf, type HumanTurnKind } from "@ash/shared/task-attention";
-import { acceptanceMessage } from "@ash/shared/accept-message";
-import { isFinalHumanGate } from "@ash/shared/workflow-policy";
+import type { QuestionItem, Task } from "@navi/shared";
+import { questionItems, questionKey } from "@navi/shared/questions";
+import { humanTurnOf, type HumanTurnKind } from "@navi/shared/task-attention";
+import { acceptanceMessage } from "@navi/shared/accept-message";
+import { isFinalHumanGate } from "@navi/shared/workflow-policy";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { projects, scheduledMessages, tasks } from "../db/schema.js";
@@ -91,7 +91,7 @@ export function awaitsPress(view: TaskView | null | undefined, kind: string, gen
 /** 一个任务此刻的样子：undefined = 这一下没读清（同 viewsOf 的约定，调用方什么都别动），null = 任务没了。 */
 export async function viewOf(taskId: string): Promise<TaskView | null | undefined> {
   const views = await viewsOf([taskId]).catch((error) => {
-    console.warn(`[ash] 读不清任务现状（${taskId}）:`, (error as Error).message);
+    console.warn(`[navi] 读不清任务现状（${taskId}）:`, (error as Error).message);
     return null;
   });
   return views?.has(taskId) ? views.get(taskId) ?? null : undefined;
@@ -169,7 +169,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
     try {
       gateVersion = task.mode === "duet" && task.status === "awaiting_review" ? await currentGateVersion(task.id) : null;
     } catch (error) {
-      console.warn(`[ash] 读不清讨论闸口现状，这一轮先不动它的卡 task=${task.id}:`, (error as Error).message);
+      console.warn(`[navi] 读不清讨论闸口现状，这一轮先不动它的卡 task=${task.id}:`, (error as Error).message);
       out.delete(task.id);
       continue;
     }

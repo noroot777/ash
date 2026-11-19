@@ -9,10 +9,10 @@ import { mock } from "node:test";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-accept-cleanup-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_DEPS_DIR = join(root, "deps");
+const root = mkdtempSync(join(tmpdir(), "navi-accept-cleanup-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -22,7 +22,7 @@ const { acceptTask } = await import("../src/task-accept.js");
 const { cleanupAcceptedTask } = await import("../src/git-accept-cleanup.js");
 const { writeRecord, readAnyPreview, recordPath } = await import("../src/preview-store.js");
 const { beginPreviewStart, endPreviewStart, previewStartCanceled, startPreview, stopPreview, stopPreviewOnRerun, sweepPreviews } = await import("../src/preview.js");
-const { hasPendingPreviewStops, retryPreviewStops } = await import("../src/preview-process-stop.js");
+const { hasPendingPreviewStops, overridePreviewStopTimings, retryPreviewStops } = await import("../src/preview-process-stop.js");
 const { previewState } = await import("../src/preview-public.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { rerunGateClosed } = await import("../src/rerun-gate.js");
@@ -37,6 +37,10 @@ const { inspectProcessSync, isPidAlive, killTree } = await import("../src/platfo
 const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
 const { restartTaskPreview } = await import("../src/workflow-steps.js");
 await ensureSchema();
+// 这里的夹具多半忽略 TERM（每停一次等满补 KILL 那一刀）或者被 mock 成杀不掉（每停一次等满放弃那道
+// 时限），按产品的 2 秒 / 5 秒真等，这一条要跑四分多钟。钉的是先后和留证，不是那两个数。
+const STOP_TIMINGS = { killAfterMs: 500, giveUpMs: 1_500 };
+overridePreviewStopTimings(STOP_TIMINGS);
 const children: ChildProcess[] = [];
 const sidecarPids: number[] = [];
 let sequence = 0;
@@ -138,7 +142,7 @@ try {
     assert.equal(existsSync(s.path), false);
     assert.equal(readAnyPreview(s.task.id), null);
     assert.equal(git(s.repo, "show", "main:feature.txt"), "committed feature");
-    assert.equal(existsSync(join(s.repo, ".git", "ash-worktree-backups")), false, "正常停止不能依靠半删除备份掩盖竞态");
+    assert.equal(existsSync(join(s.repo, ".git", "navi-worktree-backups")), false, "正常停止不能依靠半删除备份掩盖竞态");
     console.log(`✓ ${mode} preview stops before workspace deletion; late cache writes cannot recreate the directory`);
   }
 
@@ -181,7 +185,7 @@ try {
     const before = timeline(s);
     assert.match(before, /内容损坏/);
     assert.match(before, /记录格式无效/);
-    assert.match(before, /缺少有效进程身份或指向 ash 自身/);
+    assert.match(before, /缺少有效进程身份或指向 Navi 自身/);
     assert.match(before, /未向这些条目对应的 PID 发送停止信号/);
     assert.equal((await retryPreviewStops(s.task.id)).stopped, true);
     assert.equal(timeline(s), before, "失效记录只交代一次，不会无限重试或刷屏");
@@ -283,6 +287,7 @@ try {
       assert.equal(await stopPreview(s.task.id, "关闭身份暂时不可查的预览"), false);
       assert.equal(readAnyPreview(s.task.id), null);
       const fresh = await import(`../src/preview-process-stop.js?identity-restart=${Date.now()}`);
+      fresh.overridePreviewStopTimings(STOP_TIMINGS);
       const result = await fresh.retryPreviewStops(s.task.id);
       assert.equal(result.stopped, false, "模块重载后仍不能丢弃新捕获的无身份活进程");
       const denied = await accept(s.task.id);
@@ -431,10 +436,13 @@ try {
     mkdirSync(join(root, "runs", s.task.id), { recursive: true });
     const record = { taskId: s.task.id, gen: "old", pid: child.pid!, cmd: "old preview", life: "manual" as const, log: "", startedAt: new Date().toISOString(), port: null, url: null };
     writeRecord(record);
+    // 换代要落在「TERM 已发、KILL 未到」那段窗口里，这一档照产品时限给足窗口。
+    overridePreviewStopTimings(null);
     const result = action === "close" ? stopPreview(s.task.id, "关闭旧预览") : accept(s.task.id);
     await waitFor(() => existsSync(stopping));
     writeRecord({ ...record, gen: "replacement", pid: 0 });
     const done = await result;
+    overridePreviewStopTimings(STOP_TIMINGS);
     if (typeof done === "boolean") assert.equal(done, false);
     else {
       assert.equal(done.accepted, false);
@@ -489,7 +497,7 @@ try {
       assert.equal(isPidAlive(pid), false);
       assert.equal(hasPendingPreviewStops(s.task.id), false);
       assert.equal(existsSync(s.path), false);
-      assert.equal(existsSync(join(s.repo, ".git", "ash-worktree-backups")), false);
+      assert.equal(existsSync(join(s.repo, ".git", "navi-worktree-backups")), false);
     } finally { blocked?.mock.restore(); killTree(record.pid, "SIGKILL"); killTree(pid, "SIGKILL"); }
     console.log(`✓ canceled startup ${denyStop ? "archives failed state and retains a timed-out stop" : "waits for TERM-resistant processes"} before acceptance cleanup`);
   }

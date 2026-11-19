@@ -23,8 +23,8 @@
 // 更新时间一把钥匙（随手记也跟任务混在一起排），上面第 2、3 条的推导跟着失效 —— 那一档
 // 改成单段按 updatedAt 倒序扫，扫到「第 50 名比所有没扫的行都新」为止（见 searchAll 末尾）。
 import { join } from "node:path";
-import type { SearchHit, SearchField, TaskStatus } from "@ash/shared";
-import { SEARCH_MAX_HITS, compareSearchHits, searchMatchQuality, type SearchSort } from "@ash/shared/search";
+import type { SearchHit, SearchField, TaskStatus } from "@navi/shared";
+import { SEARCH_MAX_HITS, compareSearchHits, searchMatchQuality, type SearchSort } from "@navi/shared/search";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { notes, noteTasks, projects, tasks } from "./db/schema.js";
@@ -40,8 +40,8 @@ const TASK_PREVIEW_LIMIT = 2_000;
 const NOTE_PREVIEW_LIMIT = 4_000;
 const SCAN_CONCURRENCY = 6;
 
-// 任务 id 是 nanoid(12),字母表 [A-Za-z0-9_-];ash 分支只带前 8 位
-// (`ash/<id8>`),所以 8 位以上的前缀同样算「就是这个任务」。
+// 任务 id 是 nanoid(12),字母表 [A-Za-z0-9_-];navi 分支只带前 8 位
+// (`navi/<id8>`),所以 8 位以上的前缀同样算「就是这个任务」。
 const TASK_ID_PATTERN = /^[a-z0-9_-]{8,12}$/;
 
 export type SearchTerm = {
@@ -192,7 +192,7 @@ export function taskIdCandidates(query: ParsedSearchQuery): string[] {
   return [...candidates];
 }
 
-// 按「id 里不可能出现的字符」切一刀,于是直接粘 `ash/<id8>`、`/tasks/<id>`
+// 按「id 里不可能出现的字符」切一刀,于是直接粘 `navi/<id8>`、`/tasks/<id>`
 // 这类 URL 或 `taskId=<id>` 也能把 id 本体露出来。
 function idPartsOf(term: SearchTerm): string[] {
   return term.value.split(/[^a-z0-9_-]+/).filter((part) => TASK_ID_PATTERN.test(part));

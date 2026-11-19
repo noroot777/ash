@@ -12,7 +12,7 @@
 //    身份 + 回到原状态」包进队列认领临界区对推进原子可见(分开写的窗口会让推进漏记
 //    交接);恢复 paused 不是检查点落位,quietAdvance 防静止成员被续跑。
 import { eq } from "drizzle-orm";
-import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
+import type { AgentType, SessionRole, TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";

@@ -57,7 +57,7 @@
   font-size: var(--t-xs);
 }
 
-/* 上下文：一根细条画剩下的那一截，剩到 15% 以下变红 */
+/* 上下文：一根细条画已经用掉的那一截，剩到 15% 以下变红 */
 .insp-bar {
   display: block;
   width: 48px;
@@ -295,4 +295,43 @@
 
 .task-inspector > .insp-note {
   margin: 14px 0 0;
+}
+
+/* 前置那一行末尾的叉：指到这一行、键盘走到才出，触屏上一直在（task-detail/info/InfoPrerequisites.tsx） */
+.insp-prereq-remove {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  margin-left: auto;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+}
+
+.insp-kv > dd:hover > .insp-prereq-remove,
+.insp-kv > dd:focus-within > .insp-prereq-remove {
+  opacity: 1;
+}
+
+.insp-prereq-remove:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.insp-prereq-remove:focus-visible {
+  outline: 2px solid var(--focus-soft);
+  outline-offset: 0;
+}
+
+.insp-prereq-remove:disabled {
+  cursor: default;
+}
+
+@media (hover: none) {
+  .insp-prereq-remove { opacity: 1; }
 }

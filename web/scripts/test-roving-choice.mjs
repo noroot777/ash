@@ -114,12 +114,16 @@ try {
   assert.deepEqual(
     launch.filter((item) => item.disabled).map((item) => item.value),
     ["queue"],
-    "台子上「创建并排队」是禁用的(团队任务不支持排队)",
+    "台子上「创建并排队」是禁用的(叫着人时只能创建并运行)",
   );
+  // 「运行」后面紧挨着的就是禁用的那一档;再往后是哪一档按这组此刻的样子算,不写死 —— 启动方式会加档。
+  const order = launch.map((item) => item.value);
+  assert.equal(order[order.indexOf("run") + 1], "queue", "台子前提:禁用的那一档紧跟在「运行」后面");
+  const afterDisabled = order[order.indexOf("queue") + 1];
   await focusValue("启动方式", "run");
   await page.keyboard.press("ArrowRight");
-  assert.equal(await text("launch"), "create", "禁用的那一档跳过去,不是停在上面");
-  assert.equal(await focusedValue(), "create");
+  assert.equal(await text("launch"), afterDisabled, "禁用的那一档跳过去,不是停在上面");
+  assert.equal(await focusedValue(), afterDisabled);
   await page.keyboard.press("ArrowLeft");
   assert.equal(await text("launch"), "run", "往回也跳过禁用那一档");
   await page.keyboard.press("Escape");

@@ -8,7 +8,8 @@
 // 并且能让绑定状态的 GET 故意晚回（bindingDelay），用来钉住「写操作之前发出的轮询不许把界面拽回去」。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { FeishuBinding, FeishuGroups, FeishuStatus, ProjectView } from "@ash/shared";
+import type { FeishuBinding, FeishuGroups, FeishuStatus, ProjectView } from "@navi/shared";
+import { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "@navi/shared/human-action";
 import "../../src/styles/global.css";
 import { FeishuSettings } from "../../src/settings/FeishuSettings.tsx";
 
@@ -31,7 +32,7 @@ const server = {
       lastEventAt: configured ? at(-3) : null,
       error: null,
       reconnectAttempts: 0,
-      botName: configured ? "ash 助手" : null,
+      botName: configured ? "navi 助手" : null,
     },
     options: {
       enabled: true,
@@ -51,7 +52,7 @@ const server = {
     : { state: "none" }) as FeishuBinding,
   groups: (params.get("groups") === "demo"
     ? {
-      groups: [{ chatId: "oc_team", name: "ash 开发群", projectId: "p-ash", boundAt: at(-600), pushCards: false, receiving: false, boundBy: "fjh", canEdit: true }],
+      groups: [{ chatId: "oc_team", name: "navi 开发群", projectId: "p-navi", boundAt: at(-600), pushCards: false, receiving: false, boundBy: "fjh", canEdit: true }],
       claims: [{ codeId: "gcode-1", projectId: "p-daily", chatId: "oc_daily", name: "日报群", claimedAt: at(-1), expiresAt: at(8) }],
     }
     : { groups: [], claims: [] }) as FeishuGroups,
@@ -71,7 +72,7 @@ const server = {
 (window as unknown as { __feishu: typeof server }).__feishu = server;
 
 const projects = [
-  { id: "p-ash", name: "ash" },
+  { id: "p-navi", name: "navi" },
   { id: "p-daily", name: "daily-report" },
 ] as unknown as ProjectView[];
 
@@ -81,7 +82,7 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 function reply(body: unknown, status = 200, human = false) {
   const headers: Record<string, string> = { "content-type": "application/json" };
   // 真服务端的闸在每个真人动作的响应上发下一份凭据；这里照做，页面才会拿新的那份发下一次。
-  if (human) headers["x-ash-human-action-token-next"] = `tok-${++server.token}`;
+  if (human) headers[HUMAN_ACTION_TOKEN_NEXT_HEADER] = `tok-${++server.token}`;
   return new Response(JSON.stringify(body), { status, headers });
 }
 
@@ -100,7 +101,7 @@ async function handle(method: string, path: string, body: Record<string, unknown
   if (path === "/api/projects") return reply(projects);
   if (path === "/api/im/feishu/status") {
     if (s.connection.state === "connecting" && server.connectAt && Date.now() >= server.connectAt) {
-      s.connection = { ...s.connection, state: "connected", since: at(0), connectedAt: at(0), botName: "ash 助手" };
+      s.connection = { ...s.connection, state: "connected", since: at(0), connectedAt: at(0), botName: "navi 助手" };
     }
     return reply(s);
   }
@@ -186,7 +187,7 @@ window.fetch = async (input, init) => {
   const method = (init?.method ?? "GET").toUpperCase();
   const headers = new Headers(init?.headers);
   const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-  server.calls.push({ method, path, token: headers.get("x-ash-human-action-token"), body });
+  server.calls.push({ method, path, token: headers.get(HUMAN_ACTION_TOKEN_HEADER), body });
   return handle(method, path, body);
 };
 

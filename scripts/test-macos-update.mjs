@@ -1,48 +1,42 @@
-// mac app 自更新的定点回归（仅 macOS）：装新版之前那道闸（UpdateGate）和发版脚本（release.mjs）。
+// mac app 自更新的定点回归（仅 macOS）：装新版之前那道闸（UpdateGate）。发版脚本在
+// test-macos-release.mjs，真 Sparkle 从 dmg 装新版在 test-macos-sparkle-dmg.mjs。
 //
 // 闸：编进测试驱动的是真的 UpdateGate / RestartImpact / ServerShutdown / DatabaseBackup /
-// ServerRecord；端口上摆一个假的 ash（独立进程，按 health 协议报 pid 和数据根，restart-impact
+// ServerRecord；端口上摆一个假的 navi（独立进程，按 health 协议报 pid 和数据根，restart-impact
 // 的答复从一个状态文件里读，收到 SIGTERM 才退），数据根里放一份 WAL 还没落盘的真 SQLite 库。
 // 覆盖：没人会被打断 → 不问、停服务、备份、放行；会打断（判失败 + 握着 MCP，同一个任务只算
 // 一次）→ 先问；选「等」→ 排空后自己放行；选「现在」→ 立刻放行；问不出来 → 当成会打断；
 // 等的时候服务一时回 503 / 不应答 → 确认不了、接着等，不停服务；停服务只停评估过的那个进程；
 // 服务停不下来 → 不放行、不备份、松开启动闸；另一处攥着启动锁 → 不停服务；维护期里别的进程起
-// 不了服务、维护方没了就作废；端口上是别的 ash → 不碰它；退出那一档的取消 / 等 / 现在、备份失败
+// 不了服务、维护方没了就作废；端口上是别的 navi → 不碰它；退出那一档的取消 / 等 / 现在、备份失败
 // 时的说法；Sparkle 放弃（放行后 / 等待中）→ 闸收回、作废的安装回调不再跑、重试再备份；库上次是
 // 别的构建号在用、又没备份过 → 起服务前先备份并固定成恢复点，备份不成不起；没有服务记录、新版连着
 // 起不来时重试不再备份，迁移前的原件一直留着；起它的启动器没等到、服务后来起来了 → 之后谁看到它
 // 应答谁确认，下一版照常补备份；上一版起过却没人确认 → 也不拿更早的底顶替；确认之后旧恢复点作废
 // （删不掉文件也一样）；确认之前备份不轮换、之后只留最近 5 份，同一秒不覆盖、按生成先后认新旧；
 // 旧版 app 起的服务认得出来。
-//
-// 发版：用演练密钥和一个假的 Ash.app 跑 `release.mjs --local`：zip 与 appcast 都验得过签、被篡改的
-// 包与 appcast 验不过；同一版、更旧的版本拒发；app 里的公钥和签名私钥不是一对时拒发；第二版排在
-// 第一版前面、第一版原样保留；`--notes` 进 appcast（转义过）；同一构建号缓存的 zip 来自另一份 app
-// 时拒发。正式发版对着一个本地假 GitHub 跑：只给 GH_TOKEN，传包和提交 appcast 都走这一张凭证；
-// 凭证没有写权限时什么都不传。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, generateKeyPairSync } from "node:crypto";
-import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { once } from "node:events";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
 const mac = join(root, "desktop/macos");
-const temporary = mkdtempSync(join(tmpdir(), "ash-macos-update-"));
+const temporary = mkdtempSync(join(tmpdir(), "navi-macos-update-"));
 const data = join(temporary, "data");
 const binary = join(temporary, "update-tests");
 const fakes = new Set();
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
-  ...["AshConfig", "AshHealth", "DatabaseBackup", "RestartImpact", "ServerControl", "ServerLauncher", "ServerStartLock", "UpdateGate"]
+  ...["NaviConfig", "NaviHealth", "DatabaseBackup", "LegacyIdentity", "LoginService", "RestartImpact", "ServerControl", "ServerLauncher", "ServerStartLock", "UpdateGate"]
     .map((name) => join(mac, `Sources/${name}.swift`)),
   join(mac, "Tests/Update/main.swift"), "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
@@ -59,8 +53,10 @@ async function freePort() {
 const port = await freePort();
 const runtime = join(temporary, "no-runtime");
 const windowPort = await freePort();
-const env = { ...process.env, ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data, ASH_MAC_RUNTIME: runtime,
-  ASH_MAC_WINDOW_PORT: String(windowPort) };
+// 跑测试的这个进程自己带着的 app 配置（两代名字都算）不往下传。
+const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !new RegExp(`^(?:NAVI_|${LEGACY_ENV_PREFIXES[0]})(?:DATA_DIR|URL|LOCAL_ONLY|MAC_\\w+)$`).test(key)));
+const env = { ...inherited, NAVI_URL: `http://127.0.0.1:${port}`, NAVI_DATA_DIR: data, NAVI_MAC_RUNTIME: runtime,
+  NAVI_MAC_WINDOW_PORT: String(windowPort) };
 const impactFile = join(temporary, "impact.json");
 const setImpact = (value) => writeFileSync(impactFile, typeof value === "string" ? value : JSON.stringify(value));
 const healthFile = join(temporary, "health.txt");
@@ -68,7 +64,7 @@ const healthFile = join(temporary, "health.txt");
 const setHealth = (value) => writeFileSync(healthFile, value);
 const clear = { survives: [{ id: "s", title: "接管得了的", pid: 1 }], resumes: [{ id: "lead", title: "调度台" }], interrupted: [], mcpDisrupted: [] };
 
-/** 假 ash：独立进程，pid 就是它自己。stubborn = 不理 SIGTERM。 */
+/** 假 navi：独立进程，pid 就是它自己。stubborn = 不理 SIGTERM。 */
 async function startFake({ dataDir = data, stubborn = false } = {}) {
   const source = `
     const http = require('node:http'); const fs = require('node:fs');
@@ -150,7 +146,7 @@ try {
   const asked = waiting.output();
   assert.match(asked, /会打断 2 个任务/, "a task in both lists counts once");
   assert.match(asked, /排队的任务 —— 会被判失败：排队中/);
-  assert.match(asked, /握着 MCP 的任务 —— 手里握着 ash MCP/);
+  assert.match(asked, /握着 MCP 的任务 —— 手里握着 Navi MCP/);
   assert.match(asked, /等它们跑完再装,现在装/);
   await delay(800);
   assert.equal(alive(fake), true, "waiting leaves the service alone");
@@ -228,16 +224,16 @@ try {
   fake = await startFake();
   const entered = join(temporary, "lock-entered");
   const locker = spawn("/usr/bin/lockf", ["-k", join(data, ".mac-launch.lock"), process.execPath, "-e",
-    `require('node:fs').writeFileSync(${JSON.stringify(entered)},'1');setTimeout(()=>{},60000)`], { stdio: "ignore" });
+    `require('node:fs').writeFileSync(${JSON.stringify(entered)},'1');setTimeout(()=>{},60000)`], { stdio: "ignore", detached: true });
   fakes.add(locker);
   for (let i = 0; i < 100 && !existsSync(entered); i++) await delay(50);
   const backupsBefore = backups().length;
   result = await drive(["update", "10"], { extraEnv: { LOCK_TIMEOUT: "1" } });
   assert.equal(result.status, 1, result.out);
-  assert.match(result.out, /REPORT 另一处正在起 ash 服务/);
+  assert.match(result.out, /REPORT 另一处正在起 Navi 服务/);
   assert.equal(alive(fake), true, "the service is not stopped while someone else is starting one");
   assert.equal(backups().length, backupsBefore);
-  locker.kill("SIGKILL");
+  process.kill(-locker.pid, "SIGKILL"); // 整组：只杀 lockf 的话，它里面那个 node 还要再活一分钟
   await once(locker, "exit");
   console.log("PASS: the gate takes the launch lock before stopping anything");
 
@@ -270,22 +266,22 @@ try {
   await once(fake, "exit");
   console.log("PASS: a service that will not stop blocks the install and releases the launch hold");
 
-  // ── 端口上是别的 ash：不碰它 ──
+  // ── 端口上是别的 navi：不碰它 ──
   setImpact({ ...clear, interrupted: [{ id: "x", title: "别人的任务", reason: "r" }] });
   fake = await startFake({ dataDir: join(temporary, "someone-else") });
   result = await drive(["update", "10"]);
   assert.equal(result.status, 0, result.out);
   assert.doesNotMatch(result.out, /ASK/);
-  assert.equal(alive(fake), true, "another ash on the port is not ours to stop");
+  assert.equal(alive(fake), true, "another navi on the port is not ours to stop");
   fake.kill("SIGKILL");
   await once(fake, "exit");
-  console.log("PASS: another ash on the port is neither asked about nor stopped");
+  console.log("PASS: another navi on the port is neither asked about nor stopped");
 
   // ── 退出那一档：取消 / 等 / 现在 ──
   setImpact({ ...clear, interrupted: [{ id: "a", title: "排队的任务", reason: "排队中" }] });
   fake = await startFake();
   result = await drive(["quit", "5"], { answers: "cancel" });
-  assert.match(result.out, /ASK .*退出 ash 时 Sparkle 会把下好的新版装上.*\| 等它们跑完再装,现在装,取消/);
+  assert.match(result.out, /ASK .*退出 Navi 时 Sparkle 会把下好的新版装上.*\| 等它们跑完再装,现在装,取消/);
   assert.match(result.out, /REPLY false/);
   assert.equal(alive(fake), true);
   const quitWaiting = driveAsync(["quit", "15", "drain"], "wait");
@@ -440,7 +436,7 @@ try {
   fake = await startFake();
   result = await drive(["stale", "10"]);
   assert.equal(result.status, 0, result.out);
-  assert.match(result.out, /HOLD 正在换成新版的 ash 服务[\s\S]*RELEASE[\s\S]*PROCEED[\s\S]*PHASE idle LAUNCH-HOLD none/,
+  assert.match(result.out, /HOLD 正在换成新版的 Navi 服务[\s\S]*RELEASE[\s\S]*PROCEED[\s\S]*PHASE idle LAUNCH-HOLD none/,
     "after replacing a stale service the gate opens again so the window starts the new one");
   console.log("PASS: a service started by an older build is recognised and replaced through the gate");
 
@@ -465,195 +461,8 @@ try {
   assert.equal(same[3], same[2], "the newest is the one made last, whatever its name sorts as");
   db.close();
   console.log("PASS: backups are consistent snapshots; unconfirmed points are kept, then the newest five; never overwritten, ordered by creation");
-
-  // ── 发版：本地演练 ──
-  await releaseRehearsal();
 } finally {
   for (const child of fakes) child.kill("SIGKILL");
   rmSync(temporary, { recursive: true, force: true });
 }
 
-async function releaseRehearsal() {
-  const sparkle = spawnSync(process.execPath, [join(mac, "scripts/sparkle.mjs")], { encoding: "utf8" });
-  assert.equal(sparkle.status, 0, sparkle.stderr);
-  const signUpdate = join(sparkle.stdout.trim(), "bin/sign_update");
-  const makeKey = (name) => {
-    const { privateKey } = generateKeyPairSync("ed25519");
-    const jwk = privateKey.export({ format: "jwk" });
-    const file = join(temporary, `${name}.key`);
-    writeFileSync(file, Buffer.from(jwk.d, "base64url").toString("base64"));
-    return { file, publicKey: Buffer.from(jwk.x, "base64url").toString("base64") };
-  };
-  const key = makeKey("rehearsal");
-  const wrong = makeKey("wrong");
-  const feed = join(temporary, "feed");
-  const fakeApp = (version, publicKey) => {
-    const app = join(temporary, `apps-${version}`, "Ash.app");
-    mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
-    writeFileSync(join(app, "Contents/MacOS/Ash"), `binary ${version}`);
-    writeFileSync(join(app, "Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict>
-  <key>CFBundleVersion</key><string>${version}</string>
-  <key>CFBundleShortVersionString</key><string>0.2.0</string>
-  <key>AshSourceCommit</key><string>unknown</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>SUFeedURL</key><string>http://127.0.0.1:1/appcast.xml</string>
-  <key>SUPublicEDKey</key><string>${publicKey}</string>
-</dict></plist>`);
-    return app;
-  };
-  const release = (app, keyFile, notes = "演练") => spawnSync(process.execPath,
-    [join(mac, "scripts/release.mjs"), "--local", feed, "--app", app, "--ed-key-file", keyFile, "--notes", notes],
-    { encoding: "utf8", env: { ...process.env, ASH_MAC_RELEASE_ARTIFACTS: join(temporary, "artifacts") } });
-  const verify = (...args) => spawnSync(signUpdate, ["--verify", "--ed-key-file", key.file, ...args], { encoding: "utf8" }).status;
-  const appcast = () => readFileSync(join(feed, "appcast.xml"), "utf8");
-
-  let result = release(fakeApp("20000101.0001", key.publicKey), key.file);
-  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  const first = join(feed, "Ash-0.2.0-20000101.0001.zip");
-  assert.ok(existsSync(first));
-  const signature = appcast().match(/sparkle:edSignature="([^"]+)"/)[1];
-  assert.equal(verify(first, signature), 0, "the zip verifies against the signature in the appcast");
-  assert.equal(verify(join(feed, "appcast.xml")), 0, "the appcast itself is signed");
-  assert.match(appcast(), /url="http:\/\/127\.0\.0\.1:1\/Ash-0\.2\.0-20000101\.0001\.zip"/);
-  assert.match(appcast(), /length="\d+"/);
-
-  result = release(fakeApp("20000101.0001", key.publicKey), key.file);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /已经发过了/);
-  result = release(fakeApp("20000101.0000", key.publicKey), key.file);
-  assert.match(result.stderr, /不比 appcast 里最新的 20000101\.0001 新/);
-  result = release(fakeApp("20000101.0002", key.publicKey), wrong.file);
-  assert.match(result.stderr, /不是一对/, "an app whose key does not match the signing key is never published");
-
-  result = release(fakeApp("20000101.0002", key.publicKey), key.file, "第二版");
-  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  const versions = [...appcast().matchAll(/<sparkle:version>([^<]+)<\/sparkle:version>/g)].map((m) => m[1]);
-  assert.deepEqual(versions, ["20000101.0002", "20000101.0001"], "newest first, the earlier item kept");
-  assert.equal(appcast().match(/sparkle:edSignature="([^"]+)"/g).length, 2);
-  assert.equal(verify(join(feed, "appcast.xml")), 0, "re-signed after adding the item");
-  const descriptions = [...appcast().matchAll(/<description>([^<]*)<\/description>/g)].map((m) => unescapeXml(m[1]));
-  assert.deepEqual(descriptions, ["<p>第二版</p>", "<p>演练</p>"], "--notes reaches the appcast");
-
-  const second = join(feed, "Ash-0.2.0-20000101.0002.zip");
-  const newest = appcast().match(/sparkle:edSignature="([^"]+)"/)[1];
-  appendFileSync(second, "tampered");
-  assert.notEqual(verify(second, newest), 0, "a tampered zip fails verification");
-  writeFileSync(join(feed, "appcast.xml"), appcast().replace("20000101.0002</sparkle:version>", "20990101.0002</sparkle:version>"));
-  assert.notEqual(verify(join(feed, "appcast.xml")), 0, "a tampered appcast fails verification");
-  // 同一构建号：上次压的 zip 来自另一份 app → 拒发
-  const cached = join(temporary, "artifacts", "v0.2.0-20990101.0003");
-  mkdirSync(cached, { recursive: true });
-  writeFileSync(join(cached, "Ash-0.2.0-20990101.0003.zip"), "zip of some other build");
-  writeFileSync(join(cached, "Ash-0.2.0-20990101.0003.zip.source"), "0000\n");
-  result = release(fakeApp("20990101.0003", key.publicKey), key.file);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /是上次从另一份 app 压的/, "a cached zip of a different app is never signed for this one");
-  console.log("PASS: release --local signs zip and appcast, refuses re-releases, older versions and mismatched keys; tampering is detected; notes kept; cached zip bound to its app");
-
-  await formalRehearsal(key, fakeApp);
-}
-
-function unescapeXml(text) {
-  return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
-}
-
-/** 本地假 GitHub：只认 `Bearer test-token`；记下每个请求。push=false 时这张凭证没有写权限。 */
-async function fakeGitHub({ push }) {
-  const state = { calls: [], files: new Map(), releases: [], downloads: new Map() };
-  let base = "";
-  const server = createHttpServer(async (req, res) => {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks);
-    const url = new URL(req.url, base);
-    const json = (status, value) => { res.statusCode = status; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(value)); };
-    if (req.method === "GET" && state.downloads.has(url.pathname)) return res.end(state.downloads.get(url.pathname));
-    state.calls.push(`${req.method} ${url.pathname}`);
-    if (req.headers.authorization !== "Bearer test-token") return json(401, { message: "Bad credentials" });
-    if (req.method === "GET" && url.pathname === "/repos/o/r") return json(200, { permissions: { push } });
-    const contents = url.pathname.match(/^\/repos\/o\/r\/contents\/(.+)$/);
-    if (contents) {
-      const path = decodeURIComponent(contents[1]);
-      const file = state.files.get(path);
-      if (req.method === "GET") return file ? json(200, { sha: file.sha, encoding: "base64", content: Buffer.from(file.text).toString("base64") }) : json(404, {});
-      const put = JSON.parse(body);
-      if (file?.sha !== put.sha) return json(409, { message: "sha does not match" });
-      const sha = createHash("sha1").update(put.content).digest("hex");
-      state.files.set(path, { sha, text: Buffer.from(put.content, "base64").toString("utf8"), branch: put.branch, message: put.message });
-      return json(200, { content: { sha } });
-    }
-    if (req.method === "GET" && url.pathname.startsWith("/repos/o/r/releases/tags/")) {
-      const found = state.releases.find((r) => r.tag_name === decodeURIComponent(url.pathname.split("/").pop()));
-      return found ? json(200, found) : json(404, {});
-    }
-    if (req.method === "POST" && url.pathname === "/repos/o/r/releases") {
-      const { tag_name: tag, body: notes } = JSON.parse(body);
-      const created = { tag_name: tag, body: notes, assets: [], upload_url: `${base}/uploads/${tag}{?name,label}` };
-      state.releases.push(created);
-      return json(201, created);
-    }
-    if (req.method === "POST" && url.pathname.startsWith("/uploads/")) {
-      const tag = url.pathname.split("/")[2];
-      const name = url.searchParams.get("name");
-      const asset = { name, size: body.length, browser_download_url: `${base}/download/${tag}/${name}` };
-      state.downloads.set(`/download/${tag}/${name}`, body);
-      state.releases.find((r) => r.tag_name === tag).assets.push(asset);
-      return json(201, asset);
-    }
-    json(404, {});
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  base = `http://127.0.0.1:${server.address().port}`;
-  return { state, base, close: () => new Promise((done) => { server.closeAllConnections(); server.close(done); }) };
-}
-
-async function formalRehearsal(key, fakeApp) {
-  const configFile = join(temporary, "release.json");
-  writeFileSync(configFile, JSON.stringify({ repo: "o/r", branch: "main", appcastPath: "ash/mac/appcast.xml", tagPrefix: "ash-mac-v",
-    keychainAccount: "unused", publicKey: key.publicKey }));
-  const app = fakeApp("20000102.0001", key.publicKey);
-  // 正式发版要求 app 的更新源就是 release.json 算出来的那一个。
-  const plist = join(app, "Contents/Info.plist");
-  writeFileSync(plist, readFileSync(plist, "utf8").replace("http://127.0.0.1:1/appcast.xml", "https://raw.githubusercontent.com/o/r/main/ash/mac/appcast.xml"));
-  const publish = async (github) => new Promise((done) => {
-    const child = spawn(process.execPath, [join(mac, "scripts/release.mjs"), "--app", app, "--ed-key-file", key.file, "--notes", "正式 & <b>演练</b>"], {
-      env: { ...process.env, GH_TOKEN: "test-token", GITHUB_TOKEN: "", ASH_MAC_GITHUB_API: github.base,
-        ASH_MAC_RELEASE_CONFIG: configFile, ASH_MAC_RELEASE_ARTIFACTS: join(temporary, "formal-artifacts") },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let out = "";
-    child.stdout.on("data", (chunk) => { out += chunk; });
-    child.stderr.on("data", (chunk) => { out += chunk; });
-    child.once("close", (status) => done({ status, out }));
-  });
-
-  let github = await fakeGitHub({ push: false });
-  let result = await publish(github);
-  await github.close();
-  assert.notEqual(result.status, 0, result.out);
-  assert.match(result.out, /没有写权限/);
-  assert.deepEqual(github.state.calls.filter((c) => !c.startsWith("GET")), [], "nothing is published with a credential that cannot finish the job");
-
-  github = await fakeGitHub({ push: true });
-  result = await publish(github);
-  await github.close();
-  assert.equal(result.status, 0, result.out);
-  assert.match(result.out, /GitHub 凭证：GH_TOKEN/);
-  const order = github.state.calls.filter((c) => !c.startsWith("GET"));
-  assert.deepEqual(order.map((c) => c.split(" ")[0] + " " + c.split("/")[1]), ["POST repos", "POST uploads", "PUT repos"],
-    "release, then the zip, then the appcast — all through the API with the one token");
-  const committed = github.state.files.get("ash/mac/appcast.xml");
-  assert.equal(committed.branch, "main");
-  assert.match(committed.text, /<sparkle:version>20000102\.0001<\/sparkle:version>/);
-  assert.match(committed.text, new RegExp(`url="${github.base}/download/ash-mac-v0\\.2\\.0-20000102\\.0001/Ash-0\\.2\\.0-20000102\\.0001\\.zip"`));
-  writeFileSync(join(temporary, "committed-appcast.xml"), committed.text);
-  const sparkle = spawnSync(process.execPath, [join(mac, "scripts/sparkle.mjs")], { encoding: "utf8" }).stdout.trim();
-  assert.equal(spawnSync(join(sparkle, "bin/sign_update"), ["--verify", "--ed-key-file", key.file, join(temporary, "committed-appcast.xml")]).status, 0,
-    "the committed appcast is signed");
-  assert.equal(github.state.releases[0].body, "正式 & <b>演练</b>", "the release body is the notes as given");
-  assert.equal(unescapeXml(committed.text.match(/<description>([^<]*)<\/description>/)[1]), "<p>正式 &amp; &lt;b&gt;演练&lt;/b&gt;</p>",
-    "in the appcast the notes are HTML-escaped");
-  console.log("PASS: a formal release with only GH_TOKEN checks write access first, then uploads and commits the appcast with that same token");
-}

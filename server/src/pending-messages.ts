@@ -30,7 +30,7 @@
 // docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
 import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
-import type { AgentType, ScheduledMessageMode } from "@ash/shared";
+import type { AgentType, ScheduledMessageMode } from "@navi/shared";
 import { bus } from "./bus.js";
 import { createDeliveryLease } from "./delivery-lease.js";
 import { leasesHeldBy, mintLeaseStamp } from "./delivery-fence.js";
@@ -44,9 +44,9 @@ import type { TurnIdentity, TurnSource } from "./runs.js";
 import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, pendingMessageLabel, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { deliveryInFlight, holdInFlight } from "./pending-in-flight.js";
-import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorBlockedReason, monitorIdFromOrigin } from "@navi/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { MonitorWakeData } from "@navi/shared/monitor-wake";
 import { deliveryOptions, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
 import { deliveryVerdictOf } from "./pending-delivery-facts.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
@@ -62,6 +62,8 @@ import {
   reconcileCheckpointDeliveries,
 } from "./pending-checkpoint-recovery.js";
 import { id, now } from "./util.js";
+import type { DispatchHold } from "./task-hold.js";
+import type { FreezeGuard } from "./turn-freeze.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
 // 判定与投递参数的无状态部分拆在 pending-verdict.ts(本文件顶过 700 行上限);
@@ -223,7 +225,7 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
   const quoted = text ? `\n原文：${text.length > 500 ? `${text.slice(0, 500)}…` : text}` : "";
   const note = `〔系统〕${label}未发送，已取消${when}：${reason}${quoted}`;
   if (!(await appendTaskTimeline(message.taskId, alertLine(note)))) {
-    console.warn(`[ash] ${note} task=${message.taskId} message=${message.id}`);
+    console.warn(`[navi] ${note} task=${message.taskId} message=${message.id}`);
   }
 }
 
@@ -318,7 +320,7 @@ export async function reclaimStaleDeliveries(): Promise<number> {
   // 输入,下一次启动再送一遍 —— 上面那句「代价方向是重发一次而不是丢一句话」对用户打的字
   // 成立,对 agent 自己的流水线交接不成立(第 1 轮审查必须修 3 的另一半)。
   await reconcileCheckpointDeliveries()
-    .catch((error) => console.error("[ash] 在途续跑交代对账失败（不影响开机）:", error));
+    .catch((error) => console.error("[navi] 在途续跑交代对账失败（不影响开机）:", error));
   const reclaimed = await db
     .update(scheduledMessages)
     .set({ deliveringSince: null })
@@ -329,7 +331,7 @@ export async function reclaimStaleDeliveries(): Promise<number> {
       or(isNull(scheduledMessages.origin), ne(scheduledMessages.origin, CHECKPOINT_RUN_ORIGIN)),
     ))
     .returning({ id: scheduledMessages.id });
-  if (reclaimed.length) console.log(`[ash] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
+  if (reclaimed.length) console.log(`[navi] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
   await recoverPendingCheckpoints();
   return reclaimed.length;
 }
@@ -353,21 +355,26 @@ export function deliverPendingMessages(taskId?: string): Promise<void> {
 // 判了「等」的那一轮,到底在等什么 —— 给滞留告警组装一句用户读得懂的话。
 // `deliveryVerdict` 的 wait 分支刻意不带 reason(它是纯判定,不负责措辞),而这几样正是
 // 调用处刚刚查出来的,顺手拼起来比让判定多返回一个字段便宜。
+//
+// 返回 null = 这一等就是排队本身的语义,界面上本来就看得见在等什么(任务在跑、分组被你
+// 停了、前面还排着别的任务、正在讨论、在等前置),等多久都不算滞留,不出声。滞留告警只为
+// 「等的理由在界面上看不出来」的那几种存在:读不到任务、占位没人回滚、状态说不清。
+// 一轮跑二十分钟时每条排队消息都报一句「还没发出去：任务正在运行」,是把正常排队说成了故障。
 function waitReason(
   task: { status: string; mode: string | null } | null,
-  blockers: { queueBlocked: boolean; groupPaused: boolean },
-): string {
+  blockers: { queueBlocked: boolean; groupPaused: boolean; dispatchHold: DispatchHold | null; prerequisiteWait?: false | "prerequisites" | "launch"; discussing?: boolean },
+): string | null {
   if (!task) return "读不到任务当前状态";
-  if (blockers.groupPaused) return "任务所在分组已暂停";
-  if (task.status === "running") return "任务正在运行，等它这一轮结束";
+  if (blockers.groupPaused || blockers.dispatchHold || blockers.discussing || blockers.prerequisiteWait) return null;
+  if (task.status === "running") return null;
   // queued 单独说:它既可能是正常排队,也可能是一具没人回滚的占位遗留 —— 后者正是
   // 2026-10-26 那次卡死的形态,所以措辞里要给出下一步该看哪里。
   if (task.status === "queued") {
     return blockers.queueBlocked
-      ? "任务排队中，前面还有未完成或正在运行的任务"
+      ? null
       : "任务停在「排队中」，但队列里没有别的任务在跑；如果它长时间不动，多半是回合占位没人回滚";
   }
-  if (blockers.queueBlocked) return "同一队列里还有未完成或正在运行的任务";
+  if (blockers.queueBlocked) return null;
   return `任务当前状态（${task.status}）还不适合投递`;
 }
 
@@ -411,17 +418,19 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         m.execution = execution;
       }
       // 判定要的那几样持久事实（队列占位、分组暂停、哨兵来源、审查归属）读齐了交给纯判定；飞书推卡按同一份判（pending-delivery-facts.ts）。
-      const { verdict, facts: { needQueueCheck, queueBlocked, groupPaused } } = await deliveryVerdictOf(m, t, at);
+      const { verdict, facts: { needQueueCheck, queueBlocked, groupPaused, dispatchHold, prerequisiteWait, discussing } } = await deliveryVerdictOf(m, t, at);
       if (verdict.action === "wait") {
         // 还没到期(钟点未到、前置任务未完成)的等待是它自己的语义,不是滞留。
         if (!isDueForDelivery(m, at)) continue;
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。
         noteBusyAgain(m.id, at.getTime());
-        // 「等」是正常的,**一直等**不是:久久发不出去要出声并留痕,否则它和「根本没这条
-        // 消息」在日志与界面上长得一模一样(见 noteStalledPending)。判定本身不带 reason,
-        // 在这里按刚查到的那几样组装一句人话 —— 用户想知道的就是「在等什么」。
-        noteStalledPending(stallView(m, at), waitReason(t, { queueBlocked, groupPaused }), at.getTime());
+        // 「等」是正常的,**等一件界面上看不出来的事**不是:那种久久发不出去要出声并留痕,
+        // 否则它和「根本没这条消息」长得一模一样(见 noteStalledPending)。判定本身不带 reason,
+        // 在这里按刚查到的那几样组装一句人话;等的是看得见的事(任务在跑、前面还排着)就不出声。
+        const why = waitReason(t, { queueBlocked, groupPaused, dispatchHold, prerequisiteWait, discussing });
+        // 等它写完再往下扫:一次扫描的结局(写没写滞留诊断)在扫描返回时就定了,不留在后台。
+        if (why) await noteStalledPending(stallView(m, at), why, at.getTime());
         continue;
       }
       if (verdict.action === "cancel") {
@@ -461,16 +470,17 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           if (!claim.ok) {
             noteBusyAgain(m.id, at.getTime());
             // 同 wait 分支:认领不到执行占位也是一种「一直发不出去」,久了要说出来。
-            // 三档各说各的真话:套用「同队有人在跑」会让用户去等一个不存在的前项
-            // (第 ll7XKsu_ps0n 链第 2 轮指出的同一个毛病)。
-            noteStalledPending(stallView(m, at), claim.transient
-              ? "队列占位读写失败，正在重试"
-              : claim.self
-                ? "这个任务已经有另一条启动路径占着执行位"
-                : "同一队列里还有未完成或正在运行的任务", at.getTime());
+            // 两档各说各的真话:套用「同队有人在跑」会让用户去等一个不存在的前项
+            // (第 ll7XKsu_ps0n 链第 2 轮指出的同一个毛病)。同队真有别的在跑就是排队本身,
+            // 不出声(见 waitReason)。
+            if (claim.transient || claim.self) {
+              await noteStalledPending(stallView(m, at), claim.transient
+                ? "队列占位读写失败，正在重试"
+                : "这个任务已经有另一条启动路径占着执行位", at.getTime());
+            }
             continue;
           }
-          seat = claim.seat ?? undefined;
+          seat = claim.seat;
         }
         fired.add(m.taskId);
         const release = holdInFlight(m.taskId);
@@ -479,7 +489,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
     } catch (error) {
       // 一条投递失败不影响其它任务,下一轮再来 —— 但**必须留下痕迹**:这里原来是空的
       // catch,于是「消息没送出去」和「根本没发生过」在日志里长得一模一样。
-      if (!dbClient.closed) console.error(`[ash] 待发送消息投递出错 task=${m.taskId} message=${m.id}:`, error);
+      if (!dbClient.closed) console.error(`[navi] 待发送消息投递出错 task=${m.taskId} message=${m.id}:`, error);
     }
   }
 }
@@ -491,7 +501,7 @@ export function flushPendingForTask(taskId: string): void {
     // 查到一半库被关了(进程收尾)不是故障:开头那道守卫挡不住这个竞态,而一串
     // 「database is not open」的 stack trace 会让人以为刚做完的那件事自己炸了。
     if (dbClient.closed) return;
-    console.error(`[ash] deliverPendingMessages(${taskId}) failed:`, err);
+    console.error(`[navi] deliverPendingMessages(${taskId}) failed:`, err);
   });
 }
 
@@ -518,7 +528,7 @@ export function flushPendingWhenTurnIdle(taskId: string): void {
 export async function handDuePendingMessageToRun(
   taskId: string,
   // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: FreezeGuard; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);

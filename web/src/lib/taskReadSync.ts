@@ -1,15 +1,14 @@
 import {
   coversRead, parseTaskReads,
   type TaskReads, type TaskReadsSnapshot, type TaskReadsWrite, type TaskReadsWriteResult,
-} from "@ash/shared/task-reads";
+} from "@navi/shared/task-reads";
 import { ApiError, json, request } from "./apiClient.ts";
 import { subscribeConnection, subscribeEvents } from "./events.ts";
-import { readRenamedStorage } from "./renamedStorage.ts";
 import { safeStorage } from "./safeStorage.ts";
 import { createOutbox, type OutboxEntry } from "./taskReadOutbox.ts";
 
 // 「看过哪些任务」的那一份记录：真值在服务端（按人存，server/src/task-reads.ts），这里是它在本页的样子。
-// 从前只存 localStorage，每个浏览器各记各的 —— 飞书内置浏览器里打开 ash，桌面上看过的任务全亮着绿点。
+// 从前只存 localStorage，每个浏览器各记各的 —— 飞书内置浏览器里打开 navi，桌面上看过的任务全亮着绿点。
 //
 // 本页的样子 = 服务端那份（known，按 rev 只认新回执）+ 还没被服务端收下的那几眼（待发队列）。
 //
@@ -26,8 +25,8 @@ import { createOutbox, type OutboxEntry } from "./taskReadOutbox.ts";
 // 跟上服务端的几条路：绑定后拉一次；服务端说这个人的记录变了（task.reads）再拉；断线重连再拉；拉失败过一会儿
 // 再拉；别的标签页往待发队列里记了一笔（storage 事件）也照着更新、顺手帮它送。
 
-const PREFIX = "ash:task-reads-v3:";
-const LEGACY_KEY = "ash:task-read-state-v1";
+const PREFIX = "navi:task-reads-v3:";
+const LEGACY_KEY = "navi:task-read-state-v1";
 const PUSH_DELAY_MS = 400;
 const RETRY_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -76,7 +75,7 @@ function legacyRound(event: string): number | null {
 function takeLegacy(): Record<string, OutboxEntry> {
   let raw: string | null = null;
   try {
-    raw = readRenamedStorage(LEGACY_KEY);
+    raw = window.localStorage.getItem(LEGACY_KEY);
   } catch {
     return {};
   }

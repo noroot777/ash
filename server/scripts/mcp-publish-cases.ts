@@ -1,9 +1,9 @@
 // 发布事务那一层的回归:**预演 → 备份 → 写盘前再校验 → 就地写 → 读回来比对**。
 //
-// 为什么跟 `test-ash-mcp-installer.ts` 分开:那边测「哪家写在哪、拼成什么样」,这边只测
+// 为什么跟 `test-navi-mcp-installer.ts` 分开:那边测「哪家写在哪、拼成什么样」,这边只测
 // 「怎么安全地落盘」。两份实现(裸 Node `scripts/config-publish.mjs` 与服务端
 // `server/src/auth/config-publish.ts`)规矩完全一致,所以用例也在一处写、两边都过。
-// 由 `test-ash-mcp-installer.ts` 调用,不是独立的回归入口。
+// 由 `test-navi-mcp-installer.ts` 调用,不是独立的回归入口。
 //
 // **哪几条只能用结构断言**(写在用例里,不藏着):
 //  · 探针的「独占创建」是 open 的 flag 决定的 —— 名字带随机段,拿不到那个名字就没法在测试
@@ -27,9 +27,9 @@ export interface BarePublish {
 }
 
 /** 上一版那个**固定**名字:用来在测试里先占住那个路径(审查 F1 的复现形状)。 */
-const PROBE_MARK = ".ash-publish-probe";
+const PROBE_MARK = ".navi-publish-probe";
 
-/** 这一版的产物一律是 `<目标>.ash-publish-probe-<随机>`,所以按带横线的那个前缀扫残留。 */
+/** 这一版的产物一律是 `<目标>.navi-publish-probe-<随机>`,所以按带横线的那个前缀扫残留。 */
 const probeLeft = (file: string): boolean =>
   readdirSync(dirname(file)).some((n) => n.includes(`${PROBE_MARK}-`));
 
@@ -58,7 +58,7 @@ export async function checkPublishCases(
     const r0 = publish.publishConfirmed({
       file: file0,
       previous: publish.readForWrite(file0)!.text,
-      body: `${JSON.stringify({ ash: "x", userSetting: "keep-me" }, null, 2)}\n`,
+      body: `${JSON.stringify({ navi: "x", userSetting: "keep-me" }, null, 2)}\n`,
       write: (target: string | number, body: string) => {
         calls++;
         if (typeof body === "string" && body.length > 18) writeFileSync(target, body.slice(0, 18), "utf8");
@@ -72,7 +72,7 @@ export async function checkPublishCases(
     assert.equal(readFileSync(file0, "utf8"), intact, "活动配置必须逐字节还是原来那份");
     assert.equal(calls, 1, "预演那一次就收手了,活动文件根本没被碰");
     assert.ok(!probeLeft(file0), "预演产物不许留下");
-    assert.ok(!existsSync(`${file0}.bak-ash-setup`), "没动过就别留一份白备份");
+    assert.ok(!existsSync(`${file0}.bak-navi-setup`), "没动过就别留一份白备份");
 
     // ⒝ 预演过得去、**真写那一下**才失败(只读文件、文件被别人独占):这一档只能靠回写,
     //    所以仍要钉住「原文回去了 + 备份在」。
@@ -97,7 +97,7 @@ export async function checkPublishCases(
     assert.ok(!r.ok, "写失败要如实说");
     assert.match(r.ok ? "" : r.why, /原样放回去/, "而且要说清原文已经回去了");
     assert.equal(readFileSync(file, "utf8"), before, "活动配置必须还是原来那份(不许留半截)");
-    assert.ok(existsSync(`${file}.bak-ash-setup`), "备份也还在");
+    assert.ok(existsSync(`${file}.bak-navi-setup`), "备份也还在");
     assert.ok(!probeLeft(file), "预演产物不许留下");
 
     // ⒞ 原来**没有**这个文件:写失败就不该留下一个半截的新文件。
@@ -123,7 +123,10 @@ export async function checkPublishCases(
     const file3 = join(h3, "deep", "config.json");
     const r3 = publish.publishConfirmed({ file: file3, previous: null, body: "{}\n" });
     assert.ok(r3.ok, r3.ok ? "" : r3.why);
-    assert.equal(statSync(file3).mode & 0o777, 0o600, "新建的配置只给自己读");
+    // Windows 的访问控制在 ACL 上,mode 位只表达得出只读与否(读回来恒为 0o666/0o444),同 test-navi-mcp-registry.ts。
+    if (process.platform !== "win32") {
+      assert.equal(statSync(file3).mode & 0o777, 0o600, "新建的配置只给自己读");
+    }
     group("写盘失败:持续故障在动手之前收手、真写失败回写原文、新建不留半截也不放宽权限");
   }
 
@@ -167,7 +170,7 @@ export async function checkPublishCases(
 
   // ── ⑩ 预演产物只碰自己建出来的那一个(本轮审查 F1)────────────────────────
   {
-    // 审查的复现形状:上一版预演用的是一个**固定名字**(`<目标>.ash-publish-probe`),而那个
+    // 审查的复现形状:上一版预演用的是一个**固定名字**(`<目标>.navi-publish-probe`),而那个
     // 路径上可以先放一条软链接 —— 于是「预演」把用户配置全文整份写进了那条链接指的无关文件,
     // 收尾那句 `rmSync` 又把它删了。两边实现都如此。
     const h = home("probe-symlink");
@@ -178,12 +181,12 @@ export async function checkPublishCases(
     writeFileSync(victim, victimBody, "utf8");
     symlinkSync(victim, `${file}${PROBE_MARK}`);
     const read = publish.readForWrite(file)!;
-    const r = publish.publishConfirmed({ file, previous: read.text, body: '{"ash":1}\n' });
+    const r = publish.publishConfirmed({ file, previous: read.text, body: '{"navi":1}\n' });
     assert.ok(r.ok, `正事还得办成:${r.ok ? "" : r.why}`);
     assert.equal(readFileSync(victim, "utf8"), victimBody, "无关文件的正文一个字节都不许动");
     assert.ok(existsSync(victim), "更不许把它删掉");
     assert.ok(lstatSync(`${file}${PROBE_MARK}`).isSymbolicLink(), "那条软链接本身也该还在");
-    assert.equal(readFileSync(file, "utf8"), '{"ash":1}\n', "目标文件正常写进去");
+    assert.equal(readFileSync(file, "utf8"), '{"navi":1}\n', "目标文件正常写进去");
 
     // 同一个路径上放**普通文件**(并发的另一个发布器、上一次崩溃留下的残渣)也一样:
     // 既不许写它,也不许删它。
@@ -193,7 +196,7 @@ export async function checkPublishCases(
     const squatter = `${file2}${PROBE_MARK}`;
     writeFileSync(squatter, "not mine\n", "utf8");
     const read2 = publish.readForWrite(file2)!;
-    const r2 = publish.publishConfirmed({ file: file2, previous: read2.text, body: '{"ash":2}\n' });
+    const r2 = publish.publishConfirmed({ file: file2, previous: read2.text, body: '{"navi":2}\n' });
     assert.ok(r2.ok, `正事还得办成:${r2.ok ? "" : r2.why}`);
     assert.equal(readFileSync(squatter, "utf8"), "not mine\n", "别人占着的那个路径不许被写");
 
@@ -213,7 +216,7 @@ export async function checkPublishCases(
     const read = publish.readForWrite(file)!;
     const theirs = '{\n  "userJustSaved": true\n}\n';
     const r = publish.publishConfirmed({
-      file, previous: read.text, body: '{"ash":1}\n',
+      file, previous: read.text, body: '{"navi":1}\n',
       write: (target: string | number, body: string, opts?: unknown) => {
         if (typeof target === "number") {
           writeFileSync(target, body, opts as never);
@@ -226,7 +229,7 @@ export async function checkPublishCases(
     assert.ok(!r.ok, "慢步骤期间盘上那份变了 ⇒ 这一轮不许写");
     assert.ok(!r.ok && r.stale, "而且要标成「盘上那份变了」");
     assert.equal(readFileSync(file, "utf8"), theirs, "用户刚存的那一版必须留着");
-    assert.ok(!existsSync(`${file}.bak-ash-setup`), "没写成就别留一份白备份");
+    assert.ok(!existsSync(`${file}.bak-navi-setup`), "没写成就别留一份白备份");
     assert.ok(!probeLeft(file), "预演产物不许留下");
 
     // 备份本身也要核对:它是「活动那份坏了」唯一的出路,一份半截的备份比没有更坏。
@@ -235,17 +238,17 @@ export async function checkPublishCases(
     const body2 = '{\n  "userSetting": "keep"\n}\n';
     writeFileSync(file2, body2, "utf8");
     const read2 = publish.readForWrite(file2)!;
-    const r2 = publish.publishConfirmed({ file: file2, previous: read2.text, body: '{"ash":1}\n' });
+    const r2 = publish.publishConfirmed({ file: file2, previous: read2.text, body: '{"navi":1}\n' });
     assert.ok(r2.ok, r2.ok ? "" : r2.why);
-    assert.equal(r2.ok ? r2.backup : "", `${file2}.bak-ash-setup`, "备份路径要交回给调用方");
-    assert.equal(readFileSync(`${file2}.bak-ash-setup`, "utf8"), body2, "备份必须是改之前那一版");
+    assert.equal(r2.ok ? r2.backup : "", `${file2}.bak-navi-setup`, "备份路径要交回给调用方");
+    assert.equal(readFileSync(`${file2}.bak-navi-setup`, "utf8"), body2, "备份必须是改之前那一版");
 
     // 上一次发布留下的备份不许被这一轮的收手动作删掉(那是用户手里唯一的旧版本)。
     const read3 = publish.readForWrite(file2)!;
     writeFileSync(file2, '{\n  "userJustSaved": 2\n}\n', "utf8");
-    const r3 = publish.publishConfirmed({ file: file2, previous: read3.text, body: '{"ash":2}\n' });
+    const r3 = publish.publishConfirmed({ file: file2, previous: read3.text, body: '{"navi":2}\n' });
     assert.ok(!r3.ok && r3.stale, "过期快照不许盖下去");
-    assert.equal(readFileSync(`${file2}.bak-ash-setup`, "utf8"), body2, "上一轮那份备份还在");
+    assert.equal(readFileSync(`${file2}.bak-navi-setup`, "utf8"), body2, "上一轮那份备份还在");
     group("最终校验紧贴写盘:慢步骤期间的外部保存不被盖掉,备份核对过且不被误删");
   }
 
@@ -255,10 +258,10 @@ export async function checkPublishCases(
     for (const [side, code] of Object.entries(src)) {
       // 独占创建:名字带随机段 + `wx`。拿不到那个随机名字,测试没法先占住它来证明 —— 但
       // 这两条一起才是「绝不写到别人的对象上」的来源(本轮审查 F1)。
-      assert.match(code, /PROBE_PREFIX\s*=\s*"\.ash-publish-probe-"/, `${side}:预演产物的名字要带后缀分隔`);
+      assert.match(code, /PROBE_PREFIX\s*=\s*"\.navi-publish-probe-"/, `${side}:预演产物的名字要带后缀分隔`);
       assert.match(code, /randomBytes\(\d+\)\.toString\("hex"\)/, `${side}:预演产物的名字必须带随机段`);
       assert.match(code, /openSync\(probe, "wx", TMP_MODE\)/, `${side}:预演产物必须独占创建、0600 出生`);
-      assert.ok(!/\.ash-publish-probe`/.test(code), `${side}:不许再有固定名字的预演路径`);
+      assert.ok(!/\.navi-publish-probe`/.test(code), `${side}:不许再有固定名字的预演路径`);
       // 写和 fsync 都走自己那个句柄,不按路径二次打开。
       assert.ok(!/openSync\(probe, "r\+"\)/.test(code), `${side}:不许按路径把预演产物再打开一次`);
     }
@@ -279,7 +282,7 @@ export async function checkPublishCases(
 
   // ── ⑬ 备份也是发布产物:独占创建、不覆盖也不跟随已有对象(本轮审查 F2)───────────
   {
-    const body = '{\n  "ash": 1\n}\n';
+    const body = '{\n  "navi": 1\n}\n';
     const before = `${JSON.stringify({ userSetting: "keep" }, null, 2)}\n`;
 
     // ⒜ 那个固定名字上摆一条**指向用户另一份文件**的软链接:上一版 `copyFileSync` 跟着它
@@ -288,9 +291,9 @@ export async function checkPublishCases(
     const file = join(h, "config.json");
     writeFileSync(file, before, "utf8");
     const bystander = join(h, "unrelated.txt");
-    const bystanderBody = "用户另一份文件，跟 ash 无关\n";
+    const bystanderBody = "用户另一份文件，跟 navi 无关\n";
     writeFileSync(bystander, bystanderBody, "utf8");
-    const plain = `${file}.bak-ash-setup`;
+    const plain = `${file}.bak-navi-setup`;
     symlinkSync(bystander, plain);
     const r = publish.publishConfirmed({ file, previous: publish.readForWrite(file)!.text, body });
     assert.ok(r.ok, r.ok ? "" : r.why);
@@ -299,14 +302,17 @@ export async function checkPublishCases(
     const backup = (r.ok ? r.backup : "") ?? "";
     assert.ok(backup.startsWith(`${plain}-`), `被占住就换一个自己的唯一名字:${backup}`);
     assert.equal(readFileSync(backup, "utf8"), before, "备份必须逐字节是改之前那一版");
-    assert.equal(statSync(backup).mode & 0o777, 0o600, "备份一出生就只有自己能读");
+    // Windows 的访问控制在 ACL 上,mode 位只表达得出只读与否(读回来恒为 0o666/0o444),同 test-navi-mcp-registry.ts。
+    if (process.platform !== "win32") {
+      assert.equal(statSync(backup).mode & 0o777, 0o600, "备份一出生就只有自己能读");
+    }
     assert.equal(readFileSync(file, "utf8"), body, "正事也办成了");
 
     // ⒝ 那个名字上是**上一次留下的真备份**:也不覆盖 —— 那是用户手里的旧版本。
     const h2 = home("backup-occupied");
     const file2 = join(h2, "config.json");
     writeFileSync(file2, before, "utf8");
-    const old2 = `${file2}.bak-ash-setup`;
+    const old2 = `${file2}.bak-navi-setup`;
     const oldBody = "上一次留下的那一版\n";
     writeFileSync(old2, oldBody, "utf8");
     const r2 = publish.publishConfirmed({ file: file2, previous: publish.readForWrite(file2)!.text, body });
@@ -320,7 +326,7 @@ export async function checkPublishCases(
     writeFileSync(file3, before, "utf8");
     const r3 = publish.publishConfirmed({ file: file3, previous: publish.readForWrite(file3)!.text, body });
     assert.ok(r3.ok, r3.ok ? "" : r3.why);
-    assert.equal(r3.ok ? r3.backup : "", `${file3}.bak-ash-setup`, "没被占住就用固定名字");
+    assert.equal(r3.ok ? r3.backup : "", `${file3}.bak-navi-setup`, "没被占住就用固定名字");
 
     // ⒟ 结构:两侧都只许用「自己独占创建的那个句柄」写备份,不许再按固定路径拷。
     //    `copyFileSync` 的问题不是慢,是它**跟随**路径上已经有的对象(⒜ 那条软链接)。

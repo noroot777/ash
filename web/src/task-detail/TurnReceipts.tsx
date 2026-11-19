@@ -3,20 +3,23 @@ import { ListBullets } from "@phosphor-icons/react";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { TurnReceipt } from "./conversationSystemRows.ts";
-import { LaneBody, laneHasTrace } from "./ReviewVerdict.tsx";
+import { LaneBody, laneHasTrace } from "./ReviewBubble.tsx";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { NoticeIconGlyph } from "./NoticeIconGlyph.tsx";
+import type { NoticeLink } from "./noticeLinks.ts";
 import { laneReviewTarget } from "./reviewLaneLinks.ts";
 import { formatInstant } from "./utils.ts";
 
 /**
- * 记录里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套（ReviewVerdict 的 onOpenRound / renderLane）。
+ * 记录里那一轮审查点开去哪儿：跟审查者那颗气泡同一套（ReviewBubble 的 onOpenRound / renderLane）。
  * 会话那一层给一份；没给的地方（团队时间线、单测里单摆的记录）那一条就只是一句字。
  */
 export type ReceiptReview = {
   taskId?: string;
   reviewOpener?: (lane: ConversationReviewLane) => ((target: ReviewTarget) => void) | undefined;
   renderLane?: (lane: ConversationReviewLane) => ReactNode;
+  /** 其余几句点过去去哪儿（「等你裁定」去审议格那一轮、哨兵那几句去哨兵格，见 noticeLinks）。 */
+  linkFor?: (item: NonNullable<TurnReceipt["item"]>) => NoticeLink | null;
 };
 
 export const ReceiptReviewContext = createContext<ReceiptReview | null>(null);
@@ -44,6 +47,7 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
   // 认不出去哪儿就在下面摊开那一轮的经过。去审查格的那种另有一颗经过键（审查格里没有经过）。
   const go = lane && review ? review.reviewOpener?.(lane) : undefined;
   const traceToggle = !!go && !!review?.renderLane && laneHasTrace(lane!);
+  const link = !lane && receipt.item ? review?.linkFor?.(receipt.item) ?? null : null;
   return (
     <li className={`turn-receipt tone-${view.tone}`}>
       {time && <time dateTime={receipt.at} aria-label={formatInstant(receipt.at)}>{time}</time>}
@@ -54,11 +58,15 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
           <button
             type="button"
             className="turn-receipt-more"
-            aria-label={go ? `${view.text}，在右侧审查格里打开这一轮` : undefined}
+            aria-label={go ? `${view.text}，在右侧审议格里打开这一轮` : undefined}
             aria-expanded={go ? undefined : open}
             aria-controls={go ? undefined : detailId}
             onClick={() => (go ? go(laneReviewTarget(lane)) : setOpen((value) => !value))}
           >
+            {text}
+          </button>
+        ) : link ? (
+          <button type="button" className="turn-receipt-more" aria-label={`${view.text}，${link.label}`} onClick={link.open}>
             {text}
           </button>
         ) : view.detail ? (
@@ -91,7 +99,7 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
           <LaneBody lane={lane} id={detailId} taskId={review.taskId} renderLane={review.renderLane} />
         </div>
       )}
-      {!(lane && review) && view.detail && open && <p className="turn-receipt-detail" id={detailId}>{view.detail}</p>}
+      {!(lane && review) && !link && view.detail && open && <p className="turn-receipt-detail" id={detailId}>{view.detail}</p>}
     </li>
   );
 }

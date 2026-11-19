@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
-import { groups, tasks } from "./db/schema.js";
+import { tasks } from "./db/schema.js";
+import { taskHoldOf } from "./task-hold.js";
 import { id } from "./util.js";
 import { freezeStartingTurn, stopTask } from "./runs.js";
 import { writeGuardedTaskStatus } from "./status.js";
@@ -11,6 +12,14 @@ const deferred = new Map<string, {
   timer: ReturnType<typeof setTimeout>; retries: Set<() => Promise<void>>;
 }>();
 const canceling = new Map<string, number>();
+/** 隔多久把这条队列的推进再重放一次（推进时挂的兜底、失败后的退避都是它）。 */
+const RETRY_MS = 1_000;
+let retryOverride: number | null = null;
+
+/** 只给回归用：故障注入的用例每次都要真等这一秒的重放，压短它。传 null 还原。 */
+export function overrideQueueAdvanceRetry(ms: number | null): void {
+  retryOverride = ms;
+}
 
 export const isQueueAdvanceCanceling = (taskId: string): boolean => canceling.has(taskId);
 
@@ -42,10 +51,8 @@ export async function requestQueueAdvance(queueId: string, candidate: Task): Pro
   return db.transaction(async (transaction) => {
     const [task] = await transaction.select().from(tasks).where(eq(tasks.id, candidate.id));
     if (!task || task.archived || ["done", "failed", "canceled"].includes(task.status)) return null;
-    if (task.groupId) {
-      const [group] = await transaction.select().from(groups).where(eq(groups.id, task.groupId));
-      if (group?.paused) return null;
-    }
+    // 分组暂停、或上面派活的那条按了「全部停下」:不落请求(停的那一刻已经作废过一遍,见 task-hold.ts)。
+    if (await taskHoldOf(task, transaction)) return null;
     const previous = task.queueAdvanceRequest;
     const request = previous?.queueId === queueId && previous.resumePromptGeneration === task.resumePromptGeneration
       ? previous : { id: id(), queueId, resumePromptGeneration: task.resumePromptGeneration, prevStatus: candidate.status };
@@ -69,7 +76,7 @@ export async function replayQueueAdvances(queueId?: string): Promise<void> {
     try {
       await (await import("./scheduler.js")).advanceQueue(request.queueId, { ...request, taskId: task.id });
     } catch (error) {
-      console.error(`[ash] 续跑交接补推失败 queue=${request.queueId}:`, error);
+      console.error(`[navi] 续跑交接补推失败 queue=${request.queueId}:`, error);
       deferQueueAdvance(request.queueId);
     }
   }
@@ -89,11 +96,11 @@ export function deferQueueAdvance(queueId: string, retry?: () => Promise<void>):
       for (const attempt of retries) await attempt();
       await replayQueueAdvances(queueId);
     })().catch((error) => {
-      console.error(`[ash] 续跑交接请求读取失败 queue=${queueId}:`, error);
+      console.error(`[navi] 续跑交接请求读取失败 queue=${queueId}:`, error);
       deferQueueAdvance(queueId);
       for (const attempt of retries) deferQueueAdvance(queueId, attempt);
     });
-  }, 1_000);
+  }, retryOverride ?? RETRY_MS);
   timer.unref?.();
   deferred.set(queueId, { timer, retries });
 }

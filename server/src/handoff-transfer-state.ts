@@ -1,7 +1,8 @@
+import { readStorageEnv } from "@navi/shared/env-names";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { TaskHandoff } from "@ash/shared";
+import type { TaskHandoff } from "@navi/shared";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -15,7 +16,7 @@ const SAFE_TASK_ID = /^[A-Za-z0-9_-]{6,64}$/;
 const SAFE_TRANSFER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 const stateRoot = (() => {
-  const dbPath = process.env.ASH_DB?.trim();
+  const dbPath = readStorageEnv(process.env, "NAVI_DB");
   return dbPath && dbPath !== ":memory:"
     ? join(dirname(resolve(dbPath)), "handoff-canceled")
     : join(DATA_DIR, "handoff-canceled");

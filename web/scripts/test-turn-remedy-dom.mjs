@@ -12,12 +12,12 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const web = await startWebServer();
 
-const HEADER = "x-ash-human-action-token";
+const HEADER = "x-navi-human-action-token";
 // 下一份凭据走**响应头**(shared 的 HUMAN_ACTION_TOKEN_NEXT_HEADER):烧掉它的是闸,发下一份
 // 也归闸,所以不分状态码 —— 原先是各条路由在成功分支里塞进响应体,业务拒绝那几条路径一个
 // 字都不发,于是一次 400/409 之后这个开关就按不动了(第 5 轮审查 N2)。
-const NEXT = "x-ash-human-action-token-next";
-const REFUSAL = "这个动作需要本次会话的页面凭据：请在 ash 页面上点这个开关。凭据随页面下发、用一次就失效，刷新页面可以换一份新的";
+const NEXT = "x-navi-human-action-token-next";
+const REFUSAL = "这个动作需要本次会话的页面凭据：请在 navi 页面上点这个开关。凭据随页面下发、用一次就失效，刷新页面可以换一份新的";
 const json = (route, body, status = 200, headers) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body), headers });
 
@@ -46,8 +46,9 @@ try {
 
   // 事件流**必须在这里截住**:这个 hook 现在订阅 task.notices(失效协议,见
   // useRejectionNotices.ts),而 vite 的 /api 代理会把它接到真正在跑的 :4317 上去 ——
-  // 一个回归测试不该连到用户的实例上。空响应 = 连不上,这一支本来也不验事件路。
-  await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
+  // 一个回归测试不该连到用户的实例上。204 = 连不上、也不重连(200 的空流会每 3 秒重连一次),
+  // 这一支本来也不验事件路。
+  await page.route("**/api/events", (route) => route.fulfill({ status: 204 }));
 
   await page.route("**/api/tasks/t-stale/notices", (route) => json(route, notices([
     { id: "n4", action: "放开回合占位", outcome: "unknown", reason: "占位身份 single、已持有约 3 分钟", occurredAt: at(4) },

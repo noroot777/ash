@@ -29,10 +29,10 @@ for (const baseUrl of ["https://provider.invalid", "https://provider.invalid/v1/
     const wiring = codexRelay(configured);
     const declared = codexSpec.exec.relay!(configured);
     assert.deepEqual(declared, wiring, "声明路径与执行器共用供应商配置");
-    assert.deepEqual(wiring.env, { ASH_RELAY_KEY: relay.apiKey });
-    assert.equal(wiring.envHint, "ASH_RELAY_KEY=<你的key> ");
+    assert.deepEqual(wiring.env, { NAVI_RELAY_KEY: relay.apiKey });
+    assert.equal(wiring.envHint, "NAVI_RELAY_KEY=<你的key> ");
     assert.ok(wiring.args!.includes(actorHeader), "注入用户指定的新标记");
-    assert.ok(wiring.args!.includes('model_providers.ash_relay.env_key="ASH_RELAY_KEY"'));
+    assert.ok(wiring.args!.includes('model_providers.ash_relay.env_key="NAVI_RELAY_KEY"'));
     assert.ok(wiring.args!.includes('model_providers.ash_relay.wire_api="responses"'));
     const expectedBase = protocolConversionEnabled
       ? `${protocolConverterBaseUrl(relay.providerId)}/v1`
@@ -42,10 +42,11 @@ for (const baseUrl of ["https://provider.invalid", "https://provider.invalid/v1/
     const executor = new CodexExecutor({ relay: configured });
     const config = executor as unknown as ExecutorConfig;
     assert.deepEqual(config.relayArgs(), wiring.args);
-    assert.equal(config.env().ASH_RELAY_KEY, relay.apiKey);
+    assert.equal(config.env().NAVI_RELAY_KEY, relay.apiKey);
     const appServer = config.appServerArgs({});
     assert.deepEqual(appServer.ignored, []);
-    assert.deepEqual(appServer.args, ["app-server", "--stdio", ...wiring.args!]);
+    // 后面还跟着 navi 自己那份 MCP 的 `-c mcp_servers.navi=…`（test-navi-mcp-inject 管），这里只认供应商这一段。
+    assert.deepEqual(appServer.args.slice(0, 2 + wiring.args!.length), ["app-server", "--stdio", ...wiring.args!]);
     for (const sessionId of ["", "fixture-session"]) {
       const execArgs = config.execArgs({ cwd: "/fixture" }, sessionId);
       assert.equal(execArgs.filter((arg) => arg === actorHeader).length, 1);

@@ -1,4 +1,4 @@
-// agent 进程与 ash 解绑:输出写**文件**而不是匿名管道。
+// agent 进程与 navi 解绑:输出写**文件**而不是匿名管道。
 //
 // 为什么这一层是必要的:spawn.ts 里的 agent 早就是 `detached: true`(自成进程组),
 // server 重启时那句 `kill $OLD` 根本打不到它们;真正杀死它们的是 **stdout 匿名
@@ -15,7 +15,7 @@
 // stdin 从匿名管道换成可重开的具名管道，因此 server 重启后两边都能接回。
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { closeSync, createWriteStream, openSync, existsSync, unlinkSync } from "node:fs";
+import { closeSync, createWriteStream, openSync, existsSync } from "node:fs";
 import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
@@ -33,6 +33,7 @@ import {
 } from "./kernel-confine.js";
 import { reopenWindowsControlStdin, spawnWindowsDetachedAgent } from "./detached-win.js";
 import { registerWindowsOwnership } from "./windows-run-evidence.js";
+import { controlFifoPath, removeIdleControlFifoSync, retireControlFifo } from "./control-fifo.js";
 
 // 落盘文件 / tailFile / 伪装外壳这一层搬到了 detached-child.ts(那边是纯文件与流,
 // 不碰进程);使用方照旧从本文件 import,所以在这里原样转出。
@@ -48,7 +49,7 @@ export type { DetachedChild, DetachedPaths };
 // 频率可以低得多。
 const LIVENESS_MS = 400;
 
-const controlPath = (paths: DetachedPaths) => `${paths.rc}.stdin.fifo`;
+const controlPath = (paths: DetachedPaths) => controlFifoPath(paths.rc);
 
 function fifoWriter(path: string): ChildProcess["stdin"] {
   // FIFO 的纯写 open 会等待读端；若进程恰在异步 open 完成前被停止，libuv worker 会
@@ -74,34 +75,39 @@ export function spawnControllableDetachedAgent(
   paths: DetachedPaths,
   extraEnv?: Record<string, string | undefined>,
 ): DetachedChild | ChildProcess {
-  const blocked = guardAgentSpawn(bin);
-  if (blocked) return blocked;
-  const abs = resolveBin(bin);
+  const gate = guardAgentSpawn(bin);
+  if (gate.blocked) return gate.blocked;
+  const abs = resolveBin(gate.bin);
   if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
   for (const p of [paths.out, paths.err]) {
     try { closeSync(openSync(p, "a")); } catch { /* 交给 spawn 报 */ }
   }
   const input = controlPath(paths);
-  try { unlinkSync(input); } catch { /* 首次创建 */ }
-  const made = spawnSync("mkfifo", [input]);
+  // 回合身份唯一，路径上本不该已有东西；真有，也只在确认没人开着时才收（control-fifo.ts）。
+  const leftover = removeIdleControlFifoSync(input);
+  if (leftover !== "absent" && leftover !== "removed") {
+    return failedChild(`可重连 stdin 的路径上还有东西没法收（${leftover}）：${input}`);
+  }
+  // 只给属主读写：删不删要能确认「一个持有者都没有」，组/其他人可写的管子那一步答不了。
+  const made = spawnSync("mkfifo", ["-m", "600", input]);
   if (made.status !== 0) return failedChild(`创建可重连 stdin 失败：${input}`);
 
   const script = [
     CONFINE_ENROLL_CMD,                             // 分隔符由下面的 join 写
-    'trap \'rm -f "$ASH_IN"\' EXIT',
-    'exec 3<>"$ASH_IN"',
-    '"$@" <&3 >>"$ASH_OUT" 2>>"$ASH_ERR"',
+    // 不在这里 `rm` 管子：shell 看不见别的持有者，删除一律交给 server（control-fifo.ts）。
+    'exec 3<>"$NAVI_IN"',
+    '"$@" <&3 >>"$NAVI_OUT" 2>>"$NAVI_ERR"',
     'rc=$?',
-    'printf %s "$rc" >"$ASH_RC"',
+    'printf %s "$rc" >"$NAVI_RC"',
     'exit "$rc"',
   ].join("; ");
   const env = {
     ...agentBaseEnv(),
     ...extraEnv,
-    ASH_IN: input,
-    ASH_OUT: paths.out,
-    ASH_ERR: paths.err,
-    ASH_RC: paths.rc,
+    NAVI_IN: input,
+    NAVI_OUT: paths.out,
+    NAVI_ERR: paths.err,
+    NAVI_RC: paths.rc,
   };
   const track = openTrackFd();
   const stdio: Array<"ignore" | number> =
@@ -132,7 +138,11 @@ export function spawnControllableDetachedAgent(
   registerRootLife(real, bornAt);
   // **起不来就把圈撤掉**:一条没跑起来的运行留下的圈再也没人认领(登记挂在这个被丢掉的
   // `real` 上),会一路攒到那道 24 小时的年龄门才清。圈里没成员,`rmdir` 必然成功。
-  if (!real.pid) { confine?.dispose(); return failedChild(`起不来:${shq(bin)}`); }
+  if (!real.pid) {
+    confine?.dispose();
+    retireControlFifo(input, null);
+    return failedChild(`起不来:${shq(bin)}`);
+  }
   const writer = fifoWriter(input);
   if (!writer) {
     // `killChild` 把刀发给了整圈,但**成员不一定已经退了**,所以紧跟其后的 `dispose()`
@@ -140,6 +150,7 @@ export function spawnControllableDetachedAgent(
     // 扫就是了。这里要的只是「能撤就撤」:一条没跑起来的运行不该留一个没人认领的圈。
     killChild(real);
     confine?.dispose();
+    retireControlFifo(input, null);
     return failedChild(`打开可重连 stdin 失败：${input}`);
   }
   writer?.write(initialInput);
@@ -150,7 +161,10 @@ export function spawnControllableDetachedAgent(
     startOffset: 0,
     stdin: writer,
     kill: () => killChild(real),
-    onExit: (cb) => {
+    // 根一退出，这根管子就再没人会重开（见 control-fifo.ts）：收台的那一刀往往是 SIGKILL，
+    // 脚本里的 trap 没机会跑，所以这里替它收。
+    onExit: (settle) => {
+      const cb = (code: number) => { settle(code); retireControlFifo(input, writer); };
       real.on("error", () => cb(1));
       real.on("exit", (code, sig) => {
         const fallback = code ?? (sig ? 1 : 0);
@@ -192,9 +206,9 @@ export function spawnDetachedAgent(
   paths: DetachedPaths,
   extraEnv?: Record<string, string | undefined>,
 ): DetachedChild | ChildProcess {
-  const blocked = guardAgentSpawn(bin);
-  if (blocked) return blocked;
-  const abs = resolveBin(bin);
+  const gate = guardAgentSpawn(bin);
+  if (gate.blocked) return gate.blocked;
+  const abs = resolveBin(gate.bin);
   if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
 
   // 先把文件建出来:tailFile 一开始就要 open 它们,而 shell 的 >> 要等到真正
@@ -203,13 +217,13 @@ export function spawnDetachedAgent(
     try { closeSync(openSync(p, "a")); } catch { /* 目录不存在等,交给下面的 spawn 报错 */ }
   }
 
-  const script = `${CONFINE_ENROLL_CMD}; "$@" >>"$ASH_OUT" 2>>"$ASH_ERR"; printf %s $? >"$ASH_RC"`;
+  const script = `${CONFINE_ENROLL_CMD}; "$@" >>"$NAVI_OUT" 2>>"$NAVI_ERR"; printf %s $? >"$NAVI_RC"`;
   const env = {
     ...agentBaseEnv(),
     ...extraEnv,
-    ASH_OUT: paths.out,
-    ASH_ERR: paths.err,
-    ASH_RC: paths.rc,
+    NAVI_OUT: paths.out,
+    NAVI_ERR: paths.err,
+    NAVI_RC: paths.rc,
   };
   // 逃逸追踪跟普通 spawn 走同一套(见 spawn.ts 的 openTrackFd 注释)。
   const track = openTrackFd();
@@ -329,10 +343,10 @@ export function detachedInfo(
   child: ChildProcess,
 ): { pid: number; committed: () => number; unitToken: string | null } | undefined {
   const c = child as Partial<DetachedChild>;
-  if (typeof c.ashCommitted !== "function" || !c.pid) return undefined;
+  if (typeof c.naviCommitted !== "function" || !c.pid) return undefined;
   // 记号在这一处取出来是刻意的:九个执行器都从这个函数拿 `handle.detached`,在这里取就
   // 不会有哪条路忘记带上它(忘了的代价是静默的 —— 那一轮的后代只剩 pid 一条线索)。
-  return { pid: c.pid, committed: c.ashCommitted, unitToken: unitTokenOf(child) };
+  return { pid: c.pid, committed: c.naviCommitted, unitToken: unitTokenOf(child) };
 }
 
 // 重启后接管一个还活着的 agent。
@@ -385,7 +399,11 @@ export function reattachDetachedAgent(opts: {
         // 册上,随后的补刀据此才敢对一个刚空下来的组号发信号。
         if (pidRunStillAlive(opts.pid, opts.startedAt) !== "gone") return;
         clearInterval(t);
-        setTimeout(() => cb(readExitCode(opts.paths.rc)), 50);
+        setTimeout(() => {
+          cb(readExitCode(opts.paths.rc));
+          // 接回的那一轮同样由这里替 trap 收管子（普通一次性 detached 没有这根，答 absent）。
+          if (!IS_WINDOWS) retireControlFifo(controlPath(opts.paths), child.stdin);
+        }, 50);
       }, LIVENESS_MS);
       (t as { unref?: () => void }).unref?.();
     },

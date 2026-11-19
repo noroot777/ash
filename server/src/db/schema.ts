@@ -1,7 +1,6 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import type { ProjectPreviewConfig } from "@ash/shared/preview";
-import type { ProjectCommandsConfig } from "@ash/shared/project-commands";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { ProjectPreviewConfig } from "@navi/shared/preview";
+import type { ProjectCommandsConfig } from "@navi/shared/project-commands";
 import type { TaskWaitOwnership } from "./schema-task-wait.js";
 
 // JSON columns are stored as text and parsed in the repository layer.
@@ -50,7 +49,7 @@ export const projects = sqliteTable("projects", {
   createdAt: text("created_at").notNull(),
 });
 
-// ── 多人模式(docs/multi-user-plan.md)────────────────────────────────────────
+// ── 多人模式────────────────────────────────────────
 // users / user_sessions / user_invites / project_members / project_invites /
 // user_handoff_targets / user_settings 在 `schema-multiuser.ts`。整份原样再导出:
 // drizzle 的 `import * as schema` 要看到全部表,拆文件不能拆掉那个视图。
@@ -80,7 +79,7 @@ export const appSettings = sqliteTable("app_settings", {
 });
 
 // 外部 CLI 报“会话累计值”时的最后一份原始快照。它独立于 sessions：同一个 CLI
-// 会话可能跨多个 ash 行（例如讨论模式），按 source_id 才能正确算本轮差值。
+// 会话可能跨多个 navi 行（例如讨论模式），按 source_id 才能正确算本轮差值。
 export const usageCumulativeSnapshots = sqliteTable("usage_cumulative_snapshots", {
   sourceId: text("source_id").primaryKey(),
   input: integer("input_tokens").notNull(),
@@ -129,6 +128,7 @@ export const taskMemos = sqliteTable(
     id: text("id").primaryKey(),
     taskId: text("task_id").notNull(),
     body: text("body").notNull(),
+    attachments: text("attachments"), // json string[],跟 notes 同一种存法;NULL = 没有
     // 跟随手记同一条:备忘是**私有**的个人批注(§八),归属列是可见性判据本身。
     ownerUserId: text("owner_user_id"),
     createdAt: text("created_at").notNull(),
@@ -162,7 +162,6 @@ export const tasks = sqliteTable("tasks", {
   status: text("status").notNull().default("backlog"),
   stage: text("stage"), // 正交验收阶段；不参与 status 调度/结算语义
   pinnedAt: integer("pinned_at"), // null=未置顶；多个置顶任务按时间戳排序
-  starredAt: integer("starred_at"), // 星标（用户手动软记号）；null=未标
   reviewOf: text("review_of"), // 审查任务 → 被审任务 id；普通任务为 null
   reviewRound: integer("review_round"), // 审查任务针对该目标的轮次（从 1 开始）
   // 就地验证：验证轮不再另起一个任务，而是在这个任务自己身上多跑一个旁路回合。
@@ -199,7 +198,7 @@ export const tasks = sqliteTable("tasks", {
   archived: integer("archived", { mode: "boolean" }).notNull().default(false),
   archivedAt: text("archived_at"), // when it was archived (orders the archive view)
   // Opt-in per-task worktree. true → orchestrator builds <repoPath>/.worktrees/<id>
-  // on branch `ash/<id8>` based off `worktreeBase` (null = current HEAD) before
+  // on branch `navi/<id8>` based off `worktreeBase` (null = current HEAD) before
   // running. False / missing repo → behaves like before (runs in repoPath).
   useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
   // 这个任务当初挑的那条线，**创建时拷进来的快照**（json WorkflowDef）。之后改起手式
@@ -245,6 +244,29 @@ export const tasks = sqliteTable("tasks", {
   baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   creationOrigin: text("creation_origin"),
+  // 派它的那条任务：普通任务里（智能体经 MCP、或用户从回复框）派出去的独立任务。只管「收在谁名下」，
+  // 不是 parentId —— 那一列是团队执行者，带着共用目录、跟团队一起验收的整套语义（见 task-dispatch.ts）。
+  dispatchedBy: text("dispatched_by"),
+  // 摆在回复框上等用户过目的派活单（JSON，shared/src/dispatch-plan.ts）。跟 question 同一笔写下，
+  // 只在 question 还是它绑的那一问时算数，所以清提问的各处不必另清它。
+  dispatchPlan: text("dispatch_plan"),
+  // 「派出去的活交给谁」（JSON 的 DispatchRunTarget）；NULL = 同这里。
+  dispatchTarget: text("dispatch_target"),
+  // 挂在回复框顶上、可以派出去的活（JSON 的 DispatchSuggestion[]，server/src/dispatch-suggestion.ts）。
+  // 不占提问那一格，跟 question / dispatchPlan 互不相干。NULL = 一件都没有。
+  dispatchSuggestions: text("dispatch_suggestions"),
+  // 智能体收回过的那几件和原因（JSON 的 WithdrawnSuggestion[]）。跟从上一列拿掉那一件**同一条更新**写：
+  // 建议不见了，原因就一定在。NULL = 没收回过。
+  dispatchWithdrawals: text("dispatch_withdrawals"),
+  // 这一条名下（dispatchedBy 整棵往下）全部停着：用户在「派出的任务」格头按了「全部停下」的那一刻。
+  // 空 = 没停。判据与停/续的手法见 dispatch-hold.ts。
+  dispatchHoldAt: text("dispatch_hold_at"),
+  // 「全部停下」按了、名下还没停完：标记先落（拦住新的起跑），清点名下、逐条停掉做完才清。中途出错
+  // 留着它，调度 tick 接着把没停完的停完；页面据它说「正在停下」，不说「已全部停下」（dispatch-hold.ts）。
+  dispatchHoldPendingAt: text("dispatch_hold_pending_at"),
+  // 这一条欠一次起跑，记的是按住它的那条任务：被「全部停下」停掉的、停着期间轮到却被拦下的。
+  // 「接着跑」只兑现这些，停之前就停着的不碰（dispatch-hold.ts）。
+  holdOwedBy: text("hold_owed_by"),
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
   /**
@@ -365,7 +387,7 @@ export const tasks = sqliteTable("tasks", {
   // 布尔位时，崩溃重试会整段重跑——已经执行过的发布/部署命令再来一遍（at-least-once
   // 变 at-least-twice，审查实测复现）。补跑按这份清单跳过已完成的站；随 pending 一起清。
   acceptedTailDone: text("accepted_tail_done").notNull().default("[]"),
-  // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 ash 续跑（本地这份
+  // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 navi 续跑（本地这份
   // 是历史），"in" = 从别的机器接过来的。持久落库,刷新后的横幅靠它,不靠 toast。
   handoff: text("handoff"),
   // 强制恢复会清掉 handoff；风险审计另存，确保无会话任务刷新后也仍能看见双任务警告。
@@ -393,7 +415,7 @@ export const agents = sqliteTable("agents", {
   // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
   providerId: text("provider_id"),
   // 覆盖 CLI 自己配置文件里的设置(json Record<string, number>,以 env 注入)。
-  // 声明表在 @ash/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
+  // 声明表在 @navi/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
   configOverrides: text("config_overrides").notNull().default("{}"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
   // 多人模式:执行器是**个人面**资源(§八),各人各一套,互不可见。
@@ -440,6 +462,9 @@ export const reviewerProfiles = sqliteTable("reviewer_profiles", {
   model: text("model"),
   reasoningEffort: text("reasoning_effort"),
   ownerUserId: text("owner_user_id"), // 个人面资源(§八)
+  // 派出去的任务默认交给这一位审查(shared/src/review-on-create.ts)。同一个归属人至多一行为真,
+  // 由 db/index.ts 里的 reviewer_profiles_default_owner 部分唯一索引兜住;行删掉默认就跟着没了。
+  isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -456,6 +481,9 @@ export * from "./schema-task-notice.js";
 // 任务「看过没有」(task_reads,侧栏绿点的已读记录),表定义 + 建表在 `schema-task-reads.ts`。
 export * from "./schema-task-reads.js";
 
+// 验收确认层「运行」那一勾上次的样子(accept_memory,按人按项目),表定义 + 建表在 `schema-accept-memory.ts`。
+export * from "./schema-accept-memory.js";
+
 // 任务写过的位置(task_writes,生成物面板的并发裁决用),表定义 + 建表在 `schema-task-writes.ts`。
 export * from "./schema-task-writes.js";
 
@@ -466,126 +494,9 @@ export * from "./schema-accept-gate.js";
 // 理由同上面几条:调用处照旧 `import { sessions } from "./db/schema.js"`。
 export * from "./schema-sessions.js";
 
-export const schedules = sqliteTable("schedules", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id").notNull(),
-  kind: text("kind").notNull(), // once | cron
-  at: text("at"), // ISO timestamp for one-shot
-  cron: text("cron"), // 5-field expression for recurring
-  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-  lastRunAt: text("last_run_at"),
-  // 建这条日程的人。到点派出去的任务按它继承 ownerUserId(§八 三条继承规则之二),
-  // 停用该用户时他建的日程一并暂停(§五)。
-  ownerUserId: text("owner_user_id"),
-  createdAt: text("created_at").notNull(),
-});
-
-// Scheduled replies: a message to send to a task's agent when it comes due
-// (continueTask). Distinct from `schedules` (which re-runs a task): a task may
-// have several pending messages; the scheduler fires each when due and the task
-// is idle. `mode` decides what "due" means — timed=到点，queued=任务一空闲就发。
-export const scheduledMessages = sqliteTable("scheduled_messages", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id").notNull(),
-  text: text("text").notNull().default(""),
-  attachments: text("attachments").notNull().default("[]"), // json string[]
-  agent: text("agent"), // AgentType | null（@指派目标）
-  // @指派时一并选定的执行器与模型：定时发送落地时要跑的还是用户当时选的那一个。
-  executorId: text("executor_id"), // agents.id | null（null=按 agent 类型默认执行器）
-  model: text("model"), // 模型覆盖 | null（跟随执行器）
-  reasoningEffort: text("reasoning_effort"), // 思考强度覆盖 | null（跟随执行器）
-  // 投递时恢复的回合身份（"reviewer" 等）。审查者提问回合还没 release turn、用户就答复
-  // 时答案会落到这里排队——不存 role 的话投递会以 single 身份进实现会话，reviewer 永远
-  // 收不到答案（审查实测复现）。null = 普通消息。
-  sessionRole: text("session_role"),
-  // **这条消息续起来的那一轮审查是哪一次、哪一轮。** 只跟 session_role='reviewer' 一起有意义。
-  // 为什么要落库:投递可能发生在几分钟之后,那时「现在最新是哪一次审查」已经不一定是排它
-  // 那一刻的那一次(派审交接期尤其),而现查会把旧请求绑到新审查上(第 10 轮审查 F1)。
-  // 两列为空 = 这条消息没记下为哪一轮排的,它续起来的回合**不代表任何一轮审查**(显式的
-  // `"unbound"`,不是「就按最新那一轮算」;本轮审查 F2)。
-  reviewRun: text("review_run"),
-  reviewRound: integer("review_round"),
-  // 这条消息是**谁发的**(多人模式)。投递时按它解析执行器/供应商/CLI 环境与 git 署名
-  // —— 排队消息可能几分钟后才送出去,那时不能退回「任务归属人」:在别人的任务上排的
-  // 队,烧的仍该是排队那个人自己的 key(§八)。null = 自用模式或存量行。
-  ownerUserId: text("owner_user_id"),
-  // 这条消息是谁写的。null = 真人；"monitor:<id>" = 某个哨兵推来的事件。两件事靠它：
-  // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
-  // 投递时标 byBackend，让它在会话里显示成系统代写的一回合而不是冒充用户发言。
-  origin: text("origin"),
-  monitorWake: text("monitor_wake", { mode: "json" }).$type<MonitorWakeData>(),
-  mode: text("mode").notNull().default("timed"), // timed | queued | after
-  // mode=after:等这个任务完成再发(见 shared/src/schedule.ts)。其余 mode 为 null。
-  afterTaskId: text("after_task_id"),
-  // mode=after 的前置任务落 done 的那一刻(锁存:之后前置再跑/失败/被删都撤不回,见 pending-after.ts)。
-  afterDoneAt: text("after_done_at"),
-  // mode=after 登记那一刻前置任务的完成基线:前置的 done_seq 超过它才算等到(pending-after.ts)。
-  afterSeq: integer("after_seq"),
-  // 执行意图:1 = 这条是任务**排队等轮次时**暂存的回复,投递它 = 开启任务的执行回合
-  // —— 整队在跑守卫与分组暂停都挡它,重投也不丢(第 xNb655YqYzcA 链第 5 轮:起跑失败
-  // 后的自动重投曾丢掉意图,借终态续聊豁免并行执行/穿透暂停)。0 = 普通消息(运行中
-  // 暂存的追问、定时消息、终态续聊),沿用原投递语义。
-  execution: integer("execution", { mode: "boolean" }).notNull().default(false),
-  sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
-  status: text("status").notNull().default("pending"), // pending | sent | canceled
-  createdAt: text("created_at").notNull(),
-  sentAt: text("sent_at"),
-  // 「有人正在把这条送进会话」的租约（ISO 时刻），行本身仍是 pending。sent 只在原话
-  // 真的落进会话之后才写，所以 sent 永远意味着「用户刷新后看得见」。租约是内存态的
-  // 持久投影：进程一换就作废（开机 reclaimStaleDeliveries 全清），那条消息回到待发送。
-  deliveringSince: text("delivering_since"),
-  // 这张**续跑凭证**此刻挂在谁名下(checkpoint-ownership.ts 的 token:pid + 代次 + 开机随机数
-  // + 这一笔认领/接管独有的随机串)。只有续跑凭证用它。
-  //
-  // 为什么租约时刻不够:它既要当「这条租约多久了」又要当身份,于是同毫秒接管不保证换值,
-  // 更证不出「原发送方还在不在」。多开实例(ASH_ALLOW_MULTI)时后者是硬要求 —— 两个独立进程
-  // 实测:接管方按「没送出去」把交代还给任务,而原发送方照旧送了出去,同一段话执行两遍
-  // (第 2 轮自由审查 F1)。旧行 NULL = 那一代还没有身份,接管资格另按单例锁判(同上文件头)。
-  deliveringOwner: text("delivering_owner"),
-  // 这条消息已经把 `tasks.resume_prompt` 那段续跑交代**接走了**,值就是那一段原文,正文
-  // 末尾带着它(见 monitor-session.ts 的 monitorWakeCheckpoint)。
-  //
-  // 为什么要这一列:哨兵叫醒的那一轮要把 agent 自己留下的交代一起喂回去,而「先从任务行
-  // 取走、没送出去再回填」只把那段话留在一个内存闭包里 —— 取走成功、送达之前进程一换
-  // (崩溃/重启),开机只清投递租约,重投的是原始事件正文,再去读任务行也已经空了:那段
-  // 交代两边都不在(第 2 轮审查 F4)。写在这里 = 跟取走同一个批里落盘,于是重投认得出
-  // 「正文里已经带着它了」(幂等)、回填失败也不丢(下一次投递照旧带着它走)、送达之后
-  // 这一行就是那段交代被谁消费掉的记录。
-  checkpointTaken: text("checkpoint_taken"),
-  // 跟 `checkpoint_taken` 同一笔落库的**随身凭证**：那段交代的来源和它取走时的占用代次
-  // （见 tasks.resume_prompt_generation）。少了这两样，持久重投只能靠任务行上的休眠值猜来源、
-  // 靠「那一格空着」猜归属 —— 两样都会在期间有过别的占用时猜错（第 2 轮审查 F2）。
-  checkpointAuto: integer("checkpoint_auto", { mode: "boolean" }),
-  checkpointGeneration: integer("checkpoint_generation"),
-  // 这条消息承载的是**哪一笔**结果交接(`<monitorId>:<result_handoff_at>`)。null = 不是交接,
-  // 是普通消息/哨兵事件。
-  //
-  // 为什么要这一列(第 2 轮审查 N1):交接是「入队」+「销凭证」两条语句,第二条失败(或进程正好
-  // 死在中间)时凭证留着,重投器下一趟还会按它再送一次 —— 而上一条可能已经 sent,合并窗口对它
-  // 不适用,于是同一条结束通知变成两条消息、把 agent 叫醒两次。身份跟入队写在同一笔里,所以
-  // 「送过没有」这一问有一个原子的答案:库里找得到这个 token ⇒ 已经送过,只补销凭证。
-  handoffToken: text("handoff_token"),
-  // 这条消息是哪一条问答的答复（tasks.question_history 里那条记录的 id）。投递时原样落进会话
-  // 那条用户回合（answerIds），删除消息按它清问答历史。null = 不是答复。
-  answerId: text("answer_id"),
-  // 这张凭证**是在哪一代投递协议下开出来的**(delivery-crossing.ts 的 CROSSING_PROTOCOL)。
-  //
-  // 为什么非得落库:恢复侧用「越线记号不在」当否证,而那个否证只有在写记号是**硬前置**
-  // (写不成就不 spawn)的那一代里才成立。`crossingRequired` 只活在当时那个调用栈里,
-  // 旧凭证和新凭证在库里长得一模一样 —— 升级之后拿新代码的判据去读旧代开的凭证,等于
-  // 把旧协议当时根本没给过的证明力追认给它(第 2 轮自由审查 F1 跨进程实测:同一段交代
-  // 在升级后被执行了两遍)。null = 旧代开的,它的沉默什么都不证明,只能按交付不明处理。
-  crossingProtocol: text("crossing_protocol"),
-  // 哨兵结果**在回合里**交给了哪一轮（那一轮的 active_turn_token）。status='sent' 且非空 = 已交、
-  // 等那一轮收口才算数；没有确认送到就退回 pending（monitor-turn-handoff.ts 文件头）。
-  turnTakenBy: text("turn_taken_by"),
-  // 那一次交付的交付号 + 时刻 + MCP 发回确认的时刻（monitor-turn-ack.ts）：没有 ackedAt 就不算送到。
-  turnHandoff: text("turn_handoff", { mode: "json" }).$type<{ hand: string; at: string; ackedAt?: string }>(),
-  // 回合里交过、那一轮没正常收口而退回来的时刻。非空的 pending 行熬得过终态连坐，等下一次起跑送达。
-  turnReturnedAt: text("turn_returned_at"),
-  // 哨兵输出那一批在这一刻之前不投递，等紧跟着的「结束」并进来（monitor-events.ts `pushToTask`）。
-  mergeHoldUntil: text("merge_hold_until"),
-});
+// 定时（`schedules`：到点重跑任务）与待发送消息（`scheduledMessages`）两张表在 `schema-schedules.ts`，
+// 原样再导出,调用处照旧 `import { schedules } from "./db/schema.js"`。
+export * from "./schema-schedules.js";
 
 // Queue items: ordered list of tasks where each task waits for the one
 // immediately before it in the queue. Replaces the legacy depends_on /
@@ -609,7 +520,7 @@ export const queueItems = sqliteTable(
   }),
 );
 
-// 团队调度台**还没送进 CLI**的入站消息(执行者汇报/提问、ash 的唤醒语)。
+// 团队调度台**还没送进 CLI**的入站消息(执行者汇报/提问、navi 的唤醒语)。
 //
 // 调度台忙着的时候这些消息只能等它这一回合说完再合并送进去(见 team/session.ts 头注),
 // 而「等着」这段时间横跨换台、关台和 server 重启 —— 全放内存里的话,进程一换就什么都
@@ -630,26 +541,6 @@ export const teamInbound = sqliteTable(
   },
   (t) => ({ taskIdx: index("team_inbound_task_idx").on(t.taskId, t.seq) }),
 );
-
-// 供应商(relay), system-level. 挂给执行器用:启动 CLI 时注入 base_url + key,
-// 顶掉 CLI 自己的官方登录账号。ash 自己不再直连 HTTP 调模型。
-export const llmProviders = sqliteTable("llm_providers", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  protocol: text("protocol").notNull().default("openai"), // anthropic | openai
-  baseUrl: text("base_url").notNull(), // 根地址,不含 /v1(各处按需自行补)
-  apiKey: text("api_key").notNull().default(""), // 本机存储,GET 不回传明文
-  model: text("model").notNull().default(""),
-  protocolConversionEnabled: integer("protocol_conversion_enabled", { mode: "boolean" }).notNull().default(false),
-  // 选模型面板的候选来源:'api'=每次现调 /models;'pinned'=只用 pinned_models(json string[])。
-  modelListMode: text("model_list_mode").notNull().default("api"),
-  pinnedModels: text("pinned_models").notNull().default("[]"),
-  // Anthropic 供应商逐模型声明 1M；存干净模型名，运行时再加 [1m] 并按需走本地转发。
-  context1mModels: text("context_1m_models").notNull().default("[]"),
-  // 多人模式:**不做共享池**,每人自带 API key(§八)。
-  ownerUserId: text("owner_user_id"),
-  createdAt: text("created_at").notNull(),
-});
 
 // 上传附件的**归属登记**(§八)。文件本身躺在 `data/uploads` 里 —— 那是个扁平目录,
 // 文件名就是全部信息,所以「谁能读它」只能靠这张表回答(判据在 `uploads.ts`)。
@@ -678,6 +569,8 @@ export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
   targetBranch: text("target_branch").notNull(),
 });
 
+// 供应商表住在 schema-llm-providers.ts（本文件 700 行闸）。这里转发，导入路径不变。
+export { llmProviders } from "./schema-llm-providers.js";
 // 推进意图表住在 schema-queue-advance.ts(本文件 700 行闸)。这里转发,导入路径不变。
 export { queueAdvanceIntents } from "./schema-queue-advance.js";
 
@@ -686,6 +579,7 @@ export { handoffPeers, handoffLocalPeerKeys, handoffLocalKeyRevisions } from "./
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
 export { monitors, monitorReclaimDebts } from "./schema-monitors.js";
 export { taskBackgroundRevisions } from "./schema-task-background.js";
+export { taskPrerequisites, taskPrerequisiteLaunches } from "./schema-prerequisites.js";
 export { taskDiskCleanups } from "./schema-run-disk.js";
 export { regressionChecks } from "./schema-regression-checks.js";
 export { regressionEvidence } from "./schema-regression-evidence.js";

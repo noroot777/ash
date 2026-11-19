@@ -2,7 +2,7 @@
 //
 // 它要解决的是 agent 侧「盯着一件慢事」的老问题：轮询要反复烧回合去 cat 日志，
 // 挂在会话上的后台进程又会随会话一起被回收（claude 自带的 Monitor 就死在这一点上：
-// 会话一结束，它和被它盯着的活一起没了）。ash 版把进程的归属上移一层——进程由 **ash
+// 会话一结束，它和被它盯着的活一起没了）。navi 版把进程的归属上移一层——进程由 **navi
 // server** 起，不在 agent 进程树里，于是 agent 回合结束、会话结束、server 重启都动
 // 不到它；有事件时再按既有的待发送消息链路把任务唤醒。
 //
@@ -14,29 +14,30 @@
 // 面板上并排显示的哨兵有两种出身，能力**不对等**，所以 `kind` 不是装饰性标签，是读这份
 // 结构时必须先看的一列：
 //
-// - `ash`：上面说的那种，ash server 自己起的进程。全套都有——停得掉、看得到日志尾巴、
+// - `navi`：上面说的那种，navi server 自己起的进程。全套都有——停得掉、看得到日志尾巴、
 //   跨回合/会话/重启都活着。
 // - `claude`：claude CLI 自带的 `Monitor` 工具起的，**进程在 agent 自己的进程树里**。
-//   ash 只是从 stream-json 里把它认出来并记账，是一份**只读投影**：停不掉（`TaskStop`
-//   是 claude 进程内的工具，ash 没有手柄）、没有日志文件、agent 进程一死它就跟着没了。
+//   navi 只是从 stream-json 里把它认出来并记账，是一份**只读投影**：停不掉（`TaskStop`
+//   是 claude 进程内的工具，navi 没有手柄）、没有日志文件、agent 进程一死它就跟着没了。
 //
 // 为什么还要记它：不记的话，agent 在对话里说一句「已挂 Monitor，等通知」，而哨兵面板
 // 空空如也——用户翻遍界面也对不上账，只能得出「这功能坏了」。2026-10-14 实测的那个任务
-// 挂了 12 个内置 Monitor、ash 一个都不知道，用户的第一反应正是「为什么 inspector 里没
+// 挂了 12 个内置 Monitor、navi 一个都不知道，用户的第一反应正是「为什么 inspector 里没
 // 东西」。只读也比没有强，前提是**界面必须如实说明它只读**（见 MonitorCard）。
 //
 // **两种都要能看见，但界面上不许混在一起**（用户 2026-10-16 拍板）：它们的能力不对等到
 // 了「同一个词指两件事」的地步——混排时用户会对着一张 claude 的卡去找停止按钮，或者把
 // 「这个哨兵会叫醒任务」的预期套到一个只在那一轮里有效的监听上。所以面板按来源分段
-// （见 MonitorInspector），会话区那张「在等哨兵」只数 ash 那种、另起一行交代内置那几个
+// （见 MonitorInspector），会话区那张「在等哨兵」只数 navi 那种、另起一行交代内置那几个
 // （见 MonitorWaitCard）。
 //
 // **`claude` 这一种今后只从两处来**：2026-10-16 起，一次性回合（`claude -p`，单飞任务和
-// 团队执行者都是）里 agent 调内置 Monitor 会被 PreToolUse hook 当场改道成一条 ash 哨兵
+// 团队执行者都是）里 agent 调内置 Monitor 会被 PreToolUse hook 当场改道成一条 navi 哨兵
 // （见 server/src/claude-monitor-hook.ts），所以那条路上不再产生新的只读投影。仍会产生
 // 的是**常驻会话**（团队调度台，`--input-format stream-json`——那种模式下 CLI 进程一直
 // 活着，内置 Monitor 真能唤醒它自己，拦它才是错的），以及**历史**：改道之前跑过的任务，
 // 会话文件里还躺着它们，面板得答得出「那 12 个 Monitor 后来怎么了」。
+import { FROZEN_MONITOR_KIND_OWN } from "./legacy-names.ts";
 
 // `matched` 是**第五种结束方式**,不是 `stopped` 的一个变种:它说的是「约定的那一行出现了,
 // 这条哨兵就此收工」——人点停、推满上限、系统回收都叫 stopped,把这一种也塞进去,卡片上就会
@@ -44,15 +45,21 @@
 export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "matched", "lost"] as const;
 export type MonitorStatus = (typeof MONITOR_STATUSES)[number];
 
+/**
+ * Navi 自己起的哨兵（停得掉、有日志）。值是冻结的旧名 `"ash"`：它落在每一行哨兵记录上、走在接口里，
+ * 理由见 legacy-names.ts 的 `FROZEN_MONITOR_KIND_OWN`。判「是不是自己起的」一律比它，别写字面量。
+ */
+export const OWN_MONITOR_KIND = FROZEN_MONITOR_KIND_OWN;
+
 /** 哨兵的出身。能力差异见文件头那一段——`claude` 那种是只读投影。 */
-export const MONITOR_KINDS = ["ash", "claude"] as const;
+export const MONITOR_KINDS = [OWN_MONITOR_KIND, "claude"] as const;
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 
 /**
  * 这个哨兵**盯到什么时候**——三态，不是一个「到期时刻」就能表达的。
  *
- * ash 自己起的恒为 `bounded`：期限是它自己定的，当然知道。但 claude 内置 Monitor 的期限
- * 是**来源侧说了算**，而 ash 只是转述：
+ * navi 自己起的恒为 `bounded`：期限是它自己定的，当然知道。但 claude 内置 Monitor 的期限
+ * 是**来源侧说了算**，而 navi 只是转述：
  * - `bounded`：来源明确回执了有效期（`expiresAt` 可信）。
  * - `persistent`：来源说它不设会话内超时（持续盯着），没有到期时刻。
  * - `unknown`：还没拿到回执，或者回执里没提期限。
@@ -133,7 +140,7 @@ const MONITOR_UNIT_MS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_00
  * 可能来自来源回执（对），也可能来自某个旧版本拿请求值算的（错），结论本身分不开它们。
  *
  * - `receipt`：来源回执明说的（`parseMonitorStartReceipt` 读出来的）。claude 投影唯一的可信档。
- * - `self`：ash 自己起的哨兵——期限是 ash 定的，进程也是 ash 起的，不存在"来源说了算"的问题。
+ * - `self`：navi 自己起的哨兵——期限是 navi 定的，进程也是 navi 起的，不存在"来源说了算"的问题。
  * - `null`：旧版本算法推出来的，或还没拿到回执。不可信，对外不给到期时刻。
  *
  * 为什么不能用别的列代替：`cli_session_id` 从本功能第一个提交就有，`source_lifetime` 要晚
@@ -155,7 +162,7 @@ export type MonitorLifetimeEvidence = (typeof MONITOR_LIFETIME_EVIDENCE)[number]
  * 跟 {@link MONITOR_LIFETIME_EVIDENCE} 是两件独立的事——知道「盯 90 秒」不等于知道「从哪一刻
  * 开始数」。到期时刻 = 起点 + 时长，两个都得有依据才能给出一个精确时刻。
  *
- * - `observed`：**实时**投影。ash 自己看着 `task_started` 事件到达并立刻落库，起点就是那一刻，
+ * - `observed`：**实时**投影。navi 自己看着 `task_started` 事件到达并立刻落库，起点就是那一刻，
  *   不确定度只有流传输那几毫秒。
  * - `receipt-window`：**历史**重建。起点落在 `[tool_use, 回执]` 区间内（两端都是日志里真实
  *   存在的时刻），而且区间窄到不影响显示。实测本机 60 个真实回执区间宽 22~59ms。
@@ -209,7 +216,7 @@ export const startAnchorTolerance = (timeoutMs: number | null): number =>
  * - 新代码写的行一律带宽度（实时是 `[来源时刻, 到达时刻]`，历史是 `[tool_use, 回执]`），
  *   宽度在容差内就照常给精确时刻；
  * - 旧行这一列是 `null`——**没有误差界 = 无法重验 = 不可信**，于是只报时长。
- * - ash 自己起的哨兵宽度是 0（进程就是它 spawn 的，起点没有不确定性），一条不受影响。
+ * - navi 自己起的哨兵宽度是 0（进程就是它 spawn 的，起点没有不确定性），一条不受影响。
  *
  * 容差随时长放宽（见 {@link startAnchorTolerance}），所以同一行在拿到真实时长之后可能从
  * 「不可信」升级成「可信」——判定放在**读的时候**算，就不必在写入侧为此留一张内存表。
@@ -241,7 +248,7 @@ export function monitorStartTrusted(row: {
  *   「开始即到期」（实测跨度 0ms，本该是 90 秒）。
  *
  * 改成现算之后这两类都不可能发生：少任何一半证据就只报时长（`timeoutMs`），卡片说「总共
- * 盯 X（起点不确定）」；两半都在时算出来的值一定自洽。占位列从此只是 ash 自己那半的
+ * 盯 X（起点不确定）」；两半都在时算出来的值一定自洽。占位列从此只是 navi 自己那半的
  * 内部计时依据（`monitors.ts` 的到期定时器），再也不是对外契约的一部分。
  *
  * 「起点有证据」这一半由 {@link monitorStartTrusted} 判——它要的是**可重验的误差界**，不是
@@ -271,12 +278,12 @@ export function monitorExactExpiry(row: {
  * existing 表、查行都是按 `(task_id, native_id)`，声明和实现不一致；第 5 轮审查列为不拦项）：
  *
  * - **解析层按会话 + 来源分区**（`per-cli-session`）：`pending`/`byToolUse` 的键来自来源事件，
- *   不同 ash 会话各自一套；而一条 ash 会话跨好几个 run 文件，所以桶里还按**来源**（CLI 会话
+ *   不同 navi 会话各自一套；而一条 navi 会话跨好几个 run 文件，所以桶里还按**来源**（CLI 会话
  *   号，认不出来时是那个 run 文件）再分一层 —— 不同来源的同号调用各占一条，不互相覆盖
  *   （判据在 server/src/claude-monitor-identity.ts，未决调用的落盘键同一维）。
  * - **持久层按任务 + 来源去重**（`per-task`）：唯一索引
  *   `(task_id, COALESCE(cli_session_id,'run:'||source_run), native_id)`。原先是
- *   `(task_id, native_id)`，它的前提是同一个 ash 任务里来源 id 不撞 —— 那一点**实测成立但
+ *   `(task_id, native_id)`，它的前提是同一个 navi 任务里来源 id 不撞 —— 那一点**实测成立但
  *   不是来源侧的承诺**：2026-10-14 扫过本机全部 `agent-out.jsonl`，1017 条 `task_started` 里
  *   `local_bash` 的 id 形如 `b` + 8 位随机 base36（`blu5n05kp`），跨会话重复 0 个；但来源侧
  *   只承诺会话内唯一，所以现在来源那一维进了键（第 13 轮审查 N1）。
@@ -299,8 +306,8 @@ export const NATIVE_MONITOR_ID_SCOPE = "per-cli-session" as const;
  * 投影里的状态有两种出身，优先级不对等：
  * - **来源事实**：`stopped` / `exited` / `expired` 都是来源侧的 `task_notification` 说出来
  *   的。它们不该被改写——流被重放、resume 后 CLI 重发，都不该把已成定局的结局翻过来。
- * - **ash 推断**：`lost` 是**我们猜的**（流断了、ash 重启后判来源进程已不在）。猜错很正常：
- *   agent 活得过 ash 重启，一次误判之后来源侧可能照常送来 `completed`。
+ * - **navi 推断**：`lost` 是**我们猜的**（流断了、navi 重启后判来源进程已不在）。猜错很正常：
+ *   agent 活得过 navi 重启，一次误判之后来源侧可能照常送来 `completed`。
  *
  * 所以 `lost` 必须对纠正开放。原来 `close` 只认 `running`，于是「先被误判 lost、来源后来报
  * 完成」的那条路上，错误被永久固化（第 3 轮审查实测：来源还活着的卡片写着 lost，真 completed
@@ -310,11 +317,11 @@ export const monitorStatusCorrectable = (status: string): boolean =>
   status === "running" || status === "lost";
 
 /**
- * 旧后端发来的 DTO 归一：`kind` 这一列是跟着「两种来源」一起加的,之前的 ash 哨兵没有它。
+ * 旧后端发来的 DTO 归一：`kind` 这一列是跟着「两种来源」一起加的,之前的 navi 哨兵没有它。
  *
- * 为什么要在入口补:下面两个能力判据都写的 `=== "ash"`,字段缺失时两个都是 false ——
+ * 为什么要在入口补:下面两个能力判据都写的 `=== "navi"`,字段缺失时两个都是 false ——
  * **本来能停、能看日志的那张卡会变成只读且没有输出入口**(第 12/13 轮审查 N5)。前端先更新、
- * 后端还没更新的那段混合部署里只会出这一种 DTO:旧后端只有 ash 哨兵,所以缺省补 "ash" 是
+ * 后端还没更新的那段混合部署里只会出这一种 DTO:旧后端只有 navi 哨兵,所以缺省补 "navi" 是
  * 确定的,不是猜。恢复端点那边已有 404 兼容,这份 DTO 的同类兼容就在这里。
  *
  * {@link TaskMonitor.startedAtExact} 的缺省方向**相反**:补 `false`。它不是「猜哪种更常见」
@@ -328,16 +335,16 @@ export const normalizeMonitorDto = <T extends {
     ? row
     : {
       ...row,
-      kind: row.kind ?? ("ash" as const),
+      kind: row.kind ?? OWN_MONITOR_KIND,
       startedAtExact: row.startedAtExact ?? false,
       // 老后端答不出这一列 ⇒ 没约定过,不是「有但读不出来」。
       stopWhen: row.stopWhen ?? null,
     });
 
-/** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
-export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
-/** 有没有日志文件可以回看尾巴。只有 ash 自己起的才有。 */
-export const hasMonitorLog = (kind: MonitorKind) => kind === "ash";
+/** 能不能从 navi 这边停掉它。`claude` 那种的进程在 agent 进程树里，navi 够不着。 */
+export const canStopMonitor = (kind: MonitorKind) => kind === OWN_MONITOR_KIND;
+/** 有没有日志文件可以回看尾巴。只有 navi 自己起的才有。 */
+export const hasMonitorLog = (kind: MonitorKind) => kind === OWN_MONITOR_KIND;
 
 export interface TaskMonitor {
   id: string;
@@ -346,7 +353,7 @@ export interface TaskMonitor {
   kind: MonitorKind;
   /**
    * 来源侧的原生 id（`claude` 那种是 claude 的后台任务 id，形如 `b69ym4qzv`）。
-   * `ash` 那种恒为 null：它的 `id` 就是唯一那一个。
+   * `navi` 那种恒为 null：它的 `id` 就是唯一那一个。
    */
   nativeId: string | null;
   /** 盯到什么时候：有限期 / 持续 / 还不知道。见 {@link MonitorLifetime}。 */
@@ -441,7 +448,7 @@ export function isMonitorLive(status: MonitorStatus): boolean {
  * 上限与时长那一组（攒多久算一批、一批吃多少行、单行多长、一个哨兵总共推多少条、盯多久、
  * 回看多少、合并正文多长）搬到了 **monitor-limits.ts**（全局约定:单文件不超过 700 行）。
  *
- * 这里原样转发:十几个调用点都按「找 @ash/shared/monitor 要」在写，没必要为了一次拆分
+ * 这里原样转发:十几个调用点都按「找 @navi/shared/monitor 要」在写，没必要为了一次拆分
  * 全都改一遍 import。（同级运行时转发在 shared 里必须写成 `./x.ts` —— Node 的类型擦除不会
  * 把 `./x.js` 映射回 `.ts`，见 server/CLAUDE.md 里那条。）
  */

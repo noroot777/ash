@@ -28,8 +28,10 @@ import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "../agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentType, TeamConfig } from "@ash/shared";
-import { TEAM_DEFAULTS } from "@ash/shared";
+import type { AgentType, TeamConfig } from "@navi/shared";
+import { NAVI_TURN_IDENTITY_ENV } from "@navi/shared/mcp";
+import { turnIdentityVars } from "../turn-identity.js";
+import { TEAM_DEFAULTS } from "@navi/shared";
 import { bindTurnSource, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields, unbindTurnSource } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
 import { db } from "../db/index.js";
@@ -56,7 +58,7 @@ import type { Lead } from "./session-types.js";
 import { createSessionConsumer } from "./session-consumer.js";
 import { sendToLead } from "./lead-delivery.js";
 import { cliConfigDirColumn, runEnvForTask, sessionCliConfigDir, sessionResumableHere } from "../auth/run-env.js";
-import { HOST_CLI_SWITCH_SESSION_NOTE } from "@ash/shared/multiuser";
+import { HOST_CLI_SWITCH_SESSION_NOTE } from "@navi/shared/multiuser";
 import { launchFields } from "../usage.js";
 
 const INTERRUPT_NOTE = "〔系统〕已打断调度者当前回合,插入你的新指令";
@@ -143,7 +145,7 @@ export async function deliverToLead(
   return deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure, opts);
 }
 
-// 执行者汇报/提问,以及 ash 自己的唤醒语(inbox.ts 用)。
+// 执行者汇报/提问,以及 navi 自己的唤醒语(inbox.ts 用)。
 export async function sendInbound(taskId: string, text: string): Promise<void> {
   await deliver(taskId, text, "inbound");
 }
@@ -497,7 +499,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
       objective,
       newMessage: promptedText,
     });
-  const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId };
+  const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ...turnIdentityVars({ [NAVI_TURN_IDENTITY_ENV.taskId]: taskId }) };
   await ex.prepareResume?.({ cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined, env: runEnv });
   // 接回同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
   // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍（第 1 轮审查 F2,
@@ -661,7 +663,7 @@ export function attachLead(lead: Lead): void {
   // team/lead-turns.ts 顶部（第 8 轮审查必须修 1）。放在这里而不是让各调用方自己记着调：
   // `attachLead` 是「开放消费」的唯一入口,顺序在这里定死,新调用点不可能写反。
   if (lead.turnStart) holdTurn(lead, lead.turnStart);
-  void consume(lead).catch((err) => console.error(`[ash] team consume(${lead.taskId}) failed:`, err));
+  void consume(lead).catch((err) => console.error(`[navi] team consume(${lead.taskId}) failed:`, err));
 }
 
 // ── 事件消费 ──// ── 事件消费 ────────────────────────────────────────────────────────────────

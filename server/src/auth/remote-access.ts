@@ -49,12 +49,15 @@ import { isIP, type Socket } from "node:net";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
 import type { Context } from "hono";
-import type { RemoteDeviceVia } from "@ash/shared";
-import { resolveAshDbFile } from "../db/path.js";
+import type { RemoteDeviceVia } from "@navi/shared";
+import { resolveNaviDbFile } from "../db/path.js";
 import { LOCAL_ONLY } from "../local-only.js";
 import { isLoopbackAddress } from "../dir-picker.js";
 import { secretsEqual } from "../openai-converter/common.js";
 import { mintKey } from "./store.js";
+import { LEGACY_DEVICE_TOKEN_PREFIX } from "@navi/shared/legacy-names";
+
+const DEVICE_TOKEN_PREFIX = "navid_";
 
 /** 机主身份是怎么证明的。`local`/`cookie` 是浏览器会自动带上的那一类,写操作要过 CSRF。 */
 export type OwnerProof = "local" | "cookie" | "bearer";
@@ -126,8 +129,8 @@ export function originOfIncoming(incoming: IncomingMessage): RequestOrigin {
 }
 
 /**
- * ash 自己替别人转发时(预览代理)该盖在 `X-Forwarded-For` 上的值;请求本来就是本机直连的回
- * null(不盖)。代理到上游走的是回环,被预览的服务又多半把 `/api` 转回这台 ash —— 不盖这个章,
+ * navi 自己替别人转发时(预览代理)该盖在 `X-Forwarded-For` 上的值;请求本来就是本机直连的回
+ * null(不盖)。代理到上游走的是回环,被预览的服务又多半把 `/api` 转回这台 navi —— 不盖这个章,
  * 别的设备经预览绕一圈回来就成了「本机直连」,拿到的比它自己的凭证还多(读得到访问密钥)。
  */
 export function forwardedFor(origin: RequestOrigin): string | null {
@@ -167,9 +170,9 @@ interface State {
   hosts: string[];
 }
 
-const stateFilePath = (): string => `${resolveAshDbFile()}.remote-access.json`;
+const stateFilePath = (): string => `${resolveNaviDbFile()}.remote-access.json`;
 
-// 按路径缓存:同一个进程里换了 ASH_DB(回归测试模拟两台机器)就得重读。
+// 按路径缓存:同一个进程里换了 NAVI_DB(回归测试模拟两台机器)就得重读。
 let cached: { path: string; state: State } | null = null;
 
 function loadState(): State {
@@ -257,7 +260,7 @@ const hashToken = (token: string): string => createHash("sha256").update(token).
 
 /** 登记一台设备,回它的凭证(只此一次)。 */
 export function enrollDevice(input: { name: string; via: RemoteDeviceVia; address: string }): { device: RemoteDevice; token: string } {
-  const token = `ashd_${randomBytes(32).toString("base64url")}`;
+  const token = `${DEVICE_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
   const at = new Date().toISOString();
   const device: RemoteDevice = {
     id: randomBytes(9).toString("base64url"),
@@ -275,7 +278,8 @@ export function enrollDevice(input: { name: string; via: RemoteDeviceVia; addres
 export const listDevices = (): RemoteDevice[] => loadState().devices;
 
 export function deviceByToken(token: string | undefined): RemoteDevice | null {
-  if (!token?.startsWith("ashd_")) return null;
+  // 改名之前配对的设备手里是 `ashd_…`,照样认。
+  if (!token || ![DEVICE_TOKEN_PREFIX, LEGACY_DEVICE_TOKEN_PREFIX].some((prefix) => token.startsWith(prefix))) return null;
   const hash = hashToken(token);
   return loadState().devices.find((d) => d.tokenHash === hash) ?? null;
 }
@@ -313,12 +317,12 @@ function noteSeen(device: RemoteDevice, address: string): void {
 // 机主自己的浏览器替攻击页递一张 —— 机主看到的是一张来自自己电脑的申请,顺手点了允许,
 // 攻击页就领到凭证。重绑定的前提是页面开在攻击者控制的**域名**下,所以只收从认得的名字
 // 打开的页面递来的申请:
-//   · IP 字面量 —— 那个源上的页面只可能是 ash 自己给的;
+//   · IP 字面量 —— 那个源上的页面只可能是 navi 自己给的;
 //   · 这台机器自己的主机名(含 `.local`);
 //   · 机主已经带着凭证用过的名字(自定义域名、tailnet 全名):先扫码或粘密钥进来一次,
 //     这个名字就记下了。带凭证的请求造不出来 —— cookie 按域名存,攻击者的域名下没有;
 //   · 机主在设置里亲手填的对外地址(`configured`,飞书消息里的链接就指向它):填它要
-//     机主身份,攻击者写不进去。不认它的话,机主点开 ash 自己发来的链接反倒申请不了。
+//     机主身份,攻击者写不进去。不认它的话,机主点开 navi 自己发来的链接反倒申请不了。
 // 别的名字不是进不来,只是不能走「申请」:扫码和访问密钥都要机主手里的东西,不吃这一套。
 
 const MAX_HOSTS = 16;
@@ -406,7 +410,7 @@ function revoke(holder: string, keep?: Socket | null): void {
     try {
       listener(holder);
     } catch (error) {
-      console.error("[ash] 凭证收回的订阅方出错:", error);
+      console.error("[navi] 凭证收回的订阅方出错:", error);
     }
   }
 }
@@ -448,12 +452,12 @@ export function ownerProof(c: Context, sessionCookie: string | undefined): Owner
   if (!device) return null;
   holdConnection(deviceHolder(device.id), socket);
   rememberHost(host);
-  // 经同机的一跳转进来的(反代、ash 自己的预览代理)对端是回环,不是这台设备在哪:不拿它盖掉原来记的。
+  // 经同机的一跳转进来的(反代、navi 自己的预览代理)对端是回环,不是这台设备在哪:不拿它盖掉原来记的。
   noteSeen(device, socket && isLoopbackAddress(socket.remoteAddress) ? device.address : peerAddress(c));
   return { how: viaBearer ? "bearer" : "cookie", deviceId: device.id, holder: deviceHolder(device.id) };
 }
 
-const HOLDER_KEY = "ashOwnerHolder";
+const HOLDER_KEY = "naviOwnerHolder";
 
 /** 闸认下这次请求之后记一笔它凭的是哪件凭证(middleware.ts)。 */
 export function noteOwnerHolder(c: Context, holder: string): void {

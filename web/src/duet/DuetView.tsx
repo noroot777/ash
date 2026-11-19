@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { normalizeDuetConfig } from "@ash/shared/duet";
-import type { GateAction, Session, Task, TaskActions, TaskListItem } from "@ash/shared";
-import { runActivityPhase } from "@ash/shared/run-activity";
-import { TEAM_DEFAULTS, taskDisplayStatus } from "@ash/shared";
+import { normalizeDuetConfig } from "@navi/shared/duet";
+import { DUET_TIMELINE_SESSION } from "@navi/shared/user-messages";
+import type { GateAction, Session, Task, TaskActions, TaskListItem } from "@navi/shared";
+import { runActivityPhase } from "@navi/shared/run-activity";
+import { taskDisplayStatus } from "@navi/shared";
 import {
   Archive,
   CaretDown,
@@ -40,14 +41,14 @@ import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { turnImageMarkdown } from "../task-detail/turnImages.ts";
 import { conversationInputAnchor, conversationInputs } from "../task-detail/conversationInputs.ts";
 import { formatDuration, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
-import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
+import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import { DuetGateControls, DuetProgressBar } from "./DuetControls.tsx";
-import { DuetHandoffBar, DuetHandoffModal, type HandoffChoice } from "./DuetHandoff.tsx";
-import { buildDuetHandoffBody, latestDuetGate } from "./duetHandoff.ts";
+import { DuetHandoffBar, DuetHandoffModal } from "./DuetHandoff.tsx";
+import { buildDuetHandoffBody, duetHandoffTaskInput, latestDuetGate, type HandoffChoice } from "./duetHandoff.ts";
 import { isOpenDuetGate, runCreatedHandoffFollowUps } from "./handoffPolicy.ts";
 import { latestActiveDuetTurn, type DuetTurn } from "./duetState.ts";
 import { useDuet } from "./useDuet.ts";
-import { AshLoader } from "../brand/AshLoader.tsx";
 
 function timeMs(value?: string | null): number {
   const parsed = value ? Date.parse(value) : NaN;
@@ -183,8 +184,8 @@ export function DuetView({
   const [busy, setBusy] = useState(false);
   // 确认闸的对话框住在 App 层(见 task-detail/ExecutorGate.tsx),这里只拿判据。
   const confirmExecutorSwap = useExecutorGate();
-  const [teamBusy, setTeamBusy] = useState(false);
-  const [teamModal, setTeamModal] = useState(false);
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -194,7 +195,7 @@ export function DuetView({
 
   useEffect(() => setTitle(task.title), [task.id, task.title]);
   useEffect(() => {
-    setTeamModal(false);
+    setHandoffOpen(false);
     setDeleteOpen(false);
   }, [task.id]);
   useEffect(() => { void api.sessions(task.id).then(setSessions).catch(() => setSessions([])); }, [task.id, task.status]);
@@ -206,23 +207,32 @@ export function DuetView({
     ? duet.state.turns
     : duet.state.turns.filter((turn) => turn.done), [duet.state.turns, task.status]);
   // 我插的话没有条目 id，按「第几次插话」认：轮次只往后追加，插话本身也一定是 done 的，
-  // 上面那道过滤动不了它们的先后。
-  const userTurnIds = useMemo(() => {
+  // 上面那道过滤动不了它们的先后。这个编号也是它在讨论时间线上的出处 —— R 键那张表
+  // （服务端 duetUtterancesIn）按同样的数法给它编号，点过来靠它落到这一颗上。
+  const userTurnOrdinals = useMemo(() => {
     let count = 0;
-    return new Map(turns.flatMap((turn) => turn.speaker === "user" ? [[turn, `duet-user:${count++}`] as const] : []));
+    return new Map(turns.flatMap((turn) => turn.speaker === "user" ? [[turn, count++] as const] : []));
   }, [turns]);
   const inputs = useMemo(() => conversationInputs(
     { text: task.body || config.topic, at: task.createdAt },
     turns.flatMap((turn) => {
-      const id = userTurnIds.get(turn);
-      return id ? [{ kind: "user", id, text: turn.text, at: turn.at }] : [];
+      const ordinal = userTurnOrdinals.get(turn);
+      return ordinal === undefined ? [] : [{
+        kind: "user",
+        id: `duet-user:${ordinal}`,
+        text: turn.text,
+        at: turn.at,
+        sessionId: DUET_TIMELINE_SESSION,
+        sources: [{ sessionId: DUET_TIMELINE_SESSION, index: ordinal }],
+      }];
     }),
-  ), [config.topic, task.body, task.createdAt, turns, userTurnIds]);
+  ), [config.topic, task.body, task.createdAt, turns, userTurnOrdinals]);
   const currentRound = turns.reduce((max, turn) => Math.max(max, turn.round), 0);
   const gate = duet.state.gate ?? latestDuetGate(turns, task.status === "awaiting_review");
   const gateOpen = isOpenDuetGate(gate, task.status);
-  const linkedTeams = useMemo(() => allTasks
-    .filter((item) => item.mode === "team" && item.originTaskId === task.id)
+  // 从这场讨论交出去落实的任务：现在交出去的是普通任务，以前接力出来的团队也照旧列着。
+  const linkedTasks = useMemo(() => allTasks
+    .filter((item) => item.originTaskId === task.id && (item.mode === "team" || item.mode === "single"))
     .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt)), [allTasks, task.id]);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
@@ -282,46 +292,28 @@ export function DuetView({
     catch (reason) { setTitle(task.title); notify(reason instanceof Error ? reason.message : String(reason)); }
   };
   const handoff = async (choice: HandoffChoice): Promise<boolean> => {
-    if (teamBusy) return false;
-    setTeamBusy(true);
+    if (handoffBusy) return false;
+    setHandoffBusy(true);
     let created: Task;
     try {
       const freshSessions = await api.sessions(task.id);
       setSessions(freshSessions);
-      created = await api.createTask({
-        projectId: task.projectId,
-        title: `落实讨论结论：${task.title}`.slice(0, 60),
-        body: buildDuetHandoffBody(task, gate, turns, freshSessions, choice.note),
-        mode: "team",
-        originTaskId: task.id,
-        agentType: choice.lead.agentType,
-        team: {
-          ...TEAM_DEFAULTS,
-          lead: choice.lead.agentType,
-          worker: choice.worker.agentType,
-          leadExecutorId: choice.lead.executorId,
-          workerExecutorId: choice.worker.executorId,
-          leadModel: choice.lead.model,
-          leadReasoningEffort: choice.lead.effort,
-          workerModel: choice.worker.model,
-          workerReasoningEffort: choice.worker.effort,
-        },
-        autoTitle: false,
-      });
+      created = await api.createTask(duetHandoffTaskInput(task,
+        buildDuetHandoffBody(task, gate, turns, freshSessions, choice.note), choice));
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
-      setTeamBusy(false);
+      setHandoffBusy(false);
       return false;
     }
     onTaskCreated(created);
-    setTeamModal(false);
+    setHandoffOpen(false);
     const followUpFailures = await runCreatedHandoffFollowUps({
       closeGate: gateOpen ? () => api.gate(task.id, { kind: "approve" }, gate?.version) : null,
-      startTeam: () => api.runTask(created.id),
+      startTask: () => api.runTask(created.id),
     });
-    setTeamBusy(false);
-    if (!followUpFailures.length) notify("已创建团队，讨论结论已接力执行");
-    else notify(`团队已创建，但${followUpFailures.map(({ phase, reason }) => `${phase === "gate" ? "讨论自动收尾" : "启动"}失败（${reason instanceof Error ? reason.message : String(reason)}）`).join("、")}`);
+    setHandoffBusy(false);
+    if (!followUpFailures.length) notify("已创建任务，讨论结论已交给它落实");
+    else notify(`任务已创建，但${followUpFailures.map(({ phase, reason }) => `${phase === "gate" ? "讨论自动收尾" : "启动"}失败（${reason instanceof Error ? reason.message : String(reason)}）`).join("、")}`);
     return true;
   };
 
@@ -384,7 +376,7 @@ export function DuetView({
       <ImagePreviewGroup isolated>
         <div className="conversation-scroll-region">
           <div className="duet-stream" ref={scrollRef}>
-            {duet.loading && !turns.length && <p className="duet-empty"><AshLoader />正在读取讨论记录…</p>}
+            {duet.loading && !turns.length && <p className="duet-empty"><NaviLoader />正在读取讨论记录…</p>}
             {!duet.loading && duet.error && !turns.length && <p className="duet-empty is-error">讨论记录读取失败：{duet.error}</p>}
             {!duet.loading && !duet.error && !turns.length && (activityPhase
               ? <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />
@@ -393,7 +385,7 @@ export function DuetView({
               <TurnBubble
                 key={`${turn.round}-${turn.speaker}-${index}`}
                 turn={turn}
-                inputId={userTurnIds.get(turn)}
+                inputId={userTurnOrdinals.has(turn) ? `duet-user:${userTurnOrdinals.get(turn)}` : undefined}
                 previousRound={turns[index - 1]?.round}
                 session={turn.speaker === "A" ? sessionsByRole.voiceA : turn.speaker === "B" ? sessionsByRole.voiceB : undefined}
                 fallback={turn.speaker === "B" ? config.voiceB : config.voiceA}
@@ -430,29 +422,27 @@ export function DuetView({
           gate={gate}
           round={currentRound}
           maxRounds={config.maxRounds}
-          busy={busy || teamBusy}
-          linkedTeams={linkedTeams}
+          busy={busy || handoffBusy}
+          linkedTasks={linkedTasks}
           onGate={gateAction}
-          onOpenTeam={() => setTeamModal(true)}
+          onOpenHandoff={() => setHandoffOpen(true)}
           onOpenTask={onSelectTask}
         />
       ) : ["done", "failed", "canceled"].includes(task.status) ? (
         <div className="duet-terminal-handoff">
-          <div className="duet-terminal-acceptance acceptance-host">
-            <div className="acceptance-host-title"><b>讨论结论</b><small>确认这份结论，或带着意见让双方继续讨论。</small></div>
-            <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />
-          </div>
+          <AcceptanceControls className="duet-terminal-acceptance" task={task} onTaskUpdated={onTaskUpdated} notify={notify}
+            lead={<b className="acc-title">讨论结论</b>} />
           <DuetHandoffBar
-            linkedTeams={linkedTeams}
-            busy={teamBusy}
-            onOpenTeam={() => setTeamModal(true)}
+            linkedTasks={linkedTasks}
+            busy={handoffBusy}
+            onOpenHandoff={() => setHandoffOpen(true)}
             onOpenTask={onSelectTask}
           />
         </div>
       ) : (
         <DuetProgressBar round={currentRound} maxRounds={config.maxRounds} gateEnabled={config.gateG1 === "on"} />
       )}
-      {teamModal && <DuetHandoffModal taskId={task.id} busy={teamBusy} onClose={() => setTeamModal(false)} onConfirm={handoff} />}
+      {handoffOpen && <DuetHandoffModal taskId={task.id} busy={handoffBusy} onClose={() => setHandoffOpen(false)} onConfirm={handoff} />}
       {deleteOpen && <DeleteTaskDialog task={task} notify={notify} onDeleted={(ids) => ids.forEach(onTaskDeleted)} onClose={() => setDeleteOpen(false)} />}
     </div>
   );

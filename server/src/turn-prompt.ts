@@ -12,7 +12,7 @@ import {
   REGRESSION_MANIFEST_READING,
   REVIEW_VALIDATION_REQUIREMENT,
   REVIEWER_REGRESSION_CLAUSE,
-} from "@ash/shared/free-workflow";
+} from "@navi/shared/free-workflow";
 import { craftRulesFor, type CraftContext } from "./craft-rules.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";

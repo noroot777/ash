@@ -9,7 +9,7 @@
 // 预演怎么跑、为什么不会调起项目自己的程序，在 accept-gate-preview.ts 的文件头。预演出来的那棵树
 // 原样放进测试快照（accept-gate-source.ts 的 materializePreview），也是最终合并必须落下的那棵
 // （git-accept.ts 的 expectedTree）—— 合并只在这里定义一次。
-import { type AcceptGateBaseline, normalizeAcceptGateBaseline } from "@ash/shared/accept-gate";
+import { type AcceptGateBaseline, normalizeAcceptGateBaseline } from "@navi/shared/accept-gate";
 import { type CheckoutSettings, changedPaths, checkoutFilters, checkoutGaps, checkoutSettings, conversionDrift, materializationIdentity, mergeDrivers, previewMerge, readOnlyGit } from "./accept-gate-preview.js";
 import { decodePhysical, targetPreserved } from "./accept-gate-physical.js";
 import { dependencyReads } from "./accept-gate-source.js";

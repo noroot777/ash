@@ -6,16 +6,19 @@
 //   同一个 id 又有了任务行（接力迁回本机）：账作废、目录一个字节不动；
 //   旧清理和同编号的真实接力导入交错（第 3 轮审查 F1）：两种先后都不许删掉导入的正文。
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-delete-disk-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-const runs = process.env.ASH_RUNS_DIR;
+const root = mkdtempSync(join(tmpdir(), "navi-task-delete-disk-"));
+// 不指定的话，scratch、navi-mcp 这些会落进这份检出自己的 data/ 目录。
+process.env.NAVI_DATA_DIR = join(root, "data");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+const runs = process.env.NAVI_RUNS_DIR;
 const locked: string[] = [];
 const lock = (dir: string) => { chmodSync(dir, 0o500); locked.push(dir); };
 const unlockAll = () => { for (const dir of locked.splice(0)) chmodSync(dir, 0o700); };
@@ -122,7 +125,7 @@ try {
     task: { id, title: id, body: "", status: "done", stage: null, labels: "[]", agentType: "claude", model: null,
       reasoningEffort: null, autoTitle: false, useWorktree: false, worktreeBase: null, workflow: null, workflowMode: "free",
       workflowAt: null, reviewStep: null, verifyRounds: 0, verifyStationRounds: 0, resumePrompt: null, question: null,
-      questionOptions: null, questionItems: null, pinnedAt: null, starredAt: null, createdAt: stamp, startedAt: stamp, endedAt: stamp },
+      questionOptions: null, questionItems: null, pinnedAt: null, createdAt: stamp, startedAt: stamp, endedAt: stamp },
     sessions: [{ id: sessionId, role: "main", agentType: "claude", executor: "claude", startedAt: stamp, endedAt: stamp, cliSessionId: null }],
     files: [{ kind: "run-artifact", rel: `${sessionId}.md`, dataBase64: Buffer.from(text).toString("base64") }],
     freeWorkflow: null, uploads: [], messages: [], schedule: null });
@@ -183,6 +186,6 @@ try {
   console.log("task delete disk: ok");
 } finally {
   unlockAll();
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 process.exit(0);

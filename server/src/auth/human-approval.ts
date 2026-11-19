@@ -1,5 +1,7 @@
+import { readEnv } from "@navi/shared/env-names";
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto";
 import { configuredHumanApprovalKey, humanApprovalPublicKeyFile } from "./human-approval-key.js";
+import { FROZEN_HUMAN_APPROVAL_PURPOSE } from "@navi/shared/legacy-names";
 export { humanApprovalPublicKeyFile } from "./human-approval-key.js";
 
 export type HumanApprovalScope = {
@@ -21,13 +23,13 @@ export type HumanApprovalProof = { challengeId: string; signature: string };
 export function humanApprovalUnavailableReason(): string {
   const prefix = "放开回合占位需要离机人工授权；实例尚未配置有效公钥。";
   const restart = "需要重启服务；重启会清除内存中的回合占位，并中断正在运行的任务。当前不会放开互斥";
-  if (process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY) {
-    return `${prefix}启动公钥 ASH_HUMAN_APPROVAL_PUBLIC_KEY 无效，请管理员修正启动配置。${restart}`;
+  if (readEnv(process.env, "NAVI_HUMAN_APPROVAL_PUBLIC_KEY")) {
+    return `${prefix}启动公钥 NAVI_HUMAN_APPROVAL_PUBLIC_KEY 无效，请管理员修正启动配置。${restart}`;
   }
   if (humanApprovalPublicKeyFile()) {
-    return `${prefix}已预配 ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE，请管理员检查路径、公钥内容及平台是否支持独立属主核验；符合安全条件的公钥文件可热加载，无需重启。当前不会放开互斥`;
+    return `${prefix}已预配 NAVI_HUMAN_APPROVAL_PUBLIC_KEY_FILE，请管理员检查路径、公钥内容及平台是否支持独立属主核验；符合安全条件的公钥文件可热加载，无需重启。当前不会放开互斥`;
   }
-  return `${prefix}这个实例未预配人工授权锚点，现在无法放开。请管理员在启动配置中设置 ASH_HUMAN_APPROVAL_PUBLIC_KEY 或 ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE；补配${restart}`;
+  return `${prefix}这个实例未预配人工授权锚点，现在无法放开。请管理员在启动配置中设置 NAVI_HUMAN_APPROVAL_PUBLIC_KEY 或 NAVI_HUMAN_APPROVAL_PUBLIC_KEY_FILE；补配${restart}`;
 }
 
 const bucketOf = (scope: HumanApprovalScope) => JSON.stringify([scope.userId, scope.action, scope.taskId]);
@@ -72,7 +74,7 @@ export class HumanApprovalAuthority {
     this.keyFingerprint = key
       ? createHash("sha256").update(key.export({ type: "spki", format: "der" })).digest("hex")
       : null;
-    console.warn(`[ash] 人工授权信任锚变化：${previous ?? "关闭"} → ${this.keyFingerprint ?? "关闭"}；${sourceError ?? (key ? "公钥已加载" : publicKey ? "公钥格式或算法无效" : "未配置公钥")}；在途申请已失效`);
+    console.warn(`[navi] 人工授权信任锚变化：${previous ?? "关闭"} → ${this.keyFingerprint ?? "关闭"}；${sourceError ?? (key ? "公钥已加载" : publicKey ? "公钥格式或算法无效" : "未配置公钥")}；在途申请已失效`);
   }
 
   issue(scope: HumanApprovalScope, taskTitle: string): HumanApprovalChallenge | null {
@@ -90,7 +92,7 @@ export class HumanApprovalAuthority {
     const challengeId = randomUUID();
     const expiresAt = now + 5 * 60_000;
     const payload = JSON.stringify({
-      purpose: "ash-human-approval-v1",
+      purpose: FROZEN_HUMAN_APPROVAL_PURPOSE,
       instance: this.instance,
       keyFingerprint: this.keyFingerprint,
       challengeId,

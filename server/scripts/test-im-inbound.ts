@@ -28,10 +28,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-im-inbound-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+const stage = mkdtempSync(join(tmpdir(), "navi-im-inbound-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 requireTmpDb("test-im-inbound");
 
 let failure: unknown = null;
@@ -44,11 +44,11 @@ try {
   const { bindingOf, bindingView, createBindCode, rejectCode } = await import("../src/im/binding.js");
   const { confirmGroupCode, groupOf } = await import("../src/im/groups.js");
   const { chatMessageIdOf } = await import("../src/im/relay.js");
-  const { AshClient } = await import("../src/im/ash-client.js");
+  const { NaviClient } = await import("../src/im/navi-client.js");
   const { InboundRouter } = await import("../src/im/inbound.js");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf, linksOf, waitIdle } = await import("./im-fixture.js");
   const { patchOptions } = await import("../src/im/meta.js");
-  const { TASK_STATUS_LABELS } = await import("@ash/shared");
+  const { TASK_STATUS_LABELS } = await import("@navi/shared");
 
   await ensureSchema();
   const app = buildApp();
@@ -97,7 +97,7 @@ try {
     await im.settle();
     assert.equal((await inboundOf(unmentioned)).kind, "ignored", "群里没 @ 机器人不理");
     assert.equal(repliesTo(strangerInGroup).length, 0, "群里没绑定的人不出声");
-    assert.match(textOf(contentOf(repliesTo(unboundGroup)[0]!)), /还没绑定 ash 项目/);
+    assert.match(textOf(contentOf(repliesTo(unboundGroup)[0]!)), /还没绑定 Navi 项目/);
   }
 
   // ── ② 回复任务卡 ─────────────────────────────────────────────────────────
@@ -207,7 +207,7 @@ try {
     await im.reconciler.reconcile(["tj"]);
     await im.settle();
     const tjCard = await cardOf("tj");
-    const reasked = new AshClient(async (request: Request) => {
+    const reasked = new NaviClient(async (request: Request) => {
       if (request.method === "POST" && new URL(request.url).pathname.endsWith("/tasks/tj/answer")) {
         await db.update(tasks).set({
           questionHistory: JSON.stringify([{ id: "h1", question: "继续吗？", answer: "早先答过", answeredAt: at, reply: "【答复】早先答过" }]),
@@ -216,7 +216,7 @@ try {
       return app.fetch(request);
     });
     const racer = new InboundRouter({
-      appId: APP, api: im.api, ash: reasked, commands: im.commands, relay: im.relay, reconciler: im.reconciler, botOpenId: () => "ou_bot",
+      appId: APP, api: im.api, navi: reasked, commands: im.commands, relay: im.relay, reconciler: im.reconciler, botOpenId: () => "ou_bot",
     });
     await racer.handle({
       sender: { sender_id: { open_id: OWNER }, sender_type: "user" },
@@ -434,7 +434,7 @@ try {
     const photoMessage = (await db.select().from(chatMessages).where(eq(chatMessages.id, chatMessageIdOf(`msg:${photo}`)))).at(0)!;
     assert.ok(photoMessage.body.includes(paths[0]!), "附件路径随消息进了房间");
 
-    // 执行器在测试里起不来（ASH_RUNS_DIR 拦下 spawn），回复以失败收尾 —— 照样要发回飞书。
+    // 执行器在测试里起不来（NAVI_RUNS_DIR 拦下 spawn），回复以失败收尾 —— 照样要发回飞书。
     const until = Date.now() + 10_000;
     while (Date.now() < until) {
       await im.relay.poll();
@@ -477,7 +477,7 @@ try {
       return { id, name: `批量项目 ${id}`, repoPath: join(stage, "repos", id), apiKeys: null, createdAt: at };
     });
     await db.insert(projects).values(many as never);
-    const order = await im.ash.get<{ id: string; name: string }[]>({ channel: "feishu", appId: APP, openId: OWNER }, "/api/projects");
+    const order = await im.navi.get<{ id: string; name: string }[]>({ channel: "feishu", appId: APP, openId: OWNER }, "/api/projects");
     assert.ok(order.ok && order.data.length === 106, "106 个项目都看得见");
 
     const list = await im.say({ text: "/tasks" });

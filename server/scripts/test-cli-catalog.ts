@@ -13,13 +13,14 @@
 //   ⑦ 备用命令名:检测命中 bins[1] 时执行也要用它(死认 bins[0] = 目录说可用、派任务 ENOENT);
 //   ⑧ Grok 的 token 级 thought 必须按连续段聚合,不能在 UI 生成几百个「思考过程」;
 //   ⑨ 档位三级优先(probe > 内置规则 > CLI 并集)与 probe 表的 key 归一。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
 import {
   CLI_MODEL_PRESETS,
   MODEL_EFFORT_RULES,
@@ -29,7 +30,7 @@ import {
   normalizeReasoningEffort,
   reasoningEffortsFor,
   resolveReasoningEfforts,
-} from "@ash/shared/cli-presets";
+} from "@navi/shared/cli-presets";
 import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { eventQueue } from "../src/executors/event-queue.js";
 import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
@@ -45,8 +46,9 @@ import {
 } from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 import { IS_WINDOWS } from "../src/platform.js";
+import { stubHostClis, writeVersionStub } from "./host-cli-stubs.js";
 
-const MISSING_BIN = "ash-definitely-not-installed-cli";
+const MISSING_BIN = "navi-definitely-not-installed-cli";
 
 assert.match(versionWarningFor("codex", "codex-cli 0.147.0") ?? "", /升级/);
 assert.match(versionWarningFor("codex", "0.147.9-beta.1") ?? "", /0\.148\.0/);
@@ -73,17 +75,14 @@ function writeEchoStub(dir: string, name: string): string {
   return file;
 }
 
-function writeVersionStub(dir: string, name: string, version: string): string {
-  const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
-  writeFileSync(file, IS_WINDOWS ? `@echo ${version}\r\n` : `#!/bin/sh\necho ${JSON.stringify(version)}\n`, { mode: 0o755 });
-  return file;
-}
 
 {
-  const stubDir = mkdtempSync(join(tmpdir(), "ash-codex-version-stub-"));
+  const stubDir = mkdtempSync(join(tmpdir(), "navi-codex-version-stub-"));
   const originalPath = process.env.PATH;
   process.env.PATH = `${stubDir}${delimiter}${originalPath ?? ""}`;
   try {
+    // 检测会把目录里每一家都问一遍版本:先全铺上桩,问到的就不是本机真装着的那几家。
+    await stubHostClis(stubDir);
     writeVersionStub(stubDir, "codex", "codex-cli 0.147.8");
     const blocked = await registrationBlockReason("codex") ?? "";
     assert.ok(blocked, "已安装的 0.147.x 必须拒绝注册");
@@ -418,7 +417,7 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   h.kill();
 }
 {
-  // (b) 声明了 newIdFlag:ash 自己发 id,resume 时按模板拼
+  // (b) 声明了 newIdFlag:navi 自己发 id,resume 时按模板拼
   const spec = fake({ session: { newIdFlag: "--session-id", resumeArgs: (id) => ["--resume", id] } });
   const fresh = new GenericCliExecutor(spec, {}).run({ prompt: "hi", cwd: process.cwd() });
   assert.ok(fresh.commandLine.includes(`--session-id ${fresh.sessionId}`));
@@ -438,7 +437,7 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 
 // ⑤bis 恢复命令的**诚实性**:只有「CLI 真认得这个 id」时才给可执行命令。
 // 只写 interactive、却既没有 newIdFlag(我们把 id 告诉 CLI)也没有 resumeArgs
-// (id 由 parser 回报)的 spec,拿到的 id 是纯 ash 侧记录,拼出来的
+// (id 由 parser 回报)的 spec,拿到的 id 是纯 navi 侧记录,拼出来的
 // `--resume <uuid>` 引用的是一个不存在的会话 —— 用户会当真复制去执行。
 {
   const only = fake({ session: { interactive: (id) => `fake --resume ${id}` } });
@@ -450,7 +449,7 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   assert.match(note, /不能用来 --resume/, "要讲清为什么不能恢复");
   // 展示侧(会话详情的 resumeCommand)走同一个判定,不能各写一套。目录里真实存在
   // 这一档 —— 典型是 kiro:它有 `--resume-id` 无头通道,但首轮 id 由 CLI 产生、纯文本
-  // 输出不回报,ash 捕获不到,所以刻意不声明 session。这里**动态挑**一个这样的
+  // 输出不回报,navi 捕获不到,所以刻意不声明 session。这里**动态挑**一个这样的
   // spec,不写死某个 key:B 阶段谁把自己那家的 id 通道查通了(antigravity 就是这么
   // 从这一档毕业的),这条断言都不该跟着炸。
   const untrusted = CLI_SPECS.find((s) => !hasTrustedSessionId(s));
@@ -474,15 +473,15 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 // 「目录显示可用」的环境派任务稳定 ENOENT(cursor 的 agent、antigravity 的 agy)。
 // 备用名用自己造的回显桩(见 writeEchoStub),断言不依赖本机装了哪些 CLI。
 {
-  const stubDir = mkdtempSync(join(tmpdir(), "ash-echo-stub-"));
-  const stub = "ash-echo-stub";
+  const stubDir = mkdtempSync(join(tmpdir(), "navi-echo-stub-"));
+  const stub = "navi-echo-stub";
   writeEchoStub(stubDir, stub);
   const originalPath = process.env.PATH;
   // 桩目录得在 PATH 上 resolveBin 才找得到。分隔符用 `path.delimiter`:Windows 是
   // `;`,写死 `:` 会把整条 PATH 拼成一个不存在的目录名,连本机真装的命令都探不到了。
   process.env.PATH = `${stubDir}${delimiter}${originalPath ?? ""}`;
   try {
-  const bins = ["ash-missing-primary-bin", stub];
+  const bins = ["navi-missing-primary-bin", stub];
   assert.equal(await execBinFor(fake({}, { bins })), stub, "主 bin 缺失时应改用可用的备用名");
   assert.equal(
     await execBinFor(fake({}, { bins, fallbackVersionMatch: "version" })),
@@ -525,8 +524,16 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 // 「EXTRA_PATHS 探不到」这种假红。那边改用 `%APPDATA%\npm`(npm -g 的垫片目录,
 // 同在 extraPaths 里)。桩的壳也按平台换,理由见 writeEchoStub。
 {
+  // POSIX 上把家目录换成临时的再放桩:补充目录是按 `homedir()` 现算的,不必往真实的
+  // `~/.local/bin` 里写可执行文件。Windows 那支认的是 %APPDATA%,照旧。
+  const realHome = process.env.HOME;
+  const fakeHome = IS_WINDOWS ? null : mkdtempSync(join(tmpdir(), "navi-probe-home-"));
+  if (fakeHome) {
+    process.env.HOME = fakeHome;
+    mkdirSync(join(fakeHome, ".local", "bin"), { recursive: true });
+  }
   const dir = IS_WINDOWS ? join(process.env.APPDATA ?? homedir(), "npm") : join(homedir(), ".local", "bin");
-  const name = `ash-probe-fixture-${process.pid}`;
+  const name = `navi-probe-fixture-${process.pid}`;
   const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
   let usable = false;
   try {
@@ -537,19 +544,23 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   }
   if (usable) {
     const originalPath = process.env.PATH;
-    process.env.PATH = "/nonexistent-for-ash-test";
+    process.env.PATH = "/nonexistent-for-navi-test";
     try {
       const probe = await probeBins([name]);
       assert.ok(probe, "EXTRA_PATHS 里的命令必须能被探到(PATH 缺它也算装了)");
       assert.equal(probe!.path, file);
       assert.equal(probe!.version, "fixture-cli 1.2.3", "自证要跑绝对路径,裸命令名在这个 PATH 下必然拿不到版本");
       // 备用名的自证同理:PATH 缺目录时也得能证明身份,否则整项被判不可用
-      const alt = await probeBins(["ash-missing-primary-bin", name], "fixture-cli");
+      const alt = await probeBins(["navi-missing-primary-bin", name], "fixture-cli");
       assert.equal(alt?.bin, name, "备用名在 PATH 缺目录时仍应自证通过");
     } finally {
       process.env.PATH = originalPath;
       rmSync(file, { force: true });
     }
+  }
+  if (fakeHome) {
+    process.env.HOME = realHome;
+    rmSync(fakeHome, { recursive: true, force: true });
   }
 }
 
@@ -612,7 +623,7 @@ const NODE = "node";
 // ⑧ Grok 原始流一个 thought token 一行。连续 token 合成一段，正文和 end
 // 都会收口；否则 377 个 token 就会在新版前端变成 377 个折叠块。
 {
-  const dir = mkdtempSync(join(tmpdir(), "ash-grok-stream-"));
+  const dir = mkdtempSync(join(tmpdir(), "navi-grok-stream-"));
   const script = join(dir, "stub.mjs");
   const lines = [
     { type: "thought", data: "first" },

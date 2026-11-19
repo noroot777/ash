@@ -16,9 +16,9 @@
 //
 // 删除按同一个定义指名（server/src/conversation-redact.ts 的 identityWindow / traceStepsWindow）：有正文的
 // 报正文那几段，只有执行过程的报「这个回合里号落在前后两句输入之间的那几步」。
-import type { ContextUsage, Session, TurnInterruption, TurnOutcome } from "@ash/shared";
-import { segmentFingerprint, traceKeptOnDelete, traceStepsFingerprint, type TextAnchor } from "@ash/shared/session-output";
-import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
+import type { ContextUsage, Session, TurnInterruption, TurnOutcome } from "@navi/shared";
+import { segmentFingerprint, traceKeptOnDelete, traceStepsFingerprint, type TextAnchor } from "@navi/shared/session-output";
+import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem, TimelineEntry } from "./conversationModel.ts";
 import { reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
@@ -133,7 +133,7 @@ export function createAssembler(sessions: readonly Session[]) {
     bubble.steps.push({ entry, anchor: step.textAt });
     // 此刻还在不在等上游：跟老读法实时那一路同一个口径（conversationLiveTurns 的 appendAgentAux 等）。
     const awaiting = event.kind === "usage" || event.kind === "attachment" ? false
-      : event.kind === "tool" || event.kind === "thinking" || event.kind === "error"
+      : event.kind === "plan" || event.kind === "tool" || event.kind === "thinking" || event.kind === "error"
         ? awaitingAfterEvent(auxEvent(event as Parameters<typeof auxEvent>[0]) as AgentAuxEvent) : undefined;
     if (step.envelope) noteLive(bubble, step.envelope, awaiting);
   }
@@ -296,7 +296,8 @@ export function createAssembler(sessions: readonly Session[]) {
         return;
       }
       if (event.kind === "system") {
-        apply({ kind: "note", sessionId, turn, seq, item: liveSystemNote(recordId(sessionId, seq), sessionId, event) }, out);
+        const role = envelope.role ?? sessionOf.get(sessionId)?.role ?? null;
+        apply({ kind: "note", sessionId, turn, seq, item: liveSystemNote(recordId(sessionId, seq), sessionId, event, role) }, out);
       } else if (event.kind === "text") {
         apply({ kind: "prose", sessionId, turn, seq, raw: event.text, offset: envelope.textOffset ?? 0, envelope }, out);
       } else if (event.kind !== "done" && event.kind !== "turnEnd") {

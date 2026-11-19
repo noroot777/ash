@@ -1,5 +1,5 @@
 /* 任务会话流：气泡、markdown 正文、账目胶囊、附件、提问卡。
-   外壳（头部、侧栏、抽屉）在 task-detail.css，回复框与派生面板在 task-reply.css，
+   外壳（头部、侧栏、抽屉）在 task-detail.css，回复框在 task-reply.css，
    执行过程折叠块在 execution-trace.css，它用到的流光与换字在 motion-text.css。 */
 :root {
   /* 两条消息之间的空里住着两样指到才出、不占排版高度的东西：上一回合尾那一排（.turn-acts，2px 离正文
@@ -171,7 +171,7 @@
 .task-markdown strong { color: var(--ink); font-weight: var(--w-medium); }
 .task-markdown a { color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 /* 引用块跟系统旁注（.conversation-note）是同一档「不是正文在说话」的东西：agent 输出里
-   的引用多半就是 ash 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
+   的引用多半就是 navi 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
    竖线的高度才跟着一样——竖线高度就是行高加这两像素 padding 撑出来的。 */
 .task-markdown blockquote { border-left: 2px solid var(--line2); padding: 1px 0 1px 11px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
 .task-markdown blockquote > :first-child { margin-top: 0; }
@@ -355,9 +355,6 @@ button.context-meter-chip.is-tight { background: color-mix(in oklab, var(--red) 
 .context-compact-save:hover:not(:disabled) { background: var(--action-hover); }
 .context-compact-save:disabled { border-color: var(--line); background: transparent; color: var(--faint); }
 
-.task-event-line { display: flex; max-width: 790px; align-items: center; gap: 9px; margin: 17px 0 17px 30px; color: var(--muted); font-size: var(--t-xs); }
-.task-event-line p { margin: 0; }
-.task-event-line.is-error { color: var(--red); }
 
 /* 「放开回合占位」那个开关(ReclaimTurnSwitch):说清副作用,再给按钮。 */
 .task-turn-remedy { display: grid; gap: 8px; justify-items: start; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2, transparent); }
@@ -376,7 +373,7 @@ button.context-meter-chip.is-tight { background: color-mix(in oklab, var(--red) 
 .task-conversation-note,
 .task-conversation-error { margin: 8px 0; color: var(--muted); font-size: var(--t-xs); }
 .task-conversation-error { color: var(--red); }
-.task-conversation-note > .ash-loader { margin-inline-end: 7px; }
+.task-conversation-note > .navi-loader { margin-inline-end: 7px; }
 .task-message-attachments,
 .task-upload-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .task-message-image,

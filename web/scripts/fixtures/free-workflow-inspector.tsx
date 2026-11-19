@@ -1,6 +1,6 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { FreeWorkflowInspector } from "../../src/free-workflow/FreeWorkflowInspector.tsx";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
@@ -9,6 +9,8 @@ import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
 import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { syncComposerSendKey } from "../../src/lib/sendKey.ts";
+import { PostMergeVariants } from "./free-workflow-post-merge.tsx";
+import { ReadingStage } from "./reading-stage.tsx";
 import "../../src/styles/global.css";
 
 // 附言框里裸回车算不算提交跟着「输入框发送键」那一档走；没学到这一档时裸回车一律换行
@@ -406,7 +408,7 @@ window.fetch = (input, init) => {
     }));
   }
   if (url.pathname === "/api/tasks/free-accept-ui/commits" || url.pathname === "/api/tasks/free-reviewing-ui/commits" || url.pathname === "/api/tasks/post-merge-ui/commits") {
-    return Promise.resolve(new Response(JSON.stringify({ branch: "ash/free-accept-ui", commits: [] }), {
+    return Promise.resolve(new Response(JSON.stringify({ branch: "navi/free-accept-ui", commits: [] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
@@ -414,7 +416,7 @@ window.fetch = (input, init) => {
   if (url.pathname === "/api/tasks/free-accept-ui/diff" || url.pathname === "/api/tasks/free-reviewing-ui/diff" || url.pathname === "/api/tasks/post-merge-ui/diff") {
     return Promise.resolve(new Response(JSON.stringify({
       available: true,
-      sourceBranch: url.pathname.includes("post-merge-ui") ? "main@11111111" : "ash/free-accept-ui",
+      sourceBranch: url.pathname.includes("post-merge-ui") ? "main@11111111" : "navi/free-accept-ui",
       targetBranch: url.pathname.includes("post-merge-ui") ? "main@22222222" : "main",
       mergeBase: url.pathname.includes("post-merge-ui") ? "11111111aaaaaaaa" : "0123456789abcdef",
       diff: "",
@@ -441,17 +443,17 @@ window.fetch = (input, init) => {
       descendants: [],
     }), { status: 200, headers: { "content-type": "application/json" } }));
   }
-  // 验收台开屏要读两样：验收前置命令的状态、工作区有没有未提交改动。读不到时主按钮写「前置命令
-  // 状态待核对」并灰掉，所以台子得自己答：这几个任务所在的项目没设前置命令，工作区是干净的。
+  // 验收台开屏要读两样：验收前置命令的状态、工作区有没有未提交改动。读不到时主按钮转圈灰着、
+  // 前提列出一行红字，所以台子得自己答：这几个任务所在的项目没设前置命令，工作区是干净的。
   const acceptanceRead = /^\/api\/tasks\/(free-accept-ui|free-reviewing-ui|post-merge-ui)\/(accept-gate|scm)$/.exec(url.pathname);
   if (acceptanceRead && (init?.method ?? "GET") === "GET") {
     const body = acceptanceRead[2] === "accept-gate"
       ? { command: null, running: null, latest: null, basis: null }
       : {
-        root: { path: "/repo", branch: "ash/free-accept-ui", source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
+        root: { path: "/repo", branch: "navi/free-accept-ui", source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
         acceptanceCommitBlock: null, acceptanceAutoCommit: { action: "skip", reason: "工作目录没有待提交改动" },
         status: {
-          branch: { head: "ash/free-accept-ui", detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
+          branch: { head: "navi/free-accept-ui", detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
           staged: [], unstaged: [], untracked: [], merge: [], operation: null, truncated: false,
         },
         commits: [],
@@ -655,18 +657,18 @@ createRoot(document.getElementById("root")!).render(
         <div className="toolbar-waiting-fixture"><FreeWorkflowToolbar task={waitingChatTask} notify={() => undefined} /></div>
         <div className="toolbar-paused-fixture"><FreeWorkflowToolbar task={pausedCheckpointTask} notify={() => undefined} /></div>
       </div>
-      <div style={{ display: "flex", gap: 20, height: 640 }}>
-        <div style={{ flex: 1 }} />
+      <ReadingStage resetKey={task.id}>
         <aside className="inspector-host workflow-inspector-fixture" style={{ width: 380, height: 640 }}>
           <FreeWorkflowInspector task={task} />
         </aside>
         <aside className="inspector-host review-only-fixture" style={{ width: 380, height: 640 }}>
           <FreeReviewPane task={task} onOpenReview={() => undefined} notify={() => undefined} />
         </aside>
-      </div>
+      </ReadingStage>
       <AcceptanceFixture task={acceptanceTask} className="acceptance-fixture" />
       <AcceptanceFixture task={reviewingAcceptanceTask} className="acceptance-blocked-fixture" />
       <PostMergeFixture />
+      <PostMergeVariants onPostMergeReview={() => { (window as Window & { __variantReviewClicks?: number }).__variantReviewClicks = ((window as Window & { __variantReviewClicks?: number }).__variantReviewClicks ?? 0) + 1; }} />
       <aside className="inspector-host post-merge-inspector-fixture" style={{ width: 380, height: 420, marginTop: 20, marginLeft: "auto" }}>
         <FreeReviewPane task={postMergeTask} onOpenReview={() => undefined} onOpenTask={() => undefined} notify={() => undefined} />
       </aside>

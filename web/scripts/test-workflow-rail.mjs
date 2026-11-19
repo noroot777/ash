@@ -7,14 +7,14 @@
 //
 // 跑法：npm -w web run test:workflow-rail
 //
-// 注意这里**不 import @ash/shared/workflow-presets**：它对 "./workflow.js" 是运行时
+// 注意这里**不 import @navi/shared/workflow-presets**：它对 "./workflow.js" 是运行时
 // import，而 node --experimental-strip-types 不把 .js 说明符映射回 .ts（同 AGENTS.md 里
 // 那条 shared 铁律，server 侧用 tsx 所以碰不到）。线在这儿自己拼，反正 presets 的内容
 // 由 server 的 test:workflow 管。
 import assert from "node:assert/strict";
-import { STAGE_LABELS, TASK_STATUS_LABELS } from "@ash/shared";
-import { STEP_KINDS, STEP_RUNTIME, makeStep } from "@ash/shared/workflow";
-import { railStops, resolveCursor, stepStatusLabel, stepTitle, verifyStationAtCursor, workflowCost, workflowSummary } from "../src/workflow/workflowModel.ts";
+import { STAGE_LABELS, TASK_STATUS_LABELS } from "@navi/shared";
+import { STEP_KINDS, STEP_RUNTIME, makeStep } from "@navi/shared/workflow";
+import { railStops, resolveCursor, stepStatusLabel, verifyStationAtCursor, workflowSummary } from "../src/workflow/workflowModel.ts";
 
 const line = (...kinds) => ({
   workspace: "isolated",
@@ -155,25 +155,5 @@ assert.equal(stopped({ workflowAt: "s3", stage: "accepted" }), null, "已验收 
 assert.equal(stopped({ workflowAt: "s3", stage: "merged" }), null);
 assert.equal(verifyStationAtCursor({ workflow: null, status: "done", stage: "verify_failed", question: null, workflowAt: "s3" }),
   null, "没有编排的老任务不需要它：线上没有等着放行的合并");
-
-// ── 摘要行那三个数 ────────────────────────────────────────────────────────
-// 「顺利走完 N 步 · 要你出面 N 次 · 不顺利最多起 N 次 AI」 —— 它写在新建面板上，用户
-// 会照着它判断这条线要花多少。所以三个数都必须从定义直接数出来，不许估。
-const costed = line("run", "verify", "human", "accept");
-costed.steps[1].fail = { mode: "back", max: 2 };
-assert.deepEqual(workflowCost(costed), { steps: 4, gates: 1, aiRuns: 3 },
-  "1 次干活 + 验证最多打回 2 轮 = 最多 3 次 AI");
-assert.deepEqual(workflowCost(line("human")), { steps: 1, gates: 1, aiRuns: 0 },
-  "线上没有干活站就一次 AI 都不起");
-assert.deepEqual(workflowCost({ workspace: "isolated", steps: [] }), { steps: 0, gates: 0, aiRuns: 0 });
-
-// ── 站台上的名字：能带参数就带 ────────────────────────────────────────────
-const named = line("run", "command");
-assert.equal(stepTitle(named.steps[0], () => null), "让 AI 干活", "查不到执行器就回落到通用说法");
-assert.equal(stepTitle({ ...named.steps[0], p: { ...named.steps[0].p, executorId: "e1" } },
-  (id) => (id === "e1" ? "codex@cpa" : null)), "让 codex@cpa 干活");
-assert.equal(stepTitle(named.steps[1], () => null), "跑 npm run lint");
-assert.equal(stepTitle({ ...named.steps[1], p: { ...named.steps[1].p, cmd: "  " } }, () => null),
-  "跑一条命令", "命令被清空了就别硬编成「跑 」");
 
 console.log("✓ 线路图的状态口径与游标推断全部符合预期");

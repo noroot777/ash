@@ -237,7 +237,7 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // 独立证据正是它(第 19 轮审查 F1)。
   const unitToken = `unit-stopped-${process.pid}-${Date.now()}`;
   const stray = spawn("sh", ["-lc", STUBBORN], {
-    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", ASH_MONITOR_UNIT: unitToken },
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", NAVI_MONITOR_UNIT: unitToken },
   });
   stray.unref();
   invalidateMonitorUnitScan();
@@ -282,12 +282,12 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // 结束的,而外层壳退了、它派生的那个还活着才是最常见的泄漏形态。收尾那一层要按**整项资源**
   // 收,而「哪些算这一项」只认这一次创建独有的那条记号(第 12 轮审查 F1)。
   const taskId = await makeTask({ status: "done" });
-  // 记号跟生产同源:创建入口在起进程之前生成它、随行落库,再作为 `ASH_MONITOR_UNIT` 种进环境
+  // 记号跟生产同源:创建入口在起进程之前生成它、随行落库,再作为 `NAVI_MONITOR_UNIT` 种进环境
   // —— 环境随 exec 继承,所以根死了之后留下的后代仍然自证身份(它们的 argv 可能早就变了)。
   const unitToken = `unit-orphan-${process.pid}-${Date.now()}`;
   const leaderCommand = `(${STUBBORN}) & sleep 0.4; exit 0`;
   const leader = spawn("sh", ["-lc", leaderCommand], {
-    detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken },
+    detached: true, stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: unitToken },
   });
   leader.unref();
   // 生产里这一步由 `spawnMonitor` 做:起完就把上一次全表扫描作废,否则读到的可能是这个进程
@@ -335,7 +335,7 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // 独立证据正是它(第 19 轮审查 F1)。
   const unitToken = `unit-stopped-${process.pid}-${Date.now()}`;
   const stray = spawn("sh", ["-lc", STUBBORN], {
-    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", ASH_MONITOR_UNIT: unitToken },
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", NAVI_MONITOR_UNIT: unitToken },
   });
   stray.unref();
   invalidateMonitorUnitScan();
@@ -393,7 +393,7 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // 独立证据正是它(第 19 轮审查 F1)。
   const unitToken = `unit-stopped-${process.pid}-${Date.now()}`;
   const stray = spawn("sh", ["-lc", STUBBORN], {
-    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", ASH_MONITOR_UNIT: unitToken },
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", NAVI_MONITOR_UNIT: unitToken },
   });
   stray.unref();
   invalidateMonitorUnitScan();

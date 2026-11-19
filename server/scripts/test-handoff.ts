@@ -1,5 +1,5 @@
 // 任务接力(handoff)端到端回归:测试进程自己当**源机**(进程内直调 preflight/export,
-// ASH_DB 指向临时源库),再真 spawn 一个 ash server 当**对端**(PORT=0 随机端口、
+// NAVI_DB 指向临时源库),再真 spawn 一个 navi server 当**对端**(PORT=0 随机端口、
 // 独立临时库),两边走真 HTTP 协议。验的是:
 //   1. preflight 探测/项目匹配/会话文件盘点
 //   2. 应答丢失:pending 标记落库、本机启动被硬拦、重试沿用同一个 transferId
@@ -24,10 +24,11 @@
 //      定时计划带 enabled/lastRunAt 落到对端并接上任务(schedule_id)
 //  13. 出站存档的实时状态:签名代理问一圈持有机(逐个任务鉴权、pending 不问、
 //      联系不上如实进 offline、设置里删掉的机器当不存在)
-//  12. 网关伪造失败应答(对端实已导入成功、502 不带 ash 标记):按「送达未知」
+//  12. 网关伪造失败应答(对端实已导入成功、502 不带 navi 标记):按「送达未知」
 //      保留 pending,重试走幂等收口——按业务拒绝回滚就是两台机器双跑
-// ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
+// NAVI_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
 // 不会真拉起 CLI 烧额度;接力本身用 autoResume:false。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -36,9 +37,10 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { api, git, makeRepo, pairWithPeer, startFakePeer, startPeer } from "./handoff-test-utils.js";
 import { checkOutboundStates } from "./handoff-state-check.js";
+import { checkConcurrentImport } from "./handoff-import-race-check.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-test-"));
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-test-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 // claude 会话文件读写全部落进临时 HOME,不碰真实 ~/.claude。产品代码走 os.homedir(),
@@ -46,11 +48,11 @@ mkdirSync(home, { recursive: true });
 // Windows 上夹具形同没设,断言变成「看谁的机器」(test-cli-overrides.ts 同款坑)。
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.ASH_DB = join(root, "source.db");
-process.env.ASH_RUNS_DIR = join(root, "runs-src");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads-src"); // 上传附件迁移用:源/对端各一个隔离目录
+process.env.NAVI_DB = join(root, "source.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs-src");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads-src"); // 上传附件迁移用:源/对端各一个隔离目录
 assert.ok(
-  process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "本测试靠 guardAgentSpawn 兜底拦真 CLI;拦截器一失效就会烧用户的真额度",
 );
 
@@ -70,7 +72,7 @@ try {
   const { exportHandoff, handoffRemoteUrl, preflightHandoff } = await import("../src/handoff.js");
 const { claudeProjectSlug } = await import("../src/handoff-collect.js");
 // 这些 src 模块必须**在环境变量设好之后**才加载:paths.ts 在模块求值那一刻就把
-// ASH_UPLOADS_DIR / ASH_RUNS_DIR 定死了,顶层 import 会被提升到赋值之前。
+// NAVI_UPLOADS_DIR / NAVI_RUNS_DIR 定死了,顶层 import 会被提升到赋值之前。
 const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   const { jsonEscaped } = await import("../src/handoff-uploads.js");
   const { HandoffError } = await import("../src/handoff-types.js");
@@ -157,9 +159,9 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
 
   // ── 起对端 ────────────────────────────────────────────────────────────────
   const peerUrl = await startPeer({
-    ASH_DB: join(root, "target.db"),
-    ASH_RUNS_DIR: join(root, "runs-dst"),
-    ASH_UPLOADS_DIR: join(root, "uploads-dst"),
+    NAVI_DB: join(root, "target.db"),
+    NAVI_RUNS_DIR: join(root, "runs-dst"),
+    NAVI_UPLOADS_DIR: join(root, "uploads-dst"),
   }, (proc) => { peer = proc; });
   const peerProject = await api<{ id: string }>(peerUrl, "/projects", {
     method: "POST",
@@ -485,9 +487,9 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     sessions: [{ ...probeSession, id: "handoffsess1" }],
   });
   assert.equal(conflictRes.status, 409);
-  const conflictBody = (await conflictRes.json()) as { error: string; ash?: boolean };
+  const conflictBody = (await conflictRes.json()) as { error: string; navi?: boolean };
   assert.match(conflictBody.error, /会话 id 与本机.*任务冲突/);
-  assert.equal(conflictBody.ash, true, "业务拒绝应答要带 ash 标记,源机才敢回滚 pending");
+  assert.equal(conflictBody.navi, true, "业务拒绝应答要带 navi 标记,源机才敢回滚 pending");
   assert.equal((await fetch(`${peerUrl}/api/tasks/handoff-e2e-task-02`)).status, 404, "预检拦下的导入不该留任务行");
   // 载荷内部两条同 id 会话:预检查不出(对端库里还没有),落库时 UNIQUE 炸 → 整体回滚。
   const dupRes = await rawImport({
@@ -544,38 +546,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.equal(codexRows[1]!.cli, null, "定位不到的必须置空,否则续跑是假恢复");
 
   // ── 8. 并发导入互斥:同一 task id 两个在途导入,后到者 409 且零副作用 ───────
-  // 缺陷形态(第 2 轮审查实测):两个并发 import 都过了 existing 预检,输家撞
-  // tasks.id UNIQUE 后补偿回滚按公共 task id 把赢家的行也删了(req1 200、req2 500、
-  // 最终 GET 404)。进程内直调本机(源库)的 importHandoff:互斥闸是入口处的同步
-  // 前缀,两个调用必然重叠,后到者在任何副作用之前就被挡下。
-  const { importHandoff } = await import("../src/handoff-import.js");
-  const raceManifest = (transferId: string, sessionId: string) => ({
-    version: 1, sourceHost: "test-src", sourceWorkspace: null,
-    targetProjectId: projectId, autoResume: false, git: null, files: [] as unknown[],
-    transferId,
-    task: {
-      id: "handoff-e2e-task-04", title: "并发导入用例", body: "race",
-      status: "paused", createdAt: "2026-08-19T10:00:00.000Z",
-    },
-    sessions: [{
-      id: sessionId, role: "implementer", agentType: "claude", executor: "claude",
-      startedAt: "2026-08-19T10:01:00.000Z",
-    }],
-  });
-  const [race1, race2] = await Promise.allSettled([
-    importHandoff(raceManifest("transfer-race-1", "handoffrace1")),
-    importHandoff(raceManifest("transfer-race-2", "handoffrace2")),
-  ]);
-  assert.equal(race1.status, "fulfilled", "先到的导入应正常落库");
-  assert.equal(race2.status, "rejected", "同 id 的并发导入必须被互斥闸挡下");
-  const raceErr = (race2 as PromiseRejectedResult).reason as HandoffError;
-  assert.ok(raceErr instanceof HandoffError && raceErr.status === 409, "互斥闸应 409(稍后原样重试),而不是 500");
-  assert.match(raceErr.message, /另一次导入还在本机进行中/);
-  const raceTask = (await db.select().from(tasks).where(eq(tasks.id, "handoff-e2e-task-04"))).at(0);
-  assert.ok(raceTask, "输家被挡下后,赢家的任务行必须毫发无损");
-  const raceSessions = await db.select().from(sessions).where(eq(sessions.taskId, "handoff-e2e-task-04"));
-  assert.equal(raceSessions.length, 1, "只该留下赢家那一条会话行");
-  assert.equal(raceSessions[0]!.id, "handoffrace1");
+  await checkConcurrentImport(projectId);
 
   // ── 9. 接力出去的任务在源机是历史存档:非启动类写入口全被 handoff 守卫 409 ──
   // 缺陷形态(第 2 轮审查实测):out+pending 任务 accept 直接 200,把接力时刻的旧
@@ -639,10 +610,10 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   // (第 10/11 项的双机断言织在 1/3/4 节;单进程就能验的 Windows 源机附件形态、
   //  纯函数上下文改写、幂等收口 autoResume 事实在 test-handoff-local.ts。)
 
-  // ── 12. 网关伪造失败应答:对端实已导入成功,502 却不带 ash 标记 ──────────
+  // ── 12. 网关伪造失败应答:对端实已导入成功,502 却不带 navi 标记 ──────────
   // 缺陷形态(第 3 轮审查实测):路径上的网关(nginx/frp)把上游 200 吃掉、自己回
   // 502,源机按业务拒绝回滚标记 → 本机可再启动,而对端那份也在跑 → 双机双跑。
-  // 没有 ash 标记的失败应答证明不了对端没落库,必须按「送达未知」保留 pending。
+  // 没有 navi 标记的失败应答证明不了对端没落库,必须按「送达未知」保留 pending。
   const mangleTaskId = "handoff-e2e-task-07";
   await createTasks([{
     id: mangleTaskId, projectId, title: "网关伪造应答用例", body: "mangle 用例",
@@ -659,7 +630,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     onImport: async (ctx) => {
       const { status, body } = await ctx.forward();
       mangleUpstreamStatus = status;
-      // mangle 期间:对端其实已经导入成功,网关却回一个不带 ash 标记的 502。
+      // mangle 期间:对端其实已经导入成功,网关却回一个不带 navi 标记的 502。
       if (mangle) ctx.reply(502, { error: "gateway lost upstream" });
       else ctx.reply(status, body);
     },
@@ -668,7 +639,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   await assert.rejects(
     exportHandoff(mangleTaskId, { targetUrl: manglerUrl, targetProjectId: peerProject.id, autoResume: false }),
     (e: unknown) => e instanceof HandoffError && e.network && /对端可能已经收到/.test(e.message),
-    "不带 ash 标记的 502 证明不了对端没落库,必须按「送达未知」处理而不是回滚",
+    "不带 navi 标记的 502 证明不了对端没落库,必须按「送达未知」处理而不是回滚",
   );
   assert.equal(mangleUpstreamStatus, 200, "前提:对端确实导入成功了(网关才有 200 可篡改)");
   assert.equal((await fetch(`${peerUrl}/api/tasks/${mangleTaskId}`)).status, 200, "对端确实持有这份任务");

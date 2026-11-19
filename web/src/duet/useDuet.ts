@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import {

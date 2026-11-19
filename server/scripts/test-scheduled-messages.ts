@@ -8,8 +8,8 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
-import { TEAM_DEFAULTS } from "@ash/shared";
-import { installFakeClaude } from "./scheduled-messages-fixture.js";
+import { TEAM_DEFAULTS } from "@navi/shared";
+import { installFakeClaude, settleFakeClaudes } from "./scheduled-messages-fixture.js";
 import { runHandoffCases } from "./scheduled-handoff-cases.js";
 import { runQueueGateCases } from "./scheduled-queue-gate-cases.js";
 import { runCkptPendingCases } from "./scheduled-ckpt-pending-cases.js";
@@ -17,7 +17,7 @@ import { runReplyWakeCases } from "./scheduled-reply-wake-cases.js";
 import { runSteerCases } from "./scheduled-steer-cases.js";
 
 // 子进程抢下投递租约后 SIGKILL，留下可由重启回收的「pending + 租约」现场。
-const crashMessageId = process.env.ASH_TEST_CRASH_MESSAGE;
+const crashMessageId = process.env.NAVI_TEST_CRASH_MESSAGE;
 if (crashMessageId) {
   const { beginDelivery } = await import("../src/pending-messages.js");
   if (!(await beginDelivery(crashMessageId))) process.exit(3); // 没抢到 = 测试前提就不成立
@@ -25,18 +25,18 @@ if (crashMessageId) {
 }
 
 const selfPath = fileURLToPath(import.meta.url);
-const root = mkdtempSync(join(tmpdir(), "ash-scheduled-messages-"));
+const root = mkdtempSync(join(tmpdir(), "navi-scheduled-messages-"));
 const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
-process.env.ASH_DB = join(root, "ash.db");
+process.env.NAVI_DB = join(root, "ash.db");
 // transcripts/runs 一并隔离:不设的话落在仓库 data/runs,上一次运行的残留会让
 // 「会话记录里有没有某句话」这类断言读到历史内容(本文件就踩过一次)。
-process.env.ASH_RUNS_DIR = join(root, "runs");
-// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件要跑的是自己装在
-// PATH 上的假 claude,显式放行(executors/spawn.ts)。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_TEST_LEAD_LOG = leadLog;
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
+// 设了 NAVI_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件要跑的是自己装在
+// PATH 上的假 claude,只放行它(executors/spawn.ts)。
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 // Windows PATH 使用 `;`，必须走 path.delimiter。
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
 
@@ -498,9 +498,14 @@ try {
     async () => (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).length > 0,
     "这一轮退干净之后排队消息仍然没送进会话——消息被单飞锁静默吞掉了",
   );
-  const locked = (await db.select().from(scheduledMessages)
-    .where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!;
-  assert.equal(locked.status, "sent", "真送进会话之后才算 sent");
+  // 会话行先建、执行器回执到了才落 sent(pending-messages.ts 的 onAccepted),两步之间隔着
+  // 假 CLI 起来答话的那一段 —— 看到会话就当场读状态,在起进程慢的机器上(Windows 上一层
+  // .cmd 垫片 + Defender)读到的必然还是 pending。跟上面排队那节一样按条件等。
+  await waitFor(
+    async () => (await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!.status === "sent",
+    "真送进会话之后才算 sent —— 会话起来了,库里那条却一直没标成 sent",
+  );
   assert.equal(
     (await db.select({ resumePrompt: tasks.resumePrompt }).from(tasks)
       .where(eq(tasks.id, lockedTaskId))).at(0)?.resumePrompt,
@@ -592,7 +597,7 @@ try {
   // 提前把状态改成 sent:后者一断电就是一条永远没人管的 sent 行(2026-08-07 那条就是)。
   await db.insert(scheduledMessages).values([messageRow("scheduled-crashed", crashTaskId, "重启也不许弄丢这句话", "queued")]);
   const crash = spawnSync(process.execPath, [...process.execArgv, selfPath], {
-    env: { ...process.env, ASH_TEST_CRASH_MESSAGE: "scheduled-crashed" },
+    env: { ...process.env, NAVI_TEST_CRASH_MESSAGE: "scheduled-crashed" },
     encoding: "utf8",
   });
   // 「它确实是被硬杀的」这件事,两个平台的证据不一样:POSIX 下父进程拿得到 signal='SIGKILL',
@@ -657,18 +662,14 @@ try {
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
-  delete process.env.ASH_TEST_LEAD_LOG;
-  rmSync(join(paths.RUNS_DIR, deliveredTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, unavailableTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, closingTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, blockedTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, steerTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, steerUnavailableTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, steerLockedTaskId), { recursive: true, force: true });
-  rmSync(join(paths.RUNS_DIR, steerLateTaskId), { recursive: true, force: true });
+  delete process.env.NAVI_TEST_LEAD_LOG;
+  const taskIds = [
+    deliveredTaskId, unavailableTaskId, closingTaskId, queuedTaskId, lockedTaskId, pausedChatTaskId, pausedCompleteTaskId,
+    crashTaskId, blockedTaskId, steerTaskId, steerUnavailableTaskId, steerLockedTaskId, steerLateTaskId,
+  ];
+  // 跑完不留进程：最后那一轮结算之后，它的假 claude 还要一小会儿才真的没了；等到没了再拆台、再退。
+  await settleFakeClaudes(root);
+  for (const taskId of taskIds) rmSync(join(paths.RUNS_DIR, taskId), { recursive: true, force: true });
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
   // 收尾**不许盖住正主**:这里跑在 finally 里,try 抛出的断言错会被这一句的异常顶掉,

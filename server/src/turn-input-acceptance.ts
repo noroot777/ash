@@ -33,6 +33,7 @@
 // 为什么等在这里、而不是把 `onDelivered` 推迟到回合结束之后再问:托盘上那条消息在标 `sent`
 // 之前一直显示「排队中」,而回合可能跑几十分钟 —— 一条早就在会话里的话挂着「排队中」挂半小时
 // 是另一种撒谎。`inputAccepted` 正常在几百毫秒内落定,等它是最便宜的那个位置。
+import { readEnv } from "@navi/shared/env-names";
 import type { InputAcceptance, RunHandle } from "./executors/types.js";
 
 // 三档本身定在执行器契约里(判出它们的是协议适配器),这里只做有界等待那一层。
@@ -40,7 +41,7 @@ export type { InputAcceptance } from "./executors/types.js";
 
 /** 有界等待的上限。`<= 0` 或配成非数 = 退回默认值(看门狗那边同一个口径,见 turn-stall.ts 的 num)。 */
 function ackTimeoutMs(): number {
-  const raw = process.env.ASH_TURN_INPUT_ACK_MS;
+  const raw = readEnv(process.env, "NAVI_TURN_INPUT_ACK_MS");
   if (raw == null || raw === "") return 60_000;
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : 60_000;
@@ -91,11 +92,11 @@ export function settleLateTurnInput(
   void receipt
     .then(async (acceptance) => {
       if (acceptance === "unknown") return;
-      console.warn(`[ash] ${label} 迟到的回执落定成 ${acceptance === "accepted" ? "「agent 收下了」" : "「协议层拒收」"}，按它收口`);
+      console.warn(`[navi] ${label} 迟到的回执落定成 ${acceptance === "accepted" ? "「agent 收下了」" : "「协议层拒收」"}，按它收口`);
       await onSettled(acceptance);
     })
     .catch((error: unknown) => {
-      console.warn(`[ash] ${label} 等迟到的输入回执时出错（这一条留在在途，开机对账再判）:`, error);
+      console.warn(`[navi] ${label} 等迟到的输入回执时出错（这一条留在在途，开机对账再判）:`, error);
     });
 }
 
@@ -137,10 +138,10 @@ export async function lastWordOnInput(
 /** `unknown`/`refused` 各自该说的那一句(调用方只负责记,不负责措辞)。 */
 export function logTurnInputAcceptance(acceptance: InputAcceptance, label: string): void {
   if (acceptance === "refused") {
-    console.warn(`[ash] ${label} 这一轮的输入没能送进 agent，原文留在待发送里等重投`);
+    console.warn(`[navi] ${label} 这一轮的输入没能送进 agent，原文留在待发送里等重投`);
   } else if (acceptance === "unknown") {
     console.warn(
-      `[ash] ${label} 等了 ${Math.round(ackTimeoutMs() / 1000)} 秒仍拿不到「agent 收下了」的回执，`
+      `[navi] ${label} 等了 ${Math.round(ackTimeoutMs() / 1000)} 秒仍拿不到「agent 收下了」的回执，`
       + "这一条按在途处理：不写已送达、也不退回重投（避免重复执行），等迟到的凭据或开机对账",
     );
   }

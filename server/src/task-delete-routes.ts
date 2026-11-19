@@ -4,13 +4,16 @@
 // 最高的一块:它跟建任务、改任务不共用任何局部状态,只靠 `mountTaskDeleteRoutes(api)`
 // 挂回去。`deleteTaskCompletely` 跟着一起搬——项目删除那条路(project-routes.ts)也
 // 调它,留在建任务那份文件里只会让人以为它跟建任务有关。
-import type { TaskWorkspaceDiscardResult } from "@ash/shared";
+import type { TaskWorkspaceDiscardResult } from "@navi/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { latchWaitersOnDelete } from "./pending-after.js";
+import { dependentEdges, prerequisiteDeletes } from "./prerequisite-store.js";
+import { notePrerequisiteProgress } from "./prerequisite-launch.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { republishWaitsOf } from "./pending-wait.js";
+import { closeQueueGap } from "./queues.js";
 import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskReads, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
 import { beginTaskRevocation, settleTaskRevocation } from "./claude-monitor-revoked.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
@@ -20,9 +23,13 @@ import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-pla
 import { taskBusyRejection } from "./task-busy.js";
 import { forgetTaskUnconfirmed } from "./session-turns.js";
 import { forgetTaskRecordSeq } from "./session-seq.js";
+import { forgetTaskPause } from "./pause-generation.js";
+import { forgetSoloStart } from "./queue-claim-chain.js";
 import { withRepoLock } from "./repo-lock.js";
 import { reclaimDeletedTaskDisk } from "./run-dir-reclaim.js";
 import { now } from "./util.js";
+import { dispatchTree } from "./dispatch-hold.js";
+import { alertLine, appendTaskTimeline } from "./task-timeline.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
 // 删一个任务:关联状态 + 任务行本身,**一个出口、一个原子批**。自由审查链(run/round)、预约槽、
@@ -63,7 +70,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   await deleteTaskSideChats(taskId);
   await deleteTaskBranchRefs(taskId);
   // 哨兵:**先把进程停了再删行**。顺序反过来就再也没人知道那个 pid 是谁的,它会一直
-  // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 ash 的)。
+  // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 navi 的)。
   // 上面那行 `beginTaskRevocation` 必须排在所有删除之前:它关掉监听那几个 writer 的落库
   // 资格(门闸,覆盖整个删除期,见 claude-monitor-revoked.ts)。
   // `destroy`：用户要求这个任务的一切就此结束，审查还在进行也不留 —— 下面那一批删除紧接着
@@ -103,7 +110,14 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     ? (await db.select({ taskId: queueItems.taskId }).from(queueItems).where(eq(queueItems.queueId, queue.queueId)))
       .map((m) => m.taskId).filter((id) => id !== taskId)
     : [];
+  // 它按着「全部停下」的话,名下那几条从此不再被按住(停着的标记跟这一行一起没了):托盘要跟着改口。
+  const heldTree = (await db.select({ holdAt: tasks.dispatchHoldAt }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.holdAt
+    ? await dispatchTree(taskId) : [];
+  // 建在它上面的任务：关系跟着删行同一批解除，删完告诉它们（删了就查不到谁建在它上面了）。
+  const dependents = (await dependentEdges(taskId)).map((edge) => edge.taskId);
+  const deletedTitle = (await db.select({ title: tasks.title }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.title ?? taskId;
   await db.batch([
+    ...prerequisiteDeletes(taskId),
     // 已经等到的先锁存,删了就再也查不到它完成过 —— **跟删行同一批**:这一刻之前登记的都在,
     // 之后的登记在同一个 batch 里就看不到这个前置、落不下来(pending-after.ts 文件头)。
     latchWaitersOnDelete(taskId),
@@ -140,6 +154,8 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     // 团队派活自建的内部组（groups.owner_task_id=本任务）：GET /groups 默认过滤掉它们，
     // 留下来就是永远不可见也没入口清理的孤儿（审查实测：删 lead 后两个内部组原样保留）。
     db.delete(groups).where(eq(groups.ownerTaskId, taskId)),
+    // 它按着「全部停下」时欠下的起跑:原地留着、不替用户兑现(dispatch-hold.ts 文件头)。
+    db.update(tasks).set({ holdOwedBy: null }).where(eq(tasks.holdOwedBy, taskId)),
     db.delete(tasks).where(eq(tasks.id, taskId)),
     // 磁盘清理的责任**跟删行同一批**落下（run-dir-reclaim.ts）：任务没了就一定有人接着收目录。
     db.insert(taskDiskCleanups).values({ taskId, createdAt: now() }).onConflictDoNothing(),
@@ -151,8 +167,19 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   forgetTaskUnconfirmed(taskId);
   // 同理：这个任务各条会话发到第几号（session-seq.ts）也不必再记。
   forgetTaskRecordSeq(taskId);
+  // 被谁按停过（pause-generation.ts）也一样。
+  forgetTaskPause(taskId);
+  forgetSoloStart(taskId);
   for (const waiter of waiters) publishPendingMessages(waiter.taskId);
-  void republishWaitsOf(queueMates).catch((err) => console.error(`[ash] 删除 ${taskId} 后通知同队托盘失败:`, err));
+  for (const dependent of dependents) {
+    void appendTaskTimeline(dependent, alertLine(`前置任务「${deletedTitle}」已删除，这条前置关系随之解除。`));
+  }
+  if (dependents.length) notePrerequisiteProgress(taskId, dependents);
+  void republishWaitsOf([...queueMates, ...heldTree]).catch((err) => console.error(`[navi] 删除 ${taskId} 后通知同队托盘失败:`, err));
+  // 重排失败不改写「已删除」:读的一侧按先后算名次(task-store.ts enrichTasks),缺号不会显示出来。
+  if (queue && queueMates.length) {
+    await closeQueueGap(queue.queueId).catch((err) => console.error(`[navi] 删除 ${taskId} 后重排队列 ${queue.queueId} 失败:`, err));
+  }
 }
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支

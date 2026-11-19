@@ -4,7 +4,7 @@
 //
 // 只看「任务行在不在」挡不住：导入是先写文件、后建任务行的，查到「没有任务」的那一刻，导入
 // 可能正在写。所以导入从写文件到建完行整段持锁，清理在锁内重新确认任务不存在才动手——两边
-// 排队，谁也看不到对方的半截状态。ash 是单进程（singleton.ts），进程内的锁就是全部写方。
+// 排队，谁也看不到对方的半截状态。navi 是单进程（singleton.ts），进程内的锁就是全部写方。
 const tails = new Map<string, Promise<void>>();
 
 export async function withTaskDirLock<T>(taskId: string, fn: () => Promise<T>): Promise<T> {

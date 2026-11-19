@@ -1,10 +1,10 @@
 // 「读另一条任务说过的话」。与另外两组工具的分界还是**作用对象**：orchestrate 摆布一批
-// 活怎么组织，task-turn 是一条任务在自己回合里对 ash 说什么，这里是**旁观别人**——
+// 活怎么组织，task-turn 是一条任务在自己回合里对 navi 说什么，这里是**旁观别人**——
 // 只读，不碰任何任务的状态。
 //
-// 之所以要有它：会话正文一直在 ash 的 HTTP API 上（`/tasks/:id/sessions` +
+// 之所以要有它：会话正文一直在 navi 的 HTTP API 上（`/tasks/:id/sessions` +
 // `/sessions/:id/output`，web 和 mobile 都读它),但 MCP 工具清单里没有对应的入口,而
-// 工具清单是 agent 唯一会主动读的目录。于是 agent 拿到别的任务 id 时只会得出「ash 没
+// 工具清单是 agent 唯一会主动读的目录。于是 agent 拿到别的任务 id 时只会得出「navi 没
 // 提供这个能力」,转头去翻 `~/.claude/projects` 下 CLI 自己的落盘文件——那条路只对
 // claude 成立(codex 的 rollout 格式和路径都不同),而且得先知道 cwd 和 cliSessionId,
 // 而这两个值恰恰来自这里要调的那个端点。
@@ -13,8 +13,9 @@
 // 这里就读到什么**,两边不会漂。
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import { call, callText, fail, ok } from "../runtime.js";
+import { planTranscript } from "../plan-transcript.js";
 
 type TaskRow = Record<string, unknown>;
 type SessionRow = {
@@ -217,14 +218,19 @@ server.registerTool(
         const meta = [s.role, s.executor, s.turnModel, s.sideTurn ? "旁路回合" : "",
           `${local(s.startedAt)}${s.endedAt ? ` → ${local(s.endedAt)}` : " → 进行中"}`].filter(Boolean).join(" · ");
         let trace = "";
-        if (includeTrace) {
+        let plans = "";
+        {
           // 老会话(trace 2026-08-01 才加)服务端已经给成功的 `[]` 了,所以这里 catch 到的
           // **一定是真失败**。把它说成「多半跑在该功能上线之前」等于把故障粉饰成历史
           // 遗留,读的人连重试的念头都不会有 —— 原样把错误带出来。
-          try { trace = renderTrace((await call("GET", `/sessions/${s.id}/trace`)) as TraceEntry[]); }
+          try {
+            const entries = await call("GET", `/sessions/${s.id}/trace`) as TraceEntry[];
+            if (includeTrace) trace = renderTrace(entries);
+            plans = planTranscript(entries);
+          }
           catch (e) { trace = `### 执行过程\n（读不到:${e instanceof Error ? e.message : String(e)}）\n\n`; }
         }
-        bodies.push({ id: s.id, title: `## 会话 ${i + 1}/${rows.length} · ${s.id} · ${meta}`, body: `${trace}${renderSegments(raw)}` });
+        bodies.push({ id: s.id, title: `## 会话 ${i + 1}/${rows.length} · ${s.id} · ${meta}`, body: `${trace}${renderSegments(raw)}${plans ? `\n\n${plans}` : ""}` });
       }
 
       const full = `${head}\n\n${bodies.map((b) => `${b.title}\n\n${b.body}`).join(SEP)}`;

@@ -1,11 +1,11 @@
 // 回合折叠的切点。
 //
 // 折叠把「过程」收起来、只留「结论」，切点是最后一次真正动手的地方。踩过的坑是拿
-// **最后一次工具事件**当切点：ash 的 complete_task 在正文写完之后才调，全库 22% 的回合
+// **最后一次工具事件**当切点：navi 的 complete_task 在正文写完之后才调，全库 22% 的回合
 // 切点是它 —— 于是整篇报告被折进过程，外面只剩收尾那一句。待办清单的 TaskUpdate
 // （载荷就是把某条划掉）是同一个毛病的另一副面孔。
 import assert from "node:assert/strict";
-import { splitTurnSegments, turnLayout } from "../src/task-detail/turnFold.ts";
+import { splitTurnSegments } from "../src/task-detail/turnFold.ts";
 import { auxEvent } from "../src/task-detail/conversationSegments.ts";
 
 const segment = (id, { markdown = "", events = [], attachments = [] } = {}) => ({ id, markdown, events, attachments });
@@ -48,9 +48,9 @@ const labels = (segments) => segments.flatMap((item) => item.events).map((event)
 
 // 4. 服务名的四种写法都认（claude 的 mcp__x__y、codex 的 x/y，新旧两个服务名）。
 for (const label of [
-  "mcp__ash__complete_task",
+  "mcp__navi__complete_task",
   "mcp__harness__complete_task",
-  "ash/report_stage",
+  "navi/report_stage",
   "harness/report_stage",
 ]) {
   const { conclusion } = splitTurnSegments([
@@ -71,7 +71,7 @@ for (const label of [
   assert.equal(text(conclusion), "三处都改了。||全部完成。");
 }
 
-// 6. 同一个 ash MCP 里「拿它干活」的调用照旧算切点 —— 判据是有没有改变现场，
+// 6. 同一个 navi MCP 里「拿它干活」的调用照旧算切点 —— 判据是有没有改变现场，
 //    不是它属不属于本项目的 MCP。
 {
   const { process, conclusion } = splitTurnSegments([
@@ -152,32 +152,6 @@ for (const label of [
   assert.equal(conclusion, segments);
 }
 
-// 14. 折叠只在这一条回合收口之后才发生 —— 它还在飞的时候连切都不切。
-//     这条是用户 2026-08-31 说的那件事：折叠是个**重组**动作，它会把已经说出口、已经露
-//     在外面的正文一并收进过程块。跑的中途做这件事，agent 一说话上面就少一截，下一个
-//     工具调用又吐回来，用户正读的内容来回跳。
-//     闸只看这一条回合（`endedAt`），不看整个任务停没停 —— 后者会让讲完的回合在换轮、
-//     审查门、团队执行者干活期间一直摊着不收（用户 2026-09-01 反馈）。
-{
-  const said = segment("a", { markdown: "先看一圈。" });
-  const ran = segment("b", { events: [tool("Bash")] });
-  const done = segment("c", { markdown: "改好了。" });
-  const turn = [said, ran, done];
-
-  // 还在飞：原样铺开，一段都不许收编。
-  const live = turnLayout(turn, { live: true });
-  assert.equal(live.process.length, 0);
-  assert.equal(live.conclusion, turn);
-  assert.equal(text(live.conclusion), "先看一圈。||改好了。");
-
-  // 收口了：这一下才折，跟 splitTurnSegments 一致 —— 先说的那句被收编进过程块。
-  const settled = turnLayout(turn, { live: false });
-  assert.deepEqual(settled, splitTurnSegments(turn));
-  assert.equal(text(settled.process), "先看一圈。|");
-  assert.equal(text(settled.conclusion), "|改好了。");
-  assert.equal(labels(settled.process), "Bash");
-}
-
 // 一条没名字的 tool 事件不许把整页打崩。服务端已经把它判成坏行回 500（见
 // server/src/transcript.ts 的 validTraceEvent），但历史落盘和接力快照仍可能递进来，
 // 而下游是拿 label 去 split / startsWith 的 —— 崩了就是整个任务页被 React 卸载成
@@ -186,7 +160,7 @@ for (const label of [
   const nameless = auxEvent({ kind: "tool" });
   assert.equal(nameless.label, "", "缺 name 的 tool 事件兜底成空串");
   assert.equal(auxEvent({ kind: "error" }).label, "", "没有 message 的 error 同理");
-  // 这一步会走到 isBookkeepingEvent → ashMcpTool(label)，label 是 undefined 就在这里炸。
+  // 这一步会走到 isBookkeepingEvent → naviMcpTool(label)，label 是 undefined 就在这里炸。
   const { process, conclusion } = splitTurnSegments([
     segment("a", { events: [nameless], markdown: "照样说完这句。" }),
   ]);

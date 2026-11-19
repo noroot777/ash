@@ -13,11 +13,12 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-review-image-retention-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_TRACE_KEEP_DAYS;
+const root = mkdtempSync(join(tmpdir(), "navi-review-image-retention-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_TRACE_KEEP_DAYS;
 
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
@@ -167,7 +168,7 @@ try {
   await commitReopenAcceptedStage("reopened");
   await sweepRunRetention(t0 + 30 * DAY);
   assert.deepEqual(images(reopened), [true, true, true]);
-  assert.equal(existsSync(join(process.env.ASH_RUNS_DIR!, "reopened", EXPIRED_REVIEW_IMAGES)), false);
+  assert.equal(existsSync(join(process.env.NAVI_RUNS_DIR!, "reopened", EXPIRED_REVIEW_IMAGES)), false);
 
   // ── 符号链接一律不跟：链出去的图、链出去的轮次目录都不碰 ──
   const outside = join(root, "outside");
@@ -186,7 +187,7 @@ try {
   // ── 过期清单记不上：一张不删（不能删了图却说不出它是过期没的） ──
   const unrecorded = await reviewed("unrecorded", { stage: "accepted", acceptanceId: "u1" });
   await sweepRunRetention(t0);
-  const unrecordedDir = join(process.env.ASH_RUNS_DIR!, "unrecorded");
+  const unrecordedDir = join(process.env.NAVI_RUNS_DIR!, "unrecorded");
   mkdirSync(join(unrecordedDir, EXPIRED_REVIEW_IMAGES)); // 清单那个位置被一个目录占着
   await sweepRunRetention(t0 + 7 * DAY);
   assert.deepEqual(images(unrecorded), [true, true, true]);
@@ -223,18 +224,18 @@ try {
 
   // ── 保留期 0 天：第一次看到了结就删 ──
   const zero = await reviewed("zero", { stage: "accepted", acceptanceId: "z1" });
-  process.env.ASH_TRACE_KEEP_DAYS = "0";
+  process.env.NAVI_TRACE_KEEP_DAYS = "0";
   try {
     await sweepRunRetention(t0);
   } finally {
-    delete process.env.ASH_TRACE_KEEP_DAYS;
+    delete process.env.NAVI_TRACE_KEEP_DAYS;
   }
   assert.deepEqual(images(zero), [false, false, false]);
-  assert.deepEqual(JSON.parse(readFileSync(join(process.env.ASH_RUNS_DIR!, "zero", EXPIRED_REVIEW_IMAGES), "utf8")),
+  assert.deepEqual(JSON.parse(readFileSync(join(process.env.NAVI_RUNS_DIR!, "zero", EXPIRED_REVIEW_IMAGES), "utf8")),
     { [`${zero.runId}/round-1`]: [...IMAGES].sort() });
 
   console.log("review image retention: ok");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 process.exit(0);

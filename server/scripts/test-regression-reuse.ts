@@ -15,10 +15,10 @@ const { verifyProtocolFor, verifyReminderFor, reviewReminderFor } = await import
 const { freeReviewReminder } = await import("../src/free-workflow.js");
 const { SWEEP_RULES } = await import("../src/review-sweep.js");
 const { EXECUTOR_REGRESSION_RECORDING, GATE_FAILURE_REGRESSION_CARVE_OUT, REGRESSION_POLICY,
-  REVIEW_VALIDATION_REQUIREMENT, REVIEWER_REGRESSION_CLAUSE } = await import("@ash/shared/free-workflow");
+  REVIEW_VALIDATION_REQUIREMENT, REVIEWER_REGRESSION_CLAUSE } = await import("@navi/shared/free-workflow");
 const { gateFailurePrompt } = await import("../src/accept-gate-messages.js");
 const { ACCEPTANCE_REMINDER } = await import("../src/run-prompts.js");
-const { MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS } = await import("@ash/shared/monitor");
+const { MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS } = await import("@navi/shared/monitor");
 const { previewShell } = await import("../src/preview-shell.js");
 const { userShellLaunch } = await import("../src/platform.js");
 
@@ -43,7 +43,7 @@ try {
   const manifest = () => JSON.parse(readFileSync(join(evidenceDir, "regression-evidence.json"), "utf8")) as {
     records: Array<{ reusable: boolean; passed: boolean | null; command: string; exitCode: number; logPath: string; reason: string; latest: boolean }>;
   };
-  const command = `node -e "console.log('OUTPUT'.repeat(30000));process.exit(Number(process.env.ASH_TEST_REGRESSION_FAIL||0))"`;
+  const command = `node -e "console.log('OUTPUT'.repeat(30000));process.exit(Number(process.env.NAVI_TEST_REGRESSION_FAIL||0))"`;
   const runTest = async (originalCommand = command) => {
     const result = await startMonitor({ taskId, command: originalCommand, cwd: repo, regression: true, caller, timeoutMs: 30_000 });
     assert.equal(result.ok, true, JSON.stringify(result));
@@ -69,11 +69,11 @@ try {
   }));
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records[0]?.command, command, "伪造 JSON 不能覆盖数据库里的原始命令和代码树");
-  assert.equal(manifest().records[0]?.reusable, false);
+  assert.match(manifest().records[0]!.reason, /测试前后与当前代码树一致/, "伪造的代码树也不算数");
   const originalLog = readFileSync(firstRecord.logPath);
   writeFileSync(firstRecord.logPath, "ALL TESTS PASSED (forged)\n");
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records[0]?.reusable, false, "改写输出会与数据库日志摘要不符");
+  assert.match(manifest().records[0]!.reason, /日志缺失、损坏或目录不安全/, "改写输出会与数据库日志摘要不符");
   writeFileSync(firstRecord.logPath, originalLog);
   const beforeCommit = regressionSnapshot(repo)!;
   git("commit", "--allow-empty", "-m", "same tree");
@@ -81,15 +81,15 @@ try {
   assert.notEqual(beforeCommit.commit, afterCommit.commit);
   assert.equal(beforeCommit.tree, afterCommit.tree);
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records[0]?.reusable, false, "只提交而未改代码树也不能补足输入证明");
+  assert.match(manifest().records[0]!.reason, /测试前后与当前代码树一致/, "只提交而未改代码树：认的是代码树，不是提交号");
 
   writeFileSync(join(repo, "code.txt"), "changed without commit\n");
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records[0]?.reusable, false, "同一 HEAD 下未提交的改动也会使旧结果失效");
+  assert.match(manifest().records[0]!.reason, /代码树已变或无法核实/, "同一 HEAD 下未提交的改动也算代码树变了");
   writeFileSync(join(repo, "code.txt"), "base\n");
   writeFileSync(join(repo, "new.txt"), "untracked\n");
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records[0]?.reusable, false, "未跟踪文件也纳入代码树");
+  assert.match(manifest().records[0]!.reason, /代码树已变或无法核实/, "未跟踪文件也纳入代码树");
   rmSync(join(repo, "new.txt"));
 
   await db.update(monitors).set({ sourceRole: "reviewer" }).where(eq(monitors.id, first));
@@ -99,15 +99,14 @@ try {
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records.length, 0, "带旁路代次的记录也不能冒充执行者结果");
   await db.update(monitors).set({ sourceReviewRun: null }).where(eq(monitors.id, first));
-  process.env.ASH_TEST_REGRESSION_FAIL = "1";
+  process.env.NAVI_TEST_REGRESSION_FAIL = "1";
   await runTest();
-  delete process.env.ASH_TEST_REGRESSION_FAIL;
+  delete process.env.NAVI_TEST_REGRESSION_FAIL;
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records.length, 2, "同一命令保留全部历史，不能吞掉失败");
   assert.equal(manifest().records[0]?.latest, true);
   assert.equal(manifest().records[1]?.latest, false);
   assert.equal(manifest().records[0]?.exitCode, 1, "后来的失败不能被旧绿结果盖掉");
-  assert.equal(manifest().records[0]?.reusable, false, "失败如实展示，但缺少输入证明同样禁止自动复用");
   assert.equal(manifest().records[0]?.passed, false);
   assert.match(manifest().records[0]!.reason, /失败.*exitCode=1/);
   const reference = await regressionEvidenceReference(task, repo, evidenceDir);
@@ -118,14 +117,14 @@ try {
   assert.doesNotMatch(reference, /按缺口补跑/, "不得再要求审查者补跑");
   rmSync(manifest().records[0]!.logPath);
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records[0]?.reusable, false, "缺少完整日志时不能复用");
+  assert.match(manifest().records[0]!.reason, /日志缺失、损坏或目录不安全/, "完整日志没了要说出来");
 
   const mutatingCommand = `node -e "require('fs').writeFileSync('code.txt','during test')"`;
   await runTest(mutatingCommand);
   writeFileSync(join(repo, "code.txt"), "base\n");
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records.find((record) => record.command === mutatingCommand)?.reusable, false,
-    "测试期间改动代码，即使之后恢复当前代码，也不能复用");
+  assert.match(manifest().records.find((record) => record.command === mutatingCommand)!.reason, /代码树已变或无法核实/,
+    "测试期间改动代码，即使之后恢复成当前代码，也对不上");
 
   const timed = await startMonitor({ taskId, command: "node -e \"console.log('default timeout')\"", cwd: repo, regression: true, caller });
   assert.equal(timed.ok, true);
@@ -191,7 +190,7 @@ try {
   assert.equal(absolute.exitCode, 0);
   assert.match(readFileSync(absolute.logPath, "utf8"), /ABSOLUTE_NODE_OK/);
 
-  const environmentScript = Buffer.from("console.log('COMMAND_ENV=' + JSON.stringify(Object.keys(process.env).filter(key => /^ASH_(?:DB|RUNS_DIR)$/i.test(key))))").toString("base64");
+  const environmentScript = Buffer.from("console.log('COMMAND_ENV=' + JSON.stringify(Object.keys(process.env).filter(key => /^NAVI_(?:DB|RUNS_DIR)$/i.test(key))))").toString("base64");
   const environmentCommand = `${previewShell().quote(originalNode)} -e "eval(Buffer.from('${environmentScript}','base64').toString())"`;
   const isolatedCommand = await prepareRegressionCommand(taskId, "isolated-environment", environmentCommand, repo, "single");
   const isolatedLaunch = userShellLaunch(isolatedCommand);
@@ -315,6 +314,6 @@ try {
   assert.equal((await db.select().from(schema.regressionChecks).where(eq(schema.regressionChecks.monitorId, first))).length, 1);
   console.log("✓ regression evidence: real command/output/exit, tree identity, provenance, failure, post-merge, prompts and MCP");
 } finally {
-  delete process.env.ASH_TEST_REGRESSION_FAIL;
+  delete process.env.NAVI_TEST_REGRESSION_FAIL;
   await teardown();
 }

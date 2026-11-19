@@ -2,6 +2,7 @@
 //   selectNextInQueue —— 谁该被拉起来 / 什么时候一个都不拉
 //   isOvertaken / tailOrder —— 重新排队该不该去队尾、去了以后顺序对不对
 // 跑:npm -w server run test:queue
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { queueStatus, selectNextInQueue, type QueueMember } from "../src/scheduler.js";
 import { isOvertaken, manualStartBlockers, runningMembers, tailOrder } from "../src/queues.js";

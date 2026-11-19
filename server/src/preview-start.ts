@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync, openSync, closeSync, rmSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PreviewServiceConfig } from "@ash/shared/preview";
+import type { PreviewServiceConfig } from "@navi/shared/preview";
 import { bus } from "./bus.js";
 import { RUNS_DIR } from "./paths.js";
-import { afterLoginShell, previewBaseEnv, previewScriptLaunch } from "./preview-env.js";
+import { afterLoginShell, previewScriptLaunch, previewSpawnEnv } from "./preview-env.js";
 import { stopPreviewProcesses } from "./preview-process-stop.js";
 import { prepareNodeDeps, nodeDepsAdvice } from "./preview-deps.js";
 import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, lentPortIgnoredHint, declaredHostApiPort } from "./preview-log.js";
@@ -15,16 +15,18 @@ import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { canceledGens, previewRetiring, whileRetiringPreview } from "./preview-start-state.js";
 import { alive, archivePreview, logFollower, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { now } from "./util.js";
+import { mentionsSchedulerStarted } from "./log-signals.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 
 export interface PreviewStartOptions {
+  purpose?: "development";
   beforeStart?: () => Promise<void>;
   services?: PreviewServiceConfig[];
   primaryServiceId?: string | null;
   proxy?: boolean;
 }
 
-const CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）";
+const CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / Navi 重启）";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function runPreview(
@@ -50,18 +52,18 @@ export async function runPreview(
     lentPort: ports[i] ?? null,
     log: configs.length === 1 ? log : join(dir, `preview-${gen}-${s.id}.log`),
   }));
-  // 这台 ash 自己在哪。**只有 `boundListeningPort()` 算数**（确知绑上了才有值，不猜）：
-  // 「只起前端」那一档的 `/api` 就是打回这里，而 `scripts/dev.mjs` 从前写死 4317 —— ash 一换
-  // 端口，预览的 `/api` 就整个打到别处去（4317 上正坐着另一台 ash 的话，用户以为在验分支，
+  // 这台 navi 自己在哪。**只有 `boundListeningPort()` 算数**（确知绑上了才有值，不猜）：
+  // 「只起前端」那一档的 `/api` 就是打回这里，而 `scripts/dev.mjs` 从前写死 4317 —— navi 一换
+  // 端口，预览的 `/api` 就整个打到别处去（4317 上正坐着另一台 navi 的话，用户以为在验分支，
   // 实际在读写那一台；对方是单人模式还不用登录），而且它自述的端口跟我们绑着的对不上，
   // 登录态直连也就永远开不起来（第 5 轮审查 P1）。
   //
-  // 单开一个变量、不复用通用的 `ASH_PROXY`，是因为这两件事的分量不一样：这一条是 ash 说
-  // 「我在这儿」，**只当默认值**；`ASH_PROXY` 是脚本作者说「前端连我指的那个后端」，那是命令。
-  // 顺序在 dev.mjs 那边（`ASH_PROXY` 在前），压掉它就废掉了「一条整栈脚本」这种受支持的写法
+  // 单开一个变量、不复用通用的 `NAVI_PROXY`，是因为这两件事的分量不一样：这一条是 navi 说
+  // 「我在这儿」，**只当默认值**；`NAVI_PROXY` 是脚本作者说「前端连我指的那个后端」，那是命令。
+  // 顺序在 dev.mjs 那边（`NAVI_PROXY` 在前），压掉它就废掉了「一条整栈脚本」这种受支持的写法
   // ——用户以为在验分支后端，实际是拿自己的身份读写主库（第 6 轮审查 P1）。
   //
-  // 那个顺序**只在「能到 dev.mjs 的 `ASH_PROXY` 一定是命令现场写的」时才站得住**，靠的是
+  // 那个顺序**只在「能到 dev.mjs 的 `NAVI_PROXY` 一定是命令现场写的」时才站得住**，靠的是
   // 下面 previewBaseEnv() 把继承来的那份擦掉。
   const hostApiUrl = boundListeningPort() === null ? null : `http://127.0.0.1:${boundListeningPort()}`;
   const envs = services.map((s, index) => {
@@ -70,16 +72,16 @@ export async function runPreview(
       env[`PORT${i + 1}`] = String(p);
       env[`URL${i + 1}`] = `http://localhost:${p}`;
     });
-    env.ASH_PREVIEW_BASE = proxyToken ? `/preview/${taskId}/${proxyToken}/${s.id}/` : "/";
-    if (hostApiUrl) env.ASH_HOST_API = hostApiUrl;
+    env.NAVI_PREVIEW_BASE = proxyToken ? `/preview/${taskId}/${proxyToken}/${s.id}/` : "/";
+    if (hostApiUrl) env.NAVI_HOST_API = hostApiUrl;
     return env;
   });
-  const banners = services.map((s, i) => `$ ${Object.entries(envs[i]).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${s.cmd}\n`);
+  const banners = services.map((s, i) => `$ ${Object.entries(envs[i]).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none NAVI_PREVIEW=1 NAVI_PREVIEW_MODE=${step.p.mode} ${s.cmd}\n`);
   writeFileSync(log, configs.length > 1 ? `启动 ${configs.length} 个预览服务\n` : banners[0]);
   services.forEach((s, i) => { if (s.log !== log) writeFileSync(s.log, banners[i]); });
   writeRecord({
     taskId, cmd: step.p.cmd, pid: 0, url: null, port: null, life: step.p.life, startedAt: now(),
-    log, links: [], state: "starting", gen, installPid: null, services, primaryServiceId: primaryId, proxyToken,
+    log, links: [], state: "starting", gen, installPid: null, services, primaryServiceId: primaryId, proxyToken, purpose: options?.purpose,
   });
   prunePreviewArtifacts(taskId, gen);
   bus.publish({ type: "task.review", taskId });
@@ -124,7 +126,7 @@ export async function runPreview(
         const child = spawn(launch.file, launch.args, {
           cwd, detached: process.platform !== "win32", windowsHide: true,
           windowsVerbatimArguments: launch.windowsVerbatimArguments, stdio: ["ignore", fd, fd],
-          env: { ...previewBaseEnv(cwd), ...envs[i], ASH_PREVIEW: "1", ASH_PREVIEW_MODE: step.p.mode, BROWSER: "none" },
+          env: previewSpawnEnv(cwd, { ...envs[i], NAVI_PREVIEW: "1", NAVI_PREVIEW_MODE: step.p.mode, BROWSER: "none" }),
         });
         child.on("error", (error) => errors.set(s.id, error.message));
         child.on("exit", () => {
@@ -143,16 +145,16 @@ export async function runPreview(
       } finally { closeSync(fd); }
     }
     const deadline = Date.now() + 120_000;
-    // ash 自己绑的那个端口永远不是预览本尊（它就在上面跑着，别人绑不上）。日志里出现它
-    // 只可能是命令在说「我的 /api 打到 ash 那边」——认了它，预览就指到 ash 自己身上。
+    // navi 自己绑的那个端口永远不是预览本尊（它就在上面跑着，别人绑不上）。日志里出现它
+    // 只可能是命令在说「我的 /api 打到 navi 那边」——认了它，预览就指到 navi 自己身上。
     const self = currentListeningPort();
     // 启动期的两个一次性信号都顺着日志往下读，一个字节读一次（见 preview-store.ts 的
     // logFollower）。**不许用 `tail` 那 4000 字的尾巴**：这两句都打在启动最前面，装依赖回显和
     // 冷编译多打几行就把它们挤没了——一句被挤掉的自述让用户看回登录框（第 3 轮审查 P1），
     // 一句被挤掉的调度器警告让安全协议过旧的分支后端照常上线（第 4 轮审查 P1）。
     //
-    // 「我的 /api 打到那台 ash 上」（判读见 preview-log.ts 的 declaredHostApiPort）记下来只为
-    // 一件事：反代据此把 `/api` 那一跳接回本机 ash 并替用户带上会话。两道都不能少——说的端口
+    // 「我的 /api 打到那台 navi 上」（判读见 preview-log.ts 的 declaredHostApiPort）记下来只为
+    // 一件事：反代据此把 `/api` 那一跳接回本机 navi 并替用户带上会话。两道都不能少——说的端口
     // 得**正是我们此刻真绑着的那个**（`boundListeningPort` 确知才有值，不猜），而且这一趟
     // **只起了一个服务**：多服务里「谁在说」本来就分不清，而「前端 + 分支后端」那种组合的
     // `/api` 按定义就该是分支自己的。
@@ -163,7 +165,7 @@ export async function runPreview(
     const scanFresh = (i: number): string | null => {
       const fresh = follow[i]();
       if (!fresh) return null;
-      if (fresh.includes("[ash] scheduler started")) {
+      if (mentionsSchedulerStarted(fresh)) {
         return "这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先同步新版预览隔离逻辑。";
       }
       if (services.length === 1 && hostApi === null && bound !== null && declaredHostApiPort(fresh) === bound) hostApi = bound;

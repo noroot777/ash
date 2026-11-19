@@ -37,7 +37,7 @@ function parseStartedAt(raw: string): number | null {
 
 // ps 一次拿到启动时间和完整命令行。查不到(进程没了 / ps 不可用)一律 null,
 // 调用方按「不存在」处理 —— 宁可误判成死了(最多多做一次恢复),不能误判成活着
-// (那会让 ash 一直等一个永远不会有输出的进程)。
+// (那会让 navi 一直等一个永远不会有输出的进程)。
 export function inspectProcess(pid: number): ProcessInfo | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   const raw = inspectProcessSync(pid);
@@ -149,7 +149,7 @@ export function isSameProcess(pid: number, expectedStartedAt?: string | null): b
  * 身份;它每次创建新生成,所以认不到别人身上。
  *
  * **但读到这段文字和「真有这一项」是两件事,所以答案分四档**(第 14 轮审查 F1 实测:一个只在
- * 另一个变量的**值**里写了 `ASH_MONITOR_UNIT=<记号>` 的诊断进程被当成我们的后代挨了刀):
+ * 另一个变量的**值**里写了 `NAVI_MONITOR_UNIT=<记号>` 的诊断进程被当成我们的后代挨了刀):
  *
  *  · `ours` —— **真实环境项**里就有这一项(只有 Linux 的 `/proc/<pid>/environ` 给得出这份
  *    精确边界),而且它们是谁都已经知道:`members` 带着各自的**代次**,而那个代次是
@@ -205,7 +205,7 @@ export function processUnitEvidence(
  * 手里只有「我在这一刻 spawn 了它」,还没来得及问 ps 要启动时刻。
  *
  * 用在哨兵创建协议的恢复那一侧(第 9 轮审查 F3):`spawn` 返回 pid 的那一刻先把
- * `{pid, 这一刻}` 同步写到盘上,所以就算 ash 在回填 pid 之前整个没了,重启后仍然能拿这个
+ * `{pid, 这一刻}` 同步写到盘上,所以就算 navi 在回填 pid 之前整个没了,重启后仍然能拿这个
  * 锚去认它 —— **而且是真的认代次**,不是退化成「这个号上有人」。
  *
  * `toleranceMs` 的来历:`ps -o lstart` 的精度是秒,spawn 到写盘之间还隔着几毫秒,所以 ±2 秒

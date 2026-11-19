@@ -3,7 +3,7 @@
 //
 // 起因(2026-10-30,现场取证 data/runs/W54czudPJ9Q9/6ze45D4I2Bz_-…agent-out.jsonl):模型上游
 // 所在的中转主机整体离线,codex 自己重连了 4 小时 45 分 —— 事件流里 216 条
-// 「Reconnecting... waiting for network」全带 `willRetry:true`,被执行器静默丢掉,于是 ash
+// 「Reconnecting... waiting for network」全带 `willRetry:true`,被执行器静默丢掉,于是 navi
 // 全程无报错、无超时,界面一直 running。本文件钉三件事:
 //   ① 那种形状现在会按时限报警并熔断;
 //   ② **正常的长回合一档都不许触发** —— 长思考、长工具调用期间同样一个事件都不发,判据
@@ -13,10 +13,11 @@
 // 阈值刻意做成**每次现读 env**(见 turn-stall.ts 的 thresholds),所以这里能在一个进程里分段
 // 换口径;时间档用毫秒级阈值 + 真实 sleep 跑,连同那个共享计时器一起钉住(它才是「最后一条
 // 错误之后再也没有事件」时唯一的出路)。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { codexErrorEvent } from "../src/executors/codex-error-event.js";
 import { childActivity } from "../src/executors/native-agent-activity.js";
 import {
@@ -148,7 +149,7 @@ import { configure, deferredSpy, hard, notice, RETRY, sleep, spy, TURN } from ".
   assert.match(text, new RegExp(RETRY.slice(0, 12)), "诊断里没有最后一条错误");
   assert.match(text, /task-1/, "诊断里没有原始事件流的落点");
   assert.match(text, new RegExp(TURN), "诊断里没有本回合的起点");
-  assert.match(text, /ASH_STALL_TRIP_MS/, "诊断里没写阈值怎么调");
+  assert.match(text, /NAVI_STALL_TRIP_MS/, "诊断里没写阈值怎么调");
   assert.match(text, /没有过任何正常事件/, "诊断里没说清卡在哪一步");
   assert.match(text, /重试续跑|换一个执行器/, "诊断里没写用户还能做什么");
   await sleep(100);
@@ -230,7 +231,7 @@ import { configure, deferredSpy, hard, notice, RETRY, sleep, spy, TURN } from ".
   await sleep(500);
   assert.equal(log.escalations.length, 1, "终止请求没生效,却也没有回收兜底 —— 回合永远卡着");
   assert.match(log.escalations[0]!, /终止请求未生效/, "兜底那句话冒充了前一句");
-  assert.match(log.escalations[0]!, /ASH_STALL_TRIP_GRACE_MS/, "兜底诊断里没写宽限期怎么调");
+  assert.match(log.escalations[0]!, /NAVI_STALL_TRIP_GRACE_MS/, "兜底诊断里没写宽限期怎么调");
   await sleep(300);
   assert.equal(log.escalations.length, 1, "同一轮回收了两次");
 }
@@ -318,7 +319,7 @@ import { configure, deferredSpy, hard, notice, RETRY, sleep, spy, TURN } from ".
 // ── ⑤g **回收的唯一条件是结算**:离开状态机不算,老了也不算 ──────────────────────
 // 同一处被打回过三次,三次都是拿一个代理指标冒充「没有读者了」:条数水位(第 2 轮)、年龄 TTL
 // (第 3 轮)、「退场 + 年龄」(第 5 轮 F2 —— 摘牌只证明那条记录不再代表这个会话,不证明旧消费
-// 循环已经读过判决)。`ASH_STALL_TRIP_GRACE_MS=0` 是产品允许的配置(关掉强制回收),于是一个
+// 循环已经读过判决)。`NAVI_STALL_TRIP_GRACE_MS=0` 是产品允许的配置(关掉强制回收),于是一个
 // 熔断过、`interrupt` 没人理的回合可以一直活着,读者随后才来。
 {
   configure({ warnErrors: 1, tripMs: 60, graceMs: 0, pollMs: 15 });
@@ -423,12 +424,12 @@ import { configure, deferredSpy, hard, notice, RETRY, sleep, spy, TURN } from ".
 // 两道闸同时放行,第一条错误事件就当场熔断。比不设看门狗更坏(第 1 轮审查非拦项)。
 {
   configure({ warnErrors: 1 });
-  process.env.ASH_STALL_TRIP_MS = "30m";
+  process.env.NAVI_STALL_TRIP_MS = "30m";
   const { actions, log } = spy();
   trackTurnStall("s14", {}, TURN, notice(), actions);
   assert.equal(log.trips.length, 0, "阈值写成 30m 就见错即杀 —— 配错一个字比没有看门狗更坏");
   assert.equal(log.warns.length, 1, "警告档也被那个坏值带坏了");
-  process.env.ASH_STALL_TRIP_MS = "0";
+  process.env.NAVI_STALL_TRIP_MS = "0";
 }
 
 // ── ⑫ 诊断要说得出「卡在哪一步」:停滞前最后一条正常事件是什么 ──────────────────
@@ -470,7 +471,7 @@ import { configure, deferredSpy, hard, notice, RETRY, sleep, spy, TURN } from ".
   assert.equal(errors.length, 220, "夹具里的错误条数变了,下面那些结论是照它算的");
 
   // **旧行为:全程无声。** 旧判据是 `if (!p.willRetry && p.error?.message)`,而现场这 220 条
-  // 全带 willRetry:true —— 一条事件都到不了消费层,所以 ash 没有任何可报的东西。
+  // 全带 willRetry:true —— 一条事件都到不了消费层,所以 navi 没有任何可报的东西。
   assert.equal(errors.filter((line) => !line.params.willRetry).length, 0, "现场里居然有不重试的错误?");
   // **新行为:220 条,全是 notice。** notice 这一级是必须的:裸 error 会把这一轮判成有执行
   // 故障,上游恢复后正常答完的那一轮也会被记成失败。

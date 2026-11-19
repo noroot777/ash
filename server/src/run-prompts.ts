@@ -1,9 +1,9 @@
-import type { AgentType } from "@ash/shared";
-import { STEP_LABELS } from "@ash/shared/workflow";
+import type { AgentType } from "@navi/shared";
+import { STEP_LABELS } from "@navi/shared/workflow";
 import { STRICT_DONE_PROTOCOL } from "./settle-status.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { railStalledAtRun } from "./workflows.js";
-import { EXECUTOR_REGRESSION_RECORDING } from "@ash/shared/free-workflow";
+import { EXECUTOR_REGRESSION_RECORDING } from "@navi/shared/free-workflow";
 import { craftRulesFor, type CraftContext } from "./craft-rules.js";
 
 // 单任务每一轮 prompt 上下拼的那些**固定措辞**:前言、完成协议、续聊尾巴、工作目录
@@ -48,7 +48,7 @@ export const SYS_MARKER = "〔系统〕继续（从中断处）";
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
-// 宽松模式(ASH_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 ash
+// 宽松模式(NAVI_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 navi
 // 的 MCP 对 agent 不可达,交代了它也做不到,理由见 single-run.ts 的 STRICT_DONE_PROTOCOL。
 export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
   ? "验收辅路:验证回合不适用 accept_task；这一轮只给验证结论并留证。"
@@ -60,10 +60,10 @@ export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, v
       `只有用户明确说「验收通过/可以合并」时才调 accept_task(taskId="${taskId}")，不要自行 git merge / worktree remove / branch -d。`;
 export const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `【完成协议】本任务在 ash 的 taskId 是 ${taskId}。确定目标已达成时,结束前调用 ash MCP 的 complete_task(taskId="${taskId}", directionToken="<最新【当前方向身份】token>");不确认就结束,本回合按未完成记为 failed。要等外部条件就改用 pause_task,同样传最新 directionToken 并写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)}\n\n`;
+  `【完成协议】本任务在 Navi 的 taskId 是 ${taskId}。确定目标已达成时,结束前调用 Navi MCP 的 complete_task(taskId="${taskId}", directionToken="<最新【当前方向身份】token>");不确认就结束,本回合按未完成记为 failed。要等外部条件就改用 pause_task,同样传最新 directionToken 并写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)}\n\n`;
 export const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(ash 完成协议:taskId=${taskId}。本回合结束时目标已达成就先调 complete_task 并传最新【当前方向身份】directionToken,否则按未完成记 failed;要等外部条件则用 pause_task 并传同一 token。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
+  `\n\n(Navi 完成协议:taskId=${taskId}。本回合结束时目标已达成就先调 complete_task 并传最新【当前方向身份】directionToken,否则按未完成记 failed;要等外部条件则用 pause_task 并传同一 token。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 
 // 跨回合的等待别交给后台 Bash —— 事前那一句。事后那一笔（被收走时落时间线）在
 // claude-background-reaped.ts，事故经过也在那个文件头。
@@ -74,7 +74,7 @@ export const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, r
 //
 // 只发给 claude：只有它有这类内置后台（codex 等没有同类结构化的后台任务）。执行、审查、
 // 验证回合一律发（用户 2026-11-03 拍板放宽审查投递消息的体积目标来容纳这一句）。宽松模式下
-// ash MCP 对 agent 不可达，事实照说，只省掉指给它的 start_monitor / pause_task。
+// navi MCP 对 agent 不可达，事实照说，只省掉指给它的 start_monitor / pause_task。
 const BACKGROUND_WAIT_FACT =
   "跨回合的等待别交给后台 Bash：回合一结束它随进程消失，完成通知也唤不醒任务";
 export const BACKGROUND_WAIT_WARNING = `${BACKGROUND_WAIT_FACT}；要等就用 start_monitor 挂哨兵、pause_task 收尾。`;
@@ -101,7 +101,7 @@ export const FOLLOW_UP_REMINDER = (
   taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean, rail: string, free = false,
 ) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(ash:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。` +
+  `\n\n(Navi:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。` +
   `不确认不会判这一轮失败 —— 没调 complete_task,状态就原样留在「${FOLLOW_UP_LABEL[from] ?? from}」。` +
   `但**只要这一轮动了代码(改了文件、提交),结束前就必须调用 complete_task(taskId="${taskId}")**:` +
   (free
@@ -147,7 +147,7 @@ export async function followUpRailNote(taskId: string): Promise<string> {
 // the user too (its own timeline bubble), since a silently reset workspace is
 // exactly the kind of thing you must not discover at review time.
 export const WORKSPACE_RESET = (path: string) =>
-  `\n\n〔重要·工作目录已重建〕本任务原来的 worktree 和分支都已不存在(被删除了),ash 刚在 ${path} 建了一个空的工作目录:` +
+  `\n\n〔重要·工作目录已重建〕本任务原来的 worktree 和分支都已不存在(被删除了),Navi 刚在 ${path} 建了一个空的工作目录:` +
   `你在上文里创建或修改过的文件**现在全都不在了**,git 历史也回到了基线。请不要相信上文中「我已经改过某某文件」的记忆——` +
   `动手之前先实际看一遍当前目录(ls / git status / git log),据此重新判断还要做什么。`;
 export const WORKSPACE_RESET_MARKER = "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状";

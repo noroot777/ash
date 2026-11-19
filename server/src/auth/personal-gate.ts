@@ -2,8 +2,8 @@
 //
 // `owned.ts` 那条私有轴的判据是 `actor.userId`,而 agent 回合凭证身上恰好挂着 owner 的
 // userId —— 那是**归属戳**(它建的东西记在谁名下),不是「它就是这个人」(auth/context.ts
-// `isAccountHolder`)。两者没接上的后果实测过:只带 `x-ash-source-task-id` +
-// `x-ash-turn-token`、没有任何 cookie 或 Bearer key,`POST /api/llm-providers` 就在 owner
+// `isAccountHolder`)。两者没接上的后果实测过:只带 `x-navi-source-task-id` +
+// `x-navi-turn-token`、没有任何 cookie 或 Bearer key,`POST /api/llm-providers` 就在 owner
 // 名下建出了一个供应商(第 1 轮审查 P1)。
 //
 // 这不是「多一行数据」那么轻:默认执行器、默认供应商、审查者、团队预设、个人接力目标机
@@ -20,6 +20,7 @@
 // 供应商回 `hasKey`、接力目标机回 `hasKey`、git 凭证只写不读 —— 所以「读得到」不等于
 // 「拿得到 key」。真正花掉 key 的动作(`POST /llm-providers/models`、`…/test`)是写方法,
 // 被这道闸挡在外面。
+import { headerNameGenerations, readHeader } from "@navi/shared/http-headers";
 import type { MiddlewareHandler } from "hono";
 import { actorOf, isAccountHolder } from "./context.js";
 import {
@@ -48,6 +49,7 @@ const PERSONAL_COLLECTIONS = new Set([
   "settings", // 个人键(实例键另有管理员闸,叠加不冲突)
   "me", // 个人 CLI 环境与配置导入导出(personal-routes.ts 另有一份连读侧一起管)
   "task-reads", // 看过哪些任务(侧栏绿点):回合凭证没有「看」这个动作,替人标已读就是替人熄灯
+  "accept-memory", // 验收确认层上次怎么勾的:只有人在确认层里点确认才写,回合凭证替人记等于替人改下一次的默认
 ]);
 
 /**
@@ -59,7 +61,7 @@ const PERSONAL_COLLECTIONS = new Set([
  *    都敲得开本机的门,比改一个供应商还重;而按人归属之后,它同样是一张逐人隔离的表
  *    (handoff-peers.ts `peerAudience`)。回合凭证身上挂的 owner userId 是**归属戳**,
  *    不是「它就是这个人」—— 不登记进来的话,任意一条正在跑的任务只凭
- *    `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,
+ *    `x-navi-source-task-id` + `x-navi-turn-token` 就能替 owner 放行一台陌生机器,
  *    还会把操作人记成 owner 本人(第 1 轮审查 P1)。
  *  · 接力**申请**是「以 owner 的身份去敲另一台机器的门」:index.ts 用
  *    `withHandoffActor(ownerIdOf(actorOf(c)))` 包住 /api/*,所以回合凭证走到这条路由时
@@ -81,7 +83,7 @@ const PERSONAL_PATHS = [
   //  · 任务备忘是**人写给自己看的私有批注**(shared/src/task-memo.ts 顶部那份分界):它不进
   //    任何 prompt,agent 压根读不到,自然也没有任何理由改得动。而 `canUseOwned` 判的是
   //    `ownerUserId` 相等 —— 回合凭证身上恰好挂着 owner 的归属戳,于是只凭
-  //    `x-ash-source-task-id` + `x-ash-turn-token` 就能改写、删掉用户自己记的东西
+  //    `x-navi-source-task-id` + `x-navi-turn-token` 就能改写、删掉用户自己记的东西
   //    (第 2 轮审查 F2 实测:对照 `POST /api/notes` 返 403,备忘这三条却 201/200/200)。
   //    随手记走的是第一段(PERSONAL_COLLECTIONS 里的 "notes"),备忘挂在任务下面所以在这里。
   //    **末尾那条摘要端点不在内**:`/api/tasks/memos` 是只读集合查询(POST 只因为要带一批
@@ -95,7 +97,7 @@ const PERSONAL_PATHS = [
  * ① **不看单人/多人。** 上面那张清单防的是「别人家的 agent 动了我的私产」,自用模式下
  *    没有「别人」,所以整道闸放行。这里防的是另一件事 —— **agent 替用户点了那个只有
  *    用户能点的开关**,而它在自用模式下一模一样地成立:同项目另一条任务只凭
- *    `x-ash-source-task-id` + `x-ash-turn-token` 就按得动(第 1 轮审查 F2 实测:
+ *    `x-navi-source-task-id` + `x-navi-turn-token` 就按得动(第 1 轮审查 F2 实测:
  *    `kind:"agent"` 的请求拿到 200、目标任务的锁被放开,日志还记成「用户主动放开」)。
  * ② 回合身份不能代替人工授权。自用模式没有账号鉴权边界,本机默认身份本身不证明
  *    用户同意;入口仍核验来源,路由另要求显式确认风险。
@@ -116,6 +118,8 @@ const HUMAN_ONLY_PATHS = [
   // 删会话消息：抹掉的是盘上的原话、不可撤回。agent 拿着回合凭证能按动它，就等于能替用户
   // 改写「我当时说过什么」、顺手把自己挨过的批评删掉。
   /^\/api\/sessions\/[^/]+\/conversation\/delete$/,
+  // 删一整场讨论：同上，抹掉的是盘上的原话和讨论记录。
+  /^\/api\/tasks\/[^/]+\/discussions\/[^/]+\/delete$/,
   // 飞书通道：换凭证 = 换掉「谁能当这台机器的遥控器」；绑定码与确认 = 把一个飞书账号认作
   // 本人（从此它点卡片就是本人在操作）。agent 在本机裸 curl 拿到的就是机主身份，它若能自己
   // 申请绑定码、再自己点确认，就能把攻击者的飞书账号绑成机主 —— 所以只认页面凭据。
@@ -129,7 +133,7 @@ export function isHumanOnlyPath(path: string): boolean {
 }
 
 export const HUMAN_ACTION_TOKEN_REFUSAL =
-  "这个动作需要本次会话的页面凭据：请在 ash 页面上点这个开关。"
+  "这个动作需要本次会话的页面凭据：请在 Navi 页面上点这个开关。"
   + "凭据随页面下发、用一次就失效，刷新页面可以换一份新的";
 
 export const AGENT_PERSONAL_REFUSAL =
@@ -156,7 +160,8 @@ export function personalWriteGate(): MiddlewareHandler {
     let issued: string | null = null;
     const handoff = async () => {
       await next();
-      if (issued) c.header(HUMAN_ACTION_TOKEN_NEXT_HEADER, issued);
+      // 新旧两个名字都发：升级前打开、还没刷新的页面读的是旧名，读不到就拿着废号去点下一下。
+      if (issued) for (const name of headerNameGenerations(HUMAN_ACTION_TOKEN_NEXT_HEADER)) c.header(name, issued);
     };
     // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
     if (isHumanOnlyPath(c.req.path)) {
@@ -169,7 +174,7 @@ export function personalWriteGate(): MiddlewareHandler {
       // 它的能力边界写在 human-action-token.ts 顶部,别把它当密码学边界用。
       //
       // 这几条 403 都**不发**下一份:凭据没被烧掉(或者这根本不是本人),页面手里那份还能用。
-      if (!consumeHumanActionToken(c.req.header(HUMAN_ACTION_TOKEN_HEADER))) {
+      if (!consumeHumanActionToken(readHeader((key) => c.req.header(key), HUMAN_ACTION_TOKEN_HEADER))) {
         return rejectHumanRequest(c, HUMAN_ACTION_TOKEN_REFUSAL);
       }
       // 核验过了盖个戳。路由拿它决定留痕的措辞 —— 别让路由自己去重读请求头推断

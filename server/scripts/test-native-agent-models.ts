@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { AgentEvent, Session } from "@ash/shared";
+import type { AgentEvent, Session } from "@navi/shared";
 import { readClaudeAgentProfile, readCodexAgentProfile } from "../src/executors/native-agent-models.js";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { NativeWorkTrace } from "../src/executors/native-work.js";
@@ -12,7 +12,7 @@ import { parseSessionTrace } from "../src/transcript.js";
 import { buildConversationItems } from "../../web/src/task-detail/conversationModel.ts";
 import { buildNativeWork } from "../../web/src/task-detail/nativeWorkModel.ts";
 
-const root = await mkdtemp(join(tmpdir(), "ash-native-models-"));
+const root = await mkdtemp(join(tmpdir(), "navi-native-models-"));
 const parent = "11111111-1111-1111-1111-111111111111";
 const child = "22222222-2222-2222-2222-222222222222";
 const at = "2026-09-10T00:00:00.000Z";
@@ -46,7 +46,7 @@ try {
     { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: child, status: "completed", result: "保留结果" } },
   ];
   const trace = parseSessionTrace(jsonl(events.map((event) => ({ event, at, turnStartedAt: at }))));
-  const session = { id: "ash-session", taskId: "task", agentType: "codex", executor: "codex@test", role: "single",
+  const session = { id: "navi-session", taskId: "task", agentType: "codex", executor: "codex@test", role: "single",
     cliSessionId: parent, cwd: root, startedAt: at, endedAt: at, model: "parent-model" } as Session;
   const enriched = await enrichNativeWorkModels(trace, session, join(root, "codex"));
   const rows = buildNativeWork(buildConversationItems([{ session, output: "", trace: enriched }], [session], []), "done");
@@ -122,7 +122,9 @@ rl.on('line', (line) => {
   const reported = events.flatMap((event) => event.kind === "tool" && event.nativeWork?.type === "agent"
     && (event.nativeWork.effort || event.nativeWork.title) ? [[event.nativeWork.effort, event.nativeWork.title]] : []);
   assert.deepEqual(reported, ["reported", "missing-model"].includes(mode) ? [["xhigh", "page_audit"]] : []);
-  assert.equal(events.some((event) => event.kind === "error"), false, "可选模型查询失败不影响执行");
+  // 这个假 app-server 不报 MCP 启动状态，回合收尾会有一条「navi 的工具没接上」的提示（affectsTurn:false，
+  // navi-mcp-confirm.ts）—— 那不是这里要看的事。
+  assert.equal(events.some((event) => event.kind === "error" && event.affectsTurn !== false), false, "可选模型查询失败不影响执行");
   assert.ok(events.some((event) => event.kind === "done" && event.exitStatus === 0));
 }
 console.log("子代理实际模型：Codex/Claude 读取、继承边界、历史补充、归属隔离和查询失败回归通过");

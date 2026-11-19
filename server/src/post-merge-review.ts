@@ -1,4 +1,4 @@
-import type { FreeReviewDispatchInput, Task } from "@ash/shared";
+import type { FreeReviewDispatchInput, Task } from "@navi/shared";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -9,6 +9,7 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { startFreeReview } from "./free-workflow.js";
 import { isAncestor } from "./git-accept.js";
 import { expandHome, localBranchExists } from "./git.js";
+import { carvedOutUnder } from "./task-dispatch.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { createTasks, enrichTasks } from "./task-store.js";
 import { id, now } from "./util.js";
@@ -79,7 +80,8 @@ export async function createPostMergeRepairTask(taskId: string, runId: string): 
     const at = now();
     const repairId = id();
     const report = freeReviewReportPath(taskId, run.id, run.currentRound);
-    const [created] = await createTasks([{
+    // 从已验收的那条里切出来的，就收在它下面（task-dispatch.ts）。
+    const [created] = await createTasks([carvedOutUnder(source, {
       id: repairId,
       projectId: source.projectId,
       groupId: source.groupId,
@@ -107,7 +109,7 @@ export async function createPostMergeRepairTask(taskId: string, runId: string): 
       mergeTargetBranch: run.targetBranch,
       originTaskId: source.id,
       workflowMode: "free",
-    }]);
+    })]);
     if (!created) throw new Error("修复任务创建失败");
     await db.update(freeReviewRuns).set({ repairTaskId: created.id, updatedAt: now() }).where(eq(freeReviewRuns.id, run.id));
     await appendTaskTimeline(taskId, receiptLine(`已从合并结果审查创建独立修复任务：${created.title}（${created.id}）。`));

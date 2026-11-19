@@ -11,6 +11,7 @@
 //   ⑦ 某一发挂死不回：等到上限就放掉、再读，入口回得来，不会永远卡在那一发上。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 const link = (page) => page.getByRole("link", { name: "在新窗口打开预览" });
@@ -19,6 +20,9 @@ let browser;
 try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 600, height: 400 } });
+  // ⑦ 要等一发读取挂到上限（useTaskPreview 的 READ_TIMEOUT_MS = 10 秒）、再等一个重拉间隔
+  // （PULL_MS = 2.5 秒）：装上假时钟，到那一步拨过去。时间照常在走，前面几步不受影响。
+  await page.clock.install();
   const fixture = `${web.origin}/scripts/fixtures/preview-preset-links.html`;
 
   // ①
@@ -44,15 +48,15 @@ try {
   await stage(() => window.__stage.drop());
   await stage(() => window.__stage.setRunning(false));
   await stage(() => window.__stage.open());
-  await link(page).waitFor({ state: "detached", timeout: 2000 });
+  await link(page).waitFor({ state: "detached" });
 
   // ⑤ 连着的时候来一条事件，但那一次没读到：入口先收起来，读得到了自己回来。
   await stage(() => window.__stage.setRunning(true));
   await stage(() => window.__stage.review());
-  await link(page).waitFor({ timeout: 2000 });
+  await link(page).waitFor();
   await stage(() => window.__stage.failReads(true));
   await stage(() => window.__stage.review());
-  await link(page).waitFor({ state: "detached", timeout: 2000 });
+  await link(page).waitFor({ state: "detached" });
   await stage(() => window.__stage.failReads(false));
   await link(page).waitFor({ timeout: 6000 });
 
@@ -67,7 +71,9 @@ try {
   // 读的途中又来了事件，不另起一发：最多一发在路上，回来以后补读一次。
   const before = await stage(() => window.__stage.reads());
   await stage(() => { window.__stage.review(); window.__stage.review(); window.__stage.review(); });
-  await page.waitForTimeout(1000);
+  // 夹具在请求**发出那一刻**记数，叠出并行请求的话冲刷一轮就读得到；固定睡一秒反而会把
+  // 「在途那一发回来后补读一次」（正确行为）算进来。
+  await settlePage(page);
   assert.ok((await stage(() => window.__stage.reads())) - before <= 1, "读的途中来了三条事件，叠出了好几发并行的请求");
   await stage(() => window.__stage.slowReads(0));
 
@@ -76,11 +82,17 @@ try {
   await page.waitForTimeout(500);
   await stage(() => window.__stage.setRunning(false));
   await stage(() => window.__stage.hangNextRead());
+  const hung = await stage(() => window.__stage.reads());
   await stage(() => window.__stage.review());
-  await link(page).waitFor({ state: "detached", timeout: 16000 });
+  await waitUntil(async () => (await stage(() => window.__stage.reads())) > hung, "挂死的那一发已经出门");
+  await settlePage(page);
+  assert.equal(await link(page).count(), 1, "上限之前不放掉那一发，入口还是上一份");
+  await page.clock.fastForward(10_001);
+  await link(page).waitFor({ state: "detached", timeout: 2000 });
   // 放掉以后不发任何事件：入口得靠接着再读自己回来。
   await stage(() => window.__stage.setRunning(true));
-  await link(page).waitFor({ timeout: 6000 });
+  await page.clock.fastForward(2_501);
+  await link(page).waitFor({ timeout: 2000 });
 
   console.log("preview preset links: ok");
 } finally {

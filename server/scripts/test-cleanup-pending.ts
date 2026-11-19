@@ -12,8 +12,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-cleanup-pending-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-cleanup-pending-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const { ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
@@ -47,7 +47,7 @@ const sweep = async () => {
 console.log("\n10) 落库失败不等于责任消失:内存里接着扛,下一次清扫补投");
 {
   // 钉的是第 3 轮审查 F2 后半:上一版写库失败就只剩一条日志,那一笔既不在库里也不在任何人
-  // 手上,后面哪一次清扫都不会再想起它。下面那句 `[ash] agent 清理责任落库失败` 是夹具
+  // 手上,后面哪一次清扫都不会再想起它。下面那句 `[navi] agent 清理责任落库失败` 是夹具
   // 故意制造的,不是真故障。
   const token = `ash-agent-test-pending-${Date.now().toString(36)}`;
   const hole = db as unknown as { insert: unknown };

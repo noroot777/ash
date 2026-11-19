@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mergeFeed, timeMs } from "@ash/shared/team";
+import { mergeFeed, timeMs } from "@navi/shared/team";
 import { ApiError, api } from "../src/lib/api.ts";
 import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
@@ -7,14 +7,13 @@ import { buildConversationItems, conversationToMarkdown } from "../src/task-deta
 import { formatDurationShort, formatInstantRange, taskDurationInfo } from "../src/task-detail/utils.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDuetGate, runCreatedHandoffFollowUps } from "../src/duet/handoffPolicy.ts";
+import { duetHandoffTaskInput } from "../src/duet/duetHandoff.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
 import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
 import { leadTurns, teamFeedOptions } from "../src/team/teamModel.ts";
 import {
   executorRunSummary,
-  executorOptions,
   registeredAgentTypes,
-  teamExecutorCandidates,
 } from "../src/lib/agentAvailability.ts";
 import { isLocalDiskImagePath, localDiskPath } from "../src/components/markdownPolicy.ts";
 import { createTerminalTab, withoutTerminalTab } from "../src/workspace/terminalTabs.ts";
@@ -36,11 +35,11 @@ try {
   assert.equal(localDiskPath("/api/tasks/demo/file"), null);
   assert.equal(localDiskPath("https://example.com/index.html"), null);
   const terminalTabs = [
-    createTerminalTab("cli-1", 1, "ash", "/repo"),
-    createTerminalTab("cli-2", 2, "ash", "/repo"),
-    createTerminalTab("cli-3", 3, "ash", "/repo"),
+    createTerminalTab("cli-1", 1, "navi", "/repo"),
+    createTerminalTab("cli-2", 2, "navi", "/repo"),
+    createTerminalTab("cli-3", 3, "navi", "/repo"),
   ];
-  assert.deepEqual(terminalTabs.map((tab) => tab.label), ["ash", "ash 2", "ash 3"]);
+  assert.deepEqual(terminalTabs.map((tab) => tab.label), ["navi", "navi 2", "navi 3"]);
   assert.deepEqual(withoutTerminalTab(terminalTabs, "cli-2", "cli-2"), {
     tabs: [terminalTabs[0], terminalTabs[2]],
     activeId: "cli-3",
@@ -77,7 +76,7 @@ try {
     liveSince: "2026-07-30T01:00:00.000Z",
     updatedAt: "2026-07-30T01:10:00.000Z",
   };
-  // useTasks 数据同步纯函数（SSE 事件应用 / 星标回写 / GET 快照合并）的用例在
+  // useTasks 数据同步纯函数（SSE 事件应用 / GET 快照合并）的用例在
   // scripts/test-task-sync.mjs（npm -w web run test:task-sync）。
 
   const session = {
@@ -260,7 +259,7 @@ try {
   );
   assert.deepEqual(liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].run : null, { model: "gpt-5.6-sol", reasoningEffort: "high" });
 
-  const persistedAttachmentPath = "/tmp/ash/data/uploads/persisted-agent-image.png";
+  const persistedAttachmentPath = "/tmp/navi/data/uploads/persisted-agent-image.png";
   const attachmentConversation = buildConversationItems(
     [{
       session: { ...session, endedAt: "2026-07-30T01:00:10.000Z" },
@@ -280,7 +279,7 @@ try {
     [persistedAttachmentPath],
   );
 
-  const liveAttachmentPath = "/tmp/ash/data/uploads/live-agent-image.jpg";
+  const liveAttachmentPath = "/tmp/navi/data/uploads/live-agent-image.jpg";
   const liveAttachmentConversation = buildConversationItems([], [session], [
     { kind: "server", id: "live-text", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "实时图片。" } } },
     { kind: "server", id: "live-image", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "attachment", path: liveAttachmentPath } } },
@@ -531,12 +530,21 @@ try {
   const followUps = [];
   const failures = await runCreatedHandoffFollowUps({
     closeGate: async () => { followUps.push("gate"); throw new Error("gate failed"); },
-    startTeam: async () => { followUps.push("start"); throw new Error("start failed"); },
+    startTask: async () => { followUps.push("start"); throw new Error("start failed"); },
   });
   assert.deepEqual(followUps, ["gate", "start"]);
   assert.deepEqual(failures.map(({ phase }) => phase), ["gate", "start"]);
+  // 讨论收尾「交给任务落实」：建的是一条普通任务、挂回这场讨论，不再接力成团。
+  const handoffInput = duetHandoffTaskInput({ id: "duet-1", projectId: "p1", title: "缓存方案" }, "正文",
+    { note: "", executor: { agentType: "codex", executorId: "codex-local", model: "gpt-5.6-sol", effort: "high" } });
+  assert.equal(handoffInput.mode, "single");
+  assert.equal(handoffInput.workflowMode, "free");
+  assert.equal(handoffInput.originTaskId, "duet-1");
+  assert.equal("team" in handoffInput, false, "不再带团队配置");
+  assert.deepEqual([handoffInput.agentType, handoffInput.executorId, handoffInput.model, handoffInput.reasoningEffort],
+    ["codex", "codex-local", "gpt-5.6-sol", "high"]);
 
-  const roles = ["single", "lead", "worker", "reviewer"];
+  const roles = ["single"];
   for (const role of roles) {
     let executors = emptyComposerExecutorConfigs();
     // 换执行器时选择器算出来的覆盖就是这个空对象(= 跟随执行器);这里钉的是它**整份替换**
@@ -573,35 +581,6 @@ try {
     "失效的执行器引用应与服务端一致回退到类型默认值",
   );
   assert.deepEqual(registeredAgentTypes(registeredProfiles), ["codex", "qwen"]);
-  const candidates = teamExecutorCandidates({
-    status: "ready",
-    agents: [
-      { type: "claude", available: true, resident: true },
-      { type: "codex", available: true, resident: true },
-      { type: "qwen", available: true, resident: false },
-    ],
-  }, registeredProfiles);
-  assert.deepEqual(candidates.workerTypes, ["codex", "qwen"]);
-  assert.deepEqual(candidates.leadTypes, ["codex"]);
-  assert.deepEqual(candidates.leadProfiles.map(({ id }) => id), ["codex-local"]);
-  const executorLabels = executorOptions({
-    types: candidates.workerTypes,
-    profiles: registeredProfiles,
-  }).map(({ label }) => label);
-  assert.equal(executorLabels.some((label) => label.startsWith("claude ·")), false);
-  assert.equal(executorLabels.some((label) => label.startsWith("codex ·")), true);
-  assert.equal(executorLabels.some((label) => label.startsWith("qwen ·")), true);
-  const staleType = executorOptions({
-    types: candidates.workerTypes,
-    profiles: registeredProfiles,
-    selection: { agentType: "claude", executorId: null },
-  }).find(({ value }) => value === "__type:claude");
-  assert.deepEqual(staleType, {
-    value: "__type:claude",
-    label: "claude · 类型默认（当前设置 · 未注册）",
-    disabled: true,
-  });
-
   const groupTasks = [
     { id: "done", groupId: "group-1", archived: false, status: "done", createdAt: "2026-07-30T01:00:00.000Z", resumeDependsOn: [] },
     { id: "paused", groupId: "group-1", archived: false, status: "paused", createdAt: "2026-07-30T02:00:00.000Z", resumeDependsOn: ["done"] },

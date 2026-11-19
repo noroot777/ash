@@ -1,18 +1,19 @@
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { AGENT_TYPES, type AgentEvent } from "@ash/shared";
-import type { ChatMember } from "@ash/shared/chat";
+import { AGENT_TYPES, type AgentEvent } from "@navi/shared";
+import type { ChatMember } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-execution-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-execution-"));
 // repoPath 存的是用户写的原样，`~/…` 只有展开后才是真目录。要如实测这一步，家目录下就得
 // 真有一个目录；用完在 finally 里删掉。
-const homeProject = mkdtempSync(join(homedir(), ".ash-chat-home-"));
+const homeProject = mkdtempSync(join(homedir(), ".navi-chat-home-"));
 const homeProjectName = basename(homeProject);
 writeFileSync(join(homeProject, "chat-context.txt"), "来自家目录项目的建议依据");
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const projectDir = join(stage, "project");
 mkdirSync(projectDir);
 writeFileSync(join(projectDir, "chat-context.txt"), "来自当前项目的建议依据");
@@ -57,7 +58,7 @@ try {
         assert.equal(opts.sessionId, undefined);
         assert.deepEqual(opts.extraArgs, type === "claude" && (opts.prompt.includes("ASSISTANT_FIXTURE") || opts.prompt.includes("AUTHORIZATION_FIXTURE"))
           ? ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-chrome"] : undefined);
-        for (const key of ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"]) {
+        for (const key of ["NAVI_TASK_ID", "NAVI_TURN_TOKEN", "NAVI_DIRECTION_TOKEN"]) {
           assert.ok(Object.hasOwn(opts.env!, key));
           assert.equal(opts.env![key], undefined);
         }

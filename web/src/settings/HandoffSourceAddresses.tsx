@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { HandoffTarget } from "@ash/shared";
-import type { HandoffSourceAddress } from "@ash/shared/handoff";
+import type { HandoffTarget } from "@navi/shared";
+import type { HandoffSourceAddress } from "@navi/shared/handoff";
 import { SpinnerGap } from "@phosphor-icons/react";
 import { Button, TextInput } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
@@ -28,7 +28,7 @@ export function HandoffSourceAddresses({ onSaved }: { onSaved: (targets: Handoff
         <div>
           <b>来源机器地址</b>
           <small>
-            来源机的 IP 或端口变了，在这里填写它现在的 ash 完整地址。核对原有指纹后保存，再回到任务重新检查。
+            来源机的 IP 或端口变了，在这里填写它现在的 Navi 完整地址。核对原有指纹后保存，再回到任务重新检查。
             <br />保存会同步更新接力目标机地址；多人模式下只对你生效。
           </small>
         </div>
@@ -82,7 +82,7 @@ function SourceAddressRow({ source, onSaved }: {
       </div>
       <TextInput
         id={inputId}
-        aria-label={`${source.name}的 ash 地址`}
+        aria-label={`${source.name}的 Navi 地址`}
         placeholder="http://192.168.1.50:4317"
         value={draft}
         disabled={busy}

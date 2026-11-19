@@ -21,8 +21,8 @@ import { closeSync, existsSync, mkdtempSync, openSync, unlinkSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-process-subtrees-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-process-subtrees-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const { cleanupAfterRun, markAdoptedChild } = await import("../src/executors/spawn.js");
 const { IS_WINDOWS, isPidAlive } = await import("../src/platform.js");
@@ -87,6 +87,8 @@ if (IS_WINDOWS) {
   // **最要紧的一条**:已经退场的那个根,它名下不许冒出别人的孩子来。
   assert.equal(deadTree.descendants.length, 0, "退场的根不许带出任何后代");
 
+  // 整组收：只杀根的话，它那个要活一分钟的孩子会留到测试退出之后。
+  try { process.kill(-parent.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
   try { process.kill(parent.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
 }
 

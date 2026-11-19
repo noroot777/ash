@@ -22,15 +22,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-peer-key-"));
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-peer-key-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.ASH_DB = join(root, "local.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
-requireTmpDb("ash-handoff-peer-key");
+process.env.NAVI_DB = join(root, "local.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
+requireTmpDb("navi-handoff-peer-key");
 let signingPeer: { close(): Promise<void> } | undefined;
 
 try {
@@ -38,7 +38,7 @@ try {
   const { SINGLE_ACTOR } = await import("../src/auth/context.js");
   const scope = await import("../src/auth/handoff-scope.js");
   const { patchSettingsFor } = await import("../src/auth/personal-settings.js");
-  const { HANDOFF_PEER_KEY_REQUIRED } = await import("@ash/shared/handoff");
+  const { HANDOFF_PEER_KEY_REQUIRED } = await import("@navi/shared/handoff");
   await ensureSchema();
 
   const { startSignedHandoffPeer } = await import("./handoff-signed-peer-fixture.js");
@@ -51,14 +51,14 @@ try {
   assert.equal(await scope.peerKeyForRequest(null, url), "", "还没配过 key 时读回空串");
   assert.equal((await scope.listTargets(SINGLE_ACTOR))[0].hasKey, false);
 
-  await scope.setPeerKey(SINGLE_ACTOR, url, "ash_single_mode_key");
+  await scope.setPeerKey(SINGLE_ACTOR, url, "navi_single_mode_key");
   assert.equal(
-    await scope.peerKeyForRequest(null, url), "ash_single_mode_key",
+    await scope.peerKeyForRequest(null, url), "navi_single_mode_key",
     "自用模式也要能存下「我在对端的账号 key」——要不要它由对端的模式决定",
   );
   // 尾斜杠、大小写都不该影响命中:出站那一侧的 url 来自用户输入和 marker,形态不统一。
-  assert.equal(await scope.peerKeyForRequest(null, `${url}/`), "ash_single_mode_key");
-  assert.equal(await scope.peerKeyForRequest(null, url.toUpperCase().replace("HTTP", "http")), "ash_single_mode_key");
+  assert.equal(await scope.peerKeyForRequest(null, `${url}/`), "navi_single_mode_key");
+  assert.equal(await scope.peerKeyForRequest(null, url.toUpperCase().replace("HTTP", "http")), "navi_single_mode_key");
 
   const listed = await scope.listTargets(SINGLE_ACTOR);
   assert.equal(listed[0].hasKey, true, "读侧只报 hasKey");
@@ -66,7 +66,7 @@ try {
   // 凭证不能混进那份会被 `GET /settings` 整份吐回前端的设置。
   const { getAppSettings } = await import("../src/app-settings.js");
   assert.equal(
-    JSON.stringify(await getAppSettings()).includes("ash_single_mode_key"), false,
+    JSON.stringify(await getAppSettings()).includes("navi_single_mode_key"), false,
     "key 不许出现在 app_settings 里",
   );
 
@@ -76,7 +76,7 @@ try {
   assert.equal((await scope.listTargets(SINGLE_ACTOR))[0].hasKey, false);
 
   // ── 2. 删掉目标机,key 跟着走 ──────────────────────────────────────────────
-  await scope.setPeerKey(SINGLE_ACTOR, url, "ash_second_key");
+  await scope.setPeerKey(SINGLE_ACTOR, url, "navi_second_key");
   await patchSettingsFor(SINGLE_ACTOR, { handoffTargets: [] });
   await scope.addTarget(SINGLE_ACTOR, { name: "同一个地址又加回来", url });
   assert.equal(
@@ -101,7 +101,7 @@ try {
       const sig = sign(null, Buffer.from(canonicalPingChallenge(nonce)), peerKeys.privateKey).toString("base64");
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({
-        ok: true, service: "ash", host: "peer", instanceMode: "multi", userCount: 2,
+        ok: true, service: "navi", host: "peer", instanceMode: "multi", userCount: 2,
         peerUser: null, projects: [],
         identity: { publicKey, sig },
       }));
@@ -109,7 +109,7 @@ try {
     }
     // 3b. 别的路径一律按「对端明确拒绝」应答,带上它自己的原因码。
     res.writeHead(401, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "这把 key 在对端机器上不认", ash: true, code: HANDOFF_PEER_KEY_REQUIRED }));
+    res.end(JSON.stringify({ error: "这把 key 在对端机器上不认", navi: true, code: HANDOFF_PEER_KEY_REQUIRED }));
   });
   await new Promise<void>((done) => multiPeer.listen(0, "127.0.0.1", done));
   const peerPort = (multiPeer.address() as { port: number }).port;
@@ -145,15 +145,15 @@ try {
       "还没给这个地址配 key 时不该凭空发一个出去",
     );
     await scope.addTarget(SINGLE_ACTOR, { name: "假对端", url: peerUrl });
-    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "ash_outbound_key");
+    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "navi_outbound_key");
     assert.equal(
       await scope.peerKeyForRequest(null, `${peerUrl}/api/handoff/ping?nonce=abc`),
-      "ash_outbound_key",
+      "navi_outbound_key",
       "带路径和查询串的请求 URL 也要认得出是哪台目标机",
     );
     seenKeys.length = 0;
     await pingPeer(peerUrl, null, undefined, { requirePeerUser: true }).catch(() => undefined);
-    assert.deepEqual(seenKeys, [undefined, "ash_outbound_key"], "先无凭据核对身份，再把 key 随请求发到对端");
+    assert.deepEqual(seenKeys, [undefined, "navi_outbound_key"], "先无凭据核对身份，再把 key 随请求发到对端");
 
     // ── 5. 目标机已从设置里删掉时,那个地址上配的 key 照样要出门 ───────────────
     // pending / 移回重放收口时,弹框会为「已经不在清单里、但任务还挂在它身上」的地址
@@ -161,19 +161,19 @@ try {
     // 下一次预检仍旧 401 —— 因为出站读侧是拿清单去 join key 表的,孤儿行谁也看不见。
     // 现在自用模式直接读那张表本身,清单只是设置页上的书签。
     await patchSettingsFor(SINGLE_ACTOR, { handoffTargets: [] });
-    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "ash_orphan_key", fingerprintOf(publicKey), { allowUnlisted: true });
+    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "navi_orphan_key", fingerprintOf(publicKey), { allowUnlisted: true });
     assert.deepEqual(await scope.listTargets(SINGLE_ACTOR), [], "它确实已经不在清单里了");
     seenKeys.length = 0;
     await pingPeer(peerUrl, null, undefined, { requirePeerUser: true }).catch(() => undefined);
     assert.equal(
-      seenKeys.at(-1), "ash_orphan_key",
+      seenKeys.at(-1), "navi_orphan_key",
       "重放收口用的那个地址上填的 key,保存成功就必须真的能用",
     );
 
     // 而且不能被「改了别的目标机」顺手清掉 —— 只有**这次被删掉的那台**才收走它的 key。
     await patchSettingsFor(SINGLE_ACTOR, { handoffTargets: [{ name: "另一台", url, peerFp: null }] });
     assert.equal(
-      await scope.peerKeyForRequest(null, peerUrl), "ash_orphan_key",
+      await scope.peerKeyForRequest(null, peerUrl), "navi_orphan_key",
       "动了别的目标机不该顺手清掉这一把",
     );
   } finally {

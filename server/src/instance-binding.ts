@@ -1,4 +1,4 @@
-// 「这个请求是发给哪一份 ash 的」（mac app 第 2 轮审查 F2）。
+// 「这个请求是发给哪一份 navi 的」（mac app 第 2 轮审查 F2）。
 //
 // mac app 的窗口开着页面时，端口上的服务可能换了人（app 那份停了，仓库里的开发实例接着占了
 // :4317）。窗口定时认人、导航前认人都只能**事后**撤页：已经载好的页面自己发的 fetch、SSE 重连
@@ -16,32 +16,37 @@
 // Hono，在 preview-proxy.ts 里用同一个判据。
 import { randomUUID } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
+import { NAVI_HEADERS, readHeader } from "@navi/shared/http-headers";
+import { LEGACY_INSTANCE_COOKIE } from "@navi/shared/legacy-names";
 
 export const INSTANCE_ID = randomUUID();
-export const INSTANCE_COOKIE = "ash_instance";
-export const INSTANCE_HEADER = "x-ash-instance";
+export const INSTANCE_COOKIE = "navi_instance";
+export const INSTANCE_HEADER = NAVI_HEADERS.instance;
+
+/** 认的 cookie 名：升级前打开的窗口带的是旧名（它的值必然对不上新实例号，照样该被拦下）。 */
+const INSTANCE_COOKIES: readonly string[] = [INSTANCE_COOKIE, LEGACY_INSTANCE_COOKIE];
 
 /** 请求自称发给哪一份（cookie 与请求头里的全部取值）。 */
 function claimed(cookie: string | undefined, header: string | undefined): string[] {
   const values = header?.trim() ? [header.trim()] : [];
   for (const part of cookie?.split(";") ?? []) {
     const at = part.indexOf("=");
-    if (at > 0 && part.slice(0, at).trim() === INSTANCE_COOKIE) values.push(part.slice(at + 1).trim());
+    if (at > 0 && INSTANCE_COOKIES.includes(part.slice(0, at).trim())) values.push(part.slice(at + 1).trim());
   }
   return values;
 }
 
-/** 请求明说了自己要的是另一份 ash。 */
+/** 请求明说了自己要的是另一份 navi。 */
 export function addressedElsewhere(cookie: string | undefined, header: string | undefined): boolean {
   const values = claimed(cookie, header);
   return values.length > 0 && !values.every((value) => value === INSTANCE_ID);
 }
 
-export const INSTANCE_MISMATCH = "这个页面认的是另一份 ash（端口上的服务已经换了），请求没有执行。";
+export const INSTANCE_MISMATCH = "这个页面认的是另一份 Navi（端口上的服务已经换了），请求没有执行。";
 
 export function instanceBinding(): MiddlewareHandler {
   return async (c, next) => {
-    if (c.req.path === "/api/health" || !addressedElsewhere(c.req.header("cookie"), c.req.header(INSTANCE_HEADER))) return next();
+    if (c.req.path === "/api/health" || !addressedElsewhere(c.req.header("cookie"), readHeader((key) => c.req.header(key), INSTANCE_HEADER))) return next();
     return c.json({ error: INSTANCE_MISMATCH, instanceMismatch: true }, 409);
   };
 }

@@ -55,6 +55,28 @@ export async function runGoalRecoveryUi({ page, base, screenshots, sessionEnds, 
   await trackFetches(page, "/api/tasks/goal-empty-ui/reply$");
   await page.goto(`${base}/?project=cli-ui&task=goal-empty-ui`);
   const beforeEmpty = await (await fetch(`${base}/api/tasks/goal-empty-ui`)).json();
+  // 还没跑过的任务：字照样能打；斜杠菜单里只留没有会话也答得了的那条，敲全了回车是补全（好接着写参数），不是发送。
+  const unstarted = page.getByRole("textbox", { name: "回复任务" });
+  await unstarted.fill("/");
+  await page.getByRole("option", { name: /^\/goal\b/ }).waitFor();
+  assert.equal(await page.getByRole("option").count(), 1, "a never-run task offers only the session-less command");
+  await unstarted.fill("/goal");
+  await unstarted.press("Enter");
+  assert.equal(await unstarted.inputValue(), "/goal ");
+  // 从没跑过的任务只能查目标：粘贴的图不收、附件键和发送设置都关着，查询只带字立即发（服务端不收附件和稍后发送）。
+  let uploadRequests = 0;
+  const countUpload = (request) => { if (new URL(request.url()).pathname === "/api/uploads") uploadRequests += 1; };
+  page.on("request", countUpload);
+  await page.getByRole("textbox", { name: "回复任务" }).evaluate((element) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "query-paste.png", { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
+  });
+  await page.getByRole("textbox", { name: "回复任务" }).fill("/goal --scopes ");
+  assert.equal(await page.getByText("query-paste.png", { exact: true }).count(), 0, "a never-run task does not take pasted files: the only thing it can send is a text-only goal query");
+  assert.equal(uploadRequests, 0, "the pasted file is not uploaded either");
+  page.off("request", countUpload);
+  assert.equal(await page.getByRole("button", { name: "上传附件" }).isDisabled(), true, "attachment picker stays off while the box can only query");
   const emptyScopes = await send("goal-empty-ui", "/goal --scopes", 200);
   assert.equal(emptyScopes.recorded, false);
   const localResult = page.getByRole("status", { name: "命令结果" });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
-import { monitorWakeForDelivery, readMonitorWake } from "@ash/shared/monitor-wake";
+import { monitorWakeForDelivery, readMonitorWake } from "@navi/shared/monitor-wake";
 import { db, makeTask, monitors, pendingOf, scheduledMessages, startMonitor, tasks, teardown, until } from "./monitors-fixture.js";
 import { deliveryOptions } from "../src/pending-verdict.js";
 import { monitorWakeCheckpoint } from "../src/monitor-checkpoint-handoff.js";

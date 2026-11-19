@@ -50,7 +50,7 @@ async function entryOf(path: string): Promise<string> {
   if (!stat) return "missing";
   if (stat.isSymbolicLink()) return `link:${await readlink(path)}`;
   const can = (mode: number, flag: string) => access(path, mode).then(() => flag, () => "-");
-  // 目录记的是**门禁那个用户**实际能不能列出、写入、进入（access），不是权限位：快照根是 ash 新建的
+  // 目录记的是**门禁那个用户**实际能不能列出、写入、进入（access），不是权限位：快照根是 navi 新建的
   // 临时目录（0700），目标检出根通常是 0755，按位比就永远对不上，对跑起来的程序却没有分别。
   // 子模块（gitlink）同样只是个目录，里面装什么不归这棵树管。
   if (stat.isDirectory()) {

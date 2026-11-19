@@ -15,6 +15,7 @@
 //
 // 自用模式一律返回空对象:那条路的行为必须与本功能上线前逐字节一致。
 import { eq } from "drizzle-orm";
+import { FROZEN_DEFAULT_GIT_EMAIL_DOMAIN } from "@navi/shared/legacy-names";
 import { db } from "../db/index.js";
 import { tasks, users } from "../db/schema.js";
 import { cliConfigEnvFor, configDirEnvVar, userCliDir } from "./user-cli.js";
@@ -35,7 +36,7 @@ export async function runEnvForOwner(ownerUserId: string | null, agentType: stri
   const user = (await db.select().from(users).where(eq(users.id, ownerUserId))).at(0);
   if (user) {
     const name = user.gitName.trim() || user.name;
-    const email = user.gitEmail.trim() || `${user.dirName}@ash.local`;
+    const email = user.gitEmail.trim() || `${user.dirName}@${FROZEN_DEFAULT_GIT_EMAIL_DOMAIN}`;
     env.GIT_AUTHOR_NAME = name;
     env.GIT_AUTHOR_EMAIL = email;
     env.GIT_COMMITTER_NAME = name;

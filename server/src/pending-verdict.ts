@@ -4,13 +4,13 @@
 // 什么(deliveryOptions)、哨兵唤醒的最后一道闸(monitorWakeGuard)。租约、冷却、
 // 重投、扫描那些带共享状态的机器仍在 pending-messages.ts。
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
-import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import type { AgentType } from "@navi/shared";
+import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@navi/shared/cli-commands";
+import { monitorBlockedReason, monitorIdFromOrigin } from "@navi/shared/monitor";
 import { monitorEventSource, monitorWakeGate, type MonitorSourceState } from "./monitor-session.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
-import { monitorWakeForDelivery } from "@ash/shared/monitor-wake";
+import { monitorWakeForDelivery } from "@navi/shared/monitor-wake";
 import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
@@ -37,6 +37,8 @@ export type DeliveryTaskView = {
   queueBlocked?: boolean;
   /** 所在分组已被用户暂停(groups.paused,持久事实)。 */
   groupPaused?: boolean;
+  /** 上面派活的那条按了「全部停下」(task-hold.ts,持久事实)。 */
+  dispatchHeld?: boolean;
   reviewBlocked?: string | null;
   reviewUncertain?: boolean;
   /**
@@ -130,6 +132,12 @@ export function deliveryVerdict(
   // 的豁免并行执行 / 穿透暂停(第 5 轮审查两条拦验收)。真正的终态续聊(execution=0)
   // 不受影响。
   if (task.mode === "single" && message.execution && (task.queueBlocked || task.groupPaused))
+    return { action: "wait" };
+  // 名下全部停下:除了上面那条执行型的,**凡是会把一条停着的任务叫起来**的投递都等 —— 哨兵结果、
+  // 定时与「等它完成后」的消息都是系统替人叫醒,用户按的就是「都别动」。终态任务上的续聊不是执行,
+  // 照常送;审查那边的答复是旁路回合的事,也照常送(同分组暂停对审查回合的处理)。
+  if (task.mode === "single" && task.dispatchHeld && !message.origin?.startsWith("review-answer:")
+    && (message.execution || task.status === "paused" || task.status === "backlog"))
     return { action: "wait" };
   return { action: "deliver" };
 }

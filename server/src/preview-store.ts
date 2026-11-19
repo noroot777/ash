@@ -1,12 +1,13 @@
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
-import type { PreviewServiceState } from "@ash/shared/preview";
+import type { PreviewLife, WorkflowStep } from "@navi/shared/workflow";
+import type { PreviewServiceState } from "@navi/shared/preview";
 import { RUNS_DIR } from "./paths.js";
 
 export type PreviewStep = Extract<WorkflowStep, { kind: "preview" }>;
 
 export interface PreviewRecord {
+  purpose?: "development";
   services?: PreviewServiceRecord[];
   proxyToken?: string;
   primaryServiceId?: string;
@@ -18,9 +19,9 @@ export interface PreviewRecord {
   port: number | null;
   life: PreviewLife;
   /**
-   * 被预览的服务**自己在日志里说**「我的 `/api` 打到那台 ash 上」，而且说的正是我们当时
+   * 被预览的服务**自己在日志里说**「我的 `/api` 打到那台 navi 上」，而且说的正是我们当时
    * 绑着的那个端口时，记下它（见 preview-log.ts 的 declaredHostApiPort）。反代据此把 `/api`
-   * 那一跳直接接回本机 ash 并带上打开者的会话——缘由和其余前提在 preview-access.ts 顶部。
+   * 那一跳直接接回本机 navi 并带上打开者的会话——缘由和其余前提在 preview-access.ts 顶部。
    *
    * **不能拿启动方式（`PreviewMode`）当拓扑证据**，这个字段的存在就是为了替掉那种做法：
    * 自由工作流对任意自定义脚本和多服务配置一律写死 `frontend`，它表示的是「我们让它只起
@@ -30,7 +31,7 @@ export interface PreviewRecord {
   hostApi?: number | null;
   startedAt: string;
   log: string;
-  /** 起这次预览时 ash 自己挂上去的 node_modules 软链；收预览时按原样撤掉。 */
+  /** 起这次预览时 navi 自己挂上去的 node_modules 软链；收预览时按原样撤掉。 */
   links?: string[];
   /**
    * 这条记录是「还在启动」还是「已经起来了」。缺省（老记录）= 已经起来了。
@@ -189,7 +190,7 @@ export function alive(pid: number): boolean {
  * 日志尾巴，**掐掉开头那行命令回显**。
  *
  * 掐它不是为了好看：那一行里有用户自己写的命令，而命令里很可能带着一个地址
- * （`VITE_APP_API_URL=http://localhost:8082 pnpm dev`），ash 一注入 `URL2=…` 更是必然
+ * （`VITE_APP_API_URL=http://localhost:8082 pnpm dev`），navi 一注入 `URL2=…` 更是必然
  * 带。地址扫描器不认得「这句是回显不是日志」，扫到就会把预览判成起在**别人**那个端口上
  * —— 用户点开预览看到的是后端，改动却在前端。所以分析用的文本一律先减去这一行。
  *
@@ -213,7 +214,7 @@ export function tail(path: string, banner = "", max = 4000): string {
  * 尾巴是给人看的诊断（4000 字足够回答「刚才发生了什么」，也顺带挡住了内存），而这些话
  * 都打在启动最前面，装依赖回显和框架冷编译随便多打几行就把它们挤出窗口。已经栽过两次，
  * 两次的坏法还不一样：
- *  · 被挤掉的「我的 /api 打到那台 ash 上」→ 一份**确实说过**的启动被记成没说过，用户看回
+ *  · 被挤掉的「我的 /api 打到那台 navi 上」→ 一份**确实说过**的启动被记成没说过，用户看回
  *    登录框，正是这个任务要消掉的那堵墙（第 3 轮审查 P1）；
  *  · 被挤掉的「这个分支起了真调度器」→ 安全协议过旧的预览后端照常上线，真调度器接着拿
  *    真项目目录派活，而我们嘴上说的是「已立即回收」（第 4 轮审查 P1）。

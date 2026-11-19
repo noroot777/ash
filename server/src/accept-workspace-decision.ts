@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { AcceptanceAutoCommitDecision } from "@ash/shared/accept-workspace";
+import type { AcceptanceAutoCommitDecision } from "@navi/shared/accept-workspace";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import type { ScmStatus } from "./git-status.js";

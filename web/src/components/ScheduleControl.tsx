@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
-import type { Schedule } from "@ash/shared";
-import { ArrowsClockwise, Clock, Lightning, SpinnerGap } from "@phosphor-icons/react";
+import type { Schedule } from "@navi/shared";
+import { ArrowsClockwise, Clock, Lightning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { Button } from "./ui.tsx";
 import { localeDateTime } from "../lib/localeFormat.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 export type ScheduleKind = "once" | "cron";
 export type ScheduleDraftKind = "none" | ScheduleKind;
@@ -221,7 +222,7 @@ export function ScheduleControl({
       </div>
       <div className="schedule-control-footer">
         <small className={loadError ? "is-error" : ""}>
-          {loading ? <><SpinnerGap size={11} className="is-spinning" />正在读取调度…</> : loadError || scheduleSummary(schedule)}
+          {loading ? <><NaviLoader size={14} />正在读取调度…</> : loadError || scheduleSummary(schedule)}
         </small>
         {kind === "cron" && (
           <Button variant="ghost" disabled={unavailable} onClick={() => void fire()}>

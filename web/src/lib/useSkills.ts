@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentType, SkillEntry, SkillSource } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import type { AgentType, SkillEntry, SkillSource } from "@navi/shared";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
 import { api } from "./api.ts";
 import type { SlashItem } from "./slashMatch.ts";
 
@@ -12,7 +12,7 @@ import type { SlashItem } from "./slashMatch.ts";
 // 「哪些候选、按什么顺序」是纯逻辑,在 slashMatch.ts(能被 node 直接跑);
 // 这里原样转发,调用方仍从本文件拿。
 export type { SlashItem, SlashQuery } from "./slashMatch.ts";
-export { applySlashPick, mergeSlashItems, slashMatchIndex, slashQuery, slashSendsAsTyped, slashToken, toSlashItems } from "./slashMatch.ts";
+export { applySlashPick, mergeSlashItems, removeSlashToken, slashMatchIndex, slashPickAt, slashQuery, slashSendsAsTyped, slashToken, toSlashItems } from "./slashMatch.ts";
 
 export const SOURCE_LABEL: Record<SkillSource, string> = {
   project: "项目",
@@ -111,7 +111,7 @@ export function useSkills(query: {
   return { skills: entry.skills, refresh: () => pull(true) };
 }
 
-/** 供菜单画分隔线:ash 命令与技能之间的那个下标。 */
+/** 供菜单画分隔线:navi 命令与技能之间的那个下标。 */
 export function useSlashSections(items: SlashItem[]): { firstSkillIndex: number } {
   return useMemo(() => ({ firstSkillIndex: items.findIndex((item) => item.kind === "skill") }), [items]);
 }

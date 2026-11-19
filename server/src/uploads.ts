@@ -30,7 +30,7 @@ import { isMultiUser } from "./auth/mode.js";
 import { getUser } from "./auth/store.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { now } from "./util.js";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { SessionTraceEvent } from "./transcript.js";
 
 /** 路径 / URL 段 → UPLOADS_DIR 下的文件名。Windows 的反斜杠也归一。 */
@@ -170,14 +170,16 @@ export async function bindUploadsToTask(
   paths: string[] | undefined,
   taskId: string,
   actorUserId: string | null,
+  /** 跟建任务同一笔事务时传进来（派出可以派出去的活，dispatch-suggestion-launch.ts）。 */
+  store: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0] = db,
 ): Promise<void> {
   const names = [...new Set((paths ?? []).map(uploadNameOf).filter((name): name is string => !!name))];
   if (!names.length) return;
-  const rows = await db.select().from(uploads).where(inArray(uploads.file, names));
+  const rows = await store.select().from(uploads).where(inArray(uploads.file, names));
   for (const row of rows) {
     if (row.taskId) continue;
     if (row.ownerUserId && row.ownerUserId !== actorUserId) continue;
-    await db.update(uploads).set({ taskId }).where(eq(uploads.file, row.file));
+    await store.update(uploads).set({ taskId }).where(eq(uploads.file, row.file));
   }
 }
 
@@ -212,7 +214,7 @@ export async function backfillArtifactUploads(
       await registerUpload(name, { taskId });
     } catch (error) {
       // 读产物这件事不该因为补归属失败而整条失败(下一次读还会再试)。
-      console.warn("[ash] 附件归属回填失败:", error);
+      console.warn("[navi] 附件归属回填失败:", error);
     }
   }
 }
@@ -255,7 +257,7 @@ export async function repairUploadClaim(actor: Actor, fileOrPath: string, taskId
 export function noteAgentUpload(taskId: string, path: string): void {
   void registerUpload(path, { taskId }).catch((error) => {
     // 登记失败只影响别人能不能在界面上看到这张图,不该动摇这一轮的产出。
-    console.warn("[ash] 附件归属登记失败:", error);
+    console.warn("[navi] 附件归属登记失败:", error);
   });
 }
 

@@ -1,4 +1,12 @@
+import { LEGACY_CLAUDE_INTERRUPT_ID_PREFIX } from "@navi/shared/legacy-names";
 import { loadSteerJournal, saveSteerJournal, type SteerEntry } from "./claude-recovery.js";
+
+/**
+ * 打断请求号的前缀（`<前缀><序号>`）。请求号记进打断记录、重启接管时读回来：整串对回执，序号接着编。
+ * 升级前记下的是旧前缀，两代都认。
+ */
+export const INTERRUPT_ID_PREFIX = "navi_int_";
+const INTERRUPT_ID_PREFIXES = [INTERRUPT_ID_PREFIX, LEGACY_CLAUDE_INTERRUPT_ID_PREFIX];
 
 type PendingControl = {
   resolve(): void;
@@ -32,7 +40,7 @@ export class ClaudeControlBridge {
    */
   backgroundPending: () => { agent: number; workflow: number; unknown?: true } = () => ({ agent: 0, workflow: 0, unknown: true });
   /**
-   * ash 发出去的打断各认领哪一个回合结尾。**身份在写 stdin 之前就落盘**:打断出来的那条
+   * navi 发出去的打断各认领哪一个回合结尾。**身份在写 stdin 之前就落盘**:打断出来的那条
    * `result` 跟自然结束的长得一样(都可能是 error_during_execution),回执(control_response)和它
    * 谁先谁后都有,重启接管时光看输出认不出来(自由审查 i8RAcPM3zvgD R1)。一条打断认领它发出
    * 那一刻**之后**的第一个还没被认领的结尾 —— 打断总会让 CLI 收一个结尾。
@@ -67,7 +75,8 @@ export class ClaudeControlBridge {
     this.inheritedSends = new Set(this.sends);
     this.unclaimed = this.entries.map((entry) => ({ ...entry, inherited: true }));
     for (const entry of this.entries) {
-      const n = Number(entry.id.replace(/^ash_int_/, ""));
+      const prefix = INTERRUPT_ID_PREFIXES.find((candidate) => entry.id.startsWith(candidate));
+      const n = prefix ? Number(entry.id.slice(prefix.length)) : NaN;
       if (Number.isInteger(n) && n > this.sequence) this.sequence = n;
     }
   }
@@ -119,14 +128,14 @@ export class ClaudeControlBridge {
       this.persist(entries);
     } catch (error) {
       // 落盘的那条留着也只会在接管时把一个结尾认成打断;内存里照样撤。
-      console.warn("[ash] 撤不掉没发出去的打断记录:", error);
+      console.warn("[navi] 撤不掉没发出去的打断记录:", error);
     }
     this.entries = entries;
     this.unclaimed = this.unclaimed.filter((entry) => entry.id !== requestId);
   }
 
   /**
-   * 第 `result` 个回合结尾是不是 ash 打断出来的。是就认领掉,`abandoned`:上一代发了插话的打断,
+   * 第 `result` 个回合结尾是不是 navi 打断出来的。是就认领掉,`abandoned`:上一代发了插话的打断,
    * 正文却没来得及送进去(重启在两步之间)—— 回合确实是被打断的,但不会有插话开的下一回合了。
    */
   takeInterrupt(result: number): { abandoned: boolean } | null {
@@ -144,7 +153,7 @@ export class ClaudeControlBridge {
   private readonly pending = new Map<string, PendingControl>();
 
   request(): { requestId: string; line: string } {
-    const requestId = `ash_int_${++this.sequence}`;
+    const requestId = `${INTERRUPT_ID_PREFIX}${++this.sequence}`;
     return {
       requestId,
       line: `${JSON.stringify({

@@ -19,6 +19,7 @@
 // 来源审查这两条规则也跟第二类同一份 —— 写在同一个集合里,两个提问者自然一起认。
 import { and, eq, isNotNull, isNull, like, or, sql, type SQL } from "drizzle-orm";
 import { unionAll } from "drizzle-orm/sqlite-core";
+import { OWN_MONITOR_KIND } from "@navi/shared/monitor";
 import { db } from "./db/index.js";
 import { monitors, scheduledMessages } from "./db/schema.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
@@ -90,13 +91,13 @@ export async function unsettledMonitorResponsibility(
   const live = executor
     .select({ cls: sql<string>`'live'`.as("cls"), origin: sql<string | null>`NULL`.as("origin"), ...shape, ...noMessageSource })
     .from(monitors)
-    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "ash"), eq(monitors.status, "running")));
+    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, OWN_MONITOR_KIND), eq(monitors.status, "running")));
   // 第三类:结局已写定、结束通知还没入队的(凭证还在)。
   const handoff = executor
     .select({ cls: sql<string>`'handoff'`.as("cls"), origin: sql<string | null>`NULL`.as("origin"), ...shape, ...noMessageSource })
     .from(monitors)
     .where(and(
-      eq(monitors.taskId, taskId), eq(monitors.kind, "ash"),
+      eq(monitors.taskId, taskId), eq(monitors.kind, OWN_MONITOR_KIND),
       isNotNull(monitors.resultHandoffAt), isNull(monitors.resultsAbandonedAt),
     ));
   // 第二类(还排在待发送托盘里的)与第四类(回合里交出去、还没确认送到的)是**同一份结果**的

@@ -9,11 +9,11 @@
 // ② 走到哪一站读的是任务身上那个真游标（resolveCursor），不是假进度条，也不是从
 //    stage 猜的——尤其是人工关口那两个真按钮，判据只能是「游标停在这一道上」。
 import { InspKv, InspNone, InspRow, InspSec } from "../inspector/parts.tsx";
-import type { Task } from "@ash/shared";
-import type { WorkflowDef } from "@ash/shared/workflow";
-import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
+import type { Task } from "@navi/shared";
+import type { WorkflowDef } from "@navi/shared/workflow";
+import { STEP_LABELS, WORKSPACE_LABELS } from "@navi/shared/workflow";
 import { ArrowUUpLeft, Check, Warning } from "@phosphor-icons/react";
-import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
+import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
 import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./executorCatalog.ts";
 import type { Notify } from "../lib/notify.ts";
 import { PreviewRestartButton } from "./PreviewRestartButton.tsx";
@@ -96,7 +96,7 @@ function Stop({
         {stop.state === "current" && stop.note && <p className="wf-vnote">{stop.note}</p>}
         {gate && (
           <div className="wf-vgate">
-            <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />
+            <AcceptanceControls className="acc-stacked" task={task} onTaskUpdated={onTaskUpdated} notify={notify} />
             <p className="wf-vnote">在这儿按，和在审查页里按是同一件事。</p>
           </div>
         )}

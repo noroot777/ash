@@ -1,14 +1,59 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import {
-  api, db, dbClient, hits, now, runs, scenario, schema, settled, taskOf, tasks, until,
+  api, db, dbClient, hits, interceptStatements, now, runs, scenario, schema, settled, taskOf, tasks, until,
 } from "./checkpoint-recovery-fixture.js";
 import { advanceQueue } from "../src/scheduler.js";
-import { isQueueAdvanceCanceling, requestQueueAdvance } from "../src/queue-advance-retry.js";
+import { cancelQueueAdvance, isQueueAdvanceCanceling, requestQueueAdvance } from "../src/queue-advance-retry.js";
 import { occupyResumePrompt } from "../src/task-resume-prompt.js";
 import { id } from "../src/util.js";
 
 export async function checkpointAdvanceAdmissionCases(): Promise<void> {
+  // 停止路由先判「有没有东西可停」(stopVerdict),什么都没挂着时不进撤销那一段、不写任何东西就 409。
+  // 并发推进落在停止读完任务、判据之前:停止按读到的旧行如实 409,推进照常落库、事后补推。
+  {
+    const test = await scenario(0);
+    const queueId = id();
+    await db.insert(schema.queueItems).values({ taskId: test.taskId, queueId, position: 0, createdAt: now() });
+    // 回合被别人占着:推进只能落请求、不能当场起跑,停止的判据才确定读的是「还没有请求」那一刻。
+    assert.ok(runs.claimTurn(test.taskId, "foreign"));
+    let stopping = false;
+    let read = false;
+    let interrupted = false;
+    const restore = interceptStatements({
+      statement: async (sql, args) => {
+        if (!stopping || interrupted) return;
+        if (!read) {
+          read = /from "tasks" where/i.test(sql) && args.includes(test.taskId);
+          return;
+        }
+        interrupted = true;
+        await advanceQueue(queueId);
+        assert.ok((await taskOf(test.taskId)).queueAdvanceRequest?.id);
+      },
+    });
+    try {
+      stopping = true;
+      assert.equal((await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" })).status, 409);
+      assert.equal(interrupted, true);
+    } finally {
+      stopping = false;
+      restore();
+    }
+    const task = await taskOf(test.taskId);
+    assert.ok(task.queueAdvanceRequest?.id);
+    assert.equal(task.status, "paused");
+    assert.equal(hits(test.checkpoint), 0);
+    runs.releaseTurn(test.taskId);
+    await until("停止拒绝之后持久补推", async () => hits(test.checkpoint) === 1);
+    await settled(test.taskId);
+    assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
+    await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
+    console.log("PASS: real stop refusing on a read that predates concurrent queue advancement leaves the persisted request intact");
+  }
+
+  // 撤销那一段(cancelQueueAdvance)读任务期间,并发推进只被拦住起跑、推进责任照样落库;撤销按
+  // 自己读到的那一行判定没有可撤的,窗口一过持久补推。停止路由只在别的东西可停时才走进这一段。
   {
     const test = await scenario(0);
     const queueId = id();
@@ -31,7 +76,7 @@ export async function checkpointAdvanceAdmissionCases(): Promise<void> {
       return result;
     };
     try {
-      assert.equal((await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" })).status, 409);
+      assert.equal(await cancelQueueAdvance(test.taskId), false);
       assert.equal(interrupted, true);
       assert.ok((await taskOf(test.taskId)).queueAdvanceRequest);
     } finally {
@@ -42,7 +87,7 @@ export async function checkpointAdvanceAdmissionCases(): Promise<void> {
     await settled(test.taskId);
     assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
     await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
-    console.log("PASS: real stop returning 409 cannot discard concurrent queue advancement before it is persisted");
+    console.log("PASS: concurrent queue advancement during the stop's cancel window is persisted, not discarded");
   }
 
   {

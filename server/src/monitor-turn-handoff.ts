@@ -26,7 +26,7 @@
 //      · 那一轮收口(`settleTurnHandoffs`,在 `settleTaskStatus` 最前面调):正常收口(交卷 / 留了
 //        检查点 / 提问,续聊与旁路回合则是干净退出)**且**确认过 = 送达,销掉记号;其余(没确认、
 //        失败、被停、看门狗熔断、没交卷就退出)= 没送达,退回 pending,并记下 `turn_returned_at`;
-//      · ash 自己没了(那一轮的结算根本没跑)→ 开机与每分钟一趟的 `returnOrphanTurnHandoffs` 把记号
+//      · navi 自己没了(那一轮的结算根本没跑)→ 开机与每分钟一趟的 `returnOrphanTurnHandoffs` 把记号
 //        对不上任何接回来的回合的那几行同样退回(逐任务排在 `task:<id>` 队列上、写之前复核归属)。
 //    退回排在结算判终态**之前**,所以完成闸、终态落位的哨兵闸看得见它(没交卷的那一轮因此落成
 //    检查点暂停、随后被唤醒送达)。会被终态连坐的落位(失败、被取消)也收不走它:带着退回记号
@@ -44,8 +44,8 @@
 // 团队调度台(只认 single 任务);带着续跑交代的那几行(`checkpoint_taken` 非空 —— 它们是唤醒
 // 那一路上一次没送成的,交代的转手只有那一路会做,见 monitor-checkpoint-handoff.ts)。
 import { and, eq, exists, inArray, isNotNull, isNull, like, lte, or, sql } from "drizzle-orm";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
-import { readMonitorWake, type MonitorWakeData, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
+import { readMonitorWake, type MonitorWakeData, type MonitorWakeEvent } from "@navi/shared/monitor-wake";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, sessions, tasks } from "./db/schema.js";
@@ -229,7 +229,7 @@ export async function handMonitorResultsOnPause(
  * 一轮收口:它在回合里拿过的那几条,按它怎么收口、它收没收到结清(判据见文件头 ②)。
  *
  * 在 `settleTaskStatus` 的最前面调 —— 排在完成闸、终态哨兵闸之前,退回来的那几行它们才看得见。
- * **只把这一轮的当送达**;同一个任务上记号对不上这一轮的(前一轮的残留:结算没跑完 ash 就没了,
+ * **只把这一轮的当送达**;同一个任务上记号对不上这一轮的(前一轮的残留:结算没跑完 navi 就没了,
  * 开机那一扫又没赶上)一律按没送达退回。
  */
 export async function settleTurnHandoffs(taskId: string, token: string | null, closedNormally: boolean): Promise<void> {
@@ -311,7 +311,7 @@ async function sweepOrphans(): Promise<number> {
       const token = turnIdentity(taskId)?.token;
       const orphans = held.filter((m) => m.by !== token).map((m) => ({ id: m.id, by: m.by! }));
       if (!orphans.length) return;
-      returned += await returnTaken(taskId, orphans, "ash 重启时那一回合没能接回来");
+      returned += await returnTaken(taskId, orphans, "Navi 重启时那一回合没能接回来");
     });
   }
   return returned;

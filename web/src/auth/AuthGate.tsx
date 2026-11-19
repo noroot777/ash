@@ -2,10 +2,10 @@
 // 未登录访问会先把工作台渲染出来、再由一堆 401 把它打成一片错误提示,而用户看到的是
 // 「这个应用坏了」而不是「我该登录」。
 //
-// 自用模式下在 ash 所在的那台机器上打开,这一层**整体透明**:直接渲染 children,不多一个
+// 自用模式下在 navi 所在的那台机器上打开,这一层**整体透明**:直接渲染 children,不多一个
 // DOM 节点。从别的设备打开时先过配对那一屏(`needsAccessKey`)。
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { AuthState } from "@ash/shared";
+import type { AuthState } from "@navi/shared";
 import { authApi } from "../lib/authApi.ts";
 import { ApiError } from "../lib/apiClient.ts";
 import { bindTaskReadsOwner } from "../lib/taskReadSync.ts";
@@ -17,7 +17,7 @@ import { PairPage, dropPairCode } from "./PairPage.tsx";
 import { ProjectJoinPage } from "./ProjectJoinPage.tsx";
 import { SetupWizard } from "./SetupWizard.tsx";
 import { AuthContext } from "./authContext.ts";
-import { AshLoader } from "../brand/AshLoader.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /** 领取链接与项目加入链接走真实路径,刷新后还在(邮件/群里发的就是这条 URL)。 */
 function routeOf(pathname: string): { kind: "claim" | "join"; token: string } | null {
@@ -49,7 +49,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     } catch (e) {
       // 拿不到状态 = 服务端不可达或比前端旧。**不放行** —— 放行会让工作台带着一堆
       // 401 渲染出来,那种画面看不出成因。
-      setError(e instanceof ApiError ? e.message : "连不上 ash 服务端");
+      setError(e instanceof ApiError ? e.message : "连不上 Navi 服务端");
       // 已经有旧状态时下面那块错误屏不出来(它只认 `!state`),所以失败必须**回给
       // 调用方**:等着这一次刷新换屏的人只有它自己知道该怎么收场。
       return false;
@@ -74,7 +74,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   // 本机自用模式没有邀请这回事:领取 / 加入链接一律回工作台。领取页因此要等身份状态到了
-  // 再出(多一个 RTT),否则本机模式下会先闪一下「领取你的 ash 账号」。
+  // 再出(多一个 RTT),否则本机模式下会先闪一下「领取你的 navi 账号」。
   const ignoreRoute = route !== null && state?.localOnly === true;
   useEffect(() => {
     if (ignoreRoute) {
@@ -112,7 +112,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       );
     }
     // `role="status"` 不是装饰:这一屏只剩一行字,没有它读屏用户在这段等待里什么都听不到。
-    return waitedLong ? <div className="auth-booting" role="status"><AshLoader size={32} />正在确认身份…</div> : null;
+    return waitedLong ? <div className="auth-booting" role="status"><NaviLoader size={32} />正在确认身份…</div> : null;
   }
 
   // 排在向导之前:没认出机主的时候,连「要不要首启」都不该由这个访客来答。
@@ -122,7 +122,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       <AuthShell>
         <div className="auth-card auth-card--service">
           <h1>只接受本机访问</h1>
-          <p className="auth-note">请在 ash 所在的这台机器上直接打开。</p>
+          <p className="auth-note">请在 Navi 所在的这台机器上直接打开。</p>
         </div>
       </AuthShell>
     );

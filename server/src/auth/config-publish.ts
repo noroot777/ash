@@ -1,8 +1,8 @@
 // 一份用户配置文件的**发布事务**:读 → 拼 → 批准 → 替换,而且只替换我们读到的那一版。
 //
 // 为什么单独一个文件:这套规矩全是前后五轮审查在真机上打出来的(就地写保住 DACL / 扩展 ACL /
-// 硬链接 / 软链接目标、失败回写、写完读回来比对、STALE 重做),而 ash 现在要往**十五家 CLI**
-// 的配置里补 ash MCP 登记。一家一份「读改写」就是十五处可以漏掉其中一条的地方 —— 所以
+// 硬链接 / 软链接目标、失败回写、写完读回来比对、STALE 重做),而 navi 现在要往**十五家 CLI**
+// 的配置里补 navi MCP 登记。一家一份「读改写」就是十五处可以漏掉其中一条的地方 —— 所以
 // 格式各族只管拼内容(`mcp-registry/shapes.ts`,纯函数),碰文件的只有这一个文件。
 //
 // 注:`scripts/` 下的安装器另有一份同规矩的实现(setup 在裸 Node 上跑,导不进 TS),两边
@@ -87,12 +87,12 @@ function resolveTarget(file: string): string {
  * 回写也失败时盘上就是半截。那不只是「断电/被杀」那一档 —— 本轮审查在裸 Node 那侧实测过
  * **只有目标那个 inode 持续坏**的情形:同目录预演过得去,写活动文件一直 EIO,回写同样 EIO,
  * 活动配置留成 `{"other":{"`。所以这一档必须靠备份,不能靠「下一次起跑接住」:下一次起跑能
- * 接住的只有「读得通但没有 ash ⇒ 重新补一份」和「读不通 ⇒ 不猜、如实报给用户」。
+ * 接住的只有「读得通但没有 navi ⇒ 重新补一份」和「读不通 ⇒ 不猜、如实报给用户」。
  *
  * 所有者(uid/gid)没抄:配置在谁的目录里就该由谁这个进程写。
  */
 /** 预演产物的名字前缀。后面还要接一段随机值 —— 见 `rehearse` 的「独占创建」。 */
-const PROBE_PREFIX = ".ash-publish-probe-";
+const PROBE_PREFIX = ".navi-publish-probe-";
 
 /**
  * **动用户那份之前,先证明这份正文落得下去**:在同目录(同一个文件系统、同一份配额)写一个
@@ -139,14 +139,14 @@ function rehearse(target: string, body: string, create: boolean): string | null 
 
 
 /** 备份文件的后缀。跟安装器那份同名:同一个用途,用户只需要记住一个名字。 */
-export const BACKUP_SUFFIX = ".bak-ash-setup";
+export const BACKUP_SUFFIX = ".bak-navi-setup";
 
 /**
  * **改写已有文件之前,先留一份核对过的备份**(上一轮审查 F2 的可修部分)。
  *
  * 为什么非留不可:就地写没有原子替换,而「写出异常就回写旧正文」这条退路在**只有目标那个
  * inode 坏**的持续故障下同样失败 —— 审查在裸 Node 那侧实测过:活动配置留成 `{"other":{"`,
- * 而这条路**一份备份都没有**,用户手里什么都不剩。安装器那侧一直有 `.bak-ash-setup`,服务端
+ * 而这条路**一份备份都没有**,用户手里什么都不剩。安装器那侧一直有 `.bak-navi-setup`,服务端
  * 这条(每次起跑、每次读设置页都会走)原来没有。
  *
  * **备份也是发布产物,所以同样独占创建**(本轮审查 F2):上一版拿 `copyFileSync` 往那个固定
@@ -267,7 +267,7 @@ export async function publishFresh<T>(
 
 
 /** 这一轮读到的那一版已经不在盘上了 —— 由 `publishFresh` 接住,整条重做。 */
-const STALE = Symbol("ash-mcp-config-moved");
+const STALE = Symbol("navi-mcp-config-moved");
 
 /** 一份配置最多重做几遍。每遍都要起一次 codex,所以不能多;老是撞上就如实说没写。 */
 const PUBLISH_TRIES = 3;
@@ -312,7 +312,7 @@ const commit: Commit = (read, body) => {
   return null;
 };
 
-/** 没写成就别留一份白备份:用户看见 `.bak-ash-setup` 会以为我们动过手。只删自己建的那份。 */
+/** 没写成就别留一份白备份:用户看见 `.bak-navi-setup` 会以为我们动过手。只删自己建的那份。 */
 function dropBackup(saved: { backup: string | null; created: boolean }, why: string): string {
   if (saved.backup && saved.created) { try { rmSync(saved.backup, { force: true }); } catch { /* 尽力 */ } }
   return why;

@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { TASK_BRANCH_PREFIX } from "@navi/shared/task-branch";
 import { IS_WINDOWS } from "../src/platform.js";
+import { tsxCliPath } from "./tsx-loader.js";
 
 export const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -23,7 +25,7 @@ function killPeerGroupOnExit(peer: ChildProcess): void {
 
 export function makeRepo(path: string): string {
   execFileSync("git", ["init", "-b", "main", path]);
-  git(path, "config", "user.name", "Ash Handoff Test");
+  git(path, "config", "user.name", "Navi Handoff Test");
   git(path, "config", "user.email", "handoff@example.test");
   writeFileSync(join(path, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(path, "seed.txt"), "seed\n");
@@ -45,10 +47,19 @@ export async function startPeer(
   onProc: (proc: ChildProcess) => void,
 ): Promise<string> {
   const serverDir = join(import.meta.dirname, "..");
-  const tsxCli = join(serverDir, "..", "node_modules", "tsx", "dist", "cli.mjs");
-  const peer = spawn(process.execPath, [tsxCli, "src/index.ts"], {
+  // tsx 按包解析(见 ./tsx-loader.ts):写死 `<检出>/node_modules/tsx` 在 worktree 和 win-remote 的工作区里都不存在。
+  const peer = spawn(process.execPath, [tsxCliPath(), "src/index.ts"], {
     cwd: serverDir,
-    env: { ...process.env, ...env, PORT: "0" },
+    env: {
+      ...process.env,
+      // 对端的数据目录跟着它自己的库走。本进程的 NAVI_DATA_DIR 在 src/paths.ts 加载那一刻就从
+      // 环境里拿掉了,不显式给的话对端会落到这份检出的 data/ 上(往 data/tmp 写接力包)。
+      ...(env.NAVI_DB ? { NAVI_DATA_DIR: `${env.NAVI_DB}.data` } : {}),
+      // 对端一启动就会预热模型目录,那是在问本机真装着的 CLI(见 model-probe.ts 的开关说明)。
+      NAVI_TEST_NO_MODEL_PROBE: "1",
+      ...env,
+      PORT: "0",
+    },
     stdio: ["ignore", "pipe", "pipe"],
     // Windows 没有进程组这一说(detached 只影响控制台归属),那边靠调用方的 kill +
     // 进程退出时系统回收;POSIX 上这一位才是能杀到内层的关键。
@@ -116,10 +127,11 @@ export interface FakePeerImportCtx {
 
 /**
  * 站在真对端前面的假对端(中间人/坏网关)。ping 与 refs 本地应答,**不报身份** ——
- * 源机会把它当旧版对端,这正是这类用例想要的:验的是网络语义,不是身份核对。
+ * 源机会把它当没核过身份的对端,这正是这类用例想要的:验的是网络语义,不是身份核对。
+ * 任务分支前缀照报:它前面站的是新版对端,不报就会被当成改名之前的版本、打包前就被拦下。
  * /import 交给 `onImport` 决定:掐断、原样转发、或者篡改转发结果。
  *
- * 转发一定把 `x-ash-peer-*` 头带上:签名覆盖 method+path+body,少带一个头对端直接 401。
+ * 转发一定把 `x-navi-peer-*` 头带上:签名覆盖 method+path+body,少带一个头对端直接 401。
  * 转发代理天生会破坏「地址 = 那台机器」的直觉,而签名恰好只认身份不认地址。
  */
 export async function startFakePeer(opts: {
@@ -136,7 +148,7 @@ export async function startFakePeer(opts: {
       res.end(JSON.stringify(payload));
     };
     if (req.url?.includes("/api/handoff/ping")) {
-      json({ ok: true, service: "ash", host: opts.host, projects: [{ ...opts.project, isRepo: true }] });
+      json({ ok: true, service: "navi", host: opts.host, taskBranchPrefix: TASK_BRANCH_PREFIX, projects: [{ ...opts.project, isRepo: true }] });
       return;
     }
     if (req.url?.includes("/refs")) {
@@ -154,7 +166,7 @@ export async function startFakePeer(opts: {
             "content-type": req.headers["content-type"] ?? "application/json",
           };
           for (const [k, v] of Object.entries(req.headers)) {
-            if (k.startsWith("x-ash-peer-") && typeof v === "string") headers[k] = v;
+            if (k.startsWith("x-navi-peer-") && typeof v === "string") headers[k] = v;
           }
           const upstream = await fetch(`${opts.upstream}${req.url}`, {
             method: req.method ?? "POST",

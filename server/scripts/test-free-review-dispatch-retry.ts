@@ -25,8 +25,8 @@
 // `test-free-review-dispatch-ownership.ts`,台子是同一个。两份分开是因为单文件七百行封顶。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
-// (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。PATH 上那个立刻退出的 `codex` 桩管的是
-// 另一段 —— ash MCP 预检会去问 CLI,有了桩这份用例就跟这台机器装没装 codex 无关。
+// (`NAVI_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。PATH 上那个立刻退出的 `codex` 桩管的是
+// 另一段 —— navi MCP 预检会去问 CLI,有了桩这份用例就跟这台机器装没装 codex 无关。
 //
 // 跑：npm -w server run test:free-review-dispatch-retry
 import assert from "node:assert/strict";
@@ -109,6 +109,8 @@ try {
       releaseTurn(id, rival.held!); // 竞争者让位,但它已经把自己重排在队首,所以审查又输一次
     }
     await until("界用尽后落终态", async () => (await runRow(run.id)).status === "failed");
+    // 终态先落库、那句话后写（中间还要收这一轮挂的哨兵）：等它写出来再读时间线。
+    await until("终态那句话写进时间线", () => /审查启动失败/.test(timeline(id)));
 
     const dead = await roundOf(run.id);
     assert.equal(dead.status, "error", "界用尽了才轮到终态");
@@ -176,6 +178,8 @@ try {
     await db.update(groups).set({ paused: true }).where(eq(groups.id, "g"));
     releaseTurn(id, undefined);
     await until("撤回一次就落终态", async () => (await runRow(run.id)).status === "failed");
+    // 终态先落库、那句话后写（中间还要收这一轮挂的哨兵）：等它写出来再读时间线。
+    await until("终态那句话写进时间线", () => /审查启动失败/.test(timeline(id)));
     assert.equal((await roundOf(run.id)).status, "error", "撤回不是「轮不到我们」，不重排");
     assert.equal((await roundOf(run.id)).dispatch, null, "落终态要把意图一并了结");
     const said = timeline(id);

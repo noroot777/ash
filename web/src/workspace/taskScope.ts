@@ -1,7 +1,7 @@
-import type { TaskListItem } from "@ash/shared";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
+import type { TaskListItem } from "@navi/shared";
 import { indexWorkers, inTaskMode, workersFrom } from "../lib/taskAttention.ts";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
+import { dispatchEdges, dispatchSubtree } from "../lib/dispatchTree.ts";
 
 // 侧栏任务列表的**作用域**：只看当前项目一家，还是进「任务模式」。
 //
@@ -22,7 +22,7 @@ export type TaskScope =
 
 export type TaskScopeKind = TaskScope["kind"];
 
-export const SCOPE_STORAGE_KEY = "ash:task-scope";
+export const SCOPE_STORAGE_KEY = "navi:task-scope";
 // 注意别跟 Task["mode"]（单飞 / 团队 / 讨论）搞混：那个字段内部也叫 mode，但从不对用户
 // 露出「模式」两个字（它显示成「任务 / 团队 / 讨论」）。这里的「任务模式」说的是侧栏作用域。
 export const TASK_MODE_LABEL = "任务模式";
@@ -37,10 +37,11 @@ export { TASK_MODE_SHORTCUT_LABEL } from "./goChord.ts";
 export function scopeTasks<T extends TaskListItem>(tasks: T[], scope: TaskScope): T[] {
   if (scope.kind === "project") return tasks.filter((task) => task.projectId === scope.projectId);
   const workers = indexWorkers(tasks);
+  const edges = dispatchEdges(tasks);
   const leads = new Set<string>();
   for (const task of tasks) {
     if (task.parentId) continue;
-    if (inTaskMode(task, workersFrom(workers, task.id))) leads.add(task.id);
+    if ([task, ...dispatchSubtree(edges, task.id)].some((item) => !item.archived && inTaskMode(item, workersFrom(workers, item.id)))) leads.add(task.id);
   }
   return tasks.filter((task) => leads.has(task.parentId ?? task.id));
 }
@@ -95,7 +96,7 @@ export function resolveScopeKind(search: string, stored: TaskScopeKind | null): 
 
 export function readStoredScopeKind(): TaskScopeKind | null {
   try {
-    return normalizeScopeKind(readRenamedStorage(SCOPE_STORAGE_KEY));
+    return normalizeScopeKind(window.localStorage.getItem(SCOPE_STORAGE_KEY));
   } catch {
     return null;
   }

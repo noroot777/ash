@@ -4,13 +4,13 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { resolveAshDbFile } from "./db/path.js";
+import { resolveNaviDbFile } from "./db/path.js";
 import { monitors, regressionChecks, tasks } from "./db/schema.js";
 import {
   REGRESSION_MANIFEST_READING,
   REVIEWER_REGRESSION_CLAUSE,
   regressionManifestEntry,
-} from "@ash/shared/free-workflow";
+} from "@navi/shared/free-workflow";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { previewShell } from "./preview-shell.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -30,7 +30,7 @@ export async function prepareRegressionCommand(taskId: string, monitorId: string
   const worker = existsSync(built) ? built : fileURLToPath(new URL("./regression-worker.ts", import.meta.url));
   const loader = existsSync(built) ? [] : ["--import", pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href];
   const script = `const result=require('node:child_process').spawnSync(${JSON.stringify(process.execPath)},` +
-    `${JSON.stringify([...loader, worker, monitorId])},{stdio:'inherit',env:{...process.env,ASH_DB:${JSON.stringify(resolveAshDbFile())},ASH_DATA_DIR:${JSON.stringify(DATA_DIR)}}});process.exit(result.status??1)`;
+    `${JSON.stringify([...loader, worker, monitorId])},{stdio:'inherit',env:{...process.env,NAVI_DB:${JSON.stringify(resolveNaviDbFile())},NAVI_DATA_DIR:${JSON.stringify(DATA_DIR)}}});process.exit(result.status??1)`;
   const encoded = Buffer.from(script).toString("base64");
   await db.insert(regressionChecks).values({
     taskId, monitorId, role, command, cwd, inputIdentity: regressionInputIdentity(),
@@ -90,6 +90,6 @@ export async function regressionEvidenceReference(
   // `regression-evidence-lifecycle.ts`。正文只留读这份清单时用得上的几条判据。
   // 入口那一句（动态：路径随轮次变）和读法全文（静态判据）分开拼：每回合提醒里的这一份
   // 要不要去重，判据不一样 —— 读法正文讲过就够，入口与**本轮状态**必须跟着提醒走
-  // （两者都在 `@ash/shared/free-workflow`，去重判据在 `turn-prompt.ts`）。
+  // （两者都在 `@navi/shared/free-workflow`，去重判据在 `turn-prompt.ts`）。
   return regressionManifestEntry(path) + clause + REGRESSION_MANIFEST_READING;
 }

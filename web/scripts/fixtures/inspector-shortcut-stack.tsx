@@ -1,7 +1,7 @@
 import { StrictMode, act, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Robot } from "@phosphor-icons/react";
-import type { AgentEvent, Session } from "@ash/shared";
+import type { AgentEvent, Session } from "@navi/shared";
 import type { SessionTraceEntry } from "../../src/lib/api.ts";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { activateInspectorShortcut, hasInspectorShortcutTarget, type InspectorShortcutKey } from "../../src/inspector/shortcuts.ts";
@@ -54,7 +54,7 @@ function App() {
   </>;
 }
 
-const storageKeys = ["ash:inspector:shortcut-outer", "ash:inspector:shortcut-drawer"];
+const storageKeys = ["navi:inspector:shortcut-outer", "navi:inspector:shortcut-drawer"];
 const clearStorage = () => storageKeys.forEach((key) => window.localStorage.removeItem(key));
 clearStorage();
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

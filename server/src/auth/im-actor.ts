@@ -1,4 +1,4 @@
-// IM 通道（飞书）在进程内「以绑定的那个人的身份」调用 ash 自己的 HTTP 路由。
+// IM 通道（飞书）在进程内「以绑定的那个人的身份」调用 navi 自己的 HTTP 路由。
 //
 // 为什么走完整的路由栈而不是直接调 service 函数：鉴权、可见性、个人面这几道闸都挂在
 // `/api/*` 的中间件上（index.ts），而 `actorOf()` 取不到身份时兜底成**管理员**
@@ -23,6 +23,8 @@ import { imBindings } from "../db/schema-im.js";
 import { setActor, SINGLE_USER_ID, type Actor } from "./context.js";
 import { isMultiUser } from "./mode.js";
 import { getUser } from "./store.js";
+import { headerNameGenerations, NAVI_HEADERS } from "@navi/shared/http-headers";
+import { HUMAN_ACTION_TOKEN_HEADER } from "@navi/shared/human-action";
 
 export interface ImPrincipal {
   channel: "feishu";
@@ -42,7 +44,7 @@ const principals = new WeakMap<Request, ImPrincipal>();
 
 /** 唯一入口：造请求、登记身份、派发，一步做完。 */
 export async function dispatchAsIm(fetch: AppFetch, principal: ImPrincipal, call: ImCall): Promise<Response> {
-  const req = new Request(`http://ash.internal${call.path}`, {
+  const req = new Request(`http://navi.internal${call.path}`, {
     method: call.method,
     headers: call.body === undefined ? {} : { "content-type": "application/json" },
     body: call.body === undefined ? undefined : JSON.stringify(call.body),
@@ -91,8 +93,9 @@ export function imRouteAllowed(method: string, path: string): boolean {
 }
 
 const FORBIDDEN_HEADERS = [
-  "cookie", "authorization", "x-ash-source-task-id", "x-ash-turn-token",
-  "x-ash-direction-token", "x-ash-human-action-token",
+  "cookie", "authorization",
+  ...([NAVI_HEADERS.sourceTaskId, NAVI_HEADERS.turnToken, NAVI_HEADERS.directionToken, HUMAN_ACTION_TOKEN_HEADER] as const)
+    .flatMap((name) => headerNameGenerations(name)),
 ];
 
 /**
@@ -104,18 +107,18 @@ export async function imGate(c: Context, next: Next): Promise<Response | void | 
   if (!principal) return null;
   const path = new URL(c.req.url).pathname;
   if (!imRouteAllowed(c.req.method, path)) {
-    return c.json({ error: "这个操作不能经飞书发起，请在 ash 页面上操作" }, 403);
+    return c.json({ error: "这个操作不能经飞书发起，请在 Navi 页面上操作" }, 403);
   }
   if (FORBIDDEN_HEADERS.some((name) => c.req.header(name))) {
     return c.json({ error: "IM 通道请求不应携带其它凭证" }, 403);
   }
   const actor = await imActorFor(principal);
-  if (!actor) return c.json({ error: "飞书绑定已失效，请在 ash 网页上重新绑定" }, 403);
+  if (!actor) return c.json({ error: "飞书绑定已失效，请在 Navi 网页上重新绑定" }, 403);
   // 验收只放「照常验收」：跳过前置命令、确认未验证都是绕过用户自己设的闸，只能在网页上点。
   if (c.req.method === "POST" && /\/accept$/.test(path)) {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
     if (body && typeof body === "object" && ("gate" in body || "confirmUnverified" in body)) {
-      return c.json({ error: "跳过验收前置命令、确认未验证只能在 ash 页面上操作" }, 403);
+      return c.json({ error: "跳过验收前置命令、确认未验证只能在 Navi 页面上操作" }, 403);
     }
   }
   setActor(c, actor);

@@ -1,12 +1,12 @@
 // 提问 / 答复两个端点(从 task-run-routes.ts 按职责拆出,那边顶到 700 行上限)。
 // 语义与归属:提问状态写在 task.question(task-question.ts),答复的投递在 task-answer.ts;
 // 这里只做 HTTP 形状校验与回合/方向身份核对。
-import type { QuestionItem } from "@ash/shared";
+import type { QuestionItem } from "@navi/shared";
 import {
   MAX_QUESTION_ITEMS,
   MAX_QUESTION_OPTION_LEN,
   MAX_QUESTION_OPTIONS,
-} from "@ash/shared";
+} from "@navi/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -15,7 +15,10 @@ import { checkChoiceQuestion, choiceQuestionRejection } from "./choice-question-
 import { recurrenceBreakerArmed } from "./review-recurrence-gate.js";
 import { turnRole } from "./runs.js";
 import { answerTask } from "./task-answer.js";
-import { setTaskQuestion } from "./task-question.js";
+import { setTaskQuestion, waitSlotTaken } from "./task-question.js";
+import { activeDispatchPlan, parseDispatchPlan } from "@navi/shared/dispatch-plan";
+import { DISPATCH_PLAN_BLOCKS_ASK } from "./dispatch-plan.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 export function mountTaskQuestionRoutes(api: Hono): void {
 // 提问(对称 /pause,§Team):agent 在执行中调用,写下「我被这个问题卡住了」。
@@ -93,15 +96,19 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  const askToken = c.req.header("x-ash-turn-token");
+  // 同一时刻只有一样东西在等用户：这一回合已经摆了派活单，就不能再问（dispatch-plan-routes.ts 反过来也拦）。
+  if (activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) })) {
+    return c.json({ error: DISPATCH_PLAN_BLOCKS_ASK }, 409);
+  }
+  const askToken = requestHeader(c, NAVI_HEADERS.turnToken);
   if (r.mode !== "team" && r.activeTurnToken && askToken !== r.activeTurnToken) {
     return c.json({
       error: askToken
         ? "提问来自已结束的回合，已拒绝写入当前会话"
-        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），提问已拒绝写入",
+        : "MCP 未携带当前回合身份（执行器可能过滤了 NAVI_TURN_TOKEN），提问已拒绝写入",
     }, 409);
   }
-  const askDirection = c.req.header("x-ash-direction-token");
+  const askDirection = requestHeader(c, NAVI_HEADERS.directionToken);
   if (r.mode !== "team" && r.activeDirectionToken && askDirection !== r.activeDirectionToken) {
     return c.json({ error: askDirection
       ? "提问的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 ask_question"
@@ -125,7 +132,11 @@ api.post("/tasks/:id/ask", async (c) => {
       directionToken: r.activeDirectionToken,
     } }),
   });
-  if (!asked) return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
+  if (!asked) {
+    const latest = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (latest && waitSlotTaken(latest, false)) return c.json({ error: DISPATCH_PLAN_BLOCKS_ASK }, 409);
+    return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
+  }
   return c.json({
     asked: true,
     options: opts,
@@ -141,4 +152,5 @@ api.post("/tasks/:id/ask", async (c) => {
 // 说话时也接得住(continueTask → deliverToLead 先 interrupt 再写 stdin),跟
 // 「插话」走的是同一条路。挡住反而会让用户对着一个明明在线的调度台干等。
 api.post("/tasks/:id/answer", (c) => answerTask(c, c.req.param("id")));
+
 }

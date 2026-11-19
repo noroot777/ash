@@ -15,22 +15,23 @@
 //      exit 0 却判失败的那一轮也一样；批写失败时会话行那一笔单独补上（第 1、2 轮审查第 1 条）
 //   5'. 同一条会话重试成功以后：前一回合的原因按回合还带着（第 2 轮审查第 2 条）
 //   6. 诊断文件字段类型坏了：不抛，照退出码说（第 1 轮审查 N1）
-//   7. 接线：单飞收尾只在结局是 failed 时判，同一份既落回合、也跟着 done 播出去；单飞、duet、团队调度台
-//      三条收尾路的会话行都跟回合收口同批落
+//   7. 接线：真的跑一回合单飞收尾——只在结局是 failed 时判，同一份既落回合、也跟着 done 播出去；
+//      单飞、duet、团队调度台三条收尾路的会话行都跟回合收口同批落
 //   8. 团队调度台被接管以后：旧台晚到的会话行写入（原批、批失败后的补写、单独的更新）按持有者代次落空，
 //      不把新台那一行标成已退出、不抹掉它的恢复凭据；旧台自己的回合照落（第 3 轮审查第 2 条）
 //
 // 跑：npm -w server run test:turn-interruption
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentEvent, ServerEvent } from "@navi/shared";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-turn-interruption-"));
-process.env.ASH_DB = join(stage, "t.db");
-process.env.HARNESS_DB = process.env.ASH_DB;
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-turn-interruption-"));
+process.env.NAVI_DB = join(stage, "t.db");
+process.env.HARNESS_DB = process.env.NAVI_DB;
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 
 // 现场那份诊断原文的形状（截过）：前半句是 codex 的错误，后面夹着一段网关错误页。
 const UPSTREAM_503 = "unexpected status 503 Service Unavailable: auth_unavailable: no auth available "
@@ -247,11 +248,57 @@ try {
     assert.deepEqual(got, { reason: "执行器异常退出（exit 3）", detail: "执行器异常退出（exit 3）" }, "坏诊断当没有，照退出码说");
   }
 
-  // ── 7. 接线 ───────────────────────────────────────────────────────────────
+  // ── 7. 接线：真的跑一回合单飞收尾 ──────────────────────────────────────────
   {
+    const { consumeSingleRun } = await import("../src/single-run.js");
+    const { bus } = await import("../src/bus.js");
+    const live: ServerEvent[] = [];
+    const unsubscribe = bus.subscribe((event) => live.push(event));
+    const taskId = "wired";
+    const sessId = "wired-s";
+    const T = ["2026-11-13T13:00:00.000Z", "2026-11-13T13:01:00.000Z"];
+    await createTasks([{
+      id: taskId, projectId: "p", title: taskId, body: "test", mode: "single", status: "running",
+      agentType: "codex", executorId: null, autoTitle: false, workflowMode: "free",
+      useWorktree: false, createdAt: at, updatedAt: at,
+    }]);
+    await db.insert(sessions).values({
+      id: sessId, taskId, role: "single", agentType: "codex", executor: "codex@stub", cwd: repo,
+      cliSessionId: sessId, startedAt: T[0], turnStartedAt: T[0], activeMs: 0,
+    } as typeof sessions.$inferInsert);
+    mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
+    const turn = async (turnStart: string, steps: AgentEvent[]) => {
+      await db.update(sessions).set({ turnStartedAt: turnStart, endedAt: null, exitStatus: null }).where(eq(sessions.id, sessId));
+      const out = createWriteStream(join(RUNS_DIR, taskId, `${sessId}.md`), { flags: "a" });
+      const closed = new Promise<void>((resolve) => out.on("close", resolve));
+      await consumeSingleRun({
+        taskId, sessId, agentType: "codex",
+        ex: { model: null, reasoningEffort: null, resumeFields: () => ({}) } as never,
+        cwd: repo,
+        handle: {
+          sessionId: sessId, commandLine: "fake", kill() {},
+          events: (async function* () { for (const step of steps) yield step; })(),
+        } as never,
+        out, turnStart, cliSessionId: sessId, autoTitle: false,
+      });
+      await closed;
+    };
+    try {
+      await turn(T[0], [{ kind: "text", text: "跑到一半。\n" }, { kind: "done", exitStatus: 3 }]);
+      await turn(T[1], [{ kind: "text", text: "这次跑完了。\n" }, { kind: "done", exitStatus: 0 }]);
+    } finally {
+      unsubscribe();
+    }
+    const dones = live.flatMap((event) =>
+      event.type === "agent.event" && event.taskId === taskId && event.event.kind === "done" ? [event.event] : []);
+    const [session] = await sessionsForTask(taskId);
+    const persisted = session?.turnInterruptions?.[T[0]];
+    assert.equal(persisted?.reason, "执行器异常退出（exit 3）", "异常结束的那一回合：原因跟结局一起落在回合上");
+    assert.deepEqual(dones[0]?.interruption, persisted, "同一份跟着结尾事件播出去（直播那一路）");
+    assert.equal(session?.turnInterruptions?.[T[1]], undefined, "只在这一回合自己的结局是 failed 时判");
+    assert.equal(dones[1]?.interruption, undefined, "正常结束的那一回合，结尾事件上也不带");
+
     const run = readFileSync(new URL("../src/single-run.ts", import.meta.url), "utf8");
-    assert.match(run, /const interruption = failure && turnOutcome === "failed" \? turnInterruptionOf\(taskId, sessId, a\.turnStart, failure\) : null;/,
-      "只在这一回合自己的结局是 failed 时判（停止、引导都不判）");
     assert.match(run, /recordTurnSpan\(\{[^}]*outcome: turnOutcome,\s*interruption,\s*alongside: closeRow,\s*\}\)/,
       "跟结局一起落在回合上；会话行那一笔同批");
     assert.match(run, /const closeRow = db\s*\.update\(sessions\)/, "单飞收尾的会话行写入交给回合收口那一批");
@@ -261,8 +308,6 @@ try {
     const team = readFileSync(new URL("../src/team/session-consumer.ts", import.meta.url), "utf8");
     assert.equal(team.match(/closeOwnSessionWithTurn\(/g)?.length, 2, "团队调度台两条收尾路（回合说完、关台）同批");
     assert.equal(team.match(/updateOwnSession\(/g)?.length, 1, "只剩关台时一个回合都没攥着那一下单独写会话行");
-    assert.match(run, /const done = \{ \.\.\.doneEvent, turnOutcome, \.\.\.\(interruption \? \{ interruption \} : \{\}\) \};/,
-      "同一份跟着结尾事件播出去（直播那一路）");
   }
 
   // ── 8. 团队调度台被接管以后，旧台晚到的写 ─────────────────────────────────

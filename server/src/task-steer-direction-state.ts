@@ -16,7 +16,7 @@
 // 把它们挤进同一笔 UPDATE、共用一套 CAS，就会出现「检查点那一侧不符，于是用户的问题和 agent
 // 的完成确认也一起放弃恢复」—— 第 3 轮审查 F1-C 实测到的现场：新工作一个字没送出去，原来的
 // 安排三样同时消失。
-import type { QuestionItem } from "@ash/shared";
+import type { QuestionItem } from "@navi/shared";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -195,7 +195,7 @@ export async function clearPreviousDirectionState(
         questionItems: null,
       });
     } catch (error) {
-      console.warn(`[ash] 引导会话已清提问，但实时通知失败 ${taskId}:`, error);
+      console.warn(`[navi] 引导会话已清提问，但实时通知失败 ${taskId}:`, error);
     }
   }
   // 提问有自己的局部事件，检查点没有：清掉的 resume_prompt 只能靠整行广播告诉前端
@@ -278,7 +278,7 @@ export async function discardLateDirectionState(
         questionItems: null,
       });
     } catch (error) {
-      console.warn(`[ash] 原生引导已清迟到提问，但实时通知失败 ${taskId}:`, error);
+      console.warn(`[navi] 原生引导已清迟到提问，但实时通知失败 ${taskId}:`, error);
     }
   }
   if (late?.resumePrompt) await announceResumePrompt(taskId);
@@ -392,7 +392,7 @@ export async function restorePreviousDirectionState(
           : null,
       });
     } catch (error) {
-      console.warn(`[ash] 引导会话已恢复提问，但实时通知失败 ${taskId}:`, error);
+      console.warn(`[navi] 引导会话已恢复提问，但实时通知失败 ${taskId}:`, error);
     }
   }
   return true;

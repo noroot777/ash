@@ -15,7 +15,7 @@
 //   ③ 自带起手式的每人覆写:`(builtin_key, owner_user_id)` 是**每人一行**,按 key 查完
 //      取第一行再判归属,会在别人的行排前面时把我自己的覆写当成不存在(第 1 轮审查 P2)。
 //
-// 跑法(不设 ASH_DB 时自己开一个临时库):
+// 跑法(不设 NAVI_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-setup
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -23,8 +23,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-mu-setup-"));
-process.env.ASH_DB ||= join(stage, "mu-setup.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-mu-setup-"));
+process.env.NAVI_DB ||= join(stage, "mu-setup.db");
 requireTmpDb("test-multi-user-setup");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -374,7 +374,7 @@ const adminKey = await store.resetUserKey(adminRow.id);
   const rotated = await call("/api/auth/rotate-key", "POST", adminKey);
   assert.equal(rotated.status, 200, `本人轮换要成:${JSON.stringify(rotated.body)}`);
   const freshKey = String(rotated.body.key ?? "");
-  assert.ok(freshKey.startsWith("ash_"), "轮换要当场把新 key 交到本人手里,不是发一条链接");
+  assert.ok(freshKey.startsWith("navi_"), "轮换要当场把新 key 交到本人手里,不是发一条链接");
   assert.ok(rotated.cookie, "轮换必须补发会话 cookie,不然点完「重新生成」就把自己踢到登录页");
   assert.equal((await call("/api/users", "GET", freshKey)).status, 200, "新 key 立刻能用");
   assert.equal((await call("/api/users", "GET", adminKey)).status, 401, "旧 key 当场失效");

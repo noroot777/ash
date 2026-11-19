@@ -9,7 +9,7 @@ import { launchChrome } from "./dom-stage.mjs";
 import { resizeViewport } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
-const output = await mkdtemp(join(tmpdir(), "ash-chat-browser-"));
+const output = await mkdtemp(join(tmpdir(), "navi-chat-browser-"));
 console.log(`Chat screenshots: ${output}`);
 const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/chat-browser-fixture.ts"], {
   cwd: root, env: { ...process.env, PORT: "0" }, stdio: ["ignore", "pipe", "pipe"],
@@ -128,7 +128,7 @@ try {
   await send("@codex 请实现频道导航与任务状态卡。");
   await page.locator(".chat-task-card").getByText("运行中", { exact: false }).waitFor();
   await page.locator(".chat-task-card.is-done").waitFor();
-  await page.locator(".chat-task-card").getByText("ASH 任务 · codex").waitFor();
+  await page.locator(".chat-task-card").getByText("Navi 任务 · codex").waitFor();
   await page.screenshot({ path: `${output}/chat-desktop.png`, animations: "disabled" });
   await send("@codex 等待一下，我要测试停止。");
   await page.waitForFunction(() => document.querySelectorAll(".chat-message.is-running").length === 1);
@@ -169,21 +169,15 @@ try {
   await openComposer();
   const objective = page.locator(".composer-objective textarea");
   await objective.fill("切换聊天后，这份任务草稿仍然保留。");
-  const modeTabs = page.getByRole("tablist", { name: "任务模式" });
   assert.equal(await objective.count(), 1, "合并后只保留新版目标输入框");
   assert.equal(await page.locator(".studio-card").count(), 1);
-  assert.equal(await modeTabs.count(), 1, "新建面板只有一条模式栏");
-  // 模式栏只剩任务的三种模式；聊天、助手的入口在侧栏，不再外挂在这一栏里。
-  assert.deepEqual(await modeTabs.getByRole("tab").allInnerTexts(), ["单任务", "团队", "讨论"]);
-  for (const name of ["团队", "讨论", "单任务"]) {
-    await modeTabs.getByRole("tab", { name, exact: true }).click();
-    assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
-  }
+  // 新建只有一种任务：不再有「单任务 / 团队 / 讨论」那一排。
+  assert.equal(await page.getByRole("tablist", { name: "任务模式" }).count(), 0, "新建面板不再有模式栏");
   await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
   for (const width of [320, 390, 700, 900, 1440]) {
     await resizeViewport(page, { width, height: 1000 });
-    const tabBounds = await modeTabs.boundingBox();
-    assert(tabBounds && tabBounds.x >= 0 && tabBounds.x + tabBounds.width <= width, `${width}px 侧栏收起时模式栏不越界`);
+    const cardBounds = await page.locator(".studio-card").boundingBox();
+    assert(cardBounds && cardBounds.x >= 0 && cardBounds.x + cardBounds.width <= width, `${width}px 侧栏收起时输入卡不越界`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
   }
   await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
@@ -214,7 +208,7 @@ try {
   assert.equal(await page.locator(".task-upload-chip").count(), 1, "聊天往返保留附件且不重复");
   await openChat();
   await input.waitFor();
-  const currentRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
+  const currentRoomId = await page.evaluate(() => localStorage.getItem("navi:chat:chat-demo"));
   assert.ok(currentRoomId);
   await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${currentRoomId}`, { data: { seed: true, mode: "hold" } });
   await send("@all 请讨论这些背景资料");
@@ -247,7 +241,7 @@ try {
   await page.getByRole("button", { name: "添加成员", exact: true }).click();
   await page.getByRole("button", { name: "创建群聊", exact: true }).click();
   await input.waitFor();
-  const summaryRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
+  const summaryRoomId = await page.evaluate(() => localStorage.getItem("navi:chat:chat-demo"));
   await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${summaryRoomId}`, { data: { seed: true, mode: "prefixed" } });
   await send("@codex 请给建议");
   await page.getByRole("status").filter({ hasText: "较早历史已整理为共享摘要" }).waitFor();
@@ -299,7 +293,7 @@ try {
   for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "添加成员", exact: true }).click();
   await page.getByRole("button", { name: "创建群聊", exact: true }).click();
   await input.waitFor();
-  const stopRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
+  const stopRoomId = await page.evaluate(() => localStorage.getItem("navi:chat:chat-demo"));
   for (const clear of [false, true]) {
     await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${stopRoomId}`, { data: { seed: true, count: 65, mode: "hold" } });
     await send(`@all 前台整理期间${clear ? "清空" : "停止"}`);

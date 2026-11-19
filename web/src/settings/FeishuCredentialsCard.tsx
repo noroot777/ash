@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { FeishuStatus, ImDomain } from "@ash/shared";
+import type { FeishuStatus, ImDomain } from "@navi/shared";
 import { Button, PillTabs } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -137,7 +137,7 @@ export function FeishuCredentialsCard({ status, onStatus, notify }: {
           <span>
             {config
               ? `上次保存：${localeDateTime(config.updatedAt, "zh-CN")}。Secret 存进去就取不回来，只能换一把；保存后会立刻断开重连。`
-              : "Secret 存进去就取不回来，只能换一把。保存后 ash 立刻去连飞书，等上面的状态变成「已连接」再去后台订阅事件。"}
+              : "Secret 存进去就取不回来，只能换一把。保存后 Navi 立刻去连飞书，等上面的状态变成「已连接」再去后台订阅事件。"}
           </span>
           <Button variant="primary" disabled={!canSave} onClick={() => void save()}>
             {busy ? "保存中…" : "保存凭证"}

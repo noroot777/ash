@@ -1,5 +1,5 @@
 /* 任务详情的外壳：头部那一行、主体两栏布局、右侧 Inspector、队列抽屉与确认框。
-   会话流在 task-conversation.css，回复框与派生面板在 task-reply.css，执行过程在 execution-trace.css。 */
+   会话流在 task-conversation.css，回复框在 task-reply.css，执行过程在 execution-trace.css。 */
 .task-detail {
   /* 子智能体执行详情那个左侧抽屉（side-drawer.css）以这一层为定位基准：它只盖住中间
      那一栏，右侧 Inspector 照样看得见、点得到。 */
@@ -12,7 +12,7 @@
 }
 
 /* 头部一行：左边说「这是哪个任务」（类型、标题、来源、图钉），右边只有图标：轮到你的那一步、
-   验收的章、更多、面板开关（docs/ui-ux-audit head-1、head-2）。 */
+   验收的章、更多、面板开关。 */
 .task-detail-header {
   --task-header-gap: 6px;
   position: relative;
@@ -33,22 +33,6 @@
 /* 类型、来源：各一个灰图标，名字在提示里 */
 .task-head-glyph { display: inline-grid; width: 20px; height: 24px; flex: none; place-items: center; color: var(--faint); }
 .task-head-source.ui-icon-button { color: var(--faint); }
-
-.task-plan-mode-notice {
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 12px;
-  border-bottom: 0.5px solid var(--line);
-  padding: 8px 14px;
-  background: var(--accent-soft);
-  color: var(--muted);
-  font-size: var(--t-xs);
-  line-height: 1.5;
-}
-.task-plan-mode-notice strong { color: var(--accent); }
-.task-plan-mode-notice code { color: var(--ink); }
 
 /* 标题平时就是一行字，指上去或点进去才看得出能改。宽度跟着字走（.task-title-sizer 用一份看不见
    的副本撑出宽度）——来源和图钉紧跟在标题后面，不是甩在这一行的另一头；放不下时自己缩、打省略号。 */

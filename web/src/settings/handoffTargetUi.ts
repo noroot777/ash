@@ -1,10 +1,10 @@
 // 接力目标机行的公共展示逻辑。自用模式那份清单(HandoffSettings)和多人模式的按人
 // 清单(UserHandoffTargets)长得一样、判据也一样,只是存储位置不同 —— 判据抄两份的话,
 // 「对方已接受 / 等待对方接受」这类文案迟早在一边先漂。
-import type { HandoffApprovalResult } from "@ash/shared";
+import type { HandoffApprovalResult } from "@navi/shared";
 
 export const HANDOFF_URL_RE = /^https?:\/\/\S+$/;
-export const HANDOFF_PEERS_CHANGED_EVENT = "ash:handoff-peers-changed";
+export const HANDOFF_PEERS_CHANGED_EVENT = "navi:handoff-peers-changed";
 
 export const normalizeTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
 

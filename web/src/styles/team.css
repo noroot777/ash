@@ -16,10 +16,6 @@
 .team-header-menu > div > button:hover { background: var(--raised); color: var(--ink); }
 .team-header-menu > div > button.is-danger { color: var(--red); }
 .team-header-menu > div > span { display: block; height: 1px; margin: 4px 2px; background: var(--line); }
-/* 不再给这层限高 + 滚动：提问卡自己把题干区限在 44vh 并让头尾常驻，
-   外面再套一层滚动只会把「发送答复」滚出视野。 */
-.team-lead-question { flex: 0 0 auto; border-bottom: .5px solid var(--line); padding: 0 16px 8px; }
-.team-lead-question .task-question-card { max-width: none; margin: 10px 0 0; }
 .team-halt-notice { display: flex; min-height: 35px; flex: 0 0 auto; align-items: center; gap: 8px; border-bottom: 1px solid color-mix(in oklab, var(--amber) 24%, var(--line)); background: color-mix(in oklab, var(--amber) 7%, var(--panel)); padding: 6px 16px; color: var(--muted); font-size: var(--t-xs); }
 .team-halt-notice b { color: color-mix(in oklab, var(--amber) 72%, var(--ink)); font-size: var(--t-xs); }
 .team-halt-notice small { margin-left: auto; color: var(--faint); }
@@ -154,7 +150,7 @@
 .team-reply-shell > p { margin: 0 0 5px; color: var(--red); font-size: var(--t-xs); }
 /* position:relative 同时给顶边那条拖动条当锚点（.task-reply-resize，见 task-reply.css）。 */
 .team-reply-box { position: relative; overflow: hidden; border: 1px solid var(--line2); border-radius: 11px; background: var(--panel); box-shadow: var(--surface-shadow); }
-/* 高度跟着输入行数走,拖过之后照抄顶边拖动条定的高度——跟普通任务回复框同一套
+/* 高度跟着输入行数走,顶边拖动条拖出来的高度只当下限——跟普通任务回复框同一套
    (只有 lib/useAutoGrowTextarea.ts 一个写者,所以原生右下角把手必须关掉:两套都往
    style.height 上写会打架)。这里不设 max-height:那会把用户能拖到多高一起限死。 */
 .team-reply-box textarea { display: block; width: 100%; min-height: 44px; resize: none; border: 0; background: transparent; padding: 9px 11px 2px; color: var(--ink); font-size: 12px; }

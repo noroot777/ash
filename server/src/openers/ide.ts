@@ -194,8 +194,8 @@ function windowsKind(path: string): "exec" | "winshell" {
  * `caret^x`、`中文目录` 等目录名,经 `.cmd` 包装器和原生 `.exe` 各走一遍,启动器收到的都是
  * 原样完整路径,没有额外命令被执行。用例在 `server/scripts/test-open-in-ide.ts` 顶部有记。
  */
-export const WIN_LAUNCHER_ENV = "ASH_IDE_LAUNCHER";
-export const WIN_TARGET_ENV = "ASH_IDE_TARGET";
+export const WIN_LAUNCHER_ENV = "NAVI_IDE_LAUNCHER";
+export const WIN_TARGET_ENV = "NAVI_IDE_TARGET";
 
 /**
  * 放进那对双引号之前,先把**紧挨着闭合引号的那串反斜杠加倍**。
@@ -298,7 +298,7 @@ export function launchPlan(kind: LaunchKind, target: string, absPath: string): L
  *  · 等到窗口尽头还活着 → `launching`,**绝不 kill**:用户刚打开的编辑器不能被这条
  *    判据杀掉,但也不能冒充成功。
  *
- * `stdio:"ignore"` 保留着:管道会把它绑回服务端,重启 ash 就会连它一起带走。
+ * `stdio:"ignore"` 保留着:管道会把它绑回服务端,重启 navi 就会连它一起带走。
  */
 function launch(plan: LaunchPlan, name: string): Promise<LaunchStatus> {
   return new Promise((resolve, reject) => {

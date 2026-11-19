@@ -3,9 +3,12 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-plan-")));
-process.env.ASH_RUNS_DIR = join(root, "execution", "data", "runs");
+const root = realpathSync(mkdtempSync(join(tmpdir(), "navi-gate-plan-")));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.NAVI_DB = join(root, "navi-test.db");
+process.env.NAVI_RUNS_DIR = join(root, "execution", "data", "runs");
 const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, verifyGateSnapshot } =
   await import("../src/accept-gate-source.js");
 const { resolutionInputs } = await import("../src/accept-gate-resolution.js");
@@ -74,7 +77,7 @@ try {
     assert.match(String(error), /无法证明隔离/);
     assert.ok(String(error).includes(join(host, "node_modules")));
     assert.match(String(error), /安装提供 plain-consumer 的依赖/);
-    assert.match(String(error), /ASH_RUNS_DIR/);
+    assert.match(String(error), /NAVI_RUNS_DIR/);
     // 出路必须包含「去那棵树所属的检出里重装/清理」这一条：本次提交删掉过依赖的场合，另两条出路
     // 分别是「把刚删掉的装回来」和「改一个全局目录配置」，都不是这次改动该干的事。
     assert.match(String(error), /npm install \/ npm prune/);
@@ -348,9 +351,9 @@ try {
   assert.equal(probe(movedTarget, "own-alias"), "MOVED_NEW");
 
   const identityHost = project("identity-A", { workspaces: ["packages/*"] });
-  ownPackage(identityHost, "packages/mcp", "ASH_EXTERNAL");
+  ownPackage(identityHost, "packages/mcp", "NAVI_EXTERNAL");
   const hostPackage = manifest(join(identityHost, "packages/mcp"));
-  hostPackage.name = "@ash/mcp";
+  hostPackage.name = "@navi/mcp";
   save(join(identityHost, "packages/mcp/package.json"), JSON.stringify(hostPackage));
   save(join(identityHost, "loose/cli.mjs"), 'console.log("ORPHAN_SOURCE");\n');
   install(identityHost);
@@ -370,7 +373,7 @@ try {
     if (installed) {
       ownPackage(independent, "packages/mcp", "B_CERTIFIED");
       const independentPackage = manifest(join(independent, "packages/mcp"));
-      independentPackage.name = "@ash/mcp";
+      independentPackage.name = "@navi/mcp";
       save(join(independent, "packages/mcp/package.json"), JSON.stringify(independentPackage));
       install(independent);
     }
@@ -380,7 +383,7 @@ try {
     const independentTarget = join(identityHost, "data", "runs", `foreign-${installed}.source`);
     const independentSource = await readGateSource(independent, independentTarget);
     await createGateSnapshot(independent, independentTarget, independentSource);
-    assert.equal(probe(independentTarget, "@ash/mcp"), installed ? "B_CERTIFIED" : "ASH_EXTERNAL");
+    assert.equal(probe(independentTarget, "@navi/mcp"), installed ? "B_CERTIFIED" : "NAVI_EXTERNAL");
     assert.equal(await verifyGateSnapshot(independentTarget, independentSource), true);
     assert.equal(lstatSync(orphanCommand).isSymbolicLink(), true);
   }
@@ -403,10 +406,10 @@ try {
   rmSync(orphanCommand);
   const garbageTarget = join(identityHost, "data", "runs", "garbage.source");
   await createGateSnapshot(identityTask, garbageTarget, await readGateSource(identityTask, garbageTarget));
-  assert.equal(probe(garbageTarget, "@ash/mcp"), "TASK_CERTIFIED");
-  assert.equal(realpathSync(join(garbageTarget, "node_modules", "@ash", "mcp")), join(garbageTarget, "packages", "mcp"));
+  assert.equal(probe(garbageTarget, "@navi/mcp"), "TASK_CERTIFIED");
+  assert.equal(realpathSync(join(garbageTarget, "node_modules", "@navi", "mcp")), join(garbageTarget, "packages", "mcp"));
   save(join(identityHost, "packages/mcp/index.mjs"), 'export const value = "MAIN_MUTATED";\n');
-  assert.equal(probe(garbageTarget, "@ash/mcp"), "TASK_CERTIFIED");
+  assert.equal(probe(garbageTarget, "@navi/mcp"), "TASK_CERTIFIED");
 
   const memoRoot = join(root, "memo");
   for (let index = 0; index < 48; index++) {
@@ -526,6 +529,6 @@ try {
   } else console.log("accept-gate-plan: POSIX unreadable-directory fixture skipped on Windows (no ACL changes)");
   console.log("accept-gate-plan: post-binding consumers, non-destructive remedies, nested repositories, unknown metadata, project identity, per-path read counts and prior provenance cases passed");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
   console.log("accept-gate-plan: cleanup=true");
 }

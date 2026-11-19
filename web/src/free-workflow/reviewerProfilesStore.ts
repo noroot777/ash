@@ -18,7 +18,7 @@
 //  · **已知删除不许倒退**。删成功就记一条墓碑，之后任何来源（迟到的 GET、某个闭包里捕获
 //    的旧清单）给出的清单都先过一遍墓碑过滤。只有「写代次比墓碑更新的读」才能拆掉它 ——
 //    否则同一个 id 被两条路径各写一次，顺序由网络决定。
-import type { ReviewerProfile } from "@ash/shared";
+import type { ReviewerProfile } from "@navi/shared";
 import { api } from "../lib/api.ts";
 
 /** 订阅期间的轮询间隔。只在有人订阅（= 某个对话框开着）时跑，关掉就停。 */
@@ -60,7 +60,9 @@ function applyTombstones(list: ReviewerProfile[], gen: number): ReviewerProfile[
 function same(current: ReviewerProfile[] | null, next: ReviewerProfile[]): boolean {
   if (!current || current.length !== next.length) return false;
   // updatedAt 跟着每一次 PATCH 走，当版本号用。
-  return current.every((item, index) => item.id === next[index].id && item.updatedAt === next[index].updatedAt);
+  // 默认那一位另比：设默认不动 updatedAt（列表按它排，点一下星标不该让这一行跳到最前）。
+  return current.every((item, index) => item.id === next[index].id && item.updatedAt === next[index].updatedAt
+    && item.isDefault === next[index].isDefault);
 }
 
 function commit(list: ReviewerProfile[], gen: number) {
@@ -132,6 +134,15 @@ export const reviewerProfilesStore = {
     };
   },
 
+  /**
+   * 只听变化、不轮询：派出去那几处「谁来审」的小胶囊挂在页面上的时间可以很长（回复框顶上那一行），
+   * 跟着轮询就是一直每 4 秒读一次。它们挂上时读一次、窗口回到前台再读一次（useReviewerList.ts）。
+   */
+  listen: (listener: (source: ReviewerListChange) => void): (() => void) => {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  },
+
   /** 立刻读一次权威清单（对话框初始化、提交前校验都走它）。 */
   read,
 
@@ -148,6 +159,15 @@ export const reviewerProfilesStore = {
     const created = await api.createReviewerProfile(payload);
     afterWrite((current) => [created, ...current.filter((item) => item.id !== created.id)]);
     return created;
+  },
+
+  /** 设 / 取消默认审查者：每人至多一位，设了这一位、原来那位就不是了（服务端同一笔，reviewer-profiles.ts）。 */
+  setDefault: async (profileId: string, on: boolean): Promise<ReviewerProfile> => {
+    const updated = await api.patchReviewerProfile(profileId, { isDefault: on });
+    afterWrite((current) => current.map((item) => (
+      item.id === updated.id ? updated : on && item.isDefault ? { ...item, isDefault: false } : item
+    )));
+    return updated;
   },
 
   update: async (

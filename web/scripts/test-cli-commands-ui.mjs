@@ -9,13 +9,14 @@ import { fileURLToPath } from "node:url";
 import { launchChrome } from "./dom-stage.mjs";
 import { waitUntil } from "./wait-until.mjs";
 import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi, seedGoalRecoveryTranscripts } from "./cli-goal-recovery-ui.mjs";
+import { clarifyPlanUi, implementPlanUi } from "./cli-plan-ui.mjs";
 
-const root = await mkdtemp(join(tmpdir(), "ash-cli-ui-"));
+const root = await mkdtemp(join(tmpdir(), "navi-cli-ui-"));
 const workspace = join(root, "workspace");
-const screenshots = process.env.ASH_CLI_SCREENSHOTS || join(root, "screenshots");
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const screenshots = process.env.NAVI_CLI_SCREENSHOTS || join(root, "screenshots");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { db, dbClient, ensureSchema } = await import("../../server/dist/db/index.js");
 const { appSettings, projects, tasks, agents, sessions, groups, queueItems } = await import("../../server/dist/db/schema.js");
 await ensureSchema();
@@ -69,11 +70,11 @@ const boot = `
   const { ClaudeExecutor } = await import("./server/dist/executors/claude.js");
   const { CodexNativeCommands } = await import("./server/dist/executors/codex-native-commands.js");
   function fixture(options) {
-    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, turnToken: options.env.ASH_TURN_TOKEN, sessionId: options.sessionId, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
-    const sessionId = (options.cliCommand?.name === "fork" ? "fork-" : "") + (options.sessionId || "ui-" + options.env.ASH_TASK_ID);
+    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.NAVI_TASK_ID, turnToken: options.env.NAVI_TURN_TOKEN, sessionId: options.sessionId, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
+    const sessionId = (options.cliCommand?.name === "fork" ? "fork-" : "") + (options.sessionId || "ui-" + options.env.NAVI_TASK_ID);
     let goal = options.cliState?.goal ? { ...options.cliState.goal, status: "budgetLimited" } : null;
-    const snapshotMismatch = options.env.ASH_TASK_ID.startsWith("goal-snapshot-");
-    if (snapshotMismatch) goal = options.env.ASH_TASK_ID.endsWith("missing") ? null : { objective: "另一个原生目标", status: "active", tokenBudget: 300, tokensUsed: 12 };
+    const snapshotMismatch = options.env.NAVI_TASK_ID.startsWith("goal-snapshot-");
+    if (snapshotMismatch) goal = options.env.NAVI_TASK_ID.endsWith("missing") ? null : { objective: "另一个原生目标", status: "active", tokenBudget: 300, tokensUsed: 12 };
     const goalStarted = !snapshotMismatch && !!goal;
     const liveGoal = goal?.objective === "等待实时目标控制";
     if (liveGoal) goal.status = "active";
@@ -92,7 +93,7 @@ const boot = `
     } });
     return {
       sessionId, cliCommand: options.cliCommand, commandLine: "UI fixture; no CLI or model request",
-      goal: liveGoal && options.env.ASH_TASK_ID === "live-claude-goal" ? undefined : () => snapshotMismatch ? native.goal : goal, goalStarted: () => goalStarted,
+      goal: liveGoal && options.env.NAVI_TASK_ID === "live-claude-goal" ? undefined : () => snapshotMismatch ? native.goal : goal, goalStarted: () => goalStarted,
       command: (command) => native.control(command),
       kill() { finish(); },
       events: (async function* () {
@@ -104,7 +105,7 @@ const boot = `
           yield { kind: "done", exitStatus: 0 };
           return;
         }
-        if (options.env.ASH_TASK_ID === "ordinary-ui-task" && options.sessionId) {
+        if (options.env.NAVI_TASK_ID === "ordinary-ui-task" && options.sessionId) {
           native.notification("thread/goal/cleared", { threadId: sessionId });
         }
         for (const event of notices) yield event;
@@ -112,9 +113,20 @@ const boot = `
         if (options.cliCommand?.name === "fork" || options.cliCommand?.name === "goal" && !goal) {
           text = await native.control(options.cliCommand);
         }
-        if (liveGoal) text += "；测试回合 " + options.env.ASH_TURN_TOKEN;
-        if (options.env.ASH_TASK_ID === "ordinary-ui-task") text = "普通回合：" + options.env.ASH_TURN_TOKEN;
+        if (liveGoal) text += "；测试回合 " + options.env.NAVI_TURN_TOKEN;
+        if (options.env.NAVI_TASK_ID === "ordinary-ui-task") text = "普通回合：" + options.env.NAVI_TURN_TOKEN;
         yield { kind: "text", text };
+        if (options.cliCommand?.name === "plan" && options.cliCommand.args === "clarify-ui") {
+          yield { kind: "userInput", questions: [
+            { question: "什么时候重置？", options: ["每周一"] },
+            { question: "什么时候生效？", options: ["立即生效"] },
+          ] };
+        } else if (options.cliState?.plan) {
+          const id = "plan-" + options.env.NAVI_TURN_TOKEN;
+          yield { kind: "plan", id, text: "", status: "streaming" };
+          yield { kind: "plan", id, text: "尚未定稿", status: "streaming", delta: true };
+          yield { kind: "plan", id, text: "# 计划 UI 验证\\n\\n| 步骤 | 结果 |\\n| --- | --- |\\n| 实施 | 保留作用域 |", status: "complete" };
+        }
         if (liveGoal) await interrupted;
         yield { kind: "done", exitStatus: 0 };
       })(),
@@ -126,7 +138,7 @@ const boot = `
     const prepareResume = Executor.prototype.prepareResume;
     Executor.prototype.prepareResume = async function(options) {
       await prepareResume?.call(this, options);
-      if (/^live-(codex|claude)-goal$/.test(options.env?.ASH_TASK_ID ?? "")) {
+      if (/^live-(codex|claude)-goal$/.test(options.env?.NAVI_TASK_ID ?? "")) {
         // 夹具模拟「续跑前的准备有点慢」。后面每一步都按事实等（调用记录、页面文案、任务空闲），
         // 没有断言依赖它恰好是 1 秒，负载下更慢也只是晚点到。
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -135,7 +147,7 @@ const boot = `
   }
   await import("./server/dist/index.js");
 `;
-const backend = spawn(process.execPath, ["--input-type=module", "-e", boot], { cwd: repo, env: { ...process.env, ASH_UPLOADS_DIR: join(root, "uploads"), ASH_PREVIEW: "1", ASH_SEED_FROM: "", PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
+const backend = spawn(process.execPath, ["--input-type=module", "-e", boot], { cwd: repo, env: { ...process.env, NAVI_UPLOADS_DIR: join(root, "uploads"), NAVI_PREVIEW: "1", NAVI_SEED_FROM: "", PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
 let log = "";
 backend.stdout.on("data", (chunk) => { log += chunk; });
 backend.stderr.on("data", (chunk) => { log += chunk; });
@@ -165,7 +177,7 @@ try {
   const response = page.waitForResponse((value) => value.url().endsWith("/tasks/claude-ui-task/reply") && value.request().method() === "POST");
   await page.getByRole("button", { name: "发送回复", exact: true }).click();
   assert.equal((await (await response).json()).command, true);
-  await page.getByText(/这是 ash 保存的目标快照/).first().waitFor();
+  await page.getByText(/这是 Navi 保存的目标快照/).first().waitFor();
   // 原生命令不落成「你说的话」。任务原始需求自 eab6cf39 起是会话的第一颗你的气泡（data-conversation-input="requirement"），
   // 不算这条命令的回显，排除在外。
   assert.equal(await page.locator(".task-message--user:not(:has([data-conversation-input=\"requirement\"]))").count(), 0);
@@ -173,7 +185,7 @@ try {
   assert.equal(unchanged.status, "done");
   assert.equal(unchanged.stage, "accepted");
   await page.reload();
-  await page.getByText(/这是 ash 保存的目标快照/).first().waitFor();
+  await page.getByText(/这是 Navi 保存的目标快照/).first().waitFor();
   await page.screenshot({ path: join(screenshots, "claude-goal-status.png"), fullPage: true });
 
   await page.goto(`${base}/?project=cli-ui&task=codex-ui-task`);
@@ -192,13 +204,25 @@ try {
     const completed = recorded.some((session) => session.endedAt && session.endedAt !== previousEnds.get(session.id));
     return completed && !["running", "queued"].includes(task.status) && task;
   }, { interval: 50, message: `任务 ${taskId} 跑完这一回合、回到空闲（task remained busy）` });
+  // 计划模式下的回合以一份定稿计划收尾（上面的假执行器照此产出），「实施此计划？」随即占住回复框
+  // （PlanReadyCard）。接着要用回复框的步骤先把它收起；收起按这一份计划记着，刷新后仍收着。
+  const settlePlanCard = async (task) => {
+    if (!page.url().includes(`task=${task.id}`)) return task;
+    const invocation = await lastInvocation();
+    const planned = invocation.taskId === task.id && invocation.cliState?.plan === true && invocation.cliCommand?.args !== "clarify-ui";
+    if (!planned || !task.codexPlanMode || task.question || !task.codexPlanScopes.some((scope) => scope.executorId === invocation.cliState.profileId)) return task;
+    const collapse = page.getByRole("button", { name: "收起，先看计划", exact: true });
+    await collapse.click();
+    await page.getByRole("textbox", { name: "回复任务" }).waitFor();
+    return task;
+  };
   const sendCodex = async (text) => {
     const previousEnds = await sessionEnds("codex-ui-task");
     await codexReply.fill(`${text} `);
     const replied = page.waitForResponse((value) => value.url().endsWith("/tasks/codex-ui-task/reply") && value.request().method() === "POST");
     await page.getByRole("button", { name: "发送回复", exact: true }).click();
     assert.equal((await replied).status(), 202);
-    return idleTask("codex-ui-task", previousEnds);
+    return settlePlanCard(await idleTask("codex-ui-task", previousEnds));
   };
   const planNotice = page.getByRole("status", { name: "Codex 计划模式" });
   const replyAs = async (text, agent, executorId, taskId = "codex-ui-task") => {
@@ -207,7 +231,7 @@ try {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, agent, executorId }),
     });
     assert.equal(response.status, 202);
-    return idleTask(taskId, previousEnds);
+    return settlePlanCard(await idleTask(taskId, previousEnds));
   };
   const lastInvocation = async () => JSON.parse((await readFile(traceFile, "utf8")).trim().split("\n").at(-1));
 
@@ -255,6 +279,9 @@ try {
   await page.screenshot({ path: join(screenshots, "plan-mode-reloaded.png"), fullPage: true });
   assert.equal((await sendCodex("继续拆解方案")).codexPlanMode, true);
   await page.getByText("测试执行器：只讨论计划", { exact: true }).first().waitFor();
+  await clarifyPlanUi({ page, base, sendCodex, sessionEnds, idleTask, lastInvocation, screenshots });
+  await implementPlanUi({ page, base, sessionEnds, idleTask, lastInvocation, screenshots });
+  await sendCodex("/plan");
   assert.equal((await sendCodex("/plan off")).codexPlanMode, false);
   await planNotice.waitFor({ state: "hidden" });
   await page.reload();
@@ -272,7 +299,7 @@ try {
     assert.notEqual((await lastInvocation()).cliState.plan, true);
     await page.reload();
     await planNotice.waitFor();
-    assert.match(await planNotice.innerText(), /codex@验证（任务归属人）/);
+    assert.match(await planNotice.innerText(), /codex@验证/);
   }
   assert.equal((await sendCodex("照方案动手改吧")).codexPlanMode, true);
   assert.equal((await lastInvocation()).cliState.plan, true);
@@ -313,7 +340,7 @@ try {
   assert.equal(claudeStandingTask.codexPlanMode, true);
   assert.equal(claudeStandingTask.codexPlanScopes.length, 2);
   await planNotice.waitFor();
-  assert.match(await planNotice.innerText(), /codex@验证（任务归属人）.*codex@验证备用（任务归属人）/);
+  assert.match(await planNotice.innerText(), /codex@验证.*codex@验证备用/);
   await page.reload();
   await page.getByRole("textbox", { name: "回复任务" }).waitFor();
   await planNotice.waitFor();
@@ -321,16 +348,19 @@ try {
   const summonCodex = async (text) => {
     await codexReply.fill(`${text} @codex`);
     await page.getByRole("option", { name: /@codex/ }).click();
-    await page.getByRole("listbox", { name: "可选模型" }).getByRole("option").first().click();
     assert.match(await agentPicker.getAttribute("aria-label"), /^智能体：codex/);
+    // 叫上人之后不再接着弹选模型：要定执行器和模型，点胶囊上被叫那个人的模型段（改的只是这一次）。
+    await page.getByRole("button", { name: /^模型：/ }).click();
+    await page.getByRole("listbox", { name: "可选模型" }).getByRole("option").first().click();
+    if (await page.getByRole("button", { name: /^智能水平/, expanded: true }).count()) await page.keyboard.press("Escape");
     const previousEnds = await sessionEnds("codex-ui-task");
     const response = page.waitForResponse((value) => value.url().endsWith("/tasks/codex-ui-task/reply") && value.request().method() === "POST");
-    await page.getByRole("button", { name: "发送回复", exact: true }).click();
+    await page.getByRole("button", { name: "问 codex", exact: true }).click();
     const replied = await response;
     assert.equal(replied.status(), 202);
     assert.equal(replied.request().postDataJSON().agent, "codex");
     assert.equal(replied.request().postDataJSON().executorId, "codex-ui");
-    const task = await idleTask("codex-ui-task", previousEnds);
+    const task = await settlePlanCard(await idleTask("codex-ui-task", previousEnds));
     assert.equal(task.agentType, claudeStandingTask.agentType);
     assert.equal(task.executorId, claudeStandingTask.executorId);
     return task;
@@ -377,7 +407,7 @@ try {
   await page.goto(`${base}/?project=cli-ui&task=fresh-claude-plan-task`);
   await page.getByRole("textbox", { name: "回复任务" }).waitFor();
   await planNotice.waitFor();
-  assert.match(await planNotice.innerText(), /codex@验证（任务归属人）.*codex@验证备用（任务归属人）/);
+  assert.match(await planNotice.innerText(), /codex@验证.*codex@验证备用/);
   const beforeClaudeRun = await sessionEnds("fresh-claude-plan-task");
   const claudeRunResponse = page.waitForResponse((value) => value.url().endsWith("/tasks/fresh-claude-plan-task/run") && value.request().method() === "POST");
   await page.getByRole("button", { name: "运行", exact: true }).click();
@@ -573,11 +603,6 @@ try {
   const objective = page.getByRole("textbox", { name: "任务目标" });
   await objective.fill("/go");
   await page.getByRole("option", { name: /^\/goal\b/ }).waitFor();
-  await page.getByRole("tab", { name: "团队", exact: true }).click();
-  await objective.fill("/");
-  await page.getByRole("listbox").waitFor();
-  assert.equal(await page.getByRole("option", { name: /^\/goal\b/ }).count(), 0);
-  await page.getByRole("tab", { name: "单任务", exact: true }).click();
   const composerAgentPicker = page.getByRole("button", { name: /^智能体：/ });
   await composerAgentPicker.click();
   await page.getByRole("option", { name: /@claude/ }).click();
@@ -589,9 +614,9 @@ try {
   await page.getByRole("button", { name: "创建并运行", exact: true }).click();
   const rejected = await invalidCreation;
   assert.equal(rejected.status(), 400);
-  assert.match((await rejected.json()).error, /ash 通道不支持 \/plan/);
-  await page.getByText("当前执行器的 ash 通道不支持 /plan", { exact: true }).waitFor();
-  await page.locator(".workspace-toast.is-visible").filter({ hasText: "当前执行器的 ash 通道不支持 /plan" }).waitFor();
+  assert.match((await rejected.json()).error, /Navi 通道不支持 \/plan/);
+  await page.getByText("当前执行器的 Navi 通道不支持 /plan", { exact: true }).waitFor();
+  await page.locator(".workspace-toast.is-visible").filter({ hasText: "当前执行器的 Navi 通道不支持 /plan" }).waitFor();
   assert.equal(await objective.inputValue(), "/plan 怎么做这个功能");
   assert.equal((await (await fetch(`${base}/api/tasks`)).json()).length, beforeCreation.length);
   await page.screenshot({ path: join(screenshots, "cli-creation-validation.png"), fullPage: true, animations: "disabled" });
@@ -604,7 +629,7 @@ try {
   for (const [taskId, reason] of [
     ["edited-cli-task", /这一轮没能起跑：\/status 不接受参数/],
     ["legacy-cli-task", /这一轮没能起跑：\/usage 不接受参数/],
-    ["legacy-claude-task", /这一轮没能起跑：当前执行器的 ash 通道不支持 \/plan/],
+    ["legacy-claude-task", /这一轮没能起跑：当前执行器的 Navi 通道不支持 \/plan/],
   ]) {
     await page.goto(`${base}/?project=cli-ui&task=${taskId}`);
     const runResponse = page.waitForResponse((response) => response.url().endsWith(`/tasks/${taskId}/run`) && response.request().method() === "POST");

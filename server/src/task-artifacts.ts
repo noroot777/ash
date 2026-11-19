@@ -38,7 +38,7 @@ import { windowHit } from "./task-artifact-windows.js";
 //       - 写文件工具亲手写下、磁盘上这份一字未变（`task-artifact-direct.ts`）；
 //       - 任务分支上的提交动过它、而且磁盘上这份就是分支那一版（`task-artifact-version.ts`）；
 //     **只靠时间认的一律是候选**（区间里的提交、未提交的改动、被忽略的文件——命令渲染的视频、
-//     截图都在这里），哪怕那一刻看上去只有它在跑：任务能起 ash 管不到的进程（`nohup`、`&`、原生
+//     截图都在这里），哪怕那一刻看上去只有它在跑：任务能起 navi 管不到的进程（`nohup`、`&`、原生
 //     后台命令、常驻进程），它们可以在回合结束很久以后才往这里写，「没看到别人在跑」永远推不出
 //     「没有别人在写」。先后按目录、按全机在跑的任务去补这个集合，每补一类就冒出下一类（审查
 //     TgRjUOJWF1Ci 两轮），2026-11-04 用户拍板：共享目录上时间判据只能给候选。那一刻同时在跑的
@@ -249,16 +249,11 @@ export async function readTaskArtifacts(
         if (prefix && !path.startsWith(prefix)) return null;
         return prefix ? path.slice(prefix.length) : path;
       };
-      const committed = await taskBranchChangedPaths(
-        project.repoPath,
-        task.id,
-        task.mergeTargetBranch || task.worktreeBase,
-        task.worktreeStartCommit,
-      );
+      const committed = await taskBranchChangedPaths(project.repoPath, task);
       if (committed.available) {
         branchSource = committed.sourceBranch ?? null;
-        // 分支 diff **自带归属**：分支名由 taskId 派生，`merge-base..分支` 里的每个提交都是
-        // 它做的，跟它在哪个目录跑过、有没有留下运行区间都无关。worktree 事后被删、面板降级
+        // 分支 diff **自带归属**：分支名由 taskId 派生，口径（task-change-scope.ts）里只剩它自己
+        // 的改动 —— 合进来的目标分支、开工点带来的都已扣掉，跟它在哪个目录跑过、有没有留下运行区间都无关。worktree 事后被删、面板降级
         // 到主仓展示时，这是唯一还拿得出来的证据，不能被上面那道时间门槛一起挡掉。
         for (const path of committed.paths) {
           const rel = relocate(path);

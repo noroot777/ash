@@ -29,6 +29,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, openSync, closeSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const IS_WIN = process.platform === "win32";
 if (IS_WIN) {
@@ -36,8 +37,8 @@ if (IS_WIN) {
   process.exit(0);
 }
 
-const root = mkdtempSync(join(tmpdir(), "ash-holder-scan-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-holder-scan-"));
+process.env.NAVI_DB = join(root, "ash.db");
 const ORIGINAL_PATH = process.env.PATH;
 
 const { ensureSchema } = await import("../src/db/index.js");
@@ -127,7 +128,7 @@ try {
     require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(kid.pid));
     kid.unref();
     setTimeout(() => process.exit(0), 150);
-  `], { stdio: ["ignore", outFd, "ignore"], env: { ...process.env, ASH_MONITOR_UNIT: token } });
+  `], { stdio: ["ignore", outFd, "ignore"], env: { ...process.env, NAVI_MONITOR_UNIT: token } });
   closeSync(outFd);
   registerUnitToken(parent, token);
   registerRunOutPath(parent, out);
@@ -263,7 +264,7 @@ try {
       require("fs").writeFileSync(${JSON.stringify(kidPidFile)}, String(kid.pid));
       kid.unref();
       setInterval(() => {}, 1000);
-    `], { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token2 } });
+    `], { stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: token2 } });
     registerUnitToken(live, token2);
     await wait(700);
     const kidPid = Number(readFileSync(kidPidFile, "utf8"));
@@ -320,7 +321,7 @@ try {
     const live = spawn(process.execPath, ["-e", `
       const fs = require("fs");
       let n = 0; setInterval(() => fs.writeFileSync(${JSON.stringify(beat3)}, String(++n)), 50);
-    `], { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token3 } });
+    `], { stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: token3 } });
     registerUnitToken(live, token3);
     strays.push(live.pid!);
     await wait(400);
@@ -360,7 +361,7 @@ try {
     // 于是那一行永远停在「根进程还活着」,既销不掉,还把别人的进程指成我们的残留。
     const token4 = mintUnitToken();
     const gone = spawn(process.execPath, ["-e", "process.exit(0)"],
-      { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token4 } });
+      { stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: token4 } });
     registerUnitToken(gone, token4);
     const deadPid = gone.pid!;
     await new Promise<void>((resolve) => gone.once("exit", () => resolve()));
@@ -410,7 +411,7 @@ try {
       require("fs").writeFileSync(${JSON.stringify(kidPidFile)}, String(kid.pid));
       kid.unref();
       setInterval(() => {}, 1000);
-    `], { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token5 } });
+    `], { stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: token5 } });
     registerUnitToken(live, token5);
     await wait(700);
     const kidPid = Number(readFileSync(kidPidFile, "utf8"));
@@ -495,7 +496,7 @@ try {
     writeFileSync(outPath, "");
     const token6 = mintUnitToken();
     const clean = spawn(process.execPath, ["-e", "process.exit(0)"],
-      { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token6 } });
+      { stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: token6 } });
     registerUnitToken(clean, token6);
     registerRunOutPath(clean, outPath);
     await new Promise<void>((resolve) => clean.once("exit", () => resolve()));
@@ -592,7 +593,7 @@ exec /bin/ps "$@"
         process.exit(0);
       });
       setInterval(() => {}, 1000);
-    `], { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token7 } });
+    `], { stdio: "ignore", env: { ...process.env, NAVI_MONITOR_UNIT: token7 } });
     registerUnitToken(live, token7);
     await wait(700);
     const kidPid = Number(readFileSync(kidPidFile, "utf8"));
@@ -640,7 +641,7 @@ exec /bin/ps "$@"
   for (const pid of [orphan, ...strays]) {
     if (pid > 1) { try { process.kill(pid, "SIGKILL"); } catch { /* 已经没了 */ } }
   }
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过:半截查询不会再被当成查全");

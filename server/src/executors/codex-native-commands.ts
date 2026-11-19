@@ -1,5 +1,5 @@
-import type { AgentEvent, ContextUsage } from "@ash/shared";
-import { goalRequest, isGoalExecution, type CliCommand, type CliGoal, type CliSessionState } from "@ash/shared/cli-commands";
+import type { AgentEvent, ContextUsage } from "@navi/shared";
+import { goalRequest, isGoalExecution, isPlanImplementation, type CliCommand, type CliGoal, type CliSessionState } from "@navi/shared/cli-commands";
 
 type Transport = {
   request(method: string, params: Record<string, unknown>): Promise<any>;
@@ -66,7 +66,7 @@ export class CodexNativeCommands {
     if (command?.name === "goal" && (!command.args || command.args === "pause")) {
       if (!this.goal || (expected ? !matches : scopedState)) {
         const warning = expected
-          ? `${this.goal ? "原生会话里的目标与保存快照不一致" : "原生会话里没有这个目标"}；以上为 ash 保存快照。`
+          ? `${this.goal ? "原生会话里的目标与保存快照不一致" : "原生会话里没有这个目标"}；以上为 Navi 保存快照。`
           : `所选作用域没有保存目标；${this.goal ? "原生会话属于其他目标" : "原生会话中也没有目标"}。`;
         this.snapshotControl = { goal: expected ?? null, warning: `${warning}未改变原生目标、预算或已用量。使用 /goal --scopes 查看保存的目标。` };
         this.goal = expected ?? null;
@@ -108,9 +108,10 @@ export class CodexNativeCommands {
     }
     if (command.name === "plan" && command.args && command.args !== "off") {
       const result = await this.transport.request("turn/start", {
-        threadId: this.transport.threadId(), input: [{ type: "text", text: command.args }],
+        threadId: this.transport.threadId(), input: [{ type: "text", text: isPlanImplementation(command)
+          ? `${this.transport.prompt}\n\n用户已确认最新计划，现在按此计划开始实施。` : this.transport.prompt }],
         ...this.transport.turnOptions,
-        collaborationMode: this.collaborationMode(),
+        collaborationMode: this.collaborationMode(isPlanImplementation(command) ? "default" : "plan"),
       });
       return { immediate: false, turnId: result.turn?.id };
     }
@@ -165,7 +166,7 @@ export class CodexNativeCommands {
       return stringify(servers);
     }
     if (command.name === "ps") return stringify(await request("thread/backgroundTerminals/list", { threadId }));
-    if (command.name === "stop") { await request("thread/backgroundTerminals/clean", { threadId }); return "当前会话的后台终端已停止；ash 任务未取消。"; }
+    if (command.name === "stop") { await request("thread/backgroundTerminals/clean", { threadId }); return "当前会话的后台终端已停止；Navi 任务未取消。"; }
     if (command.name === "debug-config") return stringify(await request("config/read", { includeLayers: true, cwd: this.transport.cwd }));
     if (command.name === "hooks") return stringify(await request("hooks/list", { cwds: [this.transport.cwd] }));
     if (command.name === "plugins") return stringify(await request("plugin/list", { cwds: [this.transport.cwd], forceRefetch: false, marketplaceKinds: ["local"] }));

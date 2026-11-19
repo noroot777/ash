@@ -3,7 +3,7 @@ import { BookOpen, X } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 
 export function AssistantKnowledgeContent() {
-  return <><dl><dt>ash 使用说明</dt><dd>内置功能指南：任务、团队、执行器、起手式与验收。</dd>
+  return <><dl><dt>Navi 使用说明</dt><dd>内置功能指南：任务、团队、执行器、起手式与验收。</dd>
     <dt>任务与会话</dt><dd>按需检索你可见项目的本机任务及会话，包括归档任务。</dd>
     <dt>当前资源</dt><dd>可见项目、执行器、起手式示例和本对话草案的保存状态。</dd>
     <dt>回复风格 · 已启用</dt><dd>默认 1–3 句或最多 3 个要点，通常不超过 200 字；需要时再展开。</dd></dl>

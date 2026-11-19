@@ -12,14 +12,16 @@
 //   ③ 探测不到（非 git 目录、目录没了、根本没记起点）→ 同样闭嘴，绝不能抛 —— 这是个
 //      提示性功能，不许把一次正常结算带下水。
 // Run: npm -w server run test:turn-output
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-turn-output-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-turn-output-"));
+process.env.NAVI_DB = join(root, "ash.db");
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
@@ -88,5 +90,5 @@ try {
   console.log("turn output: 提交数 / 未提交改动数 / 没产出闭嘴 / 非 git 闭嘴 / 无起点闭嘴 / 读一次就删,六条通过");
 } finally {
   for (const id of IDS) rmSync(join(RUNS_DIR, id), { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

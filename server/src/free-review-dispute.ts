@@ -37,8 +37,8 @@
 // ③ 不能变成逃避修复的捷径——没写 `deferReason` 就拒绝这个裁定（判据是**边界**不是
 //    **工作量**，措辞见 free-review-prompts.ts 的 disputeOption）；
 // ④ 提出之后停下来等人——与驳回共用同一条停顿，撤自动复审预约的规矩也共用。
-import type { FreeReviewDisputeResolution, FreeReviewDisputeTarget, Task } from "@ash/shared";
-import { MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE } from "@ash/shared/free-workflow";
+import type { FreeReviewDisputeResolution, FreeReviewDisputeTarget, Task } from "@navi/shared";
+import { MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE } from "@navi/shared/free-workflow";
 import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -49,6 +49,7 @@ import {
   forgetHeldTrigger,
   readFreeReviewReservation,
 } from "./free-review-reservations.js";
+import { awaitingRuling, disputeWritten } from "./free-review-awaiting-ruling.js";
 import { withRulingGate } from "./free-review-ruling-gate.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { turnRole } from "./runs.js";
@@ -124,25 +125,6 @@ export function disputeInputOf(raw: { summary?: unknown; reason?: unknown; defer
 export function hasDispute(round: ReviewRoundRow | null | undefined): boolean {
   return !!(round?.disputeReason || round?.disputeDeferReason);
 }
-
-/**
- * 同一个判据的 SQL 版：查询与 CAS 都用它，不各写一份 `IS NOT NULL`。两边口径一偏（老数据
- * 或接力载荷里理由是空串），裁定闸按 SQL 认定「有驳回、等裁定」挡住预约，界面按
- * `hasDispute` 认定「没驳回」不给卡——用户看得见「等裁定」，却找不到能裁的那一条。
- */
-const disputeWritten = sql`(coalesce(${freeReviewRounds.disputeReason}, '') <> '' or coalesce(${freeReviewRounds.disputeDeferReason}, '') <> '')`;
-
-/**
- * 「等着用户裁定」的那组条件（不含任务过滤）：驳回已写下、没裁定、没被用户新派的审查取代、
- * 是工作区审查。按任务查（`unresolvedDisputes`）和跨任务查（`openDisputeTargets`）共用这一份，
- * 两处各写一遍的话，飞书推出去的卡和审查面板上的卡迟早不是同一批。
- */
-const awaitingRuling = and(
-  eq(freeReviewRuns.targetKind, "workspace"),
-  disputeWritten,
-  isNull(freeReviewRounds.disputeResolution),
-  isNull(freeReviewRounds.disputeSupersededAt),
-);
 
 // 排序键与界面上那张卡的 `dispute.at` 同一个兜底（free-workflow-state.ts）：接力载荷允许
 // 驳回时间为空，两边各按各的排，显示的那条和「默认那条」就会是两条。
@@ -397,7 +379,7 @@ async function disputeFreeReviewHeld(
     ? await consumeFreeReviewReservation(taskId, reservation)
     : null;
 
-  await appendTaskTimeline(taskId, noticeLine({ kind: "review.dispute", round: run.currentRound }, disputeTimelineNote({
+  await appendTaskTimeline(taskId, noticeLine({ kind: "review.dispute", round: run.currentRound, runId: run.id }, disputeTimelineNote({
     round: run.currentRound,
     reviewerName: run.reviewerName,
     summary,
@@ -456,8 +438,14 @@ async function releaseHeldReservation(taskId: string): Promise<void> {
     const { releaseReservationAfterRuling } = await import("./free-review-ruling-release.js");
     await releaseReservationAfterRuling(taskId);
   } catch (error) {
-    console.error(`[ash] 裁定后兑现预约审查失败 task=${taskId}:`, error);
+    console.error(`[navi] 裁定后兑现预约审查失败 task=${taskId}:`, error);
   }
+}
+
+/** 用户裁定收场（这一轮不用改了 / 转为独立任务）也是审查链走完的一种：建在它上面的任务重判一遍（prerequisite-launch.ts）。 */
+async function noteRulingSettled(taskId: string): Promise<void> {
+  const { notePrerequisiteProgress } = await import("./prerequisite-launch.js");
+  notePrerequisiteProgress(taskId);
 }
 
 /** 时间线里只放一句话的摘要，全文留在审查记录里（时间线不是正文的第二个家）。 */
@@ -549,11 +537,13 @@ export async function resolveFreeReviewDispute(
   const open = await targetedOpenDispute(taskId, target);
   const { activeDebateOf } = await import("./free-review-debate.js");
   if (await activeDebateOf(taskId)) throw new Error("辩论正在进行，等它结束再裁定");
+  if (await (await import("./discussion.js")).discussionHolds(taskId)) throw new Error("这条任务上正在讨论，说完再裁定");
 
   if (resolution === "deferred") {
     const { deferOpenDispute } = await import("./free-review-defer.js");
     const deferredTask = await deferOpenDispute(task, open, note);
     await releaseHeldReservation(taskId);
+    await noteRulingSettled(taskId);
     return { resolution, repairError: null, deferredTask };
   }
 
@@ -587,6 +577,7 @@ export async function resolveFreeReviewDispute(
     + (note ? `你写下的裁定要点：${summarize(note)}` : "")));
   bus.publish({ type: "task.review", taskId });
   if (resolution === "withdrawn") await releaseHeldReservation(taskId);
+  await noteRulingSettled(taskId);
 
   let repairError: string | null = null;
   if (resolution === "upheld") {

@@ -1,7 +1,7 @@
 // 「这个 CLI 自己已经装了哪些技能」——供对话框/新建任务里的 `/` 补全用。
 //
 // 菜单仍只把 `/{名字}` 补进正文；运行前则用同一份扫描结果把命中的
-// SKILL.md 精确路径注入 prompt。不能只指望 CLI/模型自己认 slash：ash 的无人
+// SKILL.md 精确路径注入 prompt。不能只指望 CLI/模型自己认 slash：navi 的无人
 // 值守、完成协议等前言会排在任务正文前，`/skill` 已经不是 CLI 的首条命令。
 //
 // 三层取数(取数永远是全量,3ms 不值得做 diff 协议):
@@ -15,7 +15,7 @@ import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync,
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { expandHome } from "./platform.js";
-import { cliCommandCatalog, isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { cliCommandCatalog, isGoalExecution, isPlanImplementation, parseCliCommand } from "@navi/shared/cli-commands";
 import { configDirEnvVar, userCliDir } from "./auth/user-cli.js";
 import { isHostCliIsolatedSync } from "./auth/multi-flag.js";
 import {
@@ -32,7 +32,7 @@ import type {
   SkillScanOverview,
   SkillScanRow,
   SkillSource,
-} from "@ash/shared";
+} from "@navi/shared";
 
 // 扫得动的 CLI。其余 agentType 一律空表(degrade,不报错)。
 const SCANNABLE = ["claude", "codex", "gemini"] as const;
@@ -63,7 +63,7 @@ const BUILTIN_SLASH_ALLOW = new Set(["review", "security-review", "compact"]);
 //   前面垫一行字再 `/compact`      → 退化成普通模型请求,不压缩
 // 于是这类命令有两条硬约束,缺一条就等于没做:
 //   ① 不加【已选择 skill】前言(下面 withSkillInvocation 直接放行)
-//   ② 它必须**独占整条 prompt**,ash 的前言和完成协议提醒一律让位
+//   ② 它必须**独占整条 prompt**,navi 的前言和完成协议提醒一律让位
 //      (orchestrator 组装 prompt 时按 nativeCliCommand 分叉)
 // 又因为整条消息不进模型,这一轮不会有任何产出、也不可能交卷 —— 调用方还得把它
 // 当**旁路回合**,否则一个 done 的任务会被这一下压缩打成 failed。
@@ -79,7 +79,7 @@ const isNativeCommandName = (agentType: string, name: string) =>
  * `/compact 重点保留 X`)。是的话返回命令名,调用方必须原样发出去,并按旁路回合处理。
  */
 export function nativeCliCommand(agentType: string, text: string): string | null {
-  if (isGoalExecution(parseCliCommand(agentType, text))) return null;
+  if (isGoalExecution(parseCliCommand(agentType, text)) || isPlanImplementation(parseCliCommand(agentType, text))) return null;
   const name = /^\/([a-zA-Z][\w-]*)(?:\s|$)/.exec(text.trim())?.[1];
   return name && isNativeCommandName(agentType, name) ? name : null;
 }

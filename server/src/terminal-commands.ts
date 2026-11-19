@@ -34,7 +34,7 @@ import {
   parseCommandPlaceholders,
   parseCommandValues,
   SERVICE_COMMAND_ID,
-} from "@ash/shared/project-commands";
+} from "@navi/shared/project-commands";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
@@ -405,7 +405,7 @@ export function startCommand(
  *
  * stop 带着脚本来(service 配了停止命令)时:先跑脚本,再确认启动会话退了 —— 没退照样
  * terminate,**停止命令是更体面的前半程,不是「脚本跑过就算停了」的免责**。反过来,脚本
- * 自己失败时原地报错、不强杀:用户写那段脚本正是不想让 ash 直接 kill,这时留着现场让他看
+ * 自己失败时原地报错、不强杀:用户写那段脚本正是不想让 navi 直接 kill,这时留着现场让他看
  * 日志、改脚本、再点一次更对(真要硬停,终端里关掉那条会话仍然会杀进程组)。
  */
 export function stopCommand(
@@ -456,7 +456,7 @@ export function stopCommand(
     // 核一遍端口 —— 不然一条 `true` 就能把「已停止」骗出来。
     const verdict = stop ? await verifyStopScript(open, snapshot, killed) : await stopLaunchPorts(open, killed, options.portGraceMs);
     if (verdict.kind === "stuck") return { status: 502 as const, body: { error: `停止失败：${verdict.reason}` } };
-    // 「我点过停止」要留下来 —— 启动脚本早就退了(服务在 ash 的进程树之外)时尤其:没有进程
+    // 「我点过停止」要留下来 —— 启动脚本早就退了(服务在 navi 的进程树之外)时尤其:没有进程
     // 可杀,但刷新回来还得看得出停过(根 AGENTS.md)。**无条件标**:活进程那条路里
     // terminate 只标它自己那条会话,缓存的 portsAlive 还可能是旧的 true,于是紧接着点启动会
     // 被幂等门拿一条已经退出的会话顶回去(第 2 轮审查发现 1)。

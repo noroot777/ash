@@ -23,7 +23,7 @@
 //     文件的诊断工具就够了)自己 open 一下就会被 `owned.add` 收养,随后被 `stop()` 终止。
 //     「继承了受监管资源」和「碰巧打开同一个文件」是两件事,而没有名字的 inode 只剩前一种。
 //
-// 上一版的第四条线索是**环境变量继承**(`ASH_TEST_PROCESS_SCOPE`),两处都塌了(第 4 轮审查
+// 上一版的第四条线索是**环境变量继承**(`NAVI_TEST_PROCESS_SCOPE`),两处都塌了(第 4 轮审查
 // F1/F2,都有实测):
 //   · **它伪造得了**:判据是 `ps -E` 那一整行 `includes(标记)`,而那一行是「命令行 + 环境块」
 //     拼起来的 —— 随便一个把这段文字当**普通 argv 参数**传进去的外部进程都会被认领,然后被
@@ -102,7 +102,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TestDirectory, directoryOwnershipError } from "./test-process-directory.mjs";
 import { scopes, cleanupFailures } from "./test-process-registry.mjs";
-import { windowsTerminateScript } from "./windows-restart.mjs";
+import { RESTART_SKIPPED_MARK, windowsTerminateScript } from "./windows-restart.mjs";
 // 「此刻系统里有些什么」全在那边答(ps / lsof / CIM 的输出、实例身份的比较),这边只下所有权
 // 与清场的判据 —— 两种问题分开,见 test-process-probe.mjs 文件头。
 import {
@@ -200,7 +200,7 @@ function windowsSignalInstance(row) {
   let output;
   try { output = powerShellSync(windowsTerminateScript([{ pid: row.pid, created: row.created }], { tolerant: true })); }
   catch (error) { return { pid: row.pid, verdict: "unverifiable", error }; }
-  const skipped = output.split("\n").some((line) => new RegExp(`^ASH_RESTART_SKIPPED ${row.pid}$`).test(line.trim()));
+  const skipped = output.split("\n").some((line) => new RegExp(`^${RESTART_SKIPPED_MARK} ${row.pid}$`).test(line.trim()));
   return { pid: row.pid, verdict: skipped ? "unverifiable" : "same" };
 }
 
@@ -346,7 +346,7 @@ export class TestProcessScope {
       ...options, detached: !windows, windowsHide: true,
       stdio: boundary === null ? stdio
         : [...(Array.isArray(stdio) ? stdio : [stdio, stdio, stdio]), boundary],
-      env: { ...environment, ASH_TEST_PROCESS_SCOPE: this.directory,
+      env: { ...environment, NAVI_TEST_PROCESS_SCOPE: this.directory,
         NODE_OPTIONS: `--require ${JSON.stringify(registerPath)} ${environment.NODE_OPTIONS ?? ""}`.trim() },
     });
     child.on("error", () => {});

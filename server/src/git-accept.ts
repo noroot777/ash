@@ -9,7 +9,7 @@
 // 工作流快照读出来传进来；不传就是老规矩（安全合并）。
 import { resolve } from "node:path";
 import { realpathSync } from "node:fs";
-import type { AcceptStrategy } from "@ash/shared/workflow";
+import type { AcceptStrategy } from "@navi/shared/workflow";
 import {
   expandHome,
   gitError,
@@ -27,6 +27,7 @@ import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistration
 import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
 import type { GatePhysical } from "./accept-gate-physical.js";
 import { alreadyLandedUntested, guardedDirtyFiles, movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
+import { LEGACY_ACCEPT_TAG_PREFIX } from "@navi/shared/legacy-names";
 
 function sameFilesystemPath(a: string, b: string): boolean {
   try { return realpathSync(resolve(a)) === realpathSync(resolve(b)); }
@@ -332,7 +333,7 @@ async function inTargetCheckout(
 // `commit: false` 是「合并后不提交」那一档（项目设置 / 单次验收的那个勾）走的同一段路：
 // merge --squash 把改动落进目标分支的工作区与暂存区，然后**就停在这儿**，不 commit。
 // 用 `--squash` 而不是 `merge --no-commit` 是有意的：后者会留下 MERGE_HEAD，整个仓库
-// 停在「合并进行中」的状态里，用户自己的终端、别的 agent、ash 的下一次 git 操作全都
+// 停在「合并进行中」的状态里，用户自己的终端、别的 agent、navi 的下一次 git 操作全都
 // 会撞上它；`--squash` 只动工作区和索引，`git commit` 或 `git reset --hard` 一句就收场。
 async function squashInCheckedOutTarget(
   cwd: string,
@@ -455,7 +456,13 @@ async function mergeWithoutCommit(
 
 /** 「只打标签不合并」那一档的标签名。 */
 export function acceptTagName(taskId: string): string {
-  return `ash-accepted/${taskId.slice(0, 8)}`;
+  return `${ACCEPT_TAG_PREFIX}${taskId.slice(0, 8)}`;
+}
+const ACCEPT_TAG_PREFIX = "navi-accepted/";
+
+/** 改名之前打的标签（`ash-accepted/<id8>`）：重复验收时它已经指着同一个提交就算打过了，不再打一个新名的。 */
+function legacyAcceptTagName(taskId: string): string {
+  return `${LEGACY_ACCEPT_TAG_PREFIX}${taskId.slice(0, 8)}`;
 }
 
 async function mergeTaskBranchLocked(
@@ -496,21 +503,29 @@ async function mergeTaskBranchLocked(
   // 看它现在指着谁：指着同一个 commit 就是重复验收，当成功；指着别处就报错让人处理。
   if (strategy === "tag") {
     const tag = acceptTagName(taskId);
-    const [head, tagged] = await Promise.all([
+    const legacyTag = legacyAcceptTagName(taskId);
+    const [head, tagged, legacyTagged] = await Promise.all([
       commitOf(repo, sourceRef),
       commitOf(repo, `refs/tags/${tag}`),
+      commitOf(repo, `refs/tags/${legacyTag}`),
     ]);
-    if (tagged) {
-      if (tagged === head) return { ok: true, sourceBranch, targetBranch, method: "tagged", tag };
+    // 新旧两个名字是**同一份验收记录**：改名之前打的 `ash-accepted/<id>` 也算数。任何一个指着
+    // 别处都按冲突报 —— 只看新名的话，升级前验收过、之后又有新提交的任务会绕开这道闸，留下
+    // 两份指着不同提交的验收标签。都指着这个提交（或只有一个、指着它）就是重复验收。
+    const existing = [{ name: tag, commit: tagged }, { name: legacyTag, commit: legacyTagged }]
+      .filter((t): t is { name: string; commit: string } => !!t.commit);
+    const elsewhere = existing.find((t) => t.commit !== head);
+    if (elsewhere) {
       return {
         ok: false,
         reason: "merge_failed",
-        message: `标签 ${tag} 已经存在、而且指向别的提交（${tagged.slice(0, 8)}）；`
+        message: `标签 ${elsewhere.name} 已经存在、而且指向别的提交（${elsewhere.commit.slice(0, 8)}）；`
           + "不覆盖它，请先确认那是什么再手动处理。",
         sourceBranch,
         targetBranch,
       };
     }
+    if (existing.length) return { ok: true, sourceBranch, targetBranch, method: "tagged", tag: existing[0]!.name };
     try {
       await exec("git", ["-C", repo, "tag", tag, sourceRef]);
       return { ok: true, sourceBranch, targetBranch, method: "tagged", tag };

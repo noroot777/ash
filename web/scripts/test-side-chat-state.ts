@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { sideChatBody, sideChatTitle, splitSideChatBody, type ChatMessage, type ChatSnapshot } from "@ash/shared/chat";
+import { sideChatBody, sideChatTitle, splitSideChatBody, type ChatMessage, type ChatSnapshot } from "@navi/shared/chat";
 import { mergeSideSnapshot } from "../src/side-chat/useSideChat.ts";
 
 const room = { id: "room", parentTaskId: "parent", kind: "side" as const, projectId: "p", name: "侧聊", members: [], createdAt: "2026-09-11" };

@@ -10,17 +10,17 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { TaskHandoff } from "@ash/shared";
+import type { TaskHandoff } from "@navi/shared";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-notice-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_LAX_DONE = "1";
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_PROMPT_DIR = join(root, "prompts");
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-notice-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_LAX_DONE = "1";
+process.env.NAVI_PROMPT_DIR = join(root, "prompts");
 process.env.PATH = `${root}${delimiter}${process.env.PATH ?? ""}`;
+process.env.NAVI_TEST_AGENT_BIN = root;
 
 const [{ db, ensureSchema }, { agents, projects, tasks }, { runTask }, { continueTask }] = await Promise.all([
   import("../src/db/index.js"),
@@ -40,13 +40,13 @@ const markerFor = (notice: string | undefined): string => JSON.stringify({
 try {
   await ensureSchema();
   execFileSync("git", ["init", "-b", "main", root]);
-  execFileSync("git", ["-C", root, "config", "user.name", "Ash Test"]);
-  execFileSync("git", ["-C", root, "config", "user.email", "ash@example.test"]);
+  execFileSync("git", ["-C", root, "config", "user.name", "Navi Test"]);
+  execFileSync("git", ["-C", root, "config", "user.email", "navi@example.test"]);
   writeFileSync(join(root, "seed.txt"), "seed\n");
   execFileSync("git", ["-C", root, "add", "seed.txt"]);
   execFileSync("git", ["-C", root, "commit", "-m", "seed"]);
 
-  // 假 codex:把 stdin 上收到的整条 prompt 按 ASH_TASK_ID 落盘,然后立刻收工。
+  // 假 codex:把 stdin 上收到的整条 prompt 按 NAVI_TASK_ID 落盘,然后立刻收工。
   const script = join(root, IS_WINDOWS ? "fake-codex.mjs" : "codex");
   const launcher = join(root, IS_WINDOWS ? "codex.cmd" : "codex");
   writeFileSync(script, `#!/usr/bin/env node
@@ -55,10 +55,10 @@ import { join } from "node:path";
 let input = "";
 process.stdin.on("data", (chunk) => { input += chunk.toString(); });
 process.stdin.on("end", () => {
-  mkdirSync(process.env.ASH_PROMPT_DIR, { recursive: true });
-  writeFileSync(join(process.env.ASH_PROMPT_DIR, process.env.ASH_TASK_ID + ".txt"), input);
+  mkdirSync(process.env.NAVI_PROMPT_DIR, { recursive: true });
+  writeFileSync(join(process.env.NAVI_PROMPT_DIR, process.env.NAVI_TASK_ID + ".txt"), input);
   const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
-  send({ type: "thread.started", thread_id: "notice-thread-" + process.env.ASH_TASK_ID });
+  send({ type: "thread.started", thread_id: "notice-thread-" + process.env.NAVI_TASK_ID });
   send({ type: "item.completed", item: { type: "agent_message", text: "收到" } });
   send({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } });
   process.exit(0);

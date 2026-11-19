@@ -4,7 +4,7 @@
 // 起因(2026-10-30,任务 W54czudPJ9Q9 的修复回合):同一个字段 `willRetry` 在两条路上被当成
 // 两件事,而两条路都错在不同方向上 ——
 //   · 主线程(`codex-app-server.ts`)把 `willRetry:true` **整条丢掉**。中转主机整体离线那次,
-//     这一支连报了 216 条「Reconnecting... waiting for network」、历时 4 小时 45 分,ash 侧
+//     这一支连报了 216 条「Reconnecting... waiting for network」、历时 4 小时 45 分,navi 侧
 //     一个事件都没有:界面全程 running、零报错,只能人工翻 jsonl 才看得出来。
 //   · 子智能体线程(`native-agent-activity.ts`)压根不看 `willRetry`,一律抬成**裸 error**。
 //     同一场重连风暴在那条路上是反方向的毛病:几百条红色「执行异常」,而且每一条都会把这
@@ -13,7 +13,7 @@
 // 所以两条路合到这一份:**重试中 = `level:"notice"`**(回合仍然正常进行中,跟成败正交,见
 // `../session-notice.ts` 顶部),**重试完了还是错 = 裸 error**。前者由回合级停滞看门狗
 // (`../turn-stall.ts`)负责「等到该动手了没有」,这里只负责如实说出来。
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { codexTurnError } from "./model-failure.js";
 
 export interface CodexErrorNotification {

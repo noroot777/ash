@@ -1,6 +1,6 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, Task } from "@navi/shared";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../../src/composer/TaskComposerPanel.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
@@ -9,7 +9,7 @@ import { useConversation } from "../../src/lib/useConversation.ts";
 import { forkReadBlock, snapshotConversationFork } from "../../src/task-detail/conversationFork.ts";
 import "../../src/styles/global.css";
 
-const project = { id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, useWorktreeDefault: false, health: { exists: true, isRepo: false } } as ProjectView;
+const project = { id: "p1", name: "navi", repoPath: "/tmp/navi", workflowId: null, useWorktreeDefault: false, health: { exists: true, isRepo: false } } as ProjectView;
 const task = { id: "source", projectId: "p1", title: "对比两种方案", body: "研究方案 A 与 B", mode: "single", status: "done" } as Task;
 const reply = (id: string, markdown: string, done = true): ConversationItem => ({
   kind: "agent", id, sessionId: "s1", label: "Codex", markdown,
@@ -51,7 +51,7 @@ function Fixture() {
       <button onClick={() => { const long = reply("long", "长会话".repeat(50000)); setSeed(snapshotConversationFork(task, [long], "long")); setView("composer"); }}>超长派生</button></nav>
     {view === "incomplete" ? <IncompleteConversation /> : view === "feed" ? <ConversationFeed task={task} items={items} sessions={[]} loading={false} error={null}
       onForkReply={(id) => { setSeed(snapshotConversationFork(task, items, id)); setView("composer"); }} />
-      : <TaskComposerPanel project={project} groups={[]} mode="single" onModeChange={() => {}}
+      : <TaskComposerPanel project={project} groups={[]}
         initialDraft={seed} onDraftSeeded={() => setSeed(null)} onCancel={() => setView("feed")}
         onCreated={(next) => { setCreated(next); setSeed(null); setView("feed"); }}
         onCreateGroup={async () => { throw new Error("unused"); }} notify={setNotice} />}

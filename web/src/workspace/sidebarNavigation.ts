@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { inputCount } from "../lib/latestInteraction.ts";
+import { dispatchPath } from "../lib/dispatchFamily.ts";
 
 // J/K（以及 ↑/↓）遍历的那份顺序**只认屏幕**：侧栏任务列表的 DOM 文档顺序。
 //
@@ -66,6 +67,12 @@ export function stepTaskId(ids: string[], currentId: string | null, step: 1 | -1
   return ids[Math.min(Math.max(at + step, 0), ids.length - 1)] ?? null;
 }
 
+export function sidebarSelectionId(ids: readonly string[], currentId: string | null, tasks: readonly TaskListItem[]): string | null {
+  if (!currentId || ids.includes(currentId)) return currentId;
+  const current = tasks.find((task) => task.id === currentId);
+  return current ? dispatchPath(current, tasks).find((task) => ids.includes(task.id))?.id ?? currentId : currentId;
+}
+
 export type SidebarNavigationOptions = {
   /** 全量任务：从屏幕上拿到的是 id，得还原成任务对象才交得给 onTask。 */
   tasks: TaskListItem[];
@@ -113,7 +120,7 @@ export function useSidebarTaskNavigation({
     const ids = order.kind === "screen" ? order.ids : fallbackOrder.map((task) => task.id);
     const chained = cursor.current?.input === input - 1 ? cursor.current.id : null;
     // 光标指的那一行要是已经不在屏幕上了（列表刷新、它所在的组被折叠），就退回选中那行重算。
-    const from = chained && ids.includes(chained) ? chained : currentId;
+    const from = chained && ids.includes(chained) ? chained : sidebarSelectionId(ids, currentId, tasks);
     const nextId = stepTaskId(ids, from, step);
     if (!nextId) { cursor.current = null; return; }
     cursor.current = { id: nextId, input };
@@ -125,9 +132,11 @@ export function useSidebarTaskNavigation({
   // 从前它只认本机 taskId，于是在「其他机器」那一节里挪选中时列表自己不跟着滚。
   useEffect(() => {
     if (!currentId) return;
-    document.querySelector(`${TREE_SELECTOR} [${ROW_ATTR}="${CSS.escape(currentId)}"]`)
+    const order = sidebarRowOrder();
+    const visibleId = sidebarSelectionId(order.kind === "screen" ? order.ids : [], currentId, tasks);
+    document.querySelector(`${TREE_SELECTOR} [${ROW_ATTR}="${CSS.escape(visibleId ?? currentId)}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [currentId]);
+  }, [currentId, tasks]);
 
   return navigate;
 }

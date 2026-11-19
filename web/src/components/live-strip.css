@@ -1,6 +1,9 @@
 /* 进行条（LiveStrip.tsx）：和执行过程收着时那一行同一副长相（字号、颜色、行高），只是前面
    没有折角——它还没有可以点开的东西。用时淡进来，等宽数字，换秒数时不晃。 */
 .live-strip { display: flex; max-width: 790px; min-height: 24px; align-items: center; gap: 8px; margin: 2px 0 10px 30px; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+/* 带上智能体的标时，标占会话头像那一栏（20px + 10px 间距），字仍和回合正文对齐。 */
+.live-strip.has-agent { margin-left: 0; }
+.live-strip-agent { display: grid; width: 20px; height: 20px; flex: none; place-items: center; margin-right: 2px; }
 .live-strip-label { font-weight: var(--w-regular); white-space: nowrap; }
 .live-strip-time { color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; animation: live-strip-in var(--dur-2) var(--ease-out) backwards; }
 .task-execution-live-time { margin-left: 2px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; animation: live-strip-in var(--dur-2) var(--ease-out) backwards; }

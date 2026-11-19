@@ -17,9 +17,9 @@
 //   ② 一段跑砸了就地停下，**不往下推**：别在一条卡住的线上开验证、也别送进人工关口。
 //   ③ 验证站轮数用尽时是**停下**，不是跳过。绕过一个用户亲手画上去的验证站，比停下更坏。
 import { eq } from "drizzle-orm";
-import type { WorkflowDef, WorkflowStep } from "@ash/shared/workflow";
-import { STEP_LABELS } from "@ash/shared/workflow";
-import { firstAnchor, nextAnchor, prevAnchor } from "@ash/shared/workflow-policy";
+import type { WorkflowDef, WorkflowStep } from "@navi/shared/workflow";
+import { STEP_LABELS } from "@navi/shared/workflow";
+import { firstAnchor, nextAnchor, prevAnchor } from "@navi/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -28,7 +28,6 @@ import { verifyStationAction } from "./review-policy.js";
 import { advanceSegment, type SegmentOptions, type SegmentResult } from "./workflow-steps.js";
 import { now } from "./util.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
-import { AshMcpUnreachable } from "./ash-mcp-launch-gate.js";
 import { leavesHumanGate, newHumanGate } from "./task-human-gate.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -120,8 +119,7 @@ async function atVerifyStation(
     const reason = error instanceof Error ? error.message : String(error);
     await appendTaskTimeline(
       task.id,
-      alertLine(`想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${reason}）。`
-        + (error instanceof AshMcpUnreachable ? "线停在这一站：把 ash MCP 接好之后点「再验一轮」，会从这一站接着走。" : "")),
+      alertLine(`想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${reason}）。`),
       { eventKey: `verify-start-failed:${station.id}:${rounds}:${task.endedAt ?? ""}:${reason}` },
     );
     return { ok: false, failed: station, reason };

@@ -26,10 +26,11 @@ import {
   MONITOR_TAIL_MAX_LINES,
   monitorExactExpiry,
   monitorStartTrusted,
+  OWN_MONITOR_KIND,
   type MonitorStatus,
   type TaskMonitor,
-} from "@ash/shared/monitor";
-import { parseEndCondition } from "@ash/shared/monitor-end-condition";
+} from "@navi/shared/monitor";
+import { parseEndCondition } from "@navi/shared/monitor-end-condition";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
@@ -50,7 +51,7 @@ export { commitProgress, pushLines } from "./monitor-consume.js";
 export type Row = typeof monitors.$inferSelect;
 
 /**
- * 「这一行是 ash 自己起的进程吗」——**所有碰进程、碰日志的查询都必须带上它**。
+ * 「这一行是 navi 自己起的进程吗」——**所有碰进程、碰日志的查询都必须带上它**。
  *
  * 表里混着 claude 内置 Monitor 的只读投影（`kind='claude'`，见 shared/src/monitor.ts
  * 文件头）：那些行 `pid` 是 null、`log_path` 是空串。漏掉这道过滤的后果按调用点各不相同，
@@ -60,19 +61,19 @@ export type Row = typeof monitors.$inferSelect;
  *
  * 唯一**不带**这道过滤的是 `listMonitors` / `getMonitor`：面板要的就是两种一起。
  */
-// 回收层(monitor-reclaim.ts)跟这里是同一摊账,所以这三样对它公开:哪些行算 ash 自己的、
+// 回收层(monitor-reclaim.ts)跟这里是同一摊账,所以这三样对它公开:哪些行算 navi 自己的、
 // 每条哨兵自己的那条队列、以及「把一条哨兵收尾」。它只做资格判断,不另起一套运行时。
 //
 // **创建层(monitor-create.ts)也从这里取运行时**:`serialize`(按任务排的那条创建队列)、
 // `liveMonitorsOf`(配额)、`attach`(把 tail 和定时器挂起来)、`publish`、`toTaskMonitor`、
 // `Row`。它拆出去只是因为「创建协议」那一段(先落身份、再起进程、回填 pid、放行)自己就是一
 // 整件事,而这个文件已经顶到行数上限 —— 运行时仍然只有这一份。
-export const isAshKind = eq(monitors.kind, "ash");
+export const isNaviKind = eq(monitors.kind, OWN_MONITOR_KIND);
 
 export const toTaskMonitor = (r: Row): TaskMonitor => ({
   id: r.id,
   taskId: r.taskId,
-  kind: (r.kind === "claude" ? "claude" : "ash"),
+  kind: (r.kind === "claude" ? "claude" : OWN_MONITOR_KIND),
   nativeId: r.nativeId,
   lifetime: (r.sourceLifetime === "persistent" || r.sourceLifetime === "unknown" ? r.sourceLifetime : "bounded"),
   command: r.command,
@@ -206,7 +207,7 @@ function noteUnreadableCondition(row: Row): void {
   if (!raw) return;
   const parsed = parseEndCondition(raw);
   if (parsed.ok) return;
-  console.error(`[ash] 哨兵 ${row.id} 存着一条读不出来的结束条件 ${JSON.stringify(raw)}：${parsed.error}`);
+  console.error(`[navi] 哨兵 ${row.id} 存着一条读不出来的结束条件 ${JSON.stringify(raw)}：${parsed.error}`);
   void appendTaskTimeline(
     row.taskId,
     alertLine(`哨兵「${row.description}」存着一条这一版读不出来的结束条件「${raw}」（结束条件不是正则，是字样）。`
@@ -358,7 +359,7 @@ export const supervisionComplete = (row: { id: string; pid: number | null }): bo
 export { claimFinish, finish, finishInFlight, settleInBackground } from "./monitor-finish.js";
 
 export async function liveMonitorsOf(taskId: string): Promise<Row[]> {
-  return db.select().from(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running"), isAshKind));
+  return db.select().from(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running"), isNaviKind));
 }
 
 export async function listMonitors(taskId: string): Promise<TaskMonitor[]> {
@@ -384,7 +385,7 @@ export async function readMonitorTail(
 ): Promise<{ lines: string[]; truncated: boolean; bytes: number | null } | null> {
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!row) return null;
-  // claude 那种没有日志文件：它的输出进了 agent 自己的会话，ash 这边一个字节都没有。
+  // claude 那种没有日志文件：它的输出进了 agent 自己的会话，navi 这边一个字节都没有。
   // 返回空而不是读 `logPath`（空串）——后者会变成一次对仓库根目录的读取尝试。
   // `bytes: null` = 「这一刻答不出它有没有产出过」。claude 投影确实没有日志文件,这里答
   // `0` 会变成一句「它从头到尾什么都没写过」的断言,而那件事只有 agent 自己的会话知道。

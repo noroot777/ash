@@ -17,11 +17,11 @@ assert.equal(hasErrorOutput('#< CLIXML\n<Objs><S S="Error">failure</S></Objs>'),
 assert.equal(hasErrorOutput('#< CLIXML\n<Objs></Objs>native failure'), true);
 
 const platform = process.platform;
-const powerShell = process.env.ASH_TEST_POWERSHELL;
+const powerShell = process.env.NAVI_TEST_POWERSHELL;
 if (platform !== "win32" && !powerShell) {
-  console.log("PowerShell semantics skipped: requires Windows or ASH_TEST_POWERSHELL");
+  console.log("PowerShell semantics skipped: requires Windows or NAVI_TEST_POWERSHELL");
 } else {
-  const stage = mkdtempSync(join(tmpdir(), "ash-powershell-command-"));
+  const stage = mkdtempSync(join(tmpdir(), "navi-powershell-command-"));
   const oldPath = process.env.PATH;
   try {
     if (platform !== "win32") {

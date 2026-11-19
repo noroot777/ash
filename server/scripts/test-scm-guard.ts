@@ -17,18 +17,19 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-scm-guard-"));
+const root = mkdtempSync(join(tmpdir(), "navi-scm-guard-"));
 const repo = join(root, "repo");
-process.env.ASH_DB = join(root, "ash.db");
+process.env.NAVI_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash SCM Guard Test");
-  git(repo, "config", "user.email", "scm@ash.test");
+  git(repo, "config", "user.name", "Navi SCM Guard Test");
+  git(repo, "config", "user.email", "scm@navi.test");
   writeFileSync(join(repo, "a.txt"), "baseline\n");
   git(repo, "add", "a.txt");
   git(repo, "commit", "-m", "seed");
@@ -156,7 +157,7 @@ try {
   // 目录没建出来，执行者看不见自己的改动，也无法从面板收尾。
   {
     const leadWorktree = join(repo, ".worktrees", "lead");
-    git(repo, "worktree", "add", "-b", "ash/lead", leadWorktree);
+    git(repo, "worktree", "add", "-b", "navi/lead", leadWorktree);
     writeFileSync(join(leadWorktree, "shared.txt"), "worker's work\n");
 
     await db.insert(tasks).values([
@@ -191,7 +192,7 @@ try {
   {
     const { claimTurn, isTurnClaimed, releaseTurn, turnRole } = await import("../src/runs.js");
     const leadWorktree = join(repo, ".worktrees", "lead");
-    git(repo, "worktree", "add", leadWorktree, "ash/lead");
+    git(repo, "worktree", "add", leadWorktree, "navi/lead");
     writeFileSync(join(leadWorktree, "shared.txt"), "baseline\n");
     git(leadWorktree, "add", "shared.txt");
     git(leadWorktree, "commit", "-m", "shared baseline");
@@ -353,8 +354,8 @@ try {
     const repo8 = join(root, "vanishing-repo");
     const moved8 = `${repo8}-moved`;
     execFileSync("git", ["init", "-b", "main", repo8]);
-    git(repo8, "config", "user.name", "Ash SCM Guard Test");
-    git(repo8, "config", "user.email", "scm@ash.test");
+    git(repo8, "config", "user.name", "Navi SCM Guard Test");
+    git(repo8, "config", "user.email", "scm@navi.test");
     writeFileSync(join(repo8, "a.txt"), "baseline\n");
     git(repo8, "add", "a.txt");
     git(repo8, "commit", "-m", "seed");
@@ -392,8 +393,8 @@ try {
     const newRepo = join(root, "moved-new-repo");
     for (const dir of [oldRepo, newRepo]) {
       execFileSync("git", ["init", "-b", "main", dir]);
-      git(dir, "config", "user.name", "Ash SCM Guard Test");
-      git(dir, "config", "user.email", "scm@ash.test");
+      git(dir, "config", "user.name", "Navi SCM Guard Test");
+      git(dir, "config", "user.email", "scm@navi.test");
       writeFileSync(join(dir, "a.txt"), "baseline\n");
       git(dir, "add", "a.txt");
       git(dir, "commit", "-m", "seed");
@@ -478,5 +479,5 @@ try {
 
   console.log("scm guard ok");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

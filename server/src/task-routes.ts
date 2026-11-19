@@ -1,19 +1,20 @@
-import type { AgentType, Task, TaskStatus } from "@ash/shared";
-import { AGENT_TYPES, isUserSettableStatus, TASK_BATCH_LIMIT } from "@ash/shared";
-import { CliCommandValidationError } from "@ash/shared/cli-commands";
-import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
-import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
-import { normalizeWorkflowDef } from "@ash/shared/workflow";
-import { PRESET_CONVERSION_CLOSED, TASK_MODES, createWorkflowMode, workflowModeMisfit } from "@ash/shared/free-workflow";
-import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import type { AgentType, Task, TaskStatus } from "@navi/shared";
+import { AGENT_TYPES, isUserSettableStatus } from "@navi/shared";
+import { CliCommandValidationError } from "@navi/shared/cli-commands";
+import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@navi/shared/cli-presets";
+import { inheritExecutorOverrides, sameExecutor } from "@navi/shared/executors";
+import { normalizeWorkflowDef } from "@navi/shared/workflow";
+import { PRESET_CONVERSION_CLOSED, TASK_MODES, createWorkflowMode, workflowModeMisfit } from "@navi/shared/free-workflow";
+import { and, asc, eq, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { projects, queueItems, tasks } from "./db/schema.js";
+import { queueItems, tasks } from "./db/schema.js";
+import { serializeQueueClaims } from "./queue-claim-chain.js";
+import { QueueJoinRefused, groupMoveRefusal, joinQueueOnCreate } from "./queue-membership-guard.js";
+import { writingGroupMembership } from "./launch-capacity.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { detectTaskWorkspace } from "./workspace-cleanup.js";
-import { allFollowUpsOf, followUpsFor } from "./task-follow-up.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
-import { monitorBlockedReason } from "@ash/shared/monitor";
+import { monitorBlockedReason } from "@navi/shared/monitor";
 import { claimOwnTurn, heldForAcceptance, releaseTurn, turnBusyText } from "./runs.js";
 import { TeamAcceptingError } from "./team-admission.js";
 import { advanceQueueInBackground } from "./scheduler.js";
@@ -25,28 +26,27 @@ import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canSeeProject, groupInProject, projectOfQueue, taskInProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
 import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executors.js";
-import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
+import { dispatcherRefusal } from "./task-dispatch.js";
+import { ReviewOnCreateError } from "./review-on-create.js";
+import { parseCreateReviewChoice } from "@navi/shared/review-on-create";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
-import { recentRejectionNotices } from "./user-action-rejection.js";
-import { suspectTurns } from "./turn-lock-reclaim.js";
+import { mountTaskReadRoutes } from "./task-read-routes.js";
+import { mountPrerequisiteRoutes, prerequisiteRefusal, stringList } from "./prerequisite-routes.js";
+import { republishPrerequisiteView } from "./prerequisite-view.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 export function mountTaskRoutes(api: Hono): void {
-  // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts —— 只是为了行数,
+  // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts、只读的查询那几条住在
+  // task-read-routes.ts —— 只是为了行数,
   // **挂载契约一个字没变**:所有调用方(含十几个回归测试的迷你 api)照旧只调
   // `mountTaskRoutes`。让它们各自再记得多挂一次,漏掉的那个不会编译报错,只会在某条
   // 用例里变成一个莫名其妙的 404。
   mountTaskDeleteRoutes(api);
+  mountTaskReadRoutes(api);
+  mountPrerequisiteRoutes(api);
 
-  // 一次最多问这么多任务的追问 / 正文（判据和常量本体在 shared 的 TASK_BATCH_LIMIT）：
-  // 追问每个都要摸一次盘，别让一个手抖的请求把整个进程钉在 I/O 上。
-  // **超了返 400，不截断** —— 静默少返几行会被前端渲染成「还没读到」，一条永远不会
-  // 消失的假状态；请求方分批才是对的做法。
-  const overBatchLimit = (ids: string[]) =>
-    ids.length > TASK_BATCH_LIMIT
-      ? { error: `一次最多问 ${TASK_BATCH_LIMIT} 个任务，请分批`, limit: TASK_BATCH_LIMIT, requested: ids.length }
-      : null;
   const agentTypeForExecutor = (scope: ExecutorScope, executorId?: string | null): AgentType | null =>
     scope.typeOf(executorId) ?? null;
   // duet 的两位讨论者各自挑执行器(voiceA/BExecutorId),和顶层 executorId、team 三角色
@@ -75,46 +75,6 @@ api.get("/tasks", async (c) => {
   return c.json((await enrichTasks(rows)).map(toTaskListItem));
 });
 
-// 侧边栏铺开时才拉：一批任务各自「我发的最后一条追问」（读的是会话 .md，不是库）。
-// 用 POST 是因为要一次带上几十个 id，塞进 query 会顶到 URL 长度上限。
-api.post("/tasks/follow-ups", async (c) => {
-  const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
-  const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
-  const over = overBatchLimit(ids);
-  if (over) return c.json(over, 400);
-  return c.json(await followUpsFor(await visibleTaskIds(actorOf(c), ids)));
-});
-
-// 悬停铺开那一格时才拉：这一个任务我发过的全部追问，从旧到新（口径同上，读的也是会话 .md），
-// 外加读没读全（TaskFollowUpList.complete）。
-api.get("/tasks/:id/follow-ups", async (c) => {
-  const taskId = c.req.param("id");
-  const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
-  return c.json(await allFollowUpsOf(taskId));
-});
-
-// 正文批量取。跟上面那条同一个触发点（侧边栏铺开的「原始需求」列），同一套 id 上限，
-// 只是这份数据在库里而不在会话文件里，所以另开一条而不是塞进 follow-ups —— 后者按
-// 定义只有「追问过的任务」才有行，而正文是每个任务都有的。
-//
-// 列表接口（GET /tasks）不再带正文，所以需要正文的表面各自按需取：铺开走这条，详情
-// 面走 GET /tasks/:id。
-api.post("/tasks/bodies", async (c) => {
-  const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
-  const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
-  if (!ids.length) return c.json([]);
-  const over = overBatchLimit(ids);
-  if (over) return c.json(over, 400);
-  const visible = await visibleProjectIds(actorOf(c));
-  const rows = (await db
-    .select({ taskId: tasks.id, body: tasks.body, projectId: tasks.projectId })
-    .from(tasks)
-    .where(inArray(tasks.id, ids)))
-    .filter((row) => visible === null || visible.has(row.projectId));
-  return c.json(rows.map((row) => ({ taskId: row.taskId, body: row.body ?? "" })));
-});
-
 api.get("/tasks/:id", async (c) => {
   const rows = await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")));
   const r = rows.at(0);
@@ -124,36 +84,6 @@ api.get("/tasks/:id", async (c) => {
   return c.json((await enrichTasks([r]))[0]);
 });
 
-// 这个任务被挡回/没做到位的那些用户操作。前端**无条件**读它,按时间合进同一条任务历史 ——
-// 不去问「对话流有没有正文」:从没跑过的任务没有会话时间线可写,而「有正文就不显示」会让
-// 那条已经入库的记录再也显示不出来(第 2 轮审查 F4)。判据见 user-action-rejection.ts 文件头。
-api.get("/tasks/:id/notices", async (c) => {
-  const taskId = c.req.param("id");
-  const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
-  // `remedy` 是**此刻**算出来的,不是存下来的:它回答的是「现在按那个开关有没有用」。
-  // 存进库就会出现「当时卡着、现在早好了,按钮还挂在那里」的死按钮。
-  const remedy = suspectTurns().some((t) => t.taskId === taskId) ? "reclaim-turn" as const : null;
-  return c.json({ notices: await recentRejectionNotices(taskId), remedy });
-});
-
-api.get("/tasks/:id/question-history", async (c) => {
-  const r = (await db.select({ projectId: tasks.projectId, history: tasks.questionHistory })
-    .from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
-  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
-  return c.json(r.history ? JSON.parse(r.history) : []);
-});
-
-// 「我现在动它,会不会被换掉执行器」。前端在运行/重跑/回复/继续讨论之前问一次,拿到
-// 非空就弹确认框(§八:不静默替换 —— 换执行器可能换模型档位,产出会变)。
-// 返回的是**列表**:duet 有两位讨论者,各占一格(第 6 轮审查 P1)。自用模式恒为空数组。
-api.get("/tasks/:id/executor-preflight", async (c) => {
-  const taskId = c.req.param("id");
-  const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
-  return c.json({ downgrades: await executorDowngradePreflight(taskId, ownerIdOf(actorOf(c))) });
-});
-
 api.post("/tasks", async (c) => {
   const b = await c.req.json<Partial<Task> & {
     projectId: string;
@@ -161,7 +91,11 @@ api.post("/tasks", async (c) => {
     attachments?: string[];
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
     workflowId?: string | null; // 内部建的 preset 任务挑哪条起手式;省略则按项目→全局默认解析
+    prerequisites?: string[]; // 前置:这条任务建在哪几条已有任务上面(prerequisite-store.ts)
+    review?: unknown; // 建出来就带的审查预约(review-on-create.ts);缺省 = 不带,新建面板不传
   }>();
+  const review = parseCreateReviewChoice(b.review);
+  if (review && typeof review === "object" && "error" in review) return c.json({ error: review.error }, 400);
   // 建任务是**往一个项目里写东西**,所以先过可见性(§十二)。resourceGate 拦的是
   // `/tasks/:id/…`,建任务这条路上还没有 id,只有请求体里那个 projectId —— 漏了这一句,
   // 猜中一个 projectId 就能把任务塞进别人的项目。
@@ -190,6 +124,10 @@ api.post("/tasks", async (c) => {
     if (taskRef && !(await taskInProject(taskRef, b.projectId))) {
       return c.json({ error: "task not found", [field]: taskRef }, 404);
     }
+  }
+  {
+    const refused = await dispatcherRefusal(actorOf(c), b);
+    if (refused) return c.json(refused.body, refused.status);
   }
   // 团队验收占着全队（team-acceptance-hold.ts）：这时加进来的执行者、审查任务不在占位里，能照常起跑、改共享目录。
   if ((b.parentId && heldForAcceptance(b.parentId)) || (b.reviewOf && heldForAcceptance(b.reviewOf))) {
@@ -333,6 +271,8 @@ api.post("/tasks", async (c) => {
     mergeTargetBranch: b.mergeTargetBranch ?? null,
     originTaskId: b.originTaskId ?? null,
     creationOrigin: await requestTaskCreationOrigin(c),
+    // 没给 = 按创建来源认（createTasks 里统一推导）；给了空串/null = 明说不归谁。
+    ...(b.dispatchedBy !== undefined ? { dispatchedBy: b.dispatchedBy || null } : {}),
     // createTasks 把它换成 tasks.workflow 里的快照（起手式是快照不是引用）。
     // 就地改过的线已经是快照了,直接落 workflow,createTasks 不会再去库里查。
     workflowId: b.workflowId ?? null,
@@ -342,10 +282,10 @@ api.post("/tasks", async (c) => {
     // 派生任务(团队执行者/审查/就地验证)继承父任务,那条路在各自的创建点上。
     // 上面那句 executorScopeForOwner 用的就是这个值 —— 两者必须同源,别各算各的。
     ownerUserId: taskOwner,
+    review,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在、跟新 task **同项目**,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400/404,不静默)。
-  let appendPosition: number | null = null;
   if (b.appendToQueue) {
     // 同项目这一条排在最前面:queueId 也是请求体里的 id,横切闸看不见它 —— 少了这句,
     // 猜中一个别人项目的 queueId 就能把自己的任务串进那条队列,而队列视图只按 queueId
@@ -374,26 +314,32 @@ api.post("/tasks", async (c) => {
         400,
       );
     }
-    appendPosition = existing.length;
+  }
+  const prerequisiteList = b.prerequisites === undefined ? [] : stringList(b.prerequisites);
+  if (!prerequisiteList) return c.json({ error: "prerequisites 要是字符串数组" }, 400);
+  const prerequisiteIds = [...new Set(prerequisiteList.filter(Boolean))];
+  if ((await visibleTaskIds(actorOf(c), prerequisiteIds)).length !== prerequisiteIds.length) {
+    return c.json({ error: "前置任务不存在" }, 404);
   }
   let created: Task | undefined;
   try {
-    [created] = await createTasks([row], b.appendToQueue && appendPosition !== null
-      ? async () => {
-          await db.insert(queueItems).values({
-            taskId,
-            queueId: b.appendToQueue!,
-            position: appendPosition!,
-            createdAt: ts,
-          });
-        }
-      : undefined, undefined, [b.reviewOf]);
+    // 上面那几句只是早点拒:隔着建任务的整段 await,队列可能已经没了、成员可能换了组。任务行与
+    // 队尾那一项同一笔事务在链上落库并重验(createTasks 的 `atomic.after`),不合法就整笔不落。
+    [created] = await createTasks([row], undefined, undefined, [b.reviewOf],
+      prerequisiteIds.map((prerequisiteId) => ({ taskId, prerequisiteId })),
+      b.appendToQueue ? { after: joinQueueOnCreate(b.appendToQueue, [taskId], { existing: true }) } : undefined);
   } catch (error) {
-    if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    if (error instanceof CliCommandValidationError || error instanceof QueueJoinRefused || error instanceof ReviewOnCreateError) {
+      return c.json({ error: error.message }, 400);
+    }
+    const refused = prerequisiteRefusal(error);
+    if (refused) return c.json(refused.body, refused.status);
     // 上面那一句只是早点拒；真正关住窗口的是落库那一下（createTasks 占着「加成员」的位，team-admission.ts）。
     if (error instanceof TeamAcceptingError) return c.json({ error: error.message, parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
     throw error;
   }
+  // 已有的前置那边也多了「谁建在它上面」（批量建任务那条路同样会发，group-routes.ts）。
+  if (prerequisiteIds.length) await republishPrerequisiteView(prerequisiteIds);
   if (b.appendToQueue) {
     // 追加到队尾后立刻推进:若前序全 done,新 task 应立刻起跑
     advanceQueueInBackground(b.appendToQueue);
@@ -424,9 +370,9 @@ api.patch("/tasks/:id", async (c) => {
   // 标记 user-action；MCP 则携带发起任务 id + 回合 token。校验的是「发起者当前仍是这
   // 一回合」，因此团队调度者可以跨任务改执行者，而被“引导会话”结束的旧单飞回合会被拒。
   let updateWhere: SQL = eq(tasks.id, tid);
-  if ((existing.status === "running" || existing.status === "queued") && c.req.header("x-ash-user-action") !== "1") {
-    const sourceTaskId = c.req.header("x-ash-source-task-id")?.trim() ?? "";
-    const turnToken = c.req.header("x-ash-turn-token")?.trim() ?? "";
+  if ((existing.status === "running" || existing.status === "queued") && requestHeader(c, NAVI_HEADERS.userAction) !== "1") {
+    const sourceTaskId = requestHeader(c, NAVI_HEADERS.sourceTaskId)?.trim() ?? "";
+    const turnToken = requestHeader(c, NAVI_HEADERS.turnToken)?.trim() ?? "";
     if (sourceTaskId) {
       const source = (await db.select({
         mode: tasks.mode,
@@ -457,7 +403,7 @@ api.patch("/tasks/:id", async (c) => {
       // 兼容已启动、尚未带 source-task-id 的本任务 MCP：仍须用目标任务的当前 token。
       if (!turnToken) {
         return c.json({
-          error: "运行中的任务缺少 ash 回合身份；外部 MCP 客户端不能修改运行中任务，请等任务空闲后再试",
+          error: "运行中的任务缺少 Navi 回合身份；外部 MCP 客户端不能修改运行中任务，请等任务空闲后再试",
         }, 409);
       }
       if (!existing.activeTurnToken || turnToken !== existing.activeTurnToken) {
@@ -498,18 +444,6 @@ api.patch("/tasks/:id", async (c) => {
   ) {
     return c.json({ error: "pinnedAt 必须是非负整数时间戳或 null" }, 400);
   }
-  if (
-    b.starredAt !== undefined &&
-    b.starredAt !== null &&
-    (!Number.isSafeInteger(b.starredAt) || b.starredAt < 0)
-  ) {
-    return c.json({ error: "starredAt 必须是非负整数时间戳或 null" }, 400);
-  }
-  // UI 只给顶层任务画星标入口:child/worker 一旦被标上就成了看不见也清不掉的隐形状态。
-  // null(清除)放行 —— 老数据里已有的 child 星标得留一条从 API 清理的路。
-  if (b.starredAt !== undefined && b.starredAt !== null && existing.parentId != null) {
-    return c.json({ error: "星标只支持顶层任务，执行者/子任务不能设置 starredAt" }, 400);
-  }
   const patch: Record<string, unknown> = {};
   // 显式改名 = 这就是标题。不关掉 autoTitle 的话，一个还没跑过的任务被改名后，首轮
   // 起跑的自动命名（auto-title.ts）会把它悄悄覆盖回去 —— 智能体用 patch_task 改名尤其
@@ -521,7 +455,6 @@ api.patch("/tasks/:id", async (c) => {
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
   if (b.pinnedAt !== undefined) patch.pinnedAt = b.pinnedAt;
-  if (b.starredAt !== undefined) patch.starredAt = b.starredAt;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   // 同建任务:groupId 是请求体里的 id,横切闸只护住了路径上的 taskId —— 少了这句,
   // 一条我看得见的任务能被改挂到别人项目的分组上(第 2 轮审查 P1)。null = 摘出分组,
@@ -607,12 +540,7 @@ api.patch("/tasks/:id", async (c) => {
   if (b.resumePrompt !== undefined) {
     patch.resumePrompt = b.resumePrompt && String(b.resumePrompt).trim() ? String(b.resumePrompt) : null;
   }
-  // updatedAt 在产品里是「最后活动时间」:同组排序、24 小时折叠、未读完成/失败事件键、
-  // 铺开态时间列都读它。星标是与活动正交的手动软记号 —— 只动 starredAt 的 PATCH 不推进
-  // updatedAt,否则给旧任务点星会让它跳到组首、解除折叠、把已读终态伪装成新事件。
-  // task.updated 事件照发(下方 publishTaskUpdated),前端仍实时回流。
-  const starOnly = "starredAt" in patch && Object.keys(patch).length === 1 && b.status === undefined;
-  if (!starOnly) patch.updatedAt = now();
+  patch.updatedAt = now();
   // 手动把任务改成**终态**，要和「起这一轮」争同一把回合锁。
   //
   // 上面那道反向守卫只看库里是不是 running/queued，而 `claimOwnTurn` 到 status 落 running
@@ -640,7 +568,16 @@ api.patch("/tasks/:id", async (c) => {
     return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再改状态", status: existing.status }, 409);
   }
   try {
-    const written = await db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
+    // 改 groupId 是分组归属写方:在起跑认领那条链上按此刻的库重验能不能改,再写(queue-membership-guard.ts)。
+    const write = () => db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
+    const moved = "groupId" in patch
+      ? await serializeQueueClaims(async () => {
+        const refused = await groupMoveRefusal(tid, (patch.groupId as string | null) ?? null);
+        return refused ? { refused } : { written: await writingGroupMembership(write) };
+      })
+      : { written: await write() };
+    if ("refused" in moved) return c.json({ error: moved.refused, groupId: existing.groupId }, 409);
+    const written = moved.written;
     if (!written.length) return c.json({ error: "任务或发起回合已经变化，PATCH 未写入" }, 409);
     // Status goes through the shared helper so manual changes maintain the run-time
     // columns (startedAt/endedAt) and broadcast them just like a real run does.
@@ -658,26 +595,5 @@ api.patch("/tasks/:id", async (c) => {
   return c.json(updated!);
 });
 
-// 这个任务在磁盘/仓库里还留着什么(worktree 目录、ash/<id8> 分支)。删除
-// 确认框在打开时先问一次:有残留才提示「要不要连它们一起删」,没有就是一句普通
-// 的确认。任务不在 worktree 模式下跑过也照查 —— useWorktree 后来被关掉、目录和
-// 分支却还在,是最容易被漏掉的那种残留。
-// children 一并探测：团队/duet 删除会连 children 行一起删，它们的 worktree/分支若不在
-// 这里露脸，确认框就不会带清理参数，删完变成数据库里查无此任务的孤儿资源（审查实测：
-// 父任务双 null、isolated child 有脏 worktree，请求根本不带清理参数）。
-api.get("/tasks/:id/workspace", async (c) => {
-  const tid = c.req.param("id");
-  const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
-  if (!t) return c.json({ error: "not found" }, 404);
-  const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
-  const own = await detectTaskWorkspace(project?.repoPath, tid);
-  const childRows = await db.select().from(tasks).where(eq(tasks.parentId, tid));
-  const children = (await Promise.all(childRows.map(async (child) => ({
-    taskId: child.id,
-    title: child.title,
-    ...(await detectTaskWorkspace(project?.repoPath, child.id)),
-  })))).filter((entry) => entry.path || entry.branch);
-  return c.json({ ...own, ...(children.length ? { children } : {}) });
-});
 
 }

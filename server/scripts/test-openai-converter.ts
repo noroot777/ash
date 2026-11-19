@@ -3,8 +3,8 @@ import { createServer } from "node:http";
 import { rmSync } from "node:fs";
 import { once } from "node:events";
 
-const dbPath = `/tmp/ash-openai-converter-${process.pid}.db`;
-process.env.ASH_DB = dbPath;
+const dbPath = `/tmp/navi-openai-converter-${process.pid}.db`;
+process.env.NAVI_DB = dbPath;
 process.env.PORT = "54321";
 
 const {
@@ -192,7 +192,7 @@ assert.equal(converted.status, 200);
 assert.equal(lastPath, "/v1/chat/completions");
 assert.equal(lastAuthorization, "Bearer secret-key");
 assert.equal(lastBody.messages[0].content, "hello");
-assert.match(converted.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
+assert.match(converted.headers.get("x-navi-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
 assert.equal(((await converted.json()) as any).output[0].content[0].text, "converted");
 
 const convertedStream = await app.request("/llm-providers/provider-1/convert/v1/responses", {
@@ -202,7 +202,7 @@ const convertedStream = await app.request("/llm-providers/provider-1/convert/v1/
 });
 assert.equal(convertedStream.status, 200);
 assert.match(convertedStream.headers.get("content-type") ?? "", /text\/event-stream/);
-assert.match(convertedStream.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
+assert.match(convertedStream.headers.get("x-navi-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
 const convertedStreamText = await convertedStream.text();
 assert.match(convertedStreamText, /response\.output_text\.delta/);
 assert.match(convertedStreamText, /response\.completed/);
@@ -212,7 +212,7 @@ const models = await app.request("/llm-providers/provider-1/convert/v1/models", 
 });
 assert.equal(models.status, 200);
 assert.equal(lastPath, "/v1/models");
-assert.match(models.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
+assert.match(models.headers.get("x-navi-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
 assert.deepEqual(await models.json(), { data: [{ id: "demo-model" }] });
 
 const { testProviderModel } = await import("../src/provider-test.js");

@@ -3,15 +3,15 @@ import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from 
 import { finished } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import type { AgentEvent, ServerEvent } from "@ash/shared";
+import type { AgentEvent, ServerEvent } from "@navi/shared";
 import type { AgentExecutor, ResidentHandle } from "../src/executors/types.js";
 import type { Lead } from "../src/team/session-types.js";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-native-upload-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+const stage = mkdtempSync(join(tmpdir(), "navi-native-upload-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 requireTmpDb("test-native-upload-visibility");
 
 const { db, ensureSchema } = await import("../src/db/index.js");

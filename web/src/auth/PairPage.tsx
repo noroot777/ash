@@ -1,11 +1,11 @@
-// 自用模式下,一台还没被放进来的设备打开 ash 时看到的那一屏。
+// 自用模式下,一台还没被放进来的设备打开 navi 时看到的那一屏。
 //
-// 默认什么都不用填:打开就自动递一张申请,机主在 ash 那边点「允许」,这边自己跳进去。
+// 默认什么都不用填:打开就自动递一张申请,机主在 navi 那边点「允许」,这边自己跳进去。
 // 两边各显示同一个四位数 —— 机主靠它认出「就是我手上这台」。
 // 另外两条路:地址里带着机主出示的一次性码(扫二维码进来的)就直接兑;脚本用的访问密钥
 // 也能粘(LoginPage 的 `accessKey` 那一档)。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PairTicket } from "@ash/shared";
+import type { PairTicket } from "@navi/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
 import { AuthShell } from "./AuthShell.tsx";
@@ -13,7 +13,7 @@ import { LoginPage } from "./LoginPage.tsx";
 
 const POLL_MS = 2_000;
 // 申请存在这个标签页里:刷新一下不该在机主那边多弹一张。
-const TICKET_KEY = "ash:pair-ticket";
+const TICKET_KEY = "navi:pair-ticket";
 
 function storedTicket(): PairTicket | null {
   try {
@@ -65,7 +65,7 @@ export function PairPage({ onDone }: { onDone: () => Promise<unknown> | void }) 
     } catch (error) {
       // 409 = 这台设备其实已经进得来了(另一个标签页刚配对完),直接去问一次状态。
       if (error instanceof ApiError && error.status === 409) return void onDone();
-      setPhase({ kind: "stopped", message: error instanceof ApiError ? error.message : "连不上 ash 服务端" });
+      setPhase({ kind: "stopped", message: error instanceof ApiError ? error.message : "连不上 Navi 服务端" });
     }
   }, [onDone]);
 
@@ -118,7 +118,7 @@ export function PairPage({ onDone }: { onDone: () => Promise<unknown> | void }) 
   return (
     <AuthShell>
       <div className="auth-card">
-        <h1>ash</h1>
+        <h1>Navi</h1>
         {phase.kind === "stopped" ? (
           <>
             <p className="auth-error" role="alert">{phase.message}</p>
@@ -126,7 +126,7 @@ export function PairPage({ onDone }: { onDone: () => Promise<unknown> | void }) 
           </>
         ) : (
           <>
-            <p className="auth-note">在跑着 ash 的那台电脑上点「允许」，这里会自己进去。</p>
+            <p className="auth-note">在跑着 Navi 的那台电脑上点「允许」，这里会自己进去。</p>
             <output className="auth-pair-code" aria-label="配对码" aria-live="polite">{ticket?.code ?? "····"}</output>
           </>
         )}

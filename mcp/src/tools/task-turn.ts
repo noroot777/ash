@@ -1,5 +1,5 @@
-// 「一条任务在自己回合里对 ash 说的话」那一组工具：阶段上报、驳回审查意见（含把越界
-// 的那几条提出来转独立任务）、辩论发言、验收、确认完成、到检查点暂停、停止、提问与答复。
+// 「一条任务在自己回合里对 navi 说的话」那一组工具：阶段上报、驳回审查意见（含把越界
+// 的那几条提出来转独立任务）、辩论与讨论发言、验收、确认完成、到检查点暂停、停止、提问与答复。
 //
 // 这几段 description 是**注入给 agent 的规则本体**，不是文档：完成协议（exit 0 ≠ done）、
 // 驳回的三条出路、辩论只许说话不许改代码，全靠这里的措辞立住。所以它们单独成文件——
@@ -11,7 +11,7 @@
 // 想写长就得先显式改那张预算表。
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@ash/shared";
+import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@navi/shared";
 // 越界转出的判据只有一份源,而且**只挂这一个运行时表面**:修复交接消息
 // (server/src/free-review-prompts.ts 的 disputeOption)那边现在只留一句指针。两边都写
 // 全文时漂过一次 —— server 那侧已经改成三种形态,这里仍要求「为什么越界(是哪一轮的哪次
@@ -23,10 +23,12 @@ import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAG
 import {
   DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
   PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE, RECURS_FIELD_GUIDE, REVIEW_VALIDATION_REQUIREMENT,
-} from "@ash/shared/free-workflow";
+} from "@navi/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { callWithMonitorResults } from "./monitor-results.js";
-import { RECURS, TASK_STAGE } from "../schemas.js";
+import { MODE, RECURS, TASK_STAGE, planTaskShape, reviewChoiceOf, suggestionShape, suggestionWithdrawShape } from "../schemas.js";
+import { MAX_DISPATCH_PLAN_ITEMS } from "@navi/shared/dispatch-plan";
+import { MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK } from "@navi/shared/dispatch-suggestion";
 
 export function registerTaskTurnTools(server: McpServer): void {
 server.registerTool(
@@ -91,27 +93,27 @@ server.registerTool(
 server.registerTool(
   "debate_reply",
   {
-    title: "辩论发言(审查意见之争)",
+    title: "辩论 / 讨论发言",
     description:
-      "执行者驳回审查意见后,用户可以让双方各说几段。你收到【审查意见辩论】提示时,说完自己这一段就调用本工具交卷,然后结束回合——**发言只认这次调用**,写在输出文本里的内容不算数,没交卷这场辩论会按「没说话」中止。\n\n"
-      + "**summary 必填**(写法见该字段说明):用户会逐段只读这一句来判断辩到哪了。\n\n"
-      + "这一段只辩论:不要改动任何文件、不要提交、不要跑会改变状态的命令。收尾那一段(提示里会写明)必须同时给 verdict:upheld=维持原意见 / withdrawn=撤回原意见 / partial=部分成立;那只是你自己的立场,**最终由用户裁定**,不改变任何结论。非收尾段传 verdict 会被忽略。本回合不要调用 report_stage / complete_task / accept_task。",
+      "审查意见辩论、或用户在回复框里发起的讨论里,轮到你说一段时(提示里写明),说完调用本工具交卷再结束回合——**发言只认这次调用**,输出文本不算,没交卷这一场按「没说话」中止。summary 必填,用户逐段只读这一句。\n\n"
+      + "这一段只说话:不改文件、不提交、不跑会改变状态的命令。辩论收尾那一段必须给 verdict(只是你自己的立场,**最终由用户裁定**,不改变任何结论);讨论里确认和各方最新的说法已一致时给 agreed=true。本回合不要调用 report_stage / complete_task / accept_task。",
     inputSchema: {
-      taskId: z.string().describe("正在辩论的任务 id(提示里有)"),
+      taskId: z.string().describe("正在辩论 / 讨论的任务 id(提示里有)"),
       summary: z.string().min(1).describe(`这一段发言的一句话,写给**用户**看。${PLAIN_SUMMARY_GUIDE}`),
-      statement: z.string().min(1).describe("你这一段的完整发言:逐条说清坚持什么、接受什么、依据是什么"),
+      statement: z.string().min(1).describe("你这一段的完整发言:坚持什么、接受什么、依据是什么"),
       verdict: z
         .enum(["upheld", "withdrawn", "partial"])
         .optional()
-        .describe("仅收尾那一段需要:upheld=维持原意见 / withdrawn=撤回原意见 / partial=部分成立"),
+        .describe("仅辩论收尾段:upheld=维持原意见 / withdrawn=撤回原意见 / partial=部分成立"),
+      agreed: z.boolean().optional().describe("仅讨论第一轮之后:你此刻的看法和各方最新的一致、再谈只是重复时传 true"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, summary, statement, verdict, directionToken }) => {
+  async ({ taskId, summary, statement, verdict, agreed, directionToken }) => {
     try {
       return ok(await call(
         "POST", `/tasks/${taskId}/free-workflow/review/debate/reply`,
-        { summary, statement, verdict }, directionToken,
+        { summary, statement, verdict, agreed }, directionToken,
       ));
     } catch (e) { return fail(e); }
   },
@@ -141,7 +143,7 @@ server.registerTool(
   {
     title: "确认任务完成(严格 done 协议)",
     description:
-      "在执行中调用,告诉 ash:「本任务的目标我确定已经达成了」。回合结算时读到这个确认才会落 done;**没有确认的正常退出(exit 0)一律按未完成记 failed**——退出码不代表目标达成,报错后退出也是 exit 0。\n\n"
+      "在执行中调用,告诉 Navi:「本任务的目标我确定已经达成了」。回合结算时读到这个确认才会落 done;**没有确认的正常退出(exit 0)一律按未完成记 failed**——退出码不代表目标达成,报错后退出也是 exit 0。\n\n"
       + "用法:核实目标已达成(产物在、校验过)后,在结束回合前调一次,然后正常结束输出。**只能在任务正在跑时调用**。没完成就不要调:要等外部条件用 pause_task;做不下去就说明原因退出(记 failed,用户可重试续跑)。\n\n"
       + "**名下还有没了结的哨兵时这个确认会被拒(409)**,两类都算:还在盯的,以及已经出了结果、还没送到你手上的(这些随 409 交给你,看过再定)。拒绝那句话里会列出是哪几个。出路:还要那个结果 → 改用 pause_task 收尾,等它叫醒你再确认;不要了 → 对那条哨兵调 stop_monitor(reason 写清为什么),它排着的结果一并按「明确放弃」算(**已经跑完的也一样要调**,放弃的是「必须先收下结果」这条条件,不是进程)。\n\n"
       + "**确认之后不要再挂哨兵**:那一刻这份确认会被当场撤掉(创建的返回里会明说),本回合改落检查点暂停。",
@@ -161,7 +163,7 @@ server.registerTool(
   {
     title: "在检查点暂停(等续跑)",
     description:
-      "在执行中调用,告诉 ash:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。你这一回合自然结束后状态落 paused(不是 done);哨兵出结果时用 resumePrompt 叫醒你续同一会话(调用时结果已到就不暂停,随返回给你),名下没有在等的哨兵时队列推进也会。\n\n"
+      "在执行中调用,告诉 Navi:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。你这一回合自然结束后状态落 paused(不是 done);哨兵出结果时用 resumePrompt 叫醒你续同一会话(调用时结果已到就不暂停,随返回给你),名下没有在等的哨兵时队列推进也会。\n\n"
       + "用法:先把检查点前的活做完,要暂停时调一次,然后正常退出当前回合。**只能在任务正在跑时调用**,resumePrompt 不能为空。\n\n"
       + "被具体问题卡住、要等人拍板时改用 ask_question:pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知团队调度者。",
     inputSchema: {
@@ -195,7 +197,7 @@ server.registerTool(
   {
     title: "提问并暂停(等调度者/用户答复)",
     description:
-      `在执行中调用,告诉 ash:「我被不拍板就没法继续的决策卡住了」。调完正常结束回合,任务落 paused 且**队列不会自动续跑**;问题即时送达团队调度者(你是执行者时),没有调度者就停在那等用户。你自己是团队调度者时调它 = 问用户。答复通过 answer_question 送达,会作为一段文本唤醒你同一个 CLI 会话续跑。\n\n`
+      `在执行中调用,告诉 Navi:「我被不拍板就没法继续的决策卡住了」。调完正常结束回合,任务落 paused 且**队列不会自动续跑**;问题即时送达团队调度者(你是执行者时),没有调度者就停在那等用户。你自己是团队调度者时调它 = 问用户。答复通过 answer_question 送达,会作为一段文本唤醒你同一个 CLI 会话续跑。\n\n`
       + `用法:只能在任务正在跑时调用,先把当下能做的都做完再提问。一个决策用 question + options;有几个**相关且都需要同一个人拍板**的决策时,用 question 写共同背景、questionItems 一次问完(最多 ${MAX_QUESTION_ITEMS} 个),别挤牙膏,也别把无关问题硬凑在一起。\n\n`
       + "options 都是**建议答案,不是单选题**:每条只写一句能直接当答复读的话,理由和取舍留在对应 question 里。答复者可以改、可以组合、也可以完全自由作答。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等具体问题的答案」。",
     inputSchema: {
@@ -229,6 +231,52 @@ server.registerTool(
   },
   async ({ taskId, question, options, questionItems, directionToken }) => {
     try { return ok(await call("POST", `/tasks/${taskId}/ask`, { question, options, questionItems }, directionToken)); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "propose_dispatch",
+  {
+    title: "摆出派活单(派出一批任务前先给用户过目)",
+    description:
+      "想派出一批任务、而用户还没看过这批活时用它：回复框那一格变成派活单，用户可以换执行器、去掉某条、改一个接一个/同时。"
+      + "调完正常结束回合，任务落 paused 等用户。用户按「派出去」时由 Navi 照单建好、挂在本任务名下、交给调度，再把建好的清单(任务号、标题、交给谁)作为答复续上你的会话——**不要再自己建一遍**；"
+      + "用户写一句发回来时一条都没建，按他的话改完可以再摆一次。\n\n"
+      + "用户已经明确说过开工、或已经确认过这份清单，直接用 batch_create_tasks / create_task_chain 建，别再摆一遍。有提问在等时会被拒，摆了单就别再 ask_question。",
+    inputSchema: {
+      taskId: z.string().describe("当前正在执行的任务 id"),
+      tasks: z.array(planTaskShape).min(1).max(MAX_DISPATCH_PLAN_ITEMS).describe("按派出顺序排列；agentType/executorId 不填 = 交给本任务「派出去的活交给谁」的默认"),
+      order: MODE.optional().describe("serial=一个接一个(默认)；parallel=同时"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+    },
+  },
+  async ({ taskId, tasks, order, directionToken }) => {
+    // 卡上每一行都摆着谁来审（缺省默认审查者），用户按「派出去」前能换、能关。
+    const items = tasks.map(({ reviewer, ...task }) => ({ ...task, review: reviewChoiceOf(reviewer) }));
+    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-plan`, { tasks: items, order: order ?? "serial" }, directionToken)); }
+    catch (e) { return fail(e); }
+  },
+);
+
+// 门槛写在说明里：每个回合都带着它，卡不住就每次回复挂两三条。
+server.registerTool(
+  "suggest_dispatch",
+  {
+    title: "挂出/收回可以另开的任务(不停下)",
+    description:
+      "只在你本来就要写「建议另开任务」时用：那件事该做、但不属于本任务。说明写好挂在用户回复框顶上，用户一按就派成新任务。"
+      + "不停任务，调完照常往下做、照常结束。拆自己的活用 propose_dispatch；顺手能做完的、想法没成形的不挂。新任务看不到这场对话，body 要自带上下文。\n\n"
+      + "挂上的一直留到用户派掉或点叉，不用重挂。后来不成立了（你自己做了、情况变了）用 withdraw 收回。",
+    inputSchema: {
+      taskId: z.string(),
+      tasks: z.array(suggestionShape).max(MAX_SUGGESTIONS_PER_CALL).optional(),
+      withdraw: z.array(suggestionWithdrawShape).max(MAX_SUGGESTIONS_PER_TASK).optional(),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken，原样传入"),
+    },
+  },
+  async ({ taskId, tasks, withdraw, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-suggestions`, { tasks, withdraw }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

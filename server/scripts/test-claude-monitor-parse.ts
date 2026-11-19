@@ -10,7 +10,7 @@
 // 内嵌而不是去读 data/runs：那些文件会被 run-logs-gc 回收，依赖它们的测试迟早变成
 // 「跳过」而没人发现。
 import { eq } from "drizzle-orm";
-import { parseMonitorStartReceipt } from "@ash/shared/monitor";
+import { parseMonitorStartReceipt } from "@navi/shared/monitor";
 import { db, makeTask, now, sessions, monitors, listMonitors, teardown } from "./monitors-fixture.js";
 
 const { ClaudeMonitorTrace } = await import("../src/claude-monitors.js");
@@ -140,9 +140,9 @@ async function main(): Promise<void> {
   await settle();
   const sub = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsubagent"))).at(0);
   check(sub !== undefined, "子智能体挂的 Monitor 也认领（接线在 claude-stream 的嵌套分支）");
-  check(sub?.taskId === taskId, "子智能体的哨兵归属到同一个 ash 任务", String(sub?.taskId));
+  check(sub?.taskId === taskId, "子智能体的哨兵归属到同一个 navi 任务", String(sub?.taskId));
 
-  // ⑧ 来源报多久就记多久 —— 不能套 ash 的创建区间
+  // ⑧ 来源报多久就记多久 —— 不能套 navi 的创建区间
   const secs = new ClaudeMonitorTrace();
   secs.event({ type: "system", subtype: "init", session_id: CLI_SESSION });
   callMonitor(secs, { command: "sleep 1", description: "只盯 5 秒", timeout_ms: 5_000 }, "toolu_secs");
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
   await settle();
   const quick = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsecs001"))).at(0);
   const quickSpan = quick ? Date.parse(quick.expiresAt) - Date.parse(quick.startedAt) : -1;
-  check(Math.abs(quickSpan - 5_000) < 1_500, "来源回执说 5 秒就记 5 秒，不抬到 ash 的下限", `${quickSpan}ms`);
+  check(Math.abs(quickSpan - 5_000) < 1_500, "来源回执说 5 秒就记 5 秒，不抬到 navi 的下限", `${quickSpan}ms`);
 
   // ⑨ 接管回来：新 trace 必须把上一轮的投影认回来，否则终态通知会被当成「不是我的」丢掉
   const reclaimTrace = new ClaudeMonitorTrace();
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
   check(fvDto?.expiresAt === null, "持续监听对外不给到期时刻（给了就是假的）", String(fvDto?.expiresAt));
 
   // ⑮ **误判过的 lost 要能被来源事实纠正。**
-  // `lost` 是 ash 推断的（流断了、重启后判来源已不在），不是来源说的。agent 活得过 ash
+  // `lost` 是 navi 推断的（流断了、重启后判来源已不在），不是来源说的。agent 活得过 navi
   // 重启，所以推断错很正常——错了之后来源照常送来 completed，那时必须改回来。第 3 轮审查
   // 实测：卡片被误判成 lost 之后，真 completed 到了仍然是 lost，错误永久固化。
   const mis = new ClaudeMonitorTrace(CLI_SESSION);

@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { FeishuStatus, ImOptions, ProjectView } from "@ash/shared";
+import type { FeishuStatus, ImOptions, ProjectView } from "@navi/shared";
 import { Button, Checkbox, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { localeNumber } from "../lib/localeFormat.ts";
@@ -98,7 +98,7 @@ export function FeishuPushCard({ status, projects, onStatus, notify }: {
             <small className={urlInvalid ? "feishu-field-error" : undefined}>
               {urlInvalid
                 ? "要以 http:// 或 https:// 开头，中间不能有空格"
-                : "卡片上「在 ash 中打开」的地址前缀。填 Tailscale 等手机能打开的地址；为空则卡片不带链接。"}
+                : "卡片上「在 Navi 中打开」的地址前缀。填 Tailscale 等手机能打开的地址；为空则卡片不带链接。"}
             </small>
           </span>
           {canManage && (
@@ -127,7 +127,7 @@ export function FeishuPushCard({ status, projects, onStatus, notify }: {
             <small className={quotaInvalid ? "feishu-field-error" : undefined}>
               {quotaInvalid
                 ? "填一个正整数"
-                : `飞书开放平台给这个应用的月调用次数上限，从开发者后台的用量页抄过来（默认 ${localeNumber(DEFAULT_QUOTA, "zh-CN")}）。ash 按它算水位，接近上限时先少推不要紧的。`}
+                : `飞书开放平台给这个应用的月调用次数上限，从开发者后台的用量页抄过来（默认 ${localeNumber(DEFAULT_QUOTA, "zh-CN")}）。Navi 按它算水位，接近上限时先少推不要紧的。`}
             </small>
           </span>
           {canManage && (

@@ -25,14 +25,16 @@
 // 另外钉住「拆屋」：为接住一句话临时建的空壳 worktree，agent 一个字没改就该删掉 ——
 // 这个任务早已验收过、不会再验收第二次，不在这儿删就永远没人删了，而用户看不见它。
 // Run: npm -w server run test:turn-baseline
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-turn-baseline-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-turn-baseline-"));
+process.env.NAVI_DB = join(root, "ash.db");
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
@@ -280,7 +282,7 @@ try {
   // ── ⑥ 空壳工作间没被动过 → 拆屋 ──────────────────────────────────────────
   const shellId = "tb-shell01";
   const shellPath = join(repo, ".worktrees", shellId);
-  const shellBranch = `ash/${shellId.slice(0, 8)}`;
+  const shellBranch = `navi/${shellId.slice(0, 8)}`;
   execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", shellBranch, shellPath]);
   await db.insert(tasks).values({
     id: shellId,
@@ -318,5 +320,5 @@ try {
   );
 } finally {
   for (const id of IDS) rmSync(join(RUNS_DIR, id), { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

@@ -1,7 +1,7 @@
 // 「这一回合是审查者在说话吗、是第几轮」——会话里认审查者的全部判据。
 // 从 conversationModel 里分出来的一块：那边管的是「把落盘与直播拼成一条时间线」,
 // 这里只管在那条线上认人。类型是单向借用（`import type` 编译后不留引用）。
-import { LEGACY_SYS_MARKER } from "@ash/shared";
+import { LEGACY_SYS_MARKER } from "@navi/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { stageOf, verifyMarkOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -51,6 +51,36 @@ export function monitorWakeFedReviewer(
   if (scope.kind === "inline") return sameAs(scope.reviewerSessionId ?? scope.startSessionId);
   if (item.sessionRole) return item.sessionRole === "reviewer" && sameAs(scope.reviewerSessionId);
   return sameAs(scope.reviewerSessionId);
+}
+
+/**
+ * 审查者那条会话**它自己的事**：结算说明、会话说明（换人接手另开会话、版本替换、会话作废…）、回合边界
+ * （「执行异常结束 · exit 1」）。这是审查的事，只能贴在审查那颗气泡下面、记进那一轮或在原处单独记一笔；
+ * 落进执行者回合的尾注或记录，读起来就是执行者那一回合出了事（用户 2026-11-19 截图）。
+ *
+ * 判据只认记录格式，不认措辞，也不认展示语气：
+ *   - `level:"notice"`（结算说明，2026-08-31 起；读进来是 `tone:"notice"`，那一档只从这个标来）和直播的
+ *     回合边界：一直都是会话自己的事；
+ *   - 其余不带 `aside` 的系统行：2026-09-14 起（f4fd774b8，再留一天给没重启的旧进程）任务时间线（验收、预览、
+ *     审查开始…）一律带 `aside`，会话里剩下的系统行（会话说明这一类生产者都不写 level）就全是会话自己的；
+ *     那之前任务时间线也不带标、老服务端还把它写进当时最新的那条会话，分不开，不算。
+ *   - 「继续（从中断处）」那种回合起点（`resume`）是下一回合的输入，不在此列。
+ */
+const SESSION_NOTE_CONTRACT_SINCE = "2026-09-15T06:11:38.000Z";
+
+export function reviewerTurnNote(item: Extract<ConversationItem, { kind: "event" }>): boolean {
+  if (item.sessionRole !== "reviewer" || item.aside || item.resume) return false;
+  if (item.tone === "notice" || item.variant === "boundary") return true;
+  return !!item.at && item.at >= SESSION_NOTE_CONTRACT_SINCE;
+}
+
+/**
+ * 审查回合没办成时结算顺手交代的「任务状态保持「X」不变」（异常退出、被停、熔断那几支）：任务状态本来就
+ * 不归审查回合管，这句话放在哪儿都只会让人以为执行者那一回合出了事。服务端已经不再给审查回合写它
+ * （single-run-settle.ts 的 sessionSettlementNote），这里认的是那之前落下的老记录，哪儿都不画。
+ */
+export function reviewerRestoredNote(item: Extract<ConversationItem, { kind: "event" }>): boolean {
+  return reviewerTurnNote(item) && item.variant !== "boundary" && /任务状态保持「[^」]+」不变。?$/.test(item.text.trim());
 }
 
 export function traceVerifyRound(entries: SessionTraceEntry[]): number | null {

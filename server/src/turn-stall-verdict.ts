@@ -23,7 +23,7 @@
 //
 // 但判决**不能只有内存这一半**(审查 F3,已实测两个独立消费进程):这里原先写着「跨 server
 // 重启那一种本来就走另一条路:重启后接回 → 进程没了 → 按真实非零退出判失败」,那个前提是
-// 错的 —— **detached 的 agent 活得过 server 重启**(executors/detached.ts,ash 的既有能力)。
+// 错的 —— **detached 的 agent 活得过 server 重启**(executors/detached.ts,navi 的既有能力)。
 // 进程没死,它会被接管;新进程的这个 Map 是空的,上游一恢复并正常答完,这一轮就按
 // `completed` 结算、任务落 `done`,而用户早已看到「已自动终止本回合并按失败结算」。
 // 持久那一半在 `turn-stall-persist.ts`(落盘 + 接管时装回来),注册进来,不反过来把 db 拖进
@@ -35,11 +35,11 @@
 // `stall_reason=NULL` 就把它解释成「没熔断过」。所以判决的事实落在一个不可能排在别人事务后面
 // 的地方(`turn-stall-journal.ts`:另一个文件、同步写、写完 fsync),库那一格降级成给界面和接口
 // 读的投影。这里只认一件事:**注册进来的那一半必须在返回之前把事实存住,并如实报它存住了没有**。
-import type { ModelFailure, ModelFailureKind } from "@ash/shared";
+import type { ModelFailure, ModelFailureKind } from "@navi/shared";
 import { now } from "./util.js";
 
 /**
- * 「ash 认定这一轮不成功」的**原因种类** —— 判决自己带着它,结算侧照它挑落位说明。
+ * 「navi 认定这一轮不成功」的**原因种类** —— 判决自己带着它,结算侧照它挑落位说明。
  *
  * **只有这一份枚举**(第 2 轮续聊自审):上一版在结算侧另定义了一份(`upstream_stall` /
  * `unverified_verdict`),由消费链在中间做一次手工三元映射。那种形状的代价是加第三种原因时
@@ -145,7 +145,7 @@ export function setStallVerdictPersister(fn: StallVerdictPersister | null): void
  *   · 第 2 轮是条数水位(KEEP=64,超了扔最老的)—— 扔掉的恰恰是还没结算那一条。断网会同时
  *     波及很多台,实测 65 个回合先全部熔断、再统一收到结束回执时,最早那一轮的判决已经被挤掉,
  *     `endTurn` 读不到于是记成 `completed`(1 completed / 64 failed)。
- *   · 第 3 轮换成纯年龄 TTL —— **老不等于孤立**。`ASH_STALL_TRIP_GRACE_MS=0`(产品允许的配置)
+ *   · 第 3 轮换成纯年龄 TTL —— **老不等于孤立**。`NAVI_STALL_TRIP_GRACE_MS=0`(产品允许的配置)
  *     关掉了强制回收,于是一个熔断过、`interrupt` 没人理的回合可以继续活着;跨过 6 小时、或者
  *     主机休眠把墙钟往前一跳,下一次熔断的写入就会把那条**仍然有人要读**的判决扫掉,旧回合
  *     后来真收到 turnEnd 时读到 null,照样写 `completed`(第 3 轮审查 F3,已实测)。
@@ -191,7 +191,7 @@ export function markStallFailure(
     try {
       return persister.append({ sessionId, turnStartedAt, reason, since: since ?? at, at, model }) ? "durable" : "lost-on-restart";
     } catch (error) {
-      console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能存住:`, error);
+      console.warn(`[navi] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能存住:`, error);
       return "lost-on-restart";
     }
   })();
@@ -282,7 +282,7 @@ export function clearStallFailure(sessionId: string, turnStartedAt: string | nul
     persister?.discharge(sessionId, turnStartedAt);
   } catch (error) {
     // 销账失败只意味着下次启动会把这条判决读回来(偏保守那一侧),不该掀翻正在收尾的结算。
-    console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的判决销账失败:`, error);
+    console.warn(`[navi] 会话 ${sessionId} 回合 ${turnStartedAt} 的判决销账失败:`, error);
   }
 }
 
@@ -311,7 +311,7 @@ export function trustedModel(value: unknown): ModelFailure | null {
  * 启动时把**落盘的那些**装进内存(`turn-stall-persist.ts` 在模块加载时调一次)。
  *
  * 为什么是启动一次性装载、而不是每次读判决时各自去读一遍文件:「读不出来」要不要影响结论,是
- * 个**全局**判断(「这台 ash 还核得了自己的判决吗」);摊到每个读取点各写一次 try/catch,默认
+ * 个**全局**判断(「这台 navi 还核得了自己的判决吗」);摊到每个读取点各写一次 try/catch,默认
  * 行为必然又退化成「读不到就当没有」—— 那正是第 5 轮审查 F1 指的那条。装载完成之后,内存这张
  * 表就是判决的全集,结算侧照常只读内存,一个字都不用改。
  *

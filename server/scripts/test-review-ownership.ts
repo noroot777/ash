@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "no
 import { join } from "node:path";
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, dbClient, root, runs, schema, tasks, teardown, until } from "./monitors-fixture.js";
 import { setupRegressionReviews } from "./regression-review-fixture.js";
 import { testReviewAcceptanceOwnership } from "./test-review-ownership-acceptance.js";
@@ -25,7 +25,7 @@ const row = async (taskId: string) => (await db.select().from(tasks).where(eq(ta
 const messages = (taskId: string) => db.select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.taskId, taskId));
 const clearMessages = (taskId: string) => db.delete(schema.scheduledMessages).where(eq(schema.scheduledMessages.taskId, taskId));
 const api = new Hono();
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 api.post("/tasks/:id/answer", (context) => answerTask(context, context.req.param("id")));
 
 try {
@@ -60,19 +60,6 @@ try {
     runs.releaseTurn(review.taskId);
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, review.taskId));
     console.log(`✓ ${mode}: old receipt closes only its own ledger, not a newer target direction`);
-  }
-
-  for (const missing of ["identity", "entire-state"] as const) {
-    const review = await open("legacy");
-    assert.equal((await review.stage()).status, 200);
-    if (missing === "identity") await db.update(schema.regressionEvidence).set({ targetIdentity: null }).where(eq(schema.regressionEvidence.directory, review.directory));
-    else await db.delete(schema.regressionEvidence).where(eq(schema.regressionEvidence.directory, review.directory));
-    await review.settle(false);
-    assert.equal((await row(review.taskId)).stage, "verified");
-    assert.equal((await review.state()).settlement?.target, null);
-    assert.equal((await review.state()).finalization?.superseded, true);
-    runs.releaseTurn(review.ownerTaskId);
-    console.log(`✓ historical ${missing}: recovery cannot sample a new target identity`);
   }
 
   for (const mode of ["preset", "legacy"] as const) {

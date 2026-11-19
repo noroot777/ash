@@ -26,7 +26,8 @@
 // 而且 `taskkill /T` 那条路不受影响。
 import { randomBytes } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
-import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } from "../monitor-unit-scan.js";
+import { invalidateMonitorUnitScan, seedMonitorUnitEnv } from "../monitor-unit-scan.js";
+import { FROZEN_AGENT_UNIT_PREFIX } from "@navi/shared/legacy-names";
 
 /**
  * 这一次运行独有的记号。
@@ -37,7 +38,7 @@ import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } from "../monitor-unit-sca
  * 是它必须落库才能跨重启认回来(`sessions.agent_unit_token`)。
  */
 export function mintUnitToken(): string {
-  return `ash-agent-${process.pid.toString(36)}-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
+  return `${FROZEN_AGENT_UNIT_PREFIX}${process.pid.toString(36)}-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
 }
 
 /**
@@ -54,7 +55,7 @@ export function mintUnitToken(): string {
  */
 export function seedUnitToken(env: NodeJS.ProcessEnv): string {
   const token = mintUnitToken();
-  env[MONITOR_UNIT_ENV] = token;
+  seedMonitorUnitEnv(env, token);
   return token;
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { PrimaryActionKind, Task, TaskActions, TaskListItem } from "@ash/shared";
-import { hasPendingAcceptCommit } from "@ash/shared";
-import { taskCreationLabel } from "@ash/shared/task-origin";
+import type { PrimaryActionKind, Task, TaskActions, TaskListItem } from "@navi/shared";
+import { hasPendingAcceptCommit } from "@navi/shared";
+import { taskCreationLabel } from "@navi/shared/task-origin";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -18,9 +18,11 @@ import {
   SealCheck,
   SpinnerGap,
   Trash,
+  TreeView,
   UsersThree,
 } from "@phosphor-icons/react";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentRelation } from "../components/TaskOrigin.tsx";
+import { TaskAncestry } from "../components/TaskAncestry.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { IconButton } from "../components/IconButton.tsx";
 import { ActionMenuItem } from "../components/ActionMenuItem.tsx";
@@ -42,7 +44,7 @@ const STEP: Record<PrimaryActionKind, { label: string; tip?: string }> = {
 
 /**
  * 任务头：左边说「这是哪个任务」——类型（灰图标）、标题、来源（灰图标）、图钉；右边只有图标：
- * 此刻轮到你的那一步（重试 / 运行 / 继续）、验收的那枚章、更多、面板开关（docs/ui-ux-audit head-1）。
+ * 此刻轮到你的那一步（重试 / 运行 / 继续）、验收的那枚章、更多、面板开关。
  * 那一步出不出、点不点得了、重新排队与归档同理，都照服务端给的 `actions`（lib/useTaskActions.ts）。
  *
  * 状态词不在头上写：在跑看回复框那颗键（它就是停止），别的看侧栏那一行的点，右侧「信息」格里
@@ -69,6 +71,7 @@ export function TaskHeader({
   onPostMergeReview,
   onDelete,
   inspectorToggle,
+  planChip,
   notify,
 }: {
   task: Task;
@@ -93,6 +96,8 @@ export function TaskHeader({
   onPostMergeReview?: () => void;
   onDelete: () => void;
   inspectorToggle?: ReactNode;
+  /** 标题后面那枚「计划」（PlanModeChip）：开着 Codex 计划模式时常驻，回复框被接管时也看得到。 */
+  planChip?: ReactNode;
   notify: (message: string) => void;
 }) {
   const [title, setTitle] = useState(task.title);
@@ -165,7 +170,10 @@ export function TaskHeader({
   return (
     <header className="task-detail-header">
       <div className="task-head-name">
-        <TaskKindGlyph mode={task.mode} />
+        {task.dispatchedBy && !task.parentId
+          ? <span className="task-head-glyph" role="img" aria-label="子任务"><TreeView size={14} aria-hidden="true" /></span>
+          : <TaskKindGlyph mode={task.mode} />}
+        <TaskAncestry task={task} tasks={allTasks} onOpen={onOpenTask} />
         {task.parentId !== null ? (
           <span className="task-detail-title is-readonly">{task.title || "未命名任务"}</span>
         ) : (
@@ -188,8 +196,9 @@ export function TaskHeader({
             />
           </span>
         )}
-        <TaskSourceGlyph task={task} allTasks={allTasks} onOpen={onOpenTask} />
+        {taskParentLink(task, allTasks)?.kind !== "dispatch" && <TaskSourceGlyph task={task} allTasks={allTasks} onOpen={onOpenTask} />}
         {task.parentId === null && <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />}
+        {planChip}
       </div>
       <span className="task-head-grow" />
       <span className="task-head-acts" ref={acts}>
@@ -342,7 +351,8 @@ function TaskSourceGlyph({ task, allTasks, onOpen }: { task: TaskListItem; allTa
   ].filter(Boolean).join("，");
   const glyph = link?.kind === "team" ? <UsersThree size={14} aria-hidden="true" />
     : creator ? <Robot size={14} aria-hidden="true" />
-      : <GitFork size={14} aria-hidden="true" />;
+      : link?.kind === "dispatch" ? <TreeView size={14} aria-hidden="true" />
+        : <GitFork size={14} aria-hidden="true" />;
   if (link?.task) {
     return (
       <IconButton label={said} size="sm" className="task-head-source" onClick={() => onOpen(link.taskId)}>

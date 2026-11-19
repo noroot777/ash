@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { PersonalCliEnv } from "@ash/shared";
+import type { PersonalCliEnv } from "@navi/shared";
 import "../../src/styles/global.css";
 import { PersonalCliSettings } from "../../src/settings/PersonalCliSettings.tsx";
 
@@ -13,7 +13,7 @@ const env = (agentType: string): PersonalCliEnv => ({
   memoryFile: `/workspace/personal/${agentType}/${agentType === "claude" ? "CLAUDE.md" : "AGENTS.md"}`,
   hasMemory: !!memories[agentType], plugins: [],
   skills: Object.keys(skills[agentType]).map(name => ({ name, description: "已安装的技能" })),
-  ashMcp: { configured: true, serverName: "ash", problem: null },
+  naviMcp: { configured: true, serverName: "navi", problem: null },
 });
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { "content-type": "application/json" },

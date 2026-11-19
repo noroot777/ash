@@ -1,4 +1,6 @@
-const DONE_KEY = "ash:inspector:retired-tabs";
+import { storageKeys } from "../lib/storageRename.ts";
+
+const DONE_KEY = "navi:inspector:retired-tabs";
 
 interface StoredState {
   openTabs?: unknown;
@@ -27,7 +29,8 @@ export function retireInspectorTab(migrationId: string, keyPattern: RegExp, tabI
   try {
     const done = readDone();
     if (done.includes(migrationId)) return;
-    for (const key of Object.keys(window.localStorage)) {
+    // 按新名列：改名时没挪成、暂留在旧名下的面板状态也要过一遍（见 storageRename.ts）。
+    for (const key of storageKeys(window.localStorage)) {
       if (!keyPattern.test(key)) continue;
       const raw = window.localStorage.getItem(key);
       if (!raw) continue;

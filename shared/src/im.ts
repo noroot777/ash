@@ -9,7 +9,7 @@ export type ImDomain = "feishu" | "lark";
  *   unconfigured  没配凭证
  *   broken        凭证文件坏了（原因在 configError）
  *   preview       预览实例，按设计不连
- *   not_exclusive 同一个库起了多个实例（ASH_ALLOW_MULTI），连上会和另一个实例随机分走事件
+ *   not_exclusive 同一个库起了多个实例（NAVI_ALLOW_MULTI），连上会和另一个实例随机分走事件
  *   disabled      总开关关着
  */
 export type ImConnectionState =
@@ -45,7 +45,7 @@ export interface ImOptions {
   enabled: boolean;
   /** 任务完成/验收合并/门禁出结果也推一条通知（默认开）。 */
   notifyCompleted: boolean;
-  /** 卡片里「在 ash 中打开」的地址前缀，如 Tailscale 地址；为空则卡片不带深链。 */
+  /** 卡片里「在 navi 中打开」的地址前缀，如 Tailscale 地址；为空则卡片不带深链。 */
   publicBaseUrl: string | null;
   /** 飞书开放平台的月调用额度（免费版自建应用 1 万次）。 */
   monthlyQuota: number;

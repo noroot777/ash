@@ -11,7 +11,7 @@
 //   ④ 退出码、清恢复字段这些既有语义一个都没被改掉
 //   ⑤ **error 通道没被废掉**：执行器自己报的那条错照旧是 error（对照组）；而结算说明
 //      （这一轮没调 complete_task）走的是 system + level:"notice" —— 它讲的是「这一轮
-//      为什么落成这个状态」，不是故障，混进红色里第一次用 ash 的人只会读成「它崩了」。
+//      为什么落成这个状态」，不是故障，混进红色里第一次用 navi 的人只会读成「它崩了」。
 // 加上 team/duet 两条链的静态钉子——三条链必须共用 session-notice.ts 那一个判据。
 //
 // 跑法：npm -w server run test:session-notice
@@ -20,13 +20,13 @@ import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentEvent, ServerEvent } from "@ash/shared";
+import type { AgentEvent, ServerEvent } from "@navi/shared";
 
-const root = mkdtempSync(join(tmpdir(), "ash-session-notice-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-session-notice-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 assert.ok(
-  process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "结算钩子一旦失手触发续跑，拦截器失效就会拿用户的真额度跑 agent",
 );
 process.on("exit", () => {
@@ -40,6 +40,7 @@ const { tasks, sessions } = await import("../src/db/schema.js");
 const { bus } = await import("../src/bus.js");
 const { RUNS_DIR } = await import("../src/paths.js");
 const { parseSessionTrace } = await import("../src/transcript.js");
+const { parseSessionOutput } = await import("@navi/shared/session-output");
 const { consumeSingleRun } = await import("../src/single-run.js");
 await ensureSchema();
 
@@ -124,7 +125,7 @@ assert.ok(
 );
 // 结算说明（这一轮没调 complete_task，严格完成协议记未完成）：走 system + level:"notice"，
 // 不进 error 通道。它是「这一轮为什么落成这个状态」的说明，不是故障 —— 混进红色里，
-// 第一次用 ash 的人看到的是一条红字加一个折起来的黑盒，读到的是「它崩了」。
+// 第一次用 navi 的人看到的是一条红字加一个折起来的黑盒，读到的是「它崩了」。
 assert.ok(
   !liveErrors.some((message) => message.includes("没有交卷")),
   `结算说明不该以 error 上 SSE：${JSON.stringify(liveErrors)}`,
@@ -180,6 +181,18 @@ assert.ok(persistedSettlement, `.md 里没有结算说明的 system 回合行：
 assert.equal(persistedSettlement.level, "notice", "结算说明落盘时把 level 丢了");
 assert.ok(md.includes("这一轮正文已经完整产出。"), "正文本身必须原样落盘");
 ok(".md 留下持久 system 注记（含 level），刷新后还在");
+
+// 旁注落在这一回合的结束标记**之后**，而且只落一次。夹在正文和结束标记之间，重建时结束时间
+// 盖不到 agent 气泡上，这一回合的用时就退回「算到下一次说话为止」；收尾链正常走完之后异常
+// 兜底还会再 flush 一次，写两遍、或者写到已经 end 的流上（当场打崩 server）都是它没先取空。
+const rebuilt = parseSessionOutput(md);
+const agentAt = rebuilt.findIndex((segment) => segment.kind === "agent");
+assert.ok(agentAt >= 0 && rebuilt[agentAt]?.endedAt, `agent 气泡没拿到结束时间：${JSON.stringify(rebuilt.map((s) => [s.kind, s.endedAt]))}`);
+const rotationAt = rebuilt.findIndex((segment) => segment.kind === "system" && segment.text.includes("全新会话"));
+assert.ok(rotationAt > agentAt, "轮换旁注要独立成段、排在这一回合的正文之后");
+assert.equal(systemTurnTexts.filter((text) => text.includes("全新会话")).length, 1, "轮换说明只落盘一次");
+assert.equal(systemTurnTexts.filter((text) => text === DIAGNOSIS).length, 1, "诊断只落盘一次");
+ok("旁注排在回合结束标记之后、只落一次：气泡的结束时间还在");
 
 // 既有语义一个都不能被这次改动动到：exit 0 照记，恢复字段照清。
 const row = (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!;

@@ -1,13 +1,14 @@
 // 单任务的验证记录：一轮一行（第几轮、在哪验、右边是结论），点开就在这一行底下铺报告；
-// 嫌窄就点正文第一行末尾那颗图标，同一份正文装进贴着面板左边缘的抽屉里看。
+// 嫌窄就点正文第一行末尾那颗图标，同一份正文从左边推出来读（LeftDrawer）。
 //
 // 粒度按各自的主语走：团队一屏里有多个被审对象，列的是对象；单任务只有它自己，列的是轮次。
 import { useMemo, useRef, useState } from "react";
-import type { TaskReviewRound } from "@ash/shared";
+import type { TaskReviewRound } from "@navi/shared";
 import { InspButton, InspNone, InspRecord, InspSec } from "../inspector/parts.tsx";
 import { useInspectorRequest } from "../inspector/nav.tsx";
 import { RequestMissNote } from "../inspector/RequestMissNote.tsx";
 import { api } from "../lib/api.ts";
+import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   ReviewRoundBody,
   roundState,
@@ -102,9 +103,15 @@ export function TaskReviewRounds({
                 onToggle={() => toggle(key)}
               >
                 <ReviewInlineReport
-                  title={`第 ${round.round} 轮验证`}
-                  subtitle={`${status.label} · ${roundWhere(round)}`}
-                  anchorRef={rootRef}
+                  entry={{
+                    key: `verify:${taskId}:${key}`,
+                    kind: "验证报告",
+                    title: `第 ${round.round} 轮验证 · ${status.label} · ${roundWhere(round)}`,
+                    ariaLabel: `验证报告：第 ${round.round} 轮`,
+                    closeLabel: "关闭验证报告",
+                    body: <ImagePreviewGroup isolated><div className="review-round-body"><ReviewRoundBody taskId={taskId} round={round} onOpenTask={onOpenTask} includeScreenshots={false} /></div></ImagePreviewGroup>,
+                    footer: screenshots ? <ImagePreviewGroup isolated>{screenshots}</ImagePreviewGroup> : undefined,
+                  }}
                   screenshots={screenshots}
                 >
                   <ReviewRoundBody taskId={taskId} round={round} onOpenTask={onOpenTask} includeScreenshots={false} />

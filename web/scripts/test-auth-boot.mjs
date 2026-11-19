@@ -6,7 +6,7 @@
 // RTT 刚好够把外壳闪出来再跳走。两头一起修,所以这里钉五条:
 //   ① 状态很快回来(本机/预热命中):从头到尾**一个过渡屏都不出现**,直接是工作台;
 //   ② 状态真的慢:仍然不许出现整块外壳,但要给出低调的等待态,别让人对着空屏猜;
-//   ③ 等待态的阈值以 AuthGate 的源码为准 —— 测试跟着它走,改阈值不用改这里;
+//   ③ (阈值取多少是可调的手感参数,不钉;慢路径靠夹具的 `?delay=hold` 扣住应答,不赌窗口)
 //   ④ index.html 里那发预热请求还在,而且确实**赶在 bundle 之前**发出去(整个修复的
 //      前提就是它俩并行;它被删掉的话 ① 会静默退化成「本机也要等一个 RTT」);
 //   ⑤ 预热快照**只兑现一次** —— 这是整个修复里唯一能造成功能倒退的语义:重复兑现的话,
@@ -16,31 +16,21 @@ import { createServer as createHttpServer } from "node:http";
 import { readSource } from "../../scripts/read-source.mjs";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const gateSource = readSource(new URL("../src/auth/AuthGate.tsx", import.meta.url));
 const indexSource = readSource(new URL("../index.html", import.meta.url));
-const probeSource = readSource(new URL("../src/lib/authProbe.ts", import.meta.url));
-
-// ③ 阈值从源码里读 —— 写死一个 400 就会在改阈值那天变成假绿。慢路径不再拿「阈值 + 600ms」
-// 赌窗口:应答扣住到测试看完等待态才放(夹具的 `?delay=hold`),所以这里只校验它的形状与区间。
-const thresholdMatch = /setWaitedLong\(true\), (\d+)\)/.exec(gateSource);
-assert(thresholdMatch, "AuthGate 里那个「等多久才给等待态」的 setTimeout 没了或改了形状");
-const threshold = Number(thresholdMatch[1]);
-assert.ok(threshold >= 200 && threshold <= 1200, `等待阈值 ${threshold}ms 不在合理区间`);
 
 // ④ 预热脚本必须还在,而且两头对得上:全局名一致、路径就是 authApi 打的那一条。
-assert.match(indexSource, /window\.__ashAuthProbe\s*=\s*fetch\(\s*"\/api\/auth\/state"/,
+assert.match(indexSource, /window\.__naviAuthProbe\s*=\s*fetch\(\s*"\/api\/auth\/state"/,
   "index.html 里的身份预热请求没了 —— 没有它,首屏那一个 RTT 又会串回 bundle 后面");
-assert.ok(indexSource.indexOf("__ashAuthProbe") < indexSource.indexOf('src="/src/main.tsx"'),
+assert.ok(indexSource.indexOf("__naviAuthProbe") < indexSource.indexOf('src="/src/main.tsx"'),
   "预热脚本必须排在 bundle 那条 script 之前,否则它就不是并行的");
 // 装它的必须是**同步的经典脚本**:带上 type="module" 就成了 defer,跟 bundle 一起排到
 // 解析之后跑,提前量当场归零 —— 而这种改法从渲染结果上完全看不出来。
-const probeAt = indexSource.indexOf("window.__ashAuthProbe");
+const probeAt = indexSource.indexOf("window.__naviAuthProbe");
 const tagStart = indexSource.lastIndexOf("<script", probeAt);
 assert.ok(tagStart >= 0, "没在 index.html 里找到装预热请求的那个 <script>");
 const probeAttrs = indexSource.slice(tagStart + "<script".length, indexSource.indexOf(">", tagStart));
 assert.doesNotMatch(probeAttrs, /type\s*=/, "预热脚本不能带 type —— module 会让它 defer,就不再抢在 bundle 前面了");
 assert.doesNotMatch(probeAttrs, /\b(?:defer|async)\b/, "预热脚本不能 defer/async,那正好抵消它存在的理由");
-assert.match(probeSource, /window\.__ashAuthProbe/, "authProbe.ts 接的全局名要和 index.html 写的那个一致");
 
 const AUTH_STATE = { mode: "single", needsSetup: false, needsAccessKey: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false };
 

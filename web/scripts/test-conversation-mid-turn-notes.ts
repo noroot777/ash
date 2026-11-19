@@ -16,14 +16,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { traceKeptOnDelete } from "@ash/shared/session-output";
+import { traceKeptOnDelete } from "@navi/shared/session-output";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 
 // 服务端删除那几个纯函数所在的模块会连带打开数据库：指到临时目录，别碰真实的库。
-const stage = mkdtempSync(join(tmpdir(), "ash-mid-turn-notes-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+const stage = mkdtempSync(join(tmpdir(), "navi-mid-turn-notes-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 const { RedactRefusal, redactTranscript, redactTrace, traceSpanWindow } = await import("../../server/src/conversation-redact.ts");
 
 type Agent = Extract<ConversationItem, { kind: "agent" }>;
@@ -158,7 +158,7 @@ const monitorWait: Step[] = [
   { turn: SESSION_AT },
   { say: "挂个哨兵等测试。", at: "2026-11-13T03:50:00.000Z" },
   { note: "哨兵已起：本轮改过的 model.test.ts", at: "2026-11-13T03:50:10.000Z" },
-  { tool: "ash/pause_task", at: "2026-11-13T03:50:12.000Z" },
+  { tool: "navi/pause_task", at: "2026-11-13T03:50:12.000Z" },
   { turnEnd: "2026-11-13T03:50:15.000Z" },
   { note: "哨兵结束：本轮改过的 model.test.ts", at: "2026-11-13T03:51:00.000Z" },
   { user: "【哨兵事件】本轮改过的 model.test.ts 跑完了", at: "2026-11-13T03:51:01.000Z", bySystem: true },
@@ -168,7 +168,7 @@ const monitorWait: Step[] = [
 {
   const items = sameEverywhere("哨兵已起之后回合就收工", monitorWait);
   assert.equal(agents(items).length, 2, "等哨兵的一回合 + 叫醒之后的一回合");
-  assert.deepEqual(stepsOf(agents(items)[0]!), ["ash/pause_task"], "pause_task 那一步在等哨兵的那个回合里");
+  assert.deepEqual(stepsOf(agents(items)[0]!), ["navi/pause_task"], "pause_task 那一步在等哨兵的那个回合里");
   assert.equal(traceOnly(items).length, 0);
 }
 
@@ -273,8 +273,8 @@ function deleteBubble(
 }
 {
   const { left, items } = deleteBubble(monitorWait, (bubbles) => bubbles[1]!);
-  assert.deepEqual(agents(items).map(stepsOf), [["ash/pause_task"]], "删叫醒之后那一回合，等哨兵那一回合原样留着");
-  assert.ok(left.some((entry) => entry.event.name === "ash/pause_task"));
+  assert.deepEqual(agents(items).map(stepsOf), [["navi/pause_task"]], "删叫醒之后那一回合，等哨兵那一回合原样留着");
+  assert.ok(left.some((entry) => entry.event.name === "navi/pause_task"));
 }
 {
   const { items } = deleteBubble(monitorWait, (bubbles) => bubbles[0]!);

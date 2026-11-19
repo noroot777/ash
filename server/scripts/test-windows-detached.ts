@@ -5,10 +5,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-windows-detached-"));
-process.env.ASH_DB = join(root, "test.db");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_KERNEL_CONFINE = "0";
+const root = mkdtempSync(join(tmpdir(), "navi-windows-detached-"));
+process.env.NAVI_DB = join(root, "test.db");
+process.env.NAVI_TEST_AGENT_BIN = process.execPath;
+process.env.NAVI_KERNEL_CONFINE = "0";
 const { detachedPathsFor, spawnForRun, spawnControllableForRun, reattachDetachedAgent } = await import("../src/executors/detached.js");
 const { windowsWrapPaths } = await import("../src/executors/detached-win-wrap.js");
 const { registerWindowsOwnership, windowsExecutionRoot } = await import("../src/executors/windows-run-evidence.js");

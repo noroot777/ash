@@ -3,9 +3,9 @@
 // 它的每条回答指到才出两颗键：复制、发给主任务。发出去以后那条回答底下多一行回执——主任务
 // 还在跑就先排着（这时能撤回），空下来才送到。回答自己要求回传的那种（你在话里说了「把结论
 // 告诉主任务」）走的是同一条投递路，回执长得一样。
-import type { ChatMessage } from "@ash/shared/chat";
-import { parseAttachmentText } from "@ash/shared/attachments";
-import { splitSideChatBody } from "@ash/shared/chat";
+import type { ChatMessage } from "@navi/shared/chat";
+import { parseAttachmentText } from "@navi/shared/attachments";
+import { splitSideChatBody } from "@navi/shared/chat";
 import { ArrowBendUpLeft, Check, Clock, Warning, X } from "@phosphor-icons/react";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";

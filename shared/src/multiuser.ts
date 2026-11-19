@@ -1,11 +1,13 @@
-// 多人模式的共享类型与纯函数（docs/multi-user-plan.md）。
+// 多人模式的共享类型与纯函数。
 //
 // 纯类型 + 几个两端都要用的判据函数(目录名 slug 校验、角色比较)。运行时函数只能走
-// 子路径 `@ash/shared/multiuser` 引用 —— index.ts 不能转发运行时值(服务端直跑 .ts 源码)。
+// 子路径 `@navi/shared/multiuser` 引用 —— index.ts 不能转发运行时值(服务端直跑 .ts 源码)。
+
+import { FROZEN_DEFAULT_GIT_EMAIL_DOMAIN } from "./legacy-names.ts";
 
 /**
  * 实例模式。`single` = 自用,一行鉴权都不拦,与本功能上线前完全一致;
- * `multi` = 多人,闸生效。**只能单向转换**(见 docs/multi-user-plan.md §二)。
+ * `multi` = 多人,闸生效。**只能单向转换**。
  */
 export type InstanceMode = "single" | "multi";
 
@@ -65,7 +67,7 @@ export interface AuthState {
   /** 模式还没定过(首启)。single 模式选定后恒为 false。 */
   needsSetup: boolean;
   /**
-   * 自用模式下这次请求没被认成机主:既不是从 ash 所在的那台机器直接发的,也不是放进来
+   * 自用模式下这次请求没被认成机主:既不是从 navi 所在的那台机器直接发的,也不是放进来
    * 的设备、没带访问密钥。多人模式恒为 false(那边看 `user`)。
    */
   needsAccessKey: boolean;
@@ -83,7 +85,7 @@ export interface AuthState {
    */
   needsOnboarding: boolean;
   /**
-   * 以本机自用模式启动(`ASH_LOCAL_ONLY`,独立 app 就这么起):只听 127.0.0.1、模式固定自用。
+   * 以本机自用模式启动(`NAVI_LOCAL_ONLY`,独立 app 就这么起):只听 127.0.0.1、模式固定自用。
    * 远程配对、转多人、邀请这些入口在界面上都不出现。
    */
   localOnly: boolean;
@@ -173,7 +175,7 @@ export interface ProjectInviteInfo {
 export const USER_DIR_NAME_HINT = "只能用小写字母、数字和连字符,2~32 个字符,不能以连字符开头或结尾";
 
 const RESERVED_DIR_NAMES = new Set([
-  // Windows 保留设备名(建目录会直接失败),外加几个 ash 自己要用的。
+  // Windows 保留设备名(建目录会直接失败),外加几个 navi 自己要用的。
   "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
   "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
   "data", "node_modules", "git",
@@ -209,7 +211,7 @@ export function suggestDirName(displayName: string): string {
 }
 
 /**
- * 按姓名生成默认 git 署名邮箱。域名固定用 `ash.local` —— 不是真邮箱,只求可归属。
+ * 按姓名生成默认 git 署名邮箱。域名固定用 `FROZEN_DEFAULT_GIT_EMAIL_DOMAIN`(为什么不随改名换,见那里)—— 不是真邮箱,只求可归属。
  *
  * 姓名推不出 slug 时(中文名)退到 `dirName`,**不是**退到字面量 `user`:后者会让
  * 每一个中文名用户都拿到同一个 `user@ash.local`,而这一列存在的全部理由就是让
@@ -217,7 +219,7 @@ export function suggestDirName(displayName: string): string {
  */
 export function suggestGitEmail(displayName: string, dirName?: string): string {
   const local = suggestDirName(displayName) || (dirName ?? "").trim() || "user";
-  return `${local}@ash.local`;
+  return `${local}@${FROZEN_DEFAULT_GIT_EMAIL_DOMAIN}`;
 }
 
 // ── 权限判据 ────────────────────────────────────────────────────────────────
@@ -333,15 +335,15 @@ export interface PersonalCliEnv {
   memoryName: string | null;
   hasMemory: boolean;
   plugins: string[];
-  /** ash MCP 在这个个人配置目录里的登记状态。不支持个人配置目录的 CLI 为 null。 */
-  ashMcp: PersonalAshMcp | null;
+  /** navi MCP 在这个个人配置目录里的登记状态。不支持个人配置目录的 CLI 为 null。 */
+  naviMcp: PersonalNaviMcp | null;
 }
 
 /**
- * 个人配置目录里的 ash MCP 登记。**缺了它 agent 就交不了卷** —— `complete_task` 那个
+ * 个人配置目录里的 navi MCP 登记。**缺了它 agent 就交不了卷** —— `complete_task` 那个
  * 工具压根不存在,活干完了也只会显示成失败(server/src/auth/user-cli-mcp.ts 顶部)。
  */
-export interface PersonalAshMcp {
+export interface PersonalNaviMcp {
   configured: boolean;
   /** 实际登记名。历史安装可能仍是 `harness`。 */
   serverName: string | null;

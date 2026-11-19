@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { sideChatBody } from "@ash/shared/chat";
+import { sideChatBody } from "@navi/shared/chat";
 import { createClientId } from "../lib/clientId.ts";
 
 export type SideChatQuote = { id: string; text: string };
-const pendingKey = (taskId: string) => `ash:side-chat:quote:task:${taskId}`;
-const roomKey = (roomId: string) => `ash:side-chat:quote:room:${roomId}`;
-const newKey = (taskId: string) => `ash:side-chat:quote:new:${taskId}`;
+const pendingKey = (taskId: string) => `navi:side-chat:quote:task:${taskId}`;
+const roomKey = (roomId: string) => `navi:side-chat:quote:room:${roomId}`;
+const newKey = (taskId: string) => `navi:side-chat:quote:new:${taskId}`;
 const cache = new Map<string, string>();
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((listener) => listener());
@@ -38,7 +38,7 @@ function subscribe(listener: () => void) {
   const sync = (event: StorageEvent) => {
     if (event.storageArea !== localStorage) return;
     if (!event.key) cache.clear();
-    else if (event.key.startsWith("ash:side-chat:quote:")) cache.delete(event.key);
+    else if (event.key.startsWith("navi:side-chat:quote:")) cache.delete(event.key);
     else return;
     listener();
   };

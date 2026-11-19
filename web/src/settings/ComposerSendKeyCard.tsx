@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ComposerSendKey } from "@ash/shared";
+import type { ComposerSendKey } from "@navi/shared";
 import { sendKeyLabels } from "../lib/sendKey.ts";
 import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
 import { Select } from "../components/Select.tsx";
@@ -43,7 +43,7 @@ export function ComposerSendKeyCard({ loading, onChange }: {
             <b>按哪一下算发送</b>
             <small>
               对全站的消息输入框生效：任务回复、新建任务、答复提问、团队插话、群聊、侧聊、
-              ash 助手、讨论关口、派审附言。改完立刻生效，不用刷新页面。
+              Navi 助手、讨论关口、派审附言。改完立刻生效，不用刷新页面。
               <br />
               当前：{labels.send} 发送，{labels.newline} 换行
               {value === "enter" && "（⌘ / Ctrl + 回车也照旧发送）"}

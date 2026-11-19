@@ -1,4 +1,4 @@
-import type { GitActionRequest } from "@ash/shared/git-workbench";
+import type { GitActionRequest } from "@navi/shared/git-workbench";
 import { fail } from "./core.js";
 
 const fields: Record<string, Record<string, string>> = {

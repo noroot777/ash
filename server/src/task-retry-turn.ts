@@ -37,9 +37,9 @@
 // 回合（`/compact`），不该把还在等用户的那一轮的入口挤掉。只带 sessionId 的老请求照旧按
 // 最新会话分档。
 import { open, stat } from "node:fs/promises";
-import type { AgentType, ConvSeg } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
-import { parseAttachmentText } from "@ash/shared/attachments";
+import type { AgentType, ConvSeg } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
+import { parseAttachmentText } from "@navi/shared/attachments";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { isAcceptingTask } from "./acceptance-lock.js";
@@ -51,7 +51,7 @@ import {
   freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, reviewAwaitsInputDecision, reviewRetrySessionId, roundOf,
 } from "./free-review-round.js";
 import { reviewRetryIdentityMismatch, type ReviewRetryIdentity } from "./free-review-retry-identity.js";
-import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
+import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
 import { turnOutcome } from "./session-turns.js";
 import type { TurnOutcome } from "./session-turns.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -66,6 +66,7 @@ import { checkpointStartBlock, preparePendingCheckpointStart } from "./pending-c
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { readableRunPath, sessionTranscriptPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
+import { dispatchHoldOf, dispatchHoldText, type DispatchHold } from "./task-hold.js";
 
 // 分档往回读会话正文，理由同 `task-follow-up.ts`：正文是一路追加的 Markdown，可能几 MB，
 // 而要找的那一段就在末尾附近；agent 一条回复动辄几十 KB，固定尾巴长度不够用。
@@ -96,21 +97,33 @@ type NonAgentSeg = Exclude<ConvSeg, { kind: "agent" }>;
 // 后端旁注（level:"notice"：结算说明、会话轮换那句）不是输入，必须跳过 —— 它们恒在回合
 // 收尾时落盘，也就是恒在最后一个真人回合之后。不跳的话每一个「没交卷」的失败回合末尾都
 // 挂着一条旁注，`lastInputOf` 拿到 system 就判成「上一轮本来就是续跑」，于是「重跑上一
-// 回合」再也重投不了用户那句话，静默退回 resume。
+// 回合」再也重投不了用户那句话，静默退回 resume。时间线旁注（aside：验收回执、「这一轮没有产出
+// 任何改动」）同理，也恒排在回合后面。
+//
+// 回合中途的系统注记（工作目录重建、基线改道，turn-system-note.ts）既不带 notice 也不是旁注，
+// 却跟那一回合的输入同带一个回合身份、排在输入后面。只取「最后一段」就会把它当成输入：worktree
+// 被验收清掉之后的每一次续聊崩了，重试都静默退回续跑，续跑是任务的执行，没交卷就把「已完成」
+// 改成「失败」，「重试这一回合」从此消失（jV60dIbVuBga）。系统续跑的那一段带着 `resume`，又恒是
+// 它那一回合的第一段；同一回合里排在别的输入后面、又没有 `resume` 的系统段只能是注记。回合中途
+// 补进来的那句话（原生 steer）是 user 段，照旧算数。
 export function lastInputOf(out: string): NonAgentSeg | null {
-  return [...parseSessionOutput(out)]
-    .reverse()
-    .find((seg): seg is NonAgentSeg => seg.kind !== "agent" && !(seg.kind === "system" && seg.level === "notice"))
-    ?? null;
+  const inputs = parseSessionOutput(out).filter((seg): seg is NonAgentSeg =>
+    seg.kind !== "agent" && !(seg.kind === "system" && (seg.level === "notice" || seg.aside)));
+  const midTurnNote = (seg: NonAgentSeg, index: number) => seg.kind === "system" && !seg.resume && !!seg.turnStartedAt
+    && inputs.findIndex((other) => other.turnStartedAt === seg.turnStartedAt) < index;
+  return inputs.filter((seg, index) => !midTurnNote(seg, index)).at(-1) ?? null;
 }
 
 async function lastInputSeg(path: string): Promise<NonAgentSeg | null> {
+  let hit: NonAgentSeg | null = null;
   for (const step of TAIL_STEPS) {
     const { text, whole } = await readTail(path, step);
-    const hit = lastInputOf(text);
-    if (hit || whole) return hit;
+    hit = lastInputOf(text);
+    // 切口正好落在回合输入和它后面的注记之间时，注记会被认成那一回合的第一段：再往前读一截。
+    const cut = hit?.kind === "system" && !hit.resume && !!hit.turnStartedAt;
+    if ((hit && !cut) || whole) return hit;
   }
-  return null;
+  return hit;
 }
 
 type UserSeg = Extract<NonAgentSeg, { kind: "user" }>;
@@ -173,6 +186,8 @@ export type RetryTurnFacts = {
   blockedBy?: QueueBlocker[];
   /** 所在分组被暂停（`scheduler.ts` 同样拒绝拉起暂停组的成员）。 */
   groupPaused?: boolean;
+  /** 上面派活的那条按了「全部停下」（task-hold.ts，同分组暂停一样不许从这里插队开跑）。 */
+  dispatchHold?: DispatchHold | null;
   /**
    * 上一回合那条 profile 后来被删了（missing）／被改过（changed）。
    * 判据是会话行里存的**环境指纹**，不是主键（见 `executors/index.ts` 的 profileDrift）。
@@ -185,7 +200,7 @@ export type RetryTurnFacts = {
   /**
    * 上一回合**自己**的权威结局（`session_turns.outcome`）。
    *
-   * 退出码答不了「ash 判这一轮成没成」：被回合级停滞看门狗终止的那一轮,我们判它失败、区间
+   * 退出码答不了「navi 判这一轮成没成」：被回合级停滞看门狗终止的那一轮,我们判它失败、区间
    * 记 failed,而被终止的进程多半以 **exit 0** 收流 —— 页面明写「本次续聊因上游连不上被自动
    * 终止」,重试却 409「上一回合不是异常结束」(审查 F2,已实测)。null = 不知道（回合还开着、
    * 存量行、收口没写成）,按老行为退回退出码判。
@@ -297,7 +312,7 @@ export function retryTurnRejection(facts: RetryTurnFacts): RetryTurnRejection | 
   // freeReviewRetryBlocker）。两者会分家 —— CLI 打完「API Error: Connection lost
   // mid-response」照样 exit 0（2026-09-11 实测：reviewer 会话 exit 0、审查链却停在 failed，
   // 时间线上明写「未能正常给出结论，已停止自动链」，界面却一个重跑入口都没有）。
-  // 「算不算异常结束」整份住在 `@ash/shared/turn-outcome`:三个信号的优先级(真人停止 >
+  // 「算不算异常结束」整份住在 `@navi/shared/turn-outcome`:三个信号的优先级(真人停止 >
   // 这一轮自己的权威结局 > 退出码)写在那里 —— 两边各写一份 if 就是在等下一次漂开,审查 F2
   // 要修的恰恰是同一句判据在两端各错一次(都只看退出码)。
   // 审查档不吃这一条:它另有更准的判据(上面那段注释)。
@@ -324,6 +339,10 @@ export function retryTurnRejection(facts: RetryTurnFacts): RetryTurnRejection | 
   }
   if (facts.checkpointBlock) return { error: facts.checkpointBlock, detail: { checkpoint: true } };
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
+  if (facts.dispatchHold) {
+    return { error: `${dispatchHoldText(facts.dispatchHold)}，先到那一条里接着跑再重试`,
+      detail: { heldBy: facts.dispatchHold.byTaskId, heldByTitle: facts.dispatchHold.byTitle } };
+  }
   // 同 /run：任务的执行回合（续跑档、执行型重投），同队有人在执行、或前面还有没让位的，就
   // 不该抢跑 —— 少了这道闸，队里任务上的重试按钮就成了插队入口。其余不是执行：审查档是旁路
   // 回合（派审本来就不查队列），普通重投是终态任务的续聊（手打同一句话发出去也不受队列限制，
@@ -406,6 +425,7 @@ export async function readRetryTurnFacts(
       resend,
       blockedBy: retryTurnIsExecution(kind, resend) ? await queueBlockerDetails(taskId) : [],
       groupPaused: !!group?.paused,
+      dispatchHold: await dispatchHoldOf(taskId),
       checkpointBlock: await checkpointStartBlock(taskId),
       // 老会话行没记指纹（null）时返回 null = 无从核对，按老行为放行。
       profileDrift: latest ? await profileDrift(latest.executorId, latest.executorFingerprint) : null,
@@ -543,7 +563,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // 执行型重投也照样占:只看「有原话可重投」就豁免,`/goal resume` 会绕过队列跟同队成员
       // 一起跑(本任务第 1 轮审查 F1,已实测)。
       if (retryTurnIsExecution(kind, resend)) {
-        const claim = await claimQueueSeat(taskId);
+        const claim = await claimQueueSeat(taskId, { turnHeld: turn });
         if (!claim.ok) {
           return c.json(await noted(taskId, action, { error: queueClaimError(claim), blockedBy: claim.blockers }), 409);
         }
@@ -574,7 +594,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       handoff(
         latest.executorId
           ? continueTask(taskId, RESUME_PROMPT, { ...route, actingUserId: acting, system: "retry", resumeSessionId: latest.id, turnHeld: turn, freezeGuard: true })
-          : resumeOrRunTask(taskId, { reason: "retry", turnHeld: turn, actingUserId: acting }),
+          : resumeOrRunTask(taskId, { origin: "user", reason: "retry", turnHeld: turn, actingUserId: acting }),
         action,
       );
       return c.json({ started: true, mode: "resume" }, 202);

@@ -14,24 +14,24 @@
 // ```
 //
 // 那句「套件结束会叫我」在说出口的那一刻就不成立了：没有人会被叫醒——内置 Monitor 的通知
-// 只注回智能体自己的会话，而那个会话连同进程已经没了；ash 这边只是一份只读投影，手里没有
-// 任何唤醒通道（能跨回合唤醒任务的只有 ash 自己起的哨兵，见 shared/src/monitor.ts 文件头）。
+// 只注回智能体自己的会话，而那个会话连同进程已经没了；navi 这边只是一份只读投影，手里没有
+// 任何唤醒通道（能跨回合唤醒任务的只有 navi 自己起的哨兵，见 shared/src/monitor.ts 文件头）。
 //
 // 而用户那一侧看到的全部线索是：卡片变成「已停止」。那读起来像「等到了，然后停了」，**意思
 // 正好相反**。于是「为什么全都停止了也没唤醒」只能靠翻 run 文件才查得出来——这正是
 // 「停止/暂停必须留下持久可见的状态」那条规矩要拦的情形（AGENTS.md）。
 //
 // 2026-10-16 起，一次性回合里这一幕基本不会再发生：agent 调内置 Monitor 的那一下会被
-// PreToolUse hook 改道成 ash 哨兵（claude-monitor-hook.ts）。这里仍然留着，因为改道只覆盖
-// 「ash 拉起的一次性回合」——常驻调度台不挂那个 hook（它那边内置 Monitor 真能唤醒自己），
-// 而老 CLI、用户自带的 `--settings`（它排在后面，会顶掉 ash 这份）都可能让改道落空。这条
+// PreToolUse hook 改道成 navi 哨兵（claude-monitor-hook.ts）。这里仍然留着，因为改道只覆盖
+// 「navi 拉起的一次性回合」——常驻调度台不挂那个 hook（它那边内置 Monitor 真能唤醒自己），
+// 而老 CLI、用户自带的 `--settings`（它排在后面，会顶掉 navi 这份）都可能让改道落空。这条
 // 路是最后那道「至少如实说出来」。
 //
 // 所以每轮至多记一条合并说明：这一轮起了几个、它们现在全没了、以及唤醒该走哪条路。时间线
 // 这条是 `aside`（agent 看不见，见 task-timeline.ts 文件头），所以它只是说给用户听的记账，
 // 不构成对下一个 agent 的指令。
 import { and, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
-import { CLAUDE_MONITOR_ENDED_REASON } from "@ash/shared/monitor-claude";
+import { CLAUDE_MONITOR_ENDED_REASON } from "@navi/shared/monitor-claude";
 import { bus } from "./bus.js";
 import type { MonitorRunOrigin } from "./claude-monitor-origin.js";
 import { admitWrite } from "./claude-monitor-write-queue.js";
@@ -178,7 +178,7 @@ const reapedNotice = (tally: { total: number; finished: number }, missed?: ReapM
       : `其中 ${finished} 个自己跑完了、剩下 ${total - finished} 个在回合结束时已经失效`;
   return `本轮智能体自己起了 ${total} 个内置 Monitor${unrecorded}，${how}——`
     + `它们的通知只注回智能体自己的会话（回合一结束，连它自己也看不到了），从来不会唤醒任务。`
-    + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。${inexact}`;
+    + `要跨回合等一件事，得用 Navi 的哨兵（start_monitor）并用 pause_task 收尾这一轮。${inexact}`;
 };
 
 /**

@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { isGoalExecution, isGoalRecovery, parseCliCommand, type CliCommand } from "@ash/shared/cli-commands";
+import type { AgentType } from "@navi/shared";
+import { isGoalExecution, isGoalRecovery, isPlanImplementation, parseCliCommand, type CliCommand } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { withTurnPreflight } from "./turn-entry-guard.js";
@@ -26,7 +26,7 @@ type ContinuationEntryOptions = {
  * 读的都是这一份 —— 两边各写一份,重投 `/goal resume` 就会绕过队列跟同队成员一起跑。
  */
 export function commandStartsExecution(slash: CliCommand | null): boolean {
-  return isGoalRecovery(slash);
+  return isGoalRecovery(slash) || isPlanImplementation(slash);
 }
 
 export function inputStartsExecution(agentType: string, userText: string): boolean {

@@ -130,7 +130,7 @@ export async function copyLink(source: string, destination: string, target: stri
   // 文件链没有退路：拷成真文件正是本模块要修的那个 bug（靠自身位置做相对解析的运行时会当场
   // 死），所以宁可停在这里把原因说清楚，而不是悄悄交出一份跑不起来的快照。
   throw new Error(`无法在测试快照中重建符号链接 ${source}（${(failure as Error).message}）；`
-    + "Windows 上请开启开发者模式或以管理员身份运行 ash，或改用不含文件软链的依赖安装方式");
+    + "Windows 上请开启开发者模式或以管理员身份运行 Navi，或改用不含文件软链的依赖安装方式");
 }
 
 async function entryStats(path: string): Promise<Stats | null> {
@@ -225,7 +225,7 @@ async function walkTree(path: string, hash: ReturnType<typeof createHash>, walk:
       // 输入（git 跟踪的源码软链指向快照外仍然直接拒绝，见 createGateSnapshot）。
       ? landing
       // 树内：相对原文照抄即可——副本层级一致，于是它自然指向副本自己那份（顺带修掉「worktree 里
-      // node_modules/@ash/shared 解析到主仓」那条老坑），而且原文里的 `..` 继续按副本自己的链接
+      // node_modules/@navi/shared 解析到主仓」那条老坑），而且原文里的 `..` 继续按副本自己的链接
       // 结构解析；绝对原文必须改写到副本，否则测试会被拉回活动工作区。
       // 搬迁过的子树(relocated)也必须改写:它在副本里的位置与源树不同,照抄的相对原文会从新位置
       // 重新解析、指到另一个文件上去——external/back.py -> ../loose/inside/data.py 被冻进

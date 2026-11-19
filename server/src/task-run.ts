@@ -1,10 +1,9 @@
 import { mkdirSync, createWriteStream } from "node:fs";
 import { claimTranscript } from "./transcript-identity.js";
 import { markdownImageAccounting } from "./agent-image-journal.js";
-import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -33,9 +32,9 @@ import { reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnStart } from "./turn-output.js";
-import { abortFrozen, freezeFacts, takeFreeze } from "./turn-freeze.js";
+import { abortFrozen, freezeFacts, startGuard, takeFreeze, type StartOrigin } from "./turn-freeze.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
-import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { isGoalExecution, parseCliCommand } from "@navi/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
@@ -66,20 +65,25 @@ export async function runTask(
   taskId: string,
   // turnHeld:入口占下的那把锁的**身份**(不是 true)—— 接管与释放都按它核,理由见
   // continueTask 同名选项与 turn-lock.ts 的 `endOwnTurn`。
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  // origin:这一次起跑是谁要的,必填 —— 末端那道闸照它定查多少(turn-freeze.ts StartOrigin)。
+  opts: RunTaskOptions,
 ): Promise<void> {
+  // server/scripts 里的老用例不过 tsc、有的不带参数直调:缺省按改造前的口径(不复查)。
+  const given: RunTaskOptions = opts ?? { origin: "user" };
   // 起跑前那几次读库(检查点恢复、任务头)抛错时,入口交来的锁也得还(见 withHeldTurn)。
-  return withHeldTurn(taskId, opts.turnHeld, () => runHeldTask(taskId, opts));
+  return withHeldTurn(taskId, given.turnHeld, () => runHeldTask(taskId, given));
 }
+
+export type RunTaskOptions = { turnHeld?: TurnIdentity | null; origin: StartOrigin; actingUserId?: string | null };
 
 async function runHeldTask(
   taskId: string,
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null },
+  opts: RunTaskOptions,
 ): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
     if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
-    console.warn(`[ash] 任务 ${taskId} 未启动：${checkpointBlocked}`);
+    console.warn(`[navi] 任务 ${taskId} 未启动：${checkpointBlocked}`);
     return;
   }
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
@@ -103,6 +107,21 @@ async function runHeldTask(
   // 接力出去的任务在本机只是历史存档 —— 路由层各有 409,但队列推进/定时班次/重试
   // 等程序化路径全都汇到这里,必须在 spawn 之前收口,否则就是双机并跑。
   if (handoffBlockReason(head?.handoff)) {
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
+    return;
+  }
+  // 有前置、还没开过工的：/fire、定时到点、重试这些程序化路径也汇到这里，前置没站齐就不起（请求已记下，
+  // 等齐由放行那一路起），站齐了这一问顺手定下起点（prerequisite-gate.ts 文件头）。
+  // 这一问要写 git、读写库，抛错时入口交进来的回合同样要还（不还就没人起得了它）。
+  let prerequisiteHold: { reason: string } | null;
+  try {
+    const { holdForPrerequisites } = await import("./prerequisite-gate.js");
+    prerequisiteHold = await holdForPrerequisites({ id: taskId }, { source: "turn", actingUserId: opts.actingUserId });
+  } catch (error) {
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
+    throw error;
+  }
+  if (prerequisiteHold) {
     if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return;
   }
@@ -143,7 +162,7 @@ async function runHeldTask(
       .where(eq(tasks.id, taskId));
     }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
-    bindTurnToken(taskId, turnToken);
+    bindTurnToken(taskId, turnToken, invocationAgent);
     // 执行回合开跑：被裁定闸按住的那次预约触发随之作废（见 free-review-reservations.ts
     // `forgetHeldTrigger` ①；与 orchestrator 续跑那一处对称）。
     await forgetHeldTrigger(taskId);
@@ -224,7 +243,7 @@ async function runHeldTask(
     // 启动末段的顺序是**定死的**:查冻结事实(最后一个 await)→ 同步定论 → spawn。内存里的
     // 停止标记必须留到**同步段**消费。消费早了,之后到的停止既杀不到(还没 trackRun)也拦不住
     // (闸已经过了)—— 第 3 轮审查 P2 就是这么开出来的窗口。
-    const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
+    const frozen = await freezeFacts(taskId, startGuard(opts.origin ?? "user"));
     // ↓ 这里往下到 spawn 全同步(撤回那条岔路除外,它不起进程)。
     const freeze = takeFreeze(taskId, frozen);
     if (freeze) await abortFrozen(taskId, freeze);
@@ -298,8 +317,6 @@ async function runHeldTask(
       agentUnitToken: handle.detached?.unitToken ?? null,
     };
     await db.insert(sessions).values(sessRow);
-    // 这一轮够不够得着 ash MCP：后台问，只提示、不拦、不等（ash-mcp-turn-hint.ts）。排在会话行之后：提示写进这一条。
-    if (!localCommand) void hintAshMcpForTurn({ taskId, agentType, executorId: profileId, ownerUserId: runOwner ?? null, cwd: ws.path, sessionId: sessId });
     // 回合开始就落一行：收尾那下写不成时,「开了没收口」才有据可查(光靠计数对不出位置)。
     await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 

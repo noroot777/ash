@@ -17,6 +17,7 @@
 // 进行中的任务一律不碰，不管多旧；查不到任务行的目录不归这里管（删任务有自己的回收与重试，
 // run-dir-reclaim.ts）。一个任务从读任务行到删完文件整段持这个编号的目录锁（task-dir-lock.ts）：
 // 接力导入会往同一个目录写新文件、再改任务行，插在中间就会拿旧了结去删新导入的东西。
+import { readEnv } from "@navi/shared/env-names";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -44,16 +45,16 @@ const KINDS = { traces: rawTraces, screenshots: reviewImages } satisfies Record<
 export type RetentionSweep = Record<keyof typeof KINDS, Reclaimed>;
 
 /**
- * ASH_TRACE_KEEP_DAYS：有限且不为负的天数，0 = 一了结就删。填错（`7d`、负数、空白）一律按
+ * NAVI_TRACE_KEEP_DAYS：有限且不为负的天数，0 = 一了结就删。填错（`7d`、负数、空白）一律按
  * 默认值并告警——这是一个删文件的开关，配置读不懂时的方向只能是多留，不能是立刻删。名字带
  * TRACE 是因为它先管的是原始事件流，截图沿用同一个开关。
  */
 export function retentionKeepDays(): number {
-  const raw = process.env.ASH_TRACE_KEEP_DAYS?.trim();
+  const raw = readEnv(process.env, "NAVI_TRACE_KEEP_DAYS")?.trim();
   if (!raw) return DEFAULT_KEEP_DAYS;
   const days = Number(raw);
   if (Number.isFinite(days) && days >= 0) return days;
-  console.warn(`[ash] ASH_TRACE_KEEP_DAYS=${JSON.stringify(process.env.ASH_TRACE_KEEP_DAYS)} 不是有效天数，按 ${DEFAULT_KEEP_DAYS} 天处理`);
+  console.warn(`[navi] NAVI_TRACE_KEEP_DAYS=${JSON.stringify(readEnv(process.env, "NAVI_TRACE_KEEP_DAYS"))} 不是有效天数，按 ${DEFAULT_KEEP_DAYS} 天处理`);
   return DEFAULT_KEEP_DAYS;
 }
 
@@ -115,7 +116,7 @@ async function sweepTask(taskId: string, nowMs: number, grace: number): Promise<
     try {
       swept[kind] = KINDS[kind].reclaim(taskId, dir, due);
     } catch (error) {
-      console.error(`[ash] 保留期清扫跳过 ${taskId} 的 ${kind}:`, error);
+      console.error(`[navi] 保留期清扫跳过 ${taskId} 的 ${kind}:`, error);
     }
   }
   return swept;
@@ -139,7 +140,7 @@ export async function sweepRunRetention(nowMs = Date.now()): Promise<RetentionSw
         total[kind].bytes += swept[kind].bytes;
       }
     } catch (error) {
-      console.error(`[ash] 保留期清扫跳过 ${taskId}:`, error);
+      console.error(`[navi] 保留期清扫跳过 ${taskId}:`, error);
     }
   }
   return total;

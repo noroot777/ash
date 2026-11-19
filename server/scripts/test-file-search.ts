@@ -16,7 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-file-search-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-file-search-"));
 const repo = join(stage, "repo");
 const plain = join(stage, "plain");
 

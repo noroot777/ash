@@ -1,6 +1,9 @@
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { groups, tasks } from "./db/schema.js";
+import { bus } from "./bus.js";
+import { TURN_FAILED_TO_START } from "./run-prompts.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 
 /**
@@ -24,7 +27,7 @@ export type GroupFailureScope = { taskId: string } | { attempted: string[] };
 export async function reportGroupStartFailure(groupId: string, error: unknown, scope: GroupFailureScope): Promise<void> {
   const message = `分组本次启动未完成：${error instanceof Error ? error.message : String(error)}`;
   const single = "taskId" in scope ? scope.taskId : null;
-  console.error(`[ash] group=${groupId}${single ? ` task=${single}` : ""} ${message}`, error);
+  console.error(`[navi] group=${groupId}${single ? ` task=${single}` : ""} ${message}`, error);
   try {
     const targets = "taskId" in scope ? [scope.taskId] : scope.attempted;
     const members = targets.length
@@ -42,10 +45,27 @@ export async function reportGroupStartFailure(groupId: string, error: unknown, s
         const target = await freshRunFailureTarget(task, null);
         await reportTurnFailure({ taskId: task.id, message, role: "single", target });
       } catch (reportError) {
-        console.error(`[ash] 分组启动失败交代写入失败 task=${task.id}:`, reportError);
+        console.error(`[navi] 分组启动失败交代写入失败 task=${task.id}:`, reportError);
       }
     }
   } catch (reportError) {
-    console.error(`[ash] 分组启动失败交代读取失败 group=${groupId}:`, reportError);
+    console.error(`[navi] 分组启动失败交代读取失败 group=${groupId}:`, reportError);
+  }
+}
+
+/**
+ * 自动开工连着起不来、不再自动重试了（launch-request.ts）：给那一条留一句交代，跟分组起不来的那句同一套
+ * （刷新之后还在，看得出「没起成」）。返回这句话**确实落进了时间线**：落不进去时调用方留着请求下次再写，
+ * 不能把「试过写」当成「写成了」。
+ */
+export async function reportLaunchGiveUp(task: typeof tasks.$inferSelect, message: string): Promise<boolean> {
+  try {
+    const target = await freshRunFailureTarget(task, null);
+    bus.publish({ type: "agent.event", taskId: task.id, sessionId: target.sessionId, role: "single", agentType: target.agentType,
+      event: { kind: "error", message } });
+    return await appendTaskTimeline(task.id, alertLine(TURN_FAILED_TO_START(message)), target);
+  } catch (error) {
+    console.error(`[navi] 自动开工失败交代写入失败 task=${task.id}（请求留着，下次再写）:`, error);
+    return false;
   }
 }

@@ -2,7 +2,7 @@
 // handoff-identity.ts 的逐请求签名解决了。剩下的缺口是:同一个局域网里有人抓包,就能把
 // 整个 git bundle 和 CLI 会话历史读走(里面可能有 API key、内部代码、客户数据)。
 //
-// 为什么不上 HTTPS:那要求自签证书 + 两端装信任链,对局域网单人系统是纯负担。而 ash
+// 为什么不上 HTTPS:那要求自签证书 + 两端装信任链,对局域网单人系统是纯负担。而 navi
 // 已经有一套**签过名的**机器身份,直接拿它做密钥协商就够了,证书体系那一层是多余的。
 //
 // 用的是 libsodium `crypto_box_seal` 那个形状(一次性发件人密钥 → 收件人静态公钥):
@@ -27,12 +27,13 @@
 // 顺序是**先验签、后解密**(验的是线上真正传的那串字节)。
 import { createCipheriv, createDecipheriv, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomBytes } from "node:crypto";
 import { localKxPrivateKey } from "./handoff-identity.js";
+import { FROZEN_HANDOFF_ENCRYPTION_DOMAIN, FROZEN_HANDOFF_ENCRYPTION_MAGIC } from "@navi/shared/legacy-names";
 
 /** 换算法/换字段就换它:老信封天然对不上,不会被当成新格式静默接受。 */
-const ENC_V1 = "ash-handoff-enc-v1";
+const ENC_V1 = FROZEN_HANDOFF_ENCRYPTION_DOMAIN;
 
 /** 帧头魔数,同时充当「这是不是加密载荷」的判据。明文 manifest 是 JSON,以 `{` 开头。 */
-const MAGIC = Buffer.from("ash-enc1", "utf8");
+const MAGIC = Buffer.from(FROZEN_HANDOFF_ENCRYPTION_MAGIC, "utf8");
 const LEN_BYTES = 4;
 
 interface SealHeader {

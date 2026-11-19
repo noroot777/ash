@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Plus, Sparkle, Trash } from "@phosphor-icons/react";
-import type { GitDiff } from "@ash/shared/git-workbench";
+import type { GitDiff } from "@navi/shared/git-workbench";
 import { parseHunkHead } from "../review/diffModel.ts";
 
 /** 段头摆成「⋯ 所在函数」，不印 `@@ -a,b +c,d @@`——区间是 patch 工具用的，行号栏里已有。 */

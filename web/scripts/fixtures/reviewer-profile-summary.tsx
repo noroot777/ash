@@ -1,7 +1,6 @@
 import { createRoot } from "react-dom/client";
-import type { AgentExecutorProfile, ReviewerProfile } from "@ash/shared";
+import type { AgentExecutorProfile, ReviewerProfile } from "@navi/shared";
 import { ReviewerProfileSummary } from "../../src/free-workflow/ReviewerProfileFields.tsx";
-import { CheckCircle, Trash } from "@phosphor-icons/react";
 import "../../src/styles/global.css";
 
 const profiles: AgentExecutorProfile[] = [{
@@ -26,18 +25,14 @@ const reviewer: ReviewerProfile = {
   updatedAt: "2026-08-10T00:00:00.000Z",
 };
 
+// 外壳照设置页「审查者」那一行（settings/ReviewerProfilesSettings.tsx）：这份摘要现在只在那里画。
 function Fixture() {
   return (
     <main style={{ width: 720, margin: "40px auto" }}>
-      <div className="free-review-reviewer-list" style={{ width: 470 }}>
-        <div className="free-review-reviewer-row">
-          <button className="free-review-reviewer-pick" type="button" aria-selected="true">
-            <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
-            <CheckCircle size={16} weight="fill" />
-          </button>
-          <button className="free-review-reviewer-delete" type="button" aria-label={`删除审查者「${reviewer.name}」`}>
-            <Trash size={13} />
-          </button>
+      <div className="settings-row settings-item" style={{ width: 470 }}>
+        <div>
+          <b>{reviewer.name}</b>
+          <ReviewerProfileSummary reviewer={reviewer} profiles={profiles} />
         </div>
       </div>
     </main>

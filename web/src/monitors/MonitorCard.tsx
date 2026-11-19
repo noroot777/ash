@@ -1,7 +1,7 @@
 import { Fragment, forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { CaretRight, Pulse, SpinnerGap } from "@phosphor-icons/react";
-import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/monitor";
-import { endConditionNote } from "@ash/shared/monitor-end-condition";
+import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@navi/shared/monitor";
+import { endConditionNote } from "@navi/shared/monitor-end-condition";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { InspButton } from "../inspector/parts.tsx";
@@ -79,7 +79,7 @@ function tookText(monitor: TaskMonitor, live: boolean, now: number): string | nu
  * claude 自带 `Monitor` 起的那种是一份只读投影，停不掉、没有日志、agent 进程一死就没。
  * 所以那种卡不渲染停止按钮、不渲染「输出」，并在细节里明写一句它是谁起的、为什么只能看。
  * 把两种画成一模一样是这张卡最容易犯的错：用户会去点一个不存在的停止按钮，或者把
- * 「0 条事件」读成「过滤写错了」——而那种卡的事件数 ash 根本数不到。
+ * 「0 条事件」读成「过滤写错了」——而那种卡的事件数 navi 根本数不到。
  *
  * 会话里那一轮挂上的哨兵就是这里的一张卡：会话那一行点「在哨兵格里看」带着它的 id 过来，
  * 这一格把它滚进视野并把焦点放上去（MonitorInspector 收那份请求）。
@@ -158,7 +158,7 @@ export const MonitorCard = forwardRef<HTMLElement, {
 
   /**
    * 收在「命令」里的那一行对账细节，按**时间顺序**排：盯到什么时候 / 什么时候结束的 →
-   * 约定的结束条件，后面才挂事件数和 pid（只有 ash 自己起的那种才有）。
+   * 约定的结束条件，后面才挂事件数和 pid（只有 navi 自己起的那种才有）。
    */
   const endedTimeLabel = formatInstant(monitor.endedAt);
   const facts = [
@@ -170,7 +170,7 @@ export const MonitorCard = forwardRef<HTMLElement, {
     // 可能是这一版读不出来的，那它就**不会**提前收工（第 2 轮审查 F2）。
     monitor.stopWhen ? endConditionNote(monitor.stopWhen) : null,
     !live && endedTimeLabel ? `结束于 ${endedTimeLabel}` : null,
-    // 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，ash 看不到
+    // 事件数只有 navi 自己起的那种数得准：claude 把事件直接注回它自己的会话，navi 看不到
     // 几条，显示一个恒为 0 的「0 条事件」只会被读成「过滤写错了」。
     logged ? `${monitor.events} 条事件` : null,
     monitor.pid === null ? null : `pid ${monitor.pid}`,
@@ -254,7 +254,7 @@ export const MonitorCard = forwardRef<HTMLElement, {
         {reason && <p className="monitor-card__reason">{reason}</p>}
         {!logged && (
           <p className="monitor-card__readonly">
-            这是智能体自己起的 Monitor，ash 只能看不能停——它的进程在智能体的进程树里，
+            这是智能体自己起的 Monitor，Navi 只能看不能停——它的进程在智能体的进程树里，
             输出也直接进了它自己的会话。
             {/* 结束之后这句话要换一半：光一个「已停止」读起来像「等到了然后停了」，而实测
                 绝大多数是回合一结束就被 CLI 成批收走，它盯的那件事当时还在跑（整段实测行序

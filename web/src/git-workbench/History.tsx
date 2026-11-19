@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { GitDiff, GitHistoryCommit } from "@ash/shared/git-workbench";
+import type { GitDiff, GitHistoryCommit } from "@navi/shared/git-workbench";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { workbenchApi } from "./api.ts";
@@ -9,7 +9,7 @@ import { WorkbenchMenu } from "./WorkbenchMenu.tsx";
 import { RebaseDialog } from "./RebaseDialog.tsx";
 import { HistorySplit } from "./HistorySplit.tsx";
 import { localeDate, localeDateTime } from "../lib/localeFormat.ts";
-import { AshLoader } from "../brand/AshLoader.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 export function History({
   projectId,
@@ -337,7 +337,7 @@ export function History({
                 {error}
               </p>
             )}
-            {loading && <div className="gwb-empty"><AshLoader />正在读取提交图…</div>}
+            {loading && <div className="gwb-empty"><NaviLoader />正在读取提交图…</div>}
             {commits.map((commit, index) => {
               if (
                 search &&

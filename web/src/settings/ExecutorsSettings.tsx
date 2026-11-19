@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider } from "@navi/shared";
 import { MagnifyingGlass } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { refreshAgentAvailability } from "../lib/agentAvailability.ts";

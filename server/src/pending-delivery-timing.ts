@@ -76,7 +76,7 @@ export function noteDeliveryTiming(
   // 而真相可能只是别的回合在正常跑。
   const idle = Math.max(0, queuedAt - dueAt - busyMs);
   console.warn(
-    `[ash] 排队消息投递偏慢 task=${taskId} 共 ${secs(at - dueAt)}`
+    `[navi] 排队消息投递偏慢 task=${taskId} 共 ${secs(at - dueAt)}`
     + `（任务又忙起来 ${secs(busyMs)}`
     + ` + 挡回后空等 ${secs(idle)}`
     + ` + 等回合退干净 ${secs(idleAt - queuedAt)}`
@@ -129,7 +129,7 @@ export async function noteStalledPending(
   const label = pendingMessageLabel(message.mode);
   const waited = `${Math.round(age / 60_000)} 分钟`;
   console.warn(
-    `[ash] ${label}等了 ${waited} 还没送出去 task=${message.taskId} message=${message.id}`
+    `[navi] ${label}等了 ${waited} 还没送出去 task=${message.taskId} message=${message.id}`
     + `（这一轮的判定：${why}）—— 原话仍在托盘里,不会丢`,
   );
   // 持久可见:用户刷新页面后也要能看出「我那句话还没送到、卡在什么上」。eventKey 让它
@@ -145,7 +145,7 @@ export async function noteStalledPending(
     );
     if (persisted) stalledTold.add(message.id);
   } catch (error) {
-    console.warn(`[ash] 滞留消息留痕失败 task=${message.taskId} message=${message.id}:`, error);
+    console.warn(`[navi] 滞留消息留痕失败 task=${message.taskId} message=${message.id}:`, error);
   } finally {
     stalledWriting.delete(message.id);
   }

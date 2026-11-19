@@ -1,8 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { CaretDown, Check, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { CaretDown, Check, Warning } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { selectPanelPlacement, type SelectPlacement } from "./selectPlacement.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /**
  * 全应用的下拉选择器：一个组件，两档长相。
@@ -82,6 +83,8 @@ export type SelectProps<V extends string = string> = {
   /** 给一个「回到不设置」的出口；候选列表里就不必再占一行「跟随…」。 */
   onClear?: () => void;
   clearLabel?: string;
+  /** 每次展开时调一次：候选随时在变、只在要看时才去取的场景（例：前置候选此刻到哪一步了）。 */
+  onOpen?: () => void;
 };
 
 /** 退场动画的时长（和 select.css 里 `.is-leaving` 那一段同一个数）。 */
@@ -112,6 +115,7 @@ export function Select<V extends string = string>({
   keepOpenOnSelect = false,
   onClear,
   clearLabel = "清空",
+  onOpen,
 }: SelectProps<V>) {
   const [open, setOpen] = useState(false);
   // 关掉之后还要留 120ms 放完退场：mounted 管「在不在 DOM 里」，open 管「是不是开着」。
@@ -242,6 +246,7 @@ export function Select<V extends string = string>({
     const selected = options.findIndex((option) => option.value === value);
     setIndex(startAt ?? Math.max(0, selected));
     setOpen(true);
+    onOpen?.();
   };
 
   const commit = (next: V) => {
@@ -326,7 +331,7 @@ export function Select<V extends string = string>({
         onClick={() => (open ? close() : openPanel())}
       >
         <span className={shown ? "" : "is-placeholder"}>{shown || placeholder}</span>
-        {status === "loading" && <SpinnerGap size={12} className="is-spinning" aria-hidden="true" />}
+        {status === "loading" && <NaviLoader size={14} />}
         {status === "failed" && <Warning size={12} className="ui-dropdown-warn" aria-hidden="true" />}
         <CaretDown size={12} weight="bold" className="ui-select-caret" aria-hidden="true" />
       </button>

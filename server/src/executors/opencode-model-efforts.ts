@@ -23,9 +23,9 @@
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AgentType } from "@ash/shared";
-import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES, modelEffortKey } from "@ash/shared/cli-presets";
-import type { ModelEffortMap } from "@ash/shared/cli-presets";
+import type { AgentType } from "@navi/shared";
+import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES, modelEffortKey } from "@navi/shared/cli-presets";
+import type { ModelEffortMap } from "@navi/shared/cli-presets";
 
 /** 4MB 上下是常态;上限只防「文件被别的东西写成了几百 MB」这种意外。 */
 const MAX_BYTES = 64 * 1024 * 1024;

@@ -6,14 +6,15 @@
 // 要连着几百行迁移逻辑一起读,而两边真正共享的只有一个 `client`。
 //
 // 全部**幂等**:匹配 0 行就是空转,失败一律只 warn 不抛 —— 一条迁移没跑成不该让整台
-// ash 起不来,它下次启动还会再试一遍。
+// navi 起不来,它下次启动还会再试一遍。
 //
 // 入口只有一个:`runDataMigrations(client)`,由 `ensureSchema()` 在 DDL 之后调用。
 import { stampOnboardingBaseline } from "./migrate-onboarding.js";
 import { migrateSessionTurnIdentity } from "./migrate-session-turns.js";
 import { backfillMonitorHolds } from "./migrate-monitor-hold.js";
+import { backfillDispatchedBy } from "./migrate-dispatched-by.js";
 import type { Client } from "./node-sqlite-client.js";
-import { dropRetiredTables } from "./retired-schema.js";
+import { dropRetiredTables, dropRetiredTriggers } from "./retired-schema.js";
 
 async function widenWorkflowBuiltinIndex(client: Client): Promise<void> {
   try {
@@ -24,7 +25,7 @@ async function widenWorkflowBuiltinIndex(client: Client): Promise<void> {
       "CREATE UNIQUE INDEX IF NOT EXISTS workflows_builtin_idx ON workflows (builtin_key, owner_user_id)",
     );
   } catch (e) {
-    console.warn("[ash] 起手式覆写索引扩宽失败,忽略:", e);
+    console.warn("[navi] 起手式覆写索引扩宽失败,忽略:", e);
   }
 }
 
@@ -76,7 +77,7 @@ async function migrateFreeReviewStatuses(client: Client): Promise<void> {
     );
     await disarmReservationsOnAcceptedTasks(client);
   } catch (e) {
-    console.warn("[ash] 自由审查旧状态收敛失败,忽略:", e);
+    console.warn("[navi] 自由审查旧状态收敛失败,忽略:", e);
   }
 }
 
@@ -113,14 +114,14 @@ async function migrateWorktreeDefaultToProjects(client: Client): Promise<void> {
       const on = String(legacy.rows[0].value) === "false" ? 0 : 1;
       await client.execute(`UPDATE projects SET use_worktree_default = ${on}`);
       await client.execute("DELETE FROM app_settings WHERE key = 'worktreeDefault'");
-      console.log(`[ash] worktree 默认值已从全局设置搬进各项目（统一置为${on ? "开" : "关"}，之后按项目单独改）`);
+      console.log(`[navi] worktree 默认值已从全局设置搬进各项目（统一置为${on ? "开" : "关"}，之后按项目单独改）`);
     }
     if (personalCount) {
       await client.execute("DELETE FROM user_settings WHERE key = 'worktreeDefault'");
-      console.log(`[ash] 多人模式下 ${personalCount} 份个人 worktree 默认值已作废：这颗开关改成项目级，请到「项目设置 → 工作目录」复核`);
+      console.log(`[navi] 多人模式下 ${personalCount} 份个人 worktree 默认值已作废：这颗开关改成项目级，请到「项目设置 → 工作目录」复核`);
     }
   } catch (e) {
-    console.warn("[ash] worktree 默认值搬迁失败,忽略:", e);
+    console.warn("[navi] worktree 默认值搬迁失败,忽略:", e);
   }
 }
 
@@ -137,7 +138,7 @@ async function backfillReservationSource(client: Client): Promise<void> {
        WHERE review_armed=1 AND review_source IS NULL`,
     );
   } catch (e) {
-    console.warn("[ash] 预约来源回填失败,忽略:", e);
+    console.warn("[navi] 预约来源回填失败,忽略:", e);
   }
 }
 
@@ -157,7 +158,7 @@ async function disarmReservationsOnAcceptedTasks(client: Client): Promise<void> 
 async function migrateDebateToDuet(client: Client): Promise<void> {
   try {
     await client.execute("ALTER TABLE tasks RENAME COLUMN debate TO duet");
-    console.log("[ash] tasks.debate 列已更名为 duet");
+    console.log("[navi] tasks.debate 列已更名为 duet");
   } catch {
     /* 已迁移或新库 */
   }
@@ -212,6 +213,7 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "accept_gate_runs", column: "diagnosis", why: "门禁事后归因已删除" },
   { table: "accept_gate_runs", column: "miss_attribution", why: "门禁事后归因已删除" },
   { table: "accept_gate_runs", column: "diagnosis_generation", why: "门禁事后归因已删除" },
+  { table: "tasks", column: "starred_at", why: "星标已移除" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。
@@ -219,11 +221,20 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
 const RETIRED_TABLES: { table: string; why: string }[] = [
   { table: "issue_comments", why: "事项中心已移除" },
   { table: "issues", why: "事项中心已移除" },
-  // 翻 claude 会话记录补内置 Monitor 的历史扫描整套删了(Monitor 调用早已改道成 ash 哨兵,
+  // 翻 claude 会话记录补内置 Monitor 的历史扫描整套删了(Monitor 调用早已改道成 navi 哨兵,
   // 扫描自 2026-10-20 起没再扫到过新东西)。扫出来的那些卡还在 monitors 里,只读照常显示。
   { table: "monitor_pending_calls", why: "内置 Monitor 历史扫描已移除" },
   { table: "monitor_scan_cursors", why: "内置 Monitor 历史扫描已移除" },
   { table: "monitor_pending_calls_rekey", why: "内置 Monitor 历史扫描已移除(换键中断留下的搬运表)" },
+];
+
+// 派出的任务来问 / 失败时记在派它的那条任务名下、画成它会话里一颗气泡的那一套（用户 2026-11-15 定的：
+// 派它的那条任务的会话里一律不出东西，提示只靠侧栏、任务头那颗键的数变色和右侧那一格）。
+// 只拆触发器，dispatch_signals 那张表连同已记下的行原样留着，不再有人读写。
+const RETIRED_TRIGGERS: { trigger: string; why: string }[] = [
+  { trigger: "dispatch_signals_question", why: "派出的任务来问不再画在派它的任务里" },
+  { trigger: "dispatch_signals_failed", why: "派出的任务失败不再画在派它的任务里" },
+  { trigger: "dispatch_signals_task_deleted", why: "dispatch_signals 不再有人读写" },
 ];
 
 // 旧自由工作流「合并&清理」的三列（merge_status/message/merged_at）在 DROP 前必须把
@@ -281,14 +292,14 @@ async function migrateFreeWorkflowMergeStates(client: Client): Promise<boolean> 
         // 错误原文是唯一证据：时间线写不进去（任务从没跑过会话）就保留旧列，下次启动再试。
         const wrote = await appendTaskTimeline(taskId, alertLine(`升级迁移：上一版「合并&清理」失败${message ? `，原始错误：${message}` : ""}；请从验收页重新验收或人工处理。`));
         if (!wrote) {
-          console.warn(`[ash] 旧合并失败原因写不进 ${taskId} 的时间线（无会话），本轮保留旧列`);
+          console.warn(`[navi] 旧合并失败原因写不进 ${taskId} 的时间线（无会话），本轮保留旧列`);
           allMigrated = false;
         }
       }
-      console.log(`[ash] 迁移旧自由工作流合并状态 ${taskId}: ${status}`);
+      console.log(`[navi] 迁移旧自由工作流合并状态 ${taskId}: ${status}`);
     } catch (e) {
       // 单条失败不拦启动，但这一轮不许删旧列（证据还没迁走），下次启动重试。
-      console.warn(`[ash] 旧合并状态迁移失败 ${taskId}(${status})，本轮保留旧列：`, e);
+      console.warn(`[navi] 旧合并状态迁移失败 ${taskId}(${status})，本轮保留旧列：`, e);
       allMigrated = false;
     }
   }
@@ -350,14 +361,14 @@ async function removeSshExecutorProfiles(client: Client): Promise<boolean> {
       }
       await client.execute({ sql: "DELETE FROM agents WHERE id = ?", args: [id] });
       console.warn(
-        `[ash] 已删除 ssh 执行器 profile ${String(row.name ?? id)}(${id}):该功能已移除,换机器请改用「接力」;`
+        `[navi] 已删除 ssh 执行器 profile ${String(row.name ?? id)}(${id}):该功能已移除,换机器请改用「接力」;`
         + "指向它的任务/审查者/待发送消息已改回按 CLI 类型的默认执行器",
       );
     }
     return true;
   } catch (e) {
     // 清不干净就把 agents.target 留到下次启动重试:那一列是唯一还认得出 ssh profile 的证据。
-    console.warn("[ash] ssh 执行器 profile 清理失败,本轮保留 agents.target:", e);
+    console.warn("[navi] ssh 执行器 profile 清理失败,本轮保留 agents.target:", e);
     return false;
   }
 }
@@ -369,7 +380,7 @@ async function reclaimOrphanOwnerGroups(client: Client): Promise<void> {
     const gone = await client.execute(
       "DELETE FROM groups WHERE owner_task_id IS NOT NULL AND owner_task_id NOT IN (SELECT id FROM tasks) RETURNING id",
     );
-    if (gone.rows.length) console.log(`[ash] 回收 ${gone.rows.length} 个 owner 任务已不存在的内部组`);
+    if (gone.rows.length) console.log(`[navi] 回收 ${gone.rows.length} 个 owner 任务已不存在的内部组`);
     // 组的成员也要处理：lead 行已不存在的 worker 挂着悬空 parent_id，前端只把
     // parentId===null 列为顶层，它们永久不可见（审查实测：主库 6 个 done+accepted 的
     // worker 藏在已消失的团队下）。解绑而不是删除——数据（会话/产物）保留，回到顶层
@@ -377,13 +388,13 @@ async function reclaimOrphanOwnerGroups(client: Client): Promise<void> {
     const unparented = await client.execute(
       "UPDATE tasks SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM tasks) RETURNING id",
     );
-    if (unparented.rows.length) console.log(`[ash] 解绑 ${unparented.rows.length} 个 lead 已不存在的执行者（回到顶层可见）`);
+    if (unparented.rows.length) console.log(`[navi] 解绑 ${unparented.rows.length} 个 lead 已不存在的执行者（回到顶层可见）`);
     const ungrouped = await client.execute(
       "UPDATE tasks SET group_id = NULL WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM groups) RETURNING id",
     );
-    if (ungrouped.rows.length) console.log(`[ash] 清理 ${ungrouped.rows.length} 个悬空的 group 引用`);
+    if (ungrouped.rows.length) console.log(`[navi] 清理 ${ungrouped.rows.length} 个悬空的 group 引用`);
   } catch (e) {
-    console.warn("[ash] 孤儿内部组回收失败，忽略：", e);
+    console.warn("[navi] 孤儿内部组回收失败，忽略：", e);
   }
 }
 
@@ -395,11 +406,11 @@ async function dropRetiredColumns(client: Client, skip?: ReadonlySet<string>): P
     if (!info.rows.some((r) => r.name === column)) continue; // 早就清过了
     try {
       await client.execute(`ALTER TABLE ${table} DROP COLUMN ${column}`);
-      console.log(`[ash] 清理退役列 ${table}.${column}(${why})`);
+      console.log(`[navi] 清理退役列 ${table}.${column}(${why})`);
     } catch (e) {
       // 清不掉不该拦住启动(比如老 SQLite 不支持 DROP COLUMN):报一声继续跑,
       // 这列本来就没人读。
-      console.warn(`[ash] 退役列 ${table}.${column} 没能清掉,忽略:`, e);
+      console.warn(`[navi] 退役列 ${table}.${column} 没能清掉,忽略:`, e);
     }
   }
 }
@@ -424,7 +435,7 @@ async function relaxDebateRoundIndex(client: Client): Promise<void> {
       "CREATE INDEX IF NOT EXISTS free_review_debates_round_idx ON free_review_debates (round_id, started_at)",
     );
   } catch (e) {
-    console.warn("[ash] 辩论轮次索引放宽失败,忽略:", e);
+    console.warn("[navi] 辩论轮次索引放宽失败,忽略:", e);
   }
 }
 
@@ -468,7 +479,7 @@ async function relaxUnfoundedClaudeMonitorLifetimes(client: Client): Promise<voi
  * `shared/src/monitor.ts` 的 `monitorExactExpiry`），而升级前的行只有 `expires_at` 没有
  * `timeout_ms`。不补的话两类行会一起出事：
  *
- * - **ash 自己的哨兵**：起点和时长本来都确定，却因为少了时长列而不再显示期限（纯倒退）。
+ * - **navi 自己的哨兵**：起点和时长本来都确定，却因为少了时长列而不再显示期限（纯倒退）。
  * - **claude 投影里时长曾被回执证明过的行**：旧算法拿**回执时刻**当起点，实测比真实起点晚
  *   一分钟（第 6 轮审查 legacyReceipt：显示误差 60 秒），而旧判据凭「时长可信」就把这个
  *   时刻放出去了。回算时长、**`start_evidence` 留空**，于是它降级成「总共盯 90 秒（起点
@@ -505,6 +516,8 @@ async function backfillMonitorTimeoutFromExpiry(client: Client): Promise<void> {
 }
 
 export async function runDataMigrations(client: Client): Promise<void> {
+  // 先拆退役的触发器：下面那几步数据搬运会改 tasks，别再让它们往没人读的表里记。
+  await dropRetiredTriggers(client, RETIRED_TRIGGERS);
   await widenWorkflowBuiltinIndex(client);
   await relaxDebateRoundIndex(client);
   await migrateLegacyNoteTaskLinks(client);
@@ -517,7 +530,7 @@ export async function runDataMigrations(client: Client): Promise<void> {
   try {
     await disarmReservationsOnAcceptedTasks(client);
   } catch (e) {
-    console.warn("[ash] 已验收任务遗留预约清理失败,忽略:", e);
+    console.warn("[navi] 已验收任务遗留预约清理失败,忽略:", e);
   }
   await reclaimOrphanOwnerGroups(client);
   await relaxUnfoundedClaudeMonitorLifetimes(client);
@@ -526,6 +539,7 @@ export async function runDataMigrations(client: Client): Promise<void> {
   await backfillMonitorTimeoutFromExpiry(client);
   await migrateSessionTurnIdentity(client);
   await backfillMonitorHolds(client);
+  await backfillDispatchedBy(client);
   // 升上来的老实例不该被糊一屏首启向导。判据只在这一刻算一次,之后 `src/onboarding.ts`
   // 只读那条记录 —— 拿实时业务列表反推会把首装过程本身当成「早就配好了」。
   await stampOnboardingBaseline(client);

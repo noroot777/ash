@@ -10,13 +10,15 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ProbeOutcome } from "../src/ash-mcp-probe.js";
-import { ensureAshMcp, type CodexAsk } from "../src/auth/user-cli-mcp.js";
+import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
+import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
+import { ensureNaviMcp, type CodexAsk } from "../src/auth/user-cli-mcp.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
 import { REPO_DIR } from "../src/paths.js";
+import { REAL_HOST_CLI } from "./host-cli-stubs.js";
 
 
-export const stage = mkdtempSync(join(tmpdir(), "ash-user-cli-mcp-"));
+export const stage = mkdtempSync(join(tmpdir(), "navi-user-cli-mcp-"));
 process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
 
 /** 每一格都拿一副全新的「假 HOME + 个人目录」,免得前一格的写入影响后一格。 */
@@ -36,19 +38,17 @@ export const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"))
 
 // ── 「问 codex 本人」那一问的替身 ──────────────────────────────────────────
 //
-// 产品代码把这一问交给探测执行层(`probeCli`:异步、起之前先拿到内核圈定的归属、每条结束
-// 路径都收得回来)。**macOS 上那一层如实弃权**,于是产品在开发机上一律答「没问过 ⇒ 不补接」
-// —— 这几格要钉的却是「问出不同答案时各自怎么收场」,所以这里换替身把那几条路逐个驱动起来
-// (口子和理由同 `probeCli` 的 `openUnit`:生产代码里没有任何弱归属实现)。
+// 这几格要钉的是「codex 问出不同答案时各自怎么收场」,真 codex 只会给其中一种,所以这里换
+// 替身把那几条路逐个驱动起来。
 
-/** codex 收下了。多数格子钉的是**写出来的内容**,不是 codex 的判决,用这个。 */
-export const LISTS_ASH: ProbeOutcome = {
-  kind: "answer", code: 0, stdout: JSON.stringify([{ name: "ash", enabled: true }]), stderr: "",
+/** codex 收下了(列出的是写进去的那条,也就是当前名)。多数格子钉的是**写出来的内容**,不是 codex 的判决,用这个。 */
+export const LISTS_NAVI: CodexAskOutcome = {
+  kind: "answer", code: 0, stdout: JSON.stringify([{ name: NAVI_MCP_SERVER_NAME, enabled: true }]), stderr: "",
 };
 
 /** 按固定答案应付,并把「它拿什么去问的、问的时候用户那份文件长什么样」记下来。 */
 export type Asked = { sandbox: string; candidate: string; userFile: string | null };
-export function canned(outcome: ProbeOutcome, log?: Asked[], userFile?: string): CodexAsk {
+export function canned(outcome: CodexAskOutcome, log?: Asked[], userFile?: string): CodexAsk {
   return async (sandbox) => {
     log?.push({
       sandbox,
@@ -66,7 +66,7 @@ export function canned(outcome: ProbeOutcome, log?: Asked[], userFile?: string):
  * 产品代码里不许这么写(本轮审查 F2),那条断言在最后一格。
  */
 export const askRealCodex: CodexAsk = async (sandbox) => {
-  const plan = resolveLaunch("codex", ["mcp", "list", "--json"]);
+  const plan = REAL_HOST_CLI ? resolveLaunch("codex", ["mcp", "list", "--json"]) : null;
   if (!plan) return { kind: "not-started", why: "这台机器上没装 codex" };
   const res = spawnSync(plan.file, plan.args, {
     cwd: sandbox,
@@ -80,10 +80,11 @@ export const askRealCodex: CodexAsk = async (sandbox) => {
   return { kind: "answer", code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 };
 
-export const HAS_CODEX = !!resolveLaunch("codex", ["mcp", "list", "--json"]);
+// 拿本机真 codex 当判官的那一格要明说才跑(NAVI_TEST_REAL_CLI=1):结论跟着这台机器装的是哪一版走。
+export const HAS_CODEX = REAL_HOST_CLI && !!resolveLaunch("codex", ["mcp", "list", "--json"]);
 
 /** 默认替身 = 「codex 收下了」。只有明确要考 codex 判决的格子才自己传。 */
-export const ensure = (dir: string, agent: string, host: string, ask: CodexAsk = canned(LISTS_ASH)) =>
-  ensureAshMcp(dir, agent, host, ask);
+export const ensure = (dir: string, agent: string, host: string, ask: CodexAsk = canned(LISTS_NAVI)) =>
+  ensureNaviMcp(dir, agent, host, ask);
 /** 宿主真的没登记过、仓库也没 build 过 mcp 时,唯一诚实的答案是「补不上」。 */
 export const HAS_BUILT_MCP = existsSync(join(REPO_DIR, "mcp", "dist", "index.js"));

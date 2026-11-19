@@ -1,8 +1,8 @@
 import { createWriteStream, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AgentType, SessionRole } from "@ash/shared";
-import type { TimelineNotice } from "@ash/shared/timeline-notice";
+import type { AgentType, SessionRole } from "@navi/shared";
+import type { TimelineNotice } from "@navi/shared/timeline-notice";
 import { desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -10,7 +10,7 @@ import { sessions } from "./db/schema.js";
 import { withRunFileLock } from "./run-file-lock.js";
 import { sessionTranscriptPath, TURN_SENTINEL, writeTurn } from "./transcript.js";
 import { bindTranscript, liveTranscript } from "./transcript-identity.js";
-import type { RecordIdentity } from "@ash/shared/session-output";
+import type { RecordIdentity } from "@navi/shared/session-output";
 import { now } from "./util.js";
 
 // Persist one system event to a task session and mirror it over SSE.
@@ -38,7 +38,8 @@ export type TimelineLine = { text: string; notice: TimelineNotice };
 /** 回执：记在所属回合上、平时不画的那一类。原文就是它的话。 */
 export const receiptLine = (text: string): TimelineLine => ({ text, notice: { kind: "receipt" } });
 /** 出了岔子 / 需要用户知道的：留在会话明面上。原文就是它的话。 */
-export const alertLine = (text: string): TimelineLine => ({ text, notice: { kind: "alert" } });
+export const alertLine = (text: string, owner?: { discussionId: string }): TimelineLine =>
+  ({ text, notice: { kind: "alert", ...(owner ? { discussionId: owner.discussionId } : {}) } });
 /** 有专门 kind 的那几类（审查起止与结论、验收完成、哨兵起停……）。 */
 export const noticeLine = (notice: TimelineNotice, text: string): TimelineLine => ({ text, notice });
 
@@ -93,7 +94,7 @@ export async function appendTaskTimeline(
     });
     return true;
   } catch (error) {
-    console.warn(`[ash] failed to append task timeline for ${taskId}:`, error);
+    console.warn(`[navi] failed to append task timeline for ${taskId}:`, error);
     return false;
   }
 }

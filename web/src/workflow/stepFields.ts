@@ -4,14 +4,14 @@
 //
 // executor / model / effort 三种类型交给组件用现成控件渲染（复用 composer 那套
 // 执行器选择），其余都是纯枚举/文本，规格表自己就描述完了。
-import type { StepKind, WorkflowStep } from "@ash/shared/workflow";
+import type { StepKind, WorkflowStep } from "@navi/shared/workflow";
 import {
   ACCEPT_CLEAN, ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY, ACCEPT_STRATEGY_LABELS,
   COMMAND_WHERE, COMMAND_WHERE_LABELS, HUMAN_NOTIFY, HUMAN_NOTIFY_LABELS,
   HUMAN_SHOW, HUMAN_SHOW_LABELS, PREVIEW_LIFE, PREVIEW_LIFE_LABELS,
   PREVIEW_MODE, PREVIEW_MODE_LABELS, PREVIEW_READY, PREVIEW_READY_LABELS,
   VERIFY_CHECKS, VERIFY_CHECK_LABELS,
-} from "@ash/shared/workflow";
+} from "@navi/shared/workflow";
 
 export interface FieldOption { value: string; label: string }
 
@@ -55,11 +55,11 @@ export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
       key: "mode", label: "启动方式", type: "select", options: opts(PREVIEW_MODE, PREVIEW_MODE_LABELS),
     },
     // 端口这句得写在这儿，不能只写进文档：预览起在自己的 worktree 里，而同一个项目
-    // 此刻通常已经有一份在跑（用户自己那份、或别的任务的预览），写死端口必撞。ash
+    // 此刻通常已经有一份在跑（用户自己那份、或别的任务的预览），写死端口必撞。navi
     // 每次都借一个空闲端口用 PORT 传进来，命令认它才错得开。
     {
       key: "cmd", label: "启动命令", type: "text", placeholder: "npm run dev", emptyText: "还没填命令",
-      hint: "ash 会把上面的选择作为 $ASH_PREVIEW_MODE 传给命令；项目不识别它时，"
+      hint: "Navi 会把上面的选择作为 $NAVI_PREVIEW_MODE 传给命令；项目不识别它时，"
         + "就是普通自定义命令。同时每次借一个空闲端口，用 $PORT 传入。端口写死的话，"
         + "同一个项目已经有一份在跑时必然撞车 —— 写成认 $PORT 的形式（例如 npm run dev -- --port $PORT）才错得开。"
         + SHELL_HINT,

@@ -1,6 +1,6 @@
 // 「同一套资源的占有权」那把短命互斥锁。
 //
-// **为什么不能只各自检查对方的锁**：ash 启动和离线迁移各有一把长命锁（`.ash.lock` /
+// **为什么不能只各自检查对方的锁**：Navi 启动和离线迁移各有一把长命锁（`.navi.lock` /
 // `.maintenance.lock`），而两边原来都是「先查对方、再建自己」。这个合成动作不是原子的，
 // 于是下面这串合法交错两边都能通过（第 1 轮审查 F2 用同步屏障实测复现）：
 //
@@ -16,14 +16,18 @@
 //    而第一个进程手里的 fd 还在、照样返回成功（同一条审查意见的第二个面）。
 // ② **按排好的顺序取多把**：一套资源包含库文件和 runs 目录两个键，所有角色都按字典序
 //    取，顺序一致就不会互相等成死锁。
+// ③ **新旧两个名字都取**（`.navi-claim.lock` + 改名之前的 `.ash-claim.lock`）：改名之前的服务和
+//    离线脚本只认旧名，只取新名就跟它们不互斥了。两代都按文件名字典序取，旧版取的是这个全序里的
+//    一个子序列，所以混着跑也不会等成死锁。
 import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, realpathSync, statSync,
   unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
+import { LEGACY_RESOURCE_CLAIM_SUFFIX } from "@navi/shared/legacy-names";
 import { isPidAlive } from "./platform.js";
 import { inspectProcess } from "./proc.js";
 
-const CLAIM_SUFFIX = ".ash-claim.lock";
+const CLAIM_SUFFIX = ".navi-claim.lock";
 /** 占有锁只在「查对方 + 建自己」那几毫秒里被持有，所以等 3 秒还拿不到就是真有人在抢。 */
 const BUDGET_MS = 3_000;
 const POLL_MS = 25;
@@ -41,6 +45,8 @@ export class ResourceClaimError extends Error {
 }
 
 export const claimFileFor = (key: string): string => `${key}${CLAIM_SUFFIX}`;
+/** 一个键要取的全部占有锁文件：当前名 + 改名之前的名字（见顶部③）。 */
+const claimFilesFor = (key: string): string[] => [claimFileFor(key), `${key}${LEGACY_RESOURCE_CLAIM_SUFFIX}`];
 
 /**
  * 「这条路径的真实落点是什么」这一问**没答上来**。
@@ -235,7 +241,7 @@ function take(file: string, note: string): () => void {
  * **所有角色都必须用同一组键**，否则等于没锁。
  */
 export function withResourceClaim<T>(keys: readonly string[], note: string, run: () => T): T {
-  const files = [...new Set(keys.map(claimFileFor))].sort();
+  const files = [...new Set(keys.flatMap(claimFilesFor))].sort();
   const releases: (() => void)[] = [];
   try {
     for (const file of files) releases.push(take(file, note));

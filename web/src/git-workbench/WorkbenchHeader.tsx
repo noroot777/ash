@@ -11,8 +11,8 @@ import {
   Sparkle,
   TreeStructure,
 } from "@phosphor-icons/react";
-import type { ProjectView } from "@ash/shared";
-import type { GitView } from "@ash/shared/git-workbench";
+import type { ProjectView } from "@navi/shared";
+import type { GitView } from "@navi/shared/git-workbench";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
@@ -57,7 +57,7 @@ export function WorkbenchHeader({
         <button
           type="button"
           className="gwb-back"
-          aria-label="返回 ash 工作区"
+          aria-label="返回 Navi 工作区"
           onClick={onExit}
           {...backTip.anchorProps}
         >

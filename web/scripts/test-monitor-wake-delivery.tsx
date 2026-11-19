@@ -3,7 +3,7 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ServerEvent, Session } from "@ash/shared";
+import type { ServerEvent, Session } from "@navi/shared";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import { teamFeedRows } from "../src/team/teamModel.ts";
 import { buildConversationItems, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
@@ -72,7 +72,7 @@ async function verify(taskRow: Parameters<typeof enrichTasks>[0][number], sessio
     assert.match(html, /FAIL: regression failed/);
     assert.match(html, /退出码 1/);
   }
-  if (process.env.ASH_WAKE_EVIDENCE) writeFileSync(process.env.ASH_WAKE_EVIDENCE, JSON.stringify({ task, session, output, timeline }));
+  if (process.env.NAVI_WAKE_EVIDENCE) writeFileSync(process.env.NAVI_WAKE_EVIDENCE, JSON.stringify({ task, session, output, timeline }));
 }
 
 try {

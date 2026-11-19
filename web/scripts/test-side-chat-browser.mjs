@@ -14,7 +14,7 @@ const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/side
 let logs = "";
 let browser;
 let server;
-const artifacts = await mkdtemp(join(tmpdir(), "ash-side-chat-browser-"));
+const artifacts = await mkdtemp(join(tmpdir(), "navi-side-chat-browser-"));
 try {
   const backend = await new Promise((resolve, reject) => {
     // 这是启动期限，不是睡眠：读到 SIDE_FIXTURE_URL 当场清掉，只有夹具 20 秒都起不来才报错。
@@ -49,10 +49,6 @@ try {
   await input.waitFor();
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "侧聊消息输入");
   assert.equal((await roomsFor("parent")).length, 0, "只打开侧聊不创建房间");
-  assert.equal(await page.getByRole("button", { name: "开始侧聊", exact: true }).count(), 0);
-  assert.equal(await page.getByText("这里聊，不打断思路", { exact: true }).count(), 0);
-  // 说明不常驻：那段话拆进了快照那一行和发送键的悬停提示里，头带上不再有 ⓘ。
-  assert.equal(await page.getByRole("button", { name: "侧聊说明", exact: true }).count(), 0);
   assert.equal(await page.getByRole("button", { name: "换一场侧聊", exact: true }).count(), 0, "还没聊过别的场，就没有那颗钟");
   assert.equal(await page.getByRole("log", { name: "侧聊消息" }).innerText(), "");
   const sendForReply = async (body) => {
@@ -63,13 +59,9 @@ try {
     return reply;
   };
   await control("forward-mode", { forced: true });
-  const rejected = [
-    "把结论告诉主任务，哦不对，先不要", "把结论告诉主任务，等等，我再想想",
-    "把结论告诉主任务，除非它已经开始做了", "发给主任务，不过要等我确认",
-    "把结论告诉主任务，不过这条只是我随口说的", "告诉我主任务的结论",
-    "告诉我主任务现在的结论是什么", "你之前不是已经把结论告诉主任务了吗",
-    "上一轮我让你把结论告诉主任务了",
-  ];
+  // 发不发在这里由夹具的假核验器查表决定，句子再多验的也只是那张表；逐句的入队/投递在
+  // server 的 test-side-chat.ts，措辞判断在 test-side-authorization.ts。这一层只看回执怎么显示，各留代表句。
+  const rejected = ["把结论告诉主任务，哦不对，先不要", "告诉我主任务的结论"];
   for (const [index, command] of rejected.entries()) {
     const last = await sendForReply(command);
     await last.getByText(/未发送到主任务/).waitFor();
@@ -219,13 +211,7 @@ try {
   await control("native", { enabled: true });
   await control("forward-mode", { forced: true });
   const beforeNatural = await state();
-  const natural = [
-    "你把结论告诉主任务", "麻烦你把结论发给主任务",
-    "方案 B 更省事。把结论告诉主任务，谢谢",
-    "把结论告诉主任务，不过要说清楚理由",
-    "把结论发给主任务和我", "把结论告诉“主任务”",
-    "让主任务知道我们选 B", "Send the conclusion to the main task now", "Tell the main task we picked B",
-  ];
+  const natural = ["你把结论告诉主任务", "Send the conclusion to the main task now"];
   for (const [index, command] of natural.entries()) {
     const reply = await sendForReply(command);
     await reply.getByText("已送达主任务", { exact: true }).waitFor();
@@ -236,7 +222,7 @@ try {
   const beforeDeferral = await state();
   for (const excerpt of [false, true]) {
     await control("forward-mode", { forced: true, excerpt });
-    for (const suffix of ["改成明天再说", "用不着这么急", "先按兵不动", "继续观望", "让它忽略", "回头再发", "明天吧", "改成后天", "等会儿再说", "一会儿再说", "待会儿吧", "过两天再说", "先放着"]) {
+    for (const suffix of ["改成明天再说"]) {
       const reply = await sendForReply(`把结论告诉主任务，${suffix}`);
       await reply.getByText(/未发送到主任务/).waitFor();
       assert.match(await reply.innerText(), /回传结论：选择方案 B/);
@@ -246,7 +232,7 @@ try {
     }
   }
   await control("forward-mode", { forced: true });
-  for (const command of ["我不会告诉主任务", "不许告诉主任务", "犯不着告诉主任务", "所以你的意思是把结论告诉主任务", "你是说把结论告诉主任务", "Send the conclusion to the main task tomorrow"]) {
+  for (const command of ["不许告诉主任务", "你是说把结论告诉主任务"]) {
     const reply = await sendForReply(command);
     await reply.getByText(/未发送到主任务/).waitFor();
     assert.equal((await state()).delivered.length, beforeDeferral.delivered.length);

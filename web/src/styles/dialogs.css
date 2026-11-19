@@ -14,7 +14,6 @@
 .notes-panel,
 .groups-panel,
 .free-review-dialog,
-.composer-preset-dialog,
 .duet-handoff-modal,
 .markdown-report-dialog {
   border-color: color-mix(in oklab, var(--line2) 70%, transparent);
@@ -189,14 +188,9 @@
 .free-review-dialog > footer { min-height: 58px; align-items: center; padding: 11px 18px; }
 .free-review-dialog > footer button { height: 36px; border-radius: 10px; padding-inline: 15px; font-weight: var(--w-medium); }
 
-.composer-preset-dialog,
 .duet-handoff-modal { border-radius: 20px; padding: 21px; }
-.composer-preset-dialog h2,
 .duet-handoff-modal h2 { font-size: 18px; letter-spacing: -.03em; }
-.composer-preset-dialog > header > span,
 .duet-handoff-modal > header > span { width: 42px; height: 42px; border-radius: 13px; }
-.composer-preset-dialog > header > span { flex: 0 0 42px; }
-.composer-preset-dialog > footer button,
 .duet-handoff-modal footer button { height: 36px; border-radius: 10px; padding-inline: 14px; font-weight: var(--w-medium); }
 .duet-handoff-modal { width: min(600px, calc(100vw - 32px)); }
 

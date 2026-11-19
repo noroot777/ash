@@ -79,6 +79,28 @@ export function pairAnswerMessages(records: readonly QuestionRecord[], messages:
   return { paired, unpaired: records.filter((record) => !record.deleted && !claimed.has(record.id)) };
 }
 
+/**
+ * 提问那一轮结算时落进会话的两句说明的起头（server 的 settle-status.ts 写，question-settle-notes.ts
+ * 拼）。服务端靠它认「这道题是在哪种回合里问的」（legacy-answer-intent.ts）；界面靠它认出这句话问的
+ * 是哪道题——那道题此刻在答题卡上、或者已经跟着答案留在你那颗气泡里，这句就不再抄一遍（题目没别处
+ * 可看时照画，比如收起答题卡改发了一句别的、旧题被撤下）。
+ */
+export const FOLLOW_UP_QUESTION_HEAD = "续聊回合以提问结束,等待答复:";
+export const PAUSED_QUESTION_HEAD = "本回合以提问暂停,等待答复:";
+
+/** 这句结算说明里问的那道题（原样），不是这两种说明就是 null。 */
+export function settleNoteQuestion(text: string): string | null {
+  const said = text.replace(/^〔系统〕/, "").trim();
+  if (said.startsWith(`${PAUSED_QUESTION_HEAD}「`) && said.endsWith("」")) {
+    return said.slice(PAUSED_QUESTION_HEAD.length + 1, -1);
+  }
+  const followUp = /」\(任务状态仍为「[^」]*」\)$/.exec(said);
+  if (said.startsWith(`${FOLLOW_UP_QUESTION_HEAD}「`) && followUp) {
+    return said.slice(FOLLOW_UP_QUESTION_HEAD.length + 1, followUp.index);
+  }
+  return null;
+}
+
 export function questionItems(source: QuestionSource): QuestionItem[] {
   return source.questionItems?.length
     ? source.questionItems
@@ -94,14 +116,17 @@ export function formatQuestionAnswers(answers: readonly string[]): string {
   return answers.map((answer, index) => `${index + 1}. ${answer.trim() || "（未答）"}`).join("\n");
 }
 
-export function questionOptionSelected(value: string, option: string): boolean {
-  return `\n${value.trim()}\n`.includes(`\n${option}\n`);
+/**
+ * 答题卡上一题的答复：勾了的那几项按选项顺序一项一行，补充的话接在最后一行。跟从前「勾选把那句话
+ * 落进输入框」拼出来的是同一种形状——智能体收到的字、已答气泡认「选了哪几项」（questionOptionSelected，
+ * 按整行认）都照旧。
+ */
+export function joinQuestionAnswer(options: readonly string[], picked: ReadonlySet<number>, note: string): string {
+  return [...options.filter((_option, index) => picked.has(index)), note.trim()].filter(Boolean).join("\n");
 }
 
-export function toggleQuestionOption(value: string, option: string): string {
-  return questionOptionSelected(value, option)
-    ? `\n${value.trim()}\n`.replace(`\n${option}\n`, "\n").trim()
-    : [value.trim(), option].filter(Boolean).join("\n");
+export function questionOptionSelected(value: string, option: string): boolean {
+  return `\n${value.trim()}\n`.includes(`\n${option}\n`);
 }
 
 export function legacyQuestionRecord(text: string, id: string, at = ""): QuestionRecord | null {

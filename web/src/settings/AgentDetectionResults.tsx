@@ -1,4 +1,4 @@
-import type { AgentExecutorProfile } from "@ash/shared";
+import type { AgentExecutorProfile } from "@navi/shared";
 import { Check, CheckCircle } from "@phosphor-icons/react";
 import type { DetectedCli } from "../lib/api.ts";
 

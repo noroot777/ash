@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 依赖这一层的回归。依赖**不**逐文件深拷,放法有两种,判据是依赖树里有没有一条链落回项目自己的
 // 源码:没有就借一条指向工作区那一份的链(O(1)),有就整棵克隆进快照(数据块共享)。为什么这么分、
@@ -14,8 +15,10 @@ import { dirname, join, resolve } from "node:path";
 // 一样、依赖根自己是链的三种落点、克隆遍历本身的保真度,以及 monorepo 的**三个运行时入口**都必须
 // 落在快照自己那份源码上(直接 import / 被借包的传递导入 / .bin 里的 CLI shim),和「依赖根不可达
 // 时不许拖垮快照」。
-const root = mkdtempSync(join(tmpdir(), "ash-gate-borrow-"));
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-gate-borrow-"));
+// 产品模块一加载就开库：不指到临时目录，开的就是这份检出自己的 data/ash.db（在主仓里那是线上的库）。
+process.env.NAVI_DB = join(root, "navi-test.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 const linkDir = (target: string, path: string) => (process.platform === "win32"
   ? symlinkSync(resolve(dirname(path), target), path, "junction")
@@ -450,4 +453,4 @@ try {
   assert.equal(runIn(join(looseMonoSnap, "probe.mjs")), "looseMono-certified");
 
   console.log("accept-gate-borrow: launch-from-snapshot, cleanup safety, install-declaration identity, no-dependencies parity, link roots, workspace isolation across all four runtime entries, unreachable roots and clone-traversal fidelity passed");
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { await removeTmpStage(root); }

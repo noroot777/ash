@@ -1,5 +1,6 @@
 import { Fragment, useId, useState, type ReactNode } from "react";
 import { DeleteMessageButton, type DeletableItem } from "./MessageDelete.tsx";
+import type { NoticeLink } from "./noticeLinks.ts";
 import type { NoticeView } from "./timelineNoticeCopy.ts";
 import { footnotePartTail, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 
@@ -27,22 +28,25 @@ export function FootnoteDot({ tone, live }: { tone: NoticeView["tone"]; live: bo
  * conversationSystemRows）。没有图标、没有底色，几件事并成一句、中间一个间隔号。
  *
  * - 指到这一句（键盘走进来）才出最近那一句的时刻（是哪条命令 · 时刻），触屏上常显；
- * - 有原文细节的那半句点了就地摊开原文；
- * - 挂在某半句后面的键（「去裁定」）由 `actionFor` 给，紧跟在那半句后面，时刻排在键后面；
+ * - 认得出去哪儿的那半句（`linkFor`：「等你裁定」去审议格那一轮）点了去那儿，原文在那一格里；
+ * - 其余有原文细节的那半句点了就地摊开原文；
+ * - 挂在某半句后面的键（「继续本轮审查」「重试这一回合」）由 `actionFor` 给，紧跟在那半句后面，时刻排在键后面；
  * - 删除不在这里：每一句同时也是「N 条记录」里的一条，删除在那儿。只有没有记录可去的地方
  *   （团队时间线）才给 `deletable`。
  *
- * 审查结论不在这里（它在会话右边自己占一行，见 ReviewVerdict）；贴在它下面的那几句也用这一句，
+ * 审查结论不在这里（它在会话右边自己占一行，见 ReviewBubble）；贴在它下面的那几句也用这一句，
  * `placement="trailing"`：靠右，时刻排在字前面——藏着的时刻若在字后面，靠右的那句字就对不齐气泡。
  */
 export function FootnoteLine({
   footnote,
   actionFor,
+  linkFor,
   placement = "turn",
   deletable,
 }: {
   footnote: TurnFootnote;
   actionFor?: (part: FootnotePart) => ReactNode;
+  linkFor?: (part: FootnotePart) => NoticeLink | null;
   /** turn = 回合正文下面；standalone = 前面没有回合可挂、在原处单独占一行；trailing = 贴在审查结论下面。 */
   placement?: "turn" | "standalone" | "trailing";
   deletable?: DeletableItem;
@@ -58,6 +62,14 @@ export function FootnoteLine({
   const sentence = (part: FootnotePart) => {
     const text = <span className="turn-footnote-text" data-selection-content=""><SentenceText view={part.view} /></span>;
     const dot = <FootnoteDot tone={part.view.tone} live={live} />;
+    const link = linkFor?.(part);
+    if (link) {
+      return (
+        <button type="button" className="turn-footnote-part" aria-label={`${part.view.text}，${link.label}`} onClick={link.open}>
+          {dot}{text}
+        </button>
+      );
+    }
     // 验收那句只是报个结果，不能点（分支名已经写在字里，原文在「N 条记录」里点开）。
     if (part.view.detail && part.view.topic !== "accept") {
       return (

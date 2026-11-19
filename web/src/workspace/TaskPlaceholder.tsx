@@ -1,5 +1,5 @@
-import type { ProjectView, TaskListItem } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
+import type { ProjectView, TaskListItem } from "@navi/shared";
+import { taskDisplayStatus } from "@navi/shared";
 import { CirclesThreePlus, FolderPlus } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";

@@ -1,6 +1,6 @@
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { HandoffTarget, ProjectView, Task, TaskListItem } from "@ash/shared";
+import type { HandoffTarget, ProjectView, Task, TaskListItem } from "@navi/shared";
 import { TaskTree } from "../../src/workspace/TaskTree.tsx";
 import { useSidebarTaskNavigation } from "../../src/workspace/sidebarNavigation.ts";
 import { spreadVisibleTasks, type SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";
@@ -30,13 +30,13 @@ const project = (id: string, name: string): ProjectView => ({
   health: { exists: true, isRepo: true },
 });
 
-const ash = project("p1", "ash");
+const navi = project("p1", "navi");
 const other = project("p2", "隔壁项目");
 
 function task(id: string, title: string, updatedAt: string, extra: Partial<Task> = {}): Task {
   return {
     id,
-    projectId: ash.id,
+    projectId: navi.id,
     groupId: null,
     parentId: null,
     title,
@@ -118,7 +118,7 @@ const idleSpread: SidebarSpread = {
   close: () => {},
 };
 
-function Ash() {
+function Navi() {
   const [taskMode, setTaskMode] = useState(false);
   // 「所有项目分组都收起」那一档要求屏幕上一行都不剩,而「置顶」那一节是不可折叠的
   // （用户 2026-09-08 拍板),所以用例得先把置顶摘掉。
@@ -131,7 +131,7 @@ function Ash() {
     () => pinned ? tasks : tasks.map((item) => item.id === "pin" ? { ...item, pinnedAt: null } : item),
     [pinned],
   );
-  const scope: TaskScope = taskMode ? { kind: "tasks" } : { kind: "project", projectId: ash.id };
+  const scope: TaskScope = taskMode ? { kind: "tasks" } : { kind: "project", projectId: navi.id };
   // 模型那份顺序：侧栏收起时 J/K 的退路，也是这个 fixture 用来证明「两种顺序确实不同」的对照。
   const modelOrder = useMemo(() => spreadVisibleTasks(rows, scope, "all"), [rows, scope]);
 
@@ -196,8 +196,8 @@ function Ash() {
       {sidebarOpen && (
         <aside className="workspace-sidebar" style={{ width: 320, minHeight: 520 }}>
           <TaskTree
-            projects={[ash, other]}
-            currentProjectId={ash.id}
+            projects={[navi, other]}
+            currentProjectId={navi.id}
             scope={scope}
             tasks={rows}
             selectedTaskId={selectedTaskId}
@@ -205,7 +205,6 @@ function Ash() {
             spread={spread}
             onTask={select}
             onRemoteTask={(next) => { setSelectedTaskId(null); setSelectedRemoteTaskId(next.id); }}
-            onTaskStarred={() => {}}
             onHandoffFinished={() => {}}
             outbound={{ outboundCount: 1, offlinePeers: [], asked: false, refreshing: false, onRefresh: () => {} }}
             notify={() => {}}
@@ -219,6 +218,6 @@ function Ash() {
 window.localStorage.clear();
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

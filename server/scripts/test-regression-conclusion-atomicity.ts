@@ -31,7 +31,7 @@ try {
       agentType: "codex", executor: "test", cwd: root, startedAt: replayAt });
     const { out } = detachedPathsFor(join(root, "runs", review.taskId), sessionId, replayAt);
     writeFileSync(out, JSON.stringify({ type: "item.completed", item: { id: sessionId, type: "mcp_tool_call",
-      server: "ash", tool: "report_stage", arguments: { taskId: review.taskId, stage: "verified" },
+      server: "navi", tool: "report_stage", arguments: { taskId: review.taskId, stage: "verified" },
       result: null, error: { message: "Transport closed" }, status: "failed" } }) + "\n");
     const task = (await db.select().from(tasks).where(eq(tasks.id, review.taskId)))[0]!;
     await db.update(tasks).set({ activeDirectionToken: "new-direction" }).where(eq(tasks.id, review.taskId));

@@ -1,4 +1,4 @@
-// 压缩上下文不是它说的话（docs/ui-ux-audit run-9）：它是执行过程里它发生的那个位置上的一步——
+// 压缩上下文不是它说的话：它是执行过程里它发生的那个位置上的一步——
 // 压着的时候是「在压缩上下文」（进行条那一行跟着说），压完并成一行「压缩了上下文」；被 PreCompact
 // hook 拦下、没压的那一次说「压缩被拦下」。没压成的那一次是一条红色异常，照旧是红的。
 //
@@ -8,7 +8,7 @@
 // 旧会话里服务端当年插进正文的那两句引用不转换，照原样显示成引用：正文里认不出哪一句是服务端
 // 插的（同一句话可能是智能体写的、可能被切在两个文字块里，trace 里也会跟前后的正文攒成一条），
 // 猜错一次就是删掉用户要看的内容（第 1、2 轮审查）。
-import type { CompactionPhase } from "@ash/shared";
+import type { CompactionPhase } from "@navi/shared";
 import type { ExecutionEvent } from "./executionTrace.ts";
 
 export const COMPACT_LABEL = "压缩上下文";

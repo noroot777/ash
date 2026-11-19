@@ -57,7 +57,7 @@ async function flush(): Promise<void> {
   try {
     targets = await affected(ids, queueIds, groupIds);
   } catch (error) {
-    console.error("[ash] 展开动作失效的牵连失败，改为全部重取:", error);
+    console.error("[navi] 展开动作失效的牵连失败，改为全部重取:", error);
     bus.publish({ type: "task.actions.stale.all" });
     return;
   }

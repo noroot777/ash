@@ -17,9 +17,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-im-wire-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-im-wire-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -319,8 +319,8 @@ try {
     assert.equal(parseCommand("/unknown x"), null, "不认识的斜杠开头当普通话");
     assert.equal(parseCommand("路径 /new 在中间"), null);
 
-    assert.equal(extractCode("绑定码 ash-abcd-efgh 发你"), "ABCDEFGH");
-    assert.equal(extractCode("ASH-ABCD-EFG"), null);
+    assert.equal(extractCode("绑定码 navi-abcd-efgh 发你"), "ABCDEFGH");
+    assert.equal(extractCode("NAVI-ABCD-EFG"), null);
 
     assert.deepEqual(splitNumberedAnswers("1. 用 A\n2、先不动\n补充一行", 2), ["用 A", "先不动\n补充一行"]);
     assert.equal(splitNumberedAnswers("就按你说的来", 2), null, "没写题号就整段当一条");

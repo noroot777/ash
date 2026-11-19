@@ -13,12 +13,12 @@
 //   ⑥ 审查会话的叫醒、审查者正在说话时的叫醒不并。
 //   ⑦ 并出来的回合带着原来几条的出处；id 是最后那一截，派生按它截上下文带得上醒来后的话。
 import assert from "node:assert/strict";
-import type { Session } from "@ash/shared";
-import { appendMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
+import type { Session } from "@navi/shared";
+import { appendMonitorWake, type MonitorWakeEvent } from "@navi/shared/monitor-wake";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { verifyNoteOf } from "../src/task-detail/conversationNotes.ts";
-import { turnLayout } from "../src/task-detail/turnFold.ts";
+import { splitTurnSegments } from "../src/task-detail/turnFold.ts";
 
 type Agent = Extract<ConversationItem, { kind: "agent" }>;
 const T0 = Date.parse("2026-11-13T02:00:00.000Z");
@@ -40,7 +40,7 @@ const end = (minute: number) => line({ t: "agentEnd", at: at(minute) });
 const tool = (minute: number, turn: number, name: string, input: Record<string, unknown>) => ({
   at: at(minute), turnStartedAt: at(turn), event: { kind: "tool", name, detail: JSON.stringify(input) },
 });
-const monitor = (minute: number, turn: number, description: string) => tool(minute, turn, "mcp__ash__start_monitor", { description, command: "npm test" });
+const monitor = (minute: number, turn: number, description: string) => tool(minute, turn, "mcp__navi__start_monitor", { description, command: "npm test" });
 const edit = (minute: number, turn: number) => tool(minute, turn, "Edit", { file_path: "/repo/a.ts" });
 const persisted = (output: string, trace: object[], extra: Partial<Session> = {}) => {
   const s = session(extra);
@@ -77,7 +77,7 @@ const wakes = (items: ConversationItem[]) => items.filter((item) => item.kind ==
   const fix = turns[1]!;
   assert.match(fix.markdown, /照意见修好了[\s\S]*B 过了，修复完成。/);
   // 外面只留醒来后那段话，暂停前写的那段收进执行过程。
-  const { process, conclusion } = turnLayout(fix.segments, { live: false });
+  const { process, conclusion } = splitTurnSegments(fix.segments);
   assert.deepEqual(conclusion.map((segment) => segment.markdown.trim()).filter(Boolean), ["B 过了，修复完成。"]);
   assert.match(process.map((segment) => segment.markdown).join(""), /照意见修好了/);
   assert.ok(process.some((segment) => segment.events.some((e) => e.label.endsWith("monitor_wake"))), "叫醒那一下不在执行过程里");
@@ -120,7 +120,7 @@ const wakes = (items: ConversationItem[]) => items.filter((item) => item.kind ==
   ].join(""), trace))).length;
   assert.equal(byText([monitor(1, 0, "全量  回归\n")], "全量 回归"), 1, "描述的空白没归一");
   assert.equal(byText([tool(1, 0, "Monitor", { description: "等回归", command: "until …" })], "等回归"), 1, "claude 内置 Monitor 改道过来的没认出来");
-  assert.equal(byText([tool(1, 0, "mcp__ash__start_monitor", { command: "npm  test" })], "npm test"), 1, "没写描述时服务端拿命令顶上，没认出来");
+  assert.equal(byText([tool(1, 0, "mcp__navi__start_monitor", { command: "npm  test" })], "npm test"), 1, "没写描述时服务端拿命令顶上，没认出来");
   assert.equal(byText([monitor(1, 0, "别的哨兵")], "全量回归"), 2, "不是这一段挂的哨兵被并了进来");
 }
 
@@ -134,7 +134,7 @@ const liveEvent = (id: string, payload: Record<string, unknown>): TimelineEntry 
 const liveWake: TimelineEntry = { kind: "user", id: "w1", at: at(10), attachments: [], bySystem: true, sessionId: S.id, ...wakeOf([W]) };
 const live = (tail: TimelineEntry[], exitStatus = 0) => foldMonitorWakes(buildConversationItems([], [S], [
   liveEvent("e1", { kind: "text", text: "改好了，挂个哨兵跑回归。" }),
-  liveEvent("e2", { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: W.source }) }),
+  liveEvent("e2", { kind: "tool", name: "mcp__navi__start_monitor", detail: JSON.stringify({ description: W.source }) }),
   liveEvent("e3", { kind: "done", exitStatus }),
   liveWake,
   ...tail,
@@ -172,7 +172,7 @@ const shape = (items: ConversationItem[]) => ({
     const noteLive: TimelineEntry = liveEvent("n1", { kind: "system", text: settlement, at: at(3), level: "notice", aside: true });
     const crashedLive = foldMonitorWakes(buildConversationItems([], [S], [
       liveEvent("e1", { kind: "text", text: "改好了，挂个哨兵跑回归。" }),
-      liveEvent("e2", { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: W.source }) }),
+      liveEvent("e2", { kind: "tool", name: "mcp__navi__start_monitor", detail: JSON.stringify({ description: W.source }) }),
       liveEvent("e3", { kind: "done", exitStatus }),
       noteLive,
       liveWake,
@@ -191,7 +191,7 @@ const shape = (items: ConversationItem[]) => ({
   for (const exitStatus of [1, 0]) {
     const crashedLive = foldMonitorWakes(buildConversationItems([], [S], [
       liveEvent("e1", { kind: "text", text: "改好了，挂个哨兵跑回归。" }),
-      liveEvent("e2", { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: W.source }) }),
+      liveEvent("e2", { kind: "tool", name: "mcp__navi__start_monitor", detail: JSON.stringify({ description: W.source }) }),
       liveEvent("e3", { kind: "done", exitStatus, turnOutcome: "failed" }),
       liveWake,
       liveEvent("e4", { kind: "text", text: "回归过了。" }),

@@ -1,10 +1,10 @@
-// 「预览缺 node 依赖时，ash 在**项目之外**备一份」（server/src/preview-deps.ts）。
+// 「预览缺 node 依赖时，navi 在**项目之外**备一份」（server/src/preview-deps.ts）。
 // 跑：npm -w server run test:preview-deps
 //
 // 钉三件事，每一件都是踩过的：
 //
-// ① **不许在用户的项目里 install。** 用户的原话是「怎么能因为 ash 去『污染』正常的项目
-//    呢？」。所以依赖装进 ash 自己的 `data/deps`（这里用 ASH_DEPS_DIR 指到临时目录），
+// ① **不许在用户的项目里 install。** 用户的原话是「怎么能因为 navi 去『污染』正常的项目
+//    呢？」。所以依赖装进 navi 自己的 `data/deps`（这里用 NAVI_DEPS_DIR 指到临时目录），
 //    项目里只被读 package.json 和锁文件，工作区里只多一条 node_modules 软链。
 // ② **生成的命令要能真跑。** 提示里那几条 `cd` / `ln -s` 是给用户整行粘走的，路径带空格
 //    不引号就是 `cd: too many arguments`。这里不看字符串长相，直接**执行**它们。
@@ -15,9 +15,9 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-preview-deps-"));
+const root = mkdtempSync(join(tmpdir(), "navi-preview-deps-"));
 // 装到哪由 DEPS_DIR 决定，而它在模块加载时就定了 —— 所以先设环境变量再 import。
-process.env.ASH_DEPS_DIR = join(root, "deps");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
 const { heldCacheOf, nodeDepsAdvice, prepareNodeDeps, pruneNodeDeps, removePreparedLinks }
   = await import("../src/preview-deps.js");
 const { missingDepsHint } = await import("../src/preview-log.js");
@@ -47,9 +47,9 @@ function installed(pkgDir: string, ...bins: string[]) {
   for (const name of bins) writeFileSync(join(bin, name), "#!/bin/sh\n");
 }
 /**
- * 按 ash 的真实布局搭一份任务 worktree：`<主仓>/.worktrees/<taskId>`，里面的 `.git` 是
- * **文件**，写着主仓在哪。位置不能随便挑 —— 「是不是 ash 自己建的隔离工作区」正是按它
- * 判的（见 ashWorktree），随便找个目录伪装成 worktree 会被当成用户自己的检出。
+ * 按 navi 的真实布局搭一份任务 worktree：`<主仓>/.worktrees/<taskId>`，里面的 `.git` 是
+ * **文件**，写着主仓在哪。位置不能随便挑 —— 「是不是 navi 自己建的隔离工作区」正是按它
+ * 判的（见 naviWorktree），随便找个目录伪装成 worktree 会被当成用户自己的检出。
  */
 function worktreeOf(repo: string, name: string): string {
   const wt = join(repo, ".worktrees", name);
@@ -118,7 +118,7 @@ try {
   const emptyHint = missingDepsHint("sh: 1: vite: not found\n", empty) ?? "";
   check("明说主仓那份也不能用", emptyHint.includes("主仓那份也不能用"), true);
   check("给出在自己主仓装一次的真实命令", emptyHint.includes(`cd ${join(bare, "a4sms-front")} && pnpm install`), true);
-  check("先交代 ash 自己在项目外备过一份", emptyHint.includes("data/deps"), true);
+  check("先交代 navi 自己在项目外备过一份", emptyHint.includes("data/deps"), true);
   // 「装完之后呢」也得说，否则用户装完还得自己想起来软链。
   check("装完那一步也给了", emptyHint.includes("装完再"), true);
   // 上一版在这儿写的是「在那儿装不会进任何任务的 diff」—— 只对了一半：node_modules 是被
@@ -194,7 +194,7 @@ try {
   }).trim();
   check("跑起来确实进了那个带空格的目录", where, join(bareSpaced, "front app"));
 
-  // ================= ash 自己备依赖：项目一个字节都不许被写 =================
+  // ================= navi 自己备依赖：项目一个字节都不许被写 =================
   // ① 主仓已经有一份能用的、package.json 又一致 → 直接软链，不联网、不写任何人的项目。
   const borrowLog = join(root, "borrow.log");
   writeFileSync(borrowLog, "");
@@ -215,7 +215,7 @@ try {
   check("但备依赖不会把那份旧树挂过来", staleTried[0]?.detail.startsWith("借用主仓"), false);
   rmSync(join(wt, "front", "node_modules"), { force: true, recursive: true });
 
-  // ② 真装一次。用 `file:` 依赖，全程不联网 —— 这条要证明的是链路（复制清单 → 在 ash 自己
+  // ② 真装一次。用 `file:` 依赖，全程不联网 —— 这条要证明的是链路（复制清单 → 在 navi 自己
   //    的目录里装 → 挂软链），不是 npm 会不会下包。
   const dep = dir("fakedep");
   file(dep, "package.json", JSON.stringify({ name: "fakedep", version: "1.0.0", bin: { fakevite: "cli.js" } }));
@@ -233,14 +233,14 @@ try {
   check("装成了", installed1.map((one) => one.ok), [true]);
   const linked = join(pkg, "node_modules");
   check("工作区里只多了一条软链", lstatSync(linked).isSymbolicLink(), true);
-  check("软链指向 ash 自己的目录", readFileSync(join(linked, ".bin", "fakevite"), "utf8").length > 0, true);
-  check("依赖装在 ASH_DEPS_DIR 下", existsSync(join(root, "deps")), true);
+  check("软链指向 navi 自己的目录", readFileSync(join(linked, ".bin", "fakevite"), "utf8").length > 0, true);
+  check("依赖装在 NAVI_DEPS_DIR 下", existsSync(join(root, "deps")), true);
   check("项目目录里没有被塞进 node_modules 实体", lstatSync(linked).isDirectory(), false);
   check("日志里交代了在项目外装", logOf(installLog).includes("在项目外备依赖"), true);
   // 同样内容的第二次不该再装一遍（内容哈希命中）。
   rmSync(linked, { force: true });
   const again = await prepareNodeDeps(installWt, "cd front && npm run dev", installLog);
-  check("第二次直接复用", again[0]?.detail.startsWith("复用 ash 之前备好的依赖"), true);
+  check("第二次直接复用", again[0]?.detail.startsWith("复用 Navi 之前备好的依赖"), true);
 
   // ③ workspaces 装不出正确的树 —— 认出来就别硬来，如实说。
   const wsRepo = dir("ws-repo");
@@ -289,14 +289,14 @@ try {
   const badHint = missingDepsHint("sh: 1: vite: not found\n", nodeDepsAdvice(badWt, "cd front", "vite"), bad) ?? "";
   check("失败理由进了给用户的下一步", badHint.includes(bad[0]?.detail ?? "!"), true);
 
-  // ⑤b 预览收掉时把我们挂的撤干净 —— 用户敲 `git status` 不该看见 ash 留下的东西
+  // ⑤b 预览收掉时把我们挂的撤干净 —— 用户敲 `git status` 不该看见 navi 留下的东西
   //    （前端的 .gitignore 写的是 `node_modules/`，只匹配目录，匹配不上软链）。
   //    只撤软链：真目录一律不动。
   const linkPath = installed1[0]?.link ?? "";
   check("成功时报出了自己挂的那条", linkPath, join(pkg, "node_modules"));
   removePreparedLinks([linkPath]);
   check("收预览后工作区里什么都不剩", existsSync(linkPath), false);
-  check("依赖本体还在 ash 自己的目录里（下次秒挂）", existsSync(join(root, "deps")), true);
+  check("依赖本体还在 navi 自己的目录里（下次秒挂）", existsSync(join(root, "deps")), true);
   removePreparedLinks([join(keepPkg, "node_modules")]); // 这次目标是真目录（上面重挂过，是软链）
   const realDir = join(root, "real-node-modules");
   mkdirSync(realDir, { recursive: true });
@@ -395,8 +395,8 @@ try {
   check("没人用了才清", existsSync(heldCache ?? ""), false);
 
   // ⑤e **相对路径依赖装不出正确的树，而且包管理器不会报错。** `file:../shared` 相对的是
-  //     项目里的目录，搬进 ash 的隔离目录就指到隔壁去了 —— npm 退出码照样 0，只留下一条
-  //     断链，等应用真去 import 才炸，那时 ash 已经宣称「依赖装好了」。
+  //     项目里的目录，搬进 navi 的隔离目录就指到隔壁去了 —— npm 退出码照样 0，只留下一条
+  //     断链，等应用真去 import 才炸，那时 navi 已经宣称「依赖装好了」。
   const relRepo = dir("rel-repo");
   mkdirSync(join(relRepo, ".git"), { recursive: true });
   const relWt = worktreeOf(relRepo, "wt-rel");
@@ -432,8 +432,8 @@ try {
 
   // ⑤f **一起复制过去的配置改了，缓存就得失效。** `.npmrc` 里的 `omit=dev` 会让装出来的树
   //     没有 devDependency（vite 就在那儿）。用户把配置改对、再点预览，如果键没变，命中的
-  //     还是那棵缺东西的旧树，ash 还会告诉他「复用之前备好的依赖」—— 他要么等三十天，要么
-  //     自己去翻 ash 的私有缓存目录。
+  //     还是那棵缺东西的旧树，navi 还会告诉他「复用之前备好的依赖」—— 他要么等三十天，要么
+  //     自己去翻 navi 的私有缓存目录。
   const cfgRepo = dir("cfg-repo");
   mkdirSync(join(cfgRepo, ".git"), { recursive: true });
   const cfgWt = worktreeOf(cfgRepo, "wt-cfg");
@@ -454,10 +454,10 @@ try {
   check("改完照样是成功的", cfgFixed[0]?.ok, true);
   removePreparedLinks([cfgFixed[0]?.link ?? ""]);
 
-  // ⑤g **不是 ash 自己的隔离工作区，就一条软链都不挂。** 任务默认不开 worktree，那种
+  // ⑤g **不是 navi 自己的隔离工作区，就一条软链都不挂。** 任务默认不开 worktree，那种
   //     任务的工作区就是用户的项目检出本身；依赖装在项目外只解决了「本体」，入口那条
   //     软链照样是写进人家的目录（`git status` 看得见，`life: task` 还能挂好几天）。
-  //     用户的原话是「怎么能因为 ash 去『污染』正常的项目呢？」——「最终会撤」不是「没写」。
+  //     用户的原话是「怎么能因为 navi 去『污染』正常的项目呢？」——「最终会撤」不是「没写」。
   const checkout = dir("plain-checkout");
   mkdirSync(join(checkout, ".git"), { recursive: true }); // 普通检出：.git 是目录
   file(sub(checkout, "front"), "package.json", JSON.stringify({ name: "plain", version: "1.0.0", private: true }));
@@ -471,10 +471,10 @@ try {
   check("也没有偷偷装一份", readdirSync(join(root, "deps")).length, depsBefore);
   const checkoutHint = missingDepsHint("sh: 1: vite: not found\n", nodeDepsAdvice(checkout, "cd front", "vite"), checkoutTried) ?? "";
   check("理由进了给用户的下一步", checkoutHint.includes(checkoutTried[0]?.detail ?? "!"), true);
-  // 开头那句话也得换：这不是「ash 备依赖失败了」，是「ash 根本不会往你的项目里放东西」。
+  // 开头那句话也得换：这不是「navi 备依赖失败了」，是「navi 根本不会往你的项目里放东西」。
   // 说成前者，用户会去等一个永远不会发生的自动补救。
   check("开头不说「这次没成」那一套", checkoutHint.includes("这次没成"), false);
-  check("而是说清楚 ash 不往项目里写", checkoutHint.includes("不往你的项目目录里写任何东西"), true);
+  check("而是说清楚 navi 不往项目里写", checkoutHint.includes("不往你的项目目录里写任何东西"), true);
   check("还得给出他自己能走的那条路", checkoutHint.includes("得在这儿装一次"), true);
   // 用户自己 `git worktree add` 出来的检出也是 worktree，但那同样是**他的**目录：
   // 判据必须严到「住在主仓的 .worktrees/ 下面」，不能只看 `.git` 是不是文件。

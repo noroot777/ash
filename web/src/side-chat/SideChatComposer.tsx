@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
-import type { Task } from "@ash/shared";
-import { sameExecutor } from "@ash/shared/executors";
-import { type ChatMember } from "@ash/shared/chat";
+import type { Task } from "@navi/shared";
+import { sameExecutor } from "@navi/shared/executors";
+import { type ChatMember } from "@navi/shared/chat";
 import { ArrowUp, Quotes, Stop, X } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";

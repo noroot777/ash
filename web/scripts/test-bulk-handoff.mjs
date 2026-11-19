@@ -272,8 +272,8 @@ assert.match(machines, /<BulkHandoffDialog/, "侧栏「其他机器」仍应是�
 // 主区在显示它、侧栏却一行都没有。箭头指上去才出现，键盘焦点落上来时也得现形。
 assert.match(machines, /className="workspace-fold"/, "「其他机器」折起来是一行能点的 fold");
 assert.match(machines, /aria-expanded=\{open\}/, "开合状态必须对读屏可见");
-assert.match(machines, /ash:handoff-machines:open/, "开合状态单独存，键换成了记「开着」的新键");
-assert.doesNotMatch(machines, /= "ash:handoff-machines:collapsed"/, "旧键不再读，老用户也默认折起");
+assert.match(machines, /navi:handoff-machines:open/, "开合状态单独存，键换成了记「开着」的新键");
+assert.doesNotMatch(machines, /= "navi:handoff-machines:collapsed"/, "旧键不再读，老用户也默认折起");
 assert.match(machines, /=== "1"/, "没存过 = 折着");
 assert.match(machines, /useRevealHiddenSelection/, "选中的远端任务被折叠藏住时应自动展开");
 const taskTree = readSource(new URL("../src/workspace/TaskTree.tsx", import.meta.url));

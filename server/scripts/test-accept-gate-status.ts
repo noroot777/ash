@@ -6,14 +6,15 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-gate-status-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-gate-status-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 用户自己的全局配置（core.autocrlf、全局过滤器…）不许影响用例。
 process.env.GIT_CONFIG_GLOBAL = join(root, "gitconfig");
 writeFileSync(process.env.GIT_CONFIG_GLOBAL, "");
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 // stderr 不收：core.autocrlf 下 `git add` 对上万个文件逐个打换行提醒，会撑爆缓冲区。
 const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args],
   { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -195,5 +196,5 @@ try {
   await quiet("批量预判", () => acceptGateWouldRun(task!, project!));
   console.log("accept-gate-status: 源码身份比对不调起 clean/process 过滤器也不进嵌套仓库；过滤文件证明得了的改动照拦、证明不了的如实说判不了；大批路径不撞命令行上限；换行/排除照项目配置；目录名尾部空格不被裁；验收台与预判同样不执行程序");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

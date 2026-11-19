@@ -1,6 +1,6 @@
 // 预览实例里归档不许碰真仓库（第 1 轮审查确定性复现的那条）。
 //
-// 预览实例（`ASH_PREVIEW=1`）连的是主库的**快照**，任务行却指向**真**仓库路径。
+// 预览实例（`NAVI_PREVIEW=1`）连的是主库的**快照**，任务行却指向**真**仓库路径。
 // `removeWorktree` 自带 `assertNotPreviewInstance`，所以目录还在时删不动；但
 // `git branch -d` 原来没有这道闸 —— 于是「目录已被清掉、只剩分支」的任务，从预览
 // 实例归档一下就能把真分支删掉。
@@ -13,11 +13,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 
-process.env.ASH_PREVIEW = "1"; // 必须在任何 src 模块被 import 之前
-const stage = mkdtempSync(join(tmpdir(), "ash-archive-preview-"));
+process.env.NAVI_PREVIEW = "1"; // 必须在任何 src 模块被 import 之前
+const stage = mkdtempSync(join(tmpdir(), "navi-archive-preview-"));
 const repo = join(stage, "repo");
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -28,8 +28,8 @@ const branchExists = (name: string) => {
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Test");
-  git(repo, "config", "user.email", "ash@example.test");
+  git(repo, "config", "user.name", "Navi Test");
+  git(repo, "config", "user.email", "navi@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "seed");

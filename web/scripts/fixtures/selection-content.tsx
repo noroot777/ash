@@ -6,11 +6,11 @@
  */
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { ConversationSelection } from "../../src/side-chat/ConversationSelection.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { QuestionRecord } from "@navi/shared/questions";
 import "../../src/styles/global.css";
 
 const usage = { input: 1200, output: 340, cacheRead: 9000, cacheWrite: 0, reasoning: 0, costUsd: 0.12, turns: 1 };
@@ -97,12 +97,12 @@ function Fixture() {
       <div style={{ height: 520 }}>
         <ConversationFeed task={task} items={list} sessions={[]} questionHistory={[answered]} loading={false} error={null} />
       </div>
-      {/* 一张**没有任何选文标记**的卡,照审查泳道/辩论卡那种写法摆:头尾用的就是
+      {/* 一张**没有任何选文标记**的卡,照辩论卡那种写法摆:头尾用的就是
           header / time / button / aria-hidden 这些语义标签。钉住「新写的卡片不必记得
           加标记」—— 审查第 1 轮不拦项里那四处现成的,靠的正是这条。摆在会话区旁边而
           不是它的 footer 里:那块高度是固定的,卡会被裁掉,rect 为 0 就连浮条都不出。 */}
-      <article className="verify-lane" data-testid="unmarked-card">
-        <header className="verify-lane-head">
+      <article className="debate-lane" data-testid="unmarked-card">
+        <header className="debate-lane-head">
           <span aria-hidden="true">🛡</span>
           <b>第 1 轮独立验证</b>
           <span>Codex 在审</span>

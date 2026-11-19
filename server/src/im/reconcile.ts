@@ -24,7 +24,7 @@
 // 门开着时锁不会先放；而裁决门这一种下一步只在门真开着时才算得出来（duet/gate-version.ts currentGateVersion），
 // 不会是结算途中的过渡。其余占锁的（结算、预约审查接棒、验收、源码管理）都是机器在办事，办完就放。
 import { createHash } from "node:crypto";
-import { isAcceptedStage } from "@ash/shared";
+import { isAcceptedStage } from "@navi/shared";
 import { and, desc, eq, gt, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
@@ -98,7 +98,7 @@ export class Reconciler {
       this.timer = null;
       const ids = [...this.dirty];
       this.dirty.clear();
-      void this.run(() => this.reconcile(ids)).catch((error) => console.error("[ash] 飞书对账出错:", error));
+      void this.run(() => this.reconcile(ids)).catch((error) => console.error("[navi] 飞书对账出错:", error));
     }, 300);
     this.timer.unref?.();
   }
@@ -116,7 +116,7 @@ export class Reconciler {
     if (this.stopped || this.sweepTimer) return;
     this.sweepTimer = setTimeout(() => {
       this.sweepTimer = null;
-      void this.full().catch((error) => console.error("[ash] 飞书对账出错:", error));
+      void this.full().catch((error) => console.error("[navi] 飞书对账出错:", error));
     }, 300);
     this.sweepTimer.unref?.();
   }
@@ -279,7 +279,7 @@ export class Reconciler {
     if (!renew && row.renderKey === renderKeyOf(view, dest, base, titleOnly)) return;
     if (DECISION_KINDS.has(view.turn.kind) && !envelope) envelope = await this.envelopeFor(row.id, view, dest);
     const { content, renderKey } = await this.render(view, dest, envelope, base, titleOnly,
-      renew ? "上一次点下去的那件事办完了，这件事还等着你：可以再点一次，经过在 ash 里。" : undefined);
+      renew ? "上一次点下去的那件事办完了，这件事还等着你：可以再点一次，经过在 Navi 里。" : undefined);
     await db.update(imOutbox).set({
       content,
       renderKey,
@@ -343,7 +343,7 @@ export class Reconciler {
           scope: await this.turnScope(view, dest),
         });
         // settleTask 已经确认这一格是空的：还撞上唯一键就是键与查询的口径不一致，不能当作已入队。
-        if (!inserted) console.warn(`[ash] 飞书卡片入队被同键旧记录挡住（${view.turn.kind} ${view.task.id} → ${dest.receiveId}）`);
+        if (!inserted) console.warn(`[navi] 飞书卡片入队被同键旧记录挡住（${view.turn.kind} ${view.task.id} → ${dest.receiveId}）`);
       }
       if (flood) await this.summarize(items[0]!.dest);
     }

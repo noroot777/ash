@@ -1,4 +1,4 @@
-import type { GitFile, GitStatus } from "@ash/shared/git-workbench";
+import type { GitFile, GitStatus } from "@navi/shared/git-workbench";
 import { Minus, Plus, Stack, Trash } from "@phosphor-icons/react";
 import { FileLayoutToggle, FolderCaret } from "../components/FileLayoutToggle.tsx";
 import { indentStyle, useFileListLayout, useFileTreeRows } from "../lib/fileLayout.ts";

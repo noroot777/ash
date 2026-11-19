@@ -1,6 +1,7 @@
-import { StrictMode } from "react";
+import { StrictMode, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
+import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
 import { TeamReviewInspector } from "../../src/team/TeamReviewInspector.tsx";
 import "../../src/styles/global.css";
 
@@ -67,13 +68,21 @@ const workers: Task[] = [
 ];
 
 // 侧边栏在页面右侧，左边是主工作区——抽屉贴着侧边栏左边缘展开，所以位置断言要有这块留白。
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <div style={{ display: "flex", height: 640 }}>
-      <div style={{ flex: 1 }} />
-      <aside className="inspector-host" style={{ width: 360, minWidth: 360 }}>
-        <TeamReviewInspector lead={lead} workers={workers} onOpenReview={() => undefined} onOpenTask={() => undefined} />
-      </aside>
-    </div>
-  </StrictMode>,
-);
+// 摆成线上的骨架：左边主区（`.team-view` 那一层是读全文那一屉的定位基准），右边侧边栏。
+function Page() {
+  const host = useLeftDrawerHost({ resetKey: lead.id });
+  return (
+    <LeftDrawerProvider value={host.api}>
+      <div className="inspector-layout" style={{ height: 640 }}>
+        <div className="inspector-layout__main">
+          <div className="team-view" style={{ position: "relative", flex: 1 }}>{host.drawer}</div>
+        </div>
+        <aside className="inspector-host" style={{ "--inspector-width": "360px" } as CSSProperties}>
+          <TeamReviewInspector lead={lead} workers={workers} onOpenReview={() => undefined} onOpenTask={() => undefined} />
+        </aside>
+      </div>
+    </LeftDrawerProvider>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(<StrictMode><Page /></StrictMode>);

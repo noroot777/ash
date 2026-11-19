@@ -125,7 +125,7 @@ export function DeleteEntryDialog({
 
       {mode === "trash" ? (
         <Fact tone="ok" icon={<CheckCircle size={16} weight="fill" />} title={`去向：${trash.label}`}>
-          <p>在访达里能「放回原处」。ash 不做自己的回收站——系统那个用户本来就会用。</p>
+          <p>在访达里能「放回原处」。Navi 不做自己的回收站——系统那个用户本来就会用。</p>
         </Fact>
       ) : (
         <Fact tone="warn" icon={<Warning size={16} />} title="永久删除，没有兜底">

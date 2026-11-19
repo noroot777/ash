@@ -8,7 +8,7 @@ import { claimTranscript } from "./transcript-identity.js";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
-import type { AgentType, SessionRole } from "@ash/shared";
+import type { AgentType, SessionRole } from "@navi/shared";
 import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
 import { agents, freeReviewRuns, tasks, sessions } from "./db/schema.js";
@@ -43,7 +43,7 @@ import { sessionLaunchCompact } from "./usage.js";
 //                丢的是当前这一轮，不是整个任务
 //  · interrupted 真会被判 failed 的：老代码起的（没 agent_pid）、queued 还没起
 //                进程的、进程已经不在的
-//  · mcpDisrupted survives 里**手上还握着 ash MCP 子进程**的那几个。重启
+//  · mcpDisrupted survives 里**手上还握着 navi MCP 子进程**的那几个。重启
 //                :4317 伤不到它们，但 restart.mjs 第 3 步杀旧 MCP 子进程时会当场掐断
 //                它们的交卷通道（2026-08-06 那次验证白跑就是这么来的）。这一类
 //                跟 survives 是**包含关系不是并列**：它们仍然活得过重启。
@@ -186,14 +186,14 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       trackRun(task.id, handle);
       adopted.add(task.id);
       // 接回的这一轮**真的还在跑**,把它的回合身份重新登记上（产物面板据此判「还在写」）。
-      // 进程内的活动登记随重启清空是刻意的：ash 重启后没有任何回合还在跑,库里那些「开始了
+      // 进程内的活动登记随重启清空是刻意的：navi 重启后没有任何回合还在跑,库里那些「开始了
       // 没收口」一律回到「未知」那一档。但接回成功是相反方向的新证据——这条会话这一刻确实
       // 在写,不登记的话面板会把正在落盘的产物说成「算不准」（第 5 轮审查必须修 1 的对称面）。
       markTurnActive({ sessionId: sess.id, taskId: task.id, startedAt: sess.turnStartedAt ?? sess.startedAt });
       // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimOwnTurn 落下的），
       // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
       //
-      // **令牌和审查来源一起恢复**:接回的 agent 手里拿的还是上一轮那个 `ASH_TURN_TOKEN`,
+      // **令牌和审查来源一起恢复**:接回的 agent 手里拿的还是上一轮那个 `NAVI_TURN_TOKEN`,
       // 它挂哨兵时要靠「内存这一轮 = 库里那个令牌」才核验得过(见 runs.ts `bindTurnToken`)。
       // 审查来源在这一刻按库里**正在进行**的那次审查认:启动期是串行的,没有派审交接在飞,
       // 所以这一问不会落到第 10 轮审查 F1 那个窗口里。
@@ -207,7 +207,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         task.id, sess.role,
         restoredReview ? { run: restoredReview.id, round: restoredReview.round } : null,
       );
-      if (claimedTurn && task.activeTurnToken) bindTurnToken(task.id, task.activeTurnToken);
+      if (claimedTurn && task.activeTurnToken) bindTurnToken(task.id, task.activeTurnToken, sess.agentType);
       // 消费循环与它的 finally 要的是**这一次**接到的那个句柄(上面那个 let 为了让失败出口
       // 够得着它才声明在 try 外面,类型上是可空的)。
       const adoptedHandle = handle;
@@ -236,7 +236,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
           }),
         },
       })
-        .catch((err) => console.error(`[ash] 接管 ${task.id} 的消费循环出错:`, err))
+        .catch((err) => console.error(`[navi] 接管 ${task.id} 的消费循环出错:`, err))
         .finally(async () => {
           discardStartingRun(task.id, adoptedHandle);
           if (claimedTurn) releaseTurn(task.id, claimedTurn);
@@ -249,7 +249,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
           // 了、登记注销了,却没有任何人来结算它 —— 任务永远停在 running(第 1 轮审查 F1)。
           // 上面三行把「有活句柄」的证据撤干净之后再问一次,正常收尾时它是空转。
           const stranded = await reconcileInterruptedTask(task.id).catch((error) => {
-            console.error(`[ash] 结算接管后中断的 ${task.id} 失败:`, error);
+            console.error(`[navi] 结算接管后中断的 ${task.id} 失败:`, error);
             return false;
           });
           // 这次接管最终没跑成,「已接管」名单里也不该再算它(调用方拿这份名单判「谁不用
@@ -258,8 +258,8 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         })
         // 这条链是 `void` 出去的,finally 里再抛就是一条无人接管的 rejection(Node 默认
         // 直接掀掉进程)。收尾动作本身不该连累整个 server。
-        .catch((error) => console.error(`[ash] 接管 ${task.id} 的收尾出错:`, error));
-      console.log(`[ash] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
+        .catch((error) => console.error(`[navi] 接管 ${task.id} 的收尾出错:`, error));
+      console.log(`[navi] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
       // 上面这句只证明「**进程**还在」。它曾经是假话:2026-11-02 任务 WfLfTjaGzcA8 接管的是一个
       // 线程已恢复、回合输入却从未送出的 codex 进程 —— 日志照样说接管成功,之后 1.5 小时零输出。
       // 执行器给得出投递回执的(见 executors/types.ts 的 inputAccepted),按**三档**如实补一句,
@@ -272,15 +272,15 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       void adoptedHandle.inputAccepted?.then((acceptance) => {
         if (acceptance === "accepted") return;
         console.warn(acceptance === "refused"
-          ? `[ash] 接管 ${task.id} 后确证这一轮的输入从未送达 agent，本回合按失败结算，原文留在待发送里等重投`
-          : `[ash] 接管 ${task.id} 后仍核实不出这一轮的输入到没到 agent（协议日志读不出来），`
+          ? `[navi] 接管 ${task.id} 后确证这一轮的输入从未送达 agent，本回合按失败结算，原文留在待发送里等重投`
+          : `[navi] 接管 ${task.id} 后仍核实不出这一轮的输入到没到 agent（协议日志读不出来），`
             + "这一条按在途处理：不写已送达、也不退回重投，身份走有界恢复");
       }, (error: unknown) => console.warn(
-        `[ash] 接管 ${task.id} 的输入回执本身出错:`,
+        `[navi] 接管 ${task.id} 的输入回执本身出错:`,
         error instanceof Error ? error.message : error,
       ));
     } catch (err) {
-      console.error(`[ash] 接管 ${task.id} 失败:`, err);
+      console.error(`[navi] 接管 ${task.id} 失败:`, err);
       adopted.delete(task.id);
       // 登记在 trackRun 之后、这段 try 里面,所以接管半路失败同样要撤（必须修 1 的同类出口）。
       closeSessionTurns(sess.id);

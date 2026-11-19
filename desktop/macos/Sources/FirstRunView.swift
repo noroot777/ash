@@ -1,7 +1,7 @@
 import AppKit
 
 /// 第一次打开、数据根还空着时的那一屏：铺满首次配置那扇小窗（`BrowserWindowController.welcomeSize`），
-/// 不是大窗正中摆一张卡。左边一栏是 ash 自己和首启要走的几步（第一步就是这里，后三步是 web 的首启
+/// 不是大窗正中摆一张卡。左边一栏是 navi 自己和首启要走的几步（第一步就是这里，后三步是 web 的首启
 /// 向导，名字和它导轨上的一致）；右边问数据从哪儿来。
 ///
 /// 选了之后不换屏：选中的那一项原地转圈，等页面载进来（窗口这时才展开成工作窗）；出了错回到这里，
@@ -21,7 +21,7 @@ final class FirstRunView: NSView {
   private let location = NSTextField(wrappingLabelWithString: "")
   private let fresh = ChoiceButton(title: "全新开始", detail: "从空白开始，接着配好供应商、执行器和项目。",
                                    textWidth: columnWidth)
-  private let importer = ChoiceButton(title: "导入已有数据…", detail: "从另一份 ash 的数据目录复制过来，原来那份不动。",
+  private let importer = ChoiceButton(title: "导入已有数据…", detail: "从另一份 Navi 的数据目录复制过来，原来那份不动。",
                                       textWidth: columnWidth)
 
   override init(frame: NSRect) {
@@ -30,17 +30,17 @@ final class FirstRunView: NSView {
 
     let title = NSTextField(labelWithString: "数据从哪儿来")
     title.font = .systemFont(ofSize: 22, weight: .semibold)
-    title.textColor = AshPalette.ink
+    title.textColor = NaviPalette.ink
     let note = NSTextField(labelWithString: "只在第一次打开时问这一次。")
     note.font = .systemFont(ofSize: 13)
-    note.textColor = AshPalette.muted
+    note.textColor = NaviPalette.muted
     error.font = .systemFont(ofSize: 13)
-    error.textColor = AshPalette.red
+    error.textColor = NaviPalette.red
     error.isSelectable = true
     error.preferredMaxLayoutWidth = Self.columnWidth
     error.isHidden = true
     location.font = .systemFont(ofSize: 12)
-    location.textColor = AshPalette.faint
+    location.textColor = NaviPalette.faint
     location.isSelectable = true
     location.preferredMaxLayoutWidth = Self.columnWidth
     fresh.onPress = { [weak self] in self?.onChoose?(.fresh) }
@@ -97,11 +97,11 @@ final class FirstRunView: NSView {
 
   override var wantsUpdateLayer: Bool { true }
   override func updateLayer() {
-    layer?.backgroundColor = AshPalette.panel.cgColor
+    layer?.backgroundColor = NaviPalette.panel.cgColor
   }
 }
 
-/// 左边那一栏：标识、一句话说 ash 是干什么的，底下是首启要走的几步。红绿灯浮在它上面。
+/// 左边那一栏：标识、一句话说 navi 是干什么的，底下是首启要走的几步。红绿灯浮在它上面。
 /// 黑底白字两种外观都一样，所以颜色是写死的白，只有底色跟外观走。
 private final class BrandPane: NSView {
   static let steps = ["数据", "供应商", "执行器", "项目"]
@@ -110,7 +110,7 @@ private final class BrandPane: NSView {
     super.init(frame: frame)
     wantsLayer = true
 
-    let name = NSTextField(labelWithString: "ash")
+    let name = NSTextField(labelWithString: "Navi")
     name.font = .systemFont(ofSize: 30, weight: .semibold)
     name.textColor = .white
     let pitch = NSTextField(wrappingLabelWithString: "")
@@ -151,42 +151,18 @@ private final class BrandPane: NSView {
 
   override var wantsUpdateLayer: Bool { true }
   override func updateLayer() {
-    layer?.backgroundColor = AshPalette.brand.cgColor
+    layer?.backgroundColor = NaviPalette.brand.cgColor
   }
 }
 
-/// 和 app 图标同一张图：米白底上的点阵标，放在黑栏上，一格 3pt（web 向导的 `.onboarding-mark` 是同一个画法）。
-/// 点阵的出处是 web/src/brand/ashMark.ts，这里和 scripts/make-icon.swift 都是照着抄的，改标时一起改。
+/// 就是 app 图标本身：米白圆角块上的 navi 标，放在黑栏上（web 向导的 `.onboarding-mark` 照着它画）。
+/// 图标那张图在 macOS 图标网格里四周留了 100/1024 的边给阴影，这里把那圈边撑到视图外面，让圆角块正好铺满。
 private final class BrandMark: NSView {
-  private static let mark = [
-    ".......@",
-    "....#...",
-    "..#...#.",
-    "#..#.#..",
-    "###.#...",
-    "####..#.",
-    "#####...",
-    "#####.#.",
-  ]
-  private static let cell: CGFloat = 3
-
   override var intrinsicContentSize: NSSize { NSSize(width: 44, height: 44) }
 
   override func draw(_ dirtyRect: NSRect) {
-    NSColor(srgbRed: 0xEC / 255.0, green: 0xEA / 255.0, blue: 0xE4 / 255.0, alpha: 1).setFill()
-    NSBezierPath(roundedRect: bounds, xRadius: bounds.width * 0.225, yRadius: bounds.width * 0.225).fill()
-    let ink = NSColor(srgbRed: 0x11 / 255.0, green: 0x11 / 255.0, blue: 0x13 / 255.0, alpha: 1)
-    let live = NSColor(srgbRed: 0x5E / 255.0, green: 0x6A / 255.0, blue: 0xD2 / 255.0, alpha: 1)
-    // 底色是定死的浅色，所以墨色也定死。AppKit 的 y 朝上，行要倒着放。
-    let left = bounds.midX - Self.cell * 4
-    let top = bounds.midY + Self.cell * 4
-    for (row, line) in Self.mark.enumerated() {
-      for (col, dot) in line.enumerated() where dot != "." {
-        (dot == "@" ? live : ink).setFill()
-        NSRect(x: left + CGFloat(col) * Self.cell, y: top - CGFloat(row + 1) * Self.cell,
-               width: Self.cell, height: Self.cell).fill()
-      }
-    }
+    let margin = bounds.width * 100 / 824
+    NSApp.applicationIconImage.draw(in: bounds.insetBy(dx: -margin, dy: -margin))
   }
 }
 
@@ -253,9 +229,9 @@ final class ChoiceButton: NSControl {
 
     title.stringValue = text
     title.font = .systemFont(ofSize: 14, weight: .semibold)
-    title.textColor = AshPalette.ink
+    title.textColor = NaviPalette.ink
     detail.font = .systemFont(ofSize: 12.5)
-    detail.textColor = AshPalette.muted
+    detail.textColor = NaviPalette.muted
     detail.preferredMaxLayoutWidth = textWidth - 32 - 28
     spinner.style = .spinning
     spinner.controlSize = .small
@@ -302,8 +278,8 @@ final class ChoiceButton: NSControl {
   override func updateLayer() {
     guard let layer else { return }
     let lit = pressable && (hovering || pressing)
-    layer.backgroundColor = (lit ? AshPalette.hover : AshPalette.raised).cgColor
-    layer.borderColor = (lit ? AshPalette.ink : AshPalette.line).cgColor
+    layer.backgroundColor = (lit ? NaviPalette.hover : NaviPalette.raised).cgColor
+    layer.borderColor = (lit ? NaviPalette.ink : NaviPalette.line).cgColor
   }
 
   // 标题、说明都是 label，点在它们上面也算点这一块。

@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-base-recovery-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-base-recovery-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, taskBranchReceipts } = await import("../src/db/schema.js");
@@ -84,8 +84,12 @@ try {
       assert.match((await retry.json()).error, /工作区已变化|子分支已被其它操作修改/);
     }
     if (mode !== "before-reset" && !mode.endsWith("start")) {
-      const brokenDiff = await (await api.request(`/tasks/${s.child.task.id}/diff`)).json();
-      assert.ok(brokenDiff.files.some((f: { path: string }) => f.path === "unrelated-main.txt"), "reproduce the review's mixed diff before recovery");
+      // 基线更新停在半途：分支已经换到新基线上，开工点还是旧的那一版。diff 按「分支里已合进来的目标分支」
+      // 扣（task-change-scope.ts），这时也不把目标分支上别人的改动算进来 —— 不必等恢复把开工点挪过去。
+      const pendingDiff = await (await api.request(`/tasks/${s.child.task.id}/diff`)).json();
+      const pendingFiles = pendingDiff.files.map((f: { path: string }) => f.path);
+      assert.ok(pendingFiles.includes("child.txt") && !pendingFiles.includes("unrelated-main.txt") && !pendingFiles.includes("parent.txt"),
+        `a pending base update never mixes the target's or the parent's changes into the task diff: ${pendingFiles}`);
     }
     const deletion = await api.request(`/tasks/${s.child.task.id}`, { method: "DELETE" });
     assert.equal(deletion.status, 409);

@@ -7,9 +7,9 @@
 // 生效，于是刚炸的任务被扔到列表最末，找它得一路滚到底。现在不按状态提升任何一档 ——
 // 失败、待验收、等你答复这些靠行内的颜色和标识认（见 TaskStatusChips），不靠位置。
 // 置顶（pinnedAt）是唯一的例外，那是用户手动摁下去的。
-import type { TaskListItem } from "@ash/shared";
-import { isTaskAwaitingAcceptance, isTeamLead } from "@ash/shared/task-attention";
-import { workersOf } from "@ash/shared/team";
+import type { TaskListItem } from "@navi/shared";
+import { isTaskAwaitingAcceptance, isTeamLead } from "@navi/shared/task-attention";
+import { workersOf } from "@navi/shared/team";
 import { needsYourCommand } from "@/lib/taskAttention";
 
 export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -65,7 +65,7 @@ export function buildTaskTree(tasks: TaskListItem[]): TaskTreeSection[] {
 }
 
 /**
- * 24 小时没更新的收进折叠区。keepVisible 命中的行**永不因为旧而被藏**（星标、置顶、
+ * 24 小时没更新的收进折叠区。keepVisible 命中的行**永不因为旧而被藏**（置顶、
  * 等你验收的、停在那儿等你指挥的）—— 用户给的软记号、没盖的章、还有等你答复 / 验证
  * 没通过，都属于「我要一直看得见」。
  * 全都旧时至少留最新那一条露在外面，否则整节只剩一个「显示另外 N 条」。
@@ -108,7 +108,7 @@ export function advanceHiddenReveal(
 }
 
 /**
- * 年龄闸的豁免名单。判据与 web 的 keepVisibleInPreview 同源：星标、置顶、等你验收、
+ * 年龄闸的豁免名单。判据与 web 的 keepVisibleInPreview 同源：置顶、等你验收、
  * 失败、等你指挥的行永不因旧被藏 —— 用户手动按的记号、没盖的章、坏在半路的活、
  * 以及停着等你拍板的（提问 / 验证未通过）。
  *
@@ -120,8 +120,7 @@ export function advanceHiddenReveal(
  */
 export function keepVisibleFor(allTasks: TaskListItem[]): (task: TaskListItem) => boolean {
   return (task) =>
-    task.starredAt != null
-    || task.pinnedAt != null
+    task.pinnedAt != null
     || task.status === "failed"
     || needsYourCommand(task, allTasks)
     // 只有团队调度台才有执行者：单飞行不必为它扫一遍全表（列表每次重算都会过一遍所有旧行）。

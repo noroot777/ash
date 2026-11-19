@@ -228,7 +228,7 @@ async function copyInto(source: string, destination: string, options: CopyOption
     return await copyLink(source, destination, target);
   }
   if (info.isDirectory()) {
-    // 目标绝不能进入自己的输入闭包：ASH_RUNS_DIR 落在依赖目录内时（它是可配的），遍历会走进正在
+    // 目标绝不能进入自己的输入闭包：NAVI_RUNS_DIR 落在依赖目录内时（它是可配的），遍历会走进正在
     // 建的那个快照，再把快照里已经建好的依赖树拷一遍，一层层嵌套到路径过长为止，一个测试命令都
     // 还没开始跑。按**落点**判而不是按字面路径，因为中间任意一层都可能是链。只在目录上做，文件
     // 不可能是谁的祖先。

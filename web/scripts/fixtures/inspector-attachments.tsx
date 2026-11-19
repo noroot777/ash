@@ -1,44 +1,40 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ImagePreviewGroup } from "../../src/components/ImagePreview.tsx";
-import { InspectorPromptContent } from "../../src/task-detail/InspectorPromptContent.tsx";
+import { InspKv } from "../../src/inspector/parts.tsx";
+import { InfoFollowUps } from "../../src/task-detail/info/InfoAsk.tsx";
 import "../../src/styles/global.css";
 
-const original = [
-  "检查原始需求里的图片链接。",
-  "",
-  "[用户附带的文件，请用 Read 工具查看以下本地文件]",
-  "- /Users/example/code/ash/data/uploads/KxOxbl42hcRf-image.png",
-].join("\n");
+// 「信息」格里的追问列表（真组件）。原始需求不在这一格，它是会话流里的第一颗气泡。
+const followUps = [
+  {
+    text: [
+      "检查第一条追问里的图片链接。",
+      "",
+      "[用户附带的文件，请用 Read 工具查看以下本地文件]",
+      "- /Users/example/code/navi/data/uploads/KxOxbl42hcRf-image.png",
+    ].join("\n"),
+    attachments: [],
+    at: "2026-11-13T02:00:00.000Z",
+  },
+  {
+    text: "检查第二条追问里的图片链接。",
+    attachments: [
+      "/Users/example/code/navi/data/uploads/R4nd0mAbC123-follow-up.jpg",
+      "/Users/example/code/navi/data/uploads/D0cumentAb12-spec.pdf",
+    ],
+    at: "2026-11-13T02:05:00.000Z",
+  },
+];
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <main className="task-inspector" style={{ width: 360, height: 420 }}>
-      <div className="task-inspector-scroll">
-        <ImagePreviewGroup isolated>
-          <section>
-            <details open>
-              <summary>原始需求</summary>
-              <InspectorPromptContent text={original} emptyText="这个任务没有正文说明。" />
-            </details>
-            <details className="task-inspector-follow-ups" open>
-              <summary>后续追问</summary>
-              <ol>
-                <li>
-                  <InspectorPromptContent
-                    text="检查追问里的图片链接。"
-                    attachments={[
-                      "/Users/example/code/ash/data/uploads/R4nd0mAbC123-follow-up.jpg",
-                      "/Users/example/code/ash/data/uploads/D0cumentAb12-spec.pdf",
-                    ]}
-                    emptyText="（空消息）"
-                  />
-                </li>
-              </ol>
-            </details>
-          </section>
-        </ImagePreviewGroup>
-      </div>
+    <main style={{ width: 360, height: 420 }}>
+      <ImagePreviewGroup isolated>
+        <InspKv label="我说过的话">
+          <InfoFollowUps followUps={followUps} />
+        </InspKv>
+      </ImagePreviewGroup>
     </main>
   </StrictMode>,
 );

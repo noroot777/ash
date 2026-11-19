@@ -18,8 +18,14 @@ import { InspectorNavProvider, type InspectorNav, type InspectorRequest } from "
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
 import {
   applyTabPolicy,
+  applyInspectorEntry,
+  requestedInspectorFocus,
   clampWidth,
+  clampWideRatio,
   INSPECTOR_DEFAULT_WIDTH,
+  INSPECTOR_WIDE_DEFAULT,
+  INSPECTOR_WIDE_MAX,
+  INSPECTOR_WIDE_MIN,
   INSPECTOR_MAX_WIDTH,
   INSPECTOR_MIN_WIDTH,
   orderedValidTabs,
@@ -81,6 +87,7 @@ function InspectorHostState<Context>({
 }) {
   const storageKey = storageKeyFor(contextKey);
   const [state, setState] = useState(() => readState(storageKey, descriptors, defaultVisible, tabPolicy));
+  const pendingEntry = useRef(tabPolicy?.entryReady === false);
   const [resizing, setResizing] = useState(false);
   /** 头带中段那块动作位的真实节点，交给当前面板 portal 用（见 headActions.tsx）。 */
   const [headSlot, setHeadSlot] = useState<HTMLDivElement | null>(null);
@@ -94,7 +101,8 @@ function InspectorHostState<Context>({
   const activeDescriptor = descriptorById.get(state.activeTab ?? "") ?? openedDescriptors[0] ?? null;
   // 窄屏上 Inspector 是盖在内容上的一层（inspector.css）：在手机上打开页面时不开，开关只算这一回，不改桌面上
   // 记着的开 / 关。开着的时候窗口被拉窄，就照样开着（变成盖在上面的一层），不让正看着的东西凭空消失。
-  const narrow = useNarrowScreen();
+  const narrowScreen = useNarrowScreen();
+  const narrow = narrowScreen;
   const [narrowOpen, setNarrowOpen] = useState(false);
   const [narrowSeen, setNarrowSeen] = useState(narrow);
   if (narrow !== narrowSeen) {
@@ -102,7 +110,9 @@ function InspectorHostState<Context>({
     if (narrow) setNarrowOpen(state.visible);
   }
   const panelVisible = (narrow ? narrowOpen : state.visible) && activeDescriptor !== null;
-  const dragStart = useRef<{ x: number; width: number } | null>(null);
+  // 宽格（descriptor.wide）按整块布局的比例算宽；窄屏上整栏本来就盖满，不分宽窄。
+  const wide = !!activeDescriptor?.wide && !narrow;
+  const dragStart = useRef<{ x: number; width: number; total: number; wide: boolean } | null>(null);
   const previousBodyStyle = useRef<{ cursor: string; userSelect: string } | null>(null);
   const instanceId = useId();
   const panelId = `${safeDomId(instanceId)}-inspector`;
@@ -142,11 +152,19 @@ function InspectorHostState<Context>({
 
   useEffect(() => {
     if (!tabPolicy) return;
+    const entering = pendingEntry.current && tabPolicy.entryReady !== false;
+    if (entering) pendingEntry.current = false;
     // localStorage wins while stateKey is unchanged; a new semantic state wins exactly once.
-    setState((current) => current.policyKey === tabPolicy.stateKey
-      ? current
-      : applyTabPolicy(current, tabPolicy, descriptors));
-  }, [descriptors, tabPolicy?.stateKey]);
+    setState((current) => {
+      const changed = current.policyKey !== tabPolicy.stateKey || current.focusKey !== (tabPolicy.focusRequest?.key ?? null);
+      if (!entering && !changed) return current;
+      const focusTabId = requestedInspectorFocus(current, tabPolicy);
+      const updated = changed ? applyTabPolicy(current, tabPolicy, descriptors) : current;
+      const next = entering ? applyInspectorEntry(updated, tabPolicy, descriptors) : updated;
+      if (narrow && focusTabId && next.activeTab === focusTabId) setNarrowOpen(true);
+      return next;
+    });
+  }, [descriptors, tabPolicy?.stateKey, tabPolicy?.focusRequest?.key, tabPolicy?.entryReady]);
 
   useEffect(() => {
     try {
@@ -167,8 +185,11 @@ function InspectorHostState<Context>({
     };
     const resize = (event: MouseEvent) => {
       if (!dragStart.current) return;
-      const nextWidth = dragStart.current.width + dragStart.current.x - event.clientX;
-      setState((current) => ({ ...current, width: clampWidth(nextWidth) }));
+      const { width, x, total, wide: dragWide } = dragStart.current;
+      const nextWidth = width + x - event.clientX;
+      setState((current) => dragWide
+        ? { ...current, wideRatio: clampWideRatio(nextWidth / total) }
+        : { ...current, width: clampWidth(nextWidth) });
     };
     window.addEventListener("mousemove", resize);
     window.addEventListener("mouseup", stopResizing);
@@ -198,6 +219,7 @@ function InspectorHostState<Context>({
   };
 
   const toggle = () => {
+    pendingEntry.current = false;
     if (narrow) {
       if (panelVisible) {
         setNarrowOpen(false);
@@ -219,6 +241,7 @@ function InspectorHostState<Context>({
   // 不算，连点两下不会连摘两格。中间换过格、加过格就不再拦（那已经不是连点了）。
   const removedAt = useRef(0);
   const closeTab = (id: string) => {
+    pendingEntry.current = false;
     if (performance.now() - removedAt.current < 400) return;
     removedAt.current = performance.now();
     setState((current) => {
@@ -236,6 +259,7 @@ function InspectorHostState<Context>({
   // 350ms 内的那一下不算，否则双击一格会「先选中再收起」。
   const switchedAt = useRef(0);
   const selectTab = (id: string, clicks = 0) => {
+    pendingEntry.current = false;
     if (id === activeDescriptor?.id) {
       if (clicks > 0 && performance.now() - switchedAt.current > 350) {
         if (narrow) setNarrowOpen(false);
@@ -256,6 +280,7 @@ function InspectorHostState<Context>({
   }, []);
 
   const openTab = useCallback((id: string, params?: InspectorRequest) => {
+    pendingEntry.current = false;
     // 新的一次打开顶掉还没办成的那份（那一格可能还在等数据）：用户已经换了想看的东西。
     if (params) {
       requestSeq.current += 1;
@@ -321,7 +346,7 @@ function InspectorHostState<Context>({
         <aside
           id={panelId}
           className={`inspector-host${resizing ? " inspector-host--resizing" : ""}`}
-          style={{ "--inspector-width": `${state.width}px` } as CSSProperties}
+          style={{ "--inspector-width": wide ? `${state.wideRatio * 100}%` : `${state.width}px` } as CSSProperties}
           aria-label="Inspector 侧边栏"
         >
           <div
@@ -329,13 +354,18 @@ function InspectorHostState<Context>({
             role="separator"
             aria-label="调整 Inspector 宽度，双击恢复默认宽度"
             aria-orientation="vertical"
-            aria-valuemin={INSPECTOR_MIN_WIDTH}
-            aria-valuemax={INSPECTOR_MAX_WIDTH}
-            aria-valuenow={state.width}
+            aria-valuemin={wide ? INSPECTOR_WIDE_MIN * 100 : INSPECTOR_MIN_WIDTH}
+            aria-valuemax={wide ? INSPECTOR_WIDE_MAX * 100 : INSPECTOR_MAX_WIDTH}
+            aria-valuenow={wide ? Math.round(state.wideRatio * 100) : state.width}
             onMouseDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();
-              dragStart.current = { x: event.clientX, width: state.width };
+              const host = event.currentTarget.parentElement!;
+              dragStart.current = {
+                x: event.clientX, wide,
+                width: wide ? host.getBoundingClientRect().width : state.width,
+                total: host.parentElement?.getBoundingClientRect().width || window.innerWidth,
+              };
               previousBodyStyle.current = {
                 cursor: document.body.style.cursor,
                 userSelect: document.body.style.userSelect,
@@ -344,7 +374,9 @@ function InspectorHostState<Context>({
               document.body.style.userSelect = "none";
               setResizing(true);
             }}
-            onDoubleClick={() => setState((current) => ({ ...current, width: INSPECTOR_DEFAULT_WIDTH }))}
+            onDoubleClick={() => setState((current) => wide
+              ? { ...current, wideRatio: INSPECTOR_WIDE_DEFAULT }
+              : { ...current, width: INSPECTOR_DEFAULT_WIDTH })}
           />
           <InspectorRail
             items={openedDescriptors}
@@ -366,7 +398,11 @@ function InspectorHostState<Context>({
                 className="inspector-host__panel-close"
                 aria-label={narrow ? "收起 Inspector" : `关闭${activeDescriptor.title}`}
                 {...closeTip.anchorProps}
-                onClick={() => narrow ? setNarrowOpen(false) : closeTab(activeDescriptor.id)}
+                onClick={() => {
+                  pendingEntry.current = false;
+                  if (narrow) setNarrowOpen(false);
+                  else closeTab(activeDescriptor.id);
+                }}
               >
                 <X size={14} aria-hidden="true" />
               </button>

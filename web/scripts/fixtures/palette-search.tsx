@@ -8,7 +8,7 @@
 // 顺带验了前端没有自己另排一遍。
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, SearchHit, TaskListItem } from "@ash/shared";
+import type { ProjectView, SearchHit, TaskListItem } from "@navi/shared";
 // global.css 必须排在组件之前 —— `main.tsx` 就是这个顺序。
 import "../../src/styles/global.css";
 import "../../src/styles/overlays.css";
@@ -102,10 +102,10 @@ const conversationHits: Record<string, SearchHit> = {
     preview: "不相关的任务正文开头",
   },
   READ_CHUNK_BYTES: {
-    ...taskHits[0]!, title: "排查 ash 意外停止", field: "conversation",
+    ...taskHits[0]!, title: "排查 navi 意外停止", field: "conversation",
     snippet: "…const READ_CHUNK_BYTES = 64 * 1024;…",
     excerpts: ["server/src/search-corpus.ts\n+const READ_CHUNK_BYTES = 64 * 1024;"],
-    preview: "为什么刚才 ash 无故自己停了两次了？",
+    preview: "为什么刚才 navi 无故自己停了两次了？",
   },
 };
 const responseOf = (rows: SearchHit[]) => new Response(`${rows.map((hit) => JSON.stringify(hit)).join("\n")}\n`, {
@@ -173,7 +173,7 @@ function Fixture() {
         onTask={(task) => setOpened((all) => [...all, task.id])}
         onTaskUpdated={() => {}}
         onNote={() => {}}
-        onComposer={(mode) => setActions((all) => [...all, `new:${mode}`])}
+        onComposer={() => setActions((all) => [...all, "new:task"])}
         onNewGroup={() => {}}
         onNewProject={() => {}}
         onDeleteTask={() => {}}
@@ -186,5 +186,5 @@ function Fixture() {
 
 // 排序档是记在 localStorage 里的；夹具每次都从「相关度」开始，免得上一轮跑剩的档位
 // 让断言随机漂。
-window.localStorage.removeItem("ash:palette:sort");
+window.localStorage.removeItem("navi:palette:sort");
 createRoot(document.getElementById("root")!).render(<Fixture />);

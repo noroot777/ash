@@ -12,6 +12,7 @@
  * 为什么是工厂而不是一组裸函数：这几件事都要问「此刻 leads 里登记的是不是我」—— 那张表
  * 归 `session.js` 持有,只能注进来。
  */
+import { readEnv } from "@navi/shared/env-names";
 import { Writable } from "node:stream";
 import { clearSessionWaiting } from "../session-waiting.js";
 import { clearTurnStall } from "../turn-stall.js";
@@ -22,9 +23,9 @@ import { flushSessionNotices } from "./lead-voice.js";
 import { persistOrReport } from "./lead-session-writes.js";
 import type { Lead } from "./session-types.js";
 
-export const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
+export const IDLE_MS = Number(readEnv(process.env, "NAVI_TEAM_IDLE_MS") ?? 30 * 60_000);
 const CLOSE_GRACE_MS = 10_000;
-const STATUS_RETRY_MS = Number(process.env.ASH_TEAM_STATUS_RETRY_MS ?? 5_000);
+const STATUS_RETRY_MS = Number(readEnv(process.env, "NAVI_TEAM_STATUS_RETRY_MS") ?? 5_000);
 
 export function createLeadStatus({ leads, releasePending }: {
   leads: Map<string, Lead>;
@@ -38,7 +39,7 @@ export function createLeadStatus({ leads, releasePending }: {
    * 和页面按钮的共同真相源:回合已经收了、agentEnd 已经落盘,库里却还写着 running,用户看到
    * 的是「仍在跑/可停止」,依赖 idle 的后续动作也不会推进。而常驻会话跟一次性任务不同 ——
    * 它收完一个回合就阻塞在 events 上,**没有下一个自然的补写时机**:默认要等下一条消息或
-   * 30 分钟空闲回收,`ASH_TEAM_IDLE_MS<=0` 时可以永远维持(2026-08-25 第 5 轮审查)。所以这
+   * 30 分钟空闲回收,`NAVI_TEAM_IDLE_MS<=0` 时可以永远维持(2026-08-25 第 5 轮审查)。所以这
    * 一笔必须自己带重试,而不是报一声就算完。
    *
    * 报错只报第一次(后面每 STATUS_RETRY_MS 静默重试),那之后再刷屏也不多给用户任何信息。

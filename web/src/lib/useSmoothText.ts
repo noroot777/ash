@@ -12,7 +12,7 @@ const SLOT_MS = 120;
 export type FreshMark = { from: number; at: number };
 
 /**
- * 正文是服务端攒一坨发一坨的；这里把它匀开放（docs/ui-ux-audit run-4）。
+ * 正文是服务端攒一坨发一坨的；这里把它匀开放。
  *
  * - 只在 `live` 时放；不在飞、或「减少动效」时直接给全文。
  * - 挂上那一刻已经在的字不放第二遍（刷新页面、切回来时整段直接在）。

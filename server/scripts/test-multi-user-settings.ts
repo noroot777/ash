@@ -10,7 +10,7 @@
 //   ④ 读侧认不出的值(手改过的库 / 上一版留下的旧值)等同没写过,落回出厂默认,
 //      而不是把一个界面上根本没有的档位端给设置页。
 //
-// 跑法(不设 ASH_DB 时自己开一个临时库):
+// 跑法(不设 NAVI_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-settings
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -18,8 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-multi-user-settings-"));
-process.env.ASH_DB ||= join(stage, "multi-user-settings.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-multi-user-settings-"));
+process.env.NAVI_DB ||= join(stage, "multi-user-settings.db");
 requireTmpDb("test-multi-user-settings");
 
 const { db, ensureSchema } = await import("../src/db/index.js");

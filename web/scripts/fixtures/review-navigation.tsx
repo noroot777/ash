@@ -4,7 +4,7 @@
 // 点不点得过去也走会话流同一个判据（laneRoundOpener）。
 import { StrictMode, useCallback, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewRun, Task, TaskReviewInfo } from "@ash/shared";
+import type { FreeReviewRun, Task, TaskReviewInfo } from "@navi/shared";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { InspectorNavProvider, type InspectorNav, type InspectorRequest } from "../../src/inspector/nav.tsx";
 import { api } from "../../src/lib/api.ts";
@@ -12,7 +12,8 @@ import { TaskReviewRounds } from "../../src/review/TaskReviewRounds.tsx";
 import { reviewTargetRequest, type ReviewTarget } from "../../src/review/reviewTarget.ts";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import { conversationFeedRows, type ConversationReviewLane } from "../../src/task-detail/conversationReviewLanes.ts";
-import { ReviewerLane, laneRoundOpener } from "../../src/task-detail/ReviewerLane.tsx";
+import { ReviewBubble } from "../../src/task-detail/ReviewBubble.tsx";
+import { laneRoundOpener } from "../../src/task-detail/reviewLaneLinks.ts";
 import { ReceiptReviewContext, TurnReceipts } from "../../src/task-detail/TurnReceipts.tsx";
 import type { TaskReviewState } from "../../src/team/ReviewEvidence.tsx";
 import "../../src/styles/global.css";
@@ -131,6 +132,25 @@ api.freeWorkflow = (async (taskId: string) => {
   };
 }) as unknown as typeof api.freeWorkflow;
 
+// 驳回过、辩过一场的一轮：会话里那颗辩论气泡点过来，审查格打开这一轮、停在它的辩论那一段。
+const debatedRun = {
+  ...run("debated-run", "2026-11-12T14:00:00.000Z", "辩过的一场"),
+  rounds: [{
+    round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "head", screenshots: [],
+    reportMarkdown: `# 辩过的一场\n\n${"报告正文很长。\n\n".repeat(40)}`,
+    startedAt: "2026-11-12T14:00:00.000Z", endedAt: "2026-11-12T14:20:00.000Z",
+    dispute: {
+      summary: "这条我不认。", reason: "读错了代码。", deferReason: "", at: "2026-11-12T14:21:00.000Z",
+      resolution: "upheld", resolvedAt: "2026-11-12T15:00:00.000Z", resolutionNote: null, deferredTaskId: null, supersededAt: null,
+      debates: [{
+        id: "debate-1", status: "finished", exchanges: 1, currentSide: null, verdict: "upheld",
+        startedAt: "2026-11-12T14:30:00.000Z", finishedAt: "2026-11-12T14:40:00.000Z",
+        turns: [1, 2, 3].map((seq) => ({ seq, side: seq % 2 ? "reviewer" : "executor", summary: `第 ${seq} 段。`, statement: `第 ${seq} 段全文。`, status: "done", startedAt: "2026-11-12T14:30:00.000Z", endedAt: "2026-11-12T14:31:00.000Z" })),
+      }],
+    },
+  }],
+} as unknown as FreeReviewRun;
+
 const taskOf = (id: string) => ({ id, title: "导航", projectId: "p", mode: "single", status: "done", stage: "implemented", workflowMode: "free", parentId: null, archived: false } as unknown as Task);
 const task = taskOf("nav-task");
 serve(task.id, runs, true);
@@ -143,11 +163,13 @@ serve(traceTask.id, runs, false);
 // 第一次读就失败：数据一直是空的，这份请求不能一声不响地挂着。
 const coldTask = taskOf("nav-cold");
 serve(coldTask.id, runs.slice(0, 1), true);
+const debatedTask = taskOf("nav-debated");
+serve(debatedTask.id, [debatedRun], false);
 
 const lane = (id: string, source: ConversationReviewLane["source"], runId: string | null, round: number, label: string): ConversationReviewLane => ({
   kind: "review-lane", id, source, round, totalRounds: null, title: `第 ${round} 轮`, items: [], reviewerLabel: label,
   reviewerModel: null, reviewerEffort: null, note: null, startedAt: null, endedAt: null, conclusion: "verified",
-  complete: true, reportAvailable: false, report: null, runId, defaultCollapsed: true, findings: null,
+  complete: true, reportAvailable: false, report: null, runId, findings: null,
 });
 
 const verifyInfo: TaskReviewInfo = {
@@ -157,13 +179,15 @@ const verifyInfo: TaskReviewInfo = {
 
 // 宿主那一份的语义（InspectorHost）：一份请求，收下（seq 对得上）才清掉。真实页面上一个任务只
 // 挂其中一种审查格，所以两种各给一个宿主。
-function Host({ name, lanes, names, workflowMode, receipts = [], children }: {
+function Host({ name, lanes, names, workflowMode, receipts = [], trigger, children }: {
   name: string;
   lanes: ConversationReviewLane[];
   names: string[];
   workflowMode: string;
   /** 被后一轮盖过的那几轮：会话里只剩「N 条记录」里的一条。 */
   receipts?: ConversationReviewLane[];
+  /** 不是审查结论那颗气泡、但同样往审查格发请求的那颗键（辩论气泡）。 */
+  trigger?: (open: (target: ReviewTarget) => void) => ReactNode;
   children: ReactNode;
 }) {
   const [request, setRequest] = useState<InspectorNav["request"]>(null);
@@ -183,9 +207,9 @@ function Host({ name, lanes, names, workflowMode, receipts = [], children }: {
   return (
     <InspectorNavProvider value={{ request, consume, openTab }}>
       <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-        <div>{lanes.map((item, index) => (
+        <div>{trigger?.(open)}{lanes.map((item, index) => (
           <div key={item.id} data-lane={names[index]}>
-            <ReviewerLane taskId={task.id} lane={item} onOpenRound={laneRoundOpener(item, workflowMode, open)}><p>这一轮的经过</p></ReviewerLane>
+            <ReviewBubble taskId={task.id} lane={item} onOpenRound={laneRoundOpener(item, workflowMode, open)} renderLane={() => <p>这一轮的经过</p>} />
           </div>
         ))}
         {receipts.length > 0 && (
@@ -243,6 +267,11 @@ function Shell() {
       <Host name="cold" lanes={[lane("cold", "free", "old-run", 1, "冷启动")]} names={["cold"]} workflowMode="free">
         <FreeReviewPane task={coldTask} notify={() => {}} />
       </Host>
+      <Host name="debated" lanes={[]} names={[]} workflowMode="free" trigger={(open) => (
+        <button type="button" data-debate-trigger="" onClick={() => open({ source: "free", runId: "debated-run", round: 1, debateId: "debate-1" })}>辩论气泡</button>
+      )}>
+        <FreeReviewPane task={debatedTask} notify={() => {}} />
+      </Host>
       <Host
         name="verify"
         lanes={[lane("verify", "inline", null, 1, "就地验证"), lane("verify-3", "inline", null, 3, "没有这一轮")]}
@@ -251,6 +280,8 @@ function Shell() {
       >
         <TaskReviewRounds taskId={task.id} state={rounds} emptyMessage="没有记录" />
       </Host>
+      {/* 留出往下滚的余地：停在辩论那一段要能把它顶到上沿。 */}
+      <div style={{ height: 1600 }} />
     </main>
   );
 }

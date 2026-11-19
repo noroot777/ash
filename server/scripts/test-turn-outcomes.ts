@@ -20,13 +20,13 @@
 import assert from "node:assert/strict";
 import { createWriteStream, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentEvent, ServerEvent } from "@ash/shared";
+import type { AgentEvent, ServerEvent } from "@navi/shared";
 import {
   root, db, dbClient, ensureSchema, projects, sessions, tasks, eq, at, ok, runLead, bus,
 } from "./team-lead-resilience-fixture.js";
 
 assert.ok(
-  process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "结算钩子一旦失手触发续跑，拦截器失效就会拿用户的真额度跑 agent",
 );
 
@@ -90,7 +90,7 @@ try {
 
     const crashed = await turn(T[0], [
       { kind: "text", text: "改好了，挂个哨兵跑回归。\n" },
-      { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: "回归" }) },
+      { kind: "tool", name: "mcp__navi__start_monitor", detail: JSON.stringify({ description: "回归" }) },
       { kind: "done", exitStatus: 1 },
     ]);
     // 这份用例的前提:这一支服务端不写结算说明,前端没有文案可猜 —— 只有结局说得清。

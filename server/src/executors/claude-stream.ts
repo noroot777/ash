@@ -5,8 +5,8 @@
 // 上顶,合在一份里每次改都要把整份塞进上下文。导出的名字一个没变,claude.ts 原样
 // re-export,复用这份解析的第三方 CLI(executors/catalog/parsers.ts)照旧从 claude.js 取。
 import { createInterface } from "node:readline";
-import type { AgentEvent, AgentType } from "@ash/shared";
-import { type CompactSnapshot, guessContextWindow } from "@ash/shared/usage";
+import type { AgentEvent, AgentType } from "@navi/shared";
+import { type CompactSnapshot, guessContextWindow } from "@navi/shared/usage";
 import { NativeWorkTrace } from "./native-work.js";
 import { childActivity } from "./native-agent-activity.js";
 import { ClaudeWriteLedger, soleReceipt } from "./tool-writes.js";
@@ -25,6 +25,8 @@ import type { ConsumedOutput } from "./types.js";
 import { claudeRetryMessage, claudeRetryModel, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 import { ClaudeRequestTimer } from "./request-timing.js";
+import { claudeNaviMcpProblem } from "./navi-mcp-confirm.js";
+import type { ClaudeNaviMcpInjection } from "./navi-mcp-inject.js";
 import { claudeApiStatus, modelFailureOf } from "./model-failure.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
@@ -54,9 +56,11 @@ export function parseClaudeStream(
   cwd?: string,
   // 正文图片的持久账本/身份种子(RunOpts.images),见 markdown-image-stream.ts。
   accounting?: MarkdownImageAccounting,
-  // 接管时上一个 ash 进程已经消费掉的那段原始输出(文件 + 字节水位)。先静音重放一遍,接回的
+  // 接管时上一个 navi 进程已经消费掉的那段原始输出(文件 + 字节水位)。先静音重放一遍,接回的
   // 状态才和不间断执行一致,见 ./claude-recovery.ts。
   consumed?: ConsumedOutput,
+  // 这一回合注入 navi MCP 的结果(只有 ClaudeExecutor 注入、才传):init 到了据此确认,见 navi-mcp-confirm.ts。
+  naviMcp?: ClaudeNaviMcpInjection,
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:它要按「一份文档」认身份,而这里一条模型消息就是
   // 一片碎片 —— 上一条消息给定义、下一条引用它时,按消息扫压根不认那张图(审查第 4 轮
@@ -67,7 +71,7 @@ export function parseClaudeStream(
   // 第 5 轮 R1)。所以 sink 在这里建好传进去,由 push 同步进账,这一层只负责收口。
   const images = markdownImageSink(cwd, accounting);
   return settleMarkdownImages(
-    claudeStreamEvents(child, resident, bin, calibrateAs, compact, onInitialized, waitNoticeMs, images, cliSessionId, cwd, consumed),
+    claudeStreamEvents(child, resident, bin, calibrateAs, compact, onInitialized, waitNoticeMs, images, cliSessionId, cwd, consumed, naviMcp),
     images,
   );
 }
@@ -84,6 +88,7 @@ async function* claudeStreamEvents(
   cliSessionId?: string,
   cwd?: string,
   consumed?: ConsumedOutput,
+  naviMcp?: ClaudeNaviMcpInjection,
 ): AsyncIterable<AgentEvent> {
   // 队列、唤醒、收尾、增量合并、子活动合并和**图片记账的时点**都在这条共用流水线里
   // (见 event-queue.ts)。顺序是硬要求:字节在 `delta`/`push` 的那一刻就冻住,交代排在
@@ -98,7 +103,7 @@ async function* claudeStreamEvents(
   // message that trails the deltas is used ONLY for tool_use — replaying its text
   // would duplicate everything the deltas already streamed.
   const events = eventQueue({ images, activity: new NativeActivityBuffer(), coalesce: { text: 40 } });
-  // 重放水位之前那段输出时(见下面 `consumed`)一律静音:那些话上一个 ash 进程已经说过了。
+  // 重放水位之前那段输出时(见下面 `consumed`)一律静音:那些话上一个 navi 进程已经说过了。
   // 只有最后一个回合结尾推出的那几条要留着 —— 它们决定接回之后收不收台,见 `ending`。
   let replaying = false;
   let ending: AgentEvent[] | null = null;
@@ -140,7 +145,7 @@ async function* claudeStreamEvents(
   // 接管时读不出水位之前那段:后台还有没有活、回合在不在进行,一概说不准(见 ./claude-recovery.ts)。
   // 回合结尾一律按「可能还有」先不收台,等到期限按未完成结算 —— 不能拿空账本判「没有后台工作」。
   let recoveryUnknown = false;
-  const outPath = (child as { ashPaths?: { out?: string } }).ashPaths?.out;
+  const outPath = (child as { naviPaths?: { out?: string } }).naviPaths?.out;
   // 单飞判「后台超时/丢失」前要核对的就是这本实时账(见 singleRunFromResident)。
   if (resident) resident.backgroundPending = () => ({ ...background.waiting(), ...(recoveryUnknown ? { unknown: true as const } : {}) });
 
@@ -216,7 +221,7 @@ async function* claudeStreamEvents(
       const images = childImages.get(ev.parent_tool_use_id) ?? imageStore();
       childImages.set(ev.parent_tool_use_id, images);
       for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
-        // 子智能体挂的 Monitor 同样要认：它跑在同一条 CLI 会话、同一个 ash 任务上，
+        // 子智能体挂的 Monitor 同样要认：它跑在同一条 CLI 会话、同一个 navi 任务上，
         // 盯的也是同一份活。漏接的话面板会说「这个任务上还没有哨兵」，而 agent 那边
         // 明明已经挂上了——跟主智能体那条路是同一个毛病，只是入口在这个分支里。
         // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
@@ -252,6 +257,12 @@ async function* claudeStreamEvents(
     }
     if (ev.type === "system" && ev.session_id) {
       if (ev.subtype === "init" && !replaying) onInitialized();
+      // navi 的工具在不在,以 CLI 自己在 init 里报的为准(navi-mcp-confirm.ts)。只有注入过的那一回合
+      // 才问:复用这份解析的别家 CLI 不注入 navi,它们清单里有没有 navi 不归这里说。
+      if (ev.subtype === "init" && !replaying && naviMcp) {
+        const problem = claudeNaviMcpProblem(naviMcp, ev.mcp_servers, ev.tools);
+        if (problem) push(problem);
+      }
       // init 事件白送一份**权威**技能清单(skills / slash_commands / cwd 都在里面),
       // 顺手校准 skills 模块的扫描结果 —— 这是唯一不用额外起一个 CLI 进程就能拿到
       // 「这个 CLI 自己认哪些技能」的机会,别浪费。纯旁路:失败也不能影响事件流。
@@ -310,9 +321,9 @@ async function* claudeStreamEvents(
       // 响应,两个任务各停了 47 分钟)。
       //
       // 那次现场值得记一笔,因为它同时暴露了「这条信号有多要紧」:1M 模型的请求并不直连
-      // 供应商,而是经本机 ash 的 context-1m 代理转发(anthropic-context-1m.ts),那一跳的
+      // 供应商,而是经本机 navi 的 context-1m 代理转发(anthropic-context-1m.ts),那一跳的
       // 上游 fetch 只继承 request.signal、自己不设超时,上游挂住它就一直等着。界面上又
-      // 一个字都没有,用户当时能试的只剩重启 ash —— 重启确实让三个任务同时活了过来,但
+      // 一个字都没有,用户当时能试的只剩重启 navi —— 重启确实让三个任务同时活了过来,但
       // 那是因为它切断了这台机器上**全部**在途请求、逼 CLI 重连,是没得选时的钝手段,
       // 不是这类情况的处理办法。真正该做的是把 CLI 早就说了的话显示出来,也就是下面这段。
       //
@@ -329,7 +340,7 @@ async function* claudeStreamEvents(
       // **这一条紧跟在上面那句重试提示后面**,而它只是把 CLI 会话身份报一遍 —— 不是上游回话了。
       // 停滞看门狗因此不能把「不是错误」当成「有进展」:那样每一条重试都被自己后面这一句当场
       // 解除,一条永远连不上的 Claude 会话于是报警和熔断都不会发生(第 2 轮审查 F1,已实测)。
-      // 判据共用 `@ash/shared/waiting` 的 `resumesWaiting`(session/context/system 都不算回话),
+      // 判据共用 `@navi/shared/waiting` 的 `resumesWaiting`(session/context/system 都不算回话),
       // 落点在 ../turn-stall.ts。
       push({ kind: "session", cliSessionId: ev.session_id });
     } else if (ev.type === "assistant" && ev.message?.content) {
@@ -448,7 +459,7 @@ async function* claudeStreamEvents(
       // 已消费水位之前还是之后的尾流里都一样认(见 claude-recovery.ts 的 SteerJournal)。
       const superseded = !!resident && !claim && resident.takeSend(resident.turns);
       if (claim?.abandoned) {
-        push({ kind: "system", text: "插话打断了这一回合，但 ash 恰在送出插话内容之前重启，那条消息没有送到，需要的话请重新发一次。", at: new Date().toISOString(), level: "notice" });
+        push({ kind: "system", text: "插话打断了这一回合，但 Navi 恰在送出插话内容之前重启，那条消息没有送到，需要的话请重新发一次。", at: new Date().toISOString(), level: "notice" });
       }
       // 我们自己打断的那一回合收尾时,插话那条消息已经(或马上就要)送进去开下一回合:会话
       // 仍算在忙。这里清成空闲,紧跟着的第二次插话就会走「空档直接送」、不再打断第一条。
@@ -529,7 +540,7 @@ async function* claudeStreamEvents(
       // 忙闲同样说不准。当它空闲:插话直接送,真在忙 CLI 也只是排到这一回合之后;当它在忙则可能
       // 去打断一个空闲会话,那不会再吐 result,插话开的那一回合结尾会被当成打断的结尾、收不了台。
       if (resident) resident.turnActive = false;
-      console.warn(`[ash] 读不出接管前已消费的输出（${consumed.outPath}），按「后台状态未知」接着跑:`, error);
+      console.warn(`[navi] 读不出接管前已消费的输出（${consumed.outPath}），按「后台状态未知」接着跑:`, error);
     } finally {
       replaying = false;
       capturing = false;

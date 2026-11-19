@@ -22,7 +22,7 @@ export const readSourceAsync = async (target) => normalizeEol(await readFile(tar
 // 这类断言钉的是「这条链上有没有这段逻辑」,可写法上往往退化成「某个文件里有没有这段
 // 文字」。项目同时有「单文件不超过 700 行、写到上限就按职责拆」的硬规则,于是一次**合规
 // 拆分**就能把它们成批打红,而行为一个字没变:2026-11-02 普查里 `test-session-lost` 与
-// `test-ash-mcp-reach` 两条同时红,责任笔是同一个 `9efd0081` —— 拆出去的
+// `test-navi-mcp-reach` 两条同时红,责任笔是同一个 `9efd0081` —— 拆出去的
 // `turn-session-pick.ts` / `turn-workspace-pick.ts` 连注释都写明了「这段搬哪儿去了」,
 // 而失败信息长得像真缺陷(「没在起跑前识别受影响的 Codex 会话」)。
 //

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PairRequestView } from "@ash/shared";
+import type { PairRequestView } from "@navi/shared";
 import { Check, Devices, Prohibit, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { authApi } from "../lib/authApi.ts";
@@ -8,7 +8,7 @@ import { useIsLocalOnly, useIsMultiUser } from "./authContext.ts";
 
 const POLL_MS = 4_000;
 
-// 自用模式:一台新设备打开了这台 ash,等机主点头。和接力申请是同一种事(别的机器想进来,
+// 自用模式:一台新设备打开了这台 navi,等机主点头。和接力申请是同一种事(别的机器想进来,
 // 得有人拍板),所以长相和落点都跟 HandoffApprovalAlert 一样,样式也用它那一套。
 //
 // 不用像那边一样筛「新鲜」:申请只活十分钟,过期了服务端自己就不再给。
@@ -57,7 +57,7 @@ export function DevicePairingAlert({ notify }: { notify: (message: string) => vo
       await authApi.decidePair(request.id, decision);
       epoch.current += 1;
       setRequests((current) => current.filter((item) => item.id !== request.id));
-      notify(decision === "approve" ? `「${request.name}」可以用这台 ash 了` : "已拒绝");
+      notify(decision === "approve" ? `「${request.name}」可以用这台 Navi 了` : "已拒绝");
     } catch (error) {
       notify(error instanceof Error ? error.message : "处理失败");
     } finally {
@@ -70,7 +70,7 @@ export function DevicePairingAlert({ notify }: { notify: (message: string) => vo
     <section className="handoff-approval-alert" role="alertdialog" aria-labelledby="device-pairing-alert-title">
       <span className="handoff-approval-alert-icon"><Devices size={22} weight="fill" aria-hidden="true" /></span>
       <div className="handoff-approval-alert-copy">
-        <strong id="device-pairing-alert-title">「{request.name}」想连接这台 ash</strong>
+        <strong id="device-pairing-alert-title">「{request.name}」想连接这台 Navi</strong>
         <p>
           它屏幕上的配对码应为 <b className="pair-code">{request.code}</b>。允许后，它能做你在这里能做的一切。
         </p>

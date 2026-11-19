@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CircleNotch, Robot, Stop } from "@phosphor-icons/react";
-import type { PreviewAssistState } from "@ash/shared/preview-assist";
-import type { ProjectPreviewConfig } from "@ash/shared/preview";
+import type { PreviewAssistState } from "@navi/shared/preview-assist";
+import type { ProjectPreviewConfig } from "@navi/shared/preview";
 import { Button } from "../components/ui.tsx";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { api } from "../lib/api.ts";
@@ -21,7 +21,7 @@ import {
 } from "./previewAssistMemory.ts";
 import { assistClaimSettled, watchAssistClaimLost } from "./previewAssistTabs.ts";
 
-// 「AI 协助」——把「这个项目该怎么起」这件事交给一个真的 CLI 智能体去判断，**并且由 ash
+// 「AI 协助」——把「这个项目该怎么起」这件事交给一个真的 CLI 智能体去判断，**并且由 navi
 // 真跑一遍**，跑起来了才填回上面的输入框。
 //
 // 界面上要一直说清楚两件事，因为它们决定用户敢不敢点：
@@ -60,7 +60,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   const [offered, setOffered] = useState<{ script: string; reason: "edited" | "unsettled" } | null>(null);
   // 成功之后**输入框到底怎么了**。卡片上的那句话只能照这个说 —— 「有没有待选脚本」推不出
   // 「填了没填」（第 3 轮审查：点完「保留我写的」，卡片照旧说「脚本已填进上面的输入框」，
-  // 用户于是以为框里那条手写的是 ash 验证过的）。
+  // 用户于是以为框里那条手写的是 navi 验证过的）。
   const [applied, setApplied] = useState<"filled" | "kept" | "shown" | null>(null);
   /**
    * 摆着的这份作业不是这个页面点出来的。
@@ -356,7 +356,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       {/* 这段小字要挡住的是「它会不会乱动我的仓库」这个顾虑 —— 这一颗按钮会在用户的项目
           目录里起真进程，不说清楚就没人敢点。判定方式也得说，否则「AI 填的」在用户眼里
           和「猜的」没区别。 */}
-      <small>AI 在<b>项目目录</b>里读文件判断启动方式，ash 再借一个空闲端口把它给的脚本<b>真跑一遍</b>——端口上真有响应才算数，随后进程会被停掉，起不来就甩回去重来（最多 {job?.maxRounds ?? 3} 轮）。它被要求不改仓库里的任何文件、不替你装依赖。</small>
+      <small>AI 在<b>项目目录</b>里读文件判断启动方式，Navi 再借一个空闲端口把它给的脚本<b>真跑一遍</b>——端口上真有响应才算数，随后进程会被停掉，起不来就甩回去重来（最多 {job?.maxRounds ?? 3} 轮）。它被要求不改仓库里的任何文件、不替你装依赖。</small>
     </div>
     {error && <p className="preview-assist-error" role="alert">{error}</p>}
     {job && <PreviewAssistProgress job={job} offered={offered} applied={applied} foreign={foreign} onTakeOffered={takeOffered} onKeepMine={keepMine} onDismiss={lost ? dismiss : undefined} />}
@@ -384,7 +384,7 @@ function PreviewAssistProgress({ job, offered, applied, foreign, onTakeOffered, 
     </div>
     {/* 上面那行状态已经说了「在哪个地址上起来过」，这里只说接下来该做什么——同一件事写两遍
         会把真正的下一步（还得点保存）淹掉。**而这句话只能照 applied 说**：说成「已填入」却
-        没填，用户就会以为框里那条手写的是 ash 验证过的（第 3 轮审查）。 */}
+        没填，用户就会以为框里那条手写的是 navi 验证过的（第 3 轮审查）。 */}
     {job.status === "running" && foreign && <p className="preview-assist-verdict">
       这一份是<b>别的页面点的</b>（AI 协助按项目算，一个项目同时只跑一份），这里只是照实显示它的进度；它跑出来的脚本<b>不会动这个页面的输入框</b>。
     </p>}
@@ -392,7 +392,7 @@ function PreviewAssistProgress({ job, offered, applied, foreign, onTakeOffered, 
       脚本已填进上面的输入框；确认无误后点「保存预览设置」，任务里的「打开预览」就按它启动。
     </p>}
     {job.status === "succeeded" && applied === "kept" && <><p className="preview-assist-verdict">
-      已按你的选择<b>保留你自己写的那条</b>：上面输入框一个字都没动，它没有经过 ash 试跑。AI 真起来过的是这一条，要换就把它复制过去：
+      已按你的选择<b>保留你自己写的那条</b>：上面输入框一个字都没动，它没有经过 Navi 试跑。AI 真起来过的是这一条，要换就把它复制过去：
     </p><pre className="preview-assist-script">{job.script}</pre></>}
     {job.status === "succeeded" && applied === "shown" && <><p className="preview-assist-verdict">
       这条结果不是这个页面点出来的（别的页面点的，或者上一次留下的——服务端把结果留 10 分钟），所以<b>没有动上面输入框里的内容</b>。要用它就把下面这条复制过去，或者自己再点一次「AI 协助填写」：

@@ -8,7 +8,7 @@ import {
   scheduledMessages, schema, tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
-import { appendMonitorWake } from "@ash/shared/monitor-wake";
+import { appendMonitorWake } from "@navi/shared/monitor-wake";
 import { occupyResumePrompt } from "../src/task-resume-prompt.js";
 import { dispatchPendingMessage } from "../src/pending-dispatch.js";
 import { hasPendingDeliveryRecovery } from "../src/pending-delivery-recovery.js";
@@ -20,10 +20,11 @@ export type Row = typeof scheduledMessages.$inferSelect;
 export const api = new Hono();
 mountTaskRunRoutes(api);
 const log = join(root, "checkpoint-input.log");
-const environment = { path: process.env.PATH, allow: process.env.ASH_ALLOW_REAL_AGENT, log: process.env.ASH_TEST_LEAD_LOG };
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${environment.path ?? ""}`;
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_TEST_LEAD_LOG = log;
+const environment = { path: process.env.PATH, staged: process.env.NAVI_TEST_AGENT_BIN, log: process.env.NAVI_TEST_LEAD_LOG };
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${environment.path ?? ""}`;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_LEAD_LOG = log;
 const created: string[] = [];
 export const input = () => existsSync(log) ? readFileSync(log, "utf8") : "";
 export const hits = (text: string) => input().split(text).length - 1;
@@ -68,6 +69,45 @@ export function failCheckpointRestore() {
     return batch.call(dbClient, statements, ...rest);
   };
   return { count: () => failures, restore: () => { dbClient.batch = batch; } };
+}
+
+/**
+ * 每条带参数的语句执行前先交给 `statement`(抛错 = 这一笔写失败;也可以在里面插入并发动作),
+ * **事务里的一并经过**:drizzle 在 `db.transaction` 里用 `dbClient.transaction()` 交回的那个事务
+ * 对象执行,只换 `dbClient.execute` 的钩子看不见它们 —— 而落终态那一笔跟推进凭据同一个事务提交
+ * (status.ts `writeTaskStatus`),停止的撤销写入正走这条路。
+ *
+ * 事务里的语句钩子只适合抛错:全进程一条连接,事务开着时别的写要等它收尾(node-sqlite-client.ts
+ * `openTx`),在里面 await 并发写只会等到超时。要让并发动作落在某笔事务**之前**,用 `transaction`,
+ * 它在 BEGIN 之前调用。返回值还原两处钩子。
+ */
+export function interceptStatements(hooks: {
+  statement?: (sql: string, args: unknown[]) => Promise<void> | void;
+  transaction?: () => Promise<void> | void;
+}): () => void {
+  const execute = dbClient.execute;
+  const transaction = dbClient.transaction;
+  const see = async (statement: Parameters<typeof dbClient.execute>[0]) => {
+    if (typeof statement !== "string") await hooks.statement?.(statement.sql, Array.isArray(statement.args) ? statement.args : []);
+  };
+  dbClient.execute = async function (statement, ...rest) {
+    await see(statement);
+    return execute.call(dbClient, statement, ...rest);
+  };
+  dbClient.transaction = async function (...args) {
+    await hooks.transaction?.();
+    const active = await transaction.apply(dbClient, args);
+    const run = active.execute.bind(active);
+    active.execute = async (statement) => {
+      await see(statement);
+      return run(statement);
+    };
+    return active;
+  };
+  return () => {
+    dbClient.execute = execute;
+    dbClient.transaction = transaction;
+  };
 }
 
 /**
@@ -129,10 +169,10 @@ export async function cleanup(): Promise<void> {
     } finally {
       if (environment.path === undefined) delete process.env.PATH;
       else process.env.PATH = environment.path;
-      if (environment.allow === undefined) delete process.env.ASH_ALLOW_REAL_AGENT;
-      else process.env.ASH_ALLOW_REAL_AGENT = environment.allow;
-      if (environment.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
-      else process.env.ASH_TEST_LEAD_LOG = environment.log;
+      if (environment.staged === undefined) delete process.env.NAVI_TEST_AGENT_BIN;
+      else process.env.NAVI_TEST_AGENT_BIN = environment.staged;
+      if (environment.log === undefined) delete process.env.NAVI_TEST_LEAD_LOG;
+      else process.env.NAVI_TEST_LEAD_LOG = environment.log;
     }
   }
 }

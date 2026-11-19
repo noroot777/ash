@@ -11,9 +11,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-workflow-library-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-workflow-library-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -32,8 +33,8 @@ try {
   const { projects, workflows } = await import("../src/db/schema.js");
   const { patchAppSettings } = await import("../src/app-settings.js");
   const { findWorkflow, listWorkflows, resolveWorkflowDef } = await import("../src/workflows.js");
-  const { BUILTIN_WORKFLOWS, builtinWorkflowDef } = await import("@ash/shared/workflow-presets");
-  const { makeStep } = await import("@ash/shared/workflow");
+  const { BUILTIN_WORKFLOWS, builtinWorkflowDef } = await import("@navi/shared/workflow-presets");
+  const { makeStep } = await import("@navi/shared/workflow");
   const { eq, isNull } = await import("drizzle-orm");
   await ensureSchema();
 
@@ -134,7 +135,7 @@ try {
   check("过不了闸的线也退回出厂定义", (await findWorkflow("release"))!.def, builtinWorkflowDef("release"));
   check("库还能整体列出来", (await listWorkflows()).length, BUILTIN_WORKFLOWS.length);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 
 console.log(failures ? `\n${failures} 处不符` : "\n起手式库语义全部符合预期");

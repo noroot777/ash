@@ -280,13 +280,13 @@ export function buildWindowsCommand(template: string, absPath: string) {
  *    `ver` 真的执行了(stdout 里有 `Microsoft Windows [版本 ...]`)。这就是旧模板的洞。
  *  · 旧模板 `cmd /c start "" <裸路径>` 在同一个目录上直接卡死(25s 被 kill)——截断后的
  *    路径不存在,`start` 停在那里不回来。
- *  · 新模板:`start "" "%ASH_OPEN_TARGET%"`,命令行里只有占位符,资源管理器开的是
+ *  · 新模板:`start "" "%NAVI_OPEN_TARGET%"`,命令行里只有占位符,资源管理器开的是
  *    `f1stage/amp&ver` 本身,没有多余命令被执行。
- *  · `%` 那一对的对照最直白:裸路径 `...\pct%ASH_F1_X%pct` 被 cmd 展开成了
+ *  · `%` 那一对的对照最直白:裸路径 `...\pct%NAVI_F1_X%pct` 被 cmd 展开成了
  *    `...\pctEXPANDEDpct`(打开的根本不是用户点的那个);走环境变量则原样是
- *    `pct%ASH_F1_X%pct` —— 展开是单遍的,展开出来的 `%` 不会再被扫一次。
+ *    `pct%NAVI_F1_X%pct` —— 展开是单遍的,展开出来的 `%` 不会再被扫一次。
  */
-export const WIN_OPEN_TARGET_ENV = "ASH_OPEN_TARGET";
+export const WIN_OPEN_TARGET_ENV = "NAVI_OPEN_TARGET";
 
 export function windowsDefaultOpenCommand(absPath: string) {
   return {

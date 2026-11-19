@@ -1,16 +1,17 @@
-// codex 的 `config.toml` 里「ash 登记在不在、叫什么、关没关」—— **唯一**一份判据。
+// codex 的 `config.toml` 里「navi 登记在不在、叫什么、关没关」—— **唯一**一份判据。
 //
 // 派审预检、设置页、隔离档自动补写、执行器注入回合身份四处都读它。以前各写各的：预检用
-// 结构扫描，注入那一侧还是 `^\[mcp_servers\.ash\]` 行首正则 —— `[mcp_servers."ash"]` 这种
+// 结构扫描，注入那一侧还是 `^\[mcp_servers\.navi\]` 行首正则 —— `[mcp_servers."navi"]` 这种
 // codex 自己认得的写法，预检说「接好了」，注入却认不出来、不给 MCP 传回合身份，审查跑完
 // 交卷照样 409（新链第 4 轮审查第 1 条）。判据只有一份，才不会出现「预检越准、越替一份
 // 实际交不了卷的配置背书」。
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { envNameGenerations } from "@navi/shared/env-names";
+import { NAVI_MCP_SERVER_NAMES } from "@navi/shared/mcp";
 
-const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
+const WANTED: readonly string[] = NAVI_MCP_SERVER_NAMES;
 
 /** 一条登记**怎么起** —— 只拿来出提示，不参与拦/放。 */
-export type LaunchSpec = { command?: string | null; args?: unknown; ashUrl?: string | null };
+export type LaunchSpec = { command?: string | null; args?: unknown; naviUrl?: string | null };
 
 type CodexServer = { enabled: boolean; spec: LaunchSpec };
 
@@ -21,13 +22,11 @@ export type CodexTomlScan = {
   /**
    * 非空 = **连语句都切不开**，所以连 `servers` 里认出来的那几条也不可信（里面的字符串是
    * 说给用户听的原因）。`doubt` 的范围比它大得多：表里有一处我们读不懂、有个表挂错了位置、
-   * 某个值的写法不认识 —— 这些都让「这份配置里没有 ash」这句话说不出口，但**不影响**已经
+   * 某个值的写法不认识 —— 这些都让「这份配置里没有 navi」这句话说不出口，但**不影响**已经
    * 正面认出来的根级登记。
    *
-   * 分开这两档是第 2 轮审查 F1 打出来的：上一版 `codexInjectionTarget` 见 `doubt` 就不注
-   * 回合身份,而一份合法配置里只要有个叫 mcp_servers 的 profile(`[profiles.mcp_servers]`)
-   * 就会答 doubt —— 真 codex 列得出 ash、也接受那条 `-c` 覆盖,我们却把身份注入整个取消了:
-   * Windows 上派审当场被拒,mac 上审查跑完交不了卷。
+   * 分开这两档的理由:一份合法配置里只要有个叫 mcp_servers 的 profile(`[profiles.mcp_servers]`)
+   * 就会答 doubt,而真 codex 读得好好的 —— 拿 doubt 当 unreadable 会把一份能用的配置判成读不懂。
    */
   unreadable: string | null;
   /**
@@ -36,7 +35,7 @@ export type CodexTomlScan = {
    * 追加一段普通表头。
    *
    * 实测（codex-cli 0.153）：整张表写成内联值 `mcp_servers = { kb = {...} }` 之后再追加
-   * `[mcp_servers.ash]`，codex 报 `cannot extend value of type inline table with a dotted
+   * `[mcp_servers.navi]`，codex 报 `cannot extend value of type inline table with a dotted
    * key` 并**整份拒载** —— 用户别的 MCP 一起没了。而根上的点号键（`mcp_servers.kb = {...}`、
    * `mcp_servers.kb.command = "x"`）、`[mcp_servers]` 下的内联项、普通子表都照样扩展得了
    * （四种形状都真机验过 rc=0）。所以封的只有「整张表是一个内联值」这一种。
@@ -45,13 +44,13 @@ export type CodexTomlScan = {
 };
 
 /**
- * 只认 TOML 的**结构**（表头、键路径），不解析值 —— 「有没有 ash 这条登记、是不是关着」
+ * 只认 TOML 的**结构**（表头、键路径），不解析值 —— 「有没有 navi 这条登记、是不是关着」
  * 只需要这些。认得的写法：
  *
- *   [mcp_servers.ash]        [ mcp_servers . "ash" ]       [mcp_servers.'ash'.env]
- *   mcp_servers.ash.command = "node"                       （根上的点号键）
- *   [mcp_servers]  ash = { command = "node", enabled = false }   （内联表）
- *   mcp_servers = { ash = { command = "node" } }           （整张表写成一个内联值）
+ *   [mcp_servers.navi]        [ mcp_servers . "navi" ]       [mcp_servers.'navi'.env]
+ *   mcp_servers.navi.command = "node"                       （根上的点号键）
+ *   [mcp_servers]  navi = { command = "node", enabled = false }   （内联表）
+ *   mcp_servers = { navi = { command = "node" } }           （整张表写成一个内联值）
  *
  * **兜底**：扫描器没认出任何登记、可文本里明明有 `mcp_servers.ash` / `mcp_servers.harness`
  * 出现在表头或行首键的位置 —— 说明写法超出了它认得的范围（多行字符串里的假表头、它没跟上的
@@ -75,7 +74,7 @@ export function scanCodexToml(text: string): CodexTomlScan {
     if (stmt.kind === "unparsed") { doubt ??= stmt.why; unreadable ??= stmt.why; continue; }
     if (stmt.kind === "header") {
       // **同名表重复定义**：TOML 里这是 `duplicate key`，codex 整份配置拒载（实测
-      // `failed to load bootstrap configuration`）。这一档说不出「有没有 ash」,只能答
+      // `failed to load bootstrap configuration`）。这一档说不出「有没有 navi」,只能答
       // 判不了 —— 自动补写那一侧正是靠它才不会再往上追加一份(新链第 6 轮审查 F1)。
       const key = stmt.path.join("\u0000");
       if (!stmt.array && seen.has(key)) doubt ??= `[${stmt.path.join(".")}] 定义了两次（codex 会整份拒载）`;
@@ -85,15 +84,15 @@ export function scanCodexToml(text: string): CodexTomlScan {
       if (at > 0 && WANTED.includes(table[at + 1] ?? "")) {
         doubt ??= `[${table.join(".")}] 把 mcp_servers 挂在了别的表底下`;
       }
-      // 表头本身就是一次登记（`[mcp_servers.ash]` 下面可以一行都没有）。
+      // 表头本身就是一次登记（`[mcp_servers.navi]` 下面可以一行都没有）。
       if (at === 0 && table.length >= 2 && WANTED.includes(table[1]!)) slot(table[1]!);
       continue;
     }
     const path = [...table, ...stmt.path];
     const at = path.indexOf("mcp_servers");
-    // **只有紧跟着兼容名的那种才值得说一句**:`[profiles.p.mcp_servers.ash]` 是用户以为接好
+    // **只有紧跟着兼容名的那种才值得说一句**:`[profiles.p.mcp_servers.navi]` 是用户以为接好
     // 了、codex 其实不读那个位置。而 `[profiles.mcp_servers]`、`[model_providers.mcp_servers]`
-    // 这些是别的命名空间里恰好叫这个名字的字段 —— 合法、与 ash 无关,上一版对它们一律答
+    // 这些是别的命名空间里恰好叫这个名字的字段 —— 合法、与 navi 无关,上一版对它们一律答
     // doubt,于是一份接得好好的配置被判成「看不准」:身份注入整个取消、派审当场被拒
     // (第 2 轮审查 F1,真机取证)。
     if (at > 0) {
@@ -102,10 +101,10 @@ export function scanCodexToml(text: string): CodexTomlScan {
     }
     if (at < 0) continue;
     if (path.length === 1) {
-      // `mcp_servers = { ash = {...} }`：整张表写成一个内联值。**必须拆开读** —— 上一版
+      // `mcp_servers = { navi = {...} }`：整张表写成一个内联值。**必须拆开读** —— 上一版
       // 在这里只拿 `\bash\b` 扫一眼值文本就答 doubt：codex 自己认得这种登记（真机 rc=0、
-      // `mcp list` 列得出 ash，`-c mcp_servers.ash.env_vars=[...]` 也落得上去），而我们
-      // 这边派审误拒、回合身份注不进去；更糟的是「没有 ash」那一半是对的时候，自动补写
+      // `mcp list` 列得出 navi，`-c mcp_servers.navi.env_vars=[...]` 也落得上去），而我们
+      // 这边派审误拒、回合身份注不进去；更糟的是「没有 navi」那一半是对的时候，自动补写
       // 会追加一段普通表头，codex 整份拒载（第 2 轮审查 F1 实测三种形状）。
       const fields = inlinePairs(stmt.value);
       if (!fields) { doubt ??= "mcp_servers 整个写成了内联表，而它的内容拆不开"; continue; }
@@ -129,7 +128,7 @@ export function scanCodexToml(text: string): CodexTomlScan {
     if (!applyServerValue(s, path.slice(2), stmt.value)) doubt ??= `${path.join(".")} 的值无法识别`;
   }
   if (!servers.size && !doubt) {
-    // **只认「mcp_servers 底下的 ash」那个位置**：表头或点号键的第一段是 `mcp_servers`、
+    // **只认「mcp_servers 底下的 navi」那个位置**：表头或点号键的第一段是 `mcp_servers`、
     // 第二段是兼容名。上一版拿「行首是 `[` 且行内有 ash/harness」当信号，codex 自己记项目
     // 信任的 `[projects."/Users/x/code/harness"]` 正好命中 —— 跑过这个仓库的机器上整份配置
     // 都成了「看不准」，预检放行、启动自检闭嘴（新链第 3 轮审查第 1 条）。
@@ -137,7 +136,7 @@ export function scanCodexToml(text: string): CodexTomlScan {
     const head = `["']?mcp_servers["']?\\s*\\.\\s*${name}`;
     const suspicious = new RegExp(`^\\s*\\[\\[?\\s*${head}\\s*[.\\]]|^\\s*${head}\\s*[.=]`, "m");
     if (suspicious.test(text)) {
-      doubt = "文本里有像是 ash 登记的写法，但扫描器没认出来";
+      doubt = "文本里有像是 Navi 登记的写法，但扫描器没认出来";
     }
   }
   return { servers, doubt, unreadable, sealed };
@@ -147,7 +146,7 @@ type Statement =
   | { kind: "header"; path: string[]; line: number; array: boolean }
   /** `first`/`last` = 这条键值对占的物理行(值跨行时 last > first),给就地改写用。 */
   | { kind: "pair"; path: string[]; value: string; first: number; last: number }
-  /** 这一行按 TOML 读不通 —— codex 自己也读不动，所以**不许**据此说「没有 ash」。 */
+  /** 这一行按 TOML 读不通 —— codex 自己也读不动，所以**不许**据此说「没有 navi」。 */
   | { kind: "unparsed"; why: string };
 
 const isHeader = (s: Statement): s is Statement & { kind: "header" } => s.kind === "header";
@@ -197,7 +196,7 @@ function statements(text: string): Statement[] {
   }
   // **文件结尾处值还没收尾**（数组少一个 `]`、多行字符串少一个 `\"\"\"`）：这份 TOML 本身
   // 不合法，codex 整份拒载。那后面那些本该是表头/键的行全被当成了这个值的续行 —— 据此说
-  // 「没有 ash」是错的，自动补写还会把新表追加进那个没收尾的值里（本轮 F1 同类）。
+  // 「没有 navi」是错的，自动补写还会把新表追加进那个没收尾的值里（本轮 F1 同类）。
   if (pending) out.push({ kind: "unparsed", why: `${pending.path.join(".")} 的值到文件结尾还没收尾` });
   return out;
 }
@@ -206,8 +205,8 @@ function statements(text: string): Statement[] {
  * `a."b".'c'` → `["a","b","c"]`。点号只在引号外才是分隔符。
  *
  * **双引号键里的转义要按 TOML 解码**，因为 codex 就是这么读的：`[mcp_servers."\u0061sh"]`
- * 在它眼里就是 `ash`（实测 codex-cli 0.153 列出 `"name":"ash"`）。上一版只把引号摘掉，于是
- * 这份配置被判成「没有 ash」—— 派审误拒、回合身份注不进去，自动补写还会再追加一份**同名**
+ * 在它眼里就是 `navi`（实测 codex-cli 0.153 列出 `"name":"navi"`）。上一版只把引号摘掉，于是
+ * 这份配置被判成「没有 navi」—— 派审误拒、回合身份注不进去，自动补写还会再追加一份**同名**
  * 表，TOML 里那是重复定义，codex 整份配置拒载、别的 MCP 一起没了（新链第 6 轮审查 F1）。
  *
  * `null` = 这串键按 TOML 读不通（引号没收尾、转义不认）。那时**不许当成「没有」**：这种
@@ -285,10 +284,10 @@ function splitKey(line: string): { path: string[]; value: string } | null {
  * 已经在一段 `delim` 开头的多行字符串里面了，从 `text[at]` 起找它在哪收尾。
  *
  * 两条 TOML 规矩，错一条就会把**字符串里的示例**当成真配置。第 5 轮 F2 实测：合法的
- * `developer_instructions` 里放一段带转义三引号的 `[mcp_servers.ash]` 示例，上一版在那个
- * 转义引号处就把字符串结束了，于是认出一条根本不存在的 ash 登记；真 codex `mcp list` 只
- * 列出 kb，而执行器照着那条假登记注入 `-c mcp_servers.ash.env_vars=…`，整份配置当场拒载
- * （`invalid transport in mcp_servers.ash`）—— 原来读得动的那些 MCP 一起没了。
+ * `developer_instructions` 里放一段带转义三引号的 `[mcp_servers.navi]` 示例，上一版在那个
+ * 转义引号处就把字符串结束了，于是认出一条根本不存在的 navi 登记；真 codex `mcp list` 只
+ * 列出 kb，而执行器照着那条假登记注入 `-c mcp_servers.navi.env_vars=…`，整份配置当场拒载
+ * （`invalid transport in mcp_servers.navi`）—— 原来读得动的那些 MCP 一起没了。
  *
  * ① 多行**基本**字符串（三个双引号）里反斜杠是转义：被转义的那个引号是内容，所以紧跟其后
  *    只剩两个引号时并不收尾；连反斜杠本身一起跳过，这样 `\\` 之后的三引号才是真收尾。行尾
@@ -402,6 +401,10 @@ function inlinePairs(raw: string): { path: string[]; value: string }[] | null {
   return depth || quote || multiline ? null : fields;
 }
 
+/** 登记里 MCP 地址变量的各代名字，新名在前；`urlRank` 记下这条登记的地址是从第几代名字读来的。 */
+const URL_ENV_NAMES = envNameGenerations("NAVI_URL");
+const urlRank = new WeakMap<LaunchSpec, number>();
+
 function applyServerValue(server: CodexServer, path: string[], raw: string): boolean {
   const value = raw.trim();
   if (!path.length || (path.length === 1 && path[0] === "env")) {
@@ -414,8 +417,14 @@ function applyServerValue(server: CodexServer, path: string[], raw: string): boo
       server.enabled = value === "true";
     } else if (path[0] === "command") server.spec.command = tomlString(value);
     else if (path[0] === "args") server.spec.args = tomlStringArray(value);
-  } else if (path.length === 2 && path[0] === "env" && path[1] === "ASH_URL") {
-    server.spec.ashUrl = tomlString(value);
+  } else if (path.length === 2 && path[0] === "env" && URL_ENV_NAMES.includes(path[1]!)) {
+    // 各代名字都认，同一张表里新旧都写了就以新名为准（跟 MCP 服务自己读的顺序一致）。
+    const rank = URL_ENV_NAMES.indexOf(path[1]!);
+    const seen = urlRank.get(server.spec);
+    if (seen === undefined || rank <= seen) {
+      server.spec.naviUrl = tomlString(value);
+      urlRank.set(server.spec, rank);
+    }
   }
   return true;
 }
@@ -511,7 +520,7 @@ export function tomlStringValues(value: string): string[] | null {
  *
  * 判据必须走**结构扫描**而不是全文正则(本轮审查 R7):上一版 `/^[ \t]*disabled_mcp_servers…/m`
  * 对整份 TOML 逐行匹配,于是
- *  · 另一个 MCP 的三引号多行字符串里恰好有这么一行 ⇒ 被当成根级事实,一条启用着的 ash
+ *  · 另一个 MCP 的三引号多行字符串里恰好有这么一行 ⇒ 被当成根级事实,一条启用着的 navi
  *    被判成「已关闭」,预检当场硬拒;
  *  · 真的写成多行数组 ⇒ 反过来漏读。
  * 两头都错,而这个文件里本来就有一个认得多行字符串、认得表作用域的扫描器。
@@ -527,26 +536,6 @@ export function tomlRootStringArray(text: string, key: string): string[] | null 
     if (root && stmt.path.length === 1 && stmt.path[0] === key) return tomlStringArray(stmt.value);
   }
   return null;
-}
-
-/**
- * 执行器往哪个名字里注入 `-c mcp_servers.<名>.env_vars=…`（回合身份靠它进 MCP 子进程）。
- *
- * 只认扫描器**正面认出来**的登记 —— 往一个没声明的名字里塞 `-c`，codex 整份配置都起不来
- * （实测 codex-cli 0.153：`invalid transport in mcp_servers.harness`）。带引号的表头、内联表
- * 都接受不带引号的 `-c` 覆盖（同版本实测）。两个兼容名都在时取开着的那个，都开着取规范名。
- *
- * **切不开就什么都不注，但「哪里有疑问」不算切不开**（第 5 轮 F2 + 第 2 轮 F1）：只有
- * `unreadable`（连语句都切不开，认出来的可能是字符串里的示例）才取消注入；`doubt` 不行 ——
- * 它连「别的命名空间里恰好有个字段叫 mcp_servers」都算进去，而那种配置真 codex 读得好好的、
- * 也接受这条 `-c` 覆盖（第 2 轮 F1 真机取证：上一版在那里返回 null，Windows 上派审当场被
- * 拒、mac 上审查跑完交不了卷）。两档的区别见 `CodexTomlScan.unreadable`。
- */
-export function codexInjectionTarget(text: string): string | null {
-  const { servers, unreadable } = scanCodexToml(text);
-  if (unreadable) return null;
-  const names = WANTED.filter((n) => servers.has(n));
-  return names.find((n) => servers.get(n)!.enabled) ?? names[0] ?? null;
 }
 
 export type TomlPairSpan = { table: string[]; path: string[]; first: number; last: number; value: string };

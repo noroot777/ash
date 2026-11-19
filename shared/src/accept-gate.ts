@@ -2,7 +2,7 @@
 //
 // 由来(用户 2026-10-23):跑全量回归这类重活,约定写的是「代码进 main 之前至少跑一次」。
 // 可有审查者在场时,**没人知道哪一轮是最后一轮** —— agent 只能每轮收尾都跑一遍,用 N 次
-// 12 分钟去对冲一个只发生一次的事件。而「进 main」这条边界在 ash 里恰好有一个确定的时刻:
+// 12 分钟去对冲一个只发生一次的事件。而「进 main」这条边界在 navi 里恰好有一个确定的时刻:
 // 用户点验收。把命令钉在那一刻,语义更准,一次也不浪费。
 //
 // 判据只有一条:**rc=0 才合并**。非 0 不合并、不清理、目标分支一个字节不动,日志回流给
@@ -80,13 +80,16 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   launcher_failed: "门禁启动器出了错，分不清停在哪一段",
   timeout: "超时",
   spawn_failed: "命令起不来",
-  server_restarted: "ash 重启,这次没跑完",
+  server_restarted: "Navi 重启,这次没跑完",
   canceled: "你取消了这一次",
   source_changed: "测试修改了被测源码，不能用结果为原版本放行",
   process_unconfirmed: "尚未取得整次运行退出的证据",
   ownership_waived: "已确认风险并强制释放，未取得整次退出证据",
   entry_missing: "入口不在被测的树里，没有起跑",
 };
+
+/** 改名 Navi 之前落盘的门禁摘要里写的旧标签：认老记录用，不再生成。 */
+export const ACCEPT_GATE_FAILURE_LEGACY_LABELS: readonly string[] = ["ash 重启,这次没跑完"];
 
 /**
  * 把存下来的 failure 归一到**当前**的联合里。认不出的(撤掉的 `command_missing`、将来再撤的
@@ -259,10 +262,35 @@ export type AcceptGateState = {
    * (老数据如实显示「没留下凭据」,不拿 latest 冒充)。
    */
   basis: AcceptGateBasis | null;
+  /**
+   * 问的这个人在这个项目里上一次确认验收时取消了「运行」(server accept-memory.ts)。只有验收台的
+   * 确认层拿它当「运行」那一勾的默认、前提列那一行跟着它说「验收时跳过」;验收接口本身不读它。
+   */
+  skipRemembered?: boolean;
   /** 项目当前的门禁基准(项目级设置)。 */
   baseline?: AcceptGateBaseline;
   /** 这一档此刻要对照的目标分支;null = 这个任务没有合并目标,三档都按分支快照跑。 */
   baselineTarget?: { branch: string; commit: string } | null;
   /** 按当前这一档,这一按会在门禁之前被拒的理由(没含目标分支 / 预演冲突);null = 不拦。 */
   baselineBlock?: string | null;
+  /**
+   * 同一件事的结构化那一份,验收台据它摆那一行和它的出路。`handoff` = 这一份预演冲突交给任务
+   * 之后的实际结局(任务分支头与目标分支头都没动才认;null = 还没交):queued 排着还没送进去、
+   * working 送到了且那一轮在跑、ended 那一轮跑完冲突还在、failed 没送到(note 是原因)。
+   * 登记意图不算送到 —— 推进只认交接层的投递结局(server accept-gate-conflict-registry.ts)。
+   */
+  baselineIssue?: {
+    reason: "accept_gate_target_behind" | "merge_conflict" | "accept_gate_preview_unavailable";
+    targetBranch: string;
+    conflictFiles: string[];
+    handoff: { at: string; state: "queued" | "working" | "ended" | "failed"; note: string | null } | null;
+  } | null;
 };
+
+/**
+ * 验收确认层点确认时送去记住的那两勾(server accept-memory.ts)。只送这一按真做了选择的那几项:
+ * 有一次还作数的通过时「运行」默认是沿用、勾上是一次性重跑,都不送 skipGate。
+ */
+export type AcceptMemoryWrite = { skipGate?: boolean; commit?: boolean };
+/** 写完之后的样子;commitSaved=false = 没有项目管理权限,「提交」只管了这一次。 */
+export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; commitSaved: boolean };

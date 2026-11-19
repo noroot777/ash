@@ -5,10 +5,10 @@ import type {
   HandoffExportResult,
   HandoffTarget,
   Task, TaskListItem,
-} from "@ash/shared";
-import { needsPeerKey } from "@ash/shared/handoff";
-import { isAcceptedStage } from "@ash/shared";
-import { Fingerprint, SpinnerGap, Warning } from "@phosphor-icons/react";
+} from "@navi/shared";
+import { needsPeerKey } from "@navi/shared/handoff";
+import { isAcceptedStage } from "@navi/shared";
+import { Fingerprint, Warning } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -16,6 +16,7 @@ import { HandoffPeerKeyField } from "../settings/HandoffPeerKeyField.tsx";
 import { handoffTargetsForTask, nextUntriedHandoffTarget } from "./handoffTargetPolicy.ts";
 import { HandoffReturnView, type HandoffReturnPhase } from "./HandoffReturnView.tsx";
 import { HandoffCapabilityNotice } from "./HandoffCapabilityNotice.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import {
   HandoffDialogHeader,
   HandoffProgress,
@@ -417,7 +418,7 @@ export function HandoffDialog({
               placeholder="如 家里的台式机"
               onChange={(event) => setDraftTargetName(event.target.value)}
             />
-            <label htmlFor="handoff-new-target-url">ash 地址</label>
+            <label htmlFor="handoff-new-target-url">Navi 地址</label>
             <input
               id="handoff-new-target-url"
               value={draftTargetUrl}
@@ -438,7 +439,7 @@ export function HandoffDialog({
             <p>
               {returningHandoff
                 ? "把这个任务连同 git 分支、CLI 会话历史移回最初交出它的机器。目标已按来源机指纹锁定，不能转送到第三台机器。"
-                : "把这个任务连同 git 分支、CLI 会话历史整体迁到另一台 ash 上继续跑。"}
+                : "把这个任务连同 git 分支、CLI 会话历史整体迁到另一台 Navi 上继续跑。"}
               {preflight?.local.running ? "任务正在运行,接力会先把它停下来。" : ""}
             </p>
             {pendingHandoff && (
@@ -452,7 +453,7 @@ export function HandoffDialog({
             {/* 移回时服务端可能要按指纹探几个候选地址才知道来源机在哪，别让下拉空着干等。 */}
             {targets === null && (
               <p className="handoff-probing">
-                <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+                <NaviLoader size={14} />
                 {returningHandoff ? "正在定位来源机器…" : "正在读取远程主机…"}
               </p>
             )}
@@ -505,7 +506,7 @@ export function HandoffDialog({
               <p className="handoff-peer-line is-warn"><Warning size={13} aria-hidden="true" /><span>{fallbackNotice}</span></p>
             )}
             {applying && targetUrl && (
-              <p className="handoff-probing"><SpinnerGap size={13} className="is-spinning" aria-hidden="true" />正在探测对端…</p>
+              <p className="handoff-probing"><NaviLoader size={14} />正在探测对端…</p>
             )}
             {preflight && (
               <>

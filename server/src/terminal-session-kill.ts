@@ -44,6 +44,18 @@ export type KillTarget = {
 export type KillResult = { ok: true; complete: boolean } | { ok: false; reason: string };
 
 /**
+ * 这条会话**此刻**还占着的 pty 设备路径;leader 退了就是 null。
+ *
+ * 设备号(/dev/ttysNNN、/dev/pts/N)只在 leader 活着时指着这条会话:leader 一退内核就收回那个号,
+ * 下一个开 pty 的 —— 另一条会话、另一份 navi、用户自己的终端 app —— 马上领到同一个号。退了以后还按
+ * 记下的那个号去枚举「会话成员」,点到的是别人,连同它整个进程组一起吃 TERM+KILL(关服清场对**每条**
+ * 还留在表里的已退会话都这么干过)。退了的会话本来也枚举不出自己人(ctty 已 revoke,见
+ * terminal-process-tree.ts 顶部),所以这里不丢任何线索:它名下还活着的只能靠 ppid 树和存续期累积的
+ * pgid 去找。下面每个入口都只经这里取设备路径,不直接读 `target.ttyPath`。
+ */
+const liveTty = (target: KillTarget): string | null => (target.exitCode === null ? target.ttyPath : null);
+
+/**
  * 关掉 tab 那一下的杀法:只发一轮 SIGKILL,清单按「实时 ppid 树 ∪ 会话成员 ∪ 存续期
  * 累积」拼齐。调用方负责把会话从表里摘掉 —— 本函数只管进程。
  *
@@ -55,7 +67,8 @@ export function killSessionTree(target: KillTarget): void {
   if (handedOver(target)) return;
   const table = readProcessTableSync();
   const live = table ? descendantsFromTable(table, target.process.pid) : { pids: [], pgids: [] };
-  const members = sessionMemberPidsSync([target.process.pid], target.ttyPath ? [target.ttyPath] : []) ?? [];
+  const tty = liveTty(target);
+  const members = sessionMemberPidsSync([target.process.pid], tty ? [tty] : []) ?? [];
   const pids = new Set(live.pids);
   const pgids = new Set([...target.descendantPgids, ...live.pgids]);
   for (const member of members) {
@@ -106,7 +119,7 @@ export async function terminateSession(
     && snapshot.pgids.every((pgid) => !groupAlive(pgid))
     && snapshot.pids.every((pid) => !processAlive(pid));
 
-  const term = await freezeAndEnumerate(groupId, target.ttyPath, target.descendantPgids, memberPids);
+  const term = await freezeAndEnumerate(groupId, liveTty(target), target.descendantPgids, memberPids);
   if (clearedBy(term.snapshot)) { term.thaw(); return { ok: true, complete: term.complete }; }
   // 这一行记的是**「用户要求停止」**,不是「已经停净」—— 两件事必须分开:它在 TERM/KILL
   // 之前就落下,后面每一轮都可能失败。「停净了吗」是账上另一档(StopFact 的 verified /
@@ -134,7 +147,7 @@ export async function terminateSession(
   if (await waitForGroupExit(target, timeouts?.termMs ?? 3000, term.snapshot)) return { ok: true, complete: term.complete };
 
   // KILL 轮:重新冻结 + 枚举到不动点,纳管 TERM handler 解冻期新建的独立 PGID。
-  const kill = await freezeAndEnumerate(groupId, target.ttyPath, target.descendantPgids, memberPids);
+  const kill = await freezeAndEnumerate(groupId, liveTty(target), target.descendantPgids, memberPids);
   signalSessionTree(target, "SIGKILL", kill.snapshot);
   kill.thaw(); // KILL 已致命,CONT 只为不把万一没死透的留在 stopped(D 状态那种)
   // 两轮取与:TERM 那一轮缺了一条线索,KILL 这一轮答全了也补不回「解冻期里逃掉的那些」。
@@ -206,7 +219,7 @@ function waitForGroupExit(target: KillTarget, timeoutMs: number, descendants?: D
  *
  * 无条件连发,不按 exitCode 筛:组长退了组不一定空(daemonize 形状),而对已空的组发信号
  * 只是 ESRCH —— 少一个条件就少一类漏杀。命令会话跑的是 dev server/watch 这类可随时重启的
- * 进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,ash 重启后会话表(内存态)清零、
+ * 进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,navi 重启后会话表(内存态)清零、
  * UI 显示「未启动」,旧进程却继续占着端口。
  */
 export function killAllSessionTrees(all: KillTarget[]): void {
@@ -214,7 +227,7 @@ export function killAllSessionTrees(all: KillTarget[]): void {
   const table = readProcessTableSync();
   const members = sessionMemberPidsSync(
     targets.map((target) => target.process.pid),
-    targets.map((target) => target.ttyPath).filter((path): path is string => path !== null),
+    targets.map(liveTty).filter((path): path is string => path !== null),
   ) ?? [];
   for (const target of targets) {
     const live = table ? descendantsFromTable(table, target.process.pid) : { pids: [], pgids: [] };

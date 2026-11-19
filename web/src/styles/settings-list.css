@@ -1,4 +1,4 @@
-/* 设置页里「一份清单 + 就地编辑」那几节（供应商、执行模式、审查者）共用的骨架，跟飞书那一页
+/* 设置页里「一份清单 + 就地编辑」那几节（供应商、审查者）共用的骨架，跟飞书那一页
    是同一副：灰色小节名 → 白卡 → 一行一项（左边名字 + 一行说明，右边状态和动作），细线分隔；
    编辑就在那一行下面展开成「字段名 + 控件」的表单行，最后一条灰底卡脚放取消 / 保存。
    颜色只留给状态（StatusChip 的那颗点），不给行首记号、不给胶囊铺底色。 */
@@ -59,6 +59,12 @@
 .settings-icon-action:hover,
 .settings-icon-action[aria-pressed="true"] {
   background: var(--hover-bg);
+  color: var(--ink);
+}
+
+/* 默认审查者那颗星：设上了就是实心、正文色，不铺「按下」的底色（它是状态，不是正在展开的东西）。 */
+.settings-default-toggle[aria-pressed="true"] {
+  background: transparent;
   color: var(--ink);
 }
 

@@ -5,7 +5,7 @@
 //
 // 认得出来的边界：叶子的进程组、还连在进程树上的后代、继承了归属记号的进程。认不出来的：
 // 清空环境、又脱离进程组、父进程还先退了的后代 —— macOS 没有 cgroup/Job 这类把整次运行圈住
-// 的内核边界，ash 的验收门禁在 macOS 上是同一个限制（server/src/accept-gate-confinement-macos.ts）。
+// 的内核边界，navi 的验收门禁在 macOS 上是同一个限制（server/src/accept-gate-confinement-macos.ts）。
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 

@@ -1,10 +1,10 @@
-// 「CLI 额度」的二选一(docs/multi-user-plan.md §八之二)。
+// 「CLI 额度」的二选一。
 //
 // 三个地方要它,所以只能有一份:首启向导的多人表单、设置页危险区的同一张表单、
 // 以及多人模式定下来之后的「实例模式」卡片(那里是改档入口)。文案本体在
-// `@ash/shared/multiuser`,两端共用 —— 前端另抄一份的话,服务端拒绝理由里说的
+// `@navi/shared/multiuser`,两端共用 —— 前端另抄一份的话,服务端拒绝理由里说的
 // 「让管理员去改成共用」和这里的选项名迟早对不上。
-import { HOST_CLI_ISOLATED_DESC, HOST_CLI_ISOLATED_TITLE, HOST_CLI_SHARED_DESC, HOST_CLI_SHARED_TITLE } from "@ash/shared/multiuser";
+import { HOST_CLI_ISOLATED_DESC, HOST_CLI_ISOLATED_TITLE, HOST_CLI_SHARED_DESC, HOST_CLI_SHARED_TITLE } from "@navi/shared/multiuser";
 
 export function HostCliChoice({
   value,

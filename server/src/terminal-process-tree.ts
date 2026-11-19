@@ -173,7 +173,7 @@ export function descendantsFromTable(table: ProcessTable, rootPid: number): Desc
 /**
  * 关键外部命令的**绝对路径**解析:PATH 逐目录找,找不到再试知名安装位 —— `/usr/sbin`
  * 常常不在非交互 shell 的 PATH 里(scripts/platform.mjs 有同款教训)。解析结果经 env
- * (ASH_PS / ASH_LSOF)传给 wrapper、manager 侧枚举也用它,两边都不再依赖运行时 PATH
+ * (NAVI_PS / NAVI_LSOF)传给 wrapper、manager 侧枚举也用它,两边都不再依赖运行时 PATH
  * (第 5 轮审查:PATH 去掉 /usr/sbin 就静默失去清场能力)。
  */
 function resolveBinPath(name: string, pathEnv: string | undefined, fallbacks: string[]): string | null {
@@ -218,9 +218,9 @@ export function containmentAvailable(): boolean {
 }
 
 // ── wrapper 脚本 ────────────────────────────────────────────────────────────────
-// 共享 prelude。ash_members 产出 " pid:pgid" 清单,成员判定 = 会话成员 ∪ pty fd 持有者
+// 共享 prelude。navi_members 产出 " pid:pgid" 清单,成员判定 = 会话成员 ∪ pty fd 持有者
 // (为什么是这两条、为什么必须在 leader 存活期间枚举,见文件头)。两个硬性排除,少一个
-// 都出事故:`$$`(wrapper 自己,不排除就自杀)与 `$ASH_PTY_PARENT`(ash server:macOS
+// 都出事故:`$$`(wrapper 自己,不排除就自杀)与 `$NAVI_PTY_PARENT`(navi server:macOS
 // 的 lsof 把 pty **master** 端也解析成同一个 /dev/ttysN,不排除会把 server TERM 掉,
 // probe4 实测 exit 143)。
 // 枚举工具自身的防呆(各卡死过一次 KEEPER 等待循环):
@@ -230,23 +230,23 @@ export function containmentAvailable(): boolean {
 //     重定向自身;pgid 查不到(ps 输出为空 = 已死的瞬时进程)的命中一律跳过。
 //   - Linux 分支用 read 内建读 stat,零 fork;fd 反查的 ls/grep 是瞬时子进程,不在循环
 //     开头展开的 /proc 通配結果里,不会自计。
-const WRAPPER_PRELUDE = `ash_bins() {
-  PSB="$ASH_PS"
+const WRAPPER_PRELUDE = `navi_bins() {
+  PSB="$NAVI_PS"
   [ -x "$PSB" ] || PSB="$(command -v ps 2>/dev/null)"
   [ -x "$PSB" ] || PSB=/bin/ps
   [ -x "$PSB" ] || PSB=""
-  L="$ASH_LSOF"
+  L="$NAVI_LSOF"
   [ -x "$L" ] || L="$(command -v lsof 2>/dev/null)"
   [ -x "$L" ] || L=/usr/sbin/lsof
   [ -x "$L" ] || L=""
 }
-ash_members() {
+navi_members() {
   MEMBERS=""
   if [ -d /proc/self/fd ]; then
     for d in /proc/[0-9]*; do
       p="\${d#/proc/}"
       [ "$p" = "$$" ] && continue
-      [ -n "$ASH_PTY_PARENT" ] && [ "$p" = "$ASH_PTY_PARENT" ] && continue
+      [ -n "$NAVI_PTY_PARENT" ] && [ "$p" = "$NAVI_PTY_PARENT" ] && continue
       { read -r s < "$d/stat"; } 2>/dev/null || continue
       r="\${s##*) }"
       set -- $r
@@ -260,7 +260,7 @@ ash_members() {
   fi
   TN="\${T#/dev/}"
   if [ -n "$TN" ] && [ -n "$PSB" ]; then
-    TF="\${TMPDIR:-/tmp}/.ash_members.$$"
+    TF="\${TMPDIR:-/tmp}/.navi_members.$$"
     "$PSB" -axo pid=,pgid=,tty= </dev/null > "$TF" 2>/dev/null &
     PSPID=$!
     wait "$PSPID"
@@ -268,7 +268,7 @@ ash_members() {
       [ "$t" = "$TN" ] || continue
       [ "$p" = "$$" ] && continue
       [ "$p" = "$PSPID" ] && continue
-      [ -n "$ASH_PTY_PARENT" ] && [ "$p" = "$ASH_PTY_PARENT" ] && continue
+      [ -n "$NAVI_PTY_PARENT" ] && [ "$p" = "$NAVI_PTY_PARENT" ] && continue
       MEMBERS="$MEMBERS $p:$g"
     done < "$TF"
     rm -f "$TF"
@@ -276,7 +276,7 @@ ash_members() {
   if [ -n "$T" ] && [ -n "$L" ]; then
     for p in $(exec </dev/null 2>/dev/null; "$L" -t "$T"); do
       [ "$p" = "$$" ] && continue
-      [ -n "$ASH_PTY_PARENT" ] && [ "$p" = "$ASH_PTY_PARENT" ] && continue
+      [ -n "$NAVI_PTY_PARENT" ] && [ "$p" = "$NAVI_PTY_PARENT" ] && continue
       case "$MEMBERS" in *" $p:"*) continue ;; esac
       g="$("\${PSB:-ps}" -o pgid= -p "$p" 2>/dev/null | tr -d ' ')"
       [ -n "$g" ] || continue
@@ -304,8 +304,8 @@ trap ':' TERM HUP
 export const TTY_REAPER_WRAPPER = `${WRAPPER_PRELUDE}"$@"
 code=$?
 T="$(tty 2>/dev/null)"
-ash_bins
-ash_members
+navi_bins
+navi_members
 if [ -n "$MEMBERS" ]; then
   for e in $MEMBERS; do
     p="\${e%%:*}"; g="\${e##*:}"
@@ -313,7 +313,7 @@ if [ -n "$MEMBERS" ]; then
     [ "$g" -gt 1 ] 2>/dev/null && kill -s TERM -- "-$g" 2>/dev/null
   done
   sleep 0.2
-  ash_members
+  navi_members
   for e in $MEMBERS; do
     p="\${e%%:*}"; g="\${e##*:}"
     kill -s KILL -- "$p" 2>/dev/null
@@ -333,9 +333,9 @@ exit $code`;
 export const TTY_COMMAND_WRAPPER = `${WRAPPER_PRELUDE}"$@"
 code=$?
 T="$(tty 2>/dev/null)"
-ash_bins
+navi_bins
 while :; do
-  ash_members
+  navi_members
   [ -z "$MEMBERS" ] && break
   sleep 2
 done

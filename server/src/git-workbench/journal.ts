@@ -1,13 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, open } from "node:fs/promises";
+import { appendFile, mkdir, open, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { GitJournalEntry } from "@ash/shared/git-workbench";
+import type { GitJournalEntry } from "@navi/shared/git-workbench";
+import { FROZEN_GIT_BACKUP_REF_NAMESPACE, LEGACY_GIT_WORKBENCH_DIR } from "@navi/shared/legacy-names";
 import { git } from "./core.js";
 
 const active = new Set<string>();
 export async function journalDirectory(repo: string): Promise<string> {
   const common = (await git(repo, ["rev-parse", "--git-common-dir"])).trim();
-  return join(resolve(repo, common), "ash-workbench");
+  const root = resolve(repo, common);
+  // 改名之前的操作日志在 `ash-workbench` 里：那个目录在就接着用它，日志不断档。
+  const legacy = join(root, LEGACY_GIT_WORKBENCH_DIR);
+  if (await stat(legacy).then((info) => info.isDirectory(), () => false)) return legacy;
+  return join(root, "navi-workbench");
 }
 export async function appendEntry(
   repo: string,
@@ -89,7 +94,7 @@ export async function backupHead(
   entry: GitJournalEntry,
 ): Promise<void> {
   if (!entry.before) return;
-  entry.backup = `refs/ash-backup/${entry.id}`;
+  entry.backup = `${FROZEN_GIT_BACKUP_REF_NAMESPACE}${entry.id}`;
   entry.recovery = "head";
   await git(repo, ["update-ref", entry.backup, entry.before, ""]);
 }

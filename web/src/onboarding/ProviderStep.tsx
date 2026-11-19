@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { LlmProvider } from "@ash/shared";
+import type { LlmProvider } from "@navi/shared";
 import { Plus } from "@phosphor-icons/react";
 import { Button, StatusChip } from "../components/ui.tsx";
 import { protocolLabel } from "../settings/agentProviderRules.ts";

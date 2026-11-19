@@ -13,7 +13,7 @@
 // 文档」这一步也省掉,理由见那个文件)。所以这个插件每要交出一份 HTML,就去后端取一份**页面
 // 文档**、把上面的 meta 抬过来:dev/preview 页手里那一份与后端自己交付的页面完全同源 ——
 // 同样一次性、同样带着它那次启动的前缀、同样随重启整批作废。取的必须是**同一个实例**,
-// 所以后端地址与 `/api` 代理共用一份解析(`ashBackendUrl`)。
+// 所以后端地址与 `/api` 代理共用一份解析(`naviBackendUrl`)。
 //
 // 取不到就**什么都不盖**,并在终端里说清是哪一步没成(后端没起 / 后端没有 web/dist)。
 // 编一份假的只会把一句准确的 403 换成一句看不懂的,而前端那边拿不出凭据时压根不编
@@ -43,15 +43,17 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { Plugin, ResolvedConfig } from "vite";
-import { HUMAN_ACTION_TOKEN_META } from "@ash/shared/human-action";
+import { HUMAN_ACTION_TOKEN_META } from "@navi/shared/human-action";
+import { readEnv } from "@navi/shared/env-names";
 
 /**
  * dev / preview 把 `/api` 代理到哪个后端。凭据要从**同一个实例**取,所以这一份解析由
- * 代理配置和本插件共用 —— 两边各写一份的话,`ASH_PROXY` 指到别的实例上时,页面拿着 A 的
+ * 代理配置和本插件共用 —— 两边各写一份的话,`NAVI_PROXY` 指到别的实例上时,页面拿着 A 的
  * 凭据去按 B 的开关,403 的原因还查不出来。
  */
-export function ashBackendUrl(): string {
-  return process.env.ASH_PROXY ?? process.env.HARNESS_PROXY ?? "http://localhost:4317";
+export function naviBackendUrl(): string {
+  // 改名之前的写法（`ASH_PROXY=… npm run dev`、更早的 `HARNESS_PROXY`）照样认，见 env-names.ts。
+  return readEnv(process.env, "NAVI_PROXY") ?? "http://localhost:4317";
 }
 
 /** 取凭据的超时。页面文档等不起 —— 后端卡住时宁可不盖(开关会如实 403),不要让整个页面打不开。 */
@@ -69,12 +71,12 @@ let lastComplaint: string | null = null;
 function complain(reason: string): void {
   if (lastComplaint === reason) return; // 每次页面加载都抱怨一遍就没人看了;原因变了再说
   lastComplaint = reason;
-  console.warn(`[ash] 这个页面拿不到真人动作凭据(${reason})——「放开回合占位」这类开关会 403。`);
+  console.warn(`[navi] 这个页面拿不到真人动作凭据(${reason})——「放开回合占位」这类开关会 403。`);
 }
 
 /** 去后端取一份页面文档,把上面的凭据抬下来。 */
 async function borrowToken(): Promise<string | null> {
-  const base = ashBackendUrl();
+  const base = naviBackendUrl();
   let response: Response;
   try {
     response = await fetch(new URL("/", base), {
@@ -164,7 +166,7 @@ async function documentFor(
 export function pageTokenPlugin(): Plugin {
   let config: ResolvedConfig;
   return {
-    name: "ash-page-token",
+    name: "navi-page-token",
     apply: "serve",
     configResolved(resolved) { config = resolved; },
     transformIndexHtml: {

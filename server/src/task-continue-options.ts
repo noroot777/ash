@@ -1,15 +1,16 @@
 import type { InputAcceptance } from "./executors/types.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
-import type { AgentType } from "@ash/shared";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { AgentType } from "@navi/shared";
+import type { MonitorWakeData } from "@navi/shared/monitor-wake";
 import type { TurnIdentity, TurnSource } from "./runs.js";
 
 // Why a task is being (re)started — labels the resume (it rides on the 〔系统〕 record,
-// see @ash/shared/system-resume); all reasons behave the same (resume if there's a
+// see @navi/shared/system-resume); all reasons behave the same (resume if there's a
 // resumable session, else fresh). Note: a scheduled cron fire is NOT here — it always
 // starts a fresh run via runTask (schedules.ts), so it never resumes.
-export type { ResumeReason } from "@ash/shared/system-resume";
-import type { ResumeReason } from "@ash/shared/system-resume";
+export type { ResumeReason } from "@navi/shared/system-resume";
+import type { ResumeReason } from "@navi/shared/system-resume";
+import type { FreezeGuard } from "./turn-freeze.js";
 
 /**
  * **这一轮没能起跑,是哪一种**(`continueTask` 返回 false 时必定带一个)。
@@ -65,6 +66,11 @@ export type ContinueTaskOptions = {
   executionTurn?: boolean;
   /** 旁路回合结束后恢复进入旁路前的任务状态。 */
   sideTurn?: boolean;
+  /**
+   * 这一回合不告诉它「本任务还有谁、实时对话记录在哪」（peer-context.ts）。给讨论第一轮用：那几份实时
+   * 记录里会有本场别人刚写的第一段，讨论之前的背景另有一份发起时截下的副本（discussion-background.ts）。
+   */
+  withholdPeerNotice?: boolean;
   /**
    * 这一回合的身份:**谁起的 + 为哪一次审查的哪一轮而起,一个对象**(见 runs.ts 的
    * `TurnSource`)。缺省 = `{ role: "single" }`。
@@ -145,7 +151,7 @@ export type ContinueTaskOptions = {
    * 还会把回合锁交接一次。普通续聊不开：在一个排队中/分组暂停的任务上发消息本来就允许，
    * 那不是被冻结的启动（说明见 turn-freeze.ts）。
    */
-  freezeGuard?: boolean;
+  freezeGuard?: FreezeGuard;
   /**
    * 「这一轮的输入**到底有没有进 agent 手里**」的回执回调 —— 在原话作为一个真人回合写进会话、
    * 并且问过协议层之后立刻调,不等这一轮跑完（`continueTask` 要等整轮结束才 resolve,那时早过了）。

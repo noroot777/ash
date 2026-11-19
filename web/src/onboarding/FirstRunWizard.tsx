@@ -1,7 +1,7 @@
 // 首启向导的后半段。前半段(自用 / 多人)在 `auth/SetupWizard.tsx`,这一段接着问三件
 // 装完就必须定下来的事:供应商 → 执行器 → 项目。
 //
-// 为什么不是「让用户自己去设置页逛一圈」:装完打开 ash,屏幕上只有一句「还没有可用
+// 为什么不是「让用户自己去设置页逛一圈」:装完打开 navi,屏幕上只有一句「还没有可用
 // 项目」。照它建完项目,下一步是新建任务 —— 而真正拦着他的是「一个执行器都没注册」,
 // 那句话在另一个页面里。这三件事有固定的依赖顺序(供应商挂到执行器上,执行器在项目
 // 目录里跑),按顺序问一遍比留三处空状态各喊一句都准。
@@ -16,7 +16,7 @@
 //
 // 走完(或跳过)之后落 `onboardedAt`,判据与放行见 `server/src/onboarding.ts`。
 import { useCallback, useEffect, useState } from "react";
-import type { AgentExecutorProfile, LlmProvider, ProjectView } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider, ProjectView } from "@navi/shared";
 import { Check } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
@@ -27,7 +27,7 @@ import { FIRST_RUN_STEPS, STEP_LABEL, stepGap, stepSettled, type FirstRunStep } 
 import { ExecutorStep } from "./ExecutorStep.tsx";
 import { ProjectStep } from "./ProjectStep.tsx";
 import { ProviderStep } from "./ProviderStep.tsx";
-import { AshMark } from "../brand/AshMark.tsx";
+import { NaviMark } from "../brand/NaviMark.tsx";
 
 /**
  * 每一站的抬头。供应商那句分两种说法 —— **隔离档下第一句是假话**:多人模式关掉
@@ -40,12 +40,12 @@ function headlineOf(step: FirstRunStep, isolated: boolean): { title: string; hin
     return {
       title: "模型从哪儿来",
       hint: isolated
-        ? "这台 ash 隔离了宿主机的 CLI 订阅：任务要跑起来，执行器必须挂一家自带 Key 的供应商。"
+        ? "这台 Navi 隔离了宿主机的 CLI 订阅：任务要跑起来，执行器必须挂一家自带 Key 的供应商。"
         : "执行器默认用 CLI 自己的订阅账号；要走中转站或第三方 API，在这里登记一次。",
     };
   }
   if (step === "executor") {
-    return { title: "谁来干活", hint: "ash 自己不调模型，任务全交给这些本地 CLI 执行。" };
+    return { title: "谁来干活", hint: "Navi 自己不调模型，任务全交给这些本地 CLI 执行。" };
   }
   return {
     title: "在哪儿干活",
@@ -53,8 +53,8 @@ function headlineOf(step: FirstRunStep, isolated: boolean): { title: string; hin
   };
 }
 
-/** 在 mac app 里(壳在 UA 里留了 `AshMac/`):数据那一站已经在原生那一屏走过了,导轨上补一格打勾的。 */
-const IN_MAC_APP = typeof navigator !== "undefined" && navigator.userAgent.includes("AshMac/");
+/** 在 mac app 里(壳在 UA 里留了 `NaviMac/`,改名前的壳留的是 `AshMac/`):数据那一站已经在原生那一屏走过了,导轨上补一格打勾的。 */
+const IN_MAC_APP = typeof navigator !== "undefined" && /\b(?:Navi|Ash)Mac\//.test(navigator.userAgent);
 
 export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
   const { toasts, notify, dismiss } = useToast();
@@ -89,7 +89,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
         if (project.status === "fulfilled") {
           setProjects(project.value);
           // 已经有项目(多人模式下被加进了别人的项目)时先选上第一个,这样最后那颗按钮
-          // 永远有个落点 —— 否则「进入 ash」会把人丢进一个没选中项目的工作台。
+          // 永远有个落点 —— 否则「进入 navi」会把人丢进一个没选中项目的工作台。
           setProjectId((current) => current ?? project.value[0]?.id ?? null);
         }
         const failed = [
@@ -125,7 +125,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
     // 表态已经存下了,这一下只差「重新确认身份」。它失败就把按钮还给用户再按一次 ——
     // 把回执丢掉的那一版会永久停在「正在进入…」上,服务恢复了也动不了(见 authContext)。
     if (!(await onDone())) {
-      notify("配置已保存，但没能重新确认身份；服务恢复后再按一次「进入 ash」。");
+      notify("配置已保存，但没能重新确认身份；服务恢复后再按一次「进入 Navi」。");
       setFinishing(false);
     }
   };
@@ -149,8 +149,8 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
       <div className="onboarding-card">
         <aside className="onboarding-aside">
           <div className="onboarding-brand">
-            <span className="onboarding-mark"><AshMark size={24} /></span>
-            <b>ash</b>
+            <span className="onboarding-mark navi-tile"><NaviMark size={26} /></span>
+            <b>Navi</b>
             <p>把活派给本机的 claude、codex，<br />进度、审查、验收都在这一处。</p>
           </div>
           {/* 导轨同时是「回上一步」的入口,所以每一格都是按钮;app 里多出来的「数据」那格已经走完、回不去。 */}
@@ -223,7 +223,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
                 跳过
               </Button>
               <Button variant="primary" disabled={loading || finishing || !ready} onClick={() => advance(true)}>
-                {last ? (finishing ? "正在进入…" : "进入 ash") : "下一步"}
+                {last ? (finishing ? "正在进入…" : "进入 Navi") : "下一步"}
               </Button>
             </div>
           </footer>

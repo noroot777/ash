@@ -7,16 +7,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { hasCliGoalHold, readCliState } from "@ash/shared/cli-commands";
+import { hasCliGoalHold, readCliState } from "@navi/shared/cli-commands";
 import { launchChrome } from "./dom-stage.mjs";
 import { waitUntil } from "./wait-until.mjs";
 
-const root = await mkdtemp(join(tmpdir(), "ash-goal-lifecycle-ui-"));
+const root = await mkdtemp(join(tmpdir(), "navi-goal-lifecycle-ui-"));
 const workspace = join(root, "workspace");
-const screenshots = process.env.ASH_CLI_SCREENSHOTS || join(root, "screenshots");
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const screenshots = process.env.NAVI_CLI_SCREENSHOTS || join(root, "screenshots");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { db, dbClient, ensureSchema } = await import("../../server/dist/db/index.js");
 const { appSettings, projects, tasks, agents, groups, queueItems, sessions } = await import("../../server/dist/db/schema.js");
 const { saveCliState } = await import("../../server/dist/task-cli-state.js");
@@ -65,7 +65,7 @@ const boot = `
   const { CodexExecutor } = await import("./server/dist/executors/codex.js");
   const { ClaudeExecutor } = await import("./server/dist/executors/claude.js");
   function fixture(options) {
-    const taskId = options.env.ASH_TASK_ID;
+    const taskId = options.env.NAVI_TASK_ID;
     const isGoal = options.cliCommand?.name === "goal";
     appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId, cliCommand: options.cliCommand, goal: options.cliState?.goal }) + "\\n");
     const goal = options.cliState?.goal ? { ...options.cliState.goal, status: "active" } : null;
@@ -100,7 +100,7 @@ const boot = `
   await import("./server/dist/index.js");
 `;
 const backend = spawn(process.execPath, ["--input-type=module", "-e", boot], {
-  cwd: repo, env: { ...process.env, ASH_UPLOADS_DIR: join(root, "uploads"), ASH_PREVIEW: "1", ASH_SEED_FROM: "", PORT: String(port) },
+  cwd: repo, env: { ...process.env, NAVI_UPLOADS_DIR: join(root, "uploads"), NAVI_PREVIEW: "1", NAVI_SEED_FROM: "", PORT: String(port) },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
@@ -145,11 +145,14 @@ try {
     await page.getByRole("textbox", { name: "回复任务" }).fill(summon ? `${text} @${summon}` : `${text} `);
     if (summon) {
       await page.getByRole("option", { name: new RegExp(`@${summon}`) }).click();
+      // 叫上人之后不再接着弹选模型：点胶囊上被叫那个人的模型段来定执行器和模型（只作用于这一次）。
+      await page.getByRole("button", { name: /^模型：/ }).click();
       await page.getByRole("listbox", { name: "可选模型" }).getByRole("option").first().click();
+      if (await page.getByRole("button", { name: /^智能水平/, expanded: true }).count()) await page.keyboard.press("Escape");
     }
     const [response] = await Promise.all([
       page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/reply`) && value.request().method() === "POST"),
-      page.getByRole("button", { name: /^(发送回复|排队发送)$/ }).click(),
+      page.getByRole("button", { name: summon ? `问 ${summon}` : /^(发送回复|排队发送)$/ }).click(),
     ]);
     return response;
   };

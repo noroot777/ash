@@ -2,21 +2,21 @@
 // 导出/导入/HTTP 面三处共用;业务流程见 handoff.ts 顶部注释)。
 import { isAbsolute } from "node:path";
 import type { HandoffGateRun } from "./handoff-accept-gate.js";
-import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@ash/shared";
+import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@navi/shared";
 import type { HandoffWaitOrigins } from "./handoff-wait.js";
 import type { FreeReviewReservationSource } from "./db/schema-free-workflow.js";
 
 export class HandoffError extends Error {
   // 导入侧专用:true = 这次失败**不证明**本机没留下半截产物(补偿回滚自身失败)。
-  // HTTP 面据此决定应答上还带不带「可证明业务拒绝」的 ash 标记——不带,源机就会
+  // HTTP 面据此决定应答上还带不带「可证明业务拒绝」的 navi 标记——不带,源机就会
   // 按「送达未知」保留 pending,不敢在本机重新起跑。
   unsettled = false;
   // network=true:请求没送达或应答没读全 —— 对端**可能已经**处理成功,调用方不能
   // 当「确认失败」处理(exportHandoff 靠它决定保留 pending 标记还是回滚)。
-  // remoteStatus / remoteAsh 只由 fetchPeer 填：兼容逻辑据此区分「旧版没有这个路由」
+  // remoteStatus / remoteNavi 只由 fetchPeer 填：兼容逻辑据此区分「旧版没有这个路由」
   // 和「新版路由明确返回业务错误」，避免靠错误文案做宽泛匹配。
   remoteStatus: number | null = null;
-  remoteAsh = false;
+  remoteNavi = false;
   // 机器可读的原因码,随应答体的 `code` 字段发到前端(定义在 shared/src/handoff.ts)。
   // 前端据此把「缺对端账号 key」渲染成一个当场能填的输入框,而不是一句让人去别处找的话。
   // 出站链路上它还要**穿透一跳**:对端 401 的 code 由 fetchPeer 原样挂回来(见那里)。
@@ -224,7 +224,7 @@ export interface HandoffSessionRow {
 export interface HandoffManifest {
   version: 1;
   sourceHost: string;
-  // 源 ash 的监听端口。接收机只把它和真实 TCP 来源地址组合成回程候选地址；回程前仍会
+  // 源 navi 的监听端口。接收机只把它和真实 TCP 来源地址组合成回程候选地址；回程前仍会
   // 用任务里钉住的公钥指纹做双向核对，所以地址被改写也拿不到任务载荷。
   sourcePort?: number | null;
   // 源机身份指纹；manifest 整体有签名保护。老版本没有，导入照常接受但无法安全“移回”。
@@ -284,6 +284,11 @@ export interface HandoffManifest {
     questionOptions: string | null;
     questionItems: string | null;
     questionHistory?: string | null;
+    // 挂在回复框顶上、用户还没处理的建议任务，和智能体收回过的每一件（tasks 表同名两列的 JSON 原样）。
+    // 老版本导出的 manifest 没有这两个键：导入侧按「没带」处理，本机那两列不动——跟带了 null（持有机上
+    // 一件都没有）是两回事，落法见 handoff-suggestions.ts。
+    dispatchSuggestions?: string | null;
+    dispatchWithdrawals?: string | null;
     // 统一验收合并的落账三件套。老版本导出的 manifest 没有这三个字段,导入侧按缺失
     // 处理(置 null),所以新旧两端可以互相接力。
     // 不带 acceptedTailPending/acceptedTailDone:那两列是**尾段崩溃续跑**的进度位,
@@ -301,7 +306,6 @@ export interface HandoffManifest {
     // 身份配上对端的新验收，飞书那边认不出是新的一次。
     acceptanceId?: string | null;
     pinnedAt: number | null;
-    starredAt: number | null;
     createdAt: string;
     startedAt: string | null;
     endedAt: string | null;
@@ -354,6 +358,8 @@ export interface HandoffPingResponse {
   // 与 projects 同档,未获批准时故意不报:装了哪些 CLI 也是本机布局的一部分,而且
   // 那时接力本来就进行不下去,报了只是白白多讲一句自己的事。
   capabilities?: HandoffPeerCapabilities;
+  /** 任务分支的前缀（`navi/`）。改名之前的版本不报这一项，发起方据此知道它只认 `ash/`（见 handoff-wire.ts）。 */
+  taskBranchPrefix?: string;
   // 任务级免审批移回时，只返回该任务原项目的 refs，供持有机生成增量 bundle。
   returnRefs?: { name: string; commit: string }[];
 }

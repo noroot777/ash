@@ -15,6 +15,7 @@
 //   • 锁内复查（guard）拒绝时一步都不许做——排队等锁的几秒里 agent 可能刚被唤醒
 //   • 锁内那道是**原子占位**而不是「再查一次」：占住期间新回合必须抢不进来
 //   • 占位期间暂停分组不许在任务身上留下冻结标记——那会把下一次真启动莫名撤回
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -43,7 +44,7 @@ import {
   turnRole,
 } from "../src/runs.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-scm-test-"));
+const root = mkdtempSync(join(tmpdir(), "navi-scm-test-"));
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
@@ -51,8 +52,8 @@ function makeRepo(name: string): string {
   const repo = join(root, name);
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash SCM Test");
-  git(repo, "config", "user.email", "scm@ash.test");
+  git(repo, "config", "user.name", "Navi SCM Test");
+  git(repo, "config", "user.email", "scm@navi.test");
   return repo;
 }
 

@@ -17,7 +17,7 @@ import { disposeTestScopesSync, spawnTestFixture, terminateInstance } from "./te
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
-const TMP = mkdtempSync(join(tmpdir(), "ash-restart-test-"));
+const TMP = mkdtempSync(join(tmpdir(), "navi-restart-test-"));
 const FAKE_BIN = join(TMP, "bin");
 mkdirSync(FAKE_BIN);
 
@@ -150,13 +150,13 @@ const env = {
   HTTPS_PROXY: "http://127.0.0.1:1",
   ALL_PROXY: "socks5://127.0.0.1:1",
   PORT: String(PORT),
-  ASH_LOG: join(TMP, "ash.log"),
+  NAVI_LOG: join(TMP, "navi.log"),
   SERVER_ENTRY: fakeServer,
   START_TIMEOUT: "10",
   SKIP_MCP: "1",
-  // 单实例锁的路径跟着 DB 走。指到临时目录,免得脚本读到本机真 ash 的那把锁
+  // 单实例锁的路径跟着 DB 走。指到临时目录,免得脚本读到本机真 navi 的那把锁
   // (它另有 port 判据兜着,但测试没道理去碰用户正在跑的东西)。
-  ASH_DB: join(TMP, "ash.db"),
+  NAVI_DB: join(TMP, "ash.db"),
 };
 
 const run = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs"), "--skip-mcp"], {
@@ -239,14 +239,14 @@ await disposeFixture(stubbornProc, "赖着不走的假 server");
 await sleep(200);
 
 if (blockedOutput.includes("已就绪")) fail("旧进程还占着端口,却打印了「已就绪」", blockedOutput);
-if (!blockedOutput.includes("仍有一个 ash 在应答")) {
+if (!blockedOutput.includes("仍有一个 Navi 在应答")) {
   fail("失败信息没说清「旧的没下线」这个成因", blockedOutput);
 }
 }
 
 // ── 问不到「会打断谁」时必须 fail closed ──────────────────────────────────────
 // 多人模式下 `/api/restart-impact` 要宿主机凭证(单实例锁文件里那串 token)。读不到锁、
-// 或者跑脚本的不是启动 ash 的那个用户时,端点会 401 —— 而 `localJson` 把「连不上」和
+// 或者跑脚本的不是启动 navi 的那个用户时,端点会 401 —— 而 `localJson` 把「连不上」和
 // 「被拒」一律压成 null,脚本于是把「会被打断的任务数」算成 0,不加 FORCE 也照杀
 // (第 1 轮审查 P1:安全闸静默失效)。这里让假 server 对这条端点回 401,其余照常 200,
 // 脚本必须当场中止且**不许碰旧进程**。
@@ -321,7 +321,7 @@ await sleep(200);
 }
 
 // ── 判据「问不出来」时也必须 fail closed ──────────────────────────────────────
-// 上一条是**服务端明确拒答**(401);这一条是它**在端口上、却没按时答复** —— ash 正忙或者
+// 上一条是**服务端明确拒答**(401);这一条是它**在端口上、却没按时答复** —— navi 正忙或者
 // 卡住了。两者的 HTTP 读数都是「没拿到 JSON」,过去被压成同一个空对象,于是:
 //   ① 安全闸算出「0 个会被打断」,不加 FORCE 也照样下刀;
 //   ② Windows 那一刀拿不到 survives 名单,退回 `taskkill /T` 整树强杀,把本来能接管的

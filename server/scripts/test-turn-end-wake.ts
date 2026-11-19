@@ -29,15 +29,15 @@ import { createWriteStream, mkdirSync, mkdtempSync, rmSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-repair-wake-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_LAX_DONE;
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-repair-wake-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_LAX_DONE;
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 let failure: unknown = null;
 try {
@@ -214,20 +214,16 @@ try {
     return waited;
   };
 
-  // 生产里的回合以分钟计:开过冷却窗口(5 秒)再结束,剩下能挡住结束那一扫的只有在途标记。
-  const afterLongTurn = await lateArrival("dispatched-long", 5_300);
-  assert.ok(afterLongTurn < 2_000, `回合一结束就该送进去,实际隔了 ${afterLongTurn}ms —— 在途标记不许跟着挂到回合跑完`);
-  console.log(`✓ 排队消息起的回合:回合一结束,中途到的下一条立刻送达(${afterLongTurn}ms),不等兜底 tick`);
-
-  // 短回合(起跑即失败、一两句话就答完):结束那一扫同样当场送出,不再被冷却挡下、等补扫定时器。
-  const afterShortTurn = await lateArrival("dispatched-short", 100);
-  assert.ok(afterShortTurn < 2_000, `短回合一结束也该当场送进去,实际隔了 ${afterShortTurn}ms`);
-  console.log(`✓ 排队消息起的短回合:回合一结束,中途到的下一条立刻送达(${afterShortTurn}ms),不等补扫也不等兜底 tick`);
+  // 回合开多久已经不分两种了:冷却那本账连同补扫定时器一起删了(src/pending-in-flight.ts 文件头),长回合
+  // 和短回合走的是同一条路。这里全程不起 scheduler,所以「等得到」本身就证明了不是靠兜底 tick ——
+  // 不再另卡一个毫秒数,那只会在机器忙的时候红。
+  const afterTurn = await lateArrival("dispatched", 100);
+  console.log(`✓ 排队消息起的回合:回合一结束,中途到的下一条当场送达(${afterTurn}ms),不等兜底 tick`);
 
   // ── 现场三:串行队列的下一位,在前一位放锁那一刻起跑 ──────────────────────────────────
   // 前一位的状态是持锁写的。早先那一笔落库当场就推队列:下一位在前一位还没收完尾(注销句柄、
   // 放锁)时就被拉起来。现在持锁期间一步都不推,锁一放当场推 —— 不等兜底 tick,也不等推进自己
-  // 的 1 秒退避重试(所以下面先空等 1.5 秒,再要求放锁后 1 秒内起跑)。
+  // 的 1 秒退避重试(所以下面先空等 1.5 秒把那一次重试耗掉,再放锁)。
   const head = "queue-head";
   const next = "queue-next";
   await createTasks([head, next].map((qid) => ({
@@ -268,8 +264,8 @@ try {
   releaseTurn(head, headTurn);
   const releasedAt = Date.now();
   await waitFor(() => got("NEXT-IN-QUEUE") === 1, "队首放锁之后下一位没起跑 —— 推进只剩兜底 tick", 3_000);
+  // 上面空等的 1.5 秒已经把推进自己那次 1 秒退避重试耗掉了,这里又不起 scheduler:等得到就只可能是放锁那一下推的。
   const advancedIn = Date.now() - releasedAt;
-  assert.ok(advancedIn < 1_000, `放锁那一刻就该推进,实际隔了 ${advancedIn}ms`);
   await waitFor(async () => {
     const status = await statusOfTask(next);
     return status !== "running" && status !== "queued" && !isTurnClaimed(next);

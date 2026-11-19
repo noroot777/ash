@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { Group, TaskListItem } from "@ash/shared";
+import type { Group, TaskListItem } from "@navi/shared";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { InspNone } from "../inspector/parts.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";

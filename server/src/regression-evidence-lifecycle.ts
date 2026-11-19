@@ -3,9 +3,8 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, regressionEvidence, tasks } from "./db/schema.js";
 import { regressionEvidenceReference, regressionManifestPath } from "./regression-checks.js";
-import { REVIEWER_REGRESSION_CLAUSE, regressionManifestEntry } from "@ash/shared/free-workflow";
+import { REVIEWER_REGRESSION_CLAUSE, regressionManifestEntry } from "@navi/shared/free-workflow";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
-import { reviewRoundDir } from "./review-evidence.js";
 import { isTurnClaimed } from "./runs.js";
 import { reviewTargetIdentity } from "./review-ownership.js";
 
@@ -103,9 +102,3 @@ export async function presetConclusionRound(task: typeof tasks.$inferSelect, que
     directionVersion: review.activeDirectionVersion, directionEpoch: review.directionEpoch } : null;
 }
 
-export async function checkPresetRegressionConclusion(taskId: string, stage: string): Promise<CheckedConclusion> {
-  if (stage !== "verified" && stage !== "verify_failed") return;
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
-  const scope = task && await presetConclusionRound(task);
-  if (scope) return checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage);
-}

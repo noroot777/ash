@@ -1,7 +1,7 @@
 // 「运行/重试/队列推进」时选 resume 还是 fresh（从 orchestrator.ts 拆出，纯行数拆分）。
 // 依赖方向单向：这里 import orchestrator，orchestrator 不回头 import 这里。
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import type { InputAcceptance } from "./executors/types.js";
 import { lastWordOnInput } from "./turn-input-acceptance.js";
 import { db } from "./db/index.js";
@@ -21,6 +21,7 @@ import { withHeldTurn } from "./turn-entry-guard.js";
 import { checkpointWaitOrigin } from "./task-wait-ownership.js";
 import { releaseTurn } from "./runs.js";
 import type { TurnIdentity } from "./runs.js";
+import { startGuard, type FreezeGuard, type StartOrigin } from "./turn-freeze.js";
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
@@ -33,14 +34,22 @@ import type { TurnIdentity } from "./runs.js";
 export async function resumeOrRunTask(
   taskId: string,
   // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
-  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
+  // origin:这一次起跑是谁要的,必填 —— 末端那道闸照它定查多少(turn-freeze.ts StartOrigin)。
+  opts: ResumeOptions,
 ): Promise<void> {
+  // server/scripts 里的老用例不过 tsc、有的不带 origin(甚至不带参数):按改造前那张表从 reason 推。
+  const given: ResumeOptions = { ...opts, origin: opts?.origin ?? legacyOrigin(opts?.reason) };
   // 返回时还没交出去的锁由这一层还(检查点凭证失权、待发送交接被别人接管那几条出路),见 withHeldTurn。
-  return withHeldTurn(taskId, opts.turnHeld, () => resumeOrRunClaimedTask(taskId, opts));
+  return withHeldTurn(taskId, given.turnHeld, () => resumeOrRunClaimedTask(taskId, given));
 }
 
-async function resumeOrRunClaimedTask(taskId: string,
-  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null }): Promise<void> {
+export type ResumeOptions = { origin: StartOrigin; reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null };
+
+function legacyOrigin(reason: ResumeReason | undefined): StartOrigin {
+  return reason === "queue" || reason === "group" || reason === "wake" || reason === "hold" ? "auto" : "user";
+}
+
+async function resumeOrRunClaimedTask(taskId: string, opts: ResumeOptions): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) throw new Error(checkpointBlocked);
   // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
@@ -51,12 +60,12 @@ async function resumeOrRunClaimedTask(taskId: string,
   // turnHeld 后,待发送交接误享了手动运行的冻结豁免,穿透分组暂停)。无人值守的启动
   // (队列推进/恢复分组/上游唤醒)从预检查到 spawn 隔着一串 await,用户可能在认领之前
   // 刚按下暂停 —— 那一刻既没有回合可打内存冻结标记、isPaused 预检查又已经读过旧值,
-  // 唯一可靠的是 spawn 前按持久事实复查(turn-freeze.ts 的 checkFacts);手动运行/重试
-  // 是用户显式动作,照旧不加闸。
-  const freezeGuard =
-    opts.reason === "queue" || opts.reason === "group" || opts.reason === "wake" ? true : undefined;
+  // 唯一可靠的是 spawn 前按持久事实复查(turn-freeze.ts 的 checkFacts)。查多少只看来源
+  // (StartOrigin,调用方必须说清):用户的显式动作不给闸,各下游照自己的缺省(待发送交接那条
+  // 没占锁时仍会查,见 handDuePendingMessageToRun)。
+  const freezeGuard: FreezeGuard | undefined = opts.origin === "user" ? undefined : startGuard(opts.origin);
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task || task.mode !== "single") return runTask(taskId, { turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting }); // duets/missing → unchanged path
+  if (!task || task.mode !== "single") return runTask(taskId, { turnHeld: opts.turnHeld, origin: opts.origin, actingUserId: acting }); // duets/missing → unchanged path
   // 检查点续跑：resumePrompt 当 user 消息回灌同一会话，先清空避免再次 settle 时又认成
   // paused（调度器会先标 queued，不能只看 paused）。reviewing run 挂着 = 中断的是审查
   // 回合：续跑必须带回 reviewer 身份与配置，否则以 single 恢复实现会话，审查链收不了尾。
@@ -75,7 +84,7 @@ async function resumeOrRunClaimedTask(taskId: string,
         // 消费掉就再也回不来,而留着最坏是下一次运行重投一遍。审查链卡死不可恢复,重投可以。
         onInputSettled: async (acceptance) => {
           if (acceptance === "accepted") { await takeResumePrompt(taskId, rp, task.resumePromptGeneration); return; }
-          console.warn(`[ash] 任务 ${taskId} 审查续跑交代没拿到「agent 收下了」的回执（${acceptance}），`
+          console.warn(`[navi] 任务 ${taskId} 审查续跑交代没拿到「agent 收下了」的回执（${acceptance}），`
             + "这段交代原样留在任务上，下一次运行会重投");
         },
       });
@@ -104,7 +113,7 @@ async function resumeOrRunClaimedTask(taskId: string,
         // 一次**条件写**而不是一次读,问不出来也一律不起跑(holdCheckpointOwnership 的头部)。
         hold = await holdCheckpointOwnership(receipt);
         if (hold !== "mine") {
-          console.warn(`[ash] 续跑凭证${hold === "lost" ? "已不在本进程名下" : "的归属这会儿问不出来"}`
+          console.warn(`[navi] 续跑凭证${hold === "lost" ? "已不在本进程名下" : "的归属这会儿问不出来"}`
             + ` task=${taskId} message=${receipt.id}：这一趟不再起跑`);
           return;
         }
@@ -174,5 +183,5 @@ async function resumeOrRunClaimedTask(taskId: string,
     await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting, ...(reviewerRoute ?? {}) });
     return;
   }
-  return runTask(taskId, { turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting }); // no resumable session → fresh
+  return runTask(taskId, { turnHeld: opts.turnHeld, origin: opts.origin, actingUserId: acting }); // no resumable session → fresh
 }

@@ -2,7 +2,7 @@
 //
 // 病症：agent 没调 complete_task 就结束，server 照严格完成协议记 failed，然后把那句说明
 // 写成「.md 里一段引用 + trace 里一条 error」。用户看到的是一条红色的「执行过程 · 22 工具 ·
-// 1 异常」折叠条（收工即自动折起），展开才是那句话，而话里全是内部黑话。第一次用 ash 的
+// 1 异常」折叠条（收工即自动折起），展开才是那句话，而话里全是内部黑话。第一次用 navi 的
 // 人读到的结论只有一个：它崩了。真出故障时它还会盖住真正的原因（docs/incidents.md
 // 「接力到多用户机器」——那一轮页面上只有这一句，真凶是会话文件写错了目录）。
 //
@@ -14,7 +14,7 @@ import { buildConversationItems } from "../src/task-detail/conversationModel.ts"
 
 const STARTED = "2026-08-31T09:46:00.000Z";
 const AT = "2026-08-31T09:52:13.000Z";
-const NOTE = "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。";
+const NOTE = "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 navi 的完成协议记为未完成。";
 
 const session = {
   id: "s1",

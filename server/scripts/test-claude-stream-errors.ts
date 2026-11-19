@@ -11,6 +11,7 @@
  *
  * 这份测试用假 CLI 输出把两条路都钉住。
  */
+import "./isolated-data.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +22,7 @@ const { parseClaudeStream } = await import("../src/executors/claude.js");
 // 手写的半个替身缺一个方法就在中途 TypeError,后面几节根本跑不到)。
 const { ClaudeControlBridge } = await import("../src/executors/claude-control.js");
 
-const dir = mkdtempSync(join(tmpdir(), "ash-claude-stream-"));
+const dir = mkdtempSync(join(tmpdir(), "navi-claude-stream-"));
 let bad = 0;
 const fail = (m: string) => { console.log("   ✕ " + m); bad++; };
 const ok = (m: string) => console.log("   ✓ " + m);
@@ -228,8 +229,8 @@ console.log("5) 旧版 Claude Code 的 --effort 参数错误要给出可操作�
   else fail(`仍在透传原始错误:${JSON.stringify(message)}`);
 }
 
-// 起因(2026-08-21):容器里以 root 跑的 ash(172.16.88.252:4317),每个 claude 回合都
-// 0s 结束,时间线上只有一行英文 —— 用户读不出这跟「ash 跑在 root 下」有关。
+// 起因(2026-08-21):容器里以 root 跑的 navi(172.16.88.252:4317),每个 claude 回合都
+// 0s 结束,时间线上只有一行英文 —— 用户读不出这跟「navi 跑在 root 下」有关。
 console.log("6) root 下被拒绝跳过权限确认要说清成因和出路");
 {
   const events = await collectStderr(
@@ -269,8 +270,8 @@ console.log("7) CLI 自身失败时,原因在 errors[] 里,不能只报一句 su
 // 起因(2026-09-24):中转网关先 502 再整个不响应,两个任务的回合各停了 47 分钟。CLI
 // 一直在退避重试(10 次里退到后面单次就等半分钟),事件流里 `api_retry` 一条不落,而
 // 解析器把整个 subtype 丢了 —— 界面上只有一句「智能体委派中」停着不动,跟正常思考
-// 长得一模一样。当时用户手上没有任何线索,只剩重启 ash 可试;重启确实让三个任务同时
-// 活了过来,但那是因为 1M 请求本就经本机 ash 的 context-1m 代理转发,重启切断了这台
+// 长得一模一样。当时用户手上没有任何线索,只剩重启 navi 可试;重启确实让三个任务同时
+// 活了过来,但那是因为 1M 请求本就经本机 navi 的 context-1m 代理转发,重启切断了这台
 // 机器上全部在途请求、逼 CLI 重连 —— 钝手段,不是处理办法。信号一直都在事件流里。
 // 下面这两组事件按现场原样抄。
 console.log("8) 上游重试必须看得见,且不把仍在进行的回合判成失败");
@@ -379,7 +380,7 @@ console.log("9) 等上游等到超时无响应要自己冒头,而工具在跑不
 // 测试丢进 5 个后台 Task 就结束了回合,进程收台后那 5 个成了孤儿;下一回合 resume 时
 // CLI 先替它们补一条聚合回执 —— `origin:{kind:"task-notification"}`、`num_turns:0`、
 // `result:""`、58ms。解析器把它当回合结束,singleRunFromResident 当场 close 进程,而
-// ash 送进 stdin 的「按审查意见修复」此时才刚 init 完(现场日志最后一行停在
+// navi 送进 stdin 的「按审查意见修复」此时才刚 init 完(现场日志最后一行停在
 // `status:requesting`),一个 token 都没吐。外面看到一个 1.7 秒的「成功」空回合,
 // 自由工作流照它推进,于是第 10 轮审的还是第 8 轮那个 commit,报告与第 9 轮一字不差。
 // 下面这组事件按现场 agent-out.jsonl 原样抄。
@@ -406,7 +407,7 @@ console.log("10) 孤儿后台任务的回执不是回合结果,不许拿它收�
       { type: "system", subtype: "init", session_id: "sess-12" },
       { type: "system", subtype: "task_notification", task_id: "bicrdbmso", status: "stopped", summary: "Orphaned by a previous Claude Code process exit and reported in an aggregate summary.", session_id: "sess-12" },
       ORPHAN_RECEIPT,
-      // ——— 这之后才是 ash 送进去的那条 prompt 的回合 ———
+      // ——— 这之后才是 navi 送进去的那条 prompt 的回合 ———
       { type: "system", subtype: "init", session_id: "sess-12" },
       { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "改好了\n" } } },
       { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "text", text: "改好了" }], usage: { input_tokens: 120, output_tokens: 8 } } },

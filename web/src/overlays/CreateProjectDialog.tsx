@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import type { ProjectView } from "@ash/shared";
-import { repoNameFromUrl, repoUrlError } from "@ash/shared/repo-url";
+import type { ProjectView } from "@navi/shared";
+import { repoNameFromUrl, repoUrlError } from "@navi/shared/repo-url";
 import { FolderOpen, FolderPlus, GitBranch } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DirectoryPickerButton, directoryName } from "../components/DirectoryPickerButton.tsx";
@@ -13,9 +13,9 @@ import { api } from "../lib/api.ts";
 
 // 新建项目的两条路。它们的差别不只是「多几个输入框」，而是**目录归谁管**：
 //
-//  · 本地目录 —— 目录归用户。ash 只往库里记一行路径；填的目录还不存在时才顺手建出来
+//  · 本地目录 —— 目录归用户。navi 只往库里记一行路径；填的目录还不存在时才顺手建出来
 //    （空目录一个，不放任何东西进去）。
-//  · 从 Git 检出 —— 目录由 ash 建（连同缺失的上级目录）并往里放一整个仓库。这里「目录
+//  · 从 Git 检出 —— 目录由 navi 建（连同缺失的上级目录）并往里放一整个仓库。这里「目录
 //    不存在」是正常情况，「已经有东西」才是错。
 //
 // 所以两条路的路径提示、按钮门禁、失败后果全是相反的，不能压成一个表单加一个复选框。
@@ -32,7 +32,7 @@ type Mode = "local" | "clone";
 
 const MODES: { key: Mode; label: string; hint: string }[] = [
   { key: "local", label: "本地目录", hint: "指向这台机器上的目录；不存在的话会建出来" },
-  { key: "clone", label: "从 Git 检出", hint: "输入仓库地址，ash 克隆到你指定的位置" },
+  { key: "clone", label: "从 Git 检出", hint: "输入仓库地址，Navi 克隆到你指定的位置" },
 ];
 
 export function CreateProjectDialog({ projects, reason = null, onClose, onCreated, notify }: {
@@ -299,7 +299,7 @@ export function CreateProjectDialog({ projects, reason = null, onClose, onCreate
           </div>
           <p className="create-project-mode-hint">
             填了就在克隆时用上，并存到新项目的 Git 凭证里，之后的拉取和推送都跟着用；只存在
-            ash 自己的库里，不写进仓库。
+            Navi 自己的库里，不写进仓库。
           </p>
         </details>}
       </>}

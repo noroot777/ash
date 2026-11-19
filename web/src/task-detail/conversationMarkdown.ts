@@ -1,5 +1,5 @@
-import type { Task } from "@ash/shared";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import type { Task } from "@navi/shared";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import type { ConversationItem } from "./conversationModel.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -19,7 +19,8 @@ export function conversationToMarkdown(items: ConversationItem[], task: Task): s
       if (body) parts.push(`## ${item.bySystem ? "系统" : "你"}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
       continue;
     }
-    const body = item.markdown.trim();
+    const plans = item.segments.flatMap((segment) => segment.events).flatMap((event) => event.plan ? [event.plan.text] : []);
+    const body = [item.markdown.trim(), ...plans].filter(Boolean).join("\n\n");
     const who = item.reviewer
       ? `${item.label}（审查者${item.reviewer.round ? ` · 第 ${item.reviewer.round} 轮` : ""}）`
       : item.label;

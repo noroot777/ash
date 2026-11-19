@@ -24,14 +24,14 @@ import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, unlinkSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-process-identity-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-process-identity-"));
+process.env.NAVI_DB = join(root, "ash.db");
 /** 把「清扫后的尾巴」压到 700ms(生产 60s),⑧ 才能在一条用例里看完整条寿命;**复核间隔**
  *  压到 300ms(生产 10 分钟),⑧ 才跨得过好几次复核 —— 老实现在那一刻无条件删文件。 */
 const TRACK_MS = 700;
 const RECHECK_MS = 300;
-process.env.ASH_TRACK_EVIDENCE_MS = String(TRACK_MS);
-process.env.ASH_TRACK_EVIDENCE_RECHECK_MS = String(RECHECK_MS);
+process.env.NAVI_TRACK_EVIDENCE_MS = String(TRACK_MS);
+process.env.NAVI_TRACK_EVIDENCE_RECHECK_MS = String(RECHECK_MS);
 
 const {
   childStillOurs, cleanupAfterRun, killByPid, killChild, pidRunStillAlive,
@@ -88,7 +88,7 @@ function provenSleeper(kind: "mark" | "outfile"): { child: ChildProcess; token: 
     invalidateMonitorUnitScan();
     return { child, token, outPath: null };
   }
-  const outPath = join(tmpdir(), `ash-test-out-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+  const outPath = join(tmpdir(), `navi-test-out-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
   const fd = openSync(outPath, "w");
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
     stdio: ["ignore", fd, "ignore"], detached: true,
@@ -234,7 +234,7 @@ if (IS_WINDOWS) {
 } else {
   // 组长:把 stdout 重定向到这一次运行独有的文件(生产上 detached 就是这么起的),那份
   // 文件就是它的归属证据;它自己派生一个**忽略 SIGTERM** 的后代,然后等着挨第一刀。
-  const outPath = join(tmpdir(), `ash-test-grp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+  const outPath = join(tmpdir(), `navi-test-grp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
   const fd = openSync(outPath, "w");
   tempFiles.push(outPath);
   const leader = spawn(process.execPath, ["-e", `
@@ -459,7 +459,7 @@ if (IS_WINDOWS) {
   );
 }
 
-// ── ⑫ 启动期清掉上一个 ash 留下的追踪文件:只删「创建者已不在 + 此刻无人持有」 ────────
+// ── ⑫ 启动期清掉上一个 navi 留下的追踪文件:只删「创建者已不在 + 此刻无人持有」 ────────
 // 证据的寿命不再有硬期限(⑧),所以「进程整个没了、内存里的租约也没了」这条路得有人收
 // (实测 tmpdir 里攒到过三千多个空文件)。这一条钉的是**不该删的两类必须活下来**,尤其是
 // 「有持有者」那一类:`lsof` 回的是解析过的真实路径(macOS 上 /var → /private/var),按整条
@@ -471,7 +471,7 @@ if (IS_WINDOWS) {
   const deadOwner = 999_999;
   assert.equal(isPidAlive(deadOwner), false, "这条用例要一个确定不存在的创建者 pid");
   const stamp = Date.now();
-  // ① 创建者是我们自己(还活着)⇒ 另一个 ash 实例正用着的那类,不许碰
+  // ① 创建者是我们自己(还活着)⇒ 另一个 navi 实例正用着的那类,不许碰
   const mine = join(tmpdir(), `ash-track-${process.pid}-${stamp}-selfown`);
   writeFileSync(mine, "");
   // ② 创建者已死、但还有活着的持有者 ⇒ 那一摊后代还在,证据必须留着
@@ -489,7 +489,7 @@ if (IS_WINDOWS) {
   writeFileSync(orphan, "");
   await wait(200);
   await sweepOrphanTrackFiles();
-  assert.equal(existsSync(mine), true, "创建者还活着(可能是另一个 ash 实例)⇒ 不许删");
+  assert.equal(existsSync(mine), true, "创建者还活着(可能是另一个 navi 实例)⇒ 不许删");
   assert.equal(existsSync(stillHeld), true, "还有活着的持有者 ⇒ 证据不许删");
   assert.equal(existsSync(orphan), false, "创建者已不在、又没人握着 ⇒ 该删");
   unlinkSync(mine);
@@ -523,7 +523,7 @@ if (IS_WINDOWS) {
   //     停在粗档(没答出来)、文件被一个只读的看客握着 —— 那不等于「这个进程的标准输出就是
   //     这个文件」,所以仍然是「证不出就不下刀」。上一版只比号码,看客因此拿到了整组击杀的
   //     授权(审查用真实只读查看器实测过:它收到 SIGTERM 死了)。
-  const viewed = join(tmpdir(), `ash-test-viewer-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+  const viewed = join(tmpdir(), `navi-test-viewer-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
   writeFileSync(viewed, "");
   tempFiles.push(viewed);
   const rfd = openSync(viewed, "r");

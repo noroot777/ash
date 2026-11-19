@@ -16,17 +16,18 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TokenUsage } from "@ash/shared";
+import type { TokenUsage } from "@navi/shared";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-claude-usage-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-claude-usage-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { sessions } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { recordSessionUsageEvent, sessionUsage, usageAccountingFor } = await import("../src/usage.js");
-const { usageTotal } = await import("@ash/shared/usage");
+const { usageTotal } = await import("@navi/shared/usage");
 
 /** 实测 wkfsPOl_xgRe 的连续 `result` 行（modelUsage 四项求和，cost 是 total_cost_usd）。 */
 const REAL: TokenUsage[] = [
@@ -117,13 +118,13 @@ try {
     "费用也应收敛到最后那份 total_cost_usd",
   );
 
-  // 同一条 CLI 线程被第二条 ash 会话续聊（审查旁路回合 / duet 各声部）：差值要接着算。
+  // 同一条 CLI 线程被第二条 navi 会话续聊（审查旁路回合 / duet 各声部）：差值要接着算。
   await insertSession({ id: "live-2", taskId: "task-live", cliSessionId: thread, role: "reviewer", sideTurn: true });
   const handover = await recordSessionUsageEvent("live-2", { kind: "usage", usage: REAL[3]! }, "claude", thread);
   assert.equal(
     usageTotal(handover.usage),
     73_292_097 - 71_666_911,
-    "快照按 CLI 线程存，所以换到另一条 ash 会话接着跑时差值仍然对",
+    "快照按 CLI 线程存，所以换到另一条 navi 会话接着跑时差值仍然对",
   );
   assert.equal(usageTotal((await readUsage("live-1"))!), 71_666_911, "上一条会话的账不许被续聊的回合改动");
 
@@ -155,5 +156,5 @@ try {
 
   console.log("claude 账本验证通过：线程累计求差、真实连续回合换算、逐条口径标记");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

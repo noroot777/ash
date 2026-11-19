@@ -9,7 +9,8 @@
 //
 // 单进程直调，不 spawn 对端 server：两台机器用两个 git 仓库模拟，共用一个临时库，所以
 // 「持有机那条任务行」在打完包之后显式删掉（真实场景里它本来就在另一台机器的库里）。
-// ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn：万一续跑闸失手，也不会真拉起 CLI。
+// NAVI_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn：万一续跑闸失手，也不会真拉起 CLI。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -18,17 +19,17 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-accepted-"));
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-accepted-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch { /* 兜底 */ } });
 assert.ok(
-  process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "本测试靠 guardAgentSpawn 兜底拦真 CLI;拦截器一失效就会烧用户的真额度",
 );
 
@@ -37,7 +38,7 @@ const git = (cwd: string, ...args: string[]) =>
 
 function makeRepo(path: string): string {
   execFileSync("git", ["init", "-b", "main", path]);
-  git(path, "config", "user.name", "Ash Handoff Test");
+  git(path, "config", "user.name", "Navi Handoff Test");
   git(path, "config", "user.email", "handoff@example.test");
   writeFileSync(join(path, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(path, "seed.txt"), "seed\n");
@@ -59,7 +60,7 @@ try {
   const holderRepo = makeRepo(join(root, "holder"));
   const originRepo = join(root, "origin");
   execFileSync("git", ["clone", "--quiet", holderRepo, originRepo]);
-  git(originRepo, "config", "user.name", "Ash Handoff Test");
+  git(originRepo, "config", "user.name", "Navi Handoff Test");
   git(originRepo, "config", "user.email", "handoff@example.test");
   const originBase = git(originRepo, "rev-parse", "HEAD");
 
@@ -136,7 +137,6 @@ try {
       acceptedTargetBranch: stage ? "main" : null,
       acceptedBaseCommit: stage ? originBase : null,
       pinnedAt: null,
-      starredAt: null,
       createdAt: now(),
       startedAt: now(),
       endedAt: now(),

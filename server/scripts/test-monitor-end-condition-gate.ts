@@ -14,11 +14,11 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { neverExitsOnItsOwn, neverExitsVerdict } from "@ash/shared/command-never-exits";
+import { neverExitsOnItsOwn, neverExitsVerdict } from "@navi/shared/command-never-exits";
 import {
   END_CONDITION_HINT, END_CONDITION_SYNTAX,
   endConditionHit, endConditionNote, parseEndCondition,
-} from "@ash/shared/monitor-end-condition";
+} from "@navi/shared/monitor-end-condition";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
   HERE, root, db, schema, startMonitor, stopMonitor, getMonitor, listMonitors,
@@ -112,7 +112,7 @@ const { monitors } = schema;
     "while true; false; do :; done; printf 'DONE\n'",       // 条件列表的真值在 `false` 上
     "until false; true; do :; done; printf 'DONE\n'",       // 同上,`until` 这一边
     // 整个循环的输入被改成一个不存在的文件 ⇒ 它一圈都跑不到（`/bin/sh` 当场报错继续往下）。
-    "while true; do :; done </definitely-missing-ash-review-file; printf 'DONE\n'",
+    "while true; do :; done </definitely-missing-navi-review-file; printf 'DONE\n'",
   ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
   // ↑ 那三条的**真阳对照**:条件列表就是循环头自己那一段、循环身上没挂输入重定向,这些照拦。
   //   漏了这一组,「读不懂就放行」会退化成「见到循环就放行」。
@@ -129,7 +129,7 @@ const { monitors } = schema;
   //   quoted,而且以 `<` 开头」,两头都漏 —— fd 前缀让词不以 `<` 开头,而「运算符在引号外、
   //   只有路径在引号里」被整词一个 quoted 布尔抹平了。下面每一条真跑 `/bin/sh` 都是退出 0
   //   并打出 DONE(整个循环一次都没开始),而创建入口一律 409。
-  const MISSING = "/definitely-missing-ash-review-file";
+  const MISSING = "/definitely-missing-navi-review-file";
   for (const command of [
     `while true; do :; done 0<${MISSING}; printf 'DONE\n'`,       // fd 前缀
     `until false; do :; done 0<${MISSING}; printf 'DONE\n'`,      // 同上,`until` 这一边
@@ -348,7 +348,7 @@ const { monitors } = schema;
   );
 
   const taskId = await makeTask();
-  const follower = "tail -F /tmp/ash-never.log | grep --line-buffered ERROR";
+  const follower = "tail -F /tmp/navi-never.log | grep --line-buffered ERROR";
   const denied = await startMonitor({ taskId, command: follower, description: "没有结束条件的跟随器" });
   assert.equal(denied.ok, false, "跟随型命令没给结束条件时不许放行");
   if (!denied.ok) {

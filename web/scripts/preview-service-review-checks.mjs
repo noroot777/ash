@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { resizeViewport } from "./wait-until.mjs";
 
-// 预览日志在「更多」里（docs/ui-ux-audit reply-3）：入口是那颗「更多」，点开再点「预览日志」。
-const MORE = ".free-workflow-toolbar .ui-menu-anchor > button";
+// 预览日志在「更多」里：入口是那颗「更多」，点开再点「预览日志」。
+const MORE = ".free-workflow-toolbar .ui-icon-menu-anchor > button";
 const openPreviewLog = async (page) => {
   await page.locator(MORE).click();
   await page.getByTestId("preview-log-open").click();
@@ -52,6 +52,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent?.includes("all service line 220"));
     assert.equal(await page.getByRole("tab").count(), 0);
     await page.getByRole("button", { name: "复制", exact: true }).focus();
+    await page.evaluate(() => { window.__servicesArrive = true; });
     await page.getByRole("tab", { name: /全部/ }).waitFor();
     assert(await page.getByRole("button", { name: "复制", exact: true }).evaluate((el) => el === document.activeElement), "迟到的服务列表不能抢走复制按钮的焦点");
 
@@ -96,6 +97,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     const beforeServices = await geometry();
     assert(beforeServices.height > 600, "服务数未知的启动预览应在列表到达前预留阅读空间");
     await page.getByRole("button", { name: "复制", exact: true }).focus();
+    await page.evaluate(() => { window.__servicesArrive = true; });
     await page.getByRole("tab", { name: /全部/ }).waitFor();
     assert.deepEqual(await geometry(), beforeServices, "服务列表到达后窗口和底部按钮不能跳位");
     assert(await page.getByRole("button", { name: "复制", exact: true }).evaluate((el) => el === document.activeElement), "短日志的服务列表迟到也不能抢焦点");

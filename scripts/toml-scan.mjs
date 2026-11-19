@@ -4,10 +4,10 @@
 // 再剔 `#`,顺序正好反了。于是
 //
 //     # 示例 """
-//     [mcp_servers.ash]      ← 真事实,却被当成多行字符串正文吞掉
+//     [mcp_servers.navi]      ← 真事实,却被当成多行字符串正文吞掉
 //     # 结束 """
 //
-// 这份配置里明明已经有 ash,扫描器却说没有,安装器于是**追加第二张同名表**并报「已接好」;
+// 这份配置里明明已经有 navi,扫描器却说没有,安装器于是**追加第二张同名表**并报「已接好」;
 // 真 grok 那边 `duplicate key` 直接让整份配置读不出来(连用户自己的 MCP 一起没了),而它的
 // 退出码还是 0。注释与字符串谁先谁后不是「再补一个正则」能解决的,只能按位置从左到右定:
 // `#` 出现在字符串外面就是注释、**吃到行尾**,里面的三引号不是字符串定界符。
@@ -75,8 +75,8 @@ function stripTomlNoise(text) {
 /**
  * `{ names, rootArrays, duplicateTables }`,或者 `{ why }` = 判不准,**不许写**。
  *
- * - `names`:配置里登记过的服务名,**去重**。子表也算(`[mcp_servers.ash.env]` 在而
- *   `[mcp_servers.ash]` 不在,这家 CLI 眼里 ash 照样是配过的,所以「已有就不覆盖」要认它);
+ * - `names`:配置里登记过的服务名,**去重**。子表也算(`[mcp_servers.navi.env]` 在而
+ *   `[mcp_servers.navi]` 不在,这家 CLI 眼里 navi 照样是配过的,所以「已有就不覆盖」要认它);
  * - `rootArrays`:**根级**那几个开关数组的原值(`{ disabled_mcp_servers: [...] }`)。
  *   **这里只负责读出来,不负责解释**:哪一家认哪个键由调用方按逐家声明决定(`switches.off`)——
  *   同一个 `disabled_mcp_servers` grok 1.0.41 认、codex-cli 0.153.4 不认,都是实测
@@ -94,7 +94,7 @@ export function scanTomlServers(text) {
   const rest = [];
   // **只有根级那个 `disabled_mcp_servers` 才是那个全局开关**(本轮审查 F2,真 grok 实测):
   // `[plugins.demo]` 底下同名的键是那个插件自己的字段,上一版不记表作用域、任意表里的同名
-  // 行都当成根级事实,于是一份真 grok 能照常加 ash 的配置被判成「你关掉了 ash」、自动补接
+  // 行都当成根级事实,于是一份真 grok 能照常加 navi 的配置被判成「你关掉了 navi」、自动补接
   // 当场被拒。TS 那侧(`codex-toml.ts` 的 `tomlRootStringArray`)本来就记作用域,这里跟上。
   // TOML 里第一个表头之后再回不到根级,所以一个布尔就够。非根级那几行照样要**吃掉** ——
   // 不吃就会落到下面的 `mcp_servers` 散行检查上(`disabled_mcp_servers` 带着这个词),
@@ -109,7 +109,7 @@ export function scanTomlServers(text) {
       root = false;
       if (path[0] === "mcp_servers") {
         // `[mcp_servers]` 本体底下只能靠点号键给出名字 —— 那一档我们不认,交给「判不准」。
-        if (path.length < 2) return { why: "配置里有一张 [mcp_servers] 总表（名字写在点号键里，ash 认不了）" };
+        if (path.length < 2) return { why: "配置里有一张 [mcp_servers] 总表（名字写在点号键里，Navi 认不了）" };
         seen.push(path[1]);
         if (path.length === 2) tables.push(path[1]);
       }
@@ -126,13 +126,13 @@ export function scanTomlServers(text) {
     rest.push(line);
   }
   const stray = rest.find((l) => /mcp_servers/.test(l));
-  if (stray) return { why: `配置里这一行提到了 mcp_servers，而 ash 读不准它的写法：${stray.slice(0, 60)}` };
+  if (stray) return { why: `配置里这一行提到了 mcp_servers，而 Navi 读不准它的写法：${stray.slice(0, 60)}` };
   const names = [...new Set(seen)];
   const duplicateTables = names.filter((n) => tables.filter((t) => t === n).length > 1);
   return { names, rootArrays, duplicateTables };
 }
 
-/** `mcp_servers."ash".env` → `["mcp_servers","ash","env"]`;读不通返回 null。 */
+/** `mcp_servers."navi".env` → `["mcp_servers","navi","env"]`;读不通返回 null。 */
 export function tomlKeyPath(raw) {
   const out = [];
   let i = 0;

@@ -9,7 +9,7 @@
 //  · Linux:`/proc/<pid>/environ` 是 **NUL 分隔的真实环境项**,所以「有没有 `KEY=VALUE` 这一项」
 //    是精确可答的 ⇒ `exact`,可以当归属凭证(下刀);
 //  · macOS:`ps -E` 把 argv 和环境**无分隔地拼成一行展示文本**,任何变量的值里都可以包含
-//    `ASH_MONITOR_UNIT=<记号>` 这段文字(实测见下),所以这一问**只能答「看见了这段文字」**
+//    `NAVI_MONITOR_UNIT=<记号>` 这段文字(实测见下),所以这一问**只能答「看见了这段文字」**
 //    ⇒ `ambiguous`:够用来拒绝说「已经没了」,**不够用来签发杀进程的凭证**;
 //  · win32:读别的进程的环境块要 ReadProcessMemory 那一套,零依赖拿不到 ⇒ 整问失败。
 //
@@ -17,6 +17,7 @@
 // 「这一问答出了什么」的四档投影在 proc.ts 的 `processUnitEvidence`。
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { envNameGenerations, setEnv } from "@navi/shared/env-names";
 import { IS_WINDOWS } from "./platform.js";
 import { processGenerationSync, type ProcessGeneration, type ProcessMember } from "./process-generation.js";
 
@@ -39,9 +40,9 @@ import { processGenerationSync, type ProcessGeneration, type ProcessMember } fro
  * 陌生进程挨刀。第 13 轮的修法是「两次快照相减切出环境段」,第 14 轮实测它仍然不够:
  *
  * ```
- * $ env -i PATH=… AAA="x BBB=2 y" ASH_MONITOR_UNIT=realtok CCC="pre ASH_MONITOR_UNIT=faketok post" sleep 40
+ * $ env -i PATH=… AAA="x BBB=2 y" NAVI_MONITOR_UNIT=realtok CCC="pre NAVI_MONITOR_UNIT=faketok post" sleep 40
  * $ ps -p <pid> -E -ww -o command=
- * sleep 40 PATH=… AAA=x BBB=2 y ASH_MONITOR_UNIT=realtok CCC=pre ASH_MONITOR_UNIT=faketok post
+ * sleep 40 PATH=… AAA=x BBB=2 y NAVI_MONITOR_UNIT=realtok CCC=pre NAVI_MONITOR_UNIT=faketok post
  * ```
  *
  * 环境段自己也**没有边界**:`AAA` 的值里那个 `BBB=2` 和真正的 `BBB=2` 长得一模一样,`CCC` 的
@@ -57,7 +58,26 @@ import { processGenerationSync, type ProcessGeneration, type ProcessMember } fro
  * 就都问不到了 —— 那一刻只能落「证不出」,**不许当成整项退出已证明**(见 proc.ts、
  * monitor-reclaim-evidence.ts 的 `traceless`)。
  */
-export const MONITOR_UNIT_ENV = "ASH_MONITOR_UNIT";
+export const MONITOR_UNIT_ENV = "NAVI_MONITOR_UNIT";
+
+/**
+ * 认记号时各代变量名都认：改名之前起的进程（活过了升级重启的智能体、哨兵）身上是 `ASH_MONITOR_UNIT`。
+ * 种记号只种当前名（`MONITOR_UNIT_ENV`），并且**先擦掉各代旧名** —— 见 `seedMonitorUnitEnv`。
+ */
+const MONITOR_UNIT_ENV_NAMES = envNameGenerations(MONITOR_UNIT_ENV);
+
+/**
+ * 往一份环境里种记号：唯一的写入口，智能体（`seedUnitToken`）和哨兵（`monitor-spawn.ts`）都走这里。
+ *
+ * 擦旧名不是洁癖：读侧「各代任一个都算这个单元」只有在**每个进程身上最多一份有效记号**时才成立。
+ * 从改名之前起的那份 ash 进程（或一个旧任务的回合）里继承来的环境带着 `NAVI_MONITOR_UNIT=<旧单元>`，
+ * 只加新名的话，新起的这棵树会同时被认成旧单元的成员 —— 收旧单元的尾会牵连它、或者一直报「旧单元
+ * 没清干净」。改名之前是同名覆盖，天然只有一份。
+ */
+export function seedMonitorUnitEnv(env: NodeJS.ProcessEnv, token: string): NodeJS.ProcessEnv {
+  setEnv(env, MONITOR_UNIT_ENV, token);
+  return env;
+}
 
 /**
  * 这一问**答得有多实**:
@@ -176,7 +196,7 @@ export function liveMonitorUnitsSync(opts: { fresh?: boolean } = {}): MonitorUni
 }
 
 /** 展示文本里**所有**出现过的 `记号=值`。全局匹配是刻意的:只取第一个就会被假记号遮住。 */
-const UNIT_MARK = new RegExp(`(?:^|\\s)${MONITOR_UNIT_ENV}=(\\S+)`, "g");
+const UNIT_MARK = new RegExp(`(?:^|\\s)(?:${MONITOR_UNIT_ENV_NAMES.join("|")})=(\\S+)`, "g");
 
 /** 一行展示文本里看得见的记号(可能来自 argv、也可能来自别的变量的值 ⇒ `ambiguous`)。 */
 function marksInText(text: string): string[] {
@@ -256,7 +276,7 @@ function scanMonitorUnits(): MonitorUnitScan | null {
 
 /**
  * Linux:`/proc/<pid>/environ` 是 **NUL 分隔的真实环境项** —— 逐项取精确的键,所以这一问
- * 「有没有 `ASH_MONITOR_UNIT=X` 这一项」是精确可答的(`exact`)。
+ * 「有没有 `NAVI_MONITOR_UNIT=X` 这一项」是精确可答的(`exact`)。
  *
  * **上一版在这里把 NUL 换成空格再跑那条正则,等于主动把唯一的真实边界丢掉**(第 14 轮审查
  * F1 指出的同类退化)。边界在手就必须用:按 `\0` 切项、`item.startsWith("KEY=")`,别的变量的
@@ -291,9 +311,10 @@ function passViaProc(): PassRow[] | null {
       continue;
     }
     const after = processGenerationSync(pid);
-    const prefix = `${MONITOR_UNIT_ENV}=`;
-    const marks = raw.split("\0").filter((item) => item.startsWith(prefix))
-      .map((item) => item.slice(prefix.length));
+    const marks = raw.split("\0").flatMap((item) => {
+      const name = MONITOR_UNIT_ENV_NAMES.find((candidate) => item.startsWith(`${candidate}=`));
+      return name ? [item.slice(name.length + 1)] : [];
+    });
     rows.push({ pid, gen: before && before === after ? before : null, marks });
   }
   return rows;

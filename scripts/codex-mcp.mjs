@@ -1,8 +1,8 @@
-// setup 给 codex 接 ash MCP 的那一步。
+// setup 给 codex 接 navi MCP 的那一步。
 //
 // 「已经接过没有」**问 codex 本人**，不自己读 TOML。setup 得在 Node 22.16 上裸跑、导入不了
 // server 那份结构扫描器（`server/src/codex-toml.ts`），而再写一份正则就是第五份判据 —— 上一版
-// 就是 `^\[mcp_servers\.ash\]`：`[mcp_servers."ash"]` 它看不见，于是再追加一份同名表，TOML 里
+// 就是 `^\[mcp_servers\.navi\]`：`[mcp_servers."navi"]` 它看不见，于是再追加一份同名表，TOML 里
 // 那是重复定义，codex 整份配置解析失败（`duplicate key`），别的 MCP 一起没了（新链第 4 轮审查
 // 第 2 条）。而「跑一次 npm run setup」正是派审预检给的补救办法。
 //
@@ -41,29 +41,29 @@ export function parseCodexList(status, stdout) {
  *          foreignChange（批准期间用户那份被别的程序改过，所以没写）；added 带
  *          legacyLeft = 历史名没删掉
  */
-export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, listServers, removeServer }) {
+export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, legacyNames = legacyName ? [legacyName] : [], listServers, removeServer }) {
   const before = listServers();
   if (!before.ok) return { action: "blocked", why: before.why };
   const current = before.servers.find((s) => s.name === name);
   if (current) return { action: "kept", enabled: current.enabled };
-  const legacy = before.servers.some((s) => s.name === legacyName);
+  const legacy = before.servers.filter((s) => legacyNames.includes(s.name)).map((s) => s.name);
 
   const existing = existsSync(configFile) ? readFileSync(configFile, "utf8") : null;
-  const sandbox = mkdtempSync(join(tmpdir(), "ash-setup-codex-"));
+  const sandbox = mkdtempSync(join(tmpdir(), "navi-setup-codex-"));
   const sandboxCfg = join(sandbox, "config.toml");
   try {
     // 迁移、追加、确认全在副本上做,用户那份这期间一个字节都不动。
     writeFileSync(sandboxCfg, existing ?? "", { mode: TMP_MODE });
-    // 删不掉就留着：两个名字 ash 都认，名字不同不会重复定义；下面如实报「没删掉」。
-    const legacyRemoved = legacy ? removeServer(legacyName, sandbox) : false;
+    // 删不掉就留着：两个名字 navi 都认，名字不同不会重复定义；下面如实报「没删掉」。
+    const legacyRemoved = legacy.length > 0 && legacy.map((old) => removeServer(old, sandbox)).every(Boolean);
     const base = readFileSync(sandboxCfg, "utf8");
     // TOML 的字符串是转义的,Windows 路径里的 `\` 必须成对写,否则 `\d`、`\n`
     // 会被当转义序列吞掉 —— 装完看着成功,codex 起 MCP 时才报路径不存在。
     const written = `${base}\n[mcp_servers.${name}]\ncommand = "node"\nargs = [${JSON.stringify(mcpEntry)}]\n\n`
-      + `[mcp_servers.${name}.env]\nASH_URL = "${url}"\n`;
+      + `[mcp_servers.${name}.env]\nNAVI_URL = "${url}"\n`;
     writeFileSync(sandboxCfg, written, { mode: TMP_MODE });
 
-    // 批准:拼完这份,codex 本人读得动吗、ash 真的列出来了吗。
+    // 批准:拼完这份,codex 本人读得动吗、navi 真的列出来了吗。
     const after = listServers(sandbox);
     if (!after.ok) return { action: "blocked", why: `${after.why}（补上那段之后）` };
     if (!after.servers.some((s) => s.name === name)) {
@@ -80,8 +80,8 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
         ? { action: "foreignChange", why: published.why, backup: null }
         : { action: "blocked", why: published.why };
     }
-    const legacyLeft = after.servers.some((s) => s.name === legacyName);
-    if (legacy && legacyRemoved && !legacyLeft) return { action: "migrated", backup: published.backup };
+    const legacyLeft = after.servers.some((s) => legacy.includes(s.name));
+    if (legacy.length && legacyRemoved && !legacyLeft) return { action: "migrated", backup: published.backup };
     return { action: "added", backup: published.backup, legacyLeft };
   } finally {
     rmSync(sandbox, { recursive: true, force: true });

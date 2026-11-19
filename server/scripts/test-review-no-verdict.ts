@@ -1,8 +1,8 @@
-// 一轮审查没给出结论时，ash 说的那句话和写进轮次的那份原因（review-channel-gap.ts 的
+// 一轮审查没给出结论时，navi 说的那句话和写进轮次的那份原因（review-channel-gap.ts 的
 // noteReviewerChannelGap + review-no-verdict.ts）。
 //
 // 现场（2026-11-13，任务 EhQtqns9fnG2 第 1 轮）：codex 审查者产出过正文和工具之后，模型上游开始回
-// 503，重连 5 次放弃、exit 1，report.md 没写。ash 说的却是「报告可能已经写完了，只是结论没能上报，
+// 503，重连 5 次放弃、exit 1，report.md 没写。navi 说的却是「报告可能已经写完了，只是结论没能上报，
 // 最可能是手上没有 report_stage（自查：codex mcp list --json…）」—— 三处全错。
 //
 // 覆盖：
@@ -17,7 +17,7 @@
 //   4. 状态接口只在这一轮仍是「error 且没结论」时带出 noVerdict；合并结果审查的尾注带 source=merge
 //   5. 看门狗熔断的原因取自熔断判据的同一批事件：穿过子智能体包装、只认最后那条、恢复过就不沿用
 //      （第 3 轮审查第 1 条）；判决没类型时不说成「上游连不上」
-//   6. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线）
+//   6. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线：真的跑一回合审查者的收尾）
 //   7. 那份记录上线之前断掉、没存过原因的轮次：状态接口按盘上的事实现算（诊断文件、会话 trace、
 //      判决日志、会话与回合行、报告在不在）；原话进结构，只认执行器说的；类型只认当时挂上的，执行
 //      故障只认消费链收到过的（原始事件文件不读）；什么都读不到就不带。看门狗熔断的老回合：诊断里
@@ -26,17 +26,17 @@
 //
 // 跑：npm -w server run test:review-no-verdict
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-review-no-verdict-"));
-process.env.ASH_DB = join(stage, "t.db");
-process.env.HARNESS_DB = process.env.ASH_DB;
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-review-no-verdict-"));
+process.env.NAVI_DB = join(stage, "t.db");
+process.env.HARNESS_DB = process.env.NAVI_DB;
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 
 // 现场那份诊断原文的形状（截过）：前半句是 codex 的错误，后面夹着一段网关错误页，里头还有个 504。
 const UPSTREAM_503 = "unexpected status 503 Service Unavailable: auth_unavailable: no auth available "
@@ -230,8 +230,8 @@ try {
     await tripped.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null } });
     assert.deepEqual(await tripped.cause(), { kind: "interrupted", reason: "回合长时间没有进展，被自动终止" });
     assert.doesNotMatch(tripped.timeline(), /上游连不上|等上游恢复|限流/, "类型缺了不替它编一个会自己恢复的原因");
-    // 执行器一句话都没说：熔断诊断是 ash 自己的判断，进说明但标明是谁说的，不当成执行器的原话。
-    assert.match(tripped.timeline(), /ash 的判断：「15 分钟里只收到重试类错误」/);
+    // 执行器一句话都没说：熔断诊断是 navi 自己的判断，进说明但标明是谁说的，不当成执行器的原话。
+    assert.match(tripped.timeline(), /Navi 的判断：「15 分钟里只收到重试类错误」/);
     assert.match(tripped.timeline(), /先看上面的判断弄清卡在哪里/);
     assert.doesNotMatch(tripped.timeline(), /执行器的原话/);
     assert.equal((await tripped.stored())?.said, undefined, "结构里的原话只放执行器说的");
@@ -262,7 +262,7 @@ try {
   {
     const written = await scene({ report: true });
     assert.equal(await written.note(), true);
-    assert.match(written.timeline(), /审查报告已经写完了，只是结论没能上报到 ash/, "报告在：说写完了");
+    assert.match(written.timeline(), /审查报告已经写完了，只是结论没能上报到 Navi/, "报告在：说写完了");
     assert.match(written.timeline(), /report_stage/, "仍是通道那套说法");
     assert.deepEqual(await written.cause(), { kind: "unreported", reason: "报告写完了，结论没报上来" });
 
@@ -318,10 +318,10 @@ try {
     const { ClaudeChildActivity, CodexChildActivity } = await import("../src/executors/native-agent-activity.js");
     const { trackTurnStall, __resetTurnStalls } = await import("../src/turn-stall.js");
     const { stallFailure, __resetStallFailures } = await import("../src/turn-stall-verdict.js");
-    process.env.ASH_STALL_WARN_ERRORS = "0";
-    process.env.ASH_STALL_WARN_MS = "0";
-    process.env.ASH_STALL_TRIP_MS = "30";
-    process.env.ASH_STALL_TRIP_GRACE_MS = "0";
+    process.env.NAVI_STALL_WARN_ERRORS = "0";
+    process.env.NAVI_STALL_WARN_MS = "0";
+    process.env.NAVI_STALL_TRIP_MS = "30";
+    process.env.NAVI_STALL_TRIP_GRACE_MS = "0";
     const TURN = "2026-11-13T12:00:00.000Z";
     const actions = { taskId: "t-stall", warn() {}, trip() {}, resolve() {}, project: async () => true };
     /** 按顺序喂进看门狗；`gap` 之前停一下，让停滞时长越过熔断阈值。 */
@@ -390,15 +390,39 @@ try {
     __resetStallFailures();
   }
 
-  // ── 6. 接线 ───────────────────────────────────────────────────────────────
+  // ── 6. 接线：真的跑一回合审查者的收尾 ───────────────────────────────────────
   {
-    const run = readFileSync(new URL("../src/single-run.ts", import.meta.url), "utf8");
-    assert.match(run, /const failure = executionFailed \? \{ exitStatus, verdict: watchdogFailure, error: lastExecutionError \} : null;/,
-      "单飞收尾按「这一回合自己异常结束」交事实：退出码、看门狗判决（带熔断那条错误的类型）、那条执行故障");
-    assert.doesNotMatch(run, /lastRetryModel/, "熔断原因不另收一份：只认看门狗判决里的");
-    assert.match(run, /noteReviewerChannelGap\(\{[^}]*failure \}\)/, "交进说明里");
-    assert.match(run, /sawExecutionError = true; if \(!lastExecutionError\?\.model \|\| emittedEvent\.model\) lastExecutionError = emittedEvent;/,
-      "带模型类型的那条不被后面的执行诊断汇总盖掉");
+    const { consumeSingleRun } = await import("../src/single-run.js");
+    const { claimOwnTurn, releaseHeldTurn } = await import("../src/turn-lock.js");
+    const s = await scene({ work: false });
+    const upstream = codexErrorEvent({ error: { message: UPSTREAM_503 } })!.event;
+    assert.ok(claimOwnTurn(s.taskId, "reviewer", { run: s.runId, round: 1 }), "回合锁本来就该是空的");
+    const out = createWriteStream(sessionTranscriptPath(s.taskId, s.sessId), { flags: "a" });
+    const closed = new Promise<void>((resolve) => out.on("close", resolve));
+    try {
+      await consumeSingleRun({
+        taskId: s.taskId, sessId: s.sessId, agentType: "codex", role: "reviewer",
+        ex: { model: null, reasoningEffort: null, resumeFields: () => ({}) } as never,
+        cwd: repo,
+        handle: {
+          sessionId: s.sessId, commandLine: "fake", kill() {},
+          events: (async function* (): AsyncGenerator<AgentEvent> {
+            yield { kind: "text", text: "先读 diff。\n" };
+            yield upstream;
+            // 执行器收尾时再报一条不带类型的诊断汇总：不许盖掉前面那条带模型类型的。
+            yield { kind: "error", message: "codex exited with code 1" };
+            yield { kind: "done", exitStatus: 1 };
+          })(),
+        } as never,
+        out, turnStart: at, cliSessionId: s.sessId, autoTitle: false,
+      });
+      await closed;
+    } finally {
+      releaseHeldTurn(s.taskId);
+    }
+    assert.deepEqual(await s.cause(), { kind: "interrupted", reason: "模型上游连不上（503）" },
+      "单飞收尾把「这一回合自己异常结束」的事实交进说明：退出码、带模型类型的那条执行故障");
+    assert.match(s.timeline(), /模型上游连不上（状态码 503）/, "那句话落在审查者自己的会话里");
   }
 
   // ── 7. 没存过原因的老轮次：按盘上的事实现算 ────────────────────────────────────
@@ -538,7 +562,7 @@ try {
     writeTrace(journaled, [retry("Reconnecting... 1/5"), { kind: "error", message: TRIP }, retry("Reconnecting... 2/5"), childRetry(RATE_429)]);
     writeEvents(journaled, [{ method: "error", params: { willRetry: true, error: { message: "Reconnecting... 2/5" } } }]);
     assert.deepEqual(await tripCause(journaled), QUOTA_CAUSE, "看门狗发的停止请求不算你停的；类型取判决冻结的那条");
-    assert.equal((await journaled.api())?.said, undefined, "执行器一句话都没说：没有原话，熔断诊断是 ash 自己的话，不冒充");
+    assert.equal((await journaled.api())?.said, undefined, "执行器一句话都没说：没有原话，熔断诊断是 navi 自己的话，不冒充");
     // 判决日志里记的就是「没类型」：照它说类型不明，执行过程里的、消费之后才到的终局错误都盖不掉。
     const journaledNone = await tripScene();
     appendStallVerdict({ at, sessionId: journaledNone.sessId, turnStartedAt: at, reason: TRIP, since: at, model: null });
@@ -593,10 +617,10 @@ try {
     assert.deepEqual(await child.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: PARENT, vague: true },
       "子线程的失败不算这一轮的执行故障，也不顶替主线程的原话");
     // 看门狗的红字、过程提示都不是执行故障。
-    const ashSaid = await scene({ diagnostics: { ...LIVE_DIAGNOSTICS, failureReason: PARENT, structuredErrors: [PARENT] } });
-    await settle(ashSaid, "failed", 1);
-    writeTrace(ashSaid, [{ kind: "error", message: PARENT }, { kind: "error", message: stallText.progressUnreadableText() }, retry(QUOTA_429)]);
-    assert.deepEqual(await ashSaid.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: PARENT, vague: true });
+    const naviSaid = await scene({ diagnostics: { ...LIVE_DIAGNOSTICS, failureReason: PARENT, structuredErrors: [PARENT] } });
+    await settle(naviSaid, "failed", 1);
+    writeTrace(naviSaid, [{ kind: "error", message: PARENT }, { kind: "error", message: stallText.progressUnreadableText() }, retry(QUOTA_429)]);
+    assert.deepEqual(await naviSaid.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: PARENT, vague: true });
 
     // 同一份诊断、但回合行说是你停的：不补。
     const userStopped = await scene({ diagnostics: KILLED });

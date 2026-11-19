@@ -1,4 +1,5 @@
 import type { AgentType } from "./index.ts";
+import type { TaskDiscussion } from "./discussion.ts";
 import type { PreviewServiceState } from "./preview.ts";
 import type { ReviewNoVerdict } from "./timeline-notice.ts";
 
@@ -370,6 +371,8 @@ export interface ReviewerProfile {
   executorLabel: string | null;
   model: string | null;
   reasoningEffort: string | null;
+  /** 派出去的任务默认交给这一位审查（每人至多一位，shared/src/review-on-create.ts）。 */
+  isDefault: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -528,7 +531,7 @@ export interface FreeReviewRound {
   reportMarkdown: string;
   screenshots: string[];
   /**
-   * 任务了结满保留期（ASH_TRACE_KEEP_DAYS，默认 7 天）后被删掉的截图，名字与 `screenshots` 同一
+   * 任务了结满保留期（NAVI_TRACE_KEEP_DAYS，默认 7 天）后被删掉的截图，名字与 `screenshots` 同一
    * 口径；报告里引用它们的地方画成「已过保留期」。省略 = 这一轮没有删过（绝大多数轮次）。
    */
   expiredScreenshots?: string[];
@@ -655,6 +658,8 @@ export interface FreeWorkflowState {
   preview: FreeWorkflowPreviewState;
   executions: FreeWorkflowExecution[];
   reviews: FreeReviewRun[];
+  /** 这条任务上开过的讨论，按开始时间排（会话里的气泡、「审议」格里的那一段都读它）。 */
+  discussions: TaskDiscussion[];
 }
 
 export interface FreeReviewDispatchInput {

@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
-import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
+import { makeStep } from "@navi/shared/workflow";
+import { familyAcceptanceNotices, familySelectionBlock } from "@navi/shared/branch-plan";
+import { TASK_BRANCH_PREFIX } from "@navi/shared/task-branch";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-branch-acceptance-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-branch-acceptance-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { tasks, projects } = await import("../src/db/schema.js");
@@ -23,9 +24,10 @@ const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { mountTaskDiffRoutes } = await import("../src/task-diff-routes.js");
 const { mountTaskScheduleRoutes } = await import("../src/task-schedule-routes.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
+const { mountAcceptMemoryRoutes } = await import("../src/accept-memory.js");
 const { branchDependency, branchDeletionBlock, dependentTasks, baseUpdateBackupPrefix } = await import("../src/task-branch-plan.js");
 const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
-const { updateTaskBase } = await import("../src/task-base-update.js");
+const { updateTaskBase, BASE_UPDATE_TMP_PREFIX } = await import("../src/task-base-update.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
 await ensureSchema();
 const api = new Hono();
@@ -41,6 +43,7 @@ mountTaskAcceptanceRoutes(api);
 mountTaskDiffRoutes(api);
 mountTaskScheduleRoutes(api);
 mountProjectRoutes(api);
+mountAcceptMemoryRoutes(api);
 let sequence = 0;
 const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id)))[0];
 const commit = (path: string, file: string, value: string) => {
@@ -117,7 +120,7 @@ try {
     await db.update(tasks).set({ mergeTargetBranch: stale.parentWs.branch }).where(eq(tasks.id, stale.child.id));
     rmSync(stale.parentWs.path, { recursive: true, force: true });
     const legacySource = await setup(); // case11: own source filtering also follows harness/*.
-    git(legacySource.childWs.path, "branch", "-m", legacySource.childWs.branch!.replace("ash/", "harness/"));
+    git(legacySource.childWs.path, "branch", "-m", legacySource.childWs.branch!.replace(TASK_BRANCH_PREFIX, "harness/"));
     const broken = await setup(); // case12: directory and WIP survive a broken .git backlink.
     await db.update(tasks).set({ mergeTargetBranch: broken.parentWs.branch }).where(eq(tasks.id, broken.child.id));
     writeFileSync(join(broken.parentWs.path, "PARENT_WIP.txt"), "keep parent WIP\n");
@@ -222,14 +225,15 @@ try {
     await checkDiff("source_branch_missing");
     await taskWorkspace(await row(task.id), s.repo);
     await checkDiff(null);
+    // 目标分支读不到：任务分支里合进来过多少目标分支无从得知，按开工点给出的会是错的数字（task-change-scope.ts）。
     git(s.repo, "branch", "-m", "main", "renamed-main");
-    await checkDiff(null);
+    await checkDiff("target_branch_missing");
     await db.update(tasks).set({ worktreeStartCommit: "0".repeat(40) }).where(eq(tasks.id, task.id));
     await checkDiff("start_commit_unreadable");
     assert.equal((await api.request(`/tasks/${task.id}/diff/file?path=../shared.txt`)).status, 400);
     await db.update(tasks).set({ worktreeStartCommit: null }).where(eq(tasks.id, task.id));
     await checkDiff("target_branch_missing");
-    console.log("✓ unstarted and unreadable pinned diff ranges return matching structured results; pinned diffs survive target rename");
+    console.log("✓ unstarted and unreadable pinned diff ranges return matching structured results; a missing target is reported, never papered over with the pinned start");
   }
   {
     const s = await setup("squash");
@@ -260,7 +264,7 @@ try {
     const family = await acceptFamily(s.parent.id, [view.task, ...view.descendants], acceptTask);
     assert.equal(family.ok, false);
     assert.deepEqual(family.completed, []);
-    assert.match(family.error!, /释放工作区目录（保留分支）/);
+    assert.match(family.error!, /释放目录」（保留分支）/);
     assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit);
     const acceptBefore = await acceptTask(s.child.id);
     assert.equal(acceptBefore.accepted, false);
@@ -346,7 +350,7 @@ try {
     const blocked = (await readBranchPlan(s.child.id))!.task;
     assert.equal(blocked.targetTaskId, s.parent.id);
     assert.equal(blocked.startCommit, initial.startCommit);
-    assert.match(blocked.blocker!, /释放工作区目录（保留分支）/);
+    assert.match(blocked.blocker!, /释放目录」（保留分支）/);
     assert.ok(blocked.blocker!.includes(s.parentWs.path));
     const selected = (view: NonNullable<Awaited<ReturnType<typeof readBranchPlan>>>) => [view.task, ...view.descendants];
     const before = selected((await readBranchPlan(s.parent.id))!);
@@ -394,7 +398,7 @@ try {
     const view = (await readBranchPlan(other.id))!;
     assert.equal(view.descendants[0].taskId, s.child.id, "merge target ownership also works outside the base parent");
     assert.equal(view.descendants[0].targetTaskId, other.id);
-    assert.match(view.descendants[0].blocker!, /释放工作区目录/);
+    assert.match(view.descendants[0].blocker!, /释放目录」/);
     assert.match((await branchDeletionBlock(s.repo, other.id))!, /依赖/);
     console.log("✓ retargeting to another task exposes that owner's dependent and protects its branch");
   }
@@ -566,7 +570,7 @@ try {
     assert.equal((await updateTaskBase(s.child.id, before)).ok, false);
     assert.equal(git(s.childWs.path, "rev-parse", "HEAD"), before);
     assert.equal(git(s.childWs.path, "status", "--porcelain"), "");
-    assert.equal(git(s.repo, "worktree", "list").includes("ash-base-update-"), false);
+    assert.equal(git(s.repo, "worktree", "list").includes(BASE_UPDATE_TMP_PREFIX), false);
     console.log("✓ failed rebase preserves child and cleans temporary checkout");
   }
   {

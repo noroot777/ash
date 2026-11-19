@@ -1,4 +1,4 @@
-import type { AcceptGateView } from "@ash/shared/accept-gate";
+import type { AcceptGateView } from "@navi/shared/accept-gate";
 import { dropPendingAcceptGate, startPendingAcceptGate } from "./accept-gate.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import type { AcceptTaskResult } from "./task-accept.js";

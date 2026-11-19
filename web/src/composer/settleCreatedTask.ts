@@ -1,54 +1,64 @@
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import type { Draft, DraftHandle } from "../lib/DraftStore.tsx";
 import type { LaunchMode } from "./ComposerLaunchControl.tsx";
+import type { ComposerOpening } from "./composerOpening.ts";
 
 /**
  * 创建成功之后的收尾:草稿归属裁决 → 按启动方式排队/启动/定时 → 回写 onCreated。
  *
- * 提交是异步的,完成时发起那份面板可能早已卸载(用户切走、删了刚建的任务又开了
- * 新面板),共享草稿(按项目一份,见 composerDraft.ts)可能已被新面板接管。收尾
- * 必须绑定**本次提交**的归属(第 9、10 轮审查:旧请求的收尾清掉了用户正在写的新
- * 草稿/新附件):
- * - 清草稿:面板还挂着照常清;已卸载时交给 clearIfUnchanged 按提交时刻的草稿
- *   对象引用做原子裁决——引用相同 ⇔ 正文、附件、在途上传、回链、截图全都没动过,
- *   任何变化(含改过又改回)都让旧提交失去清空资格;
- * - 随手记回链交**提交那一刻**捕获的 noteIds,不读完成时的(那可能是新面板的);
- * - ownsComposer 一并交给上层,上层只在它为 true 时收面板。
+ * 提交是异步的,结果回来时发起那份面板可能早已卸载(用户切走、删了刚建的任务又开了
+ * 新面板),共享草稿(按项目一份,见 composerDraft.ts)也可能已被清空、换成了另一件事。
+ * 所以结果**一律凭这次提交的身份**动草稿,不看面板挂没挂着来猜(第 9、10 轮审查清掉了新
+ * 草稿/新附件;新建框第 3 轮审查:清空后新写的内容被旧请求的成功清掉、面板被收起):
+ * - 成功清草稿、没送达挂上待重发的那条,都走 DraftStore 的 settleSubmission——草稿还盖着
+ *   这次的戳才认;面板已卸载时还要求自提交那一刻起一点没动过(对象引用相同);
+ * - 不认就不清、不挂,ownsComposer=false,上层不收面板;只如实说一声;
+ * - 随手记回链交**提交那一刻**捕获的 noteIds,不读完成时的(那可能是新面板的)。
+ *
+ * 框里 `@` 了人时「启动」就是起第一回合(问一句 / 讨论)。它没被服务端接下,任务虽已建好,这次提交却没办成:
+ * 不收尾——草稿、叫的人原样留着,这条任务记进草稿,再按一次只对它重发这一下,不再建一条。草稿已经不是那一份,
+ * 这条任务就不去接管新草稿,只说一声它留在待办里。
+ * 返回值:这次提交在远端办成了没有——只够调用方决定记不记偏好,**不是**动草稿的资格:草稿上该动的(正文、附件、
+ * 叫的人、待重发的那条)这里已经凭提交身份动完了,调用方别再凭它去改草稿。
  */
 export async function settleCreatedTask(args: {
   task: Task;
   launchMode: LaunchMode;
   scheduleAt: string;
   scheduleCron: string;
-  /** 提交那一刻的草稿对象(归属标识)与随手记回链。 */
-  submitted: { draft: Draft; noteIds: string[] };
+  /** 框里 `@` 了人：「创建并运行」那一下换成它起第一回合（只在 launchMode="run" 时有）。 */
+  opening?: ComposerOpening | null;
+  /** 这次提交的身份：盖在草稿上的戳、盖完那一刻的草稿对象，以及那一刻的随手记回链。 */
+  submitted: { token: string; draft: Draft; noteIds: string[] };
   /** 发起提交的那份面板此刻是否仍挂载。 */
   panelMounted: () => boolean;
-  draft: Pick<DraftHandle, "clear" | "clearIfUnchanged">;
+  draft: Pick<DraftHandle, "settleSubmission">;
   resetLabels: () => void;
   enqueue: (task: Task) => Promise<{ task: Task; members: Task[]; message: string }>;
   onCreated: (task: Task, noteIds: string[], ownsComposer: boolean) => void;
   onTasksSynced?: (tasks: Task[]) => void;
   notify: (message: string) => void;
-}): Promise<void> {
-  const { submitted, notify } = args;
+  /** 「创建并等前置」：已选里还没站稳的那几条的名字（提示「等谁」用）。 */
+  waitingFor?: () => string[];
+}): Promise<boolean> {
+  const { submitted } = args;
   let task = args.task;
   // 创建成功了草稿才丢:中途任何一步失败都原样留着,用户回到面板还能接着改。
+  let kept = false;
   const finishCreation = () => {
-    const ownsComposer = args.panelMounted();
-    if (ownsComposer) {
-      args.resetLabels();
-      args.draft.clear();
-    } else {
-      args.draft.clearIfUnchanged(submitted.draft);
-    }
-    args.onCreated(task, submitted.noteIds, ownsComposer);
+    const mounted = args.panelMounted();
+    const owns = args.draft.settleSubmission(submitted.token, "clear", mounted ? undefined : submitted.draft);
+    kept = !owns;
+    if (owns && mounted) args.resetLabels();
+    args.onCreated(task, submitted.noteIds, owns && mounted);
   };
+  // 草稿已经换了的时候补一句：那边写的东西没被动过，面板也没收。
+  const notify = (message: string) => args.notify(kept ? `${message}；那份草稿已经换了，后来写的内容原样留着` : message);
   if (args.launchMode === "create") {
     finishCreation();
     notify("任务已创建");
-    return;
+    return true;
   }
   if (args.launchMode === "queue") {
     // 创建成功后排队失败不回滚任务(enqueue 如实分开报两段结果);成功时 task
@@ -60,11 +70,13 @@ export async function settleCreatedTask(args: {
     finishCreation();
     if (result.members.length) args.onTasksSynced?.(result.members);
     notify(result.message);
-    return;
+    return true;
   }
   let launchError: unknown = null;
+  let held: Awaited<ReturnType<typeof api.runTask>> | null = null;
   try {
-    if (args.launchMode === "run") await api.runTask(task.id);
+    if (args.launchMode === "run") held = await (args.opening ? args.opening.start(task).then(() => null) : api.runTask(task.id));
+    else if (args.launchMode === "prerequisites") held = await api.runTask(task.id);
     else if (args.launchMode === "once") {
       await api.setSchedule(task.id, { kind: "once", at: new Date(args.scheduleAt).toISOString(), cron: null });
     } else {
@@ -73,14 +85,35 @@ export async function settleCreatedTask(args: {
   } catch (error) {
     launchError = error;
   }
+  const reason = launchError instanceof Error ? launchError.message : "未知错误";
+  if (launchError && args.opening) {
+    args.notify(args.draft.settleSubmission(submitted.token, { created: { task, error: reason } })
+      ? `任务已创建，但${args.opening.what}没发出去：${reason}。再按一次只重发这一下，不会再建一条`
+      : `任务「${task.title}」已创建，但${args.opening.what}没发出去：${reason}。那份草稿已经换了，这条任务留在待办里`);
+    return false;
+  }
   finishCreation();
   if (launchError) {
-    notify(`任务已创建，但${args.launchMode === "run" ? "启动" : "定时设置"}失败：${launchError instanceof Error ? launchError.message : "未知错误"}`);
-    return;
+    const what = args.launchMode === "run" || args.launchMode === "prerequisites" ? "启动" : "定时设置";
+    notify(`任务已创建，但${what}失败：${reason}`);
+    return true;
+  }
+  // 前置没齐时服务端不起跑、记成等齐就起：这是被接受了的请求，不是启动失败。
+  if (held?.waiting) {
+    if (held.blocked) {
+      notify(`任务已建好，前置都站稳了，但还开不了工：${held.reason ?? "原因未知"}`);
+      return true;
+    }
+    const names = (args.waitingFor?.() ?? []).map((title) => `「${title}」`).join("");
+    notify(`任务已建好，等${names || "前置"}站稳后自动开始`);
+    return true;
   }
   notify(args.launchMode === "run"
-    ? "任务已创建并启动"
-    : args.launchMode === "once"
-      ? "任务已创建，已设置一次性定时"
-      : "任务已创建，已设置 Cron 定时");
+    ? args.opening?.started ?? "任务已创建并启动"
+    : args.launchMode === "prerequisites"
+      ? "任务已创建并启动"
+      : args.launchMode === "once"
+        ? "任务已创建，已设置一次性定时"
+        : "任务已创建，已设置 Cron 定时");
+  return true;
 }

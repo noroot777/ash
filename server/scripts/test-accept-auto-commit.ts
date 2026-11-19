@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
-import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
+import type { AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 
-const root = mkdtempSync(join(tmpdir(), "ash-auto-commit-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-auto-commit-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");

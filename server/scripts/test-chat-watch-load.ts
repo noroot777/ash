@@ -3,14 +3,16 @@
 // 下 3/12 漏报（rename / edit-existing / sync-write 拿到空附注）——晚到的 FSEvents 事件
 // 被 close() 永久丢弃且不降级。静默结算 + 武装窗口后必须稳定捕获；另铺不在观察范围内的
 // 背景 churn 抬高 fseventsd 投递负载，逼近真实并发场景。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-watch-load-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-watch-load-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { watchChatWorkspace } = await import("../src/chat/boundary.js");
 
 const ROUNDS = 6;
@@ -43,5 +45,5 @@ try {
   assert.equal(failures.length, 0, `并发负载下目录观察漏报：\n${failures.join("\n")}`);
   console.log(`chat watch load: ${ROUNDS} 轮 × ${WORKERS} 路并发的真实写入/编辑/改名全部捕获，无降级`);
 } finally {
-  rmSync(stage, { recursive: true, force: true });
+  await removeTmpStage(stage);
 }

@@ -1,9 +1,9 @@
-// 首启向导(§二)。它只管一次性的分叉:这台 ash 是给一个人用,还是给几个人用。
+// 首启向导(§二)。它只管一次性的分叉:这台 navi 是给一个人用,还是给几个人用。
 //
 // 「切到多人」的表单本体在 `MultiModeForm.tsx` —— 设置页危险区走的是同一份,
 // 那几条警告(转不回、根目录锁死)以及「CLI 额度」那一档只能有一份拷贝。
 import { useCallback, useState } from "react";
-import type { AuthState } from "@ash/shared";
+import type { AuthState } from "@navi/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
 import { AuthShell } from "./AuthShell.tsx";
@@ -57,7 +57,7 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
           <h1>{resuming ? "把管理员补建出来" : "切到多人模式"}</h1>
           {resuming ? (
             <p className="auth-note">
-              上一次转换没走完：这台 ash 已经是多人模式，但还没有任何人能登录。
+              上一次转换没走完：这台 Navi 已经是多人模式，但还没有任何人能登录。
               填一次姓名就能补上，根目录已经锁死、不用再选。
             </p>
           ) : null}
@@ -77,7 +77,7 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
   return (
     <AuthShell>
       <div className="auth-card auth-card--wide">
-        <h1>这台 ash 给谁用？</h1>
+        <h1>这台 Navi 给谁用？</h1>
         <p className="auth-note">选完就能开始。之后从自用切到多人还来得及，反过来不行。</p>
 
         <button type="button" className="auth-choice" onClick={() => void chooseSingle()} disabled={busy}>
@@ -94,7 +94,7 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
             每人一把 key、一个自己的目录、一套自己的执行器。
             CLI 额度是<b>各花各的还是共用这台机器的订阅，下一步选</b>，之后也能改。
             权限是<b>防误操作的护栏，不是 OS 级隔离</b>：所有 agent 都以同一个系统账号运行。
-            传输安全靠 Tailscale / 反向代理的 TLS，ash 自己不做 HTTPS。
+            传输安全靠 Tailscale / 反向代理的 TLS，Navi 自己不做 HTTPS。
           </span>
         </button>
 

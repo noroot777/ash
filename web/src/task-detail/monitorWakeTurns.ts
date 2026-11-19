@@ -1,6 +1,6 @@
-// 哨兵住进回合里（docs/ui-ux-audit feed-7）。
+// 哨兵住进回合里。
 //
-// 哨兵每叫醒一次，会话正文里就多一条「ash 自动输入」，后面跟着它的回复。照原样排，一段
+// 哨兵每叫醒一次，会话正文里就多一条「navi 自动输入」，后面跟着它的回复。照原样排，一段
 // 话被切成七八截，每截都重报一遍头像和名字。这里把它们**并回等它的那一回合**：
 //
 //   · 叫醒那一下变成执行过程里的一步（「等 哨兵「…」 · 3m · 来了 2 条」），点开是送回来的那几行；
@@ -25,7 +25,7 @@
 //
 // 只改排法，不改数据：并出来的那一条带着原来几条的出处（删除照旧能定位），id 取最后并进来的那一截
 // （派生按 id 在原始条目里截上下文，截到它才带得上醒来后说的话）。
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
 import type { AgentContentSegment, ConversationItem } from "./conversationModel.ts";
 import { monitorWakeInput, monitorWakePreview, type MonitorWakeInput } from "./monitorWakeModel.ts";
 import { claimStarts, claimWake, emptyClaims, ownsWake, type MonitorClaims } from "./monitorWakeOwner.ts";
@@ -241,7 +241,7 @@ function wakeSegment(wake: UserItem, input: MonitorWakeInput, waitedFrom: string
     attachments: wake.attachments,
     events: [{
       kind: "tool",
-      label: `mcp__${ASH_MCP_SERVER_NAME}__${MONITOR_WAKE_TOOL}`,
+      label: `mcp__${NAVI_MCP_SERVER_NAME}__${MONITOR_WAKE_TOOL}`,
       at: wake.at,
       detail: JSON.stringify({
         source: input.source ?? "哨兵",

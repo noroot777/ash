@@ -6,8 +6,9 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-personal-cli-settings-"));
-process.env.ASH_DB = join(stage, "test.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-personal-cli-settings-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_DATA_DIR = join(stage, "data");
 requireTmpDb("test-personal-cli-settings");
 const { mountPersonalCliRoutes } = await import("../src/auth/personal-routes.js");
 const { USER_CLI_ROOT, userCliDir, writePersonalSkill } = await import("../src/auth/user-cli.js");
@@ -33,8 +34,8 @@ try {
     mkdirSync(skillDir, { recursive: true });
     const file = join(skillDir, "SKILL.md");
     writeFileSync(file, "# Existing skill\nOriginal content that is longer than the replacement.\n");
-    if (agent === "claude") writeFileSync(join(dir, ".claude.json"), JSON.stringify({ mcpServers: { ash: { command: "node", args: [] } } }));
-    else writeFileSync(join(dir, "config.toml"), '[mcp_servers.ash]\ncommand = "node"\nargs = []\n');
+    if (agent === "claude") writeFileSync(join(dir, ".claude.json"), JSON.stringify({ mcpServers: { navi: { command: "node", args: [] } } }));
+    else writeFileSync(join(dir, "config.toml"), '[mcp_servers.navi]\ncommand = "node"\nargs = []\n');
 
     for (const body of ["# 已修改\n", "# Updated\n" + "更多内容。\n".repeat(20)]) {
       assert.equal((await update(agent, "existing", body)).status, 200);

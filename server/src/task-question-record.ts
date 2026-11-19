@@ -1,13 +1,17 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { formatQuestionAnswers, questionItems, questionKey } from "@ash/shared/questions";
-import type { QuestionAnswerInput, QuestionRecord, QuestionSource } from "@ash/shared/questions";
+import { formatQuestionAnswers, questionItems, questionKey } from "@navi/shared/questions";
+import type { QuestionAnswerInput, QuestionRecord, QuestionSource } from "@navi/shared/questions";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { TaskRow } from "./task-store.js";
 import { now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { questionOccurrenceOf } from "./task-wait-ownership.js";
+import { activeDispatchPlan, parseDispatchPlan } from "@navi/shared/dispatch-plan";
+
+/** 派活单被发回来改时，答复最前面那一句（智能体据此知道一条都没建）。 */
+export const DISPATCH_PLAN_RETURNED = "（派活单没有派出，一条任务都没建。用户的意见如下，按它改完可以再摆一次。）";
 
 export function prepareQuestionRecord(task: TaskRow, answer: string, input: QuestionAnswerInput): QuestionRecord {
   const source: QuestionSource = {
@@ -32,31 +36,38 @@ export function prepareQuestionRecord(task: TaskRow, answer: string, input: Ques
   }
   const text = answers ? formatQuestionAnswers(answers) : answer.trim();
   if (!text) throw new TypeError("answer 不能为空");
+  // 对着一张派活单回的话（网页上的「发回去改」、手机或飞书里直接回一句）：一条任务都没建，先跟智能体说清。
+  const plan = activeDispatchPlan({ question: task.question, dispatchPlan: parseDispatchPlan(task.dispatchPlan) });
   return {
     ...source, id: nanoid(12), answeredAt: now(), answer: text,
     ...(answers ? { answers: answers.map((value) => value.trim()) } : {}),
-    reply: `【答复】\n${text}`,
+    reply: `【答复】\n${plan ? `${DISPATCH_PLAN_RETURNED}\n` : ""}${text}`,
   };
 }
 
+/** 整行条件写认领这一问：条件写命中才证明答的就是那一问。 */
 export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord,
   onClaim?: (transaction: ConclusionTransaction) => Promise<void>): Promise<boolean> {
-  return db.transaction(async (transaction) => {
-    const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
-    const claimed = await transaction.update(tasks).set({
-      question: null, questionOptions: null, questionItems: null,
-      questionHistory: JSON.stringify([...history, record]), updatedAt: record.answeredAt,
-    }).where(and(
-      eq(tasks.id, task.id),
-      eq(tasks.question, task.question!),
-      task.questionOptions === null ? isNull(tasks.questionOptions) : eq(tasks.questionOptions, task.questionOptions),
-      task.questionItems === null ? isNull(tasks.questionItems) : eq(tasks.questionItems, task.questionItems),
-      task.questionHistory === null ? isNull(tasks.questionHistory) : eq(tasks.questionHistory, task.questionHistory),
-      task.waitOwnership === null ? isNull(tasks.waitOwnership) : eq(tasks.waitOwnership, task.waitOwnership),
-      task.mode === "team" ? undefined : eq(tasks.status, task.status),
-    )).returning({ id: tasks.id });
-    if (!claimed.length) return false;
-    await onClaim?.(transaction);
-    return true;
-  }, { behavior: "immediate" });
+  return db.transaction((transaction) => claimQuestionAnswerWithin(transaction, task, record, onClaim), { behavior: "immediate" });
+}
+
+/** 同上，但落在调用方的事务里：派活单「派出去」要让认领和建任务同一笔提交（dispatch-plan-launch.ts）。 */
+export async function claimQuestionAnswerWithin(transaction: ConclusionTransaction, task: TaskRow, record: QuestionRecord,
+  onClaim?: (transaction: ConclusionTransaction) => Promise<void>): Promise<boolean> {
+  const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
+  const claimed = await transaction.update(tasks).set({
+    question: null, questionOptions: null, questionItems: null, dispatchPlan: null,
+    questionHistory: JSON.stringify([...history, record]), updatedAt: record.answeredAt,
+  }).where(and(
+    eq(tasks.id, task.id),
+    eq(tasks.question, task.question!),
+    task.questionOptions === null ? isNull(tasks.questionOptions) : eq(tasks.questionOptions, task.questionOptions),
+    task.questionItems === null ? isNull(tasks.questionItems) : eq(tasks.questionItems, task.questionItems),
+    task.questionHistory === null ? isNull(tasks.questionHistory) : eq(tasks.questionHistory, task.questionHistory),
+    task.waitOwnership === null ? isNull(tasks.waitOwnership) : eq(tasks.waitOwnership, task.waitOwnership),
+    task.mode === "team" ? undefined : eq(tasks.status, task.status),
+  )).returning({ id: tasks.id });
+  if (!claimed.length) return false;
+  await onClaim?.(transaction);
+  return true;
 }

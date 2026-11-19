@@ -153,7 +153,7 @@ if (IS_WIN) {
   const shapes: Array<[string, string]> = [
     ["模板串那条路(spawnDetachedAgent)", `${CONFINE_ENROLL_CMD}; "$@" >>/dev/null 2>>/dev/null; printf %s $? >/dev/null`],
     ["数组 join 那条路(spawnControllableDetachedAgent)",
-      [CONFINE_ENROLL_CMD, 'trap \'rm -f "$ASH_IN"\' EXIT', 'exec 3<>"$ASH_IN"', '"$@" <&3', 'exit $?'].join("; ")],
+      [CONFINE_ENROLL_CMD, 'trap \'rm -f "$NAVI_IN"\' EXIT', 'exec 3<>"$NAVI_IN"', '"$@" <&3', 'exit $?'].join("; ")],
   ];
   for (const [label, script] of shapes) {
     const check = spawnSync("/bin/sh", ["-n", "-c", script], { encoding: "utf8" });
@@ -314,7 +314,7 @@ if (!confine) {
     // ① 先证明这个现场**真的**是那个硬场景:既有几台设备认不出它。
     const unit = processUnitEvidence(token, { fresh: true });
     if (unit.verdict === "none" || unit.verdict === "unprovable") {
-      ok(`记号那台设备看不见它(${unit.verdict})—— 它的环境里一项 ASH_ 都没有`);
+      ok(`记号那台设备看不见它(${unit.verdict})—— 它的环境里一项 NAVI_ 都没有`);
     } else fail(`现场不成立:记号那台设备仍然认得出它(${unit.verdict}),那就不是线索断掉的场景`);
     const ppid = readPpid(descendant);
     if (IS_WIN) {
@@ -419,13 +419,13 @@ if (!confine) {
   // 那条路里 `sh` 在 `exec` 之前把 `$$` 写进 `cgroup.procs`(CONFINE_ENROLL_CMD),
   // 所以 CLI 的第一条指令就已经在圈里 —— 这是 `whole-run` 这一档的来历。
   //
-  // 同一个现场跑两遍(设备开 / `ASH_KERNEL_CONFINE=0`),对照的是**后代的实际存亡**,
+  // 同一个现场跑两遍(设备开 / `NAVI_KERNEL_CONFINE=0`),对照的是**后代的实际存亡**,
   // 不是判定的措辞:措辞会随判据演进,「它到底还在不在跑」不会。这一对就是验收里
   // 「答不出来时退回原路径」那条的可执行形态 —— 关掉之后既有那四台设备在这个现场
   // 结构性地看不见它,于是它活下来;而两边的结论都如实,没有一边冒充清理完成。
   const home = mkdtempSync(join(tmpdir(), "ash-confine-e2e-"));
-  process.env.ASH_DB = join(home, "ash.db");
-  process.env.ASH_ALLOW_REAL_AGENT = "1";
+  process.env.NAVI_DB = join(home, "ash.db");
+  process.env.NAVI_TEST_AGENT_BIN = process.execPath;
   const { ensureSchema } = await import("../src/db/index.js");
   await ensureSchema();
   const { detachedPathsFor, spawnForRun } = await import("../src/executors/detached.js");
@@ -451,8 +451,8 @@ setTimeout(() => {
   const TOUGH_KID = 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)';
 
   const runOnce = async (deviceOn: boolean, kidCode = IDLE_KID) => {
-    if (deviceOn) delete process.env.ASH_KERNEL_CONFINE;
-    else process.env.ASH_KERNEL_CONFINE = "0";
+    if (deviceOn) delete process.env.NAVI_KERNEL_CONFINE;
+    else process.env.NAVI_KERNEL_CONFINE = "0";
     const dir = mkdtempSync(join(home, deviceOn ? "on-" : "off-"));
     const paths = detachedPathsFor(dir, "s1", "2026-10-22T00:00:00Z");
     const child = spawnForRun(dir, process.execPath, ["-e", e2eRoot(kidCode)], "", undefined, paths);
@@ -498,7 +498,7 @@ setTimeout(() => {
 
   const off = await runOnce(false);
   try {
-    delete process.env.ASH_KERNEL_CONFINE;
+    delete process.env.NAVI_KERNEL_CONFINE;
     console.log(`     · 设备关掉,同一段耗时 ${off.tookMs} ms(差值就是这台设备的收尾代价)`);
     if (off.alive) {
       ok(`设备关掉:同一个现场,既有那四台设备结构性看不见它,它活了下来(${off.descendant})`
@@ -567,20 +567,20 @@ console.log("5) 关掉这台设备 ⇒ 原样退回既有那套");
   // 这一组钉的是「答不出来时退回原路」这条**可执行**的保证:同一台机器、同一个现场,
   // 把设备关掉之后 `openConfinement` 必须答 null、披露面必须说得出为什么,而判定那一摊
   // 一个字都不改(上面第 1 组已经钉过:read 为 null ⇒ confinedResidue 不说话)。
-  const prev = process.env.ASH_KERNEL_CONFINE;
-  process.env.ASH_KERNEL_CONFINE = "0";
+  const prev = process.env.NAVI_KERNEL_CONFINE;
+  process.env.NAVI_KERNEL_CONFINE = "0";
   try {
     const off = openConfinement(`${token}-off`);
-    if (off === null) ok("显式关掉之后建不出圈(ASH_KERNEL_CONFINE=0)");
+    if (off === null) ok("显式关掉之后建不出圈(NAVI_KERNEL_CONFINE=0)");
     else { fail("关了还是建出来了"); off.dispose(); }
     const why = confineAbstention();
-    if (why && /ASH_KERNEL_CONFINE/.test(why)) ok(`披露面如实说出弃权的理由:${why}`);
+    if (why && /NAVI_KERNEL_CONFINE/.test(why)) ok(`披露面如实说出弃权的理由:${why}`);
     else fail(`关掉之后披露面没说清为什么弃权(${why})`);
     if (reopenConfinement("/whatever") === null) ok("关掉之后也不去打开任何既有的圈");
     else fail("关了还在打开圈");
   } finally {
-    if (prev === undefined) delete process.env.ASH_KERNEL_CONFINE;
-    else process.env.ASH_KERNEL_CONFINE = prev;
+    if (prev === undefined) delete process.env.NAVI_KERNEL_CONFINE;
+    else process.env.NAVI_KERNEL_CONFINE = prev;
   }
 }
 

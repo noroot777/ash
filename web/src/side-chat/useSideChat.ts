@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
-import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
+import type { ChatMember, ChatRoom, ChatSnapshot } from "@navi/shared/chat";
 import { chatApi } from "../chat/chatApi.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
@@ -85,7 +85,7 @@ export function useSideChat(taskId: string) {
   const confirmedMembers = useRef(new Map<string, ChatMember>());
   const attached = useRef(attachments);
   const uploading = useRef(pending);
-  const selectionKey = `ash:side-chat:task:${taskId}`;
+  const selectionKey = `navi:side-chat:task:${taskId}`;
   const restoreAttachments = useCallback((scope: string) => {
     const restored = readAttachments(scope);
     attached.current = restored;
@@ -255,7 +255,7 @@ export function useSideChat(taskId: string) {
     write(requestKey(scope), JSON.stringify(request));
     try {
       if (!targetId) {
-        const key = `ash:side-chat:create:${taskId}`;
+        const key = `navi:side-chat:create:${taskId}`;
         const id = read(key) || createClientId();
         write(key, id);
         const created = await chatApi.createSideChat(taskId, member, id);

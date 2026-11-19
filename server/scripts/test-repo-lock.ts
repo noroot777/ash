@@ -1,13 +1,15 @@
 // 仓库级串行锁回归测试:并行验收必须排队依次合并,而不是一起冲进同一个 `.git`。
-// 每个用例自带临时仓库,任何 checkout / ref 更新都不会外溢到 ash 仓库。
+// 每个用例自带临时仓库,任何 checkout / ref 更新都不会外溢到 navi 仓库。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-repo-lock-test-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-repo-lock-test-"));
+process.env.NAVI_DB = join(root, "ash.db");
 // 会话 Markdown 落在仓库的 data/runs 下(RUNS_DIR 与 cwd 无关),用例结束时清掉。
 const transcripts: string[] = [];
 const git = (cwd: string, ...args: string[]) =>
@@ -27,7 +29,7 @@ function hasRef(repo: string, branch: string): boolean {
 function makeRepo(name: string): string {
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Repo Lock Test");
+  git(repo, "config", "user.name", "Navi Repo Lock Test");
   git(repo, "config", "user.email", "lock@example.test");
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
@@ -273,5 +275,5 @@ try {
   console.log("repo lock: 互斥 / 路径归一 / 可重入 / 异常释放 / 排队上报 / 并行验收串行合并 / 排队留痕全部通过");
 } finally {
   for (const dir of transcripts) rmSync(dir, { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

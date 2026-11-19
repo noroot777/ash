@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgentEvent, ServerEvent } from "@ash/shared";
+import type { AgentEvent, ServerEvent } from "@navi/shared";
 import {
   ExecutionDetails,
   executionBlockTone,
@@ -20,7 +20,7 @@ import {
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import type { AgentContentSegment } from "../src/task-detail/conversationModel.ts";
 import { awaitingUpstream } from "../src/task-detail/conversationSegments.ts";
-import { turnLayout } from "../src/task-detail/turnFold.ts";
+import { splitTurnSegments } from "../src/task-detail/turnFold.ts";
 import { applyDuetEvent, emptyDuet } from "../src/duet/duetState.ts";
 
 const RETRY = "上游返回 502 server_error，正在重试（第 1/10 次，等 0.6 秒）";
@@ -106,13 +106,12 @@ assert.deepEqual(
 // ── 4) 回合折叠:提示不是「动手」，不能被当成切点 ──────────────────────────────
 // 切点落在**最后一次真正动手**的那一步上，它之前的正文折进过程、之后的留在外面。提示
 // 讲的恰恰是「什么都没发生」——拿它当切点，上游抽风那一下之前说过的话就全被折没了。
-const folded = turnLayout(
+const folded = splitTurnSegments(
   [
     { id: "f0", markdown: "边干边说的那一段。\n", events: [{ kind: "tool", label: "Bash" }], attachments: [] },
     { id: "f1", markdown: "", events: [{ kind: "notice", label: "提示", detail: RETRY }], attachments: [] },
     { id: "f2", markdown: "这是结论。", events: [], attachments: [] },
   ],
-  { live: false },
 );
 assert.equal(
   folded.conclusion.map((segment) => segment.markdown).join(""),
@@ -265,7 +264,7 @@ const withBlankTail = tracedSegments(
 assert.ok(withBlankTail.length >= 1);
 assert.equal(awaitingUpstream(withBlankTail), true, "等待那一位落到了折叠条读不到的段上");
 
-// ── 事后点开：紧挨着的几次重试并成一行，用最后一次的说法、带上一共几次（docs/ui-ux-audit run-9）──
+// ── 事后点开：紧挨着的几次重试并成一行，用最后一次的说法、带上一共几次──
 const RETRY_2 = "上游返回 502 server_error，正在重试（第 2/10 次，等 1.2 秒）";
 const RETRY_3 = "上游返回 502 server_error，正在重试（第 3/10 次，等 2.4 秒）";
 const retries = renderToStaticMarkup(<ExecutionDetails running={false} events={[

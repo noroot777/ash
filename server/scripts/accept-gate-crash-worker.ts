@@ -38,6 +38,6 @@ bus.publish = (event) => {
   if (phase === "after-merged" && event.type === "task.stage" && event.stage === "merged") process.kill(process.pid, "SIGKILL");
 };
 await acceptTask(taskId);
-// 命令已经放行、正在跑的时候 ash 整个死掉（test-accept-gate-takeover.ts 的四条分流都从这里起）。
+// 命令已经放行、正在跑的时候 navi 整个死掉（test-accept-gate-takeover.ts 的四条分流都从这里起）。
 if (phase === "armed") process.kill(process.pid, "SIGKILL");
 setInterval(() => {}, 1_000);

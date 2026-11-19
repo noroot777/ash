@@ -1,3 +1,5 @@
+// 必须是第一个 import：老版本存下的键要在任何模块读存储之前挪到新前缀（见 lib/storageRename.ts）。
+import "./lib/storageRenameBoot.ts";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/inter";

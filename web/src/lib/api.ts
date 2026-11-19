@@ -1,5 +1,6 @@
-import type { DetectedPreviewService, PreviewServiceState } from "@ash/shared/preview";
+import type { DetectedPreviewService, PreviewServiceState } from "@navi/shared/preview";
 import type {
+  DiscussionStartInput,
   BranchPlanView,
   FamilyAcceptanceResult,
   AgentExecutorProfile,
@@ -34,20 +35,20 @@ import type {
   TaskListItem,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
-  TeamPreset,
-  TeamPresetConfig,
-} from "@ash/shared";
+} from "@navi/shared";
 
-import type { AcceptGateCancelResult, AcceptGateView } from "@ash/shared/accept-gate";
-import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
-import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
-import type { CliHostEnv } from "@ash/shared/cli-overrides";
-import type { CliModelCatalog } from "@ash/shared/cli-presets";
+import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult } from "@navi/shared/accept-gate";
+import type { BaseUpdateRecovery } from "@navi/shared/branch-plan";
+import type { WorkflowDef, WorkflowItem } from "@navi/shared/workflow";
+import type { CliHostEnv } from "@navi/shared/cli-overrides";
+import type { CliModelCatalog } from "@navi/shared/cli-presets";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
+import { prerequisiteApi } from "./apiPrerequisites.ts";
 import { taskMemoApi } from "./apiTaskMemos.ts";
+import { userMessageApi } from "./apiUserMessages.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { feishuApi } from "./feishuApi.ts";
@@ -77,7 +78,7 @@ import type {
   PullStrategy,
   ReplyTaskResult,
   SessionTraceEntry,
-  TaskCommit,
+  TaskCommitList,
   TaskDiffResult,
   TaskFileDiffResult,
   TaskWorkspaceProbe,
@@ -157,7 +158,7 @@ export const api = {
     request(`/projects/${id(projectId)}/git/push`, json("POST", { remote: remote ?? null })),
 
   // 项目的 git 配置：提交署名 / SSH key 落在**仓库自己的 .git/config**（agent 和用户的
-  // 终端看到的是同一份），HTTPS 用户名+令牌落在 ash 的库里且只写不读。
+  // 终端看到的是同一份），HTTPS 用户名+令牌落在 navi 的库里且只写不读。
   projectGitConfig: (projectId: string): Promise<ProjectGitConfig> =>
     request(`/projects/${id(projectId)}/git-config`),
   saveProjectGitConfig: (projectId: string, patch: ProjectGitConfigPatch): Promise<ProjectGitConfig> =>
@@ -197,6 +198,11 @@ export const api = {
     request(`/groups/${id(groupId)}/run`, { method: "POST" }),
   pauseGroup: (groupId: string): Promise<Group> =>
     request(`/groups/${id(groupId)}/pause`, { method: "POST" }),
+  // 「子任务」格头那一对键：这条任务名下全部停下 / 接着跑（server/src/dispatch-hold.ts）。
+  holdDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/hold`, { method: "POST" }),
+  releaseDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/release`, { method: "POST" }),
   createTasksBatch: (
     groupId: string,
     body: BatchCreateTasksBody,
@@ -205,11 +211,11 @@ export const api = {
 
   // 列表不带正文（见 shared 的 TaskListItem）；正文走 api.task(id)。
   tasks: (signal?: AbortSignal): Promise<TaskListItem[]> => request("/tasks", { signal }),
-  task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
+  task: (taskId: string, signal?: AbortSignal): Promise<Task> => request(`/tasks/${id(taskId)}`, { signal }),
   // 任务「此刻能做什么」（shared/src/task-actions.ts）：只经 useTaskActions 取，别处不直接调。
-  taskActions: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").TaskActions> =>
+  taskActions: (taskId: string, signal?: AbortSignal): Promise<import("@navi/shared").TaskActions> =>
     request(`/tasks/${id(taskId)}/actions`, { signal }),
-  taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
+  taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@navi/shared/questions").QuestionRecord[]> =>
     request(`/tasks/${id(taskId)}/question-history`, { signal }),
   ...taskNoticeApi,
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
@@ -222,10 +228,14 @@ export const api = {
   taskBodies: (taskIds: string[]): Promise<{ taskId: string; body: string }[]> =>
     request("/tasks/bodies", json("POST", { taskIds })),
   createTask: (
-    task: Partial<Task> & {
+    task: Partial<Omit<Task, "prerequisites">> & {
       projectId: string;
       title: string;
       attachments?: string[];
+      /** 建在哪几条任务上面（和任务同一次请求写进去，服务端判不成立就整条不建）。 */
+      prerequisites?: string[];
+      /** 建出来就带的审查预约（shared/src/review-on-create.ts）；不传 = 不带（新建面板）。 */
+      review?: import("@navi/shared/review-on-create").CreateReviewChoice;
       // 挑哪条起手式；task.workflow 非空时它已经是就地改过的快照，服务端直接落库
       workflowId?: string | null;
     },
@@ -233,7 +243,7 @@ export const api = {
   patchTask: (taskId: string, patch: Partial<Task>): Promise<Task> =>
     request(`/tasks/${id(taskId)}`, {
       ...json("PATCH", patch),
-      headers: { "content-type": "application/json", "x-ash-user-action": "1" },
+      headers: { "content-type": "application/json", "x-navi-user-action": "1" },
     }),
   deleteTask: (
     taskId: string,
@@ -246,7 +256,8 @@ export const api = {
     const query = params.toString();
     return request(`/tasks/${id(taskId)}${query ? `?${query}` : ""}`, { method: "DELETE" });
   },
-  runTask: (taskId: string): Promise<unknown> =>
+  /** 有前置、前置没齐时不起跑：`waiting` 为真，记成等齐就起；`blocked` = 前置都齐了却开不了工。 */
+  runTask: (taskId: string): Promise<{ started?: boolean; waiting?: boolean; blocked?: boolean; reason?: string }> =>
     request(`/tasks/${id(taskId)}/run`, { method: "POST" }),
   // 「我现在动它，会不会被换掉执行器」。列表:duet 两位讨论者各占一格。
   // 多人模式的共享项目里才可能非空；自用模式恒为空数组。
@@ -276,8 +287,19 @@ export const api = {
     request(`/tasks/${id(taskId)}/archive`, { method: "POST" }),
   unarchiveTask: (taskId: string): Promise<{ task: Task; restoreNote: string | null }> =>
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
-  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
+  answerTask: (taskId: string, answer: string, input?: import("@navi/shared/questions").QuestionAnswerInput, attachments?: string[]): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(attachments?.length ? { attachments } : {}) })),
+  // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
+  launchDispatchPlan: (taskId: string, input: import("@navi/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
+    request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
+  // 可以派出去的活：「派出去」照那一行此刻的样子建任务（这条任务的智能体不被叫醒）；叉 = 这一件不派。
+  launchSuggestions: (taskId: string, input: import("@navi/shared/dispatch-suggestion").DispatchSuggestionLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
+    request(`/tasks/${id(taskId)}/dispatch-suggestions/launch`, json("POST", input)),
+  dropSuggestion: (taskId: string, suggestionId: string): Promise<{ dropped: boolean }> =>
+    request(`/tasks/${id(taskId)}/dispatch-suggestions/${id(suggestionId)}`, { method: "DELETE" }),
+  // 「派出去的活交给谁」：null = 同这里。
+  setDispatchTarget: (taskId: string, target: import("@navi/shared/dispatch-plan").DispatchRunTarget | null): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatch-target`, json("PUT", { target })),
   replyTask: (
     taskId: string,
     text: string,
@@ -368,6 +390,9 @@ export const api = {
     target: FreeReviewDisputeTarget,
   ): Promise<{ debateId: string; state: FreeWorkflowApiState }> =>
     request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges, target })),
+  // 回复框里 @ 了人、选「讨论」：各方来回几段，说完由这条任务的执行器在主会话里写合稿。
+  startDiscussion: (taskId: string, input: DiscussionStartInput): Promise<{ discussionId: string; state: FreeWorkflowApiState }> =>
+    request(`/tasks/${id(taskId)}/discussions`, json("POST", input)),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   adjustFreeReviewRounds: (taskId: string, input: FreeReviewRoundsInput): Promise<FreeWorkflowApiState> =>
@@ -402,7 +427,7 @@ export const api = {
   ): Promise<{ ok: true; url: string | null; port: number | null }> =>
     request(`/tasks/${id(taskId)}/preview/restart`, json("POST", { stepId })),
   acceptanceCheck: (taskId: string): Promise<{
-    verification: import("@ash/shared/workflow-policy").UnexecutedVerification | null;
+    verification: import("@navi/shared/workflow-policy").UnexecutedVerification | null;
   }> => request(`/tasks/${id(taskId)}/acceptance-check`),
   // `commit` 只覆盖这一次：不传 = 跟项目设置走（默认合并后提交）。
   acceptTask: async (
@@ -418,6 +443,9 @@ export const api = {
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
   },
+  // 确认层点确认时记下这一次怎么勾的（按人按项目；「提交」写回项目设置，要管理权限）。
+  rememberAccept: (projectId: string, write: AcceptMemoryWrite, signal?: AbortSignal): Promise<AcceptMemoryWriteResult> =>
+    request(`/accept-memory/${id(projectId)}`, { ...json("PUT", write), signal }),
   acceptGate: (taskId: string, signal?: AbortSignal): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`, { signal }),
   // 整份日志单独取：状态接口每隔几秒拉一次，几十 MB 的回归输出不能搭在它上面。
   // runId 指定某一次（已验收那张回执看的是**凭据那一次**，不是最近一次）。
@@ -432,10 +460,13 @@ export const api = {
     request(`/tasks/${id(taskId)}/accept-gate/cancel`, json("POST", { runId })),
   forceReleaseAcceptGate: (taskId: string, runId: string): Promise<{ ok: true; gate: AcceptGateView }> =>
     request(`/tasks/${id(taskId)}/accept-gate/force-release`, json("POST", { runId, confirmation: "release-without-exit-proof" })),
-  // 「再交给智能体去修」：红了那次 ash 已经自动交过一次，这条是补救（那次没投递成功）
+  // 「再交给智能体去修」：红了那次 navi 已经自动交过一次，这条是补救（那次没投递成功）
   // 与再推一把（agent 那一轮跑完了还没修好）。
   rehandOffAcceptGate: (taskId: string): Promise<{ handedOff: true; gate: AcceptGateView }> =>
     request(`/tasks/${id(taskId)}/accept-gate/handoff`, json("POST", {})),
+  // 合并预览撞了冲突：不等验收，直接把冲突交给任务去解（与验收撞冲突时交的是同一份）。
+  handOffGateConflict: (taskId: string): Promise<{ ok: true; message: string }> =>
+    request(`/tasks/${id(taskId)}/accept-gate/conflict-handoff`, json("POST", {})),
   branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
   releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
   changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),
@@ -459,8 +490,10 @@ export const api = {
   // 这个读的是提交历史上的一段区间。同一个文件两边的内容可以完全不同，路径也不通用。
   taskBranchFileDiff: (taskId: string, path: string, origPath?: string | null): Promise<TaskFileDiffResult> =>
     request(`/tasks/${id(taskId)}/diff/file?path=${id(path)}${origPath ? `&origPath=${id(origPath)}` : ""}`),
-  taskCommits: (taskId: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>
-    request(`/tasks/${id(taskId)}/commits`),
+  // 还没重启到新版的服务端不给 `total`，清单最多列 50 条：没列满就是全部，列满了条数就不知道。
+  taskCommits: (taskId: string): Promise<TaskCommitList> =>
+    request<Omit<TaskCommitList, "total"> & { total?: number | null }>(`/tasks/${id(taskId)}/commits`)
+      .then((list) => ({ ...list, total: list.total !== undefined ? list.total : list.commits.length < 50 ? list.commits.length : null })),
 
   // 工作目录里的文件那一族（列目录、`@` 候选、读全文、打开方式、删除）在 `fileApi.ts`，
   // 整份 spread 进来，`api.taskFiles()` 这类调用点一字不动。
@@ -496,7 +529,7 @@ export const api = {
     { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => request("/agents/detect"),
   detectClis: (): Promise<DetectedCli[]> => request("/agents/catalog"),
-  // ash 起 CLI 时子进程会看到的环境事实(只读)。设置页拿它算压缩触发点 ——
+  // navi 起 CLI 时子进程会看到的环境事实(只读)。设置页拿它算压缩触发点 ——
   // 那个换算里有一项在 server 的环境变量里,前端自己算不出来。
   cliHostEnv: (): Promise<CliHostEnv> => request("/agents/cli-env"),
   // 这个 CLI 现在有哪些模型 —— 服务端会去问 CLI 自己(`grok models` 之类)并缓存,
@@ -537,7 +570,7 @@ export const api = {
   ): Promise<ReviewerProfile> => request("/reviewer-profiles", json("POST", profile)),
   patchReviewerProfile: (
     profileId: string,
-    patch: Partial<Pick<ReviewerProfile, "name" | "agentType" | "executorId" | "model" | "reasoningEffort">>,
+    patch: Partial<Pick<ReviewerProfile, "name" | "agentType" | "executorId" | "model" | "reasoningEffort" | "isDefault">>,
   ): Promise<ReviewerProfile> => request(`/reviewer-profiles/${id(profileId)}`, json("PATCH", patch)),
   deleteReviewerProfile: (profileId: string): Promise<{ deleted: true }> =>
     request(`/reviewer-profiles/${id(profileId)}`, { method: "DELETE" }),
@@ -558,15 +591,6 @@ export const api = {
     request(`/workflows/${id(workflowId)}`, { method: "DELETE" }),
   restoreWorkflow: (workflowId: string): Promise<WorkflowItem> =>
     request(`/workflows/${id(workflowId)}/restore`, { method: "POST" }),
-
-  teamPresets: (): Promise<TeamPreset[]> => request("/team-presets"),  createTeamPreset: (name: string, config: TeamPresetConfig): Promise<TeamPreset> =>
-    request("/team-presets", json("POST", { name, config })),
-  patchTeamPreset: (
-    presetId: string,
-    patch: { name?: string; config?: TeamPresetConfig },
-  ): Promise<TeamPreset> => request(`/team-presets/${id(presetId)}`, json("PATCH", patch)),
-  deleteTeamPreset: (presetId: string): Promise<{ deleted: true }> =>
-    request(`/team-presets/${id(presetId)}`, { method: "DELETE" }),
 
   // signal：会话列表是排成一条链读的（见 lib/useConversation.ts），一发卡住就轮不到
   // 后面的，所以调用方要能给它设上限、也能在用户手动重读时把它掐掉。
@@ -590,6 +614,9 @@ export const api = {
     >,
   ): Promise<{ deleted: number }> =>
     humanAction(`/sessions/${id(sessionId)}/conversation/delete`, json("POST", { segments })),
+  // 删一整场讨论（同上，真人专属）：服务端把各会话里那几段、讨论记录和它的目录一起清掉。
+  deleteDiscussion: (taskId: string, discussionId: string): Promise<{ deleted: true }> =>
+    humanAction(`/tasks/${id(taskId)}/discussions/${id(discussionId)}/delete`, json("POST", {})),
   duetTranscript: (taskId: string): Promise<unknown[]> =>
     request(`/tasks/${id(taskId)}/duet`),
 
@@ -612,12 +639,15 @@ export const api = {
 
   // 哨兵那一组住在 apiMonitors.ts（同样是为了守住 700 行），调用点写法不变。
   ...monitorApi,
+  ...prerequisiteApi,
   // 直连 LLM 供应商那一组住在 apiLlm.ts，同理。
   ...llmApi,
   // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。
   ...previewAssistApi,
   // 任务备忘同理，住在 apiTaskMemos.ts。
   ...taskMemoApi,
+  // R 键「我说过的话」同理，住在 apiUserMessages.ts。
+  ...userMessageApi,
   // 飞书通道那一组住在 feishuApi.ts（守 700 行）。
   ...feishuApi,
 

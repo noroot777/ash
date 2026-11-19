@@ -7,8 +7,8 @@
 //
 // 依赖是单向的:这边用 monitors.ts 的运行时与推送,那边一个字都不用回头问这边。
 import { and, eq } from "drizzle-orm";
-import { monitorEventTally } from "@ash/shared/monitor-silence";
-import type { MonitorStatus } from "@ash/shared/monitor";
+import { monitorEventTally } from "@navi/shared/monitor-silence";
+import type { MonitorStatus } from "@navi/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { deliverResultHandoff } from "./monitor-events.js";
@@ -27,7 +27,7 @@ import { now } from "./util.js";
  * 进程已经不在了的那一路：**先把日志里没读过的那段补完**，再落终态。
  *
  * 不补的代价是整段工作白跑——而「一件事要跑两小时」恰恰是哨兵存在的全部理由：命令在
- * ash 关闭期间跑完，重启后只看到一句「进程已不在」，那两小时的进展和结束结果一个字都
+ * navi 关闭期间跑完，重启后只看到一句「进程已不在」，那两小时的进展和结束结果一个字都
  * 不会到任务头上（第 1 轮审查复现：日志里有 OFFLINE_DONE，任务一条通知都没有）。
  *
  * 退出码确实拿不到，如实记 null —— 不拿 0 冒充跑成功了。
@@ -49,7 +49,7 @@ export async function finishOffline(
     if (dbClient.closed) return;
     const fresh = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0);
     if (!fresh || fresh.status !== "running") {
-      console.error(`[ash] 离线收尾放手 monitor=${row.id}：队列里重读到的状态是 `
+      console.error(`[navi] 离线收尾放手 monitor=${row.id}：队列里重读到的状态是 `
         + `${fresh?.status ?? "行已不在"}，这一刻的结局已经有人写过了（${reason}）`);
       return;
     }
@@ -63,7 +63,7 @@ export async function finishOffline(
     // 会撤运行时、补推、落终态),这一趟无非是白跑一遍。
     const release = claimFinish(fresh.id);
     if (!release) {
-      console.error(`[ash] 离线收尾让位 monitor=${fresh.id}：已经有一笔收尾在跑（它手上可能还`
+      console.error(`[navi] 离线收尾让位 monitor=${fresh.id}：已经有一笔收尾在跑（它手上可能还`
         + `握着没送出去的行），由它落终态（${reason}）`);
       return;
     }
@@ -107,7 +107,7 @@ export async function finishOffline(
       // 另写一遍。
       //
       // **只换标签,不抹掉「进程为什么没了」**:这一路从来拿不到退出码（照旧 `exitCode: null`），
-      // 而且 ash 不在的时候那个进程是跑完了、被谁杀了、还是机器重启了,只有传进来的那句话答
+      // 而且 navi 不在的时候那个进程是跑完了、被谁杀了、还是机器重启了,只有传进来的那句话答
       // 得出来 —— 所以把它原样接在后面,而不是换掉它（在线那一侧的折叠见 monitor-finish.ts
       // 的 `foldHit`）。只折 `lost` 这一档:别的终态是更确定的事实,不许被一行日志改写。
       // 两份证据同一个判据:**已经确认过并落了库的那一条**（`base.hitLine` —— 排干那一趟读到
@@ -116,7 +116,7 @@ export async function finishOffline(
       const hit = base.hitLine ?? fresherHit;
       const outcome = hit !== null && status === "lost" ? "matched" : status;
       const note = hit !== null && status === "lost"
-        ? `${matchedReason(hit)} —— 这一行是 ash 不在期间补读到的：${reason}`
+        ? `${matchedReason(hit)} —— 这一行是 Navi 不在期间补读到的：${reason}`
         : reason;
 
       // 同上:凭证跟终态一条语句落库(第 1 轮审查 F1 的对称面 —— 离线收尾也是「先结束、后通知」)。
@@ -135,7 +135,7 @@ export async function finishOffline(
       if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
         // 条件没落上 = 这一瞬有人把它收尾了。**结束通知到此为止**:再推就是在用户已经停掉
         // 之后又叫醒一次任务(补读出去的那几行是已经发生的事实,留着)。
-        console.error(`[ash] 离线收尾的条件更新没落上 monitor=${base.id}：结局已经有人写过了`);
+        console.error(`[navi] 离线收尾的条件更新没落上 monitor=${base.id}：结局已经有人写过了`);
         return;
       }
       publish(base.taskId);
@@ -155,7 +155,7 @@ export async function finishOffline(
       // 监督挂回去之后才交还所有权:中间这一瞬要是让别的收尾进来,它看到的就是「没有运行时、
       // 行还 running」那张老牌面。放手不等于放行(还欠着入队的,凭证照旧挡着),这里只触发一次。
       release();
-      void flushMonitorRows(row.id).catch((e) => console.error(`[ash] 离线收尾后触发投递失败 monitor=${row.id}:`, e));
+      void flushMonitorRows(row.id).catch((e) => console.error(`[navi] 离线收尾后触发投递失败 monitor=${row.id}:`, e));
     }
   });
 }

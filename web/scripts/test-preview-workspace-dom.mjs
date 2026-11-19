@@ -13,7 +13,7 @@ import { checkPreviewPanelOverlap } from "./preview-panel-overlap-checks.mjs";
 import { resizeViewport, settlePage, waitUntil } from "./wait-until.mjs";
 
 export async function testPreviewWorkspaceDom() {
-  const cacheDir = await mkdtemp(join(tmpdir(), "ash-preview-workspace-test-"));
+  const cacheDir = await mkdtemp(join(tmpdir(), "navi-preview-workspace-test-"));
   const server = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "error", cacheDir,
     server: { host: "127.0.0.1", port: 0, strictPort: false } });
   let browser;
@@ -54,7 +54,9 @@ export async function testPreviewWorkspaceDom() {
     await page.route("**/api/**", async (route) => {
       const request = route.request(), path = new URL(request.url()).pathname;
       const reply = (body) => route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-      if (path === "/api/events") return route.fulfill({ contentType: "text/event-stream", body: ": connected\n\n" });
+      // 这里不发事件。回 204 = 这条流不必再连；回一条写完就结束的流，EventSource 会每 3 秒重连一次，
+      // 连上和断开挨着到，页面在两下之间做什么全看机器忙不忙（同 accept-gate-stage.mjs 那一处）。
+      if (path === "/api/events") return route.fulfill({ status: 204 });
       if (path.endsWith("/preview") && new URL(request.url()).searchParams.has("launch")) return reply(launchInfo);
       if (path.endsWith("/preview/restart")) { launches.push(request.postDataJSON()); running = true; return reply(preview()); }
       if (path.endsWith("/preview")) return reply(preview());
@@ -226,7 +228,7 @@ export async function testPreviewWorkspaceDom() {
     assert.deepEqual(await iframe.boundingBox(), box, "collapsing notes does not resize the embedded page");
     assert(await page.evaluate(() => document.elementFromPoint(700, 400)?.tagName === "IFRAME"), "empty space between floating controls remains interactive");
     await button("标注").click();
-    const draft = () => page.evaluate(() => JSON.parse(localStorage.getItem("ash.annotation-batch.fixture")));
+    const draft = () => page.evaluate(() => JSON.parse(localStorage.getItem("navi.annotation-batch.fixture")));
     const emit = async (number, tool = "element") => {
       await page.frames().find((frame) => frame.url().includes("/preview/open/")).evaluate(({ number, tool }) => window.emit({ type: "annotation", canSelectParent: false, annotation: {
         id: `item-${number}`, number, tool, points: [{x:100,y:100}], element: null,
@@ -280,7 +282,7 @@ export async function testPreviewWorkspaceDom() {
     await frame.evaluate((png) => window.emit({ type: "image", id: "item-1", image: {
       capturedAt: 1, dataUrl: `data:image/png;base64,${png}`, missing: ["Canvas", "fonts"],
     } }), png);
-    await page.waitForFunction(() => JSON.parse(localStorage.getItem("ash.annotation-batch.fixture"))?.evidence.some((item) => item.path));
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem("navi.annotation-batch.fixture"))?.evidence.some((item) => item.path));
     await page.getByRole("status").filter({ hasText: "已保存 · 草稿" }).waitFor();
     assert.deepEqual((await draft()).evidence, record.batch.evidence, "uploaded evidence and server record have the same content");
     assert.notEqual(JSON.stringify((await draft()).evidence), JSON.stringify(record.batch.evidence), "server normalization reorders path/missing");
@@ -324,7 +326,7 @@ export async function testPreviewWorkspaceDom() {
       oldBatch.items = oldBatch.items.map((item) => ({ ...item, gen: oldBatch.gen }));
       record = { batch: oldBatch, revision: 1, state: "saved", messageId: null, error: null, savedAt: "2026-09-11" };
       savedRecords.clear(); savedRecords.set(oldBatch.id, record);
-      await page.evaluate((batch) => localStorage.setItem("ash.annotation-batch.fixture", JSON.stringify(batch)), oldBatch);
+      await page.evaluate((batch) => localStorage.setItem("navi.annotation-batch.fixture", JSON.stringify(batch)), oldBatch);
       await page.reload();
       await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
       if (scenario === "service") {
@@ -383,7 +385,7 @@ export async function testPreviewWorkspaceDom() {
       assert.equal(await page.locator(".preview-workspace-detail textarea").inputValue(), "最终意见");
     }
 
-    await page.evaluate(() => localStorage.removeItem("ash.annotation-batch.fixture"));
+    await page.evaluate(() => localStorage.removeItem("navi.annotation-batch.fixture"));
     record = null; savedRecords.clear(); realRuntime = true;
     await page.reload();
     await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
@@ -445,11 +447,11 @@ export async function testPreviewWorkspaceDom() {
       // 同一个来源发到同一个窗口的消息按序派发：哨兵到了，前面那条普通窗口消息就已经被处理过。
       await page.evaluate(() => {
         window.__sentinel = new Promise((resolve) => {
-          const on = (event) => { if (event.data?.type === '__ash-sentinel') { window.removeEventListener('message', on); resolve(); } };
+          const on = (event) => { if (event.data?.type === '__navi-sentinel') { window.removeEventListener('message', on); resolve(); } };
           window.addEventListener('message', on);
         });
       });
-      await runtimeFrame.evaluate(() => { parent.postMessage({ type: 'escape' }, '*'); parent.postMessage({ type: '__ash-sentinel' }, '*'); });
+      await runtimeFrame.evaluate(() => { parent.postMessage({ type: 'escape' }, '*'); parent.postMessage({ type: '__navi-sentinel' }, '*'); });
       await page.evaluate(() => window.__sentinel);
       await settlePage(page);
       assert.equal(await button('还原预览').isVisible(), true, 'ordinary window messages cannot dismiss the workspace');

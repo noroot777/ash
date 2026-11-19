@@ -14,7 +14,7 @@
 //     时区,UTC 下记录、北京时间下重读,清掉了环境的活命令曾被判成换代并永久收档)、新主人起在
 //     锚之后但没超出防拨钟的余量、ps 这一刻问不出来。
 //
-// 「换代」的证据是两个不带时区的量:ash 落盘的绝对时刻(债行的创建时刻 / 身份边条的 spawn 时刻)
+// 「换代」的证据是两个不带时区的量:navi 落盘的绝对时刻(债行的创建时刻 / 身份边条的 spawn 时刻)
 // 和号上那个进程的已运行时长。台子里的「债是两小时前记的」就是这么来的。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -97,7 +97,7 @@ try {
     assert.equal(reclaimState(stranger, recorded, await debtUnit(monId)), "superseded",
       "号被后来的进程占着、记号问全了也没有 ⇒ 这一档是 superseded,不再是「原进程退出无法确认」");
     assert.equal(reclaimState(stranger, recorded, { unitToken: (await debtRow(monId))!.unitToken }), "not-ours",
-      "没有 ash 落盘的锚就证不出换代:只凭那串展示时间不升档");
+      "没有 navi 落盘的锚就证不出换代:只凭那串展示时间不升档");
 
     await sweepMonitorReclaimDebts();
     const closed = (await debtRow(monId))!;

@@ -1,66 +1,28 @@
-// 与 ash server 说话的那一层：地址、回合身份、连不上时的退避重试，以及把结果包成
+// 与 navi server 说话的那一层：地址、回合身份、连不上时的退避重试，以及把结果包成
 // MCP 响应的两个壳。从 index.ts 拆出来的动机是**职责**不是行数：工具注册表会一直长
-// （每加一个 ash 能力就多一段），而这一层是恒定的；混在一起时，改一句工具描述也要把
+// （每加一个 navi 能力就多一段），而这一层是恒定的；混在一起时，改一句工具描述也要把
 // 整份传输层重新读一遍。
 //
-// 这里不含任何业务判断 —— 业务全在 ash 的 HTTP 端点上（见 index.ts 顶部那段）。
-import { readFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
-import { ASH_TURN_IDENTITY_ENV, ASH_TURN_IDENTITY_FILE, isTurnIdentityPathEntry } from "@ash/shared/mcp";
-import { answeredMcpError, UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
+// 这里不含任何业务判断 —— 业务全在 navi 的 HTTP 端点上（见 index.ts 顶部那段）。
+import { readEnv } from "@navi/shared/env-names";
+import { NAVI_HEADERS } from "@navi/shared/http-headers";
+import { answeredMcpError, UNDELIVERED_NET_CODES } from "@navi/shared/mcp-delivery";
+import { resolveTurnIdentity } from "./turn-identity.js";
 
-export const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
+export const BASE = (readEnv(process.env, "NAVI_URL") ?? "http://localhost:4317").replace(/\/+$/, "");
 
-/**
- * 回合身份的**第二条通路**:`PATH` 上那个一次性目录里的 `identity.json`。
- *
- * 谁需要它:只把 `PATH` 自动交给 MCP 子进程的那几家 CLI(copilot 文档明写其余变量必须
- * 写死在登记的 `env` 里,而回合身份一轮一个值 —— 写死就是过期的假身份)。约定本体、以及
- * 「为什么是按回合开目录」那几条安全要点,见 `@ash/shared/mcp` 的
- * `ASH_TURN_IDENTITY_PATH_DIR`;写的那一侧是 `server/src/turn-identity.ts`。
- *
- * **变量优先**:变量在就用变量,这里只是兜底。读不出来一律当没有(目录可能已经被下一回合
- * 清掉了 —— 那正是设计意图:宁可交不了卷,也不能让上一回合的残留进程拿到当前令牌)。
- */
-const identityFromPath = ((): { taskId?: string; turnToken?: string; directionToken?: string } => {
-  for (const entry of (process.env.PATH ?? "").split(delimiter)) {
-    if (!entry || !isTurnIdentityPathEntry(entry)) continue;
-    try {
-      const raw = JSON.parse(readFileSync(join(entry, ASH_TURN_IDENTITY_FILE), "utf8")) as Record<string, unknown>;
-      const str = (key: string): string | undefined => {
-        const value = raw[key];
-        return typeof value === "string" && value.trim() ? value.trim() : undefined;
-      };
-      const found = { taskId: str("taskId"), turnToken: str("turnToken"), directionToken: str("directionToken") };
-      if (found.taskId && found.turnToken) return found;
-    } catch { /* 这一段读不出来就继续找下一段 */ }
-  }
-  return {};
-})();
-
-// 回合令牌有两套变量名,谁活着用谁 —— 有的 CLI(实测 gemini)按**名字**把带 TOKEN 字样的
-// 变量从 MCP 子进程环境里删掉,别名那套刻意不含那些词。理由与取证见
-// `@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_ENV`。两套名字都没过来时,再退到 `PATH` 那条路
-// (见上)—— 逐项退,不整组退:有的 CLI 只删带 TOKEN 字样的那两个,`ASH_TASK_ID` 是过得去的。
-const pick = (fallback: string | undefined, ...names: string[]): string => {
-  for (const name of names) {
-    const value = process.env[name]?.trim();
-    if (value) return value;
-  }
-  return fallback?.trim() ?? "";
-};
-export const SOURCE_TASK_ID = pick(identityFromPath.taskId, ASH_TURN_IDENTITY_ENV.taskId);
-export const TURN_TOKEN = pick(
-  identityFromPath.turnToken, ASH_TURN_IDENTITY_ENV.turnToken, ASH_TURN_IDENTITY_ENV.turnTicket,
-);
-export const DIRECTION_TOKEN = pick(
-  identityFromPath.directionToken, ASH_TURN_IDENTITY_ENV.directionToken, ASH_TURN_IDENTITY_ENV.directionTicket,
-);
+// 回合身份(任务 id + 回合令牌 + 方向令牌)从哪几条通道来、带了回合指纹时怎么挑,见 turn-identity.ts。
+// 对不上指纹时 `IDENTITY_REFUSAL` 非空,main.ts 据此拒绝启动。
+const identity = resolveTurnIdentity(process.env);
+export const SOURCE_TASK_ID = identity.taskId;
+export const TURN_TOKEN = identity.turnToken;
+export const DIRECTION_TOKEN = identity.directionToken;
+export const IDENTITY_REFUSAL = identity.refused;
 
 // 本机流量一律不走代理。Node 24+ 在 NODE_USE_ENV_PROXY=1(或显式 HTTP_PROXY)下
 // **连 localhost 也走代理** —— 实测本机 http_proxy=127.0.0.1:7897 时,打给
-// ash 的每一次工具调用都先绕到代理再回来。两个后果:①白白多一跳、还把
-// ash 的存活绑在代理上;②server 重启时拿到的是代理给的 UND_ERR_SOCKET
+// navi 的每一次工具调用都先绕到代理再回来。两个后果:①白白多一跳、还把
+// navi 的存活绑在代理上;②server 重启时拿到的是代理给的 UND_ERR_SOCKET
 // (「对端关闭」)而不是 ECONNREFUSED,下面那个「确定没送达才重试」的判断就永远
 // 命中不了。合并而不是覆盖已有的 NO_PROXY,别把用户自己的配置吃掉。
 // 必须在第一次 fetch 之前执行 —— 放模块顶层即可(工具调用都在之后)。
@@ -77,7 +39,7 @@ export const DIRECTION_TOKEN = pick(
 
 // 重启窗口的等待上限。scripts/restart.mjs 是「杀掉 → 等端口释放 → 起新进程 →
 // 轮询 /api/health」,正常几秒内回来;给到 60s 是留足构建慢、机器忙的余量。
-export const RECONNECT_WINDOW_MS = Number(process.env.ASH_RECONNECT_MS ?? process.env.HARNESS_RECONNECT_MS ?? 60_000);
+export const RECONNECT_WINDOW_MS = Number(readEnv(process.env, "NAVI_RECONNECT_MS") ?? 60_000);
 
 // 只对「明确没送达」的连接错误重试。ECONNREFUSED = 根本没人在监听那个端口
 // (server 重启期间的确切表现),请求一个字节都没发出去,重试绝不会重复执行。
@@ -118,11 +80,11 @@ async function request(method: string, path: string, body: unknown, directionTok
   let res: Response;
   for (;;) {
     try {
-      const headers: Record<string, string> = { "x-ash-client": "mcp" };
+      const headers: Record<string, string> = { [NAVI_HEADERS.client]: "mcp" };
       if (body !== undefined) headers["content-type"] = "application/json";
-      if (SOURCE_TASK_ID) headers["x-ash-source-task-id"] = SOURCE_TASK_ID;
-      if (TURN_TOKEN) headers["x-ash-turn-token"] = TURN_TOKEN;
-      if (directionToken) headers["x-ash-direction-token"] = directionToken;
+      if (SOURCE_TASK_ID) headers[NAVI_HEADERS.sourceTaskId] = SOURCE_TASK_ID;
+      if (TURN_TOKEN) headers[NAVI_HEADERS.turnToken] = TURN_TOKEN;
+      if (directionToken) headers[NAVI_HEADERS.directionToken] = directionToken;
       res = await fetch(`${BASE}/api${path}`, {
         method,
         headers: Object.keys(headers).length ? headers : undefined,
@@ -134,12 +96,12 @@ async function request(method: string, path: string, body: unknown, directionTok
       if (!code || Date.now() >= deadline) {
         const waited = lastCode ? `（已重试 ${Math.round(RECONNECT_WINDOW_MS / 1000)}s，${lastCode}）` : "";
         throw new Error(
-          `连不上 ash server (${BASE})${waited}，确认它在运行（npm start）。原始错误：${e instanceof Error ? e.message : String(e)}`,
+          `连不上 Navi server (${BASE})${waited}，确认它在运行（npm start）。原始错误：${e instanceof Error ? e.message : String(e)}`,
         );
       }
       lastCode = code;
       // stderr 才是 MCP 的日志通道(stdout 是协议帧,写脏了会直接搞崩会话)。
-      console.error(`[ash-mcp] ${code} — server 可能在重启，${delay}ms 后重试 ${method} ${path}`);
+      console.error(`[navi-mcp] ${code} — server 可能在重启，${delay}ms 后重试 ${method} ${path}`);
       await sleep(Math.min(delay, Math.max(0, deadline - Date.now())));
       delay = Math.min(delay * 2, 5_000);
     }

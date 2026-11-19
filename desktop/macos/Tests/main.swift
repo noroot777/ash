@@ -1,8 +1,8 @@
 import Foundation
 import Darwin
 
-// scripts/test-macos-client.mjs 的驱动：编进来的是真的 AshConfig / AshHealth / ServerLauncher /
-// DataImport，配置全走环境变量（ASH_URL、ASH_DATA_DIR、ASH_MAC_RUNTIME、ASH_MAC_DOWNLOAD_JOURNAL），
+// scripts/test-macos-client.mjs 的驱动：编进来的是真的 NaviConfig / NaviHealth / ServerLauncher /
+// DataImport，配置全走环境变量（NAVI_URL、NAVI_DATA_DIR、NAVI_MAC_RUNTIME、NAVI_MAC_DOWNLOAD_JOURNAL），
 // 碰不到日常那一份 app 的数据。
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -50,14 +50,24 @@ if mode == "coalesce" {
   require(failed, "fixture intentionally fails")
   exit(0)
 }
+if mode == "config" {
+  // 环境变量各代怎么认：新名优先、退到旧名，指向数据的两代打架就拒绝。
+  if let conflict = NaviConfig.environmentConflict { print("CONFLICT \(conflict)"); exit(1) }
+  print("url=\(NaviConfig.baseURL.absoluteString)")
+  print("data=\(NaviConfig.dataURL.path)")
+  print("window=\(NaviConfig.windowPort)")
+  print("runtime=\(NaviConfig.runtimeURL.path)")
+  print("journal=\(NaviConfig.downloadJournalURL.path)")
+  exit(0)
+}
 if mode == "health" {
   // 窗口从占位页恢复用的就是这一次探测 + isServing。
-  let probe = AshHealth.probeSync()
+  let probe = NaviHealth.probeSync()
   switch probe {
   case .down: print("DOWN")
   case .unreachable(let why): print("UNREACHABLE \(why)")
-  case .notAsh: print("NOT ASH")
-  case .ash: print(AshHealth.isServing(probe) ? "READY" : "FOREIGN")
+  case .notNavi: print("NOT NAVI")
+  case .navi: print(NaviHealth.isServing(probe) ? "READY" : "FOREIGN")
   }
   exit(0)
 }
@@ -66,8 +76,8 @@ if mode == "import-inspect" || mode == "import" {
     let source = try DataImport.inspect(URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true))
     var held = ""
     if mode == "import" {
-      let report = try DataImport.run(source, into: AshConfig.dataURL, lockTimeout: Double(CommandLine.arguments.dropFirst(3).first ?? "") ?? 60)
-      held = " held=\(report.held.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")) relocated=\(report.relocated)"
+      let report = try DataImport.run(source, into: NaviConfig.dataURL, lockTimeout: Double(CommandLine.arguments.dropFirst(3).first ?? "") ?? 60)
+      held = " held=\(report.held.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")) relocated=\(report.relocated) skipped=\(report.skippedSpecial)"
     }
     print("OK live=\(source.livePID.map(String.init) ?? "none")\(held)")
     exit(0)

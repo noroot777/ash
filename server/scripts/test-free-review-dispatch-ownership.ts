@@ -26,7 +26,7 @@
 // `test-free-review-dispatch-delivery.ts`:它问的不是「这是哪一次」,台子同一个。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
-// (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。
+// (`NAVI_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。
 //
 // 跑：npm -w server run test:free-review-dispatch-ownership
 import assert from "node:assert/strict";
@@ -308,6 +308,9 @@ try {
       .where(eq(freeReviewRounds.id, `${reopenedRun}-round`));
     await db.update(freeReviewRuns).set({ status: "failed", finishedAt: at })
       .where(eq(freeReviewRuns.id, reopenedRun));
+    const generationNow = async () => (await db.select({ generation: regressionEvidence.generation }).from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, freeReviewEvidenceDir(reopened, reopenedRun, 1)))).at(0)?.generation;
+    const generationBefore = await generationNow();
     const busy = holdLifecycle(reopenedRun);
     const retrying = reopenFailedFreeReview(reopened);
     for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -316,7 +319,9 @@ try {
     busy.open();
     await busy.done;
     assert.equal((await retrying).dispatched, true, "放手之后照常重跑并派出去");
-    assert.equal((await roundOf(reopenedRun)).status, "reviewing", "这一轮回到进行中");
+    // 「回到进行中」在这里只有一瞬:不许起真执行器,派出去的那一轮随即被拒、又落回 error,看状态就是
+    // 跟它赌先后。换没换代次不会回退,看它。
+    assert.notEqual(await generationNow(), generationBefore, "这一轮换了代次重新起跑");
     console.log("✓ ⑲ 旧代次的收尾与重跑换代次互斥：要么先做完，要么进来时整段作废");
   }
 
@@ -398,7 +403,7 @@ try {
   // 第 2 轮审查把责任又往前挪了一步:**登记责任的人是公开这一轮的那一个**,而且登记的那一份是
   // **持久的**(round 行上的 `preparing` 意图,与公开 reviewing 同一笔写)。所以这条用例按
   // publisher 的样子布置现场(证 + 持久意图),再让真 launch 卡在准备里。卡住的办法不碰任何库
-  // 函数:把 PATH 上那个 codex 桩改慢 —— ash MCP 预检那一步会真的 spawn 它。
+  // 函数:把 PATH 上那个 codex 桩改慢 —— navi MCP 预检那一步会真的 spawn 它。
   {
     const id = "free-dispatch-preparing-live";
     const runId = await restarted(id, 1);

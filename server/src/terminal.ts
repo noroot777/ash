@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import * as pty from "node-pty";
-import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
+import { SERVICE_COMMAND_ID } from "@navi/shared/project-commands";
 import { IS_WINDOWS } from "./platform.js";
 import { createPortScanner, LAUNCH_ID_ENV } from "./service-ports.js";
 import { id } from "./util.js";
@@ -208,7 +208,7 @@ export class TerminalSessionManager {
     // 采样后继续对清场报成功(第 5 轮自由审查)。Linux 有 /proc 永真,macOS 的 ps 在
     // /bin/ps(SIP 保护),真实环境到不了这里;到了就是环境坏了,该修环境而不是带病运行。
     if (!IS_WINDOWS && !this.containment) {
-      throw new Error("终端依赖缺失：ps 与 /proc 都不可用，无法保证关闭会话时清空进程树；请安装 procps 后重启 ash");
+      throw new Error("终端依赖缺失：ps 与 /proc 都不可用，无法保证关闭会话时清空进程树；请安装 procps 后重启 Navi");
     }
     const args = launch.args;
     // POSIX 一律包 wrapper,session leader 是常驻 /bin/sh、真正的 shell/命令是它的孩子,
@@ -232,7 +232,7 @@ export class TerminalSessionManager {
     const wrapper = options.command ? TTY_COMMAND_WRAPPER : TTY_REAPER_WRAPPER;
     const spawnSpec = IS_WINDOWS
       ? { file: shell, args }
-      : { file: "/bin/sh", args: ["-c", wrapper, "ash-terminal", shell, ...args] };
+      : { file: "/bin/sh", args: ["-c", wrapper, "navi-terminal", shell, ...args] };
     // 记号必须在 spawn **之前**生成:它要进这次启动的环境,才能被后代继承。
     const launchToken = options.command ? id() : null;
     // 各个钟的起跑读数同样在 spawn 之前取:事后补取,创建子进程到取样之间那段停顿会让真后代
@@ -458,7 +458,7 @@ export class TerminalSessionManager {
    * (为什么必须同步、为什么不能只读累积快照,见 terminal-session-kill.ts 那边)。
    *
    * **端口这一档也在清场范围内**,而且同样必须同步:会话表一清,这次启动的记号就没了,
-   * 而真·守护化的服务只认这一条线索 —— 漏掉它,ash 重启后那个服务还听着端口,却再没有
+   * 而真·守护化的服务只认这一条线索 —— 漏掉它,navi 重启后那个服务还听着端口,却再没有
    * 任何把手能停它(第 3 轮审查发现 2)。顺序是先发信号再问端口:信号是免费的,lsof 要
    * 几十毫秒一个端口,别让它拖着前面那一步。
    */
@@ -492,7 +492,7 @@ export class TerminalSessionManager {
       if (sessionRunning(session)) continue;
       // 唯一的例外:service 的启动脚本**正常退出、又没被用户停过**。这条记录可能是
       // 「服务还开着」仅存的凭据 —— `docker compose up -d`、`pm2 start` 这类服务跑在
-      // ash 的进程树之外,启动脚本跑完自己就退,把它当「纯退出日志」收走,停止按钮当场
+      // navi 的进程树之外,启动脚本跑完自己就退,把它当「纯退出日志」收走,停止按钮当场
       // 退回 ▶、容器却还在跑(第 1 轮审查 E1 实锤)。GC 在这件事上必须保守:宁可多留
       // 一条退出日志,也不能把「还有东西在跑」这个事实清掉。
       if (session.commandId === SERVICE_COMMAND_ID && session.exitCode === 0 && session.stop.kind === "none") continue;
@@ -550,7 +550,7 @@ export class TerminalSessionManager {
    * terminal-abandon.ts 的文件头 —— 这里只负责把那一刻的快照落进会话事实。
    *
    * **只写一格,不动别的任何一格**:`stop` 账原样留着(`unresolved` 不改写成 `verified`)、
-   * 端口事实不碰、进程一个不杀。放弃是「ash 不再把它当还在跑的东西管」,不是「它停了」——
+   * 端口事实不碰、进程一个不杀。放弃是「navi 不再把它当还在跑的东西管」,不是「它停了」——
    * 两者混成一格,界面上就会凭空多出一句「已停止」,而那正是停止语义里最不许出现的谎
    * (根 AGENTS.md:停止要留下持久可见的状态,**而且不许谎报**)。
    *
@@ -679,7 +679,7 @@ export const terminalSessions = new TerminalSessionManager();
 // server 无论怎么退,'exit' 都会同步触发:SIGINT/SIGTERM 处理器(singleton.ts
 // installCleanup)和 `npm run restart` 的杀法最终都走 process.exit(),uncaught 的默认
 // 行为也是 exit。在这里收掉所有活着的会话进程,否则常用命令的 dev server 被 PID 1
-// 收养成孤儿 —— ash 重启后会话表(内存态)清零,UI 显示「未启动」,旧进程却继续占端口,
+// 收养成孤儿 —— navi 重启后会话表(内存态)清零,UI 显示「未启动」,旧进程却继续占端口,
 // 再点启动只会得到端口冲突(第 3 轮审查实锤)。kill -9 / 崩溃 / 断电没有钩子能接,
 // 属已知边界。
 process.once("exit", () => terminalSessions.shutdown());

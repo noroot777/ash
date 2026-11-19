@@ -10,6 +10,54 @@
 
 ## 〇、当前基线
 
+**2026-11-19 改名 navi 之后的第一轮**(32 绿 / 9 红,红的逐条拿改名前的版本对照过)记录在
+`docs/rename-navi-windows.md` 第一、二节。同一天修了其中 7 条(`test:handoff` 修到对端 server 起得来,
+仍有 3 条红;`test-rename-navi.mjs` 是只在开发机上跑的改名脚本回归,没在 Windows 上修),修完重测的
+结果是下面这一段;再往下 10-23 那一段是改名之前的记录。
+
+**2026-11-19 实测(改名 navi 之后,Windows PowerShell 5.1 / node v22.20.0)。** 叶子环境照
+`scripts/test-runner.mjs` 的 `leafEnv`(擦掉各代库/运行目录/数据目录,每条自己的 `NAVI_DATA_DIR`
+与 `TEMP`/`TMP`,`NAVI_TEST_NO_MODEL_PROBE=1`),`PATH` 最前另放一组一调就失败的假 CLI。
+
+整链绿:`terminal`(14 条,`test-launch-abandon` 在 Windows 上整条跳过,理由见下)、
+`scheduled-messages`(10 条)、`navi-mcp-registry`(3 条)、`user-cli-mcp`(3 条,检出里 build 过
+`mcp/dist`)、`detached`(4 条)、`reattach`、`host-navi-mcp`。`detached` 与 `reattach` 在叶子**设了**
+`NAVI_RUNS_DIR` 时也绿。
+
+改名 ⑦ 那轮红的几处,修法和归类(都在改名之前的 `8abd51552` 上就红):
+
+| 测试 | 红在哪 | 归类与修法 |
+|---|---|---|
+| `test-service-ports-scan` | Windows 分支期望值少了 `membersIncomplete` | 夹具。期望值单写一份,POSIX 上拿空端口走同一出口核一遍 —— 结果对象再加字段,开发机先红 |
+| `test-scheduled-messages:503` | 看到会话就读状态,读到 `pending` | 夹具时序。会话行先建、执行器回执到了才落 `sent`(`onAccepted`),这是产品定义的先后;改成按条件等 |
+| `test-navi-mcp-registry:538` | 写死 `/profile/...` | C 类。契约写相对落点,期望值用 `join` 拼;往下露出的 `0o600` 权限位断言照已有写法只在 POSIX 断(Windows 的权限在 ACL 上) |
+| `codex-approve-cases:44` | 正则对不上 TOML 里成对的 `\\` | C 类。按 TOML 解码后比路径;另把 Windows 形状的路径渲染再解回来,开发机上也钉住 |
+| `test-stop-verification:130` | 「守护进程还活着」为假 | 产品边界,不是 bug。按记号点名守护进程那几节只在 POSIX 跑:Windows 上记号一问整档 `unavailable`,`processAlive` 恒为 false(`terminal-process-tree.ts`) |
+| `test-host-navi-mcp`、`test:handoff` | 找不到 drizzle-orm / tsx | 夹具。按包解析(`tsx-loader.ts` 的两个导出口;拷出来的代码树按 server 声明的依赖逐个按 Node 查找顺序借包)。`host-navi-mcp` 随后露出**家目录没隔离**:只给了 `HOME`,Windows 上 `homedir()` 认 `USERPROFILE`,于是读到了那台机器用户真实的 `~/.claude.json`(当场核过没有写入)。现在两个都给 |
+| 收尾 EBUSY | 断言都过、删舞台目录时 EBUSY | A 类。`tmp-db.ts` 的 `removeTmpStage`:先松开库,删除自己重试「被占着」那几种(最多约 20 秒;`rmSync` 的 `maxRetries` 不管目录本身第一下就 EBUSY)。`finally`/末尾删开着库的舞台的 45 条测试统一改用它;在真机上跑过,没有一条再红在收尾 |
+| `test-turn-visibility` | 单独跑时退出码 0、临时库留在磁盘上 | A 类,审查第 1 轮发现。清理挂在同步的 exit 钩子上、吞掉了 EBUSY,只有运行器替它收叶子目录时才看不出来;改成 `finally` 里 `removeTmpStage`。真机单独跑:绿,叶子 `TEMP` 里没有舞台目录剩下 |
+| `tsx-loader.ts` 的加载器口 | 子进程起不来:`ERR_UNSUPPORTED_ESM_URL_SCHEME` | C 类,审查第 1 轮发现。交给 `--import` 的裸路径 `D:\...` 被当成 `d:` 协议;加载器口改给 file URL(`tsxLoaderUrl`),CLI 口仍给路径。用它的三处(`test-launch-restart`、`test-monitor-checkpoint-recovery` 及其 `checkpoint-queue-cases`)真机上都起得来了,但随即红在正文,见下 |
+| `test-detached-survival` / `test-reattach` 设了 `NAVI_RUNS_DIR` | 卡满 900 秒 / `pid === undefined` | 夹具。三条进程测试都用 `NAVI_TEST_AGENT_BIN` 声明自己铺的假 agent;起不来时当场带原因失败,不再等一个不会来的 `close`(`failedChild` 只发 `error`) |
+
+`test-launch-abandon` **在 Windows 上整条跳过**:账上的号判活走 `processAlive`,win32 上恒为 false,
+「起不动也删不掉」的死局在那边不存在。以前真机上「断言都过」是巧合 —— 等启动脚本退掉只给了 5 秒,
+PowerShell 没退完、会话本来就在跑;等到真退了,第二次启动拿到 201。
+
+**还红着、这一轮没修的**(以前都被前面那条挡着、没跑到过):
+
+- `test:handoff` 里 3 条:`test-handoff:452` 报「任务回合还在收尾」409(时序);`test-handoff-return`
+  对端机器没有全局 git 身份(`Committer identity unknown`),收尾另有 `attacker.db` EBUSY;
+  `test-handoff-cli-config-dir` 的 `cliConfigDirForOwner` 为假。其余 20 条绿。
+- 收尾换成 `removeTmpStage` 的 45 条里,9 条红在正文(不在收尾):`accept-gate-status`、`preview-process`、
+  `project-git-config`(`spawnSync sh`)、`review-image-retention`、`review-resume`、`scm-guard`、
+  `session-read-errors`(chmod 造不出「读不动」)、`turn-output`(`spawnSync mkdir`)、`workflow-run`。
+  多半是 B/C 类夹具,没有逐条查。
+- 加载器修好后露出来的 2 条:`test-launch-restart` 红在「prerequisite:跑完一条补一条」等不到(同时满屏
+  「进程树问不出来」);`test-monitor-checkpoint-recovery` 红在 `checkpoint-ack-failure-cases`:用来造
+  「越线凭据写不下来」的办法在 Windows 上没让 `/run` 失败(实得 202)。都没有查。
+- 那台机器**现在建不出符号链接**(`win-remote doctor` 报 ✗),第二节说的开发者模式不再是开着的,
+  依赖 `symlinkSync` 的那几条会红在这个前提上。
+
 **2026-10-23 实测这 7 条绿**:`win-launch`、`path-boundary`、`openers-windows`、`terminal`
 (含 `test-project-commands` 的 Windows 生命周期一节)、`detached`、`reattach`、
 `scheduled-messages`(含 `test-native-steer` —— 它的两个假 CLI 这一轮才换成 Windows 也能启动的
@@ -21,7 +69,7 @@
 夹具此后改过,没有重测就不作数** —— 别把下表当成「现在还是 14/14」。
 
 不作数的原因很具体:`test-accept-merge` / `test-review-flow` 的假 claude 已经删掉,改成
-「`ASH_RUNS_DIR` 一设就必须 fail-closed」的断言(见第三节);`test-scheduled-messages`
+「`NAVI_RUNS_DIR` 一设就必须 fail-closed」的断言(见第三节);`test-scheduled-messages`
 当时那条绿更是假的 —— 它断言 `crash.signal === "SIGKILL"`,而 Windows 没有 POSIX 信号,
 `signal` 恒为 `null`,这条在真机上**只可能红**。它现在按平台分:Windows 断 `status === 1`,
 POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`)这个伪前提。
@@ -85,7 +133,7 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
   产品逻辑(`win-command.ts` 的 `process.env.COMSPEC || "cmd.exe"`)两边都对。第 6 节早就把 COMSPEC
   钉死了,第 5 节漏了。
 - `path-boundary` 断言全过,却在 `finally` 里 `EBUSY: unlink …ash.db` —— Windows 删不掉还开着的
-  文件,而 `ASH_DB` 指向的那个库是 import 时连上的。POSIX 上删已打开的文件合法,所以这条只在
+  文件,而 `NAVI_DB` 指向的那个库是 import 时连上的。POSIX 上删已打开的文件合法,所以这条只在
   真机上现形。现在收尾前先 `dbClient.close()`。
 
 ## 二、需要先满足一个前提
@@ -105,12 +153,12 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 值,据此报过一次假警。要回答的问题其实是「symlink 建不建得出来」—— 直接建一个再删掉最准
 (`scripts/win-remote.mjs` 的 doctor 就是这么做的)。
 
-**`ASH_DB` 指向临时目录**:下面几条会真写库,入口有守卫(`server/scripts/tmp-db.ts`)——
+**`NAVI_DB` 指向临时目录**:下面几条会真写库,入口有守卫(`server/scripts/tmp-db.ts`)——
 
 `test-queue.ts`、`test-answer-routing.ts`、`test-executor-resolution.ts`、`test-cli-overrides.ts`
 
-守卫认 `os.tmpdir()`(POSIX 上额外认 `/tmp`)。Windows 上**别再照抄注释里的 `ASH_DB=/tmp/x.db`**:
-那会落到当前盘的 `\tmp\`,多半不存在。改用 `ASH_DB=%TEMP%\test-queue.db`。`win-remote.mjs test`
+守卫认 `os.tmpdir()`(POSIX 上额外认 `/tmp`)。Windows 上**别再照抄注释里的 `NAVI_DB=/tmp/x.db`**:
+那会落到当前盘的 `\tmp\`,多半不存在。改用 `NAVI_DB=%TEMP%\test-queue.db`。`win-remote.mjs test`
 已经统一代跑的人给一个临时库并在跑完删掉 —— 不给的话,红出来的样子是「Windows 上失败了」,
 而其实 mac 上不设照样红。
 
@@ -131,11 +179,11 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 **`test-accept-merge.ts` 和 `test-review-flow.ts` 已经不摆假 CLI 了**,别再照着上面那张表去找。
 它们要的只是「别真起 claude」,而这件事 `spawn.ts` 的 `guardAgentSpawn` 已经在做:设了
-`ASH_RUNS_DIR` 且没显式给 `ASH_ALLOW_REAL_AGENT=1` 时,任何执行器启动都被换成一个立刻
-失败的假 child。于是这两条改成在开头断言这个隔离确实生效 —— 假 CLI 是「挡住了就没人知道有没有
+`NAVI_RUNS_DIR` 时,执行器启动一律被换成一个立刻失败的假 child —— 除非解析到的可执行文件落在
+测试自己列出的假 CLI 里(`NAVI_TEST_AGENT_BIN`),或者是 live 脚本显式给了 `NAVI_ALLOW_REAL_AGENT=1`。于是这两条改成在开头断言这个隔离确实生效 —— 假 CLI 是「挡住了就没人知道有没有
 挡住」,fail-closed 断言是「没挡住就当场炸」。断言故意会响,所以这两条的临时目录清理挂在
-`process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`ASH_ALLOW_REAL_AGENT=1`
-跑一次就在 `os.tmpdir()` 留一个 `ash-review-flow-*`)。
+`process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`NAVI_ALLOW_REAL_AGENT=1`
+跑一次就在 `os.tmpdir()` 留一个 `navi-review-flow-*`)。
 
 光挂钩子还不够,**断言本身要排在打开数据库之前**。exit 钩子是同步的,`await` 不了
 `releaseTmpDb()`;断言要是排在开库之后才响,Windows 上 `rmSync` 撞的是「文件还开着」的 EBUSY,
@@ -144,11 +192,11 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 ## 四、原先「有意不做」的那一档:已经做了(2026-10-23 真机绿)
 
-**「agent 活得过 ash 重启」在 Windows 上不做**曾经是写进支持计划的决策,`reattach.ts` 和
+**「agent 活得过 Navi 重启」在 Windows 上不做**曾经是写进支持计划的决策,`reattach.ts` 和
 `detached.ts` 里各有平台短路。现在那几处短路都删了,`test:detached` / `test:reattach` 在真机上
 **实测绿**(2026-10-23):
 
-- `npm -w server run test:detached` —— 杀掉 ash 之后 agent 还活着、接回后 24 行不丢不重、
+- `npm -w server run test:detached` —— 杀掉 Navi 之后 agent 还活着、接回后 24 行不丢不重、
   **退出码也对**;第二条(`test-controllable-detached`)钉的是重启后 stdin 还能接着引导
 - `npm -w server run test:reattach` —— 真库 + 真进程走一遍接管接线,含 claude / codex 两条
   原生引导回合接回后仍能 interrupt / steer
@@ -171,7 +219,7 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 ### 那一刀本身:**认记号,不认名单**
 
-落盘 + `detached` 只保证「ash 自己退出时 agent 不死」。`npm run restart` 还会**主动**下刀:
+落盘 + `detached` 只保证「Navi 自己退出时 agent 不死」。`npm run restart` 还会**主动**下刀:
 Windows 没有信号,旧版是 `taskkill /PID <server> /T /F`,`/T` 按父子关系把整棵树一起杀。于是这
 一轮先改成「整棵后代减去 `/api/restart-impact` 给的 survives 名单」—— 第 1 轮审查实测证明这还
 不够,两条都是确定性复现:
@@ -228,13 +276,13 @@ failed / closed;接管不再把异步 marker 尚未出现误判成不支持输�
 
 - 团队 / duet 那批长链路测试只做了静态阅读,没有逐条推演会不会间接踩到上面几类前提。
   其中**有一批会真 spawn `claude -p` 烧真额度** —— 判据不是「名字看着像端到端」,而是
-  **它有没有设 `ASH_RUNS_DIR`**:设了的那批被 `guardAgentSpawn` fail-closed 挡着
+  **它有没有设 `NAVI_RUNS_DIR`**:设了的那批被 `guardAgentSpawn` fail-closed 挡着
   (`review`、`accept-merge`、`free-workflow*`、`workflow-*`、`turn-*` 等),不设的那批没人挡
-  (`test:queue` 就是,`grep -L ASH_RUNS_DIR server/scripts/test-*.ts` 能列全)。
+  (`test:queue` 就是,`grep -L NAVI_RUNS_DIR server/scripts/test-*.ts` 能列全)。
   要无人值守地全量扫,先按这条筛一遍。
 - `test-terminal.ts` 已按平台分了 shell(Windows 走 `cmd.exe`,探针命令换成 `echo` + `cd`),
   ConPTY 那条路**实测绿**(2026-08-18,8.6s)。但它会在退出时留一个孤儿:node-pty 的
   `conpty_console_list_agent.ts:13` 抛 `Error: AttachConsole failed` 之后不退,继续攥着 stdout。
   测试本身 exit 0 不受影响,踩到的是**外面**的东西 —— 任何拿「管道关闭」当完成判据的调用方
-  (`<cmd> | Out-File`、CI 收集器)都会永远等不到 EOF。这是环境/上游的问题,不是 ash 的,
+  (`<cmd> | Out-File`、CI 收集器)都会永远等不到 EOF。这是环境/上游的问题,不是 Navi 的,
   暂未处理;`scripts/win-remote/transport.mjs` 改用「进程退出」当判据来绕开它。

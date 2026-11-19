@@ -4,7 +4,8 @@ import WebKit
 /// 把标题栏那一条还给页面：内容铺到窗口顶，红绿灯直接浮在页面左上角，不再单占一行。
 ///
 /// 页面与壳的约定（页面那一半在 web/index.html 和 web/src/styles/window-shell.css）：
-///  · 页面先表态：文档里有 `<meta name="ash-window-chrome" content="overlay">` 才铺上去。没有这一行的
+///  · 页面先表态：文档里有 `<meta name="navi-window-chrome" content="overlay">`（改名前的页面写的是
+///    `ash-window-chrome`，连旧版服务时两个都认）才铺上去。没有这一行的
 ///    文档（旧版本的 ash、同源的 /mobile 之类别的页面）不知道要给红绿灯让位，壳就退回普通标题栏。
 ///  · 壳在 `<html>` 上写 `data-window-shell="mac"`，外加两个长度：`--window-titlebar-height`
 ///    （红绿灯那一条多高）、`--window-controls-width`（红绿灯占掉左边多宽）。全屏时红绿灯收起、
@@ -20,7 +21,7 @@ import WebKit
 /// WKWebView 不认 `-webkit-app-region`，鼠标事件也全被它收走，所以「拖」只能由页面脚本认出来再
 /// 交回原生：按下时先不动，移出几个点才 `performDrag` —— 原地点一下仍是一次完整的点击，页面照常收到。
 final class WindowChrome: NSObject, WKScriptMessageHandler {
-  private static let messageName = "ashWindowChrome"
+  private static let messageName = "naviWindowChrome"
 
   private weak var window: NSWindow?
   private weak var webView: WKWebView?
@@ -101,7 +102,7 @@ final class WindowChrome: NSObject, WKScriptMessageHandler {
   func refresh() {
     guard let webView else { return }
     let (titlebar, controls) = metrics
-    let apply = "window.__ashWindowChrome && window.__ashWindowChrome(\(titlebar), \(controls));"
+    let apply = "window.__naviWindowChrome && window.__naviWindowChrome(\(titlebar), \(controls));"
     let controller = webView.configuration.userContentController
     controller.removeAllUserScripts()
     controller.addUserScript(WKUserScript(
@@ -138,21 +139,21 @@ final class WindowChrome: NSObject, WKScriptMessageHandler {
     }
   }
 
-  /// 文档一开始就跑：立下 `__ashWindowChrome(titlebar, controls)` 这个入口，替页面表态，并接管「拖窗口」的手势。
+  /// 文档一开始就跑：立下 `__naviWindowChrome(titlebar, controls)` 这个入口，替页面表态，并接管「拖窗口」的手势。
   private static let pageScript = #"""
   (() => {
-    if (window.__ashWindowChrome) return;
+    if (window.__naviWindowChrome) return;
     const root = document.documentElement;
     let titlebar = 0;
-    window.__ashWindowChrome = (height, controls) => {
+    window.__naviWindowChrome = (height, controls) => {
       titlebar = height;
       root.dataset.windowShell = "mac";
       root.style.setProperty("--window-titlebar-height", height + "px");
       root.style.setProperty("--window-controls-width", controls + "px");
     };
-    const post = (kind) => window.webkit.messageHandlers.ashWindowChrome.postMessage(kind);
+    const post = (kind) => window.webkit.messageHandlers.naviWindowChrome.postMessage(kind);
     // 这份文档认不认这套约定，读完 <head> 才知道。
-    const declare = () => post(document.querySelector("meta[name='ash-window-chrome'][content='overlay']") ? "overlay" : "titlebar");
+    const declare = () => post(document.querySelector("meta[name='navi-window-chrome'][content='overlay'], meta[name='ash-window-chrome'][content='overlay']") ? "overlay" : "titlebar");
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", declare, { once: true });
     else declare();
     // 这一屏要多大的窗：页面（AuthGate）写在 <html data-window-size> 上，变一次报一次。

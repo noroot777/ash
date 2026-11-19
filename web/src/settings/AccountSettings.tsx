@@ -31,7 +31,7 @@ export function AccountSettings({ notify }: { notify: (message: string) => void 
         <header className="settings-heading">
           <div>
             <h1>我的账号</h1>
-            <p>这台 ash 是自用模式，没有账号这回事。</p>
+            <p>这台 Navi 是自用模式，没有账号这回事。</p>
           </div>
         </header>
         <section className="settings-section">

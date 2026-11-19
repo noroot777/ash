@@ -1,7 +1,7 @@
-import { readMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
+import { readMonitorWake, type MonitorWakeEvent } from "@navi/shared/monitor-wake";
 import type { ConversationItem } from "./conversationModel.ts";
 
-export type { MonitorWakeEvent } from "@ash/shared/monitor-wake";
+export type { MonitorWakeEvent } from "@navi/shared/monitor-wake";
 
 export type MonitorWakeInput = {
   events: MonitorWakeEvent[];

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { db, inTurnCaller, makeTask, runs, schema, startMonitor, tasks } from "./monitors-fixture.js";
 import { setupRegression } from "./regression-fixture.js";
 
@@ -71,7 +71,7 @@ export async function setupRegressionReviews() {
     const state = () => db.select().from(schema.regressionEvidence).where(eq(schema.regressionEvidence.directory, directory)).then((rows) => rows[0]!);
     const generation = (await state()).generation;
     const stage = () => api.request(`/tasks/${taskId}/stage`, { method: "POST",
-      headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${ownerTaskId}`, "x-ash-source-task-id": ownerTaskId },
+      headers: { "content-type": "application/json", "x-navi-turn-token": `turn-${ownerTaskId}`, "x-navi-source-task-id": ownerTaskId },
       body: JSON.stringify({ stage: "verified" }) });
     const conclusion = async () => free
       ? (await db.select().from(schema.freeReviewRounds).where(eq(schema.freeReviewRounds.id, roundId)))[0]!.conclusion
@@ -90,5 +90,14 @@ export async function setupRegressionReviews() {
     return { mode, taskId, ownerTaskId, round, runId, roundId, directory, monitor, generation, stage, state, conclusion,
       settle, releaseResult };
   };
-  return { ...fixture, open };
+  // 同一轮，但撤掉那两条哨兵排着的结果。回合锁一放开就会扫待发送（turn-release.ts）：留着它们，
+  // 调用方每放一次锁就有一次后台投递来抢这一轮，「放锁 → 摆场景 → 看结算」的每一步都在跟它赌先后。
+  // 只关心结算怎么判、不关心哨兵结果怎么叫醒任务的测试用这个。
+  const openQuiet = async (mode: ReviewMode) => {
+    const review = await open(mode);
+    await db.delete(schema.scheduledMessages)
+      .where(inArray(schema.scheduledMessages.taskId, [review.taskId, review.ownerTaskId]));
+    return review;
+  };
+  return { ...fixture, open, openQuiet };
 }

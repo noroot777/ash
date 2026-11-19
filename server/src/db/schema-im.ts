@@ -5,7 +5,7 @@
 // 凭证（App Secret）不在这里，在库文件旁的 `<db>.feishu.json`（im/config.ts）。
 //
 // 几张表的分工：
-//   im_bindings    飞书身份 ↔ ash 身份。键是 (channel, app_id, open_id)：换应用就要重绑，有意为之。
+//   im_bindings    飞书身份 ↔ navi 身份。键是 (channel, app_id, open_id)：换应用就要重绑，有意为之。
 //   im_bind_codes  网页发起的一次性绑定码（只存哈希）。码由飞书侧认领、再回网页确认，两步都留痕。
 //   im_outbox      发出去的每一张卡/每一条消息。推送由对账驱动（im/reconcile.ts），这张表就是
 //                  「已经推过什么、现在长什么样」的唯一记录 —— 飞书回读 2.0 卡片只给降级文字，
@@ -27,7 +27,7 @@ export const imBindings = sqliteTable("im_bindings", {
   channel: text("channel").notNull(),
   appId: text("app_id").notNull(),
   openId: text("open_id").notNull(),
-  /** ash 账号。自用模式下为空（= 机主）。 */
+  /** navi 账号。自用模式下为空（= 机主）。 */
   userId: text("user_id"),
   /** 单聊会话 id：首次收到这个人的单聊消息时记下，发消息仍按 open_id 发。 */
   chatId: text("chat_id"),
@@ -41,7 +41,7 @@ export const imBindings = sqliteTable("im_bindings", {
 
 export const imBindCodes = sqliteTable("im_bind_codes", {
   id: text("id").primaryKey(),
-  /** 发起绑定的 ash 账号；自用模式为空串（主键/唯一索引里 NULL 不相等，所以不用 NULL）。 */
+  /** 发起绑定的 navi 账号；自用模式为空串（主键/唯一索引里 NULL 不相等，所以不用 NULL）。 */
   owner: text("owner").notNull(),
   /** user = 绑定本人的飞书账号（在单聊里发码）；group = 把一个群绑到项目（在群里 @ 机器人发码）。 */
   purpose: text("purpose").notNull(),
@@ -147,7 +147,7 @@ export const imInbound = sqliteTable("im_inbound", {
   kind: text("kind").notNull(),
   taskId: text("task_id"),
   roomId: text("room_id"),
-  /** 实际送进 ash 的正文（附件转存后的路径也定在这里，重试时用同一份，chat 的幂等要求逐字节相同）。 */
+  /** 实际送进 navi 的正文（附件转存后的路径也定在这里，重试时用同一份，chat 的幂等要求逐字节相同）。 */
   body: text("body"),
   attachments: text("attachments"),
   /** 聊天房间的回复发回飞书时凭的授权来源（JSON，im/scope.ts）：投进房间那一刻盖下。 */
@@ -170,7 +170,7 @@ export const imGroups = sqliteTable("im_groups", {
   chatId: text("chat_id").notNull(),
   projectId: text("project_id").notNull(),
   name: text("name"),
-  /** 谁把这个群绑上的（ash 账号；自用模式为空）。群里的 @ 用这个人的身份执行。 */
+  /** 谁把这个群绑上的（navi 账号；自用模式为空）。群里的 @ 用这个人的身份执行。 */
   boundBy: text("bound_by"),
   /** 1 = 本项目任务的卡片改发到这个群（而不是各自的单聊）。 */
   pushCards: integer("push_cards").notNull().default(0),
@@ -181,7 +181,7 @@ export const imGroupRooms = sqliteTable("im_group_rooms", {
   channel: text("channel").notNull(),
   appId: text("app_id").notNull(),
   chatId: text("chat_id").notNull(),
-  /** 说话人的 ash 账号；自用模式为空串。 */
+  /** 说话人的 navi 账号；自用模式为空串。 */
   userKey: text("user_key").notNull(),
   roomId: text("room_id").notNull(),
 }, (t) => [primaryKey({ columns: [t.channel, t.appId, t.chatId, t.userKey] })]);

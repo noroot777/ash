@@ -1,5 +1,6 @@
-import type { HandoffPeerIdentity } from "@ash/shared";
-import { Fingerprint, SpinnerGap, Warning } from "@phosphor-icons/react";
+import type { HandoffPeerIdentity } from "@navi/shared";
+import { Fingerprint, Warning } from "@phosphor-icons/react";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 // 移回的对话框刻意做得比接力短:移回没有任何可选项——目标机被任务记录的来源指纹
 // 锁死,落哪个项目由原机的历史存档决定,连"选来源机地址"都该是系统自己探出来的。
@@ -12,8 +13,8 @@ export type HandoffReturnPhase = "locating" | "ready" | "unreachable";
  * 的原样留着,宁可技术味重也别把唯一的线索吞掉。
  */
 function readableReason(message: string | null): string {
-  const raw = (message ?? "").replace(/^连不上对端 ash（[^）]*）[:：]\s*/, "").trim();
-  if (/ECONNREFUSED|fetch failed/i.test(raw)) return "它没有应答——那台机器上的 ash 多半没在跑，或者端口被挡住了。";
+  const raw = (message ?? "").replace(/^连不上对端 (?:Navi|ash)（[^）]*）[:：]\s*/, "").trim();
+  if (/ECONNREFUSED|fetch failed/i.test(raw)) return "它没有应答——那台机器上的 Navi 多半没在跑，或者端口被挡住了。";
   if (/ETIMEDOUT|timeout|超时/i.test(raw)) return "连接超时——地址可能已经不对，或者两台机器不在同一个网络里。";
   if (/ENOTFOUND|EAI_AGAIN/i.test(raw)) return "这个主机名解析不出来。";
   return raw || "没有拿到应答。";
@@ -80,7 +81,7 @@ export function HandoffReturnView({
       )}
       {phase === "locating" && (
         <p className="handoff-probing">
-          <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+          <NaviLoader size={14} />
           正在联系来源机器…
         </p>
       )}
@@ -96,7 +97,7 @@ export function HandoffReturnView({
             连不上来源机器{peerUrl ? `（${peerUrl}）` : ""}。{readableReason(errorMessage)}
           </p>
           <ul className="handoff-summary">
-            <li>确认那台机器开着、ash 正在运行，并且和本机在同一个网络里</li>
+            <li>确认那台机器开着、Navi 正在运行，并且和本机在同一个网络里</li>
             <li>
               如果它换了地址，到「<a className="handoff-settings-link" href={settingsHref}>设置 → 默认规则 → 任务接力 → 来源机器地址</a>」
               填写新地址并核对保存，再回到任务重新检查

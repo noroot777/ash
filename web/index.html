@@ -3,17 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // iOS 的 WebKit 在聚焦字号 < 16px 的输入框时会把整页放大到 16px 的观感，失焦后不缩回——
+      // 回复框是 12.5px，点一下再出来整页就放大约 1.28 倍、右边被裁掉。封顶 maximum-scale=1
+      // 是 WebKit 唯一的「别自动放大」开关：Safari 里捏合缩放照样能用；飞书 / 微信这类内嵌
+      // WebView 会连捏合一起关掉，工作台是铺满一屏的应用外壳，这个代价可以接受。只拨 iOS：
+      // Android 本来就不会自动放大，加上它只会白白关掉捏合。iPadOS 桌面模式自报 MacIntel，靠触点数认。
+      (function () {
+        var ios = /iP(hone|od|ad)/.test(navigator.platform)
+          || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+        if (!ios) return;
+        var meta = document.querySelector('meta[name="viewport"]');
+        if (meta) meta.setAttribute("content", "width=device-width, initial-scale=1.0, maximum-scale=1.0");
+      })();
+    </script>
     <meta name="theme-color" content="#efeff0" />
     <!-- 告诉 macOS 壳：这份页面会给红绿灯让位（styles/window-shell.css），内容可以铺到窗口顶。 -->
-    <meta name="ash-window-chrome" content="overlay" />
-    <title>Ash</title>
+    <meta name="navi-window-chrome" content="overlay" />
+    <title>Navi</title>
     <script>
       // 深浅色在第一帧之前拨好:等 bundle 起来再拨，深色用户每次开页都先闪一屏白。
       // 读的是 src/lib/theme.ts 存下的那份本机镜像(键名与判据两边一致，改一边看另一边);
       // 读不到就跟随系统。theme-color 两个色值 = global.css 里浅 / 深两套的 --chrome。
       (function () {
         var pref = null;
-        try { pref = localStorage.getItem("ash.colorTheme"); } catch (e) {}
+        // 改名前存的键还没被 storageRenameBoot.ts 挪过来时（升级后第一次打开）读旧的那一份。
+        try { pref = localStorage.getItem("navi.colorTheme") || localStorage.getItem("ash.colorTheme"); } catch (e) {}
         var dark = pref === "dark" || (pref !== "light" && window.matchMedia
           && window.matchMedia("(prefers-color-scheme: dark)").matches);
         var root = document.documentElement;
@@ -32,7 +47,7 @@
       // **必须是同步的经典脚本**：加上 type="module" 它就变成 defer，跟 bundle 一起排到
       // 解析之后跑，这里争取的那点提前量当场归零。
       // 接它的是 src/lib/authProbe.ts；接不住就照常自己请求一次，那条路径永远能工作。
-      window.__ashAuthProbe = fetch("/api/auth/state", { credentials: "same-origin" })
+      window.__naviAuthProbe = fetch("/api/auth/state", { credentials: "same-origin" })
         .then(function (r) { return r.ok ? r.json() : null; })
         .catch(function () { return null; });
     </script>

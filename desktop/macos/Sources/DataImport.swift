@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 import Darwin
 
-/// 首启时「从一份已有的 ash 数据目录导入」（比如仓库里的 `data/`）。**只复制、不移动**，源目录
+/// 首启时「从一份已有的 navi 数据目录导入」（比如仓库里的 `data/`）。**只复制、不移动**，源目录
 /// 一个字节都不改。
 ///
 /// 源库可能正被另一份 server 开着（WAL 模式、随时在写），所以库文件不能按文件拷：拷到一半的
@@ -25,10 +25,13 @@ enum DataImport {
     let livePID: Int32?
   }
 
-  /// 洗副本时停下来的东西（import-snapshot 的 ImportPreparation）。
+  /// 洗副本时停下来的东西（import-snapshot 的 ImportPreparation），外加复制时跳过的特殊文件数。
   struct Report: Decodable {
     let held: [String: Int]
     let relocated: Int
+    var skippedSpecial = 0
+
+    private enum CodingKeys: String, CodingKey { case held, relocated }
   }
 
   typealias Failure = SQLiteFile.Failure
@@ -43,13 +46,13 @@ enum DataImport {
   static func inspect(_ url: URL) throws -> Source {
     let db = url.appendingPathComponent("ash.db")
     guard FileManager.default.fileExists(atPath: db.path) else {
-      throw Failure("\(url.path) 里没有 ash.db。要选的是 ash 的数据目录（仓库里是 data/）。")
+      throw Failure("\(url.path) 里没有 ash.db。要选的是 Navi 的数据目录（仓库里是 data/）。")
     }
-    let source = AshHealth.realPath(url.path), dest = AshHealth.realPath(AshConfig.dataURL.path)
+    let source = NaviHealth.realPath(url.path), dest = NaviHealth.realPath(NaviConfig.dataURL.path)
     guard source != dest else { throw Failure("这就是 app 自己的数据目录。") }
     // 互相包含时，复制的一边会把另一边也卷进去（目标在源里面 = 把自己拷进自己）。
     guard !contains(source, dest) && !contains(dest, source) else {
-      throw Failure("\(url.path) 和 app 的数据目录 \(AshConfig.dataURL.path) 一个在另一个里面，没法导入。")
+      throw Failure("\(url.path) 和 app 的数据目录 \(NaviConfig.dataURL.path) 一个在另一个里面，没法导入。")
     }
     // 多人模式的数据转不回自用（server 的 auth/mode.ts），而 app 只以本机自用模式起服务。
     if try instanceMode(of: db) == "multi" {
@@ -67,18 +70,20 @@ enum DataImport {
     let staging = dest.appendingPathComponent("\(stagingPrefix)\(getpid())-\(UUID().uuidString)", isDirectory: true)
     defer { try? fm.removeItem(at: staging) }
     try fm.createDirectory(at: staging, withIntermediateDirectories: false)
+    var special = 0
     for name in try fm.contentsOfDirectory(atPath: source.url.path) where !skipped(name) {
-      try fm.copyItem(at: source.url.appendingPathComponent(name), to: staging.appendingPathComponent(name))
+      special += try copyTree(source.url.appendingPathComponent(name).path, to: staging.appendingPathComponent(name).path)
     }
     let db = staging.appendingPathComponent("ash.db")
     try SQLiteFile.snapshot(from: source.url.appendingPathComponent("ash.db"), to: db)
-    let report = try prepare(db, source: source.url, dest: dest)
+    var report = try prepare(db, source: source.url, dest: dest)
+    report.skippedSpecial = special
     try seal(db)
 
     let lock = try ServerStartLock(dataDir: dest)
     let deadline = Date().addingTimeInterval(lockTimeout)
     while try !lock.tryAcquire() {
-      guard Date() < deadline else { throw Failure("另一处正在启动 ash 服务，等它超时了。这次没有导入，可以重试。") }
+      guard Date() < deadline else { throw Failure("另一处正在启动 Navi 服务，等它超时了。这次没有导入，可以重试。") }
       Thread.sleep(forTimeInterval: 0.2)
     }
     try withExtendedLifetime(lock) { try publish(staging, into: dest) }
@@ -91,6 +96,30 @@ enum DataImport {
     let exact: Set<String> = ["ash.db", "ash.db-wal", "ash.db-shm", "ash.db-journal", "deps", "tmp", journalName]
     return exact.contains(name) || appOwned.contains(name) || name.hasPrefix(stagingPrefix)
       || name.hasSuffix(".ash.lock") || name.contains(".ash-online.")
+  }
+
+  /// 只搬普通文件、目录和符号链接（链接照原样复制成链接，不跟进去，跟 `copyItem` 一致）。命名管道、
+  /// socket、设备文件绑的是源那台机器上的进程，副本里没有用，`copyItem` 碰到 FIFO 还会直接抛错、
+  /// 让整次导入作罢 —— 跳过，返回跳过了几个。
+  private static func copyTree(_ from: String, to: String) throws -> Int {
+    let fm = FileManager.default
+    let attributes = try fm.attributesOfItem(atPath: from)   // lstat：不跟随链接
+    switch attributes[.type] as? FileAttributeType {
+    case .typeRegular?, .typeSymbolicLink?:
+      try fm.copyItem(atPath: from, toPath: to)
+      return 0
+    case .typeDirectory?:
+      try fm.createDirectory(atPath: to, withIntermediateDirectories: false)
+      var special = 0
+      for name in try fm.contentsOfDirectory(atPath: from) {
+        special += try copyTree((from as NSString).appendingPathComponent(name), to: (to as NSString).appendingPathComponent(name))
+      }
+      // 权限放到最后：源目录要是只读的，先设上就写不进里面的东西了。
+      if let mode = attributes[.posixPermissions] { try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: to) }
+      return special
+    default:
+      return 1
+    }
   }
 
   // MARK: 发布
@@ -139,7 +168,7 @@ enum DataImport {
 
   private static func requireNoDatabase(_ dest: URL) throws {
     guard !FileManager.default.fileExists(atPath: dest.appendingPathComponent("ash.db").path) else {
-      throw Failure("\(dest.path) 里已经有一份 ash 数据了（可能另一个窗口或登录项刚点了「全新开始」）。这次没有导入，那份数据没有动。")
+      throw Failure("\(dest.path) 里已经有一份 Navi 数据了（可能另一个窗口或登录项刚点了「全新开始」）。这次没有导入，那份数据没有动。")
     }
   }
 
@@ -147,13 +176,13 @@ enum DataImport {
 
   /// 自带 node 跑 server 的 import-snapshot：源数据根按选的路径和它的真实路径各给一份。
   private static func prepare(_ db: URL, source: URL, dest: URL) throws -> Report {
-    for part in [AshConfig.nodeURL, AshConfig.importToolURL] where !FileManager.default.fileExists(atPath: part.path) {
-      throw Failure("app 里自带的 ash 不完整（缺 \(part.path)）。重新装一次 Ash.app。")
+    for part in [NaviConfig.nodeURL, NaviConfig.importToolURL] where !FileManager.default.fileExists(atPath: part.path) {
+      throw Failure("app 里自带的 Navi 不完整（缺 \(part.path)）。重新装一次 Navi.app。")
     }
-    let roots = Array(Set([source.standardizedFileURL.path, AshHealth.realPath(source.path)]))
+    let roots = Array(Set([source.standardizedFileURL.path, NaviHealth.realPath(source.path)]))
     let tool = Process()
-    tool.executableURL = AshConfig.nodeURL
-    tool.arguments = [AshConfig.importToolURL.path, db.path, dest.standardizedFileURL.path] + roots
+    tool.executableURL = NaviConfig.nodeURL
+    tool.arguments = [NaviConfig.importToolURL.path, db.path, dest.standardizedFileURL.path] + roots
     tool.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8"]
     let output = Pipe(), errors = Pipe()
     tool.standardOutput = output
@@ -188,7 +217,7 @@ enum DataImport {
     defer { sqlite3_close(handle) }
     var statement: OpaquePointer?
     guard sqlite3_prepare_v2(handle, "select value from app_settings where key = 'instanceMode'", -1, &statement, nil) == SQLITE_OK else {
-      throw Failure("读不出这份库（\(String(cString: sqlite3_errmsg(handle)))），它可能不是 ash 的库。")
+      throw Failure("读不出这份库（\(String(cString: sqlite3_errmsg(handle)))），它可能不是 Navi 的库。")
     }
     defer { sqlite3_finalize(statement) }
     guard sqlite3_step(statement) == SQLITE_ROW, let text = sqlite3_column_text(statement, 0) else { return "" }

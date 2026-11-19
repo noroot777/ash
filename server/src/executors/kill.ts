@@ -240,7 +240,7 @@ async function sweepAndJudge(child: ChildProcess): Promise<CleanupResult> {
     failed: ";**责任没能落盘**(库写失败),已留在内存里等补投 —— 但它跨不过重启",
   }[noted];
   console.warn(
-    `[ash] 这一次运行的后代还不能证明收干净(pid=${child.pid ?? "?"}):`
+    `[navi] 这一次运行的后代还不能证明收干净(pid=${child.pid ?? "?"}):`
     + `${cleanupResultDetail(result)}${tail}`,
   );
   return result;

@@ -41,12 +41,12 @@ export function conflictContextEvent(text: string): boolean {
  * 新记录由服务端标成 `review.dispute`（见 timelineNoticeCopy.ts）。
  *
  * 匹配的是 `server/src/free-review-dispute.ts` 里唯一写它的那一处结尾——那句话把三/四条
- * 出路**列了出来却没给任何能点的东西**，用户读完还得自己去右边找审查面板（用户 2026-09-24
- * 反馈：「直接给个按钮不行吗」）。所以这条旁注上要挂一颗「去裁定」。
+ * 出路列了出来。认出它，是为了让这一句留到裁完为止、不被同一回合后来的话盖掉（裁定本身在
+ * 回复框顶上那一行，见 free-workflow/DisputeRulingDock.tsx）。
  *
  * 认这句而不是认句首：句首会随「驳回了 / 认可但越界 / 部分驳回」三种形态变，而「现在由你
  * 裁定」是三种共有的收尾。**光靠它还不够**——它只说明这条旁注当时在等裁定，不说明现在还
- * 等着；按钮的在与不在由 `openDisputeIn(reviews)` 决定，这里只负责挑中哪一行。
+ * 等着；算不算现在的事由 `openDisputeIn(reviews)` 决定，这里只负责挑中哪一行。
  */
 export function pendingDisputeEvent(text: string): boolean {
   return /现在由你裁定[：:]/.test(text);

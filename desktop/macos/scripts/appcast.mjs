@@ -51,7 +51,7 @@ export function renderItem({ version, shortVersion, url, length, signature, mini
     `  <sparkle:shortVersionString>${escape(shortVersion)}</sparkle:shortVersionString>`,
     `  <sparkle:minimumSystemVersion>${escape(minimumSystemVersion)}</sparkle:minimumSystemVersion>`,
   ];
-  if (commit) lines.push(`  <ash:commit>${escape(commit)}</ash:commit>`);
+  if (commit) lines.push(`  <navi:commit>${escape(commit)}</navi:commit>`);
   if (notes) lines.push(`  <description>${escape(notes)}</description>`);
   lines.push(
     `  <enclosure url="${escape(url)}" length="${length}" type="application/octet-stream" sparkle:edSignature="${escape(signature)}"/>`,
@@ -60,11 +60,31 @@ export function renderItem({ version, shortVersion, url, length, signature, mini
   return lines.join("\n      ");
 }
 
+/**
+ * 「仅通知」的一项（Sparkle 的 informationalUpdate）：不带安装包，查到它的 app 只提示有新版、「了解更多」
+ * 打开 link。给改名前的 Ash.app 用 —— 它装不了包标识不同的 Navi。
+ */
+export function renderInformationalItem({ version, shortVersion, link, minimumSystemVersion, notes, pubDate }) {
+  return [
+    "<item>",
+    `  <title>${escape(`Navi ${shortVersion}（${version}）`)}</title>`,
+    `  <pubDate>${escape(pubDate.toUTCString())}</pubDate>`,
+    `  <sparkle:version>${escape(version)}</sparkle:version>`,
+    `  <sparkle:shortVersionString>${escape(shortVersion)}</sparkle:shortVersionString>`,
+    `  <sparkle:minimumSystemVersion>${escape(minimumSystemVersion)}</sparkle:minimumSystemVersion>`,
+    "  <sparkle:informationalUpdate></sparkle:informationalUpdate>",
+    `  <link>${escape(link)}</link>`,
+    ...(notes ? [`  <description>${escape(notes)}</description>`] : []),
+    "</item>",
+  ].join("\n      ");
+}
+
 /** 整份 appcast：新的一项在最前，旧的原样跟在后面。不带签名（交给 sign_update）。 */
 export function renderAppcast({ title, link, items }) {
   return [
     `<?xml version="1.0" encoding="utf-8"?>`,
-    `<rss version="2.0" xmlns:sparkle="${SPARKLE_NS}" xmlns:ash="https://github.com/noroot777/ash">`,
+    // xmlns:ash 是兼容声明：改名前发的条目原样带过来时里面是 <ash:commit>，前缀没声明整份 XML 就解析不了。
+    `<rss version="2.0" xmlns:sparkle="${SPARKLE_NS}" xmlns:navi="https://github.com/noroot777/navi" xmlns:ash="https://github.com/noroot777/ash">`,
     "  <channel>",
     `    <title>${escape(title)}</title>`,
     `    <link>${escape(link)}</link>`,
@@ -75,7 +95,7 @@ export function renderAppcast({ title, link, items }) {
   ].join("\n");
 }
 
-/** 上一版是从哪个提交出的（写在 <ash:commit> 里），给这一版的更新说明划范围。 */
+/** 上一版是从哪个提交出的（写在 <navi:commit> 里；改名前的条目写的是 <ash:commit>），给这一版的更新说明划范围。 */
 export function previousCommit(items) {
-  return items[0]?.xml.match(/<ash:commit>\s*([0-9a-f]{7,40})\s*<\/ash:commit>/)?.[1] ?? null;
+  return items[0]?.xml.match(/<(navi|ash):commit>\s*([0-9a-f]{7,40})\s*<\/\1:commit>/)?.[2] ?? null;
 }

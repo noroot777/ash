@@ -15,7 +15,7 @@ export function scrubText(text: string | null | undefined, max = 1500): string {
   if (!text) return "";
   let out = redactSecrets(text).replace(FEISHU_SECRETS, "$1***").replace(AT_TAG, "");
   out = out.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-  return out.length > max ? `${out.slice(0, max)}…（已截断，完整内容在 ash 里）` : out;
+  return out.length > max ? `${out.slice(0, max)}…（已截断，完整内容在 Navi 里）` : out;
 }
 
 /** 卡片标题：一行、去 @、短。 */

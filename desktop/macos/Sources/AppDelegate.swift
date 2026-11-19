@@ -5,6 +5,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var windowController: BrowserWindowController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // 第一个 WKWebView 建出来之前：要先让旧 app 退出、把改名前的网页数据复制过来（见 LegacyIdentity）。
+    guard adoptLegacyIdentity() else { return }
     AppUpdater.shared.start()
     NSApp.mainMenu = MainMenu.build()
     let controller = BrowserWindowController()
@@ -16,6 +18,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSApp.activate(ignoringOtherApps: true)
     do { try LoginService.reconcileAtLaunch() } catch { NSAlert(error: error).runModal() }
     DispatchQueue.global(qos: .utility).async { DownloadTransaction.reclaimAbandoned() }
+  }
+
+  /// 网页数据没接过来就不建窗口（建了就再也接不回来，见 LegacyIdentity.webDataSettled）：说清卡在哪，让用户选。
+  /// 返回 false = 用户选了退出。
+  private func adoptLegacyIdentity() -> Bool {
+    while let blocked = LegacyIdentity.adoptAtLaunch() {
+      let alert = NSAlert()
+      alert.messageText = "还没接过 Ash 的登录和页面设置"
+      alert.informativeText = "\(blocked)\n\n现在不接直接打开的话，Ash 里的登录、草稿和页面设置就不再接过来了（Ash 那份原样留着）。"
+      alert.addButton(withTitle: "重试")
+      alert.addButton(withTitle: "不接了，直接打开")
+      alert.addButton(withTitle: "退出")
+      switch alert.runModal() {
+      case .alertFirstButtonReturn: continue
+      case .alertSecondButtonReturn:
+        // 记不下（另一份 Navi 还在复制）就不开窗口，回到上面重新判断、再问一次。
+        _ = LegacyIdentity.skipWebData()
+      default:
+        NSApp.terminate(nil)
+        return false
+      }
+    }
+    return true
   }
 
   /// 退出时 Sparkle 会把下好的新版装上：先过 UpdateGate（会不会打断任务、停服务、备份库）。
@@ -31,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     UpdateGate.shared.reconsider()
   }
 
-  // 关窗不退出：ash 是常驻的工作台，像邮件 / Slack 那样点 Dock 图标就回来；⌘Q 才是真退出。
+  // 关窗不退出：navi 是常驻的工作台，像邮件 / Slack 那样点 Dock 图标就回来；⌘Q 才是真退出。
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -60,7 +85,7 @@ extension AppDelegate: NSMenuItemValidation {
       item.state = LoginService.isEnabled ? .on : .off
     }
     // 只有本机那份才有「替这台机器的 CLI 接 MCP」这回事。
-    if item.action == #selector(checkHostMcp(_:)) { return AshConfig.isLocal }
+    if item.action == #selector(checkHostMcp(_:)) { return NaviConfig.isLocal }
     // 只在有一次更新排着（等任务跑完、或上次没装成）时出现。
     if item.action == #selector(installPendingUpdate(_:)) {
       let gate = UpdateGate.shared
@@ -101,8 +126,8 @@ enum MainMenu {
   }
 
   private static func appMenu() -> NSMenu {
-    let menu = NSMenu(title: "ash")
-    menu.addItem(item("关于 ash", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+    let menu = NSMenu(title: "Navi")
+    menu.addItem(item("关于 Navi", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
     if let target = AppUpdater.shared.menuTarget {
       let check = item("检查更新…", #selector(SPUStandardUpdaterController.checkForUpdates(_:)))
       check.target = target
@@ -112,14 +137,14 @@ enum MainMenu {
       menu.addItem(pending)
     }
     menu.addItem(.separator())
-    menu.addItem(item("登录时启动 ash 服务", #selector(AppDelegate.toggleLoginService(_:))))
-    menu.addItem(item("检查 ash MCP 登记…", #selector(AppDelegate.checkHostMcp(_:))))
+    menu.addItem(item("登录时启动 Navi 服务", #selector(AppDelegate.toggleLoginService(_:))))
+    menu.addItem(item("检查 Navi MCP 登记…", #selector(AppDelegate.checkHostMcp(_:))))
     menu.addItem(.separator())
-    menu.addItem(item("隐藏 ash", #selector(NSApplication.hide(_:)), "h"))
+    menu.addItem(item("隐藏 Navi", #selector(NSApplication.hide(_:)), "h"))
     menu.addItem(item("隐藏其他", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]))
     menu.addItem(item("全部显示", #selector(NSApplication.unhideAllApplications(_:))))
     menu.addItem(.separator())
-    menu.addItem(item("退出 ash", #selector(NSApplication.terminate(_:)), "q"))
+    menu.addItem(item("退出 Navi", #selector(NSApplication.terminate(_:)), "q"))
     return menu
   }
 

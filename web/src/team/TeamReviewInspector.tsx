@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { STAGE_LABELS, TASK_STATUS_LABELS, type Task, type TaskListItem } from "@ash/shared";
+import { useMemo } from "react";
+import { STAGE_LABELS, TASK_STATUS_LABELS, type Task, type TaskListItem } from "@navi/shared";
 import {
   CaretRight,
   CheckCircle,
@@ -7,7 +7,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { ReviewEvidence, useTaskReviewInfo } from "./ReviewEvidence.tsx";
-import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
+import { useLeftDrawer } from "../components/LeftDrawer.tsx";
 
 function reviewLabel(task: TaskListItem) {
   if (task.stage) return STAGE_LABELS[task.stage];
@@ -117,15 +117,26 @@ export function TeamReviewInspector({
   }).length;
   const failed = targets.filter((task) => subjectOf(task).stage === "verify_failed").length;
 
-  // 抽屉默认不弹：一进来就盖住列表反而更难挑。点哪条开哪条，再点一次收起。
-  const [openId, setOpenId] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const opened = openId ? targets.find((task) => task.id === openId) ?? null : null;
-  const openedSubject = opened ? subjectOf(opened) : null;
+  // 抽屉默认不弹：一进来就盖住列表反而更难挑。点哪条开哪条（从左边推出来，列表留在右边看得见），
+  // 再点一次收起。
+  const drawer = useLeftDrawer();
+  const keyOf = (target: TaskListItem) => `team-review:${lead.id}:${target.id}`;
+  const toggle = (target: TaskListItem) => {
+    if (!drawer) return;
+    if (drawer.activeKey === keyOf(target)) return drawer.close();
+    const subject = subjectOf(target);
+    drawer.open({
+      key: keyOf(target),
+      kind: "审查记录",
+      title: `${subject.title} · ${roleOf(target)}`,
+      ariaLabel: `审查记录：${subject.title}`,
+      closeLabel: "关闭审查记录",
+      body: <TargetEvidence subject={subject} onOpenTask={onOpenTask} />,
+    });
+  };
 
   return (
-    <div className="review-inspector" aria-label="团队审查" ref={rootRef}>
+    <div className="review-inspector" aria-label="团队审查">
       <section className="review-inspector__overview">
         <header>
           <span className={`review-inspector__status${failed ? " is-verify_failed" : completed ? " is-verified" : ""}`}>
@@ -156,7 +167,7 @@ export function TeamReviewInspector({
                 : "点开在左侧看各自的轮次与证据"}
           </small>
         </header>
-        <div ref={listRef}>
+        <div>
           {!targets.length && (
             <p className="review-inspector__empty">
               这个团队还没有审查记录。执行者只是被验收标记过，并不代表验证跑过——所以这里先空着，而不是把整队执行者列成一排空记录。
@@ -164,13 +175,14 @@ export function TeamReviewInspector({
           )}
           {targets.map((target) => {
             const targetSubject = subjectOf(target);
+            const open = drawer?.activeKey === keyOf(target);
             return (
               <button
                 type="button"
                 key={target.id}
-                className={target.id === openId ? "is-selected" : targetSubject.stage === "verify_failed" ? "is-failed" : ""}
-                aria-expanded={target.id === openId}
-                onClick={() => setOpenId((current) => current === target.id ? null : target.id)}
+                className={open ? "is-selected" : targetSubject.stage === "verify_failed" ? "is-failed" : ""}
+                aria-pressed={open}
+                onClick={() => toggle(target)}
               >
                 <span><b>{target.title}</b><small>{roleOf(target)}</small></span>
                 <em>{reviewLabel(targetSubject)}</em>
@@ -179,18 +191,6 @@ export function TeamReviewInspector({
           })}
         </div>
       </section>
-
-      {opened && openedSubject && (
-        <ReviewEvidenceDrawer
-          anchorRef={rootRef}
-          keepOpenRef={listRef}
-          title={openedSubject.title}
-          subtitle={roleOf(opened)}
-          onClose={() => setOpenId(null)}
-        >
-          <TargetEvidence subject={openedSubject} onOpenTask={onOpenTask} />
-        </ReviewEvidenceDrawer>
-      )}
     </div>
   );
 }

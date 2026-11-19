@@ -37,7 +37,7 @@
   box-shadow: var(--shadow);
 }
 
-/* 深色下比 --chrome 再压一档,不至于和右边连成一片(同原生 AshPalette.brand)。 */
+/* 深色下比 --chrome 再压一档,不至于和右边连成一片(同原生 NaviPalette.brand)。 */
 :root[data-theme="dark"] .onboarding-card {
   --onboarding-brand: #0c0c0e;
 }
@@ -58,17 +58,14 @@
   align-items: flex-start;
 }
 
-/* 和 app 图标同一张图:米白底上的点阵标,一格 3px(原生首启页的 BrandMark 是同一个画法)。
-   底是定死的浅色,所以墨色和亮的那一格也定死,不跟主题走。 */
+/* 和 app 图标同一块:米白底上的标,标占六成(原生首启页的 BrandMark 直接画的就是 app 图标)。
+   底色和里面标的配色来自 .navi-tile。 */
 .onboarding-mark {
   display: grid;
   place-items: center;
   width: 44px;
   height: 44px;
   border-radius: 10px;
-  background: #eceae4;
-  color: #111113;
-  --accent: #5e6ad2;
 }
 
 .onboarding-brand b {
@@ -238,7 +235,7 @@ button.onboarding-rail-step:hover:not(.is-on),
   font-size: var(--t-xs);
   line-height: 1.5;
   color: var(--amber);
-  /* 补不上 ash MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
+  /* 补不上 navi MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
   white-space: pre-wrap;
 }
 
@@ -441,10 +438,9 @@ button.onboarding-rail-step:hover:not(.is-on),
     border-radius: 8px;
   }
 
-  /* 小块里标缩到一格 2px。 */
   .onboarding-mark svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
   }
 
   .onboarding-rail {

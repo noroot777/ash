@@ -133,7 +133,7 @@ export async function checkpointAckFailureCases(): Promise<void> {
 
   // ④ **「送达」只认协议层那一声确认**(第 2 轮自由审查 F1;前身是第 1 轮逻辑审查 4)。
   //
-  //    这一问被收紧过两次,方向是同一个:**别拿 ash 自己的记账当 agent 的点头**。
+  //    这一问被收紧过两次,方向是同一个:**别拿 navi 自己的记账当 agent 的点头**。
   //      · 第一代判据是「这个任务在租约之后开过任何一个回合」——同一个任务上别的回合(审查旁路、
   //        续聊、再点一次运行)也会命中,那段交代于是被当成已送达划掉;
   //      · 第二代收紧成「记号上写着的那一轮开起来过」——仍然是本地记账:越线、会话行、回合行
@@ -159,7 +159,7 @@ export async function checkpointAckFailureCases(): Promise<void> {
   }
   {
     // ④b 记号在、协议层没点头。**连「记号上写着的那一轮确实开起来了」也不算送达**(第 2 轮
-    //    自由审查 F1):会话行、回合行都是 ash 自己的记账,证明不了那串字进了 agent 手里。
+    //    自由审查 F1):会话行、回合行都是 navi 自己的记账,证明不了那串字进了 agent 手里。
     //    必须落「交付不明」,原文留在用户看得见的地方。
     const test = await scenario(0);
     const generation = (await taskOf(test.taskId)).resumePromptGeneration;

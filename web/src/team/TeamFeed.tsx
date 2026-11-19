@@ -1,8 +1,8 @@
 import { useMemo, useRef } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
-import { runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
-import type { Batch } from "@ash/shared/team";
+import type { Task, TaskListItem } from "@navi/shared";
+import { runActivityPhase, runActivityTail } from "@navi/shared/run-activity";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
+import type { Batch } from "@navi/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { contentVersion } from "../lib/useStickToBottom.ts";
@@ -17,7 +17,9 @@ import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "../task-detail/QuestionHistory.tsx";
-import { isQuestionAnswer } from "@ash/shared/questions";
+import { useQuestionHistory } from "../task-detail/useQuestionHistory.ts";
+import { isQuestionAnswer } from "@navi/shared/questions";
+import { questionsOnScreen } from "../task-detail/timelineNoticeCopy.ts";
 import { SystemAuthoredMessage, SystemBoundary, SystemEventNote } from "../task-detail/SystemNotice.tsx";
 import { isReviewSystemPrompt } from "../task-detail/systemNoticeModel.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
@@ -72,7 +74,7 @@ function AgentRow({
 
 function UserRow({ row, onReuse }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]; onReuse?: (input: ReusableInput) => void }) {
   if (row.kind !== "user") return null;
-  if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
+  if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} attachments={row.attachments} />;
   const bySystem = !!row.bySystem;
   if (bySystem && !isReviewSystemPrompt(row.text)) {
     return <SystemAuthoredMessage item={row} surface="team" />;
@@ -234,6 +236,10 @@ export function TeamFeed({
   const wakeReplies = monitorWakeReplyIds(rows.flatMap((row) => row.kind === "conv" ? [row.item] : []));
   // 调度台的原始需求同样不在会话正文里（首条会话从调度者的拆解开始）：流的最顶上拿任务正文
   // 补画第一颗气泡，左侧导航也靠它排出第一格。
+  // 另有一处看得见的那几道题（答题卡、答过的气泡）：调度者提问那一轮的结算说明对的是它们时不再抄一遍。
+  // 跟答过的气泡读同一份合并后的问答历史（useQuestionHistory.ts）。
+  const history = useQuestionHistory(task.id, task.questionHistory, true);
+  const onScreen = questionsOnScreen(task, history.records);
   const inputs = useMemo(
     () => conversationInputs({ text: task.body, at: task.createdAt }, rows.flatMap((row) => row.kind === "conv" ? [row.item] : [])),
     [rows, task.body, task.createdAt],
@@ -259,7 +265,7 @@ export function TeamFeed({
     runActivityTail(rows.map((row) => (row.kind === "conv" ? row.item : { kind: "batch" }))),
   );
   return (
-    <QuestionHistoryProvider key={task.id} taskId={task.id} history={task.questionHistory} live
+    <QuestionHistoryProvider history={history}
       messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item] : [])}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">
@@ -298,9 +304,9 @@ export function TeamFeed({
               );
             }
             if (item.variant === "boundary") {
-              return <SystemBoundary item={item} surface="team" key={row.key} />;
+              return <SystemBoundary item={item} key={row.key} />;
             }
-            return <SystemEventNote item={item} key={row.key} />;
+            return <SystemEventNote item={item} key={row.key} onScreen={onScreen} />;
           })}
           {historyReady && <QuestionHistoryRemainder />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}

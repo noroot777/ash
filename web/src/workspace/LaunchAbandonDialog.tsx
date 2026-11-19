@@ -12,7 +12,7 @@ import { localeDateTime } from "../lib/localeFormat.ts";
 // 这个框的三条硬要求都来自那份判据：
 //   ① **先摆事实再签字**：开框先只读地问一遍残留（哪个 pid 还活着、端口上坐着谁），
 //      拿不到就不许按——让人在看不见的东西上签字，等于把显式确认做成了静默核销；
-//   ② **解除范围原样显示**：ash 从此不再做哪几件事，逐条列出来，按之前就读得到；
+//   ② **解除范围原样显示**：navi 从此不再做哪几件事，逐条列出来，按之前就读得到；
 //   ③ **它不是「已停止」**：文案一个字都不许说停了。放弃之后那些进程大概率还在跑，
 //      只是从此由用户自己处理。
 //
@@ -68,7 +68,7 @@ export function LaunchAbandonDialog({ projectId, commandId, onClose, onDone, not
     title={view ? `放弃「${view.name}」这次启动的管理责任` : "放弃这次启动的管理责任"}
     message={done
       ? `这次启动的管理责任已经在 ${when(done.at)} 放弃过了。下面是当时记下的情况。`
-      : "ash 不再把这次启动当「还在跑」的东西管，删除保护一并解除。它不杀任何进程，也不代表服务停了——下面列出的情况从此由你自己处理。"}
+      : "Navi 不再把这次启动当「还在跑」的东西管，删除保护一并解除。它不杀任何进程，也不代表服务停了——下面列出的情况从此由你自己处理。"}
     eyebrow="ABANDON LAUNCH"
     icon={<HandPalm size={18} weight="fill" />}
     danger
@@ -98,7 +98,7 @@ export function LaunchAbandonDialog({ projectId, commandId, onClose, onDone, not
           </ul>
           {!done && (
             <>
-              <p className="launch-abandon__scope-title">放弃之后 ash 不再做这几件事：</p>
+              <p className="launch-abandon__scope-title">放弃之后 Navi 不再做这几件事：</p>
               <ul className="launch-abandon__scope">
                 {view.scope.map((line) => <li key={line}>{line}</li>)}
               </ul>

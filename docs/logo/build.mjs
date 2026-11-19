@@ -1,81 +1,139 @@
-// 把标画成文件：跑 `node docs/logo/build.mjs` 重画同目录下的全部 SVG（node 22.18 之前要加
-// --experimental-strip-types）。几何不在这里 —— 点阵和火烧过去的次序都在 web/src/brand/ashMark.ts，
-// 前端的加载动画和标签页图标用的是同一份；这里只管排版、配色和 lockup 里那三个字母。
+// 把标画成文件：跑 `node docs/logo/build.mjs` 重画同目录下的全部 SVG 和手机端的图标。
+// 几何和配色不在这里 —— 都在 web/src/brand/naviMark.ts，前端的标、加载动画和标签页图标用的是同一份；
+// 这里只管排版。手机端的位图要在 macOS 上出（交给 rasterize.swift，SVG 由 AppKit 解析），别的系统上跳过。
 //
-//   icon.svg          自带底色的应用图标
-//   mark.svg          透明底的标，墨色跟着页面深浅色换
-//   favicon.svg       标签页图标：标铺满整张图，不留边（前端那份是构建时内联进页面的，这张只是摆出来看）
-//   lockup.svg        标 + ash，同上
-//   lockup-light.svg  定死浅色页配色的 lockup（README 用：GitHub 按自己的主题挑图，不看系统深浅色）
-//   lockup-dark.svg   定死深色页配色的 lockup
-//   loader.svg        动起来的标（一道火从左下烧到右上），循环播放
-import { readFileSync, writeFileSync } from "node:fs";
+//   icon.svg          自带底色的应用图标（mac 的应用图标就是把它栅格化的：desktop/macos/scripts/make-icon.swift）
+//   mark.svg          透明底的标，颜色跟着系统深浅色换
+//   favicon.svg       标签页图标（前端那份是构建时内联进页面的，这张只是摆出来看）
+//   lockup.svg        字标 navi，同上跟着深浅色换
+//   lockup-light.svg  定死浅色页配色的字标（README 用：GitHub 按自己的主题挑图，不看系统深浅色）
+//   lockup-dark.svg   定死深色页配色的字标
+//   loader.svg        加载动画「找北」，循环播放
+//
+//   mobile/assets/images/*.png    应用图标、安卓自适应图标三层、网页图标、启动图
+//   mobile/assets/expo.icon/      iOS 的 Icon Composer 图标：一层标，底色是 icon.json 里的纯色
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LOADER_LINES, LOADER_TIP, MARK, MARK_SIZE, faviconSvg } from "../../web/src/brand/ashMark.ts";
+import {
+  COLORS,
+  TILE_MARK,
+  TILE_RADIUS,
+  VIEW,
+  WORDMARK,
+  adaptivePaint,
+  adaptiveStyle,
+  brandCss,
+  faviconSvg,
+  fixedPaint,
+  markBody,
+  wordBody,
+} from "../../web/src/brand/naviMark.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, "../..");
 const n = (v) => +v.toFixed(2);
 
-const LIGHT = { ink: "#111113", live: "#5e6ad2" };
-const DARK = { ink: "#f1f0ec", live: "#8b95ee" };
-const vars = (tone) => Object.entries(tone).map(([k, v]) => `--${k}:${v}`).join(";");
-const fixed = (tone) => `<style>svg{${vars(tone)}}</style>`;
-const adaptive = `<style>svg{${vars(LIGHT)}}@media (prefers-color-scheme:dark){svg{${vars(DARK)}}}</style>`;
+const svg = (viewBox, w, h, body) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" width="${n(w)}" height="${n(h)}">\n${body}\n</svg>\n`;
 
-const svg = (w, h, body) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n(w)} ${n(h)}" width="${n(w)}" height="${n(h)}" shape-rendering="crispEdges">\n${body}\n</svg>\n`;
-
-// 颜色一律写在 style 里：属性里的 var() 不是每个渲染器都认。
-const dots = (runs, x, y, cell, ink = "var(--ink)", live = "var(--live)") =>
-  runs
-    .map((r) => `<rect x="${n(x + r.x * cell)}" y="${n(y + r.y * cell)}" width="${n(r.w * cell)}" height="${n(cell)}" style="fill:${r.accent ? live : ink}"/>`)
-    .join("");
-
-// lockup 里的字：和标同一种格子，x 高五格，h 的竖笔再高两格。
-const GLYPHS = {
-  a: [".###.", "....#", ".####", "#...#", ".####"],
-  s: [".####", "#....", ".###.", "....#", "####."],
-  h: ["#....", "#....", "####.", "#...#", "#...#", "#...#", "#...#"],
+/** 标放进 size 见方的画布，占 share 那么宽，居中。 */
+const placed = (size, share, body) => {
+  const k = (size * share) / VIEW;
+  return `<g transform="translate(${n((size - size * share) / 2)} ${n((size - size * share) / 2)}) scale(${n(k)})">${body}</g>`;
 };
-const glyphRuns = (rows) =>
-  rows.flatMap((row, y) => [...row.matchAll(/#+/g)].map((m) => ({ x: m.index, y, w: m[0].length, accent: false })));
 
-function lockup(style) {
-  const cell = 22, left = 24, base = 216;
-  let x = left + (MARK_SIZE + 3) * cell;
-  let body = dots(MARK, left, base - MARK_SIZE * cell, cell);
-  for (const ch of "ash") {
-    body += dots(glyphRuns(GLYPHS[ch]), x, base - GLYPHS[ch].length * cell, cell);
-    x += 6 * cell;
-  }
-  return svg(x - cell + left, 256, style + body);
-}
+/** 应用图标那一块：米白底上的标。rounded=false 出直角的满底（iOS / 安卓自己会切圆角）。 */
+const tile = (size, rounded = true) =>
+  svg(
+    `0 0 ${size} ${size}`,
+    size,
+    size,
+    `<rect width="${size}" height="${size}"${rounded ? ` rx="${n(size * TILE_RADIUS)}"` : ""} fill="${COLORS.tile}"/>` +
+      placed(size, TILE_MARK, markBody(fixedPaint(COLORS.light))),
+  );
 
-// 动画：和前端是同一份样式 —— 把 web/src/styles/ash-loader.css 原样嵌进来，元素结构照 AshLoader.tsx 摆。
-// 那份样式认的是 currentColor 和 --accent，这里把它们接到本文件的两个色上。
+const lockup = (style, paint) =>
+  svg(WORDMARK.viewBox, WORDMARK.width * 3, VIEW * 3, style + markBody(paint) + wordBody(paint));
+
+// 动画：和前端是同一份样式 —— 页面 <head> 里那段配色与转轴（brandCss）加 web/src/styles/navi-brand.css，
+// 元素结构照 NaviMark.tsx 摆。那两段认的是 --navi-ink / --navi-north，这里把它们接到本文件跟着系统深浅色换的
+// 两个色上（brandCss 里的 :root 在独立的 SVG 里就是 <svg> 本身，所以这里要用更具体的选择器压过它）。
 function loader() {
-  const css = readFileSync(join(here, "../../web/src/styles/ash-loader.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ").trim();
-  const lines = LOADER_LINES.map(
-    (line) =>
-      `<g class="ash-loader__line" style="--step:${line.step}">` +
-      line.cells.map((c) => `<rect x="${c.x}" y="${c.y}" width="1" height="1"/>`).join("") +
-      `</g>`,
-  ).join("");
+  const css = readFileSync(join(root, "web/src/styles/navi-brand.css"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const body = markBody((role) => (role === "north" ? `class="navi-mark__north"` : ""), "navi-mark__needle");
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" class="ash-loader" viewBox="0 0 ${MARK_SIZE} ${MARK_SIZE}" width="256" height="256" shape-rendering="crispEdges">\n` +
-    `${adaptive}<style>svg{color:var(--ink);--accent:var(--live)}${css}</style>${lines}` +
-    `<rect class="ash-loader__tip" x="${LOADER_TIP.x}" y="${LOADER_TIP.y}" width="1" height="1"/>\n</svg>\n`
+    `<svg xmlns="http://www.w3.org/2000/svg" class="navi-mark navi-loader" viewBox="0 0 ${VIEW} ${VIEW}" width="256" height="256">\n` +
+    `${adaptiveStyle()}<style>${brandCss()}${css} svg.navi-loader{--navi-ink:var(--ink);--navi-north:var(--north)}</style>${body}\n</svg>\n`
   );
 }
 
-const files = {
-  "icon.svg": svg(512, 512, `<rect width="512" height="512" rx="115.2" style="fill:#eceae4;shape-rendering:geometricPrecision"/>` + dots(MARK, 96, 96, 40, LIGHT.ink, LIGHT.live)),
-  "mark.svg": svg(512, 512, adaptive + dots(MARK, 32, 32, 56)),
+const docs = {
+  "icon.svg": tile(512),
+  "mark.svg": svg(`0 0 ${VIEW} ${VIEW}`, 512, 512, adaptiveStyle() + markBody(adaptivePaint)),
   "favicon.svg": `${faviconSvg()}\n`,
-  "lockup.svg": lockup(adaptive),
-  "lockup-light.svg": lockup(fixed(LIGHT)),
-  "lockup-dark.svg": lockup(fixed(DARK)),
+  "lockup.svg": lockup(adaptiveStyle(), adaptivePaint),
+  "lockup-light.svg": lockup("", fixedPaint(COLORS.light)),
+  "lockup-dark.svg": lockup("", fixedPaint(COLORS.dark)),
   "loader.svg": loader(),
 };
-for (const [name, text] of Object.entries(files)) writeFileSync(join(here, name), text);
+for (const [name, text] of Object.entries(docs)) writeFileSync(join(here, name), text);
+
+// ── 手机端 ────────────────────────────────────────────────────────────────────
+const mobile = join(root, "mobile/assets");
+const light = markBody(fixedPaint(COLORS.light));
+const mono = markBody(fixedPaint({ ink: "#000000", north: "#000000" }));
+const square = (size, body) => svg(`0 0 ${size} ${size}`, size, size, body);
+
+// 安卓自适应图标：108dp 的画布只露出中间 72dp，标占露出来那块的六成，和 iOS 的图标一个比例。
+const ADAPTIVE_MARK = (72 / 108) * TILE_MARK;
+const bitmaps = [
+  ["images/icon.png", 1024, tile(1024, false)],
+  ["images/android-icon-background.png", 512, square(512, `<rect width="512" height="512" fill="${COLORS.tile}"/>`)],
+  ["images/android-icon-foreground.png", 512, square(512, placed(512, ADAPTIVE_MARK, light))],
+  ["images/android-icon-monochrome.png", 432, square(432, placed(432, ADAPTIVE_MARK, mono))],
+  // 网页图标是位图，跟不了深浅色，所以带着底。
+  ["images/favicon.png", 48, tile(48)],
+  // 启动图铺在 app.json 里那块米白上，app.json 按 76pt 宽摆它。
+  ["images/splash-icon.png", 228, square(228, placed(228, 1, light))],
+];
+
+// iOS：Icon Composer 的图层是按点数原样摆在 1024 的画布正中的，标的边长就是画布的六成。
+const composer = join(mobile, "expo.icon");
+for (const name of readdirSync(join(composer, "Assets"))) rmSync(join(composer, "Assets", name));
+writeFileSync(join(composer, "Assets/navi-mark.svg"), svg(`0 0 ${VIEW} ${VIEW}`, 1024 * TILE_MARK, 1024 * TILE_MARK, light));
+const channel = (hex, at) => (parseInt(hex.slice(at, at + 2), 16) / 255).toFixed(5);
+const tileColor = `extended-srgb:${channel(COLORS.tile, 1)},${channel(COLORS.tile, 3)},${channel(COLORS.tile, 5)},1.00000`;
+writeFileSync(
+  join(composer, "icon.json"),
+  `${JSON.stringify(
+    {
+      fill: { solid: tileColor },
+      groups: [{ layers: [{ "image-name": "navi-mark.svg", name: "navi-mark" }], shadow: { kind: "neutral", opacity: 0.5 } }],
+      "supported-platforms": { circles: ["watchOS"], squares: "shared" },
+    },
+    null,
+    2,
+  )}\n`,
+);
+
+if (process.platform !== "darwin") {
+  console.warn("不是 macOS：手机端的位图没有重画（SVG 交给 AppKit 解析，别处没有）。");
+} else {
+  const scratch = mkdtempSync(join(tmpdir(), "navi-logo-"));
+  try {
+    const jobs = bitmaps.flatMap(([out, px, text], i) => {
+      const source = join(scratch, `${i}.svg`);
+      writeFileSync(source, text);
+      return [source, join(mobile, out), String(px)];
+    });
+    execFileSync("swift", [join(here, "rasterize.swift"), ...jobs], { stdio: "inherit" });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}

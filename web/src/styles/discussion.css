@@ -1,0 +1,73 @@
+/* 讨论：会话里那颗气泡（DiscussionBubble，骨架和辩论气泡同一副，画法沿用 dispute-ruling.css 的 .debate-bubble）、
+   每段一行的概览（TalkOverview is-named）、「审议」格里那一条（FreeReviewDiscussion），以及回复框里选人那一段和
+   轮数那一段（ReplyDiscussSegments）。只用主题变量，浅色深色同一套。 */
+
+/* 左列写的是执行器名，比「审查者」长：放宽一些，再长就截断（整句在读屏名里）。 */
+.debate-overview.is-named .debate-row { grid-template-columns: 64px minmax(0, 1fr) 22px; }
+.debate-overview.is-named .debate-row-who { overflow: hidden; text-overflow: ellipsis; }
+.dispute-part .debate-overview.is-named .debate-row { grid-template-columns: 56px minmax(0, 1fr) 0; }
+
+/* 「审议」格里那一场讨论的话题：最多三行，多了截断（全文就是会话里讨论气泡上方你发的那一句）。 */
+.talk-topic {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--t-xs);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+/* 背景不全那一句：概览、完整记录的开头一行，琥珀色小字，不加框。 */
+.discussion-lost { margin: 0 0 6px; color: var(--amber); font-size: var(--t-xs); line-height: 1.6; overflow-wrap: anywhere; }
+
+/* 从会话里那颗气泡点过来：这一条亮一下再退掉。 */
+.insp-rec.is-here { border-radius: 8px; animation: talk-here 1.6s var(--ease-out) both; }
+@keyframes talk-here {
+  0%, 35% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+:root[data-motion="reduce"] .insp-rec.is-here { animation: none; background: var(--overlay); }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .insp-rec.is-here { animation: none; background: var(--overlay); }
+}
+
+/* —— 回复框：讨论时胶囊的第一段是「和谁」（点开多选），最后一段是「几轮」（点一下换一档）—— */
+.discuss-people-names { overflow: hidden; max-width: 14em; text-overflow: ellipsis; white-space: nowrap; }
+/* 挂在 body 上、按触发器定位（usePanelPlacement 给 left/top/宽/层高）。 */
+.discuss-people-menu {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  overflow: auto;
+  max-width: calc(100vw - 24px);
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 4px;
+  box-shadow: var(--surface-shadow);
+}
+.discuss-people-menu > p { margin: 2px 8px 4px; color: var(--faint); font-size: var(--t-xs); }
+.discuss-people-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 8px;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.discuss-people-item:hover:not([aria-disabled="true"]) { background: var(--overlay); }
+.discuss-people-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.discuss-people-item[aria-disabled="true"] { color: var(--faint); cursor: default; }
+.discuss-people-item > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discuss-people-item > em { color: var(--faint); font-size: var(--t-xs); font-style: normal; }

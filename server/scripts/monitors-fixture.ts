@@ -4,7 +4,7 @@
 // 和「终态与投递抢同一条命的那几个窗口」(test-monitor-races.ts)。台子只能有一份，
 // 两边各抄一遍迟早漂移（漂的那一刻两份测试对「任务一开始是什么状态」的理解就分家了）。
 //
-// **导入它就等于把台子搭起来**：`ASH_DB` / `ASH_RUNS_DIR` 在模块顶层就落定，所以它必须
+// **导入它就等于把台子搭起来**：`NAVI_DB` / `NAVI_RUNS_DIR` 在模块顶层就落定，所以它必须
 // 排在任何 `src/` 模块之前被导入——下面那串动态 import 就是为此。
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,9 +14,9 @@ import { and, eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
-export const root = mkdtempSync(join(tmpdir(), "ash-monitors-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+export const root = mkdtempSync(join(tmpdir(), "navi-monitors-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitors");
 
 export const [
@@ -145,7 +145,7 @@ export async function reviewInFlight(
 export async function insertMonitorRow(
   taskId: string,
   // `unitToken` 要跟那个进程**真的带着的那条记号**一致(生产里它在起进程之前就随意图行落库,
-  // 并作为 `ASH_MONITOR_UNIT` 种进环境,见 proc.ts 的 `processUnitEvidence`):给对了就是
+  // 并作为 `NAVI_MONITOR_UNIT` 种进环境,见 proc.ts 的 `processUnitEvidence`):给对了就是
   // 「归属已证明」的现场,不给或给错就是「证不出归属」的现场 —— 后者只许记责任、不许下刀。
   // `command` 只进日志和存量行的时间锚核对,**不是归属凭证**。
   opts: {
@@ -195,7 +195,7 @@ export const pendingOf = (taskId: string) =>
 /**
  * 收尾：哨兵从运行时上撒手、**把台子自己起的命令收掉**、放锁、删临时目录。
  *
- * 「哨兵本来就该活过 ash」那条语义**靠的是库还在**:下一次启动按行把它们重新接回去、按责任
+ * 「哨兵本来就该活过 navi」那条语义**靠的是库还在**:下一次启动按行把它们重新接回去、按责任
  * 重收。测试没有那个明天 —— 临时库下一行就删掉了,之后谁都没法再按责任重收它们,留下的就是
  * 一组永远没人认领的进程(第 24 轮审查 N5 实测到一组,之前几轮我手工清过十几个)。
  *

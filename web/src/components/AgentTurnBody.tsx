@@ -8,6 +8,7 @@ import { ImagePreviewGroup } from "./ImagePreview.tsx";
 import { MarkdownBody } from "./MarkdownBody.tsx";
 import { useSmoothText } from "../lib/useSmoothText.ts";
 import type { MarkdownLayout } from "./markdownLayout.ts";
+import { ProposedPlan } from "./ProposedPlan.tsx";
 import {
   ExecutionDetails,
   ExecutionEventList,
@@ -106,6 +107,7 @@ export function AgentTurnBody({
             stop={stop}
             /* 折叠块自己就是一层 `<details>`,里面的事件行不再各自套一层(见 ExecutionEventList)。 */
             bare={!!fold && index < fold.stops}
+            live={running}
             running={index === pulse}
             awaiting={awaiting && index === pulse}
             since={index === pulse ? since : undefined}
@@ -140,12 +142,18 @@ export function AgentTurnBody({
 
 /* `awaiting` = 此刻正卡在上游等回话,只会落在脉冲那一步上(它就是正在发生的这一步):
    折叠条上那句「正在重试」要常驻,见 lib/executionWords.ts 的 liveLabel。 */
-function StopBody({ stop, bare, running, awaiting, since }: { stop: TurnStop; bare: boolean; running: boolean; awaiting: boolean; since?: string | null }) {
+function StopBody({ stop, bare, live, running, awaiting, since }: { stop: TurnStop; bare: boolean; live: boolean; running: boolean; awaiting: boolean; since?: string | null }) {
+  const groups: TurnStop["events"][] = [];
+  for (const event of stop.events) {
+    if (event.kind === "plan" || groups.at(-1)?.[0]?.kind === "plan" || !groups.length) groups.push([event]);
+    else groups.at(-1)!.push(event);
+  }
   return (
     <>
-      {bare
-        ? <ExecutionEventList events={stop.events} />
-        : <ExecutionDetails events={stop.events} running={running} awaiting={awaiting} since={since} />}
+      {groups.map((events, index) => events[0]?.plan
+        ? <ProposedPlan key={events[0].plan.id} plan={events[0].plan} running={live} />
+        : bare ? <ExecutionEventList key={index} events={events} />
+          : <ExecutionDetails key={index} events={events} running={running} awaiting={awaiting} since={since} />)}
       <MessageAttachments paths={stop.attachments} />
     </>
   );

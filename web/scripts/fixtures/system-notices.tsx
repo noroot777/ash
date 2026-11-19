@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Session, Task } from "@ash/shared";
+import type { Session, Task } from "@navi/shared";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import { SystemBoundary } from "../../src/task-detail/SystemNotice.tsx";
@@ -105,12 +105,12 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     {query.has("boundaries") ? (
       <main style={{ padding: 20, background: "var(--bg)" }}>
-        {(["task", "team"] as const).map((surface) => (
+        {/* 回合边界线只剩团队时间线在画（任务会话里早就不画了）。 */}
+        {(["team"] as const).map((surface) => (
           <div key={surface} data-surface={surface}>
             {(["neutral", "error"] as const).map((tone) => (
               <SystemBoundary
                 key={tone}
-                surface={surface}
                 item={{ text: tone === "error" ? "执行异常结束 · exit 1" : "本轮执行结束", tone }}
               />
             ))}

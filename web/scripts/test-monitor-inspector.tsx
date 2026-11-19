@@ -5,13 +5,14 @@ import {
   MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS,
   canStopMonitor, monitorDurationOptions, normalizeMonitorDto, normalizeMonitorTimeout,
   type TaskMonitor,
-} from "@ash/shared/monitor";
+} from "@navi/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { formatInstant } from "../src/task-detail/utils.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
 import { emptyLogCopy } from "../src/monitors/monitorCopy.ts";
-import { MonitorWaitLine } from "../src/monitors/MonitorWaitLine.tsx";
+import { monitorDue } from "../src/monitors/monitorTray.ts";
+import { ScheduledMessageTray } from "../src/components/ScheduledMessageTray.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
 import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
 
@@ -110,24 +111,14 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
   assert.match(spanOnly, /总共盯 2 分钟/, "119.6 秒说成「2 分钟」，不是「1 分 60 秒」");
   assert.doesNotMatch(spanOnly, /60 秒/, "任何情况下都不该出现 60 秒");
 
-  // 「（起点不确定）」这句话现在只剩**会话最后那一行「在等哨兵」**一个去处：起点不作数、
+  // 「（起点不确定）」这句话现在只剩**回复框上方那一块里哨兵那一行**一个去处：起点不作数、
   // 算不出「最迟几点」时，那一行退回这一句，所以必须自带这半句。卡片上它是重复的（起点那一段
   // 已经认了），于是传 `startSaidSeparately` 关掉——两头要分别钉住，否则「到处都不说」也能让上面那条绿。
-  const waiting = renderToStaticMarkup(
-    <MonitorWaitLine
-      monitors={[{ ...base, expiresAt: null, timeoutMs: 119_600, startedAtExact: false }]} builtinCount={0}
-      resumePrompt={null} reviewArmed={false} onOpenPanel={() => undefined}
-    />,
-  );
-  assert.match(waiting, /总共盯 2 分钟（起点不确定）/, "等待行算不出最迟几点时要自带「起点不确定」");
+  assert.match(monitorDue({ ...base, expiresAt: null, timeoutMs: 119_600, startedAtExact: false }) ?? "",
+    /总共盯 2 分钟（起点不确定）/, "托盘那一行算不出最迟几点时要自带「起点不确定」");
   // 起点作数时直接说最迟几点。
-  const due = renderToStaticMarkup(
-    <MonitorWaitLine
-      monitors={[{ ...base, expiresAt: null, timeoutMs: 119_600 }]} builtinCount={0}
-      resumePrompt={null} reviewArmed={false} onOpenPanel={() => undefined}
-    />,
-  );
-  assert.match(due, /最迟 (\d\d\/\d\d )?\d\d:\d\d/, "起点作数时等待行写最迟几点");
+  assert.match(monitorDue({ ...base, expiresAt: null, timeoutMs: 119_600 }) ?? "",
+    /最迟 (\d\d\/\d\d )?\d\d:\d\d/, "起点作数时托盘那一行写最迟几点");
   assert.doesNotMatch(spanOnly, /起点不确定/, "卡片上起点已经单独说过了，不许再带一遍");
 }
 
@@ -150,7 +141,7 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
 }
 
 // ── 在盯的那个必须给得出「停」，并把花掉的回合数摆在明面上 ────────────────────
-// 哨兵的进程是故意脱离 ash 的：agent 的回合、会话、甚至 server 重启都带不走它。代价
+// 哨兵的进程是故意脱离 navi 的：agent 的回合、会话、甚至 server 重启都带不走它。代价
 // 就是「后台有个进程在跑、每吐一行烧一个回合」这件事再没有第二个地方看得见。所以这一条
 // 不是装饰：没有它，用户对一个跑飞的哨兵束手无策。
 {
@@ -235,7 +226,7 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
 }
 
 // ── 两种出身的卡不一样，而且差别必须看得见 ──────────────────────────────────
-// claude 自带 Monitor 的投影是只读的：进程在智能体自己的进程树里，ash 停不掉、拿不到日志、
+// claude 自带 Monitor 的投影是只读的：进程在智能体自己的进程树里，navi 停不掉、拿不到日志、
 // 也数不到事件数。画成和 ash 哨兵一样的后果是用户去点一个注定失败的停止按钮，再把恒为 0
 // 的事件数读成「我的过滤条件写错了」。
 {
@@ -243,9 +234,9 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
   assert.match(html, /最终全量回归结果/, "投影的说明照样要露在外面");
   assert.match(html, /claude 自带 Monitor/, "出身要标出来：两种卡按来源分段，段头写明是谁起的");
   assert.match(html, /只能看不能停/, "要解释清楚它为什么没有停止按钮");
-  assert.doesNotMatch(html, /停掉哨兵/, "ash 停不掉它，就不该画一个注定失败的停止按钮");
-  assert.doesNotMatch(html, /条事件/, "事件数 ash 根本数不到，画出来只会被读成「过滤写错了」");
-  assert.doesNotMatch(html, />输出<\/button>/, "它的输出进了智能体自己的会话，ash 这边没有日志可看");
+  assert.doesNotMatch(html, /停掉哨兵/, "navi 停不掉它，就不该画一个注定失败的停止按钮");
+  assert.doesNotMatch(html, /条事件/, "事件数 navi 根本数不到，画出来只会被读成「过滤写错了」");
+  assert.doesNotMatch(html, />输出<\/button>/, "它的输出进了智能体自己的会话，navi 这边没有日志可看");
 }
 
 // ── 结束之后那半句要分档说 ──────────────────────────────────────────────────
@@ -267,7 +258,7 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
 
   const stopped = panel([{ ...projected, status: "stopped", endedAt: "2026-08-25T11:00:00.000Z" }]);
   assert.match(stopped, /没命等到结果/, "被停掉/盯满的那两档是「还在等，但已经没命等了」");
-  assert.match(stopped, /ash 自己的哨兵/, "每一档都要给出能跨回合等的那条路");
+  assert.match(stopped, /Navi 自己的哨兵/, "每一档都要给出能跨回合等的那条路");
 }
 
 // ── 「盯到什么时候」必须如实 ────────────────────────────────────────────────
@@ -289,9 +280,9 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
 // 两种混排时各画各的，不会互相串味。
 {
   const html = panel([base, projected]);
-  assert.match(html, /停掉哨兵“盯构建日志”/, "混排时 ash 那张照常给停止入口");
+  assert.match(html, /停掉哨兵“盯构建日志”/, "混排时 navi 那张照常给停止入口");
   assert.match(html, /claude 自带/, "混排时投影那张照常标出身");
-  assert.equal(html.match(/停掉哨兵/g)?.length, 1, "两张卡里只有 ash 那张有停止按钮");
+  assert.equal(html.match(/停掉哨兵/g)?.length, 1, "两张卡里只有 navi 那张有停止按钮");
 }
 
 // ── 已结束的如实说明结局，并且不再给停止入口 ─────────────────────────────────
@@ -402,13 +393,6 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
     endedReason: "命令自己跑完了",
   }]);
   assert.equal(html.split("命令自己跑完了").length - 1, 1, "同一句话不该在一张卡上出现两次");
-}
-
-// ── 哨兵只有一个落脚点：回复框上面不再并排一条 ───────────────────────────────
-// 同一件事摆两处必然漂移，而且回复框上方每多一行，输入区就矮一行。
-for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx"]) {
-  const source = readSource(new URL(file, import.meta.url));
-  assert.doesNotMatch(source, /TaskMonitorStrip/, `${file} 不该再并排一条哨兵，它已经整格搬进 Inspector`);
 }
 
 // ── 手机端同样要有「叫停」这一下 ─────────────────────────────────────────────
@@ -533,31 +517,32 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   }
 }
 
-// ── 会话最后那一行「在等哨兵」：折叠时只说等的是谁 ──────────────────────────────
+// ── 回复框上方那一块里的哨兵：收着时只说盯的是谁 ──────────────────────────────
 //
 // 重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步时,那一行是 running、pid 空、
 // `ended_reason` 上写着受阻原因(server/src/monitor-adopt.ts 的 `notePendingIntent`)。
-// 它展开之后该说什么**全归 DOM 测试**(第 22 轮审查 N1 改的就是那几句:监督已经不随认领走,
+// 它摊开之后该说什么**全归 DOM 测试**(第 22 轮审查 N1 改的就是那几句:监督已经不随认领走,
 // 所以「会被叫醒」对它也是真的,该说的是「点停未必停得掉它」)——正文要点开才渲染。
 {
   const stuck: TaskMonitor = {
     ...base, id: "m-stuck", pid: null, events: 0,
     endedReason: "server 重启后这一刻认不回它：起进程时没来得及记下 pid（身份边条这一刻读不出来：读盘报错：EIO），"
-      + "所以一个信号都没发；这条创建意图原样留着，ash 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）",
+      + "所以一个信号都没发；这条创建意图原样留着，navi 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）",
   };
-  const wait = (monitors: TaskMonitor[]) => renderToStaticMarkup(
-    <MonitorWaitLine
-      monitors={monitors} builtinCount={0} resumePrompt={null}
-      reviewArmed={false} onOpenPanel={() => undefined}
+  const tray = (live: TaskMonitor[]) => renderToStaticMarkup(
+    <ScheduledMessageTray
+      messages={[]} loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined}
+      monitors={{ live, ended: new Set(), running: false, resumePrompt: null, reviewArmed: false, onOpen: () => undefined, onStop: async () => undefined }}
     />,
   );
-  // 这里只管折叠态:正文**要点开才渲染**,静态渲染拿不到点击,所以「展开之后说了什么」一律
+  // 这里只管收着的样子:正文**要点开才渲染**,静态渲染拿不到点击,所以「摊开之后说了什么」一律
   // 归 test-monitor-inspector-dom.mjs 的 `?wait=pending|claimed` 两张台子(第 21 轮审查 N2:
-  // 上一版在折叠态上断言「不含『重新叫醒』」,那在任何实现下都成立,等于什么都没查)。
-  const shut = wait([stuck]);
-  assert.match(shut, /在等哨兵「盯构建日志」/, "折叠那一行:等的是谁");
-  assert.doesNotMatch(shut, /monitor-wait-line__body/,
-    "折叠态连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
+  // 上一版在收着的样子上断言「不含『重新叫醒』」,那在任何实现下都成立,等于什么都没查)。
+  const shut = tray([stuck]);
+  assert.match(shut, /哨兵 1/, "收着那一行:有几个哨兵在盯");
+  assert.match(shut, /盯构建日志/, "收着那一行:盯的是谁");
+  assert.doesNotMatch(shut, /scheduled-monitor-body/,
+    "收着连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
 }
 
 // ── 空日志那一格：只说可证实的事实（第 1 轮审查 F3 的前端那一半）──────────────
@@ -608,7 +593,7 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
     ["exited", /命令自己跑完了（退出码 0）/],
     ["expired", /一直到盯满时长/],
     ["stopped", /被停掉之前没有输出/],
-    // `lost` 只说得出两件事：ash 认不回它了、没有一条输出送到。**不许编一次重启**（第 2 轮
+    // `lost` 只说得出两件事：navi 认不回它了、没有一条输出送到。**不许编一次重启**（第 2 轮
     // 审查 R2-4：创建期补偿失败也写 lost，那一路压根没有重启，也证明不了进程已经不在）。
     ["lost", /认不回这个进程/],
   ] as const) {

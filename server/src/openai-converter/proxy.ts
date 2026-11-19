@@ -1,5 +1,5 @@
 import { relayApi } from "../llm.js";
-import { relayErrorResponse, relayFetch } from "../llm-relay.js";
+import { RELAY_REQUEST_ID_HEADER, relayErrorResponse, relayFetch } from "../llm-relay.js";
 import {
   asBoolean,
   asString,
@@ -88,8 +88,8 @@ async function responsesViaChat(request: Request, provider: ConverterProvider): 
       connection: "keep-alive",
       "x-accel-buffering": "no",
     });
-    const requestId = upstream.headers.get("x-ash-relay-request-id");
-    if (requestId) headers.set("x-ash-relay-request-id", requestId);
+    const requestId = upstream.headers.get(RELAY_REQUEST_ID_HEADER);
+    if (requestId) headers.set(RELAY_REQUEST_ID_HEADER, requestId);
     return new Response(chatStreamToResponses(upstream.body, asString(sourceObject.model) ?? ""), {
       status: 200,
       headers,

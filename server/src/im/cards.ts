@@ -2,13 +2,13 @@
 //
 // 按钮上的 value 只放信封 id（e）和动作（op），收件人、代次、过期时间都在库里（envelopes.ts），
 // 卡片 JSON 被人转发、截图、抓包都伪造不出一次有效点击。
-import { hasPendingAcceptCommit, type Task } from "@ash/shared";
+import { hasPendingAcceptCommit, type Task } from "@navi/shared";
 import type { CardBlock, CardButton, CardModel, CardTone } from "./feishu/cards.js";
 import type { TaskView, Turn } from "./attention.js";
 import { scrubText, scrubTitle } from "./scrub.js";
 
 export interface CardContext {
-  /** 「在 ash 中打开」的地址；没配公网/内网地址时为 null，卡片上就不放这个按钮。 */
+  /** 「在 navi 中打开」的地址；没配公网/内网地址时为 null，卡片上就不放这个按钮。 */
   link: string | null;
   /** 这个项目设成了只推标题。 */
   titleOnly: boolean;
@@ -29,7 +29,7 @@ export interface CardExtras {
   lastPress?: string;
 }
 
-const EXTRAS_UNREAD = "（这张卡的补充内容这一下没读到，稍后自动补上；也可以回 ash 里看）";
+const EXTRAS_UNREAD = "（这张卡的补充内容这一下没读到，稍后自动补上；也可以回 Navi 里看）";
 
 export const KIND_LABEL: Record<Turn["kind"], string> = {
   question: "等你答复",
@@ -49,7 +49,7 @@ const KIND_TONE: Record<Turn["kind"], CardTone> = {
   accept: "green",
 };
 
-const TITLE_ONLY = "这个项目设成了只推标题：详细内容请在 ash 里看。";
+const TITLE_ONLY = "这个项目设成了只推标题：详细内容请在 Navi 里看。";
 
 export function taskLink(base: string | null, view: { task: Pick<TaskView["task"], "id" | "projectId"> }): string | null {
   if (!base) return null;
@@ -57,7 +57,7 @@ export function taskLink(base: string | null, view: { task: Pick<TaskView["task"
 }
 
 function linkButton(ctx: CardContext): CardButton[] {
-  return ctx.link ? [{ text: "在 ash 中打开", url: ctx.link }] : [];
+  return ctx.link ? [{ text: "在 Navi 中打开", url: ctx.link }] : [];
 }
 
 /**
@@ -128,7 +128,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
     case "dispute":
       blocks.push(ctx.titleOnly
         ? { type: "note", text: TITLE_ONLY }
-        : { type: "text", text: turn.summary ? scrubText(turn.summary, 800) : "（这条驳回没有一句话摘要，请在 ash 里看完整理由）" });
+        : { type: "text", text: turn.summary ? scrubText(turn.summary, 800) : "（这条驳回没有一句话摘要，请在 Navi 里看完整理由）" });
       blocks.push({
         type: "buttons",
         buttons: [
@@ -147,7 +147,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
       const shown = ctx.titleOnly || (!extras.unread && !!c);
       if (ctx.titleOnly) blocks.push({ type: "note", text: TITLE_ONLY });
       else if (extras.unread) blocks.push({ type: "note", text: EXTRAS_UNREAD });
-      else if (!c) blocks.push({ type: "note", text: "（这一版方案没找到，放行请到 ash 里看过方案再点）" });
+      else if (!c) blocks.push({ type: "note", text: "（这一版方案没找到，放行请到 Navi 里看过方案再点）" });
       else {
         if (c.consensus && c.a) blocks.push({ type: "text", text: `共识：${scrubText(c.a, 1500)}` });
         else {
@@ -175,7 +175,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
       return { ...header(view, turn.kind), blocks };
     }
     case "verify_failed":
-      blocks.push({ type: "text", text: "验证报告和「修复 / 强制通过」都在 ash 里：强制通过会一路推进到合并，不能经飞书操作。" });
+      blocks.push({ type: "text", text: "验证报告和「修复 / 强制通过」都在 Navi 里：强制通过会一路推进到合并，不能经飞书操作。" });
       if (ctx.link) blocks.push({ type: "buttons", buttons: linkButton(ctx) });
       return { ...header(view, turn.kind), blocks };
     case "accept": {
@@ -185,7 +185,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
       if (turn.reviewStale) blocks.push({ type: "text", text: "注意：最近一轮审查没通过，之后的改动还没复审。" });
       else if (turn.reviewFailed && turn.release) blocks.push({ type: "text", text: "注意：最近一轮审查没通过。" });
       const what = !ctx.titleOnly ? turn.confirm
-        : turn.release ? "这一按只是放行这一关：不合并、不清理，这条线接着往下走。" : "这一按会合并还是只记下认可、怎么清理，在 ash 里看得到。";
+        : turn.release ? "这一按只是放行这一关：不合并、不清理，这条线接着往下走。" : "这一按会合并还是只记下认可、怎么清理，在 Navi 里看得到。";
       const confirm = turn.reviewFailed
         ? { title: "最近一轮审查没通过", text: `${what} 确定照样${turn.release ? "放行" : "验收"}吗？` }
         : { title: turn.release ? "放行这一关？" : "确认验收通过？", text: what };
@@ -247,7 +247,7 @@ export function settledCard(
 /** 收件人已无权查看时改成的样子：不带任务标题、状态和链接（原卡上的正文还留在对方飞书里，得把它盖掉）。 */
 /** why 是出口判定的固定措辞（scope.ts 的 deny 原因），不含业务数据。 */
 export function neutralCard(why?: string): CardModel {
-  return { title: "ash", tone: "grey", blocks: [{ type: "text", text: why ? `这张卡已收起：${why}。` : "这张卡已收起。" }] };
+  return { title: "Navi", tone: "grey", blocks: [{ type: "text", text: why ? `这张卡已收起：${why}。` : "这张卡已收起。" }] };
 }
 
 /** /todo 的清单正文（出口重核后有几张不能再列时，用同一个样子重排）。 */
@@ -337,12 +337,12 @@ export function confirmCard(title: string, text: string, envelope: string, dange
 }
 
 /**
- * 新设备申请连进这台 ash（自用模式，auth/remote-pairing.ts）。配对码和那台设备屏幕上的对得上才是同一台 ——
+ * 新设备申请连进这台 navi（自用模式，auth/remote-pairing.ts）。配对码和那台设备屏幕上的对得上才是同一台 ——
  * 递申请不用任何凭证，同一个网里别人的设备也递得上来。
  */
 export function pairCard(request: { name: string; code: string; address: string }, envelope: string): CardModel {
   return {
-    title: "新设备想连接这台 ash",
+    title: "新设备想连接这台 Navi",
     tone: "orange",
     blocks: [
       { type: "text", text: `「${scrubTitle(request.name, 40)}」，来自 ${request.address}\n它屏幕上的配对码应为 ${request.code}` },
@@ -351,7 +351,7 @@ export function pairCard(request: { name: string; code: string; address: string 
         buttons: [
           {
             text: "允许", style: "primary", value: value(envelope, "approve"),
-            confirm: { title: "允许这台设备连接？", text: "允许之后它能完整操作这台 ash，包括终端。配对码对不上、或者不是你自己在连，就别允许。" },
+            confirm: { title: "允许这台设备连接？", text: "允许之后它能完整操作这台 Navi，包括终端。配对码对不上、或者不是你自己在连，就别允许。" },
           },
           { text: "拒绝", value: value(envelope, "deny") },
         ],

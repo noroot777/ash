@@ -13,7 +13,7 @@ import { removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 export type TemporaryWorktree = { root: string; path: string };
 
 export async function addTemporaryWorktree(repo: string, ref: string, detached: boolean): Promise<TemporaryWorktree> {
-  const root = mkdtempSync(join(tmpdir(), "ash-accept-"));
+  const root = mkdtempSync(join(tmpdir(), "navi-accept-"));
   const path = join(root, "worktree");
   const args = ["-C", repo, "worktree", "add"];
   if (detached) args.push("--detach");

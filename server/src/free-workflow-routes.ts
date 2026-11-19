@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { FreeReviewDispatchInput, FreeReviewRoundsInput } from "@ash/shared";
+import type { FreeReviewDispatchInput, FreeReviewRoundsInput } from "@navi/shared";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { db } from "./db/index.js";
@@ -11,6 +11,10 @@ import {
   startManualFreeReviewRepair,
 } from "./free-workflow.js";
 import { startFreeReviewDebate, submitDebateStatement } from "./free-review-debate.js";
+import { RedactRefusal } from "./conversation-redact.js";
+import { startDiscussion, submitDiscussionStatement } from "./discussion.js";
+import { deleteDiscussion } from "./discussion-delete.js";
+import { activeTalkOf } from "./talk/segments.js";
 import { adjustFreeReviewRounds } from "./free-review-rounds.js";
 import { noted } from "./user-action-rejection.js";
 import {
@@ -29,6 +33,7 @@ import { handoffBlockReasonById } from "./handoff-guard.js";
 import { createPostMergeRepairTask, startPostMergeReview } from "./post-merge-review.js";
 import { evidenceHeaders } from "./evidence-path.js";
 import { actorOf } from "./auth/context.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
 
@@ -56,13 +61,13 @@ async function turnIdentityError(c: Context, taskId: string, what: string): Prom
     activeDirectionToken: tasks.activeDirectionToken,
   }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return "任务不存在";
-  const turnToken = c.req.header("x-ash-turn-token");
+  const turnToken = requestHeader(c, NAVI_HEADERS.turnToken);
   if (task.activeTurnToken && turnToken !== task.activeTurnToken) {
     return turnToken
       ? `${what}来自已结束的回合，已拒绝写入当前会话`
-      : `MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），${what}已拒绝写入`;
+      : `MCP 未携带当前回合身份（执行器可能过滤了 NAVI_TURN_TOKEN），${what}已拒绝写入`;
   }
-  const direction = c.req.header("x-ash-direction-token");
+  const direction = requestHeader(c, NAVI_HEADERS.directionToken);
   if (task.activeDirectionToken && direction !== task.activeDirectionToken) {
     return direction
       ? `${what}的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试`
@@ -171,10 +176,37 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const identity = await turnIdentityError(c, taskId, "辩论发言");
     if (identity) return c.json({ error: identity }, 409);
     try {
-      type ReplyBody = { summary?: unknown; statement?: unknown; verdict?: unknown };
+      type ReplyBody = { summary?: unknown; statement?: unknown; verdict?: unknown; agreed?: unknown };
       const body = await c.req.json<ReplyBody>().catch(() => ({} as ReplyBody));
+      // 讨论跟辩论共用这一个交卷口（MCP debate_reply）：这条任务上此刻在说的是讨论就交给讨论。
+      if (await activeTalkOf(taskId, "discussion")) {
+        const turnToken = requestHeader(c, NAVI_HEADERS.turnToken) ?? null;
+        return c.json({ recorded: true, taskId, ...(await submitDiscussionStatement(taskId, body, { turnToken })) });
+      }
       return c.json({ recorded: true, taskId, ...(await submitDebateStatement(taskId, body)) });
     } catch (error) { return c.json(errorBody(error), 409); }
+  });
+  // 回复框里 @ 了人、选「讨论」、按「开始讨论」（discussion.ts）。
+  api.post("/tasks/:id/discussions", async (c) => {
+    const blocked = await blockedByHandoff(c);
+    if (blocked) return blocked;
+    try {
+      type StartBody = { topic?: unknown; attachments?: unknown; rounds?: unknown; guests?: unknown };
+      const body = await c.req.json<StartBody>().catch(() => ({} as StartBody));
+      const started = await startDiscussion(c.req.param("id"), body, { holdTurn: true });
+      return c.json({ ...started, state: await freeWorkflowState(c.req.param("id")) }, 201);
+    } catch (error) { return c.json(await noted(c.req.param("id"), "开始讨论", errorBody(error)), 409); }
+  });
+  // 删掉一整场讨论（真人专属：auth/personal-gate.ts 的 HUMAN_ONLY_PATHS），四处怎么清见 discussion-delete.ts。
+  api.post("/tasks/:id/discussions/:discussionId/delete", async (c) => {
+    const blocked = await blockedByHandoff(c);
+    if (blocked) return blocked;
+    try {
+      return c.json(await deleteDiscussion(c.req.param("id"), c.req.param("discussionId")));
+    } catch (error) {
+      if (error instanceof RedactRefusal) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
   });
   api.put("/tasks/:id/free-workflow/review-reservation", async (c) => {
     const blocked = await blockedByHandoff(c);

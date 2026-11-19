@@ -1,5 +1,5 @@
-const key = (taskId: string) => `ash.annotation-reopen-dismissed.${taskId}`;
-export const reopenPreferenceEvent = "ash:annotation-reopen-preference";
+const key = (taskId: string) => `navi.annotation-reopen-dismissed.${taskId}`;
+export const reopenPreferenceEvent = "navi:annotation-reopen-preference";
 export function reopenDismissed(taskId: string): boolean {
   try { return localStorage.getItem(key(taskId)) === "1"; } catch { return false; }
 }

@@ -1,5 +1,5 @@
-import type { HandoffTarget, TaskHandoff } from "@ash/shared";
-import type { HandoffSourceAddress } from "@ash/shared/handoff";
+import type { HandoffTarget, TaskHandoff } from "@navi/shared";
+import type { HandoffSourceAddress } from "@navi/shared/handoff";
 import { desc, inArray, isNotNull } from "drizzle-orm";
 import type { Actor } from "./auth/context.js";
 import { isAccountHolder } from "./auth/context.js";
@@ -65,7 +65,7 @@ export async function updateSourceAddress(
   const url = normalizePeerUrl(rawUrl);
   const actual = await probeSignedPeerFingerprint(url, 5_000);
   if (!actual) {
-    throw new HandoffError("无法核对新地址的来源机身份。请确认地址、端口和 ash 运行状态后重试；原地址未修改。", 502);
+    throw new HandoffError("无法核对新地址的来源机身份。请确认地址、端口和 Navi 运行状态后重试；原地址未修改。", 502);
   }
   if (!sameFingerprint(actual, source.fingerprint)) {
     throw new HandoffError("新地址的身份指纹与来源机器不一致，原地址未修改。请填写原来那台机器的新地址。", 409);

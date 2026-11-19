@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isPidAlive, killServerProcess, sleep } from "./platform.mjs";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-restart-preservation-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-restart-preservation-"));
 const statePath = join(stage, "root.json");
 const unknownPath = join(stage, "unknown.json");
 const heartbeatPath = join(stage, "heartbeat");

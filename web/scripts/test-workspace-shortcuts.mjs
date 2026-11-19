@@ -73,6 +73,13 @@ try {
   await type(["c"]);
   assert.match(await log.textContent(), /create$/, "无前缀的 c 仍应新建任务");
 
+  // R 打开「我说过的话」；主区那颗运行按钮挪到了 Shift+R，单键 r 不能再按到它。
+  await type(["r"]);
+  assert.match(await log.textContent(), /recall$/, "R 应打开「我说过的话」");
+  assert.doesNotMatch(await log.textContent(), /run/, "单键 r 不应再按到运行按钮");
+  await type(["Shift+R"]);
+  assert.match(await log.textContent(), /recall run$/, "Shift+R 应按下主区的运行按钮，且不打开「我说过的话」");
+
   // Q 摊开会话左侧的输入导航；眼下没有哪条会话挂着导航时，按键原样放过、不吞。
   await type(["q"]);
   assert.match(await log.textContent(), /inputs$/, "Q 应摊开会话输入导航");
@@ -94,10 +101,13 @@ try {
   assert.match(await log.textContent(), /commands$/, "列表导航关掉后 G C 仍应可用");
   await type(["g", "z"]);
   assert.match(await log.textContent(), /terminal$/, "列表导航关掉后 G Z 仍应可用");
+  // R 跟 G 族一样不靠当前界面：点一句就跳进那个任务，聊天 / 助手 / 设置页里照样按得到。
+  await type(["r"]);
+  assert.match(await log.textContent(), /recall$/, "列表导航关掉后 R 仍应打开「我说过的话」");
 
   // 反过来，列表导航那几颗单键在那些界面上没有落点，一颗都不能响。
   const quiet = await log.textContent();
-  await type(["c", "f", "j", "k", "r", "q", "Escape", "Enter"]);
+  await type(["c", "f", "j", "k", "Shift+R", "q", "Escape", "Enter"]);
   assert.equal(await log.textContent(), quiet, "列表导航键在聊天 / 助手 / 设置页不应触发");
   // Inspector 的 `I …` 同理：那些界面上根本没有那块面板。
   await type(["i", "g"]);
@@ -123,6 +133,10 @@ try {
   await entry.type("q");
   assert.equal(await entry.inputValue(), "q");
   assert.equal(await log.textContent(), beforeEntry, "输入框里的 q 不应摊开输入导航");
+  await entry.fill("");
+  await entry.type("rR");
+  assert.equal(await entry.inputValue(), "rR");
+  assert.equal(await log.textContent(), beforeEntry, "输入框里的 r / R 不应打开「我说过的话」或按下运行");
 
   console.log("workspace shortcut tests passed");
 

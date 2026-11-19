@@ -9,7 +9,7 @@
 // **别在调用点自己拼 SQL** —— 项目切换器、任务列表、搜索、SSE、通知、验收页、随手记
 // 全都要过同一份判据;复制一份出去,漏掉的那个面就是横向越权。
 import { and, asc, eq, inArray } from "drizzle-orm";
-import type { ProjectMemberView, ProjectRole } from "@ash/shared";
+import type { ProjectMemberView, ProjectRole } from "@navi/shared";
 import { db } from "../db/index.js";
 import { groups, projectMembers, projects, queueItems, tasks, users } from "../db/schema.js";
 import { now } from "../util.js";
@@ -22,7 +22,7 @@ import { isMultiUser } from "./mode.js";
  *
  * 它身上确实挂着一个 userId(那条任务的 owner),但它不是那个人 —— 按 owner 的成员表
  * 展开的话,共享账号下任意一个正在跑的 agent 都能横向读到 owner 的其它项目(第 2 轮
- * 审查 P1 实测:只带 `x-ash-source-task-id` + `x-ash-turn-token` 的请求,`GET /api/tasks`
+ * 审查 P1 实测:只带 `x-navi-source-task-id` + `x-navi-turn-token` 的请求,`GET /api/tasks`
  * 列出了另一个项目的任务、`GET /api/tasks/:id` 直接回出详情)。计划 §三 写死的口径是
  * 「有效回合凭证 → **任务归属项目**」,不是「→ owner 的账号」。
  *

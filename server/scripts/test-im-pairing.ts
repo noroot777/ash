@@ -9,7 +9,7 @@
 // ⑦ 经飞书只放「允许 / 拒绝」这一条：名册、等着的申请、出码、请设备出去、换密钥一律 403；没绑定的账号连这一条也 403；
 // ⑧ 发出之后换了绑定（解绑重绑、换了人绑）：出口不再放行，收卡时换成中性的收起卡；
 // ⑨ 通道起来时按现状对：此刻等着、还没有卡的补上；
-// ⑩ 点下按钮时 ash 重启（信封占着没结局）：照实说申请作废了，不说「重新发命令」；
+// ⑩ 点下按钮时 navi 重启（信封占着没结局）：照实说申请作废了，不说「重新发命令」；
 // ⑪ 多人模式：不推卡，经飞书点也放不进设备；
 // ⑫ 卡还没入队、申请就在别处处理掉了：不发那张废卡。
 import assert from "node:assert/strict";
@@ -18,9 +18,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-im-pairing-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-im-pairing-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-im-pairing");
 
 let failure: unknown = null;
@@ -78,7 +78,7 @@ try {
     const [sent] = fake.sends();
     assert.ok(sent, "卡发出去了");
     const said = textOf(contentOf(sent!));
-    assert.match(said, /新设备想连接这台 ash/);
+    assert.match(said, /新设备想连接这台 Navi/);
     assert.match(said, /iPhone · Safari/);
     assert.match(said, /192\.168\.1\.23/);
     assert.ok(said.includes(first.code), "卡上有配对码");
@@ -232,7 +232,7 @@ try {
     await im.settle();
     assert.equal((await fresh(row.id)).state, "sent");
 
-    // ── ⑩ 点下按钮时 ash 重启 ─────────────────────────────────────────────
+    // ── ⑩ 点下按钮时 navi 重启 ─────────────────────────────────────────────
     const envelope = (await db.select().from(imActions).where(eq(imActions.outboxId, row.id))).at(0)!;
     await db.update(imActions).set({ usedAt: new Date().toISOString(), claimedBy: "上一次运行" }).where(eq(imActions.id, envelope.id));
     // 申请不在了（重启丢了内存里的申请），可这张卡上的那一下还没结局：收卡这一路不碰它，留给接管。
@@ -242,7 +242,7 @@ try {
     assert.equal(await im.actions.recover(), 1);
     const after = await fresh(row.id);
     assert.equal(after.state, "resolved");
-    assert.match(textOf(JSON.parse(after.content)), /这张申请作废了：在那台设备上重新打开 ash 再申请一次/);
+    assert.match(textOf(JSON.parse(after.content)), /这张申请作废了：在那台设备上重新打开 Navi 再申请一次/);
     assert.doesNotMatch(textOf(JSON.parse(after.content)), /重新发命令/);
     await im.settle();
   }

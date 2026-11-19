@@ -6,7 +6,7 @@ import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
 import type { HandoffAudit, TaskHandoff } from "./handoff.ts";
 export type { Session, SessionNotice, SessionRole, TurnInterruption, TurnOutcome } from "./session.ts";
-// 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
+// 归一化后的 token 用量。运行时函数(累加/格式化)走 "@navi/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
 export type { ContextUsage, OutputTiming, TokenUsage, UsageAccountingMark } from "./usage.ts";
 export type {
@@ -16,6 +16,17 @@ export type {
   TaskReviewRound,
   TeamConfig,
 } from "./team.ts";
+export type {
+  DiscussionOutcome,
+  DiscussionParticipant,
+  DiscussionRounds,
+  DiscussionStartInput,
+  DiscussionStatus,
+  DiscussionLostRecord,
+  DiscussionTurn,
+  DiscussionTurnStatus,
+  TaskDiscussion,
+} from "./discussion.ts";
 export type {
   FreeReviewCheckMode,
   FreeReviewDebate,
@@ -39,8 +50,8 @@ export type {
   ReviewerProfile,
   TaskWorkflowMode,
 } from "./free-workflow.ts";
-// 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@ash/shared/executors"
-// 子路径导出(跟 "@ash/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
+// 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@navi/shared/executors"
+// 子路径导出(跟 "@navi/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
 // 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
 // 回 "./x.ts",转发一加进程就起不来。
 
@@ -52,7 +63,7 @@ export { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_
 
 // ── 多人模式 ────────────────────────────────────────────────────────────────
 // 类型本体在 ./multiuser.ts;运行时判据(目录名校验、权限判据)走子路径
-// `@ash/shared/multiuser`,这里同上只再导出类型。
+// `@navi/shared/multiuser`,这里同上只再导出类型。
 export type {
   ActorLike,
   AuthState,
@@ -73,7 +84,7 @@ export type {
   PairCode,
   PairRequestView,
   PairTicket,
-  PersonalAshMcp,
+  PersonalNaviMcp,
   PersonalCliEnv,
   PersonalSkill,
   ProjectInviteInfo,
@@ -91,7 +102,7 @@ export type {
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
 // 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。
 // 认持有机那两个函数、以及错误码常量（`HANDOFF_PEER_KEY_REQUIRED` / `needsPeerKey`）
-// 都是**运行时导出**，走子路径 `@ash/shared/handoff`：这个文件不能转发运行时值（理由见
+// 都是**运行时导出**，走子路径 `@navi/shared/handoff`：这个文件不能转发运行时值（理由见
 // server/CLAUDE.md：服务端直接跑 .ts 源码，类型擦除不会把 "./x.js" 映射回 "./x.ts"，
 // 一加真正的转发进程就起不来）。
 export type {
@@ -148,11 +159,11 @@ export const AGENT_TYPES = [
 export type AgentType = (typeof AGENT_TYPES)[number];
 
 // CLI 各自的模型别名(CLI_MODEL_PRESETS)与思考强度档位(REASONING_EFFORT_VALUES /
-// REASONING_EFFORT_DETAIL)在 `./cli-presets.ts`,走子路径 `@ash/shared/cli-presets`。
+// REASONING_EFFORT_DETAIL)在 `./cli-presets.ts`,走子路径 `@navi/shared/cli-presets`。
 // 这里刻意不转发:服务端跑 shared 的 .ts 源码,index 转发运行时值会让它起不来。
 
 // 执行器 profile(AgentExecutorProfile)的本体在 ./executor-profile.ts(index.ts 的行数有上限)。
-export type { AgentExecutorProfile, ExecutorAshMcp } from "./executor-profile.ts";
+export type { AgentExecutorProfile, ExecutorNaviMcp } from "./executor-profile.ts";
 
 // ── Hierarchy (§3) ──────────────────────────────────────────────────────────
 // 项目、它在磁盘上的工作区残留、分组容器 —— 本体在 ./project.ts(index.ts 的行数有
@@ -169,7 +180,7 @@ export type {
   TaskWorkspaceLeftover,
 } from "./project.ts";
 // summarizeArchiveCleanup 是运行时函数,**不能**从这里转发(见 server/CLAUDE.md):
-// 两端都走子路径 `@ash/shared/project` 拿它。
+// 两端都走子路径 `@navi/shared/project` 拿它。
 export type { ProjectCommandConfig, ProjectCommandsConfig, ProjectServiceConfig } from "./project-commands.ts";
 
 export interface NoteTaskLink {
@@ -292,14 +303,13 @@ export interface Task {
   status: TaskStatus;
   stage?: TaskStage | null;
   pinnedAt?: number | null; // null=未置顶；整数毫秒时间戳用于置顶区排序
-  starredAt?: number | null; // 星标：用户手动的软记号，与自动状态正交。null=未标
   reviewOf?: string | null;
   reviewRound?: number | null;
   reviewRequested?: boolean;
   labels: string[];
   dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代
   resumeDependsOn: string[]; // [废弃,保留为 []] 同上
-  // 队列归属与位置（null = 不在队列），推进规则见 queues.ts。
+  // 队列归属与名次（0 起、连续；null = 不在队列），推进规则见 queues.ts。
   queueId?: string | null;
   queuePosition?: number | null;
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it
@@ -367,6 +377,15 @@ export interface Task {
   // Backlink used by duet ↔ team derivation chains.
   originTaskId?: string | null;
   creationOrigin?: import("./task-origin.ts").TaskCreationOrigin | null;
+  // 派它的那条任务（普通任务里派出去的独立任务收在谁名下）。不是 parentId：那是团队执行者。
+  // 随列表下发；建任务时可显式指定（用户从回复框派出去），不给就按创建来源认（server/src/task-dispatch.ts）。
+  dispatchedBy?: string | null;
+  // 这一条名下全部停着（「派出的任务」格头按了「全部停下」的时刻）；null = 没停。名下的任务被谁按住，
+  // 前端顺着 dispatchedBy 往上找第一条带它的（web/src/lib/dispatchHold.ts）。
+  dispatchHoldAt?: string | null;
+  // 按了「全部停下」、名下还没停完（中途出错，服务端在补停）：页面说「正在停下」、给「再停一次」，
+  // 不说「已全部停下」也不给「接着跑」。停完清空。
+  dispatchHoldPendingAt?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
   // 就地验证轮的轮次号；非空 = 这一轮验证还没出结论。任务此刻多半没有进程在跑
@@ -380,6 +399,14 @@ export interface Task {
   // 多问题列表；null/[] 沿用单问题 question + questionOptions。
   questionItems?: QuestionItem[] | null;
   questionHistory?: QuestionRecord[];
+  // 摆在回复框上等用户过目的派活单（shared/src/dispatch-plan.ts）。只在它绑的那一问还在时下发，否则 null。
+  dispatchPlan?: import("./dispatch-plan.ts").DispatchPlan | null;
+  // 「派出去的活交给谁」：null = 同这里（这条任务自己的执行器）。
+  dispatchTarget?: import("./dispatch-plan.ts").DispatchRunTarget | null;
+  // 挂在回复框顶上、可以派出去的活（shared/src/dispatch-suggestion.ts）；没有 = []。
+  dispatchSuggestions?: import("./dispatch-suggestion.ts").DispatchSuggestion[];
+  // 智能体收回过的那几件和各自的原因（跟拿掉同一笔落库）；会话里收回的那一处据它写一句。没有 = []。
+  dispatchWithdrawals?: import("./dispatch-suggestion.ts").WithdrawnSuggestion[];
   // 任务接力标记（见 TaskHandoff）。null = 从未接力。
   handoff?: TaskHandoff | null;
   // 强制恢复清掉 handoff 后仍保留的风险审计；刷新后必须持续可见。
@@ -400,6 +427,17 @@ export interface Task {
    * 不是「有东西会自己回来」,而是「它在干等,大概回不来」—— 所以圆点是另一档。
    */
   upstreamStalled?: boolean;
+  /**
+   * 执行者驳回了一轮审查意见、**在等你裁定**（判据见 server/src/free-review-awaiting-ruling.ts）。
+   * 后台事实，同上随 `backgroundRevision` 一起刷新。任务此刻常常是 done，只看 status/stage 会把它
+   * 读成「做完了，等验收」——可驳回不裁，验收就是没看审查意见就合并。
+   */
+  disputeOpen?: boolean;
+  /**
+   * 前置（这条任务建在哪几条上面）与谁建在它上面；没有前置也没人建在它上面时省略。
+   * 后台事实：前置那边一变它就跟着变，随 `backgroundRevision` 一起刷新（server/src/prerequisite-view.ts）。
+   */
+  prerequisites?: import("./prerequisites.ts").TaskPrerequisites;
   backgroundRevision?: number;
 }
 
@@ -498,7 +536,7 @@ export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude", rev
 // ── 供应商 (relay, system-level) ─────────────────────────────────────────────
 // 一个可挂到执行器上的模型来源:官方 API 端点,或第三方代理/聚合服务。挂上后启动 CLI 时注入
 // base_url + key,顶掉 CLI 自己的登录账号 —— 于是 claude@官方 和 claude@公司
-// 可以并存。全局(不分项目)。ash 自己不再直连它调模型。
+// 可以并存。全局(不分项目)。navi 自己不再直连它调模型。
 export type LlmProtocol = "anthropic" | "openai";
 
 // 选模型面板(对话框 @ 之后那一步、以及所有模型下拉)从哪里拿这家供应商的候选模型:
@@ -514,7 +552,7 @@ export interface LlmProvider {
   protocol: LlmProtocol; // anthropic-compatible (挂 claude) | openai-compatible (挂 codex)
   baseUrl: string; // 根地址,不含 /v1 —— e.g. https://your-relay.com
   model: string;
-  // OpenAI 兼容供应商若只实现 Chat Completions，开启后由 ash 把 Codex 的
+  // OpenAI 兼容供应商若只实现 Chat Completions，开启后由 navi 把 Codex 的
   // Responses API 请求/流式响应转换成 Chat Completions 再转回来。
   protocolConversionEnabled: boolean;
   modelListMode: ProviderModelListMode;
@@ -526,7 +564,7 @@ export interface LlmProvider {
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
 // 形状住在 ./search.ts,这里只再导出**类型**;那个文件里的排序判据
-// (compareSearchHits / SEARCH_MAX_HITS)是运行时值,走子路径 `@ash/shared/search`
+// (compareSearchHits / SEARCH_MAX_HITS)是运行时值,走子路径 `@navi/shared/search`
 // ——index.ts 不能转发运行时函数(见 server/CLAUDE.md)。
 export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.ts";
 
@@ -552,7 +590,7 @@ export type { BatchCreateTasksBody, BatchTaskInput } from "./batch.ts";
 
 // ── Duet 讨论 (§7) ───────────────────────────────────────────────────────────
 // 类型从 ./duet.ts 再导出(type-only,编译期抹掉,安全);DUET_DEFAULTS 与
-// normalizeDuetConfig 是运行时值,走子路径 `@ash/shared/duet`。
+// normalizeDuetConfig 是运行时值,走子路径 `@navi/shared/duet`。
 export type { DuetConfig, DuetConsensusBy, DuetStyle, HitlGate } from "./duet.ts";
 
 // ── Scheduling (§9) ──────────────────────────────────────────────────────────
@@ -572,7 +610,7 @@ export type { AgentEvent, CompactionPhase, ModelFailure, ModelFailureKind, DuetS
 export type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus } from "./native-work.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────
-// 会话 .md 的格式与解析住在 ./session-output.ts（运行时函数走 `@ash/shared/session-output`
+// 会话 .md 的格式与解析住在 ./session-output.ts（运行时函数走 `@navi/shared/session-output`
 // 子路径：本文件不能转发运行时函数）。老会话的「继续」标记仍从这里导出，web 有两处在读它。
 export const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
 export type { ConvSeg } from "./session-output.ts";

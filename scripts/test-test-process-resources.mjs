@@ -49,8 +49,8 @@ await withTestResources(() => {
   directories = JSON.parse(manifest.slice("RESOURCE_DIRECTORIES=".length));
   assert.equal(child.status, 1, child.stderr);
   assert.match(child.stderr, /INJECTED_BUSINESS_ASSERTION/);
-  assert.ok(directories.some((directory) => directory.includes("ash-test-lifecycle-")));
-  assert.ok(directories.some((directory) => directory.includes("ash-test-scope-")));
+  assert.ok(directories.some((directory) => directory.includes("navi-test-lifecycle-")));
+  assert.ok(directories.some((directory) => directory.includes("navi-test-scope-")));
   assert.deepEqual(directories.filter((directory) => existsSync(directory)), []);
 }, [() => cleanupTestResources(directories.map((directory) => () => rmSync(directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })))]);
 console.log("✓ 真实生命周期脚本注入业务断言后原错仍可见,模拟域/临时目录全部回收");

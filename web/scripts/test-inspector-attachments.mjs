@@ -9,6 +9,8 @@ try {
   const page = await browser.newPage();
   await page.goto(`${web.origin}/scripts/fixtures/inspector-attachments.html`);
 
+  // 追问平时折成一行「2 条」，点开才铺开。
+  await page.getByRole("button", { name: /2 条/ }).click();
   const originalLink = page.getByRole("link", { name: "image.png" });
   const followUpLink = page.getByRole("link", { name: "follow-up.jpg" });
   const fileLink = page.getByRole("link", { name: "spec.pdf" });
@@ -19,8 +21,8 @@ try {
   assert.equal(await fileLink.getAttribute("target"), "_blank");
   assert.equal(await page.locator(".task-message-attachments").count(), 0, "inspector attachments should not render cards");
   assert.equal(await page.getByText("[用户附带的文件，请用 Read 工具查看以下本地文件]").count(), 0);
-  assert.equal(await page.getByText("检查原始需求里的图片链接。").count(), 1);
-  assert.equal(await page.getByText("检查追问里的图片链接。").count(), 1);
+  assert.equal(await page.getByText("检查第一条追问里的图片链接。").count(), 1);
+  assert.equal(await page.getByText("检查第二条追问里的图片链接。").count(), 1);
 
   await originalLink.click();
   const dialog = page.getByRole("dialog", { name: /图片预览/ });

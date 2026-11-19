@@ -1,4 +1,7 @@
+import type { ScheduledMessage } from "@navi/shared";
+import type { DraftHandle } from "../lib/DraftStore.tsx";
 import type { UploadAttachment } from "./Attachments.tsx";
+import type { MentionTarget } from "./mentionPicker.ts";
 import { attachmentView } from "./utils.ts";
 import { createClientId } from "../lib/clientId.ts";
 
@@ -95,6 +98,25 @@ export function mergeAttachments(
 }
 
 /**
+ * 从别处引用进来的附件（`@` 一条随手记）接到草稿**后面**：跟撤回相反，这是正在写的这一份
+ * 往下续，先挑的排前面。同一路径只留一份，换上这一次的选择记号（理由同 mergeAttachments）。
+ */
+export function appendAttachments(
+  current: UploadAttachment[],
+  added: UploadAttachment[],
+): UploadAttachment[] {
+  const again = new Map(added.map((attachment) => [attachment.path, attachment]));
+  const currentPaths = new Set(current.map((attachment) => attachment.path));
+  return [
+    ...current.map((attachment) => {
+      const chosen = again.get(attachment.path);
+      return chosen ? { ...attachment, selection: chosen.selection } : attachment;
+    }),
+    ...added.filter((attachment) => !currentPaths.has(attachment.path)),
+  ];
+}
+
+/**
  * 一条消息发出去之后，草稿该不该清。
  *
  * 判据只有一条：**当前草稿逐字还是发送时的那一份吗**。是就清掉（常态：点了发送就没再
@@ -144,4 +166,35 @@ export function dropSentAttachments(
 ): UploadAttachment[] {
   const gone = new Set(sent.map(selectionKey));
   return current.filter((attachment) => !gone.has(selectionKey(attachment)));
+}
+
+/**
+ * 撤回:先把消息从队列上取下来(失败就什么都不动,免得内容一式两份),成功后正文、附件、这条消息当初 @ 指派的
+ * 执行器配置一并放回对话框——发它时是什么样,撤回后就还是什么样,用户接着改就行。「稍后」的设定也留着(定时的
+ * 还没到点才留,等任务的原样留)。
+ *
+ * 有发送正在飞就先等它结算完:发送成功会把它自己那份草稿清掉,清完再并入撤回的内容。顺序一确定,两边都不必去猜
+ * 草稿里哪一段是谁的(靠猜会猜错,2026-08-27 审查实测)。
+ */
+export async function withdrawIntoBox(message: ScheduledMessage, box: {
+  cancel: (messageId: string) => Promise<boolean>;
+  draft: Pick<DraftHandle, "afterSend" | "setText" | "setAttachments">;
+  restoreCall: (target: MentionTarget) => void;
+  restoreLater: (message: ScheduledMessage) => void;
+  focus: () => void;
+}): Promise<void> {
+  if (!await box.cancel(message.id)) return;
+  await box.draft.afterSend();
+  box.draft.setText((current) => joinDraftText(message.text, current));
+  box.draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
+  if (message.agent) {
+    box.restoreCall({
+      agent: message.agent,
+      executorId: message.executorId,
+      model: message.model,
+      reasoningEffort: message.reasoningEffort,
+    });
+  }
+  box.restoreLater(message);
+  box.focus();
 }

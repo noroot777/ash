@@ -306,13 +306,17 @@ export function useStickToBottom(
 
   useEffect(() => {
     stuckRef.current = true;
+    /* 还没过期的滚动意图是上一条会话的。留着的话,新会话先缩成「读取中」、scrollTop 被浏览器
+       夹回 0 的那一下会被当成读者自己往回滚(onScroll 看 userDriven),跟随就此断掉,正文到了
+       也不跟 —— 刚在子任务里往上滚了一下就回父任务,父任务停在最上面。 */
+    clearUserIntent();
     // 换任务要的是「落在最新一条」,不是「跟随增长」—— 走显式的一次性放行,不靠几何。
     forceStickRef.current = true;
     atBottomRef.current = true;
     tailAppendedRef.current = false;
     lastTailKeyRef.current = null;
     scheduleStick();
-  }, [resetKey, scheduleStick]);
+  }, [clearUserIntent, resetKey, scheduleStick]);
 
   useEffect(() => {
     if (lastTailKeyRef.current !== null && lastTailKeyRef.current !== tailKey) {
@@ -378,6 +382,10 @@ export function useStickToBottom(
       noteUserScrollIntent(true);
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      /* 默认动作被别处取消了的键没有滚任何东西,读者的位置也就没动。最常见的是工作区的 ↑ / ↓
+         (切到侧栏上一条 / 下一条任务):它在捕获阶段认下键、同步换了任务,这里冒泡收到时已经是
+         新会话 —— 再把它当成「往回看」,新会话首屏那次落底就被作废,停在最上面。 */
+      if (event.defaultPrevented) return;
       if (!SCROLL_KEYS.has(event.key) || isEditableTarget(event.target)) return;
       if (event.key === "Home" || event.key === "PageUp" || event.key === "ArrowUp" || (event.key === " " && event.shiftKey)) {
         noteUserScrollIntent(true);

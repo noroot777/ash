@@ -15,7 +15,7 @@
 import type { Context } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { eq } from "drizzle-orm";
-import type { HandoffPeer } from "@ash/shared";
+import type { HandoffPeer } from "@navi/shared";
 import { db } from "./db/index.js";
 import { handoffPeers, users } from "./db/schema.js";
 import { getAppSettings } from "./app-settings.js";
@@ -27,18 +27,19 @@ import type { Actor } from "./auth/context.js";
 import { isAccountHolder, ownerIdOf } from "./auth/context.js";
 import { canRevokeReturnGrant, returnGrantOwners } from "./handoff-return.js";
 import { now } from "./util.js";
+import { readHeader, type NaviHeaderName } from "@navi/shared/http-headers";
 
 export const PEER_HEADERS = {
-  key: "x-ash-peer-key",
-  sig: "x-ash-peer-sig",
-  ts: "x-ash-peer-ts",
-  nonce: "x-ash-peer-nonce",
-  host: "x-ash-peer-host",
+  key: "x-navi-peer-key",
+  sig: "x-navi-peer-sig",
+  ts: "x-navi-peer-ts",
+  nonce: "x-navi-peer-nonce",
+  host: "x-navi-peer-host",
   // 对端自报的实例模式,形如 `single` / `multi:3`。**不可信**(同 host 头,自报的),
   // 不进签名 —— 它不是权限判据,只让批准的人知道自己在批什么:批一台多人实例
   // = 那台机器上**所有人**都能经这条路接力进来(§十一 多人→单人 那一格)。
-  mode: "x-ash-peer-mode",
-} as const;
+  mode: "x-navi-peer-mode",
+} as const satisfies Record<string, NaviHeaderName>;
 
 /** 时间戳容忍窗口。两台机器的表差几分钟很常见,但更宽就等于给重放留窗口。 */
 const SKEW_MS = 5 * 60_000;
@@ -93,7 +94,8 @@ export interface VerifiedPeer {
  * 带了但验不过 → 直接抛,不给「签坏了就当没签」的降级路径。
  */
 export function verifyPeerSignature(c: Context, rawBody: string | Buffer): VerifiedPeer | null {
-  const h = (name: string) => c.req.header(name)?.trim() ?? "";
+  // 改名之前的对端发的是旧名头(x-ash-peer-*),两代都认。
+  const h = (name: NaviHeaderName) => readHeader((key) => c.req.header(key), name)?.trim() ?? "";
   const publicKey = h(PEER_HEADERS.key);
   const sig = h(PEER_HEADERS.sig);
   const ts = h(PEER_HEADERS.ts);
@@ -240,7 +242,7 @@ const toPeer = (
  *
  * **agent 回合凭证一律不算本人**。它身上挂的 owner userId 是归属戳,不是「它就是这个
  * 人」(auth/context.ts `isAccountHolder`)。不判这一条的话,任意一条正在跑的任务只凭
- * `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,还把操作人
+ * `x-navi-source-task-id` + `x-navi-turn-token` 就能替 owner 放行一台陌生机器,还把操作人
  * 记成 owner 本人(第 1 轮审查 P1 实测复现)。写侧另有 `personal-gate.ts` 的中间件兜底,
  * 两道都要 —— 判据自己立不住的话,中间件那份路径名单迟早会漏掉一条。
  *
@@ -463,7 +465,7 @@ export async function requireApprovedPeer(c: Context, rawBody: string | Buffer):
   if (!settings.handoffRequireApproval) return peer;
   if (!peer) {
     throw new HandoffError(
-      "目标机开启了接力来源审批,但这次请求没带身份签名 —— 来源机器多半是不支持身份校验的旧版 ash。升级源机,或到目标机「设置 → 默认规则 → 接力来源」临时关掉审批。",
+      "目标机开启了接力来源审批,但这次请求没带身份签名 —— 来源机器多半是不支持身份校验的旧版 Navi。升级源机,或到目标机「设置 → 默认规则 → 接力来源」临时关掉审批。",
       401,
     );
   }

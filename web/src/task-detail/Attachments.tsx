@@ -7,7 +7,7 @@ import {
   type SetStateAction,
 } from "react";
 import { File as FileIcon, Paperclip, SpinnerGap, X } from "@phosphor-icons/react";
-import { maxBytesFor, type AttachmentKind } from "@ash/shared";
+import { maxBytesFor, type AttachmentKind } from "@navi/shared";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
@@ -80,11 +80,17 @@ export function useAttachments({
   onChange,
   pending,
   onPendingChange,
+  onFailed,
 }: {
   value?: UploadAttachment[];
   onChange?: Dispatch<SetStateAction<UploadAttachment[]>>;
   pending?: UploadingFile[];
   onPendingChange?: Dispatch<SetStateAction<UploadingFile[]>>;
+  /**
+   * 传了就由调用方接管失败（不再写本组件的 `error`）。附件和在途都受控在外面、活得比组件
+   * 久的调用方要用它：失败发生时组件可能已经卸载，写进局部 state 等于没人看见。
+   */
+  onFailed?: (file: File, message: string) => void;
 } = {}) {
   const [storedAttachments, setStoredAttachments] = useState<UploadAttachment[]>([]);
   const [storedPending, setStoredPending] = useState<UploadingFile[]>([]);
@@ -105,6 +111,11 @@ export function useAttachments({
     else setStoredPending(update);
   }, [onPendingChange, pendingControlled]);
 
+  const fail = useCallback((file: File, message: string) => {
+    if (onFailed) onFailed(file, message);
+    else setError(`${file.name || "文件"} ${message}`);
+  }, [onFailed]);
+
   const addFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
     setError(null);
@@ -114,7 +125,7 @@ export function useAttachments({
     for (const file of files) {
       const limit = maxBytesFor(file.type);
       if (file.size > limit) {
-        setError(`${file.name || "文件"} 过大，上限 ${Math.round(limit / 1048576)}MB`);
+        fail(file, `过大，上限 ${Math.round(limit / 1048576)}MB`);
         continue;
       }
       const controller = new AbortController();
@@ -149,13 +160,13 @@ export function useAttachments({
         // 用户自己按的取消不是失败，别报错。
         if (!controller.signal.aborted) {
           const detail = reason instanceof Error && reason.message ? `：${reason.message}` : "";
-          setError(`${file.name || "文件"} 上传失败${detail}`);
+          fail(file, `上传失败${detail}`);
         }
       } finally {
         setPending((current) => current.filter((item) => item.id !== entry.id));
       }
     }
-  }, [setAttachments, setPending]);
+  }, [fail, setAttachments, setPending]);
 
   const onPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = pastedFiles(event);

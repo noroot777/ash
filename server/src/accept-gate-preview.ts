@@ -6,7 +6,7 @@
 // 安全不能靠「事先把属性文件找全」—— 第 1 轮那份文本扫描漏掉了被忽略的属性文件。这里换成
 // **执行环境本身就没有程序可调**：
 //
-//  · 预演在一个 ash 自己建的空 git 目录里跑（GIT_DIR），对象库指向项目的那一份（GIT_OBJECT_DIRECTORY，
+//  · 预演在一个 navi 自己建的空 git 目录里跑（GIT_DIR），对象库指向项目的那一份（GIT_OBJECT_DIRECTORY，
 //    预演写出的树要留给快照用）；系统 / 全局配置、系统 / 全局属性文件一律换成空的，环境里继承来的
 //    GIT_* 全部丢掉。这个目录的配置里**没有任何驱动和过滤器的定义**，属性点名一个没定义的驱动时
 //    git 退回内置合并 —— 想执行程序也没有程序可执行；
@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileText } from "./exec.js";
 import { expandHome } from "./platform.js";
+import { LEGACY_SEALED_SNAPSHOT_MARK } from "@navi/shared/legacy-names";
 
 const MAX_BUFFER = 32 * 1024 * 1024;
 /**
@@ -54,7 +55,7 @@ async function scratch(): Promise<{ root: string; empty: string }> {
   const current = await scratchRoot?.catch(() => null);
   if (current && existsSync(current.empty)) return current;
   scratchRoot = (async () => {
-    const root = await mkdtemp(join(tmpdir(), "ash-merge-preview-"));
+    const root = await mkdtemp(join(tmpdir(), "navi-merge-preview-"));
     const empty = join(root, "empty");
     await writeFile(empty, "");
     return { root, empty };
@@ -101,7 +102,7 @@ export async function sealedGitDir(checkout: string, entries: [string, string][]
   const ask = async (args: string[]) => outputLine((await git(checkout, args)).stdout);
   const format = await ask(["rev-parse", "--show-object-format"]) || "sha1";
   const common = await ask(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  const dir = await mkdtemp(join(tmpdir(), "ash-sealed-"));
+  const dir = await mkdtemp(join(tmpdir(), "navi-sealed-"));
   const dispose = () => rm(dir, { recursive: true, force: true });
   try {
     const gitDir = join(dir, "git");
@@ -148,7 +149,7 @@ const sealed = (empty: string) => ["-c", `core.attributesFile=${empty}`, "-c", `
 // 检出会跑过滤器（smudge/process），`git diff` 会跑 clean，所以门禁命令之外快照里的每一条 git 都
 // 得是没有程序可调的。光把系统 / 全局配置置空不够：克隆自己的 `.git/config` 也是配置，而它的来源
 // 不止 clone 本身（`init.templateDir` 能把模板里的 config 抄进去，第 2 轮复审 F1）。所以不去推断
-// 「新克隆里应该有什么」，而是**克隆完就把它的本地配置整份换成 ash 写的那一份**：只留仓库格式
+// 「新克隆里应该有什么」，而是**克隆完就把它的本地配置整份换成 navi 写的那一份**：只留仓库格式
 // 必需的几项（白名单），再加上从项目有效配置带过来的内置转换选项和封口的几项。之后这份快照里
 // 跑的 git —— 物化预演树、收尾核验 —— 都用这一份配置，检出时的换行转换与核验时解释文件的口径
 // 也就天然是同一份（第 2 轮复审 F2：检出临时 `-c` 带配置、核验却读另一份，CRLF 被判成改了源码）。
@@ -156,7 +157,9 @@ const sealed = (empty: string) => ["-c", `core.attributesFile=${empty}`, "-c", `
 
 /** 换掉快照本地配置时保留的那几项：没有它们这份仓库就打不开（格式、对象格式、引用存储）。 */
 const KEPT_SETTINGS = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|compatobjectformat|refstorage))$/;
-const SEAL_MARK = "ash.sealedsnapshot";
+const SEAL_MARK = "navi.sealedsnapshot";
+/** 认得出的全部封存标记：升级前封的快照上是旧名（见 legacy-names.ts）。写只写当前名。 */
+const SEAL_MARKS = [SEAL_MARK, LEGACY_SEALED_SNAPSHOT_MARK];
 
 async function sealedExec(cwd: string, args: string[]): Promise<string> {
   const { empty } = await scratch();
@@ -181,10 +184,10 @@ export async function cloneSealedSnapshot(source: string, target: string, settin
     return at < 0 ? [line, "true"] : [line.slice(0, at), line.slice(at + 1)];
   }).filter(([key]) => KEPT_SETTINGS.test(key));
   const entries: [string, string][] = [...kept, ...settings,
-    ["core.hooksPath", join(target, ".git", "ash-no-hooks")],
-    ["core.attributesFile", join(target, ".git", "ash-no-attributes")],
+    ["core.hooksPath", join(target, ".git", "navi-no-hooks")],
+    ["core.attributesFile", join(target, ".git", "navi-no-attributes")],
     ["core.fsmonitor", "false"], [SEAL_MARK, "true"]];
-  const next = `${file}.ash-sealed`;
+  const next = `${file}.navi-sealed`;
   await writeFile(next, "");
   for (const [key, value] of entries) await execFileText("git", ["config", "--file", next, key, value], { env });
   await rename(next, file);
@@ -258,12 +261,16 @@ export async function checkoutGaps(repo: string): Promise<string[]> {
 /** 这份快照是不是 `cloneSealedSnapshot` 建的（收尾核验据此决定用哪套环境跑 git）。 */
 export async function isSealedSnapshot(cwd: string): Promise<boolean> {
   const { empty } = await scratch();
-  return (await execFileText("git", ["config", "--file", join(cwd, ".git", "config"), "--get", SEAL_MARK],
-    { env: cleanEnv(empty) }).catch(() => null))?.stdout.trim() === "true";
+  for (const mark of SEAL_MARKS) {
+    const value = (await execFileText("git", ["config", "--file", join(cwd, ".git", "config"), "--get", mark],
+      { env: cleanEnv(empty) }).catch(() => null))?.stdout.trim();
+    if (value === "true") return true;
+  }
+  return false;
 }
 
 /**
- * 在封好的快照里跑一条 git：系统 / 全局配置与属性置空、`GIT_*` 不继承，本地配置就是 ash 写的那一份，
+ * 在封好的快照里跑一条 git：系统 / 全局配置与属性置空、`GIT_*` 不继承，本地配置就是 navi 写的那一份，
  * 属性点名的过滤器一个都没有定义，git 按原样读写 blob —— 想执行也没有程序可执行。这是硬边界，
  * 不靠事先扫描；`checkoutFilters` 只负责把「这样写出来的跟平时检出的不一样」提前说清楚。
  */

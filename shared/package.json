@@ -1,11 +1,15 @@
 {
-  "name": "@ash/shared",
+  "name": "@navi/shared",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./task-runtime": {
+      "types": "./src/task-runtime.ts",
+      "default": "./src/task-runtime.ts"
+    },
     "./task-reads": {
       "types": "./src/task-reads.ts",
       "default": "./src/task-reads.ts"
@@ -38,9 +42,25 @@
       "types": "./src/questions.ts",
       "default": "./src/questions.ts"
     },
+    "./dispatch-plan": {
+      "types": "./src/dispatch-plan.ts",
+      "default": "./src/dispatch-plan.ts"
+    },
+    "./review-on-create": {
+      "types": "./src/review-on-create.ts",
+      "default": "./src/review-on-create.ts"
+    },
+    "./dispatch-suggestion": {
+      "types": "./src/dispatch-suggestion.ts",
+      "default": "./src/dispatch-suggestion.ts"
+    },
     "./scheduled-message-wait": {
       "types": "./src/scheduled-message-wait.ts",
       "default": "./src/scheduled-message-wait.ts"
+    },
+    "./prerequisites": {
+      "types": "./src/prerequisites.ts",
+      "default": "./src/prerequisites.ts"
     },
     "./branch-plan": {
       "types": "./src/branch-plan.ts",
@@ -61,6 +81,10 @@
     "./task-origin": {
       "types": "./src/task-origin.ts",
       "default": "./src/task-origin.ts"
+    },
+    "./user-messages": {
+      "types": "./src/user-messages.ts",
+      "default": "./src/user-messages.ts"
     },
     "./native-work": {
       "types": "./src/native-work.ts",
@@ -154,6 +178,10 @@
       "types": "./src/workflow-presets.ts",
       "default": "./src/workflow-presets.ts"
     },
+    "./discussion": {
+      "types": "./src/discussion.ts",
+      "default": "./src/discussion.ts"
+    },
     "./free-workflow": {
       "types": "./src/free-workflow.ts",
       "default": "./src/free-workflow.ts"
@@ -185,6 +213,26 @@
     "./mcp": {
       "types": "./src/mcp.ts",
       "default": "./src/mcp.ts"
+    },
+    "./turn-fingerprint": {
+      "types": "./src/turn-fingerprint.ts",
+      "default": "./src/turn-fingerprint.ts"
+    },
+    "./legacy-names": {
+      "types": "./src/legacy-names.ts",
+      "default": "./src/legacy-names.ts"
+    },
+    "./env-names": {
+      "types": "./src/env-names.ts",
+      "default": "./src/env-names.ts"
+    },
+    "./http-headers": {
+      "types": "./src/http-headers.ts",
+      "default": "./src/http-headers.ts"
+    },
+    "./task-branch": {
+      "types": "./src/task-branch.ts",
+      "default": "./src/task-branch.ts"
     },
     "./repo-url": {
       "types": "./src/repo-url.ts",

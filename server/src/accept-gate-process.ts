@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ACCEPT_GATE_LOG_MAX_BYTES, ACCEPT_GATE_TAIL_BYTES } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_LOG_MAX_BYTES, ACCEPT_GATE_TAIL_BYTES } from "@navi/shared/accept-gate";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { inspectProcessSync, isPidAlive, IS_MAC, userShellLaunch } from "./platform.js";
@@ -17,6 +17,12 @@ import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, g
 
 /** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
 const KILL_GRACE_MS = 5_000;
+let killGraceOverride: number | null = null;
+
+/** 只给回归用：`trap '' TERM` 的夹具每取消一次都要等满上面那道宽限，压短它。传 null 还原。 */
+export function overrideGateKillGrace(ms: number | null): void {
+  killGraceOverride = ms;
+}
 
 /** SIGKILL 之后再确认多久。KILL 收不下，那就是真卡在内核里了（D 状态 / 没权限）。 */
 const KILL_CONFIRM_MS = 3_000;
@@ -40,10 +46,10 @@ export type GateExit = { code: number | null; signal: NodeJS.Signals | null;
 /**
  * 起一条门禁命令。返回 pid 和它的**启动时间**（拿不到 pid 视为没起来，抛错）。
  *
- * 启动时间要跟着 pid 一起落盘：pid 单独一个数字说明不了身份，ash 重启之后它可能早被
+ * 启动时间要跟着 pid 一起落盘：pid 单独一个数字说明不了身份，navi 重启之后它可能早被
  * 别的进程复用了（见 stopAcceptGate / isSameGateProcess）。读不出来就是 null。
  *
- * 输出**全部写文件**：十几分钟的测试输出走管道只会把它攒在 ash 的内存里，而用户真正
+ * 输出**全部写文件**：十几分钟的测试输出走管道只会把它攒在 navi 的内存里，而用户真正
  * 要的是能从头翻的一份日志。stdin 给 /dev/null —— 门禁命令不该等人输入，等于挂死。
  */
 export async function spawnAcceptGate(opts: {
@@ -71,7 +77,7 @@ export async function spawnAcceptGate(opts: {
     if (IS_MAC) environment.bootstrap[MAC_GATE_ENV] = macGateToken(opts.logPath);
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
       ...(opts.prepare ? { prepare: userShellLaunch(opts.prepare),
-        prepared: `\n[ash] 准备命令通过，开跑验收前置命令\n[ash] $ ${opts.command}\n\n` } : {}),
+        prepared: `\n[navi] 准备命令通过，开跑验收前置命令\n[navi] $ ${opts.command}\n\n` } : {}),
       ...await gateSupervisorBootstrap(opts.logPath),
       restoreEnv: environment.restore,
       go: gateGoPath(opts.logPath), abort: gateAbortPath(opts.logPath), exit: gateExitPath(opts.logPath) })).toString("base64");
@@ -84,11 +90,11 @@ export async function spawnAcceptGate(opts: {
     });
     child.once("error", (error) => {
       // spawn 失败（shell 不存在之类）：当作一次没跑成的结束，别让调用方永远等。
-      appendGateLog(opts.logPath, `\n[ash] 门禁命令起不来：${error instanceof Error ? error.message : String(error)}\n`);
+      appendGateLog(opts.logPath, `\n[navi] 门禁命令起不来：${error instanceof Error ? error.message : String(error)}\n`);
       opts.onExit({ code: null, signal: null });
     });
     child.once("exit", (code, signal) => opts.onExit({ code, signal }));
-    // ash 自己的事件循环不该被它吊着不退（退出时的收尾由 stopAcceptGate 负责）。
+    // navi 自己的事件循环不该被它吊着不退（退出时的收尾由 stopAcceptGate 负责）。
     child.unref();
     const pid = child.pid;
     if (!pid) throw new Error("门禁命令没有拿到 pid");
@@ -150,7 +156,7 @@ export async function stopAcceptGate(
     return true;
   }
   if (!launch.confinementEnrolled) {
-    appendGateLog(logPath, "\n[ash] 缺少整次运行的内核归属凭据；PID/进程组消失不能证明 detached 后代退出，保留工作区占用。\n");
+    appendGateLog(logPath, "\n[navi] 缺少整次运行的内核归属凭据；PID/进程组消失不能证明 detached 后代退出，保留工作区占用。\n");
     return false;
   }
   const confinement = gateConfinement(logPath, launch);
@@ -162,7 +168,7 @@ export async function stopAcceptGate(
   };
   if (!empty()) {
     confinement.killAll("SIGTERM");
-    if (!await untilEmpty(empty, KILL_GRACE_MS)) {
+    if (!await untilEmpty(empty, killGraceOverride ?? KILL_GRACE_MS)) {
       confinement.killAll("SIGKILL");
       if (!await untilEmpty(empty, KILL_CONFIRM_MS)) return false;
     }
@@ -208,10 +214,10 @@ export function appendGateLog(logPath: string, text: string): boolean {
 
 /**
  * 日志末尾若干字节。整份日志可能有几十 MB（全量回归的输出），**只读尾巴**：
- * 一次验收检查要回这份数据，整份读进内存会把 ash 顶爆。
+ * 一次验收检查要回这份数据，整份读进内存会把 navi 顶爆。
  */
 export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTES): string {
-  // 这份文件里只有命令自己的输出，ash 的进度和现场住在旁边（accept-gate-diagnosis.ts）。
+  // 这份文件里只有命令自己的输出，navi 的进度和现场住在旁边（accept-gate-diagnosis.ts）。
   // 它们**不跟原始输出抢位置**：先把那一段留出来，剩下的才给日志尾巴 —— 没能停下来的
   // 进程继续写也挤不掉已经存好的现场（第 2 轮审查 R2-F2）。
   const extra = gateDiagnosisTail(logPath);
@@ -228,7 +234,7 @@ export function acceptGateLogText(logPath: string): string {
   const suffix = gateDiagnosisFull(logPath);
   const { text, skipped } = readTail(logPath, ACCEPT_GATE_LOG_MAX_BYTES);
   if (!skipped) return `${text}${suffix}`;
-  return `[ash] 这份日志有 ${Math.round((skipped + Buffer.byteLength(text)) / 1_000_000 * 10) / 10} MB，这里只给最后 `
+  return `[navi] 这份日志有 ${Math.round((skipped + Buffer.byteLength(text)) / 1_000_000 * 10) / 10} MB，这里只给最后 `
     + `${Math.round(ACCEPT_GATE_LOG_MAX_BYTES / 1000)} KB。完整文件在 ${logPath}\n\n${text}${suffix}`;
 }
 

@@ -4,18 +4,19 @@ import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-workspace-"));
+const root = mkdtempSync(join(tmpdir(), "navi-task-workspace-"));
 const repo = join(root, "repo");
-process.env.ASH_DB = join(root, "ash.db");
+process.env.NAVI_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Test");
-  git(repo, "config", "user.email", "ash@example.test");
+  git(repo, "config", "user.name", "Navi Test");
+  git(repo, "config", "user.email", "navi@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "seed.txt");
   git(repo, "commit", "-m", "seed");
@@ -335,7 +336,7 @@ try {
     writeFileSync(join(ws.path, "after.txt"), "after fallback\n");
     git(ws.path, "add", "-A");
     git(ws.path, "commit", "-m", "work after fallback");
-    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    const diff = await taskBranchDiff(repo, reloaded);
     assert.equal(diff.available, true, `降级后 diff 必须能出来，实际 ${JSON.stringify(diff)}`);
   }
 
@@ -375,7 +376,7 @@ try {
     git(again.path, "add", "-A");
     git(again.path, "commit", "-m", "work in kept worktree");
     const reloaded = await load("keptwt-task");
-    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    const diff = await taskBranchDiff(repo, reloaded);
     assert.equal(diff.available, true, `复用路径降级后 diff 也必须能出来，实际 ${JSON.stringify(diff)}`);
   }
 
@@ -459,7 +460,7 @@ try {
     git(ws.path, "add", "-A");
     git(ws.path, "commit", "-m", "work on tag base");
     const reloaded = await load("tagmask-task");
-    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    const diff = await taskBranchDiff(repo, reloaded);
     assert.equal(diff.available, true, `同名 tag 场景下 diff 也必须能出来，实际 ${JSON.stringify(diff)}`);
   }
 
@@ -482,5 +483,5 @@ try {
   console.log("✓ 项目改了 repoPath 之后，圈人和上锁跟着实际工作目录走");
   console.log("✓ 三种工作目录去向各自的措辞对得上，同回合的两条 marker 不互相打架");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

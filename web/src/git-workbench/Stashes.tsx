@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CaretDown, CaretRight, Stack } from "@phosphor-icons/react";
-import type { GitDiff } from "@ash/shared/git-workbench";
+import { stashSubjectForDisplay, type GitDiff } from "@navi/shared/git-workbench";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { DiffView } from "./DiffView.tsx";
@@ -56,7 +56,7 @@ export function Stashes({
               <Stack size={14} />
               <code className="stash-index">{row.ref}</code>
               <span className="stash-msg">
-                {row.subject.replace(/\[ash:[^\]]+\]\s*/, "")}
+                {stashSubjectForDisplay(row.subject)}
               </span>
               <span className={`session-chip${row.owned ? " is-mine" : ""}`}>
                 {row.owned ? "我的贮藏" : "共享 · 仅应用"}

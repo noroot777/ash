@@ -139,6 +139,10 @@
   color: var(--accent);
 }
 
+.insp-attn {
+  color: var(--amber);
+}
+
 .insp-bad {
   color: var(--red);
 }

@@ -1,3 +1,4 @@
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -5,7 +6,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { ClaudeExecutor, singleRunFromResident } from "../src/executors/claude.js";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { CodexExecutor } from "../src/executors/codex.js";
@@ -320,7 +321,7 @@ assert.ok(
 );
 console.log("✓ Codex App Server 失败收尾会发 session poison 与 context 清零哨兵");
 
-const detachedRoot = mkdtempSync(join(tmpdir(), "ash-native-steer-detached-"));
+const detachedRoot = mkdtempSync(join(tmpdir(), "navi-native-steer-detached-"));
 const detachedPids: number[] = [];
 let stickyPid: number | null = null;
 let stickyEscapePid: number | null = null;

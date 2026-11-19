@@ -4,8 +4,8 @@
 // 从 single-run.ts 拆出来（单文件 700 行），也因为这几样要一起守一条规矩：**同一条记录在三处带同一个
 // 身份**（记录号 + 回合，见 shared/src/session-output.ts 的 RecordIdentity）。落进 trace 的那条、写进
 // .md 的那一行领的号，实时事件原样带出去；页面凭它认「这条实时事件就是盘上那条」，不比时间和文字。
-import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
-import type { RecordIdentity, TextAnchor } from "@ash/shared/session-output";
+import type { AgentEvent, AgentType, SessionRole } from "@navi/shared";
+import type { RecordIdentity, TextAnchor } from "@navi/shared/session-output";
 import { bus } from "./bus.js";
 import { appendSessionTrace, writeTurn } from "./transcript.js";
 import { isIdentityStream, onRecord, reserveRecord, writeProse } from "./transcript-identity.js";
@@ -65,6 +65,11 @@ export function createRunVoice(a: {
     },
     flushSessionNotices: () => {
       for (const notice of sessionNotices.splice(0)) {
+        // 流已经关了就落不了盘：如实记一笔，不往上写 —— 那是一个没人接的 error 事件，会带走整个 server。
+        if ((out as { writableEnded?: boolean }).writableEnded) {
+          console.error(`[navi] task=${taskId} 的会话旁注来不及落盘（流已关闭）：${notice.text}`);
+          continue;
+        }
         writeTurn(out, { t: "system", agent: agentType, text: notice.text, level: notice.level }, notice.at, notice.identity);
       }
     },
@@ -78,7 +83,7 @@ export function createRunVoice(a: {
     persistTrace: (event: AgentEvent, at?: string): { seq: number; textAt: TextAnchor | null } | null => {
       // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
       // 此刻、只有最后一个值有意义，它的家在 sessions 行上（setSessionContext）。
-      if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
+      if (event.kind === "plan" || event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
         // agent 自己产出的图(工具结果截图之类)也躺在 uploads 目录里,归属跟着这个任务走 ——
         // 不登记的话多人模式下它是「无主资产」,同项目的人在会话里打不开(uploads.ts)。
         // 团队那条链的同一处在 team/session-consumer.ts 的 traceLead:改一处记得看另一处。

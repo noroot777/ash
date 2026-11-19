@@ -14,18 +14,19 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-worktree-recovery-"));
+const root = mkdtempSync(join(tmpdir(), "navi-worktree-recovery-"));
 const repo = join(root, "repo");
-process.env.ASH_DB = join(root, "ash.db");
+process.env.NAVI_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Test");
-  git(repo, "config", "user.email", "ash@example.test");
+  git(repo, "config", "user.name", "Navi Test");
+  git(repo, "config", "user.email", "navi@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "seed");
@@ -133,5 +134,5 @@ try {
 
   console.log("worktree 恢复 / 重建 / 预检失败：全部通过");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

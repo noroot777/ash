@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { LEGACY_GIT_WORKTREE_BACKUPS_DIR } from "@navi/shared/legacy-names";
 import { execFileText as exec } from "./exec.js";
 import { hasWorktreeRegistration, samePath, UnreadableWorktreeError } from "./git-worktree-state.js";
 
@@ -33,7 +35,7 @@ export async function preserveRemovedWorktree(repo: string, path: string, branch
       throw new UnreadableWorktreeError(`无法确认工作区 ${path} 已清理：任务分支 ${branch} 不存在或无法解析，无法核对残留源码。目录及文件已保留，请先从已核实的提交恢复该任务分支，再重试清理。`);
     });
 
-  const scratch = await mkdtemp(join(tmpdir(), "ash-worktree-recovery-"));
+  const scratch = await mkdtemp(join(tmpdir(), "navi-worktree-recovery-"));
   try {
     const options = { cwd: path, env: { ...process.env, GIT_INDEX_FILE: join(scratch, "index") } };
     const args = ["--git-dir", common, "--work-tree", path];
@@ -63,7 +65,9 @@ export async function preserveRemovedWorktree(repo: string, path: string, branch
     await rm(scratch, { recursive: true, force: true });
   }
 
-  const backups = join(common, "ash-worktree-backups");
+  // 改名之前的备份都在 `ash-worktree-backups`：那个目录在就接着往里放，备份不分两处。
+  const legacyBackups = join(common, LEGACY_GIT_WORKTREE_BACKUPS_DIR);
+  const backups = existsSync(legacyBackups) ? legacyBackups : join(common, "navi-worktree-backups");
   await mkdir(backups, { recursive: true });
   const backup = join(backups, `${basename(path)}-${randomUUID()}`);
   await rename(path, backup);

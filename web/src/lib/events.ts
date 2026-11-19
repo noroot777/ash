@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@navi/shared";
 
 type EventListener = (event: ServerEvent) => void;
 type ConnectionListener = (connected: boolean) => void;
@@ -57,20 +57,24 @@ export function subscribeConnection(listener: ConnectionListener) {
   };
 }
 
-/** 全应用共享一条 EventSource；多个数据 hook 只增加本地订阅者。 */
-export function useServerEvents(onEvent: EventListener): boolean {
+/**
+ * 全应用共享一条 EventSource；多个数据 hook 只增加本地订阅者。`enabled` = false 时不订（也就不会
+ * 为它开那条连接），报「没连上」——给那种同一个 hook 有时只读快照、不该听本机事件的调用方。
+ */
+export function useServerEvents(onEvent: EventListener, enabled = true): boolean {
   const handler = useRef(onEvent);
   handler.current = onEvent;
   const [isConnected, setIsConnected] = useState(connected);
 
   useEffect(() => {
+    if (!enabled) return;
     const removeEvent = subscribeEvents((event) => handler.current(event));
     const removeConnection = subscribeConnection(setIsConnected);
     return () => {
       removeEvent();
       removeConnection();
     };
-  }, []);
+  }, [enabled]);
 
-  return isConnected;
+  return enabled && isConnected;
 }

@@ -1,3 +1,5 @@
+import { LEGACY_STASH_OWNER_TAG } from "./legacy-names.ts";
+
 export type GitView =
   | "changes"
   | "history"
@@ -249,3 +251,14 @@ export function gitChangeCount(
     status.merge.length
   );
 }
+
+/**
+ * 贮藏标题里的所有权标记：`[<标签>:<用户摘要前 12 位>]`。服务端写它、按它判「是不是本人存的」，
+ * 界面显示前剥掉它。升级前存的贮藏带旧标签，两代都认（见 legacy-names.ts）。
+ */
+export const STASH_OWNER_TAG = "navi";
+export const STASH_OWNER_TAGS = [STASH_OWNER_TAG, LEGACY_STASH_OWNER_TAG] as const;
+export const stashOwnerMark = (tag: string, ownerDigest: string): string => `[${tag}:${ownerDigest}]`;
+const STASH_OWNER_MARK = new RegExp(`\\[(?:${STASH_OWNER_TAGS.join("|")}):[^\\]]+\\]\\s*`);
+/** 贮藏标题去掉所有权标记，给人看的那一段。 */
+export const stashSubjectForDisplay = (subject: string): string => subject.replace(STASH_OWNER_MARK, "");

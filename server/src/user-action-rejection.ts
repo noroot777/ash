@@ -59,7 +59,9 @@ export type RejectedAction =
   | "继续本轮审查" | "重试这一回合"
   // 自由工作流那张卡上的几颗:派合并结果审查、按意见修复、预约复审、调整审查轮数,以及驳回之后
   // 用户要拍的那两下(让双方辩论 / 裁定)。
-  | "按审查意见修复" | "建修复任务" | "预约派审" | "调整审查轮数" | "让双方辩论" | "裁定驳回";
+  | "按审查意见修复" | "建修复任务" | "预约派审" | "调整审查轮数" | "让双方辩论" | "裁定驳回"
+  // 回复框里 @ 了人、选「讨论」之后那一按（discussion.ts）。
+  | "开始讨论";
 
 /**
  * 这一下的结果。**不是同一句话的两种语气,是两件不同的事**,所以存下来而不是让前端去猜:
@@ -129,8 +131,8 @@ export async function noteUserActionOutcome(
   } catch (error) {
     // 去重记账要撤回,否则这条挡回会被静默吞掉整个 DEDUPE_MS。
     lastNoted.delete(key);
-    console.warn(`[ash] 用户操作留痕写表失败 task=${taskId}（${action}/${outcome}）:`, error);
-    console.warn(`[ash] 用户操作${outcome === "rejected" ? "被挡回" : "没到位"}（${action}）task=${taskId}：${reason}`);
+    console.warn(`[navi] 用户操作留痕写表失败 task=${taskId}（${action}/${outcome}）:`, error);
+    console.warn(`[navi] 用户操作${outcome === "rejected" ? "被挡回" : "没到位"}（${action}）task=${taskId}：${reason}`);
     return false;
   }
 }
@@ -152,7 +154,7 @@ export async function noteSystemNotice(
     if (inserted.length) bus.publish({ type: "task.notices", taskId });
     return true;
   } catch (error) {
-    console.warn(`[ash] 系统诊断留痕写表失败 task=${taskId}（${action}）:`, error);
+    console.warn(`[navi] 系统诊断留痕写表失败 task=${taskId}（${action}）:`, error);
     return false;
   }
 }

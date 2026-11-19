@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { formatQuestionAnswers, questionKey, legacyQuestionRecord, toggleQuestionOption } from "@ash/shared/questions";
+import { formatQuestionAnswers, joinQuestionAnswer, questionKey, questionOptionSelected, legacyQuestionRecord } from "@navi/shared/questions";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-question-history-"));
-process.env.ASH_DB = join(stage, "ash.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-question-history-"));
+process.env.NAVI_DB = join(stage, "ash.db");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { tasks } = await import("../src/db/schema.js");
 const { prepareQuestionRecord, claimQuestionAnswer } = await import("../src/task-question-record.js");
@@ -63,7 +63,7 @@ try {
   assert.deepEqual(JSON.parse(saved.questionHistory!), [record]);
   assert.equal((await answerRequest("q1", { answer: "again" })).status, 409);
 
-  const independent = new DatabaseSync(process.env.ASH_DB!);
+  const independent = new DatabaseSync(process.env.NAVI_DB!);
   try {
     assert.deepEqual(JSON.parse(independent.prepare("SELECT question_history FROM tasks WHERE id='q1'").get()!.question_history as string), [record], "独立连接仍可读到完整问答");
   } finally { independent.close(); }
@@ -84,8 +84,10 @@ try {
   assert.deepEqual(JSON.parse(saved.questionHistory!), [record, finalRecord]);
 
   assert.equal(formatQuestionAnswers(["  简短答案  "]), "简短答案");
-  assert.equal(toggleQuestionOption("补充说明", "甲\n乙"), "补充说明\n甲\n乙");
-  assert.equal(toggleQuestionOption("补充说明\n甲\n乙", "甲\n乙"), "补充说明");
+  // 答题卡：勾了的选项（含多行的）按选项顺序在前，补充的话在最后一行；按整行认得回选了哪几项。
+  assert.equal(joinQuestionAnswer(["甲\n乙", "丙"], new Set([0]), " 补充说明 "), "甲\n乙\n补充说明");
+  assert.equal(questionOptionSelected(joinQuestionAnswer(["甲\n乙", "丙"], new Set([0]), "补充说明"), "甲\n乙"), true);
+  assert.equal(questionOptionSelected(joinQuestionAnswer(["甲\n乙", "丙"], new Set([0]), "补充说明"), "丙"), false);
   const legacy = legacyQuestionRecord("【答复】你之前的提问:「选择哪种方案？」\n\n方案 A\n\n请据此继续完成任务。", "old");
   assert.equal(legacy?.question, "选择哪种方案？");
   assert.deepEqual(legacy?.answers, ["方案 A"]);

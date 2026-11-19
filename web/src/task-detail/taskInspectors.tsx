@@ -1,5 +1,5 @@
-import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats } from "@phosphor-icons/react";
+import type { Group, Session, Task, TaskListItem } from "@navi/shared";
+import { Browser, FolderOpen, GitPullRequest, Globe, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TerminalWindow, TreeView } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { InspButton, InspNone } from "../inspector/parts.tsx";
@@ -10,12 +10,14 @@ import { ScmInspector } from "../scm/ScmInspector.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import type { Notify } from "../lib/notify.ts";
 import { TaskInspector } from "./TaskInspector.tsx";
+import { DispatchedInspector } from "./dispatched/DispatchedInspector.tsx";
+import type { DispatchFoldState } from "./dispatched/dispatchFolds.ts";
 import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
 import { FreeReviewPane } from "../free-workflow/FreeReviewPane.tsx";
 import { SideChatPane } from "../side-chat/SideChatPane.tsx";
-import { monitorBlockedReason } from "@ash/shared/monitor";
+import { monitorBlockedReason } from "@navi/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
 import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
@@ -23,6 +25,9 @@ import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 import type { InfoRunFacts } from "./info/infoRunFacts.ts";
 import { reviewPanelSources } from "../review/reviewTarget.ts";
 import type { ReviewRetryAction } from "./turnRetry.ts";
+import type { TaskRuntime } from "../task-runtime/useTaskRuntime.ts";
+import { ServiceInspector } from "../task-runtime/ServiceInspector.tsx";
+import { BrowserInspector } from "../task-runtime/TaskBrowserPane.tsx";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -32,6 +37,7 @@ export interface TaskInspectorContext {
   groups: Group[];
   sessions: Session[];
   allTasks: TaskListItem[];
+  dispatchedFolds: DispatchFoldState;
   followUps: { text: string; attachments: string[]; at?: string }[];
   /** 「信息」格里最近一轮的用量、上下文与压缩中（以前挂在会话尾栏的药丸上）。 */
   runFacts: InfoRunFacts;
@@ -53,6 +59,8 @@ export interface TaskInspectorContext {
   onOpenScmDiff: (target: ScmDiffTarget) => void;
   /** 此刻能「继续本轮审查」的那一轮和那个动作（会话尾注上那颗同一份，见 turnRetry.ts）。 */
   reviewRetry: ReviewRetryAction | null;
+  /** 托管服务与共享浏览器（「服务」「浏览器」两格），由 useTaskInspectorStack 拉。 */
+  runtime: TaskRuntime;
 
   notify: Notify;
 }
@@ -85,7 +93,7 @@ function MonitorInspectorPane({ context }: { context: TaskInspectorContext }) {
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
-// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
+// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 子任务 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 服务 · 浏览器 · 哨兵。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 //
 // 子智能体和哨兵这两格的 `defaultOpen` 是动态的（见 inspector/usedTabs.tsx）：全部面板一直
@@ -165,6 +173,23 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => <NativeWorkInspector {...context.nativeWork} />,
   },
   {
+    id: "dispatched",
+    cluster: 3,
+    title: "子任务",
+    icon: <TreeView size={14} />,
+    shortcut: "d",
+    render: (context) => (
+      <DispatchedInspector
+        foldState={context.dispatchedFolds}
+        task={context.task}
+        allTasks={context.allTasks}
+        onOpenTask={context.onOpenTask}
+        onTaskUpdated={context.onTaskUpdated}
+        notify={context.notify}
+      />
+    ),
+  },
+  {
     // 备忘跟旁边两样东西的分界见 shared/src/task-memo.ts：它不进任何 prompt，所以**不走
     // 「用过才浮现」**——手写一条的入口只在这一格里，藏起来等于这条路只能从会话选文进。
     id: "memos",
@@ -198,7 +223,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   {
     id: "review",
     cluster: 3,
-    title: "审查",
+    title: "审议",
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
     shortcut: "r",
@@ -224,6 +249,24 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     ),
   },
   {
+    // 服务、浏览器也走「用过才浮现」（开合由 useTaskInspectorStack 按运行环境翻）：智能体托管过服务、
+    // 开过共享浏览器才冒到图标条上。浏览器是宽格，智能体一开它就自动切过去（RuntimeAutoOpen）。
+    id: "service",
+    cluster: 3,
+    title: "服务",
+    icon: <TerminalWindow size={14} />,
+    render: (context) => <ServiceInspector runtime={context.runtime}
+      taskRunning={context.task.status === "running" || context.task.status === "queued"} />,
+  },
+  {
+    id: "browser",
+    cluster: 3,
+    title: "浏览器",
+    icon: <Globe size={14} />,
+    wide: true,
+    render: (context) => <BrowserInspector runtime={context.runtime} />,
+  },
+  {
     // 和子智能体同一条「用过才浮现」：开合由 useMonitorInspector 按「这个任务挂过哨兵没有」
     // 翻（所以这里不写 defaultOpen）。它仍然是手动起哨兵唯一的入口，所以可以不默认开着、
     // 但绝不能整格不给——「+」菜单和 I M 永远找得到它，空态里那段话解释这是什么。
@@ -235,4 +278,3 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => <MonitorInspectorPane context={context} />,
   },
 ];
-

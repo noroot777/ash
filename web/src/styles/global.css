@@ -27,9 +27,10 @@
 @import "./task-detail.css";
 @import "./task-conversation.css";
 @import "./question-card.css";
+@import "./dispatch-plan.css";
 @import "./execution-trace.css";
 @import "./motion-text.css";
-@import "./ash-loader.css";
+@import "./navi-brand.css";
 @import "./task-reply.css";
 @import "./agent-plate.css";
 @import "./agent-run-meta.css";
@@ -38,7 +39,10 @@
 @import "./system-turn.css";
 @import "./monitor-wake.css";
 @import "./reviewer-turn.css";
-@import "./debate-lane.css";
+@import "./reply-dock.css";
+@import "./dispatch-suggestion.css";
+@import "./dispute-ruling.css";
+@import "./discussion.css";
 @import "./inspector.css";
 @import "./team-info-panel.css";
 @import "./review-inspector.css";
@@ -49,7 +53,7 @@
 @import "./team-review.css";
 @import "./zoom-layer.css";
 @import "./review.css";
-@import "./branch-acceptance.css";
+@import "./acceptance.css";
 @import "./files.css";
 @import "./artifacts.css";
 @import "./scm.css";
@@ -60,7 +64,7 @@
 @import "./settings-project-git.css";
 @import "./settings-path-link.css";
 @import "./settings-skill-scan.css";
-/* 供应商 / 执行模式 / 审查者共用的「清单 + 就地编辑」骨架（跟飞书页同一副）。 */
+/* 供应商 / 审查者共用的「清单 + 就地编辑」骨架（跟飞书页同一副）。 */
 @import "./settings-list.css";
 /* 供应商表单与本地 CLI 检测结果这两个组件被首启向导复用了(web/src/onboarding/),
    所以这三份从 SettingsPage.tsx 搬到这里 —— 挂在组件文件上的话,「谁先 import」
@@ -79,22 +83,20 @@
 @import "./quick-create.css";
 @import "./groups-panel.css";
 @import "./composer.css";
-@import "./composer-presets.css";
 @import "./schedule.css";
 @import "./reply.css";
 @import "./scheduled-message-tray.css";
 @import "./reply-layout.css";
 @import "./workflow.css";
-@import "./workflow-composer.css";
 @import "./free-workflow.css";
 @import "./parity.css";
 @import "./recent-pages.css";
 @import "./dialogs.css";
 @import "./composer-studio.css";
+@import "./dispatched.css";
 /* 验收动作宿主的形状。排在最后:它要压住的那几张状态卡(.accept-gate-card /
    .pending-merge-card / .team-accept-failure)自带 margin,选择器特异性跟它一样重,
    只有排在它们后面才算数。 */
-@import "./acceptance-host.css";
 /* 放在最后：它改的是前面各份里整页布局的上边距。 */
 @import "./window-shell.css";
 
@@ -169,7 +171,7 @@
   --scrollbar: rgb(55 57 63 / 28%);
   --scrollbar-hover: rgb(55 57 63 / 44%);
 
-  /* 尺子（docs/ui-ux-audit 08「定尺」）。各面的字号、字重、圆角、动效只从这里取。
+  /* 尺子。各面的字号、字重、圆角、动效只从这里取。
      名字用短前缀（--t- / --w- / --r-），不用 --text- / --radius-：那两个是 Tailwind 的
      主题命名空间，同名会把 rounded-sm、text-xs 这些工具类一起改掉。 */
   --t-xs: 12px;
@@ -454,7 +456,7 @@ code,
   color: var(--ink);
 }
 
-/* 预览实例角标（`VITE_ASH_PREVIEW`，只在预览起的前端上出现）。
+/* 预览实例角标（`VITE_NAVI_PREVIEW`，只在预览起的前端上出现）。
    `pointer-events: none` 是必须的：它盖在右下角，谁也不该因为它点不到底下的按钮。 */
 .preview-badge {
   position: fixed;

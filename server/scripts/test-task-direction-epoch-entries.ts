@@ -12,7 +12,7 @@
 //     票被新一轮的结算吃掉，一轮从没交卷的工作显示「已完成」（第 1 轮审查 F1 实测
 //     `sequential-direction-restore-then-fresh-run`，**不需要任何并发**）。
 //
-// 所以这里不设 `ASH_LAX_DONE`：严格完成协议下「没交卷 = failed」，一轮假 CLI 从头到尾不调
+// 所以这里不设 `NAVI_LAX_DONE`：严格完成协议下「没交卷 = failed」，一轮假 CLI 从头到尾不调
 // complete_task，结果只要是 done 就说明有一张不属于它的票被消费了。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -21,17 +21,18 @@ import { delimiter, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-direction-epoch-entries-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_TEST_LEAD_LOG = join(root, "fake-input.jsonl");
-// 这个用例就是要验证真实起跑/落盘/结算整条链，所以显式放行真进程（executors/spawn.ts）。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-delete process.env.ASH_LAX_DONE; // 台子前提：严格完成协议，没交卷就是 failed
+const root = mkdtempSync(join(tmpdir(), "navi-direction-epoch-entries-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEST_LEAD_LOG = join(root, "fake-input.jsonl");
+delete process.env.NAVI_LAX_DONE; // 台子前提：严格完成协议，没交卷就是 failed
 requireTmpDb("task-direction-epoch-entries");
 
 const { installFakeClaude } = await import("./scheduled-messages-fixture.js");
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${process.env.PATH ?? ""}`;
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ""}`;
+// 这个用例就是要验证真实起跑/落盘/结算整条链，所以放行上面铺的假 claude（executors/spawn.ts）。
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
 
 const [{ db, ensureSchema }, schema, tickets, directionState, { setTaskStatus }, { runTask }, { continueTask }] =
   await Promise.all([

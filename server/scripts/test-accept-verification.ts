@@ -140,7 +140,7 @@ const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js
   const client = new Client({ name: "acceptance-regression", version: "1" });
   try {
     const transport = new StdioClientTransport({ command: process.execPath, args: ["--import", "tsx", fileURLToPath(new URL("../../mcp/src/index.ts", import.meta.url))],
-      env: { ...process.env, ASH_URL: `http://127.0.0.1:${address.port}`, ASH_TASK_ID: "", ASH_TURN_TOKEN: "", ASH_DIRECTION_TOKEN: "" } as Record<string, string>, stderr: "pipe" });
+      env: { ...process.env, NAVI_URL: `http://127.0.0.1:${address.port}`, NAVI_TASK_ID: "", NAVI_TURN_TOKEN: "", NAVI_DIRECTION_TOKEN: "" } as Record<string, string>, stderr: "pipe" });
     await client.connect(transport);
     for (const [taskId, missingStep] of [["mcpverify", "s2"], ["mcpmultiverify", "v2"]] as const) {
       const result = await client.callTool({ name: "accept_task", arguments: { taskId } });

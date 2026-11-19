@@ -1,7 +1,7 @@
-// 门禁命令的**退出结果**：起它的那个 ash 收不到时（重启了），新实例凭什么认。
+// 门禁命令的**退出结果**：起它的那个 navi 收不到时（重启了），新实例凭什么认。
 //
 // 由来（2026-11-02）：启动器（GATE_BOOTSTRAP）拿到退出码后原本只用 process.exit 转发，唯一的
-// 收件人是旧 ash 内存里的 exit 回调。ash 一重启，十几分钟跑出来的 rc=0 没人认，只能落「被打断」
+// 收件人是旧 navi 内存里的 exit 回调。navi 一重启，十几分钟跑出来的 rc=0 没人认，只能落「被打断」
 // 让用户从头再跑一遍。现在启动器转发之前先把结果原子写进日志旁的 `.exit.json`
 // （accept-gate-launch.ts 的 GATE_BOOTSTRAP），重启后按三岔分流（gateRecoveryFate）：
 //
@@ -14,16 +14,16 @@
 //    别的运行、也不会认领上一次的残留；
 //  · 档里的 pid 就是启动记录里登记的那个启动器；tmp+rename 写入，启动器被杀/崩溃只会留下
 //    没改名的 tmp，读口不认；
-//  · 启动记录是 armed（命令确实被放行过），而且**没有 abort 标记**。abort 只由 ash 自己写
-//    （取消、超时、结算时的收尾都先写它再动刀），有它就说明那一刻是 ash 在停这条命令：子进程被
-//    信号打死后启动器留下的 128 不是命令自己的结论。「命令自己跑完了、旧 ash 正在收尾时死掉」
+//  · 启动记录是 armed（命令确实被放行过），而且**没有 abort 标记**。abort 只由 navi 自己写
+//    （取消、超时、结算时的收尾都先写它再动刀），有它就说明那一刻是 navi 在停这条命令：子进程被
+//    信号打死后启动器留下的 128 不是命令自己的结论。「命令自己跑完了、旧 navi 正在收尾时死掉」
 //    那一段不靠这里：结算一认领就先把结论落库（accept-gate-settle.ts 的 settlement），重启后
 //    照那一份续完，轮不到这里来猜。
 //
 // **时限也按同一份证据判**（第 1 轮审查 F1）：退出档里有启动器自己量的单调用时，过了时限的
-// 退出码一律不作数、按超时收。不然同一次运行，ash 在不在场就决定了它是「超时」还是「通过」。
+// 退出码一律不作数、按超时收。不然同一次运行，navi 在不在场就决定了它是「超时」还是「通过」。
 import { existsSync, readFileSync } from "node:fs";
-import type { AcceptGateFailure, AcceptGateStatus } from "@ash/shared/accept-gate";
+import type { AcceptGateFailure, AcceptGateStatus } from "@navi/shared/accept-gate";
 import { gateAbortPath, gateConfinement, gateExitPath, gateGoPath, readGateLaunch } from "./accept-gate-launch.js";
 import { isSameGateProcess, type GateExit } from "./accept-gate-process.js";
 import { gateTakeoverUnavailable } from "./accept-gate-confinement.js";
@@ -58,14 +58,14 @@ export type GateFate = { kind: "exited"; exit: GateExit } | { kind: "running" } 
 const minutes = (ms: number): string => (ms / 60_000).toFixed(1);
 
 /**
- * 退出 → 结论。起它的 ash 收到的 exit 回调、重启后读到的退出档、接管期间等到的退出、看门的
+ * 退出 → 结论。起它的 navi 收到的 exit 回调、重启后读到的退出档、接管期间等到的退出、看门的
  * 撞上时限那一刻，四条路查的是同一张表：结论只取决于命令怎么退的、用了多久，不取决于中间有没有
  * 重启过、谁先被处理。
  */
 export function gateExitOutcome(exit: GateExit, timeoutMs = gateTimeoutMs()): GateOutcome {
   if (exit.elapsedMs !== undefined && exit.elapsedMs >= timeoutMs) return { status: "failed", exitCode: null, failure: "timeout",
     note: `命令跑了 ${minutes(exit.elapsedMs)} 分钟才退出（rc=${exit.code}），超过了 ${minutes(timeoutMs)} 分钟的上限，`
-      + "按超时处理：过了时限的退出码不作数，不论那一刻 ash 在不在场。" };
+      + "按超时处理：过了时限的退出码不作数，不论那一刻 Navi 在不在场。" };
   if (exit.infra) return { status: "interrupted", exitCode: null, failure: "launcher_failed", note: exit.infra };
   if (exit.phase === "prepare" && exit.code !== 0 && exit.code !== null && !exit.signal) {
     return { status: "failed", exitCode: exit.code, failure: "prepare_failed" };
@@ -95,7 +95,7 @@ export function readGateExit(logPath: string, pid: number): GateExit | null {
 }
 
 /**
- * 退出档读不到（写盘失败、被删）时，在场的 ash 手里只有启动器的 `{code, signal}`。配了准备命令的那一档，
+ * 退出档读不到（写盘失败、被删）时，在场的 navi 手里只有启动器的 `{code, signal}`。配了准备命令的那一档，
  * 这个数说不清是准备命令的、前置命令的，还是启动器自己出错退的 —— 任何能补上阶段的旁证（标记文件、
  * 日志）都要写盘，而退出档写不进去恰恰说明写盘这条路不可靠（第 1、2 轮审查 #3/#2：先后按「没标记 =
  * 准备没过」「有标记 = 测试红」猜过，各被一种写盘故障打穿）。所以一律按「分不清」收：不判红、不交修。
@@ -108,14 +108,14 @@ export function unrecordedGateExit(exit: GateExit, prepared: boolean): GateExit 
     : exit;
 }
 
-/** 这条日志对应的启动器有没有留下退出档（pid 取自启动记录）。在场的 ash 收到退出回调时也先认它。 */
+/** 这条日志对应的启动器有没有留下退出档（pid 取自启动记录）。在场的 navi 收到退出回调时也先认它。 */
 export function recordedGateExit(logPath: string): GateExit | null {
   const pid = readGateLaunch(logPath)?.pid;
   return pid ? readGateExit(logPath, pid) : null;
 }
 
 /**
- * ash 重启后，一条库里还是 running 的门禁实际上怎么样了。只读，不发任何信号。
+ * navi 重启后，一条库里还是 running 的门禁实际上怎么样了。只读，不发任何信号。
  *
  * 「还在跑」的判据是**身份**（pid + 启动时间）而不是 pid 在不在：pid 被复用时那个号属于别人，
  * 当成我们的去接管，最后要么误杀、要么拿别人的退出去结算。身份读不出来也不算「还在跑」——
@@ -148,7 +148,7 @@ export function gateRecoveryFate(run: { pid: number | null; pidStartedAt: string
  * 不算消失：一次 ps 抖动就把一条还在跑的命令判成被打断、紧接着收掉它，比多等一秒糟得多。
  *
  * 顺带把监督的持续观察接回来（GateConfinement.resume）：macOS 兼容监督靠轮询记下后代，起跑时
- * 那份轮询随旧 ash 一起没了，不接回来的话接管期间新冒出来的后代就没人记，收尾时认不出它们。
+ * 那份轮询随旧 navi 一起没了，不接回来的话接管期间新冒出来的后代就没人记，收尾时认不出它们。
  * 接不回来要说出来（`onResumeFailed`），不能让「已接管」被读成监督也全部恢复了。
  */
 export function watchGateExit(opts: { logPath: string; pid: number; startedAt: string;

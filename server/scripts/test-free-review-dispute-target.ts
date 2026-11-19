@@ -13,7 +13,7 @@
 // ⑦ 两个表面（web 与飞书卡片）同时对同一条点不同的档：只有一档落库，输的那一路报 stale；
 // ⑧ 跨任务的待裁定清单（飞书启动对账用）与按任务查的是同一批，路由对过时目标回 stale。
 //
-// 修复要真走到投递那一步（它就是被测对象），所以起跑链会跑到执行器边界：ASH_RUNS_DIR 指向
+// 修复要真走到投递那一步（它就是被测对象），所以起跑链会跑到执行器边界：NAVI_RUNS_DIR 指向
 // 临时目录时 spawn 一律被拦（executors/spawn.ts `guardAgentSpawn`），PATH 上再垫一个只会
 // 报错退出的 codex 替身、CODEX_HOME 指到临时目录，确保碰不到真 CLI 与真配置。
 import assert from "node:assert/strict";
@@ -24,13 +24,11 @@ import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-free-review-dispute-target-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-free-review-dispute-target-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 process.env.CODEX_HOME = join(root, "codex-home");
-// 辩论开场会核两边够不够得着 ash MCP（ash-mcp-launch-gate.ts），给一份接好了的最小配置。
 mkdirSync(process.env.CODEX_HOME);
-writeFileSync(join(process.env.CODEX_HOME, "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');
 const bin = join(root, "bin");
 mkdirSync(bin);
 writeFileSync(join(bin, "codex"), "#!/bin/sh\necho 'codex fixture'\nexit 89\n", { mode: 0o755 });

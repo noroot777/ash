@@ -13,8 +13,8 @@
 //    （`restartTaskPreview` 没有 running 门禁），收预览那一路也已经为旁路回合让开
 //    （server 的 review-turn.ts）。
 import { useState } from "react";
-import type { Task } from "@ash/shared";
-import type { WorkflowStep } from "@ash/shared/workflow";
+import type { Task } from "@navi/shared";
+import type { WorkflowStep } from "@navi/shared/workflow";
 import { ArrowClockwise, SpinnerGap } from "@phosphor-icons/react";
 import { PreviewServiceLinks } from "../free-workflow/PreviewServiceLinks.tsx";
 import { api } from "../lib/api.ts";

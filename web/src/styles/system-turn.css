@@ -74,6 +74,28 @@
 .system-action-wrap .system-action-line b { color: var(--ink); }
 .system-action-wrap .system-action-line > p > span { color: var(--muted); }
 
+/* 回复框里派出去的那一句（DispatchNoteLine）：靠右、跟你的话同一侧，同一种小灰字；点它在左抽屉打开那条任务。 */
+.dispatch-note { display: flex; justify-content: flex-end; margin: -6px 0 14px; padding-left: 38px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
+.dispatch-note > button {
+  min-width: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: right;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out), text-decoration-color var(--dur-1) var(--ease-out);
+}
+.dispatch-note > button:hover { color: var(--ink); text-decoration-color: currentColor; }
+.dispatch-note > button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+@media (max-width: 760px) { .dispatch-note { padding-left: 10px; } }
+
 /* 回合的尾注（FootnoteLine）：回合之后发生的、要你知道的事，并成正文下面的一句小灰字——
    跟回合头起因、「执行过程」那一行同一档。没有图标、没有底色，左缘跟正文对齐。
    几件事中间一个间隔号；最近那一句的时刻（.turn-footnote-tail）指到才出，触屏上常显。
@@ -134,7 +156,7 @@ button.turn-footnote-part:focus-visible { outline: 2px solid var(--focus-ring); 
   white-space: pre-wrap;
   animation: notice-unfold var(--dur-2) var(--ease-out) backwards;
 }
-/* 一轮审查就地摊开（审查结论气泡、记录里那一条，没有右侧「审查」格可去时）。 */
+/* 一轮审查就地摊开（审查结论气泡、记录里那一条，没有右侧「审议」格可去时）。 */
 .turn-footnote-lane {
   margin: 6px 0 12px;
   border-left: 1px solid var(--line2);
@@ -285,7 +307,7 @@ button.turn-footnote-part:focus-visible { outline: 2px solid var(--focus-ring); 
   .task-message--user.is-system-authored .task-user-bubble { max-width: 100%; }
 }
 
-/* 「去裁定」：这一行上别的东西都是「发生了什么」，只有它是「现在等你做什么」，而且它出现的
+/* 「重试这一回合」这类挂在旁注上的键：这一行上别的东西都是「发生了什么」，只有它是「现在等你做什么」，而且它出现的
    前提就是任务停在那儿等人——所以是实心键（黑白：浅色主题黑底白字，深色反过来）。
    `white-space: nowrap` 兜底：不管哪个容器把它挤窄，它宁可顶出去也不断成一列字。 */
 .system-event-cta {

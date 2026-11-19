@@ -3,7 +3,7 @@
 // 领取那一步**不作废链接**:手滑点开就把它烧掉,用户得回头再找管理员要一条 —— 这是
 // 计划里明确要避免的。真正作废发生在用户点了「我已保存」之后。
 import { useCallback, useEffect, useState } from "react";
-import type { InviteInfo } from "@ash/shared";
+import type { InviteInfo } from "@navi/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
 import { AuthShell } from "./AuthShell.tsx";
@@ -61,7 +61,7 @@ export function ClaimPage({ token, onDone }: { token: string; onDone: () => void
   return (
     <AuthShell>
       <div className="auth-card auth-card--wide">
-        <h1>领取你的 ash 账号</h1>
+        <h1>领取你的 Navi 账号</h1>
         {error ? <p className="auth-error">{error}</p> : null}
         {info ? (
           <>

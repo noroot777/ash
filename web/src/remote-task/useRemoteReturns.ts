@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import type { HandoffTarget, Task, TaskListItem } from "@ash/shared";
-import { isCapabilityBlocked, normalizedPeerUrl } from "@ash/shared/handoff";
+import type { HandoffTarget, Task, TaskListItem } from "@navi/shared";
+import { isCapabilityBlocked, normalizedPeerUrl } from "@navi/shared/handoff";
 import { api, ApiError } from "../lib/api.ts";
 
 type ReturnOperation = {

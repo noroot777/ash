@@ -1,11 +1,11 @@
-// ash 在门禁跑着的时候死掉，新实例起来之后的四条分流（server/src/accept-gate-exit.ts 顶部）：
+// navi 在门禁跑着的时候死掉，新实例起来之后的四条分流（server/src/accept-gate-exit.ts 顶部）：
 //  (a) 命令还在跑 → 接管：看门的重挂、时限从开跑那一刻算，最后按真实 rc 结算；
 //  (b) 已经 rc=0 退出 → 结算 passed，并照常自动把验收做完；
 //  (c) 已经 rc≠0 退出 → 结算 failed，照常交回任务去修；
 //  (d) 没有退出档 → 维持老结局「被打断」，文案不变。
 // 外加身份核验：pid 被复用时绝不接管、绝不误杀、绝不拿别人的退出结算。
 //
-// 「ash 死掉」是真的：门禁由另一个进程（accept-gate-crash-worker.ts）发起，命令放行后它
+// 「navi 死掉」是真的：门禁由另一个进程（accept-gate-crash-worker.ts）发起，命令放行后它
 // SIGKILL 自己，内存里的退出回调、看门的、进程表全部跟着没了，本进程只剩库和盘上的文件。
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -77,7 +77,7 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     const row = await runOf(taskId);
     assert.equal(row.status, "running");
     assert.equal(readGateLaunch(row.logPath)?.phase, "armed", "旧实例死前命令已经放行");
-    assert.equal(hasLiveAcceptGate(taskId), false, "本进程从没见过这条运行：跟一个新起来的 ash 一样");
+    assert.equal(hasLiveAcceptGate(taskId), false, "本进程从没见过这条运行：跟一个新起来的 navi 一样");
     return row;
   }
 
@@ -117,19 +117,27 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
   {
     const s = await stage("timeout");
     const row = await crashMidRun(s.taskId);
-    const limit = 3_000;
-    await until(() => Date.now() - Date.parse(row.startedAt) > limit + 200, "跑过时限", limit + 5_000);
+    const limit = 5_000;
+    // 「跑过时限」照产品计时的那个起点等（启动器起来那一刻，比这一行的开跑时刻晚出建快照那一段），
+    // 否则接管时离时限还差着那一段，后面的判据平白吃掉这么多余量。
+    const launchedAt = Date.parse(readGateLaunch(row.logPath)?.launchedAt ?? row.startedAt);
+    await until(() => Date.now() - launchedAt > limit + 200, "跑过时限", limit + 10_000);
     overrideGateWatchTimings({ timeoutMs: limit, sampleMs: 20 });
     const resumedAt = Date.now();
+    let reactedAfter = Infinity;
     try {
       assert.equal((await recoverAcceptGates()).resumed, 1);
+      // 判据取「动手收命令」那一刻，不取整条结算做完：从接管重新计时的话，最早也要到 resumedAt + limit
+      // 才动手，早于它就只能是从开跑算的。结算后面那几步（落库、交回任务去修）在门禁并行跑满时
+      // 自己就能拖过两秒，跟计时起点无关。
+      await until(() => !alive(row.pid!), "超时收掉命令", limit + 15_000);
+      reactedAfter = Date.now() - resumedAt;
       await settled(s.taskId);
     } finally { overrideGateWatchTimings(null); }
-    assert.ok(Date.now() - resumedAt < limit - 1_000, "从接管那一刻重新计时的话，这里还得再等一整个时限");
+    assert.ok(reactedAfter < limit, `从接管那一刻重新计时的话，这里还得再等一整个时限（实际 ${reactedAfter}ms 后动手）`);
     const done = await runOf(s.taskId);
     assert.equal(done.status, "failed");
     assert.equal(done.failure, "timeout");
-    await until(() => !alive(row.pid!), "超时收掉命令");
     for (let i = 0; i < 200 && isTurnClaimed(s.taskId); i++) await sleep(25);
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, s.taskId));
     releaseTurn(s.taskId);
@@ -191,13 +199,13 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     const done = await runOf(s.taskId);
     assert.equal(done.status, "interrupted");
     assert.equal(done.failure, "server_restarted");
-    assert.ok(s.timeline().includes(`验收前置命令被打断：ash 重启时它还在跑（\`${s.command}\`），已按未完成收尾。`));
-    assert.match(read(row.logPath), /ash 重启后核对进程，执行状态为 interrupted/);
+    assert.ok(s.timeline().includes(`验收前置命令被打断：Navi 重启时它还在跑（\`${s.command}\`），已按未完成收尾。`));
+    assert.match(read(row.logPath), /Navi 重启后核对进程，执行状态为 interrupted/);
     await until(() => !alive(child), "残留进程收掉");
     assert.equal(main(s.repo), s.before);
   }
 
-  // 身份核验：pid 被复用、退出档对不上、ash 自己喊过停 —— 一律不接管、不结算。
+  // 身份核验：pid 被复用、退出档对不上、navi 自己喊过停 —— 一律不接管、不结算。
   const stranger = spawn("sleep", ["60"], { stdio: "ignore", detached: true });
   const strangerPid = stranger.pid!;
   try {
@@ -221,7 +229,7 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     assert.deepEqual(gateRecoveryFate(run), { kind: "exited", exit: { code: 0, signal: null, elapsedMs: 1_000 } },
       "这一次的启动器留下的完整退出档，不受之后 pid 被谁复用影响");
     writeFileSync(gateAbortPath(log), "abort");
-    assert.equal(gateRecoveryFate(run).kind, "lost", "ash 自己喊过停：退出档里的不是命令自己的结论");
+    assert.equal(gateRecoveryFate(run).kind, "lost", "navi 自己喊过停：退出档里的不是命令自己的结论");
     rmSync(gateAbortPath(log));
     writeGateLaunch(log, { ...readGateLaunch(log)!, phase: "stopped" });
     assert.equal(gateRecoveryFate(run).kind, "lost");

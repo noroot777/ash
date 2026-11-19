@@ -16,9 +16,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-verify-override-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-verify-override-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_DATA_DIR ??= join(root, "data");
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 
@@ -135,7 +137,7 @@ const repo2 = join(root, "repo2");
 execFileSync("git", ["init", "-q", "-b", "main", repo2]);
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-git(repo2, "config", "user.name", "Ash Override Test");
+git(repo2, "config", "user.name", "Navi Override Test");
 git(repo2, "config", "user.email", "override@example.test");
 writeFileSync(join(repo2, ".gitignore"), ".worktrees/\n");
 git(repo2, "add", "-A");
@@ -161,5 +163,5 @@ assert.equal(existsSync(ws.path), false, "「合并并清理」写的是 clean=a
 assert.equal((await row(mergeTask)).stage, "accepted", "合完就是验收完成");
 
 console.log("verify override ok");
-rmSync(root, { recursive: true, force: true });
+await removeTmpStage(root);
 process.exit(0);

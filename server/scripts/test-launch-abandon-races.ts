@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 
-const temporary = realpathSync(mkdtempSync(join(tmpdir(), "ash-abandon-races-")));
-process.env.ASH_DB = join(temporary, "test.db");
+const temporary = realpathSync(mkdtempSync(join(tmpdir(), "navi-abandon-races-")));
+process.env.NAVI_DB = join(temporary, "test.db");
 const { terminalSessions } = await import("../src/terminal.js");
 const { startCommand, stopCommand, restartCommand } = await import("../src/terminal-commands.js");
 const { mountLaunchAbandonRoutes } = await import("../src/terminal-abandon.js");

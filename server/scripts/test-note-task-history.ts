@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Note, NoteSearchHit, TaskSearchHit } from "@ash/shared";
+import type { Note, NoteSearchHit, TaskSearchHit } from "@navi/shared";
 import { createClient } from "../src/db/node-sqlite-client.js";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "ash-note-history-"));
+const root = mkdtempSync(join(tmpdir(), "navi-note-history-"));
 const dbFile = join(root, "ash.db");
-process.env.ASH_DB = dbFile;
+process.env.NAVI_DB = dbFile;
 
 // Start from the old single-link shape so this test also pins the startup migration.
 const legacy = createClient({ url: dbFile });

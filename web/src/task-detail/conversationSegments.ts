@@ -12,8 +12,8 @@
 // 则压根不切段。
 //
 // 从 conversationModel 拆出来的一族:那边管「会话 → 气泡」,这里管「事件 → 段落」。
-import type { AgentEvent } from "@ash/shared";
-import { stableBlockBoundary } from "@ash/shared/markdown-images";
+import type { AgentEvent } from "@navi/shared";
+import { stableBlockBoundary } from "@navi/shared/markdown-images";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 import { compactionEvent, isCompactionEvent } from "../lib/compaction.ts";
@@ -131,7 +131,7 @@ export function markSegmentsAwaiting(segments: AgentContentSegment[]): void {
   if (target) target.awaiting = true;
 }
 
-export type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
+export type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" | "plan" }>;
 type TracedContentEntry = SessionTraceEntry & {
   event: Exclude<SessionTraceEntry["event"], { kind: "usage" | "run" }>;
 };
@@ -155,6 +155,7 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
   const text = (value: unknown): string => typeof value === "string" ? value : "";
   if (event.kind === "tool") return { kind: "tool", label: text(event.name), detail: event.detail, ...(at ? { at } : {}), ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
   if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
+  if (event.kind === "plan") return { kind: "plan", label: "计划", plan: event };
   // level:"notice" = 这条不是故障,是过程里的一句提示(上游在重试、还在等回话)。整句话
   // 走 detail 而不是 label:label 在行内是不收缩的工具名那一格,一条几十字的提示塞进去
   // 会把整行撑爆;detail 那一格本来就是「这一步具体在干什么」,超长自己省略。
@@ -240,6 +241,15 @@ export function contentSegments(
   // 分段只认进得了执行过程展示的那些事件;「此刻还在不在等」压根不在这一层算(见文件里
   // markSegmentsAwaiting 与 AgentContentSegment.awaiting)。
   for (const [index, entry] of entries.entries()) {
+    if (entry.event.kind === "plan") {
+      const event = auxEvent(entry.event);
+      const planId = entry.event.id;
+      const previous = [...segments, current].find((segment) => segment.events.some((candidate) => candidate.plan?.id === planId));
+      if (previous) {
+        previous.events = appendExecutionEvent(previous.events, event);
+        continue;
+      }
+    }
     if (entry.event.kind === "text") {
       current.markdown += entry.event.text;
       continue;

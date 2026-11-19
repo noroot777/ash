@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { TaskListItem, TaskWorkspaceDiscardResult, TaskWorkspaceLeftover } from "@ash/shared";
+import type { TaskListItem, TaskWorkspaceDiscardResult, TaskWorkspaceLeftover } from "@navi/shared";
 import { GitBranch, TreeStructure, Warning } from "@phosphor-icons/react";
 import { api, type TaskWorkspaceProbe } from "../lib/api.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";

@@ -9,7 +9,7 @@ import {
   SESSION_LOST_NOTE,
   SESSION_POISONED_NOTE,
   normalizeSessionNoteText,
-} from "@ash/shared/session-notes";
+} from "@navi/shared/session-notes";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { isWorkspaceRecoveryNote, noteTone, verifyNoteOf } from "../src/task-detail/conversationNotes.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
@@ -22,7 +22,7 @@ import { laneVerdictView } from "../src/task-detail/turnFootnote.ts";
 assert.equal(noteTone("自由工作流第 2 轮审查通过（5.5审查）。"), "neutral");
 assert.equal(noteTone("验收阶段更新：验收完成（accepted）"), "neutral");
 assert.equal(noteTone("已预约完成后审查：5.5审查 · 逻辑检查 · 自动复审 1 轮。"), "neutral");
-assert.equal(noteTone("自由工作流合并&清理完成：已安全合并 ash/x → main"), "neutral");
+assert.equal(noteTone("自由工作流合并&清理完成：已安全合并 navi/x → main"), "neutral");
 assert.equal(noteTone("第 3 轮验证开始：就在这个任务的工作目录里跑。"), "neutral");
 assert.equal(noteTone("自由工作流第 1 轮审查未通过，意见已发回会话；修复完成后自动复审。"), "error");
 assert.equal(noteTone("完成后审查启动失败：审查者不可用"), "error");
@@ -54,7 +54,14 @@ assert.equal(legacy(held, "error").tier, "receipt");
 assert.equal(legacy(held, "notice").tier, "receipt");
 assert.equal(noticeView({ text: held, tone: "neutral", variant: "note", notice: { kind: "receipt" } }).tier, "receipt");
 assert.equal(legacy("分组被暂停,本回合被中止 —— 任务落为已暂停", "notice").tier, "receipt", "你自己停的不用再告诉你");
-assert.equal(legacy("本回合被 ash 主动终止:上游连不上", "notice").tier, "alert", "被 ash 判失败的结算说明要你知道");
+assert.equal(legacy("本回合被 ash 主动终止:上游连不上", "notice").tier, "alert", "被 navi 判失败的结算说明要你知道");
+// 改名 Navi 之后新写的那几句、和改名前落盘的老记录，起头两种都要认。
+for (const name of ["ash", "Navi"]) {
+  assert.equal(legacy(`本回合是上次 ${name} 中断时留下的,而本次启动读不出熔断判决日志`, "notice").tier, "alert", `${name} 中断留下的那一轮要你知道`);
+  assert.equal(legacy(`${name} 重启接管时读不出这个进程之前的输出,确认不了后台工作流/子代理`, "notice").tier, "alert", `${name} 接管读不出输出要你知道`);
+  assert.equal(legacy(`${name} 重启后继续核对验收前置命令 \`npm test\``).tier, "alert", `${name} 重启后核对门禁要你知道`);
+}
+assert.equal(legacy("本回合被 Navi 主动终止:上游连不上", "notice").tier, "alert", "改名后的结算说明照样认");
 assert.equal(legacy("预览没起来（`npm run dev`）\n端口被占用").tier, "alert", "照 alertLine 调用点的起头认");
 assert.equal(legacy("预约审查仍在等待：回合还没结束。", "error").tier, "receipt", "表里没有的起头一律是回执");
 assert.equal(legacy("〔系统〕已预约完成后审查：5.5审查。").tier, "receipt", "老记录的〔系统〕前缀是回执");
@@ -88,6 +95,7 @@ for (const text of [
   // 成败在引文紧后面的那两种：命令里引了「通过」也不改变真的那个。
   "验收前置命令 `printf '` 通过（rc=0）'` 未通过：命令退出码非 0（rc=1）。",
   "验收前置命令 `sleep 999` 被打断：ash 重启,这次没跑完。 命令跑了 30 分钟才退出",
+  "验收前置命令 `sleep 999` 被打断：Navi 重启,这次没跑完。 命令跑了 30 分钟才退出",
   "跑了一条命令：`npm test`（没通过）\n输出里有一行：`（没通过）",
   "这条线卡在「自定义」这一站，停下等你处理。",
   "「自定义」已经打回重做 3 次仍没过，按线上写的上限停下等你处理。",
@@ -142,10 +150,10 @@ assert.deepEqual(
 assert.equal(typed({ kind: "accept.done", target: "feat/ui-revamp" }).mono, "feat/ui-revamp", "分支名换成等宽字");
 assert.equal(typed({ kind: "alert" }, "预览没起来：端口被占用。").tier, "alert");
 // 你那条斜杠命令的回答是你要看的东西：不收进回合记录。
-const scopes = typed({ kind: "command.output", command: "/goal --scopes" }, "/goal --scopes\n已保存的目标作用域（ash 快照，不启动模型）：\n- codex：让 test/auth 全过");
+const scopes = typed({ kind: "command.output", command: "/goal --scopes" }, "/goal --scopes\n已保存的目标作用域（navi 快照，不启动模型）：\n- codex：让 test/auth 全过");
 assert.deepEqual(
   [scopes.tier, scopes.text, scopes.meta],
-  ["reply", "已保存的目标作用域（ash 快照，不启动模型）：\n- codex：让 test/auth 全过", "/goal --scopes"],
+  ["reply", "已保存的目标作用域（navi 快照，不启动模型）：\n- codex：让 test/auth 全过", "/goal --scopes"],
   "命令的回答整段常显，命令本身写在指到才出的那半句里",
 );
 assert.equal(typed({ kind: "command.output", command: "/goal clear" }, "已清除。\n命令：/goal clear").text, "已清除。");
@@ -197,7 +205,7 @@ const lane = (id, round, conclusion, extra = {}) => ({
   items: [{ kind: "event", id: `${id}:end`, text: `自由工作流第 ${round} 轮审查${conclusion === "verified" ? "通过" : "未通过"}`, at: `2026-11-13T0${round}:00:00.000Z`, variant: "note", tone: "neutral", notice: { kind: "review.verdict", source: "free", round, verdict: conclusion === "verified" ? "passed" : "failed" } }],
   reviewerLabel: "5.5审查", reviewerModel: null, reviewerEffort: null, note: null,
   startedAt: null, endedAt: `2026-11-13T0${round}:00:00.000Z`, conclusion, complete: true,
-  reportAvailable: false, report: null, runId: null, defaultCollapsed: true, findings: null, ...extra,
+  reportAvailable: false, report: null, runId: null, findings: null, ...extra,
 });
 const figure3 = conversationSystemRows([
   user("u0"),
@@ -302,7 +310,7 @@ assert.equal(oneLog.rows[0].id, growingLog.rows[0].id, "同一组追加回执时
 // —— 会话轮换旁注：中性事实，不是本回合失败 ——
 // 这几句会出现在一个 exit 0 的成功回合、甚至用户自己点的「停止全组」上。判据不是「文案
 // 里恰好没踩到关键词」（`SESSION_POISONED_NOTE` 讲的就是 Codex 报了问题），而是
-// @ash/shared/session-notes 那份服务端也在用的同一源文本。
+// @navi/shared/session-notes 那份服务端也在用的同一源文本。
 for (const note of NEUTRAL_SESSION_NOTES) {
   assert.equal(noteTone(note), "neutral", `会话轮换旁注被判成执行异常：${note.slice(0, 24)}…`);
   // 旁注是纯文本一行小字（ConversationFeed 的 <p>{item.text}</p>），Markdown 不会被解析：
@@ -316,7 +324,7 @@ assert.equal(
   "用户主动停止后的会话更正不该显示成执行异常",
 );
 assert.equal(
-  noteTone("更正上面那条：CLI 会话接不回了。ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，下一次重新开台时可能再次尝试旧会话。"),
+  noteTone("更正上面那条：CLI 会话接不回了。navi 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，下一次重新开台时可能再次尝试旧会话。"),
   "error",
   "拼在中性文案后面的真失败被一起洗白了",
 );
@@ -348,6 +356,13 @@ assert.equal(
   "旧文案要就地换成当前文案，前后文原样保留",
 );
 assert.equal(normalizeSessionNoteText("跟轮换无关的一句话"), "跟轮换无关的一句话", "认不出来的文本必须原样返回");
+// 改名 Navi 之前落盘的那一版：措辞跟现在一样，只是产品名还叫 navi。
+for (const current of [SESSION_POISONED_NOTE, SESSION_LOST_NOTE]) {
+  const preRename = current.split("Navi 已").join("ash 已");
+  assert.notEqual(preRename, current, "夹具得真的是改名前的写法");
+  assert.equal(normalizeSessionNoteText(preRename), current, "改名前落盘的轮换旁注要归一成现在的文案");
+  assert.equal(noteTone(`更正上面那条：CLI 会话接不回了。${preRename}`), "neutral", "改名前落盘的轮换旁注不该变红");
+}
 
 const session = {
   id: "s1",
@@ -508,17 +523,12 @@ assert.deepEqual(
 const rotationSession = { ...session, agentType: "codex", endedAt: null, turnStartedAt: session.startedAt };
 const diagnosis = "Codex 会话诊断：session=poisoned_session";
 const rotationNote = SESSION_POISONED_NOTE;
-// 轮换说明自己带着「异常」二字(它在转述 Codex 报的 rollout 异常),不专门认出来就会被
-// FAILED_HINTS 染红 —— 只断言 variant 会漏掉这一整层(自由工作流第 2 轮审查)。
-assert.equal(noteTone(SESSION_POISONED_NOTE), "neutral", "poisoned 轮换说明不许被关键词染红");
-assert.equal(noteTone(SESSION_LOST_NOTE), "neutral", "会话失效轮换说明不许被关键词染红");
-assert.equal(noteTone(`更正上面那条:CLI 会话接不回了。${SESSION_POISONED_NOTE}`), "neutral", "收尾更正说的是同一件事");
 // 这条不是轮换而是真出了问题:恢复字段没写进库,下一次可能再撞旧会话。该红就红。
 assert.equal(noteTone(SESSION_DROP_PERSISTENCE_FAILED_NOTE), "error", "清理写库失败仍必须报红");
 // 旁注三处渲染点(ConversationFeed、team/TeamFeed、duet 的 duet-turn-notice)都是纯文本,
 // 措辞里带 `**` 用户就会看到字面量的星号(自由工作流第 1 轮审查)。哪天真上了受控的
 // inline Markdown 渲染,记得三处一起上,再来改这条断言。
-for (const [name, text] of Object.entries({ SESSION_LOST_NOTE, SESSION_POISONED_NOTE, SESSION_DROP_PERSISTENCE_FAILED_NOTE })) {
+for (const [name, text] of Object.entries({ SESSION_DROP_PERSISTENCE_FAILED_NOTE })) {
   assert.doesNotMatch(text, /\*\*|`|^#|\[.+\]\(/m, `${name} 是纯文本旁注，不能带 Markdown 标记`);
 }
 const rotationLive = buildConversationItems(

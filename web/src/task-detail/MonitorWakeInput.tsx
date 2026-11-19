@@ -30,7 +30,7 @@ export function MonitorWakeInput({ item, input, surface }: {
             <span className="monitor-wake-mark" aria-hidden="true"><ArrowSquareIn size={14} /></span>
             <span className="monitor-wake-head-main">
               <span className="monitor-wake-meta">
-                <b>ash</b>
+                <b>Navi</b>
                 <span className="monitor-wake-label">自动输入</span>
                 {item.at && <time>{formatInstant(item.at)}</time>}
                 {/* 复制按钮落在 <summary> 里：那里的点击默认连带开合这张卡，所以这一格把默认

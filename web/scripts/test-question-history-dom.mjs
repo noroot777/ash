@@ -242,41 +242,71 @@ try {
   assert.doesNotMatch(await tombstoned.page.locator("main").textContent(), /gone的答案/, "迟到的旧读取不能复活删掉的答复");
   await tombstoned.page.close();
 
+  // 提问那一轮的结算说明（题目全文在里面）画不画，跟答过的气泡读的是同一份问答历史：调用方给的快照是旧的
+  // （还没有这条记录），补读读到了，题目就只剩气泡那一处；推来一条删除，气泡没了，结算说明照画回来。
+  // 任务页、团队页一样。去重要是另读 props 快照，补读一到同一道题就画两遍。
+  for (const mode of ["", "mode=team&"]) {
+    const where = mode ? "团队页" : "任务页";
+    const deduped = await open(`${mode}history=empty&settle=task-a`, { respond: async () => ({ json: [record("task-a")] }) });
+    await count(deduped.page, 1);
+    const mentions = async () => {
+      // 任务页的结算说明收在「N 条记录」里：摊开再数。
+      for (const toggle of await deduped.page.locator(".turn-receipts-toggle[aria-expanded=false]").all()) await toggle.click();
+      return deduped.page.evaluate(() => document.querySelector("main").textContent.split("task-a的问题").length - 1);
+    };
+    assert.equal(await mentions(), 1, `${where}：补读到的答复和结算说明不能把同一道题画两遍`);
+    const tombstone = { ...record("task-a"), answer: "", reply: "", deleted: true };
+    await sse(deduped.page, "message", { type: "task.updated", task: { id: "history-a", questionHistory: [tombstone] } });
+    await count(deduped.page, 0);
+    await waitUntil(async () => await mentions() === 1, `${where}：答复删掉以后结算说明照画`);
+    await deduped.page.close();
+  }
+
+  // 删除不可逆，不管删除是从哪一路来的：这里它经调用方的快照到达（墓碑），下一份快照是不带问答历史的
+  // 列表投影，删除之前发出的那发旧读取这时才落地——删掉的答复不能回来。任务页、团队页一样。
+  for (const mode of ["", "mode=team&"]) {
+    const where = mode ? "团队页" : "任务页";
+    let releaseStale;
+    const stale = new Promise((resolve) => { releaseStale = resolve; });
+    pending.push(() => releaseStale({ json: [] }));
+    const removed = await open(`${mode}history=seed`, { respond: async () => stale });
+    await waitForCalls(removed, 1);
+    await count(removed.page, 1);
+    await removed.page.getByRole("button", { name: "快照里删掉" }).click();
+    await count(removed.page, 0);
+    await removed.page.getByRole("button", { name: "去掉快照" }).click();
+    releaseStale({ json: [record("seed")] });
+    await fetchesSettled(removed.page, 0, `${where}：删除之前那发旧读取已落地`);
+    assert.equal(await removed.page.locator(".task-question-record").count(), 0, `${where}：快照里删掉的答复不能被迟到的旧读取复活`);
+    await removed.page.close();
+  }
+
+  // 首次补读按任务算：A 连上过、读到过，事件流随后断了（普通请求还通），这时切到 B、再切回 A——
+  // 每一次都得自己补读一次，不能因为「之前连上过」就不读。任务页、团队页一样。
+  for (const mode of ["", "mode=team&"]) {
+    const where = mode ? "团队页" : "任务页";
+    const offline = await open(mode, { respond: async (path) => ({ json: [record(path.includes("history-b/") ? "task-b" : "task-a")] }) });
+    await waitForCalls(offline, 1);
+    await count(offline.page, 1);
+    await sse(offline.page, "error");
+    await offline.page.getByRole("button", { name: "切换任务" }).click();
+    await waitForCalls(offline, 2);
+    await waitUntil(async () => /task-b的问题/.test(await offline.page.locator("main").textContent()), `${where}：断线时切到 B，B 自己补读到`);
+    await offline.page.getByRole("button", { name: "切回任务" }).click();
+    await waitForCalls(offline, 3);
+    await waitUntil(async () => /task-a的问题/.test(await offline.page.locator("main").textContent()), `${where}：断线时切回 A，A 这一次照样补读`);
+    assert.equal(await offline.page.locator(".task-question-record").count(), 1);
+    await offline.page.close();
+  }
+
   const snapshot = await open("mode=snapshot&history=seed");
   await count(snapshot.page, 1);
   assert.equal(await snapshot.page.evaluate(() => window.__sources.length), 0, "远端快照不订阅本地事件");
   assert.equal(snapshot.calls.length, 0);
   await snapshot.page.close();
 
-  const form = await browser.newPage();
-  await form.goto(`${origin}/scripts/fixtures/question-card.html`);
-  await form.evaluate(() => localStorage.clear());
-  await form.reload();
-  await form.getByRole("button", { name: "留在会话里，点击展开", exact: true }).click();
-  assert.match(await form.locator(".task-question-card footer").innerText(), /已答 1\/2 · 留空的题会标记为未答/);
-  assert.doesNotMatch(await form.locator("main").innerText(), /可稍后补充/);
-  // 提问卡停在滚动容器**外面**的坞里：会话照常滚，问题不会被滚走、也压不到浮动按钮上。
-  assert.equal(await form.locator(".task-conversation .task-question-card").count(), 0);
-  assert.equal(await form.locator(".task-question-dock > .task-question-card").count(), 1);
-  // 一次只出一题；翻到第 2 题后第 1 题连同它的选项都不在 DOM 里。
-  assert.equal(await form.locator(".task-question-step").innerText().then((t) => t.includes("同时提供历史入口")), true);
-  await form.getByRole("button", { name: /下一题/ }).click();
-  assert.match(await form.locator(".task-question-step").innerText(), /发给智能体的回复保留哪些内容/);
-  assert.doesNotMatch(await form.locator(".task-question-step").innerText(), /同时提供历史入口/);
-  // 翻页后焦点落在选项上，数字键立刻可用。
-  await form.keyboard.press("2");
-  assert.equal(await form.locator(".task-question-step textarea").inputValue(), "加一句简短说明");
-  assert.match(await form.locator(".task-question-card footer").innerText(), /已答 2\/2/);
-  // 题号既是进度也是跳转：点回第 1 题，之前的答案还在。
-  await form.getByRole("button", { name: "第 1 题（已答）" }).click();
-  assert.equal(await form.locator(".task-question-step textarea").inputValue(), "留在会话里，点击展开");
-  // 收起后只剩一条标题栏，仍然看得出还欠几题。
-  await form.getByRole("button", { name: "收起答复卡，先看上文" }).click();
-  assert.equal(await form.locator(".task-question-step").count(), 0);
-  assert.match(await form.locator(".task-question-heading").innerText(), /2\/2 · 待答复/);
-  await form.close();
   assert.deepEqual(failures, []);
-  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, snapshot, docked one-at-a-time form and truthful copy passed");
+  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, settle-note dedupe on the merged history, snapshot tombstones kept, per-task first catch-up while disconnected, snapshot passed (the answer card itself: test-question-card-dom)");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

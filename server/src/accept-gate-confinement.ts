@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { openConfinement, reopenConfinement, type Confinement, type ConfineRead } from "./executors/kernel-confine.js";
 import { IS_MAC, IS_WINDOWS } from "./platform.js";
 import { gateJobConfinement } from "./accept-gate-confinement-job.js";
+import { LEGACY_WINDOWS_GATE_JOB_PREFIX } from "@navi/shared/legacy-names";
 import { isMacGateScope, macGateBootstrap, macGateConfinement, MAC_GATE_NOTICE } from "./accept-gate-confinement-macos.js";
 
 export type GateConfinement = Omit<Confinement, "enroll" | "read"> & {
@@ -22,7 +23,7 @@ export const gateExecutionNotice = (): string | null => IS_MAC ? MAC_GATE_NOTICE
 export const gateSupervisorBootstrap = async (logPath: string) => IS_MAC ? macGateBootstrap(logPath) : {};
 /**
  * 这台机器上能不能跨重启接管一条还在跑的门禁（accept-gate-exit.ts）。不能就**显式降级**为
- * 重启前的老结局「被打断」，不是漏了：Windows 上 Job 监督器跨 ash 重启重开、以及启动器退出档
+ * 重启前的老结局「被打断」，不是漏了：Windows 上 Job 监督器跨 navi 重启重开、以及启动器退出档
  * 在那边的落盘语义都还没在真机上验过，而接管的终点可能是一次不可逆的自动合并。
  */
 export const gateTakeoverUnavailable = (): string | null =>
@@ -30,18 +31,26 @@ export const gateTakeoverUnavailable = (): string | null =>
 export const gateScopeNotice = (id: string | null | undefined): string | null =>
   id === "macos-observed" || isMacGateScope(id) ? MAC_GATE_NOTICE : null;
 
+/**
+ * Windows 上门禁 Job 对象的名字前缀。整串名字落在门禁的启动记录里，接回时按前缀认出「这是 Job、
+ * 不是 cgroup」—— 升级前起的门禁记的是旧前缀，两代都认。
+ */
+const WINDOWS_GATE_JOB_PREFIX = "Local\\navi-accept-gate-";
+export const isWindowsGateJob = (id: string): boolean =>
+  [WINDOWS_GATE_JOB_PREFIX, LEGACY_WINDOWS_GATE_JOB_PREFIX].some((prefix) => id.startsWith(prefix));
+
 export function createGateConfinement(logPath: string, pid: number, startedAt: string): GateConfinement | null {
   assertGateConfinementAvailable();
   if (IS_MAC) return macGateConfinement(logPath, pid, startedAt);
-  const token = `accept-gate-${randomUUID()}`;
+  const id = randomUUID();
   return IS_WINDOWS
-    ? gateJobConfinement(logPath, `Local\\ash-${token}`, pid, true, startedAt)
-    : openConfinement(token);
+    ? gateJobConfinement(logPath, `${WINDOWS_GATE_JOB_PREFIX}${id}`, pid, true, startedAt)
+    : openConfinement(`accept-gate-${id}`);
 }
 
 export function reopenGateConfinement(logPath: string, id: string, pid: number, startedAt: string | null): GateConfinement | null {
   if (IS_MAC) return isMacGateScope(id) ? macGateConfinement(logPath, pid, startedAt, id) : null;
-  return IS_WINDOWS && id.startsWith("Local\\ash-accept-gate-")
+  return IS_WINDOWS && isWindowsGateJob(id)
     ? gateJobConfinement(logPath, id, pid, false, startedAt)
     : reopenConfinement(id);
 }

@@ -2,7 +2,7 @@ import { withTestResources } from "./test-process-resources.mjs";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { windowsRestartPlan, windowsRestartTargets, windowsTerminateScript } from "./windows-restart.mjs";
+import { RESTART_SKIPPED_MARK, windowsRestartPlan, windowsRestartTargets, windowsTerminateScript } from "./windows-restart.mjs";
 import { IS_WINDOWS, isPidAlive, killServerProcess, listProcesses } from "./platform.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { delay, spawnTestFixture } from "./test-process-scope.mjs";
@@ -75,7 +75,7 @@ if (IS_WINDOWS) {
       ], { tolerant: true });
       const output = await runTestProcess("powershell.exe",
         ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(batch, "utf16le").toString("base64")], { encoding: "utf8" });
-      assert.match(output.stdout, new RegExp(`ASH_RESTART_SKIPPED ${spared.pid}\\b`), "对不上的只报号码");
+      assert.match(output.stdout, new RegExp(`${RESTART_SKIPPED_MARK} ${spared.pid}\\b`), "对不上的只报号码");
       assert.doesNotThrow(() => process.kill(spared.pid, 0), "区间对不上不能下刀");
       for (let attempt = 0; attempt < 100 && isPidAlive(doomed.pid); attempt++) await delay(20);
       assert.ok(!isPidAlive(doomed.pid), "区间对得上的照杀,不被另一条拦下");

@@ -1,3 +1,4 @@
+import { readEnv } from "@navi/shared/env-names";
 import type { Context, Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
@@ -6,7 +7,7 @@ import { relayApi } from "./llm.js";
 import { bearerToken, errorResponse, responseHeaders, secretsEqual } from "./openai-converter/common.js";
 import { currentListeningPort } from "./listening-port.js";
 import { relayErrorResponse, relayFetch } from "./llm-relay.js";
-import { CONTEXT_1M_SUFFIX, modelUsesContext1m, stripContext1mSuffix } from "@ash/shared/context-1m";
+import { CONTEXT_1M_SUFFIX, modelUsesContext1m, stripContext1mSuffix } from "@navi/shared/context-1m";
 
 // 判定本体在 shared(设置页与会话面板要用同一份),这里原样转出,老调用点不用改。
 export { modelUsesContext1m, stripContext1mSuffix };
@@ -20,8 +21,8 @@ export function withContext1mSuffix(model: string | undefined, configured: reado
 }
 
 export function anthropicContext1mBaseUrl(providerId: string): string {
-  const configured = process.env.ASH_ANTHROPIC_1M_RELAY_URL?.trim()
-    || process.env.ASH_PROTOCOL_CONVERTER_URL?.trim();
+  const configured = readEnv(process.env, "NAVI_ANTHROPIC_1M_RELAY_URL")?.trim()
+    || readEnv(process.env, "NAVI_PROTOCOL_CONVERTER_URL")?.trim();
   const origin = (configured || `http://127.0.0.1:${currentListeningPort() ?? 4317}`).replace(/\/+$/, "");
   return `${origin}/api/llm-providers/${encodeURIComponent(providerId)}/context-1m`;
 }

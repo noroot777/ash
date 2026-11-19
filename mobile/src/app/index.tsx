@@ -2,8 +2,8 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { View, Text, Pressable, SectionList, RefreshControl } from "react-native";
 import { Redirect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { TaskListItem, Group } from "@ash/shared";
-import { workersOf } from "@ash/shared/team";
+import type { TaskListItem, Group } from "@navi/shared";
+import { workersOf } from "@navi/shared/team";
 import { getBaseURL } from "@/lib/config";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
@@ -108,7 +108,7 @@ function TaskList() {
 
   const sections = useMemo<(SectionMeta & { data: TaskListItem[] })[]>(() => {
     const mine = tasks.filter((t) => t.projectId === projectId);
-    // 星标/置顶/等你验收的行永不因旧被藏。判据跟 web 的 keepVisible 同源。
+    // 置顶/等你验收的行永不因旧被藏。判据跟 web 的 keepVisible 同源。
     const keepVisible = keepVisibleFor(tasks);
     const now = Date.now();
     // 每一节都过同一道年龄闸：手动展开过就整节放出来，`hidden` 始终是被闸住的那几条,

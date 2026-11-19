@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { appendMonitorWake } from "@ash/shared/monitor-wake";
+import { appendMonitorWake } from "@navi/shared/monitor-wake";
 import { db, makeTask, monitors, now, pending, root, runs, scheduledMessages, sessions, tasks } from "./monitors-fixture.js";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
 import { mountTaskRunRoutes } from "../src/task-run-routes.js";
@@ -14,16 +14,17 @@ import { id } from "../src/util.js";
 
 export type Row = typeof scheduledMessages.$inferSelect;
 export const log = join(root, "turn-handoff-input.log");
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${process.env.PATH ?? ""}`;
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_TEST_LEAD_LOG = log;
+const fakeBin = installFakeClaude(root);
+process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ""}`;
+process.env.NAVI_TEST_AGENT_BIN = fakeBin;
+process.env.NAVI_TEST_LEAD_LOG = log;
 
 export const api = new Hono();
 mountTaskRunRoutes(api);
-/** 默认按 ash 的 MCP 那样声明「我会确认」(`monitorAck`);要演不声明的调用方就显式传 false。 */
+/** 默认按 navi 的 MCP 那样声明「我会确认」(`monitorAck`);要演不声明的调用方就显式传 false。 */
 export const post = (path: string, token: string, body: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
   api.request(path, {
-    method: "POST", headers: { "content-type": "application/json", "x-ash-turn-token": token, ...headers },
+    method: "POST", headers: { "content-type": "application/json", "x-navi-turn-token": token, ...headers },
     body: JSON.stringify({ monitorAck: true, ...body }),
   });
 /**

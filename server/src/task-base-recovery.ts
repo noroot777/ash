@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
+import type { BaseUpdateRecovery } from "@navi/shared/branch-plan";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";

@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-effort-isolation-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-effort-isolation-"));
 // 不读开发机真实的 `~/.cache/opencode/models.json`:那份文件装没装、是哪天的快照都
 // 不在测试掌控内。XDG_CACHE_HOME 是 opencode-model-efforts.ts 认的那个入口。
 const cacheHome = join(stage, "cache");
@@ -43,9 +43,12 @@ writeFileSync(
   }),
 );
 process.env.XDG_CACHE_HOME = cacheHome;
-process.env.ASH_DB ||= join(stage, "effort-isolation.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DB ||= join(stage, "effort-isolation.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-model-effort-isolation");
+// 目录那一面要真走一遍探测(档位来自上面那份 models.json),但问的不该是本机真装着的 opencode。
+const { shadowHostClis } = await import("./host-cli-stubs.js");
+await shadowHostClis();
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents, projects, tasks } = await import("../src/db/schema.js");
@@ -140,7 +143,7 @@ const isolatedFromSolo = await surfaces();
 assertAgree("自用 → 多人隔离", isolatedFromSolo, false);
 assert.match(
   isolatedFromSolo.reason,
-  /依据：ash 内置规则/,
+  /依据：Navi 内置规则/,
   `隔离档下的拒绝必须说清依据来自内置规则，got: ${isolatedFromSolo.reason}`,
 );
 // 缓存里那份宿主机探测结果**还在**(TTL 6 小时没到) —— 这正是复现 A 的前置条件。

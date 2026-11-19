@@ -6,8 +6,8 @@ import {
   MONITOR_MIN_TIMEOUT_MS,
   MONITOR_WAKE_TARGETS,
   normalizeMonitorTimeout,
-} from "@ash/shared/monitor";
-import { silentWaitNotice } from "@ash/shared/monitor-silence";
+} from "@navi/shared/monitor";
+import { silentWaitNotice } from "@navi/shared/monitor-silence";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -21,6 +21,7 @@ import {
   monitorHookInternalError,
   type ClaudeMonitorHookInput,
 } from "./claude-monitor-hook.js";
+import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 /**
  * **这次创建请求是谁发起的** —— 核验在这里做,判归属在 `monitorSourceGate`(见那边的文件头)。
@@ -39,13 +40,13 @@ import {
 async function callerOf(c: Context, taskId: string, wake?: string | null): Promise<MonitorCaller> {
   const actor = actorOf(c);
   const agent = actor.kind === "agent" ? actor : await agentActor(c);
-  const token = c.req.header("x-ash-turn-token")?.trim() ?? "";
+  const token = requestHeader(c, NAVI_HEADERS.turnToken)?.trim() ?? "";
   // 核验通过时**带上被核验的那一轮**(令牌 + 此刻的角色 + 此刻的审查代次),而不是只说一句
   // 「核验过了」:创建要在 `task:<id>` 队列里排队,落库处会拿这几样再核对一遍(见
   // monitor-session.ts 的 `VerifiedTurn`)。`agentActor` 比对的正是这个 header 里的令牌,
   // 所以两处说的是同一轮。
   if (agent?.taskId === taskId && token) return turnCaller(verifiedTurn(taskId, token));
-  const claimed = !!(c.req.header("x-ash-source-task-id")?.trim() || token);
+  const claimed = !!(requestHeader(c, NAVI_HEADERS.sourceTaskId)?.trim() || token);
   if (!agent && claimed) return { kind: "unverified" };
   return { kind: "external", wake };
 }
@@ -140,7 +141,7 @@ export function mountMonitorRoutes(api: Hono): void {
    * non-blocking error，而那意味着**放行** —— 放过去的监听照样活不过这一轮，到点没人
    * 叫醒，正是这个 hook 要堵的那一幕。所以出了什么事都用 reason 说出来，别用状态码。
    *
-   * 身份走 agent 那条既有的通道（`x-ash-source-task-id` + `x-ash-turn-token`，见
+   * 身份走 agent 那条既有的通道（`x-navi-source-task-id` + `x-navi-turn-token`，见
    * auth/middleware.ts）。认不出来时 actor 不是 agent，taskId 传 null：仍然拦，但只能
    * 让它自己去挂。
    */
@@ -160,14 +161,14 @@ export function mountMonitorRoutes(api: Hono): void {
       // 会让整个端点抛出去 → 非 2xx → 被 CLI 当成 non-blocking error → 放行（同上）。
       const actor = actorOf(c);
       const agent = actor.kind === "agent" ? actor : await agentActor(c);
-      const hookToken = c.req.header("x-ash-turn-token")?.trim() ?? "";
+      const hookToken = requestHeader(c, NAVI_HEADERS.turnToken)?.trim() ?? "";
       const turn = agent?.taskId && hookToken ? verifiedTurn(agent.taskId, hookToken) : null;
       const decision = await claudeMonitorHookDecision(input, turn, ownerIdOf(agent ?? actor));
       // 上面那一问已经确认是 Monitor 了，所以这里一定有决定；真拿到 null 也当内部异常
       // 处理，绝不空手放行。
       return c.json(decision ?? monitorHookInternalError("没能得出处置结论"));
     } catch (error: unknown) {
-      console.error("[ash] Monitor 改道 hook 出错", error);
+      console.error("[navi] Monitor 改道 hook 出错", error);
       return c.json(monitorHookInternalError(error instanceof Error ? error.message : String(error)));
     }
   });

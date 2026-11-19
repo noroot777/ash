@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { useRouter } from "expo-router";
-import type { PairTicket } from "@ash/shared/multiuser";
+import type { PairTicket } from "@navi/shared/multiuser";
 import { getApiKey, getBaseURL, setApiKey, setBaseURL } from "@/lib/config";
 import { api } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
@@ -12,7 +12,7 @@ type Status = { kind: "idle" | "testing" | "ok" | "fail"; msg?: string };
 
 /** 配对时报给电脑那边的名字:机主靠它认出「就是我手上这台」。网页导出版不报,让服务端按浏览器认。 */
 const DEVICE_NAME =
-  Platform.OS === "ios" ? "iPhone · ash app" : Platform.OS === "android" ? "Android · ash app" : undefined;
+  Platform.OS === "ios" ? "iPhone · Navi app" : Platform.OS === "android" ? "Android · Navi app" : undefined;
 
 export default function Settings() {
   const router = useRouter();
@@ -20,7 +20,7 @@ export default function Settings() {
   const [url, setUrl] = useState(getBaseURL() ?? "");
   const [key, setKey] = useState(getApiKey() ?? "");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  // 这台后端怎么认人?多人模式要个人 key;自用模式从手机连过去要先配对(只有和 ash 同机
+  // 这台后端怎么认人?多人模式要个人 key;自用模式从手机连过去要先配对(只有和 navi 同机
   // 的模拟器才不用):点保存就递一张申请,在电脑上点「允许」即可,什么都不用填。那把给
   // 脚本用的访问密钥也能填,但要自己点开。地址一变就重探一次。
   const [multi, setMulti] = useState<boolean | null>(null);
@@ -91,7 +91,7 @@ export default function Settings() {
       if (state.mode === "multi" && !state.user) {
         setStatus({
           kind: "fail",
-          msg: key.trim() ? "这把 key 不对（可能已被重置或停用），找管理员重发" : "这台 ash 是多人模式，需要填你的 key",
+          msg: key.trim() ? "这把 key 不对（可能已被重置或停用），找管理员重发" : "这台 Navi 是多人模式，需要填你的 key",
         });
         return;
       }
@@ -121,7 +121,7 @@ export default function Settings() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <ScrollView style={{ flex: 1, backgroundColor: theme.bg }} contentContainerStyle={{ padding: 16, gap: 14 }}>
         <Text style={{ color: theme.muted, fontSize: 13, lineHeight: 19 }}>
-          填写 ash 后端地址（经 Tailscale 访问 Mac）。例如 http://100.x.x.x:4317 或
+          填写 Navi 后端地址（经 Tailscale 访问 Mac）。例如 http://100.x.x.x:4317 或
           http://你的主机名:4317。
         </Text>
 
@@ -145,15 +145,15 @@ export default function Settings() {
             <Input
               value={key}
               onChangeText={setKey}
-              placeholder="ash_…"
+              placeholder="navi_…"
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry
             />
             <Text style={{ color: theme.faint, fontSize: 11, lineHeight: 16 }}>
               {multi === false
-                ? "在跑着 ash 的那台电脑上打开它 → 设置 → 默认规则 → 远程访问。"
-                : "在电脑上打开 ash → 设置 → 我的 key 里拿。"}
+                ? "在跑着 Navi 的那台电脑上打开它 → 设置 → 默认规则 → 远程访问。"
+                : "在电脑上打开 Navi → 设置 → 我的 key 里拿。"}
               它只存在这台手机上，每次请求带一次。
             </Text>
           </View>
@@ -162,7 +162,7 @@ export default function Settings() {
         {pairing ? (
           <View style={{ gap: 10, alignItems: "center", paddingVertical: 8 }}>
             <Text style={{ color: theme.muted, fontSize: 13, lineHeight: 19, textAlign: "center" }}>
-              在跑着 ash 的那台电脑上点「允许」，这里会自己连上。
+              在跑着 Navi 的那台电脑上点「允许」，这里会自己连上。
             </Text>
             <Text
               accessibilityLabel={`配对码 ${pairing.ticket.code}`}
@@ -188,7 +188,7 @@ export default function Settings() {
 
         <Text style={{ color: theme.faint, fontSize: 12, lineHeight: 18, marginTop: 8 }}>
           {multi === true
-            ? "这台 ash 开了多人模式：每个人用自己的 key，看到的也只是自己有权限的项目。"
+            ? "这台 Navi 开了多人模式：每个人用自己的 key，看到的也只是自己有权限的项目。"
             : "安全提示：连接本身不加密，请仅经 Tailscale 内网访问，不要把端口暴露到公网。"}
         </Text>
       </ScrollView>

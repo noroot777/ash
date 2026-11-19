@@ -1,6 +1,6 @@
 // 回给发话人的那一句（scope.ts reply）：他自己这次操作的结局 —— 接口报错、拒绝的原因、投不进房间、
 // 拿不到回复。报错原文常带着项目里的字，所以出口照样核：还是请求进来那一刻的那个人（绑定实例在那一刻
-// 记下，办完之后不按现状重新盖）、他此刻还看得见那个项目、群还绑着它。核不过不发原文，换成一句不含 ash
+// 记下，办完之后不按现状重新盖）、他此刻还看得见那个项目、群还绑着它。核不过不发原文，换成一句不含 navi
 // 数据的固定说明 —— 「看不到了 / 解绑了」常常正是报错要说的事，一声不吭他只会以为没收到。
 //
 // 钉住的几件事：
@@ -17,9 +17,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-im-replies-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-im-replies-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-im-replies");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -55,7 +55,7 @@ try {
     .map((call) => JSON.stringify(contentOf(call))).join("\n");
   // 重试接口的报错原文带着项目里的字（受控输入）。fakeRetry 打开时 /retry 不进真接口、回这一句；stall 在就先停在那里。
   const SECRET = "部署项目「内部客户甲」失败：/private/customer-a/deploy.sh 无法执行";
-  const WITHHELD = /这次操作的结果不在飞书里显示了（([^）]+)），请到 ash 网页查看。/;
+  const WITHHELD = /这次操作的结果不在飞书里显示了（([^）]+)），请到 Navi 网页查看。/;
   const gate = () => {
     let reached!: () => void;
     let release!: () => void;
@@ -65,13 +65,13 @@ try {
   };
   let fakeRetry = false;
   let stall: ReturnType<typeof gate> | null = null;
-  const realPost = im.ash.post.bind(im.ash);
-  im.ash.post = (async (who: never, path: `/api/${string}`, body?: unknown) => {
+  const realPost = im.navi.post.bind(im.navi);
+  im.navi.post = (async (who: never, path: `/api/${string}`, body?: unknown) => {
     if (!fakeRetry || !path.endsWith("/retry")) return realPost(who, path, body);
     const held = stall;
     if (held) { held.reached(); await held.opened; }
     return { ok: false, status: 409, error: SECRET, data: {} };
-  }) as typeof im.ash.post;
+  }) as typeof im.navi.post;
   /** 请求进了 /retry、停在那里时做 change，再放行。返回 run 的结果。 */
   const during = async <T>(run: () => Promise<T>, change: () => Promise<unknown>): Promise<T> => {
     const held = stall = gate();
@@ -133,7 +133,7 @@ try {
     fake.reset();
     assert.equal(await im.relay.post(ctx, "msg:om_relay_post", "room-gone", "你好", [], null, null), false);
     await im.settle();
-    assert.match(repliesTo("om_relay_post"), /没能送进 ash：/, "房间没了，投不进去的说明照发");
+    assert.match(repliesTo("om_relay_post"), /没能送进 Navi：/, "房间没了，投不进去的说明照发");
 
     // 投进去了、回复还没来，房间被删了。
     const member = { agentType: "claude", name: "Claude" };
@@ -214,7 +214,7 @@ try {
     const withheld = (await db.select().from(imOutbox).where(eq(imOutbox.replyTo, unbound))).at(0)!;
     assert.equal(withheld.state, "sent");
     assert.doesNotMatch(withheld.content, /内部客户甲/, "库里那份也换成了固定说明");
-    assert.deepEqual(JSON.parse(withheld.scope!), { kind: "system" }, "换上的那句不含 ash 数据");
+    assert.deepEqual(JSON.parse(withheld.scope!), { kind: "system" }, "换上的那句不含 navi 数据");
 
     // 换绑：同一个飞书账号重新绑了一次（新的实例）—— 也不发。
     await bindAgain(new Date(Date.now() + 1_000).toISOString());
@@ -258,7 +258,7 @@ try {
       await bindAgain(new Date(Date.now() + 4_000).toISOString());
     });
     assert.doesNotMatch(JSON.stringify(quick), /内部客户甲/, "按钮快路径：换绑了，toast 不带原文");
-    assert.match(JSON.stringify(quick), /没办成，原因见 ash。/);
+    assert.match(JSON.stringify(quick), /没办成，原因见 Navi。/);
     await unbindOwner("");
     await bindAgain(at);
     fakeRetry = false;
@@ -327,7 +327,7 @@ try {
     fake.reset();
     const retry = await asBob("/retry", groupCard.messageId!);
     await im.settle();
-    assert.match(repliesTo(retry), /没能重试，原因见 ash。/, "只推标题：换成短句");
+    assert.match(repliesTo(retry), /没能重试，原因见 Navi。/, "只推标题：换成短句");
     assert.doesNotMatch(repliesTo(retry), /没能重试：/);
     await patchOptions({ titleOnlyProjectIds: [] });
   }
@@ -389,16 +389,16 @@ try {
     // 回复任务卡（/reply）：报错那一句同样按办之前的项目核。
     await visibility.addProjectMember({ projectId: "pa", userId: bob.id, role: "member", addedBy: alice.id });
     const replied = await groupFailedCard("tgr");
-    const realReply = im.ash.post;
-    im.ash.post = (async (who: never, path: `/api/${string}`, body?: unknown) => {
+    const realReply = im.navi.post;
+    im.navi.post = (async (who: never, path: `/api/${string}`, body?: unknown) => {
       if (!path.endsWith("/reply")) return realReply(who, path, body);
       if (stall) { stall.reached(); await stall.opened; }
       return { ok: false, status: 409, error: SECRET, data: {} };
-    }) as typeof im.ash.post;
+    }) as typeof im.navi.post;
     fake.reset();
     const reply = await during(() => asBob("/reply 换个思路", replied.messageId!), dropBob("tgr"));
     await im.settle();
-    im.ash.post = realReply;
+    im.navi.post = realReply;
     assert.doesNotMatch(sentText(), /内部客户甲/, "/reply：任务删了、他也看不到了，报错原文不发");
     assert.equal(WITHHELD.exec(repliesTo(reply))?.[1], "看不到这个项目了");
 
@@ -409,7 +409,7 @@ try {
     const toast = await during(() => im.click("ou_bob", value), dropBob("tgb"));
     await im.settle();
     assert.doesNotMatch(JSON.stringify(toast) + sentText(), /内部客户甲/, "按钮：任务删了、他也看不到了，不带原文");
-    assert.match(JSON.stringify(toast), /没办成，原因见 ash。/);
+    assert.match(JSON.stringify(toast), /没办成，原因见 Navi。/);
   }
 
   im.reconciler.stop();

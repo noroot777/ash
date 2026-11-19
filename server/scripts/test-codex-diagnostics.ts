@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { classifyCodexExit, formatFailureForTimeline, RunTraceRecorder, type CodexExitEvidence } from "../src/executors/diagnostics.js";
 import { parseCodexStream } from "../src/executors/codex.js";
 
@@ -89,7 +89,7 @@ assert.equal(
   "找不到 codex 可执行文件",
 );
 
-const dir = mkdtempSync(join(tmpdir(), "ash-diagnostics-"));
+const dir = mkdtempSync(join(tmpdir(), "navi-diagnostics-"));
 try {
   const originalCodexHome = process.env.CODEX_HOME;
   const emptyCodexHome = join(dir, "codex-home");

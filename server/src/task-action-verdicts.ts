@@ -5,10 +5,10 @@
 //
 // 这里只收**确定性**的事实：库里的行、同队成员、审查链、有没有活进程。回合锁、验收锁、加成员锁
 // 这些转瞬即逝的占位不在这里，由各路由在判据之后自己查（撞车被拒时照样回一句原因）。
-import type { ActionVerdict, PrimaryAction, TaskStatus } from "@ash/shared";
-import { canArchive, canSingleRun } from "@ash/shared";
-import { queueBlockedText, type QueueBlocker } from "@ash/shared/scheduled-message-wait";
-import { teamNeverStarted } from "@ash/shared/team";
+import type { ActionVerdict, PrimaryAction, TaskStatus } from "@navi/shared";
+import { canArchive, canSingleRun } from "@navi/shared";
+import { queueBlockedText, type QueueBlocker } from "@navi/shared/scheduled-message-wait";
+import { teamNeverStarted } from "@navi/shared/team";
 import { handoffBlockReason } from "./handoff-guard.js";
 
 /** 判据要的那几列（任务行的子集，回归脚本直接喂字面量）。 */
@@ -47,6 +47,8 @@ export type ActionFacts = {
    * 只读预判，原因同一句。null = 没有。
    */
   checkpointBlock: string | null;
+  /** 挂着还没兑现的开工请求（等前置站齐 / 等同组名额 / 等放开，launch-request.ts）：停止能撤回它。 */
+  prerequisiteRequest?: boolean;
   /** 团队任务才有：名下每个执行者的状态、它所在的那一批（分组）有没有被停下。停止全组看整个团队。 */
   team: { workers: { status: string; groupPaused: boolean }[] } | null;
 };
@@ -145,7 +147,7 @@ export function stopVerdict(f: ActionFacts): Verdict {
   const request = task.queueAdvanceRequest;
   const pendingAdvance = !!request && request.resumePromptGeneration === task.resumePromptGeneration
     && ["paused", "backlog", "queued", "running"].includes(task.status);
-  if (pendingAdvance || f.liveProcess || live(task.status)) return OK;
+  if (pendingAdvance || f.prerequisiteRequest || f.liveProcess || live(task.status)) return OK;
   return hide("任务没有在运行的进程可停止", { status: task.status });
 }
 

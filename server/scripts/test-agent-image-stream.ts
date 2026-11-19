@@ -8,20 +8,21 @@
 // 这一份从**真的起一个进程**那一端验:任意自定义解析器 + GenericCliExecutor.run,事件流里
 // 必须出现带 `source` 的 attachment。另外验流式碎片(半句话分两次到)和去重。
 // 滑动窗口那一族(⑬-⑰、⑲ 系)拆在 test-agent-image-stream-window.ts(单文件 700 行闸)。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-const root = mkdtempSync(join(tmpdir(), "ash-image-stream-"));
+const root = mkdtempSync(join(tmpdir(), "navi-image-stream-"));
 const uploads = join(root, "data", "uploads");
 // uploads 目录在 paths.ts 里是模块级常量,所以必须在**导入它之前**改环境变量 —— 静态
 // import 会被提到所有语句之前,这里只能动态导。
-process.env.ASH_UPLOADS_DIR = uploads;
+process.env.NAVI_UPLOADS_DIR = uploads;
 // claude 执行器要先导:`catalog/parsers.ts` ↔ `executors/claude.ts` ↔ `catalog/claude.ts`
 // 是一条既有的循环依赖,从 parsers 这头进去会在 `catalog/claude.ts` 读到还没初始化的
 // `claudeStreamJsonParser`(TDZ)。从 claude 这头进去则只需要 import 绑定,能跑通。

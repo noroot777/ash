@@ -17,7 +17,7 @@ import {
   type AcceptGateBasisMode,
   type AcceptGateCancelResult,
   type AcceptGateView,
-} from "@ash/shared/accept-gate";
+} from "@navi/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { acceptGateLogPath, appendGateLog, spawnAcceptGate } from "./accept-gate-process.js";
@@ -49,6 +49,7 @@ import { probeGateEntryWithTarget } from "./accept-gate-entry-target.js";
 import { gateBaselineMatches, gateBaselineNotice, gateDriftBesidesTree, resolveGateBaseline, type GateBaselineBlock,
   type GateBaselinePlan } from "./accept-gate-baseline.js";
 import { handOffConflict } from "./accept-conflict.js";
+import { noteConflictHandoff } from "./accept-gate-conflict-registry.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type GateRow = typeof acceptGateRuns.$inferSelect;
@@ -133,7 +134,7 @@ export async function acceptGateCheck(
   // 门禁基准（项目级）：拦在一切复用与登记之前 —— 「没含目标分支」「预演冲突」这两种在跑之前就
   // 说得清，不该先烧十几分钟再告诉用户。明确跳过门禁的那一按不受它管：什么都不跑，就无所谓测哪棵。
   const baseline = opts.intent === "skip" ? null : await resolveGateBaseline(task, project, head, { cwd, dependencies: source.dependencies });
-  if (baseline?.block) return await baselineRefusal(task, baseline.block);
+  if (baseline?.block) return await baselineRefusal(task, baseline.block, head);
   const plan = baseline?.plan ?? null;
 
   // 门禁绿了之后系统自己接着做完的那一次：带着凭据进来，不再重判。
@@ -170,7 +171,7 @@ export async function acceptGateCheck(
     await appendTaskTimeline(
       task.id,
       receiptLine(`本次验收**跳过**了验收前置命令 \`${command}\`：这是你在验收时明确选的，` +
-        `ash 没有跑它，也没有任何它通过的证据。${inFlight ? "正在跑的那一次已经一并收掉。" : ""}`),
+        `Navi 没有跑它，也没有任何它通过的证据。${inFlight ? "正在跑的那一次已经一并收掉。" : ""}`),
     );
     recordBasis("skipped", null);
     return null;
@@ -211,10 +212,11 @@ export async function acceptGateCheck(
  * 基准拦下来的那一按。冲突那一种**跟真合并撞冲突同一个口径**：同样的 reason / 冲突文件，同样把来源
  * 任务叫醒去解（交接在锁释放之后才真的发出，见 accept-conflict.ts）。
  */
-async function baselineRefusal(task: TaskRow, block: GateBaselineBlock): Promise<AcceptFailure> {
+async function baselineRefusal(task: TaskRow, block: GateBaselineBlock, head: string | null): Promise<AcceptFailure> {
   await appendTaskTimeline(task.id, alertLine(`验收未完成：${block.error}`));
   const conflictHandoff = block.reason === "merge_conflict"
     ? await handOffConflict(task, { ...block, preview: true }) : null;
+  if (conflictHandoff) noteConflictHandoff(task.id, head, block.targetCommit);
   return { accepted: false, httpStatus: 409, taskId: task.id, reason: block.reason, error: block.error,
     status: task.status, targetBranch: block.targetBranch, sourceBranch: block.sourceBranch,
     conflictFiles: block.conflictFiles, ...(conflictHandoff ? { conflictHandoff } : {}) };
@@ -229,7 +231,7 @@ async function noteTargetDrift(task: TaskRow, repoPath: string, row: GateRow): P
   const notice = `注意：验收前置命令跑的时候 ${row.targetBranch} 还在 ${row.targetCommit.slice(0, 8)}，现在已经是 ${current.slice(0, 8)}。`
     + (included ? "目标分支现在的内容已经包含在被测提交中。"
       : "它跑过的是任务分支那棵树，不是这一次的合并结果 —— 目标分支这期间进来的改动没有被它验过。");
-  appendGateLog(row.logPath, `\n[ash] ${notice}\n`);
+  appendGateLog(row.logPath, `\n[navi] ${notice}\n`);
   await appendTaskTimeline(task.id, alertLine(notice));
 }
 
@@ -268,9 +270,9 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     const baselineNotice = gateBaselineNotice(plan.baseline);
     // 这两句写在核入口、建快照之前，所以只说「准备」：核下来可能根本不起跑（entry_missing），也可能
     // 起不来（spawn_failed），那时结算会接着说清；真起跑了，紧跟着的就是命令自己的输出。
-    appendGateLog(logPath, `[ash] ${startedAt} 验收前置命令准备起跑（${plan.prepare ? "先建快照、跑准备命令" : "先建快照、核入口"}）\n[ash] source: ${plan.cwd}\n[ash] snapshot: ${snapshotCwd}\n[ash] fingerprint: ${plan.source.fingerprint}\n`
-      + (baselineNotice ? `[ash] baseline: ${baselineNotice}（预览基准 ${plan.baseline.targetBranch} = ${plan.baseline.previewBase}）\n` : "")
-      + (plan.prepare ? `[ash] 准备命令（在快照里先装依赖）\n[ash] $ ${plan.prepare}\n\n` : `[ash] $ ${plan.command}\n\n`));
+    appendGateLog(logPath, `[navi] ${startedAt} 验收前置命令准备起跑（${plan.prepare ? "先建快照、跑准备命令" : "先建快照、核入口"}）\n[navi] source: ${plan.cwd}\n[navi] snapshot: ${snapshotCwd}\n[navi] fingerprint: ${plan.source.fingerprint}\n`
+      + (baselineNotice ? `[navi] baseline: ${baselineNotice}（预览基准 ${plan.baseline.targetBranch} = ${plan.baseline.previewBase}）\n` : "")
+      + (plan.prepare ? `[navi] 准备命令（在快照里先装依赖）\n[navi] $ ${plan.prepare}\n\n` : `[navi] $ ${plan.command}\n\n`));
     const executionNotice = gateExecutionNotice();
     await appendTaskTimeline(
       taskId,
@@ -301,7 +303,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       // 合并预览档一律走封好的快照（已含目标分支时 tree 为 null：不合，只在封好的环境里检出分支那棵树）。
       plan.baseline.previewBase && plan.baseline.previewSettings
         ? { targetCommit: plan.baseline.previewBase, tree: plan.baseline.previewTree, settings: plan.baseline.previewSettings } : undefined);
-    if (previewCommit) appendGateLog(logPath, `[ash] preview: 快照里的合并结果 ${previewCommit}（tree ${plan.baseline.previewTree}）\n\n`);
+    if (previewCommit) appendGateLog(logPath, `[navi] preview: 快照里的合并结果 ${previewCommit}（tree ${plan.baseline.previewTree}）\n\n`);
     // 快照是全新写的，真合并只重写改到的文件：目标检出里没改到的那些磁盘上和快照不是同一份，就不跑
     // （accept-gate-physical.ts）。拦在起进程之前，落成「起不来」并把原因写进日志。对得上就把测过的这份
     // 记成摘要进凭据：复用旧绿与最终落地都按它再核目标检出（第 5 轮复审 F2）。
@@ -337,7 +339,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     // 入口是一个具体文件、快照里没有它：这条命令不可能跑起来，**不起跑**，直接收成一条带原因的红。
     // 走跟其它红同一条结算（时间线、交回修复、刷新后卡片上那句话都由它落盘）。
     if (entryCertainlyMissing(entry)) {
-      appendGateLog(logPath, `[ash] ${gateEntryNote(entry, "failed")}\n`);
+      appendGateLog(logPath, `[navi] ${gateEntryNote(entry, "failed")}\n`);
       await stopGateRun(runId);
       await settleGate(runId, { status: "failed", exitCode: null, failure: "entry_missing" });
       const blocked = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
@@ -349,7 +351,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     }
     // 执行方式的说明写在核过入口之后：没起跑的那份日志不该先说「实际执行验收命令」（第 3 轮审查 N1）。
     const executionNotice = gateExecutionNotice();
-    if (executionNotice) appendGateLog(logPath, `[ash] ${executionNotice}\n`);
+    if (executionNotice) appendGateLog(logPath, `[navi] ${executionNotice}\n`);
     started = await spawnAcceptGate({
       command: plan.command,
       prepare: plan.prepare,
@@ -360,7 +362,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       onExit: (exit) => void settleGate(runId, gateExitOutcome(recordedGateExit(logPath) ?? unrecordedGateExit(exit, !!plan.prepare))),
     });
   } catch (error) {
-    appendGateLog(logPath, `\n[ash] 起不来：${error instanceof Error ? error.message : String(error)}\n`);
+    appendGateLog(logPath, `\n[navi] 起不来：${error instanceof Error ? error.message : String(error)}\n`);
     await stopGateRun(runId);
     await settleGate(runId, { status: "failed", exitCode: null, failure: "spawn_failed" });
     const failed = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
@@ -376,7 +378,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       await withReviewAuthority(plan.choices.reviewAuthority, async () => { await started.authorize(); });
     } else await started.authorize();
   } catch (error) {
-    appendGateLog(logPath, `\n[ash] 启动握手失败，命令未获放行：${String(error)}\n`);
+    appendGateLog(logPath, `\n[navi] 启动握手失败，命令未获放行：${String(error)}\n`);
     await settleGate(runId, { status: "failed", exitCode: null, failure: "spawn_failed" });
   }
   const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
@@ -385,7 +387,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   // （第 1 轮审查 F2 的第二个窗口）。所以这里回头再看一眼：不是 running 了就说明有人在这
   // 期间收过它，由**我们**来把刚起的这条收掉（两边都查一次，谁后到谁负责，窗口就封住了）。
   if (row && row.status !== "running") {
-    appendGateLog(logPath, `\n[ash] 这一次在起跑的同时就被收掉了（${row.status}），正在停掉刚起的进程。\n`);
+    appendGateLog(logPath, `\n[navi] 这一次在起跑的同时就被收掉了（${row.status}），正在停掉刚起的进程。\n`);
     const watching = live.get(taskId);
     if (watching?.runId === runId) { watching.watch.stop(); live.delete(taskId); }
     await noteIfStillAlive(taskId, logPath, await stopGateRun(runId));
@@ -464,7 +466,7 @@ export async function cancelAcceptGate(taskId: string, reason = "你在验收台
   }
   const wasRunning = row.status === "running";
   if (wasRunning) {
-    appendGateLog(row.logPath, `\n[ash] ${reason}，正在收掉它。\n`);
+    appendGateLog(row.logPath, `\n[navi] ${reason}，正在收掉它。\n`);
     await settleGate(row.id, { status: "canceled", exitCode: null, failure: "canceled" }, false);
   } else if (row.processPending && await stopGateRun(row.id)) await cleanupGateSnapshot(row.taskId, row.id);
   const current = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, row.id))).at(0) ?? row;

@@ -1,6 +1,6 @@
 # 智能体目录(catalog)
 
-ash 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 spec 文件**。这份 spec 同时喂三条链路:
+Navi 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 spec 文件**。这份 spec 同时喂三条链路:
 
 | 链路 | 用到的字段 | 出口 |
 |---|---|---|
@@ -36,15 +36,15 @@ ash 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 spec 
    cd /tmp && mkdir -p probe && cd probe
    <bin> <你写进 spec 的那串参数> # prompt 用「创建 hello.txt,内容 hi」这种可验证的
    ```
-   看三件事:①有没有卡在交互确认(卡住 = 自动批准的 flag 没给对,ash 里会表现为任务永远不结束);②有没有真的动文件;③stdout 长什么样(决定 parser)。
+   看三件事:①有没有卡在交互确认(卡住 = 自动批准的 flag 没给对,Navi 里会表现为任务永远不结束);②有没有真的动文件;③stdout 长什么样(决定 parser)。
 3. **把实测结果写进 spec**,去掉 `untested`,`notes` 改成「实测于 <日期> + 版本号 + 仍未确认的点」。**没实测通就别去掉 `untested`** —— 那个标记是给用户看的诚实声明,不是待办勾选框。
 4. **跑测试**:
    ```bash
    npx tsc -p server/tsconfig.json --noEmit     # typecheck(必须干净)
    npm -w server run test:cli-catalog           # 目录机制的回归测试
    ```
-   > worktree 里 typecheck 报 `@ash/shared` 是旧类型的话,说明该 worktree 没有自己的 `node_modules`(会走到主仓那份)。补一次软链即可:
-   > `mkdir -p node_modules/@ash && for p in shared server web mcp; do ln -sfn ../../$p node_modules/@ash/$p; done`
+   > worktree 里 typecheck 报 `@navi/shared` 是旧类型的话,说明该 worktree 没有自己的 `node_modules`(会走到主仓那份)。补一次软链即可:
+   > `mkdir -p node_modules/@navi && for p in shared server web mcp; do ln -sfn ../../$p node_modules/@navi/$p; done`
 
 ---
 
@@ -130,10 +130,10 @@ reasoningEffort: (v) => ["-c", `model_reasoning_effort="${v}"`]  // 拼不出来
 
 ```ts
 // (a) 整个 session 字段不写 = 没有 resume 通道。
-//     ash 会忽略 RunOpts.sessionId、生成一个新 sessionId 仅作追溯,
+//     navi 会忽略 RunOpts.sessionId、生成一个新 sessionId 仅作追溯,
 //     恢复命令给一句诚实说明。续聊时 agent 记忆是断的 —— 这是事实,不是 bug。
 
-// (b) ash 自己发 id(claude 的 --session-id):最省事,textParser 也能续跑
+// (b) navi 自己发 id(claude 的 --session-id):最省事,textParser 也能续跑
 session: {
   newIdFlag: "--session-id",
   resumeArgs: (id) => ["--resume", id],
@@ -141,11 +141,11 @@ session: {
 }
 
 // (c) id 由 CLI 自己产生:必须让 parser 发 {kind:"session", cliSessionId} 把 id 带回来,
-//     否则 ash 拿不到 id,永远起新会话
+//     否则 navi 拿不到 id,永远起新会话
 session: { resumeArgs: (id) => ["resume", id], interactive: (id) => `foo resume ${id}` }
 ```
 
-**只写 `interactive` 是无效的**(第 1 轮审查抓到过):没有 `newIdFlag` 也没有 `resumeArgs` 时,ash 手里那个 id 是它自己发的运行记录,CLI 压根没听说过 —— 拿它拼 `--resume <id>` 就是给用户一条引用不存在会话的命令。所以 `interactiveResumeInner`(`executors/generic.ts`)会判定它不可信、退化成诚实说明,`interactive` 等于白写。知道该 CLI 有 `--resume` 但还没查清 id 从哪来时,就走 (a) 档、把线索写进 `notes`。
+**只写 `interactive` 是无效的**(第 1 轮审查抓到过):没有 `newIdFlag` 也没有 `resumeArgs` 时,Navi 手里那个 id 是它自己发的运行记录,CLI 压根没听说过 —— 拿它拼 `--resume <id>` 就是给用户一条引用不存在会话的命令。所以 `interactiveResumeInner`(`executors/generic.ts`)会判定它不可信、退化成诚实说明,`interactive` 等于白写。知道该 CLI 有 `--resume` 但还没查清 id 从哪来时,就走 (a) 档、把线索写进 `notes`。
 
 **供应商注入(`relay`)** —— **密钥绝不能进 argv**(`commandLine` 会存进 `sessions.command_line` 并在 UI 展示):
 
@@ -168,7 +168,7 @@ relay: (r) => ({
 - 自己写:**内联在自己的 spec 文件里**(别加到 `parsers.ts`,那是共享文件)。骨架照抄下面这份:
 
 ```ts
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser } from "./types.js";
 
@@ -228,17 +228,21 @@ factory: (opts) => new FooExecutor(opts),
 
 ---
 
-## ash MCP 登记矩阵(2026-10-31)
+## Navi MCP 登记矩阵(2026-10-31)
 
-**为什么这张表要紧**:ash 的完成协议整个建立在 ash MCP 上(`complete_task` / `ask_question` /
+**为什么这张表要紧**:Navi 的完成协议整个建立在 Navi MCP 上(`complete_task` / `ask_question` /
 `pause_task` / `report_stage`)。一家 CLI 接不上它,用它跑的任务干完活也交不了卷,界面上只看得到
 「失败」—— 用户 2026-10-30 实测到的就是这个:claude / codex 之外的十三家压根没有注册逻辑。
 
+**claude / codex 不靠这张表**(2026-11-14 起):起跑时由 Navi 把自己的 MCP 注入进去,连没连上
+以 CLI 启动时自己报的为准(`executors/navi-mcp-inject.ts`)。表里这两行只在独立 app 首启替本机
+CLI 接 Navi 那一下用得到;其余十三家的退路仍是它们自己配置里的登记。
+
 **表本体是代码,不是这段文字**:`server/src/mcp-registry/catalog.ts`(`satisfies Record<AgentType,…>`
 保证新增执行器时编译不过,逼着当场给结论)。下面这张是给人读的同一份内容,
-`npm -w server run test:ash-mcp-registry` 会逐行比对它和代码里那张表,对不上就红。
+`npm -w server run test:navi-mcp-registry` 会逐行比对它和代码里那张表,对不上就红。
 
-| 执行器 | ash 自动写? | 落点(用户级) | 配置目录变量 | 格式族 | 回合身份 | 档位 |
+| 执行器 | Navi 自动写? | 落点(用户级) | 配置目录变量 | 格式族 | 回合身份 | 档位 |
 |---|---|---|---|---|---|---|
 | claude | 是 | `<配置目录>/.claude.json` | `CLAUDE_CONFIG_DIR` | `mcpServers` JSON | 原样继承 | 实测 |
 | codex | 是 | `$CODEX_HOME/config.toml` | `CODEX_HOME` | `[mcp_servers.x]` TOML | 要声明(`env_vars`) | 实测 |
@@ -263,58 +267,51 @@ factory: (opts) => new FooExecutor(opts),
 
 - **gemini 两道门**。① 未信任的目录连**用户级** MCP server 都不加载 —— 所以 `gemini.ts` 的
   `baseArgs` 带 `--skip-trust`,别去掉;② 它把交给 MCP 子进程的环境按**变量名**过滤(命中
-  `/TOKEN|KEY|SECRET|AUTH/i` 一类的直接删),于是回合身份 `ASH_TURN_TOKEN` 根本到不了子进程 ——
+  `/TOKEN|KEY|SECRET|AUTH/i` 一类的直接删),于是回合身份 `NAVI_TURN_TOKEN` 根本到不了子进程 ——
   这就是为什么 `shared/src/mcp.ts` 另按 `*_TICKET` 别名导了一份(用只 dump 环境的假 MCP server 取证)。
 - **启停策略一家一家认,不跨家套用**(机制上的 `switches`,2026-10-31 两边真机实测):
-  - **grok 有两种关法**:条目上的 `enabled = false`,和根级 `disabled_mcp_servers = ["ash"]`
+  - **grok 有两种关法**:条目上的 `enabled = false`,和根级 `disabled_mcp_servers = ["navi"]`
     (`grok mcp list` 打出 `(disabled)`);
   - **同样写 TOML 的 codex 压根不认那个根级键**(`codex mcp list --json` 仍是
     `enabled: true, disabled_reason: null`)—— 所以它**不许**声明 `switches`。上一版两家共用
-    格式族、无条件解释那个键,给 grok 关一次 ash 会把 codex 这条能用的连接也判成「被关掉了」,
+    格式族、无条件解释那个键,给 grok 关一次 Navi 会把 codex 这条能用的连接也判成「被关掉了」,
     安装器还说是用户自己关的;
-  - **gemini 还有两个根级名单**:`mcp.excluded` 列着 ash、或 `mcp.allowed` 这个白名单里没有
-    ash(**空数组也算「一个都不放行」**),真 CLI 把那条登记直接打成 `⛔ Blocked`。所以它
+  - **gemini 还有两个根级名单**:`mcp.excluded` 列着 `navi`、或 `mcp.allowed` 这个白名单里没有
+    `navi`(**空数组也算「一个都不放行」**),真 CLI 把那条登记直接打成 `⛔ Blocked`。所以它
     **压根没登记时也要如实说「被挡住了」**(没登记的名字里只问规范名 —— 历史名 `harness` 不在
     白名单里是常态,拿它判会把一份完全可用的配置说成关着的),而且绝不替用户改那两个名单。
   格式族只负责**结构读取**:条目上那两个布尔之外的开关一律由逐家声明进来(本轮审查 F2)。
 - **kimi 没有 `mcp` 子命令**(`kimi mcp add` 报 unknown command),只能我们写文件,也就没法拿它
-  自己的输出复核;预检对它只有「读配置」这一档依据。
+  自己的输出复核。
 - **opencode 会读好几份配置,判的是「几份合起来最终生效的那一条」**(真 CLI 逐格实测,全部
   记在那家的 `source` 里)。**六层**来源,优先级从低到高:默认目录(`config.json` <
   `opencode.json` < `opencode.jsonc`,**三份都读**;`config.json` 这个名字**只在默认目录**算)、
   `OPENCODE_CONFIG` 指的那个文件、任务目录往上走的项目配置、`~/.opencode/`(`opencode.json` <
   `opencode.jsonc`,**压过上面那几层**,站点上的 `extraDirs`)、`OPENCODE_CONFIG_DIR` 再加的
   那个目录、`OPENCODE_CONFIG_CONTENT` 里那整段 JSON(**只读,没有文件可写**)。合并是**逐字段深合并**:低的那份写完整登记、高的那份只写
-  `{"enabled": false}` ⇒ 命令留着、开关被关掉(真 CLI 报 `ash disabled`);嵌套的
-  `environment` 按键合、数组整条替换。所以判据只能是 `resolveAshMcp`
+  `{"enabled": false}` ⇒ 命令留着、开关被关掉(真 CLI 报 `navi disabled`);嵌套的
+  `environment` 按键合、数组整条替换。所以判据只能是 `resolveNaviMcp`
   (`mcp-registry/register.ts`),而且必须是**合完那一条**——「任一份里有就算有」会把已经被
-  关掉的说成已接好;「只看写入目标那一份」会把本来连得上的判成 absent(预检里 absent 是硬拒);
+  关掉的说成已接好;「只看写入目标那一份」会把本来连得上的判成 absent;
   「挑一份赢家」会把跨来源继承来的启动命令整个丢掉(高优先级那份只写 `{"enabled": true}` 时,
   搬进隔离档的就只有这一个键,真 CLI 在那边一个服务都没有)。这件事由站点上的 `sourcesMerge`
   声明 ——它同时表示**加载序**和**逐字段合并**语义都实测过,**只给实测过的家置真**;kilo 的
-  `KILO_CONFIG` 形状一样但没真 CLI 可问,几份来源结论不一致时判定一律回 unknown(不写、也不
-  拦起跑)。合并还有三条实测约束,少一条就会把「连得上」和「连不上」算反:
+  `KILO_CONFIG` 形状一样但没真 CLI 可问,几份来源结论不一致时判定一律回 unknown(不写)。合并还有三条实测约束,少一条就会把「连得上」和「连不上」算反:
   ① **逐份投影**:条目是三支并集,没写 `type` 的那一支只认 `enabled` —— 哪一份来源写成开关就
   只贡献这一个键(低的那份、高的那份都一样),所以投影做在 `shapes.ts` 的 `opencodeFact` 里、
   `mergeFacts` 两边一视同仁;只过滤高的那份会让低那份里本该被丢掉的 `environment` 活下来,
   搬进隔离档后真 CLI 报 `MCP error -32000: Connection closed`。
   ② **阶段才是单位**:同一个文件被两条路指到(`OPENCODE_CONFIG` 指回默认目录那份)算两次
-  加载,`ashMcpHostSources` 不按路径去重 —— 去重会把优先级最高的那次加载整个删掉,实测把一条
+  加载,`naviMcpHostSources` 不按路径去重 —— 去重会把优先级最高的那次加载整个删掉,实测把一条
   `connected` 的登记判成 disabled、落点还指错。
   ③ **任何一份读不通就整份拒载**:实测 `debug config --pure` 直接 `exit 1`(不管那份在哪一层、
-  有没有提到 ash),所以 `resolveAshMcp` 只要见到一份读不准就回 unknown,不能靠「优先级比它低
+  有没有提到 Navi),所以 `resolveNaviMcp` 只要见到一份读不准就回 unknown,不能靠「优先级比它低
   的影响不到」放行 —— 那时压根没有生效的登记可言。
-  来源**入口**那一侧还有两条(本轮审查 F1,三行实测里真 CLI 全是 `ash connected`、而 ash 答
-  absent 并据此硬拒、安装器还新写一条把生效 `ASH_URL` 换掉了):
-  ④ **指到文件的变量给相对路径时按 CLI 自己的工作目录解** —— 所以 `ashMcpHostSources` 吃一个
-  `cwd`:知道那个目录就解准,不知道就把这份来源标成**证不出来**(`AshMcpSource.unprovable`),
-  整体回 unknown(不拦人、不写,也永不当写入落点)。判定那一档按**每个候选工作目录各解一遍**,
-  结论不一致同样回 unknown —— 那一轮究竟跑在哪个目录,ash 定不了。
-  ⑤ **「确定没有」要可证**:站点上的 `loadMeasured` 才是 absent 的闸(目前只有 opencode 置真)。
-  没逐格实测过读取位置的家,「枚举到的几份里都没有」只答 unknown、放行并在预检里说一句 ——
-  absent 在派审那一关是硬拒,而那种「没找到」可能只是我们不知道它还读哪儿。安装器**不看**这一位
-  (它问的是「看得见的里面有没有」,追加不覆盖任何已有登记),否则十三家的 `npm run setup` 一条
-  都写不出来。
+  来源**入口**那一侧还有两条(本轮审查 F1,三行实测里真 CLI 全是 `navi connected`、而 Navi 答
+  absent 并据此硬拒、安装器还新写一条把生效 `NAVI_URL` 换掉了):
+  ④ **指到文件的变量给相对路径时按 CLI 自己的工作目录解** —— 所以 `naviMcpHostSources` 吃一个
+  `cwd`:知道那个目录就解准,不知道就把这份来源标成**证不出来**(`NaviMcpSource.unprovable`),
+  整体回 unknown(不写,也永不当写入落点)。
 - **opencode / kilo 不是 `mcpServers` 那一族**:容器叫 `mcp`、`command` 是整条 argv 数组、环境
   变量键叫 `environment`。
 - **antigravity 别和 gemini 搞混**:两家都住 `~/.gemini` 下,但 gemini 读 `settings.json`、
@@ -325,27 +322,27 @@ factory: (opts) => new FooExecutor(opts),
   读不读它没有第二处证据。
 - **copilot 的身份搭 `PATH` 那班车**:官方文档明写「`PATH` 自动继承,其余环境变量必须配在这条登记的
   `env` 里」,而回合身份一轮一个值 —— 写死进配置文件就是过期的假身份。所以身份改走**一份文件**:
-  ash 每回合在 `<runs>/<taskId>/turn-identity/<turnToken>/identity.json` 写一份、把那个目录追加到
+  Navi 每回合在 `<runs>/<taskId>/turn-identity/<turnToken>/identity.json` 写一份、把那个目录追加到
   `PATH` 末尾(目录里没有可执行文件,盖不掉任何命令),MCP 侧在变量都不在时读它
-  (`@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_PATH_DIR` 是约定本体,两侧实现在
-  `server/src/turn-identity.ts` 与 `mcp/src/runtime.ts`,回归在 `test:turn-identity`)。
+  (`@navi/shared/mcp` 的 `NAVI_TURN_IDENTITY_PATH_DIR` 是约定本体,两侧实现在
+  `server/src/turn-identity.ts` 与 `mcp/src/turn-identity.ts`,回归在 `test:turn-identity`)。
   **按回合开目录、开新的就删旧的**:上一回合的残留子进程读到的是空,而不是当前令牌。
   表里 `identity: "path"` + `caveat` —— 这条桥本机没装 copilot、没法实测,万一它连 `PATH` 也改写,
   表现就回到「交卷被拒」。另外 `--config-dir` 旗标优先于 `COPILOT_HOME`,起跑带了它这条判据会错。
 - **trae 写的是它「另外支持的那种格式」**:原生 `~/.trae/traecli.yaml` 是 YAML(`mcp_servers` 对象
   数组、`env` 是 `{key,value}` 列表),本仓没有保得住注释缩进的 YAML 写入器;但它同样扫描标准
   `mcpServers` JSON(`~/.trae/mcp.json`),所以走后者。**同目录出现 `traecli.yaml` / `mcp.yaml` /
-  `.mcp.yaml` 时一个字都不写、也不下结论**(`site.opaque`):ash 可能已经被写在那里面了,而同名登记
-  同时来自两份配置、谁生效没有文档依据。项目里的 `.trae/mcp.json` 是用户仓库文件,ash 不碰。
+  `.mcp.yaml` 时一个字都不写、也不下结论**(`site.opaque`):`navi` 那条登记可能已经被写在那里面了,而同名登记
+  同时来自两份配置、谁生效没有文档依据。项目里的 `.trae/mcp.json` 是用户仓库文件,Navi 不碰。
 
-**「回合身份」那一列的几种值**:原样继承 = ash 起跑时注进 CLI 进程就够了;要声明 = 得在登记里放行
+**「回合身份」那一列的几种值**:原样继承 = Navi 起跑时注进 CLI 进程就够了;要声明 = 得在登记里放行
 变量名(codex 的 `env_vars`,按回合用 `-c` 给,不写进配置文件);走 PATH 上那份文件 = CLI 只自动继承
 `PATH`(copilot),身份改走一次性目录里的 `identity.json`,登记里一个身份字段都不用写。还留着一档
 **送不进去**(`blocked`)当判据,现在空着:下一家若连 `PATH` 都过滤就落它,那一家登记写对了也交不了卷,
 表里必须配 `caveat` 当场说出来。
 
 **改这张表要同时改三处**:`mcp-registry/catalog.ts`(单源)、`scripts/mcp-host-sources.mjs`(安装时
-那份裸 Node 实现,setup 导不进 TS)、本节表格。三处不一致时 `test:ash-mcp-registry` 会红 —— 它逐项比对
+那份裸 Node 实现,setup 导不进 TS)、本节表格。三处不一致时 `test:navi-mcp-registry` 会红 —— 它逐项比对
 路径、变量、格式族、要不要 `type`/`enabled`,以及本节每一行的档位。
 
 ---
@@ -354,8 +351,8 @@ factory: (opts) => new FooExecutor(opts),
 
 - [ ] `npx tsc -p server/tsconfig.json --noEmit` 干净
 - [ ] `npm -w server run test:cli-catalog` 通过
-- [ ] 新执行器在「ash MCP 登记矩阵」里有一行(代码那张表会编译不过;本节表格由
-      `npm -w server run test:ash-mcp-registry` 逐行核对)
+- [ ] 新执行器在「Navi MCP 登记矩阵」里有一行(代码那张表会编译不过;本节表格由
+      `npm -w server run test:navi-mcp-registry` 逐行核对)
 - [ ] 只改了自己的 spec 文件 + `shared/src/cli-presets.ts` 里自己 type 的两行(`git status` 确认)
 - [ ] 实测通过才去掉 `untested`;没通过就把结论写进 `notes`(包括「这个 CLI 不支持非交互,当不了执行器」这种结论 —— 如实说比留个跑不动的配置有用)
 - [ ] `notes` 写了版本号和实测日期

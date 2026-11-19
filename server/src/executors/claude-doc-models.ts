@@ -8,7 +8,7 @@ export function extractClaudeDocModels(html: string): string[] {
 
 export async function fetchClaudeDocModels(): Promise<string[]> {
   const response = await fetch(MODELS_URL, {
-    headers: { "user-agent": "ash/model-catalog" },
+    headers: { "user-agent": "navi/model-catalog" },
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`Anthropic 模型文档返回 HTTP ${response.status}`);

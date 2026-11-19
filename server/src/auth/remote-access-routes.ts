@@ -6,10 +6,9 @@
 //     (middleware.ts)。它们各自要的凭据在路由里验:申请的 secret、一次性码。
 //   · `/remote-access*` —— **机主那一侧**,在闸内。
 import type { Context, Hono } from "hono";
-import { getCookie } from "hono/cookie";
-import type { PairClaim, PairCode, PairRequestView, PairTicket, RemoteAccessView, RemoteDeviceView } from "@ash/shared";
+import type { PairClaim, PairCode, PairRequestView, PairTicket, RemoteAccessView, RemoteDeviceView } from "@navi/shared";
 import { actorOf } from "./context.js";
-import { SESSION_COOKIE } from "./middleware.js";
+import { sessionCookieOf } from "./middleware.js";
 import { readOptions } from "../im/meta.js";
 import { isMultiUser } from "./mode.js";
 import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
@@ -26,7 +25,7 @@ const MULTI_REFUSAL = "多人模式下每个人用自己的 key 登录，没有�
 /** 发这次请求的设备(凭 cookie 或 Bearer 进来的那台);本机直连和脚本没有。 */
 function currentDevice(c: Context) {
   const bearer = /^Bearer\s+(\S+)$/i.exec((c.req.header("authorization") ?? "").trim())?.[1];
-  return deviceByToken(bearer) ?? deviceByToken(getCookie(c, SESSION_COOKIE));
+  return deviceByToken(bearer) ?? deviceByToken(sessionCookieOf(c));
 }
 
 function viewFor(c: Context): RemoteAccessView {
@@ -64,8 +63,8 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
     const publicBaseUrl = await readOptions().then((options) => options.publicBaseUrl, () => null);
     if (!knownHost(host, [publicBaseUrl])) {
       return c.json({
-        error: `ash 还不认得「${host ?? ""}」这个地址，从它打开的页面不能直接申请配对。`
-          + "改用 IP 地址打开，或者在 ash 那台电脑上「扫码添加」、用访问密钥进来一次 —— 之后这个地址就认得了",
+        error: `Navi 还不认得「${host ?? ""}」这个地址，从它打开的页面不能直接申请配对。`
+          + "改用 IP 地址打开，或者在 Navi 那台电脑上「扫码添加」、用访问密钥进来一次 —— 之后这个地址就认得了",
       }, 403);
     }
     const { name } = await c.req.json<{ name?: unknown }>().catch(() => ({ name: undefined }));
@@ -73,7 +72,7 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
       name: deviceName(c.req.header("user-agent"), name),
       address: peerAddress(c),
     });
-    if (!ticket) return c.json({ error: "等着批准的设备太多了，先在 ash 那台电脑上处理掉几个" }, 429);
+    if (!ticket) return c.json({ error: "等着批准的设备太多了，先在 Navi 那台电脑上处理掉几个" }, 429);
     return c.json(ticket);
   });
 
@@ -94,7 +93,7 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
       name: deviceName(c.req.header("user-agent"), name),
       address: peerAddress(c),
     });
-    if (!token) return c.json({ error: "这个二维码用过了或者过期了，在 ash 那台电脑上重新出一个" }, 410);
+    if (!token) return c.json({ error: "这个二维码用过了或者过期了，在 Navi 那台电脑上重新出一个" }, 410);
     issueSessionCookie(c, token);
     return c.json({ token });
   });
@@ -117,7 +116,7 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
 
   // 点头这一下还能从飞书里来:申请递上来时机主的飞书单聊会收到一张带「允许 / 拒绝」的卡
   // (im/pairing.ts),点它的是绑定的那个人 —— 自用模式下就是机主。只放这一条:名册、出码、
-  // 请设备出去仍要回到 ash 页面(im-actor.ts 的白名单是另一道)。
+  // 请设备出去仍要回到 navi 页面(im-actor.ts 的白名单是另一道)。
   api.post("/remote-access/requests/:id/:decision{approve|deny}", async (c) => {
     const refused = actorOf(c).kind === "im" && !(await isMultiUser()) ? null : await ownerRefusal(c);
     if (refused) return refused;
@@ -142,7 +141,7 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
   api.post("/remote-access/rotate", async (c) => {
     const refused = await ownerRefusal(c);
     if (refused) return refused;
-    if (!isLocalDirect(c)) return c.json({ error: "访问密钥只能在 ash 所在的那台机器上更换" }, 403);
+    if (!isLocalDirect(c)) return c.json({ error: "访问密钥只能在 Navi 所在的那台机器上更换" }, 403);
     rotateRemoteAccessKey();
     return c.json(viewFor(c));
   });

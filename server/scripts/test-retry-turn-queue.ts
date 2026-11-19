@@ -23,33 +23,31 @@ import { Hono } from "hono";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-retry-turn-queue-"));
+const root = mkdtempSync(join(tmpdir(), "navi-retry-turn-queue-"));
 const inputLog = join(root, "inputs.jsonl");
 const releaseDir = join(root, "release");
 mkdirSync(releaseDir, { recursive: true });
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-// 设了 ASH_RUNS_DIR 就有测试隔离闸;这里跑的是下面这个假 claude,显式放行。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_TEST_INPUT_LOG = inputLog;
-process.env.ASH_TEST_RELEASE_DIR = releaseDir;
-delete process.env.ASH_LAX_DONE;
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEST_INPUT_LOG = inputLog;
+process.env.NAVI_TEST_RELEASE_DIR = releaseDir;
+delete process.env.NAVI_LAX_DONE;
 
 const bin = join(root, "bin");
 mkdirSync(bin, { recursive: true });
 writeFileSync(join(bin, "fake-claude.js"), `const fs = require("fs");
 const path = require("path");
-const task = String(process.env.ASH_TASK_ID);
+const task = String(process.env.NAVI_TASK_ID);
 const resident = process.argv.includes("--input-format");
 let buf = "";
 let started = false;
 function start(input) {
-  fs.appendFileSync(process.env.ASH_TEST_INPUT_LOG, JSON.stringify({ task, input }) + "\\n");
+  fs.appendFileSync(process.env.NAVI_TEST_INPUT_LOG, JSON.stringify({ task, input }) + "\\n");
   if (started) return;
   started = true;
   process.stdout.write(JSON.stringify({ type: "system", session_id: "retry-queue-" + task }) + "\\n");
   const timer = setInterval(() => {
-    if (!fs.existsSync(path.join(process.env.ASH_TEST_RELEASE_DIR, task))) return;
+    if (!fs.existsSync(path.join(process.env.NAVI_TEST_RELEASE_DIR, task))) return;
     clearInterval(timer);
     process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: "retry-queue-" + task }) + "\\n");
     process.exit(0);
@@ -67,7 +65,7 @@ process.stdin.on("data", (d) => {
 });
 process.stdin.on("end", () => {
   if (resident) return;
-  if (!buf || !process.env.ASH_TURN_TOKEN) return process.exit(1);
+  if (!buf || !process.env.NAVI_TURN_TOKEN) return process.exit(1);
   start(buf);
 });
 `);
@@ -77,6 +75,8 @@ writeFileSync(
   { mode: 0o755 },
 );
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
+// 设了 NAVI_RUNS_DIR 就有测试隔离闸;只放行上面这个假 claude。
+process.env.NAVI_TEST_AGENT_BIN = bin;
 
 const [{ db, ensureSchema }, schema, runRoutes, runs, { setTaskStatus }, { queueStatus }, transcript, store,
   { freeWorkflowState }, { freeReviewEvidenceDir }, { evidenceState }] = await Promise.all([

@@ -24,7 +24,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const row = (overrides) => ({
   id: "t-1", projectId: "p1", title: "任务一", status: "running", parentId: null, archived: false,
   mode: "single", groupId: null, queueId: null, queuePosition: null, labels: [],
-  updatedAt: "2026-10-31T00:00:00.000Z", starredAt: null, backgroundRevision: 0,
+  updatedAt: "2026-10-31T00:00:00.000Z", backgroundRevision: 0,
   acceptGateRunning: false, monitorRunning: false, ...overrides,
 });
 
@@ -96,10 +96,20 @@ try {
   // 页面这一侧每一发 /api/tasks 有没有被消费完：桩只知道自己送出去了，「页面已经按它渲染」
   // 要看这里（见 wait-until.mjs）。
   await trackFetches(page, "/api/tasks");
+  // 重试间隔是产品的 5 秒（③④ 一共要等三轮），装上假时钟由 retryLeaves 按轮拨过去；时间照常
+  // 在走，其余定时器不受影响。
+  await page.clock.install();
+  /** 拨过一个重试间隔，那一发重试此刻就该已经出门 —— 只留 1 秒真实时间的余量，重试推迟了就等不到。 */
+  const retryLeaves = async (message) => {
+    const reads = (await fetchLog(page)).length;
+    await page.clock.runFor(CATCH_UP_RETRY_MS + 1);
+    await waitUntil(async () => (await fetchLog(page)).length > reads, { timeout: 1_000, message });
+  };
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/task-catch-up.html`);
 
   // ① 开局:列表读到了,SSE 连上了(连上本身也会触发一次追平)。
   await page.waitForSelector('[data-task="t-1"]');
+  await page.waitForSelector('main[data-ready="true"]');
   await page.waitForSelector('main[data-connected="true"]');
   await page.waitForFunction(() => document.querySelectorAll("li").length === 1);
   // 连上那一次对账要先走完再记「之前」：它由一个零延迟定时器发车（useCatchUpLink），越过它、
@@ -123,9 +133,11 @@ try {
   assert.equal(await page.locator("li").count(), 1, "GET 掉了,这一刻页面还是旧快照");
   assert.equal(store.hits, hitsBefore + 1, "事件应当只换来一发 GET");
   assert.equal(await page.locator('[data-task="t-1"]').getAttribute("data-monitor"), "false");
+  assert.equal(await page.locator("main").getAttribute("data-ready"), "true", "后续请求失败不撤销首次完整快照的就绪状态");
 
   // ③ **恢复责任**:没有第二次事件、没有重连、没有人点刷新,它必须自己再试一次并追平。
-  await page.waitForSelector('[data-task="t-2"]', { timeout: CATCH_UP_RETRY_MS + 10_000 });
+  await retryLeaves("拨过重试间隔，补的那一发出门了");
+  await page.waitForSelector('[data-task="t-2"]');
   assert.equal(await page.locator('[data-task="t-1"]').getAttribute("data-monitor"), "true",
     "追平回来的那份快照要如实写上「哨兵在跑」");
   assert.equal(store.hits, hitsBefore + 2, "重试只补一发,不是每秒一发");
@@ -136,8 +148,15 @@ try {
   const hitsBeforeStreak = store.hits;
   store.list = [row({ monitorRunning: false }), row({ id: "t-2", title: "任务二" }), row({ id: "t-3", title: "任务三" })];
   store.failures = 2;
+  const readsBeforeStreak = (await fetchLog(page)).length;
   emit({ type: "task.monitors", taskId: "t-1" });
-  await page.waitForSelector('[data-task="t-3"]', { timeout: CATCH_UP_RETRY_MS * 2 + 15_000 });
+  for (let failed = 1; failed <= 2; failed += 1) {
+    await waitUntil(async () => (await fetchLog(page)).slice(readsBeforeStreak)
+      .filter((entry) => entry.outcome === "http 503").length === failed, `第 ${failed} 发 503 已被页面读完`);
+    await settlePage(page);
+    await retryLeaves(`第 ${failed} 发掉了，拨过重试间隔又补了一发`);
+  }
+  await page.waitForSelector('[data-task="t-3"]');
   assert.equal(store.hits, hitsBeforeStreak + 3, "两次失败 + 一次成功");
 
   // ⑤ **跨代次的恢复责任**(第 1 轮审查 F3):在途那一发还没落地就断线了,重连之后的追平
@@ -178,6 +197,20 @@ try {
   assert.equal(await page.locator("li").count(), 4, "迟到的旧快照不许把追平的结果盖回去");
   assert.equal(await page.locator("main").getAttribute("data-connected"), "true");
 
+  await page.close();
+  store.failures = 100;
+  const cold = await browser.newPage();
+  cold.on("pageerror", (error) => errors.push(error.message));
+  await cold.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/task-catch-up.html`);
+  await cold.waitForSelector('main[data-error="true"][data-ready="false"][data-connected="true"]');
+  emit({ type: "task.created", task: row({ id: "sse-only", title: "仅事件到达" }) });
+  await cold.waitForSelector('[data-task="sse-only"]');
+  assert.equal(await cold.locator("main").getAttribute("data-ready"), "false", "首次 GET 失败和 SSE 单行回填都不是完整列表");
+  store.failures = 0;
+  emit({ type: "task.monitors", taskId: "t-1" });
+  await cold.waitForSelector('main[data-ready="true"]', { timeout: CATCH_UP_RETRY_MS + 10_000 });
+  await cold.waitForSelector('[data-task="t-4"]');
+  assert.equal(await cold.locator("main").getAttribute("data-error"), "true", "静默重试成功即就绪，不依赖初次错误横幅清除");
   assert.deepEqual(errors, []);
   console.log(`✓ 哨兵事件带着恢复责任:GET 掉了自己重试到追平(重试间隔 ${CATCH_UP_RETRY_MS}ms,连掉两发也不放弃),断线前那一发回来也不许清掉重连后欠下的那一趟`);
 } finally {

@@ -24,7 +24,7 @@ import type { InputAcceptance, RunHandle } from "../src/executors/types.js";
 import { root, startHarness } from "./free-review-dispatch-harness.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-process.env.ASH_TURN_INPUT_ACK_MS = "30";
+process.env.NAVI_TURN_INPUT_ACK_MS = "30";
 
 try {
   const harness = await startHarness();

@@ -50,6 +50,7 @@
 // 这台设备再权威也不去放松它。一个已经被别的设备点过名、此刻还活着的号,内核圈定可以推出
 // 「它不在我这个集合里 ⇒ 它不是这次运行的」—— 但那是**改核销判据**,不在本次改动的范围内
 // (约束原话:`dischargeOpen` 的语义不要改)。所以名单上还剩一条,这里照样降成 `unknown`。
+import { readEnv } from "@navi/shared/env-names";
 import type { ChildProcess } from "node:child_process";
 import {
   existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync,
@@ -59,6 +60,7 @@ import { basename, join } from "node:path";
 import { IS_MAC, IS_WINDOWS, killOne } from "../platform.js";
 import { processGenerationSync } from "../process-generation.js";
 import { openJobConfinement, reopenJobConfinement } from "./confine-job.js";
+import { FROZEN_AGENT_UNIT_PREFIX, FROZEN_CONFINE_TMP_DIR } from "@navi/shared/legacy-names";
 
 /**
  * 圈里的一个成员:号 + **读到这个事实时它是哪一代**。
@@ -90,14 +92,14 @@ export type ConfineRead =
  * 并把 `env` 里那一项带上 —— 于是圈定发生在目标程序被 fork 出来**之前**,这次运行产生的
  * 每一个进程都必然进过集合(coverage 从此是 `whole-run`,见 `ConfineCoverage`)。
  *
- * 写成功之后**再往一个普通文件里写一次自己的号**(`$ASH_CONFINE_OK`):那是这一句到底
+ * 写成功之后**再往一个普通文件里写一次自己的号**(`$NAVI_CONFINE_OK`):那是这一句到底
  * 跑成没跑成的**唯一可验证证据**,父进程随时核得动,而且进程退出之后它还在盘上。
  * `whole-run` 这一档就认它(见 `cgroupConfinement` 里的 `confirmWholeRun`)—— 以前这一档
  * 是在**发环境变量那一刻**直接声明的,等于「我打算这么做」被当成「内核已经这么记下了」:
  * 这一句写失败(或者根本没被执行)时读数照旧自称 `whole-run`,于是「集合空」这句**推断
  * 出来的空**会压过别的设备,正是这台设备本来要消灭的那类判据错误(第 1 轮审查 F3)。
  *
- * 失败不往 `/dev/null` 吞,接到 `$ASH_ERR`(这次运行自己的 stderr 文件)上:吞掉等于把
+ * 失败不往 `/dev/null` 吞,接到 `$NAVI_ERR`(这次运行自己的 stderr 文件)上:吞掉等于把
  * 一台设备的失效做成静默。接不上时(没有那一项)才退回 `/dev/null` —— 圈定是**加一台
  * 设备**,不该让它把一次正常的运行弄挂。
  *
@@ -107,18 +109,18 @@ export type ConfineRead =
  * 换成了 `..._CMD`:它不是「可以直接贴上去的前缀」,是「要自己接分隔符的一条命令」。
  */
 export const CONFINE_ENROLL_CMD =
-  'test -n "$ASH_CONFINE_PROCS" && { echo $$ >"$ASH_CONFINE_PROCS"'
-  + ' && echo $$ >"$ASH_CONFINE_OK"; } 2>>"${ASH_ERR:-/dev/null}"';
+  'test -n "$NAVI_CONFINE_PROCS" && { echo $$ >"$NAVI_CONFINE_PROCS"'
+  + ' && echo $$ >"$NAVI_CONFINE_OK"; } 2>>"${NAVI_ERR:-/dev/null}"';
 
 /** `CONFINE_ENROLL_CMD` 认的两项环境变量:圈的成员文件,以及那一句的成功凭据。 */
-export const CONFINE_PROCS_ENV = "ASH_CONFINE_PROCS";
-export const CONFINE_OK_ENV = "ASH_CONFINE_OK";
+export const CONFINE_PROCS_ENV = "NAVI_CONFINE_PROCS";
+export const CONFINE_OK_ENV = "NAVI_CONFINE_OK";
 
 export type Confinement = {
   /**
    * **圈号**:Linux 是 cgroup 相对挂载点的路径,Windows 是 Job Object 的名字。
    * 路径/名字本身就是身份,所以**落库之后**清扫侧能原样把圈打开(`reopenConfinement`)。
-   * **目前没落库**:这台设备的有效范围就是 ash 自己这条命之内,跨 server 重启那一档
+   * **目前没落库**:这台设备的有效范围就是 navi 自己这条命之内,跨 server 重启那一档
    * 是「未接」而不是「在」—— 别把这一行读成已经接上了。
    */
   readonly id: string;
@@ -169,27 +171,27 @@ export function confineAbstention(): string | null {
   // 换来的是「弃权就一定说得出为什么」这条能被回归钉住的不变量。
   const probe = probeCgroupWritable(mount);
   return probe
-    ? `这台机器上建不出 cgroup(${probe}):ash 自己这个 cgroup 的目录不可写 —— `
-      + "常见于从 ssh 登录会话直接起的 ash(那个 scope 归 root);"
-      + "要拿到这台设备得让 ash 跑在一个被 delegate 的 scope 里(systemd-run --user --scope)"
+    ? `这台机器上建不出 cgroup(${probe}):Navi 自己这个 cgroup 的目录不可写 —— `
+      + "常见于从 ssh 登录会话直接起的 Navi(那个 scope 归 root);"
+      + "要拿到这台设备得让 Navi 跑在一个被 delegate 的 scope 里(systemd-run --user --scope)"
     : null;
 }
 
 /**
- * **显式关掉这台设备**的开关(`ASH_KERNEL_CONFINE=0`)。
+ * **显式关掉这台设备**的开关(`NAVI_KERNEL_CONFINE=0`)。
  *
  * 两个用处,都不是「配置项」:回归要能在**同一台机器上**跑「有这台设备」和「没有这台设备」
  * 两遍,证明「答不出来就退回原路」这条真的走得通(`test:kernel-confine` 第 5 组);真出了
  * 问题时它也是一条退路 —— 关掉只是少一台设备,判定原样退回既有那套,不会放松任何判据。
  */
-const CONFINE_OFF_ENV = "ASH_KERNEL_CONFINE";
-const confineEnabled = (): boolean => process.env[CONFINE_OFF_ENV] !== "0";
+const CONFINE_OFF_ENV = "NAVI_KERNEL_CONFINE";
+const confineEnabled = (): boolean => readEnv(process.env, CONFINE_OFF_ENV) !== "0";
 
 /** `null` = 建得出来(已经删掉);非 null = 建不出来的那个 errno。 */
 function probeCgroupWritable(mount: string): string | null {
   const own = ownCgroup();
   if (!own) return "ENOENT";
-  const dir = join(mount, `.${own === "/" ? "" : own}`, `ash-confine-probe-${process.pid}`);
+  const dir = join(mount, `.${own === "/" ? "" : own}`, `${FROZEN_CONFINE_TMP_DIR}-probe-${process.pid}`);
   try {
     mkdirSync(dir);
   } catch (error) {
@@ -218,7 +220,7 @@ let disclosed: string | null = null;
 
 /**
  * **弃权要说出来。** 任务原话要求把平台边界写在「代码注释和披露面」两处,而注释只给改这块
- * 代码的人看 —— 真正跑着 ash 的那台 macOS 上,得有一句话让使用者知道自己拿不到 Linux 那一档
+ * 代码的人看 —— 真正跑着 navi 的那台 macOS 上,得有一句话让使用者知道自己拿不到 Linux 那一档
  * 的保证。所以这台设备建不出圈时,**每个进程打一次**那句弃权理由。
  *
  * 同一句理由只打一次:它是平台/部署形态决定的,一次运行里不会变,每个回合重复一遍只会把
@@ -230,7 +232,7 @@ function discloseAbstention(): void {
   const why = confineAbstention();
   if (!why || why === disclosed) return;
   disclosed = why;
-  console.warn(`[ash] 内核圈定这台设备在这台机器上弃权:${why}`);
+  console.warn(`[navi] 内核圈定这台设备在这台机器上弃权:${why}`);
 }
 
 /**
@@ -284,15 +286,15 @@ export const confinementOf = (child: ChildProcess): Confinement | null =>
 // 这不是保守,是内核规则:cgroup v2 的 delegation containment 要求「迁移一个进程时,写的人
 // 必须对**源与目标的共同祖先**的 `cgroup.procs` 有写权限」。所以:
 //
-//  · ash 跑在 systemd 的 **user scope / user service** 里(`user@<uid>.service` 整棵子树归
+//  · navi 跑在 systemd 的 **user scope / user service** 里(`user@<uid>.service` 整棵子树归
 //    用户)⇒ 自己的目录可写、共同祖先也在自己子树里 ⇒ **可用**(2026-10-22 在 Ubuntu 24.04
 //    aarch64 实测:`systemd-run --user --scope` 里 mkdir/迁移/`cgroup.kill`/rmdir 全通);
 //  · 容器里(root + 私有 cgroup 命名空间)⇒ `/sys/fs/cgroup` 就是自己这一层 ⇒ **可用**;
-//  · ash 从 **ssh 登录会话**里起(`session-N.scope`,root 所有)⇒ mkdir 当场 EACCES ⇒ 弃权。
+//  · navi 从 **ssh 登录会话**里起(`session-N.scope`,root 所有)⇒ mkdir 当场 EACCES ⇒ 弃权。
 //    这一档**不能**靠「改去 `user@<uid>.service` 下面建」绕过去:目录建得出来,可把进程从
 //    `session-N.scope` 迁进去时共同祖先是 root 所有的 `user-<uid>.slice`,写入 EACCES
 //    (同日实测:`MKDIR_USERAT_OK` 紧跟着 `MIGRATE_FAIL: Permission denied`)。真要在那种
-//    部署下拿到这台设备,得让 ash 自己跑在一个被 delegate 的 scope 里(`systemd-run --user
+//    部署下拿到这台设备,得让 navi 自己跑在一个被 delegate 的 scope 里(`systemd-run --user
 //    --scope`),那是部署方式的选择,代码这一侧只能如实弃权。
 const CGROUP_MOUNTS = ["/sys/fs/cgroup", "/sys/fs/cgroup/unified"];
 
@@ -334,7 +336,7 @@ function openCgroupConfinement(token: string): Confinement | null {
   } catch (error) {
     // EACCES = 这个部署形态下没有可写的 cgroup(见上面那段降级),EEXIST 几乎不可能
     // (名字带着随机记号)。两种都只有一个处置:**弃权**,让判定退回既有那套。
-    console.warn(`[ash] 内核圈定这台设备弃权:建不出 cgroup ${dir}(${describe(error)})`);
+    console.warn(`[navi] 内核圈定这台设备弃权:建不出 cgroup ${dir}(${describe(error)})`);
     return null;
   }
   sweepStaleCgroups(join(mount, `.${own}`), basename(dir));
@@ -359,7 +361,7 @@ function sweepStaleCgroups(parent: string, keep: string): void {
     return;                                         // 父目录读不了:不是我们该管的事
   }
   for (const name of names) {
-    if (name === keep || !name.startsWith("ash-agent-")) continue;
+    if (name === keep || !name.startsWith(FROZEN_AGENT_UNIT_PREFIX)) continue;
     const dir = join(parent, name);
     try {
       if (!statSync(dir).isDirectory() || statSync(dir).mtimeMs >= cutoff) continue;
@@ -372,13 +374,13 @@ function sweepStaleCgroups(parent: string, keep: string): void {
 
 /** cgroup 目录名。记号本身只含 `[a-z0-9-]`,这里仍然兜一道:路径分隔符进不去。 */
 const cgroupName = (token: string): string =>
-  `ash-agent-${token.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+  `${FROZEN_AGENT_UNIT_PREFIX}${token.replace(/[^A-Za-z0-9._-]/g, "_")}`;
 
 function cgroupConfinement(id: string, dir: string): Confinement {
   // **默认是保守的那一档**,而且升档要由**内核那一侧确认**,不是由这边声明。
   //
   // 取过 `preExecEnv()` 只说明「我打算在目标程序跑起来之前把自己写进去」;那一句到底跑成
-  // 没跑成,只有 shell 自己知道。所以它写成功之后还要往 `$ASH_CONFINE_OK` 里写一次自己的
+  // 没跑成,只有 shell 自己知道。所以它写成功之后还要往 `$NAVI_CONFINE_OK` 里写一次自己的
   // 号,这边核对那份凭据(`confirmWholeRun`)—— 核不上就老老实实停在 `since-enroll`,那一
   // 档的「空」不构成证明。上一版在**发环境变量那一刻**就把 coverage 设成 `whole-run`:
   // 那一句写失败、或者 shell 根本没执行到它(脚本语法错、`exec` 之前就挂了)时,读数照旧
@@ -416,7 +418,7 @@ function cgroupConfinement(id: string, dir: string): Confinement {
         // 两种都归到同一个处置:这个号没圈住。**但不改 coverage** —— shell 那一侧可能
         // 已经把自己写进去了(进程已经退出的话这里写必然失败,而它当初确实进过集合)。
         if (!enrolledByParent) {
-          console.warn(`[ash] 内核圈定:${pid} 没能写进 ${id}(${describe(error)})`);
+          console.warn(`[navi] 内核圈定:${pid} 没能写进 ${id}(${describe(error)})`);
         }
         return false;
       }
@@ -469,7 +471,7 @@ function cgroupConfinement(id: string, dir: string): Confinement {
 }
 
 /** 盘上那点凭据放哪:跟 Windows 那边守圈进程的就绪文件同一个目录(confine-job.ts)。 */
-const confineTmp = (): string => join(tmpdir(), "ash-confine");
+const confineTmp = (): string => join(tmpdir(), FROZEN_CONFINE_TMP_DIR);
 
 /**
  * 过期的入圈凭据扫掉。跟 `sweepStaleCgroups` 同一个理由和同一道年龄门:判定没落在
@@ -485,7 +487,7 @@ function sweepStaleEnrolled(): void {
     return;
   }
   for (const name of names) {
-    if (!name.startsWith("ash-agent-") || !name.endsWith(".enrolled")) continue;
+    if (!name.startsWith(FROZEN_AGENT_UNIT_PREFIX) || !name.endsWith(".enrolled")) continue;
     const file = join(confineTmp(), name);
     try {
       if (statSync(file).mtimeMs >= cutoff) continue;

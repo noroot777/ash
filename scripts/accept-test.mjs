@@ -1,21 +1,22 @@
 import { fileURLToPath } from "node:url";
 import { runSteps } from "./test-runner.mjs";
+import { clearEnv } from "./env.mjs";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const environment = { ...process.env };
-for (const key of Object.keys(environment)) {
-  if (/^ASH_(?:DB|RUNS_DIR|DATA_DIR)$/i.test(key)) delete environment[key];
-}
+// 各代名字一起擦(`NAVI_DB`、改名之前的 `ASH_DB`……):擦漏一代,测试就会打到那份库上。
+for (const name of ["NAVI_DB", "NAVI_RUNS_DIR", "NAVI_DATA_DIR"]) clearEnv(environment, name);
 
 // 验收前置命令跑哪几条。加一条的判据：它拦的是**无声退化**——不跑就没有任何人会发现的
 // 那一类。提示词体积属于这一类：注入给模型的字数涨上去不会报任何错，只会在几个月后变成
 // 一张「每回合读 39.7M token」的账单；它现在由后端那一步带进来（test:accept → test:review
 // → test-prompt-budget），所以这里**不要**再单列一条，单列就是同一条跑两遍。
 //
-// 两步的叶子进同一个并行池子（scripts/test-runner.mjs），任何一条红就收掉在跑的、拒绝验收。
+// 几步的叶子进同一个并行池子（scripts/test-runner.mjs），任何一条红就收掉在跑的、拒绝验收。
 const STEPS = [
   { label: "后端核心回归", workspace: "server", script: "test:accept" },
   { label: "前端全量回归", workspace: "web", script: "test" },
+  { label: "脚本与手机端回归", workspace: ".", script: "test:accept-scripts" },
 ];
 
 console.log(`[accept-test] 运行${STEPS.map((step) => step.label).join("、")}…`);

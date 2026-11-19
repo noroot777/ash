@@ -3,12 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
-import { isSearchQueryReady, searchMatchQuality } from "@ash/shared/search";
+import { isSearchQueryReady, searchMatchQuality } from "@navi/shared/search";
 import { SearchCorpus } from "../src/search-corpus.js";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-search-experience-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-search-experience-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const [{ db, ensureSchema }, { projects, tasks, notes }, { searchAll }, { SINGLE_ACTOR }] = await Promise.all([
   import("../src/db/index.js"), import("../src/db/schema.js"), import("../src/search.js"), import("../src/auth/context.js"),
 ]);
@@ -118,5 +119,5 @@ try {
   assert.equal(corpus.snippets(["alpha", "omega"]).length, 2);
   console.log("search experience passed: real user/system/agent turns, tool inputs, changes and paths, match/evidence invariant, raw exclusions, ranking and snippets");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

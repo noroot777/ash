@@ -1,3 +1,4 @@
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -9,7 +10,7 @@ import { startCommand, stopCommand } from "../src/terminal-commands.js";
 import { PORT_TIER_AVAILABLE, stopByPorts, stopByPortsSync } from "../src/service-ports.js";
 import { readLineage } from "../src/service-ports-probe.js";
 
-const cwd = mkdtempSync(join(tmpdir(), "ash-stop-review-"));
+const cwd = mkdtempSync(join(tmpdir(), "navi-stop-review-"));
 const manager = new TerminalSessionManager();
 let listener: ReturnType<typeof spawn> | undefined;
 let listenerExited: Promise<unknown> | undefined;

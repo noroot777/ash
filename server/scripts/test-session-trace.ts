@@ -1,3 +1,4 @@
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";

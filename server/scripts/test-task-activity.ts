@@ -10,7 +10,7 @@
 // 启动迁移里清 ssh profile 引用。
 //
 // 跑法:
-//   ASH_DB=/tmp/test-task-activity-$RANDOM.db npx tsx server/scripts/test-task-activity.ts
+//   NAVI_DB=/tmp/test-task-activity-$RANDOM.db npx tsx server/scripts/test-task-activity.ts
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,8 +18,8 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-activity-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-task-activity-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 // routes.ts 导出的 `api` 已经把 task / group 路由都挂好了,照它在真实进程里的样子请求。
 const [{ db, ensureSchema }, schema, { api }] = await Promise.all([
@@ -75,7 +75,7 @@ try {
 
   console.log("task activity tests passed");
 } finally {
-  // Windows 删不掉还开着的库文件(舞台目录里就是 ASH_DB),先松手再删。
+  // Windows 删不掉还开着的库文件(舞台目录里就是 NAVI_DB),先松手再删。
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }

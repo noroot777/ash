@@ -1,8 +1,8 @@
 // 用户管理(实例层,仅管理员)+ 项目成员与项目邀请(项目层)。§五 / §六。
 import type { Hono } from "hono";
 import { and, eq, isNull } from "drizzle-orm";
-import type { ProjectInviteInfo, ProjectRole, UserRole } from "@ash/shared";
-import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
+import type { ProjectInviteInfo, ProjectRole, UserRole } from "@navi/shared";
+import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@navi/shared/multiuser";
 import { db } from "../db/index.js";
 import { projectInvites, projects, schedules, tasks } from "../db/schema.js";
 import { stopTask } from "../runs.js";
@@ -202,7 +202,7 @@ export function mountUserRoutes(api: Hono): void {
         if (!stopTask(task.id)) await setTaskStatus(task.id, "canceled");
         stopped.push(task.id);
       } catch (e) {
-        console.warn(`[ash] 停用 ${target} 时停不掉任务 ${task.id}:`, e);
+        console.warn(`[navi] 停用 ${target} 时停不掉任务 ${task.id}:`, e);
       }
     }
     // 日程:暂停而不是删除。恢复启用后由本人自行续跑(§五)。

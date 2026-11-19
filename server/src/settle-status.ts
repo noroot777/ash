@@ -5,9 +5,10 @@
 //
 // **落位规则是全局单点**,谁也不该另造一份:续聊、原生命令、手停、组暂停、提问、检查点、
 // 严格完成协议、以及那条「挂着哨兵不许落终态」的不变量,全都在下面这一个函数里算清楚。
+import { readEnv } from "@navi/shared/env-names";
 import { and, desc, eq, isNull } from "drizzle-orm";
-import type { SessionRole, TaskStatus } from "@ash/shared";
-import { monitorSweepingStatus } from "@ash/shared/monitor";
+import type { SessionRole, TaskStatus } from "@navi/shared";
+import { monitorSweepingStatus } from "@navi/shared/monitor";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { now } from "./util.js";
@@ -25,6 +26,7 @@ import type { StallVerdictKind } from "./turn-stall-verdict.js";
 import { failedTurnLanding } from "./settle-landing.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
+import { settleDiscussionTurn } from "./discussion.js";
 import { settleTurnHandoffs } from "./monitor-turn-handoff.js";
 
 async function setStatus(
@@ -51,19 +53,21 @@ export async function afterSettlement(
   executionFailed = false,
 ) {
   try {
+    // 讨论的每一段（连同合稿）都是旁路回合，排在审查那一路之前收：交给它会被当成普通回合去消费预约、推审查链。
+    if (await settleDiscussionTurn(taskId, turnOk, role)) return;
     if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk, role, exitObserved, executionFailed)) return;
     await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
   } catch (error) {
     // Review orchestration is a post-settlement side effect. A failure here must
     // never rewrite an already-settled worker/reviewer status.
-    console.error(`[ash] review settlement hook failed for ${taskId}:`, error);
+    console.error(`[navi] review settlement hook failed for ${taskId}:`, error);
   } finally {
     // 上面两个钩子会往托盘里放消息(审查未通过的修复指令、打回重做):平时由放锁那一刻的扫描送出去
     // (turn-release.ts)。锁已经放了才结算的那一路(引导收尾期间被停止,task-steer.ts)后面没有
     // 放锁了,当场扫一遍。动态 import 的理由同 status.ts:pending-messages 那条链会绕回本文件。
     if (!isTurnClaimed(taskId)) {
       await import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId))
-        .catch((error) => console.error(`[ash] 结算后的待发送扫描失败 ${taskId}:`, error));
+        .catch((error) => console.error(`[navi] 结算后的待发送扫描失败 ${taskId}:`, error));
     }
   }
 }
@@ -77,27 +81,27 @@ export async function afterSettlement(
 // 协议：agent 必须在回合内调过 complete_task 确认
 // 「目标真的达成了」才落 done —— exit 0 只证明 CLI 进程正常退出,agent 报错后
 // 退出照样 exit 0,假 done 会误推进队列、错误唤醒下游。未确认 → failed(重试
-// 会 resume 续跑,代价低)。逃生口:ASH_LAX_DONE=1 退回「exit 0 即 done」
-// (接没配 ash MCP 的 agent 时用)。一处算清楚,run / continue 共用。
+// 会 resume 续跑,代价低)。逃生口:NAVI_LAX_DONE=1 退回「exit 0 即 done」
+// (接没配 navi MCP 的 agent 时用)。一处算清楚,run / continue 共用。
 // 队列推进：done / canceled / failed / paused 进 setTaskStatus 后会触发同 queue 推进。
 // 返回落位状态 + note(未确认降级的说明,调用方写进时间线让用户知道为什么)。
-const STRICT_DONE = !process.env.ASH_LAX_DONE;
+const STRICT_DONE = !readEnv(process.env, "NAVI_LAX_DONE");
 /**
  * 导出给 orchestrator：宽松模式下**连前言也别发**。
  *
- * 这个逃生口的适用场景是「对面的 agent 根本够不着这台 ash 的 MCP」——预览实例就是
+ * 这个逃生口的适用场景是「对面的 agent 根本够不着这台 navi 的 MCP」——预览实例就是
  * 现成一例（claude 只把配置文件里写死的 env 交给 MCP 子进程，不传父进程的环境变量，
  * 所以预览里跑的 agent 的 `complete_task` 一定打去主实例、拿一个 404）。这种时候还照旧
  * 交代「不确认就记 failed」，agent 会认真去调、失败、再花半个回合解释它没能确认——
  * 一条它压根做不到的指令，不如不说。
  */
 export const STRICT_DONE_PROTOCOL = STRICT_DONE;
-// 结算说明写给**第一次用 ash 的人**看:他这一刻眼里只有一条红字,而红字里全是内部
+// 结算说明写给**第一次用 navi 的人**看:他这一刻眼里只有一条红字,而红字里全是内部
 // 黑话(严格完成协议、方向身份、409),读完只会得出「它崩了」。所以顺序是「发生了什么 →
 // 这不是崩溃 → 你现在能做什么 → 常见原因」,内部原因排最后。落位仍是 failed,措辞不改
 // 规则。**这类说明一律以 level:"notice" 发出**,别跟执行器报的真故障挤在同一格红里。
 const UNCONFIRMED_NOTE =
-  "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。" +
+  "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 Navi 的完成协议记为未完成。" +
   "这不是崩溃 —— 进程正常退出(exit 0)只证明 CLI 没挂,报错后退出也是 exit 0,所以「干完了」只认 agent 亲口确认。" +
   "产物都还在:核对后可直接把状态改成已完成;点重试会从中断处接着跑,不用从头再来。" +
   "常见原因:agent 漏调了这一步;执行器/MCP 丢了回合或方向身份;任务状态中途变了,调用被 409 拒绝。";
@@ -123,7 +127,7 @@ const UNCONFIRMED_HELD_TAIL =
  * **这一轮为什么结束**里那部分退出码表达不了的:由下结论的那一方结构化地传进来。
  *
  * 退出码只够说「进程怎么没的」,而落位要分的是**原因**:被动检查点(agent 自己留了续跑指令、
- * 问了问题、持续目标没确认)、真人停止、还是 ash **主动**判这一轮失败。看门狗熔断是最后一种:
+ * 问了问题、持续目标没确认)、真人停止、还是 navi **主动**判这一轮失败。看门狗熔断是最后一种:
  * 它是我们自己杀掉一个还在跑的回合,而且已经在时间线上红着写了「已自动终止本回合并按失败
  * 结算」—— 这句话必须兑现。
  *
@@ -140,7 +144,7 @@ export type SettleExecutionReason = {
    * 下面那两张措辞表按它穷举(`Record<StallVerdictKind, …>`):加一种就编译不过。
    *
    * **落位判据是「有没有这个原因」,不是「它是哪一种」**(下面三处都这么写)——这个类型本身的
-   * 含义就是「ash 认定这一轮不成功」,逐处枚举只会给漏掉一处留出空间。种类只决定措辞。
+   * 含义就是「navi 认定这一轮不成功」,逐处枚举只会给漏掉一处留出空间。种类只决定措辞。
    */
   kind: StallVerdictKind;
   /** 诊断原文(`turn-stall.ts` 那段),给落位说明转述。 */
@@ -152,7 +156,7 @@ export type SettleExecutionReason = {
 // 熔断落位的说明。要同时说清三件事:为什么失败、续跑材料还在、以及现在能做什么 ——
 // 「暂停中」那个落位原本替用户表达了后两件,改成 failed 之后得由这段话接上。
 const STALL_FAILED_NOTE =
-  "本回合被 ash 主动终止:上游连不上,整段时间里只收到重试类错误、没有任何正常输出,"
+  "本回合被 Navi 主动终止:上游连不上,整段时间里只收到重试类错误、没有任何正常输出,"
   + "按失败结算(诊断见上面那条红字)。**不是检查点暂停** —— 这一轮确实失败了,"
   + "所以状态是未完成而不是「在等」。续跑材料一个字没动:点重试会从中断处接着跑,"
   + "原来的续跑指令/待答复的问题都还在;上游一直连不上就换一个执行器。";
@@ -160,12 +164,12 @@ const STALL_FAILED_NOTE =
 // 「结局核实不了」那一档的落位说明。**不能复用上面那段** —— 那段断言「整段时间里只收到重试类
 // 错误」,而这一档恰恰是我们不知道当时发生了什么。
 const UNVERIFIED_FAILED_NOTE =
-  "本回合是上次 ash 中断时留下的,而本次启动读不出熔断判决日志,无法确认它当时有没有被判失败。"
+  "本回合是上次 Navi 中断时留下的,而本次启动读不出熔断判决日志,无法确认它当时有没有被判失败。"
   + "按未完成结算:可能它本来就失败了,也可能日志故障让我们冤枉了它,两种都不该悄悄记成完成"
   + "(诊断见上面那条红字)。续跑材料一个字没动:核对过工作成果之后点重试或者直接续聊即可。";
 
 const BACKGROUND_TIMEOUT_NOTE =
-  "后台工作流/子代理等到时限还没跑完,ash 收掉了进程,本回合按未完成结算(说明见上面那条红字)。"
+  "后台工作流/子代理等到时限还没跑完,Navi 收掉了进程,本回合按未完成结算(说明见上面那条红字)。"
   + "已经跑完的子智能体结果在会话里;点重试会从当前会话接着跑,让智能体看看还差什么。";
 
 const BACKGROUND_LOST_NOTE =
@@ -173,7 +177,7 @@ const BACKGROUND_LOST_NOTE =
   + "已经跑完的子智能体结果在会话里;点重试会从当前会话接着跑,让智能体看看还差什么。";
 
 const BACKGROUND_UNVERIFIED_NOTE =
-  "ash 重启接管时读不出这个进程之前的输出,确认不了后台工作流/子代理跑没跑完,等到时限或进程退出时都没能核实。"
+  "Navi 重启接管时读不出这个进程之前的输出,确认不了后台工作流/子代理跑没跑完,等到时限或进程退出时都没能核实。"
   + "按未完成结算:可能都跑完了,也可能没有,两种都不该悄悄记成完成。点重试会从当前会话接着跑,让智能体核对一下。";
 
 const WRAPUP_MISSING_NOTE =
@@ -181,7 +185,7 @@ const WRAPUP_MISSING_NOTE =
   + "子智能体的结果在会话里;点重试会从当前会话接着跑,让智能体接着整理。";
 
 /** 落位说明按原因分。穷举的 `Record` 不是装饰:加一种原因而忘了写措辞,这里就编译不过。 */
-const ASH_FAILURE_NOTE: Record<StallVerdictKind, string> = {
+const NAVI_FAILURE_NOTE: Record<StallVerdictKind, string> = {
   tripped: STALL_FAILED_NOTE,
   unverified: UNVERIFIED_FAILED_NOTE,
   background_timeout: BACKGROUND_TIMEOUT_NOTE,
@@ -191,7 +195,7 @@ const ASH_FAILURE_NOTE: Record<StallVerdictKind, string> = {
 };
 
 /** 终态续聊那一支的一句话版本(同一张穷举表的道理)。 */
-const ASH_FAILURE_FOLLOW_UP: Record<StallVerdictKind, string> = {
+const NAVI_FAILURE_FOLLOW_UP: Record<StallVerdictKind, string> = {
   tripped: "续聊回合因上游连不上被自动终止",
   unverified: "续聊回合是上次中断留下的,结局核实不了",
   background_timeout: "续聊回合等后台工作等到时限还没跑完",
@@ -213,6 +217,11 @@ export async function settleTaskStatus(
   note?: string;
   confirmedDone: boolean;
   failureReason?: "missing_completion_confirmation";
+  /**
+   * 续聊 / 旁路回合没办成，任务状态原样放回了进这一轮之前那一个：`note` 只是在交代「状态没变」。
+   * 审查旁路回合据此不写这句（single-run-settle.ts）。
+   */
+  restored?: true;
   /** 这一轮是 CLI 原生命令（`/compact`）—— 调用方据此整段跳过结算钩子。 */
   nativeTurn: boolean;
 }> {
@@ -243,7 +252,7 @@ export async function settleTaskStatus(
   const closedNormally = !stopped && exitStatus === 0 && !reason
     && (!!t?.followUpFrom || confirmed || !!t?.question || !!t?.resumePrompt || !STRICT_DONE);
   await settleTurnHandoffs(taskId, t?.activeTurnToken ?? null, closedNormally)
-    .catch((error) => console.error(`[ash] 结清回合内交付的哨兵结果失败 task=${taskId}:`, error));
+    .catch((error) => console.error(`[navi] 结清回合内交付的哨兵结果失败 task=${taskId}:`, error));
   // **确认在手 ≠ 可以落 done**(第 1 轮审查 F1)。确认那一刻过的那道哨兵闸只证明「那一刻」:
   // 之后还可以挂新哨兵、断线补录还能从旁路写进来一份确认。所以终态落位之前再问一次同一份
   // 判据 —— 这是那条不变量的最后一关,而且不依赖任何人调接口。拦下来不是失败,是**检查点
@@ -256,7 +265,7 @@ export async function settleTaskStatus(
   // **按需问、问一次**:它有副作用(落检查点 + 时间线 + 置闩),而这一轮可能根本不往终态走
   // (提问、组暂停、恢复一个非终态的原状态)—— 那些落位本来就留着哨兵,不该被这一段碰。
   // 每个落位各自判「我这一笔会不会收走哨兵」,判据是 shared 里那一份(`monitorSweepingStatus`,
-  // 跟终态清理、唤醒闸同源),不是「交了卷没有」:`ASH_LAX_DONE` 下没交卷也会落 done,一样连坐。
+  // 跟终态清理、唤醒闸同源),不是「交了卷没有」:`NAVI_LAX_DONE` 下没交卷也会落 done,一样连坐。
   let landing: string | null | undefined;
   const monitorGate = async (): Promise<string | null> => {
     if (landing === undefined) landing = await beginTerminalLanding(taskId);
@@ -268,7 +277,7 @@ export async function settleTaskStatus(
   const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string, extra?: string) => {
     if (!t) return;
     void notifyTeamLead(t, kind, q, extra).catch((err) =>
-      console.error(`[ash] notifyTeamLead(${taskId}) failed:`, err),
+      console.error(`[navi] notifyTeamLead(${taskId}) failed:`, err),
     );
   };
   // 续聊(follow-up)回合:任务早就是终态,这一轮是终态之后的对话,不是任务的执行。
@@ -339,10 +348,10 @@ export async function settleTaskStatus(
     // 恢复 paused 用 quietAdvance:回到原样不是新的检查点落位(setTaskStatus 的注释)。
     const { serializeQueueClaims } = await import("./queue-seat.js");
     // **落位优先级走共用那一份**(`settle-landing.ts`):这一支算出来就是 `back`,写成一次调用是
-    // 为了让「续聊的原终态压过 ash 判的失败」这条优先级只有一处定义 —— 启动对账那边原先在同一个
+    // 为了让「续聊的原终态压过 navi 判的失败」这条优先级只有一处定义 —— 启动对账那边原先在同一个
     // 事实上另写了一行三元表达式,于是同一轮失败续聊按进了哪个入口给出两种任务结论(第 1 轮审查 F2)。
     const landing = failedTurnLanding({
-      ashFailed: !!reason, followUpFrom: back as Parameters<typeof setStatus>[1], queueAdvancePrev: null, goalHeld: false,
+      naviFailed: !!reason, followUpFrom: back as Parameters<typeof setStatus>[1], queueAdvancePrev: null, goalHeld: false,
     }) as Parameters<typeof setStatus>[1];
     await serializeQueueClaims(async () => {
       // 同上:**消费输入与写下结论必须是一笔**。原终态是这条链唯一的权威来源(库里就这一列),
@@ -360,19 +369,19 @@ export async function settleTaskStatus(
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
       // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
       notify("question", t.question);
-      return { status: back, note: followUpQuestionNote(t.question, label), confirmedDone: false, nativeTurn };
+      return { status: back, note: followUpQuestionNote(t.question, label), restored: true, confirmedDone: false, nativeTurn };
     }
     if (stopped) {
       const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
-      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
+      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, restored: true, confirmedDone: false, nativeTurn };
     }
     if (exitStatus !== 0) {
       // 终态续聊的既定契约是「只能变好,不会变差」,熔断也不例外:状态照旧回到续聊前那个终态
-      // (第 3 轮审查 F1 明确不要求改这条)。但**话要说准** —— 这一轮不是「异常结束」,是 ash
+      // (第 3 轮审查 F1 明确不要求改这条)。但**话要说准** —— 这一轮不是「异常结束」,是 navi
       // 主动终止的,退出码还是我们自己合成的,照原样念出来会让人去查一个不存在的崩溃。
-      const why = reason ? ASH_FAILURE_FOLLOW_UP[reason.kind]
+      const why = reason ? NAVI_FAILURE_FOLLOW_UP[reason.kind]
         : `续聊回合异常结束(退出码 ${exitStatus})`;
-      return { status: back, note: `${why},任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
+      return { status: back, note: `${why},任务状态保持「${label}」不变。`, restored: true, confirmedDone: false, nativeTurn };
     }
     return { status: back, confirmedDone: false, nativeTurn };
   }
@@ -420,15 +429,15 @@ export async function settleTaskStatus(
   // 这里也不过哨兵闸 —— 同 `exitStatus !== 0` 那一支:这一轮是真失败,不拿检查点粉饰它
   // (哨兵的连坐是终态本来就有的后果,见 task-complete.ts)。
   if (reason) {
-    // 同一份策略(`settle-landing.ts`):这里交进去的事实是「ash 判了失败」+「这是不是持续目标」,
+    // 同一份策略(`settle-landing.ts`):这里交进去的事实是「navi 判了失败」+「这是不是持续目标」,
     // 答案必然是 `failed` —— 写成调用而不是字面量,是为了让「它压过持续目标那句暂停」这条优先级
     // 跟启动对账读的是同一行代码。
     const landing = failedTurnLanding({
-      ashFailed: true, followUpFrom: null, queueAdvancePrev: null, goalHeld: goalTurn,
+      naviFailed: true, followUpFrom: null, queueAdvancePrev: null, goalHeld: goalTurn,
     }) as Parameters<typeof setStatus>[1];
     await setStatus(taskId, landing);
     notify("failed");
-    return { status: landing, note: ASH_FAILURE_NOTE[reason.kind], confirmedDone: false, nativeTurn };
+    return { status: landing, note: NAVI_FAILURE_NOTE[reason.kind], confirmedDone: false, nativeTurn };
   }
   // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
   // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。

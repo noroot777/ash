@@ -5,7 +5,7 @@
 // 需要库,也就不可能误连生产库,更不会在生产数据目录旁边写出一个日志文件)。落盘与落库要引
 // 路径和 db,所以单独住在这里,注册进去,不反过来把它们拖进状态机。
 //
-// 要解决的事:**detached 执行器活得过 server 重启**(`executors/detached.ts`,ash 的既有能力)。
+// 要解决的事:**detached 执行器活得过 server 重启**(`executors/detached.ts`,navi 的既有能力)。
 // 判决原先只活在进程内存里,于是存在这样一条路 —— 看门狗判了熔断、终止请求还没兑现(codex 的
 // kill 先发 interrupt,另设 2 秒回收)时 server 退出;重启后接管那个仍然存活的进程,新进程的
 // Map 空着;上游恰好恢复并正常答完,这一轮就按 `completed` 结算、任务落 `done`。退出码重建不出
@@ -69,7 +69,7 @@ setStallVerdictPersister({
  * **装载也在模块加载里做**:把盘上**还没销账的**判决一次性读进内存,之后结算侧照常只读内存。
  *
  * 为什么是一次性装载、而不是每个读取点各读一遍文件(上一版的做法,第 5 轮审查 F1):
- * 「读不出来」要不要影响结论,是个**全局**判断 —— 「这台 ash 还核得了自己的判决吗」。摊到每个
+ * 「读不出来」要不要影响结论,是个**全局**判断 —— 「这台 navi 还核得了自己的判决吗」。摊到每个
  * 读取点各写一次 try/catch,默认行为必然又退化成「读不到就当没有」:实测把日志改成不可读
  * (EACCES)之后接管一个仍然存活的回合,恢复静默失败,上游一恢复这一轮就记成 `completed`、
  * 任务落 `done`,而用户那边「已自动终止本回合」的红字还在。
@@ -87,10 +87,10 @@ const journalUnavailable = ((): string | null => {
   // 读出来多少先装多少 —— 坏了一行不该连带丢掉同一份日志里其它完好的判决。
   const loaded = loadStallFailures(pendingStallVerdicts(read));
   if (read.status === "unavailable") {
-    console.warn(`[ash] 熔断判决日志有内容读不出来,这台 ash 核不了自己的判决:${read.why}`);
+    console.warn(`[navi] 熔断判决日志有内容读不出来,这台 Navi 核不了自己的判决:${read.why}`);
     return read.why;
   }
-  if (loaded) console.log(`[ash] 从判决日志装回 ${loaded} 条还没结算的熔断判决`);
+  if (loaded) console.log(`[navi] 从判决日志装回 ${loaded} 条还没结算的熔断判决`);
   return null;
 })();
 
@@ -118,11 +118,11 @@ export async function projectStallVerdictToDb(
       args: { reason, sid: sessionId, at: turnStartedAt },
     });
     if (!written.rowsAffected) {
-      console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 在 session_turns 里没有对应行,`
+      console.warn(`[navi] 会话 ${sessionId} 回合 ${turnStartedAt} 在 session_turns 里没有对应行,`
         + `熔断判决没能投影到库(${fallback})`);
     }
   } catch (error) {
-    console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能投影到库`
+    console.warn(`[navi] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能投影到库`
       + `(${fallback}):`, error);
   }
 }
@@ -177,7 +177,7 @@ export async function restoreStallVerdict(
     });
     if (typeof read.rows.at(0)?.stall_reason === "string") reason = read.rows.at(0)!.stall_reason as string;
   } catch (error) {
-    console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的回合行没读出来`
+    console.warn(`[navi] 会话 ${sessionId} 回合 ${turnStartedAt} 的回合行没读出来`
       + "(落盘的判决仍然算数):", error);
     // 问不到也**不许解释成「已经结算完了」**:那又是一次「拿读不到当成没发生」。
     if (carriedOver) unreadable = unreadable ?? `回合行读不出来:${String(error)}`;
@@ -220,9 +220,9 @@ export async function pendingStallObligations(): Promise<{ sessionId: string; tu
       });
       const taskId = read.rows.at(0)?.task_id;
       if (typeof taskId === "string") owners.set(sessionId, taskId);
-      else console.warn(`[ash] 会话 ${sessionId} 背着一条没结算的熔断判决,但库里没有这条会话行 —— 落位无从下手`);
+      else console.warn(`[navi] 会话 ${sessionId} 背着一条没结算的熔断判决,但库里没有这条会话行 —— 落位无从下手`);
     } catch (error) {
-      console.warn(`[ash] 会话 ${sessionId} 的归属任务没读出来,这条熔断判决这次落不了位:`, error);
+      console.warn(`[navi] 会话 ${sessionId} 的归属任务没读出来,这条熔断判决这次落不了位:`, error);
     }
   }
   return live.flatMap((v) => {
@@ -243,6 +243,6 @@ export async function pendingStallObligations(): Promise<{ sessionId: string; tu
  */
 export async function compactStallVerdicts(): Promise<{ kept: number; dropped: number } | null> {
   const result = compactStallJournal();
-  if (result?.dropped) console.log(`[ash] 判决日志已压缩:留下 ${result.kept} 条未结算,清掉 ${result.dropped} 条已销账记录`);
+  if (result?.dropped) console.log(`[navi] 判决日志已压缩:留下 ${result.kept} 条未结算,清掉 ${result.dropped} 条已销账记录`);
   return result;
 }

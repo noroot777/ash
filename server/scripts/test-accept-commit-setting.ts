@@ -10,12 +10,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-accept-commit-test-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-accept-commit-test-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 兜底清理挂在建好舞台的下一行：早退路径也不许在 TEMP 里留下目录（见 test-accept-merge.ts）。
 process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
 const git = (cwd: string, ...args: string[]) =>
@@ -33,7 +33,7 @@ function hasRef(repo: string, branch: string): boolean {
 function makeRepo(name: string): string {
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Accept Test");
+  git(repo, "config", "user.name", "Navi Accept Test");
   git(repo, "config", "user.email", "accept@example.test");
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(repo, "shared.txt"), "seed\n");
@@ -298,7 +298,7 @@ try {
     assert.equal(git(repo, "rev-parse", "main"), before, "父任务这一档不提交，main 的 ref 不动");
     assert.equal(git(repo, "diff", "--cached", "--name-only"), "tagparent.txt");
     assert.equal((await row(childId)).stage, "accepted");
-    assert.match(git(repo, "tag", "--list"), /ash-accepted\//, "tag 那一档照常打标签");
+    assert.match(git(repo, "tag", "--list"), /navi-accepted\//, "tag 那一档照常打标签");
   }
 
   console.log("accept commit setting: 合并后不提交 / 目标分支前提 / 项目默认与单次覆盖 / 统一验收本次覆盖 全部通过");

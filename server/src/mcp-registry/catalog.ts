@@ -1,4 +1,4 @@
-// 「每家 CLI 的 ash MCP 登记写在哪、什么形状」——**一家一条,这是唯一真相来源**。
+// 「每家 CLI 的 navi MCP 登记写在哪、什么形状」——**一家一条,这是唯一真相来源**。
 //
 // 读这张表前先看 `types.ts` 的文件头(为什么要有它)。这里只补三条读表规矩:
 //
@@ -6,29 +6,29 @@
 //     产物;`docs` = 只查了官方文档或发布包源码。没有第三档「我觉得」—— 十五家里有九家
 //     本机没装,凭直觉写一条路径出来,最后收获的是「登记写了、CLI 不读、任务照样失败」,
 //     正是这轮要治的病(用户 2026-10-30 实测:换别的 agent 跑任务全是 failed)。
-//  ② **`identity` 比 `shape` 更要紧**:登记写对了只代表 CLI 连得上 ash MCP;交卷还需要
-//     回合身份(`ASH_TASK_ID` / 两套 token)真的进到 MCP 子进程里。gemini 就是现成的坑 ——
+//  ② **`identity` 比 `shape` 更要紧**:登记写对了只代表 CLI 连得上 navi MCP;交卷还需要
+//     回合身份(`NAVI_TASK_ID` / 两套 token)真的进到 MCP 子进程里。gemini 就是现成的坑 ——
 //     登记完全正确、工具列得出来,但它按**变量名**把 `*_TOKEN` 从子进程环境里删了,于是
 //     `complete_task` 永远报「这不是当前回合」。所以这一列拿不准时写 `unknown` 并在
 //     `identityNote` 里说明,别默认它通。
-//  ③ **宿主机那份配置只在缺 ash 条目时追加**(用户 2026-10-30 的硬边界)。表里不写「怎么写」,
+//  ③ **宿主机那份配置只在缺 navi 条目时追加**(用户 2026-10-30 的硬边界)。表里不写「怎么写」,
 //     怎么写由 `shapes.ts` 的 compose + `auth/config-publish.ts` 的事务统一负责。
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import { mcpServersJsonShape, mcpServersTomlShape, opencodeJsonShape } from "./shapes.js";
-import type { AshMcpConfigSite, AshMcpMechanism, AshMcpTable } from "./types.js";
+import type { NaviMcpConfigSite, NaviMcpMechanism, NaviMcpTable } from "./types.js";
 
 /** 配置目录就是 home 本身(claude 的 `.claude.json`、gemini 的 `.gemini/`)。 */
-const atHome: AshMcpConfigSite["defaultDir"] = (_env, home) => home;
+const atHome: NaviMcpConfigSite["defaultDir"] = (_env, home) => home;
 /** `~/<段>/…`。 */
-const underHome = (...segments: string[]): AshMcpConfigSite["defaultDir"] =>
+const underHome = (...segments: string[]): NaviMcpConfigSite["defaultDir"] =>
   (_env, home) => join(home, ...segments);
 /** XDG 那一族:`$XDG_CONFIG_HOME/<名>`,没设就 `~/.config/<名>`。 */
-const xdgConfig = (name: string): AshMcpConfigSite["defaultDir"] =>
+const xdgConfig = (name: string): NaviMcpConfigSite["defaultDir"] =>
   (env, home) => join(env.XDG_CONFIG_HOME?.trim() || join(home, ".config"), name);
 
-export const ASH_MCP_TABLE = {
+export const NAVI_MCP_TABLE = {
   // ── 本机实测过的六家 ────────────────────────────────────────────────────
 
   claude: {
@@ -40,7 +40,7 @@ export const ASH_MCP_TABLE = {
     evidence: "tested",
     // CLI 自己 `mcp add` 写出来的那条带 `type`,照抄它:同一份文件两种写法会让人以为被改过。
     writeType: "stdio",
-    source: "`claude mcp add ash --scope user` 实测；本仓 `scripts/setup.mjs` 从一开始就在写这份",
+    source: "`claude mcp add navi --scope user` 实测；本仓 `scripts/setup.mjs` 从一开始就在写这份",
     notes: "`.claude.json` 同时是 CLI 自己在写的文件（会话、onboarding 标记都在里面），"
       + "所以写它必须走 `config-publish.ts` 那套就地写 + 读回来比对：半截内容比缺一条登记更糟",
   },
@@ -52,17 +52,16 @@ export const ASH_MCP_TABLE = {
       dirEnv: "CODEX_HOME",
       defaultDir: underHome(".codex"),
       relative: ["config.toml"],
-      projectRelative: [[".codex", "config.toml"]],
     },
     // **没有 `switches`**:根级 `disabled_mcp_servers` 是 grok 专有的,codex 不认(2026-10-31
     // 实测 codex-cli 0.153.4:同一份配置里那个键 + 条目 `enabled = true` ⇒ `codex mcp list
     // --json` 仍是 `enabled: true, disabled_reason: null`)。上一版两家共用 TOML 族、无条件
-    // 解释那个键,于是给 grok 关一次 ash 会让 codex 这边也被判成「被关掉了」(本轮审查 F2)。
+    // 解释那个键,于是给 grok 关一次 navi 会让 codex 这边也被判成「被关掉了」(本轮审查 F2)。
     // codex 按 `env_vars` 白名单过滤 MCP 子进程环境:起跑时用 `-c mcp_servers.<名>.env_vars=[…]`
     // 声明(`executors/codex.ts`)。**那是按回合给的命令行覆盖,不是写进配置文件的** ——
     // 回合 token 一轮一个,写进配置就是过期的假身份。
     identity: "declare",
-    identityNote: "回合身份靠起跑时 `-c mcp_servers.ash.env_vars=[…]` 声明放行（`executors/codex.ts`）",
+    identityNote: "回合身份靠起跑时 `-c mcp_servers.navi.env_vars=[…]` 声明放行（`executors/codex.ts`）",
     evidence: "tested",
     source: "`codex mcp add` 实测 + `server/src/codex-toml.ts` 的结构扫描器（整套回归在 `test:codex-toml`）",
     notes: "整张表被写成内联值（`mcp_servers = { … }`）之后 TOML 不许再用表头扩展，"
@@ -76,19 +75,18 @@ export const ASH_MCP_TABLE = {
       dirEnv: "GEMINI_CLI_HOME",
       defaultDir: atHome,
       relative: [".gemini", "settings.json"],
-      projectRelative: [[".gemini", "settings.json"], [".mcp.json"]],
     },
     // 根级两个名单会直接把一条写得完全正确的登记打成 `Blocked`(2026-10-31 本机实测,
-    // gemini 0.60.0:`mcp.excluded:["ash"]` ⇒ `⛔ ash … Blocked`;`mcp.allowed:["other"]`
-    // 同样 Blocked;`mcp.allowed:["ash"]` 则换成 `other` 被 Blocked;`mcp.allowed:[]`
+    // gemini 0.60.0:`mcp.excluded:["navi"]` ⇒ `⛔ navi … Blocked`;`mcp.allowed:["other"]`
+    // 同样 Blocked;`mcp.allowed:["navi"]` 则换成 `other` 被 Blocked;`mcp.allowed:[]`
     // 两条全 Blocked —— 所以**键存在就生效**,空数组不是「没配」)。
     switches: { off: ["mcp", "excluded"], only: ["mcp", "allowed"] },
     identity: "inherit",
     identityNote: "gemini 把交给 MCP 子进程的环境按**变量名**过滤（命中 /TOKEN|KEY|SECRET|AUTH/i 一类的删掉），"
-      + "所以回合身份另按 `*_TICKET` 别名导一份（`shared/src/mcp.ts` 的 `ASH_TURN_IDENTITY_ENV`）；"
-      + "只注 `ASH_TURN_TOKEN` 那一套的话登记再对也交不了卷",
+      + "所以回合身份另按 `*_TICKET` 别名导一份（`shared/src/mcp.ts` 的 `NAVI_TURN_IDENTITY_ENV`）；"
+      + "只注 `NAVI_TURN_TOKEN` 那一套的话登记再对也交不了卷",
     evidence: "tested",
-    source: "`GEMINI_CLI_HOME=<沙盘> gemini mcp add ash node <entry> -s user -e ASH_URL=…` 实测写出 "
+    source: "`GEMINI_CLI_HOME=<沙盘> gemini mcp add navi node <entry> -s user -e NAVI_URL=…` 实测写出 "
       + "`$GEMINI_CLI_HOME/.gemini/settings.json`；环境过滤用只 dump 环境的假 MCP server 取证",
     notes: "**工作区信任**:未信任的目录连用户级 MCP server 都不加载 —— 所以 `catalog/gemini.ts` 的 "
       + "`baseArgs` 带 `--skip-trust`，别去掉",
@@ -101,20 +99,19 @@ export const ASH_MCP_TABLE = {
       dirEnv: "GROK_HOME",
       defaultDir: underHome(".grok"),
       relative: ["config.toml"],
-      projectRelative: [[".grok", "config.toml"]],
     },
     // 根级这个数组是**它专有**的:2026-10-31 同一份配置(条目 `enabled = true` + 根级
-    // `disabled_mcp_servers = ["ash"]`)grok 1.0.41 打出 `(disabled)`,codex-cli 0.153.4
+    // `disabled_mcp_servers = ["navi"]`)grok 1.0.41 打出 `(disabled)`,codex-cli 0.153.4
     // 压根不认(仍是 `enabled: true, disabled_reason: null`)—— 所以它只能挂在这一家身上。
     switches: { off: ["disabled_mcp_servers"] },
     identity: "unknown",
     identityNote: "没验过它给 MCP 子进程的环境是不是原样继承（TOML 里也没有 codex 那样的 `env_vars` 声明位）",
     evidence: "tested",
-    // 跟 codex 同格式到字节级:`[mcp_servers.ash]` + command/args,多一行 `enabled = true`。
+    // 跟 codex 同格式到字节级:`[mcp_servers.navi]` + command/args,多一行 `enabled = true`。
     writeEnabled: true,
-    source: "`GROK_HOME=<沙盘> grok mcp add ash --command node --args …` 实测写出 `$GROK_HOME/config.toml`，"
+    source: "`GROK_HOME=<沙盘> grok mcp add navi --command node --args …` 实测写出 `$GROK_HOME/config.toml`，"
       + "内容与 codex 的 `[mcp_servers.x]` 同形（多 `enabled = true`）",
-    notes: "还有个根级开关 `disabled_mcp_servers = [\"ash\"]`（`grok mcp disable` 会同时写它），"
+    notes: "还有个根级开关 `disabled_mcp_servers = [\"navi\"]`（`grok mcp disable` 会同时写它），"
       + "判据只认写在一行里的那种数组，多行漏读时刻意偏向「放行」",
   },
 
@@ -126,12 +123,11 @@ export const ASH_MCP_TABLE = {
       defaultDir: underHome(".kimi-code"),
       relative: ["mcp.json"],
       // 装好的二进制里原文列着这三档:user / projectRoot 的 `.mcp.json` / `<cwd>/.kimi-code/mcp.json`。
-      projectRelative: [[".mcp.json"], [".kimi-code", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "tested",
     source: "装好的 kimi 二进制里原文写着「The unified MCP management view: user-level "
-      + "`<KIMI_CODE_HOME>/mcp.json`」，`mcpServers` 形状同族；本仓 `scripts/kimi-mcp.mjs` 已按它写",
+      + "`<KIMI_CODE_HOME>/mcp.json`」，`mcpServers` 形状同族；本仓 `scripts/mcp-hosts.mjs` 已按它写",
     notes: "**没有 `mcp` 子命令**（`kimi mcp add` 报 unknown command），所以只能我们写文件，"
       + "也意味着没法拿 CLI 自己的输出来复核 —— 预检对它只有读配置这一档依据",
   },
@@ -158,31 +154,26 @@ export const ASH_MCP_TABLE = {
       // 同目录三个名字都读,顺序就是实测的加载序(`config.json` 这个名字**只在默认目录**算)。
       load: [["config.json"], ["opencode.json"], ["opencode.jsonc"]],
       extraDirs: [underHome(".opencode")],
-      projectRelative: [
-        ["opencode.json"], ["opencode.jsonc"],
-        [".opencode", "opencode.json"], [".opencode", "opencode.jsonc"],
-      ],
-      loadMeasured: true,
     },
     identity: "inherit",
     identityNote: "回合身份原样传到 MCP 子进程 —— 端到端那一条真跑出来的结论（交卷要带 turn/direction token，"
       + "传不进去服务端会拒）",
     evidence: "tested",
     source: "`OPENCODE_CONFIG=<沙盘>/opencode.json opencode mcp list` 实测读得出我们写的那条 "
-      + "`mcp.ash`（`type:\"local\"` + `command:[argv]` + `environment`）；"
-      + "另有端到端 `server/scripts/e2e-opencode-ash-mcp.ts`:注册 → 起真任务 → agent 调 "
-      + "`ash_complete_task` 交卷,任务落 done(2026-10-31 跑通);"
+      + "`mcp.navi`（`type:\"local\"` + `command:[argv]` + `environment`）；"
+      + "另有端到端 `server/scripts/e2e-opencode-navi-mcp.ts`:注册 → 起真任务 → agent 调 "
+      + "`navi_complete_task` 交卷,任务落 done(2026-10-31 跑通);"
       + "来源与优先级共八组实测(审查 R3 三组 + F4 五组,全部 `opencode mcp list` 退出 0):"
-      + "① 全局有 ash、`OPENCODE_CONFIG` 那份没有 ⇒ 照样列出 ash;② 两份各放一条不同的 ⇒ 列出 2 条;"
+      + "① 全局有 Navi、`OPENCODE_CONFIG` 那份没有 ⇒ 照样列出 Navi;② 两份各放一条不同的 ⇒ 列出 2 条;"
       + "③ 同名各放一条 ⇒ 列出变量那份的;④ 高优先级那份只写 `{\"enabled\":false}` ⇒ 报 "
-      + "`ash disabled`(所以「任一来源有」不等于「接上了」);⑤ ash 只在 `opencode.jsonc` 里 ⇒ "
-      + "照样生效(默认目录两个文件名都读);⑥ `OPENCODE_CONFIG_DIR` 指到别处、ash 只在默认那份 ⇒ "
+      + "`navi disabled`(所以「任一来源有」不等于「接上了」);⑤ Navi 只在 `opencode.jsonc` 里 ⇒ "
+      + "照样生效(默认目录两个文件名都读);⑥ `OPENCODE_CONFIG_DIR` 指到别处、Navi 只在默认那份 ⇒ "
       + "照样生效(它是再加一个目录,不取代);⑦ 那个目录里写 `enabled:false`、默认那份开着 ⇒ "
       + "报 disabled(它优先级更高);⑧ `OPENCODE_CONFIG_CONTENT` 与文件/全局各写一条相反的 ⇒ "
       + "两次都是它赢(优先级最高、而且没有文件可写);"
       + "**审查 F1 又补了七组**(`opencode debug config --pure` + `mcp list`,全部退出 0):"
       + "⑨ `OPENCODE_CONFIG` 文件写完整条目 + `enabled:false`、`OPENCODE_CONFIG_DIR` 目录里只写 "
-      + "`{\"enabled\":true}` ⇒ 真 CLI `ash connected` —— **那个目录比那个文件还高**(⑦⑧ 都没对打"
+      + "`{\"enabled\":true}` ⇒ 真 CLI `navi connected` —— **那个目录比那个文件还高**(⑦⑧ 都没对打"
       + "过这两层,上一版据此排反了);⑩ 全局写完整条目、文件只写 `{\"enabled\":true}` ⇒ 生效的是"
       + "两份**合起来**那一条(命令、`environment` 全在),所以搬运必须搬合完那条;⑪ 嵌套对象按键"
       + "合、数组整条替换(`environment` 低份 `{KEEP,OVER}` + 高份 `{OVER,NEW}` ⇒ 三个键都在);"
@@ -201,14 +192,14 @@ export const ASH_MCP_TABLE = {
       + "command}`(没 type)⇒ 命令和 environment 仍是低份的(⑬ 的复核);"
       + "⑲ **同一个文件被两条路指到算两次加载**:默认目录 `.json` 完整开着、同目录 `.jsonc` 只写 "
       + "`{\"enabled\":false}`、`OPENCODE_CONFIG` 指回那份 `.json` ⇒ 最终 `enabled:true`、"
-      + "`ash connected`(指回 `.jsonc` 则相反:`enabled:false`)—— 按路径去重会把最高那次加载删掉;"
+      + "`navi connected`(指回 `.jsonc` 则相反:`enabled:false`)—— 按路径去重会把最高那次加载删掉;"
       + "⑳ **任何一份读不通整份拒载**:`{BROKEN` 放在最低那层、最高那层、同目录 `.jsonc`、"
-      + "或者放在一份压根没提 ash 的文件里,四种都是 `exit 1`(报那份不是合法 JSON(C))——"
+      + "或者放在一份压根没提 Navi 的文件里,四种都是 `exit 1`(报那份不是合法 JSON(C))——"
       + "所以「低的盖不住高的」在这一档不成立,只要有一份读不准就没有生效的登记可言;"
-      + "**本轮审查 F1 又补了十二组**(`opencode debug config --pure`,逐格比对 `mcp.ash.command`):"
-      + "㉑ 默认目录里**只有** `config.json` 写 ash ⇒ 读得出(上一版压根没枚举这个名字,于是答 "
+      + "**本轮审查 F1 又补了十二组**(`opencode debug config --pure`,逐格比对 `mcp.navi.command`):"
+      + "㉑ 默认目录里**只有** `config.json` 写 Navi ⇒ 读得出(上一版压根没枚举这个名字,于是答 "
       + "absent、派审硬拒,裸 Node 安装器还往 `opencode.json` 新写一条、把真 CLI 的生效 "
-      + "`ASH_URL` 从 `:54321` 换成了 `:4317`);㉒ `config.json` + `opencode.json` 同在 ⇒ 后者赢;"
+      + "`NAVI_URL` 从 `:54321` 换成了 `:4317`);㉒ `config.json` + `opencode.json` 同在 ⇒ 后者赢;"
       + "㉓ `config.json` + `opencode.jsonc` ⇒ `.jsonc` 赢;㉔ 三份同在 ⇒ `.jsonc` 赢(所以升序是 "
       + "`config.json` < `.json` < `.jsonc`);㉕ `config.json` 读不通 ⇒ 整份 `exit 1`(⑳ 同一条规矩);"
       + "㉖ 这个名字**只在默认目录**算:`~/.opencode/config.json` 和 `$OPENCODE_CONFIG_DIR/config.json` "
@@ -234,7 +225,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: null,
       defaultDir: underHome(".cursor"),
       relative: ["mcp.json"],
-      projectRelative: [[".cursor", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -256,7 +246,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: "QWEN_HOME",
       defaultDir: underHome(".qwen"),
       relative: ["settings.json"],
-      projectRelative: [[".qwen", "settings.json"], [".mcp.json"], ["mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -276,13 +265,12 @@ export const ASH_MCP_TABLE = {
       // 目录名本身可以被 `QODER_CONFIG_DIR_NAME` 换掉(bundle 里有这个分支)。
       defaultDir: (env, home) => join(home, env.QODER_CONFIG_DIR_NAME?.trim() || ".qoder"),
       relative: ["mcp.json"],
-      projectRelative: [[".mcp.json"], ["mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
     source: "读 npm 包 `@qoder-ai/qodercli@1.1.81` 的 bundle：用户级配置目录 `~/.qoder`"
       + "（目录名可由 `QODER_CONFIG_DIR_NAME` 覆盖），MCP 读 `mcp.json`，`mcpServers` 容器",
-    notes: "**未实测**（本机没装）。它还读项目里的 `.mcp.json`/`mcp.json`，那是仓库文件，ash 不替用户写",
+    notes: "**未实测**（本机没装）。它还读项目里的 `.mcp.json`/`mcp.json`，那是仓库文件，Navi 不替用户写",
   },
 
   copilot: {
@@ -292,21 +280,20 @@ export const ASH_MCP_TABLE = {
       dirEnv: "COPILOT_HOME",
       defaultDir: underHome(".copilot"),
       relative: ["mcp-config.json"],
-      projectRelative: [[".mcp.json"], [".github", "mcp.json"]],
     },
     // 文件里本地服务的 `type` 叫 `local`(命令行那一侧才是 `--transport stdio`,两边不同名)。
     writeType: "local",
     // **身份搭 PATH 那班车**:copilot 只自动继承 PATH,别的环境变量要求写死在 `env` 里,
     // 而回合 token 一轮一个 —— 写死就是过期的假身份。所以身份改走一份文件,目录挂在 PATH
-    // 末尾。详见 `AshMcpIdentity` 的 `path` 与 `@ash/shared/mcp` 那段约定。
+    // 末尾。详见 `NaviMcpIdentity` 的 `path` 与 `@navi/shared/mcp` 那段约定。
     identity: "path",
     identityNote: "copilot 文档明写「`PATH` 自动继承，其余环境变量必须在这条登记的 `env` 里配」，"
-      + "而回合身份一轮一个值、写死进配置文件就是过期的假身份 —— 所以 ash 每回合在 "
+      + "而回合身份一轮一个值、写死进配置文件就是过期的假身份 —— 所以 Navi 每回合在 "
       + "`<runs>/<taskId>/turn-identity/<turnToken>/` 放一份 `identity.json`、把那个目录追加到 "
       + "`PATH` 末尾（目录里没有可执行文件，盖不掉任何命令），MCP 侧在变量都不在时读它。"
       + "登记本身不需要写任何身份相关的东西",
-    caveat: "copilot 的 MCP 子进程只自动继承 PATH，所以 ash 的回合身份走 `PATH` 上一个一次性目录"
-      + "里的文件（约定见 `@ash/shared/mcp`）。**这条桥本机没法实测**（没装 copilot），"
+    caveat: "copilot 的 MCP 子进程只自动继承 PATH，所以 Navi 的回合身份走 `PATH` 上一个一次性目录"
+      + "里的文件（约定见 `@navi/shared/mcp`）。**这条桥本机没法实测**（没装 copilot），"
       + "文档依据见 source；万一它连 `PATH` 也改写，表现就回到「交卷被拒」，"
       + "那时请换别的执行器跑需要交卷的任务",
     evidence: "docs",
@@ -327,7 +314,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: null,
       defaultDir: underHome(".kiro"),
       relative: ["settings", "mcp.json"],
-      projectRelative: [[".kiro", "settings", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -348,7 +334,6 @@ export const ASH_MCP_TABLE = {
       defaultDir: xdgConfig("kilo"),
       relative: ["kilo.json"],
       alternates: [["kilo.jsonc"], ["config.json"], ["opencode.json"], ["opencode.jsonc"]],
-      projectRelative: [["kilo.json"], ["kilo.jsonc"], [".kilo", "kilo.json"], [".kilocode", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -370,7 +355,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: null,
       defaultDir: underHome(".gemini", "config"),
       relative: ["mcp_config.json"],
-      projectRelative: [[".agents", "mcp_config.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -387,7 +371,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: "PI_CODING_AGENT_DIR",
       defaultDir: underHome(".pi", "agent"),
       relative: ["mcp.json"],
-      projectRelative: [[".pi", "mcp.json"]],
     },
     // pi-mcp 的 StdioTransport 默认 `{ ...process.env, ...options.env }`(inheritEnv 不为 false),
     // pi 自己没传 inheritEnv —— 所以起跑时注的回合身份进得去。
@@ -417,12 +400,8 @@ export const ASH_MCP_TABLE = {
       defaultDir: underHome(".trae"),
       relative: ["mcp.json"],
       alternates: [[".mcp.json"]],
-      // 同目录那三份它也读、而 JSON 族读不了(见 `AshMcpConfigSite.opaque`)。
+      // 同目录那三份它也读、而 JSON 族读不了(见 `NaviMcpConfigSite.opaque`)。
       opaque: [["traecli.yaml"], ["mcp.yaml"], [".mcp.yaml"]],
-      projectRelative: [
-        [".trae", "traecli.yaml"], [".trae", "mcp.json"], [".trae", ".mcp.json"],
-        [".coco", "coco.yaml"], [".agents", "coco.yaml"],
-      ],
     },
     identity: "unknown",
     evidence: "docs",
@@ -439,25 +418,25 @@ export const ASH_MCP_TABLE = {
       + "没用它：它写哪一份（项目级还是用户级）文档没说，而我们要的是用户级那一份；"
       + "它的 `${workspaceFolder}` 变量插值不包括环境变量，回合身份仍然只能靠继承",
   },
-} satisfies AshMcpTable;
+} satisfies NaviMcpTable;
 
-/** 这家 CLI 的 ash MCP 机制;不是已知执行器就返回 null(调用方按「不知道」处理,别当成没有)。 */
-export function ashMcpMechanism(agentType: string): AshMcpMechanism | null {
-  return (ASH_MCP_TABLE as Record<string, AshMcpMechanism>)[agentType] ?? null;
+/** 这家 CLI 的 navi MCP 机制;不是已知执行器就返回 null(调用方按「不知道」处理,别当成没有)。 */
+export function naviMcpMechanism(agentType: string): NaviMcpMechanism | null {
+  return (NAVI_MCP_TABLE as Record<string, NaviMcpMechanism>)[agentType] ?? null;
 }
 
-/** ash 能不能**自动**把登记写进这家 CLI(manual / none 都是不能)。 */
-export function canRegisterAshMcp(agentType: string): boolean {
-  return ashMcpMechanism(agentType)?.kind === "file";
+/** navi 能不能**自动**把登记写进这家 CLI(manual / none 都是不能)。 */
+export function canRegisterNaviMcp(agentType: string): boolean {
+  return naviMcpMechanism(agentType)?.kind === "file";
 }
 
-/** 宿主机上这家 CLI 的 ash MCP 配置目录(`dirEnv` 优先,它指到文件时返回那个文件所在目录)。 */
-export function ashMcpConfigDir(
+/** 宿主机上这家 CLI 的 navi MCP 配置目录(`dirEnv` 优先,它指到文件时返回那个文件所在目录)。 */
+export function naviMcpConfigDir(
   agentType: string,
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
 ): string | null {
-  const mechanism = ashMcpMechanism(agentType);
+  const mechanism = naviMcpMechanism(agentType);
   if (mechanism?.kind !== "file") return null;
   const { site } = mechanism;
   const override = site.dirEnv ? env[site.dirEnv]?.trim() : "";

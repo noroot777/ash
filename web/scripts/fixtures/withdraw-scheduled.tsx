@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { api } from "../../src/lib/api.ts";

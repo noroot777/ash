@@ -68,9 +68,10 @@ import { join } from "node:path";
 import { IS_WINDOWS, powerShell, powerShellSync } from "../platform.js";
 import { processGenerationsAsync, processGenerationsSync } from "../process-generation.js";
 import type { ConfineMember, ConfineRead, Confinement } from "./kernel-confine.js";
+import { FROZEN_AGENT_UNIT_PREFIX, FROZEN_CONFINE_TMP_DIR } from "@navi/shared/legacy-names";
 
 /** Job Object 的名字。`Local\` = 当前登录会话的命名空间(跨会话不可见,正是我们要的边界)。 */
-const jobName = (token: string): string => `Local\\ash-agent-${token.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+const jobName = (token: string): string => `Local\\${FROZEN_AGENT_UNIT_PREFIX}${token.replace(/[^A-Za-z0-9._-]/g, "_")}`;
 
 /**
  * 「这个圈**建起来过**」的就绪文件。常驻守圈进程在 assign 成功之后写它。
@@ -82,7 +83,7 @@ const jobName = (token: string): string => `Local\\ash-agent-${token.replace(/[^
  * 名字又查不到 ⇒ 句柄那一侧出事了(集合再也查不回来),如实记成这一问没答出来。
  */
 const readyPath = (name: string): string =>
-  join(tmpdir(), "ash-confine", `${name.replace(/[^A-Za-z0-9._-]/g, "_")}.ready`);
+  join(tmpdir(), FROZEN_CONFINE_TMP_DIR, `${name.replace(/[^A-Za-z0-9._-]/g, "_")}.ready`);
 
 export function openJobConfinement(token: string): Confinement | null {
   if (!IS_WINDOWS) return null;
@@ -116,7 +117,7 @@ export function reopenJobConfinement(id: string): Confinement | null {
  *
  * 代价如实记下:attached 的守圈进程**活不过起它的那个进程**(同一台机器上实测:父进程退出
  * 1 秒后圈名就查不到了 —— 那台机器的终端会话给整条进程树套了 job)。所以 Windows 上这台
- * 设备的有效范围是 **ash 自己这条命之内**(清扫发生在回合末尾,够用),跨 server 重启那一档
+ * 设备的有效范围是 **navi 自己这条命之内**(清扫发生在回合末尾,够用),跨 server 重启那一档
  * 照旧弃权 —— `reopenJobConfinement` 那条路本来就把「名字没了」记成 `absent` 而不是
  * `unqueryable`,两边正好对上。
  *
@@ -163,7 +164,7 @@ function sweepStaleReady(): void {
   if (sweptStale) return;
   sweptStale = true;
   try {
-    const dir = join(tmpdir(), "ash-confine");
+    const dir = join(tmpdir(), FROZEN_CONFINE_TMP_DIR);
     const cutoff = Date.now() - 24 * 3600_000;
     for (const name of readdirSync(dir)) {
       const f = join(dir, name);
@@ -234,7 +235,7 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
     for (let waited = 0; waited < HELD_WAIT_MS; waited += 50) {
       if (existsSync(ready)) { held = true; return; }
       if (holderDead()) return;
-      await new Promise((r) => { setTimeout(r, 50); });   // 不 unref:见 ash-mcp-probe.ts 的 wait
+      await new Promise((r) => { setTimeout(r, 50); });   // 不 unref:事件循环里只剩它时 unref 掉的 timer 不保活
     }
   };
   /**
@@ -268,7 +269,7 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
       // (接口注释写着幂等,而上一版第二次一律答 false,第 2 轮审查指出口径不一致)。
       if (asked) return pid === heldPid;
       try {
-        mkdirSync(join(tmpdir(), "ash-confine"), { recursive: true });
+        mkdirSync(join(tmpdir(), FROZEN_CONFINE_TMP_DIR), { recursive: true });
         rmSync(ready, { force: true });             // 上一次运行留下的同名就绪信号不许认下来
       } catch { /* 目录建不出来:退化成「建没建起来分不清」,仍然不误判 */ }
       if (!askHolder(["hold", name, String(pid), readyBase(name)].join("\t"))) return false;
@@ -390,7 +391,7 @@ function jobScript(name: string, op: "list" | "terminate"): string {
   return [
     "$ErrorActionPreference='Stop'",
     addType,
-    op === "list" ? `[AshJob]::List(${psq(name)})` : `[AshJob]::Terminate(${psq(name)})`,
+    op === "list" ? `[NaviJob]::List(${psq(name)})` : `[NaviJob]::Terminate(${psq(name)})`,
   ].join("\n");
 }
 
@@ -399,7 +400,7 @@ function serveScript(): string {
   return [
     "$ErrorActionPreference='Stop'",
     addType,
-    "[AshJob]::Serve()",
+    "[NaviJob]::Serve()",
   ].join("\n");
 }
 
@@ -413,7 +414,7 @@ function jobCsharp(): string {
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
-public static class AshJob {
+public static class NaviJob {
   const uint JOB_QUERY = 0x0004, JOB_TERMINATE = 0x0008;
   const uint PROC_TERMINATE = 0x0001, PROC_SET_QUOTA = 0x0100;
   [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]

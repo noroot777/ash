@@ -7,11 +7,11 @@ export interface PreviewServiceConfig {
 }
 
 /**
- * 启动命令跑起来之后，**它自己**该起多大一摊。ash 只把这个选择作为 `$ASH_PREVIEW_MODE`
+ * 启动命令跑起来之后，**它自己**该起多大一摊。navi 只把这个选择作为 `$NAVI_PREVIEW_MODE`
  * 递给命令，起不起后端是命令自己的事 —— 不认这个变量的项目，四档全都一样。
  *
- * 值域里那几个「独立新库 / 测试库快照」的说法是照 ash 自带的 `scripts/dev.mjs` 写的：
- * 它是目前唯一认这个变量的脚本，而这几档正是照着「验一个 ash 分支要什么」定的。
+ * 值域里那几个「独立新库 / 测试库快照」的说法是照 navi 自带的 `scripts/dev.mjs` 写的：
+ * 它是目前唯一认这个变量的脚本，而这几档正是照着「验一个 navi 分支要什么」定的。
  */
 export const PREVIEW_MODE = ["command", "frontend", "full", "test"] as const;
 export type PreviewMode = (typeof PREVIEW_MODE)[number];
@@ -28,7 +28,7 @@ export interface ProjectPreviewConfig {
   primaryServiceId: string | null;
   services: PreviewServiceConfig[];
   /**
-   * 递给启动命令的 `$ASH_PREVIEW_MODE`。**老配置里没有这个字段**，读出来一律补
+   * 递给启动命令的 `$NAVI_PREVIEW_MODE`。**老配置里没有这个字段**，读出来一律补
    * `"frontend"` —— 那是这个字段存在之前写死的值，补别的会让所有存量项目的预览
    * 在一次升级里悄悄换一种起法。
    */
@@ -64,7 +64,7 @@ export interface PreviewServiceState {
   url: string | null;
   port: number | null;
   /**
-   * ash 借给这个服务的端口。跟 `port` 不一样时说明**命令没吃它**，自己挑了一个 —— 那正是
+   * navi 借给这个服务的端口。跟 `port` 不一样时说明**命令没吃它**，自己挑了一个 —— 那正是
    * 「$PORT 没写进命令」的唯一症状（判读与后果见 previewPortDrift）。老记录里没有这个字段，
    * 读出来是 null，那时一律当成「不知道」，不提任何意见。
    */
@@ -84,7 +84,7 @@ export function previewProxyEnabled(setting: ProjectPreviewConfig["proxy"] | und
  *
  * 两种都认是被咬过一口才加的（第 3 轮审查）：AI 协助的端点递的是请求体里那个字符串，
  * 而当时这里只从对象上取 `.launch`，于是 `command`/`full`/`test` 三档**静默**变成
- * `frontend` —— 试跑时注入的 `ASH_PREVIEW_MODE` 跟用户在页面上选的不是一回事，而判出来的
+ * `frontend` —— 试跑时注入的 `NAVI_PREVIEW_MODE` 跟用户在页面上选的不是一回事，而判出来的
  * 那条脚本照样填进输入框，保存之后开预览才发现对不上。少一层包装就错一档，这种签名
  * 不该留着等下一个调用方踩。
  *
@@ -131,7 +131,7 @@ export function parsePreviewConfig(value: unknown): ProjectPreviewConfig | null 
 // ── 端口怎么写进启动命令 ────────────────────────────────────────────────────
 //
 // 新用户在「自填启动命令」里写的第一条命令几乎一定是 `npm run dev`，然后预览要么起在一个
-// ash 不知道的端口上，要么跟他自己已经在跑的那份撞车。这不是他填错了 —— 是**填字的地方
+// navi 不知道的端口上，要么跟他自己已经在跑的那份撞车。这不是他填错了 —— 是**填字的地方
 // 没人告诉他这件事**：`$PORT` 的完整说明只在设置页的「配置说明与示例」对话框里，而打开
 // 预览的人根本不会路过那儿。
 //
@@ -177,7 +177,7 @@ export interface PreviewPortRule {
 export function previewPortRule(dialect: PreviewPortDialect): PreviewPortRule {
   const port = previewPortRef("PORT", dialect);
   return {
-    lead: `ash 每次开预览都借一个空闲端口，用 ${port} 传给你的命令。`,
+    lead: `Navi 每次开预览都借一个空闲端口，用 ${port} 传给你的命令。`,
     branches: [
       {
         when: "服务自己读 PORT 环境变量（Next、Nest、Express、Spring Boot、Go…）",
@@ -221,19 +221,19 @@ export function previewCommandSamples(dialect: PreviewPortDialect): PreviewComma
  */
 export function wrongPortDialectHint(command: string, dialect: PreviewPortDialect): string | null {
   if (dialect === "cmd" && /\$\{?PORT\d?\}?/.test(command)) {
-    return "这台 ash 跑在 Windows 上，命令交给 cmd 执行：$PORT 在那儿是一串字面量，不是变量。请改写成 %PORT%。";
+    return "这台 Navi 跑在 Windows 上，命令交给 cmd 执行：$PORT 在那儿是一串字面量，不是变量。请改写成 %PORT%。";
   }
   if (dialect === "posix" && /%PORT\d?%/.test(command)) {
-    return "这台 ash 跑在类 Unix 系统上，命令交给 sh 执行：%PORT% 在那儿是一串字面量，不是变量。请改写成 $PORT。";
+    return "这台 Navi 跑在类 Unix 系统上，命令交给 sh 执行：%PORT% 在那儿是一串字面量，不是变量。请改写成 $PORT。";
   }
   return null;
 }
 
-// ── 端口漂移：命令没吃 ash 借的那个端口 ────────────────────────────────────
+// ── 端口漂移：命令没吃 navi 借的那个端口 ────────────────────────────────────
 //
 // 填字时的那些提示（判据、起手式、方言检查）本质都是**说明**——用户可以不读，而且大部分
 // 时候他确实不读。这一节是另一回事：它不是推断出来的规则，是**已经发生的事实**——服务此刻
-// 真的听在 5173 上，ash 借出去的 45843 真的没人要。
+// 真的听在 5173 上，navi 借出去的 45843 真的没人要。
 //
 // 这条信号有三个别处都拿不到的性质：
 //   · **零误报**，因为它不是猜的。静态看命令永远分不清 `npm run dev` 背后是 vite 还是 next；
@@ -253,7 +253,7 @@ export function wrongPortDialectHint(command: string, dialect: PreviewPortDialec
 export interface PreviewPortDrift {
   serviceId: string;
   serviceName: string;
-  /** ash 借出去的那个。 */
+  /** navi 借出去的那个。 */
   lent: number;
   /** 服务实际听的那个。 */
   actual: number;
@@ -262,7 +262,7 @@ export interface PreviewPortDrift {
 }
 
 /**
- * 哪些服务没吃 ash 借的端口。`lentPort` 缺失（老记录）或状态不是 ready 的一律跳过 ——
+ * 哪些服务没吃 navi 借的端口。`lentPort` 缺失（老记录）或状态不是 ready 的一律跳过 ——
  * 还没起来的服务谈不上「起在哪儿」。
  */
 export function previewPortDrift(
@@ -273,7 +273,7 @@ export function previewPortDrift(
     const { lentPort: lent, port: actual } = service;
     // 用真值判断而不是 `=== null`：这两个字段的来源是盘上的 preview.json 和跨版本的接口，
     // 老记录里 lentPort 压根不存在（是 undefined，`=== null` 拦不住），漏过去就会渲染出一条
-    // 「起在 5173，不是 ash 借的 undefined」。端口不可能是 0，所以真值判断在这里没有代价。
+    // 「起在 5173，不是 navi 借的 undefined」。端口不可能是 0，所以真值判断在这里没有代价。
     if (service.status !== "ready" || !lent || !actual || lent === actual) return [];
     return [{
       serviceId: service.id,

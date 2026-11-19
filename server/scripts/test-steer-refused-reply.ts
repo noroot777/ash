@@ -13,21 +13,18 @@ if (process.platform === "win32") {
   process.exit(0);
 }
 
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-steer-refused-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const root = mkdtempSync(join(tmpdir(), "navi-steer-refused-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.env.CODEX_HOME = join(root, "codex-home");
-// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件跑的是自己装在 PATH 上的
-// 假 codex,显式放行(executors/spawn.ts)。
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_LAX_DONE = "1";
-process.env.ASH_TURN_INPUT_ACK_MS = "1000";
-process.env.ASH_CODEX_TURN_START_ACK_MS = "1000";
+process.env.NAVI_LAX_DONE = "1";
+process.env.NAVI_TURN_INPUT_ACK_MS = "1000";
+process.env.NAVI_CODEX_TURN_START_ACK_MS = "1000";
 const originalPath = process.env.PATH;
 
 // 假 codex:mode 文件决定这一次起跑怎么走。`hold` = 照常起跑并挂着一个长工具(等新方向),
@@ -54,6 +51,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     send({ method: "turn/started", params: { threadId: THREAD, turn: { id: TURN } } });
     send({ method: "item/started", params: { threadId: THREAD, turnId: TURN,
       item: { type: "commandExecution", id: "long", command: "wait-for-new-direction" } } });
+    // 真机上会让 navi 作废恢复 thread 的那句 stderr（executors/session-lost.ts）：被引导截断的旧回合
+    // 手里于是攒着一条会话旁注，见下面「旁注落盘」那一条。
+    process.stderr.write("dropping turn-scoped item for unknown turn id\n");
     return;
   }
   if (message.method === "turn/interrupt") {
@@ -69,6 +69,9 @@ writeFileSync(join(bin, "codex"),
   `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(shim)} "$@"\n`, { mode: 0o755 });
 writeFileSync(modeFile, "hold");
 process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
+// 设了 NAVI_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;只放行自己装在 PATH 上的这个
+// 假 codex(executors/spawn.ts)。
+process.env.NAVI_TEST_AGENT_BIN = bin;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, scheduledMessages, tasks } = await import("../src/db/schema.js");
@@ -125,6 +128,13 @@ await cancelPendingMessage(message, "回归脚本收场").catch(() => undefined)
 for (let i = 0; i < 250 && runs.isRunning(taskId); i += 1) await sleep(20);
 await Promise.race([request, sleep(500)]);
 await Promise.race([initial, sleep(2_000)]);
+
+// 被引导截断的旧回合不走普通结算，它攒着的会话旁注也得在流关掉**之前**落盘：漏了这一步，收尾的兜底会往
+// 已经关掉的流上写，那是一个没人接的 error 事件，整个 server 当场退出（本脚本也就走不到这一行）。
+const transcripts = readdirSync(join(root, "runs", taskId)).filter((name) => name.endsWith(".md"))
+  .map((name) => readFileSync(join(root, "runs", taskId, name), "utf8")).join("\n");
+check(transcripts.includes("dropping turn-scoped item for unknown turn id"),
+  "被引导截断的旧回合：攒着的会话旁注落进了会话记录（没有丢，也没有写到已关的流上）");
 
 if (originalPath === undefined) delete process.env.PATH;
 else process.env.PATH = originalPath;

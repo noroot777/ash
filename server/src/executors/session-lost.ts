@@ -1,9 +1,9 @@
 /**
  * 「CLI 说这条会话它不认识」的识别。
  *
- * ash 每一轮续跑都把上一轮记下的 `sessions.cli_session_id` 拼成 `--resume <id>`。
- * 那个 id 是 ash 在**起跑那一刻**自己发的（`generic.ts` 的 `session()`：claude 一类
- * 带 `newIdFlag` 的 CLI 由 ash 指定 id），落库时机是 spawn 成功、还没等到 CLI 说话。
+ * navi 每一轮续跑都把上一轮记下的 `sessions.cli_session_id` 拼成 `--resume <id>`。
+ * 那个 id 是 navi 在**起跑那一刻**自己发的（`generic.ts` 的 `session()`：claude 一类
+ * 带 `newIdFlag` 的 CLI 由 navi 指定 id），落库时机是 spawn 成功、还没等到 CLI 说话。
  * 于是有一类死循环：**第一轮 CLI 根本没建起会话就退出了**（2026-08-21 的现场是
  * root 身份下 `--dangerously-skip-permissions` 被拒，0 字节 stdout），id 照样落了库；
  * 之后每一次重试都 `--resume` 一个从未存在过的会话，稳定失败，且失败原因跟第一次
@@ -17,7 +17,7 @@
  * 不值当 —— 认不出来时的退化行为（照旧报错、id 留着）本来就是今天的行为。
  */
 
-import { SESSION_LOST_NOTE, SESSION_POISONED_NOTE } from "@ash/shared/session-notes";
+import { SESSION_LOST_NOTE, SESSION_POISONED_NOTE } from "@navi/shared/session-notes";
 import type { ResumeFields } from "./types.js";
 
 /** 各 CLI 拒绝恢复会话时的原文。加一条前先在真机上跑出那句话。 */
@@ -47,7 +47,7 @@ const CODEX_POISON_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> 
   },
 ];
 
-/** 真机要求 ash 作废恢复 thread 的 stderr 指纹。 */
+/** 真机要求 navi 作废恢复 thread 的 stderr 指纹。 */
 export function codexSessionPoisonReason(message: string): string | null {
   return CODEX_POISON_PATTERNS.find(({ pattern }) => pattern.test(message))?.reason ?? null;
 }
@@ -96,7 +96,7 @@ export const LOST_SESSION_PATCH: { cliSessionId: null } & { [K in keyof ResumeFi
 
 /**
 /**
- * 三条说明的措辞与「这算不算轮换」的判据都住在 `@ash/shared/session-notes` —— 前端
+ * 三条说明的措辞与「这算不算轮换」的判据都住在 `@navi/shared/session-notes` —— 前端
  * `noteTone` 要拿同一份文本判「这是会话轮换,不是执行失败」,两边各写一份就会漂移
  * (那头一红,一个 exit 0 的正常回合在用户眼里就成了异常)。这里只做转发,服务端各处
  * 照旧从这个模块引。
@@ -106,7 +106,7 @@ export {
   SESSION_POISONED_NOTE,
   SESSION_DROP_PERSISTENCE_FAILED_NOTE,
   isSessionRotationNote,
-} from "@ash/shared/session-notes";
+} from "@navi/shared/session-notes";
 
 export function sessionResumeFaultNote(fault: SessionResumeFault): string {
   return fault === "poisoned" ? SESSION_POISONED_NOTE : SESSION_LOST_NOTE;

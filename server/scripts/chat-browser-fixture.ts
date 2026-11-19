@@ -7,10 +7,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { markFixtureOnboarded } from "./fixture-onboarding.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-browser-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-browser-"));
 mkdirSync(join(stage, "node_modules", "pkg"), { recursive: true });
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, agents, tasks, chatMessages } = await import("../src/db/schema.js");
 const { api } = await import("../src/routes.js");

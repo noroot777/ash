@@ -12,20 +12,21 @@ import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-free-lifecycle-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-free-lifecycle-"));
+// 不指定的话，scratch、navi-mcp 这些会落进这份检出自己的 data/ 目录。
+process.env.NAVI_DATA_DIR = join(root, "data");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 这份文件里绝大多数任务都用 `reasoningEffort: "ultra-fake"` 让执行器解析必炸、压根不拉起
 // 进程 —— 测的是锁与账,不是进程。**只有 ⑨ 不行**:它要钉「班次被正常消费」,而「消费」的
 // 判据已经收紧成「拿到启动回执才算真的开跑」(回执只在 adoptRun / 团队 deliver 时落),
 // 解析必炸的任务永远到不了那一步。所以给它备一个真能起来的假 claude。
 const fakeBin = installFakeClaude(root);
 const priorEnv = {
-  path: process.env.PATH, allow: process.env.ASH_ALLOW_REAL_AGENT, log: process.env.ASH_TEST_LEAD_LOG,
+  path: process.env.PATH, staged: process.env.NAVI_TEST_AGENT_BIN, log: process.env.NAVI_TEST_LEAD_LOG,
 };
-// PATH 上备着它就行;**放行真进程(ASH_ALLOW_REAL_AGENT)只在 ⑨ 那一小段开**——
-// 这份文件里别的任务用的是 baseTask 的 codex 执行器,全局放行会把它们也真的拉起来
-// (实测:真去 spawn /opt/homebrew/bin/codex)。
+// PATH 上备着它就行;**放行(NAVI_TEST_AGENT_BIN)只在 ⑨ 那一小段开**——这份文件里别的任务
+// 用的是 baseTask 的 codex 执行器,测的是锁与账,一个进程都不该起。
 process.env.PATH = `${fakeBin}${delimiter}${priorEnv.path ?? ""}`;
 
 function git(cwd: string, ...args: string[]): string {
@@ -58,7 +59,7 @@ try {
   mkdirSync(repo, { recursive: true });
   git(repo, "init", "-b", "main");
   git(repo, "config", "user.email", "test@example.com");
-  git(repo, "config", "user.name", "Ash Test");
+  git(repo, "config", "user.name", "Navi Test");
   writeFileSync(join(repo, "base.txt"), "base\n");
   git(repo, "add", "base.txt");
   git(repo, "commit", "-m", "base");
@@ -262,8 +263,8 @@ try {
   // 所以这里用假 claude 能服务的 agentType,不跟这份文件里其它用例共用 ultra-fake。
   await createTasks([{ ...baseTask, id: "sched-task", title: "sched",
     agentType: "claude", executorId: null }]);
-  process.env.ASH_ALLOW_REAL_AGENT = "1";
-  process.env.ASH_TEST_LEAD_LOG = joinPath(root, "fake-claude-input.log");
+  process.env.NAVI_TEST_AGENT_BIN = fakeBin;
+  process.env.NAVI_TEST_LEAD_LOG = joinPath(root, "fake-claude-input.log");
   try {
     assert.equal(beginAccepting("sched-task"), true);
     const fireBlocked = await runApi.request("/tasks/sched-task/fire", { method: "POST" });
@@ -283,9 +284,9 @@ try {
     assert.equal(schedRow?.enabled, false, "解锁后的下一个 tick 应正常消费 once 班次");
     assert.equal(!!schedRow?.lastRunAt, true);
   } finally {
-    delete process.env.ASH_ALLOW_REAL_AGENT;
-    if (priorEnv.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
-    else process.env.ASH_TEST_LEAD_LOG = priorEnv.log;
+    delete process.env.NAVI_TEST_AGENT_BIN;
+    if (priorEnv.log === undefined) delete process.env.NAVI_TEST_LEAD_LOG;
+    else process.env.NAVI_TEST_LEAD_LOG = priorEnv.log;
   }
 
   // ⑩ 尾段失败不清补跑凭据：失败站与后续站保留补跑入口，修好后再次验收接着跑。
@@ -527,9 +528,12 @@ try {
   const raceRound = await startVerifyRound("vr-race-task"); // 校验通过，状态写下，投递排第二
   assert.equal(raceRound.round, 1);
   releaseTurn("vr-race-task"); // 竞争者先拿到；验证 waiter 同步 claim 失败 → onError 回滚
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  const raceRow = (await db.select({ verifyRound: tasks.verifyRound, stage: tasks.stage, reviewStep: tasks.reviewStep })
+  // 回滚是放锁之后异步写库的：等到它落下来（有上限），不赌 300ms 够不够。
+  const readRace = async () => (await db.select({ verifyRound: tasks.verifyRound, stage: tasks.stage, reviewStep: tasks.reviewStep })
     .from(tasks).where(eq(tasks.id, "vr-race-task"))).at(0);
+  const rolledBack = (row: Awaited<ReturnType<typeof readRace>>) => row?.verifyRound === null && row.stage === null && row.reviewStep === null;
+  for (let i = 0; i < 150 && !rolledBack(await readRace()); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+  const raceRow = await readRace();
   assert.equal(raceRow?.verifyRound, null, "验证没起来必须清 verifyRound");
   assert.equal(raceRow?.stage, null, "对称回滚必须连 stage=verifying 一起恢复（UI 不能永久显示验证中）");
   assert.equal(raceRow?.reviewStep, null, "station 字段一并回滚");
@@ -573,9 +577,9 @@ try {
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
   if (priorEnv.path === undefined) delete process.env.PATH; else process.env.PATH = priorEnv.path;
-  if (priorEnv.allow === undefined) delete process.env.ASH_ALLOW_REAL_AGENT;
-  else process.env.ASH_ALLOW_REAL_AGENT = priorEnv.allow;
-  if (priorEnv.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
-  else process.env.ASH_TEST_LEAD_LOG = priorEnv.log;
+  if (priorEnv.staged === undefined) delete process.env.NAVI_TEST_AGENT_BIN;
+  else process.env.NAVI_TEST_AGENT_BIN = priorEnv.staged;
+  if (priorEnv.log === undefined) delete process.env.NAVI_TEST_LEAD_LOG;
+  else process.env.NAVI_TEST_LEAD_LOG = priorEnv.log;
   rmSync(root, { recursive: true, force: true });
 }

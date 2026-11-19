@@ -54,7 +54,7 @@ export async function checkPayloadGuards(ctx: PayloadCheckContext): Promise<void
       if (req.url?.includes("/handoff/import")) sniffed.push(raw);
       const forwarded: Record<string, string> = { "content-type": "application/json" };
       for (const [k, v] of Object.entries(req.headers)) {
-        if (k.startsWith("x-ash-peer-") && typeof v === "string") forwarded[k] = v;
+        if (k.startsWith("x-navi-peer-") && typeof v === "string") forwarded[k] = v;
       }
       void fetch(`${peerUrl}${req.url}`, {
         method: req.method ?? "GET",

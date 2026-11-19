@@ -1,5 +1,5 @@
-import type { AgentEvent, NativeWorkEvent, NativeWorkStatus } from "@ash/shared";
-import { nativeWorkStatus as nativeStatus } from "@ash/shared/native-work";
+import type { AgentEvent, NativeWorkEvent, NativeWorkStatus } from "@navi/shared";
+import { nativeWorkStatus as nativeStatus } from "@navi/shared/native-work";
 import { ClaudeChildActivity, childActivity } from "./native-agent-activity.js";
 
 const names = new Set(["agent", "task", "taskcreate", "taskupdate", "taskget", "tasklist", "taskoutput", "taskstop", "todowrite", "update_plan",
@@ -245,7 +245,7 @@ export function codexNativeWork(item: any): AgentEvent[] {
  *
  * 这条协议**不带派活正文** —— `spawn_agent` 的 `message` 参数在上游就被整段加密
  * （`gAAAAA…`），父子两边的 rollout 里都只有密文，codex CLI 自己也只转发不解密。所以
- * 「主会话对子智能体说了什么」ash 在任何通道都拿不到，只有 `agentPath` 这一个明文标签。
+ * 「主会话对子智能体说了什么」navi 在任何通道都拿不到，只有 `agentPath` 这一个明文标签。
  * 别再去 rollout 里找正文（2026-09-12 已查遍父/子两份记录与事件流）。
  *
  * `interacted` 故意不产出事件：它既不是开工也不是收工，拿它改状态会把已完成的子智能体

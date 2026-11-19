@@ -1,5 +1,5 @@
 // 定时重跑(Schedule)与待发送消息(ScheduledMessage)的形状。纯类型模块 —— 从 index.ts
-// 拆出来只是为了不让那个文件继续长,消费方仍从 "@ash/shared" 导入,路径不变。
+// 拆出来只是为了不让那个文件继续长,消费方仍从 "@navi/shared" 导入,路径不变。
 import type { AgentType } from "./index.ts";
 import type { ScheduledMessageWait } from "./scheduled-message-wait.ts";
 

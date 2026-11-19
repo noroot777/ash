@@ -4,10 +4,10 @@
 // 夹具刻意**不**渲染真实的会话组件:要钉的是 useStickToBottom 认不认得出这两类变化,
 // 混进真实气泡只会把失败原因摊到一堆不相干的渲染里。消息形状照搬群聊那一种(id/body/
 // status),指纹也走产品自己的 chatTailKey —— 测的是产品算的那个数,不是测里另写一份。
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { chatTailKey } from "../../src/lib/chatTailKey.ts";
-import { isVisibleExecutionEvent } from "@ash/shared/native-work";
+import { isVisibleExecutionEvent } from "@navi/shared/native-work";
 import type { ExecutionEvent } from "../../src/lib/executionTrace.ts";
 import { appendExecutionEvent } from "../../src/lib/executionTrace.ts";
 import { conversationItemSize } from "../../src/task-detail/conversationContentSize.ts";
@@ -43,7 +43,31 @@ function Feed() {
   const thinkingSize = conversationItemSize({
     kind: "agent", id: "active", sessionId: "s", label: "agent", markdown: "", segments: [segment],
   });
-  const { resume } = useStickToBottom(scroll, "fixture", `${chatTailKey(messages)}:${thinkingSize}`);
+  /* 换到另一条会话：先是读取中（几乎没有内容，scrollTop 被浏览器夹回 0），正文稍后才到 ——
+     真实的切任务就是这个顺序。顶上那张图也一起收掉：读取中的内容要是还能滚，正文到的那一下
+     浏览器的 scroll anchoring 会顺手把视口带回底部，正好盖住要钉的那个洞。 */
+  const [room, setRoom] = useState(0);
+  const switchRoom = () => {
+    setRoom((value) => value + 1);
+    setImageLoaded(false);
+    setMessages([]);
+    window.setTimeout(() => setMessages(seed(60)), 120);
+  };
+  /* 工作区那颗全局 ↑（切到侧栏上一条任务）：挂在 window 的捕获阶段，认下就 preventDefault。
+     "switch" 照它真实的样子切会话；"swallow" 只吃掉这颗键、别的什么都不做。 */
+  const arrowMode = useRef<"off" | "switch" | "swallow">("off");
+  const switchRef = useRef(switchRoom);
+  switchRef.current = switchRoom;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowUp" || arrowMode.current === "off") return;
+      event.preventDefault();
+      if (arrowMode.current === "switch") switchRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+  const { resume } = useStickToBottom(scroll, `room-${room}`, `${chatTailKey(messages)}:${thinkingSize}`);
 
   return <div>
     <div
@@ -127,6 +151,9 @@ function Feed() {
       藏起这个面板 / 切回来
     </button>
     <button type="button" data-testid="resume" onClick={() => resume()}>恢复跟随</button>
+    <button type="button" data-testid="switch-room" onClick={switchRoom}>换一条会话</button>
+    <button type="button" data-testid="arrow-switch" onClick={() => { arrowMode.current = "switch"; }}>↑ 切会话</button>
+    <button type="button" data-testid="arrow-swallow" onClick={() => { arrowMode.current = "swallow"; }}>↑ 被别处吃掉</button>
   </div>;
 }
 

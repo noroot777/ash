@@ -4,6 +4,9 @@ import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/** 原生验收工具（Windows Job 监督器、macOS 进程扫描器）的编译缓存目录，按源码摘要命中。 */
+export const GATE_NATIVE_CACHE_DIR = "navi-accept-gate";
+
 let compiling: Promise<string> | null = null;
 
 export function gateJobSupervisorExecutable(): Promise<string> {
@@ -12,7 +15,7 @@ export function gateJobSupervisorExecutable(): Promise<string> {
 }
 
 async function compileGateJobSupervisor(): Promise<string> {
-  const directory = join(tmpdir(), "ash-accept-gate");
+  const directory = join(tmpdir(), GATE_NATIVE_CACHE_DIR);
   mkdirSync(directory, { recursive: true });
   const digest = createHash("sha256").update(GATE_JOB_SUPERVISOR).digest("hex");
   const executable = join(directory, `supervisor-${digest}.exe`);
@@ -37,7 +40,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-public static class AshGateJob {
+public static class NaviGateJob {
   public static void Main(string[] args) {
     if (args.Length == 5) Run(args[0], int.Parse(args[1]), args[2], args[3], args[4]);
   }

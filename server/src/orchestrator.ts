@@ -3,7 +3,7 @@ import { claimTranscript } from "./transcript-identity.js";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
+import type { AgentType, SessionRole, TaskStatus } from "@navi/shared";
 import { deliverLeadInterjection } from "./team/lead-interjection.js";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
@@ -44,7 +44,6 @@ import { reseedHistory } from "./history-reseed.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
-import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { freeReviewReminder } from "./free-workflow.js";
@@ -118,7 +117,7 @@ export async function continueTask(
   const decline = (reason: TurnStartDecline): false => {
     if (!declined) {
       declined = true;
-      try { opts.onDecline?.(reason); } catch (error) { console.error(`[ash] 起跑未成的原因上报失败 task=${taskId}:`, error); }
+      try { opts.onDecline?.(reason); } catch (error) { console.error(`[navi] 起跑未成的原因上报失败 task=${taskId}:`, error); }
     }
     return false;
   };
@@ -246,7 +245,7 @@ export async function continueTask(
     }, { behavior: "immediate" });
     // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
     // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
-    bindTurnToken(taskId, turnToken);
+    bindTurnToken(taskId, turnToken, agent);
     await (await import("./review-recurrence-gate.js")).carryRecurrenceBreaker(taskId, { ...opts, native: !!nativeCommand });
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
@@ -270,7 +269,7 @@ export async function continueTask(
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
     const preserveCliState = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
     const resetPlan = !!opts.system && !preserveCliState;
-    const planning = !resetPlan && !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
+    const planning = !resetPlan && !goalExecution && !inputExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
     if (planning) {
       sideTurn = true;
       if (sessionRole === "single") reclaimTurn(taskId, turn, "side");
@@ -355,7 +354,7 @@ export async function continueTask(
     // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它
     // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
     // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
-    const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
+    const peerNotice = opts.withholdPeerNotice ? "" : peerNoticeFor({ taskId, self: agent, all, prev });
     // 「你被搬过机器了」——接力导入时挂在 handoff 标记上的一次性前言（不占 resume_prompt
     // 那一列，理由见 handoff-notice.ts）。只投给任务自己的正式回合：审查/验证/就地旁路
     // 回合吃掉它，任务本人就再也收不到了。
@@ -420,7 +419,7 @@ export async function continueTask(
     checkingReviewStart = false;
     // 顺序定死:查冻结事实(最后一个 await)→ 同步定论 → spawn。为什么只能这么排、以及
     // freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
-    const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
+    const frozen = await freezeFacts(taskId, opts.freezeGuard ?? false);
     // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
     // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
     const freeze = takeFreeze(taskId, frozen);
@@ -549,8 +548,6 @@ export async function continueTask(
     };
     if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner, sessId);
     else await persistRunner(db);
-    // 后台问一句够不够得着 ash MCP:只提示不拦、不等(ash-mcp-turn-hint.ts);旁路回合在起跑处已过闸。
-    if (!sideTurn) void hintAshMcpForTurn({ taskId, agentType: agent, executorId: profileId, ownerUserId: runOwner ?? null, cwd, sessionId: sessId });
     if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
     await openTurn({
@@ -691,7 +688,7 @@ export async function continueTask(
     releaseTurn(taskId, turn);
     // 同 task-run：全出口注销,不依赖走到收尾函数（第 6 轮审查必须修 1）。
     closeTaskTurns(taskId);
-    if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
+    if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[navi] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
   // 落到时间线/状态上)。返回 false 的只有「一个字没送出去」的几类:被单飞锁挡回,起跑前

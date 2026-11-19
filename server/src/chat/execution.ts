@@ -2,8 +2,8 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { ChatMember, ChatTraceEvent } from "@ash/shared/chat";
-import { isVisibleExecutionEvent } from "@ash/shared/native-work";
+import type { ChatMember, ChatTraceEvent } from "@navi/shared/chat";
+import { isVisibleExecutionEvent } from "@navi/shared/native-work";
 import { expandHome } from "../git.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import { dispatchRejection, executorOwnerScope } from "../auth/dispatch-gate.js";
@@ -39,7 +39,7 @@ export type ChatInvokeOptions =
 
 export class AssistantToolError extends Error {
   constructor(tool: string) {
-    super(`助手调用了未开放的工具（${JSON.stringify(tool.slice(0, 80))}）。查询和配置由 ash 内置能力处理；请重新发送消息重试。`);
+    super(`助手调用了未开放的工具（${JSON.stringify(tool.slice(0, 80))}）。查询和配置由 Navi 内置能力处理；请重新发送消息重试。`);
     this.name = "AssistantToolError";
   }
 }
@@ -86,7 +86,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   // repoPath 按用户写的原样存（`~/code/x` 保持可读、可搬机器），所以每个消费点都得自己
   // 展开——少这一步，watchChatWorkspace 的 realpath 会直接 ENOENT，被 @ 的成员一个不剩
   // 全报同一条错，而且错在 CLI 起来之前，看着像「智能体坏了」。
-  const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : sideCwd ?? expandHome(project!.repoPath);
+  const cwd = temporary ? await mkdtemp(join(tmpdir(), "navi-chat-")) : sideCwd ?? expandHome(project!.repoPath);
   if (!temporary && !await stat(cwd).then((entry) => entry.isDirectory()).catch(() => false)) {
     throw new Error(`群聊项目的工作目录不存在：${project!.repoPath}。请在项目设置里改成这台机器上真实存在的目录，再重新 @。`);
   }
@@ -138,7 +138,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
         // 让它「去核查一下」时就是要它跑命令、必要时动手改。闸门的分类器只认白名单里的裸命令，
         // 一个 `git log --oneline | head` 就被判成「无法确认只读」，把整次咨询连回复一起中止。
         // 群聊/助手/摘要仍受闸门约束——那些跑在项目主仓或临时目录里，和任务无绑定关系。
-        // 任务结算类写入不靠这条闸门挡：侧聊的 env 不带 ASH_TURN_TOKEN，complete_task 一类
+        // 任务结算类写入不靠这条闸门挡：侧聊的 env 不带 NAVI_TURN_TOKEN，complete_task 一类
         // MCP 写入在服务端就会被拒。
         if (event.kind === "tool" && purpose !== "side" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
         signal.throwIfAborted();

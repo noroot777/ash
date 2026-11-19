@@ -24,15 +24,15 @@
 
 点「停止全组」后端全做对了——进程 SIGTERM、内部组置 `paused`、会话写入系统提示——但按钮原样、状态徽标不动、`paused` 前端压根没渲染，用户只能得出「按钮坏了」。
 
-更坏的是它**掩盖了真问题**：界面若明说「已停止，0 个执行者被打断（都已完成）」，用户立刻就知道还在动的鼠标不归 ash 管，而不是把一个架构缺口误报成 UI bug。
+更坏的是它**掩盖了真问题**：界面若明说「已停止，0 个执行者被打断（都已完成）」，用户立刻就知道还在动的鼠标不归 Navi 管，而不是把一个架构缺口误报成 UI bug。
 
 ---
 
-## CUA 旁路会话：ash 够不着的全局单例（2026-07-27）
+## CUA 旁路会话：Navi 够不着的全局单例（2026-07-27）
 
-对应约定：`CLAUDE.md` 的「三层击杀只覆盖 ash 自己 spawn 的进程树」。
+对应约定：`CLAUDE.md` 的「三层击杀只覆盖 Navi 自己 spawn 的进程树」。
 
-codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUseService`（**开机级全局单例**，跟着宿主 App 一起启动，不是每任务一个），ash 的进程组/fd/ppid 三条线索一条都够不着它。
+codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUseService`（**开机级全局单例**，跟着宿主 App 一起启动，不是每任务一个），Navi 的进程组/fd/ppid 三条线索一条都够不着它。
 
 **已验证有效的手段**：`stopTask` 三层击杀掉执行者后，`SkyComputerUseService` 随即消失，屏幕指示器跟着走（CUA 服务有 `shouldTerminateWhenNoClientsRemain` 语义，codex 客户端一死它就自行退出）。
 
@@ -198,7 +198,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 两条推论：
 
 - **一个判断有几处实现，就要有几盏红灯**。推进器那条路修好之后，`acceptTask` 这条路上同名的判断仍是旧的：`test-workflow-gate.ts` 当时只测推进器，全绿，而用户点下去的正是没测的那条。所以这次的回归直接在真库 + 真 git 仓库上调 `acceptTask`，断言 main 的 ref 一动没动、worktree 还在、分支还在。
-- **worktree 里没有 `node_modules`，`@ash/shared` 会解析到主仓那份**（本次首跑就是这么撞出来的：改完 shared 测试照红，因为 server 读的是主仓的旧文件）。改 shared 时先 `ln -sfn ../../shared node_modules/@ash/shared`，否则验证的是别的分支的代码。
+- **worktree 里没有 `node_modules`，`@navi/shared` 会解析到主仓那份**（本次首跑是这么撞出来的：改完 shared 测试照红，因为 server 读的是主仓的旧文件）。改 shared 时先 `ln -sfn ../../shared node_modules/@navi/shared`，否则验证的是别的分支的代码。
 
 ---
 
@@ -249,7 +249,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 
 对应说明：`server/src/auth/run-env.ts` 的 `cliConfigDirForOwner`、`handoff-collect.ts` 的 `claudeProjectDir`、`handoff-import.ts` 那道「CLI 自己找得到吗」的闸。回归：`npm -w server run test:handoff-cli-config-dir`（并入 `test:handoff`）。
 
-现象只有一行红字：任务 `fvosBsZ8V7XA` 从自用机接力到一台多用户 ash（172）之后，自动续跑的那一回合 **1 秒结束**，时间线上只有一句「回合正常结束,但本回合内没有收到 complete_task 的完成确认」。那句话是**结算结果**，不是原因——它把真正的故障整个盖住了。
+现象只有一行红字：任务 `fvosBsZ8V7XA` 从自用机接力到一台多用户 Navi（172）之后，自动续跑的那一回合 **1 秒结束**，时间线上只有一句「回合正常结束,但本回合内没有收到 complete_task 的完成确认」。那句话是**结算结果**，不是原因——它把真正的故障整个盖住了。
 
 拉回对端快照后，证据链很干净：`turnStartedAt 13:27:03.325 → endedAt 13:27:04.756`，usage 全 0，`agentOffset: 761`，trace 只有 `run → usage(全0) → error: result: error_during_execution`，没有 init、没有正文、没有水位。
 
@@ -267,7 +267,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 三处让它更难查：
 
 - **导入侧那道闸拦不住它**。`handoff-import.ts` 的注释写着「只认文件写盘成功、且 CLI 自己找得到的会话」，但 claude 一路只比对文件名到没到 `arrived` 集合里；「CLI 定位得到吗」这一问当时只对 codex 追（因为 rollout 的目录深度有过教训）。于是 `cliSessionId` 被保留、`--resume` 照发——正是这个文件早就命名过的「假恢复」。
-- **CLI 说了原因，ash 没听**。`executors/claude.ts` 组织错误消息时只读 `ev.result` 和 `ev.api_error_status`；而 CLI **自身**失败时 `result` 是空的，原因只在 `errors[]` 里。用户因此只拿到一句没有信息量的 `result: error_during_execution`。更要命的是 `executors/session-lost.ts` 早就收了 `no conversation found with session id` 这条正则，注释里甚至写明「同时把同一句塞进 stream-json 的 `result.errors[]`」，还把「把库从另一台机器搬过来」列为已知入口——**识别是现成的，只是那串字符从来没送到它面前**。
+- **CLI 说了原因，Navi 没听**。`executors/claude.ts` 组织错误消息时只读 `ev.result` 和 `ev.api_error_status`；而 CLI **自身**失败时 `result` 是空的，原因只在 `errors[]` 里。用户因此只拿到一句没有信息量的 `result: error_during_execution`。更要命的是 `executors/session-lost.ts` 早就收了 `no conversation found with session id` 这条正则，注释里甚至写明「同时把同一句塞进 stream-json 的 `result.errors[]`」，还把「把库从另一台机器搬过来」列为已知入口——**识别是现成的，只是那串字符从来没送到它面前**。
 - **就算送到了这次也清不掉**。`shouldDropSession` 对 `lost` 要求退出码非零（防止 agent 正文里出现这句话就误清一条能续的会话，是有意的取舍），而对端这一回合记的 `exitStatus` 是 0——本机同参数复现是 1，这个差异没有继续追。所以自愈这条路在本例里并不成立，修必须落在「一开始就别写错目录」。
 
 修法对称成三层：`cliConfigDirForOwner` 直接读 `runEnvForOwner` 的注入结果（不另拼一次路径，判据只留一份），接力找/放两侧都用它；导入侧的闸给 claude 补上 `existsSync` 那一问，找不到就清掉 `cliSessionId` 老实开新会话；claude 执行器补读 `errors[]`。
@@ -290,7 +290,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 
 对应代码：`server/src/exit-ledger.ts`、`server/src/singleton.ts`（心跳与信号覆盖）。
 
-用户两次遇到「ash 服务好像又停了」，手动 `restart` 救回。日志 `/tmp/ash-4317.log` 里对应的痕迹只有两行 `stale singleton lock`（PID 51330、PID 65995），前后都是普通的 llm-relay 记录，中间什么都没有。
+用户两次遇到「Navi 服务好像又停了」，手动 `restart` 救回。日志 `/tmp/ash-4317.log` 里对应的痕迹只有两行 `stale singleton lock`（PID 51330、PID 65995），前后都是普通的 llm-relay 记录，中间什么都没有。
 
 **死亡时刻只能从系统日志反推**：`/usr/bin/log show` 里 `mDNSResponder` 在 `15:20:15.491` 记了一条 `DNSServiceCreateConnection STOP PID[65995](node)`，而最后一次数据库写入是 `15:20:06`（`session_turns.started_at`）。进程不是 launchd 管的，所以连 `runningboardd` 的 `termination reported by proc_exit` 都没有——那条 DNS 连接拆除是它留下的唯一一句话。
 
@@ -301,7 +301,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 | JS 崩溃 | 否 | `index.ts` 的 `uncaughtException`/`unhandledRejection` 兜底会打印，日志里没有 |
 | V8 OOM | 否 | 那会打印 `FATAL ERROR: heap out of memory` |
 | 原生崩溃（SEGV/ABRT） | 否 | `~/Library/Logs/DiagnosticReports` 当天一份 `.ips` 都没有 |
-| 内存压力击杀 | 否 | 当天唯一一份 `JetsamEvent` 是 12:53，那次被杀的是 `IntelligencePlatformComputeServi`（`reason: per-process-limit`），ash 在那份快照里还活着 |
+| 内存压力击杀 | 否 | 当天唯一一份 `JetsamEvent` 是 12:53，那次被杀的是 `IntelligencePlatformComputeServi`（`reason: per-process-limit`），Navi 在那份快照里还活着 |
 | 终端挂断 SIGHUP | 否 | 服务由 `start-detached.mjs` detached 起，自成 session、`TTY=??`，没有控制终端可挂断 |
 | `npm run restart` | 否 | 那条路只发 SIGTERM（`scripts/platform.mjs` 的 `killPid`），而 SIGTERM 会删掉单例锁 |
 | 不留话地被带走（SIGKILL，或当时还没处理器的 SIGHUP/SIGQUIT） | **是** | 下面那条判据 |
@@ -318,7 +318,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 
 心跳有两条边界，都别越：**它不能参与存活判据**——事件循环被同步活儿堵住时心跳也会停，拿它判陈旧就会把一个还活着的 server 判死，然后两个实例调度同一份库（存活判据始终是 pid + 进程启动时间 + 命令形状那三条）；**它也不是死亡时刻的上界**，只是「最后已知存活」——堵塞、睡眠、心跳落盘失败都能让间隔任意长，审查实测过权限失败导致心跳停更而进程照活。
 
-两个顺带的坑：zsh 里 `log` 被占用（报 `too many arguments`），查系统日志必须写全路径 `/usr/bin/log`；那份 12:53 的 `JetsamEvent` 里 ash 的 `lifetimeMax` 是 182030 页（≈2.85 GB 峰值），不是这次的死因，但值得留意。
+两个顺带的坑：zsh 里 `log` 被占用（报 `too many arguments`），查系统日志必须写全路径 `/usr/bin/log`；那份 12:53 的 `JetsamEvent` 里 Navi 的 `lifetimeMax` 是 182030 页（≈2.85 GB 峰值），不是这次的死因，但值得留意。
 
 ## 重启后的对账把 112 条老审查改写成 failed（2026-10-26）
 
@@ -335,3 +335,21 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 回填口径：**恢复成「这次写之前那一刻的值」**，源按优先级 `data/ash.db.bak-before-updatedat-restore`（2026-10-20；其中 `2026-10-19T13:39:05.339Z` 本身是上一次污染的值，要跳过）→ `data/ash.db.bak-before-daily-report-accept`（2026-08-26，8-26 前建的任务的真值）→ `ended_at`。这个口径不是猜的：10-19 那次污染后用户自己恢复过一轮，命中 8-26 备份的 201 行逐字节一致，照着走即可。回填前先 `.backup` 一份。
 
 做进系统的是判据本身：没有待结算记录（证据行不存在、或存在但从没落过结算）且任务自己已终态、没有在飞的 `verifyRound`/`resumePrompt` 时，一律算已收口。回归用例在 `server/scripts/test-review-history.ts`（注意：harness 的验收前置命令只有 `npm run test:web`，覆盖不到它，得显式跑 `npm -w server run test:regression-evidence`）。
+
+---
+
+## 判据不是可证事实：门禁源码隔离 13 轮打回才收口（2026-10-26～27）
+
+任务 TaESWHhrPOoa（门禁快照别拍平软链）：原目标只是「快照别把依赖目录里的软链解引用成真文件」，但围绕它长出的「源码隔离」机制让审查链在两天里走了 7 个 run、13 轮审查记录（除 2 轮启动失败外全部打回）。每一轮的修法都是**给报告里那个具体触发点加判据**：根主干可写检查、workspace 同名检查、目录名豁免改精确计划、`@scope` 白名单……每一轮都被下一个布局绕过：
+
+- scope 目录是指向外部安装存储的软链 → `rm` 穿过中间链把**外部真实安装**删掉（macOS 先破坏后报错，Windows 连错都不报、快照照常建成）；
+- 仓内同名补丁目录（`patches/left-pad` 那种）被源码扫描当成自有包 → 快照里遮蔽正式 registry 包，门禁从第一条命令起测的就不是项目真正用的代码；
+- 无 npm 安装记录的借用布局（正是本仓 worktree 借依赖的日常形态）→ `.bin` 入口按「未知外部路径」原样保留，解析回活动主检出，主检出一改，「已冻结」的检查输出跟着变。
+
+根因不在哪条判据写错了，而在**修复高度与审查高度错位**：「按名字 / 按根目录 / 按白名单」是启发式判据，反例空间无穷；审查要的是不变量级证明。逐点修永不收敛，每条新反例在审查口径里都是同一类的「修后复发」——这不是审查者翻旧账，是同一个类缺陷换衣服再进门。
+
+**被证伪的路**：对抗性审查下继续按触发点加判据/白名单。从 Q5rOASODZ2eu 到 izqUbZK6XmGC 五个完整 run 的实证，每次「本轮触发点已堵死」之后下一轮都有新布局，别再试第六次。
+
+**收口**（`867ecc40`）：把「源码隔离」改成计划层三条不变量，判据只认可证事实，**证明不了就无副作用地拒绝**——① 写入所有权：全部 rm/mkdir/建链动作先收进一张写入计划，逐目的地逐段 lstat 证明完整父链落在快照内，有一段穿到外面就整体拒绝重绑定；② 来源身份：包身份只认安装记录与「安装入口↔安装来源↔本次提交目录」映射，同名不等于同源；③ 运行入口闭包：`.bin`/别名/嵌套消费者统一纳入同一张计划校验，来源未知 = 未证明 = 拒绝或明确降级并披露。审查者自己的三个反例 smoke 随后全部转绿或转「带人话理由拒绝」。定点回归钉在 `server/scripts/test-accept-gate-confine.ts`。
+
+通用教训：**审查要求「证明」而实现给的是「启发式」时，这个循环没有终点；而「证明不了就拒绝」本身就是审查认可的修法**——fail-closed 比支持任意布局便宜一个数量级。下次遇到同形状的拉锯，先问「能不能拒」，再问「能不能证」，最后才轮到「能不能支持」。

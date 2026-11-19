@@ -12,7 +12,7 @@ import { runPreview, type PreviewStartOptions } from "./preview-start.js";
 export { readPreview, readPreviewLog, hasPreviewLog, previewLogPath } from "./preview-store.js";
 export type { PreviewStep, PreviewRecord, PreviewResult } from "./preview-store.js";
 export { beginPreviewStart, endPreviewStart, previewStartCanceled } from "./preview-start-state.js";
-export const PREVIEW_CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）";
+export const PREVIEW_CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / Navi 重启）";
 const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
 
@@ -28,7 +28,7 @@ export function previewStartingRecord(taskId: string): PreviewRecord | null {
 
 export async function startPreview(taskId: string, step: PreviewStep, cwd: string, registered?: string, options?: PreviewStartOptions): Promise<PreviewResult> {
   const gen = registered ?? randomUUID();
-  if (registered === undefined) beginDriving(taskId, gen);
+  if (registered === undefined) beginDriving(taskId, gen, options?.purpose);
   try {
     return await runPreview(taskId, step, cwd, gen, options, async () => (await stopPreviewExcept(taskId, null, gen)).stopped);
   } finally {
@@ -67,13 +67,17 @@ async function stopPreviewExcept(
   taskId: string,
   reason: string | null,
   exceptGen: string | null,
+  preserveDevelopment = false,
 ): Promise<StopOutcome> {
   // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
   // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
   const record = readAnyPreview(taskId);
   // 记录还没落盘的那一段也要停得掉（见 canceledGens）：标上记号，那一趟到下一个检查点
   // 就自己收摊，而且**永远不会写出记录**。
-  const marked = cancelDriving(taskId, exceptGen);
+  const marked = cancelDriving(taskId, exceptGen, preserveDevelopment);
+  if (preserveDevelopment && record?.purpose === "development") return stopOutcome({ stopped: true }, false);
+  const { closeTaskBrowser } = await import("./task-browser.js");
+  await closeTaskBrowser(taskId, reason ?? "托管服务已停止或替换");
   let pending = await retryPreviewStops(taskId);
   if (!record) {
     if (!marked) return stopOutcome(pending, false);
@@ -124,16 +128,9 @@ export async function stopPreviewAtAccept(taskId: string): Promise<PreviewStopRe
   } catch (error) { return previewStopFailure(error); }
 }
 
-/** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
+/** 任务又开跑了：回收普通预览，开发服务由智能体复用或替换。 */
 export async function stopPreviewOnRerun(taskId: string): Promise<void> {
-  // **不设门禁。** 这里曾经拿 `readAnyPreview` 当开关，漏掉的正是「内存里已经有启动代、
-  // 盘上还没有记录」那一段：任务从 done 重新开跑得足够快时（自动推进、连点重跑），上一版
-  // 的预览此刻正在冷启动，`readAnyPreview` 却读不到东西，于是这一下什么也没停——几十秒后
-  // 它照常上线，用户对着上一版代码验新改动，而这正是本函数唯一要防的事。
-  //
-  // 直接调 stopPreview 是安全的：它本身幂等，既没有记录、内存里也没有在启动的代时，
-  // 它什么都不做，也不会往时间线写字。
-  await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码");
+  await stopPreviewExcept(taskId, "任务重新开跑，旧预览指向的是上一版代码", null, true);
 }
 
 // 清扫：进程早死了的记录、以及 idle30 那一档到点的。启动时先扫一遍，之后每 5 分钟一次
@@ -177,7 +174,7 @@ async function sweepTaskPreview(taskId: string): Promise<void> {
     const retired = await retirePreview(record, "failed");
     if (!retired) return;
     await appendTaskTimeline(taskId, !retired.stopped ? alertLine(retired.message) : interrupted
-      ? receiptLine(`预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`)
+      ? receiptLine(`预览没能起完就中断了（Navi 重启），已经清理：${record.cmd}`)
       : alertLine(`预览进程已自行退出：${record.url ?? record.cmd}`));
     return;
   }

@@ -42,17 +42,17 @@ export function disposeTestScopesSync() {
     const result = spawnSync(process.execPath, [cleanupPath], {
       input: JSON.stringify(pending),
       encoding: "utf8", timeout: 120_000, killSignal: "SIGKILL", windowsHide: true,
-      env: { ...process.env, ASH_TEST_PROCESS_SCOPE: "" },
+      env: { ...process.env, NAVI_TEST_PROCESS_SCOPE: "" },
     });
     if (result.error || result.signal || result.status !== 0) {
       processError = Object.assign(new Error(`测试执行域退出清理失败\n${result.stdout ?? ""}${result.stderr ?? ""}`, { cause: result.error }), {
         code: result.error?.code ?? "ETESTCLEANUP", result,
       });
     }
-    const report = result.stdout?.split(/\r?\n/).find((line) => line.startsWith("ASH_TEST_SCOPE_CLEANUP="));
+    const report = result.stdout?.split(/\r?\n/).find((line) => line.startsWith("NAVI_TEST_SCOPE_CLEANUP="));
     let retired = new Set();
     try {
-      const directories = JSON.parse(report?.slice("ASH_TEST_SCOPE_CLEANUP=".length));
+      const directories = JSON.parse(report?.slice("NAVI_TEST_SCOPE_CLEANUP=".length));
       if (!Array.isArray(directories) || directories.some((directory) => typeof directory !== "string")) throw new Error("清理退役清单无效");
       retired = new Set(directories);
     } catch (error) { processError ??= new Error("测试执行域退出清理缺少有效退役清单", { cause: error }); }

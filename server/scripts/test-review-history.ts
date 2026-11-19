@@ -21,13 +21,13 @@ const source = (review: { mode: ReviewMode; runId: string; round: number }) =>
     ? { role: "reviewer" as const, review: { run: review.runId, round: review.round } }
     : { role: "single" as const };
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 const api = new Hono();
 api.post("/tasks/:id/answer", (context) => answerTask(context, context.req.param("id")));
 try {
-  const { open } = await setupRegressionReviews();
+  const { open, openQuiet } = await setupRegressionReviews();
   const historical = async (mode: ReviewMode, missing: "identity" | "entire-state") => {
-    const review = await open(mode);
+    const review = await openQuiet(mode);
     assert.equal((await review.stage()).status, 200);
     if (missing === "identity") await db.update(schema.regressionEvidence).set({ targetIdentity: null })
       .where(eq(schema.regressionEvidence.directory, review.directory));
@@ -175,7 +175,6 @@ try {
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {
     for (const missing of ["identity", "entire-state"] as const) {
       const review = await historical(mode, missing);
-      await db.delete(schema.scheduledMessages).where(eq(schema.scheduledMessages.taskId, review.ownerTaskId));
       await db.update(tasks).set({ status: "paused", question: "Historical review question" }).where(eq(tasks.id, review.ownerTaskId));
       const response = await api.request(`/tasks/${review.ownerTaskId}/answer`, { method: "POST",
         headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: "Only continue this review" }) });

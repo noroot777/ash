@@ -3,7 +3,7 @@
 // 三类调用方,判据完全不同,但都要收敛成同一个 Actor:
 //  · **人**(web cookie / mobile Bearer):落在 users 表上,有实例角色。
 //  · **agent**(MCP 回连,带回合凭证):不走用户会话,归属记在那个任务的 owner 名下,
-//    但**权限只到那条任务**。见 docs/multi-user-plan.md §三。它没有 web 会话,也不该有
+//    但**权限只到那条任务**。它没有 web 会话,也不该有
 //    —— 一个 agent 拿到的权限恰好是它那条任务的权限,多一分都是横向越权(项目轴的收窄
 //    在 visibility.ts `agentScope`,账号面的在下面的 `isAccountHolder`)。
 //  · **自用模式**:恒定的隐式本地用户(id 见 SINGLE_USER_ID)。这样归属列只有一套
@@ -12,7 +12,7 @@
 // Actor 挂在 Hono 的 context vars 上,取用一律走 `actorOf(c)` —— 别在别处再解析一遍
 // cookie/header,那就是第二份判据。
 import type { Context } from "hono";
-import type { UserRole } from "@ash/shared";
+import type { UserRole } from "@navi/shared";
 
 /**
  * 自用模式下那个隐式本地用户的 id。**不进 users 表**,归属列也一律写 null ——
@@ -79,7 +79,7 @@ export const ANONYMOUS_ACTOR: Actor = {
 };
 
 // Hono 的 c.set/c.get 是无类型的字符串键。收敛成两个函数,别在调用点写裸字符串。
-const ACTOR_KEY = "ashActor";
+const ACTOR_KEY = "naviActor";
 
 export function setActor(c: Context, actor: Actor): void {
   c.set(ACTOR_KEY as never, actor as never);
@@ -159,7 +159,7 @@ export async function instanceAdminOnly(
 ): Promise<{ status: 403; body: { error: string } } | null> {
   const actor = actorOf(c as never);
   if (!KIND_POLICY[actor.kind].hostAccess) {
-    return { status: 403, body: { error: `${what}不对经飞书等 IM 通道发来的请求开放，请在 ash 页面上操作` } };
+    return { status: 403, body: { error: `${what}不对经飞书等 IM 通道发来的请求开放，请在 Navi 页面上操作` } };
   }
   const { isMultiUser } = await import("./mode.js");
   if (!(await isMultiUser())) return null;

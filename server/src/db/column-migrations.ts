@@ -1,6 +1,8 @@
 // ensureSchema 的容错加列清单(从 db/index.ts 拆出,文件 700 行闸;语义原样):
 // 每条独立执行、"column already exists" 一律吞掉 —— 顺序只在**同表同列有依赖**时才要紧,
 // 列的语义注释全部住在这里,改列先读上下文。真正的一次性数据搬运在 migrations.ts。
+import { OWN_MONITOR_KIND } from "@navi/shared/monitor";
+
 export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN queue_advance_request TEXT",
   "ALTER TABLE tasks ADD COLUMN queue_seat_token TEXT",
@@ -22,7 +24,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
   // 那一次在快照里先跑的准备命令。旧行 NULL = 没配过（依赖借用工作区那一份）。
   "ALTER TABLE accept_gate_runs ADD COLUMN prepare_command TEXT",
-  "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
+  `ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT '${OWN_MONITOR_KIND}'`,
   // 身份还没补全时,把「那一刻 spawn 的」这个时间锚留在债上:哨兵行和身份边条都可能先没了,
   // 而缺了锚,一次查询失败就被永久固化成「这条证不出身份」(第 10 轮审查 F2-B)。
   "ALTER TABLE monitor_reclaim_debts ADD COLUMN spawn_anchor_ms INTEGER",
@@ -30,7 +32,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
   // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的
   // expires_at 是拿 Monitor 入参那个 timeout_ms（请求值）算的，来源侧真钳了就是错的。
-  // 填 'bounded' 等于声称「来源确认过这个期限」，把编出来的时刻变成事实。ash 自己起的
+  // 填 'bounded' 等于声称「来源确认过这个期限」，把编出来的时刻变成事实。navi 自己起的
   // 哨兵期限确实是自己定的，由紧随其后的那条 UPDATE 刷回 'bounded'（见下）。
   "ALTER TABLE monitors ADD COLUMN source_lifetime TEXT NOT NULL DEFAULT 'unknown'",
   // 期限的**证据**,不是期限本身。新列 ⇒ 旧行必然 NULL,这才是「哪些期限由旧算法推出来」
@@ -200,8 +202,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN stage TEXT",
   // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
   "ALTER TABLE tasks ADD COLUMN pinned_at INTEGER",
-  // 星标：用户手动软记号（与自动状态正交）；null=未标
-  "ALTER TABLE tasks ADD COLUMN starred_at INTEGER",
   // §工作流：项目默认起手式 + 任务创建时拷下的那条线（快照，不是引用）
   "ALTER TABLE projects ADD COLUMN workflow_id TEXT",
   // 「新任务默认开不开 worktree」从 app_settings 搬到项目这一层（2026-09-14）。
@@ -346,7 +346,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN human_gate_id TEXT",
   // 项目级浏览器登录态授权白名单（JSON 字符串数组）。空/null = 不授权,是默认。
   "ALTER TABLE projects ADD COLUMN browser_cdp_domains TEXT",
-  // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
+  // ── 多人模式──────────────────────────────
   // 归属列。全部可空:自用模式下恒为 null,转多人时由向导一次性实名化成初始管理员。
   "ALTER TABLE tasks ADD COLUMN owner_user_id TEXT",
   "ALTER TABLE tasks ADD COLUMN executor_snapshot TEXT",
@@ -413,4 +413,21 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
   // 被哨兵隔开的续聊,续聊前的状态(见 db/schema.ts 同名列)。存量行 NULL:升级前已经落下的那些不追改。
   "ALTER TABLE tasks ADD COLUMN follow_up_held_from TEXT",
+  // 备忘里贴的图(见 db/schema.ts 同名列)。存量行 NULL = 没有附件。
+  "ALTER TABLE task_memos ADD COLUMN attachments TEXT",
+  // 派它的那条任务(见 db/schema.ts 同名列)。存量行由 migrate-dispatched-by.ts 按 creation_origin 回填。
+  "ALTER TABLE tasks ADD COLUMN dispatched_by TEXT",
+  // 派活单与「派出去的活交给谁」(见 db/schema.ts 同名列)。存量行 NULL = 没摆单、同这里。
+  "ALTER TABLE tasks ADD COLUMN dispatch_plan TEXT",
+  "ALTER TABLE tasks ADD COLUMN dispatch_target TEXT",
+  // 名下全部停着 / 欠一次起跑 / 停下还没做完(见 db/schema.ts 同名列)。存量行 NULL = 没停过。
+  "ALTER TABLE tasks ADD COLUMN dispatch_hold_at TEXT",
+  "ALTER TABLE tasks ADD COLUMN hold_owed_by TEXT",
+  "ALTER TABLE tasks ADD COLUMN dispatch_hold_pending_at TEXT",
+  // 可以派出去的活(见 db/schema.ts 同名列)。存量行 NULL = 一件都没有。
+  "ALTER TABLE tasks ADD COLUMN dispatch_suggestions TEXT",
+  // 智能体收回建议时留下的原因(见 db/schema.ts 同名列)。存量行 NULL = 没收回过。
+  "ALTER TABLE tasks ADD COLUMN dispatch_withdrawals TEXT",
+  // 默认审查者(见 db/schema.ts 同名列)。存量行 0 = 谁都不是默认,派出去的任务照旧不带预约。
+  "ALTER TABLE reviewer_profiles ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0",
 ];

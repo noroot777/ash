@@ -1,14 +1,14 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import type { AppSettings, HandoffTarget } from "@ash/shared";
-import type { HandoffSourceAddress } from "@ash/shared/handoff";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
+import type { AppSettings, HandoffTarget } from "@navi/shared";
+import type { HandoffSourceAddress } from "@navi/shared/handoff";
 import { SettingsPage } from "../../src/settings/SettingsPage.tsx";
 import type { SettingsSection } from "../../src/settings/SettingsPage.tsx";
 import { HandoffReturnView } from "../../src/task-detail/HandoffReturnView.tsx";
 import "../../src/styles/global.css";
 
-const STORAGE_KEY = "ash:fixture:handoff-source-address";
+const STORAGE_KEY = "navi:fixture:handoff-source-address";
 const FINGERPRINT = "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0011223344556677";
 const ORIGINAL_URL = "http://192.168.1.51:4317";
 
@@ -135,7 +135,7 @@ function TaskFixture() {
           taskScopedReturn={true}
           running={false}
           notes={[]}
-          errorMessage={`连不上对端 ash（${ORIGINAL_URL}）：fetch failed`}
+          errorMessage={`连不上对端 navi（${ORIGINAL_URL}）：fetch failed`}
           identityMissing={false}
           autoResume={false}
           autoResumeLocked={false}

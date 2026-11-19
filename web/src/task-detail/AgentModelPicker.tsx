@@ -1,11 +1,12 @@
-import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
-import { ArrowLeft, ArrowsClockwise, CaretRight, SpinnerGap, Warning } from "@phosphor-icons/react";
+import type { AgentExecutorProfile, AgentType, LlmProvider } from "@navi/shared";
+import { ArrowLeft, ArrowsClockwise, CaretRight, Warning } from "@phosphor-icons/react";
 import { AgentIcon } from "../components/AgentIcon.tsx";
 import { useAgentModelCatalog } from "../lib/modelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 import {
   agentRows,
   clampIndex,
@@ -46,6 +47,7 @@ export function AgentModelPicker({
   currentExecutorId = null,
   triggerRef,
   anchorRef,
+  extra,
   onCommit,
   onCancel,
 }: {
@@ -64,6 +66,8 @@ export function AgentModelPicker({
   triggerRef?: RefObject<HTMLElement | null>;
   /** 传了就挂到 body 上、贴着这个元素定位（躲开祖先的 overflow 裁切）。 */
   anchorRef?: RefObject<HTMLElement | null>;
+  /** 选智能体那一步里、列表下面多出的一行（回复框里「派出去的活交给谁」）。它自己管键盘，不走这里的上下键。 */
+  extra?: ReactNode;
   onCommit: (selection: AgentModelSelection) => void;
   onCancel: () => void;
 }) {
@@ -210,7 +214,7 @@ export function AgentModelPicker({
                 <header>
                   <b>{section.group.providerName}</b>
                   <small className={section.group.status === "failed" ? "is-error" : ""}>
-                    {section.group.status === "loading" && <SpinnerGap size={10} className="is-spinning" aria-hidden="true" />}
+                    {section.group.status === "loading" && <NaviLoader size={12} />}
                     {section.group.status === "failed" && <Warning size={10} aria-hidden="true" />}
                     {section.group.note}
                   </small>
@@ -256,6 +260,11 @@ export function AgentModelPicker({
             );
           })}
         </div>
+      )}
+
+      {stage === "agent" && extra && (
+        // 这一行里的键（以及它自己开出的浮层）按自己的键盘走：上下键、回车别冒到上面去选智能体。
+        <div className="agent-model-picker-extra" onKeyDown={(event) => event.stopPropagation()}>{extra}</div>
       )}
 
       <footer>

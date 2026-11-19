@@ -10,8 +10,8 @@ import type {
   FreeWorkflowExecutionStatus,
   FreeWorkflowState,
   TaskStatus,
-} from "@ash/shared";
-import { FREE_REVIEW_CHECK_MODES } from "@ash/shared/free-workflow";
+} from "@navi/shared";
+import { FREE_REVIEW_CHECK_MODES } from "@navi/shared/free-workflow";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { bus } from "./bus.js";
@@ -26,6 +26,7 @@ import {
 } from "./db/schema.js";
 import { freeReviewExpiredScreenshots, freeReviewScreenshots, readExpiredReviewImages, readFreeReviewReport, taskExpiredScreenshots } from "./free-review-files.js";
 import { debateViews } from "./free-review-debate.js";
+import { discussionViews } from "./discussion.js";
 import { hasDispute } from "./free-review-dispute.js";
 import { worktreePathFor } from "./git.js";
 import { workspaceSnapshot, type WorkspaceSnapshot } from "./workspace-fingerprint.js";
@@ -180,6 +181,8 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     roundRows.filter((round) => hasDispute(round))
       .map(async (round) => [round.id, await debateViews(round.id)] as const),
   ));
+  // 讨论跟辩论同一张表（kind 分开），不挂在任何一轮审查上，按任务整份读。
+  const discussions = await discussionViews(taskId);
   // 还挂在 reviewing 的那一轮是不是停在「送没送到说不清、等用户拿主意」(会话底部那颗「继续本轮
   // 审查」据此出现)。动态导入:free-review-round.ts 反过来要用这里的状态读取。
   const { reviewAwaitsInputDecision } = await import("./free-review-round.js");
@@ -346,5 +349,6 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     reviewTurn,
     executions,
     reviews,
+    discussions,
   };
 }

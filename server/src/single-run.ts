@@ -11,7 +11,7 @@
 // 职责（续聊/原生/手停/提问/检查点/严格完成协议/哨兵闸），而且被引导、重试、测试直接调。
 import { cleanupSettled, nothingToCollect, type CleanupResult } from "./executors/kill.js";
 import type { WriteStream } from "node:fs";
-import type { AgentEvent, AgentType, SessionRole, TurnOutcome } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionRole, TurnOutcome } from "@navi/shared";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -54,6 +54,7 @@ import { settleSingleRunTurn } from "./single-run-settle.js";
 import { windDownStep } from "./turn-wind-down.js";
 import type { TurnOwner } from "./turn-lock.js";
 import { settleContextRebuild } from "./history-reseed.js";
+import { setTaskQuestion } from "./task-question.js";
 
 const STEERED_NOTE = "〔系统〕当前回合已由“引导会话”结束。";
 
@@ -129,14 +130,15 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // verify_round 同理**从库里读**而不是让调用方传:三条起跑路径(fresh run / continueTask /
   // 重启接回)都汇到这儿,由库来答就不会漏标其中一条。验证中途提问、答复回来续跑的那一
   // 回合库里仍挂着轮次号,于是它照样归这一轮验证——跟 orchestrator 的 sideTurn 判据同源。
-  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound, goalTurn: tasks.goalTurn })
+  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound, goalTurn: tasks.goalTurn,
+    activeTurnToken: tasks.activeTurnToken, activeDirectionToken: tasks.activeDirectionToken })
     .from(tasks).where(eq(tasks.id, taskId))).at(0);
   const nativeTurn = !!taskRow?.nativeTurn;
   let goalStartPending = !!taskRow?.goalTurn;
   const verifyRound = taskRow?.verifyRound ?? null;
   const executionEventId = role === "single" && !nativeTurn
     ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
-        console.warn(`[ash] failed to record free workflow execution start for ${taskId}:`, error);
+        console.warn(`[navi] failed to record free workflow execution start for ${taskId}:`, error);
         return null;
       })
     : null;
@@ -340,14 +342,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       recoverTurnProgress(taskId, sessId, watchedTurn, (progress) => {
         if (progress === "none") {
           if (confirmTurnSilence(sessId, a.handle, watchedTurn)) {
-            console.warn(`[ash] 会话 ${sessId} 本轮的进展证明后来读出来了「确证零进展」，`
+            console.warn(`[navi] 会话 ${sessId} 本轮的进展证明后来读出来了「确证零进展」，`
               + "那条按「核实不了」开的观察换回正常静默档(含熔断)");
           }
           return;
         }
         progressSecured = true;
         if (withdrawTurnSilence(sessId, a.handle, watchedTurn)) {
-          console.warn(`[ash] 会话 ${sessId} 本轮的进展证明后来读出来了「有过产出」，`
+          console.warn(`[navi] 会话 ${sessId} 本轮的进展证明后来读出来了「有过产出」，`
             + "撤掉那条按「核实不了」开的静默观察");
         }
       }, () => turnLive);
@@ -355,6 +357,16 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       watchTurnSilence(sessId, a.handle, a.turnStart, stallActions, progressFact);
     }
     for await (const event of a.handle.events) {
+      if (event.kind === "userInput") {
+        if (!taskRow || !await setTaskQuestion({
+          taskId,
+          question: event.questions.length === 1 ? event.questions[0]!.question : "请确认以下问题",
+          options: event.questions.length === 1 ? event.questions[0]!.options : undefined,
+          items: event.questions.length > 1 ? event.questions : undefined,
+          currentTurn: { token: taskRow.activeTurnToken, directionToken: taskRow.activeDirectionToken },
+        })) throw new Error("Codex 的澄清问题未能保存，请重试当前回合");
+        continue;
+      }
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
       // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
       trackSessionWaiting(sessId, a.handle, a.turnStart, event);
@@ -452,7 +464,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 事件流到此结束 = 进入收尾段:从这里到起跑方放锁,每个 await 之前记一步(turn-wind-down.ts)。
     step("回收 CLI 的后台后代进程(cleanup)");
     const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {
-      console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
+      console.warn(`[navi] failed to clean descendants after task ${taskId}:`, error);
       // 清理整个抛了:这一轮一个号都没点上来 ⇒ 名单只能是空的,但结论不是空的(见
       // cleanup-result.ts 的闸二:`open` 必填,逼这里显式说一句「我手上没有」)。
       return { kind: "unknown", detail: "cleanup 抛错", open: [] };
@@ -550,6 +562,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     clearTurnStart(taskId);
     publishEvent({ kind: "system", text: STEERED_NOTE, at: endIso }, writeTurn(out, { t: "system", agent: agentType, text: STEERED_NOTE }, endIso));
     writeTurnEnd(out, endIso);
+    // 被截断的这一回合也可能攒着会话旁注（codex 收场时报的「这条恢复 thread 要作废」就是）：跟普通结算
+    // 一样在关流之前落下。漏了的话 finally 那句兜底会往已经 end 的流上写，整个 server 当场退出。
+    flushSessionNotices();
     out.end();
     return;
   }
@@ -563,7 +578,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   }
   if (dropSession) {
     const note = sessionResumeFaultNote(sessionFault!);
-    // 只弹一句话不算数：用户看不出 ash 已经替他把坏 id 清了、也看不出重试会丢上下文。
+    // 只弹一句话不算数：用户看不出 navi 已经替他把坏 id 清了、也看不出重试会丢上下文。
     // 落成持久 system 旁注（.md 原始产物 + SSE），刷新后还在；**不落 error** —— 换会话
     // 不等于这一轮失败，真正的失败自有它自己的 error 和退出码（见 session-notice.ts）。
     // 落盘仍走缓冲：这里已经在收尾链上，正文早写完了，夹在 writeTurnEnd 前面会让重建
@@ -581,8 +596,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 正常路径上上面那句已经把旁注清空了，这里是**异常路径**的保险：清库、重放、结算
     // 任何一步抛错，都不能让「这条会话作废了、下次会丢上下文」只活在实时 SSE 里 ——
     // 用户一刷新就什么都看不到，还会去重试同一条坏会话。flushSessionNotices 先取空再写，
-    // 所以正常路径走到这里必然是空的，绝不会往已经 end 掉的流上再写一次（写已 end 的
-    // 流会当场打崩 server，见 duet/turn.ts 里同样的告诫）。
+    // 关流的两处（上面被引导截断那一支、single-run-settle.ts）都在 end 之前取空过，所以正常路径
+    // 走到这里必然是空的；万一还有，它自己认得流已经关了、不会再写（写已 end 的流会当场打崩
+    // server，见 duet/turn.ts 里同样的告诫）。
     flushSessionNotices();
     await closeExecution("failed", now());
   }

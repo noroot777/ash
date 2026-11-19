@@ -10,7 +10,7 @@
 // `turn/started`),所以必须从头整份重放一遍;日志行可能半行、可能损坏,逐行 try/catch 跳过 ——
 // 但**跳过的行要记账**:坏行里可能正是那张开始凭据(见 evidence 那一档)。
 import { readFileSync } from "node:fs";
-import type { CliGoal } from "@ash/shared/cli-commands";
+import type { CliGoal } from "@navi/shared/cli-commands";
 
 /**
  * 重启接管时从完整协议日志找回当前 turn id；stdout offset 可能早已越过启动通知。
@@ -59,7 +59,7 @@ export function readCodexAppServerState(
     // 读不出来 ≠ 没启动过(见上面 evidence 那一档)。只报一句话:整个 stack 对这个结论没用,
     // 而这一行在每次接管失败时都会出现。
     const detail = error instanceof Error ? error.message : String(error);
-    console.warn(`[ash] 读 Codex 协议日志 ${path} 失败，这一轮有没有启动过核实不了：${detail}`);
+    console.warn(`[navi] 读 Codex 协议日志 ${path} 失败，这一轮有没有启动过核实不了：${detail}`);
     return { threadId, turnId, evidence: "unreadable" };
   }
   let damaged = false;

@@ -8,23 +8,24 @@
 //   · 定义离引用很远 / 定义多到装不下一个预算;
 //   · 同 id 的子智能体 completed 之后又被唤醒接着说;
 //   · 消费者自己抛错(落库失败)时,已经露过脸的那张图不许被当垃圾删掉。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const red = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 1)]);
 const blue = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 2)]);
-const root = mkdtempSync(join(tmpdir(), "ash-image-entry-"));
+const root = mkdtempSync(join(tmpdir(), "navi-image-entry-"));
 const uploads = join(root, "data", "uploads");
 // uploads 目录在 paths.ts 里是模块级常量,所以必须在**导入它之前**改环境变量 —— 静态
 // import 会被提到所有语句之前,这里只能动态导。
-process.env.ASH_UPLOADS_DIR = uploads;
+process.env.NAVI_UPLOADS_DIR = uploads;
 // claude 执行器要先导:`catalog/parsers.ts` ↔ `executors/claude.ts` ↔ `catalog/claude.ts`
 // 是一条既有的循环依赖,从 parsers 这头进去会读到还没初始化的 `claudeStreamJsonParser`。
 const { parseClaudeStream } = await import("../src/executors/claude.js");

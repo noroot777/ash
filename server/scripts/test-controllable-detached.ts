@@ -15,7 +15,7 @@ import { IS_WINDOWS, killTree } from "../src/platform.js";
 const here = dirname(fileURLToPath(import.meta.url));
 // file:// 而不是裸路径 —— 理由同 test-detached-survival.ts（Windows 上 `D:` 会被当协议）。
 const mod = (rel: string) => JSON.stringify(pathToFileURL(join(here, rel)).href);
-const root = mkdtempSync(join(tmpdir(), "ash-controllable-detached-"));
+const root = mkdtempSync(join(tmpdir(), "navi-controllable-detached-"));
 const agentScript = join(root, "agent.mjs");
 const serverScript = join(root, "server.mjs");
 const stateA = join(root, "a.json");
@@ -53,22 +53,28 @@ const consume = (child, count = 0) => new Promise((resolve) => {
     if (count && lines.length >= count) resolve("count");
   });
   child.on("close", (code) => resolve("close:" + code));
+  // 起不来时只有 'error'、没有 'close'(spawn.ts 的 failedChild):只等 'close' 就一直卡着。
+  child.on("error", (error) => resolve("error:" + error.message));
 });
 
 if (mode === "v1") {
   const child = spawnControllableForRun(root, process.execPath, [agentScript], "one\\n", undefined, paths);
-  await consume(child, 1);
+  const how = await consume(child, 1);
+  if (how.startsWith("error:") || !child.pid) {
+    writeFileSync(stateFile, JSON.stringify({ spawnError: how.startsWith("error:") ? how.slice("error:".length) : "拿不到 pid" }));
+    process.exit(1);
+  }
   const info = inspectProcess(child.pid);
   writeFileSync(stateFile, JSON.stringify({
     pid: child.pid,
     startedAt: info?.startedAt ?? null,
-    offset: child.ashCommitted(),
+    offset: child.naviCommitted(),
     lines,
   }));
   process.exit(0);
 }
 
-const previous = JSON.parse(process.env.ASH_PREV_STATE);
+const previous = JSON.parse(process.env.NAVI_PREV_STATE);
 const child = reattachDetachedAgent({
   pid: previous.pid,
   startedAt: previous.startedAt,
@@ -90,20 +96,23 @@ const run = (args: string[], env: Record<string, string> = {}) => new Promise<nu
   // 理由同 test-detached-survival.ts:`spawn("npx")` 在 Windows 上 ENOENT。
   const child = spawn(process.execPath, ["--import", "tsx", serverScript, ...args], {
     cwd: join(here, ".."),
-    env: { ...process.env, ...env },
+    // 假 agent 是自己铺的(node 跑上面那份脚本):设了 NAVI_RUNS_DIR 时隔离闸也放它过去。
+    env: { ...process.env, NAVI_TEST_AGENT_BIN: process.execPath, ...env },
     stdio: ["ignore", "inherit", "inherit"],
   });
   child.on("close", (code) => resolve(code ?? 1));
 });
 
 try {
-  assert.equal(await run(["v1", root, agentScript, stateA]), 0);
+  const v1 = await run(["v1", root, agentScript, stateA]);
   const first = JSON.parse(readFileSync(stateA, "utf8"));
+  assert.equal(first.spawnError, undefined, `假 agent 没起来,后面的断言无从谈起:${first.spawnError}`);
+  assert.equal(v1, 0);
   agentPid = first.pid;
   assert.doesNotThrow(() => process.kill(first.pid, 0), "agent 应活过 server-v1 退出");
 
   assert.equal(await run(["v2", root, agentScript, stateB], {
-    ASH_PREV_STATE: JSON.stringify(first),
+    NAVI_PREV_STATE: JSON.stringify(first),
   }), 0);
   const second = JSON.parse(readFileSync(stateB, "utf8"));
   assert.equal(second.reattached, true, "server-v2 应恢复可写 stdin");

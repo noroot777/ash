@@ -3,8 +3,8 @@ import { once } from "node:events";
 import { rmSync } from "node:fs";
 import { createServer } from "node:http";
 
-const dbPath = `/tmp/ash-anthropic-context-1m-${process.pid}.db`;
-process.env.ASH_DB = dbPath;
+const dbPath = `/tmp/navi-anthropic-context-1m-${process.pid}.db`;
+process.env.NAVI_DB = dbPath;
 process.env.PORT = "54322";
 
 const {
@@ -144,7 +144,7 @@ const oneMExecutor = new ClaudeExecutor({
 });
 const oneMRun = oneMExecutor.run({ cwd: "/tmp", prompt: "test" });
 assert.match(oneMRun.commandLine, /--model claude-opus-5\[1m\]/);
-assert.doesNotMatch(oneMRun.commandLine, /ash-claude-settings-/);
+assert.doesNotMatch(oneMRun.commandLine, /claude-settings-/);
 assert.doesNotMatch(oneMRun.commandLine, /secret-key/);
 const oneMResume = oneMExecutor.resumeFields("/tmp", oneMRun.sessionId);
 assert.equal(oneMResume.resumeEnv, null);
@@ -164,7 +164,7 @@ const directExecutor = new ClaudeExecutor({
 const directRun = directExecutor.run({ cwd: "/tmp", prompt: "test" });
 assert.match(directRun.commandLine, /--model claude-haiku-4-5/);
 assert.doesNotMatch(directRun.commandLine, /\[1m\]/);
-assert.doesNotMatch(directRun.commandLine, /ash-claude-settings-/);
+assert.doesNotMatch(directRun.commandLine, /claude-settings-/);
 const directResume = directExecutor.resumeFields("/tmp", directRun.sessionId);
 assert.equal(directResume.resumeEnv, null);
 assert.match(directResume.resumeArgs ?? "", new RegExp(String(address.port)));
@@ -180,6 +180,6 @@ const disconnected = await app.request("/llm-providers/provider-1/context-1m/v1/
 });
 assert.equal(disconnected.status, 502);
 assert.match(await disconnected.text(), /ECONNREFUSED|ECONNRESET|UND_ERR_SOCKET/);
-assert.match(disconnected.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
+assert.match(disconnected.headers.get("x-navi-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
 for (const suffix of ["", "-shm", "-wal"]) rmSync(dbPath + suffix, { force: true });
 console.log("anthropic context 1m tests passed");

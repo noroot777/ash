@@ -12,11 +12,12 @@
 //   · 收尾里**等外部东西**的那几步各自有时限,到点由这一轮自己放弃那一步、留痕、继续走到
 //     自己的放锁出口(时限住在各步自己那里,例如 turn-baseline.ts 的工作区快照);
 //   · 这里记下**走到了哪一步、什么时候进的**,巡检据此在同一步停太久时写一条持久提示,说清
-//     卡在哪、出路是重启 ash(turn-lock-reclaim.ts `reportStuckWindDowns`);
+//     卡在哪、出路是重启 navi(turn-lock-reclaim.ts `reportStuckWindDowns`);
 //   · 人工放开对这类锁继续拒绝,拒绝的话里带同样的说明。
 //
 // 记录**挂在那把锁的身份上**(`TurnIdentity.windDown`),跟锁同生同死:放锁即带走,换了主人
 // 的锁上读不到上一轮的记录。依赖单向:这里读写 turn-lock 交出来的身份,turn-lock 只借类型。
+import { readEnv } from "@navi/shared/env-names";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { turnIdentity, type TurnOwner } from "./turn-lock.js";
 
@@ -26,10 +27,10 @@ import { turnIdentity, type TurnOwner } from "./turn-lock.js";
  * 为什么按「停在同一步」计:收尾一直在往前走,哪怕走得慢,也说明它会自己放锁;只有原地不动
  * 才是卡住。为什么 10 分钟:各步正常是秒级;最慢的是回收 CLI 甩出去的后台后代(自带等待上界,
  * executors/kill.ts)和工作区快照那几条 git(各自有时限,见 `WIND_DOWN_COMMAND_TIMEOUT_MS`)。
- * 取到 10 分钟,有界的步骤够不着。可用 `ASH_STUCK_WIND_DOWN_MS`(毫秒)调,回归测试靠它压窗口。
+ * 取到 10 分钟,有界的步骤够不着。可用 `NAVI_STUCK_WIND_DOWN_MS`(毫秒)调,回归测试靠它压窗口。
  */
 export const STUCK_WIND_DOWN_MS = (() => {
-  const configured = Number(process.env.ASH_STUCK_WIND_DOWN_MS);
+  const configured = Number(readEnv(process.env, "NAVI_STUCK_WIND_DOWN_MS"));
   return Number.isFinite(configured) && configured > 0 ? configured : 10 * 60_000;
 })();
 
@@ -43,10 +44,10 @@ export const LONG_WIND_DOWN_STEP_MS = 6 * STUCK_WIND_DOWN_MS;
 /**
  * 收尾里每一条外部命令(git 之类)的时限。到点按进程组杀掉,那一步按它自己的「取不到」处理
  * (exec.ts `execFileText` 的 `timeoutMs`)。正常是毫秒到秒级;2 分钟只为兜住超大仓库的
- * `git diff HEAD`。可用 `ASH_WIND_DOWN_COMMAND_TIMEOUT_MS` 调。
+ * `git diff HEAD`。可用 `NAVI_WIND_DOWN_COMMAND_TIMEOUT_MS` 调。
  */
 export const WIND_DOWN_COMMAND_TIMEOUT_MS = (() => {
-  const configured = Number(process.env.ASH_WIND_DOWN_COMMAND_TIMEOUT_MS);
+  const configured = Number(readEnv(process.env, "NAVI_WIND_DOWN_COMMAND_TIMEOUT_MS"));
   return Number.isFinite(configured) && configured > 0 ? configured : 2 * 60_000;
 })();
 
@@ -105,9 +106,9 @@ export const heldFor = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)} 
 export function stuckWindDownText(windDown: WindDown, at = Date.now()): string {
   return `这一轮的 CLI 已经结束，收尾停在「${windDown.step}」已经约 ${heldFor(at - windDown.stepAt)}`
     + `（收尾开始于约 ${heldFor(at - windDown.since)}前），回合占位因此一直没放，点运行会被挡回。`
-    + "收尾里等外部命令和仓库锁的那几步都有时限，超过阈值还不动，多半是 ash 进程里这一段调用卡住了；"
+    + "收尾里等外部命令和仓库锁的那几步都有时限，超过阈值还不动，多半是 Navi 进程里这一段调用卡住了；"
     + "从外面放开占位会让它和下一轮同时活着、互相改状态，所以不提供手动放开。"
-    + "出路是重启 ash：在跑的其它 agent 会被接回、不会丢；这一轮的产物都在磁盘上，"
+    + "出路是重启 Navi：在跑的其它 agent 会被接回、不会丢；这一轮的产物都在磁盘上，"
     + "任务要是还停在「运行中」会按中断收成可重试，没走完的那几步收尾不会再补。";
 }
 

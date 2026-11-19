@@ -1,5 +1,5 @@
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
-import { sameExecutor } from "@ash/shared/executors";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
+import { sameExecutor } from "@navi/shared/executors";
 import { WarningCircle } from "@phosphor-icons/react";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import {
@@ -40,6 +40,7 @@ export function ExecutorPickerField({
   disabled = false,
   unsetText,
   onUnset,
+  compact,
   onChange,
   onEffortChange,
 }: {
@@ -57,6 +58,8 @@ export function ExecutorPickerField({
   unsetText?: string;
   /** 传了就多给一个改回「不指定」的入口——不然选出去就回不来了。 */
   onUnset?: () => void;
+  /** 收着时只露智能体那一段（见 RunTargetPicker 的同名参数）。 */
+  compact?: boolean;
   /**
    * 选了执行器或模型：`override` 是这次选择之后该存的模型与智能水平（换了执行器就
    * 是空串 = 跟随执行器）。两者是同一次选择的结果，一起落进同一次状态更新即可。
@@ -95,6 +98,7 @@ export function ExecutorPickerField({
           effort={override?.effort ?? ""}
           disabled={disabled}
           unsetText={unsetText}
+          compact={compact}
           onCommit={(target) => {
             // 执行器没换就把智能水平原样放回去：用户只是换了个模型，不该顺手把第三段
             // 清掉。真换了执行器才跟着清（旧档位在新 CLI 上多半根本不存在，见

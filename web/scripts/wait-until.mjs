@@ -61,7 +61,7 @@ export async function waitUntil(check, options = {}) {
 export async function trackFetches(target, pattern) {
   await target.addInitScript((source) => {
     const matcher = new RegExp(source);
-    const log = (window.__ashFetches ??= []);
+    const log = (window.__naviFetches ??= []);
     // 被换进来的那份可能自己又调回被包过的旧 fetch（测试里再套一层记别的东西）：外层已经在记
     // 这一发，同步调下去的内层就直接放行，一发只记一条。
     let nested = false;
@@ -101,7 +101,7 @@ export async function trackFetches(target, pattern) {
 
 /** `trackFetches` 记下的那几发（按发出顺序）：`[{ url, method, state, outcome, inFlightAtIssue }]`。 */
 export function fetchLog(page) {
-  return page.evaluate(() => (window.__ashFetches ?? []).map((entry) => ({ ...entry })));
+  return page.evaluate(() => (window.__naviFetches ?? []).map((entry) => ({ ...entry })));
 }
 
 /**

@@ -27,7 +27,7 @@ import type { Actor } from "../auth/context.js";
 import { imActorFor, type ImPrincipal } from "../auth/im-actor.js";
 import { canSeeProject } from "../auth/visibility.js";
 import { acceptIdentityOf, awaitsPress, DECISION_KINDS, sameTurn, versionOf, viewOf, viewsOf, type TaskView } from "./attention.js";
-import { taskPath, type AshClient, type AshResult } from "./ash-client.js";
+import { taskPath, type NaviClient, type NaviResult } from "./navi-client.js";
 import { bindingOf, CHANNEL } from "./binding.js";
 import { acceptLabel, settledCard, taskLink } from "./cards.js";
 import {
@@ -42,7 +42,7 @@ import { ACTED, type Reconciler } from "./reconcile.js";
 import { originOf, replyScope, scopeOfRow, type OutboxScope } from "./scope.js";
 import { scrubText } from "./scrub.js";
 import type { CommandRunner } from "./commands.js";
-import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
+import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 
 export interface CallbackEvent {
   eventId: string;
@@ -68,7 +68,7 @@ export interface Outcome {
   tone?: CardTone;
   /** 写进任务时间线的那一句（不写 = 不记）。 */
   audit?: string;
-  /** 结果卡上「在 ash 中打开」指向哪里（缺省用这张卡原来的任务）。 */
+  /** 结果卡上「在 navi 中打开」指向哪里（缺省用这张卡原来的任务）。 */
   link?: string | null;
   /** 项目设成只推标题时卡上换成的那一句（text 里带着答复原文、出错原因时给）。 */
   brief?: string;
@@ -96,11 +96,11 @@ const toast = (type: NonNullable<CallbackResponse["toast"]>["type"], content: st
 const sleep = (ms: number) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
 
 const REJECT_TEXT: Record<string, string> = {
-  missing: "按钮已失效（卡片太旧或已被替换），请在 ash 里处理",
-  expired: "卡片已过期，请在 ash 里处理",
+  missing: "按钮已失效（卡片太旧或已被替换），请在 Navi 里处理",
+  expired: "卡片已过期，请在 Navi 里处理",
   not_yours: "这张卡片不是发给你的",
   used: "这张卡片已经处理过了",
-  corrupt: "这张卡片的按钮记录读不出来了，请在 ash 里处理",
+  corrupt: "这张卡片的按钮记录读不出来了，请在 Navi 里处理",
 };
 
 /** 结局事务。只用 tx 写（根 db 的写会等这个事务收尾，事务里调它就卡死 5 秒再抛错）。 */
@@ -116,7 +116,7 @@ async function restoreIn(tx: ConclusionTransaction, rowId: string): Promise<void
 export class CardActions {
   constructor(private readonly deps: {
     appId: string;
-    ash: AshClient;
+    navi: NaviClient;
     reconciler: Reconciler;
     sender: OutboxSender;
     commands: CommandRunner;
@@ -135,7 +135,7 @@ export class CardActions {
     const principal: ImPrincipal = { channel: CHANNEL, appId: this.deps.appId, openId: event.operatorOpenId };
     const binding = await bindingOf(this.deps.appId, event.operatorOpenId);
     const actor = binding ? await imActorFor(principal) : null;
-    if (!binding || !actor) return toast("error", "你还没绑定 ash（或绑定已失效）：请在 ash 网页 设置 → 飞书 里绑定");
+    if (!binding || !actor) return toast("error", "你还没绑定 Navi（或绑定已失效）：请在 Navi 网页 设置 → 飞书 里绑定");
     const row = (await db.select().from(imOutbox).where(eq(imOutbox.id, check.envelope.outboxId))).at(0);
     if (!row) return toast("error", REJECT_TEXT.missing!);
     const source = scopeOfRow(row);
@@ -172,10 +172,10 @@ export class CardActions {
     const quick = await Promise.race([work, new Promise<null>((resolve) => { const t = setTimeout(() => resolve(null), FAST_MS); t.unref?.(); })]);
     if (quick) return this.conclude(quick, click, "callback");
     void work.then((outcome) => this.conclude(outcome, click, "patch"))
-      .catch((error) => console.error("[ash] 飞书按钮异步收尾出错:", error));
+      .catch((error) => console.error("[navi] 飞书按钮异步收尾出错:", error));
     const processing = await this.deps.reconciler.exits.outward(row,
       renderCard(settledCard(cardHeaderOf(row.content), "处理中…结果出来会更新在这张卡上。", { link: job.link }, "wathet")))
-      .catch((error) => { console.warn("[ash] 飞书「处理中」卡没拼出来，只回一句提示:", (error as Error).message); return null; });
+      .catch((error) => { console.warn("[navi] 飞书「处理中」卡没拼出来，只回一句提示:", (error as Error).message); return null; });
     return processing ? { toast: { type: "info", content: "处理中" }, card: { type: "raw", data: processing } } : toast("info", "处理中");
   }
 
@@ -273,7 +273,7 @@ export class CardActions {
       try {
         await this.recoverOne(envelope);
       } catch (error) {
-        console.error(`[ash] 飞书按钮 ${envelope.id} 收尾接管出错:`, error);
+        console.error(`[navi] 飞书按钮 ${envelope.id} 收尾接管出错:`, error);
       }
     }
     // 办完了、时间线那一句还没记上的（记的途中退出了）：按同一个 eventKey 补记，记过的不会重复。
@@ -290,8 +290,8 @@ export class CardActions {
     if (envelope.action === "confirm") {
       // 配对申请只在内存里（auth/remote-pairing.ts）：重启之后那张申请不在了，点没点成都一样，设备那边得重新申请。
       const text = commandOf(envelope) === "pair"
-        ? "点下按钮时 ash 正好重启，这张申请作废了：在那台设备上重新打开 ash 再申请一次。"
-        : "点下按钮时 ash 正好重启，不确定办成没有：请在 ash 里看一眼，需要的话重新发命令。";
+        ? "点下按钮时 Navi 正好重启，这张申请作废了：在那台设备上重新打开 Navi 再申请一次。"
+        : "点下按钮时 Navi 正好重启，不确定办成没有：请在 Navi 里看一眼，需要的话重新发命令。";
       const content = row ? JSON.stringify(renderCard(settledCard(cardHeaderOf(row.content), text, { link: null }, "orange"))) : null;
       await commit(this.deps.reconciler, async (tx) => {
         if (!await finishEnvelope(tx, claim, "interrupted") || !row || !content) return;
@@ -319,7 +319,7 @@ export class CardActions {
   ): string | (() => Promise<Outcome>) {
     const principal: ImPrincipal = { channel: CHANNEL, appId: this.deps.appId, openId: event.operatorOpenId };
     const id = view.task.id;
-    const ash = this.deps.ash;
+    const navi = this.deps.navi;
     const form = (key: string) => (typeof event.formValue[key] === "string" ? (event.formValue[key] as string).trim() : "");
     switch (envelope.action) {
       case "question": {
@@ -339,7 +339,7 @@ export class CardActions {
           shown = count === 1 ? answers[0]! : answers.map((answer, index) => `${index + 1}. ${answer || "（未答）"}`).join("\n");
         } else return "认不出这个按钮";
         // 答的是发卡时那一次提问（代次），不只是同一段题面：同样的题再问一次，旧卡上的按钮答不中新的那次。
-        return async () => outcomeOf(await ash.post(principal, taskPath(id, "/answer"), {
+        return async () => outcomeOf(await navi.post(principal, taskPath(id, "/answer"), {
           ...body, questionKey: payload.questionKey, questionOccurrence: envelope.generation,
         }), `已答复：${scrubText(shown, 300)}`, "答复了提问", "已答复。");
       }
@@ -347,12 +347,12 @@ export class CardActions {
       // 占着互斥再核：点下去之前另一端又跑完一轮、线换了一道关，旧卡就重试不了、验收或放行不了后来那一件。
       case "failed":
         if (op !== "retry") return "认不出这个按钮";
-        return async () => outcomeOf(await ash.post(principal, taskPath(id, "/retry"), { expectedFailure: versionOf(envelope.generation) }),
+        return async () => outcomeOf(await navi.post(principal, taskPath(id, "/retry"), { expectedFailure: versionOf(envelope.generation) }),
           "已重试，任务重新开始跑了。", "点了「重试」");
       case "dispute": {
         const labels: Record<string, string> = { upheld: "让它接着改", withdrawn: "这一轮不用改了", deferred: "转为独立任务" };
         if (!labels[op]) return "认不出这个按钮";
-        return async () => outcomeOf(await ash.post(principal, taskPath(id, "/free-workflow/review/dispute/resolution"), {
+        return async () => outcomeOf(await navi.post(principal, taskPath(id, "/free-workflow/review/dispute/resolution"), {
           resolution: op, target: { runId: payload.runId, round: payload.round },
         }), `已裁定：${labels[op]}。`, `裁定驳回为「${labels[op]}」`);
       }
@@ -361,7 +361,7 @@ export class CardActions {
         if (!labels[op]) return "认不出这个按钮";
         const text = form("text");
         if ((op === "inject" || op === "ask") && !text) return "先写下意见或问题";
-        return async () => outcomeOf(await ash.post(principal, taskPath(id, "/gate"), {
+        return async () => outcomeOf(await navi.post(principal, taskPath(id, "/gate"), {
           kind: op, ...(text && (op === "inject" || op === "ask") ? { text } : {}), expectedVersion: payload.version,
         }), labels[op]!, `在讨论闸口${{ approve: "放行", reject: "打回", inject: "注入意见", ask: "提问" }[op]}`);
       }
@@ -369,7 +369,7 @@ export class CardActions {
         if (op !== "accept" || view.turn?.kind !== "accept") return "认不出这个按钮";
         const { resultVersion, humanGate } = acceptIdentityOf(envelope.generation);
         const pressed = acceptLabel(view.turn);
-        return async () => acceptOutcome(await ash.post(principal, taskPath(id, "/accept"), {
+        return async () => acceptOutcome(await navi.post(principal, taskPath(id, "/accept"), {
           expectedResultVersion: resultVersion, expectedHumanGate: humanGate,
         }), pressed);
       }
@@ -383,7 +383,7 @@ export class CardActions {
     try {
       return await this.settle(outcome, click, via);
     } catch (error) {
-      console.error("[ash] 飞书按钮收尾没落库，稍后重试:", error);
+      console.error("[navi] 飞书按钮收尾没落库，稍后重试:", error);
       void this.retrySettle(outcome, click);
       return toast("info", "处理中");
     }
@@ -400,7 +400,7 @@ export class CardActions {
         await this.settle(outcome, click, "patch");
         return;
       } catch (error) {
-        console.error("[ash] 飞书按钮收尾重试失败:", error);
+        console.error("[navi] 飞书按钮收尾重试失败:", error);
       }
     }
   }
@@ -428,13 +428,13 @@ export class CardActions {
         await this.deps.reconciler.insert({
           dest, taskId: row.taskId, kind: "fail", subject: `fail:${claim.id}:${claim.usedAt}`, msgType: "text",
           content: JSON.stringify({ text: `没办成：${said}` }), replyTo: row.messageId, scope,
-          brief: JSON.stringify({ text: "没办成，原因见 ash。" }),
+          brief: JSON.stringify({ text: "没办成，原因见 Navi。" }),
         }, tx);
         return true;
       });
       if (released && repair) this.deps.sender.kick();
       if (via === "patch" && job.taskId) this.deps.reconciler.mark(job.taskId);
-      return toast("error", terse ? "没办成，原因见 ash。" : said.slice(0, 60));
+      return toast("error", terse ? "没办成，原因见 Navi。" : said.slice(0, 60));
     }
     // 卡上、toast 里显示哪一版按出口同一个判据定：没资格的换中性卡，只推标题的用短的那一版。
     const verdict = await this.deps.reconciler.exits.admission(row);
@@ -495,13 +495,13 @@ function commandOf(envelope: EnvelopeRow): unknown {
   }
 }
 
-function outcomeOf(result: AshResult, text: string, audit: string, brief?: string): Outcome {
+function outcomeOf(result: NaviResult, text: string, audit: string, brief?: string): Outcome {
   if (result.ok) return { ok: true, text, final: true, audit, ...(brief ? { brief } : {}) };
   return { ok: false, text: scrubText(result.error, 300), final: false };
 }
 
 /** pressed = 卡上那个按钮的字（「验收通过」或「放行，继续下一站」），记进时间线。 */
-function acceptOutcome(result: AshResult, pressed: string): Outcome {
+function acceptOutcome(result: NaviResult, pressed: string): Outcome {
   if (result.ok) return { ok: true, final: true, audit: `点了「${pressed}」`, ...acceptedOutcome(result.data) };
   const reason = result.data.reason;
   if (reason === "accept_gate_running") {
@@ -511,9 +511,9 @@ function acceptOutcome(result: AshResult, pressed: string): Outcome {
     };
   }
   if (reason === "accept_gate_failed") {
-    return { ok: true, final: true, tone: "red", audit: `点了「${pressed}」，验收前置命令没通过`, text: "验收前置命令没通过，日志已交回任务修复（详情在 ash 里）。" };
+    return { ok: true, final: true, tone: "red", audit: `点了「${pressed}」，验收前置命令没通过`, text: "验收前置命令没通过，日志已交回任务修复（详情在 Navi 里）。" };
   }
-  if (reason === "verify_not_run") return { ok: false, final: false, text: "独立验证还没跑：要不等验证、直接验收，只能在 ash 页面上确认。" };
+  if (reason === "verify_not_run") return { ok: false, final: false, text: "独立验证还没跑：要不等验证、直接验收，只能在 Navi 页面上确认。" };
   return { ok: false, final: false, text: scrubText(result.error, 400) };
 }
 
@@ -542,22 +542,22 @@ export function acceptedOutcome(data: Record<string, unknown>): Pick<Outcome, "t
   // 尾段原因是命令的原话：只推标题那一版不带。放行之后停在这一道上，卡留着、按钮还能点（settle）：照实说再点一次是什么。
   // 线已经离开这一道、下一站验证没开起来（movedOn）：那一站修好之后在那一站接着走，这张卡不用再点。
   const why = (withReason: boolean) => (withReason && reason ? `（${reason}）` : "");
-  const stuck = (withReason: boolean) => !released ? `但「${step ?? "点头之后那一段"}」没跑成${withReason && reason ? `：${reason}` : ""}，详情在 ash 里。`
-    : tail?.movedOn === true ? `但下一站「${step ?? "验证"}」没开起来${why(withReason)}，线停在那一站，详情在 ash 里。`
-      : `但线没能接着往下走${step ? `：「${step}」没跑成${why(withReason)}` : ""}，停在这一道上，详情在 ash 里。`
+  const stuck = (withReason: boolean) => !released ? `但「${step ?? "点头之后那一段"}」没跑成${withReason && reason ? `：${reason}` : ""}，详情在 Navi 里。`
+    : tail?.movedOn === true ? `但下一站「${step ?? "验证"}」没开起来${why(withReason)}，线停在那一站，详情在 Navi 里。`
+      : `但线没能接着往下走${step ? `：「${step}」没跑成${why(withReason)}` : ""}，停在这一道上，详情在 Navi 里。`
         + "修好之后再点一次「放行，继续下一站」，会从这一道重新往下走。";
   const warnings = Array.isArray(data.warnings) ? data.warnings.length : 0;
   const autoCommit = data.autoCommit && typeof data.autoCommit === "object" ? acceptanceAutoCommitMessage(data.autoCommit as AcceptanceAutoCommitOutcome) : "";
   const notes = [
     autoCommit ? `${autoCommit}。` : "",
-    warnings ? `清理时有 ${warnings} 条提醒，详情在 ash 里。` : "",
+    warnings ? `清理时有 ${warnings} 条提醒，详情在 Navi 里。` : "",
   ].join("");
   return {
     text: done + (tailFailed ? stuck(true) : "") + notes,
     tone: tailFailed ? "orange" : "green",
     // 尾段原因、自动提交原因是命令和 git 的原话：只推标题时连同分支名、标签名一起换成不带它们的那一句。
     ...(tailFailed || autoCommit || plain !== done
-      ? { brief: `${plain}${tailFailed ? stuck(false) : autoCommit ? "详情在 ash 里。" : ""}` } : {}),
+      ? { brief: `${plain}${tailFailed ? stuck(false) : autoCommit ? "详情在 Navi 里。" : ""}` } : {}),
   };
 }
 
@@ -571,6 +571,6 @@ async function audit(taskId: string, envelopeId: string, text: string): Promise<
       || await noteSystemNotice(taskId, `im:${envelopeId}`, "飞书操作", text);
     if (landed) await auditDone(envelopeId);
   } catch (error) {
-    console.warn(`[ash] 飞书操作记入时间线失败（${taskId}）:`, (error as Error).message);
+    console.warn(`[navi] 飞书操作记入时间线失败（${taskId}）:`, (error as Error).message);
   }
 }

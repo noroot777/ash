@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
 import { api } from "./api.ts";
 
 export type DetectedAgent = Awaited<ReturnType<typeof api.detectAgents>>[number];
@@ -15,16 +15,7 @@ export type ExecutorSelection = {
   executorId: string | null;
 };
 
-export type ExecutorOption = {
-  value: string;
-  label: string;
-  disabled: boolean;
-};
-
 const TYPE_PREFIX = "__type:";
-// 检测拿不到结果时的保守兜底:这两个类型的执行器实现了 openResident
-// (claude 进程级常驻、codex 会话级常驻),权威判断仍来自 detect 的 `resident`。
-const RESIDENT_CAPABLE: readonly AgentType[] = ["claude", "codex"];
 const LOADING: AgentDetection = { status: "loading", agents: [] };
 
 let cachedDetection: Promise<AgentDetection> | null = null;
@@ -78,27 +69,6 @@ export function availableAgentTypes(agents: DetectedAgent[]): AgentType[] {
 export function registeredAgentTypes(profiles: AgentExecutorProfile[]): AgentType[] {
   const registered = new Set(profiles.map((profile) => profile.type));
   return AGENT_TYPES.filter((type) => registered.has(type));
-}
-
-/** Types whose executor implementation can own a resident team session. */
-export function residentAgentTypes(agents: DetectedAgent[]): AgentType[] {
-  const resident = new Set<AgentType>(RESIDENT_CAPABLE);
-  for (const agent of agents) if (agent.resident) resident.add(agent.type);
-  return AGENT_TYPES.filter((type) => resident.has(type));
-}
-
-/** Worker/reviewer choices plus the resident-only subset for team leads. */
-export function teamExecutorCandidates(
-  detection: AgentDetection,
-  profiles: AgentExecutorProfile[],
-) {
-  const workerTypes = registeredAgentTypes(profiles);
-  const residentTypes = residentAgentTypes(detection.agents);
-  return {
-    workerTypes,
-    leadTypes: workerTypes.filter((type) => residentTypes.includes(type)),
-    leadProfiles: profiles.filter((profile) => residentTypes.includes(profile.type)),
-  };
 }
 
 export function isExecutorPickable(
@@ -187,45 +157,4 @@ export function parseExecutorValue(
   }
   const profile = profiles.find((candidate) => candidate.id === value);
   return profile ? { agentType: profile.type, executorId: profile.id } : fallback;
-}
-
-/**
- * Generate native-select options in one place. `types` 已经由 registeredAgentTypes
- * 收窄；显式 Profile 与类型默认项都只来自注册表。失效的当前值仅作为禁用诊断项保留，
- * 不会重新变成可选候选。
- */
-export function executorOptions({
-  types,
-  profiles,
-  selection,
-  knownProfiles = profiles,
-}: {
-  types: AgentType[];
-  profiles: AgentExecutorProfile[];
-  selection?: ExecutorSelection;
-  knownProfiles?: AgentExecutorProfile[];
-}): ExecutorOption[] {
-  const options: ExecutorOption[] = types.map((type) => ({
-    value: executorValue({ agentType: type, executorId: null }),
-    label: `${type} · 类型默认`,
-    disabled: false,
-  }));
-  options.push(...profiles.map((profile) => ({
-    value: executorValue({ agentType: profile.type, executorId: profile.id }),
-    label: `${profile.name}${profile.model ? ` · ${profile.model}` : ""}${profile.isDefault ? "（默认）" : ""}`,
-    disabled: false,
-  })));
-  if (selection && !isExecutorPickable(selection, types, profiles)) {
-    const profile = selection.executorId
-      ? knownProfiles.find((candidate) => candidate.id === selection.executorId)
-      : null;
-    options.push({
-      value: executorValue(selection),
-      label: profile
-        ? `${profile.name}（当前设置 · 不可用）`
-        : `${selection.agentType} · 类型默认（当前设置 · 未注册）`,
-      disabled: true,
-    });
-  }
-  return options;
 }

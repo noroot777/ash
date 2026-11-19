@@ -12,10 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 
-const root = mkdtempSync(join(tmpdir(), "ash-pending-after-handoff-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const root = mkdtempSync(join(tmpdir(), "navi-pending-after-handoff-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.env.HOME = join(root, "home");
 process.env.USERPROFILE = join(root, "home");
 mkdirSync(process.env.HOME, { recursive: true });

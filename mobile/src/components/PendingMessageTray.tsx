@@ -1,7 +1,7 @@
 import { Alert, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { ScheduledMessage } from "@ash/shared";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import type { ScheduledMessage } from "@navi/shared";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import { api } from "@/lib/api";
 import { useTheme, radius, fonts } from "@/lib/theme";
 import { formatInstant } from "@/lib/time";

@@ -1,12 +1,13 @@
 // 认证与首启/转换的端点。**这些路由本身不在闸内**(见 middleware.ts 的 PUBLIC 清单)——
 // 前端要先问「现在是什么模式、我登没登」才知道该渲染哪一屏。
 import type { Context, Hono } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import type { AuthState, InviteInfo, UserRole } from "@ash/shared";
-import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
+import { deleteCookie, setCookie } from "hono/cookie";
+import type { AuthState, InviteInfo, UserRole } from "@navi/shared";
+import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@navi/shared/multiuser";
 import { hostname } from "node:os";
 import { actorOf, authErrorResponse, isAccountHolder, requireAdmin } from "./context.js";
-import { SESSION_COOKIE, crossSiteRejection } from "./middleware.js";
+import { SESSION_COOKIE, crossSiteRejection, sessionCookieOf } from "./middleware.js";
+import { LEGACY_SESSION_COOKIE } from "@navi/shared/legacy-names";
 import {
   ensureHomeDirUnder,
   ensureUserHomeDir,
@@ -44,7 +45,7 @@ import { claimExistingDataFor, conversionPreflight } from "./conversion.js";
  * cookie 一律 `SameSite=Lax` + `HttpOnly`:前者让跨站请求根本带不上它(CSRF 的第一
  * 道),后者让页面脚本读不到(XSS 拿不走会话)。
  *
- * **不设 `Secure`**:ash 本身不做 HTTPS(传输安全靠 Tailscale / 反代 TLS,§一),
+ * **不设 `Secure`**:navi 本身不做 HTTPS(传输安全靠 Tailscale / 反代 TLS,§一),
  * 设了会让局域网 http 访问直接登不上去 —— 那不是更安全,是不能用。
  */
 function issueSessionCookie(c: Context, token: string): void {
@@ -112,7 +113,7 @@ export function mountAuthRoutes(api: Hono): void {
       // 本机自用模式没有「放一台设备进来」这回事(身份判据见 remote-access.ts 的 ownerProof)。
       if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
       if (!remoteKeyMatches(key ?? "")) {
-        return c.json({ error: "访问密钥不对。现在这一把在 ash 所在那台机器的「设置 → 默认规则 → 远程访问」里" }, 401);
+        return c.json({ error: "访问密钥不对。现在这一把在 Navi 所在那台机器的「设置 → 默认规则 → 远程访问」里" }, 401);
       }
       const { token } = enrollDevice({ name: deviceName(c.req.header("user-agent")), via: "key", address: peerAddress(c) });
       issueSessionCookie(c, token);
@@ -128,12 +129,13 @@ export function mountAuthRoutes(api: Hono): void {
   });
 
   api.post("/auth/logout", async (c) => {
-    const session = getCookie(c, SESSION_COOKIE) ?? "";
+    const session = sessionCookieOf(c) ?? "";
     await deleteSession(session);
     // 自用模式:登出 = 这台设备自己退出名册,凭证当场作废。
     const device = deviceByToken(session);
     if (device) removeDevice(device.id, connectionOf(c));
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    deleteCookie(c, LEGACY_SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
   });
 
@@ -168,11 +170,11 @@ export function mountAuthRoutes(api: Hono): void {
     const resuming = config.mode === "multi" && (await needsSetup());
     const first = config.mode === "" || resuming;
     // 还没人认领的实例,谁先到谁就是管理员 —— 所以「先到」得是机主:本机直连,或者拿得出
-    // 访问密钥(密钥文件只有读得到 ash 数据目录的人拿得到)。否则局域网里任何一台机器都
+    // 访问密钥(密钥文件只有读得到 navi 数据目录的人拿得到)。否则局域网里任何一台机器都
     // 能抢在机主前面把它设成自己的多人实例。补做(resuming)那一档不在此列:多人模式的
     // 身份体系里没有访问密钥这回事,它沿用既有的免登录名单。
     if (config.mode === "" && actorOf(c).kind === "anonymous") {
-      return c.json({ error: "首次设置要在 ash 所在的那台机器上做，或者先用访问密钥登录", needsAuth: true }, 401);
+      return c.json({ error: "首次设置要在 Navi 所在的那台机器上做，或者先用访问密钥登录", needsAuth: true }, 401);
     }
     // 已经定过模式 = 这是设置页危险区的转换,必须是管理员(自用模式下人人都是)。
     if (!first) {
@@ -277,7 +279,7 @@ export function mountAuthRoutes(api: Hono): void {
   api.get("/auth/setup/preflight", async (c) => {
     if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
     if (await isMultiUser()) {
-      return c.json({ error: "这台 ash 已经是多人模式了，转换前的盘点只在转换那一刻有意义" }, 409);
+      return c.json({ error: "这台 Navi 已经是多人模式了，转换前的盘点只在转换那一刻有意义" }, 409);
     }
     const { unbackedExecutors, counts } = await conversionPreflight();
     return c.json({ unbackedExecutors, counts, host: hostname() });
@@ -339,13 +341,13 @@ export function mountAuthRoutes(api: Hono): void {
   mountRemoteAccessRoutes(api, issueSessionCookie);
 
   // ── 宿主机逃生门(§三)──────────────────────────────────────────────────────
-  // 唯一管理员丢 key 时的出路。它**不是 HTTP 端点**,而是 scripts/ash-admin.mjs 直接
+  // 唯一管理员丢 key 时的出路。它**不是 HTTP 端点**,而是 scripts/navi-admin.mjs 直接
   // 操作数据库文件 —— 能碰到那个文件的人本来就拥有一切,所以这条路不削弱任何东西。
   // 这里只放一个说明端点,让界面能把命令原样告诉用户。
   api.get("/auth/recovery-hint", (c) =>
     c.json({
-      command: "node scripts/ash-admin.mjs invite-admin",
-      note: "在跑着 ash 的那台机器上、仓库根目录执行。它会打印一条新的管理员邀请链接。",
+      command: "node scripts/navi-admin.mjs invite-admin",
+      note: "在跑着 Navi 的那台机器上、仓库根目录执行。它会打印一条新的管理员邀请链接。",
     }));
 
   // 管理员为**别人**重置 key:走专属邀请链接重领(§五),旧 key 即刻失效。

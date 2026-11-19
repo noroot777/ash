@@ -7,13 +7,15 @@
 //   ③ 调 reconcileInterrupted()：**绝不能**把它判成 failed
 //   ④ 等假 agent 自然结束：任务应按结算规则落位，且 .md 里能看到接管之后的输出
 // 反向用例：pid 是死的 → 不接管 → reconcile 照常把它判 failed（老语义不回退）。
-process.env.ASH_DB ||= `/tmp/test-reattach-${Math.random().toString(36).slice(2)}.db`;
-process.env.ASH_LAX_DONE = "1"; // 这里验的是接管，不是严格 done 协议
+process.env.NAVI_DB ||= `/tmp/test-reattach-${Math.random().toString(36).slice(2)}.db`;
+process.env.NAVI_LAX_DONE = "1"; // 这里验的是接管，不是严格 done 协议
 
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { eq } from "drizzle-orm";
 
 const { ensureSchema, db } = await import("../src/db/index.js");
@@ -30,7 +32,23 @@ const { RUNS_DIR } = await import("../src/paths.js");
 
 await ensureSchema();
 
-const dir = mkdtempSync(join(tmpdir(), "ash-reattach-"));
+const dir = mkdtempSync(join(tmpdir(), "navi-reattach-"));
+// 起的全是自己铺的假 agent(node 跑本文件写的脚本,外加 dir 里的假 codex 垫片):声明出来,设了
+// NAVI_RUNS_DIR 时隔离闸(executors/spawn.ts 的 guardAgentSpawn)也放它们过去(同 test-control-fifo.ts)。
+process.env.NAVI_TEST_AGENT_BIN = [process.execPath, dir].join(delimiter);
+
+/**
+ * 起来了就交回 pid;起不来就带着原因当场失败。`child.pid!` 直接拿去用的那一版,起不来时
+ * 拿到 undefined 往下走,崩在一个跟原因毫不相干的地方(2026-11-19 真机:隔离闸拦下假 agent)。
+ */
+async function startedPid(child: ChildProcess, what: string): Promise<number> {
+  if (child.pid) return child.pid;
+  const why = await new Promise<string>((resolve) => {
+    child.once("error", (error) => resolve(error.message));
+    setTimeout(() => resolve("拿不到 pid,也没有 error 事件"), 2000).unref();
+  });
+  throw new Error(`${what}没起来,后面的断言无从谈起:${why}`);
+}
 const TOTAL = 20;
 const agentScript = join(dir, "agent.mjs");
 /** 「普通假 agent 可以收工了」的信号(⑤ 放行时写出来)。 */
@@ -184,7 +202,7 @@ async function makeCase(taskId: string, live: boolean) {
   mkdirSync(runDir, { recursive: true });
   const paths = detachedPathsFor(runDir, sessId, "T0");
   const child = spawnForRun(dir, process.execPath, [agentScript], "", undefined, paths);
-  const pid = child.pid!;
+  const pid = await startedPid(child, "假 agent ");
   cleanupPids.add(pid);
   // 让它先吐几行再「重启」，这样接管时确实有历史内容与未读内容之分。
   await new Promise((r) => setTimeout(r, 450));
@@ -221,7 +239,7 @@ async function makeClaudeSteerCase() {
   const paths = detachedPathsFor(runDir, sessId, "T0");
   const initial = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "OLD" }] } }) + "\n";
   const child = spawnControllableForRun(dir, process.execPath, [steerAgentScript], initial, undefined, paths);
-  cleanupPids.add(child.pid!);
+  cleanupPids.add(await startedPid(child, "可引导的假 claude "));
   await new Promise((resolve) => setTimeout(resolve, 200));
   await db.insert(sessions).values({
     id: sessId, taskId: CLAUDE_STEER, role: "single", agentType: "claude", executor: "claude@local",
@@ -253,6 +271,8 @@ async function makeCodexSteerCase() {
   );
   const realExecutor = new CodexExecutor({ bin: shim });
   const handle = realExecutor.runSteerable({ cwd: dir, prompt: "OLD", detach: paths });
+  // 起不来时 detached 那一份是空的,`handle.detached!.pid` 会崩成一句跟原因无关的 TypeError。
+  assert.ok(handle.detached?.pid, "假 codex App Server 没起来(拿不到 pid),后面的断言无从谈起 —— 原因见上面执行器打出的启动失败");
   cleanupPids.add(handle.detached!.pid);
   const iterator = handle.events[Symbol.asyncIterator]();
   let cliSessionId = "";
@@ -458,7 +478,7 @@ console.log("⑦ 句柄构造之前失败:后代要收、责任要交出去");
   mkdirSync(runDir, { recursive: true });
   const paths = detachedPathsFor(runDir, sessId, "T0");
   const child = spawnForRun(dir, process.execPath, [rawAgentScript], "", undefined, paths);
-  const rootPid = child.pid!;
+  const rootPid = await startedPid(child, "甩后代的假 agent ");
   cleanupPids.add(rootPid);
   // 等它把后代的 pid 写出来。**按条件轮询而不是睡固定时长**:这一组要起两层 node
   // (壳 + 假 agent),Windows 上头一次执行刚写出来的脚本还要过一遍 Defender,固定 600ms

@@ -31,10 +31,11 @@
 // (`withMonitorHolds`,条件写在同一段暂停上:状态仍是 paused、方向世代没变),开机补办与每一次
 // tick 都会读到它。
 import { and, eq, isNull } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { groups, queueItems, tasks } from "./db/schema.js";
+import { queueItems, tasks } from "./db/schema.js";
+import { taskHoldOf } from "./task-hold.js";
 import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -52,7 +53,7 @@ async function heldOrUnknown(taskId: string): Promise<boolean | null> {
   try {
     return await heldByMonitors(taskId);
   } catch (error) {
-    console.error(`[ash] 读哨兵责任失败 task=${taskId}:`, error);
+    console.error(`[navi] 读哨兵责任失败 task=${taskId}:`, error);
     return null;
   }
 }
@@ -97,7 +98,7 @@ async function stampHold(row: TaskRow): Promise<void> {
       isNull(tasks.monitorHoldAt),
     ));
   } catch (error) {
-    console.error(`[ash] 补记「在等哨兵」失败 task=${row.id}(下一次读到再补):`, error);
+    console.error(`[navi] 补记「在等哨兵」失败 task=${row.id}(下一次读到再补):`, error);
   }
 }
 
@@ -110,10 +111,8 @@ async function releaseIfOwed(taskId: string, queueId: string): Promise<void> {
     return;
   }
   if (!task.monitorHoldAt) return;
-  if (task.groupId) {
-    const group = (await db.select({ paused: groups.paused }).from(groups).where(eq(groups.id, task.groupId))).at(0);
-    if (group?.paused) return;
-  }
+  // 分组暂停 / 名下全部停下:不补推(放开之后 tick 的扫描会再走到这里)。
+  if (await taskHoldOf(task)) return;
   const { advanceQueue, pickNextLaunchable } = await import("./scheduler.js");
   if ((await pickNextLaunchable(queueId))?.id !== taskId) return;
   await advanceQueue(queueId);
@@ -129,7 +128,7 @@ export async function sweepReleasedQueueMembers(): Promise<void> {
     try {
       await releaseIfOwed(taskId, queueId);
     } catch (error) {
-      console.error(`[ash] 等过哨兵的队列成员补推失败 task=${taskId}(下一次 tick 再来):`, error);
+      console.error(`[navi] 等过哨兵的队列成员补推失败 task=${taskId}(下一次 tick 再来):`, error);
     }
   }
 }
@@ -155,7 +154,7 @@ function onMonitorChange(taskId: string): void {
         await recheck(taskId);
       } while (checking.get(taskId));
     } catch (error) {
-      console.error(`[ash] 等哨兵的队列成员复查失败 task=${taskId}(调度 tick 会再扫到它):`, error);
+      console.error(`[navi] 等哨兵的队列成员复查失败 task=${taskId}(调度 tick 会再扫到它):`, error);
     } finally {
       checking.delete(taskId);
     }

@@ -1,4 +1,4 @@
-import type { Group, ProjectView, Task, TaskListItem } from "@ash/shared";
+import type { Group, ProjectView, Task, TaskListItem } from "@navi/shared";
 import { useEffect } from "react";
 import type { ComponentType } from "react";
 import {
@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   ArrowsLeftRight,
   ChatTeardropDots,
-  CirclesThreePlus,
   FolderSimple,
   PlugsConnected,
   Robot,
@@ -25,7 +24,6 @@ import { DefaultsSettings } from "./DefaultsSettings.tsx";
 import { FeishuSettings } from "./FeishuSettings.tsx";
 import { ExecutorsSettings } from "./ExecutorsSettings.tsx";
 import { GroupsSettings } from "./GroupsSettings.tsx";
-import { ModesSettings } from "./ModesSettings.tsx";
 import { PersonalCliSettings } from "./PersonalCliSettings.tsx";
 import { ProjectMembersSettings } from "./ProjectMembersSettings.tsx";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel.tsx";
@@ -58,7 +56,6 @@ const NAV_ICONS: Record<SettingsSection, ComponentType<{ size?: number; "aria-hi
   archive: Archive,
   providers: PlugsConnected,
   executors: Robot,
-  modes: CirclesThreePlus,
   workflows: WorkflowIcon,
   reviewers: MagnifyingGlass,
   "cli-env": Terminal,
@@ -199,7 +196,6 @@ export function SettingsPage({
         <div className="settings-content" data-wide={WIDE_SECTIONS.includes(section) ? "yes" : "no"}>
           {section === "providers" && <ProvidersSettings notify={notify} onOpen={onSection} />}
           {section === "executors" && <ExecutorsSettings notify={notify} />}
-          {section === "modes" && <ModesSettings notify={notify} />}
           {section === "workflows" && <WorkflowsSettings notify={notify} />}
           {section === "reviewers" && <ReviewerProfilesSettings notify={notify} />}
           {section === "cli-env" && <PersonalCliSettings notify={notify} />}

@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-search-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-search-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
-// 动态 import:search.js 连带打开 DB,得等 ASH_DB 指到临时库之后再加载。
+// 动态 import:search.js 连带打开 DB,得等 NAVI_DB 指到临时库之后再加载。
 const [{ db, ensureSchema }, { projects, tasks }, search, { parseWorktreePorcelain }, { SINGLE_ACTOR }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
@@ -38,7 +39,7 @@ const TASK_ID = "Zx8Kq2mNrT4V";
 
 // 整串 id、分支短 id、以及粘贴 URL / 分支名 / kv 写法都要认出 id 本体。
 assert.deepEqual(candidates(TASK_ID), ["zx8kq2mnrt4v"]);
-assert.deepEqual(candidates("ash/Zx8Kq2mN"), ["zx8kq2mn"]);
+for (const prefix of ["navi/", "ash/", "harness/"]) assert.deepEqual(candidates(`${prefix}Zx8Kq2mN`), ["zx8kq2mn"]);
 assert.deepEqual(candidates(`http://localhost:4317/tasks/${TASK_ID}`), ["localhost", "zx8kq2mnrt4v"]);
 assert.deepEqual(candidates(`taskId=${TASK_ID}`), ["zx8kq2mnrt4v"]);
 // 太短的词不是 id,别拿它去撞任务。
@@ -59,11 +60,11 @@ assert.equal(visibleLocalSearchTask(JSON.stringify({ direction: "in" })), true);
 
 const worktrees = parseWorktreePorcelain(
   "worktree /repo\0HEAD abc123\0branch refs/heads/main\0\0" +
-    "worktree /repo/.worktrees/task\0HEAD def456\0branch refs/heads/ash/task\0\0",
+    "worktree /repo/.worktrees/task\0HEAD def456\0branch refs/heads/navi/task\0\0",
 );
 assert.deepEqual(worktrees, [
   { path: "/repo", branch: "main", head: "abc123", detached: false },
-  { path: "/repo/.worktrees/task", branch: "ash/task", head: "def456", detached: false },
+  { path: "/repo/.worktrees/task", branch: "navi/task", head: "def456", detached: false },
 ]);
 
 // ── searchAll:搜 id 时那个任务必须排第一,而且是「凭 id」排上来的 ──────────
@@ -86,7 +87,7 @@ try {
   assert.ok(mention, "正文里提到该 id 的任务照常命中,只是排在后面");
   assert.notEqual(mention?.field, "id", "别人提到它不等于别人就是它");
 
-  const byBranch = await searchAll(`ash/${TASK_ID.slice(0, 8)}`);
+  const byBranch = await searchAll(`navi/${TASK_ID.slice(0, 8)}`);
   assert.equal(byBranch[0]?.id, TASK_ID, "分支名里的 8 位短 id 也要能定位到任务");
   assert.equal(byBranch[0]?.field, "id");
 
@@ -99,7 +100,7 @@ try {
   assert.equal((await searchAll("修复")).length, 0, "普通词不该误撞任何任务 id");
   assert.equal((await searchAll("隐藏搜索词")).length, 0, "已确认转出的本机存档不应出现在搜索结果");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 
 console.log("search query + task-id + git overview parser tests passed");

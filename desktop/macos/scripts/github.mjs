@@ -3,10 +3,11 @@
 // git 子进程去推（那样用的是 git 自己的凭证，和这里查过权限的不是同一个身份）。
 import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, extname } from "node:path";
+import { readEnv } from "../../../scripts/env.mjs";
 
-// ASH_MAC_GITHUB_API 只给回归测试指向一个本地假的 GitHub。
-const API = process.env.ASH_MAC_GITHUB_API || "https://api.github.com";
+// NAVI_MAC_GITHUB_API 只给回归测试指向一个本地假的 GitHub。
+const API = readEnv(process.env, "NAVI_MAC_GITHUB_API") || "https://api.github.com";
 
 /** 按顺序找：GH_TOKEN / GITHUB_TOKEN → `gh auth token` → git 凭证助手里 github.com 那一条。 */
 export function resolveToken() {
@@ -27,9 +28,10 @@ export function resolveToken() {
 }
 
 export const NO_TOKEN_HINT = [
-  "找不到能调 GitHub API 的凭证。任选一种（传附件、改 appcast 都只用这一张）：",
+  "找不到能调 GitHub API 的凭证，或者它对 release.json 里的两个仓库（releaseRepo 放安装包、feedRepo 放 appcast）不是都能写。",
+  "任选一种（传附件、改 appcast 都只用这一张）：",
   "  · 装 gh 并登录：brew install gh && gh auth login",
-  "  · 或者给一个有该仓库 contents 写权限的 token：export GH_TOKEN=…（fine-grained token，仓库权限 Contents: Read and write）",
+  "  · 或者给一个对这两个仓库都有 contents 写权限的 token：export GH_TOKEN=…（fine-grained token，两个仓库都选上，权限 Contents: Read and write）",
   "  · 或者让 git 记住 github.com 的凭证（git push 过一次、存进钥匙串的那种）",
 ].join("\n");
 
@@ -60,9 +62,39 @@ export class GitHub {
     return (await this.call("GET", `/repos/${repo}`, { allow: [404] })).status !== 404;
   }
 
-  /** 这张凭证能不能往仓库里写（传附件、改 appcast 都要）。 */
-  async canPush(repo) {
-    return Boolean((await this.call("GET", `/repos/${repo}`)).json?.permissions?.push);
+  /**
+   * 这张凭证能不能往仓库里写（建 Release、传附件、改 appcast 都是同一项 Contents 写权限）。
+   * 仓库信息里的 permissions.push 说的是账号对仓库的权限，不是这张 token 的：fine-grained token 没选这个
+   * 仓库、或没给 Contents 写权限时它照样是 true。所以真写一次 —— 建一个不挂到任何提交、分支上的 blob：
+   * 和改文件同一项权限，外面看不见，没有引用会被 GitHub 回收。
+   */
+  async canWrite(repo) {
+    if (!(await this.call("GET", `/repos/${repo}`)).json?.permissions?.push) return false;
+    const { status } = await this.call("POST", `/repos/${repo}/git/blobs`, {
+      body: { content: "navi release: write check", encoding: "utf-8" }, allow: [401, 403, 404, 422],
+    });
+    return status === 201;
+  }
+
+  /**
+   * 分支上挡着「经 Contents API 直接提交」的东西：经典分支保护，或 ruleset 里除了不许删、不许强推、
+   * 线性历史以外的规则（要 PR、限制更新、要状态检查……）。读不到详情（要管理员权限）也算挡着：
+   * 证明不了能直接提交，就当不能。
+   */
+  async branchRestrictions(repo, branch) {
+    const found = [];
+    const { status, json } = await this.call("GET", `/repos/${repo}/branches/${encodeURIComponent(branch)}`, { allow: [404] });
+    if (status === 404) return [`分支 ${branch} 不存在`];
+    if (json.protected) found.push("开着分支保护");
+    const rules = (await this.call("GET", `/repos/${repo}/rules/branches/${encodeURIComponent(branch)}`, { allow: [404] })).json || [];
+    for (const rule of rules) if (!HARMLESS_RULES.has(rule.type)) found.push(`ruleset 规则 ${rule.type}`);
+    return found;
+  }
+
+  /** 仓库里有没有这个提交（短 sha 也认），有就给出完整 sha，没有是 null。 */
+  async commitSha(repo, ref) {
+    const { status, json } = await this.call("GET", `/repos/${repo}/commits/${encodeURIComponent(ref)}`, { allow: [404, 422] });
+    return status === 404 || status === 422 ? null : json.sha;
   }
 
   /** 读分支上的一个文件：{ sha, text }；不存在是 null。 */
@@ -91,15 +123,52 @@ export class GitHub {
     return (await this.call("POST", path, { body: { name, description, private: false, auto_init: true } })).json;
   }
 
-  async releaseByTag(repo, tag) {
+  /** 这个 tag 的 Release，草稿也算（草稿还没有 tag，按 tag 查不到，只能从列表里认 tag_name）。 */
+  async findRelease(repo, tag) {
     const { status, json } = await this.call("GET", `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, { allow: [404] });
-    return status === 404 ? null : json;
+    if (status !== 404) return json;
+    for (let page = 1; ; page++) {
+      const list = (await this.call("GET", `/repos/${repo}/releases?per_page=100&page=${page}`)).json || [];
+      const found = list.find((release) => release.draft && release.tag_name === tag);
+      if (found) return found;
+      if (list.length < 100) return null;
+    }
   }
 
-  async createRelease(repo, { tag, branch, name, body }) {
+  /** tag 指向哪个提交（附注 tag 剥到底）；tag 不存在是 null。 */
+  async tagCommit(repo, tag) {
+    const { status, json } = await this.call("GET", `/repos/${repo}/git/ref/tags/${encodeURIComponent(tag)}`, { allow: [404] });
+    if (status === 404) return null;
+    let object = json.object;
+    for (let depth = 0; object.type === "tag" && depth < 5; depth++) {
+      object = (await this.call("GET", `/repos/${repo}/git/tags/${object.sha}`)).json.object;
+    }
+    return object.type === "commit" ? object.sha : null;
+  }
+
+  /** 建草稿 Release：谁都看不见，tag 要到公开时才在 target（分支名或完整 sha）上打出来。 */
+  async createDraftRelease(repo, { tag, target, name, body }) {
     return (await this.call("POST", `/repos/${repo}/releases`, {
-      body: { tag_name: tag, target_commitish: branch, name, body, draft: false, prerelease: false },
+      body: { tag_name: tag, target_commitish: target, name, body, draft: true, prerelease: false },
     })).json;
+  }
+
+  /**
+   * 草稿 → 公开，同时把目标提交写成 target（沿用的旧草稿可能记着别的提交；tag 就是这一下按它打出来的）。
+   * 只有这一个方向：公开了就不再退回草稿。
+   */
+  async publishRelease(repo, release, target) {
+    return (await this.call("PATCH", `/repos/${repo}/releases/${release.id}`, { body: { draft: false, target_commitish: target } })).json;
+  }
+
+  /** 经 API 下回一个附件（草稿的附件也下得到，公开地址那时还不通）。 */
+  async downloadAsset(asset) {
+    const response = await fetch(asset.url, {
+      headers: { authorization: `Bearer ${this.token}`, accept: "application/octet-stream", "x-github-api-version": "2022-11-28" },
+      redirect: "follow",
+    });
+    if (!response.ok) throw new Error(`下载附件 ${asset.name} → HTTP ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
   }
 
   /** 传附件。同名附件已经在、大小也对就当传过了；大小不对说明是另一份，拒绝覆盖。 */
@@ -114,9 +183,11 @@ export class GitHub {
     const url = release.upload_url.replace(/\{.*$/, `?name=${encodeURIComponent(name)}`);
     return (await this.call("POST", url, {
       body: new Uint8Array(readFileSync(file)),
-      headers: { "content-type": "application/zip", "content-length": String(size) },
+      headers: { "content-type": CONTENT_TYPES[extname(name)] || "application/octet-stream", "content-length": String(size) },
     })).json;
   }
 }
 
+const HARMLESS_RULES = new Set(["deletion", "non_fast_forward", "required_linear_history"]);
+const CONTENT_TYPES = { ".dmg": "application/x-apple-diskimage", ".zip": "application/zip" };
 const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");

@@ -4,9 +4,9 @@ import {
   type AgentExecutorProfile,
   type AgentType,
   type Task, type TaskListItem,
-} from "@ash/shared";
-import { sameExecutor } from "@ash/shared/executors";
-import type { WorkflowDef } from "@ash/shared/workflow";
+} from "@navi/shared";
+import { sameExecutor } from "@navi/shared/executors";
+import type { WorkflowDef } from "@navi/shared/workflow";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { InspActions, InspConclusion, InspMainButton, InspMore, type InspMoreItem } from "../inspector/InspHead.tsx";
 

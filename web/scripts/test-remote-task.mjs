@@ -12,7 +12,7 @@ const handoffBanner = readSource(new URL("../src/task-detail/HandoffBanner.tsx",
 const handoffViews = readSource(new URL("../src/task-detail/HandoffDialogViews.tsx", import.meta.url));
 const returnView = readSource(new URL("../src/task-detail/HandoffReturnView.tsx", import.meta.url));
 const taskDetail = readSource(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url));
-// 接力 / 移回那颗键在回复框那一行动作里（docs/ui-ux-audit reply-3）。
+// 接力 / 移回那颗键在回复框那一行动作里。
 const replyRail = readSource(new URL("../src/task-detail/TaskReplyActions.tsx", import.meta.url));
 const taskHeader = readSource(new URL("../src/task-detail/TaskHeader.tsx", import.meta.url));
 const handoffSettings = readSource(new URL("../src/settings/HandoffSettings.tsx", import.meta.url));
@@ -24,7 +24,10 @@ assert.match(machines, /is-selected/, "远程任务行应有与普通侧栏一�
 assert.match(shell, /<RemoteTaskDetail/, "工作区主区应渲染远程任务代理视图");
 assert.match(detail, /上下文从该机器同步，回复也由该机器继续执行/, "远程位置与路由必须持续可见");
 assert.match(detail, /api\.remoteTaskReply/, "回复必须经本机代理发往远端");
-assert.match(detail, /<QuestionCard/, "远程任务处于提问态时应显示标准答复卡");
+assert.match(detail, /<QuestionDock takeover=\{takeover\}/, "远程任务处于提问态时，回复框那一格是标准答题卡");
+assert.match(detail, /\{!takeover\.covering && <div className="task-reply-box">/, "卡展开时远程回复框整个不挂，收起后回来");
+// 收起答题卡后露出来的回复框照它自己的条件能写能发（跟任务页、团队页一样），不再因为「有题在等」整个灰掉。
+assert.doesNotMatch(detail, /Boolean\(task\.question\)/, "远程回复框的输入与发送不能再按「有题在等」禁用");
 assert.match(detail, /api\.remoteTaskAnswer/, "远程提问必须走 answer 代理而不是普通 reply");
 assert.match(detail, /task\.question \? "等答复"/, "远程提问态的顶栏应明确显示等答复");
 assert.match(detail, /local\.handoff\?\.direction !== "out"/, "所有权回到本机后代理视图应自动退出");
@@ -44,7 +47,7 @@ assert.doesNotMatch(handoff + handoffBanner, /const canOpenRemote|task-handoff-o
 assert.doesNotMatch(taskDetail, /onOpenRemote=|onRemoteTask/, "任务详情不应再为不可选中的 out 存档接死代码回调");
 assert.match(handoff, /hasOwnProperty\.call\(pendingHandoff, "returnTransferId"\)/, "移回应答丢失后的重放弹窗仍应保持移回语义");
 assert.match(replyRail, /hasOwnProperty\.call\(task\.handoff, "returnTransferId"\)/, "移回应答丢失后的任务操作仍应显示移回而不是接力");
-// 任务头 2026-11 起不写状态字（docs/ui-ux-audit head-1），「移回 / 接力未确认」只由横幅说。
+// 任务头 2026-11 起不写状态字，「移回 / 接力未确认」只由横幅说。
 assert.doesNotMatch(taskHeader, /接力未确认/, "任务头不再写状态字，接力未确认只由横幅说");
 assert.match(handoffBanner, /pendingReturn\s*\?\s*`[^`]*移回\$\{peer\}后没收到确认/, "移回应答丢失后的横幅不能误报成接力未确认");
 assert.match(returnView, /上次移回没收到确认/, "移回重放警告必须使用移回和来源机语义");

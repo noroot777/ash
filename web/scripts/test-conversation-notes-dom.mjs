@@ -23,7 +23,6 @@ try {
   // 这份 fixture 全是**没有类型的老记录**：照样认得出哪几句要你知道，它们是所属回合的尾注。
   const messages = page.locator(".task-message--agent");
   await messages.first().waitFor();
-  assert.equal(await page.locator(".notice-line").count(), 0, "没有独占一行、图标落在头像轴上的旁注");
   const footnoteTexts = await messages.evaluateAll((elements) => elements.map((el) =>
     [...el.querySelectorAll(".turn-footnote-text")].map((text) => text.textContent).join(" · ")));
   assert.deepEqual(
@@ -39,7 +38,7 @@ try {
     "回执连同尾注里的每一句都记在各自所属的回合上，一条不少（预约、验收阶段、迁移说明、会话轮换、回合边界、实时预约）",
   );
   // 回合边界不再横贯会话：正常收口是那一回合上的一条记录。
-  assert.equal(await page.locator(".task-event-line, .system-boundary").count(), 0);
+  assert.equal(await page.locator(".system-boundary").count(), 0);
   // 后面又起了回合，它们都是过去的事：没有一颗彩色的点。
   assert.equal(await page.locator(".turn-footnote-dot").count(), 0, "过去回合上的未通过、结算说明都是灰字");
   const openLog = async (index) => {
@@ -55,7 +54,7 @@ try {
   const rotation = rotationLog.locator(".turn-receipt").filter({ hasText: "CLI 会话" });
   assert.equal(await rotation.evaluate((el) => el.classList.contains("tone-neutral")), true, "会话轮换旁注被渲染成异常");
   if (await rotation.locator(".turn-receipt-more").count()) await rotation.locator(".turn-receipt-more").click();
-  assert.match(await rotation.innerText(), /ash 已经把这个失效的 id 清掉/, "会话轮换的原文点开看得到");
+  assert.match(await rotation.innerText(), /Navi 已经把这个失效的 id 清掉/, "会话轮换的原文点开看得到");
   assert.doesNotMatch(await rotation.textContent(), /\*\*/, "旁注是纯文本，Markdown 标记会原样露给用户");
 
   // 结算说明（level:"notice"）：是那一回合尾注里的一句，字是灰的（它讲的是流程，不是故障）。

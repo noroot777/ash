@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
 import { ArrowsLeftRight, GitBranch, ShieldCheck } from "@phosphor-icons/react";
-import { AshMark } from "../brand/AshMark.tsx";
+import { NaviMark } from "../brand/NaviMark.tsx";
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <div className="auth-shell">
       <div className="auth-stage">
         <aside className="auth-brand">
-          <div className="auth-brand-mark"><AshMark size={24} label="ash" /></div>
+          <div className="auth-brand-mark navi-tile"><NaviMark size={28} label="Navi" /></div>
           <div className="auth-brand-copy">
             <span>LOCAL AGENT OPERATIONS</span>
             <h2>把复杂的协作，留在一张清楚的工作台里。</h2>
@@ -18,7 +18,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
             <li><ArrowsLeftRight size={17} weight="duotone" /><span><b>顺滑接力</b><small>上下文与进度一起移动</small></span></li>
             <li><ShieldCheck size={17} weight="duotone" /><span><b>身份明确</b><small>多人协作保留清晰边界</small></span></li>
           </ul>
-          <p className="auth-brand-foot">ASH · AGENT CONTROL ROOM</p>
+          <p className="auth-brand-foot">NAVI · AGENT CONTROL ROOM</p>
         </aside>
         <main className="auth-stage-content">{children}</main>
       </div>

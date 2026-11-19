@@ -7,11 +7,11 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-cli-startup-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
-delete process.env.ASH_ALLOW_REAL_AGENT;
+const root = mkdtempSync(join(tmpdir(), "navi-cli-startup-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { groups, projects, tasks, sessions, queueItems } = await import("../src/db/schema.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
@@ -63,7 +63,7 @@ try {
   await db.insert(projects).values({ id: "project", name: "命令验证", repoPath: root, createdAt: at });
   await db.insert(groups).values({ id: "group", projectId: "project", name: "串行验证", mode: "serial", createdAt: at });
   for (const [agentType, body, expected] of [
-    ["claude", "/plan 怎么做这个功能", /当前执行器的 ash 通道不支持 \/plan/],
+    ["claude", "/plan 怎么做这个功能", /当前执行器的 Navi 通道不支持 \/plan/],
     ["codex", "/usage 看一下用量", /\/usage 不接受参数/],
     ["codex", "/goal 完成测试 --budget 0", /目标预算必须是正整数/],
     ["claude", "/goal 完成测试 --budget 100", /不支持 token 预算参数/],
@@ -102,7 +102,7 @@ try {
   await db.insert(tasks).values({ id: "legacy", projectId: "project", title: "老任务", body: "/usage 看一下这个月的用量再决定", agentType: "codex", status: "backlog", createdAt: at, updatedAt: at });
   await runFailed("legacy", /\/usage 不接受参数/);
   await db.insert(tasks).values({ id: "legacy-claude", projectId: "project", title: "Claude 老任务", body: "/plan 怎么做这个功能", agentType: "claude", status: "backlog", createdAt: at, updatedAt: at });
-  await runFailed("legacy-claude", /ash 通道不支持 \/plan/);
+  await runFailed("legacy-claude", /Navi 通道不支持 \/plan/);
   assert.equal((await db.select().from(sessions)).every((session) => !session.agentPid && !session.cliSessionId), true);
   console.log("native creation errors return 400; edited/legacy startup failures persist and remain visible after reload: passed");
 } finally {

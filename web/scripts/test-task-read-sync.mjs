@@ -10,6 +10,9 @@
 //  · 服务端已有新一轮 / 封顶 / 不存在：以服务端为准，不一直重送；拉失败了过一会儿自己再拉；
 //  · 不带账号的老缓存：自用模式补送，多人模式丢掉，都只处理一次。
 import assert from "node:assert/strict";
+import { mock } from "node:test";
+
+mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
 
 const storage = new Map();
 const windowListeners = new Set();
@@ -43,7 +46,7 @@ const warnings = [];
 console.warn = (...args) => { warnings.push(args); };
 /** 磁盘上这个人待发的那几眼：每个任务取看到的最新一轮。 */
 const pendingOf = (who) => {
-  const prefix = `ash:task-reads-v3:${who || "local"}:p:`;
+  const prefix = `navi:task-reads-v3:${who || "local"}:p:`;
   const out = {};
   for (const [key, value] of storage) {
     if (!key.startsWith(prefix)) continue;
@@ -121,7 +124,17 @@ globalThis.fetch = async (path, init = {}) => {
 let source = null;
 globalThis.EventSource = class { constructor() { source = this; } close() {} };
 const emit = (event) => source?.onmessage?.({ data: JSON.stringify(event) });
-const settle = (ms = 700) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * 走过 `ms` 的时间。定时器和 Date.now 是假的（下面 mock.timers），按 10 毫秒一步拨，每步之间让真的
+ * 事件循环转几圈 —— 假服务端的回执、Response 读正文、模块里的 then 链都靠它往前走。产品里的
+ * 5 秒重试、400 毫秒攒批就不必真等。
+ */
+const settle = async (ms = 700) => {
+  for (let left = ms; left > 0; left -= 10) {
+    mock.timers.tick(Math.min(10, left));
+    for (let spin = 0; spin < 4; spin += 1) await new Promise((resolve) => setImmediate(resolve));
+  }
+};
 const putsFor = (taskId) => server.puts.filter((put) => put.reads[taskId]).length;
 let instance = 0;
 /** 开一个标签页：登录关口确认是 who（AuthGate），然后侧栏开始订阅。 */
@@ -339,13 +352,13 @@ const look = (page, taskId, round) => page.updateTaskReads((current) => ({ ...cu
   storageDenied = false;
 
   server.tasks.set("after-bad", 5_000);
-  storage.set("ash:task-reads-v3:local:p:%:1", JSON.stringify({ event: "done:bad", round: 1, at: 1 }));
-  storage.set("ash:task-reads-v3:local:p:no-round", "{oops");
+  storage.set("navi:task-reads-v3:local:p:%:1", JSON.stringify({ event: "done:bad", round: 1, at: 1 }));
+  storage.set("navi:task-reads-v3:local:p:no-round", "{oops");
   server.failPuts = true;
   const other = await openPage("");
   look(other, "after-bad", 5_000);
   assert.equal(pendingOf("")["after-bad"]?.round, 5_000, "坏键不拖垮整份");
-  assert.equal(storage.has("ash:task-reads-v3:local:p:%:1") || storage.has("ash:task-reads-v3:local:p:no-round"), false, "坏键顺手删掉");
+  assert.equal(storage.has("navi:task-reads-v3:local:p:%:1") || storage.has("navi:task-reads-v3:local:p:no-round"), false, "坏键顺手删掉");
   server.failPuts = false;
   await settle(5_500);
   assert.equal(server.of("").reads.get("after-bad")?.round, 5_000);
@@ -388,16 +401,16 @@ const look = (page, taskId, round) => page.updateTaskReads((current) => ({ ...cu
 
 // ── 不带账号的老缓存 ─────────────────────────────────────────────────────────────
 {
-  storage.set("ash:task-read-state-v1", JSON.stringify({ "alice-task": { event: "done:2026-11-13T00:00:00.000Z:", readAt: 1 } }));
+  storage.set("navi:task-read-state-v1", JSON.stringify({ "alice-task": { event: "done:2026-11-13T00:00:00.000Z:", readAt: 1 } }));
   server.cookie = "bob";
   const bob = await openPage("bob");
   await settle();
   assert.equal(server.of("bob").reads.get("alice-task"), undefined, "多人模式下认不出是谁的：不送");
-  assert.equal(storage.get("ash:task-read-state-v1"), undefined, "只处理一次");
+  assert.equal(storage.get("navi:task-read-state-v1"), undefined, "只处理一次");
   bob.stop();
 
   const at = "2026-11-13T00:00:01.000Z";
-  storage.set("ash:task-read-state-v1", JSON.stringify({ six: { event: `done:2026-11-13T00:00:00.000Z:${at}`, readAt: 1 } }));
+  storage.set("navi:task-read-state-v1", JSON.stringify({ six: { event: `done:2026-11-13T00:00:00.000Z:${at}`, readAt: 1 } }));
   server.tasks.set("six", Date.parse(at));
   server.cookie = "";
   const single = await openPage("");

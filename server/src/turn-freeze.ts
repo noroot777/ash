@@ -17,15 +17,41 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { groups, tasks } from "./db/schema.js";
-import { markStopped, takeStartFreeze } from "./runs.js";
+import { tasks } from "./db/schema.js";
+import { markStopped, takeStartFreezeDetail } from "./runs.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
+import { dispatchHoldOf, dispatchHoldText, taskHoldOf } from "./task-hold.js";
+import { oweHeldStart } from "./dispatch-hold-owed.js";
 
 export type TurnFreeze = { reason: string } & (
   | { source: "stop"; settle: "canceled"; overrideRestorable: true }
   | { source: "group-pause"; settle: "paused"; overrideRestorable: false }
+  // 上面派活的那条按了「全部停下」(task-hold.ts):手法同分组暂停,另记一笔欠账等「接着跑」兑现。
+  | { source: "dispatch-hold"; settle: "paused"; overrideRestorable: false; byTaskId: string }
   | { source: "archive" | "delete"; settle: "canceled"; overrideRestorable: false }
 );
+
+/**
+ * 起跑前要不要按持久事实复查：true = 全查（无人值守的启动、重试、审查重跑）；`"dispatch-hold"` =
+ * 只查「名下全部停下」—— 智能体调 run_task：分组暂停对它照旧放行（同用户点运行），但派它的那条
+ * 按了停就不许起（task-hold.ts）。入口那道检查离 spawn 隔着一串 await，停在其间落下只有这里接得住。
+ */
+export type FreezeGuard = boolean | "dispatch-hold";
+
+/**
+ * 这一次起跑是谁要的。起跑入口（task-run.ts runTask、task-resume.ts resumeOrRunTask）**必填**，末端那道
+ * 闸照它定查多少（startGuard）：
+ *   user  = 用户的显式动作（点运行、立即运行、重试）：不复查，入口已经判过、用户明知故点的照旧放行；
+ *   agent = 智能体要起的（调 run_task、群聊里模型建完顺手起跑）：单查「名下全部停下」；
+ *   auto  = 其余一切无人值守的起跑（队列推进、分组运行、到点启动、接着跑、上游叫醒、接力自动续跑）：全查。
+ * 以前这件事是调用方可选地传 freezeGuard，漏传就静默享了用户那份免检 —— 到点启动就是这么在
+ * 「全部停下」之后照样起跑的。现在不说清来源编译不过。
+ */
+export type StartOrigin = "user" | "agent" | "auto";
+
+export function startGuard(origin: StartOrigin): FreezeGuard {
+  return origin === "auto" ? true : origin === "agent" ? "dispatch-hold" : false;
+}
 
 export class FrozenTurn extends Error {
   constructor(reason: string) {
@@ -42,20 +68,24 @@ export class FrozenTurn extends Error {
  *   （重试按钮、自由审查重跑）。普通续聊不查：在一个 queued/暂停分组的任务上发消息本来
  *   就允许，那不是被冻结的启动。
  */
-export async function freezeFacts(taskId: string, checkFacts = false): Promise<TurnFreeze | null> {
+export async function freezeFacts(taskId: string, checkFacts: FreezeGuard = false): Promise<TurnFreeze | null> {
   if (!checkFacts) return null;
+  if (checkFacts === "dispatch-hold") {
+    const hold = await dispatchHoldOf(taskId);
+    return hold
+      ? { reason: dispatchHoldText(hold), source: "dispatch-hold", settle: "paused", overrideRestorable: false, byTaskId: hold.byTaskId }
+      : null;
+  }
   const task = (await db
     .select({ archived: tasks.archived, groupId: tasks.groupId })
     .from(tasks)
     .where(eq(tasks.id, taskId))).at(0);
   if (!task) return { reason: "任务已删除", source: "delete", settle: "canceled", overrideRestorable: false };
   if (task.archived) return { reason: "任务已归档", source: "archive", settle: "canceled", overrideRestorable: false };
-  if (task.groupId) {
-    const group = (await db
-      .select({ paused: groups.paused })
-      .from(groups)
-      .where(eq(groups.id, task.groupId))).at(0);
-    if (group?.paused) return { reason: "所在分组已暂停", source: "group-pause", settle: "paused", overrideRestorable: false };
+  const hold = await taskHoldOf({ id: taskId, groupId: task.groupId });
+  if (hold?.kind === "group") return { reason: "所在分组已暂停", source: "group-pause", settle: "paused", overrideRestorable: false };
+  if (hold?.kind === "dispatch") {
+    return { reason: dispatchHoldText(hold), source: "dispatch-hold", settle: "paused", overrideRestorable: false, byTaskId: hold.byTaskId };
   }
   return null;
 }
@@ -68,11 +98,13 @@ export async function freezeFacts(taskId: string, checkFacts = false): Promise<T
  * 之后收到的停止就会既杀不到也拦不住),而查库的那半边事实只能在它之前的 await 里取。
  */
 export function takeFreeze(taskId: string, facts: TurnFreeze | null = null): TurnFreeze | null {
-  const marked = takeStartFreeze(taskId);
+  const marked = takeStartFreezeDetail(taskId);
   if (marked) {
-    return marked === "canceled"
-      ? { reason: "这一轮已被停止", source: "stop", settle: marked, overrideRestorable: true }
-      : { reason: "所在分组已暂停", source: "group-pause", settle: marked, overrideRestorable: false };
+    if (marked.settle === "canceled") return { reason: "这一轮已被停止", source: "stop", settle: "canceled", overrideRestorable: true };
+    if (marked.hold) {
+      return { reason: dispatchHoldText(marked.hold), source: "dispatch-hold", settle: "paused", overrideRestorable: false, byTaskId: marked.hold.byTaskId };
+    }
+    return { reason: "所在分组已暂停", source: "group-pause", settle: "paused", overrideRestorable: false };
   }
   return facts;
 }
@@ -92,12 +124,13 @@ export async function abortFrozen(
   opts: { restorable?: boolean } = {},
 ): Promise<never> {
   await appendTaskTimeline(taskId, alertLine(`这一轮在启动前被撤回：${freeze.reason}。`)).catch(() => false);
+  if (freeze.source === "dispatch-hold") await oweHeldStart(taskId, freeze.byTaskId);
   if (!opts.restorable || freeze.overrideRestorable) markStopped(taskId, freeze.settle);
   throw new FrozenTurn(freeze.reason);
 }
 
 /** 取事实 + 定论(不撤回)。给只要一个「现在该不该跑」答案的调用方。 */
-export async function turnFreezeReason(taskId: string, checkFacts = false): Promise<TurnFreeze | null> {
+export async function turnFreezeReason(taskId: string, checkFacts: FreezeGuard = false): Promise<TurnFreeze | null> {
   return takeFreeze(taskId, await freezeFacts(taskId, checkFacts));
 }
 

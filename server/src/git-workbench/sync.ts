@@ -1,4 +1,4 @@
-import type { GitAction } from "@ash/shared/git-workbench";
+import type { GitAction } from "@navi/shared/git-workbench";
 import { gitNetInjection } from "../git-credentials.js";
 import { execFileText } from "../exec.js";
 import { gitError } from "../git.js";

@@ -1,5 +1,5 @@
 import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
-import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
+import type { HandoffTarget, ProjectView, TaskListItem } from "@navi/shared";
 import type { TerminalSessionInfo } from "../lib/api.ts";
 import type { OutboundBar } from "./OutboundStatusBar.tsx";
 import {
@@ -41,7 +41,6 @@ export function WorkspaceSidebar({
   onTaskMode,
   onTask,
   onRemoteTask,
-  onTaskStarred,
   onHandoffFinished,
   onQueueChanged,
   outbound,
@@ -74,7 +73,6 @@ export function WorkspaceSidebar({
   onTaskMode: () => void;
   onTask: (task: TaskListItem) => void;
   onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
-  onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
   onQueueChanged: () => void;
   outbound: OutboundBar;
@@ -125,7 +123,7 @@ export function WorkspaceSidebar({
             <SidebarSimple size={17} weight="bold" aria-hidden="true" />
           </button>
           {onAssistant && (
-            <SidebarIconButton className="workspace-assistant-entry" label="ash 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
+            <SidebarIconButton className="workspace-assistant-entry" label="Navi 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
               <AssistantIcon size={18} filled={assistantOpen} />
             </SidebarIconButton>
           )}
@@ -188,7 +186,6 @@ export function WorkspaceSidebar({
         spread={spread}
         onTask={onTask}
         onRemoteTask={onRemoteTask}
-        onTaskStarred={onTaskStarred}
         onHandoffFinished={onHandoffFinished}
         onQueueChanged={onQueueChanged}
         outbound={outbound}
@@ -221,7 +218,7 @@ export function WorkspaceSidebar({
           </SidebarIconButton>
         )}
         {onAssistant && (
-          <SidebarIconButton className="workspace-assistant-entry" label="ash 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
+          <SidebarIconButton className="workspace-assistant-entry" label="Navi 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
             <AssistantIcon size={15} filled={assistantOpen} />
           </SidebarIconButton>
         )}

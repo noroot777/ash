@@ -88,7 +88,7 @@ export async function noteReviewInputAcceptance(
       return;
     } catch (error) {
       if (attempt >= 3) {
-        console.error(`[ash] 任务 ${taskId} 的审查输入回执(${acceptance})没能记到交付凭据上，`
+        console.error(`[navi] 任务 ${taskId} 的审查输入回执(${acceptance})没能记到交付凭据上，`
           + "本进程内照它结算；进程没了就按「送没送进去说不清」收尾:", error);
         return;
       }

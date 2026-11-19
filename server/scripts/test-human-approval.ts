@@ -6,14 +6,15 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Hono } from "hono";
 import type { HumanApprovalKeyFiles } from "../src/auth/human-approval-key.js";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-human-approval-"));
+const root = mkdtempSync(join(tmpdir(), "navi-human-approval-"));
 const keys = generateKeyPairSync("ed25519");
 const publicKey = keys.publicKey.export({ type: "spki", format: "der" }).toString("base64");
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_SUSPECT_TURN_MS = "1";
-process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = publicKey;
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_SUSPECT_TURN_MS = "1";
+process.env.NAVI_HUMAN_APPROVAL_PUBLIC_KEY = publicKey;
 
 const { HumanApprovalAuthority, humanApproval, humanApprovalPublicKeyFile } = await import("../src/auth/human-approval.js");
 const { readTrustedHumanApprovalKeyFile } = await import("../src/auth/human-approval-key.js");
@@ -189,29 +190,29 @@ const assertUnavailable = async (expected: string, excluded: string) => {
   }
   assert.deepEqual(heldTurns().find((turn) => turn.taskId === "target"), heldBeforeConfig);
 };
-delete process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY;
-delete process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE;
+delete process.env.NAVI_HUMAN_APPROVAL_PUBLIC_KEY;
+delete process.env.NAVI_HUMAN_APPROVAL_PUBLIC_KEY_FILE;
 assert.equal(humanApprovalPublicKeyFile(), undefined, "数据目录不再默认充当信任锚");
 await assertUnavailable("补配需要重启服务；重启会清除内存中的回合占位", "无需重启");
 assert.ok((await recentRejectionNotices("target")).some((notice) => notice.action === "申请人工授权" && notice.reason.includes("有效公钥")));
-writeFileSync(`${process.env.ASH_DB}.human-approval.pub`, publicKey);
+writeFileSync(`${process.env.NAVI_DB}.human-approval.pub`, publicKey);
 assert.equal((await requestApproval()).status, 503, "agent 向旧默认位置写自己的公钥不能开启入口");
 const keyFile = join(root, "agent-writable-public-key");
-process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE = keyFile;
-await assertUnavailable("已预配 ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE", "补配需要重启");
+process.env.NAVI_HUMAN_APPROVAL_PUBLIC_KEY_FILE = keyFile;
+await assertUnavailable("已预配 NAVI_HUMAN_APPROVAL_PUBLIC_KEY_FILE", "补配需要重启");
 writeFileSync(keyFile, publicKey);
 await assertUnavailable("符合安全条件的公钥文件可热加载，无需重启", "补配需要重启");
 chmodSync(keyFile, 0o444);
 assert.equal((await requestApproval()).status, 503, "服务自己拥有的只读文件仍能被自己 chmod，不可信");
 chmodSync(keyFile, 0o644);
 assert.deepEqual(heldTurns().find((turn) => turn.taskId === "target"), heldBeforeConfig);
-process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = "invalid-inline-key";
-await assertUnavailable("启动公钥 ASH_HUMAN_APPROVAL_PUBLIC_KEY 无效", "无需重启");
-process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = publicKey;
+process.env.NAVI_HUMAN_APPROVAL_PUBLIC_KEY = "invalid-inline-key";
+await assertUnavailable("启动公钥 NAVI_HUMAN_APPROVAL_PUBLIC_KEY 无效", "无需重启");
+process.env.NAVI_HUMAN_APPROVAL_PUBLIC_KEY = publicKey;
 assert.equal((await app.request("/api/tasks/target/reclaim-turn/approval")).status, 404, "GET 不再创建申请");
 assert.equal((await requestApproval("missing")).status, 404);
 for (const headers of [
-  { "x-ash-source-task-id": "agent" }, { "x-ash-turn-token": "token" },
+  { "x-navi-source-task-id": "agent" }, { "x-navi-turn-token": "token" },
   { origin: "https://other.example" }, { "sec-fetch-site": "cross-site" },
 ]) {
   const rejected = await requestApproval("target", headers);
@@ -234,7 +235,7 @@ for (const path of ["reclaim-turn/approval", "reclaim-turn"]) {
   assert.match((await withoutPage.json() as { error: string }).error, /页面凭据/);
   assert.ok(isTurnClaimed("target"));
 }
-assert.equal((await post("target", validProof, { "x-ash-source-task-id": "agent" })).status, 403);
+assert.equal((await post("target", validProof, { "x-navi-source-task-id": "agent" })).status, 403);
 assert.equal((await post("target", validProof, { origin: "https://other.example" })).status, 403);
 assert.equal((await post("other", validProof)).status, 403, "不能换任务复用");
 assert.equal(isTurnClaimed("target"), true);
@@ -295,7 +296,7 @@ const script = resolve("../scripts/human-approval.mjs");
 const privatePath = join(root, "offline-fixture.pem");
 const generated = spawnSync(process.execPath, [script, "generate", privatePath], { encoding: "utf8" });
 assert.equal(generated.status, 0, generated.stderr);
-assert.match(generated.stdout, /^ASH_HUMAN_APPROVAL_PUBLIC_KEY=/);
+assert.match(generated.stdout, /^NAVI_HUMAN_APPROVAL_PUBLIC_KEY=/);
 assert.equal(spawnSync(process.execPath, [script, "generate", privatePath]).status, 1, "不覆盖私钥");
 const signingNow = Date.now();
 const fixtureAuthority = new HumanApprovalAuthority(generated.stdout.trim().split("=").slice(1).join("="), () => signingNow);
@@ -355,9 +356,9 @@ const unavailableProbe = `
 `;
 for (const configured of ["", "invalid-public-key"]) {
   const unavailable = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", unavailableProbe], {
-    encoding: "utf8", env: { ...process.env, ASH_HUMAN_APPROVAL_PUBLIC_KEY: configured, ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE: join(root, "missing-key") },
+    encoding: "utf8", env: { ...process.env, NAVI_HUMAN_APPROVAL_PUBLIC_KEY: configured, NAVI_HUMAN_APPROVAL_PUBLIC_KEY_FILE: join(root, "missing-key") },
   });
   assert.equal(unavailable.status, 0, unavailable.stderr);
 }
-rmSync(root, { recursive: true, force: true });
+await removeTmpStage(root);
 console.log("human-approval regressions ok");

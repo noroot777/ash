@@ -1,27 +1,28 @@
-// 回合身份(ASH_TASK_ID + 回合令牌 + 方向令牌)怎么进 agent 进程 —— **设和清都只走这里**。
+// 回合身份(NAVI_TASK_ID + 回合令牌 + 方向令牌)怎么进 agent 进程 —— **设和清都只走这里**。
 //
 // 为什么收成一处:这套变量有两类调用点,而它们的正确性是互为镜像的:
 //  · **设**:真任务回合(`task-run.ts` / `orchestrator.ts`)。少一个变量 = agent 交不了卷。
 //  · **清**:不是任务回合的那几条路(侧聊、预览助手、duet 讨论者)。那里**不设不等于没有**
-//    —— 子进程默认继承 server 自己的环境,而 ash 从一个 ash 任务里启动时这几个变量是有值的
-//    (duet 实测收到过**另一个任务**的 `ASH_TASK_ID`)。借来的身份比没有身份更糟:它能拿着去
+//    —— 子进程默认继承 server 自己的环境,而 navi 从一个 navi 任务里启动时这几个变量是有值的
+//    (duet 实测收到过**另一个任务**的 `NAVI_TASK_ID`)。借来的身份比没有身份更糟:它能拿着去
 //    调 `complete_task`。
 //
-// 两类调用点加起来有五处,而变量名本轮多了一套别名(见 `@ash/shared/mcp` 的
-// `ASH_TURN_IDENTITY_ENV`:gemini 按名字过滤带 TOKEN 字样的变量)。名单散在五处的话,
+// 两类调用点加起来有五处,而变量名本轮多了一套别名(见 `@navi/shared/mcp` 的
+// `NAVI_TURN_IDENTITY_ENV`:gemini 按名字过滤带 TOKEN 字样的变量)。名单散在五处的话,
 // 下一次加名字只要漏掉一个「清」的地方,就是一条能借身份的暗路 —— 所以这里只给两个函数,
 // 名单它们自己从 shared 那份常量里取。
 //
 // **身份不止走变量**:还有一条搭 `PATH` 的备用通路,给「只把 PATH 交给 MCP 子进程」的那几家
-// (copilot)。约定本体在 `@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_PATH_DIR`,它和那五个变量
+// (copilot)。约定本体在 `@navi/shared/mcp` 的 `NAVI_TURN_IDENTITY_PATH_DIR`,它和那五个变量
 // 受同一条规矩约束 —— **设和清都只走这里**,所以两个函数各自把 `PATH` 也办了,调用点一个字
 // 都不用改(这正是不加第三个导出函数的理由:加一个就等于在五处之外再开五个漏点)。
 import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import {
-  ASH_TURN_IDENTITY_ENV, ASH_TURN_IDENTITY_ENV_KEYS, ASH_TURN_IDENTITY_FILE,
-  ASH_TURN_IDENTITY_PATH_DIR, isTurnIdentityPathEntry,
-} from "@ash/shared/mcp";
+  NAVI_TURN_IDENTITY_ENV, NAVI_TURN_IDENTITY_ENV_ALL_KEYS, NAVI_TURN_IDENTITY_FILE,
+  NAVI_TURN_IDENTITY_PATH_DIR, isTurnIdentityPathEntry,
+} from "@navi/shared/mcp";
+import { withLegacyEnvNames } from "@navi/shared/env-names";
 import { augmentedEnv } from "./executors/bin-resolve.js";
 import { RUNS_DIR } from "./paths.js";
 
@@ -42,7 +43,7 @@ export interface TurnIdentity {
  * 而那正是它们没有这条桥之前的样子。但要留一行看得见的痕迹,别让它变成静默降级。
  */
 function materializeIdentityDir(id: TurnIdentity): string | null {
-  const root = join(RUNS_DIR, id.taskId, ASH_TURN_IDENTITY_PATH_DIR);
+  const root = join(RUNS_DIR, id.taskId, NAVI_TURN_IDENTITY_PATH_DIR);
   const dir = join(root, id.turnToken);
   try {
     mkdirSync(dir, { recursive: true });
@@ -53,7 +54,7 @@ function materializeIdentityDir(id: TurnIdentity): string | null {
     const body = `${JSON.stringify({
       taskId: id.taskId, turnToken: id.turnToken, directionToken: id.directionToken,
     }, null, 2)}\n`;
-    writeFileSync(join(dir, ASH_TURN_IDENTITY_FILE), body, { encoding: "utf8", mode: 0o600 });
+    writeFileSync(join(dir, NAVI_TURN_IDENTITY_FILE), body, { encoding: "utf8", mode: 0o600 });
     return dir;
   } catch (e) {
     console.warn(`[turn-identity] 回合身份文件没落下来(${dir}):${String(e)} —— `
@@ -72,22 +73,38 @@ function rewritePath(base: string, add: string | null): string | null {
 
 
 /**
+ * 回合身份变量交给智能体时**新旧两代名字同值各一份**(`NAVI_TASK_ID` 和 `ASH_TASK_ID`)。
+ *
+ * 跟交给用户命令的变量同一个道理(`withLegacyEnvNames`):智能体的回合里跑的不只是我们的 MCP ——
+ * 用户自己配的钩子、脚本、升级之前装的工具都按旧名读身份。我们自己这一侧(MCP)按新名优先读,
+ * 两份同值,谁读到都是这一回合的。拆:用户的钩子/脚本都换成新名之后,改回只写新名。
+ */
+export function turnIdentityVars(vars: Readonly<Record<string, string>>): Record<string, string> {
+  return withLegacyEnvNames(vars);
+}
+
+/**
  * 这一回合的身份:五个变量(两套名字同值)+ `PATH` 上那条备用通路。
  *
  * `PATH` 这一段是给「只把 `PATH` 交给 MCP 子进程」的那几家用的(copilot 文档明写其余变量
- * 必须写死在登记里,而写死就是过期的假身份)。约定本体与四条安全要点见 `@ash/shared/mcp`
- * 的 `ASH_TURN_IDENTITY_PATH_DIR`;认得它的是 `mcp/src/runtime.ts`。
+ * 必须写死在登记里,而写死就是过期的假身份)。约定本体与四条安全要点见 `@navi/shared/mcp`
+ * 的 `NAVI_TURN_IDENTITY_PATH_DIR`;认得它的是 `mcp/src/turn-identity.ts`。
  *
- * 底座那份 `PATH` 先过一遍筛子:**ash 自己可能就是从一个 ash 任务里起来的**,那时继承到的
+ * 底座那份 `PATH` 先过一遍筛子:**navi 自己可能就是从一个 navi 任务里起来的**,那时继承到的
  * `PATH` 里带着**那条任务**的身份目录 —— 不筛掉就是一条跨任务借身份的暗路。
  */
-export function turnIdentityEnv(id: TurnIdentity): Record<string, string> {
-  const vars = {
-    [ASH_TURN_IDENTITY_ENV.taskId]: id.taskId,
-    [ASH_TURN_IDENTITY_ENV.turnToken]: id.turnToken,
-    [ASH_TURN_IDENTITY_ENV.directionToken]: id.directionToken,
-    [ASH_TURN_IDENTITY_ENV.turnTicket]: id.turnToken,
-    [ASH_TURN_IDENTITY_ENV.directionTicket]: id.directionToken,
+export function turnIdentityEnv(id: TurnIdentity): Record<string, string | undefined> {
+  const vars: Record<string, string | undefined> = {
+    // 各代名字先全清掉:navi 从一个改名之前的任务里起来时,继承的环境里带着**那条任务**的身份,
+    // 再上一代(`HARNESS_`)的这里不再写,不清就原样留在这一回合的环境里。
+    ...Object.fromEntries(NAVI_TURN_IDENTITY_ENV_ALL_KEYS.map((key) => [key, undefined])),
+    ...turnIdentityVars({
+      [NAVI_TURN_IDENTITY_ENV.taskId]: id.taskId,
+      [NAVI_TURN_IDENTITY_ENV.turnToken]: id.turnToken,
+      [NAVI_TURN_IDENTITY_ENV.directionToken]: id.directionToken,
+      [NAVI_TURN_IDENTITY_ENV.turnTicket]: id.turnToken,
+      [NAVI_TURN_IDENTITY_ENV.directionTicket]: id.directionToken,
+    }),
   };
   const path = rewritePath(augmentedEnv().PATH ?? "", materializeIdentityDir(id));
   return path === null ? vars : { ...vars, PATH: path };
@@ -103,14 +120,11 @@ export function withoutTurnIdentity<T extends Record<string, string | undefined>
   env: T,
 ): T & Record<string, string | undefined> {
   const out: Record<string, string | undefined> = { ...env };
-  for (const key of ASH_TURN_IDENTITY_ENV_KEYS) out[key] = undefined;
+  for (const key of NAVI_TURN_IDENTITY_ENV_ALL_KEYS) out[key] = undefined;
   // `PATH` 上那条通路也要摘干净,道理和上面那段注释一字不差:子进程默认继承 server 自己的
-  // 环境,而 ash 从一个 ash 任务里启动时那份 `PATH` 里**就带着**那条任务的身份目录。
+  // 环境,而 navi 从一个 navi 任务里启动时那份 `PATH` 里**就带着**那条任务的身份目录。
   // 没有可摘的就一个字都不动 —— 这几条路的行为必须与这条桥上线前逐字节一致。
   const path = rewritePath(out.PATH ?? augmentedEnv().PATH ?? "", null);
   if (path !== null) out.PATH = path;
   return out as T & Record<string, string | undefined>;
 }
-
-/** MCP 子进程要拿到的那几个变量名(codex 的 `env_vars` 白名单按它声明)。 */
-export const TURN_IDENTITY_ENV_KEYS = ASH_TURN_IDENTITY_ENV_KEYS;

@@ -1,7 +1,7 @@
 import { cleanupDetail, cleanupSettled, type CleanupResult } from "./executors/kill.js";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import type { SteerText } from "./executors/types.js";
-import type { CliCommand, CliGoal } from "@ash/shared/cli-commands";
+import type { CliCommand, CliGoal } from "@navi/shared/cli-commands";
 import { RECONCILE_TURN_ROLE, claimNonTurn, whenTurnIdle } from "./turn-lock.js";
 import { acknowledgeStartReceipt, registerStartReceipt } from "./task-start-receipt.js";
 import { markTaskActionsDirty } from "./task-actions-dirty.js";
@@ -12,7 +12,7 @@ import { markTaskActionsDirty } from "./task-actions-dirty.js";
 export {
   ACCEPT_HOLD_ROLE, bindTurnToken, claimAcceptanceHold, claimIdleWorkspaceTurns, claimOwnTurn, claimTurn, claimWakeTurn,
   claimWorkspaceTurn, freezeStartingTurn, heldForAcceptance, isTurnClaimed, reclaimTurn, turnBusyText,
-  releaseHeldTurn, releaseTurn, SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, turnIdentity,
+  releaseHeldTurn, releaseTurn, SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, takeStartFreezeDetail, turnIdentity,
   turnRole, turnSourceReview, turnSourceRole, waitForTurnIdle, whenTurnIdle,
 } from "./turn-lock.js";
 export type { TurnIdentity, TurnOwner, TurnReview, TurnSource } from "./turn-lock.js";
@@ -150,10 +150,10 @@ export async function finalizeAbandonedRun(h: Killable): Promise<void> {
     // 「不许放手」的出口之一)。责任本身已经由 `cleanupAfterRun` 落进 `agent_cleanup_debts`,
     // 开机清扫会再追;这里的日志是给当场看日志的人的那一行。
     if (result && !cleanupSettled(result)) {
-      console.warn(`[ash] 无主回合的后代还不能证明收干净:${cleanupDetail(result)}`);
+      console.warn(`[navi] 无主回合的后代还不能证明收干净:${cleanupDetail(result)}`);
     }
   } catch (error) {
-    console.warn("[ash] 回收无主回合的 CLI 后代失败:", error);
+    console.warn("[navi] 回收无主回合的 CLI 后代失败:", error);
   }
 }
 
@@ -224,7 +224,7 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
         // provider 已确认收到以后，消息就已经是真实投递；实时广播失败不能把它退回队列
         // 再投一次，否则同一句会进入模型两遍。
         try { target.record(text, at); } catch (error) {
-          console.warn(`[ash] 原生引导已送达，但会话记录失败 ${taskId}:`, error);
+          console.warn(`[navi] 原生引导已送达，但会话记录失败 ${taskId}:`, error);
         }
       } finally {
         release();

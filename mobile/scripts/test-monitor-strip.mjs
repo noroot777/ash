@@ -114,8 +114,8 @@ try {
   await page.getByRole("button", { name: "切A", exact: true }).click();
   await stopA.waitFor();
   await page.evaluate(() => window.mock.stopReject(new Error("受控网络失败")));
-  await page.waitForTimeout(100);
-  assert.equal(await stopA.isDisabled(), false, "切走再切回来之后，停止按钮不该还灰着（不重新挂载也能再按）");
+  // 切走再切回来之后，停止按钮不该还灰着（不重新挂载也能再按）：等它放开，不赌 100ms 内渲染完。
+  await page.waitForFunction(() => document.querySelector('button[aria-label="停掉哨兵「任务A的监听」"]')?.disabled === false);
   assert.equal(
     await page.evaluate(() => window.mock.alerts.length), 1,
     "切走之后那次失败不该弹到新一屏上（提示仍只有最初那一条确认框）",
@@ -125,8 +125,8 @@ try {
   await page.evaluate(() => { window.mock.deferredPoll = true; window.mock.polls.at(-1)(); });
   await confirmStop(stopA, "停掉哨兵「任务A的监听」");
   await page.evaluate(() => { window.mock.lists.A = []; window.mock.stopResolve(); });
-  await page.waitForTimeout(100);
-  assert.equal(await stopA.count(), 0, "停掉之后那一发 reload 返回空列表，卡片该消失");
+  // 停掉之后那一发 reload 返回空列表，卡片该消失。
+  await stopA.waitFor({ state: "detached" });
   await page.evaluate(() => window.mock.pollResolve([
     { id: "mon-A", taskId: "A", kind: "ash", status: "running", description: "任务A的监听", events: 1 },
   ]));

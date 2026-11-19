@@ -1,4 +1,4 @@
-// 接力**出站**侧的对端客户端:所有发往另一台 ash 的请求都从这里出去。
+// 接力**出站**侧的对端客户端:所有发往另一台 navi 的请求都从这里出去。
 //
 // 两件事,缺一不可:
 //   1. **签名**每一个请求(方法+路径+时间戳+nonce+body 哈希,ed25519)。对端据此确认
@@ -10,8 +10,8 @@
 //      之后每次预检/导出都先核对,对不上就**拒绝打包**,连探测都不往下走。
 //
 // 入站方向(谁能推进本机)在 handoff-peers.ts。
-import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity } from "@ash/shared";
-import { HANDOFF_CAPABILITY_BLOCKED, HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
+import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity } from "@navi/shared";
+import { HANDOFF_CAPABILITY_BLOCKED, HANDOFF_PEER_KEY_REQUIRED } from "@navi/shared/handoff";
 import { getAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffPingResponse } from "./handoff-types.js";
@@ -20,6 +20,8 @@ import {
   sameFingerprint, sha256Hex, shortFingerprint, signWithLocalKey, verifyWithPeerKey,
 } from "./handoff-identity.js";
 import { PEER_HEADERS } from "./handoff-peers.js";
+import { hasHandoffTrustedMark, isHandoffService } from "./handoff-wire.js";
+import { headerNameGenerations, withLegacyHeaderNames } from "@navi/shared/http-headers";
 import { sealForPeer } from "./handoff-crypto.js";
 import { handoffActorId, peerUserKeyHeader } from "./auth/handoff-outbound.js";
 import { localModeTag, PEER_USER_KEY_HEADER } from "./auth/handoff-peer-user.js";
@@ -48,7 +50,8 @@ export function peerRequestHeaders(url: string, method: string, body: string | B
     nonce,
     bodyHash: sha256Hex(body),
   });
-  return {
+  // 新旧两代名字各发一份:对端可能还是改名之前的版本,它只认旧名(见 handoff-wire.ts)。
+  return withLegacyHeaderNames({
     [PEER_HEADERS.key]: identity.publicKey,
     [PEER_HEADERS.sig]: signWithLocalKey(canonical),
     [PEER_HEADERS.ts]: ts,
@@ -56,7 +59,7 @@ export function peerRequestHeaders(url: string, method: string, body: string | B
     // HTTP 头只装 ByteString:主机名里有中文(中文 Windows 上是常态)直接 percent
     // 编码,不然 fetch 在构造请求头那一刻就抛,整条接力起都起不来。
     [PEER_HEADERS.host]: encodeURIComponent(hostname()).slice(0, 180),
-  };
+  });
 }
 
 export async function fetchPeer<T>(
@@ -69,7 +72,7 @@ export async function fetchPeer<T>(
   // 信封是二进制帧(不再 base64),所以 content-type 也要跟着换。
   const body = init?.sealTo ? sealForPeer(init.sealTo.kx, init.sealTo.fingerprint, plain) : plain;
   const suppliedHeaders = new Headers(init?.headers);
-  suppliedHeaders.delete(PEER_USER_KEY_HEADER);
+  for (const name of headerNameGenerations(PEER_USER_KEY_HEADER)) suppliedHeaders.delete(name);
   const headers: Record<string, string> = {
     ...Object.fromEntries(suppliedHeaders),
     // 多人模式:带上「我在对端的账号 key」。机器级签名只证明「哪台机器」,这一头才
@@ -77,7 +80,7 @@ export async function fetchPeer<T>(
     ...(await peerUserKeyHeader(url, init?.expectedPeerFp ?? init?.sealTo?.fingerprint)),
     // 自报实例模式,好让对端**知情批准**(§十一)。不进签名:它本来就是自报的,
     // 签了也只是"经过完整性校验的自我声明",拿它当权限判据仍旧不成立。
-    [PEER_HEADERS.mode]: await localModeTag(),
+    ...withLegacyHeaderNames({ [PEER_HEADERS.mode]: await localModeTag() }),
   };
   // Buffer 不在 fetch 的 BodyInit 里(DOM 的 BufferSource 只收非共享的 ArrayBuffer),
   // 套一层零拷贝视图交出去 —— 签名仍按同一串字节算。
@@ -96,23 +99,23 @@ export async function fetchPeer<T>(
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new HandoffError(`连不上对端 ash（${url}）：${msg}`, 502, true);
+    throw new HandoffError(`连不上对端 Navi（${url}）：${msg}`, 502, true);
   }
   const payload = (await res.json().catch(() => null)) as
-    { error?: string; ash?: boolean; code?: string } | null;
+    { error?: string; code?: string; [mark: string]: unknown } | null;
   if (!res.ok) {
-    // 只有带 ash 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
+    // 只有带 navi 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
     // 没有标记的非 2xx 可能是中间网关在对端已处理成功后伪造的(上游读超时回 502 等),
     // 按网络类失败(network=true)处理,让调用方保留 pending 而不是回滚——宁可让用户
     // 多点一次收口重试,也不能让同一个任务在两台机器上各跑一份。
-    // 鉴权拒绝(401/403)一律带 ash 标记,确实什么都没导入,回滚才是对的。
+    // 鉴权拒绝(401/403)一律带 navi 标记,确实什么都没导入,回滚才是对的。
     const error = new HandoffError(
       `对端返回 ${res.status}：${payload?.error ?? "未知错误"}`,
       502,
-      payload?.ash !== true,
+      !hasHandoffTrustedMark(payload),
     );
     error.remoteStatus = res.status;
-    error.remoteAsh = payload?.ash === true;
+    error.remoteNavi = hasHandoffTrustedMark(payload);
     // 原因码穿透这一跳:「对端不认识你这把 key」是对端才知道的事实,可本机的界面才是
     // 能补 key 的地方。只认白名单里的码 —— 对端是外部输入,不能让它往前端塞任意字符串。
     // 能力握手的拒绝同样要穿透:一键移回是**对端**在跑导出,而能勾「仍然接力」的界面
@@ -129,6 +132,27 @@ export async function fetchPeer<T>(
   return payload as T;
 }
 
+// 对端 navi 刚重启时，本机连接池里可能还留着通往旧进程的长连接：请求写进一条对面早已关掉的
+// 连接，拿到的是「other side closed」/ECONNRESET 而不是应答，探测就被记成「核对不过」——
+// 用户再点一次才好。下面两个探测都是只读的（不带本机签名、不改对端任何状态），这类连接层
+// 错误就换一条新连接再试**一次**。拿到了应答（哪怕验签不过）、超时、连不上，都不重试。
+const STALE_CONNECTION_CODES = new Set(["UND_ERR_SOCKET", "UND_ERR_CLOSED", "ECONNRESET", "EPIPE"]);
+
+function staleConnection(error: unknown): boolean {
+  const code = (error instanceof Error ? error.cause as { code?: unknown } | undefined : undefined)?.code;
+  return typeof code === "string" && STALE_CONNECTION_CODES.has(code);
+}
+
+async function fetchReadOnlyProbe(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const attempt = () => fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  try {
+    return await attempt();
+  } catch (error) {
+    if (!staleConnection(error)) throw error;
+    return await attempt();
+  }
+}
+
 /**
  * 只读取目标机公开身份，不带本机签名、不携带任务 id，也不会触发对端 touchPeer。
  * 批量弹窗用它把用户填写的主机名/IP 映射到 marker 指纹；正式预检仍会做签名挑战。
@@ -137,10 +161,10 @@ export async function probePeerIdentity(rawTargetUrl: string, timeoutMs = 2_000)
   const url = `${normalizePeerUrl(rawTargetUrl)}/api/handoff/identity`;
   let response: Response;
   try {
-    response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    response = await fetchReadOnlyProbe(url, {}, timeoutMs);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new HandoffError(`连不上对端 ash（${url}）：${message}`, 502, true);
+    throw new HandoffError(`连不上对端 Navi（${url}）：${message}`, 502, true);
   }
   const body = (await response.json().catch(() => null)) as Partial<HandoffIdentity> | null;
   if (!response.ok || !body || typeof body.fingerprint !== "string"
@@ -175,13 +199,12 @@ export async function probeSignedPeerFingerprint(
   try { base = normalizePeerUrl(rawTargetUrl); } catch { return null; }
   const nonce = newNonce();
   try {
-    const response = await fetch(`${base}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`, {
+    const response = await fetchReadOnlyProbe(`${base}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`, {
       redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    }, timeoutMs);
     if (!response.ok) return null;
     const ping = (await response.json().catch(() => null)) as HandoffPingResponse | null;
-    if (!ping?.ok || ping.service !== "ash") return null;
+    if (!ping?.ok || !isHandoffService(ping.service)) return null;
     const identity = ping.identity;
     if (!identity?.publicKey || !identity.sig) return null;
     if (!verifyWithPeerKey(identity.publicKey, canonicalPingChallenge(nonce, identity.kxPublicKey), identity.sig)) {
@@ -212,7 +235,7 @@ export interface HandoffReturnContext {
 }
 
 const identityRecoveryGuidance = (returnContext?: HandoffReturnContext): string => returnContext
-  ? "任务来源指纹保存在这条任务的接力记录里，设置页没有可清除项。确认是同一台来源机时，请先恢复来源机原来的 ash 数据和身份；若身份无法恢复，不要忽略校验直接移回，应在本机继续任务并手工迁移。"
+  ? "任务来源指纹保存在这条任务的接力记录里，设置页没有可清除项。确认是同一台来源机时，请先恢复来源机原来的 Navi 数据和身份；若身份无法恢复，不要忽略校验直接移回，应在本机继续任务并手工迁移。"
   : "确认无误再到「设置 → 默认规则」清掉记住的指纹重新配对。";
 
 /**
@@ -257,8 +280,8 @@ export async function pingPeer(
     taskScopedReturn = false;
     ping = await fetchPeer<HandoffPingResponse>(plainPing, { expectedPeerFp: expectedFp });
   }
-  if (!ping?.ok || ping.service !== "ash") {
-    throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
+  if (!ping?.ok || !isHandoffService(ping.service)) {
+    throw new HandoffError("对端不是 Navi（/api/handoff/ping 应答不对）", 502);
   }
   // 对端是多人实例、而这次没认出我是谁(没配 key 或 key 已失效):在这里就说清楚。
   // 不说的话用户看到的是「对端一个项目都没有」——那是最容易被误读成「对端没建项目」

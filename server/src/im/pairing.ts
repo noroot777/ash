@@ -1,4 +1,4 @@
-// 新设备申请连进这台 ash 时（自用模式，auth/remote-pairing.ts），给机主的飞书单聊推一张带「允许 / 拒绝」的卡：
+// 新设备申请连进这台 navi 时（自用模式，auth/remote-pairing.ts），给机主的飞书单聊推一张带「允许 / 拒绝」的卡：
 // 人不在电脑前也能把自己的另一台设备放进来。
 //
 // 卡和网页顶条说的是同一张申请，哪边先点算哪边。卡上那件事没了就把卡收起来，和任务的决策卡一个路数 —— 不按
@@ -9,7 +9,7 @@
 // `/api/remote-access/requests/:id/approve|deny`。那一下正办着的卡这里不碰：结局由那一下自己落。
 import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import type { PairRequestView } from "@ash/shared";
+import type { PairRequestView } from "@navi/shared";
 import { isMultiUser } from "../auth/mode.js";
 import { onPairEvent, PAIR_REQUEST_TTL_MS, pendingPairRequests, type PairEvent } from "../auth/remote-pairing.js";
 import { db } from "../db/index.js";
@@ -38,12 +38,12 @@ export class PairingCards {
   start(): void {
     this.unsubscribe = onPairEvent((event) => {
       const work = event.kind === "opened" ? this.push(event.request) : this.settle(event);
-      void work.catch((error) => console.error("[ash] 飞书配对卡出错:", error));
+      void work.catch((error) => console.error("[navi] 飞书配对卡出错:", error));
     });
     void (async () => {
       for (const request of pendingPairRequests()) await this.push(request);
       await this.settle();
-    })().catch((error) => console.error("[ash] 飞书配对卡初次对账出错:", error));
+    })().catch((error) => console.error("[navi] 飞书配对卡初次对账出错:", error));
   }
 
   stop(): void {
@@ -87,7 +87,7 @@ export class PairingCards {
     reconciler.kick();
     const timer = setTimeout(() => {
       this.timers.delete(timer);
-      void this.settle().catch((error) => console.error("[ash] 飞书配对卡到期收卡出错:", error));
+      void this.settle().catch((error) => console.error("[navi] 飞书配对卡到期收卡出错:", error));
     }, ttlMs + 1_000);
     timer.unref?.();
     this.timers.add(timer);
@@ -107,7 +107,7 @@ export class PairingCards {
         const pressing = await db.select({ id: imActions.id }).from(imActions)
           .where(and(eq(imActions.outboxId, row.id), isNotNull(imActions.usedAt), isNull(imActions.result)));
         if (pressing.length) continue;
-        const text = decided?.id !== row.subject ? "这张申请失效了：过期了，或者 ash 重启过。"
+        const text = decided?.id !== row.subject ? "这张申请失效了：过期了，或者 Navi 重启过。"
           : decided.approved ? "已在别处允许这台设备连接。" : "已在别处拒绝。";
         await reconciler.resolve(row, text, null);
       }

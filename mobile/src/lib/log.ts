@@ -1,10 +1,10 @@
 // Display model for a task's conversation. The transcript is parsed from each
-// session's persisted .md — parseSessionOutput lives in @ash/shared so web and
+// session's persisted .md — parseSessionOutput lives in @navi/shared so web and
 // mobile agree on the format: agent prose becomes a "text" line (Conversation
 // merges consecutive ones into one bubble); the interleaved 你→ / 〔系统〕 turns keep
 // their timestamp and get a unique sessionId so each renders as its own bubble.
-import type { AgentType, SessionNotice } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import type { AgentType, SessionNotice } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user" | "system";

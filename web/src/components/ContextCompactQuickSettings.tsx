@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { CaretDown, Sliders } from "@phosphor-icons/react";
-import type { AgentExecutorProfile, LlmProvider, Session } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider, Session } from "@navi/shared";
 import {
   cliConfigOverrideConflict,
   cliConfigOverrideHints,
   hasCliConfigOverrides,
-} from "@ash/shared/cli-overrides";
-import { claudeModelWindow } from "@ash/shared/context-1m";
+} from "@navi/shared/cli-overrides";
+import { claudeModelWindow } from "@navi/shared/context-1m";
 import { api } from "../lib/api.ts";
 import { fmtOverrideValue, useCliOverrideDraft } from "../lib/cliOverrideDraft.ts";
 import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";

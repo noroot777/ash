@@ -46,7 +46,7 @@ export interface PreviewCandidate {
   command: string;
   /**
    * 这东西是「拿来看的」还是「给别人当后台的」。只影响一件事：一份前后端并排的仓库里，
-   * 组合示例该把谁放在最后（ash 打开的是主角端口上那个，也就是最后那个）。
+   * 组合示例该把谁放在最后（navi 打开的是主角端口上那个，也就是最后那个）。
    */
   kind: "web" | "service";
   /** 静态文件可能来自旧构建，候选即使唯一也先展示给用户确认。 */
@@ -77,7 +77,7 @@ function read(path: string): string | null {
  *
  * 「随便挑一种、剩下的听天由命」是不行的：给 vite 塞 `PORT` 它照样起在配置里那个端口上
  * （vite 6 实测），给一个只认 `PORT` 的程序塞 `--port` 则直接报未知参数。两种错法都是
- * 「ash 借了端口、命令没吃」——用户看到的是预览起在一个谁也没约定的端口上。
+ * 「navi 借了端口、命令没吃」——用户看到的是预览起在一个谁也没约定的端口上。
  */
 type PortDelivery =
   | { via: "env"; name: string; template: string }
@@ -96,7 +96,7 @@ const INLINE: PortDelivery = { via: "inline" };
 /**
  * 「主角端口」要以哪些名字递进去（`{port}` 换成真端口后由 preview.ts 注入环境）。
  *
- * 一个端口、一串名字，因为**每种运行时读的变量名都不一样**，而 ash 事先并不知道这条命令
+ * 一个端口、一串名字，因为**每种运行时读的变量名都不一样**，而 navi 事先并不知道这条命令
  * 是哪门语言 —— 填过「预览命令」的项目根本不走下面的识别，那条命令可以是任何东西。多注
  * 几个名字的代价只是日志头长一点；漏注一个的代价是那门语言的预览一律起在写死的端口上。
  *
@@ -177,7 +177,7 @@ function where(rel: string): string {
  *
  * 这条不是推测，是实测（vite 6）：`PORT=41111 vite` 起在配置里写的 3000 上，`vite --port
  * 41111` 才落到 41111 —— 而 `port: Number(env.VITE_APP_PORT || 3000)` 正是 vite 项目最常见的
- * 写法。也就是说，只给环境变量的话，ash 借的端口对**整个 vite 生态**都是白借的：命令起在
+ * 写法。也就是说，只给环境变量的话，navi 借的端口对**整个 vite 生态**都是白借的：命令起在
  * 一个谁也没约定的端口上，「借出去的端口连得上就是它」这条就绪判据（preview.ts）当场失效。
  *
  * 反过来也不能一律加 `--port`：Next / CRA / Nest / Nuxt / Express 认 `PORT`，多给一个未知
@@ -217,7 +217,7 @@ function nodeCandidates(shell: PreviewShell, dir: string, rel: string): PreviewC
   //     当成配置了），必须写 `npm run dev -- --port 3000` 才是 `["--port","3000"]`。
   //   · pnpm 反过来：`pnpm run dev --port 3000` 就是 `["--port","3000"]`，多写一个 `--`
   //     反而**把分隔符本身也透传给脚本** —— 实测 `["--","--port","3000"]`。vite 收到一个
-  //     多余的 `--` 后就不认后面那个 `--port` 了，于是 ash 借的随机端口白借：它照配置里
+  //     多余的 `--` 后就不认后面那个 `--port` 了，于是 navi 借的随机端口白借：它照配置里
   //     写死的端口起，撞车（a4sms-front 就是这样一直起在 4000 上）。
   //   · yarn 1 直接透传，不要 `--`。
   const command = pm === "npm" ? `${base} -- --port {port}` : `${base} --port {port}`;
@@ -498,12 +498,12 @@ export function detectPreviewCandidates(root: string, shell: PreviewShell = prev
 /**
  * 前后端并排的仓库里，「一条命令同时起几个」该怎么写。
  *
- * 这是多模块项目真正卡住的地方，而且卡的不是命令怎么写，是**端口**：ash 借的端口是随机的
+ * 这是多模块项目真正卡住的地方，而且卡的不是命令怎么写，是**端口**：navi 借的端口是随机的
  * （不随机就会跟用户自己那份、跟另一个任务的预览撞车），可前端要在启动那一刻就知道后端
- * 落在哪儿。谁也猜不到谁，只有借端口的那个人能同时告诉两边 —— 所以 ash 一次借一串，
+ * 落在哪儿。谁也猜不到谁，只有借端口的那个人能同时告诉两边 —— 所以 navi 一次借一串，
  * 主角吃 `PORT`，配角吃 `PORT2…` / `URL2…`（见 preview.ts 的 portEnv）。
  *
- * 生成的示例把配角丢后台、要看的那个放最后（ash 打开的是主角端口上那个）。前端拿什么
+ * 生成的示例把配角丢后台、要看的那个放最后（navi 打开的是主角端口上那个）。前端拿什么
  * 变量名去认后端地址是它自己的事（vite 项目多半是 `VITE_*_URL`），这里只能把 `URL2`
  * 递到手边并说清楚 —— 替他猜变量名只会写出一条看着像对的假命令。
  *
@@ -528,7 +528,7 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
       + "dotnet run、Laravel 的 artisan、Rails 的 bin/rails 和明确的静态 HTML 产物都找过了）。\n"
       + "请在「设置 → 项目设置 → 预览 → 自定义脚本」里填写启动脚本 —— 任何语言都行，"
       + "它在任务工作区根目录用你自己的 shell 执行，可以带 cd。\n"
-      + `端口从 ash 借的那个来：命令里写 \`${port}\`，或者让它读这些环境变量之一（${PORT_ENV_ALIASES.map((a) => a.name).join(" / ")}）。`;
+      + `端口从 Navi 借的那个来：命令里写 \`${port}\`，或者让它读这些环境变量之一（${PORT_ENV_ALIASES.map((a) => a.name).join(" / ")}）。`;
   }
   const list = candidates.map((c) => `  · ${c.label}\n    ${c.command}`).join("\n");
   if (candidates.every((c) => c.requiresSelection)) {
@@ -537,7 +537,7 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
       + "到「设置 → 项目设置 → 预览 → 选择服务」点击检测并勾选所需服务，保存后再打开预览。";
   }
   const combined = combinedExample(shell, candidates);
-  return `这个工作区里认出了 ${candidates.length} 个能起服务的东西，ash 不替你挑`
+  return `这个工作区里认出了 ${candidates.length} 个能起服务的东西，Navi 不替你挑`
     + "（挑错的话你会对着另一个服务验收自己的改动）：\n"
     + `${list}\n`
     + "到「设置 → 项目设置 → 预览 → 选择服务」点击检测并勾选所需服务，也可以在「自定义脚本」里填写启动方式。保存后，任务按这份配置打开预览。\n"
@@ -546,7 +546,7 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
         + `要看的那个放最后用 \`${port}\`。\n`
         + `    ${combined}\n`
         + `前端得知道后端地址的话，把 \`${shell.ref("URL2")}\`（= \`http://localhost:${shell.ref("PORT2")}\`）递给它自己认的那个变量，`
-        + `例如 \`${shell.withEnv("VITE_APP_API_URL", shell.ref("URL2"), "pnpm run dev")}\` —— 变量名看你前端读的是哪个，ash 不替你猜。\n`
+        + `例如 \`${shell.withEnv("VITE_APP_API_URL", shell.ref("URL2"), "pnpm run dev")}\` —— 变量名看你前端读的是哪个，Navi 不替你猜。\n`
       : "")
     + "上面的命令是各自最常见的写法，你的项目另有讲究就照着改"
     + "（例如 Maven 多模块首次跑要先把依赖模块装进本地仓库：`mvn -pl <模块> -am install -DskipTests`）。";

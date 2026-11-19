@@ -8,8 +8,9 @@
 // 没做 SSE 推送：备忘是**人自己写给自己看的**，不会有第二个来源在后台改它（agent 碰不到
 // 这张表）。多开一个标签页的话另一页要刷新才同步 —— 为这点代价开一条实时通道不划算。
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import type { TaskMemo } from "@ash/shared/task-memo";
+import type { TaskMemo } from "@navi/shared/task-memo";
 import { api } from "../lib/api.ts";
+import type { TaskMemoContent } from "../lib/apiTaskMemos.ts";
 
 export type TaskMemoState = {
   memos: readonly TaskMemo[];
@@ -144,8 +145,8 @@ export async function reloadTaskMemos(taskId: string): Promise<void> {
  * **不需要 `onlyMine` 那道仲裁**：它加的是一行新的，没有「谁覆盖谁」—— 期间别的写落地
  * 了也只是让 `current.memos` 更新，把新行并进去仍然对。
  */
-export async function addTaskMemo(taskId: string, body: string): Promise<TaskMemo> {
-  const memo = await api.createTaskMemo(taskId, body);
+export async function addTaskMemo(taskId: string, content: TaskMemoContent): Promise<TaskMemo> {
+  const memo = await api.createTaskMemo(taskId, content);
   confirmWrite(taskId);
   const current = snapshot(taskId);
   // 新的那条排在最前：撞 id 时（读取快照已经含它）sorted 留的就是这份权威应答。
@@ -153,9 +154,9 @@ export async function addTaskMemo(taskId: string, body: string): Promise<TaskMem
   return memo;
 }
 
-export async function editTaskMemo(taskId: string, memoId: string, body: string): Promise<TaskMemo> {
+export async function editTaskMemo(taskId: string, memoId: string, content: TaskMemoContent): Promise<TaskMemo> {
   const writtenAt = writes.get(taskId) ?? 0;
-  const memo = await api.updateTaskMemo(taskId, memoId, body);
+  const memo = await api.updateTaskMemo(taskId, memoId, content);
   confirmWrite(taskId);
   if (!onlyMine(taskId, writtenAt)) {
     void reloadTaskMemos(taskId);

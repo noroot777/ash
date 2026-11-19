@@ -5,7 +5,7 @@
 //
 // 等价说法:身份没落库 ⇒ 那条命令一个字都没跑过。它不是讲究,是第 7 轮审查 F3 实测的那一幕
 // 的根:原来的顺序是「先 spawn,再 insert」——
-//   1. 命令已经独立跑起来了,ash 才去登记;
+//   1. 命令已经独立跑起来了,navi 才去登记;
 //   2. 登记失败时只能**事后**追它(落责任 → 发信号 → 追到线索空 → 收档);
 //   3. 而当身份查询那一刻也不可用、责任表又写不进去时(两张表都被注入写失败),那个进程的
 //      唯一线索只剩 `scheduleReclaimPersist` 的内存参数 —— unref 定时器,活不过服务退出;
@@ -49,9 +49,9 @@
 // (判据已收紧在 proc.ts 的 `unverifiable` 档)。所以这里**拒绝**:身份问不全就不放行,
 // 而那一刻要收掉的进程由**句柄**证明所有权,不经过 pid 身份那条路。
 import { desc, eq } from "drizzle-orm";
-import { MONITOR_MAX_PER_TASK, MONITOR_MAX_TIMEOUT_MS, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
-import { neverExitsVerdict } from "@ash/shared/command-never-exits";
-import { endConditionAdvice, endConditionDemand, parseEndCondition } from "@ash/shared/monitor-end-condition";
+import { MONITOR_MAX_PER_TASK, MONITOR_MAX_TIMEOUT_MS, OWN_MONITOR_KIND, normalizeMonitorTimeout, type TaskMonitor } from "@navi/shared/monitor";
+import { neverExitsVerdict } from "@navi/shared/command-never-exits";
+import { endConditionAdvice, endConditionDemand, parseEndCondition } from "@navi/shared/monitor-end-condition";
 import { db } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
@@ -148,7 +148,7 @@ const detail = (e: unknown): string => (e instanceof Error ? e.message : String(
  */
 export async function startMonitor(input: StartMonitorInput): Promise<StartMonitorResult> {
   // 参数一律在**起进程之前**校验并规范化。顺序反过来的话，一个 description: 7 就能让
-  // trim 抛在 spawn 之后：进程已经脱离 ash 跑起来了，记录却没落，于是它既不在列表里、
+  // trim 抛在 spawn 之后：进程已经脱离 navi 跑起来了，记录却没落，于是它既不在列表里、
   // 也没有到期定时器，谁都停不掉（第 1 轮审查复现：HTTP 500 + 一个无主的 shell 还活着）。
   const command = text(input.command);
   if (!command) return { ok: false, status: 400, error: "command 不能为空" };
@@ -291,12 +291,12 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       resultHandoffAt: null,
       resultHandoffText: null,
       ownerUserId: input.ownerUserId ?? null,
-      kind: "ash",
+      kind: OWN_MONITOR_KIND,
       nativeId: null,
       cliSessionId: null,
       // 只有 claude 投影才有「起它的那个 tool_use」。
       toolUseId: null,
-      // 代次结论与起点下界都是 claude 投影那一侧的事：ash 自己 spawn 的进程有真 pid，
+      // 代次结论与起点下界都是 claude 投影那一侧的事：navi 自己 spawn 的进程有真 pid，
       // 起点就是 spawn 那一刻（见 schema-monitors.ts）。
       sourceRun: null,
       startLowAt: null,
@@ -313,14 +313,14 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // **哪一次**:同一轮会被用户重跑(`reopenFailedFreeReview` 换证据代次),run 和轮次两样
       // 都不变 —— 少了这一位,上一次的收尾会把这一行当成自己的哨兵停掉(见 schema-monitors.ts)。
       sourceReviewGeneration: source.reviewGeneration ?? null,
-      // ash 自己起的：期限是它自己定的，当然知道。
+      // navi 自己起的：期限是它自己定的，当然知道。
       sourceLifetime: "bounded",
-      // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，
+      // navi 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，
       // 代次由 pid/pidStartedAt 两列（上面）记着，不走 claude 投影那套来源代次。
       lifetimeEvidence: "self",
       sourcePid: null,
       sourcePidStartedAt: null,
-      // ash 自己 spawn 的，起点就是这一刻，没有不确定性 —— 误差界 0。两列成对写：少了误差界
+      // navi 自己 spawn 的，起点就是这一刻，没有不确定性 —— 误差界 0。两列成对写：少了误差界
       // 这一行就「无法重验」，对外会丢掉期限（见 shared 的 monitorStartTrusted）。
       startEvidence: "observed",
       startAnchorWidthMs: 0,
@@ -366,7 +366,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     let announced = false;    // 时间线上那句「哨兵已起」写出去了吗(失败时要追一句更正)
     try {
       // ③-0 **交接要可恢复**。闸和身份边条两样都没有时(只可能是 win32 + 边条写失败),这条
-      //      命令可能已经开工,而 ash 这一刻要是没了就再没有东西能定位它 —— 重启枚举的是
+      //      命令可能已经开工,而 navi 这一刻要是没了就再没有东西能定位它 —— 重启枚举的是
       //      monitors(pid 还空着)和边条(没写成),两边都指不到那个进程。带着这种交接放行等于
       //      把「以后谁都收不掉它」写进系统,所以拒(第 10 轮审查 F2-C;判据在 spawn 层的
       //      `handoverRecoverable`)。要收的那个进程由**句柄**证明所有权,不经过 pid 那条路。
@@ -375,7 +375,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
         await noteProcessClue(row, null);
         return await abandonRegistration(
           row,
-          "这次开工交接恢复不了（这一侧没有放行闸，身份边条也写不下来），ash 一重启就再也定位不到它，所以不放行",
+          "这次开工交接恢复不了（这一侧没有放行闸，身份边条也写不下来），Navi 一重启就再也定位不到它，所以不放行",
           spawned,
         );
       }

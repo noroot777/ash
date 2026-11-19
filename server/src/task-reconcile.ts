@@ -1,7 +1,7 @@
 // 重启后收拾被打断的任务（从 orchestrator.ts 拆出，纯行数拆分）。
 // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序），理由见函数注释。
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, tasks } from "./db/schema.js";
 import { recordTurnSpan } from "./session-turns.js";
@@ -66,7 +66,7 @@ export async function reconcileInterrupted(): Promise<void> {
   }
   if (!failed && !followUps && !pendingAdvances && !teamIds.length) return;
   console.log(
-    `[ash] reconciled ${failed} interrupted task(s) → failed` +
+    `[navi] reconciled ${failed} interrupted task(s) → failed` +
       (followUps ? `, ${followUps} follow-up turn(s) → 原终态` : "") +
       (pendingAdvances ? `, ${pendingAdvances} pending advance(s) → 起跑前状态` : "") +
       (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
@@ -83,7 +83,7 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 进程随后没活到接管的持续目标,在这里被写成「因服务中断已暂停」:界面显示暂停中 + 继续,
   // 回合区间 `outcome` 留空,而判决明明还在日志里读得出来。落位不是「多一种重启时间组合」,
   // 是**同一个权威结局在另一个结算入口没被接上**。
-  const ashFailure = await interruptedTurnVerdict(t.id);
+  const naviFailure = await interruptedTurnVerdict(t.id);
   const advance = t.queueAdvanceRequest;
   const pendingAdvance = advance && advance.resumePromptGeneration === t.resumePromptGeneration;
   if (t.nativeTurn && !t.goalTurn) {
@@ -104,7 +104,7 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
     if (session?.agentType === "claude" && session.commandLine) cleanupClaudeGoalContext(session.commandLine);
     // 熔断过的那一轮不许说成「暂停」:那句话替用户表达了「它在等你」,而这一轮是我们自己判
     // 失败的 —— 两个结论里用户看到的那个说它在等人,正是 F3 的形状。那一句由下面统一补。
-    if (!ashFailure.note) {
+    if (!naviFailure.note) {
       await appendTaskTimeline(t.id, alertLine(goalHeld
         ? "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。"
         : "持续目标尚未启动就遇到服务中断；已恢复起跑前的目标状态。"));
@@ -115,7 +115,7 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 一次失败续聊打断,不重启收尾保住 `done`,重启收尾却整个降成 `failed`。恢复层只提供事实,
   // 优先级归 `settle-landing.ts` 一处(它同时也挡住了「残留的队列占位抵消一轮确凿失败」那一支)。
   const back = failedTurnLanding({
-    ashFailed: !!ashFailure.note,
+    naviFailed: !!naviFailure.note,
     followUpFrom: (t.followUpFrom as TaskStatus | null) ?? goalFollowUpFrom,
     queueAdvancePrev: pendingAdvance ? (advance.prevStatus as TaskStatus) : null,
     goalHeld,
@@ -135,7 +135,7 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 这一轮的结局说给用户:**每一条路都要说**,不只持续目标那一支 —— 普通回合落 failed 时,
   // 时间线上同样只有那条来自上一个进程的红字,不说清「这一轮为什么是失败的」就只能让人去查
   // 一个不存在的崩溃。
-  if (ashFailure.note) await appendTaskTimeline(t.id, alertLine(ashFailure.note));
+  if (naviFailure.note) await appendTaskTimeline(t.id, alertLine(naviFailure.note));
   await reconcileTurnBaseline(t.id, false);
   // 旧会话的停滞标记在这里撤:置标记的那个消费者早就没了,没人来撤(第 5 轮审查 F5)。留着
   // 的话,用户换执行器重试时新会话只清自己那一行,旧行重新满足「任务在跑」的 EXISTS,卡片上
@@ -145,12 +145,12 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
     ...(pendingAdvance ? { quietAdvance: true } : {}),
     ...(consume ? { consume } : {}),
     // 失败义务在**这一笔**兑现:落位写进库了才销账,没写到行就一个字都不销。
-    settleStallTurns: ashFailure.settled,
+    settleStallTurns: naviFailure.settled,
   });
 }
 
 /**
- * 这个任务**被打断的那一轮**有没有一个 ash 自己认定的失败结局,顺带把那一轮收口。
+ * 这个任务**被打断的那一轮**有没有一个 navi 自己认定的失败结局,顺带把那一轮收口。
  *
  * 判据跟接管那条路共用同一个单点(`restoreStallVerdict`),所以两边不可能漂:一边读得到判决、
  * 另一边把同一轮写成「暂停中」这种事,只会在各写一份判据的时候发生。
@@ -252,7 +252,7 @@ async function interruptedTurnVerdict(taskId: string): Promise<InterruptedVerdic
  * 「义务已销、落位未写」的缝(第 2 轮审查 F1)。
  */
 type InterruptedVerdict = {
-  /** 用户看得见的那一句(没有 ash 判定的失败结局就是 null)。 */
+  /** 用户看得见的那一句(没有 navi 判定的失败结局就是 null)。 */
   note: string | null;
   settled: { sessionId: string; turnStartedAt: string }[];
 };
@@ -295,12 +295,12 @@ export async function reconcileInterruptedTask(taskId: string): Promise<boolean>
       return true;
     }
     await settleInterruptedTask(task);
-    console.log(`[ash] 已结算被打断的任务 ${taskId}(状态在飞,手上却没有活句柄)`);
+    console.log(`[navi] 已结算被打断的任务 ${taskId}(状态在飞,手上却没有活句柄)`);
     return true;
   } finally {
     release();
     await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId)
-      .catch((error) => console.error(`[ash] 中断审查收尾待重试 ${taskId}:`, error));
+      .catch((error) => console.error(`[navi] 中断审查收尾待重试 ${taskId}:`, error));
   }
 }
 
@@ -322,10 +322,10 @@ function wakeInterruptedLeads(teamIds: string[]): void {
   const t = setTimeout(() => {
     for (const teamId of teamIds) {
       void startTeam(teamId).catch((err) =>
-        console.error(`[ash] 唤醒被打断的团队调度台 ${teamId} 失败:`, err),
+        console.error(`[navi] 唤醒被打断的团队调度台 ${teamId} 失败:`, err),
       );
     }
-    console.log(`[ash] 已叫醒 ${teamIds.length} 个被打断的团队调度台`);
+    console.log(`[navi] 已叫醒 ${teamIds.length} 个被打断的团队调度台`);
   }, 3000);
   (t as { unref?: () => void }).unref?.();
 }

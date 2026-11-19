@@ -5,7 +5,7 @@
 // 的是审查链自己的状态机(预约、结算、换轮、收尾)。两边唯一的接口就是下面这几个 import。
 //
 // 这一段自己的不变量都在各函数的注释里,拆文件没有改动其中任何一条。
-import { reviewAnchorMatches } from "@ash/shared/free-workflow";
+import { reviewAnchorMatches } from "@navi/shared/free-workflow";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -73,6 +73,7 @@ async function manualRepairSubject(taskId: string, target: RepairTarget | null):
   if (task.stage === "accepted" || task.stage === "merged") return "任务已进入验收结果";
   if (await reviewingRun(taskId)) return "审查回合正在进行";
   if (await activeDebateOf(taskId)) return "审查意见辩论正在进行，等它说完再决定";
+  if (await (await import("./discussion.js")).discussionHolds(taskId)) return "这条任务上正在讨论，等它说完再决定";
   let subject: RepairSubject | string;
   if (target) subject = await pinnedSubject(taskId, target);
   else {

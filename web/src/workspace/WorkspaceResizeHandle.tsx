@@ -1,17 +1,16 @@
 import { useEffect, useRef } from "react";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
 
 export const WORKSPACE_SIDEBAR_MIN = 220;
 export const WORKSPACE_SIDEBAR_MAX = 560;
 export const WORKSPACE_SIDEBAR_DEFAULT = 260;
-export const WORKSPACE_SIDEBAR_STORAGE_KEY = "ash:sidebar-width";
+export const WORKSPACE_SIDEBAR_STORAGE_KEY = "navi:sidebar-width";
 
 function clampSidebarWidth(width: number): number {
   return Math.min(WORKSPACE_SIDEBAR_MAX, Math.max(WORKSPACE_SIDEBAR_MIN, width));
 }
 
 export function readWorkspaceSidebarWidth(): number {
-  const stored = Number(readRenamedStorage(WORKSPACE_SIDEBAR_STORAGE_KEY));
+  const stored = Number(window.localStorage.getItem(WORKSPACE_SIDEBAR_STORAGE_KEY));
   return Number.isFinite(stored) && stored >= WORKSPACE_SIDEBAR_MIN && stored <= WORKSPACE_SIDEBAR_MAX
     ? stored
     : WORKSPACE_SIDEBAR_DEFAULT;

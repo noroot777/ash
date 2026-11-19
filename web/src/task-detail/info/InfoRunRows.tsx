@@ -3,9 +3,9 @@
 // 照旧（会话行上的账本 + 会话流里最新那条气泡的直播值，见 infoRunFacts.ts），只是换成「标签 值」。
 // 每一回合各自烧了多少收在那一回合尾的「更多」菜单里（TurnActions）。
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Session, Task, TokenUsage } from "@ash/shared";
-import { addUsage, formatTokens, formatTokensExact, hasContext, hasUsage, usageTotal } from "@ash/shared/usage";
-import { taskCreationLabel } from "@ash/shared/task-origin";
+import type { Session, Task, TokenUsage } from "@navi/shared";
+import { addUsage, formatTokens, formatTokensExact, hasContext, hasUsage, usageTotal } from "@navi/shared/usage";
+import { taskCreationLabel } from "@navi/shared/task-origin";
 import { createPortal } from "react-dom";
 import { AgentIcon } from "../../components/AgentIcon.tsx";
 import { ContextMeterPanel, contextMeterView } from "../../components/ContextMeterChip.tsx";
@@ -53,7 +53,7 @@ function UsageValue({ label, agentType, usage, wakes }: { label: string; agentTy
   );
 }
 
-/** 上下文那一行：一根细条画剩下的那一截（剩到 15% 以下变红），右边是「压缩设置」——点开就是原来那颗胶囊的明细加快捷设置。 */
+/** 上下文那一行：一根细条从左往右涨，画已经用掉的那一截（剩到 15% 以下变红），右边是「压缩设置」——点开就是原来那颗胶囊的明细加快捷设置。 */
 function ContextValue({ facts }: { facts: InfoRunFacts }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(true);
@@ -74,7 +74,7 @@ function ContextValue({ facts }: { facts: InfoRunFacts }) {
     <>
       {remain !== null && (
         <span className={`insp-bar${remain <= 15 ? " is-low" : ""}`} aria-hidden="true">
-          <i style={{ transform: `scaleX(${remain / 100})` }} />
+          <i style={{ transform: `scaleX(${Math.min(1, Math.max(0, 1 - remain / 100))})` }} />
         </span>
       )}
       <span className={facts.compacting ? "insp-live" : "insp-num"} aria-label={facts.compacting ? "正在压缩上下文" : view.spoken}>

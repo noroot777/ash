@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, rmdir, stat, w
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { type CheckoutSettings, cloneSealedSnapshot, isSealedSnapshot, readOnlyGit, sealedGit } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
+import { NAVI_GIT_IDENTITY_ARGS } from "./navi-commit-identity.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
@@ -70,7 +71,7 @@ const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
 const git = async (cwd: string, args: string[]) => (await readOnlyGit(cwd, args)).stdout;
 
 // 准备命令现装的快照里，依赖解析图只剩**执行位置向上那条链**（node 对没装进快照的包名照旧一级级
-// 往上找 node_modules）。这一档的快照住在 ash 与项目目录树之外、起跑前还核过那条链上没有依赖树
+// 往上找 node_modules）。这一档的快照住在 navi 与项目目录树之外、起跑前还核过那条链上没有依赖树
 // （accept-gate-isolated.ts），源码那一侧（工作区、主检出）不在它的解析路径上，再摘它只会让无关的
 // 安装变化作废凭据。所以把执行位置的父目录同时当作两个根传进去。
 const gateAmbient = (cwd: string, executionCwd: string, roots: string[], prepared: boolean | undefined) =>
@@ -82,7 +83,7 @@ async function nonGitFiles(cwd: string): Promise<string[]> {
   return (await readdir(cwd)).filter(name => name !== ".git").sort();
 }
 
-// 运行目录(ash 的 runs)落在项目内时,它既不是测试输入、也不能跟着进副本——快照自己就住在那
+// 运行目录(navi 的 runs)落在项目内时,它既不是测试输入、也不能跟着进副本——快照自己就住在那
 // 里面,复制它等于让快照把自己复制进自己。但排除**只在源侧做**不行:clone/checkout 会把运行目录
 // 里被跟踪的文件照样写进副本,副本回算再不过滤就必然看到源摘要里没有的输入,项目什么也没改也会
 // 被判「没能按原样复现」。所以排除项按**相对路径**记一次,源摘要、复制、副本回算各按自己的根
@@ -268,7 +269,7 @@ async function resolveRecording(base: string, components: string[], record: (lin
 
 export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, "identity.source"),
   prepared = false): Promise<GateSource> {
-  if (physicalPath(cwd) === physicalPath(RUNS_DIR)) throw new Error("项目目录不能与 ash 运行产物目录相同");
+  if (physicalPath(cwd) === physicalPath(RUNS_DIR)) throw new Error("项目目录不能与 Navi 运行产物目录相同");
   const commit = await commitAt(cwd, "HEAD");
   const hash = sourceHash();
   const dependencies: string[] = [];
@@ -297,7 +298,7 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     const { paths, filters } = changes.unverified;
     if (paths.length) {
       throw new Error(`任务工作区里有 ${paths.length} 个文件（${paths.slice(0, 5).join("、")}${paths.length > 5 ? "…" : ""}）`
-        + `要经过项目配置的过滤器（${filters.join("、")}）才能确认改没改，ash 不在验收前置命令之外运行项目程序，`
+        + `要经过项目配置的过滤器（${filters.join("、")}）才能确认改没改，Navi 不在验收前置命令之外运行项目程序，`
         + "所以没法确认工作区就是已提交的那份；请在任务工作区自己运行一次 git status（它按项目配置核对并刷新记录），"
         + "或提交这些文件，再验收");
     }
@@ -323,7 +324,7 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     ambient: await gateAmbient(cwd, executionCwd, supplyRoots(supplied), prepared), executionCwd, ...(prepared ? { prepared } : {}) };
 }
 
-/** 快照住在哪。配了准备命令的那一档放在 ash 与项目目录树之外（理由见 accept-gate-isolated.ts）。 */
+/** 快照住在哪。配了准备命令的那一档放在 navi 与项目目录树之外（理由见 accept-gate-isolated.ts）。 */
 export const gateSnapshotPath = (taskId: string, runId: string, prepared = false) =>
   join(prepared ? GATE_ISOLATED_DIR : RUNS_DIR, taskId, `accept-gate-${runId}.source`);
 
@@ -347,7 +348,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     const inherited = source.prepared ? await ancestorDependencyDir(target) : null;
     if (inherited) {
       throw new Error(`测试快照 ${target} 往上能找到依赖目录 ${inherited}：准备命令漏装的包会从那里被解析到，`
-        + "测出来的不是准备命令装出来的那一份。把它移走，或用 ASH_GATE_ISOLATED_DIR 把快照根指到没有依赖目录的位置");
+        + "测出来的不是准备命令装出来的那一份。把它移走，或用 NAVI_GATE_ISOLATED_DIR 把快照根指到没有依赖目录的位置");
     }
     if (await gateAmbient(cwd, target, roots, source.prepared) !== source.ambient) {
       // 对不上一律拒绝（这一条不打折），但**说法得对得上**，因为出路不是同一条：
@@ -397,7 +398,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
         await cloneSealedSnapshot(cwd, target, preview.settings);
       } else {
         await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
-        await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
+        await git(target, ["config", "core.hooksPath", join(target, ".git", "navi-no-hooks")]);
       }
       await snap(["checkout", "--detach", source.commit]);
       // 封好的克隆自带的配置里本就没有 origin；已含目标分支时（tree 为 null）不合，检出的就是分支那棵树。
@@ -507,9 +508,9 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
  * 预演写进主仓对象库的，本地克隆整份带过来（worktree 与主仓共用一份）。
  */
 async function materializePreview(target: string, targetCommit: string, tree: string): Promise<string> {
-  const commit = (await sealedGit(target, ["-c", "user.name=ash", "-c", "user.email=ash@localhost",
+  const commit = (await sealedGit(target, [...NAVI_GIT_IDENTITY_ARGS,
     "commit-tree", "--no-gpg-sign", tree, "-p", "HEAD", "-p", targetCommit,
-    "-m", `ash 验收门禁合并预览：合入 ${targetCommit}`])).trim();
+    "-m", `Navi 验收门禁合并预览：合入 ${targetCommit}`])).trim();
   await sealedGit(target, ["checkout", "--detach", commit]);
   return commit;
 }

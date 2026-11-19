@@ -1,12 +1,12 @@
-// 哨兵的**进程**这一层：怎么把一条用户命令起成「ash 死了它也还活着」的长跑进程，
+// 哨兵的**进程**这一层：怎么把一条用户命令起成「navi 死了它也还活着」的长跑进程，
 // 以及怎么跟着它的输出文件按行往下读。编排（什么时候推、推给谁、什么时候停）在
 // monitors.ts，这里一个业务判断都没有。
 //
-// 脱离 ash 靠两件事，缺一不可（跟 executors/detached.ts 是同一招，理由见那里的文件头）：
-//   ① `detached: true` —— POSIX 上 setsid 自成会话/进程组，ash 退出时的那串信号打不到它
-//   ② **输出写文件、不给它任何管道** —— 唯一真正的生死绑定是 stdout 匿名管道：ash 一死
+// 脱离 navi 靠两件事，缺一不可（跟 executors/detached.ts 是同一招，理由见那里的文件头）：
+//   ① `detached: true` —— POSIX 上 setsid 自成会话/进程组，navi 退出时的那串信号打不到它
+//   ② **输出写文件、不给它任何管道** —— 唯一真正的生死绑定是 stdout 匿名管道：navi 一死
 //      读端关闭，它下次往 stdout 写就吃 SIGPIPE 当场毙命。换成文件这条绑定就断了。
-// 再加一个 `unref()`，ash 自己的事件循环也不会被它吊着不退。
+// 再加一个 `unref()`，navi 自己的事件循环也不会被它吊着不退。
 //
 // ── 放行闸：**命令开工之前，身份必须已经落库**（第 7 轮审查 F3）─────────────────
 //
@@ -17,9 +17,9 @@
 // 活着，三处全空）。
 //
 // 所以 spawn 出来的壳**先停在一道闸前面**：它第一件事是从 fd 3 读一行，读到才 exec 用户的
-// 命令。ash 只有在身份行（含 pid）落库之后才写那一行。于是：
+// 命令。navi 只有在身份行（含 pid）落库之后才写那一行。于是：
 //   · 登记失败 ⇒ 不放行 ⇒ 用户的命令**从未开工**，没有任何需要回收的外部资源；
-//   · ash 在放行前自己没了 ⇒ 写端随进程关闭 ⇒ 壳读到 EOF ⇒ 自己退出，同上；
+//   · navi 在放行前自己没了 ⇒ 写端随进程关闭 ⇒ 壳读到 EOF ⇒ 自己退出，同上；
 //   · 放行之后 ⇒ 身份早已在库里，照旧由接回/债表那一圈兜。
 // 壳是我们自己拼的一行 `sh`，不会 trap 信号，所以不放行时那一刀必中。
 //
@@ -29,7 +29,7 @@
 //
 // ── 身份边条：**pid 在任何一次 await 之前就已经在盘上**（第 9 轮审查 F3）────────────
 //
-// 闸管得住「命令什么时候开工」，管不住「ash 死在 spawn 和回填 pid 之间」这一档的 win32：
+// 闸管得住「命令什么时候开工」，管不住「navi 死在 spawn 和回填 pid 之间」这一档的 win32：
 // 那一侧命令已经在跑，而库里那行 pid 还空着 —— 重启只剩一条没有 pid 的行，说明、命令文字、
 // 日志路径都在，却**没有任何能用来找回那个进程的身份**（审查原话：「留下 id、命令和日志
 // 路径，不等于留下了能定位原进程的持久身份」）。
@@ -47,7 +47,7 @@
 //
 // 「这些进程属于这一次创建」要有凭证,而命令原文不是 —— 它是要干的活:同一条命令可以合法
 // 地被创建两次,前缀还会撞(记录 `sleep 1`、现存 `sleep 120`,包含判断照样认作自己的后代)。
-// 所以这里把 `ASH_MONITOR_UNIT=<记号>` 种进那个壳的环境:环境随 `exec` 继承、后代各自带一
+// 所以这里把 `NAVI_MONITOR_UNIT=<记号>` 种进那个壳的环境:环境随 `exec` 继承、后代各自带一
 // 份,于是**组长死了之后留在后台的那些仍然自证身份**(它们的 argv 早就换成别的程序了)。
 // 记号本身在起进程之前就随意图行落库,所以跨重启也认得回来。判定在 proc.ts
 // (`processUnitEvidence`),扫描在 monitor-unit-scan.ts(`liveMonitorUnitsSync`)。
@@ -65,7 +65,7 @@ import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentBaseEnv } from "./executors/spawn.js";
-import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } from "./monitor-unit-scan.js";
+import { invalidateMonitorUnitScan, seedMonitorUnitEnv } from "./monitor-unit-scan.js";
 import { IS_WINDOWS, killTree, userShellLaunch } from "./platform.js";
 import { RUNS_DIR } from "./paths.js";
 
@@ -81,10 +81,10 @@ export const monitorSpawnIdentityPath = (logPath: string): string => `${logPath}
 export type SpawnIdentity = { pid: number; spawnedAtMs: number };
 
 /**
- * **这一次交接可不可恢复** —— ash 要是在「回填 pid」之前整个没了,还有没有东西能定位那个进程。
+ * **这一次交接可不可恢复** —— navi 要是在「回填 pid」之前整个没了,还有没有东西能定位那个进程。
  *
  * 两条路任一条成立就够:
- *  · `gated` —— 装了放行闸(POSIX):命令还没开工,ash 一死写端就关、壳在 exec 之前自退,
+ *  · `gated` —— 装了放行闸(POSIX):命令还没开工,navi 一死写端就关、壳在 exec 之前自退,
  *    不存在需要定位的残留;
  *  · `identitySaved` —— 身份边条落盘了:命令可能已经开工,但重启后按代次认得回来。
  *
@@ -124,7 +124,7 @@ export function readSpawnIdentity(logPath: string): SpawnIdentityRead {
   }
   try {
     const o = JSON.parse(text) as { pid?: unknown; spawnedAtMs?: unknown };
-    // 文件在、但内容不认识 ⇒ **也算读不出来**:它恰恰可能是「写到一半 ash 就没了」的样子,
+    // 文件在、但内容不认识 ⇒ **也算读不出来**:它恰恰可能是「写到一半 navi 就没了」的样子,
     // 那一刻命令往往已经起来了 —— 按「没留下边条」处理等于替它声称没开工。
     if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) {
       return { kind: "unreadable", why: "内容里没有一个像样的 pid" };
@@ -150,7 +150,7 @@ export type SpawnedMonitor = {
   pid: number;
   /**
    * **这一次交接可不可恢复**(`handoverRecoverable` 的结论)。false = 命令可能已经开工,而
-   * ash 要是现在没了就再没有东西能定位它 —— 创建层必须据此拒掉这次创建(第 10 轮审查 F2-C)。
+   * navi 要是现在没了就再没有东西能定位它 —— 创建层必须据此拒掉这次创建(第 10 轮审查 F2-C)。
    */
   recoverable: boolean;
   /** 命令自己跑完时回调一次（仅限本进程起的那次；跨 server 重启接回来的拿不到）。 */
@@ -158,7 +158,7 @@ export type SpawnedMonitor = {
   /**
    * **拿句柄杀它**,不经过 pid 身份判定。
    *
-   * 创建期的撤销只能走这一条:那一刻 ash 手里**真的还握着这个 ChildProcess**,所有权是
+   * 创建期的撤销只能走这一条:那一刻 navi 手里**真的还握着这个 ChildProcess**,所有权是
    * 句柄本身证明的 —— 而 pid 那条路要先问 ps 要启动时刻,ps 不可用(或还没问到)时按第 9 轮
    * 审查 F3 的判据一律不许下刀。于是「身份记不全」这种失败里,句柄是唯一还能动手的凭据。
    */
@@ -194,8 +194,8 @@ export type SpawnedMonitor = {
   abandon: () => void;
 };
 
-/** 放行闸的那段壳前缀：先从 fd 3 读一行，读不到（ash 没了）就退出，绝不执行用户的命令。 */
-const GATE_PREFIX = "IFS= read -r __ash_go <&3 || exit 97; exec 3<&-; ";
+/** 放行闸的那段壳前缀：先从 fd 3 读一行，读不到（navi 没了）就退出，绝不执行用户的命令。 */
+const GATE_PREFIX = "IFS= read -r __navi_go <&3 || exit 97; exec 3<&-; ";
 
 export function spawnMonitor(
   /** `unitToken` = 这一次创建独有的资源记号(见文件头)。缺省只出现在测试台子上。 */
@@ -226,13 +226,13 @@ export function spawnMonitor(
     // 跟在后面，它自己的引号、换行、`&&` 的语义一个字都不变。
     const gated = !IS_WINDOWS;
     const launch = userShellLaunch(gated ? `${GATE_PREFIX}${opts.command}` : opts.command);
-    // stdin 给 ignore 而不是继承：哨兵命令不该有机会去读 ash 的标准输入（闸走的是 fd 3，
+    // stdin 给 ignore 而不是继承：哨兵命令不该有机会去读 navi 的标准输入（闸走的是 fd 3，
     // 所以用户的命令拿到的 stdin 仍然是 /dev/null）。
     // stdout/stderr 都指向同一个 fd —— 合流是刻意的，命令自己报的错也该成为事件。
     const child = spawn(launch.file, launch.args, {
       cwd: opts.cwd,
       // 记号跟着环境走 —— 这是整棵树唯一的身份凭证(见文件头)。
-      env: opts.unitToken ? { ...agentBaseEnv(), [MONITOR_UNIT_ENV]: opts.unitToken } : agentBaseEnv(),
+      env: opts.unitToken ? seedMonitorUnitEnv(agentBaseEnv(), opts.unitToken) : agentBaseEnv(),
       detached: true,
       stdio: gated ? ["ignore", fd, fd, "pipe"] : ["ignore", fd, fd],
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
@@ -241,7 +241,7 @@ export function spawnMonitor(
     //
     // 两个监听都必须**此刻**就挂上:
     //  · `error` —— spawn 的失败是异步报的(坏 cwd 在 fork 之后才 chdir 失败),这一刻没有
-    //    监听者的话 Node 把它升级成 uncaughtException,整个 ash 当场退出,一次失败的创建把
+    //    监听者的话 Node 把它升级成 uncaughtException,整个 navi 当场退出,一次失败的创建把
     //    所有任务页一起带下线(第 2 轮审查实测:退出码 143、`uncaughtException: spawn sh ENOENT`);
     //  · `exit` —— 它是**一次性事件**。上一版在 `onExit(cb)` 里才 `child.on("exit")`,而
     //    订阅发生在「回填 pid」这一次 await 之后:壳在那之前就退掉的话(命令有语法错误、
@@ -267,7 +267,7 @@ export function spawnMonitor(
     if (!child.pid) {
       // **绝不能 `child.kill()`**：没有 pid 就没有进程可杀，这一步会走到
       // `uv_process_kill(0, SIGTERM)`，而 POSIX 的 `kill(0, …)` 是「发给自己所在的
-      // 整个进程组」—— ash 把自己连同它起的一切一起 SIGTERM 掉（同上，实测）。
+      // 整个进程组」—— navi 把自己连同它起的一切一起 SIGTERM 掉（同上，实测）。
       return { error: `哨兵起不来：${opts.command}` };
     }
     child.unref();
@@ -286,9 +286,9 @@ export function spawnMonitor(
     } catch (e) {
       // 写失败**不一定**致命:有闸的那一侧命令还没开工。致不致命由 `handoverRecoverable` 判,
       // 创建层据此决定放行还是拒(第 10 轮审查 F2-C)。
-      console.error(`[ash] 哨兵身份边条写不下来 ${monitorSpawnIdentityPath(opts.logPath)}:`, e);
+      console.error(`[navi] 哨兵身份边条写不下来 ${monitorSpawnIdentityPath(opts.logPath)}:`, e);
     }
-    // 闸的写端：**也要 unref**，不然 ash 的事件循环会被这个 pipe 吊着不退（`child.unref()`
+    // 闸的写端：**也要 unref**，不然 navi 的事件循环会被这个 pipe 吊着不退（`child.unref()`
     // 只管进程句柄，stdio 流是另一个 handle）。
     const gate = (child.stdio as Array<{
       write?: (chunk: string) => void; end?: () => void; destroy?: () => void; unref?: () => void;
@@ -296,7 +296,7 @@ export function spawnMonitor(
     } | null>)[3];
     gate?.unref?.();
     // 写端是一个 socket:对端先死时 EPIPE 是**'error' 事件**,不是 `write()` 的同步异常 ——
-    // 没人听就会升级成 uncaughtException。壳先退了只说明「没放行成」,不该把 ash 带走。
+    // 没人听就会升级成 uncaughtException。壳先退了只说明「没放行成」,不该把 navi 带走。
     gate?.on?.("error", () => { /* 壳已经没了 = 这次没放行,调用方照旧走回收圈 */ });
     return {
       pid: child.pid,
@@ -323,7 +323,7 @@ export function spawnMonitor(
       kill: () => {
         // **要覆盖它派生的后代,不能只打根进程**:根进程退出不证明这条命令结束了
         // (第 10 轮审查 F2-C)。`killTree` 两边各走各的 —— POSIX 打组信号(组号就是 pid,
-        // 因为壳是 `detached` 的),win32 打 `taskkill /T` 那棵树(跟 ash 收 agent 进程树用的
+        // 因为壳是 `detached` 的),win32 打 `taskkill /T` 那棵树(跟 navi 收 agent 进程树用的
         // 是同一个函数)。**win32 这一侧未在真机验证**(根 AGENTS.md:那台机器现在连不上)。
         // 所有权在这里由**句柄**证明,不必去问 ps 的启动时刻(第 9 轮审查 F3)。
         //

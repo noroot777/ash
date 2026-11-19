@@ -3,7 +3,7 @@ import { createDeliveryLease } from "./delivery-lease.js";
 import { abortDelivery, cancelPendingMessage, markSent } from "./pending-messages.js";
 import { beginPendingBatch, batchMonitorWake } from "./pending-monitor-batch.js";
 import { recoverPendingDelivery } from "./pending-delivery-recovery.js";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
 import { scheduleRedelivery } from "./pending-redelivery.js";
 import { deliveryOptions, monitorWakeGuard } from "./pending-verdict.js";
 import { monitorWakeCheckpoint } from "./monitor-session.js";
@@ -131,6 +131,7 @@ export async function dispatchPendingMessage(
       for (const checkpoint of checkpoints.reverse()) await checkpoint.restore().catch(() => {});
     }
     context.release?.();
-    if (context.seat && lease.callerMustReturn()) await context.seat.release();
+    // 落了 queued 的占位只在落空时回滚(送达后由结算覆盖);不在队列的那一份「正在起跑」凭证无论成败都交回。
+    if (context.seat && (lease.callerMustReturn() || !context.seat.holdsQueued)) await context.seat.release();
   }
 }

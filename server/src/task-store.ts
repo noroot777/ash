@@ -1,26 +1,36 @@
 import { eq, inArray, sql } from "drizzle-orm";
-import { normalizeDuetConfig } from "@ash/shared/duet";
-import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
+import { normalizeDuetConfig } from "@navi/shared/duet";
+import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
-import { acceptGateRuns, agents, monitors, projects, queueItems, sessions, taskBackgroundRevisions, tasks } from "./db/schema.js";
+import { serializeQueueClaims } from "./queue-claim-chain.js";
+import { acceptGateRuns, agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, monitors, projects, queueItems, sessions, taskBackgroundRevisions, tasks } from "./db/schema.js";
+import { startDisputeOpenSync } from "./dispute-open-sync.js";
+import { awaitingRuling } from "./free-review-awaiting-ruling.js";
 import { bus } from "./bus.js";
-import { runsTiming } from "./util.js";
+import { now, runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { admissionKeysOf, admitMembers, TeamAcceptingError } from "./team-admission.js";
 import { execFileText as exec } from "./exec.js";
 import { expandHome } from "./git.js";
 import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
+import { assertPrerequisiteEdges, insertPrerequisiteEdges, withPrerequisiteGraph, type EdgeTask, type PrerequisiteEdge } from "./prerequisite-store.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
-import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
-import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
+import { parseTaskCreationOrigin } from "@navi/shared/task-origin";
+import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
+import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@navi/shared/dispatch-plan";
+import { parseDispatchSuggestions, parseWithdrawnSuggestions, publicSuggestions } from "@navi/shared/dispatch-suggestion";
+import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
+import { announceCreateReviews, reservationRows, resolveCreateReviews, type CreateReviewSlot } from "./review-on-create.js";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
 // 里的那份快照（见 createTasks）。调用方给 id，库里存线本身。
-export type NewTaskRow = typeof tasks.$inferInsert & { id: string; workflowId?: string | null };
+/** `review`：建出来就带的审查预约（review-on-create.ts），不是任务表的列；缺省 = 不带。 */
+export type NewTaskRow = typeof tasks.$inferInsert & { id: string; workflowId?: string | null; review?: CreateReviewChoice };
 
 type AgentLabelRow = ExecutorProfileRow;
 
@@ -85,7 +95,6 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   status: r.status as TaskStatus,
   stage: (r.stage as TaskStage | null) ?? null,
   pinnedAt: r.pinnedAt ?? null,
-  starredAt: r.starredAt ?? null,
   reviewOf: r.reviewOf ?? null,
   reviewRound: r.reviewRound ?? null,
   reviewRequested: r.reviewRequested,
@@ -127,15 +136,26 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   workflowAt: r.workflowAt ?? null,
   originTaskId: r.originTaskId ?? null,
   creationOrigin: parseTaskCreationOrigin(r.creationOrigin),
+  dispatchedBy: r.dispatchedBy ?? null,
+  dispatchHoldAt: r.dispatchHoldAt ?? null,
+  dispatchHoldPendingAt: r.dispatchHoldPendingAt ?? null,
   resumePrompt: r.resumePrompt ?? null,
   verifyRound: r.verifyRound ?? null,
   question: r.question ?? null,
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
   questionHistory: r.questionHistory ? JSON.parse(r.questionHistory) : [],
+  // 只在它绑的那一问还在时下发（shared/src/dispatch-plan.ts `activeDispatchPlan`）。
+  dispatchPlan: activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) }),
+  dispatchTarget: parseDispatchTarget(r.dispatchTarget),
+  dispatchSuggestions: publicSuggestions(parseDispatchSuggestions(r.dispatchSuggestions)),
+  dispatchWithdrawals: parseWithdrawnSuggestions(r.dispatchWithdrawals),
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
 });
+
+// 「等你裁定」那一格变了就重发快照：挂在列表投影旁边，加载即生效（dispute-open-sync.ts）。
+startDisputeOpenSync();
 
 // GET /tasks、task.created 和 task.updated 共用这一条序列化路径，保证派生的
 // executorLabel、执行时长以及 queueId/queuePosition 不会在事件里缺字段。
@@ -170,6 +190,20 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
     .from(queueItems)
     .where(inArray(queueItems.taskId, rows.map((r) => r.id)));
   const byQueueTask = new Map(items.map((q) => [q.taskId, q] as const));
+  // 对外的 queuePosition 是**名次**(0..N-1),不是库里那一列的原值:position 只保证先后,
+  // 中间缺号(删任务只摘自己那一格)的话原值 +1 就成了「13/12」这种读数。
+  const queueRank = new Map<string, number>();
+  const queueIds = [...new Set(items.map((q) => q.queueId))];
+  if (queueIds.length) {
+    const members = await db.select({ queueId: queueItems.queueId, taskId: queueItems.taskId }).from(queueItems)
+      .where(inArray(queueItems.queueId, queueIds)).orderBy(queueItems.queueId, queueItems.position);
+    let queueId: string | null = null;
+    let rank = 0;
+    for (const member of members) {
+      if (member.queueId !== queueId) { queueId = member.queueId; rank = 0; }
+      queueRank.set(member.taskId, rank++);
+    }
+  }
   const background = new Map((await db.select({
     taskId: tasks.id,
     backgroundRevision: sql<number>`coalesce(${taskBackgroundRevisions.revision}, 0)`.mapWith(Number),
@@ -179,7 +213,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       and ${monitors.status} = 'running')`.mapWith(Boolean),
     // 「这个任务其实在干等上游」(回合级停滞看门狗,见 turn-stall.ts)。四个条件缺一不可:
     // 标记在、那条会话还没收尾、任务此刻真的在跑、而且**那条会话就是此刻这一轮用的那条** ——
-    // 后三条是残值闸:ash 被硬杀时标记留在库里没人撤,少了它们那颗点会永久亮在卡片上。
+    // 后三条是残值闸:navi 被硬杀时标记留在库里没人撤,少了它们那颗点会永久亮在卡片上。
     //
     // 最后一条是第 5 轮审查 F5:前三条挡不住「旧行还挂着标记、新回合已经在跑」。换执行器重试
     // 或者旧执行器不能复用时会**新建一条会话行**(task-run.ts / orchestrator.ts),旧行一个字
@@ -200,19 +234,29 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
         and newer.role = ${sessions.role}
         and coalesce(newer.turn_started_at, newer.started_at)
           > coalesce(${sessions.turnStartedAt}, ${sessions.startedAt})))`.mapWith(Boolean),
+    // 「执行者驳回了一轮审查意见，在等你裁定」。判据跟裁定闸、审查面板那张卡同一份（awaitingRuling）；
+    // 它变了由 dispute-open-sync.ts 统一重发快照（下面 startDisputeOpenSync）。
+    disputeOpen: sql<boolean>`exists(select 1 from ${freeReviewRounds}
+      inner join ${freeReviewRuns} on ${freeReviewRuns.id} = ${freeReviewRounds.runId}
+      where ${freeReviewRuns.taskId} = ${tasks.id} and ${awaitingRuling})`.mapWith(Boolean),
   }).from(tasks).leftJoin(taskBackgroundRevisions, eq(tasks.id, taskBackgroundRevisions.taskId))
     .where(inArray(tasks.id, rows.map(row => row.id)))).map(row => [row.taskId, row]));
+  const { prerequisiteViews } = await import("./prerequisite-view.js");
+  const prerequisites = await prerequisiteViews(rows);
   return rows.map((r) => {
     const q = byQueueTask.get(r.id);
+    const view = prerequisites.get(r.id);
     return {
       ...toTask(r, profiles),
       ...runsTiming(byTask.get(r.id) ?? []),
       queueId: q?.queueId ?? null,
-      queuePosition: q?.position ?? null,
+      queuePosition: q ? queueRank.get(r.id) ?? q.position : null,
       backgroundRevision: background.get(r.id)?.backgroundRevision ?? 0,
       acceptGateRunning: background.get(r.id)?.acceptGateRunning ?? false,
       monitorRunning: background.get(r.id)?.monitorRunning ?? false,
       upstreamStalled: background.get(r.id)?.upstreamStalled ?? false,
+      disputeOpen: background.get(r.id)?.disputeOpen ?? false,
+      ...(view ? { prerequisites: view } : {}),
     };
   });
 }
@@ -277,12 +321,34 @@ async function snapshotExecutor(row: NewTaskRow): Promise<string | null> {
 // 等锁可能等很久，等着的这段时间里委派来源可能已经不作数了（聊天派生的任务：群聊被删了），
 // 而 createTasks 一旦越过这里就只管把行插进去。抛出即取消创建，此时还没有分支计划、没有
 // 插入，无需回滚。放在这里而不是调用方 `await createTasks()` 之前——那太早，锁还没拿到。
+//
+// 串进队列这一种挂靠不能走 afterInsert，要走 `atomic`：任务行一插进去，调度器（分组运行、
+// 队列推进）和改分组那些写方读库就看得见它，这时队列成员还没写，它就是一条可以被单独起跑、
+// 单独改组的独立任务 —— 随后再串进队列，挂上的是一条已经在跑、或者已经换了组的任务；串不进去
+// 时再删行，删掉的可能是一条已经被人接手跑起来的任务（NJ1Maq-3KV_I 第 2 轮审查实测三种）。所以
+// 任务行与队列成员**同一笔事务**落库，且整笔排在队列认领链上（queue-claim-chain.ts）：事务没提交时
+// 同一条连接上的读看得见新行，但凡要起它、改它归属的都在链上，轮到时它已经在队里了。
+type TaskTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export async function createTasks(
   rows: NewTaskRow[],
   afterInsert?: () => Promise<void>,
   beforeInsert?: () => Promise<void> | void,
   /** 行上没记、但这次创建也挂靠着的任务（POST /tasks 的 reviewOf）：一起占「加成员」的位。 */
   alsoAdmit: (string | null | undefined)[] = [],
+  /** 这一批里逐条写的前置（下游可以是这一批里的，前置也可以是已有的任务）。不成立就整批不建。 */
+  prerequisites: PrerequisiteEdge[] = [],
+  /**
+   * 要跟这批任务同一笔提交的写（派活单：认领那一问、分组、队列，dispatch-plan-launch.ts；串到队尾 / 串成队列：
+   * queue-membership-guard.ts `joinQueueOnCreate`）。`before` 在插任务之前、`after` 在之后，都在同一个事务里，整笔
+   * 排在队列认领链上（见上）；任一步抛错整笔回滚，一条都不留。只能用传进来的事务写，别碰根 `db`，也别再等那条链。
+   */
+  atomic?: {
+    before?: (transaction: TaskTransaction) => Promise<void>;
+    after?: (transaction: TaskTransaction) => Promise<void>;
+    /** 那一笔提交成功的那一刻（之后的读回、广播再抛错，调用方据此知道任务已经建好了）。 */
+    onCommitted?: () => void;
+  },
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
   for (const row of rows) {
@@ -303,13 +369,25 @@ export async function createTasks(
     .where(inArray(projects.id, projectIds));
   const repoByProject = new Map(projectRows.map((project) => [project.id, project.repoPath] as const));
   const worktreeDefaultByProject = new Map(projectRows.map((project) => [project.id, project.useWorktreeDefault] as const));
-  const normalizedRows = await Promise.all(rows.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
+  // 创建来源先定下来：调用方没给 = 服务端自己建的（系统）。下面两步认的都是落库的这一份。
+  const sourced = rows.map((row) => ({
+    ...row,
+    creationOrigin: row.creationOrigin === undefined ? JSON.stringify({ kind: "system" }) : row.creationOrigin,
+  }));
+  // 收在谁名下（判据见 task-dispatch.ts）：显式给的优先，否则按创建来源认。
+  const dispatchedBy = await resolveDispatchedBy(sourced);
+  // 没指明交给谁、又收在某条任务名下的：交给那条任务「派出去的活交给谁」的默认值（task-dispatch.ts）。
+  const assigned = await withDispatchDefaults(sourced, dispatchedBy);
+  // 建出来就带的审查预约：先核一遍（指定了却找不到整批不建，早退），落库那笔事务里再定一遍才作数（review-on-create.ts）。
+  await resolveCreateReviews(assigned);
+  let reviewSlots: CreateReviewSlot[] = [];
+  const normalizedRows = await Promise.all(assigned.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
     const requested = row.useWorktree ?? worktreeDefaultByProject.get(row.projectId) ?? false;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
-    const { workflowId, ...rest } = row;
+    const { workflowId, review: _review, ...rest } = row;
     return {
       ...rest,
-      creationOrigin: row.creationOrigin === undefined ? JSON.stringify({ kind: "system" }) : row.creationOrigin,
+      dispatchedBy: dispatchedBy.get(row.id) ?? null,
       useWorktree,
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
       // 审查任务（reviewOf 非空）不拷线：它本身就是别人那条线上「验证」那一站长出来的
@@ -343,7 +421,25 @@ export async function createTasks(
         await initializeBranchPlan(row, repoByProject.get(row.projectId) || "");
         if (!hadStart && row.worktreeStartCommit) pinned.push(row);
       }
-      await db.insert(tasks).values(normalizedRows);
+      // 合入目标要等分支计划算出来才判得了（prerequisite-store.ts），所以排在它后面、落库前面。
+      // 判环与落边在整张图上排队（prerequisite-store.ts `withPrerequisiteGraph`）；不带前置的照旧直接落。
+      // 任务行、预约槽、前置边**始终同一笔事务**（分开落时预约一失败，报错之后库里留着一条没预约的任务）。带 `atomic`
+      // 的再把调用方那几笔放进来、整笔排在认领链上（见上）。锁序是图 → 认领链：链上的人不会回头等图。
+      const write = async (transaction: TaskTransaction) => {
+        await atomic?.before?.(transaction);
+        await transaction.insert(tasks).values(normalizedRows);
+        reviewSlots = await resolveCreateReviews(assigned, transaction);
+        if (reviewSlots.length) await transaction.insert(freeWorkflowStates).values(reservationRows(reviewSlots, now()));
+        await insertPrerequisiteEdges(prerequisites, transaction);
+        await atomic?.after?.(transaction);
+      };
+      const land = async () => {
+        await assertPrerequisiteEdges(prerequisites, normalizedRows.map(edgeTaskOf));
+        if (!atomic) return db.transaction(write, { behavior: "immediate" });
+        await serializeQueueClaims(() => db.transaction(write, { behavior: "immediate" }));
+        atomic.onCommitted?.();
+      };
+      await (prerequisites.length ? withPrerequisiteGraph(land) : land());
     } catch (error) {
       for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
       throw error;
@@ -362,8 +458,19 @@ export async function createTasks(
   });
   const created = await enrichTasks(ordered);
   for (const task of created) bus.publish({ type: "task.created", task });
+  if (reviewSlots.length) await announceCreateReviews(reviewSlots);
   return created;
 }
+
+/** 串进队列那一笔事务里能用的读写(createTasks 的 `atomic.after`,queue-membership-guard.ts)。 */
+export type QueueJoinWriter = Pick<typeof db, "select" | "insert">;
+
+const edgeTaskOf = (row: typeof tasks.$inferInsert & { id: string }): EdgeTask => ({
+  id: row.id, projectId: row.projectId, title: row.title, mode: row.mode ?? "single", parentId: row.parentId ?? null,
+  reviewOf: row.reviewOf ?? null, status: row.status ?? "backlog", archived: !!row.archived, useWorktree: !!row.useWorktree,
+  mergeTargetBranch: row.mergeTargetBranch ?? null, acceptedTargetBranch: row.acceptedTargetBranch ?? null,
+  baseTaskId: row.baseTaskId ?? null, stage: row.stage ?? null,
+});
 
 export async function publishTaskUpdated(taskId: string): Promise<Task | null> {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);

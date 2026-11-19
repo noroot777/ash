@@ -5,14 +5,15 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-workflow-run-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-workflow-run-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
-const { builtinWorkflowDef } = await import("@ash/shared/workflow-presets");
-const { makeStep } = await import("@ash/shared/workflow");
-const { workflowPolicy } = await import("@ash/shared/workflow-policy");
+const { builtinWorkflowDef } = await import("@navi/shared/workflow-presets");
+const { makeStep } = await import("@navi/shared/workflow");
+const { workflowPolicy } = await import("@navi/shared/workflow-policy");
 const { reviewOutcomeAction, shouldAutoDispatchReview, withVerifyExecutor } =
   await import("../src/review-policy.js");
 
@@ -161,7 +162,7 @@ assert.deepEqual(
 console.log("workflow run policy tests passed");
 
 // ── 段落切分：哪几站跟在哪个锚点后面 ──────────────────────────────────────
-const { stepsAfterAnchor } = await import("@ash/shared/workflow-policy");
+const { stepsAfterAnchor } = await import("@navi/shared/workflow-policy");
 const line = {
   workspace: "isolated" as const,
   steps: [
@@ -193,7 +194,7 @@ assert.deepEqual(stepsAfterAnchor(null, "run"), []);
 // 段落按**站的 id** 切,不按锚点类型——这正是这两类站能出现多次的前提。以前按类型切
 // 的时候,第二个 verify 没有任何东西能把它跟第一个区分开,只会被静默跳过。
 const { segmentAfter, nextAnchor, prevAnchor, isFinalHumanGate, anchorAt } =
-  await import("@ash/shared/workflow-policy");
+  await import("@navi/shared/workflow-policy");
 const multi = {
   workspace: "isolated" as const,
   steps: [
@@ -313,7 +314,7 @@ assert.equal(
 );
 
 // ── 验收通过那一刻按线上写的做 ────────────────────────────────────────────
-const { acceptPlan, hasAcceptStation } = await import("@ash/shared/workflow-policy");
+const { acceptPlan, hasAcceptStation } = await import("@navi/shared/workflow-policy");
 assert.deepEqual(
   acceptPlan(null), { merge: "safe", clean: "all" },
   "老任务身上没有线：验收还是老规矩(安全合并 + worktree 和分支都删)，行为分毫不变",
@@ -439,11 +440,25 @@ assert.equal(
 
 // ── 预览站真起真收 ────────────────────────────────────────────────────────
 const { startPreview, readPreview, stopPreview } = await import("../src/preview.js");
-const port = 14000 + (process.pid % 900);
+// 三个互不相同的空闲端口：同时占住再一起放。按 pid 算端口的话，相邻 pid 的两份测试会互相撞（一个用 N、N+1，
+// 另一个用 N+1、N+2）。
+const [port, nextPort, unsafePort] = await (async () => {
+  const { createServer } = await import("node:net");
+  const { once } = await import("node:events");
+  const probes = await Promise.all([0, 1, 2].map(async () => {
+    const probe = createServer();
+    probe.listen(0, "127.0.0.1");
+    await once(probe, "listening");
+    return probe;
+  }));
+  const ports = probes.map((probe) => (probe.address() as { port: number }).port);
+  await Promise.all(probes.map((probe) => new Promise((done) => probe.close(done))));
+  return ports;
+})();
 const previewStep = makeStep("preview", "pv");
 if (previewStep.kind === "preview") {
   previewStep.p = {
-    cmd: `node -e "if(process.env.ASH_PREVIEW!=='1'||process.env.ASH_PREVIEW_MODE!=='test')process.exit(12);require('http').createServer((q,s)=>s.end('ok')).listen(${port},()=>console.log('ready on http://localhost:${port}/'))"`,
+    cmd: `node -e "if(process.env.NAVI_PREVIEW!=='1'||process.env.NAVI_PREVIEW_MODE!=='test')process.exit(12);require('http').createServer((q,s)=>s.end('ok')).listen(${port},()=>console.log('ready on http://localhost:${port}/'))"`,
     mode: "test",
     ready: "http200",
     life: "gate",
@@ -458,7 +473,7 @@ if (started.ok) {
   const replacement = makeStep("preview", "pv-replacement");
   if (replacement.kind === "preview") {
     replacement.p = {
-      cmd: `node -e "if(process.env.ASH_PREVIEW_MODE!=='full')process.exit(13);require('http').createServer((q,s)=>s.end('next')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
+      cmd: `node -e "if(process.env.NAVI_PREVIEW_MODE!=='full')process.exit(13);require('http').createServer((q,s)=>s.end('next')).listen(${nextPort},()=>console.log('ready on http://localhost:${nextPort}/'))"`,
       mode: "full",
       ready: "http200",
       life: "gate",
@@ -468,13 +483,13 @@ if (started.ok) {
   assert.equal(replaced.ok, true, "另一个任务的预览也能起来");
   assert.ok(readPreview("t1"), "不同 worktree/任务的预览可以并行，旧预览仍在");
   assert.ok(readPreview("t2"), "新预览有自己的记录");
-  assert.equal(await fetch(`http://localhost:${port + 1}/`).then((res) => res.text()), "next");
+  assert.equal(await fetch(`http://localhost:${nextPort}/`).then((res) => res.text()), "next");
   assert.equal(await stopPreview("t2", "测试收尾"), true);
   assert.equal(readPreview("t2"), null, "收掉之后记录一并删掉");
   const unsafe = makeStep("preview", "pv-unsafe");
   if (unsafe.kind === "preview") {
     unsafe.p = {
-      cmd: `node -e "console.log('[ash] scheduler started');require('http').createServer((q,s)=>s.end('bad')).listen(${port + 3},()=>console.log('ready on http://localhost:${port + 3}/'))"`,
+      cmd: `node -e "console.log('[navi] scheduler started');require('http').createServer((q,s)=>s.end('bad')).listen(${unsafePort},()=>console.log('ready on http://localhost:${unsafePort}/'))"`,
       mode: "command",
       ready: "http200",
       life: "gate",
@@ -484,12 +499,9 @@ if (started.ok) {
   assert.equal(refused.ok, false, "旧分支预览一旦启动真调度器必须当场拒绝");
   if (!refused.ok) assert.match(refused.reason, /真调度器/);
   assert.equal(await stopPreview("t1", "测试收尾"), true);
-  await new Promise((r) => setTimeout(r, 300));
-  assert.equal(
-    await fetch(`http://localhost:${port}/`).then(() => true).catch(() => false),
-    false,
-    "进程真被杀了,不是只删了记录",
-  );
+  const answers = () => fetch(`http://localhost:${port}/`).then(() => true).catch(() => false);
+  for (const end = Date.now() + 10_000; Date.now() < end && await answers();) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(await answers(), false, "进程真被杀了,不是只删了记录");
 }
 
 // ── 一站没过之后,线上写的那一档真的做出来了 ────────────────────────────────
@@ -573,5 +585,5 @@ assert.equal(
 );
 
 rmSync(join(RUNS_DIR, "t1"), { recursive: true, force: true });
-rmSync(root, { recursive: true, force: true });
+await removeTmpStage(root);
 console.log("workflow step runner tests passed");

@@ -3,7 +3,7 @@ import type {
   GitRef,
   GitStash,
   GitWorkbenchState,
-} from "@ash/shared/git-workbench";
+} from "@navi/shared/git-workbench";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { getGitOverview } from "../git-overview.js";
@@ -23,14 +23,17 @@ import {
 import { cappedGitStdout } from "../git-exec.js";
 import { repoKey } from "../git.js";
 import { lockedRepoKeys } from "../repo-lock.js";
+import { STASH_OWNER_TAG, STASH_OWNER_TAGS, stashOwnerMark } from "@navi/shared/git-workbench";
 import { git, digest, commitOid, fail, stateVersion } from "./core.js";
 import { readJournal } from "./journal.js";
 import { readRemoteDetails } from "./remotes.js";
 import { readBackups } from "./maintenance.js";
 import { readChangeStats, withChangeStats } from "./change-stats.js";
 
-export const ownerPrefix = (actor: string) =>
-  `[ash:${digest(actor).slice(0, 12)}]`;
+/** 这一版新存贮藏写的所有权标记。 */
+export const ownerPrefix = (actor: string) => stashOwnerMark(STASH_OWNER_TAG, digest(actor).slice(0, 12));
+/** 认「本人存的」时两代标记都算：升级前存的贮藏带旧标签。 */
+const ownerMarks = (actor: string) => STASH_OWNER_TAGS.map((tag) => stashOwnerMark(tag, digest(actor).slice(0, 12)));
 export async function readRefs(root: string): Promise<GitRef[]> {
   const raw = await git(root, [
     "for-each-ref",
@@ -80,7 +83,7 @@ export async function readStashes(
         sha,
         subject,
         at,
-        owned: subject.includes(ownerPrefix(actor)),
+        owned: ownerMarks(actor).some((mark) => subject.includes(mark)),
       };
     });
 }

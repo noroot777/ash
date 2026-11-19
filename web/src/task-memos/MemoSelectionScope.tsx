@@ -30,7 +30,7 @@ export function MemoSelectionScope({ taskId, openTab, notify, onAsk, onAddToRepl
       // toast 让他自己猜。几十毫秒的事，换的是「切过去就看得见」。
       onAddToMemo={(text) => void (async () => {
         try {
-          await addTaskMemo(taskId, text);
+          await addTaskMemo(taskId, { body: text });
           openTab("memos");
         } catch (reason) {
           notify(reason instanceof Error ? reason.message : String(reason));

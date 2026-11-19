@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
-import { closeRelayDispatchers, relayErrorResponse, relayFetch, RelayRequestError } from "../src/llm-relay.js";
+import { closeRelayDispatchers, relayErrorResponse, relayFetch, RelayRequestError, RELAY_HEADERS_TIMEOUT_CODE, RELAY_PROXY_UNAVAILABLE_CODE } from "../src/llm-relay.js";
 import { parseGnomeProxy, refreshSystemProxy, setSystemProxyReaderForTests, type SystemProxySettings } from "../src/system-proxy.js";
 
 const warnings: string[] = [];
@@ -14,7 +14,7 @@ const originalLog = console.log;
 console.warn = (message: unknown) => { warnings.push(String(message)); };
 console.log = (...args: unknown[]) => {
   const line = args.map(String).join(" ");
-  if (line.startsWith("[ash]")) warnings.push(line);
+  if (line.startsWith("[navi]")) warnings.push(line);
   else originalLog(...args);
 };
 // 本测试不读本机真实的系统代理：默认「系统没配」，用到时逐段换
@@ -25,7 +25,7 @@ const systemProxyReader = async () => {
   return systemProxy;
 };
 setSystemProxyReaderForTests(systemProxyReader, 60_000);
-const envKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "ASH_LLM_RELAY_HEADERS_TIMEOUT_MS", "ASH_LLM_RELAY_BODY_TIMEOUT_MS"];
+const envKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "NAVI_LLM_RELAY_HEADERS_TIMEOUT_MS", "NAVI_LLM_RELAY_BODY_TIMEOUT_MS"];
 const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 const sockets = new Set<Socket>();
 const calls: { path: string; method: string; socket: Socket }[] = [];
@@ -133,8 +133,8 @@ try {
   process.env.http_proxy = process.env.HTTP_PROXY = "http://127.0.0.1:1";
   process.env.https_proxy = process.env.HTTPS_PROXY = "http://127.0.0.1:1";
   process.env.no_proxy = process.env.NO_PROXY = "only-remote-provider.test";
-  delete process.env.ASH_LLM_RELAY_HEADERS_TIMEOUT_MS;
-  delete process.env.ASH_LLM_RELAY_BODY_TIMEOUT_MS;
+  delete process.env.NAVI_LLM_RELAY_HEADERS_TIMEOUT_MS;
+  delete process.env.NAVI_LLM_RELAY_BODY_TIMEOUT_MS;
 
   const globalDispatcher = getGlobalDispatcher();
   const blocked = new MockAgent();
@@ -145,7 +145,7 @@ try {
     const isolated = await relayFetch(`${origin}/healthy`, {});
     assert.equal(isolated.status, 200);
     assert.deepEqual(await isolated.json(), { ok: true });
-    assert.match(isolated.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
+    assert.match(isolated.headers.get("x-navi-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
   } finally {
     setGlobalDispatcher(globalDispatcher);
     await blocked.close();
@@ -168,7 +168,7 @@ try {
   const hungFailure = assert.rejects(hung, (error: unknown) => {
     assert(error instanceof RelayRequestError);
     assert.equal(error.diagnostic.status, 504);
-    assert.deepEqual(error.diagnostic.codes, ["ASH_RELAY_HEADERS_TIMEOUT"]);
+    assert.deepEqual(error.diagnostic.codes, [RELAY_HEADERS_TIMEOUT_CODE]);
     assert.match(error.message, /等待响应头超过 150ms/);
     assert.equal(relayErrorResponse(error).status, 504);
     return true;
@@ -194,7 +194,7 @@ try {
   assert.equal(await empty.text(), "");
   console.log("  ✓ 响应头超时不截断已经开始的长流，空响应也正确释放连接");
 
-  process.env.ASH_LLM_RELAY_BODY_TIMEOUT_MS = "200";
+  process.env.NAVI_LLM_RELAY_BODY_TIMEOUT_MS = "200";
   const idle = await relayFetch(`${origin}/idle`, {});
   let idleGuard: ReturnType<typeof setTimeout> | undefined;
   const idleFailure = assert.rejects(Promise.race([
@@ -213,7 +213,7 @@ try {
   const heartbeat = await relayFetch(`${origin}/heartbeat`, {}, { headersTimeoutMs: 60 });
   assert.match(await heartbeat.text(), /data: first[\s\S]*data: last/);
   await idleFailure;
-  delete process.env.ASH_LLM_RELAY_BODY_TIMEOUT_MS;
+  delete process.env.NAVI_LLM_RELAY_BODY_TIMEOUT_MS;
   console.log("  ✓ 无数据的流触发空闲超时，持续有心跳的长流不被截断，并行流不受牵连");
 
   const cancelSurvivor = await relayFetch(`${origin}/heartbeat`, {});
@@ -399,14 +399,14 @@ try {
   await assert.rejects(relayFetch(mappedUrl, { method: "POST", body: "inference-request" }), (error: unknown) => {
     assert(error instanceof RelayRequestError);
     assert.equal(error.diagnostic.status, 502);
-    assert.deepEqual(error.diagnostic.codes, ["ASH_SYSTEM_PROXY_UNAVAILABLE"]);
+    assert.deepEqual(error.diagnostic.codes, [RELAY_PROXY_UNAVAILABLE_CODE]);
     assert.equal(error.diagnostic.proxy, "blocked", "没发出去的请求诊断里不写成直连");
     assert.match(error.message, /系统代理不可用，未转发（读取系统代理失败（EACCES）/);
     return true;
   });
   await assert.rejects(relayFetch(`${origin}/redirect?to=${encodeURIComponent(mappedUrl)}`, {}), (error: unknown) => {
     assert(error instanceof RelayRequestError);
-    assert(error.diagnostic.codes.includes("ASH_SYSTEM_PROXY_UNAVAILABLE"), "重定向到远端的那一跳同样拒绝");
+    assert(error.diagnostic.codes.includes(RELAY_PROXY_UNAVAILABLE_CODE), "重定向到远端的那一跳同样拒绝");
     return true;
   });
   assert.deepEqual(calls.slice(callsBeforeBlocked).map((entry) => entry.path), [`/redirect?to=${encodeURIComponent(mappedUrl)}`], "首次读取失败时远端请求一个都没直连出去");
@@ -429,7 +429,7 @@ try {
   assert(!lastCallViaProxy(), "系统绕过列表照常直连");
   await assert.rejects(relayFetch(`https://provider.test:${address.port}/healthy`, {}), (error: unknown) => {
     assert(error instanceof RelayRequestError);
-    assert.deepEqual(error.diagnostic.codes, ["ASH_SYSTEM_PROXY_UNAVAILABLE"]);
+    assert.deepEqual(error.diagnostic.codes, [RELAY_PROXY_UNAVAILABLE_CODE]);
     assert.match(error.message, /未转发（系统 HTTPS 代理地址无法解析/);
     return true;
   });
@@ -501,7 +501,7 @@ try {
   await refreshSystemProxy();
   const pacDirect = await relayFetch(mappedUrl, {});
   assert.deepEqual(await pacDirect.json(), { ok: true });
-  assert(warnings.some((line) => line.includes("PAC 自动配置（http://pac.test/proxy.pac）ash 不支持、未生效，当前直连")));
+  assert(warnings.some((line) => line.includes("PAC 自动配置（http://pac.test/proxy.pac）Navi 不支持、未生效，当前直连")));
   assert.doesNotMatch(warnings.join("\n"), /system-proxy-secret/);
   console.log("  ✓ 代理连不上时报出代理地址与来源（凭据打码）且不降级直连，PAC 明说未生效");
 

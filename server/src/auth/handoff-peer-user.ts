@@ -10,16 +10,19 @@
 //   本机多人 + 带错/过期的 key → 抛 401「这把 key 在本机不认」
 //   本机多人 + 压根没带 key → 抛 401「在这台机器上没有账号,找管理员开通」
 import type { Context } from "hono";
-import { HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
+import { HANDOFF_PEER_KEY_REQUIRED } from "@navi/shared/handoff";
 import type { Actor } from "./context.js";
 import { SINGLE_ACTOR } from "./context.js";
 import type { UserRow } from "./store.js";
 import { countUsers, findUserByKey } from "./store.js";
 import { HandoffError } from "../handoff-types.js";
 import { isMultiUser } from "./mode.js";
+import { readHeader } from "@navi/shared/http-headers";
 
 /** 出站请求把「我在对端的 key」放这个头里。它是凭证,只走 header,不进 URL/日志。 */
-export const PEER_USER_KEY_HEADER = "x-ash-peer-user-key";
+export const PEER_USER_KEY_HEADER = "x-navi-peer-user-key";
+/** 入站：改名之前的对端发的是旧名（x-ash-peer-user-key），两代都认。 */
+const peerUserKeyOf = (c: Context): string => readHeader((key) => c.req.header(key), PEER_USER_KEY_HEADER)?.trim() ?? "";
 
 export type PeerUser =
   | { kind: "single"; user: null }
@@ -31,7 +34,7 @@ export type PeerUser =
  */
 export async function peerUserFor(c: Context): Promise<PeerUser> {
   if (!(await isMultiUser())) return { kind: "single", user: null };
-  const key = c.req.header(PEER_USER_KEY_HEADER)?.trim() ?? "";
+  const key = peerUserKeyOf(c);
   if (!key) {
     throw peerKeyError(
       "对端是多人实例:接力必须带上「你在对端的账号 key」。在接力对话框里直接填上它;还没有账号就找对端管理员开一个。",
@@ -62,7 +65,7 @@ const peerKeyError = (message: string): HandoffError => {
  */
 export async function peerUserSoft(c: Context): Promise<PeerUser | null> {
   if (!(await isMultiUser())) return { kind: "single", user: null };
-  const key = c.req.header(PEER_USER_KEY_HEADER)?.trim() ?? "";
+  const key = peerUserKeyOf(c);
   if (!key) return null;
   const user = await findUserByKey(key);
   if (!user || user.status === "suspended") return null;

@@ -6,7 +6,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { HighlightStyle, StreamLanguage, bracketMatching, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { tags } from "@lezer/highlight";
-import { MAX_PREVIEW_SCRIPT_LENGTH } from "@ash/shared/preview";
+import { MAX_PREVIEW_SCRIPT_LENGTH } from "@navi/shared/preview";
 import { localeNumber } from "../lib/localeFormat.ts";
 import "./shell-script-editor.css";
 
@@ -24,8 +24,8 @@ const CONTENT_PADDING = 16;
 const MAX_DRAG_HEIGHT = 900;
 
 const externalValue = Annotation.define<boolean>();
-const wrapStorageKey = "ash:preview-command-wrap";
-const heightStorageKey = "ash:shell-editor-height";
+const wrapStorageKey = "navi:preview-command-wrap";
+const heightStorageKey = "navi:shell-editor-height";
 const highlighting = HighlightStyle.define([
   { tag: tags.keyword, color: "var(--accent)", fontWeight: "500" },
   { tag: [tags.string, tags.special(tags.string)], color: "var(--green)" },

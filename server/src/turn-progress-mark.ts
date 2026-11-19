@@ -64,6 +64,7 @@ import {
   closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, writeSync,
 } from "node:fs";
 import { join } from "node:path";
+import { LEGACY_TURN_PROGRESS_WATCH_HEAD } from "@navi/shared/legacy-names";
 import { RUNS_DIR } from "./paths.js";
 import { verifyUntilKnown, type VerifyPace } from "./verify-until-known.js";
 
@@ -71,7 +72,9 @@ import { verifyUntilKnown, type VerifyPace } from "./verify-until-known.js";
  * 参与证明的**完整性标记**。第一行认版本与回合身份,末行认「写完了」:
  * 半张证明(截断后写失败)、以及上一代没有版本行的证明,都读不出它 → `unreadable`。
  */
-const WATCH_HEAD = "ash-turn-progress-watch/v2";
+const WATCH_HEAD = "navi-turn-progress-watch/v2";
+/** 版本行只改了名字、格式没变：升级那一刻正在跑的回合手里是旧名写的证明，照样认。 */
+const WATCH_HEADS = [WATCH_HEAD, LEGACY_TURN_PROGRESS_WATCH_HEAD];
 const WATCH_TAIL = "complete";
 
 /** 读出来的三档。`none` 是**确证**没有过进展(目录在、这一轮的记号不在)。 */
@@ -121,7 +124,7 @@ export function openTurnProgress(taskId: string, sessionId: string, turnStartedA
     }
     fsyncDir(progressDir(taskId));
   } catch (error) {
-    console.warn(`[ash] 落会话 ${sessionId} 本轮的进展参与证明失败(静默档这一轮按「核实不了」处理):`, error);
+    console.warn(`[navi] 落会话 ${sessionId} 本轮的进展参与证明失败(静默档这一轮按「核实不了」处理):`, error);
   }
 }
 
@@ -134,7 +137,7 @@ export function openTurnProgress(taskId: string, sessionId: string, turnStartedA
 function watchIsComplete(dir: string, sessionId: string, turnStartedAt: string): boolean {
   try {
     const lines = readFileSync(join(dir, watchName(sessionId, turnStartedAt)), "utf8").split("\n");
-    return lines[0] === `${WATCH_HEAD} ${turnStartedAt}` && lines.includes(WATCH_TAIL);
+    return WATCH_HEADS.some((head) => lines[0] === `${head} ${turnStartedAt}`) && lines.includes(WATCH_TAIL);
   } catch {
     return false; // 读不动也是「说不上来」,不是「它没产出」
   }
@@ -145,7 +148,7 @@ function dropTurnProgressWatch(taskId: string, sessionId: string, turnStartedAt:
   try {
     rmSync(join(progressDir(taskId), watchName(sessionId, turnStartedAt)), { force: true });
   } catch (error) {
-    console.warn(`[ash] 撤会话 ${sessionId} 本轮的进展参与证明失败:`, error);
+    console.warn(`[navi] 撤会话 ${sessionId} 本轮的进展参与证明失败:`, error);
   }
 }
 
@@ -175,7 +178,7 @@ export function noteTurnProgress(taskId: string, sessionId: string, turnStartedA
   } catch (error) {
     written.delete(key); // 下一条进展事件再试一次
     dropTurnProgressWatch(taskId, sessionId, turnStartedAt);
-    console.warn(`[ash] 记下会话 ${sessionId} 本轮已有进展失败(这一轮的静默档就此退回「核实不了」):`, error);
+    console.warn(`[navi] 记下会话 ${sessionId} 本轮已有进展失败(这一轮的静默档就此退回「核实不了」):`, error);
     return false;
   }
 }
@@ -199,7 +202,7 @@ export function turnProgress(taskId: string, sessionId: string, turnStartedAt: s
     if (!existsSync(join(dir, watchName(sessionId, turnStartedAt)))) return "unreadable";
     return watchIsComplete(dir, sessionId, turnStartedAt) ? "none" : "unreadable";
   } catch (error) {
-    console.warn(`[ash] 读会话 ${sessionId} 本轮进展记号失败,按「核实不了」处理:`, error);
+    console.warn(`[navi] 读会话 ${sessionId} 本轮进展记号失败,按「核实不了」处理:`, error);
     return "unreadable";
   }
 }

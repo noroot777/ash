@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ServerEvent } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import type { ServerEvent } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-event-timestamps-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-event-timestamps-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 try {
   const { bus } = await import("../src/bus.js");
@@ -72,5 +73,5 @@ try {
   unsubscribe();
   console.log("task event timestamps: 状态水位、系统旁注时间与类型均保持实时/落盘一致");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

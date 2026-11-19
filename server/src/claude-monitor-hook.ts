@@ -1,9 +1,9 @@
-// Monitor 改道：agent 调 claude 内置 `Monitor` 时拦下来，拿同一份参数起一条 ash 哨兵。
+// Monitor 改道：agent 调 claude 内置 `Monitor` 时拦下来，拿同一份参数起一条 navi 哨兵。
 //
 // ── 为什么要拦 ───────────────────────────────────────────────────────────────
 //
-// 内置 Monitor 的进程挂在 agent 自己的进程树里。ash 用 `claude -p` 跑一次性回合，回合
-// 一结束 CLI 就把它们成批收走，而它的通知只注回那条随之结束的会话 —— ash 这边够不着任何
+// 内置 Monitor 的进程挂在 agent 自己的进程树里。navi 用 `claude -p` 跑一次性回合，回合
+// 一结束 CLI 就把它们成批收走，而它的通知只注回那条随之结束的会话 —— navi 这边够不着任何
 // 唤醒通道。实测行序原样抄在 `claude-monitor-reaped.ts` 的文件头。净效果是：agent 说的
 // 那句「监听已挂上，套件结束会叫我」在说出口的那一刻就不成立了。
 //
@@ -13,7 +13,7 @@
 // `sleep 1800` 同步干等 —— 那比现在更糟（回合卡死或超时，而不是只是没人叫醒）。
 //
 // 这里把它要的效果**真的给它**：同一份 command/description/timeout 交给 `startMonitor`
-// 起一条真哨兵（进程由 ash 起，在 agent 身外，跨回合/会话/重启都活着），再把 monitorId
+// 起一条真哨兵（进程由 navi 起，在 agent 身外，跨回合/会话/重启都活着），再把 monitorId
 // 和「这一轮该用 pause_task 收尾」一并回给它。
 //
 // 回话只能走 `permissionDecision: "deny"` 的 reason：hook 契约里没有「替工具返回结果」
@@ -42,11 +42,13 @@
 // 收台）—— 于是它顺带把这个 hook 关掉了。`runSteerable` 又是**所有任务的默认路径**
 // （`orchestrator.ts` / `task-run.ts` 都是 `ex.runSteerable ?? ex.run`），净效果是本功能
 // 2026-10-16 上线之后，在真实任务上一次都没有生效过：库里 2026-10-15 ~ 10-20 的 93 条
-// 内置 Monitor 投影一条都没被改道（同期 ash 哨兵只有 2 条，还都是 agent 自己手动调的）。
+// 内置 Monitor 投影一条都没被改道（同期 navi 哨兵只有 2 条，还都是 agent 自己手动调的）。
 // 上线时那次真机验证走的是 `run()`（一次性 `claude -p`），恰好是唯一挂着 hook 的那条路。
 // 现在两个概念分开了（`crossTurn`），而 `test-claude-monitor-hook.ts` 直接按三条真实出
 // 入口断言「谁该带、谁不该带」。
-import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/monitor";
+import { NAVI_HEADERS } from "@navi/shared/http-headers";
+import { NAVI_MCP_SERVER_NAME, NAVI_TURN_IDENTITY_ENV } from "@navi/shared/mcp";
+import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@navi/shared/monitor";
 import { currentListeningPort } from "./listening-port.js";
 import { startMonitor } from "./monitor-create.js";
 import { turnCaller, type VerifiedTurn } from "./monitor-session.js";
@@ -55,10 +57,10 @@ import { turnCaller, type VerifiedTurn } from "./monitor-session.js";
 const MONITOR_TOOL = "Monitor";
 
 const HOW_TO_DIY =
-  "你可以自己调 `mcp__harness__start_monitor`（同样的 command/description），再用 `pause_task` 收尾这一轮。";
+  `你可以自己调 \`mcp__${NAVI_MCP_SERVER_NAME}__start_monitor\`（同样的 command/description），再用 \`pause_task\` 收尾这一轮。`;
 
 const WHY_NOT_BUILTIN =
-  "claude 内置的 Monitor 在 ash 里活不过这一轮（它的进程在你自己的进程树里，回合一结束就被收走，"
+  "claude 内置的 Monitor 在 Navi 里活不过这一轮（它的进程在你自己的进程树里，回合一结束就被收走，"
   + "通知也只注回这条随之结束的会话），所以这次调用没有执行。";
 
 /** claude 发过来的 PreToolUse 事件里我们用得上的那几个字段。其余原样忽略。 */
@@ -101,16 +103,16 @@ const deny = (reason: string): ClaudeMonitorHookDecision => ({
  * **代办成功并拒掉原工具**，或者**没能代办、明确拒掉并说清怎么补**。
  */
 export const monitorHookInternalError = (detail: string): ClaudeMonitorHookDecision =>
-  deny(`${WHY_NOT_BUILTIN}本想替你改挂成 ash 哨兵，但 ash 这边处理这次请求时出错了（${detail}）。${HOW_TO_DIY}`);
+  deny(`${WHY_NOT_BUILTIN}本想替你改挂成 Navi 哨兵，但 Navi 这边处理这次请求时出错了（${detail}）。${HOW_TO_DIY}`);
 
-/** 这次 PreToolUse 事件是不是内置 `Monitor` 的调用。不是的话 ash 一律不表态。 */
+/** 这次 PreToolUse 事件是不是内置 `Monitor` 的调用。不是的话 navi 一律不表态。 */
 export const isMonitorHookCall = (input: ClaudeMonitorHookInput | null | undefined): boolean =>
   input?.tool_name === MONITOR_TOOL;
 
 /**
  * 这次 Monitor 调用该怎么处置。
  *
- * `turn` 为空 = CLI 没把回合身份插进 header（老版本，或这根本不是 ash 拉起的 claude）。
+ * `turn` 为空 = CLI 没把回合身份插进 header（老版本，或这根本不是 navi 拉起的 claude）。
  * 那时仍然拦，但只能让它自己去挂：**一个都不放行**，因为放过去的监听照样活不过这一轮，
  * 而「拦住 + 说清怎么补」比「放行 + 到点没人叫醒」诚实。
  */
@@ -127,23 +129,23 @@ export async function claudeMonitorHookDecision(
   const command = typeof toolInput.command === "string" ? toolInput.command.trim() : "";
   const description = typeof toolInput.description === "string" ? toolInput.description.trim() : "";
 
-  // ws 这一种代办不了：ash 的哨兵只认「起一条命令、按行读它的 stdout」。硬要代办就得替
+  // ws 这一种代办不了：navi 的哨兵只认「起一条命令、按行读它的 stdout」。硬要代办就得替
   // 它挑一个 websocat / node 的写法，那是替 agent 做它自己的技术选择。
   if (!command) {
     const ws = toolInput.ws
-      ? "ash 的哨兵盯的是命令的 stdout，接不了 WebSocket：把它包成一条命令（websocat，或一小段每收一帧打印一行的 node 脚本）再挂。"
+      ? "Navi 的哨兵盯的是命令的 stdout，接不了 WebSocket：把它包成一条命令（websocat，或一小段每收一帧打印一行的 node 脚本）再挂。"
       : "";
     return deny(`${WHY_NOT_BUILTIN}${ws}${HOW_TO_DIY}`);
   }
 
   if (!turn) {
-    return deny(`${WHY_NOT_BUILTIN}本想替你改挂成 ash 哨兵，但这次请求里没有回合身份，挂不了。${HOW_TO_DIY}`);
+    return deny(`${WHY_NOT_BUILTIN}本想替你改挂成 Navi 哨兵，但这次请求里没有回合身份，挂不了。${HOW_TO_DIY}`);
   }
 
   const timeoutMs = typeof toolInput.timeout_ms === "number" && Number.isFinite(toolInput.timeout_ms)
     ? toolInput.timeout_ms
     : undefined;
-  // 钳过要说出来：agent 写了 2 小时而 ash 上限 60 分钟时，不说它就会按自己写的那个数去
+  // 钳过要说出来：agent 写了 2 小时而 navi 上限 60 分钟时，不说它就会按自己写的那个数去
   // 安排后面的事。判据与 HTTP 端点那条同源（monitor-routes.ts）。
   const clamped = timeoutMs !== undefined
     && (timeoutMs < MONITOR_MIN_TIMEOUT_MS || timeoutMs > MONITOR_MAX_TIMEOUT_MS);
@@ -163,15 +165,15 @@ export async function claudeMonitorHookDecision(
   });
 
   if (!result.ok) {
-    return deny(`${WHY_NOT_BUILTIN}替你改挂成 ash 哨兵也没成：${result.error}。${HOW_TO_DIY}`);
+    return deny(`${WHY_NOT_BUILTIN}替你改挂成 Navi 哨兵也没成：${result.error}。${HOW_TO_DIY}`);
   }
 
   return deny(
-    `已经替你改挂成 ash 哨兵了（monitorId=${result.monitor.id}），盯的是同一条命令`
-    + `${clamped ? "；你写的 timeout 超出 ash 的区间，已经钳到边界" : ""}。`
+    `已经替你改挂成 Navi 哨兵了（monitorId=${result.monitor.id}），盯的是同一条命令`
+    + `${clamped ? "；你写的 timeout 超出 Navi 的区间，已经钳到边界" : ""}。`
     + "换一套的原因：claude 内置的 Monitor 进程在你自己的进程树里，这一轮一结束就被收走，"
     + "它的通知也只注回这条随之结束的会话 —— 没有任何东西会把这个任务叫醒。"
-    + "ash 哨兵的进程由 ash 自己起，活得过这一回合，每吐一行就把这个任务唤醒一次。"
+    + "Navi 哨兵的进程由 Navi 自己起，活得过这一回合，每吐一行就把这个任务唤醒一次。"
     + "**所以这一轮请用 `pause_task` 收尾**（resumePrompt 写清被叫醒后该干什么），别干等、也别就这么结束。",
   );
 }
@@ -181,11 +183,11 @@ export async function claudeMonitorHookDecision(
  * 内置 Monitor 是好用的（见文件头，以及它跟 `--input-format stream-json` 的区别）。
  *
  * 用 `http` 而不是 `command`：见文件头。`headers` 里的 `$VAR` 由 CLI 从进程环境里取，
- * 而 `ASH_TASK_ID` / `ASH_TURN_TOKEN` 正是 ash 起跑时注进去给 MCP 用的那两个
+ * 而 `NAVI_TASK_ID` / `NAVI_TURN_TOKEN` 正是 navi 起跑时注进去给 MCP 用的那两个
  * （`auth/run-env.ts` 旁边的调用点），所以这里不必自己传一遍。
  *
- * **不设 `onFailure: "block"`**：那是 v2.1.295+ 才有的字段，而 ash 支持的 CLI 版本跨度
- * 比这宽。连不上 ash 时退化成放行（回到这个功能上线前的状态），比让一份带未知字段的
+ * **不设 `onFailure: "block"`**：那是 v2.1.295+ 才有的字段，而 navi 支持的 CLI 版本跨度
+ * 比这宽。连不上 navi 时退化成放行（回到这个功能上线前的状态），比让一份带未知字段的
  * settings 被整个拒掉强 —— 后者会连 fastMode、供应商路由一起带走。
  */
 /**
@@ -210,10 +212,10 @@ export function monitorRedirectHook(crossTurn: boolean): Record<string, unknown>
               // 那就等于放行 —— 所以这个数宁可宽一点。
               timeout: 15,
               headers: {
-                "x-ash-source-task-id": "$ASH_TASK_ID",
-                "x-ash-turn-token": "$ASH_TURN_TOKEN",
+                [NAVI_HEADERS.sourceTaskId]: `$${NAVI_TURN_IDENTITY_ENV.taskId}`,
+                [NAVI_HEADERS.turnToken]: `$${NAVI_TURN_IDENTITY_ENV.turnToken}`,
               },
-              allowedEnvVars: ["ASH_TASK_ID", "ASH_TURN_TOKEN"],
+              allowedEnvVars: [NAVI_TURN_IDENTITY_ENV.taskId, NAVI_TURN_IDENTITY_ENV.turnToken],
             },
           ],
         },

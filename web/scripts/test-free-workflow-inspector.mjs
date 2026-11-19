@@ -160,7 +160,7 @@ try {
     "自由审查格应和普通任务一样按轮列出记录",
   );
   assert.equal(await reviewOnly.locator(".insp-rec__body").count(), 0, "审查正文默认收着");
-  assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "审查正文默认不弹出");
+  assert.equal(await page.locator(".side-drawer").count(), 0, "审查正文默认不弹出");
   await reviewRounds.first().click();
 
   const inline = reviewOnly.locator(".insp-rec__body").first();
@@ -171,12 +171,13 @@ try {
   assert.equal(await inline.getByRole("heading", { name: "审查结论" }).count(), 1, "报告应就地按 Markdown 正文渲染");
   assert.equal(await inline.locator("pre").count(), 0, "报告不再退化成原始 pre 文本");
   assert.equal(await inline.locator(".review-screenshot-strip img[role=button]").count(), 6, "就地展开时截图也在");
-  assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "就地展开不弹抽屉");
+  assert.equal(await page.locator(".side-drawer").count(), 0, "就地展开不弹抽屉");
 
-  // 嫌窄就点那一行末尾的图标：同一份正文装进贴着面板左边缘的抽屉里。
+  // 嫌窄就点那一行末尾的图标：同一份正文从主区左边推出来（读全文那一屉，LeftDrawer）。
   await inline.getByRole("button", { name: "在左侧铺开看" }).click();
-  const drawer = page.locator(".review-evidence-drawer");
+  const drawer = page.locator(".side-drawer");
   await drawer.waitFor();
+  assert.equal(await drawer.locator(".side-drawer__kind").innerText(), "审查报告");
   assert.match(await drawer.locator(".review-note").innerText(), /派审附言[\s\S]*重点核对退款分支的边界条件。/, "报告抽屉里要带出这一轮的附言");
   assert.equal(await drawer.getByRole("heading", { name: "审查结论" }).count(), 1, "报告应在左侧抽屉按 Markdown 正文渲染");
 
@@ -188,8 +189,10 @@ try {
 
   await drawer.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const drawerBox = await drawer.boundingBox();
-  const footerBox = await drawer.locator(".review-evidence-drawer__footer").boundingBox();
+  const footerBox = await drawer.locator(".side-drawer__footer").boundingBox();
   assert.ok(Math.abs(footerBox.y + footerBox.height - (drawerBox.y + drawerBox.height)) <= 1, "图片区应固定贴住抽屉底边");
+  const paneBox = await page.locator(".workflow-inspector-fixture").boundingBox();
+  assert.ok(drawerBox.x + drawerBox.width <= paneBox.x + 1, "抽屉只盖主区，不盖侧边栏");
 
   const pageCount = page.context().pages().length;
   await shots.locator("img[role=button]").first().click();
@@ -232,20 +235,19 @@ try {
   assert.equal(await drawer.count(), 0, "工作流中的审查正文默认也不弹出");
   await activities.nth(1).getByRole("button").click();
   await drawer.waitFor();
-  assert.equal(await drawer.locator("header b").innerText(), "第 1 轮审查", "点时间线审查节点应复用左侧抽屉");
+  assert.match(await drawer.locator("header b").innerText(), /^第 1 轮审查/, "点时间线审查节点应复用左侧抽屉");
   assert.equal(await drawer.getByRole("heading", { name: "审查结论" }).count(), 1);
 
   await activities.nth(3).getByRole("button").click();
   assert.equal(await drawer.locator(".review-round-body p").first().innerText(), "还在审，报告写完会出现在这里。", "点第二次审查应在同一抽屉切换记录（那一轮还在审）");
-  assert.equal(await drawer.locator(".review-evidence-drawer__footer").count(), 0, "没有截图的轮次不应留下空白底栏");
+  assert.equal(await drawer.locator(".side-drawer__footer:visible").count(), 0, "没有截图的轮次不应留下空白底栏");
   await activities.nth(3).getByRole("button").click();
   await drawer.waitFor({ state: "detached" });
 
   const acceptance = page.locator(".acceptance-fixture");
   const toolbar = acceptance.locator('[aria-label="自由工作流快捷操作"]');
   await toolbar.waitFor();
-  assert.deepEqual(await toolbar.getByRole("button").allInnerTexts(), ["派审查", "打开预览"], "会话上方只保留派审与预览");
-  assert.equal(await acceptance.getByText("合并&清理", { exact: true }).count(), 0, "自由工作流快捷栏不再显示合并按钮");
+  assert.deepEqual(await toolbar.getByRole("button").allInnerTexts(), ["派审查", "打开预览"], "这一组键只保留派审与预览");
   const acceptButton = acceptance.getByRole("button", { name: "验收", exact: true });
   await acceptButton.click();
   const acceptanceWorkspace = acceptance.locator(".single-review-workspace");
@@ -253,16 +255,21 @@ try {
   const workspaceAcceptButton = acceptanceWorkspace.getByRole("button", { name: "验收通过", exact: true });
   await workspaceAcceptButton.waitFor();
   assert.equal(await workspaceAcceptButton.count(), 1, "自由任务应进入统一验收页");
-  assert.equal(await acceptanceWorkspace.getByText("用会话上方“合并&清理”操作", { exact: true }).count(), 0);
 
   const blockedAcceptance = page.locator(".acceptance-blocked-fixture");
   await blockedAcceptance.getByRole("button", { name: "验收", exact: true }).click();
   const blockedWorkspace = blockedAcceptance.locator(".single-review-workspace");
   await blockedWorkspace.waitFor();
-  const blockedButton = blockedWorkspace.getByRole("button", { name: "审查进行中", exact: true });
-  await blockedButton.waitFor();
+  // 主按钮上永远只写动作名；挡住它的原因是前提列里自己那一行（审查在跑 = live 调子）。
+  const blockedRow = blockedWorkspace.locator('.acc-checks[aria-label="验收前提"] > .acc-check[data-check="review"]');
+  await blockedRow.waitFor();
+  assert.match(await blockedRow.getAttribute("class"), /\bis-live\b/, "审查进行中那一行是「正在替你办」的 live 调子");
+  assert.equal((await blockedRow.innerText()).trim(), "审查进行中", "挡路的原因写在前提列里");
+  const blockedButton = blockedWorkspace.locator(".acc-actions > button.acc-btn.is-primary");
+  assert.equal(await blockedButton.count(), 1);
+  assert.equal((await blockedButton.innerText()).trim(), "验收通过", "被挡住时主按钮仍写动作名，不换成原因");
   assert.equal(await blockedButton.isDisabled(), true, "自由审查进行中应在验收页禁用验收按钮");
-  assert.equal(await blockedWorkspace.getByRole("button", { name: "验收通过", exact: true }).count(), 0);
+  assert.equal(await blockedWorkspace.getByRole("button", { name: "审查进行中" }).count(), 0, "原因不再填进按钮");
 
   const postMergeFixture = page.locator(".post-merge-fixture");
   const postMergeHeader = postMergeFixture.locator(".task-detail-header");
@@ -282,15 +289,38 @@ try {
   await postMergeHeader.getByRole("button", { name: "更多任务操作" }).click();
   await postMergeHeader.getByRole("menuitem", { name: "查看改动与审查" }).click();
   const postMergeWorkspace = postMergeFixture.locator(".single-review-workspace");
-  await postMergeWorkspace.getByRole("region", { name: "验收合并快照" }).waitFor();
-  const snapshotLink = postMergeWorkspace.getByRole("button", { name: /审查本次合并/ });
-  assert.equal(await snapshotLink.count(), 1, "统一验收快照卡应提供低调文字入口");
+  // 已验收：第一行右边是「已验收」加一颗低调的文字键，验收快照卡已经没有了。
+  const postMergeActions = postMergeWorkspace.locator(".acc-bar .acc-actions");
+  await postMergeActions.locator(".acc-done", { hasText: "已验收" }).waitFor();
+  assert.equal(await postMergeWorkspace.getByRole("region", { name: "验收合并快照" }).count(), 0, "验收快照卡已删除");
+  assert.equal(await postMergeActions.locator("button.acc-btn").count(), 0, "已验收后不再摆打回 / 验收两颗键");
+  const snapshotLink = postMergeActions.getByRole("button", { name: "审查这次合并", exact: true });
+  await snapshotLink.waitFor();
+  assert.match(await snapshotLink.getAttribute("class"), /\bacc-link\b/, "合并审查入口是低调的文字键");
   await snapshotLink.click();
   await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
   await reviewDialog.locator(".free-review-reviewer .ui-dropdown-trigger").filter({ hasText: "Codex 审查" }).waitFor();
   await reviewDialog.getByRole("button", { name: "开始审查", exact: true }).click();
   await page.waitForFunction(() => window.__postMergeRequests === 1);
-  assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "快照入口应发起一次合并结果审查");
+  assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "第一行入口应发起一次合并结果审查");
+  // 审查一开起来，同一颗键就改说「合并审查中」（共享的自由工作流状态跟着刷新）。
+  await postMergeActions.getByRole("button", { name: "合并审查中", exact: true }).waitFor();
+  assert.equal(await postMergeActions.getByRole("button", { name: "审查这次合并", exact: true }).count(), 0);
+
+  // 上一次合并审查已经出了结论：同一颗键写「再审这次合并」。
+  const againActions = page.locator(".post-merge-again-ui-fixture .acc-bar .acc-actions");
+  await againActions.locator(".acc-done", { hasText: "已验收" }).waitFor();
+  const againLink = againActions.getByRole("button", { name: "再审这次合并", exact: true });
+  await againLink.waitFor();
+  await againLink.click();
+  assert.equal(await page.evaluate(() => window.__variantReviewClicks), 1, "「再审这次合并」接的是同一个入口");
+  // 「合并后不提交」还欠一步提交：那个合并提交还不存在，第一行不给审查入口；欠的那一步在前提列里。
+  const pendingFixture = page.locator(".post-merge-pending-ui-fixture");
+  await pendingFixture.locator('.acc-checks > .acc-check[data-check="pending-merge"]').waitFor();
+  const pendingActions = pendingFixture.locator(".acc-bar .acc-actions");
+  assert.equal(await pendingActions.locator(".acc-done", { hasText: "已验收" }).count(), 1);
+  assert.equal(await pendingActions.locator("button.acc-link").count(), 0, "欠提交时不出合并审查入口");
+  assert.equal(await pendingFixture.getByRole("button", { name: /审查这次合并|再审这次合并|合并审查中/ }).count(), 0);
 
   const postMergeInspector = page.locator(".post-merge-inspector-fixture");
   const postMergeHead = postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true });
@@ -328,20 +358,24 @@ try {
     "工作区没变过时不该凭空劝人再审一轮",
   );
 
-  // 裁定要点得在这一轮的审查记录里留一份：裁定一落，驳回卡就收了，用户自己写的那段话
-  // 除了时间线上那句摘要就再无去处。它是**用户**的话，所以跟驳回理由分块摆。
+  // 裁定要点得在这一轮的审查记录里留一份：裁定一落，回复框顶上那一行就收了，用户自己写的那段话
+  // 除了时间线上那句摘要就再无去处。它在这一轮下面「裁定」那一段里，折着、写明是附的话。
   const waivedFixture = page.locator(".waived-fresh-fixture");
   await waivedFixture.locator(".insp-rec > .insp-go").first().click();
   const waivedBody = waivedFixture.locator(".insp-rec__body").first();
   await waivedBody.waitFor();
-  const resolutionNote = waivedBody.locator(".review-round-dispute__note");
-  await resolutionNote.waitFor();
-  assert.match(await resolutionNote.innerText(), /你裁定时写的要点/, "要标明这段是用户自己写的");
+  const ruling = waivedBody.locator(".dispute-part[aria-label='裁定']");
+  await ruling.waitFor();
+  assert.match(await ruling.locator(".dispute-part-gist").innerText(), /^这一轮不用改了/, "裁定一句结果");
+  const resolutionNote = ruling.locator(".folded-prose");
+  assert.match(await resolutionNote.locator("button").innerText(), /附了一段理由/, "要标明这段是用户自己附的话");
+  await resolutionNote.locator("button").click();
   assert.match(
-    await resolutionNote.innerText(),
+    await resolutionNote.locator(".task-markdown").innerText(),
     /按辩论里达成的方案做/,
     "裁定要点原文要留在审查记录里，否则用户回头只剩时间线上那 60 字摘要",
   );
+  assert.equal(await waivedBody.getByRole("button", { name: /让它接着改|这一轮不用改了|转为独立任务|让双方辩论/ }).count(), 0, "审查格里没有裁定的按钮");
 
   // 裁定过的那几条，服务端派审时会自动讲给下一位审查者（free-review-settled.ts）。
   // 派审面上必须说出这件事：不说的话用户无从知道它已经自动化了，只会照旧每轮手打一句

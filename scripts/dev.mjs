@@ -1,5 +1,5 @@
-// `npm run dev` 被人手调用时照旧启动 4317 + 前端；被 ash 预览站调用时，
-// `PORT` 是借来的前端端口，`ASH_PREVIEW_MODE` 是那次预览选的启动范围：
+// `npm run dev` 被人手调用时照旧启动 4317 + 前端；被 navi 预览站调用时，
+// `PORT` 是借来的前端端口，`NAVI_PREVIEW_MODE` 是那次预览选的启动范围：
 //
 //   frontend  只起这个 worktree 的前端，/api 打回本机 4317
 //   full      起这个 worktree 的前后端，用 `<worktree>/data/preview-empty.db`，只播种设置
@@ -9,29 +9,30 @@
 // 那个值从哪来：编排工作流看「打开预览」那一站的设置，自由预览看**项目设置 → 预览 →
 // 启动范围**（存在 previewConfig.launch，缺省 frontend）。自由预览这一档曾经写死
 // `frontend`，于是验一个改了后端的分支时，预览里的 /api 全打回主实例、看到的是旧行为
-// —— ash 是目前唯一读这个变量的项目，这条链断在哪儿都只表现成「我改的东西没生效」。
+// —— navi 是目前唯一读这个变量的项目，这条链断在哪儿都只表现成「我改的东西没生效」。
 //
 // 每个 worktree 的 DB 文件路径不同，所以各预览后端可并行；单实例锁仍保证同一份库
 // 不会被两个 server 同时调度。测试库每次启动都洗掉 pid/running/定时任务，预览实例也
 // 无条件禁用调度器、接管与合并清理。
 //
-// **预览里的 agent 够不着预览这台 ash 的 MCP**，这条得先说清楚，不然会以为坏了：
-// ash MCP 是注册在用户 `~/.claude.json` 里的，那条记录写死了
-// `env: {ASH_URL: "http://localhost:4317"}`；而 claude 只把配置里列的 env 交给 MCP
-// 子进程，**不传父进程的环境变量**（实测：父进程设的 ASH_URL / 自定义变量在 MCP
+// **预览里的 agent 够不着预览这台 navi 的 MCP**，这条得先说清楚，不然会以为坏了：
+// navi MCP 是注册在用户 `~/.claude.json` 里的，那条记录写死了
+// `env: {NAVI_URL: "http://localhost:4317"}`；而 claude 只把配置里列的 env 交给 MCP
+// 子进程，**不传父进程的环境变量**（实测：父进程设的 NAVI_URL / 自定义变量在 MCP
 // 子进程的 environ 里根本不出现）。所以预览里跑的任务，`complete_task` 一定打去主实例、
 // 拿一个 404 —— 严格完成协议下每个任务都会以 failed 收场。于是预览走既有的逃生口
-// `ASH_LAX_DONE=1`（「接没配 ash MCP 的 agent 时用」，正是这个情形）：exit 0 即
+// `NAVI_LAX_DONE=1`（「接没配 navi MCP 的 agent 时用」，正是这个情形）：exit 0 即
 // done，同时完成协议的前言也不再发（做不到的指令不如不说，见 single-run.ts）。
 // 代价说在明处：预览里 ask_question / report_stage 这些 MCP 工具同样不通。要连它们一起
-// 修，得让 ash 每次起 CLI 时自带 mcp 配置，那是另一件事、另一个爆炸半径。
-import "./env.mjs";
+// 修，得让 navi 每次起 CLI 时自带 mcp 配置，那是另一件事、另一个爆炸半径。
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
+import { readEnv, readStorageEnv, setEnv } from "./env.mjs";
+import { LEGACY_DB_FILE, LEGACY_LOG_TAG } from "./legacy-names.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 let tracked = [];
@@ -48,7 +49,7 @@ async function main() {
     child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
     return;
   }
-  const requested = process.env.ASH_PREVIEW_MODE;
+  const requested = readEnv(process.env, "NAVI_PREVIEW_MODE");
   const mode = requested === "frontend" || requested === "full" || requested === "test" ? requested : "test";
   if (mode === "frontend") startFrontendOnly(Number(lent));
   else await startPreviewStack(Number(lent), mode);
@@ -65,43 +66,44 @@ function webDevArgs(webPort) {
 }
 
 function startFrontendOnly(webPort) {
-  // 打哪台 ash 的顺序：**脚本自己写的 `ASH_PROXY` 最大**，其次才是启动预览的那台 ash 递过来
-  // 的 `ASH_HOST_API`（见 server/src/preview-start.ts），最后才是默认的 4317。
+  // 打哪台 navi 的顺序：**脚本自己写的 `NAVI_PROXY` 最大**，其次才是启动预览的那台 navi 递过来
+  // 的 `NAVI_HOST_API`（见 server/src/preview-start.ts），最后才是默认的 4317。
   //
-  // 两头都栽过，方向还相反：写死 4317 让「ash 不跑在 4317 上」的部署整个错位——/api 打到别处，
-  // 那个端口上要是坐着另一台 ash，用户以为在验分支、实际在读写那一台（第 5 轮审查 P1）。反过来
-  // 让宿主地址压过 `ASH_PROXY`，则把「一条整栈脚本」这种受支持的写法废掉了：
+  // 两头都栽过，方向还相反：写死 4317 让「navi 不跑在 4317 上」的部署整个错位——/api 打到别处，
+  // 那个端口上要是坐着另一台 navi，用户以为在验分支、实际在读写那一台（第 5 轮审查 P1）。反过来
+  // 让宿主地址压过 `NAVI_PROXY`，则把「一条整栈脚本」这种受支持的写法废掉了：
   //     PORT=$PORT2 npm -w server run dev &
-  //     ASH_PROXY=$URL2 npm run dev
-  // 这句 `ASH_PROXY=$URL2` 是用户**明说**「前端连我这个分支后端」，压掉它等于把 /api 悄悄接回
-  // 主 ash——他以为在验分支后端，实际在拿自己的身份读写主库（第 6 轮审查 P1）。所以宿主地址只是
+  //     NAVI_PROXY=$URL2 npm run dev
+  // 这句 `NAVI_PROXY=$URL2` 是用户**明说**「前端连我这个分支后端」，压掉它等于把 /api 悄悄接回
+  // 主 navi——他以为在验分支后端，实际在拿自己的身份读写主库（第 6 轮审查 P1）。所以宿主地址只是
   // 一个更聪明的默认值，不是命令。
   //
-  // 这个顺序成立有个前提，**在这里看不出来、也检查不了**：能到这儿的 `ASH_PROXY` 必须只可能是
-  // 命令现场写的。宿主 ash 自己环境里带着的那份（连同旧名 `HARNESS_PROXY`）由 ash 在组预览子
+  // 这个顺序成立有个前提，**在这里看不出来、也检查不了**：能到这儿的 `NAVI_PROXY` 必须只可能是
+  // 命令现场写的。宿主 navi 自己环境里带着的那份（连同旧名 `HARNESS_PROXY`）由 navi 在组预览子
   // 进程环境时擦掉——见 server/src/preview-start.ts 的 previewBaseEnv；不擦，一个跟这次预览毫无
-  // 关系的遗留值就能压掉 ash 确知的监听端口（第 7 轮审查 P1）。
-  const proxy = process.env.ASH_PROXY ?? process.env.ASH_HOST_API ?? "http://127.0.0.1:4317";
+  // 关系的遗留值就能压掉 navi 确知的监听端口（第 7 轮审查 P1）。
+  const proxy = readEnv(process.env, "NAVI_PROXY") ?? readEnv(process.env, "NAVI_HOST_API") ?? "http://127.0.0.1:4317";
   const target = proxy.replace(/^https?:\/\//, "");
-  // 打这一行时把 scheme 去掉，理由跟下面转发后端日志时一样：ash 会从预览日志里认地址，
+  // 打这一行时把 scheme 去掉，理由跟下面转发后端日志时一样：navi 会从预览日志里认地址，
   // 前端那行还没打出来的那几秒里，这行是日志里唯一一个 `http://…`，会被当成预览本尊。
   console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${target}`);
-  // 下面这行是**打给 ash 看的回话**：它给我们递了 ASH_PREVIEW_MODE=frontend，这句是我们
-  // 确认「照做了，我的 /api 确实打到那台 ash 上」。只有收到这句，反代才会把 /api 那一跳
-  // 接回本机 ash 并替用户带上会话（判读在 server/src/preview-log.ts 的 declaredHostApiPort，
+  // 下面这行是**打给 navi 看的回话**：它给我们递了 NAVI_PREVIEW_MODE=frontend，这句是我们
+  // 确认「照做了，我的 /api 确实打到那台 navi 上」。只有收到这句，反代才会把 /api 那一跳
+  // 接回本机 navi 并替用户带上会话（判读在 server/src/preview-log.ts 的 declaredHostApiPort，
   // 缘由在 server/src/preview-access.ts 顶部）。递过来的那个 env 本身不算数——任意项目脚本
   // 都可以不理它。同样不带 scheme，理由同上一行。
-  console.log(`[ash] preview-api-host ${target}`);
+  // 前缀用旧的 `[ash]`：拉起这次预览的可能还是改名之前的服务，它只认这个前缀；新版两种都认
+  // （server/src/log-signals.ts）。拆：没有改名之前的服务会来预览这个分支之后，换成 `[navi]`。
+  console.log(`${LEGACY_LOG_TAG} preview-api-host ${target}`);
   const web = spawn(NPM, webDevArgs(webPort), {
     cwd: REPO,
     stdio: "inherit",
     windowsHide: true,
-    env: {
-      ...process.env,
+    env: childEnv({
       PORT: String(webPort),
-      ASH_PROXY: proxy,
-      VITE_ASH_PREVIEW: `预览实例 · 只启动这个分支的前端 · API 连本机 ${target}`,
-    },
+      NAVI_PROXY: proxy,
+      VITE_NAVI_PREVIEW: `预览实例 · 只启动这个分支的前端 · API 连本机 ${target}`,
+    }),
     ...NPM_SPAWN_OPTS,
   });
   watchChildren([["前端", web]]);
@@ -116,11 +118,11 @@ async function startPreviewStack(webPort, mode) {
   const mainData = mainRepoDataDir();
   const apiUrl = `http://127.0.0.1:${apiPort}`;
   const ownDb = mode === "full" ? "preview-empty.db" : "preview.db";
-  const dbFile = process.env.ASH_DB || fileURLToPath(new URL(`../data/${ownDb}`, import.meta.url));
+  const dbFile = readStorageEnv(process.env, "NAVI_DB") || fileURLToPath(new URL(`../data/${ownDb}`, import.meta.url));
   const firstBoot = !existsSync(dbFile);
-  const seedFrom = process.env.ASH_SEED_FROM
-    ?? (firstBoot ? join(mainData, "ash.db") : "");
-  const seedMode = process.env.ASH_SEED_MODE ?? (mode === "full" ? "config" : "snapshot");
+  const seedFrom = readEnv(process.env, "NAVI_SEED_FROM")
+    ?? (firstBoot ? mainDbFile(mainData) : "");
+  const seedMode = readEnv(process.env, "NAVI_SEED_MODE") ?? (mode === "full" ? "config" : "snapshot");
   const dbLabel = mode === "test"
     ? `${dbFile}，${firstBoot ? "首次从主库播种" : "复用这个 worktree 的测试数据"}`
     : `${dbFile}，${firstBoot ? "首次只播种设置" : "复用这个 worktree 的独立数据"}`;
@@ -129,29 +131,28 @@ async function startPreviewStack(webPort, mode) {
     + `前端 ${webPort}，前端的 /api 打到后端。`,
   );
 
-  // ASH_URL 要跟着传：agent 进程继承 server 的环境变量，ash MCP 就靠它知道
+  // NAVI_URL 要跟着传：agent 进程继承 server 的环境变量，navi MCP 就靠它知道
   // 「complete_task 该报给谁」。不传的话预览里跑的任务会去敲本机那份 4317。
-  // ASH_SEED_FROM：开局从主库拷一份快照过来（见文件头）。
-  // ASH_RUNS_FALLBACK：历史会话的正文/trace 是文件不是库行，只读回退到主仓那份。
-  // ASH_PREVIEW：告诉后端「你是预览」——不启动调度器，不许合并/删 worktree/删分支。
-  // ASH_LAX_DONE：预览里退回「exit 0 即 done」，理由见下面 MCP 那段。
+  // NAVI_SEED_FROM：开局从主库拷一份快照过来（见文件头）。
+  // NAVI_RUNS_FALLBACK：历史会话的正文/trace 是文件不是库行，只读回退到主仓那份。
+  // NAVI_PREVIEW：告诉后端「你是预览」——不启动调度器，不许合并/删 worktree/删分支。
+  // NAVI_LAX_DONE：预览里退回「exit 0 即 done」，理由见下面 MCP 那段。
   // 前四个用 `??` 让外面覆盖得了（`??` 而不是 `||`：空串是「不要播种」这个明确意思）；
   // 后两个是闸不是配置，一律写死——外面能关掉的闸不叫闸。
   const api = spawn(NPM, ["-w", "server", "run", "dev"], {
     cwd: REPO,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
-    env: {
-      ...process.env,
+    env: childEnv({
       PORT: String(apiPort),
-      ASH_DB: dbFile,
-      ASH_URL: apiUrl,
-      ASH_SEED_FROM: seedFrom,
-      ASH_SEED_MODE: seedMode,
-      ASH_RUNS_FALLBACK: process.env.ASH_RUNS_FALLBACK ?? join(mainData, "runs"),
-      ASH_PREVIEW: "1",
-      ASH_LAX_DONE: "1",
-    },
+      NAVI_DB: dbFile,
+      NAVI_URL: apiUrl,
+      NAVI_SEED_FROM: seedFrom,
+      NAVI_SEED_MODE: seedMode,
+      NAVI_RUNS_FALLBACK: readEnv(process.env, "NAVI_RUNS_FALLBACK") ?? join(mainData, "runs"),
+      NAVI_PREVIEW: "1",
+      NAVI_LAX_DONE: "1",
+    }),
     ...NPM_SPAWN_OPTS,
   });
   forward(api.stdout);
@@ -161,18 +162,33 @@ async function startPreviewStack(webPort, mode) {
     cwd: REPO,
     stdio: "inherit",
     windowsHide: true,
-    env: {
-      ...process.env,
+    env: childEnv({
       PORT: String(webPort),
-      ASH_PROXY: apiUrl,
-      VITE_ASH_PREVIEW: mode === "test"
+      NAVI_PROXY: apiUrl,
+      VITE_NAVI_PREVIEW: mode === "test"
         ? "预览实例 · 这个分支的前端 + 后端 · 自己的测试库快照"
         : "预览实例 · 这个分支的前端 + 后端 · 自己的独立新库",
-    },
+    }),
     ...NPM_SPAWN_OPTS,
   });
 
   watchChildren([["后端", api], ["前端", web]]);
+}
+
+/** 子进程环境：继承本进程的，`NAVI_` 开头的几项按新名写、同时擦掉它们的旧名（不然继承来的旧名各说各的）。 */
+function childEnv(vars) {
+  const env = { ...process.env };
+  for (const [name, value] of Object.entries(vars)) {
+    if (name.startsWith("NAVI_")) setEnv(env, name, value);
+    else env[name] = value;
+  }
+  return env;
+}
+
+/** 主库文件：改名之后的 `navi.db` 在就是它，不然是改名之前的那份（见 server/src/db/path.ts）。 */
+function mainDbFile(mainData) {
+  const current = join(mainData, "navi.db");
+  return existsSync(current) ? current : join(mainData, LEGACY_DB_FILE);
 }
 
 function watchChildren(children) {
@@ -249,7 +265,7 @@ function freePort() {
  * 后端的日志按行转出去，顺手把 `http://` 去掉。
  *
  * 不是嫌它长：预览的就绪判定挑的是日志里第一个 `http://localhost:...`，而后端那行
- * `[ash] server on http://localhost:<port>` 多半比 vite 先打出来——照原样转，用户点开
+ * `[navi] server on http://localhost:<port>` 多半比 vite 先打出来——照原样转，用户点开
  * 预览会落到 API 上（一片 JSON）。去掉 scheme 就不再匹配那条正则，人还是读得懂。
  */
 function forward(stream) {

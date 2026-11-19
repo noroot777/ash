@@ -1,3 +1,4 @@
+import { readEnv } from "@navi/shared/env-names";
 import { randomUUID } from "node:crypto";
 import { Agent, ProxyAgent, type Dispatcher } from "undici";
 import {
@@ -193,6 +194,10 @@ function hopUrl(options: Dispatcher.DispatchOptions): URL {
   return url;
 }
 
+/** 我方自己产生的两种诊断错误码（跟 undici 的 `UND_ERR_*` 并列写进诊断）：系统代理不可用而拒绝直连、等响应头超时。 */
+export const RELAY_PROXY_UNAVAILABLE_CODE = "NAVI_SYSTEM_PROXY_UNAVAILABLE";
+export const RELAY_HEADERS_TIMEOUT_CODE = "NAVI_RELAY_HEADERS_TIMEOUT";
+
 // 走不走代理按**每一跳的 origin** 判（重定向到别的主机也照样判），并把实际走的那条路报给这个请求的诊断；
 // 判成 blocked 的那一跳直接报错，不落到直连池上。代理池按地址懒建，连接在同一个 pool 里复用。
 function routedDispatcher(lease: PoolLease, plan: ProxyPlan, first: RouteTarget, onRoute: (route: ProxyRoute) => void): Dispatcher {
@@ -202,7 +207,7 @@ function routedDispatcher(lease: PoolLease, plan: ProxyPlan, first: RouteTarget,
     const hop = { url: hopUrl(options), explicitPort: ports.get(new URL(String(options.origin)).origin) ?? 0 };
     const route = routeFor(plan, hop);
     onRoute(route);
-    if (route.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
+    if (route.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: RELAY_PROXY_UNAVAILABLE_CODE });
     const observed = recordRedirectPorts(handler, hop, ports);
     return route.proxy ? proxyAgent(lease, route.proxy, route.authorization).dispatch(options, observed) : dispatch(options, observed);
   });
@@ -212,15 +217,18 @@ function upstreamOrigin(url: string): string {
   try { return new URL(url).origin; } catch { return "无效地址"; }
 }
 
+/** 中转请求的诊断 id，挂在应答头上（协议转换那一层原样转出去，见 openai-converter/proxy.ts）。 */
+export const RELAY_REQUEST_ID_HEADER = "x-navi-relay-request-id";
+
 function logDiagnostic(diagnostic: RelayDiagnostic): void {
-  console.warn(`[ash][llm-relay] ${JSON.stringify(diagnostic)}`);
+  console.warn(`[navi][llm-relay] ${JSON.stringify(diagnostic)}`);
 }
 
 export function relayErrorResponse(error: unknown): Response {
   if (error instanceof RelayRequestError) {
     return Response.json({ error: { message: error.message, type: "upstream_connection_error" } }, {
       status: error.diagnostic.status,
-      headers: { "x-ash-relay-request-id": error.diagnostic.requestId },
+      headers: { [RELAY_REQUEST_ID_HEADER]: error.diagnostic.requestId },
     });
   }
   return Response.json({ error: { message: "供应商转发失败", type: "upstream_connection_error" } }, { status: 502 });
@@ -231,9 +239,9 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   const requestId = randomUUID();
   const upstream = upstreamOrigin(url);
   const method = (init.method ?? "GET").toUpperCase();
-  const timeoutMs = positiveTimeout(options.headersTimeoutMs ?? process.env.ASH_LLM_RELAY_HEADERS_TIMEOUT_MS,
+  const timeoutMs = positiveTimeout(options.headersTimeoutMs ?? readEnv(process.env, "NAVI_LLM_RELAY_HEADERS_TIMEOUT_MS"),
     method === "GET" || method === "HEAD" ? 15_000 : 300_000);
-  const bodyTimeoutMs = positiveTimeout(options.bodyTimeoutMs ?? process.env.ASH_LLM_RELAY_BODY_TIMEOUT_MS, 300_000);
+  const bodyTimeoutMs = positiveTimeout(options.bodyTimeoutMs ?? readEnv(process.env, "NAVI_LLM_RELAY_BODY_TIMEOUT_MS"), 300_000);
   const deadline = new AbortController();
   const signal = init.signal ? AbortSignal.any([init.signal, deadline.signal]) : deadline.signal;
   let timedOut = false;
@@ -251,13 +259,13 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   });
   const failure = (error: unknown, phase: RelayPhase): RelayRequestError => {
     const canceled = init.signal?.aborted === true;
-    const codes = canceled ? ["ABORT_ERR"] : timedOut ? ["ASH_RELAY_HEADERS_TIMEOUT"] : errorCodes(error);
+    const codes = canceled ? ["ABORT_ERR"] : timedOut ? [RELAY_HEADERS_TIMEOUT_CODE] : errorCodes(error);
     if (!codes.length) codes.push("NETWORK_ERROR");
     const timeout = timedOut || codes.some((code) => code.includes("TIMEOUT") || code === "ETIMEDOUT");
     const status = canceled ? 499 : timeout ? 504 : 502;
     const reason = canceled ? "请求已取消" : timedOut ? `等待响应头超过 ${timeoutMs}ms`
       : codes.includes("UND_ERR_BODY_TIMEOUT") ? `响应流空闲超过 ${bodyTimeoutMs}ms`
-      : codes.includes("ASH_SYSTEM_PROXY_UNAVAILABLE") ? "系统代理不可用"
+      : codes.includes(RELAY_PROXY_UNAVAILABLE_CODE) ? "系统代理不可用"
       : timeout ? "连接超时" : phase === "stream" ? "响应流中断" : "连接失败";
     const diagnostic = { requestId, upstream, method, phase, status, elapsedMs: Date.now() - startedAt, codes, ...routeFields() };
     logDiagnostic(diagnostic);
@@ -275,7 +283,7 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     plan = await relayProxyPlan();
     const target = routeTarget(url);
     route = routeFor(plan, target);
-    if (route?.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
+    if (route?.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: RELAY_PROXY_UNAVAILABLE_CODE });
     lease = { pool: acquirePool(upstream, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs, plan), proxies: new Set() };
     const dispatcher = routedDispatcher(lease, plan, target, (actual) => { route = actual; });
     const requestInit: RequestInit & { dispatcher: Dispatcher } = { ...init, signal, dispatcher };
@@ -287,7 +295,7 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     clearTimeout(timer);
   }
   const headers = new Headers(response.headers);
-  headers.set("x-ash-relay-request-id", requestId);
+  headers.set(RELAY_REQUEST_ID_HEADER, requestId);
   if (response.status >= 500) {
     logDiagnostic({ requestId, upstream, method, phase: "headers", status: response.status, elapsedMs: Date.now() - startedAt, codes: [`HTTP_${response.status}`], ...routeFields() });
   }

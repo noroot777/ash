@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ScheduledMessage, TaskListItem } from "@ash/shared";
+import type { ScheduledMessage, TaskListItem } from "@navi/shared";
 import { ScheduledMessageTray } from "../src/components/ScheduledMessageTray.tsx";
 import { sendAfterOptions, sendAfterState } from "../src/lib/sendAfter.ts";
 
@@ -50,17 +50,18 @@ const message = (id: string, afterTaskId: string, afterDoneAt: string | null = n
   text: id, attachments: [], agent: null, executorId: null, model: null, reasoningEffort: null, origin: null, sessionRole: null,
   mode: "after", afterTaskId, afterDoneAt, status: "pending", createdAt: "2026-11-04T00:00:00Z", sendAt: "2026-11-04T00:00:00Z", sentAt: null });
 const tray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages} loading={false}
-  error={null} cancelingIds={new Set()} onWithdraw={() => {}} onCancel={() => {}} tasks={tasks} onSendNow={() => {}} />);
+  error={null} cancelingIds={new Set()} onWithdraw={() => {}} onCancel={() => {}} tasks={tasks} onSendNow={() => {}} defaultExpanded />);
 
 const waiting = tray([message("waiting", "running")]);
 assert.match(waiting, /等「running」完成/);
-assert.match(waiting, /等前置任务完成后发送/, "托盘抬头按条件说,不说「等待当前一轮结束」");
+assert.match(waiting, /scheduled-message-when">等「running」完成</, "在等谁写在这一条的「什么时候发」那一格");
+assert.doesNotMatch(waiting, /等待当前一轮结束|等前置任务完成后发送/, "不说「等待当前一轮结束」,也不再有抬头那句总的说明");
 assert.doesNotMatch(waiting, /scheduled-message-send-now|is-stuck/, "等得到时不给「直接发送」");
 assert.match(waiting, /scheduled-message-withdraw/, "照常可撤回");
 
 const stuck = tray([message("stuck", "failed")]);
 assert.match(stuck, /「failed」失败/);
-assert.match(stuck, /is-stuck/);
+assert.match(stuck, /scheduled-message-when is-stuck">「failed」失败</, "等不到了那一格是琥珀色");
 assert.match(stuck, /scheduled-message-send-now/);
 assert.match(tray([message("gone", "deleted")]), /前置任务不存在[\s\S]*scheduled-message-send-now/);
 const released = tray([message("latched", "failed", "2026-11-04T09:00:00Z")]);

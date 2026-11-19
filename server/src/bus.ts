@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@navi/shared";
 
 // Single in-process pub/sub. The orchestrator publishes; SSE handlers subscribe.
 // Lives in the long-running server process (orchestrator singleton).

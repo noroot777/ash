@@ -3,7 +3,7 @@
 //
 // 接管的不变量是「接回后的状态 = 不间断读完整条输出的状态」(src/executors/claude-recovery.ts),
 // 所以 ③ 那组把水位切在各种位置上:通知回合说完话之后、新回合请求中途、打断回执前后,以及
-// 前缀读不出来、等后台的期限跨重启。哪个结尾是 ash 打断出来的,按写 stdin 之前落盘的打断记录
+// 前缀读不出来、等后台的期限跨重启。哪个结尾是 navi 打断出来的,按写 stdin 之前落盘的打断记录
 // 认(`.steer.json`),不按回执先后猜(自由审查 i8RAcPM3zvgD R1)。
 //
 // 都走真实的 `ClaudeExecutor.attach → residentFromChild → parseClaudeStream →
@@ -18,15 +18,16 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-claude-reattach-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-claude-reattach-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const HOLD_MS = 60_000;
-process.env.ASH_BACKGROUND_HOLD_MS = String(HOLD_MS);
-const [{ ensureSchema, dbClient }, { ClaudeExecutor }, { consumedEvents }] = await Promise.all([
+process.env.NAVI_BACKGROUND_HOLD_MS = String(HOLD_MS);
+const [{ ensureSchema, dbClient }, { ClaudeExecutor }, { consumedEvents }, { INTERRUPT_ID_PREFIX }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/executors/claude.js"),
   import("../src/executors/claude-recovery.js"),
+  import("../src/executors/claude-control.js"),
 ]);
 await ensureSchema();
 
@@ -92,7 +93,7 @@ function reattach(name: string, prefixEvents: unknown[], tail: unknown[], onInpu
   const prefix = prefixEvents.map(line).join("");
   writeFileSync(consumedPath, prefix);
   const stub = stubCli(name, tail, onInput);
-  Object.assign(stub.child, { ashPaths: { out: consumedPath } });
+  Object.assign(stub.child, { naviPaths: { out: consumedPath } });
   const handle = executor.attach(stub.child, {
     sessionId: "sess-r", commandLine, consumed: { outPath: consumedPath, offset: Buffer.byteLength(prefix) },
   });
@@ -112,7 +113,7 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
   const prefix = launch.map(line).join("");
   writeFileSync(consumedPath, prefix);
   const { child, stderr } = stubCli("reattach-mid", [progress, ...say("工作流还在跑，等它完成后合稿"), result]);
-  Object.assign(child, { ashPaths: { out: consumedPath } });
+  Object.assign(child, { naviPaths: { out: consumedPath } });
   const handle = executor.attach(child, {
     sessionId: "sess-r", commandLine, consumed: { outPath: consumedPath, offset: Buffer.byteLength(prefix) },
   });
@@ -175,7 +176,7 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
     emit({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
   }`);
   const out = join(root, "steer-twice.jsonl");
-  Object.assign(child, { ashPaths: { out } });
+  Object.assign(child, { naviPaths: { out } });
   const handle = executor.attach(child, { sessionId: "sess-r", commandLine });
   const consuming = (async () => { for await (const _ of handle.events) { /* 只看对面收到了什么 */ } })();
   await new Promise((resolve) => setTimeout(resolve, 150));
@@ -187,8 +188,8 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
   assert.deepEqual(inputs, ["INPUT control_request", "INPUT user", "INPUT control_request", "INPUT user"],
     "第二次插话也要先打断第一条开的那一回合");
   assert.deepEqual(JSON.parse(readFileSync(`${out}.steer.json`, "utf8")).entries, [
-    { id: "ash_int_1", result: 1, sent: true },
-    { id: "ash_int_2", result: 2, sent: true },
+    { id: `${INTERRUPT_ID_PREFIX}1`, result: 1, sent: true },
+    { id: `${INTERRUPT_ID_PREFIX}2`, result: 2, sent: true },
   ], "每次打断认领下一个结尾,正文送出前记下");
   handle.kill();
   await consuming.catch(() => {});
@@ -198,7 +199,7 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
 // ②b 打断记录落不了盘:插话直接报错,stdin 一个字都不写(写了接管时就认不出那个结尾)。
 {
   const { child, stderr } = stubCli("journal-unwritable", [{ type: "system", subtype: "status", status: "requesting" }]);
-  Object.assign(child, { ashPaths: { out: join(root, "no-such-dir", "out.jsonl") } });
+  Object.assign(child, { naviPaths: { out: join(root, "no-such-dir", "out.jsonl") } });
   const handle = executor.attach(child, { sessionId: "sess-r", commandLine });
   const consuming = (async () => { for await (const _ of handle.events) { /* 只看对面收到了什么 */ } })();
   await new Promise((resolve) => setTimeout(resolve, 150));
@@ -291,6 +292,7 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
 
 // ③f 插话打断出来的那个 result 在水位附近:不许拿它收台,插话开的那一回合结尾才收。回执与 result
 // 两种先后都有,回执还可能落在水位之后、晚到一秒多、前面插进后台进度 —— 都不影响,身份看打断记录。
+// 这一组的打断记录用的是改名之前的请求号 `ash_int_1`:升级前插过话的智能体,接管时照样认得出那个结尾。
 const steered = (out: string, sent = true) =>
   writeFileSync(`${out}.steer.json`, JSON.stringify({ entries: [{ id: "ash_int_1", result: 1, sent }] }));
 const followUp = [{ type: "system", subtype: "init", session_id: "sess-r" }, ...say("插话之后的答复"), result];
@@ -377,7 +379,7 @@ console.log("✓ 插话正文没送出去就重启:按回合结束收台,说明�
   }`;
   const liveOut = join(root, "idle-send-live.jsonl");
   const first = stubCli("idle-send-live", [...launch, ...heldEnd], steerAck);
-  Object.assign(first.child, { ashPaths: { out: liveOut } });
+  Object.assign(first.child, { naviPaths: { out: liveOut } });
   const liveHandle = executor.attach(first.child, { sessionId: "sess-r", commandLine });
   const liveConsuming = (async () => { for await (const _ of liveHandle.events) { /* 只看落盘与对面收到了什么 */ } })();
   await new Promise((resolve) => setTimeout(resolve, 150));
@@ -428,7 +430,7 @@ function live(name: string, tail: unknown[], ignoreEof = false, heldFor?: number
   const out = join(root, `${name}.jsonl`);
   if (heldFor !== undefined) writeFileSync(`${out}.hold.json`, JSON.stringify({ turn: 1, since: new Date(Date.now() - heldFor).toISOString() }));
   const stub = stubCli(name, tail, "", ignoreEof);
-  Object.assign(stub.child, { ashPaths: { out } });
+  Object.assign(stub.child, { naviPaths: { out } });
   return { ...stub, handle: executor.attach(stub.child, { sessionId: "sess-r", commandLine }) };
 }
 

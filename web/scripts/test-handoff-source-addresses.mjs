@@ -19,7 +19,7 @@ try {
   const fixture = `${web.origin}/scripts/fixtures/handoff-source-addresses.html`
     + "?project=fixture-project&task=fixture-task";
   await page.goto(fixture);
-  await page.evaluate(() => localStorage.removeItem("ash:fixture:handoff-source-address"));
+  await page.evaluate(() => localStorage.removeItem("navi:fixture:handoff-source-address"));
   await page.reload();
 
   const routeLink = page.getByRole("link", { name: /设置 → 默认规则 → 任务接力 → 来源机器地址/ });
@@ -39,7 +39,7 @@ try {
   assert.equal(await page.getByRole("heading", { name: "任务接力" }).count(), 1);
   const card = page.locator("#handoff-source-addresses");
   await card.waitFor();
-  const input = page.getByRole("textbox", { name: "书房 Windows的 ash 地址" });
+  const input = page.getByRole("textbox", { name: "书房 Windows的 Navi 地址" });
   await input.waitFor();
   assert.equal(await input.inputValue(), originalUrl, "服务端记录的原地址应预填");
   assert.match(await card.innerText(), /指纹 A1B2-C3D4-E5F6-0718-293A/);

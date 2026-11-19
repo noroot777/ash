@@ -2,9 +2,10 @@
 // 认错了界面上看不出来：会静默退回「从中断处续跑」，而崩在 CLI 起来之前的那一回合根本
 // 没把指令交给 CLI —— 用户点了重试，agent 却什么都没收到。所以在这里钉住。
 // 跑:npm -w server run test:retry-turn
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import type { RetryTurnFacts, RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
-import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
+import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
 import {
   lastInputOf, latestSessionOf, resendInputOf, retryTurnActionOf, retryTurnKindOf, retryTurnIsExecution, retryTurnRejection, retryTurnTierOf,
 } from "../src/task-retry-turn.js";
@@ -54,6 +55,54 @@ const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
     turn("system", "继续（从中断处）"),
   ].join("\n"));
   assert.equal(seg?.kind, "system");
+}
+
+// ── 回合中途的系统注记（工作目录重建）跟输入同一个回合身份、排在输入后面 → 跳过它，重投用户那句 ──
+// 认错了就退回续跑：续跑是任务的执行，没交卷把「已完成」改成「失败」，重试入口从此消失（jV60dIbVuBga）。
+{
+  const at = "2026-11-17T04:47:16.250Z";
+  const seg = lastInputOf([
+    turn("system", "收到新的指令，这条线先退回「让 AI 干活」这一站", { aside: true, notice: { kind: "receipt" }, seq: 1, turnStartedAt: null }),
+    turn("user", "先给我做个 html demo", { seq: 2, turnStartedAt: at }),
+    turn("system", "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状", { seq: 3, turnStartedAt: at }),
+    "API Error: 503",
+  ].join("\n"));
+  assert.equal(seg?.kind, "user", "工作目录重建那句是注记，不是输入");
+  assert.equal(seg?.text, "先给我做个 html demo");
+}
+
+// ── 回合末尾的时间线旁注（aside）也不是输入 ──────────────────────────────────
+{
+  const seg = lastInputOf([
+    turn("user", "看一下现状", { seq: 1, turnStartedAt: "2026-11-17T04:38:53.006Z" }),
+    "agent 崩了",
+    turn("system", "这一轮没有产出任何改动", { aside: true, notice: { kind: "receipt" }, seq: 2, turnStartedAt: "2026-11-17T04:38:53.006Z" }),
+  ].join("\n"));
+  assert.equal(seg?.text, "看一下现状");
+}
+
+// ── 系统续跑那一段（带 resume）后面跟着注记 → 仍认续跑 ────────────────────────
+{
+  const at = "2026-11-17T08:36:53.397Z";
+  const seg = lastInputOf([
+    turn("user", "开工", { seq: 1, turnStartedAt: "2026-11-17T08:00:00.000Z" }),
+    turn("system", "〔系统〕继续（从中断处）", { resume: { reason: "retry" }, seq: 2, turnStartedAt: at }),
+    turn("system", "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状", { seq: 3, turnStartedAt: at }),
+  ].join("\n"));
+  assert.equal(seg?.kind, "system");
+  assert.equal(seg?.kind === "system" ? seg.resume?.reason : undefined, "retry", "取的是续跑那一段，不是注记");
+}
+
+// ── 回合中途补进来的那句话（原生 steer）是 user 段，照旧是最后的输入 ───────────────
+{
+  const at = "2026-11-17T09:00:00.000Z";
+  const seg = lastInputOf([
+    turn("user", "先改标题", { seq: 1, turnStartedAt: at }),
+    "agent 改着",
+    turn("user", "顺便把副标题也改了", { seq: 2, turnStartedAt: at }),
+    "agent 崩了",
+  ].join("\n"));
+  assert.equal(seg?.text, "顺便把副标题也改了");
 }
 
 // ── 自由工作流自动修复回合崩了：最后一段是后端代写的 user 回合 → 重投并保留标记 ──
@@ -277,7 +326,7 @@ assert.ok(why(task(), sess({ id: "a", role: "voiceA" })), "duet 会话不归这�
 // 都挂一颗「重试」。
 assert.ok(why(task(), sess({ id: "a", role: "single", exitStatus: 0 })), "普通回合 exit 0 仍然不给");
 
-// ── 共用判据本身:三个信号的优先级(@ash/shared/turn-outcome) ───────────────────
+// ── 共用判据本身:三个信号的优先级(@navi/shared/turn-outcome) ───────────────────
 // 这一份被**前端那颗按钮读着同一个函数**(web/src/task-detail/turnRetry.ts),所以优先级直接
 // 钉在这儿,而不是只通过 retryTurnRejection 间接测 —— 审查 F2 要修的那一条恰恰是同一句判据
 // 在两端各错一次。
@@ -303,7 +352,7 @@ assert.ok(why(task(), sess({ id: "a", role: "single", exitStatus: 0 })), "普通
 }
 
 // ── 权威结局优先于退出码(审查 F2,已实测) ──────────────────────────────────────
-// 回合级停滞看门狗终止掉的那一轮:ash 已经判它失败(区间 outcome=failed、正文写明「已自动
+// 回合级停滞看门狗终止掉的那一轮:navi 已经判它失败(区间 outcome=failed、正文写明「已自动
 // 终止本回合并按失败结算」),而被终止的进程多半以 exit 0 收流。照退出码判就是 409
 // 「上一回合不是异常结束」,而页面同时明写着它被自动终止 —— 用户没有任何重来的入口。
 assert.equal(
@@ -314,7 +363,7 @@ assert.equal(
 assert.equal(
   why(task(), sess({ id: "a", exitStatus: null }), { turnOutcome: "failed" }),
   null,
-  "退出码没写成、但 ash 已判这一轮失败,同样放行",
+  "退出码没写成、但 navi 已判这一轮失败,同样放行",
 );
 // 上面那一条不许把闲聊也放进来:**只认 failed**。续聊的聊天回合本来就不调 complete_task,
 // 它的区间是 completed —— 跟着放松就等于每次闲聊后都挂一颗「重试」(紧挨着的那条断言)。

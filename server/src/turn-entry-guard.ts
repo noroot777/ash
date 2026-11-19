@@ -145,10 +145,12 @@ async function decideTurnEntry(input: TurnEntryInput): Promise<TurnIdentity | Tu
     let blocked: string | null = null;
     try {
       blocked = await pendingCheckpointBlockReason(taskId, input.pendingMessageIds)
-        ?? await input.wakeGuard?.() ?? null;
+        ?? await input.wakeGuard?.()
+        ?? await prerequisiteBlock(taskId, input.source)
+        ?? null;
     } catch (error) {
       // 出声：咽下去的话，「读不到状态」和「状态说不该起」在日志里长得一模一样。
-      console.error(`[ash] 起跑前的资格检查读失败 task=${taskId}:`, error);
+      console.error(`[navi] 起跑前的资格检查读失败 task=${taskId}:`, error);
       blocked = "读不到这个任务此刻的状态";
     }
     if (blocked) {
@@ -159,6 +161,17 @@ async function decideTurnEntry(input: TurnEntryInput): Promise<TurnIdentity | Tu
     }
   }
   return owner;
+}
+
+/**
+ * 有前置、还没开过工的任务：回复、排队消息补投这些续聊路径同样汇到这里，前置没站齐就不起（请求已记下，
+ * 消息按「未投递」留在托盘，等齐由放行那一路连同它一起起），站齐了这一问顺手定下起点（prerequisite-gate.ts）。
+ * 审查回合不问：它不是任务的执行。
+ */
+async function prerequisiteBlock(taskId: string, source: TurnSource): Promise<string | null> {
+  if (turnSourceRole(source) !== "single") return null;
+  const { holdForPrerequisites } = await import("./prerequisite-gate.js");
+  return (await holdForPrerequisites({ id: taskId }, { source: "turn" }))?.reason ?? null;
 }
 
 /**
@@ -211,7 +224,7 @@ export async function enterLeadDelivery(input: {
       // 审查实测:只拒一次资格 SELECT,消息当场 canceled,恢复并等过冷却也不再补送)。
       // 所以照单飞那侧的同一口径:这一轮先不起、**不填拒绝理由**,调用方据此归还租约、
       // 把消息留在托盘里重投。
-      console.error(`[ash] 起跑前的资格检查读失败 task=${taskId}:`, error);
+      console.error(`[navi] 起跑前的资格检查读失败 task=${taskId}:`, error);
       blocked = "读不到这个任务此刻的状态";
     }
     if (blocked) {

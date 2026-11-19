@@ -11,8 +11,6 @@ import { join, resolve } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 import {
   assertCarriesSweepProtocol,
-  assertCarriesSweepReminder,
-  assertSweepRuleTable,
 } from "./review-sweep-rules.js";
 import {
   assertCarriesSummaryFormat,
@@ -20,21 +18,21 @@ import {
   assertSummaryRuleTable,
 } from "./review-summary-rules.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-review-flow-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-review-flow-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 这个脚本是线性的,没有包住全程的 try/finally —— 清理全靠跑到最后那几行。于是**任何**一条
-// 断言失败都会在 TEMP 里留下一个 ash-review-flow-*,fail-closed 那条(见下面 guardAgentSpawn
+// 断言失败都会在 TEMP 里留下一个 navi-review-flow-*,fail-closed 那条(见下面 guardAgentSpawn
 // 的前提断言)尤其:它本来就是设计成要响的。exit 钩子对每条早退路径都成立;成功路径末尾那次
 // 清理照旧,它还得先 releaseTmpDb 才删得动库文件。
 process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
 // fail-closed 断言必须**赶在开库之前**响。它原来摆在下半场(那一节真正用到拦截器的地方),
 // 那时 better-sqlite3 已经把 ash.db 打开了,而 exit 钩子是同步的、`await` 不了
 // releaseTmpDb —— Windows 上删一个还开着的文件是 EBUSY,被 `catch {}` 一吞,
-// `ASH_ALLOW_REAL_AGENT=1` 每跑一次就在 TEMP 里留下一个 ash-review-flow-*。
+// `NAVI_ALLOW_REAL_AGENT=1` 每跑一次就在 TEMP 里留下一个 navi-review-flow-*。
 // 挪到这儿(和 test-accept-merge 同一套)之后,断言响的时候还没有任何句柄,rmSync 删得干净。
 assert.ok(
-  process.env.ASH_RUNS_DIR && process.env.ASH_ALLOW_REAL_AGENT !== "1",
+  process.env.NAVI_RUNS_DIR && process.env.NAVI_ALLOW_REAL_AGENT !== "1",
   "下半场靠 guardAgentSpawn 拦住真 CLI;拦截器一失效,测试就会拿用户的真额度跑 agent",
 );
 
@@ -154,8 +152,8 @@ const commit = (message: string, at: string) => {
   return git("rev-parse", "HEAD");
 };
 execFileSync("git", ["init", "-b", "main", coverageRepo]);
-git("config", "user.name", "Ash Review Test");
-git("config", "user.email", "ash@example.test");
+git("config", "user.name", "Navi Review Test");
+git("config", "user.email", "navi@example.test");
 writeFileSync(join(coverageRepo, "shared.ts"), "seed\n");
 writeFileSync(join(coverageRepo, "other.ts"), "seed\n");
 git("add", "-A");
@@ -320,13 +318,8 @@ assertCarriesSummaryReminder(
 // 报告**形状**的契约（上面那几行）管不了「找到几条」：一份格式完美的单条发现照样全绿。
 // 扫描义务是另一份契约，同样只有一份源（`server/src/review-sweep.ts`），同样要核「原样
 // 包含那个常量」——它是把停机条件从「够判不通过了」改成「该扫的面扫完了」的唯一载体。
-assertSweepRuleTable();
+// 表自身完整、续跑提醒里也带着，由 test-review-sweep.ts 核（同一条链上紧跟着跑），这里只核完整 prompt 这一条。
 assertCarriesSweepProtocol(reviewPrompt, "自动验证 prompt");
-assertCarriesSweepReminder((await verifyReminderFor(taskId, 1)).text, "自动验证续跑提醒");
-assertCarriesSweepReminder(
-  (await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })).text,
-  "历史审查续跑提醒",
-);
 // 调度台的 stdin 注入**只有一道门**(sendToLead):用户插话、执行者汇报、回合末合并投递
 // 一律从投递口过,串行链和回合身份都挂在那里。连着三个文件一起数:消费循环与 session.ts
 // 都不许再出现裸 handle.send。
@@ -542,7 +535,7 @@ rmSync(resolve(reviewRoundDir(failId, 1), "../.."), { recursive: true, force: tr
 // 两条都只能在真跑一遍回合时才暴露,所以这里用一个立刻 exit 0 的假 claude 跑通全程。
 const { projects } = await import("../src/db/schema.js");
 await db.insert(projects).values({ id: "project", name: "native-turn", repoPath: root, createdAt: at });
-// 这几轮**不会真的起 CLI**:ASH_RUNS_DIR 一设,guardAgentSpawn 就把每一次 spawn 都拦成
+// 这几轮**不会真的起 CLI**:NAVI_RUNS_DIR 一设,guardAgentSpawn 就把每一次 spawn 都拦成
 // failedChild(executors/spawn.ts),回合照样开、照样结算,只是没有真进程。所以这里既不需要
 // 假 claude,也**不可能**摸到机器上真的 claude。
 // 原来这儿摆着一份没有后缀的 `#!/bin/sh` 假 claude,还把 PATH 用 `:` 拼起来 —— 那两条都只在

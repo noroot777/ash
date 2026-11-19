@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { Note, ProjectView } from "@ash/shared";
+import type { Note, ProjectView } from "@navi/shared";
 import { ArrowSquareOut, CheckCircle, CornersIn, CornersOut, File, MagnifyingGlass, NotePencil, Plus, Trash, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -19,8 +19,8 @@ import { attachmentView } from "../task-detail/utils.ts";
 import { filterNotes, NOTE_CONVERSION_FILTERS, type NoteConversionFilter } from "./notesFilter.ts";
 import { uniquePaths, useNoteDrafts } from "./useNoteDrafts.ts";
 import { localeDateTime } from "../lib/localeFormat.ts";
+import { noteTitle as titleOf } from "../lib/noteMention.ts";
 
-const titleOf = (body: string) => body.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 42) || "无标题随手记";
 const noteTime = (value: number) => localeDateTime(value, "zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 type Position = { left: number; top: number };

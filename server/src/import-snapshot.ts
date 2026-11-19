@@ -1,4 +1,4 @@
-// 把另一份 ash 的数据导进来之前，先把那份库的**副本**洗成「一份独立实例的数据」。
+// 把另一份 navi 的数据导进来之前，先把那份库的**副本**洗成「一份独立实例的数据」。
 //
 // SQLite 在线备份给的是一致快照，不是独立实例的快照：库里记着源实例手上的进程（pid + 启动时刻、
 // 进程记号、输出文件），还记着它下一次开机要接着做的事（接管 agent、接回哨兵、补发通知、推进队列、
@@ -22,7 +22,7 @@ export type ImportPreparation = {
   relocated: number;
 };
 
-const HELD_NOTE = "导入时它还属于原来那份 ash，这份副本没有接管它";
+const HELD_NOTE = "导入时它还属于原来那份 Navi，这份副本没有接管它";
 
 export function prepareImportedSnapshot(file: string, sourceRoots: string[], targetRoot: string): ImportPreparation {
   const db = new DatabaseSync(file);
@@ -99,7 +99,7 @@ function holdRuntime(db: DatabaseSync): Record<string, number> {
   run(null, "free_review_rounds", ["status", "ended_at", "started_at"],
     `UPDATE free_review_rounds SET status='error', ended_at=COALESCE(ended_at, started_at) WHERE status='reviewing'`);
   run("reviews", "free_review_debates", ["status", "finished_at", "updated_at"],
-    `UPDATE free_review_debates SET status='failed', finished_at=COALESCE(finished_at, ?), updated_at=? WHERE status='running'`, at, at);
+    `UPDATE free_review_debates SET status='failed', finished_at=COALESCE(finished_at, ?), updated_at=? WHERE status IN ('running','synthesizing')`, at, at);
   run(null, "free_review_debate_turns", ["status", "ended_at"],
     `UPDATE free_review_debate_turns SET status='error', ended_at=COALESCE(ended_at, ?) WHERE status='speaking'`, at);
 

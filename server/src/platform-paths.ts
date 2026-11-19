@@ -50,7 +50,7 @@ export function windowsPathRejection(absPath: string): string | null {
 
 // ── Windows 长路径(MAX_PATH) ──────────────────────────────────────────────
 //
-// ash 的 worktree 落在 `<repo>\.worktrees\<taskId>`,比主仓深两层,agent 进去
+// navi 的 worktree 落在 `<repo>\.worktrees\<taskId>`,比主仓深两层,agent 进去
 // 再装一遍 node_modules —— 260 字符的老上限在这条链路上是**最容易先撞到的一堵墙**。
 // 要点是两个开关缺一不可,而且第二个经常被漏:
 //  · 系统侧 `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled=1`
@@ -77,7 +77,7 @@ export function windowsLongPathHint(targetPath: string, stderr = ""): string | n
     `Windows 的 MAX_PATH 是 ${WINDOWS_MAX_PATH},这条路径已经 ${targetPath.length} 字符 —— 深路径是这里最常见的失败原因。两个开关缺一不可:`,
     "  · 管理员 PowerShell:Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' LongPathsEnabled 1",
     "  · git config --global core.longpaths true",
-    "改完要重开终端和 ash;还不行就把项目挪到更短的路径下(比如 C:\\code\\<项目>)。",
+    "改完要重开终端和 Navi;还不行就把项目挪到更短的路径下(比如 C:\\code\\<项目>)。",
   ].join("\n");
 }
 
@@ -115,7 +115,7 @@ export interface HostInfo {
 /**
  * 前端要按**这台机器**给路径提示(新建项目的占位符、把家目录缩写成 `~`)。
  * 浏览器自己的 `navigator.platform` 不算数 —— 用 Windows 上的浏览器连 mac 上的
- * ash 是完全正常的用法,那时该显示的是 mac 的路径形状:项目目录在服务端。
+ * navi 是完全正常的用法,那时该显示的是 mac 的路径形状:项目目录在服务端。
  */
 export function hostInfo(): HostInfo {
   return { platform: process.platform, sep: PATH_SEP, home: homedir() };

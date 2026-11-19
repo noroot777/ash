@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
@@ -26,7 +26,7 @@ const TASK: Task = {
   updatedAt: "2026-09-01T00:00:00.000Z",
 };
 
-function Ash() {
+function Navi() {
   const [log, setLog] = useState<string[]>([]);
   return (
     // 上方留白是给浮层的：菜单锚在输入框上沿往上弹，贴着视口顶会被裁掉。
@@ -34,8 +34,8 @@ function Ash() {
       <ReplyBox
         task={TASK}
         hasConversation
-        onSend={async (text) => {
-          setLog((current) => [...current, `send:${text}`]);
+        onSend={async (text, attachments) => {
+          setLog((current) => [...current, `send:${text}${attachments.length ? ` +${attachments.join(",")}` : ""}`]);
           return { started: true };
         }}
       />
@@ -48,6 +48,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <DraftProvider>
-    <Ash />
+    <Navi />
   </DraftProvider>,
 );

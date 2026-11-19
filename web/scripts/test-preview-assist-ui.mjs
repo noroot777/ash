@@ -1,10 +1,10 @@
 // 「AI 协助填写」这块面板的浏览器回归。
 //
 // 要钉的是**每一种结局在界面上都留得下痕迹、而且说的是实话**，因为这颗按钮要跑几分钟，
-// 用户在这几分钟里会换页面、会刷新、会自己动手写脚本，还可能碰上 ash 重启或者网断一下：
+// 用户在这几分钟里会换页面、会刷新、会自己动手写脚本，还可能碰上 navi 重启或者网断一下：
 //   ① 点下去 → 看得见第几轮、看得见「停止」；
 //   ② 点停止 → 留下「已取消」（不是悄悄退回初始按钮）；
-//   ③ ash 重启把内存态吞了 → 「已随 ash 重启中断」，而且**刷新之后还在**
+//   ③ navi 重启把内存态吞了 → 「已随 Navi 重启中断」，而且**刷新之后还在**
 //      （项目约定：停止/中断必须留下持久可见的状态，判据就是刷新后还看得见）；
 //   ④ 作业正常跑完、终态过了 10 分钟被清掉 → 说的是「过期」，**不能说成重启**
 //      （服务端回的都是 job: null，靠它自报的实例身份分辨）；
@@ -104,7 +104,6 @@ try {
   await script.waitFor();
   assert.match(await capsule.getByRole("button", { name: /模型：/ }).getAttribute("aria-label") ?? "",
     /模型：sonnet/, "刷新之后还得记着刚选的模型");
-  await dismiss().catch(() => {});
 
   // ① 点下去
   await startAssist.click();
@@ -120,14 +119,14 @@ try {
   await stopAssist.waitFor({ state: "detached" });
   assert.equal(await assistButton.isDisabled(), false, "停下来之后要能重新点");
 
-  // ③ ash 重启：服务端只回 job: null，界面不能装作没点过
+  // ③ navi 重启：服务端只回 job: null，界面不能装作没点过
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   await page.getByTestId("assist-restart").click();
-  await progress.getByText("已随 ash 重启中断", { exact: false }).waitFor();
+  await progress.getByText("已随 Navi 重启中断", { exact: false }).waitFor();
   await page.reload();
   await script.waitFor();
-  await progress.getByText("已随 ash 重启中断", { exact: false }).waitFor();
+  await progress.getByText("已随 Navi 重启中断", { exact: false }).waitFor();
   assert.match(await progress.innerText(), /再点一次/, "中断之后要说清下一步怎么办");
   // 这张卡是本地记录推出来的，服务端没有对应的东西可轮询，所以必须给它一个出口。
   await dismiss();
@@ -138,13 +137,13 @@ try {
   await assistGetsSettled(page, 1, "刷新后的首次状态读取已被页面消费完");
   assert.equal(await progress.count(), 0, "收掉的提示不该在刷新后又冒出来");
 
-  // ④ 同样是 job: null，但 ash 没重启过：那是作业跑完之后终态自己过期了
+  // ④ 同样是 job: null，但 navi 没重启过：那是作业跑完之后终态自己过期了
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   await page.getByTestId("assist-expire").click();
   await progress.getByText("已经过期", { exact: false }).waitFor();
   const expired = await progress.innerText();
-  assert.doesNotMatch(expired, /重启/, "ash 没重启过就不能说它重启了");
+  assert.doesNotMatch(expired, /重启/, "navi 没重启过就不能说它重启了");
   assert.match(expired, /只保留 10 分钟/, "要说清结果为什么没了");
   await dismiss();
   await progress.waitFor({ state: "detached" });
@@ -157,7 +156,6 @@ try {
   assert.equal(await page.locator(".preview-assist-error").count(), 0, "接管成功就不该再红一条启动失败");
   await stopAssist.click();
   await progress.locator(".preview-assist-step").getByText("已取消", { exact: false }).waitFor();
-  await dismiss().catch(() => {});
 
   // ⑤b 响应丢在路上，但服务端那边作业已经跑完、还成功了：那次验证是真的
   await page.getByTestId("assist-drop-post-succeeded").click();
@@ -183,12 +181,12 @@ try {
   // 摆出来的那条脚本要看得见，而且换不换由用户点
   assert.match(await progress.innerText(), /npm run dev -- --port \$PORT/, "AI 试出来的那条要摆出来给人看");
   // 点完「保留我写的」，卡片得说准：说成「已填进上面的输入框」，用户就会以为框里这条手写的
-  // 是 ash 验证过的（第 3 轮审查）。
+  // 是 navi 验证过的（第 3 轮审查）。
   await progress.getByRole("button", { name: "保留我写的" }).click();
   await progress.getByText("保留你自己写的那条", { exact: false }).waitFor();
   const kept = await progress.innerText();
   assert.doesNotMatch(kept, /脚本已填进上面的输入框/, "没填进去就不能说填了");
-  assert.match(kept, /没有经过 ash 试跑/, "要说清框里这条没被验证过");
+  assert.match(kept, /没有经过 Navi 试跑/, "要说清框里这条没被验证过");
   assert.equal(await editorText(script), mine, "选了保留就还是手写那份");
 
   // ⑥b 同一张卡的另一个选择：点「用这条替换」才换

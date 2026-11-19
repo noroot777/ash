@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
-import type { Group, ProjectView, TaskListItem } from "@ash/shared";
-import { TASK_STATUS_LABELS } from "@ash/shared";
-import { isSearchQueryReady, SEARCH_MAX_HITS } from "@ash/shared/search";
+import type { Group, ProjectView, TaskListItem } from "@navi/shared";
+import { TASK_STATUS_LABELS } from "@navi/shared";
+import { isSearchQueryReady, SEARCH_MAX_HITS } from "@navi/shared/search";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -15,7 +15,6 @@ import {
   NotePencil,
   Play,
   Plus,
-  ChatsCircle,
   Stack,
   Stop,
   Trash,
@@ -72,7 +71,7 @@ type CommandPaletteProps = {
   onTaskUpdated: (task: TaskListItem) => void;
   /** projectId 为 null = 当前没有可用项目：由上层决定提示什么、要不要引导去建项目，这里不静默吞掉。 */
   onNote: (projectId: string | null, noteId: string | null) => void;
-  onComposer: (mode?: "single" | "team" | "duet") => void;
+  onComposer: () => void;
   onNewGroup: () => void;
   onNewProject: () => void;
   onDeleteTask: (task: TaskListItem) => void;
@@ -188,7 +187,7 @@ export function CommandPalette({
         result.push({
           key: "task:parent",
           group: taskGroup,
-          label: `${parent.kind === "team" ? "打开所属团队" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
+          label: `${parent.kind === "team" ? "打开所属团队" : parent.kind === "dispatch" ? "打开父任务" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
           icon: <TaskModeIcon mode={taskParentMode(parent)} />,
           run: closeRun(() => onTask(parent.task!)),
         });
@@ -261,8 +260,7 @@ export function CommandPalette({
       }
     }
     result.push(
-      { key: "new:task", group: "新建", label: "新建任务", keys: "C", icon: <Plus size={15} />, run: closeRun(() => onComposer("single")) },
-      { key: "new:duet", group: "新建", label: "新建讨论 · 给你答案", icon: <ChatsCircle size={15} />, run: closeRun(() => onComposer("duet")) },
+      { key: "new:task", group: "新建", label: "新建任务", keys: "C", icon: <Plus size={15} />, run: closeRun(() => onComposer()) },
       { key: "new:note", group: "新建", label: "新建随手记", keys: "NI", icon: <NotePencil size={15} />, run: closeRun(() => onNote(currentProject?.id ?? null, "__new__")) },
       { key: "new:group", group: "新建", label: "新建分组", icon: <Stack size={15} />, run: closeRun(onNewGroup) },
       { key: "new:project", group: "新建", label: "新建项目", icon: <FolderPlus size={15} />, run: closeRun(onNewProject) },
@@ -504,7 +502,7 @@ export function CommandPalette({
         {step === "search" && !slashMode && (
           <div className="palette-body">
             <div className="palette-results">
-              <SearchHitList hits={pinnedHits} active={active} startIndex={0} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
+              <SearchHitList hits={pinnedHits} active={active} startIndex={0} query={query} sort={sort} onSelect={setActive} onOpen={openHit} tasks={tasks} />
               {items.map((item, position) => {
                 const index = position + pinnedHits.length;
                 const header = position === 0 || items[position - 1]?.group !== item.group ? item.group : null;
@@ -521,13 +519,13 @@ export function CommandPalette({
                   </div>
                 );
               })}
-              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
+              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} sort={sort} onSelect={setActive} onOpen={openHit} tasks={tasks} />
               {!normalTotal && !searchError && <p className="palette-empty">{searching ? searchNote : isSearchQueryReady(query) ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
               {searching && normalTotal > 0 && <p className="px-4 py-2 text-center text-[length:var(--t-xs)] text-faint">{searchNote}</p>}
               {searchError && <div role="alert" className="palette-search-error"><span>{searchError}</span><button type="button" onClick={retry}>重试</button></div>}
               {!searching && hits.length >= SEARCH_MAX_HITS && <p className="px-4 py-2 text-center text-[length:var(--t-xs)] text-faint">显示前 {SEARCH_MAX_HITS} 条结果</p>}
             </div>
-            {hasHits && <SearchPreview hit={activeHit} query={query} onOpen={openHit} />}
+            {hasHits && <SearchPreview hit={activeHit} query={query} onOpen={openHit} tasks={tasks} />}
           </div>
         )}
 

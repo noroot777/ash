@@ -9,7 +9,7 @@ import { confineOwnPackages } from "../src/accept-gate-confine.js";
 import { linksIntoSource, provideDependency, recordedLinks, workspacePackages } from "../src/accept-gate-deps.js";
 import { projectSources } from "../src/accept-gate-project.js";
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-proof-")));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "navi-gate-proof-")));
 const promises = createRequire(import.meta.url)("node:fs/promises") as typeof import("node:fs/promises");
 type Operation = "stat" | "lstat" | "realpath" | "readdir" | "readFile";
 const save = (path: string, content: string) => {

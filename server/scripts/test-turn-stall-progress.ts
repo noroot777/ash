@@ -2,17 +2,18 @@
 // 跑:npm -w server run test:turn-stall-progress
 //
 // 两档动手(阈值、熔断、回收、现场重放)在 test-turn-stall.ts;这一份只钉判据本身 ——
-// 判据整份住在 `@ash/shared/waiting` 的 `producesWork`,它被三条消费链共用,漂一个字就会
+// 判据整份住在 `@navi/shared/waiting` 的 `producesWork`,它被三条消费链共用,漂一个字就会
 // 让「同一次重试」在不同表面上给出不同结论。夹具见 stall-fixtures.ts。
+import "./isolated-data.js";
 import assert from "node:assert/strict";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { codexErrorEvent } from "../src/executors/codex-error-event.js";
 import { childActivity } from "../src/executors/native-agent-activity.js";
 import { __resetTurnStalls, clearTurnStall, trackTurnStall } from "../src/turn-stall.js";
 import { configure, hard, notice, RETRY, spy, TURN } from "./stall-fixtures.js";
 
 // ── ③a 解除条件:**上游真的回话了**那一类 ───────────────────────────────────────
-// 判据共用 `@ash/shared/waiting` 的 `resumesWaiting`(那个文件就是为了不让三处判据各自漂)。
+// 判据共用 `@navi/shared/waiting` 的 `resumesWaiting`(那个文件就是为了不让三处判据各自漂)。
 {
   for (const resume of [
     { kind: "text", text: "续" },

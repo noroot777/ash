@@ -17,6 +17,11 @@ export interface InspectorDescriptor<Context> {
   shortcut?: InspectorShortcutKey;
   /** 竖轨上的第几簇。相邻两格簇号不同，中间多留一段空（不画线）；不给就不分簇。 */
   cluster?: number;
+  /**
+   * 宽格：选中它时右栏按整块布局的比例算宽（默认一半，跟内容大约五五开），而不是平常那个像素宽。
+   * 给要「看一整页」的格子用（共享浏览器）；比例单独记，拖它不改别的格子的宽度。
+   */
+  wide?: boolean;
 }
 
 export interface InspectorTabPolicy {
@@ -29,6 +34,9 @@ export interface InspectorTabPolicy {
   /** Focused once when stateKey changes; manual focus wins until then. */
   defaultActiveTabId: string;
   preserveActiveTabIds?: readonly string[];
+  focusOnEntry?: string;
+  entryReady?: boolean;
+  focusRequest?: { key: string; tabId: string };
 }
 
 export interface InspectorHostControls {

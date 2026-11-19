@@ -14,7 +14,7 @@
 // 「把代码搬开」而已。
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { windowsTerminateScript } from "./windows-restart.mjs";
+import { RESTART_SKIPPED_MARK, windowsTerminateScript } from "./windows-restart.mjs";
 import { CLOCK_SLACK_MS, fileTime, powerShell } from "./test-process-probe.mjs";
 import { delay, delaySync, handleAlive, requestQuit, terminateBound } from "./test-process-terminate.mjs";
 
@@ -114,7 +114,7 @@ export async function stopScope(scope) {
         const output = await powerShell(windowsTerminateScript(targets, { tolerant: true }));
         // 跳过的那些:这个号码在查到和动手之间换了主人,不是我们的那一个。不杀,记一笔。
         for (const line of output.split("\n")) {
-          const skipped = /^ASH_RESTART_SKIPPED (\d+)/.exec(line.trim());
+          const skipped = new RegExp(`^${RESTART_SKIPPED_MARK} (\\d+)`).exec(line.trim());
           if (skipped) unverified.push(Number(skipped[1]));
         }
       } catch (error) { errors.push(error); }

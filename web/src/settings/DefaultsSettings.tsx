@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AppSettings } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import type { ComposerSendKey } from "@ash/shared";
+import type { AppSettings } from "@navi/shared";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
+import type { ComposerSendKey } from "@navi/shared";
 import { useIsInstanceAdmin, useIsLocalOnly, useIsMultiUser } from "../auth/authContext.ts";
 import { api } from "../lib/api.ts";
 import { ColorThemeCard } from "./ColorThemeCard.tsx";

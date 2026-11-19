@@ -10,18 +10,18 @@
 //      检查点续跑失权不起跑、fresh run 起跑前读库抛错 —— 锁都要还回去。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "ash-turn-wind-down-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_STUCK_WIND_DOWN_MS = "150";
-process.env.ASH_WIND_DOWN_COMMAND_TIMEOUT_MS = "500";
-assert.ok(process.env.ASH_ALLOW_REAL_AGENT !== "1", "结算钩子失手续跑时不许真拉起 CLI");
+const root = mkdtempSync(join(tmpdir(), "navi-turn-wind-down-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_STUCK_WIND_DOWN_MS = "150";
+process.env.NAVI_WIND_DOWN_COMMAND_TIMEOUT_MS = "500";
+assert.ok(process.env.NAVI_ALLOW_REAL_AGENT !== "1", "结算钩子失手续跑时不许真拉起 CLI");
 process.on("exit", () => {
   try { rmSync(root, { recursive: true, force: true }); } catch {}
 });
@@ -116,6 +116,10 @@ function interceptSql(match: (sql: string) => boolean, hook: (run: () => Promise
   return () => { dbClient.execute = execute; dbClient.batch = batch; };
 }
 
+/** 用当前这份 node 跑一段脚本 —— 不依赖 sh/sleep,Windows 真机上也能跑。 */
+const node = (script: string) => [process.execPath, ["-e", script]] as const;
+const SLEEP = "setInterval(() => {}, 1000);";
+
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 /** 起一轮「CLI 已经跑完」的单飞回合,直接走真实的收尾链。返回凭据与收尾那一条 promise。 */
@@ -141,15 +145,19 @@ async function windDownTurn(taskId: string) {
 // ── ① 外部命令与仓库锁的时限 ─────────────────────────────────────────────────
 {
   // 读 stdin 的命令(仓库 hook、交互式凭据 helper 的形状):没有 input 也要当场读到 EOF。
-  const { stdout } = await within("读 stdin 的命令", 3_000, execFileText("sh", ["-c", "read x; echo done"]));
+  const { stdout } = await within("读 stdin 的命令", 3_000, execFileText(...node(
+    "process.stdin.resume(); process.stdin.on('end', () => console.log('done'));")));
   assert.equal(stdout.trim(), "done");
 }
 {
-  // 到点按进程组杀:命令甩出去的后台后代一并收掉,不等输出管道关上就结算。
+  // 到点连后代一起杀(POSIX 按进程组、Windows 走 taskkill /T):命令甩出去的后台后代一并收掉,
+  // 不等输出管道关上就结算。
   const pidFile = join(root, "bg.pid");
   const started = Date.now();
-  const outcome = await within("带时限的命令", 3_000,
-    execFileText("sh", ["-c", `sleep 30 & echo $! > ${pidFile}; sleep 30`], { timeoutMs: 300 }).then(() => null, (error: unknown) => error));
+  const outcome = await within("带时限的命令", 3_000, execFileText(...node(
+    `const bg = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(SLEEP)}], { stdio: 'ignore' });`
+    + `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(bg.pid)); ${SLEEP}`), { timeoutMs: 300 })
+    .then(() => null, (error: unknown) => error));
   assert.ok(outcome instanceof ExecTimeout, `应以 ExecTimeout 结束,实际:${String(outcome)}`);
   assert.ok(Date.now() - started < 2_000, "到点就结算");
   const pid = Number(readFileSync(pidFile, "utf8"));
@@ -159,10 +167,10 @@ async function windDownTurn(taskId: string) {
   // 圈定的段里没显式给时限的命令取段上的时限,到点告诉圈段的人放弃了什么。
   const gaveUp: string[] = [];
   const outcome = await within("圈定时限的命令", 3_000, withExternalWaitBound({ ms: 200, onTimeout: (what) => gaveUp.push(what) },
-    () => execFileText("sleep", ["30"])).then(() => null, (error: unknown) => error));
+    () => execFileText(...node(SLEEP))).then(() => null, (error: unknown) => error));
   assert.ok(outcome instanceof ExecTimeout);
   assert.equal(gaveUp.length, 1);
-  assert.match(gaveUp[0]!, /sleep 30/);
+  assert.match(gaveUp[0]!, /setInterval/);
 }
 {
   // 圈定的段里等仓库锁:到点放弃排队,不执行;队位让过去,后来的人不被一个走掉的号挡住。
@@ -225,7 +233,7 @@ async function windDownTurn(taskId: string) {
   assert.equal(await later, undefined, "段结束之后时限失效");
   // 自带 Node `timeout` 的命令(命令站那一类)不被段上的短时限覆盖。
   const { stdout } = await within("自带上限的命令", 3_000, withExternalWaitBound({ ms: 100, onTimeout: () => {} },
-    () => execFileText("sh", ["-c", "sleep 0.3; echo fine"], { timeout: 5_000 })));
+    () => execFileText(...node("setTimeout(() => console.log('fine'), 300);"), { timeout: 5_000 })));
   assert.equal(stdout.trim(), "fine");
 }
 {
@@ -256,10 +264,11 @@ async function windDownTurn(taskId: string) {
   assert.ok(existsSync(join(RUNS_DIR, taskId, "turn-start.json")));
   // 结算那一张:git diff 调起的外部 diff 辅助程序睡死,并把自己的号记下来。
   const helperPids = join(root, "helper.pids");
-  const helper = join(root, "hang-diff.sh");
-  writeFileSync(helper, `#!/bin/sh\necho $$ >> ${helperPids}\nsleep 30\n`);
-  chmodSync(helper, 0o755);
-  git("config", "diff.external", helper);
+  const helper = join(root, "hang-diff.cjs");
+  writeFileSync(helper, `require('node:fs').appendFileSync(${JSON.stringify(helperPids)}, process.pid + '\\n'); ${SLEEP}\n`);
+  // git 经 shell 调它(Windows 上是 git 自带的 sh),路径里可能有空格和反斜杠:一律正斜杠加引号。
+  const quoted = (path: string) => `"${path.replace(/\\/g, "/")}"`;
+  git("config", "diff.external", `${quoted(process.execPath)} ${quoted(helper)}`);
   try {
     const { sessId, turn, consumed } = await windDownTurn(taskId);
     const started = Date.now();
@@ -267,7 +276,7 @@ async function windDownTurn(taskId: string) {
     assert.ok(Date.now() - started < 10 * WIND_DOWN_COMMAND_TIMEOUT_MS, "这一轮在时限内自己结束");
     assert.equal(turnIdentity(taskId)?.windDown?.step, "交卷通道诊断(noteTurnChannelGap)",
       "收尾走完了全程(最后一步是没交卷时的通道诊断)");
-    for (const pid of readFileSync(helperPids, "utf8").trim().split("\n").map(Number)) {
+    for (const pid of readFileSync(helperPids, "utf8").trim().split(/\r?\n/).map(Number)) {
       await waitFor(`外部 diff 辅助程序 ${pid} 被收掉`, () => !alive(pid), 3_000);
     }
     const transcript = readFileSync(join(RUNS_DIR, taskId, `${sessId}.md`), "utf8");
@@ -302,9 +311,11 @@ async function windDownTurn(taskId: string) {
   const stepNow = () => turnIdentity(taskId)?.windDown?.step ?? null;
   await waitFor("收尾走到写会话那一步", () => stepNow() === "写执行记录与会话收尾(closeExecution / recordTurnSpan)");
 
-  // 没到阈值:不报;人工放开拒绝,说的是「正在收尾,会自己放」。
-  assert.equal(await reportStuckWindDowns(), 0);
-  const early = turnReclaimStatus(taskId);
+  // 没到阈值:不报;人工放开拒绝,说的是「正在收尾,会自己放」。时刻明着给(进到这一步之后 1ms) ——
+  // 阈值压到了 150ms,按挂钟问的话机器一忙,走到这两句时就已经过线了。
+  const justIn = turnIdentity(taskId)!.windDown!.stepAt + 1;
+  assert.equal(await reportStuckWindDowns(justIn), 0);
+  const early = turnReclaimStatus(taskId, justIn);
   assert.equal(early.kind, "blocked");
   assert.match(early.kind === "blocked" ? early.reason : "", /正在收尾.*会自己放开占位/);
 
@@ -315,7 +326,7 @@ async function windDownTurn(taskId: string) {
   const stuck = notes.find((row) => row.action === "回合收尾卡住");
   assert.ok(stuck, "提示要落库(刷新页面后还在)");
   assert.match(stuck.reason, /收尾停在「写执行记录与会话收尾\(closeExecution \/ recordTurnSpan\)」已经约/);
-  assert.match(stuck.reason, /出路是重启 ash/);
+  assert.match(stuck.reason, /出路是重启 Navi/);
   assert.match(stuck.reason, /不提供手动放开/);
   {
     const response = await api.request(`/tasks/${taskId}/notices`);
@@ -326,7 +337,7 @@ async function windDownTurn(taskId: string) {
   assert.ok(!suspectTurns().some((suspect) => suspect.taskId === taskId), "不进可放开的名单");
   const late = turnReclaimStatus(taskId);
   assert.equal(late.kind, "blocked", "人工放开照样拒绝");
-  assert.match(late.kind === "blocked" ? late.reason : "", /收尾停在「写执行记录与会话收尾.*出路是重启 ash/,
+  assert.match(late.kind === "blocked" ? late.reason : "", /收尾停在「写执行记录与会话收尾.*出路是重启 Navi/,
     "拒绝的话里带同样的说明");
   assert.equal(turnIdentity(taskId)?.seq, turn.seq, "锁原样在原回合手上");
 

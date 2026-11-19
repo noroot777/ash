@@ -1,7 +1,7 @@
-// ash MCP 登记能力表的类型(单一真相来源的形状定义)。
+// navi MCP 登记能力表的类型(单一真相来源的形状定义)。
 //
-// 为什么要有这一层:ash 的完成协议整个建立在 ash MCP 上(`complete_task` / `ask_question` /
-// `pause_task` / `report_stage`),而「怎么把 ash 这一条登记写进某家 CLI 的配置」原先只有
+// 为什么要有这一层:navi 的完成协议整个建立在 navi MCP 上(`complete_task` / `ask_question` /
+// `pause_task` / `report_stage`),而「怎么把 navi 这一条登记写进某家 CLI 的配置」原先只有
 // claude 和 codex 两份**孤岛实现**(`auth/user-cli-mcp.ts` 里两条 if、`scripts/setup.mjs` 里
 // 三段 if)。执行器目录里另外十三家一行注册逻辑都没有 —— 用户 2026-10-30 实测:换别的 agent
 // 跑任务,MCP 调不到、卷交不了,而界面上只看得到「失败」。
@@ -10,20 +10,20 @@
 // (见 `shapes.ts`),读/写/判都由格式族统一实现。新增一家执行器时 `satisfies Record<AgentType,…>`
 // 会**编译不过**,逼着当场给出结论(支持哪条路、还是明确标 none),不许沉默跳过 —— 沉默正是
 // 这条链一直在修的那个病。
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 
-/** 一条 ash MCP 登记的内容(格式族各自渲染成 JSON / TOML)。 */
-export interface AshMcpEntry {
+/** 一条 navi MCP 登记的内容(格式族各自渲染成 JSON / TOML)。 */
+export interface NaviMcpEntry {
   /** 启动命令,一律 node(我们这份 MCP 服务是 JS)。 */
   command: string;
   /** 参数,通常是 `[<repo>/mcp/dist/index.js]`。 */
   args: string[];
-  /** 进程环境:至少有 ASH_URL。 */
+  /** 进程环境:至少有 NAVI_URL。 */
   env: Record<string, string>;
 }
 
-/** 配置文件里 ash 这条登记的状态。三态加一个「关着」,判据见各格式族的 `read`。 */
-export interface AshMcpConfigState {
+/** 配置文件里 navi 这条登记的状态。三态加一个「关着」,判据见各格式族的 `read`。 */
+export interface NaviMcpConfigState {
   /**
    * present=登记在且没关 / absent=确实没有 / disabled=登记在但显式关掉了 /
    * unknown=读不出来或写法判不了,**别据此下结论**。
@@ -35,22 +35,22 @@ export interface AshMcpConfigState {
   detail: string;
 }
 
-/** 「这条登记怎么起」—— 只拿来出提示,不参与拦/放(见 `ash-mcp-file.ts` 的 `launchHint`)。 */
-export interface AshMcpLaunch {
+/** 「这条登记怎么起」—— 只拿来出提示、认「指没指向这里」(`host-setup.ts`),不参与写不写。 */
+export interface NaviMcpLaunch {
   command?: string | null;
   args?: unknown;
-  ashUrl?: string | null;
+  naviUrl?: string | null;
 }
 
 /**
  * 一个兼容名(`ash` / 历史名 `harness`)在**一份**配置里的事实 —— 刻意**不折叠**。
  *
  * 为什么要有这一层(本轮审查 F3):`ash` 和 `harness` 是**两条独立登记**,一条关着、另一条
- * 开着时 ash MCP 是能用的。上一版每份来源先压成一个四态结论,再按来源优先级选赢家 ——
- * 两个名字的事实在第一步就被混成了一个,于是「高优先级那份里 ash 关着、低优先级那份里
+ * 开着时 navi MCP 是能用的。上一版每份来源先压成一个四态结论,再按来源优先级选赢家 ——
+ * 两个名字的事实在第一步就被混成了一个,于是「高优先级那份里 navi 关着、低优先级那份里
  * harness 开着」被判成 disabled(预检硬拒),而真 CLI 那边工具明明连得上。
  */
-export interface AshMcpNameFact {
+export interface NaviMcpNameFact {
   /** on=登记在且没关 / off=显式关掉了 / doubt=写法认不出来(**别据此下结论**)。 */
   readonly status: "on" | "off" | "doubt";
   /** 给用户看的一句话(off/doubt 必填)。**不带来源前缀** —— 前缀由消费者按来源加。 */
@@ -58,7 +58,7 @@ export interface AshMcpNameFact {
   /**
    * 这条登记**在这份来源里真正贡献的那些字段**,整条搬给隔离档用。
    *
-   * **跨来源的逐字段合并也靠它**(`AshMcpShape.mergeFacts`):几份来源各写了同一个名字时,
+   * **跨来源的逐字段合并也靠它**(`NaviMcpShape.mergeFacts`):几份来源各写了同一个名字时,
    * CLI 最终用的是它们合起来那一条,所以 `status` / `launch` 都必须从**合完的原值**上重算,
    * 不能从某一份的结论上取。有 `raw` 还意味着「这一份的写法认得出来、能参与合并」——
    * `status: "doubt"` 而**不带** `raw` 的那种(值根本不是对象、或者少到让 CLI 整份拒载)
@@ -75,26 +75,26 @@ export interface AshMcpNameFact {
   /** 这条登记的原文(TOML 族),整段搬给隔离档用。 */
   readonly block?: string;
   /** 这条登记写的启动方式,只给 `launchHint` 出提示。 */
-  readonly launch?: AshMcpLaunch | null;
+  readonly launch?: NaviMcpLaunch | null;
 }
 
 /**
  * **一份**配置扫出来的「每个兼容名各自的事实」。
  *
- * 折叠成四态是 `shapes.ts` 的 `foldScan`,跨来源逐名解析是 `register.ts` 的 `resolveAshMcp` ——
+ * 折叠成四态是 `shapes.ts` 的 `foldScan`,跨来源逐名解析是 `register.ts` 的 `resolveNaviMcp` ——
  * 读状态、幂等判断、宿主搬运、诊断提示全部消费同一个选中结果,不许各自再选一遍。
  */
-export interface AshMcpNameScan {
+export interface NaviMcpNameScan {
   /** 整份读不准(解析不了、登记容器不是对象…):它声明了哪些名字也就谈不上。 */
   readonly doubt?: string;
   /** 确认没有这份配置(文件不存在 / 正文空白)。 */
   readonly missing?: boolean;
   /** **声明过**的那几个兼容名(没声明的不出现)。 */
-  readonly names: ReadonlyMap<string, AshMcpNameFact>;
+  readonly names: ReadonlyMap<string, NaviMcpNameFact>;
 }
 
-/** 拼的时候这家 CLI 要的那两个可选修饰(来自 `AshMcpMechanism` 的同名字段)。 */
-export interface AshMcpComposeOpts {
+/** 拼的时候这家 CLI 要的那两个可选修饰(来自 `NaviMcpMechanism` 的同名字段)。 */
+export interface NaviMcpComposeOpts {
   /** TOML 族:带上 `enabled = true`。 */
   enabled?: boolean;
   /** JSON 族:带上 `"type": "stdio"`。 */
@@ -102,7 +102,7 @@ export interface AshMcpComposeOpts {
 }
 
 /** 拼一段新内容出来:给 body 就是可以发布,给 why 就是**不能自动补**(原因原样交给用户)。 */
-export type AshMcpCompose = { body: string } | { why: string };
+export type NaviMcpCompose = { body: string } | { why: string };
 
 /**
  * 一个格式族(JSON 的 `mcpServers`、opencode 的 `mcp`、TOML 的 `[mcp_servers.x]`)。
@@ -111,7 +111,7 @@ export type AshMcpCompose = { body: string } | { why: string };
  * 就地写、写完读回来比对)统一在 `auth/config-publish.ts`,格式族一律不碰文件系统 ——
  * 十五家各自一份「读改写」就是十五处可以漏掉文件身份保全的地方。
  */
-export interface AshMcpShape {
+export interface NaviMcpShape {
   /** 格式族名字,出现在矩阵和报错文案里。 */
   readonly id: "mcp-servers-json" | "opencode-json" | "mcp-servers-toml";
   /**
@@ -122,11 +122,11 @@ export interface AshMcpShape {
    * `hostBlock` 按名字固定先挑 `ash`,`read` 挑**开着**的那条,于是 `ash` 关着、`harness`
    * 开着时,搬过去的是那条关着的。
    */
-  scan(text: string | null, switches?: AshMcpSwitches): AshMcpNameScan;
-  /** 这份配置里 ash 登记的状态(= `scan` 折一下)。`text === null` = 确认没有这个文件。 */
-  read(text: string | null, switches?: AshMcpSwitches): AshMcpConfigState;
-  /** 把 ash 这一条拼进去(已有一律不覆盖 —— 调用方先 `read` 过)。 */
-  compose(text: string | null, entry: AshMcpEntry, opts?: AshMcpComposeOpts): AshMcpCompose;
+  scan(text: string | null, switches?: NaviMcpSwitches): NaviMcpNameScan;
+  /** 这份配置里 navi 登记的状态(= `scan` 折一下)。`text === null` = 确认没有这个文件。 */
+  read(text: string | null, switches?: NaviMcpSwitches): NaviMcpConfigState;
+  /** 把 navi 这一条拼进去(已有一律不覆盖 —— 调用方先 `read` 过)。 */
+  compose(text: string | null, entry: NaviMcpEntry, opts?: NaviMcpComposeOpts): NaviMcpCompose;
   /**
    * 同一个名字在**几份来源**里各有一条时,合起来是哪一条 —— 只有**实测过合并语义**的格式
    * 族有(本轮审查 F1)。`lower` 是优先级低的那份,`higher` 是高的那份,按升序两两折叠;
@@ -134,26 +134,26 @@ export interface AshMcpShape {
    *
    * 为什么非得是「合并」而不是「选一份赢家」(2026-10-31 真 opencode 实测):全局那份写着
    * 完整的启动命令和环境变量、`OPENCODE_CONFIG` 那份只写 `{"enabled": true}` 时,真 CLI
-   * 用的是**两份合起来**那一条(`ash connected`)。上一版只取赢家那一份的原值,于是搬进
+   * 用的是**两份合起来**那一条(`navi connected`)。上一版只取赢家那一份的原值,于是搬进
    * 隔离档的只有 `{"enabled": true}` —— 注册报成功,而那份档里真 CLI 打印
-   * `No MCP servers configured`,agent 一个 ash 工具都没有。
+   * `No MCP servers configured`,agent 一个 navi 工具都没有。
    *
    * 这一位在不在是**格式**的事(这种写法怎么合),站点上的 `sourcesMerge` 是**那家 CLI**
    * 的事(它到底会不会把几份读到一起)。两个都成立才真的合 —— kilo 跟 opencode 同格式、
    * 但没有真 CLI 可问,所以它那边几份结论不一致仍然只能答 unknown。
    */
-  mergeFacts?(name: string, lower: AshMcpNameFact, higher: AshMcpNameFact): AshMcpNameFact;
-  /** 把一条原值登记按规范名拼进去(配 `AshMcpNameFact.raw`,JSON 两族有)。 */
-  composeRaw?(text: string | null, value: Record<string, unknown>): AshMcpCompose;
+  mergeFacts?(name: string, lower: NaviMcpNameFact, higher: NaviMcpNameFact): NaviMcpNameFact;
+  /** 把一条原值登记按规范名拼进去(配 `NaviMcpNameFact.raw`,JSON 两族有)。 */
+  composeRaw?(text: string | null, value: Record<string, unknown>): NaviMcpCompose;
   /** 没有宿主那段可搬时,按一条登记现渲染一段(「整段原文照搬」只有 TOML 族有)。 */
-  blockFor?(entry: AshMcpEntry, opts?: AshMcpComposeOpts): string;
+  blockFor?(entry: NaviMcpEntry, opts?: NaviMcpComposeOpts): string;
   /** 把一段登记原文接进配置(重复表、内联表这些判据跟 `compose` 同一份)。 */
-  appendBlock?(text: string | null, block: string): AshMcpCompose;
+  appendBlock?(text: string | null, block: string): NaviMcpCompose;
   /**
    * 这条登记写的启动方式,只给提示用。**要带上这家的启停策略**:被这家自己的根级名单挡住
    * 的那条不该拿去当提示(用户照着去查一个其实用不上的命令)。
    */
-  launch(text: string | null, switches?: AshMcpSwitches): AshMcpLaunch | null;
+  launch(text: string | null, switches?: NaviMcpSwitches): NaviMcpLaunch | null;
 }
 
 /**
@@ -162,10 +162,10 @@ export interface AshMcpShape {
  *
  * 为什么不能留在格式族里:同一个格式族底下各家的开关各不相同,而把一家的开关套到另一家
  * 身上两个方向都错,两种错都是实测出来的(2026-10-31,本机真 CLI):
- *  · **漏掉**:gemini 的根级 `mcp.excluded: ["ash"]` / `mcp.allowed: ["other"]` 会让它直接
- *    把 ash 判成 `Blocked`,而格式族只看条目上的 `disabled/enabled` ⇒ ash 答 present、
- *    预检无提示放行,那一轮起来一个 ash 工具都没有、跑完交不了卷;
- *  · **套用**:根级 `disabled_mcp_servers = ["ash"]` 是 **grok 专有**的(`grok mcp list`
+ *  · **漏掉**:gemini 的根级 `mcp.excluded: ["navi"]` / `mcp.allowed: ["other"]` 会让它直接
+ *    把 navi 判成 `Blocked`,而格式族只看条目上的 `disabled/enabled` ⇒ navi 答 present、
+ *    预检无提示放行,那一轮起来一个 navi 工具都没有、跑完交不了卷;
+ *  · **套用**:根级 `disabled_mcp_servers = ["navi"]` 是 **grok 专有**的(`grok mcp list`
  *    打出 `(disabled)`),同格式的 codex 压根不认它(`codex mcp list --json` 照样
  *    `enabled: true, disabled_reason: null`)⇒ 一条能用的 codex 连接被判成「被关掉了」,
  *    安装器还会说「是你自己关的,没替你打开」。
@@ -173,7 +173,7 @@ export interface AshMcpShape {
  * 键路径按**根级**算(`["mcp","excluded"]` = 根下 `mcp` 对象里的 `excluded`)。TOML 那一族
  * 只支持一层(`["disabled_mcp_servers"]`)。
  */
-export interface AshMcpSwitches {
+export interface NaviMcpSwitches {
   /** 「这几个名字关掉」的数组键路径(grok: `disabled_mcp_servers`;gemini: `mcp.excluded`)。 */
   readonly off?: readonly string[];
   /**
@@ -195,21 +195,21 @@ export interface AshMcpSwitches {
  * 是「已接好」、在真 CLI 那边是 `Blocked`。一律走 `readingFor(mechanism)` 拿这一份,
  * 别在调用点自己拼。
  */
-export interface AshMcpReading {
-  readonly shape: AshMcpShape;
+export interface NaviMcpReading {
+  readonly shape: NaviMcpShape;
   /** 这家会不会把几份来源**合起来**看(站点上的 `sourcesMerge`)。 */
   readonly merges: boolean;
   /** 这家自己的启停策略(机制上的 `switches`)。 */
-  readonly switches?: AshMcpSwitches;
+  readonly switches?: NaviMcpSwitches;
 }
 
 /** 这家 CLI 的配置目录由哪个环境变量指定、文件落在目录里的哪一层。 */
-export interface AshMcpConfigSite {
+export interface NaviMcpConfigSite {
   /**
    * 「整体取代配置目录」的环境变量名(claude 的 `CLAUDE_CONFIG_DIR`、codex 的 `CODEX_HOME`、
    * grok 的 `GROK_HOME`…)。null = 这家没有已知的等价变量,只有宿主机默认目录那一份。
    *
-   * **宿主机那一份也必须尊重它**:变量由 ash 进程原样继承给子进程,CLI 认的就是它 ——
+   * **宿主机那一份也必须尊重它**:变量由 navi 进程原样继承给子进程,CLI 认的就是它 ——
    * 写死 `homedir()` 会两头都错(实际目录有登记却报缺失;默认目录有登记而实际目录没有时
    * 又漏报)。
    */
@@ -220,10 +220,10 @@ export interface AshMcpConfigSite {
    */
   readonly dirEnvIsFile?: boolean;
   /**
-   * 这家 CLI 的几份来源**合起来看**,而且「谁覆盖谁」这件事 ash **逐格实测过** ——
+   * 这家 CLI 的几份来源**合起来看**,而且「谁覆盖谁」这件事 navi **逐格实测过** ——
    * 置真表示两件事都成立:**加载序**是确定的(含同一个目录里那几个文件名的先后),
    * **逐字段合并**语义是确定的。判定、搬运、安装都据此算最终生效的那一条
-   * (`register.ts` 的 `resolveAshMcp`)。
+   * (`register.ts` 的 `resolveNaviMcp`)。
    *
    * 2026-10-31 用真 opencode 1.19.3 实测,升序是:默认目录(`opencode.json` <
    * `opencode.jsonc`)< `OPENCODE_CONFIG` 那个文件 < `OPENCODE_CONFIG_DIR` 那个目录 <
@@ -242,7 +242,7 @@ export interface AshMcpConfigSite {
    * `enabled = false` 盖得住默认那份的开启。
    *
    * **它比 `dirEnvIsFile` 那份文件还高**(本轮审查 F1 实测:那个文件里写完整的
-   * `enabled: false`、这个目录里只写 `{"enabled": true}` ⇒ 真 CLI `ash connected`)。
+   * `enabled: false`、这个目录里只写 `{"enabled": true}` ⇒ 真 CLI `navi connected`)。
    * 上一版按「文件比目录具体、所以更高」排,排反了 —— 于是一条连得上的登记被判成
    * disabled,预检当场硬拒,安装器还说是用户自己关的。
    */
@@ -251,7 +251,7 @@ export interface AshMcpConfigSite {
    * 整段配置 JSON 直接装在这个变量里(opencode 的 `OPENCODE_CONFIG_CONTENT`)。
    *
    * 它是**只读来源**:优先级最高(本轮实测它能盖掉 `OPENCODE_CONFIG` 文件里的 enabled),
-   * 但没有文件可写 —— 只有它里面有 ash 时,判定必须是 present、而且一个字都不许写
+   * 但没有文件可写 —— 只有它里面有 navi 时,判定必须是 present、而且一个字都不许写
    * (上一版判 absent 还去改全局文件)。
    */
   readonly contentEnv?: string;
@@ -267,9 +267,9 @@ export interface AshMcpConfigSite {
    * 只有**实测过同目录加载序**的家给(回归测试会钉住它包含 `relative`)。
    *
    * 2026-10-31 真 opencode 1.19.3 实测:`config.json` < `opencode.json` < `opencode.jsonc`,
-   * 三份**都读**、合起来看。上一版只枚举后两个,于是用户的 ash 只写在 `config.json` 里时
-   * (真 CLI `ash connected`)ash 答 absent、派审硬拒,裸 Node 安装器还往 `opencode.json`
-   * 里新写一条 —— 那份优先级更高,**真 CLI 的生效 `ASH_URL` 当场被换掉**(本轮审查 F1)。
+   * 三份**都读**、合起来看。上一版只枚举后两个,于是用户的 navi 只写在 `config.json` 里时
+   * (真 CLI `navi connected`)navi 答 absent、派审硬拒,裸 Node 安装器还往 `opencode.json`
+   * 里新写一条 —— 那份优先级更高,**真 CLI 的生效 `NAVI_URL` 当场被换掉**(本轮审查 F1)。
    *
    * 没有这一项的家走 `alternates`:同目录几份算同一级,谁覆盖谁没实测。
    */
@@ -280,33 +280,14 @@ export interface AshMcpConfigSite {
    * opencode 的 `~/.opencode/`:2026-10-31 实测它**压过** `$XDG_CONFIG_HOME/opencode/`、
    * 压过 `$OPENCODE_CONFIG` 那个文件、也压过任务目录里的项目配置,只有
    * `OPENCODE_CONFIG_DIR` 和 `OPENCODE_CONFIG_CONTENT` 比它高 —— 所以它在
-   * `ashMcpHostSources` 里排在「指到文件的变量」之上、`altDirEnv` 之下,别挪。
+   * `naviMcpHostSources` 里排在「指到文件的变量」之上、`altDirEnv` 之下,别挪。
    * 同目录里也是 `opencode.json` < `opencode.jsonc`,而 `config.json` 这个名字**只在默认
    * 目录**才算(实测:`~/.opencode/config.json` 和 `$OPENCODE_CONFIG_DIR/config.json`
    * 都不读)。
    *
-   * **只枚举真实存在的那几份,永远不当新建落点**:ash 不去给用户新造一个全局配置目录。
+   * **只枚举真实存在的那几份,永远不当新建落点**:navi 不去给用户新造一个全局配置目录。
    */
   readonly extraDirs?: readonly ((env: NodeJS.ProcessEnv, home: string) => string)[];
-  /**
-   * 这家 CLI 的**全部读取位置**都本机逐格实测过、而且都在这张 site 上有对应声明。
-   *
-   * 这一位是「能不能下 absent 这个硬结论」的闸(本轮审查 F1):absent 在派审预检里是**硬拒**,
-   * 而「我枚举到的几份里都没有」只有在枚举本身可证完整时才等于「真的没有」。不置真的家
-   * 照样照常判 present / disabled,只是「都没找到」答 unknown(放行、不写、如实说一句),
-   * 因为那种「没找到」可能只是我们不知道它还读哪儿 —— 本轮三格实测里每一格都是这么错的。
-   *
-   * **安装器不看这一位**:它问的是「我看得见的来源里有没有」,追加一条不覆盖任何已有登记,
-   * 否则十三家 CLI 的 `npm run setup` 会一条都写不出来。
-   */
-  readonly loadMeasured?: boolean;
-  /**
-   * 这家 CLI 还会读的**项目级**配置(相对任务目录)。只给判据那一档用:这些文件里只要
-   * 提到 MCP,「用户级没有」就不再是个确定的结论 —— 按「向放行开」答 unknown,别拿
-   * 一份看不全的证据拦下一整轮审查(`ash-mcp-file.ts` 文件头)。ash 永远不写它们:
-   * 那是用户仓库里的文件,会被提交进去。
-   */
-  readonly projectRelative?: readonly (readonly string[])[];
   /**
    * 同样合法的其它文件名(kilo 的 `kilo.jsonc` / `config.json` / `opencode.json(c)`)——
    * **这一档是「没实测过同目录加载序」那种**:存在哪个就读写哪个(顺序就是我们猜的优先级),
@@ -318,7 +299,7 @@ export interface AshMcpConfigSite {
    * 同一个配置目录里这家 CLI **也会读、而这个格式族读不了**的文件(trae 的原生
    * `traecli.yaml` 和它那两个 `mcp.yaml`)。存在就两件事都不做:
    *
-   *  · 判:答 unknown —— 用户完全可能把 ash 写在那里面,「我们读不了」不是「没有」;
+   *  · 判:答 unknown —— 用户完全可能把 navi 写在那里面,「我们读不了」不是「没有」;
    *  · 写:不写 —— 同名登记同时出现在两个来源,谁生效没有文档依据(trae 只写了「项目级
    *    更近者优先」),而两份里有一份是我们看不见的。
    */
@@ -326,11 +307,11 @@ export interface AshMcpConfigSite {
 }
 
 /** 证据等级:本机真 CLI 验过,还是只按官方文档写。 */
-export type AshMcpEvidence = "tested" | "docs";
+export type NaviMcpEvidence = "tested" | "docs";
 
-/** 回合身份(`@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_ENV`)怎么进 MCP 子进程。 */
-export type AshMcpIdentity =
-  /** CLI 把自己的环境原样(或只按名字黑名单)传给 MCP 子进程 —— ash 起跑时注进去就够了。 */
+/** 回合身份(`@navi/shared/mcp` 的 `NAVI_TURN_IDENTITY_ENV`)怎么进 MCP 子进程。 */
+export type NaviMcpIdentity =
+  /** CLI 把自己的环境原样(或只按名字黑名单)传给 MCP 子进程 —— navi 起跑时注进去就够了。 */
   | "inherit"
   /** CLI 过滤子进程环境,必须在登记里声明放行哪几个变量(codex 的 `env_vars`)。 */
   | "declare"
@@ -338,39 +319,39 @@ export type AshMcpIdentity =
    * CLI 过滤子进程环境,而登记里那个位置**只收字面值**(copilot:文档明写只自动继承
    * `PATH`,其余要写死在 `env` 里)—— 回合 token 一轮一个,写死就是过期的假身份。
    *
-   * 这一档的意思是「登记写对了也交不了卷」,所以必须配 `caveat` 当场说出来:ash 送不进
-   * 回合身份,用户只能自己换个接法。**在 ash 给出 `PATH` 那条通路之后,这一档空着** ——
+   * 这一档的意思是「登记写对了也交不了卷」,所以必须配 `caveat` 当场说出来:navi 送不进
+   * 回合身份,用户只能自己换个接法。**在 navi 给出 `PATH` 那条通路之后,这一档空着** ——
    * 留着是因为判据还在:下一家 CLI 若连 `PATH` 都过滤,它就该落这一档。
    */
   | "blocked"
   /**
    * CLI 只把 `PATH` 自动交给 MCP 子进程(copilot 文档原文),于是身份改走**文件**:
-   * ash 每回合开一个一次性目录、把 `identity.json` 放进去、把目录追加到 `PATH` 末尾,
-   * MCP 侧在变量都不在时读它。约定与四条安全要点见 `@ash/shared/mcp` 的
-   * `ASH_TURN_IDENTITY_PATH_DIR`,两侧实现在 `server/src/turn-identity.ts` 与
-   * `mcp/src/runtime.ts`。
+   * navi 每回合开一个一次性目录、把 `identity.json` 放进去、把目录追加到 `PATH` 末尾,
+   * MCP 侧在变量都不在时读它。约定与四条安全要点见 `@navi/shared/mcp` 的
+   * `NAVI_TURN_IDENTITY_PATH_DIR`,两侧实现在 `server/src/turn-identity.ts` 与
+   * `mcp/src/turn-identity.ts`。
    *
-   * 这一档**不需要在登记里写任何东西**(写进 `env` 的只有静态的 `ASH_URL`)。
+   * 这一档**不需要在登记里写任何东西**(写进 `env` 的只有静态的 `NAVI_URL`)。
    */
   | "path"
   /** 还没验过。按 inherit 走(多数 CLI 如此),矩阵里如实标出来。 */
   | "unknown";
 
-/** 这家 CLI 的 ash MCP 机制。 */
-export type AshMcpMechanism =
+/** 这家 CLI 的 navi MCP 机制。 */
+export type NaviMcpMechanism =
   | {
     kind: "file";
-    shape: AshMcpShape;
-    site: AshMcpConfigSite;
+    shape: NaviMcpShape;
+    site: NaviMcpConfigSite;
     /**
-     * 这家自己的启停策略(语义见 `AshMcpSwitches`)。不写 = 这家除了条目上那两个布尔
+     * 这家自己的启停策略(语义见 `NaviMcpSwitches`)。不写 = 这家除了条目上那两个布尔
      * 之外没有已知的别处开关 —— **别照着同格式的邻居填**,那正是 F2 两种错的来路。
      */
-    switches?: AshMcpSwitches;
-    identity: AshMcpIdentity;
+    switches?: NaviMcpSwitches;
+    identity: NaviMcpIdentity;
     /** 身份这一路上的坑(谁按名字过滤、要靠哪套别名才过得去),原样进矩阵。 */
     identityNote?: string;
-    evidence: AshMcpEvidence;
+    evidence: NaviMcpEvidence;
     /** TOML 族:写进去的那段要不要带 `enabled = true`(跟着该 CLI 自己 `mcp add` 的写法)。 */
     writeEnabled?: boolean;
     /**
@@ -395,11 +376,11 @@ export type AshMcpMechanism =
     caveat?: string;
   }
   | {
-    /** 有 MCP 机制,但 ash **不自动写**(格式我们没有安全的写入器,如 trae 的 YAML 数组)。 */
+    /** 有 MCP 机制,但 navi **不自动写**(格式我们没有安全的写入器,如 trae 的 YAML 数组)。 */
     kind: "manual";
     /** 一句话说清:登记写在哪、怎么写(用户看到的唯一指引)。 */
     howTo: string;
-    evidence: AshMcpEvidence;
+    evidence: NaviMcpEvidence;
     source: string;
     notes?: string;
   }
@@ -408,8 +389,8 @@ export type AshMcpMechanism =
     kind: "none";
     /** 为什么没有(实测依据或文档依据),预检拒绝时原样说给用户。 */
     why: string;
-    evidence: AshMcpEvidence;
+    evidence: NaviMcpEvidence;
     source: string;
   };
 
-export type AshMcpTable = Record<AgentType, AshMcpMechanism>;
+export type NaviMcpTable = Record<AgentType, NaviMcpMechanism>;

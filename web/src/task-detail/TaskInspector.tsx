@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import type { Group, Session, Task, TaskListItem, TaskStatus } from "@ash/shared";
-import { isUserSettableStatus, TASK_STATUS_LABELS, taskDisplayStatus } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem, TaskStatus } from "@navi/shared";
+import { isUserSettableStatus, TASK_STATUS_LABELS, taskDisplayStatus } from "@navi/shared";
 import { ArrowSquareOut, Warning } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -10,6 +10,7 @@ import { InspKv, InspNote, InspRow } from "../inspector/parts.tsx";
 import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
 import { InfoFollowUps, InfoResumePrompt, type InfoFollowUp } from "./info/InfoAsk.tsx";
 import { InfoQueue } from "./info/InfoQueue.tsx";
+import { InfoPrerequisites } from "./info/InfoPrerequisites.tsx";
 import { InfoRunRows, InfoSessionRows } from "./info/InfoRunRows.tsx";
 import { InfoSchedule } from "./info/InfoSchedule.tsx";
 import { EMPTY_RUN_FACTS, type InfoRunFacts } from "./info/infoRunFacts.ts";
@@ -156,6 +157,7 @@ export function TaskInspector({
             onTasksSynced={onTasksSynced}
             notify={notify}
           />
+          <InfoPrerequisites task={task} groups={groups} readOnly={!!task.archived} onOpenTask={onOpenTask} onTasksSynced={onTasksSynced} notify={notify} />
           <InfoResumePrompt
             value={task.resumePrompt ?? ""}
             editable={task.parentId === null && task.status === "paused" && !task.question}

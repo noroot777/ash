@@ -44,7 +44,7 @@ if (process.platform === "darwin" || process.platform === "win32") {
 
 // ── 输出解析 ─────────────────────────────────────────────────────────────────
 // 认不出来必须回 null,而不是把半截 stderr 当路径填进用户的输入框。
-assert.deepEqual(parseMarker("OK/Users/example/code/ash\n"), { path: "/Users/example/code/ash", cancelled: false });
+assert.deepEqual(parseMarker("OK/Users/example/code/navi\n"), { path: "/Users/example/code/navi", cancelled: false });
 assert.deepEqual(parseMarker("OKC:\\Users\\example\\代码\r\n"), { path: "C:\\Users\\example\\代码", cancelled: false });
 assert.deepEqual(parseMarker("CANCEL\r\n"), { path: null, cancelled: true });
 // PowerShell 的告警/进度会先落在前面,标记在最后一行,所以从后往前扫。
@@ -54,9 +54,9 @@ for (const junk of ["", "\n\n", "not a marker", "OK"]) {
 }
 
 // AppleScript 的 `POSIX path of` 给文件夹一律带尾斜杠(例如选中 server/src
-// 得到 `/Users/example/code/ash/server/src/`)。不削掉的话同一个目录会在库里存出两种写法。
-assert.deepEqual(parseMarker("OK/Users/example/code/ash/server/src/"), {
-  path: "/Users/example/code/ash/server/src",
+// 得到 `/Users/example/code/navi/server/src/`)。不削掉的话同一个目录会在库里存出两种写法。
+assert.deepEqual(parseMarker("OK/Users/example/code/navi/server/src/"), {
+  path: "/Users/example/code/navi/server/src",
   cancelled: false,
 });
 assert.equal(normalizePickedPath("/tmp/x/"), "/tmp/x");
@@ -98,7 +98,7 @@ assert.ok(
   win.includes("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8"),
   "不钉 UTF-8 的话中文目录名会被 OEM 代码页变成乱码",
 );
-assert.ok(win.includes("$env:ASH_DIR_PICKER_START"), "起始目录经环境变量传入,绕开 PowerShell 引号规则");
+assert.ok(win.includes("$env:NAVI_DIR_PICKER_START"), "起始目录经环境变量传入,绕开 PowerShell 引号规则");
 assert.ok(win.includes("$dialog.ShowDialog($owner)"), "必须带 owner 窗口调用,否则会被前台窗口规则挡在后面");
 assert.ok(win.includes("$owner.TopMost = $true"), "owner 要置顶");
 assert.ok(win.includes("$owner.Show()") && win.includes("$owner.Activate()"), "owner 得先显示并激活才算前台");
@@ -117,7 +117,7 @@ assert.ok(/^[A-Za-z0-9+/]+=*$/.test(encoded), "编出来得是合法 base64");
 assert.deepEqual(parseMarker("OKC:\\Users\\example\\code"), { path: "C:\\Users\\example\\code", cancelled: false });
 
 // ── 起始目录 ─────────────────────────────────────────────────────────────────
-const dir = await mkdtemp(join(tmpdir(), "ash-dir-picker-"));
+const dir = await mkdtemp(join(tmpdir(), "navi-dir-picker-"));
 const file = join(dir, "readme.md");
 await writeFile(file, "x");
 assert.equal(await startDirectory(dir), resolve(dir), "给的就是目录:原样停在那儿");

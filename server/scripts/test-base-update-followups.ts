@@ -4,12 +4,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-base-followups-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-base-followups-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { tasks, projects, taskBranchReceipts } = await import("../src/db/schema.js");
 const { createTasks } = await import("../src/task-store.js");
@@ -137,7 +137,7 @@ try {
     const oldGrand = git(s.repo, "rev-parse", s.grand.branch!);
     assert.equal((await updateTaskBase(s.grand.task.id, oldGrand)).ok, true);
     assert.equal((await branchDependency(await row(s.grand.task.id), s.repo))?.state, "ready");
-    const diff = await taskBranchDiff(s.repo, s.grand.task.id, "main", undefined, (await row(s.grand.task.id)).worktreeStartCommit);
+    const diff = await taskBranchDiff(s.repo, { ...(await row(s.grand.task.id)), mergeTargetBranch: "main" });
     assert.deepEqual(diff.files.map(file => file.path), ["grand.txt"]);
     assert.equal((await acceptTask(s.grand.task.id)).accepted, true);
     assert.equal(readFileSync(join(s.repo, "middle.txt"), "utf8"), mode === "complete" ? "middle" : "amended middle");

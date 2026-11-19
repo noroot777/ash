@@ -94,7 +94,7 @@
 //      · `set -e; while true; do false; done` —— 实测退出 1。开了 errexit 之后**循环体自己就是
 //        一条出路**:体里任何一条返回非零,shell 当场走人。而「这一圈里每一条都一定成功」这一层
 //        答不出来 ⇒ 这道闸盖到循环的收尾那一段（体里才 `set -e` 的那种同样算）。
-//      · `tail -f /definitely-missing-ash-review; printf 'DONE\n'` —— 报一句 No such file 就
+//      · `tail -f /definitely-missing-navi-review; printf 'DONE\n'` —— 报一句 No such file 就
 //        退出、随后打出 DONE。`tail -f FILE` 的「不退出」压着一个前提:**那个文件在**
 //        （`-F`/`--retry` 才是没了也一直重试）。这一版把前提交出去、让创建闸拿 `existsSync`
 //        去核 —— **那条路第 2 轮审查证伪了,见 ⑩**。
@@ -147,7 +147,7 @@
 //        而这一层只登记过 `set -e` 一种语义。
 //      · `while true; do kill -TERM $$; done` —— 当场被 SIGTERM 结束。能终止这个 shell 的调用
 //        不只有 `break`/`exit`/`return` 那三个词。
-//      · `PATH=/definitely-missing-ash-review; tail -F /dev/null` —— 退出 127,一句
+//      · `PATH=/definitely-missing-navi-review; tail -F /dev/null` —— 退出 127,一句
 //        `tail: command not found`。跟随型的「不退出」压着一个前提:那个工具找得到。
 //    所以这一版把那个背景前提**写出来,并且交给命令自己去推翻**:硬拦的证明以「默认执行环境」
 //    为前提 —— 那不是待证项,否则磁盘满、外部信号、ulimit 都能让任何命令退出,闸直接归零;而
@@ -552,7 +552,7 @@ export function neverExitsVerdict(command: string): NeverExitsVerdict | null {
       ? { what: found.what, unprovable: found.unprovable }
       : null;
   } catch (err) {
-    console.error(`[ash] 命令结构判据出错,这条命令按「读不懂」放行：${String(err)}`);
+    console.error(`[navi] 命令结构判据出错,这条命令按「读不懂」放行：${String(err)}`);
     return null;
   }
 }

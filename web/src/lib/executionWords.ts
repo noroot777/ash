@@ -1,14 +1,14 @@
 // 执行过程那一串怎么说成人话:每一行(describeEvent)、在跑时折叠条上那一句(liveLabel)、
 // 做完以后的过去式摘要(pastSummary)。工具那一部分的翻译在 toolPhrase.ts。
 //
-// 摘要的说法照样机(docs/ui-ux-audit/demo/live-words.js 的 summarize):「读了 3 个文件，搜了 1 次，
+// 摘要的说法:「读了 3 个文件，搜了 1 次，
 // 改了 2 个文件，另有 1 步」。读、改按文件去重;只说前三类,其余并成「另有 N 步」;相邻两类
 // 都是「文件」时后一类省掉名词。只有一步时直接说那一步:「读了 ReplyBox.tsx」。
 import { isVisibleExecutionEvent, type ExecutionEvent } from "./executionTrace.ts";
 import { describeTool, joinVerb, type StepKind, type StepPhrase } from "./toolPhrase.ts";
 import { COMPACTED, COMPACTING, isCompactionEvent } from "./compaction.ts";
 
-export type StepView = StepPhrase & { tone: "tool" | "thinking" | "error" | "notice" };
+export type StepView = StepPhrase & { tone: "tool" | "thinking" | "error" | "notice" | "compaction" };
 
 const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -29,8 +29,8 @@ function plain(tone: StepView["tone"], verb: string, text: string): StepView {
 export function describeEvent(event: ExecutionEvent): StepView {
   if (event.kind === "tool") return { ...describeTool(event), tone: "tool" };
   if (event.kind === "thinking") return plain("thinking", "思考", event.detail ?? "");
-  // 压缩上下文是这一轮中途发生的事，一句话说完（run-9）。
-  if (isCompactionEvent(event)) return plain("notice", event.detail ?? COMPACTED, "");
+  // 压缩上下文是这一轮中途发生的事，一句话说完（run-9）。它不是上游闹脾气，不穿「提示」那身琥珀。
+  if (isCompactionEvent(event)) return plain("compaction", event.detail ?? COMPACTED, "");
   // 提示的正文在 detail 里(label 恒为「提示」,见 conversationSegments 的 auxEvent)。
   if (event.kind === "notice") return plain("notice", event.label || "提示", event.detail ?? "");
   // 异常的话在 label 里;有 detail 的(少见)点开看。

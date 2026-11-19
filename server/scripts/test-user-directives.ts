@@ -5,6 +5,7 @@
 // 提示的「需求」去验，然后给出一个看起来有理有据的错结论（2026-08-06 那次就是反过来：
 // 一条都没进，于是照着作废的原始正文打回了正确产物）。
 // 跑:npm -w server run test:user-directives
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { capDirectives, directivesIn, formatDirectives, orderDirectives } from "../src/user-directives.js";
 import { formatReviewRequestContext } from "../src/review-request-context.js";

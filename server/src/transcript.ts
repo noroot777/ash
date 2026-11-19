@@ -5,13 +5,13 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { AgentEvent, AgentType } from "@ash/shared";
-import { isTokenUsage, isUsageAccountingMark } from "@ash/shared/usage";
-import { textAnchorOf, type RecordIdentity, type TextAnchor } from "@ash/shared/session-output";
+import type { AgentEvent, AgentType } from "@navi/shared";
+import { isTokenUsage, isUsageAccountingMark } from "@navi/shared/usage";
+import { textAnchorOf, type RecordIdentity, type TextAnchor } from "@navi/shared/session-output";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 import { closeProse, sentinelIdentity, traceRecord } from "./transcript-identity.js";
 
-type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
+type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" | "plan" }>;
 type TraceTextEvent = { kind: "text"; text: string };
 // 本回合的 token 用量。落 trace 而不是只落库,是因为**会话行只有累计值**——刷新
 // 后要按回合把「这一轮花了多少」放回各自的气泡,就得有一份按 turnStartedAt 分组
@@ -80,7 +80,7 @@ export function appendSessionTrace(
   } catch (error) {
     // Trace persistence is diagnostic UI state. A disk failure must not alter the
     // executor's outcome, but it must remain visible to operators.
-    console.warn(`[ash] failed to persist session trace ${sessionId}:`, error);
+    console.warn(`[navi] failed to persist session trace ${sessionId}:`, error);
   }
   return record;
 }
@@ -225,6 +225,9 @@ function validTraceEvent(event: unknown): boolean {
     case "text":
     case "thinking":
       return isString(e.text);
+    case "plan":
+      return isString(e.id) && isString(e.text) && (e.status === "streaming" || e.status === "complete")
+        && (e.delta === undefined || (e.delta === true && e.status === "streaming"));
     case "tool":
       return isString(e.name) && optionalString(e.detail)
         && (e.nativeWork === undefined || validNativeWork(e.nativeWork));
@@ -322,7 +325,7 @@ export function writeTurn(
   // （从中断处）」那类真回合起点在盘上长得一模一样，而两者的读法正相反——旁注砸在回合
   // 中间纯属偶然，拿它当回合边界就会把一条回复劈成两半（见 shared/src/events.ts）。
   // clientKey:页面发这一句时给的凭据(见 shared/src/session-output.ts 的 ConvSeg)。
-  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true; notice?: import("@ash/shared/timeline-notice").TimelineNotice; eventKey?: string; answerIds?: string[]; monitorWake?: import("@ash/shared/monitor-wake").MonitorWakeData; resume?: import("@ash/shared/system-resume").SystemResume; clientKey?: string },
+  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true; notice?: import("@navi/shared/timeline-notice").TimelineNotice; eventKey?: string; answerIds?: string[]; monitorWake?: import("@navi/shared/monitor-wake").MonitorWakeData; resume?: import("@navi/shared/system-resume").SystemResume; clientKey?: string },
   at: string,
   // 先领过号的那种(会话轮换旁注,见 transcript-identity.ts 的 reserveRecord)把号带进来;缺省就现领。
   // 返回这一行的身份,实时事件带上同一份。流没绑定(团队调度台、duet)时不带身份、返回 null。

@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { mock } from "node:test";
 import { eq } from "drizzle-orm";
-import type { ChatMember } from "@ash/shared/chat";
+import type { ChatMember } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-review-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-review-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, chatRooms, chatMessages, chatContextEntries, chatSummaries } = await import("../src/db/schema.js");
 const { ChatService, roomMessages } = await import("../src/chat/service.js");

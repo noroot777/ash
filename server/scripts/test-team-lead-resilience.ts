@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import type { AgentEvent } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import {
   POISON, root, db, dbClient, ensureSchema, projects, sessions, tasks,
   haltTeam, sendInbound, teamIsLive, bus, SESSION_POISONED_NOTE, eq, at, ok,
@@ -132,7 +132,7 @@ try {
   // ── ⑥ 落 idle 那一笔写库瞬时失败:必须补上,不能让任务永久显示 running ──────────────
   // 这一条跟前面几条最大的不同是**事件流全程在线**:常驻调度台收完一个回合就阻塞在
   // events 上,没有下一个自然的补写时机 —— 默认要等下一条消息或 30 分钟空闲回收,
-  // ASH_TEAM_IDLE_MS<=0 时可以永远维持。而 tasks.status 是路由门禁、排队投递和页面按钮
+  // NAVI_TEAM_IDLE_MS<=0 时可以永远维持。而 tasks.status 是路由门禁、排队投递和页面按钮
   // 的共同真相源:用户看到「仍在跑/可停止」,依赖 idle 的后续动作也不会推进。
   let reachedIdle!: () => void;
   const turnSettled = new Promise<void>((r) => { reachedIdle = r; });
@@ -205,10 +205,10 @@ try {
   assert.equal(teamIsLive(HAND_OVER), false, "新台应当已经收完台并摘牌");
 
   // 旧计时器现在到点。等足几个重试周期,它一个字都不该再写。
-  await new Promise((r) => setTimeout(r, Number(process.env.ASH_TEAM_STATUS_RETRY_MS) * 5 + 200));
+  await new Promise((r) => setTimeout(r, Number(process.env.NAVI_TEAM_STATUS_RETRY_MS) * 5 + 200));
   releaseOld();
   while (teamIsLive(HAND_OVER) && Date.now() < handOverDeadline) await new Promise((r) => setTimeout(r, 20));
-  await new Promise((r) => setTimeout(r, Number(process.env.ASH_TEAM_STATUS_RETRY_MS) * 5 + 200));
+  await new Promise((r) => setTimeout(r, Number(process.env.NAVI_TEAM_STATUS_RETRY_MS) * 5 + 200));
   assert.equal(teamIsLive(HAND_OVER), false, "两台都收完了,不该还有人在线");
   assert.equal(
     (await db.select().from(tasks).where(eq(tasks.id, HAND_OVER))).at(0)!.status,
@@ -232,6 +232,8 @@ try {
   async function* sharedOldScript(): AsyncGenerator<AgentEvent> {
     sharedOldReady();
     await holdSharedOld; // 新台接管之后才轮到它收尾
+    // 出局之后才判死自己那条会话:中途清库那一步同样不许碰新台的那一行(下面 cliSessionId 那条)。
+    yield { kind: "error", message: POISON, scope: "session" };
     yield { kind: "done", exitStatus: 7 };
   }
   await startLead({ taskId: SHARED, sessId: SHARED_SESS, cliSessionId: "old-thread", events: sharedOldScript() });
@@ -465,7 +467,7 @@ try {
   // 为什么要一条业务级的:这一路**一个故障都没有**。.md、状态、trace 全是对的,库里也没有脏
   // 数据 —— 唯独插话起的那一轮被**上一轮的**结束事件提前收口(一个几毫秒的假区间),它真正
   // 干活那一段落进两条记录之间的空洞,那一轮做出来的图从此永久漏在清单外,重新扫描和刷新
-  // 都找不回来。打断与结束天然是交错的:ash 先 interrupt 再 send(新一轮当场开跑),而被打断
+  // 都找不回来。打断与结束天然是交错的:navi 先 interrupt 再 send(新一轮当场开跑),而被打断
   // 那一轮的进程要再过一会儿才吐出它的 turnEnd —— 这条用例就卡在那个交错点上。
   {
     const { deliverToLead } = await import("../src/team/session.js");

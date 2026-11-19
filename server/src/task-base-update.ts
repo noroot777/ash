@@ -8,6 +8,7 @@ import { execFileText as exec } from "./exec.js";
 import { expandHome, symbolicBranch, worktreePathFor, resolveWorktreeBranchName } from "./git.js";
 import { branchDependency, baseUpdateBackupPrefix, commitAt, inheritedParentCommit } from "./task-branch-plan.js";
 import { recordCompletedBaseUpdate } from "./task-base-record.js";
+import { startsFromPrerequisites } from "./prerequisite-dependency.js";
 import { parseBaseUpdateIntent } from "./task-base-intent.js";
 import { retainBaseUpdateBackups } from "./task-base-backups.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -20,10 +21,13 @@ import { publishTaskUpdated } from "./task-store.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { now } from "./util.js";
 
+/** 换基线时临时检出所在目录的前缀（系统临时目录下，用完即删）。 */
+export const BASE_UPDATE_TMP_PREFIX = "navi-base-update-";
+
 // 先记录目标提交再移动 Git；中断后的重试只完成同一份意图，不再次 rebase。
 async function finishBaseUpdate(task: typeof tasks.$inferSelect, repo: string, held = false): Promise<{ ok: boolean; error?: string }> {
   const intent = parseBaseUpdateIntent(task.baseUpdateIntent!);
-  if (!intent) return { ok: false, error: "基线更新记录损坏，无法自动重试。请点击「处理未完成的基线更新」，核对现存备份与差异后手动解除挂起；当前代码未修改。" };
+  if (!intent) return { ok: false, error: "基线更新记录损坏，无法自动重试。请点验收台上这一行的「处理」，核对现存备份与差异后手动解除挂起；当前代码未修改。" };
   const path = worktreePathFor(repo, task.id);
   const peers = await workspaceParticipants(task, path);
   if (!held && peers.some(p => p.status === "running" || p.status === "queued")) return { ok: false, error: "工作区正在执行，无法恢复基线更新" };
@@ -63,7 +67,8 @@ export async function updateTaskBase(taskId: string, expectedHead: string): Prom
       }
       const branch = await resolveWorktreeBranchName(repo, taskId);
       const parent = task.baseTaskId ? (await db.select().from(tasks).where(eq(tasks.id, task.baseTaskId))).at(0) : undefined;
-      const upstream = (await inheritedParentCommit(task, repo, parent))!;
+      // 按前置开工的：起点就是全部前置合在一起的那一版，只把这条任务自己的提交搬到目标分支上。
+      const upstream = await startsFromPrerequisites(taskId) ? task.worktreeStartCommit : (await inheritedParentCommit(task, repo, parent))!;
       const head = await commitAt(repo, branch);
       const target = await commitAt(repo, task.mergeTargetBranch);
       if (!head || !target || head !== expectedHead) return { ok: false, error: "任务提交已经变化，请刷新后重试" };
@@ -78,7 +83,7 @@ export async function updateTaskBase(taskId: string, expectedHead: string): Prom
       const release = claimWorkspaceTurn(peers.map(p => p.id));
       if (!release) return { ok: false, error: "工作区刚被其它任务占用，请稍后重试" };
       let root: string;
-      try { root = await mkdtemp(join(tmpdir(), "ash-base-update-")); } catch (e) { release(); throw e; }
+      try { root = await mkdtemp(join(tmpdir(), BASE_UPDATE_TMP_PREFIX)); } catch (e) { release(); throw e; }
       const temp = join(root, "worktree");
       try {
         await exec("git", ["-C", repo, "worktree", "add", "--detach", temp, head]);

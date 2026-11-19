@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { readRenamedStorage } from "./renamedStorage.ts";
 
 // 界面上几份**文件清单**怎么摆：平铺，还是按目录树。
 //
@@ -17,9 +16,9 @@ import { readRenamedStorage } from "./renamedStorage.ts";
 
 export type FileListLayout = "flat" | "tree";
 
-const STORAGE_KEY = "ash:file-list-layout";
+const STORAGE_KEY = "navi:file-list-layout";
 /** 同一个页面里的多份清单靠它同步；`storage` 事件只跨标签页，本页要自己广播。 */
-const SYNC_EVENT = "ash:file-list-layout";
+const SYNC_EVENT = "navi:file-list-layout";
 
 /** 按钮上说的是「按下去会变成什么」，不是「现在是什么」——跟 VSCode 的 View as Tree/List 同约定。 */
 export const FILE_LAYOUT_ACTION: Record<FileListLayout, string> = {
@@ -29,7 +28,7 @@ export const FILE_LAYOUT_ACTION: Record<FileListLayout, string> = {
 
 function stored(): FileListLayout {
   try {
-    return readRenamedStorage(STORAGE_KEY) === "tree" ? "tree" : "flat";
+    return window.localStorage.getItem(STORAGE_KEY) === "tree" ? "tree" : "flat";
   } catch {
     // 隐私模式下读 localStorage 会抛，回落到默认即可。
     return "flat";

@@ -22,6 +22,7 @@
 //
 // 跑法(自带临时库):
 //   npm -w server run test:upload-visibility
+import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -29,13 +30,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-upload-visibility-"));
-process.env.ASH_DB ||= join(stage, "upload-visibility.db");
-process.env.ASH_RUNS_DIR ||= join(stage, "runs");
-process.env.ASH_UPLOADS_DIR ||= join(stage, "uploads");
+const stage = mkdtempSync(join(tmpdir(), "navi-upload-visibility-"));
+process.env.NAVI_DB ||= join(stage, "upload-visibility.db");
+process.env.NAVI_RUNS_DIR ||= join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR ||= join(stage, "uploads");
 requireTmpDb("test-upload-visibility");
 
-// 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
+// 碰库的模块一律 await import:静态 import 会被提升到设 NAVI_DB 之前,那样连的是真库。
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { notes, projects, tasks, uploads, users } = await import("../src/db/schema.js");
 const { UPLOADS_DIR } = await import("../src/paths.js");

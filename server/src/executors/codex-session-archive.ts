@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { cleanupAfterRun, redactSecrets, spawnAgent } from "./spawn.js";
 import { findArchivedRollout, findRollout } from "./codex-rollout.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
@@ -126,7 +126,7 @@ async function updateCodexThreadArchive(
   const timer = setTimeout(() => rejectAll(new Error(`Codex 会话${action}超时`)), CODEX_ARCHIVE_TIMEOUT_MS);
   try {
     await request("initialize", {
-      clientInfo: { name: "ash", title: "ash", version: "0.0.0" },
+      clientInfo: { name: "navi", title: "Navi", version: "0.0.0" },
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
     child.stdin?.write(`${JSON.stringify({ method: "initialized" })}\n`);

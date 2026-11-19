@@ -1,5 +1,5 @@
-import type { FreeReviewDebate, FreeReviewRound, FreeReviewRun, FreeWorkflowState, Task } from "@ash/shared";
-import { reviewAnchorMatches } from "@ash/shared/free-workflow";
+import type { FreeReviewDebate, FreeReviewRound, FreeReviewRun, FreeWorkflowState, Task } from "@navi/shared";
+import { reviewAnchorMatches } from "@navi/shared/free-workflow";
 
 // 审查链只有四个持久状态；「修复中 / 等待复审 / 结论过期」全部在这里**推导**出来：
 // - 修复中 = 任务本身 running/queued 且最近一轮停在未通过（或挂着预约）
@@ -30,18 +30,6 @@ export function reviewerDeleteMessage(name: string, options: { breaksReservation
 
 export function freeReviewBlockingLabel(run: FreeReviewRun): string | null {
   return run.status === "reviewing" ? "审查进行中" : null;
-}
-
-function checkModeLabel(run: FreeReviewRun): string {
-  return run.checkMode === "logic" ? "逻辑检查" : "语法检查";
-}
-
-export function freeReviewActivityTitle(run: FreeReviewRun): string {
-  return `${run.reviewerName} · ${checkModeLabel(run)}`;
-}
-
-export function freeReviewActivityDetail(run: FreeReviewRun): string {
-  return `${FREE_REVIEW_RUN_LABELS[run.status]} · 已到第 ${run.currentRound} 轮 / 最多 ${run.retryLimit + 1} 轮`;
 }
 
 export type FreeReviewFreshness = "fresh" | "stale" | "unknown";
@@ -95,7 +83,10 @@ export type FreeReviewView = {
    *  **槽里挂着预约不算**:任务空闲、也不在等什么时,没有哪个回合会来触发它。把它也算进来
    *  的话,按钮只剩「调整预约」,用户想审只能先取消预约再派——裁定「这一轮不用改了」之后
    *  正是这个形状(用户 2026-11-10)。此时按钮回到直派语义,弹窗里仍可取消预约,直派会
-   *  顺带清掉槽(后端 clearReservationForDispatch)。 */
+   *  顺带清掉槽(后端 clearReservationForDispatch)。
+   *
+   *  **还没开跑(backlog)的也算**:它后面一定还会动,派出去的任务建出来就带着预约
+   *  (shared/src/review-on-create.ts),开跑之前就得能看、能改、能取消。 */
   reservationMode: boolean;
   /** armed 且挂着 runId = 自动复审链的续轮预约 */
   autoRereview: boolean;
@@ -142,8 +133,16 @@ export function openDisputeEntryIn(
 }
 
 /**
- * 同上只取那一轮（会话那一侧只拿得到 `reviews`）。会话里那颗「去裁定」按钮和审查面板上
- * 那张卡必须同生共死，所以两边都从这一处取，各算各的就会出现「按钮还在、卡片没了」。
+ * 这个任务此刻还能不能动审查：验收了、合并了、归档了，或者接力出去了（本机是历史存档，后端一律 409）。
+ * 审查格那几颗键的禁用、回复框顶上那一行出不出，和会话里「等你裁定」那一句算不算现在的事，都认这一处。
+ */
+export function reviewLocked(task: Pick<Task, "stage" | "archived" | "handoff">): boolean {
+  return task.stage === "accepted" || task.stage === "merged" || !!task.archived || task.handoff?.direction === "out";
+}
+
+/**
+ * 同上只取那一轮（会话那一侧只拿得到 `reviews`）。会话里「等你裁定」那一句和回复框顶上那一行
+ * 必须同生共死，所以两边都从这一处取，各算各的就会出现「还写着等你、却没处裁」。
  */
 export function openDisputeIn(runs: readonly FreeReviewRun[] | null | undefined): FreeReviewRound | null {
   return openDisputeEntryIn(runs)?.round ?? null;
@@ -205,7 +204,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     reviewTurn: !!state?.reviewTurn,
     waiting,
     reservationArmed,
-    reservationMode: taskBusy || waiting,
+    reservationMode: taskBusy || waiting || task.status === "backlog",
     autoRereview,
     repairing: taskBusy && (!!stoppedRun || autoRereview),
     freshness,

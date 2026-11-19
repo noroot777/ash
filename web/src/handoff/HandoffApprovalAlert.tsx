@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import type { HandoffPeer } from "@ash/shared";
+import type { HandoffPeer } from "@navi/shared";
 import { Check, Prohibit, ShieldWarning, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { localeDateTime } from "../lib/localeFormat.ts";
 
-const PEERS_CHANGED_EVENT = "ash:handoff-peers-changed";
+const PEERS_CHANGED_EVENT = "navi:handoff-peers-changed";
 const POLL_MS = 4_000;
 
 // 横幅只弹**新鲜**的申请。

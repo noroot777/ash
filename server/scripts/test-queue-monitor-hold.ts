@@ -15,15 +15,15 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import {
   continueTask, db, dbClient, insertMonitorRow, monitors, now, reviewInFlight, root, runs, scheduledMessages, schema,
   sleep, startMonitor, tasks, teardown, until,
 } from "./monitors-fixture.js";
 import type { RunHandle, RunOpts } from "../src/executors/types.js";
 
-delete process.env.ASH_LAX_DONE;
-delete process.env.ASH_ALLOW_REAL_AGENT;
+delete process.env.NAVI_LAX_DONE;
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 const { ClaudeExecutor } = await import("../src/executors/claude.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
@@ -53,8 +53,8 @@ async function identity(taskId: string): Promise<Record<string, string>> {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
   return {
     "content-type": "application/json",
-    ...(row.activeTurnToken ? { "x-ash-turn-token": row.activeTurnToken } : {}),
-    ...(row.activeDirectionToken ? { "x-ash-direction-token": row.activeDirectionToken } : {}),
+    ...(row.activeTurnToken ? { "x-navi-turn-token": row.activeTurnToken } : {}),
+    ...(row.activeDirectionToken ? { "x-navi-direction-token": row.activeDirectionToken } : {}),
   };
 }
 
@@ -80,7 +80,7 @@ async function complete(taskId: string): Promise<void> {
 }
 
 const run = (opts: RunOpts): RunHandle => {
-  const taskId = opts.env!.ASH_TASK_ID!;
+  const taskId = opts.env!.NAVI_TASK_ID!;
   inputs.set(taskId, [...inputsOf(taskId), opts.prompt]);
   const turn = scripts.get(taskId)?.shift() ?? complete;
   const native = `native-${taskId}`;
@@ -342,7 +342,7 @@ try {
     console.log("PASS: 重启(无意图行、开机补办读失败)后哨兵落 lost —— 队列接着推,A 恰好被叫醒一次");
   }
 
-  // ⑥b 哨兵在 ash 停着的那段时间里就了结了(库里已写下放弃,开机后不会再有事件):调度 tick 的巡检
+  // ⑥b 哨兵在 navi 停着的那段时间里就了结了(库里已写下放弃,开机后不会再有事件):调度 tick 的巡检
   //     接住,不靠开机补办、也不靠意图行。
   {
     const q = await queuePair("restart-settled");

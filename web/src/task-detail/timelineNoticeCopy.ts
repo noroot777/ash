@@ -1,4 +1,4 @@
-// 会话里「ash 自己说的话」的那一张表：每一类事摆在哪一档、说的是哪件事、写成哪句话。
+// 会话里「navi 自己说的话」的那一张表：每一类事摆在哪一档、说的是哪件事、写成哪句话。
 //
 // 类型由服务端写时间线时给（shared/src/timeline-notice.ts）。这里**写结果，不写机制**：
 // 「已验收，合并到 main」「不再等回归测试了，它已经跑完」—— 分支名、退出码、理由这些细节
@@ -15,9 +15,10 @@
 // 没有类型的老记录（这份类型出现之前落盘的、线上老服务端写的、以及回合里那几种不走时间线的
 // 系统注记）退回老读法：认原文里的几个固定说法，再按起头表（legacyNoticeTable）认要你知道的
 // 那几句，其余一律是回执。只有这一处还在读原文。
-import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage, type TurnInterruption } from "@ash/shared";
-import { normalizeSessionNoteText } from "@ash/shared/session-notes";
-import type { TimelineNotice, TimelineReviewSource } from "@ash/shared/timeline-notice";
+import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage, type TurnInterruption } from "@navi/shared";
+import { normalizeSessionNoteText } from "@navi/shared/session-notes";
+import { settleNoteQuestion, type QuestionRecord, type QuestionSource } from "@navi/shared/questions";
+import type { TimelineNotice, TimelineReviewSource } from "@navi/shared/timeline-notice";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import { isWorkspaceRecoveryNote, verifyNoteOf } from "./conversationNotes.ts";
@@ -55,7 +56,7 @@ export type NoticeView = {
   mono?: string;
   /** 点开再看的原文。跟 `text` 说的是同一句时为 null。 */
   detail: string | null;
-  /** 「执行者驳回了审查意见，等你裁定」——这一条上挂「去裁定」。 */
+  /** 「执行者驳回了审查意见，等你裁定」——这一句留到裁完为止（裁定在回复框顶上那一行）。 */
   dispute: boolean;
   /** 指到才出的那半句里、排在时刻前面的话（命令的回答：是哪条命令）。 */
   meta?: string;
@@ -206,6 +207,9 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
         .trim();
       return { tier: "reply", tone: "neutral", topic: "other", icon: "command", text: output || raw, detail: null, dispute: false, meta: notice.command };
     }
+    // 讨论这几句平时折进讨论气泡里，原文就是它的话；中止那一句要你知道。
+    case "discussion":
+      return notice.phase === "aborted" ? generic("alert", "warn", raw) : generic("receipt", "neutral", raw);
     case "receipt":
       return generic("receipt", "neutral", raw);
     case "alert":
@@ -300,4 +304,25 @@ const PREVIEW_LIFECYCLE = /^(?:自由工作流预览已打开[（：]|预览已�
 
 export function isPreviewLifecycleNotice(text: string): boolean {
   return PREVIEW_LIFECYCLE.test(text.replace(/^〔系统〕/, "").trim());
+}
+
+/**
+ * 哪儿都不画的旁注：预览开关那几种老记录（上面），以及提问那一轮的结算说明（「本回合以提问暂停,
+ * 等待答复:「<问题全文>」」）——但只在那道题此刻**另有一处看得见**时（`onScreen`，见 questionsOnScreen）：
+ * 在等时它在答题卡上，答完跟着答案留在你那颗气泡里。没被回答就撤下的旧题（收起卡改发了别的话）
+ * 没有别处可看，这句照画。不给 `onScreen` 就一律照画。
+ */
+export function isUnshownNotice(text: string, onScreen?: ReadonlySet<string>): boolean {
+  if (isPreviewLifecycleNotice(text)) return true;
+  const question = settleNoteQuestion(text);
+  return question !== null && !!onScreen?.has(question.trim());
+}
+
+/** 此刻界面上另有一处看得见的那几道题：在等的那一道（答题卡），以及答过的（问答记录跟着答案留在气泡里）。 */
+export function questionsOnScreen(
+  task: Pick<QuestionSource, "question">,
+  history: readonly QuestionRecord[] | null | undefined,
+): ReadonlySet<string> {
+  return new Set([task.question, ...(history ?? []).filter((record) => !record.deleted).map((record) => record.question)]
+    .map((question) => question?.trim()).filter((question): question is string => !!question));
 }

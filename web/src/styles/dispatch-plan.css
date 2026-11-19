@@ -1,0 +1,67 @@
+/* 派活单（task-detail/DispatchPlanCard.tsx）：跟答题卡同一副骨架（question-card.css 那一套面板、细线分段、
+   最后一行一颗实心键），只多出这几样：卡头右边一组两段的切换「一个接一个 / 同时」，一行一个任务
+   （序号、标题、备注，行尾交给谁，指到才出的叉）。只用主题变量，浅色深色同一套。 */
+.dispatch-plan-title { margin: 0; font-size: 13.5px; font-weight: var(--w-strong); line-height: 1.6; overflow-wrap: anywhere; }
+
+/* 两段的切换：同框顶那一行的纯文字键，按下的那一颗浅底、字重一档。 */
+.dispatch-plan-order { display: flex; gap: 2px; border-radius: 8px; background: var(--raised); padding: 2px; }
+.dispatch-plan-order button {
+  height: 24px; border: 0; border-radius: 6px; background: transparent; padding: 0 9px;
+  color: var(--muted); font: inherit; font-size: var(--t-xs); white-space: nowrap;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.dispatch-plan-order button:hover:not(:disabled) { color: var(--ink); }
+.dispatch-plan-order button[aria-pressed="true"] { background: var(--panel); color: var(--ink); font-weight: var(--w-medium); box-shadow: var(--surface-shadow); }
+.dispatch-plan-restore {
+  height: 24px; border: 0; border-radius: 6px; background: transparent; padding: 0 7px;
+  color: var(--muted); font: inherit; font-size: var(--t-xs); white-space: nowrap;
+}
+.dispatch-plan-restore:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
+
+/* 一行一个任务：行和行之间一条细线。行尾那颗胶囊和叉排在右边；窄了胶囊换到下一行、靠右。 */
+.dispatch-plan-rows { min-height: 0; flex: 0 1 auto; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; list-style: none; }
+.dispatch-plan-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  min-height: 44px; padding: 7px 8px 7px 14px; border-top: 1px solid var(--line);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.dispatch-plan-row:hover { background: var(--hover-bg); }
+.dispatch-plan-row > .question-card-key { align-self: flex-start; margin-top: 1px; }
+.dispatch-plan-text { display: flex; min-width: min(14em, 100%); flex: 1 1 14em; flex-direction: column; gap: 1px; }
+.dispatch-plan-name {
+  align-self: flex-start; max-width: 100%; border: 0; border-radius: 4px; background: transparent; padding: 0;
+  color: var(--ink); font: inherit; font-size: 12.5px; font-weight: var(--w-medium); line-height: 1.55; text-align: left; overflow-wrap: anywhere;
+}
+button.dispatch-plan-name { cursor: pointer; }
+button.dispatch-plan-name:hover, button.dispatch-plan-name[aria-pressed="true"] { text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+.dispatch-plan-text > small { color: var(--muted); font-size: var(--t-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.dispatch-plan-row > .run-target-picker { margin-left: auto; max-width: 100%; }
+.dispatch-plan-row > .run-target-picker + .reviewer-chip { margin-left: 0; }
+.dispatch-plan-drop {
+  display: grid; flex: 0 0 auto; width: 24px; height: 24px; place-items: center; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); opacity: 0; transition: opacity var(--dur-1) var(--ease-out);
+}
+.dispatch-plan-drop:hover:not(:disabled) { background: var(--overlay); color: var(--ink); }
+.dispatch-plan-row:is(:hover, :focus-within) .dispatch-plan-drop, .dispatch-plan-drop:focus-visible { opacity: 1; }
+@media (hover: none) { .dispatch-plan-drop { opacity: 1; } }
+.dispatch-plan-reading { padding: 4px 2px 12px; }
+
+@media (max-width: 560px) {
+  .dispatch-plan-row { padding-left: 12px; }
+  .question-card-head:has(.dispatch-plan-order) { flex-wrap: wrap; }
+}
+
+/* 「派出去的活交给谁」：回复框胶囊点开智能体那一段，列表下面一行。 */
+.agent-model-picker-extra { border-top: 0.5px solid var(--line); padding: 6px 8px; }
+.dispatch-default-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--t-xs); }
+.dispatch-default-row > span { margin-right: 4px; color: var(--muted); white-space: nowrap; }
+.dispatch-default-same {
+  height: 24px; border: 0; border-radius: 999px; background: transparent; padding: 0 10px;
+  color: var(--muted); font: inherit; font-size: var(--t-xs); white-space: nowrap; box-shadow: inset 0 0 0 1px var(--line2);
+}
+.dispatch-default-same:hover:not(:disabled) { color: var(--ink); }
+.dispatch-default-same[aria-pressed="true"] { background: var(--overlay); color: var(--ink); font-weight: var(--w-medium); box-shadow: none; }
+.dispatch-default-row > .run-target-picker { max-width: 100%; }
+/* 底栏胶囊最后那一段：设成了非默认值才有，淡一档。 */
+.dispatch-default-seg { cursor: default; color: var(--muted); white-space: nowrap; }
+.dispatch-default-seg > code { font-size: var(--t-xs); color: var(--ink); }

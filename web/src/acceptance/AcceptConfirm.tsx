@@ -1,0 +1,117 @@
+import type { ReactNode, RefObject } from "react";
+import type { AcceptanceSteps } from "@navi/shared/accept-message";
+import { AcceptLayer } from "./AcceptLayer.tsx";
+import { cleanText, type ConfirmGate, type ConfirmView } from "./confirmPlan.ts";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
+
+/**
+ * 「这一按会做什么」：挂在主按钮下面的一层，一步一行。可以不做的那两步（运行、提交）前面带勾，
+ * 取消了那一行自己写后果；两勾打开时是上一次确认的样子，确认了就记成新的（confirmPlan.ts）。事实来自 shared 的 acceptanceSteps —— 和飞书待验收卡那句话同源。
+ */
+export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitChoosable, commitDefault, commitRemembered, verification, source, family,
+  waiting, submitting, canSetGate, onRun, onCommit, onAcknowledge, onRetryDefault, onRetryGate, onRetryVerification, onSetGate, onConfirm, onClose }: {
+  anchorRef: RefObject<HTMLElement | null>;
+  steps: AcceptanceSteps;
+  view: ConfirmView;
+  gate: ConfirmGate | null;
+  /** 前置命令那份状态在重读 / 读失败：勾照画，确认键等它（confirmPlan.ts gatePending）。 */
+  gateRead: { pending: boolean; error: string | null };
+  commitChoosable: boolean;
+  commitDefault: { value: boolean | null; error: string | null; pending: boolean };
+  /** 确认时「提交」那一勾会写回项目设置（有项目管理权限）；false = 只管这一次。 */
+  commitRemembered: boolean;
+  verification: { state: "none" | "loading" | "error" | "unacknowledged" | "acknowledged"; error: string | null };
+  source: string;
+  /** 一起验收的那几个任务（父任务在前）；只验一个时为空。 */
+  family: string[];
+  /** 依赖、门禁还在核对（或刚读不出来）：确认键先等着，层不收起来。 */
+  waiting: boolean;
+  /** 这一按已经发出去了：键上转圈；没发出去时 waiting 只是在等上面那些读回来，画「找北」。 */
+  submitting: boolean;
+  canSetGate: boolean;
+  onRun: (value: boolean) => void;
+  onCommit: (value: boolean) => void;
+  onAcknowledge: (value: boolean) => void;
+  onRetryDefault: () => void;
+  onRetryGate: () => void;
+  onRetryVerification: () => void;
+  onSetGate: () => void;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const merge = steps.kind === "merge" ? steps : null;
+  return (
+    <AcceptLayer open anchorRef={anchorRef} onClose={onClose} label={steps.kind === "release" ? "确认放行" : "确认验收"} align="end" className="acc-layer-confirm">
+      <ol className="acc-steps">
+        {steps.kind === "release" && <Step verb="放行" what={steps.next ? <>下一站「{steps.next}」</> : "这一关"} />}
+        {steps.kind === "mark" && <Step verb="标记" what="验收完成" />}
+        {steps.kind !== "release" && gate && (
+          <Step verb="运行" checked={view.runs} onToggle={onRun} label="运行前置命令" off={!view.runs && !gate.reusable}
+            what={<><code>{gate.command}</code>
+              {view.runs && gate.issue && <em className="is-red">{gate.issue}</em>}
+              {gate.reusable && !view.runs && gate.passedAgo && <em>{gate.passedAgo}通过</em>}
+              {!view.runs && !gate.reusable && gate.lastFailed && <em className="is-amber">上次未通过</em>}
+              {gateRead.pending && <ReadStatus what="运行状态" error={gateRead.error} onRetry={onRetryGate} />}</>} />
+        )}
+        {steps.kind !== "release" && !gate && gateRead.pending && (
+          <Step verb="运行" what={<ReadStatus what="运行状态" error={gateRead.error} onRetry={onRetryGate} />} />
+        )}
+        {merge && (merge.merge === "tag"
+          ? <Step verb="打标签" what={<><code>navi-accepted</code><em><code>{merge.target}</code> 不动</em></>} />
+          : <Step verb="合并" what={<>{family.length > 1 ? `${family.length} 个任务` : <code>{source}</code>} → <code>{merge.target}</code>
+            {merge.merge === "squash" && <em>squash</em>}</>} />)}
+        {merge && family.length > 1 && <li className="acc-step-family"><ul>{family.map((title) => <li key={title}>{title}</li>)}</ul></li>}
+        {merge && commitChoosable && (commitDefault.value === null
+          ? <Step verb="提交" what={<ReadStatus what="项目默认" error={commitDefault.error} onRetry={onRetryDefault} />} />
+          : <Step verb="提交" checked={view.commit} onToggle={onCommit} label="合并后提交"
+            what={<>{view.batchNeedsCommit ? <em className="is-red">不提交时一次只能合一个任务</em>
+              : !view.commit ? <em className="is-amber">改动留在 {merge.target} 工作区，这个仓库别的验收先被挡住</em> : null}
+              {!commitRemembered && view.commit !== commitDefault.value && <em>只管这一次，项目默认要管理员改</em>}
+              {/* 重读中、重读失败：勾留着给人看，确认键等它读到（confirmPlan.ts）。 */}
+              {commitDefault.pending && <ReadStatus what="项目默认" error={commitDefault.error} onRetry={onRetryDefault} />}</>} />)}
+        {merge && <Step verb="清理" what={cleanText(merge, view.commit)} />}
+        {steps.kind !== "release" && steps.team && <Step verb="联动" what="共享执行者一起标为验收完成" />}
+        {verification.state === "loading" && <Step verb="验证" what={<em><NaviLoader size={14} />核对独立验证</em>} />}
+        {verification.state === "error" && <Step verb="验证" what={<><em className="is-red">验证记录读不出来</em>
+          <button type="button" className="acc-link" onClick={onRetryVerification}>重试</button></>} />}
+        {(verification.state === "unacknowledged" || verification.state === "acknowledged") && (
+          <Step verb="知情" checked={verification.state === "acknowledged"} onToggle={onAcknowledge} label="我已知晓独立验证尚未执行，仍要验收"
+            what={<em className="is-amber">独立验证尚未执行，仍要验收</em>} />
+        )}
+      </ol>
+      <footer>
+        {canSetGate && <button type="button" className="acc-link" onClick={onSetGate}>设一条前置命令</button>}
+        <button type="button" className="acc-btn" onClick={onClose}>取消</button>
+        <button type="button" className="acc-btn is-primary" autoFocus disabled={view.confirmDisabled || waiting} aria-busy={waiting || undefined}
+          onClick={onConfirm}>
+          {waiting && (submitting ? <i className="acc-spin" aria-hidden="true" /> : <NaviLoader size={14} className="navi-inverse" />)}{view.confirmLabel}
+        </button>
+      </footer>
+    </AcceptLayer>
+  );
+}
+
+/** 这一按要用的默认 / 记忆还在读、读不出来：确认键为什么灰着、怎么办。 */
+function ReadStatus({ what, error, onRetry }: { what: string; error: string | null; onRetry: () => void }) {
+  return error
+    ? <><em className="is-red">{what}读不出来</em><button type="button" className="acc-link" onClick={onRetry}>重试</button></>
+    : <em><NaviLoader size={14} />读取{what}</em>;
+}
+
+function Step({ verb, what, checked, onToggle, label, off = false }: {
+  verb: string;
+  what: ReactNode;
+  checked?: boolean;
+  onToggle?: (value: boolean) => void;
+  label?: string;
+  off?: boolean;
+}) {
+  const body = <><span className="acc-step-verb">{verb}</span><span className="acc-step-what">{what}</span></>;
+  return (
+    <li className={off ? "is-off" : undefined}>
+      {onToggle
+        ? <label><input type="checkbox" checked={!!checked} aria-label={label} onChange={(event) => onToggle(event.target.checked)} />{body}</label>
+        : <div><i aria-hidden="true" />{body}</div>}
+    </li>
+  );
+}

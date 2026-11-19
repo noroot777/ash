@@ -18,9 +18,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-im-requests-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-im-requests-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-im-requests");
 
 let failure: unknown = null;
@@ -66,7 +66,7 @@ try {
   const sentText = () => fake.sends().map((call) => JSON.stringify(contentOf(call))).join("\n");
   const repliesTo = (messageId: string) => fake.sends().filter((call) => call.path.includes(`/messages/${messageId}/reply`))
     .map((call) => JSON.stringify(contentOf(call))).join("\n");
-  const WITHHELD = /这次操作的结果不在飞书里显示了（([^）]+)），请到 ash 网页查看。/;
+  const WITHHELD = /这次操作的结果不在飞书里显示了（([^）]+)），请到 Navi 网页查看。/;
 
   let generation = 0;
   /** 同一个飞书账号绑给 userId（每次都是新的一次绑定）。 */
@@ -80,8 +80,8 @@ try {
 
   // 以他的身份读接口：读完、回到命令里之前停一下（读到的是 alice 那一次的数据）。
   let stall: { path: RegExp; reached: () => void; opened: Promise<void> } | null = null;
-  const realGet = im.ash.get.bind(im.ash);
-  im.ash.get = (async (who: never, path: `/api/${string}`) => {
+  const realGet = im.navi.get.bind(im.navi);
+  im.navi.get = (async (who: never, path: `/api/${string}`) => {
     const result = await realGet(who, path);
     const held = stall;
     if (held?.path.test(path)) {
@@ -90,7 +90,7 @@ try {
       await held.opened;
     }
     return result;
-  }) as typeof im.ash.get;
+  }) as typeof im.navi.get;
   /** run 读到 path、停在那里时做 change，再放行。 */
   const during = async <T>(path: RegExp, run: () => Promise<T>, change: () => Promise<unknown>): Promise<T> => {
     let reached!: () => void;

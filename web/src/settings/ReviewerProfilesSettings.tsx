@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, ReviewerProfile } from "@ash/shared";
-import { PencilSimple, Plus, Trash } from "@phosphor-icons/react";
+import type { AgentExecutorProfile, ReviewerProfile } from "@navi/shared";
+import { PencilSimple, Plus, Star, Trash } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
@@ -14,12 +14,14 @@ import {
   type ReviewerDraft,
 } from "../free-workflow/ReviewerProfileFields.tsx";
 import { reviewerDeleteMessage } from "../free-workflow/freeReviewCopy.ts";
+import { reviewerProfilesStore } from "../free-workflow/reviewerProfilesStore.ts";
 
 /** 正在编辑哪一位：某个审查者的 id，或者「新建」那一张空表。 */
 const NEW = "new";
 
 // 设置 → 审查者。跟飞书页同一副骨架：一位审查者一行，点编辑就在那一行下面展开表单
-// （骨架样式在 styles/settings-list.css）。
+// （骨架样式在 styles/settings-list.css）。行尾那颗星 = 默认审查者：派出去的任务建出来就交给这一位审查
+// （shared/src/review-on-create.ts），每人至多一位，再点一下取消；那一位被删掉，默认就跟着没了。
 export function ReviewerProfilesSettings({ notify }: { notify: (message: string) => void }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [reviewers, setReviewers] = useState<ReviewerProfile[]>([]);
@@ -75,6 +77,22 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
       notify(creating ? `已创建审查者「${saved.name}」` : `已保存审查者「${saved.name}」`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "审查者保存失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleDefault = async (reviewer: ReviewerProfile) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const saved = await reviewerProfilesStore.setDefault(reviewer.id, !reviewer.isDefault);
+      setReviewers((current) => current.map((item) => (
+        item.id === saved.id ? saved : saved.isDefault && item.isDefault ? { ...item, isDefault: false } : item
+      )));
+      notify(saved.isDefault ? `派出去的任务默认交给「${saved.name}」审查` : "已取消默认审查者，派出去的任务不再自动带审查");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "默认审查者没能改过去");
     } finally {
       setBusy(false);
     }
@@ -143,6 +161,16 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
                   <ReviewerProfileSummary reviewer={reviewer} profiles={profiles} />
                 </div>
                 <span className="settings-row-actions">
+                  <button
+                    type="button"
+                    className="settings-icon-action settings-default-toggle"
+                    disabled={busy}
+                    aria-pressed={reviewer.isDefault}
+                    aria-label={reviewer.isDefault ? `${reviewer.name} 是默认审查者；点击取消默认` : `把 ${reviewer.name} 设为默认审查者`}
+                    onClick={() => void toggleDefault(reviewer)}
+                  >
+                    <Star size={14} weight={reviewer.isDefault ? "fill" : "regular"} />
+                  </button>
                   <button
                     type="button"
                     className="settings-icon-action"

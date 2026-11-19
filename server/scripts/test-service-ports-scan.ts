@@ -116,8 +116,17 @@ assert.deepEqual(portsFromOutput("proxy notlocalhost:8787 ready"), [], "主机�
   console.log(`  流式等价性:${corpus.length} 段文本 × ${combos} 组切法`);
 }
 
+// 「一个都没动」的那份结果。Windows 上整档短路时回的就是它,而那一支只能在真机上走到 ——
+// 期望值单写一份、POSIX 上拿「一个端口都没给」走同一个出口核一遍,结果对象加字段时开发机
+// 上先红,不会等到真机才发现 Windows 那句期望值少了一项(2026-11-19 少过 `membersIncomplete`)。
+const NOTHING_STOPPED = { killed: [], spared: [], unknown: [], leftovers: [], membersIncomplete: false };
+
 // ── ④ 三态:lsof 失灵与「没人听」是两件事 ───────────────────────────────────────
 if (!IS_WINDOWS) {
+  assert.deepEqual(
+    await stopByPorts([], { launchToken: "irrelevant" }, (async () => { throw new Error("没给端口就不该探测"); }) as never),
+    NOTHING_STOPPED,
+  );
   const ok = (stdout: string) => (async () => ({ stdout, stderr: "" })) as never;
   const boom = (failure: unknown) => (async () => { throw failure; }) as never;
   assert.deepEqual(await listeningPids(8787, ok("123\n456\n")), { ok: true, pids: [123, 456] });
@@ -153,7 +162,7 @@ if (IS_WINDOWS) {
   // Windows 没有 lsof,这一档整档不启用(service-ports.ts 里直接短路),行为与改动前一致。
   assert.deepEqual(
     await stopByPorts([8787], { launchToken: "irrelevant" }),
-    { killed: [], spared: [], unknown: [], leftovers: [] },
+    NOTHING_STOPPED,
   );
 }
 

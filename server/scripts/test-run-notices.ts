@@ -3,19 +3,19 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { ServerEvent } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import type { ServerEvent } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import { eq } from "drizzle-orm";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-run-notices-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_LAX_DONE = "1";
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_NOTICE_TRIGGER = join(root, "finish");
+const root = mkdtempSync(join(tmpdir(), "navi-run-notices-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_LAX_DONE = "1";
+process.env.NAVI_NOTICE_TRIGGER = join(root, "finish");
 process.env.PATH = `${root}${delimiter}${process.env.PATH ?? ""}`;
+process.env.NAVI_TEST_AGENT_BIN = root;
 
 const [
   { db, ensureSchema },
@@ -32,8 +32,8 @@ const [
 try {
   await ensureSchema();
   execFileSync("git", ["init", "-b", "main", root]);
-  execFileSync("git", ["-C", root, "config", "user.name", "Ash Test"]);
-  execFileSync("git", ["-C", root, "config", "user.email", "ash@example.test"]);
+  execFileSync("git", ["-C", root, "config", "user.name", "Navi Test"]);
+  execFileSync("git", ["-C", root, "config", "user.email", "navi@example.test"]);
   writeFileSync(join(root, "seed.txt"), "seed\n");
   execFileSync("git", ["-C", root, "add", "seed.txt"]);
   execFileSync("git", ["-C", root, "commit", "-m", "seed"]);
@@ -51,7 +51,7 @@ const receive = (message) => {
   else if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "notice-turn" } } });
     const timer = setInterval(() => {
-      if (!existsSync(process.env.ASH_NOTICE_TRIGGER)) return;
+      if (!existsSync(process.env.NAVI_NOTICE_TRIGGER)) return;
       clearInterval(timer);
       send({ method: "turn/completed", params: {
         threadId: "notice-thread", turn: { id: "notice-turn", status: "completed", error: null },
@@ -63,7 +63,7 @@ if (isExec) {
   process.stdin.resume();
   process.stdin.on("end", () => {
     const timer = setInterval(() => {
-      if (!existsSync(process.env.ASH_NOTICE_TRIGGER)) return;
+      if (!existsSync(process.env.NAVI_NOTICE_TRIGGER)) return;
       clearInterval(timer);
       send({ type: "thread.started", thread_id: "notice-thread" });
       send({ type: "item.completed", item: { type: "agent_message", text: "兼容参数已保留" } });
@@ -130,9 +130,10 @@ if (isExec) {
     assert.match(inFlight.commandLine ?? "", /--profile my-profile/, "profile 参数及其值必须原样保留");
     assert.match(inFlight.commandLine ?? "", /-c foo=1/, "exec 与 App Server 共用的 -c 也必须保留");
     assert.doesNotMatch(inFlight.commandLine ?? "", new RegExp(secret));
-    writeFileSync(process.env.ASH_NOTICE_TRIGGER!, "finish");
-    await running;
   } finally {
+    // 放走假 codex 排在 finally 里:上面哪条断言先红了,它也不会一直等着这个文件、变成没人管的进程。
+    writeFileSync(process.env.NAVI_NOTICE_TRIGGER!, "finish");
+    await running?.catch(() => {});
     unsubscribe();
   }
 

@@ -7,7 +7,7 @@
 // 这里**不管供应商**：选模型那颗胶囊自己从 lib/modelCatalog.ts 的全页共享缓存里读
 // （连带 /v1/models 探测），线路图再存一份只会多发一轮请求、还会跟它漂移。
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile } from "@ash/shared";
+import type { AgentExecutorProfile } from "@navi/shared";
 import { api } from "../lib/api.ts";
 
 export interface ExecutorCatalog {

@@ -6,14 +6,15 @@ import { canSeeProject } from "./visibility.js";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";
 import { noteRejectedUserAction } from "../user-action-rejection.js";
+import { NAVI_HEADERS, requestHeader } from "../request-headers.js";
 
 export const AGENT_HUMAN_ONLY_REFUSAL =
   "这个动作只有账号本人按得动：它解除的是回合互斥，系统判不了原来那一位死没死才交给人来判，"
   + "回合凭证不能代替用户知情同意";
 
 export function humanRequestRejection(context: Context): string | null {
-  if (!isAccountHolder(actorOf(context)) || context.req.header("x-ash-source-task-id") !== undefined
-    || context.req.header("x-ash-turn-token") !== undefined) return AGENT_HUMAN_ONLY_REFUSAL;
+  if (!isAccountHolder(actorOf(context)) || requestHeader(context, NAVI_HEADERS.sourceTaskId) !== undefined
+    || requestHeader(context, NAVI_HEADERS.turnToken) !== undefined) return AGENT_HUMAN_ONLY_REFUSAL;
   return crossSiteRejection({
     secFetchSite: context.req.header("sec-fetch-site"), origin: context.req.header("origin"), host: new URL(context.req.url).host,
   });

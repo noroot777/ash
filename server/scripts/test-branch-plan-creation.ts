@@ -7,9 +7,9 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-branch-plan-creation-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-branch-plan-creation-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, sessions } = await import("../src/db/schema.js");
@@ -109,12 +109,15 @@ try {
       new RegExp(`比较基线 ${featureStart}`));
     await db.update(tasks).set({ worktreeBase: "main" }).where(eq(tasks.id, automatic.id));
     assert.deepEqual((await commits()).map((entry) => entry.sha), [ownCommit], "frozen start wins over a legacy branch");
-    await db.update(tasks).set({ worktreeStartCommit: null }).where(eq(tasks.id, automatic.id));
+    // 没冻结过起点的老任务：提交清单和 diff 一样，按登记的那条基线分支算（task-change-scope.ts）。
+    await db.update(tasks).set({ worktreeStartCommit: null, mergeTargetBranch: null }).where(eq(tasks.id, automatic.id));
     assert.deepEqual((await commits()).map((entry) => entry.subject), ["task-only.txt", "upgrade.txt"], "legacy tasks retain their explicit baseline");
-    await db.update(tasks).set({ worktreeBase: null }).where(eq(tasks.id, automatic.id));
-    assert.deepEqual(await commits(), [], "unknown origins never borrow the project's current branch");
-    assert.match(await verifyProtocolFor(await row(automatic.id), 2, repo), /比较基线 未记录任务起点/);
-    console.log("✓ commits API and both verification protocols use the frozen start after checkout; legacy and unknown baselines stay honest");
+    assert.match(await verifyProtocolFor(await row(automatic.id), 2, repo), new RegExp(`比较基线 ${mainStart}`));
+    // 起点记了却读不出来：照实说算不出来，不借别的基线给出一份清单。
+    await db.update(tasks).set({ worktreeStartCommit: "0".repeat(40) }).where(eq(tasks.id, automatic.id));
+    assert.deepEqual(await commits(), [], "an unreadable start never borrows another baseline");
+    assert.match(await verifyProtocolFor(await row(automatic.id), 2, repo), /比较基线 未能确定（无法读取任务的开工提交）/);
+    console.log("✓ commits API and both verification protocols use the frozen start after checkout; legacy and unreadable baselines stay honest");
   }
   {
     const repo = await repository("retarget");

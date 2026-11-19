@@ -13,7 +13,7 @@
 // 存在 `handoff_local_peer_keys`(按 url),既不进那份会被整份吐回前端的设置,又能在
 // 设置页和接力对话框里正常填写。
 import { and, eq, inArray } from "drizzle-orm";
-import type { HandoffTarget } from "@ash/shared";
+import type { HandoffTarget } from "@navi/shared";
 import { getAppSettings, invalidateInstanceCache, parseAppSettingsPatch, patchAppSettings, writeAppSettingsPatch } from "../app-settings.js";
 import { db } from "../db/index.js";
 import { appSettings, handoffLocalPeerKeys, userHandoffTargets } from "../db/schema.js";
@@ -297,7 +297,7 @@ async function keyFingerprintForSave(rawUrl: string, peerKey: string, expectedPe
   if (peerKey && (!peerFp || (expectedPeerFp && !sameFingerprint(peerFp, expectedPeerFp)))) {
     throw new HandoffError(peerFp
       ? "地址背后的机器指纹不一致，账号 key 未保存。请先核对来源机器地址。"
-      : "无法核对机器身份，账号 key 未保存。请确认地址和 ash 运行状态后重试。", peerFp ? 409 : 502);
+      : "无法核对机器身份，账号 key 未保存。请确认地址和 Navi 运行状态后重试。", peerFp ? 409 : 502);
   }
   return peerFp;
 }

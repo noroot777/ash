@@ -29,7 +29,7 @@ async function listDirs(dir: string): Promise<BrowseEntry[]> {
   const out: BrowseEntry[] = [];
   for (const item of items) {
     if (!item.isDirectory()) continue;
-    // 点开头的目录一律不列:`.git`、`.ash`、`node_modules` 这类既不是用户想选的
+    // 点开头的目录一律不列:`.git`、`.navi`、`node_modules` 这类既不是用户想选的
     // 位置,又会把树撑成几千行。
     if (item.name.startsWith(".") || item.name === "node_modules") continue;
     const full = join(dir, item.name);

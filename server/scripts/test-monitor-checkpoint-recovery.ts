@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { tsxLoaderPath } from "./tsx-loader.js";
+import { tsxLoaderUrl } from "./tsx-loader.js";
 import { eq } from "drizzle-orm";
 import {
   api, cleanup, db, dbClient, failCheckpointRestore, hits, input, now, pending,
@@ -19,6 +19,7 @@ import { advanceQueue, runGroup } from "../src/scheduler.js";
 import { claimCheckpointForRun } from "../src/task-checkpoint-delivery.js";
 import { enterLeadDelivery, enterTurn } from "../src/turn-entry-guard.js";
 import { monitorWakeCheckpoint } from "../src/monitor-checkpoint-handoff.js";
+import { overrideQueueAdvanceRetry } from "../src/queue-advance-retry.js";
 import { id } from "../src/util.js";
 import { checkpointStartCases } from "./checkpoint-start-cases.js";
 import { checkpointQueueCases } from "./checkpoint-queue-cases.js";
@@ -32,7 +33,7 @@ import { checkpointOwnershipCases } from "./checkpoint-ownership-cases.js";
 
 function owner(mode: string, taskId: string, messageId = ""): void {
   const child = spawnSync(process.execPath, [
-    "--import", tsxLoaderPath(), // 写死 ../../node_modules 的那一版在 worktree 里必炸,见 ./tsx-loader.ts
+    "--import", tsxLoaderUrl(), // 写死 ../../node_modules 的那一版在 worktree 里必炸,见 ./tsx-loader.ts
     fileURLToPath(new URL("./checkpoint-recovery-owner.ts", import.meta.url)), mode, taskId, messageId,
   ], { env: process.env, encoding: "utf8", timeout: 30_000 });
   process.stdout.write(child.stdout ?? "");
@@ -52,6 +53,9 @@ async function resultsDelivered(test: Awaited<ReturnType<typeof scenario>>): Pro
   await settled(test.taskId);
 }
 
+// 推进队列时总会挂一趟 1 秒后的兜底重放，这一套注入的故障多半靠它补上，每次都按产品的 1 秒真等。
+// 钉的是「那一趟会来、补得上」，不是那一秒。
+overrideQueueAdvanceRetry(100);
 try {
   await checkpointOwnershipCases();
   await checkpointAckFailureCases();

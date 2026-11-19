@@ -152,7 +152,7 @@ try {
 
   const projectMenu = page.getByLabel("选择 Git 项目", { exact: true });
   const worktreeMenu = page.getByLabel("选择工作树", { exact: true });
-  const exit = page.getByLabel("返回 ash 工作区", { exact: true });
+  const exit = page.getByLabel("返回 Navi 工作区", { exact: true });
   const fetch = page.getByLabel("获取", { exact: true });
   await Promise.all([projectMenu.waitFor(), worktreeMenu.waitFor(), exit.waitFor()]);
   assert.equal(await projectMenu.count(), 1, "project selector must have one trigger");
@@ -166,7 +166,7 @@ try {
   });
   assert.equal(exitColors.text, "", "return must be icon-only; its name lives in the hover tip");
   assert.match(exitColors.background, /rgba\(0, 0, 0, 0\)|transparent/, "return must not be a filled button");
-  // 出口只有这一颗：工作台选项里不再另放「返回 ash」。
+  // 出口只有这一颗：工作台选项里不再另放「返回 navi」。
   await page.getByLabel("工作台选项", { exact: true }).click();
   const optionsMenu = page.getByRole("menu", { name: "工作台选项" });
   await optionsMenu.waitFor();
@@ -285,7 +285,7 @@ try {
     assert.equal(exited.searchParams.get(name), null, `${name} must be cleared on return`);
   await page.reload();
   await page.locator(".workspace-sidebar").waitFor();
-  assert.equal(await page.locator(".workspace-git-page").count(), 0, "refresh after return must stay in ash");
+  assert.equal(await page.locator(".workspace-git-page").count(), 0, "refresh after return must stay in navi");
 
   const mobilePage = await browser.newPage({ viewport: mobile });
   const mobileUrl = new URL(url);
@@ -302,7 +302,7 @@ try {
     scrollWidth: document.documentElement.scrollWidth,
   }));
   assert.equal(dimensions.scrollWidth, dimensions.clientWidth, "mobile workbench must not overflow horizontally");
-  const mobileExit = mobilePage.getByLabel("返回 ash 工作区", { exact: true });
+  const mobileExit = mobilePage.getByLabel("返回 Navi 工作区", { exact: true });
   const mobileFetch = mobilePage.getByLabel("获取", { exact: true });
   // 窄屏顶栏折成两行：返回在第一行最左，拉取引用那一组落到第二行——按阅读顺序它仍在前面。
   const [mobileExitBox, mobileFetchBox] = [await box(mobileExit), await box(mobileFetch)];

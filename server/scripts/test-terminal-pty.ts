@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { spawnWindowsPty } from "../src/terminal-pty.js";
 
-const temporary = mkdtempSync(join(tmpdir(), "ash-terminal-pty-"));
+const temporary = mkdtempSync(join(tmpdir(), "navi-terminal-pty-"));
 const worker = join(temporary, "worker.mjs");
 const marker = join(temporary, "worker.pid");
 const options = { cwd: temporary, env: process.env as Record<string, string> };
@@ -16,10 +17,19 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+// 机器忙时 worker 可能还没跑到「写下自己 pid」那一行就被启动超时收掉了，标记文件就不存在。那时按命令行
+// 找它：脚本路径在本测试自己的临时目录里，认不错。Windows 上没有 ps，照旧只认标记文件。
+function workerPids(): number[] {
+  if (process.platform === "win32") return [Number(readFileSync(marker, "utf8"))];
+  const written = existsSync(marker) ? Number(readFileSync(marker, "utf8")) : 0; // 刚建出来还没写进去的是空文件
+  if (written > 0) return [written];
+  return execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" }).split("\n")
+    .filter((line) => line.includes(worker)).map((line) => Number(line.trim().split(/\s+/)[0]));
+}
+
 async function stopped(): Promise<void> {
-  const pid = Number(readFileSync(marker, "utf8"));
-  for (let attempt = 0; attempt < 100 && alive(pid); attempt++) await delay(50);
-  assert.equal(alive(pid), false, `isolated worker ${pid} leaked`);
+  for (let attempt = 0; attempt < 100 && workerPids().some(alive); attempt++) await delay(50);
+  assert.deepEqual(workerPids().filter(alive), [], "isolated worker leaked");
 }
 
 try {

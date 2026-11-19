@@ -25,7 +25,7 @@ const files = [
 
 const diff: TaskDiffResult = {
   available: true,
-  sourceBranch: "ash/tree",
+  sourceBranch: "navi/tree",
   targetBranch: "main",
   mergeBase: "abcdef0123456789",
   files,

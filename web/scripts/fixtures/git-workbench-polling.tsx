@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { GitWorkbenchState } from "@ash/shared/git-workbench";
+import type { GitWorkbenchState } from "@navi/shared/git-workbench";
 import { useWorkbench } from "../../src/git-workbench/useWorkbench.ts";
 
 const reply = (body: unknown, status = 200) =>

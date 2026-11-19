@@ -7,7 +7,6 @@ import {
   Copy,
   FolderOpen,
   GitDiff,
-  SpinnerGap,
   Trash,
   Warning,
   X,
@@ -21,6 +20,7 @@ import { formatSize, isImageName } from "./fileModel.ts";
 import { MARKDOWN_PATTERN, MarkdownFileBody } from "./MarkdownFileBody.tsx";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
+import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 function TextBody({ file }: { file: FileContent }) {
   const lines = useMemo(() => (file.text ?? "").split("\n"), [file.text]);
@@ -50,7 +50,7 @@ function ImageBody({ src, name }: { src: string; name: string }) {
  * 任务做出来的网页，就地渲染。
  *
  * `sandbox` 里**故意没有 `allow-same-origin`**：这些 html 是 agent 现写的，给了它就等于
- * 让页面以 ash 自己的源跑脚本，读得到登录态、能带着 cookie 调 ash 的接口。服务端那条
+ * 让页面以 navi 自己的源跑脚本，读得到登录态、能带着 cookie 调 navi 的接口。服务端那条
  * `/tasks/:id/page/<令牌>/*` 还会再压一道同样的 CSP，直接在地址栏打开也照样被钉住。
  *
  * 地址由服务端随文件内容一起发（`pageUrl`），前端不自己拼：里面那段令牌是挡住第三方
@@ -409,7 +409,7 @@ export function FileViewer({
       )}
 
       <div className="file-viewer__body">
-        {loading && <p className="file-viewer__state"><SpinnerGap size={14} aria-hidden="true" />正在读取…</p>}
+        {loading && <p className="file-viewer__state"><NaviLoader />正在读取…</p>}
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
         {!loading && !error && file && (
           <Body taskId={taskId} file={file} pageUrl={pageUrl} showSource={showSource} />

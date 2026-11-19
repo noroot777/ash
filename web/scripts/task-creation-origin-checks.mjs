@@ -8,7 +8,7 @@ export async function checkTaskCreationOrigin(page, fixtureUrl) {
     await page.getByRole("heading", { name: title, exact: true }).waitFor({ state: "visible" });
   };
   // 详情页头上不再挂徽标、也不再另起一条「来自…」：谁开的、从哪来收在标题前那一颗来源图标的
-  // 读屏名和提示里（docs/ui-ux-audit head-2）。来源任务还在就能点过去。
+  // 读屏名和提示里。来源任务还在就能点过去。
   const source = () => page.locator(".task-detail-header .task-head-source");
   const sourceSaid = async () => (await source().count()) ? await source().first().getAttribute("aria-label") : null;
   const ensureNoStrayLines = async title => {
@@ -30,9 +30,11 @@ export async function checkTaskCreationOrigin(page, fixtureUrl) {
   }
   await open("用户从父任务派生");
   ensure(!(await sourceSaid() || "").includes("创建"), "a user-derived task shows only where it came from, never a creator");
-  const cases = [["Codex 派生的任务", "Codex 派生", "Codex Dev"], ["外部智能体创建", "智能体创建（自报）", null],
+  // 另一条任务派出来的（子任务）在任务头上换了说法（2026-11-16 子任务整页导航）：标题前是「子任务」
+  // 那颗图标加一段可点的来路，来源图标不再出——它要说的「从哪来」已经在来路里了。列表行尾那颗照旧。
+  const cases = [["Codex 派生的任务", "Codex 派生", "Codex Dev", "父任务已改名"], ["外部智能体创建", "智能体创建（自报）", null],
     ["群聊委派的任务", "Codex 群聊委派", "聊天 Codex"]];
-  for (const [title, label, executor] of cases) {
+  for (const [title, label, executor, dispatchedFrom] of cases) {
     await row(title).waitFor({ state: "visible" });
     ensure(await wrap(title).locator(".task-creation-badge").count() === 0, `the colored chip must not come back to the list: ${title}`);
     const mark = wrap(title).locator(`[aria-label^="${label}"]`);
@@ -40,6 +42,15 @@ export async function checkTaskCreationOrigin(page, fixtureUrl) {
     const listSaid = await mark.getAttribute("aria-label");
     ensure(listSaid === label || listSaid.startsWith(`${label} · `), `wrong list origin label: ${title} → ${listSaid}`);
     await open(title);
+    if (dispatchedFrom) {
+      const head = page.locator(".task-detail-header");
+      ensure(await sourceSaid() === null, `a dispatched task says where it came from in its trail, not in a second mark: ${title}`);
+      ensure(await head.locator('[role="img"][aria-label="子任务"]').count() === 1, `a dispatched task must be marked as a subtask: ${title}`);
+      await ensureNoStrayLines(title);
+      await head.getByRole("button", { name: `父任务：${dispatchedFrom}`, exact: true }).click();
+      await page.getByRole("heading", { name: dispatchedFrom, exact: true }).waitFor({ state: "visible" });
+      continue;
+    }
     const said = await sourceSaid() || "";
     ensure(said.includes(label), `wrong detail origin: ${title} → ${said}`);
     if (executor) ensure(said.includes(executor), `creator executor snapshot is missing: ${title} → ${said}`);

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { db, root, runs, schema, tasks, teardown } from "./monitors-fixture.js";
+import { db, root, runs, schema, tasks, teardown, until } from "./monitors-fixture.js";
 import { setupRegressionReviews, type ReviewMode } from "./regression-review-fixture.js";
 
 const { reconcileFreeReviews } = await import("../src/free-workflow.js");
@@ -82,7 +82,9 @@ try {
   await reconcileFreeReviews();
   assert.equal((await unknown.state()).settlement?.outcome, "failed", "no durable exit fact means no inferred success");
   const previous = await unknown.state();
-  assert(runs.claimTurn(unknown.taskId, "dispatch"));
+  // 审查者名下那条跑完的哨兵还欠着一份结果，回合一空它就来投：这一轮已经结算，投不进去，占一下
+  // 就放手、200ms 后再试。那一下占位落在哪一拍随事件循环定，所以等它放手再占，不跟它赌先后。
+  await until("调用方在两次重投之间占到回合", async () => runs.claimTurn(unknown.taskId, "dispatch"));
   await reopenFailedFreeReview(unknown.taskId);
   assert(runs.isTurnClaimed(unknown.taskId), "restart delivery remains parked behind the caller's turn reservation");
   const restarted = await unknown.state();

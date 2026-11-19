@@ -28,8 +28,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, openSync, closeSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-cleanup-debt-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-cleanup-debt-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const { ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
@@ -70,6 +70,11 @@ const { IS_WINDOWS } = await import("../src/platform.js");
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const strays: number[] = [];
+// 中途抛了也要把登记过的号带走：收尾那几行在文件末尾，断言一抛就走不到。这里头有一个故意做成
+// 「按记号收不掉」的后代（清空了环境、自成一组），漏了它就在机器上每 100ms 写一次文件直到重启。
+process.on("exit", () => {
+  for (const pid of strays) { try { process.kill(pid, "SIGKILL"); } catch { /* 已经没了 */ } }
+});
 const temps: string[] = [];
 let bad = 0;
 const ok = (m: string) => console.log(`   ✓ ${m}`);

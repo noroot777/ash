@@ -16,7 +16,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await footerAssistantEntry().waitFor();
   assert.equal(await footerAssistantEntry().isEnabled(), true, "project-independent assistant is available while projects load");
   await footerAssistantEntry().click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u, "footer entry opens assistant directly while projects load");
 
   await configureProjects({ empty: false, fail: true });
@@ -27,7 +27,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await footerAssistantEntry().waitFor();
   assert.equal(await footerAssistantEntry().isEnabled(), true, "assistant remains available when projects fail to load");
   await footerAssistantEntry().click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u, "project error falls back to the project-independent assistant");
 
   await configureProjects({ empty: true, delayMs: 800 });
@@ -38,7 +38,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await emptyProjects;
   await page.getByRole("heading", { name: "还没有可用项目" }).waitFor();
   await footerAssistantEntry().click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u, "confirmed empty project list opens assistant directly");
 
   await configureProjects({ empty: false });
@@ -47,26 +47,26 @@ export async function checkAssistantEntry(page, fixtureUrl) {
 
   await page.getByRole("button", { name: "聊天", exact: true }).first().click();
   await page.getByRole("region", { name: "聊天模式" }).waitFor();
-  await page.getByRole("button", { name: "ash 助手" }).last().click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("button", { name: "Navi 助手" }).last().click();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   await page.getByRole("button", { name: "登录认证流程重构" }).click();
   const taskTitle = page.getByRole("textbox", { name: "任务标题" });
   await taskTitle.waitFor();
   assert.equal(await taskTitle.inputValue(), "登录认证流程重构");
   await page.goBack();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   await page.getByRole("button", { name: "关闭助手" }).click();
   await page.locator(".task-composer-panel.is-home").waitFor();
   assert.doesNotMatch(page.url(), /[?&]view=chat(?:&|$)/u, "popstate clears a stale chat origin before assistant closes");
 
   await page.getByRole("button", { name: "聊天", exact: true }).first().click();
   await page.getByRole("region", { name: "聊天模式" }).waitFor();
-  await page.getByRole("button", { name: "ash 助手" }).last().click();
+  await page.getByRole("button", { name: "Navi 助手" }).last().click();
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u);
   assert.match(page.url(), /[?&]from=chat(?:&|$)/u, "assistant URL records its chat origin");
   await configureProjects({ empty: false, delayMs: 1_200 });
   await page.reload();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   await page.getByRole("button", { name: "关闭助手" }).click();
   await page.waitForURL(/[?&]view=chat(?:&|$)/u);
   assert.equal(await footerAssistantEntry().isEnabled(), true, "assistant remains available before the delayed project list returns");
@@ -79,7 +79,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await configureProjects({ empty: true });
   const confirmedEmptyProjects = page.waitForResponse(response => response.url().endsWith("/api/projects") && response.status() === 200);
   await page.goto(new URL("?view=assistant&from=chat", fixtureBase).href);
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   await confirmedEmptyProjects;
   await page.getByRole("button", { name: "关闭助手" }).click();
   await page.getByRole("heading", { name: "还没有可用项目" }).waitFor();
@@ -87,7 +87,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
 
   await configureProjects({ empty: true, delayMs: 1_200 });
   await page.goto(new URL("?view=assistant&from=chat", fixtureBase).href);
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.equal(await footerAssistantEntry().isEnabled(), true, "assistant entry stays enabled during an eventually empty project load");
   await page.getByRole("button", { name: "关闭助手" }).click();
   await page.waitForURL(/[?&]view=chat(?:&|$)/u);
@@ -127,7 +127,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
     assert.ok(geometry.children.every(child => child.left >= geometry.left - 0.2 && child.right <= geometry.right + 0.2),
       `${width}px footer child overflow: ${JSON.stringify(geometry)}`);
     // 右边四颗只画图标，名字在提示里；F 不再是底部的一句提示，挪成了「找」那一行最右的一颗键
-    const icons = ["聊天", "ash 助手", /^配色：/u, "收起侧边栏"].map(name => geometry.children.find(child =>
+    const icons = ["聊天", "Navi 助手", /^配色：/u, "收起侧边栏"].map(name => geometry.children.find(child =>
       typeof name === "string" ? child.label === name : name.test(child.label ?? "")));
     assert.ok(icons.every(Boolean), `${width}px footer keeps chat, assistant, theme and collapse: ${JSON.stringify(geometry)}`);
     assert.ok(icons.every(icon => icon.text === "" && Math.abs(icon.width - 28) < 0.5), `${width}px footer icons carry no text: ${JSON.stringify(icons)}`);
@@ -204,16 +204,16 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.equal(assistantAppearance.background, "rgba(0, 0, 0, 0)", "assistant entry has no separate background");
   assert.ok(assistantAppearance.height <= baselineHeight, `assistant button does not increase footer height: ${JSON.stringify(assistantAppearance)}`);
   await footerAssistant.hover();
-  await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).waitFor();
+  await page.getByRole("tooltip").filter({ hasText: "Navi 助手" }).waitFor();
   assert.equal(await page.getByRole("tooltip").count(), 1, "hovering assistant shows exactly one tooltip");
-  let tip = await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).boundingBox();
+  let tip = await page.getByRole("tooltip").filter({ hasText: "Navi 助手" }).boundingBox();
   assert.ok(tip && tip.x >= 0 && tip.y >= 0 && tip.x + tip.width <= 1200 && tip.y + tip.height <= 820, "hover tooltip stays in viewport");
   await page.locator(".workspace-main").hover();
   await page.locator(".workspace-main").click();
   await page.getByRole("tooltip").waitFor({ state: "detached" });
   await tabTo(footerAssistant, "the assistant entry");
-  await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).waitFor();
-  tip = await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).boundingBox();
+  await page.getByRole("tooltip").filter({ hasText: "Navi 助手" }).waitFor();
+  tip = await page.getByRole("tooltip").filter({ hasText: "Navi 助手" }).boundingBox();
   assert.ok(tip && tip.y >= 0, "focus tooltip stays above the footer without clipping");
 
   const objective = page.getByRole("textbox", { name: "任务目标" });
@@ -242,7 +242,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   };
 
   await footerAssistant.click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u);
   assert.equal(await footerAssistant.getAttribute("aria-pressed"), "true", "footer entry reflects assistant view");
   await page.getByRole("button", { name: "关闭助手" }).click();
@@ -251,8 +251,8 @@ export async function checkAssistantEntry(page, fixtureUrl) {
 
   await page.getByRole("button", { name: "聊天", exact: true }).first().click();
   await page.getByRole("region", { name: "聊天模式" }).waitFor();
-  await page.getByRole("button", { name: "ash 助手" }).last().click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("button", { name: "Navi 助手" }).last().click();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.match(page.url(), /[?&]from=chat(?:&|$)/u);
   await page.getByRole("button", { name: "关闭助手" }).click();
   await page.getByRole("region", { name: "聊天模式" }).waitFor();
@@ -260,7 +260,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
 
   await page.getByRole("button", { name: "返回工作区" }).click();
   await footerAssistant.click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   const workspaceNoteId = await convertNewNote("从工作区助手转来的随手记");
   assert.match(page.url(), /[?&]view=create(?:&|$)/u, "workspace assistant note conversion opens composer immediately");
   assert.equal(await objective.inputValue(), "从工作区助手转来的随手记");
@@ -274,31 +274,31 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await page.locator(".task-composer-panel.is-home").waitFor();
   await page.getByRole("button", { name: "新建任务" }).click();
   await objective.waitFor();
-  await page.getByRole("tab", { name: "团队", exact: true }).click();
-  await objective.fill("保留这份团队任务草稿");
+  await objective.fill("保留这份任务草稿");
   await footerAssistant.click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.match(page.url(), /[?&]from=composer(?:&|$)/u, "assistant URL records its composer origin");
-  assert.match(page.url(), /[?&]mode=team(?:&|$)/u, "assistant URL records the composer mode");
+  assert.doesNotMatch(page.url(), /[?&]mode=/u, "新建只有一种任务，URL 不再记模式");
   await page.getByRole("button", { name: "关闭助手" }).click();
   await objective.waitFor();
-  assert.equal(await objective.inputValue(), "保留这份团队任务草稿", "composer draft survives an assistant round trip");
-  assert.equal(await page.getByRole("tab", { name: "团队", exact: true }).getAttribute("aria-selected"), "true",
-    "composer mode survives an assistant round trip");
-  await footerAssistant.click();
-  await page.reload();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
-  await page.getByRole("button", { name: "关闭助手" }).click();
-  await objective.waitFor();
-  assert.equal(await page.getByRole("tab", { name: "团队", exact: true }).getAttribute("aria-selected"), "true",
-    "composer mode survives an assistant page reload");
-  await page.getByRole("tab", { name: "团队", exact: true }).click();
-  await objective.fill("原有的团队草稿");
+  assert.equal(await objective.inputValue(), "保留这份任务草稿", "composer draft survives an assistant round trip");
+  // 老链接还带着 `mode=team` / `mode=duet`：一律打开普通的新建框，没有模式那一排。（草稿库只活在这一次会话里，
+  // 刷新即清空，跟回复框一致——同一次会话里正文按项目存、不按模式存，换不换模式都是同一份。）
+  for (const mode of ["team", "duet"]) {
+    const legacy = new URL(page.url());
+    legacy.searchParams.delete("from");
+    legacy.searchParams.set("view", "create");
+    legacy.searchParams.set("mode", mode);
+    await page.goto(legacy.toString());
+    await objective.waitFor();
+    assert.equal(await page.getByRole("tablist", { name: "任务模式" }).count(), 0, `老链接 mode=${mode} 不再出模式那一排`);
+    assert.doesNotMatch(page.url(), /[?&]mode=/u, `老链接 mode=${mode} 打开后 URL 不再带模式`);
+  }
+  await objective.fill("原有的任务草稿");
   await footerAssistant.click();
   const composerNoteId = await convertNewNote("从原新建任务来源的助手转来的随手记");
   assert.match(page.url(), /[?&]view=create(?:&|$)/u);
-  assert.match(page.url(), /[?&]mode=single(?:&|$)/u, "note conversion switches directly to single-task composer");
-  const mergedNoteDraft = "从原新建任务来源的助手转来的随手记\n\n原有的团队草稿";
+  const mergedNoteDraft = "从原新建任务来源的助手转来的随手记\n\n原有的任务草稿";
   assert.equal(await objective.inputValue(), mergedNoteDraft, "converted note seed and existing composer draft are both retained");
   await footerAssistant.click();
   await page.getByRole("button", { name: "关闭助手" }).click();
@@ -321,11 +321,11 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await page.getByRole("button", { name: "收起侧边栏" }).click();
   const collapsed = page.getByRole("complementary", { name: "已收起的侧边栏" });
   assert.equal(await collapsed.getByRole("button", { name: "聊天" }).count(), 0, "collapsed sidebar has no chat-shaped duplicate");
-  assert.equal(await collapsed.getByRole("button", { name: "ash 助手" }).count(), 1, "collapsed sidebar keeps one assistant entry");
+  assert.equal(await collapsed.getByRole("button", { name: "Navi 助手" }).count(), 1, "collapsed sidebar keeps one assistant entry");
   assert.equal(await collapsed.getByRole("status").count(), 0, "collapsed sidebar lights no connection dot");
-  const collapsedAssistant = collapsed.getByRole("button", { name: "ash 助手" });
+  const collapsedAssistant = collapsed.getByRole("button", { name: "Navi 助手" });
   await collapsedAssistant.click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u, "collapsed assistant entry opens AssistantView directly");
   assert.doesNotMatch(page.url(), /[?&]from=chat(?:&|$)/u, "collapsed footer entry uses the workspace return path");
 
@@ -334,9 +334,9 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await page.getByRole("heading", { name: "还没有可用项目" }).waitFor();
   const emptyCollapsed = page.getByRole("complementary", { name: "已收起的侧边栏" });
   assert.equal(await emptyCollapsed.getByRole("button", { name: "聊天" }).count(), 0);
-  assert.equal(await emptyCollapsed.getByRole("button", { name: "ash 助手" }).count(), 1);
-  await emptyCollapsed.getByRole("button", { name: "ash 助手" }).click();
-  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  assert.equal(await emptyCollapsed.getByRole("button", { name: "Navi 助手" }).count(), 1);
+  await emptyCollapsed.getByRole("button", { name: "Navi 助手" }).click();
+  await page.getByRole("region", { name: "Navi 助手" }).waitFor();
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u, "no-project assistant fallback opens directly");
   } finally {
     await configureProjects({ empty: false }).catch(() => {});

@@ -1,4 +1,4 @@
-import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
+import type { ChatMember, ChatRoom, ChatSnapshot } from "@navi/shared/chat";
 import { request } from "../lib/apiClient.ts";
 
 const json = (body: unknown, method = "POST"): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -14,7 +14,7 @@ export const chatApi = {
   send: (roomId: string, body: string, id: string, projectId?: string, attachments?: string[]) => request<ChatSnapshot>(`/chats/${roomId}/messages`, json({ body, id, projectId, attachments })),
   stop: (roomId: string) => request<ChatSnapshot>(`/chats/${roomId}/stop`, json({})),
   assistants: (projectId: string) => request<ChatRoom[]>(`/chats?kind=assistant&projectId=${encodeURIComponent(projectId)}`),
-  createAssistant: (projectId: string, member: ChatMember, name = "ash 助手") => request<ChatRoom>("/chats", json({ projectId, name, members: [member], kind: "assistant" })),
+  createAssistant: (projectId: string, member: ChatMember, name = "Navi 助手") => request<ChatRoom>("/chats", json({ projectId, name, members: [member], kind: "assistant" })),
   forward: (roomId: string, messageId: string) => request<ChatSnapshot>(`/chats/${roomId}/messages/${messageId}/forward`, json({})),
   saveWorkflow: (roomId: string, messageId: string) => request<ChatSnapshot>(`/chats/${roomId}/messages/${messageId}/workflow`, json({})),
 };

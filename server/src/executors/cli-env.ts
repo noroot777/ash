@@ -4,11 +4,11 @@ import {
   cliConfigOverrideEnv,
   cliConfigOverrideEnvPrefix,
   type CliHostEnv,
-} from "@ash/shared/cli-overrides";
-import { type CompactSnapshot, compactSnapshotFromEnv, UNKNOWN_COMPACT_SNAPSHOT } from "@ash/shared/usage";
+} from "@navi/shared/cli-overrides";
+import { type CompactSnapshot, compactSnapshotFromEnv, UNKNOWN_COMPACT_SNAPSHOT } from "@navi/shared/usage";
 import { type ClaudeCompactFacts, type ClaudeConfigDir, claudeCompactFacts } from "./claude-settings.js";
 
-// ash 起 CLI 时,那个子进程会看到的环境事实。**只读**,不是配置项 —— 它由 ash
+// navi 起 CLI 时,那个子进程会看到的环境事实。**只读**,不是配置项 —— 它由 navi
 // 自己的启动环境**和用户自己的 claude 配置文件**共同决定。
 //
 // 为什么要单拎出来:覆盖项里那个百分比要换算成 claude 认的「占有效窗口的比例」,而有效
@@ -33,14 +33,14 @@ export function hostEnvOf(facts: ClaudeCompactFacts): CliHostEnv {
 /**
  * 这次起跑 claude **最终**按什么压缩,解成启动快照(带来源标记落库,见 shared CompactSnapshot)。
  *
- * 快照必须覆盖 CLI 会消费的**每一个**压缩输入,不能只看 ash 注入了什么(审查 SaouXWB_jEuw F1),
+ * 快照必须覆盖 CLI 会消费的**每一个**压缩输入,不能只看 navi 注入了什么(审查 SaouXWB_jEuw F1),
  * 而且各层配置要按**这次起跑的配置目录**读(同一轮 F1 第 2 轮),跟 env()/settingsPayload() 用
  * 同一次读取的结果(claudeCompactFacts,审查 rGyEqSY4VO6F N1):
- *   · 配了窗口:ash 的 `--settings` 压过项目/用户各层;留空的百分比由 CLI 自己从下层继承,快照把
+ *   · 配了窗口:navi 的 `--settings` 压过项目/用户各层;留空的百分比由 CLI 自己从下层继承,快照把
  *     同一个继承值记下来(只记,不往 CLI 里钉 —— 钉了就是替用户改配置);
- *   · 没配窗口:ash 一个字都不注入,项目/用户层要是碰过任一压缩输入,CLI 就按它们走 —— 判不全,标「不知道」;
+ *   · 没配窗口:navi 一个字都不注入,项目/用户层要是碰过任一压缩输入,CLI 就按它们走 —— 判不全,标「不知道」;
  *   · 额外参数(profile 的 + 本次调用的,跟 buildArgs 拼进命令的是同一份)另带 `--settings`:整份顶掉
- *     ash 那份(cliConfigOverrideConflict),「不知道」;
+ *     navi 那份(cliConfigOverrideConflict),「不知道」;
  *   · `--setting-sources` 筛掉某几层、企业策略层碰过压缩输入:继承的那部分判不全,「不知道」。这条判据
  *     在 shared claudeCompactionUnprovable,设置页与会话压缩设置的预览用的是同一个(审查 7pDLIAokZRHH)。
  */

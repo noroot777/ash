@@ -7,9 +7,8 @@
 // 从 `free-workflow.ts` 切出来的原因：那份文件已经贴着 700 行上限，而重跑审查回合需要
 // 复用 launchReviewRound/failReviewStart 这一组。依赖是单向的（free-workflow.ts →
 // 本文件），`task-retry-turn.ts` 直接从这里取重跑入口，不用绕回去。
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import { and, desc, eq } from "drizzle-orm";
-import { gateAshMcpBeforeLaunch } from "./ash-mcp-launch-gate.js";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, projects, regressionEvidence, sessions, tasks } from "./db/schema.js";
@@ -35,7 +34,7 @@ import { taskWorkspace } from "./task-workspace.js";
 import { turnProducedWork } from "./transcript.js";
 import { id, now } from "./util.js";
 import { workspaceSnapshot } from "./workspace-fingerprint.js";
-import { UNKNOWN_FINGERPRINT } from "@ash/shared/free-workflow";
+import { UNKNOWN_FINGERPRINT } from "@navi/shared/free-workflow";
 
 type TaskRow = typeof tasks.$inferSelect;
 export type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
@@ -141,7 +140,7 @@ export async function stopReviewRunMonitors(
     .then(({ stopMonitorsForReviewRun }) => stopMonitorsForReviewRun(runId, reason, owner))
     .catch((error) => {
       if (strict) throw error;
-      console.error(`[ash] stopMonitorsForReviewRun(${runId}) failed:`, error);
+      console.error(`[navi] stopMonitorsForReviewRun(${runId}) failed:`, error);
       return 0;
     });
 }
@@ -221,7 +220,7 @@ async function failReviewStartHeld(
     return true;
   }, { behavior: "immediate" });
   if (!settled) {
-    console.error(`[ash] 迟到的审查启动失败不落账 run=${run.id} round=${run.currentRound}`
+    console.error(`[navi] 迟到的审查启动失败不落账 run=${run.id} round=${run.currentRound}`
       + `（这一轮已有结论，或者已经被重跑成另一次，或者被拒收的那次输入已经不是这一轮当前的输入）：${message}`);
     return;
   }
@@ -238,9 +237,6 @@ async function failReviewStartHeld(
   bus.publish({ type: "task.review", taskId: run.taskId });
 }
 
-
-// 预检的候选目录超集挪到了 `ash-mcp-launch-gate.ts`（验证轮、辩论也要用）；这里留一个转出口。
-export { reviewCwdCandidates, type ReviewCwdSession } from "./ash-mcp-launch-gate.js";
 
 /**
  * 崩掉的那一轮能不能**从中断处接着做**：那条 CLI 会话在崩掉的那一回合里干过活吗。
@@ -286,7 +282,7 @@ export async function launchReviewRound(
     // (公开 reviewing 那一笔、清预约、写时间线),中途完全可以有一次重跑把它定向撤销掉
     // (`supersedeReviewDispatch`)。不核就会以作废的身份往下准备、排队,而真正的现任在办同一轮。
     if (!reviewDispatchOwned(run.id, run.currentRound, claimToken)) {
-      console.error(`[ash] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：手里这张认领证已经被撤销（这一轮期间被重跑成另一次）`);
+      console.error(`[navi] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：手里这张认领证已经被撤销（这一轮期间被重跑成另一次）`);
       return { resumed: false, dispatched: false };
     }
   }
@@ -297,13 +293,12 @@ export async function launchReviewRound(
     // **库里那一行才是权威**(文件头 ⑫):内存认领只能证明「本进程此刻没有第二个人在办」。
     const evidence = await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
     if (evidence.generation !== generation) {
-      console.error(`[ash] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：准备期间这一轮被重跑成另一次`);
+      console.error(`[navi] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：准备期间这一轮被重跑成另一次`);
       return { resumed: false, dispatched: false };
     }
   }
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   let cwd: string | undefined;
-  let workspacePath: string | undefined;
   // 锚定本轮结论的基准：审查启动时工作区的 HEAD 与内容指纹。之后代码变没变、结论新不新鲜，
   // 全靠它跟当前工作区比（`reviewAnchorMatches`），不靠任何状态字段。取不到（工作区缺失）就留 null。
   if (run.targetKind === "accepted_merge") {
@@ -313,26 +308,12 @@ export async function launchReviewRound(
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
   } else if (project) {
     const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
-    workspacePath = workspace?.path;
     const anchor = workspace ? await workspaceSnapshot(workspace.path, { verify: true }) : null;
     if (anchor?.head) {
       await db.update(freeReviewRounds).set({ reviewedCommit: anchor.head, reviewedFingerprint: anchor.fingerprint ?? UNKNOWN_FINGERPRINT })
         .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
     }
   }
-  // 审查者交卷靠 ash MCP 的 report_stage，而那条登记在**它自己的 CLI 配置里**，ash 只能
-  // 问、不能替它注入。缺了的话这一轮会完整跑完、报告也写得好好的，最后一步才发现没有
-  // 工具可调 —— 一轮审查动辄几十分钟、几百万 token（2026-10-28 现场）。所以在这儿拦，
-  // 抛出去由三个调用点统一走 failReviewStart。验证轮、辩论走的是同一道闸（ash-mcp-launch-gate.ts）。
-  //
-  // **排在 cwd 算出来之后**：claude 的项目级登记（`--scope local`）只在那个目录下看得见，
-  // 在它之前问等于拿「别的目录没有」去拦这一轮（第 1 轮审查 F1）。只传单个 `cwd` 不够 ——
-  // 普通工作区分支的 `cwd` 一直是 undefined，于是预检在 **server 进程**的目录里问，
-  // 任务目录里接好的 claude 被判成没登记（第 2 位审查者 F1），所以闸那边按超集问。
-  await gateAshMcpBeforeLaunch(task, { agentType: run.agentType, executorId: run.executorId }, "审查者", {
-    cwd,
-    workspacePath,
-  });
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
   // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
   // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。
@@ -502,7 +483,7 @@ export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void>
   const claimToken = claimReviewDispatch(run.id, round, generation);
   if (!claimToken) {
     // 这一轮已经有人在办(并发入口撞上了):一个字都不写、也不落终态,那一次会把它办完。
-    console.error(`[ash] 自由工作流第 ${round} 轮让出 run=${run.id}：这一轮已经有在途派发`);
+    console.error(`[navi] 自由工作流第 ${round} 轮让出 run=${run.id}：这一轮已经有在途派发`);
     return;
   }
   let handed = false;

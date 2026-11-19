@@ -7,12 +7,16 @@
 //
 // 不碰 codex-events.jsonl / stderr.log：它们是失败取证的现场，按「任务了结 + 宽限期」
 // 回收，规则在 run-retention.ts。
+import { readEnv } from "@navi/shared/env-names";
 import { readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
+import {
+  CONTROL_FIFO_SUFFIX, controlFifoPath, removeIdleControlFifos, restoreAbandonedRetirements,
+} from "./executors/control-fifo.js";
 
 // 只认这三种后缀 —— 白名单而不是黑名单：这个目录里还躺着 .md 正文、审查证据、
 // 用户上传的图片，误删任何一样都是不可逆的。
@@ -24,10 +28,13 @@ const MONITOR_PREFIX = "monitor-";
 const MONITOR_SUFFIX = ".log";
 
 // 默认保留一天。跑完就没用了，留一天纯粹是给「任务刚挂、想翻原始输出查一眼」
-// 留窗口。ASH_RUNLOG_KEEP_H 可调，0 = 结束即删。
-const KEEP_HOURS = Number(process.env.ASH_RUNLOG_KEEP_H ?? 24);
+// 留窗口。NAVI_RUNLOG_KEEP_H 可调，0 = 结束即删。
+const KEEP_HOURS = Number(readEnv(process.env, "NAVI_RUNLOG_KEEP_H") ?? 24);
 
-export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }> {
+// 可引导回合的 stdin 具名管道（executors/control-fifo.ts）不看年龄：根一走它就没用了，正常
+// 情况下根退出时已经收掉；这里扫的是上一辈子没来得及收的。删不删只听「此刻有没有人开着」。
+// 上一辈子收到一半（挪开了还没定论）就死掉的，先放回原名再一起判。
+export async function sweepRunLogs(): Promise<{ removed: number; bytes: number; fifos: number }> {
   const cutoff = Date.now() - KEEP_HOURS * 3600_000;
 
   // 正在被使用的那几个绝不能删：有 agent_pid 且这一轮还没结束 = 此刻可能正有
@@ -37,6 +44,7 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
   for (const s of await db.select().from(sessions).where(isNull(sessions.endedAt))) {
     if (!s.agentPid) continue;
     for (const p of [s.agentOutPath, s.agentErrPath, s.agentRcPath]) if (p) live.add(p);
+    if (s.agentRcPath) live.add(controlFifoPath(s.agentRcPath));
   }
   // 还在盯的哨兵同理：它的进程此刻正往这个文件里写，tail 也正从里面读。
   for (const m of await db.select({ logPath: monitors.logPath }).from(monitors).where(eq(monitors.status, "running"))) {
@@ -45,11 +53,12 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
 
   let removed = 0;
   let bytes = 0;
+  const fifoPaths: string[] = [];
   let taskDirs: string[];
   try {
     taskDirs = readdirSync(RUNS_DIR);
   } catch {
-    return { removed, bytes }; // 还没有 runs 目录
+    return { removed, bytes, fifos: 0 }; // 还没有 runs 目录
   }
   for (const taskId of taskDirs) {
     const dir = join(RUNS_DIR, taskId);
@@ -60,7 +69,15 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
     } catch {
       continue;
     }
+    for (const path of restoreAbandonedRetirements(dir, entries)) {
+      if (!live.has(path)) fifoPaths.push(path);
+    }
     for (const name of entries) {
+      if (name.endsWith(CONTROL_FIFO_SUFFIX)) {
+        const full = join(dir, name);
+        if (!live.has(full)) fifoPaths.push(full);
+        continue;
+      }
       const isMonitorLog = name.startsWith(MONITOR_PREFIX) && name.endsWith(MONITOR_SUFFIX);
       if (!isMonitorLog && !SUFFIXES.some((sfx) => name.endsWith(sfx))) continue;
       const full = join(dir, name);
@@ -76,5 +93,7 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
       }
     }
   }
-  return { removed, bytes };
+  const swept = await removeIdleControlFifos(fifoPaths);
+  const fifos = [...swept.values()].filter((result) => result === "removed").length;
+  return { removed, bytes, fifos };
 }

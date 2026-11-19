@@ -38,7 +38,7 @@ import { CLOCK_SLACK_MS, birthOf, environmentHasMarker, instanceVerdict, process
 // 环境把 `/tmp/check-ABC` 那一域的标记整段包住 —— 它被当成域内进程认领,随后被那一域的
 // `stop()` 终止。临时目录名带后缀是常态,这不是巧合输入。
 {
-  const marker = "ASH_TEST_PROCESS_SCOPE=/tmp/check-ABC";
+  const marker = "NAVI_TEST_PROCESS_SCOPE=/tmp/check-ABC";
   for (const [segment, why] of [
     [` ${marker}`, "段尾收口"],
     [` ${marker} OTHER=1`, "后面还有别的变量"],
@@ -55,10 +55,9 @@ import { CLOCK_SLACK_MS, birthOf, environmentHasMarker, instanceVerdict, process
   ]) assert.equal(environmentHasMarker(segment, marker), false, `这不算有这个变量:${why}`);
   assert.equal(environmentHasMarker(` ${marker}`, ""), false, "没有标记就不认领任何东西");
   // **残留,如实记下来**:`ps -E` 把环境块按空格拼成一行,而变量值本身可以带空格 —— 所以
-  // 「另一个变量的值里原样嵌着『空格 + 我这一整段 + 空格』」这一种切不开,这个判据认得出它。
+  // 「另一个变量的值里原样嵌着『空格 + 我这一整段 + 空格』」这一种切不开,这个判据会认错。
   // 那需要有人把本域的随机临时目录名专门拼进去(理由与上界见 `environmentHasMarker`)。
-  assert.equal(environmentHasMarker(` OTHER=x ${marker} y`, marker), true,
-    "已知残留:值里嵌着空格收口的那一段,文本判据分不出来");
+  // 这里不对它下断言:认错不是谁该依赖的行为,判据哪天变准了不该因此红。
   console.log("✓ 环境段:前缀/后缀碰撞都不算有这个变量(F4 那一条当场被拦),残留只剩值里嵌空格那一种");
 }
 

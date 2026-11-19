@@ -1,6 +1,6 @@
-import { isUserFollowUp } from "@ash/shared";
-import type { TaskCreationOrigin } from "@ash/shared/task-origin";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import { isUserFollowUp } from "@navi/shared";
+import type { TaskCreationOrigin } from "@navi/shared/task-origin";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import { attachmentView, parseAttachmentText } from "./utils.ts";
 
 /**
@@ -17,6 +17,12 @@ export type ConversationInput = {
   text: string;
   attachments: string[];
   at?: string;
+  /**
+   * 这句话在哪条会话的第几段（气泡的落盘出处）。R 键那张「我说过的话」靠它认出要落到哪一颗：
+   * 服务端给的也是这一对（shared/user-messages）。实时到达、还没落盘的那几句没有。
+   */
+  source?: { sessionId: string; index: number };
+  sessionId?: string;
 };
 
 /**
@@ -47,6 +53,8 @@ type InputSource = {
   attachments?: readonly string[];
   at?: string | null;
   bySystem?: boolean;
+  sessionId?: string;
+  sources?: readonly { sessionId: string; index?: number }[];
 };
 
 function displayed(raw: string, extra: readonly string[] = []): { text: string; attachments: string[] } {
@@ -71,7 +79,14 @@ export function conversationInputs(
   for (const item of items) {
     if (!isUserFollowUp({ kind: item.kind, text: item.text, bySystem: item.bySystem })) continue;
     const shown = displayed(item.text ?? "", item.attachments ?? []);
-    inputs.push({ id: item.id, ...shown, ...(item.at ? { at: item.at } : {}) });
+    const source = item.sources?.find((candidate) => typeof candidate.index === "number");
+    inputs.push({
+      id: item.id,
+      ...shown,
+      ...(item.at ? { at: item.at } : {}),
+      ...(source?.index !== undefined ? { source: { sessionId: source.sessionId, index: source.index } } : {}),
+      ...(item.sessionId ? { sessionId: item.sessionId } : {}),
+    });
   }
   return inputs;
 }

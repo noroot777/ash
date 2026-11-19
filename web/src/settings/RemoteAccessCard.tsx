@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowClockwise, Check, Eye, EyeSlash, Prohibit, QrCode as QrCodeIcon, SignOut, Trash } from "@phosphor-icons/react";
-import type { PairCode, RemoteAccessView, RemoteDeviceView, RemoteDeviceVia } from "@ash/shared";
+import type { PairCode, RemoteAccessView, RemoteDeviceView, RemoteDeviceVia } from "@navi/shared";
 import { Button, StatusChip } from "../components/ui.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { QrCode } from "../components/QrCode.tsx";
@@ -16,11 +16,11 @@ const VIA_LABEL: Record<RemoteDeviceVia, string> = {
   key: "凭访问密钥加入",
 };
 
-// 自用模式的「远程访问」:哪些设备能从别处连进这台 ash(判据在 server 的
+// 自用模式的「远程访问」:哪些设备能从别处连进这台 navi(判据在 server 的
 // auth/remote-access.ts)。从上到下:等着点头的申请 → 已经放进来的设备 → 再放一台 →
 // 给脚本用的访问密钥。
 //
-// 最后一行只在 **ash 所在的那台机器上**打开时才有:连进来的设备能放别的设备、能请别的
+// 最后一行只在 **navi 所在的那台机器上**打开时才有:连进来的设备能放别的设备、能请别的
 // 设备出去(它本来就开得了终端),但读不到那把长期密钥。
 export function RemoteAccessCard({ notify }: { notify: (message: string) => void }) {
   const [view, setView] = useState<RemoteAccessView | null>(null);
@@ -96,7 +96,7 @@ export function RemoteAccessCard({ notify }: { notify: (message: string) => void
   const decide = (requestId: string, name: string, decision: "approve" | "deny") => act(async () => {
     try {
       await authApi.decidePair(requestId, decision);
-      notify(decision === "approve" ? `「${name}」可以用这台 ash 了` : "已拒绝");
+      notify(decision === "approve" ? `「${name}」可以用这台 Navi 了` : "已拒绝");
     } finally {
       window.dispatchEvent(new Event(PAIR_REQUESTS_CHANGED_EVENT));
     }
@@ -120,7 +120,7 @@ export function RemoteAccessCard({ notify }: { notify: (message: string) => void
         {view.requests.map((request) => (
           <div className="settings-row" key={request.id}>
             <div>
-              <b>「{request.name}」想连接这台 ash</b>
+              <b>「{request.name}」想连接这台 Navi</b>
               <small>
                 它屏幕上的配对码应为 <b className="pair-code">{request.code}</b> · 来自 {request.address}
               </small>
@@ -156,7 +156,7 @@ export function RemoteAccessCard({ notify }: { notify: (message: string) => void
         <div className="settings-row">
           <div>
             <b>添加设备</b>
-            <small>在那台设备上打开这台 ash 的地址，回到这里点「允许」。手机可以直接扫码。</small>
+            <small>在那台设备上打开这台 Navi 的地址，回到这里点「允许」。手机可以直接扫码。</small>
           </div>
           <Button variant="secondary" disabled={busy} aria-expanded={adding !== null} onClick={toggleAdding}>
             <QrCodeIcon size={13} aria-hidden="true" />{adding ? "收起" : "扫码添加"}

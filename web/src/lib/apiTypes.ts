@@ -10,15 +10,15 @@ import type {
   TaskWorkspaceLeftover,
   TokenUsage,
   UsageAccountingMark,
-} from "@ash/shared";
+} from "@navi/shared";
 import type { ScmChange, ScmDiffSource } from "./apiTypes.scm.ts";
-import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
+import type { AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 
 export type ChildWorkspaceLeftover = TaskWorkspaceLeftover & { taskId: string; title?: string };
 
 /**
  * server 跑在哪台机器上（`GET /api/host`）。路径提示一律按它给 —— 浏览器所在的系统
- * 不算数：用 Windows 上的浏览器连 mac 上的 ash 是正常用法，项目目录在服务端。
+ * 不算数：用 Windows 上的浏览器连 mac 上的 navi 是正常用法，项目目录在服务端。
  */
 export type HostInfo = {
   /** `process.platform` 原文，如 `darwin` / `win32` / `linux`。 */
@@ -58,6 +58,11 @@ export type DeleteTaskResult = {
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
 
 export type TaskCommit = { sha: string; subject: string; at: string };
+/**
+ * 任务自己的提交。`commits` 只列最近的一批，`total` 才是条数——清单被截断时它比 `commits.length` 大。
+ * 数不出来时 `total` 是 null（不是 0），原因在 `reason`（码表同 diff，见 branch-diff-reason.ts）。
+ */
+export type TaskCommitList = { branch: string | null; commits: TaskCommit[]; total: number | null; reason?: string };
 
 export type RemoteTaskSnapshot = {
   task: Task;
@@ -73,13 +78,14 @@ export type SessionTraceEntry = {
   /** 这条记录在会话里的号（同 shared/src/session-output.ts 的 RecordIdentity）。老记录、读侧补出来的没有。 */
   seq?: number;
   /** 这一步落在正文的哪个位置（同 shared/src/session-output.ts 的 TextAnchor）。带号的才有。 */
-  textAt?: import("@ash/shared/session-output").TextAnchor | null;
+  textAt?: import("@navi/shared/session-output").TextAnchor | null;
   /** 服务端**读的时候**补出来的（盘上没有）：图片账本补回的图、子智能体的模型档案。删除指纹不数它们。 */
   origin?: "journal" | "models";
   event:
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
-    | Extract<import("@ash/shared").AgentEvent, { kind: "tool" }>
+    | Extract<import("@navi/shared").AgentEvent, { kind: "plan" }>
+    | Extract<import("@navi/shared").AgentEvent, { kind: "tool" }>
     // source/ref/path:一处正文引用的保存结果(见 shared/src/events.ts)。配对靠 source+ref,
     // 不靠文件名;path 缺省 = 这处引用确实没有副本,`lost: true` 进一步说明「字节当时读到了、
     // 写盘失败了」—— 那一处只能作废,不能拿现在的文件顶上。`pos` 是这处引用的文档节点身份
@@ -421,7 +427,7 @@ export type AcceptTaskFailure = {
   taskId: string;
   reason: string;
   error: string;
-  verification?: import("@ash/shared/workflow-policy").UnexecutedVerification;
+  verification?: import("@navi/shared/workflow-policy").UnexecutedVerification;
   confirmationRequired?: "confirmUnverified";
   completedMerge?: { targetBranch: string; commit: string | null };
   completedTag?: string;
@@ -442,14 +448,14 @@ export type AcceptTaskFailure = {
   warnings?: AcceptTaskWarning[];
   conflictHandoff?: { notified: boolean; message: string };
   /** 验收前置命令那三种失败（accept_gate_required/running/failed）带回来的现场。 */
-  gate?: import("@ash/shared/accept-gate").AcceptGateView;
+  gate?: import("@navi/shared/accept-gate").AcceptGateView;
 };
 
 export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;
 
 // 门禁那一份状态的形状住在 shared/src/accept-gate.ts：它跟 AcceptGateView、凭据语义
 // （basis）是同一件事的几个面，分开写迟早会漂。这里只把它接到 api 的类型面上。
-export type { AcceptGateBasis, AcceptGateBasisMode, AcceptGateState } from "@ash/shared/accept-gate";
+export type { AcceptGateBasis, AcceptGateBasisMode, AcceptGateState } from "@navi/shared/accept-gate";
 
 // 人工强制通过一站「自动验证」之后的落点：签字之后线可能停在下一道关口、又开了一轮
 // 验证、也可能直接合并完了，所以回的是**推进之后**的游标与验收阶段。

@@ -22,7 +22,7 @@ import { freeReviewRounds, freeReviewRuns } from "./db/schema.js";
 import { freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { readConclusion, readReport, reviewRoundDir } from "./review-evidence.js";
 import { chainSequence, findingRefBase } from "./review-recurrence-refs.js";
-import { RECURRENCE_HINT } from "@ash/shared/free-workflow";
+import { RECURRENCE_HINT } from "@navi/shared/free-workflow";
 import { join } from "node:path";
 import { fromMarkdown } from "mdast-util-from-markdown";
 

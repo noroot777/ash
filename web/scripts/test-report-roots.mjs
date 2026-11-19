@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 
 // markdownPolicy 用 window.location.origin 判同源（站内地址才给灯箱/证据接口）。
-globalThis.window = { location: { origin: "https://ash.local" } };
+globalThis.window = { location: { origin: "https://navi.local" } };
 const policy = await import("../src/components/markdownPolicy.ts");
 const { reportFileResolver, siblingResolverForUrl, reviewFileTarget } = policy;
 
@@ -69,13 +69,13 @@ assert.equal(reportFileResolver(urlFor)("/Users/fjh/x.png"), null);
 // 指的是 `notes/shot.png`。丢掉这一层的那一版会把证据根下同名的另一张图端上来（R3 第 4 条
 // 实测：弹窗里显示的是根目录那张蓝图，而正文说的是子目录那张红图）。
 const nested = siblingResolverForUrl("/api/tasks/T1/review/file?round=2&name=notes%2Fsupplement.md");
-assert.equal(nested?.("shot.png")?.url, "https://ash.local/api/tasks/T1/review/file?round=2&name=notes%2Fshot.png");
-assert.equal(nested?.("shots/deep.png")?.url, "https://ash.local/api/tasks/T1/review/file?round=2&name=notes%2Fshots%2Fdeep.png");
+assert.equal(nested?.("shot.png")?.url, "https://navi.local/api/tasks/T1/review/file?round=2&name=notes%2Fshot.png");
+assert.equal(nested?.("shots/deep.png")?.url, "https://navi.local/api/tasks/T1/review/file?round=2&name=notes%2Fshots%2Fdeep.png");
 // 根目录下的报告仍解在根上；自由工作流那条路径一样（run/round 原样留着）。
 const flat = siblingResolverForUrl("/api/tasks/T1/free-workflow/review-file?run=R1&round=3&name=report.md");
 assert.equal(
   flat?.("shot.png")?.url,
-  "https://ash.local/api/tasks/T1/free-workflow/review-file?run=R1&round=3&name=shot.png",
+  "https://navi.local/api/tasks/T1/free-workflow/review-file?run=R1&round=3&name=shot.png",
 );
 // 报告弹窗手上只有报告自己的地址，任务 id 从那个地址里取 —— 绝对路径那一档不能因此丢掉。
 assert.match(nested?.("/Users/fjh/x.png")?.url ?? "", /\/api\/tasks\/T1\/file\/raw\?path=/);
@@ -85,7 +85,7 @@ assert.match(nested?.("/Users/fjh/x.png")?.url ?? "", /\/api\/tasks\/T1\/file\/r
 const escaped = siblingResolverForUrl("/api/tasks/T1/review/file?round=2&name=notes%2520raw%2Fsupplement.md");
 assert.equal(
   escaped?.("shot.png")?.url,
-  "https://ash.local/api/tasks/T1/review/file?round=2&name=notes%2520raw%2Fshot.png",
+  "https://navi.local/api/tasks/T1/review/file?round=2&name=notes%2520raw%2Fshot.png",
   "目录名里字面的 %20 必须原样留着",
 );
 
@@ -99,8 +99,5 @@ assert.equal(reviewFileTarget("https://example.invalid/data/runs/T1/review/round
 assert.equal(reviewFileTarget("//cdn.example.invalid/data/runs/T1/review/round-2/shot.png"), null);
 assert.ok(reviewFileTarget("/Users/fjh/code/harness/data/runs/T1/review/round-2/shot.png"));
 assert.ok(reviewFileTarget("file:///Users/fjh/code/harness/data/runs/T1/review/round-2/shot.png"));
-
-// ⑥ 清单那条路连函数都不该剩下：留着就会有人再拿「清单里有没有它」当归属判据。
-assert.equal(policy.evidenceListingUrl, undefined, "清单地址推导已撤");
 
 console.log("报告文档根归属回归通过");
