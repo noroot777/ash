@@ -49,8 +49,11 @@ try {
   assert.equal((await startCommand(projectId, temporary, command)).status, 201);
   const sessionId = terminalSessions.listCommandSessions()
     .find((session) => session.projectId === projectId)!.id;
-  // 等启动脚本自己退掉:死局的典型形状是「脚本早退了,账上还挂着没核销的号」。
-  for (let i = 0; i < 200 && terminalSessions.get(sessionId, projectId)?.exitCode === null; i++) await delay(25);
+  // 等启动脚本自己退掉:死局的典型形状是「脚本早退了,账上还挂着没核销的号」。按条件等、上限放宽:
+  // Windows 上冷起一个 PowerShell 要过 Defender,原先 5 秒的上限不够,前提没成立就往下走,红在
+  // 一个看不出原因的 `201 !== 200` 上(2026-11-19 真机)。
+  for (let i = 0; i < 1200 && terminalSessions.get(sessionId, projectId)?.exitCode === null; i++) await delay(25);
+  assert.notEqual(terminalSessions.get(sessionId, projectId)?.exitCode ?? null, null, "夹具前提:启动脚本已经自己退了");
   terminalSessions.oweCommandLeftovers(sessionId, projectId, [strayPid],
     `pid ${strayPid} 核不上归属，一个字都没敢动`);
 

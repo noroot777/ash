@@ -10,10 +10,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { delimiter, dirname, join, sep } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -39,6 +39,7 @@ const serverPkg = JSON.parse(readFileSync(join(serverDir, "package.json"), "utf8
 const declared = [serverPkg.dependencies, serverPkg.optionalDependencies].flatMap((deps) => Object.keys(deps ?? {}));
 const lookup = createRequire(join(serverDir, "package.json")).resolve.paths("x") ?? [];
 const borrowed = join(codeRoot, "node_modules");
+const links: string[] = [];
 for (const name of declared) {
   const home = lookup.map((dir) => join(dir, name)).find((dir) => existsSync(join(dir, "package.json")));
   if (!home) {
@@ -48,17 +49,27 @@ for (const name of declared) {
   }
   mkdirSync(dirname(join(borrowed, name)), { recursive: true });
   symlinkSync(home, join(borrowed, name), "junction");
+  links.push(join(borrowed, name));
 }
 assert.ok(existsSync(join(borrowed, "drizzle-orm", "package.json")), "夹具前提:拷出来的代码树借得到依赖");
 const src = pathToFileURL(join(codeRoot, "server", "src") + sep);
 const mcpEntry = pathToFileURL(join(codeRoot, "mcp", "dist", "index.js"));
+const mcpEntryPath = fileURLToPath(mcpEntry); // 不用 URL 的 pathname:Windows 上那是 `/C:/…`,不是路径
 mkdirSync(dirname(fileURLToPath(mcpEntry)), { recursive: true });
 writeFileSync(mcpEntry, "// 占位：测试只要这个入口存在\n");
 
 function run(home: string, bin: string, body: string): Record<string, unknown> {
   const script = `${body}\nconsole.log("PROBE=" + JSON.stringify(out));`;
+  // 家目录两个名字都给:Windows 上 `homedir()` 认的是 USERPROFILE,只给 HOME 的话它读写的是这台机器
+  // 用户真实的 ~/.claude.json(2026-11-19 真机上就这样读到了真配置)。SystemRoot 是 Windows 上 node
+  // 自己要的(没有它网络、加密那几块起不来),PATH 用平台分隔符拼。
+  const system = process.platform === "win32"
+    ? [join(process.env.SystemRoot ?? "C:\\Windows", "System32")]
+    : ["/usr/bin", "/bin"];
   const env: Record<string, string> = {
-    HOME: home, PATH: `${bin}:/usr/bin:/bin`, NAVI_DATA_DIR: join(home, "data"), NAVI_DB: join(home, "data", "ash.db"),
+    HOME: home, USERPROFILE: home, PATH: [bin, ...system].join(delimiter),
+    NAVI_DATA_DIR: join(home, "data"), NAVI_DB: join(home, "data", "ash.db"),
+    ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
   };
   const stdout = execFileSync(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], { env, encoding: "utf8" });
   const line = stdout.split("\n").find((l) => l.startsWith("PROBE="));
@@ -89,9 +100,13 @@ try {
   const bin = join(root, "bin");
   mkdirSync(home, { recursive: true });
   mkdirSync(bin, { recursive: true });
-  // 只「装」claude：codex 等十几家都不在 PATH 上。
-  writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 0\n");
-  chmodSync(join(bin, "claude"), 0o755);
+  // 只「装」claude：codex 等十几家都不在 PATH 上。Windows 上 PATH 查找只认 PATHEXT 里的后缀,
+  // 不认 shebang,壳按平台换(docs/windows-testing.md 第三节)。
+  if (process.platform === "win32") writeFileSync(join(bin, "claude.cmd"), "@exit /b 0\r\n");
+  else {
+    writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(bin, "claude"), 0o755);
+  }
   const claudeJson = join(home, ".claude.json");
 
   // ── 没登记：补一条指向这份 navi，只动装了的那家 ──
@@ -100,7 +115,7 @@ try {
   assert.ok(result.onlyInstalled, "只问装了的那几家");
   assert.ok(result.untouched, "没装的 CLI 不该被建配置");
   const written = JSON.parse(readFileSync(claudeJson, "utf8"));
-  assert.deepEqual(written.mcpServers.navi.args, [new URL(mcpEntry).pathname]);
+  assert.deepEqual(written.mcpServers.navi.args, [mcpEntryPath]);
   assert.equal(written.mcpServers.navi.env.NAVI_URL, "http://127.0.0.1:4317");
 
   // ── 再问一次：已经指向这里 ──
@@ -117,14 +132,15 @@ try {
   const claude = result.claude!;
   assert.equal(claude.state, "elsewhere");
   assert.ok(claude.current!.includes("/Users/someone/code/navi/mcp/dist/index.js"), claude.current);
-  assert.ok(claude.wanted!.includes(new URL(mcpEntry).pathname), claude.wanted);
+  // 交回的是配置原文,路径在里面是 JSON 字符串的写法(Windows 上 `\` 成对)。
+  assert.ok(claude.wanted!.includes(JSON.stringify(mcpEntryPath)), claude.wanted);
   assert.equal(claude.file, claudeJson);
   assert.equal(readFileSync(claudeJson, "utf8"), foreign, "指向别处的登记一个字节都不许改");
 
   // ── pointsAt：node 真正执行的入口、命令、完整地址都要对上（只有本机回环别名算同一台）──
   const points = run(home, bin, `
 const { pointsAt } = await import(${JSON.stringify(new URL("mcp-registry/host-setup.js", src).href)});
-const wanted = { command: "/app/node", args: [${JSON.stringify(new URL(mcpEntry).pathname)}], env: { NAVI_URL: "http://127.0.0.1:4317" } };
+const wanted = { command: "/app/node", args: [${JSON.stringify(mcpEntryPath)}], env: { NAVI_URL: "http://127.0.0.1:4317" } };
 const entry = wanted.args[0];
 const out = {
   same: pointsAt({ command: "/app/node", args: [entry], naviUrl: "http://localhost:4317" }, wanted),
@@ -152,5 +168,8 @@ const out = {
 
   console.log("test-host-navi-mcp: ok");
 } finally {
+  // 借来的链接先一条条摘掉、再删目录:它们指着这台机器真装着的依赖(win-remote 的工作区里就是
+  // 对端主仓的 node_modules),删目录时一旦顺着链接进去,删的就是人家的依赖。
+  for (const link of links) unlinkSync(link);
   rmSync(root, { recursive: true, force: true });
 }
