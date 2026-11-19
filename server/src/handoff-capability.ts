@@ -26,15 +26,15 @@
 // 模型正是本功能要覆盖的两种情况之一(第 1 轮审查抓到的就是这个)。探测预算见
 // `MODEL_PROBE_BUDGET_MS`。
 import { and, eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
 import type {
   HandoffCapabilityGap, HandoffCapabilityReport, HandoffCapabilitySlot,
   HandoffPeerAgentCapability, HandoffPeerCapabilities,
-} from "@ash/shared";
-import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
-import type { CliModelCatalog } from "@ash/shared/cli-presets";
-import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
+} from "@navi/shared";
+import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@navi/shared/multiuser";
+import type { CliModelCatalog } from "@navi/shared/cli-presets";
+import { CLI_MODEL_PRESETS } from "@navi/shared/cli-presets";
 import { db } from "./db/index.js";
 import { agents, freeWorkflowStates, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { probeBins } from "./executors/bin-probe.js";
