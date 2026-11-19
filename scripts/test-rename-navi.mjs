@@ -1,7 +1,7 @@
 // 改名脚本手写修复层的落点契约：整份新建的文件按磁盘实况认，不按 git 清单 —— 没加进 git 的同名文件
 // 不许被覆盖（整次拒绝、一个文件都不动）；已经生成好、还没加进 git 的那份，重跑和核对都当它在。
 // 文件清单的契约：没加进 git 的新文件（在途分支刚写的）也要过一遍 —— 不加 --dirty 拒绝，核对报出来，--dirty 照改。
-// 正文：含 NUL 的文本照常改名、字节原样，核对与清单都点名；不是 UTF-8 又写着旧名的整次拒绝；Windows 验证记录整份不改。
+// 正文：含 NUL 的、不是 UTF-8 的认不准，整次拒绝、字节不动、核对与清单都点名；登记过的二进制不看；Windows 验证记录整份不改。
 // 磁盘上的形态：路径上每一级都不透过符号链接读写建（链到仓库外的东西不许被改、不许被建出目录）；还没提交的删除、
 // 要挪名的链接、所在目录或落点上级是链接的，动手之前整次拒绝；规划之后才被别的进程换掉、改掉的，动手时停下。
 // 索引：挪名时按路径精确认索引项（特殊字符的文件名不配上别人的项），带标志的、有冲突的（路径里带 TAB 也认得）动手之前整次拒绝。
@@ -107,56 +107,63 @@ try {
   assert.equal(run("--check").status, 0, "改完核对应为 0");
   console.log("✓ 改名脚本：没加进 git 的新文件也改名、也核对；不加 --dirty 拒绝");
 
-  // 正文认不认得：含 NUL 的文本（handoff-capability.ts 拿 NUL 当拼键分隔符，曾被当成二进制整份跳过、核对和清单都不报）
-  // 照常改名，NUL 和别的字节原样；不是合法 UTF-8、又写着旧名的，改名和核对都整次拒绝、一个字节不动，清单里说清；
-  // 不写旧名的不拦。Windows 真机验证记录写的是改名前那台机器上的事实，整份不进改名。
+  // 正文认不认得：只有不含 NUL、按 UTF-8 往返逐字节一样的才改。含 NUL 的（handoff-capability.ts 拿 NUL 当拼键分隔符，
+  // 曾被当成二进制整份跳过、核对和清单都不报）、往返对不上的，一律整次拒绝、一个字节不动、清单里点名 —— 不按
+  // 「字节里看不看得见 ash」放行：没登记扩展名的 wasm 能往返 UTF-8，换了名长度字段就坏了；UTF-16 里 ash 的字节不连着；
+  // Latin-1 不写 ash 也认不准。登记过的二进制不看正文。Windows 真机验证记录写的是改名前的事实，整份不进改名。
   mkdirSync(join(root, "docs"));
   const bytes = (path) => readFileSync(join(root, path));
-  const NUL_FILE = "notes/nul.ts";
-  write(NUL_FILE, 'import { x } from "@ash/shared";\nconst ashKey = `${a}\0${b}`; // 拼键，NUL 分隔\n');
-  const NUL_RENAMED = Buffer.from('import { x } from "@navi/shared";\nconst naviKey = `${a}\0${b}`; // 拼键，NUL 分隔\n', "utf8");
+  const WASM = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0, 0, 4, 3, 97, 115, 104]); // 一个名叫 ash 的自定义段
+  const unsure = {
+    "notes/nul.ts": [Buffer.from('import { x } from "@ash/shared";\nconst ashKey = `${a}\0${b}`;\n', "utf8"), /含 NUL 字节/],
+    "notes/module": [WASM, /含 NUL 字节/],
+    "notes/utf16-bom.txt": [Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('import { x } from "@ash/shared";\n', "utf16le")]), /不是合法的 UTF-8/],
+    "notes/utf16.txt": [Buffer.from('import { x } from "@ash/shared";\n', "utf16le"), /含 NUL 字节/],
+    "notes/latin1.txt": [Buffer.from("caf\xe9 ash\n", "latin1"), /不是合法的 UTF-8/],
+    "notes/latin1-plain.txt": [Buffer.from("caf\xe9 au lait\n", "latin1"), /不是合法的 UTF-8/],
+  };
+  for (const [path, [content]] of Object.entries(unsure)) writeFileSync(join(root, path), content);
+  writeFileSync(join(root, "notes/module.wasm"), WASM);
   const WINDOWS = "docs/rename-navi-windows.md";
   const WINDOWS_TEXT = "# Windows 真机验证\n\n- 旧服务读 ASH_DB，任务分支 ash/abc，锁 ash.db.ash.lock\n- 那台的 ash 服务跑在 :4317\n";
   write(WINDOWS, WINDOWS_TEXT);
-  const LATIN = Buffer.from("caf\xe9 ash\n", "latin1");
-  const LATIN_PLAIN = Buffer.from("caf\xe9 au lait\n", "latin1");
-  writeFileSync(join(root, "notes/latin1.txt"), LATIN);
-  writeFileSync(join(root, "notes/latin1-plain.txt"), LATIN_PLAIN);
   git("add", "-A");
   git("commit", "-q", "-m", "content kinds");
+  const reEscape = (path) => path.replace(/[.]/g, "\\.");
   for (const args of [[], ["--check"]]) {
     const r = run(...args);
-    assert.equal(r.status, 2, `${args.join(" ") || "改名"}：不是 UTF-8 又写着旧名的应整次拒绝\n${r.stdout}${r.stderr}`);
-    assert.match(r.stderr, /notes\/latin1\.txt：不是合法的 UTF-8/);
-    assert.doesNotMatch(r.stderr, /latin1-plain/, "不写旧名的不用拦");
+    assert.equal(r.status, 2, `${args.join(" ") || "改名"}：认不准的正文应整次拒绝\n${r.stdout}${r.stderr}`);
+    for (const [path, [, why]] of Object.entries(unsure)) assert.match(r.stderr, new RegExp(`${reEscape(path)}：${why.source}`), `${path} 要点名`);
+    assert.doesNotMatch(r.stderr, /module\.wasm/, "登记过的二进制不拦");
   }
-  assert.deepEqual(bytes("notes/latin1.txt"), LATIN, "拒绝时一个字节不动");
-  assert.match(read(NUL_FILE), /@ash\/shared/, "拒绝时含 NUL 的那份也不动");
+  for (const [path, [content]] of Object.entries(unsure)) assert.deepEqual(bytes(path), content, `${path}：拒绝时一个字节不动`);
   const kinds = run("--report");
   assert.equal(kinds.status, 0, kinds.stderr);
-  assert.match(kinds.stdout, /^## not-text（1 份）$/m);
-  assert.match(kinds.stdout, /^- notes\/latin1\.txt：不是合法的 UTF-8/m);
-  assert.match(kinds.stdout, /^## nul-text（1 份）\n[^]*?^- notes\/nul\.ts$/m, "含 NUL 的文本在清单里点名");
+  assert.match(kinds.stdout, /^## not-text（7 份）$/m);
+  for (const [path, [, why]] of Object.entries(unsure)) assert.match(kinds.stdout, new RegExp(`^- ${reEscape(path)}：${why.source}`, "m"), `${path} 在清单里点名`);
+  assert.match(kinds.stdout, /^- notes\/module\.wasm：登记过的二进制格式/m, "登记过的二进制字节里有 ash 也点名");
   assert.doesNotMatch(kinds.stdout, /^- docs\/rename-navi-windows\.md:/m, "Windows 记录不逐处列成「留下的兼容值」");
   assert.match(kinds.stdout, /^- docs\/rename-navi-windows\.md：\d+ 行$/m, "Windows 记录记在改名自己的文档里");
-  git("rm", "-q", "notes/latin1.txt");
-  git("commit", "-q", "-m", "drop latin1");
-  const nulCheck = run("--check");
-  assert.equal(nulCheck.status, 1, `含 NUL 的文本要被核对看见\n${nulCheck.stdout}${nulCheck.stderr}`);
-  assert.match(nulCheck.stdout, /^edit notes\/nul\.ts（含 NUL 字节/m);
-  assert.doesNotMatch(nulCheck.stdout, /rename-navi-windows/, "Windows 记录不算要改的");
-  const nulRun = run();
-  assert.equal(nulRun.status, 0, nulRun.stderr);
-  assert.match(nulRun.stdout, /notes\/nul\.ts（含 NUL 字节/, "改的时候标出来");
-  assert.deepEqual(bytes(NUL_FILE), NUL_RENAMED, "只换旧名，NUL 和其余字节原样");
-  assert.equal(read(WINDOWS), WINDOWS_TEXT, "Windows 记录一个字不改");
-  assert.deepEqual(bytes("notes/latin1-plain.txt"), LATIN_PLAIN);
+  // 照提示处理之后照常改名：源码里的 NUL 写成转义，其余认不准的挪走；登记过的二进制、Windows 记录原样。
+  write("notes/nul.ts", 'import { x } from "@ash/shared";\nconst ashKey = `${a}\\u0000${b}`;\n');
+  git("rm", "-q", ...Object.keys(unsure).filter((path) => path !== "notes/nul.ts"));
   git("add", "-A");
-  git("commit", "-q", "-m", "nul renamed");
+  git("commit", "-q", "-m", "resolved");
+  const pendingNul = run("--check");
+  assert.equal(pendingNul.status, 1, `${pendingNul.stdout}${pendingNul.stderr}`);
+  assert.match(pendingNul.stdout, /^edit notes\/nul\.ts$/m);
+  assert.doesNotMatch(pendingNul.stdout, /rename-navi-windows|module\.wasm/, "Windows 记录、登记过的二进制不算要改的");
+  const resolved = run();
+  assert.equal(resolved.status, 0, resolved.stderr);
+  assert.equal(read("notes/nul.ts"), 'import { x } from "@navi/shared";\nconst naviKey = `${a}\\u0000${b}`;\n');
+  assert.deepEqual(bytes("notes/module.wasm"), WASM, "登记过的二进制一个字节不动");
+  assert.equal(read(WINDOWS), WINDOWS_TEXT, "Windows 记录一个字不改");
+  git("add", "-A");
+  git("commit", "-q", "-m", "renamed");
   assert.equal(run("--check").status, 0, "改完核对应为 0");
-  git("rm", "-r", "-q", "docs", NUL_FILE, "notes/latin1-plain.txt");
+  git("rm", "-r", "-q", "docs", "notes/nul.ts", "notes/module.wasm");
   git("commit", "-q", "-m", "drop content kinds");
-  console.log("✓ 改名脚本：含 NUL 的文本照常改名且字节原样、核对与清单都点名；不是 UTF-8 又写着旧名的整次拒绝；Windows 验证记录整份不改");
+  console.log("✓ 改名脚本：含 NUL、不是 UTF-8 的正文（wasm、UTF-16、Latin-1，写没写 ash 都算）整次拒绝、字节不动、核对与清单点名；登记过的二进制不看；Windows 验证记录整份不改");
 
   // 链到仓库外的文本文件：不透过链接改它，核对也不因为它报要改。
   const OUTSIDE_TEXT = 'const ashWidget = "ash";\n';

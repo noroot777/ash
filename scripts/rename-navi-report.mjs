@@ -55,15 +55,17 @@ export function harnessSection(files, readText) {
 
 export const HARNESS_WHY = Object.fromEntries([...HARNESS_RULES.map((r) => [r.id, r.why]), ["unclassified", "没有一条规则认得：要么补规则说清为什么留，要么它是漏改，该换掉"]]);
 
-const OPAQUE_WHY = {
-  binary: "按扩展名认作二进制格式，正文不看",
-  undecodable: "不是合法的 UTF-8：按文本改写会毁掉别的字节，改名和核对都拒绝（返回 2），手工改",
+// 正文认不准、改名和核对都整次拒绝的（返回 2）：理由和出路。分类见 scripts/rename-navi.mjs 的 decode。
+const FIX_HINT = "是二进制就把扩展名登记进 BINARY（scripts/rename-navi.mjs），是文本就转成 UTF-8、NUL 写成转义（\\u0000）";
+export const OPAQUE_WHY = {
+  nul: `含 NUL 字节，认不准是文本还是二进制（二进制里有长度字段，换了名会坏；UTF-16 文本里的 ash 字节不连着）。${FIX_HINT}`,
+  undecodable: `不是合法的 UTF-8，按文本改写会毁掉别的字节，里面有没有 ash 也认不准。${FIX_HINT}`,
 };
 
 /**
  * 整份剩余清单。第一个参数是 scripts/rename-navi.mjs 规划的结果，第二个是它那边的名单、理由与认词。
  */
-export function renderReport({ kept, ruleFiles, files, readText, opaque, nul }, { registryFiles, toolingFiles, remaining, why, token }) {
+export function renderReport({ kept, ruleFiles, files, readText, opaque }, { registryFiles, toolingFiles, remaining, why, token }) {
   const groups = new Map();
   for (const k of kept) groups.set(k.why, [...(groups.get(k.why) ?? []), k]);
   const tokenLines = (path) => (readText(path) ?? "").split("\n").flatMap((text, i) => (token.test(text) ? [{ path, line: i + 1, text }] : []));
@@ -87,15 +89,11 @@ export function renderReport({ kept, ruleFiles, files, readText, opaque, nul }, 
   for (const k of ruleFiles) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160)}`);
   lines.push("", "## rename-tooling", "", "改名自己的脚本和交付文档：旧名是规则与说明本身，只记数，不逐行列", "");
   for (const path of toolingFiles) if (path !== remaining && files.includes(path)) lines.push(`- ${path}：${tokenLines(path).length} 行`);
-  // 正文没按文本读的：字节里出现了 ash 才列（文件名照常挪，不在这里说）。
-  const unread = [...opaque].filter(([, { tokens }]) => tokens);
+  // 正文没按文本读的（文件名照常挪，不在这里说）：认不准的每一份都列；登记过的二进制只列字节里出现了 ash 的。
+  const unread = [...opaque].filter(([, { kind, tokens }]) => kind !== "binary" || tokens);
   if (unread.length) {
-    lines.push("", `## not-text（${unread.length} 份）`, "", "正文没有按文本读、字节里又出现了 ash 的文件", "");
-    for (const [path, { kind }] of unread) lines.push(`- ${path}：${OPAQUE_WHY[kind]}`);
-  }
-  if (nul.size) {
-    lines.push("", `## nul-text（${nul.size} 份）`, "", "含 NUL 字节的文本文件：NUL 在 UTF-8 里是合法字符，照常按文本改名，NUL 和其余没换的字节原样写回", "");
-    for (const path of nul) lines.push(`- ${path}`);
+    lines.push("", `## not-text（${unread.length} 份）`, "", "正文没有按文本读的文件", "");
+    for (const [path, { kind }] of unread) lines.push(`- ${path}：${OPAQUE_WHY[kind] ?? "登记过的二进制格式，正文不看；字节里出现了 ash"}`);
   }
   lines.push("", ...harnessSection(files.filter((path) => !toolingFiles.includes(path)), readText));
   return lines.join("\n") + "\n";
