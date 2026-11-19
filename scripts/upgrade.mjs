@@ -94,7 +94,7 @@ const gate = {
 async function preflight(pkg, abort) {
   const data = inspectData({ repo: REPO, env, keepDbName: options.keepDbName, stamp });
   const problems = [...runtimeProblems(pkg), ...data.problems];
-  const { port, from: portFrom } = data.problems.length ? { port: 0 } : resolvePort(REPO, env);
+  const { port, from: portFrom } = data.problems.length ? { port: 0 } : resolvePort(REPO, env, readState(data.dataDir).port);
   const server = data.problems.length ? null : await identifyServer({ repo: REPO, env, port, dataDir: data.dataDir, explicit: data.explicit });
   if (server) problems.push(...server.problems);
   if (problems.length) {
@@ -201,6 +201,7 @@ async function apply() {
   }
   if (resumed) say(`  · 上次升级(从 ${short(resumed.from)} 起)没做完,接着做`);
   state.inProgress = { ...(resumed ?? { from, startedAt: new Date().toISOString() }), to: head };
+  state.port = port;
   createdProgress = !resumed;
   writeState(dataDir, state);
   const save = () => writeState(dataDir, state);

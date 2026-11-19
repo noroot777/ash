@@ -90,7 +90,7 @@ export function buildStamp(files) {
 /**
  * 升级做到哪了,记在数据目录里(跟着这份数据走;不进 git):
  *   built      最后一次构建成功时的 { commit, stamp }(stamp 见 buildStamp)
- *   servedPid  最后一次起好的服务
+ *   servedPid  最后一次起好的服务            port       这份安装的服务端口(锁收了之后再跑也找得到)
  *   inProgress { from, to, backup }        有它 = 上次没做完,再跑接着做(from 和备份沿用那一次的)
  *   last       上一次升好的那次:{ from, to, at, backup }
  */

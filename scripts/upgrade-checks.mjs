@@ -89,13 +89,17 @@ export function inspectData({ repo, env, keepDbName, stamp }) {
   return out;
 }
 
-/** 不设 PORT 时就按这份库的锁文件里记的端口来(服务就是在那儿起的),再没有才是 4317。 */
-export function resolvePort(repo, env) {
+/**
+ * 不设 PORT 时就按这份库的锁文件里记的端口来(服务就是在那儿起的);服务停着、锁也收了(比如上次升级起服务没起来),
+ * 再看上次升级记下的端口(remembered);都没有才是 4317。
+ */
+export function resolvePort(repo, env, remembered) {
   if (env.PORT) return { port: Number(env.PORT), from: "PORT" };
   try {
     const lock = JSON.parse(readFileSync(lockFileFor(repo, env), "utf8"));
     if (Number.isInteger(lock?.port) && lock.port > 0) return { port: lock.port, from: "lock" };
   } catch { /* 没有锁:服务没起过,或者早就停了 */ }
+  if (Number.isInteger(remembered) && remembered > 0) return { port: remembered, from: "upgrade" };
   return { port: 4317, from: "default" };
 }
 

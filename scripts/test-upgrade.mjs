@@ -246,6 +246,9 @@ assert.match(out, /上次升级\(从 [0-9a-f]+ 起\)没做完,接着做/, out);
 assert.match(out, /新服务没起来/, out);
 assert.match(out, /start: 这一版故意起不来/, `没把日志末尾打出来\n${out}`);
 assert.equal(backupCount(), backupsBefore, "接着做时备份不该重做");
+// 服务停着、锁也收了:不给 PORT 再跑一次,得照这份安装的端口接着做,而不是去找 4317。
+out = await upgrade([], 1);
+assert.ok(out.includes(`起服务 :${PORT}`), `锁收了之后没找回这份安装的端口\n${out}`);
 back = await followRollback(out);
 assert.equal((await health())?.version, "v2", back.out);
 const v5 = publish(DEV, "v5");
