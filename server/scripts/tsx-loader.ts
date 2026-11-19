@@ -11,7 +11,12 @@
 // tsx 的 `exports` 里写着这两个口:`.` 是加载器(`dist/loader.mjs`,也就是 `--import tsx`
 // 用的那个),`./cli` 是 CLI。拿 `createRequire` 按 Node 自己的规则解析,目录布局怎么变都跟
 // 着 Node 走。
+//
+// 加载器交给 `--import`,那里要的是 import 说明符:Windows 上的裸绝对路径 `D:\...` 会被当成
+// `d:` 协议的 URL,报 ERR_UNSUPPORTED_ESM_URL_SCHEME,所以加载器给 file URL。CLI 是 `node` 的
+// 脚本参数,那里要的是文件路径,照旧给路径 —— 两个口的契约不一样,别合成一个。
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 
@@ -23,8 +28,8 @@ function resolveTsx(specifier: "tsx" | "tsx/cli"): string {
   }
 }
 
-export function tsxLoaderPath(): string {
-  return resolveTsx("tsx");
+export function tsxLoaderUrl(): string {
+  return pathToFileURL(resolveTsx("tsx")).href;
 }
 
 export function tsxCliPath(): string {
