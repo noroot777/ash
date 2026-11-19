@@ -122,10 +122,10 @@ enum DatabaseBackup {
   }
 
   /// 备份当前数据根里的库，固定成恢复点。`fromVersion` 只用来起文件名。数据根里还没有库（从没
-  /// 起过服务）就什么都不做，返回 nil。
+  /// 起过服务）就什么都不做，返回 nil；有库但认不准是哪份（两份都是库、改名没做完）就抛错，不当成没东西可备。
   @discardableResult
   static func beforeUpdate(fromVersion: String, now: Date = Date()) throws -> URL? {
-    guard let db = DatabaseFile.existing(in: NaviConfig.dataURL) else { return nil }
+    guard let db = try DatabaseFile.existing(in: NaviConfig.dataURL) else { return nil }
     let dir = NaviConfig.backupURL
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let stamp = DateFormatter()

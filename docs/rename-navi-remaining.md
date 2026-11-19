@@ -3,14 +3,14 @@
 由 `node scripts/rename-navi.mjs --report` 生成，是生成那一刻的快照：行号会随后续改动漂移，要最新的就重新生成。
 第一部分是整词 ash（产品的上一代名字），第二部分单列更早一代 harness。
 
-# 一、ash（1211 处）
+# 一、ash（1213 处）
 
 ## db-file-fixture（269 处）
 
 测试夹具里显式指定的临时库文件名：名字随便起的，与默认库名无关（默认库名的回归在 test-db-file.ts）
 
 - scripts/test-macos-client.mjs:425  // 源目录还是改名之前的样子：库叫 ash.db，跟着库名走的状态文件也是旧名。
-- scripts/test-macos-client.mjs:608  console.log("PASS: import reads navi.db or the pre-rename ash.db (state files follow it to the new name), refuses two databases / a lone marker / an unfinished 
+- scripts/test-macos-client.mjs:608  console.log("PASS: import reads navi.db or the pre-rename ash.db (state files follow it to the new name), refuses two databases / a lone marker / an unfinished
 - scripts/test-relocate-checkout-edges.mjs:41  const db = new DatabaseSync(join(data, "ash.db"));
 - scripts/test-relocate-checkout-edges.mjs:112  const xdg = { XDG_DATA_HOME: join(t.from, "xdg-data"), XDG_CONFIG_HOME: join(t.from, "xdg-config"), NAVI_DB: join(t.from, "data", "ash.db") };
 - scripts/test-relocate-checkout-edges.mjs:119  const db = ["--db", join(t.from, "data", "ash.db")];
@@ -379,7 +379,7 @@
 - scripts/test-macos-release.mjs:444  assert.deepEqual(writes(github), ["PUT /repos/o/feed/contents/navi/mac/appcast.xml", "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
 - scripts/test-macos-release.mjs:468  "PUT /repos/o/feed/contents/navi/mac/appcast.xml", "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
 - scripts/test-macos-release.mjs:489  const notice = github.state.files.get("o/feed:ash/mac/appcast.xml");
-- scripts/test-macos-release.mjs:518  assert.match(github.state.files.get("o/feed:ash/mac/appcast.xml").text, /<sparkle:version>20000102\.0003<\/sparkle:version>/, "the notice moves on to the newer 
+- scripts/test-macos-release.mjs:518  assert.match(github.state.files.get("o/feed:ash/mac/appcast.xml").text, /<sparkle:version>20000102\.0003<\/sparkle:version>/, "the notice moves on to the newer
 - scripts/test-macos-sparkle-dmg.mjs:9  // 改名（Ash.app / dev.ash.* → Navi.app / dev.navi.*）：改名前的 Ash.app 拿到 Navi 的包也装不上（Sparkle 只认同名或
 - scripts/test-macos-sparkle-dmg.mjs:25  const temporary = realpathSync(mkdtempSync(join(tmpdir(), "ash-sparkle-dmg-")));
 - scripts/test-macos-sparkle-dmg.mjs:27  const legacyId = `dev.ash.sparkle-dmg-probe.${process.pid}`;
@@ -526,8 +526,8 @@
 - web/scripts/test-storage-rename.mjs:214  assert.match(tabs, /const CHANNEL = "ash:preview-assist-claims";/);
 - web/scripts/test-storage-rename.mjs:215  assert.match(tabs, /const LOCK = \(projectId: string, claim: string\) => `ash:preview-assist:\$\{projectId\}:\$\{claim\}`;/);
 - web/scripts/test-storage-rename.mjs:221  const grep = spawnSync("git", ["grep", "-nE", "[\"`](ash|harness-next)[:.][a-zA-Z$]", "--", "src"], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
-- web/scripts/test-storage-rename.mjs:228  console.log("PASS storage rename: legacy ash:/ash./harness-next: keys move to navi before anything reads storage, newest generation wins, and what does not fit 
-- web/scripts/test-storage-rename.mjs:228  console.log("PASS storage rename: legacy ash:/ash./harness-next: keys move to navi before anything reads storage, newest generation wins, and what does not fit 
+- web/scripts/test-storage-rename.mjs:228  console.log("PASS storage rename: legacy ash:/ash./harness-next: keys move to navi before anything reads storage, newest generation wins, and what does not fit
+- web/scripts/test-storage-rename.mjs:228  console.log("PASS storage rename: legacy ash:/ash./harness-next: keys move to navi before anything reads storage, newest generation wins, and what does not fit
 - web/src/lib/storageRename.ts:2  // （harness → ash → navi），老版本页面存下的偏好、草稿、布局还挂在旧前缀上：页面一启动、任何模块读存储
 - web/src/lib/storageRename.ts:6  // 同一个新键可能同时有好几代旧值（`ash:x` 和更早的 `harness-next:x` 都在）：按代数定胜负，新键 > ash >
 - web/src/lib/storageRename.ts:6  // 同一个新键可能同时有好几代旧值（`ash:x` 和更早的 `harness-next:x` 都在）：按代数定胜负，新键 > ash >
@@ -679,8 +679,8 @@
 - desktop/macos/README.md:138  改名之前装的是 `Ash.app`（包标识 `dev.ash.mac`）。Navi 换了包标识（`dev.navi.mac`），macOS 把它当成另一个 app，而 Sparkle 只肯装包标识相同的更新包（实测：包名、包标识都换了的 dmg，旧版下载、验签之后报「No suitable install is fou
 - desktop/macos/README.md:138  改名之前装的是 `Ash.app`（包标识 `dev.ash.mac`）。Navi 换了包标识（`dev.navi.mac`），macOS 把它当成另一个 app，而 Sparkle 只肯装包标识相同的更新包（实测：包名、包标识都换了的 dmg，旧版下载、验签之后报「No suitable install is fou
 - desktop/macos/README.md:146  | defaults 域 `dev.ash.mac` | `dev.navi.mac` | 每一项抄过来（新域已有的不盖）；`AshURL` / `AshDataDir` / 窗口位置 `NSWindow Frame AshMainWindow` 换成 `NaviURL` / `NaviDataDir` / `…Nav
-- desktop/macos/README.md:147  | 数据根 `~/Library/Application Support/dev.ash.mac/` | 原地继续用 | 新的那块地还不存在、旧的在，就一直用旧的（记在 defaults 里，之后哪个组件建出了新目录也不会换成空数据根）。不搬：数据根的路径决定窗口专用端口，端口一变页面的源就变，页面存在本机的设置全丢 
-- desktop/macos/README.md:147  | 数据根 `~/Library/Application Support/dev.ash.mac/` | 原地继续用 | 新的那块地还不存在、旧的在，就一直用旧的（记在 defaults 里，之后哪个组件建出了新目录也不会换成空数据根）。不搬：数据根的路径决定窗口专用端口，端口一变页面的源就变，页面存在本机的设置全丢 
+- desktop/macos/README.md:147  | 数据根 `~/Library/Application Support/dev.ash.mac/` | 原地继续用 | 新的那块地还不存在、旧的在，就一直用旧的（记在 defaults 里，之后哪个组件建出了新目录也不会换成空数据根）。不搬：数据根的路径决定窗口专用端口，端口一变页面的源就变，页面存在本机的设置全丢
+- desktop/macos/README.md:147  | 数据根 `~/Library/Application Support/dev.ash.mac/` | 原地继续用 | 新的那块地还不存在、旧的在，就一直用旧的（记在 defaults 里，之后哪个组件建出了新目录也不会换成空数据根）。不搬：数据根的路径决定窗口专用端口，端口一变页面的源就变，页面存在本机的设置全丢
 - desktop/macos/README.md:148  | WebKit 网站数据 `~/Library/WebKit/dev.ash.mac`、cookie `~/Library/HTTPStorages/dev.ash.mac{,.binarycookies}` | `…/dev.navi.mac` | 等旧窗口退了，在第一个窗口建出来之前整份复制（复制不挪，旧的留着）
 - desktop/macos/README.md:148  | WebKit 网站数据 `~/Library/WebKit/dev.ash.mac`、cookie `~/Library/HTTPStorages/dev.ash.mac{,.binarycookies}` | `…/dev.navi.mac` | 等旧窗口退了，在第一个窗口建出来之前整份复制（复制不挪，旧的留着）
 - desktop/macos/README.md:149  | 登录项 `~/Library/LaunchAgents/dev.ash.server.plist`（跑 `Ash.app/…/Ash --start-server`） | `dev.navi.server.plist`（跑 `Navi.app/…/Navi --start-server`） | 原来开着就先装好新的
@@ -688,7 +688,7 @@
 - desktop/macos/README.md:152  | `/Applications/Ash.app`（或 `~/Applications/`、别处 LaunchServices 认得的） | 废纸篓里；原位置是一个指向 `Navi.app` 的软链 | 等旧登录项换成了 Navi 的、旧服务、旧版拉起的 MCP 和别的进程都不在用它的代码了才挪，判据与 `instal
 - desktop/macos/README.md:152  | `/Applications/Ash.app`（或 `~/Applications/`、别处 LaunchServices 认得的） | 废纸篓里；原位置是一个指向 `Navi.app` 的软链 | 等旧登录项换成了 Navi 的、旧服务、旧版拉起的 MCP 和别的进程都不在用它的代码了才挪，判据与 `instal
 - desktop/macos/README.md:190  内容铺到窗口顶，红绿灯浮在页面左上角，不单占一行标题栏（首次配置时窗口开多大见「第一次打开」）。页面要给它让位，所以是页面先表态：`web/index.html` 里有 `<meta name="navi-window-chrome" content="overlay">`（改名前的页面写的是 `ash-window-
-- desktop/macos/README.md:192  导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。每笔下载在 app 那块地（`~/Library/Application Support/dev.navi.mac`，升级上来的是 `dev.ash.mac`）的 `downloads` 下留一张带锁的登记；app 
+- desktop/macos/README.md:192  导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。每笔下载在 app 那块地（`~/Library/Application Support/dev.navi.mac`，升级上来的是 `dev.ash.mac`）的 `downloads` 下留一张带锁的登记；app
 - desktop/macos/README.md:203  | `Sources/LegacyIdentity.swift` | 改名前的 Ash.app 怎么交班：设置、网页数据、登录项接过来，旧包让位 |
 - desktop/macos/README.md:232  卸载：菜单里先取消「登录时启动 Navi 服务」，停掉服务，再删 /Applications/Navi.app（升级上来的机器上还有一个指向它的 `Ash.app` 替身，一起删）；数据在 `~/Library/Application Support/dev.navi.mac/`（升级上来的是 `dev.ash.mac
 - desktop/macos/README.md:232  卸载：菜单里先取消「登录时启动 Navi 服务」，停掉服务，再删 /Applications/Navi.app（升级上来的机器上还有一个指向它的 `Ash.app` 替身，一起删）；数据在 `~/Library/Application Support/dev.navi.mac/`（升级上来的是 `dev.ash.mac
@@ -771,7 +771,7 @@
 - scripts/test-macos-sparkle-dmg.mjs:193  console.log("PASS: through the pre-rename feed, Ash.app only gets an informational notice pointing at the download, and fetches nothing else");
 - web/src/onboarding/FirstRunWizard.tsx:56  /** 在 mac app 里(壳在 UA 里留了 `NaviMac/`,改名前的壳留的是 `AshMac/`):数据那一站已经在原生那一屏走过了,导轨上补一格打勾的。 */
 
-## sibling（99 处）
+## sibling（100 处）
 
 同一行同时写着新旧两代（或 harness 那一代）：这一行是在列举/比对各代名字
 
@@ -791,7 +791,7 @@
 - desktop/macos/README.md:156  - **隐私权限要重新给**：macOS 按包标识记权限（辅助功能、完全磁盘访问、自动化、文件夹访问……）。给过 Ash 的，Navi 第一次用到时会重新问；「系统设置 → 隐私与安全性」里 Ash 那几条要自己删。
 - desktop/macos/README.md:159  - Dock 里固定的 Ash 图标会跟着旧包进废纸篓（或者失效）：从 Dock 移掉、重新把 Navi 拖上去。**别从废纸篓或那个旧图标打开 Ash**：旧版会把 Navi 的服务当成「旧版 app 起的」换成它自己的、用旧代码跑在已经被新版迁移过的库上；真要退回旧版按「更新前的库备份、回到旧版」那一节走。
 - desktop/macos/README.md:159  - Dock 里固定的 Ash 图标会跟着旧包进废纸篓（或者失效）：从 Dock 移掉、重新把 Navi 拖上去。**别从废纸篓或那个旧图标打开 Ash**：旧版会把 Navi 的服务当成「旧版 app 起的」换成它自己的、用旧代码跑在已经被新版迁移过的库上；真要退回旧版按「更新前的库备份、回到旧版」那一节走。
-- desktop/macos/README.md:192  导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。每笔下载在 app 那块地（`~/Library/Application Support/dev.navi.mac`，升级上来的是 `dev.ash.mac`）的 `downloads` 下留一张带锁的登记；app 
+- desktop/macos/README.md:192  导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。每笔下载在 app 那块地（`~/Library/Application Support/dev.navi.mac`，升级上来的是 `dev.ash.mac`）的 `downloads` 下留一张带锁的登记；app
 - desktop/macos/scripts/release.mjs:243  + `\n\n装着改名前的 Ash.app：装法一样，装好打开一次 Navi，它会接过 Ash 的设置、数据和登录项，把 Ash.app 移到废纸篓。`,
 - desktop/macos/scripts/release.mjs:353  notes: `<p>Ash 改名为 Navi。新版换了应用标识，没法从 Ash 里直接更新：点「了解更多」下载 Navi，拖进「应用程序」后打开一次，`
 - desktop/macos/scripts/release.mjs:353  notes: `<p>Ash 改名为 Navi。新版换了应用标识，没法从 Ash 里直接更新：点「了解更多」下载 Navi，拖进「应用程序」后打开一次，`
@@ -811,6 +811,7 @@
 - scripts/test-relocate-checkout-edges.mjs:19  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(GIT_|CODEX_HOME$|XDG_|CLAUDE_CONFIG_DIR$|(NAVI|ASH|HARNESS)_)/.test(k)));
 - scripts/test-relocate-checkout.mjs:20  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(GIT_|CODEX_HOME$|XDG_|CLAUDE_CONFIG_DIR$|(NAVI|ASH|HARNESS)_(DB|DATA_DIR|RUNS_DIR
 - scripts/test-runner.mjs:154  // 从外面继承来的 ASH_DATA_DIR 和新写的 NAVI_DATA_DIR 同时出现、值又不同，读的那头（readStorageEnv）拒绝启动。
+- server/drizzle.config.ts:2  // 跟服务同一套认库：navi.db 优先，还没改名的老目录认 ash.db，认不准就不开（scripts/db-file.mjs）。
 - server/scripts/mcp-sources-cases.ts:146  // ── ⑱ 逐名跨来源解析:`ash` 和 `harness` 是两条独立登记(本轮审查 F3)──────────
 - server/scripts/mcp-sources-cases.ts:151  // ⒜ 审查那条复现:高优先级那份里 `ash` 关着、低优先级那份里 `harness` 开着 ⇒ 真 CLI
 - server/scripts/mcp-sources-cases.ts:152  //    那边工具**连得上**(两个名字各是一条登记,ash 的工具由 harness 那条提供)。
@@ -919,24 +920,24 @@
 - docs/windows-testing.md:82  | `path-boundary` | 红 → 绿 | 收尾 `EBUSY: unlink ash.db`(A 类) |
 - docs/windows-testing.md:135  - `path-boundary` 断言全过,却在 `finally` 里 `EBUSY: unlink …ash.db` —— Windows 删不掉还开着的
 - scripts/rename-db-core.mjs:1  // 库改名（ash.db → navi.db）的计划与执行：清点、账本、做、做不完就照原样退回。CLI 在 scripts/rename-db.mjs，
-- scripts/rename-db-core.mjs:29  *  legacy      只有 ash.db（一份库）——可以改名
-- scripts/rename-db-core.mjs:30  *  renamed     有 navi.db，ash.db 不在或是路标 —— 已经是新名（可以退回）
+- scripts/rename-db-core.mjs:34  *  legacy      只有 ash.db（一份库）——可以改名
+- scripts/rename-db-core.mjs:35  *  renamed     有 navi.db，ash.db 不在或是路标 —— 已经是新名（可以退回）
 - scripts/rename-db.mjs:2  // 把数据目录里的库从改名之前的 ash.db 改成 navi.db（连同跟着库名走的身份、访问密钥、账本），或者退回去。
 - scripts/rename-db.mjs:7  //   node scripts/rename-db.mjs --rollback           退回成 ash.db，好换回改名之前的版本（上次做到一半的话：撤销那一次）
 - server/scripts/test-db-file.ts:1  // 库文件名（ash.db → navi.db）的回归：
 - server/scripts/test-db-file.ts:2  //   ① 选库：新目录建 navi.db；只有 ash.db 开 ash.db；两份都是库、只剩路标、账本还在 —— 一律不起、说清楚；harness.db 改名成 navi.db；
 - server/scripts/test-db-file.ts:2  //   ① 选库：新目录建 navi.db；只有 ash.db 开 ash.db；两份都是库、只剩路标、账本还在 —— 一律不起、说清楚；harness.db 改名成 navi.db；
-- server/scripts/test-db-file.ts:6  //   ④ 真起服务（本机自用模式、临时 HOME、随机端口）：新目录起出来是 navi.db；两份都是库时不起；只有 ash.db 的目录
-- server/scripts/test-db-file.ts:61  assert.deepEqual(choose(legacy), { file: join(legacy, LEGACY_DB_FILE), legacy: true }, "还没迁的老安装照常开 ash.db");
-- server/scripts/test-db-file.ts:87  console.log("✓ 选库：新建 navi.db、老安装开 ash.db、认不准的三种情形不起、harness.db 改成 navi.db");
-- server/scripts/test-db-file.ts:217  assert.ok(!existsSync(join(oldData, "navi.db")), "老安装照常开 ash.db，不在运行时改名");
+- server/scripts/test-db-file.ts:7  //   ④ 真起服务（本机自用模式、临时 HOME、随机端口）：新目录起出来是 navi.db；两份都是库时不起；只有 ash.db 的目录
+- server/scripts/test-db-file.ts:64  assert.deepEqual(choose(legacy), { file: join(legacy, LEGACY_DB_FILE), legacy: true }, "还没迁的老安装照常开 ash.db");
+- server/scripts/test-db-file.ts:106  console.log("✓ 选库：新建 navi.db、老安装开 ash.db、认不准的三种情形不起、harness.db 改成 navi.db；显式路径也过改名的闸；锁里重认");
+- server/scripts/test-db-file.ts:336  assert.ok(!existsSync(join(oldData, "navi.db")), "老安装照常开 ash.db，不在运行时改名");
 - server/src/db/path.ts:10  /** 库文件名。新安装建它；改名之前的安装用 `ash.db`，停机时跑 `npm run rename-db` 改过来。 */
 - server/src/db/path.ts:13  * 改名迁移把 `ash.db` 搬走之后在原地留的路标的开头。它不是 SQLite 库：改名之前的服务只认 `ash.db`，
 - server/src/db/path.ts:13  * 改名迁移把 `ash.db` 搬走之后在原地留的路标的开头。它不是 SQLite 库：改名之前的服务只认 `ash.db`，
 - server/src/db/path.ts:57  * 数据目录里该开哪一份库：`navi.db` 在就是它；不在而 `ash.db` 是一份库，就开 `ash.db`（还没迁的老安装）；
 - server/src/db/path.ts:57  * 数据目录里该开哪一份库：`navi.db` 在就是它；不在而 `ash.db` 是一份库，就开 `ash.db`（还没迁的老安装）；
 - server/src/db/path.ts:58  * 都没有就建 `navi.db`。**运行时不把 `ash.db` 改成 `navi.db`**：改名要连着 `-wal`、`-shm`、身份、访问密钥一起挪，
-- server/src/db/path.ts:94  // 放了一份 `ash.db`，后半程的派生文件指到另一份库上去。
+- server/src/db/path.ts:98  // 放了一份 `ash.db`，后半程的派生文件指到另一份库上去。
 
 ## legacy-markers（51 处）
 
@@ -1037,7 +1038,7 @@
 - shared/src/monitor.ts:49  * Navi 自己起的哨兵（停得掉、有日志）。值是冻结的旧名 `"ash"`：它落在每一行哨兵记录上、走在接口里，
 - web/src/task-detail/taskDerivation.ts:11  /** 这条任务自己的分支：改名之前建的叫 `ash/<id8>`，在 `branches`（仓库现有分支）里找实际存在的那个，都不在就是当前名。 */
 
-## legacy-lock-files（35 处）
+## legacy-lock-files（36 处）
 
 读旧写新的旧名：只在认旧数据的那一侧出现，见 shared/src/legacy-names.ts（互斥要横跨新旧两版：旧版只认这几个文件名）
 
@@ -1058,12 +1059,13 @@
 - scripts/test-macos-client.mjs:522  for (const skipped of ["deps", "tmp", "downloads", `${OLD_DB}.ash.lock`, `${OLD_DB}.ash-online.123.json`, ".mac-maintenance.json", OLD_DB, `${OLD_DB}-wal`, `${O
 - scripts/test-restart-lock-owner.mjs:70  if (lock) writeFileSync(join(dir, "ash.db.ash.lock"), JSON.stringify({ version: 1, port, cwd: TMP, token: "t", ...lock }));
 - server/scripts/test-chat-navi-data.ts:53  join(data, "server.log"), join(data, "ash.db.ash.lock"), join(data, "skill-calibrations.json"),
-- server/scripts/test-db-file.ts:106  const suffix = m[1] ? constants[m[1]] ?? (m[1] === "LEGACY_SINGLETON_LOCK_SUFFIX" ? ".ash.lock" : undefined) : m[2];
-- server/scripts/test-db-file.ts:133  writeFileSync(join(data, `${LEGACY_DB_FILE}.ash.lock`), JSON.stringify({ pid: Number(deadPid) }));
-- server/scripts/test-db-file.ts:135  for (const lock of [`${LEGACY_DB_FILE}.ash.lock`, "navi.db.navi.lock"]) {
-- server/scripts/test-db-file.ts:143  writeFileSync(join(data, `${LEGACY_DB_FILE}.ash.lock`), JSON.stringify({ pid: Number(deadPid) }));
-- server/scripts/test-db-file.ts:172  assert.equal(existsSync(join(data, `${LEGACY_DB_FILE}.ash.lock`)), false, "死掉的锁不跟着改名");
-- server/scripts/test-db-file.ts:173  assert.ok(readdirSync(join(data, "backups")).some((d) => readdirSync(join(data, "backups", d)).includes(`${LEGACY_DB_FILE}.ash.lock`)), "挪进留底");
+- server/scripts/test-db-file.ts:125  const suffix = m[1] ? constants[m[1]] ?? (m[1] === "LEGACY_SINGLETON_LOCK_SUFFIX" ? ".ash.lock" : undefined) : m[2];
+- server/scripts/test-db-file.ts:166  writeFileSync(join(data, `${LEGACY_DB_FILE}.ash.lock`), JSON.stringify({ pid: Number(deadPid) }));
+- server/scripts/test-db-file.ts:168  for (const lock of [`${LEGACY_DB_FILE}.ash.lock`, "navi.db.navi.lock"]) {
+- server/scripts/test-db-file.ts:176  writeFileSync(join(data, `${LEGACY_DB_FILE}.ash.lock`), JSON.stringify({ pid: Number(deadPid) }));
+- server/scripts/test-db-file.ts:206  assert.equal(existsSync(join(data, `${LEGACY_DB_FILE}.ash.lock`)), false, "死掉的锁不跟着改名");
+- server/scripts/test-db-file.ts:207  assert.ok(readdirSync(join(data, "backups")).some((d) => readdirSync(join(data, "backups", d)).includes(`${LEGACY_DB_FILE}.ash.lock`)), "挪进留底");
+- server/scripts/test-db-file.ts:263  writeFileSync(join(legacyBase, `${LEGACY_DB_FILE}.ash.lock`), JSON.stringify({ pid: Number(deadPid) }));
 - server/scripts/test-rename-compat.ts:7  //   ⑤ 互斥:改名之前的服务只写 `.ash.lock` / `.ash-claim.lock` / `.ash-online.` —— 新版必须被它们挡下,
 - server/scripts/test-rename-compat.ts:7  //   ⑤ 互斥:改名之前的服务只写 `.ash.lock` / `.ash-claim.lock` / `.ash-online.` —— 新版必须被它们挡下,
 - server/scripts/test-rename-compat.ts:7  //   ⑤ 互斥:改名之前的服务只写 `.ash.lock` / `.ash-claim.lock` / `.ash-online.` —— 新版必须被它们挡下,
@@ -1172,14 +1174,14 @@ mac 启动器交给服务端的旧名（假服务读到的、rc 文件里导出�
 
 - desktop/macos/Sources/ServerLauncher.swift:4  /// `ASH_DATA_DIR`，带 `ASH_LOCAL_ONLY=1`（只听 127.0.0.1、固定自用模式）。
 - desktop/macos/Sources/ServerLauncher.swift:4  /// `ASH_DATA_DIR`，带 `ASH_LOCAL_ONLY=1`（只听 127.0.0.1、固定自用模式）。
-- desktop/macos/Sources/ServerLauncher.swift:145  // export 过的 ASH_DATA_DIR、PORT、ASH_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
-- desktop/macos/Sources/ServerLauncher.swift:145  // export 过的 ASH_DATA_DIR、PORT、ASH_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
-- desktop/macos/Sources/ServerLauncher.swift:147  // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
-- desktop/macos/Sources/ServerLauncher.swift:147  // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
-- desktop/macos/Sources/ServerLauncher.swift:147  // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
-- desktop/macos/Sources/ServerLauncher.swift:154  let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1"
-- desktop/macos/Sources/ServerLauncher.swift:154  let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1"
-- desktop/macos/Sources/ServerLauncher.swift:155  + " ASH_WINDOW_PORT=\(NaviConfig.windowPort)\(port) "
+- desktop/macos/Sources/ServerLauncher.swift:149  // export 过的 ASH_DATA_DIR、PORT、ASH_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
+- desktop/macos/Sources/ServerLauncher.swift:149  // export 过的 ASH_DATA_DIR、PORT、ASH_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
+- desktop/macos/Sources/ServerLauncher.swift:151  // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
+- desktop/macos/Sources/ServerLauncher.swift:151  // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
+- desktop/macos/Sources/ServerLauncher.swift:151  // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
+- desktop/macos/Sources/ServerLauncher.swift:158  let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1"
+- desktop/macos/Sources/ServerLauncher.swift:158  let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1"
+- desktop/macos/Sources/ServerLauncher.swift:159  + " ASH_WINDOW_PORT=\(NaviConfig.windowPort)\(port) "
 - scripts/test-macos-client.mjs:99  const dataDir=process.env.ASH_DATA_DIR;
 - scripts/test-macos-client.mjs:100  fs.writeFileSync(${JSON.stringify(seen)},JSON.stringify({cwd:process.cwd(),dataDir,localOnly:process.env.ASH_LOCAL_ONLY??null,
 - scripts/test-macos-client.mjs:101  port:process.env.PORT??null,windowPort:process.env.ASH_WINDOW_PORT??null,leaked:Object.keys(process.env).filter(k=>k.startsWith('NAVI_MAC_'))}));
@@ -1347,7 +1349,7 @@ GitHub 上改名前的仓库名（release.json 的 legacyReleaseRepo、旧 appca
 
 drizzle-kit 的库路径按各代变量名依次认（NAVI_DB → ASH_DB → HARNESS_DB）
 
-- server/drizzle.config.ts:8  url: process.env.NAVI_DB ?? process.env.ASH_DB ?? process.env.HARNESS_DB ?? "./data/navi.db",
+- server/drizzle.config.ts:16  url: process.env.NAVI_DB ?? process.env.ASH_DB ?? process.env.HARNESS_DB ?? defaultDb("./data"),
 
 ## legacy-persisted-text-test（1 处）
 
@@ -1381,9 +1383,9 @@ drizzle-kit 的库路径按各代变量名依次认（NAVI_DB → ASH_DB → HAR
 - scripts/rename-navi-fs.mjs：0 行
 - scripts/test-rename-navi.mjs：77 行
 - docs/rename-navi.md：28 行
-- docs/rename-navi-windows.md：38 行
+- docs/rename-navi-windows.md：42 行
 
-# 二、更早一代 harness（389 处）
+# 二、更早一代 harness（390 处）
 
 ## legacy-mcp-name（97 处）
 
@@ -1510,8 +1512,8 @@ MCP 服务更早一代的登记名 harness：setup 迁成新名、注入检查�
 - server/scripts/test-accept-gate-conflict-handoff.ts:19  const h = await baselineHarness("navi-gate-conflict-handoff-");
 - server/scripts/test-accept-gate-handoff-verdict.ts:18  import { root, startHarness } from "./free-review-dispatch-harness.js";
 - server/scripts/test-accept-gate-handoff-verdict.ts:26  const { db, tasks, freeTask, timeline, until, turnIdentity } = await startHarness();
-- server/scripts/test-db-file.ts:83  const harness = dir("harness");
-- server/scripts/test-db-file.ts:85  assert.deepEqual(choose(harness), { file: join(harness, "navi.db"), legacy: false });
+- server/scripts/test-db-file.ts:86  const harness = dir("harness");
+- server/scripts/test-db-file.ts:88  assert.deepEqual(choose(harness), { file: join(harness, "navi.db"), legacy: false });
 - server/scripts/test-free-review-dispatch-delivery.ts:3  // 跟隔壁两份的分工(台子是同一个,`free-review-dispatch-harness.ts`):
 - server/scripts/test-free-review-dispatch-delivery.ts:22  import { root, startHarness } from "./free-review-dispatch-harness.js";
 - server/scripts/test-free-review-dispatch-delivery.ts:26  // 台子(临时库、桩、种子数据、夹具)都在 `free-review-dispatch-harness.ts`。
@@ -1629,7 +1631,7 @@ MCP 服务更早一代的登记名 harness：setup 迁成新名、注入检查�
 - mcp/scripts/test-reconnect.mjs:24  delete env.HARNESS_RECONNECT_MS;
 - scripts/dev.mjs:83  // 命令现场写的。宿主 navi 自己环境里带着的那份（连同旧名 `HARNESS_PROXY`）由 navi 在组预览子
 - scripts/env.mjs:2  // 上几代的 `ASH_X`、`HARNESS_X`；写给子进程只写新名并擦掉旧名；擦就各代一起擦。
-- server/drizzle.config.ts:8  url: process.env.NAVI_DB ?? process.env.ASH_DB ?? process.env.HARNESS_DB ?? "./data/navi.db",
+- server/drizzle.config.ts:16  url: process.env.NAVI_DB ?? process.env.ASH_DB ?? process.env.HARNESS_DB ?? defaultDb("./data"),
 - server/scripts/mcp-sources-cases.ts:36  const HARNESS_ON = ocBody({ harness: OC_ENTRY });
 - server/scripts/mcp-sources-cases.ts:156  const aGlobal = seedGlobal(a.host, HARNESS_ON);
 - server/scripts/mcp-sources-cases.ts:168  assert.equal(readFileSync(aGlobal, "utf8"), HARNESS_ON, "两份都不许动");
@@ -1641,8 +1643,8 @@ MCP 服务更早一代的登记名 harness：setup 迁成新名、注入检查�
 - server/scripts/test-data-root.ts:265  }, "只换脚本入口和跑不起来的 node;cwd/timeout/env(含 HARNESS_URL 远端)原样留着");
 - server/scripts/test-data-root.ts:269  'HARNESS_URL = "https://remote.example:8443"', 'NAVI_RECONNECT_MS = "7000"',
 - server/scripts/test-data-root.ts:319  + 'HARNESS_URL = "https://r.example" # 原先在 /old/mcp/dist/index.js\n');
-- server/scripts/test-db-file.ts:19  import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@navi/shared/legacy-names";
-- server/scripts/test-db-file.ts:84  writeFileSync(join(harness, LEGACY_HARNESS_DB_FILE), "db");
+- server/scripts/test-db-file.ts:22  import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@navi/shared/legacy-names";
+- server/scripts/test-db-file.ts:87  writeFileSync(join(harness, LEGACY_HARNESS_DB_FILE), "db");
 - server/scripts/test-duet-stall-visibility.ts:25  process.env.HARNESS_DB = process.env.NAVI_DB;
 - server/scripts/test-preview-host-api.ts:15  //   ① 宿主进程继承的、以及登录 shell 从 profile 里读回来的 `ASH_PROXY`/`HARNESS_PROXY`
 - server/scripts/test-preview-host-api.ts:42  // 别处（第 7 轮审查 P1）。旧名 `HARNESS_PROXY` 一并预置：scripts/env.mjs 会把 `HARNESS_*`
@@ -1666,7 +1668,7 @@ MCP 服务更早一代的登记名 harness：setup 迁成新名、注入检查�
 - server/scripts/test-stall-settle.ts:32  process.env.HARNESS_DB = process.env.NAVI_DB;
 - server/scripts/test-turn-interruption.ts:33  process.env.HARNESS_DB = process.env.NAVI_DB;
 - server/src/db/path.ts:4  import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@navi/shared/legacy-names";
-- server/src/db/path.ts:89  migrateLegacyDbFiles(current, join(dataDir, LEGACY_HARNESS_DB_FILE));
+- server/src/db/path.ts:93  migrateLegacyDbFiles(current, join(dataDir, LEGACY_HARNESS_DB_FILE));
 - server/src/mcp-registry/host-setup.ts:71  * 命令是同一个 node、NAVI_URL(旧登记里是 ASH_URL、HARNESS_URL)规范化之后是同一个地址。
 - server/src/preview-env.ts:25  * 进程继承下来的这两个**（连同它们的各代旧名 `ASH_*`、`HARNESS_*` —— dev.mjs 各代都认，留着等于
 - server/src/turn-identity.ts:99  // 再上一代(`HARNESS_`)的这里不再写,不清就原样留在这一回合的环境里。
@@ -1762,7 +1764,7 @@ MCP 服务更早一代的登记名 harness：setup 迁成新名、注入检查�
 - web/scripts/test-storage-rename.mjs:70  assert.equal(storage.key(0), "harness-next:sidebar-width", "前提：更早那一代先被枚举到");
 - web/scripts/test-storage-rename.mjs:103  const first = new StorageLike({ "ash:assistant-draft:r1": draft, "harness-next:small": "1", filler: "y".repeat(40) });
 - web/scripts/test-storage-rename.mjs:221  const grep = spawnSync("git", ["grep", "-nE", "[\"`](ash|harness-next)[:.][a-zA-Z$]", "--", "src"], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
-- web/scripts/test-storage-rename.mjs:228  console.log("PASS storage rename: legacy ash:/ash./harness-next: keys move to navi before anything reads storage, newest generation wins, and what does not fit 
+- web/scripts/test-storage-rename.mjs:228  console.log("PASS storage rename: legacy ash:/ash./harness-next: keys move to navi before anything reads storage, newest generation wins, and what does not fit
 - web/src/lib/storageRename.ts:6  // 同一个新键可能同时有好几代旧值（`ash:x` 和更早的 `harness-next:x` 都在）：按代数定胜负，新键 > ash >
 - web/src/lib/storageRename.ts:7  // harness-next，跟存储枚举的先后无关 —— 浏览器枚举键的顺序不是版本信息。新键已经在（比如另一个已升级
 - web/src/lib/storageRename.ts:22  ["harness-next:", "navi:"],
@@ -1822,8 +1824,8 @@ MCP 服务更早一代的登记名 harness：setup 迁成新名、注入检查�
 
 - docs/rename-db.md:22  | 都没有 | 建 `navi.db`（更早一代的 `harness.db` 在的话就地改名成 `navi.db`） |
 - server/scripts/test-db-file.ts:2  //   ① 选库：新目录建 navi.db；只有 ash.db 开 ash.db；两份都是库、只剩路标、账本还在 —— 一律不起、说清楚；harness.db 改名成 navi.db；
-- server/scripts/test-db-file.ts:86  assert.equal(readFileSync(join(harness, "navi.db"), "utf8"), "db", "harness.db 就地改名成 navi.db");
-- server/scripts/test-db-file.ts:87  console.log("✓ 选库：新建 navi.db、老安装开 ash.db、认不准的三种情形不起、harness.db 改成 navi.db");
+- server/scripts/test-db-file.ts:89  assert.equal(readFileSync(join(harness, "navi.db"), "utf8"), "db", "harness.db 就地改名成 navi.db");
+- server/scripts/test-db-file.ts:106  console.log("✓ 选库：新建 navi.db、老安装开 ash.db、认不准的三种情形不起、harness.db 改成 navi.db；显式路径也过改名的闸；锁里重认");
 - server/scripts/test-singleton.ts:82  const legacy = join(root, "harness.db");
 - server/src/db/path.ts:67  * 更早的 `harness.db` 就地改名成 `navi.db`（那一代没有并存的旧版服务，也没有跟着库名走的状态文件）。
 
@@ -1833,4 +1835,10 @@ MCP 服务更早一代的登记名 harness：setup 迁成新名、注入检查�
 
 - docs/incidents.md:325  早上看侧栏，三条 8 月就跑完的 `审查:*` 任务排在 harness 最前面，怎么都折不掉。第一反应是折叠坏了——不是，是那几行的数据在凌晨被改写过。
 - docs/incidents.md:337  做进系统的是判据本身：没有待结算记录（证据行不存在、或存在但从没落过结算）且任务自己已终态、没有在飞的 `verifyRound`/`resumePrompt` 时，一律算已收口。回归用例在 `server/scripts/test-review-history.ts`（注意：harness 的验收前置命令只有 `np
+
+## unclassified（1 处）
+
+没有一条规则认得：要么补规则说清为什么留，要么它是漏改，该换掉
+
+- server/scripts/test-db-file.ts:91  for (const d of [fresh, legacy, both, moved, halfway, harness]) {
 

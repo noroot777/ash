@@ -58,3 +58,14 @@ export function dbFileIn(dataDir) {
   const legacy = join(dataDir, LEGACY_DB_FILE);
   return legacyDbState(legacy) === "present" ? legacy : current;
 }
+
+/**
+ * 服务会拒绝启动的那几种情形（server/src/db/path.ts chooseDbFileIn 的同一套）：账本在、两份都是库、只剩路标。
+ * 返回一句原因，正常时 null。要**开库**的脚本（drizzle-kit 那类）先问它，别对着认不准的目录照 dbFileIn 开下去。
+ */
+export function unclearDbReason(dataDir) {
+  if (existsSync(join(dataDir, DB_RENAME_JOURNAL))) return `${dataDir} 里的库改名上次没做完（${DB_RENAME_JOURNAL} 还在），先 npm run rename-db 处理掉`;
+  const old = legacyDbState(join(dataDir, LEGACY_DB_FILE));
+  if (existsSync(join(dataDir, DB_FILE_NAME))) return old === "present" ? `${dataDir} 里 ${DB_FILE_NAME} 和 ${LEGACY_DB_FILE} 都是库，分不清该开哪一份` : null;
+  return old === "moved" ? `${dataDir} 里的 ${LEGACY_DB_FILE} 是改名留下的路标，但 ${DB_FILE_NAME} 不在` : null;
+}

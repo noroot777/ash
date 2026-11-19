@@ -47,7 +47,7 @@ export function harnessSection(files, readText) {
   const lines = [`# 二、更早一代 harness（${total} 处）`, ""];
   for (const [id, items] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
     lines.push(`## ${id}（${items.length} 处）`, "", HARNESS_WHY[id], "");
-    for (const k of items) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160)}`);
+    for (const k of items) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160).trimEnd()}`);
     lines.push("");
   }
   return lines;
@@ -82,11 +82,11 @@ export function renderReport({ kept, ruleFiles, files, readText, opaque }, { reg
   ];
   for (const [id, items] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
     lines.push(`## ${id}（${items.length} 处）`, "", why[id], "");
-    for (const k of items) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160)}`);
+    for (const k of items) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160).trimEnd()}`);
     lines.push("");
   }
   lines.push(`## rule-file（${ruleFiles.length} 处）`, "", "规则文件由人改写（每处多一个字节，脚本不碰，见 scripts/rule-guard.mjs）；这里是改完之后仍留着的", "");
-  for (const k of ruleFiles) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160)}`);
+  for (const k of ruleFiles) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160).trimEnd()}`);
   lines.push("", "## rename-tooling", "", "改名自己的脚本和交付文档：旧名是规则与说明本身，只记数，不逐行列", "");
   for (const path of toolingFiles) if (path !== remaining && files.includes(path)) lines.push(`- ${path}：${tokenLines(path).length} 行`);
   // 正文没按文本读的（文件名照常挪，不在这里说）：认不准的每一份都列；登记过的二进制只列字节里出现了 ash 的。
