@@ -6,7 +6,7 @@ import { reviewerRestoredNote, reviewerTurnNote } from "./conversationReviewer.t
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { isUnshownNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
 import type { CrashedTurn } from "./turnFailure.ts";
-import { absorbs, noVerdictCauseView, noVerdictPartId, saysWhyNoVerdict, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";
+import { absorbs, namesLane, noVerdictCauseView, noVerdictPartId, saysWhyNoVerdict, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";
 import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
@@ -184,17 +184,22 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
     out.push(orphan.row);
     return orphan;
   };
-  // 有审查结论那一行时，审查自己的话（reviewOwned）不再单记一条：记录里那一轮已经有结论那一条（点它去
-  // 那一轮），这句话贴在结论下面；再记进执行者那一回合的「N 条记录」，读起来就是执行者那一回合的事。
-  const record = (receipt: TurnReceipt, part: FootnotePart | null) => {
-    if (verdict && !reviewerTurn && part && reviewOwned(part)) return;
+  // 已经记进这一轮审查的那几句不再记进执行者那一回合的「N 条记录」（读起来就是执行者那一回合的事）：
+  // 结论气泡下面那一句原因已经说了的（absorbs），指名道姓说这一轮为什么没结论的原因旁注（namesLane，
+  // 审查状态里有同一份），以及这一轮审查者会话收口后自己那一回合的话（它在这一轮的经过里，见
+  // conversationFeedRows）。记录里那一轮有结论那一条，点它去那一轮。其余的照记——被盖过时
+  // 它们不回执行者回合的尾注，记录是它们唯一的去处。
+  const inRound = (event: EventItem | undefined) => !!verdict && !!event
+    && (verdict.row.lane.items.includes(event) || namesLane(verdict.row.lane, event));
+  const record = (receipt: TurnReceipt, owned: boolean) => {
+    if (owned && !reviewerTurn) return;
     if (turn) give(turn, [receipt]);
     else (orphan ?? openOrphan(receipt.id)).row.receipts.push(receipt);
   };
   const note = (part: FootnotePart, receipt: TurnReceipt | null) => {
     if (verdict) {
       verdict.parts.push(part);
-      if (receipt) record(receipt, part);
+      if (receipt) record(receipt, part.kind === "event" && inRound(part.item));
       return;
     }
     if (turn) {
@@ -246,12 +251,12 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       const absorbed = verdict?.cause ? absorbs(verdict.cause.entry, event) : null;
       if (absorbed && verdict?.cause) {
         if (absorbed.detail && !verdict.cause.part.view.detail) verdict.cause.part.view = { ...verdict.cause.part.view, detail: absorbed.detail };
-        record(receipt, verdict.cause.part);
+        record(receipt, true);
         return;
       }
       if (view.tier !== "receipt") note({ kind: "event", id: event.id, at: event.at, view, item: event }, receipt);
-      else if (turn) give(turn, [receipt]);
-      else pending.push(receipt);
+      else if (turn) record(receipt, inRound(event));
+      else if (!inRound(event)) pending.push(receipt);
       return;
     }
     // 同一回合上新开的一轮：上一行结论此刻就让位（理由见上面的说明），它照样在这一回合的记录里。

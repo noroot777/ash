@@ -25,6 +25,7 @@ import type { MonitorWakeData } from "./monitor-wake.ts";
 import { timelineNoticeOf, type TimelineNotice } from "./timeline-notice.ts";
 import { LEGACY_SYS_MARKER } from "./index.ts";
 import { systemResumeOf, type SystemResume } from "./system-resume.ts";
+import { settleNoteQuestion } from "./questions.ts";
 
 /**
  * 一条记录的身份：这条会话的第几条记录（`seq`，trace 与 .md 共用一个号段，实时事件带同一个值），
@@ -116,27 +117,38 @@ const answerIdsOf = (value: unknown): { answerIds?: string[] } => {
 };
 
 /**
- * 老会话专用：2026-08-31 之前，结算说明（「这一轮为什么落成这个状态」）是直接写进正文的一段引用块，
- * 紧贴在回合收口那一行（agentEnd）前面。它是 Navi 说的话，不是智能体的：照正文解析，页面就把它画成
- * 执行者（或审查者）自己说的一段，审查者那条会话里还会单独冒出一颗不在审查段里的气泡。这里只认当年
- * 服务端写死的那几种起头（settle-status.ts 的落位说明），并且要求这一段（当年是 `\n> ${note}\n`，说明
- * 里带换行时续行没有引用符号）后面隔着空行就是收口那一行 —— 智能体自己引的一段话后面还有别的话。认出来
- * 就落成跟新会话同一种结算旁注（`level:"notice"`）。
+ * 老会话专用：2026-08-31 之前，结算说明（「这一轮为什么落成这个状态」）是直接写进正文的一段引用块
+ * （`\n> ${note}\n`，说明里带换行时续行没有引用符号），紧贴在回合收口那一行（agentEnd）前面。它是 Navi
+ * 说的话，不是智能体的：照正文解析，页面就把它画成执行者（或审查者）自己说的一段，审查者那条会话里还会
+ * 单独冒出一颗不在审查段里的气泡。
+ *
+ * 光凭「引用的字像结算说明、又恰好在末尾」证明不了是服务端写的 —— 智能体照样会引用一句旧提示收尾。所以
+ * 先按记录格式排除现行正文：那段正文带着身份（开头那一行标记有记录号），或者收口那一行带记录号、晚于
+ * 服务端改写法那一版（00c771eca，2026-08-31 18:28 +0800，留一天给没重启的旧进程），一律照原文留着。
+ * 剩下的老记录里，只认当年写死的那几种起头（settle-status.ts 的落位说明）：提问那两种按完整的说明格式认
+ * （settleNoteQuestion，题目里可以有空行、分几段）；其余几种都是一句话，要求这一段后面隔着空行就是收口。
+ * 认出来就落成跟新会话同一种结算旁注（`level:"notice"`）。
  */
-const LEGACY_SETTLEMENT_QUOTE = /^> (续聊回合(异常结束|被手动停止|分组被暂停|以提问结束)|分组被暂停,本回合被中止|本回合以提问暂停|回合正常结束,但(本回合内没有收到|agent 未调用) complete_task)/;
+const LEGACY_SETTLEMENT_QUOTE = /^> (续聊回合(异常结束|被手动停止|分组被暂停|以提问结束)|分组被暂停,本回合被中止|本回合以提问暂停|回合正常结束,但 ?(本回合内没有收到|agent 未调用) ?complete_task)/;
+const LEGACY_SETTLEMENT_UNTIL = "2026-09-01T10:28:31.000Z";
 
-/** 从 `from` 起这一段老结算说明到哪一行为止（收口那一行的前一行）；后面不是收口就不是它。 */
-function legacySettlementQuote(lines: readonly string[], from: number): { last: number; at?: string } | null {
-  if (!LEGACY_SETTLEMENT_QUOTE.test(lines[from]!.trim())) return null;
-  let last = from;
-  while (last + 1 < lines.length && lines[last + 1]!.trim() && !lines[last + 1]!.startsWith("\x1e")) last += 1;
-  let end = last + 1;
-  while (end < lines.length && !lines[end]!.trim()) end += 1;
-  if (!lines[end]?.startsWith("\x1e")) return null;
+/**
+ * 从 `from` 起这一段老结算说明的原文和最后一行（收口那一行之前）；不是它就是 null。
+ * `modern`：这段正文开头带着身份，是现行格式写的。
+ */
+function legacySettlementQuote(lines: readonly string[], from: number, modern: boolean): { text: string; last: number; at?: string } | null {
+  if (modern || !LEGACY_SETTLEMENT_QUOTE.test(lines[from]!.trim())) return null;
+  let end = from + 1;
+  while (end < lines.length && !lines[end]!.startsWith("\x1e")) end += 1;
   let close: Sentinel | null = null;
-  try { close = JSON.parse(lines[end]!.slice(1)) as Sentinel; } catch { /* 不是记录行 */ }
-  if (close?.t !== "agentEnd") return null;
-  return { last, ...(close.at ? { at: close.at } : {}) };
+  try { close = end < lines.length ? JSON.parse(lines[end]!.slice(1)) as Sentinel : null; } catch { /* 不是记录行 */ }
+  if (close?.t !== "agentEnd" || recordIdentityOf(close) || !close.at || !(close.at < LEGACY_SETTLEMENT_UNTIL)) return null;
+  let last = end - 1;
+  while (last > from && !lines[last]!.trim()) last -= 1;
+  const block = lines.slice(from, last + 1);
+  const text = block.join("\n").replace(/^\s*> /, "").trim();
+  if (settleNoteQuestion(text) === null && block.some((line) => !line.trim())) return null;
+  return { text, last, at: close.at };
 }
 
 export function parseSessionSpans(out: string): SessionSegmentSpan[] {
@@ -198,18 +210,17 @@ export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan
       skippingDiagnostic = false;
     }
     // 老会话里写进正文的结算说明（见 LEGACY_SETTLEMENT_QUOTE）：落成结算旁注，不进气泡。
-    const quote = legacySettlementQuote(lines, index);
+    const quote = legacySettlementQuote(lines, index, !!marker);
     if (quote) {
       flush();
-      const text = lines.slice(index, quote.last + 1).join("\n").replace(/^> /, "").trim();
-      const seg: ConvSeg = { kind: "system", text, level: "notice", ...(quote.at ? { at: quote.at } : {}) };
+      const seg: ConvSeg = { kind: "system", text: quote.text, level: "notice", ...(quote.at ? { at: quote.at } : {}) };
       legacyNotes.add(seg);
       push(seg, index, quote.last);
       skipThrough = quote.last;
       return;
     }
-    // 认不出段落边界的那一句（后面不是收口）照旧只能按前缀藏掉。
-    if (trimmed.startsWith("> 续聊回合异常结束(")) return;
+    // 认不出段落边界的那一句（后面不是收口）照旧只能按前缀藏掉；带身份的现行正文不猜。
+    if (!marker && trimmed.startsWith("> 续聊回合异常结束(")) return;
     if (line.startsWith("\x1e")) {
       let j: Sentinel | null = null;
       try { j = JSON.parse(line.slice(1)) as Sentinel; } catch { /* not a turn line — ordinary text */ }

@@ -3,7 +3,8 @@ import type { FreeReviewRun } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import { stageOf, verifyMarkOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import { monitorWakeInput } from "./monitorWakeModel.ts";
-import { monitorWakeFedReviewer } from "./conversationReviewer.ts";
+import { monitorWakeFedReviewer, reviewerTurnNote } from "./conversationReviewer.ts";
+import { namesLane, saysWhyNoVerdict } from "./reviewNoVerdictCause.ts";
 import type { ReviewVerdictWord } from "./timelineNoticeCopy.ts";
 
 export type ReviewLaneConclusion = "verified" | "verify_failed" | "inconclusive" | null;
@@ -370,13 +371,27 @@ export function conversationFeedRows(
 ): ConversationFeedRow[] {
   const rows: ConversationFeedRow[] = [];
   let active: ActiveLane | null = null;
+  // 刚收口的那一轮和它的审查者会话：服务端先写结论旁注、后结算审查者那一回合，那一回合的结算说明
+  // （改落检查点暂停、会话轮换、归档失败…）和「这一轮为什么没结论」的原因旁注于是总落在收口之后。它们
+  // 说的是这一轮，记进这一轮的经过（在审查者那一回合上），同时照旧留在外面，归属那一步（conversationSystemRows）
+  // 贴在这一轮结论下面、不再记给执行者那一回合。认它们靠身份：带类型的原因旁注按 runId、轮号；其余的
+  // 按会话——得是这一轮审查者的那条会话。
+  let closed = null as { lane: ConversationReviewLane; reviewerSessionId: string | null } | null;
   const pushActive = (opts?: { complete?: boolean; superseded?: boolean }) => {
     if (!active) return;
-    rows.push(finishLane(active, opts));
+    const reviewerSessionId = active.reviewerSessionId;
+    const lane = finishLane(active, opts);
+    rows.push(lane);
+    closed = opts?.complete ? { lane, reviewerSessionId } : null;
     active = null;
   };
 
   for (const item of items) {
+    if (!active && closed && item.kind !== "event") closed = null;
+    if (!active && closed && item.kind === "event" && !laneStart(item) && (namesLane(closed.lane, item)
+      || (!!closed.reviewerSessionId && item.sessionId === closed.reviewerSessionId && (reviewerTurnNote(item) || saysWhyNoVerdict(item))))) {
+      closed.lane.items.push(item);
+    }
     const start = laneStart(item);
     const rerun = !!active && !!start && continuesLane(active, start);
     // 重跑那一条说了是哪一场、开轮那一条（升级前落的）没说：这张卡从此认这一场。

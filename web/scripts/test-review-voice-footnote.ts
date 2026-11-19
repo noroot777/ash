@@ -12,7 +12,10 @@
 //   ③ 被盖过的那一轮此刻还挂着动作（「继续本轮审查」）：那一句跟到这一回合的下一行结论下面，不落执行者回合；
 //   ④ 开着页面看：审查者会话的结算说明是直播到的，同样认得出是审查者的话（条目带着会话角色）；
 //   ⑤ 任务的事（验收暂缓之类）照旧：被盖过的那一行下面的它们回到执行者回合的尾注；
-//   ⑥ 认不出审查段的老记录：原因旁注照旧落在执行者回合上（「继续本轮审查」退回挂在它上面），结算说明不进尾注。
+//   ⑥ 认不出审查段的老记录：原因旁注照旧落在执行者回合上（「继续本轮审查」退回挂在它上面），结算说明不进尾注；
+//   ⑦ 审查者那一回合收口后说的别的事（改落检查点暂停）：不被「没结论」的原因吞掉，记进这一轮的经过
+//      （审查者那一回合的记录上），不进执行者回合的尾注和记录；这一轮被重跑盖过后，经过里照样在；
+//   ⑧ 另一条审查者会话说的事（归档没成）：认不出是哪一轮的，不吞、不丢，照记在记录里。
 // 跑：npm -w web run test:review-voice-footnote
 import assert from "node:assert/strict";
 import type { FreeReviewRun, Session } from "@ash/shared";
@@ -20,7 +23,7 @@ import { buildConversationItems, type ConversationItem, type TimelineEntry } fro
 import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
 import { conversationDebateRows } from "../src/task-detail/conversationDebateRows.ts";
-import { conversationSystemRows } from "../src/task-detail/conversationSystemRows.ts";
+import { conversationSystemRows, laneReceipts } from "../src/task-detail/conversationSystemRows.ts";
 import { laneNoVerdicts, noVerdictPartId } from "../src/task-detail/reviewNoVerdictCause.ts";
 import { crashedTurns } from "../src/task-detail/turnFailure.ts";
 
@@ -52,10 +55,10 @@ function transcript() {
       return self.aside(`自由工作流第 ${round} 轮审查未能正常给出结论，已停止自动链。`,
         { kind: "review.verdict", source: "free", round, verdict: "inconclusive", reviewer: "顶级审查" }, at);
     },
-    crashed(at: string) {
+    crashed(at: string, text = CRASH) {
       const note = ++seq;
       put({ t: "agentEnd" }, at);
-      put({ t: "system", agent: "codex", text: CRASH, level: "notice" }, at, note);
+      put({ t: "system", agent: "codex", text, level: "notice" }, at, note);
       return self;
     },
     text(body: string, at: string) { put({ t: "agent" }, at); out.push(`${body}\n`); return self; },
@@ -233,6 +236,51 @@ const reviewish = (text: string) => /中断|模型上游|续聊回合|没有给�
   const { shown, turnId } = display(items, [], new Set([why.id]));
   const records = (shown.receipts.get(turnId) ?? []).map((receipt) => receipt.view.text);
   assert.ok(records.some((text) => /第 4 轮审查中断/.test(text)), "没有结论那一行可代表这一轮：原因旁注照旧记在这一回合上，删除在这里");
+}
+
+// ⑦ + ⑧：审查者开过口的一轮，中断收口后审查者会话又说了别的事。
+{
+  const CHECKPOINT = "本回合要落的终态被拦下，改为检查点暂停：名下还有没了结的哨兵（回归测试）。";
+  const ARCHIVE = "Codex 会话自动归档未完成，桌面端可能仍显示此会话；执行结果与续跑记录保留。permission denied";
+  const reviewer = { ...reviewerA, id: "R-spoke", startedAt: "2026-11-19T01:23:13.700Z" } as unknown as Session;
+  const other = { ...reviewerA, id: "R-other", startedAt: "2026-11-19T01:00:00.000Z" } as unknown as Session;
+  const build = (rerun: boolean) => {
+    const t = transcript()
+      .start(1, "RUN3", "2026-11-19T01:23:13.722Z")
+      .resume("2026-11-19T01:23:14.176Z")
+      .text("先看改动范围，再跑一遍构建。", "2026-11-19T01:23:30.000Z")
+      .noVerdict(1, "2026-11-19T01:24:51.409Z")
+      .crashed("2026-11-19T01:24:51.377Z", CHECKPOINT);
+    if (rerun) t.start(1, "RUN3", "2026-11-19T01:25:30.000Z", "重跑上一回合：顶级审查");
+    const otherOutput = transcript().crashed("2026-11-19T01:24:52.000Z", ARCHIVE).toString();
+    return buildConversationItems(
+      [{ session: exec, output: EXEC_OUTPUT, trace: [] }, { session: other, output: otherOutput, trace: [] }, { session: reviewer, output: t.toString(), trace: [] }],
+      [exec, other, reviewer], [],
+    );
+  };
+  const runs = [run("RUN3", 1, "failed", "2026-11-19T01:23:13.264Z", { noVerdict: cause })] as unknown as FreeReviewRun[];
+  const kept = (text: string) => text.includes("检查点暂停");
+
+  const settled = display(build(false), runs);
+  assert.deepEqual(settled.footnote.filter((text) => kept(text) || reviewish(text)), [], `执行者回合的尾注里出现了审查的话：${JSON.stringify(settled.footnote)}`);
+  const loose = (settled.shown.receipts.get(settled.turnId) ?? []).filter((receipt) => !receipt.lane).map((receipt) => receipt.view.text);
+  assert.ok(!loose.some(kept), `检查点那一句不该记进执行者回合的记录：${JSON.stringify(loose)}`);
+  const verdict = settled.shown.rows.find((row) => row.kind === "verdict");
+  assert(verdict && verdict.kind === "verdict", "这一轮收了口，是一行结论");
+  const under = verdict.footnote.parts.map((part) => part.view.text);
+  assert.deepEqual(under, ["中断 · 模型上游连不上（503）"], `结论下面只有原因那一句：${JSON.stringify(under)}`);
+  const round = laneReceipts(verdict.lane);
+  const said = [...round.receipts.values()].flat().map((receipt) => receipt.item?.text ?? "");
+  assert.ok(said.some(kept), `检查点那一句没被原因吞掉，记在这一轮审查者那一回合上：${JSON.stringify(said)}`);
+  assert.ok(loose.some((text) => text.includes("归档")), `另一条会话说的事不吞不丢：${JSON.stringify(loose)}`);
+
+  const superseded = display(build(true), runs);
+  assert.deepEqual(superseded.footnote.filter((text) => kept(text) || reviewish(text)), [], `被盖过以后执行者回合的尾注里出现了审查的话：${JSON.stringify(superseded.footnote)}`);
+  const lanes = (superseded.shown.receipts.get(superseded.turnId) ?? []).flatMap((receipt) => receipt.lane ? [receipt.lane] : []);
+  assert.ok(lanes.some((lane) => [...laneReceipts(lane).receipts.values()].flat().some((receipt) => kept(receipt.item?.text ?? ""))),
+    "被盖过的那一轮，经过里照样有检查点那一句");
+  const records = (superseded.shown.receipts.get(superseded.turnId) ?? []).filter((receipt) => !receipt.lane).map((receipt) => receipt.view.text);
+  assert.ok(records.some((text) => text.includes("归档")), `被盖过以后，另一条会话说的事还在记录里：${JSON.stringify(records)}`);
 }
 
 console.log("✓ review voice stays off the executor's footnote");
