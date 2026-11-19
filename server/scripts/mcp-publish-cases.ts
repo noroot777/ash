@@ -123,7 +123,10 @@ export async function checkPublishCases(
     const file3 = join(h3, "deep", "config.json");
     const r3 = publish.publishConfirmed({ file: file3, previous: null, body: "{}\n" });
     assert.ok(r3.ok, r3.ok ? "" : r3.why);
-    assert.equal(statSync(file3).mode & 0o777, 0o600, "新建的配置只给自己读");
+    // Windows 的访问控制在 ACL 上,mode 位只表达得出只读与否(读回来恒为 0o666/0o444),同 test-navi-mcp-registry.ts。
+    if (process.platform !== "win32") {
+      assert.equal(statSync(file3).mode & 0o777, 0o600, "新建的配置只给自己读");
+    }
     group("写盘失败:持续故障在动手之前收手、真写失败回写原文、新建不留半截也不放宽权限");
   }
 
@@ -299,7 +302,10 @@ export async function checkPublishCases(
     const backup = (r.ok ? r.backup : "") ?? "";
     assert.ok(backup.startsWith(`${plain}-`), `被占住就换一个自己的唯一名字:${backup}`);
     assert.equal(readFileSync(backup, "utf8"), before, "备份必须逐字节是改之前那一版");
-    assert.equal(statSync(backup).mode & 0o777, 0o600, "备份一出生就只有自己能读");
+    // Windows 的访问控制在 ACL 上,mode 位只表达得出只读与否(读回来恒为 0o666/0o444),同 test-navi-mcp-registry.ts。
+    if (process.platform !== "win32") {
+      assert.equal(statSync(backup).mode & 0o777, 0o600, "备份一出生就只有自己能读");
+    }
     assert.equal(readFileSync(file, "utf8"), body, "正事也办成了");
 
     // ⒝ 那个名字上是**上一次留下的真备份**:也不覆盖 —— 那是用户手里的旧版本。

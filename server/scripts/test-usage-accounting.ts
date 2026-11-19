@@ -20,6 +20,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-usage-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -546,5 +547,5 @@ try {
 
   console.log("Token 账本验证通过：两条 SQL 路径、累计求差、v3 历史纠偏、水位覆盖");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

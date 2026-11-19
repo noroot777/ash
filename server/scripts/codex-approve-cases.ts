@@ -12,7 +12,9 @@ import { join } from "node:path";
 import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
 import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
 import type { CodexAsk } from "../src/auth/user-cli-mcp.js";
-import { DATA_DIR, REPO_DIR } from "../src/paths.js";
+import { NAVI_MCP_TABLE } from "../src/mcp-registry/catalog.js";
+import { tomlBlock } from "../src/mcp-registry/shapes.js";
+import { CODE_DIR, DATA_DIR, REPO_DIR } from "../src/paths.js";
 import { type Asked, bench, canned, ensure, askRealCodex, HAS_BUILT_MCP, HAS_CODEX, LISTS_NAVI } from "./user-cli-mcp-bench.js";
 
 // 补进去的那条登记的表头：落的是当前名。宿主机上的 `[mcp_servers.ash]` 是改名之前 setup 写的旧名。
@@ -41,9 +43,23 @@ export async function checkCodexApprove(): Promise<void> {
     if (HAS_BUILT_MCP) {
       assert.match(written, TABLE_RE, "补的是规范名那条");
       assert.ok(!/enabled = false/.test(written), "宿主那条关着的一个字都不许搬过来");
-      assert.match(written, /mcp[\\/]dist[\\/]index\.js/, "搬不了就按内置那条渲染(指向本仓库的 MCP 入口)");
+      // 按 TOML 解码之后比路径,不拿正则对原文:Windows 上路径在 TOML 基本字符串里是成对的 `\\`,
+      // 原文正则写成单个分隔符就只在 POSIX 上配得上。
+      const codex = NAVI_MCP_TABLE.codex;
+      assert.ok(codex.kind === "file");
+      assert.deepEqual(codex.shape.launch?.(written)?.args, [join(CODE_DIR, "mcp", "dist", "index.js")],
+        "搬不了就按内置那条渲染(指向本仓库的 MCP 入口)");
     } else {
       assert.equal(written, before, "没东西可搬、仓库也没 build ⇒ 一个字都不写");
+    }
+    // 上面那句只在 build 过的检出上走得到,而开发机上的路径里没有反斜杠:Windows 形状的路径单独
+    // 渲染一遍再解回来,转义写错在这台机器上也红。
+    {
+      const codex = NAVI_MCP_TABLE.codex;
+      assert.ok(codex.kind === "file");
+      const winEntry = "D:\\ai\\navi\\mcp\\dist\\index.js";
+      assert.deepEqual(codex.shape.launch?.(tomlBlock({ command: "node", args: [winEntry], env: {} }, true))?.args, [winEntry],
+        "Windows 路径写进 TOML 再读回来是同一个路径");
     }
 
     // **没批准就一个字节都没写**:codex 看完候选说它仍然列不出 navi ⇒ 原文照旧、连 mtime

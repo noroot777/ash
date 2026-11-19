@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerEvent } from "@navi/shared";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-resume-prompt-broadcast-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -91,5 +92,5 @@ try {
   unsubscribe();
   console.log("resume-prompt broadcast test passed");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

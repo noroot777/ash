@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-search-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -99,7 +100,7 @@ try {
   assert.equal((await searchAll("修复")).length, 0, "普通词不该误撞任何任务 id");
   assert.equal((await searchAll("隐藏搜索词")).length, 0, "已确认转出的本机存档不应出现在搜索结果");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 
 console.log("search query + task-id + git overview parser tests passed");

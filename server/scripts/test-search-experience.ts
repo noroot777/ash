@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { isSearchQueryReady, searchMatchQuality } from "@navi/shared/search";
 import { SearchCorpus } from "../src/search-corpus.js";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-search-experience-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -118,5 +119,5 @@ try {
   assert.equal(corpus.snippets(["alpha", "omega"]).length, 2);
   console.log("search experience passed: real user/system/agent turns, tool inputs, changes and paths, match/evidence invariant, raw exclusions, ranking and snippets");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

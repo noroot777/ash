@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-turn-freeze-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -235,5 +236,5 @@ try {
   const { freezeArchiveCases } = await import("./turn-freeze-archive-cases.js");
   await freezeArchiveCases(root);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

@@ -65,13 +65,20 @@ function consume(child, stopAfter) {
       if (stopAfter && lines.length >= stopAfter) resolve("stopped");
     });
     child.on("close", (code) => resolve("closed:" + code));
+    // 起不来时只有 'error'、没有 'close'(spawn.ts 的 failedChild 就是这样):只等 'close' 的话
+    // 这里会一直等到外层超时,看到的是「卡死」而不是「起不来」。
+    child.on("error", (error) => resolve("error:" + error.message));
   });
 }
 
 if (mode === "v1") {
   const child = spawnForRun(dir, process.execPath, [agentScript], "", undefined, paths);
   // 读到第 6 行就「被重启」：记下 pid / 启动时间 / 已消费到的字节位置，然后硬退出。
-  await consume(child, 6);
+  const how = await consume(child, 6);
+  if (how.startsWith("error:") || !child.pid) {
+    writeFileSync(stateFile, JSON.stringify({ spawnError: how.startsWith("error:") ? how.slice("error:".length) : "拿不到 pid" }));
+    process.exit(1);
+  }
   const info = inspectProcess(child.pid);
   writeFileSync(stateFile, JSON.stringify({
     pid: child.pid, startedAt: info?.startedAt ?? null,
@@ -96,7 +103,9 @@ const run = (args, env) =>
     // **夹具**的方言问题，不是产品问题）。`--import tsx` 不依赖 PATH，两个平台同一条命令。
     const p = spawn(process.execPath, ["--import", "tsx", serverScript, ...args], {
       cwd: join(HERE, ".."),
-      env: { ...process.env, ...env },
+      // 假 agent 是 node 跑本文件写的脚本:声明成自己铺的执行器,设了 NAVI_RUNS_DIR 时隔离闸
+      // (executors/spawn.ts 的 guardAgentSpawn)也放它过去(同 test-control-fifo.ts)。
+      env: { ...process.env, NAVI_TEST_AGENT_BIN: process.execPath, ...env },
       stdio: ["ignore", "inherit", "inherit"],
     });
     p.on("close", resolve);
@@ -108,6 +117,12 @@ const stateB = join(dir, "b.json");
 console.log("① 起 server-v1，读几行后硬杀掉它…");
 await run(["v1", dir, agentScript, stateA]);
 const a = JSON.parse(readFileSync(stateA, "utf8"));
+if (a.spawnError) {
+  // 起不来就当场说原因:只等 'close' 的那一版在这里一直等到外层超时(2026-11-19 真机上设了
+  // NAVI_RUNS_DIR、隔离闸拦下假 agent 时卡满 900 秒)。
+  console.error(`✕ 假 agent 没起来,后面的断言无从谈起:${a.spawnError}`);
+  process.exit(1);
+}
 console.log(`   v1 读到 ${a.lines.length} 行，agent pid=${a.pid}，offset=${a.offset}`);
 
 console.log("② 检查 agent 是否活过了这次「重启」…");

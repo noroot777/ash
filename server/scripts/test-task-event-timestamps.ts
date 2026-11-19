@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { ServerEvent } from "@navi/shared";
 import { parseSessionOutput } from "@navi/shared/session-output";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-task-event-timestamps-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -72,5 +73,5 @@ try {
   unsubscribe();
   console.log("task event timestamps: 状态水位、系统旁注时间与类型均保持实时/落盘一致");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

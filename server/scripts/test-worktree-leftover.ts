@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-worktree-leftover-"));
 const repo = join(root, "repo");
@@ -119,5 +120,5 @@ try {
 
   console.log("worktree 残骸清理 / 幂等 / 复用防护 / 脏工作区拦截：全部通过");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

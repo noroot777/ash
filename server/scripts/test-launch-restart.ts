@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { tsxLoaderPath } from "./tsx-loader.js";
+import { tsxLoaderUrl } from "./tsx-loader.js";
 
 const phase = process.argv[2];
 const SOURCES = ["group", "prerequisite", "dispatch", "crashed"] as const;
@@ -24,7 +24,7 @@ if (!phase) {
   const root = mkdtempSync(join(tmpdir(), "navi-launch-restart-"));
   try {
     for (const name of ["seed", "resume"]) {
-      const child = spawnSync(process.execPath, ["--import", tsxLoaderPath(), fileURLToPath(import.meta.url), name], {
+      const child = spawnSync(process.execPath, ["--import", tsxLoaderUrl(), fileURLToPath(import.meta.url), name], {
         env: { ...process.env, NAVI_TEST_FIXTURE_ROOT: root }, encoding: "utf8", timeout: 400_000,
       });
       process.stdout.write(child.stdout ?? "");

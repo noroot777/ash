@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-gate-reclaim-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -96,6 +97,6 @@ try {
 
   console.log("accept-gate reclaim: ok");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 process.exit(0);

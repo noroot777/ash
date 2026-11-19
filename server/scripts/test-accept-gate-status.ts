@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-gate-status-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -195,5 +196,5 @@ try {
   await quiet("批量预判", () => acceptGateWouldRun(task!, project!));
   console.log("accept-gate-status: 源码身份比对不调起 clean/process 过滤器也不进嵌套仓库；过滤文件证明得了的改动照拦、证明不了的如实说判不了；大批路径不撞命令行上限；换行/排除照项目配置；目录名尾部空格不被裁；验收台与预判同样不执行程序");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

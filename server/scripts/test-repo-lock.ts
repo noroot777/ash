@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-repo-lock-test-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -274,5 +275,5 @@ try {
   console.log("repo lock: 互斥 / 路径归一 / 可重入 / 异常释放 / 排队上报 / 并行验收串行合并 / 排队留痕全部通过");
 } finally {
   for (const dir of transcripts) rmSync(dir, { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

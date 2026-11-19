@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getHeapStatistics } from "node:v8";
 import { readRunCorpus, SearchCorpus } from "../src/search-corpus.js";
 import { SearchLogText } from "../src/search-log-text.js";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-search-stream-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -152,5 +153,5 @@ try {
   assert.equal(emitted.length, 1);
   console.log(`search stream passed: 256 MiB single-line logs, six concurrent tasks, heap limit ${Math.round(heapLimit / 1024 / 1024)} MiB`);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

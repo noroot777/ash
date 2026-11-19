@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, truncateSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { removeTmpStage } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "navi-file-raw-"));
 const repo = join(stage, "repo");
@@ -112,5 +113,5 @@ try {
 
   console.log("任务工作目录原始字节(workspaceOnly)回归通过");
 } finally {
-  rmSync(stage, { recursive: true, force: true });
+  await removeTmpStage(stage);
 }

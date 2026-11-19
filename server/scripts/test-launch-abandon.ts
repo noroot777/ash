@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 「我自己处理了」这个显式出口的回归(server/src/terminal-abandon.ts)。
 //
@@ -15,14 +16,26 @@ import { Hono } from "hono";
 //      东西管。两者混成一格就会凭空多出一句「已停止」,那是停止语义里最不许出现的谎。
 //
 // 残留事实用一个**外部的**活进程扮演(不是这次启动起来的),于是不依赖 lsof、也不依赖
-// 守护化形状,在 CI 和 Windows 上都是确定性的。
+// 守护化形状。
+//
+// **Windows 上这个死局不存在,整条跳过。** 账上的号算不算还活着走的是 `processAlive`
+// (terminal-stop-facts.ts 的 liveLeftovers),它在 win32 上恒为 false(terminal-process-tree.ts:
+// 那边没有进程组,脱管的进程判不出来,terminal.ts 起会话那段写明了这条边界)。于是 Windows 上
+// 欠着的号一律算「已经没了」,启动不会被顶回,也就没有出口可测;生产上那边也记不下这种号
+// (端口兜底与记号扫描在 Windows 上都整档不启用)。以前在真机上「断言都过」是巧合:等启动脚本
+// 退掉只给了 5 秒,PowerShell 还没退完,会话本来就在跑(2026-11-19 真机:等到真退了,第二次
+// 启动拿到 201)。哪天 Windows 有了真的判活,这一条要跟着打开。
+if (process.platform === "win32") {
+  console.log("test-launch-abandon: SKIP —— Windows 上账上的号恒判为已退出(processAlive),没有死局可解");
+  process.exit(0);
+}
 
 const temporary = realpathSync(mkdtempSync(join(tmpdir(), "navi-launch-abandon-")));
 process.env.NAVI_DB = join(temporary, "test.db");
 const { terminalSessions } = await import("../src/terminal.js");
 const { startCommand } = await import("../src/terminal-commands.js");
 const { launchResidue, mountLaunchAbandonRoutes, residueNotice } = await import("../src/terminal-abandon.js");
-const { dbClient } = await import("../src/db/index.js");
+// 库由收尾的 removeTmpStage 先松开再删(见 ./tmp-db.ts)。
 
 const windows = process.platform === "win32";
 const projectId = "abandon-project";
@@ -48,8 +61,11 @@ try {
   assert.equal((await startCommand(projectId, temporary, command)).status, 201);
   const sessionId = terminalSessions.listCommandSessions()
     .find((session) => session.projectId === projectId)!.id;
-  // 等启动脚本自己退掉:死局的典型形状是「脚本早退了,账上还挂着没核销的号」。
-  for (let i = 0; i < 200 && terminalSessions.get(sessionId, projectId)?.exitCode === null; i++) await delay(25);
+  // 等启动脚本自己退掉:死局的典型形状是「脚本早退了,账上还挂着没核销的号」。按条件等、上限放宽:
+  // Windows 上冷起一个 PowerShell 要过 Defender,原先 5 秒的上限不够,前提没成立就往下走,红在
+  // 一个看不出原因的 `201 !== 200` 上(2026-11-19 真机)。
+  for (let i = 0; i < 1200 && terminalSessions.get(sessionId, projectId)?.exitCode === null; i++) await delay(25);
+  assert.notEqual(terminalSessions.get(sessionId, projectId)?.exitCode ?? null, null, "夹具前提:启动脚本已经自己退了");
   terminalSessions.oweCommandLeftovers(sessionId, projectId, [strayPid],
     `pid ${strayPid} 核不上归属，一个字都没敢动`);
 
@@ -200,8 +216,7 @@ try {
 } finally {
   try { stray.kill("SIGKILL"); } catch { /* 已经没了 */ }
   terminalSessions.shutdown();
-  dbClient.close();
-  rmSync(temporary, { recursive: true, force: true });
+  await removeTmpStage(temporary);
 }
 
 async function processAlive(pid: number): Promise<boolean> {

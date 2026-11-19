@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TokenUsage } from "@navi/shared";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-claude-usage-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -155,5 +156,5 @@ try {
 
   console.log("claude 账本验证通过：线程累计求差、真实连续回合换算、逐条口径标记");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

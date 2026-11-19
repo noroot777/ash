@@ -10,8 +10,53 @@
 
 ## 〇、当前基线
 
-**2026-11-19 改名 navi 之后又测了一轮**（32 绿 / 9 红，红的逐条拿改名前的版本对照过）：清单、分类和叶子环境的
-跑法见 `docs/rename-navi-windows.md` 第一、二节。下面 10-23 那一段是改名之前的记录。
+**2026-11-19 改名 navi 之后的第一轮**(32 绿 / 9 红,红的逐条拿改名前的版本对照过)记录在
+`docs/rename-navi-windows.md` 第一、二节。同一天修了其中 7 条(`test:handoff` 修到对端 server 起得来,
+仍有 3 条红;`test-rename-navi.mjs` 是只在开发机上跑的改名脚本回归,没在 Windows 上修),修完重测的
+结果是下面这一段;再往下 10-23 那一段是改名之前的记录。
+
+**2026-11-19 实测(改名 navi 之后,Windows PowerShell 5.1 / node v22.20.0)。** 叶子环境照
+`scripts/test-runner.mjs` 的 `leafEnv`(擦掉各代库/运行目录/数据目录,每条自己的 `NAVI_DATA_DIR`
+与 `TEMP`/`TMP`,`NAVI_TEST_NO_MODEL_PROBE=1`),`PATH` 最前另放一组一调就失败的假 CLI。
+
+整链绿:`terminal`(14 条,`test-launch-abandon` 在 Windows 上整条跳过,理由见下)、
+`scheduled-messages`(10 条)、`navi-mcp-registry`(3 条)、`user-cli-mcp`(3 条,检出里 build 过
+`mcp/dist`)、`detached`(4 条)、`reattach`、`host-navi-mcp`。`detached` 与 `reattach` 在叶子**设了**
+`NAVI_RUNS_DIR` 时也绿。
+
+改名 ⑦ 那轮红的几处,修法和归类(都在改名之前的 `8abd51552` 上就红):
+
+| 测试 | 红在哪 | 归类与修法 |
+|---|---|---|
+| `test-service-ports-scan` | Windows 分支期望值少了 `membersIncomplete` | 夹具。期望值单写一份,POSIX 上拿空端口走同一出口核一遍 —— 结果对象再加字段,开发机先红 |
+| `test-scheduled-messages:503` | 看到会话就读状态,读到 `pending` | 夹具时序。会话行先建、执行器回执到了才落 `sent`(`onAccepted`),这是产品定义的先后;改成按条件等 |
+| `test-navi-mcp-registry:538` | 写死 `/profile/...` | C 类。契约写相对落点,期望值用 `join` 拼;往下露出的 `0o600` 权限位断言照已有写法只在 POSIX 断(Windows 的权限在 ACL 上) |
+| `codex-approve-cases:44` | 正则对不上 TOML 里成对的 `\\` | C 类。按 TOML 解码后比路径;另把 Windows 形状的路径渲染再解回来,开发机上也钉住 |
+| `test-stop-verification:130` | 「守护进程还活着」为假 | 产品边界,不是 bug。按记号点名守护进程那几节只在 POSIX 跑:Windows 上记号一问整档 `unavailable`,`processAlive` 恒为 false(`terminal-process-tree.ts`) |
+| `test-host-navi-mcp`、`test:handoff` | 找不到 drizzle-orm / tsx | 夹具。按包解析(`tsx-loader.ts` 的两个导出口;拷出来的代码树按 server 声明的依赖逐个按 Node 查找顺序借包)。`host-navi-mcp` 随后露出**家目录没隔离**:只给了 `HOME`,Windows 上 `homedir()` 认 `USERPROFILE`,于是读到了那台机器用户真实的 `~/.claude.json`(当场核过没有写入)。现在两个都给 |
+| 收尾 EBUSY | 断言都过、删舞台目录时 EBUSY | A 类。`tmp-db.ts` 的 `removeTmpStage`:先松开库,删除自己重试「被占着」那几种(最多约 20 秒;`rmSync` 的 `maxRetries` 不管目录本身第一下就 EBUSY)。`finally`/末尾删开着库的舞台的 45 条测试统一改用它;在真机上跑过,没有一条再红在收尾 |
+| `test-turn-visibility` | 单独跑时退出码 0、临时库留在磁盘上 | A 类,审查第 1 轮发现。清理挂在同步的 exit 钩子上、吞掉了 EBUSY,只有运行器替它收叶子目录时才看不出来;改成 `finally` 里 `removeTmpStage`。真机单独跑:绿,叶子 `TEMP` 里没有舞台目录剩下 |
+| `tsx-loader.ts` 的加载器口 | 子进程起不来:`ERR_UNSUPPORTED_ESM_URL_SCHEME` | C 类,审查第 1 轮发现。交给 `--import` 的裸路径 `D:\...` 被当成 `d:` 协议;加载器口改给 file URL(`tsxLoaderUrl`),CLI 口仍给路径。用它的三处(`test-launch-restart`、`test-monitor-checkpoint-recovery` 及其 `checkpoint-queue-cases`)真机上都起得来了,但随即红在正文,见下 |
+| `test-detached-survival` / `test-reattach` 设了 `NAVI_RUNS_DIR` | 卡满 900 秒 / `pid === undefined` | 夹具。三条进程测试都用 `NAVI_TEST_AGENT_BIN` 声明自己铺的假 agent;起不来时当场带原因失败,不再等一个不会来的 `close`(`failedChild` 只发 `error`) |
+
+`test-launch-abandon` **在 Windows 上整条跳过**:账上的号判活走 `processAlive`,win32 上恒为 false,
+「起不动也删不掉」的死局在那边不存在。以前真机上「断言都过」是巧合 —— 等启动脚本退掉只给了 5 秒,
+PowerShell 没退完、会话本来就在跑;等到真退了,第二次启动拿到 201。
+
+**还红着、这一轮没修的**(以前都被前面那条挡着、没跑到过):
+
+- `test:handoff` 里 3 条:`test-handoff:452` 报「任务回合还在收尾」409(时序);`test-handoff-return`
+  对端机器没有全局 git 身份(`Committer identity unknown`),收尾另有 `attacker.db` EBUSY;
+  `test-handoff-cli-config-dir` 的 `cliConfigDirForOwner` 为假。其余 20 条绿。
+- 收尾换成 `removeTmpStage` 的 45 条里,9 条红在正文(不在收尾):`accept-gate-status`、`preview-process`、
+  `project-git-config`(`spawnSync sh`)、`review-image-retention`、`review-resume`、`scm-guard`、
+  `session-read-errors`(chmod 造不出「读不动」)、`turn-output`(`spawnSync mkdir`)、`workflow-run`。
+  多半是 B/C 类夹具,没有逐条查。
+- 加载器修好后露出来的 2 条:`test-launch-restart` 红在「prerequisite:跑完一条补一条」等不到(同时满屏
+  「进程树问不出来」);`test-monitor-checkpoint-recovery` 红在 `checkpoint-ack-failure-cases`:用来造
+  「越线凭据写不下来」的办法在 Windows 上没让 `/run` 失败(实得 202)。都没有查。
+- 那台机器**现在建不出符号链接**(`win-remote doctor` 报 ✗),第二节说的开发者模式不再是开着的,
+  依赖 `symlinkSync` 的那几条会红在这个前提上。
 
 **2026-10-23 实测这 7 条绿**:`win-launch`、`path-boundary`、`openers-windows`、`terminal`
 (含 `test-project-commands` 的 Windows 生命周期一节)、`detached`、`reattach`、

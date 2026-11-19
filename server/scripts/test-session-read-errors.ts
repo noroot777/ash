@@ -16,7 +16,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { requireTmpDb } from "./tmp-db.js";
+import { requireTmpDb, removeTmpStage } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "navi-session-read-"));
 process.env.NAVI_DB ||= join(stage, "session-read.db");
@@ -166,5 +166,5 @@ try {
   console.log("会话正文/轨迹读取失败语义验证通过");
 } finally {
   for (const path of locked) chmodSync(path, 0o600);
-  rmSync(stage, { recursive: true, force: true });
+  await removeTmpStage(stage);
 }

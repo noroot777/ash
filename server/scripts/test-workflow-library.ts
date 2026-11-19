@@ -11,6 +11,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-workflow-library-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -134,7 +135,7 @@ try {
   check("过不了闸的线也退回出厂定义", (await findWorkflow("release"))!.def, builtinWorkflowDef("release"));
   check("库还能整体列出来", (await listWorkflows()).length, BUILTIN_WORKFLOWS.length);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 
 console.log(failures ? `\n${failures} 处不符` : "\n起手式库语义全部符合预期");

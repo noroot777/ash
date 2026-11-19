@@ -509,7 +509,10 @@ export async function checkSourceModel(
     const own = readdirSync(d.dir).filter((n) => n.startsWith(`${basename(file2)}${BACKUP_SUFFIX}-`));
     assert.equal(own.length, 1, `被占住就换一个自己的唯一名字:${readdirSync(d.dir).join("、")}`);
     assert.equal(readFileSync(join(d.dir, own[0]!), "utf8"), before2, "备份必须逐字节是改之前那一版");
-    assert.equal(statSync(join(d.dir, own[0]!)).mode & 0o777, 0o600, "备份一出生就只有自己能读");
+    // Windows 的访问控制在 ACL 上,mode 位只表达得出只读与否(读回来恒为 0o666/0o444),同 test-navi-mcp-registry.ts。
+    if (process.platform !== "win32") {
+      assert.equal(statSync(join(d.dir, own[0]!)).mode & 0o777, 0o600, "备份一出生就只有自己能读");
+    }
     assert.match(readFileSync(file2, "utf8"), new RegExp(`"${NAME}"`), "正事也办成了");
     group("服务端这条路也留备份:改写前那一版逐字节在、新建那一路不留白备份、占住的名字不碰");
   }
