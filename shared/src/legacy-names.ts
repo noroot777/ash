@@ -30,11 +30,12 @@ export const LEGACY_TASK_BRANCH_PREFIXES = ["ash/", "harness/"] as const;
 export const LEGACY_ACCEPT_TAG_PREFIX = "ash-accepted/";
 
 /**
- * 默认库文件的旧名（数据目录下）。老安装继续用它，直到本地目录迁移脚本把它改名；**新安装暂时也建
- * 它**（mac 应用只认这个名字，见 `server/src/db/path.ts`）。拆：mac 应用认得 `navi.db`、迁移脚本交付之后。
+ * 默认库文件的旧名（数据目录下）。新安装建 `navi.db`；还没改名的老安装继续用它，停机时 `npm run rename-db`
+ * 改名，改完在原地留一份路标挡住改名之前的服务（`server/src/db/path.ts`、`docs/rename-db.md`）。拆：确认不会
+ * 再有没改名的数据目录、也不会再退回改名之前的版本之后。
  */
 export const LEGACY_DB_FILE = "ash.db";
-/** 再上一代的库文件名：启动时就地改名成 `LEGACY_DB_FILE`（老逻辑，保留）。 */
+/** 再上一代的库文件名：启动时就地改名成 `navi.db`（那一代没有并存的旧版服务）。 */
 export const LEGACY_HARNESS_DB_FILE = "harness.db";
 
 /**

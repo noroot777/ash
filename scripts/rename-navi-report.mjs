@@ -11,7 +11,7 @@ const REGISTRY = new Set(["shared/src/legacy-names.ts", "scripts/legacy-names.mj
 export const HARNESS_RULES = [
   { id: "legacy-registry", why: "旧名登记处：更早一代的名字只在这两份里登记，别处要认就从这里取", test: (path) => REGISTRY.has(path) },
   { id: "legacy-env", why: "环境变量的更早一代前缀 HARNESS_：读的时候在 NAVI_、ASH_ 之后兜底认（scripts/env.mjs、shared/src/env-names.ts），测试里照旧名喂进去", re: /HARNESS_/ },
-  { id: "legacy-db", why: "更早一代的库文件名 harness.db：启动时就地改名成 ash.db（server/src/db/path.ts）", re: /harness\\?\.db|HARNESS_DB_FILE/ },
+  { id: "legacy-db", why: "更早一代的库文件名 harness.db：启动时就地改名成 navi.db（server/src/db/path.ts）", re: /harness\\?\.db|HARNESS_DB_FILE/ },
   { id: "legacy-stored-keys", why: "浏览器、手机本机存储里更早一代的键（harness.baseURL、harness-next: 前缀）：升级时整批挪到 navi 前缀", re: /harness[.-](?:baseURL|apiKey|next)|harness\.\*|harness-next:/ },
   { id: "repo-dir", why: "仓库检出目录的路径或以目录命名的项目（本机 ~/code/harness）：那是文件夹名，不是产品名；挪目录是本地目录迁移那一步的事", re: /code[\\/]+harness|[\\/]harness[\\/](?:data|\.worktrees)|name: "harness", (?:repoPath|myRole)|projectName: "harness"|^\s*name: "harness",$|projectOf\([^)]*"harness"|query === "harness"|\["harness", "project:/ },
   { id: "legacy-branch-prefix", why: "更早一代的任务分支前缀 harness/：升级前建的分支照样认得", re: /harness\/|\|harness\)\\?\/|harness\/\*|harness branches/ },

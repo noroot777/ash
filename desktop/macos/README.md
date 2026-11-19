@@ -75,13 +75,15 @@ server 一启动就做不可逆的迁移，所以闸在停掉服务之后、换 
 
 ```bash
 # （数据根按自己机器上的写：从 Ash.app 升级上来的还是 dev.ash.mac，见「从 Ash.app 升级」）
-# 1. 退出 app，停掉服务（数据根里 ash.db.ash.lock 记着 pid）
-kill "$(node -p 'require(process.env.HOME + "/Library/Application Support/dev.navi.mac/ash.db.ash.lock").pid')"
+# 1. 退出 app，停掉服务（数据根里库的单例锁记着 pid：库叫 navi.db 的是 navi.db.navi.lock，还叫 ash.db 的是 ash.db.ash.lock）
+cd ~/Library/Application\ Support/dev.navi.mac
+for l in navi.db.navi.lock ash.db.ash.lock; do [ -f "$l" ] && kill "$(node -p "require('./$l').pid")"; done
 # 2. 从 noroot777/navi 的 Releases 里下回备份文件名里那个构建号的 dmg（tag navi-mac-v…-<构建号>），
 #    打开后把里面的 Navi（`Navi.app`）拖进 Applications，选「替换」
-# 3. 把备份放回去（先把现在这份挪开，别直接覆盖）
-cd ~/Library/Application\ Support/dev.navi.mac
-mkdir -p rolled-back && mv ash.db ash.db-wal ash.db-shm rolled-back/ 2>/dev/null
+# 3. 把备份放回去（先把现在这份挪开，别直接覆盖）。放成旧名 ash.db：新旧版 app 都认它（认不得 navi.db 的旧版只认它）；
+#    接力身份、访问密钥这些跟着库名走的文件一并换回旧名，不然旧版会当成一台新机器
+mkdir -p rolled-back && mv navi.db navi.db-wal navi.db-shm ash.db ash.db-wal ash.db-shm rolled-back/ 2>/dev/null
+for f in navi.db.*; do case "$f" in *.lock|*-online.*) ;; *) mv "$f" "ash.db${f#navi.db}";; esac; done 2>/dev/null
 cp backups/<那一份>.db ash.db
 # 4. 打开旧版 app
 ```
@@ -159,7 +161,7 @@ open /tmp/r/Navi.app                                                         # �
 
 ## 第一次打开
 
-数据根里还没有 `ash.db` 时，窗口开成一扇 980×660 的小窗（不是 1440 的大窗正中摆几行字），先问数据从哪来（`FirstRunView`：左边一栏是 Navi 和首次配置要走的几站，右边是两个选项；选了之后原地转圈直到页面接上，不换屏、不闪白）。原生那一屏只交给表了态的页面（报了窗口大小 = 画出了第一屏或报错屏），主文档载完不算数；页面脚本没载成、或者久等不到表态，就换成一屏说明，给「重试」和「仍然显示页面」，不放出一整块空白。随后 web 的三步向导也在这扇小窗里、铺满整窗，用同一套两栏版式（左栏原地不动），每一站都能跳过；页面说进了工作台才展开成工作窗。窗口大小由页面表态：`<html data-window-size="setup|work">`（`web/src/auth/AuthGate.tsx` 写，`WindowChrome` 转告）——数据已有、向导上次没走完时也会缩回小窗。首次配置期间不记窗口位置，工作窗照旧按上次拖成的样子打开。
+数据根里还没有库（`navi.db`，或改名之前的 `ash.db`，见 `docs/rename-db.md`）时，窗口开成一扇 980×660 的小窗（不是 1440 的大窗正中摆几行字），先问数据从哪来（`FirstRunView`：左边一栏是 Navi 和首次配置要走的几站，右边是两个选项；选了之后原地转圈直到页面接上，不换屏、不闪白）。原生那一屏只交给表了态的页面（报了窗口大小 = 画出了第一屏或报错屏），主文档载完不算数；页面脚本没载成、或者久等不到表态，就换成一屏说明，给「重试」和「仍然显示页面」，不放出一整块空白。随后 web 的三步向导也在这扇小窗里、铺满整窗，用同一套两栏版式（左栏原地不动），每一站都能跳过；页面说进了工作台才展开成工作窗。窗口大小由页面表态：`<html data-window-size="setup|work">`（`web/src/auth/AuthGate.tsx` 写，`WindowChrome` 转告）——数据已有、向导上次没走完时也会缩回小窗。首次配置期间不记窗口位置，工作窗照旧按上次拖成的样子打开。
 
 
 - **全新开始**：起一份空的，进入首启向导（供应商 → 执行器 → 项目）。
