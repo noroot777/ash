@@ -1,14 +1,16 @@
 // 把 navi MCP 登记进这台机器上装了的各家 CLI(agent 靠它交卷),改名之前的登记(`ash`、更早的 `harness`)
 // 顺手迁成规范名。setup.mjs(装机)和 upgrade.mjs(升级)共用这一份。
 //
-// 幂等:已有 navi 条目的不重复写;但还留着的旧名条目(起的是 Navi 的 MCP 脚本)照样删掉 —— 不然每一回合
-// 两套一模一样的工具同时挂着。同名却起着别的程序的,是用户自己的东西,不动,报一句。
+// 幂等:已有 navi 条目的不重复写;但还留着的旧名条目(起的是 Navi 的 MCP 脚本)照样收掉 —— 不然每一回合
+// 两套一模一样的工具同时挂着。claude / codex 走它们自己的 CLI,其余各家见 mcp-legacy-retire.mjs。
+// 同名却起着别的程序的,是用户自己的东西,不动,报一句。
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WINDOWS, runCli, which } from "./platform.mjs";
 import { HOST_SITES, registerHostMcp } from "./mcp-hosts.mjs";
 import { parseCodexList, pointsAtNaviMcp, registerCodexMcp } from "./codex-mcp.mjs";
 import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.mjs";
+import { retireLegacyHostMcp } from "./mcp-legacy-retire.mjs";
 
 // 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
 // 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把两边钉成同一个。
@@ -129,6 +131,21 @@ export function registerNaviMcp({ repo, port, ok, warn, say }) {
         ? which(join(process.env.KIMI_INSTALL_DIR || join(homedir(), ".kimi-code"), "bin", "kimi"))
         : null);
     if (!bin) continue;
+    // 先把旧名登记收成 navi(mcp-legacy-retire.mjs):已有 navi 就删旧名,没有就原地改名;收不了只报一句。
+    try {
+      const retired = retireLegacyHostMcp({ agentType });
+      for (const c of retired.changed) {
+        const what = [c.renamed && `旧 ${c.renamed} 条目原地改名为 navi`, c.removed.length && `删掉旧 ${c.removed.join(" / ")} 条目(和 navi 是同一套工具)`].filter(Boolean).join(",");
+        ok(`${agentType}:${what}(${c.file}${c.backup ? `,原文件备份在 ${c.backup}` : ""})`);
+        if (c.renamed && c.launch && !c.launch.includes(mcpEntry)) {
+          say(`  · ${agentType}:改名的那条起的是 ${c.launch.slice(0, 160)},不是这份检出的 ${mcpEntry};要换成这份,删掉它再跑一次 npm run upgrade`);
+        }
+      }
+      if (retired.skipped) warn(`${agentType}:旧名登记没收成 navi —— ${retired.skipped}`);
+      if (retired.foreign.length) say(`  · ${agentType}:${retired.foreign.join(" / ")} 这个名字的条目起的不是 Navi 的 MCP 脚本,是别的东西,没动它`);
+    } catch (error) {
+      warn(`${agentType}:收拾旧名登记时出错:${error.message}`);
+    }
     try {
       const result = registerHostMcp({ agentType, mcpEntry, url: URL_BASE });
       if (result.added) ok(`${agentType}:已注册 Navi MCP (${result.file})`);

@@ -139,6 +139,54 @@ export function spliceJsonMember(text, container, memberKey, value) {
   return { body: insertFirst(text, container0, entry) };
 }
 
+/**
+ * 顶层 `container` 里那条 `key` 成员:`{ text, container, hit }`,或 `{ why }`。重名取最后一条(跟 `member` 同口径)。
+ * 下面两个改法(删一条、给一条改名)只在裸 Node 这一侧有:它们只给升级 / setup 收拾改名之前的登记用,服务端用不着。
+ */
+function containerMember(text, container, key) {
+  const root = text === null ? null : parseJsonDoc(text);
+  if (!root) return { why: "配置解析不了，没敢动它" };
+  const hit = member(root, container);
+  const obj = hit ? parseValue(text, hit.valueStart) : null;
+  if (!obj || obj.kind !== "object") return { why: `配置里的 ${container} 不是一个对象，没敢动它` };
+  const target = member(obj, key);
+  if (!target) return { why: `配置里没有 ${key} 这条登记` };
+  if (obj.members.filter((m) => m.key === key).length > 1) return { why: `配置里 ${key} 这条登记写了不止一次，没敢动它` };
+  return { obj, target };
+}
+
+/** 删掉顶层 `container` 里的 `key` 那一条,**其余字节原样**(连同它前后那个逗号;独占一行时连这一行)。 */
+export function removeJsonMember(text, container, key) {
+  const found = containerMember(text, container, key);
+  if (found.why) return found;
+  const { obj, target } = found;
+  const after = skipTrivia(text, target.valueEnd);
+  const lineStart = text.lastIndexOf("\n", target.keyStart - 1) + 1;
+  const start = /^[ \t]*$/.test(text.slice(lineStart, target.keyStart)) ? lineStart : target.keyStart;
+  if (text[after] === ",") {
+    // 后面跟着逗号(后面还有成员,或者是个尾逗号):连逗号一起删,这一行剩下的空白和换行也收掉。
+    let end = after + 1;
+    const lineEnd = text.indexOf("\n", end);
+    if (lineEnd !== -1 && /^[ \t]*$/.test(text.slice(end, lineEnd))) end = lineEnd + 1;
+    return { body: text.slice(0, start) + text.slice(end) };
+  }
+  const index = obj.members.indexOf(target);
+  if (index === 0) return { body: text.slice(0, start) + text.slice(target.valueEnd).replace(/^[ \t]*\n/, "") };
+  // 它是最后一条:删掉前一条后面那个逗号到它结尾。
+  const comma = skipTrivia(text, obj.members[index - 1].valueEnd);
+  if (text[comma] !== ",") return { why: "配置里那一段的逗号认不出来，没敢动它" };
+  return { body: text.slice(0, comma) + text.slice(target.valueEnd) };
+}
+
+/** 把顶层 `container` 里 `from` 那一条的键改成 `to`(值、注释、别的字节一概不动);`to` 已经有了就不改。 */
+export function renameJsonMember(text, container, from, to) {
+  const found = containerMember(text, container, from);
+  if (found.why) return found;
+  if (member(found.obj, to)) return { why: `配置里已经有 ${to} 这条登记了` };
+  const keyEnd = endOfString(text, found.target.keyStart);
+  return { body: text.slice(0, found.target.keyStart) + JSON.stringify(to) + text.slice(keyEnd) };
+}
+
 /** 把注释和尾逗号剔成标准 JSON(**只用于读**;写回去走 `spliceJsonMember`)。 */
 export function stripTrivia(text) {
   let out = "";

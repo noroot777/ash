@@ -23,7 +23,7 @@
  *
  * 单行引号里的文本**留着** —— 那种写法会落到「判不准」那条出路,方向偏向不写。
  */
-function stripTomlNoise(text) {
+export function stripTomlNoise(text) {
   const lines = [];
   let line = "";
   let ml = null;      // 多行字符串:`"""` 或 `'''`
