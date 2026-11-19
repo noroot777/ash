@@ -13,7 +13,7 @@
   `test-rename-compat` 自己的收尾（见第三节，已修）；`test-rename-navi.mjs` 是改名脚本的回归，天生只在
   POSIX 上成立，那个脚本也只在开发机上跑（见第二节表里那一行，没修）。
 - **新旧两版在同一份数据上互斥照样成立**，新旧接力能认出对方，认不了的那一种会说清原因、拒绝。
-- **那台机器可以升级**，步骤见第五节；有两件事没在真机上验证，原因见第四节。
+- **那台机器可以升级**，步骤见第五节；有四件事没在真机上验证，原因见第四节。
 
 ## 一、跑了什么、结果
 
@@ -95,7 +95,7 @@
 | `test:user-cli-mcp` | `codex-approve-cases.ts:44` 的 `/mcp[\\/]dist[\\/]index\.js/` 对不上 TOML 里转义过的 `mcp\\dist\\index.js` | 这句改名前就在；旧版检出没 build `mcp/dist`，走的是另一支 —— 线上那份检出是 build 过的，在那里跑同样会红 | 改名前就有 |
 | `test-stop-verification` | `:130` 断言「守护进程还活着」为假：夹具是 POSIX 的形状（中转双 fork 出一个自己 `setsid` 的守护） | 同一处红（`:128`） | 改名前就有 |
 | `test-launch-abandon` | 断言都过，`:204` 收尾删临时目录 `EBUSY` | 同一处红 | 改名前就有（和第三节同一类收尾） |
-| `test:handoff` | 对端 server 起不来：测试写死 `<检出>\node_modules\tsx\dist\cli.mjs`，win-remote 工作区的 `node_modules` 里只有 `@navi/*` | 同一结构（旧版是 `@ash/*`） | 测试与 win-remote 工作区布局不合，不是改名；跨版本接力由第一节 H 组在真机上覆盖 |
+| `test:handoff` | 对端 server 起不来：测试写死 `<检出>\node_modules\tsx\dist\cli.mjs`，win-remote 工作区的 `node_modules` 里只有 `@navi/*` | 同一结构（旧版是 `@ash/*`） | 测试与 win-remote 工作区布局不合，不是改名。新旧之间的接力由第一节 H 组在真机上跑过；两边都是新版的接力没有跑通过的结果（见第四节） |
 | `test-rename-navi.mjs` | `:332` 权限位：Windows 没有执行位，`chmod 0o755` 读回来是 `0o666`；试着把这句改成比「写之前读回来的那份」，又红在 `:359`：给开着文件的目录改名 `EPERM`。后面还有建符号链接（那台机器没开开发者模式）、路径带 TAB 几段（那处试改已撤回） | 改名之前没有这个脚本 | 改名脚本只在开发机上跑，Windows 那台的升级用不到它（第五节）；它的回归天生是 POSIX 的，不在 Windows 上修 |
 | `test:host-navi-mcp` | 拷出来的代码树找不到 `drizzle-orm`：测试往上找「第一个 `node_modules`」借给它，而 win-remote 的工作区里那个 `node_modules` 只有 `@navi/*` 几条 junction，其余依赖靠逐级向上解析到主仓 | 旧版这里放的是 `@ash/*`，同一结构；旧版检出另因没 build `mcp/dist` 先红在前一步 | 测试与 win-remote 工作区布局不合，不是改名 |
 
@@ -125,8 +125,8 @@
   操作单因此要求空闲时升级。
 - **真 claude / codex 吃到 Navi 注入的 `navi` 这条 MCP 登记。** 要起真 CLI、烧额度，没跑；注入与登记的逻辑由
   `navi-mcp-inject`、`cli-overrides` 等回归在真机上覆盖，用户配置里那条 `harness` 登记由 U13 覆盖。
-- **两边都升级之后 Mac ↔ Windows 用 `navi/` 分支接力。** 这一轮对端线上还是旧版，跨机只验了新→旧；新↔新由对端的
-  `test:handoff` 覆盖（同一台机器上两个实例）。
+- **两边都是新版时的接力（升级之后 Mac ↔ Windows 用 `navi/` 分支）。** 这一轮对端线上还是旧版，跨机只验了新→旧；
+  真机上能顶这一格的 `test:handoff` 红在起对端 server 那一步（第二节），没有通过的结果，所以这一格是空的。
 
 ## 五、那台机器的升级操作单
 
@@ -153,10 +153,10 @@
    - `node_modules\@navi\` 下是四条 junction（mcp / server / shared / web），`node_modules\@ash\` 已经没有了。
 7. **CLI 里的 MCP 登记不用改。** 那两条 `harness` 登记指的入口没变，`HARNESS_URL` 照样认（U13）。Navi 自己起 agent 时注入的是
    新名 `navi`，两者不冲突。
-8. **之后从 Mac 往这台接力**，`navi/` 开头的任务分支就能过了；升级之前这类接力会被拒，并写明「先把对端升级到 Navi」（H4）。
+8. **之后从 Mac 往这台接力**：升级之前，`navi/` 开头的任务分支会被拒，并写明「先把对端升级到 Navi」（H4）；升级之后按设计就能过，但两边都是新版的接力这一轮没在真机上跑通过（第四节），第一次接力时留意结果。
 
 **回退：** `node scripts/stop.mjs` → `git checkout 8abd51552` → `npm install` → `npm run build` → 用原来的方式起
-（`node scripts/start-detached.mjs %TEMP%\ash-4317.log node server/dist/index.js`，或 `npm run restart`）。旧版认得新版留下的
+（PowerShell 里是 `node scripts/start-detached.mjs "$env:TEMP\ash-4317.log" node server/dist/index.js`，`%TEMP%` 只有 cmd 才展开；或 `npm.cmd run restart`）。旧版认得新版留下的
 `ash.db.ash.lock`，也在新版迁移过的库上起得来（M5 就是这个顺序）；真遇到旧版读不了的库，用第 4 步那份备份换回 `data\ash.db`。
 
 ## 六、清场
