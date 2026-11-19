@@ -23,8 +23,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-multi-user-git-"));
-process.env.ASH_DB ||= join(stage, "multi-user-git.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-multi-user-git-"));
+process.env.NAVI_DB ||= join(stage, "multi-user-git.db");
 requireTmpDb("test-multi-user-git");
 // 全局 git 配置指到临时文件:scope 判定与提交署名才不受跑测试这台机器的影响。
 const globalConfig = join(stage, "gitconfig-global");
@@ -185,14 +185,14 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   assert.equal(anonymous.status, 401, `没凭证必须拒:${anonymous.text}`);
   assert.equal(anonymous.text.includes("会被重启打断的排队任务"), false, "拒了就一个字都不许漏");
 
-  const wrong = await call("/api/restart-impact", "GET", null, undefined, { "x-ash-host-token": "not-the-token" });
+  const wrong = await call("/api/restart-impact", "GET", null, undefined, { "x-navi-host-token": "not-the-token" });
   assert.equal(wrong.status, 401, `token 不对必须拒:${wrong.text}`);
 
   // 这条测试没走 index.ts,没人拿过单实例锁 —— `liveLockToken()` 是 null。空串对空串
   // 不许放行,这正是「没拿到锁时凭证不存在」那一档。
   const { liveLockToken } = await import("../src/singleton.js");
   assert.equal(liveLockToken(), null, "没起过 server 就不该有锁 token");
-  const emptyToken = await call("/api/restart-impact", "GET", null, undefined, { "x-ash-host-token": "" });
+  const emptyToken = await call("/api/restart-impact", "GET", null, undefined, { "x-navi-host-token": "" });
   assert.equal(emptyToken.status, 401, "锁 token 不存在时,空串不能被当成匹配");
 
   // 拿得到锁就拿得到凭证:真起一次锁,再打同一条端点。
@@ -202,7 +202,7 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   try {
     const token = liveLockToken();
     assert.ok(token, "拿到锁之后必须有 token");
-    const ok = await call("/api/restart-impact", "GET", null, undefined, { "x-ash-host-token": token! });
+    const ok = await call("/api/restart-impact", "GET", null, undefined, { "x-navi-host-token": token! });
     assert.equal(ok.status, 200, `宿主机凭证要过:${ok.text}`);
     const impact = ok.body as { interrupted?: { id: string }[] };
     assert.ok(
@@ -219,7 +219,7 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
 }
 
 // ── ⑤ 接力协商:未登录也要到得了路由自己的签名闸 ──────────────────────────
-// 打这两条的是**对端的 ash 服务端**,只带机器 ed25519 签名和 §十一 的 peer user key,
+// 打这两条的是**对端的 navi 服务端**,只带机器 ed25519 签名和 §十一 的 peer user key,
 // 不可能有本机 cookie。被通用闸拦住 = 多人↔多人 Git 接力在第一步就死。
 {
   const refs = await call("/api/handoff/projects/p-shared/refs", "GET", null);

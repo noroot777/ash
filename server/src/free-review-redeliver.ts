@@ -102,7 +102,7 @@ export async function redeliverReviewRound(
       if (input === "unconfirmed") await noteReviewInput(task, run, directory, input);
       if (input === "hold" || input === "unconfirmed") return "hold";
       await clearReviewDispatchIntent(run.id, round.round, generation);
-      console.error(`[ash] 审查任务书已越过交付线，补投取消 run=${run.id} round=${round.round}`);
+      console.error(`[navi] 审查任务书已越过交付线，补投取消 run=${run.id} round=${round.round}`);
       return "hold";
     }
     if (verdict === "exhausted") {
@@ -146,7 +146,7 @@ export async function redeliverReviewRound(
     // 是瞬时读库故障(SQLITE_BUSY 一类),把这一轮打成 error 等于拿一次锁争用换掉一轮审查。
     // 认领在 finally 里还回去、库里那份没消费的意图原样留着,下一拍健康的对账照样能补办;
     // 答 `hold` 是因为这一拍什么都没问清,收尸的判据也就谈不上成立(第 3 轮审查 F3)。
-    console.error(`[ash] 审查补投准备阶段出错 run=${run.id} round=${round.round}`
+    console.error(`[navi] 审查补投准备阶段出错 run=${run.id} round=${round.round}`
       + `（认领已归还，意图留着等下一拍重试）:`, error);
     return "hold";
   } finally {

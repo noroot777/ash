@@ -1,7 +1,7 @@
 // claude 单飞：常驻那条可引导的流上，一个回合 = 一个进程（`ClaudeExecutor.runSteerable` / 接管单飞）。
 // 从 claude.ts 拆出来的（那份逼近 700 行），内容没动；为什么要等后台、怎么收台见下面 `singleRunFromResident`。
-import { readEnv } from "@ash/shared/env-names";
-import type { AgentEvent } from "@ash/shared";
+import { readEnv } from "@navi/shared/env-names";
+import type { AgentEvent } from "@navi/shared";
 import type { ResidentHandle, RunHandle } from "./types.js";
 import type { StallVerdict } from "../turn-stall-verdict.js";
 import { resolveSteerText, type SteerText } from "./steer-text.js";
@@ -17,7 +17,7 @@ const BACKGROUND_HOLD_MS = (() => {
   if (!raw) return fallback;
   const value = Number(raw);
   if (Number.isFinite(value) && value > 0 && value <= 2 ** 31 - 1) return value;
-  console.warn(`[ash] NAVI_BACKGROUND_HOLD_MS=${raw} 不是有效的毫秒数，按缺省 ${fallback} 处理`);
+  console.warn(`[navi] NAVI_BACKGROUND_HOLD_MS=${raw} 不是有效的毫秒数，按缺省 ${fallback} 处理`);
   return fallback;
 })();
 
@@ -45,7 +45,7 @@ const WRAPUP_START_MS = 10 * 60_000;
  * 一律核对实时账本（`resident.backgroundPending`），跑完了就不能说成没跑完。
  *
  * 等到点还没跑完 = 这一轮的活没干完：硬杀进程（关 stdin 只是请它退出，它可以接着等自己的
- * 后台、一直不走），报一条真错误，并经 `failure()` 把「ash 判这一轮未完成」交给结算 —— 智能体
+ * 后台、一直不走），报一条真错误，并经 `failure()` 把「navi 判这一轮未完成」交给结算 —— 智能体
  * 可能早在发起后台工作那一回合就交过卷，不能让它落成完成。后台还没跑完进程就自己退了（哪怕
  * exit 0）同理，见 `done.unfinished`；后台跑完了却一直没开回合收尾（或者没开就退了）也同理，
  * 只是原因如实说成后者。

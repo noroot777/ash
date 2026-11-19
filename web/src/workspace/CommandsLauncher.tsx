@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowsClockwise, CircleNotch, HandPalm, Play, Scroll, Square } from "@phosphor-icons/react";
-import type { ProjectView } from "@ash/shared";
-import { parseCommandPlaceholders, SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
+import type { ProjectView } from "@navi/shared";
+import { parseCommandPlaceholders, SERVICE_COMMAND_ID } from "@navi/shared/project-commands";
 import { api, type TerminalSessionInfo } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";

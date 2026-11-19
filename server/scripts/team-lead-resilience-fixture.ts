@@ -18,14 +18,14 @@ import assert from "node:assert/strict";
 import { createWriteStream, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { ResidentHandle } from "../src/executors/types.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-team-resilience-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_TEAM_IDLE_MS = "0"; // 别在测试里挂一个 30 分钟的回收计时
-process.env.ASH_TEAM_STATUS_RETRY_MS = "40"; // 状态重试:别让测试干等 5 秒
+const root = mkdtempSync(join(tmpdir(), "navi-team-resilience-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEAM_IDLE_MS = "0"; // 别在测试里挂一个 30 分钟的回收计时
+process.env.NAVI_TEAM_STATUS_RETRY_MS = "40"; // 状态重试:别让测试干等 5 秒
 
 // 真机 Codex stderr:同一条 thread 已经 poisoned,恢复它只会一次次撞同一堵墙。
 const POISON = "ignored world-state patch without a full snapshot";

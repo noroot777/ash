@@ -2,7 +2,7 @@
 //
 // 选项不进 app_settings：`GET /settings` 会把整份回给任何已登录的人，preview-seed 还会复制
 // 进预览库；飞书的选项与凭证一起只属于这一个实例。
-import type { ImOptions } from "@ash/shared";
+import type { ImOptions } from "@navi/shared";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imMeta } from "../db/schema-im.js";

@@ -1,6 +1,6 @@
 // 归档时顺手收掉任务留在磁盘上的工作区(用户 2026-10-08 要求「归档也删」)。
 //
-// 上线前归档只翻一个 `archived` 位,`.worktrees/<id>` 目录和 `ash/<id8>` 分支原样留着:
+// 上线前归档只翻一个 `archived` 位,`.worktrees/<id>` 目录和 `navi/<id8>` 分支原样留着:
 // 归档列表越长,磁盘上就越多谁也不会再打开的工作副本。现在按全局设置 `archiveClean`
 // 清理(默认 all),三档语义与验收清理共用。
 //
@@ -29,7 +29,7 @@
 //  ⑥ **预览实例一律不清理**。那台后端连的是主库快照,任务行指向的却是真仓库;
 //     `removeWorktree` 自带这道闸,`git branch -d` 没有,于是「目录已不在、只剩分支」
 //     的任务会把真分支删掉(第 1 轮审查确定性复现)。在入口直接挡住,不依赖下游。
-import type { ArchiveCleanupItem, ArchiveCleanupReport } from "@ash/shared";
+import type { ArchiveCleanupItem, ArchiveCleanupReport } from "@navi/shared";
 import { eq } from "drizzle-orm";
 import { getAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";

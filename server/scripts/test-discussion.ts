@@ -22,9 +22,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-discussion-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-discussion-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 let failure: unknown = null;
 try {
@@ -43,7 +43,7 @@ try {
   const { afterSettlement } = await import("../src/settle-status.js");
   const { freeWorkflowState } = await import("../src/free-workflow.js");
   const { deliveryVerdictOf } = await import("../src/pending-delivery-facts.js");
-  const { discussionAgreed, speakingOrder } = await import("@ash/shared/discussion");
+  const { discussionAgreed, speakingOrder } = await import("@navi/shared/discussion");
 
   await ensureSchema();
   const at = new Date().toISOString();

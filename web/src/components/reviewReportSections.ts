@@ -66,7 +66,7 @@
 // 每修一个角就露出下一个角，因为判据本身是「我复刻的 CommonMark」而不是 CommonMark。
 // 现在顶层二级标题由 `mdast-util-from-markdown`（`react-markdown` 渲染这份报告时用的就是
 // 它）给出，围栏、HTML 块、列表、引用、缩进代码块一次性全部各归各位。
-import type { ReviewConclusion } from "@ash/shared";
+import type { ReviewConclusion } from "@navi/shared";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";

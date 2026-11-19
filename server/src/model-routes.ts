@@ -10,8 +10,8 @@
 // CLI(§八),回的是对谁都一样的内置快照;自用模式下本来就没有「谁」这回事。别在这里
 // 补第二道判据 —— 边界是「不起那个子进程」,不是「谁能看见结果」。
 import type { Hono } from "hono";
-import type { AgentType } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
 import { modelCatalogs } from "./executors/model-probe.js";
 
 // `?type=` 可给一个或多个(逗号分隔)。给了不认识的名字就当没给 —— 返回全部,

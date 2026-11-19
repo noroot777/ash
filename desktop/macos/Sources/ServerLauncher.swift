@@ -1,6 +1,6 @@
 import Foundation
 
-/// 把自带的那份 ash 服务起起来：用 bundle 里的 node 跑 bundle 里的 server，数据根交给
+/// 把自带的那份 navi 服务起起来：用 bundle 里的 node 跑 bundle 里的 server，数据根交给
 /// `ASH_DATA_DIR`，带 `ASH_LOCAL_ONLY=1`（只听 127.0.0.1、固定自用模式）。
 ///
 /// server 由 `scripts/start-detached.mjs` 放进自己的会话、脱离本进程 —— 关窗、退出 app 都不会
@@ -14,7 +14,7 @@ final class ServerLauncher {
     case ready
     /// 数据根还是空的：等用户在首启那一屏选「全新开始」或「导入已有数据」。
     case needsSetup
-    /// 端口被别的 ash / 别的程序占着。带着说给用户听的那段话：是谁、怎么办。
+    /// 端口被别的 navi / 别的程序占着。带着说给用户听的那段话：是谁、怎么办。
     case occupied(String)
     case failed(String)
   }
@@ -30,9 +30,9 @@ final class ServerLauncher {
   /// 记在数据根里（见 Maintenance），别的进程里的维护也算。值是说给用户听的那句话。
   var hold: String? { Maintenance.activeNote() }
 
-  var logURL: URL { AshConfig.serverLogURL }
+  var logURL: URL { NaviConfig.serverLogURL }
 
-  private let queue = DispatchQueue(label: "dev.ash.server-launcher")
+  private let queue = DispatchQueue(label: "dev.navi.server-launcher")
   private let requests = NSLock()
   private var completions: [(Outcome) -> Void] = []
 
@@ -54,18 +54,18 @@ final class ServerLauncher {
   }
 
   func ensureRunningSync(timeout: TimeInterval) -> Outcome {
-    if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+    if let settled = Self.settle(NaviHealth.probeSync()) { return settled }
     if let hold { return .failed(hold) }
-    guard AshConfig.isLocal else {
-      return .failed("连不上 \(AshConfig.baseURL.absoluteString)。它不是本机地址，app 不会替它启动服务。")
+    guard NaviConfig.isLocal else {
+      return .failed("连不上 \(NaviConfig.baseURL.absoluteString)。它不是本机地址，app 不会替它启动服务。")
     }
-    guard AshConfig.isDataInitialized || freshStartApproved else { return .needsSetup }
+    guard NaviConfig.isDataInitialized || freshStartApproved else { return .needsSetup }
     let lock: ServerStartLock
     do {
-      lock = try ServerStartLock(dataDir: AshConfig.dataURL)
+      lock = try ServerStartLock(dataDir: NaviConfig.dataURL)
       let deadline = Date().addingTimeInterval(timeout)
       while try !lock.tryAcquire() {
-        if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+        if let settled = Self.settle(NaviHealth.probeSync()) { return settled }
         if let hold { return .failed(hold) }
         guard Date() < deadline else { return .failed("等另一处启动 Navi 服务超时。可以重试；服务起来后也会自动载入。") }
         Thread.sleep(forTimeInterval: 0.2)
@@ -74,17 +74,17 @@ final class ServerLauncher {
       return .failed("无法取得服务启动锁：\(error.localizedDescription)")
     }
     defer { withExtendedLifetime(lock) {} }
-    if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+    if let settled = Self.settle(NaviHealth.probeSync()) { return settled }
     if let hold { return .failed(hold) }
     if let failure = Self.backUpBeforeMigration() { return .failed(failure) }
-    let parts = [AshConfig.nodeURL, AshConfig.serverEntryURL, AshConfig.detachScriptURL]
+    let parts = [NaviConfig.nodeURL, NaviConfig.serverEntryURL, NaviConfig.detachScriptURL]
     if let missing = parts.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
       return .failed("app 里自带的 Navi 不完整（缺 \(missing.path)）。重新装一次 Navi.app。")
     }
     do {
-      try FileManager.default.createDirectory(at: AshConfig.logURL, withIntermediateDirectories: true)
+      try FileManager.default.createDirectory(at: NaviConfig.logURL, withIntermediateDirectories: true)
     } catch {
-      return .failed("建不了日志目录 \(AshConfig.logURL.path)：\(error.localizedDescription)")
+      return .failed("建不了日志目录 \(NaviConfig.logURL.path)：\(error.localizedDescription)")
     }
     switch spawnDetached() {
     case .failure(let reason): return .failed(reason)
@@ -105,11 +105,11 @@ final class ServerLauncher {
   /// 在这里补一份。备份不成、或者记不下「这一版要起了」就不起：库原样留着，配上旧版 app 还能回去。
   /// 返回 nil = 可以起。
   private static func backUpBeforeMigration() -> String? {
-    let db = AshConfig.dataURL.appendingPathComponent("ash.db")
+    let db = NaviConfig.dataURL.appendingPathComponent("ash.db")
     guard FileManager.default.fileExists(atPath: db.path) else { return nil }
     let lastServedBy = ServerRecord.read()?.bundleVersion ?? "unknown"
     do {
-      if lastServedBy != AshConfig.bundleVersion && !DatabaseBackup.covers(lastServedBy: lastServedBy) {
+      if lastServedBy != NaviConfig.bundleVersion && !DatabaseBackup.covers(lastServedBy: lastServedBy) {
         try DatabaseBackup.beforeUpdate(fromVersion: lastServedBy)
       }
     } catch {
@@ -119,20 +119,20 @@ final class ServerLauncher {
     do {
       try ServerRecord.writeAttempt()
     } catch {
-      return "记不下这一次要起的是哪一版（\(AshConfig.dataURL.path)：\(error.localizedDescription)），所以没起服务、库没动过。修好权限 / 腾出空间后点「重试」。"
+      return "记不下这一次要起的是哪一版（\(NaviConfig.dataURL.path)：\(error.localizedDescription)），所以没起服务、库没动过。修好权限 / 腾出空间后点「重试」。"
     }
     return nil
   }
 
   /// 探到的结果里哪些已经是结论：自己那份在 → ready；别人占着 → occupied；连不上 → nil（接着起）。
-  static func settle(_ probe: AshProbe) -> Outcome? {
+  static func settle(_ probe: NaviProbe) -> Outcome? {
     switch probe {
     case .down, .unreachable: return nil
-    case .notAsh(let what): return .occupied(Occupant.notAsh(what))
-    case .ash(let instance):
-      guard AshHealth.isServing(probe) else { return .occupied(Occupant.otherAsh(instance)) }
+    case .notNavi(let what): return .occupied(Occupant.notNavi(what))
+    case .navi(let instance):
+      guard NaviHealth.isServing(probe) else { return .occupied(Occupant.otherNavi(instance)) }
       // 不管服务是谁起的、谁先看到它起来，确认都在这一处（窗口、登录项、另一个窗口的重试都经过这里）。
-      if AshConfig.isLocal { ServerRecord.confirmServing(pid: instance.pid) }
+      if NaviConfig.isLocal { ServerRecord.confirmServing(pid: instance.pid) }
       return .ready
     }
   }
@@ -147,17 +147,17 @@ final class ServerLauncher {
     // 写成命令里的字面量，由 `env` 在 exec 的边界上落定（shell 带来的 PORT 先清掉）。
     // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
     // 环境里删掉（见 server/src/paths.ts、local-only.ts、window-port.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
-    let data = Self.quoted(AshConfig.dataURL.path)
-    let node = Self.quoted(AshConfig.nodeURL.path)
+    let data = Self.quoted(NaviConfig.dataURL.path)
+    let node = Self.quoted(NaviConfig.nodeURL.path)
     // 默认端口不传 PORT：server 的环境会一路继承给 agent 与应用内终端，多一个 PORT 会让
-    // 里面起的前端 dev server 去抢 ash 的端口。
-    let port = AshConfig.port == 4317 ? "" : " PORT=\(AshConfig.port)"
+    // 里面起的前端 dev server 去抢 navi 的端口。
+    let port = NaviConfig.port == 4317 ? "" : " PORT=\(NaviConfig.port)"
     let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1"
-      + " ASH_WINDOW_PORT=\(AshConfig.windowPort)\(port) "
-      + "\(node) \(Self.quoted(AshConfig.detachScriptURL.path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(AshConfig.serverEntryURL.path))"
+      + " ASH_WINDOW_PORT=\(NaviConfig.windowPort)\(port) "
+      + "\(node) \(Self.quoted(NaviConfig.detachScriptURL.path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(NaviConfig.serverEntryURL.path))"
     shell.arguments = ["-ilc", script]
     shell.environment = Self.terminalLikeEnvironment()
-    let launchLog = AshConfig.logURL.appendingPathComponent("launch-\(UUID().uuidString).log")
+    let launchLog = NaviConfig.logURL.appendingPathComponent("launch-\(UUID().uuidString).log")
     guard FileManager.default.createFile(atPath: launchLog.path, contents: nil),
           let output = try? FileHandle(forWritingTo: launchLog) else {
       return .failure("无法创建启动器日志。")
@@ -191,12 +191,12 @@ final class ServerLauncher {
   private func waitReady(pid: Int32, timeout: TimeInterval) -> Outcome {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
-      let probe = AshHealth.probeSync()
-      if case .ash(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
+      let probe = NaviHealth.probeSync()
+      if case .navi(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
         ServerRecord.confirmServing(pid: Int(pid))
         return .ready
       }
-      if case .ash(let instance) = probe, !instance.isOurs { return .occupied(Occupant.otherAsh(instance)) }
+      if case .navi(let instance) = probe, !instance.isOurs { return .occupied(Occupant.otherNavi(instance)) }
       if kill(pid, 0) != 0 && errno == ESRCH {
         return .failed("服务进程 \(pid) 起来就退出了：\n\(logTail())\n完整日志：\(logURL.path)")
       }
@@ -240,8 +240,8 @@ final class ServerLauncher {
 
 /// 「端口被占着」时说给用户听的那段话：是谁、怎么办。
 enum Occupant {
-  static func otherAsh(_ instance: AshInstance) -> String {
-    let port = AshConfig.port
+  static func otherNavi(_ instance: NaviInstance) -> String {
+    let port = NaviConfig.port
     let who = instance.pid.map { "进程 \($0)" } ?? "进程号不明"
     var lines = ["\(port) 端口上已经有一份 Navi 在跑（\(who)），但它不是这个 app 起的那份，所以没有连上去。\(instance.mismatch ?? "")"]
     if let codeDir = instance.codeDir, let dataDir = instance.dataDir {
@@ -255,8 +255,8 @@ enum Occupant {
     return lines.joined(separator: "\n\n")
   }
 
-  static func notAsh(_ what: String) -> String {
-    let port = AshConfig.port
+  static func notNavi(_ what: String) -> String {
+    let port = NaviConfig.port
     return "\(port) 端口被别的程序占着（它应答了 \(what)，不是 Navi），Navi 服务起不来。\n\n"
       + "看是谁：lsof -nP -iTCP:\(port) -sTCP:LISTEN；关掉它之后点「重试」。"
   }

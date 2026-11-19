@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, Task } from "@navi/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { ProjectGitContext } from "../../src/workspace/ProjectGitContext.tsx";

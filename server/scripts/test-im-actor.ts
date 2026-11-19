@@ -19,9 +19,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-im-actor-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-im-actor-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 requireTmpDb("test-im-actor");
 
 let failure: unknown = null;
@@ -111,7 +111,7 @@ try {
     assert.equal(ownerIdOf(actor), null, "自用模式归属列写 null，不写 __local__");
 
     // 外部请求带什么头都造不出 im 身份：自用模式下照常是机主，与 im 无关。
-    const outside = await call("/api/tasks/t1", "GET", { "x-ash-im-open-id": "ou_owner" });
+    const outside = await call("/api/tasks/t1", "GET", { "x-navi-im-open-id": "ou_owner" });
     assert.equal(outside.status, 200);
   }
 
@@ -133,7 +133,7 @@ try {
     const code = await call("/api/im/feishu/binding/code", "POST", { [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken() });
     assert.equal(code.status, 409, `凭据对了也得先连上飞书：${code.text}`);
 
-    const agent = { "x-ash-source-task-id": "t1", "x-ash-turn-token": "turn-1" };
+    const agent = { "x-navi-source-task-id": "t1", "x-navi-turn-token": "turn-1" };
     const agentPatch = await call("/api/im/feishu/options", "PATCH", agent, { publicBaseUrl: "https://evil.example" });
     assert.equal(agentPatch.status, 403, `agent 回合凭证改不了深链：${agentPatch.text}`);
     const agentUnbind = await call("/api/im/feishu/binding", "DELETE", agent);

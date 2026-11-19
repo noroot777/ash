@@ -9,7 +9,7 @@ import type {
   PairCode,
   PairRequestView,
   PairTicket,
-  PersonalAshMcp,
+  PersonalNaviMcp,
   PersonalCliEnv,
   ProjectInviteInfo,
   ProjectMemberView,
@@ -17,7 +17,7 @@ import type {
   RemoteAccessView,
   UserRole,
   UserView,
-} from "@ash/shared";
+} from "@navi/shared";
 import { id, json, request } from "./apiClient.ts";
 import { syncHostCliPolicy } from "./hostCliPolicy.ts";
 import { takeAuthProbe } from "./authProbe.ts";
@@ -49,7 +49,7 @@ export const authApi = {
   claimPair: (ticket: { id: string; secret: string }) =>
     request<PairClaim>("/auth/pair/claim", json("POST", { id: ticket.id, secret: ticket.secret })),
   redeemPair: (code: string) => request<{ token: string }>("/auth/pair/redeem", json("POST", { code })),
-  // 机主那一侧。访问密钥(给脚本用)只有在 ash 所在的那台机器上打开页面时才读得到、换得了。
+  // 机主那一侧。访问密钥(给脚本用)只有在 navi 所在的那台机器上打开页面时才读得到、换得了。
   remoteAccess: () => request<RemoteAccessView>("/remote-access"),
   rotateRemoteAccess: () => request<RemoteAccessView>("/remote-access/rotate", json("POST")),
   pairRequests: () => request<{ requests: PairRequestView[] }>("/remote-access/requests"),
@@ -151,8 +151,8 @@ export const personalCliApi = {
     request<{
       mode: "single" | "multi";
       sharedHostCli: boolean;
-      /** 共用档下才有：真正生效的宿主机配置里 ash MCP 登记了没有。 */
-      hostAshMcp?: ({ agentType: string } & PersonalAshMcp)[];
+      /** 共用档下才有：真正生效的宿主机配置里 navi MCP 登记了没有。 */
+      hostNaviMcp?: ({ agentType: string } & PersonalNaviMcp)[];
       envs: PersonalCliEnv[];
     }>("/me/cli-env"),
   one: (agentType: string) => request<PersonalCliEnv>(`/me/cli-env/${id(agentType)}`),

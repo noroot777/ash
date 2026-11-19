@@ -3,8 +3,8 @@
 // 起来了不再往会话里写「预览已起：地址」，这一站就得自己现读当前预览、刷新后照样给出入口。
 // 真组件（PreviewRestartButton），中间只换掉 fetch 和事件通道：`?running=1` 表示盘上已经有一份起来了的预览。
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
-import type { WorkflowStep } from "@ash/shared/workflow";
+import type { Task } from "@navi/shared";
+import type { WorkflowStep } from "@navi/shared/workflow";
 import "../../src/styles/global.css";
 import "../../src/styles/task-reply.css";
 import "../../src/styles/free-workflow.css";
@@ -65,7 +65,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     const hang = hangNext;
     hangNext = false;
     // 结果按请求**发出那一刻**的样子定，回得慢不改变它说的是哪一刻。
-    const answer = failReads ? reply({ error: "ash 不在线" }, 502) : reply(state());
+    const answer = failReads ? reply({ error: "navi 不在线" }, 502) : reply(state());
     if (hang || readDelay) {
       await new Promise<void>((resolve, reject) => {
         const timer = hang ? undefined : window.setTimeout(resolve, readDelay);

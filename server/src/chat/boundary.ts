@@ -2,8 +2,8 @@ import { watch, type FSWatcher } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { AgentEvent } from "@ash/shared";
-import { resolveAshDbFile } from "../db/path.js";
+import type { AgentEvent } from "@navi/shared";
+import { resolveNaviDbFile } from "../db/path.js";
 import { DATA_DIR, RUNS_DIR, UPLOADS_DIR } from "../paths.js";
 
 export class ChatBoundaryError extends Error {
@@ -67,18 +67,18 @@ const SETTLE_QUIET_MS = 500;
 const SETTLE_MAX_MS = 5000;
 
 // 目录观察只做「记录并如实上报」，不做中止：文件系统事件说不出一次改动是谁做的。被咨询的
-// 项目通常是一个活着的仓库——ash 自己的验收合并在写它的工作区（2026-09-08 一次 fast-forward
+// 项目通常是一个活着的仓库——navi 自己的验收合并在写它的工作区（2026-09-08 一次 fast-forward
 // 就把三个成员的咨询齐刷刷杀掉）、别的任务在 .worktrees/ 里持续写、用户的编辑器和构建也在写。
 // 此前按「变化即越界、中止全员」运行的六轮补丁（排除依赖树、shallow 目录、linked worktree
-// index、ash 的 data/、整棵 .git……）每轮都在给新冒出来的合法并发写豁免，排除清单永远追不上
+// index、navi 的 data/、整棵 .git……）每轮都在给新冒出来的合法并发写豁免，排除清单永远追不上
 // 真实世界。可归因、可中止的只读约束只有一层：工具事件闸门（readOnlyChatTool，默认拒绝）；
 // 这里观察到的变化随回复附注展示，由用户自己判断来源。
 export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObserver> {
   const root = await realpath(cwd);
-  const dbFile = resolveAshDbFile();
+  const dbFile = resolveNaviDbFile();
   const db = join(await realpath(dirname(dbFile)), basename(dbFile));
   const contains = (tree: string, path: string) => path === tree || path.startsWith(`${tree}${sep}`);
-  // ash 自己写进项目里的东西不值得附注：群聊的项目常常**就是 ash 仓库本身**，server.log 每个
+  // navi 自己写进项目里的东西不值得附注：群聊的项目常常**就是 navi 仓库本身**，server.log 每个
   // 请求都动，还有 ash.db 的 -wal/-shm/.ash.lock、scratch/、task-artifacts/、uploads/、runs/。
   // 位置可由 env 改，所以逐个解析而不是只看 DATA_DIR；反过来把项目整个罩住的（比如 NAVI_DB
   // 指到项目根）只能当它不存在，否则等于把观察关掉。
@@ -89,7 +89,7 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
     if (excludedFiles.has(path) || owned.some((tree) => contains(tree, path))) return true;
     if (basename(path) === ".DS_Store") return true;
     const parts = relative(root, path).split(sep);
-    // `.git` 里的东西不是项目文件，是 git 的记账：ash 轮询 `git status` 会刷新索引，别的任务在
+    // `.git` 里的东西不是项目文件，是 git 的记账：navi 轮询 `git status` 会刷新索引，别的任务在
     // 同一个仓库提交，用户自己的终端和编辑器也在跑 git。工作区里名叫 `.gitignore`、`index.lock`
     // 的普通文件不在此列，照常观察。
     if (parts[0] === ".git") return true;
@@ -126,8 +126,8 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
     seen.add(local.slice(0, 180));
   };
   const pending = new Set<Promise<void>>();
-  // 项目相关事件（滤掉 ash 自有/忽略树之后）每到一条就 +1：settle 的静默判据只看它。
-  // 故意不数被忽略的事件——群聊的项目常常就是 ash 仓库本身，data/ 里的写入永不停歇，
+  // 项目相关事件（滤掉 navi 自有/忽略树之后）每到一条就 +1：settle 的静默判据只看它。
+  // 故意不数被忽略的事件——群聊的项目常常就是 navi 仓库本身，data/ 里的写入永不停歇，
   // 数上它们会让每次结算都拖到封顶并误报降级。
   let activity = 0;
   try {

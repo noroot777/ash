@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@ash/shared";
-import { modelEffortKey } from "@ash/shared/cli-presets";
+import type { AgentEvent } from "@navi/shared";
+import { modelEffortKey } from "@navi/shared/cli-presets";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliParserContext, CliSpec } from "./types.js";
@@ -82,7 +82,7 @@ export const piSpec: CliSpec = {
     // 没有 1.5x 加速档这个概念,故不写 fastArgs。
     //
     // --session-id 是「按 id 打开,没有就用这个 id 新建」,等于 claude 的 --session-id:
-    // ash 自己发 UUID 即可(assertValidSessionId 接受 UUID),新建和续跑用同一个 flag。
+    // navi 自己发 UUID 即可(assertValidSessionId 接受 UUID),新建和续跑用同一个 flag。
     session: {
       newIdFlag: "--session-id",
       resumeArgs: (id) => ["--session-id", id],

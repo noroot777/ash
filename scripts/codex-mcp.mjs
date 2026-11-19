@@ -1,8 +1,8 @@
-// setup 给 codex 接 ash MCP 的那一步。
+// setup 给 codex 接 navi MCP 的那一步。
 //
 // 「已经接过没有」**问 codex 本人**，不自己读 TOML。setup 得在 Node 22.16 上裸跑、导入不了
 // server 那份结构扫描器（`server/src/codex-toml.ts`），而再写一份正则就是第五份判据 —— 上一版
-// 就是 `^\[mcp_servers\.ash\]`：`[mcp_servers."ash"]` 它看不见，于是再追加一份同名表，TOML 里
+// 就是 `^\[mcp_servers\.navi\]`：`[mcp_servers."navi"]` 它看不见，于是再追加一份同名表，TOML 里
 // 那是重复定义，codex 整份配置解析失败（`duplicate key`），别的 MCP 一起没了（新链第 4 轮审查
 // 第 2 条）。而「跑一次 npm run setup」正是派审预检给的补救办法。
 //
@@ -54,7 +54,7 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
   try {
     // 迁移、追加、确认全在副本上做,用户那份这期间一个字节都不动。
     writeFileSync(sandboxCfg, existing ?? "", { mode: TMP_MODE });
-    // 删不掉就留着：两个名字 ash 都认，名字不同不会重复定义；下面如实报「没删掉」。
+    // 删不掉就留着：两个名字 navi 都认，名字不同不会重复定义；下面如实报「没删掉」。
     const legacyRemoved = legacy.length > 0 && legacy.map((old) => removeServer(old, sandbox)).every(Boolean);
     const base = readFileSync(sandboxCfg, "utf8");
     // TOML 的字符串是转义的,Windows 路径里的 `\` 必须成对写,否则 `\d`、`\n`
@@ -63,7 +63,7 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
       + `[mcp_servers.${name}.env]\nNAVI_URL = "${url}"\n`;
     writeFileSync(sandboxCfg, written, { mode: TMP_MODE });
 
-    // 批准:拼完这份,codex 本人读得动吗、ash 真的列出来了吗。
+    // 批准:拼完这份,codex 本人读得动吗、navi 真的列出来了吗。
     const after = listServers(sandbox);
     if (!after.ok) return { action: "blocked", why: `${after.why}（补上那段之后）` };
     if (!after.servers.some((s) => s.name === name)) {

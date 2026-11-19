@@ -1,7 +1,7 @@
 // 真库测试不得启动真智能体。这道闸放在最底层 spawn 边界，所以普通管道、
 // 输出落盘的 detached 管道、常驻会话都绕不过。
 //
-// 放行按路径认（ASH_TEST_AGENT_BIN）：测试只能起自己铺的那几个可执行文件。后半段钉的就是
+// 放行按路径认（NAVI_TEST_AGENT_BIN）：测试只能起自己铺的那几个可执行文件。后半段钉的就是
 // 「收尾先把 PATH 还原、排着的任务这时才起跑」——那一刻同一个名字解析到的是机器上真的 CLI，
 // 必须被闸住，一次都不许跑起来。再后面钉「验的和起的是同一个文件」：解析结果是相对路径时，
 // 校验按本进程的 cwd 认、子进程按任务的 cwd 找，两处各有一个同名文件就会验一个起另一个。
@@ -14,13 +14,13 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-agent-guard-"));
+const root = mkdtempSync(join(tmpdir(), "navi-agent-guard-"));
 const IS_WINDOWS = process.platform === "win32";
 const originalPath = process.env.PATH;
 const originalCwd = process.cwd();
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_ALLOW_REAL_AGENT;
-delete process.env.ASH_TEST_AGENT_BIN;
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_ALLOW_REAL_AGENT;
+delete process.env.NAVI_TEST_AGENT_BIN;
 
 const { spawnAgent } = await import("../src/executors/spawn.js");
 const { detachedPathsFor, spawnControllableForRun, spawnDetachedAgent, spawnForRun } = await import("../src/executors/detached.js");
@@ -95,7 +95,7 @@ try {
   const fakeClaude = stub(fake, "claude");
   const hostClaude = stub(host, "claude");
   const hostCodex = stub(host, "codex");
-  process.env.ASH_TEST_AGENT_BIN = fake;
+  process.env.NAVI_TEST_AGENT_BIN = fake;
   process.env.PATH = [fake, host, originalPath ?? ""].join(delimiter);
   assert.equal(await exitOf(spawnAgent(root, "claude", [], "")), 0);
   assert.ok(existsSync(fakeClaude.ran), "铺的假 claude 应当真的跑起来");
@@ -117,12 +117,12 @@ try {
   console.log("✓ PATH 还原之后才轮到的起跑：解析到机器上那份，管道与落盘两种起法都不起");
 
   // —— 声明的是单个文件：只放行它，同目录的别的不沾光（node 旁边就是真 CLI 的机器很常见）。
-  process.env.ASH_TEST_AGENT_BIN = hostCodex.file;
+  process.env.NAVI_TEST_AGENT_BIN = hostCodex.file;
   assert.equal(await exitOf(spawnAgent(root, "codex", [], "")), 0);
   assert.match(await errorOf(spawnAgent(root, "claude", [], "")), BLOCKED);
   assert.ok(existsSync(hostCodex.ran) && !existsSync(hostClaude.ran));
   // 多项用 PATH 分隔符；目录写成另一种等价路径（macOS 的临时目录是软链）照样认。
-  process.env.ASH_TEST_AGENT_BIN = [process.execPath, realpathSync(fake)].join(delimiter);
+  process.env.NAVI_TEST_AGENT_BIN = [process.execPath, realpathSync(fake)].join(delimiter);
   process.env.PATH = [fake, host, originalPath ?? ""].join(delimiter);
   assert.equal(await exitOf(spawnAgent(root, process.execPath, ["-e", "process.exit(0)"], "")), 0);
   assert.equal(await exitOf(spawnAgent(root, "claude", [], "")), 0);
@@ -135,7 +135,7 @@ try {
   const work = join(stage, "work");
   const vetted = stub(join(stage, "rel"), "claude");
   const impostor = stub(join(work, "rel"), "claude");
-  process.env.ASH_TEST_AGENT_BIN = join(stage, "rel");
+  process.env.NAVI_TEST_AGENT_BIN = join(stage, "rel");
   process.env.PATH = ["rel", originalPath ?? ""].join(delimiter);
   const launches: [string, () => Child][] = [
     ["管道，命令写成相对路径", () => spawnForRun(work, join("rel", "claude"), [], "")],
@@ -158,7 +158,7 @@ try {
   console.log("✓ 解析结果是相对路径：管道、落盘、可重连 stdin 起的都是通过校验的那一个");
 
   // —— 闸查的那一下还没有，刚查完才装上：放行范围之外的东西，不能靠「第一次没查到」混过去。
-  process.env.ASH_TEST_AGENT_BIN = fake;
+  process.env.NAVI_TEST_AGENT_BIN = fake;
   process.env.PATH = [fake, originalPath ?? ""].join(delimiter);
   const ghostFile = join(host, IS_WINDOWS ? "ghost.cmd" : "ghost");
   const appearing: [string, () => Child][] = [
@@ -198,13 +198,13 @@ try {
   }
 
   // —— live 脚本的整体放行仍然是整体放行。
-  delete process.env.ASH_TEST_AGENT_BIN;
-  process.env.ASH_ALLOW_REAL_AGENT = "1";
+  delete process.env.NAVI_TEST_AGENT_BIN;
+  process.env.NAVI_ALLOW_REAL_AGENT = "1";
   assert.equal(await exitOf(spawnAgent(root, process.execPath, ["-e", "process.exit(0)"], "")), 0);
   console.log("agent spawn guard ok");
 } finally {
-  delete process.env.ASH_ALLOW_REAL_AGENT;
-  delete process.env.ASH_TEST_AGENT_BIN;
+  delete process.env.NAVI_ALLOW_REAL_AGENT;
+  delete process.env.NAVI_TEST_AGENT_BIN;
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   rmSync(root, { recursive: true, force: true });

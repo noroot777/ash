@@ -2,8 +2,8 @@
 //
 // ## 为什么非得有这个东西
 //
-// 原先这道闸的判据是「调用方有没有自称 agent」:带着 `x-ash-source-task-id` +
-// `x-ash-turn-token` 的拿 403,**什么头都不带的裸请求拿 200**（审查实测
+// 原先这道闸的判据是「调用方有没有自称 agent」:带着 `x-navi-source-task-id` +
+// `x-navi-turn-token` 的拿 403,**什么头都不带的裸请求拿 200**（审查实测
 // `200 {reclaimed:true, role:"single", heldMs:45}`，锁确实被放开）。诚实申报的被拦、
 // 一言不发的放行，顺序正好是反的 —— 于是这道闸只拦得住愿意配合的调用方，而 agent 手里
 // 有 shell，`curl` 一行就绕过去了。
@@ -25,8 +25,8 @@
 //   ③ 记录只说得出它能证的那一档(见 turn-lock-reclaim.ts 的措辞)。
 import { randomBytes } from "node:crypto";
 import type { Context } from "hono";
-import { HUMAN_ACTION_TOKEN_META } from "@ash/shared/human-action";
-export { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "@ash/shared/human-action";
+import { HUMAN_ACTION_TOKEN_META } from "@navi/shared/human-action";
+export { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "@navi/shared/human-action";
 
 /**
  * 这次启动的前缀。上次启动发出去的凭据因此一律验不过 —— 不必持久化、也不必清理。
@@ -109,7 +109,7 @@ export function liveHumanActionTokenCount(): number {
 }
 
 // Hono 的 c.set/c.get 是无类型字符串键,收敛成下面两个函数(同 auth/context.ts 的口径)。
-const VERIFIED_KEY = "ashHumanActionVerified";
+const VERIFIED_KEY = "naviHumanActionVerified";
 
 /** 闸核验通过之后盖一个戳。**只有 `personalWriteGate` 该调它。** */
 export function markHumanActionVerified(c: Context): void {

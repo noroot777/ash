@@ -1,4 +1,4 @@
-import type { Note } from "@ash/shared";
+import type { Note } from "@navi/shared";
 
 // `@` 引用随手记的**纯逻辑**：哪些随手记算命中、列表上那一行写什么、选中之后正文变成什么。
 // 跟 fileMention.ts 同样的理由单独成文件：回归测试（web/scripts/test-note-mention.mjs）

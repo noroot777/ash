@@ -5,9 +5,9 @@ import type {
   HandoffExportResult,
   HandoffTarget,
   Task, TaskListItem,
-} from "@ash/shared";
-import { needsPeerKey } from "@ash/shared/handoff";
-import { isAcceptedStage } from "@ash/shared";
+} from "@navi/shared";
+import { needsPeerKey } from "@navi/shared/handoff";
+import { isAcceptedStage } from "@navi/shared";
 import { Fingerprint, Warning } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";

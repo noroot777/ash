@@ -54,7 +54,7 @@
   color: var(--red);
 }
 
-/* 说明行末尾的「现问一次 CLI」。CLI 上新模型跟 ash 发版无关，这颗按钮是用户
+/* 说明行末尾的「现问一次 CLI」。CLI 上新模型跟 navi 发版无关，这颗按钮是用户
    不等发版就能拿到新模型的唯一入口，所以哪怕说明被截断它也要留在行内可见。 */
 .agent-model-control > small > button.model-refresh {
   display: inline-flex;

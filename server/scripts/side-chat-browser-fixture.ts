@@ -8,12 +8,12 @@ import { and, eq, isNull } from "drizzle-orm";
 import { acceptedSideRequests } from "./side-authorization-cases.js";
 import { mountFixtureSettings } from "./fixture-settings.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-side-browser-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-side-browser-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 // 粘进侧聊的图要真落盘：走的是正式的 /uploads 路由，只是把目录挪进这次的临时舞台。
 // 末段必须仍是 data/uploads —— 前端按这段路径判断附件能不能直接预览（attachmentView）。
-process.env.ASH_UPLOADS_DIR = join(stage, "data", "uploads");
+process.env.NAVI_UPLOADS_DIR = join(stage, "data", "uploads");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, agents, tasks, scheduledMessages } = await import("../src/db/schema.js");
 const { ChatService } = await import("../src/chat/service.js");
@@ -23,7 +23,7 @@ const { setInstanceMode } = await import("../src/auth/mode.js");
 const runs = await import("../src/runs.js");
 await ensureSchema(); await setInstanceMode("single", stage);
 const timestamp = new Date().toISOString();
-await db.insert(projects).values({ id: "p", name: "ash", repoPath: stage, createdAt: timestamp });
+await db.insert(projects).values({ id: "p", name: "navi", repoPath: stage, createdAt: timestamp });
 await db.insert(agents).values({ id: "side-codex", name: "Codex", type: "codex", model: "", extraArgs: "[]", isDefault: true, createdAt: timestamp });
 for (const id of ["parent", "other"]) await db.insert(tasks).values({ id, projectId: "p", title: id === "parent" ? "实现任务消息回传" : "另一个主任务", body: `${id} 的主任务背景：比较方案 A 和 B。`, mode: "single", status: "running", agentType: "codex", executorId: "side-codex", activeTurnToken: "turn", activeDirectionToken: "direction", createdAt: timestamp, updatedAt: timestamp });
 const delivered: string[] = [];

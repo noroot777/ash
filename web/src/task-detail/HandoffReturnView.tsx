@@ -1,4 +1,4 @@
-import type { HandoffPeerIdentity } from "@ash/shared";
+import type { HandoffPeerIdentity } from "@navi/shared";
 import { Fingerprint, Warning } from "@phosphor-icons/react";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
 

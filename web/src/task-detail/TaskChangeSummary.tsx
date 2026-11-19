@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { InspRow } from "../inspector/parts.tsx";

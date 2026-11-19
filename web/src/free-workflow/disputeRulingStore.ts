@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer } from "react";
-import type { FreeReviewDebateTurn, FreeReviewDisputeTarget } from "@ash/shared";
+import type { FreeReviewDebateTurn, FreeReviewDisputeTarget } from "@navi/shared";
 import { useLeftDrawer } from "../components/LeftDrawer.tsx";
 import { focusReplyInput } from "../task-detail/replyQuote.ts";
 import { DEBATE_SIDE_LABEL, turnGist } from "./debateModel.ts";

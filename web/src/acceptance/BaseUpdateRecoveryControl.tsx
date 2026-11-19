@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
+import type { BaseUpdateRecovery } from "@navi/shared/branch-plan";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { NaviLoader } from "../brand/NaviLoader.tsx";

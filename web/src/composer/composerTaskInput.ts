@@ -1,11 +1,11 @@
 // 新建面板「提交那一刻」要发给 POST /tasks 的那一份。新建出来的一律是普通任务（mode=single、自由工作流）：
 // 团队、讨论不再是新建时选的模式，讨论是这条任务里 `@` 人开的一场（composerOpening.ts）。
 // 从 TaskComposerPanel 拆出来纯粹是职责：面板管状态和门禁，这里只管把状态翻成请求体。
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import type { api } from "../lib/api.ts";
 import type { ExecutorSelection } from "../lib/agentAvailability.ts";
 import { forkTaskBody, type ConversationFork } from "../task-detail/conversationFork.ts";
-import { provisionalTitle } from "@ash/shared/provisional-title";
+import { provisionalTitle } from "@navi/shared/provisional-title";
 
 type RunTarget = ExecutorSelection & { model: string | null; reasoningEffort: string | null };
 

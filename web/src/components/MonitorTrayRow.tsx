@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { ArrowSquareOut, X } from "@phosphor-icons/react";
-import { canStopMonitor, type TaskMonitor } from "@ash/shared/monitor";
+import { canStopMonitor, type TaskMonitor } from "@navi/shared/monitor";
 import { monitorWhen } from "../monitors/monitorTray.ts";
 import { MonitorMark } from "./MonitorMark.tsx";
 import { RevealButton } from "./ScheduledMessageRow.tsx";
 
 /** 托盘里哨兵那几行要的东西（TaskDetail 给；团队回复框不给，那边没有哨兵）。 */
 export type TrayMonitors = {
-  /** 还在盯的那几个：ash 自己起的 + claude 内置 Monitor 的只读投影。 */
+  /** 还在盯的那几个：navi 自己起的 + claude 内置 Monitor 的只读投影。 */
   live: readonly TaskMonitor[];
   /**
    * 读到了明确终态的那几个的 id：它送来的排队结果前面画「已结束」。只认读到的终态——列表还没读到、
@@ -85,7 +85,7 @@ function MonitorNote({ monitor, monitors }: { monitor: TaskMonitor; monitors: Tr
     </p>;
   }
   const session = monitor.sourceRole === "reviewer" ? "审查那条会话" : "这条会话";
-  // pid 还空着：ash 这一刻认不回它的进程（重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步，
+  // pid 还空着：navi 这一刻认不回它的进程（重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步，
   // 见 server/src/monitor-adopt.ts）。接回层照样给它立了 tail 和期限，所以「有事件会叫醒、到点会收尾」
   // 对它也是真的；认不回号真正影响的是另一件事 —— 点停未必停得掉那个进程。原因照抄 `endedReason`。
   const unclaimed = monitor.pid === null && !!monitor.endedReason;

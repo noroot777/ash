@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { HandoffPeerOffline, HandoffRemoteState, HandoffTarget, TaskListItem } from "@ash/shared";
+import type { HandoffPeerOffline, HandoffRemoteState, HandoffTarget, TaskListItem } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { applyRemoteStates, handedOut, peersOf, remoteStateMap } from "./outboundStateModel.ts";
 

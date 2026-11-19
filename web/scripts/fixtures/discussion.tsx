@@ -5,7 +5,7 @@
 // 审议格的数据由测试那一侧接住 `/tasks/:id/free-workflow` 交过来（同任务页：它自己拉）。
 import { StrictMode, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Session, Task, TaskDiscussion } from "@ash/shared";
+import type { Session, Task, TaskDiscussion } from "@navi/shared";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { InspectorNavProvider, type InspectorNav } from "../../src/inspector/nav.tsx";
@@ -66,7 +66,7 @@ const STAGES = {
   },
   done: {
     discussion: discussionOf("d-done", {
-      status: "finished", outcome: "agreed", finishedAt: at(9), attachments: ["/Users/u/ash/data/uploads/AbCdEfGhIjKl-方案草图.txt"], lostBackground: [{ agentType: "gemini", role: "single" }],
+      status: "finished", outcome: "agreed", finishedAt: at(9), attachments: ["/Users/u/navi/data/uploads/AbCdEfGhIjKl-方案草图.txt"], lostBackground: [{ agentType: "gemini", role: "single" }],
       turns: [turn(1, "codex", "done", "让收尾每一步自己带时限"), turn(2, "claude", "done", "也不赞成手动放开"),
         turn(3, "codex", "done", "补一条先修那处泄漏", true)] as never,
     }),

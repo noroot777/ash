@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { dispatchSubtree } from "./dispatchTree.ts";
 
 // 「名下全部停下」在前端的读法：这条任务被谁按住了、它名下此刻还有没有在动的。判据跟服务端

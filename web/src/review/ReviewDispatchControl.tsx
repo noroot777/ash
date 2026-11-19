@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, TaskListItem, TaskReviewRound } from "@ash/shared";
+import type { AgentExecutorProfile, TaskListItem, TaskReviewRound } from "@navi/shared";
 import { MagnifyingGlass, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {

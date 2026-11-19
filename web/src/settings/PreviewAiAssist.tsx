@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CircleNotch, Robot, Stop } from "@phosphor-icons/react";
-import type { PreviewAssistState } from "@ash/shared/preview-assist";
-import type { ProjectPreviewConfig } from "@ash/shared/preview";
+import type { PreviewAssistState } from "@navi/shared/preview-assist";
+import type { ProjectPreviewConfig } from "@navi/shared/preview";
 import { Button } from "../components/ui.tsx";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { api } from "../lib/api.ts";
@@ -21,7 +21,7 @@ import {
 } from "./previewAssistMemory.ts";
 import { assistClaimSettled, watchAssistClaimLost } from "./previewAssistTabs.ts";
 
-// 「AI 协助」——把「这个项目该怎么起」这件事交给一个真的 CLI 智能体去判断，**并且由 ash
+// 「AI 协助」——把「这个项目该怎么起」这件事交给一个真的 CLI 智能体去判断，**并且由 navi
 // 真跑一遍**，跑起来了才填回上面的输入框。
 //
 // 界面上要一直说清楚两件事，因为它们决定用户敢不敢点：
@@ -60,7 +60,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   const [offered, setOffered] = useState<{ script: string; reason: "edited" | "unsettled" } | null>(null);
   // 成功之后**输入框到底怎么了**。卡片上的那句话只能照这个说 —— 「有没有待选脚本」推不出
   // 「填了没填」（第 3 轮审查：点完「保留我写的」，卡片照旧说「脚本已填进上面的输入框」，
-  // 用户于是以为框里那条手写的是 ash 验证过的）。
+  // 用户于是以为框里那条手写的是 navi 验证过的）。
   const [applied, setApplied] = useState<"filled" | "kept" | "shown" | null>(null);
   /**
    * 摆着的这份作业不是这个页面点出来的。
@@ -384,7 +384,7 @@ function PreviewAssistProgress({ job, offered, applied, foreign, onTakeOffered, 
     </div>
     {/* 上面那行状态已经说了「在哪个地址上起来过」，这里只说接下来该做什么——同一件事写两遍
         会把真正的下一步（还得点保存）淹掉。**而这句话只能照 applied 说**：说成「已填入」却
-        没填，用户就会以为框里那条手写的是 ash 验证过的（第 3 轮审查）。 */}
+        没填，用户就会以为框里那条手写的是 navi 验证过的（第 3 轮审查）。 */}
     {job.status === "running" && foreign && <p className="preview-assist-verdict">
       这一份是<b>别的页面点的</b>（AI 协助按项目算，一个项目同时只跑一份），这里只是照实显示它的进度；它跑出来的脚本<b>不会动这个页面的输入框</b>。
     </p>}

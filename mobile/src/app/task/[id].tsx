@@ -28,9 +28,9 @@ import { TaskDetailHeader } from "@/components/TaskDetailHeader";
 import { TaskReviewPanel } from "@/components/TaskReviewPanel";
 import { MarkdownText } from "@/components/MarkdownText";
 import { ReplyComposer } from "@/components/ReplyComposer";
-import { canArchive } from "@ash/shared";
-import { summarizeArchiveCleanup } from "@ash/shared/project";
-import type { Session, ScheduledMessage, Task } from "@ash/shared";
+import { canArchive } from "@navi/shared";
+import { summarizeArchiveCleanup } from "@navi/shared/project";
+import type { Session, ScheduledMessage, Task } from "@navi/shared";
 import type { LogLine } from "@/lib/log";
 import { mergeSessionNotices, snapshotToLogLines } from "@/lib/log";
 
@@ -220,7 +220,7 @@ export default function TaskDetail() {
       })
       .catch((e) => Alert.alert("取消归档失败", e instanceof Error ? e.message : String(e)));
 
-  // 删除任务:worktree 目录和 ash/<id8> 分支不会跟着任务行一起没,所以先问
+  // 删除任务:worktree 目录和 navi/<id8> 分支不会跟着任务行一起没,所以先问
   // 一次服务端还留着什么 —— 留着就多给一个「连它们一起删」的选项。任务一删,这两
   // 样在界面上就再没有入口了,这一问是唯一的机会。
   const confirmDelete = async () => {

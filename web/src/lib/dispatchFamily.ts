@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { byCreated, dispatchEdges, dispatchSubtree } from "./dispatchTree.ts";
 import { isAcceptedStage, indexWorkers, workersFrom } from "./taskAttention.ts";
 import { dispatchedRollUp, dispatchedStateOf, taskLook } from "./taskLook.ts";

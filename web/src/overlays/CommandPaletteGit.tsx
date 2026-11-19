@@ -1,6 +1,6 @@
 import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import type { ReactNode } from "react";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { Check, GitBranch, GitCommit, TreeStructure } from "@phosphor-icons/react";
 import type { GitOverview } from "../lib/api.ts";
 

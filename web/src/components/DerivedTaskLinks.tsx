@@ -1,4 +1,4 @@
-import { taskDisplayStatus, type TaskListItem } from "@ash/shared";
+import { taskDisplayStatus, type TaskListItem } from "@navi/shared";
 import { ArrowRight } from "@phosphor-icons/react";
 import { StatusChip } from "./ui.tsx";
 import { TaskModeIcon, taskModeLabel } from "./TaskOrigin.tsx";

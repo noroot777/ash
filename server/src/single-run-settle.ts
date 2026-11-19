@@ -6,7 +6,7 @@
 // `step` 是收尾记步(turn-wind-down.ts):每个 await 之前报一声「走到这一步了」,卡住时巡检才
 // 说得出卡在哪一步。它不决定往不往下走 —— 锁只由这一轮自己放,别人拿不走。
 import type { WriteStream } from "node:fs";
-import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionRole } from "@navi/shared";
 import { turnIdentity, type StopSettle } from "./runs.js";
 import type { RunHandle } from "./executors/types.js";
 import { writeTurnEnd } from "./transcript.js";
@@ -131,14 +131,14 @@ export async function settleSingleRunTurn(s: SingleRunSettlement): Promise<void>
     const review = turnIdentity(taskId)?.review ?? null;
     step("审查通道诊断(noteReviewerChannelGap)");
     await noteReviewerChannelGap({ taskId, sessId, turnStart: s.turnStart, agentType, stopped: !!stopped, review, failure })
-      .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
+      .catch((error) => { console.error(`[navi] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
   }
   if (settled.note) {
     // 结算说明落成**会话旁注**（持久 system 行 + SSE），跟会话轮换旁注同一条道：
     // 它讲的是「这一轮为什么落成这个状态」，不是 agent 干的活，也不是执行器报的错。
     // 从前它是「.md 里一段引用 + trace 里一条 error」，两处毛病都实打实：引用块糊进
     // agent 气泡正文（实时那份还没有，刷新后才冒出来），error 则把回合折叠条整条染红、
-    // 计进「N 异常」—— 第一次用 ash 的人看到的是一个红色黑盒，读到的是「它崩了」，而
+    // 计进「N 异常」—— 第一次用 navi 的人看到的是一个红色黑盒，读到的是「它崩了」，而
     // 真相多半只是「忘了调 complete_task」。真出故障时它还会盖住原因（docs/incidents.md
     // 「接力到多用户机器」）。
     // level:"notice" 让展示端直接知道这是提示不是故障，不必再靠关键词猜语气。
@@ -147,11 +147,11 @@ export async function settleSingleRunTurn(s: SingleRunSettlement): Promise<void>
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   flushSessionNotices();
   out.end();
-  // 普通回合 exit 0 却没交卷：会话证据点名 ash MCP 没连上时，把原因接在结算说明后面说出来
+  // 普通回合 exit 0 却没交卷：会话证据点名 navi MCP 没连上时，把原因接在结算说明后面说出来
   // （先结果、后原因；只认确定证据，见 review-channel-gap.ts 的 noteTurnChannelGap）。
   if (role !== "reviewer" && settled.failureReason === "missing_completion_confirmation") {
     step("交卷通道诊断(noteTurnChannelGap)");
     await noteTurnChannelGap({ taskId, sessId, turnStart: s.turnStart, agentType })
-      .catch((error) => { console.error(`[ash] noteTurnChannelGap(${taskId}) failed:`, error); return false; });
+      .catch((error) => { console.error(`[navi] noteTurnChannelGap(${taskId}) failed:`, error); return false; });
   }
 }

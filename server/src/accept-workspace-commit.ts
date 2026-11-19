@@ -5,7 +5,7 @@ import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import type { tasks } from "./db/schema.js";
 import { assertAcceptanceWorkspaceCommit } from "./accept-workspace-ownership.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
-import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
+import type { AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 import { acceptanceAutoCommitDecision } from "./accept-workspace-decision.js";
 import { holdMembers } from "./team-acceptance-hold.js";
 

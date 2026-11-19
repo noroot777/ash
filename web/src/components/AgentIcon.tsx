@@ -1,6 +1,6 @@
 import { useId, useMemo } from "react";
 import { Robot } from "@phosphor-icons/react";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import antigravity from "./agent-icons/antigravity.svg?raw";
 import claude from "./agent-icons/claude.svg?raw";
 import codex from "./agent-icons/codex.svg?raw";

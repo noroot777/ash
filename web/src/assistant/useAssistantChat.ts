@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
+import type { ChatMember, ChatRoom, ChatSnapshot } from "@navi/shared/chat";
 import { chatApi } from "../chat/chatApi.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { forgetWorkflows } from "../workflow/WorkflowPicker.tsx";

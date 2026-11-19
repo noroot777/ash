@@ -20,7 +20,7 @@ export async function persistOrReport(
     await run();
     return true;
   } catch (error) {
-    console.error(`[ash] team ${what}(${lead.taskId}) persistence failed:`, error);
+    console.error(`[navi] team ${what}(${lead.taskId}) persistence failed:`, error);
     reportLeadFailure(lead, `${what}写入数据库失败：${error instanceof Error ? error.message : String(error)}`, at);
     return false;
   }

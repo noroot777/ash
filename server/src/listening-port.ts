@@ -20,7 +20,7 @@ export function currentListeningPort(): number | null {
  *
  * 上面那个会退到 `PORT ?? 4317`，对「日志里出现这个端口就别当成预览本尊」那类判断够用
  * ——猜错了顶多少认一个端口。要把用户的会话 cookie 递过去的那一跳不能用它：猜错的
- * 4317 上可能坐着**另一台** ash，那就是把凭据送给了不该拿到的进程。
+ * 4317 上可能坐着**另一台** navi，那就是把凭据送给了不该拿到的进程。
  */
 export function boundListeningPort(): number | null {
   return boundPort;

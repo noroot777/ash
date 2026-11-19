@@ -6,8 +6,8 @@ import { deskSettled, freezeAutoRetry, gateRow, mainButton, openConfirm, stateOf
 const GATE_RETRY_CAP_MS = 10_000;
 
 const capture = async (page, name) => {
-  if (process.env.ASH_BROWSER_EVIDENCE_DIR) {
-    await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/${name}.png`, fullPage: true });
+  if (process.env.NAVI_BROWSER_EVIDENCE_DIR) {
+    await page.screenshot({ path: `${process.env.NAVI_BROWSER_EVIDENCE_DIR}/${name}.png`, fullPage: true });
   }
 };
 const emit = (page, event = { type: "task.acceptGate", taskId: "gate-task" }) =>

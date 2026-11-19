@@ -8,7 +8,7 @@
 // 旧会话里服务端当年插进正文的那两句引用不转换，照原样显示成引用：正文里认不出哪一句是服务端
 // 插的（同一句话可能是智能体写的、可能被切在两个文字块里，trace 里也会跟前后的正文攒成一条），
 // 猜错一次就是删掉用户要看的内容（第 1、2 轮审查）。
-import type { CompactionPhase } from "@ash/shared";
+import type { CompactionPhase } from "@navi/shared";
 import type { ExecutionEvent } from "./executionTrace.ts";
 
 export const COMPACT_LABEL = "压缩上下文";

@@ -41,7 +41,7 @@ explain_in_use() {
 if [[ "${3:-}" == --swap ]]; then
   STAGE="$4"
   OLD="$5"
-  export ASH_LOCK_HOLDER="$PPID"
+  export NAVI_LOCK_HOLDER="$PPID"
   # 挪开之前认一遍（命令行里的路径这时还解析得到），挪开之后再按打开着的文件认一遍。
   refuse_if_in_use "$DEST" || exit 1
   mv "$DEST" "$OLD"
@@ -54,12 +54,12 @@ fi
 [[ -f "$APP/$CODE_LOCK" ]] || { echo "✕ ${APP} 里没有代码锁 ${CODE_LOCK}，不是用这一版 build.sh 编出来的" >&2; exit 1; }
 mkdir -p "$DEST_DIR"
 
-if [[ -z "${ASH_INSTALL_LOCKED:-}" ]]; then
+if [[ -z "${NAVI_INSTALL_LOCKED:-}" ]]; then
   # 锁的位置只由目标目录的真实路径决定，不跟 TMPDIR 走：两个环境不同的安装器也排在同一把锁上。
-  LOCKS="${ASH_INSTALL_LOCKS:-/tmp/navi-install-locks}"
+  LOCKS="${NAVI_INSTALL_LOCKS:-/tmp/navi-install-locks}"
   mkdir -p "$LOCKS" && chmod 1777 "$LOCKS" 2>/dev/null || true
   LOCK="$LOCKS/$(md5 -qs "$(cd "$DEST_DIR" && pwd -P)").lock"
-  ASH_INSTALL_LOCKED=1 exec lockf -k -t 600 "$LOCK" /bin/bash "$0" "$@"
+  NAVI_INSTALL_LOCKED=1 exec lockf -k -t 600 "$LOCK" /bin/bash "$0" "$@"
 fi
 
 STAGE="$DEST_DIR/.Navi.app.installing-$$"

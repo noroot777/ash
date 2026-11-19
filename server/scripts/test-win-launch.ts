@@ -27,7 +27,7 @@ import { join } from "node:path";
 // 必须在 import 任何 src 模块之前翻平台：IS_WINDOWS 是模块加载期算的。
 Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 
-const stage = mkdtempSync(join(tmpdir(), "ash-win-launch-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-win-launch-"));
 
 /** npm 在 Windows 上生成的 bin 垫片，原样照抄结构（末行那条脚本路径是重点）。 */
 function npmShim(scriptRel: string): string {
@@ -166,7 +166,7 @@ try {
   delete process.env.Path;
 
   // ARM64 上三个 Program Files 各装各的架构;`%ProgramFiles%` 只指向与当前进程同架构
-  // 的那一个,少扫另外两个 = 一个 x64 版 node 起的 ash 看不见原生 ARM 装的 CLI。
+  // 的那一个,少扫另外两个 = 一个 x64 版 node 起的 navi 看不见原生 ARM 装的 CLI。
   process.env.ProgramFiles = "C:\\Program Files";
   process.env["ProgramFiles(x86)"] = "C:\\Program Files (x86)";
   process.env["ProgramFiles(Arm)"] = "C:\\Program Files (Arm)";
@@ -267,7 +267,7 @@ try {
   // ── 9. agent 壳的记号:两侧必须一字不差 ───────────────────────────────────────
   // `scripts/platform.mjs` 在 build 之前就要能跑(setup 的头两件事是装依赖、构建),所以它
   // 复刻了一份常量而不是 import server 的。重启那一刀靠这个后缀在进程表里认出「这是一个
-  // 活得过 ash 的 agent 壳」并绕开它(第 1 轮审查 F2 的不变量);两边漂了就等于那条不变量
+  // 活得过 navi 的 agent 壳」并绕开它(第 1 轮审查 F2 的不变量);两边漂了就等于那条不变量
   // 静默失效 —— 名单漏掉的新 agent 会被 taskkill 掉,而没有任何东西会报错。所以钉在这儿。
   const { WINDOWS_WRAP_SUFFIX, windowsWrapPaths } = await import("../src/executors/detached-win-wrap.js");
   const { WINDOWS_AGENT_WRAP_SUFFIX, agentWrapPids } = await import("../../scripts/platform.mjs");
@@ -289,7 +289,7 @@ try {
 
   // ── 10. CLI 候选目录:Windows 分支两份一致 ──────────────────────────────────
   // 同 9 的理由(scripts 侧只能复刻),但错法不同:候选目录漂了不会杀错进程,而是让
-  // **装机脚本把「装了」判成「没装」** —— setup.mjs 跳过 MCP 注册,ash 自己却照样派得
+  // **装机脚本把「装了」判成「没装」** —— setup.mjs 跳过 MCP 注册,navi 自己却照样派得
   // 出任务,于是每个任务都活干完、交不了卷、记 failed(2026-10-28 实测,见 bin-resolve.ts
   // 的 extraPaths 头部)。Windows 分支那一坨(三个 Program Files、scoop、choco 兜底)是
   // 最容易漂的,而它在开发机上永远走不到 —— 本文件已把 platform 翻成 win32,正好钉它。
@@ -306,7 +306,7 @@ try {
   const winHome = "C:\\Users\\u";
   assert.deepEqual(scriptExtraPaths(winEnv, winHome), binExtraPaths(winEnv, winHome),
     "scripts/platform.mjs 与 bin-resolve.ts 的候选目录必须一致（Windows 分支）");
-  // 三个 Program Files 都在里头(x64 版 node 起的 ash 看不见原生 ARM 目录,见那边注释)。
+  // 三个 Program Files 都在里头(x64 版 node 起的 navi 看不见原生 ARM 目录,见那边注释)。
   // 期望值用 `join` 拼而不是写死 `\`:两份实现都走 join,而 join 的分隔符由 Node 启动时的
   // **真实**平台定死、跟 IS_WINDOWS 一起翻不过来(见本文件头部)。写死就只能在 Windows 上过。
   const winDirs = binExtraPaths(winEnv, winHome);
@@ -325,7 +325,7 @@ try {
   const { candidates: scriptCandidates } = await import("../../scripts/platform.mjs");
   const { candidatesIn } = await import("../src/executors/bin-resolve.js");
   const dir = "C:\\Users\\u\\AppData\\Roaming\\npm";
-  for (const name of ["ash-review-cli", "claude", "node.exe"]) {
+  for (const name of ["navi-review-cli", "claude", "node.exe"]) {
     assert.deepEqual(
       scriptCandidates(name).map((c) => join(dir, c)),
       candidatesIn(dir, name),

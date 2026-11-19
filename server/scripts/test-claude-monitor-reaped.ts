@@ -12,14 +12,14 @@
 //
 // 于是用户那一侧全部的线索是卡片变成「已停止」+ 下面原样复读一遍描述。那读起来像「等到了
 // 然后停了」，而真相相反：它没等到，而且内置 Monitor 的通知只注回智能体自己的会话，从来
-// 不经过 ash —— 谁也不会被叫醒。这份回归钉三件事：
+// 不经过 navi —— 谁也不会被叫醒。这份回归钉三件事：
 //
 // ① 终态文案不复读描述（复读 = 两行都没说出发生了什么）；
 // ② 来源**明说**是被进程退出收走的那一句（`Orphaned by a previous…`）要翻出来；
 // ③ 回合结束时在任务时间线上留一条合并说明——「停止/暂停必须留下持久可见的状态」
 //    （AGENTS.md）在这里同样成立：用户刷新页面后得能看出「这一轮它挂了几个、现在全没了」。
 import { db, makeTask, monitors, now, sessions, teardown } from "./monitors-fixture.js";
-import { CLAUDE_MONITOR_ENDED_REASON, CLAUDE_MONITOR_REAPED_REASON, claudeMonitorEndedReason } from "@ash/shared/monitor-claude";
+import { CLAUDE_MONITOR_ENDED_REASON, CLAUDE_MONITOR_REAPED_REASON, claudeMonitorEndedReason } from "@navi/shared/monitor-claude";
 import { eq } from "drizzle-orm";
 
 const { ClaudeMonitorTrace } = await import("../src/claude-monitors.js");

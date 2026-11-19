@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-monitor-wiring-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-monitor-wiring-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitor-wiring");
 
 const [{ db, ensureSchema }, schema, { parseClaudeStream }] = await Promise.all([
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
   await new Promise((r) => setTimeout(r, 200));
   const subRow = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsub0001"))).at(0);
   check(subRow !== undefined, "子智能体挂的 Monitor 也接上了（嵌套分支）");
-  check(subRow?.taskId === "t1", "归属到同一个 ash 任务", String(subRow?.taskId));
+  check(subRow?.taskId === "t1", "归属到同一个 navi 任务", String(subRow?.taskId));
 
   // ── 接管那条路：上一轮的投影还挂着 running，新开的流必须认回来再收它的终态。
   await db.update(monitors).set({ status: "running", endedAt: null, endedReason: null })

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@navi/shared";
 
 type EventListener = (event: ServerEvent) => void;
 type ConnectionListener = (connected: boolean) => void;

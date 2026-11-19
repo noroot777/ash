@@ -15,8 +15,8 @@
 // resolvePreviewCommand 直接抛），根本没有日志文件 —— 那一档乐观按钮必须收回去。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
-import type { PreviewServiceState } from "@ash/shared/preview";
+import type { Task } from "@navi/shared";
+import type { PreviewServiceState } from "@navi/shared/preview";
 import "../../src/styles/global.css";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
 
@@ -133,7 +133,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     canceled = true;
     // cancel-late-success 例外：这一路要复现「DELETE 先赢、POST 还是 200」，所以**不**把
     // 那趟 POST 打成失败，留给页面上那颗控制按钮决定它什么时候成功返回。
-    if (!cancelLate) failStart?.(new Error("预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）"));
+    if (!cancelLate) failStart?.(new Error("预览启动被取消（关闭预览 / 任务重新开跑 / navi 重启）"));
     return reply({ stopped: true });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview` && (init?.method ?? "GET") !== "GET") {

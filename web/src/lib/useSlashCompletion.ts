@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from "react";
-import type { SkillEntry } from "@ash/shared";
+import type { SkillEntry } from "@navi/shared";
 import { isMenuPickKeyEvent } from "./sendKey.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, type SlashItem } from "./useSkills.ts";
 
@@ -7,20 +7,20 @@ import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, type Sl
 // @召唤、定时发送），它们自己接；剩下那些「只是一个 textarea」的表面用这个，
 // 免得把同一套 ↑↓/回车/Esc 抄第三遍第四遍。
 //
-// 只做补全：选中一条就是把正文末尾那个斜杠 token 换成 `/名字 `，ash 不改写、不截走。
+// 只做补全：选中一条就是把正文末尾那个斜杠 token 换成 `/名字 `，navi 不改写、不截走。
 // 例外是给了 onSend 的发送框：原生命令已经敲全时回车直接发（见 slashSendsAsTyped）。
 export function useSlashCompletion({
   value,
   setValue,
   skills,
-  ash = [],
+  navi = [],
   disabled,
   onSend,
 }: {
   value: string;
   setValue: (next: string) => void;
   skills: SkillEntry[];
-  ash?: SlashItem[];
+  navi?: SlashItem[];
   disabled?: boolean;
   onSend?: () => void;
 }) {
@@ -29,7 +29,7 @@ export function useSlashCompletion({
 
   const query = disabled || dismissed ? null : slashQuery(value);
   const token = query?.token ?? null;
-  const items = mergeSlashItems(ash, skills, query);
+  const items = mergeSlashItems(navi, skills, query);
   const selectedIndex = Math.min(index, Math.max(0, items.length - 1));
   const open = items.length > 0;
   const sends = open && !!onSend && slashSendsAsTyped(items[selectedIndex], value);

@@ -1,4 +1,4 @@
-import { reliableAnnotationMatch, scoreAnnotationCandidate } from "@ash/shared/page-annotation-review";
+import { reliableAnnotationMatch, scoreAnnotationCandidate } from "@navi/shared/page-annotation-review";
 
 export function previewAnnotationReviewRuntime(): string {
   return String.raw`

@@ -13,7 +13,7 @@
 // 存在 `handoff_local_peer_keys`(按 url),既不进那份会被整份吐回前端的设置,又能在
 // 设置页和接力对话框里正常填写。
 import { and, eq, inArray } from "drizzle-orm";
-import type { HandoffTarget } from "@ash/shared";
+import type { HandoffTarget } from "@navi/shared";
 import { getAppSettings, invalidateInstanceCache, parseAppSettingsPatch, patchAppSettings, writeAppSettingsPatch } from "../app-settings.js";
 import { db } from "../db/index.js";
 import { appSettings, handoffLocalPeerKeys, userHandoffTargets } from "../db/schema.js";

@@ -1,4 +1,4 @@
-// 接力**出站**侧的对端客户端:所有发往另一台 ash 的请求都从这里出去。
+// 接力**出站**侧的对端客户端:所有发往另一台 navi 的请求都从这里出去。
 //
 // 两件事,缺一不可:
 //   1. **签名**每一个请求(方法+路径+时间戳+nonce+body 哈希,ed25519)。对端据此确认
@@ -10,8 +10,8 @@
 //      之后每次预检/导出都先核对,对不上就**拒绝打包**,连探测都不往下走。
 //
 // 入站方向(谁能推进本机)在 handoff-peers.ts。
-import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity } from "@ash/shared";
-import { HANDOFF_CAPABILITY_BLOCKED, HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
+import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity } from "@navi/shared";
+import { HANDOFF_CAPABILITY_BLOCKED, HANDOFF_PEER_KEY_REQUIRED } from "@navi/shared/handoff";
 import { getAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffPingResponse } from "./handoff-types.js";
@@ -21,7 +21,7 @@ import {
 } from "./handoff-identity.js";
 import { PEER_HEADERS } from "./handoff-peers.js";
 import { hasHandoffTrustedMark, isHandoffService } from "./handoff-wire.js";
-import { headerNameGenerations, withLegacyHeaderNames } from "@ash/shared/http-headers";
+import { headerNameGenerations, withLegacyHeaderNames } from "@navi/shared/http-headers";
 import { sealForPeer } from "./handoff-crypto.js";
 import { handoffActorId, peerUserKeyHeader } from "./auth/handoff-outbound.js";
 import { localModeTag, PEER_USER_KEY_HEADER } from "./auth/handoff-peer-user.js";
@@ -104,18 +104,18 @@ export async function fetchPeer<T>(
   const payload = (await res.json().catch(() => null)) as
     { error?: string; code?: string; [mark: string]: unknown } | null;
   if (!res.ok) {
-    // 只有带 ash 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
+    // 只有带 navi 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
     // 没有标记的非 2xx 可能是中间网关在对端已处理成功后伪造的(上游读超时回 502 等),
     // 按网络类失败(network=true)处理,让调用方保留 pending 而不是回滚——宁可让用户
     // 多点一次收口重试,也不能让同一个任务在两台机器上各跑一份。
-    // 鉴权拒绝(401/403)一律带 ash 标记,确实什么都没导入,回滚才是对的。
+    // 鉴权拒绝(401/403)一律带 navi 标记,确实什么都没导入,回滚才是对的。
     const error = new HandoffError(
       `对端返回 ${res.status}：${payload?.error ?? "未知错误"}`,
       502,
       !hasHandoffTrustedMark(payload),
     );
     error.remoteStatus = res.status;
-    error.remoteAsh = hasHandoffTrustedMark(payload);
+    error.remoteNavi = hasHandoffTrustedMark(payload);
     // 原因码穿透这一跳:「对端不认识你这把 key」是对端才知道的事实,可本机的界面才是
     // 能补 key 的地方。只认白名单里的码 —— 对端是外部输入,不能让它往前端塞任意字符串。
     // 能力握手的拒绝同样要穿透:一键移回是**对端**在跑导出,而能勾「仍然接力」的界面
@@ -132,7 +132,7 @@ export async function fetchPeer<T>(
   return payload as T;
 }
 
-// 对端 ash 刚重启时，本机连接池里可能还留着通往旧进程的长连接：请求写进一条对面早已关掉的
+// 对端 navi 刚重启时，本机连接池里可能还留着通往旧进程的长连接：请求写进一条对面早已关掉的
 // 连接，拿到的是「other side closed」/ECONNRESET 而不是应答，探测就被记成「核对不过」——
 // 用户再点一次才好。下面两个探测都是只读的（不带本机签名、不改对端任何状态），这类连接层
 // 错误就换一条新连接再试**一次**。拿到了应答（哪怕验签不过）、超时、连不上，都不重试。

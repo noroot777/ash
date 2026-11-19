@@ -7,7 +7,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { groups, scheduledMessages, taskPrerequisiteLaunches, taskPrerequisites, tasks } from "./db/schema.js";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import { withAfterGates, type AfterGate } from "./pending-after.js";
 import { deliveryVerdict, pendingExecutionIntent, type DeliveryVerdict } from "./pending-verdict.js";

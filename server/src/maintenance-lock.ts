@@ -1,7 +1,7 @@
 // 离线维护锁：**一把真锁**，不是一次探活。
 //
 // 历史回填那类脚本会直接改 `sessions`、`usage_cumulative_snapshots` 和 data/runs 里的
-// trace 文件。只在动手之前「看一眼有没有活着的 ash」是不够的 —— 看完到写完之间服务可以
+// trace 文件。只在动手之前「看一眼有没有活着的 navi」是不够的 —— 看完到写完之间服务可以
 // 起来，另一份迁移也可以同时开跑，两边各写一半同一条 CLI 线程的账（第 2 轮审查 F2 并发面）。
 //
 // 锁**按资源键**配，一套资源有几个可写资源就取几把：历史回填传的是「库文件 + 它的 runs
@@ -10,31 +10,31 @@
 //
 // 两个方向都挡：
 // ① 维护脚本之间：原子建锁文件，已经有活着的持有者就直接拒。
-// ② 维护脚本和 ash 服务之间：`acquireDbSingletonLock` 起手会查这些锁（见 singleton.ts），
+// ② 维护脚本和 navi 服务之间：`acquireDbSingletonLock` 起手会查这些锁（见 singleton.ts），
 //    迁移跑着的时候服务起不来；反方向则由**占有锁里的在线复查**负责 —— 下面取锁时会在
-//    claim 内重新查一遍 ash 的在线登记（ash-presence.ts）。
+//    claim 内重新查一遍 navi 的在线登记（navi-presence.ts）。
 //
 // **两边的「查对方 + 登记自己」必须都在同一把占有锁里**（resource-claim.ts）。只有一边
 // 包起来是不够的：第 3 轮审查 F2 用真实服务实测了剩下那条交错 —— 迁移在 claim 之外探了
-// 一次「没有 ash」，服务随后拿到 claim 起来并写下自己的锁，迁移再拿到 claim 写维护锁，
+// 一次「没有 navi」，服务随后拿到 claim 起来并写下自己的锁，迁移再拿到 claim 写维护锁，
 // 两边同时活着（`BOTH_LIVE`，服务 /api/health 仍返回 200）。所以探活不能留在 claim 外面。
 //
-// **为什么不复用 ash 自己那把单例锁**：`staleLockReason` 要求持有者的命令行长得像
+// **为什么不复用 navi 自己那把单例锁**：`staleLockReason` 要求持有者的命令行长得像
 // `node server/dist/index.js`，脚本的命令行对不上，于是服务会把脚本的锁判成陈旧锁直接
 // 覆盖 —— 看着锁住了，其实谁都没挡住。
 //
 // 陈旧判据故意只认两条硬事实（pid 还活着 + 进程启动时刻对得上），**不认命令行形状**：
-// 脚本被强杀之后那把锁必须自动失效，否则 ash 就永远起不来了。读不出来的锁一律按陈旧算
+// 脚本被强杀之后那把锁必须自动失效，否则 navi 就永远起不来了。读不出来的锁一律按陈旧算
 // （宁可少挡一次，也不能把服务永久挡在外面）—— 锁文件是**带着内容原子出现**的
 // （`atomicCreateWithContent`），所以「读不懂」不再可能是「刚建好还没写完」那一瞬。
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
-import { resolveAshDbFile } from "./db/path.js";
+import { resolveNaviDbFile } from "./db/path.js";
 import { isPidAlive } from "./platform.js";
 import { inspectProcess } from "./proc.js";
 import { atomicCreateWithContent, withResourceClaim } from "./resource-claim.js";
-import { AshPresenceUnknownError, describeAshPresence, liveAshPresenceForAny } from "./ash-presence.js";
+import { NaviPresenceUnknownError, describeNaviPresence, liveNaviPresenceForAny } from "./navi-presence.js";
 
 const SUFFIX = ".maintenance.lock";
 /** 进程启动时刻的比对容差，跟 singleton.ts 同一个量级。 */
@@ -44,7 +44,7 @@ const START_TIME_TOLERANCE_MS = 10_000;
 export function maintenanceLockFileFor(key: string): string {
   return `${key}${SUFFIX}`;
 }
-export function maintenanceLockFileForDb(dbFile = resolveAshDbFile()): string {
+export function maintenanceLockFileForDb(dbFile = resolveNaviDbFile()): string {
   return maintenanceLockFileFor(dbFile);
 }
 
@@ -66,12 +66,12 @@ export type MaintenanceHolder = {
   note: string;
 };
 
-/** 取锁时在 claim 内发现这套资源上还有活着的 ash。 */
-export class AshOnlineError extends Error {
+/** 取锁时在 claim 内发现这套资源上还有活着的 navi。 */
+export class NaviOnlineError extends Error {
   constructor(public readonly detail: string) {
     super(`拒绝动手：这套资源上还有活着的 Navi —— ${detail}\n`
       + "先停掉它再回填 —— 跑着的回合会跟回填抢同一条线程的累计快照和同一份 trace 文件。");
-    this.name = "AshOnlineError";
+    this.name = "NaviOnlineError";
   }
 }
 
@@ -117,7 +117,7 @@ export function liveMaintenanceHolderFor(key: string): MaintenanceHolder | null 
   };
 }
 
-export function liveMaintenanceHolderForDb(dbFile = resolveAshDbFile()): MaintenanceHolder | null {
+export function liveMaintenanceHolderForDb(dbFile = resolveNaviDbFile()): MaintenanceHolder | null {
   return liveMaintenanceHolderFor(dbFile);
 }
 
@@ -146,7 +146,7 @@ export function acquireMaintenanceLocks(
   options: {
     /**
      * 额外的在线探测，**在 claim 里**跑。默认那条只认新版的在线登记；老 build 起的服务
-     * 只写单例锁，调用方（CLI）把 `liveAshHolderForDb` 从这里补进来。返回非空 = 拒绝。
+     * 只写单例锁，调用方（CLI）把 `liveNaviHolderForDb` 从这里补进来。返回非空 = 拒绝。
      */
     onlineProbe?: () => string | null;
   } = {},
@@ -160,14 +160,14 @@ export function acquireMaintenanceLocks(
     // 的写入者抢同一条线程就互相覆盖,所以这一关只接受**证明得了的否**。
     let online;
     try {
-      online = liveAshPresenceForAny(unique);
+      online = liveNaviPresenceForAny(unique);
     } catch (error) {
-      if (error instanceof AshPresenceUnknownError) throw new AshOnlineError(error.message);
+      if (error instanceof NaviPresenceUnknownError) throw new NaviOnlineError(error.message);
       throw error;
     }
-    if (online) throw new AshOnlineError(describeAshPresence(online));
+    if (online) throw new NaviOnlineError(describeNaviPresence(online));
     const extra = options.onlineProbe?.();
-    if (extra) throw new AshOnlineError(extra);
+    if (extra) throw new NaviOnlineError(extra);
 
     const taken: { file: string; token: string }[] = [];
     const rollback = () => {
@@ -231,7 +231,7 @@ function takeAll(
 
 /** 单键的便捷入口（测试和只改库的场景用）。 */
 export function acquireMaintenanceLock(
-  dbFile: string = resolveAshDbFile(),
+  dbFile: string = resolveNaviDbFile(),
   note = process.argv.slice(1).join(" "),
 ): MaintenanceLock {
   return acquireMaintenanceLocks([dbFile], note);
@@ -243,6 +243,6 @@ function releaseLock(lockFile: string, token: string): void {
   try {
     unlinkSync(lockFile);
   } catch (error) {
-    console.warn(`[ash] 维护锁没删掉 ${lockFile}:`, error);
+    console.warn(`[navi] 维护锁没删掉 ${lockFile}:`, error);
   }
 }

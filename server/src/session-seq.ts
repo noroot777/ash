@@ -7,7 +7,7 @@
 //
 // 号只活在进程内存里。进程重启（或第一次碰这条会话）时从两份文件的尾巴上把用过的最大号接回来：
 // 号随写入单调增长，最大的那个一定贴在文件末尾；尾巴里一个都找不到（一段特别长的正文把它挤出
-// 去了）才整份读一遍。从没带过号的老会话从 1 起。同一条会话只有一个 ash 进程在写（单实例锁），
+// 去了）才整份读一遍。从没带过号的老会话从 1 起。同一条会话只有一个 navi 进程在写（单实例锁），
 // 所以内存里这一份就是权威。
 //
 // 只认**记录本身的元数据**：`.md` 里的 sentinel 行（`\x1e` 开头的那种 JSON）、trace 每一行顶层的
@@ -73,7 +73,7 @@ function recovered(taskId: string, sessionId: string): number | null {
   try {
     return Math.max(maxSeqInFile(join(dir, `${sessionId}.md`), "md"), maxSeqInFile(join(dir, `${sessionId}.trace.jsonl`), "trace"));
   } catch (error) {
-    console.warn(`[ash] 接回会话记录号失败 ${taskId}/${sessionId}，这一回合不带身份:`, error);
+    console.warn(`[navi] 接回会话记录号失败 ${taskId}/${sessionId}，这一回合不带身份:`, error);
     return null;
   }
 }
@@ -89,7 +89,7 @@ export function recordSeq(taskId: string, sessionId: string): RecordSeq | null {
   const last = recovered(taskId, sessionId);
   if (last === null) return null;
   if (last >= CEILING) {
-    console.warn(`[ash] 会话记录号已经接近上限 ${taskId}/${sessionId}（${last}），这条会话之后的回合不带身份`);
+    console.warn(`[navi] 会话记录号已经接近上限 ${taskId}/${sessionId}（${last}），这条会话之后的回合不带身份`);
     return null;
   }
   const counter = { last };

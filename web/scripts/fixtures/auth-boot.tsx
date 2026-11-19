@@ -11,7 +11,7 @@
 // 夹具页面**故意不带** index.html 里那段预热脚本:这里要测的是「预热没生效时 AuthGate
 // 自己撑不撑得住」,预热本身的并行性由测试直接对着真 index.html 量。
 import { createRoot } from "react-dom/client";
-import type { AuthState } from "@ash/shared";
+import type { AuthState } from "@navi/shared";
 // global.css 必须排在组件之前 —— `main.tsx` 就是这个顺序。
 import "../../src/styles/global.css";
 import { AuthGate } from "../../src/auth/AuthGate.tsx";
@@ -43,7 +43,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
 
 if (params.get("mode") === "probe-once") {
   // 快照带个记号,好分辨每一次 `authApi.state()` 到底吃的是预热结果还是真请求。
-  window.__ashAuthProbe = Promise.resolve({ ...state, homeDir: "/from-probe" });
+  window.__naviAuthProbe = Promise.resolve({ ...state, homeDir: "/from-probe" });
   void (async () => {
     const first = await authApi.state();
     const afterFirst = realRequests;

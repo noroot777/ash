@@ -5,7 +5,7 @@
 import "./isolated-data.js";
 import assert from "node:assert/strict";
 import type { RetryTurnFacts, RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
-import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
+import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
 import {
   lastInputOf, latestSessionOf, resendInputOf, retryTurnActionOf, retryTurnKindOf, retryTurnIsExecution, retryTurnRejection, retryTurnTierOf,
 } from "../src/task-retry-turn.js";
@@ -326,7 +326,7 @@ assert.ok(why(task(), sess({ id: "a", role: "voiceA" })), "duet 会话不归这�
 // 都挂一颗「重试」。
 assert.ok(why(task(), sess({ id: "a", role: "single", exitStatus: 0 })), "普通回合 exit 0 仍然不给");
 
-// ── 共用判据本身:三个信号的优先级(@ash/shared/turn-outcome) ───────────────────
+// ── 共用判据本身:三个信号的优先级(@navi/shared/turn-outcome) ───────────────────
 // 这一份被**前端那颗按钮读着同一个函数**(web/src/task-detail/turnRetry.ts),所以优先级直接
 // 钉在这儿,而不是只通过 retryTurnRejection 间接测 —— 审查 F2 要修的那一条恰恰是同一句判据
 // 在两端各错一次。
@@ -352,7 +352,7 @@ assert.ok(why(task(), sess({ id: "a", role: "single", exitStatus: 0 })), "普通
 }
 
 // ── 权威结局优先于退出码(审查 F2,已实测) ──────────────────────────────────────
-// 回合级停滞看门狗终止掉的那一轮:ash 已经判它失败(区间 outcome=failed、正文写明「已自动
+// 回合级停滞看门狗终止掉的那一轮:navi 已经判它失败(区间 outcome=failed、正文写明「已自动
 // 终止本回合并按失败结算」),而被终止的进程多半以 exit 0 收流。照退出码判就是 409
 // 「上一回合不是异常结束」,而页面同时明写着它被自动终止 —— 用户没有任何重来的入口。
 assert.equal(
@@ -363,7 +363,7 @@ assert.equal(
 assert.equal(
   why(task(), sess({ id: "a", exitStatus: null }), { turnOutcome: "failed" }),
   null,
-  "退出码没写成、但 ash 已判这一轮失败,同样放行",
+  "退出码没写成、但 navi 已判这一轮失败,同样放行",
 );
 // 上面那一条不许把闲聊也放进来:**只认 failed**。续聊的聊天回合本来就不调 complete_task,
 // 它的区间是 completed —— 跟着放松就等于每次闲聊后都挂一颗「重试」(紧挨着的那条断言)。

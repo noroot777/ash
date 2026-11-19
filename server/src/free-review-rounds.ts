@@ -8,7 +8,7 @@
 // run 行里），轮数只是这条链的一个参数。结算那一侧在落笔事务里重读 run 行的上限（见
 // handleFreeWorkflowSettlement），所以这里只要在「这一轮还没结算」时写进去就一定生效；
 // 晚了一步（结算已经把 run 收成 stopped/passed）就如实拒掉，不假装改上了。
-import type { FreeReviewRoundsInput } from "@ash/shared";
+import type { FreeReviewRoundsInput } from "@navi/shared";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

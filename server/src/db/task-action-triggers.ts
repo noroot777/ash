@@ -4,7 +4,7 @@
 // 地方几十处，挨个补「写完记得通知」迟早漏一处，而漏一处的后果就是另一张开着的页面停在一颗点了必被
 // 拒的键上。触发器只认「哪一列变了」，谁写的都一样。
 //
-// 都是 TEMP 触发器 + 本连接上登记的 JS 函数：只活在 ash 自己这条连接里，不落进库文件（别的进程打开
+// 都是 TEMP 触发器 + 本连接上登记的 JS 函数：只活在 navi 自己这条连接里，不落进库文件（别的进程打开
 // 这个库不会撞上「没有这个函数」），每次开机重建。函数和触发器必须一起装：只有触发器没有函数，
 // 那几张表的每一次写都会报错。
 //
@@ -36,7 +36,7 @@ const changed = (columns: string[]) => columns.map((column) => `OLD.${column} IS
 // 审查 F2：删掉挡路的前置任务，后面那个失败任务的「重试」一直灰着）。推送那一侧只做一件事：把记下
 // 的队列 / 分组展开成**此刻**的成员（task-actions-feed.ts）；已经离开的成员自己那一行也在变，自己会
 // 被记上。
-const dirty = (kind: "task" | "queue" | "group", key: string) => `ash_actions_dirty('${kind}', ${key})`;
+const dirty = (kind: "task" | "queue" | "group", key: string) => `navi_actions_dirty('${kind}', ${key})`;
 const queueOf = (taskId: string) => `(SELECT queue_id FROM queue_items WHERE task_id = ${taskId})`;
 /** 一个任务变了：它自己、它的上级、它审的那个任务、它所在的那条队列。 */
 const taskEdges = (row: "NEW" | "OLD") =>
@@ -52,7 +52,7 @@ const roundTask = (row: "NEW" | "OLD") => dirty("task", `(SELECT task_id FROM fr
 
 /** 一张表的增 / 改 / 删各一条触发器；`when` 限定「改」只在判据会读的列变了时才算。 */
 function watch(table: string, edges: (row: "NEW" | "OLD") => string, when?: string): string {
-  const name = `ash_actions_${table}`;
+  const name = `navi_actions_${table}`;
   return `
   CREATE TEMP TRIGGER IF NOT EXISTS ${name}_ins AFTER INSERT ON ${table} BEGIN SELECT ${edges("NEW")}; END;
   CREATE TEMP TRIGGER IF NOT EXISTS ${name}_upd AFTER UPDATE ON ${table}${when ? ` WHEN ${when}` : ""}
@@ -76,13 +76,13 @@ const TRIGGERS = [
   watch("task_prerequisite_launches", onTask, changed(["requested_at"])),
   // 执行器 profile 改了 / 删了：重跑上一回合的保真前提（会话记下的指纹）全变，说不清是哪些任务。
   `
-  CREATE TEMP TRIGGER IF NOT EXISTS ash_actions_agents_upd AFTER UPDATE ON agents BEGIN SELECT ash_actions_dirty('all', NULL); END;
-  CREATE TEMP TRIGGER IF NOT EXISTS ash_actions_agents_del AFTER DELETE ON agents BEGIN SELECT ash_actions_dirty('all', NULL); END;`,
+  CREATE TEMP TRIGGER IF NOT EXISTS navi_actions_agents_upd AFTER UPDATE ON agents BEGIN SELECT navi_actions_dirty('all', NULL); END;
+  CREATE TEMP TRIGGER IF NOT EXISTS navi_actions_agents_del AFTER DELETE ON agents BEGIN SELECT navi_actions_dirty('all', NULL); END;`,
 ].join("\n");
 
 /** 装触发器。ensureSchema 的最后一步：表和列都已经齐了。 */
 export async function installTaskActionTriggers(client: Client): Promise<void> {
-  client.defineFunction("ash_actions_dirty", (kind: SqlValue, id: SqlValue) => {
+  client.defineFunction("navi_actions_dirty", (kind: SqlValue, id: SqlValue) => {
     if (kind === "all") markTaskActionsDirty({ kind: "all" });
     else if (typeof id !== "string" || !id) return null;
     else if (kind === "queue") markTaskActionsDirty({ kind: "queue", queueId: id });

@@ -10,12 +10,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { makeStep } from "@ash/shared/workflow";
+import { makeStep } from "@navi/shared/workflow";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-accept-commit-test-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-accept-commit-test-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 兜底清理挂在建好舞台的下一行：早退路径也不许在 TEMP 里留下目录（见 test-accept-merge.ts）。
 process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
 const git = (cwd: string, ...args: string[]) =>
@@ -33,7 +33,7 @@ function hasRef(repo: string, branch: string): boolean {
 function makeRepo(name: string): string {
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Accept Test");
+  git(repo, "config", "user.name", "Navi Accept Test");
   git(repo, "config", "user.email", "accept@example.test");
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(repo, "shared.txt"), "seed\n");

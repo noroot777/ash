@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { Pause } from "@phosphor-icons/react";
 import { dispatchHolderOf, dispatchHoldPhrase } from "../../lib/dispatchHold.ts";
 

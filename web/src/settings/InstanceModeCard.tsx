@@ -6,7 +6,7 @@
 // 所以这张卡在多人模式下仍然有一个可写控件,只对实例管理员开放(服务端 PATCH /settings
 // 的实例面闸是权威,这里只负责别把改不动的东西显示成能改)。
 import { useState } from "react";
-import type { AppSettings } from "@ash/shared";
+import type { AppSettings } from "@navi/shared";
 import { KeyReveal } from "../auth/KeyReveal.tsx";
 import { MultiModeForm } from "../auth/MultiModeForm.tsx";
 import { HostCliChoice } from "../auth/HostCliChoice.tsx";

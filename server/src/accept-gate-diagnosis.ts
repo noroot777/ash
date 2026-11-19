@@ -1,19 +1,19 @@
 // 门禁日志里**哪一个字节是谁写的**。这一层的全部存在理由就是这一句。
 //
 // 由来（第 1 轮审查 F3 → 第 2 轮 R2-F1 → 第 3 轮 F2，同一条问题被钉了三次）：命令的
-// stdout/stderr 由 spawnAcceptGate 直接接到门禁日志那个 fd 上，ash 的进度行一度也往同一
+// stdout/stderr 由 spawnAcceptGate 直接接到门禁日志那个 fd 上，navi 的进度行一度也往同一
 // 份文件里追加，于是「这一行是谁写的」只能靠内容去猜。三种猜法全被实测推翻：
-//  · 按 `[ash] ` 前缀猜 —— 被测命令自己也能打印这个前缀；
+//  · 按 `[navi] ` 前缀猜 —— 被测命令自己也能打印这个前缀；
 //  · 写前写后两次 stat 推自己那几个字节的区间 —— 命令可能正好插在这两次 stat 中间，
 //    推出来的区间会把它的输出当成心跳抹掉；
 //  · 把自己写过的行**原文**记下来剔除 —— O_APPEND 只保证我们这一段不被从中间拆开，
 //    **不保证它前面是个换行**。命令在「读最后一个字节」和「append」之间写了半行，两段就
-//    粘成 `...[ash] 进度 · …`，原文比不上，于是 ash 的提示被当成了命令的末行。
+//    粘成 `...[navi] 进度 · …`，原文比不上，于是 navi 的提示被当成了命令的末行。
 //
-// 所以不猜了：**ash 的元信息根本不写进那份文件**。命令跑着的那段时间里门禁日志只有命令
-// 一个写入者（ash 只在开跑前和结算时写，两头都在 watcher 的窗口之外），watcher 要的末行、
+// 所以不猜了：**navi 的元信息根本不写进那份文件**。命令跑着的那段时间里门禁日志只有命令
+// 一个写入者（navi 只在开跑前和结算时写，两头都在 watcher 的窗口之外），watcher 要的末行、
 // 字节数、更新时间于是全部直接取自它，中间没有「判断来源」这一步可错。
-// ash 自己的两样东西住在日志旁边：
+// navi 自己的两样东西住在日志旁边：
 //   <log>.notes   跑的过程中的进度/静默提示，一行一条按时间追加
 //   <log>.scene   撞上时限那一刻的现场，一次性冻结，之后不再改
 // 用户看到的仍然是合起来的一份：acceptGateLogTail / acceptGateLogText 在末尾给它们留位置。
@@ -39,7 +39,7 @@ export function gateScenePath(logPath: string): string {
 }
 
 /**
- * 一份门禁日志**是一组文件**：命令自己的输出，加上 ash 的两个诊断附件。
+ * 一份门禁日志**是一组文件**：命令自己的输出，加上 navi 的两个诊断附件。
  *
  * 由来（第 8 轮审查 F1）：上面把一份日志拆成三个文件之后，日志的**生成和读取**都跟着
  * 改了，但「这份日志有没有、要不要带走」这类判断散在别处，还按「那个 `.log` 在不在」
@@ -77,7 +77,7 @@ export function isGateLogFile(name: string): boolean {
   return /^accept-gate-[A-Za-z0-9_-]+\.log(\.notes|\.scene)?$/.test(name);
 }
 
-/** 记一条 ash 自己的进度/提示。**不碰门禁日志**，所以它永远不会跟命令的输出粘在一起。 */
+/** 记一条 navi 自己的进度/提示。**不碰门禁日志**，所以它永远不会跟命令的输出粘在一起。 */
 export function appendGateNote(logPath: string, line: string): boolean {
   try {
     mkdirSync(dirname(logPath), { recursive: true });
@@ -132,7 +132,7 @@ function noteLines(logPath: string): string[] {
 }
 
 /**
- * 补在回显尾巴后面的那一段 ash 元信息。
+ * 补在回显尾巴后面的那一段 navi 元信息。
  *
  * 出了结论就只给现场：现场里已经有完整的产出节奏，再把进度行抄一遍只会挤掉命令自己的输出。
  */
@@ -147,6 +147,6 @@ export function gateDiagnosisTail(logPath: string): string {
 export function gateDiagnosisFull(logPath: string): string {
   const notes = noteLines(logPath);
   const scene = readGateScene(logPath);
-  const timeline = notes.length ? `\n[ash] ──── 跑的过程中的进度 ────\n${notes.join("\n")}\n` : "";
+  const timeline = notes.length ? `\n[navi] ──── 跑的过程中的进度 ────\n${notes.join("\n")}\n` : "";
   return `${timeline}${scene ? `\n${scene}` : ""}`;
 }

@@ -14,7 +14,7 @@
 // `noteSaveState()`。在途的保存**自己带着主语**。于是「这份回包该不该动界面」不再是
 // 散落各处的判断，而是推导的自然结果 —— 根本没有第二份状态可写错。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Note } from "@ash/shared";
+import type { Note } from "@navi/shared";
 import { api } from "../lib/api.ts";
 
 export type NoteDraft = { id: string | null; body: string; attachments: string[] };

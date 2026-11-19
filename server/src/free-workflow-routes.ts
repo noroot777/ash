@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { FreeReviewDispatchInput, FreeReviewRoundsInput } from "@ash/shared";
+import type { FreeReviewDispatchInput, FreeReviewRoundsInput } from "@navi/shared";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { db } from "./db/index.js";

@@ -1,4 +1,4 @@
-import type { TaskDiscussion, TaskListItem } from "@ash/shared";
+import type { TaskDiscussion, TaskListItem } from "@navi/shared";
 import type { LeftDrawerEntry } from "../components/LeftDrawer.tsx";
 import {
   discussionLive, discussionLostText, discussionPair, discussionSegmentHead, discussionSegments, discussionSpeaking, discussionTotal,

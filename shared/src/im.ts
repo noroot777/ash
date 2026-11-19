@@ -45,7 +45,7 @@ export interface ImOptions {
   enabled: boolean;
   /** 任务完成/验收合并/门禁出结果也推一条通知（默认开）。 */
   notifyCompleted: boolean;
-  /** 卡片里「在 ash 中打开」的地址前缀，如 Tailscale 地址；为空则卡片不带深链。 */
+  /** 卡片里「在 navi 中打开」的地址前缀，如 Tailscale 地址；为空则卡片不带深链。 */
   publicBaseUrl: string | null;
   /** 飞书开放平台的月调用额度（免费版自建应用 1 万次）。 */
   monthlyQuota: number;

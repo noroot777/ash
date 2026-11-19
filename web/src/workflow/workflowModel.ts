@@ -15,10 +15,10 @@
 //    点过了」（2026-08-05 事故，见 docs/incidents.md「关口画在验证前面就被跳过」）。
 //    反推留给老任务和还没走到任何锚点的任务：精度有限（preview/command 站在 status 上
 //    跟 run 站长得一样，一律算作 run 之后的在途），但读的仍是真实状态，不是假进度条。
-import type { Task, TaskStage } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
-import type { StepKind, WorkflowDef, WorkflowStep } from "@ash/shared/workflow";
-import { STEP_RUNTIME } from "@ash/shared/workflow";
+import type { Task, TaskStage } from "@navi/shared";
+import { taskDisplayStatus } from "@navi/shared";
+import type { StepKind, WorkflowDef, WorkflowStep } from "@navi/shared/workflow";
+import { STEP_RUNTIME } from "@navi/shared/workflow";
 
 // 线路图上的短名。STEP_LABELS 那套（「让 AI 干活」）是编排时选站用的完整说法，
 // 画在一排站台上太挤，这里另给一套两三个字的。

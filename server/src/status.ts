@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -79,7 +79,7 @@ export type SetTaskStatusOptions = {
    * 为什么非得挤进同一条 UPDATE(main 那一轮第 2 轮审查 F2,已实测):结算侧原先是「先清
    * `followUpFrom`、下一句再写 status」两条语句。两句之间任务是 `running + followUpFrom=null`
    * —— 此刻进程没了,**恢复原终态所需的那个事实已经永久消失**,重启后的对账只能把一个本该
-   * 回到 `done` 的任务落成 failed。用户那边唯一的区别只是 ash 有没有在那条缝里重启。
+   * 回到 `done` 的任务落成 failed。用户那边唯一的区别只是 navi 有没有在那条缝里重启。
    *
    * 起跑侧一直是对的(`guarded-turn-start.ts` / `review-start-retry.ts`:status 与这三列在同一笔
    * 事务里写),结算侧照它对齐。类型只允许「清掉」那几个值:这个口子不是通用的字段补写入口。
@@ -243,7 +243,7 @@ async function writeTaskStatus(
     // 还在路上,刚攒下的哨兵事件就会抢在它前面把这个已经 done 的任务重新拉起来跑一轮。
     await import("./monitor-reclaim.js")
       .then(({ stopMonitorsForTask }) => stopMonitorsForTask(taskId, `任务已${status}，哨兵一并收回`))
-      .catch((err) => console.error(`[ash] stopMonitorsForTask(${taskId}) failed:`, err));
+      .catch((err) => console.error(`[navi] stopMonitorsForTask(${taskId}) failed:`, err));
   }
   // Carry execution-time fields so every surface updates live with the status —
   // notably the terminal transition, where every turn now has ended_at so
@@ -258,7 +258,7 @@ async function writeTaskStatus(
   bus.publish({ type: "task.status", taskId, status, updatedAt, startedAt, endedAt, ...timing });
   // 托盘上「在等什么」读的就是这些状态(pending-wait.ts):本任务和同队挂着待发送消息的,通知重拉。
   void import("./pending-wait.js").then(({ republishWaitsAround }) => republishWaitsAround(taskId))
-    .catch((err) => console.error(`[ash] republishWaitsAround(${taskId}) failed:`, err));
+    .catch((err) => console.error(`[navi] republishWaitsAround(${taskId}) failed:`, err));
 
   // 队列推进(DESIGN §3)与待发送扫描。这里只定「该不该」,什么时候做归 turn-release.ts:锁空着
   // 当场做;回合还占着锁(结算就是持锁写的这一笔)就留到放锁那一刻 —— 早了推进认领不到这把锁,
@@ -274,11 +274,11 @@ async function writeTaskStatus(
   // 别的任务上「等它完成后发送」的消息:完成了就锁存并发;失败/取消了托盘要改口说在等什么。
   if (status === "done" || status === "canceled" || status === "failed") {
     void import("./pending-after.js").then(({ flushPendingAfterTask }) => flushPendingAfterTask(taskId))
-      .catch((err) => console.error(`[ash] flushPendingAfterTask(${taskId}) failed:`, err));
+      .catch((err) => console.error(`[navi] flushPendingAfterTask(${taskId}) failed:`, err));
   }
   // 建在它上面的任务：页面上那句「它到哪一步了」跟着变，等齐就起的重判一遍（prerequisite-launch.ts）。
   void import("./prerequisite-launch.js").then(({ notePrerequisiteProgress }) => notePrerequisiteProgress(taskId))
-    .catch((err) => console.error(`[ash] notePrerequisiteProgress(${taskId}) failed:`, err));
+    .catch((err) => console.error(`[navi] notePrerequisiteProgress(${taskId}) failed:`, err));
   return true;
 }
 

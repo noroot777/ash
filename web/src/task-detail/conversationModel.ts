@@ -1,9 +1,9 @@
-import type { ContextUsage, Session, SessionRole, TokenUsage, TurnInterruption, TurnOutcome } from "@ash/shared";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
-import { addUsage, usageTotal } from "@ash/shared/usage";
+import type { ContextUsage, Session, SessionRole, TokenUsage, TurnInterruption, TurnOutcome } from "@navi/shared";
+import type { MonitorWakeData } from "@navi/shared/monitor-wake";
+import { addUsage, usageTotal } from "@navi/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
-import type { TimelineNotice } from "@ash/shared/timeline-notice";
+import type { TimelineNotice } from "@navi/shared/timeline-notice";
 import { applyVerifySpans, reviewerKey } from "./conversationReviewer.ts";
 import { markSystemResumes, type ResumeNote } from "./turnCause.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";

@@ -1,4 +1,4 @@
-// 用真 Claude CLI 打本地假上游，验证 ash 供应商配置不会被用户级 settings / CC Switch 覆盖。
+// 用真 Claude CLI 打本地假上游，验证 navi 供应商配置不会被用户级 settings / CC Switch 覆盖。
 // 假上游只返回固定 SSE，不调用真实模型，也不会产生费用。
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -13,7 +13,7 @@ if (spawnSync("claude", ["--version"], { encoding: "utf8" }).status !== 0) {
   process.exit(0);
 }
 
-const scratch = mkdtempSync(join(tmpdir(), "ash-claude-relay-live-"));
+const scratch = mkdtempSync(join(tmpdir(), "navi-claude-relay-live-"));
 // 死进程留下的设置文件故意用改名之前的前缀：启动清扫要两代一起认（legacy-names.ts）。
 const staleSettings = join(tmpdir(), "ash-claude-settings-2147483647-00000000-0000-0000-0000-000000000000.json");
 writeFileSync(staleSettings, "stale");
@@ -79,7 +79,7 @@ try {
   const address = upstream.address();
   assert.ok(address && typeof address !== "string");
 
-  process.env.ASH_DB = join(scratch, "relay.db");
+  process.env.NAVI_DB = join(scratch, "relay.db");
   const { ClaudeExecutor } = await import("../src/executors/claude.js");
   assert.equal(existsSync(staleSettings), false, "导入执行器时应清理已死亡 pid 的残留 settings");
   const executor = new ClaudeExecutor({
@@ -88,7 +88,7 @@ try {
       providerId: "provider-live",
       name: "live",
       baseUrl: `http://127.0.0.1:${address.port}`,
-      apiKey: "ash-profile-key",
+      apiKey: "navi-profile-key",
       defaultModel: "claude-sonnet-4-6",
       protocolConversionEnabled: false,
       context1mModels: [],
@@ -99,8 +99,8 @@ try {
   assert.ok(settingsPath && existsSync(settingsPath), "运行期 settings 文件应在 spawn 前准备好");
   if (platform() !== "win32") assert.equal(statSync(settingsPath).mode & 0o777, 0o600);
   const runtimeSettings = readFileSync(settingsPath, "utf8");
-  assert.match(runtimeSettings, /ash-profile-key/);
-  assert.doesNotMatch(handle.commandLine, /ash-profile-key/);
+  assert.match(runtimeSettings, /navi-profile-key/);
+  assert.doesNotMatch(handle.commandLine, /navi-profile-key/);
   let text = "";
   let error: string | null = null;
   for await (const event of handle.events) {
@@ -111,12 +111,12 @@ try {
 
   assert.equal(error, null);
   assert.equal(text.trim(), "OK");
-  assert.equal(authorization, "Bearer ash-profile-key");
+  assert.equal(authorization, "Bearer navi-profile-key");
   assert.equal(xApiKey, null);
   assert.doesNotMatch(beta, /oauth-2025-04-20|extended-cache-ttl-2025-04-11/);
   assert.ok(cacheControls.every((value) => !value || typeof value !== "object" || !("ttl" in value)), "AUTH_TOKEN 通道不应请求 1h cache ttl");
   assert.doesNotMatch(handle.commandLine, /--setting-sources/);
-  assert.doesNotMatch(handle.commandLine, /ash-profile-key|wrong-user/);
+  assert.doesNotMatch(handle.commandLine, /navi-profile-key|wrong-user/);
   assert.equal(existsSync(settingsPath), false, "Claude init 后应删除临时 settings 文件");
   assert.ok(existsSync(hookFile), "用户级 SessionStart hook 应继续加载");
   assert.deepEqual(JSON.parse(readFileSync(hookFile, "utf8")), { timeout: "3000000" });
@@ -137,7 +137,7 @@ try {
       providerId: "provider-live",
       name: "live",
       baseUrl: `http://127.0.0.1:${address.port}`,
-      apiKey: "ash-profile-key",
+      apiKey: "navi-profile-key",
       defaultModel: "claude-sonnet-4-6",
       protocolConversionEnabled: false,
       context1mModels: [],

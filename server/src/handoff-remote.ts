@@ -5,9 +5,9 @@ import type {
   HandoffTarget,
   TaskHandoff,
   TaskStage,
-} from "@ash/shared";
-import { isAcceptedStage } from "@ash/shared";
-import { outboundHolder } from "@ash/shared/handoff";
+} from "@navi/shared";
+import { isAcceptedStage } from "@navi/shared";
+import { outboundHolder } from "@navi/shared/handoff";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { handoffActorId } from "./auth/handoff-outbound.js";
@@ -255,7 +255,7 @@ async function outboundByPeer(actor: Actor): Promise<Map<string, PeerBucket>> {
 // **要验的只有一种情况**:设置里那条 target 没有指纹,而这些出站行记着一个。改地址会
 // 把记住的指纹一起丢掉(设置页那段注释:指纹是对上一个地址背后那台机器的承诺),于是
 // outboundHolder 只能按名字把它认回来 —— 而名字认回来的地址可能根本是填错的。
-// 不验就直接问的话,一台恰好也批准过本机的 ash 会回 200 + 空 rows:侧栏既没有实时状态、
+// 不验就直接问的话,一台恰好也批准过本机的 navi 会回 200 + 空 rows:侧栏既没有实时状态、
 // 也不会说「联系不上」,正是这次要修的那种「不是实时却没有提示」。
 //
 // target 自己有指纹时不必验:outboundHolder 的闸已经保证它跟 marker 记的是同一台。
@@ -387,7 +387,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
     } catch (error) { return fail(c, error); }
   });
 
-  // 浏览器面：浏览器只跟本机 Ash 说话，本机核对出站存档和目标指纹后再签名转发。
+  // 浏览器面：浏览器只跟本机 Navi 说话，本机核对出站存档和目标指纹后再签名转发。
   api.post("/tasks/:id/remote-snapshot", async (c) => {
     try {
       const body = await c.req.json<BrowserProxyBody>();

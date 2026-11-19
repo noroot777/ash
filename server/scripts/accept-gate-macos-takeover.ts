@@ -1,7 +1,7 @@
 // macOS 兼容监督下的**跨重启接管**（生产实现，不加载编排夹具）。
 //
 // 钉的是 GateConfinement.resume：兼容监督靠 250ms 一次的轮询，顺着 ppid 记下清掉了继承标记
-// 的后代。起跑时那份轮询随旧 ash 一起没了 —— 新实例接管后不把它接回来，接管**之后**才冒出来
+// 的后代。起跑时那份轮询随旧 navi 一起没了 —— 新实例接管后不把它接回来，接管**之后**才冒出来
 // 的这类后代就没人记，收尾时认不出它，测试转绿、它却还活着。这里专门造一个：接管之后才起、
 // env 清空（没有标记）、自成一个进程组，只靠父进程还活着那会儿被观察到。
 import assert from "node:assert/strict";
@@ -25,7 +25,7 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
 
 export async function testMacGateTakeover(directory: string): Promise<object> {
   assert.equal(process.platform, "darwin");
-  assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+  assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
   mkdirSync(directory, { recursive: true });
   const repo = join(directory, "repo");
   const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
@@ -72,7 +72,7 @@ if (process.argv[2] === "child") {
     await db.insert(tasks).values({ id: taskId, projectId, title: "macos-takeover", mode: "single", status: "done",
       stage: "verified", workflowMode: "free", useWorktree: true, worktreeBase: "main", mergeTargetBranch: "main",
       createdAt: stamp, updatedAt: stamp });
-    // 旧 ash：另一个进程发起验收，命令放行后 SIGKILL 自己。
+    // 旧 navi：另一个进程发起验收，命令放行后 SIGKILL 自己。
     const worker = spawn(process.execPath, ["--import", "tsx",
       fileURLToPath(new URL("./accept-gate-crash-worker.ts", import.meta.url)), taskId, "armed"],
     { env: process.env, stdio: ["ignore", "pipe", "pipe"] });

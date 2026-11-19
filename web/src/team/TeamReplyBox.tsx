@@ -4,8 +4,8 @@
 //
 // 从 TeamView.tsx 搬出来独立成文件（那份已经顶到 700 行上限），搬的是整块、一字未改。
 import { useEffect, useRef, useState } from "react";
-import type { ScheduledMessage, Task, TaskListItem } from "@ash/shared";
-import { cliCommandsForMode } from "@ash/shared/cli-commands";
+import type { ScheduledMessage, Task, TaskListItem } from "@navi/shared";
+import { cliCommandsForMode } from "@navi/shared/cli-commands";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
 import { LaterSendKey, useLaterSend, type LaterChoice } from "../components/LaterSend.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
@@ -20,7 +20,7 @@ import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
 import { ComposerInput } from "../task-detail/ComposerInput.tsx";
 import { QuestionDock, useQuestionTakeover } from "../task-detail/QuestionSlot.tsx";
-import type { QuestionAnswerInput } from "@ash/shared/questions";
+import type { QuestionAnswerInput } from "@navi/shared/questions";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import {
   ReplyResizeHandle,

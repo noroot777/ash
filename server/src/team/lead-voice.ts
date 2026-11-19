@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { bus } from "../bus.js";
 import { now } from "../util.js";
 import { appendSessionTrace, writeTurn, writeRunError } from "../transcript.js";

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClient, type Client } from "../src/db/node-sqlite-client.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-db-tx-"));
+const root = mkdtempSync(join(tmpdir(), "navi-db-tx-"));
 let bad = 0;
 const check = (ok: boolean, what: string, got = ""): void => {
   if (!ok) bad += 1;

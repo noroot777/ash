@@ -25,7 +25,7 @@ export async function releaseGateOwnership(taskId: string, runId: string) {
   forgetGateProcess(runId);
   const message = `已显式确认风险并强制释放验收前置命令 ${runId} 的停止占用。未取得整次退出证据，` +
     "不代表进程已停止或测试通过；残留进程仍可能写入文件，合并、删除或接力可能与它竞争。若有独立快照，不会自动清理，请检查残留。";
-  appendGateLog(row.logPath, `\n[ash] ${now()} ${message}\n`);
+  appendGateLog(row.logPath, `\n[navi] ${now()} ${message}\n`);
   await appendTaskTimeline(taskId, alertLine(message));
   return { ok: true as const, gate: gateView(released) };
 }

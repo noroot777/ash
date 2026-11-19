@@ -41,7 +41,7 @@
 //
 // ── ④ 「它盯的那个东西在不在」:这一层只交出前提,不自己断言 ──────────────────────────
 //
-// 新一轮审查 F1 实测:`tail -f /definitely-missing-ash-review; printf 'DONE\n'` 报一句 No such
+// 新一轮审查 F1 实测:`tail -f /definitely-missing-navi-review; printf 'DONE\n'` 报一句 No such
 // file or directory 就退出、随后打出 DONE（退出 0）—— 而它被硬拦。`tail -f FILE` 的「不退出」
 // 藏着一个前提:**那个文件现在就在**。`-F`/`--retry`/`--follow=name` 是「没了也一直重试」,它
 // 不要这个前提。

@@ -1,7 +1,7 @@
 // 「等某任务完成后发送」的候选与托盘口径。回复框(普通任务 / 团队调度台)选目标、托盘
 // 显示「在等谁」都读这里,判据与服务端 pending-after.ts 同源:只有「完成」算数。
-import type { Group, TaskListItem, TaskStatus } from "@ash/shared";
-import { TASK_STATUS_LABELS } from "@ash/shared";
+import type { Group, TaskListItem, TaskStatus } from "@navi/shared";
+import { TASK_STATUS_LABELS } from "@navi/shared";
 import type { DropdownOption } from "../components/Dropdown.tsx";
 
 const FINISHED: readonly TaskStatus[] = ["done", "failed", "canceled"];

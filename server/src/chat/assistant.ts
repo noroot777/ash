@@ -1,7 +1,7 @@
 import { and, desc, eq, gt, inArray, isNotNull } from "drizzle-orm";
-import type { AssistantResult, ChatMember } from "@ash/shared/chat";
-import type { SearchHit } from "@ash/shared";
-import { normalizeWorkflowDef } from "@ash/shared/workflow";
+import type { AssistantResult, ChatMember } from "@navi/shared/chat";
+import type { SearchHit } from "@navi/shared";
+import { normalizeWorkflowDef } from "@navi/shared/workflow";
 import { db } from "../db/index.js";
 import { chatContextResets, chatMessages, users, workflows } from "../db/schema.js";
 import { SINGLE_ACTOR, type Actor } from "../auth/context.js";

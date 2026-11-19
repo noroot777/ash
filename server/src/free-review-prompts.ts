@@ -11,7 +11,7 @@ import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-
 import {
   REVIEW_VALIDATION_REQUIREMENT,
   REVIEWER_REGRESSION_CLAUSE,
-} from "@ash/shared/free-workflow";
+} from "@navi/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { lstat, rename } from "node:fs/promises";
 import { join } from "node:path";
@@ -62,7 +62,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
   const reviewLocation = acceptedMerge ? "当前 detached 临时 worktree" : repoPath;
   // 扫描义务**不再分 workspace / accepted_merge 两份**：原先那个分叉存在的唯一理由是
   // 「任务分支的回归结果能不能复用」，而回归复用这件事已经整体退役（回归统一在验收时跑，
-  // 审查者一条都不跑，口径见 `@ash/shared/free-workflow` 的 `REGRESSION_POLICY`）。
+  // 审查者一条都不跑，口径见 `@navi/shared/free-workflow` 的 `REGRESSION_POLICY`）。
   // 两种目标现在只差一句话，由 `refreshRegressionEvidence` 的清单说明自己交代。
   // 口径本体由同一条消息末段的 `REVIEW_VALIDATION_REQUIREMENT` 讲一遍就够,清单说明只讲
   // 「这份文件怎么读」—— 原先这条消息里同一段口径出现三遍(扫描义务回归面、清单说明、验证义务)。
@@ -184,7 +184,7 @@ async function writeRecurrenceList(taskId: string, runId: string, round: number,
     }
     return null;
   } catch (error) {
-    console.error(`[ash] 熔断清单没写进证据目录 task=${taskId}:`, error);
+    console.error(`[navi] 熔断清单没写进证据目录 task=${taskId}:`, error);
     return error instanceof Error ? error.message : String(error);
   }
 }

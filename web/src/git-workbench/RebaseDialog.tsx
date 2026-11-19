@@ -3,7 +3,7 @@ import type {
   GitHistoryCommit,
   RebaseAction,
   RebaseStep,
-} from "@ash/shared/git-workbench";
+} from "@navi/shared/git-workbench";
 import { ArrowDown, ArrowUp } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";

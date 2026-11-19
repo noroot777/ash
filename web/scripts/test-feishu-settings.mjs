@@ -156,8 +156,8 @@ try {
   {
     const page = await open("scenario=connected&groups=demo");
     const groups = page.locator('[data-settings-anchor="feishu-groups"]');
-    await groups.getByText("ash 开发群", { exact: true }).waitFor();
-    assert.equal(await selectedValue(selectTrigger(groups, "ash 开发群 绑定的项目")), "p-ash");
+    await groups.getByText("navi 开发群", { exact: true }).waitFor();
+    assert.equal(await selectedValue(selectTrigger(groups, "navi 开发群 绑定的项目")), "p-navi");
     await groups.getByText(/群「日报群」在 .+ 发来了绑定码，要把它绑到项目「daily-report」吗？/).waitFor();
     await groups.getByRole("button", { name: "确认绑定群", exact: true }).click();
     await groups.getByText("日报群", { exact: true }).waitFor();
@@ -183,7 +183,7 @@ try {
     assert.equal((await calls(page, "DELETE", "/api/im/feishu/groups/oc_team")).length, 0);
     await dialog.getByRole("button", { name: "解绑", exact: true }).click();
     await dialog.waitFor({ state: "detached" });
-    await groups.getByText("ash 开发群", { exact: true }).waitFor({ state: "detached" });
+    await groups.getByText("navi 开发群", { exact: true }).waitFor({ state: "detached" });
     await page.close();
   }
 

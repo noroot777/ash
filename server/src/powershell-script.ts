@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
 
 export function powerShellScriptInvocation(command: string, scriptPath: string, pathEnd: number): string {
-  const state = `$__ashState_${randomUUID().replace(/-/g, "")}`;
+  const state = `$__naviState_${randomUUID().replace(/-/g, "")}`;
   const stackKey = randomUUID();
   const stack = `([AppDomain]::CurrentDomain.GetData('${stackKey}'))`;
   const invocation = `& ${scriptPath}${command.slice(pathEnd)}`;
   const encoded = Buffer.from(invocation, "utf16le").toString("base64");
-  const prepareTarget = "(& { if ($args[0] -is [System.Management.Automation.CommandInfo]) { $prepare = $ExecutionContext.SessionState.InvokeCommand.GetCommand('__ashPrepareCommand', [System.Management.Automation.CommandTypes]::Function); if ($null -ne $prepare) { & $prepare $args[0]; return } }; ,$args[0] } (";
+  const prepareTarget = "(& { if ($args[0] -is [System.Management.Automation.CommandInfo]) { $prepare = $ExecutionContext.SessionState.InvokeCommand.GetCommand('__naviPrepareCommand', [System.Management.Automation.CommandTypes]::Function); if ($null -ne $prepare) { & $prepare $args[0]; return } }; ,$args[0] } (";
   const finish = `[void]${stack}.Pop(); if (-not ${state}[2]) { if (${state}[0]) { exit 0 }; if (${state}[1] -is [int] -and ${state}[1] -ne 0) { exit ${state}[1] }; exit 1 }`;
   return [
     "& {",
     `[AppDomain]::CurrentDomain.SetData('${stackKey}', [Collections.Generic.Stack[object]]::new())`,
-    "function __ashCompileScript([string]$source, [string]$file) {",
+    "function __naviCompileScript([string]$source, [string]$file) {",
     "  $program = [scriptblock]::Create($source)",
     "  $edits = [Collections.Generic.List[object]]::new()",
     `  $initialize = '${state} = @($true, 0, $false); ${stack.replace(/'/g, "''")}.Push(${state});' + [Environment]::NewLine`,
@@ -19,7 +19,7 @@ export function powerShellScriptInvocation(command: string, scriptPath: string, 
     "",
     `} catch { ${state}[2] = $true; throw } finally {`,
     `  & { ${state}[0], ${state}[1] = $args } $? $LASTEXITCODE`,
-    "__ASH_FINISH__",
+    "__NAVI_FINISH__",
     "}",
     "'@",
     "  $blocks = @($program.Ast.BeginBlock, $program.Ast.ProcessBlock, $program.Ast.EndBlock) | Where-Object { $null -ne $_ }",
@@ -35,7 +35,7 @@ export function powerShellScriptInvocation(command: string, scriptPath: string, 
     "    if ($null -eq $first) {",
     "      $edits.Add([pscustomobject]@{ Offset = $end; Priority = 2; Text = [Environment]::NewLine + $prefix + $finish + [Environment]::NewLine })",
     "    } else {",
-    "      $edits.Add([pscustomobject]@{ Offset = $end; Priority = 2; Text = $finalizer.Replace('__ASH_FINISH__', $finish) })",
+    "      $edits.Add([pscustomobject]@{ Offset = $end; Priority = 2; Text = $finalizer.Replace('__NAVI_FINISH__', $finish) })",
     '      $edits.Add([pscustomobject]@{ Offset = $first.Extent.StartOffset; Priority = 0; Text = $prefix + "try {`n" })',
     "    }",
     "  }",
@@ -57,18 +57,18 @@ export function powerShellScriptInvocation(command: string, scriptPath: string, 
     "  }",
     "  foreach ($edit in ($edits | Sort-Object Offset, Priority -Descending)) { $source = $source.Insert($edit.Offset, $edit.Text) }",
     "  $parseErrors = $null",
-    `  $source = $source.Replace('${state}', ('$__ashState_' + [guid]::NewGuid().ToString('N')))`,
+    `  $source = $source.Replace('${state}', ('$__naviState_' + [guid]::NewGuid().ToString('N')))`,
     "  $rewritten = [System.Management.Automation.Language.Parser]::ParseInput($source, $file, [ref]$null, [ref]$parseErrors)",
     "  if ($parseErrors.Count) { throw ($parseErrors | Out-String) }",
     "  $rewritten.GetScriptBlock()",
     "}",
-    "function __ashPrepareCommand($command) {",
+    "function __naviPrepareCommand($command) {",
     "  $original = $command",
     "  if ($original -is [System.Management.Automation.AliasInfo]) { $original = $original.ResolvedCommand }",
     "  if ($original -is [System.Management.Automation.ExternalScriptInfo]) {",
     "    try {",
     "      $null = $original.ScriptBlock",
-    "      $program = __ashCompileScript $original.ScriptContents $original.Path",
+    "      $program = __naviCompileScript $original.ScriptContents $original.Path",
     "      [System.Management.Automation.ExternalScriptInfo].GetProperty('ScriptBlock').SetValue($original, $program, $null)",
     "    } catch {",
     `      $failure = [scriptblock]::Create(("throw '" + $_.ToString().Replace("'", "''") + "'"))`,
@@ -80,10 +80,10 @@ export function powerShellScriptInvocation(command: string, scriptPath: string, 
     "}",
     "$ExecutionContext.InvokeCommand.PostCommandLookupAction = {",
     "  param($sender, $lookup)",
-    "  $lookup.Command = __ashPrepareCommand $lookup.Command",
+    "  $lookup.Command = __naviPrepareCommand $lookup.Command",
     "}",
     `$source = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encoded}'))`,
-    "$program = __ashCompileScript $source ''",
+    "$program = __naviCompileScript $source ''",
     "$global:LASTEXITCODE = 0",
     "& $program",
     "}",

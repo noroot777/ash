@@ -23,7 +23,7 @@ import type { TerminalSessionInfo } from "./terminal-session-facts.js";
  * 收尾动作**立住了什么**。
  *
  *  · `complete`  —— 成员清单全不全(freezeAndEnumerate 的同名标记,两轮取与)。
- *                   **`null` = 这一趟 ash 没动手**:用户那条停止命令已经把它收掉了,所以
+ *                   **`null` = 这一趟 navi 没动手**:用户那条停止命令已经把它收掉了,所以
  *                   没有枚举可言 —— 跟「枚举过、没列全」严格分开,前者不该连坐。
  *  · `groupGone` —— 收尾动作之后再读一次会话事实:那个启动进程组确实探不到了。必须由调用方
  *                   在动手**之后**读,不能拿动手前的那张现场推。
@@ -71,7 +71,7 @@ function who(left: LaunchMember[]): string {
 /**
  * 账上这几个号 → 一句给用户看的话。**两种成因混在一起时要分开说**:核不上归属所以没敢动
  * 的,和核实是这次起来的、却怎么都杀不掉的 —— 后者早先压根进不了账(第 6 轮审查 F1),
- * 混成一句会把「ash 不敢动」说到一个它已经发过 KILL 的进程头上。
+ * 混成一句会把「navi 不敢动」说到一个它已经发过 KILL 的进程头上。
  */
 export function leftoverNotice(where: string, left: LaunchMember[]): string {
   const stubborn = left.filter((one) => one.ours);
@@ -166,7 +166,7 @@ export function scanIncompleteNotice(scan: LaunchScan, scripted: boolean): strin
       : "请稍后再点一次停止，或者在「管理常用命令」里给这个服务填一条停止命令。");
 }
 
-/** ash 这一趟的成员清单没列全(`killed.complete === false`)时,端口那条道上那句话。 */
+/** navi 这一趟的成员清单没列全(`killed.complete === false`)时,端口那条道上那句话。 */
 export function killedIncompleteNotice(open: TerminalSessionInfo, scripted: boolean): string {
   return `端口 ${open.ports.join("、")} 让出来了，但 Navi 这一趟连成员清单都没列全`
     + `（进程表或端口查询没答上来），收掉的只是问出来的那些 —— `
@@ -186,7 +186,7 @@ export function portStopVerdict(
   /** 端口那一趟发现的号 */ found: LaunchMember[],
   /** 端口那一趟的线索全不全(成员清单 / 停止前那张相) */ portsComplete: boolean,
 ): StopVerdict {
-  // 这一趟的全部必要证据有一条未知吗。端口那趟、ash 的收尾枚举、记号扫描,三条取与。
+  // 这一趟的全部必要证据有一条未知吗。端口那趟、navi 的收尾枚举、记号扫描,三条取与。
   const complete = portsComplete && !open.portsTruncated
     && killed.complete !== false && launchClosureSealed(scan);
   // ① 记号点到名的:直接反证,压倒端口那边的任何结论。
@@ -222,7 +222,7 @@ export function processStopVerdict(open: TerminalSessionInfo, scripted: boolean,
     return { kind: "unresolved", leftovers: [], complete: false, notice: scanIncompleteNotice(scan, scripted) };
   }
   // 正面判据:停止前组还活着、现在探不到了,**而且没有「枚举过但没列全」这回事**。
-  // `complete === null`(ash 这一趟没动手、用户那条停止命令收的)不算不全 —— 它要是没收掉,
+  // `complete === null`(navi 这一趟没动手、用户那条停止命令收的)不算不全 —— 它要是没收掉,
   // 组也不会空;真逃出去的那些另有 ① 那一问直接点名。
   if (open.groupAlive && killed.groupGone && killed.complete !== false) return { kind: "stopped" };
   const did = killed.complete === null
@@ -236,7 +236,7 @@ export function processStopVerdict(open: TerminalSessionInfo, scripted: boolean,
     : "而当前平台无法核验本机端口，脱离了进程树的后台进程这里一条线索都没有";
   return {
     kind: "unresolved", leftovers: [], complete: false,
-    // 「ash 没法确认是否停净」这半句是**固定措辞**:界面和回归都靠它认这一档,三条支路
+    // 「navi 没法确认是否停净」这半句是**固定措辞**:界面和回归都靠它认这一档,三条支路
     // 只换前因、不换这句结论。
     notice: `${did}，${why} —— 所以 Navi 没法确认是否停净，不能说这次启动起来的东西都停了。`
       + (scripted
@@ -257,6 +257,6 @@ export function scriptLeftoverNotice(left: LaunchMember[]): string {
 /**
  * 停止命令跑完之后的**终态核验**:它说自己成功了(exit 0)不等于服务真的停了 ——
  * 一条 `true` 也会 exit 0(第 1 轮审查 E2:填一条返回零但什么都不做的脚本,界面照样报
- * 「已停止」、停止按钮消失,服务还在听)。这里不替用户强杀(他写那段脚本正是不想让 ash
+ * 「已停止」、停止按钮消失,服务还在听)。这里不替用户强杀(他写那段脚本正是不想让 navi
  * 直接 kill),只是**不许宣称已停止**:原地报失败、留着可重试的现场。
  */

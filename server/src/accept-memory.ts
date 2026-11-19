@@ -10,7 +10,7 @@
 //    提交与否照样按层里看见的值发给 /accept（那条不读这里）。
 //  · 两项都按到达顺序写：后到的确认算数，晚做完的旧确认盖不掉它（accept-order.ts）。
 import type { Hono } from "hono";
-import type { AcceptMemoryWriteResult } from "@ash/shared/accept-gate";
+import type { AcceptMemoryWriteResult } from "@navi/shared/accept-gate";
 import { and, eq, isNull, notInArray, or } from "drizzle-orm";
 import { arrivalSeq, writeAcceptCommit } from "./accept-order.js";
 import { actorOf, authErrorResponse, ownerIdOf, type Actor } from "./auth/context.js";

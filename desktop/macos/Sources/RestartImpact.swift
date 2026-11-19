@@ -6,7 +6,7 @@ import Foundation
 ///
 /// 算「会打断」的两类：
 ///  · interrupted   重启后接不回来、会被判 failed 的（排队中还没进程的、进程已经不在的……）
-///  · mcpDisrupted  进程活得过重启，但手里握着 ash MCP：服务换代码那几十秒里它的交卷撞上就失败，
+///  · mcpDisrupted  进程活得过重启，但手里握着 navi MCP：服务换代码那几十秒里它的交卷撞上就失败，
 ///                  restart.mjs 对它们的默认也是「不动」
 /// survives（会被接管）和 resumes（调度台自动接回）不算。
 struct RestartImpact: Decodable {
@@ -37,10 +37,10 @@ struct RestartImpact: Decodable {
 
 /// 问一次的结果。
 enum ImpactVerdict {
-  /// 确认不会打断任何任务：自己那份没在跑、端口上是别的 ash，或者问到了、是空的。
+  /// 确认不会打断任何任务：自己那份没在跑、端口上是别的 navi，或者问到了、是空的。
   case clear(ServiceTarget)
   case disrupts(ServiceTarget, [(title: String, why: String)])
-  /// 确认不了：服务没答复、答的不像 ash、没报身份，或者 restart-impact 问不出来（拒答、超时、
+  /// 确认不了：服务没答复、答的不像 navi、没报身份，或者 restart-impact 问不出来（拒答、超时、
   /// 答非所问）。**确认不了不等于没有**：按会打断对待，只有用户点了「现在」才往下走。
   case unknown(String)
 
@@ -61,19 +61,19 @@ enum ImpactVerdict {
 enum RestartImpactProbe {
   /// 只在后台队列上调。
   static func assessSync() -> ImpactVerdict {
-    guard AshConfig.isLocal else { return .clear(.remote) }
-    switch AshHealth.probeSync() {
+    guard NaviConfig.isLocal else { return .clear(.remote) }
+    switch NaviHealth.probeSync() {
     case .down:
       return .clear(.absent)
     case .unreachable(let why):
       return .unknown("服务没有答复：\(why)")
-    case .notAsh(let what):
-      // 自己那份正忙、正在重启时也会这样（比如一次 503），不能当成「端口上不是 ash」。
+    case .notNavi(let what):
+      // 自己那份正忙、正在重启时也会这样（比如一次 503），不能当成「端口上不是 navi」。
       return .unknown("端口上的应答不像 Navi（\(what)）")
-    case .ash(let instance) where !instance.isOurs:
+    case .navi(let instance) where !instance.isOurs:
       guard instance.dataDir != nil else { return .unknown("端口上的 Navi 没报数据根在哪，认不出是不是这一份") }
       return .clear(.foreign(pid: instance.pid))
-    case .ash(let instance):
+    case .navi(let instance):
       guard let pid = instance.pid, pid > 1 else { return .unknown("服务没报自己的进程号") }
       return askImpact(of: .ours(pid: pid), instance: instance.id)
     }
@@ -82,7 +82,7 @@ enum RestartImpactProbe {
   /// 带着认过的那一份的实例号问：问到之前端口换了人，新来的那份不答（server/src/instance-binding.ts），
   /// 闸拿不到别人的名单。
   private static func askImpact(of target: ServiceTarget, instance: String?) -> ImpactVerdict {
-    var request = URLRequest(url: AshConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
+    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // 与 restart.mjs 同一张凭证：单实例锁里那串 token（文件 0600）。本机直连多半用不上，带着不吃亏。
     if let token = hostToken() { request.setValue(token, forHTTPHeaderField: "x-ash-host-token") }
@@ -106,7 +106,7 @@ enum RestartImpactProbe {
   }
 
   private static func hostToken() -> String? {
-    let lock = AshConfig.dataURL.appendingPathComponent("ash.db.ash.lock")
+    let lock = NaviConfig.dataURL.appendingPathComponent("ash.db.ash.lock")
     guard let data = try? Data(contentsOf: lock),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
     return json["token"] as? String

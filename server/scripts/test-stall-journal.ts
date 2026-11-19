@@ -28,8 +28,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // 兜底:万一哪条默认参数路径没显式传库文件,也只会落在临时目录里,不可能挨着生产库。
-const stage = mkdtempSync(join(tmpdir(), "ash-stall-journal-"));
-process.env.ASH_DB = join(stage, "journal.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-stall-journal-"));
+process.env.NAVI_DB = join(stage, "journal.db");
 
 const {
   __seedStallVerdict, appendStallDischarge, appendStallVerdict, compactStallJournal, pendingStallVerdicts,
@@ -51,7 +51,7 @@ const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
 // ── ① 落盘与读回 ────────────────────────────────────────────────────────────────
 {
   const dbFile = join(stage, "read.db");
-  // 文件压根不在 = **确实没有判决**,这一档必须是 ok(不是「读不出来」):否则每台新装的 ash
+  // 文件压根不在 = **确实没有判决**,这一档必须是 ok(不是「读不出来」):否则每台新装的 navi
   // 第一次启动都在喊「核不了自己的判决」,那句警告立刻变成噪音。
   const empty = readStallJournal(dbFile);
   assert.equal(empty.status, "ok", "日志文件不存在被当成了读取故障");

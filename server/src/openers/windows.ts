@@ -282,9 +282,9 @@ export function buildWindowsCommand(template: string, absPath: string) {
  *    路径不存在,`start` 停在那里不回来。
  *  · 新模板:`start "" "%NAVI_OPEN_TARGET%"`,命令行里只有占位符,资源管理器开的是
  *    `f1stage/amp&ver` 本身,没有多余命令被执行。
- *  · `%` 那一对的对照最直白:裸路径 `...\pct%ASH_F1_X%pct` 被 cmd 展开成了
+ *  · `%` 那一对的对照最直白:裸路径 `...\pct%NAVI_F1_X%pct` 被 cmd 展开成了
  *    `...\pctEXPANDEDpct`(打开的根本不是用户点的那个);走环境变量则原样是
- *    `pct%ASH_F1_X%pct` —— 展开是单遍的,展开出来的 `%` 不会再被扫一次。
+ *    `pct%NAVI_F1_X%pct` —— 展开是单遍的,展开出来的 `%` 不会再被扫一次。
  */
 export const WIN_OPEN_TARGET_ENV = "NAVI_OPEN_TARGET";
 

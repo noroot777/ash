@@ -30,9 +30,9 @@
 //     「那一代交代过没有」。接回后同文重放(前缀)= 同一代沿用冻结;真正的新内容自然
 //     落进非前缀/清场那一档开新代 —— 「同回合重放要继承」不被推广成「下一回合也继承」
 //     (复审 R1 metaResumeNewTurn)。
-import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
-import { markdownImageRefs } from "@ash/shared/markdown-images";
-import { childResultTexts } from "@ash/shared/native-work";
+import type { AgentEvent, NativeAgentActivity } from "@navi/shared";
+import { markdownImageRefs } from "@navi/shared/markdown-images";
+import { childResultTexts } from "@navi/shared/native-work";
 import {
   captureMarkdownImages,
   imageStore,

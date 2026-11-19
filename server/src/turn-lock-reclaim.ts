@@ -27,7 +27,7 @@
 // 前一版据此自动回收,本轮审查 F1 判它是比原缺陷更重的回归:原缺陷是任务卡住,这个是
 // **解除互斥**,同一个任务两个回合并跑,烧真额度、对着同一个工作区互相改。
 //
-// 而这个仓库早就为同一类操作立过口径(AGENTS.md「旁路会话:ash 杀不到的东西」,讲的是
+// 而这个仓库早就为同一类操作立过口径(AGENTS.md「旁路会话:navi 杀不到的东西」,讲的是
 // CUA 那个全局单例):
 //   「兜底绝不自动杀 …… 检测到残留只如实上报,强杀走用户主动点的显式端点并明示副作用」
 //   「这类不可逆又外溢的操作,默认必须是『告诉用户 + 给一个他自己按的开关』」
@@ -54,7 +54,7 @@
 // 是一个判据:**持有者的等待有没有时长上界**。没有上界 → ① 在它身上不携带任何信息,
 // 报出来纯是噪音(每个等裁决的 duet 任务都会收到一条「可疑」)。清单漏了谁的代价也只是
 // 一条多余的提示 —— 上面那条不变量兜着。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -172,7 +172,7 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
     reporting.add(key);
     const detail = `占位身份 ${suspect.role}、已持有约 ${held(suspect.heldMs)}`;
     console.warn(
-      `[ash] 回合占位占着不动 task=${suspect.taskId}（${detail}）`
+      `[navi] 回合占位占着不动 task=${suspect.taskId}（${detail}）`
       + "：进程登记册里没有句柄、也没有绑过回合令牌。不自动放开（可能有人正在长时间准备），"
       + `需要时走 POST /api/tasks/${suspect.taskId}/reclaim-turn`,
     );
@@ -276,7 +276,7 @@ async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean
     row = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   } catch (error) {
     readFailed = true;
-    console.warn(`[ash] 放开回合占位后读状态失败 task=${taskId}:`, error);
+    console.warn(`[navi] 放开回合占位后读状态失败 task=${taskId}:`, error);
   }
   // **隔了一次 await,持有者就得再核一次**(本轮审查 N2)。上面那一道只证到「读之前没人持有」,
   // 而读库这一段里完全可以有新回合接手(放开之后紧接着就是调度推进)。下面每一句话的前提都是
@@ -345,11 +345,11 @@ export async function releaseSuspectTurn(
   // 下发的一次性凭据(auth/human-action-token.ts);它证的是「这一下来自一个页面文档」,
   // **不是**「某个人按了鼠标」—— 所以也不能写成「用户主动放开」。拿不出凭据的请求压根
   // 走不到这里(闸上 403),剩下的只有不过闸的内部直调,那一档如实写「来源无法确认」。
-  console.warn(`[ash] ${origin === "page" ? "页面发起的" : "来源无法确认的"}请求放开回合占位 task=${taskId}（${detail}）`);
+  console.warn(`[navi] ${origin === "page" ? "页面发起的" : "来源无法确认的"}请求放开回合占位 task=${taskId}（${detail}）`);
   // 核对后置条件(理由见 `runnable`)。排在释放之后 —— 释放那两行一个 await 都不能隔。
   const after = await runnableAfterRelease(taskId);
   if (!after.runnable) {
-    console.warn(`[ash] 放开了回合占位但任务仍不可运行 task=${taskId}（状态 ${after.status ?? "读不到"}）`);
+    console.warn(`[navi] 放开了回合占位但任务仍不可运行 task=${taskId}（状态 ${after.status ?? "读不到"}）`);
   }
   await noteSystemNotice(
     taskId,
@@ -392,7 +392,7 @@ function notSuspectReason(
 
 // ── 收尾卡住:只报告,出路是重启 ───────────────────────────────────────────────
 // 进了收尾段的锁停在同一步超过阈值(turn-wind-down.ts 的 `windDownStuck`):写一条持久的任务提示,
-// 说清卡在哪一步、多久了、出路是重启 ash。**不提供手动放开**,理由见 turn-wind-down.ts 文件头;
+// 说清卡在哪一步、多久了、出路是重启 navi。**不提供手动放开**,理由见 turn-wind-down.ts 文件头;
 // 上面的人工放开对这类锁照样拒绝,拒绝的话就是同一段(`notSuspectReason` 第一支)。
 //
 // 去重按「哪一把锁的第几步」:同一步只报一次;收尾后来又往前走、又卡在下一步,那是新的一条。
@@ -411,7 +411,7 @@ export async function reportStuckWindDowns(at = Date.now()): Promise<number> {
     if (toldStuck.has(key)) continue;
     toldStuck.add(key);
     const text = stuckWindDownText(windDown, at);
-    console.warn(`[ash] 回合收尾卡住 task=${turn.taskId}（停在「${windDown.step}」约 ${held(at - windDown.stepAt)}），出路是重启 Navi`);
+    console.warn(`[navi] 回合收尾卡住 task=${turn.taskId}（停在「${windDown.step}」约 ${held(at - windDown.stepAt)}），出路是重启 Navi`);
     const persisted = await noteSystemNotice(turn.taskId, `stuck-wind-down:${turn.claimedAt}:${turn.seq}:${windDown.index}`,
       "回合收尾卡住", text);
     if (persisted) reported += 1;

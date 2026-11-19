@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { CATCH_UP_DEADLINE_MS } from "../lib/catchUp.ts";
 

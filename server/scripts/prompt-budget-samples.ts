@@ -7,7 +7,7 @@
 // 路径会进正文（证据目录、报告路径），而 `mkdtemp` 的长度逐机不同 —— 所以**所有样本在
 // 量之前都把舞台根路径替换成 `<ROOT>`**，否则同一份代码在两台机器上算出两个字节数。
 //
-// 调用方负责在 import 之前设好 `ASH_DB` / `ASH_RUNS_DIR`（都得在临时目录里）。
+// 调用方负责在 import 之前设好 `NAVI_DB` / `NAVI_RUNS_DIR`（都得在临时目录里）。
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -191,7 +191,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     debatePrompt, freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt, freeReviewResumeMessage,
   } = await import("../src/free-review-prompts.js");
   const { freeReviewReminder } = await import("../src/free-workflow.js");
-  const { regressionManifestEntry } = await import("@ash/shared/free-workflow");
+  const { regressionManifestEntry } = await import("@navi/shared/free-workflow");
   const { settledRulingsFor } = await import("../src/free-review-settled.js");
   const { commonDirectory, freeReviewHistorySection } = await import("../src/review-history.js");
   // 一节历史说明可能把地址列全，也可能折成一个公共目录 —— 两种形态都是合法入口，所以

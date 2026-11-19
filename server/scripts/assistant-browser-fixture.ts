@@ -6,15 +6,15 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { markFixtureOnboarded } from "./fixture-onboarding.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-assistant-browser-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-assistant-browser-"));
 const primaryRepo = join(stage, "primary");
 const archiveRepo = join(stage, "archive");
 mkdirSync(primaryRepo, { recursive: true });
 mkdirSync(archiveRepo, { recursive: true });
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 
-const { builtinWorkflowDef } = await import("@ash/shared/workflow-presets");
+const { builtinWorkflowDef } = await import("@navi/shared/workflow-presets");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { agents, projects, tasks } = await import("../src/db/schema.js");
 const { api } = await import("../src/routes.js");

@@ -136,7 +136,7 @@ function carriedVerdictText(verdict: StallVerdict, tail: string): string {
     + `${tail}原判决(${verdict.at}):${verdict.reason}`;
 }
 
-/** 「这台 ash 为什么核不了自己的判决」—— 同理,只有一份。 */
+/** 「这台 navi 为什么核不了自己的判决」—— 同理,只有一份。 */
 function unverifiableText(why: string, tail: string): string {
   return "这一回合是上次 Navi 中断时留下的,而本次启动读不出熔断判决日志"
     + `(${why}),无法确认它当时有没有被判定上游连不上并按失败结算。${tail}`;
@@ -190,7 +190,7 @@ export function progressUnreadableText(): string {
  * 判决**没能存住**时补在熔断诊断后面的一句。
  *
  * 为什么要说出来:这一轮照常被终止、照常按失败结算,但那个结论只在当前进程的内存里 —— 如果
- * ash 在这一轮结算完之前重启,接管的新进程读不到它,这一轮可能又显示成「已完成」。这正是
+ * navi 在这一轮结算完之前重启,接管的新进程读不到它,这一轮可能又显示成「已完成」。这正是
  * F1 那条路,出现过一次就不该再让用户自己去猜。
  */
 export function stallVolatileVerdictText(): string {

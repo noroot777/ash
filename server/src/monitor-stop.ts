@@ -2,7 +2,7 @@
 // 它自成一块职责:两段式的取消协议、跟创建共用的那条资源队列、以及停完之后的责任补收。
 // 运行时、收尾、取证那三层仍在各自的文件里,这里只按它们的公开判据组合。
 import { and, eq, isNull } from "drizzle-orm";
-import type { TaskMonitor } from "@ash/shared/monitor";
+import type { TaskMonitor } from "@navi/shared/monitor";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
@@ -45,7 +45,7 @@ export type StopMonitorResult =
  * 停一个哨兵。
  *
  * claude 内置 Monitor 的投影行**一律拒绝**而不是静默忽略：它的进程在 agent 自己的进程树
- * 里，`TaskStop` 是 claude 进程内的工具，ash 没有任何手柄够得着。假装停掉（把状态改成
+ * 里，`TaskStop` 是 claude 进程内的工具，navi 没有任何手柄够得着。假装停掉（把状态改成
  * stopped 就返回）比报错坏得多——那个进程还在那边跑着、还会继续唤醒任务，而界面上写着
  * 「已停止」，用户再也不会回头看它。前端据此根本不给 claude 那种卡渲染停止按钮，这里是
  * 第二道闸（API 直调、旧前端）。
@@ -133,7 +133,7 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     if (row.pid === null || !isTracelessState(reclaimState(row.pid, row.pidStartedAt, row))) {
       const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`);
       if (await settleReclaim(outcome) === "unaccounted") {
-        console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
+        console.error(`[navi] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
       }
     }
     // 放弃凭证改了这条哨兵还欠不欠一份结果,而 `finish` 那条播报这一支走不到:不说一声,等它

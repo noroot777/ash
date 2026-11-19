@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { Chats, Info } from "@phosphor-icons/react";
 import { InspectorHost } from "../../src/inspector/index.ts";
 import { ConversationSelection } from "../../src/side-chat/ConversationSelection.tsx";

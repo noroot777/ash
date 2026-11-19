@@ -13,8 +13,8 @@ await access(join(dist, "index.html")).catch(() => {
   console.error(`没有导出产物 ${dist}index.html —— 先在仓库根跑 \`npm run build:mobile\``);
   process.exit(1);
 });
-const root = await mkdtemp(join(tmpdir(), "ash-mobile-command-ui-"));
-const shots = process.env.ASH_MOBILE_SCREENSHOTS ?? join(root, "shots");
+const root = await mkdtemp(join(tmpdir(), "navi-mobile-command-ui-"));
+const shots = process.env.NAVI_MOBILE_SCREENSHOTS ?? join(root, "shots");
 await mkdir(shots, { recursive: true });
 const at = new Date().toISOString();
 const tasks = ["empty", "recorded", "other"].map((id) => ({

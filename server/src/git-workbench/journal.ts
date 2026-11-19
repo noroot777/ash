@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { GitJournalEntry } from "@ash/shared/git-workbench";
-import { FROZEN_GIT_BACKUP_REF_NAMESPACE, LEGACY_GIT_WORKBENCH_DIR } from "@ash/shared/legacy-names";
+import type { GitJournalEntry } from "@navi/shared/git-workbench";
+import { FROZEN_GIT_BACKUP_REF_NAMESPACE, LEGACY_GIT_WORKBENCH_DIR } from "@navi/shared/legacy-names";
 import { git } from "./core.js";
 
 const active = new Set<string>();

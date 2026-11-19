@@ -30,7 +30,7 @@
 // docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
 import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
-import type { AgentType, ScheduledMessageMode } from "@ash/shared";
+import type { AgentType, ScheduledMessageMode } from "@navi/shared";
 import { bus } from "./bus.js";
 import { createDeliveryLease } from "./delivery-lease.js";
 import { leasesHeldBy, mintLeaseStamp } from "./delivery-fence.js";
@@ -44,9 +44,9 @@ import type { TurnIdentity, TurnSource } from "./runs.js";
 import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, pendingMessageLabel, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { deliveryInFlight, holdInFlight } from "./pending-in-flight.js";
-import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorBlockedReason, monitorIdFromOrigin } from "@navi/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
-import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { MonitorWakeData } from "@navi/shared/monitor-wake";
 import { deliveryOptions, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
 import { deliveryVerdictOf } from "./pending-delivery-facts.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
@@ -225,7 +225,7 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
   const quoted = text ? `\n原文：${text.length > 500 ? `${text.slice(0, 500)}…` : text}` : "";
   const note = `〔系统〕${label}未发送，已取消${when}：${reason}${quoted}`;
   if (!(await appendTaskTimeline(message.taskId, alertLine(note)))) {
-    console.warn(`[ash] ${note} task=${message.taskId} message=${message.id}`);
+    console.warn(`[navi] ${note} task=${message.taskId} message=${message.id}`);
   }
 }
 
@@ -320,7 +320,7 @@ export async function reclaimStaleDeliveries(): Promise<number> {
   // 输入,下一次启动再送一遍 —— 上面那句「代价方向是重发一次而不是丢一句话」对用户打的字
   // 成立,对 agent 自己的流水线交接不成立(第 1 轮审查必须修 3 的另一半)。
   await reconcileCheckpointDeliveries()
-    .catch((error) => console.error("[ash] 在途续跑交代对账失败（不影响开机）:", error));
+    .catch((error) => console.error("[navi] 在途续跑交代对账失败（不影响开机）:", error));
   const reclaimed = await db
     .update(scheduledMessages)
     .set({ deliveringSince: null })
@@ -331,7 +331,7 @@ export async function reclaimStaleDeliveries(): Promise<number> {
       or(isNull(scheduledMessages.origin), ne(scheduledMessages.origin, CHECKPOINT_RUN_ORIGIN)),
     ))
     .returning({ id: scheduledMessages.id });
-  if (reclaimed.length) console.log(`[ash] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
+  if (reclaimed.length) console.log(`[navi] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
   await recoverPendingCheckpoints();
   return reclaimed.length;
 }
@@ -489,7 +489,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
     } catch (error) {
       // 一条投递失败不影响其它任务,下一轮再来 —— 但**必须留下痕迹**:这里原来是空的
       // catch,于是「消息没送出去」和「根本没发生过」在日志里长得一模一样。
-      if (!dbClient.closed) console.error(`[ash] 待发送消息投递出错 task=${m.taskId} message=${m.id}:`, error);
+      if (!dbClient.closed) console.error(`[navi] 待发送消息投递出错 task=${m.taskId} message=${m.id}:`, error);
     }
   }
 }
@@ -501,7 +501,7 @@ export function flushPendingForTask(taskId: string): void {
     // 查到一半库被关了(进程收尾)不是故障:开头那道守卫挡不住这个竞态,而一串
     // 「database is not open」的 stack trace 会让人以为刚做完的那件事自己炸了。
     if (dbClient.closed) return;
-    console.error(`[ash] deliverPendingMessages(${taskId}) failed:`, err);
+    console.error(`[navi] deliverPendingMessages(${taskId}) failed:`, err);
   });
 }
 

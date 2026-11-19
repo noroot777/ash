@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseAttachmentText } from "@ash/shared/attachments";
+import { parseAttachmentText } from "@navi/shared/attachments";
 import { annotationBounds, imagePoint, positionDescription, screenshotCandidates, screenshotReplyText, type Annotation, type ScreenshotDraft } from "./model.ts";
 import type { ConversationItem } from "../task-detail/conversationModel.ts";
 

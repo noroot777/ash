@@ -293,7 +293,7 @@ function describePlan(plan: ProxyPlan): string {
 function remember(plan: ProxyPlan): ProxyPlan {
   if (lastPlan?.key === plan.key) return lastPlan;
   lastPlan = plan;
-  console.log(`[ash][llm-relay] ${describePlan(plan)}`);
+  console.log(`[navi][llm-relay] ${describePlan(plan)}`);
   return plan;
 }
 

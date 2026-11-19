@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MagnifyingGlass, Paperclip } from "@phosphor-icons/react";
-import type { ProjectView, TaskListItem } from "@ash/shared";
-import type { UserMessage } from "@ash/shared/user-messages";
+import type { ProjectView, TaskListItem } from "@navi/shared";
+import type { UserMessage } from "@navi/shared/user-messages";
 import { api } from "../lib/api.ts";
 import { splitMessageQuotes } from "../lib/messageQuotes.ts";
 import { indexWorkers, workersFrom } from "../lib/taskAttention.ts";

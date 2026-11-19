@@ -9,7 +9,7 @@
 // 要如实写给用户的边界：agent 与 server 是同一个 OS 用户，读得到这个文件；Windows 上 chmod 不生效。
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { resolveAshDbFile } from "../db/path.js";
+import { resolveNaviDbFile } from "../db/path.js";
 
 export type FeishuDomain = "feishu" | "lark";
 
@@ -23,7 +23,7 @@ export interface FeishuCredentials {
 const APP_ID_RE = /^cli_[A-Za-z0-9]{8,40}$/;
 
 export function credentialsPath(): string {
-  return `${resolveAshDbFile()}.feishu.json`;
+  return `${resolveNaviDbFile()}.feishu.json`;
 }
 
 export function domainUrl(domain: FeishuDomain): string {

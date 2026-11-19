@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { reviewerOfChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
+import { reviewerOfChoice, type CreateReviewChoice } from "@navi/shared/review-on-create";
 import { CaretDown, MagnifyingGlass } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";

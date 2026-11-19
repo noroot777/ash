@@ -1,4 +1,4 @@
-import { MAX_IMAGE_BYTES, maxBytesFor } from "@ash/shared";
+import { MAX_IMAGE_BYTES, maxBytesFor } from "@navi/shared";
 import { drawAnnotations } from "./render.ts";
 import type { AnnotationImage, ScreenshotCandidate, ScreenshotDraft } from "./model.ts";
 

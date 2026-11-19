@@ -4,12 +4,12 @@ import type {
   Group,
   TaskListItem,
   TaskStatus,
-} from "@ash/shared";
+} from "@navi/shared";
 import {
   statusCounts,
   teamNeverStarted,
   workerHaltStats,
-} from "@ash/shared/team";
+} from "@navi/shared/team";
 import type { TeamCuaStatus } from "@/lib/api";
 import { STATUS_META } from "@/lib/constants";
 import { TaskTimeChip } from "@/lib/time";

@@ -8,8 +8,8 @@
 //
 // 挑完之后的事(执行器解析、工作目录、prompt 拼装、spawn)仍在 orchestrator.ts。
 import { eq } from "drizzle-orm";
-import type { AgentType, SessionRole } from "@ash/shared";
-import type { CliCommand } from "@ash/shared/cli-commands";
+import type { AgentType, SessionRole } from "@navi/shared";
+import type { CliCommand } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { isDiagnosticSession } from "./turn-failure.js";

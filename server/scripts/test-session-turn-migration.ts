@@ -1,7 +1,7 @@
 // 老库升到「回合一行」这套形状时的契约：`ended_at` 得能为空、同一回合不能有两行、升级前
 // 的历史要变成一个**说得出来的基数**而不是悄悄当成完整。
 //
-// 为什么单独一条：这几步跑在 `ensureSchema()` 里，而那条路上抛异常 = 整台 ash 起不来
+// 为什么单独一条：这几步跑在 `ensureSchema()` 里，而那条路上抛异常 = 整台 navi 起不来
 // （db/index.ts 里 2026-10-14 那条实测教训）。所以迁移自己 catch 掉一切只 warn——代价是
 // **失败会很安静**，只能靠这条测试盯着它真跑成了没有。
 import assert from "node:assert/strict";
@@ -11,9 +11,9 @@ import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 requireTmpDb("session-turn-migration");
-const stage = mkdtempSync(join(tmpdir(), "ash-turn-migration-"));
-process.env.ASH_DB = join(stage, "legacy.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-turn-migration-"));
+process.env.NAVI_DB = join(stage, "legacy.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 
 const { dbClient, ensureSchema } = await import("../src/db/index.js");
 try {
@@ -117,7 +117,7 @@ try {
   assert.equal(Number(fresh.turns_base_approx), 0, "也不该被标成「算不准」");
 
   // ── 回填**失败**那条出口：不许把「没跑成」留成看着像跑成了 ──────────────────────
-  // 整条迁移自己 catch 掉一切只 warn（抛出去 = 整台 ash 起不来）,所以失败很安静。于是契约
+  // 整条迁移自己 catch 掉一切只 warn（抛出去 = 整台 navi 起不来）,所以失败很安静。于是契约
   // 只能架在库里那件**可核验的事实**上：失败之后那些行的 `turns_base_approx` 还是 NULL,
   // 读端据此照「升级没跑完、缺没缺无从得知」披露并放宽区间（见 task-artifact-windows.ts 的
   // `migrated` 判据,第 1 轮审查 F3）。下次启动重试要能把它补上。

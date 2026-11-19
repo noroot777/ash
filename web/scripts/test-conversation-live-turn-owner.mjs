@@ -107,11 +107,11 @@ function singleScript(options) {
   for (let index = 0; index < 18; index += 1) h.tool(at(T1, 10 + index * 8), `Bash ${index + 1}`, T1);
   h.text("2026-11-13T05:57:55.000Z", "Committed the cleanup script; the retention test will run.", T1);
   h.aside("2026-11-13T05:58:03.001Z", "哨兵已起：原始事件流保留期回归", { kind: "monitor.started", description: "原始事件流保留期回归" });
-  h.tool("2026-11-13T05:58:03.005Z", "mcp__ash__start_monitor", T1);
+  h.tool("2026-11-13T05:58:03.005Z", "mcp__navi__start_monitor", T1);
   h.aside("2026-11-13T05:58:05.563Z", "哨兵结束：原始事件流保留期回归", { kind: "monitor.finished", description: "原始事件流保留期回归" });
   h.text("2026-11-13T05:58:06.200Z", "Meanwhile, estimate how much the runs directory will shrink.\n\n", T1);
   h.tool("2026-11-13T05:58:09.818Z", "Bash tail", T1);
-  h.tool("2026-11-13T05:58:20.049Z", "mcp__ash__pause_task", T1);
+  h.tool("2026-11-13T05:58:20.049Z", "mcp__navi__pause_task", T1);
   h.text("2026-11-13T05:58:28.494Z", "已挂哨兵等回归结果，先暂停。", T1);
   h.usage("2026-11-13T05:58:28.500Z", T1);
   h.settle("2026-11-13T05:58:29.992Z", "本轮已暂停：等哨兵结果。", T1);
@@ -179,7 +179,7 @@ for (const moment of readMoments) {
   assertPreviousTurnsClosed(pausedItems, T2, `${moment.name}（刚暂停）`);
   assertPreviousTurnsClosed(wokenItems, T2, `${moment.name}（被叫醒）`);
   // 2. 实时到达的那几步和收尾正文，叫醒前后落在同一颗气泡里（且前后都有归属）。
-  for (const needle of ["Bash tail", "mcp__ash__pause_task", "已挂哨兵等回归结果"]) {
+  for (const needle of ["Bash tail", "mcp__navi__pause_task", "已挂哨兵等回归结果"]) {
     assert.ok(owner(paused, needle), `${moment.name}：「${needle}」没有落进任何气泡`);
     assert.equal(owner(woken, needle), owner(paused, needle), `${moment.name}：「${needle}」在叫醒之后换了气泡`);
   }
@@ -318,7 +318,7 @@ for (const rowTurn of [T1, T2]) {
   h.text(at(LEAD_T1, 3), "先看一下仓库结构。\n\n", LEAD_T1);
   h.tool(at(LEAD_T1, 10), "Glob", LEAD_T1);
   h.aside(at(LEAD_T1, 20), "已派出 3 个执行者", { kind: "receipt" });
-  h.tool(at(LEAD_T1, 21), "mcp__ash__dispatch", LEAD_T1);
+  h.tool(at(LEAD_T1, 21), "mcp__navi__dispatch", LEAD_T1);
   h.text(at(LEAD_T1, 30), "派好了，等它们回话。", LEAD_T1);
   h.end(at(LEAD_T1, 31), LEAD_T1);
   const pausedCount = h.list.length;
@@ -328,7 +328,7 @@ for (const rowTurn of [T1, T2]) {
     trace: [],
     live: { kind: "user", text: "进度怎么样", attachments: [], at: LEAD_T2_SAID, sessionId: SESSION_ID, sessionRole: "lead", source: "server" },
   });
-  h.tool(at(LEAD_T2, 2), "mcp__ash__list_tasks", LEAD_T2);
+  h.tool(at(LEAD_T2, 2), "mcp__navi__list_tasks", LEAD_T2);
   h.text(at(LEAD_T2, 5), "两个做完了。", LEAD_T2);
   const team = { list: h.list, pausedCount };
   const lead = (patch) => sessionRow({ role: "lead", startedAt: LEAD_T1, ...patch });
@@ -336,7 +336,7 @@ for (const rowTurn of [T1, T2]) {
   const idle = previousTurnShape(replay(team, { ...moment, phase: "paused", sessionNow: lead({ turnStartedAt: LEAD_T1, endedAt: null }) }), LEAD_T2_SAID);
   const next = previousTurnShape(replay(team, { ...moment, phase: "woken", sessionNow: lead({ turnStartedAt: LEAD_T2, endedAt: null }) }), LEAD_T2_SAID);
   assert.deepEqual(next, idle, "团队调度台：下一回合一开始，上一回合的气泡就变了");
-  assert.equal(owner(next, "mcp__ash__dispatch"), owner(next, "Glob"), "团队调度台：记录之后那几步该留在这一回合的气泡里");
+  assert.equal(owner(next, "mcp__navi__dispatch"), owner(next, "Glob"), "团队调度台：记录之后那几步该留在这一回合的气泡里");
   assert.equal(owner(next, "派好了"), owner(next, "Glob"));
 }
 
@@ -361,7 +361,7 @@ for (const rowTurn of [T1, T2]) {
     ],
   }];
   const spontaneous = [
-    leadEvent({ kind: "tool", name: "mcp__ash__list_tasks", detail: "list" }, LEAD_T2),
+    leadEvent({ kind: "tool", name: "mcp__navi__list_tasks", detail: "list" }, LEAD_T2),
     leadEvent({ kind: "text", text: "第二回合：后台任务通知唤醒，开始汇总结果。" }, LEAD_T2),
   ];
   const assertSplit = (items, label) => {
@@ -369,7 +369,7 @@ for (const rowTurn of [T1, T2]) {
     assert.equal(bubbles.length, 2, `${label}：自己开的下一轮被接进了上一轮`);
     const [previous, next] = bubbles;
     assert.ok(!previous.markdown.includes("第二回合"), `${label}：上一轮的气泡里混进了下一轮的话`);
-    assert.ok(!steps(previous).includes("mcp__ash__list_tasks"), `${label}：上一轮的气泡里混进了下一轮的步骤`);
+    assert.ok(!steps(previous).includes("mcp__navi__list_tasks"), `${label}：上一轮的气泡里混进了下一轮的步骤`);
     assert.equal(next.at, LEAD_T2, `${label}：下一轮的气泡该从它自己的起点算`);
     assert.equal(next.continuation, false, `${label}：下一轮要重新报身份，不画成上一段的下半截`);
     return previous;
@@ -379,12 +379,12 @@ for (const rowTurn of [T1, T2]) {
   {
     const items = buildConversationItems(persistedT1(false), [leadRow({ turnStartedAt: LEAD_T2, endedAt: null })], [
       asideNote(at(LEAD_T1, 20), "已派出 3 个执行者"),
-      leadEvent({ kind: "tool", name: "mcp__ash__dispatch", detail: "dispatch" }, LEAD_T1),
+      leadEvent({ kind: "tool", name: "mcp__navi__dispatch", detail: "dispatch" }, LEAD_T1),
       leadEvent({ kind: "text", text: "派好了。" }, LEAD_T1),
       ...spontaneous,
     ]);
     const previous = assertSplit(items, "中途读盘");
-    assert.deepEqual(steps(previous), ["Glob", "mcp__ash__dispatch"]);
+    assert.deepEqual(steps(previous), ["Glob", "mcp__navi__dispatch"]);
     assert.match(previous.markdown, /派好了/);
   }
   // 2. 上一轮已经落盘收口（读盘那时调度台正待命）：同样另起一颗，上一轮的用时不变。

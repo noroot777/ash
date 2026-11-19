@@ -6,14 +6,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { annotationBatchPrompt, parseAnnotationBatch, type AnnotationBatch } from "@ash/shared/page-annotation-batch";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import { annotationBatchPrompt, parseAnnotationBatch, type AnnotationBatch } from "@navi/shared/page-annotation-batch";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 
-const child = process.env.ASH_ANNOTATION_RESTART === "1";
-const root = child ? process.env.ASH_ANNOTATION_TEST_ROOT! : mkdtempSync(join(tmpdir(), "ash-annotation-batch-"));
-process.env.ASH_DB = join(root, "test.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const child = process.env.NAVI_ANNOTATION_RESTART === "1";
+const root = child ? process.env.NAVI_ANNOTATION_TEST_ROOT! : mkdtempSync(join(tmpdir(), "navi-annotation-batch-"));
+process.env.NAVI_DB = join(root, "test.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 const [{ db, ensureSchema, dbClient }, { tasks, projects, scheduledMessages }, store, routes, { replyToTask }, pending, runs] = await Promise.all([
   import("../src/db/index.js"), import("../src/db/schema.js"), import("../src/page-annotation-store.js"),
   import("../src/page-annotation-routes.js"), import("../src/task-reply.js"), import("../src/pending-messages.js"), import("../src/runs.js"),
@@ -86,7 +86,7 @@ try {
     assert.equal((await request(`/tasks/${taskId}/annotation-reference`, { gen: "expired", serviceId: "web", route: "/" })).status, 200);
     assert.ok(await pending.beginDelivery(message.id), "抢到租约（现在回的是抢下那一刻的那一行）");
     const restarted = spawnSync(process.execPath, ["--import", "tsx", fileURLToPath(import.meta.url)], {
-      env: { ...process.env, ASH_ANNOTATION_RESTART: "1", ASH_ANNOTATION_TEST_ROOT: root }, encoding: "utf8", timeout: 20_000,
+      env: { ...process.env, NAVI_ANNOTATION_RESTART: "1", NAVI_ANNOTATION_TEST_ROOT: root }, encoding: "utf8", timeout: 20_000,
     });
     assert.equal(restarted.status, 0, restarted.stdout + restarted.stderr);
     process.stdout.write(restarted.stdout);

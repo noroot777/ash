@@ -5,7 +5,7 @@ import {
   runActivityPhase,
   liveRunActor,
   runActivityTail,
-} from "@ash/shared/run-activity";
+} from "@navi/shared/run-activity";
 import { latestActiveDuetTurn, rebuildDuetState } from "../src/duet/duetState.ts";
 
 assert.equal(runActivityPhase("running", "empty"), "starting");

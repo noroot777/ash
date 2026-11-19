@@ -1,4 +1,4 @@
-import { acceptanceAutoCommitMessage } from "@ash/shared/accept-workspace";
+import { acceptanceAutoCommitMessage } from "@navi/shared/accept-workspace";
 import type { AcceptTaskFailure, AcceptTaskSuccess } from "../lib/apiTypes.ts";
 
 /**

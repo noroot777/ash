@@ -225,7 +225,7 @@ async function walkTree(path: string, hash: ReturnType<typeof createHash>, walk:
       // 输入（git 跟踪的源码软链指向快照外仍然直接拒绝，见 createGateSnapshot）。
       ? landing
       // 树内：相对原文照抄即可——副本层级一致，于是它自然指向副本自己那份（顺带修掉「worktree 里
-      // node_modules/@ash/shared 解析到主仓」那条老坑），而且原文里的 `..` 继续按副本自己的链接
+      // node_modules/@navi/shared 解析到主仓」那条老坑），而且原文里的 `..` 继续按副本自己的链接
       // 结构解析；绝对原文必须改写到副本，否则测试会被拉回活动工作区。
       // 搬迁过的子树(relocated)也必须改写:它在副本里的位置与源树不同,照抄的相对原文会从新位置
       // 重新解析、指到另一个文件上去——external/back.py -> ../loose/inside/data.py 被冻进

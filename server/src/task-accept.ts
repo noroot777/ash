@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
-import { acceptPlan, hasAcceptStation, isFinalHumanGate } from "@ash/shared/workflow-policy";
-import type { AcceptBy } from "@ash/shared/workflow-policy";
-import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS } from "@ash/shared/workflow";
-import { STAGE_LABELS } from "@ash/shared";
+import { acceptPlan, hasAcceptStation, isFinalHumanGate } from "@navi/shared/workflow-policy";
+import type { AcceptBy } from "@navi/shared/workflow-policy";
+import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS } from "@navi/shared/workflow";
+import { STAGE_LABELS } from "@navi/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
@@ -39,8 +39,8 @@ import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from 
 import { discardPendingAcceptanceGate, finishAcceptanceGate } from "./task-accept-gate-launch.js";
 import { acceptanceContext } from "./task-accept-context.js";
 import { releaseHumanGate, staleAcceptance, type AcceptExpectation } from "./task-human-gate.js";
-import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
-import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
+import type { UnexecutedVerification } from "@navi/shared/workflow-policy";
+import type { AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 
 export type AcceptSuccess = {
   accepted: true;
@@ -198,7 +198,7 @@ async function acceptTaskUnlocked(
   if (gate) return gate;
 
   // A task that deliberately ran in the project's existing checkout has no
-  // ash/<id> branch or ash-owned worktree to merge/delete.
+  // navi/<id> branch or navi-owned worktree to merge/delete.
   if (!task.useWorktree) {
     const guard = await acceptanceGuard(taskId, "before_accept");
     if (guard.failure) return guard.failure;

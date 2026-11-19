@@ -21,11 +21,11 @@ const SOURCES = ["group", "prerequisite", "dispatch", "crashed"] as const;
 const PER_GROUP = 6;
 
 if (!phase) {
-  const root = mkdtempSync(join(tmpdir(), "ash-launch-restart-"));
+  const root = mkdtempSync(join(tmpdir(), "navi-launch-restart-"));
   try {
     for (const name of ["seed", "resume"]) {
       const child = spawnSync(process.execPath, ["--import", tsxLoaderPath(), fileURLToPath(import.meta.url), name], {
-        env: { ...process.env, ASH_TEST_FIXTURE_ROOT: root }, encoding: "utf8", timeout: 400_000,
+        env: { ...process.env, NAVI_TEST_FIXTURE_ROOT: root }, encoding: "utf8", timeout: 400_000,
       });
       process.stdout.write(child.stdout ?? "");
       process.stderr.write(child.stderr ?? "");

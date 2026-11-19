@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { GitAction, GitActionRequest } from "@ash/shared/git-workbench";
+import type { GitAction, GitActionRequest } from "@navi/shared/git-workbench";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
 

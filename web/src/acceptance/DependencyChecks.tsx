@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { BranchPlanView, Task, TaskListItem } from "@ash/shared";
-import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
+import type { BranchPlanView, Task, TaskListItem } from "@navi/shared";
+import { familyAcceptanceNotices, familySelectionBlock } from "@navi/shared/branch-plan";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import type { useBranchPlan } from "../review/useBranchPlan.ts";

@@ -25,7 +25,7 @@
 // 同一口径：同一张图可能是相对路径解出来的、绝对路径改写来的、或者用户复制证据地址贴回来的，
 // 写法不一定一字不差（`round=01`、`shots\a.png`）。
 import { useEffect, useSyncExternalStore } from "react";
-import type { FreeReviewExpiredScreenshots } from "@ash/shared";
+import type { FreeReviewExpiredScreenshots } from "@navi/shared";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { subscribeEvents } from "../lib/events.ts";
 

@@ -15,9 +15,9 @@ import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-search-scan-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-search-scan-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const [{ db, ensureSchema }, schema, search, { SINGLE_ACTOR }] = await Promise.all([
   import("../src/db/index.js"),

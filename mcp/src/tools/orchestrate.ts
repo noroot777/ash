@@ -2,14 +2,14 @@
 // 起跑/重新排队、队列增删改。
 //
 // 与 task-turn.ts 的分界是**作用对象**：这里的工具摆布的是「一批活怎么组织」，那边的
-// 是「某一条任务在自己回合里对 ash 说什么」。按这条线拆，加一个队列工具不会挤到回合
+// 是「某一条任务在自己回合里对 navi 说什么」。按这条线拆，加一个队列工具不会挤到回合
 // 协议那份措辞旁边——而回合协议的措辞是最经不起误改的东西。
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createWorkflowMode } from "@ash/shared/free-workflow";
+import { createWorkflowMode } from "@navi/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
-import type { TaskPrerequisites } from "@ash/shared/prerequisites";
-import { prerequisiteStepText } from "@ash/shared/prerequisites";
+import type { TaskPrerequisites } from "@navi/shared/prerequisites";
+import { prerequisiteStepText } from "@navi/shared/prerequisites";
 import { AGENT_TYPE, MODE, QUEUE_VS_PREREQUISITES, REVIEWER, REVIEWER_GUIDE, TASK_STATUS, WORKFLOW_MODE, reviewChoiceOf, taskShape } from "../schemas.js";
 
 type ToolTask = z.infer<typeof taskShape>;

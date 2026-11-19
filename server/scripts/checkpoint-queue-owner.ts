@@ -15,7 +15,7 @@ const options = JSON.parse(process.argv[3]!) as {
 };
 const taskOf = async () => (await db.select().from(tasks).where(eq(tasks.id, options.taskId)))[0]!;
 const hits = (text: string) => {
-  const log = process.env.ASH_TEST_LEAD_LOG!;
+  const log = process.env.NAVI_TEST_LEAD_LOG!;
   return (existsSync(log) ? readFileSync(log, "utf8") : "").split(text).length - 1;
 };
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {

@@ -19,14 +19,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent, NativeWorkEvent } from "@ash/shared";
+import type { AgentEvent, NativeWorkEvent } from "@navi/shared";
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const red = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 1)]);
 const blue = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 2)]);
-const root = mkdtempSync(join(tmpdir(), "ash-image-meta-"));
-process.env.ASH_UPLOADS_DIR = join(root, "data", "uploads");
-process.env.ASH_RUNS_DIR = join(root, "data", "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-image-meta-"));
+process.env.NAVI_UPLOADS_DIR = join(root, "data", "uploads");
+process.env.NAVI_RUNS_DIR = join(root, "data", "runs");
 const { markdownImageSink } = await import("../src/executors/markdown-image-stream.js");
 const { metaSeedKey } = await import("../src/executors/markdown-image-meta.js");
 const { childActivity } = await import("../src/executors/native-agent-activity.js");

@@ -1,7 +1,7 @@
 // agent 回合凭证的**边界**:它代表的是那一条任务,不是任务 owner 的账号。
 //
 // 第 2 轮审查 P1 实测过的越界(共享账号下,owner 同时是多个项目的成员):只带
-// `x-ash-source-task-id` + `x-ash-turn-token` 的请求能
+// `x-navi-source-task-id` + `x-navi-turn-token` 的请求能
 //   ① `GET /api/tasks` 读到 owner **另一个项目**里的任务;
 //   ② `GET /api/tasks/:id` 直接取另一个项目的任务详情;
 //   ③ `PATCH /api/users/:id` 改掉 owner 本人的 git 署名。
@@ -31,8 +31,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-multi-user-agent-"));
-process.env.ASH_DB ||= join(stage, "multi-user-agent.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-multi-user-agent-"));
+process.env.NAVI_DB ||= join(stage, "multi-user-agent.db");
 requireTmpDb("test-multi-user-agent");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -117,7 +117,7 @@ const call = async (
 };
 
 /** MCP 给每个 HTTP 调用附的那两个头(mcp/src/index.ts)。 */
-const AS_AGENT = { "x-ash-source-task-id": "t-source", "x-ash-turn-token": "turn-secret" };
+const AS_AGENT = { "x-navi-source-task-id": "t-source", "x-navi-turn-token": "turn-secret" };
 const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
 
 // ── ① 项目轴:agent 只看得见源任务那一个项目 ──────────────────────────────
@@ -239,7 +239,7 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
   );
 
   // 凭证本身仍然要对得上:token 不对就退回匿名。
-  const wrong = await call("/api/tasks", "GET", { ...AS_AGENT, "x-ash-turn-token": "nope" });
+  const wrong = await call("/api/tasks", "GET", { ...AS_AGENT, "x-navi-turn-token": "nope" });
   assert.equal(wrong.status, 401, `token 不对必须回未登录:${wrong.text}`);
 }
 
@@ -337,7 +337,7 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
   await db.insert(tasks).values([
     task({ id: "t-legacy", projectId: "p-legacy", title: "legacy task", status: "running", activeTurnToken: "turn-legacy", ownerUserId: null }),
   ] as never);
-  const AS_LEGACY = { "x-ash-source-task-id": "t-legacy", "x-ash-turn-token": "turn-legacy" };
+  const AS_LEGACY = { "x-navi-source-task-id": "t-legacy", "x-navi-turn-token": "turn-legacy" };
 
   const before = (await db.select().from(projects)).length;
   for (const [what, path, body] of [

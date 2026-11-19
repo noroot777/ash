@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
-import { readMonitorWake, type MonitorWakeData } from "@ash/shared/monitor-wake";
+import { monitorIdFromOrigin } from "@navi/shared/monitor";
+import { readMonitorWake, type MonitorWakeData } from "@navi/shared/monitor-wake";
 import { db } from "./db/index.js";
 import { scheduledMessages } from "./db/schema.js";
 import { beginDelivery } from "./pending-messages.js";

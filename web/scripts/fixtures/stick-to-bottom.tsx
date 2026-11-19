@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { chatTailKey } from "../../src/lib/chatTailKey.ts";
-import { isVisibleExecutionEvent } from "@ash/shared/native-work";
+import { isVisibleExecutionEvent } from "@navi/shared/native-work";
 import type { ExecutionEvent } from "../../src/lib/executionTrace.ts";
 import { appendExecutionEvent } from "../../src/lib/executionTrace.ts";
 import { conversationItemSize } from "../../src/task-detail/conversationContentSize.ts";

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ProjectView, SkillScanOverview, SkillScanRow, SkillSource } from "@ash/shared";
+import type { ProjectView, SkillScanOverview, SkillScanRow, SkillSource } from "@navi/shared";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { Select } from "../components/Select.tsx";

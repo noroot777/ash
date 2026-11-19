@@ -42,16 +42,16 @@ assert.match(invalid.stderr, /--help/);
 assert.doesNotMatch(invalid.stdout, /▶/);
 console.log("✓ stop 参数兼容环境变量, npm run stop 透传选项, 错误参数在动手前中止");
 
-const TMP = mkdtempSync(join(tmpdir(), "ash-stop-test-"));
+const TMP = mkdtempSync(join(tmpdir(), "navi-stop-test-"));
 const env = {
   ...process.env,
   HTTP_PROXY: "http://127.0.0.1:1",
   HTTPS_PROXY: "http://127.0.0.1:1",
   ALL_PROXY: "socks5://127.0.0.1:1",
   PORT: String(PORT),
-  ASH_LOG: join(TMP, "ash.log"),
-  // 锁路径跟着 DB 走,指到临时目录,别读到本机真 ash 的那把锁。
-  ASH_DB: join(TMP, "ash.db"),
+  NAVI_LOG: join(TMP, "navi.log"),
+  // 锁路径跟着 DB 走,指到临时目录,别读到本机真 navi 的那把锁。
+  NAVI_DB: join(TMP, "ash.db"),
   FORCE: "",
   WAIT: "",
 };

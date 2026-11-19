@@ -7,7 +7,7 @@
 //
 // 不碰 codex-events.jsonl / stderr.log：它们是失败取证的现场，按「任务了结 + 宽限期」
 // 回收，规则在 run-retention.ts。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { eq, isNull } from "drizzle-orm";

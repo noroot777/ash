@@ -2,8 +2,8 @@
 // 跟任务/会话那一摊只共用一个 taskId，所以从 `api.ts` 的端点清单里单独拎出来一份——
 // 那份已经顶到单文件 700 行上限。调用点仍然只写 `api.taskMonitors(...)`。
 import { id, json, request } from "./apiClient.ts";
-import { normalizeMonitorDto } from "@ash/shared/monitor";
-import type { MonitorWakeTarget, TaskMonitor } from "@ash/shared/monitor";
+import { normalizeMonitorDto } from "@navi/shared/monitor";
+import type { MonitorWakeTarget, TaskMonitor } from "@navi/shared/monitor";
 
 export const monitorApi = {
   taskMonitors: (taskId: string, signal?: AbortSignal): Promise<TaskMonitor[]> =>

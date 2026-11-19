@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { AnnotationBatch, AnnotationDraft } from "@ash/shared/page-annotation-batch";
-import { evidenceLabels } from "@ash/shared/page-annotation-batch";
+import type { AnnotationBatch, AnnotationDraft } from "@navi/shared/page-annotation-batch";
+import { evidenceLabels } from "@navi/shared/page-annotation-batch";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
 import { localeDateTime } from "../lib/localeFormat.ts";
 

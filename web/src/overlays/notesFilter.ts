@@ -1,4 +1,4 @@
-import type { Note } from "@ash/shared";
+import type { Note } from "@navi/shared";
 
 export type NoteConversionFilter = "all" | "converted" | "unconverted";
 

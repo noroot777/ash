@@ -28,7 +28,7 @@ import { terminalSessions } from "./terminal.js";
 import { withCommandLock } from "./terminal-management-lock.js";
 import type { LaunchAbandonment, TerminalSessionInfo } from "./terminal-session-facts.js";
 
-/** 放弃之后 ash **不再做**哪几件事。原样进弹层 —— 用户按之前就该读到解除范围。 */
+/** 放弃之后 navi **不再做**哪几件事。原样进弹层 —— 用户按之前就该读到解除范围。 */
 function scopeOf(info: TerminalSessionInfo): string[] {
   return [
     "这条启动记录的删除保护解除：关掉它的日志标签、删掉这个项目都不再被它拦下（只删这条记录，名下的进程 Navi 一个都不杀）",
@@ -57,7 +57,7 @@ export async function launchResidue(info: TerminalSessionInfo): Promise<LaunchAb
     : { state: info.ports.length ? "unavailable" as const : "free" as const, why: null };
   const owedPids = liveLeftovers(info.stop);
   // 两类事实分开说(用户 2026-10-29 选定「停止判据保持诚实」时一并要求):**确定是这次启动
-  // 留下的**,和 **ash 分不清是不是这次的**。后者多半是系统自己的后台进程(Spotlight 的索引
+  // 留下的**,和 **navi 分不清是不是这次的**。后者多半是系统自己的后台进程(Spotlight 的索引
   // 进程之类),早先跟前者混成一句「这些残留得你自己处理」,用户看到的就是要他替十几个无关的
   // 系统进程签字。
   const owned: string[] = [];

@@ -2,11 +2,11 @@
 //
 // 起因(2026-10-30,任务 W54czudPJ9Q9 的修复回合):模型上游所在的中转主机整体离线,codex
 // 自己无限重连了 4 小时 45 分 —— 事件流 254 行里 216 条是 `willRetry:true` 的
-// 「Reconnecting... waiting for network」,模型零输出、零工具调用。而 ash 全程**无任何报错、
+// 「Reconnecting... waiting for network」,模型零输出、零工具调用。而 navi 全程**无任何报错、
 // 无超时**,界面一直显示 running。三层叠加造成的:
 //   ① 执行器把 `willRetry` 的错误有意静默丢掉(防瞬时抖动刷屏,本意合理),却没有升级路径
 //      —— 第 1 次和第 216 次重连待遇完全相同;
-//   ② ash 的失败判定全是**验尸式**的(`executors/diagnostics.ts` 只在进程退出后运行),
+//   ② navi 的失败判定全是**验尸式**的(`executors/diagnostics.ts` 只在进程退出后运行),
 //      进程活着 = 回合进行中,全仓没有任何回合级停滞检测;
 //   ③ CLI 自身重连无上限(上游工具,不归我们改)。
 // 于是「永远失败的回合」和「正常的长回合」在产品里不可区分,只能人工翻 jsonl 才看得出来。
@@ -27,7 +27,7 @@
 // (`session` 会话身份、`context` 本地算的上下文水位、`system` 旁注)都**不是上游在回话**。
 // Claude 每条重试提示后面紧跟一条 `session`,照「非错误即进展」判就是每条重试被自己后面
 // 那句身份通知当场解除 —— 远超阈值也一声不响(第 2 轮审查 F1,已实测)。这一类既不解除也不
-// 计数,连「卡在哪一步」都不记。判据共用 `@ash/shared/waiting` 的 `resumesWaiting`(那个文件
+// 计数,连「卡在哪一步」都不记。判据共用 `@navi/shared/waiting` 的 `resumesWaiting`(那个文件
 // 就是为了不让三处判据各自漂),钉子在 test-turn-stall.ts ③a/③b/③c 与 test-claude-retry-stall.ts。
 //
 // 为什么住在**消费层**而不是各执行器里:停滞这件事对 claude / codex / kimi / cursor / … 是
@@ -77,9 +77,9 @@
 // 落盘、终止回合、回收句柄由各链传进来的 `StallActions` 做;唯一的例外是
 // `turn-stall-verdict.ts` —— 那也只是一张内存表,而「这一轮算失败」这个结论必须由下结论的
 // 这一方写下,见那个文件头。
-import type { AgentEvent, ModelFailure } from "@ash/shared";
+import type { AgentEvent, ModelFailure } from "@navi/shared";
 import { isExecutionNotice } from "./session-notice.js";
-import { producesWork } from "@ash/shared/waiting";
+import { producesWork } from "@navi/shared/waiting";
 import { markStallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import {
   adoptedSilenceWarningText, silentTurnTripText, silentTurnWarningText,
@@ -180,7 +180,7 @@ export function errorFacts(event: AgentEvent): { message: string; notice: boolea
 }
 
 /**
- * 「这条事件算**上游接着往下走了**吗」—— 解除停滞的唯一条件,判据**共用** `@ash/shared/waiting`
+ * 「这条事件算**上游接着往下走了**吗」—— 解除停滞的唯一条件,判据**共用** `@navi/shared/waiting`
  * 的 `resumesWaiting`(text/thinking/tool/attachment/usage/turnEnd/done 算,`session`/`context`/
  * `system` 不算)。
  *
@@ -199,7 +199,7 @@ export function errorFacts(event: AgentEvent): { message: string; notice: boolea
  * 第三档刻意排在「宁可漏判不误杀」那一侧之外:它们不是进展的证据,但也不是停滞的证据。真的
  * 恢复了,紧跟着就会有正文/工具/收尾事件,那一条才解除。
  */
-// 「上游真回话了吗」的判据整份住在 `@ash/shared/waiting`(producesWork):包装恒为
+// 「上游真回话了吗」的判据整份住在 `@navi/shared/waiting`(producesWork):包装恒为
 // `kind:"tool"`,照外层判等于「子线程有任何动静都算进展」,而**包装不是进展,里面那条才算**
 // (与 errorFacts 同一道穿透)。上一版只穿透了 `activity` 一种包装,`type:"agent"` 的状态
 // 通知仍从默认分支漏过去 —— 一条「仍在运行」的心跳就能解除停滞(审查 F1,已实测)。
@@ -257,7 +257,7 @@ export function trackTurnStall(
         try {
           noted = actions.noteProgress?.() ?? true; // 没实现这一档 = 这条链不需要持久那一半
         } catch (error) {
-          console.warn(`[ash] 记下会话 ${sessionId} 本轮已有进展失败:`, error);
+          console.warn(`[navi] 记下会话 ${sessionId} 本轮已有进展失败:`, error);
         }
       }
       lastProgress.set(owner, { turn: turnStartedAt, kind: event.kind, noted });
@@ -358,7 +358,7 @@ export function watchTurnSilence(
   // 那段 `unreadable` 的注释,以及 ../turn-progress-mark.ts 的 `recoverTurnProgress`)。
   if (hadProgress !== "none") {
     if (hadProgress === "unreadable") {
-      console.warn(`[ash] 会话 ${sessionId} 本轮有无进展核实不了,这一档不替它下结论(出路在调用方)`);
+      console.warn(`[navi] 会话 ${sessionId} 本轮有无进展核实不了,这一档不替它下结论(出路在调用方)`);
     }
     return;
   }
@@ -475,7 +475,7 @@ function discardProjection(sessionId: string, stall: Stall): void {
   try {
     stall.actions.resolve({ ...factsOf(stall), since });
   } catch (error) {
-    console.warn(`[ash] 撤销会话 ${sessionId} 的上游停滞标记失败:`, error);
+    console.warn(`[navi] 撤销会话 ${sessionId} 的上游停滞标记失败:`, error);
   }
 }
 
@@ -505,7 +505,7 @@ function evaluate(sessionId: string, stall: Stall): void {
       stall.actions.warn(stall.unverifiedHistory ? adoptedSilenceWarningText(facts)
         : silent ? silentTurnWarningText(facts) : stallWarningText(facts), facts);
     } catch (error) {
-      console.warn(`[ash] 落会话 ${sessionId} 的上游停滞警告失败:`, error);
+      console.warn(`[navi] 落会话 ${sessionId} 的上游停滞警告失败:`, error);
     }
   }
   // 持久投影**单独跟**:报过警而它还没确认落库,就每拍重投一次(N1)。幂等,所以重投无害;
@@ -527,12 +527,12 @@ function evaluate(sessionId: string, stall: Stall): void {
           if (stalls.get(sessionId) !== stall) discardProjection(sessionId, stall);
         })
         .catch((error: unknown) => {
-          console.warn(`[ash] 置会话 ${sessionId} 的上游停滞标记失败(下一拍重投):`, error);
+          console.warn(`[navi] 置会话 ${sessionId} 的上游停滞标记失败(下一拍重投):`, error);
         })
         .finally(() => { stall.projecting = false; });
     } catch (error) {
       stall.projecting = false;
-      console.warn(`[ash] 置会话 ${sessionId} 的上游停滞标记抛了(下一拍重投):`, error);
+      console.warn(`[navi] 置会话 ${sessionId} 的上游停滞标记抛了(下一拍重投):`, error);
     }
   }
   if (stall.trippedAtMs !== null) {
@@ -546,7 +546,7 @@ function evaluate(sessionId: string, stall: Stall): void {
       try {
         stall.actions.escalate?.(stallEscalateText(facts, graceMs), facts);
       } catch (error) {
-        console.warn(`[ash] 回收会话 ${sessionId} 的停滞回合失败:`, error);
+        console.warn(`[navi] 回收会话 ${sessionId} 的停滞回合失败:`, error);
       }
     }
     return;
@@ -570,7 +570,7 @@ function evaluate(sessionId: string, stall: Stall): void {
   try {
     stall.actions.trip(text, facts);
   } catch (error) {
-    console.warn(`[ash] 熔断会话 ${sessionId} 的停滞回合失败:`, error);
+    console.warn(`[navi] 熔断会话 ${sessionId} 的停滞回合失败:`, error);
   }
 }
 
@@ -612,7 +612,7 @@ export function resumeTrippedTurn(
   try {
     actions.trip(stallResumeText(verdict), factsOf(stall));
   } catch (error) {
-    console.warn(`[ash] 接管会话 ${sessionId} 的停滞回合、继续终止失败:`, error);
+    console.warn(`[navi] 接管会话 ${sessionId} 的停滞回合、继续终止失败:`, error);
   }
 }
 

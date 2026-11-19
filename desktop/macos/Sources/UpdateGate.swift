@@ -158,7 +158,7 @@ final class UpdateGate {
     replies.forEach { $0(allowed) }
   }
 
-  /// 只有**确认**没人会被打断才自己放行；确认不了（服务一时没答复、答的不像 ash……）就接着等。
+  /// 只有**确认**没人会被打断才自己放行；确认不了（服务一时没答复、答的不像 navi……）就接着等。
   private func startWaiting() {
     phase = .waiting
     log("等会被打断的任务跑完，每 \(Int(pollInterval)) 秒再问一次")
@@ -200,7 +200,7 @@ final class UpdateGate {
     log("放行：停服务、备份库")
     let (shutdownTimeout, lockTimeout) = (shutdownTimeout, lockTimeout)
     DispatchQueue.global(qos: .userInitiated).async { [self] in
-      let step = Self.stopAndBackUp(target, note: note, fromVersion: stale ?? AshConfig.bundleVersion,
+      let step = Self.stopAndBackUp(target, note: note, fromVersion: stale ?? NaviConfig.bundleVersion,
                                     shutdownTimeout: shutdownTimeout, lockTimeout: lockTimeout)
       DispatchQueue.main.async { self.settle(step, epoch: mine, stale: stale != nil) }
     }
@@ -351,7 +351,7 @@ final class UpdateGate {
   }
 
   /// 记进系统日志（Console.app 里按子系统 = bundle id、类别 update 过滤）：事后查「为什么没装 / 为什么问了」。
-  static let logger = Logger(subsystem: AshConfig.bundleID, category: "update")
+  static let logger = Logger(subsystem: NaviConfig.bundleID, category: "update")
 
   private func log(_ message: String) {
     Self.logger.notice("\(message, privacy: .public)")

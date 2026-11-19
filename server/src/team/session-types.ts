@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import type { ResidentHandle, ResumeFields } from "../executors/types.js";
 import type { PendingInbound } from "./inbound-queue.js";
 
@@ -43,7 +43,7 @@ export interface Lead {
    * 这台**此刻持有**的回合身份队列（`started_at`,`Set` 的插入序即投入顺序）。只由
    * `lead-turns.ts` 读写,别处不碰。
    *
-   * 为什么是队列而不是上面那个 `turnStart` 字段：投入与结束是交错的。用户插话时 ash 先打断
+   * 为什么是队列而不是上面那个 `turnStart` 字段：投入与结束是交错的。用户插话时 navi 先打断
    * 再投递,新一轮当场开跑,而被打断那一轮还要过一会儿才吐出它的 `turnEnd` —— 同一瞬间手上
    * 有两个未结束的身份。只认一个字段的后果有两层：被覆盖掉的那个起点永远没人注销（读端把它
    * 当成「这条会话一直在写」,待命期间别人做的东西全算进这台的产物,第 8 轮审查必须修 1）,

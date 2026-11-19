@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import "../../src/styles/global.css";
 import "../../src/styles/commands-launcher.css";
 import { ProjectCommandsSettings } from "../../src/settings/ProjectCommandsSettings.tsx";
@@ -66,7 +66,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     // 服务会话:用例用 window.__service 切六种现场 —— 在跑 / 真·守护化(启动脚本退了,
     // 但它打印过的端口还有人听) / 启动脚本自己退了而端口上也没人(docker compose up -d
     // 那种,服务在本机进程与端口之外) / 已经被停过 / 停过但**没停净**(端口让出来了,同组
-    // 还有核不上归属、ash 没敢杀的进程还活着 —— 第 2 轮审查发现 2)/ 停过、**一个号都举不
+    // 还有核不上归属、navi 没敢杀的进程还活着 —— 第 2 轮审查发现 2)/ 停过、**一个号都举不
     // 出来但也证明不到停净**(端口超额:没记下的端口谁都没问过 —— 第 3 轮审查发现 1。
     // 这一幕没有活证据,所以它不该卡着启动按钮,但那句话必须还在)。
     const service = (window as unknown as {

@@ -6,11 +6,11 @@
 // 按身份归位,不走这里。这里的「跨旁注回捞当前回合」「同文字 30 秒内算重复」都是猜法,只留给没有身份的
 // 老会话(团队调度台、duet、升级前的会话、老服务端),别再往上加新的猜法。
 // 往气泡里追加正文 / 执行过程那几个小件(appendAgentText 等)两边共用,身份那一路也调它们。
-import type { ContextUsage, Session } from "@ash/shared";
-import { stableBlockBoundary } from "@ash/shared/markdown-images";
-import { addUsage } from "@ash/shared/usage";
-import { normalizeSessionNoteText } from "@ash/shared/session-notes";
-import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
+import type { ContextUsage, Session } from "@navi/shared";
+import { stableBlockBoundary } from "@navi/shared/markdown-images";
+import { addUsage } from "@navi/shared/usage";
+import { normalizeSessionNoteText } from "@navi/shared/session-notes";
+import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
 import { eventTone, isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";

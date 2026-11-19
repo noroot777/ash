@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
 import { CaretDown } from "@phosphor-icons/react";
 import { AgentIcon } from "./AgentIcon.tsx";
-import { reasoningEffortsFor } from "@ash/shared/cli-presets";
+import { reasoningEffortsFor } from "@navi/shared/cli-presets";
 import { AgentModelPicker } from "../task-detail/AgentModelPicker.tsx";
 import { EffortPicker } from "./EffortPicker.tsx";
 import { useProviders } from "../lib/modelCatalog.ts";

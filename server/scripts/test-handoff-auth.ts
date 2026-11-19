@@ -2,7 +2,7 @@
 //
 //  入站(谁能把任务推进本机)——真起一台对端 server,用原始 HTTP 打它的机器对机器端点:
 //   1. 陌生机器:ping 能敲门(那是配对请求本身)但拿不到项目清单,/refs 与 /import 401,
-//      且应答带 ash 标记(源机据此回滚,不会留下「送达未知」的 pending)
+//      且应答带 navi 标记(源机据此回滚,不会留下「送达未知」的 pending)
 //   2. 批准后放行;拉黑后 403
 //   3. 没带签名头(旧版源机)→ 401
 //   4. body 被改过 → 401(签名覆盖 body 哈希,不然中间人留着签名头换 manifest 照样过)
@@ -21,7 +21,7 @@
 //
 // 12/13 这两节住在 test-handoff-payload.ts(700 行上限),环境仍由这边搭好传过去。
 //
-// ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn:即使哪里失手触发续跑也不会真
+// NAVI_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn:即使哪里失手触发续跑也不会真
 // 拉起 CLI 烧额度;接力本身一律 autoResume:false。
 import assert from "node:assert/strict";
 import { type ChildProcess } from "node:child_process";
@@ -32,17 +32,17 @@ import { generateKeyPairSync, createHash, randomBytes, sign as edSign } from "no
 import { api, makeRepo, pairWithPeer, startPeer } from "./handoff-test-utils.js";
 import { checkPayloadGuards } from "./test-handoff-payload.js";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
-import { questionKey, type QuestionRecord } from "@ash/shared/questions";
+import { questionKey, type QuestionRecord } from "@navi/shared/questions";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-auth-"));
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-auth-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.ASH_DB = join(root, "source.db");
-process.env.ASH_RUNS_DIR = join(root, "runs-src");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads-src");
-requireTmpDb("ash-handoff-auth");
+process.env.NAVI_DB = join(root, "source.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs-src");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads-src");
+requireTmpDb("navi-handoff-auth");
 
 let peer: ChildProcess | undefined;
 
@@ -78,9 +78,9 @@ async function main(): Promise<void> {
   };
 
   const peerUrl = await startPeer({
-    ASH_DB: join(root, "target.db"),
-    ASH_RUNS_DIR: join(root, "runs-dst"),
-    ASH_UPLOADS_DIR: join(root, "uploads-dst"),
+    NAVI_DB: join(root, "target.db"),
+    NAVI_RUNS_DIR: join(root, "runs-dst"),
+    NAVI_UPLOADS_DIR: join(root, "uploads-dst"),
   }, (proc) => { peer = proc; });
   const peerProject = await api<{ id: string }>(peerUrl, "/projects", {
     method: "POST",
@@ -92,7 +92,7 @@ async function main(): Promise<void> {
   assert.equal(peerIdentity.short, shortFingerprint(peerIdentity.fingerprint));
   assert.notEqual(
     peerIdentity.fingerprint, localIdentity().fingerprint,
-    "源机与对端各有一份身份:同一台电脑上跑两个实例也不能共用(密钥挂 ASH_DB 而不是 DATA_DIR)",
+    "源机与对端各有一份身份:同一台电脑上跑两个实例也不能共用(密钥挂 NAVI_DB 而不是 DATA_DIR)",
   );
   const peersBeforeIdentityProbe = await api<{ peers: unknown[] }>(peerUrl, "/handoff/peers");
   assert.equal((await probePeerIdentity(peerUrl)).fingerprint, peerIdentity.fingerprint);
@@ -168,8 +168,8 @@ async function main(): Promise<void> {
   assert.equal(refs401.status, 401, "未批准的机器不该读到对端的分支与提交");
   const import401 = await raw("/handoff/import", signedInit("/handoff/import", "POST", manifest("auth-unapproved")));
   assert.equal(import401.status, 401);
-  const body401 = await import401.json() as { error: string; ash?: boolean };
-  assert.equal(body401.ash, true, "鉴权拒绝确实什么都没导入,必须带 ash 标记让源机回滚而不是留 pending");
+  const body401 = await import401.json() as { error: string; navi?: boolean };
+  assert.equal(body401.navi, true, "鉴权拒绝确实什么都没导入,必须带 navi 标记让源机回滚而不是留 pending");
   assert.match(body401.error, /还没批准/);
   assert.equal(
     (await fetch(`${peerUrl}/api/tasks/auth-unapproved`)).status, 404,
@@ -298,10 +298,10 @@ async function main(): Promise<void> {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-ash-peer-key": srcPub,
-      "x-ash-peer-sig": (await import("../src/handoff-identity.js")).signWithLocalKey(canonical),
-      "x-ash-peer-ts": staleTs,
-      "x-ash-peer-nonce": staleNonce,
+      "x-navi-peer-key": srcPub,
+      "x-navi-peer-sig": (await import("../src/handoff-identity.js")).signWithLocalKey(canonical),
+      "x-navi-peer-ts": staleTs,
+      "x-navi-peer-nonce": staleNonce,
     },
     body: staleBody,
   });
@@ -321,9 +321,9 @@ async function main(): Promise<void> {
     return raw(path, {
       method: "POST",
       headers: {
-        "content-type": "application/json", "x-ash-peer-key": strangerPub,
-        "x-ash-peer-sig": edSign(null, Buffer.from(canonical, "utf8"), stranger.privateKey).toString("base64"),
-        "x-ash-peer-ts": ts, "x-ash-peer-nonce": nonce,
+        "content-type": "application/json", "x-navi-peer-key": strangerPub,
+        "x-navi-peer-sig": edSign(null, Buffer.from(canonical, "utf8"), stranger.privateKey).toString("base64"),
+        "x-navi-peer-ts": ts, "x-navi-peer-nonce": nonce,
       },
       body,
     });
@@ -339,11 +339,11 @@ async function main(): Promise<void> {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-ash-peer-key": strangerPub,
-      "x-ash-peer-sig": edSign(null, Buffer.from(sCanonical, "utf8"), stranger.privateKey).toString("base64"),
-      "x-ash-peer-ts": sTs,
-      "x-ash-peer-nonce": sNonce,
-      "x-ash-peer-host": encodeURIComponent("陌生机器·stranger"),
+      "x-navi-peer-key": strangerPub,
+      "x-navi-peer-sig": edSign(null, Buffer.from(sCanonical, "utf8"), stranger.privateKey).toString("base64"),
+      "x-navi-peer-ts": sTs,
+      "x-navi-peer-nonce": sNonce,
+      "x-navi-peer-host": encodeURIComponent("陌生机器·stranger"),
     },
     body: strangerBody,
   });
@@ -369,11 +369,11 @@ async function main(): Promise<void> {
   ].join("\n");
   const pingRes = await raw("/handoff/ping?nonce=pair-probe", {
     headers: {
-      "x-ash-peer-key": strangerPub,
-      "x-ash-peer-sig": edSign(null, Buffer.from(pCanonical, "utf8"), stranger.privateKey).toString("base64"),
-      "x-ash-peer-ts": pTs,
-      "x-ash-peer-nonce": pNonce,
-      "x-ash-peer-host": encodeURIComponent("陌生机器·stranger"),
+      "x-navi-peer-key": strangerPub,
+      "x-navi-peer-sig": edSign(null, Buffer.from(pCanonical, "utf8"), stranger.privateKey).toString("base64"),
+      "x-navi-peer-ts": pTs,
+      "x-navi-peer-nonce": pNonce,
+      "x-navi-peer-host": encodeURIComponent("陌生机器·stranger"),
     },
   });
   assert.equal(pingRes.status, 200, "配对入口对谁都开着(项目清单为空而已)");
@@ -414,10 +414,10 @@ async function main(): Promise<void> {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-ash-peer-key": strangerPub,
-      "x-ash-peer-sig": edSign(null, Buffer.from(foreignSnapshotCanonical, "utf8"), stranger.privateKey).toString("base64"),
-      "x-ash-peer-ts": foreignSnapshotTs,
-      "x-ash-peer-nonce": foreignSnapshotNonce,
+      "x-navi-peer-key": strangerPub,
+      "x-navi-peer-sig": edSign(null, Buffer.from(foreignSnapshotCanonical, "utf8"), stranger.privateKey).toString("base64"),
+      "x-navi-peer-ts": foreignSnapshotTs,
+      "x-navi-peer-nonce": foreignSnapshotNonce,
     },
     body: foreignSnapshotBody,
   });
@@ -430,13 +430,13 @@ async function main(): Promise<void> {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-ash-peer-key": strangerPub,
-      "x-ash-peer-sig": edSign(null, Buffer.from([
+      "x-navi-peer-key": strangerPub,
+      "x-navi-peer-sig": edSign(null, Buffer.from([
         "ash-handoff-v1", "POST", "/api/handoff/import", sTs, `${sNonce}b`,
         createHash("sha256").update(strangerBody, "utf8").digest("hex"),
       ].join("\n"), "utf8"), stranger.privateKey).toString("base64"),
-      "x-ash-peer-ts": sTs,
-      "x-ash-peer-nonce": `${sNonce}b`,
+      "x-navi-peer-ts": sTs,
+      "x-navi-peer-nonce": `${sNonce}b`,
     },
     body: strangerBody,
   });
@@ -497,7 +497,7 @@ async function main(): Promise<void> {
   const legacy = createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({
-      ok: true, service: "ash", host: "legacy",
+      ok: true, service: "navi", host: "legacy",
       projects: [{ id: peerProject.id, name: "acme", repoPath: dstRepo, isRepo: true }],
     }));
   });
@@ -555,7 +555,7 @@ async function main(): Promise<void> {
     body: withGit(taskId, branch, head),
   });
   const evilBranches = [
-    ["--upload-pack=touch /tmp/ash-pwned", "`-` 开头会被 git 当成选项"],
+    ["--upload-pack=touch /tmp/navi-pwned", "`-` 开头会被 git 当成选项"],
     ["../../../../etc/evil", "`..` 能把 ref 指到 .git 之外"],
     ["main\nrefs/heads/x", "换行能把 refspec 拆成两条"],
     ["main:refs/heads/x", "`:` 是 refspec 的分隔符"],
@@ -564,7 +564,7 @@ async function main(): Promise<void> {
     const res = await postGit(`auth-branch-${i}`, branch, "a".repeat(40));
     assert.equal(res.status, 400, `分支名 ${JSON.stringify(branch)} 必须在落库前被拒:${why}`);
   }
-  const badHead = await postGit("auth-head-bad", "main", "$(touch /tmp/ash-pwned)");
+  const badHead = await postGit("auth-head-bad", "main", "$(touch /tmp/navi-pwned)");
   assert.equal(badHead.status, 400, "head 只收 40/64 位 hex 提交号,别的一律不进 git 命令");
   const cnBranch = await postGit("auth-branch-cn", "功能/中文分支", "a".repeat(40));
   assert.notEqual(cnBranch.status, 400, "中文分支名在 git 里合法,校验不能把它一起误伤");

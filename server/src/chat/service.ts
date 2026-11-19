@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
-import type { ChatMember, ChatMessage, ChatRoom, ChatTraceEvent } from "@ash/shared/chat";
-import { isChatClearCommand, mentionedMembers } from "@ash/shared/chat";
+import type { ChatMember, ChatMessage, ChatRoom, ChatTraceEvent } from "@navi/shared/chat";
+import { isChatClearCommand, mentionedMembers } from "@navi/shared/chat";
 import { db } from "../db/index.js";
 import { chatRooms, chatMessages } from "../db/schema.js";
 import { id, now } from "../util.js";

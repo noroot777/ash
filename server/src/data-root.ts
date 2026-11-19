@@ -2,9 +2,9 @@
 // 所以要在 paths.js 冻成常量之前、或者替别的环境算数据根的地方也能用。
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
-import { readStorageEnv } from "@ash/shared/env-names";
+import { readStorageEnv } from "@navi/shared/env-names";
 
-// 这份 ash 的代码根：server/、web/、mcp/ 的产物都在它底下。src 与编译后的 dist 都在
+// 这份 navi 的代码根：server/、web/、mcp/ 的产物都在它底下。src 与编译后的 dist 都在
 // server/ 下一层，所以 ../.. 两种跑法都指向同一处。它**不一定是仓库**：独立打包的 app
 // 里它是 bundle 的 Contents/Resources，只读。
 export const CODE_DIR = fileURLToPath(new URL("../..", import.meta.url));

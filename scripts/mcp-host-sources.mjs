@@ -4,7 +4,7 @@
 // build 过),导不进 server 那边的 TypeScript。两边各自的分工也一样 ——
 // 这个文件 ↔ `server/src/mcp-registry/sources.ts`(站点表 + 来源 + 判定),
 // `mcp-hosts.mjs` ↔ `server/src/mcp-registry/register.ts`(拼内容 + 发布事务)。
-// `server/scripts/test-ash-mcp-registry.ts` 会把这张表和 `mcp-registry/catalog.ts` 那张
+// `server/scripts/test-navi-mcp-registry.ts` 会把这张表和 `mcp-registry/catalog.ts` 那张
 // 逐项比对(路径、环境变量、格式族、加载序、额外目录、启停策略、要不要 enabled/type),
 // 对不上就红。
 
@@ -117,13 +117,13 @@ export const HOST_SITES = {
   },
 };
 /** 规范登记名;改名之前的登记名(`ash`、更早的 `harness`)见 legacy-names.mjs,照样认作已登记。 */
-export const ASH = "navi";
+export const NAVI = "navi";
 export const LEGACY_NAMES = LEGACY_MCP_SERVER_NAMES;
 
 /** 某个配置目录里该写哪一份(`alternates` 存在哪个就用哪个,免得多出一份两边都生效)。 */
 function fileInDir(dir, site) {
   // 实测过同目录加载序的家:落点取**存在的那几份里优先级最高的** —— 往更低那份写会被盖掉
-  // (真 opencode:`.jsonc` 压 `.json` 压 `config.json`)。跟 TS 的 `ashMcpConfigFile` 同口径。
+  // (真 opencode:`.jsonc` 压 `.json` 压 `config.json`)。跟 TS 的 `naviMcpConfigFile` 同口径。
   if (site.load) {
     const existing = site.load.map((parts) => join(dir, ...parts)).filter((f) => existsSync(f));
     return existing.length ? existing[existing.length - 1] : join(dir, ...site.relative);
@@ -145,7 +145,7 @@ function fileInDir(dir, site) {
 function filesInDir(dir, site, create = true) {
   // `load` 的顺序就是实测的加载序(升序),落点是其中存在的最高那份 —— 跟 `fileInDir` 同一份
   // 判据,所以 `hostMcpFile` 取最后一个必然跟它一致。`create = false` 给 `extraDirs` 那一层:
-  // 只枚举真实存在的,ash 不替用户造第二个全局配置目录。
+  // 只枚举真实存在的,navi 不替用户造第二个全局配置目录。
   if (site.load) {
     const found = site.load.map((parts) => join(dir, ...parts)).filter((f) => existsSync(f));
     if (found.length) return found;
@@ -162,10 +162,10 @@ function filesInDir(dir, site, create = true) {
  * 这家 CLI 在宿主机上**会读的全部配置**,按优先级**从低到高**。
  *
  * 为什么不是一个文件,以及这个顺序凭什么(真 opencode 1.19.3 逐格实测;TS 那份
- * `ashMcpHostSources` 同模型、同顺序,两边各一份实现是因为 setup 在裸 Node 上跑):
- *  · `OPENCODE_CONFIG` 是「再加一份」不是「取代」—— 全局那份里的 ash 照样生效;
+ * `naviMcpHostSources` 同模型、同顺序,两边各一份实现是因为 setup 在裸 Node 上跑):
+ *  · `OPENCODE_CONFIG` 是「再加一份」不是「取代」—— 全局那份里的 navi 照样生效;
  *  · 默认目录里 `opencode.json` 和 `opencode.jsonc` **两份都读**(上一版「找到第一个就只认
- *    它」,于是 ash 写在 `.json`、目录里又有一份 `.jsonc` 时判成没有,安装器还往 `.jsonc`
+ *    它」,于是 navi 写在 `.json`、目录里又有一份 `.jsonc` 时判成没有,安装器还往 `.jsonc`
  *    里再补一条),而且 **`.jsonc` 压得住 `.json`**(本轮实测);
  *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**,优先级高于默认目录、**也高于上面那个文件**
  *    (本轮审查 F1 实测:上一版把文件排在它上面,排反了);
@@ -190,12 +190,12 @@ export function hostMcpSources(agentType, { env = process.env, home = homedir() 
   // 配置照样会被读,见上面第一条)。
   const dirOverride = site.dirEnv && !site.dirEnvIsFile ? (env[site.dirEnv] || "").trim() : "";
   addDir(dirOverride || site.dir(env, home));
-  // **同一个路径在两个阶段各算一次**(本轮审查 F1-B,跟 TS 的 `ashMcpHostSources` 同口径):
+  // **同一个路径在两个阶段各算一次**(本轮审查 F1-B,跟 TS 的 `naviMcpHostSources` 同口径):
   // 上一版按路径去重、只留第一次出现,于是 `OPENCODE_CONFIG` 指回默认目录那份时,它那一次
   // (最高优先级的)加载被整个删掉 —— 实测真 CLI 会再读一遍、结论相反。
   const file = site.dirEnvIsFile && site.dirEnv ? (env[site.dirEnv] || "").trim() : "";
   if (file) {
-    // **相对路径按 CLI 自己的工作目录解**(实测,见 TS 那边 `ashMcpHostSources` 的说明)。
+    // **相对路径按 CLI 自己的工作目录解**(实测,见 TS 那边 `naviMcpHostSources` 的说明)。
     // 安装器压根不知道那个目录(它跑在用户的 shell 里、CLI 之后在任务目录里跑),所以这份
     // 来源**证不出来**:既不当「不存在」也不当落点 —— 整体答看不准、一个字节都不写。
     if (isAbsolute(file)) out.push({ label: file, file, level: next++ });
@@ -341,8 +341,8 @@ function mergeFactsFor(site) {
   };
 }
 
-/** 认的那几个服务名 —— **各是独立登记**,顺序就是优先。跟 TS 那份 `ASH_MCP_NAMES` 同口径。 */
-const NAMES = [ASH, ...LEGACY_NAMES];
+/** 认的那几个服务名 —— **各是独立登记**,顺序就是优先。跟 TS 那份 `NAVI_MCP_NAMES` 同口径。 */
+const NAMES = [NAVI, ...LEGACY_NAMES];
 
 /**
  * 一份来源扫出来的**逐名事实**:`{ doubt?, missing?, names: Map<名, { status, detail }> }`,
@@ -392,7 +392,7 @@ function scanSource(source, site) {
       // **这家明确挡住这个名字时,压根没登记也要如实说**(本轮审查 F2,跟 TS 的 `scanJson`
       // 同口径):补一条进去也是条用不上的登记,而用户看到的是「已接好」。没登记的名字里
       // **只问规范名** —— 历史名没在白名单里是常态,拿它说「被关掉了」会误判整份配置。
-      if (name !== ASH) continue;
+      if (name !== NAVI) continue;
       const blocked = switchVerdict(doc, site.switches, name);
       if (blocked && blocked.off) names.set(name, { status: "off", detail: blocked.off });
       else if (blocked) names.set(name, { status: "doubt", detail: blocked.doubt });
@@ -445,7 +445,7 @@ function foldScan(scan, label) {
 }
 
 /**
- * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记 —— 跟 TS 那份 `resolveAshMcp` 同一套
+ * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记 —— 跟 TS 那份 `resolveNaviMcp` 同一套
  * 判据:实测过合并语义的那几家走**逐字段合并**,状态从合完那份原值上重算(本轮审查 F1)。
  * 上一版是「声明了这个名字的来源里,优先级最高的那份说了算」,而真 opencode 实测里那三种
  * 形状都错:低的那份写完整登记、高的那份只写 `{"enabled": true}` 时真 CLI 连得上;来源层级
@@ -508,10 +508,10 @@ export function effectiveState(sources, site) {
     picks.push(winners[winners.length - 1]);
   }
   const live = picks.find((p) => p.fact && p.fact.status === "on");
-  // 整份读不准的那些 —— **一份都不许放过**(本轮审查 F1-C,跟 TS 的 `resolveAshMcp` 同口径):
-  // 实测真 opencode 读到任何一份读不通的配置就整份拒载(不管它在哪一层、有没有提到 ash),
+  // 整份读不准的那些 —— **一份都不许放过**(本轮审查 F1-C,跟 TS 的 `resolveNaviMcp` 同口径):
+  // 实测真 opencode 读到任何一份读不通的配置就整份拒载(不管它在哪一层、有没有提到 navi),
   // 那时压根没有「生效的登记」可言。上一版只拦「优先级不低于生效那条」的,于是低层一份坏
-  // 文件 + 高层一条完整登记会被答成 present、安装器还说「已经有生效的 ash 登记」。
+  // 文件 + 高层一条完整登记会被答成 present、安装器还说「已经有生效的 navi 登记」。
   const blind = read.filter((r) => r.scan.doubt);
   const blindWhy = (over) => [...new Set(
     over.map((b) => foldScan(b.scan, b.source.label).why))].join("；");

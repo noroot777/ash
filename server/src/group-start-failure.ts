@@ -27,7 +27,7 @@ export type GroupFailureScope = { taskId: string } | { attempted: string[] };
 export async function reportGroupStartFailure(groupId: string, error: unknown, scope: GroupFailureScope): Promise<void> {
   const message = `分组本次启动未完成：${error instanceof Error ? error.message : String(error)}`;
   const single = "taskId" in scope ? scope.taskId : null;
-  console.error(`[ash] group=${groupId}${single ? ` task=${single}` : ""} ${message}`, error);
+  console.error(`[navi] group=${groupId}${single ? ` task=${single}` : ""} ${message}`, error);
   try {
     const targets = "taskId" in scope ? [scope.taskId] : scope.attempted;
     const members = targets.length
@@ -45,11 +45,11 @@ export async function reportGroupStartFailure(groupId: string, error: unknown, s
         const target = await freshRunFailureTarget(task, null);
         await reportTurnFailure({ taskId: task.id, message, role: "single", target });
       } catch (reportError) {
-        console.error(`[ash] 分组启动失败交代写入失败 task=${task.id}:`, reportError);
+        console.error(`[navi] 分组启动失败交代写入失败 task=${task.id}:`, reportError);
       }
     }
   } catch (reportError) {
-    console.error(`[ash] 分组启动失败交代读取失败 group=${groupId}:`, reportError);
+    console.error(`[navi] 分组启动失败交代读取失败 group=${groupId}:`, reportError);
   }
 }
 
@@ -65,7 +65,7 @@ export async function reportLaunchGiveUp(task: typeof tasks.$inferSelect, messag
       event: { kind: "error", message } });
     return await appendTaskTimeline(task.id, alertLine(TURN_FAILED_TO_START(message)), target);
   } catch (error) {
-    console.error(`[ash] 自动开工失败交代写入失败 task=${task.id}（请求留着，下次再写）:`, error);
+    console.error(`[navi] 自动开工失败交代写入失败 task=${task.id}（请求留着，下次再写）:`, error);
     return false;
   }
 }

@@ -16,8 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-artifacts-"));
-process.env.ASH_DB = join(stage, "ash.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-artifacts-"));
+process.env.NAVI_DB = join(stage, "ash.db");
 requireTmpDb("task-artifacts");
 
 const repo = join(stage, "repo");
@@ -365,7 +365,7 @@ try {
   console.log("✓ task artifacts: 别人后来的改动不抹掉自己已提交的产物(暂存/未暂存)、以换行开头的文件名照样认");
   console.log("✓ task artifacts: 共享工作区按运行区间认人——窗口有上限、别人的 worktree 排除、两个任务两份清单、审查跟到被审、在飞的开放到现在");
 } finally {
-  // ASH_DB 落在舞台目录里,Windows 上不先松开就删不掉(见 tmp-db.ts)。
+  // NAVI_DB 落在舞台目录里,Windows 上不先松开就删不掉(见 tmp-db.ts)。
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }

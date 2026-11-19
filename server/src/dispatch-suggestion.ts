@@ -14,7 +14,7 @@ import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import {
   MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK, MAX_SUGGESTION_NOTE_LEN, MAX_WITHDRAW_REASON_LEN, parseDispatchSuggestions,
   type DispatchSuggestion, type DispatchSuggestionWithdrawal, type WithdrawnSuggestion,
-} from "@ash/shared/dispatch-suggestion";
+} from "@navi/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { ExecutorScope } from "./auth/owned-executors.js";

@@ -1,7 +1,7 @@
 import { CodexExecutor } from "../codex.js";
 import { resumeInner } from "../spawn.js";
 import { codexRelay } from "../codex-provider.js";
-import { modelEffortKey } from "@ash/shared/cli-presets";
+import { modelEffortKey } from "@navi/shared/cli-presets";
 import type { CliSpec } from "./types.js";
 
 // `codex debug models` 的输出(0.153.4 实测):一整个 JSON,`{"models":[{slug,display_name,
@@ -10,7 +10,7 @@ import type { CliSpec } from "./types.js";
 //
 // 只取 `visibility !== "hide"` 的:hide 那批(gpt-daybreak-*、codex-auto-review、退役的
 // gpt-5.4-mini)codex 自己的模型选择器也不列,把它们端上来等于让用户在一堆内部代号里挑。
-// 仍然可用 —— ash 的下拉框允许手填,profile 里已经钉着的值也会被选择器自己补回候选。
+// 仍然可用 —— navi 的下拉框允许手填,profile 里已经钉着的值也会被选择器自己补回候选。
 //
 // `supported_reasoning_levels` 是**每个模型自己的完整允许集合**(0.153.4 实测形状是
 // `[{effort,description},…]`),顺手一起带出来:它和模型清单同住一份输出,白给。接了它

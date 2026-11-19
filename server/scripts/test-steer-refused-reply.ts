@@ -17,14 +17,14 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-steer-refused-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const root = mkdtempSync(join(tmpdir(), "navi-steer-refused-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 process.env.CODEX_HOME = join(root, "codex-home");
-process.env.ASH_LAX_DONE = "1";
-process.env.ASH_TURN_INPUT_ACK_MS = "1000";
-process.env.ASH_CODEX_TURN_START_ACK_MS = "1000";
+process.env.NAVI_LAX_DONE = "1";
+process.env.NAVI_TURN_INPUT_ACK_MS = "1000";
+process.env.NAVI_CODEX_TURN_START_ACK_MS = "1000";
 const originalPath = process.env.PATH;
 
 // 假 codex:mode 文件决定这一次起跑怎么走。`hold` = 照常起跑并挂着一个长工具(等新方向),
@@ -51,7 +51,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     send({ method: "turn/started", params: { threadId: THREAD, turn: { id: TURN } } });
     send({ method: "item/started", params: { threadId: THREAD, turnId: TURN,
       item: { type: "commandExecution", id: "long", command: "wait-for-new-direction" } } });
-    // 真机上会让 ash 作废恢复 thread 的那句 stderr（executors/session-lost.ts）：被引导截断的旧回合
+    // 真机上会让 navi 作废恢复 thread 的那句 stderr（executors/session-lost.ts）：被引导截断的旧回合
     // 手里于是攒着一条会话旁注，见下面「旁注落盘」那一条。
     process.stderr.write("dropping turn-scoped item for unknown turn id\n");
     return;
@@ -69,9 +69,9 @@ writeFileSync(join(bin, "codex"),
   `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(shim)} "$@"\n`, { mode: 0o755 });
 writeFileSync(modeFile, "hold");
 process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
-// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;只放行自己装在 PATH 上的这个
+// 设了 NAVI_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;只放行自己装在 PATH 上的这个
 // 假 codex(executors/spawn.ts)。
-process.env.ASH_TEST_AGENT_BIN = bin;
+process.env.NAVI_TEST_AGENT_BIN = bin;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, scheduledMessages, tasks } = await import("../src/db/schema.js");

@@ -3,10 +3,10 @@ import type { ChildProcess } from "node:child_process";
 import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
-import { type CliHostEnv, cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
-import type { CompactSnapshot } from "@ash/shared/usage";
-import { LEGACY_CLAUDE_RUNTIME_SETTINGS_PREFIX } from "@ash/shared/legacy-names";
+import type { AgentEvent } from "@navi/shared";
+import { type CliHostEnv, cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@navi/shared/cli-overrides";
+import type { CompactSnapshot } from "@navi/shared/usage";
+import { LEGACY_CLAUDE_RUNTIME_SETTINGS_PREFIX } from "@navi/shared/legacy-names";
 import { claudeLaunchCompact, cliHostEnv, hostEnvOf } from "./cli-env.js";
 import { type ClaudeCompactFacts, claudeCompactFacts, claudeConfigDirOf } from "./claude-settings.js";
 import type { AgentExecutor, ConsumedOutput, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
@@ -19,7 +19,7 @@ import { monitorRedirectHook } from "../claude-monitor-hook.js";
 import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } from "../anthropic-context-1m.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { parseClaudeStream } from "./claude-stream.js";
-import { claudeAshMcpInjection, type ClaudeAshMcpInjection } from "./ash-mcp-inject.js";
+import { claudeNaviMcpInjection, type ClaudeNaviMcpInjection } from "./navi-mcp-inject.js";
 import { claudeGoalInvocation, cleanupClaudeGoalContext } from "./claude-goal.js";
 import { singleRunFromResident } from "./claude-single-run.js";
 export { parseClaudeStream } from "./claude-stream.js";
@@ -108,10 +108,10 @@ export class ClaudeExecutor implements AgentExecutor {
   /** 恢复参数按会话 cwd 现算；构造时提前冻结会漏掉项目 settings。 */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
     // **不含 Monitor 改道那段钩子**:那条命令是给人复制到自己终端里手跑的,钩子头上那两个
-    // `$NAVI_TASK_ID` / `$NAVI_TURN_TOKEN` 只在 ash 起的进程里有(auth/run-env.ts),手跑时它们
-    // 是空的 —— 于是那一次会话里每一次 Monitor 调用都会拿空身份去敲 ash 的回调端点,既帮不上
+    // `$NAVI_TASK_ID` / `$NAVI_TURN_TOKEN` 只在 navi 起的进程里有(auth/run-env.ts),手跑时它们
+    // 是空的 —— 于是那一次会话里每一次 Monitor 调用都会拿空身份去敲 navi 的回调端点,既帮不上
     // 他,还得靠服务端那道兜底把它挡回去。这一截也不是他的「覆盖项」:界面上那条命令是用来
-    // 说明「要带上哪些配置才跟 ash 里跑的一样」的,ash 自己的观测钩子不属于这个范围。
+    // 说明「要带上哪些配置才跟 navi 里跑的一样」的,navi 自己的观测钩子不属于这个范围。
     const settings = this.settingsPayload(cwd, this.model, this.relay ? "<你的key>" : undefined, true);
     const resumeArgs = settings ? `--settings ${shq(JSON.stringify(settings))}` : null;
     const inner = resumeInner.claude(sessionId);
@@ -234,7 +234,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
       : this.runtimeSettings(opts.cwd, host, model, false);
-    const { args, ash } = this.buildArgs(opts, sessionId, false, model, settings.arg);
+    const { args, navi } = this.buildArgs(opts, sessionId, false, model, settings.arg);
     const goal = claudeGoalInvocation(opts);
     args.push(...goal.args);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>${goal.marker}`);
@@ -245,7 +245,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", settings.cleanup);
     let goalStarted = false;
     const launchCompact = this.launchCompactSnapshot(opts, facts);
-    const events = cleanupWithEvents(parseClaudeStream(child, undefined, this.bin, this.type, launchCompact, settings.cleanup, undefined, sessionId, opts.cwd, opts.images, undefined, ash), settings.cleanup);
+    const events = cleanupWithEvents(parseClaudeStream(child, undefined, this.bin, this.type, launchCompact, settings.cleanup, undefined, sessionId, opts.cwd, opts.images, undefined, navi), settings.cleanup);
     return {
       cliCommand: opts.cliCommand,
       goalStarted: () => goalStarted,
@@ -276,7 +276,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
       : this.runtimeSettings(opts.cwd, host, model, false);
-    const { args, ash } = this.buildArgs(opts, sessionId, true, model, settings.arg);
+    const { args, navi } = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error
       ? failedChild(this.startupError ?? settings.error!)
@@ -291,7 +291,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", settings.cleanup);
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, true, undefined, ash),
+      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, true, undefined, navi),
       detached,
     );
   }
@@ -337,7 +337,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
       : this.runtimeSettings(opts.cwd, host, model, true);
-    const { args, ash } = this.buildArgs(opts, sessionId, true, model, settings.arg);
+    const { args, navi } = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error
       ? failedChild(this.startupError ?? settings.error!)
@@ -345,7 +345,7 @@ export class ClaudeExecutor implements AgentExecutor {
           keepStdin: true,
         });
     child.on("close", settings.cleanup);
-    return this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, false, undefined, ash);
+    return this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, false, undefined, navi);
   }
 
   private residentFromChild(
@@ -359,10 +359,10 @@ export class ClaudeExecutor implements AgentExecutor {
     images?: MarkdownImageAccounting,
     reapsAtTurnEnd = false,
     consumed?: ConsumedOutput,
-    ash?: ClaudeAshMcpInjection,
+    navi?: ClaudeNaviMcpInjection,
   ): ResidentHandle {
     // 打断/发送记录只给单飞落:接管(attach)只接单飞,常驻调度台重启是另开一台,不重放。
-    const resident = new ClaudeControlBridge(reapsAtTurnEnd, reapsAtTurnEnd ? (child as { ashPaths?: { out?: string } }).ashPaths?.out : undefined);
+    const resident = new ClaudeControlBridge(reapsAtTurnEnd, reapsAtTurnEnd ? (child as { naviPaths?: { out?: string } }).naviPaths?.out : undefined);
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
       const input = child.stdin;
       if (!input || input.destroyed || input.writableEnded || !input.writable) {
@@ -377,7 +377,7 @@ export class ClaudeExecutor implements AgentExecutor {
       launchCompact: compact,
       events: cleanupWithEvents(
         // 同 attach：可引导流接管回来时同样没有新的 init。
-        parseClaudeStream(child, resident, this.bin, this.type, compact, settingsCleanup, undefined, sessionId, cwd, images, consumed, ash),
+        parseClaudeStream(child, resident, this.bin, this.type, compact, settingsCleanup, undefined, sessionId, cwd, images, consumed, navi),
         settingsCleanup,
       ),
       send: (text: string) => {
@@ -388,7 +388,7 @@ export class ClaudeExecutor implements AgentExecutor {
         try {
           resident.noteSend();
         } catch (error) {
-          console.warn("[ash] 记不下这条消息的发送记录，先不送:", error);
+          console.warn("[navi] 记不下这条消息的发送记录，先不送:", error);
           return false;
         }
         stdin.write(userLine(text));
@@ -462,10 +462,10 @@ export class ClaudeExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);
-    // ash 自己的 MCP 起跑时注入:同名以最后一个 `--mcp-config` 为准,所以排在全部参数之后(ash-mcp-inject.ts)。
-    const ash = claudeAshMcpInjection(opts.env);
-    args.push(...ash.args);
-    return { args, ash };
+    // navi 自己的 MCP 起跑时注入:同名以最后一个 `--mcp-config` 为准,所以排在全部参数之后(navi-mcp-inject.ts)。
+    const navi = claudeNaviMcpInjection(opts.env);
+    args.push(...navi.args);
+    return { args, navi };
   }
 }
 

@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import { RunTargetPicker } from "../../src/components/RunTargetPicker.tsx";
 import type { AgentModelSelection } from "../../src/task-detail/mentionPicker.ts";
 import "../../src/styles/global.css";
 
 const TYPES: AgentType[] = ["claude", "codex", "kimi"];
 
-function Ash() {
+function Navi() {
   const [selection, setSelection] = useState<{ agentType: AgentType; executorId: string | null }>({
     agentType: "claude",
     executorId: null,
@@ -42,4 +42,4 @@ function Ash() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<Ash />);
+createRoot(document.getElementById("root")!).render(<Navi />);

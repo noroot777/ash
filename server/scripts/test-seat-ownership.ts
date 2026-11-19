@@ -27,12 +27,12 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "ash-turn-ownership-"));
+const root = mkdtempSync(join(tmpdir(), "navi-turn-ownership-"));
 const approvalKey = generateKeyPairSync("ed25519");
-process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = approvalKey.publicKey.export({ type: "spki", format: "der" }).toString("base64");
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_SUSPECT_TURN_MS = "20";
+process.env.NAVI_HUMAN_APPROVAL_PUBLIC_KEY = approvalKey.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_SUSPECT_TURN_MS = "20";
 
 const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
 const { projects, queueItems, tasks } = await import("../src/db/schema.js");
@@ -280,7 +280,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
 }
 
 // ── ⑤ 放开回合占位只有账号本人按得动 ────────────────────────────────────────
-// 实测(审查 `agent-reclaim-smoke.log`):只带 `x-ash-source-task-id` + `x-ash-turn-token`
+// 实测(审查 `agent-reclaim-smoke.log`):只带 `x-navi-source-task-id` + `x-navi-turn-token`
 // 的 agent 请求拿到 200、`reclaimed:true`,另一个任务的锁被放开,日志还记成「用户主动放开」。
 // 这条路存在的全部理由是「系统判不了原持有者死没死,所以交给知情的人判」,把一次 agent
 // 发来的请求当成用户知情同意,等于把这个设计的唯一前提抽掉。
@@ -329,7 +329,7 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
     invalidateInstanceConfig();
     const asAgent = await gated.request("/api/tasks/t-gate/reclaim-turn", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "valid-turn" },
+      headers: { "content-type": "application/json", "x-navi-source-task-id": "source-agent", "x-navi-turn-token": "valid-turn" },
       body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
     });
     assert.equal(authenticatedAs, "agent", `${mode} 模式必须保留真实的任务身份`);
@@ -383,8 +383,8 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-ash-source-task-id": "source-agent",
-      "x-ash-turn-token": "valid-turn",
+      "x-navi-source-task-id": "source-agent",
+      "x-navi-turn-token": "valid-turn",
       [HUMAN_ACTION_TOKEN_HEADER]: stolen,
     },
     body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
@@ -482,11 +482,11 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   await new Promise((r) => setTimeout(r, 40)); // 过了可疑阈值
 
   const invalidCredentials: Record<string, string>[] = [
-    { "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "expired" },
-    { "x-ash-source-task-id": "source-agent" },
-    { "x-ash-turn-token": "valid-turn" },
-    { "x-ash-source-task-id": "source-team" },
-    { "x-ash-source-task-id": "", "x-ash-turn-token": "" },
+    { "x-navi-source-task-id": "source-agent", "x-navi-turn-token": "expired" },
+    { "x-navi-source-task-id": "source-agent" },
+    { "x-navi-turn-token": "valid-turn" },
+    { "x-navi-source-task-id": "source-team" },
+    { "x-navi-source-task-id": "", "x-navi-turn-token": "" },
   ];
   for (const headers of invalidCredentials) {
     const invalid = await gated.request("/api/tasks/t-gate/reclaim-turn", {
@@ -503,14 +503,14 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   }
   const staleCreation = await gated.request("/api/tasks", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "expired" },
+    headers: { "content-type": "application/json", "x-navi-source-task-id": "source-agent", "x-navi-turn-token": "expired" },
     body: JSON.stringify({ projectId: "p1", title: "expired creation", useWorktree: false }),
   });
   assert.equal(staleCreation.status, 409, "过期回合应由业务路由按原语义拒绝");
   assert.match((await staleCreation.json() as { error: string }).error, /创建来源的回合身份已过期/);
   for (const status of ["idle", "running"]) {
     await db.update(tasks).set({ status, activeTurnToken: null }).where(eq(tasks.id, "source-team"));
-    const headers = { "content-type": "application/json", "x-ash-source-task-id": "source-team" };
+    const headers = { "content-type": "application/json", "x-navi-source-task-id": "source-team" };
     const created = await gated.request("/api/tasks", {
       method: "POST", headers,
       body: JSON.stringify({ projectId: "p1", title: `resident ${status}`, useWorktree: false }),
@@ -529,7 +529,7 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   await writeSystemSetting("instanceMode", "multi");
   invalidateInstanceConfig();
   const unauthenticated = await gated.request("/api/tasks/t-gate", {
-    headers: { "x-ash-source-task-id": "source-team" },
+    headers: { "x-navi-source-task-id": "source-team" },
   });
   assert.equal(unauthenticated.status, 401, "来源头不能绕过多人登录边界");
   await writeSystemSetting("instanceMode", "single");

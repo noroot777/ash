@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentExecutorProfile } from "@ash/shared";
+import type { AgentExecutorProfile } from "@navi/shared";
 import { AgentProfilesSection } from "../../src/settings/AgentProfilesSection.tsx";
 import { Button } from "../../src/components/ui.tsx";
 import type { DetectedCli } from "../../src/lib/api.ts";

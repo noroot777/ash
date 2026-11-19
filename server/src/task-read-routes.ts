@@ -1,6 +1,6 @@
 // 任务的只读查询（追问、正文批量取、被挡回的操作、提问历史、换执行器预检、磁盘残留）。从 task-routes.ts
 // 拆出来只是为了行数，由 `mountTaskRoutes` 一并挂载（见那里的说明）。
-import { TASK_BATCH_LIMIT } from "@ash/shared";
+import { TASK_BATCH_LIMIT } from "@navi/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -93,7 +93,7 @@ api.get("/tasks/:id/executor-preflight", async (c) => {
   return c.json({ downgrades: await executorDowngradePreflight(taskId, ownerIdOf(actorOf(c))) });
 });
 
-// 这个任务在磁盘/仓库里还留着什么(worktree 目录、ash/<id8> 分支)。删除
+// 这个任务在磁盘/仓库里还留着什么(worktree 目录、navi/<id8> 分支)。删除
 // 确认框在打开时先问一次:有残留才提示「要不要连它们一起删」,没有就是一句普通
 // 的确认。任务不在 worktree 模式下跑过也照查 —— useWorktree 后来被关掉、目录和
 // 分支却还在,是最容易被漏掉的那种残留。

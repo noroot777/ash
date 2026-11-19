@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ServerEvent, TaskListItem } from "@ash/shared";
+import type { ServerEvent, TaskListItem } from "@navi/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 import { mergeTaskSnapshotFields } from "./taskSnapshot.ts";

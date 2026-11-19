@@ -7,7 +7,7 @@
 // 清到什么程度由线上那一站说了算（AcceptClean → CleanupPlan）；不传就是老规矩全清。
 import { basename } from "node:path";
 import { statSync } from "node:fs";
-import type { AcceptClean } from "@ash/shared/workflow";
+import type { AcceptClean } from "@navi/shared/workflow";
 import {
   dirtyFilesAt,
   expandHome,

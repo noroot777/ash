@@ -79,7 +79,7 @@ export async function backfillDispatchedBy(client: Client): Promise<void> {
       args: [mark.carved],
     });
   } catch (e) {
-    console.warn("[ash] 回填「派它的那条任务」失败，忽略(下次启动按同一条边界再补):", e);
+    console.warn("[navi] 回填「派它的那条任务」失败，忽略(下次启动按同一条边界再补):", e);
   }
 }
 
@@ -93,7 +93,7 @@ export async function backfillDispatchedByAfterCopy(dest: Client, source: Client
     const sourceMark = await readMark(source);
     if (sourceMark) await writeMark(dest, sourceMark);
   } catch (e) {
-    console.warn("[ash] 读主库的派活归属边界失败，沿用预览库自己的:", e);
+    console.warn("[navi] 读主库的派活归属边界失败，沿用预览库自己的:", e);
   }
   await backfillDispatchedBy(dest);
 }

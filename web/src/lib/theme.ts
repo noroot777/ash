@@ -13,8 +13,8 @@
 //
 // 这个文件**不 import `api.ts`**:它被 settingsSync 调(读到设置的那一刻交进来),
 // 跟 sendKey.ts 一样夹在中间才不会绕成环。
-import type { ColorTheme } from "@ash/shared";
-import { COLOR_THEMES } from "@ash/shared";
+import type { ColorTheme } from "@navi/shared";
+import { COLOR_THEMES } from "@navi/shared";
 
 export type ResolvedTheme = "light" | "dark";
 

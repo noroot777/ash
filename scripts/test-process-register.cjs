@@ -9,7 +9,7 @@
 const fs = require("node:fs");
 const childProcess = require("node:child_process");
 const path = require("node:path");
-const directory = process.env.ASH_TEST_PROCESS_SCOPE;
+const directory = process.env.NAVI_TEST_PROCESS_SCOPE;
 if (directory) {
   const stopped = path.join(directory, "stopped");
   if (fs.existsSync(stopped)) process.exit(86);

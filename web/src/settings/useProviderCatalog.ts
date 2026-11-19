@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { LlmProtocol } from "@ash/shared";
+import type { LlmProtocol } from "@navi/shared";
 import { api } from "../lib/api.ts";
 
 /**

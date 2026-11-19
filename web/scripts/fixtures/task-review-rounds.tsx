@@ -1,6 +1,6 @@
 import { StrictMode, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
-import type { TaskReviewRound } from "@ash/shared";
+import type { TaskReviewRound } from "@navi/shared";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
 import { TaskReviewRounds } from "../../src/review/TaskReviewRounds.tsx";
 import "../../src/styles/global.css";

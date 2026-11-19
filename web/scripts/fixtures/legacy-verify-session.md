@@ -14,8 +14,8 @@
 
 阻塞问题：设置页“立即重新扫描”按钮被压缩成逐字竖排，影响可用性。已留截图和报告：
 
-[验收报告](/Users/fjh/code/ash/data/runs/eFjv9houajxX/review/round-1/report.md)
-[问题截图](/Users/fjh/code/ash/data/runs/eFjv9houajxX/review/round-1/settings-scan.jpg)
+[验收报告](/Users/fjh/code/navi/data/runs/eFjv9houajxX/review/round-1/report.md)
+[问题截图](/Users/fjh/code/navi/data/runs/eFjv9houajxX/review/round-1/settings-scan.jpg)
 
 已停止验收服务、释放端口，证据未加入 Git，并已上报 `verify_failed`。
 
@@ -39,8 +39,8 @@
 
 已复验上一轮的按钮布局修复；构建、类型检查、技能回归测试和真实 Chrome 交互均通过。服务与临时数据库已清理，证据未入 Git。
 
-[第 2 轮报告](/Users/fjh/code/ash/data/runs/eFjv9houajxX/review/round-2/report.md)
-[设置页截图](/Users/fjh/code/ash/data/runs/eFjv9houajxX/review/round-2/settings-button-fixed.jpg)
+[第 2 轮报告](/Users/fjh/code/navi/data/runs/eFjv9houajxX/review/round-2/report.md)
+[设置页截图](/Users/fjh/code/navi/data/runs/eFjv9houajxX/review/round-2/settings-button-fixed.jpg)
 
 
 {"t":"system","agent":"codex","text":"这条线上没写「等我点头」，走到「合并并清理」就自己合了。","at":"2026-08-05T14:42:26.190Z"}
@@ -49,9 +49,9 @@
 
 {"t":"system","agent":"codex","text":"验收阶段更新：已合并（merged）","at":"2026-08-05T14:42:26.374Z"}
 
-{"t":"system","agent":"codex","text":"合并完成：ash/eFjv9hou → feat/issue-center（纯 fast-forward）。","at":"2026-08-05T14:42:26.374Z"}
+{"t":"system","agent":"codex","text":"合并完成：navi/eFjv9hou → feat/issue-center（纯 fast-forward）。","at":"2026-08-05T14:42:26.374Z"}
 
-{"t":"system","agent":"codex","text":"清理完成：已删除 worktree /Users/fjh/code/ash/.worktrees/eFjv9houajxX；已用 git branch -d 删除 ash/eFjv9hou。","at":"2026-08-05T14:42:28.469Z"}
+{"t":"system","agent":"codex","text":"清理完成：已删除 worktree /Users/fjh/code/navi/.worktrees/eFjv9houajxX；已用 git branch -d 删除 navi/eFjv9hou。","at":"2026-08-05T14:42:28.469Z"}
 
 {"t":"system","agent":"codex","text":"验收阶段更新：验收完成（accepted）","at":"2026-08-05T14:42:28.470Z"}
 
@@ -65,9 +65,9 @@
 
 {"t":"system","agent":"codex","text":"验收阶段更新：已合并（merged）","at":"2026-08-06T03:32:24.970Z"}
 
-{"t":"system","agent":"codex","text":"合并完成：ash/eFjv9hou → feat/issue-center（--no-ff 合并提交）。","at":"2026-08-06T03:32:24.970Z"}
+{"t":"system","agent":"codex","text":"合并完成：navi/eFjv9hou → feat/issue-center（--no-ff 合并提交）。","at":"2026-08-06T03:32:24.970Z"}
 
-{"t":"system","agent":"codex","text":"验收清理未完成：任务 worktree 删除失败：fatal: '/Users/fjh/code/ash/.worktrees/eFjv9houajxX' contains modified or untracked files, use --force to delete it。合并结果已保留，阶段停在 merged，status 保持 done。","at":"2026-08-06T03:32:25.022Z"}
+{"t":"system","agent":"codex","text":"验收清理未完成：任务 worktree 删除失败：fatal: '/Users/fjh/code/navi/.worktrees/eFjv9houajxX' contains modified or untracked files, use --force to delete it。合并结果已保留，阶段停在 merged，status 保持 done。","at":"2026-08-06T03:32:25.022Z"}
 
 {"t":"system","agent":"codex","text":"任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）","at":"2026-08-06T03:32:42.287Z"}
 
@@ -75,9 +75,9 @@
 
 {"t":"system","agent":"codex","text":"验收阶段更新：已合并（merged）","at":"2026-08-06T04:05:45.276Z"}
 
-{"t":"system","agent":"codex","text":"合并完成：ash/eFjv9hou → feat/issue-center（任务分支此前已合并）。","at":"2026-08-06T04:05:45.277Z"}
+{"t":"system","agent":"codex","text":"合并完成：navi/eFjv9hou → feat/issue-center（任务分支此前已合并）。","at":"2026-08-06T04:05:45.277Z"}
 
-{"t":"system","agent":"codex","text":"清理完成：已删除 worktree /Users/fjh/code/ash/.worktrees/eFjv9houajxX；已用 git branch -d 删除 ash/eFjv9hou。","at":"2026-08-06T04:05:45.483Z"}
+{"t":"system","agent":"codex","text":"清理完成：已删除 worktree /Users/fjh/code/navi/.worktrees/eFjv9houajxX；已用 git branch -d 删除 navi/eFjv9hou。","at":"2026-08-06T04:05:45.483Z"}
 
 {"t":"system","agent":"codex","text":"验收阶段更新：验收完成（accepted）","at":"2026-08-06T04:05:45.484Z"}
 

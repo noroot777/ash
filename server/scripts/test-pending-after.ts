@@ -19,9 +19,9 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 
-const root = mkdtempSync(join(tmpdir(), "ash-pending-after-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-pending-after-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const { releaseTmpDb } = await import("./tmp-db.js");
 const { db, ensureSchema } = await import("../src/db/index.js");

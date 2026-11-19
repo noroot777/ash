@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-search-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-search-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
-// 动态 import:search.js 连带打开 DB,得等 ASH_DB 指到临时库之后再加载。
+// 动态 import:search.js 连带打开 DB,得等 NAVI_DB 指到临时库之后再加载。
 const [{ db, ensureSchema }, { projects, tasks }, search, { parseWorktreePorcelain }, { SINGLE_ACTOR }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
@@ -59,11 +59,11 @@ assert.equal(visibleLocalSearchTask(JSON.stringify({ direction: "in" })), true);
 
 const worktrees = parseWorktreePorcelain(
   "worktree /repo\0HEAD abc123\0branch refs/heads/main\0\0" +
-    "worktree /repo/.worktrees/task\0HEAD def456\0branch refs/heads/ash/task\0\0",
+    "worktree /repo/.worktrees/task\0HEAD def456\0branch refs/heads/navi/task\0\0",
 );
 assert.deepEqual(worktrees, [
   { path: "/repo", branch: "main", head: "abc123", detached: false },
-  { path: "/repo/.worktrees/task", branch: "ash/task", head: "def456", detached: false },
+  { path: "/repo/.worktrees/task", branch: "navi/task", head: "def456", detached: false },
 ]);
 
 // ── searchAll:搜 id 时那个任务必须排第一,而且是「凭 id」排上来的 ──────────

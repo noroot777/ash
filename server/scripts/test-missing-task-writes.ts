@@ -20,11 +20,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-missing-task-"));
-process.env.ASH_DB ||= join(stage, "missing-task.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-missing-task-"));
+process.env.NAVI_DB ||= join(stage, "missing-task.db");
 requireTmpDb("test-missing-task-writes");
 
-// 碰库的模块一律等 ASH_DB 落定之后再 import(静态 import 会被提升到上面那句之前)。
+// 碰库的模块一律等 NAVI_DB 落定之后再 import(静态 import 会被提升到上面那句之前)。
 const { db, ensureSchema } = await import("../src/db/index.js");
 const schema = await import("../src/db/schema.js");
 const { Hono } = await import("hono");

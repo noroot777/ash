@@ -12,7 +12,7 @@ import { at, db, project, request, setup, tasks, teardown } from "./prerequisite
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { taskPrerequisites } from "./prerequisite-fixture.js";
-import type { PrerequisiteCandidates } from "@ash/shared/prerequisites";
+import type { PrerequisiteCandidates } from "@navi/shared/prerequisites";
 
 const candidates = async (projectId: string, query: string) => {
   const res = await request("GET", `/projects/${projectId}/prerequisite-candidates?${query}`);

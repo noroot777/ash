@@ -3,7 +3,7 @@
 //
 // 粒度按各自的主语走：团队一屏里有多个被审对象，列的是对象；单任务只有它自己，列的是轮次。
 import { useMemo, useRef, useState } from "react";
-import type { TaskReviewRound } from "@ash/shared";
+import type { TaskReviewRound } from "@navi/shared";
 import { InspButton, InspNone, InspRecord, InspSec } from "../inspector/parts.tsx";
 import { useInspectorRequest } from "../inspector/nav.tsx";
 import { RequestMissNote } from "../inspector/RequestMissNote.tsx";

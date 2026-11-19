@@ -74,7 +74,7 @@ export async function announceResumePrompt(taskId: string): Promise<void> {
   try {
     await publishTaskUpdated(taskId);
   } catch (error) {
-    console.warn(`[ash] 续跑指令已更新，但实时通知失败 ${taskId}:`, error);
+    console.warn(`[navi] 续跑指令已更新，但实时通知失败 ${taskId}:`, error);
   }
 }
 

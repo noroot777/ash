@@ -1,6 +1,6 @@
 // **创建意图行的责任接管** —— 第 19 轮审查 F2 的回归。
 //
-// 现场:身份先落库、进程后起、pid 回填(创建协议见 monitor-create.ts 文件头)。ash 恰好死在
+// 现场:身份先落库、进程后起、pid 回填(创建协议见 monitor-create.ts 文件头)。navi 恰好死在
 // 「落了身份」和「回填 pid」之间时,库里剩下的就是一行 `running` + `pid IS NULL` + 一份身份
 // 边条。那一行的**结局从没被确认过** —— 命令可能正在跑。
 //
@@ -71,7 +71,7 @@ try {
     "这一刻不记回收债:债是补刀授权,而这一行的进程多半正常跑着");
   assert.equal(isPidAlive(pid), true, "候选号一个信号都不授权");
 
-  // ② 故障撤掉 ⇒ **ash 自己把它认回来**(第 20 轮审查 F2)。上一版这里是台子再跑一次
+  // ② 故障撤掉 ⇒ **navi 自己把它认回来**(第 20 轮审查 F2)。上一版这里是台子再跑一次
   //    `reattachMonitors()`,那只能证明「下一次启动还会问」,证不出产品在这一次启动周期里
   //    自己会问 —— 而审查实测到的正是后者:等 31 秒结果早就出来了,行还停在「在等」。
   await until("恢复梯子自己把身份认回来", async () => (await readRow(mon))?.pid === pid, 20_000);
@@ -138,7 +138,7 @@ try {
   const child5 = spawn(
     process.execPath,
     ["-e", 'setTimeout(() => console.log("READY_FROM_REAL_PROCESS"), 300); setInterval(() => {}, 1000)'],
-    { detached: true, stdio: ["ignore", logFd, logFd], env: { PATH: process.env.PATH!, ASH_MONITOR_UNIT: token5 } },
+    { detached: true, stdio: ["ignore", logFd, logFd], env: { PATH: process.env.PATH!, NAVI_MONITOR_UNIT: token5 } },
   );
   closeSync(logFd);
   child5.unref();
@@ -256,7 +256,7 @@ try {
   const child8 = spawn(
     process.execPath,
     ["-e", 'setTimeout(() => console.log("READY_FROM_REAL_PROCESS"), 300); setInterval(() => {}, 1000)'],
-    { detached: true, stdio: ["ignore", fd8, fd8], env: { PATH: process.env.PATH!, ASH_MONITOR_UNIT: token8 } },
+    { detached: true, stdio: ["ignore", fd8, fd8], env: { PATH: process.env.PATH!, NAVI_MONITOR_UNIT: token8 } },
   );
   closeSync(fd8);
   child8.unref();
@@ -287,7 +287,7 @@ try {
   } finally { fault8.restore(); }
 
   console.log(
-    "✓ 创建意图的责任接管：认不回来时行原样留着且一刀不发 / 故障撤掉后 ash 自己认得回来、"
+    "✓ 创建意图的责任接管：认不回来时行原样留着且一刀不发 / 故障撤掉后 navi 自己认得回来、"
     + "接上日志与期限 / 问出反证就照实写掉(并把运行时一起交接掉) /"
     + " 删除前那一问问得到 pid 还空着的意图行、责任落盘才许删 / 开机清扫按边条把它重新问一遍 /"
     + " 边条读不出来既不算没有边条也不算没有责任（接回、删除、开机三处同判）/"

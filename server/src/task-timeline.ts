@@ -1,8 +1,8 @@
 import { createWriteStream, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AgentType, SessionRole } from "@ash/shared";
-import type { TimelineNotice } from "@ash/shared/timeline-notice";
+import type { AgentType, SessionRole } from "@navi/shared";
+import type { TimelineNotice } from "@navi/shared/timeline-notice";
 import { desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -10,7 +10,7 @@ import { sessions } from "./db/schema.js";
 import { withRunFileLock } from "./run-file-lock.js";
 import { sessionTranscriptPath, TURN_SENTINEL, writeTurn } from "./transcript.js";
 import { bindTranscript, liveTranscript } from "./transcript-identity.js";
-import type { RecordIdentity } from "@ash/shared/session-output";
+import type { RecordIdentity } from "@navi/shared/session-output";
 import { now } from "./util.js";
 
 // Persist one system event to a task session and mirror it over SSE.
@@ -94,7 +94,7 @@ export async function appendTaskTimeline(
     });
     return true;
   } catch (error) {
-    console.warn(`[ash] failed to append task timeline for ${taskId}:`, error);
+    console.warn(`[navi] failed to append task timeline for ${taskId}:`, error);
     return false;
   }
 }

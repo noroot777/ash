@@ -5,9 +5,9 @@
 //   服务端只有 `executors/model-probe.ts` 一处读它当兜底 —— 没必要让每个 import
 //   shared 的地方都带上这一大坨。
 //
-// 走子路径导出 `@ash/shared/cli-presets`,**不从 index 转发**:服务端直接跑
+// 走子路径导出 `@navi/shared/cli-presets`,**不从 index 转发**:服务端直接跑
 // shared 的 .ts 源码,Node 的类型擦除不会把 "./x.js" 说明符映射回 "./x.ts",
-// index 里转发运行时值会让 server 进程起不来(同 `@ash/shared/executors`)。
+// index 里转发运行时值会让 server 进程起不来(同 `@navi/shared/executors`)。
 import type { AgentType } from "./index.ts";
 
 /**
@@ -16,7 +16,7 @@ import type { AgentType } from "./index.ts";
  * **来源的权威性不一样,裁剪责任在适配器而不在这里**:
  *   • codex(`codex debug models` 的 `supported_reasoning_levels`)与 claude
  *     (control protocol 的 `list_models`/initialize 响应)是 CLI **自己**报的,
- *     原样登记 —— 它们将来加一个新档位,ash 不该因为并集里没有就把它挡掉,那又回到
+ *     原样登记 —— 它们将来加一个新档位,navi 不该因为并集里没有就把它挡掉,那又回到
  *     「手写表滞后」的老问题。
  *   • opencode / kilo 读的是 models.dev 快照,描述的是「这个模型/API 支持什么」,
  *     不等于「`--variant` 接受什么」(它有 `none`、`budget_tokens` 这些对不上的值)。
@@ -30,7 +30,7 @@ export type ModelEffortMap = Readonly<Record<string, readonly string[]>>;
  * `POST /api/agents/models/refresh` 的元素形状。
  *
  * 为什么要有它:`CLI_MODEL_PRESETS` 是发版时抄下来的**快照**,而各家 CLI 上新模型
- * 跟 ash 发版毫无关系 —— grok 4.6 上线后本机 CLI 早就能用,系统里却只有 4.5。
+ * 跟 navi 发版毫无关系 —— grok 4.6 上线后本机 CLI 早就能用,系统里却只有 4.5。
  * 所以 CLI 给得出清单的现问 CLI;Claude 从官方文档获取完整 ID 候选;失败才退回快照。
  *
  * 字段的诚实边界:`source` 区分 CLI 清单、文档候选与内置兜底,`error` 保留
@@ -93,7 +93,7 @@ export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", 
 // 全键 Record 是刻意的:新类型不填就编译不过,免得漏登记后下拉框静默空着。
 // 空数组 = 该 CLI 的模型别名还没实测(用户仍可在 profile 里手填任意模型名)。
 //
-// **这张表是兜底,不是权威**:CLI 自己有清单命令的(见 spec 的 `models` 字段),ash
+// **这张表是兜底,不是权威**:CLI 自己有清单命令的(见 spec 的 `models` 字段),navi
 // 会现问 CLI 并缓存,前端也给了「刷新」入口;探不到才退回这里。
 export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   claude: ["opus", "sonnet", "haiku", "fable"],

@@ -16,7 +16,7 @@ import { join } from "node:path";
 export async function testInstall({ root, temporary, launch, children, until, delay }) {
   const install = join(root, "desktop/macos/scripts/install-app.sh");
   // 安装锁有固定位置，测试换成自己的临时目录，跑完一起清掉。
-  const installEnv = { ASH_INSTALL_LOCKS: join(temporary, "install-locks") };
+  const installEnv = { NAVI_INSTALL_LOCKS: join(temporary, "install-locks") };
   // 安装目录名里带正则字符，再给它一个软链别名：从哪个拼写拉起、从哪个拼写安装都得认出是同一个包。
   const apps = join(temporary, "Apps [1]+ $x");
   const appsAlias = join(temporary, "Applications-alias");
@@ -44,7 +44,7 @@ export async function testInstall({ root, temporary, launch, children, until, de
   const installed = () => readFileSync(join(apps, "Navi.app/Contents/version"), "utf8");
   const outside = join(temporary, "outside");
   mkdirSync(outside);
-  // 经包外的软链起 ash 的入口：命令行、可执行文件、工作目录都看不出它跟包有关，只有它拿着的锁。
+  // 经包外的软链起 navi 的入口：命令行、可执行文件、工作目录都看不出它跟包有关，只有它拿着的锁。
   symlinkSync(join(apps, "Navi.app/Contents/Resources/app/server/dist/entry.mjs"), join(outside, "run.mjs"));
   const startUser = (command, args, cwd, env = {}) => {
     const user = spawn(command, args, { stdio: "ignore", cwd, env: { ...process.env, ...env } });

@@ -1,4 +1,4 @@
-import type { ChatContextStatus } from "@ash/shared/chat";
+import type { ChatContextStatus } from "@navi/shared/chat";
 
 export function ChatContextNotice({ context }: { context?: ChatContextStatus }) {
   if (!context) return null;

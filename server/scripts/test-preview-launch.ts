@@ -1,8 +1,8 @@
-// 预览起多大一摊（`$ASH_PREVIEW_MODE`）照谁的意思来。
+// 预览起多大一摊（`$NAVI_PREVIEW_MODE`）照谁的意思来。
 //
 // 钉的是这条：自由预览这一档**曾经写死 `"frontend"`**，项目在设置里配什么都没用。
 // 这个 bug 的症状是隐形的 —— 用户改完后端、打开预览、看到的是**另一个进程**（自带
-// 的 dev 脚本把 /api 打回正在跑的那台 ash）上的旧行为，页面上没有一个字提过这件事，
+// 的 dev 脚本把 /api 打回正在跑的那台 navi）上的旧行为，页面上没有一个字提过这件事，
 // 于是只能得出「我改的东西没生效」。真实排查耗掉了一整轮对话。
 //
 // 所以这里不测「函数返回了什么」，测**启动命令手上真正拿到的那个环境变量** —— 中间
@@ -16,12 +16,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { PREVIEW_MODE, parsePreviewConfig, previewLaunchOf, type ProjectPreviewConfig } from "@ash/shared/preview";
+import { PREVIEW_MODE, parsePreviewConfig, previewLaunchOf, type ProjectPreviewConfig } from "@navi/shared/preview";
 
-const root = mkdtempSync(join(realpathSync(tmpdir()), "ash-preview-launch-"));
-process.env.ASH_DB = join(root, "test.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_DEPS_DIR = join(root, "deps");
+const root = mkdtempSync(join(realpathSync(tmpdir()), "navi-preview-launch-"));
+process.env.NAVI_DB = join(root, "test.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, tasks } = await import("../src/db/schema.js");
 const { authGate } = await import("../src/auth/middleware.js");
@@ -50,7 +50,7 @@ assert.deepEqual([...PREVIEW_MODE], ["command", "frontend", "full", "test"], "�
 const repo = join(root, "repo");
 mkdirSync(repo, { recursive: true });
 // 命令自己验：环境变量不是期待的那一档就立刻退出，预览于是起不来，断言在 200 上失败。
-const probe = (expected: string) => `${previewShell().quote(process.execPath)} -e "if(process.env.ASH_PREVIEW_MODE!=='${expected}')process.exit(21);const s=require('node:http').createServer((q,r)=>r.end('ok'));s.listen(Number(process.env.PORT),'127.0.0.1',()=>console.log('http://localhost:'+s.address().port+'/'))"`;
+const probe = (expected: string) => `${previewShell().quote(process.execPath)} -e "if(process.env.NAVI_PREVIEW_MODE!=='${expected}')process.exit(21);const s=require('node:http').createServer((q,r)=>r.end('ok'));s.listen(Number(process.env.PORT),'127.0.0.1',()=>console.log('http://localhost:'+s.address().port+'/'))"`;
 const stamp = new Date().toISOString();
 await db.insert(projects).values({ id: "p", name: "Preview", repoPath: repo, createdAt: stamp });
 await db.insert(tasks).values({

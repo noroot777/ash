@@ -3,7 +3,7 @@ import { claimTranscript } from "./transcript-identity.js";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
+import type { AgentType, SessionRole, TaskStatus } from "@navi/shared";
 import { deliverLeadInterjection } from "./team/lead-interjection.js";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
@@ -117,7 +117,7 @@ export async function continueTask(
   const decline = (reason: TurnStartDecline): false => {
     if (!declined) {
       declined = true;
-      try { opts.onDecline?.(reason); } catch (error) { console.error(`[ash] 起跑未成的原因上报失败 task=${taskId}:`, error); }
+      try { opts.onDecline?.(reason); } catch (error) { console.error(`[navi] 起跑未成的原因上报失败 task=${taskId}:`, error); }
     }
     return false;
   };
@@ -688,7 +688,7 @@ export async function continueTask(
     releaseTurn(taskId, turn);
     // 同 task-run：全出口注销,不依赖走到收尾函数（第 6 轮审查必须修 1）。
     closeTaskTurns(taskId);
-    if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
+    if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[navi] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
   // 落到时间线/状态上)。返回 false 的只有「一个字没送出去」的几类:被单飞锁挡回,起跑前

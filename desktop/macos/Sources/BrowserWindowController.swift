@@ -42,7 +42,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // 出问题时 Safari「开发」菜单里能直接挂上检查器。
     webView.isInspectable = true
     // 页面画出第一帧之前 WKWebView 先铺一层白：从原生那几屏（首启、启动中）切到页面时整窗闪一下白。
-    // 不画自己的底，透出窗口底色（跟页面的 theme-color 走，载进来之前是同色的 AshPalette.chrome）。
+    // 不画自己的底，透出窗口底色（跟页面的 theme-color 走，载进来之前是同色的 NaviPalette.chrome）。
     // 没有公开接口；这个键在哪一版没了就照旧画白底，不至于崩。
     if webView.responds(to: NSSelectorFromString("_setDrawsBackground:")) {
       webView.setValue(false, forKey: "drawsBackground")
@@ -69,7 +69,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
     chrome?.onPageBroken = { [weak self] source in self?.pageDidBreak(source) }
     // 位置和大小记在 UserDefaults 里，下次原样打开。数据根还空着就先开成首启那扇小窗。
-    if AshConfig.isLocal && !AshConfig.isDataInitialized {
+    if NaviConfig.isLocal && !NaviConfig.isDataInitialized {
       enterWelcome()
     } else {
       window.setFrameAutosaveName(Self.frameName)
@@ -107,7 +107,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         self?.window?.title = title.isEmpty ? "Navi" : title
       },
       webView.observe(\.themeColor, options: [.initial, .new]) { [weak self] view, _ in
-        self?.window?.backgroundColor = view.themeColor ?? AshPalette.chrome
+        self?.window?.backgroundColor = view.themeColor ?? NaviPalette.chrome
       },
     ]
   }
@@ -177,14 +177,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   func windowDidFailToEnterFullScreen(_ window: NSWindow) { chrome?.setFullScreen(false) }
   func windowDidExitFullScreen(_ notification: Notification) { chrome?.setFullScreen(false) }
 
-  /// 把页面载进来。连别处的 ash 时直接载；本机地址先认一次人、把那一份的实例号交给页面再载。
+  /// 把页面载进来。连别处的 navi 时直接载；本机地址先认一次人、把那一份的实例号交给页面再载。
   func loadPage() {
     stopHealthPolling()
-    guard AshConfig.isLocal else { return showPage() }
-    AshHealth.probe(AshConfig.windowHealthURL) { probe in
+    guard NaviConfig.isLocal else { return showPage() }
+    NaviHealth.probe(NaviConfig.windowHealthURL) { probe in
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
-        guard let instance = AshHealth.ours(probe) else { return self.instanceLost() }
+        guard let instance = NaviHealth.ours(probe) else { return self.instanceLost() }
         self.bind(instance) { self.showPage() }
       }
     }
@@ -192,9 +192,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
   private func showPage() {
     beginHandoff()
-    // 失败页、撤下后的空白页之后 webView.url 不是 ash 的，此时回到撤下前的路由或首页；正常情况下
+    // 失败页、撤下后的空白页之后 webView.url 不是 navi 的，此时回到撤下前的路由或首页；正常情况下
     // 原地重载保住当前路由。
-    let target = [webView.url, resumeURL].compactMap { $0 }.first(where: AshConfig.isSameOrigin) ?? AshConfig.windowURL
+    let target = [webView.url, resumeURL].compactMap { $0 }.first(where: NaviConfig.isSameOrigin) ?? NaviConfig.windowURL
     resumeURL = nil
     webView.load(URLRequest(url: target))
     startInstanceGuard()
@@ -265,12 +265,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   /// 页面之后发的每个请求（fetch、SSE、页面本身、预览）都带着认过的那一份的实例号。窗口连的是这份
-  /// 服务专用的端口（AshConfig.windowPort），服务一停那个端口就空着，别的 ash 接不到窗口的请求；
-  /// 自己那份重起过、或者有谁照着同一个端口起了一份新版 ash，实例号对不上就不执行
+  /// 服务专用的端口（NaviConfig.windowPort），服务一停那个端口就空着，别的 navi 接不到窗口的请求；
+  /// 自己那份重起过、或者有谁照着同一个端口起了一份新版 navi，实例号对不上就不执行
   /// （server/src/instance-binding.ts）。定时认人和导航前认人只负责撤页和说明。
-  func bind(_ instance: AshInstance, then: @escaping () -> Void) {
+  func bind(_ instance: NaviInstance, then: @escaping () -> Void) {
     guard let id = instance.id, id != boundInstance else { return then() }
-    guard let host = AshConfig.windowURL.host,
+    guard let host = NaviConfig.windowURL.host,
           let cookie = HTTPCookie(properties: [.name: Self.instanceCookie, .value: id, .domain: host, .path: "/"]) else {
       return then()
     }
@@ -288,7 +288,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   /// （WebViewBridge），已经载好的页面自己发的请求、SSE 不经过导航 —— 它们落到新来的那一份上会被
   /// 实例号挡下（见 `bind`），但页面会一直报错。所以页面在的时候还要定时认：不是自己那份了就撤掉页面、说清楚。
   private func startInstanceGuard() {
-    guard AshConfig.isLocal, guardTimer == nil else { return }
+    guard NaviConfig.isLocal, guardTimer == nil else { return }
     guardTimer = Timer.scheduledTimer(withTimeInterval: Self.instanceGuardInterval, repeats: true) { [weak self] _ in
       self?.checkInstance()
     }
@@ -302,12 +302,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private func checkInstance() {
     guard !guardProbing, guardTimer != nil else { return }
     guardProbing = true
-    AshHealth.probe(AshConfig.windowHealthURL) { probe in
+    NaviHealth.probe(NaviConfig.windowHealthURL) { probe in
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
         self.guardProbing = false
         guard self.guardTimer != nil else { return }
-        guard let instance = AshHealth.ours(probe) else { return self.instanceLost() }
+        guard let instance = NaviHealth.ours(probe) else { return self.instanceLost() }
         // 还是自己那份，但服务重起过（实例号换了）：页面手上的旧实例号会被拒，换上新的重载一遍。
         if instance.id != self.boundInstance { self.bind(instance) { self.webView.reload() } }
       }
@@ -320,7 +320,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     stopInstanceGuard()
     // 下面换上的空白文档也会「提交、载完」，别把它当成页面接上了。
     handoff = nil
-    if let url = webView.url, AshConfig.isSameOrigin(url) { resumeURL = url }
+    if let url = webView.url, NaviConfig.isSameOrigin(url) { resumeURL = url }
     webView.stopLoading()
     webView.loadHTMLString("", baseURL: nil)
     loadHome()
@@ -342,11 +342,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   func startHealthPolling(takeOverWhenFree: Bool = false) {
     guard healthTimer == nil else { return }
     healthTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-      AshHealth.probe { probe in
+      NaviHealth.probe { probe in
         var down = false
         if case .down = probe { down = true }
         if case .unreachable = probe { down = true }
-        guard AshHealth.isServing(probe) || (takeOverWhenFree && down) else { return }
+        guard NaviHealth.isServing(probe) || (takeOverWhenFree && down) else { return }
         DispatchQueue.main.async { self?.loadHome() }
       }
     }
@@ -364,7 +364,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   @objc func openInBrowser(_ sender: Any?) {
-    NSWorkspace.shared.open(webView.url.map(AshConfig.browserURL) ?? AshConfig.baseURL)
+    NSWorkspace.shared.open(webView.url.map(NaviConfig.browserURL) ?? NaviConfig.baseURL)
   }
 
   @objc func goBack(_ sender: Any?) { webView.goBack() }

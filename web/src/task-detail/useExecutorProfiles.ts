@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile } from "@ash/shared";
+import type { AgentExecutorProfile } from "@navi/shared";
 import { api } from "../lib/api.ts";
 
 /**

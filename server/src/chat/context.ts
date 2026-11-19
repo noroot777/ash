@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { ChatMember } from "@ash/shared/chat";
+import type { ChatMember } from "@navi/shared/chat";
 import { db } from "../db/index.js";
 import { chatRooms, chatSummaries } from "../db/schema.js";
 import { now } from "../util.js";

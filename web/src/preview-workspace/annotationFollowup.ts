@@ -1,4 +1,4 @@
-import type { AnnotationBatch, AnnotationDraft } from "@ash/shared/page-annotation-batch";
+import type { AnnotationBatch, AnnotationDraft } from "@navi/shared/page-annotation-batch";
 
 export function annotationFollowup(batch: AnnotationBatch, item: AnnotationDraft, comment: string, id: string): AnnotationBatch {
   return { ...batch, id, createdAt: Date.now(), items: [{ ...item,

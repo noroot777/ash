@@ -19,9 +19,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 
-const root = mkdtempSync(join(tmpdir(), "ash-adopt-replay-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-adopt-replay-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const { readCodexAppServerState } = await import("../src/executors/codex-app-server-state.js");
 const { openCodexAppServer } = await import("../src/executors/codex-app-server.js");

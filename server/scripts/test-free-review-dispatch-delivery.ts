@@ -13,7 +13,7 @@
 // 所以这里从 ㉘ 起。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
-// (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。
+// (`NAVI_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。
 //
 // 跑：npm -w server run test:free-review-dispatch-delivery
 import assert from "node:assert/strict";

@@ -9,8 +9,8 @@
 // 保存是自动的（改完即生效，跟 ③④ 一起构成「你改的就是它本身」这套语义），但只在
 // 这条线过得了闸的时候写；过不了就顶着红条等你改好，不会把一条存不进去的线写下去。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
-import { WORKSPACE_LABELS, checkWorkflow, makeStep, workflowDenied } from "@ash/shared/workflow";
+import type { WorkflowDef, WorkflowItem } from "@navi/shared/workflow";
+import { WORKSPACE_LABELS, checkWorkflow, makeStep, workflowDenied } from "@navi/shared/workflow";
 import { ArrowCounterClockwise, Copy, Plus, Prohibit, TrashSimple } from "@phosphor-icons/react";
 import { Toggle } from "../components/ui.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";

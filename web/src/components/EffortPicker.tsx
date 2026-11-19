@@ -1,12 +1,12 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import {
   isReasoningEffortSupported,
   REASONING_EFFORT_DETAIL,
   reasoningEffortsFor,
   resolveReasoningEfforts,
-} from "@ash/shared/cli-presets";
+} from "@navi/shared/cli-presets";
 import { CaretDown, Warning } from "@phosphor-icons/react";
 import { useCliModelCatalog } from "../lib/cliModelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";

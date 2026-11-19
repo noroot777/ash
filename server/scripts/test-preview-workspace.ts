@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import type { WorkspacePreviewLaunch } from "@ash/shared/preview";
+import type { WorkspacePreviewLaunch } from "@navi/shared/preview";
 
-const root = mkdtempSync(join(realpathSync(tmpdir()), "ash-workspace-preview-"));
-process.env.ASH_DB = join(root, "test.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_DEPS_DIR = join(root, "deps");
+const root = mkdtempSync(join(realpathSync(tmpdir()), "navi-workspace-preview-"));
+process.env.NAVI_DB = join(root, "test.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, tasks, scheduledMessages } = await import("../src/db/schema.js");
 const { mountFreePreviewRoutes } = await import("../src/free-workflow-preview.js");
@@ -80,7 +80,7 @@ try {
     assert.equal(page.status, 200, `iframe page at ${gateway.headers.get("location")}`);
     const html = await page.text();
     assert(html.includes(`TASK ${id}`), "preview must use task files, not the project root");
-    assert(html.includes("ash-preview-annotation"), "iframe document must contain the existing annotation runtime");
+    assert(html.includes("navi-preview-annotation"), "iframe document must contain the existing annotation runtime");
     assert.equal(readPreview(id)?.life, id === "preset" ? "gate" : "task");
     const generation = previewState(id).gen;
     await launch(id);

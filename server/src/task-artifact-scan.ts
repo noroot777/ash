@@ -21,7 +21,7 @@ const SKIP_DIRS = new Set([
   ".gradle", ".m2", "Pods", "DerivedData", ".stack-work", "elm-stuff", ".bundle",
   ".terraform", ".idea", ".vscode", ".expo", ".dart_tool",
   "coverage", ".nyc_output",
-  // 别的任务的隔离工作区：ash 自己建的在 `.worktrees/<任务>`，EnterWorktree 建的在
+  // 别的任务的隔离工作区：navi 自己建的在 `.worktrees/<任务>`，EnterWorktree 建的在
   // `.claude/worktrees/`——`.claude` 整个跳过（里面是 agent 的配置、技能和临时工作区，
   // 没有一样是「这一趟做出来给人看的东西」）。
   ".worktrees", ".claude",

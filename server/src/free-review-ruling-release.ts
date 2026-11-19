@@ -101,7 +101,7 @@ function retryAfterTurn(taskId: string): void {
   whenTurnIdle(taskId, () => {
     retryPending.delete(taskId);
     void releaseReservationAfterRuling(taskId, { retry: true })
-      .catch((error) => console.error(`[ash] 回合放锁后兑现预约审查失败 task=${taskId}:`, error));
+      .catch((error) => console.error(`[navi] 回合放锁后兑现预约审查失败 task=${taskId}:`, error));
   });
 }
 
@@ -128,7 +128,7 @@ export async function releaseHeldReservations(): Promise<void> {
       if (await openDisputeOf(taskId)) continue;
       await releaseReservationAfterRuling(taskId);
     } catch (error) {
-      console.error(`[ash] 启动补发裁定后的预约审查失败 task=${taskId}:`, error);
+      console.error(`[navi] 启动补发裁定后的预约审查失败 task=${taskId}:`, error);
     }
   }
 }

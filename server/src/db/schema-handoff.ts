@@ -54,8 +54,8 @@ export const handoffPeers = sqliteTable("handoff_peers", {
 // 实例以后转多人时,它会当场变成所有人都读得到的公共设置。凭证的待遇统一照
 // project_git_credentials:单独存,读侧只报 hasKey。
 //
-// 为什么自用实例也需要它:要不要 key 由**对端**的模式决定,不是本机。一台自用 ash 往
-// 多人 ash 上接力同样要带「你在对端的账号 key」——2026-08-29 之前自用模式压根没有存
+// 为什么自用实例也需要它:要不要 key 由**对端**的模式决定,不是本机。一台自用 navi 往
+// 多人 navi 上接力同样要带「你在对端的账号 key」——2026-08-29 之前自用模式压根没有存
 // 它的地方,预检失败的提示却让人去设置页补,那里根本没有输入框。
 export const handoffLocalPeerKeys = sqliteTable("handoff_local_peer_keys", {
   // 归一后的目标机地址(去尾斜杠、小写),与 app_settings.handoffTargets 里的行按它对齐。

@@ -6,11 +6,11 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-steer-hardening-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-steer-hardening-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 带附件的引导要走真实的归属回填：uploadNameOf 只认真的落在 uploads 目录直下的路径。
-process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 const attachmentFile = "hardening-shot.png";
 const attachmentPath = join(root, "uploads", attachmentFile);
 mkdirSync(join(root, "uploads"), { recursive: true });
@@ -367,7 +367,7 @@ try {
   runs.releaseTurn("claude-native-fallback");
   console.log("✓ Claude ACK 失败明确降级重投，并留下持久时间线说明");
 
-  // 附件不是降级理由：它在 ash 里本来就是一段路径文本，steer 送的是同一条通道。
+  // 附件不是降级理由：它在 navi 里本来就是一段路径文本，steer 送的是同一条通道。
   assert.equal(runs.claimTurn("native-attachment", "single"), true);
   let attachmentKills = 0;
   let steeredPrompt = "";
@@ -506,14 +506,14 @@ try {
   mountTaskStageRoutes(api);
   const complete = (token?: string, direction?: string) => api.request("/tasks/token/complete", {
     method: "POST",
-    headers: { ...(token ? { "x-ash-turn-token": token } : {}),
-      ...(direction ? { "x-ash-direction-token": direction } : {}) },
+    headers: { ...(token ? { "x-navi-turn-token": token } : {}),
+      ...(direction ? { "x-navi-direction-token": direction } : {}) },
   });
   const missingComplete = await complete();
   assert.equal(missingComplete.status, 409);
   assert.match(
     ((await missingComplete.json()) as { error: string }).error,
-    /MCP.*回合身份|ASH_TURN_TOKEN/,
+    /MCP.*回合身份|NAVI_TURN_TOKEN/,
     "没收到 token 时应提示执行器/MCP 传递问题，而不是误报旧回合",
   );
   const stale = await complete("old-token");
@@ -534,8 +534,8 @@ try {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(token ? { "x-ash-turn-token": token } : {}),
-      ...(direction ? { "x-ash-direction-token": direction } : {}),
+      ...(token ? { "x-navi-turn-token": token } : {}),
+      ...(direction ? { "x-navi-direction-token": direction } : {}),
     },
     body: JSON.stringify(body),
   });
@@ -586,8 +586,8 @@ try {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(token ? { "x-ash-turn-token": token } : {}),
-      ...(direction ? { "x-ash-direction-token": direction } : {}),
+      ...(token ? { "x-navi-turn-token": token } : {}),
+      ...(direction ? { "x-navi-direction-token": direction } : {}),
     },
     body: JSON.stringify({ stage: "implemented" }),
   });
@@ -618,27 +618,27 @@ try {
     "没有身份的外部调用不能误报成旧回合",
   );
   assert.equal((await patchTask("token", "stale-old-token", {
-    "x-ash-source-task-id": "token",
-    "x-ash-turn-token": "old-token",
+    "x-navi-source-task-id": "token",
+    "x-navi-turn-token": "old-token",
   })).status, 409, "旧回合 PATCH 必须拒绝");
   assert.equal((await patchTask("token", "current-turn", {
-    "x-ash-source-task-id": "token",
-    "x-ash-turn-token": "new-token",
+    "x-navi-source-task-id": "token",
+    "x-navi-turn-token": "new-token",
   })).status, 200, "当前回合 PATCH 应继续可用");
   assert.equal((await patchTask("token", "human-edit", {
-    "x-ash-user-action": "1",
+    "x-navi-user-action": "1",
   })).status, 200, "真人界面修改运行中任务必须保持兼容");
   assert.equal((await patchTask("patch-target", "cross-task", {
-    "x-ash-source-task-id": "patch-source",
-    "x-ash-turn-token": "source-token",
+    "x-navi-source-task-id": "patch-source",
+    "x-navi-turn-token": "source-token",
   })).status, 200, "当前回合应能跨任务 PATCH");
   await db.update(tasks).set({ activeTurnToken: "source-next-token" }).where(eq(tasks.id, "patch-source"));
   assert.equal((await patchTask("patch-target", "stale-cross-task", {
-    "x-ash-source-task-id": "patch-source",
-    "x-ash-turn-token": "source-token",
+    "x-navi-source-task-id": "patch-source",
+    "x-navi-turn-token": "source-token",
   })).status, 409, "跨任务 PATCH 也必须绑定发起者当前回合");
   assert.equal((await patchTask("patch-target", "team-cross-task", {
-    "x-ash-source-task-id": "team-patcher",
+    "x-navi-source-task-id": "team-patcher",
   })).status, 200, "团队常驻调度者跨任务 PATCH 必须保持兼容");
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "patch-target"))).at(0)!.title, "team-cross-task");
   console.log("✓ report_stage / patch_task 拒绝旧回合，并保留用户操作与团队跨任务修改");

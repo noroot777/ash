@@ -581,7 +581,7 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   await db.update(tasks).set({ queueAdvanceRequest: oRequest }).where(eq(tasks.id, oB));
   // 另一条真实 SQLite 连接持写锁,耗尽服务端 5s busy timeout(与审查同手法,不 stub)。
   const { DatabaseSync } = await import("node:sqlite");
-  const ext = new DatabaseSync(process.env.ASH_DB!);
+  const ext = new DatabaseSync(process.env.NAVI_DB!);
   ext.exec("BEGIN IMMEDIATE");
   const advanceDone = scheduler.advanceQueue("scheduled-gate-queue-12", { ...oRequest, taskId: oB });
   await advanceDone; // setQueued 超时失败,但函数自己收口,不外抛

@@ -1,7 +1,7 @@
 // 退了的会话不许再拿它当年的 pty 设备号去点人。
 //
 // pty 的设备号（/dev/ttysNNN、/dev/pts/N）只在会话的 leader 活着时指着这条会话：leader 一退内核就收回
-// 那个号，下一个开 pty 的 —— 另一条会话、另一份 ash、用户自己的终端 app —— 马上领到同一个号。退了以后
+// 那个号，下一个开 pty 的 —— 另一条会话、另一份 navi、用户自己的终端 app —— 马上领到同一个号。退了以后
 // 还按那个号枚举「会话成员」，点到的是别人，连同它整个进程组一起被 TERM+KILL。
 //
 // 这里不去赌「真的凑出一次复用」：直接造一条「已退、手里还留着某个设备号」的记录，而那个号此刻属于另一条
@@ -20,7 +20,7 @@ if (IS_WINDOWS) {
   process.exit(0);
 }
 
-const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ash-stale-tty-")));
+const cwd = realpathSync(mkdtempSync(join(tmpdir(), "navi-stale-tty-")));
 const manager = new TerminalSessionManager();
 const PROJECT = "project-stale-tty";
 

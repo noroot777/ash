@@ -2,25 +2,25 @@
 //
 // 跟 `register.ts`(怎么把缺的那条补进去)分开住的理由:这一半有几个独立的消费者 ——
 // 设置页、启动自检、以及补接流程本身,而它们一律只许走这里
-// 的 `readingFor` + `resolveAshMcp`(本轮审查 F2:启停策略原先只进了其中一处,同一份配置
+// 的 `readingFor` + `resolveNaviMcp`(本轮审查 F2:启停策略原先只进了其中一处,同一份配置
 // 在设置页上是「已接好」、在真 CLI 那边是 `Blocked`)。两个文件都已经接近单文件行数上限,
 // 本轮按这条缝拆开。
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileState } from "../auth/config-publish.js";
-import { ashMcpConfigDir, ashMcpMechanism } from "./catalog.js";
-import { ASH_MCP_NAMES, foldScan } from "./shapes.js";
+import { naviMcpConfigDir, naviMcpMechanism } from "./catalog.js";
+import { NAVI_MCP_NAMES, foldScan } from "./shapes.js";
 import type {
-  AshMcpConfigSite, AshMcpConfigState, AshMcpMechanism, AshMcpNameFact, AshMcpNameScan, AshMcpReading,
+  NaviMcpConfigSite, NaviMcpConfigState, NaviMcpMechanism, NaviMcpNameFact, NaviMcpNameScan, NaviMcpReading,
 } from "./types.js";
 
 /**
- * 「这家 CLI 的配置怎么读」—— **三个表面只许从这里取**(语义与病史见 `AshMcpReading`)。
- * 安装写入资格(`registerAshMcp`)、设置页与诊断文案全走它,
+ * 「这家 CLI 的配置怎么读」—— **三个表面只许从这里取**(语义与病史见 `NaviMcpReading`)。
+ * 安装写入资格(`registerNaviMcp`)、设置页与诊断文案全走它,
  * 所以逐家启停策略不可能只进其中一处。
  */
-export function readingFor(mechanism: Extract<AshMcpMechanism, { kind: "file" }>): AshMcpReading {
+export function readingFor(mechanism: Extract<NaviMcpMechanism, { kind: "file" }>): NaviMcpReading {
   return {
     shape: mechanism.shape,
     merges: mechanism.site.sourcesMerge === true,
@@ -34,7 +34,7 @@ export function readingFor(mechanism: Extract<AshMcpMechanism, { kind: "file" }>
  * `alternates` 存在哪个就用哪个:用户已经有 `opencode.jsonc` 时再新建一份 `opencode.json`,
  * 两份都会被 CLI 认,到底哪份生效说不清(opencode / kilo 都认好几个文件名)。
  */
-export function ashMcpConfigFile(dir: string, site: AshMcpConfigSite): string {
+export function naviMcpConfigFile(dir: string, site: NaviMcpConfigSite): string {
   // 实测过同目录加载序的家(`load`):落点取**存在的那几份里优先级最高的那个** —— 往更低
   // 那份写,写完会被上面那份盖掉(真 opencode:`.jsonc` 压 `.json` 压 `config.json`)。
   if (site.load) {
@@ -54,17 +54,17 @@ export function ashMcpConfigFile(dir: string, site: AshMcpConfigSite): string {
  * `dirEnv` 指到文件的那几家(opencode 的 `OPENCODE_CONFIG`、kilo 的 `KILO_CONFIG`)必须原样
  * 用那个路径。本轮审查 R4:上一版只有这里认得它,另外几处消费者(当时的预检判定、
  * 启动自检的 `hostCliConfigFile`、自查文案的 `howToCheck`)各自先把文件名丢掉、再按默认名
- * 拼回来 —— 于是用自定义文件名的用户那边,真 CLI 连得上 ash、派审却报「没接好」,给出的
+ * 拼回来 —— 于是用自定义文件名的用户那边,真 CLI 连得上 navi、派审却报「没接好」,给出的
  * 路径还是另一份文件。声明了 `dirEnvIsFile` 之后不许任何消费者再自己恢复默认文件名。
  */
-export function ashMcpHostFile(
+export function naviMcpHostFile(
   agentType: string,
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
 ): string | null {
-  // 落点 = **优先级最高的那份可写来源**(见 `ashMcpHostSources`)。往更低优先级那份写,
+  // 落点 = **优先级最高的那份可写来源**(见 `naviMcpHostSources`)。往更低优先级那份写,
   // 写完也可能被上面那份盖掉;只读来源(变量里那整段 JSON)当然不能当落点。
-  const writable = ashMcpHostSources(agentType, env, home).filter((s) => s.file);
+  const writable = naviMcpHostSources(agentType, env, home).filter((s) => s.file);
   return writable.at(-1)?.file ?? null;
 }
 
@@ -75,7 +75,7 @@ export function ashMcpHostFile(
  * 实测过加载序的那几家(站点上的 `sourcesMerge`)连同一个目录里的几个文件名都各占一级,
  * 所以它们永远不会出现相等的 level —— 判定走的是「几份合起来」,不是「挑一份赢家」。
  */
-export interface AshMcpSource {
+export interface NaviMcpSource {
   /** 给人看的名字:文件路径,或 `$OPENCODE_CONFIG_CONTENT` 这样的变量名。 */
   readonly label: string;
   /** 可写落点;null = 只读来源(整段配置装在变量里,没有文件可写)。 */
@@ -94,17 +94,17 @@ export interface AshMcpSource {
 /**
  * 这一层(某个配置目录)里**实际存在**的那几份,升序;一份都不存在时给出该写哪一份。
  *
- * 「该写哪一份」只有 `ashMcpConfigFile` 一份判据,所以 `alternates` 那一档把它挑中的那个
- * **排在最后** —— 上游 `ashMcpHostFile` 取的是最后一个,两边因此必然一致。按 existsSync 的
- * 自然顺序排会分叉:kilo 同时有 `config.json` 和 `opencode.jsonc` 时,`ashMcpConfigFile`
+ * 「该写哪一份」只有 `naviMcpConfigFile` 一份判据,所以 `alternates` 那一档把它挑中的那个
+ * **排在最后** —— 上游 `naviMcpHostFile` 取的是最后一个,两边因此必然一致。按 existsSync 的
+ * 自然顺序排会分叉:kilo 同时有 `config.json` 和 `opencode.jsonc` 时,`naviMcpConfigFile`
  * 取前者(alternates 的顺序就是我们猜的优先级),自然顺序的最后一个却是后者。
  *
  * `create = false` 给**额外目录**那一层(`extraDirs`):只枚举真实存在的,一份都没有就空着 ——
- * 那一层不是新建落点(ash 不替用户造第二个全局配置目录)。
+ * 那一层不是新建落点(navi 不替用户造第二个全局配置目录)。
  */
-function filesInDir(dir: string, site: AshMcpConfigSite, create = true): string[] {
+function filesInDir(dir: string, site: NaviMcpConfigSite, create = true): string[] {
   // `load` 的顺序就是实测的加载序(升序),落点是其中存在的最高那份 —— 两边同一份判据,
-  // 所以 `ashMcpHostFile` 取最后一个必然跟 `ashMcpConfigFile` 一致,不必再把它挪到末尾。
+  // 所以 `naviMcpHostFile` 取最后一个必然跟 `naviMcpConfigFile` 一致,不必再把它挪到末尾。
   if (site.load) {
     const found = site.load.map((parts) => join(dir, ...parts)).filter((f) => existsSync(f));
     if (found.length) return found;
@@ -112,7 +112,7 @@ function filesInDir(dir: string, site: AshMcpConfigSite, create = true): string[
   }
   const names = [site.relative, ...(site.alternates ?? [])];
   const found = names.map((parts) => join(dir, ...parts)).filter((f) => existsSync(f));
-  const pick = ashMcpConfigFile(dir, site);
+  const pick = naviMcpConfigFile(dir, site);
   if (found.length) return [...found.filter((f) => f !== pick), pick];
   return create ? [pick] : [];
 }
@@ -121,34 +121,34 @@ function filesInDir(dir: string, site: AshMcpConfigSite, create = true): string[
  * 这家 CLI 在宿主机上**会读的全部配置**,按优先级**从低到高**。
  *
  * 为什么不是一个文件,以及这个顺序凭什么(真 opencode 1.19.3 逐格实测,五轮):
- *  · `OPENCODE_CONFIG` 是「再加一份」不是「取代」—— 全局那份里的 ash 照样生效;
+ *  · `OPENCODE_CONFIG` 是「再加一份」不是「取代」—— 全局那份里的 navi 照样生效;
  *  · 默认目录里 `config.json` / `opencode.json` / `opencode.jsonc` **三份都读**,升序就是
- *    这个(上一版「找到第一个就只认它」,于是 ash 写在 `.json`、目录里又有一份 `.jsonc` 时
+ *    这个(上一版「找到第一个就只认它」,于是 navi 写在 `.json`、目录里又有一份 `.jsonc` 时
  *    判成 absent,安装器还往 `.jsonc` 里再补一条 —— 上一轮审查 F4 的第二格;`config.json`
- *    整个名字到本轮审查 F1 才补上,在那之前「只有 config.json 里有 ash」被判成 absent、
+ *    整个名字到本轮审查 F1 才补上,在那之前「只有 config.json 里有 navi」被判成 absent、
  *    派审硬拒,安装器还往更高优先级那份写一条、把真 CLI 的生效 `NAVI_URL` 换掉了);
  *  · `~/.opencode/` 是**另一层全局配置**(`opencode.json` < `opencode.jsonc`),它压过默认
  *    目录、压过上面那个文件变量、也压过任务目录里的项目配置(本轮审查 F1 实测);
  *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**,优先级高于默认目录,**也高于上面那个文件**
  *    (本轮审查 F1 实测:文件里 `enabled: false`、这个目录里只写 `{"enabled": true}` ⇒
- *    真 CLI `ash connected`。上一版把文件排在它上面,于是这条连得上的登记被判成 disabled);
+ *    真 CLI `navi connected`。上一版把文件排在它上面,于是这条连得上的登记被判成 disabled);
  *  · `OPENCODE_CONFIG_CONTENT` 里那整段 JSON 优先级最高、而且**没有文件可写** —— 只有它
- *    有 ash 时,真 CLI 连得上,上一版却判 absent 还去改全局文件(F4 的第三格)。
+ *    有 navi 时,真 CLI 连得上,上一版却判 absent 还去改全局文件(F4 的第三格)。
  *
- * 判「到底有没有」一律走 `resolveAshMcp`:这几份**合起来**CLI 最终看到的是哪一条。
+ * 判「到底有没有」一律走 `resolveNaviMcp`:这几份**合起来**CLI 最终看到的是哪一条。
  */
-export function ashMcpHostSources(
+export function naviMcpHostSources(
   agentType: string,
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
   cwd?: string,
-): AshMcpSource[] {
-  const mechanism = ashMcpMechanism(agentType);
+): NaviMcpSource[] {
+  const mechanism = naviMcpMechanism(agentType);
   if (mechanism?.kind !== "file") return [];
   const { site } = mechanism;
-  const out: AshMcpSource[] = [];
+  const out: NaviMcpSource[] = [];
   // 实测过加载序的那几家(`sourcesMerge`),同一个目录里的几份也各占一级;没实测的那几家
-  // 整层共用一级 —— 「相等 = 谁覆盖谁没实测」,见 `AshMcpSource.level`。
+  // 整层共用一级 —— 「相等 = 谁覆盖谁没实测」,见 `NaviMcpSource.level`。
   const ordered = site.sourcesMerge === true;
   let next = 0;
   const addDir = (dir: string, create = true): void => {
@@ -158,7 +158,7 @@ export function ashMcpHostSources(
   };
   // ① 配置目录那一层。`dirEnv` 指到**目录**时它整体取代默认目录(变量原样继承给子进程,
   //    CLI 认的就是它);指到**文件**时这一层仍是默认目录 —— 那种情况下不能走
-  //    `ashMcpConfigDir`,它返回的是那个文件所在的目录,拿它拼只会又得到同一份,
+  //    `naviMcpConfigDir`,它返回的是那个文件所在的目录,拿它拼只会又得到同一份,
   //    真正该一起看的全局那份照样看不见。
   const dirOverride = site.dirEnv && !site.dirEnvIsFile ? env[site.dirEnv]?.trim() : "";
   addDir(dirOverride || site.defaultDir(env, home));
@@ -166,7 +166,7 @@ export function ashMcpHostSources(
   //    后的路径去重、只保留第一次出现,于是 `OPENCODE_CONFIG` 指回默认目录里那份时,它那
   //    一次(优先级最高的)加载被整个删掉 —— 2026-10-31 实测:默认目录 `.json` 完整开着、
   //    同目录 `.jsonc` 只写 `{"enabled": false}`、`OPENCODE_CONFIG` 指回那份 `.json`,真
-  //    CLI 最终是 `enabled: true`(`ash connected`),而去重之后 ash 判成 disabled、预检硬拒,
+  //    CLI 最终是 `enabled: true`(`navi connected`),而去重之后 navi 判成 disabled、预检硬拒,
   //    落点还指向 `.jsonc`。文件身份相同不等于加载阶段相同,合并本身对同一份内容是幂等的。
   const file = site.dirEnvIsFile && site.dirEnv ? env[site.dirEnv]?.trim() : "";
   if (file) {
@@ -174,7 +174,7 @@ export function ashMcpHostSources(
     // 在任务目录里跑读得出、在别处跑读不到)。给了 cwd 就解准;没给就**证不出来** ——
     // 那时既不能当「不存在」(absent 在派审里是硬拒),也不能当写入落点,如实答看不准。
     // 上一版把这个相对路径原样当文件路径,于是按 server 自己的目录去找、找不到就判 absent:
-    // 真 CLI 那边 `ash connected`,预检当场拒了一整轮审查(本轮审查 F1)。
+    // 真 CLI 那边 `navi connected`,预检当场拒了一整轮审查(本轮审查 F1)。
     const abs = isAbsolute(file) ? file : cwd ? resolve(cwd, file) : null;
     if (abs) out.push({ label: abs, file: abs, level: next++ });
     else {
@@ -188,8 +188,8 @@ export function ashMcpHostSources(
     }
   }
   // ③ 同样按固定路径算得出、这家也读的其它目录(opencode 的 `~/.opencode/`):**比上面那个
-  //    文件高、比下面那个目录低**(实测,见 `AshMcpConfigSite.extraDirs`)。只枚举真实存在
-  //    的那几份 —— 不拿它当新建落点,ash 不给用户造第二个全局配置目录。
+  //    文件高、比下面那个目录低**(实测,见 `NaviMcpConfigSite.extraDirs`)。只枚举真实存在
+  //    的那几份 —— 不拿它当新建落点,navi 不给用户造第二个全局配置目录。
   for (const extra of site.extraDirs ?? []) addDir(extra(env, home), false);
   // ④ 指到另一个配置目录的变量:再加一层,**比上面那些都高**(本轮实测)。
   const altDir = site.altDirEnv ? env[site.altDirEnv]?.trim() : "";
@@ -201,12 +201,12 @@ export function ashMcpHostSources(
 }
 
 /**
- * 一份来源扫出来的**逐名事实**(折叠和跨来源解析都建在它上面,见 `resolveAshMcp`)。
+ * 一份来源扫出来的**逐名事实**(折叠和跨来源解析都建在它上面,见 `resolveNaviMcp`)。
  *
  * 文件那一路先分清「没有这个文件」和「有但读不动」:下面的读取路径会把异常吞成「空」,
  * 于是一次 EACCES / EIO 会被说成「没有登记」—— 读不动不是没有。
  */
-export function sourceScan(source: AshMcpSource, reading: AshMcpReading): AshMcpNameScan {
+export function sourceScan(source: NaviMcpSource, reading: NaviMcpReading): NaviMcpNameScan {
   // 证不出来的那一档(相对路径没带 cwd):看不准,别当成「没有」。
   if (source.unprovable) return { doubt: source.unprovable, names: new Map() };
   if (!source.file) {
@@ -227,24 +227,24 @@ export function sourceScan(source: AshMcpSource, reading: AshMcpReading): AshMcp
 }
 
 /** 一份文件里的登记状态。 */
-export function fileConfigState(file: string, reading: AshMcpReading): AshMcpConfigState {
+export function fileConfigState(file: string, reading: NaviMcpReading): NaviMcpConfigState {
   return sourceConfigState({ label: file, file, level: 0 }, reading);
 }
 
 /** 一份来源里的登记状态(= 扫一遍再折一下,折叠判据只有 `foldScan` 一份)。 */
-export function sourceConfigState(source: AshMcpSource, reading: AshMcpReading): AshMcpConfigState {
+export function sourceConfigState(source: NaviMcpSource, reading: NaviMcpReading): NaviMcpConfigState {
   return foldScan(sourceScan(source, reading), source.label);
 }
 
 /** 最终生效的那条登记,外加**它来自哪一份来源 / 那条登记本身**(搬运和提示都消费这个)。 */
-export interface AshMcpEffective extends AshMcpConfigState {
+export interface NaviMcpEffective extends NaviMcpConfigState {
   /** present/disabled 时:说了算的那份来源。 */
-  readonly source?: AshMcpSource;
+  readonly source?: NaviMcpSource;
   /** present/disabled 时:那条登记在它那份里的事实(原值 / 原文 / 启动方式都在这)。 */
-  readonly fact?: AshMcpNameFact;
+  readonly fact?: NaviMcpNameFact;
 }
 
-type NamePick = { name: string; fact: AshMcpNameFact; source: AshMcpSource } | { why: string };
+type NamePick = { name: string; fact: NaviMcpNameFact; source: NaviMcpSource } | { why: string };
 
 /**
  * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记,以及它出自哪一份。
@@ -253,9 +253,9 @@ type NamePick = { name: string; fact: AshMcpNameFact; source: AshMcpSource } | {
  * 来源里各有一条时,CLI 用的是它们按加载序合起来那一条,所以**状态和启动方式都从合完那份
  * 原值上重算**(本轮审查 F1)。上一版是「声明了这个名字的来源里,优先级最高的那份说了算」,
  * 三种形状都错:
- *  · 低的那份写完整登记、高的那份只写 `{"enabled": true}` ⇒ 真 CLI `ash connected`,而取
+ *  · 低的那份写完整登记、高的那份只写 `{"enabled": true}` ⇒ 真 CLI `navi connected`,而取
  *    赢家那一份得到的是「只有一个 enabled 键」的登记,搬进隔离档后那边一个工具都没有;
- *  · 来源层级本身排反了(见 `ashMcpHostSources` 的 ③)⇒ 一条连得上的登记被判成 disabled,
+ *  · 来源层级本身排反了(见 `naviMcpHostSources` 的 ③)⇒ 一条连得上的登记被判成 disabled,
  *    预检当场硬拒,安装器还说是用户自己关的;
  *  · 同一层里两份都开着、命令不同时取的是数组里第一份,而真 CLI 用的是后面那份。
  *
@@ -275,10 +275,10 @@ type NamePick = { name: string; fact: AshMcpNameFact; source: AshMcpSource } | {
  *  · 合完那条自己就认不出来(写法超出格式族认得的范围);
  *  · 有一份**整份读不准**、而且优先级不低于那条生效的登记 —— 它可能正把那条关掉。
  */
-export function resolveAshMcp(
-  sources: readonly AshMcpSource[],
-  reading: AshMcpReading,
-): AshMcpEffective {
+export function resolveNaviMcp(
+  sources: readonly NaviMcpSource[],
+  reading: NaviMcpReading,
+): NaviMcpEffective {
   const { merges } = reading;
   if (!sources.length) return unknownState("算不出这家 CLI 会读哪几份配置");
   const read = sources.map((source) => ({ source, scan: sourceScan(source, reading) }));
@@ -291,8 +291,8 @@ export function resolveAshMcp(
         || (f.state === "present" ? `${read[i]!.source.label} 里已经有 Navi 登记` : f.state)).join("；"));
   }
   const picks: NamePick[] = [];
-  for (const name of ASH_MCP_NAMES) {
-    // `read` 是升序的(见 `ashMcpHostSources`),所以这几份本身就是加载序。
+  for (const name of NAVI_MCP_NAMES) {
+    // `read` 是升序的(见 `naviMcpHostSources`),所以这几份本身就是加载序。
     const declared = read.filter((r) => r.scan.names.has(name));
     if (!declared.length) continue;
     if (merge) {
@@ -323,7 +323,7 @@ export function resolveAshMcp(
       continue;
     }
     // 同层、状态一致 ⇒ 取**写入落点那一份**(`filesInDir` 把它排在最后)。谁覆盖谁没实测,
-    // 但指向落点至少跟 `ashMcpHostFile` 是同一份,不会出现「说的是 a、写的是 b」。
+    // 但指向落点至少跟 `naviMcpHostFile` 是同一份,不会出现「说的是 a、写的是 b」。
     picks.push(winners.at(-1)!);
   }
   const live = picks.find((p): p is Extract<NamePick, { name: string }> => "fact" in p && p.fact.status === "on");
@@ -333,12 +333,12 @@ export function resolveAshMcp(
    * 上一版只拦「优先级不低于生效那条」的,理由是「低的盖不住高的」。那条推理只覆盖了「某个
    * 字段会不会被覆盖」,漏掉了更粗的一档:2026-10-31 实测,真 opencode 读到**任何一份**读不
    * 通的配置就整份拒载(`debug config --pure` exit 1,报的是那份文件不是合法 JSON(C))——
-   * 不管它在最低那层、最高那层、还是同目录那份 `.jsonc`,也不管它里面有没有提到 ash。
+   * 不管它在最低那层、最高那层、还是同目录那份 `.jsonc`,也不管它里面有没有提到 navi。
    * 那种情况下压根没有「生效的登记」可言,而上一版答的是 present、安装器还说「已经有生效的
-   * ash 登记,不动它」:用户看到的是「已接好」,agent 起来一个工具都没有。
+   * navi 登记,不动它」:用户看到的是「已接好」,agent 起来一个工具都没有。
    *
    * 所以这里只要有一份读不准就答 unknown:不写(写进去也救不了那份坏文件)、不拦起跑、
-   * 如实说是哪一份。同一份文件会在两个加载阶段各出现一次(见 `ashMcpHostSources` 的 ②),
+   * 如实说是哪一份。同一份文件会在两个加载阶段各出现一次(见 `naviMcpHostSources` 的 ②),
    * 说给人听的时候按名字去重。
    */
   const blind = read.filter((r) => r.scan.doubt);
@@ -375,28 +375,28 @@ export function resolveAshMcp(
   return { ...folded.at(-1)!, source: read.at(-1)!.source };
 }
 
-/** `resolveAshMcp` 的四态投影(老调用方只要状态)。 */
+/** `resolveNaviMcp` 的四态投影(老调用方只要状态)。 */
 export function effectiveConfigState(
-  sources: readonly AshMcpSource[],
-  reading: AshMcpReading,
-): AshMcpConfigState {
-  return resolveAshMcp(sources, reading);
+  sources: readonly NaviMcpSource[],
+  reading: NaviMcpReading,
+): NaviMcpConfigState {
+  return resolveNaviMcp(sources, reading);
 }
 
-/** 某个配置目录(隔离档给个人目录,宿主档走 `ashMcpHostFile`)里的那份配置文件。 */
-export function siteFileFor(agentType: string, dir: string, site: AshMcpConfigSite, env: NodeJS.ProcessEnv): string {
+/** 某个配置目录(隔离档给个人目录,宿主档走 `naviMcpHostFile`)里的那份配置文件。 */
+export function siteFileFor(agentType: string, dir: string, site: NaviMcpConfigSite, env: NodeJS.ProcessEnv): string {
   // 指到文件的变量只在**宿主档**成立:隔离档是我们自己造的目录,调用方给的 dir 才是权威。
-  if (site.dirEnvIsFile && dir === ashMcpConfigDir(agentType, env, homedir())) {
-    return ashMcpHostFile(agentType, env) ?? ashMcpConfigFile(dir, site);
+  if (site.dirEnvIsFile && dir === naviMcpConfigDir(agentType, env, homedir())) {
+    return naviMcpHostFile(agentType, env) ?? naviMcpConfigFile(dir, site);
   }
-  return ashMcpConfigFile(dir, site);
+  return naviMcpConfigFile(dir, site);
 }
 
 /**
  * 同一个配置目录里这家 CLI 也会读、而这个格式族读不了的那种文件(trae 的原生 YAML)。
- * 返回第一个**真实存在**的;没有就 null。语义与两条后果见 `AshMcpConfigSite.opaque`。
+ * 返回第一个**真实存在**的;没有就 null。语义与两条后果见 `NaviMcpConfigSite.opaque`。
  */
-export function ashMcpOpaqueSibling(dir: string, site: AshMcpConfigSite): string | null {
+export function naviMcpOpaqueSibling(dir: string, site: NaviMcpConfigSite): string | null {
   for (const candidate of site.opaque ?? []) {
     const file = join(dir, ...candidate);
     if (existsSync(file)) return file;
@@ -404,25 +404,25 @@ export function ashMcpOpaqueSibling(dir: string, site: AshMcpConfigSite): string
   return null;
 }
 
-/** 这家 CLI 的 ash MCP 登记状态(四态,语义见 `types.ts` 的 `AshMcpConfigState`)。 */
-export function ashMcpStateIn(
+/** 这家 CLI 的 navi MCP 登记状态(四态,语义见 `types.ts` 的 `NaviMcpConfigState`)。 */
+export function naviMcpStateIn(
   dir: string,
   agentType: string,
   env: NodeJS.ProcessEnv = process.env,
-): AshMcpConfigState {
-  const mechanism = ashMcpMechanism(agentType);
+): NaviMcpConfigState {
+  const mechanism = naviMcpMechanism(agentType);
   if (!mechanism) return unknownState(`不认识的执行器 ${agentType}`);
   if (mechanism.kind === "none") return { state: "absent", serverName: null, detail: mechanism.why };
   if (mechanism.kind === "manual") {
     return unknownState(`${agentType} 的 MCP 配置 Navi 不自动读写：${mechanism.howTo}`);
   }
   const file = siteFileFor(agentType, dir, mechanism.site, env);
-  // 同目录有这家也读、而我们读不了格式的配置 ⇒ 不下结论(`AshMcpConfigSite.opaque`)。
-  const opaque = ashMcpOpaqueSibling(dir, mechanism.site);
+  // 同目录有这家也读、而我们读不了格式的配置 ⇒ 不下结论(`NaviMcpConfigSite.opaque`)。
+  const opaque = naviMcpOpaqueSibling(dir, mechanism.site);
   if (opaque) return unknownState(`${opaque} 这份配置 ${agentType} 也读，而 Navi 读不了它的格式`);
   // **先分清「没有这个文件」和「有但读不动」**:下面的读取路径会把异常吞成「空」,于是一次
   // EACCES / EIO 会被说成「没有登记」。只有确实没有文件才配得上 absent。
   return fileConfigState(file, readingFor(mechanism));
 }
 
-const unknownState = (detail: string): AshMcpConfigState => ({ state: "unknown", serverName: null, detail });
+const unknownState = (detail: string): NaviMcpConfigState => ({ state: "unknown", serverName: null, detail });

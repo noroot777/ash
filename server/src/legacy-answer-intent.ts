@@ -23,7 +23,7 @@
 // 两条都不成立就原样留着执行型:错放的代价是同队并跑、穿透分组暂停,错留的代价只是多等一会儿。
 import { readFile } from "node:fs/promises";
 import { and, desc, eq, isNotNull, lte } from "drizzle-orm";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { QuestionRecord } from "@navi/shared/questions";
 import { db } from "./db/index.js";
 import { scheduledMessages, sessionTurns, tasks } from "./db/schema.js";
 import { FOLLOW_UP_QUESTION_HEAD, PAUSED_QUESTION_HEAD } from "./question-settle-notes.js";
@@ -87,6 +87,6 @@ export async function restoreFollowUpAnswers(): Promise<number> {
     )).returning({ id: scheduledMessages.id });
     restored += updated.length;
   }
-  if (restored) console.log(`[ash] ${restored} 条终态任务上的提问答复还原成续聊`);
+  if (restored) console.log(`[navi] ${restored} 条终态任务上的提问答复还原成续聊`);
   return restored;
 }

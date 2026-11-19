@@ -1,12 +1,12 @@
 import type { CleanupResult } from "./kill.js";
 import type { ChildProcess } from "node:child_process";
-import type { AgentEvent, AgentType } from "@ash/shared";
-import type { CompactSnapshot } from "@ash/shared/usage";
-import type { ModelEffortMap } from "@ash/shared/cli-presets";
+import type { AgentEvent, AgentType } from "@navi/shared";
+import type { CompactSnapshot } from "@navi/shared/usage";
+import type { ModelEffortMap } from "@navi/shared/cli-presets";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { StallVerdict } from "../turn-stall-verdict.js";
 import type { DetachedPaths } from "./detached.js";
-import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
+import type { CliCommand, CliGoal, CliSessionState } from "@navi/shared/cli-commands";
 /**
  * 「这一轮的输入到底有没有进 agent 手里」的三档。语义、单调性与各档的调用方义务写在下面
  * `RunHandle.inputAccepted` 上(有界等待那一层在 ../turn-input-acceptance.ts)。
@@ -46,7 +46,7 @@ export interface RunOpts {
 // event stream. The orchestrator records sessionId/commandLine for traceability
 // before/while consuming the stream. `kill` terminates the
 // underlying subprocess (manual stop) — the stream then ends like a normal exit.
-/** 接管时上一个 ash 进程已经消费到哪:输出文件与字节水位(sessions.agent_out_path / agent_offset)。 */
+/** 接管时上一个 navi 进程已经消费到哪:输出文件与字节水位(sessions.agent_out_path / agent_offset)。 */
 export interface ConsumedOutput {
   outPath: string;
   offset: number;
@@ -208,7 +208,7 @@ export interface ExecutorBuildOpts {
   startupError?: string;
   relay?: RelayConfig;
   /**
-   * 盖过 CLI 自己配置文件的那几项(以 env 注入)。已按 @ash/shared/cli-overrides
+   * 盖过 CLI 自己配置文件的那几项(以 env 注入)。已按 @navi/shared/cli-overrides
    * 的声明归一过,执行器直接 `cliConfigOverrideEnv()` 落成环境变量即可。
    */
   configOverrides?: Record<string, number>;
@@ -229,7 +229,7 @@ export interface ExecutorBuildOpts {
  *      duet 复用 session 行时漏掉了其中两列。
  *   ② `--settings` 的内容**跟会话 cwd 有关**(项目那几层 settings 文件参与换算),所以
  *      cwd 是必填参数。先前它是构造器里算好的字段,executor 建出来时还不知道要在哪个
- *      目录跑,于是 ash 自己带着项目层的值跑、复制出来的命令却少了那一截,两边压缩
+ *      目录跑,于是 navi 自己带着项目层的值跑、复制出来的命令却少了那一截,两边压缩
  *      水位差着几千 token(第 3 轮审查 finding 2)。签名里要 cwd,这个错就编译不过。
  */
 export interface ResumeFields {

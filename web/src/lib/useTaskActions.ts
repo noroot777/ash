@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import type { ActionVerdict, ServerEvent, TaskActions } from "@ash/shared";
+import type { ActionVerdict, ServerEvent, TaskActions } from "@navi/shared";
 import { api, ApiError } from "./api.ts";
 import { type CatchUp, catchUpAbortKind, createCatchUp } from "./catchUp.ts";
 import { subscribeConnection, subscribeEvents } from "./events.ts";

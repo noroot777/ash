@@ -60,7 +60,7 @@ try {
 
   const inspector = page.locator(".inspector-host");
   const inspectorStyle = await inspector.getAttribute("style");
-  assert.ok((await agentRow("调研 ash").locator(".native-work__title").innerText()).length >= 50, "夹具覆盖超长标题");
+  assert.ok((await agentRow("调研 navi").locator(".native-work__title").innerText()).length >= 50, "夹具覆盖超长标题");
   for (const width of [280, 316, 340, 448, 720]) {
     await inspector.evaluate((el, width) => {
       el.style.setProperty("--inspector-width", `${width}px`);

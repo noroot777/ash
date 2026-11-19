@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import type { AgentExecutorProfile, ReviewerProfile } from "@ash/shared";
+import type { AgentExecutorProfile, ReviewerProfile } from "@navi/shared";
 import { ReviewerProfileSummary } from "../../src/free-workflow/ReviewerProfileFields.tsx";
 import "../../src/styles/global.css";
 

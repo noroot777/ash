@@ -1,4 +1,4 @@
-import type { AgentType, SessionRole } from "@ash/shared";
+import type { AgentType, SessionRole } from "@navi/shared";
 import type { Workspace } from "./git.js";
 import { WORKSPACE_BASE_FALLBACK_MARKER } from "./run-prompts.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";

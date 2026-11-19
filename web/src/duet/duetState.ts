@@ -1,6 +1,6 @@
-import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent, TurnImageRef } from "@ash/shared";
-import { isVisibleExecutionEvent } from "@ash/shared/native-work";
-import { resumesWaiting } from "@ash/shared/waiting";
+import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent, TurnImageRef } from "@navi/shared";
+import { isVisibleExecutionEvent } from "@navi/shared/native-work";
+import { resumesWaiting } from "@navi/shared/waiting";
 import { appendExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
 export type DuetTurn = {

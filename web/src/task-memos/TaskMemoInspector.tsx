@@ -5,7 +5,7 @@
 // 指出刚进来的是哪条（justAddedId 的高亮）。
 import { useEffect, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
-import type { TaskMemo } from "@ash/shared/task-memo";
+import type { TaskMemo } from "@navi/shared/task-memo";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { InspButton, InspNone, InspNote, InspTool } from "../inspector/parts.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";

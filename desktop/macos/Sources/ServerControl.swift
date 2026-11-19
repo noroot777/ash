@@ -15,7 +15,7 @@ import Darwin
 /// UpdateGate 的 `.staleServer`。记录里的 pid 对不上就是「不知道」，不当成旧版。
 struct ServerRecord: Codable {
   static let fileName = ".mac-server.json"
-  static var url: URL { AshConfig.dataURL.appendingPathComponent(fileName) }
+  static var url: URL { NaviConfig.dataURL.appendingPathComponent(fileName) }
 
   let pid: Int
   let bundleVersion: String
@@ -24,11 +24,11 @@ struct ServerRecord: Codable {
 
   /// 要起服务了：先记下是这一版。写不进去抛错，调用方就别起。
   static func writeAttempt() throws {
-    try save(ServerRecord(pid: 0, bundleVersion: AshConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
+    try save(ServerRecord(pid: 0, bundleVersion: NaviConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
   }
 
   static func write(pid: Int) {
-    try? save(ServerRecord(pid: pid, bundleVersion: AshConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
+    try? save(ServerRecord(pid: pid, bundleVersion: NaviConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
   }
 
   /// 端口上自己那份应答了：是记录里那个进程，就确认它起来过。
@@ -49,7 +49,7 @@ struct ServerRecord: Codable {
 
   /// 正在应答的这份（pid）是不是由别的构建号的 app 起的；是就返回那个构建号。
   static func staleVersion(servingPID pid: Int?) -> String? {
-    guard let pid, let record = read(), record.pid == pid, record.bundleVersion != AshConfig.bundleVersion else { return nil }
+    guard let pid, let record = read(), record.pid == pid, record.bundleVersion != NaviConfig.bundleVersion else { return nil }
     return record.bundleVersion
   }
 }
@@ -59,9 +59,9 @@ struct ServerRecord: Codable {
 enum ServiceTarget: Equatable {
   /// 确认没人在听（连接被拒）。
   case absent
-  /// 确认是别的 ash：它报了自己的数据根，不是这一份，用的不是这份库。
+  /// 确认是别的 navi：它报了自己的数据根，不是这一份，用的不是这份库。
   case foreign(pid: Int?)
-  /// 连的是别处的 ash（不是本机地址）：app 不管它的死活，换 app 也不重启它。
+  /// 连的是别处的 navi（不是本机地址）：app 不管它的死活，换 app 也不重启它。
   case remote
   /// 自己那份，进程号是这个。
   case ours(pid: Int)
@@ -69,7 +69,7 @@ enum ServiceTarget: Equatable {
 
 /// 让自己那份服务下线，给换代码让路。只停**评估过的那一份**（UpdateGate 问 restart-impact 时
 /// 端口上的那个进程）：这会儿端口上换了人、或者认不出是谁，一律不停、回去重新评估 —— 不拿上一次
-/// 「不会打断谁」的结论去停另一份服务。别的 ash 用的不是这份库，跟这次更新无关，不碰。
+/// 「不会打断谁」的结论去停另一份服务。别的 navi 用的不是这份库，跟这次更新无关，不碰。
 ///
 /// SIGTERM 就够了：在跑的单飞 agent 输出走文件，不随 server 死，新 server 起来按 pid 接管；团队
 /// 调度台下次有人说话时 --resume 接回（server 的 reattach.ts）。会被真正打断的那些在这之前已经
@@ -86,20 +86,20 @@ enum ServerShutdown {
   /// `target` 为 nil：用户在「确认不了」时点了「现在」—— 停那时候端口上自己那份，认不出是谁就不停。
   static func stop(expecting target: ServiceTarget?, timeout: TimeInterval = 20) -> Result {
     if target == .remote { return .stopped(nil) }
-    switch AshHealth.probeSync() {
+    switch NaviHealth.probeSync() {
     case .down:
       // 没人在听了。评估过的那个进程要是还在（正在自己退出），等它退干净。
       guard case .ours(let pid) = target else { return .stopped(nil) }
       return waitGone(pid, timeout: timeout)
     case .unreachable(let why):
       return .changed("服务这会儿没有答复（\(why)）")
-    case .notAsh(let what):
+    case .notNavi(let what):
       return .changed("端口上的应答不像 Navi（\(what)）")
-    case .ash(let instance) where !instance.isOurs:
+    case .navi(let instance) where !instance.isOurs:
       guard instance.dataDir != nil else { return .changed("端口上的 Navi 认不出是不是这一份") }
       if case .ours = target { return .changed("端口上换成了别的 Navi") }
       return .stopped(nil)
-    case .ash(let instance):
+    case .navi(let instance):
       guard let pid = instance.pid, pid > 1 else { return .failed("服务没报自己的进程号，没法让它下线。") }
       if let target, target != .ours(pid: pid) { return .changed("服务换了一份（进程 \(pid)）") }
       guard let pid32 = Int32(exactly: pid) else { return .failed("服务的进程号不对：\(pid)") }
@@ -115,10 +115,10 @@ enum ServerShutdown {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
       let gone = kill(pid32, 0) != 0 && errno == ESRCH
-      if gone, case .down = AshHealth.probeSync() { return .stopped(pid) }
+      if gone, case .down = NaviHealth.probeSync() { return .stopped(pid) }
       Thread.sleep(forTimeInterval: 0.2)
     }
-    return .failed("服务进程 \(pid) \(Int(timeout)) 秒内没有退出，更新没装。看日志 \(AshConfig.serverLogURL.path)。")
+    return .failed("服务进程 \(pid) \(Int(timeout)) 秒内没有退出，更新没装。看日志 \(NaviConfig.serverLogURL.path)。")
   }
 }
 
@@ -137,7 +137,7 @@ final class Maintenance {
   }
 
   static let fileName = ".mac-maintenance.json"
-  static var url: URL { AshConfig.dataURL.appendingPathComponent(fileName) }
+  static var url: URL { NaviConfig.dataURL.appendingPathComponent(fileName) }
   private static let staleAfter: TimeInterval = 15 * 60
 
   private var lock: ServerStartLock?
@@ -146,7 +146,7 @@ final class Maintenance {
 
   /// 攥住启动锁、写标记。另一处正在起服务时等它做完，等满 timeout 秒还拿不到就报错。
   static func begin(note: String, timeout: TimeInterval) throws -> Maintenance {
-    let lock = try ServerStartLock(dataDir: AshConfig.dataURL)
+    let lock = try ServerStartLock(dataDir: NaviConfig.dataURL)
     let deadline = Date().addingTimeInterval(timeout)
     while try !lock.tryAcquire() {
       guard Date() < deadline else { throw SQLiteFile.Failure("另一处正在起 Navi 服务，\(Int(timeout)) 秒还没完") }

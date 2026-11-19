@@ -13,12 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-delete-disk-"));
-// 不指定的话，scratch、ash-mcp 这些会落进这份检出自己的 data/ 目录。
-process.env.ASH_DATA_DIR = join(root, "data");
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-const runs = process.env.ASH_RUNS_DIR;
+const root = mkdtempSync(join(tmpdir(), "navi-task-delete-disk-"));
+// 不指定的话，scratch、navi-mcp 这些会落进这份检出自己的 data/ 目录。
+process.env.NAVI_DATA_DIR = join(root, "data");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+const runs = process.env.NAVI_RUNS_DIR;
 const locked: string[] = [];
 const lock = (dir: string) => { chmodSync(dir, 0o500); locked.push(dir); };
 const unlockAll = () => { for (const dir of locked.splice(0)) chmodSync(dir, 0o700); };

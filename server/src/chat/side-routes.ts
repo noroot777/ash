@@ -1,8 +1,8 @@
 import { open } from "node:fs/promises";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Context, Hono } from "hono";
-import { parseSessionOutput } from "@ash/shared/session-output";
-import { sideChatTitle } from "@ash/shared/chat";
+import { parseSessionOutput } from "@navi/shared/session-output";
+import { sideChatTitle } from "@navi/shared/chat";
 import { db } from "../db/index.js";
 import { chatContextEntries, chatMessages, chatRooms, sessions, tasks } from "../db/schema.js";
 import { actorOf, ownerIdOf } from "../auth/context.js";

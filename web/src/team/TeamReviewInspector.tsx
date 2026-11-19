@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { STAGE_LABELS, TASK_STATUS_LABELS, type Task, type TaskListItem } from "@ash/shared";
+import { STAGE_LABELS, TASK_STATUS_LABELS, type Task, type TaskListItem } from "@navi/shared";
 import {
   CaretRight,
   CheckCircle,

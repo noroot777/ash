@@ -18,9 +18,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-discussion-dispatch-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-discussion-dispatch-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 let failure: unknown = null;
 try {
@@ -40,7 +40,7 @@ try {
   // 起跑的每一回合都记下来：谁、拿到的整段话、是讨论的第几段（合稿为 null）。讨论中就照常交一段卷。
   GenericCliExecutor.prototype.run = function (this: InstanceType<typeof GenericCliExecutor>, options) {
     const agent = this.type;
-    const taskId = options.env?.ASH_TASK_ID ?? "";
+    const taskId = options.env?.NAVI_TASK_ID ?? "";
     const call: Call = { taskId, agent, prompt: options.prompt, seq: null };
     calls.push(call);
     return {
@@ -59,7 +59,7 @@ try {
           }
           // 跟真 MCP 一样带上起跑时交给它的回合令牌。
           await submitDiscussionStatement(taskId, { summary: `${agent} 的看法`, statement: `${agent} 第 ${call.seq} 段：这么做，理由如下。` },
-            { turnToken: options.env?.ASH_TURN_TOKEN ?? null });
+            { turnToken: options.env?.NAVI_TURN_TOKEN ?? null });
           yield { kind: "text" as const, text: "交卷了。" };
         } else {
           yield { kind: "text" as const, text: "合稿：结论在这里；分歧：无。" };

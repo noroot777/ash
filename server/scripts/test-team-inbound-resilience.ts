@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import {
   POISON, root, db, dbClient, ensureSchema, projects, sessions,
   sendInbound, teamIsLive, pendingInbound, SESSION_POISONED_NOTE, eq, at, ok,

@@ -3,7 +3,7 @@ import { api } from "./api.ts";
 import type { HostInfo } from "./apiTypes.ts";
 
 // 「server 跑在哪台机器上」。路径提示一律按**它**的形状给：浏览器所在的系统不算数，
-// 用 Windows 上的浏览器连 mac 上的 ash 是正常用法，而项目目录在服务端那台机器上。
+// 用 Windows 上的浏览器连 mac 上的 navi 是正常用法，而项目目录在服务端那台机器上。
 //
 // 一个 server 进程的平台/分隔符/家目录不会中途变，所以整个前端只拉一次、模块内共享。
 

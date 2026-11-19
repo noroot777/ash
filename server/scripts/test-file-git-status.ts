@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { readFileGitStatus } from "../src/file-git-status.js";
 import { fileGitDecorations } from "../../web/src/files/fileGitDecorations.ts";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-file-git-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-file-git-"));
 const repo = join(stage, "repo");
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 const write = (path: string, content = path) => writeFileSync(join(repo, path), content);

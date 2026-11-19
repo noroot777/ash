@@ -18,7 +18,7 @@
 //  · **已知删除不许倒退**。删成功就记一条墓碑，之后任何来源（迟到的 GET、某个闭包里捕获
 //    的旧清单）给出的清单都先过一遍墓碑过滤。只有「写代次比墓碑更新的读」才能拆掉它 ——
 //    否则同一个 id 被两条路径各写一次，顺序由网络决定。
-import type { ReviewerProfile } from "@ash/shared";
+import type { ReviewerProfile } from "@navi/shared";
 import { api } from "../lib/api.ts";
 
 /** 订阅期间的轮询间隔。只在有人订阅（= 某个对话框开着）时跑，关掉就停。 */

@@ -28,8 +28,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, openSync, closeSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-cleanup-debt-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-cleanup-debt-"));
+process.env.NAVI_DB = join(root, "ash.db");
 
 const { ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();

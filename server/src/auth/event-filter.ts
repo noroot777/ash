@@ -1,7 +1,7 @@
 // SSE 事件的可见性过滤(§十二 —— 计划把这一条点名成验收基准)。
 //
 // 全局事件流是最容易漏的那个面:它不是「一条查询加个 where」,而是一条已经建立好的
-// 长连接,后端广播什么它就推什么。不过滤的话,共享同一台 ash 的两个人里,任何一个人
+// 长连接,后端广播什么它就推什么。不过滤的话,共享同一台 navi 的两个人里,任何一个人
 // 的任务标题、提问原文、agent 正文都会实时推给另一个人 —— 界面上看不到那个任务,
 // 但 DevTools 的 Network 面板里一条不落。
 //
@@ -13,7 +13,7 @@
 //  ② actor → 可见项目集合:按秒失效。改成员后最多 3 秒才生效 —— 权限收紧的即时性
 //     换掉的是每条事件一次 join,这个取舍在「相互信任的小团队」这个定位下是划算的。
 import { eq } from "drizzle-orm";
-import type { ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@navi/shared";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";
 import { ownerIdOf, type Actor } from "./context.js";

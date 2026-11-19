@@ -79,8 +79,8 @@ export type MarkdownRegion = {
   collapsed?: boolean;
 };
 
-const MARK = "dataAshInsert";
-const REGION = "dataAshRegion";
+const MARK = "dataNaviInsert";
+const REGION = "dataNaviRegion";
 
 /** 这个 hast 节点是我们插的标记吗 —— 是就返回它在 `inserts` 里的下标。 */
 export function insertIndexOf(properties: Record<string, unknown> | undefined): number | null {

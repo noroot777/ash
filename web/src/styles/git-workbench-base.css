@@ -1,6 +1,6 @@
-/* Git 工作台 demo · 基础层:变量沿用 ash web 的设计语言(global.css),外壳、控件、菜单、弹层、diff。 */
+/* Git 工作台 demo · 基础层:变量沿用 navi web 的设计语言(global.css),外壳、控件、菜单、弹层、diff。 */
 
-/* 颜色变量不在这里另抄一份：它挂在 ash 页面里，直接继承 global.css 的那套(含深色)。
+/* 颜色变量不在这里另抄一份：它挂在 navi 页面里，直接继承 global.css 的那套(含深色)。
    以前整份抄过来，深浅色一翻面这里就成了一块孤岛。 */
 
 .gwb-design * { box-sizing: border-box; }

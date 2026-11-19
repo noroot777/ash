@@ -2,10 +2,10 @@ import * as driverCore from "drizzle-orm/libsql/driver-core";
 import type { LibSQLDatabase } from "drizzle-orm/libsql/driver-core";
 import { createClient } from "./node-sqlite-client.js";
 import * as schema from "./schema.js";
-import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
+import { ensureNaviDbDir, resolveNaviDbFile } from "./path.js";
 import { runDataMigrations } from "./migrations.js";
 import { COLUMN_MIGRATIONS } from "./column-migrations.js";
-import { OWN_MONITOR_KIND } from "@ash/shared/monitor";
+import { OWN_MONITOR_KIND } from "@navi/shared/monitor";
 import { ensureChatSchema } from "./schema-chat.js";
 import { ensureHandoffTokenUnique } from "./handoff-token-index.js";
 import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
@@ -22,8 +22,8 @@ import { ensureAcceptMemorySchema } from "./schema-accept-memory.js";
 import { ensureTaskWritesSchema } from "./schema-task-writes.js";
 import { installTaskActionTriggers } from "./task-action-triggers.js";
 
-const dbFile = resolveAshDbFile();
-ensureAshDbDir(dbFile);
+const dbFile = resolveNaviDbFile();
+ensureNaviDbDir(dbFile);
 
 // Node 自带的 `node:sqlite`，零原生编译（Windows 不需要 Visual Studio Build Tools）。
 // 外壳把它伪装成 libsql 的 Client，drizzle 那一侧的用法一行不用改；细节见 node-sqlite-client.ts。
@@ -156,7 +156,7 @@ export async function ensureSchema() {
       started_at TEXT NOT NULL,
       -- 可空：null = 这一回合开始了还没收口（见 schema.ts 上那段注释）。唯一索引
       -- （session_id, started_at）由 migrate-session-turns.ts 在去重之后建——老库里可能
-      -- 已经有重复行，在这里建会抛，而这一段抛出去就是整台 ash 起不来。
+      -- 已经有重复行，在这里建会抛，而这一段抛出去就是整台 navi 起不来。
       ended_at TEXT,
       -- 这一回合**自己**的结局（completed/failed/stopped）。可空：存量行与收尾没落成的行都是
       -- null = 「不知道」，读端据此不给失败现场（见 schema.ts 上那段注释）。
@@ -341,7 +341,7 @@ export async function ensureSchema() {
   // **必须排在上面那串容错 ALTER 之后**：这条索引引用 `native_id`，而老库那一列是靠
   // ALTER 补上的。放进上面的建表块里会要了命——`CREATE TABLE IF NOT EXISTS` 对已存在的
   // 表什么都不做（不补列），索引紧接着引用一个还不存在的列，整个 executeMultiple 抛出，
-  // ensureSchema 崩掉 = 整台 ash 起不来。2026-10-14 在真实库副本上实测到这一条。
+  // ensureSchema 崩掉 = 整台 navi 起不来。2026-10-14 在真实库副本上实测到这一条。
   //
   // 索引本身的用途：claude 内置 Monitor 的投影按 native_id 认人，同一个后台任务的
   // task_started / task_notification 要 upsert 成同一行；唯一性同时挡住重放同一段 stream
@@ -371,7 +371,7 @@ export async function ensureSchema() {
     await client.execute("DROP INDEX IF EXISTS monitors_native_session");
     await client.execute("DROP INDEX IF EXISTS monitors_native");
   } catch (e) {
-    console.warn("[ash] monitors_native_source 索引创建失败,忽略:", e);
+    console.warn("[navi] monitors_native_source 索引创建失败,忽略:", e);
   }
   // 默认审查者每个归属人至多一位(reviewer-profiles.ts 设默认时先清后设,同一笔事务)。排在上面那串 ALTER
   // 之后:is_default 是靠它补上的。自用模式下归属全是 NULL,COALESCE 成空串让它们彼此互斥。
@@ -381,18 +381,18 @@ export async function ensureSchema() {
       + " ON reviewer_profiles(COALESCE(owner_user_id, '')) WHERE is_default = 1",
     );
   } catch (e) {
-    console.warn("[ash] reviewer_profiles_default_owner 索引创建失败,忽略:", e);
+    console.warn("[navi] reviewer_profiles_default_owner 索引创建失败,忽略:", e);
   }
   // 一份结果交接只许对应一条消息（含存量重复时的身份归并，理由在那个文件顶部）。
   await ensureHandoffTokenUnique(client);
-  // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
-  // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来；证据列同理补 'self'
-  // （新列对存量行一律 NULL,而 NULL 的语义是「旧算法推的、不可信」,对 ash 行不成立）。幂等。
+  // navi 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
+  // claude 投影编期限把默认值设成了 'unknown',这里把 navi 那半刷回来；证据列同理补 'self'
+  // （新列对存量行一律 NULL,而 NULL 的语义是「旧算法推的、不可信」,对 navi 行不成立）。幂等。
   try {
     await client.execute(`UPDATE monitors SET source_lifetime='bounded' WHERE kind='${OWN_MONITOR_KIND}' AND source_lifetime<>'bounded'`);
     await client.execute(`UPDATE monitors SET lifetime_evidence='self' WHERE kind='${OWN_MONITOR_KIND}' AND lifetime_evidence IS NULL`);
-    // ash 行的起点就是 ash 自己 spawn 那一刻,从来没有不确定性 —— 档位 'observed'、误差界 0。
-    // **这两句必须成对**:只补档位不补误差界的话,存量 ash 行会因为「无法重验」而丢掉期限
+    // navi 行的起点就是 navi 自己 spawn 那一刻,从来没有不确定性 —— 档位 'observed'、误差界 0。
+    // **这两句必须成对**:只补档位不补误差界的话,存量 navi 行会因为「无法重验」而丢掉期限
     // (第 7 轮把起点判据从结论字符串换成了可重验的误差界)。
     await client.execute(`UPDATE monitors SET start_evidence='observed' WHERE kind='${OWN_MONITOR_KIND}' AND start_evidence IS NULL`);
     await client.execute(`UPDATE monitors SET start_anchor_width_ms=0 WHERE kind='${OWN_MONITOR_KIND}' AND start_anchor_width_ms IS NULL`);

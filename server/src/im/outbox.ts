@@ -112,7 +112,7 @@ export class OutboxSender {
     if (this.stopped) return;
     if (this.running) { this.again = true; return; }
     this.running = true;
-    void this.drain().catch((error) => console.error("[ash] 飞书发件队列出错:", error))
+    void this.drain().catch((error) => console.error("[navi] 飞书发件队列出错:", error))
       .finally(() => {
         this.running = false;
         if (this.again && !this.stopped) { this.again = false; this.kick(); }
@@ -150,7 +150,7 @@ export class OutboxSender {
     try {
       return await this.guard[mode](row);
     } catch (error) {
-      console.error(`[ash] 飞书${mode === "send" ? "发件" : "改卡"}前核对出错:`, error);
+      console.error(`[navi] 飞书${mode === "send" ? "发件" : "改卡"}前核对出错:`, error);
       await db.update(imOutbox).set({ nextAt: new Date(this.clock.now() + GUARD_RETRY_MS).toISOString(), updatedAt: now() })
         .where(eq(imOutbox.id, row.id));
       return "error";
@@ -195,7 +195,7 @@ export class OutboxSender {
       return JSON.parse(row.content) as unknown;
     } catch (error) {
       const lastError = `内容解析不了：${(error as Error).message}`.slice(0, 500);
-      console.warn(`[ash] 飞书${mode === "send" ? "消息放弃发送" : "卡片放弃改写"}（${row.kind} ${row.taskId ?? ""}）：${lastError}`);
+      console.warn(`[navi] 飞书${mode === "send" ? "消息放弃发送" : "卡片放弃改写"}（${row.kind} ${row.taskId ?? ""}）：${lastError}`);
       await db.update(imOutbox).set(mode === "send" ? { state: "dead", nextAt: null, lastError, updatedAt: now() } : { patchState: "skipped", lastError, updatedAt: now() })
         .where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, row.content)));
       return undefined;
@@ -249,7 +249,7 @@ export class OutboxSender {
       nextAt: dead ? null : new Date(this.clock.now() + BACKOFF_MS[attempts - 1]!).toISOString(),
       updatedAt: at,
     }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.state, "pending")));
-    if (dead) console.warn(`[ash] 飞书消息放弃发送（${row.kind} ${row.taskId ?? ""}）：${res.code} ${res.msg}`);
+    if (dead) console.warn(`[navi] 飞书消息放弃发送（${row.kind} ${row.taskId ?? ""}）：${res.code} ${res.msg}`);
   }
 
   private async recallOne(row: OutboxRow): Promise<void> {
@@ -331,7 +331,7 @@ export class OutboxSender {
     const attempts = row.attempts + 1;
     if (!res.retryable || attempts > BACKOFF_MS.length) {
       await db.update(imOutbox).set({ patchState: "failed", attempts, lastError, updatedAt: at }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
-      console.warn(`[ash] 飞书改卡放弃（${row.kind} ${row.taskId ?? ""}）：${lastError}`);
+      console.warn(`[navi] 飞书改卡放弃（${row.kind} ${row.taskId ?? ""}）：${lastError}`);
       return;
     }
     // 退避重试。acking 到这里已经过期没确认，改成 result 继续按退避改。

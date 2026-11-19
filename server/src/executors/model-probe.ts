@@ -1,6 +1,6 @@
 // 「这个 CLI 现在有哪些模型」——有只读命令就现问 CLI；Claude 没有清单命令，
 // 复用 ccb 的官方文档提取方式，提供完整 ID 候选（不代表账号一定可用）。
-// (`shared/src/cli-presets.ts` 的 CLI_MODEL_PRESETS:各家上新模型跟 ash 发版
+// (`shared/src/cli-presets.ts` 的 CLI_MODEL_PRESETS:各家上新模型跟 navi 发版
 // 毫无关系,那张表必然滞后,且滞后多久取决于「有没有人想起来改它」)。
 //
 // 三条设计约束,都来自这个系统里已有的先例:
@@ -23,12 +23,12 @@
 // 为什么不落库:清单是**本机 CLI 当下的事实**,不是用户配置。落库要额外处理「换了
 // CLI 版本 / 换了登录账号 / 卸载了」的失效,而重启后重探一次的代价只有几百毫秒。
 
-import { readEnv } from "@ash/shared/env-names";
-import type { AgentType, AppSettings } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
-import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
-import type { CliModelCatalog, ModelEffortMap } from "@ash/shared/cli-presets";
-import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
+import { readEnv } from "@navi/shared/env-names";
+import type { AgentType, AppSettings } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
+import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@navi/shared/multiuser";
+import type { CliModelCatalog, ModelEffortMap } from "@navi/shared/cli-presets";
+import { CLI_MODEL_PRESETS } from "@navi/shared/cli-presets";
 import { probeBins } from "./bin-probe.js";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { execFileText as exec } from "../exec.js";
@@ -328,7 +328,7 @@ let claudeRefreshTimer: ReturnType<typeof setInterval> | null = null;
 export function startClaudeModelRefreshLoop(): void {
   if (claudeRefreshTimer) return;
   const refresh = () => void modelCatalogFor("claude").catch((error) =>
-    console.error("[ash] Claude 模型目录更新失败:", error));
+    console.error("[navi] Claude 模型目录更新失败:", error));
   refresh();
   claudeRefreshTimer = setInterval(refresh, 60_000);
   claudeRefreshTimer.unref();

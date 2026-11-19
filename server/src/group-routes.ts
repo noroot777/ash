@@ -1,9 +1,9 @@
-import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group, Task } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
-import { CliCommandValidationError } from "@ash/shared/cli-commands";
-import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
-import { createWorkflowMode } from "@ash/shared/free-workflow";
-import { parseCreateReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
+import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group, Task } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
+import { CliCommandValidationError } from "@navi/shared/cli-commands";
+import { inheritExecutorOverrides, pickExecutor } from "@navi/shared/executors";
+import { createWorkflowMode } from "@navi/shared/free-workflow";
+import { parseCreateReviewChoice, type CreateReviewChoice } from "@navi/shared/review-on-create";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -65,7 +65,7 @@ api.post("/groups/:id/run", async (c) => {
   if (g.paused) {
     await db.update(groups).set({ paused: false }).where(eq(groups.id, gid));
     // 托盘上「分组已暂停」那几条要改口(pending-wait.ts)。
-    void republishGroupWaits(gid).catch((err) => console.error(`[ash] republishGroupWaits(${gid}) failed:`, err));
+    void republishGroupWaits(gid).catch((err) => console.error(`[navi] republishGroupWaits(${gid}) failed:`, err));
   }
   void runGroupInBackground(gid);
   return c.json({ started: true }, 202);

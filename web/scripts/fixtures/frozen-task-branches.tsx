@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
-import { makeStep, type WorkflowDef } from "@ash/shared/workflow";
+import type { Task } from "@navi/shared";
+import { makeStep, type WorkflowDef } from "@navi/shared/workflow";
 import { ForcePassVerifyButton } from "../../src/workflow/VerifyGateControls.tsx";
 import { TEAM_INSPECTORS, type TeamInspectorContext } from "../../src/team/TeamInspector.tsx";
 import "../../src/styles/global.css";

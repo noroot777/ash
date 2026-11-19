@@ -1,8 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CaretLeft } from "@phosphor-icons/react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
-import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem } from "@ash/shared";
-import { outboundHolder } from "@ash/shared/handoff";
+import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem } from "@navi/shared";
+import { outboundHolder } from "@navi/shared/handoff";
 import { api } from "../lib/api.ts";
 import { leavesOnArchive, type ArchivedOnOpen } from "../lib/archivedSelection.ts";
 import { claimAction, isActionFresh } from "../lib/latestInteraction.ts";

@@ -1,5 +1,5 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { tasks } from "./db/schema.js";
 import { SEAT_ROLLBACK_ROLE, isTurnClaimed, turnRole } from "./runs.js";
 import { writeGuardedTaskStatus } from "./status.js";

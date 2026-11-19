@@ -7,8 +7,8 @@ import type {
   HandoffTarget,
   ProjectView,
   TaskListItem,
-} from "@ash/shared";
-import { needsPeerKey } from "@ash/shared/handoff";
+} from "@navi/shared";
+import { needsPeerKey } from "@navi/shared/handoff";
 import { Check, Fingerprint, LockKey, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";

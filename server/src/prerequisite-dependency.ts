@@ -2,7 +2,7 @@
 // 目标分支，它才能合。判据逐条复用单父那一份（task-branch-plan.ts `inheritedDependency`），这里只负责
 // 「好几条时取最要紧的那条、把没好的都说出来」，以及删分支时谁还在等它。
 import { and, eq, isNotNull } from "drizzle-orm";
-import type { BranchDependency } from "@ash/shared/branch-plan";
+import type { BranchDependency } from "@navi/shared/branch-plan";
 import { db } from "./db/index.js";
 import { taskPrerequisites, tasks } from "./db/schema.js";
 import type { BranchPlanReads } from "./branch-plan-reads.js";

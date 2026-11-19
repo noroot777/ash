@@ -1,4 +1,4 @@
-import { builtinWorkflowDef } from "@ash/shared/workflow-presets";
+import { builtinWorkflowDef } from "@navi/shared/workflow-presets";
 
 export const ASSISTANT_REPLY_STYLE = `回复必须言简意赅：先给结论，默认用 1–3 句或最多 3 个要点，通常不超过 200 字。只保留回答问题所需的信息，不写寒暄、长篇背景、重复总结或未经请求的延伸建议。只有用户明确要求详细说明时才展开，仍需精炼。任务结果卡和起手式草案会单独展示，不在 reply 中重复抄写；task.body 和 workflow.def 保留执行所需的完整信息，不为缩短回复而删减。`;
 

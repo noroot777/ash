@@ -13,8 +13,8 @@
 //   reported 先写了报告再断掉：审查格那一轮的记录里报告和原话都在。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewRound, FreeReviewRun, RetryTurnAction, Session, Task } from "@ash/shared";
-import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
+import type { FreeReviewRound, FreeReviewRun, RetryTurnAction, Session, Task } from "@navi/shared";
+import type { ReviewNoVerdict } from "@navi/shared/timeline-notice";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
@@ -29,7 +29,7 @@ const END = "2026-11-13T11:17:45.348Z";
 const SAID = "unexpected status 503 Service Unavailable: auth_unavailable: no auth available";
 const TYPED: ReviewNoVerdict = { kind: "interrupted", reason: "模型上游连不上（503）", said: SAID };
 const VAGUE: ReviewNoVerdict = { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: SAID, vague: true };
-const LEGACY_GUESS = "这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。这一轮没查到直接证据；最可能的原因是审查者手上根本没有 report_stage 这个工具（自查：codex mcp list --json（看 ash 在不在、enabled 是不是 true））：报告照样写得完整，只有最后一步上报做不到。修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。";
+const LEGACY_GUESS = "这一轮的审查报告可能已经写完了，只是结论没能上报到 navi。这一轮没查到直接证据；最可能的原因是审查者手上根本没有 report_stage 这个工具（自查：codex mcp list --json（看 navi 在不在、enabled 是不是 true））：报告照样写得完整，只有最后一步上报做不到。修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。";
 
 const round = (runId: string, cause: ReviewNoVerdict | undefined, retry: boolean, at = START, reportMarkdown = ""): FreeReviewRound => ({
   round: 1, status: "error", conclusion: null, reviewedCommit: "c1", reportMarkdown, screenshots: [],
