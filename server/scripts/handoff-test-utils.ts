@@ -5,6 +5,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { TASK_BRANCH_PREFIX } from "@navi/shared/task-branch";
 import { IS_WINDOWS } from "../src/platform.js";
+import { tsxCliPath } from "./tsx-loader.js";
 
 export const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -46,8 +47,8 @@ export async function startPeer(
   onProc: (proc: ChildProcess) => void,
 ): Promise<string> {
   const serverDir = join(import.meta.dirname, "..");
-  const tsxCli = join(serverDir, "..", "node_modules", "tsx", "dist", "cli.mjs");
-  const peer = spawn(process.execPath, [tsxCli, "src/index.ts"], {
+  // tsx 按包解析(见 ./tsx-loader.ts):写死 `<检出>/node_modules/tsx` 在 worktree 和 win-remote 的工作区里都不存在。
+  const peer = spawn(process.execPath, [tsxCliPath(), "src/index.ts"], {
     cwd: serverDir,
     env: {
       ...process.env,

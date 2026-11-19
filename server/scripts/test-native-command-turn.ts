@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-native-turn-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -142,5 +143,5 @@ try {
 
   console.log("test:native-turn ok");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

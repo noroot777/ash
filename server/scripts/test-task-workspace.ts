@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-task-workspace-"));
 const repo = join(root, "repo");
@@ -482,5 +483,5 @@ try {
   console.log("✓ 项目改了 repoPath 之后，圈人和上锁跟着实际工作目录走");
   console.log("✓ 三种工作目录去向各自的措辞对得上，同回合的两条 marker 不互相打架");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

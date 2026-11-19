@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerEvent } from "@navi/shared";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-reopen-acceptance-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -76,5 +77,5 @@ try {
   unsubscribe();
   console.log("reopen acceptance: single/team/duet × accepted/merged 回归验证通过");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

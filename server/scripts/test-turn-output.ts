@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-turn-output-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -89,5 +90,5 @@ try {
   console.log("turn output: 提交数 / 未提交改动数 / 没产出闭嘴 / 非 git 闭嘴 / 无起点闭嘴 / 读一次就删,六条通过");
 } finally {
   for (const id of IDS) rmSync(join(RUNS_DIR, id), { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

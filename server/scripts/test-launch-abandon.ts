@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 「我自己处理了」这个显式出口的回归(server/src/terminal-abandon.ts)。
 //
@@ -22,7 +23,7 @@ process.env.NAVI_DB = join(temporary, "test.db");
 const { terminalSessions } = await import("../src/terminal.js");
 const { startCommand } = await import("../src/terminal-commands.js");
 const { launchResidue, mountLaunchAbandonRoutes, residueNotice } = await import("../src/terminal-abandon.js");
-const { dbClient } = await import("../src/db/index.js");
+// 库由收尾的 removeTmpStage 先松开再删(见 ./tmp-db.ts)。
 
 const windows = process.platform === "win32";
 const projectId = "abandon-project";
@@ -200,8 +201,7 @@ try {
 } finally {
   try { stray.kill("SIGKILL"); } catch { /* 已经没了 */ }
   terminalSessions.shutdown();
-  dbClient.close();
-  rmSync(temporary, { recursive: true, force: true });
+  await removeTmpStage(temporary);
 }
 
 async function processAlive(pid: number): Promise<boolean> {

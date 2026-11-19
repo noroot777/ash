@@ -87,8 +87,13 @@ export async function releaseTmpDb(): Promise<void> {
  * 这个先后就是上面那段说的不变量,所以收在这一处,不在各个 `finally` 里各写一遍 —— 只写了
  * `rmSync(root)` 的那种在 POSIX 上看不出毛病,到 Windows 上就是断言全过、收尾 EBUSY。
  * 删不掉照样抛:吞掉它等于把红灯换成一堆留在磁盘上的临时目录。
+ *
+ * 库之外还有晚一步才松手的:刚杀掉的进程(终端会话的 shell、假 agent)的工作目录和日志句柄,
+ * 要等系统回收完才放开 —— test-launch-abandon 先关了库、照样 EBUSY(2026-11-19 真机)。所以删
+ * 本身带上 Node 自己的重试(只对 EBUSY/EPERM/ENOTEMPTY 这类重试,线性退避,合计约 5 秒),
+ * 等得到就过、等不到才抛。POSIX 上第一次就删掉了,重试是空转。
  */
 export async function removeTmpStage(root: string): Promise<void> {
   await releaseTmpDb();
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

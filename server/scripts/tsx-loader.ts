@@ -1,26 +1,32 @@
-// 子进程要用的 tsx 加载器在哪。
+// 子进程要用的 tsx 在哪:加载器(`--import <它>`)和 CLI(`node <它> src/index.ts`)。
 //
-// 为什么不能写死 `../../node_modules/tsx/dist/loader.mjs`:**任务默认在 git worktree 里跑**
-// (`.worktrees/<id>/`),而那里只有 `server/node_modules` 一条指回主仓的软链 —— 仓库根下压根
-// 没有 `node_modules`,于是写死那条路的用例在 worktree 里一律炸在
-// `ERR_MODULE_NOT_FOUND: .../<worktree>/node_modules/tsx/dist/loader.mjs`,
-// 而它跟被测的东西毫无关系(报错还长得像产品缺陷)。
+// **按包解析,不按目录猜。** 两种猜法都栽过:
+//  · 写死 `<检出>/node_modules/tsx/...`:任务默认在 git worktree 里跑(`.worktrees/<id>/`),
+//    那里的仓库根下压根没有 `node_modules`,于是炸在 `ERR_MODULE_NOT_FOUND`,而它跟被测的东西
+//    毫无关系(报错还长得像产品缺陷);
+//  · 往上找「第一个有 node_modules 的目录」:win-remote 在 Windows 上的工作区里 `node_modules`
+//    只放了 `@navi/*` 几条 junction,其余依赖靠 Node 逐级向上解析到主仓 —— 第一个目录找到了,
+//    里面却没有 tsx(2026-11-19 真机上 test:handoff 的对端 server 因此起不来)。
 //
-// `import.meta.resolve("tsx/dist/loader.mjs")` 也不行:那个子路径没写进 tsx 的 `exports`。
-// 所以按目录往上找 —— worktree 嵌在主仓里面(`<repo>/.worktrees/<id>/server/scripts`),
-// 一路往上走一定会走到主仓根的那一份。
-import { existsSync } from "node:fs";
-import { dirname, join, parse } from "node:path";
-import { fileURLToPath } from "node:url";
+// tsx 的 `exports` 里写着这两个口:`.` 是加载器(`dist/loader.mjs`,也就是 `--import tsx`
+// 用的那个),`./cli` 是 CLI。拿 `createRequire` 按 Node 自己的规则解析,目录布局怎么变都跟
+// 着 Node 走。
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+
+function resolveTsx(specifier: "tsx" | "tsx/cli"): string {
+  try {
+    return require.resolve(specifier);
+  } catch (error) {
+    throw new Error(`找不到 ${specifier}(按包解析失败):这几条用例要起独立进程跑 .ts —— ${(error as Error).message}`);
+  }
+}
 
 export function tsxLoaderPath(): string {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  const { root } = parse(dir);
-  for (;;) {
-    const candidate = join(dir, "node_modules", "tsx", "dist", "loader.mjs");
-    if (existsSync(candidate)) return candidate;
-    if (dir === root) break;
-    dir = dirname(dir);
-  }
-  throw new Error("找不到 tsx 的加载器(node_modules/tsx/dist/loader.mjs):这几条用例要起独立进程跑 .ts");
+  return resolveTsx("tsx");
+}
+
+export function tsxCliPath(): string {
+  return resolveTsx("tsx/cli");
 }

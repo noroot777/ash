@@ -53,11 +53,17 @@ const consume = (child, count = 0) => new Promise((resolve) => {
     if (count && lines.length >= count) resolve("count");
   });
   child.on("close", (code) => resolve("close:" + code));
+  // 起不来时只有 'error'、没有 'close'(spawn.ts 的 failedChild):只等 'close' 就一直卡着。
+  child.on("error", (error) => resolve("error:" + error.message));
 });
 
 if (mode === "v1") {
   const child = spawnControllableForRun(root, process.execPath, [agentScript], "one\\n", undefined, paths);
-  await consume(child, 1);
+  const how = await consume(child, 1);
+  if (how.startsWith("error:") || !child.pid) {
+    writeFileSync(stateFile, JSON.stringify({ spawnError: how.startsWith("error:") ? how.slice("error:".length) : "拿不到 pid" }));
+    process.exit(1);
+  }
   const info = inspectProcess(child.pid);
   writeFileSync(stateFile, JSON.stringify({
     pid: child.pid,
@@ -90,15 +96,18 @@ const run = (args: string[], env: Record<string, string> = {}) => new Promise<nu
   // 理由同 test-detached-survival.ts:`spawn("npx")` 在 Windows 上 ENOENT。
   const child = spawn(process.execPath, ["--import", "tsx", serverScript, ...args], {
     cwd: join(here, ".."),
-    env: { ...process.env, ...env },
+    // 假 agent 是自己铺的(node 跑上面那份脚本):设了 NAVI_RUNS_DIR 时隔离闸也放它过去。
+    env: { ...process.env, NAVI_TEST_AGENT_BIN: process.execPath, ...env },
     stdio: ["ignore", "inherit", "inherit"],
   });
   child.on("close", (code) => resolve(code ?? 1));
 });
 
 try {
-  assert.equal(await run(["v1", root, agentScript, stateA]), 0);
+  const v1 = await run(["v1", root, agentScript, stateA]);
   const first = JSON.parse(readFileSync(stateA, "utf8"));
+  assert.equal(first.spawnError, undefined, `假 agent 没起来,后面的断言无从谈起:${first.spawnError}`);
+  assert.equal(v1, 0);
   agentPid = first.pid;
   assert.doesNotThrow(() => process.kill(first.pid, 0), "agent 应活过 server-v1 退出");
 

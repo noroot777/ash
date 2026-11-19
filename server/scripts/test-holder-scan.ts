@@ -29,6 +29,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, openSync, closeSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const IS_WIN = process.platform === "win32";
 if (IS_WIN) {
@@ -640,7 +641,7 @@ exec /bin/ps "$@"
   for (const pid of [orphan, ...strays]) {
     if (pid > 1) { try { process.kill(pid, "SIGKILL"); } catch { /* 已经没了 */ } }
   }
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过:半截查询不会再被当成查全");

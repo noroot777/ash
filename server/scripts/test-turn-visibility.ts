@@ -22,7 +22,9 @@ import { eq } from "drizzle-orm";
 const root = mkdtempSync(join(tmpdir(), "navi-turn-visibility-"));
 // 断言失败是直接抛的，清理因此挂在进程退出上而不是写在末尾：写末尾的话失败一次就在
 // os.tmpdir() 下留一份 DB + runs 目录，反复跑越堆越多。
-process.on("exit", () => rmSync(root, { recursive: true, force: true }));
+// 删不掉就留着:exit 钩子是同步的、松不开还开着的库,Windows 上这一句必然 EBUSY,抛出来会把
+// 断言全过的一次判红(同 isolated-data.ts;运行器给每条叶子的临时目录跑完一起删)。
+process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
 process.env.NAVI_DB = join(root, "ash.db");
 process.env.NAVI_RUNS_DIR = join(root, "runs");
 

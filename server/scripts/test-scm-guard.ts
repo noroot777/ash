@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-scm-guard-"));
 const repo = join(root, "repo");
@@ -478,5 +479,5 @@ try {
 
   console.log("scm guard ok");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

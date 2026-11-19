@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Hono } from "hono";
 import type { HumanApprovalKeyFiles } from "../src/auth/human-approval-key.js";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-human-approval-"));
 const keys = generateKeyPairSync("ed25519");
@@ -359,5 +360,5 @@ for (const configured of ["", "invalid-public-key"]) {
   });
   assert.equal(unavailable.status, 0, unavailable.stderr);
 }
-rmSync(root, { recursive: true, force: true });
+await removeTmpStage(root);
 console.log("human-approval regressions ok");

@@ -520,22 +520,25 @@ try {
   {
     // 这张表是**跟各家 CLI 的契约**,两份实现「互相一致」证明不了它 —— qwen 那条就是这么
     // 错的(QWEN_HOME 已经是最终配置目录,上一版又在它底下接了一层 `.qwen`)。
+    // 表里写的是**相对覆盖变量那一层**的落点,期望值用 `join` 拼:被测的解析口也是 `join`,
+    // 写死 `/profile/...` 的话 Windows 上分隔符是 `\`,契约本身没错也一样红。
+    const profile = "/profile";
     const contract: Partial<Record<AgentType, string>> = {
-      claude: "/profile/.claude.json",
-      codex: "/profile/config.toml",
-      gemini: "/profile/.gemini/settings.json",       // GEMINI_CLI_HOME 是 home 基准(实测)
-      grok: "/profile/config.toml",
-      kimi: "/profile/mcp.json",
-      qwen: "/profile/settings.json",                 // QWEN_HOME 是最终配置目录
-      copilot: "/profile/mcp-config.json",
-      pi: "/profile/mcp.json",
+      claude: ".claude.json",
+      codex: "config.toml",
+      gemini: ".gemini/settings.json",       // GEMINI_CLI_HOME 是 home 基准(实测)
+      grok: "config.toml",
+      kimi: "mcp.json",
+      qwen: "settings.json",                 // QWEN_HOME 是最终配置目录
+      copilot: "mcp-config.json",
+      pi: "mcp.json",
     };
-    for (const [type, expect] of Object.entries(contract) as [AgentType, string][]) {
+    for (const [type, rel] of Object.entries(contract) as [AgentType, string][]) {
       const mechanism = NAVI_MCP_TABLE[type];
       assert.equal(mechanism.kind, "file");
       if (mechanism.kind !== "file") continue;
-      const env = { [mechanism.site.dirEnv!]: "/profile" } as NodeJS.ProcessEnv;
-      assert.equal(naviMcpHostFile(type, env, "/h"), expect, `${type}:覆盖变量指到的那一层`);
+      const env = { [mechanism.site.dirEnv!]: profile } as NodeJS.ProcessEnv;
+      assert.equal(naviMcpHostFile(type, env, "/h"), join(profile, rel), `${type}:覆盖变量指到的那一层`);
     }
     // `dirEnvIsFile` 的那两家:**写、判、提示必须是同一个路径**(上一版三处消费者各自把
     // 文件名丢掉再按默认名拼回来,于是真 CLI 连得上、派审却报没接好)。

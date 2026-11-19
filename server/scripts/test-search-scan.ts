@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-search-scan-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -326,5 +327,5 @@ try {
 
   console.log("✓ search scan: 早停等价 + 跨字段 AND + 排除词 + 多词 + 纯排除 + 本项目优先 + 流式一致 + 中断即停 + id 不绕过 AND + 最近更新档");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

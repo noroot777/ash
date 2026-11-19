@@ -498,9 +498,14 @@ try {
     async () => (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).length > 0,
     "这一轮退干净之后排队消息仍然没送进会话——消息被单飞锁静默吞掉了",
   );
-  const locked = (await db.select().from(scheduledMessages)
-    .where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!;
-  assert.equal(locked.status, "sent", "真送进会话之后才算 sent");
+  // 会话行先建、执行器回执到了才落 sent(pending-messages.ts 的 onAccepted),两步之间隔着
+  // 假 CLI 起来答话的那一段 —— 看到会话就当场读状态,在起进程慢的机器上(Windows 上一层
+  // .cmd 垫片 + Defender)读到的必然还是 pending。跟上面排队那节一样按条件等。
+  await waitFor(
+    async () => (await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!.status === "sent",
+    "真送进会话之后才算 sent —— 会话起来了,库里那条却一直没标成 sent",
+  );
   assert.equal(
     (await db.select({ resumePrompt: tasks.resumePrompt }).from(tasks)
       .where(eq(tasks.id, lockedTaskId))).at(0)?.resumePrompt,

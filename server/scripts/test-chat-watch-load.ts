@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "navi-chat-watch-load-"));
 process.env.NAVI_DB = join(stage, "test.db");
@@ -44,5 +45,5 @@ try {
   assert.equal(failures.length, 0, `并发负载下目录观察漏报：\n${failures.join("\n")}`);
   console.log(`chat watch load: ${ROUNDS} 轮 × ${WORKERS} 路并发的真实写入/编辑/改名全部捕获，无降级`);
 } finally {
-  rmSync(stage, { recursive: true, force: true });
+  await removeTmpStage(stage);
 }

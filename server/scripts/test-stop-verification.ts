@@ -105,8 +105,16 @@ writeFileSync(portLauncher, `const fs=require('node:fs'),prefix=process.argv[2];
   + `server.listen(0,'127.0.0.1',()=>{const port=server.address().port;fs.writeFileSync(prefix+'.port',String(port));`
   + `process.stdout.write('listening on http://127.0.0.1:'+port+' \\n')});`);
 
+// 下面几节的夹具都是「前台退了、中转双 fork 出一个自成一组的守护」,断言要的是**按启动记号把它
+// 点名**。这两问在 Windows 上整档不存在,不是没做好:记号那一问读不到别人的环境
+// (terminal-launch-survivors.ts 落 `unavailable`),`processAlive` 在 win32 上恒为 false
+// (terminal-process-tree.ts —— 没有进程组,脱管的守护那边判不出来,terminal.ts 起会话那段
+// 写明了这条边界)。在 Windows 上跑它们只会红在「守护还活着」为假上,跟停止判定对不对无关。
+const daemonNaming = process.platform !== "win32";
+if (!daemonNaming) console.log("  (windows: 按启动记号点名守护进程那几节不适用,跳过)");
+
 try {
-  for (const action of ["stop", "restart"] as const) {
+  for (const action of daemonNaming ? (["stop", "restart"] as const) : []) {
     const projectId = `no-port-${action}`;
     const prefix = join(cwd, action);
     const command = { id: "service", name: action, command: runNode(launcher, prefix), stopCommand: noop, restartCommand: null };
@@ -145,7 +153,7 @@ try {
     assert.ok(terminalSessions.get(original.id), "名下还有活物的记录不许被闲置回收:那是触达它的唯一把手");
   }
 
-  {
+  if (daemonNaming) {
     // **有端口记录也必须扫记号**。第 1 轮审查发现 1 在真实页面上实测:前台监听者停了、
     // 端口让出来了,界面报「已停止」、停止按钮消失、刷新仍然如此 —— 而那个双 fork 出去、
     // 自成一组、不听任何端口的工人还在跑。端口空只能证明**监听**停了。
@@ -163,9 +171,7 @@ try {
     pids.push(pid);
     // 等中转真的退了、工人过继给 init 再停：工人写下 pid 时中转可能还没退干净（机器忙时常见），那一刻它还挂在
     // 启动器的进程树上，停止会顺着树把它一起收掉 —— 那就不是「端口那条道点不到它」这个形状了。
-    if (process.platform !== "win32") {
-      await waitFor(() => execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).trim() === "1");
-    }
+    await waitFor(() => execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).trim() === "1");
     const original = terminalSessions.listForProject(projectId)[0];
     const result = await stopCommand(projectId, "service", null, { portGraceMs: 50 });
     assert.equal(result.status, 200);
@@ -196,7 +202,7 @@ try {
   // 这一趟必须如实报未确认。工作目录从此不参与筛选(它可变),只决定先点谁的名。
   for (const [mode, script] of [["silent-env", envLauncher], ["fresh-env", freshLauncher],
     ["moved-fresh", movedFreshLauncher]] as const) {
-    if (process.platform === "win32") break;
+    if (!daemonNaming) break;
     const projectId = mode;
     const prefix = join(cwd, mode);
     const home = join(cwd, `${mode}-home`);
@@ -244,7 +250,7 @@ try {
   // 环境**之前**,所以这个号连被问的机会都没有:它明明带着这次启动的记号、本该被点名,结果
   // 整条线索彻底消失、停止干净地报「已停止」。审查当时把这半边记为代码推断,这里补成实测。
   // 筛子撤掉之后它该回到第一条道上 —— 被点名,并给出 pid。
-  if (process.platform !== "win32") {
+  if (daemonNaming) {
     const projectId = "moved-marked";
     const prefix = join(cwd, "moved-marked");
     const home = join(cwd, "moved-marked-home");
@@ -275,7 +281,7 @@ try {
   // 一件外衣:前三轮分别拿空环境、现搭环境、工作目录试过,这一轮换成「环境里确实有一枚 navi
   // 记号,只是不是这次的」。它曾是候选集里唯一保留的那道归属筛子,于是这个号连被算进「没问
   // 出来」的机会都没有,停止干净地报停净。
-  if (process.platform !== "win32") {
+  if (daemonNaming) {
     const projectId = "cached-marker";
     const prefix = join(cwd, "cached-marker");
     const home = join(cwd, "cached-marker-home");
@@ -365,7 +371,7 @@ try {
   // 第 1 轮:macOS 上同属主、比这次启动更早的常驻进程有几百个,上一版每一趟都因为它们落
   // incomplete)。核不上的孤儿照旧可能让这一趟落 incomplete —— 那是另一条理由,所以只在一个
   // 都没有时才断言封口。
-  if (process.platform !== "win32") {
+  if (daemonNaming) { // 用的是第一节那次启动
     const earlier = terminalSessions.listForProject("no-port-stop")[0];
     const identity = terminalSessions.launchIdentityOf(earlier.id);
     assert.equal(identity?.clocks?.wallSteady, true, "真启动:取样到 spawn 返回之间钟没被拨过");

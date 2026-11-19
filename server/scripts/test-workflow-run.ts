@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-workflow-run-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -584,5 +585,5 @@ assert.equal(
 );
 
 rmSync(join(RUNS_DIR, "t1"), { recursive: true, force: true });
-rmSync(root, { recursive: true, force: true });
+await removeTmpStage(root);
 console.log("workflow step runner tests passed");

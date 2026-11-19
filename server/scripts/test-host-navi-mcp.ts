@@ -28,12 +28,28 @@ const codeRoot = join(root, "code");
 const serverDir = fileURLToPath(new URL("..", import.meta.url));
 cpSync(join(serverDir, "src"), join(codeRoot, "server", "src"), { recursive: true });
 for (const file of ["package.json", "tsconfig.json"]) copyFileSync(join(serverDir, file), join(codeRoot, "server", file));
-const ownModules = join(serverDir, "node_modules");
-if (existsSync(ownModules)) symlinkSync(ownModules, join(codeRoot, "server", "node_modules"), "junction");
-for (let dir = dirname(serverDir); ; dir = dirname(dir)) {
-  if (existsSync(join(dir, "node_modules"))) { symlinkSync(join(dir, "node_modules"), join(codeRoot, "node_modules"), "junction"); break; }
-  assert.notEqual(dir, dirname(dir), "往上找不到 node_modules");
+// 依赖**逐个按包**借:server 声明的每一个包,照 Node 从真 server 目录出发的查找顺序找到它住在
+// 哪,在拷出来的代码树里链一条过去。原先是整个借「往上第一个 node_modules」,而那个目录可能
+// 只装了一部分 —— win-remote 的工作区里 `node_modules` 只有 `@navi/*` 几条 junction,其余靠
+// 逐级向上解析到主仓,于是拷出来的那份找不到 drizzle-orm(2026-11-19 真机)。开发机的 worktree
+// 补了 `@navi/*` 软链之后也是同一个形状。
+const serverPkg = JSON.parse(readFileSync(join(serverDir, "package.json"), "utf8")) as Record<string, Record<string, string> | undefined>;
+// 只借运行时的那两组:被测代码是被 import 来跑的,devDependencies(类型、tsx 本身)用不上 —— tsx 由
+// `--import` 按真检出的绝对地址给。
+const declared = [serverPkg.dependencies, serverPkg.optionalDependencies].flatMap((deps) => Object.keys(deps ?? {}));
+const lookup = createRequire(join(serverDir, "package.json")).resolve.paths("x") ?? [];
+const borrowed = join(codeRoot, "node_modules");
+for (const name of declared) {
+  const home = lookup.map((dir) => join(dir, name)).find((dir) => existsSync(join(dir, "package.json")));
+  if (!home) {
+    // 可选依赖没装是正常的;必需的找不到就是这台机器的检出不全,当场说清是哪一个。
+    assert.ok(serverPkg.optionalDependencies?.[name], `按 Node 的查找顺序找不到 server 声明的依赖 ${name}`);
+    continue;
+  }
+  mkdirSync(dirname(join(borrowed, name)), { recursive: true });
+  symlinkSync(home, join(borrowed, name), "junction");
 }
+assert.ok(existsSync(join(borrowed, "drizzle-orm", "package.json")), "夹具前提:拷出来的代码树借得到依赖");
 const src = pathToFileURL(join(codeRoot, "server", "src") + sep);
 const mcpEntry = pathToFileURL(join(codeRoot, "mcp", "dist", "index.js"));
 mkdirSync(dirname(fileURLToPath(mcpEntry)), { recursive: true });

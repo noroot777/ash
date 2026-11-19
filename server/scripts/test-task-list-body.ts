@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { setActor } from "../src/auth/context.js";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-task-list-body-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -156,5 +157,5 @@ try {
 
   console.log("✓ task list omits body/history; scoped history endpoint returns only question records");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }

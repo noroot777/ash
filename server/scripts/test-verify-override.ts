@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTmpStage } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-verify-override-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -162,5 +163,5 @@ assert.equal(existsSync(ws.path), false, "「合并并清理」写的是 clean=a
 assert.equal((await row(mergeTask)).stage, "accepted", "合完就是验收完成");
 
 console.log("verify override ok");
-rmSync(root, { recursive: true, force: true });
+await removeTmpStage(root);
 process.exit(0);

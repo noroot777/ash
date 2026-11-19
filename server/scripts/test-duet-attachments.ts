@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { parseAttachmentText } from "@navi/shared/attachments";
 import { duetTopicText, gateUserMessage } from "../src/duet/user-message.js";
+import { removeTmpStage } from "./tmp-db.js";
 
 // 一句话 + 一张截图:正文在前,附件段在后。
 const withBoth = gateUserMessage("这里的按钮点不动", ["/tmp/uploads/a-image.png"]);
@@ -123,5 +124,5 @@ try {
 
   console.log("duet attachments ok");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTmpStage(root);
 }
