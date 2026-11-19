@@ -1,9 +1,9 @@
 // 归档/取消归档（从 task-run-routes.ts 拆出，纯行数拆分）。归档 = 冻结（archived 位，
-// 不动 status），门禁与团队连带见各路由内注释。磁盘上的 worktree/分支按全局设置
-// `archiveClean` 一起收，那一段在 task-archive-cleanup.ts。
+// 不动 status），门禁与团队连带见各路由内注释；派出去的子孙同样连带（dispatch-archive.ts）。
+// 磁盘上的 worktree/分支按全局设置 `archiveClean` 一起收，那一段在 task-archive-cleanup.ts。
 import type { TaskStatus } from "@navi/shared";
 import { summarizeArchiveCleanup } from "@navi/shared/project";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
@@ -12,12 +12,13 @@ import { reclaimGateSnapshots } from "./accept-gate-reclaim.js";
 import { isAcceptingTask, isAdmitting } from "./acceptance-lock.js";
 import { claimWorkspaceTurn, isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
-import { cleanupArchivedWorkspaces } from "./task-archive-cleanup.js";
+import { cleanupArchivedWorkspaces, type ArchiveCleanupTarget } from "./task-archive-cleanup.js";
+import { archivedTogether, isDispatcher, readDispatchBelow } from "./dispatch-archive.js";
 import { acceptedHeadRef, commitAt } from "./task-branch-plan.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
-import { enrichTasks } from "./task-store.js";
+import { enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { readActionFacts } from "./task-actions.js";
-import { archiveVerdict } from "./task-action-verdicts.js";
+import { archiveVerdict, type Verdict } from "./task-action-verdicts.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { haltTeam } from "./team/session.js";
 import { now } from "./util.js";
@@ -35,7 +36,9 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     if (r.archived) return c.json({ task: (await enrichTasks([r]))[0], cleanup: null });
     // 状态不是终态、团队执行者（跟着团队一起归档）、就地验证轮没结束、自由审查正在进行：
     // 判据见 archiveVerdict，界面上那颗「归档」读同一份。
-    const verdict = archiveVerdict(await readActionFacts(r));
+    // 派出去的子孙有没结束的也在这里挡回去（判据同一份，界面上那颗键也读它）。
+    const facts = await readActionFacts(r);
+    const verdict = archiveVerdict(facts);
     if (!verdict.ok) return c.json({ error: verdict.reason, ...verdict.detail }, 409);
     // 归档 = 冻结。回合被占（status 尚未落 running）或验收正在执行时归档，会让一个「冻结」
     // 任务上继续跑回合/合并写入——先等它结束或停掉再归档。这几把锁只在内存里、转瞬即逝，
@@ -60,7 +63,25 @@ export function mountTaskArchiveRoutes(api: Hono): void {
         return c.json({ error, childId: busy.id }, 409);
       }
     }
+    // 派出去的子孙跟着冻结：同团队那段，占着回合锁、在验收、在加成员的都挡回去。
+    const below = facts.dispatchBelow ?? [];
+    const busyBelow = below.find((row) => isAcceptingTask(row.id) || isAdmitting(row.id) || isTurnClaimed(row.id));
+    if (busyBelow) {
+      return c.json({ error: `子任务「${busyBelow.title || busyBelow.id}」正在验收或回合中，结束后再归档`, childId: busyBelow.id }, 409);
+    }
     const ts = now();
+    const dispatched = below.map((row) => row.id);
+    // 判据读完到真的写下去之间，子孙可能被点了运行。占住它们的回合锁（挡住新回合起跑），占住后再判一遍
+    // 才写；写完就还，后面清理磁盘时 cleanupArchivedWorkspaces 要自己再占。
+    if (r.mode !== "team") {
+      const hold = dispatched.length ? claimWorkspaceTurn(dispatched) : () => {};
+      if (!hold) return c.json({ error: "子任务正有回合要开始，结束后再归档" }, 409);
+      try {
+        const fresh: Verdict = dispatched.length ? archiveVerdict({ ...facts, dispatchBelow: await readDispatchBelow(r.id) }) : { ok: true };
+        if (!fresh.ok) return c.json({ error: fresh.reason, ...fresh.detail }, 409);
+        await archiveRows([r.id, ...dispatched], ts);
+      } finally { hold(); }
+    }
     // 团队(§Team):归档才是「这件事结束了」—— 先停掉调度台进程和所有在跑的执行者,
     // 再把执行者一并归档(不管它们各自停在什么状态:团队没了,散在列表里的执行者只是
     // 噪音;取消归档时整支队伍一起回来)。
@@ -76,14 +97,14 @@ export function mountTaskArchiveRoutes(api: Hono): void {
         }
         await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, w.id));
       }
+      await archiveRows([r.id], ts);
     }
-    await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, r.id));
     // 归档 = 这件事结束了。哨兵的唯一出口是唤醒这个任务,而归档任务收不到消息
     // (deliveryVerdict 直接作废),留着它就是一个永远喂不到人的后台进程。团队的执行者
     // 同样要收 —— 它们各自也可能挂着哨兵。
     for (const target of r.mode === "team"
       ? [r.id, ...(await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, r.id))).map((w) => w.id)]
-      : [r.id]) {
+      : [r.id, ...dispatched]) {
       // `destroy`：归档是用户要求这个任务停下来，审查还在进行也不留 —— 归档任务收不到任何
       // 消息（deliveryVerdict 直接作废），留着它只是个永远喂不到人的后台进程。
       //
@@ -104,12 +125,22 @@ export function mountTaskArchiveRoutes(api: Hono): void {
       }
     }
     const cleanup = await cleanupArchivedWorkspaces(await repoPathOf(r.projectId), cleanupTargets);
+    // 派出去的子孙可以在别的项目里（派到另一个仓库去干活），按项目分批清，报告并进同一份。
+    for (const [projectId, targets] of await targetsByProject(dispatched)) {
+      const report = await cleanupArchivedWorkspaces(await repoPathOf(projectId), targets);
+      cleanup.items.push(...report.items);
+      cleanup.skipped = [cleanup.skipped, report.skipped].filter(Boolean).join("；") || null;
+      cleanupTargets.push(...targets);
+    }
     // 验收快照同理（见 accept-gate-reclaim.ts）。取回归档也用不上它：快照只在那次门禁结算时读过一次。
     for (const target of cleanupTargets) {
       await reclaimGateSnapshots(target.id).catch((error) => console.error(`[navi] 归档时回收快照失败（${target.id}）:`, error));
     }
     const summary = summarizeArchiveCleanup(cleanup);
     if (summary) await appendTaskTimeline(r.id, receiptLine(`归档时清理工作区：${summary}。`));
+    if (dispatched.length) await appendTaskTimeline(r.id, receiptLine(`子任务 ${dispatched.length} 条一起归档了。`));
+    // 侧栏里它们那几行要当场收走（发起这一下的页面只拿到父任务自己）。
+    for (const id of dispatched) await publishTaskUpdated(id);
     const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];
     return c.json({ task, cleanup });
   });
@@ -121,9 +152,11 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     // 取回必须和归档清理互斥(第 2 轮审查确定性复现):清理占着这批回合锁的时候解冻,
     // 执行者就能在正被删的目录里起跑。占同一把锁 = 排在清理后面;占不到就如实让用户
     // 稍后再点一次(清理是秒级的)。团队连执行者一起占,因为取回也是整支队伍一起回来。
+    // 派出去的子孙：只带回跟它同一刻归档的那几条（dispatch-archive.ts 文件头）。
+    const dispatched = isDispatcher(r) ? await archivedTogether(r.id, r.archivedAt) : [];
     const family = [r.id, ...(r.mode === "team"
       ? (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, r.id))).map((w) => w.id)
-      : [])];
+      : dispatched)];
     const release = claimWorkspaceTurn(family);
     if (!release) {
       return c.json({ error: "这个任务的工作区正在清理或有回合在跑，请稍后再取回", taskId: r.id }, 409);
@@ -134,6 +167,10 @@ export function mountTaskArchiveRoutes(api: Hono): void {
       // 对称:团队回来了,它的执行者也一起回来(归档时是整支队伍一起走的)
       if (r.mode === "team") {
         await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
+      }
+      if (dispatched.length) {
+        await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(inArray(tasks.id, dispatched));
+        for (const id of dispatched) await publishTaskUpdated(id);
       }
       const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];
       // 归档会按设置把 worktree 删掉,所以「取回」之后的工作区状态必须当场说清楚 ——
@@ -163,6 +200,23 @@ async function restoreNoteFor(projectId: string, taskId: string): Promise<string
   if (head) return `工作区和任务分支都已清理，下次运行会从任务完成时的提交 ${head.slice(0, 8)} 重建。`;
   return "工作区和任务分支都已不在（归档清理或验收时收掉了），下次运行会退回这个任务的开工提交；"
     + "它做完的改动如果已经合进目标分支，需要你自己决定要不要带回来。";
+}
+
+/** 一起冻结的这一批落在同一刻（取回时按这一刻认「是这次一起归档的」，dispatch-archive.ts）。 */
+async function archiveRows(ids: string[], ts: string): Promise<void> {
+  await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(inArray(tasks.id, ids));
+}
+
+async function targetsByProject(ids: string[]): Promise<Map<string, ArchiveCleanupTarget[]>> {
+  const out = new Map<string, ArchiveCleanupTarget[]>();
+  if (!ids.length) return out;
+  const rows = await db.select({ id: tasks.id, title: tasks.title, projectId: tasks.projectId }).from(tasks).where(inArray(tasks.id, ids));
+  for (const row of rows) {
+    const bucket = out.get(row.projectId) ?? [];
+    bucket.push({ id: row.id, title: row.title ?? row.id });
+    out.set(row.projectId, bucket);
+  }
+  return out;
 }
 
 const repoPathOf = async (projectId: string): Promise<string | null> =>

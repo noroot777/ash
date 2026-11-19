@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm";
 import type { AgentType, Task, TeamConfig } from "@navi/shared";
 import { TEAM_DEFAULTS } from "@navi/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@navi/shared/executors";
+import { legacyModeRefusal } from "@navi/shared/legacy-modes";
 import { db } from "../db/index.js";
 import { tasks, groups } from "../db/schema.js";
 import { joinQueueOnCreate } from "../queue-membership-guard.js";
@@ -47,6 +48,9 @@ export async function dispatchWorkers(
   opts: { mode?: "serial" | "parallel"; run?: boolean; batchName?: string } = {},
 ): Promise<DispatchResult> {
   if (!specs.length) throw new Error("tasks 不能为空");
+  // 团队已停用（shared/src/legacy-modes.ts）：存量调度台也派不出新的执行者。
+  const legacy = legacyModeRefusal({ parentId: leadTaskId });
+  if (legacy) throw new Error(legacy);
   const lead = (await db.select().from(tasks).where(eq(tasks.id, leadTaskId))).at(0);
   if (!lead) throw new Error("调度者任务不存在");
   if (lead.mode !== "team") throw new Error("只有团队任务(mode:\"team\")能派活");

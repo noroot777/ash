@@ -1,6 +1,7 @@
 import type { AgentType, Task, TaskStatus } from "@navi/shared";
 import { AGENT_TYPES, isUserSettableStatus } from "@navi/shared";
 import { CliCommandValidationError } from "@navi/shared/cli-commands";
+import { legacyModeRefusal } from "@navi/shared/legacy-modes";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@navi/shared/cli-presets";
 import { inheritExecutorOverrides, sameExecutor } from "@navi/shared/executors";
 import { normalizeWorkflowDef } from "@navi/shared/workflow";
@@ -113,6 +114,9 @@ api.post("/tasks", async (c) => {
   // 会把它当成「挂在别人名下」放过 preset。
   if (!b.parentId) b.parentId = null;
   if (!b.reviewOf) b.reviewOf = null;
+  // 团队、讨论已停用（shared/src/legacy-modes.ts）：这两种任务和团队执行者都建不出新的了。
+  const legacy = legacyModeRefusal(b);
+  if (legacy) return c.json({ error: legacy, mode: b.mode ?? null, parentId: b.parentId }, 409);
   // 这条路由的请求体里一共四个资源 id:projectId、groupId、appendToQueue,加上这里这三个
   // **指向别的任务**的。它们同样得查归属,而且 parentId 比前几个更要紧 —— 下面那句
   // `inheritOwner` 按全库 id 查父任务的 ownerUserId,于是「猜中一个隐藏父任务」就能在自己
@@ -526,6 +530,8 @@ api.patch("/tasks/:id", async (c) => {
     if (!(TASK_MODES as readonly string[]).includes(b.mode)) {
       return c.json({ error: "mode 只能是 single、team 或 duet" }, 400);
     }
+    const legacy = legacyModeRefusal({ mode: b.mode });
+    if (legacy) return c.json({ error: legacy, mode: b.mode }, 409);
     const misfit = workflowModeMisfit({ ...existing, mode: b.mode });
     if (misfit) {
       return c.json({ error: misfit.kind === "preset-closed" ? PRESET_CONVERSION_CLOSED : misfit.error }, misfit.status);

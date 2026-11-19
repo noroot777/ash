@@ -13,6 +13,7 @@ import { canSeeProject } from "./auth/visibility.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { latestRun, roundOf } from "./free-review-round.js";
 import { reviewRetryGeneration } from "./free-review-retry-identity.js";
+import { isDispatcher, readDispatchBelow } from "./dispatch-archive.js";
 import { checkpointStartBlock } from "./pending-checkpoint-recovery.js";
 import { queueBlockerDetails } from "./queues.js";
 import { isRunning } from "./runs.js";
@@ -54,6 +55,7 @@ export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
     prerequisiteRequest: (row.status === "backlog" || row.status === "paused") && !!(await db.select({ at: taskPrerequisiteLaunches.requestedAt })
       .from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, row.id))).at(0)?.at,
     team,
+    dispatchBelow: isDispatcher(row) ? await readDispatchBelow(row.id) : undefined,
   };
 }
 

@@ -51,7 +51,21 @@ export type ActionFacts = {
   prerequisiteRequest?: boolean;
   /** 团队任务才有：名下每个执行者的状态、它所在的那一批（分组）有没有被停下。停止全组看整个团队。 */
   team: { workers: { status: string; groupPaused: boolean }[] } | null;
+  /** 派出去的子孙里还没归档的（dispatch-archive.ts）：归档时整棵一起冻结。不是派活人时缺省。 */
+  dispatchBelow?: DispatchBelow[];
 };
+
+export type DispatchBelow = { id: string; title: string | null; status: string; verifyRound: number | null; freeReviewActive: boolean };
+
+/** 这一条自己能不能跟着冻结（口径同 archiveVerdict 对任务自己的那几项）。不能时回一个短词说它在干什么。 */
+function dispatchUnsettled(below: DispatchBelow): string | null {
+  if (!canArchive(below.status as TaskStatus)) {
+    return live(below.status) ? "在跑" : below.status === "paused" ? "停着" : "还没开工";
+  }
+  if (below.verifyRound !== null) return "验证没结束";
+  if (below.freeReviewActive) return "在审查";
+  return null;
+}
 
 /** 路由那一侧多带两样：回给调用方的附加字段，和要不要往任务时间线留痕（`noted`）。 */
 export type Verdict =
@@ -193,6 +207,16 @@ export function archiveVerdict(f: ActionFacts): Verdict {
     return block("就地验证轮还没结束（可能正等你答复），处理完再归档", { status: task.status });
   }
   if (task.workflowMode === "free" && f.freeReviewActive) return block("自由审查正在进行，结束后再归档");
+  // 子孙跟着一起冻结（dispatch-archive.ts）：有一条还没结束，整棵都等着。
+  const unsettled = (f.dispatchBelow ?? []).flatMap((below) => {
+    const doing = dispatchUnsettled(below);
+    return doing ? [{ ...below, doing }] : [];
+  });
+  if (unsettled.length) {
+    const named = unsettled.slice(0, 3).map((below) => `「${below.title || below.id}」${below.doing}`).join("、");
+    const more = unsettled.length > 3 ? ` 等 ${unsettled.length} 条` : "";
+    return block(`子任务 ${named}${more}，都结束了再归档`, { unsettled: unsettled.map((below) => below.id) });
+  }
   return OK;
 }
 

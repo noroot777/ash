@@ -24,6 +24,8 @@ import { NAVI_TURN_FINGERPRINT_ENV, turnFingerprint } from "@navi/shared/turn-fi
 
 const root = mkdtempSync(join(tmpdir(), "navi-turn-fingerprint-"));
 process.env.NAVI_DATA_DIR = join(root, "data");
+// 透传名单逐字核对，按线上默认（团队 / 讨论关着，shared/src/legacy-modes.ts）。
+delete process.env.NAVI_LEGACY_TEAM_AND_DUET;
 
 const current = { taskId: "task-now", turnToken: "turn-now", directionToken: "dir-now" };
 const fp = turnFingerprint(current);

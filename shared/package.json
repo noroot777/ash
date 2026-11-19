@@ -214,6 +214,10 @@
       "types": "./src/mcp.ts",
       "default": "./src/mcp.ts"
     },
+    "./legacy-modes": {
+      "types": "./src/legacy-modes.ts",
+      "default": "./src/legacy-modes.ts"
+    },
     "./turn-fingerprint": {
       "types": "./src/turn-fingerprint.ts",
       "default": "./src/turn-fingerprint.ts"

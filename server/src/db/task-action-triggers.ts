@@ -17,7 +17,7 @@ import { markTaskActionsDirty } from "../task-actions-dirty.js";
 const TASK_COLUMNS = [
   "status", "archived", "stage", "mode", "workflow_mode", "group_id", "parent_id", "review_of", "handoff",
   "question", "resume_prompt", "resume_prompt_generation", "verify_round", "queue_advance_request",
-  "agent_type", "executor_id", "follow_up_from", "title",
+  "agent_type", "executor_id", "follow_up_from", "title", "dispatched_by",
 ];
 /** 会话行上判据会读的列（重跑上一回合认的是最近那条会话怎么收的尾、用的哪个执行器）。 */
 const SESSION_COLUMNS = [
@@ -29,7 +29,8 @@ const changed = (columns: string[]) => columns.map((column) => `OLD.${column} IS
 
 // ── 依赖边 ──────────────────────────────────────────────────────────────────────
 // 一个任务的结论不只看它自己那一行，还看：同队成员（队列挡路）、名下执行者（团队的停止全组）、
-// 审它的历史审查任务（「已有一轮审查没结束」）、所在分组（暂停着不能重跑上一回合）。
+// 审它的历史审查任务（「已有一轮审查没结束」）、所在分组（暂停着不能重跑上一回合）、派出去的子孙
+// （归档看整棵；这里只记直接那一层，再往上由 task-actions-feed.ts 展开）。
 //
 // **每条边都在行变化的那一刻、用 OLD 和 NEW 两侧的键当场记下**：删行、改队、换上级、挪出分组时，
 // 变化之后的库里已经查不到这条边了 —— 事后再按「此刻的关系」去找谁受牵连，找到的永远少一个（第 2 轮
@@ -38,9 +39,9 @@ const changed = (columns: string[]) => columns.map((column) => `OLD.${column} IS
 // 被记上。
 const dirty = (kind: "task" | "queue" | "group", key: string) => `navi_actions_dirty('${kind}', ${key})`;
 const queueOf = (taskId: string) => `(SELECT queue_id FROM queue_items WHERE task_id = ${taskId})`;
-/** 一个任务变了：它自己、它的上级、它审的那个任务、它所在的那条队列。 */
+/** 一个任务变了：它自己、它的上级、派它的那条、它审的那个任务、它所在的那条队列。 */
 const taskEdges = (row: "NEW" | "OLD") =>
-  `${dirty("task", `${row}.id`)}, ${dirty("task", `${row}.parent_id`)}, ${dirty("task", `${row}.review_of`)}, ${dirty("queue", queueOf(`${row}.id`))}`;
+  `${dirty("task", `${row}.id`)}, ${dirty("task", `${row}.parent_id`)}, ${dirty("task", `${row}.dispatched_by`)}, ${dirty("task", `${row}.review_of`)}, ${dirty("queue", queueOf(`${row}.id`))}`;
 /** 一条队列成员行变了：这个任务，和这条队列上的所有人。 */
 const queueEdges = (row: "NEW" | "OLD") => `${dirty("task", `${row}.task_id`)}, ${dirty("queue", `${row}.queue_id`)}`;
 /** 一个分组变了：它的成员、它所属的团队。 */

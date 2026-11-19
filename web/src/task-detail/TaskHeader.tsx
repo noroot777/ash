@@ -31,7 +31,7 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import { useLayoutMotion } from "../lib/motion/index.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
 import { sealState } from "./taskHeadSteps.ts";
-import { safeDownloadName } from "./utils.ts";
+import { formatInstant, safeDownloadName } from "./utils.ts";
 
 export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive";
 
@@ -170,12 +170,15 @@ export function TaskHeader({
   return (
     <header className="task-detail-header">
       <div className="task-head-name">
-        {task.dispatchedBy && !task.parentId
-          ? <span className="task-head-glyph" role="img" aria-label="子任务"><TreeView size={14} aria-hidden="true" /></span>
-          : <TaskKindGlyph mode={task.mode} />}
+        {task.archived
+          ? <ArchivedGlyph task={task} onUnarchive={task.parentId === null ? onArchive : undefined} />
+          : task.dispatchedBy && !task.parentId
+            ? <span className="task-head-glyph" role="img" aria-label="子任务"><TreeView size={14} aria-hidden="true" /></span>
+            : <TaskKindGlyph mode={task.mode} />}
         <TaskAncestry task={task} tasks={allTasks} onOpen={onOpenTask} />
-        {task.parentId !== null ? (
-          <span className="task-detail-title is-readonly">{task.title || "未命名任务"}</span>
+        {/* 归档 = 冻结，改标题服务端也拒（先取消归档再编辑），所以这里同样是一行只读的字。 */}
+        {task.parentId !== null || task.archived ? (
+          <span className={`task-detail-title is-readonly${task.archived ? " is-archived" : ""}`}>{task.title || "未命名任务"}</span>
         ) : (
           <span className="task-title-sizer" data-value={title || " "}>
             <input
@@ -320,6 +323,29 @@ export function TaskHeader({
       </div>
       {inspectorToggle}
     </header>
+  );
+}
+
+/**
+ * 归档了：类型那一格换成归档图标，归档时刻在提示里。点它就是取回（同更多菜单里那一项）；团队执行者
+ * 跟着团队一起取回，只给看的。
+ */
+function ArchivedGlyph({ task, onUnarchive }: { task: Task; onUnarchive?: () => void }) {
+  const hover = useHoverTip();
+  const at = formatInstant(task.archivedAt);
+  const said = `已归档${at ? ` · ${at}` : ""}`;
+  if (onUnarchive) {
+    return (
+      <IconButton label={`${said} · 取消归档`} size="sm" className="task-head-archived" onClick={onUnarchive}>
+        <Archive size={14} aria-hidden="true" />
+      </IconButton>
+    );
+  }
+  return (
+    <span className="task-head-glyph task-head-archived" role="img" aria-label={said} {...hover.anchorProps}>
+      <Archive size={14} aria-hidden="true" />
+      <HoverTip at={hover.at}>{said}</HoverTip>
+    </span>
   );
 }
 

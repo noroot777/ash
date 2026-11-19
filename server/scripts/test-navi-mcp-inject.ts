@@ -31,6 +31,9 @@ const root = mkdtempSync(join(tmpdir(), "navi-mcp-inject-"));
 process.env.NAVI_DATA_DIR = join(root, "data");
 process.env.NAVI_DB = join(root, "ash.db");
 delete process.env.NAVI_LAX_DONE;
+// 下面逐字核对透传名单和「一样不少」：按线上默认（团队 / 讨论关着，shared/src/legacy-modes.ts）核，
+// 开着的样子在用到的那两处另核。
+delete process.env.NAVI_LEGACY_TEAM_AND_DUET;
 // 数据目录在 paths.ts 加载那一刻就定下来：放在上面两句之后再 import，不然注入文件写进这份检出的 data/。
 const { IS_WINDOWS } = await import("../src/platform.js");
 const { REPO_DIR } = await import("../src/paths.js");
@@ -121,6 +124,11 @@ try {
     assert.equal(level(minor), "notice", "只缺非收尾工具 ⇒ 提示级");
     assert.match(msg(minor), /list_groups 不在 agent 手上/);
     assert.equal(level(claudeNaviMcpProblem(ok, [injected])), "notice", "init 里没有工具清单 ⇒ 核实不了(提示),不冒充没问题");
+    // 团队 / 讨论关着时 MCP 本来就不注册 dispatch:不算被挡掉;开着时它照样得在
+    assert.equal(claudeNaviMcpProblem(ok, [injected], without("dispatch")), null, "关着时少了 dispatch 不是问题");
+    process.env.NAVI_LEGACY_TEAM_AND_DUET = "1";
+    assert.match(msg(claudeNaviMcpProblem(ok, [injected], without("dispatch"))), /dispatch 不在 agent 手上/);
+    delete process.env.NAVI_LEGACY_TEAM_AND_DUET;
     const failedOne = claudeNaviMcpProblem(ok, [{ name: NAME, status: "failed" }]) as ErrorEvent;
     assert.match(failedOne.message, /状态是 failed/);
     assert.equal(failedOne.affectsTurn, false, "诊断不改本回合成败");
@@ -192,6 +200,10 @@ process.stdin.on("end", () => process.exit(0));
       + `enabled=true,env_vars=["${NAVI_TURN_IDENTITY_ENV.taskId}","${NAVI_TURN_IDENTITY_ENV.turnToken}"]}`);
     assert.ok(!value!.includes("turn-1"), "令牌值不进 argv,进的只是它的单向摘要");
     assert.ok(!codexNaviMcpArgs({}, winEntry)[1]!.includes("env_vars"), "没有回合身份(非任务回合)就不写 env_vars");
+    process.env.NAVI_LEGACY_TEAM_AND_DUET = "1";
+    assert.ok(codexNaviMcpArgs(turn, winEntry)[1]!.endsWith(`env_vars=["${NAVI_TURN_IDENTITY_ENV.taskId}","${NAVI_TURN_IDENTITY_ENV.turnToken}","NAVI_LEGACY_TEAM_AND_DUET"]}`),
+      "团队 / 讨论开着时 codex 也把开关透给 MCP,不然那边照样当关着");
+    delete process.env.NAVI_LEGACY_TEAM_AND_DUET;
     const plan = realCli ? resolveLaunch("codex", ["-c", value!, "mcp", "list", "--json"]) : null;
     if (plan) {
       const home = join(root, "codex-home");

@@ -9,6 +9,7 @@ import {
   type AgentType,
   type LlmProvider,
 } from "@navi/shared";
+import { legacyTeamAndDuet } from "@navi/shared/legacy-modes";
 import { useStore } from "@/lib/store";
 import { api, type DetectedAgent } from "@/lib/api";
 import { LAUNCH_MODES, type LaunchMode } from "@/lib/constants";
@@ -340,7 +341,8 @@ export default function NewTask() {
           />
         </Field>
 
-        <Field label="任务模式">
+        {/* 团队已停用（shared/src/legacy-modes.ts）：开关跟着它藏起来，teamOn 一直是 false。 */}
+        {legacyTeamAndDuet() && <Field label="任务模式">
           <TeamTaskOptions
             enabled={teamOn}
             onEnabledChange={setTeamOn}
@@ -362,7 +364,7 @@ export default function NewTask() {
             onWorkerModelChange={setWorkerModel}
             onWorkerReasoningEffortChange={setWorkerReasoningEffort}
           />
-        </Field>
+        </Field>}
 
         {!teamOn ? (
           <Field label="执行设置">

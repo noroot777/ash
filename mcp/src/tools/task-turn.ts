@@ -28,6 +28,7 @@ import { call, fail, ok } from "../runtime.js";
 import { callWithMonitorResults } from "./monitor-results.js";
 import { MODE, RECURS, TASK_STAGE, planTaskShape, reviewChoiceOf, suggestionShape, suggestionWithdrawShape } from "../schemas.js";
 import { MAX_DISPATCH_PLAN_ITEMS } from "@navi/shared/dispatch-plan";
+import { legacyTeamAndDuet, whenLegacy } from "@navi/shared/legacy-modes";
 import { MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK } from "@navi/shared/dispatch-suggestion";
 
 export function registerTaskTurnTools(server: McpServer): void {
@@ -38,7 +39,7 @@ server.registerTool(
     description:
       "在验证回合里上报验证结论（与 TaskStatus 正交，不改队列也不改任务结算）。验证轮开始时后端自动置 verifying，得出结论后报 verified 或 verify_failed。" +
       REVIEW_VALIDATION_REQUIREMENT +
-      "截图按需：改动看得见就必须截，看不见的（服务端逻辑、CLI、脚本）不用截，技术明细里贴命令与输出即可。taskId 填**被验任务**的 id——旁路验证时那就是你当前这个任务，历史独立审查任务则填被审任务 id。implemented/awaiting_acceptance/merged/accepted 只留给兼容与验收链路；团队调度台(mode=team)不适用，普通执行回合不自我上报。",
+      "截图按需：改动看得见就必须截，看不见的（服务端逻辑、CLI、脚本）不用截，技术明细里贴命令与输出即可。taskId 填**被验任务**的 id——旁路验证时那就是你当前这个任务，历史独立审查任务则填被审任务 id。implemented/awaiting_acceptance/merged/accepted 只留给兼容与验收链路；" + whenLegacy("团队调度台(mode=team)不适用，") + "普通执行回合不自我上报。",
     inputSchema: {
       taskId: z.string().describe("被验任务 id（就地验证时即当前任务；历史独立审查任务填被审任务 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
@@ -124,7 +125,8 @@ server.registerTool(
   {
     title: "确认验收通过并合并清理",
     description:
-      "仅在用户明确表示「验收通过」「可以合并」时调用。服务端确定性执行：查父成果依赖 → 把任务分支合并到 mergeTargetBranch → 删 worktree → `git branch -d` 删任务分支 → stage 标为 accepted（status 不变）。冲突、目标工作区脏或清理失败会返回结构化原因，绝不强制合并。**不要自行跑 git merge / worktree remove / branch -d**，统一调本工具。\n\n项目设了「验收前置命令」时，这一按会先在任务工作区跑一遍那条命令（可能十几分钟）：返回 accept_gate_running = 已开跑，rc=0 就会自动做完，**不用再调一次**；返回 accept_gate_failed = 它红了，没合并也没清理，日志已交回那个任务去修。\n\nparentId 指向团队且 useWorktree=false 的共享执行者不适用本工具（单独调会 409）：验收团队整体，团队级成功会联动把全部共享执行者标为 accepted。",
+      "仅在用户明确表示「验收通过」「可以合并」时调用。服务端确定性执行：查父成果依赖 → 把任务分支合并到 mergeTargetBranch → 删 worktree → `git branch -d` 删任务分支 → stage 标为 accepted（status 不变）。冲突、目标工作区脏或清理失败会返回结构化原因，绝不强制合并。**不要自行跑 git merge / worktree remove / branch -d**，统一调本工具。\n\n项目设了「验收前置命令」时，这一按会先在任务工作区跑一遍那条命令（可能十几分钟）：返回 accept_gate_running = 已开跑，rc=0 就会自动做完，**不用再调一次**；返回 accept_gate_failed = 它红了，没合并也没清理，日志已交回那个任务去修。"
+      + whenLegacy("\n\nparentId 指向团队且 useWorktree=false 的共享执行者不适用本工具（单独调会 409）：验收团队整体，团队级成功会联动把全部共享执行者标为 accepted。"),
     inputSchema: {
       taskId: z.string().describe("用户明确验收通过的任务 id"),
       confirmUnverified: z.boolean().optional().describe("返回 verify_not_run 时，只有用户知晓「独立验证尚未执行」且明确确认继续验收后才传 true；中途 human 关口会继续推进后续 verify，无需此参数"),
@@ -165,7 +167,7 @@ server.registerTool(
     description:
       "在执行中调用,告诉 Navi:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。你这一回合自然结束后状态落 paused(不是 done);哨兵出结果时用 resumePrompt 叫醒你续同一会话(调用时结果已到就不暂停,随返回给你),名下没有在等的哨兵时队列推进也会。\n\n"
       + "用法:先把检查点前的活做完,要暂停时调一次,然后正常退出当前回合。**只能在任务正在跑时调用**,resumePrompt 不能为空。\n\n"
-      + "被具体问题卡住、要等人拍板时改用 ask_question:pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知团队调度者。",
+      + "被具体问题卡住、要等人拍板时改用 ask_question:pause 是「到检查点等续跑」,ask 是「等答案」" + whenLegacy("且会自动通知团队调度者") + "。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
@@ -195,9 +197,9 @@ server.registerTool(
 server.registerTool(
   "ask_question",
   {
-    title: "提问并暂停(等调度者/用户答复)",
+    title: legacyTeamAndDuet() ? "提问并暂停(等调度者/用户答复)" : "提问并暂停(等用户答复)",
     description:
-      `在执行中调用,告诉 Navi:「我被不拍板就没法继续的决策卡住了」。调完正常结束回合,任务落 paused 且**队列不会自动续跑**;问题即时送达团队调度者(你是执行者时),没有调度者就停在那等用户。你自己是团队调度者时调它 = 问用户。答复通过 answer_question 送达,会作为一段文本唤醒你同一个 CLI 会话续跑。\n\n`
+      `在执行中调用,告诉 Navi:「我被不拍板就没法继续的决策卡住了」。调完正常结束回合,任务落 paused 且**队列不会自动续跑**;${legacyTeamAndDuet() ? "问题即时送达团队调度者(你是执行者时),没有调度者就停在那等用户。你自己是团队调度者时调它 = 问用户。" : "问题停在那等用户。"}答复通过 answer_question 送达,会作为一段文本唤醒你同一个 CLI 会话续跑。\n\n`
       + `用法:只能在任务正在跑时调用,先把当下能做的都做完再提问。一个决策用 question + options;有几个**相关且都需要同一个人拍板**的决策时,用 question 写共同背景、questionItems 一次问完(最多 ${MAX_QUESTION_ITEMS} 个),别挤牙膏,也别把无关问题硬凑在一起。\n\n`
       + "options 都是**建议答案,不是单选题**:每条只写一句能直接当答复读的话,理由和取舍留在对应 question 里。答复者可以改、可以组合、也可以完全自由作答。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等具体问题的答案」。",
     inputSchema: {
@@ -226,7 +228,7 @@ server.registerTool(
         .max(MAX_QUESTION_ITEMS)
         .optional()
         .describe(`一次并列询问的相关问题(可选,最多 ${MAX_QUESTION_ITEMS} 个)；每题会独立显示候选和输入框。`),
-      directionToken: z.string().min(1).optional().describe("单飞任务必须原样传入最新用户方向附带的 directionToken；只有团队调度台可省略"),
+      directionToken: z.string().min(1).optional().describe(legacyTeamAndDuet() ? "单飞任务必须原样传入最新用户方向附带的 directionToken；只有团队调度台可省略" : "必须原样传入最新用户方向附带的 directionToken"),
     },
   },
   async ({ taskId, question, options, questionItems, directionToken }) => {
@@ -286,7 +288,7 @@ server.registerTool(
   {
     title: "答复提问中的任务并唤醒它",
     description:
-      "给一个「提问暂停」中的任务(get_task 里 question 非空、status=paused)送答复:清空问题,并把答复作为消息 resume 它的 CLI 会话继续跑。团队调度者收到【执行者提问】通知后用这个答,用户/其他 agent 也可以直接调。提问任务还在 running/queued(回合没结算完)时会被拒,等它落 paused 再调 —— 例外是团队调度台(mode=team),常驻会话忙着也接得住。",
+      "给一个「提问暂停」中的任务(get_task 里 question 非空、status=paused)送答复:清空问题,并把答复作为消息 resume 它的 CLI 会话继续跑。" + whenLegacy("团队调度者收到【执行者提问】通知后用这个答,") + "用户/其他 agent 也可以直接调。提问任务还在 running/queued(回合没结算完)时会被拒,等它落 paused 再调" + whenLegacy(" —— 例外是团队调度台(mode=team),常驻会话忙着也接得住") + "。",
     inputSchema: {
       taskId: z.string().describe("提问任务的 id(通知里有)"),
       answer: z.string().min(1).describe("答复内容:直接给结论和理由,它会原样喂给对方续跑"),

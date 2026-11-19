@@ -31,6 +31,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { legacyTeamAndDuet } from "@navi/shared/legacy-modes";
 import { NAVI_MCP_SERVER_NAME, NAVI_TURN_IDENTITY_ENV, NAVI_TURN_IDENTITY_ENV_KEYS } from "@navi/shared/mcp";
 import { NAVI_TURN_FINGERPRINT_ENV, NAVI_TURN_FINGERPRINT_NONE, turnFingerprint } from "@navi/shared/turn-fingerprint";
 import { naviMcpEntry } from "../mcp-registry/register.js";
@@ -126,14 +127,18 @@ export function claudeNaviMcpInjection(
  */
 export function codexNaviMcpArgs(env: SpawnEnv, entry: NaviMcpEntry = naviMcpEntry()): string[] {
   const str = (s: string) => JSON.stringify(s);
-  const identityVars = NAVI_TURN_IDENTITY_ENV_KEYS.filter((key) => !!env?.[key]);
+  // 团队 / 讨论开关（shared/src/legacy-modes.ts）开着时也得透过去：codex 不透，MCP 那边就照样当关着。
+  const passVars = [
+    ...NAVI_TURN_IDENTITY_ENV_KEYS.filter((key) => !!env?.[key]),
+    ...(legacyTeamAndDuet() ? ["NAVI_LEGACY_TEAM_AND_DUET"] : []),
+  ];
   const vars = Object.entries({ ...entry.env, ...fingerprintEnv(env) }).map(([k, v]) => `${k}=${str(v)}`).join(",");
   const fields = [
     `command=${str(entry.command)}`,
     `args=[${entry.args.map(str).join(",")}]`,
     `env={${vars}}`,
     "enabled=true",
-    ...(identityVars.length ? [`env_vars=[${identityVars.map(str).join(",")}]`] : []),
+    ...(passVars.length ? [`env_vars=[${passVars.map(str).join(",")}]`] : []),
   ];
   return ["-c", `mcp_servers.${NAVI_MCP_SERVER_NAME}={${fields.join(",")}}`];
 }

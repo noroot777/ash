@@ -26,7 +26,10 @@ function schedule(): void {
   timer = setTimeout(() => { timer = null; void flush(); }, 30);
 }
 
-/** 这一批脏键指向的全部任务：记下的任务本身，加上记下的队列、分组**此刻**的成员。 */
+/**
+ * 这一批脏键指向的全部任务：记下的任务本身，加上记下的队列、分组**此刻**的成员，再加上它们往上每一层
+ * 派活的那条（归档要名下整棵都结束，孙辈一变，祖辈那颗「归档」就可能跟着变；触发器里递归不了）。
+ */
 async function affected(ids: string[], queueIds: string[], groupIds: string[]): Promise<string[]> {
   const out = new Set(ids);
   if (queueIds.length) {
@@ -36,6 +39,12 @@ async function affected(ids: string[], queueIds: string[], groupIds: string[]): 
   if (groupIds.length) {
     const members = await db.select({ id: tasks.id }).from(tasks).where(inArray(tasks.groupId, groupIds));
     for (const member of members) out.add(member.id);
+  }
+  let level = [...out];
+  while (level.length) {
+    const rows = await db.select({ by: tasks.dispatchedBy }).from(tasks).where(inArray(tasks.id, level));
+    level = rows.flatMap((row) => (row.by && !out.has(row.by) ? [row.by] : []));
+    for (const by of level) out.add(by);
   }
   return [...out];
 }

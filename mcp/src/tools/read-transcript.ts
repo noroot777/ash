@@ -13,6 +13,7 @@
 // 这里就读到什么**,两边不会漂。
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { whenLegacy } from "@navi/shared/legacy-modes";
 import { parseSessionOutput } from "@navi/shared/session-output";
 import { call, callText, fail, ok } from "../runtime.js";
 import { planTranscript } from "../plan-transcript.js";
@@ -177,7 +178,7 @@ server.registerTool(
       "读**另一条任务**(或自己)已经说过的话:用户的指令、agent 的回复、系统的结算说明,按时间顺序拼成一份可读的对话,跟界面上看到的是同一份语料。" +
       "拿到一个任务 id、想知道「它当时得出了什么结论/做过什么」时用这个——别去翻 ~/.claude/projects 或 codex 的 rollout 文件,那条路只对单一执行器成立。" +
       "一个任务有多条会话时(duet 各声部、重试新建的、旁路回合)默认全读,按**最后活动时间**排序(续聊复用老会话,创建时间不代表内容新旧);sessionId 可只读一条。" +
-      "团队任务的执行者是各自独立的任务,先用 list_tasks(parentId=团队 id) 拿 id 再逐个读。超长时按会话分摊裁剪、各保末尾。",
+      whenLegacy("团队任务的执行者是各自独立的任务,先用 list_tasks(parentId=团队 id) 拿 id 再逐个读。") + "超长时按会话分摊裁剪、各保末尾。",
     inputSchema: {
       taskId: z.string().describe("要读的任务 id"),
       sessionId: z.string().optional().describe("只读这一条会话;缺省读该任务的全部会话"),

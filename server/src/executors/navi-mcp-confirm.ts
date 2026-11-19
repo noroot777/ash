@@ -19,6 +19,7 @@
 import { readEnv } from "@navi/shared/env-names";
 import { existsSync } from "node:fs";
 import type { AgentEvent } from "@navi/shared";
+import { LEGACY_ONLY_MCP_TOOLS, legacyTeamAndDuet } from "@navi/shared/legacy-modes";
 import { NAVI_MCP_SERVER_NAME, NAVI_MCP_TOOLS, NAVI_MCP_TURN_EXITS, isNaviMcpServerName } from "@navi/shared/mcp";
 import { naviMcpEntry } from "../mcp-registry/register.js";
 import type { ClaudeNaviMcpInjection } from "./navi-mcp-inject.js";
@@ -47,7 +48,9 @@ function unavailable(detail: string): Problem {
 /** 连上了，`exposed` 是 CLI 报的 navi 工具名（不带前缀）；缺了哪几样就说哪几样。 */
 function missingTools(exposed: readonly string[], who: string): Problem {
   if (lax()) return null;
-  const missing = NAVI_MCP_TOOLS.filter((t) => !exposed.includes(t));
+  // 团队停用时 MCP 本来就不注册 dispatch（shared/src/legacy-modes.ts），不算被挡掉。
+  const expected = legacyTeamAndDuet() ? NAVI_MCP_TOOLS : NAVI_MCP_TOOLS.filter((t) => !LEGACY_ONLY_MCP_TOOLS.includes(t));
+  const missing = expected.filter((t) => !exposed.includes(t));
   if (!missing.length) return null;
   const exits = missing.filter((t) => t in NAVI_MCP_TURN_EXITS);
   const head = `${who}连上了 Navi，但 ${missing.join("、")} 不在 agent 手上 —— 执行器配置限制了 Navi 的工具清单`;

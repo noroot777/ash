@@ -33,6 +33,9 @@
 /* 类型、来源：各一个灰图标，名字在提示里 */
 .task-head-glyph { display: inline-grid; width: 20px; height: 24px; flex: none; place-items: center; color: var(--faint); }
 .task-head-source.ui-icon-button { color: var(--faint); }
+/* 归档了：类型那一格是归档图标、标题退成灰字 —— 冻结着，不是正在看的一件事。 */
+.task-head-archived.ui-icon-button { color: var(--muted); }
+.task-detail-title.is-archived { color: var(--muted); }
 
 /* 标题平时就是一行字，指上去或点进去才看得出能改。宽度跟着字走（.task-title-sizer 用一份看不见
    的副本撑出宽度）——来源和图钉紧跟在标题后面，不是甩在这一行的另一头；放不下时自己缩、打省略号。 */

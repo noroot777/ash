@@ -6,6 +6,9 @@ const repo = fileURLToPath(new URL("..", import.meta.url));
 const environment = { ...process.env };
 // 各代名字一起擦(`NAVI_DB`、改名之前的 `ASH_DB`……):擦漏一代,测试就会打到那份库上。
 for (const name of ["NAVI_DB", "NAVI_RUNS_DIR", "NAVI_DATA_DIR"]) clearEnv(environment, name);
+// 团队 / 讨论在线上是关着的，代码留着等哪天打开（shared/src/legacy-modes.ts）。门禁带着它跑那套老代码的
+// 回归，留着的东西就一直是能用的；关着时的样子由 test:dispatch-archive 自己擦掉它来验。
+environment.NAVI_LEGACY_TEAM_AND_DUET = "1";
 
 // 验收前置命令跑哪几条。加一条的判据：它拦的是**无声退化**——不跑就没有任何人会发现的
 // 那一类。提示词体积属于这一类：注入给模型的字数涨上去不会报任何错，只会在几个月后变成

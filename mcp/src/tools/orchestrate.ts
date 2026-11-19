@@ -1,5 +1,5 @@
-// 「安排谁去做什么、按什么顺序」那一组工具：项目、分组、任务清单与批量创建、团队派活、
-// 起跑/重新排队、队列增删改。
+// 「安排谁去做什么、按什么顺序」那一组工具：项目、分组、任务清单与批量创建、团队派活（停用中，
+// 见 shared/src/legacy-modes.ts）、起跑/重新排队、队列增删改。
 //
 // 与 task-turn.ts 的分界是**作用对象**：这里的工具摆布的是「一批活怎么组织」，那边的
 // 是「某一条任务在自己回合里对 navi 说什么」。按这条线拆，加一个队列工具不会挤到回合
@@ -7,6 +7,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createWorkflowMode } from "@navi/shared/free-workflow";
+import { legacyTeamAndDuet, whenLegacy } from "@navi/shared/legacy-modes";
 import { call, fail, ok } from "../runtime.js";
 import type { TaskPrerequisites } from "@navi/shared/prerequisites";
 import { prerequisiteStepText } from "@navi/shared/prerequisites";
@@ -156,8 +157,8 @@ server.registerTool(
   "list_tasks",
   {
     title: "列出任务",
-    description: "列出任务,可按 projectId / groupId / parentId 过滤。团队调度者查「我的执行者现在都什么状态」用 parentId=自己的 taskId。默认隐藏已归档任务(includeArchived:true 才带上)。返回精简字段(id/title/status/archived/agentType/executorId/executorLabel/queueId/queuePosition/groupId/parentId/question/prerequisites)。prerequisites 只在有前置关系时给:每条前置的 step(settled=站稳)、waiting=在等前置、blocked=开不了工的原因。",
-    inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), parentId: z.string().optional().describe("只列这个任务的下属执行者(团队调度者用)"), includeArchived: z.boolean().optional().describe("默认 false:列表不含已归档任务") },
+    description: "列出任务,可按 projectId / groupId / parentId 过滤。" + whenLegacy("团队调度者查「我的执行者现在都什么状态」用 parentId=自己的 taskId。") + "默认隐藏已归档任务(includeArchived:true 才带上)。返回精简字段(id/title/status/archived/agentType/executorId/executorLabel/queueId/queuePosition/groupId/parentId/question/prerequisites)。prerequisites 只在有前置关系时给:每条前置的 step(settled=站稳)、waiting=在等前置、blocked=开不了工的原因。",
+    inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), parentId: z.string().optional().describe(legacyTeamAndDuet() ? "只列这个任务的下属执行者(团队调度者用)" : "只列 parentId 是它的任务"), includeArchived: z.boolean().optional().describe("默认 false:列表不含已归档任务") },
   },
   async ({ projectId, groupId, parentId, includeArchived }) => {
     try {
@@ -276,7 +277,8 @@ server.registerTool(
 );
 
 
-server.registerTool(
+// 团队停用时不注册：智能体连这个工具都看不到（shared/src/legacy-modes.ts）。
+if (legacyTeamAndDuet()) server.registerTool(
   "dispatch",
   {
     title: "派活给执行者(团队调度者专用)",
