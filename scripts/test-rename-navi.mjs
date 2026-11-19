@@ -1,6 +1,7 @@
 // 改名脚本手写修复层的落点契约：整份新建的文件按磁盘实况认，不按 git 清单 —— 没加进 git 的同名文件
 // 不许被覆盖（整次拒绝、一个文件都不动）；已经生成好、还没加进 git 的那份，重跑和核对都当它在。
 // 文件清单的契约：没加进 git 的新文件（在途分支刚写的）也要过一遍 —— 不加 --dirty 拒绝，核对报出来，--dirty 照改。
+// 正文：含 NUL 的文本照常改名、字节原样，核对与清单都点名；不是 UTF-8 又写着旧名的整次拒绝；Windows 验证记录整份不改。
 // 磁盘上的形态：路径上每一级都不透过符号链接读写建（链到仓库外的东西不许被改、不许被建出目录）；还没提交的删除、
 // 要挪名的链接、所在目录或落点上级是链接的，动手之前整次拒绝；规划之后才被别的进程换掉、改掉的，动手时停下。
 // 索引：挪名时按路径精确认索引项（特殊字符的文件名不配上别人的项），带标志的、有冲突的（路径里带 TAB 也认得）动手之前整次拒绝。
@@ -105,6 +106,57 @@ try {
   assert.equal(read("notes/navi-widget.ts"), "export const naviWidget = 1;\n");
   assert.equal(run("--check").status, 0, "改完核对应为 0");
   console.log("✓ 改名脚本：没加进 git 的新文件也改名、也核对；不加 --dirty 拒绝");
+
+  // 正文认不认得：含 NUL 的文本（handoff-capability.ts 拿 NUL 当拼键分隔符，曾被当成二进制整份跳过、核对和清单都不报）
+  // 照常改名，NUL 和别的字节原样；不是合法 UTF-8、又写着旧名的，改名和核对都整次拒绝、一个字节不动，清单里说清；
+  // 不写旧名的不拦。Windows 真机验证记录写的是改名前那台机器上的事实，整份不进改名。
+  mkdirSync(join(root, "docs"));
+  const bytes = (path) => readFileSync(join(root, path));
+  const NUL_FILE = "notes/nul.ts";
+  write(NUL_FILE, 'import { x } from "@ash/shared";\nconst ashKey = `${a}\0${b}`; // 拼键，NUL 分隔\n');
+  const NUL_RENAMED = Buffer.from('import { x } from "@navi/shared";\nconst naviKey = `${a}\0${b}`; // 拼键，NUL 分隔\n', "utf8");
+  const WINDOWS = "docs/rename-navi-windows.md";
+  const WINDOWS_TEXT = "# Windows 真机验证\n\n- 旧服务读 ASH_DB，任务分支 ash/abc，锁 ash.db.ash.lock\n- 那台的 ash 服务跑在 :4317\n";
+  write(WINDOWS, WINDOWS_TEXT);
+  const LATIN = Buffer.from("caf\xe9 ash\n", "latin1");
+  const LATIN_PLAIN = Buffer.from("caf\xe9 au lait\n", "latin1");
+  writeFileSync(join(root, "notes/latin1.txt"), LATIN);
+  writeFileSync(join(root, "notes/latin1-plain.txt"), LATIN_PLAIN);
+  git("add", "-A");
+  git("commit", "-q", "-m", "content kinds");
+  for (const args of [[], ["--check"]]) {
+    const r = run(...args);
+    assert.equal(r.status, 2, `${args.join(" ") || "改名"}：不是 UTF-8 又写着旧名的应整次拒绝\n${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /notes\/latin1\.txt：不是合法的 UTF-8/);
+    assert.doesNotMatch(r.stderr, /latin1-plain/, "不写旧名的不用拦");
+  }
+  assert.deepEqual(bytes("notes/latin1.txt"), LATIN, "拒绝时一个字节不动");
+  assert.match(read(NUL_FILE), /@ash\/shared/, "拒绝时含 NUL 的那份也不动");
+  const kinds = run("--report");
+  assert.equal(kinds.status, 0, kinds.stderr);
+  assert.match(kinds.stdout, /^## not-text（1 份）$/m);
+  assert.match(kinds.stdout, /^- notes\/latin1\.txt：不是合法的 UTF-8/m);
+  assert.match(kinds.stdout, /^## nul-text（1 份）\n[^]*?^- notes\/nul\.ts$/m, "含 NUL 的文本在清单里点名");
+  assert.doesNotMatch(kinds.stdout, /^- docs\/rename-navi-windows\.md:/m, "Windows 记录不逐处列成「留下的兼容值」");
+  assert.match(kinds.stdout, /^- docs\/rename-navi-windows\.md：\d+ 行$/m, "Windows 记录记在改名自己的文档里");
+  git("rm", "-q", "notes/latin1.txt");
+  git("commit", "-q", "-m", "drop latin1");
+  const nulCheck = run("--check");
+  assert.equal(nulCheck.status, 1, `含 NUL 的文本要被核对看见\n${nulCheck.stdout}${nulCheck.stderr}`);
+  assert.match(nulCheck.stdout, /^edit notes\/nul\.ts（含 NUL 字节/m);
+  assert.doesNotMatch(nulCheck.stdout, /rename-navi-windows/, "Windows 记录不算要改的");
+  const nulRun = run();
+  assert.equal(nulRun.status, 0, nulRun.stderr);
+  assert.match(nulRun.stdout, /notes\/nul\.ts（含 NUL 字节/, "改的时候标出来");
+  assert.deepEqual(bytes(NUL_FILE), NUL_RENAMED, "只换旧名，NUL 和其余字节原样");
+  assert.equal(read(WINDOWS), WINDOWS_TEXT, "Windows 记录一个字不改");
+  assert.deepEqual(bytes("notes/latin1-plain.txt"), LATIN_PLAIN);
+  git("add", "-A");
+  git("commit", "-q", "-m", "nul renamed");
+  assert.equal(run("--check").status, 0, "改完核对应为 0");
+  git("rm", "-r", "-q", "docs", NUL_FILE, "notes/latin1-plain.txt");
+  git("commit", "-q", "-m", "drop content kinds");
+  console.log("✓ 改名脚本：含 NUL 的文本照常改名且字节原样、核对与清单都点名；不是 UTF-8 又写着旧名的整次拒绝；Windows 验证记录整份不改");
 
   // 链到仓库外的文本文件：不透过链接改它，核对也不因为它报要改。
   const OUTSIDE_TEXT = 'const ashWidget = "ash";\n';
@@ -489,6 +541,7 @@ try {
   assert.match(listed.stdout, /^# 二、更早一代 harness（\d+ 处）/m, "harness 那一代单列");
   assert.doesNotMatch(listed.stdout, /^## unclassified/m, "每一处 harness 都要有理由：认不出的要么补规则，要么是漏改");
   assert.doesNotMatch(listed.stdout, /rename-navi-remaining\.md：/, "清单不记它自己：生成时它是空的，记进去就和重新生成的对不上");
+  assert.match(listed.stdout, /^- docs\/rename-navi-windows\.md：\d+ 行$/m, "Windows 真机验证记录整份不进改名");
   console.log("✓ 剩余清单：旧名登记处逐行列出，harness 单列且没有说不出理由的");
 } finally {
   rmSync(root, { recursive: true, force: true });

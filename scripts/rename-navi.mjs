@@ -23,7 +23,7 @@ import { readFileSync, readlinkSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FIXES } from "./rename-navi-fixes.mjs";
-import { harnessSection } from "./rename-navi-report.mjs";
+import { renderReport } from "./rename-navi-report.mjs";
 import { ancestorProblem, diskKind, identity, moveInRepo, writeInRepo } from "./rename-navi-fs.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
@@ -45,8 +45,9 @@ const renameText = (text) => text.replace(TOKEN, (m) => CASES[m]);
 const REGISTRY_FILES = ["shared/src/legacy-names.ts", "scripts/legacy-names.mjs"];
 // 改名自己的工具和交付文档：里面的旧名是规则和说明本身。
 // 剩余清单是 --report 的输出：清单里不记它自己（生成时它正被写、内容是空的，记进去就和重新生成的对不上）。
+// Windows 真机验证的记录和那台机器的升级操作单：写的是改名前那台机器上的事实（ASH_* 变量、ash/ 分支、旧锁文件名），换了就写错了。
 const REMAINING = "docs/rename-navi-remaining.md";
-const TOOLING_FILES = [SELF, "scripts/rename-navi-fixes.mjs", "scripts/rename-navi-report.mjs", "scripts/rename-navi-fs.mjs", "scripts/test-rename-navi.mjs", "docs/rename-navi.md", REMAINING];
+const TOOLING_FILES = [SELF, "scripts/rename-navi-fixes.mjs", "scripts/rename-navi-report.mjs", "scripts/rename-navi-fs.mjs", "scripts/test-rename-navi.mjs", "docs/rename-navi.md", REMAINING, "docs/rename-navi-windows.md"];
 const SKIP_FILES = new Set([...REGISTRY_FILES, ...TOOLING_FILES]);
 const isRuleFile = (p) => /(^|\/)(CLAUDE|AGENTS)\.md$/.test(p) || p === "docs/incidents.md";
 const BINARY = /\.(png|jpe?g|gif|icns|ico|webp|pdf|zip|gz|dmg|ttf|otf|woff2?|mp4|mov|db|sqlite)$|(^|\/)DS_Store$/i;
@@ -196,7 +197,16 @@ function repoFiles() {
   const untracked = list("--others", "--exclude-standard");
   return { files: [...list(), ...untracked], untracked: new Set(untracked) };
 }
-const isText = (path, buf) => !BINARY.test(path) && !buf.includes(0);
+// 正文能不能当文本改，看的是按 UTF-8 解码再编码回去是不是逐字节一样，不看有没有 NUL：NUL 在 UTF-8 里是合法字符
+// （源码里拿它当拼键的分隔符照样是文本），一样就照常改，没换的字节原样写回。不一样的（别的编码、没登记扩展名的
+// 二进制）解码时坏字节会被换成 U+FFFD，写回去就毁了：不改，字节里写着旧名的整次拒绝。扩展名登记过的二进制不看正文。
+// 不是文本的记下 kind，以及按字节（latin1 一字节一字符）看有没有旧名。
+function decode(path, buf) {
+  const tokens = () => HAS_TOKEN.test(buf.toString("latin1"));
+  if (BINARY.test(path)) return { kind: "binary", tokens: tokens() };
+  const text = buf.toString("utf8");
+  return Buffer.from(text, "utf8").equals(buf) ? { kind: "text", text } : { kind: "undecodable", tokens: tokens() };
+}
 // 索引整份读一次、按路径精确认：不带路径参数（git 把路径参数当通配模式，ash[1].txt 会配上 ash1.txt 那一项）。
 // -z 时每一项是「mode sha stage<TAB>路径<NUL>」，路径是第一个 TAB 之后的全部（路径里可以有 TAB）；--debug 在后面
 // 跟五行固定格式的缓存信息，最后一行是 flags。认不出这个形状就停下，不猜。
@@ -434,13 +444,19 @@ function plan() {
     }
     return kinds.get(path);
   };
+  // 正文没按文本读的（见 decode）和含 NUL 的文本：前者要么拒绝、要么在清单里说清，后者改的时候标出来。
+  const opaque = new Map();
+  const nul = new Set();
   const readText = (path) => {
     if (cache.has(path)) return cache.get(path);
     let value = null;
     if (kindOf(path) === "file") {
       try {
         const buf = readFileSync(join(REPO, path));
-        if (isText(path, buf)) value = buf.toString("utf8");
+        const content = decode(path, buf);
+        if (content.kind === "text") value = content.text;
+        else opaque.set(path, content);
+        if (content.kind === "text" && buf.includes(0)) nul.add(path);
       } catch (error) {
         unreadable.push(`${path}：${error?.code ?? error}`);
       }
@@ -489,6 +505,9 @@ function plan() {
     }
     let text = readText(path);
     const target = renamePath(path);
+    if (opaque.get(path)?.kind === "undecodable" && opaque.get(path).tokens) {
+      blocked.push(`${path}：不是合法的 UTF-8，里面又写着旧名：按文本改写会毁掉别的字节。是别的编码的文本就手工改，是二进制就把扩展名加进 BINARY`);
+    }
     for (const patch of PATCHES) if (patch.file === path && text?.includes(patch.from) && !text.includes(patch.to)) text = text.replace(patch.from, patch.to);
     if (target !== path) moves.push([path, target]);
     if (text === null) continue;
@@ -523,7 +542,7 @@ function plan() {
   }
   // 改正文时拿什么复核：规划时读到的原文和那一份的身份（动手前内容或身份变了就停下）。
   for (const edit of edits) if (!edit.create) Object.assign(edit, { original: readText(edit.path), id: ids.get(edit.path) });
-  return { moves, edits, kept, ruleFiles, unreadable, blocked, fixProblems, files, untracked, ids, index, readText };
+  return { moves, edits, kept, ruleFiles, unreadable, blocked, fixProblems, files, untracked, ids, index, readText, opaque, nul };
 }
 
 /** 手写修复：文件里已经有它的记号就算修过了（之后再怎么改都不碰）；没有就逐段按原文替换，哪段对不上都整份不动、记下来。 */
@@ -548,34 +567,6 @@ function applyFix(fix, text, problems) {
 
 const WHY = Object.fromEntries([...GLOBAL_KEEP, ...FILE_KEEP].map((r) => [r.id, r.why]));
 Object.assign(WHY, { "compat-file": COMPAT_WHY, prose: PROSE_WHY, sibling: SIBLING_WHY, "legacy-registry": "旧名登记处：兼容要认的旧名只在这两份里登记（各自的文件头写着），整份不进改名" });
-
-function report({ kept, ruleFiles, files, readText }) {
-  const groups = new Map();
-  for (const k of kept) groups.set(k.why, [...(groups.get(k.why) ?? []), k]);
-  const tokenLines = (path, re) => (readText(path) ?? "").split("\n").flatMap((text, i) => (re.test(text) ? [{ path, line: i + 1, text }] : []));
-  const registry = REGISTRY_FILES.flatMap((path) => tokenLines(path, HAS_TOKEN));
-  if (registry.length) groups.set("legacy-registry", registry);
-  const lines = [
-    "# 改名剩余清单",
-    "",
-    "由 `node scripts/rename-navi.mjs --report` 生成，是生成那一刻的快照：行号会随后续改动漂移，要最新的就重新生成。",
-    "第一部分是整词 ash（产品的上一代名字），第二部分单列更早一代 harness。",
-    "",
-    `# 一、ash（${kept.length + registry.length + ruleFiles.length} 处）`,
-    "",
-  ];
-  for (const [id, items] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
-    lines.push(`## ${id}（${items.length} 处）`, "", WHY[id], "");
-    for (const k of items) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160)}`);
-    lines.push("");
-  }
-  lines.push(`## rule-file（${ruleFiles.length} 处）`, "", "规则文件由人改写（每处多一个字节，脚本不碰，见 scripts/rule-guard.mjs）；这里是改完之后仍留着的", "");
-  for (const k of ruleFiles) lines.push(`- ${k.path}:${k.line}  ${k.text.trim().slice(0, 160)}`);
-  lines.push("", "## rename-tooling", "", "改名自己的脚本和交付文档：旧名是规则与说明本身，只记数，不逐行列", "");
-  for (const path of TOOLING_FILES) if (path !== REMAINING && files.includes(path)) lines.push(`- ${path}：${tokenLines(path, HAS_TOKEN).length} 行`);
-  lines.push("", ...harnessSection(files.filter((path) => !TOOLING_FILES.includes(path)), readText));
-  return lines.join("\n") + "\n";
-}
 
 /** 动手之前先把挪名的落点全查一遍：有一个已经被占（在途分支自己建过同名新文件）就一个都不动。 */
 function moveConflicts(moves) {
@@ -626,6 +617,8 @@ function apply({ moves, edits, untracked, ids, index }) {
   }
 }
 
+const nulNote = ({ nul }, path) => (nul.has(path) ? "（含 NUL 字节，照常按 UTF-8 文本改，NUL 和其余没换的字节原样）" : "");
+
 const args = new Set(process.argv.slice(2));
 const result = plan();
 if (result.unreadable.length) {
@@ -641,10 +634,10 @@ if (result.blocked.length && !args.has("--report")) {
   process.exit(2);
 }
 if (args.has("--report")) {
-  process.stdout.write(report(result));
+  process.stdout.write(renderReport(result, { registryFiles: REGISTRY_FILES, toolingFiles: TOOLING_FILES, remaining: REMAINING, why: WHY, token: HAS_TOKEN }));
 } else if (args.has("--check")) {
   for (const [from, to] of result.moves) console.log(`move ${from} → ${to}`);
-  for (const { path } of result.edits) console.log(`edit ${path}`);
+  for (const { path } of result.edits) console.log(`edit ${path}${nulNote(result, path)}`);
   process.exit(result.moves.length || result.edits.length ? 1 : 0);
 } else {
   // 没加进 git 的文件也算不干净：它们同样会被改名，改坏了 git reset --hard 退不回来。
@@ -659,5 +652,6 @@ if (args.has("--report")) {
   }
   apply(result);
   console.log(`改名：挪了 ${result.moves.length} 个文件，改了 ${result.edits.length} 个文件；留下 ${result.kept.length} 处兼容值（--report 看清单）`);
+  for (const { path, target } of result.edits) if (result.nul.has(path)) console.log(`  ${target}${nulNote(result, path)}`);
   console.log("接着：npm install（工作区包换了作用域），再按 scripts/rename-navi.mjs 的报告核对。");
 }

@@ -12,11 +12,12 @@
 | `scripts/rename-navi.mjs` | 入口。按词元认 ash（`hash`、`bash`、`dashboard` 不算；驼峰 `isAshMcp`、下划线 `ASH_DB`、连字符 `ash-presence` 切开后整段是 ash 才算），大小写跟着原词走：ash → navi、Ash → Navi、ASH → NAVI。兼容值按规则跳过。 |
 | `scripts/rename-navi-fixes.mjs` | 手写修复层：机械换不出来、交付又离不开的几处（mac 应用与发版脚本读环境变量新旧两代都认、win-remote 按目录名认对端本仓库、被改名带坏的测试夹具等）。同一次运行里在机械改名之后套上。 |
 | `scripts/rename-navi-fs.mjs` | 仓库边界：路径上每一级都不许是符号链接，规划时认一遍，动手建目录、挪、写之前再认一遍。 |
-| `scripts/rename-navi-report.mjs` | `--report` 里更早一代 harness 那一节的分类规则。 |
+| `scripts/rename-navi-report.mjs` | `--report` 的排版，和其中更早一代 harness 那一节的分类规则。 |
 | `scripts/test-rename-navi.mjs` | 脚本自己的回归（挂在 `npm run test:accept-scripts` 里）。 |
 | `docs/rename-navi-remaining.md` | 交付时那一刻的剩余清单（`--report` 的输出）。 |
+| `docs/rename-navi-windows.md` | Windows 真机验证（第 ⑦ 步）的记录和那台机器的升级操作单。 |
 
-这几份整份不进改名（里面的旧名是规则和说明本身）。
+这几份整份不进改名：里面的旧名是规则和说明本身；Windows 那份写的是改名前那台机器上的事实（`ASH_*` 变量、`ash/` 分支、旧锁文件名），换了就写错了。
 
 ## 用法
 
@@ -35,7 +36,8 @@ node scripts/rename-navi.mjs --report   # 打出剩下的每一处 ash 与理由
   - 工作区不干净（没加 `--dirty`）。
   - 挪名的落点已经有文件。
   - 有做不完整的文件：还没提交的删除；要挪名、链接里写着旧名的符号链接；路径上有目录链接的文件或落点；
-    索引项有没解决的冲突、或带着 intent-to-add / assume-unchanged / skip-worktree 标志的。`--check` 碰上这种也返回 2，不算通过。
+    索引项有没解决的冲突、或带着 intent-to-add / assume-unchanged / skip-worktree 标志的；不是合法 UTF-8、里面又写着旧名的
+    （见下面「正文怎么认」）。`--check` 碰上这种也返回 2，不算通过。
 - `3`：改到一半失败。会列出已经做完的步骤，并给出恢复办法。
 - `4`：有文件读不到（权限、IO），没法判断要不要换。
 - `5`：手写修复对不上（原文找不到，或要新建的文件那里已经有一份别的内容），一个文件都没动。
@@ -43,6 +45,15 @@ node scripts/rename-navi.mjs --report   # 打出剩下的每一处 ash 与理由
 脚本过一遍的文件是「已跟踪的 + 没加进 git、也没被 .gitignore 忽略的」，改名、`--check`、`--report` 用的是同一份：
 分支上刚写、还没 `git add` 的新文件照样改名、照样被核对。不加 `--dirty` 时有这种文件就拒绝（返回 2），因为它们改坏了
 `git reset --hard` 退不回来。
+
+正文怎么认（文件名一律照常挪，这里只说正文）：
+
+- 扩展名在脚本的 `BINARY` 名单里的（图片、字体、压缩包、库文件……）：二进制格式，正文不看。字节里出现了 ash 的，`--report` 的 `not-text` 一节点名。
+- 其余的按 UTF-8 解码再编码回去，逐字节一样就是文本，照常改名，没换的字节原样写回。**含 NUL 字节的也算**：NUL 在 UTF-8 里是合法字符，
+  源码里拿它当分隔符的照样是文本（`server/src/handoff-capability.ts` 曾因为含 NUL 被当成二进制整份跳过，核对和清单都不报）。
+  这种文件 `--check` 和改名的输出里会标「含 NUL 字节」，`--report` 的 `nul-text` 一节逐个列出。
+- 逐字节对不上的（GBK、Latin-1 之类别的编码，或没登记扩展名的二进制）：解码时坏字节会被换掉，写回去就毁了，所以不改。
+  里面写着 ash 的整次拒绝（返回 2），`--report` 的 `not-text` 一节也列着。是别的编码的文本就手工改；是二进制就把扩展名加进 `BINARY`。
 
 正文只读写仓库里的普通文件，而且路径从仓库根往下每一级都不许是符号链接：文件本身是链接、所在目录是链接、
 挪名的落点在链接下面都算。碰上这些，链到仓库外的东西一样都不会被读、被改、被建出目录来。
