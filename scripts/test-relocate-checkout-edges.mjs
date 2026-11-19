@@ -100,7 +100,7 @@ try {
       const text = readFileSync(file, "utf8");
       const r = t.cli(["--apply"]);
       assert.equal(r.status, 2, `${label}：${out(r)}`);
-      assert.match(r.stdout, /改完会和已有的 .* 相同/, label);
+      assert.match(r.stdout, /改完会和已有的 .* 重名/, label);
       assert.equal(readFileSync(file, "utf8"), text, label);
       assert.ok(existsSync(t.from) && !existsSync(t.to), `${label}：目录没搬`);
     }
@@ -108,7 +108,7 @@ try {
 
   test("F3 资源根：XDG 数据/配置目录、显式 --db 都在树里时，--no-link 搬完照样改到、核对看得见", () => {
     const t = tree();
-    const xdg = { XDG_DATA_HOME: join(t.from, "xdg-data"), XDG_CONFIG_HOME: join(t.from, "xdg-config") };
+    const xdg = { XDG_DATA_HOME: join(t.from, "xdg-data"), XDG_CONFIG_HOME: join(t.from, "xdg-config"), NAVI_DB: join(t.from, "data", "ash.db") };
     mkdirSync(join(xdg.XDG_DATA_HOME, "opencode"), { recursive: true });
     const oc = new DatabaseSync(join(xdg.XDG_DATA_HOME, "opencode", "opencode.db"));
     oc.exec("CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT)");
@@ -117,14 +117,19 @@ try {
     write(join(xdg.XDG_CONFIG_HOME, "opencode", "opencode.json"), `${JSON.stringify({ mcp: { navi: { command: [`${t.from}/mcp/x.js`] } } })}\n`);
     const db = ["--db", join(t.from, "data", "ash.db")];
     const r = t.cli(["--apply", "--no-link", ...db], xdg);
-    assert.equal(r.status, 0, out(r));
-    const moved = { XDG_DATA_HOME: join(t.to, "xdg-data"), XDG_CONFIG_HOME: join(t.to, "xdg-config") };
+    assert.equal(r.status, 1, out(r));
+    for (const name of Object.keys(xdg)) assert.match(r.stdout, new RegExp(`环境变量 ${name} 还写着旧位置`), name);
+    const moved = { XDG_DATA_HOME: join(t.to, "xdg-data"), XDG_CONFIG_HOME: join(t.to, "xdg-config"), NAVI_DB: join(t.to, "data", "ash.db") };
     const ocAfter = new DatabaseSync(join(moved.XDG_DATA_HOME, "opencode", "opencode.db"), { readOnly: true });
     assert.equal(ocAfter.prepare("SELECT directory FROM session").get().directory, `${t.to}/.worktrees/T1`);
     ocAfter.close();
     assert.ok(readFileSync(join(moved.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8").includes(`${t.to}/mcp/x.js`));
-    // 搬完之后环境变量和 --db 照旧写着旧位置（用户 shell 里没改）：脚本按树此刻的位置换算，照样看得见。
-    const v = t.cli(["--verify", ...db], xdg);
+    // 搬完之后环境变量还写着旧位置：脚本自己照样找得到东西，但服务和 CLI 照原值读，所以核对不算完；
+    // 在改过的环境里核对才干净。一次性的 --db 照旧写旧位置没关系（只给脚本自己找库用）。
+    const stale = t.cli(["--verify", ...db], xdg);
+    assert.equal(stale.status, 1, out(stale));
+    assert.match(stale.stdout, new RegExp(`XDG_DATA_HOME=${moved.XDG_DATA_HOME}`));
+    const v = t.cli(["--verify", ...db], moved);
     assert.equal(v.status, 0, out(v));
     assert.match(v.stdout, /opencode 会话的工作目录要改：0 条\n/);
     assert.ok(!v.stdout.includes("没装 opencode"));
@@ -206,6 +211,7 @@ try {
     write(join(src, "s.jsonl"), jsonl(`${t.from}/.worktrees/T1`));
     write(join(t.projects, claudeSlug(`${t.to}/.worktrees/T1`), "n.jsonl"), jsonl(`${t.to}/.worktrees/T1`));
     chmodSync(src, 0o700);
+    chmodSync(join(t.projects, claudeSlug(`${t.to}/.worktrees/T1`)), 0o700); // 目标比源宽会被拦下（见下面的「合并权限」）
     assert.ok([0, 1].includes(t.cli(["--apply"]).status));
     assert.ok(!existsSync(src));
     assert.equal(t.cli(["--rollback"]).status, 0);
@@ -228,6 +234,98 @@ try {
     } finally {
       child.kill();
     }
+  });
+  test("合并目标：新名字是指向别的项目的链接、旧名字本身是链接，都不动；别的项目一个字节不多", () => {
+    const t = tree();
+    const other = join(t.base, "other-project");
+    mkdirSync(other);
+    const src = join(t.projects, claudeSlug(`${t.from}/.worktrees/T1`));
+    write(join(src, "s.jsonl"), jsonl(`${t.from}/.worktrees/T1`));
+    symlinkSync(other, join(t.projects, claudeSlug(`${t.to}/.worktrees/T1`)));
+    const realMain = join(t.base, "elsewhere-main");
+    write(join(realMain, "m.jsonl"), jsonl(t.from));
+    symlinkSync(realMain, join(t.projects, claudeSlug(t.from)));
+    const grok = join(t.home, ".grok", "sessions");
+    write(join(grok, encodeURIComponent(`${t.from}/.worktrees/T1`), "g", "chat.jsonl"), "{}\n");
+    symlinkSync(other, join(grok, encodeURIComponent(`${t.to}/.worktrees/T1`)));
+    const dry = t.cli([]);
+    assert.match(dry.stdout, /新名字 .* 已经有了，但它是链接，不往里并/, out(dry));
+    assert.match(dry.stdout, new RegExp(`${claudeSlug(t.from).replace(/[-]/g, "\\-")}（是链接，不动`));
+    const r = t.cli(["--apply"]);
+    assert.equal(r.status, 1, out(r));
+    assert.deepEqual(readdirSync(other), [], "别的项目里什么都没进去");
+    assert.deepEqual(readdirSync(src), ["s.jsonl"]);
+    assert.ok(existsSync(join(grok, encodeURIComponent(`${t.from}/.worktrees/T1`), "g", "chat.jsonl")));
+  });
+
+  test("合并权限：目标比源宽（0755 并 0700）就拦下真做，什么都不动；目标收紧到 0700 后才并", () => {
+    const t = tree();
+    const src = join(t.projects, claudeSlug(`${t.from}/.worktrees/T1`));
+    const dst = join(t.projects, claudeSlug(`${t.to}/.worktrees/T1`));
+    write(join(src, "s.jsonl"), jsonl(`${t.from}/.worktrees/T1`));
+    write(join(dst, "n.jsonl"), jsonl(`${t.to}/.worktrees/T1`));
+    chmodSync(src, 0o700);
+    chmodSync(dst, 0o755);
+    const r = t.cli(["--apply"]);
+    assert.equal(r.status, 2, out(r));
+    assert.match(r.stdout, /目标权限 0755 比源 0700 宽/);
+    assert.ok(existsSync(t.from) && !existsSync(t.to) && existsSync(join(src, "s.jsonl")));
+    chmodSync(dst, 0o700);
+    assert.ok([0, 1].includes(t.cli(["--apply"]).status));
+    assert.deepEqual(readdirSync(dst).sort(), ["n.jsonl", "s.jsonl"]);
+    assert.equal(statSync(dst).mode & 0o777, 0o700);
+  });
+
+  test("配置里的合法转义：JSONC / TOML 里写成 \\u002f 的旧路径也认得、改得到，注释照留，改完按值核对", () => {
+    const t = tree();
+    const esc = (p) => p.replace(/\//g, "\\u002f");
+    const jsonc = join(t.home, ".config", "opencode", "opencode.jsonc");
+    write(jsonc, `{\n  // 工具在 ${t.from}/mcp\n  "mcp": { "navi": { "command": ["${esc(`${t.from}/mcp/x.js`)}"], }, },\n}\n`);
+    const toml = join(t.home, ".codex", "config.toml");
+    write(toml, `[projects.'${t.from}'] # 旧\ntrust_level = "trusted"\n\n[mcp_servers.navi]\nargs = ["${esc(`${t.from}/mcp/x.js`)}"]\n`);
+    const r = t.cli(["--apply", "--no-link"]);
+    assert.equal(r.status, 0, out(r));
+    const j = readFileSync(jsonc, "utf8");
+    assert.ok(j.includes(`// 工具在 ${t.to}/mcp`) && j.includes(`"${t.to}/mcp/x.js"`), j);
+    const parsed = JSON.parse(spawnSync("python3", ["-c", "import sys, json, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], 'rb'))))", toml], { encoding: "utf8" }).stdout);
+    assert.deepEqual(Object.keys(parsed.projects), [t.to]);
+    assert.deepEqual(parsed.mcp_servers.navi.args, [`${t.to}/mcp/x.js`]);
+    assert.equal(t.cli(["--verify"]).status, 0);
+  });
+
+  test("归属证据：有一份会话记录读不出工作目录就整目录不动（点名认领才搬）；同一个会话号两份记录对不上也不认", () => {
+    const t = tree();
+    const dir = join(t.projects, claudeSlug(`${t.from}/.worktrees/T1`));
+    write(join(dir, "a.jsonl"), jsonl(`${t.from}/.worktrees/T1`));
+    write(join(dir, "b.jsonl"), `${JSON.stringify({ type: "summary" })}\n`);
+    // 工作流目录：会话号 sid 的记录有两份，一份在树里、一份在树外。
+    const wf = join(t.projects, `${claudeSlug(`${t.from}/.worktrees/T1`)}-server`);
+    mkdirSync(join(wf, "sid"), { recursive: true });
+    write(join(t.projects, `${claudeSlug(t.from)}-x`, "sid.jsonl"), jsonl(join(t.base, "code", "harness-x")));
+    write(join(t.projects, claudeSlug(t.from), "sid.jsonl"), jsonl(t.from));
+    const dry = t.cli([]);
+    assert.match(dry.stdout, /1 份会话记录读不出工作目录/, out(dry));
+    assert.match(dry.stdout, new RegExp(`${wf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}（目录里没有会话记录`));
+    assert.ok([0, 1].includes(t.cli(["--apply", "--claude-claim", dir]).status));
+    assert.ok(existsSync(join(t.projects, claudeSlug(`${t.to}/.worktrees/T1`), "b.jsonl")), "点名认领的搬了");
+    assert.ok(existsSync(join(wf, "sid")), "对不上的不动");
+  });
+
+  test("认领参数：配置目录在树里时，搬前给的完整路径搬后照样认；读不懂的维护锁按「不知道」拦下", () => {
+    const t = tree();
+    const personal = join(t.from, "data", "user-cli", "u1", "claude");
+    const dir = join(personal, "projects", claudeSlug(`${t.from}/.worktrees/T1`));
+    write(join(dir, "memory", "m.md"), `在 ${t.from}/.worktrees/T1\n`);
+    const claim = ["--claude-claim", dir];
+    assert.ok([0, 1].includes(t.cli(["--apply", ...claim]).status));
+    const moved = join(t.to, "data", "user-cli", "u1", "claude", "projects", claudeSlug(`${t.to}/.worktrees/T1`));
+    assert.equal(readFileSync(join(moved, "memory", "m.md"), "utf8"), `在 ${t.to}/.worktrees/T1\n`);
+    assert.equal(t.cli(["--verify", ...claim]).status, 0);
+    const u = tree();
+    writeFileSync(join(u.data, "ash.db.maintenance.lock"), "{ 半份");
+    const r = u.cli(["--apply"]);
+    assert.equal(r.status, 2, out(r));
+    assert.match(r.stdout, /维护锁 .* 读不懂/);
   });
 } finally {
   for (const b of bases) { try { chmodSync(join(b, ".navi-relocate"), 0o755); } catch { /* 没有 */ } rmSync(b, { recursive: true, force: true }); }

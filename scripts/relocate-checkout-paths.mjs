@@ -157,7 +157,8 @@ export function rewriteJson(value, rules, collisions = [], at = "$") {
   if (typeof value === "string") return rewriteText(value, rules).text;
   if (Array.isArray(value)) return value.map((v, i) => rewriteJson(v, rules, collisions, `${at}[${i}]`));
   if (!value || typeof value !== "object") return value;
-  const out = {};
+  // 没有原型的对象：`__proto__` 这类成员名照样是普通的键，不会被当成改原型而丢掉。
+  const out = Object.create(null);
   const keys = Object.keys(value);
   for (const key of keys) {
     let nextKey = rewriteText(key, rules).text;
@@ -166,40 +167,6 @@ export function rewriteJson(value, rules, collisions = [], at = "$") {
       nextKey = key;
     }
     out[nextKey] = rewriteJson(value[key], rules, collisions, `${at}.${nextKey}`);
-  }
-  return out;
-}
-
-/** 文本里所有带引号的字面量，解码之后的内容（`"…"` 按 JSON 转义解，`'…'` 原样）。 */
-export function stringLiterals(text) {
-  const out = [];
-  for (const m of text.matchAll(/"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'/g)) {
-    let value = m[2];
-    if (value === undefined) {
-      try { value = JSON.parse(`"${m[1]}"`); } catch { value = m[1]; }
-    }
-    out.push(value);
-  }
-  return out;
-}
-
-/**
- * 文本格式的结构化配置（TOML、JSONC）改完会不会撞名：不靠解析器，在字面量层面保守地判。键里的路径
- * 一定是带引号的字面量（路径里有 `/`，做不了裸键），所以「改完的某个字面量等于文件里已有的另一个字面量、
- * 或者两个不同的字面量改完相同」是撞名的必要条件 —— 命中就当撞名（值相同也会被拦下，那是可接受的误报）。
- * 比的是解码之后的内容：TOML 里 `'…'` 与 `"…"` 内容相同就是同一个键。
- */
-export function literalCollisions(text, rules) {
-  const literals = stringLiterals(text);
-  const existing = new Set(literals);
-  const seen = new Map();
-  const out = [];
-  for (const v of new Set(literals)) {
-    const next = rewriteText(v, rules).text;
-    if (next === v) continue;
-    if (existing.has(next)) out.push({ key: v, existing: next });
-    else if (seen.has(next)) out.push({ key: v, existing: `${seen.get(next)}（两者改完相同）` });
-    seen.set(next, v);
   }
   return out;
 }

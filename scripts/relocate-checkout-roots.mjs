@@ -32,6 +32,26 @@ function storageEnv(env, name, errors) {
   return set[0]?.[1] ?? null;
 }
 
+/** 指定资源位置的环境变量：服务端的存储变量（三代名字）与各家 CLI 的配置 / 数据目录变量（照 catalog.ts）。 */
+const ROOT_ENV = [
+  ...["NAVI_DATA_DIR", "NAVI_DB", "NAVI_RUNS_DIR"].flatMap((n) => [n, ...LEGACY_ENV_PREFIXES.map((p) => p + n.slice("NAVI_".length))]),
+  "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "GEMINI_CLI_HOME", "KIMI_CODE_HOME",
+  "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "QWEN_HOME", "COPILOT_HOME", "KILO_CONFIG", "PI_CODING_AGENT_DIR",
+];
+
+/**
+ * 此刻环境里写着树里旧位置的资源变量：[{ name, value, next }]。脚本自己按树此刻的位置换算着用，但服务和
+ * 各家 CLI 照原值读 —— 不改的话，不留链接或拆了链接之后，它们会去旧位置找（或在那儿新建一份空的）。
+ * 脚本改不了启动它的 shell，也看不见别的终端、启动脚本里设的值，只能列出来交给人。
+ */
+export function staleEnv(env, { from, to }) {
+  return ROOT_ENV.flatMap((name) => {
+    const value = env[name]?.trim();
+    const next = value && mapPath(resolve(value), from, to);
+    return next ? [{ name, value, next }] : [];
+  });
+}
+
 const kindOf = (file) => (file.endsWith(".toml") ? "toml" : file.endsWith(".jsonc") ? "jsonc" : "json");
 
 /**

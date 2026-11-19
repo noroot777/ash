@@ -167,7 +167,7 @@ function report(plan, { verify = false } = {}) {
   say(`  claude 会话目录要改名：${c.moves.length} 个${c.moves.some((m) => m.merge) ? `（${c.moves.filter((m) => m.merge).length} 个目标已存在，并进去）` : ""}`);
   list(c.moves.filter((m) => !m.from.includes("--worktrees-")), (m) => `${m.from} → ${m.to}（${m.evidence}）`, 4);
   for (const m of [...c.moves, ...plan.grok.moves].filter((x) => x.conflicts.length)) {
-    say(`  ✗ ${m.from} 并进 ${m.to} 时有 ${m.conflicts.length} 项内容不同：${m.conflicts.slice(0, 3).join("、")}`);
+    say(`  ✗ ${m.from} 并进 ${m.to} 时有 ${m.conflicts.length} 处对不上：${m.conflicts.slice(0, 3).join("、")}`);
     blockers.push("会话目录合并有冲突");
   }
   if (c.unclassified.length) {
@@ -195,6 +195,14 @@ function report(plan, { verify = false } = {}) {
     say(`  ! ${f.file} 里写着旧路径（脚本不改，自己改掉）：`);
     list(f.lines, ([n, l]) => `${n}: ${l.trim().slice(0, 140)}`, 5);
     unresolved.push(`${f.file} 里的旧路径`);
+  }
+
+  say("\n环境变量：");
+  if (!plan.env.length) say("  当前 shell 里没有指进树里的资源变量");
+  for (const e of plan.env) {
+    say(`  ! ${e.name}=${e.value}：服务和 CLI 照原值读，不留链接或拆了链接之后会去旧位置找（或在那儿新建一份空的）`);
+    say(`    在启动服务的 shell、启动脚本、以后新开的终端里改成 ${e.name}=${e.next}，再在改过的 shell 里核对`);
+    unresolved.push(`环境变量 ${e.name} 还写着旧位置`);
   }
 
   say("\n远端：");

@@ -46,12 +46,14 @@ test("边界：兄弟目录（含中文名、空格后缀）、同名前缀、�
   assert.equal(r("/u/code/harness 下面"), "/u/code/harness 下面", "整值以旧根加空格开头：按整条路径看是另一个目录（真库里没有这种值）");
 });
 
-test("JSON 键改完撞名：两份都原样留着，记进 collisions", () => {
+test("JSON 键改完撞名：两份都原样留着，记进 collisions；`__proto__` 这类成员名不丢", () => {
   const rules = rewriteRules({ from: "/u/code/harness", to: "/u/code/navi" });
   const collisions = [];
   const out = rewriteJson({ "/u/code/harness": { a: 1 }, "/u/code/navi": { b: 2 }, "/u/code/harness/x": "/u/code/harness/y" }, rules, collisions);
-  assert.deepEqual(out, { "/u/code/harness": { a: 1 }, "/u/code/navi": { b: 2 }, "/u/code/navi/x": "/u/code/navi/y" });
+  assert.equal(JSON.stringify(out), JSON.stringify({ "/u/code/harness": { a: 1 }, "/u/code/navi": { b: 2 }, "/u/code/navi/x": "/u/code/navi/y" }));
   assert.deepEqual(collisions.map((c) => c.existing), ["/u/code/navi"]);
+  const proto = JSON.parse('{"__proto__": {"cmd": "/u/code/harness/x"}, "k": 1}');
+  assert.equal(JSON.stringify(rewriteJson(proto, rules)), '{"__proto__":{"cmd":"/u/code/navi/x"},"k":1}', "__proto__ 成员原样留着");
 });
 
 // ── 夹具 ───────────────────────────────────────────────────────────────────

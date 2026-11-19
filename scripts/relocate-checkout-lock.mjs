@@ -129,7 +129,9 @@ export function liveHolders(dbFile, runsDirs) {
       if (alive(r.body.pid, r.body.processStartedAtMs)) reasons.push(`在线登记 ${join(dir, name)}：navi 进程 ${r.body.pid}${r.body.port ? `（端口 ${r.body.port}）` : ""}还活着`);
     }
     const m = readJson(`${key}${MAINTENANCE_SUFFIX}`, errors);
-    if (m.body && Number.isInteger(m.body.pid) && m.body.pid !== process.pid && alive(m.body.pid, m.body.processStartedAtMs)) {
+    // 读不懂的维护锁证明不了持有者已经不在（正常协议是带内容原子建的，不会有半份）：按「不知道」拦下，交给人删。
+    if (m.unreadable || (m.body && !Number.isInteger(m.body.pid))) errors.push(`维护锁 ${key}${MAINTENANCE_SUFFIX} 读不懂，分不清持有者还在不在；确认没有别的维护在跑之后删掉它`);
+    else if (m.body && m.body.pid !== process.pid && alive(m.body.pid, m.body.processStartedAtMs)) {
       reasons.push(`维护锁 ${key}${MAINTENANCE_SUFFIX}：进程 ${m.body.pid} 正在维护这份数据（${m.body.note ?? ""}）`);
     }
   }

@@ -8,12 +8,14 @@ import { readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { LEGACY_REPO_DIR_NAMES } from "./legacy-names.mjs";
-import { configProblems, memoryFiles, refsIn, scanClaude, scanConfigs, scanGrok, scanOpencode } from "./relocate-checkout-agents.mjs";
+import { scanConfigs } from "./relocate-checkout-agents.mjs";
+import { analyzeConfig, configStrings } from "./relocate-checkout-config.mjs";
 import { isDirNoFollow, isLink, lexists, listDir, readTextOr, sh } from "./relocate-checkout-fs.mjs";
 import { Journal } from "./relocate-checkout-journal.mjs";
 import { liveHolders } from "./relocate-checkout-lock.mjs";
-import { countAmbiguous, countRefs, isUnder, mapPath, otherDirSuffix, rewriteRules, stringLiterals } from "./relocate-checkout-paths.mjs";
-import { afterPath, claudePrefixes, currentPath, resolveRoots } from "./relocate-checkout-roots.mjs";
+import { memoryFiles, scanClaude, scanGrok, scanOpencode } from "./relocate-checkout-sessions.mjs";
+import { countAmbiguous, countRefs, isUnder, mapPath, otherDirSuffix, rewriteRules } from "./relocate-checkout-paths.mjs";
+import { afterPath, claudePrefixes, currentPath, resolveRoots, staleEnv } from "./relocate-checkout-roots.mjs";
 
 /** 目录树此刻在哪：旧位置是真目录 → 还没搬；旧位置没了或是指向新位置的链接、新位置是真目录 → 已搬。 */
 export function locateTree({ from, to }) {
@@ -102,10 +104,10 @@ export function dbSiblingSuffixes(dbFile, rules, errors) {
 /** 配置文件里的字面量同理（JSON 的键和值、TOML 的字符串）。 */
 function configSiblingSuffixes(files, rules, errors) {
   const out = new Set();
-  for (const { file } of files) {
+  for (const { file, kind } of files) {
     const text = readTextOr(file, errors);
     if (text === null) continue;
-    for (const v of stringLiterals(text)) {
+    for (const v of configStrings(text, kind)) {
       for (const r of rules) { const x = otherDirSuffix(v, r.old); if (x !== null) out.add(x); }
     }
   }
@@ -307,8 +309,8 @@ export function scanDataFiles(dataRoot, rules, errors) {
     const file = join(dataRoot, name);
     const text = readTextOr(file, errors);
     if (text === null) continue;
-    const count = refsIn(text, "json", rules);
-    if (count) out.push({ file, count, problems: configProblems(text, "json", rules) });
+    const { count, problems } = analyzeConfig(text, "json", rules);
+    if (count) out.push({ file, count, problems });
   }
   return out;
 }
@@ -343,6 +345,7 @@ export function scan({ from, to, home, db: dbExplicit, env = process.env, claims
   plan.dbState = scanDbState(resolveRoots({ ...rootsArgs, errors: [] }).dbFile, errors);
   const roots = resolveRoots({ ...rootsArgs, dbDirs: plan.dbState.configDirs });
   plan.roots = roots;
+  plan.env = staleEnv(env, pair);
   plan.dbFile = roots.dbFile;
   plan.worktrees = scanWorktrees(root, { from, to, errors });
   plan.claude = scanClaude(roots.claude, { from, to, claims, errors });
