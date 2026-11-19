@@ -246,7 +246,7 @@ scripts/  setup / restart / package（.mjs，跨平台）
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `4317` | 服务端口（界面与 API 共用） |
-| `NAVI_DB` | `./data/ash.db` | SQLite 数据库路径 |
+| `NAVI_DB` | `./data/navi.db`（改名之前装的是 `ash.db`，见 `docs/rename-db.md`） | SQLite 数据库路径 |
 
 所有持久化数据存放在 `data/` 目录（数据库、运行记录、上传文件），该目录不入 git。备份迁移只需拷贝此目录。
 

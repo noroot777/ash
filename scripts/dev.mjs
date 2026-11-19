@@ -32,7 +32,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { readEnv, readStorageEnv, setEnv } from "./env.mjs";
-import { LEGACY_DB_FILE, LEGACY_LOG_TAG } from "./legacy-names.mjs";
+import { dbFileIn } from "./db-file.mjs";
+import { LEGACY_LOG_TAG } from "./legacy-names.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 let tracked = [];
@@ -121,7 +122,7 @@ async function startPreviewStack(webPort, mode) {
   const dbFile = readStorageEnv(process.env, "NAVI_DB") || fileURLToPath(new URL(`../data/${ownDb}`, import.meta.url));
   const firstBoot = !existsSync(dbFile);
   const seedFrom = readEnv(process.env, "NAVI_SEED_FROM")
-    ?? (firstBoot ? mainDbFile(mainData) : "");
+    ?? (firstBoot ? dbFileIn(mainData) : "");
   const seedMode = readEnv(process.env, "NAVI_SEED_MODE") ?? (mode === "full" ? "config" : "snapshot");
   const dbLabel = mode === "test"
     ? `${dbFile}，${firstBoot ? "首次从主库播种" : "复用这个 worktree 的测试数据"}`
@@ -183,12 +184,6 @@ function childEnv(vars) {
     else env[name] = value;
   }
   return env;
-}
-
-/** 主库文件：改名之后的 `navi.db` 在就是它，不然是改名之前的那份（见 server/src/db/path.ts）。 */
-function mainDbFile(mainData) {
-  const current = join(mainData, "navi.db");
-  return existsSync(current) ? current : join(mainData, LEGACY_DB_FILE);
 }
 
 function watchChildren(children) {

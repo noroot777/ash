@@ -6,20 +6,18 @@
 // 配置文件清单照 server/src/mcp-registry/catalog.ts 的 NAVI_MCP_TABLE（各家的 dirEnv / defaultDir / relative），
 // 外加 claude 的 settings 文件。脚本要在没有构建产物的检出里裸跑，导不了那份 .ts，所以在这里照抄一份。
 import { dirname, join, relative, resolve } from "node:path";
-import { LEGACY_DB_FILE, LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
+import { dbFileIn } from "./db-file.mjs";
+import { LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
 import { isUnder, mapPath } from "./relocate-checkout-paths.mjs";
-import { isDirNoFollow, lexists, listDir } from "./relocate-checkout-fs.mjs";
+import { isDirNoFollow, listDir } from "./relocate-checkout-fs.mjs";
 
 /** 一条路径此刻在哪（p 写的是哪一侧都行）。 */
 export const currentPath = (p, { from, to, moved }) => (moved ? mapPath(p, from, to) ?? p : mapPath(p, to, from) ?? p);
 /** 一条路径搬完之后在哪。 */
 export const afterPath = (p, { from, to }) => mapPath(p, from, to) ?? p;
 
-/** 库文件：数据目录里 navi.db 在就用它，不然用旧库名（与 scripts/server-control.mjs 同口径）。 */
-export function dbFileIn(dataRoot) {
-  const navi = join(dataRoot, "navi.db");
-  return lexists(navi) ? navi : join(dataRoot, LEGACY_DB_FILE);
-}
+/** 库文件：数据目录里认哪一份（scripts/db-file.mjs，与 server/src/db/path.ts 同口径）。 */
+export { dbFileIn };
 
 /**
  * 服务端的存储类环境变量（NAVI_DATA_DIR / NAVI_DB / NAVI_RUNS_DIR，旧前缀也认），与

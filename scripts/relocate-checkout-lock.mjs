@@ -147,27 +147,30 @@ function ensureDir(dir) {
 }
 
 /**
- * 在占有锁里复查一遍在线，再落下维护锁；有人在线或没答上来就抛错，什么都不留。**一定返回一把锁**：
+ * 在占有锁里复查一遍在线，再落下维护锁；有人在线或没答上来就抛错，什么都不留。dbFiles 给几份库就把几份都锁上、
+ * 都查（库改名时新旧两个名字是同一份数据）。**一定返回一把锁**：
  * 库所在目录（跟着链接走）还不存在时先把它建出来再锁 —— 不然迁移进行中有人起服务，服务会在这里
  * 建一份新库开始写；放锁时这些新建的目录还空着就删掉。
  */
-export function acquire({ dbFile, runsDirs }, note) {
-  const created = ensureDir(dirname(dbFile));
-  try { return { ...lockKeys(resourceKeys(dbFile, runsDirs), dbFile, runsDirs, note), created }; }
-  catch (error) { removeCreated(created); throw error; }
+export function acquire({ dbFile, dbFiles = [dbFile], runsDirs }, note) {
+  const created = [...new Set(dbFiles.map(dirname))].flatMap(ensureDir);
+  try {
+    const keys = [...new Set(dbFiles.flatMap((db) => resourceKeys(db, runsDirs)))].sort();
+    return { ...lockKeys(keys, dbFiles, runsDirs, note), created };
+  } catch (error) { removeCreated(created); throw error; }
 }
 
 function removeCreated(created) {
   for (const d of created) { try { if (!readdirSync(d).length) rmdirSync(d); } catch { /* 已被别的东西用上 */ } }
 }
 
-function lockKeys(keys, dbFile, runsDirs, note) {
+function lockKeys(keys, dbFiles, runsDirs, note) {
   const claims = [...new Set(keys.flatMap((k) => CLAIM_SUFFIXES.map((s) => `${k}${s}`)))].sort();
   const releases = [];
   try {
     for (const file of claims) releases.push(takeClaim(file, note));
-    const live = liveHolders(dbFile, runsDirs);
-    if (live.reasons.length || live.errors.length) throw new Error([...live.reasons, ...live.errors].join("；"));
+    const live = dbFiles.map((db) => liveHolders(db, runsDirs)).flatMap((r) => [...r.reasons, ...r.errors]);
+    if (live.length) throw new Error([...new Set(live)].join("；"));
     const held = [];
     try {
       for (const key of keys) {

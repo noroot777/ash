@@ -3,4 +3,6 @@
 import { holdCodeLock } from "@navi/shared/code-lock";
 
 holdCodeLock();
+// 先拿库的单例锁、再加载会开库的服务本体（为什么非得分两步见 startup-lock.ts）。
+await import("./startup-lock.js");
 await import("./main.js");

@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 /// 拷 SQLite 库只走在线备份：库可能正被 server 开着（WAL 模式、随时在写），按文件拷到一半的
-/// `ash.db` 加上对不上的 `-wal` 就是一份坏库。在线备份在一个读事务里整份拷出，是某一时刻的
+/// 库文件加上对不上的 `-wal` 就是一份坏库。在线备份在一个读事务里整份拷出，是某一时刻的
 /// 一致快照，WAL 里还没落进主文件的写入也带上；写库的进程不受影响。导入旧数据和更新前备份共用。
 enum SQLiteFile {
   struct Failure: LocalizedError {
@@ -122,11 +122,10 @@ enum DatabaseBackup {
   }
 
   /// 备份当前数据根里的库，固定成恢复点。`fromVersion` 只用来起文件名。数据根里还没有库（从没
-  /// 起过服务）就什么都不做，返回 nil。
+  /// 起过服务）就什么都不做，返回 nil；有库但认不准是哪份（两份都是库、改名没做完）就抛错，不当成没东西可备。
   @discardableResult
   static func beforeUpdate(fromVersion: String, now: Date = Date()) throws -> URL? {
-    let db = NaviConfig.dataURL.appendingPathComponent("ash.db")
-    guard FileManager.default.fileExists(atPath: db.path) else { return nil }
+    guard let db = try DatabaseFile.existing(in: NaviConfig.dataURL) else { return nil }
     let dir = NaviConfig.backupURL
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let stamp = DateFormatter()

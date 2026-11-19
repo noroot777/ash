@@ -1,0 +1,67 @@
+// 库文件叫什么、一个数据目录里认哪一份 —— `server/src/db/path.ts` 的脚本侧镜像（脚本要在没有构建产物的
+// 检出里裸跑，导不了那份 .ts）。两份一致由 `server/scripts/test-db-file.ts` 钉住。各条「为什么」写在那份里。
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
+import { join } from "node:path";
+import { LEGACY_DB_FILE, LEGACY_PRESENCE_PREFIX, LEGACY_RESOURCE_CLAIM_SUFFIX, LEGACY_SINGLETON_LOCK_SUFFIX } from "./legacy-names.mjs";
+
+export const DB_FILE_NAME = "navi.db";
+export const DB_MOVED_MARKER = "NAVI-DB-MOVED";
+export const DB_RENAME_JOURNAL = `${DB_FILE_NAME}.renaming`;
+
+/** 跟着库文件名走、要随库一起改名的文件（`${库}${后缀}`）；为什么是这几个见 path.ts 那份。 */
+export const DB_CARRIED_SUFFIXES = [
+  "-wal", "-shm", "-journal",
+  ".exits.jsonl", ".exits.jsonl.1", ".stall-verdicts.jsonl", ".stall-verdicts.jsonl.1",
+  ".identity.json", ".remote-access.json", ".feishu.json",
+];
+
+/**
+ * 挂在库名上、只对「那一刻在跑的进程」有意义的文件：单例锁、资源占用锁、在线登记（新旧两代名字）。迁移前已经
+ * 确认它们的主人都不在了，改名时不带过去（带过去会被下一个服务当成「上一轮没收干净」），挪进留底目录。
+ * 维护锁不在其中：迁移自己正拿着这份库的那一把。
+ */
+export function isRuntimeResidue(name, db) {
+  if (!name.startsWith(db)) return false;
+  const rest = name.slice(db.length);
+  return [".navi.lock", LEGACY_SINGLETON_LOCK_SUFFIX, ".navi-claim.lock", LEGACY_RESOURCE_CLAIM_SUFFIX].includes(rest)
+    || ([".navi-online.", LEGACY_PRESENCE_PREFIX].some((p) => rest.startsWith(p)) && rest.endsWith(".json"));
+}
+
+/** 旧名那一份是什么：不在 / 迁移留下的路标 / 一份库（认不出的一律按库算）。 */
+export function legacyDbState(file) {
+  if (!existsSync(file)) return "absent";
+  const head = Buffer.alloc(DB_MOVED_MARKER.length);
+  let fd = null;
+  try {
+    fd = openSync(file, "r");
+    const read = readSync(fd, head, 0, head.length, 0);
+    return read === head.length && head.toString("latin1") === DB_MOVED_MARKER ? "moved" : "present";
+  } catch {
+    return "present";
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+/**
+ * 只为「找到服务开的是哪一份」（停服务时找它的锁、组预览时拷它、迁目录时清点它），不报错：`navi.db` 在就是它；
+ * 不然旧名那份是库就是它；都没有就是 `navi.db`（服务起来会建的那份）。认不准、服务会拒绝启动的那几种情形
+ * （两份都是库、账本还在）也照这个顺序给一个，交给服务自己说清楚。
+ */
+export function dbFileIn(dataDir) {
+  const current = join(dataDir, DB_FILE_NAME);
+  if (existsSync(current)) return current;
+  const legacy = join(dataDir, LEGACY_DB_FILE);
+  return legacyDbState(legacy) === "present" ? legacy : current;
+}
+
+/**
+ * 服务会拒绝启动的那几种情形（server/src/db/path.ts chooseDbFileIn 的同一套）：账本在、两份都是库、只剩路标。
+ * 返回一句原因，正常时 null。要**开库**的脚本（drizzle-kit 那类）先问它，别对着认不准的目录照 dbFileIn 开下去。
+ */
+export function unclearDbReason(dataDir) {
+  if (existsSync(join(dataDir, DB_RENAME_JOURNAL))) return `${dataDir} 里的库改名上次没做完（${DB_RENAME_JOURNAL} 还在），先 npm run rename-db 处理掉`;
+  const old = legacyDbState(join(dataDir, LEGACY_DB_FILE));
+  if (existsSync(join(dataDir, DB_FILE_NAME))) return old === "present" ? `${dataDir} 里 ${DB_FILE_NAME} 和 ${LEGACY_DB_FILE} 都是库，分不清该开哪一份` : null;
+  return old === "moved" ? `${dataDir} 里的 ${LEGACY_DB_FILE} 是改名留下的路标，但 ${DB_FILE_NAME} 不在` : null;
+}

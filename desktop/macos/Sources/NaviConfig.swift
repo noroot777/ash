@@ -93,9 +93,7 @@ enum NaviConfig {
   }()
 
   /// 数据根里还没有库 = 这个数据目录第一次用：先问「全新开始」还是「导入已有数据」，再起服务。
-  static var isDataInitialized: Bool {
-    FileManager.default.fileExists(atPath: dataURL.appendingPathComponent("ash.db").path)
-  }
+  static var isDataInitialized: Bool { DatabaseFile.isInitialized(dataURL) }
 
   /// 日志跟着数据根走（`<数据根>/logs`）：换临时数据根验证时不会混进日常那一份的日志里。
   static var logURL: URL { dataURL.appendingPathComponent("logs", isDirectory: true) }
@@ -125,5 +123,83 @@ enum NaviConfig {
 
   private static func port(of url: URL) -> Int {
     url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)
+  }
+}
+
+/// 数据目录里的库叫什么、认哪一份。口径同 server/src/db/path.ts：新名 `navi.db`；改名之前的安装是 `ash.db`，停机时
+/// `npm run rename-db` 改名，改完在原地留一份路标（不是 SQLite 库，改名之前的服务对着它起不来）。
+enum DatabaseFile {
+  static let name = "navi.db"
+  static let movedMarker = "NAVI-DB-MOVED"
+  static let renameJournal = "navi.db.renaming"
+  /// 跟着库名走的状态文件（scripts/db-file.mjs 的 DB_CARRIED_SUFFIXES 去掉 SQLite 自己那三个）：导入改名之前的
+  /// 数据时跟着库一起换成新名，不然接力身份、远程访问密钥在新库旁边找不到。
+  static let carriedSuffixes = [".exits.jsonl", ".exits.jsonl.1", ".stall-verdicts.jsonl", ".stall-verdicts.jsonl.1",
+                                ".identity.json", ".remote-access.json", ".feishu.json"]
+  /// 两代库名下的 SQLite 自带文件：库走在线备份另拷，这些不跟着复制。
+  static let sqliteFiles: Set<String> = Set([name, LegacyIdentity.databaseFile].flatMap { [$0, "\($0)-wal", "\($0)-shm", "\($0)-journal"] })
+
+  enum Choice: Equatable {
+    case current(URL), legacy(URL), none
+    /// 认不准（两份都是库 / 只剩路标 / 上次改名没做完）：说清怎么办，不替人选。
+    case unclear(String)
+
+    var url: URL? {
+      switch self {
+      case .current(let url), .legacy(let url): return url
+      case .none, .unclear: return nil
+      }
+    }
+  }
+
+  /// 旧名那一份是不是一份库（在、而且不是路标）。
+  static func isLegacyDatabase(_ url: URL) -> Bool {
+    guard let handle = FileHandle(forReadingAtPath: url.path) else { return FileManager.default.fileExists(atPath: url.path) }
+    defer { try? handle.close() }
+    let head = (try? handle.read(upToCount: movedMarker.utf8.count)) ?? Data()
+    return head != Data(movedMarker.utf8)
+  }
+
+  static func choose(in dir: URL) -> Choice {
+    let fm = FileManager.default
+    let current = dir.appendingPathComponent(name), legacy = dir.appendingPathComponent(LegacyIdentity.databaseFile)
+    if fm.fileExists(atPath: dir.appendingPathComponent(renameJournal).path) {
+      return .unclear("\(dir.path) 里的库改名上次没做完（\(renameJournal) 还在）。停着服务跑 `npm run rename-db -- --apply` 做完它，或 `-- --rollback` 退回去。")
+    }
+    let hasLegacy = fm.fileExists(atPath: legacy.path)
+    if fm.fileExists(atPath: current.path) {
+      if hasLegacy && isLegacyDatabase(legacy) {
+        return .unclear("\(dir.path) 里 \(name) 和 \(LegacyIdentity.databaseFile) 都是库，分不清哪份是在用的。把不要的那份挪出去再来。")
+      }
+      return .current(current)
+    }
+    if hasLegacy {
+      return isLegacyDatabase(legacy) ? .legacy(legacy)
+        : .unclear("\(dir.path) 里的 \(LegacyIdentity.databaseFile) 是改名留下的路标，但 \(name) 不在。")
+    }
+    return .none
+  }
+
+  struct Unclear: LocalizedError {
+    let errorDescription: String?
+  }
+
+  /// 服务开着的（或会开的）那份库：给它留底、找它的锁。没有库是 nil；认不准时抛出原因 —— 「有库但分不清是哪份」
+  /// 跟「从没用过」不是一回事，留底、更新前备份不能把它当成没东西可备就放过去。只认一次：认两次，中间目录一变，
+  /// 第二次的「认不准」就成了 nil、被当成没有库。
+  static func existing(in dir: URL) throws -> URL? {
+    let choice = choose(in: dir)
+    if case .unclear(let why) = choice { throw Unclear(errorDescription: why) }
+    return choice.url
+  }
+
+  /// 这个数据目录用过没有：两代库名、改名账本，有一样就算 —— 认不准的情形交给服务起来时说清楚，不当成第一次用。
+  static func isInitialized(_ dir: URL) -> Bool {
+    [name, LegacyIdentity.databaseFile, renameJournal].contains { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path) }
+  }
+
+  /// 这份库的单例锁，两代名字（新版服务两份都写，改名之前的只写旧名）。
+  static func lockFiles(of db: URL) -> [URL] {
+    [".navi.lock", LegacyIdentity.singletonLockSuffix].map { URL(fileURLWithPath: db.path + $0) }
   }
 }

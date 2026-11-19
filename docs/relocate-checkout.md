@@ -106,7 +106,7 @@ mac 应用不受这次搬家影响：Ash.app / Navi.app 跑的是自带的服务
 **不改的**：
 - 会话原始记录（`data/runs/**`、claude 的 `*.jsonl`、codex 的 rollout）。它们是只追加的日志。库里记着读到第几个字节（`sessions.agent_offset`），改了长度续读就错位。
   界面按路径的形状认图片（`…/data/runs/…`、`…/data/uploads/…`），旧路径照样显示。
-- 库文件名 `ash.db`。改名要连锁和账本一起挪；mac 应用的「导入已有数据」按 `ash.db` 找；回退到旧版会对着空库起来（见 `server/src/db/path.ts`）。
+- 库文件名。改名（`ash.db` → `navi.db`）是另一件事、另一条命令，要连身份、访问密钥、账本一起挪，见 `docs/rename-db.md`。本脚本按数据目录里此刻是哪一份就清点哪一份（`scripts/db-file.mjs`）。
 - shell 配置、登录项、crontab：只列出写着旧路径的行，自己看着改。
 
 **拦下真做的预检**：

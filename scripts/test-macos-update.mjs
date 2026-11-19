@@ -24,7 +24,7 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
+import { LEGACY_DB_FILE, LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -114,9 +114,10 @@ function driveAsync(args, answers, extraEnv = {}) {
 const backups = () => (existsSync(join(data, "backups")) ? readdirSync(join(data, "backups")).filter((n) => n.endsWith(".db")) : []);
 
 try {
-  // 数据根里一份真库：WAL 模式、写入还在 WAL 里（就像正在跑的 server 刚写过）。
+  // 数据根里一份真库：WAL 模式、写入还在 WAL 里（就像正在跑的 server 刚写过）。库还叫改名之前的名字（没跑过
+  // rename-db 的老数据根）：更新前照样认得它、给它留底。新名那一份由 test-macos-client.mjs 的起服务那段覆盖。
   mkdirSync(data, { recursive: true });
-  const db = new DatabaseSync(join(data, "ash.db"));
+  const db = new DatabaseSync(join(data, LEGACY_DB_FILE));
   db.exec("pragma journal_mode = wal; pragma wal_autocheckpoint = 0; create table tasks (id text primary key)");
   for (let i = 0; i < 50; i += 1) db.exec(`insert into tasks values ('t${i}')`);
 
@@ -353,6 +354,21 @@ try {
   chmodSync(join(data, "backups"), 0o700);
   assert.match(result.out, /LAUNCH failed .*迁移前先备份库没成功.*没起服务/, result.out);
   console.log("PASS: a launcher about to run a newer build on an un-backed-up database backs it up first, or does not start");
+
+  // ── 库认不准（改名做到一半 / 两份都是库）：有库但分不清是哪份，备份和起服务都停下说清楚，不当成没库可备 ──
+  const unclearBefore = backups();
+  writeFileSync(join(data, "navi.db.renaming"), "{}");
+  result = await drive(["backup"]);
+  assert.match(result.out, /BACKUP failed .*改名上次没做完/, result.out);
+  result = await drive(["launch", "2"]);
+  assert.match(result.out, /LAUNCH failed 数据根里的库认不准.*改名上次没做完.*没起服务/, result.out);
+  rmSync(join(data, "navi.db.renaming"));
+  new DatabaseSync(join(data, "navi.db")).close();
+  result = await drive(["backup"]);
+  assert.match(result.out, /BACKUP failed .*都是库/, result.out);
+  rmSync(join(data, "navi.db"));
+  assert.deepEqual(backups(), unclearBefore, "认不准时一份都没备");
+  console.log("PASS: an unclear database (rename half done, or both names are databases) stops backup and launch with the reason");
 
   // ── 没有服务记录（导入来的、旧版 app 没写过）、新版连着起不来：迁移前的原件一直留着 ──
   rmSync(join(data, "backups"), { recursive: true, force: true });

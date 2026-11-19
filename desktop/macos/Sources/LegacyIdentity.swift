@@ -37,6 +37,9 @@ enum LegacyIdentity {
   private static let adoptedDefaultsKey = "AdoptedAshDefaults"
   private static let adoptedWebDataKey = "AdoptedAshWebData"
   static let logger = Logger(subsystem: successor, category: "legacy-identity")
+  /// 改名之前的库文件名，和改名之前的服务只写的那一份单例锁（见 DatabaseFile）。
+  static let databaseFile = "ash.db"
+  static let singletonLockSuffix = ".ash.lock"
 
   private static var isSuccessor: Bool { Bundle.main.bundleIdentifier == successor }
 

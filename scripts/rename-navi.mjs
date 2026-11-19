@@ -82,7 +82,6 @@ const GLOBAL_KEEP = [
   { id: "legacy-lock-files", why: LEGACY_READ + "（互斥要横跨新旧两版：旧版只认这几个文件名）", re: /\.ash\.lock|\.ash-claim\.lock|\.ash-online\.|\.ash-deps-ready/g },
   { id: "legacy-markers", why: LEGACY_READ,
     re: /ash-accepted\/|ash-preview-annotation-v1|ash-workbench\b(?!-)|ash-worktree-backups\b(?!-)|ash-turn-progress-watch\/v2|ash\.sealedsnapshot|ash-claude-settings-|ash-track-|ash-claude-goal-(?!live-)|ash-goal-context|ash_int_|ash_session|ash_instance|ash-mcp\/host-setup/g },
-  { id: "db-file", why: "库文件现在仍叫 ash.db（LEGACY_DB_FILE：老安装继续用，新安装暂时也建它，mac 应用只认这个名字）", re: /\bash\\?\.db\b/g },
   { id: "mac-legacy-app", why: "改名前的 mac 应用（Ash.app / dev.ash.mac / 登录项 dev.ash.server）：新版首次打开时按这些名字接班",
     re: /Ash\.app|dev\.ash\.(?:mac|server)\b(?!-)|adopted-from-ash|ash-window-chrome|ash(?:-mac)?-build-number|AshSourceCommit|\bAshMac\b/g },
   { id: "github-legacy-repo", why: "GitHub 上改名前的仓库名（release.json 的 legacyReleaseRepo、旧 appcast 的 XML 命名空间）", re: /noroot777\/ash\b(?!-)/g },
@@ -103,6 +102,14 @@ const FILE_KEEP = [
   { id: "mac-launcher-env", why: "mac 启动器交给服务端的旧名（假服务读到的、rc 文件里导出的），见 ServerLauncher.swift",
     files: /^scripts\/test-macos-client\.mjs$/, re: /(?<=process\.env\.|export [^\n]*)ASH_(?:DATA_DIR|LOCAL_ONLY|WINDOW_PORT)\b/g },
   { id: "brand-check-message", why: "界面文字残留检查的报错：说的是要找的旧产品名", files: /^scripts\/check-conventions\.mjs$/, re: /(?<=旧产品名 |仍叫 )ash/g },
+  // 库文件已经改叫 navi.db（docs/rename-db.md）。旧名只留在讲老安装、讲迁移的地方。
+  { id: "db-file", why: "改名之前的库文件名 ash.db（LEGACY_DB_FILE）：讲老安装兼容与库改名的代码注释、文档，以及写着当时事实的历史记录",
+    files: /^(\.gitignore|README\.md|docs\/(rename-db|install|relocate-checkout|win-remote|windows-testing)\.md|desktop\/macos\/(README\.md|Sources\/(DataImport|NaviConfig)\.swift)|server\/src\/db\/path\.ts|server\/scripts\/test-db-file\.ts|scripts\/(rename-db|rename-db-core|db-file)\.mjs)$/,
+    re: /\bash\\?\.db\b/g },
+  // 测试夹具显式指定的临时库（`NAVI_DB=<临时目录>/ash.db` 一类）：名字随便起，跟默认库名、迁移都无关。换它要碰两百多份
+  // 测试、和在途分支全冲突，换完行为一点不变，所以不换；新写的夹具照新名写。
+  { id: "db-file-fixture", why: "测试夹具里显式指定的临时库文件名：名字随便起的，与默认库名无关（默认库名的回归在 test-db-file.ts）",
+    files: /^(server\/scripts\/|web\/scripts\/|scripts\/test-)/, re: /\bash\\?\.db\b/g },
   { id: "drizzle-env", why: "drizzle-kit 的库路径按各代变量名依次认（NAVI_DB → ASH_DB → HARNESS_DB）", files: /^server\/drizzle\.config\.ts$/, re: /\bASH_DB\b/g },
   { id: "mac-legacy-app-prompt", why: "说的是改名前的 Ash.app（没接过它的登录和页面设置时的提示）", files: /^desktop\/macos\/Sources\/AppDelegate\.swift$/, re: /\bAsh\b(?= 的| 里| 那份)/g },
   { id: "qr-test-vector", why: "二维码编码的测试向量：期望的摘要按这段输入算出来的，换了输入摘要就对不上", files: /^web\/scripts\/test-qr\.ts$/, re: /(?<=")ash(?=", 0, 21,)/g },

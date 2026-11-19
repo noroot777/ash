@@ -129,6 +129,15 @@ case "backups":
   emit("KEPT \(DatabaseBackup.existing().map(\.lastPathComponent).joined(separator: ","))")
   emit("PINS \(DatabaseBackup.recoveryPoints().map(\.lastPathComponent).joined(separator: ","))")
 
+case "backup":
+  // 做一份更新前备份，失败就把原因打出来（认不准是哪份库时要失败，不能当成没库可备）。
+  do {
+    let made = try DatabaseBackup.beforeUpdate(fromVersion: "probe")
+    emit("MADE \(made?.lastPathComponent ?? "nil")")
+  } catch {
+    emit("BACKUP failed \(error.localizedDescription)")
+  }
+
 case "backups-same-second":
   // 同一秒连做十二份：名字各不相同，「最新」是最后做的那份（不是名字排在最前的那份）。
   let now = Date(timeIntervalSince1970: 1_900_000_000)
