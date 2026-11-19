@@ -6,7 +6,7 @@ import Darwin
 /// 一个字节都不改。
 ///
 /// 源库可能正被另一份 server 开着（WAL 模式、随时在写），所以库文件不能按文件拷：拷到一半的
-/// `ash.db` 加上对不上的 `-wal` 就是一份坏库。库走 SQLite 的在线备份（一个读事务里整份拷出，
+/// 库文件加上对不上的 `-wal` 就是一份坏库。库走 SQLite 的在线备份（一个读事务里整份拷出，
 /// 是某一时刻的一致快照），其余目录（runs、uploads……）按文件复制 —— 同一个 APFS 卷上是克隆，
 /// 几个 G 的 runs 也不占第二份空间。
 ///
@@ -16,11 +16,16 @@ import Darwin
 ///
 /// 两段：先在数据根里一个只属于这一次的暂存目录里把整份备齐，再拿着**和起服务同一把锁**发布。
 /// 锁里重查一次数据根还空着 —— 首启那一屏只是当时的一次判断，另一个窗口或登录项可能已经点了
-/// 「全新开始」。发布时库最后落，它就是提交点：之前的任何一步失败，数据根里都还没有 `ash.db`，
+/// 「全新开始」。发布时库最后落，它就是提交点：之前的任何一步失败，数据根里都还没有库，
 /// 下次打开还是首启那一屏；挪了一半的条目记在一张清单里，下一次导入先按清单收掉。
+///
+/// 源目录的库可能还叫改名之前的 `ash.db`（DatabaseFile）：导进来一律落成 `navi.db`（app 自带的服务是新版），
+/// 跟着库名走的状态文件（接力身份、远程访问密钥……）一并换成新名。
 enum DataImport {
   struct Source {
     let url: URL
+    /// 源目录里那份库（`navi.db`，或改名之前的 `ash.db`）。
+    let db: URL
     /// 还开着这份库的 server 进程（看它的单实例锁）。nil = 没人开着。
     let livePID: Int32?
   }
@@ -42,11 +47,14 @@ enum DataImport {
   private static let journalName = ".import-publishing.json"
   private static let stagingPrefix = ".import-staging-"
 
-  /// 看一眼这份目录能不能导：有库、和 app 的数据根互不包含、不是多人模式。
+  /// 看一眼这份目录能不能导：有库（认得准是哪一份）、和 app 的数据根互不包含、不是多人模式。
   static func inspect(_ url: URL) throws -> Source {
-    let db = url.appendingPathComponent("ash.db")
-    guard FileManager.default.fileExists(atPath: db.path) else {
-      throw Failure("\(url.path) 里没有 ash.db。要选的是 Navi 的数据目录（仓库里是 data/）。")
+    let db: URL
+    switch DatabaseFile.choose(in: url) {
+    case .current(let found), .legacy(let found): db = found
+    case .unclear(let why): throw Failure(why)
+    case .none:
+      throw Failure("\(url.path) 里没有 \(DatabaseFile.name)（改名之前叫 \(LegacyIdentity.databaseFile)）。要选的是 Navi 的数据目录（仓库里是 data/）。")
     }
     let source = NaviHealth.realPath(url.path), dest = NaviHealth.realPath(NaviConfig.dataURL.path)
     guard source != dest else { throw Failure("这就是 app 自己的数据目录。") }
@@ -58,7 +66,7 @@ enum DataImport {
     if try instanceMode(of: db) == "multi" {
       throw Failure("这份数据是多人模式的。app 只以本机自用模式运行，多人数据转不回自用，没法导入。")
     }
-    return Source(url: url, livePID: livePID(lock: url.appendingPathComponent("ash.db.ash.lock")))
+    return Source(url: url, db: db, livePID: DatabaseFile.lockFiles(of: db).lazy.compactMap(livePID).first)
   }
 
   /// 导进 `dest`（app 的数据根）。数据根在这期间被别人用上了就整次作罢，那份数据一个字节不碰。
@@ -72,10 +80,10 @@ enum DataImport {
     try fm.createDirectory(at: staging, withIntermediateDirectories: false)
     var special = 0
     for name in try fm.contentsOfDirectory(atPath: source.url.path) where !skipped(name) {
-      special += try copyTree(source.url.appendingPathComponent(name).path, to: staging.appendingPathComponent(name).path)
+      special += try copyTree(source.url.appendingPathComponent(name).path, to: staging.appendingPathComponent(published(name, from: source)).path)
     }
-    let db = staging.appendingPathComponent("ash.db")
-    try SQLiteFile.snapshot(from: source.url.appendingPathComponent("ash.db"), to: db)
+    let db = staging.appendingPathComponent(DatabaseFile.name)
+    try SQLiteFile.snapshot(from: source.db, to: db)
     var report = try prepare(db, source: source.url, dest: dest)
     report.skippedSpecial = special
     try seal(db)
@@ -90,12 +98,21 @@ enum DataImport {
     return report
   }
 
-  /// 不跟着搬的：库文件本身（另走备份）和它的日志、别人的锁与在线标记、可以重建的缓存、
-  /// app 自己放在数据根里的东西，以及别的导入留下的暂存。
+  /// 不跟着搬的：库文件本身（另走备份）和它的日志、改名留下的路标、别人的锁与在线标记（两代名字）、
+  /// 可以重建的缓存、app 自己放在数据根里的东西，以及别的导入留下的暂存。
   static func skipped(_ name: String) -> Bool {
-    let exact: Set<String> = ["ash.db", "ash.db-wal", "ash.db-shm", "ash.db-journal", "deps", "tmp", journalName]
-    return exact.contains(name) || appOwned.contains(name) || name.hasPrefix(stagingPrefix)
-      || name.hasSuffix(".ash.lock") || name.contains(".ash-online.")
+    let exact: Set<String> = ["deps", "tmp", journalName, DatabaseFile.renameJournal]
+    return exact.contains(name) || DatabaseFile.sqliteFiles.contains(name) || appOwned.contains(name) || name.hasPrefix(stagingPrefix)
+      || [".navi.lock", LegacyIdentity.singletonLockSuffix].contains { name.hasSuffix($0) }
+      || [".navi-online.", ".ash-online."].contains { name.contains($0) }
+  }
+
+  /// 源库还叫旧名时，跟着库名走的状态文件在副本里换成新名（新库旁边才找得到它们）；其余照原名。
+  static func published(_ name: String, from source: Source) -> String {
+    let legacy = LegacyIdentity.databaseFile
+    guard source.db.lastPathComponent == legacy,
+          DatabaseFile.carriedSuffixes.contains(where: { name == legacy + $0 }) else { return name }
+    return DatabaseFile.name + name.dropFirst(legacy.count)
   }
 
   /// 只搬普通文件、目录和符号链接（链接照原样复制成链接，不跟进去，跟 `copyItem` 一致）。命名管道、
@@ -129,14 +146,15 @@ enum DataImport {
     let fm = FileManager.default
     try requireEmpty(dest, except: staging.lastPathComponent)
     // 库是单个文件（seal）；它旁边残留的 -shm 只是共享内存索引，不跟着挪。
-    let entries = try fm.contentsOfDirectory(atPath: staging.path).filter { !["ash.db", "ash.db-shm", "ash.db-journal"].contains($0) }
-    guard !entries.contains("ash.db-wal") else { throw Failure("导出来的库还没收成单个文件，没有导入。") }
+    let db = DatabaseFile.name
+    let entries = try fm.contentsOfDirectory(atPath: staging.path).filter { ![db, "\(db)-shm", "\(db)-journal"].contains($0) }
+    guard !entries.contains("\(db)-wal") else { throw Failure("导出来的库还没收成单个文件，没有导入。") }
     let journal = dest.appendingPathComponent(journalName)
     try JSONSerialization.data(withJSONObject: entries).write(to: journal, options: .atomic)
     for name in entries {
       try fm.moveItem(at: staging.appendingPathComponent(name), to: dest.appendingPathComponent(name))
     }
-    try fm.moveItem(at: staging.appendingPathComponent("ash.db"), to: dest.appendingPathComponent("ash.db"))
+    try fm.moveItem(at: staging.appendingPathComponent(db), to: dest.appendingPathComponent(db))
     try? fm.removeItem(at: journal)
   }
 
@@ -167,7 +185,7 @@ enum DataImport {
   }
 
   private static func requireNoDatabase(_ dest: URL) throws {
-    guard !FileManager.default.fileExists(atPath: dest.appendingPathComponent("ash.db").path) else {
+    guard !DatabaseFile.isInitialized(dest) else {
       throw Failure("\(dest.path) 里已经有一份 Navi 数据了（可能另一个窗口或登录项刚点了「全新开始」）。这次没有导入，那份数据没有动。")
     }
   }
@@ -231,7 +249,7 @@ enum DataImport {
   }
 
   /// server 的单实例锁是 JSON，`pid` 那一项还活着就是有人开着这份库。
-  private static func livePID(lock: URL) -> Int32? {
+  private static func livePID(_ lock: URL) -> Int32? {
     guard let data = try? Data(contentsOf: lock),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let pid = json["pid"] as? Int, pid > 1, let pid32 = Int32(exactly: pid) else { return nil }

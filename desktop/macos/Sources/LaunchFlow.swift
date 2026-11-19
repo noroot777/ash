@@ -119,7 +119,7 @@ extension BrowserWindowController {
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.allowsMultipleSelection = false
-    panel.message = "选一份 Navi 的数据目录（里面有 ash.db，比如仓库里的 data/）"
+    panel.message = "选一份 Navi 的数据目录（里面有 \(DatabaseFile.name) 或改名之前的 \(LegacyIdentity.databaseFile)，比如仓库里的 data/）"
     panel.prompt = "导入"
     panel.beginSheetModal(for: window) { [weak self] response in
       guard response == .OK, let url = panel.url else { return }

@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { testInstanceGuard } from "./macos-client-guard.mjs";
 import { testInstall } from "./macos-client-install.mjs";
-import { LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
+import { LEGACY_DB_FILE, LEGACY_ENV_PREFIXES } from "./legacy-names.mjs";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -100,7 +100,7 @@ const dataDir=process.env.ASH_DATA_DIR;
 fs.writeFileSync(${JSON.stringify(seen)},JSON.stringify({cwd:process.cwd(),dataDir,localOnly:process.env.ASH_LOCAL_ONLY??null,
   port:process.env.PORT??null,windowPort:process.env.ASH_WINDOW_PORT??null,leaked:Object.keys(process.env).filter(k=>k.startsWith('NAVI_MAC_'))}));
 ${exitAtOnce ? "process.exit(1);" : ""}
-fs.writeFileSync(path.join(dataDir,'ash.db'),'');
+fs.writeFileSync(path.join(dataDir,'navi.db'),'');
 http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');
 res.end(JSON.stringify({ok:true,pid:process.pid+${pidOffset},instance:{id:'svc-'+process.pid,dataDir,codeDir:path.resolve(__dirname,'../..'),
   localOnly:process.env.ASH_LOCAL_ONLY==='1',windowPort:Number(process.env.ASH_WINDOW_PORT)}}));})
@@ -422,16 +422,19 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   assert.equal(spawnSync("mkfifo", [fifo]).status, 0, "fixture: mkfifo");
   writeFileSync(join(source, "uploads", "a.png"), "png");
   writeFileSync(join(source, "logs", "server.log"), "the source's own log");
-  writeFileSync(join(source, "ash.db.exits.jsonl"), "{}\n");
-  writeFileSync(join(source, "ash.db.ash-online.123.json"), "{}");
+  // 源目录还是改名之前的样子：库叫 ash.db，跟着库名走的状态文件也是旧名。
+  const OLD_DB = LEGACY_DB_FILE;
+  writeFileSync(join(source, `${OLD_DB}.exits.jsonl`), "{}\n");
+  writeFileSync(join(source, `${OLD_DB}.identity.json`), '{"who":"source"}');
+  writeFileSync(join(source, `${OLD_DB}.ash-online.123.json`), "{}");
   writeFileSync(join(source, ".mac-maintenance.json"), JSON.stringify({ pid: process.pid, note: "源那边在装更新", since: 0 }));
   // 源库开着、WAL 模式、最后几笔还在 WAL 里没落进主文件 —— 跟正在跑的那份 server 一样。
-  const live = new DatabaseSync(join(source, "ash.db"));
+  const live = new DatabaseSync(join(source, OLD_DB));
   live.exec("pragma journal_mode = wal; pragma wal_autocheckpoint = 0;");
   live.exec("create table app_settings (key text primary key, value text); create table tasks (id text primary key)");
   live.exec(`insert into app_settings values ('instanceMode', '"single"')`);
   for (let i = 0; i < 50; i += 1) live.exec(`insert into tasks values ('t${i}')`);
-  writeFileSync(join(source, "ash.db.ash.lock"), JSON.stringify({ pid: process.pid, port: 4317, token: "x" }));
+  writeFileSync(join(source, `${OLD_DB}.ash.lock`), JSON.stringify({ pid: process.pid, port: 4317, token: "x" }));
   const before = readdirSync(source).sort();
   const listing = () => readdirSync(data).filter((name) => name !== ".mac-launch.lock").sort();
   const stagings = () => readdirSync(data).filter((name) => name.startsWith(".import-staging-"));
@@ -474,14 +477,14 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   result = await launch(binary, ["import", source, "0.5"], env).done;
   assert.equal(result.status, 1, result.output);
   assert.match(result.output, /等它超时/);
-  assert.equal(existsSync(join(data, "ash.db")), false);
+  assert.equal(existsSync(join(data, "navi.db")), false);
   assert.deepEqual(stagings(), [], "the staged copy is cleaned up");
 
   // 暂存期间另一处「全新开始」先建好了数据：锁里重查，作罢，那份数据一个字节不碰。
   rmSync(toolSeen, { force: true });
   const racing = launch(binary, ["import", source, "20"], env);
   await until(() => existsSync(toolSeen), "import did not reach the publish step");
-  writeFileSync(join(data, "ash.db"), "fresh");
+  writeFileSync(join(data, "navi.db"), "fresh");
   mkdirSync(join(data, "uploads"));
   writeFileSync(join(data, "uploads", "fresh.png"), "fresh upload");
   process.kill(holderPid, "SIGTERM");
@@ -490,11 +493,11 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   result = await racing.done;
   assert.equal(result.status, 1, result.output);
   assert.match(result.output, /已经有一份 Navi 数据/);
-  assert.equal(readFileSync(join(data, "ash.db"), "utf8"), "fresh", "the data a fresh start created is kept");
+  assert.equal(readFileSync(join(data, "navi.db"), "utf8"), "fresh", "the data a fresh start created is kept");
   assert.deepEqual(readdirSync(join(data, "uploads")), ["fresh.png"], "nothing of the import is mixed into it");
   assert.equal(existsSync(join(data, "runs")), false);
   assert.deepEqual(stagings(), []);
-  rmSync(join(data, "ash.db"));
+  rmSync(join(data, "navi.db"));
   rmSync(join(data, "uploads"), { recursive: true });
 
   // 上一次发布到一半（清单在、条目挪了一部分、库没落）和死掉的进程留下的暂存：先收掉再导。
@@ -516,16 +519,18 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   assert.equal(existsSync(abandoned), false, "staging left by a dead import is collected");
   assert.equal(readFileSync(join(data, "logs", "login.log"), "utf8"), "the app's own log", "the app's own files stay");
   assert.equal(existsSync(join(data, "logs", "server.log")), false, "the source's logs are not carried over");
-  for (const skipped of ["deps", "tmp", "downloads", "ash.db.ash.lock", "ash.db.ash-online.123.json", ".mac-maintenance.json", "ash.db-wal", "ash.db-shm",
-    ".import-publishing.json"]) {
+  for (const skipped of ["deps", "tmp", "downloads", `${OLD_DB}.ash.lock`, `${OLD_DB}.ash-online.123.json`, ".mac-maintenance.json", OLD_DB, `${OLD_DB}-wal`, `${OLD_DB}-shm`,
+    "navi.db-wal", "navi.db-shm", `${OLD_DB}.exits.jsonl`, `${OLD_DB}.identity.json`, ".import-publishing.json"]) {
     assert.equal(existsSync(join(data, skipped)), false, `${skipped} is not in the published data root`);
   }
   assert.deepEqual(stagings(), []);
   const tool = JSON.parse(readFileSync(toolSeen, "utf8"));
-  assert.match(tool.db, /\/\.import-staging-\d+-[^/]+\/ash\.db$/, "the copy is washed in staging, before it is published");
+  assert.match(tool.db, /\/\.import-staging-\d+-[^/]+\/navi\.db$/, "the copy is washed in staging, before it is published");
   assert.equal(realpathSync(tool.target), realpathSync(data), "paths are relocated to the app's data root");
   assert.ok(tool.sources.includes(source) && tool.sources.includes(realpathSync(source)), "both the chosen and the real source path");
-  const copied = new DatabaseSync(join(data, "ash.db"), { readOnly: true });
+  assert.equal(readFileSync(join(data, "navi.db.identity.json"), "utf8"), '{"who":"source"}', "state files named after the old database follow it to its new name");
+  assert.equal(readFileSync(join(data, "navi.db.exits.jsonl"), "utf8"), "{}\n");
+  const copied = new DatabaseSync(join(data, "navi.db"), { readOnly: true });
   assert.equal(copied.prepare("select count(*) as n from tasks").get().n, 50, "writes still in the WAL come along");
   assert.equal(copied.prepare("select by from washed").get().by, "import-tool", "the published database is the washed one");
   assert.equal(copied.prepare("pragma journal_mode").get().journal_mode, "delete", "published as a single file");
@@ -534,7 +539,7 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   live.exec("insert into tasks values ('after')");
   assert.equal(live.prepare("select count(*) as n from tasks").get().n, 51, "the source server keeps writing");
   live.close();
-  assert.equal(existsSync(join(source, "ash.db-shm")), false, "fixture: the source navi stopped cleanly");
+  assert.equal(existsSync(join(source, `${OLD_DB}-shm`)), false, "fixture: the source navi stopped cleanly");
   result = await launch(binary, ["import", source], env).done;
   assert.match(result.output, /已经有一份 Navi 数据/, "an initialised data root never takes a second import");
   // 源实例正常停掉（-wal、-shm 都收了）之后也导得了，源目录仍旧不多一个文件。
@@ -542,7 +547,7 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   const stoppedBefore = readdirSync(source).sort();
   result = await launch(binary, ["import", source], { ...env, NAVI_DATA_DIR: stoppedTarget }).done;
   assert.equal(result.status, 0, result.output);
-  const fromStopped = new DatabaseSync(join(stoppedTarget, "ash.db"), { readOnly: true });
+  const fromStopped = new DatabaseSync(join(stoppedTarget, "navi.db"), { readOnly: true });
   assert.equal(fromStopped.prepare("select count(*) as n from tasks").get().n, 51, "a stopped source is read whole");
   fromStopped.close();
   assert.deepEqual(readdirSync(source).sort(), stoppedBefore, "reading a stopped source leaves no -shm behind");
@@ -552,23 +557,55 @@ console.log(JSON.stringify({held:{tasks:2,schedules:1},relocated:3}));`);
   result = await launch(binary, ["import-inspect", source], { ...env, NAVI_DATA_DIR: join(source, "nested") }).done;
   assert.match(result.output, /一个在另一个里面/, "a data root inside the source is refused");
   result = await launch(binary, ["import-inspect", join(dataAlias, "runs")], env).done;
-  assert.match(result.output, /没有 ash\.db/);
+  assert.match(result.output, /没有 navi\.db/);
   const inner = join(data, "inner-old");
   mkdirSync(inner);
-  copyFileSync(join(data, "ash.db"), join(inner, "ash.db"));
+  copyFileSync(join(data, "navi.db"), join(inner, "navi.db"));
   result = await launch(binary, ["import-inspect", inner], env).done;
   assert.match(result.output, /一个在另一个里面/, "a source inside the data root is refused");
   rmSync(inner, { recursive: true });
   result = await launch(binary, ["import", join(temporary, "runtime")], env).done;
-  assert.match(result.output, /没有 ash\.db/);
+  assert.match(result.output, /没有 navi\.db/);
   const multi = join(temporary, "multi-data");
   mkdirSync(multi);
-  const multiDb = new DatabaseSync(join(multi, "ash.db"));
+  const multiDb = new DatabaseSync(join(multi, "navi.db"));
   multiDb.exec(`create table app_settings (key text primary key, value text); insert into app_settings values ('instanceMode', '"multi"')`);
   multiDb.close();
   result = await launch(binary, ["import-inspect", multi], env).done;
   assert.equal(result.status, 1);
   assert.match(result.output, /多人模式/);
+
+  // 源目录已经改过名（navi.db + 旧名位置上的路标）：导 navi.db，路标不跟过来。两份都是库、只剩路标、改名没做完：拒绝。
+  const renamedSource = join(temporary, "renamed-data");
+  mkdirSync(renamedSource);
+  const renamedDb = new DatabaseSync(join(renamedSource, "navi.db"));
+  renamedDb.exec(`create table app_settings (key text primary key, value text); create table tasks (id text primary key); insert into tasks values ('n1')`);
+  renamedDb.close();
+  writeFileSync(join(renamedSource, "navi.db.identity.json"), '{"who":"renamed"}');
+  writeFileSync(join(renamedSource, OLD_DB), "NAVI-DB-MOVED\n路标");
+  const renamedTarget = join(temporary, "data-from-renamed");
+  result = await launch(binary, ["import", renamedSource], { ...env, NAVI_DATA_DIR: renamedTarget }).done;
+  assert.equal(result.status, 0, result.output);
+  const fromRenamed = new DatabaseSync(join(renamedTarget, "navi.db"), { readOnly: true });
+  assert.equal(fromRenamed.prepare("select count(*) as n from tasks").get().n, 1, "a renamed source is imported from navi.db");
+  fromRenamed.close();
+  assert.equal(readFileSync(join(renamedTarget, "navi.db.identity.json"), "utf8"), '{"who":"renamed"}');
+  assert.equal(existsSync(join(renamedTarget, OLD_DB)), false, "the marker left by the rename is not carried over");
+  const bothDb = new DatabaseSync(join(renamedSource, OLD_DB + ".real"));
+  bothDb.exec("create table t (x)");
+  bothDb.close();
+  copyFileSync(join(renamedSource, OLD_DB + ".real"), join(renamedSource, OLD_DB));
+  result = await launch(binary, ["import-inspect", renamedSource], env).done;
+  assert.equal(result.status, 1);
+  assert.match(result.output, /都是库/, "two real databases: refused, not guessed");
+  rmSync(join(renamedSource, "navi.db"));
+  writeFileSync(join(renamedSource, OLD_DB), "NAVI-DB-MOVED\n路标");
+  result = await launch(binary, ["import-inspect", renamedSource], env).done;
+  assert.match(result.output, /路标/, "only the marker left: refused");
+  writeFileSync(join(renamedSource, "navi.db.renaming"), "{}");
+  result = await launch(binary, ["import-inspect", renamedSource], env).done;
+  assert.match(result.output, /上次没做完/, "an unfinished rename: refused");
+  console.log("PASS: import reads navi.db or the pre-rename ash.db (state files follow it to the new name), refuses two databases / a lone marker / an unfinished rename");
   console.log("PASS: import stages a consistent, washed snapshot and publishes it under the launch lock only into an empty data root; "
     + "named pipes are skipped, symlinks stay links; failures, a racing fresh start and lock timeouts leave nothing behind; leftovers of an unfinished publish are collected; nested roots, multi-user data refused");
 } finally {

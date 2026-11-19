@@ -105,8 +105,7 @@ final class ServerLauncher {
   /// 在这里补一份。备份不成、或者记不下「这一版要起了」就不起：库原样留着，配上旧版 app 还能回去。
   /// 返回 nil = 可以起。
   private static func backUpBeforeMigration() -> String? {
-    let db = NaviConfig.dataURL.appendingPathComponent("ash.db")
-    guard FileManager.default.fileExists(atPath: db.path) else { return nil }
+    guard DatabaseFile.existing(in: NaviConfig.dataURL) != nil else { return nil }
     let lastServedBy = ServerRecord.read()?.bundleVersion ?? "unknown"
     do {
       if lastServedBy != NaviConfig.bundleVersion && !DatabaseBackup.covers(lastServedBy: lastServedBy) {

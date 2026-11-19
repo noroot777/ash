@@ -106,9 +106,11 @@ enum RestartImpactProbe {
   }
 
   private static func hostToken() -> String? {
-    let lock = NaviConfig.dataURL.appendingPathComponent("ash.db.ash.lock")
-    guard let data = try? Data(contentsOf: lock),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-    return json["token"] as? String
+    guard let db = DatabaseFile.existing(in: NaviConfig.dataURL) else { return nil }
+    for lock in DatabaseFile.lockFiles(of: db) {
+      if let data = try? Data(contentsOf: lock), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+         let token = json["token"] as? String { return token }
+    }
+    return nil
   }
 }
