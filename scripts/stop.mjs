@@ -4,6 +4,7 @@
 //   npm run stop              # 或直接 node scripts/stop.mjs
 //   node scripts/stop.mjs --wait  # 等会被打断的任务排空再停
 //   node scripts/stop.mjs --force # 明知会打断也要停(被打断的任务标为 failed)
+//   node scripts/stop.mjs --pid N # 只结束一个没在应答的服务进程并等它退出(升级的退回命令用,stop-pid.mjs)
 //
 // 跟 restart.mjs 的第 2 步是同一套安全闸(scripts/server-control.mjs),只是停完不再起新的:
 //  - 判据是「停止会**真正打断**几个任务」,不是「有几个在跑」。单飞任务的 agent 输出走
@@ -18,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { IS_WINDOWS } from "./platform.mjs";
 import { lockFileFor, takeDown } from "./server-control.mjs";
 import { parseStopOptions, stopCommand, STOP_USAGE } from "./stop-options.mjs";
+import { stopPid } from "./stop-pid.mjs";
 
 let options;
 try {
@@ -39,6 +41,13 @@ const LOG = readEnv(process.env, "NAVI_LOG") || join(IS_WINDOWS ? (process.env.T
 const WAIT_TIMEOUT = process.env.WAIT_TIMEOUT ? Number(process.env.WAIT_TIMEOUT) : null;
 
 const say = (line) => process.stdout.write(`${line}\n`);
+
+if (options.pid) {
+  process.exit(await stopPid({
+    pid: options.pid, entry: process.env.SERVER_ENTRY || "server/dist/index.js", force: options.force,
+    timeoutSec: Number(process.env.STOP_PID_TIMEOUT || 60), say,
+  }));
+}
 
 say(`▶ 停止 :${PORT} 服务端…`);
 const { running } = await takeDown({

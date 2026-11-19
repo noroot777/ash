@@ -1,7 +1,7 @@
 // 升级里碰数据的那几步:停着服务时给库留底、核对升级前后每一条都还在、把库改名交给 ⑨ 的改名命令、记下升级做到哪。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,23 +34,69 @@ export function backupSources({ backupRoot, db, explicit }) {
   return { files, problems };
 }
 
+const SQLITE_MAGIC = Buffer.from("SQLite format 3\0");
+const JOURNAL_SUFFIXES = ["-wal", "-shm", "-journal"];
+
+/** 文件头是不是 SQLite 库(旧名位置上也可能是改名留下的路标文本)。 */
+function isSqlite(file) {
+  const head = Buffer.alloc(SQLITE_MAGIC.length);
+  const fd = openSync(file, "r");
+  try { return readSync(fd, head, 0, head.length, 0) === head.length && head.equals(SQLITE_MAGIC); } finally { closeSync(fd); }
+}
+
+/** 文件内容的指纹:核对「升级前」的数字之前,先认准读的还是留底那一刻那份。 */
+export function fileDigest(file) {
+  const hash = createHash("sha256");
+  const buf = Buffer.alloc(1 << 20);
+  const fd = openSync(file, "r");
+  try {
+    for (let n; (n = readSync(fd, buf, 0, buf.length, null)) > 0;) hash.update(buf.subarray(0, n));
+  } finally { closeSync(fd); }
+  return hash.digest("hex");
+}
+
 /**
- * 服务停着的时候把 backupSources 列出来的文件原样拷进 `<数据目录>/backups/upgrade-<时间>/`,拷完逐个核对大小。
- * 返回 { dir, files };一个都没有返回 null;认不准、拷不全就抛出去(调用方把原来的服务起回来,这次不升)。
+ * 一份库的一致快照,交给 SQLite 自己做(在线备份,逐页拷):-wal 里已经提交、还没合回主库的那些都在里面。不能自己按文件名拷
+ * 库和 -wal —— 库是软链时 SQLite 把 -wal 放在**它指着的那份**旁边、叫那份的名字(审查第 2、3 轮实测:按链接名找,备份里就少了
+ * 最近写的那些)。源库只读打开(不在留底这一步替它合并日志);做完把快照换成不带 -wal 的写法,它自己就是完整的一份,只读也打得开。
  */
-export function backupDb({ backupRoot, db, explicit, stamp }) {
+async function snapshotDb(src, dest) {
+  const { DatabaseSync, backup } = createRequire(import.meta.url)("node:sqlite");
+  const source = new DatabaseSync(src, { readOnly: true });
+  try { await backup(source, dest); } finally { source.close(); }
+  const out = new DatabaseSync(dest);
+  try { out.exec("PRAGMA journal_mode = DELETE"); } finally { out.close(); }
+}
+
+/**
+ * 服务停着的时候给库留底,放进 `<数据目录>/backups/upgrade-<时间>/`:
+ *   · 库本身(新旧名下是 SQLite 的那份)做一致快照(snapshotDb),它的 -wal / -shm / -journal 不另拷 —— 快照里都有了;
+ *   · 其余跟着库名走的文件(身份、访问密钥、账本、旧名位置的路标)和改名账本原样拷(软链照它指向的内容拷),逐个核对大小。
+ * 返回 { dir, files, baseline:{ file, digest } | null }(baseline = 核对「升级前」认的那份库和它的指纹);一个都没有返回 null;
+ * 认不准、拷不全就抛出去(调用方把原来的服务起回来,这次不升)。
+ */
+export async function backupDb({ backupRoot, db, explicit, stamp }) {
   const { files, problems } = backupSources({ backupRoot, db, explicit });
   if (problems.length) throw new Error(problems.join(";"));
   if (!files.length) return null;
   let dir = join(backupRoot, "backups", `upgrade-${stamp}`);
   for (let n = 2; existsSync(dir); n += 1) dir = join(backupRoot, "backups", `upgrade-${stamp}-${n}`);
   mkdirSync(dir, { recursive: true });
+  const dbs = new Set(files.filter((f) => !JOURNAL_SUFFIXES.some((x) => f.endsWith(x)) && isSqlite(f)));
+  const out = [];
   for (const f of files) {
+    if (JOURNAL_SUFFIXES.some((x) => f.endsWith(x) && dbs.has(f.slice(0, -x.length)))) continue;
     const to = join(dir, basename(f));
-    copyFileSync(f, to, constants.COPYFILE_EXCL);
-    if (statSync(to).size !== statSync(f).size) throw new Error(`${f} 拷进备份之后大小对不上`);
+    if (dbs.has(f)) {
+      await snapshotDb(f, to);
+    } else {
+      copyFileSync(f, to, constants.COPYFILE_EXCL);
+      if (statSync(to).size !== statSync(f).size) throw new Error(`${f} 拷进备份之后大小对不上`);
+    }
+    out.push(basename(f));
   }
-  return { dir, files: files.map((f) => basename(f)) };
+  const file = dbInBackup(dir, db, explicit);
+  return { dir, files: out, baseline: file && existsSync(file) ? { file, digest: fileDigest(file) } : null };
 }
 
 /** 备份里那份库(核对「升级前」的数字就读它:停服务那一刻的一致快照,读它也不碰真库)。 */
@@ -63,12 +109,12 @@ export function dbInBackup(dir, db, explicit) {
 }
 
 /**
- * 三张表的 id。备份那份用读写打开(是我们自己的拷贝,让 SQLite 把 -wal 合进来);服务起着时的真库只读打开。
+ * 三张表的 id,只读打开(备份那份是不带 -wal 的快照;服务起着时的真库同样只读)—— 文件不在就打不开、抛出去,不会替它建一份空库。
  * 表还不存在(全新的库)算空;读不了就抛出去,由调用方如实说「没核对成」。
  */
-export function readIds(file, { readOnly }) {
+export function readIds(file) {
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
-  const db = new DatabaseSync(file, { readOnly });
+  const db = new DatabaseSync(file, { readOnly: true });
   try {
     const out = {};
     for (const [table] of CHECKED_TABLES) {
@@ -123,16 +169,23 @@ export function buildStamp(paths) {
 }
 
 /**
- * 升级前后核对:备份里那份(停服务那一刻的一致快照)跟现在的库比,每一条都还在没有。
- * 返回 { state: "ok" | "missing" | "unverified", line, rows }。读不出来就是 unverified —— 「没发现少」不等于「核对过了」,
- * 调用方不能拿它宣布升好了。
+ * 升级前后核对:备份里那份(停服务那一刻的一致快照)跟现在的库比,每一条都还在没有。baseline = { file, digest }(留底时记下的)。
+ * 返回 { state: "ok" | "missing" | "unverified", line, rows }。「升级前」那份先认人:在、是个非空文件、指纹还是留底那一刻的 ——
+ * 不见了、被换过、没记指纹都是 unverified,不拿一份空库或别的库当基线(「零条都在」证明不了任何事)。读不出来同样是 unverified ——
+ * 「没发现少」不等于「核对过了」,调用方不能拿它宣布升好了。
  */
-export function verifyData(backupFile, liveFile) {
+export function verifyData(baseline, liveFile) {
+  const unverified = (why) => ({ state: "unverified", line: `没核对成:${why}`, rows: [] });
+  const file = baseline?.file;
+  const st = file ? statSync(file, { throwIfNoEntry: false }) : null;
+  if (!st?.isFile() || st.size === 0) return unverified(`升级前那份库 ${file ?? "(没记下来)"} 不在了或是空的,拿什么比都证明不了数据都在`);
+  if (!baseline.digest) return unverified(`${file} 留底时没记指纹,认不出它还是不是升级前那一份`);
   let rows;
   try {
-    rows = compareIds(readIds(backupFile, { readOnly: false }), readIds(liveFile, { readOnly: true }));
+    if (fileDigest(file) !== baseline.digest) return unverified(`${file} 跟留底那一刻不一样了(被改过或换过),不能拿它当升级前的数字`);
+    rows = compareIds(readIds(file), readIds(liveFile));
   } catch (error) {
-    return { state: "unverified", line: `没核对成:${error.message}`, rows: [] };
+    return unverified(error.message);
   }
   const counts = rows.map((r) => `${r.label} ${r.before} → ${r.after}`).join(" · ");
   const missing = rows.filter((r) => r.missing.length);
@@ -144,9 +197,10 @@ export function verifyData(backupFile, liveFile) {
 /**
  * 升级做到哪了,记在数据目录里(跟着这份数据走;不进 git):
  *   built      最后一次构建成功时的 { commit, stamp }(stamp 见 buildStamp)
- *   verifyPending { backupFile }          数据核对还没过(读不出来、或者有缺):再跑会先补核,过了才清掉
+ *   verifyPending { backupFile, backupDigest } 数据核对还没过(读不出来、或者有缺):再跑会先补核,过了才清掉
  *   servedPid  最后一次起好的服务            port       这份安装的服务端口(锁收了之后再跑也找得到)
- *   inProgress { from, to, backup, backupFile } 有它 = 上次没做完,再跑接着做(from 和备份沿用那一次的;backupFile = 备份里那份库)
+ *   inProgress { from, to, backup, backupFile, backupDigest } 有它 = 上次没做完,再跑接着做(from 和备份沿用那一次的;
+ *              backupFile / backupDigest = 备份里那份库和它留底时的指纹)
  *   last       上一次升好的那次:{ from, to, at, backup }
  */
 export const stateFile = (dataDir) => join(dataDir, "upgrade.json");

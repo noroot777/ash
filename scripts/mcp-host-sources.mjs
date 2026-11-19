@@ -352,7 +352,7 @@ const NAMES = [NAVI, ...LEGACY_NAMES];
  * 登记,先压成一个四态结论就会把两个名字的事实混成一个(本轮审查 F3)。值认不出来(不是
  * 对象)一律 doubt —— 当没有去写就会把用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。
  */
-function scanSource(source, site) {
+export function scanSource(source, site) {
   const names = new Map();
   let text;
   // 证不出来的那一档(相对路径没带工作目录):看不准,别当成「没有」。

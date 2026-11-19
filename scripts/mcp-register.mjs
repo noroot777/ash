@@ -143,6 +143,8 @@ export function registerNaviMcp({ repo, port, ok, warn, say }) {
       }
       if (retired.skipped) warn(`${agentType}:旧名登记没收成 navi —— ${retired.skipped}`);
       if (retired.foreign.length) say(`  · ${agentType}:${retired.foreign.join(" / ")} 这个名字的条目起的不是 Navi 的 MCP 脚本,是别的东西,没动它`);
+      if (retired.unsure.length) say(`  · ${agentType}:${retired.unsure.join(" / ")} 这个名字的条目认不准起的是什么(启动命令的写法读不通),没动它;是 Navi 的就自己删掉`);
+      for (const label of retired.readonly) say(`  · ${agentType}:${label} 里还有起着 Navi 脚本的旧名登记,那份 Navi 改不了,自己去掉它`);
     } catch (error) {
       warn(`${agentType}:收拾旧名登记时出错:${error.message}`);
     }

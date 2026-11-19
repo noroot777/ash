@@ -20,7 +20,7 @@
 // 打出两条路(修好再跑一次接着做;或原样照抄就能退回升级前版本的几行命令)。库改名失败按 ⑨ 的账本退回原样,照旧名起服务,
 // 不让这一项作废整次升级;停服务之后出了别的意外(写不进进度、磁盘满)一样停下、打出那两条路。做到哪记在数据目录的
 // upgrade.json(upgrade-data.mjs),再跑接着做;已是最新就说一句,不重启服务(但 MCP 登记照样收拾、上次没核对过的数据照样补核)。
-// 同一份检出同一时刻只许一次升级(upgrade-lock.mjs)。
+// 同一份检出、同一份数据同一时刻只许一次升级 / restart / setup(upgrade-lock.mjs)。
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -41,7 +41,7 @@ import {
   beforeLastPull, countBetween, fastForward, fetchRemote, inspectCheckout, isAncestor, relation, resetKeep, revParse, short,
   showFile, untrackedCollisions,
 } from "./upgrade-git.mjs";
-import { acquireUpgradeLock, UPGRADE_LOCK_ENV } from "./upgrade-lock.mjs";
+import { acquireUpgradeLock, checkoutLockDir, dataLockDir, UPGRADE_LOCK_ENV } from "./upgrade-lock.mjs";
 import { parseUpgradeOptions, upgradeCommand, UPGRADE_USAGE, userArgs } from "./upgrade-options.mjs";
 import { printRollback, printSummary, rollbackCommands, shellArg } from "./upgrade-report.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
@@ -99,6 +99,10 @@ async function preflight(pkg, abort) {
   const problems = [...runtimeProblems(pkg), ...data.problems];
   // 库留不了底的(软链指着的东西不在了之类),在停服务之前就拦下。
   if (!data.problems.length) problems.push(...backupSources({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit }).problems);
+  // 库改名做到一半(账本在)、而这次升级之前没留过底:那一刻库和它的 -wal 可能分在新旧两个名字下,做不出一份可靠的快照。
+  if (data.rename === "resume" && !readState(data.dataDir).inProgress?.backup) {
+    problems.push(`库改名上次做到一半(账本还在),而且之前没留过底:先 node scripts/rename-db.mjs --apply --data ${shellArg(data.dataDir)} 做完(或 --rollback 退回),再升级`);
+  }
   const { port, from: portFrom } = data.problems.length ? { port: 0 } : resolvePort(REPO, env, readState(data.dataDir).port);
   const server = data.problems.length ? null : await identifyServer({ repo: REPO, env, port, dataDir: data.dataDir, explicit: data.explicit });
   if (server) problems.push(...server.problems);
@@ -129,7 +133,7 @@ async function prepare() {
   say("▶ 升级之前先核对一遍(这一段不改任何东西)…");
   const co = inspectCheckout(REPO);
   if (co.problems.length) block(co.problems);
-  const lock = acquireUpgradeLock(REPO);
+  const lock = acquireUpgradeLock([checkoutLockDir(REPO)], { note: "升级" });
   if (!lock.ok) block([lock.why]);
   process.on("exit", lock.release);
   const fetched = fetchRemote(REPO, co.remote);
@@ -153,6 +157,10 @@ async function prepare() {
   try { pkg = JSON.parse(rel === "behind" ? showFile(REPO, target, "package.json") : readFileSync(join(REPO, "package.json"), "utf8")); }
   catch { block(["新版的 package.json 读不出来,不知道它要什么版本的 Node/npm"]); }
   const ctx = await preflight(pkg, stopHere);
+  // 数据那一头也锁上(别的检出可以经 NAVI_DATA_DIR / NAVI_DB 指到同一份数据)。
+  const dataLock = acquireUpgradeLock([dataLockDir(ctx.data.db)], { token: lock.token, note: "升级" });
+  if (!dataLock.ok) block([dataLock.why]);
+  process.on("exit", dataLock.release);
   // 有任务在跑就在这里拦下(--wait 在这里等):还没拉代码,什么都没变。
   if (ctx.server.running) await takeDown(takeDownArgs(ctx, { check: true }));
   let pulled = null;
@@ -189,8 +197,8 @@ async function apply() {
     process.exit(code);
   };
 
-  // 第一段把锁递过来了就接着持有(pid 换成自己);直接跑 --continue 的现拿一把。
-  const lock = acquireUpgradeLock(REPO, { token: env[UPGRADE_LOCK_ENV] || null });
+  // 第一段把锁递过来了就用同一个 token 放自己的登记(同一次升级);直接跑 --continue 的现拿一把。
+  const lock = acquireUpgradeLock([checkoutLockDir(REPO)], { token: env[UPGRADE_LOCK_ENV] || null, note: "升级" });
   if (!lock.ok) { say(`  ✕ ${lock.why}`); undoPull(2); }
   process.on("exit", lock.release);
 
@@ -205,6 +213,9 @@ async function apply() {
   }
   const ctx = await preflight(JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")), undoPull);
   const { data, port } = ctx;
+  const dataLock = acquireUpgradeLock([dataLockDir(data.db)], { token: lock.token, note: "升级" });
+  if (!dataLock.ok) { say(`  ✕ ${dataLock.why}`); undoPull(2); }
+  process.on("exit", dataLock.release);
   dataDir = data.dataDir;
   state = readState(dataDir);
   const log = logFor(port);
@@ -232,7 +243,7 @@ async function apply() {
     let code = 0;
     if (state.verifyPending) {
       // 上次升级没核对过的数据补核一次(只读现在的库,不重启)。
-      const v = verifyData(state.verifyPending.backupFile, dbFileFor(REPO, env));
+      const v = verifyData({ file: state.verifyPending.backupFile, digest: state.verifyPending.backupDigest }, dbFileFor(REPO, env));
       reportMissing(v);
       if (v.state === "ok") {
         delete state.verifyPending;
@@ -259,7 +270,13 @@ async function apply() {
   }
   const save = () => writeState(dataDir, state);
 
+  // 起过的服务进程都记下来(起回原来的那个、起新的那个):没应答的那种 stop.mjs 问不到,退回命令得按 pid 结束、等它真退。
   let launchedPid = null;
+  const launch = async () => {
+    const r = await launchServer({ port, log, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT, env: { ...env, PORT: String(port) } });
+    if (r.pid) launchedPid = r.pid;
+    return r;
+  };
   /**
    * 服务此刻到底什么样,退回命令照它写:端口上有服务应答(stop.mjs 停得了);刚起的进程还活着却没应答(起得慢、卡在迁移里 ——
    * stop.mjs 问不到它,得按 pid 结束);都没有。
@@ -304,7 +321,7 @@ async function apply() {
     if (!state.inProgress.backup) {
       let b;
       try {
-        b = backupDb({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit, stamp });
+        b = await backupDb({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit, stamp });
       } catch (error) {
         // 依赖、构建产物都还是原来的:把原来的服务原样起回来,升级这次不做。
         say(`  ✕ 留底没成:${error.message}`);
@@ -313,20 +330,29 @@ async function apply() {
         const reset = pulledFrom ? resetKeep(REPO, pulledFrom) : { ok: true };
         if (!reset.ok) say(`  ✕ 刚拉的代码没退回 ${short(pulledFrom)}(${reset.err});手工退回:git reset --keep ${pulledFrom}`);
         if (down.running) {
-          const back = await launchServer({ port, log, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT, env: { ...env, PORT: String(port) } });
-          say(back.ok ? `  ↩ 原来的服务已经照原样起回来了(pid ${back.pid})` : `  ✕ 原来的服务也没起回来,看 ${log};手工起:${restartCommand()}`);
+          const back = await launch();
+          if (back.ok) say(`  ↩ 原来的服务已经照原样起回来了(pid ${back.pid})`);
+          else {
+            const now = await serviceNow();
+            say(`  ✕ 原来的服务也没起回来(${now.line})。`);
+            if (now.strayPid) say(`    要手工重来,先结束它、等它真退:node scripts/stop.mjs --pid ${now.strayPid};再 ${restartCommand()}`);
+            else say(`    手工起:${restartCommand()}`);
+          }
         }
         say("✕ 没有升级:库留不了底就不往下做。腾出空间(或修好权限)再跑一次。");
         process.exit(1);
       }
       state.inProgress.backup = b?.dir ?? null;
-      // 备份里那份库记下来:核对认的就是它,它后来不见了、读不动 = 没核对成,不是「升级前没有库」。
-      state.inProgress.backupFile = b ? dbInBackup(b.dir, data.db, data.explicit) : null;
+      // 备份里那份库和它的指纹记下来:核对认的就是它,它后来不见了、被换过、读不动 = 没核对成,不是「升级前没有库」。
+      state.inProgress.backupFile = b?.baseline?.file ?? null;
+      state.inProgress.backupDigest = b?.baseline?.digest ?? null;
       save();
     }
     say(state.inProgress.backup ? `  ✓ ${state.inProgress.backup}` : "  · 还没有库(新安装),不用留底");
-    const backupFile = state.inProgress.backupFile !== undefined ? state.inProgress.backupFile
-      : state.inProgress.backup ? dbInBackup(state.inProgress.backup, data.db, data.explicit) : null;
+    // 老格式的进度(没记 backupFile)照目录认出那份库,但没有指纹 —— 核对会如实说认不准,不当成升级前没有库。
+    const baseline = state.inProgress.backupFile ? { file: state.inProgress.backupFile, digest: state.inProgress.backupDigest }
+      : state.inProgress.backup && state.inProgress.backupFile === undefined
+        ? { file: dbInBackup(state.inProgress.backup, data.db, data.explicit), digest: null } : null;
 
     if (built) {
       say("▶ 3/6 依赖和构建已经是这一版的,跳过");
@@ -362,8 +388,7 @@ async function apply() {
     }
 
     say(`▶ 5/6 起服务 :${port}…`);
-    const launched = await launchServer({ port, log, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT, env: { ...env, PORT: String(port) } });
-    launchedPid = launched.pid ?? null;
+    const launched = await launch();
     if (!launched.ok) {
       const why = { spawn: "启动命令拉不起来", impostor: `端口上应答的是 pid ${launched.impostor},不是刚起的那个`, timeout: `等了 ${START_TIMEOUT}s 还没就绪`, exited: "新服务一起来就退出了" }[launched.why];
       let tail = [];
@@ -377,14 +402,14 @@ async function apply() {
 
     say("▶ 6/6 核对数据、收尾…");
     // 核对有三种结局:都在 / 有缺 / 没核对成。后两种都不算升好:记成 verifyPending,再跑先补核(不重启服务)。
-    const v = backupFile ? verifyData(backupFile, dbFileFor(REPO, env)) : { state: "ok", line: "没核对(升级前没有库)" };
+    const v = baseline ? verifyData(baseline, dbFileFor(REPO, env)) : { state: "ok", line: "没核对(升级前没有库)" };
     reportMissing(v);
     if (v.state === "ok") {
-      if (backupFile) say(`  ✓ ${v.line}`);
+      if (baseline) say(`  ✓ ${v.line}`);
       delete state.verifyPending;
     } else {
       if (v.state === "unverified") say(`  ⚠ ${v.line}`);
-      state.verifyPending = { backupFile };
+      state.verifyPending = { backupFile: baseline.file, backupDigest: baseline.digest };
     }
     await refreshMcp({ repo: REPO, port, lockFile: lockFileFor(REPO, env), skip: options.skipMcp, force: false, say, command: restartCommand });
     registerMcp();

@@ -135,9 +135,51 @@ try {
     const r = s.retire("kimi");
     assert.deepEqual([r.changed, r.foreign], [[], ["ash"]]);
     assert.equal(readFileSync(file, "utf8"), foreign);
-    assert.deepEqual(s.retire("cursor"), { changed: [], foreign: [], skipped: null });
+    assert.deepEqual(s.retire("cursor"), { changed: [], foreign: [], unsure: [], readonly: [], skipped: null });
     assert.ok(!existsSync(join(s.home, ".cursor")), "没有配置的那家不建目录");
     console.log("✓ 只有起着别的程序的旧名时一个字节都不写;没配置的那家不建目录");
+  }
+
+  // ⑧ grok:「起的是什么」只看服务自己那张表的 command / args(审查第 3 轮 R5)。
+  //    子表里恰好叫 command 的环境变量写着 Navi 路径 ⇒ 不是我们的,原样留着;多行数组里的 Navi 路径照样认得出来。
+  {
+    const s = stage();
+    const navi = `[mcp_servers.navi]\ncommand = "node"\nargs = [${js(s.entry)}]\n`;
+    const trap = `${navi}[mcp_servers.ash]\ncommand = "another-mcp"\nargs = ["serve"]\n[mcp_servers.ash.env]\ncommand = ${js(s.entry)}\n`;
+    const file = s.put(".grok/config.toml", trap);
+    const r = s.retire("grok");
+    assert.deepEqual([r.changed, r.foreign], [[], ["ash"]]);
+    assert.equal(readFileSync(file, "utf8"), trap, "子表里的路径不算它起的东西,一个字节都不动");
+    const multi = `${navi}\n[mcp_servers.ash]\ncommand = "node" # Navi\nargs = [\n  # 脚本\n  ${js(s.entry)},\n]\n\n[mcp_servers.kb]\ncommand = "kb-mcp"\n`;
+    writeFileSync(file, multi);
+    const r2 = s.retire("grok");
+    assert.deepEqual(r2.changed.map((c) => c.removed), [["ash"]], "多行数组里的 Navi 脚本照样认得出来");
+    assert.equal(readFileSync(file, "utf8"), `${navi}\n[mcp_servers.kb]\ncommand = "kb-mcp"\n`);
+    const odd = `[mcp_servers.ash]\ncommand = "node"\nargs = [${js(s.entry)}] extra\n`;
+    writeFileSync(file, odd);
+    const r3 = s.retire("grok");
+    assert.deepEqual([r3.changed, r3.unsure], [[], ["ash"]], "启动参数那一行读不通 ⇒ 认不准,不动");
+    assert.equal(readFileSync(file, "utf8"), odd);
+    console.log("✓ grok:只认服务自己那张表的启动命令 —— 子表里的同名键不算,多行数组认得出,读不通的不动");
+  }
+
+  // ⑨ 已有 navi 时,被 gemini 根级 mcp.excluded 挡掉的 ash 也不动(关着就是关着,不看别的登记在不在)。
+  {
+    const s = stage();
+    const doc = js({ mcp: { excluded: ["ash"] }, mcpServers: { navi: { command: "node", args: [s.entry] }, ash: { command: "node", args: [s.entry] } } });
+    const file = s.put(".gemini/settings.json", doc);
+    assert.deepEqual(s.retire("gemini").changed, []);
+    assert.equal(readFileSync(file, "utf8"), doc);
+    console.log("✓ gemini:已有 navi 时,被根级名单挡掉的旧名条目照样不动");
+  }
+
+  // ⑩ 只在 OPENCODE_CONFIG_CONTENT 里的旧名登记:改不了,报出来是哪一份。
+  {
+    const s = stage();
+    s.env.OPENCODE_CONFIG_CONTENT = js({ mcp: { ash: { type: "local", command: ["node", s.entry] } } });
+    const r = s.retire("opencode");
+    assert.deepEqual([r.changed, r.readonly], [[], ["$OPENCODE_CONFIG_CONTENT"]]);
+    console.log("✓ opencode:只在环境变量里的那份旧名登记改不了,如实报出来");
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

@@ -40,13 +40,13 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, listenerPids, localJson } from "./platform.mjs";
-import { countOf, drainWait as drainUntilSafe, exitLedgerFor, explainNoVerdict, killListeners, lockFileFor, noVerdictReason, queryImpact, waitPortQuiet } from "./server-control.mjs";
+import { countOf, dbFileFor, drainWait as drainUntilSafe, exitLedgerFor, explainNoVerdict, killListeners, lockFileFor, noVerdictReason, queryImpact, waitPortQuiet } from "./server-control.mjs";
 import { launchServer, refreshMcp } from "./server-start.mjs";
 import { readEnv } from "./env.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 import { parseRestartOptions, restartCommand, RESTART_USAGE } from "./restart-options.mjs";
-import { upgradeInProgressLine } from "./upgrade-lock.mjs";
+import { holdOrExit } from "./upgrade-lock.mjs";
 
 let options;
 try {
@@ -62,12 +62,8 @@ if (options.help) {
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
-// 这份检出正在升级(upgrade.mjs 持着锁):它也在装依赖、构建、起服务,插进来就是两边一起踩。
-const upgrading = upgradeInProgressLine(REPO);
-if (upgrading) {
-  process.stderr.write(`✕ ${upgrading}\n`);
-  process.exit(2);
-}
+// 跟 upgrade / setup 互斥(upgrade-lock.mjs):它们也在装依赖、构建、起服务,插进来就是两边一起踩。
+holdOrExit({ repo: REPO, dbFile: dbFileFor(REPO), note: "restart" });
 
 const PORT = Number(process.env.PORT || 4317);
 const LOG = readEnv(process.env, "NAVI_LOG") || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `navi-${PORT}.log`);

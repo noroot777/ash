@@ -7,6 +7,8 @@ export function stopCommand(...args) {
 export const STOP_USAGE = `用法: ${stopCommand()} [选项]
 
   --force      强制停止(会被打断的任务标为 failed;会被接管的照常保住)
+  --pid <n>    只结束这一个没在应答的服务进程(升级打印的退回命令里用),等它真的退出才算完;
+               认准它在跑服务入口才动手。等满 STOP_PID_TIMEOUT 秒(默认 60)还不退时,加 --force 强行结束
   --wait       等会被打断的任务排空后再停止(--force 优先)
   --help, -h   显示帮助,不停止
 
@@ -22,12 +24,15 @@ export function parseStopOptions(args = process.argv.slice(2), env = process.env
     options: {
       force: { type: "boolean" },
       wait: { type: "boolean" },
+      pid: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
+  if (values.pid !== undefined && !(/^\d+$/.test(values.pid) && Number(values.pid) > 1)) throw new Error(`--pid 要一个进程号,收到的是 ${values.pid}`);
   return {
     force: !!(values.force || env.FORCE),
     wait: !!(values.wait || env.WAIT),
+    pid: values.pid === undefined ? null : Number(values.pid),
     help: !!values.help,
   };
 }

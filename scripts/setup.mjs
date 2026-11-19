@@ -22,18 +22,14 @@ import { IS_WINDOWS, runCli as run, which, windowsLongPaths } from "./platform.m
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
 import { registerNaviMcp } from "./mcp-register.mjs";
 import { NODE_MIN, sqliteUsable } from "./runtime-check.mjs";
-import { upgradeInProgressLine } from "./upgrade-lock.mjs";
+import { holdOrExit } from "./upgrade-lock.mjs";
 
 // setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts（MCP 登记那份同理，见 mcp-register.mjs）。
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
-// 这份检出正在升级(upgrade.mjs 持着锁):它也在装依赖、构建、起服务,插进来就是两边一起踩。
-const upgrading = upgradeInProgressLine(REPO);
-if (upgrading) {
-  process.stderr.write(`✕ ${upgrading}\n`);
-  process.exit(2);
-}
+// 跟 upgrade / restart 互斥(upgrade-lock.mjs):它们也在装依赖、构建,插进来就是两边一起踩。
+holdOrExit({ repo: REPO, note: "setup" });
 
 const PORT = Number(process.env.PORT || 4317);
 const URL_BASE = `http://localhost:${PORT}`;

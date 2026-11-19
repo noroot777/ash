@@ -19,7 +19,7 @@ const STOP = join(REPO, "scripts", "stop.mjs");
 const PORT = 14318;
 
 // ── 参数 ──────────────────────────────────────────────────────────────────────
-const defaults = { force: false, wait: false, help: false };
+const defaults = { force: false, wait: false, pid: null, help: false };
 assert.equal(stopCommand("--force"), "node scripts/stop.mjs --force");
 assert.ok(STOP_USAGE.startsWith(`用法: ${stopCommand()} [选项]`));
 assert.deepEqual(parseStopOptions([], {}), defaults);
@@ -30,6 +30,9 @@ for (const [flag, field, variable] of [["--force", "force", "FORCE"], ["--wait",
 }
 for (const flag of ["--help", "-h"]) assert.deepEqual(parseStopOptions([flag], {}), { ...defaults, help: true });
 for (const args of [["--froce"], ["force"], ["--force=false"]]) assert.throws(() => parseStopOptions(args, {}));
+// --pid:只结束那一个没应答的服务进程(升级的退回命令用;行为单测在 test-upgrade-units.mjs)。
+assert.deepEqual(parseStopOptions(["--pid", "4242"], {}), { ...defaults, pid: 4242 });
+for (const bad of ["abc", "1", "0", "-3", "12x"]) assert.throws(() => parseStopOptions(["--pid", bad], {}), /--pid/);
 
 const help = await runTestProcess(NPM, ["run", "stop", "--", "--help"], {
   ...NPM_SPAWN_OPTS, cwd: REPO, encoding: "utf8", timeout: 30_000,
