@@ -156,12 +156,14 @@ function report(plan, { verify = false } = {}) {
 const plan = scan({ from: opts.from, to: opts.to, home, db: opts.db });
 
 if (opts.mode === "rollback") {
-  const journal = opts.journal ? new Journal(resolve(opts.journal)) : Journal.latest(home);
-  if (!journal) { say("没有找到账本（~/.navi-relocate/*/journal.json）"); process.exit(2); }
-  if (journal.data.rolledBackAt) { say(`这份账本已经退回过：${journal.dir}`); process.exit(0); }
+  const journals = opts.journal ? [new Journal(resolve(opts.journal))] : Journal.pending(home, { from: opts.from, to: opts.to });
+  if (!journals.length) { say("没有要退回的账本（~/.navi-relocate/*/journal.json）"); process.exit(0); }
   if (!plan.service || plan.service.running) { say(`✗ 退回之前要先停服务：${(plan.service?.reasons ?? [plan.where.why]).join("；")}`); process.exit(2); }
-  say(`照账本退回：${journal.dir}`);
-  try { rollback(journal, say); } catch (error) { say(`✗ 退回中途失败：${error.message}\n  账本里标了 undone 的已经退回，修好原因再跑一次 --rollback 接着退`); process.exit(3); }
+  for (const journal of journals) {
+    if (journal.data.rolledBackAt) { say(`这份账本已经退回过：${journal.dir}`); continue; }
+    say(`照账本退回：${journal.dir}`);
+    try { rollback(journal, say); } catch (error) { say(`✗ 退回中途失败：${error.message}\n  账本里标了 undone 的已经退回，修好原因再跑一次 --rollback 接着退`); process.exit(3); }
+  }
   say("已退回。");
   process.exit(0);
 }

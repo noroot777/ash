@@ -34,11 +34,13 @@ export class Journal {
     j.save();
     return j;
   }
-  static latest(home) {
+  /** 这对路径下所有还没退回过、真做过事的账本，新的在前（中途失败后重跑会留下不止一份）。 */
+  static pending(home, { from, to }) {
     const base = join(home, ".navi-relocate");
     let runs = [];
-    try { runs = readdirSync(base).filter((d) => existsSync(join(base, d, "journal.json"))).sort(); } catch { return null; }
-    return runs.length ? new Journal(join(base, runs.at(-1))) : null;
+    try { runs = readdirSync(base).filter((d) => existsSync(join(base, d, "journal.json"))).sort().reverse(); } catch { return []; }
+    return runs.map((d) => new Journal(join(base, d)))
+      .filter((j) => j.data.from === from && j.data.to === to && !j.data.rolledBackAt && j.data.steps.some((s) => !s.undone));
   }
   save() {
     const tmp = `${this.file}.tmp`;

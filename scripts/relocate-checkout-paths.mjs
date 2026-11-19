@@ -50,7 +50,8 @@ export function rewriteRules({ from, to, home }) {
   return rules.map((rule) => ({
     ...rule,
     re: new RegExp(
-      (rule.after ? `(?<=${escapeRe(rule.after)})` : START) + escapeRe(rule.old) + BOUNDARY,
+      // claude 目录名里 `-` 就是原来的 `/`，所以它后面可以紧跟 `-`；只有字母数字才说明是另一个名字。
+      (rule.after ? `(?<=${escapeRe(rule.after)})` : START) + escapeRe(rule.old) + (rule.kind === "claude-slug" ? "(?![A-Za-z0-9])" : BOUNDARY),
       "g",
     ),
   }));
