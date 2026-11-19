@@ -322,7 +322,7 @@ console.log("OPS " + n);
           const label = `${direction} ${failAt ? "撤回途中" : ""}第 ${killAt} 次操作${when === "before" ? "之前" : when === "after" ? "之后" : `写到第 ${when.slice(8)} 个字节时`}被杀`;
           // 账本里记的是绝对路径：每种接着处理的办法各自从头造一次现场，就地处理。
           const kill = (tag: string) => {
-            const crashed = dir(`crash-${direction}-${killAt}-${when}-${tag}`);
+            const crashed = dir(`crash-${direction}-${killAt}-${when.replace(":", "-")}-${tag}`); // Windows 目录名里不能有冒号
             cpSync(base, crashed, { recursive: true });
             // 被杀 = 没走到最后那句 OPS（Windows 上自杀报的是退出码，不是信号）
             assert.doesNotMatch(crash(crashed, direction, when, killAt, failAt).stdout, /OPS/, label);
