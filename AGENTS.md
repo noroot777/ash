@@ -61,6 +61,8 @@
 
 它没开 SSH/WinRM，远程 shell 就用 Navi 自己的终端 API：`POST /api/projects/<id>/terminal/sessions` 开会话 → `/input` 送命令 → `/events`(SSE) 收输出。控制台是 GBK，命令和结果都走 base64 进出，否则中文全是乱码。代码别 push 到 GitHub 中转，用 `git format-patch` + 局域网 `python3 -m http.server` 传，落进 `git worktree add --detach` 的独立目录（`node_modules` 用 `mklink /J` 借主仓的），别碰用户的检出。完事把会话、worktree、测试服务、临时文件全清掉。
 
+那边的接口要访问密钥：放在本机 `~/.config/navi/win-192.168.1.187.key`（仓库之外），现成的通道工具 `scripts/win-remote.mjs`（用法见 `docs/win-remote.md`）从环境变量 `WIN_REMOTE_KEY` 取它。
+
 ## 任务完成协议
 
 **exit 0 ≠ done**，规则本体由 prompt 前言注入（fresh run）/ 消息尾部提醒（reply/resume 回合），此处不复述——**别再往任何 md 里加第四份拷贝**。改结算逻辑看 `server/CLAUDE.md`。
