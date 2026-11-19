@@ -20,7 +20,10 @@ import { acquireUpgradeLock, dataLockDirs } from "./upgrade-lock.mjs";
 
 const dir = mkdtempSync(join(realpathSync(tmpdir()), "navi-upgrade-units-"));
 
-/** 一份 WAL 库:before 已经合回主库,in-wal 只在 -wal 里(写的进程被 SIGKILL,没机会合并)—— 异常退出后的合法停机形态。 */
+/**
+ * 一份 WAL 库:before 已经合回主库,in-wal 只在 -wal 里(写的进程被 SIGKILL,没机会合并)—— 异常退出后的合法停机形态。
+ * file 是服务打开的那个路径(可以是软链):-wal 落在哪由 SQLite 定 —— POSIX 跟着软链落在指着的那份旁边,Windows 不跟,落在链接名旁边。
+ */
 function walDb(file) {
   const code = `const { DatabaseSync } = require("node:sqlite");
 const db = new DatabaseSync(${JSON.stringify(file)});
@@ -35,11 +38,13 @@ try {
   {
     const real = join(dir, "elsewhere", "real.sqlite");
     mkdirSync(join(dir, "elsewhere"));
-    walDb(real);
-    assert.ok(existsSync(`${real}-wal`), "造不出带 -wal 的库,这一格没法测");
+    writeFileSync(real, ""); // 空文件就是一份空库;先有它,软链才指得过去
     let linked = true;
     try { symlinkSync(real, join(dir, "custom.sqlite")); } catch { linked = false; }
     const db = linked ? join(dir, "custom.sqlite") : real;
+    walDb(db); // 照服务那样经配置的路径写
+    const wal = [`${real}-wal`, `${db}-wal`].find((f) => existsSync(f));
+    assert.ok(wal, "造不出带 -wal 的库,这一格没法测");
     writeFileSync(`${db}.identity.json`, "{\"id\":\"me\"}");
     const b = await backupDb({ backupRoot: dir, db, explicit: true, stamp: "t" });
     const name = linked ? "custom.sqlite" : "real.sqlite";
@@ -48,8 +53,8 @@ try {
     assert.deepEqual(readdirSync(b.dir).sort(), [name, `${name}.identity.json`].sort(), "快照自己就是完整的一份,只读打开也不该多出 -wal");
     assert.equal(b.baseline.file, join(b.dir, name));
     assert.equal(b.baseline.digest, fileDigest(b.baseline.file));
-    assert.ok(existsSync(`${real}-wal`), "留底这一步不该替源库合并日志");
-    console.log(linked ? "✓ 库是软链、-wal 在它指着的那份旁边:快照照样带上 -wal 里已提交的那条" : "⚠ 建不了软链,只测了普通 WAL 库的快照");
+    assert.ok(existsSync(wal), "留底这一步不该替源库合并日志");
+    console.log(linked ? `✓ 库是软链、-wal 在${wal === `${real}-wal` ? "它指着的那份" : "链接名"}旁边:快照照样带上 -wal 里已提交的那条` : "⚠ 建不了软链,只测了普通 WAL 库的快照");
 
     // ── 核对认人 ──────────────────────────────────────────────────────────────────
     const live = join(dir, "live.sqlite");
