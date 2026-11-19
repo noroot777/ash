@@ -8,13 +8,16 @@ import { apiPath, id } from "../lib/apiClient.ts";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { InspButton, InspNone } from "../inspector/parts.tsx";
 import { runtimeApi } from "./runtimeApi.ts";
-import { runtimeErrorText, type TaskRuntime } from "./useTaskRuntime.ts";
+import { runtimeErrorText, type BrowserActionTicket, type TaskRuntime } from "./useTaskRuntime.ts";
 import "./task-runtime.css";
 
 export function BrowserInspector({ runtime }: { runtime: TaskRuntime }) {
   const browser = runtime.state.browser;
-  if (browser) return <TaskBrowserPane key={browser.id} taskId={runtime.taskId} state={browser} beginWrite={runtime.beginBrowserWrite} />;
+  // 打开 / 重连会换出一个新的浏览器会话，不属于哪个旧会话：走运行环境的动作，完了整份重拉。
   const open = () => void runtime.perform(() => runtimeApi.action(runtime.taskId, undefined, { action: "open" }));
+  // 有没有历史会话都显示同一条错误通道：从「服务」那格点「在共享浏览器里查看」被拒，切过来就看得到。
+  if (browser) return <TaskBrowserPane key={browser.id} taskId={runtime.taskId} state={browser} error={runtime.error}
+    begin={runtime.beginBrowserAction} reopen={open} reopening={runtime.busy} />;
   return (
     <div className="insp-pane">
       <InspNone action={runtime.serviceReady ? <InspButton disabled={runtime.busy} onClick={open}>打开浏览器</InspButton> : undefined}>
@@ -25,8 +28,10 @@ export function BrowserInspector({ runtime }: { runtime: TaskRuntime }) {
   );
 }
 
-function useBrowserFrame(taskId: string, state: TaskBrowserState, onError: (text: string) => void) {
+/** 画面轮询自己的失败（加载不出画面）只在这一格显示，下一帧取到就消失。 */
+function useBrowserFrame(taskId: string, state: TaskBrowserState) {
   const [frame, setFrame] = useState("");
+  const [error, setError] = useState("");
   const objectUrl = useRef("");
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -52,45 +57,54 @@ function useBrowserFrame(taskId: string, state: TaskBrowserState, onError: (text
           const previous = objectUrl.current;
           objectUrl.current = next;
           setFrame(next);
+          setError("");
           if (previous) URL.revokeObjectURL(previous);
         }
-      } catch (reason) { if (!canceled) onError(runtimeErrorText(reason)); }
+      } catch (reason) { if (!canceled) setError(runtimeErrorText(reason)); }
       if (!canceled && stateRef.current.status === "ready") timer = setTimeout(() => void poll(), 900);
     };
     if (state.hasFrame || ready) void poll();
     return () => { canceled = true; abort.abort(); clearTimeout(timer); };
   }, [taskId, state.id, ready, state.hasFrame, state.revision]);
   useEffect(() => () => { if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); }, []);
-  return frame;
+  return { frame, error };
 }
 
-/** `beginWrite`：真正发出一个动作时领票，结果经它写回（过期的由 useTaskRuntime 丢掉）。 */
-export function TaskBrowserPane({ taskId, state, beginWrite }: {
-  taskId: string; state: TaskBrowserState; beginWrite: () => (next: TaskBrowserState) => void;
+/**
+ * `begin`：签发这一格时那次渲染的能力（钉着任务、访问代次、浏览器会话）。动作排队时就绑上它，轮到时
+ * 它说不该发了（换了任务或会话）就不发；结果和失败经它落回运行环境那一条通道。
+ */
+export function TaskBrowserPane({ taskId, state, error, begin, reopen, reopening }: {
+  taskId: string; state: TaskBrowserState; error: string; begin: () => BrowserActionTicket | null;
+  reopen: () => void; reopening: boolean;
 }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const [path, setPath] = useState(state.url);
   const [text, setText] = useState("");
   const [activityOpen, setActivityOpen] = useState(false);
   const pending = useRef(Promise.resolve());
   const pendingCount = useRef(0);
-  const frame = useBrowserFrame(taskId, state, setError);
+  const disposed = useRef(false);
+  useEffect(() => { disposed.current = false; return () => { disposed.current = true; }; }, []);
+  const { frame, error: frameError } = useBrowserFrame(taskId, state);
   const ready = state.status === "ready";
   const controlled = ready && state.control === "user";
   const mobile = state.width <= 480;
   useEffect(() => { setPath(state.url); }, [state.url]);
   // 动作排成一队按顺序发：连点、连敲不会互相超车。
+  // 排队时绑定的是这一次渲染的 begin / taskId / state.id；这一格卸掉（换任务、换会话、切走）后，
+  // 还没发出去的一律不发。
   const act = (action: BrowserUserAction) => {
     pendingCount.current += 1;
     setBusy(true);
     const next = pending.current.then(async () => {
-      setError("");
       // 票在请求真正发出时领（排队等前一个动作的那段不算），顺序号才对得上发起的先后。
-      const write = beginWrite();
-      try { const result = await runtimeApi.action(taskId, state.id, action); write(result.state); }
-      catch (reason) { setError(runtimeErrorText(reason)); }
-      finally { pendingCount.current -= 1; setBusy(pendingCount.current > 0); }
+      const ticket = disposed.current ? null : begin();
+      try {
+        if (!ticket) return;
+        try { ticket.write((await runtimeApi.action(taskId, state.id, action)).state); }
+        catch (reason) { ticket.fail(reason); }
+      } finally { pendingCount.current -= 1; setBusy(pendingCount.current > 0); }
     });
     pending.current = next;
     return next;
@@ -115,7 +129,7 @@ export function TaskBrowserPane({ taskId, state, beginWrite }: {
             onClick={() => void act({ action: "resize", width: 390, height: 844 })}><DeviceMobile aria-hidden="true" size={14} /></button>
         </div>
       </form>
-      {(error || state.error) && <p className="runtime-error" role="alert">{error || state.error}</p>}
+      {(error || frameError || state.error) && <p className="runtime-error" role="alert">{error || frameError || state.error}</p>}
       <div className={`task-browser-viewport${mobile ? " is-mobile" : ""}`} tabIndex={controlled ? 0 : -1} role="group" aria-label="共享页面画面"
         onKeyDown={(event) => {
           if (!controlled || ["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
@@ -145,7 +159,7 @@ export function TaskBrowserPane({ taskId, state, beginWrite }: {
         <button type="button" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)}>操作记录</button>
         <span className="task-browser-gap" />
         {ready ? <button type="button" disabled={busy} onClick={() => void act({ action: "close" })}>断开</button>
-          : <button type="button" disabled={busy} onClick={() => void act({ action: "open" })}>重连</button>}
+          : <button type="button" disabled={busy || reopening} onClick={reopen}>重连</button>}
       </footer>
     </section>
   );

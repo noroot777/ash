@@ -150,9 +150,20 @@ try {
     let releaseAction: (() => void) | null = null;
     let actionSeen: (() => void) | null = null;
     let pollGate: Promise<void> | null = null;
+    let browserPosts = 0;
+    let refuseOpen = "";
     await page.route("**/api/**", async (route: any) => {
       const req = route.request();
       const url = new URL(req.url());
+      if (req.method() === "POST" && url.pathname === "/api/tasks/runtime/runtime/browser") {
+        browserPosts += 1;
+        if (refuseOpen && JSON.parse(req.postData() ?? "{}").action === "open") {
+          const error = refuseOpen;
+          refuseOpen = "";
+          await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error }) });
+          return;
+        }
+      }
       if (holdNext && req.method() === "GET" && url.pathname === "/api/tasks/runtime/runtime") {
         holdNext = false;
         await new Promise<void>((resolve) => { releaseHeld = resolve; heldSeen?.(); });
@@ -232,6 +243,12 @@ try {
     assert.equal(readAnyPreview("runtime")?.pid, first.pid);
     assert.equal(taskBrowserState("runtime")?.status, "closed");
     assert.equal(await pane.getByRole("img").count(), 1);
+    // 从「服务」那格打开浏览器被拒：切到的「浏览器」格（有历史会话）当场写着原因，不用切回去找。
+    refuseOpen = "已有 4 个共享浏览器，请关闭不用的会话后重试";
+    await tab("服务").click();
+    await page.getByRole("button", { name: "在共享浏览器里查看", exact: true }).click();
+    await pane.getByRole("alert").filter({ hasText: /已有 4 个共享浏览器/ }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "重连", exact: true }).count(), 1);
     await page.getByRole("button", { name: "重连", exact: true }).click();
     await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     assert.equal(taskBrowserState("runtime")?.control, "agent");
@@ -252,6 +269,28 @@ try {
     await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     await pane.getByRole("img").waitFor();
     await page.screenshot({ path: join(screenshots, "shared-browser-continued.png"), fullPage: true });
+    // 接管后连敲两个键，第一个的响应还没回来就切到别的任务：排着的第二个不再发出去，第一个迟到的结果
+    // 也落不到新任务上（新任务没有浏览器，那一格就不该冒出来）。
+    await page.getByRole("button", { name: "接管", exact: true }).click();
+    await page.getByRole("button", { name: "交还", exact: true }).waitFor();
+    const typed = new Promise<void>((resolve) => { actionSeen = resolve; });
+    holdAction = true;
+    browserPosts = 0;
+    await pane.getByRole("group", { name: "共享页面画面" }).focus();
+    await page.keyboard.press("x");
+    await typed;
+    await page.keyboard.press("y");
+    await page.getByRole("button", { name: "切换任务", exact: true }).click();
+    await pane.waitFor({ state: "hidden" });
+    releaseAction!();
+    await page.waitForTimeout(800);
+    assert.equal(browserPosts, 1, "切走后，排着的输入还是发了出去");
+    assert.equal(await tab("浏览器").count(), 0, "上一个任务的浏览器结果串进了当前任务");
+    assert.equal(await page.getByText("你在操作", { exact: true }).count(), 0);
+    await page.getByRole("button", { name: "切换任务", exact: true }).click();
+    await tab("浏览器").waitFor(); // 右栏记着停在「浏览器」，回来就是那一格（再点一下是收起）
+    await page.getByRole("button", { name: "交还", exact: true }).click();
+    await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     // A→B→A：在 A 点了接管、响应还没回来就切到 B；期间 A 的浏览器被关掉重开成新会话；切回 A 后旧接管的
     // 响应才到。它属于上一次访问、上一个浏览器会话，不能把新会话画成「你在操作」。
     const actionHeld = new Promise<void>((resolve) => { actionSeen = resolve; });

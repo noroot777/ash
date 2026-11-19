@@ -2,18 +2,18 @@
 // 竖轨上那两颗点、智能体开浏览器时自动切过去，读的都是这一份。
 //
 // 任务页换任务时不重挂（WorkspaceShell 复用同一个 TaskDetail），所以这一份 hook 会先后服务好几个
-// 任务，同一个任务也会被反复进出（A→B→A）。所有异步落点只认一张票（Ticket）：
-//   - 访问代次 `visit`：每进入一次任务就换一代，A→B→A 回来也是新的一代。票的代次不是当前这一代，
-//     结果一律丢掉——不管任务 ID 是不是碰巧相同。
-//   - 顺序号 `seq`：**发起时**领（查询、动作、浏览器回写共用一条序列）；只有比已落下的号新的才落。
-//     返回时才领号就会把迟到的旧结果当成最新的。
-//   - 浏览器回写另核对发起时的浏览器会话：期间浏览器被关掉重开、换成了另一个会话，旧动作的结果不能
-//     盖到新会话上。
-// 状态、两种错误、busy 都记着写下它的那一代（busy 还记着是哪张票开的），读的时候对不上就当没有；
-// 清理也只清自己那张票写下的。
+// 任务，同一个任务也会被反复进出（A→B→A）。归属的唯一来源是**签发能力的那一次渲染**：
+//   - 访问代次 `visit`：每进入一次任务就换一代，A→B→A 回来也是新的一代。
+//   - `perform` 和 `beginBrowserAction` 每一代（浏览器动作还按每个浏览器会话）各签一份，签发时就
+//     把任务、代次、浏览器会话钉在闭包里，不在调用时再去读「现在是谁」。旧组件、排队的回调拿着的是
+//     旧的那份，调用时对不上当前就直接作废——不会领到新任务的身份。
+//   - 顺序号 `seq`：真正发起时领（查询、动作、浏览器回写共用一条序列）；只有比已落下的号新的才落。
+//   - 浏览器回写还要核对响应里的浏览器 ID 就是发起时那个会话。
+// 状态、两种错误、busy 都记着写下它的那一代，读的时候对不上就当没有。
 //
-// 错误分两种：动作被拒（停止 / 重启 / 打开浏览器失败）要一直挂着，直到你再做下一个动作；查询失败
-// 是暂时的，下一次查询成功就消失。两者分开存，成功的轮询不会把动作的失败原因冲掉。
+// 错误只有一条通道：动作被拒（停止 / 重启 / 打开 / 接管 / 输入…，不管哪一格发起的）一直挂着，直到
+// 你再做下一个动作；查询失败是暂时的，下一次查询成功就消失。两格都显示它，动作在哪一格发起、失败时
+// 你停在哪一格都看得到。
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TaskBrowserState, TaskRuntimeState } from "@ash/shared/task-runtime";
 import { runtimeApi } from "./runtimeApi.ts";
@@ -24,6 +24,12 @@ export const runtimeErrorText = (error: unknown) => error instanceof Error ? err
 type Ticket = { visit: number; seq: number };
 type Stamped<T> = { visit: number; value: T };
 
+/** 一个已发出的浏览器动作：结果、失败都经它落回。 */
+export type BrowserActionTicket = {
+  write: (next: TaskBrowserState) => void;
+  fail: (reason: unknown) => void;
+};
+
 export type TaskRuntime = {
   taskId: string;
   state: TaskRuntimeState;
@@ -33,10 +39,10 @@ export type TaskRuntime = {
   /** 上一个动作被拒的原因（优先），或最近一次查询失败的原因。 */
   error: string;
   /**
-   * 发一个浏览器动作之前领票，返回把结果写回来的函数。票记着此刻的访问代次、顺序号和浏览器会话；
-   * 结果回来时三者有一样对不上（换过任务、有更新的结果落下了、浏览器换了会话），就丢掉。
+   * 对当前浏览器会话发一个动作之前调用。签发它的那次渲染已经不是当前（换过任务、浏览器换了会话）
+   * 就返回 null——这个动作不该再发出去。
    */
-  beginBrowserWrite: () => (next: TaskBrowserState) => void;
+  beginBrowserAction: () => BrowserActionTicket | null;
   /** 跑一个改运行环境的动作（停服务、开浏览器…），完了重新拉一次状态；失败的原因留着直到下一个动作。 */
   perform: (action: () => Promise<unknown>) => Promise<void>;
 };
@@ -60,14 +66,20 @@ export function useTaskRuntime(taskId: string): TaskRuntime {
   const state = stateStamp?.visit === visit ? stateStamp.value : EMPTY;
   const stateRef = useRef(state);
   stateRef.current = state;
+  const browserId = state.browser?.id ?? null;
 
-  const ticket = useCallback((): Ticket => ({ visit: visitRef.current, seq: ++seqRef.current }), []);
+  /** 只给签发时那一代领号；那一代已经过去就领不到。 */
+  const ticketFor = useCallback((origin: number): Ticket | null =>
+    origin === visitRef.current ? { visit: origin, seq: ++seqRef.current } : null, []);
   const live = (held: Ticket) => held.visit === visitRef.current;
   /** 这张票的结果还能落：同一代、且比已落下的新。落了就把水位抬到它。 */
   const claim = (held: Ticket) => {
     if (!live(held) || held.seq <= appliedRef.current) return false;
     appliedRef.current = held.seq;
     return true;
+  };
+  const failWith = (held: Ticket, reason: unknown) => {
+    if (live(held)) setActionError({ visit: held.visit, value: runtimeErrorText(reason) });
   };
 
   const refresh = useCallback(async (forTask: string, held: Ticket) => {
@@ -81,7 +93,8 @@ export function useTaskRuntime(taskId: string): TaskRuntime {
     let canceled = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      const held = ticket();
+      const held = ticketFor(visit);
+      if (!held) return;
       try { await refresh(taskId, held); }
       catch (reason) {
         // 什么都没有的任务拉失败了不吵：那一格本来就不在。
@@ -92,38 +105,44 @@ export function useTaskRuntime(taskId: string): TaskRuntime {
     };
     void poll();
     return () => { canceled = true; clearTimeout(timer); };
-  }, [taskId, refresh, ticket]);
+  }, [taskId, visit, refresh, ticketFor]);
 
   const perform = useCallback(async (action: () => Promise<unknown>) => {
-    const held = ticket();
-    const forTask = visitTask.current!;
     if (busyRef.current && live(busyRef.current)) return;
+    const held = ticketFor(visit);
+    if (!held) return;
     busyRef.current = held;
     setBusyTicket(held);
     setActionError(null);
     try { await action(); }
-    catch (reason) { if (live(held)) setActionError({ visit: held.visit, value: runtimeErrorText(reason) }); }
+    catch (reason) { failWith(held, reason); }
     // 动作完了再拉一次：领新票，它比动作期间发出的轮询都新。
-    try { if (live(held)) await refresh(forTask, ticket()); } catch { /* 状态下一轮轮询再拉 */ }
+    try { const after = ticketFor(visit); if (after) await refresh(taskId, after); } catch { /* 状态下一轮轮询再拉 */ }
     if (busyRef.current === held) { busyRef.current = null; setBusyTicket(null); }
-  }, [refresh, ticket]);
+  }, [taskId, visit, refresh, ticketFor]);
 
-  const beginBrowserWrite = useCallback(() => {
-    const held = ticket();
-    const browserId = stateRef.current.browser?.id ?? null;
-    return (next: TaskBrowserState) => {
-      if (stateRef.current.browser?.id !== browserId || !claim(held)) return;
-      setStateStamp((previous) => ({
-        visit: held.visit,
-        value: { ...(previous?.visit === held.visit ? previous.value : EMPTY), browser: next },
-      }));
+  const beginBrowserAction = useCallback((): BrowserActionTicket | null => {
+    if (!browserId || stateRef.current.browser?.id !== browserId) return null;
+    const held = ticketFor(visit);
+    if (!held) return null;
+    setActionError(null);
+    const owns = () => live(held) && stateRef.current.browser?.id === browserId;
+    return {
+      write: (next) => {
+        if (next.id !== browserId || !owns() || !claim(held)) return;
+        setStateStamp((previous) => ({
+          visit: held.visit,
+          value: { ...(previous?.visit === held.visit ? previous.value : EMPTY), browser: next },
+        }));
+      },
+      fail: (reason) => { if (owns()) failWith(held, reason); },
     };
-  }, [ticket]);
+  }, [visit, browserId, ticketFor]);
 
   const service = state.service;
   const error = (actionError?.visit === visit ? actionError.value : "") || (queryError?.visit === visit ? queryError.value : "");
   return {
     taskId, state, serviceReady: !!service?.url && !service.starting,
-    busy: busyTicket?.visit === visit, error, beginBrowserWrite, perform,
+    busy: busyTicket?.visit === visit, error, beginBrowserAction, perform,
   };
 }
