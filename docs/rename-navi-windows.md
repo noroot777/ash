@@ -161,4 +161,18 @@
 
 ## 六、清场
 
-<!-- CLEANUP -->
+2026-11-19 收尾时做的，做完回头核过：
+
+- **对端工作区**：`.worktrees\navi7-verify`、`.worktrees\navi7-old` 已删（先摘掉里面 7 条 junction —— `node_modules\@navi\*` 四条、
+  `server`/`web`/`mcp` 的 `node_modules` 三条 —— 再 `git worktree remove`，免得递归删除顺着链接删进主仓），`git worktree prune` 过；
+  对端 `git worktree list` 里剩下的都是原来就在的（线上任务的 `ash/*` 六条、`win-remote`、`ash-review-JG0-r2-*`），一条没动。
+- **对端临时文件**：`%TEMP%` 下 `navi7*` 的目录与文件（驱动脚本、日志、各条测试的临时根）和这一轮测试留下的 `navi-*` / `ash-detached-*`
+  临时目录都已删；`%TEMP%\ash-confine` 是旧版运行时自己用的目录，线上那台服务也用它，没动。
+- **测试服务与进程**：按命令行查 `navi7`、测试临时目录名，零条；除 `:4317` 外没有 node 在监听。
+- **终端会话**：按 id 删了一条（`afy2UsWTvr7T`，那次被打断的同步留下的），之后列表为空。
+- **临时 git 引用**：对端、开发机两边 `refs/win-remote/*` 都是 0，引用名带 `navi7` 的也是 0。工作区锁 `win-remote.lock` 已不在。
+- **对端主仓回头核对**：`D:\ai_workspace\ash` 仍在 `main` @ `8abd51552`，`git status` 为空；`node_modules` 282 项、修改时间仍是
+  2026-11-16；`node_modules\@ash\*` 四条 junction 在，`tsx`、`drizzle-orm`、`node-pty`、`server\node_modules\@types\node` 都在；
+  `server\node_modules`（`@types`、`undici-types`）、`web\node_modules`、`mcp\node_modules` 原样。线上 `:4317`（pid 18792）没停过。
+- **开发机**：局域网文件服务已停；临时的旧版检出（`/tmp` 下那份 `8abd51552`）已 `git worktree remove`；本分支检出里为了跑测试铺的
+  `node_modules` 软链和构建产物已删；主仓 `node_modules`（含 `@ash/*` 四条）原样。
