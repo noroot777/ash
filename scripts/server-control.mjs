@@ -6,10 +6,16 @@ import { join, resolve } from "node:path";
 import { readStorageEnv } from "./env.mjs";
 import { dbFileIn } from "./db-file.mjs";
 import { LEGACY_HTTP_HEADER_PREFIX, LEGACY_SINGLETON_LOCK_SUFFIX } from "./legacy-names.mjs";
-import { isNotListening, killServerProcesses, localGet, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isNotListening, killServerProcesses, listenerPids, localGet, localJson, sleep } from "./platform.mjs";
 
 const LOCK_SUFFIX = ".navi.lock";
 const HOST_TOKEN_HEADER = "x-navi-host-token";
+
+/** 数据目录,口径跟 server/src/data-root.ts 一致:`NAVI_DATA_DIR`(旧名同样认),不设就是 `<仓库>/data`。 */
+export function dataDirFor(repo, env = process.env) {
+  const explicit = readStorageEnv(env, "NAVI_DATA_DIR");
+  return explicit ? resolve(explicit) : join(repo, "data");
+}
 
 /**
  * server 用的库文件,口径跟 server/src/db/path.ts 一致:`NAVI_DB`(旧名 `ASH_DB` 同样认)覆盖;
@@ -18,7 +24,7 @@ const HOST_TOKEN_HEADER = "x-navi-host-token";
 export function dbFileFor(repo, env = process.env) {
   const explicit = readStorageEnv(env, "NAVI_DB");
   if (explicit) return resolve(explicit);
-  return dbFileIn(join(repo, "data"));
+  return dbFileIn(dataDirFor(repo, env));
 }
 
 /**
@@ -123,17 +129,18 @@ export function explainNoVerdict(data, { say, lockFile, log }) {
 /**
  * --wait 用:轮询到「不再有会被打断的任务」为止,把「人守着等」换成「脚本替你等」。
  * `count` 每次都得走调用方的 fail-closed 判据(中途凭证失效同样会把 busy 读成 0)。
+ * 等到了返回 true;超时返回 false(那句话已经说了),由调用方中止(退出码 3)。
  */
 export async function drainWait({ count, waitTimeout, say, verb }) {
   let n = await count();
-  if (!n) return;
+  if (!n) return true;
   say(`  ⏳ WAIT:还有 ${n} 个任务${verb}会被打断,等它们跑完(Ctrl-C 可随时放弃)…`);
   let elapsed = 0;
   const step = 5;
   while (n > 0) {
     if (waitTimeout !== null && elapsed >= waitTimeout) {
       say(`  ✕ WAIT 超时(${waitTimeout}s),仍有 ${n} 个会被打断 —— 已中止,未${verb}服务端。`);
-      process.exit(3);
+      return false;
     }
     await sleep(step * 1000);
     elapsed += step;
@@ -141,6 +148,7 @@ export async function drainWait({ count, waitTimeout, say, verb }) {
     if (elapsed % 60 === 0 && n > 0) say(`  ⏳ 已等 ${elapsed / 60}min,还有 ${n} 个会被打断…`);
   }
   say("  ✓ 已经没有会被打断的任务了,继续。");
+  return true;
 }
 
 /**
@@ -171,4 +179,86 @@ export async function waitPortQuiet(port, timeoutMs = 15_000) {
   const by = Date.now() + timeoutMs;
   while (Date.now() < by && !(await isPortQuiet(port))) await sleep(200);
   return isPortQuiet(port);
+}
+
+/** 停不下来时说清现状和怎么手工确认;返回该用的退出码。 */
+export async function explainStillUp(port, old, { say, lockFile }) {
+  const answers = Boolean(await localJson(port, "/api/health"));
+  say(answers
+    ? `  ✕ :${port} 上仍有一个 Navi 在应答,没能让它下线。`
+    : `  ✕ :${port} 仍被占着(连得上、但不应答),没能让它下线。`);
+  if (old.length) say(`     试过 kill:${old.join(", ")} —— 它没退,或者占着端口的根本是别的进程。`);
+  else say("     系统没查到谁在监听这个端口:这台机器上 lsof/ss/fuser 可能都没装。");
+  say(`     手工确认它是谁:  cat ${lockFile}`);
+  say("                       ps -ef | grep server/dist/index.js");
+  return 1;
+}
+
+/**
+ * 让 :port 上的 navi 下线 —— stop.mjs、upgrade.mjs 共用的这一整段(restart.mjs 第 2 步在两次问判据之间
+ * 夹着 build,自己拼这几块)。顺序与理由同 stop.mjs 顶部:只认系统说的监听者、问不出判据就不下刀、
+ * 会被挡的任务默认中止、端口彻底安静才算停了。
+ *
+ * gate 说清「什么情况下不下刀」和中止时怎么说:
+ *   verb        「停止」「升级」
+ *   held(data)  挡住这一次的任务清单(停止只挡接管不了的那些;升级挡一切在跑、在排队的)
+ *   heldLine(n) 挡住时开头那半句
+ *   tail        中止时补的那半句:动了什么、没动什么
+ *   command(f)  出路命令(--wait / --force)
+ *   passLine(safe, lead)  可选:放行时还有任务在跑,说一句它们会怎样
+ * check:只过闸、不下刀(升级在动任何东西之前先问一遍)。
+ * abort(code) 不返回:缺省直接退出;升级要先把拉下来的代码退回去再退。
+ * 返回 { running:false } 本来就没在跑;{ running:true, data } 过了闸(check)或已停干净。
+ */
+export async function takeDown({ port, lockFile, log, force, wait, waitTimeout, say, gate, check = false, abort = (code) => process.exit(code) }) {
+  const old = listenerPids(port);
+  if (!old.length) {
+    if (await isPortQuiet(port)) return { running: false };
+    // 查不到监听者(lsof/ss/fuser 都没装)却有人占着:只过闸时照样问判据,真要下刀时如实失败。
+    if (!check) return abort(await explainStillUp(port, old, { say, lockFile }));
+  }
+  const ask = async () => {
+    const data = await queryImpact(port, lockFile);
+    const why = noVerdictReason(data);
+    if (why === null || force) return data;
+    say(`  ✋ 问不到「${gate.verb}会打断谁」(${why}) —— 已中止,${gate.tail}`);
+    explainNoVerdict(data, { say, lockFile, log });
+    say(`     明知可能打断也要${gate.verb}:  ${gate.command("--force")}`);
+    return abort(2);
+  };
+  let data = await ask();
+  let held = gate.held(data);
+  if (held.length && wait && !force) {
+    const drained = await drainWait({ count: async () => gate.held(await ask()).length, waitTimeout, say, verb: gate.verb });
+    if (!drained) return abort(3);
+    data = await ask();
+    held = gate.held(data);
+  }
+  if (held.length && !force) {
+    say(`  ✋ ${gate.heldLine(held.length)} —— 已中止,${gate.tail}`);
+    for (const t of held.slice(0, 8)) say(`     · ${t.title}${t.reason ? ` —— ${t.reason}` : ""}`);
+    say(`     让脚本替你等它们跑完:  ${gate.command("--wait")}`);
+    say(`     确定要打断:            ${gate.command("--force")}`);
+    return abort(2);
+  }
+  if (check) return { running: true, data };
+  const safe = countOf(data, "survives");
+  const lead = countOf(data, "resumes");
+  if ((safe > 0 || lead > 0) && gate.passLine) say(gate.passLine(safe, lead));
+  const busy = countOf(data, "interrupted");
+  if (busy > 0) say(`  ⚠ FORCE:打断 ${busy} 个**接管不了**的任务(判为 failed,可重试);会被接管的不受影响。`);
+  let how = "signal";
+  try {
+    how = killListeners(old, data, { force });
+  } catch (error) {
+    say(`  ✋ 无法安全终止 Windows 实例: ${error.message}。已中止,${gate.tail}`);
+    say(`     未授权整树强杀;确定接受任务中断才使用 ${gate.command("--force")}。`);
+    return abort(2);
+  }
+  if (IS_WINDOWS && safe > 0 && how !== "selective") {
+    say(`  ⚠ 这一刀走的是整树强杀(taskkill /T),${safe} 个本可接管的任务会跟着断 ——`);
+    say("     只有问得到判据(survives 名单)时才能点名保住它们。");
+  }
+  if (!(await waitPortQuiet(port))) return abort(await explainStillUp(port, old, { say, lockFile }));
+  return { running: true, data };
 }

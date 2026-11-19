@@ -232,7 +232,11 @@ Kimi Code 账号需有可用的编码订阅；403 订阅错误会显示在任务
 
 ## 四、日常运维
 
-**升级**:`git pull`(或换个新 tar 包解到旁边)后 `npm install && npm run restart`。库会在启动时自动补列迁移,不需要单独跑迁移命令。
+**升级**:`git clone` 的检出跑 `npm run upgrade`(改名之前的版本还没有这条命令,第一次是 `git pull && npm run upgrade`)。它拉远端最新、
+停服务、把库连同身份和访问密钥备份进 `data/backups/upgrade-<时间>/`、装依赖、构建、把 `ash.db` 改名成 `navi.db`、在原来的端口上起服务,
+最后核对升级前的项目、任务、会话一条不少,打一段小结(从哪个提交升到哪个、备份在哪、怎么退回)。有任务在跑或排队、工作区有没提交的改动、
+分支不能快进、远端拉不动、Node/npm 不够新、数据目录认不准,都在停服务之前拦下、什么都不改;重复跑是安全的。选项(`--wait`、
+`--keep-db-name` 等)见 `node scripts/upgrade.mjs --help`。tar 包解到旁边的照旧 `npm install && npm run restart`。库会在启动时自动补列迁移,不需要单独跑迁移命令。
 
 **数据与备份**:全在仓库里的 `data/`——`navi.db`(SQLite;改名之前装的还叫 `ash.db`,照常能用,想改名见 `docs/rename-db.md`)+ `runs/`(每轮的正文、trace、验证证据)+ `uploads/`。备份就备份这个目录;换机器把它整个拷过去即可。`data/` 不入库,所以你发出去的包永远不含对方不该看的东西,反过来对方的数据也不会被你的包覆盖。
 

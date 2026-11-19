@@ -39,8 +39,9 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, listenerPids, localJson } from "./platform.mjs";
 import { countOf, drainWait as drainUntilSafe, exitLedgerFor, explainNoVerdict, killListeners, lockFileFor, noVerdictReason, queryImpact, waitPortQuiet } from "./server-control.mjs";
+import { launchServer, refreshMcp } from "./server-start.mjs";
 import { readEnv } from "./env.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
@@ -107,7 +108,9 @@ async function interruptCount() {
 }
 
 /** WAIT=1 用:等到「不再有会被打断的任务」为止。 */
-const drainWait = () => drainUntilSafe({ count: interruptCount, waitTimeout: WAIT_TIMEOUT, say, verb: "重启" });
+async function drainWait() {
+  if (!(await drainUntilSafe({ count: interruptCount, waitTimeout: WAIT_TIMEOUT, say, verb: "重启" }))) process.exit(3);
+}
 
 function npm(args, failMessage) {
   const res = spawnSync(NPM, args, { stdio: "inherit", ...NPM_SPAWN_OPTS });
@@ -223,37 +226,12 @@ if (!(await waitPortQuiet(PORT))) {
   process.exit(1);
 }
 
-// 起一个脱离本进程的 server:helper 自己退出后 child 归给 init/服务管理器,
-// 跟着完整继承这里的 cwd 与环境(理由见 start-detached.mjs 顶部)。
-const started = spawnSync(process.execPath, ["scripts/start-detached.mjs", LOG, SERVER_NODE, SERVER_ENTRY], {
-  encoding: "utf8",
-  stdio: ["ignore", "pipe", "inherit"],
-});
-const serverPid = Number((started.stdout || "").trim());
-if (started.status !== 0 || !Number.isInteger(serverPid) || serverPid <= 0) {
+const launched = await launchServer({ port: PORT, log: LOG, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT });
+if (launched.why === "spawn") {
   say(`  ✕ :${PORT} 启动命令拉起失败,看 ${LOG}`);
   process.exit(1);
 }
-
-let ready = false;
-let impostor = 0;
-let readyHealth = null;
-const deadline = Date.now() + START_TIMEOUT * 1000;
-while (Date.now() < deadline) {
-  const health = await localJson(PORT, "/api/health");
-  // 认「就绪」之前先认人:health 带 pid 是为了让这里能分辨「新进程起来了」和「端口
-  // 上还坐着另一个 navi」。旧版本 server 没有这个字段(undefined),那就退回只看通不通
-  // —— 上面那道「必须先安静」的闸已经保证了此刻端口上不会有别人。
-  if (health && (!health.pid || health.pid === serverPid)) {
-    ready = true;
-    readyHealth = health;
-    break;
-  }
-  if (health?.pid) impostor = health.pid;
-  // 启动进程已经退出就别傻等满超时；反之给迁移/重启接管留足时间。
-  if (!isPidAlive(serverPid)) break;
-  await sleep(200);
-}
+const { ok: ready, pid: serverPid, health: readyHealth } = launched;
 if (ready) {
   say(`  ✓ :${PORT} 已就绪(pid ${serverPid},日志 ${LOG})`);
   // 「上一次服务是怎么停的」只有在这一刻说才有人读。新 server 启动时如果发现上一轮的
@@ -284,48 +262,20 @@ if (ready) {
   } else if (residual && !IS_WINDOWS) {
     say(`     查内核日志:journalctl -k --since -1h | grep -i -e oom -e kill`);
   }
-} else if (impostor) {
-  say(`  ✕ :${PORT} 上应答的是 pid ${impostor},不是刚起的 ${serverPid} —— 重启没生效,跑的还是旧代码。看 ${LOG}`);
+} else if (launched.why === "impostor") {
+  say(`  ✕ :${PORT} 上应答的是 pid ${launched.impostor},不是刚起的 ${serverPid} —— 重启没生效,跑的还是旧代码。看 ${LOG}`);
   process.exit(1);
 } else {
-  say(isPidAlive(serverPid)
+  say(launched.why === "timeout"
     ? `  ✕ :${PORT} 等待 ${START_TIMEOUT}s 仍未就绪,但启动进程还在运行;看 ${LOG}`
     : `  ✕ :${PORT} 启动进程已退出,看 ${LOG}`);
   process.exit(1);
 }
 
 say("▶ 3/3 刷新 Navi MCP…");
-// 谁手里还握着 MCP 通道。**在服务端重启完之后才问**:此刻接管已经做完,答案是最新的。
-// server 没起来/老版本没这个字段算 0,退回原来的行为;**服务端拒答则当作「有人握着」**
-// —— 掐断在跑的 agent 是不可逆的,不知道就别掐(第 1 轮审查 P1 的同一条判据)。
-const after = await impact();
-// 「不知道」两档都算(拒答 / 没答上来):掐断在跑的 agent 是不可逆的,不知道就别掐。
-const mcpWhy = noVerdictReason(after);
-const mcpUnknown = mcpWhy !== null;
-const holders = countOf(after, "mcpDisrupted");
-if (options.skipMcp) {
-  say("  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 Navi MCP 的会话不会被打断。");
-  say("     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 --skip-mcp / SKIP_MCP 再跑一次。)");
-} else if (mcpUnknown && !options.forceMcp && !FORCE) {
-  say(`  ⏭ 问不到「谁还握着 MCP 通道」(${mcpWhy}),已跳过刷新 —— 宁可让旧会话跑旧 mcp,也不冒险掐断在跑的 agent。`);
-  say(`     确定要刷新:  ${restartCommand("--force-mcp")}`);
-} else if (holders > 0 && !options.forceMcp && !FORCE) {
-  // 默认不掐断正在干活的 agent:刷新 MCP 的收益只是"旧会话用上新 mcp 代码",
-  // 代价却是它这一轮的交卷调用当场失败(2026-08-06 验证白跑)。收益远小于代价,
-  // 所以默认让路,并把出路说清楚。
-  say(`  ⏭ 有 ${holders} 个正在干活的 agent 手里握着 Navi MCP 通道,已跳过刷新以免掐断它们的交卷。`);
-  for (const t of after.mcpDisrupted.slice(0, 8)) say(`     · ${t.title} (pid ${t.pid})`);
-  say(`     (:${PORT} 已经是新代码;这些会话仍跑旧 mcp/dist。)`);
-  say(`     改了 mcp/ 需要立刻生效:  ${restartCommand("--force-mcp")}`);
-} else {
-  const stale = pidsRunningScript(join(REPO, "mcp", "dist", "index.js"));
-  if (stale.length) {
-    if (holders > 0) say(`  ⚠ 强制刷新:${holders} 个在跑的 agent 手里的 MCP 通道会被掐断,它们这一轮的交卷调用会失败。`);
-    for (const pid of stale) killPid(pid);
-    say(`  ✓ 清掉 ${stale.length} 个旧 MCP 进程,下次会话/调用即用新代码`);
-  } else {
-    say("  (没有在跑的旧 MCP 进程;新会话会直接用新 mcp/dist)");
-  }
-}
+// 谁手里还握着 MCP 通道。**在服务端重启完之后才问**:此刻接管已经做完,答案是最新的(判据与理由见 refreshMcp)。
+await refreshMcp({
+  repo: REPO, port: PORT, lockFile: LOCK_FILE, skip: options.skipMcp, force: options.forceMcp || FORCE, say, command: restartCommand,
+});
 
 say("✅ 完成。提示:已经开着的 Codex/Claude 会话要重连或重开,才会用上新的 Navi MCP。");
