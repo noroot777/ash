@@ -40,14 +40,36 @@ process.exit(0);
   }
 }
 
-const BUILD = `import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+/** 假的 claude / codex:记下被怎么调,`mcp list` 照给定的文本回答,别的子命令一律成功。 */
+export function fakeCli(bin, name, logFile, listOutput) {
+  mkdirSync(bin, { recursive: true });
+  const shim = join(bin, `${name}-shim.mjs`);
+  writeFileSync(shim, `import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logFile)}, ${JSON.stringify(name)} + " " + args.join(" ") + "\\n");
+if (args[0] === "mcp" && args[1] === "list") process.stdout.write(${JSON.stringify(listOutput)});
+process.exit(0);
+`);
+  if (IS_WINDOWS) {
+    writeFileSync(join(bin, `${name}.cmd`), `@echo off\r\nnode "${shim}" %*\r\n`);
+  } else {
+    writeFileSync(join(bin, name), `#!/bin/sh\nexec node "${shim}" "$@"\n`);
+    chmodSync(join(bin, name), 0o755);
+  }
+}
+
+const BUILD = `import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 if (existsSync("BUILD_FAIL")) { console.error("build: 这一版故意构建失败"); process.exit(1); }
+// 升级进度那个文件的位置被一个目录占了:构建之后那一笔进度写不进去(EISDIR),升级得走「意外」那个出口。
+if (existsSync("BREAK_STATE")) { const f = join(process.env.ASH_DATA_DIR, "upgrade.json"); rmSync(f, { force: true }); mkdirSync(f); }
 mkdirSync("server/dist", { recursive: true });
 copyFileSync("server/src/server.mjs", "server/dist/index.js");
 mkdirSync("mcp/dist", { recursive: true });
 writeFileSync("mcp/dist/index.js", "");
-mkdirSync("web/dist", { recursive: true });
+mkdirSync("web/dist/assets", { recursive: true });
 writeFileSync("web/dist/index.html", "");
+writeFileSync("web/dist/assets/app.js", "");
 `;
 
 /** 假 server。version 是它报出来的版本号;legacy = 改名之前的那一代。 */
@@ -59,6 +81,8 @@ import { fileURLToPath } from "node:url";
 const VERSION = ${JSON.stringify(version)};
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 if (existsSync(join(repo, "START_FAIL"))) { console.error("start: 这一版故意起不来"); process.exit(1); }
+// 起得慢(大迁移):进程活着,好一阵才应答。
+if (existsSync(join(repo, "SLOW_START"))) await new Promise((r) => setTimeout(r, 20_000));
 const port = Number(process.env.PORT || 4317);
 const dataDir = resolve(process.env.NAVI_DATA_DIR || process.env.ASH_DATA_DIR || join(repo, "data"));
 const navi = join(dataDir, "navi.db");
@@ -83,7 +107,7 @@ process.on("SIGTERM", () => { for (const l of locks) rmSync(l, { force: true });
 
 /**
  * 在开发者检出里写出某一版并推上去。legacy = 改名之前那一代(服务只认 ash.db,选库代码里没有 navi.db 这个名字)。
- * flags 里列的文件(BUILD_FAIL / START_FAIL)放进仓库根,没列的删掉;upgradeMarker 给这一版的升级脚本加一行自报家门;
+ * flags 里列的文件(BUILD_FAIL / START_FAIL / BREAK_STATE / SLOW_START)放进仓库根,没列的删掉;upgradeMarker 给这一版的升级脚本加一行自报家门;
  * node / workspaces 改这一版 package.json 里要的 Node 版本、声明的 workspace。
  */
 export function publish(dev, version, { legacy = false, flags = [], upgradeMarker = false, node = ">=22.16.0", workspaces = ["shared"] } = {}) {
@@ -110,7 +134,7 @@ export function publish(dev, version, { legacy = false, flags = [], upgradeMarke
   mkdirSync(join(dev, "server", "src", "db"), { recursive: true });
   writeFileSync(join(dev, "server", "src", "server.mjs"), serverSource(version, legacy));
   writeFileSync(join(dev, "server", "src", "db", "path.ts"), `export const DB_FILE_NAME = ${JSON.stringify(legacy ? "ash.db" : "navi.db")};\n`);
-  for (const flag of ["BUILD_FAIL", "START_FAIL"]) {
+  for (const flag of ["BUILD_FAIL", "START_FAIL", "BREAK_STATE", "SLOW_START"]) {
     if (flags.includes(flag)) writeFileSync(join(dev, flag), "1\n");
     else rmSync(join(dev, flag), { force: true });
   }

@@ -18,29 +18,32 @@
 //
 // 失败时的去向:停服务之前失败 = 什么都没改;留底失败 = 把原来的服务原样起回来;装依赖/构建/起服务失败 = 停在那一步,
 // 打出两条路(修好再跑一次接着做;或原样照抄就能退回升级前版本的几行命令)。库改名失败按 ⑨ 的账本退回原样,照旧名起服务,
-// 不让这一项作废整次升级。做到哪记在数据目录的 upgrade.json(upgrade-data.mjs),再跑接着做;已是最新就说一句,不重启服务。
+// 不让这一项作废整次升级;停服务之后出了别的意外(写不进进度、磁盘满)一样停下、打出那两条路。做到哪记在数据目录的
+// upgrade.json(upgrade-data.mjs),再跑接着做;已是最新就说一句,不重启服务(但 MCP 登记照样收拾、上次没核对过的数据照样补核)。
+// 同一份检出同一时刻只许一次升级(upgrade-lock.mjs)。
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DB_FILE_NAME } from "./db-file.mjs";
 import { readEnv } from "./env.mjs";
 import { LEGACY_DB_FILE } from "./legacy-names.mjs";
 import { registerNaviMcp } from "./mcp-register.mjs";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS } from "./platform.mjs";
+import { IS_WINDOWS, isPidAlive, localJson } from "./platform.mjs";
 import { inspect } from "./rename-db-core.mjs";
 import { restartCommand } from "./restart-options.mjs";
 import { dbFileFor, lockFileFor, takeDown } from "./server-control.mjs";
 import { launchServer, refreshMcp } from "./server-start.mjs";
 import { identifyServer, inspectData, resolvePort, runtimeProblems } from "./upgrade-checks.mjs";
-import { backupDb, buildStamp, compareIds, dbInBackup, readIds, readState, renameDb, writeState } from "./upgrade-data.mjs";
+import { backupDb, backupSources, buildStamp, dbInBackup, readState, renameDb, verifyData, writeState } from "./upgrade-data.mjs";
 import {
   beforeLastPull, countBetween, fastForward, fetchRemote, inspectCheckout, isAncestor, relation, resetKeep, revParse, short,
   showFile, untrackedCollisions,
 } from "./upgrade-git.mjs";
+import { acquireUpgradeLock, UPGRADE_LOCK_ENV } from "./upgrade-lock.mjs";
 import { parseUpgradeOptions, upgradeCommand, UPGRADE_USAGE, userArgs } from "./upgrade-options.mjs";
-import { printRollback, printSummary, rollbackCommands } from "./upgrade-report.mjs";
+import { printRollback, printSummary, rollbackCommands, shellArg } from "./upgrade-report.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 
@@ -94,6 +97,8 @@ const gate = {
 async function preflight(pkg, abort) {
   const data = inspectData({ repo: REPO, env, keepDbName: options.keepDbName, stamp });
   const problems = [...runtimeProblems(pkg), ...data.problems];
+  // 库留不了底的(软链指着的东西不在了之类),在停服务之前就拦下。
+  if (!data.problems.length) problems.push(...backupSources({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit }).problems);
   const { port, from: portFrom } = data.problems.length ? { port: 0 } : resolvePort(REPO, env, readState(data.dataDir).port);
   const server = data.problems.length ? null : await identifyServer({ repo: REPO, env, port, dataDir: data.dataDir, explicit: data.explicit });
   if (server) problems.push(...server.problems);
@@ -106,6 +111,14 @@ async function preflight(pkg, abort) {
   return { data, port, portFrom, server };
 }
 
+/** 核对出来少了的那几张表,逐张说清少了哪几条。 */
+function reportMissing(v) {
+  for (const r of v.rows ?? []) {
+    if (!r.missing.length) continue;
+    say(`  ✕ ${r.label}少了 ${r.missing.length} 条(id ${r.missing.slice(0, 5).join("、")}${r.missing.length > 5 ? " …" : ""})。先别动库备份,照下面的办法退回再查`);
+  }
+}
+
 const takeDownArgs = (ctx, extra) => ({
   port: ctx.port, lockFile: ctx.server.lockFile, log: logFor(ctx.port), force: options.force, wait: options.wait,
   waitTimeout: WAIT_TIMEOUT, say, gate, ...extra,
@@ -116,6 +129,9 @@ async function prepare() {
   say("▶ 升级之前先核对一遍(这一段不改任何东西)…");
   const co = inspectCheckout(REPO);
   if (co.problems.length) block(co.problems);
+  const lock = acquireUpgradeLock(REPO);
+  if (!lock.ok) block([lock.why]);
+  process.on("exit", lock.release);
   const fetched = fetchRemote(REPO, co.remote);
   if (!fetched.ok) {
     block([`从 ${co.remote} 拉不动:${fetched.err.split("\n").slice(-3).join(" / ")}`, "     网络、代理或凭证的问题;先让 git fetch 能过,再跑一次"]);
@@ -148,7 +164,7 @@ async function prepare() {
   }
   // 接着跑刚拉下来的那份升级脚本 —— 新版自己的升级逻辑,不是内存里这份旧的。
   const next = spawnSync(process.execPath, [join(REPO, "scripts", "upgrade.mjs"), ...userArgs(), "--continue", ...(pulled ? ["--pulled-from", pulled] : [])], {
-    stdio: "inherit", env: { ...env, PORT: String(ctx.port) },
+    stdio: "inherit", env: { ...env, PORT: String(ctx.port), [UPGRADE_LOCK_ENV]: lock.token },
   });
   process.exit(next.status ?? 1);
 }
@@ -173,6 +189,11 @@ async function apply() {
     process.exit(code);
   };
 
+  // 第一段把锁递过来了就接着持有(pid 换成自己);直接跑 --continue 的现拿一把。
+  const lock = acquireUpgradeLock(REPO, { token: env[UPGRADE_LOCK_ENV] || null });
+  if (!lock.ok) { say(`  ✕ ${lock.why}`); undoPull(2); }
+  process.on("exit", lock.release);
+
   let ws = inspectWorkspaces(REPO);
   if (!ws.ok && repairEmptyWorkspaces(REPO).restored.length) ws = inspectWorkspaces(REPO);
   const npmCfg = inspectNpmConfig();
@@ -191,162 +212,198 @@ async function apply() {
   const lastTo = state.last?.to && state.last.to !== head && isAncestor(REPO, state.last.to, head) ? state.last.to : null;
   const from = resumed?.from ?? pulledFrom ?? lastTo ?? beforeLastPull(REPO) ?? head;
   const entry = isAbsolute(SERVER_ENTRY) ? SERVER_ENTRY : join(REPO, SERVER_ENTRY);
-  const products = [entry, join(REPO, "mcp", "dist", "index.js"), join(REPO, "web", "dist", "index.html"), join(REPO, "node_modules", ".package-lock.json")];
-  const built = state.built?.commit === head && state.built.stamp === buildStamp(products) && products.slice(0, 3).every(existsSync);
+  // 构建产物整棵树 + npm 记的已装依赖清单(buildStamp);几个入口文件得在,是起服务的前提。
+  const products = [dirname(entry), ...["shared", "mcp", "web"].map((ws) => join(REPO, ws, "dist")), join(REPO, "node_modules", ".package-lock.json")];
+  const entries = [entry, join(REPO, "mcp", "dist", "index.js"), join(REPO, "web", "dist", "index.html")];
+  const built = state.built?.commit === head && entries.every(existsSync) && state.built.stamp === buildStamp(products);
   const renameNow = ["todo", "resume"].includes(data.rename);
   const serving = ctx.server.running && state.servedPid && ctx.server.health?.pid === state.servedPid;
+  /** MCP 登记收拾成只有 navi(setup 那份逻辑):幂等,迁不了不算升级失败,说一句就行。 */
+  const registerMcp = () => {
+    if (options.skipMcp) return;
+    try {
+      registerNaviMcp({ repo: REPO, port, ok: (l) => say(`  ✓ ${l}`), warn: (l) => say(`  ⚠ ${l}`), say });
+    } catch (error) {
+      say(`  ⚠ MCP 登记没迁成:${error.message}(不影响服务;之后再跑一次 npm run upgrade 或 npm run setup)`);
+    }
+  };
   if (!resumed && built && !renameNow && serving) {
-    say(`✓ 已是最新:代码 ${short(head)},库 ${data.db},服务 http://localhost:${port}(pid ${state.servedPid})在跑。什么都没动。`);
-    process.exit(0);
+    say(`✓ 已是最新:代码 ${short(head)},库 ${data.db},服务 http://localhost:${port}(pid ${state.servedPid})在跑。代码、依赖、服务都没动。`);
+    let code = 0;
+    if (state.verifyPending) {
+      // 上次升级没核对过的数据补核一次(只读现在的库,不重启)。
+      const v = verifyData(state.verifyPending.backupFile, dbFileFor(REPO, env));
+      reportMissing(v);
+      if (v.state === "ok") {
+        delete state.verifyPending;
+        try { writeState(dataDir, state); } catch { /* 记不下来,下次再补核一遍而已 */ }
+        say(`  ✓ 上次没核对成的数据补核过了:${v.line}`);
+      } else {
+        code = 1;
+        say(`  ⚠ 上次升级的数据核对还是没过:${v.line}。升级前的库在 ${state.verifyPending.backupFile},先别删它。`);
+      }
+    }
+    registerMcp();
+    process.exit(code);
   }
   if (resumed) say(`  · 上次升级(从 ${short(resumed.from)} 起)没做完,接着做`);
   state.inProgress = { ...(resumed ?? { from, startedAt: new Date().toISOString() }), to: head };
   state.port = port;
   createdProgress = !resumed;
-  writeState(dataDir, state);
+  try {
+    writeState(dataDir, state);
+  } catch (error) {
+    say(`  ✕ 升级进度写不进 ${dataDir}(${error.message}),停服务之前就不往下做了`);
+    createdProgress = false;
+    undoPull(2);
+  }
   const save = () => writeState(dataDir, state);
 
-  /** 停服务之后失败:停在这一步,给两条路。 */
-  const fail = (reason, extra = []) => {
+  let launchedPid = null;
+  /**
+   * 服务此刻到底什么样,退回命令照它写:端口上有服务应答(stop.mjs 停得了);刚起的进程还活着却没应答(起得慢、卡在迁移里 ——
+   * stop.mjs 问不到它,得按 pid 结束);都没有。
+   */
+  const serviceNow = async () => {
+    const h = await localJson(port, "/api/health");
+    if (h) return { serverRunning: true, line: `:${port} 上有服务在应答(pid ${h.pid ?? "?"})` };
+    if (launchedPid && isPidAlive(launchedPid)) {
+      return { serverRunning: false, strayPid: launchedPid, line: `刚起的服务进程(pid ${launchedPid})还活着、只是没应答 —— 可能只是起得慢(看 ${log});等它起来了再跑一次 npm run upgrade 收尾就算升好` };
+    }
+    return { serverRunning: false, line: "服务现在没在跑" };
+  };
+  /** 停服务之后失败:停在这一步,给两条路。退回命令只用内存里的东西拼(进度可能正是写不进去的那个)。 */
+  const fail = async (reason, extra = []) => {
+    const now = await serviceNow();
     say("");
-    say(`✕ ${reason}。服务现在没在跑。`);
+    say(`✕ ${reason}。${now.line}。`);
     for (const line of extra) say(`  ${line}`);
-    say(`  · 修好原因后再跑一次 npm run upgrade(或 ${upgradeCommand()}):从这一步接着做,库备份不会重做。`);
-    printRollback(say, rollbackFor(false));
+    say(`  · 修好原因后再跑一次 npm run upgrade(或 ${upgradeCommand()}):从这一步接着做。`);
+    printRollback(say, rollbackFor(now));
     process.exit(1);
   };
   /** 退回 from 那一版的命令。库现在叫 navi.db、那一版又认不得它,就先(用新版)退回旧名。 */
-  const rollbackFor = (serverRunning) => {
-    // 那一版的服务开不开得了 navi.db:看它自己选库的那份代码(改名之前的版本里没有这个名字)。
-    const fromKnowsNavi = (showFile(REPO, from, "server/src/db/path.ts") ?? "").includes(JSON.stringify(DB_FILE_NAME));
-    const renameBack = !data.explicit && !fromKnowsNavi && inspect(dataDir).state === "renamed";
-    return { repo: REPO, backup: state.inProgress?.backup ?? state.last?.backup, cmds: rollbackCommands({ from, head, port, serverRunning, renameBack, dataDir }) };
+  const rollbackFor = ({ serverRunning, strayPid = null }) => {
+    let renameBack = false;
+    try {
+      // 那一版的服务开不开得了 navi.db:看它自己选库的那份代码(改名之前的版本里没有这个名字)。
+      const fromKnowsNavi = (showFile(REPO, from, "server/src/db/path.ts") ?? "").includes(JSON.stringify(DB_FILE_NAME));
+      renameBack = !data.explicit && !fromKnowsNavi && inspect(dataDir).state === "renamed";
+    } catch { /* 认不出来:退库名那一步不写,rename-db 自己会在旧版起不来时说清楚 */ }
+    const cmds = rollbackCommands({ from, head, port, serverRunning, strayPid, renameBack, dataDir });
+    return { repo: REPO, backup: state.inProgress?.backup ?? state.last?.backup, cmds };
   };
 
   say(`▶ 1/6 停服务 :${port}…`);
   const down = await takeDown(takeDownArgs(ctx, { abort: undoPull }));
   createdProgress = false; // 服务动过了,往后不再退回代码
   say(down.running ? `  ✓ :${port} 已停` : `  · :${port} 本来就没在跑`);
-
-  say("▶ 2/6 给库留底…");
-  if (!state.inProgress.backup) {
-    let b;
-    try {
-      b = backupDb({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit, stamp });
-    } catch (error) {
-      // 依赖、构建产物都还是原来的:把原来的服务原样起回来,升级这次不做。
-      say(`  ✕ 留底没成:${error.message}`);
-      delete state.inProgress;
-      try { save(); } catch { /* 磁盘满时这里也写不进去;下次再跑会重新判断 */ }
-      if (pulledFrom) resetKeep(REPO, pulledFrom);
-      if (down.running) {
-        const back = await launchServer({ port, log, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT, env: { ...env, PORT: String(port) } });
-        say(back.ok ? `  ↩ 原来的服务已经照原样起回来了(pid ${back.pid})` : `  ✕ 原来的服务也没起回来,看 ${log};手工起:${restartCommand()}`);
+  // 往后任何一步抛出来的意外(写不进进度、磁盘满、读不动文件)都落到同一个出口:停下、照服务此刻的样子给两条路。
+  try {
+    say("▶ 2/6 给库留底…");
+    if (!state.inProgress.backup) {
+      let b;
+      try {
+        b = backupDb({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit, stamp });
+      } catch (error) {
+        // 依赖、构建产物都还是原来的:把原来的服务原样起回来,升级这次不做。
+        say(`  ✕ 留底没成:${error.message}`);
+        delete state.inProgress;
+        try { save(); } catch { /* 磁盘满时这里也写不进去;下次再跑会重新判断 */ }
+        const reset = pulledFrom ? resetKeep(REPO, pulledFrom) : { ok: true };
+        if (!reset.ok) say(`  ✕ 刚拉的代码没退回 ${short(pulledFrom)}(${reset.err});手工退回:git reset --keep ${pulledFrom}`);
+        if (down.running) {
+          const back = await launchServer({ port, log, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT, env: { ...env, PORT: String(port) } });
+          say(back.ok ? `  ↩ 原来的服务已经照原样起回来了(pid ${back.pid})` : `  ✕ 原来的服务也没起回来,看 ${log};手工起:${restartCommand()}`);
+        }
+        say("✕ 没有升级:库留不了底就不往下做。腾出空间(或修好权限)再跑一次。");
+        process.exit(1);
       }
-      say("✕ 没有升级:库留不了底就不往下做。腾出空间(或修好权限)再跑一次。");
-      process.exit(1);
+      state.inProgress.backup = b?.dir ?? null;
+      // 备份里那份库记下来:核对认的就是它,它后来不见了、读不动 = 没核对成,不是「升级前没有库」。
+      state.inProgress.backupFile = b ? dbInBackup(b.dir, data.db, data.explicit) : null;
+      save();
     }
-    state.inProgress.backup = b?.dir ?? null;
-    save();
-  }
-  say(state.inProgress.backup ? `  ✓ ${state.inProgress.backup}` : "  · 还没有库(新安装),不用留底");
-  let before = null;
-  const backupFile = state.inProgress.backup && dbInBackup(state.inProgress.backup, data.db, data.explicit);
-  if (backupFile) {
-    try { before = readIds(backupFile, { readOnly: false }); }
-    catch (error) { say(`  ⚠ 备份里的库读不出来(${error.message}),升完没法逐条核对`); }
-  }
+    say(state.inProgress.backup ? `  ✓ ${state.inProgress.backup}` : "  · 还没有库(新安装),不用留底");
+    const backupFile = state.inProgress.backupFile !== undefined ? state.inProgress.backupFile
+      : state.inProgress.backup ? dbInBackup(state.inProgress.backup, data.db, data.explicit) : null;
 
-  if (built) {
-    say("▶ 3/6 依赖和构建已经是这一版的,跳过");
-  } else {
-    say("▶ 3/6 装依赖、构建(shared → web → server → mcp)…");
-    const npm = (args) => spawnSync(NPM, args, { stdio: "inherit", ...NPM_SPAWN_OPTS }).status;
-    if (npm(["install", "--no-audit", "--no-fund"]) !== 0) fail("依赖没装上(npm install 失败,报错在上面)");
-    if (npm(["run", "build"]) !== 0) fail("构建失败(报错在上面)");
-    state.built = { commit: head, stamp: buildStamp(products) };
-    save();
-  }
-
-  say("▶ 4/6 库改名…");
-  let dbOutcome = data.rename;
-  if (["todo", "resume", "taken"].includes(data.rename)) {
-    const r = renameDb({ dataDir, env, say });
-    if (r.code === 0) dbOutcome = "renamed";
-    else if (r.journalLeft) {
-      fail("库改名中途失败,而且没能照账本退回,账本还在,服务在它处理掉之前起不来", [
-        `· 先看清现状:node scripts/rename-db.mjs --data ${dataDir}`,
-        "  再 --apply 接着做完、或 --rollback 退回;然后再跑一次 npm run upgrade。",
-      ]);
+    if (built) {
+      say("▶ 3/6 依赖和构建已经是这一版的,跳过");
     } else {
-      dbOutcome = "failed";
-      say(`  ⚠ 库名没改成(原因在上面),照旧用 ${LEGACY_DB_FILE} 起服务,其余照常升。`);
+      say("▶ 3/6 装依赖、构建(shared → web → server → mcp)…");
+      const npm = (args) => spawnSync(NPM, args, { stdio: "inherit", ...NPM_SPAWN_OPTS }).status;
+      if (npm(["install", "--no-audit", "--no-fund"]) !== 0) await fail("依赖没装上(npm install 失败,报错在上面)");
+      if (npm(["run", "build"]) !== 0) await fail("构建失败(报错在上面)");
+      state.built = { commit: head, stamp: buildStamp(products) };
+      save();
     }
-  }
-  if (dbOutcome !== "failed" && dbOutcome !== "renamed") {
-    say({
-      keep: `  · 按 --keep-db-name 留着 ${LEGACY_DB_FILE}`, explicit: "  · 设了 NAVI_DB:库在哪、叫什么都按它,不改名",
-      done: `  · 库已经叫 ${DB_FILE_NAME}`, none: `  · 还没有库,服务起来会直接建 ${DB_FILE_NAME}`,
-    }[dbOutcome]);
-  }
 
-  say(`▶ 5/6 起服务 :${port}…`);
-  const launched = await launchServer({ port, log, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT, env: { ...env, PORT: String(port) } });
-  if (!launched.ok) {
-    const why = { spawn: "启动命令拉不起来", impostor: `端口上应答的是 pid ${launched.impostor},不是刚起的那个`, timeout: `等了 ${START_TIMEOUT}s 还没就绪`, exited: "新服务一起来就退出了" }[launched.why];
-    let tail = [];
-    try { tail = readFileSync(log, "utf8").trimEnd().split("\n").slice(-12); } catch { /* 没有日志 */ }
-    if (tail.length) { say(`  日志 ${log} 最后几行:`); for (const l of tail) say(`     │ ${l}`); }
-    fail(`新服务没起来:${why}`);
-  }
-  state.servedPid = launched.pid;
-  save();
-  say(`  ✓ :${port} 已就绪(pid ${launched.pid},日志 ${log})`);
-
-  say("▶ 6/6 核对数据、收尾…");
-  let ok = true;
-  let check = "没核对(升级前没有库)";
-  if (before) {
-    try {
-      const rows = compareIds(before, readIds(dbFileFor(REPO, env), { readOnly: true }));
-      const missing = rows.filter((r) => r.missing.length);
-      check = rows.map((r) => `${r.label} ${r.before} → ${r.after}`).join(" · ");
-      if (missing.length) {
-        ok = false;
-        for (const r of missing) say(`  ✕ ${r.label}少了 ${r.missing.length} 条(id ${r.missing.slice(0, 5).join("、")}${r.missing.length > 5 ? " …" : ""})。先别动库备份,照下面的办法退回再查`);
-        check += ",有缺(见上面)";
+    say("▶ 4/6 库改名…");
+    let dbOutcome = data.rename;
+    if (["todo", "resume", "taken"].includes(data.rename)) {
+      const r = renameDb({ dataDir, env, say });
+      if (r.code === 0) dbOutcome = "renamed";
+      else if (r.journalLeft) {
+        await fail("库改名中途失败,而且没能照账本退回,账本还在,服务在它处理掉之前起不来", [
+          `· 先看清现状:node scripts/rename-db.mjs --data ${shellArg(dataDir)}`,
+          "  再 --apply 接着做完、或 --rollback 退回;然后再跑一次 npm run upgrade。",
+        ]);
       } else {
-        check += ",升级前的每一条都还在";
-        say(`  ✓ ${check}`);
+        dbOutcome = "failed";
+        say(`  ⚠ 库名没改成(原因在上面),照旧用 ${LEGACY_DB_FILE} 起服务,其余照常升。`);
       }
-    } catch (error) {
-      check = `没核对成:${error.message}`;
-      say(`  ⚠ ${check}`);
     }
-  } else if (backupFile) {
-    check = "没核对成(备份读不出来)";
-  }
-  await refreshMcp({ repo: REPO, port, lockFile: lockFileFor(REPO, env), skip: options.skipMcp, force: false, say, command: restartCommand });
-  if (!options.skipMcp) {
-    // 迁不了不算升级失败:说一句就行(setup 那份逻辑,各家各报各的)。
-    try {
-      registerNaviMcp({ repo: REPO, port, ok: (l) => say(`  ✓ ${l}`), warn: (l) => say(`  ⚠ ${l}`), say });
-    } catch (error) {
-      say(`  ⚠ MCP 登记没迁成:${error.message}(不影响服务;之后跑一次 npm run setup 再试)`);
+    if (dbOutcome !== "failed" && dbOutcome !== "renamed") {
+      say({
+        keep: `  · 按 --keep-db-name 留着 ${LEGACY_DB_FILE}`, explicit: "  · 设了 NAVI_DB:库在哪、叫什么都按它,不改名",
+        done: `  · 库已经叫 ${DB_FILE_NAME}`, none: `  · 还没有库,服务起来会直接建 ${DB_FILE_NAME}`,
+      }[dbOutcome]);
     }
-  }
 
-  const backup = state.inProgress.backup;
-  state.last = { from, to: head, at: new Date().toISOString(), backup };
-  delete state.inProgress;
-  save();
-  const branch = inspectCheckout(REPO).branch ?? "?";
-  printSummary(say, {
-    ok, from, head, branch, commits: from === head ? 0 : countBetween(REPO, from, head),
-    db: dbFileFor(REPO, env), dbOutcome, backup, check, port, pid: launched.pid, log,
-    rollback: from !== head ? rollbackFor(true) : null,
-  });
-  process.exit(ok ? 0 : 1);
+    say(`▶ 5/6 起服务 :${port}…`);
+    const launched = await launchServer({ port, log, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT, env: { ...env, PORT: String(port) } });
+    launchedPid = launched.pid ?? null;
+    if (!launched.ok) {
+      const why = { spawn: "启动命令拉不起来", impostor: `端口上应答的是 pid ${launched.impostor},不是刚起的那个`, timeout: `等了 ${START_TIMEOUT}s 还没就绪`, exited: "新服务一起来就退出了" }[launched.why];
+      let tail = [];
+      try { tail = readFileSync(log, "utf8").trimEnd().split("\n").slice(-12); } catch { /* 没有日志 */ }
+      if (tail.length) { say(`  日志 ${log} 最后几行:`); for (const l of tail) say(`     │ ${l}`); }
+      await fail(`新服务没起来:${why}`);
+    }
+    state.servedPid = launched.pid;
+    save();
+    say(`  ✓ :${port} 已就绪(pid ${launched.pid},日志 ${log})`);
+
+    say("▶ 6/6 核对数据、收尾…");
+    // 核对有三种结局:都在 / 有缺 / 没核对成。后两种都不算升好:记成 verifyPending,再跑先补核(不重启服务)。
+    const v = backupFile ? verifyData(backupFile, dbFileFor(REPO, env)) : { state: "ok", line: "没核对(升级前没有库)" };
+    reportMissing(v);
+    if (v.state === "ok") {
+      if (backupFile) say(`  ✓ ${v.line}`);
+      delete state.verifyPending;
+    } else {
+      if (v.state === "unverified") say(`  ⚠ ${v.line}`);
+      state.verifyPending = { backupFile };
+    }
+    await refreshMcp({ repo: REPO, port, lockFile: lockFileFor(REPO, env), skip: options.skipMcp, force: false, say, command: restartCommand });
+    registerMcp();
+
+    const backup = state.inProgress.backup;
+    state.last = { from, to: head, at: new Date().toISOString(), backup };
+    delete state.inProgress;
+    save();
+    const branch = inspectCheckout(REPO).branch ?? "?";
+    const ok = v.state === "ok";
+    printSummary(say, {
+      ok, from, head, branch, commits: from === head ? 0 : countBetween(REPO, from, head),
+      db: dbFileFor(REPO, env), dbOutcome, backup, check: v.line, port, pid: launched.pid, log,
+      rollback: from !== head ? rollbackFor({ serverRunning: true }) : null,
+    });
+    process.exit(ok ? 0 : 1);
+  } catch (error) {
+    await fail(`升级中途出了意外:${error.message}`);
+  }
 }
 
 if (options.continue) await apply();

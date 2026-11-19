@@ -7,12 +7,14 @@
 //   · 命令会更新自己:拉完代码之后跑的是新版的升级逻辑;
 //   · 构建失败、新服务起不来:留下的状态和打印的退回命令,原样照抄能回到能用的状态;修好之后再跑接着做完;
 //   · 库改名失败(目标名下已有东西;macOS 上再加一个改到一半失败的)照旧名起服务,其余照常升;
-//   · --keep-db-name 升完库还叫 ash.db。
+//   · --keep-db-name 升完库还叫 ash.db;
+//   · 同一份检出同时只许一次升级;产物少了一个文件照样重建;数据没核对成不算升好、再跑先补核;已是最新也收拾 MCP 登记;
+//     停服务之后写不进进度、新服务起得太慢,都给出照抄就能退回的命令;库是软链也照它指向的那份留底。
 // 现场与假 server / 假 npm 在 test-upgrade-fixture.mjs。数据目录用改名之前的变量名 ASH_DATA_DIR 指到检出之外,
 // 端口不设 PORT、让升级按锁文件里记的端口找。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,11 +22,12 @@ import { DB_MOVED_MARKER } from "./db-file.mjs";
 import { clearEnv } from "./env.mjs";
 import { IS_WINDOWS, isPidAlive, localJson, sleep } from "./platform.mjs";
 import { satisfiesRange } from "./runtime-check.mjs";
-import { fakeNpm, git, publish, seedDb } from "./test-upgrade-fixture.mjs";
+import { fakeCli, fakeNpm, git, publish, seedDb } from "./test-upgrade-fixture.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { disposeTestScopesSync, spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
 import { parseUpgradeOptions, userArgs } from "./upgrade-options.mjs";
-import { rollbackCommands } from "./upgrade-report.mjs";
+import { backupDb, backupSources } from "./upgrade-data.mjs";
+import { rollbackCommands, shellArg } from "./upgrade-report.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14361;
@@ -44,8 +47,41 @@ assert.throws(() => parseUpgradeOptions(["--keep-db"], {}));
 assert.throws(() => parseUpgradeOptions(["--pulled-from", "x; rm -rf /"], {}));
 assert.deepEqual(userArgs(["--wait", "--continue", "--pulled-from", "abc1234", "--keep-db-name"]), ["--wait", "--keep-db-name"]);
 const cmds = rollbackCommands({ from: "a".repeat(40), head: "b".repeat(40), port: 4317, serverRunning: true, renameBack: true, dataDir: "/d d" });
-assert.deepEqual(cmds, ["node scripts/stop.mjs", 'node scripts/rename-db.mjs --rollback --data "/d d"', `git reset --keep ${"a".repeat(40)}`, "node scripts/restart.mjs"]);
+assert.deepEqual(cmds, ["node scripts/stop.mjs", "node scripts/rename-db.mjs --rollback --data '/d d'", `git reset --keep ${"a".repeat(40)}`, "node scripts/restart.mjs"]);
+// 照抄进 shell 也还是原样:双引号包不住 `$USER`,单引号才包得住;路径里本身的单引号各按各的 shell 转义。
+assert.equal(shellArg("/tmp/data$USER", false), "'/tmp/data$USER'");
+assert.equal(shellArg("/it's", false), "'/it'\\''s'");
+assert.equal(shellArg("C:\\it's dir", true), "'C:\\it''s dir'");
+assert.equal(shellArg("C:\\plain\\dir", true), "C:\\plain\\dir");
+// 刚起的服务还活着却没应答:stop.mjs 问不到它,得按 pid 结束。
+assert.deepEqual(rollbackCommands({ from: "a", head: "b", port: 4317, serverRunning: false, strayPid: 42, renameBack: false, dataDir: "/d", windows: false }),
+  ["kill 42", "git reset --keep a", "node scripts/restart.mjs"]);
+assert.equal(rollbackCommands({ from: "a", head: "a", port: 4317, serverRunning: false, strayPid: 42, renameBack: false, dataDir: "/d", windows: true })[0], "taskkill /PID 42 /T /F");
 console.log("✓ 版本范围、参数、退回命令的形状");
+
+// ── 库是软链(放在别的盘上):照它指向的那份留底;软链指着的东西不在了 = 认不准,拦下 ────────────────────
+{
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "navi-upgrade-link-"));
+  try {
+    const real = join(dir, "elsewhere.db");
+    writeFileSync(real, Buffer.alloc(8192, 7));
+    let linked = true;
+    try { symlinkSync(real, join(dir, "custom.sqlite")); } catch { linked = false; }
+    if (linked) {
+      const b = backupDb({ backupRoot: dir, db: join(dir, "custom.sqlite"), explicit: true, stamp: "t" });
+      assert.deepEqual(b?.files, ["custom.sqlite"], "软链的库被当成了不存在");
+      assert.equal(readFileSync(join(b.dir, "custom.sqlite")).length, 8192, "备份里得是那份库的内容,不是一条链接");
+      rmSync(real);
+      assert.equal(backupSources({ backupRoot: dir, db: join(dir, "custom.sqlite"), explicit: true }).problems.length, 1, "悬空的软链没拦下");
+      assert.throws(() => backupDb({ backupRoot: dir, db: join(dir, "custom.sqlite"), explicit: true, stamp: "u" }), /软链指着的东西不在了/);
+      console.log("✓ 库是软链也照它指向的那份留底;软链悬空在停服务之前拦下");
+    } else {
+      console.log("⚠ 这台机器建不了软链,跳过软链库那一格");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 // ── 现场 ──────────────────────────────────────────────────────────────────────────
 const TMP = mkdtempSync(join(realpathSync(tmpdir()), "navi-upgrade-test-"));
@@ -323,5 +359,95 @@ out = await waiting;
 assert.match(out, /WAIT:还有 1 个任务升级会被打断/, out);
 assert.equal((await health())?.version, "v10", out);
 console.log("✓ --wait 等任务跑完才升");
+
+// ── 产物少了一个文件(入口还在):不能算「已是最新」,照常重建 ───────────────────────────────
+let pid = (await health())?.pid;
+let npmBefore = npmCalls().length;
+rmSync(join(INSTALL, "web", "dist", "assets", "app.js"));
+out = await upgrade([], 0, { PORT: String(PORT) });
+assert.doesNotMatch(out, /已是最新/, out);
+assert.equal(npmCalls().length, npmBefore + 2, `产物缺了文件却没重建\n${out}`);
+assert.ok(existsSync(join(INSTALL, "web", "dist", "assets", "app.js")));
+assert.notEqual((await health())?.pid, pid);
+console.log("✓ 产物里少了一个文件(入口还在)照样重建,不说已是最新");
+
+// ── 同一份检出同时只许一次升级;持有者死了的锁下一次接手 ────────────────────────────────
+const upgradeLock = join(git(INSTALL, "rev-parse", "--absolute-git-dir"), "navi-upgrade.lock");
+pid = (await health())?.pid;
+writeFileSync(upgradeLock, JSON.stringify({ pid: process.pid, token: "someone-else", startedAt: "刚才" }));
+out = await upgrade([], 2, { PORT: String(PORT) });
+assert.match(out, /已经有一次升级在跑\(pid \d+/, out);
+assert.equal((await health())?.pid, pid, "有升级在跑却动了服务");
+const restartWhile = await runTestProcess(process.execPath, [join(INSTALL, "scripts", "restart.mjs")], { cwd: INSTALL, env: { ...env, PORT: String(PORT) }, encoding: "utf8", timeout: 60_000 }, 2);
+assert.match(`${restartWhile.stdout}${restartWhile.stderr}`, /正在升级/, "升级进行中 restart 也该让开");
+const dead = execFileSync(process.execPath, ["-e", "console.log(process.pid)"], { encoding: "utf8" }).trim();
+writeFileSync(upgradeLock, JSON.stringify({ pid: Number(dead), token: "crashed", startedAt: "很久以前" }));
+out = await upgrade([], 0, { PORT: String(PORT) });
+assert.match(out, /已是最新/, out);
+assert.ok(!existsSync(upgradeLock), "升级做完没把锁还回去");
+console.log("✓ 同一份检出同时只许一次升级(restart 也让开);持有者死了的锁下一次接手");
+
+// ── 数据没核对成:不算升好,再跑先补核(不重启) ─────────────────────────────────────────
+const stateFile = join(DATA, "upgrade.json");
+const withState = (patch) => writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, "utf8")), ...patch }));
+writeFileSync(join(TMP, "garbage.db"), "这不是一份库");
+withState({ verifyPending: { backupFile: join(TMP, "garbage.db") } });
+out = await upgrade([], 1, { PORT: String(PORT) });
+assert.match(out, /数据核对还是没过/, out);
+assert.equal((await health())?.pid, pid, "补核不该重启服务");
+withState({ verifyPending: { backupFile: join(firstBackup, "ash.db") } });
+out = await upgrade([], 0, { PORT: String(PORT) });
+assert.match(out, /补核过了:项目 2 → 2/, out);
+assert.equal(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, undefined);
+console.log("✓ 数据没核对成不算升好;再跑先补核,过了才清掉,服务不重启");
+
+// ── 已是最新也收拾 MCP 登记:navi 在、旧名 ash 起的也是 Navi 的脚本 → 删掉旧名 ─────────────────────
+{
+  const home = join(TMP, "home");
+  const cliLog = join(TMP, "cli.log");
+  const entry = join(INSTALL, "mcp", "dist", "index.js");
+  fakeCli(join(TMP, "clibin"), "claude", cliLog, `navi: node ${entry} - ✔ Connected\nash: node ${entry} - ✔ Connected\n`);
+  fakeCli(join(TMP, "clibin"), "codex", cliLog, JSON.stringify([{ name: "navi", enabled: true, transport: { type: "stdio", command: "node", args: [entry] } }]));
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  out = await upgrade([], 0, {
+    PORT: String(PORT), SKIP_MCP: "", PATH: join(TMP, "clibin") + delimiter + env.PATH,
+    HOME: home, USERPROFILE: home, CODEX_HOME: join(home, ".codex"), XDG_CONFIG_HOME: join(home, ".config"),
+    APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"),
+  });
+  assert.match(out, /已是最新/, out);
+  assert.ok(readFileSync(cliLog, "utf8").includes("claude mcp remove ash --scope user"), `已是最新时没收拾旧名登记\n${out}`);
+  assert.equal((await health())?.pid, pid, "收拾登记不该重启服务");
+  console.log("✓ 已是最新也收拾 MCP 登记(旧名 ash 删掉),不重启服务");
+}
+
+// ── 停服务之后写不进进度:同一个出口,照抄退回命令回到能用的旧版 ──────────────────────────────
+const v11Base = head();
+publish(DEV, "v11", { flags: ["BREAK_STATE"] });
+out = await upgrade([], 1, { PORT: String(PORT) });
+assert.match(out, /升级中途出了意外/, out);
+assert.match(out, /服务现在没在跑/, out);
+rmSync(stateFile, { recursive: true, force: true });
+back = await followRollback(out);
+assert.ok(back.commands.includes(`git reset --keep ${v11Base}`), back.commands.join("\n"));
+assert.equal(head(), v11Base);
+const v11BaseVersion = (await health())?.version;
+assert.ok(v11BaseVersion && v11BaseVersion !== "v11", `照抄退回命令之后没回到能用的旧版\n${back.out}`);
+console.log("✓ 停服务之后写不进进度:照服务此刻的样子给出退回命令,照抄能回到旧版");
+
+// ── 新服务起得太慢(进程活着、没应答):说清它还活着,退回命令先按 pid 结束它 ─────────────────────
+const v12 = publish(DEV, "v12");
+out = await upgrade([], 0, { PORT: String(PORT) });
+assert.equal((await health())?.version, "v12", out);
+publish(DEV, "v13", { flags: ["SLOW_START"] });
+out = await upgrade([], 1, { PORT: String(PORT), START_TIMEOUT: "2" });
+const stray = Number(out.match(/刚起的服务进程\(pid (\d+)\)还活着/)?.[1]);
+assert.ok(stray && isPidAlive(stray), `没说清刚起的进程还活着\n${out}`);
+back = await followRollback(out);
+assert.ok(back.commands[1] === (IS_WINDOWS ? `taskkill /PID ${stray} /T /F` : `kill ${stray}`), back.commands.join("\n"));
+for (let i = 0; i < 50 && isPidAlive(stray); i += 1) await sleep(100);
+assert.ok(!isPidAlive(stray), "照抄退回命令之后那个慢服务还活着");
+assert.equal((await health())?.version, "v12", back.out);
+assert.equal(head(), v12);
+console.log("✓ 新服务起得太慢:说清它还活着,照抄退回命令先结束它再回到旧版");
 
 console.log("✓ upgrade.mjs 回归全部通过");
