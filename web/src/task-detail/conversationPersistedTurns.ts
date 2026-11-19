@@ -258,6 +258,7 @@ export function appendPersistedSession(
         text,
         at: segment.at,
         sessionId: session.id,
+        sessionRole: session.role,
         // 服务端标了 notice 就照它的，别再去猜（见 conversationNotes 的 tone 注释）。
         tone: eventTone(text, segment.notice, segment.level),
         variant: "note",

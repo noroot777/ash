@@ -16,6 +16,7 @@ import type { FreeReviewRun } from "@ash/shared";
 import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import { noVerdictCauseText, noVerdictSaidText } from "../free-workflow/freeReviewRounds.ts";
 import type { ConversationItem } from "./conversationModel.ts";
+import { reviewerTurnNote } from "./conversationReviewer.ts";
 import type { ConversationFeedRow, ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { CHANNEL_GAP_GUESS } from "./legacyNoticeTable.ts";
 import { noticeRawText, type NoticeView } from "./timelineNoticeCopy.ts";
@@ -70,11 +71,23 @@ export function noVerdictCauseView(cause: ReviewNoVerdict): NoticeView {
 }
 
 /**
+ * 这条旁注说的是某一轮审查**为什么没给出结论**：带类型的原因旁注，或者老服务端那句「报告可能写完了…」。
+ * 它跟结论气泡下面那一句原因是同一件事，是审查的话（见 conversationSystemRows 的 reviewOwned）。
+ */
+export function saysWhyNoVerdict(event: EventItem): boolean {
+  const notice = event.notice;
+  return notice?.kind === "review.no_verdict" || ((!notice || notice.kind === "alert") && CHANNEL_GAP_GUESS.test(noticeRawText(event.text)));
+}
+
+/**
  * 同一个位置上原来说这件事的那一条，这一句出现以后它就不再单独说：这一轮自己那条带类型的原因旁注；
- * 老服务端那句「报告可能写完了…report_stage」（回合中断时它是错的，没上报时它的说明还在理，点开看）。
+ * 老服务端那句「报告可能写完了…report_stage」（回合中断时它是错的，没上报时它的说明还在理，点开看）；
+ * 审查者那一回合自己的结算说明（「续聊回合异常结束(退出码 1)，任务状态保持…」，说的是同一次中断，
+ * 后半句讲的还是任务状态，跟这一轮审查无关）。
  * 返回 null = 不是它；`detail` = 它的原文能不能拿来当点开的说明。
  */
 export function absorbs(entry: LaneNoVerdict, event: EventItem): { detail: string | null } | null {
+  if (reviewerTurnNote(event)) return { detail: null };
   const notice = event.notice;
   const raw = noticeRawText(event.text);
   if (notice?.kind === "review.no_verdict") {

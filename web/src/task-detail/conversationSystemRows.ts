@@ -2,10 +2,11 @@ import type { ConversationItem } from "./conversationModel.ts";
 import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
 import { conflictContextEvent, isConflictHandoff } from "./systemNoticeModel.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
+import { reviewerTurnNote } from "./conversationReviewer.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { isUnshownNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
 import type { CrashedTurn } from "./turnFailure.ts";
-import { absorbs, noVerdictCauseView, noVerdictPartId, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";
+import { absorbs, noVerdictCauseView, noVerdictPartId, saysWhyNoVerdict, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";
 import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
@@ -102,8 +103,22 @@ function groupConflictHandoffs(rows: ConversationDebateFeedRow[]): Array<Convers
   return grouped;
 }
 
+/**
+ * 这一句是审查自己的话：一轮为什么没出结论（按轮次身份取的那一句，或者服务端说同一件事的那条旁注），
+ * 或者审查者那条会话给它自己那一回合写的结算说明（reviewerTurnNote）。它只贴在那颗审查气泡下面、或者
+ * 记在审查者自己的回合上；那颗气泡撤了（被同一轮的重跑、下一轮盖过），它跟着那一行结论进记录，**不落到
+ * 执行者回合的尾注上**——那里的每一句读起来都是执行者那一回合的事（用户 2026-11-19：审查断了的那句
+ * 「中断 · 模型上游连不上」看着像进了执行者的会话）。
+ */
+function reviewOwned(part: FootnotePart): boolean {
+  if (part.kind === "cause") return true;
+  return part.kind === "event" && !!part.item && (reviewerTurnNote(part.item) || saysWhyNoVerdict(part.item));
+}
+
 type Accessors<Row> = {
   turnIdOf: (row: Row) => string | null;
+  /** 这一回合是审查者在说话（审查自己的话可以记在它上面，见 reviewOwned）。 */
+  reviewerTurnOf?: (row: Row) => boolean;
   breaksSegment: (row: Row) => boolean;
   eventOf: (row: Row) => EventItem | null;
   /** 收了口的一轮审查（变成审查结论那一行，结论同时记进被审那一回合的记录）。 */
@@ -131,7 +146,8 @@ type Accessors<Row> = {
  *   回合跑完紧跟着的事（审查已预约、验收了），都是那一回合的后话；
  * - 审查结论自己占一行（ConversationVerdictRow），排在原处。它之后、下一个回合之前要你知道的那几句
  *   贴在它下面，不回到回合的尾注里。同一回合上又出了一次结论（重跑、重审），只留最近那一行：被盖过
- *   的那一行撤掉，贴在它下面的那几句发生在新结论之前，回到回合的尾注；被盖过的结论本身在记录里。
+ *   的那一行撤掉，贴在它下面的那几句发生在新结论之前，回到回合的尾注——审查自己的话（reviewOwned）
+ *   除外，它跟被盖过的结论本身一样只在记录里。
  *   「被盖过」从新的一轮**开始**那一刻就算：进行中的那一轮和它出的结论是同一颗气泡，要是等它出了
  *   结论才撤上面那一行，那颗气泡（连同摊开着的经过）就会在换字那一下整个往上跳；
  * - 段里还没有回合：回执等这一段的第一回合来认领（「意见已交给执行者」→ 按意见改的那一回合），
@@ -148,6 +164,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
   const parts = new Map<string, FootnotePart[]>();
   const order = new Map<string, number>();
   let turn: string | null = null;
+  let reviewerTurn = false;
   let pending: TurnReceipt[] = [];
   let orphan: { row: ConversationFootnoteRow; parts: FootnotePart[] } | null = null;
   const orphans: Array<{ row: ConversationFootnoteRow; parts: FootnotePart[] }> = [];
@@ -156,6 +173,8 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
   type VerdictSlot = { row: ConversationVerdictRow; parts: FootnotePart[]; cause?: { entry: LaneNoVerdict; part: FootnotePart } };
   let verdict: VerdictSlot | null = null;
   const verdicts: VerdictSlot[] = [];
+  // 被盖过的结论下面、此刻还挂着动作的审查自己的话（「继续本轮审查」那一句）：等这一回合上的下一行结论来接。
+  let carried: FootnotePart[] = [];
   const give = (id: string, list: TurnReceipt[]) => {
     if (list.length) receipts.set(id, [...receipts.get(id) ?? [], ...list]);
   };
@@ -173,7 +192,11 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       return;
     }
     if (turn) {
-      parts.set(turn, [...parts.get(turn) ?? [], part]);
+      // 审查者会话给它自己那一回合写的结算说明，没有审查气泡可贴时只进记录：执行者回合的尾注不替审查记账。
+      // 一轮为什么没结论那一句照留——认不出审查段的老记录里（没有「开始」那一条）结论那一句也落在这儿，
+      // 原因得跟着它，「继续本轮审查」也退回挂在它上面（footnoteActions 的 retryEventId）。
+      const turnNote = part.kind === "event" && !!part.item && reviewerTurnNote(part.item);
+      if (reviewerTurn || !turnNote) parts.set(turn, [...parts.get(turn) ?? [], part]);
       if (receipt) give(turn, [receipt]);
       return;
     }
@@ -190,7 +213,18 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
     pending = [];
     orphan = null;
     verdict = null;
+    carried = [];
     turn = null;
+    reviewerTurn = false;
+  };
+  // 同一回合上的这一行结论被盖过、撤下来：贴在它下面的任务的事（验收暂缓、等你裁定…）发生在新结论之前，
+  // 回到这一回合的尾注；审查自己的话（reviewOwned）跟着这一行结论进记录，挂着动作的那几句留给下一行结论。
+  const retire = (slot: VerdictSlot, home: string) => {
+    out.splice(out.indexOf(slot.row), 1);
+    verdicts.splice(verdicts.indexOf(slot), 1);
+    const back = slot.parts.filter((part) => reviewerTurn || !reviewOwned(part));
+    parts.set(home, [...parts.get(home) ?? [], ...back]);
+    carried.push(...slot.parts.filter((part) => !back.includes(part) && acc.held?.has(part.id)));
   };
   rows.forEach((row, index) => {
     const event = acc.eventOf(row);
@@ -217,9 +251,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
     }
     // 同一回合上新开的一轮：上一行结论此刻就让位（理由见上面的说明），它照样在这一回合的记录里。
     if (turn && verdict && acc.pendingLaneOf?.(row)) {
-      out.splice(out.indexOf(verdict.row), 1);
-      verdicts.splice(verdicts.indexOf(verdict), 1);
-      parts.set(turn, [...parts.get(turn) ?? [], ...verdict.parts]);
+      retire(verdict, turn);
       verdict = null;
     }
     const lane = acc.laneOf?.(row);
@@ -231,13 +263,10 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       order.set(receipt.id, index);
       if (turn) {
         give(turn, [receipt]);
-        if (verdict) {
-          out.splice(out.indexOf(verdict.row), 1);
-          verdicts.splice(verdicts.indexOf(verdict), 1);
-          parts.set(turn, [...parts.get(turn) ?? [], ...verdict.parts]);
-        }
+        if (verdict) retire(verdict, turn);
       }
-      verdict = { row: { kind: "verdict", id: `verdict:${lane.id}`, lane, footnote: { id: `footnote:verdict:${lane.id}`, parts: [], live: false }, live: false }, parts: [] };
+      verdict = { row: { kind: "verdict", id: `verdict:${lane.id}`, lane, footnote: { id: `footnote:verdict:${lane.id}`, parts: [], live: false }, live: false }, parts: carried };
+      carried = [];
       const cause = acc.causeOf?.(lane);
       if (cause) {
         const part: FootnotePart = { kind: "cause", id: noVerdictPartId(cause.runId, cause.round), at, view: noVerdictCauseView(cause.cause) };
@@ -257,7 +286,9 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       pending = [];
       orphan = null;
       verdict = null;
+      carried = [];
       turn = turnId;
+      reviewerTurn = acc.reviewerTurnOf?.(row) ?? false;
       const failure = acc.failureOf?.(turnId);
       if (failure) {
         const id = `failure:${turnId}`;
@@ -326,6 +357,7 @@ export function conversationSystemRows(
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
   const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item, options.onScreen))), {
     turnIdOf: (row) => row.kind === "item" && row.item.kind === "agent" ? row.item.id : null,
+    reviewerTurnOf: (row) => row.kind === "item" && row.item.kind === "agent" && row.item.sessionRole === "reviewer",
     // 辩论、讨论分段；还没出结论的那一轮审查不分（它收口以后就是被审那一回合后面那一行结论）。
     breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "discussion-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),
     eventOf: (row) => row.kind === "item" && row.item.kind === "event" ? row.item : null,
@@ -359,6 +391,7 @@ export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "compl
     items.map((item) => ({ kind: "item", item })),
     {
       turnIdOf: (row) => row.item.kind === "agent" ? row.item.id : null,
+      reviewerTurnOf: (row) => row.item.kind === "agent" && row.item.sessionRole === "reviewer",
       breaksSegment: (row) => row.item.kind === "user",
       eventOf: (row) => row.item.kind === "event" ? row.item : null,
       held,

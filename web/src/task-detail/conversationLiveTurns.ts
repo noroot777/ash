@@ -271,8 +271,10 @@ export function appendLiveEntry(
     return;
   }
   const event = entry.event.event;
+  const sessionId = entry.event.sessionId;
+  const sessionRole = entry.event.role ?? sessions.find((session) => session.id === sessionId)?.role ?? null;
   if (event.kind === "system") {
-    appendEvent(items, liveSystemNote(entry.id, entry.event.sessionId, event));
+    appendEvent(items, liveSystemNote(entry.id, sessionId, event, sessionRole));
     return;
   }
   // 会话轮换信号（`scope:"session"`，见 server 的 session-notice.ts）不是本回合的
@@ -283,7 +285,8 @@ export function appendLiveEntry(
       kind: "event",
       id: entry.id,
       text: event.message,
-      sessionId: entry.event.sessionId,
+      sessionId,
+      sessionRole,
       tone: noteTone(event.message),
       variant: "note",
     });
@@ -296,6 +299,8 @@ export function appendLiveEntry(
       kind: "event",
       id: entry.id,
       text: failed ? `执行异常结束 · exit ${event.exitStatus}` : "本轮执行结束",
+      sessionId,
+      sessionRole,
       tone: failed ? "error" : "neutral",
       variant: "boundary",
       ...(failed && event.interruption ? { interruption: event.interruption } : {}),
@@ -304,8 +309,8 @@ export function appendLiveEntry(
   }
   if (event.kind === "turnEnd") {
     appendEvent(items, event.turnOutcome === "failed"
-      ? { kind: "event", id: entry.id, text: "执行异常结束", tone: "error", variant: "boundary" }
-      : { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息", variant: "boundary" });
+      ? { kind: "event", id: entry.id, text: "执行异常结束", sessionId, sessionRole, tone: "error", variant: "boundary" }
+      : { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息", sessionId, sessionRole, variant: "boundary" });
     return;
   }
   // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;
@@ -329,7 +334,12 @@ export function appendLiveEntry(
 }
 
 /** 直播到达的一条系统注记 → 旁注条目（老记录那一路与身份那一路共用）。 */
-export function liveSystemNote(id: string, sessionId: string, event: Extract<LiveAgentEvent["event"], { kind: "system" }>): ConversationEventItem {
+export function liveSystemNote(
+  id: string,
+  sessionId: string,
+  event: Extract<LiveAgentEvent["event"], { kind: "system" }>,
+  sessionRole: string | null,
+): ConversationEventItem {
   const text = normalizeSessionNoteText(event.text);
   const resume = resumeNoteOf(text, event.resume);
   return {
@@ -338,6 +348,7 @@ export function liveSystemNote(id: string, sessionId: string, event: Extract<Liv
     text,
     at: event.at,
     sessionId,
+    sessionRole,
     tone: eventTone(text, event.notice, event.level),
     variant: "note",
     verify: isVerifyNote(text, event.notice),

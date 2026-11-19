@@ -217,6 +217,11 @@ export async function settleTaskStatus(
   note?: string;
   confirmedDone: boolean;
   failureReason?: "missing_completion_confirmation";
+  /**
+   * 续聊 / 旁路回合没办成，任务状态原样放回了进这一轮之前那一个：`note` 只是在交代「状态没变」。
+   * 审查旁路回合据此不写这句（single-run-settle.ts）。
+   */
+  restored?: true;
   /** 这一轮是 CLI 原生命令（`/compact`）—— 调用方据此整段跳过结算钩子。 */
   nativeTurn: boolean;
 }> {
@@ -364,11 +369,11 @@ export async function settleTaskStatus(
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
       // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
       notify("question", t.question);
-      return { status: back, note: followUpQuestionNote(t.question, label), confirmedDone: false, nativeTurn };
+      return { status: back, note: followUpQuestionNote(t.question, label), restored: true, confirmedDone: false, nativeTurn };
     }
     if (stopped) {
       const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
-      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
+      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, restored: true, confirmedDone: false, nativeTurn };
     }
     if (exitStatus !== 0) {
       // 终态续聊的既定契约是「只能变好,不会变差」,熔断也不例外:状态照旧回到续聊前那个终态
@@ -376,7 +381,7 @@ export async function settleTaskStatus(
       // 主动终止的,退出码还是我们自己合成的,照原样念出来会让人去查一个不存在的崩溃。
       const why = reason ? ASH_FAILURE_FOLLOW_UP[reason.kind]
         : `续聊回合异常结束(退出码 ${exitStatus})`;
-      return { status: back, note: `${why},任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
+      return { status: back, note: `${why},任务状态保持「${label}」不变。`, restored: true, confirmedDone: false, nativeTurn };
     }
     return { status: back, confirmedDone: false, nativeTurn };
   }

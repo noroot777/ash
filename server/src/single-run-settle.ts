@@ -45,6 +45,21 @@ export type SingleRunSettlement = {
   turn?: TurnOwner | null;
 };
 
+/**
+ * 这一回合的结算说明要不要落进它自己那条会话。审查旁路回合不写「状态原样留在…」那几句：它本来就
+ * 不动任务状态，这一轮怎么了由审查那一路说（结论 + 怎么断的，noteReviewerChannelGap /
+ * review-no-verdict.ts）。写成「续聊回合异常结束(退出码 1),任务状态保持「已完成」不变」，页面上
+ * 读起来就是执行者的续聊出了事（用户 2026-11-19 截图）。真改了任务状态的那一句（名下哨兵没了结、
+ * 改落检查点暂停）照写。
+ */
+export function sessionSettlementNote(
+  role: SessionRole,
+  settled: Pick<Awaited<ReturnType<typeof settleTaskStatus>>, "note" | "restored">,
+): string | null {
+  if (!settled.note || (role === "reviewer" && settled.restored)) return null;
+  return settled.note;
+}
+
 export async function settleSingleRunTurn(s: SingleRunSettlement): Promise<void> {
   const { taskId, sessId, agentType, role, out, endIso, exitStatus, stopped, watchdogFailure, executionFailed,
     doneEvent, failure, noteSessionNotice, flushSessionNotices, step } = s;
@@ -133,7 +148,8 @@ export async function settleSingleRunTurn(s: SingleRunSettlement): Promise<void>
     await noteReviewerChannelGap({ taskId, sessId, turnStart: s.turnStart, agentType, stopped: !!stopped, review, failure })
       .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
   }
-  if (settled.note) {
+  const note = sessionSettlementNote(role, settled);
+  if (note) {
     // 结算说明落成**会话旁注**（持久 system 行 + SSE），跟会话轮换旁注同一条道：
     // 它讲的是「这一轮为什么落成这个状态」，不是 agent 干的活，也不是执行器报的错。
     // 从前它是「.md 里一段引用 + trace 里一条 error」，两处毛病都实打实：引用块糊进
@@ -142,7 +158,7 @@ export async function settleSingleRunTurn(s: SingleRunSettlement): Promise<void>
     // 真相多半只是「忘了调 complete_task」。真出故障时它还会盖住原因（docs/incidents.md
     // 「接力到多用户机器」）。
     // level:"notice" 让展示端直接知道这是提示不是故障，不必再靠关键词猜语气。
-    noteSessionNotice(settled.note, endIso, "notice");
+    noteSessionNotice(note, endIso, "notice");
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   flushSessionNotices();

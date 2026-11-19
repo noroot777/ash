@@ -296,7 +296,8 @@ export function createAssembler(sessions: readonly Session[]) {
         return;
       }
       if (event.kind === "system") {
-        apply({ kind: "note", sessionId, turn, seq, item: liveSystemNote(recordId(sessionId, seq), sessionId, event) }, out);
+        const role = envelope.role ?? sessionOf.get(sessionId)?.role ?? null;
+        apply({ kind: "note", sessionId, turn, seq, item: liveSystemNote(recordId(sessionId, seq), sessionId, event, role) }, out);
       } else if (event.kind === "text") {
         apply({ kind: "prose", sessionId, turn, seq, raw: event.text, offset: envelope.textOffset ?? 0, envelope }, out);
       } else if (event.kind !== "done" && event.kind !== "turnEnd") {

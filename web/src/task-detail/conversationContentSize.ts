@@ -152,6 +152,7 @@ const EVENT_SIZE: SizeTable<EventItem> = {
   id: () => 0,
   at: () => 0,
   sessionId: () => 0,
+  sessionRole: () => 0,
   tone: () => 0,
   variant: () => 0,
   verify: () => 0,

@@ -53,6 +53,18 @@ export function monitorWakeFedReviewer(
   return sameAs(scope.reviewerSessionId);
 }
 
+/**
+ * 审查者那条会话给**它自己那一回合**写的话：结算说明（`level:"notice"`，「续聊回合异常结束(退出码 1)…」）
+ * 和直播的回合边界（「执行异常结束 · exit 1」）。这是审查的事，只能贴在审查那颗气泡下面或进记录，
+ * 落进执行者回合的尾注，读起来就是执行者那一回合出了事（用户 2026-11-19 截图）。
+ *
+ * 只认这两种：老服务端把任务时间线（验收、预览、审查开始…）也写进当时最新的那条会话、不带 `aside`
+ * 标，那些照样是任务的事，不在此列。
+ */
+export function reviewerTurnNote(item: Extract<ConversationItem, { kind: "event" }>): boolean {
+  return item.sessionRole === "reviewer" && !item.aside && (item.tone === "notice" || item.variant === "boundary");
+}
+
 export function traceVerifyRound(entries: SessionTraceEntry[]): number | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const event = entries[index]?.event;
