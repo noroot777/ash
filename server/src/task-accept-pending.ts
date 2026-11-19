@@ -5,7 +5,7 @@
 // 还欠一步，也找不到任何地方能收尾，最后是人手工 `git merge --no-ff` 把那份改动补进目标
 // 分支的。所以这里做两件事：
 //
-// ① **核对现场**，不是复读 DB。验收之后用户在自己的终端里干了什么 ash 一概管不着：他
+// ① **核对现场**，不是复读 DB。验收之后用户在自己的终端里干了什么 navi 一概管不着：他
 //    可能自己提交了、可能 `git reset --hard` 丢了、也可能又往暂存区里加了别的东西。所以
 //    每次都去看一眼那份改动此刻的处境（PendingMergeKind 的五种态）。
 // ② 给出那几条出路的动作：把索引里那份落成提交（`commitPendingMerge`），或者在产物已经
@@ -21,8 +21,8 @@
 //   分支已合并，`git branch -d` 仍会拒绝，清理重跑时照实说，不改用 `-D`。
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { acceptPlan } from "@ash/shared/workflow-policy";
-import type { PendingMergeActionResult, PendingMergeState } from "@ash/shared/accept-pending";
+import { acceptPlan } from "@navi/shared/workflow-policy";
+import type { PendingMergeActionResult, PendingMergeState } from "@navi/shared/accept-pending";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { expandHome, localBranchExists, resolveWorktreeBranchName, symbolicBranch } from "./git.js";

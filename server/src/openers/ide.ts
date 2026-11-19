@@ -298,7 +298,7 @@ export function launchPlan(kind: LaunchKind, target: string, absPath: string): L
  *  · 等到窗口尽头还活着 → `launching`,**绝不 kill**:用户刚打开的编辑器不能被这条
  *    判据杀掉,但也不能冒充成功。
  *
- * `stdio:"ignore"` 保留着:管道会把它绑回服务端,重启 ash 就会连它一起带走。
+ * `stdio:"ignore"` 保留着:管道会把它绑回服务端,重启 navi 就会连它一起带走。
  */
 function launch(plan: LaunchPlan, name: string): Promise<LaunchStatus> {
   return new Promise((resolve, reject) => {

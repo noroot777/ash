@@ -35,7 +35,7 @@ const children = new Set();
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const usersScript = join(root, "desktop/macos/scripts/bundle-users.sh");
 
-const sources = ["AshConfig", "AshHealth", "LegacyIdentity", "LoginService"].map((name) => join(mac, `Sources/${name}.swift`));
+const sources = ["NaviConfig", "NaviHealth", "LegacyIdentity", "LoginService"].map((name) => join(mac, `Sources/${name}.swift`));
 const build = spawnSync("swiftc", ["-swift-version", "5", ...sources, join(mac, "Tests/Identity/main.swift"), "-o", driver], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
 
@@ -243,7 +243,7 @@ try {
   console.log("PASS: a lockless older bundle is recognised as busy by the command lines that mention it");
 
   // ── 真 WebKit：复制过来的网站数据在新身份下读得出来 ──
-  const sparkleFree = ["AshConfig", "AshHealth", "LegacyIdentity", "LoginService"].map((name) => join(mac, `Sources/${name}.swift`));
+  const sparkleFree = ["NaviConfig", "NaviHealth", "LegacyIdentity", "LoginService"].map((name) => join(mac, `Sources/${name}.swift`));
   const probeBinary = join(temporary, "probe");
   const probeBuild = spawnSync("swiftc", ["-swift-version", "5", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", "-framework", "WebKit",
     ...sparkleFree, join(mac, "Tests/IdentityProbe/main.swift"), "-o", probeBinary], { encoding: "utf8" });

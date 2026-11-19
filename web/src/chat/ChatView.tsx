@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProjectView, TaskListItem } from "@ash/shared";
-import type { ChatRoom, ChatSnapshot } from "@ash/shared/chat";
-import { ALL_MENTION_ALIASES, isChatClearCommand, mentionedMembers } from "@ash/shared/chat";
+import type { ProjectView, TaskListItem } from "@navi/shared";
+import type { ChatRoom, ChatSnapshot } from "@navi/shared/chat";
+import { ALL_MENTION_ALIASES, isChatClearCommand, mentionedMembers } from "@navi/shared/chat";
 import { ArrowLeft, ArrowUp, At, ChatCircleDots, Hash, PencilSimple, Plus, Stop, UsersThree } from "@phosphor-icons/react";
 import { chatApi } from "./chatApi.ts";
 import { ChatMembers } from "./ChatMembers.tsx";

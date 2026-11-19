@@ -1,4 +1,4 @@
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 
 type StartTask = { id: string; status: string; followUpFrom?: string | null };
 const queuedFrom = new Map<string, TaskStatus>();

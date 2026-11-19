@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import type { TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@ash/shared";
+import type { TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@navi/shared";
 import { dirtyFilesAt, expandHome, gitError, listFiles, localBranchExists, removeWorktree, resolveWorktreeBranchName, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
@@ -11,12 +11,12 @@ const isDir = (p: string) => {
 };
 
 // ── 删除任务时 worktree/分支的去留 ──────────────────────────────────────────
-// ash 建 worktree 但**不随手删**;会删的只有这四条路:①验收通过(accept,合并后清理,
+// navi 建 worktree 但**不随手删**;会删的只有这四条路:①验收通过(accept,合并后清理,
 // 见 server/CLAUDE.md);②删除任务时勾选「连 worktree 和分支一起删」—— 就是这里;
 // ③任务接力确认送达后自动清理(见文件末尾 discardMigratedWorkspace);④归档,按全局
 // 设置 `archiveClean`(默认删,见 task-archive-cleanup.ts)。前两条由用户显式点出,
 // 后两条是「这件事在本机结束了」的自动收尾。
-// 任务行一没,`.worktrees/<taskId>` 目录和 `ash/<id8>` 分支
+// 任务行一没,`.worktrees/<taskId>` 目录和 `navi/<id8>` 分支
 // 就成了没人认领的垃圾:用户在界面上再也看不见它们,只能靠自己记得去 git 里收拾。
 //
 // 两件东西各自独立存在:目录被手动 rm 过、分支还留着,或者反过来(分支被删、目录
@@ -113,7 +113,7 @@ export async function discardTaskWorkspace(
  * 之后,它原本替我们做的几件事都得自己补齐:
  *  · 检出保护:被检出的分支删掉后那个目录的 HEAD 就悬空了。
  *  · 只删这个名字本身(`--no-deref`):不加时 update-ref 会顺着符号引用删掉它指向的分支 ——
- *    `ash/<id8>` 是指向 main 的别名时,删掉的是 main(第 2 轮审查实测)。
+ *    `navi/<id8>` 是指向 main 的别名时,删掉的是 main(第 2 轮审查实测)。
  *  · 删掉 `branch.<name>.*` 配置节:否则取回后同名分支重建,会沿用旧的上游等设置。
  */
 async function deleteBranchAt(repo: string, branch: string, expected: string): Promise<void> {

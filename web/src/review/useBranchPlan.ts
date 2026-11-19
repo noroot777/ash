@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { BranchPlanView, TaskListItem } from "@ash/shared";
+import type { BranchPlanView, TaskListItem } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { useWorkspaceCommitVersion } from "./workspaceCommit.ts";
 

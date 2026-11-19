@@ -11,7 +11,7 @@ import { TestProcessScope, disposeTestProcessResourcesSync, disposeTestScopesSyn
 import { cleanupTestResources, withTestResources } from "./test-process-resources.mjs";
 import native from "./test-process-native.cjs";
 
-const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-directory-"));
+const temporary = fs.mkdtempSync(join(tmpdir(), "navi-test-directory-"));
 const cleanup = fileURLToPath(new URL("test-process-cleanup.mjs", import.meta.url));
 const scopeURL = new URL("test-process-scope.mjs", import.meta.url).href;
 const owned = [];
@@ -40,7 +40,7 @@ await withTestResources(async () => {
     assert.ifError(result.error);
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /拒绝清理无法确认归属/);
-    assert.match(result.stdout, /ASH_TEST_SCOPE_CLEANUP=\[\]/);
+    assert.match(result.stdout, /NAVI_TEST_SCOPE_CLEANUP=\[\]/);
     assertVictim(victim);
   }
   const implicit = spawnSync(process.execPath, ["--input-type=module", "-e", `
@@ -52,7 +52,7 @@ await withTestResources(async () => {
   assert.equal(implicit.status, 0, implicit.stderr);
   assert.match(implicit.stdout, /REFUSED_BEFORE_EXIT/);
   assertVictim(victim);
-  const lookalike = join(temporary, "ash-test-scope-ABC123");
+  const lookalike = join(temporary, "navi-test-scope-ABC123");
   makeVictim(lookalike);
   assert.throws(() => new TestProcessScope(lookalike), { code: "EOWNERSHIP" });
   assertVictim(lookalike);
@@ -60,7 +60,7 @@ await withTestResources(async () => {
 
   const credentials = makeScope();
   for (const shape of ["started", "domain", "temporary-name", "copied-record"]) {
-    const directory = shape === "temporary-name" ? fs.mkdtempSync(join(tmpdir(), "ash-test-scope-")) : join(temporary, shape);
+    const directory = shape === "temporary-name" ? fs.mkdtempSync(join(tmpdir(), "navi-test-scope-")) : join(temporary, shape);
     victims.push(directory);
     makeVictim(directory);
     if (shape === "started") fs.writeFileSync(join(directory, "started"), "1762000000000");
@@ -207,7 +207,7 @@ await withTestResources(async () => {
   for (const phase of ["record-directory", "record-write"]) {
     const created = [];
     fs.mkdtempSync = (prefix, ...args) => {
-      if (phase === "record-directory" && prefix.includes("ash-test-owner-")) throw Object.assign(new Error("INJECTED_OWNER_EACCES"), { code: "EACCES" });
+      if (phase === "record-directory" && prefix.includes("navi-test-owner-")) throw Object.assign(new Error("INJECTED_OWNER_EACCES"), { code: "EACCES" });
       const directory = originals.mkdtempSync(prefix, ...args);
       created.push(directory);
       return directory;

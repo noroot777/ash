@@ -30,14 +30,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 
-const root = mkdtempSync(join(tmpdir(), "ash-dispatch-hold-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-dispatch-hold-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 「exit 0 即 done」：本文件测的是停 / 续，不是完成协议。
-process.env.ASH_LAX_DONE = "1";
-delete process.env.ASH_ALLOW_REAL_AGENT;
+process.env.NAVI_LAX_DONE = "1";
+delete process.env.NAVI_ALLOW_REAL_AGENT;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const schema = await import("../src/db/schema.js");
@@ -78,7 +78,7 @@ const killDelay = new Map<string, number>();
 const turnsOf = (taskId: string) => turns.get(taskId) ?? [];
 
 const run = (opts: { prompt: string; sessionId?: string; env?: Record<string, string | undefined> }) => {
-  const taskId = opts.env!.ASH_TASK_ID!;
+  const taskId = opts.env!.NAVI_TASK_ID!;
   turns.set(taskId, [...turnsOf(taskId), { prompt: opts.prompt, resume: opts.sessionId }]);
   const native = opts.sessionId ?? `native-${taskId}`;
   let release!: () => void;
@@ -249,7 +249,7 @@ try {
   // ── 停着期间新派出去的：建得出来，不起跑 ──────────────────────────────────────────
   await db.insert(tasks).values([task("N", { groupId: "G", dispatchedBy: "H" }), task("N2", { dispatchedBy: "C" })]);
   await runGroup("G");
-  const agentRun = await post("/tasks/N2/run", { "x-ash-client": "mcp" });
+  const agentRun = await post("/tasks/N2/run", { "x-navi-client": "mcp" });
   assert.equal(agentRun.status, 409, "智能体调 run_task 起被按住的任务：拒掉");
   assert.match((await agentRun.json() as { error: string }).error, /名下已全部停下/);
   await sleep(300);
@@ -363,7 +363,7 @@ try {
   await until("S2 接着跑时兑现", () => turnsOf("S2").length === 1);
 
   // ── 先落标记再清点：清点名下的那一刻，派活那条已经是停着的 ─────────────────────────────
-  const peek = new DatabaseSync(process.env.ASH_DB!, { readOnly: true });
+  const peek = new DatabaseSync(process.env.NAVI_DB!, { readOnly: true });
   const select = db.select;
   const flagAtFirstRead: unknown[] = [];
   (db as { select: unknown }).select = function (this: unknown, ...args: unknown[]) {

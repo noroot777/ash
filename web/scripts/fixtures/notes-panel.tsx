@@ -1,20 +1,20 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { NotesPanel, type NoteTaskDraft } from "../../src/overlays/NotesPanel.tsx";
 import "../../src/styles/global.css";
 
 const project: ProjectView = {
   id: "p1",
-  name: "ash",
-  repoPath: "/tmp/ash",
+  name: "navi",
+  repoPath: "/tmp/navi",
   workflowId: null,
   useWorktreeDefault: false,
   createdAt: "2026-08-28T00:00:00.000Z",
   health: { exists: true, isRepo: false },
 };
 
-function Ash() {
+function Navi() {
   const [open, setOpen] = useState(true);
   const [log, setLog] = useState<string[]>([]);
   const add = (line: string) => setLog((current) => [...current, line]);
@@ -37,6 +37,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

@@ -7,7 +7,7 @@ import "../../src/styles/global.css";
 // 之后那次 readScmStatus 降级成了可选（成功绝不能被状态读失败翻成失败），面板因此可能
 // 停在一份写之前的列表上——这里就是造那个局面：写响应不带 status，随后的 GET 也失败。
 
-function Ash() {
+function Navi() {
   const [notice, setNotice] = useState<string | null>(null);
   return (
     <div className="inspector-host" style={{ width: 360 }}>
@@ -24,6 +24,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

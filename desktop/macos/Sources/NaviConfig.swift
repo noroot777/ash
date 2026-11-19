@@ -3,14 +3,20 @@ import Foundation
 /// 这个 app 连哪台、自带的那份 Navi 在 bundle 里哪儿、数据和日志放哪。
 ///
 /// 环境变量那几个口子是给验证用的：把 app 拷到别处、用临时数据根和临时端口起一份，碰不到
-/// 日常那一份（`ASH_URL` + `ASH_DATA_DIR` 就够了；`ASH_MAC_RUNTIME` / `ASH_MAC_DOWNLOAD_JOURNAL`
-/// 只给回归测试换成假的）。
-enum AshConfig {
-  private static let env = ProcessInfo.processInfo.environment
+/// 日常那一份（`NAVI_URL` + `NAVI_DATA_DIR` 就够了；`NAVI_MAC_RUNTIME` / `NAVI_MAC_DOWNLOAD_JOURNAL`
+/// 只给回归测试换成假的）。改名前的旧名照样认，新名优先（`LegacyIdentity.environment`）。
+enum NaviConfig {
+  private static let environment = ProcessInfo.processInfo.environment
+  private static func env(_ name: String) -> String? { LegacyIdentity.environment(name, in: environment) }
 
-  /// 优先级：环境变量 ASH_URL > `defaults write dev.navi.mac NaviURL <url>` > 本机 4317。
+  /// 新旧两代变量指着不同的服务或数据根：说不清该开哪一份，入口据此拒绝打开（见 main.swift）。
+  static var environmentConflict: String? {
+    ["NAVI_URL", "NAVI_DATA_DIR"].lazy.compactMap { LegacyIdentity.environmentConflict($0, in: environment) }.first
+  }
+
+  /// 优先级：环境变量 NAVI_URL > `defaults write dev.navi.mac NaviURL <url>` > 本机 4317。
   static let baseURL: URL = {
-    for raw in [env["ASH_URL"], UserDefaults.standard.string(forKey: "NaviURL")] {
+    for raw in [env("NAVI_URL"), UserDefaults.standard.string(forKey: "NaviURL")] {
       if let raw, let url = URL(string: raw.trimmingCharacters(in: .whitespaces)), url.host != nil {
         return url
       }
@@ -22,17 +28,17 @@ enum AshConfig {
   static var port: Int { port(of: baseURL) }
 
   /// 本机那份服务给窗口专用的端口（server/src/window-port.ts）。窗口只连它，4317 留给浏览器、CLI
-  /// 和 MCP：app 的服务一停，这个端口就空着，另一份 ash（不管新旧）接手的只会是 4317，页面在撤下
+  /// 和 MCP：app 的服务一停，这个端口就空着，另一份 navi（不管新旧）接手的只会是 4317，页面在撤下
   /// 之前发出的请求连不到它。按数据根的真实路径算一个固定值，避开系统的临时端口段（49152 起）：
   /// 每次起服务都是同一个端口，页面的本地设置（主题、草稿）跟着这个地址留得住。
   static let windowPort: Int = {
-    if let raw = env["ASH_MAC_WINDOW_PORT"], let port = Int(raw), (1...65535).contains(port) { return port }
+    if let raw = env("NAVI_MAC_WINDOW_PORT"), let port = Int(raw), (1...65535).contains(port) { return port }
     var hash: UInt32 = 2_166_136_261
-    for byte in AshHealth.realPath(dataURL.path).utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+    for byte in NaviHealth.realPath(dataURL.path).utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
     return 42_000 + Int(hash % 6_000)
   }()
 
-  /// 窗口载的地址：本机时是专用端口，连别处的 ash 时就是那个地址。
+  /// 窗口载的地址：本机时是专用端口，连别处的 navi 时就是那个地址。
   static var windowURL: URL {
     guard isLocal else { return baseURL }
     return URL(string: "http://127.0.0.1:\(windowPort)")!
@@ -48,12 +54,12 @@ enum AshConfig {
     return parts.url ?? baseURL
   }
 
-  /// 本机地址才有「自己起、认是不是自己那份」这回事；连局域网别的 ash 时 app 只是个窗口。
+  /// 本机地址才有「自己起、认是不是自己那份」这回事；连局域网别的 navi 时 app 只是个窗口。
   static var isLocal: Bool { loopback.contains(baseURL.host?.lowercased() ?? "") }
 
-  /// 自带的那份 ash（`scripts/bundle-runtime.mjs` 装进来的，布局见那份脚本顶部）。
+  /// 自带的那份 navi（`scripts/bundle-runtime.mjs` 装进来的，布局见那份脚本顶部）。
   static var runtimeURL: URL {
-    if let raw = env["ASH_MAC_RUNTIME"], !raw.isEmpty { return URL(fileURLWithPath: raw, isDirectory: true) }
+    if let raw = env("NAVI_MAC_RUNTIME") { return URL(fileURLWithPath: raw, isDirectory: true) }
     return Bundle.main.resourceURL!.appendingPathComponent("app", isDirectory: true)
   }
   static var nodeURL: URL { runtimeURL.appendingPathComponent("node/bin/node") }
@@ -63,7 +69,7 @@ enum AshConfig {
   static var importToolURL: URL { runtimeURL.appendingPathComponent("server/dist/import-snapshot-cli.js") }
 
   /// 正式那份是 dev.navi.mac（改名前是 dev.ash.mac，接班见 LegacyIdentity）。演练用的 app 换一个
-  /// （build.sh 的 ASH_MAC_BUNDLE_ID），defaults、数据根、登录项就都跟日常那份分开；测试驱动不是 bundle，
+  /// （build.sh 的 NAVI_MAC_BUNDLE_ID），defaults、数据根、登录项就都跟日常那份分开；测试驱动不是 bundle，
   /// 退回正式那个名字。
   static var bundleID: String { Bundle.main.bundleIdentifier ?? LegacyIdentity.successor }
 
@@ -78,10 +84,10 @@ enum AshConfig {
       in: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0], bundleID: bundleID)
   }
 
-  /// server 的数据根（库、runs、uploads……整份交给 `ASH_DATA_DIR`）。缺省就是 app 自己那块地；
-  /// `ASH_DATA_DIR` 或 `defaults write dev.navi.mac NaviDataDir <目录>` 可以改指。
+  /// server 的数据根（库、runs、uploads……整份交给 `NAVI_DATA_DIR`）。缺省就是 app 自己那块地；
+  /// `NAVI_DATA_DIR` 或 `defaults write dev.navi.mac NaviDataDir <目录>` 可以改指。
   static let dataURL: URL = {
-    let raw = env["ASH_DATA_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+    let raw = env("NAVI_DATA_DIR")
       ?? UserDefaults.standard.string(forKey: "NaviDataDir").flatMap { $0.isEmpty ? nil : $0 }
     return raw.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL } ?? supportURL
   }()
@@ -100,13 +106,13 @@ enum AshConfig {
 
   /// 下载事务的登记放哪（见 DownloadTransaction）。
   static var downloadJournalURL: URL {
-    if let raw = env["ASH_MAC_DOWNLOAD_JOURNAL"], !raw.isEmpty { return URL(fileURLWithPath: raw, isDirectory: true) }
+    if let raw = env("NAVI_MAC_DOWNLOAD_JOURNAL") { return URL(fileURLWithPath: raw, isDirectory: true) }
     return supportURL.appendingPathComponent("downloads", isDirectory: true)
   }
 
   /// 窗口的同源判据：scheme + host + port 跟窗口地址逐字一样。本机时**不认别名**：localhost、::1、
   /// 4317 都不是窗口那一份，交给浏览器打开 —— 窗口只跟专用端口说话，实例号的 cookie 也只绑在这一处。
-  /// 连别处的 ash 时 127.0.0.1 与 localhost 视为同一台，免得服务端回跳到另一种写法时被踢去浏览器。
+  /// 连别处的 navi 时 127.0.0.1 与 localhost 视为同一台，免得服务端回跳到另一种写法时被踢去浏览器。
   static func isSameOrigin(_ url: URL) -> Bool {
     guard let scheme = url.scheme?.lowercased(), scheme == windowURL.scheme?.lowercased() else { return false }
     let host = url.host?.lowercased() ?? ""

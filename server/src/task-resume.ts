@@ -1,7 +1,7 @@
 // 「运行/重试/队列推进」时选 resume 还是 fresh（从 orchestrator.ts 拆出，纯行数拆分）。
 // 依赖方向单向：这里 import orchestrator，orchestrator 不回头 import 这里。
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import type { InputAcceptance } from "./executors/types.js";
 import { lastWordOnInput } from "./turn-input-acceptance.js";
 import { db } from "./db/index.js";
@@ -84,7 +84,7 @@ async function resumeOrRunClaimedTask(taskId: string, opts: ResumeOptions): Prom
         // 消费掉就再也回不来,而留着最坏是下一次运行重投一遍。审查链卡死不可恢复,重投可以。
         onInputSettled: async (acceptance) => {
           if (acceptance === "accepted") { await takeResumePrompt(taskId, rp, task.resumePromptGeneration); return; }
-          console.warn(`[ash] 任务 ${taskId} 审查续跑交代没拿到「agent 收下了」的回执（${acceptance}），`
+          console.warn(`[navi] 任务 ${taskId} 审查续跑交代没拿到「agent 收下了」的回执（${acceptance}），`
             + "这段交代原样留在任务上，下一次运行会重投");
         },
       });
@@ -113,7 +113,7 @@ async function resumeOrRunClaimedTask(taskId: string, opts: ResumeOptions): Prom
         // 一次**条件写**而不是一次读,问不出来也一律不起跑(holdCheckpointOwnership 的头部)。
         hold = await holdCheckpointOwnership(receipt);
         if (hold !== "mine") {
-          console.warn(`[ash] 续跑凭证${hold === "lost" ? "已不在本进程名下" : "的归属这会儿问不出来"}`
+          console.warn(`[navi] 续跑凭证${hold === "lost" ? "已不在本进程名下" : "的归属这会儿问不出来"}`
             + ` task=${taskId} message=${receipt.id}：这一趟不再起跑`);
           return;
         }

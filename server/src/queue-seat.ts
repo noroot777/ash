@@ -169,7 +169,7 @@ export async function claimQueueSeat(taskId: string, opts: { turnHeld?: TurnOwne
       // 会把 /fire 的「永不 resume」偷换成续跑旧会话、消费掉检查点指令(第 ll7XKsu_ps0n
       // 链第 2 轮实测:409 之后任务自行续上旧检查点)。失败就只回滚遗留,让原入口按
       // 原语义重试(用户重点、扫描重投、定时不消费班次)。
-      console.error(`[ash] 队列占位写入失败(${taskId}),按认领失败返回并安排遗留回收:`, err);
+      console.error(`[navi] 队列占位写入失败(${taskId}),按认领失败返回并安排遗留回收:`, err);
       void import("./queue-seat-reclaim.js").then(({ reclaimStrandedSeat }) => {
         const timer = setTimeout(
           () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus, { repush: "never", reservation }),
@@ -197,13 +197,13 @@ function makeSeat(reservation: TaskQueueReservation, queueId: string): QueueSeat
   // 本 seat 不再为这具占位负责了,交给 queue-seat-reclaim 兜底那条带重试的路。只要还有人接手,
   // 「占位没人回滚」就不会变成永久的「排队中」。
   const handOff = (why: string): void => {
-    console.warn(`[ash] 队列占位回滚交给兜底补偿(${taskId}):${why}`);
+    console.warn(`[navi] 队列占位回滚交给兜底补偿(${taskId}):${why}`);
     // 动态 import:queue-seat-reclaim 静态依赖本模块。repush:"never" —— 本模块的调用方全是
     // 带自身语义的入口,补办重推会把 /fire 的「全新一轮」偷换成续跑旧会话(见 claimQueueSeat)。
     void import("./queue-seat-reclaim.js").then(({ reclaimStrandedSeat }) =>
       reclaimStrandedSeat(taskId, queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2],
         { repush: "never", reservation }),
-    ).catch((err) => console.error(`[ash] 队列占位回滚交接失败(${taskId}):`, err));
+    ).catch((err) => console.error(`[navi] 队列占位回滚交接失败(${taskId}):`, err));
   };
 
   const rollback = async (deferrals: number): Promise<void> => {
@@ -272,7 +272,7 @@ export async function seatThenStart(
     // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimOwnTurn 之后的 500 + 锁泄漏
     // (调用方的「认领失败」分支走不到)。读失败没有写入遗留,按失败
     // 认领返回即可,下一次点运行就是干净的重试。
-    console.error(`[ash] 队列占位认领读取失败(${taskId}):`, err);
+    console.error(`[navi] 队列占位认领读取失败(${taskId}):`, err);
     releaseTurn(taskId, owner);
     return { ok: false, transient: true, blockers: ["队列占位读写失败，请稍后重试"] };
   }
@@ -285,7 +285,7 @@ export async function seatThenStart(
     try {
       await start(seat);
     } catch (err) {
-      console.error(`[ash] 任务 ${taskId} 启动异常:`, err);
+      console.error(`[navi] 任务 ${taskId} 启动异常:`, err);
       if (opts.onStartError) opts.onStartError(err);
       else await appendTaskTimeline(taskId, alertLine(`本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`));
     } finally {

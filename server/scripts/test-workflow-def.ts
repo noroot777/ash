@@ -10,9 +10,9 @@
 import {
   MAX_WORKFLOW_STEPS, SINGLETON_KINDS, STEP_LABELS,
   checkWorkflow, isWorkflowUsable, makeStep, normalizeWorkflowDef,
-} from "@ash/shared/workflow";
-import type { StepKind, WorkflowDef, WorkflowStep } from "@ash/shared/workflow";
-import { BUILTIN_WORKFLOWS, builtinWorkflowDef } from "@ash/shared/workflow-presets";
+} from "@navi/shared/workflow";
+import type { StepKind, WorkflowDef, WorkflowStep } from "@navi/shared/workflow";
+import { BUILTIN_WORKFLOWS, builtinWorkflowDef } from "@navi/shared/workflow-presets";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {

@@ -7,7 +7,7 @@
 // 这里把真组件（FreeWorkflowToolbar）和真提示（useToast + WorkspaceToast）挂在一起，
 // 中间只换掉 fetch —— 断言的就是「这一句还在不在」。
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
@@ -17,7 +17,7 @@ const reply = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 /** 后端认出多个候选时说的那段话（server/src/preview-command.ts 的 ambiguousMessage 形状）。 */
-export const AMBIGUOUS = "这个工作区里认出了 2 个能起服务的东西，ash 不替你挑"
+export const AMBIGUOUS = "这个工作区里认出了 2 个能起服务的东西，navi 不替你挑"
   + "（挑错的话你会对着另一个服务验收自己的改动）：\n"
   + "  · a4sms-back/a4sms-imds（Maven 模块 · Spring Boot）\n"
   + "    cd a4sms-back && mvn -pl a4sms-imds spring-boot:run\n"

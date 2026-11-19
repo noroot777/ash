@@ -1,7 +1,7 @@
-import type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus, TaskStatus } from "@ash/shared";
-import { markdownImageRefs } from "@ash/shared/markdown-images";
-import { childResultTexts, nativeWorkStatus as workStatus, sameSnapshotIdentity, snapshotVersion } from "@ash/shared/native-work";
-export { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
+import type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus, TaskStatus } from "@navi/shared";
+import { markdownImageRefs } from "@navi/shared/markdown-images";
+import { childResultTexts, nativeWorkStatus as workStatus, sameSnapshotIdentity, snapshotVersion } from "@navi/shared/native-work";
+export { nativeWorkStatus as workStatus } from "@navi/shared/native-work";
 import type { AttachmentSource, ConversationItem } from "./conversationModel.ts";
 
 export interface NativeWorkItem {

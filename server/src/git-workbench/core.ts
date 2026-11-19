@@ -6,7 +6,7 @@ import { expandHome, gitError } from "../git.js";
 import { getGitOverview } from "../git-overview.js";
 import { readScmStatus, type ScmStatus } from "../git-status.js";
 import { ScmOperationError } from "../scm-paths.js";
-import type { GitAction } from "@ash/shared/git-workbench";
+import type { GitAction } from "@navi/shared/git-workbench";
 
 export function fail(message: string, status = 409): never {
   throw new ScmOperationError(message, status);

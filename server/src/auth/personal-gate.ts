@@ -2,8 +2,8 @@
 //
 // `owned.ts` 那条私有轴的判据是 `actor.userId`,而 agent 回合凭证身上恰好挂着 owner 的
 // userId —— 那是**归属戳**(它建的东西记在谁名下),不是「它就是这个人」(auth/context.ts
-// `isAccountHolder`)。两者没接上的后果实测过:只带 `x-ash-source-task-id` +
-// `x-ash-turn-token`、没有任何 cookie 或 Bearer key,`POST /api/llm-providers` 就在 owner
+// `isAccountHolder`)。两者没接上的后果实测过:只带 `x-navi-source-task-id` +
+// `x-navi-turn-token`、没有任何 cookie 或 Bearer key,`POST /api/llm-providers` 就在 owner
 // 名下建出了一个供应商(第 1 轮审查 P1)。
 //
 // 这不是「多一行数据」那么轻:默认执行器、默认供应商、审查者、团队预设、个人接力目标机
@@ -20,7 +20,7 @@
 // 供应商回 `hasKey`、接力目标机回 `hasKey`、git 凭证只写不读 —— 所以「读得到」不等于
 // 「拿得到 key」。真正花掉 key 的动作(`POST /llm-providers/models`、`…/test`)是写方法,
 // 被这道闸挡在外面。
-import { headerNameGenerations, readHeader } from "@ash/shared/http-headers";
+import { headerNameGenerations, readHeader } from "@navi/shared/http-headers";
 import type { MiddlewareHandler } from "hono";
 import { actorOf, isAccountHolder } from "./context.js";
 import {
@@ -61,7 +61,7 @@ const PERSONAL_COLLECTIONS = new Set([
  *    都敲得开本机的门,比改一个供应商还重;而按人归属之后,它同样是一张逐人隔离的表
  *    (handoff-peers.ts `peerAudience`)。回合凭证身上挂的 owner userId 是**归属戳**,
  *    不是「它就是这个人」—— 不登记进来的话,任意一条正在跑的任务只凭
- *    `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,
+ *    `x-navi-source-task-id` + `x-navi-turn-token` 就能替 owner 放行一台陌生机器,
  *    还会把操作人记成 owner 本人(第 1 轮审查 P1)。
  *  · 接力**申请**是「以 owner 的身份去敲另一台机器的门」:index.ts 用
  *    `withHandoffActor(ownerIdOf(actorOf(c)))` 包住 /api/*,所以回合凭证走到这条路由时
@@ -83,7 +83,7 @@ const PERSONAL_PATHS = [
   //  · 任务备忘是**人写给自己看的私有批注**(shared/src/task-memo.ts 顶部那份分界):它不进
   //    任何 prompt,agent 压根读不到,自然也没有任何理由改得动。而 `canUseOwned` 判的是
   //    `ownerUserId` 相等 —— 回合凭证身上恰好挂着 owner 的归属戳,于是只凭
-  //    `x-ash-source-task-id` + `x-ash-turn-token` 就能改写、删掉用户自己记的东西
+  //    `x-navi-source-task-id` + `x-navi-turn-token` 就能改写、删掉用户自己记的东西
   //    (第 2 轮审查 F2 实测:对照 `POST /api/notes` 返 403,备忘这三条却 201/200/200)。
   //    随手记走的是第一段(PERSONAL_COLLECTIONS 里的 "notes"),备忘挂在任务下面所以在这里。
   //    **末尾那条摘要端点不在内**:`/api/tasks/memos` 是只读集合查询(POST 只因为要带一批
@@ -97,7 +97,7 @@ const PERSONAL_PATHS = [
  * ① **不看单人/多人。** 上面那张清单防的是「别人家的 agent 动了我的私产」,自用模式下
  *    没有「别人」,所以整道闸放行。这里防的是另一件事 —— **agent 替用户点了那个只有
  *    用户能点的开关**,而它在自用模式下一模一样地成立:同项目另一条任务只凭
- *    `x-ash-source-task-id` + `x-ash-turn-token` 就按得动(第 1 轮审查 F2 实测:
+ *    `x-navi-source-task-id` + `x-navi-turn-token` 就按得动(第 1 轮审查 F2 实测:
  *    `kind:"agent"` 的请求拿到 200、目标任务的锁被放开,日志还记成「用户主动放开」)。
  * ② 回合身份不能代替人工授权。自用模式没有账号鉴权边界,本机默认身份本身不证明
  *    用户同意;入口仍核验来源,路由另要求显式确认风险。

@@ -24,8 +24,8 @@
 
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { modelEffortKey } from "@ash/shared/cli-presets";
-import type { ModelEffortMap } from "@ash/shared/cli-presets";
+import { modelEffortKey } from "@navi/shared/cli-presets";
+import type { ModelEffortMap } from "@navi/shared/cli-presets";
 import { resolveLaunch } from "./bin-resolve.js";
 
 /** 握手超时。实测 185ms 拿到结果,给够 10s 足以容忍冷启动与磁盘慢。 */

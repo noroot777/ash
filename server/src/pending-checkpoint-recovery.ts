@@ -116,7 +116,7 @@ export async function reconcileCheckpointDeliveries(taskId?: string): Promise<vo
       taskId ? eq(scheduledMessages.taskId, taskId) : undefined,
     )));
   } catch (error) {
-    console.error(`[ash] 在途续跑交代读取失败 task=${taskId ?? "all"}:`, error);
+    console.error(`[navi] 在途续跑交代读取失败 task=${taskId ?? "all"}:`, error);
   }
 }
 
@@ -134,13 +134,13 @@ async function reconcileLeasedCheckpoints(rows: (typeof scheduledMessages.$infer
   if (!stranded.length) return;
   const delivery = await import("./task-checkpoint-delivery.js");
   for (const receipt of stranded) {
-    // **接管要有证据**:上面那张筛子是进程内的,它答不出「另一份 ash 有没有在送这一张」。
+    // **接管要有证据**:上面那张筛子是进程内的,它答不出「另一份 navi 有没有在送这一张」。
     // 放行只认三条(本进程拿着单例锁 / 这张票是本进程开的 / token 里那个进程证明得了已经
     // 不在),其余一律不接管 —— 墙钟租约证不出「原发送方已经不在送」,按它接管就是把一段
     // 正在送的交代归还回任务,同一段话执行两遍(第 2 轮自由审查 F1,两个独立进程实测)。
     const allowed = checkpointSeizureReason(receipt.deliveringOwner);
     if (!allowed) {
-      console.warn(`[ash] 在途续跑交代仍由 ${describeCheckpointOwner(receipt.deliveringOwner)} 负责`
+      console.warn(`[navi] 在途续跑交代仍由 ${describeCheckpointOwner(receipt.deliveringOwner)} 负责`
         + ` task=${receipt.taskId} message=${receipt.id}：证不出它已经不在送，这一趟不接管`);
       continue;
     }
@@ -154,7 +154,7 @@ async function reconcileLeasedCheckpoints(rows: (typeof scheduledMessages.$infer
     } catch (error) {
       // 出路自己没走完就抛出来:所有权交回,下一趟对账照旧接得走(别把它锁死,那是 F2)。
       forgetCheckpointDelivering(seized.id);
-      console.error(`[ash] 在途续跑交代对账失败 task=${seized.taskId} message=${seized.id}:`, error);
+      console.error(`[navi] 在途续跑交代对账失败 task=${seized.taskId} message=${seized.id}:`, error);
     }
   }
 }
@@ -196,7 +196,7 @@ export async function recoverPendingCheckpoints(taskId?: string): Promise<Map<st
       taskId ? eq(scheduledMessages.taskId, taskId) : undefined,
     ));
   } catch (error) {
-    console.error(`[ash] 未送达续跑交代读取失败 task=${taskId ?? "all"}:`, error);
+    console.error(`[navi] 未送达续跑交代读取失败 task=${taskId ?? "all"}:`, error);
     if (!taskId) throw error;
     failed.set(taskId, "read");
     return failed;
@@ -277,7 +277,7 @@ export async function checkpointStartBlock(taskId: string): Promise<string | nul
     if (receipts.every(settlesItself)) return null;
     return await pendingCheckpointBlockReason(taskId);
   } catch (error) {
-    console.error(`[ash] 续跑交代挡板读取失败 task=${taskId}:`, error);
+    console.error(`[navi] 续跑交代挡板读取失败 task=${taskId}:`, error);
     return "暂时无法确认续跑交代的持久归属，请稍后重试";
   }
 }
@@ -293,7 +293,7 @@ export async function preparePendingCheckpointStart(taskId: string): Promise<str
     if (failed.has(taskId)) return "续跑交代归还失败，原文仍保存在消息账本中，请稍后重试";
     return await pendingCheckpointBlockReason(taskId);
   } catch (error) {
-    console.error(`[ash] 续跑交代准入检查失败 task=${taskId}:`, error);
+    console.error(`[navi] 续跑交代准入检查失败 task=${taskId}:`, error);
     return "暂时无法确认续跑交代的持久归属，请稍后重试";
   }
 }

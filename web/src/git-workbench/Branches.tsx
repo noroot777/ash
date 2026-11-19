@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { GitBranch, Plus } from "@phosphor-icons/react";
-import type { GitRef } from "@ash/shared/git-workbench";
+import type { GitRef } from "@navi/shared/git-workbench";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { openGitWorkbench } from "./navigation.ts";

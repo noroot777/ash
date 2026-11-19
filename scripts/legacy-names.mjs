@@ -6,6 +6,7 @@
 
 export const LEGACY_ENV_PREFIXES = ["ASH_", "HARNESS_"];
 export const LEGACY_MCP_SERVER_NAMES = ["ash", "harness"];
+export const LEGACY_REPO_DIR_NAMES = ["ash", "harness"];
 export const LEGACY_TASK_BRANCH_PREFIXES = ["ash/", "harness/"];
 export const LEGACY_ACCEPT_TAG_PREFIX = "ash-accepted/";
 export const LEGACY_DB_FILE = "ash.db";

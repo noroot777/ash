@@ -1,12 +1,12 @@
-// 与 ash server 说话的那一层：地址、回合身份、连不上时的退避重试，以及把结果包成
+// 与 navi server 说话的那一层：地址、回合身份、连不上时的退避重试，以及把结果包成
 // MCP 响应的两个壳。从 index.ts 拆出来的动机是**职责**不是行数：工具注册表会一直长
-// （每加一个 ash 能力就多一段），而这一层是恒定的；混在一起时，改一句工具描述也要把
+// （每加一个 navi 能力就多一段），而这一层是恒定的；混在一起时，改一句工具描述也要把
 // 整份传输层重新读一遍。
 //
-// 这里不含任何业务判断 —— 业务全在 ash 的 HTTP 端点上（见 index.ts 顶部那段）。
-import { readEnv } from "@ash/shared/env-names";
-import { NAVI_HEADERS } from "@ash/shared/http-headers";
-import { answeredMcpError, UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
+// 这里不含任何业务判断 —— 业务全在 navi 的 HTTP 端点上（见 index.ts 顶部那段）。
+import { readEnv } from "@navi/shared/env-names";
+import { NAVI_HEADERS } from "@navi/shared/http-headers";
+import { answeredMcpError, UNDELIVERED_NET_CODES } from "@navi/shared/mcp-delivery";
 import { resolveTurnIdentity } from "./turn-identity.js";
 
 export const BASE = (readEnv(process.env, "NAVI_URL") ?? "http://localhost:4317").replace(/\/+$/, "");
@@ -21,8 +21,8 @@ export const IDENTITY_REFUSAL = identity.refused;
 
 // 本机流量一律不走代理。Node 24+ 在 NODE_USE_ENV_PROXY=1(或显式 HTTP_PROXY)下
 // **连 localhost 也走代理** —— 实测本机 http_proxy=127.0.0.1:7897 时,打给
-// ash 的每一次工具调用都先绕到代理再回来。两个后果:①白白多一跳、还把
-// ash 的存活绑在代理上;②server 重启时拿到的是代理给的 UND_ERR_SOCKET
+// navi 的每一次工具调用都先绕到代理再回来。两个后果:①白白多一跳、还把
+// navi 的存活绑在代理上;②server 重启时拿到的是代理给的 UND_ERR_SOCKET
 // (「对端关闭」)而不是 ECONNREFUSED,下面那个「确定没送达才重试」的判断就永远
 // 命中不了。合并而不是覆盖已有的 NO_PROXY,别把用户自己的配置吃掉。
 // 必须在第一次 fetch 之前执行 —— 放模块顶层即可(工具调用都在之后)。

@@ -9,7 +9,7 @@
 //      codex 新建文件的全文），**不读磁盘**——回执到达之前文件可能已经被别人覆盖了；
 //   2. 记录端：相对路径按会话目录展开、软链解开、同一路径去重，乱序到达只往外扩，指纹认更晚的；
 //   3. 归属：亲手写下且一字未变 → 确定，不问时间和还有谁；现在这份正是别人亲手写下的 → 不列；
-//      两边写下过同样内容 → 候选；只能按时间认的**一律候选**（哪怕那一刻只有它在跑：ash 管不到的
+//      两边写下过同样内容 → 候选；只能按时间认的**一律候选**（哪怕那一刻只有它在跑：navi 管不到的
 //      后台进程照样能写，用户 2026-11-04 拍板），那一刻还有别的任务在跑——不管它在哪个目录——
 //      就说出是谁（看不见的项目不报标题）；协作关系不算别人。
 // git 仓库那一半（提交、分支版本）在 test-task-artifacts-evidence.ts。
@@ -19,12 +19,12 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { eq, sql } from "drizzle-orm";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
-const tmp = mkdtempSync(join(tmpdir(), "ash-artifacts-concurrent-"));
-process.env.ASH_DB = join(tmp, "ash.db");
+const tmp = mkdtempSync(join(tmpdir(), "navi-artifacts-concurrent-"));
+process.env.NAVI_DB = join(tmp, "ash.db");
 // 解开软链（macOS 的 /var 是 /private/var）：记录端存的是真实路径，断言按同一种写法比。
 const stage = realpathSync(tmp);
 requireTmpDb("task-artifacts-concurrent");
@@ -415,7 +415,7 @@ rl.on('line', (line) => {
 
   // ── 3c. 「那一刻只有它在跑」也不算确定 ──────────────────────────────────────
   // 审查 TgRjUOJWF1Ci 第 2 轮 #2 的复现：别的任务起了个后台进程，自己的回合收了尾，后台几秒后才把
-  // 网页写进这里——ash 的记录里那一刻只有本任务在跑。按时间认的在共享目录上一律是候选（用户
+  // 网页写进这里——navi 的记录里那一刻只有本任务在跑。按时间认的在共享目录上一律是候选（用户
   // 2026-11-04 拍板），不靠「没看到别人」升成确定。
   const bg = join(stage, "bg-target");
   mkdirSync(bg, { recursive: true });
@@ -425,7 +425,7 @@ rl.on('line', (line) => {
   await runTask("BgOther00002", minutes(B0, 5), minutes(B0, 10), { dir: elsewhere, project: "po" });
   place(bg, "foreign.html", minutes(B0, 10.1), "<h1>written by a background job of BgOther</h1>");
   const bgRead = await read("BgOwner00001", rootAt(bg, "pb"));
-  assert.equal(conf(bgRead, "foreign.html"), "timed", "ash 记录里那一刻没别人，照样只是候选");
+  assert.equal(conf(bgRead, "foreign.html"), "timed", "navi 记录里那一刻没别人，照样只是候选");
   assert.deepEqual(bgRead.incomplete, [], "这不是记录缺口，不往页脚说");
   await db.run(sql`ALTER TABLE task_writes RENAME TO task_writes_off`);
   try {

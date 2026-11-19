@@ -1,4 +1,4 @@
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { byCreated, dispatchSubtree } from "../lib/dispatchTree.ts";
 
 export type DispatchForest<T extends TaskListItem = TaskListItem> = {

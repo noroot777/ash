@@ -48,7 +48,7 @@ import { requireProjectAdmin } from "./auth/visibility.js";
 // 加上锁内重读的脏检查，不是这一层。
 //
 // 后半段是**项目的 git 配置**（`/projects/:id/git-config`、`/git-credential`）：提交署名
-// 和 SSH key 落在仓库自己的 .git/config（`git-identity.ts`），HTTPS 用户名/令牌落在 ash
+// 和 SSH key 落在仓库自己的 .git/config（`git-identity.ts`），HTTPS 用户名/令牌落在 navi
 // 的库里且只写不读（`git-credentials.ts`）。两个模块的顶部注释解释了为什么分开存。
 
 const errorStatus = (error: unknown) => (error instanceof ScmOperationError ? error.status : 500);

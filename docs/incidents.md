@@ -198,7 +198,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 两条推论：
 
 - **一个判断有几处实现，就要有几盏红灯**。推进器那条路修好之后，`acceptTask` 这条路上同名的判断仍是旧的：`test-workflow-gate.ts` 当时只测推进器，全绿，而用户点下去的正是没测的那条。所以这次的回归直接在真库 + 真 git 仓库上调 `acceptTask`，断言 main 的 ref 一动没动、worktree 还在、分支还在。
-- **worktree 里没有 `node_modules`，`@ash/shared` 会解析到主仓那份**（本次首跑就是这么撞出来的：改完 shared 测试照红，因为 server 读的是主仓的旧文件）。改 shared 时先 `ln -sfn ../../shared node_modules/@ash/shared`，否则验证的是别的分支的代码。
+- **worktree 里没有 `node_modules`，`@navi/shared` 会解析到主仓那份**（本次首跑是这么撞出来的：改完 shared 测试照红，因为 server 读的是主仓的旧文件）。改 shared 时先 `ln -sfn ../../shared node_modules/@navi/shared`，否则验证的是别的分支的代码。
 
 ---
 

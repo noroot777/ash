@@ -1,5 +1,5 @@
-import { LEGACY_SYS_MARKER } from "@ash/shared";
-import type { FreeReviewRun } from "@ash/shared";
+import { LEGACY_SYS_MARKER } from "@navi/shared";
+import type { FreeReviewRun } from "@navi/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import { stageOf, verifyMarkOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import { monitorWakeInput } from "./monitorWakeModel.ts";

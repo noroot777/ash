@@ -1,7 +1,7 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 // 供应商(relay), system-level. 挂给执行器用:启动 CLI 时注入 base_url + key,
-// 顶掉 CLI 自己的官方登录账号。ash 自己不再直连 HTTP 调模型。
+// 顶掉 CLI 自己的官方登录账号。navi 自己不再直连 HTTP 调模型。
 export const llmProviders = sqliteTable("llm_providers", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),

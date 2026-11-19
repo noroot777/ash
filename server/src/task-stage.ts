@@ -1,6 +1,6 @@
 import { recordBranchReceipt } from "./task-branch-receipts.js";
-import type { TaskStage } from "@ash/shared";
-import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@ash/shared";
+import type { TaskStage } from "@navi/shared";
+import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@navi/shared";
 import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";

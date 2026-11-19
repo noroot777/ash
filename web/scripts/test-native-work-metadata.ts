@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { AgentEvent, NativeWorkEvent, Session } from "@ash/shared";
+import type { AgentEvent, NativeWorkEvent, Session } from "@navi/shared";
 import { codexChildWork, codexNativeWork, nativePlanSnapshot, NativeWorkTrace } from "../../server/src/executors/native-work.ts";
 import { childActivity } from "../../server/src/executors/native-agent-activity.ts";
 import { buildConversationItems, type ConversationItem } from "../src/task-detail/conversationModel.ts";

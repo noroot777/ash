@@ -17,12 +17,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { previewPortDrift } from "@ash/shared/preview";
+import { previewPortDrift } from "@navi/shared/preview";
 
-const root = mkdtempSync(join(realpathSync(tmpdir()), "ash-preview-lent-"));
-process.env.ASH_DB = join(root, "test.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_DEPS_DIR = join(root, "deps");
+const root = mkdtempSync(join(realpathSync(tmpdir()), "navi-preview-lent-"));
+process.env.NAVI_DB = join(root, "test.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DEPS_DIR = join(root, "deps");
 const { ensureSchema, dbClient } = await import("../src/db/index.js");
 const { startPreview, stopPreview } = await import("../src/preview.js");
 const { tail } = await import("../src/preview-store.js");
@@ -42,7 +42,7 @@ async function freePort(): Promise<number> {
 const server = (where: string) =>
   `node -e "const p=${where};require('http').createServer((q,s)=>s.end('ok')).listen(p,'127.0.0.1',()=>console.log('  ➜  Local:   http://localhost:'+p+'/'))"`;
 
-const cwd = mkdtempSync(join(realpathSync(tmpdir()), "ash-preview-lent-wt-"));
+const cwd = mkdtempSync(join(realpathSync(tmpdir()), "navi-preview-lent-wt-"));
 const run = async (taskId: string, cmd: string) => {
   const result = await startPreview(taskId, {
     id: "preview", kind: "preview",
@@ -60,21 +60,21 @@ const check = (name: string, actual: unknown, expected: unknown) => {
 };
 
 try {
-  // ① 认了 ash 借的端口 —— 正常情况，一个字都不许多说。搞错 lent 的语义就会在这里露馅：
+  // ① 认了 navi 借的端口 —— 正常情况，一个字都不许多说。搞错 lent 的语义就会在这里露馅：
   //    每一次正常预览的日志里都多出三行噪音。
   const good = await run("obedient", server("process.env.PORT"));
-  check("认了 $PORT 就不啰嗦", good.log.includes("[ash] 注意"), false);
+  check("认了 $PORT 就不啰嗦", good.log.includes("[navi] 注意"), false);
   check("预览记录里的端口就是借出去的那个", good.record.port === Number(/PORT=(\d+)/.exec(good.log)?.[1]), true);
   await stopPreview("obedient", null);
 
-  // ② 端口写死，没吃 ash 借的那个 —— 这正是 $PORT 没写进命令的症状。
+  // ② 端口写死，没吃 navi 借的那个 —— 这正是 $PORT 没写进命令的症状。
   const pinned = await freePort();
   const own = await run("stubborn", server(String(pinned)));
   const lent = Number(/PORT=(\d+)/.exec(own.log)?.[1]);
   check("这一档本来就该起在别的端口上（前提核对）", own.record.port === pinned && lent !== pinned, true);
-  check("说了这件事", own.log.includes("[ash] 注意"), true);
+  check("说了这件事", own.log.includes("[navi] 注意"), true);
   check("它自己起的那个端口写出来了", own.log.includes(`起在 ${pinned}`), true);
-  check("ash 借的那个也写出来了，用户才对得上", own.log.includes(`借给它的 ${lent}`), true);
+  check("navi 借的那个也写出来了，用户才对得上", own.log.includes(`借给它的 ${lent}`), true);
   // 不判失败：命令是用户的，他有权让服务听一个固定端口。预览照常可用。
   check("没因此把预览判死", own.record.state, "ready");
 
@@ -100,7 +100,7 @@ try {
   check("认了 $PORT 的服务界面上不提", previewPortDrift(
     [{ id: "ok", name: "预览脚本", command: "x", status: "ready", url: "u", port: 45843, lentPort: 45843 }], "posix",
   ).length, 0);
-  // 老记录没有 lentPort（undefined，不是 null）—— 不许据此编出「不是 ash 借的 undefined」。
+  // 老记录没有 lentPort（undefined，不是 null）—— 不许据此编出「不是 navi 借的 undefined」。
   check("老记录一律当成不知道", previewPortDrift(
     [{ id: "old", name: "预览脚本", command: "x", status: "ready", url: "u", port: 5173 } as never], "posix",
   ).length, 0);

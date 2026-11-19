@@ -2,9 +2,9 @@ import { writeFileSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { isGoalExecution, type CliGoal } from "@ash/shared/cli-commands";
+import { isGoalExecution, type CliGoal } from "@navi/shared/cli-commands";
 import type { RunOpts } from "./types.js";
-import { LEGACY_CLAUDE_GOAL_CONTEXT_TAG, LEGACY_CLAUDE_GOAL_FILE_PREFIX } from "@ash/shared/legacy-names";
+import { LEGACY_CLAUDE_GOAL_CONTEXT_TAG, LEGACY_CLAUDE_GOAL_FILE_PREFIX } from "@navi/shared/legacy-names";
 import { formatGoal } from "./codex-native-commands.js";
 
 // 目标上下文文件（系统临时目录下）和命令行里指着它的那一段记号。记号随命令行落库，服务重启后

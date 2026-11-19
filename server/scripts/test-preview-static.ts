@@ -10,7 +10,7 @@ import { ambiguousMessage, detectPreviewCandidates, resolvePreviewCommand } from
 import { previewShell } from "../src/preview-shell.js";
 import { userShellLaunch } from "../src/platform.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-preview-static-"));
+const root = mkdtempSync(join(tmpdir(), "navi-preview-static-"));
 const html = (body = "static artifact") => `<!doctype html><html><head></head><body>${body}</body></html>`;
 const dir = (rel: string) => { const path = join(root, rel); mkdirSync(path, { recursive: true }); return path; };
 const file = (rel: string, body: string) => {

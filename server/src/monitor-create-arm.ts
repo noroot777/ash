@@ -152,7 +152,7 @@ export async function noteProcessClue(row: Row, startedAt: string | null): Promi
       .set({ pid: row.pid, pidStartedAt: startedAt })
       .where(and(eq(monitors.id, row.id), isNull(monitors.pid)));
   } catch (e) {
-    console.error(`[ash] 哨兵 ${row.id} 的 pid 线索写不进库（pid=${row.pid}）:`, detail(e));
+    console.error(`[navi] 哨兵 ${row.id} 的 pid 线索写不进库（pid=${row.pid}）:`, detail(e));
   }
 }
 

@@ -1,11 +1,11 @@
-// 请求点名要另一份 ash 时，真正处理它的服务一律不执行（server/src/instance-binding.ts，mac app 第 2 轮审查 F2）。
+// 请求点名要另一份 navi 时，真正处理它的服务一律不执行（server/src/instance-binding.ts，mac app 第 2 轮审查 F2）。
 //
 // 起一份真服务（本机自用模式、临时 HOME / 数据根、随机端口），拿它自己报的实例号当「认过的那一份」，
 // 再拿一个别的实例号当「端口换人之前认过的那一份」：
 //   · 带着别人的实例号来的写请求 409，库里一行都没写进去（cookie、请求头两条路都试）；
 //   · 页面本身、预览代理、预览的 WebSocket 升级同样拒；
 //   · `/api/health` 照常答（窗口靠它重新认人），带着自己的实例号、或者什么都不带的请求照常执行；
-//   · mac app 窗口专用的端口（`ASH_WINDOW_PORT`，server/src/window-port.ts）：health 报出它，它上面
+//   · mac app 窗口专用的端口（`NAVI_WINDOW_PORT`，server/src/window-port.ts）：health 报出它，它上面
 //     一样能用、一样认实例号；端口被别的程序占着时 health 报 null，服务照常在主端口上起来。
 //
 // 跑法：npm -w server run test:instance-binding
@@ -21,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 const serverRoot = fileURLToPath(new URL("..", import.meta.url));
-const root = mkdtempSync(join(tmpdir(), "ash-instance-binding-"));
+const root = mkdtempSync(join(tmpdir(), "navi-instance-binding-"));
 const home = join(root, "home");
 const data = join(root, "data");
 const project = join(root, "project");
@@ -43,11 +43,11 @@ async function startServer(window: number): Promise<void> {
   const child = spawn(process.execPath, ["--import", tsx, "src/index.ts"], {
     cwd: serverRoot,
     env: {
-      HOME: home, PATH: "/usr/bin:/bin", PORT: String(port), ASH_LOCAL_ONLY: "1", ASH_DATA_DIR: data, ASH_DB: join(data, "ash.db"),
-      ASH_WINDOW_PORT: String(window),
+      HOME: home, PATH: "/usr/bin:/bin", PORT: String(port), NAVI_LOCAL_ONLY: "1", NAVI_DATA_DIR: data, NAVI_DB: join(data, "ash.db"),
+      NAVI_WINDOW_PORT: String(window),
       // 环境是从零拼的，门禁给的开关传不过来：不关的话服务一启动就去问本机真装着的 claude
       // （握手探针活得比服务久，每跑一次留一个）。
-      ASH_TEST_NO_MODEL_PROBE: "1",
+      NAVI_TEST_NO_MODEL_PROBE: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -88,8 +88,8 @@ try {
 
   for (const [label, headers] of [
     ["cookie", { cookie: `theme=dark; ash_instance=${stale}` }],
-    ["请求头", { "x-ash-instance": stale }],
-    ["cookie 对、请求头不对", { cookie: `ash_instance=${ours}`, "x-ash-instance": stale }],
+    ["请求头", { "x-navi-instance": stale }],
+    ["cookie 对、请求头不对", { cookie: `ash_instance=${ours}`, "x-navi-instance": stale }],
   ] as const) {
     const response = await create(`stale-${label}`, headers);
     assert.equal(response.status, 409, `带着别人的实例号（${label}）的写请求要 409`);
@@ -156,7 +156,7 @@ try {
   console.log("test-instance-binding: ok");
 } finally {
   await stopServer();
-  // 服务开机会问一下本机装着的 CLI（ash MCP 登记自检，auth/user-cli.ts），那个子进程可能比服务活得久、
+  // 服务开机会问一下本机装着的 CLI（navi MCP 登记自检，auth/user-cli.ts），那个子进程可能比服务活得久、
   // 往临时 HOME 里落一份配置：删完再看一会儿，又冒出来就再删。
   for (let quiet = 0; quiet < 4;) {
     rmSync(root, { recursive: true, force: true });

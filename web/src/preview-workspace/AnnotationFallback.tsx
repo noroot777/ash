@@ -1,4 +1,4 @@
-import type { AnnotationBatchRecord } from "@ash/shared/page-annotation-batch";
+import type { AnnotationBatchRecord } from "@navi/shared/page-annotation-batch";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { api } from "../lib/api.ts";
 

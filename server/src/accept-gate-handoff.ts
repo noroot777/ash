@@ -10,8 +10,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { ACCEPT_GATE_STATUS_LABELS,
-  type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
-import type { AcceptBy } from "@ash/shared/workflow-policy";
+  type AcceptGateStatus, type AcceptGateView } from "@navi/shared/accept-gate";
+import type { AcceptBy } from "@navi/shared/workflow-policy";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, sessions, tasks } from "./db/schema.js";

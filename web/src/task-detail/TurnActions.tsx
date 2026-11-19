@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { TokenUsage } from "@ash/shared";
+import type { TokenUsage } from "@navi/shared";
 import { ChatsCircle, Check, Copy, GitFork, Trash, X } from "@phosphor-icons/react";
 import { IconButton } from "../components/IconButton.tsx";
 import { IconMenu, type IconMenuItem } from "../components/IconMenu.tsx";

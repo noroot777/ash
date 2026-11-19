@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, rmSync, rmdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import type { Hono } from "hono";
-import type { ProjectView } from "@ash/shared";
-import { repoNameFromUrl } from "@ash/shared/repo-url";
+import type { ProjectView } from "@navi/shared";
+import { repoNameFromUrl } from "@navi/shared/repo-url";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { execFileText } from "./exec.js";

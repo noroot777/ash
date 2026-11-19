@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-local-open-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-local-open-"));
 const repo = join(stage, "repo");
 const outside = join(stage, "outside");
 const home = join(stage, "home");
-process.env.ASH_DB = join(stage, "ash.db");
+process.env.NAVI_DB = join(stage, "ash.db");
 // homedir() 每次现读：POSIX 读 HOME，Windows 读 USERPROFILE
 process.env.HOME = home;
 process.env.USERPROFILE = home;

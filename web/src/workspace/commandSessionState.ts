@@ -1,5 +1,5 @@
 // 常用命令那条启动记录的**状态投影层**:会话事实(server/src/terminal.ts 的
-// `TerminalSessionInfo`)→「还在跑吗 / 还被 ash 管着吗 / 要不要给用户一个出口 / 旁边那行字
+// `TerminalSessionInfo`)→「还在跑吗 / 还被 navi 管着吗 / 要不要给用户一个出口 / 旁边那行字
 // 怎么写」。从 CommandsLauncher.tsx 拆出来有两个理由:① 弹层头部的 service、行列表、外面
 // 那颗 ▶ 三个表面都认这同一份判据,**判据只能有一份**(劈叉的实测后果写在各函数注释里);
 // ② 它是纯函数,拆出来才钉得住回归(web/scripts/test-command-session-state.mjs)——
@@ -29,7 +29,7 @@ export const sessionRunning = (session: TerminalSessionInfo): boolean =>
   && (session.running ?? (session.groupAlive || session.portsAlive || session.portUncertain === true || leftoversOf(session).length > 0));
 
 /**
- * 这条启动**此刻还被 ash 管着吗** —— 服务那一行要摆停止还是启动,只问这一个函数。
+ * 这条启动**此刻还被 navi 管着吗** —— 服务那一行要摆停止还是启动,只问这一个函数。
  *
  * 与服务端 `openSession` 逐字对齐,包括**判据的顺序**:放弃过的那一档排在最前面,后面每一档
  * 都可能回「还开着」,而放弃的全部用途就是解除那几档造成的死局。早先这里是一条
@@ -51,10 +51,10 @@ export const managedOpen = (
 };
 
 /**
- * 这条启动**卡死在 ash 管不动的状态**上了吗 —— 那颗「我自己处理了」要不要出现看它。
+ * 这条启动**卡死在 navi 管不动的状态**上了吗 —— 那颗「我自己处理了」要不要出现看它。
  *
  * 两种形状:① 端口归属核不上(`portUncertain`):启动认为它还开着、停止永远 502、删项目也
- * 被它拦下,而 ash 手里压根没有能动它的凭据;② 上次停止没能确认停净(`unresolved`):账上
+ * 被它拦下,而 navi 手里压根没有能动它的凭据;② 上次停止没能确认停净(`unresolved`):账上
  * 挂着的号同样永远核销不掉。两种都是**悲观判据的终点**,拦着也多停不掉一个进程 ——
  * 必须配一个用户够得着的出口(server/src/terminal-abandon.ts 文件头)。
  *
@@ -75,10 +75,10 @@ export function bestSession(sessions: TerminalSessionInfo[], projectId: string, 
  * 再写一句「未启动」是把默认态当事件播报(用户 2026-09-18 点名删掉)。
  *
  * open = 会话已经退了,但我们仍认为服务开着(端口还有人听,或配了停止命令;见 serviceOpen)。
- * 这时说「已退出」是错的 —— 退的是启动脚本,服务在 ash 的进程树之外跑着。
+ * 这时说「已退出」是错的 —— 退的是启动脚本,服务在 navi 的进程树之外跑着。
  *
  * service = 这是项目级服务那一行。它正常退出时只说「启动脚本已退出」而不说「已退出」:
- * ash 知道的只有**脚本**退了,服务是不是真停了它并不知道(守护化的服务既没留进程、这次又
+ * navi 知道的只有**脚本**退了,服务是不是真停了它并不知道(守护化的服务既没留进程、这次又
  * 没打印端口时,谁也说不准)。普通命令不走这一档 —— `npm run build` 退了就是退了。
  */
 export function sessionState(
@@ -88,7 +88,7 @@ export function sessionState(
 ): { tone: string; text: string | null } {
   // 用户显式放弃过:**不说「已停止」**(那是谎报 —— 放弃不杀进程),照实说「我放过手了」。
   // 这一档排在最前面:放弃之后服务端的 running 已经是 false,但这条记录的 stop 账原样留着,
-  // 落到下面就会被说成「已停止（没能确认停净）」,把用户自己的决定讲成了 ash 的结论。
+  // 落到下面就会被说成「已停止（没能确认停净）」,把用户自己的决定讲成了 navi 的结论。
   if (session?.abandoned) {
     // 只剩「分不清是不是这次的」那类时不能说成残留自理 —— 那些多半是系统自己的进程。
     const left = session.abandoned.left;

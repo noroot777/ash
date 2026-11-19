@@ -383,7 +383,7 @@ try {
   await backupRow.waitFor();
   assert.match(await backups.getByRole("heading").innerText(), /历史备份 · 1/);
 
-  screenshotDirectory = mkdtempSync(join(tmpdir(), "ash-git-workbench-review-"));
+  screenshotDirectory = mkdtempSync(join(tmpdir(), "navi-git-workbench-review-"));
   await page.screenshot({ path: join(screenshotDirectory, "backups-desktop.png"), fullPage: true });
   await resizeViewport(page, { width: 390, height: 844 });
   assert((await page.evaluate(() => document.documentElement.scrollWidth)) <= 390);

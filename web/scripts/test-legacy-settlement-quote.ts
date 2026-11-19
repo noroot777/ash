@@ -12,8 +12,8 @@
 //   ④ 审查者会话里「任务状态保持「X」不变」那一句（一回合只有它）：不出气泡，也哪儿都不画。
 // 跑：npm -w web run test:legacy-settlement-quote
 import assert from "node:assert/strict";
-import type { Session } from "@ash/shared";
-import { parseSessionTranscript } from "@ash/shared/session-output";
+import type { Session } from "@navi/shared";
+import { parseSessionTranscript } from "@navi/shared/session-output";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";

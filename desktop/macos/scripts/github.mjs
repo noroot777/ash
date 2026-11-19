@@ -4,9 +4,10 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
+import { readEnv } from "../../../scripts/env.mjs";
 
-// ASH_MAC_GITHUB_API 只给回归测试指向一个本地假的 GitHub。
-const API = process.env.ASH_MAC_GITHUB_API || "https://api.github.com";
+// NAVI_MAC_GITHUB_API 只给回归测试指向一个本地假的 GitHub。
+const API = readEnv(process.env, "NAVI_MAC_GITHUB_API") || "https://api.github.com";
 
 /** 按顺序找：GH_TOKEN / GITHUB_TOKEN → `gh auth token` → git 凭证助手里 github.com 那一条。 */
 export function resolveToken() {
@@ -70,7 +71,7 @@ export class GitHub {
   async canWrite(repo) {
     if (!(await this.call("GET", `/repos/${repo}`)).json?.permissions?.push) return false;
     const { status } = await this.call("POST", `/repos/${repo}/git/blobs`, {
-      body: { content: "ash release: write check", encoding: "utf-8" }, allow: [401, 403, 404, 422],
+      body: { content: "navi release: write check", encoding: "utf-8" }, allow: [401, 403, 404, 422],
     });
     return status === 201;
   }

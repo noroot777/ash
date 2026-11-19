@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { useRouter } from "expo-router";
-import type { PairTicket } from "@ash/shared/multiuser";
+import type { PairTicket } from "@navi/shared/multiuser";
 import { getApiKey, getBaseURL, setApiKey, setBaseURL } from "@/lib/config";
 import { api } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
@@ -20,7 +20,7 @@ export default function Settings() {
   const [url, setUrl] = useState(getBaseURL() ?? "");
   const [key, setKey] = useState(getApiKey() ?? "");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  // 这台后端怎么认人?多人模式要个人 key;自用模式从手机连过去要先配对(只有和 ash 同机
+  // 这台后端怎么认人?多人模式要个人 key;自用模式从手机连过去要先配对(只有和 navi 同机
   // 的模拟器才不用):点保存就递一张申请,在电脑上点「允许」即可,什么都不用填。那把给
   // 脚本用的访问密钥也能填,但要自己点开。地址一变就重探一次。
   const [multi, setMulti] = useState<boolean | null>(null);
@@ -145,7 +145,7 @@ export default function Settings() {
             <Input
               value={key}
               onChangeText={setKey}
-              placeholder="ash_…"
+              placeholder="navi_…"
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry

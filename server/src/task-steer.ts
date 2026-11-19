@@ -4,7 +4,7 @@
 //
 // 两条硬不变量：① 清旧状态前先预约 steering，数据库失败可撤销；② 原话真正落盘前消息
 // 始终 pending，续送失败先把假 running 拉回真实状态，再归还投递租约。
-import type { TaskStatus } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
 import { and, asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -27,7 +27,7 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { attachmentsPrompt, now } from "./util.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { nativeCliCommand } from "./skills.js";
-import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
+import { isUserAuthoredMessage } from "@navi/shared/scheduled-message-author";
 import { steerRefusal } from "./task-steer-gate.js";
 import { DIRECTION_PROTOCOL } from "./run-prompts.js";
 import {
@@ -77,7 +77,7 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
       onReturn: async (why) => {
         await recoverUndeliveredSteer(message.taskId);
         await abortDelivery(message);
-        console.warn(`[ash] 任务 ${message.taskId} 的新方向${why}`);
+        console.warn(`[navi] 任务 ${message.taskId} 的新方向${why}`);
       },
     });
 
@@ -137,7 +137,7 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
 type NativeReservation = Extract<NativeSteerReservation, { kind: "native" }>;
 
 /**
- * 附件在 ash 里就是一段文本：`attachmentsPrompt` 把绝对路径清单拼进 prompt，agent 自己
+ * 附件在 navi 里就是一段文本：`attachmentsPrompt` 把绝对路径清单拼进 prompt，agent 自己
  * 去 Read。原生引导送的也是同一条文本通道（claude 写一行 user 消息、codex 走 turn/steer），
  * CLI 一侧看不出「这句话带没带附件」，所以带附件不构成降级成 kill + resume 的理由。
  * 只有 attachments 列本身解析不出路径时才退回硬切 —— 那时原生送过去等于把附件丢了。

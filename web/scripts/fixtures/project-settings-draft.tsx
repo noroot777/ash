@@ -1,8 +1,8 @@
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentExecutorProfile, AuthState, ProjectView } from "@ash/shared";
-import type { PreviewAssistState } from "@ash/shared/preview-assist";
-import type { DetectedPreviewService, ProjectPreviewConfig } from "@ash/shared/preview";
+import type { AgentExecutorProfile, AuthState, ProjectView } from "@navi/shared";
+import type { PreviewAssistState } from "@navi/shared/preview-assist";
+import type { DetectedPreviewService, ProjectPreviewConfig } from "@navi/shared/preview";
 import "../../src/styles/global.css";
 import { AuthContext } from "../../src/auth/authContext.ts";
 import { ProjectSettingsPanel } from "../../src/settings/ProjectSettingsPanel.tsx";
@@ -32,7 +32,7 @@ const freshProject = (id: string, name: string): ProjectView => ({
 });
 
 const caseId = new URLSearchParams(location.search).get("case") ?? "manual";
-const storageKey = `ash-project-settings-fixture:${caseId}`;
+const storageKey = `navi-project-settings-fixture:${caseId}`;
 
 function readProjects(): Record<string, ProjectView> {
   const raw = localStorage.getItem(storageKey);
@@ -92,7 +92,7 @@ const SEQ_KEY = `${storageKey}:assist-seq`;
 const readAssist = (): PreviewAssistState | null =>
   JSON.parse(localStorage.getItem(JOB_KEY) ?? "null") as PreviewAssistState | null;
 const setAssist = (next: PreviewAssistState | null) => localStorage.setItem(JOB_KEY, JSON.stringify(next));
-// 服务端自报的实例身份：ash 重启才会变。前端靠它把「重启吞了」和「终态自己过期了」分开。
+// 服务端自报的实例身份：navi 重启才会变。前端靠它把「重启吞了」和「终态自己过期了」分开。
 // 同样得存住 —— 刷新后实例又变回原值就等于「没重启过」，那条测不成了。
 const INSTANCE_KEY = `${storageKey}:assist-instance`;
 localStorage.setItem(INSTANCE_KEY, localStorage.getItem(INSTANCE_KEY) ?? "inst-1");
@@ -277,13 +277,13 @@ function Fixture() {
         <button type="button" data-testid="switch-project" onClick={() => setCurrent(loadProject("p-two"))}>
           换个项目
         </button>
-        {/* AI 协助这台作业是内存态的：ash 一重启服务端就只会回 `job: null`。这颗按钮演的
+        {/* AI 协助这台作业是内存态的：navi 一重启服务端就只会回 `job: null`。这颗按钮演的
             就是那一下 —— 面板必须还看得出「我点过、它被打断了」，而不是退回初始按钮。 */}
         <button type="button" data-testid="assist-restart" onClick={() => { setAssist(null); restartAssistInstance(); }}>
-          假装 ash 重启
+          假装 navi 重启
         </button>
         {/* 跟上面那颗的区别只在实例身份没变：作业是自己跑完、终态过了 10 分钟被清掉的。
-            这一档说成「重启」就是让用户去查一台根本没重启过的 ash。 */}
+            这一档说成「重启」就是让用户去查一台根本没重启过的 navi。 */}
         <button type="button" data-testid="assist-expire" onClick={() => { setAssist(null); }}>
           假装结果过期
         </button>

@@ -19,6 +19,10 @@ export const LEGACY_ENV_PREFIXES = ["ASH_", "HARNESS_"] as const;
  *  登记都由 setup / 注册执行器改写成新名、且升级前起的会话都已结束之后。 */
 export const LEGACY_MCP_SERVER_NAMES = ["ash", "harness"] as const;
 
+/** 仓库目录的旧名（用户机器上那份检出的文件夹名，如 Windows 真机 `D:\ai_workspace\ash`）：改名不挪目录，
+ *  按目录认「哪个项目是本仓库」时两代都得认。拆：本地目录迁移把这些检出都挪成新名之后。 */
+export const LEGACY_REPO_DIR_NAMES = ["ash", "harness"] as const;
+
 /** 任务分支的旧前缀（`ash/<id8>`）。拆：升级前建的任务都已验收或清理、仓库里不再有这种分支之后。 */
 export const LEGACY_TASK_BRANCH_PREFIXES = ["ash/", "harness/"] as const;
 

@@ -1,5 +1,5 @@
 import { TerminalWindow } from "@phosphor-icons/react";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { TERMINAL_SHORTCUT_LABEL } from "./goChord.ts";
 import { TerminalTabStrip } from "./TerminalTabStrip.tsx";

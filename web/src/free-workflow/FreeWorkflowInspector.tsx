@@ -4,7 +4,7 @@ import type {
   FreeReviewRun,
   FreeWorkflowExecution,
   Task,
-} from "@ash/shared";
+} from "@navi/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { useInspectorNav } from "../inspector/nav.tsx";
 import { InspNone } from "../inspector/parts.tsx";

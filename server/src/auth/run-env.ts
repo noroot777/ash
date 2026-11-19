@@ -15,7 +15,7 @@
 //
 // 自用模式一律返回空对象:那条路的行为必须与本功能上线前逐字节一致。
 import { eq } from "drizzle-orm";
-import { FROZEN_DEFAULT_GIT_EMAIL_DOMAIN } from "@ash/shared/legacy-names";
+import { FROZEN_DEFAULT_GIT_EMAIL_DOMAIN } from "@navi/shared/legacy-names";
 import { db } from "../db/index.js";
 import { tasks, users } from "../db/schema.js";
 import { cliConfigEnvFor, configDirEnvVar, userCliDir } from "./user-cli.js";

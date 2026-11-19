@@ -3,8 +3,8 @@
 // 有一份带着等裁定的驳回（框顶那一行让给裁定），一份分支已经清掉，一份一件建议都没有（只看斜杠）。
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewDispute, FreeReviewRun, Task } from "@ash/shared";
-import type { DispatchSuggestion } from "@ash/shared/dispatch-suggestion";
+import type { FreeReviewDispute, FreeReviewRun, Task } from "@navi/shared";
+import type { DispatchSuggestion } from "@navi/shared/dispatch-suggestion";
 import { useDisputeRulingDock } from "../../src/free-workflow/DisputeRulingDock.tsx";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
@@ -44,7 +44,7 @@ const disputed = [{
 function Stage({ name, suggestions = [], reviews: initial = [], task: patch = {} }: {
   name: string; suggestions?: DispatchSuggestion[]; reviews?: FreeReviewRun[]; task?: Partial<Task>;
 }) {
-  // id 前 8 个字就是它的 worktree 分支名（ash/<前 8 个字>），测试那一侧按它给分支列表。
+  // id 前 8 个字就是它的 worktree 分支名（navi/<前 8 个字>），测试那一侧按它给分支列表。
   const task = { ...baseTask, ...patch, id: `t-${name}`, dispatchSuggestions: suggestions } as Task;
   const [reviews, setReviews] = useState(initial);
   const override = useDisputeRulingDock({

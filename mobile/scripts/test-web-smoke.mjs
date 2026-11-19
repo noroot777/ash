@@ -52,7 +52,7 @@ const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 const BASE = "/mobile/app";
 const at = new Date().toISOString();
 const PROJECT = {
-  id: "smoke", name: "冒烟项目", repoPath: "/tmp/ash-mobile-smoke", browserCdpDomains: [], createdAt: at,
+  id: "smoke", name: "冒烟项目", repoPath: "/tmp/navi-mobile-smoke", browserCdpDomains: [], createdAt: at,
   health: { exists: true, isRepo: true }, myRole: "admin",
 };
 const TASK = {

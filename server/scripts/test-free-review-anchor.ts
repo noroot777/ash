@@ -11,9 +11,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-free-review-anchor-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-free-review-anchor-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 // 夹具仓库的 git 一律不继承外层的 GIT_* 环境（外层若在 hook / bisect 里跑，GIT_DIR 会漏进来改到别的仓库）。
 const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
@@ -64,7 +64,7 @@ try {
   rmSync(join(repo, "new.txt"));
   assert.equal((await workspaceSnapshot(repo)).fingerprint, reEdited.fingerprint, "删回去就回到原来那一版");
 
-  // 被忽略的文件、ash 自己的 .worktrees、软链进来的 node_modules 都不是这个项目的改动。
+  // 被忽略的文件、navi 自己的 .worktrees、软链进来的 node_modules 都不是这个项目的改动。
   writeFileSync(join(repo, "ignored.log"), "noise\n");
   mkdirSync(join(repo, ".worktrees", "t1"), { recursive: true });
   writeFileSync(join(repo, ".worktrees", "t1", "f"), "x\n");
@@ -249,7 +249,7 @@ try {
   await assert.rejects(() => startManualFreeReviewRepair("a-legacy"), /代码已变化/, "没有内容锚点的老数据照旧口径");
 
   // 新审查采集失败（锚点记成 UNKNOWN_FINGERPRINT）：哪怕 HEAD 相同、工作区干净，也不能冒充老数据放行。
-  const { reviewAnchorMatches, UNKNOWN_FINGERPRINT } = await import("@ash/shared/free-workflow");
+  const { reviewAnchorMatches, UNKNOWN_FINGERPRINT } = await import("@navi/shared/free-workflow");
   const unknown = await seedDirtyReview("a-unknown");
   occupy("a-unknown");
   git(unknown.repo, "checkout", "--", "a.txt");

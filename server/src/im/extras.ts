@@ -35,7 +35,7 @@ export async function extrasFor(view: TaskView): Promise<CardExtras> {
   } catch (error) {
     // 文件不在 = 那一回合没留下 trace：没什么可补的，不算出错。
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.warn(`[ash] 飞书卡片补充信息读取失败（${view.task.id}）:`, (error as Error).message);
+      console.warn(`[navi] 飞书卡片补充信息读取失败（${view.task.id}）:`, (error as Error).message);
       return { unread: true };
     }
   }

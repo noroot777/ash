@@ -20,17 +20,17 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-duet-stall-"));
-process.env.ASH_DB = join(stage, "t.db");
-process.env.HARNESS_DB = process.env.ASH_DB;
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+const stage = mkdtempSync(join(tmpdir(), "navi-duet-stall-"));
+process.env.NAVI_DB = join(stage, "t.db");
+process.env.HARNESS_DB = process.env.NAVI_DB;
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 // ③ 那一段驱动真 `runTurn`,所以阈值要小到秒内能走完两档。
-process.env.ASH_STALL_WARN_ERRORS = "3";
-process.env.ASH_STALL_WARN_MS = "0";
-process.env.ASH_STALL_TRIP_MS = "120";
-process.env.ASH_STALL_TRIP_GRACE_MS = "0";
-process.env.ASH_STALL_POLL_MS = "20";
+process.env.NAVI_STALL_WARN_ERRORS = "3";
+process.env.NAVI_STALL_WARN_MS = "0";
+process.env.NAVI_STALL_TRIP_MS = "120";
+process.env.NAVI_STALL_TRIP_GRACE_MS = "0";
+process.env.NAVI_STALL_POLL_MS = "20";
 
 const { requireTmpDb } = await import("./tmp-db.js");
 requireTmpDb("test-duet-stall-visibility");

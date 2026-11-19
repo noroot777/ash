@@ -16,9 +16,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-free-review-defer-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-free-review-defer-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
@@ -26,8 +26,8 @@ let failure: unknown = null;
 try {
   const repo = join(root, "repo");
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Test");
-  git(repo, "config", "user.email", "ash@example.test");
+  git(repo, "config", "user.name", "Navi Test");
+  git(repo, "config", "user.email", "navi@example.test");
   execFileSync("git", ["-C", repo, "commit", "--allow-empty", "-m", "base"]);
   const reviewedCommit = git(repo, "rev-parse", "HEAD");
 

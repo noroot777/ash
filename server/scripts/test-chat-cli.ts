@@ -3,20 +3,20 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AGENT_TYPES } from "@ash/shared";
-import type { ChatMember } from "@ash/shared/chat";
+import { AGENT_TYPES } from "@navi/shared";
+import type { ChatMember } from "@navi/shared/chat";
 
-if (process.env.ASH_CHAT_SMOKE !== "1") throw new Error("此测试调用真实 CLI；显式设置 ASH_CHAT_SMOKE=1 后运行。");
+if (process.env.NAVI_CHAT_SMOKE !== "1") throw new Error("此测试调用真实 CLI；显式设置 NAVI_CHAT_SMOKE=1 后运行。");
 const agentType = process.argv[2] ?? "claude";
 if (!AGENT_TYPES.includes(agentType as ChatMember["agentType"])) throw new Error("未知智能体类型。");
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-cli-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-cli-"));
 const projectDir = join(stage, "project");
 mkdirSync(projectDir);
 const marker = `chat-read-${randomUUID()}`;
 writeFileSync(join(projectDir, "chat-context.txt"), marker);
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_ALLOW_REAL_AGENT = "1";
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects } = await import("../src/db/schema.js");
 const { invokeChat } = await import("../src/chat/execution.js");

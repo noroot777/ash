@@ -1,4 +1,4 @@
-import type { ChatMember, ChatMessage } from "@ash/shared/chat";
+import type { ChatMember, ChatMessage } from "@navi/shared/chat";
 import { contextMessage } from "./context-format.js";
 import { parseLastJsonObject, rawOutputExcerpt, textField } from "./json-object.js";
 

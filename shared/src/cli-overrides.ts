@@ -1,9 +1,9 @@
 import { splitProfileExtraArgs } from "./cli-args.ts";
 import type { AgentType } from "./index.ts";
 
-// ── ash 替你写进 CLI 的配置 ─────────────────────────────────────────────
-// 这里声明的每一项,ash 都是**绕过 CLI 自己的配置文件**、直接以环境变量的形式
-// 注入到它启动的进程里。语义是「只对 ash 起的这个进程生效」:
+// ── navi 替你写进 CLI 的配置 ─────────────────────────────────────────────
+// 这里声明的每一项,navi 都是**绕过 CLI 自己的配置文件**、直接以环境变量的形式
+// 注入到它启动的进程里。语义是「只对 navi 起的这个进程生效」:
 //   · 用户自己在终端敲 `claude` 时读到的还是他的 settings.json,原样不动
 //   · 不同 profile 可以给不同的值(官方账号那条不配,中转的那条配上)
 // 所以 `shadows` 字段是这张表的重点 —— 它写清楚「这一项盖掉了谁」,前端原样显示给
@@ -33,21 +33,21 @@ export interface CliConfigOverride {
   requires?: string;
   /**
    * 落环境变量前的换算。缺省 = 原样。第二个参数是同一 profile 上的其它覆盖项,
-   * 第三个是「ash 起 CLI 时它会看到的环境」(见 CliHostEnv)。
+   * 第三个是「navi 起 CLI 时它会看到的环境」(见 CliHostEnv)。
    * 返回 null = 这一项在当前组合下不起作用,干脆不注入。
    */
   toEnv?: (value: number, values: Record<string, number>, host: CliHostEnv) => string | null;
 }
 
 /**
- * ash 起 CLI 时,那个进程会看到的环境事实 —— **只读**,不是配置项。
+ * navi 起 CLI 时,那个进程会看到的环境事实 —— **只读**,不是配置项。
  * 前端算不出来(变量在 server 进程里),所以由服务端如实报一份给它,好让设置页
  * 显示的触发水位和 CLI 真正的行为对得上。
  */
 export interface CliHostEnv {
   /** `CLAUDE_CODE_MAX_OUTPUT_TOKENS`;没设 = null(CLI 用模型自己的上限)。 */
   maxOutputTokens: number | null;
-  /** 企业策略配置(managed-settings.json)碰过任一压缩输入:它压在 ash 的 `--settings` 之上。 */
+  /** 企业策略配置(managed-settings.json)碰过任一压缩输入:它压在 navi 的 `--settings` 之上。 */
   managedCompaction?: boolean;
 }
 
@@ -92,7 +92,7 @@ const CLAUDE_COMPACT_FLOOR_GAP = 13_000;
 // 没配窗口就一个字都不碰:用户在自己机器上关掉自动压缩是他的事。
 const CLAUDE_AUTO_COMPACT_KILL_SWITCHES = ["DISABLE_COMPACT", "DISABLE_AUTO_COMPACT"] as const;
 
-// 百分比换算的分母(`min(它, 20000)` = 输出预留量)。ash 按自己读到的值算完触发点,
+// 百分比换算的分母(`min(它, 20000)` = 输出预留量)。navi 按自己读到的值算完触发点,
 // 就**把同一个值钉进 `--settings.env`**:不钉的话,用户 settings.json 里的同名变量会在
 // 换算之后把分母改小,有效窗口变大、真实触发点比页面写的晚 5 个百分点左右(第 2 轮
 // 审查 finding 3)。钉的是「我们读到的那个赢家值」,所以对用户是原地不动,只是不许它
@@ -346,7 +346,7 @@ export function cliConfigOverrideEnv(
 /**
  * 落成子进程环境的**补丁**:配了的给值,**没配的显式给 `undefined` = 从子进程里删掉**。
  *
- * 后半句不是多余的。spawn 传的是 `{ ...process.env, ...补丁 }`,ash 自己启动时若
+ * 后半句不是多余的。spawn 传的是 `{ ...process.env, ...补丁 }`,navi 自己启动时若
  * 环境里已经带着同名变量(用户在 shell 里 export 过、launchd plist 里写过),不删就等于
  * 每个 profile 都被那份全局值悄悄覆盖 —— 而设置页还老老实实显示「留空 = 跟随 CLI」。
  * 这一档配置的语义是「只有这里配的才算数」,所以留空必须是真的空。
@@ -366,7 +366,7 @@ export function cliConfigOverrideEnvPatch(
  *
  * 为什么光有环境变量不够(2026-08-12 实测 claude 2.1.220):CLI 初始化时会把各层
  * settings 的 `env` 对象**再写回自己的进程环境**,于是用户 `~/.claude/settings.json`
- * 或项目 `.claude/settings.json` 里的同名变量反过来盖掉 ash 注入的那份 —— 设置页
+ * 或项目 `.claude/settings.json` 里的同名变量反过来盖掉 navi 注入的那份 —— 设置页
  * 上写着 200k · 80%,实际按他文件里的数跑,而且一声不吭。这一档配置对外的承诺正是
  * 「覆盖 settings.json」,所以必须赢下它。
  *
@@ -386,7 +386,7 @@ export function cliConfigOverrideSettings(
 }
 
 /**
- * profile 自带的额外参数里有没有 `--settings` —— 有就说明 ash 写进去的那份会被
+ * profile 自带的额外参数里有没有 `--settings` —— 有就说明 navi 写进去的那份会被
  * 整份顶掉(claude 只认最后一个)。
  *
  * **判定必须拆词后再做**:参数编辑器按 token 存,但历史配置和整段粘贴会留下
@@ -404,14 +404,14 @@ function hasSettingsArg(extraArgs: readonly string[] | null | undefined): boolea
 }
 
 /**
- * 这次起跑会在多少 token 压缩,ash **证明不了**的原因;证明得了返回 null。起跑快照(server
+ * 这次起跑会在多少 token 压缩,navi **证明不了**的原因;证明得了返回 null。起跑快照(server
  * cli-env.ts claudeLaunchCompact)和设置页、会话压缩设置的预览共用这一个判据 —— 一边说「不知道」、
  * 一边承诺「继承 50%、约 90k 压」,用户就不知道该信哪个(审查 7pDLIAokZRHH 第 2 轮 F1)。
  *
- * 覆盖项本身照样生效(ash 的 `--settings` 是命令行参数,不在被筛的来源里),判不出的是**从各层
+ * 覆盖项本身照样生效(navi 的 `--settings` 是命令行参数,不在被筛的来源里),判不出的是**从各层
  * 配置继承**的那部分:
- *   · `--setting-sources` 筛掉了某几层,ash 按全部分层解出来的继承值未必是 CLI 读到的;
- *   · 企业策略层碰过压缩输入,它压在 ash 那份之上。
+ *   · `--setting-sources` 筛掉了某几层,navi 按全部分层解出来的继承值未必是 CLI 读到的;
+ *   · 企业策略层碰过压缩输入,它压在 navi 那份之上。
  * 额外参数里另带 `--settings` 是另一回事(覆盖整份到不了 CLI),见 cliConfigOverrideConflict。
  */
 export function claudeCompactionUnprovable(
@@ -455,9 +455,9 @@ export function cliSpeedOverrideConflict(
 /**
  * 同一批变量拼成 shell 前缀(`K=v K2=v2 `),给「复制到终端接着聊」那条命令用。
  * 不带它的话,用户手跑的那一次会退回 CLI 自己的 settings.json —— 压缩行为跟他在
- * ash 里看到的不是一回事,而这恰恰是他复制命令时最不会想到的差异。
+ * navi 里看到的不是一回事,而这恰恰是他复制命令时最不会想到的差异。
  *
- * 只出赋值、不出 `env -u`:ash 起子进程时会把没配的项从环境里删掉(见上面的
+ * 只出赋值、不出 `env -u`:navi 起子进程时会把没配的项从环境里删掉(见上面的
  * 补丁),但用户自己终端里 export 了什么是他自己的事,替他 unset 属于越界。
  */
 export function cliConfigOverrideEnvPrefix(
@@ -482,7 +482,7 @@ export interface ClaudeCompactionPreview {
 /**
  * 设置页 / 会话「压缩设置」预览的**唯一**入口:这组覆盖项在多少 token 压,以及判不出时为什么。
  *
- * 预览跟起跑不在同一个位置:它没有那次起跑的 cwd(项目层配置)、拿到的只是 ash 这台机器上用户级
+ * 预览跟起跑不在同一个位置:它没有那次起跑的 cwd(项目层配置)、拿到的只是 navi 这台机器上用户级
  * 的 claude 配置,还可能压根没读到。所以它只承诺**只靠覆盖项本身就定得下来**的触发点,其余一律
  * 判不出、说明原因 —— 不拿「读到了用户层」冒充「这次会继承它」,也不拿「没读到」冒充「没配」
  * (审查 rGyEqSY4VO6F F1)。起跑时的真值由 server cli-env.ts claudeLaunchCompact 按真实输入判:

@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { cleanupAfterRun, redactSecrets, spawnAgent } from "./spawn.js";
 import { findArchivedRollout, findRollout } from "./codex-rollout.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";

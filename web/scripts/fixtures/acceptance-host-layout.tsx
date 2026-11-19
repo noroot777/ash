@@ -1,6 +1,6 @@
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { AuthContext } from "../../src/auth/authContext.ts";
 import { AcceptanceControls } from "../../src/acceptance/AcceptanceControls.tsx";
 import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";

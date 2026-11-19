@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Group, Task, TaskListItem } from "@ash/shared";
-import { batchesOf, teamGroupsOf, waitingWorkers, workersOf } from "@ash/shared/team";
+import type { Group, Task, TaskListItem } from "@navi/shared";
+import { batchesOf, teamGroupsOf, waitingWorkers, workersOf } from "@navi/shared/team";
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { SideDrawer } from "../components/SideDrawer.tsx";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../components/LeftDrawer.tsx";

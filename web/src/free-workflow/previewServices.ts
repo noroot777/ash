@@ -1,4 +1,4 @@
-import type { PreviewServiceState } from "@ash/shared/preview";
+import type { PreviewServiceState } from "@navi/shared/preview";
 
 export const previewServiceStatus = {
   starting: "启动中", ready: "运行中", failed: "失败", stopped: "已停止",

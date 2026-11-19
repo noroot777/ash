@@ -29,17 +29,17 @@ const entry = (taskId, more = {}) => ({
   targetBranch: "main", sourceCommit: "1111111111111111", targetCommit: "2222222222222222", strategy: "merge",
   dependency: null, blocker: null, baseUpdatePending: false, fingerprint: `fp-${taskId}`, ...more,
 });
-const child = entry("child-task", { title: "子任务", targetTaskId: "single-task", targetBranch: "ash/single-task", stage: "awaiting_acceptance" });
+const child = entry("child-task", { title: "子任务", targetTaskId: "single-task", targetBranch: "navi/single-task", stage: "awaiting_acceptance" });
 const scm = (taskId) => ({
-  root: { path: `/repo/.worktrees/${taskId}`, branch: `ash/${taskId}`, source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
+  root: { path: `/repo/.worktrees/${taskId}`, branch: `navi/${taskId}`, source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
   acceptanceCommitBlock: null, acceptanceAutoCommit: { action: "skip", reason: "项目未开启验收前自动提交" },
-  status: { branch: { head: `ash/${taskId}`, detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
+  status: { branch: { head: `navi/${taskId}`, detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
     staged: [], unstaged: [], untracked: [], merge: [], operation: null, truncated: false },
   commits: [],
 });
 const pendingState = (kind) => ({
   taskId: "pending-task", kind, message: kind === "staged" ? "合并结果还暂存在 main 上" : "已提交", repoPath: "/repo",
-  targetBranch: "main", sourceBranch: "ash/pending-task", sourceBranchExists: true, commit: kind === "committed" ? "abcdef12" : null,
+  targetBranch: "main", sourceBranch: "navi/pending-task", sourceBranchExists: true, commit: kind === "committed" ? "abcdef12" : null,
   stagedFiles: kind === "staged" ? ["a.ts"] : [], dirtyFiles: [], canCommit: kind === "staged", canRemerge: false,
 });
 
@@ -89,14 +89,14 @@ function api(store) {
       if (what === "scm") return reply(scm(taskId));
       if (what === "sessions") return reply([]);
       if (what === "workspace") {
-        return store.failWorkspace ? fail() : reply({ path: store.released ? null : `/repo/.worktrees/${taskId}`, branch: `ash/${taskId}` });
+        return store.failWorkspace ? fail() : reply({ path: store.released ? null : `/repo/.worktrees/${taskId}`, branch: `navi/${taskId}` });
       }
       if (what === "pending-merge") return store.failPending ? fail() : reply({ state: pendingState(store.pending) });
       if (what === "commits") {
-        return store.failChanges ? fail() : reply({ branch: `ash/${taskId}`, commits: [{ sha: "1111111111111111", subject: "feat", at: "2026-11-02T01:20:00.000Z" }] });
+        return store.failChanges ? fail() : reply({ branch: `navi/${taskId}`, commits: [{ sha: "1111111111111111", subject: "feat", at: "2026-11-02T01:20:00.000Z" }] });
       }
       if (what === "diff") {
-        return store.failChanges ? fail() : reply({ available: true, sourceBranch: `ash/${taskId}`, targetBranch: store.target, mergeBase: "0123456789abcdef",
+        return store.failChanges ? fail() : reply({ available: true, sourceBranch: `navi/${taskId}`, targetBranch: store.target, mergeBase: "0123456789abcdef",
           diff: DIFF, files: [{ path: "a.ts", additions: 1, deletions: 1, origPath: null }], truncated: false, limitBytes: 1048576 });
       }
     }

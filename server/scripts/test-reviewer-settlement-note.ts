@@ -4,7 +4,7 @@
 // 断的（「第 4 轮审查没有给出结论 · 中断 · 模型上游连不上（503）」），结算这边又往审查者会话里落了一句
 // 「续聊回合异常结束(退出码 1),任务状态保持「已完成」不变」——讲的是任务状态，用的是执行者续聊的口吻，
 // 页面上跟着那句原因一起落进了执行者那一回合的尾注。这份回归盯：
-//   ① 续聊 / 旁路回合没办成、状态原样放回的那几支（异常退出、被停、ash 熔断），结算交出的说明带 `restored`；
+//   ① 续聊 / 旁路回合没办成、状态原样放回的那几支（异常退出、被停、Navi 熔断），结算交出的说明带 `restored`；
 //   ② 审查回合不落这几句，普通回合照落；
 //   ③ 正常收尾没有说明；不带 `restored` 的说明（真改了任务状态的那种，如改落检查点暂停）审查回合照落。
 // 跑：npm -w server run test:reviewer-settlement-note
@@ -37,7 +37,7 @@ try {
   assert.match(stopped.note ?? "", /^续聊回合被手动停止/);
   assert.equal(sessionSettlementNote("reviewer", stopped), null);
 
-  // ash 熔断（退出码是合成的，说明换成熔断那一句，同样只是交代状态没变）。
+  // Navi 熔断（退出码是合成的，说明换成熔断那一句，同样只是交代状态没变）。
   const tripped = await settleTaskStatus(await sideTurn(), 1, null, undefined, { kind: "tripped", detail: "上游一直不回话" });
   assert.equal(tripped.restored, true);
   assert.ok(tripped.note, "熔断那一支有说明");

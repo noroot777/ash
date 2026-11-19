@@ -10,7 +10,7 @@
 // 跟着当前项目换，所以「操作跑一半切到别的项目」也在这份 fixture 的覆盖范围里。
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectHealth, ProjectView } from "@ash/shared";
+import type { ProjectHealth, ProjectView } from "@navi/shared";
 import "../../src/styles/global.css";
 import { ProjectGitContext } from "../../src/workspace/ProjectGitContext.tsx";
 import { useProjectGitAnnouncer } from "../../src/workspace/useProjectGitAnnouncer.ts";
@@ -126,7 +126,7 @@ const projectOf = (id: string, name: string, branch: string): ProjectView => ({
 
 const PROJECTS = [projectOf("p1", "harness", "main"), projectOf("p2", "other", "release")];
 
-function Ash() {
+function Navi() {
   const [toast, setToast] = useState("");
   // 说了**几句**也要记账：同一句话说第二遍时，只看文本的断言会被上一次的残留骗过去。
   const [said, setSaid] = useState(0);
@@ -170,6 +170,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

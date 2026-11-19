@@ -4,10 +4,10 @@
 // 从 `codex-app-server.ts` 拆出来的理由同 `codex-app-server-state.ts` / `-adopt.ts`:那份文件
 // 顶到了单文件上限(根 CLAUDE.md 的 700 行)。这一块自成一块 —— 它不碰协议收发,只回答「调用方
 // 要交什么、我们按什么期限和什么措辞收口」。
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import type { ChildProcess } from "node:child_process";
-import type { TokenUsage } from "@ash/shared";
-import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
+import type { TokenUsage } from "@navi/shared";
+import type { CliCommand, CliGoal, CliSessionState } from "@navi/shared/cli-commands";
 import type { MarkdownImageAccounting } from "./markdown-image-stream.js";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { DetachedPaths } from "./detached.js";

@@ -1,11 +1,11 @@
-// 「AI 协助」：让一个真的 CLI 智能体去项目里判断该怎么起预览，**由 ash 自己真跑一遍**，
+// 「AI 协助」：让一个真的 CLI 智能体去项目里判断该怎么起预览，**由 navi 自己真跑一遍**，
 // 跑起来了才把脚本填回输入框。
 //
 // 这件事分工很明确，两边都不越界：
 //   · 智能体负责「判别」—— 它读得懂 README、认得出 monorepo 里哪个才是要看的那个前端、
 //     知道这个框架的端口要写成参数还是读环境变量。这些是静态检测（preview-command.ts）
 //     永远做不到的。
-//   · ash 负责「判定」—— 借一个真端口、在项目目录里把脚本真跑起来、探端口上有没有响应、
+//   · navi 负责「判定」—— 借一个真端口、在项目目录里把脚本真跑起来、探端口上有没有响应、
 //     然后杀干净（preview-trial.ts）。模型说「我验证过了」不作数：它可能在别的端口上验的、
 //     可能把 build 当成了 serve、也可能压根没跑。
 // 起不来就把失败原因和日志尾巴甩回给它再来一轮，最多 PREVIEW_ASSIST_MAX_ROUNDS 轮。
@@ -14,7 +14,7 @@
 // 一次几分钟的交互式动作，不是任务，落库只会多出一张要清理的表和一堆「上次那个还挂在那儿」
 // 的僵尸状态。代价是「重启把它打断了」这件事服务端自己说不出来，所以那句话由**点过按钮的
 // 那个浏览器**负责留下（web/src/settings/previewAssistMemory.ts：本地记着 jobId，轮询突然
-// 拿到 null 就摆出「已随 ash 重启中断」，刷新也还在）。
+// 拿到 null 就摆出「已随 navi 重启中断」，刷新也还在）。
 import {
   parseAssistScript,
   PREVIEW_ASSIST_MAX_ROUNDS,
@@ -22,9 +22,9 @@ import {
   PREVIEW_ASSIST_TRIAL_MS,
   type PreviewAssistAttempt,
   type PreviewAssistState,
-} from "@ash/shared/preview-assist";
-import type { PreviewMode } from "@ash/shared/preview";
-import type { AgentType } from "@ash/shared";
+} from "@navi/shared/preview-assist";
+import type { PreviewMode } from "@navi/shared/preview";
+import type { AgentType } from "@navi/shared";
 import { runEnvForOwner } from "./auth/run-env.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
@@ -120,7 +120,7 @@ async function loop(
       continue;
     }
     // 这一轮带着错误（超时被杀、CLI 挂了）但**说过话**的，还是要解析一遍：结论早就写完、
-    // 之后才出事的情况下，那条脚本照样作数（反正接下来 ash 自己会真跑一遍）。判据在解析器
+    // 之后才出事的情况下，那条脚本照样作数（反正接下来 navi 自己会真跑一遍）。判据在解析器
     // 那一侧：围栏开合不齐就是半截输出，一律不认（shared/src/preview-assist.ts）。
     const script = parseAssistScript(said.text);
     if (!script) {
@@ -166,7 +166,7 @@ function retryPrompt(last: PreviewAssistAttempt | null, round: number): string {
   if (!last) return "请按原格式给出启动脚本。";
   if (!last.script) {
     // 别逼它硬凑一条：这条岔路的常见成因是「它认为这个项目起不来」，而催出来的那条命令
-    // ash 照样会真跑一遍（白烧两分钟）再告诉用户同一件事。
+    // navi 照样会真跑一遍（白烧两分钟）再告诉用户同一件事。
     return `上一轮没收到可用的结论（${last.reason ?? "没给出脚本"}）。如果你确实找到了启动方式，请按格式给结论：一行「启动脚本：」，紧跟一个 \`\`\`sh 围栏块，块里只放脚本本身（不要粘终端回显）。如果你的判断是这个项目根本起不来，就把原因说清楚、不要写那一段 —— 我会把你的原话原样转给用户。`;
   }
   return assistRetryPrompt({

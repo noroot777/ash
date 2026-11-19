@@ -12,8 +12,8 @@
 // 轮号，对上那一场那一轮。同一场同一轮在会话里有几张卡（续过、中间隔着你的话），原因只给最后那张：
 // 服务端那一份说的是这一轮**最近那一回合**。那一句自己算一件事（topic=review），不跟别的提醒抢位置。
 // 同一个位置上原来那两种说法（新记录的旁注、老记录那句推断）随之不再单独说，记录里照旧都在。
-import type { FreeReviewRun } from "@ash/shared";
-import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
+import type { FreeReviewRun } from "@navi/shared";
+import type { ReviewNoVerdict } from "@navi/shared/timeline-notice";
 import { noVerdictCauseText, noVerdictSaidText } from "../free-workflow/freeReviewRounds.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import type { ConversationFeedRow, ConversationReviewLane } from "./conversationReviewLanes.ts";

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { TASK_STATUS_LABELS, type TaskListItem, type TaskReviewInfo, type TaskReviewRound } from "@ash/shared";
+import { TASK_STATUS_LABELS, type TaskListItem, type TaskReviewInfo, type TaskReviewRound } from "@navi/shared";
 import {
   ArrowSquareOut,
   CaretDown,

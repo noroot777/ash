@@ -16,7 +16,7 @@
 // 压缩过,这一次就不计;文件里有读不出来的行,这一回合都不计。宁缺不估。
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import type { OutputTiming } from "@ash/shared";
+import type { OutputTiming } from "@navi/shared";
 import { findRollout } from "./codex-rollout.js";
 
 /** 模型写出来的条目。 */
@@ -135,7 +135,7 @@ export async function readCodexTurnTiming(
     }
     return result?.timed;
   } catch (error) {
-    console.warn(`[ash] failed to read Codex request timing for thread ${threadId}:`, error);
+    console.warn(`[navi] failed to read Codex request timing for thread ${threadId}:`, error);
     return undefined;
   }
 }

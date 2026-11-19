@@ -1,11 +1,11 @@
 import { useId } from "react";
-import { previewCommandSamples, previewPortRef, previewPortRule, wrongPortDialectHint, type PreviewPortDialect } from "@ash/shared/preview";
+import { previewCommandSamples, previewPortRef, previewPortRule, wrongPortDialectHint, type PreviewPortDialect } from "@navi/shared/preview";
 
 /**
  * 自填启动命令旁边的端口引导。
  *
  * 这块存在的理由就是一句话：**`$PORT` 的说明在设置页里，而打开预览的人不会路过设置页。**
- * 以前这儿只有一行「端口使用 ash 提供的 PORT 环境变量」——那句话读起来像「ash 会替你处理」，
+ * 以前这儿只有一行「端口使用 navi 提供的 PORT 环境变量」——那句话读起来像「navi 会替你处理」，
  * 可它的真实意思是「你得把它写进命令」，两者差着一次撞车。
  *
  * 判据、示例、方言全部由 shared 的 preview.ts 给（设置页那边用同一份），这里只管怎么摆：

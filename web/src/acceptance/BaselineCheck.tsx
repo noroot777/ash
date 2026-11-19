@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { TaskListItem } from "@ash/shared";
-import type { AcceptGateState } from "@ash/shared/accept-gate";
+import type { TaskListItem } from "@navi/shared";
+import type { AcceptGateState } from "@navi/shared/accept-gate";
 import { api } from "../lib/api.ts";
 import { CheckAction, CheckRow, FileList } from "./CheckRow.tsx";
 

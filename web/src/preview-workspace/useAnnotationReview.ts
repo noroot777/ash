@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AnnotationBatchRecord } from "@ash/shared/page-annotation-batch";
-import type { AnnotationReviewStatus, AnnotationVerdict } from "@ash/shared/page-annotation-review";
+import type { AnnotationBatchRecord } from "@navi/shared/page-annotation-batch";
+import type { AnnotationReviewStatus, AnnotationVerdict } from "@navi/shared/page-annotation-review";
 import { createReviewStatusReader } from "./reviewStatusReader.ts";
 import { api } from "../lib/api.ts";
 import { json, request } from "../lib/apiClient.ts";

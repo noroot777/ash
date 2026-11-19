@@ -4,13 +4,13 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { desc, eq } from "drizzle-orm";
-import type { AgentEvent } from "@ash/shared";
-import { hasCliGoalHold, validateCliCommand, type CliSessionState } from "@ash/shared/cli-commands";
+import type { AgentEvent } from "@navi/shared";
+import { hasCliGoalHold, validateCliCommand, type CliSessionState } from "@navi/shared/cli-commands";
 
-const root = await realpath(await mkdtemp(join(tmpdir(), "ash-goal-live-")));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+const root = await realpath(await mkdtemp(join(tmpdir(), "navi-goal-live-")));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_ALLOW_REAL_AGENT = "1";
 const { CodexExecutor } = await import("../src/executors/codex.js");
 const home = join(root, "codex");
 const workspace = join(root, "workspace");
@@ -48,7 +48,7 @@ try {
   await mkdir(workspace);
   await writeFile(join(home, "config.toml"), `model = "gpt-5.4"\nmodel_reasoning_effort = "high"\nmodel_provider = "goal_fixture"\ncheck_for_update_on_startup = false\n[model_providers.goal_fixture]\nname = "Goal fixture"\nbase_url = "http://127.0.0.1:${address.port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects.${JSON.stringify(workspace)}]\ntrust_level = "trusted"\n`);
   const executor = new CodexExecutor({ reasoningEffort: "xhigh" });
-  const handle = executor.runSteerable({ cwd: workspace, prompt: "ash goal fixture; continue until the budget runs out", cliCommand: validateCliCommand("codex", "/goal 持续推进直到预算用完 --budget 150")!, cliState: { goal: { objective: "持续推进直到预算用完", status: "active", tokenBudget: 150 } }, env: { CODEX_HOME: home } });
+  const handle = executor.runSteerable({ cwd: workspace, prompt: "navi goal fixture; continue until the budget runs out", cliCommand: validateCliCommand("codex", "/goal 持续推进直到预算用完 --budget 150")!, cliState: { goal: { objective: "持续推进直到预算用完", status: "active", tokenBudget: 150 } }, env: { CODEX_HOME: home } });
   const events: AgentEvent[] = [];
   const deadline = setTimeout(() => handle.kill(), 30_000);
   try { for await (const event of handle.events) events.push(event); }
@@ -64,7 +64,7 @@ try {
   assert.ok(sessionId);
   const goalThreadId = sessionId;
   const nativeGoal = handle.goal?.();
-  const snapshot = { ...nativeGoal!, objective: "ash 保存的另一个目标", status: "paused" as const };
+  const snapshot = { ...nativeGoal!, objective: "navi 保存的另一个目标", status: "paused" as const };
   async function inspectGoal(text: string, cliState: CliSessionState) {
     const modelCalls = count;
     const inspected = executor.runSteerable({ cwd: workspace, sessionId: goalThreadId, prompt: text, cliCommand: validateCliCommand("codex", text)!, cliState, env: { CODEX_HOME: home } });
@@ -81,7 +81,7 @@ try {
   for (const text of ["/goal", "/goal pause"]) {
     const observed = await inspectGoal(text, { profileId: "snapshot-profile", ownerUserId: null, goal: snapshot, goalHold: true });
     assert.deepEqual(observed.goal, snapshot);
-    assert.match(observed.text, /ash 保存的另一个目标[\s\S]*原生会话里的目标与保存快照不一致/);
+    assert.match(observed.text, /navi 保存的另一个目标[\s\S]*原生会话里的目标与保存快照不一致/);
   }
   const noSnapshot = await inspectGoal("/goal pause", { profileId: "empty-scope", ownerUserId: null });
   assert.equal(noSnapshot.goal, null);
@@ -242,7 +242,7 @@ try {
   assert.equal(replacementGoal.tokenBudget, 250);
   assert.equal(replacementGoal.status, "budgetLimited");
   assert.ok(count > beforeFork);
-  console.log("real ash /fork clears branch goal without starting a model turn, reports a truthful reset guide, and accepts a new budgeted goal: passed");
+  console.log("real navi /fork clears branch goal without starting a model turn, reports a truthful reset guide, and accepts a new budgeted goal: passed");
   const originalSessionId = (await currentSession()).cliSessionId;
   assert.equal(await continueTask("live-task", "/new"), true);
   assert.ok(!(await currentSession()).cliSessionId);
@@ -283,9 +283,9 @@ try {
     assert.doesNotMatch(lastUserInput, /本回合只讨论计划/, reason);
     assert.equal((await restartTask()).status, "failed", `${reason}: an unconfirmed real CLI turn must not settle done`);
   }
-  console.log("real ash fresh run, resumable run and retry exit stored plan mode: passed");
+  console.log("real navi fresh run, resumable run and retry exit stored plan mode: passed");
   console.log("real CLI queue/group/wake resumptions exit stored plan mode and require completion: passed");
-  console.log("real ash continuation: plan scope, side-turn isolation, native multi-turn goal, durable budget pause and inspection: passed");
+  console.log("real navi continuation: plan scope, side-turn isolation, native multi-turn goal, durable budget pause and inspection: passed");
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   const { dbClient } = await import("../src/db/index.js");

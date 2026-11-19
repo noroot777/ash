@@ -1,7 +1,7 @@
 // 回合折叠的切点。
 //
 // 折叠把「过程」收起来、只留「结论」，切点是最后一次真正动手的地方。踩过的坑是拿
-// **最后一次工具事件**当切点：ash 的 complete_task 在正文写完之后才调，全库 22% 的回合
+// **最后一次工具事件**当切点：navi 的 complete_task 在正文写完之后才调，全库 22% 的回合
 // 切点是它 —— 于是整篇报告被折进过程，外面只剩收尾那一句。待办清单的 TaskUpdate
 // （载荷就是把某条划掉）是同一个毛病的另一副面孔。
 import assert from "node:assert/strict";
@@ -48,9 +48,9 @@ const labels = (segments) => segments.flatMap((item) => item.events).map((event)
 
 // 4. 服务名的四种写法都认（claude 的 mcp__x__y、codex 的 x/y，新旧两个服务名）。
 for (const label of [
-  "mcp__ash__complete_task",
+  "mcp__navi__complete_task",
   "mcp__harness__complete_task",
-  "ash/report_stage",
+  "navi/report_stage",
   "harness/report_stage",
 ]) {
   const { conclusion } = splitTurnSegments([
@@ -71,7 +71,7 @@ for (const label of [
   assert.equal(text(conclusion), "三处都改了。||全部完成。");
 }
 
-// 6. 同一个 ash MCP 里「拿它干活」的调用照旧算切点 —— 判据是有没有改变现场，
+// 6. 同一个 navi MCP 里「拿它干活」的调用照旧算切点 —— 判据是有没有改变现场，
 //    不是它属不属于本项目的 MCP。
 {
   const { process, conclusion } = splitTurnSegments([
@@ -160,7 +160,7 @@ for (const label of [
   const nameless = auxEvent({ kind: "tool" });
   assert.equal(nameless.label, "", "缺 name 的 tool 事件兜底成空串");
   assert.equal(auxEvent({ kind: "error" }).label, "", "没有 message 的 error 同理");
-  // 这一步会走到 isBookkeepingEvent → ashMcpTool(label)，label 是 undefined 就在这里炸。
+  // 这一步会走到 isBookkeepingEvent → naviMcpTool(label)，label 是 undefined 就在这里炸。
   const { process, conclusion } = splitTurnSegments([
     segment("a", { events: [nameless], markdown: "照样说完这句。" }),
   ]);

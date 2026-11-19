@@ -3,7 +3,7 @@
 //
 // 运行时函数住在这里而不是 index.ts:服务端直接跑 shared 的 .ts 源码,index 里
 // 转发运行时值会让进程起不来(见 index.ts 顶部注释),所以照 team / executors
-// 的办法开一个子路径导出 "@ash/shared/usage"。
+// 的办法开一个子路径导出 "@navi/shared/usage"。
 
 import { claudeCompactTrigger } from "./cli-overrides.ts";
 
@@ -149,7 +149,7 @@ export function hasUsage(u: TokenUsage | null | undefined): u is TokenUsage {
   return !!u && usageTotal(u) > 0;
 }
 
-// 复用同一个格式器：在 JavaScriptCore（mac 版 ash 的页面）上 `toLocaleString("en-US")` 每调一次
+// 复用同一个格式器：在 JavaScriptCore（mac 版 navi 的页面）上 `toLocaleString("en-US")` 每调一次
 // 都现建一个 ICU 格式器，内存落在 GC 看不见的地方，列表里成片调用会把页面撑大（见
 // web/src/lib/localeFormat.ts 顶部）。
 const THOUSANDS = new Intl.NumberFormat("en-US");
@@ -215,7 +215,7 @@ export interface ContextUsage {
   compactPercent?: number;
   compactMaxOutput?: number;
   /**
-   * ash 证明不了那个进程最终用的是哪份压缩配置:额外参数里自带的 `--settings` 整份顶掉了 ash
+   * navi 证明不了那个进程最终用的是哪份压缩配置:额外参数里自带的 `--settings` 整份顶掉了 navi
    * 注入的那份(claude 只认最后一个),或者老行没留下能证明这一点的起跑证据 —— 判不出窗口与
    * 触发点。为 true 时上面三项一定缺省。
    */
@@ -238,7 +238,7 @@ export interface ContextUsage {
  */
 export type CompactSnapshot = Pick<ContextUsage, "compactWindow" | "compactPercent" | "compactMaxOutput" | "compactUnknown">;
 
-/** 证明不了 CLI 最终用的是哪份压缩配置(另有 `--settings` 盖住 ash 那份,或老行缺起跑证据):如实标「不知道」。 */
+/** 证明不了 CLI 最终用的是哪份压缩配置(另有 `--settings` 盖住 navi 那份,或老行缺起跑证据):如实标「不知道」。 */
 export const UNKNOWN_COMPACT_SNAPSHOT: CompactSnapshot = Object.freeze({ compactUnknown: true });
 
 const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
@@ -270,7 +270,7 @@ export function compactSnapshotFromEnv(env: Readonly<Record<string, string | und
 // 那条写入路径会盖上它。没有标记的非空文本出自这一判定上线前的写入 —— 那时被额外参数盖掉的
 // 配置照样当事实写了进去(第 4 轮审查 F1),所以「列非空」不等于「可信」,只有标记说了算。
 // 标记带版本:判定口径每收紧一次就换一个,旧口径写下的一律当证明不了。
-//   launch-final       只记 ash 注入的那几项,留空的百分比从下层继承时漏记(审查 SaouXWB_jEuw F1)
+//   launch-final       只记 navi 注入的那几项,留空的百分比从下层继承时漏记(审查 SaouXWB_jEuw F1)
 //   launch-final/v2    各层配置按那次起跑自己的配置目录读,但没看额外参数里的 `--setting-sources`,
 //                      百分比也不是按 CLI 的 parseFloat 解的(审查 7pDLIAokZRHH F1)
 //   launch-final/v3    改变 CLI 读哪些配置的额外参数一律判不知道,继承值按 CLI 同一种解码
@@ -328,7 +328,7 @@ export function effectiveContextWindow(c: ContextUsage | null | undefined): numb
 
 /**
  * 这条会话实际会在多少 token 压缩:按启动快照里的百分比,套在 CLI 实际用的窗口上。
- * 没配压缩窗口(= 跟随 CLI 自己的判断)时不给数 —— 那一档的触发规则 ash 这边没有依据。
+ * 没配压缩窗口(= 跟随 CLI 自己的判断)时不给数 —— 那一档的触发规则 navi 这边没有依据。
  */
 export function contextCompactTrigger(c: ContextUsage | null | undefined): number | null {
   if (typeof c?.compactWindow !== "number" || !(c.compactWindow > 0)) return null;

@@ -40,6 +40,33 @@ enum LegacyIdentity {
 
   private static var isSuccessor: Bool { Bundle.main.bundleIdentifier == successor }
 
+  // MARK: 环境变量
+
+  /// 环境变量的旧前缀：改名前的启动配置（`ASH_URL`、`ASH_DATA_DIR` 这类，构建测试用的那几个口子也一样）照样认。
+  /// 口径同 scripts/env.mjs：新名优先，新名没设（或是空串）才退到旧名。
+  static let envPrefix = "ASH_"
+
+  /// 一个 `NAVI_` 开头的变量的值：新名优先，退到旧名；空串当没设。
+  static func environment(_ name: String, in env: [String: String]) -> String? {
+    envGenerations(name).lazy.compactMap { env[$0] }.first { !$0.isEmpty }
+  }
+
+  /// 指向数据的变量（连哪台、数据根）：两代都设了、值又不一样，就说不清该用哪一份 —— 返回冲突说明，调用方
+  /// 拒绝打开，不替用户挑（挑错了就是开着另一份数据、原来的任务「不见了」）。同 scripts/env.mjs 的 readStorageEnv。
+  static func environmentConflict(_ name: String, in env: [String: String]) -> String? {
+    let set = envGenerations(name).compactMap { key -> (String, String)? in
+      guard let value = env[key]?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+      return (key, value)
+    }
+    guard let first = set.first, let other = set.dropFirst().first(where: { $0.1 != first.1 }) else { return nil }
+    return "\(first.0)=\(first.1) 和 \(other.0)=\(other.1) 同时设了、指向不同的地方，不知道该用哪一个：擦掉其中一个再打开。"
+  }
+
+  private static func envGenerations(_ name: String) -> [String] {
+    precondition(name.hasPrefix("NAVI_"), "环境变量名必须以 NAVI_ 开头：\(name)")
+    return [name, envPrefix + name.dropFirst("NAVI_".count)]
+  }
+
   // MARK: 设置
 
   /// 旧域抄进新域：新域已有的不盖，改了名的键换成新名。返回抄过来的键（新名）。
@@ -424,7 +451,7 @@ enum LegacyIdentity {
     process.executableURL = URL(fileURLWithPath: "/bin/bash")
     process.arguments = [script.path, bundle.path]
     // 自己拿着代码锁的排他锁，lsof 会把自己也列出来：跟安装器一样告诉它这一个不算。
-    process.environment = ProcessInfo.processInfo.environment.merging(["ASH_LOCK_HOLDER": String(getpid())]) { $1 }
+    process.environment = ProcessInfo.processInfo.environment.merging(["NAVI_LOCK_HOLDER": String(getpid())]) { $1 }
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = FileHandle.nullDevice

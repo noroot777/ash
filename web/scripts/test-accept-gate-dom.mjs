@@ -19,7 +19,7 @@ import { fetchesSettled, waitUntil } from "./wait-until.mjs";
 // ③ 正在跑的时候不给改（没有齿轮）、只给「停止」，主按钮也锁着：这一次用的是开跑时那条命令原文。
 // ④ 红了之后不另摆「重跑 / 跳过」两颗键：它们都是确认层里「运行」那一勾（失败从不被沿用，
 //    所以默认勾着 = 重跑，取消 = 这次跳过，层里标出「上次未通过」）。日志默认展开。
-// ⑤ 「交给任务」这件事 ash 红了就**自动**做过一次，所以这一行先说清它做没做成：做成了
+// ⑤ 「交给任务」这件事 navi 红了就**自动**做过一次，所以这一行先说清它做没做成：做成了
 //    就不再摆这颗键，没做成就得直说「没叫醒任务」。
 // ⑥ 「上次那个绿灯还作不作数」有几种不作数（代码变了 / 命令换了 / 准备命令换了），出路一样但原因
 //    完全不同，说错一种用户会去查错的地方。
@@ -305,7 +305,7 @@ try {
     assert.match(await notice(page).innerText(), /重试取消/);
     assert.doesNotMatch(await notice(page).innerText(), /已经结束|已取消这一次/);
     await card.getByRole("button", { name: stop }).waitFor();
-    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/cancel-settlement-failed-${wait ? "wait" : "card"}.png`, fullPage: true });
+    if (process.env.NAVI_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.NAVI_TEST_ARTIFACTS}/cancel-settlement-failed-${wait ? "wait" : "card"}.png`, fullPage: true });
     await page.close();
   }
   // 本机能力不可用：红行、不转圈、不交给任务；出路是确认层里取消「运行」（这次跳过）。
@@ -322,7 +322,7 @@ try {
     await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
     await waitUntil(() => store.accepts.length === 1, "跳过那一按发出去");
     assert.deepEqual(store.accepts, [{ confirmUnverified: false, commit: true, gate: "skip" }]);
-    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/supervision-unavailable.png`, fullPage: true });
+    if (process.env.NAVI_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.NAVI_TEST_ARTIFACTS}/supervision-unavailable.png`, fullPage: true });
     await page.close();
   }
   {
@@ -343,7 +343,7 @@ try {
       }
       assert.equal(store.handoffs, 0);
       assert.equal(await page.getByText("本机能力不可用").count(), 0);
-      if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-compatible-${query === "?wait=1" ? "running" : query ? "receipt" : "ready"}.png`, fullPage: true });
+      if (process.env.NAVI_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.NAVI_TEST_ARTIFACTS}/macos-compatible-${query === "?wait=1" ? "running" : query ? "receipt" : "ready"}.png`, fullPage: true });
       await page.close();
     }
   }
@@ -366,7 +366,7 @@ try {
     assert.equal(store.released ?? 0, 0);
     await card.getByRole("button", { name: "停止证据丢失？确认风险并强制释放…" }).click();
     assert.match(await card.getByRole("alert").innerText(), /不等于停止或测试通过/);
-    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/force-release-confirm-${wait ? "wait" : "card"}.png`, fullPage: true });
+    if (process.env.NAVI_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.NAVI_TEST_ARTIFACTS}/force-release-confirm-${wait ? "wait" : "card"}.png`, fullPage: true });
     await card.getByRole("button", { name: "我确认风险，强制释放本次占用" }).click();
     await notice(page).filter({ hasText: "没有取得退出证据" }).waitFor();
     assert.equal(store.released, 1);
@@ -405,11 +405,11 @@ try {
       }
     };
     await assertDots("attention");
-    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/dots-paused.png` });
+    if (process.env.NAVI_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.NAVI_BROWSER_EVIDENCE_DIR}/dots-paused.png` });
     store.tasks = rows.map(row => ({ ...row, monitorRunning: row.id !== "lead" }));
     await page.evaluate(() => window.emitGateEvent({ type: "task.monitors", taskId: "worker" }));
     await assertDots("working");
-    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/dots-monitor-running.png` });
+    if (process.env.NAVI_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.NAVI_BROWSER_EVIDENCE_DIR}/dots-monitor-running.png` });
     store.tasks = rows;
     await page.evaluate(() => window.emitGateEvent({ type: "task.monitors", taskId: "worker" }));
     await assertDots("attention");
@@ -427,7 +427,7 @@ try {
     await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
     await gateRow(page).filter({ hasText: "npm run replacement" }).waitFor();
     assert.equal(await stateOf(gateRow(page)), "通过，但命令变了");
-    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/command-invalidated.png` });
+    if (process.env.NAVI_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.NAVI_BROWSER_EVIDENCE_DIR}/command-invalidated.png` });
     store.gate = { command: null, running: null, latest: previous };
     await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
     await gateRow(page).waitFor({ state: "detached" });

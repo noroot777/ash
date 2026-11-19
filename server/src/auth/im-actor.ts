@@ -1,4 +1,4 @@
-// IM 通道（飞书）在进程内「以绑定的那个人的身份」调用 ash 自己的 HTTP 路由。
+// IM 通道（飞书）在进程内「以绑定的那个人的身份」调用 navi 自己的 HTTP 路由。
 //
 // 为什么走完整的路由栈而不是直接调 service 函数：鉴权、可见性、个人面这几道闸都挂在
 // `/api/*` 的中间件上（index.ts），而 `actorOf()` 取不到身份时兜底成**管理员**
@@ -23,8 +23,8 @@ import { imBindings } from "../db/schema-im.js";
 import { setActor, SINGLE_USER_ID, type Actor } from "./context.js";
 import { isMultiUser } from "./mode.js";
 import { getUser } from "./store.js";
-import { headerNameGenerations, NAVI_HEADERS } from "@ash/shared/http-headers";
-import { HUMAN_ACTION_TOKEN_HEADER } from "@ash/shared/human-action";
+import { headerNameGenerations, NAVI_HEADERS } from "@navi/shared/http-headers";
+import { HUMAN_ACTION_TOKEN_HEADER } from "@navi/shared/human-action";
 
 export interface ImPrincipal {
   channel: "feishu";
@@ -44,7 +44,7 @@ const principals = new WeakMap<Request, ImPrincipal>();
 
 /** 唯一入口：造请求、登记身份、派发，一步做完。 */
 export async function dispatchAsIm(fetch: AppFetch, principal: ImPrincipal, call: ImCall): Promise<Response> {
-  const req = new Request(`http://ash.internal${call.path}`, {
+  const req = new Request(`http://navi.internal${call.path}`, {
     method: call.method,
     headers: call.body === undefined ? {} : { "content-type": "application/json" },
     body: call.body === undefined ? undefined : JSON.stringify(call.body),

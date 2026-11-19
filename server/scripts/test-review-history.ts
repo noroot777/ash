@@ -21,7 +21,7 @@ const source = (review: { mode: ReviewMode; runId: string; round: number }) =>
     ? { role: "reviewer" as const, review: { run: review.runId, round: review.round } }
     : { role: "single" as const };
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 const api = new Hono();
 api.post("/tasks/:id/answer", (context) => answerTask(context, context.req.param("id")));
 try {

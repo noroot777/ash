@@ -45,10 +45,10 @@ try {
     if (path === "/projects") return json([{ id: "p1", name: "p1", useWorktreeDefault: true }, { id: "p2", name: "p2", useWorktreeDefault: true }]);
     if (path === "/projects/p2/health") return json({ isRepo: true });
     if (path === "/projects/p2/branches") {
-      return branchesFail ? json({ error: "分支读取失败（夹具）" }, 503) : json({ branches: ["main", "ash/t-flaky"], current: "main" });
+      return branchesFail ? json({ error: "分支读取失败（夹具）" }, 503) : json({ branches: ["main", "navi/t-flaky"], current: "main" });
     }
     if (path === "/projects/p1/health") return json({ isRepo: true });
-    if (path === "/projects/p1/branches") return json({ branches: ["main", "ash/t-send", "ash/t-runnin", "ash/t-fail"], current: "main" });
+    if (path === "/projects/p1/branches") return json({ branches: ["main", "navi/t-send", "navi/t-runnin", "navi/t-fail"], current: "main" });
     let match = /^\/tasks\/([^/]+)\/sessions$/.exec(path);
     if (match) return json([{ id: "s1", taskId: match[1], startedAt: "2026-11-15T01:00:00.000Z", transcriptPath: `/runs/${match[1]}/s1.md` }]);
     if (path === "/tasks" && request.method() === "POST") {
@@ -169,7 +169,7 @@ try {
   assert.equal(body.mode, "single");
   assert.equal(body.agentType, "codex");
   assert.equal(body.model, "gpt-5.6-sol", "交给他时用的是胶囊上那一套");
-  assert.equal(body.worktreeBase, "ash/t-send", "接着这里的代码 = 从这条任务的分支开工");
+  assert.equal(body.worktreeBase, "navi/t-send", "接着这里的代码 = 从这条任务的分支开工");
   assert.equal(body.title, "补一组登录页的单测");
   assert.equal(body.autoTitle, true);
   assert.ok(body.body.startsWith("补一组登录页的单测"), "写的那句话是新任务要做的事");
@@ -265,7 +265,7 @@ try {
   assert.equal(await baseError.count(), 0);
   await flakySend.click();
   await waitUntil(async () => (await logged("__created_flaky")).length === 1, "读到之后派出去");
-  assert.equal(requests.find((item) => item.kind === "create" && item.body.dispatchedBy === "t-flaky").body.worktreeBase, "ash/t-flaky");
+  assert.equal(requests.find((item) => item.kind === "create" && item.body.dispatchedBy === "t-flaky").body.worktreeBase, "navi/t-flaky");
 
   // ⑪ 派出去还没回来：换回问一句、写下一句；回来后下一句的人和做法都还在。
   await call("slow", "", "codex");

@@ -1,12 +1,12 @@
 // 派活单的三个端点（逻辑在 dispatch-plan.ts / dispatch-plan-launch.ts）：
 //   POST /tasks/:id/dispatch-plan          智能体摆单（MCP propose_dispatch），跟提问同一套回合与方向身份核对
-//   POST /tasks/:id/dispatch-plan/launch   用户按「派出去」：ash 照卡上此刻的样子建任务并续上会话
+//   POST /tasks/:id/dispatch-plan/launch   用户按「派出去」：navi 照卡上此刻的样子建任务并续上会话
 //   PUT  /tasks/:id/dispatch-target        「派出去的活交给谁」（回复框胶囊点开那一层里的一行）
 // 「发回去改」不在这里：它就是对那一问的普通答复（POST /tasks/:id/answer），一条任务都不建。
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { AGENT_TYPES, type AgentType } from "@ash/shared";
-import { activeDispatchPlan, parseDispatchPlan } from "@ash/shared/dispatch-plan";
+import { AGENT_TYPES, type AgentType } from "@navi/shared";
+import { activeDispatchPlan, parseDispatchPlan } from "@navi/shared/dispatch-plan";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";

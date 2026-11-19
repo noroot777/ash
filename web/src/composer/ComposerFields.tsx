@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { AgentExecutorProfile, AgentType, Group } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, Group } from "@navi/shared";
 import { DotsThree, FolderSimple, GitBranch, Tag } from "@phosphor-icons/react";
 import { ComposerStarters } from "./ComposerStudio.tsx";
 import { ComposerPopover } from "./ComposerPopover.tsx";

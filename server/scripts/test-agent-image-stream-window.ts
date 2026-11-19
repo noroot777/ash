@@ -7,14 +7,14 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-const root = mkdtempSync(join(tmpdir(), "ash-image-stream-window-"));
+const root = mkdtempSync(join(tmpdir(), "navi-image-stream-window-"));
 const uploads = join(root, "data", "uploads");
 // uploads 目录在 paths.ts 里是模块级常量,所以必须在**导入它之前**改环境变量 —— 静态
 // import 会被提到所有语句之前,这里只能动态导。
-process.env.ASH_UPLOADS_DIR = uploads;
+process.env.NAVI_UPLOADS_DIR = uploads;
 const { withMarkdownImages } = await import("../src/executors/markdown-image-stream.js");
 
 async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {

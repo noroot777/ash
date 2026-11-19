@@ -8,7 +8,7 @@ import {
   type AgentExecutorProfile,
   type AgentType,
   type LlmProvider,
-} from "@ash/shared";
+} from "@navi/shared";
 import { useStore } from "@/lib/store";
 import { api, type DetectedAgent } from "@/lib/api";
 import { LAUNCH_MODES, type LaunchMode } from "@/lib/constants";
@@ -460,7 +460,7 @@ export default function NewTask() {
                   ))}
                 </View>
                 <Text style={{ color: theme.faint, fontSize: 11 }}>
-                  将拉一个新分支 ash/&lt;id8&gt;，跑在 .worktrees/&lt;id&gt;/
+                  将拉一个新分支 navi/&lt;id8&gt;，跑在 .worktrees/&lt;id&gt;/
                 </Text>
               </View>
             ) : null}

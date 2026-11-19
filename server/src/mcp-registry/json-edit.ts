@@ -1,12 +1,12 @@
 // JSON / JSONC 的**最小无损编辑**:只插入我们那一条,别的字节一个不动。
 //
 // 为什么不能 `JSON.parse` → 改 → `JSON.stringify`(本轮审查 R4):那条往返**不是无损的**,
-// 而这个任务的硬约束恰恰是「只在缺 ash 条目时追加,绝不动其它条目」。往返会悄悄改掉用户保存
+// 而这个任务的硬约束恰恰是「只在缺 navi 条目时追加,绝不动其它条目」。往返会悄悄改掉用户保存
 // 的值:
 //  · `9007199254740993` 超出 JS 安全整数 ⇒ 写回去变成 `…992`(第三方工具拿到的是另一个编号);
 //  · `1e999` ⇒ `Infinity` ⇒ `JSON.stringify` 写成 `null`;`-0` ⇒ `0`;重复键只剩最后一个;
 //  · 注释、缩进、键序全没了(上一版因此干脆**拒绝**改写带注释的配置,用户只能手工接)。
-//  回读那一步也兜不住:它只看 ash 在不在,而损失已经发生在候选正文里了。
+//  回读那一步也兜不住:它只看 navi 在不在,而损失已经发生在候选正文里了。
 //
 // 所以这里走**文本插入**:把容器对象的 `{` 找出来,在它后面插一行我们的登记,其余原文按字节
 // 保留。代价是要自己认一遍 JSON 文本(下面那个小解析器带位置),收益是「只改我们那一条」从
@@ -16,7 +16,7 @@
 // 读,写回去时不碰它们)。
 //
 // 裸 Node 那一侧有一份同构实现(`scripts/json-edit.mjs`) —— setup 在 build 之前跑、导不进 TS。
-// 两边的行为由 `server/scripts/test-ash-mcp-installer.ts` 的对齐组钉着。
+// 两边的行为由 `server/scripts/test-navi-mcp-installer.ts` 的对齐组钉着。
 
 /** 一个成员:键名,以及键和值在原文里的位置(`valueEnd` 是**之后**一位)。 */
 export interface JsonMember {
@@ -119,9 +119,9 @@ export function parseJsonDoc(text: string): JsonNode | null {
  * 同名键取**最后一条** —— `JSON.parse` 就是这么取的(后来的覆盖先前的)。
  *
  * 这不是风格选择:取第一条会让读和写指向不同的容器(本轮审查 F5)。
- * `{"mcpServers":{},"mcpServers":{"other":…}}` 这种配置上,上一版把 ash 插进**第一个**
+ * `{"mcpServers":{},"mcpServers":{"other":…}}` 这种配置上,上一版把 navi 插进**第一个**
  * 空容器,而 CLI(以及我们自己的回读)用的是**最后一个** —— 文件写出去了、语法也对,
- * 生效的那个容器里却没有 ash:界面报「已接好」,启动后一个 ash 工具都看不到。
+ * 生效的那个容器里却没有 navi:界面报「已接好」,启动后一个 navi 工具都看不到。
  */
 const member = (node: JsonNode, key: string): JsonMember | undefined =>
   node.members?.filter((m) => m.key === key).at(-1);

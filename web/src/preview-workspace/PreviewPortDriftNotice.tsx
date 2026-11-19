@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Warning, Copy, Check } from "@phosphor-icons/react";
-import type { PreviewServiceState } from "@ash/shared/preview";
-import { previewPortDrift, previewPortRef, type PreviewPortDialect, type PreviewPortDrift } from "@ash/shared/preview";
+import type { PreviewServiceState } from "@navi/shared/preview";
+import { previewPortDrift, previewPortRef, type PreviewPortDialect, type PreviewPortDrift } from "@navi/shared/preview";
 
 /**
- * 「这次预览起在 5173，不是 ash 借的 45843。」
+ * 「这次预览起在 5173，不是 navi 借的 45843。」
  *
  * 这条跟填字时那些提示**不是一类东西**：那些是说明（用户可以不读，而且多半不读），这条是
  * 已经发生的事实。它零误报、不挑语言，而且**命令写对时根本不出现**——所以它敢占版面，也
@@ -13,7 +13,7 @@ import { previewPortDrift, previewPortRef, type PreviewPortDialect, type Preview
  * 动作分两档，由 `fixed` 是不是 null 决定，这一刀很要紧：
  *   · 端口写在命令里 → 把那个数字换成 $PORT 是一次**确定的改写**（那个数字就是它实际绑上
  *     的端口，不是猜的），所以敢给整行命令让他复制走。
- *   · 端口写在配置文件里（vite.config.ts / application.yml…）→ ash 编不出改法，就老实说
+ *   · 端口写在配置文件里（vite.config.ts / application.yml…）→ navi 编不出改法，就老实说
  *     「它不在这条命令里」。编一条看着像对的命令比不给更坏。
  *
  * 可以关掉：预览照常能用，用户有权让服务听一个固定端口。**但一次关闭只活到它关掉的那条

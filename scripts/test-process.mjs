@@ -52,7 +52,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
   let stdoutPath;
   let stderrPath;
   try {
-    temporary = mkdtempSync(join(tmpdir(), "ash-test-process-"));
+    temporary = mkdtempSync(join(tmpdir(), "navi-test-process-"));
     stdoutPath = join(temporary, "stdout.log");
     stderrPath = join(temporary, "stderr.log");
     scope = new TestProcessScope();

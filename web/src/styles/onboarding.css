@@ -37,7 +37,7 @@
   box-shadow: var(--shadow);
 }
 
-/* 深色下比 --chrome 再压一档,不至于和右边连成一片(同原生 AshPalette.brand)。 */
+/* 深色下比 --chrome 再压一档,不至于和右边连成一片(同原生 NaviPalette.brand)。 */
 :root[data-theme="dark"] .onboarding-card {
   --onboarding-brand: #0c0c0e;
 }
@@ -235,7 +235,7 @@ button.onboarding-rail-step:hover:not(.is-on),
   font-size: var(--t-xs);
   line-height: 1.5;
   color: var(--amber);
-  /* 补不上 ash MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
+  /* 补不上 navi MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
   white-space: pre-wrap;
 }
 

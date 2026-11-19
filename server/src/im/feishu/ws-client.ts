@@ -143,7 +143,7 @@ export class FeishuWsClient {
     try {
       this.options.onStatus?.(this.getStatus());
     } catch (error) {
-      console.error("[ash] 飞书连接状态回调抛错:", error);
+      console.error("[navi] 飞书连接状态回调抛错:", error);
     }
   }
 
@@ -277,7 +277,7 @@ export class FeishuWsClient {
       via.send(encodeFrame(frame));
       return true;
     } catch (error) {
-      console.error("[ash] 飞书长连接发帧失败:", (error as Error).message);
+      console.error("[navi] 飞书长连接发帧失败:", (error as Error).message);
       return false;
     }
   }
@@ -292,7 +292,7 @@ export class FeishuWsClient {
     this.livenessTimer = this.deps.setTimeout(() => {
       this.livenessTimer = null;
       if (generation !== this.generation) return;
-      console.warn("[ash] 飞书长连接 ping 后无应答，主动重连");
+      console.warn("[navi] 飞书长连接 ping 后无应答，主动重连");
       this.generation++;
       this.clearTimers();
       this.dropSocket();
@@ -314,7 +314,7 @@ export class FeishuWsClient {
       if (!bytes) return;
       frame = decodeFrame(bytes);
     } catch (error) {
-      console.error("[ash] 飞书长连接收到无法解码的帧:", (error as Error).message);
+      console.error("[navi] 飞书长连接收到无法解码的帧:", (error as Error).message);
       return;
     }
     if (frame.method === FRAME_CONTROL) {
@@ -348,7 +348,7 @@ export class FeishuWsClient {
       }
     } catch (error) {
       resp.code = 500;
-      console.error("[ash] 飞书事件处理抛错:", error);
+      console.error("[navi] 飞书事件处理抛错:", error);
     }
     // 回执只回给收到这一帧的那条连接：处理期间重连了，旧帧的头发到新连接上对不上任何请求。
     const acked = this.send({
@@ -368,7 +368,7 @@ export class FeishuWsClient {
     const seq = Number(headerOf(frame, "seq") ?? 0);
     const payload = frame.payload ?? new Uint8Array();
     if (!Number.isInteger(sum) || sum <= 0 || !Number.isInteger(seq) || seq < 0 || seq >= sum) {
-      console.error(`[ash] 飞书事件分片元数据非法 message_id=${messageId} sum=${sum} seq=${seq}`);
+      console.error(`[navi] 飞书事件分片元数据非法 message_id=${messageId} sum=${sum} seq=${seq}`);
       return null;
     }
     const now = this.deps.now();
@@ -396,7 +396,7 @@ export class FeishuWsClient {
     try {
       return JSON.parse(new TextDecoder().decode(bytes));
     } catch (error) {
-      console.error(`[ash] 飞书事件不是合法 JSON message_id=${messageId}:`, (error as Error).message);
+      console.error(`[navi] 飞书事件不是合法 JSON message_id=${messageId}:`, (error as Error).message);
       return null;
     }
   }
@@ -405,7 +405,7 @@ export class FeishuWsClient {
 /** 2.0 事件：`{schema, header:{event_id, event_type, ...}, event:{...}}`。加密事件（配了 Encrypt Key）不支持。 */
 export function parseEnvelope(raw: Record<string, unknown>): FeishuEnvelope | null {
   if ("encrypt" in raw) {
-    console.warn("[ash] 收到加密的飞书事件：请在开发者后台清空 Encrypt Key，长连接不需要它");
+    console.warn("[navi] 收到加密的飞书事件：请在开发者后台清空 Encrypt Key，长连接不需要它");
     return null;
   }
   const header = (raw.header ?? {}) as Record<string, unknown>;

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { CaretDown, Check, FolderPlus, GearSix, ListChecks, MagnifyingGlass } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { shortenHomePath, useHostInfo } from "../lib/useHostInfo.ts";

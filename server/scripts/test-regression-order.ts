@@ -11,18 +11,18 @@ const { createClient } = await import("../src/db/node-sqlite-client.js");
 
 try {
   const { task, repo, evidenceDir, manifest, start, wait } = await setupRegression();
-  const command = "node -e \"process.exit(Number(process.env.ASH_TEST_ORDER_FAIL||0))\"";
+  const command = "node -e \"process.exit(Number(process.env.NAVI_TEST_ORDER_FAIL||0))\"";
   const at = async (time: string, fail: boolean) => {
     const originalDate = globalThis.Date;
     globalThis.Date = class extends originalDate {
       constructor(value?: string | number) { super(value ?? time); }
     } as DateConstructor;
-    process.env.ASH_TEST_ORDER_FAIL = fail ? "1" : "0";
+    process.env.NAVI_TEST_ORDER_FAIL = fail ? "1" : "0";
     try {
       return await start(command);
     } finally {
       globalThis.Date = originalDate;
-      delete process.env.ASH_TEST_ORDER_FAIL;
+      delete process.env.NAVI_TEST_ORDER_FAIL;
     }
   };
   const collisionTime = new Date().toISOString();
@@ -50,7 +50,7 @@ try {
   const release = join(root, "release");
   writeFileSync(join(repo, "concurrent.cjs"), `
     const fs = require('node:fs');
-    if (process.env.ASH_TEST_ORDER_FAIL === '1') process.exit(1);
+    if (process.env.NAVI_TEST_ORDER_FAIL === '1') process.exit(1);
     fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
     const timer = setInterval(() => {
       if (!fs.existsSync(${JSON.stringify(release)})) return;
@@ -63,9 +63,9 @@ try {
   await until("较早的执行已阻塞", async () => existsSync(ready));
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records.find((entry) => entry.monitorId === older)?.passed, null);
-  process.env.ASH_TEST_ORDER_FAIL = "1";
+  process.env.NAVI_TEST_ORDER_FAIL = "1";
   let newer: string;
-  try { newer = await start(concurrentCommand); } finally { delete process.env.ASH_TEST_ORDER_FAIL; }
+  try { newer = await start(concurrentCommand); } finally { delete process.env.NAVI_TEST_ORDER_FAIL; }
   await wait(newer);
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records.find((entry) => entry.monitorId === newer)?.latest, true);
@@ -122,6 +122,6 @@ try {
   }
   console.log("✓ regression generations: same millisecond, clock rollback, overlapping workers, complete failure history and durable migration");
 } finally {
-  delete process.env.ASH_TEST_ORDER_FAIL;
+  delete process.env.NAVI_TEST_ORDER_FAIL;
   await teardown();
 }

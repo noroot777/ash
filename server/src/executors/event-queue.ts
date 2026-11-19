@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { MarkdownImageSink } from "./markdown-image-stream.js";
 import type { NativeActivityBuffer } from "./native-activity-buffer.js";
 

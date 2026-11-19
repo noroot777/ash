@@ -10,14 +10,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { AgentExecutor, RunHandle } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-recurrence-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-delete process.env.ASH_LAX_DONE;
+const root = mkdtempSync(join(tmpdir(), "navi-recurrence-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+delete process.env.NAVI_LAX_DONE;
 
 try {
   const { parseCarries, lineageLengths, recurrenceLabel, recurrenceListMarkdown, recurrenceRepairNote,
@@ -119,7 +119,7 @@ try {
       ["文件名", { question: "要改 review-history.ts 的判断。" }, /文件路径/],
       ["驼峰标识符", { options: ["改 parseCarries：你会少一轮", good.options[1]!] }, /代码标识符「parseCarries」/],
       ["蛇形标识符", { options: ["加一列 history_refs：会多一次迁移", good.options[1]!] }, /代码标识符「history_refs」/],
-      ["分支名", { options: ["合进 ash/FVo81m14：会快一点", good.options[1]!] }, /分支名/],
+      ["分支名", { options: ["合进 navi/FVo81m14：会快一点", good.options[1]!] }, /分支名/],
       ["commit", { question: "回到 773f06a2 那一版。" }, /commit「773f06a2」/],
       ["轮次", { question: "第 3 轮审查又报了这条。" }, /第 N 轮/],
       ["背景超过两句", { question: "第一句。第二句。第三句。" }, /3 句/],
@@ -316,8 +316,8 @@ try {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          ...(activeTurnToken ? { "x-ash-turn-token": activeTurnToken } : {}),
-          ...(activeDirectionToken ? { "x-ash-direction-token": activeDirectionToken } : {}),
+          ...(activeTurnToken ? { "x-navi-turn-token": activeTurnToken } : {}),
+          ...(activeDirectionToken ? { "x-navi-direction-token": activeDirectionToken } : {}),
         },
         body: JSON.stringify(body),
       });
@@ -403,7 +403,7 @@ try {
 
     // 第 2 轮审查 F1：清单那个位置已经被换成指向证据根外的符号链接 / 硬链接 —— 重新生成替换的是
     // 目录项本身，根外那份一个字节不动。
-    const outside = mkdtempSync(join(tmpdir(), "ash-recurrence-outside-"));
+    const outside = mkdtempSync(join(tmpdir(), "navi-recurrence-outside-"));
     try {
       for (const link of ["symlink", "hardlink"] as const) {
         const victim = join(outside, `${link}.txt`);

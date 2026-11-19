@@ -1,9 +1,9 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { codexNativeWork } from "./native-work.js";
-import type { AgentEvent, TokenUsage } from "@ash/shared";
-import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
-import { ASH_TURN_IDENTITY_ENV } from "@ash/shared/mcp";
+import type { AgentEvent, TokenUsage } from "@navi/shared";
+import { cliConfigOverrideEnvPatch } from "@navi/shared/cli-overrides";
+import { NAVI_TURN_IDENTITY_ENV } from "@navi/shared/mcp";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
@@ -22,8 +22,8 @@ import {
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
-import { codexAshMcpArgs } from "./ash-mcp-inject.js";
-import { CodexExecAshMcp } from "./ash-mcp-confirm.js";
+import { codexNaviMcpArgs } from "./navi-mcp-inject.js";
+import { CodexExecNaviMcp } from "./navi-mcp-confirm.js";
 import { openCodexAppServer } from "./codex-app-server.js";
 import { readCodexAppServerState } from "./codex-app-server-state.js";
 import { codexTurnError } from "./model-failure.js";
@@ -63,7 +63,7 @@ export class CodexExecutor implements AgentExecutor {
 
   resumeCommand(cwd: string, sessionId: string): string {
     // Human-friendly copy command: interactive resume (shows the session + lets
-    // you continue). The ash's own headless resume uses `exec resume` in run().
+    // you continue). The navi's own headless resume uses `exec resume` in run().
     return resumeFor(cwd, resumeInner.codex(sessionId), this.resumeEnvHint ?? "");
   }
 
@@ -107,9 +107,9 @@ export class CodexExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
-    // ash 自己的 MCP 起跑时注入(ash-mcp-inject.ts),连同按**变量名**透传的回合身份(codex 默认
+    // navi 自己的 MCP 起跑时注入(navi-mcp-inject.ts),连同按**变量名**透传的回合身份(codex 默认
     // 过滤 MCP 子进程环境;argv 里没有 token 值)。放在用户 extraArgs 之后,同 key 时以注入为准。
-    common.push(...codexAshMcpArgs(opts.env));
+    common.push(...codexNaviMcpArgs(opts.env));
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }
 
@@ -139,8 +139,8 @@ export class CodexExecutor implements AgentExecutor {
         // 这一轮真正生效的 CODEX_HOME(多用户模式由 auth/run-env.ts 注入),rollout 就写在
         // 它下面 —— 水位必须去同一个目录读。
         configDir: opts.env?.CODEX_HOME,
-        // 任务回合才要 ash 的工具交卷;exec 这条路 codex 不报 MCP 启动状态,按本回合记录判(ash-mcp-inject.ts)。
-        ashMcp: opts.env?.[ASH_TURN_IDENTITY_ENV.taskId] ? new CodexExecAshMcp() : undefined,
+        // 任务回合才要 navi 的工具交卷;exec 这条路 codex 不报 MCP 启动状态,按本回合记录判(navi-mcp-inject.ts)。
+        naviMcp: opts.env?.[NAVI_TURN_IDENTITY_ENV.taskId] ? new CodexExecNaviMcp() : undefined,
       }), { bin: this.bin, args: this.appServerArgs(opts).args, cwd: opts.cwd,
         env: { ...this.env(), ...opts.env } }, opts.sessionId, () => cleanupAfterRun(child)),
       kill: () => {
@@ -184,14 +184,14 @@ export class CodexExecutor implements AgentExecutor {
     const turn = appServerCompatibleArgs(opts.extraArgs ?? []);
     args.push(...profile.args, ...turn.args);
     // App Server 同样由它自己拉起 MCP 子进程:注入与身份透传同 exec(见 execArgs)。
-    args.push(...codexAshMcpArgs(opts.env));
+    args.push(...codexNaviMcpArgs(opts.env));
     return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting }): RunHandle {
     const detached = child as Partial<DetachedChild>;
-    if (child.stdin && opts.commandLine.includes("app-server") && detached.ashPaths) {
-      const recovered = readCodexAppServerState(detached.ashPaths.out, opts.sessionId);
+    if (child.stdin && opts.commandLine.includes("app-server") && detached.naviPaths) {
+      const recovered = readCodexAppServerState(detached.naviPaths.out, opts.sessionId);
       const env = { ...this.env(), ...(opts.configDir ? { CODEX_HOME: opts.configDir } : {}) };
       return openCodexAppServer({
         bin: this.bin,
@@ -214,7 +214,7 @@ export class CodexExecutor implements AgentExecutor {
           // 「读不出来」那一档的身份有界恢复:同一份日志过几秒再读一次
           // (见 codex-app-server-adopt.ts 的 recoverAdoptedIdentity)。
           reread: () => {
-            const again = readCodexAppServerState(detached.ashPaths!.out, opts.sessionId);
+            const again = readCodexAppServerState(detached.naviPaths!.out, opts.sessionId);
             // **evidence 原样带回去**:重读读出 `never-started` 时接管方要据此按失败收口
             // (第 3 轮自由审查 F3 —— 上一版在这儿丢掉它,于是否证永远走不到拒收那条路)。
             return {
@@ -317,7 +317,7 @@ export function parseCodexStream(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting; ashMcp?: CodexExecAshMcp },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting; naviMcp?: CodexExecNaviMcp },
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:一条 agent_message 只是一片碎片,上一条消息给定义、
   // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。统一由那一层按「一份文档」
@@ -337,7 +337,7 @@ async function* codexStreamEvents(
   // 目录)。不传就是宿主机默认那份 —— 读不到 rollout 时水位静默为空。
   // cwd = 这一轮干活的目录。正文里 `![](output/x.png)` 这种相对路径要靠它解成真文件
   // 才复制得进 uploads（见 ../agent-attachments.ts）。
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; ashMcp?: CodexExecAshMcp },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; naviMcp?: CodexExecNaviMcp },
   images: MarkdownImageSink,
 ): AsyncIterable<AgentEvent> {
   let turnCompleted = false;
@@ -386,7 +386,7 @@ async function* codexStreamEvents(
       push(codexTurnError(turnFailedMessage));
     } else if (ev.type === "item.completed" && ev.item) {
       const it = ev.item;
-      contextOptions.ashMcp?.item(it);
+      contextOptions.naviMcp?.item(it);
       // codex emits one complete agent_message / reasoning per turn (not token
       // deltas). The orchestrator no longer appends newlines — text pieces are
       // concatenated verbatim downstream — so carry the paragraph break here.
@@ -419,7 +419,7 @@ async function* codexStreamEvents(
 
   child.stderr?.on("data", (d) => {
     trace.stderr(d.toString());
-    contextOptions.ashMcp?.stderr(d.toString());
+    contextOptions.naviMcp?.stderr(d.toString());
   });
   const finish = (opts: {
     exitStatus: number;
@@ -428,8 +428,8 @@ async function* codexStreamEvents(
     forceFinished?: boolean;
   }) => {
     if (events.closed) return;
-    const ashProblem = lifecycle.stopRequested || opts.spawnError ? null : contextOptions.ashMcp?.settle();
-    if (ashProblem) push(ashProblem);
+    const naviProblem = lifecycle.stopRequested || opts.spawnError ? null : contextOptions.naviMcp?.settle();
+    if (naviProblem) push(naviProblem);
     const diagnostics = trace.finish({
       ...opts,
       stopRequested: lifecycle.stopRequested,

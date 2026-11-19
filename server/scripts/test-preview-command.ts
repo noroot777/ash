@@ -50,7 +50,7 @@ function failure(cwd: string, configured?: string | null): string {
   }
 }
 
-const root = mkdtempSync(join(tmpdir(), "ash-preview-command-"));
+const root = mkdtempSync(join(tmpdir(), "navi-preview-command-"));
 const dir = (...parts: string[]) => {
   const p = join(root, ...parts);
   mkdirSync(p, { recursive: true });
@@ -214,7 +214,7 @@ try {
   // Node 还是照旧认，只是不再是「预览」这件事的定义。
   // 端口怎么给要看脚本里跑的是谁：**vite 不读 PORT**（vite 6 实测：`PORT=41111 vite` 起在
   // 配置里那个 3000 上），只认 `--port`；Next/CRA/Nest/Express 反过来只认 PORT，多塞一个
-  // 未知参数有的直接报错退出。给错了都是「ash 借了端口、命令没吃」。
+  // 未知参数有的直接报错退出。给错了都是「navi 借了端口、命令没吃」。
   const node = dir("node");
   pkg(node, { dev: "vite" });
   check("Node + npm + vite：端口写成参数", cmds(node), ["npm run dev -- --port $PORT"]);
@@ -270,7 +270,7 @@ try {
   check("整段话里不提 package.json", monoError.includes("package.json"), false);
   checkIncludes("多模块首次要装依赖模块的写法也给了", monoError, "-am install -DskipTests");
 
-  // 前后端并排时最难的不是命令怎么写，是**端口**：两边都是 ash 随机借的，前端要在启动
+  // 前后端并排时最难的不是命令怎么写，是**端口**：两边都是 navi 随机借的，前端要在启动
   // 那一刻就知道后端在哪。所以这段话里必须直接给出一条能粘的组合命令：配角丢后台吃
   // $PORT2（Spring Boot 认 SERVER_PORT），要看的那个放最后吃 $PORT。
   checkIncludes(
@@ -413,7 +413,7 @@ try {
   // 相反，只对字符串是看不出来的：
   //   · `npm run dev --port 3000` → 脚本收到 ["3000"]（`--port` 被 npm 吃了当配置）
   //   · `pnpm run dev -- --port 3000` → 脚本收到 ["--","--port","3000"]（分隔符也透传）
-  // 后一条正是原目标项目一直起在写死的 4000 上、吃不到 ash 借的随机端口的原因：vite 收到
+  // 后一条正是原目标项目一直起在写死的 4000 上、吃不到 navi 借的随机端口的原因：vite 收到
   // 一个多余的 `--` 就不认后面那个 `--port` 了。所以这里放一个假 vite 进 `.bin`，把生成的
   // 命令原样交给真包管理器跑，看脚本最后到手的是什么。
   const argvProbe = dir("argv-probe");
@@ -427,7 +427,7 @@ try {
     const lock = { npm: "package-lock.json", pnpm: "pnpm-lock.yaml", yarn: "yarn.lock" }[pm];
     // 这台机器上没装就跳过，并且**把跳过说出来**：静默跳过读起来跟「测过了」一模一样。
     // cwd 一定要给夹具目录：corepack 会照**当前目录**往上找 packageManager 声明，
-    // 在 ash 仓库里跑会被自己的 devEngines 范围声明卡住（那跟被测的东西毫无关系）。
+    // 在 navi 仓库里跑会被自己的 devEngines 范围声明卡住（那跟被测的东西毫无关系）。
     try { execFileSync(pm, ["--version"], { cwd: argvProbe, stdio: "ignore" }); } catch {
       console.log(`- 跳过 ${pm}：这台机器上没装（它的透传规矩没在这轮被真跑验证）`);
       continue;

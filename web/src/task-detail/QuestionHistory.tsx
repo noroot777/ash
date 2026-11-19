@@ -1,8 +1,8 @@
 import { createContext, useContext, useId, useMemo, useState, type ReactNode } from "react";
 import {
   formatQuestionAnswers, legacyQuestionRecord, pairAnswerMessages, questionItems, questionOptionSelected, type QuestionRecord,
-} from "@ash/shared/questions";
-import { parseAttachmentText } from "@ash/shared/attachments";
+} from "@navi/shared/questions";
+import { parseAttachmentText } from "@navi/shared/attachments";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { ConversationSource } from "./conversationModel.ts";

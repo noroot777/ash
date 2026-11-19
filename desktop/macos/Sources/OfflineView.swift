@@ -29,10 +29,10 @@ final class OfflineView: NSView {
     spinner.style = .spinning
     spinner.controlSize = .small
     headline.font = .systemFont(ofSize: 15, weight: .semibold)
-    headline.textColor = AshPalette.ink
+    headline.textColor = NaviPalette.ink
     headline.alignment = .center
     detail.font = .systemFont(ofSize: 12)
-    detail.textColor = AshPalette.muted
+    detail.textColor = NaviPalette.muted
     detail.alignment = .center
     detail.isSelectable = true
     detail.preferredMaxLayoutWidth = 420
@@ -103,7 +103,7 @@ final class OfflineView: NSView {
   // CGColor 不跟随明暗切换；updateLayer 在当前外观下调用，切换时也会重来一次。
   override var wantsUpdateLayer: Bool { true }
   override func updateLayer() {
-    layer?.backgroundColor = AshPalette.chrome.cgColor
+    layer?.backgroundColor = NaviPalette.chrome.cgColor
   }
 
   @objc private func press(_ sender: NSButton) { actions[sender.tag].run() }

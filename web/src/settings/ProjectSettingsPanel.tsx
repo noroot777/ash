@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import { Button, Toggle } from "../components/ui.tsx";
 import { DirectoryPickerButton } from "../components/DirectoryPickerButton.tsx";
 import { api } from "../lib/api.ts";
@@ -11,7 +11,7 @@ import { ProjectCommandsSettings } from "./ProjectCommandsSettings.tsx";
 import { ProjectBrowserAccessSettings } from "./ProjectBrowserAccessSettings.tsx";
 import { AcceptGateBaselineChoice } from "../review/AcceptGateBaselineChoice.tsx";
 import { ACCEPT_GATE_BASELINE_LABELS, acceptGateBaselineEffect, normalizeAcceptGateBaseline,
-  type AcceptGateBaseline } from "@ash/shared/accept-gate";
+  type AcceptGateBaseline } from "@navi/shared/accept-gate";
 
 // 改名 / 改目录 / 删除项目都是**项目设置**,按权限表只给项目管理员与实例
 // 管理员(§四)。后端本来就会 403,但把必然失败的控件摆在成员面前,他只会以为是自己点坏了
@@ -146,7 +146,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
             <b>这个项目的新任务默认开独立 worktree</b>
             <small>
               {project.health.isRepo
-                ? "开：每张任务拉一个 ash/<id8> 分支、跑在 .worktrees/<id>/ 里，互不打扰；关：所有任务直接在项目目录里跑。每张新任务仍可单独覆盖。"
+                ? "开：每张任务拉一个 navi/<id8> 分支、跑在 .worktrees/<id>/ 里，互不打扰；关：所有任务直接在项目目录里跑。每张新任务仍可单独覆盖。"
                 : "当前目录不是 Git 仓库，这个项目的任务一律直接在项目目录里跑；这一位先存着，等目录换成仓库就生效。"}
             </small>
             {/* 项目自己的性质,不是个人口味:构建脚本写死绝对路径、依赖装在仓库根、产物要
@@ -196,7 +196,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
             onChange={(checked) => void setAcceptCommit(checked)}
           />
         </div>
-        {/* 「进 main 之前跑一次全量回归」这件事，在 ash 里只有一个确定的时刻可以挂：
+        {/* 「进 main 之前跑一次全量回归」这件事，在 navi 里只有一个确定的时刻可以挂：
             用户点验收那一下。有审查者来回打回时，没人分得清哪一轮是最后一次改动，所以
             挂在「实现完成」或者「审查通过」上都会挂错地方（要么白跑好几遍，要么跑的不是
             最终那棵树）。 */}

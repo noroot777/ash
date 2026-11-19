@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { checkScriptImports } from "./check-script-imports.mjs";
 
-const root = mkdtempSync(join(tmpdir(), "ash-script-imports-"));
+const root = mkdtempSync(join(tmpdir(), "navi-script-imports-"));
 try {
   mkdirSync(join(root, "scripts"));
   mkdirSync(join(root, "src"));

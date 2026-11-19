@@ -29,8 +29,8 @@
 // 不会让一条消息跟着别的项目的任务完成而放行。跨机交接带的是**已等到**这个事实本身
 // (`afterDoneAt`,导出前按完成计数求一次,handoff-messages.ts),不是让目标机重新去猜。
 import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
-import { TASK_STATUS_LABELS } from "@ash/shared";
+import type { TaskStatus } from "@navi/shared";
+import { TASK_STATUS_LABELS } from "@navi/shared";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 

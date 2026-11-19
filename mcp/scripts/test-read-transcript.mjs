@@ -1,5 +1,5 @@
-// 端到端验证 read_task_transcript：起真实的 mcp/dist/index.js，ASH_URL 指向一个**假
-// ash**（固定语料，不碰真库），然后按断言逐条核对它拼出来的对话。
+// 端到端验证 read_task_transcript：起真实的 mcp/dist/index.js，NAVI_URL 指向一个**假
+// navi**（固定语料，不碰真库），然后按断言逐条核对它拼出来的对话。
 //
 // 钉住的都是这个工具自己写的那几段逻辑——API 是现成的，拼装才是会坏的地方：
 //  1. 多会话按 startedAt 排序（假 server 故意乱序返回；duet 一个任务三条会话，顺序错了
@@ -116,7 +116,7 @@ function dynamic(taskId) {
   };
 }
 
-function fakeAsh() {
+function fakeNavi() {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
       const path = req.url.split("?")[0];
@@ -149,7 +149,7 @@ function fakeAsh() {
 function mcpClient() {
   const child = spawn("node", [MCP_ENTRY], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, ASH_URL: `http://127.0.0.1:${PORT}`, ASH_RECONNECT_MS: "3000" },
+    env: { ...process.env, NAVI_URL: `http://127.0.0.1:${PORT}`, NAVI_RECONNECT_MS: "3000" },
   });
   const pending = new Map();
   let buf = "";
@@ -178,7 +178,7 @@ const check = (label, cond, extra = "") => {
   if (!cond) failures.push(label);
 };
 
-const server = await fakeAsh();
+const server = await fakeNavi();
 const { child, rpc } = mcpClient();
 try {
   await rpc("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test", version: "0" } });

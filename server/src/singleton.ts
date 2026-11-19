@@ -1,12 +1,12 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, openSync, unlinkSync, writeFileSync } from "node:fs";
-import { LEGACY_SINGLETON_LOCK_SUFFIX } from "@ash/shared/legacy-names";
-import { resolveAshDbFile, ensureAshDbDir } from "./db/path.js";
+import { LEGACY_SINGLETON_LOCK_SUFFIX } from "@navi/shared/legacy-names";
+import { resolveNaviDbFile, ensureNaviDbDir } from "./db/path.js";
 import { liveMaintenanceHolderForAny, maintenanceLockFileFor } from "./maintenance-lock.js";
 import { resourceKeysFor, withResourceClaim } from "./resource-claim.js";
-import { type AshPresenceRegistration, registerAshPresence } from "./ash-presence.js";
+import { type NaviPresenceRegistration, registerNaviPresence } from "./navi-presence.js";
 import { RUNS_DIR } from "./paths.js";
 import { IS_WINDOWS, killPidsCommand } from "./platform.js";
 import type { ProcessInfo } from "./proc.js";
@@ -16,7 +16,7 @@ import {
   holderFromLock,
   inspectProcess,
   isAlreadyExists,
-  isAshServerCommand,
+  isNaviServerCommand,
   isNotFound,
   readLock,
   readLockResult,
@@ -108,7 +108,7 @@ export type SingletonLock = {
   release: () => LockReleaseOutcome;
 };
 
-export function singletonLockFileForDb(dbFile = resolveAshDbFile()) {
+export function singletonLockFileForDb(dbFile = resolveNaviDbFile()) {
   return `${dbFile}${LOCK_SUFFIX}`;
 }
 
@@ -118,7 +118,7 @@ export function singletonLockFileForDb(dbFile = resolveAshDbFile()) {
  * 双实例了）；反过来它持有着旧名时，我们也要被它挡下。两份内容相同（同一个 pid、token）。
  * 拆旧名：确认不会再有改名之前的服务跑在这份数据上之后。
  */
-export function singletonLockFilesForDb(dbFile = resolveAshDbFile()): string[] {
+export function singletonLockFilesForDb(dbFile = resolveNaviDbFile()): string[] {
   return [singletonLockFileForDb(dbFile), `${dbFile}${LEGACY_SINGLETON_LOCK_SUFFIX}`];
 }
 
@@ -126,7 +126,7 @@ export function singletonLockFilesForDb(dbFile = resolveAshDbFile()): string[] {
  * 本进程写进锁文件的那串随机 token。
  *
  * 它顺带是**宿主机运维者**的凭证:锁文件按 0600 落盘(见 `writeOwnLock` 的 `openSync`),
- * 读得到它 = 读得到 ash 的数据目录 = 本来就能直接读库。多人模式下 `scripts/restart.mjs`
+ * 读得到它 = 读得到 navi 的数据目录 = 本来就能直接读库。多人模式下 `scripts/restart.mjs`
  * 拿它去打 `/api/restart-impact` —— 那个脚本跑在宿主机上,手里没有任何网页登录态,而
  * 那条端点被鉴权闸挡住时它只会把「会被打断的任务数」算成 0,安全闸静默失效
  * (第 1 轮审查 P1)。
@@ -138,7 +138,7 @@ export function liveLockToken(): string | null {
 }
 
 /**
- * 这份库文件现在有没有**活着的** ash 实例在用。给离线维护脚本当安全闸用：历史回填会直接
+ * 这份库文件现在有没有**活着的** navi 实例在用。给离线维护脚本当安全闸用：历史回填会直接
  * 改 `sessions` 和 trace 文件，跟运行中的回合抢同一条线程的快照就会互相覆盖，所以那类
  * 脚本必须能在动手之前问一句「服务停了吗」，而不是只比对路径像不像生产库。
  *
@@ -148,7 +148,7 @@ export function liveLockToken(): string | null {
  * 没有锁文件就返回 null —— 包括 `NAVI_ALLOW_MULTI=1` 起的实例（它压根不写锁）。那种
  * 情况下这条闸给不出答案，调用方别把 null 读成「保证没人在用」。
  */
-export function liveAshHolderForDb(dbFile = resolveAshDbFile()): {
+export function liveNaviHolderForDb(dbFile = resolveNaviDbFile()): {
   pid: number;
   startedAt: string | null;
   command: string | null;
@@ -162,11 +162,11 @@ export function liveAshHolderForDb(dbFile = resolveAshDbFile()): {
 }
 
 export function acquireDbSingletonLock(options: { port?: number | null } = {}): SingletonLock | null {
-  const dbFile = resolveAshDbFile();
+  const dbFile = resolveNaviDbFile();
   const lockFile = singletonLockFileForDb(dbFile);
   const port = options.port ?? null;
 
-  ensureAshDbDir(dbFile);
+  ensureNaviDbDir(dbFile);
   // 这套资源的全部键:库文件 + 它的 runs 目录。两个都要查 —— 迁移要改的 trace 文件在
   // runs 里，而别的库路径（副本、软链）可能落到同一份 runs 上，只按库名锁挡不住。
   const keys = resourceKeysFor(dbFile, RUNS_DIR);
@@ -174,10 +174,10 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
   // 「查维护锁 + 登记自己」必须是一个原子动作:两边都「先查对方再建自己」的话，存在一串
   // 两边都通过检查的合法交错（第 1 轮审查 F2 实测复现），所以整段放进占有锁里。
   //
-  // **登记的不只是单例锁**:还要在每个资源键上留一份在线记录（ash-presence.ts）。单例锁
+  // **登记的不只是单例锁**:还要在每个资源键上留一份在线记录（navi-presence.ts）。单例锁
   // 按库命名、而且 `NAVI_ALLOW_MULTI=1` 压根不写它，于是「共享同一份 runs 的另一个库路径」
   // 和「多实例模式」这两种在线写入，离线迁移都探不到（第 3 轮审查 F2）。
-  const acquired = withResourceClaim<{ lock: SingletonLock | null; presence: AshPresenceRegistration }>(
+  const acquired = withResourceClaim<{ lock: SingletonLock | null; presence: NaviPresenceRegistration }>(
     keys,
     `Navi 启动 PID ${process.pid}`,
     () => {
@@ -185,7 +185,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
       // CLI 线程的账，谁都不知道最后落下的是什么。它是独立的一把锁，判据只认 pid 存活 +
       // 启动时刻（见 maintenance-lock.ts），所以脚本被强杀之后不会把服务永久挡在外面。
       //
-      // **这一关排在 NAVI_ALLOW_MULTI 前面**:那个开关的语义是「允许多个 ash 并存」，不是
+      // **这一关排在 NAVI_ALLOW_MULTI 前面**:那个开关的语义是「允许多个 navi 并存」，不是
       // 「允许踩正在迁移的库」—— 放在它后面等于给迁移留了一个一句话就能绕开的后门。
       const maintenance = liveMaintenanceHolderForAny(keys);
       if (maintenance) {
@@ -203,10 +203,10 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
       }
       if (readEnv(process.env, "NAVI_ALLOW_MULTI") === "1") {
         console.warn(
-          `[ash] WARNING: NAVI_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
+          `[navi] WARNING: NAVI_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
         );
         // 放弃排他不等于放弃「让别人看见我在线」:离线迁移据此拒绝开跑。
-        const shared = registerAshPresence(keys, { port, mode: "shared" });
+        const shared = registerNaviPresence(keys, { port, mode: "shared" });
         installPresenceCleanup(dbFile, shared);
         return { lock: null, presence: shared };
       }
@@ -214,7 +214,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
       // 登记失败就把刚落下的锁放回去:它带着活 PID,留在盘上会把所有后来者(以及离线维护)永久挡在
       // 外面,而这个实例自己压根没起来（第 3 轮复核 N1 的另一半）。
       try {
-        return { lock, presence: registerAshPresence(keys, { port, mode: "exclusive" }) };
+        return { lock, presence: registerNaviPresence(keys, { port, mode: "exclusive" }) };
       } catch (error) {
         lock.release();
         throw error;
@@ -225,7 +225,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
   if (!ownLock) return null;
 
   try {
-    const holders = findLiveAshDbHolders(dbFile).filter((p) => p.pid !== process.pid);
+    const holders = findLiveNaviDbHolders(dbFile).filter((p) => p.pid !== process.pid);
     if (holders.length > 0) {
       presence.release();
       ownLock.release();
@@ -250,7 +250,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
   }
 
   // **放锁就等于下线**：`release()` 要是只删锁文件，在线登记就会一直留到进程退出，于是
-  // 「锁已经放了」和「还有 ash 在线占着这套资源」同时成立，离线回填被一份幽灵记录挡住。
+  // 「锁已经放了」和「还有 navi 在线占着这套资源」同时成立，离线回填被一份幽灵记录挡住。
   // 退出清理照旧装（信号/崩溃那条路没人调 release），两边都幂等。
   const lock = withPresenceRelease(ownLock, presence);
   installCleanup(lock, presence);
@@ -259,7 +259,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
 }
 
 /** 把在线登记的释放绑进锁的 `release()`：先下线，再放锁。 */
-function withPresenceRelease(lock: SingletonLock, presence: AshPresenceRegistration): SingletonLock {
+function withPresenceRelease(lock: SingletonLock, presence: NaviPresenceRegistration): SingletonLock {
   return {
     dbFile: lock.dbFile,
     lockFile: lock.lockFile,
@@ -278,13 +278,13 @@ function withPresenceRelease(lock: SingletonLock, presence: AshPresenceRegistrat
  * 监听端口、照旧写库和 trace，而它既没有单例锁、也没有在线登记 —— 离线回填查完一片干净，当场开跑。
  * 排他那条路一直是「放锁 + 打印 + `process.exit`」，两条生命周期必须一样：**下线和退出是同一件事**。
  */
-function installPresenceCleanup(dbFile: string, registration: AshPresenceRegistration): void {
+function installPresenceCleanup(dbFile: string, registration: NaviPresenceRegistration): void {
   const startedAtMs = Date.now() - Math.round(process.uptime() * 1000);
   process.once("exit", () => registration.release());
   for (const signal of EXIT_SIGNALS) {
     process.once(signal, () => {
       registration.release();
-      console.warn(`[ash] 收到 ${signal}，退出（运行 ${humanDuration(Date.now() - startedAtMs)}，`
+      console.warn(`[navi] 收到 ${signal}，退出（运行 ${humanDuration(Date.now() - startedAtMs)}，`
         + `NAVI_ALLOW_MULTI 实例无单例锁，在线登记已撤销；库 ${dbFile}）`);
       process.exit(SIGNAL_EXIT_CODE[signal] ?? 143);
     });
@@ -462,7 +462,7 @@ function reportResidualLock(dbFile: string, lock: Partial<LockFile> | null, stal
   if (prior) {
     const how = prior.kind === "signal" ? `收到 ${prior.signal ?? "信号"}` : `退出码 ${prior.code ?? "未知"}`;
     console.warn(
-      `[ash] 上一实例(PID ${pid})留下了锁,账本里有它这一轮的退出意向(${how},${prior.at})`
+      `[navi] 上一实例(PID ${pid})留下了锁,账本里有它这一轮的退出意向(${how},${prior.at})`
         + ` ⇒ 它**进入过**退出流程,但那一轮的清理没完成。那条记录写在删锁之前,`
         + `所以「删锁失败(数据目录不可写)」和「记完账之后又被强杀」留下的是同一个现场`
         + ` —— 最终死因未知。账本:${ledger}`,
@@ -473,7 +473,7 @@ function reportResidualLock(dbFile: string, lock: Partial<LockFile> | null, stal
     ? `最后已知存活 ${record.lastHeartbeatAt}(之后静默 ${humanDuration(record.silentMs)},至少活了 ${humanDuration(record.uptimeMs)})`
     : "那把锁是旧版本写的、没有心跳字段,连最后存活时刻都给不出";
   console.warn(
-    `[ash] 上一实例(PID ${pid})留下了锁,账本里**没有**它这一轮的任何记录 ⇒ 最终死因未知:`
+    `[navi] 上一实例(PID ${pid})留下了锁,账本里**没有**它这一轮的任何记录 ⇒ 最终死因未知:`
       + `${alive}。可能是 SIGKILL / 内核击杀,也可能是退出时连账本都没写进去;`
       + `锁本身只能证明「那一轮的清理没完成」。账本:${ledger}`,
   );
@@ -485,7 +485,7 @@ function reportResidualLock(dbFile: string, lock: Partial<LockFile> | null, stal
 //
 // POSIX 这边 2026-10-19 补上了 SIGHUP 和 SIGQUIT:在那之前它们**没有任何处理器**,
 // 默认动作是静默终止 —— 不打印、不写崩溃报告、不释放锁,跟被 SIGKILL 带走长得一模一样。
-// 排查「ash 服务又停了」时正是这件事让「谁杀的」变成无解:能分辨的死因越多,下一次
+// 排查「navi 服务又停了」时正是这件事让「谁杀的」变成无解:能分辨的死因越多,下一次
 // 要猜的就越少。SIGQUIT 被接住之后不再产 core,这台机器上 `core` rlimit 本来就是 0,
 // 没有损失。
 const EXIT_SIGNALS = (IS_WINDOWS
@@ -508,7 +508,7 @@ const SIGNAL_EXIT_CODE: Partial<Record<NodeJS.Signals, number>> = {
 // 的 handle.exe 要单独装且要管理员权限,不能当成必备依赖。所以 Windows 上单实例保护
 // 只剩锁文件那一道(pid + 进程启动时间 + token,足以识别 pid 复用和陈旧锁),失去的是
 // 「锁文件被删掉之后还能兜住」这一层。如实降级,不假装有覆盖。
-function findLiveAshDbHolders(dbFile: string): ProcessInfo[] {
+function findLiveNaviDbHolders(dbFile: string): ProcessInfo[] {
   if (IS_WINDOWS) return [];
   if (!existsSync(dbFile)) return [];
   let out = "";
@@ -523,7 +523,7 @@ function findLiveAshDbHolders(dbFile: string): ProcessInfo[] {
   const pids = [...new Set(out.split(/\s+/).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   return pids
     .map((pid) => inspectProcess(pid))
-    .filter((info): info is ProcessInfo => Boolean(info && isAshServerCommand(info.command)));
+    .filter((info): info is ProcessInfo => Boolean(info && isNaviServerCommand(info.command)));
 }
 
 /**
@@ -538,7 +538,7 @@ function findLiveAshDbHolders(dbFile: string): ProcessInfo[] {
  * 释放结果不进账本:那是**释放之后**才知道的事,再补一条更晚的记录也证明不了终态
  * (标记之后还有窗口),它只进日志。
  */
-function installCleanup(lock: SingletonLock, presence: AshPresenceRegistration | null) {
+function installCleanup(lock: SingletonLock, presence: NaviPresenceRegistration | null) {
   const startedAtMs = Date.now() - Math.round(process.uptime() * 1000);
   const runId = runIdOfToken(ownLockToken ?? "");
   let recorded = false;
@@ -567,7 +567,7 @@ function installCleanup(lock: SingletonLock, presence: AshPresenceRegistration |
       // 收到 SIGTERM 曾经是**完全静默**地退出(`npm run restart` 走的就是这条),于是
       // 日志里「上一次为什么停」永远少一行。现在至少能把「有人让它停」和「它自己没了」
       // 分开,而且锁到底有没有删掉也如实说 —— 说错了会让下一个实例得出假结论。
-      console.warn(`[ash] 收到 ${signal}，退出（运行 ${humanDuration(uptimeMs)}，${describeRelease(outcome)}）`);
+      console.warn(`[navi] 收到 ${signal}，退出（运行 ${humanDuration(uptimeMs)}，${describeRelease(outcome)}）`);
       process.exit(SIGNAL_EXIT_CODE[signal] ?? 143);
     });
   }
@@ -580,7 +580,7 @@ function formatConflictMessage(
   reason: string,
 ) {
   const lines = [
-    `[ash] Refusing to start: ${reason}.`,
+    `[navi] Refusing to start: ${reason}.`,
     `  DB: ${dbFile}`,
     `  Lock: ${lockFile}`,
     `  PID: ${holder.pid}`,

@@ -1,6 +1,6 @@
 import { eq, asc, inArray } from "drizzle-orm";
-import type { TaskStatus } from "@ash/shared";
-import { hasCliGoalHold } from "@ash/shared/cli-commands";
+import type { TaskStatus } from "@navi/shared";
+import { hasCliGoalHold } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueAdvanceIntents, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
@@ -47,7 +47,7 @@ export async function pauseGroup(groupId: string): Promise<void> {
   notePauseOfGroup(groupId);
   // 没有成员在跑时暂停只改了 groups.paused,不会有任何任务换状态:托盘的等待说明得单独通知。
   void import("./pending-wait.js").then(({ republishGroupWaits }) => republishGroupWaits(groupId))
-    .catch((err) => console.error(`[ash] republishGroupWaits(${groupId}) failed:`, err));
+    .catch((err) => console.error(`[navi] republishGroupWaits(${groupId}) failed:`, err));
   const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   for (const t of members) {
     // status 可能在队列推进/续聊交错时短暂失真；只要有活 handle，先杀进程永远优先。
@@ -110,7 +110,7 @@ async function retryableQueueAdvance(
     // 退避重试照旧登记:它在**同一个进程里**还救得回来,只是不能拿它当「已接受」的凭据
     // (那正是 F2 的错)。凭据在不在由 intent 说,这里只负责把这一趟的结果如实报上去;
     // 重试带着**同一代**责任走,因为要了结的本来就是它。
-    console.error(`[ash] 队列推进临界区失败 queue=${queueId}，稍后重试:`, error);
+    console.error(`[navi] 队列推进临界区失败 queue=${queueId}，稍后重试:`, error);
     deferQueueAdvance(queueId, async () => { await retryableQueueAdvance(queueId, attempt, intent); });
     return { ok: false, error };
   }
@@ -131,7 +131,7 @@ async function retryableQueueAdvance(
  * 这里只负责别让它静默。
  */
 export function advanceQueueInBackground(queueId: string): void {
-  void advanceQueue(queueId).catch((error) => console.error(`[ash] 后台队列推进失败 queue=${queueId}:`, error));
+  void advanceQueue(queueId).catch((error) => console.error(`[navi] 后台队列推进失败 queue=${queueId}:`, error));
 }
 
 /**
@@ -153,7 +153,7 @@ async function yieldToHold(task: { id: string; groupId: string | null }, attempt
 
 function kickOwedStart(taskId: string): void {
   void import("./dispatch-hold.js").then(({ honorOwedStart }) => honorOwedStart(taskId))
-    .catch((error) => console.error(`[ash] 交给欠账的起跑当场兑现失败 task=${taskId}(tick 会再来):`, error));
+    .catch((error) => console.error(`[navi] 交给欠账的起跑当场兑现失败 task=${taskId}(tick 会再来):`, error));
 }
 
 async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt): Promise<void> {
@@ -251,7 +251,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
       await reserveQueuedTask(reservation);
     } catch (err) {
       releaseTurn(candidate.id, turn);
-      console.error(`[ash] 队列推进占位写入失败(${candidate.id}),释放预认领并稍后补偿:`, err);
+      console.error(`[navi] 队列推进占位写入失败(${candidate.id}),释放预认领并稍后补偿:`, err);
       // 失败 ≠ 肯定没写入:setTaskStatus 写完 status 还要读 sessions 算用时再广播,
       // UPDATE 已提交、附带 SELECT 才超时的话任务已经是 queued —— selectNextInQueue
       // 会被这具遗留占位冻结,单纯重推救不回(第 7 轮审查:短暂锁故障后整队永久
@@ -272,7 +272,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
     void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { origin: "auto", reason: "queue", turnHeld: next.turn })
       .catch((err) => {
-        console.error(`[ash] 队列推进续跑(${next.id})失败:`, err);
+        console.error(`[navi] 队列推进续跑(${next.id})失败:`, err);
         // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 由认领方
         // 按**自己那份身份**收回。接管后的异常由 continueTask 自己吸收并在 finally 释放,
         // 不会走到这里。早先这里是「还占着就释放」:占着不等于占的是这一次认领的那把 ——
@@ -284,7 +284,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
         if (started) await clearQueueAdvance(next.advanceRequest);
         else deferQueueAdvance(queueId);
       }).catch((error) => {
-        console.error(`[ash] 队列启动回执确认失败(${next.id}):`, error);
+        console.error(`[navi] 队列启动回执确认失败(${next.id}):`, error);
         deferQueueAdvance(queueId);
       });
     return;
@@ -479,7 +479,7 @@ export async function groupLaunchTargets(groupId: string): Promise<string[]> {
  * 进程一消失这份责任就蒸发,三条恢复入口没有一条看得见它 —— `reattachRunningTasks` 看活
  * handle、`reconcileInterrupted` 只扫 running/queued、`replayQueueAdvances` 只扫已落库的
  * 请求。实测后果:前一个刚跑完、下一个本该自动开跑,这一瞬间数据库被占着、你随后几秒重启了
- * ash,这条队列就永久停住,界面上没有任何报错(第 2 轮审查必须修 1 跨进程复现)。
+ * navi,这条队列就永久停住,界面上没有任何报错(第 2 轮审查必须修 1 跨进程复现)。
  *
  * **只推「已经在动」的队列**,不是见队列就推。两条判据,各管一头:
  * ① **落了库的推进意图**(`queue_advance_intents`)—— 这一条才是正解:它说的正是「有一次推进
@@ -513,9 +513,9 @@ export async function recoverQueueAdvances(attempt = 0): Promise<void> {
     // 别让启动挂掉)。
     // 退避加倍、封顶一分钟,但不设次数上限:放弃就等于这次重启的恢复责任没人接。
     const wait = Math.min(1_000 * 2 ** attempt, 60_000);
-    console.error(`[ash] 重启恢复:队列枚举失败，${wait / 1000}s 后重试整轮:`, error);
+    console.error(`[navi] 重启恢复:队列枚举失败，${wait / 1000}s 后重试整轮:`, error);
     const timer = setTimeout(() => void recoverQueueAdvances(attempt + 1)
-      .catch((retryError) => console.error("[ash] 队列推进补办重试失败:", retryError)), wait);
+      .catch((retryError) => console.error("[navi] 队列推进补办重试失败:", retryError)), wait);
     timer.unref?.();
     return;
   }
@@ -525,7 +525,7 @@ export async function recoverQueueAdvances(attempt = 0): Promise<void> {
     try {
       await recoverQueueAdvance(queueId, accepted);
     } catch (error) {
-      console.error(`[ash] 重启恢复:队列 ${queueId} 读取失败，稍后重试:`, error);
+      console.error(`[navi] 重启恢复:队列 ${queueId} 读取失败，稍后重试:`, error);
       deferQueueAdvance(queueId, () => recoverQueueAdvance(queueId, accepted));
     }
   }
@@ -549,7 +549,7 @@ async function recoverQueueAdvance(queueId: string, accepted: AcceptedAdvance | 
     const ahead = live.slice(0, live.findIndex((t) => t.id === candidate.id));
     if (!ahead.some((t) => ["done", "failed", "canceled"].includes(queueStatus(t)))) return;
   }
-  console.log(`[ash] 重启恢复:队列 ${queueId} 的推进补办一次(队首 ${candidate.id}，`
+  console.log(`[navi] 重启恢复:队列 ${queueId} 的推进补办一次(队首 ${candidate.id}，`
     + `${accepted ? "有已接受的推进意图" : "前驱已落终态"})`);
   await advanceQueue(queueId);
 }
@@ -599,7 +599,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
     await requestLaunch(ids, { source: "group" });
     for (const id of ids) attempted?.owed.delete(id);
     await Promise.all(ids.map((id) => releaseLaunch(id)
-      .catch((error) => console.error(`[ash] 分组成员开工判定失败 group=${groupId} task=${id}(请求留着，稍后再判):`, error))));
+      .catch((error) => console.error(`[navi] 分组成员开工判定失败 group=${groupId} task=${id}(请求留着，稍后再判):`, error))));
   }
 
   // 让本 group 关联的所有 queue 也推一下(关键:如果有 paused task 在 queue

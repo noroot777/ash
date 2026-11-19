@@ -1,6 +1,6 @@
 // 任务接力（跨机器 handoff）——导出侧与两端共用的协议/助手。
 //
-// 场景:下班前把本机还没跑完的任务「接力」到另一台跑着 ash 的机器上继续。
+// 场景:下班前把本机还没跑完的任务「接力」到另一台跑着 navi 的机器上继续。
 // 迁移三样东西,缺一样对端就续不上:
 //   1. 任务与会话的**元数据**（tasks/sessions 行,manifest 里按列原样带走）
 //   2. **git 状态**——任务 worktree 分支上的提交打成 `git bundle` 带走(接力前先把
@@ -35,8 +35,8 @@ import { id, now } from "./util.js";
 import { checkpointReadyTask, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import type {
   HandoffExportResult, HandoffPreflightResult, HandoffPeerIdentity, TaskHandoff,
-} from "@ash/shared";
-import { outboundHolder } from "@ash/shared/handoff";
+} from "@navi/shared";
+import { outboundHolder } from "@navi/shared/handoff";
 
 type TaskScopedPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
 
@@ -58,7 +58,7 @@ import { readableUploads, taskUploadNames } from "./uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { capabilityReportFor } from "./handoff-capability.js";
 import { legacyPeerBranchRefusal } from "./handoff-wire.js";
-import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/handoff";
+import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@navi/shared/handoff";
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
@@ -66,7 +66,7 @@ import { manifestTask } from "./handoff-manifest-task.js";
 import { collectGateRuns } from "./handoff-accept-gate.js";
 import { withRunFileLock } from "./run-file-lock.js";
 import { sessionContextCompact } from "./usage.js";
-import { serializeCompactSnapshot } from "@ash/shared/usage";
+import { serializeCompactSnapshot } from "@navi/shared/usage";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -578,7 +578,7 @@ export async function exportHandoff(
             timeoutMs: 600_000,
           },
         );
-        // 2xx 但 ok:false:真 ash 的导入端点从不这样应答(要么 ok:true 要么抛错),
+        // 2xx 但 ok:false:真 navi 的导入端点从不这样应答(要么 ok:true 要么抛错),
         // 多半是中间层拼的怪应答——同样按「送达未知」处理,保留 pending。
         if (!result.ok) throw new HandoffError(`对端导入失败：${result.error ?? "未知错误"}`, 502, true);
       } catch (e) {
@@ -588,7 +588,7 @@ export async function exportHandoff(
           e.message += `。对端可能已经收到这份任务:本机保留「${pendingLabel}」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。`;
           throw e;
         }
-        // 带 ash 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。
+        // 带 navi 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。
         await db.update(tasks)
           .set({ handoff: prevHandoffRaw, updatedAt: now() })
           .where(eq(tasks.id, taskId));

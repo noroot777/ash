@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
-import { cliCommandCatalog, cliCommandsForMode, goalRequest, hasCliGoalHold, isGoalExecution, isGoalRecovery, parseCliCommand, validateCliCommand, type CliCommand, type CliGoal } from "@ash/shared/cli-commands";
+import type { AgentEvent } from "@navi/shared";
+import { cliCommandCatalog, cliCommandsForMode, goalRequest, hasCliGoalHold, isGoalExecution, isGoalRecovery, parseCliCommand, validateCliCommand, type CliCommand, type CliGoal } from "@navi/shared/cli-commands";
 import { CodexNativeCommands, redactCommandData } from "../src/executors/codex-native-commands.js";
 import { claudeGoalInvocation, cleanupClaudeGoalContext, formatClaudeGoal } from "../src/executors/claude-goal.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-cli-commands-"));
-process.env.ASH_DB = join(root, "ash.db");
+const root = mkdtempSync(join(tmpdir(), "navi-cli-commands-"));
+process.env.NAVI_DB = join(root, "ash.db");
 const { CodexExecutor } = await import("../src/executors/codex.js");
 const command = (text: string, agent = "codex") => validateCliCommand(agent, text)!;
 try {
@@ -65,7 +65,7 @@ try {
   assert.equal(hasCliGoalHold('{"codex":{"goalHold":true,"goal":{"objective":"等待恢复","status":"paused"}}}'), true);
   assert.equal(hasCliGoalHold("broken"), false);
 
-  const privateData = { apiKey: "key-a", accessToken: "token-a", nested: { ASH_AUTH_TOKEN: "token-b", GITHUB_TOKEN: "token-c", env: { SAFE: "private" }, http_headers: { "x-api-key": "secret-header-value" } }, tokenBudget: 400, tokensUsed: 20 };
+  const privateData = { apiKey: "key-a", accessToken: "token-a", nested: { NAVI_AUTH_TOKEN: "token-b", GITHUB_TOKEN: "token-c", env: { SAFE: "private" }, http_headers: { "x-api-key": "secret-header-value" } }, tokenBudget: 400, tokensUsed: 20 };
   const redacted = JSON.stringify(redactCommandData(privateData));
   for (const secret of ["key-a", "token-a", "token-b", "token-c", "private", "secret-header-value"]) assert.ok(!redacted.includes(secret));
   assert.ok(redacted.includes('"tokenBudget":400'));
@@ -77,7 +77,7 @@ try {
   let goal: CliGoal | null = null;
   let pageCount = 0;
   const native = new CodexNativeCommands({
-    threadId: () => "thread", turnId: () => "turn", model: () => "model", cwd: root, prompt: "完整 ash 协议与本回合身份",
+    threadId: () => "thread", turnId: () => "turn", model: () => "model", cwd: root, prompt: "完整 navi 协议与本回合身份",
     state: { plan: true, personality: "friendly", serviceTier: "default" }, turnOptions: { effort: "high", serviceTierForTurn: "default" }, push: (event) => events.push(event),
     request: async (method, params) => {
       calls.push({ method, params });
@@ -99,7 +99,7 @@ try {
   assert.deepEqual(await native.start(command("/goal 完成目标 --budget 400")), { immediate: false, turnId: "turn" });
   assert.deepEqual(calls.slice(1, 4).map((call) => call.method), ["thread/goal/set", "turn/start", "thread/goal/set"]);
   assert.equal(calls[1]!.params.status, "paused");
-  assert.equal((calls[2]!.params.input as any[])[0].text, "完整 ash 协议与本回合身份");
+  assert.equal((calls[2]!.params.input as any[])[0].text, "完整 navi 协议与本回合身份");
   assert.equal(calls[2]!.params.effort, "high");
   assert.equal(calls[2]!.params.serviceTierForTurn, "default");
   assert.equal((calls[2]!.params.collaborationMode as any).mode, "default");

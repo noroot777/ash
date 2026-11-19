@@ -19,10 +19,10 @@
 // 条判据；两处各写一份，迟早只有一处会跟着后端改。「再验一轮」不必拆——验证页本来就有
 // 一颗更全的「验一轮」（能挑执行器），这里那颗是给「不想挑、就照原样再来一次」的人。
 import { useState } from "react";
-import type { Task } from "@ash/shared";
-import type { WorkflowDef, WorkflowStep } from "@ash/shared/workflow";
-import { STEP_LABELS } from "@ash/shared/workflow";
-import { nextAnchor, segmentAfter } from "@ash/shared/workflow-policy";
+import type { Task } from "@navi/shared";
+import type { WorkflowDef, WorkflowStep } from "@navi/shared/workflow";
+import { STEP_LABELS } from "@navi/shared/workflow";
+import { nextAnchor, segmentAfter } from "@navi/shared/workflow-policy";
 import { MagnifyingGlass, SealCheck, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";

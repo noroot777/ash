@@ -131,7 +131,7 @@ try {
   const fresh = makeApp(staging, "20000101.0002", { check: false });
   const good = join(temporary, "feed-good");
   const release = spawnSync(process.execPath, [join(mac, "scripts/release.mjs"), "--local", good, "--app", fresh, "--ed-key-file", keyFile, "--notes", "新版"],
-    { encoding: "utf8", env: { ...cleanEnv, ASH_MAC_RELEASE_ARTIFACTS: join(temporary, "artifacts") } });
+    { encoding: "utf8", env: { ...cleanEnv, NAVI_MAC_RELEASE_ARTIFACTS: join(temporary, "artifacts") } });
   assert.equal(release.status, 0, `${release.stdout}${release.stderr}`);
   const dmgName = "Navi-0.2.0-20000101.0002.dmg";
   assert.ok(existsSync(join(good, dmgName)));

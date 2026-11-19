@@ -4,15 +4,15 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const bin = process.env.KIMI_TEST_BIN || "kimi";
 const version = execFileSync(bin, ["--version"], { encoding: "utf8" }).trim();
-const directory = mkdtempSync(join(tmpdir(), "ash-kimi-live-"));
-process.env.ASH_DB = join(directory, "test.db");
-process.env.ASH_RUNS_DIR = join(directory, "runs");
-process.env.ASH_ALLOW_REAL_AGENT = "1";
+const directory = mkdtempSync(join(tmpdir(), "navi-kimi-live-"));
+process.env.NAVI_DB = join(directory, "test.db");
+process.env.NAVI_RUNS_DIR = join(directory, "runs");
+process.env.NAVI_ALLOW_REAL_AGENT = "1";
 requireTmpDb("test-kimi-live");
 const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { GenericCliExecutor } = await import("../src/executors/generic.js");
@@ -33,15 +33,15 @@ createInterface({ input: process.stdin }).on("line", line => {
   let result = {};
   if (request.method === "initialize") result = {
     protocolVersion: request.params.protocolVersion, capabilities: { tools: {} },
-    serverInfo: { name: "ash-kimi-fixture", version: "1.0.0" }
+    serverInfo: { name: "navi-kimi-fixture", version: "1.0.0" }
   };
   if (request.method === "tools/list") result = { tools: [{
-    name: "complete_task", description: "Record a test completion without contacting ash",
+    name: "complete_task", description: "Record a test completion without contacting navi",
     inputSchema: { type: "object", properties: { taskId: { type: "string" }, directionToken: { type: "string" } }, required: ["taskId", "directionToken"] }
   }] };
   if (request.method === "tools/call") {
     writeFileSync(${JSON.stringify(proof)}, JSON.stringify({
-      ...request.params, taskId: process.env.ASH_TASK_ID, turnToken: process.env.ASH_TURN_TOKEN
+      ...request.params, taskId: process.env.NAVI_TASK_ID, turnToken: process.env.NAVI_TURN_TOKEN
     }));
     result = { content: [{ type: "text", text: "KIMI_MCP_OK" }] };
   }
@@ -86,7 +86,7 @@ const server = createServer(async (request, response) => {
     phase += 1;
     response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
     const emit = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
-    const base = { id: "kimi-local", object: "chat.completion.chunk", created: 1, model: "ash-test" };
+    const base = { id: "kimi-local", object: "chat.completion.chunk", created: 1, model: "navi-test" };
     emit({ ...base, choices: [{ index: 0, delta: { role: "assistant", ...delta }, finish_reason: null }] });
     emit({ ...base, choices: [{ index: 0, delta: {}, finish_reason: delta.tool_calls ? "tool_calls" : "stop" }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } });
     response.end("data: [DONE]\n\n");
@@ -102,33 +102,33 @@ try {
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   writeFileSync(join(home, "config.toml"), `
-default_model = "ash-test"
+default_model = "navi-test"
 telemetry = false
-[providers.ash-test]
+[providers.navi-test]
 type = "kimi"
 base_url = "http://127.0.0.1:${address.port}/v1"
 api_key = "local-test-key"
-[models.ash-test]
-provider = "ash-test"
-model = "ash-test"
+[models.navi-test]
+provider = "navi-test"
+model = "navi-test"
 max_context_size = 262144
 capabilities = ["tool_use", "thinking"]
 support_efforts = ["low", "high", "max"]
 `);
-  writeFileSync(join(home, "mcp.json"), JSON.stringify({ mcpServers: { ash: { command: process.execPath, args: [fixture] } } }));
+  writeFileSync(join(home, "mcp.json"), JSON.stringify({ mcpServers: { navi: { command: process.execPath, args: [fixture] } } }));
   const env = {
-    KIMI_CODE_HOME: home, KIMI_DISABLE_TELEMETRY: "1", ASH_TASK_ID: "kimi-test", ASH_TURN_TOKEN: "test-turn-token",
+    KIMI_CODE_HOME: home, KIMI_DISABLE_TELEMETRY: "1", NAVI_TASK_ID: "kimi-test", NAVI_TURN_TOKEN: "test-turn-token",
     KIMI_MODEL_NAME: undefined, KIMI_MODEL_API_KEY: undefined,
   };
   const modelSpec = CLI_SPEC_BY_KEY.kimi.models!;
   const modelOutput = execFileSync(bin, modelSpec.args, { env: { ...process.env, ...env }, encoding: "utf8" });
   const models = modelSpec.parse(modelOutput, "");
-  assert.deepEqual(models.models, ["ash-test"]);
-  assert.deepEqual(models.modelEfforts?.["ash-test"], ["low", "high", "max"]);
+  assert.deepEqual(models.models, ["navi-test"]);
+  assert.deepEqual(models.modelEfforts?.["navi-test"], ["low", "high", "max"]);
   const executor = new GenericCliExecutor(CLI_SPEC_BY_KEY.kimi, {
-    bin, model: "ash-test", reasoningEffort: "high", modelEfforts: models.modelEfforts,
+    bin, model: "navi-test", reasoningEffort: "high", modelEfforts: models.modelEfforts,
   });
-  for (const model of [undefined, "ash-test"]) {
+  for (const model of [undefined, "navi-test"]) {
     const invalid = new GenericCliExecutor(CLI_SPEC_BY_KEY.kimi, {
       bin, model, reasoningEffort: "medium", modelEfforts: models.modelEfforts,
     }).run({ cwd, prompt: "must not reach the model service", env });

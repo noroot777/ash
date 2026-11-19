@@ -1,6 +1,6 @@
 // 「派它的那条任务」（tasks.dispatched_by）：存量回填认得出、新建时自动记上、显式给的能收，
 // 团队那一套（执行者 parentId、调度台用 MCP 另建的任务）一处不碰。判据见 src/task-dispatch.ts。
-// 跑：npm -w @ash/server run test:task-dispatched-by
+// 跑：npm -w @navi/server run test:task-dispatched-by
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,9 +9,9 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-dispatched-by-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-dispatched-by-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, sessions, appSettings } = await import("../src/db/schema.js");
 const { backfillDispatchedBy, backfillDispatchedByAfterCopy, DISPATCHED_BY_BACKFILL_KEY } = await import("../src/db/migrate-dispatched-by.js");
@@ -86,27 +86,27 @@ try {
   // —— 新建：智能体在普通任务的回合里建的，自动记上；在团队调度台里建的，不记。
   await db.update(tasks).set({ status: "running", activeTurnToken: "turn-a" }).where(eq(tasks.id, "analysis"));
   await db.insert(sessions).values({ id: "s-analysis", taskId: "analysis", role: "single", agentType: "codex", executor: "Codex", startedAt: at });
-  const fromAgent = await (await create({ title: "回合里派出去的" }, { "x-ash-source-task-id": "analysis", "x-ash-turn-token": "turn-a" })).json();
+  const fromAgent = await (await create({ title: "回合里派出去的" }, { "x-navi-source-task-id": "analysis", "x-navi-turn-token": "turn-a" })).json();
   assert.equal(fromAgent.dispatchedBy, "analysis");
   assert.equal(fromAgent.parentId ?? null, null, "派出去的任务不是团队执行者");
   await db.update(tasks).set({ status: "running", activeTurnToken: "turn-t" }).where(eq(tasks.id, "team"));
   await db.insert(sessions).values({ id: "s-team", taskId: "team", role: "lead", agentType: "claude", executor: "Claude", startedAt: at });
-  const fromTeam = await (await create({ title: "调度台另建的" }, { "x-ash-source-task-id": "team", "x-ash-turn-token": "turn-t" })).json();
+  const fromTeam = await (await create({ title: "调度台另建的" }, { "x-navi-source-task-id": "team", "x-navi-turn-token": "turn-t" })).json();
   assert.equal(fromTeam.dispatchedBy, null);
   const workers = await dispatchWorkers("team", [{ title: "团队执行者", body: "test" }], { run: false });
   assert.equal(workers.tasks[0].parentId, "team");
   assert.equal(workers.tasks[0].dispatchedBy ?? null, null, "团队派执行者：parentId 照旧，不记派活人");
   await db.update(tasks).set({ status: "running", activeTurnToken: "turn-e" }).where(eq(tasks.id, "team-exec"));
   await db.insert(sessions).values({ id: "s-exec", taskId: "team-exec", role: "single", agentType: "claude", executor: "Claude", startedAt: at });
-  const fromExec = await (await create({ title: "执行者另建的" }, { "x-ash-source-task-id": "team-exec", "x-ash-turn-token": "turn-e" })).json();
+  const fromExec = await (await create({ title: "执行者另建的" }, { "x-navi-source-task-id": "team-exec", "x-navi-turn-token": "turn-e" })).json();
   assert.equal(fromExec.creationOrigin?.taskId, "team-exec");
   assert.equal(fromExec.dispatchedBy, null, "团队执行者回合里建的任务不记在执行者名下");
 
   // —— 明确选了不归属（dispatchedBy:null / ""）：重启（回填再跑一遍）之后也不会被挂回来源名下。
-  const optOut = await (await create({ title: "明确不归属", dispatchedBy: null }, { "x-ash-source-task-id": "analysis", "x-ash-turn-token": "turn-a" })).json();
+  const optOut = await (await create({ title: "明确不归属", dispatchedBy: null }, { "x-navi-source-task-id": "analysis", "x-navi-turn-token": "turn-a" })).json();
   assert.equal(optOut.creationOrigin?.taskId, "analysis");
   assert.equal(optOut.dispatchedBy, null);
-  const optOutBlank = await (await create({ title: "空串也算不归属", dispatchedBy: "" }, { "x-ash-source-task-id": "analysis", "x-ash-turn-token": "turn-a" })).json();
+  const optOutBlank = await (await create({ title: "空串也算不归属", dispatchedBy: "" }, { "x-navi-source-task-id": "analysis", "x-navi-turn-token": "turn-a" })).json();
   assert.equal(optOutBlank.dispatchedBy, null);
   await backfillDispatchedBy(dbClient as never);
   assert.equal(await dispatchedOf(optOut.id), null, "重启之后，明确不归属的仍然不归属");

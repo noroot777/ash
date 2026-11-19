@@ -5,21 +5,21 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import type { AgentEvent } from "@ash/shared";
-import type { ChatMember } from "@ash/shared/chat";
+import type { AgentEvent } from "@navi/shared";
+import type { ChatMember } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-git-metadata-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-git-metadata-"));
 const repo = join(stage, "main");
 const linked = join(stage, "linked");
 mkdirSync(repo);
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_DATA_DIR ??= join(stage, "data");
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_DATA_DIR ??= join(stage, "data");
 const gitEnv = { ...process.env, GIT_OPTIONAL_LOCKS: "1" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "core.hooksPath=", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env: gitEnv }).trim();
 git(repo, "init", "-q", "-b", "main");
 git(repo, "config", "user.name", "Chat Metadata Test");
-git(repo, "config", "user.email", "chat-metadata@ash.test");
+git(repo, "config", "user.email", "chat-metadata@navi.test");
 writeFileSync(join(repo, "source.txt"), "unchanged\n");
 git(repo, "add", "source.txt");
 git(repo, "commit", "-qm", "fixture");
@@ -87,7 +87,7 @@ try {
 
   background = false;
   release = undefined;
-  // git 的记账目录整棵不算项目文件：主仓和其他工作树的索引、锁、HEAD、refs、logs，都会被 ash
+  // git 的记账目录整棵不算项目文件：主仓和其他工作树的索引、锁、HEAD、refs、logs，都会被 navi
   // 的状态轮询、别的任务在同一个仓库里的提交、以及用户自己的终端动到，全不是被咨询者干的。
   const gitWrites = [
     join(linkedGit, "index.lock"), join(linkedGit, "HEAD"),

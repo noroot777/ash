@@ -4,16 +4,16 @@
  * 前三档(ppid 树 / ctty 会话成员 / 累积 pgid)由 test-project-commands.ts 盯着,那套能覆盖
  * `cmd &`、nohup、disown。这里专钉它们都够不着的那一种:**真·守护化** —— 子进程 setsid 自成
  * 会话、父进程随即退出让它挂到 PID 1 名下、stdio 全部重定向。knowledge-base 的 kb.sh 就是这个
- * 形状(用户 2026-10-26 报的「启动了按钮却没变成停止」),ash 按进程归属一个线索都找不到,
+ * 形状(用户 2026-10-26 报的「启动了按钮却没变成停止」),navi 按进程归属一个线索都找不到,
  * 只剩服务自己打印的那句 `http://127.0.0.1:<port>`。
  *
- * 这个文件管**ash 自己动手**那条路(停止命令留空)。用户自己写了停止命令的那条路在
+ * 这个文件管**navi 自己动手**那条路(停止命令留空)。用户自己写了停止命令的那条路在
  * test-service-ports-script.ts,真进程夹具两边共用 test-service-ports-fixtures.ts
  * (全局约定:单文件不超过 700 行)。
  *
  * 下面这些都必须成立 —— 除了 ① 之外,每一条背后都有一次自由审查的实锤:
  *   ① 那句话被记下来、端口还听着就等于「服务开着」(按钮该是停止),点停止真能杀掉它;
- *   ② **端口只是「上哪儿找」,不是「可以杀」** —— 授权靠环境里那枚启动记号(ASH_LAUNCH_ID)。
+ *   ② **端口只是「上哪儿找」,不是「可以杀」** —— 授权靠环境里那枚启动记号(NAVI_LAUNCH_ID)。
  *      没记号的住户一根汗毛都不许动,哪怕它就坐在同一个进程组里(E1:pgid 不是血缘证据);
  *   ③ **停止结果必须与终态一致** —— 杀掉了一部分不算停止,脚本 exit 0 也不算停止(E2);
  *   ④⑤ 认端口(含流式切块等价)和探测三态**不需要真进程**,按行数拆去
@@ -45,7 +45,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
+import { SERVICE_COMMAND_ID } from "@navi/shared/project-commands";
 import { IS_WINDOWS } from "../src/platform.js";
 import { probeOwnedPorts, probePorts, stopByPorts } from "../src/service-ports.js";
 import { HAS_PROC } from "../src/terminal-process-tree.js";
@@ -141,7 +141,7 @@ try {
   // ── ② 身份闸:端口上坐着的不是这次起来的,一根汗毛都不许动,并且不许谎报已停止 ────
   const strayPort = await freePort();
   const strayPidfile = join(outside, "stray.pid");
-  // 这个服务由**测试进程**起(它的环境里没有 ASH_LAUNCH_ID),模拟「端口被别人占着」。
+  // 这个服务由**测试进程**起(它的环境里没有 NAVI_LAUNCH_ID),模拟「端口被别人占着」。
   spawn(process.execPath, [join(cwd, "serve.js"), String(strayPort), strayPidfile], {
     cwd: outside, detached: true, stdio: "ignore",
   }).unref();
@@ -161,7 +161,7 @@ try {
   // (E1)。换成环境记号之后,它不再有任何授权作用。
   assert.equal(
     (await stopByPorts([strayPort], { launchToken: "", graceMs: 300 })).killed.length, 0,
-    "连记号都没有的那次启动(ash 重启前起的)更不该拿到授权",
+    "连记号都没有的那次启动(navi 重启前起的)更不该拿到授权",
   );
   assert.ok(alive(strayPid));
 
@@ -218,7 +218,7 @@ try {
   assert.equal(serviceSession("ports3")?.stop.kind, "unresolved", "运行中的成员也要保存责任，不等于核验停净");
   assert.deepEqual(leftoversOf("ports3"), [scriptPid]);
   assert.equal(serviceSession("ports3")?.portsAlive, true, "更不许把还在运行的事实抹掉");
-  assert.ok(alive(scriptPid), "ash 不替用户强杀:他写那段脚本正是不想让 ash 直接 kill");
+  assert.ok(alive(scriptPid), "navi 不替用户强杀:他写那段脚本正是不想让 navi 直接 kill");
 
   // 换一条真能停的脚本,这时才允许报成功 —— 顺手把现场清掉。
   // 真正的停止脚本会**等它走掉**才返回 —— `kill` 只是把信号递出去,端口未必立刻让开。
@@ -308,7 +308,7 @@ try {
     "记下的端口都空了也证明不到「全停了」:只听没记下那些端口的守护进程压根没被问过",
   );
 
-  // ── ⑦ 唯一判据:ash 手里一条线索都没有时,靠「配了停止命令」认它还开着 ────────────
+  // ── ⑦ 唯一判据:navi 手里一条线索都没有时,靠「配了停止命令」认它还开着 ────────────
   //    第 2 轮审查发现 1 的实测反例:不打印网址的守护服务 + 配了停止命令 —— 停止接口和
   //    界面都认它开着,启动接口另问一个只认缓存的同义函数,认它没开,于是起了第二份。
   const quietPidfile = join(cwd, "quiet.pid");
@@ -390,11 +390,11 @@ try {
     const guardPort = await freePort();
     const guardPidfile = join(cwd, "guard.pid");
     const guardToken = "watch-token-0123456789";
-    // 监听者必须是**带着记号的真进程**:观测层问的是归属,不是「有没有人听」。(ash 自己
+    // 监听者必须是**带着记号的真进程**:观测层问的是归属,不是「有没有人听」。(navi 自己
     // 持的监听一律不算 —— probeOwnedPorts 把 process.pid 过滤掉,所以这里不能用同进程的
     // net.createServer 顶替。)
     const guard = spawn(process.execPath, [join(cwd, "serve.js"), String(guardPort), guardPidfile], {
-      cwd, detached: true, stdio: "ignore", env: { ...process.env, ASH_LAUNCH_ID: guardToken },
+      cwd, detached: true, stdio: "ignore", env: { ...process.env, NAVI_LAUNCH_ID: guardToken },
     });
     guard.unref();
     await waitFor("带记号的监听者起来了", async () => (await listening(guardPort)).length > 0);
@@ -481,7 +481,7 @@ try {
     const failPidfile = join(cwd, "psfail.pid");
     const failToken = "ps-failure-token-0123456789";
     const failing = spawn(process.execPath, [join(cwd, "serve.js"), String(failPort), failPidfile], {
-      cwd, detached: true, stdio: "ignore", env: { ...process.env, ASH_LAUNCH_ID: failToken },
+      cwd, detached: true, stdio: "ignore", env: { ...process.env, NAVI_LAUNCH_ID: failToken },
     });
     failing.unref();
     await waitFor("带记号的监听者起来了", async () => (await listening(failPort)).length > 0);
@@ -616,7 +616,7 @@ process.on("SIGTERM", () => {
 
   // ── ⑩-关服 那一拍的同步收口也要盖到端口这一档 ─────────────────────────────────────
   //    `process.once("exit")` 里没有 await 可用(信号处理器直接 process.exit),所以这一步
-  //    必须是同步的。漏掉它,ash 重启后那个服务还听着端口、却再没有任何把手能停它。
+  //    必须是同步的。漏掉它,navi 重启后那个服务还听着端口、却再没有任何把手能停它。
   //    **放在最后**:shutdown() 会把整个会话管理器停掉。
   const exitPort = await freePort();
   const exitPidfile = join(cwd, "exit.pid");

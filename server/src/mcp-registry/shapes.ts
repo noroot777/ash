@@ -8,23 +8,23 @@
 //  ① **已有登记一律不覆盖**,含历史名 `harness` —— 用户可能自己改过路径或 URL;
 //  ② **「读不出来」绝不当成「没有」**:解析失败、写法超出认得的范围一律 unknown,
 //     因为拿「读不出来」当空去写,就是一份只剩 MCP 登记的新文件把用户整份配置盖掉。
-import { envNameGenerations } from "@ash/shared/env-names";
-import { ASH_MCP_SERVER_NAME, ASH_MCP_SERVER_NAMES } from "@ash/shared/mcp";
+import { envNameGenerations } from "@navi/shared/env-names";
+import { NAVI_MCP_SERVER_NAME, NAVI_MCP_SERVER_NAMES } from "@navi/shared/mcp";
 import { extractTomlTables, scanCodexToml, tomlRootStringArray } from "../codex-toml.js";
 import { readJsonLoose, spliceJsonMember } from "./json-edit.js";
 import type {
-  AshMcpCompose, AshMcpComposeOpts, AshMcpConfigState, AshMcpEntry, AshMcpLaunch, AshMcpNameFact,
-  AshMcpNameScan, AshMcpShape, AshMcpSwitches,
+  NaviMcpCompose, NaviMcpComposeOpts, NaviMcpConfigState, NaviMcpEntry, NaviMcpLaunch, NaviMcpNameFact,
+  NaviMcpNameScan, NaviMcpShape, NaviMcpSwitches,
 } from "./types.js";
 
 /** 认的服务名(当前名 `navi`、历史名 `ash` / `harness`)—— **各自独立的登记**,顺序就是优先。 */
-export const ASH_MCP_NAMES: readonly string[] = ASH_MCP_SERVER_NAMES;
+export const NAVI_MCP_NAMES: readonly string[] = NAVI_MCP_SERVER_NAMES;
 
-const WANTED = ASH_MCP_NAMES;
+const WANTED = NAVI_MCP_NAMES;
 
-const present = (serverName: string): AshMcpConfigState => ({ state: "present", serverName, detail: "" });
-const absent = (detail: string): AshMcpConfigState => ({ state: "absent", serverName: null, detail });
-const unknown = (detail: string): AshMcpConfigState => ({ state: "unknown", serverName: null, detail });
+const present = (serverName: string): NaviMcpConfigState => ({ state: "present", serverName, detail: "" });
+const absent = (detail: string): NaviMcpConfigState => ({ state: "absent", serverName: null, detail });
+const unknown = (detail: string): NaviMcpConfigState => ({ state: "unknown", serverName: null, detail });
 
 // ── JSON 两族共用的小工具 ──────────────────────────────────────────────────
 
@@ -48,18 +48,18 @@ function takenNames(container: unknown): string[] {
   return servers ? WANTED.filter((n) => Object.hasOwn(servers, n)) : [];
 }
 
-const doubtScan = (doubt: string): AshMcpNameScan => ({ doubt, names: new Map() });
-const noConfig = (): AshMcpNameScan => ({ missing: true, names: new Map() });
+const doubtScan = (doubt: string): NaviMcpNameScan => ({ doubt, names: new Map() });
+const noConfig = (): NaviMcpNameScan => ({ missing: true, names: new Map() });
 
 /**
  * 这一份配置里**选中**的那条登记 —— 整个格式族层**只有这一处**在做这个选择。
  *
  * 两个兼容名是两条独立登记,所以**先找开着的那条**:`ash` 关着、`harness` 开着时 CLI 那边
- * ash MCP 是能用的。本轮审查 F3 的病根就是各处自己选一遍:`hostBlock` 固定先挑 `ash`、
+ * navi MCP 是能用的。本轮审查 F3 的病根就是各处自己选一遍:`hostBlock` 固定先挑 `navi`、
  * `read` 挑开着的那条,于是搬过去的是那条关着的;更早一版 `launch` 按名字取第一条,提示里
  * 给的是一个根本没在跑的命令,而 `read` 明明已经放行了。
  */
-export function pickFact(scan: AshMcpNameScan): { name: string; fact: AshMcpNameFact } | null {
+export function pickFact(scan: NaviMcpNameScan): { name: string; fact: NaviMcpNameFact } | null {
   for (const name of WANTED) {
     const fact = scan.names.get(name);
     if (fact?.status === "on") return { name, fact };
@@ -72,9 +72,9 @@ export function pickFact(scan: AshMcpNameScan): { name: string; fact: AshMcpName
  * 知道说的是哪一份)。
  *
  * 顺序刻意是「开着的 > 认不出来 > 关着的 > 没有」:开着的那条一旦找到,另一个名字写成什么样
- * 都不改变「ash MCP 能用」这个事实(认不出来的那条照样不许覆盖,那道闸在 `takenNames`)。
+ * 都不改变「navi MCP 能用」这个事实(认不出来的那条照样不许覆盖,那道闸在 `takenNames`)。
  */
-export function foldScan(scan: AshMcpNameScan, at = ""): AshMcpConfigState {
+export function foldScan(scan: NaviMcpNameScan, at = ""): NaviMcpConfigState {
   const say = (d: string) => (at ? `${at}：${d}` : d);
   if (scan.doubt) return unknown(say(scan.doubt));
   const live = pickFact(scan);
@@ -93,14 +93,14 @@ export function foldScan(scan: AshMcpNameScan, at = ""): AshMcpConfigState {
  * 读那一侧的**全部**实现:都是 `scan` 折一下或投影一下。
  *
  * 为什么非得这样收(上一轮审查 F3):`read`/`hostRaw`/`hostBlock`/`launch` 原先各自走一遍
- * 「在容器里找 ash」,四处判据就有四种漂法。现在族里只实现 `scan`,「选中哪条」只有
+ * 「在容器里找 navi」,四处判据就有四种漂法。现在族里只实现 `scan`,「选中哪条」只有
  * `pickFact` 一处。本轮审查 F1 又把 `hostRaw`/`hostBlock` 整个删掉了:搬运要的是**几份
  * 来源合起来**那一条,再按单份原文重新找一遍必然跟解析层分叉 —— 它现在直接读
- * `resolveAshMcp` 给出的那条 `AshMcpNameFact`。
+ * `resolveNaviMcp` 给出的那条 `NaviMcpNameFact`。
  */
 function readSide(
-  scan: (text: string | null, switches?: AshMcpSwitches) => AshMcpNameScan,
-): Pick<AshMcpShape, "scan" | "read" | "launch"> {
+  scan: (text: string | null, switches?: NaviMcpSwitches) => NaviMcpNameScan,
+): Pick<NaviMcpShape, "scan" | "read" | "launch"> {
   return {
     scan,
     read: (text, switches) => foldScan(scan(text, switches)),
@@ -109,7 +109,7 @@ function readSide(
 }
 
 /**
- * 这家 CLI 的**别处开关**对这个名字怎么说 —— 格式族只在这里消费 `AshMcpSwitches`,
+ * 这家 CLI 的**别处开关**对这个名字怎么说 —— 格式族只在这里消费 `NaviMcpSwitches`,
  * 一条策略一处实现(JSON 两族共用;TOML 那族只有一层键,走 `tomlRootStringArray`)。
  *
  * 三档刻意分开:`"off"` = 它明确挡住了这个名字(状态按关着算,而且要说清是**哪一行**在挡,
@@ -118,7 +118,7 @@ function readSide(
  */
 function switchVerdict(
   doc: Record<string, unknown>,
-  switches: AshMcpSwitches | undefined,
+  switches: NaviMcpSwitches | undefined,
   name: string,
 ): { off: string } | { doubt: string } | null {
   if (!switches) return null;
@@ -162,38 +162,38 @@ function switchVerdict(
 }
 
 /** 一条登记的原值 → 这个名字的事实。各族一份(判据各自实测,别互相套)。 */
-type FactOf = (name: string, entry: Record<string, unknown>) => AshMcpNameFact;
+type FactOf = (name: string, entry: Record<string, unknown>) => NaviMcpNameFact;
 
 /**
  * JSON 两族的逐名扫描。族间只差两件事,所以都做成参数:登记容器叫什么、一条原值怎么判。
  *
- * **值不是对象一律 doubt**:`"ash": null`、`"ash": "node x.js"` 这种写法我们认不出来,
+ * **值不是对象一律 doubt**:`"navi": null`、`"navi": "node x.js"` 这种写法我们认不出来,
  * 当没有去写就会把用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。那一档**不带 `raw`**,
- * 于是跨来源合并时它只能继续 doubt(见 `AshMcpNameFact.raw`)。
+ * 于是跨来源合并时它只能继续 doubt(见 `NaviMcpNameFact.raw`)。
  */
 function scanJson(
   container: string,
   text: string | null,
   factOf: FactOf,
-  switches?: AshMcpSwitches,
-): AshMcpNameScan {
+  switches?: NaviMcpSwitches,
+): NaviMcpNameScan {
   const doc = parseDoc(text);
   if (doc === undefined) return doubtScan("配置解析不了（它可能正被 CLI 写到一半，也可能被手工改坏了）");
   if (doc === null) return noConfig();
   const servers = asObject(doc[container]);
   if (doc[container] !== undefined && !servers) return doubtScan("里的登记容器不是一个对象");
-  const names = new Map<string, AshMcpNameFact>();
+  const names = new Map<string, NaviMcpNameFact>();
   for (const name of WANTED) {
     const raw = servers ? servers[name] : undefined;
     if (raw === undefined) {
-      // **这家明确挡住这个名字时,压根没登记也要如实说**(本轮审查 F2):`mcp.excluded:["ash"]`
+      // **这家明确挡住这个名字时,压根没登记也要如实说**(本轮审查 F2):`mcp.excluded:["navi"]`
       // 在那儿摆着,补一条登记进去也是条用不上的(真 gemini 把它打成 `Blocked`)—— 答 absent
-      // 的话安装器会照写、设置页一片绿,而那一轮起来一个 ash 工具都没有。
+      // 的话安装器会照写、设置页一片绿,而那一轮起来一个 navi 工具都没有。
       //
-      // 没登记的名字里**只问规范名**:它才是 ash 会去写的那个。历史名 `harness` 没在白名单
-      // 里是常态(`allowed: ["ash"]` 就是这样),拿它说「被关掉了」会把一份其实完全可用的
+      // 没登记的名字里**只问规范名**:它才是 navi 会去写的那个。历史名 `harness` 没在白名单
+      // 里是常态(`allowed: ["navi"]` 就是这样),拿它说「被关掉了」会把一份其实完全可用的
       // 配置判成 disabled、派审当场硬拒。
-      if (name !== ASH_MCP_SERVER_NAME) continue;
+      if (name !== NAVI_MCP_SERVER_NAME) continue;
       const blocked = switchVerdict(doc, switches, name);
       if (blocked && "off" in blocked) names.set(name, { status: "off", detail: blocked.off });
       else if (blocked) names.set(name, { status: "doubt", detail: blocked.doubt });
@@ -252,7 +252,7 @@ function deepMergeRaw(
  * 认不出来的那一份(没有 `raw`)一律让 doubt 赢:合不动就别猜。
  */
 function mergeJson(factOf: FactOf) {
-  return (name: string, lower: AshMcpNameFact, higher: AshMcpNameFact): AshMcpNameFact => {
+  return (name: string, lower: NaviMcpNameFact, higher: NaviMcpNameFact): NaviMcpNameFact => {
     if (!lower.raw) return lower;
     if (!higher.raw) return higher;
     return factOf(name, deepMergeRaw(lower.raw, higher.raw));
@@ -262,24 +262,24 @@ function mergeJson(factOf: FactOf) {
 /**
  * 把一条登记按规范名写进容器 —— JSON 两族**只有这一处会改文档**。
  *
- * 规范名落地:宿主那份即使叫历史名 harness,搬过来也按 ash 登记(两边都叫 ash 之后,提示词
- * 里那句「ash MCP」才对得上工具名)。已有同名键一律不碰(含值认不出来的那种,见 `scanJson`):调用方本该先 `read` 过,这里是第二道闸,因为「覆盖用户已有登记」是不可逆的。
+ * 规范名落地:宿主那份即使叫历史名 harness,搬过来也按 navi 登记(两边都叫 navi 之后,提示词
+ * 里那句「navi MCP」才对得上工具名)。已有同名键一律不碰(含值认不出来的那种,见 `scanJson`):调用方本该先 `read` 过,这里是第二道闸,因为「覆盖用户已有登记」是不可逆的。
  */
 function putJson(
-  shape: AshMcpShape,
+  shape: NaviMcpShape,
   container: string,
   text: string | null,
   value: Record<string, unknown>,
-): AshMcpCompose {
+): NaviMcpCompose {
   const doc = parseDoc(text);
   if (doc === undefined) return { why: "配置解析不了，没敢动它 —— 手工修好或删掉它再重启" };
   const taken = takenNames((doc ?? {})[container]);
   if (taken.length) return { why: `配置里已经有 ${taken.join(" / ")} 这条登记了，没有覆盖它` };
   // **文本插入,不重新序列化**(本轮审查 R4):大整数、`1e999`、`-0`、重复键、注释、键序、
   // 缩进全部按字节留着。上一版走 `JSON.parse` → `JSON.stringify` 往返,那条路会悄悄改掉用户
-  // 保存的值(`9007199254740993` → `…992`),而回读只看 ash 在不在、看不出这种损失。
+  // 保存的值(`9007199254740993` → `…992`),而回读只看 navi 在不在、看不出这种损失。
   // 顺带:注释不再会被抹掉,所以带注释的 `.jsonc` 也能自动补接了。
-  const spliced = spliceJsonMember(text, container, ASH_MCP_SERVER_NAME, value);
+  const spliced = spliceJsonMember(text, container, NAVI_MCP_SERVER_NAME, value);
   if (!spliced.body) return { why: spliced.why ?? "没能把那条登记插进去" };
   const body = spliced.body;
   // 自己复核一遍:这一族的「真解析器」就在手上(语义全在 JSON 语法里),所以拼完能当场验。
@@ -291,7 +291,7 @@ function putJson(
 // ── ① `mcpServers` 这一族(claude / gemini / kimi / cursor / qwen / copilot / kiro / qoder / antigravity)──
 //
 // 同一个形状:顶层 `mcpServers` 对象,每条 `{ command, args, env }`。本轮在 gemini 上
-// 用真 CLI 验过一遍(`gemini mcp add ash node <entry> -s user -e NAVI_URL=…` 写出来的
+// 用真 CLI 验过一遍(`gemini mcp add navi node <entry> -s user -e NAVI_URL=…` 写出来的
 // 就是这个形状),其余几家按各自官方文档(出处记在 `catalog.ts` 的 `source`)。
 
 /**
@@ -308,12 +308,12 @@ export function mcpUrlOf(env: Record<string, unknown>): string | null {
 const CONTAINER = "mcpServers";
 
 /** 这一族的启动方式:`command` 是字符串、`args` 另给、环境变量的键叫 `env`。 */
-function mcpServersLaunch(entry: Record<string, unknown>): AshMcpLaunch {
+function mcpServersLaunch(entry: Record<string, unknown>): NaviMcpLaunch {
   const env = asObject(entry.env) ?? {};
   return {
     command: typeof entry.command === "string" ? entry.command : null,
     args: entry.args,
-    ashUrl: mcpUrlOf(env),
+    naviUrl: mcpUrlOf(env),
   };
 }
 
@@ -332,7 +332,7 @@ const mcpServersFact: FactOf = (name, entry) => switchedOff(entry)
   ? { status: "off", detail: `${name} 这条登记是关着的`, raw: entry }
   : { status: "on", detail: "", raw: entry, launch: mcpServersLaunch(entry) };
 
-export const mcpServersJsonShape: AshMcpShape = {
+export const mcpServersJsonShape: NaviMcpShape = {
   id: "mcp-servers-json",
   ...readSide((text, switches) => scanJson(CONTAINER, text, mcpServersFact, switches)),
   compose(text, entry, opts) {
@@ -347,13 +347,13 @@ export const mcpServersJsonShape: AshMcpShape = {
 // ── ② opencode 这一族(opencode / kilo)────────────────────────────────────
 //
 // 顶层叫 `mcp`,一条登记长这样(本轮用真 opencode v…… 实测 `opencode mcp list` 读得出):
-//   "ash": { "type": "local", "command": ["node", "<entry>"], "environment": {…}, "enabled": true }
+//   "navi": { "type": "local", "command": ["node", "<entry>"], "environment": {…}, "enabled": true }
 // 注意 `command` 是**整条 argv 的数组**、环境变量的键叫 `environment` —— 跟上一族不是
 // 同一个形状,所以单列一族,别拿 `mcpServers` 那份硬套。
 
 const OPENCODE_CONTAINER = "mcp";
 
-const opencodeEntry = (entry: AshMcpEntry) => ({
+const opencodeEntry = (entry: NaviMcpEntry) => ({
   type: "local",
   command: [entry.command, ...entry.args],
   environment: { ...entry.env },
@@ -361,13 +361,13 @@ const opencodeEntry = (entry: AshMcpEntry) => ({
 });
 
 /** 这一族的启动方式:`command` 是**整条 argv 的数组**、环境变量的键叫 `environment`。 */
-function opencodeLaunch(entry: Record<string, unknown>): AshMcpLaunch {
+function opencodeLaunch(entry: Record<string, unknown>): NaviMcpLaunch {
   const argv = Array.isArray(entry.command) ? entry.command.map(String) : [];
   const env = asObject(entry.environment) ?? {};
   return {
     command: argv[0] ?? null,
     args: argv.slice(1),
-    ashUrl: mcpUrlOf(env),
+    naviUrl: mcpUrlOf(env),
   };
 }
 
@@ -378,9 +378,9 @@ function opencodeLaunch(entry: Record<string, unknown>): AshMcpLaunch {
  *
  *  · **没写 `type` 就不是一条服务登记**,只是个开关:`{"enabled": true}` 单独在那儿时真 CLI
  *    打印 `No MCP servers configured`(实测),所以这种不许报成「已接好」—— 上一版报的是
- *    present,而那份档里 agent 一个 ash 工具都没有、跑完交不了卷;
+ *    present,而那份档里 agent 一个 navi 工具都没有、跑完交不了卷;
  *  · 连 `enabled` 都没写(光写 `command` 之类)⇒ 真 opencode 把**整份配置**判为非法、
- *    `exit 1` 起不来(实测 `Missing key mcp.ash.command` / `…enabled`),那更不是「有登记」;
+ *    `exit 1` 起不来(实测 `Missing key mcp.navi.command` / `…enabled`),那更不是「有登记」;
  *  · `enabled` 不写 = 开着(实测 `{type,command}` 照样去连);`enabled: false` 才是关着;
  *  · **`disabled: true` 这个键 opencode 不认**(实测:带着它照样连,状态还是 enabled)——
  *    它是 `mcpServers` 那一族的写法。这里既不敢当成关着(那会把一条连得上的登记硬拒掉),
@@ -417,7 +417,7 @@ const opencodeFact: FactOf = (name, entry) => {
   return { status: "on", detail: "", raw: entry, launch: opencodeLaunch(entry) };
 };
 
-export const opencodeJsonShape: AshMcpShape = {
+export const opencodeJsonShape: NaviMcpShape = {
   id: "opencode-json",
   ...readSide((text, switches) => scanJson(OPENCODE_CONTAINER, text, opencodeFact, switches)),
   mergeFacts: mergeJson(opencodeFact),
@@ -433,23 +433,23 @@ export const opencodeJsonShape: AshMcpShape = {
 //
 // `[mcp_servers.<名>]` + `[mcp_servers.<名>.env]`。grok 本轮实测写出来的跟 codex 一模一样
 // (多一行 `enabled = true`),所以判据直接共用 codex 那份**结构**扫描器 —— 不再写第二份
-// 正则:`[mcp_servers."ash"]`、缩进表头、点号键、内联表都认,它自己没把握时答 unknown。
+// 正则:`[mcp_servers."navi"]`、缩进表头、点号键、内联表都认,它自己没把握时答 unknown。
 
 /**
  * 根级那个「关掉这几个名字」的数组对这个名字怎么说。**哪一家有这个键、叫什么,由那家自己
  * 声明**(机制上的 `switches.off`)—— 不声明就一律当「没有这种开关」。
  *
- * 本轮审查 F2 实测(2026-10-31,同一份 `disabled_mcp_servers = ["ash"]` + 条目
+ * 本轮审查 F2 实测(2026-10-31,同一份 `disabled_mcp_servers = ["navi"]` + 条目
  * `enabled = true`):grok 1.0.41 `grok mcp list` 打出 `(disabled)`,**codex-cli 0.153.4
  * 压根不认**(`codex mcp list --json` 仍是 `enabled: true, disabled_reason: null`)。
- * 上一版两家共用这一族、无条件解释这个键,于是用户给 grok 关一次 ash,codex 这边一条能用
+ * 上一版两家共用这一族、无条件解释这个键,于是用户给 grok 关一次 navi,codex 这边一条能用
  * 的连接也被判成「被关掉了」,安装器还说是他自己关的。
  *
  * 判据走 `codex-toml.ts` 的结构扫描器(**第 7 轮审查**:上一版拿全文正则扫,别人多行字符串
  * 里的同名行会被当成根级事实)。读不通或根级没这个键一律当「没关」:这个方向上的错最多是
  * 放过一轮(跑完没结论、有说明),反过来是当场拦掉一轮本来跑得起来的审查。
  */
-function tomlRootDisabled(text: string, name: string, switches?: AshMcpSwitches): boolean {
+function tomlRootDisabled(text: string, name: string, switches?: NaviMcpSwitches): boolean {
   const key = switches?.off;
   if (!key?.length) return false;
   // TOML 这一族只支持一层键:根级 `disabled_mcp_servers` 那种。多层的路径声明是写错了。
@@ -464,7 +464,7 @@ function tomlRootDisabled(text: string, name: string, switches?: AshMcpSwitches)
  * 判据跟读那一侧(`read`)问同一个扫描器:判错成「没有」就会再追加一份同名表,那在 TOML
  * 里是重复定义,CLI 整份配置都读不出来(连用户别的 MCP 一起没了)。
  */
-function appendToml(text: string | null, block: string): AshMcpCompose {
+function appendToml(text: string | null, block: string): NaviMcpCompose {
   const current = text ?? "";
   const scan = scanCodexToml(current);
   if (scan.doubt) {
@@ -474,7 +474,7 @@ function appendToml(text: string | null, block: string): AshMcpCompose {
   if (scan.sealed) {
     return {
       why: `配置里 ${scan.sealed}，所以没有自动补写 —— 请在那个内联表里自己加一条 `
-        + `${ASH_MCP_SERVER_NAME}，或者把它改写成 [mcp_servers.xxx] 的普通表写法再重启`,
+        + `${NAVI_MCP_SERVER_NAME}，或者把它改写成 [mcp_servers.xxx] 的普通表写法再重启`,
     };
   }
   const body = current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`;
@@ -482,8 +482,8 @@ function appendToml(text: string | null, block: string): AshMcpCompose {
   // 见 `auth/codex-approve.ts`)。
   const back = scanCodexToml(body);
   if (back.doubt) return { why: `补上那段之后配置自己都读不通了（${back.doubt}）` };
-  if (!back.servers.get(ASH_MCP_SERVER_NAME)?.enabled) {
-    return { why: `补上那段之后仍读不出启用着的 [mcp_servers.${ASH_MCP_SERVER_NAME}]` };
+  if (!back.servers.get(NAVI_MCP_SERVER_NAME)?.enabled) {
+    return { why: `补上那段之后仍读不出启用着的 [mcp_servers.${NAVI_MCP_SERVER_NAME}]` };
   }
   return { body };
 }
@@ -494,18 +494,18 @@ function appendToml(text: string | null, block: string): AshMcpCompose {
  * 数组(见 `tomlRootDisabled` —— grok 认、codex 不认,都是实测)。
  *
  * `block` 顺手在这里取好(表头改成规范名):搬宿主那条时整段原文照搬,连底下的子表一起 ——
- * 上一版 `hostBlock` 自己又按名字固定先挑 `ash`,跟这里挑**开着**那条的判据不是一套
+ * 上一版 `hostBlock` 自己又按名字固定先挑 `navi`,跟这里挑**开着**那条的判据不是一套
  * (本轮审查 F3)。
  */
-function scanToml(text: string | null, switches?: AshMcpSwitches): AshMcpNameScan {
+function scanToml(text: string | null, switches?: NaviMcpSwitches): NaviMcpNameScan {
   if (text === null) return noConfig();
   const found = scanCodexToml(text);
   if (found.doubt) return doubtScan(found.doubt);
-  const names = new Map<string, AshMcpNameFact>();
+  const names = new Map<string, NaviMcpNameFact>();
   for (const name of WANTED) {
     const one = found.servers.get(name);
     if (!one) continue;
-    const block = extractTomlTables(text, name, ASH_MCP_SERVER_NAME) ?? undefined;
+    const block = extractTomlTables(text, name, NAVI_MCP_SERVER_NAME) ?? undefined;
     const rootOff = tomlRootDisabled(text, name, switches);
     if (one.enabled && !rootOff) {
       names.set(name, { status: "on", detail: "", block, launch: one.spec });
@@ -523,7 +523,7 @@ function scanToml(text: string | null, switches?: AshMcpSwitches): AshMcpNameSca
   return { names };
 }
 
-export const mcpServersTomlShape: AshMcpShape = {
+export const mcpServersTomlShape: NaviMcpShape = {
   id: "mcp-servers-toml",
   ...readSide((text, switches) => scanToml(text, switches)),
   compose(text, entry, opts) {
@@ -533,9 +533,9 @@ export const mcpServersTomlShape: AshMcpShape = {
   appendBlock: appendToml,
 };
 
-/** 一条 ash 登记的 TOML 原文。路径一律走 `JSON.stringify` —— Windows 的 `\` 必须成对写。 */
-export function tomlBlock(entry: AshMcpEntry, enabled: boolean): string {
-  const head = `[mcp_servers.${ASH_MCP_SERVER_NAME}]`;
+/** 一条 navi 登记的 TOML 原文。路径一律走 `JSON.stringify` —— Windows 的 `\` 必须成对写。 */
+export function tomlBlock(entry: NaviMcpEntry, enabled: boolean): string {
+  const head = `[mcp_servers.${NAVI_MCP_SERVER_NAME}]`;
   const lines = [
     head,
     `command = ${JSON.stringify(entry.command)}`,
@@ -544,10 +544,10 @@ export function tomlBlock(entry: AshMcpEntry, enabled: boolean): string {
   if (enabled) lines.push("enabled = true");
   const env = Object.entries(entry.env);
   if (env.length) {
-    lines.push("", `[mcp_servers.${ASH_MCP_SERVER_NAME}.env]`);
+    lines.push("", `[mcp_servers.${NAVI_MCP_SERVER_NAME}.env]`);
     for (const [k, v] of env) lines.push(`${k} = ${JSON.stringify(v)}`);
   }
   return lines.join("\n");
 }
 
-export type { AshMcpCompose, AshMcpComposeOpts, AshMcpEntry, AshMcpLaunch };
+export type { NaviMcpCompose, NaviMcpComposeOpts, NaviMcpEntry, NaviMcpLaunch };

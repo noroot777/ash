@@ -1,7 +1,7 @@
 // 前置：这条任务建在哪几条上面（shared/src/prerequisites.ts）。加、减、列候选三个端点，从 `api.ts` 的清单里
 // 拎出来（那份顶着单文件 700 行上限）；调用点仍然只写 `api.addPrerequisite(...)`。
-import type { PrerequisiteCandidates } from "@ash/shared/prerequisites";
-import type { Task } from "@ash/shared";
+import type { PrerequisiteCandidates } from "@navi/shared/prerequisites";
+import type { Task } from "@navi/shared";
 import { id, json, request } from "./apiClient.ts";
 
 export const prerequisiteApi = {

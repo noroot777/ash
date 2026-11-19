@@ -1,4 +1,4 @@
-import type { HandoffExportResult, HandoffPingProject } from "@ash/shared";
+import type { HandoffExportResult, HandoffPingProject } from "@navi/shared";
 import {
   ArrowRight,
   ArrowSquareOut,

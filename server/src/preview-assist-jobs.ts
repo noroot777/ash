@@ -1,11 +1,11 @@
 // 「AI 协助」的作业登记簿：一个项目一格，谁占着、现在什么状态、怎么落终态。
 //
 // 为什么从 preview-assist.ts 拆出来：那份要 `resolveExecutorFor`，顺着它会把整个
-// `db/index.ts` 拉进来（import 一下就打开真的 ash 库并跑迁移）。而这里全是内存里的判断，
+// `db/index.ts` 拉进来（import 一下就打开真的 navi 库并跑迁移）。而这里全是内存里的判断，
 // 恰好又是**最该被回归测试钉住**的那一块（预占的原子性），所以留成一个不碰 DB 的模块，
 // `test:preview-assist` 才能不带 NAVI_DB、不起 CLI 智能体地测它。
-import type { PreviewAssistState } from "@ash/shared/preview-assist";
-import { PREVIEW_ASSIST_MAX_ROUNDS } from "@ash/shared/preview-assist";
+import type { PreviewAssistState } from "@navi/shared/preview-assist";
+import { PREVIEW_ASSIST_MAX_ROUNDS } from "@navi/shared/preview-assist";
 import type { RunHandle } from "./executors/types.js";
 import { id, now } from "./util.js";
 
@@ -21,12 +21,12 @@ const jobs = new Map<string, Job>();
 const KEEP_FINISHED_MS = 10 * 60_000;
 
 /**
- * 这一台 ash 进程的身份，每次启动换一个。
+ * 这一台 navi 进程的身份，每次启动换一个。
  *
  * 前端要靠它把两件长得一模一样的事分开：都是「我本地记着一个跑着的作业、服务端却回
- * `job: null`」，但一种是 **ash 重启把内存态吞了**（该说「已随 ash 重启中断」），另一种是
+ * `job: null`」，但一种是 **navi 重启把内存态吞了**（该说「已随 navi 重启中断」），另一种是
  * **作业早就正常跑完、终态过了 10 分钟被清掉**（说「重启」就是在撒谎，第 2 轮审查复现过：
- * 页面关着的时候它跑完了，十分钟后回来看到一句 ash 从来没发生过的重启）。
+ * 页面关着的时候它跑完了，十分钟后回来看到一句 navi 从来没发生过的重启）。
  *
  * 光凭那个 null 分不出来，所以得有个人说「我还是刚才那一台」——就是它。
  */

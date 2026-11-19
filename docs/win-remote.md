@@ -16,8 +16,8 @@ node scripts/win-remote.mjs test x --no-sync    # 跳过同步,重跑上次那�
 环境变量:`WIN_REMOTE_KEY`(对端 Navi 的访问密钥——自用模式的 Navi 对别处来的脚本只认这把密钥,
 不带就是 401;在那台 Windows 上打开 Navi「设置 → 默认规则 → 远程访问」拿,或在它本机
 `curl http://127.0.0.1:4317/api/remote-access`)、`WIN_REMOTE_HOST`(默认 `http://192.168.1.187:4317`)、`WIN_REMOTE_SELF`(本机对外 IP,
-自动探测不准时用)、`WIN_REMOTE_PROJECT`(对端项目 id,自动按 `repoPath` 猜歪了时用;给了不存在的
-id 会把现有项目列出来)、`WIN_REMOTE_GIT_PORT`(钉死 git daemon 端口,默认每次现挑一个空闲的)、
+自动探测不准时用)、`WIN_REMOTE_PROJECT`(对端项目 id。不给就按 `repoPath` 的目录名认本仓库,新旧名都认,
+认不出或认出好几个就拒绝并列出现有项目,不会退到列表第一个;给了不存在的 id 同样列出来)、`WIN_REMOTE_GIT_PORT`(钉死 git daemon 端口,默认每次现挑一个空闲的)、
 `WIN_REMOTE_WORKSPACE`(换个对端目录,默认 `.worktrees/win-remote`;**四个子命令一律跟着它走** ——
 sync 检出、exec 的 cwd、test 的 cwd、doctor 的探针都取同一个来源,不会出现「同步 A、测 B」)、
 `WIN_REMOTE_ADOPT=1`(接管一个不是本工具建的 worktree —— 会覆盖里面所有未提交内容,
@@ -60,7 +60,7 @@ sync 检出、exec 的 cwd、test 的 cwd、doctor 的探针都取同一个来�
 **带斜杠只匹配目录**,而在 worktree 里做 typecheck 的标准手法恰恰是往那儿挂一个指向主仓的
 **软链** —— 软链在 git 眼里不是目录,ignore 不生效,`add -A` 就把它收进快照;到了 Windows
 (git 默认不建符号链接)它被还原成一个内容是路径字符串的普通文件,名字正好占住 `node_modules`,
-后面 `mklink /J` 在它下面建 `@ash\*` 只报一句 "The system cannot find the path specified."。
+后面 `mklink /J` 在它下面建 `@navi\*` 只报一句 "The system cannot find the path specified."。
 排除它本身也是对的:对端的 `node_modules` 一律由那边自己建。
 
 **所有进 PowerShell 单引号的插值都走 `ps.mjs` 的 `psq()`**(转义 `'` → `''`,连引号一起返回)。
@@ -77,9 +77,9 @@ Windows 仓库里了。快照带着未提交和未跟踪的内容,留在那儿�
 **落到对端的 `.worktrees/win-remote`,绝不动它的主工作区。** 那台机器上的 `D:\ai_workspace\ash`
 是**正在跑着的 Navi 自己**,而且有未提交的本地改动。往那儿 checkout 等于既覆盖别人的活、又把
 live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析 node_modules 会逐级向上,worktree 里
-不装依赖也能跑。唯一要补的是 `node_modules/@ash/*` 的 junction —— 不补的话 `@ash/shared`
+不装依赖也能跑。唯一要补的是 `node_modules/@navi/*` 的 junction —— 不补的话 `@navi/shared`
 会解析到**主仓那份**,于是你改了 shared 却测的是旧代码。「缺了就建」不够:junction **在**、却指着
-主仓是同一个坑更隐蔽的那一半 —— fetch、checkout、完整 SHA 校验全绿,`import '@ash/shared'`
+主仓是同一个坑更隐蔽的那一半 —— fetch、checkout、完整 SHA 校验全绿,`import '@navi/shared'`
 拿到的仍是主仓旧代码,一个全部通过的假绿。所以每次同步都把四个 junction 的实际目标读出来回传,
 **和 SHA 一样算成功判据**:指错了就先删链接本体(只删链接,`Remove-Item -Recurse` 会穿过 junction
 去删目标目录)再重建;位置上蹲着的是真目录/真文件就直接中止报错,不替用户做主删东西。
@@ -112,7 +112,7 @@ live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析
    含 `..` 的路径、盘符开头、`/` 或 `\` 开头、UNC —— 一律拒绝并说明理由,CLI 以 1 退出。
    空串尤其要拦:它拼出来的正是对端 repo 根,也就是那个**正在跑着 Navi 的主工作区**。
 2. **先摘掉目录型 reparse point,再 clean。** `git clean` 的递归删除同样会穿过 junction ——
-   那四个 `@ash/*` 指着的正是主仓的 `shared`/`server`/`web`/`mcp`。摘掉的链接紧接着
+   那四个 `@navi/*` 指着的正是主仓的 `shared`/`server`/`web`/`mcp`。摘掉的链接紧接着
    就原地重建,所以顺带也免了「junction 指错」那一半。连**枚举**都不能进 junction:
    `Get-ChildItem -Recurse` 会跟进去,那就是在遍历主仓。
 

@@ -10,8 +10,8 @@
 // publish/推进放在临界区外(理由见 queue-claim-chain.ts)。
 import type { Context, Hono } from "hono";
 import { eq, asc, inArray } from "drizzle-orm";
-import type { Task } from "@ash/shared";
-import { queueBlockedText, type QueueBlocker } from "@ash/shared/scheduled-message-wait";
+import type { Task } from "@navi/shared";
+import { queueBlockedText, type QueueBlocker } from "@navi/shared/scheduled-message-wait";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -73,7 +73,7 @@ async function publishQueueMembers(taskIds: string[]): Promise<Map<string, Task>
   const published = await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
   // 队列成员或顺序变了,托盘上「在等谁」也跟着变(pending-wait.ts)。
   void import("./pending-wait.js").then(({ republishWaitsOf }) => republishWaitsOf(taskIds))
-    .catch((err) => console.error("[ash] 队列变更后通知托盘失败:", err));
+    .catch((err) => console.error("[navi] 队列变更后通知托盘失败:", err));
   return new Map(published.filter((t): t is Task => t != null).map((t) => [t.id, t]));
 }
 

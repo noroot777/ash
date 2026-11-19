@@ -5,10 +5,10 @@
 // 重试在原始流里是**两条** —— 先一条 notice error,紧跟一条 `session`(把 CLI 会话 id 报一遍)。
 // 于是每条重试都被自己后面那句身份通知当场解除:8 次重试、远超阈值,页面上只有八条普通提示,
 // 任务一直显示运行中,既不报警也不熔断。那句话压根不是上游回话 —— 判据共用
-// `@ash/shared/waiting` 的 `resumesWaiting`(session/context/system 都不算),落点在 turn-stall.ts。
+// `@navi/shared/waiting` 的 `resumesWaiting`(session/context/system 都不算),落点在 turn-stall.ts。
 //
 // 同一条意见的另一半:**子线程里的重试压根没转换成事件**。带 `parent_tool_use_id` 的事件在
-// claude-stream 那边提前 return,不走它的 `system` 分支,所以子智能体连不上上游时 ash 全程静默
+// claude-stream 那边提前 return,不走它的 `system` 分支,所以子智能体连不上上游时 navi 全程静默
 // (codex 那一侧的同一个洞是第 1 轮第 1 条)。现在由 `ClaudeChildActivity` 补出来,包装成
 // `kind:"tool"` 的子活动 —— 看门狗穿过包装认里面那条(errorFacts)。
 //
@@ -24,12 +24,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // 纯类型,静态引进来不碰库(类型擦除,不会在设 env 之前加载那条链)。
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { StallActions, StallFacts } from "../src/turn-stall.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-claude-retry-"));
-process.env.ASH_DB = join(stage, "t.db");
-process.env.HARNESS_DB = process.env.ASH_DB;
+const stage = mkdtempSync(join(tmpdir(), "navi-claude-retry-"));
+process.env.NAVI_DB = join(stage, "t.db");
+process.env.HARNESS_DB = process.env.NAVI_DB;
 
 const { ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
@@ -52,11 +52,11 @@ const lines = [
 const script = `for (const l of ${JSON.stringify(lines)}) console.log(l);`;
 const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "pipe"] });
 
-process.env.ASH_STALL_WARN_ERRORS = "5";
-process.env.ASH_STALL_WARN_MS = "0";
-process.env.ASH_STALL_TRIP_MS = "0"; // 这一段只验报警:熔断有自己的钉子(test-turn-stall.ts)
-process.env.ASH_STALL_TRIP_GRACE_MS = "0";
-process.env.ASH_STALL_POLL_MS = "20";
+process.env.NAVI_STALL_WARN_ERRORS = "5";
+process.env.NAVI_STALL_WARN_MS = "0";
+process.env.NAVI_STALL_TRIP_MS = "0"; // 这一段只验报警:熔断有自己的钉子(test-turn-stall.ts)
+process.env.NAVI_STALL_TRIP_GRACE_MS = "0";
+process.env.NAVI_STALL_POLL_MS = "20";
 __resetTurnStalls();
 __resetStallFailures();
 
@@ -93,7 +93,7 @@ assert.ok(
 assert.equal(
   kinds.filter((kind) => kind === "tool:error").length,
   1,
-  `子线程里的重试没被报出来 —— 子智能体连不上上游时 ash 全程静默(${JSON.stringify(kinds)})`,
+  `子线程里的重试没被报出来 —— 子智能体连不上上游时 navi 全程静默(${JSON.stringify(kinds)})`,
 );
 
 // ② 看门狗:5 条错误(4 主 + 1 子)凑够阈值就该报警,中间那几条身份通知撤不动它。
@@ -137,9 +137,9 @@ __resetTurnStalls();
   const child3 = spawn(process.execPath, ["-e", `for (const l of ${JSON.stringify(lines3)}) console.log(l);`],
     { stdio: ["ignore", "pipe", "pipe"] });
 
-  process.env.ASH_STALL_WARN_ERRORS = "3";
-  process.env.ASH_STALL_TRIP_MS = "60";   // 熔断档也要真落下来:报告实测那一例是「警告 0、熔断 0」
-  process.env.ASH_STALL_POLL_MS = "20";
+  process.env.NAVI_STALL_WARN_ERRORS = "3";
+  process.env.NAVI_STALL_TRIP_MS = "60";   // 熔断档也要真落下来:报告实测那一例是「警告 0、熔断 0」
+  process.env.NAVI_STALL_POLL_MS = "20";
   __resetTurnStalls();
   __resetStallFailures();
 

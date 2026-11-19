@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { CHAT_TRACE_LIMITS, type ChatTraceEvent } from "@ash/shared/chat";
+import { CHAT_TRACE_LIMITS, type ChatTraceEvent } from "@navi/shared/chat";
 import { db } from "../db/index.js";
 import { chatMessages } from "../db/schema.js";
 

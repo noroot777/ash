@@ -9,7 +9,7 @@
 // 体积：保留末尾 HISTORY_BUDGET 字，更早的截掉并指给它完整记录的路径（那份 .md 已经抹掉了
 // 被删的内容，读它不会把原话读回来）。
 import { readFile } from "node:fs/promises";
-import { parseSessionOutput, type ConvSeg } from "@ash/shared/session-output";
+import { parseSessionOutput, type ConvSeg } from "@navi/shared/session-output";
 import { readableRunPath, sessionTranscriptPath } from "./transcript.js";
 
 const HISTORY_BUDGET = 60_000;

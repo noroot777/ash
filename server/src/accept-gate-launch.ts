@@ -112,15 +112,15 @@ const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 const config = JSON.parse(Buffer.from(process.argv[1], "base64").toString("utf8"));
 // 配了准备命令就先跑它（同一个 cwd、同一份环境、同一棵受监督的进程树），rc=0 才接着起前置命令；
-// 中间 ash 要停它（abort）就不再起下一段。退出档记下停在哪一段：「准备没过」和「测试红了」是两件事。
+// 中间 navi 要停它（abort）就不再起下一段。退出档记下停在哪一段：「准备没过」和「测试红了」是两件事。
 //
 // 这一档里**阶段只由退出档说**（第 2 轮审查 #2）：日志是辅助输出，写不进去（磁盘满、fd 坏了）只少
 // 几行字（say），不许打断阶段推进；启动器自己任何意外都经 finish 记成 infra，不让 node 以 1 退出、
-// 被读成某一段的退出码。退出档本身写不进去时 ash 一律按「分不清」收（accept-gate-exit.ts）。
+// 被读成某一段的退出码。退出档本身写不进去时 navi 一律按「分不清」收（accept-gate-exit.ts）。
 let phase = config.prepare ? "prepare" : "command";
 function say(fd, text) { try { fs.writeSync(fd, text); } catch {} }
 if (config.prepare) process.on("uncaughtException", error => {
-  say(2, "\n[ash] 门禁启动器出错（" + (error && error.message || error) + "），停在" + (phase === "prepare" ? "准备命令" : "前置命令") + "这一段\n");
+  say(2, "\n[navi] 门禁启动器出错（" + (error && error.message || error) + "），停在" + (phase === "prepare" ? "准备命令" : "前置命令") + "这一段\n");
   finish(125, null, phase, true);
 });
 if (config.macGuard) {
@@ -153,9 +153,9 @@ function run(next) {
     run("command");
   });
 }
-// 退出码除了转发给起我的那个 ash，还要**先落盘**：那个 ash 可能已经重启了，新实例只能从这里
+// 退出码除了转发给起我的那个 navi，还要**先落盘**：那个 navi 可能已经重启了，新实例只能从这里
 // 认领结果。tmp+rename 保证要么整份、要么没有；写不进去也照常转发，不拿落盘失败改写结论。
-// elapsedMs 是本进程起来到现在的单调用时：时限按它判，跟 ash 在不在场、墙上时间有没有被校正都无关。
+// elapsedMs 是本进程起来到现在的单调用时：时限按它判，跟 navi 在不在场、墙上时间有没有被校正都无关。
 function finish(code, childSignal, phase, infra) {
   if (config.exit) try {
     const temporary = config.exit + "." + process.pid + ".tmp";

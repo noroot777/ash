@@ -1,10 +1,10 @@
 // 回归:restart.mjs 停谁只认「谁在监听端口」,单实例锁里的号码不当线索(用户 2026-11-16 选定)。
 //
-// 事故形状:ash 没正常退出,锁留在原地,号码被别的进程复用 —— 2026-11-16 那台 Windows 上旧 ash
+// 事故形状:navi 没正常退出,锁留在原地,号码被别的进程复用 —— 2026-11-16 那台 Windows 上旧 navi
 // 11-12 就死了,号码被一个系统服务占着,restart 拿它当旧实例,报「无法安全终止 Windows 旧实例:
 // <pid> 的进程身份不完整」。中间几版试过从锁里把号码「认回来」(比对命令行、出生时刻早于心跳),
 // 都被审查拆穿:命令行会认错,时钟回拨能骗过心跳证明。所以这里的旁观者两种形状都做:命令行末尾
-// 就是 ash 入口,锁里的心跳既有「早于它出生」也有「晚于它出生」(时钟回拨后的样子)。
+// 就是 navi 入口,锁里的心跳既有「早于它出生」也有「晚于它出生」(时钟回拨后的样子)。
 //
 // 端到端跑真的 restart.mjs(假 npm、假 server,同 test-restart.mjs 的搭法)。POSIX 上用一组一律
 // 失败的 lsof/ss/fuser 垫片模拟「系统查不出监听者」;Windows 的监听者走 PowerShell,垫不掉,
@@ -22,10 +22,10 @@ import { runTestProcess } from "./test-process.mjs";
 import { spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const TMP = mkdtempSync(join(tmpdir(), "ash-restart-lock-"));
+const TMP = mkdtempSync(join(tmpdir(), "navi-restart-lock-"));
 const FAKE_BIN = join(TMP, "bin");
 const NO_LISTENERS_BIN = join(TMP, "no-listeners");
-const ENTRY = join(TMP, "ash", "server", "dist", "index.js");
+const ENTRY = join(TMP, "navi", "server", "dist", "index.js");
 
 // 四个互不相同的空闲端口：同时占住再一起放，免得拿到同一个。写死端口的话这条测试没法跟自己并行，
 // 也会撞上机器上碰巧占着那个号的东西。
@@ -87,8 +87,8 @@ createServer((req, res) => {
       ...process.env,
       PATH: [...bins, process.env.PATH].join(IS_WINDOWS ? ";" : ":"),
       PORT: String(port),
-      ASH_DB: join(dir, "ash.db"),
-      ASH_LOG: join(dir, "ash.log"),
+      NAVI_DB: join(dir, "ash.db"),
+      NAVI_LOG: join(dir, "navi.log"),
       SERVER_ENTRY: fakeServer,
       START_TIMEOUT: "10",
     },
@@ -112,7 +112,7 @@ async function stopStarted() {
 await withTestResources(async () => {
   mkdirSync(FAKE_BIN);
   mkdirSync(NO_LISTENERS_BIN);
-  mkdirSync(join(TMP, "ash", "server", "dist"), { recursive: true });
+  mkdirSync(join(TMP, "navi", "server", "dist"), { recursive: true });
   writeFileSync(ENTRY, "setInterval(() => {}, 1000);\n");
   const npmShim = join(FAKE_BIN, "npm-shim.mjs");
   writeFileSync(npmShim, "");
@@ -135,7 +135,7 @@ await withTestResources(async () => {
         assert.match(output, new RegExp(`${port} 已就绪`), `${shape}:重启没完成:\n${output}`);
         await stopStarted();
       }
-      console.log("✓ 残锁的号码被一个命令行末尾就是 ash 入口的进程复用:心跳怎么写都不碰它,重启照常完成");
+      console.log("✓ 残锁的号码被一个命令行末尾就是 navi 入口的进程复用:心跳怎么写都不碰它,重启照常完成");
     }, [stopStarted, () => bystander.dispose()]);
   }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import { inputCount } from "../lib/latestInteraction.ts";
 import { dispatchPath } from "../lib/dispatchFamily.ts";
 

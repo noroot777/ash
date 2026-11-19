@@ -1,4 +1,4 @@
-import type { Session } from "@ash/shared";
+import type { Session } from "@navi/shared";
 
 /**
  * 两份 sessions 快照怎么合。

@@ -23,7 +23,7 @@
 //      审查段的在原处单独记一笔；改写法之前的老任务时间线（同样不带标）照旧是任务的事。
 // 跑：npm -w web run test:review-voice-footnote
 import assert from "node:assert/strict";
-import type { FreeReviewRun, Session } from "@ash/shared";
+import type { FreeReviewRun, Session } from "@navi/shared";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";

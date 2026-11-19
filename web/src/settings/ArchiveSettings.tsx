@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import type { AcceptClean } from "@ash/shared/workflow";
-import { ACCEPT_CLEAN, ACCEPT_CLEAN_LABELS } from "@ash/shared/workflow";
-import type { AppSettings, ProjectView, Task, TaskListItem } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import type { AcceptClean } from "@navi/shared/workflow";
+import { ACCEPT_CLEAN, ACCEPT_CLEAN_LABELS } from "@navi/shared/workflow";
+import type { AppSettings, ProjectView, Task, TaskListItem } from "@navi/shared";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
 import { ArrowCounterClockwise, Archive } from "@phosphor-icons/react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { CopyButton } from "../components/CopyButton.tsx";

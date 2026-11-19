@@ -7,7 +7,7 @@ import {
   type SetStateAction,
 } from "react";
 import { File as FileIcon, Paperclip, SpinnerGap, X } from "@phosphor-icons/react";
-import { maxBytesFor, type AttachmentKind } from "@ash/shared";
+import { maxBytesFor, type AttachmentKind } from "@navi/shared";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";

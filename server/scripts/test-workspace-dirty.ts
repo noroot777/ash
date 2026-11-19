@@ -7,7 +7,7 @@
 //
 // 钉住四条：
 //   1. 借来的 node_modules 软链（含子包下的）不算脏
-//   2. ash 自己的 .worktrees/ 不算脏
+//   2. navi 自己的 .worktrees/ 不算脏
 //   3. 真实改动（未跟踪的新源文件 / 改过的已跟踪文件）照常算脏
 //   4. 读不到的目录返回 null（调用方按「不确定」处理，不当干净）
 import assert from "node:assert/strict";
@@ -16,7 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-workspace-dirty-"));
+const root = mkdtempSync(join(tmpdir(), "navi-workspace-dirty-"));
 const repo = join(root, "repo");
 
 const git = (cwd: string, ...args: string[]) =>
@@ -24,8 +24,8 @@ const git = (cwd: string, ...args: string[]) =>
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Ash Test");
-  git(repo, "config", "user.email", "ash@example.test");
+  git(repo, "config", "user.name", "Navi Test");
+  git(repo, "config", "user.email", "navi@example.test");
   mkdirSync(join(repo, "server"), { recursive: true });
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   // 子包里得有已跟踪文件，git 才会把 server/node_modules 单独报出来而不是折叠成 `?? server/`。
@@ -49,10 +49,10 @@ try {
   assert.equal(await workspaceDirty(repo), false,
     "借来的 node_modules 软链是构建脚手架，不是这个任务的代码改动");
 
-  // ── 2. ash 自己的 .worktrees/ 不算脏 ────────────────────────────────────
+  // ── 2. navi 自己的 .worktrees/ 不算脏 ────────────────────────────────────
   mkdirSync(join(repo, ".worktrees", "someTask"), { recursive: true });
   writeFileSync(join(repo, ".worktrees", "someTask", "x.txt"), "x\n");
-  assert.equal(await workspaceDirty(repo), false, "ash 放任务 worktree 的目录不算这个项目的改动");
+  assert.equal(await workspaceDirty(repo), false, "navi 放任务 worktree 的目录不算这个项目的改动");
 
   // ── 3. 真实改动照常算脏 ─────────────────────────────────────────────────
   writeFileSync(join(repo, "feature.ts"), "export const x = 1;\n");

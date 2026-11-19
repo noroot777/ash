@@ -14,12 +14,12 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { GitAction, GitWorkbenchState } from "@ash/shared/git-workbench";
+import type { GitAction, GitWorkbenchState } from "@navi/shared/git-workbench";
 
 const directory = realpathSync(
-  mkdtempSync(join(tmpdir(), "ash-workbench-maintenance-")),
+  mkdtempSync(join(tmpdir(), "navi-workbench-maintenance-")),
 );
-process.env.ASH_DB = join(directory, "ash.db");
+process.env.NAVI_DB = join(directory, "ash.db");
 process.env.GIT_CONFIG_GLOBAL = join(directory, "gitconfig");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 writeFileSync(

@@ -10,15 +10,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const directory = realpathSync(
-  mkdtempSync(join(tmpdir(), "ash-git-workbench-browser-")),
+  mkdtempSync(join(tmpdir(), "navi-git-workbench-browser-")),
 );
-process.env.ASH_DB = join(directory, "ash.db");
-delete process.env.ASH_PREVIEW;
+process.env.NAVI_DB = join(directory, "ash.db");
+delete process.env.NAVI_PREVIEW;
 process.env.GIT_CONFIG_GLOBAL = join(directory, "gitconfig");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 writeFileSync(
   process.env.GIT_CONFIG_GLOBAL,
-  "[user]\nname = Ash Browser Test\nemail = browser@example.test\n[commit]\ngpgsign = false\n",
+  "[user]\nname = Navi Browser Test\nemail = browser@example.test\n[commit]\ngpgsign = false\n",
 );
 const root = join(directory, "repo");
 const remote = join(directory, "origin.git");

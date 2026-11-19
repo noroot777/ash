@@ -40,7 +40,7 @@ export async function recordQueueAdvanceIntent(queueId: string): Promise<string 
       .onConflictDoUpdate({ target: queueAdvanceIntents.queueId, set: { acceptedAt, generation } });
     return generation;
   } catch (error) {
-    console.error(`[ash] 队列推进意图落库失败 queue=${queueId}:`, error);
+    console.error(`[navi] 队列推进意图落库失败 queue=${queueId}:`, error);
     return null;
   }
 }
@@ -61,7 +61,7 @@ export async function clearQueueAdvanceIntent(queueId: string, generation: strin
     generation === null
       ? isNull(queueAdvanceIntents.generation)
       : eq(queueAdvanceIntents.generation, generation),
-  )).catch((error) => console.error(`[ash] 队列推进意图清理失败 queue=${queueId}:`, error));
+  )).catch((error) => console.error(`[navi] 队列推进意图清理失败 queue=${queueId}:`, error));
 }
 
 /**
@@ -78,7 +78,7 @@ export async function refuseQueueAdvance(
 ): Promise<Error> {
   const why = cause instanceof Error ? cause.message : String(cause);
   const message = `队列推进未接受：推进责任没能落库，这一次没有任何人能在重启后补办（${why}）`;
-  console.error(`[ash] ${message} queue=${queueId}${taskId ? ` task=${taskId}` : ""}`, cause);
+  console.error(`[navi] ${message} queue=${queueId}${taskId ? ` task=${taskId}` : ""}`, cause);
   if (taskId) {
     try {
       const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -88,7 +88,7 @@ export async function refuseQueueAdvance(
         });
       }
     } catch (error) {
-      console.error(`[ash] 队列推进未接受的交代写入失败 task=${taskId}:`, error);
+      console.error(`[navi] 队列推进未接受的交代写入失败 task=${taskId}:`, error);
     }
   }
   return new Error(message);

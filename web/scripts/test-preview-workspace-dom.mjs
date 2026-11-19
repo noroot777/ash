@@ -13,7 +13,7 @@ import { checkPreviewPanelOverlap } from "./preview-panel-overlap-checks.mjs";
 import { resizeViewport, settlePage, waitUntil } from "./wait-until.mjs";
 
 export async function testPreviewWorkspaceDom() {
-  const cacheDir = await mkdtemp(join(tmpdir(), "ash-preview-workspace-test-"));
+  const cacheDir = await mkdtemp(join(tmpdir(), "navi-preview-workspace-test-"));
   const server = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "error", cacheDir,
     server: { host: "127.0.0.1", port: 0, strictPort: false } });
   let browser;
@@ -447,11 +447,11 @@ export async function testPreviewWorkspaceDom() {
       // 同一个来源发到同一个窗口的消息按序派发：哨兵到了，前面那条普通窗口消息就已经被处理过。
       await page.evaluate(() => {
         window.__sentinel = new Promise((resolve) => {
-          const on = (event) => { if (event.data?.type === '__ash-sentinel') { window.removeEventListener('message', on); resolve(); } };
+          const on = (event) => { if (event.data?.type === '__navi-sentinel') { window.removeEventListener('message', on); resolve(); } };
           window.addEventListener('message', on);
         });
       });
-      await runtimeFrame.evaluate(() => { parent.postMessage({ type: 'escape' }, '*'); parent.postMessage({ type: '__ash-sentinel' }, '*'); });
+      await runtimeFrame.evaluate(() => { parent.postMessage({ type: 'escape' }, '*'); parent.postMessage({ type: '__navi-sentinel' }, '*'); });
       await page.evaluate(() => window.__sentinel);
       await settlePage(page);
       assert.equal(await button('还原预览').isVisible(), true, 'ordinary window messages cannot dismiss the workspace');

@@ -284,7 +284,7 @@ export async function takeIntent(
       .returning({ id: freeReviewRounds.id });
     return taken.length ? "taken" : "lost";
   } catch (error) {
-    console.error(`[ash] 审查派发意图落库失败 run=${runId} round=${round}:`, error);
+    console.error(`[navi] 审查派发意图落库失败 run=${runId} round=${round}:`, error);
     return "unwritable";
   }
 }
@@ -313,6 +313,6 @@ export async function clearReviewDispatchIntent(
     ))
     .then(() => undefined)
     .catch((error) => {
-      console.error(`[ash] 审查派发意图清理失败 run=${runId} round=${round}:`, error);
+      console.error(`[navi] 审查派发意图清理失败 run=${runId} round=${round}:`, error);
     });
 }

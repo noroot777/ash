@@ -5,7 +5,7 @@ import "../../src/styles/global.css";
 
 // StrictMode 是刻意的：这个组件栽过一次「effect 自己触发自己 → cleanup 作废在途请求
 // → 菜单永远停在加载态」，StrictMode 的双跑正是最容易把那类写法照出来的地方。
-function Ash() {
+function Navi() {
   const [path, setPath] = useState("AGENTS.md");
   const [toast, setToast] = useState("");
   return (
@@ -24,6 +24,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <Navi />
   </StrictMode>,
 );

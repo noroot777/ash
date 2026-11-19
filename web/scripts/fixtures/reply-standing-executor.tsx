@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
@@ -40,7 +40,7 @@ const BASE: Task = {
   updatedAt: "2026-09-01T00:00:00.000Z",
 };
 
-function Ash() {
+function Navi() {
   // 服务端那一半用本地 state 替身：PATCH 成功后任务字段跟着变，正是真实回流的形状。
   const [task, setTask] = useState<Task>(BASE);
   const [log, setLog] = useState<string[]>([]);
@@ -92,6 +92,6 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <DraftProvider>
-    <Ash />
+    <Navi />
   </DraftProvider>,
 );

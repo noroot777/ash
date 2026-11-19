@@ -11,7 +11,7 @@
 //   原生子智能体调用                             → nativeWork.input 里有结构化参数
 //   catalog 那几家在工具报错时会再补一条同名事件,detail 以「失败：」开头
 // 认不出的工具一律「调用 <工具名>」,后面跟上能挑出来的那个值 —— 宁可说得笨,不能把它弄丢。
-import { isAshMcpServerName } from "@ash/shared/mcp";
+import { isNaviMcpServerName } from "@navi/shared/mcp";
 import { shortenPath, traceSummary, type ExecutionEvent } from "./executionTrace.ts";
 
 /** 摘要里分得开的那几类;其余的(调用 MCP、记待办、看目录……)都算 other,摘要里并成「另有 N 步」。 */
@@ -84,11 +84,11 @@ other("resumeagent", "唤回子智能体", "正在唤回子智能体", "唤回�
 other("listagents", "看子智能体", "正在看子智能体", "看了子智能体", []);
 other("exitplanmode", "交出计划", "正在交出计划", "交出了计划", ["plan"]);
 
-/** 哨兵叫醒那一步在执行过程里用的工具名(ash 服务名下),见 task-detail/monitorWakeTurns.ts。 */
+/** 哨兵叫醒那一步在执行过程里用的工具名(navi 服务名下),见 task-detail/monitorWakeTurns.ts。 */
 export const MONITOR_WAKE_TOOL = "monitor_wake";
 
-// ash 自己那套 MCP 工具:名字说的就是动作,翻一下就不必让人去认 `mcp__ash__start_monitor`。
-const ASH_TOOLS: Record<string, [string, string, string, string[]]> = {
+// navi 自己那套 MCP 工具:名字说的就是动作,翻一下就不必让人去认 `mcp__navi__start_monitor`。
+const NAVI_TOOLS: Record<string, [string, string, string, string[]]> = {
   start_monitor: ["挂哨兵", "正在挂哨兵", "挂了哨兵", ["description", "command"]],
   stop_monitor: ["停哨兵", "正在停哨兵", "停了哨兵", ["reason", "monitorId"]],
   complete_task: ["确认完成", "正在确认完成", "确认了完成", []],
@@ -313,8 +313,8 @@ export function describeTool(event: ExecutionEvent): StepPhrase {
 
   const parsed = parseDetail(event);
   const input = parsed.input;
-  const isAsh = isAshMcpServerName(server);
-  const kind: StepKind = isAsh ? "other" : KIND_BY_KEY[key] ?? "other";
+  const isNavi = isNaviMcpServerName(server);
+  const kind: StepKind = isNavi ? "other" : KIND_BY_KEY[key] ?? "other";
 
   if (kind === "read") {
     const path = (input && (firstOf(input, ["file_path", "filePath", "notebook_path", "absolute_path", "path", "file", "target_file", "uri"])
@@ -371,9 +371,9 @@ export function describeTool(event: ExecutionEvent): StepPhrase {
     return phrase(kind, FORMS.dispatch, { object: line, short: line ? `子智能体「${clip(line, 40)}」` : "子智能体" }, parsed, "任务");
   }
 
-  // 哨兵叫醒了它:不是它调的工具,是 ash 把等来的东西喂回这一回合(task-detail/monitorWakeTurns.ts
+  // 哨兵叫醒了它:不是它调的工具,是 navi 把等来的东西喂回这一回合(task-detail/monitorWakeTurns.ts
   // 造的那一步)。说成「等 哨兵「…」」,后面是等了多久、等到了什么;点开是送回来的那几行。
-  if (isAsh && tool === MONITOR_WAKE_TOOL && input) {
+  if (isNavi && tool === MONITOR_WAKE_TOOL && input) {
     const name = asText(input.source) || "哨兵";
     const output = asText(input.output);
     return {
@@ -385,7 +385,7 @@ export function describeTool(event: ExecutionEvent): StepPhrase {
   }
 
   // 其余:有专门说法的用专门说法,否则「调用 <工具名>」后面跟一个挑得出来的值。
-  const known = isAsh ? ASH_TOOLS[tool] : OTHER[key];
+  const known = isNavi ? NAVI_TOOLS[tool] : OTHER[key];
   if (known) {
     const [verb, now, past, pick] = known;
     let object = input ? firstOf(input, pick) : collapse(parsed.text ?? "");
@@ -400,6 +400,6 @@ export function describeTool(event: ExecutionEvent): StepPhrase {
   const value = traceSummary({ ...event, label: tool });
   return phrase("other", ["调用", "正在调用", "调用了"], {
     object: tool, short: tool, mono: true,
-    tail: [server && !isAsh ? server : "", value].filter(Boolean).join(" · "),
+    tail: [server && !isNavi ? server : "", value].filter(Boolean).join(" · "),
   }, parsed, "参数");
 }

@@ -15,7 +15,7 @@ const row = async (taskId: string) => (await db.select().from(tasks).where(eq(ta
 const api = new Hono();
 mountTaskRunRoutes(api);
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 try {
   const { open, openQuiet } = await setupRegressionReviews();
   for (const entry of ["continue", "checkpoint"] as const) {

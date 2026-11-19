@@ -171,7 +171,7 @@
 .task-markdown strong { color: var(--ink); font-weight: var(--w-medium); }
 .task-markdown a { color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 /* 引用块跟系统旁注（.conversation-note）是同一档「不是正文在说话」的东西：agent 输出里
-   的引用多半就是 ash 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
+   的引用多半就是 navi 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
    竖线的高度才跟着一样——竖线高度就是行高加这两像素 padding 撑出来的。 */
 .task-markdown blockquote { border-left: 2px solid var(--line2); padding: 1px 0 1px 11px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
 .task-markdown blockquote > :first-child { margin-top: 0; }

@@ -3,7 +3,7 @@
 // 服务端只广播「重取一下」（task-actions-feed.ts），算一遍的永远是开着那个任务的页面发来的这次请求。
 import { randomUUID } from "node:crypto";
 import type { Hono } from "hono";
-import type { PrimaryAction, RetryTurnAction, TaskActions } from "@ash/shared";
+import type { PrimaryAction, RetryTurnAction, TaskActions } from "@navi/shared";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { groups, queueItems, taskPrerequisiteLaunches, tasks } from "./db/schema.js";

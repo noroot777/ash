@@ -43,7 +43,7 @@ const overview = {
 };
 const branchDiff = {
   available: true,
-  sourceBranch: "ash/x",
+  sourceBranch: "navi/x",
   targetBranch: "main",
   mergeBase: "abc1234",
   diff: "",

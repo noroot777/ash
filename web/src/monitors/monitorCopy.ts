@@ -2,7 +2,7 @@
 //
 // 单独成文件是因为**会话区那张等待卡和 inspector 里那张卡必须说同一句话**：同一个哨兵
 // 在两处显示成不同的期限，用户只会以为其中一处是坏的。
-import type { TaskMonitor } from "@ash/shared/monitor";
+import type { TaskMonitor } from "@navi/shared/monitor";
 import { formatInstant } from "../task-detail/utils.ts";
 
 /**
@@ -149,7 +149,7 @@ function endedWithoutOutput(monitor: TaskMonitor): string {
     case "lost":
       // **不替它编一次重启**（第 2 轮审查 R2-4）：`lost` 还有另一个来源 —— 创建期的补偿没能
       // 确认那个壳的归属（`monitor-create.ts` 的两处 `lost`），那一路压根没发生过重启，也
-      // 证明不了那个进程已经不在。这一层说得出的只有两件事：ash 认不回它了，以及它一条
+      // 证明不了那个进程已经不在。这一层说得出的只有两件事：navi 认不回它了，以及它一条
       // 输出都没送到。到底是哪一种由 `endedReason` 答（就显示在这句话旁边），不从一个通用
       // 终态反推一个没观测到的事实。
       return "Navi 已经认不回这个进程了，期间它也没有一条输出送到这个任务头上。";

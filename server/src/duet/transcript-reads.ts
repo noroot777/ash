@@ -6,7 +6,7 @@
 // 用的是同一道(审查第 3 轮 R4 是类问题)。
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { TurnImageRef } from "@ash/shared";
+import type { TurnImageRef } from "@navi/shared";
 import { RUNS_DIR } from "../paths.js";
 import { readableRunPath } from "../transcript.js";
 import { backfillArtifactUploads } from "../uploads.js";

@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 
 export function formatInstant(value?: string | null): string {
   if (!value) return "";
@@ -113,7 +113,7 @@ export function isAudioPath(path: string): boolean {
 
 // 解析逻辑搬进了 shared（server 读「最后一条消息」时要用同一份），这里只转出去，
 // 免得所有调用点跟着改 import。
-export { parseAttachmentText } from "@ash/shared/attachments";
+export { parseAttachmentText } from "@navi/shared/attachments";
 
 export function attachmentView(path: string): { name: string; url: string | null; image: boolean } {
   const normalized = path.trim().replaceAll("\\", "/");

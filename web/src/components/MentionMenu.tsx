@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, type MouseEvent, type ReactNode } from "react";
-import type { Note } from "@ash/shared";
+import type { Note } from "@navi/shared";
 import { CaretDown, CaretRight, File, FolderSimple, NotePencil } from "@phosphor-icons/react";
 import { AgentIcon } from "./AgentIcon.tsx";
 import { noteTitle } from "../lib/noteMention.ts";

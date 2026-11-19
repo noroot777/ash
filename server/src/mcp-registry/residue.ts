@@ -1,4 +1,4 @@
-// 宿主登记搬进新隔离档之前的收口:**要发布的那整条里,还有没有不是当前这一份的 ash 脚本引用**。
+// 宿主登记搬进新隔离档之前的收口:**要发布的那整条里,还有没有不是当前这一份的 navi 脚本引用**。
 //
 // 判的是 CLI **实际会读到的值**,不是原文(第 6 轮审查:TOML 里 `"/old/mcp/dist/index.js"` 原文上
 // 看不见 `mcp/dist`,codex 解码后就是旧入口;反过来行尾注释原文上看得见,codex 根本不读)。所以:
@@ -7,13 +7,13 @@
 //     读不通,就当作「说不准」,一律拒绝 —— 证明不了不依赖旧入口,就不发布;
 //   · 每个值先把路径的等价写法归一(分隔符连写、`\` 与 `/`、`./`、`x/..`、`%2F` 之类的百分号编码),
 //     再把当前入口的每一次**完整**出现抹掉(两侧得是分隔符:它也可能只是另一条更长路径的一截),
-//     然后去掉引号(shell 里 `"/old/mcp/"'dist'` 拼起来就是一条路径),剩下的还看得见 ash 脚本就算残留。
+//     然后去掉引号(shell 里 `"/old/mcp/"'dist'` 拼起来就是一条路径),剩下的还看得见 navi 脚本就算残留。
 //
 // 静态判不了的,这里不假装能判:运行时才拼出来的路径(shell 变量展开、命令替换),以及用户自己的
-// 启动器程序内部又去找旧安装 —— 那些只能看到「它是用户自己的启动方式」,跟 ash 的安装位置无关,原样搬。
+// 启动器程序内部又去找旧安装 —— 那些只能看到「它是用户自己的启动方式」,跟 navi 的安装位置无关,原样搬。
 import { tomlPairSpans, tomlStringValues } from "../codex-toml.js";
 
-/** ash 脚本的提及:`…/mcp/dist/index.js`,以及 node 会解析到它的目录写法 `…/mcp/dist`。 */
+/** navi 脚本的提及:`…/mcp/dist/index.js`,以及 node 会解析到它的目录写法 `…/mcp/dist`。 */
 const SCRIPT_MENTION = /mcp\/dist(?:\/index\.js(?![\w.-])|\/?(?![\w./-]))/i;
 /** 当前入口的一次「完整出现」两侧必须是这些字符(或者值的两端)。 */
 const OPEN = /[\s"'`=(,;&|]/;
@@ -34,7 +34,7 @@ const percentDecoded = (text: string): string =>
     try { return decodeURIComponent(run); } catch { return run; }
   });
 
-/** 一个值里有没有不是当前入口的 ash 脚本引用。 */
+/** 一个值里有没有不是当前入口的 navi 脚本引用。 */
 export function staleIn(value: string, entry: string): boolean {
   const current = normalizePath(entry);
   return [value, percentDecoded(value)].some((form) => {
@@ -53,7 +53,7 @@ export function staleIn(value: string, entry: string): boolean {
   });
 }
 
-/** JSON 族要发布的那整条里,第一个还引用着旧 ash 脚本的字符串值(返回说给用户听的那一处)。 */
+/** JSON 族要发布的那整条里,第一个还引用着旧 navi 脚本的字符串值(返回说给用户听的那一处)。 */
 export function staleField(value: unknown, entry: string, path = ""): string | null {
   if (typeof value === "string") return staleIn(value, entry) ? `${path || "登记"} 还引用着旧的 Navi 脚本` : null;
   if (Array.isArray(value)) {
@@ -70,7 +70,7 @@ export function staleField(value: unknown, entry: string, path = ""): string | n
   return null;
 }
 
-/** TOML 族要发布的那段里,第一条还引用着(或者说不准有没有引用)旧 ash 脚本的语句。 */
+/** TOML 族要发布的那段里,第一条还引用着(或者说不准有没有引用)旧 navi 脚本的语句。 */
 export function staleStatement(block: string, entry: string): string | null {
   const spans = tomlPairSpans(block);
   if (!spans) return "宿主那段 TOML 有语句读不通,说不准它引用了什么";

@@ -1,4 +1,4 @@
-// ash 的**在线登记**：一个活着的实例在它会写的**每一个资源键**上留一份记录。
+// navi 的**在线登记**：一个活着的实例在它会写的**每一个资源键**上留一份记录。
 //
 // 为什么单例锁不够用来回答「这套资源现在有没有人在线写」（第 3 轮审查 F2）：
 // ① 单例锁按**库文件**命名。共享同一份 `runs` 的另一个库路径（副本、别名）看不见它，
@@ -18,10 +18,10 @@
 // **「读不出来」不等于「没人在线」**（第 3 轮复核 F2 的同类出口）：枚举目录失败、某份登记读不动或
 // 解析不了，都只说明这一问没答上来。那时既不许清掉它、也不许回「没人」—— 这一问的下游是「要不要
 // 开始改别人正在写的历史」，答不上来还放行就是两个写入者同时落账。所以这种情况抛
-// `AshPresenceUnknownError`，由调用方按拒绝处理。
+// `NaviPresenceUnknownError`，由调用方按拒绝处理。
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { LEGACY_PRESENCE_PREFIX } from "@ash/shared/legacy-names";
+import { LEGACY_PRESENCE_PREFIX } from "@navi/shared/legacy-names";
 import { isPidAlive } from "./platform.js";
 import { inspectProcess } from "./proc.js";
 import { atomicCreateWithContent, canonicalResourceKey } from "./resource-claim.js";
@@ -32,7 +32,7 @@ const SUFFIX = ".json";
 /** 进程启动时刻的比较余量：ps 的精度到秒。 */
 const START_TIME_TOLERANCE_MS = 10_000;
 
-export type AshPresence = {
+export type NaviPresence = {
   pid: number;
   startedAt: string | null;
   processStartedAtMs: number | null;
@@ -51,16 +51,16 @@ const presenceFilesFor = (key: string, pid = process.pid): string[] =>
   PREFIXES.map((prefix) => `${key}${prefix}${pid}${SUFFIX}`);
 
 /** 这套资源上「有没有人在线」没答上来。调用方必须按「可能有」处理。 */
-export class AshPresenceUnknownError extends Error {
+export class NaviPresenceUnknownError extends Error {
   constructor(public readonly target: string, reason: string) {
     super(`无法确认 ${target} 上还有没有活着的 Navi（${reason}）：`
       + "不能据此认定没人在线，请恢复该路径可读取（或删掉读不懂的那份登记）后重试");
-    this.name = "AshPresenceUnknownError";
+    this.name = "NaviPresenceUnknownError";
   }
 }
 
 type PresenceRead =
-  | { kind: "record"; record: AshPresence }
+  | { kind: "record"; record: NaviPresence }
   /** 文件确实没了（ENOENT/ENOTDIR）—— 这是正常形态。 */
   | { kind: "absent" }
   /** 读不动或解析不了：**不是**「没人」。 */
@@ -76,17 +76,17 @@ function readPresence(file: string): PresenceRead {
     return { kind: "unreadable", reason: `读取失败（${code}）` };
   }
   try {
-    const parsed = JSON.parse(text) as Partial<AshPresence>;
+    const parsed = JSON.parse(text) as Partial<NaviPresence>;
     if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0) {
       return { kind: "unreadable", reason: "登记里没有可用的 pid" };
     }
-    return { kind: "record", record: parsed as AshPresence };
+    return { kind: "record", record: parsed as NaviPresence };
   } catch {
     return { kind: "unreadable", reason: "登记内容不是可解析的 JSON" };
   }
 }
 
-function alive(record: AshPresence): boolean {
+function alive(record: NaviPresence): boolean {
   if (!isPidAlive(record.pid)) return false;
   if (typeof record.processStartedAtMs !== "number") return true;
   const info = inspectProcess(record.pid);
@@ -94,29 +94,29 @@ function alive(record: AshPresence): boolean {
   return Math.abs(info.startedAtMs - record.processStartedAtMs) <= START_TIME_TOLERANCE_MS;
 }
 
-/** 这个资源键上现在有没有活着的 ash。顺手清掉已经没主的记录。 */
-export function liveAshPresenceFor(key: string): AshPresence | null {
-  return liveAshPresenceIn(key, null);
+/** 这个资源键上现在有没有活着的 navi。顺手清掉已经没主的记录。 */
+export function liveNaviPresenceFor(key: string): NaviPresence | null {
+  return liveNaviPresenceIn(key, null);
 }
 
 /**
- * 这个资源键上**除了我之外**还有没有活着的 ash。
+ * 这个资源键上**除了我之外**还有没有活着的 navi。
  *
  * 跟上面那一问分开给:拿着单例锁只证明「没有别的**守锁的**实例」,`NAVI_ALLOW_MULTI=1` 起的
  * 那种压根不写锁、只留在线登记 —— 所以「这台机器上就我一个」必须连这一问一起答
  * (checkpoint-ownership.ts:接管一张滞留凭证之前要拿它当证据)。答不出来照旧抛
- * AshPresenceUnknownError,调用方按「可能有」处理。
+ * NaviPresenceUnknownError,调用方按「可能有」处理。
  */
-export function otherLiveAshPresenceForAny(keys: readonly string[]):
-{ key: string; presence: AshPresence } | null {
+export function otherLiveNaviPresenceForAny(keys: readonly string[]):
+{ key: string; presence: NaviPresence } | null {
   for (const key of keys) {
-    const presence = liveAshPresenceIn(key, process.pid);
+    const presence = liveNaviPresenceIn(key, process.pid);
     if (presence) return { key, presence };
   }
   return null;
 }
 
-function liveAshPresenceIn(key: string, skipPid: number | null): AshPresence | null {
+function liveNaviPresenceIn(key: string, skipPid: number | null): NaviPresence | null {
   const canonical = canonicalResourceKey(key);
   const dir = dirname(canonical);
   const heads = PREFIXES.map((prefix) => `${basename(canonical)}${prefix}`);
@@ -127,14 +127,14 @@ function liveAshPresenceIn(key: string, skipPid: number | null): AshPresence | n
     const code = (error as NodeJS.ErrnoException).code;
     // 目录不在 = 这套资源压根没建起来过，没人在线是**证明得了**的。其余（权限、I/O）没答上来。
     if (code === "ENOENT" || code === "ENOTDIR") return null;
-    throw new AshPresenceUnknownError(dir, `枚举目录失败（${code}）`);
+    throw new NaviPresenceUnknownError(dir, `枚举目录失败（${code}）`);
   }
   for (const name of names) {
     if (!heads.some((head) => name.startsWith(head)) || !name.endsWith(SUFFIX)) continue;
     const file = join(dir, name);
     const read = readPresence(file);
     // 读不懂的那份**既不清也不放过**:清掉它等于把一个可能活着的写入者抹成不存在。
-    if (read.kind === "unreadable") throw new AshPresenceUnknownError(file, read.reason);
+    if (read.kind === "unreadable") throw new NaviPresenceUnknownError(file, read.reason);
     if (read.kind === "absent") continue;
     // 自己那一份:既不算「别人」,也不许被当成残骸清掉。
     if (skipPid !== null && read.record.pid === skipPid) continue;
@@ -146,26 +146,26 @@ function liveAshPresenceIn(key: string, skipPid: number | null): AshPresence | n
   return null;
 }
 
-/** 这一组资源键里，第一个有活着的 ash 的键。 */
-export function liveAshPresenceForAny(keys: readonly string[]):
-{ key: string; presence: AshPresence } | null {
+/** 这一组资源键里，第一个有活着的 navi 的键。 */
+export function liveNaviPresenceForAny(keys: readonly string[]):
+{ key: string; presence: NaviPresence } | null {
   for (const key of keys) {
-    const presence = liveAshPresenceFor(key);
+    const presence = liveNaviPresenceFor(key);
     if (presence) return { key, presence };
   }
   return null;
 }
 
-export type AshPresenceRegistration = { files: string[]; release: () => void };
+export type NaviPresenceRegistration = { files: string[]; release: () => void };
 
 /**
  * 把自己登记到这一组资源键上。**调用点必须在共同占有锁（`withResourceClaim`）里面** ——
  * 「查对方 + 登记自己」要是分成两段，两边各自都能通过检查（那正是 F2 的交错）。
  */
-export function registerAshPresence(
+export function registerNaviPresence(
   keys: readonly string[],
-  info: { port: number | null; mode: AshPresence["mode"] },
-): AshPresenceRegistration {
+  info: { port: number | null; mode: NaviPresence["mode"] },
+): NaviPresenceRegistration {
   const processStartedAtMs = Date.now() - Math.round(process.uptime() * 1000);
   const files: string[] = [];
   const drop = (): void => {
@@ -182,7 +182,7 @@ export function registerAshPresence(
   // 起来。部分登记不算成功占用。
   try {
     for (const key of [...new Set(keys.map(canonicalResourceKey))]) {
-      const record: AshPresence = {
+      const record: NaviPresence = {
         pid: process.pid,
         startedAt: new Date(processStartedAtMs).toISOString(),
         processStartedAtMs,
@@ -213,7 +213,7 @@ export function registerAshPresence(
 }
 
 /** 给人看的一句话。 */
-export const describeAshPresence = (found: { key: string; presence: AshPresence }): string =>
+export const describeNaviPresence = (found: { key: string; presence: NaviPresence }): string =>
   `PID ${found.presence.pid}（${found.presence.mode === "shared" ? "NAVI_ALLOW_MULTI 实例" : "持单例锁"}`
   + `${found.presence.port === null ? "" : `，端口 ${found.presence.port}`}，起于 ${found.presence.startedAt ?? "不详"}）`
   + ` 正在线占用 ${found.key}`;

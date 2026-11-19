@@ -66,7 +66,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
 let mode = "accept";
 try { mode = readFileSync(${JSON.stringify(modePath)}, "utf8").trim(); } catch { /* 缺省 accept */ }
-// refuse:一个应答都不给,当场退出。连接一关,ash 侧那条 \`initialize\` 以
+// refuse:一个应答都不给,当场退出。连接一关,navi 侧那条 \`initialize\` 以
 // 「Codex App Server 连接已关闭」被拒 —— 回合输入一个字都没出去。
 if (mode === "refuse") process.exit(0);
 // resume-silent:initialize 照答,**thread/resume 永远不答**,过两秒半自己断线。
@@ -93,7 +93,7 @@ function receive(message) {
     }
     // 先记一行再分档:**不管哪种 mode,输入到了这个进程就算一次执行**(重复执行就是从这儿数的)。
     try { appendFileSync(${JSON.stringify(startsPath)}, Date.now() + "\\n"); } catch { /* 记不下也别把假 CLI 弄崩 */ }
-    // stall:握手照常答、**回合输入收下却一声不吭也不断线**。ash 侧那条 turn/start 的应答
+    // stall:握手照常答、**回合输入收下却一声不吭也不断线**。navi 侧那条 turn/start 的应答
     // 永远等不到 → 有界等待到期 → unknown(说不上来)。这是 F3 那条路的真实现场:既不能当送达
     // 写终态 sent,也不能当没送达退回重投。(注:这段注释活在模板字符串里,不许用反引号。)
     if (mode === "stall") return;

@@ -7,7 +7,7 @@
 // 从 `free-workflow.ts` 切出来的原因：那份文件已经贴着 700 行上限，而重跑审查回合需要
 // 复用 launchReviewRound/failReviewStart 这一组。依赖是单向的（free-workflow.ts →
 // 本文件），`task-retry-turn.ts` 直接从这里取重跑入口，不用绕回去。
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -34,7 +34,7 @@ import { taskWorkspace } from "./task-workspace.js";
 import { turnProducedWork } from "./transcript.js";
 import { id, now } from "./util.js";
 import { workspaceSnapshot } from "./workspace-fingerprint.js";
-import { UNKNOWN_FINGERPRINT } from "@ash/shared/free-workflow";
+import { UNKNOWN_FINGERPRINT } from "@navi/shared/free-workflow";
 
 type TaskRow = typeof tasks.$inferSelect;
 export type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
@@ -140,7 +140,7 @@ export async function stopReviewRunMonitors(
     .then(({ stopMonitorsForReviewRun }) => stopMonitorsForReviewRun(runId, reason, owner))
     .catch((error) => {
       if (strict) throw error;
-      console.error(`[ash] stopMonitorsForReviewRun(${runId}) failed:`, error);
+      console.error(`[navi] stopMonitorsForReviewRun(${runId}) failed:`, error);
       return 0;
     });
 }
@@ -220,7 +220,7 @@ async function failReviewStartHeld(
     return true;
   }, { behavior: "immediate" });
   if (!settled) {
-    console.error(`[ash] 迟到的审查启动失败不落账 run=${run.id} round=${run.currentRound}`
+    console.error(`[navi] 迟到的审查启动失败不落账 run=${run.id} round=${run.currentRound}`
       + `（这一轮已有结论，或者已经被重跑成另一次，或者被拒收的那次输入已经不是这一轮当前的输入）：${message}`);
     return;
   }
@@ -282,7 +282,7 @@ export async function launchReviewRound(
     // (公开 reviewing 那一笔、清预约、写时间线),中途完全可以有一次重跑把它定向撤销掉
     // (`supersedeReviewDispatch`)。不核就会以作废的身份往下准备、排队,而真正的现任在办同一轮。
     if (!reviewDispatchOwned(run.id, run.currentRound, claimToken)) {
-      console.error(`[ash] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：手里这张认领证已经被撤销（这一轮期间被重跑成另一次）`);
+      console.error(`[navi] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：手里这张认领证已经被撤销（这一轮期间被重跑成另一次）`);
       return { resumed: false, dispatched: false };
     }
   }
@@ -293,7 +293,7 @@ export async function launchReviewRound(
     // **库里那一行才是权威**(文件头 ⑫):内存认领只能证明「本进程此刻没有第二个人在办」。
     const evidence = await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
     if (evidence.generation !== generation) {
-      console.error(`[ash] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：准备期间这一轮被重跑成另一次`);
+      console.error(`[navi] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：准备期间这一轮被重跑成另一次`);
       return { resumed: false, dispatched: false };
     }
   }
@@ -483,7 +483,7 @@ export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void>
   const claimToken = claimReviewDispatch(run.id, round, generation);
   if (!claimToken) {
     // 这一轮已经有人在办(并发入口撞上了):一个字都不写、也不落终态,那一次会把它办完。
-    console.error(`[ash] 自由工作流第 ${round} 轮让出 run=${run.id}：这一轮已经有在途派发`);
+    console.error(`[navi] 自由工作流第 ${round} 轮让出 run=${run.id}：这一轮已经有在途派发`);
     return;
   }
   let handed = false;

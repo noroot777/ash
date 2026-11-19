@@ -4,7 +4,7 @@ import { slashMatchIndex } from "../lib/slashMatch.ts";
 
 // 输入框敲 `/` 弹出来的那张菜单：回复框和新建任务共用一份。
 //
-// 排序是刻意的：**ash 自己的命令永远在最上面**，中间一条分隔线，下面才是这个
+// 排序是刻意的：**navi 自己的命令永远在最上面**，中间一条分隔线，下面才是这个
 // CLI 已装的技能。前者换的是「谁来干这件事」（派生一个团队、一场讨论），后者只是
 // 给当前这轮加一句提示词——点错的代价差着量级，不能让某个 CLI 装了个叫 team 的
 // 技能就把它挤下去。
@@ -72,7 +72,7 @@ export function SlashMenu({
             onClick={() => onPick(item)}
           >
             <CommandText command={item.command} token={token} />
-            {item.kind === "ash"
+            {item.kind === "navi"
               ? <span>{item.label}</span>
               : <em>{item.label}</em>}
             {item.hint && <em>{item.hint}</em>}

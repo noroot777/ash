@@ -66,7 +66,7 @@ export function attachStatusOf(
     running?: boolean; stop?: StopFactLike; abandoned?: unknown;
   },
 ): TerminalStatus {
-  // 用户显式放弃管理之后一律按「已结束」:ash 不再把这条记录当「还在跑」(服务端
+  // 用户显式放弃管理之后一律按「已结束」:navi 不再把这条记录当「还在跑」(服务端
   // sessionRunning / openSession 都把这一档放在所有兜底之前)。服务端算好的 running 本来
   // 就是这样,这里补的是它缺省时那条自推导的退路 —— 判据只许有一份,劈叉的后果见
   // commandSessionState.ts 的 managedOpen(第 1 轮审查 F3)。

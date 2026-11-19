@@ -1,4 +1,4 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import type { Hono } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { realpath, stat } from "node:fs/promises";
@@ -12,7 +12,7 @@ import { openWithApp } from "./openers/index.js";
 import { isInsidePath, splitPathList, windowsPathRejection } from "./platform.js";
 
 // 额外放行的目录。**默认空**:原来写死的两条(`/Users/fjh/code/daily-report/videos`、
-// `/Users/fjh/code/ash/review`)都落在已注册项目的仓库路径底下,
+// `/Users/fjh/code/navi/review`)都落在已注册项目的仓库路径底下,
 // registeredProjectRoots() 本来就覆盖着它们 —— 写死在源码里只是让别人 clone 下来多两
 // 条不存在的目录,外加一个人的用户名。要加别的目录走 NAVI_LOCAL_OPEN_ROOTS。
 //

@@ -24,7 +24,7 @@
 //   · 团队派活的执行者任务 → `executorScopeForOwner(lead.ownerUserId)`
 //   · 执行器 / 审查者 / 团队预设本身 → `executorScope(actor)`;这几张表的 ownerUserId
 //     就是 `ownerStamp(actor)` 盖的,归属人**就是**操作人,两条路同一个答案。
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 import type { Actor } from "./context.js";

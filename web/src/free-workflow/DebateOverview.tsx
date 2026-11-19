@@ -1,4 +1,4 @@
-import type { FreeReviewDebate, FreeReviewDebateTurn } from "@ash/shared";
+import type { FreeReviewDebate, FreeReviewDebateTurn } from "@navi/shared";
 import { DEBATE_SIDE_LABEL, debateSpeaking } from "./debateModel.ts";
 import { TalkOverview } from "./TalkOverview.tsx";
 

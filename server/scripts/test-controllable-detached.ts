@@ -15,7 +15,7 @@ import { IS_WINDOWS, killTree } from "../src/platform.js";
 const here = dirname(fileURLToPath(import.meta.url));
 // file:// 而不是裸路径 —— 理由同 test-detached-survival.ts（Windows 上 `D:` 会被当协议）。
 const mod = (rel: string) => JSON.stringify(pathToFileURL(join(here, rel)).href);
-const root = mkdtempSync(join(tmpdir(), "ash-controllable-detached-"));
+const root = mkdtempSync(join(tmpdir(), "navi-controllable-detached-"));
 const agentScript = join(root, "agent.mjs");
 const serverScript = join(root, "server.mjs");
 const stateA = join(root, "a.json");
@@ -62,13 +62,13 @@ if (mode === "v1") {
   writeFileSync(stateFile, JSON.stringify({
     pid: child.pid,
     startedAt: info?.startedAt ?? null,
-    offset: child.ashCommitted(),
+    offset: child.naviCommitted(),
     lines,
   }));
   process.exit(0);
 }
 
-const previous = JSON.parse(process.env.ASH_PREV_STATE);
+const previous = JSON.parse(process.env.NAVI_PREV_STATE);
 const child = reattachDetachedAgent({
   pid: previous.pid,
   startedAt: previous.startedAt,
@@ -103,7 +103,7 @@ try {
   assert.doesNotThrow(() => process.kill(first.pid, 0), "agent 应活过 server-v1 退出");
 
   assert.equal(await run(["v2", root, agentScript, stateB], {
-    ASH_PREV_STATE: JSON.stringify(first),
+    NAVI_PREV_STATE: JSON.stringify(first),
   }), 0);
   const second = JSON.parse(readFileSync(stateB, "utf8"));
   assert.equal(second.reattached, true, "server-v2 应恢复可写 stdin");

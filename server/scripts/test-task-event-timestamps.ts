@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ServerEvent } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import type { ServerEvent } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import { eq } from "drizzle-orm";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-event-timestamps-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-event-timestamps-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 try {
   const { bus } = await import("../src/bus.js");

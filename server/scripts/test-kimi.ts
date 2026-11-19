@@ -3,15 +3,15 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
-import { isReasoningEffortSupported, reasoningEffortsFor, resolveReasoningEfforts } from "@ash/shared/cli-presets";
+import type { AgentEvent } from "@navi/shared";
+import { isReasoningEffortSupported, reasoningEffortsFor, resolveReasoningEfforts } from "@navi/shared/cli-presets";
 import { eventQueue } from "../src/executors/event-queue.js";
 import { kimiEffortPreflight, parseKimiModels } from "../src/executors/kimi-models.js";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 import { augmentedEnv } from "../src/executors/bin-resolve.js";
 
-const directory = mkdtempSync(join(tmpdir(), "ash-kimi-unit-"));
-process.env.ASH_DB = join(directory, "test.db");
+const directory = mkdtempSync(join(tmpdir(), "navi-kimi-unit-"));
+process.env.NAVI_DB = join(directory, "test.db");
 requireTmpDb("test-kimi");
 const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { GenericCliExecutor } = await import("../src/executors/generic.js");
@@ -74,7 +74,7 @@ try {
   const authFailure = await parse([version], 1, "provider.auth_error: 403 subscription required");
   assert.match(JSON.stringify(authFailure), /403 subscription required/);
   assert.equal((await parse([version], 143, "killed", true)).some((event) => event.kind === "error"), false);
-  const missing = spawn("ash-kimi-definitely-not-installed", [], { stdio: ["ignore", "pipe", "pipe"] });
+  const missing = spawn("navi-kimi-definitely-not-installed", [], { stdio: ["ignore", "pipe", "pipe"] });
   const missingEvents: AgentEvent[] = [];
   for await (const event of kimiSpec.exec.parser!({ child: missing, bin: "kimi", label: "kimi", lifecycle: { stopRequested: false }, events: eventQueue() })) {
     missingEvents.push(event);

@@ -12,13 +12,13 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSessionSpans, segmentFingerprint } from "@ash/shared/session-output";
+import { parseSessionSpans, segmentFingerprint } from "@navi/shared/session-output";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-discussion-delete-"));
-process.env.ASH_DB = join(stage, "ash.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-discussion-delete-"));
+process.env.NAVI_DB = join(stage, "ash.db");
 requireTmpDb("test-discussion-delete");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const ok = (m: string) => console.log("   ✓ " + m);
 
 let failure: unknown = null;

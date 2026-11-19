@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { ACCEPT_GATE_FAILURE_LABELS } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_FAILURE_LABELS } from "@navi/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, type tasks } from "./db/schema.js";
 import { gateLogFileNames } from "./accept-gate-diagnosis.js";

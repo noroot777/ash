@@ -11,9 +11,9 @@ const skill = (command, description = "") => ({
   alsoIn: [],
 });
 
-const ASH = [
-  { command: "/team", label: "派生团队", kind: "ash" },
-  { command: "/duet", label: "派生讨论", kind: "ash" },
+const NAVI = [
+  { command: "/team", label: "派生团队", kind: "navi" },
+  { command: "/duet", label: "派生讨论", kind: "navi" },
 ];
 
 const SKILLS = [
@@ -39,19 +39,19 @@ assert.deepEqual(
   ["/design-taste-frontend", "/high-end-visual-design"],
 );
 
-// ash 自己的命令永远在最前,排序只在各自组内进行:
-// `/me` 在技能里既有中段命中(grill-me)也有,ash 组空了也不能把技能提上去当 ash。
-const teamMatch = mergeSlashItems(ASH, SKILLS, slashQuery("/me"));
+// navi 自己的命令永远在最前,排序只在各自组内进行:
+// `/me` 在技能里既有中段命中(grill-me)也有,navi 组空了也不能把技能提上去当 navi。
+const teamMatch = mergeSlashItems(NAVI, SKILLS, slashQuery("/me"));
 assert.deepEqual(teamMatch.map((item) => item.command), ["/grill-me"]);
 assert.deepEqual(
-  mergeSlashItems(ASH, SKILLS, slashQuery("/e")).map((item) => item.kind),
-  ["ash", "ash", "skill", "skill", "skill", "skill"],
+  mergeSlashItems(NAVI, SKILLS, slashQuery("/e")).map((item) => item.kind),
+  ["navi", "navi", "skill", "skill", "skill", "skill"],
 );
 
 // 没有 token 就一条都不给(菜单据此决定弹不弹)。
-assert.deepEqual(mergeSlashItems(ASH, SKILLS, null), []);
-// 一个斜杠 = 全量候选,ash 在前。
-assert.equal(mergeSlashItems(ASH, SKILLS, slashQuery("/")).length, ASH.length + SKILLS.length);
+assert.deepEqual(mergeSlashItems(NAVI, SKILLS, null), []);
+// 一个斜杠 = 全量候选,navi 在前。
+assert.equal(mergeSlashItems(NAVI, SKILLS, slashQuery("/")).length, NAVI.length + SKILLS.length);
 
 // token 只在「整段正文就是一个斜杠 token」时成立,句中的 `/` 不弹菜单。
 assert.equal(slashToken("  /Design"), "/design");
@@ -67,12 +67,12 @@ assert.equal(applySlashPick("帮我看看这个 /gri", "/grill-me"), "帮我看�
 assert.equal(applySlashPick("  /gri", "/grill-me"), "/grill-me ");
 
 const native = { ...skill("/goal", "持续目标"), native: true, source: "builtin" };
-const grouped = mergeSlashItems(ASH, [skill("/goal-helper"), native], slashQuery("/"));
-assert.deepEqual(grouped.map((item) => item.kind), ["ash", "ash", "native", "skill"]);
+const grouped = mergeSlashItems(NAVI, [skill("/goal-helper"), native], slashQuery("/"));
+assert.deepEqual(grouped.map((item) => item.kind), ["navi", "navi", "native", "skill"]);
 assert.equal(grouped[2].command, "/goal");
-// 句中不给原生命令(它得是整条消息的开头才生效);ash 的叫人命令照给,排法同在开头时(选中它只是叫人,命令本身被拿掉)。
+// 句中不给原生命令(它得是整条消息的开头才生效);navi 的叫人命令照给,排法同在开头时(选中它只是叫人,命令本身被拿掉)。
 assert.deepEqual(
-  mergeSlashItems(ASH, [skill("/goal-helper"), native], slashQuery("先这样 /")).map((item) => item.command),
+  mergeSlashItems(NAVI, [skill("/goal-helper"), native], slashQuery("先这样 /")).map((item) => item.command),
   ["/team", "/duet", "/goal-helper"],
 );
 
@@ -98,7 +98,7 @@ assert.deepEqual(removeSlashToken(quoted, tail), { text: "> 该改测试的模�
 assert.deepEqual(removeSlashToken("/派 你去修", slashQuery("/派 你去修", 2)), { text: "你去修", caret: 0 });
 assert.deepEqual(removeSlashToken("  /讨", slashQuery("  /讨")), { text: "", caret: 0 });
 
-// 回车直接发只给「原生命令且已一字不差敲全」:没敲全要补全,技能永远补全,ash 命令走派生配置。
+// 回车直接发只给「原生命令且已一字不差敲全」:没敲全要补全,技能永远补全,navi 命令走派生配置。
 const compact = mergeSlashItems([], [{ ...skill("/compact", "原生压缩"), native: true, source: "builtin" }], slashQuery("/com"))[0];
 assert.equal(compact.kind, "native");
 assert.equal(slashSendsAsTyped(compact, "/com"), false);

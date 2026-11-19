@@ -3,7 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
-import { LEGACY_GIT_WORKTREE_BACKUPS_DIR } from "@ash/shared/legacy-names";
+import { LEGACY_GIT_WORKTREE_BACKUPS_DIR } from "@navi/shared/legacy-names";
 import { execFileText as exec } from "./exec.js";
 import { hasWorktreeRegistration, samePath, UnreadableWorktreeError } from "./git-worktree-state.js";
 

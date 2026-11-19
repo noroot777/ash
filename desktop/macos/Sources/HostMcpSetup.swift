@@ -1,11 +1,11 @@
 import AppKit
 
-/// 首次连上自己那份服务时，替本机 CLI 接好 ash MCP（`POST /api/ash-mcp/host-setup`，逐家补接的
+/// 首次连上自己那份服务时，替本机 CLI 接好 navi MCP（`POST /api/ash-mcp/host-setup`，逐家补接的
 /// 逻辑在 server 的 mcp-registry/host-setup.ts：缺了才写、已有一律不覆盖）。
 ///
 /// 已有登记却**指向别处**的（最常见的是指向仓库里的 `mcp/dist`）不替用户改：那条可能是他自己
 /// 写的、也可能正连着开发实例。这里把「现在指向哪、指向这个 app 该改成什么」摆出来，改不改由他。
-/// 每个数据根自动跑一次；菜单「检查 ash MCP 登记」随时再查。
+/// 每个数据根自动跑一次；菜单「检查 navi MCP 登记」随时再查。
 enum HostMcpSetup {
   struct Host: Decodable {
     let agentType: String
@@ -22,9 +22,9 @@ enum HostMcpSetup {
 
   /// 这个数据根还没自动查过就查一次；一切正常时不出声。
   static func runOnceIfNeeded(window: NSWindow?) {
-    let key = AshConfig.dataURL.path
+    let key = NaviConfig.dataURL.path
     var done = UserDefaults.standard.stringArray(forKey: doneKey) ?? []
-    guard AshConfig.isLocal, !done.contains(key) else { return }
+    guard NaviConfig.isLocal, !done.contains(key) else { return }
     request { result in
       guard case .success(let hosts) = result else { return }
       done.append(key)
@@ -50,8 +50,8 @@ enum HostMcpSetup {
   /// 补接要写本机 CLI 的配置，只交给认过的自己那份去做：走窗口专用端口、带上它的实例号，中间换了人
   /// 就连不上或者被拒（server/src/window-port.ts、instance-binding.ts）。
   private static func request(_ completion: @escaping (Result<[Host], Error>) -> Void) {
-    AshHealth.probe(AshConfig.windowHealthURL) { probe in
-      guard let id = AshHealth.ours(probe)?.id else {
+    NaviHealth.probe(NaviConfig.windowHealthURL) { probe in
+      guard let id = NaviHealth.ours(probe)?.id else {
         return DispatchQueue.main.async { completion(.failure(DataImport.Failure("端口上不是这个 app 的 Navi 服务，没有去改 CLI 的登记。"))) }
       }
       send(instance: id, completion)
@@ -59,7 +59,7 @@ enum HostMcpSetup {
   }
 
   private static func send(instance: String, _ completion: @escaping (Result<[Host], Error>) -> Void) {
-    var request = URLRequest(url: AshConfig.windowURL.appendingPathComponent("api/ash-mcp/host-setup"), timeoutInterval: 60)
+    var request = URLRequest(url: NaviConfig.windowURL.appendingPathComponent("api/ash-mcp/host-setup"), timeoutInterval: 60)
     request.httpMethod = "POST"
     request.setValue(instance, forHTTPHeaderField: "x-ash-instance")
     URLSession.shared.dataTask(with: request) { data, response, error in

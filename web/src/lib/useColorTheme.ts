@@ -3,7 +3,7 @@
 // 判据本体在 `theme.ts`(它不认识 React);这里只做订阅。保存走 `api.patchSettings`,
 // 由 settingsSync 把在途的选择立刻推给 theme.ts,所以这里不另管「保存中」的显示。
 import { useEffect, useState } from "react";
-import type { ColorTheme } from "@ash/shared";
+import type { ColorTheme } from "@navi/shared";
 import { colorTheme, onColorThemeChange, resolvedTheme, type ResolvedTheme } from "./theme.ts";
 
 export function useColorTheme(): { preference: ColorTheme; resolved: ResolvedTheme } {

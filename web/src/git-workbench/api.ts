@@ -5,7 +5,7 @@ import type {
   GitDiff,
   GitHistoryCommit,
   GitWorkbenchState,
-} from "@ash/shared/git-workbench";
+} from "@navi/shared/git-workbench";
 import { id, json, request } from "../lib/apiClient.ts";
 
 const base = (project: string) => `/projects/${id(project)}/git/workbench`;

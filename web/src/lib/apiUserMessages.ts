@@ -1,7 +1,7 @@
 // R 键那张「我说过的话」的端点（server/src/user-messages.ts）。单独一份同 apiTaskMemos.ts：
 // api.ts 的端点清单已经顶到单文件 700 行上限，调用点仍然只写 `api.userMessagesOf(…)`。
 import { request } from "./apiClient.ts";
-import type { UserMessageHits, UserMessagesOf } from "@ash/shared/user-messages";
+import type { UserMessageHits, UserMessagesOf } from "@navi/shared/user-messages";
 
 export const userMessageApi = {
   /** 这几个任务里我说过的话，从 cursor（缺省 = 最新）往前一页，页内旧的在前；`older` 接着往前读。 */

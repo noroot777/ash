@@ -3,18 +3,18 @@ import { execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HandoffPreflightResult, HandoffReturnGrant, HandoffTarget, Task } from "@ash/shared";
+import type { HandoffPreflightResult, HandoffReturnGrant, HandoffTarget, Task } from "@navi/shared";
 import { api, makeRepo, startPeer } from "./handoff-test-utils.js";
 import { startImpostorPeer, startOrdinaryImportProxy, startReturnProxy } from "./handoff-proxy-fixture.js";
 import { readReturnLocalState, seedReturnLocalState, stripHandoffPeerUrl } from "./handoff-return-state-fixture.js";
 import { killOne, listenerPidsSync } from "../src/platform.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-handoff-return-"));
+const root = mkdtempSync(join(tmpdir(), "navi-handoff-return-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.ASH_DB = join(root, "attacker.db");
+process.env.NAVI_DB = join(root, "attacker.db");
 
 const children: ChildProcess[] = [];
 const serverPorts: number[] = [];
@@ -29,19 +29,19 @@ try {
   execFileSync("git", ["clone", "--quiet", repoA, repoB]);
 
   const machineA = await startPeer({
-    ASH_DB: join(root, "a.db"),
-    ASH_RUNS_DIR: join(root, "runs-a"),
-    ASH_UPLOADS_DIR: join(root, "uploads-a"),
+    NAVI_DB: join(root, "a.db"),
+    NAVI_RUNS_DIR: join(root, "runs-a"),
+    NAVI_UPLOADS_DIR: join(root, "uploads-a"),
   }, remember);
   const machineB = await startPeer({
-    ASH_DB: join(root, "b.db"),
-    ASH_RUNS_DIR: join(root, "runs-b"),
-    ASH_UPLOADS_DIR: join(root, "uploads-b"),
+    NAVI_DB: join(root, "b.db"),
+    NAVI_RUNS_DIR: join(root, "runs-b"),
+    NAVI_UPLOADS_DIR: join(root, "uploads-b"),
   }, remember);
   const machineC = await startPeer({
-    ASH_DB: join(root, "c.db"),
-    ASH_RUNS_DIR: join(root, "runs-c"),
-    ASH_UPLOADS_DIR: join(root, "uploads-c"),
+    NAVI_DB: join(root, "c.db"),
+    NAVI_RUNS_DIR: join(root, "runs-c"),
+    NAVI_UPLOADS_DIR: join(root, "uploads-c"),
   }, remember);
   serverPorts.push(Number(new URL(machineA).port), Number(new URL(machineB).port), Number(new URL(machineC).port));
 
@@ -125,7 +125,7 @@ try {
   assert.equal((await api<Task>(machineA, `/tasks/${delayedTask.id}`)).handoff, null);
   const lateDelivery = await delayedProxy.deliverHeld();
   assert.equal(lateDelivery.status, 409, "已登记撤销的旧 import 不能在清标记后晚到");
-  assert.equal(lateDelivery.body.ash, true);
+  assert.equal(lateDelivery.body.navi, true);
   assert.match(lateDelivery.body.error ?? "", /安全撤销|不能再导入/);
   assert.equal((await fetch(`${machineB}/api/tasks/${delayedTask.id}`)).status, 404, "旧请求被拒后目标机仍不能出现第二份任务");
 
@@ -332,7 +332,7 @@ try {
 
   const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   const { resetIdentityCache } = await import("../src/handoff-identity.js");
-  const attackerDb = process.env.ASH_DB!;
+  const attackerDb = process.env.NAVI_DB!;
   const refsBody = JSON.stringify({
     taskId: task.id,
     returnTransferId: inbound.handoff?.transferId,
@@ -341,7 +341,7 @@ try {
   let refsStatus = 0;
   let refsCount = 0;
   try {
-    process.env.ASH_DB = join(root, "b.db");
+    process.env.NAVI_DB = join(root, "b.db");
     resetIdentityCache();
     const refsProbe = await fetch(`${machineA}/api/handoff/return/ping`, {
       method: "POST",
@@ -355,7 +355,7 @@ try {
     const refsPayload = (await refsProbe.json()) as { returnRefs?: { name: string; commit: string }[] };
     refsCount = refsPayload.returnRefs?.length ?? 0;
   } finally {
-    process.env.ASH_DB = attackerDb;
+    process.env.NAVI_DB = attackerDb;
     resetIdentityCache();
   }
   assert.equal(refsStatus, 200);
@@ -439,7 +439,7 @@ try {
   execFileSync("git", ["-C", originWorktree, "add", "origin-after-handoff.txt"]);
   execFileSync("git", [
     "-C", originWorktree,
-    "-c", "user.name=Ash Handoff Test", "-c", "user.email=handoff@example.test",
+    "-c", "user.name=Navi Handoff Test", "-c", "user.email=handoff@example.test",
     "commit", "-m", "origin commit after handoff",
   ]);
   const originDivergedHead = execFileSync("git", ["-C", originWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -447,7 +447,7 @@ try {
   execFileSync("git", ["-C", holderWorktree, "add", "remote-change.txt"]);
   execFileSync("git", [
     "-C", holderWorktree,
-    "-c", "user.name=Ash Handoff Test", "-c", "user.email=handoff@example.test",
+    "-c", "user.name=Navi Handoff Test", "-c", "user.email=handoff@example.test",
     "commit", "-m", "holder commit",
   ]);
   const divergedReturn = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {
@@ -535,7 +535,7 @@ try {
   const peersOnA = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
   assert.ok(!peersOnA.peers.some((peer) => peer.fingerprint === identityB.fingerprint), "免审批移回不应暗中建立整机级批准记录");
 
-  // 移回 pending 的地址若切到另一台新版 ash，404 表示存档不匹配，不是目标机版本过旧。
+  // 移回 pending 的地址若切到另一台新版 navi，404 表示存档不匹配，不是目标机版本过旧。
   const changedReturnTask = await createSimpleTask("移回地址换机不能误报旧版");
   await api(machineA, `/tasks/${changedReturnTask.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },

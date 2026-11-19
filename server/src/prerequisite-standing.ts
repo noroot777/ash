@@ -26,9 +26,9 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { isAcceptedStage, type TaskStage } from "@ash/shared";
-import type { PrerequisiteStep } from "@ash/shared/prerequisites";
-import { reviewAnchorMatches } from "@ash/shared/free-workflow";
+import { isAcceptedStage, type TaskStage } from "@navi/shared";
+import type { PrerequisiteStep } from "@navi/shared/prerequisites";
+import { reviewAnchorMatches } from "@navi/shared/free-workflow";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, tasks } from "./db/schema.js";
 import { resolveWorktreeBranchName, worktreePathFor } from "./git.js";

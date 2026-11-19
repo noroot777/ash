@@ -14,9 +14,9 @@
 // 提交之后剩下的只是「让人看见」和「催一下」（读回、广播、通知派它的任务、前置视图、催一下起跑与投递），
 // 每一步各自兜底、互不挡路：任何一步抛错都不改变「已经派出」这个结果，也不挡后面的起跑。
 import type { Context } from "hono";
-import type { DispatchPlan, DispatchPlanItem, DispatchRunTarget } from "@ash/shared/dispatch-plan";
-import { dispatchDefaultTarget, parseDispatchTarget } from "@ash/shared/dispatch-plan";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { DispatchPlan, DispatchPlanItem, DispatchRunTarget } from "@navi/shared/dispatch-plan";
+import { dispatchDefaultTarget, parseDispatchTarget } from "@navi/shared/dispatch-plan";
+import type { QuestionRecord } from "@navi/shared/questions";
 import { nanoid } from "nanoid";
 import { db } from "./db/index.js";
 import { agents, groups, queueItems, scheduledMessages } from "./db/schema.js";
@@ -33,7 +33,7 @@ import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { createTasks, type TaskRow } from "./task-store.js";
 import { id, now, taskBody } from "./util.js";
 import { launchBubble, launchReply, serialOrderConflict, type LaunchPick, type TargetLabel } from "./dispatch-plan.js";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 
 class PlanClaimLost extends Error {}
 
@@ -141,15 +141,15 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
       const message = error instanceof Error ? error.message : String(error);
       return { status: 409, body: { error: `没能派出去：${message}` } };
     }
-    console.error(`[ash] 派活单已派出，读回或广播新任务时出错 ${task.id}:`, error);
+    console.error(`[navi] 派活单已派出，读回或广播新任务时出错 ${task.id}:`, error);
   }
 
   // —— 提交之后：只剩「让人看见」和「催一下」，各自兜底。
   const settle = (what: string, work: () => unknown) => {
     try {
-      void Promise.resolve(work()).catch((error) => console.error(`[ash] 派活单已派出，${what}出错 ${task.id}:`, error));
+      void Promise.resolve(work()).catch((error) => console.error(`[navi] 派活单已派出，${what}出错 ${task.id}:`, error));
     } catch (error) {
-      console.error(`[ash] 派活单已派出，${what}出错 ${task.id}:`, error);
+      console.error(`[navi] 派活单已派出，${what}出错 ${task.id}:`, error);
     }
   };
   settle("广播收卡", () => bus.publish({

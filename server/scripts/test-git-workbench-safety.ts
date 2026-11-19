@@ -11,12 +11,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GitAction, GitWorkbenchState } from "@ash/shared/git-workbench";
+import type { GitAction, GitWorkbenchState } from "@navi/shared/git-workbench";
 
 const directory = realpathSync(
-  mkdtempSync(join(tmpdir(), "ash-workbench-safety-")),
+  mkdtempSync(join(tmpdir(), "navi-workbench-safety-")),
 );
-process.env.ASH_DB = join(directory, "ash.db");
+process.env.NAVI_DB = join(directory, "ash.db");
 process.env.GIT_CONFIG_GLOBAL = join(directory, "gitconfig");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 writeFileSync(
@@ -128,7 +128,7 @@ try {
   const managed = join(root, ".worktrees", "archived-task");
   const { ensureWorktreesIgnored } = await import("../src/git.js");
   await ensureWorktreesIgnored(root);
-  git("worktree", "add", "-b", "ash/archived", managed);
+  git("worktree", "add", "-b", "navi/archived", managed);
   await db.insert(tasks).values({
     id: "archived-task",
     projectId: "p",
@@ -162,7 +162,7 @@ try {
     (
       await run({
         kind: "branch-rename",
-        name: "ash/archived",
+        name: "navi/archived",
         sha: head,
         next: "lost",
       })

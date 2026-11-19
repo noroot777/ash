@@ -259,7 +259,7 @@ export function bindTurnToken(taskId: string, token: string, agent: string): voi
   const held = turns.get(taskId);
   if (!held) {
     // 没占位就写令牌 = 调用顺序错了。不静默:来源核验会把这一轮当「不是当前这一轮」拒掉。
-    console.error(`[ash] bindTurnToken(${taskId}) 时没有回合在跑,这一轮的来源将无法核验`);
+    console.error(`[navi] bindTurnToken(${taskId}) 时没有回合在跑,这一轮的来源将无法核验`);
     return;
   }
   held.token = token;
@@ -281,7 +281,7 @@ export function reclaimTurn(taskId: string, owner: TurnOwner, role: string,
   const held = turns.get(taskId);
   if (!held || held.seq !== owner.seq) {
     // 出声:这一轮不接管了,而「锁被拔走」和「调用顺序写错了」在日志里长得一样。
-    console.error(`[ash] reclaimTurn(${taskId}) 的占位已经不在手上(seq=${owner.seq},`
+    console.error(`[navi] reclaimTurn(${taskId}) 的占位已经不在手上(seq=${owner.seq},`
       + ` 现持有=${held ? held.seq : "无"}),这一轮不接管`);
     return null;
   }
@@ -480,7 +480,7 @@ function endOwnTurn(taskId: string, owner: TurnOwner, clearFreeze: boolean): Tur
     try {
       fn();
     } catch (error) {
-      console.error(`[ash] after-turn hook failed for ${taskId}:`, error);
+      console.error(`[navi] after-turn hook failed for ${taskId}:`, error);
     }
   }
   return held;

@@ -1,4 +1,4 @@
-import type { HandoffAudit } from "@ash/shared";
+import type { HandoffAudit } from "@navi/shared";
 import { Warning } from "@phosphor-icons/react";
 import { localeDateTime } from "../lib/localeFormat.ts";
 

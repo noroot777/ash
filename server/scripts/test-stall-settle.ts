@@ -15,7 +15,7 @@
 // 末尾那一段钉的是另一件事(第 1 轮审查 F2,已实测):这条优先级原先在**两处各写了一份**,
 // 正常结算用分支顺序、启动对账用一行三元表达式。两份一漂,同一个事实就按进了哪个入口给出两种
 // 结论 —— 一个已完成的任务被一次失败续聊打断,不重启收尾保住 `done`,重启收尾却整个降成
-// `failed`,而用户那边唯一的区别只是 ash 有没有重启。现在两个入口共用同一个纯函数
+// `failed`,而用户那边唯一的区别只是 navi 有没有重启。现在两个入口共用同一个纯函数
 // (`settle-landing.ts`),所以这一段直接把那张优先级表逐行钉住 —— 跨进程那一侧的端到端由
 // `test:stall-restart` 的场景⑨钉。
 //
@@ -27,9 +27,9 @@ import { join } from "node:path";
 // 纯类型,静态引进来不碰库(类型擦除,不会在设 env 之前加载那条链)。
 import type { SettleExecutionReason } from "../src/settle-status.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-stall-settle-"));
-process.env.ASH_DB = join(stage, "t.db");
-process.env.HARNESS_DB = process.env.ASH_DB;
+const stage = mkdtempSync(join(tmpdir(), "navi-stall-settle-"));
+process.env.NAVI_DB = join(stage, "t.db");
+process.env.HARNESS_DB = process.env.NAVI_DB;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
@@ -141,7 +141,7 @@ const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.
 // 这一支原先是两条语句:先单独清 `followUpFrom`,下一句才写 status。两句之间任务是
 // `running + followUpFrom=null` —— 此刻进程没了(或者下一句抛了),**续聊前的原终态就永久
 // 消失了**,而那是库里唯一的权威来源:重启后的对账再也拿不到「该回到哪个终态」,只能把一个
-// 本该回到 `done` 的任务落成 failed。用户那边唯一的区别只是 ash 有没有在那条缝里重启。
+// 本该回到 `done` 的任务落成 failed。用户那边唯一的区别只是 navi 有没有在那条缝里重启。
 // 现在清与写是同一条 UPDATE(`setTaskStatus` 的 `consume`),所以这里用触发器让那一笔真的
 // 失败,然后钉:原终态还在。
 {
@@ -171,20 +171,20 @@ const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.
 {
   const { failedTurnLanding } = await import("../src/settle-landing.js");
   const landing = (facts: Partial<Parameters<typeof failedTurnLanding>[0]>) => failedTurnLanding({
-    ashFailed: false, followUpFrom: null, queueAdvancePrev: null, goalHeld: false, ...facts,
+    naviFailed: false, followUpFrom: null, queueAdvancePrev: null, goalHeld: false, ...facts,
   });
-  // ① 终态续聊回到原终态 —— 而且它压过 ash 判的失败:回合失败和任务此前的成果是两个轴。
+  // ① 终态续聊回到原终态 —— 而且它压过 navi 判的失败:回合失败和任务此前的成果是两个轴。
   assert.equal(landing({ followUpFrom: "done" }), "done", "终态续聊没回到原终态");
-  assert.equal(landing({ followUpFrom: "done", ashFailed: true }), "done",
+  assert.equal(landing({ followUpFrom: "done", naviFailed: true }), "done",
     "一次被我们熔断的续聊把整个已完成的任务降成了失败 —— 续聊的契约是「只能变好,不会变差」");
   assert.equal(landing({ followUpFrom: "paused" }), "paused",
     "旁路回合恢复的不止三个终态,这一支不能只认 done/failed");
-  // ② ash 判的失败压过残留的队列占位和持续目标 —— 那两句话都替用户表达了「它在等你」。
-  assert.equal(landing({ ashFailed: true, queueAdvancePrev: "backlog" }), "failed",
+  // ② navi 判的失败压过残留的队列占位和持续目标 —— 那两句话都替用户表达了「它在等你」。
+  assert.equal(landing({ naviFailed: true, queueAdvancePrev: "backlog" }), "failed",
     "一条残留的起跑请求把一轮确凿的失败落回了「尚未起跑」");
-  assert.equal(landing({ ashFailed: true, goalHeld: true }), "failed",
+  assert.equal(landing({ naviFailed: true, goalHeld: true }), "failed",
     "持续目标那一支把我们自己判的失败说成了「暂停中 + 继续」");
-  // ③④⑤ 没有 ash 失败时,后两条按序生效;都没有就是 failed。
+  // ③④⑤ 没有 navi 失败时,后两条按序生效;都没有就是 failed。
   assert.equal(landing({ queueAdvancePrev: "backlog" }), "backlog", "压根没起跑的一轮留下了失败记录");
   assert.equal(landing({ queueAdvancePrev: "backlog", goalHeld: true }), "backlog",
     "队列占位该排在持续目标前面:这一轮连开始都没开始");

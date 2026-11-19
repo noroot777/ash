@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
-import { AGENT_TYPES } from "@ash/shared";
-import type { ChatMember } from "@ash/shared/chat";
-import { isAllMention } from "@ash/shared/chat";
+import { AGENT_TYPES } from "@navi/shared";
+import type { ChatMember } from "@navi/shared/chat";
+import { isAllMention } from "@navi/shared/chat";
 import { db } from "../db/index.js";
 import { agents, chatRooms, projects, tasks } from "../db/schema.js";
 import { actorOf, isHumanPrincipal, type Actor } from "../auth/context.js";

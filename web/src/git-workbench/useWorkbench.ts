@@ -3,9 +3,9 @@ import type {
   GitAction,
   GitActionRequest,
   GitWorkbenchState,
-} from "@ash/shared/git-workbench";
+} from "@navi/shared/git-workbench";
 import { workbenchApi } from "./api.ts";
-import { gitActionBlockReason } from "@ash/shared/git-workbench";
+import { gitActionBlockReason } from "@navi/shared/git-workbench";
 
 export function useWorkbench(
   projectId: string,

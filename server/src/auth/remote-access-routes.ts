@@ -6,7 +6,7 @@
 //     (middleware.ts)。它们各自要的凭据在路由里验:申请的 secret、一次性码。
 //   · `/remote-access*` —— **机主那一侧**,在闸内。
 import type { Context, Hono } from "hono";
-import type { PairClaim, PairCode, PairRequestView, PairTicket, RemoteAccessView, RemoteDeviceView } from "@ash/shared";
+import type { PairClaim, PairCode, PairRequestView, PairTicket, RemoteAccessView, RemoteDeviceView } from "@navi/shared";
 import { actorOf } from "./context.js";
 import { sessionCookieOf } from "./middleware.js";
 import { readOptions } from "../im/meta.js";
@@ -116,7 +116,7 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
 
   // 点头这一下还能从飞书里来:申请递上来时机主的飞书单聊会收到一张带「允许 / 拒绝」的卡
   // (im/pairing.ts),点它的是绑定的那个人 —— 自用模式下就是机主。只放这一条:名册、出码、
-  // 请设备出去仍要回到 ash 页面(im-actor.ts 的白名单是另一道)。
+  // 请设备出去仍要回到 navi 页面(im-actor.ts 的白名单是另一道)。
   api.post("/remote-access/requests/:id/:decision{approve|deny}", async (c) => {
     const refused = actorOf(c).kind === "im" && !(await isMultiUser()) ? null : await ownerRefusal(c);
     if (refused) return refused;

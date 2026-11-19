@@ -1,4 +1,4 @@
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import { useMention } from "../components/useMention.ts";
 

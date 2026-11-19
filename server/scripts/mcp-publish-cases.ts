@@ -1,9 +1,9 @@
 // 发布事务那一层的回归:**预演 → 备份 → 写盘前再校验 → 就地写 → 读回来比对**。
 //
-// 为什么跟 `test-ash-mcp-installer.ts` 分开:那边测「哪家写在哪、拼成什么样」,这边只测
+// 为什么跟 `test-navi-mcp-installer.ts` 分开:那边测「哪家写在哪、拼成什么样」,这边只测
 // 「怎么安全地落盘」。两份实现(裸 Node `scripts/config-publish.mjs` 与服务端
 // `server/src/auth/config-publish.ts`)规矩完全一致,所以用例也在一处写、两边都过。
-// 由 `test-ash-mcp-installer.ts` 调用,不是独立的回归入口。
+// 由 `test-navi-mcp-installer.ts` 调用,不是独立的回归入口。
 //
 // **哪几条只能用结构断言**(写在用例里,不藏着):
 //  · 探针的「独占创建」是 open 的 flag 决定的 —— 名字带随机段,拿不到那个名字就没法在测试
@@ -58,7 +58,7 @@ export async function checkPublishCases(
     const r0 = publish.publishConfirmed({
       file: file0,
       previous: publish.readForWrite(file0)!.text,
-      body: `${JSON.stringify({ ash: "x", userSetting: "keep-me" }, null, 2)}\n`,
+      body: `${JSON.stringify({ navi: "x", userSetting: "keep-me" }, null, 2)}\n`,
       write: (target: string | number, body: string) => {
         calls++;
         if (typeof body === "string" && body.length > 18) writeFileSync(target, body.slice(0, 18), "utf8");
@@ -178,12 +178,12 @@ export async function checkPublishCases(
     writeFileSync(victim, victimBody, "utf8");
     symlinkSync(victim, `${file}${PROBE_MARK}`);
     const read = publish.readForWrite(file)!;
-    const r = publish.publishConfirmed({ file, previous: read.text, body: '{"ash":1}\n' });
+    const r = publish.publishConfirmed({ file, previous: read.text, body: '{"navi":1}\n' });
     assert.ok(r.ok, `正事还得办成:${r.ok ? "" : r.why}`);
     assert.equal(readFileSync(victim, "utf8"), victimBody, "无关文件的正文一个字节都不许动");
     assert.ok(existsSync(victim), "更不许把它删掉");
     assert.ok(lstatSync(`${file}${PROBE_MARK}`).isSymbolicLink(), "那条软链接本身也该还在");
-    assert.equal(readFileSync(file, "utf8"), '{"ash":1}\n', "目标文件正常写进去");
+    assert.equal(readFileSync(file, "utf8"), '{"navi":1}\n', "目标文件正常写进去");
 
     // 同一个路径上放**普通文件**(并发的另一个发布器、上一次崩溃留下的残渣)也一样:
     // 既不许写它,也不许删它。
@@ -193,7 +193,7 @@ export async function checkPublishCases(
     const squatter = `${file2}${PROBE_MARK}`;
     writeFileSync(squatter, "not mine\n", "utf8");
     const read2 = publish.readForWrite(file2)!;
-    const r2 = publish.publishConfirmed({ file: file2, previous: read2.text, body: '{"ash":2}\n' });
+    const r2 = publish.publishConfirmed({ file: file2, previous: read2.text, body: '{"navi":2}\n' });
     assert.ok(r2.ok, `正事还得办成:${r2.ok ? "" : r2.why}`);
     assert.equal(readFileSync(squatter, "utf8"), "not mine\n", "别人占着的那个路径不许被写");
 
@@ -213,7 +213,7 @@ export async function checkPublishCases(
     const read = publish.readForWrite(file)!;
     const theirs = '{\n  "userJustSaved": true\n}\n';
     const r = publish.publishConfirmed({
-      file, previous: read.text, body: '{"ash":1}\n',
+      file, previous: read.text, body: '{"navi":1}\n',
       write: (target: string | number, body: string, opts?: unknown) => {
         if (typeof target === "number") {
           writeFileSync(target, body, opts as never);
@@ -235,7 +235,7 @@ export async function checkPublishCases(
     const body2 = '{\n  "userSetting": "keep"\n}\n';
     writeFileSync(file2, body2, "utf8");
     const read2 = publish.readForWrite(file2)!;
-    const r2 = publish.publishConfirmed({ file: file2, previous: read2.text, body: '{"ash":1}\n' });
+    const r2 = publish.publishConfirmed({ file: file2, previous: read2.text, body: '{"navi":1}\n' });
     assert.ok(r2.ok, r2.ok ? "" : r2.why);
     assert.equal(r2.ok ? r2.backup : "", `${file2}.bak-navi-setup`, "备份路径要交回给调用方");
     assert.equal(readFileSync(`${file2}.bak-navi-setup`, "utf8"), body2, "备份必须是改之前那一版");
@@ -243,7 +243,7 @@ export async function checkPublishCases(
     // 上一次发布留下的备份不许被这一轮的收手动作删掉(那是用户手里唯一的旧版本)。
     const read3 = publish.readForWrite(file2)!;
     writeFileSync(file2, '{\n  "userJustSaved": 2\n}\n', "utf8");
-    const r3 = publish.publishConfirmed({ file: file2, previous: read3.text, body: '{"ash":2}\n' });
+    const r3 = publish.publishConfirmed({ file: file2, previous: read3.text, body: '{"navi":2}\n' });
     assert.ok(!r3.ok && r3.stale, "过期快照不许盖下去");
     assert.equal(readFileSync(`${file2}.bak-navi-setup`, "utf8"), body2, "上一轮那份备份还在");
     group("最终校验紧贴写盘:慢步骤期间的外部保存不被盖掉,备份核对过且不被误删");
@@ -279,7 +279,7 @@ export async function checkPublishCases(
 
   // ── ⑬ 备份也是发布产物:独占创建、不覆盖也不跟随已有对象(本轮审查 F2)───────────
   {
-    const body = '{\n  "ash": 1\n}\n';
+    const body = '{\n  "navi": 1\n}\n';
     const before = `${JSON.stringify({ userSetting: "keep" }, null, 2)}\n`;
 
     // ⒜ 那个固定名字上摆一条**指向用户另一份文件**的软链接:上一版 `copyFileSync` 跟着它
@@ -288,7 +288,7 @@ export async function checkPublishCases(
     const file = join(h, "config.json");
     writeFileSync(file, before, "utf8");
     const bystander = join(h, "unrelated.txt");
-    const bystanderBody = "用户另一份文件，跟 ash 无关\n";
+    const bystanderBody = "用户另一份文件，跟 navi 无关\n";
     writeFileSync(bystander, bystanderBody, "utf8");
     const plain = `${file}.bak-navi-setup`;
     symlinkSync(bystander, plain);

@@ -6,15 +6,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { Actor } from "../src/auth/context.js";
-import type { HandoffSourceAddress } from "@ash/shared/handoff";
-import type { HandoffTarget, TaskHandoff } from "@ash/shared";
+import type { HandoffSourceAddress } from "@navi/shared/handoff";
+import type { HandoffTarget, TaskHandoff } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-handoff-source-address-"));
-process.env.ASH_DB = join(stage, "local.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-requireTmpDb("ash-handoff-source-address");
+const stage = mkdtempSync(join(tmpdir(), "navi-handoff-source-address-"));
+process.env.NAVI_DB = join(stage, "local.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
+requireTmpDb("navi-handoff-source-address");
 const servers: Server[] = [];
 
 try {
@@ -43,18 +43,18 @@ try {
   const seenCredentials: unknown[] = [];
   const peer = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
-    seenCredentials.push(req.headers["x-ash-peer-user-key"], req.headers["x-ash-peer-key"]);
+    seenCredentials.push(req.headers["x-navi-peer-user-key"], req.headers["x-navi-peer-key"]);
     if (url.pathname === "/api/handoff/import") {
-      const authorized = req.headers["x-ash-peer-user-key"] === "saved-inline-key";
+      const authorized = req.headers["x-navi-peer-user-key"] === "saved-inline-key";
       res.writeHead(authorized ? 200 : 401, { "content-type": "application/json" });
-      res.end(JSON.stringify(authorized ? { ok: true } : { error: "missing peer user key", ash: true }));
+      res.end(JSON.stringify(authorized ? { ok: true } : { error: "missing peer user key", navi: true }));
       return;
     }
     const sig = sign(null, Buffer.from(canonicalPingChallenge(
       badSignature ? "wrong-nonce" : url.searchParams.get("nonce")!,
     )), keys.privateKey).toString("base64");
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ ok: true, service: "ash", identity: { publicKey, sig } }));
+    res.end(JSON.stringify({ ok: true, service: "navi", identity: { publicKey, sig } }));
   });
   servers.push(peer);
   await new Promise<void>((resolve) => peer.listen(0, "127.0.0.1", resolve));
@@ -215,12 +215,12 @@ try {
   const machineBFp = fingerprintOf(machineBKeys.publicKey.export({ type: "spki", format: "der" }).toString("base64"));
   let oldPeerKeys = keys;
   const oldPeer = createServer((req, res) => {
-    seenCredentials.push(req.headers["x-ash-peer-user-key"], req.headers["x-ash-peer-key"]);
+    seenCredentials.push(req.headers["x-navi-peer-user-key"], req.headers["x-navi-peer-key"]);
     const nonce = new URL(req.url!, "http://localhost").searchParams.get("nonce")!;
     const publicKey = oldPeerKeys.publicKey.export({ type: "spki", format: "der" }).toString("base64");
     const sig = sign(null, Buffer.from(canonicalPingChallenge(badSignature ? "wrong-nonce" : nonce)), oldPeerKeys.privateKey).toString("base64");
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ ok: true, service: "ash", identity: { publicKey, sig } }));
+    res.end(JSON.stringify({ ok: true, service: "navi", identity: { publicKey, sig } }));
   });
   servers.push(oldPeer);
   await new Promise<void>((resolve) => oldPeer.listen(0, "127.0.0.1", resolve));

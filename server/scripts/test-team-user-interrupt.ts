@@ -10,19 +10,19 @@
 // 一直不结束,看用户那句话能不能在它结束之前就开跑。断言的不是 send 的先后,而是「哪个回合
 // 真的启动了、哪个回合被杀了」。
 //
-// 跑:ASH_DB=/tmp/t.db npx tsx server/scripts/test-team-user-interrupt.ts
+// 跑:NAVI_DB=/tmp/t.db npx tsx server/scripts/test-team-user-interrupt.ts
 import assert from "node:assert/strict";
 import { createWriteStream, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 requireTmpDb("test-team-user-interrupt");
-const root = mkdtempSync(join(tmpdir(), "ash-team-interrupt-"));
-process.env.ASH_RUNS_DIR = join(root, "runs");
-process.env.ASH_TEAM_IDLE_MS = "0";
+const root = mkdtempSync(join(tmpdir(), "navi-team-interrupt-"));
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+process.env.NAVI_TEAM_IDLE_MS = "0";
 
 const TASK = "task-user-interrupt";
 const SESS = "sess-user-interrupt";

@@ -131,7 +131,7 @@ export function noteDeliveryCrossing(
 ): void {
   if (!messageIds.length) return;
   try { writeCrossings(taskId, messageIds, about); }
-  catch (error) { console.warn(`[ash] 投递越线记号写入失败 task=${taskId}:`, error); }
+  catch (error) { console.warn(`[navi] 投递越线记号写入失败 task=${taskId}:`, error); }
 }
 
 /**
@@ -233,7 +233,7 @@ function writeFact(kind: string, what: string, taskId: string, messageIds: reado
     }
     fsyncDir(factDir(kind, taskId));
   } catch (error) {
-    console.warn(`[ash] ${what}记号写入失败 task=${taskId}:`, error);
+    console.warn(`[navi] ${what}记号写入失败 task=${taskId}:`, error);
   }
 }
 
@@ -275,9 +275,9 @@ export function forgetDeliveryCrossing(taskId: string, messageIds: readonly stri
     // 三张记号同一个生命周期:定论一下,谁都不该留给下一次投递。
     for (const kind of ["refused", "delivered"] as const) {
       try { rmSync(factPath(kind, taskId, messageId), { force: true }); }
-      catch (error) { console.warn(`[ash] 投递记号(${kind})清理失败 task=${taskId} message=${messageId}:`, error); }
+      catch (error) { console.warn(`[navi] 投递记号(${kind})清理失败 task=${taskId} message=${messageId}:`, error); }
     }
     try { rmSync(crossingPath(taskId, messageId), { force: true }); }
-    catch (error) { console.warn(`[ash] 投递越线记号清理失败 task=${taskId} message=${messageId}:`, error); }
+    catch (error) { console.warn(`[navi] 投递越线记号清理失败 task=${taskId} message=${messageId}:`, error); }
   }
 }

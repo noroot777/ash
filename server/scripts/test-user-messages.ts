@@ -5,7 +5,7 @@
 //   duetUtterancesIn / duetContextAround —— 讨论里插的话（不在会话 .md 里，在讨论时间线上）
 // 跑：npm -w server run test:user-messages
 import assert from "node:assert/strict";
-import { parseSessionSpans } from "@ash/shared/session-output";
+import { parseSessionSpans } from "@navi/shared/session-output";
 import {
   CONTEXT_AFTER_CAP,
   CONTEXT_BEFORE_CAP,

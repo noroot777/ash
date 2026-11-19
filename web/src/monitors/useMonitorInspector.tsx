@@ -19,7 +19,7 @@ retireInspectorTab("monitors-surface-on-use", /^navi:inspector:/, "monitors");
  * 没挂过就留在「+」菜单和 `I M` 里等人去开——手动起哨兵仍然只有这一格里那个「+」，所以它
  * 可以不默认开着，但绝不能像上一版的子智能体那样整格不给。
  *
- * **两种来源一起算**（ash 自己起的 + claude 自带 Monitor 的只读投影）：claude 执行器的
+ * **两种来源一起算**（navi 自己起的 + claude 自带 Monitor 的只读投影）：claude 执行器的
  * 任务几乎全程用后者，只数前者的话那些任务永远不浮现——而那正是最需要对账的场景。
  * 两种都没有才是真的「没用过」，这时这一格不该占着图标条。
  *

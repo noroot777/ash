@@ -2,13 +2,13 @@
 //
 // 按钮上的 value 只放信封 id（e）和动作（op），收件人、代次、过期时间都在库里（envelopes.ts），
 // 卡片 JSON 被人转发、截图、抓包都伪造不出一次有效点击。
-import { hasPendingAcceptCommit, type Task } from "@ash/shared";
+import { hasPendingAcceptCommit, type Task } from "@navi/shared";
 import type { CardBlock, CardButton, CardModel, CardTone } from "./feishu/cards.js";
 import type { TaskView, Turn } from "./attention.js";
 import { scrubText, scrubTitle } from "./scrub.js";
 
 export interface CardContext {
-  /** 「在 ash 中打开」的地址；没配公网/内网地址时为 null，卡片上就不放这个按钮。 */
+  /** 「在 navi 中打开」的地址；没配公网/内网地址时为 null，卡片上就不放这个按钮。 */
   link: string | null;
   /** 这个项目设成了只推标题。 */
   titleOnly: boolean;
@@ -337,7 +337,7 @@ export function confirmCard(title: string, text: string, envelope: string, dange
 }
 
 /**
- * 新设备申请连进这台 ash（自用模式，auth/remote-pairing.ts）。配对码和那台设备屏幕上的对得上才是同一台 ——
+ * 新设备申请连进这台 navi（自用模式，auth/remote-pairing.ts）。配对码和那台设备屏幕上的对得上才是同一台 ——
  * 递申请不用任何凭证，同一个网里别人的设备也递得上来。
  */
 export function pairCard(request: { name: string; code: string; address: string }, envelope: string): CardModel {

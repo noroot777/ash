@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile, Task } from "@ash/shared";
-import type { ChatMember } from "@ash/shared/chat";
+import type { AgentExecutorProfile, Task } from "@navi/shared";
+import type { ChatMember } from "@navi/shared/chat";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { readSideStorage, writeSideStorage } from "./sideChatStorage.ts";

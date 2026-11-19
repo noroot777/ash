@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { TaskListItem } from "@ash/shared";
+import type { TaskListItem } from "@navi/shared";
 import type { LookForTask } from "../lib/useTaskReadState.ts";
 import { dispatchTally, type DispatchFacts } from "../lib/dispatchTree.ts";
 import type { BelowSignal } from "../lib/taskLook.ts";

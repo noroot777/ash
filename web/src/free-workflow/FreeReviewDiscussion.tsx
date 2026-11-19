@@ -1,4 +1,4 @@
-import type { TaskDiscussion, TaskListItem } from "@ash/shared";
+import type { TaskDiscussion, TaskListItem } from "@navi/shared";
 import { ArrowsOutSimple } from "@phosphor-icons/react";
 import { useLeftDrawer } from "../components/LeftDrawer.tsx";
 import { InspRecord, InspTool } from "../inspector/parts.tsx";

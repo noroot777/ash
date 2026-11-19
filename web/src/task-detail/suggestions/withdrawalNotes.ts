@@ -1,7 +1,7 @@
 // 智能体收回了挂在回复框顶上的建议任务：那一行不见了，为什么不见了写在会话里收回的那一刻——跟回合的尾注
 // 同一种小灰字（FootnoteLine 的 standalone），不带颜色、不占回复框。记录跟拿掉那一件同一笔落库、随任务下发
 // （shared/src/dispatch-suggestion.ts），这里不读会话正文：建议不见了，这一句就一定在。
-import type { WithdrawnSuggestion } from "@ash/shared/dispatch-suggestion";
+import type { WithdrawnSuggestion } from "@navi/shared/dispatch-suggestion";
 import type { TurnFootnote } from "../turnFootnote.ts";
 
 export type WithdrawalNote = { key: string; at: string; footnote: TurnFootnote };

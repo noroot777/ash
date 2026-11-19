@@ -27,7 +27,7 @@ for (const [text, expected] of [
   ["docs/release notes.md", "docs/release notes.md"],
   ["docs/plan(final).md", "docs/plan(final).md"],
   // 家目录原样交给服务端展开：成片常落在 `~/Movies`，在工作区外，由 locate 判本机打不打得开。
-  ["~/Movies/ash-promo.mp4", "~/Movies/ash-promo.mp4"],
+  ["~/Movies/navi-promo.mp4", "~/Movies/navi-promo.mp4"],
 ]) {
   assert.equal(codeFilePath(text, TASK), expected, `行内代码 ${text}`);
 }

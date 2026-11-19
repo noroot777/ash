@@ -3,7 +3,7 @@
 //
 // 底子是审查意见辩论那一套（talk/segments.ts）：每一段是一个**旁路回合**（任务状态、验收阶段、审查链
 // 原样不动），发言用 `debate_reply` 交卷、带一句写给用户的摘要，推进只在结算里做，落在同一张表里
-// （kind=discussion）。谁在第几段说、什么算谈拢，按 @ash/shared/discussion 那几条规则算。
+// （kind=discussion）。谁在第几段说、什么算谈拢，按 @navi/shared/discussion 那几条规则算。
 //
 // 一场讨论的输入在发起那一刻就定死，之后每一段都只认它：各方是谁、按哪一套执行器配置说（主执行器也是，中途
 // 改了任务的执行器，这一场照旧由原来那位说完、写合稿）、附了哪些图和文件（各方第一段都带上）、讨论之前的
@@ -17,12 +17,12 @@
 //
 // 讨论期间（running / synthesizing）这条任务的回合归它：用户发的话照「任务在跑」排队（task-reply.ts、
 // pending-delivery-facts.ts），派审、辩论、裁定都等它说完——它们插进两段之间，就会被当成讨论的一段结算。
-import type { AgentType, DiscussionParticipant, DiscussionRounds, TaskDiscussion } from "@ash/shared";
-import { AGENT_TYPES } from "@ash/shared";
+import type { AgentType, DiscussionParticipant, DiscussionRounds, TaskDiscussion } from "@navi/shared";
+import { AGENT_TYPES } from "@navi/shared";
 import {
   discussionAgreed, discussionRoundsLabel, discussionRoundsOf, discussionTotalSegments, isBlindSeq,
   MAX_DISCUSSION_GUESTS, speakerAt, speakingOrder,
-} from "@ash/shared/discussion";
+} from "@navi/shared/discussion";
 import { asc, and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -185,7 +185,7 @@ async function advance(talk: TalkRow, step: () => Promise<void>): Promise<void> 
     await step();
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    console.error(`[ash] 讨论 ${talk.id} 推进出错:`, error);
+    console.error(`[navi] 讨论 ${talk.id} 推进出错:`, error);
     const fresh = (await db.select().from(freeReviewDebates).where(eq(freeReviewDebates.id, talk.id))).at(0) ?? talk;
     if (fresh.status === "synthesizing") await closeSynthesis(fresh.id, fresh.taskId, `合稿没能准备好（${reason}）`);
     else if (fresh.status === "running") await failDiscussion(fresh, await speakingTurnOf(fresh), `推进讨论时出错（${reason}）`);

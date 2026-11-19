@@ -1,11 +1,11 @@
 // 「我说过的话」（R 键那张表）的纯函数部分：从一份会话正文里摘出真人的发言、按查询筛、按时间倒序
 // 翻页。从 user-messages.ts 拆出来是因为那边一导入就连库，这几条规则要能脱库钉住
 // （server/scripts/test-user-messages.ts）。
-import { isUserFollowUp } from "@ash/shared";
-import { parseAttachmentText } from "@ash/shared/attachments";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
-import { parseSessionSpans } from "@ash/shared/session-output";
-import type { UserMessage } from "@ash/shared/user-messages";
+import { isUserFollowUp } from "@navi/shared";
+import { parseAttachmentText } from "@navi/shared/attachments";
+import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
+import { parseSessionSpans } from "@navi/shared/session-output";
+import type { UserMessage } from "@navi/shared/user-messages";
 
 /** 列表里一条最多带多少字：右边那栏读全文用，再长的没人在这里读完，也不该为它撑大响应。 */
 export const MESSAGE_TEXT_CAP = 4000;

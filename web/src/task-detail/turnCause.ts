@@ -2,13 +2,13 @@
 //
 // 两种来源：哨兵叫醒（monitorWakeTurns 认出来的，`wokenByMonitor`）、系统续跑（这里认）。系统续跑
 // 在会话里只有一条「〔系统〕继续（从中断处）」记录，紧挨着它起头的那一回合。服务端写它时带上了
-// 缘由（@ash/shared/system-resume），这里把缘由挂到那一回合头上；那条记录本身就不再作为回执收进
+// 缘由（@navi/shared/system-resume），这里把缘由挂到那一回合头上；那条记录本身就不再作为回执收进
 // 上一回合的「N 条记录」（同一件事不写两遍，见 conversationSystemRows 的 shown）。
 //
 // 只改排法，不改数据：那条记录仍在条目表里、原文不变——审查段的起止（conversationReviewLanes、
 // conversationReviewer）照旧认它。
-import { LEGACY_SYS_MARKER } from "@ash/shared";
-import type { ResumeReason, SystemResume } from "@ash/shared/system-resume";
+import { LEGACY_SYS_MARKER } from "@navi/shared";
+import type { ResumeReason, SystemResume } from "@navi/shared/system-resume";
 import type { ConversationItem } from "./conversationModel.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;

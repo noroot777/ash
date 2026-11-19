@@ -27,7 +27,7 @@
 import { randomBytes } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { invalidateMonitorUnitScan, seedMonitorUnitEnv } from "../monitor-unit-scan.js";
-import { FROZEN_AGENT_UNIT_PREFIX } from "@ash/shared/legacy-names";
+import { FROZEN_AGENT_UNIT_PREFIX } from "@navi/shared/legacy-names";
 
 /**
  * 这一次运行独有的记号。

@@ -1,6 +1,6 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { PreviewServiceState } from "@ash/shared/preview";
+import type { PreviewServiceState } from "@navi/shared/preview";
 import { PillTabs } from "../../src/components/ui.tsx";
 import { InspectorRail } from "../../src/inspector/InspectorRail.tsx";
 import { PreviewServiceTabs } from "../../src/free-workflow/PreviewServiceTabs.tsx";

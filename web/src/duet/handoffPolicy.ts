@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from "@ash/shared";
+import type { Task, TaskStatus } from "@navi/shared";
 import type { DuetGate } from "./duetState.ts";
 
 export function isOpenDuetGate(gate: DuetGate | null, status: TaskStatus): boolean {

@@ -1,4 +1,4 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import type { Context, Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
@@ -7,7 +7,7 @@ import { relayApi } from "./llm.js";
 import { bearerToken, errorResponse, responseHeaders, secretsEqual } from "./openai-converter/common.js";
 import { currentListeningPort } from "./listening-port.js";
 import { relayErrorResponse, relayFetch } from "./llm-relay.js";
-import { CONTEXT_1M_SUFFIX, modelUsesContext1m, stripContext1mSuffix } from "@ash/shared/context-1m";
+import { CONTEXT_1M_SUFFIX, modelUsesContext1m, stripContext1mSuffix } from "@navi/shared/context-1m";
 
 // 判定本体在 shared(设置页与会话面板要用同一份),这里原样转出,老调用点不用改。
 export { modelUsesContext1m, stripContext1mSuffix };

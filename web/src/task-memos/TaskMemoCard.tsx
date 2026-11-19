@@ -8,7 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { File as FileIcon, PencilSimple, TrashSimple } from "@phosphor-icons/react";
 import { InspTool } from "../inspector/parts.tsx";
-import type { TaskMemo } from "@ash/shared/task-memo";
+import type { TaskMemo } from "@navi/shared/task-memo";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { attachmentView, formatInstant } from "../task-detail/utils.ts";
 import { MemoEditor } from "./MemoEditor.tsx";

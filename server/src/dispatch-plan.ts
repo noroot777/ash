@@ -3,14 +3,14 @@
 // 的一句（`launchBubble`）和续上智能体会话的那段答复（`launchReply`）。路由在 dispatch-plan-routes.ts，
 // 建任务那一下在 dispatch-plan-launch.ts。
 //
-// 为什么是 ash 建、不是让智能体再调一次工具：用户在卡上换的人、去掉的条、选的一个接一个 / 同时，
+// 为什么是 navi 建、不是让智能体再调一次工具：用户在卡上换的人、去掉的条、选的一个接一个 / 同时，
 // 只有照着卡建才保证「看到的就是派出去的」。智能体续上时拿到的是已经建好的清单，它不必、也不该再建一遍。
-import { AGENT_TYPES, type AgentType } from "@ash/shared";
+import { AGENT_TYPES, type AgentType } from "@navi/shared";
 import {
   DISPATCH_ORDER_LABEL, MAX_DISPATCH_NOTE_LEN, MAX_DISPATCH_PLAN_ITEMS,
   type DispatchOrder, type DispatchPlan, type DispatchPlanItem, type DispatchRunTarget,
-} from "@ash/shared/dispatch-plan";
-import { parseCreateReviewChoice, type CreateReviewChoice } from "@ash/shared/review-on-create";
+} from "@navi/shared/dispatch-plan";
+import { parseCreateReviewChoice, type CreateReviewChoice } from "@navi/shared/review-on-create";
 import type { ExecutorScope } from "./auth/owned-executors.js";
 import { id, now } from "./util.js";
 
@@ -180,7 +180,7 @@ export function launchReply(
   ].join("\n");
 }
 
-/** 一条交给 ash 的派出清单核一遍：留下的行在单子里、不重复、交给谁写得对。 */
+/** 一条交给 navi 的派出清单核一遍：留下的行在单子里、不重复、交给谁写得对。 */
 export function normalizeLaunch(
   plan: DispatchPlan,
   body: { planId?: unknown; order?: unknown; items?: unknown },

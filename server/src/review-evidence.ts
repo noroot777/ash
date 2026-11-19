@@ -7,7 +7,7 @@
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { ReviewConclusion } from "@ash/shared";
+import type { ReviewConclusion } from "@navi/shared";
 import {
   containedPath,
   evidenceSegments,

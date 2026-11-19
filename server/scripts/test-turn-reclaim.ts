@@ -26,13 +26,13 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { turnReclaimPost } from "./turn-reclaim-test-client.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-turn-reclaim-"));
+const root = mkdtempSync(join(tmpdir(), "navi-turn-reclaim-"));
 const approvalKey = generateKeyPairSync("ed25519");
-process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = approvalKey.publicKey.export({ type: "spki", format: "der" }).toString("base64");
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.NAVI_HUMAN_APPROVAL_PUBLIC_KEY = approvalKey.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 // 把判据窗口压到毫秒级,好让 HTTP 放开那条真实路径也测得动(见 SUSPECT_TURN_MS)。
-process.env.ASH_SUSPECT_TURN_MS = "20";
+process.env.NAVI_SUSPECT_TURN_MS = "20";
 
 const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
 const { projects, sessions, tasks, taskNotices, queueItems, scheduledMessages } = await import("../src/db/schema.js");

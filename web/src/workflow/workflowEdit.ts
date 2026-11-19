@@ -6,10 +6,10 @@
 // 本身待在同一个函数里，否则总有一条路径会漏掉。
 import type {
   FailPolicy, StepKind, StepParams, WorkflowDef, WorkflowStep,
-} from "@ash/shared/workflow";
+} from "@navi/shared/workflow";
 import {
   MAX_FAIL_ROUNDS, MAX_WORKFLOW_STEPS, hasFailBranch, isSingletonKind, makeStep,
-} from "@ash/shared/workflow";
+} from "@navi/shared/workflow";
 
 /** 线里没被占用的最小 sN。id 只在这条线内唯一即可。 */
 export function nextStepId(def: WorkflowDef): string {

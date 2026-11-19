@@ -1,7 +1,7 @@
 // 首启向导的后半段。前半段(自用 / 多人)在 `auth/SetupWizard.tsx`,这一段接着问三件
 // 装完就必须定下来的事:供应商 → 执行器 → 项目。
 //
-// 为什么不是「让用户自己去设置页逛一圈」:装完打开 ash,屏幕上只有一句「还没有可用
+// 为什么不是「让用户自己去设置页逛一圈」:装完打开 navi,屏幕上只有一句「还没有可用
 // 项目」。照它建完项目,下一步是新建任务 —— 而真正拦着他的是「一个执行器都没注册」,
 // 那句话在另一个页面里。这三件事有固定的依赖顺序(供应商挂到执行器上,执行器在项目
 // 目录里跑),按顺序问一遍比留三处空状态各喊一句都准。
@@ -16,7 +16,7 @@
 //
 // 走完(或跳过)之后落 `onboardedAt`,判据与放行见 `server/src/onboarding.ts`。
 import { useCallback, useEffect, useState } from "react";
-import type { AgentExecutorProfile, LlmProvider, ProjectView } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider, ProjectView } from "@navi/shared";
 import { Check } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
@@ -89,7 +89,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
         if (project.status === "fulfilled") {
           setProjects(project.value);
           // 已经有项目(多人模式下被加进了别人的项目)时先选上第一个,这样最后那颗按钮
-          // 永远有个落点 —— 否则「进入 ash」会把人丢进一个没选中项目的工作台。
+          // 永远有个落点 —— 否则「进入 navi」会把人丢进一个没选中项目的工作台。
           setProjectId((current) => current ?? project.value[0]?.id ?? null);
         }
         const failed = [

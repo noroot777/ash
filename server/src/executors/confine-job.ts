@@ -68,7 +68,7 @@ import { join } from "node:path";
 import { IS_WINDOWS, powerShell, powerShellSync } from "../platform.js";
 import { processGenerationsAsync, processGenerationsSync } from "../process-generation.js";
 import type { ConfineMember, ConfineRead, Confinement } from "./kernel-confine.js";
-import { FROZEN_AGENT_UNIT_PREFIX, FROZEN_CONFINE_TMP_DIR } from "@ash/shared/legacy-names";
+import { FROZEN_AGENT_UNIT_PREFIX, FROZEN_CONFINE_TMP_DIR } from "@navi/shared/legacy-names";
 
 /** Job Object 的名字。`Local\` = 当前登录会话的命名空间(跨会话不可见,正是我们要的边界)。 */
 const jobName = (token: string): string => `Local\\${FROZEN_AGENT_UNIT_PREFIX}${token.replace(/[^A-Za-z0-9._-]/g, "_")}`;
@@ -117,7 +117,7 @@ export function reopenJobConfinement(id: string): Confinement | null {
  *
  * 代价如实记下:attached 的守圈进程**活不过起它的那个进程**(同一台机器上实测:父进程退出
  * 1 秒后圈名就查不到了 —— 那台机器的终端会话给整条进程树套了 job)。所以 Windows 上这台
- * 设备的有效范围是 **ash 自己这条命之内**(清扫发生在回合末尾,够用),跨 server 重启那一档
+ * 设备的有效范围是 **navi 自己这条命之内**(清扫发生在回合末尾,够用),跨 server 重启那一档
  * 照旧弃权 —— `reopenJobConfinement` 那条路本来就把「名字没了」记成 `absent` 而不是
  * `unqueryable`,两边正好对上。
  *
@@ -391,7 +391,7 @@ function jobScript(name: string, op: "list" | "terminate"): string {
   return [
     "$ErrorActionPreference='Stop'",
     addType,
-    op === "list" ? `[AshJob]::List(${psq(name)})` : `[AshJob]::Terminate(${psq(name)})`,
+    op === "list" ? `[NaviJob]::List(${psq(name)})` : `[NaviJob]::Terminate(${psq(name)})`,
   ].join("\n");
 }
 
@@ -400,7 +400,7 @@ function serveScript(): string {
   return [
     "$ErrorActionPreference='Stop'",
     addType,
-    "[AshJob]::Serve()",
+    "[NaviJob]::Serve()",
   ].join("\n");
 }
 
@@ -414,7 +414,7 @@ function jobCsharp(): string {
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
-public static class AshJob {
+public static class NaviJob {
   const uint JOB_QUERY = 0x0004, JOB_TERMINATE = 0x0008;
   const uint PROC_TERMINATE = 0x0001, PROC_SET_QUOTA = 0x0100;
   [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]

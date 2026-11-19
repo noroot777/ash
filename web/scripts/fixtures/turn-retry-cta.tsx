@@ -18,8 +18,8 @@
 //   blocked   服务端说此刻重来不了（所在分组暂停着）：动作灰着，指上去说原因，点了不走。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { RetryTurnAction, Session, Task, TurnInterruption } from "@ash/shared";
-import { appendMonitorWake } from "@ash/shared/monitor-wake";
+import type { RetryTurnAction, Session, Task, TurnInterruption } from "@navi/shared";
+import { appendMonitorWake } from "@navi/shared/monitor-wake";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { buildConversationItems, type PersistedConversation, type TimelineEntry } from "../../src/task-detail/conversationModel.ts";
@@ -126,7 +126,7 @@ const SCENES: Record<string, (id: string) => Scene> = {
       mark({ t: "user", text: "按意见改一下构建脚本。", at: at2 }), "重试好了。", mark({ t: "agentEnd", at: end2 }),
     ].join("");
     const trace = [
-      { at: "2026-11-13T12:01:00.000Z", turnStartedAt: at, event: { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: "构建", command: "npm run build" }) } },
+      { at: "2026-11-13T12:01:00.000Z", turnStartedAt: at, event: { kind: "tool", name: "mcp__navi__start_monitor", detail: JSON.stringify({ description: "构建", command: "npm run build" }) } },
       { at: "2026-11-13T12:06:00.000Z", turnStartedAt: woke, event: { kind: "tool", name: "Read", detail: "{}" } },
       { at: "2026-11-13T12:11:00.000Z", turnStartedAt: at2, event: { kind: "tool", name: "Edit", detail: "{}" } },
     ];

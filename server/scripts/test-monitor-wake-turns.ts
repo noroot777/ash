@@ -15,10 +15,10 @@ import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 requireTmpDb("monitor-wake-turns");
-const stage = realpathSync(mkdtempSync(join(tmpdir(), "ash-wake-turns-")));
-process.env.ASH_DB = join(stage, "wake.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+const stage = realpathSync(mkdtempSync(join(tmpdir(), "navi-wake-turns-")));
+process.env.NAVI_DB = join(stage, "wake.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 
 const { eq } = await import("drizzle-orm");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");

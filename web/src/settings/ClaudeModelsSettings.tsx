@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import type { AppSettings } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import type { CliModelCatalog } from "@ash/shared/cli-presets";
+import type { AppSettings } from "@navi/shared";
+import { DEFAULT_APP_SETTINGS } from "@navi/shared";
+import type { CliModelCatalog } from "@navi/shared/cli-presets";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { cliCatalogNote, useCliModelCatalog } from "../lib/cliModelCatalog.ts";
 import { api } from "../lib/api.ts";

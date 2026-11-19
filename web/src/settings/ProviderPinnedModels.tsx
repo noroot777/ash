@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { LlmProtocol, ProviderModelListMode } from "@ash/shared";
+import type { LlmProtocol, ProviderModelListMode } from "@navi/shared";
 import { ArrowsClockwise, Play, X } from "@phosphor-icons/react";
 import { Button, PillTabs } from "../components/ui.tsx";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";

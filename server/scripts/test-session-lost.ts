@@ -2,7 +2,7 @@
  * 「CLI 否认了这条会话」的识别与清理。
  *
  * 起因(2026-08-21,172.16.88.252):任务第一次起跑就被 claude 的 root 闸拒掉,stdout
- * 0 字节 —— 会话压根没建起来,但 ash 在 spawn 那一刻就把自己发的 session id 落了库。
+ * 0 字节 —— 会话压根没建起来,但 navi 在 spawn 那一刻就把自己发的 session id 落了库。
  * 之后每一次重试都 `--resume` 一个从不存在的会话,稳定失败,报的还是另一句话。用户
  * 把真正的病因(root 闸)修好了,任务照样红,两件事看不出关系。
  *
@@ -20,7 +20,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { readSource, readSourceChain } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import { readCodexCliVersion } from "../src/executors/codex-rollout.js";
 import {
   LOST_SESSION_PATCH,
@@ -44,7 +44,7 @@ import {
   onRotationPersisted,
 } from "../src/team/rotation-state.js";
 
-const dir = mkdtempSync(join(tmpdir(), "ash-session-lost-"));
+const dir = mkdtempSync(join(tmpdir(), "navi-session-lost-"));
 const ok = (m: string) => console.log("   ✓ " + m);
 
 // 真机原话(claude 2.1.220,`claude --resume <uuid>` 指向一个不存在的 transcript)。
@@ -223,7 +223,7 @@ const CHAIN_OWNER: Record<string, string> = {
   "duet/turn.ts": "duet/turn.ts",
 };
 // **`(` 不许出现在中间**:这一问找的是「库里那个 id 原样当成 `--resume` 的参数」。把它交给
-// 一个函数去换成别的东西(`sessionOf(cliSessionId, taskId)` 换出来的是 ash 自己的会话行 id,
+// 一个函数去换成别的东西(`sessionOf(cliSessionId, taskId)` 换出来的是 navi 自己的会话行 id,
 // 给时间线用的)既不是续跑,也不需要清失效 id —— 上一版的宽松写法把那种调用也算成一条链。
 const RESUME_CALL = /sessionId:\s*[^,\n(]*(cliSessionId|resumeCliId)/;
 const walk = (d: string): string[] =>

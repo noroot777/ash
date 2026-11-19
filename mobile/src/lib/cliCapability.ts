@@ -8,8 +8,8 @@
 //
 // 取数函数由调用方传进来(组件传 `api.cliModels`,测试传假的):这个文件不碰
 // react-native,也不碰网络。
-import type { AgentType } from "@ash/shared";
-import type { CliModelCatalog, ModelEffortMap } from "@ash/shared/cli-presets";
+import type { AgentType } from "@navi/shared";
+import type { CliModelCatalog, ModelEffortMap } from "@navi/shared/cli-presets";
 
 /**
  * CLI 官方账号那一档的能力。`models` 是 server 现问 CLI 的候选(`grok models` 之类),

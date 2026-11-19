@@ -3,10 +3,10 @@
 // `api.pendingMerge()` 这类写法一字不动。
 //
 // 这一族的共同点是**都去核对现场**，不是复读库里那句「我们合完没提交」：验收之后用户
-// 在自己的终端里干了什么 ash 一概管不着（自己提交了 / reset --hard 丢了 / 又往暂存区
+// 在自己的终端里干了什么 navi 一概管不着（自己提交了 / reset --hard 丢了 / 又往暂存区
 // 加了别的东西），所以每次都由服务端去看一眼目标分支此刻的真实状态（见服务端
 // task-accept-pending.ts）。
-import type { PendingMergeActionResult, PendingMergeState } from "@ash/shared/accept-pending";
+import type { PendingMergeActionResult, PendingMergeState } from "@navi/shared/accept-pending";
 import { id, json, request } from "./apiClient.ts";
 
 export const pendingMergeApi = {

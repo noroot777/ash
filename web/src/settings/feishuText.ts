@@ -2,7 +2,7 @@
 //
 // 单独放一份是因为同一个状态会在好几张卡上出现（连接卡的状态点、绑定卡里「机器人还没连上」
 // 的提醒），文案抄两份迟早一边先漂。
-import type { ImApiKind, ImConnectionState, ImQuotaLevel } from "@ash/shared";
+import type { ImApiKind, ImConnectionState, ImQuotaLevel } from "@navi/shared";
 import { localeDateTime } from "../lib/localeFormat.ts";
 
 type Tone = "neutral" | "green" | "amber" | "red";

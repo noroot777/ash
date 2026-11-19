@@ -16,11 +16,11 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@navi/shared";
 
-const root = mkdtempSync(join(tmpdir(), "ash-team-session-notice-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-team-session-notice-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 process.on("exit", () => {
   try {
     rmSync(root, { recursive: true, force: true });
@@ -66,7 +66,7 @@ writeFileSync(
 process.env.PATH = `${stubDir}${delimiter}${process.env.PATH ?? ""}`;
 // 这个测试就是要验证进程管理(常驻回合 → 停止 → closeLead),隔离闸只放行上面那个只会
 // echo JSONL 的 `codex` 桩,打不到任何模型。
-process.env.ASH_TEST_AGENT_BIN = stubDir;
+process.env.NAVI_TEST_AGENT_BIN = stubDir;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, sessions } = await import("../src/db/schema.js");

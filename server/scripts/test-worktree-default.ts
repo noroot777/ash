@@ -18,10 +18,10 @@ import { eq } from "drizzle-orm";
 import { createClient } from "../src/db/node-sqlite-client.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-worktree-default-"));
+const root = mkdtempSync(join(tmpdir(), "navi-worktree-default-"));
 const dbFile = join(root, "ash.db");
-process.env.ASH_DB = dbFile;
-process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.NAVI_DB = dbFile;
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 

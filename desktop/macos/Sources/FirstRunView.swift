@@ -1,7 +1,7 @@
 import AppKit
 
 /// 第一次打开、数据根还空着时的那一屏：铺满首次配置那扇小窗（`BrowserWindowController.welcomeSize`），
-/// 不是大窗正中摆一张卡。左边一栏是 ash 自己和首启要走的几步（第一步就是这里，后三步是 web 的首启
+/// 不是大窗正中摆一张卡。左边一栏是 navi 自己和首启要走的几步（第一步就是这里，后三步是 web 的首启
 /// 向导，名字和它导轨上的一致）；右边问数据从哪儿来。
 ///
 /// 选了之后不换屏：选中的那一项原地转圈，等页面载进来（窗口这时才展开成工作窗）；出了错回到这里，
@@ -30,17 +30,17 @@ final class FirstRunView: NSView {
 
     let title = NSTextField(labelWithString: "数据从哪儿来")
     title.font = .systemFont(ofSize: 22, weight: .semibold)
-    title.textColor = AshPalette.ink
+    title.textColor = NaviPalette.ink
     let note = NSTextField(labelWithString: "只在第一次打开时问这一次。")
     note.font = .systemFont(ofSize: 13)
-    note.textColor = AshPalette.muted
+    note.textColor = NaviPalette.muted
     error.font = .systemFont(ofSize: 13)
-    error.textColor = AshPalette.red
+    error.textColor = NaviPalette.red
     error.isSelectable = true
     error.preferredMaxLayoutWidth = Self.columnWidth
     error.isHidden = true
     location.font = .systemFont(ofSize: 12)
-    location.textColor = AshPalette.faint
+    location.textColor = NaviPalette.faint
     location.isSelectable = true
     location.preferredMaxLayoutWidth = Self.columnWidth
     fresh.onPress = { [weak self] in self?.onChoose?(.fresh) }
@@ -97,11 +97,11 @@ final class FirstRunView: NSView {
 
   override var wantsUpdateLayer: Bool { true }
   override func updateLayer() {
-    layer?.backgroundColor = AshPalette.panel.cgColor
+    layer?.backgroundColor = NaviPalette.panel.cgColor
   }
 }
 
-/// 左边那一栏：标识、一句话说 ash 是干什么的，底下是首启要走的几步。红绿灯浮在它上面。
+/// 左边那一栏：标识、一句话说 navi 是干什么的，底下是首启要走的几步。红绿灯浮在它上面。
 /// 黑底白字两种外观都一样，所以颜色是写死的白，只有底色跟外观走。
 private final class BrandPane: NSView {
   static let steps = ["数据", "供应商", "执行器", "项目"]
@@ -151,7 +151,7 @@ private final class BrandPane: NSView {
 
   override var wantsUpdateLayer: Bool { true }
   override func updateLayer() {
-    layer?.backgroundColor = AshPalette.brand.cgColor
+    layer?.backgroundColor = NaviPalette.brand.cgColor
   }
 }
 
@@ -229,9 +229,9 @@ final class ChoiceButton: NSControl {
 
     title.stringValue = text
     title.font = .systemFont(ofSize: 14, weight: .semibold)
-    title.textColor = AshPalette.ink
+    title.textColor = NaviPalette.ink
     detail.font = .systemFont(ofSize: 12.5)
-    detail.textColor = AshPalette.muted
+    detail.textColor = NaviPalette.muted
     detail.preferredMaxLayoutWidth = textWidth - 32 - 28
     spinner.style = .spinning
     spinner.controlSize = .small
@@ -278,8 +278,8 @@ final class ChoiceButton: NSControl {
   override func updateLayer() {
     guard let layer else { return }
     let lit = pressable && (hovering || pressing)
-    layer.backgroundColor = (lit ? AshPalette.hover : AshPalette.raised).cgColor
-    layer.borderColor = (lit ? AshPalette.ink : AshPalette.line).cgColor
+    layer.backgroundColor = (lit ? NaviPalette.hover : NaviPalette.raised).cgColor
+    layer.borderColor = (lit ? NaviPalette.ink : NaviPalette.line).cgColor
   }
 
   // 标题、说明都是 label，点在它们上面也算点这一块。

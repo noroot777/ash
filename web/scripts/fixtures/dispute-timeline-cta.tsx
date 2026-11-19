@@ -6,7 +6,7 @@
 // 裁定的事）。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewRun, Session, Task } from "@ash/shared";
+import type { FreeReviewRun, Session, Task } from "@navi/shared";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
@@ -47,7 +47,7 @@ const settled = [
   "已按第 2 轮意见修好，只剩一条建议转出去。",
   `\x1e${JSON.stringify({ t: "system", text: DISPUTE_NOTE, aside: true, notice: { kind: "review.dispute", round: 2 }, at: "2026-09-24T04:00:00.000Z" })}`,
   `\x1e${JSON.stringify({ t: "agentEnd", at: "2026-09-24T04:00:13.000Z" })}`,
-  `\x1e${JSON.stringify({ t: "system", text: "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。", level: "notice", at: "2026-09-24T04:00:13.000Z" })}`,
+  `\x1e${JSON.stringify({ t: "system", text: "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 navi 的完成协议记为未完成。", level: "notice", at: "2026-09-24T04:00:13.000Z" })}`,
 ].join("\n");
 const heldItems = buildConversationItems([{ session, output: settled, trace: [] }], [session], [] as never);
 const acceptedTask = { ...task, stage: "accepted" } as unknown as Task;

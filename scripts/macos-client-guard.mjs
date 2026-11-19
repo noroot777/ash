@@ -1,6 +1,6 @@
 // test-macos-client.mjs 的一段：窗口在线之后服务换了人。
 //
-// 窗口只连这份服务专用的端口（AshConfig.windowPort，server/src/window-port.ts），4317 留给浏览器、CLI。
+// 窗口只连这份服务专用的端口（NaviConfig.windowPort，server/src/window-port.ts），4317 留给浏览器、CLI。
 // 两个端口各摆一个假的应答者：
 //   · 窗口端口照真服务的规矩办（server/src/instance-binding.ts）：请求带着别人的实例号就 409；
 //   · 4317 换人时换上一份**旧版 ash**：不认实例号，什么请求来了都照办 —— 第 3 轮审查 F1 的那个口子。

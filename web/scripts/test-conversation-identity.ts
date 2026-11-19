@@ -24,16 +24,16 @@ import { chmodSync, createWriteStream, existsSync, mkdtempSync, readFileSync, rm
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { parseSessionSpans, segmentFingerprint, traceSpanFingerprint } from "@ash/shared/session-output";
+import { parseSessionSpans, segmentFingerprint, traceSpanFingerprint } from "@navi/shared/session-output";
 import type { SessionTraceEntry } from "../src/lib/api.ts";
 import { buildConversationItems, conversationToMarkdown, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { awaitingUpstream } from "../src/task-detail/conversationSegments.ts";
 import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-conversation-identity-"));
-process.env.ASH_DB = join(stage, "ash.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
-process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
+const stage = mkdtempSync(join(tmpdir(), "navi-conversation-identity-"));
+process.env.NAVI_DB = join(stage, "ash.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
+process.env.NAVI_UPLOADS_DIR = join(stage, "uploads");
 const { appendSessionTrace, sessionTracePath, sessionTranscriptPath, writeTurn, writeTurnEnd } = await import("../../server/src/transcript.ts");
 const { bindTranscript, claimTranscript, onRecord, reserveRecord, writeProse } = await import("../../server/src/transcript-identity.ts");
 const { createRunVoice } = await import("../../server/src/single-run-voice.ts");

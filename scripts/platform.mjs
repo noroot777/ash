@@ -36,7 +36,7 @@ export function candidates(cmd) {
   // **不含裸名**：跟 `bin-resolve.ts` 的 `candidatesIn` 一致。npm 全局目录里同名的
   // 无后缀文件是给 POSIX shell 用的脚本，Windows 的 CreateProcess 起不来它 —— 把它
   // 排在前面，`which` 会返回那一个、`run` 据此 spawn，拿到 ENOENT（第 1 轮审查 N2，
-  // Windows 真机实测：which 给 `ash-review-cli`、resolveBin 给 `ash-review-cli.cmd`）。
+  // Windows 真机实测：which 给 `navi-review-cli`、resolveBin 给 `navi-review-cli.cmd`）。
   const exts = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   return exts.map((ext) => cmd + ext.toLowerCase());
 }
@@ -78,9 +78,9 @@ export function extraPaths(env = process.env, home = homedir()) {
 /**
  * `command -v` 的跨平台版本：找不到返回 null。
  *
- * **扫 PATH 之后接着扫 `extraPaths()`** —— 跟 ash 自己派活时用的 `resolveBin` 同一套
+ * **扫 PATH 之后接着扫 `extraPaths()`** —— 跟 navi 自己派活时用的 `resolveBin` 同一套
  * 候选目录。少了这一截,装机脚本会把「装了、只是不在这个 shell 的 PATH 里」判成
- * 「没装」:`setup.mjs` 据此跳过 MCP 注册,而 ash 照样派得出任务,结果是每个任务都
+ * 「没装」:`setup.mjs` 据此跳过 MCP 注册,而 navi 照样派得出任务,结果是每个任务都
  * 交不了卷(见 bin-resolve.ts 的 extraPaths 头部)。
  */
 export function which(cmd) {
@@ -143,7 +143,7 @@ function uniquePids(text) {
  * 谁在监听这个端口。查不到（命令不可用 / 竞态）返回空数组。
  *
  * POSIX 上要依次退好几条：**`lsof` 是 macOS 自带、Linux 精简镜像普遍不装**。
- * 2026-08-21 踩到的实例是一台 Rocky 容器里的 ash —— `lsof` 不在，这里返回空，
+ * 2026-08-21 踩到的实例是一台 Rocky 容器里的 navi —— `lsof` 不在，这里返回空，
  * restart.mjs 于是「没找到旧进程」直接放过，新进程撞单实例锁退出，而 `/api/health`
  * 由**老进程**照常回 200，脚本打印「已就绪」。用户完全有理由以为重启成功了，实际
  * 跑了三个多小时的旧代码。所以 lsof → ss(iproute2) → fuser(psmisc) 挨个试。
@@ -208,7 +208,7 @@ $rows=@(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {
 }
 
 /**
- * 「这是一个活得过 ash 的 agent 壳」的记号。跟
+ * 「这是一个活得过 navi 的 agent 壳」的记号。跟
  * `server/src/executors/detached-win-wrap.ts` 的 `WINDOWS_WRAP_SUFFIX` **必须一字不差**
  * —— 那边按这个后缀生成壳脚本的文件名,这边按它在进程表的命令行里把壳认出来。
  *
@@ -251,7 +251,7 @@ export function agentWrapPids(rows) {
  * 跟「名单」不同,它和 doomed 集合读的是同一份快照,中间没有时间差。
  *
  * 快照之后才出生的进程压根不在 doomed 里,也就一刀都挨不着:它要么是个新壳(该活),要么
- * 是 ash 非 detached 起的子进程 —— 后者会被 libuv 那个 `KILL_ON_JOB_CLOSE` 的全局 Job 在
+ * 是 navi 非 detached 起的子进程 —— 后者会被 libuv 那个 `KILL_ON_JOB_CLOSE` 的全局 Job 在
  * server 一死时连带收掉(机制见 detached-win.ts 顶部),不需要这里补刀。
  *
  */
@@ -357,7 +357,7 @@ export function localJson(port, path, timeoutMs = 2000, headers = undefined) {
  *
  * 第三档也得分开:**「端口上没人在听」和「有人在听但没按时答」不是一回事**
  * (第 1 轮审查 F1)。两者的 `status` 都是 null,可前者意味着「本来就没有任务会被打断」,
- * 后者只意味着「问不出来」—— 把后者当前者处理,安全闸就会在 ash 响应慢的时候静默失效。
+ * 后者只意味着「问不出来」—— 把后者当前者处理,安全闸就会在 navi 响应慢的时候静默失效。
  * 所以再带一个 `error`:`null` = 答了,`"timeout"` = 超时,其余是 errno(`ECONNREFUSED`
  * 这类),由 `isNotListening` 判。
  */

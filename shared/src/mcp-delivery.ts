@@ -29,7 +29,7 @@
 export const UNDELIVERED_NET_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]);
 
 // 各家 CLI 在 MCP 通道断掉时写进事件流的说法。全部小写后做子串匹配。
-// codex(rmcp) 实测：`tool call failed for \`ash/report_stage\`\n\nCaused by:\n    Transport closed`
+// codex(rmcp) 实测：`tool call failed for \`navi/report_stage\`\n\nCaused by:\n    Transport closed`
 //
 // 注意这里比 UNDELIVERED_NET_CODES 宽：`econnreset` / `socket hang up` 严格说是
 // 「连上了又断」，未必没送达。只有**叠着幂等白名单**的补捞侧能用这份（见文件头）。
@@ -47,10 +47,10 @@ const UNDELIVERED_PHRASES = [
 ];
 
 /**
- * **ash 已经应答过**的那种失败:MCP 端拿到 ash 的非 2xx 回复,就把它写成这个形状交给 agent
+ * **navi 已经应答过**的那种失败:MCP 端拿到 navi 的非 2xx 回复,就把它写成这个形状交给 agent
  * (`mcp/src/runtime.ts` 的 `request()`、带结果的拒绝 `mcp/src/tools/monitor-results.ts` 共用)。
  * 补捞那一侧据此认「对面回过话了」—— 这是格式上的约定,不是猜正文里有没有某个词:通道真断了
- * 的时候,agent 记下的是执行器自己写的那句话,里面不会有 ash 的回复。
+ * 的时候,agent 记下的是执行器自己写的那句话,里面不会有 navi 的回复。
  */
 export const answeredMcpError = (status: number, method: string, path: string, body: string): string =>
   `HTTP ${status} ${method} ${path} — ${body}`;
@@ -64,7 +64,7 @@ export const isAnsweredMcpError = (text: string | null | undefined): boolean => 
  */
 export function isUndeliveredMcpFailure(input: { code?: string | null; message?: string | null }): boolean {
   if (input.code && UNDELIVERED_NET_CODES.has(input.code)) return true;
-  // ash 已经应答过的拒绝,正文里写着什么都不算:它可能整段带着命令输出(随 409 交出的哨兵结果),
+  // navi 已经应答过的拒绝,正文里写着什么都不算:它可能整段带着命令输出(随 409 交出的哨兵结果),
   // 那里出现 `ECONNRESET` 是业务内容,不是这条通道断了。
   if (isAnsweredMcpError(input.message)) return false;
   const text = (input.message ?? "").toLowerCase();
@@ -79,7 +79,7 @@ export function isUndeliveredMcpFailure(input: { code?: string | null; message?:
  * 收进来的判据是三条同时成立：
  * ① **幂等**：重复执行一次结果不变（写同一个值），所以「其实送达了、只是回执丢了」
  *    的那种情况重放也不会出事；
- * ② **只写回本任务自己的状态**：它是 agent 在回合末尾「向 ash 交卷」的动作，丢了
+ * ② **只写回本任务自己的状态**：它是 agent 在回合末尾「向 navi 交卷」的动作，丢了
  *    就等于活白干（结论没写回、完成没确认）；
  * ③ **不凭空创造一个新的等待**：重放只是把 agent 已经做出的判断补录进来，不该让任务
  *    多出一个「有人在等你」的状态。

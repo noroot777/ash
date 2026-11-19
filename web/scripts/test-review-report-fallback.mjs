@@ -274,9 +274,9 @@ for (const [what, title] of [
   const metadataFirst = [
     "# 第 1 轮逻辑审查报告",
     "",
-    "## 任务：查询 Claude 模型 (ash 中增加 Claude CLI 模型指定功能)",
+    "## 任务：查询 Claude 模型 (navi 中增加 Claude CLI 模型指定功能)",
     "",
-    "审查对象：`ash/_wWMPNIsr`。",
+    "审查对象：`navi/_wWMPNIsr`。",
     "",
     "## 1. 编译验证",
     "",

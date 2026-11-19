@@ -1,6 +1,6 @@
 // 服务端「上一次是怎么停的」账本。
 //
-// 2026-10-19 排查「ash 又停了」时发现:进程消失这件事在机器上**一点痕迹都没有**。
+// 2026-10-19 排查「navi 又停了」时发现:进程消失这件事在机器上**一点痕迹都没有**。
 // 不是 JS 崩溃(兜底 handler 会打印)、不是 V8 OOM(会打印 FATAL ERROR)、不是原生崩溃
 // (会在 ~/Library/Logs/DiagnosticReports 留 .ips)、不是 jetsam(会留 JetsamEvent)、
 // 也不是 `npm run restart`(只发 SIGTERM)。唯一的线索是单例锁文件被留在原地,以及
@@ -16,7 +16,7 @@
 //   * **进程内部的记录只是「退出意向」,不是最终终态**(第 2 轮)。那条记录写在释放锁
 //     之前,写完之后照样可以被 SIGKILL 带走 —— 审查实测过:收到 SIGTERM、账本里记着
 //     `kind=signal`,进程最终却是被 SIGKILL 结束的。所以残留锁旁边只报 `ExitEvidence`
-//     (有没有留下退出意向),**不报死因**;最终死因要外部 wait 状态才说得清,ash 自己
+//     (有没有留下退出意向),**不报死因**;最终死因要外部 wait 状态才说得清,navi 自己
 //     拿不到。也不许再加一条「更晚的进程内标记」来假装终态被证明 —— 更晚的标记之后
 //     同样有窗口。
 //
@@ -43,7 +43,7 @@
 // 因为磁盘满/权限问题把退出本身搞崩。
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, renameSync } from "node:fs";
-import { resolveAshDbFile } from "./db/path.js";
+import { resolveNaviDbFile } from "./db/path.js";
 
 const LEDGER_SUFFIX = ".exits.jsonl";
 /** 上一代账本:裁剪就是把当前这份改名成它。两代之外的才真正消失。 */
@@ -167,7 +167,7 @@ export function runIdOfToken(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 16);
 }
 
-export function exitLedgerFileForDb(dbFile = resolveAshDbFile()): string {
+export function exitLedgerFileForDb(dbFile = resolveNaviDbFile()): string {
   return `${dbFile}${LEDGER_SUFFIX}`;
 }
 
@@ -179,7 +179,7 @@ export function exitLedgerFileForDb(dbFile = resolveAshDbFile()): string {
  * 会把读失败当成「不需要补」,于是又粘回去(第 2 轮审查实测)。多出来的那个空行由
  * `parseRecords` 跳掉。
  */
-export function recordExit(record: ExitRecord, dbFile = resolveAshDbFile()): void {
+export function recordExit(record: ExitRecord, dbFile = resolveNaviDbFile()): void {
   try {
     appendFileSync(exitLedgerFileForDb(dbFile), `\n${JSON.stringify(record)}\n`, { mode: 0o600 });
   } catch {
@@ -214,12 +214,12 @@ function parseLedger(dbFile: string): ExitRecord[] {
 }
 
 /** 读出最近 N 条(最旧在前)。读不到就当没有 —— 它只是诊断信息。 */
-export function readExitRecords(limit = KEEP_RECORDS, dbFile = resolveAshDbFile()): ExitRecord[] {
+export function readExitRecords(limit = KEEP_RECORDS, dbFile = resolveNaviDbFile()): ExitRecord[] {
   return parseLedger(dbFile).slice(-limit);
 }
 
 /** 这一轮启动留下过退出意向吗(从新往旧找)。残留锁的证据等级就靠它。 */
-export function findExitByRunId(runId: string, dbFile = resolveAshDbFile()): ExitRecord | null {
+export function findExitByRunId(runId: string, dbFile = resolveNaviDbFile()): ExitRecord | null {
   const records = parseLedger(dbFile);
   for (let i = records.length - 1; i >= 0; i -= 1) {
     const record = records[i]!;
@@ -240,7 +240,7 @@ export function findExitByRunId(runId: string, dbFile = resolveAshDbFile()): Exi
  * 裁剪本来就要做的事。换来的是「裁剪永不删除任何已经落盘的记录」这条不依赖加锁的
  * 不变量,所以它也不要求调用方在持锁期间调用。
  */
-export function rotateExitLedger(dbFile = resolveAshDbFile()): void {
+export function rotateExitLedger(dbFile = resolveNaviDbFile()): void {
   const file = exitLedgerFileForDb(dbFile);
   try {
     if (parseRecords(file).length <= KEEP_RECORDS) return;

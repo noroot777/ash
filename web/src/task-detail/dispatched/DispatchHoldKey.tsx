@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { Play, Stop } from "@phosphor-icons/react";
 import { InspectorHeadActions } from "../../inspector/index.ts";
 import { InspTool } from "../../inspector/parts.tsx";

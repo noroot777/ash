@@ -31,7 +31,7 @@ import { RUNS_DIR } from "./paths.js";
 import { withRunFileLock } from "./run-file-lock.js";
 import { recordSeq, takeRecordSeq, type RecordSeq } from "./session-seq.js";
 import { now } from "./util.js";
-import type { RecordIdentity, TextAnchor } from "@ash/shared/session-output";
+import type { RecordIdentity, TextAnchor } from "@navi/shared/session-output";
 
 type Binding = {
   taskId: string;

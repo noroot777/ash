@@ -29,7 +29,7 @@ try {
     if (path !== "/api/uploads" || request.method() !== "POST") return route.fulfill({ json: [] });
     const { name } = JSON.parse(request.postData() ?? "{}");
     await new Promise((resolve) => held.set(name, resolve));
-    await route.fulfill({ json: { id: `up-${name}`, path: `/ash/data/uploads/up12345678ab-${name}`, url: `data:image/png;base64,${PNG}`, name, kind: "image" } })
+    await route.fulfill({ json: { id: `up-${name}`, path: `/navi/data/uploads/up12345678ab-${name}`, url: `data:image/png;base64,${PNG}`, name, kind: "image" } })
       .catch(() => {});
   });
   await page.goto(`${web.origin}/scripts/fixtures/question-card.html`);
@@ -154,7 +154,7 @@ try {
   assert.equal(await card.getByRole("button", { name: "上传附件" }).count(), 1, "最后一行也有回形针");
   await send.click();
   await card.waitFor({ state: "detached" });
-  assert.match(await page.getByLabel("发给智能体的回复", { exact: true }).innerText(), /ask-card\n\n\[用户附带的文件[^\]]*\]\n- \/ash\/data\/uploads\/up12345678ab-shot\.png$/, "图跟着答复一起发出");
+  assert.match(await page.getByLabel("发给智能体的回复", { exact: true }).innerText(), /ask-card\n\n\[用户附带的文件[^\]]*\]\n- \/navi\/data\/uploads\/up12345678ab-shot\.png$/, "图跟着答复一起发出");
   const answered = page.locator(".task-question-record").last();
   assert.equal(await answered.locator(".task-message-image img").count(), 1, "答过的气泡里画出贴的图");
   assert.doesNotMatch(await answered.innerText(), /用户附带的文件/, "附件块不当成答案文字");

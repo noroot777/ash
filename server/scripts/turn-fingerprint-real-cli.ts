@@ -1,14 +1,14 @@
 // test-turn-fingerprint.ts 里要真 CLI 的那两段。只走到「启动报告」那一步就收手:claude 拿到 init、
-// codex 拿到 ash 的 startupStatus,不调模型、不花额度;各用临时配置目录,不碰用户的。
+// codex 拿到 navi 的 startupStatus,不调模型、不花额度;各用临时配置目录,不碰用户的。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@ash/shared";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-import { claudeAshMcpProblem, CodexAshMcpStatus } from "../src/executors/ash-mcp-confirm.js";
-import { claudeAshMcpInjection, codexAshMcpArgs } from "../src/executors/ash-mcp-inject.js";
+import type { AgentEvent } from "@navi/shared";
+import { NAVI_MCP_SERVER_NAME } from "@navi/shared/mcp";
+import { claudeNaviMcpProblem, CodexNaviMcpStatus } from "../src/executors/navi-mcp-confirm.js";
+import { claudeNaviMcpInjection, codexNaviMcpArgs } from "../src/executors/navi-mcp-inject.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
 import { withoutTurnIdentity } from "../src/turn-identity.js";
 
@@ -32,7 +32,7 @@ export type RealCliContext = {
   picked: () => Picked | null;
 };
 
-// 跑这个测试的进程自己可能就在一个 ash 回合里:它的身份变量和 PATH 上的身份目录一律摘掉。
+// 跑这个测试的进程自己可能就在一个 navi 回合里:它的身份变量和 PATH 上的身份目录一律摘掉。
 const baseEnv = (): Env => withoutTurnIdentity({ ...process.env });
 
 const errorText = (e: AgentEvent | null) => (e?.kind === "error" ? e.message : "");
@@ -44,13 +44,13 @@ export async function checkRealClaude(ctx: RealCliContext): Promise<void> {
     const home = mkdtempSync(join(ctx.root, "claude-home-"));
     writeFileSync(join(home, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, projects: {} }));
     writeFileSync(join(home, "settings.json"), JSON.stringify({ env: settingsEnv }));
-    const injection = claudeAshMcpInjection(spawnEnv, { entry: ctx.entry, dir: join(home, "inject") });
+    const injection = claudeNaviMcpInjection(spawnEnv, { entry: ctx.entry, dir: join(home, "inject") });
     const plan = resolveLaunch("claude", ["-p", "--output-format", "stream-json", "--verbose", "--max-turns", "1", ...injection.args])!;
     const child = spawn(plan.file, plan.args, {
       cwd: home, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
       // 模型端点指到死端口、key 是占位:init 一到就收手,不会真发请求。
-      env: { ...baseEnv(), ...spawnEnv, CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: "ash-test-not-a-key",
+      env: { ...baseEnv(), ...spawnEnv, CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: "navi-test-not-a-key",
         ANTHROPIC_BASE_URL: "http://127.0.0.1:9", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
     });
     let out = "";
@@ -62,7 +62,7 @@ export async function checkRealClaude(ctx: RealCliContext): Promise<void> {
     const init = out.split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } })
       .find((e) => e.type === "system" && e.subtype === "init");
     assert.ok(init, `真 claude 没给出 init:${out.slice(0, 500)}`);
-    return { picked: ctx.picked(), problem: claudeAshMcpProblem(injection, init.mcp_servers, init.tools) };
+    return { picked: ctx.picked(), problem: claudeNaviMcpProblem(injection, init.mcp_servers, init.tools) };
   };
 
   const recovered = await probe(ctx.stale, ctx.currentEnv);
@@ -74,7 +74,7 @@ export async function checkRealClaude(ctx: RealCliContext): Promise<void> {
   const refused = await probe(ctx.allStale, ctx.currentVars);
   assert.match(refused.picked?.refused ?? "", /回合身份对不上/, "所有通道都是旧的 ⇒ MCP 拒绝启动");
   assert.match(errorText(refused.problem), /Navi 的工具在这一回合没接上（claude 启动时报告 Navi MCP 的状态是 failed/,
-    "不再是 connected 却交不了卷:ash 留下一条持久诊断");
+    "不再是 connected 却交不了卷:navi 留下一条持久诊断");
 
   const side = await probe(ctx.stale, withoutTurnIdentity({}));
   assert.deepEqual([side.picked?.taskId, side.picked?.turnToken, side.picked?.refused], ["", "", null],
@@ -85,7 +85,7 @@ export async function checkRealClaude(ctx: RealCliContext): Promise<void> {
   assert.deepEqual([team.picked?.taskId, team.picked?.turnToken, team.picked?.refused], [ctx.lead, "", null],
     "团队调度台:带着自己的任务 id 连上,不捎配置里残留的旧令牌");
   assert.equal(team.problem, null);
-  console.log("✓ 真 claude:settings.env 写死旧身份时接上本回合那份;全是旧的 ⇒ ash 没接上并留诊断;非任务回合不认旧身份;团队调度台保住任务 id");
+  console.log("✓ 真 claude:settings.env 写死旧身份时接上本回合那份;全是旧的 ⇒ navi 没接上并留诊断;非任务回合不认旧身份;团队调度台保住任务 id");
 }
 
 /** 真 codex app-server:[mcp_servers.navi.env] 写死旧身份。只走到 thread/start,不发 turn/start。 */
@@ -95,18 +95,18 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
     const home = mkdtempSync(join(ctx.root, "codex-home-"));
     mkdirSync(home, { recursive: true });
     const lines = Object.entries(staticEnv).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join("\n");
-    writeFileSync(join(home, "config.toml"), `[mcp_servers.${ASH_MCP_SERVER_NAME}]\ncommand = "unused"\n[mcp_servers.${ASH_MCP_SERVER_NAME}.env]\n${lines}\n`);
-    const launch = resolveLaunch("codex", ["app-server", "--stdio", ...codexAshMcpArgs(spawnEnv, ctx.entry)])!;
+    writeFileSync(join(home, "config.toml"), `[mcp_servers.${NAVI_MCP_SERVER_NAME}]\ncommand = "unused"\n[mcp_servers.${NAVI_MCP_SERVER_NAME}.env]\n${lines}\n`);
+    const launch = resolveLaunch("codex", ["app-server", "--stdio", ...codexNaviMcpArgs(spawnEnv, ctx.entry)])!;
     const child = spawn(launch.file, launch.args, {
       cwd: home, env: { ...baseEnv(), ...spawnEnv, CODEX_HOME: home }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
     });
-    const status = new CodexAshMcpStatus();
+    const status = new CodexNaviMcpStatus();
     const said: AgentEvent[] = [];
     const waiters = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
     let next = 0;
     let settled: () => void = () => {};
-    const ashDone = new Promise<void>((r) => { settled = r; });
+    const naviDone = new Promise<void>((r) => { settled = r; });
     // 每一问都有界:codex 卡住不答时照样走到 finally 收掉进程,而不是把整条验收挂到哨兵超时。
     const request = (method: string, params: unknown, timeoutMs = 15_000) => new Promise<unknown>((resolve, reject) => {
       const id = ++next;
@@ -131,13 +131,13 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
       const e = status.update(m.params!);
       if (e) said.push(e);
       status.checkTools(request, m.params!.threadId, (x) => said.push(x));
-      if (m.params!.name === ASH_MCP_SERVER_NAME && m.params!.status !== "starting") settled();
+      if (m.params!.name === NAVI_MCP_SERVER_NAME && m.params!.status !== "starting") settled();
     });
     try {
-      await request("initialize", { clientInfo: { name: "ash-test", version: "1" }, capabilities: { experimentalApi: true } });
+      await request("initialize", { clientInfo: { name: "navi-test", version: "1" }, capabilities: { experimentalApi: true } });
       child.stdin!.write('{"method":"initialized"}\n');
       await request("thread/start", { cwd: home, approvalPolicy: "never", sandbox: "danger-full-access" });
-      await Promise.race([ashDone, new Promise((r) => setTimeout(r, 20_000))]);
+      await Promise.race([naviDone, new Promise((r) => setTimeout(r, 20_000))]);
       const e = await status.settle(10_000);
       if (e) said.push(e);
       return { picked: ctx.picked(), said };
@@ -155,7 +155,7 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
   // 变量全被换掉、又没有 PATH 那条(比如身份目录没写下来)
   const refused = await probe(ctx.allStale, ctx.currentVars);
   assert.match(refused.picked?.refused ?? "", /回合身份对不上/, "所有通道都是旧的 ⇒ MCP 拒绝启动");
-  assert.equal(refused.said.length, 1, `ash 留下一条诊断:${JSON.stringify(refused.said)}`);
+  assert.equal(refused.said.length, 1, `navi 留下一条诊断:${JSON.stringify(refused.said)}`);
   assert.match(errorText(refused.said[0]!), /Navi 的工具在这一回合没接上（codex 报告 Navi MCP 启动失败/);
 
   const side = await probe(ctx.stale, withoutTurnIdentity({}));
@@ -167,5 +167,5 @@ export async function checkRealCodex(ctx: RealCliContext): Promise<void> {
   assert.deepEqual([team.picked?.taskId, team.picked?.turnToken, team.picked?.refused], [ctx.lead, "", null],
     "团队调度台:带着自己的任务 id 连上,不捎登记里写死的旧令牌");
   assert.deepEqual(team.said, []);
-  console.log("✓ 真 codex app-server:登记 env 写死旧身份时接上本回合那份;全是旧的 ⇒ ash 没接上并留诊断;非任务回合不认旧身份;团队调度台保住任务 id");
+  console.log("✓ 真 codex app-server:登记 env 写死旧身份时接上本回合那份;全是旧的 ⇒ navi 没接上并留诊断;非任务回合不认旧身份;团队调度台保住任务 id");
 }

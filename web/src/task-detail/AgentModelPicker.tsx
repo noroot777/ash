@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, LlmProvider } from "@navi/shared";
 import { ArrowLeft, ArrowsClockwise, CaretRight, Warning } from "@phosphor-icons/react";
 import { AgentIcon } from "../components/AgentIcon.tsx";
 import { useAgentModelCatalog } from "../lib/modelCatalog.ts";

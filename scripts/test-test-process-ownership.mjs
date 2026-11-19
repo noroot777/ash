@@ -11,7 +11,7 @@ import { isPidAlive } from "./platform.mjs";
 import native from "./test-process-native.cjs";
 import { withTestResources } from "./test-process-resources.mjs";
 
-const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-ownership-"));
+const temporary = fs.mkdtempSync(join(tmpdir(), "navi-test-ownership-"));
 const original = { mkdtempSync: fs.mkdtempSync, writeFileSync: fs.writeFileSync, readFileSync: fs.readFileSync };
 await withTestResources(async () => {
   for (const code of ["ENOSPC", "EACCES"]) {
@@ -44,7 +44,7 @@ await withTestResources(async () => {
   for (const phase of ["output", "scope"]) {
     const created = [];
     fs.mkdtempSync = (...args) => {
-      if (String(args[0]).includes(phase === "output" ? "ash-test-process-" : "ash-test-scope-")) {
+      if (String(args[0]).includes(phase === "output" ? "navi-test-process-" : "navi-test-scope-")) {
         throw Object.assign(new Error(`injected ${phase} EACCES`), { code: "EACCES" });
       }
       const directory = original.mkdtempSync(...args); created.push(directory); return directory;
@@ -89,7 +89,7 @@ await withTestResources(async () => {
       syncBuiltinESMExports();
       try { await assert.rejects(() => runTestProcess(process.execPath, ["-e", "process.exit()"]), { code }); }
       finally { Object.assign(fs, original); syncBuiltinESMExports(); }
-      assert.deepEqual(directories.filter((directory) => !directory.includes("ash-test-native-") && fs.existsSync(directory)), []);
+      assert.deepEqual(directories.filter((directory) => !directory.includes("navi-test-native-") && fs.existsSync(directory)), []);
     }
     console.log("✓ 原生编译失败回滚产物目录,域描述发布失败回滚输出/执行域目录");
     const environment = { ...process.env };
@@ -97,7 +97,7 @@ await withTestResources(async () => {
     fs.mkdtempSync = (...args) => {
       const directory = original.mkdtempSync(...args);
       outputDirectories.push(directory);
-      if (String(args[0]).includes("ash-test-process-")) environment.CAPTURED_STDOUT = join(directory, "stdout.log");
+      if (String(args[0]).includes("navi-test-process-")) environment.CAPTURED_STDOUT = join(directory, "stdout.log");
       return directory;
     };
     syncBuiltinESMExports();
@@ -153,7 +153,7 @@ await withTestResources(async () => {
     const crashMarker = join(temporary, "crash-late");
     await withTestResources(async () => {
       crashed.spawn(process.execPath, ["-e", `
-        const env = { ...process.env }; delete env.NODE_OPTIONS; delete env.ASH_TEST_PROCESS_SCOPE;
+        const env = { ...process.env }; delete env.NODE_OPTIONS; delete env.NAVI_TEST_PROCESS_SCOPE;
         require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(`
           const fs = require('node:fs');
           fs.writeFileSync(${JSON.stringify(crashReady)}, 'ready');
@@ -231,7 +231,7 @@ await withTestResources(async () => {
     console.log("✓ 原生后代正常/超时/连续出生退出:整域零活动证明,晚写双流收齐或已禁止继续写入");
 
     const isolated = await runTestProcess(process.execPath, ["-e", `
-      const env = { ...process.env }; delete env.NODE_OPTIONS; delete env.ASH_TEST_PROCESS_SCOPE;
+      const env = { ...process.env }; delete env.NODE_OPTIONS; delete env.NAVI_TEST_PROCESS_SCOPE;
       require('node:child_process').spawn(process.execPath, ['-e', "setTimeout(() => console.log('UNREGISTERED_TAIL'), 700)"], { env, detached: true, stdio: 'inherit' }).unref();
     `]);
     assert.match(isolated.stdout, /UNREGISTERED_TAIL/);

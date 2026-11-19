@@ -2,7 +2,7 @@ import {
   cleanupSettled, mergeCleanupResults, nothingToCollect, type CleanupResult,
 } from "./kill.js";
 import type { ChildProcess } from "node:child_process";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import type { ResidentHandle } from "./types.js";
 import { sessionResumeFault } from "./session-lost.js";
 
@@ -92,7 +92,7 @@ export function openCodexResident(params: {
         if (cleanupSettled(result)) unfinalized.delete(child);
         return result;
       } catch (error) {
-        console.warn("[ash] 回收 codex 常驻回合的后代失败(留在册上,下一次 cleanup 再试):", error);
+        console.warn("[navi] 回收 codex 常驻回合的后代失败(留在册上,下一次 cleanup 再试):", error);
         return {
           kind: "unknown", detail: error instanceof Error ? error.message : String(error),
           // 清理本身抛了异常:这一轮一个号都没点上来,名单只能是空的(它的责任由「留在

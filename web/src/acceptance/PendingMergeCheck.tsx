@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { PendingMergeState } from "@ash/shared/accept-pending";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { PendingMergeState } from "@navi/shared/accept-pending";
+import type { Task, TaskListItem } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { CheckAction, CheckRow, FileList, RetryAction } from "./CheckRow.tsx";
@@ -14,7 +14,7 @@ import { useRowRead } from "./useRowRead.ts";
  * 只认事实列 `acceptedMergeMethod === "no_commit"`（不拿 `acceptedMergeCommit === null` 去猜），
  * 每次都让服务端**核对现场**：改动还躺着、已经提交了、还是被丢了。提交之后这一行就没了；任务头上
  * 那颗「待提交」徽记是刷新后仍看得出欠一步的那一处（对话区不另铺一张卡）。
- * 动作都由用户自己点：ash 不替他提交、不强删分支。
+ * 动作都由用户自己点：navi 不替他提交、不强删分支。
  *
  * 现场会在页面之外变：用户照这一行给的命令去终端里提交或丢弃。所以这一行在场时自己对账 ——
  * 页面可见时每 15 秒核对一次、窗口回到前台时立刻核对一次（有界：现场一旦是「已提交」这一行就没了，

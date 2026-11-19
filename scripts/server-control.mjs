@@ -1,4 +1,4 @@
-// restart.mjs 与 stop.mjs 共用的「让 :PORT 上的 ash 下线」那半截:问判据、等排空、
+// restart.mjs 与 stop.mjs 共用的「让 :PORT 上的 navi 下线」那半截:问判据、等排空、
 // 认准监听者下刀、等端口彻底安静。两个入口只在「下线之后做什么」上不同,安全闸必须是
 // 同一份 —— 停止命令要是另写一套,「问不出来就当 0」那类旧错就会在新入口上重演一遍。
 import { existsSync, readFileSync } from "node:fs";
@@ -41,7 +41,7 @@ export const exitLedgerFor = (lockFile) =>
  * 宿主机运维者的凭证:锁文件里那串 token(server 自己写的,文件 0600)。
  *
  * 多人模式下 `/api/restart-impact` 会挡住未登录请求 —— 而跑脚本的人手上没有任何网页
- * 登录态。读得到这个 token = 读得到 ash 的数据目录 = 本来就能直接读库,所以拿它当
+ * 登录态。读得到这个 token = 读得到 navi 的数据目录 = 本来就能直接读库,所以拿它当
  * 「我就是这台机器的运维者」的证明既够用也不额外扩大暴露面(server/src/singleton.ts
  * `liveLockToken`)。
  */
@@ -76,7 +76,7 @@ function hostTokenHeaders(lockFile, port) {
  *  · `unknown`         **问不出来**:超时、连接被重置
  *  · `{}`              端口上压根没人在听 = server 没在跑 = 本来就没有任务会被打断
  *
- * 后两者过去被压成同一个 `{}`,于是 ash 响应慢的时候安全闸静默变成 0(第 1 轮审查 F1 / P1)。
+ * 后两者过去被压成同一个 `{}`,于是 navi 响应慢的时候安全闸静默变成 0(第 1 轮审查 F1 / P1)。
  * **「问不出来」不等于「没有」**,所以这里把它单独报出来,由调用方 fail closed。
  */
 export async function queryImpact(port, lockFile) {
@@ -115,7 +115,7 @@ export function explainNoVerdict(data, { say, lockFile, log }) {
     say("     (它由 server 自己写、权限 0600;换个用户跑这个脚本就读不到了)。");
     return;
   }
-  // 这一档是「它在,只是没答上来」:ash 正忙,或者真卡住了。两种都不该让脚本自己拍板下刀
+  // 这一档是「它在,只是没答上来」:navi 正忙,或者真卡住了。两种都不该让脚本自己拍板下刀
   // —— 问不出保护名单的那一刀,等于拿正在跑的任务赌一把(第 1 轮审查 F1)。
   say("     它还在端口上,只是没按时答复 —— Navi 正忙,或者卡住了。");
   say("     「问不出来」不等于「没有任务会被打断」,所以这里不下刀。稍后重试;");

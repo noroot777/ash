@@ -1,4 +1,4 @@
-import { taskDisplayStatus, type TaskListItem } from "@ash/shared";
+import { taskDisplayStatus, type TaskListItem } from "@navi/shared";
 import { awaitsRuling, hasFailed } from "../../lib/taskAttention.ts";
 import { taskLook } from "../../lib/taskLook.ts";
 import { taskDurationInfo } from "../utils.ts";

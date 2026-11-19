@@ -23,7 +23,7 @@ import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, real
   unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import { LEGACY_RESOURCE_CLAIM_SUFFIX } from "@ash/shared/legacy-names";
+import { LEGACY_RESOURCE_CLAIM_SUFFIX } from "@navi/shared/legacy-names";
 import { isPidAlive } from "./platform.js";
 import { inspectProcess } from "./proc.js";
 

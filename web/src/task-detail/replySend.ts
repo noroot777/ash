@@ -1,7 +1,7 @@
 // 任务页回复框那颗发送键真正做的事：先过换执行器的确认闸，发出去，再按**结果**说一句话。
 // 单独成文件是为了守住 TaskDetail 的 700 行。
 import type { ComponentProps } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem } from "@navi/shared";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { localeDateTime } from "../lib/localeFormat.ts";

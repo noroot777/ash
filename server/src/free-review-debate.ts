@@ -25,8 +25,8 @@ import type {
   AgentType,
   FreeReviewDebateSide,
   FreeReviewDebateVerdict,
-} from "@ash/shared";
-import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
+} from "@navi/shared";
+import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@navi/shared/free-workflow";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

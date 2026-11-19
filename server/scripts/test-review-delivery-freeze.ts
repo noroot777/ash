@@ -36,7 +36,7 @@ const recoveryUrl = new URL("../src/regression-settlement.ts", import.meta.url).
 const recover = () => execFileSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e",
   `await (await import(${JSON.stringify(recoveryUrl)})).reconcileRegressionSettlements();`], { env: process.env, stdio: "pipe" });
 
-assert.notEqual(process.env.ASH_ALLOW_REAL_AGENT, "1");
+assert.notEqual(process.env.NAVI_ALLOW_REAL_AGENT, "1");
 try {
   const { open } = await setupRegressionReviews();
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {

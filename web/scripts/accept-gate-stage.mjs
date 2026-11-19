@@ -49,9 +49,9 @@ export const taskRow = (over = {}) => ({
 /** 依赖那一份：不挡路，默认没有派生任务（`children` 给几个就挂几个能一起验收的派生任务）。 */
 export const branchPlan = (children = []) => ({
   task: { taskId: "gate-task", title: "门禁卡", projectId: "proj-1", stage: "verified", blocker: null, dependency: null,
-    strategy: "safe", sourceBranch: "ash/gate-task", targetBranch: "main", fingerprint: "fp-1" },
+    strategy: "safe", sourceBranch: "navi/gate-task", targetBranch: "main", fingerprint: "fp-1" },
   descendants: children.map((title, index) => ({ taskId: `child-${index + 1}`, title, projectId: "proj-1", stage: "verified",
-    blocker: null, dependency: null, strategy: "safe", sourceBranch: `ash/child-${index + 1}`, targetBranch: "main",
+    blocker: null, dependency: null, strategy: "safe", sourceBranch: `navi/child-${index + 1}`, targetBranch: "main",
     fingerprint: `fp-child-${index + 1}` })),
 });
 

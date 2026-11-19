@@ -19,8 +19,8 @@ import {
   createHash, createPrivateKey, createPublicKey, generateKeyPairSync,
   randomBytes, sign, timingSafeEqual, verify, type KeyObject,
 } from "node:crypto";
-import { resolveAshDbFile } from "./db/path.js";
-import { FROZEN_HANDOFF_SIGNATURE_DOMAIN } from "@ash/shared/legacy-names";
+import { resolveNaviDbFile } from "./db/path.js";
+import { FROZEN_HANDOFF_SIGNATURE_DOMAIN } from "@navi/shared/legacy-names";
 
 /** 签名覆盖的协议版本串:换算法/换字段就换它,老签名天然验不过,不会被静默接受。 */
 const SIG_V1 = FROZEN_HANDOFF_SIGNATURE_DOMAIN;
@@ -46,7 +46,7 @@ interface IdentityFile {
 }
 
 function identityFilePath(): string {
-  return `${resolveAshDbFile()}.identity.json`;
+  return `${resolveNaviDbFile()}.identity.json`;
 }
 
 export function fingerprintOf(publicKeyB64: string): string {

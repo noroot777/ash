@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { ColorTheme } from "@ash/shared";
+import type { ColorTheme } from "@navi/shared";
 import { Check, Desktop, Moon, Sun } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useColorTheme } from "../lib/useColorTheme.ts";

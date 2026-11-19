@@ -8,13 +8,13 @@
 //    产物反推:正文先写 `.md`,要到下一条非正文事件才冲进 trace(single-run 与 team 的
 //    pendingTraceText 都是这个缓冲),于是照 trace 判就会在整段恢复回答期间一直说「正在
 //    重试」,而用户手机上明明已经在读那段回答了(第 3 轮审查 F2)。事件到达那一刻这件事
-//    是确定的:提示来了就是在等,下一条有效输出来了就不是了。代价说在明处 —— ash 重启后
+//    是确定的:提示来了就是在等,下一条有效输出来了就不是了。代价说在明处 —— navi 重启后
 //    内存里这份没了,在飞的那一轮回空;等待是转瞬状态,宁可不显示也不该靠猜。
 //
 // ② 失败现场(`failedTurnNotices`)—— 从 trace 回放,因为它要活过刷新和重启。判据是
 //    「**这一轮**有没有明确的失败结局」,**不是「进程退没退」**(见函数自己的注释)。
-import type { AgentEvent, SessionNotice } from "@ash/shared";
-import { resumesWaiting } from "@ash/shared/waiting";
+import type { AgentEvent, SessionNotice } from "@navi/shared";
+import { resumesWaiting } from "@navi/shared/waiting";
 import { isExecutionNotice } from "./session-notice.js";
 import type { TurnOutcome } from "./session-turns.js";
 import type { SessionTraceEntry } from "./transcript.js";

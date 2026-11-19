@@ -1,7 +1,7 @@
 // 新建面板「创建并排队」的目标选择与落库:状态、候选、分组联动、入队动作。
 // 从 TaskComposerPanel 抽出来(单文件 700 行上限),面板只拿 slot 摆进启动设置浮层。
 import { useState } from "react";
-import type { Group, Task, TaskListItem } from "@ash/shared";
+import type { Group, Task, TaskListItem } from "@navi/shared";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { placeTaskAfter, queueAfterOptions } from "../lib/queueAfter.ts";
 

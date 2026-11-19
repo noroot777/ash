@@ -6,7 +6,7 @@
 // 替已挂载的选择器重取」没接上的话,这一屏点完开关,菜单里还留着旧那一档的档位。
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentType } from "@ash/shared";
+import type { AgentType } from "@navi/shared";
 import { RunTargetPicker } from "../../src/components/RunTargetPicker.tsx";
 import type { AgentModelSelection } from "../../src/task-detail/mentionPicker.ts";
 import { api } from "../../src/lib/api.ts";
@@ -14,7 +14,7 @@ import "../../src/styles/global.css";
 
 const TYPES: AgentType[] = ["codex"];
 
-function Ash() {
+function Navi() {
   const [selection, setSelection] = useState<{ agentType: AgentType; executorId: string | null }>({
     agentType: "codex",
     executorId: null,
@@ -66,4 +66,4 @@ function Ash() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<Ash />);
+createRoot(document.getElementById("root")!).render(<Navi />);

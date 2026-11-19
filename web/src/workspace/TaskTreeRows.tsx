@@ -1,9 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import type { ProjectView, TaskListItem } from "@ash/shared";
-import { statusCounts, workersOf } from "@ash/shared/team";
+import type { ProjectView, TaskListItem } from "@navi/shared";
+import { statusCounts, workersOf } from "@navi/shared/team";
 import { CaretRight, ChatsCircle, PaperPlaneTilt, PushPin, Robot, UsersThree, type Icon } from "@phosphor-icons/react";
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
-import { taskCreationLabel } from "@ash/shared/task-origin";
+import { taskCreationLabel } from "@navi/shared/task-origin";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import type { TaskLook, TaskPhrase } from "../lib/taskLook.ts";
 import { type LookForTask } from "../lib/useTaskReadState.ts";

@@ -1,4 +1,4 @@
-// 本机自用模式（`ASH_LOCAL_ONLY=1`）的身份判定：**只认本机直连**。
+// 本机自用模式（`NAVI_LOCAL_ONLY=1`）的身份判定：**只认本机直连**。
 //
 // 只封配对入口不够（第 1 轮审查实测）：从普通模式换到本机模式的同一份数据里，旧访问密钥、
 // 旧设备凭证都还在，经同机反代 / 隧道转进来的请求（带 X-Forwarded-For）拿着它们照样被认成
@@ -18,10 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-local-only-auth-"));
-process.env.ASH_DB ||= join(stage, "local-only.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-local-only-auth-"));
+process.env.NAVI_DB ||= join(stage, "local-only.db");
 // local-only.js 在模块加载时读开关，所以得在 import 任何 server 模块之前设好。
-process.env.ASH_LOCAL_ONLY = "1";
+process.env.NAVI_LOCAL_ONLY = "1";
 requireTmpDb("test-local-only-auth");
 
 const { ensureSchema } = await import("../src/db/index.js");

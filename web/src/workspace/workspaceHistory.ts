@@ -1,4 +1,4 @@
-import type { Task, TaskHandoff } from "@ash/shared";
+import type { Task, TaskHandoff } from "@navi/shared";
 import type { TaskScopeKind } from "./taskScope.ts";
 
 type TaskSelection = Pick<Task, "id" | "projectId">;

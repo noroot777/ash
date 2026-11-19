@@ -3,11 +3,11 @@ import type {
   GitActionRequest,
   GitActionResult,
   GitJournalEntry,
-} from "@ash/shared/git-workbench";
+} from "@navi/shared/git-workbench";
 import {
   emptyCommitGuidance,
   gitActionBlockReason,
-} from "@ash/shared/git-workbench";
+} from "@navi/shared/git-workbench";
 import { withRepoLock } from "../repo-lock.js";
 import { readScmStatus, type ScmStatus } from "../git-status.js";
 import {
@@ -42,7 +42,7 @@ import { rebasePlan } from "./rebase.js";
 import { displayCommand, safeGitMessage } from "./command.js";
 import { runRemoteAction } from "./remotes.js";
 import { cleanupRebaseHelpers, deleteBackup } from "./maintenance.js";
-import { FROZEN_GIT_BACKUP_REF_NAMESPACE } from "@ash/shared/legacy-names";
+import { FROZEN_GIT_BACKUP_REF_NAMESPACE } from "@navi/shared/legacy-names";
 
 const historyActions = new Set([
   "merge",

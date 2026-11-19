@@ -62,7 +62,7 @@ const FORBIDDEN: Array<{ what: string; find: (text: string) => string | null }> 
       .find((hit) => shape.accept?.(hit) ?? true)).find(Boolean) ?? null,
   },
   {
-    // `ash/xxx`、`origin/main`、`src/main.ts`：纯字母数字的 `x/y` 分不清是分支还是目录，一起报。
+    // `navi/xxx`、`origin/main`、`src/main.ts`：纯字母数字的 `x/y` 分不清是分支还是目录，一起报。
     // 两边都至少两个字符，`A/B` 这种口语不算。
     what: "路径或分支名",
     find: (text) => [...text.matchAll(/(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{2,}\/[A-Za-z0-9_./-]{2,}/g)]

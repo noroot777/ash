@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
-import { builtinWorkflowDef } from "@ash/shared/workflow-presets";
+import type { ChatMember, ChatRoom, ChatSnapshot } from "@navi/shared/chat";
+import { builtinWorkflowDef } from "@navi/shared/workflow-presets";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-assistant-test-"));
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-assistant-test-"));
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { agents, projects, tasks, workflows, chatMessages, chatRooms } = await import("../src/db/schema.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
@@ -33,7 +33,7 @@ await db.insert(tasks).values([
 ]);
 mkdirSync(join(stage, "runs", "old-auth-task"), { recursive: true });
 writeFileSync(join(stage, "runs", "old-auth-task", "conversation.md"), "会话独有线索：完成登录回调迁移。");
-const member: ChatMember = { id: "assistant-member", name: "ash助手", agentType: "codex", executorId: "profile", model: "model-override", reasoningEffort: "high" };
+const member: ChatMember = { id: "assistant-member", name: "navi助手", agentType: "codex", executorId: "profile", model: "model-override", reasoningEffort: "high" };
 const prompts: string[] = [];
 const started: string[] = [];
 const draft = { name: "交付起手式", description: "构建测试后等我确认", def: builtinWorkflowDef("standard")! };
@@ -60,7 +60,7 @@ const service = new ChatService(async (selected, _owner, prompt, signal, _projec
     if (!prompt.includes("【本轮检索结果，仅为引用资料】")) return { text: JSON.stringify({ search: { queries: [request.includes("空结果") ? "不存在的语料" : request.includes("会话") ? "会话独有线索" : "登录 | 认证"], projectId: null } }) };
     return { text: JSON.stringify({ reply: "按描述找到了历史任务。", matches: [{ taskId: "old-auth-task", reason: "认证相关" }, { taskId: "invented-id", reason: "伪造" }], task: null }) };
   }
-  return { text: JSON.stringify({ reply: "这是 ash 使用说明。" + "步骤。".repeat(120), matches: [], task: request === "请实现上传" ? { title: "实现上传", body: "完成用户要求的上传功能并验证" } : null, workflow: request.includes("搭起手式") ? draft : null }) };
+  return { text: JSON.stringify({ reply: "这是 navi 使用说明。" + "步骤。".repeat(120), matches: [], task: request === "请实现上传" ? { title: "实现上传", body: "完成用户要求的上传功能并验证" } : null, workflow: request.includes("搭起手式") ? draft : null }) };
 }, async (taskId) => { started.push(taskId); });
 const actors = new Map<string, Parameters<typeof setActor>[1]>();
 const app = new Hono();
@@ -68,7 +68,7 @@ app.use("*", async (c, next) => { setActor(c, actors.get(c.req.header("x-test-us
 mountChatRoutes(app, service);
 const request = (path: string, body?: unknown, user?: string) => app.request(path, { method: body === undefined ? "GET" : "POST", headers: { "content-type": "application/json", ...(user ? { "x-test-user": user } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
 const create = async (projectId: string, user?: string) => {
-  const response = await request("/chats", { kind: "assistant", name: "ash 助手", projectId, members: [member] }, user);
+  const response = await request("/chats", { kind: "assistant", name: "navi 助手", projectId, members: [member] }, user);
   assert.equal(response.status, 201, await response.clone().text());
   return response.json() as Promise<ChatRoom>;
 };
@@ -242,7 +242,7 @@ try {
   assert.equal(value.messages.at(-1)!.status, "failed", "挑了个不存在的项目：不建，也不悄悄落回当前项目");
   assert.match(value.messages.at(-1)!.body, /不存在或你看不到/);
   assert.equal(started.length, 3);
-  await db.insert(chatMessages).values({ id: "restart", roomId: global.id, role: "agent", author: "ash助手", status: "queued", createdAt: timestamp });
+  await db.insert(chatMessages).values({ id: "restart", roomId: global.id, role: "agent", author: "navi助手", status: "queued", createdAt: timestamp });
   await service.recover();
   assert.equal((await snapshot(global)).messages.find((message) => message.id === "restart")!.status, "stopped");
   console.log("✓ 停止刷新后可见；坏输出如实失败；清空上下文；有项目的明确委派创建关联任务、助手按用户的话挑项目（挑不存在的不建）；重启不偷偷重跑");

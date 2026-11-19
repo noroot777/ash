@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectView } from "@ash/shared";
+import type { ProjectView } from "@navi/shared";
 import type { TerminalSessionInfo } from "../../src/lib/api.ts";
 import "../../src/styles/global.css";
 import "../../src/styles/status-bar.css";

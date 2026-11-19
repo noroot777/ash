@@ -9,7 +9,7 @@
 // —— 晚到的旧回调同样不许清掉 B 的动作、不许在 B 的页面上说话或开窗。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import "../../src/styles/global.css";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
 

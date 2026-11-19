@@ -10,14 +10,14 @@
 //   本机多人 + 带错/过期的 key → 抛 401「这把 key 在本机不认」
 //   本机多人 + 压根没带 key → 抛 401「在这台机器上没有账号,找管理员开通」
 import type { Context } from "hono";
-import { HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
+import { HANDOFF_PEER_KEY_REQUIRED } from "@navi/shared/handoff";
 import type { Actor } from "./context.js";
 import { SINGLE_ACTOR } from "./context.js";
 import type { UserRow } from "./store.js";
 import { countUsers, findUserByKey } from "./store.js";
 import { HandoffError } from "../handoff-types.js";
 import { isMultiUser } from "./mode.js";
-import { readHeader } from "@ash/shared/http-headers";
+import { readHeader } from "@navi/shared/http-headers";
 
 /** 出站请求把「我在对端的 key」放这个头里。它是凭证,只走 header,不进 URL/日志。 */
 export const PEER_USER_KEY_HEADER = "x-navi-peer-user-key";

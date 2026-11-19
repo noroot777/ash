@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import { RemoteTaskDetail } from "../../src/remote-task/RemoteTaskDetail.tsx";
 import { useRemoteReturns } from "../../src/remote-task/useRemoteReturns.ts";
 import { useToast, WorkspaceToast } from "../../src/workspace/WorkspaceToast.tsx";

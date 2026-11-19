@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RebaseStep } from "@ash/shared/git-workbench";
+import type { RebaseStep } from "@navi/shared/git-workbench";
 import { commitOid, fail, git } from "./core.js";
 import { journalDirectory } from "./journal.js";
 import { cleanupRebaseHelpers } from "./maintenance.js";

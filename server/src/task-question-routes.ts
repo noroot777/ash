@@ -1,12 +1,12 @@
 // 提问 / 答复两个端点(从 task-run-routes.ts 按职责拆出,那边顶到 700 行上限)。
 // 语义与归属:提问状态写在 task.question(task-question.ts),答复的投递在 task-answer.ts;
 // 这里只做 HTTP 形状校验与回合/方向身份核对。
-import type { QuestionItem } from "@ash/shared";
+import type { QuestionItem } from "@navi/shared";
 import {
   MAX_QUESTION_ITEMS,
   MAX_QUESTION_OPTION_LEN,
   MAX_QUESTION_OPTIONS,
-} from "@ash/shared";
+} from "@navi/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -16,7 +16,7 @@ import { recurrenceBreakerArmed } from "./review-recurrence-gate.js";
 import { turnRole } from "./runs.js";
 import { answerTask } from "./task-answer.js";
 import { setTaskQuestion, waitSlotTaken } from "./task-question.js";
-import { activeDispatchPlan, parseDispatchPlan } from "@ash/shared/dispatch-plan";
+import { activeDispatchPlan, parseDispatchPlan } from "@navi/shared/dispatch-plan";
 import { DISPATCH_PLAN_BLOCKS_ASK } from "./dispatch-plan.js";
 import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 

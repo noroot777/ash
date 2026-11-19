@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider } from "@navi/shared";
 import { MagnifyingGlass, Star } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
@@ -135,7 +135,7 @@ export function ExecutorStep({ profiles, providers, onProfileAdded, onProfileCha
               {/* 注册出来 ≠ 派得动。隔离档下服务端现算的拒绝理由直接摆在这一行上 ——
                   不说的话用户要到真正派任务时才知道它跑不起来。 */}
               {profile.dispatchBlocked && <p className="onboarding-blocked">{profile.dispatchBlocked}</p>}
-              {profile.ashMcp?.detail && <p className="onboarding-blocked">{profile.ashMcp.detail}</p>}
+              {profile.naviMcp?.detail && <p className="onboarding-blocked">{profile.naviMcp.detail}</p>}
             </li>
           ))}
         </ul>

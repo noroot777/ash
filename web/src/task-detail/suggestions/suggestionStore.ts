@@ -2,9 +2,9 @@
 // 抽屉里是不是在改。放在模块里而不是组件里：切到别的任务再回来，改过的东西还在（派出去之前别丢）；读全文的
 // 抽屉是开的那一刻交出去的元素（components/LeftDrawer.tsx），它里面的标题、正文要跟着那一行变，就按身份订阅这里。
 import { useSyncExternalStore } from "react";
-import type { DispatchRunTarget } from "@ash/shared/dispatch-plan";
-import type { DispatchSuggestionBase } from "@ash/shared/dispatch-suggestion";
-import type { CreateReviewChoice } from "@ash/shared/review-on-create";
+import type { DispatchRunTarget } from "@navi/shared/dispatch-plan";
+import type { DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 
 export type SuggestionEdit = {
   title?: string; body?: string; target?: DispatchRunTarget; review?: CreateReviewChoice; base?: DispatchSuggestionBase;

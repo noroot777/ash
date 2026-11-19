@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { HandoffPeer } from "@ash/shared";
+import type { HandoffPeer } from "@navi/shared";
 import { Check, Prohibit, ShieldWarning, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";

@@ -1,6 +1,6 @@
-import type { ReviewConclusion, TaskStage } from "@ash/shared";
-import { STEP_LABELS } from "@ash/shared/workflow";
-import { workflowPolicy } from "@ash/shared/workflow-policy";
+import type { ReviewConclusion, TaskStage } from "@navi/shared";
+import { STEP_LABELS } from "@navi/shared/workflow";
+import { workflowPolicy } from "@navi/shared/workflow-policy";
 import { eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

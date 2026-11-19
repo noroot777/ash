@@ -6,7 +6,7 @@
 // 该类型默认执行器(官方账号)的端点上撞,任务起来就死。
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType } from "@navi/shared";
 import { RunTargetPicker } from "../../src/components/RunTargetPicker.tsx";
 import type { AgentModelSelection } from "../../src/task-detail/mentionPicker.ts";
 import "../../src/styles/global.css";

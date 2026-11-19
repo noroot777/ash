@@ -1,4 +1,4 @@
-import { LEGACY_CLAUDE_INTERRUPT_ID_PREFIX } from "@ash/shared/legacy-names";
+import { LEGACY_CLAUDE_INTERRUPT_ID_PREFIX } from "@navi/shared/legacy-names";
 import { loadSteerJournal, saveSteerJournal, type SteerEntry } from "./claude-recovery.js";
 
 /**
@@ -40,7 +40,7 @@ export class ClaudeControlBridge {
    */
   backgroundPending: () => { agent: number; workflow: number; unknown?: true } = () => ({ agent: 0, workflow: 0, unknown: true });
   /**
-   * ash 发出去的打断各认领哪一个回合结尾。**身份在写 stdin 之前就落盘**:打断出来的那条
+   * navi 发出去的打断各认领哪一个回合结尾。**身份在写 stdin 之前就落盘**:打断出来的那条
    * `result` 跟自然结束的长得一样(都可能是 error_during_execution),回执(control_response)和它
    * 谁先谁后都有,重启接管时光看输出认不出来(自由审查 i8RAcPM3zvgD R1)。一条打断认领它发出
    * 那一刻**之后**的第一个还没被认领的结尾 —— 打断总会让 CLI 收一个结尾。
@@ -128,14 +128,14 @@ export class ClaudeControlBridge {
       this.persist(entries);
     } catch (error) {
       // 落盘的那条留着也只会在接管时把一个结尾认成打断;内存里照样撤。
-      console.warn("[ash] 撤不掉没发出去的打断记录:", error);
+      console.warn("[navi] 撤不掉没发出去的打断记录:", error);
     }
     this.entries = entries;
     this.unclaimed = this.unclaimed.filter((entry) => entry.id !== requestId);
   }
 
   /**
-   * 第 `result` 个回合结尾是不是 ash 打断出来的。是就认领掉,`abandoned`:上一代发了插话的打断,
+   * 第 `result` 个回合结尾是不是 navi 打断出来的。是就认领掉,`abandoned`:上一代发了插话的打断,
    * 正文却没来得及送进去(重启在两步之间)—— 回合确实是被打断的,但不会有插话开的下一回合了。
    */
   takeInterrupt(result: number): { abandoned: boolean } | null {

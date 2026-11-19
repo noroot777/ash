@@ -86,7 +86,7 @@ const hiddenDeepProblem = `## 结论
 
 ## 技术明细
 
-\`npm -w @ash/web test\` 退出 0。
+\`npm -w @navi/web test\` 退出 0。
 
 ### 保存后内容会全部消失
 你会遇到：点保存以后，刚写的整篇内容清空。
@@ -149,7 +149,7 @@ const englishVerdict = `## 结论
 
 ## 技术明细
 
-\`npm -w @ash/web test\` 退出 0；临时服务已停，无残留监听。
+\`npm -w @navi/web test\` 退出 0；临时服务已停，无残留监听。
 `;
 
 // 复审第 4 轮：主句一个字都没错，反悔写在尾巴上。「可以验收」合格，「但保存问题仍未解决」

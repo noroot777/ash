@@ -9,7 +9,7 @@ import { TestProcessScope, disposeTestProcessResourcesSync, disposeTestScopesSyn
 import { cleanupTestResources, cleanupTestResourcesSync, reportTestResourceError, withTestResources } from "./test-process-resources.mjs";
 import native from "./test-process-native.cjs";
 
-const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-cleanup-"));
+const temporary = fs.mkdtempSync(join(tmpdir(), "navi-test-cleanup-"));
 const original = { spawnSync: childProcess.spawnSync, dispose: native.dispose, executable: native.executable, invoke: native.invoke, error: console.error };
 const owned = [];
 await withTestResources(async () => {
@@ -57,7 +57,7 @@ await withTestResources(async () => {
     }
     assert.ok(!directories.includes(failed.directory));
     for (const directory of directories) fs.rmSync(directory, { recursive: true });
-    return { status: 0, signal: null, stdout: `ASH_TEST_SCOPE_CLEANUP=${JSON.stringify(directories)}\n`, stderr: "" };
+    return { status: 0, signal: null, stdout: `NAVI_TEST_SCOPE_CLEANUP=${JSON.stringify(directories)}\n`, stderr: "" };
   };
   syncBuiltinESMExports();
   let originalFailure;
@@ -96,7 +96,7 @@ await withTestResources(async () => {
     mixedAttempts++;
     const pending = JSON.parse(options.input);
     assert.equal(pending.find((scope) => scope.directory === retired.directory).domain.name, "retired-job");
-    return { status: 1, signal: null, stdout: `ASH_TEST_SCOPE_CLEANUP=${JSON.stringify([retired.directory])}\n`, stderr: "ONE_DOMAIN_FAILED" };
+    return { status: 1, signal: null, stdout: `NAVI_TEST_SCOPE_CLEANUP=${JSON.stringify([retired.directory])}\n`, stderr: "ONE_DOMAIN_FAILED" };
   };
   syncBuiltinESMExports();
   assert.throws(() => disposeTestScopesSync(), /ONE_DOMAIN_FAILED/);

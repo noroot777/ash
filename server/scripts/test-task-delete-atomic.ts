@@ -16,9 +16,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "ash-task-delete-atomic-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "navi-task-delete-atomic-"));
+process.env.NAVI_DB = join(root, "ash.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
 requireTmpDb("task-delete-atomic");
 
 const [{ db, dbClient, ensureSchema }, { monitors, projects, sessions, tasks }, { isTaskRevoked }] =
@@ -48,7 +48,7 @@ const monitorRow = (taskId: string, kind: "ash" | "claude") => ({
 });
 
 let seq = 0;
-/** 一个「用过两种监听」的任务:一张 ash 自管的历史卡 + 一张内置 Monitor 的只读卡。 */
+/** 一个「用过两种监听」的任务:一张 navi 自管的历史卡 + 一张内置 Monitor 的只读卡。 */
 async function fixture(name: string): Promise<string> {
   const taskId = `t-${name}-${seq += 1}`;
   await db.insert(tasks).values({ id: taskId, projectId: "p", title: name, body: "", status: "done",

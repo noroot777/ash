@@ -5,13 +5,13 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { mock } from "node:test";
-import type { AgentEvent } from "@ash/shared";
-import type { ChatMember } from "@ash/shared/chat";
+import type { AgentEvent } from "@navi/shared";
+import type { ChatMember } from "@navi/shared/chat";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-chat-large-workspace-"));
+const stage = mkdtempSync(join(tmpdir(), "navi-chat-large-workspace-"));
 const realRepo = process.argv[2] ? await fs.realpath(resolve(process.argv[2])) : undefined;
-process.env.ASH_DB = join(stage, "test.db");
-process.env.ASH_RUNS_DIR = realRepo ? join(realRepo, "data", "runs") : join(stage, "runs");
+process.env.NAVI_DB = join(stage, "test.db");
+process.env.NAVI_RUNS_DIR = realRepo ? join(realRepo, "data", "runs") : join(stage, "runs");
 const projectDir = join(stage, "project");
 mkdirSync(projectDir);
 // monitoredShallow：不参与任何枚举，但其中的变更仍要附注；ignoredTrees：其他任务的工作树，
@@ -102,12 +102,12 @@ try {
     const before = await fs.readFile(packageFile, "utf8");
     mutate = () => {};
     const began = Date.now();
-    const testDb = process.env.ASH_DB;
+    const testDb = process.env.NAVI_DB;
     let result: { reply: string; task: unknown };
     try {
-      process.env.ASH_DB = join(repoPath, "data", "ash.db");
+      process.env.NAVI_DB = join(repoPath, "data", "ash.db");
       result = JSON.parse((await invoke("real")).text);
-    } finally { process.env.ASH_DB = testDb; }
+    } finally { process.env.NAVI_DB = testDb; }
     assert.equal(result.task, null);
     assert.equal(await fs.readFile(packageFile, "utf8"), before);
     console.log(JSON.stringify({ repoPath, runCalled: true, task: result.task, elapsedMs: Date.now() - began, read: relative(repoPath, packageFile) }));

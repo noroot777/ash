@@ -11,7 +11,7 @@
 //   ③ 多人模式下按人收窄仍然成立,且同样不越类型。
 //
 // 跑法:
-//   ASH_DB=/tmp/test-executor-default-scope-$RANDOM.db npx tsx server/scripts/test-executor-default-scope.ts
+//   NAVI_DB=/tmp/test-executor-default-scope-$RANDOM.db npx tsx server/scripts/test-executor-default-scope.ts
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
@@ -19,8 +19,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-executor-default-scope-"));
-process.env.ASH_DB ||= join(stage, "default-scope.db");
+const stage = mkdtempSync(join(tmpdir(), "navi-executor-default-scope-"));
+process.env.NAVI_DB ||= join(stage, "default-scope.db");
 requireTmpDb("test-executor-default-scope");
 
 const { db, ensureSchema } = await import("../src/db/index.js");

@@ -13,7 +13,7 @@ import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments
 import type { ScreenshotDraft } from "../page-annotation/model.ts";
 import type { ReuseMark } from "../task-detail/withdrawDraft.ts";
 import type { ReplyCall } from "../task-detail/replyCall.ts";
-import type { Task } from "@ash/shared";
+import type { Task } from "@navi/shared";
 import type { ComposerExecutorConfig } from "../composer/executorOverrides.ts";
 
 // 「还没发出去的那份东西」统一放这里：对话框的回复草稿、主工作区新建任务框里的草稿，

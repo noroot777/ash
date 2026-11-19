@@ -13,9 +13,9 @@
 | GET / HEAD，例如模型列表 | 15 秒 |
 | POST 等请求，例如推理 | 300 秒 |
 
-较长的推理首包窗口保留了大上下文预填充的等待空间。`ASH_LLM_RELAY_HEADERS_TIMEOUT_MS` 可覆盖两类请求的响应头等待上限，单位为毫秒，例如 `180000`。无效值沿用默认值。
+较长的推理首包窗口保留了大上下文预填充的等待空间。`NAVI_LLM_RELAY_HEADERS_TIMEOUT_MS` 可覆盖两类请求的响应头等待上限，单位为毫秒，例如 `180000`。无效值沿用默认值。
 
-收到响应头后，响应头计时器立即取消。响应体保留独立的 300 秒空闲超时：连续 300 秒没有收到下一块数据就终止读取；`ASH_LLM_RELAY_BODY_TIMEOUT_MS` 可单独调整该上限，单位为毫秒，无效值（包括 `0`）沿用默认值。持续收到数据或 SSE 心跳会重置空闲计时，因此健康长流不受总时长限制。客户端停止或取消读取只中止该请求，不影响池中其他并行请求。
+收到响应头后，响应头计时器立即取消。响应体保留独立的 300 秒空闲超时：连续 300 秒没有收到下一块数据就终止读取；`NAVI_LLM_RELAY_BODY_TIMEOUT_MS` 可单独调整该上限，单位为毫秒，无效值（包括 `0`）沿用默认值。持续收到数据或 SSE 心跳会重置空闲计时，因此健康长流不受总时长限制。客户端停止或取消读取只中止该请求，不影响池中其他并行请求。
 
 远端供应商访问保留 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 配置，小写变量优先；`localhost`、`127.0.0.1`、`[::1]` 始终直连。
 
@@ -25,10 +25,10 @@ Navi 不额外自动重发转发请求，包括 POST 推理请求；CLI 自身�
 
 本机连接失败返回 502，连接或响应头等待超时返回 504，客户端取消归类为 499。响应流已经开始后发生的故障不能改写已发送的 HTTP 状态，但会记录流阶段的诊断，并终止该流。
 
-透传响应、成功转换的响应和本机连接错误响应携带 `x-ash-relay-request-id`。本机连接错误正文也带有相同诊断号，可与服务日志中的 `[ash][llm-relay]` 条目对应；请求校验和协议转换本身的错误不属于这类连接诊断：
+透传响应、成功转换的响应和本机连接错误响应携带 `x-navi-relay-request-id`。本机连接错误正文也带有相同诊断号，可与服务日志中的 `[navi][llm-relay]` 条目对应；请求校验和协议转换本身的错误不属于这类连接诊断：
 
 ```json
-{"requestId":"...","upstream":"https://provider.example","method":"POST","phase":"headers","status":504,"elapsedMs":300000,"codes":["ASH_RELAY_HEADERS_TIMEOUT"]}
+{"requestId":"...","upstream":"https://provider.example","method":"POST","phase":"headers","status":504,"elapsedMs":300000,"codes":["NAVI_RELAY_HEADERS_TIMEOUT"]}
 ```
 
 `codes` 保留底层 `cause` 和聚合错误里的错误码，例如 `ETIMEDOUT`、`EADDRNOTAVAIL`、`ECONNREFUSED`、`UND_ERR_SOCKET`。`phase` 区分响应头之前和流读取阶段；流空闲超时记录 `phase: "stream"`、`status: 504`、`UND_ERR_BODY_TIMEOUT` 和诊断号，已发送的 HTTP 状态不会被改写。`HTTP_503` 等代码表示供应商实际返回的 HTTP 错误，而不是本机连接失败。

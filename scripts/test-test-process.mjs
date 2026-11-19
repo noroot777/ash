@@ -22,7 +22,7 @@ for (const result of [
   { ...complete, stderr: null },
 ]) assert.throws(() => assertProcessResult(result));
 
-const temporary = mkdtempSync(join(tmpdir(), "ash-test-process-fixture-"));
+const temporary = mkdtempSync(join(tmpdir(), "navi-test-process-fixture-"));
 const pidPath = join(temporary, "child.pid");
 /**
  * 按约定保留下来的那个后台进程,连同执行域交出来的**实例凭据**。

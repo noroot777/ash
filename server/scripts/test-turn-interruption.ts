@@ -25,13 +25,13 @@ import assert from "node:assert/strict";
 import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent, ServerEvent } from "@ash/shared";
+import type { AgentEvent, ServerEvent } from "@navi/shared";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "ash-turn-interruption-"));
-process.env.ASH_DB = join(stage, "t.db");
-process.env.HARNESS_DB = process.env.ASH_DB;
-process.env.ASH_RUNS_DIR = join(stage, "runs");
+const stage = mkdtempSync(join(tmpdir(), "navi-turn-interruption-"));
+process.env.NAVI_DB = join(stage, "t.db");
+process.env.HARNESS_DB = process.env.NAVI_DB;
+process.env.NAVI_RUNS_DIR = join(stage, "runs");
 
 // 现场那份诊断原文的形状（截过）：前半句是 codex 的错误，后面夹着一段网关错误页。
 const UPSTREAM_503 = "unexpected status 503 Service Unavailable: auth_unavailable: no auth available "

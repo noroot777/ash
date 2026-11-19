@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Group, GroupMode, ProjectView, TaskListItem } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, TaskListItem } from "@navi/shared";
 import { Pause, Play, Plus, Trash } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";

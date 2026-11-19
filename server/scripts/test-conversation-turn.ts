@@ -1,8 +1,8 @@
 import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { Writable } from "node:stream";
-import type { ServerEvent } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared/session-output";
+import type { ServerEvent } from "@navi/shared";
+import { parseSessionOutput } from "@navi/shared/session-output";
 import { bus } from "../src/bus.js";
 import { recordUserConversationTurn } from "../src/conversation-turn.js";
 

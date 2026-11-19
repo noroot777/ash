@@ -1,18 +1,18 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { clearEnv, readEnv, readStorageEnv, type NaviEnvName } from "@ash/shared/env-names";
+import { clearEnv, readEnv, readStorageEnv, type NaviEnvName } from "@navi/shared/env-names";
 import { CODE_DIR, dataRootFor } from "./data-root.js";
 
 export { CODE_DIR };
 
-// 代码根**是 git 检出时**才有值。两处要问「这台 ash 自己的仓库」：preview-access.ts 判断被
-// 预览的项目是不是 ash 自己，review/ 目录的默认位置。独立 app 跑在 bundle 里，代码根不是任何
+// 代码根**是 git 检出时**才有值。两处要问「这台 navi 自己的仓库」：preview-access.ts 判断被
+// 预览的项目是不是 navi 自己，review/ 目录的默认位置。独立 app 跑在 bundle 里，代码根不是任何
 // 人的仓库，这时答「没有」—— 拿 bundle 路径去比项目路径只会永远不等，但语义上是在撒谎。
 export const REPO_DIR: string | null = existsSync(join(CODE_DIR, ".git")) ? CODE_DIR : null;
 
 export const DATA_DIR = dataRootFor(process.env);
 // 读完就从本进程环境里拿掉：agent、预览、终端、git 子进程都是 `{...process.env}` 起的，
-// 留着的话，agent 在某个 ash 检出里起一台验证用的 server，它就会把这份数据目录当成自己的
+// 留着的话，agent 在某个 navi 检出里起一台验证用的 server，它就会把这份数据目录当成自己的
 // （开同一个库、写同一份 runs）。需要它的子进程（回归 worker）由起它的地方显式传。
 clearEnv(process.env, "NAVI_DATA_DIR");
 // 只给真库测试用：流程测试会写时间线/验证证据，不能污染正式 data/runs。
@@ -35,7 +35,7 @@ export const RUNS_FALLBACK_DIR = readEnv(process.env, "NAVI_RUNS_FALLBACK")?.tri
 // file here and pass its absolute path in the prompt for the agent to Read.
 // NAVI_UPLOADS_DIR 只给测试用:接力测试的两个实例各需一份隔离的 uploads 目录。
 export const UPLOADS_DIR = dirOverride("NAVI_UPLOADS_DIR", "uploads");
-// ash 自己给预览备的 node 依赖（见 preview-deps.ts 顶部）。**关键是它在用户项目之外**：
+// navi 自己给预览备的 node 依赖（见 preview-deps.ts 顶部）。**关键是它在用户项目之外**：
 // 依赖装在这儿，任务工作区只挂一条软链，用户的检出一个字节都不会被写。
 // NAVI_DEPS_DIR 只给测试用。
 export const DEPS_DIR = dirOverride("NAVI_DEPS_DIR", "deps");

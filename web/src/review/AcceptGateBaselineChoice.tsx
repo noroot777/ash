@@ -1,5 +1,5 @@
-import type { AcceptGateBaseline } from "@ash/shared/accept-gate";
-import { ACCEPT_GATE_BASELINE_LABELS, ACCEPT_GATE_BASELINES } from "@ash/shared/accept-gate";
+import type { AcceptGateBaseline } from "@navi/shared/accept-gate";
+import { ACCEPT_GATE_BASELINE_LABELS, ACCEPT_GATE_BASELINES } from "@navi/shared/accept-gate";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
 
 // 门禁基准的三档单选。「项目设置 → 验收」和验收台门禁卡用的是同一颗（同一个项目字段，见

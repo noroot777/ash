@@ -35,7 +35,7 @@ type StartedServer = {
 };
 
 async function main() {
-  const root = mkdtempSync(join(tmpdir(), "ash-singleton-"));
+  const root = mkdtempSync(join(tmpdir(), "navi-singleton-"));
   console.log(`[singleton-test] temp root: ${root}`);
 
   try {
@@ -255,7 +255,7 @@ async function testHealthDoesNotLeakForeignCommandLine(root: string) {
   try {
     await delay(300);
     assert.ok(decoy.pid, "哨兵进程应当起来了");
-    // 不写 heartbeat:这一支要走的是「PID 活着但不是 ash」那条陈旧判据。
+    // 不写 heartbeat:这一支要走的是「PID 活着但不是 navi」那条陈旧判据。
     writeStaleLock(db, decoy.pid!, { processStartedAtMs: Date.now() - 3_600_000 });
 
     const port = await freePort();
@@ -455,7 +455,7 @@ async function testExitIntentDoesNotExcludeKill(root: string) {
 /** 跑一小段 ESM,直接用构建产物里的 singleton(不起 HTTP 服务,只要锁和账本)。 */
 function spawnModule(db: string, source: string): StartedServer {
   const chunks: string[] = [];
-  const env = { ...process.env, ASH_DB: db, ASH_ALLOW_MULTI: "" };
+  const env = { ...process.env, NAVI_DB: db, NAVI_ALLOW_MULTI: "" };
   delete env.HARNESS_DB;
   const child = spawn(process.execPath, ["--input-type=module", "-e", source], {
     cwd: serverRoot,
@@ -512,10 +512,10 @@ function readLedger(db: string): ExitRecord[] {
   });
 }
 
-function spawnServer(port: number, db: string, dbEnv = "ASH_DB"): StartedServer {
+function spawnServer(port: number, db: string, dbEnv = "NAVI_DB"): StartedServer {
   const chunks: string[] = [];
-  const env = { ...process.env, PORT: String(port), ASH_ALLOW_MULTI: "" };
-  delete env.ASH_DB;
+  const env = { ...process.env, PORT: String(port), NAVI_ALLOW_MULTI: "" };
+  delete env.NAVI_DB;
   delete env.HARNESS_DB;
   env[dbEnv] = db;
   const child = spawn(process.execPath, ["dist/index.js"], {
@@ -538,7 +538,7 @@ function spawnServer(port: number, db: string, dbEnv = "ASH_DB"): StartedServer 
   };
 }
 
-async function startServer(port: number, db: string, ready = /server on/, dbEnv = "ASH_DB") {
+async function startServer(port: number, db: string, ready = /server on/, dbEnv = "NAVI_DB") {
   const server = spawnServer(port, db, dbEnv);
   await waitForOutput(server, ready);
   return server;

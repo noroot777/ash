@@ -9,18 +9,18 @@
 // 这里钉的是那条交错:**没送出去的,必须还在待送队列里**。确定性地卡在投递链的前一环上,
 // 不靠 sleep 赌时序。
 //
-// 跑:ASH_DB=/tmp/t.db npm -w server run test:team-inbound-durability
+// 跑:NAVI_DB=/tmp/t.db npm -w server run test:team-inbound-durability
 import assert from "node:assert/strict";
 import { createWriteStream, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent } from "@navi/shared";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 requireTmpDb("test-team-inbound-interleave");
-const dir = mkdtempSync(join(tmpdir(), "ash-team-interleave-"));
-process.env.ASH_RUNS_DIR = join(dir, "runs");
-process.env.ASH_TEAM_IDLE_MS = "0";
+const dir = mkdtempSync(join(tmpdir(), "navi-team-interleave-"));
+process.env.NAVI_RUNS_DIR = join(dir, "runs");
+process.env.NAVI_TEAM_IDLE_MS = "0";
 
 const TASK = "task-inbound-interleave";
 const SESS = "sess-inbound-interleave";
@@ -138,7 +138,7 @@ console.log("   ✓ 同一台的投递按调用顺序串行,插话不会抢在�
 // 下一次**真的空下来**时它必须送出去,并且只送一次。
 //
 // 为什么推两个 turnEnd：这时这台手上有两轮 —— 合并汇报起的那一轮,和插话起的那一轮(插话是
-// 在前者还开着的时候投进去的,ash 先 interrupt 再 send)。一个结束事件只关它自己那一轮
+// 在前者还开着的时候投进去的,navi 先 interrupt 再 send)。一个结束事件只关它自己那一轮
 // (FIFO 配对,见 team/lead-turns.ts),所以要等两轮都报完,这台才算真的空下来。把第一个结束
 // 事件当成「空闲了」的那一版会顺手把正在跑的那一轮也收口,它做出来的东西就此漏在产物清单外
 // (第 1 轮审查 F1);攒着的汇报也会在一台其实正忙的调度台上被合并送出,还把它标成待命。

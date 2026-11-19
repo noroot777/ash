@@ -10,7 +10,7 @@
 // 一轮，改状态、删除、归档、写工作区也被各自的守卫挡回；验收自己的守卫和自动提交认得这份占位（holdMembers）。
 //
 // 调度台的回合不走那把锁（常驻会话），由投递口挡：写进它 stdin 的那一刻（team/lead-delivery.ts）和离线开台之前
-// （team/session.ts deliver）都先问 heldForAcceptance。它自己的 CLI 起的回合 ash 挡不住（team/session-consumer.ts
+// （team/session.ts deliver）都先问 heldForAcceptance。它自己的 CLI 起的回合 navi 挡不住（team/session-consumer.ts
 // 「CLI 自己开的新一轮」），所以占住时记下这一版成果，之后每道守卫和盖章之前各核一次（holdDrift），变了就不验收。
 //
 // 成员集合在验收期间也不能长：建任务落库那一下、派活全程都占着「加成员」的位（team-admission.ts → acceptance-lock.ts
@@ -109,6 +109,6 @@ async function afterHold(leadId: string): Promise<void> {
     const { resumeLeadAfterAcceptance } = await import("./team/session.js");
     await resumeLeadAfterAcceptance(leadId);
   } catch (error) {
-    console.error(`[ash] 团队验收结束后补送消息失败 task=${leadId}:`, error);
+    console.error(`[navi] 团队验收结束后补送消息失败 task=${leadId}:`, error);
   }
 }

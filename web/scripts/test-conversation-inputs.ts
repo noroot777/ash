@@ -20,7 +20,7 @@ import {
 import { registerConversationInputsTarget, toggleConversationInputs } from "../src/components/conversationInputNav.ts";
 
 // ── 哪些话进导航 ────────────────────────────────────────────────────────────
-const upload = "/Users/example/code/ash/data/uploads/R4nd0mAbC123-shot.png";
+const upload = "/Users/example/code/navi/data/uploads/R4nd0mAbC123-shot.png";
 const items = [
   { kind: "agent", id: "a1", text: "我先看看。" },
   { kind: "user", id: "u1", text: "改成 Q 吧", at: "2026-11-03T09:07:35.669Z" },

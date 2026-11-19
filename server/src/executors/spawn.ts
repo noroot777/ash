@@ -1,4 +1,4 @@
-import { readEnv } from "@ash/shared/env-names";
+import { readEnv } from "@navi/shared/env-names";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
@@ -28,7 +28,7 @@ export {
 } from "./kill.js";
 
 // ── 多人模式:server 进程自己的出站凭证不透传给 agent──
-// 宿主机上跑着的 ash 很可能自带 ANTHROPIC_API_KEY 之类;不删的话,一个「没挂供应商」
+// 宿主机上跑着的 navi 很可能自带 ANTHROPIC_API_KEY 之类;不删的话,一个「没挂供应商」
 // 的执行器照样能花到宿主的钱,「抹去宿主订阅」整节就是空的。
 //
 // 判据是**隔离**而不是「多人」:开了「共用宿主机 CLI」的实例(§八之二)本来就是几个人
@@ -168,8 +168,8 @@ export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): stri
 
 // 这条**管道路径**在 Windows 上一律不 detached。注意这是个取舍而不是「那边不需要」:
 // libuv 给每个非 detached 的子进程都做一次 `AssignProcessToJobObject`,圈带着
-// `KILL_ON_JOB_CLOSE` —— 所以 ash 一退出,这条路上的 agent 会被内核连坐杀掉。
-// 走管道的回合**本来就活不过 ash**(输出要经过 ash 的管道),连坐正好等于「ash 一死
+// `KILL_ON_JOB_CLOSE` —— 所以 navi 一退出,这条路上的 agent 会被内核连坐杀掉。
+// 走管道的回合**本来就活不过 navi**(输出要经过 navi 的管道),连坐正好等于「navi 一死
 // 这一轮就结束」,不留没人管的孤儿;dev 终端 Ctrl-C 连带收走 agent 也是同一个机制。
 // 要让 agent 活过重启就必须跳过那次 assign,那条路在 detached-win.ts(壳 + `detached:
 // true`,那边记着三种起法的实测数字)。
@@ -185,10 +185,10 @@ const DETACH = !IS_WINDOWS;
 // stdout/stderr 管道不死，流永远不 EOF，run loop 收不到 close → 任务永远停不掉
 // (真实案例：codex CLI 重装期间 resume，任务卡 running 且 stop 无效)。
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
-// Windows 上这条路反过来 —— 不 detached，于是 ash 一退出 libuv 的全局 job 会连坐
-// 把它杀掉；那正是「走管道的回合活不过 ash」的实现,理由见 DETACH。
+// Windows 上这条路反过来 —— 不 detached，于是 navi 一退出 libuv 的全局 job 会连坐
+// 把它杀掉；那正是「走管道的回合活不过 navi」的实现,理由见 DETACH。
 // extraEnv: per-executor 的环境变量(供应商的 base_url / key、覆盖 CLI 自己的配置)。
-// **值为 `undefined` = 把这个变量从子进程里删掉**:ash 自己环境里带着的同名变量,
+// **值为 `undefined` = 把这个变量从子进程里删掉**:navi 自己环境里带着的同名变量,
 // 不删就会盖掉「这里留空 = 跟随 CLI」(Node 会跳过值为 undefined 的项)。
 // keepStdin: 常驻会话(§Team 的调度台)用 —— 写完首条消息不关 stdin,管道留给
 // 调用方继续注入后续回合(见 executors/claude.ts 的 openResident)。
@@ -293,7 +293,7 @@ export function forceFinishOnExit(
 // 供 claude.ts / codex.ts / catalog 复用同一份字符串。展示用的那条命令由
 // `executors/resume.ts` 的 resumeCommandFor 按目录重算(还要过一道「sessionId
 // 是不是 CLI 真认得的 id」的判定,见 generic.ts 的 hasTrustedSessionId)。
-// (The ash's own headless resume is built separately inside each executor's run().)
+// (The navi's own headless resume is built separately inside each executor's run().)
 export const resumeInner: Record<string, (id: string) => string> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
