@@ -37,6 +37,9 @@ for (const name of ["NAVI_DB", "NAVI_DATA_DIR", "NAVI_RUNS_DIR", "NAVI_UPLOADS_D
 const dataDir = join(root, "data");
 mkdirSync(dataDir, { recursive: true });
 const dbFile = join(dataDir, "ash.db");
+// 库文件先建好再让产品模块选库:拿占有锁时会核对「选中的还是不是同一个文件」,选库那一刻还不在、后来才被
+// 开库建出来的,会被当成同时在改名而拒起(真服务先拿锁再开库;这里的产品模块导入时就开了库)。
+writeFileSync(dbFile, "");
 process.env.NAVI_DB = dbFile;
 process.env.NAVI_DATA_DIR = dataDir;
 process.env.NAVI_RUNS_DIR = join(root, "runs");
@@ -441,13 +444,14 @@ try {
   // ── ⑦ setup 迁移 codex 登记 + 真执行器开关的闸 ─────────────────────────────
   {
     const { registerCodexMcp } = await import(new URL("../../scripts/codex-mcp.mjs", import.meta.url).href) as {
-      registerCodexMcp: (opts: Record<string, unknown>) => { action: string; legacyLeft?: boolean };
+      registerCodexMcp: (opts: Record<string, unknown>) => { action: string; legacyLeft?: string[] };
     };
     const file = join(root, "codex", "config.toml");
     mkdirSync(join(file, ".."), { recursive: true });
     writeFileSync(file, `[mcp_servers.ash]\ncommand = "node"\n[other]\nk = 1\n`);
     const answers = [
-      { ok: true, servers: [{ name: "ash", enabled: true }] },
+      // navi:true = 那条起的是 Navi 的 MCP 脚本;同名却指着别处的不归我们删。
+      { ok: true, servers: [{ name: "ash", enabled: true, navi: true }] },
       { ok: true, servers: [{ name: NAVI_MCP_SERVER_NAME, enabled: true }] },
     ];
     const result = registerCodexMcp({

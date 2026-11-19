@@ -15,25 +15,21 @@
 // 而 Windows 没有 bash。平台差异集中在 scripts/platform.mjs。
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
-import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
+import { IS_WINDOWS, runCli as run, which, windowsLongPaths } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
-import { HOST_SITES, registerHostMcp } from "./mcp-hosts.mjs";
-import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
-import { LEGACY_MCP_SERVER_NAMES } from "./legacy-names.mjs";
+import { registerNaviMcp } from "./mcp-register.mjs";
+import { NODE_MIN, sqliteUsable } from "./runtime-check.mjs";
+import { holdOrExit } from "./upgrade-lock.mjs";
 
-// setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
-// 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把两边钉成同一个。
-// 改名之前的登记（`ash`、更早的 `harness`）在这里迁成规范名：Navi 起 claude/codex 时注入的是规范名，
-// 用户级配置里再留一条旧名，那两家每一回合都会多挂一套同样的工具。
-const NAVI_MCP_SERVER_NAME = "navi";
+// setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts（MCP 登记那份同理，见 mcp-register.mjs）。
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
+// 跟 upgrade / restart 互斥(upgrade-lock.mjs):它们也在装依赖、构建,插进来就是两边一起踩。
+holdOrExit({ repo: REPO, note: "setup" });
 
 const PORT = Number(process.env.PORT || 4317);
 const URL_BASE = `http://localhost:${PORT}`;
@@ -43,24 +39,6 @@ const say = (line = "") => process.stdout.write(`${line}\n`);
 const ok = (line) => say(`  ✓ ${line}`);
 const warn = (line) => say(`  ⚠ ${line}`);
 const bad = (line) => { say(`  ✕ ${line}`); fail = 1; };
-
-/**
- * 跑一条外部命令拿退出码和 stdout。
- *
- * Windows 上 `claude` / `codex` 落地成 `.cmd` 垫片,而 Node 自 CVE-2024-27980 起拒绝
- * 在没有 shell 的情况下执行批处理 —— 必须开 `shell: true`,于是参数要自己加引号
- * (家目录里有空格是常态)。这里的参数全是本脚本写死的字面量加路径,没有用户输入。
- */
-function run(cmd, args, opts = {}) {
-  const file = which(cmd) ?? cmd;
-  const useShell = IS_WINDOWS && /\.(cmd|bat)$/i.test(file);
-  const res = spawnSync(
-    useShell ? `"${file}"` : file,
-    useShell ? args.map((a) => (/[\s"]/.test(a) ? `"${a}"` : a)) : args,
-    { encoding: "utf8", windowsHide: true, shell: useShell, ...opts },
-  );
-  return { status: res.status ?? 1, stdout: res.stdout ?? "" };
-}
 
 function npm(args, opts = {}) {
   return spawnSync(NPM, args, { stdio: "inherit", ...NPM_SPAWN_OPTS, ...opts }).status ?? 1;
@@ -72,28 +50,7 @@ say("▶ 1/5 检查运行环境");
 // scripts/platform.mjs / server/src/platform.ts 里分了平台。
 ok(`系统 ${process.platform} (${process.arch})`);
 
-// Node 不比版本号,直接问能力:navi 的数据库是 Node 内置的 `node:sqlite`,而它到位的
-// 时间比大版本号细得多 —— 22.13~22.15 有模块却没有 `StatementSync.setReturnArrays`
-// (缺了它 join 出的重名列会**静默**读错),23.x 一路到 23.7 也还不行,22.16 和 24 才是全的。
-// 所以这里当场跑一遍 navi 真正用到的调用;版本号只在报错时出场,给个说得出口的目标。
-//
-// 另外这段必须用 createRequire 而不是 import:ESM 的静态 import 在链接期就解析,Node 20
-// 上整个脚本一行都执行不到就先抛 ERR_UNKNOWN_BUILTIN_MODULE —— 那正是这条检查要替用户
-// 翻译掉的错。
-const NODE_MIN = "22.16.0";
-function sqliteUsable() {
-  try {
-    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
-    const db = new DatabaseSync(":memory:");
-    try {
-      return typeof db.prepare("select 1").setReturnArrays === "function";
-    } finally {
-      db.close();
-    }
-  } catch {
-    return false;
-  }
-}
+// Node 不比版本号,直接问能力(为什么见 runtime-check.mjs);版本号只在报错时出场,给个说得出口的目标。
 if (sqliteUsable()) ok(`node v${process.versions.node}`);
 else bad(`node v${process.versions.node} 带不动内置的 node:sqlite(Navi 的数据库),需要 >= ${NODE_MIN}(建议 24)`);
 
@@ -180,100 +137,10 @@ if (!process.env.SKIP_BUILD) {
 
 say();
 say("▶ 4/5 接上 Navi MCP(agent 靠它交卷)");
-const mcpEntry = join(REPO, "mcp", "dist", "index.js");
-
 if (process.env.SKIP_MCP) {
   warn("SKIP_MCP=1,跳过。之后在界面「设置 → 执行器」注册执行器时会补接,或按 docs/install.md 手接;没接上的任务跑完一律记 failed。");
 } else {
-  // ── claude ────────────────────────────────────────────────────────────────
-  if (which("claude")) {
-    const listed = run("claude", ["mcp", "list"]);
-    if (new RegExp(`^${NAVI_MCP_SERVER_NAME}:`, "m").test(listed.stdout)) {
-      ok("claude:Navi 已注册,不动它");
-    } else {
-      const legacy = LEGACY_MCP_SERVER_NAMES.filter((old) => new RegExp(`^${old}:`, "m").test(listed.stdout));
-      const added = run("claude", [
-        "mcp", "add", NAVI_MCP_SERVER_NAME, "--scope", "user", "-e", `NAVI_URL=${URL_BASE}`, "--", "node", mcpEntry,
-      ]);
-      if (added.status === 0) {
-        if (legacy.length) {
-          const left = legacy.filter((old) => run("claude", ["mcp", "remove", old, "--scope", "user"]).status !== 0);
-          if (!left.length) ok(`claude:旧 ${legacy.join(" / ")} 条目已迁移为 Navi`);
-          else warn(`claude:Navi 已接好,但旧 ${left.join(" / ")} 条目没删掉;可手动执行 ${left.map((old) => `claude mcp remove ${old} --scope user`).join("、")}`);
-        } else {
-          ok("claude:已注册 Navi(user 作用域,编排别的仓库时也在)");
-        }
-      }
-      else {
-        warn("claude mcp add 失败,手动跑:");
-        say(`      claude mcp add ${NAVI_MCP_SERVER_NAME} --scope user -e NAVI_URL=${URL_BASE} -- node ${mcpEntry}`);
-      }
-    }
-  } else {
-    warn("没装 claude CLI,跳过它的 MCP 注册");
-  }
-
-  // ── codex ─────────────────────────────────────────────────────────────────
-  const codexCfg = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
-  if (which("codex")) {
-    // 在临时目录里问:codex 会把 cwd 那份项目级 `.codex/config.toml` 也合进来,这里只关心用户级。
-    // 给了 home 就是在问(或改)沙盘里那份副本 —— cwd 也设成它,免得把谁的项目配置合进来。
-    const listServers = (home) => {
-      const res = run("codex", ["mcp", "list", "--json"], {
-        cwd: home ?? tmpdir(), timeout: 60_000,
-        ...(home ? { env: { ...process.env, CODEX_HOME: home } } : {}),
-      });
-      return parseCodexList(res.status, res.stdout);
-    };
-    // 删历史名只在沙盘里做(审查第 4 轮 F2):让 codex 去改用户真文件,它自己的 temp+rename
-    // 会断掉硬链接,删到一半失败还会把那份配置留在中间状态。
-    const removeServer = (name, home) =>
-      run("codex", ["mcp", "remove", name], {
-        cwd: home, timeout: 60_000, env: { ...process.env, CODEX_HOME: home },
-      }).status === 0;
-    const r = registerCodexMcp({
-      configFile: codexCfg, mcpEntry, url: URL_BASE,
-      name: NAVI_MCP_SERVER_NAME, legacyNames: LEGACY_MCP_SERVER_NAMES, listServers, removeServer,
-    });
-    if (r.action === "kept") {
-      if (r.enabled) ok(`codex:Navi 已在 ${codexCfg} 里,不动它`);
-      else warn(`codex:${codexCfg} 里的 Navi 写着 enabled = false,没有替你打开`);
-    } else if (r.action === "foreignChange") {
-      warn(`codex:${r.why}${r.backup ? `(补写前的备份在 ${r.backup})` : ""};先看一眼 ${codexCfg} 现在的内容,再决定要不要重跑 setup`);
-    } else if (r.action === "blocked") {
-      // 现在「批准」发生在写之前(整条迁移在沙盘里做),所以没写成只有一种收场:一个字节都没动。
-      warn(`codex:${r.why};没有动 ${codexCfg};先跑 codex mcp list 看它报什么、修好再重跑 setup`);
-    } else if (r.legacyLeft) {
-      warn(`codex:已写入 Navi,但旧条目(${LEGACY_MCP_SERVER_NAMES.join(" / ")} 之一)没删掉(几个名字都能用);可手动执行 codex mcp remove <旧名>`);
-    } else {
-      ok(`codex:${r.action === "migrated" ? "旧条目已迁移为 Navi" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-navi-setup)" : ""}`);
-    }
-  } else {
-    warn("没装 codex CLI,跳过它的 MCP 注册");
-  }
-
-  // ── 其余各家 ───────────────────────────────────────────────────────────────
-  //
-  // 一张表走完(`mcp-host-sources.mjs` 的 `HOST_SITES`,`mcp-hosts.mjs` 转一手):claude 走它自己的 `mcp add`(那是它的
-  // 原生入口),codex 走 `codex-mcp.mjs`(发布前要让 codex 本人读一遍),**其余十二家都在
-  // 这里**。2026-10-30 之前这里只有 kimi 一家,所以换别的 agent 跑任务一律交不了卷。
-  //
-  // 只给**这台机器上真装了**的那几家写:没装就建目录等于在用户家里乱留垃圾。
-  for (const [agentType, site] of Object.entries(HOST_SITES)) {
-    const bin = site.bins.map((b) => which(b)).find(Boolean)
-      // kimi 的安装器不往 PATH 里放,官方装法是 `~/.kimi-code/bin`。
-      || (agentType === "kimi" && !IS_WINDOWS
-        ? which(join(process.env.KIMI_INSTALL_DIR || join(homedir(), ".kimi-code"), "bin", "kimi"))
-        : null);
-    if (!bin) continue;
-    try {
-      const result = registerHostMcp({ agentType, mcpEntry, url: URL_BASE });
-      if (result.added) ok(`${agentType}:已注册 Navi MCP (${result.file})`);
-      else warn(`${agentType}:${result.why || "没有写入"}`);
-    } catch (error) {
-      warn(`${agentType} MCP 注册失败：${error.message}；手动接入见 docs/install.md`);
-    }
-  }
+  registerNaviMcp({ repo: REPO, port: PORT, ok, warn, say });
 }
 
 // git hooks:config 不随 clone/解包传播,必须每台机器执行一次。

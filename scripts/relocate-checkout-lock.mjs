@@ -26,7 +26,7 @@ const SINGLETON_SUFFIXES = [".navi.lock", LEGACY_SINGLETON_LOCK_SUFFIX];
 const PRESENCE_PREFIXES = [".navi-online.", LEGACY_PRESENCE_PREFIX];
 const START_TOLERANCE_MS = 10_000;
 const CLAIM_BUDGET_MS = 3_000;
-const selfStartedAtMs = () => Date.now() - Math.round(process.uptime() * 1000);
+export const selfStartedAtMs = () => Date.now() - Math.round(process.uptime() * 1000);
 
 function realpathOrAbsent(p) {
   try { return realpathSync(p); }
@@ -56,7 +56,7 @@ function processStartMs(pid) {
 }
 
 /** pid 还活着、而且（记了启动时刻的话）是同一个进程 —— pid 被复用的不算。 */
-function alive(pid, startedAtMs) {
+export function alive(pid, startedAtMs) {
   try { process.kill(pid, 0); } catch (error) { if (error.code !== "EPERM") return false; }
   if (typeof startedAtMs !== "number") return true;
   const now = processStartMs(pid);
@@ -70,7 +70,7 @@ const readJson = (file, errors) => {
 };
 
 /** 带着内容原子出现（link 一份写好的临时文件）；已经存在返回 false。 */
-function atomicCreate(path, text) {
+export function atomicCreate(path, text) {
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeFileSync(tmp, text, { mode: 0o600, flag: "wx" });

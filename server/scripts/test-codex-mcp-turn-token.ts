@@ -22,9 +22,13 @@ delete process.env.NAVI_FAKE_EXEC_CALL;
 
 try {
   assert.equal(NAVI_MCP_SERVER_NAME, "navi", "安装器约定的规范 MCP 名必须是 navi");
-  const setupSource = readSource(fileURLToPath(new URL("../../scripts/setup.mjs", import.meta.url)));
-  assert.doesNotMatch(setupSource, /from\s+["'][^"']+\.ts["']/, "setup 必须兼容不能裸导入 TS 的 Node 22.16");
-  assert.match(setupSource, /const NAVI_MCP_SERVER_NAME = "navi"/, "安装器的规范名必须与运行时一致");
+  // 安装器（setup.mjs）和升级（upgrade.mjs）的 MCP 登记都走 mcp-register.mjs。
+  for (const script of ["setup.mjs", "mcp-register.mjs"]) {
+    const source = readSource(fileURLToPath(new URL(`../../scripts/${script}`, import.meta.url)));
+    assert.doesNotMatch(source, /from\s+["'][^"']+\.ts["']/, `${script} 必须兼容不能裸导入 TS 的 Node 22.16`);
+  }
+  const registerSource = readSource(fileURLToPath(new URL("../../scripts/mcp-register.mjs", import.meta.url)));
+  assert.match(registerSource, /const NAVI_MCP_SERVER_NAME = "navi"/, "安装器的规范名必须与运行时一致");
   writeFileSync(probe, `
 import { writeFileSync } from "node:fs";
 writeFileSync(process.argv[2], JSON.stringify(process.env));

@@ -18,7 +18,10 @@ const base = {
 };
 /** 按顺序吐出预先写好的「codex 本人的回答」。第二问起问的是沙盘,`home` 这里不关心。 */
 const answers = (...seq) => () => seq.shift() ?? assert.fail("多问了一次 codex");
-const listed = (...names) => ({ ok: true, servers: names.map((name) => ({ name, enabled: true })) });
+/** codex 列出的登记;都起的是 Navi 的 MCP 脚本,`!名字` 表示同名却起着别的程序。 */
+const listed = (...names) => ({
+  ok: true, servers: names.map((n) => ({ name: n.replace(/^!/, ""), enabled: true, navi: !n.startsWith("!") })),
+});
 /** codex 在**沙盘**里删掉旧名:它永远不该碰用户那份。 */
 const removesInSandbox = (left, watch) => (name, home) => {
   if (watch) watch.seen.push(readFileSync(watch.file, "utf8"));
@@ -27,14 +30,21 @@ const removesInSandbox = (left, watch) => (name, home) => {
 };
 
 try {
-  assert.deepEqual(parseCodexList(0, '[{"name":"navi","enabled":false}]'), { ok: true, servers: [{ name: "navi", enabled: false }] });
+  assert.deepEqual(parseCodexList(0, '[{"name":"navi","enabled":false}]'), { ok: true, servers: [{ name: "navi", enabled: false, navi: false }] });
+  assert.deepEqual(
+    parseCodexList(0, JSON.stringify([
+      { name: "ash", transport: { type: "stdio", command: "node", args: ["C:\\navi\\mcp\\dist\\index.js"] } },
+      { name: "harness", transport: { type: "stdio", command: "other-tool", args: ["serve"] } },
+    ])).servers.map((x) => x.navi),
+    [true, false], "认得出哪条起的是 Navi 的 MCP 脚本(Windows 路径也认)",
+  );
   assert.equal(parseCodexList(1, "").ok, false, "codex 自己报错退出 = 读不动");
   assert.equal(parseCodexList(0, "Error: x").ok, false);
 
   // codex 说已经有了(哪种拼法都一样) → 一个字都不写。
   const quoted = `[mcp_servers."navi"]\ncommand = "node"\n`;
   writeFileSync(file, quoted);
-  assert.deepEqual(registerCodexMcp({ ...base, listServers: answers(listed("navi")) }), { action: "kept", enabled: true });
+  assert.deepEqual(registerCodexMcp({ ...base, listServers: answers(listed("navi")) }), { action: "kept", enabled: true, legacyLeft: [], foreign: [] });
   assert.equal(readFileSync(file, "utf8"), quoted);
   assert.equal(existsSync(`${file}.bak-navi-setup`), false);
 
@@ -124,10 +134,50 @@ try {
     removeServer: () => false,
   });
   assert.equal(kept.action, "added");
-  assert.equal(kept.legacyLeft, true);
+  assert.deepEqual(kept.legacyLeft, ["harness"]);
   assert.ok(kept.backup.startsWith(plainBackup), `真写了就把备份在哪交出来:${kept.backup}`);
   assert.notEqual(kept.backup, plainBackup, "那个名字被上一次的备份占着 ⇒ 换一个唯一名字");
   assert.equal(readFileSync(plainBackup, "utf8"), keptEarlier, "上一次那份备份一个字节都不许动");
+
+  // 已有 navi、旧名也还在(跑过两次 setup / 手动加过 navi):旧名照样在沙盘里删,删完发布,别的登记原样在。
+  // 不删的话每一回合两套一模一样的工具同时挂着(任务 Rz6wCPAMSnPU:第一次请求 17 万 token)。
+  {
+    const original = `[mcp_servers.navi]\ncommand = "node"\n[mcp_servers.ash]\ncommand = "node"\n[mcp_servers.kb]\ncommand = "uv"\n`;
+    const left = `[mcp_servers.navi]\ncommand = "node"\n[mcp_servers.kb]\ncommand = "uv"\n`;
+    writeFileSync(file, original);
+    const watch = { file, seen: [] };
+    const r = registerCodexMcp({
+      ...base, legacyNames: ["ash", "harness"],
+      listServers: answers(listed("navi", "ash", "kb"), listed("navi", "kb")),
+      removeServer: removesInSandbox(left, watch),
+    });
+    assert.equal(r.action, "cleaned");
+    assert.deepEqual(r.legacyLeft, []);
+    assert.equal(readFileSync(file, "utf8"), left, "只剩 navi 和别的登记,没有再追加一份 navi");
+    assert.deepEqual(watch.seen, [original], "删旧名那一步碰的是副本");
+    assert.ok(r.backup && readFileSync(r.backup, "utf8") === original, "改了就留备份");
+  }
+  // 已有 navi、旧名删不掉 → 不写、如实交出没删掉的名字。
+  {
+    const original = `[mcp_servers.navi]\ncommand = "node"\n[mcp_servers.ash]\ncommand = "node"\n`;
+    writeFileSync(file, original);
+    const r = registerCodexMcp({ ...base, legacyNames: ["ash"], listServers: answers(listed("navi", "ash")), removeServer: () => false });
+    assert.deepEqual(r, { action: "kept", enabled: true, legacyLeft: ["ash"], foreign: [] });
+    assert.equal(readFileSync(file, "utf8"), original);
+  }
+  // 同名却起着别的程序 → 不是我们的,碰都不碰(有没有 navi 都一样),交出名字让调用方报一句。
+  for (const names of [["navi", "!ash"], ["!ash"]]) {
+    const original = `[mcp_servers.ash]\ncommand = "other-tool"\n`;
+    writeFileSync(file, original);
+    const r = registerCodexMcp({
+      ...base, legacyNames: ["ash"],
+      listServers: answers(listed(...names), listed("ash", "navi")),
+      removeServer: () => assert.fail("指着别处的旧名不许删"),
+    });
+    assert.deepEqual(r.foreign, ["ash"], names.join(","));
+    if (names.includes("navi")) assert.equal(readFileSync(file, "utf8"), original, "已有 navi:一个字节都不动");
+    else assert.equal(r.action, "added", "只补 navi,那条留着");
+  }
 
   // **换上去那份要跟原来那份同身份**(审查第 3/4/5 轮)。现在一律就地写,但「身份」在两边
   // 由不同的东西构成(DACL / mode + 扩展 ACL + 链接),所以各自钉各自那几样。
@@ -254,21 +304,21 @@ try {
     // 审查第 2 条的原样形状:历史名带 `tools.*` 子表(本机真实配置就是这样)。上一版按表头
     // 字面量删,子表留成孤儿登记,codex 整份拒载、迁移必然回滚。带引号、缩进的表头同样要迁得过去。
     const shapes = [
-      `model = "x"\n\n[mcp_servers.harness]\ncommand = "node"\nargs = ["/x.js"]\n\n[mcp_servers.harness.env]\nNAVI_URL = "u"\n\n`
+      `model = "x"\n\n[mcp_servers.harness]\ncommand = "node"\nargs = ["/x/mcp/dist/index.js"]\n\n[mcp_servers.harness.env]\nNAVI_URL = "u"\n\n`
         + `[mcp_servers.harness.tools.get_task]\napproval_mode = "approve"\n\n[mcp_servers.kb]\ncommand = "uv"\n`,
-      `  [mcp_servers."harness"]\n  command = "node"\n[mcp_servers."harness".env]\nNAVI_URL = "u"\n[mcp_servers.kb]\ncommand = "uv"\n`,
+      `  [mcp_servers."harness"]\n  command = "node"\n  args = ["/x/mcp/dist/index.js"]\n[mcp_servers."harness".env]\nNAVI_URL = "u"\n[mcp_servers.kb]\ncommand = "uv"\n`,
     ];
     for (const shape of shapes) {
       writeFileSync(cfg, shape);
       const r = registerCodexMcp({ ...base, configFile: cfg, listServers: real, removeServer: realRemove });
       assert.equal(r.action, "migrated", `真 codex 下迁得过去：${JSON.stringify(shape)}`);
       const names = real().servers.map((x) => x.name).sort();
-      assert.deepEqual(names, ["navi", "kb"], "旧名整条没了、别的 server 原样在");
+      assert.deepEqual(names, ["kb", "navi"], "旧名整条没了、别的 server 原样在");
     }
     // 真 codex 迁移 + 硬链接:删旧名那一步只碰沙盘,所以关联还在(审查第 4 轮 F2)。
     if (!IS_WINDOWS) {
       const twin = join(directory, "twin.toml");
-      writeFileSync(cfg, `[mcp_servers.harness]\ncommand = "node"\nargs = ["/x.js"]\n\n[mcp_servers.kb]\ncommand = "uv"\n`);
+      writeFileSync(cfg, `[mcp_servers.harness]\ncommand = "node"\nargs = ["/x/mcp/dist/index.js"]\n\n[mcp_servers.kb]\ncommand = "uv"\n`);
       rmSync(twin, { force: true });
       linkSync(cfg, twin);
       const ino = statSync(cfg).ino;

@@ -5,7 +5,7 @@
 //
 // 口径与 platform.ts 一致：**探测失败一律返回空**（空串 / 空数组 / null），系统探测
 // 拿不到不该拖垮调用方。
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { Agent, request } from "node:http";
 import { homedir } from "node:os";
@@ -93,6 +93,24 @@ export function which(cmd) {
     }
   }
   return null;
+}
+
+/**
+ * 跑一条外部 CLI 拿退出码和 stdout(setup / upgrade 问 claude、codex、npm、git 用)。
+ *
+ * Windows 上 `claude` / `codex` 落地成 `.cmd` 垫片,而 Node 自 CVE-2024-27980 起拒绝
+ * 在没有 shell 的情况下执行批处理 —— 必须开 `shell: true`,于是参数要自己加引号
+ * (家目录里有空格是常态)。调用点的参数全是写死的字面量加路径,没有用户输入。
+ */
+export function runCli(cmd, args, opts = {}) {
+  const file = which(cmd) ?? cmd;
+  const useShell = IS_WINDOWS && /\.(cmd|bat)$/i.test(file);
+  const res = spawnSync(
+    useShell ? `"${file}"` : file,
+    useShell ? args.map((a) => (/[\s"]/.test(a) ? `"${a}"` : a)) : args,
+    { encoding: "utf8", windowsHide: true, shell: useShell, ...opts },
+  );
+  return { status: res.status ?? 1, stdout: res.stdout ?? "" };
 }
 
 function executable(full) {
