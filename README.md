@@ -6,358 +6,219 @@
 </p>
 
 <p align="center">
-  <strong>AI 编程智能体的本地调度台</strong><br>
-  派活 · 排队 · 验证 · 接力 · 合并 —— 一个进程搞定
+  本地 AI 编程智能体的调度台<br>
+  派活 · 排队 · 验证 · 接力 · 合并
 </p>
 
 <p align="center">
   <a href="https://nodejs.org"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D22.16-339933?logo=nodedotjs&logoColor=fff"></a>
-  <a href="#支持的执行器"><img alt="agents" src="https://img.shields.io/badge/agents-15%20CLIs-blue?logo=robot&logoColor=fff"></a>
-  <a href="#mcp-工具"><img alt="MCP tools" src="https://img.shields.io/badge/MCP-25%20tools-8B5CF6?logo=puzzle&logoColor=fff"></a>
-  <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?logo=apple&logoColor=fff">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
+  <a href="#支持的执行器"><img alt="agents" src="https://img.shields.io/badge/agents-15%20CLIs-blue"></a>
+  <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey">
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
 </p>
 
 <p align="center">
-  <a href="#下载-mac-版">下载 mac 版</a> · <a href="#快速开始">快速开始</a> · <a href="#核心能力">核心能力</a> · <a href="#编排模式">编排模式</a> · <a href="#任务接力">任务接力</a> · <a href="#实时预览">实时预览</a> · <a href="#多人模式">多人模式</a> · <a href="docs/install.md">部署文档</a>
+  <a href="#mac-客户端">Mac 客户端</a> · <a href="#快速开始">快速开始</a> · <a href="#它能干什么">它能干什么</a> · <a href="#编排方式">编排方式</a> · <a href="docs/install.md">部署文档</a>
 </p>
 
 ---
 
-<!-- 下面那条地址是 49 秒的介绍片:GitHub 只给「拖进评论框传上去的附件」出播放器,而且地址得单独占一行。
-     整份工程和成片在素材库 noroot777/materials 的 navi/promo 下,不进本仓库(放进来每个 clone 要多下
-     五十 MB)。重渲之后跑那边的 scripts/github_upload.sh、重传一次,把这条地址换掉。 -->
+<!-- 介绍片。GitHub 只给拖进评论框上传的附件出播放器,地址需独占一行。
+     工程和成片在素材库 noroot777/materials 的 navi/promo 下,不进本仓库。 -->
 
 https://github.com/user-attachments/assets/9c9c559f-bf5d-4043-913d-7b065f875a2b
 
-Navi 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
+Navi 管的不是某一个 AI 编程工具，而是管这些工具怎么干活。
 
-一个 Node 进程，一个端口，数据全在本地磁盘。
+你把任务扔给它，它分配给 Claude Code、Codex、Gemini 这些 agent CLI，让它们在隔离的 git worktree 里干，干完自动验证，验证过了合并回主干。整个过程你可以不管，也可以随时插手。
 
-## 下载 mac 版
+一个 Node 进程，一个端口，数据全在本地。不要你的 API key，不替代任何工具——只管调度。
+
+## Mac 客户端
 
 <!-- navi-mac-download -->
 第一版还没发布，现在请按下面的「快速开始」从源码运行。
 <!-- /navi-mac-download -->
 
-<!-- 上面两行标记之间由发版脚本（npm run release:mac）在每次发完后改成那一版 dmg 的直链，并单独提交这个文件。 -->
+<!-- 标记之间由发版脚本（npm run release:mac）自动替换为 dmg 直链。 -->
 
-自带 node 和 Navi 本体，装好就能用，不用克隆仓库。需要 Apple 芯片（M 系列）的 Mac、macOS 14 以上。
+自带 Node 和 Navi 本体，装好就能用。要求 Apple 芯片（M 系列）、macOS 14+。
 
-1. 下载上面的 dmg，打开后把 **Navi**（`Navi.app`）拖进 **Applications**（应用程序）。
-2. 第一次打开会被系统拦下（app 没有经过 Apple 公证）：到「系统设置 → 隐私与安全性」，在页面下方点「仍要打开」。
-3. 如果提示「已损坏，无法打开」，在终端里执行下面这行，再打开一次：
-
+1. 下载 dmg，把 **Navi** 拖进 **Applications**。
+2. 首次打开会被系统拦——到「系统设置 → 隐私与安全性」页面底部点「仍要打开」。
+3. 如果提示「已损坏」，终端跑一下：
    ```bash
    xattr -dr com.apple.quarantine /Applications/Navi.app
    ```
+4. 以后从菜单「Navi → 检查更新…」升级。
 
-4. 以后的新版本从菜单「Navi → 检查更新…」安装（app 也会每 6 小时自己查一次）。
-
-装过改名前的 **Ash.app**：它没法自己更新成 Navi（换了应用标识），按上面装一次 Navi 再打开就好 —— Navi 第一次打开时会退出 Ash、接过它的设置、数据和登录项（Ash 不肯退或者复制失败时先弹窗问你，不会悄悄丢掉），等 Ash 的服务和别的进程都不再用它后把 `Ash.app` 移到废纸篓（原位置留一个指向 Navi 的替身）。细节和没法自动接的几样见 [desktop/macos/README.md](desktop/macos/README.md#从-ashapp-升级)。
+> 装过旧版 **Ash.app** 的：Navi 首次打开会自动接管 Ash 的设置和数据，细节见 [desktop/macos/README.md](desktop/macos/README.md#从-ashapp-升级)。
 
 ## 快速开始
 
-> **前置条件**：Node.js >= 22.16、git，至少一个已安装并登录过的 agent CLI。
+需要 Node.js >= 22.16、git，以及至少一个装好的 agent CLI。
 
 ```bash
-# 安装 agent CLI（至少一个）
+# 装一个 agent CLI（至少一个）
 npm install -g @anthropic-ai/claude-code && claude
 npm install -g @openai/codex && codex
 ```
 
 ```bash
-# 安装并启动 Navi
+# 启动 Navi
 git clone https://github.com/noroot777/navi.git && cd navi
-npm run setup        # 环境检查 → 依赖安装 → 构建 → MCP 接入
+npm run setup        # 检查环境 → 装依赖 → 构建 → 接入 MCP
 npm start            # http://localhost:4317
 ```
 
-启动后：新建项目（填 git 仓库绝对路径，或直接从 Git URL 检出）→ 创建任务 → 选择执行器 → 运行。
+然后：新建项目（填仓库路径或 Git URL）→ 建任务 → 选执行器 → 跑。
 
 > [!IMPORTANT]
-> **MCP 接入不可跳过。** agent 通过 MCP 工具 `complete_task` 提交完成状态。未接入 MCP 的 agent 无法交卷，所有任务将显示为失败。<br>验证：`claude mcp list` 中应显示 `navi: … ✔ Connected`。<br>手动接入方法见 [docs/install.md](docs/install.md)。
+> **MCP 接入不能跳过。** Agent 靠 MCP 工具 `complete_task` 来交卷。没接入的话所有任务都会变成 failed。<br>
+> 验证方法：`claude mcp list` 里 `navi` 那行应该是 Connected。<br>
+> 手动接入见 [docs/install.md](docs/install.md)。
 
-## 核心能力
+## 它能干什么
 
-🎯 **智能体随意切换** — 任务运行中可随时切换不同的智能体、模型和智能水平，下一轮回复立即生效，因为上下文会跨智能体共享。
+**随时换智能体** — 任务跑到一半觉得不对，直接换一个 agent、换一个模型，下一轮立刻生效。上下文跨 agent 共享，不会丢。
 
-🔗 **队列编排** — 串行队列按序推进，并行分组同时运行。失败任务自动跳过，重新排队时按规则归位。
+**队列** — 串行的按顺序跑，前一个完了自动启动下一个；并行的同时跑，各自在独立 worktree 里互不干扰。
 
-🔍 **自动验证** — 任务完成后触发验证轮（可配置多轮复审），在同一会话中运行。未通过则打回修复，上下文完整保留。
+**前置依赖** — A 任务依赖 B 和 C 的结果，B、C 完成后 A 自动开工。建任务时指定前置，调度的事不用你管。
 
-🖥️ **实时预览** — agent 改了前端代码，一键启动预览服务查看效果。项目设置中可配置多个预览服务（最多 8 个同时运行），自动检测仓库中的常见框架脚本，端口从专用池分配。多人模式下自动挂载认证反代，外部可安全访问。预览可随任务生命周期自动管理：重新运行时关旧起新，验收后自动清理。
+**自动验证** — 任务做完了不直接算完，先跑一轮验证（可以配多轮）。没过就打回去改，改完再验证，上下文全程保留。
 
-✅ **一键验收** — 确认通过后自动合并到主干、清理 worktree 和临时分支。遇到冲突会唤醒来源任务处理。
+**一键验收** — 确认通过后自动合并代码、清理 worktree 和临时分支。有冲突会叫你处理。
 
-📝 **随手记** — 项目级别的快速笔记，列表内直接新建，多人模式下按人隔离。
+**实时预览** — Agent 改了前端代码，直接在 Navi 里起预览服务看效果。支持同时开多个，端口自动分配。
 
-💬 **多智能体聊天** — 项目下的持久群聊频道，可拉入任意数量、任意类型的智能体成员（不限 Claude），用 `@成员名` 点名提问。被点名的 agent 可以读取项目文件后给出简短建议（咨询），也可以创建标准任务去真正执行修改（委派）。聊天上下文自动管理——后台预压缩长历史为摘要，不会因对话变长而丢失早期决策。`/clear` 重新开始上下文，旧消息仍可查看。
+**任务接力** — 一台机器上的任务可以连同代码、会话历史、附件一起迁移到另一台 Navi 继续跑。用 ed25519 密钥对做认证，首次配对验一次指纹就行。详见 [docs/handoff.md](docs/handoff.md)。
 
-🗂️ **任务模式** — 跨项目鸟瞰所有在跑和待验收的任务，按项目分组，一键展开会话。
+**群聊** — 项目下的持久频道，拉进不同的 agent 用 @点名。被点到的 agent 可以看代码给建议，也可以直接建任务去做。
 
-🤖 **助手** — 侧栏底部打开，选择智能体后直接对话，无需项目也能用。可按描述检索历史任务、生成起手式草案、委派工作到其它项目。对话跨项目保留，`/clear` 重置上下文。
+**助手** — 侧栏打开就能跟 agent 对话，不用先建项目。搜历史任务、起草任务、往别的项目派活都行。
 
-🔎 **全局搜索** — `⌘K` 搜任务标题、正文、会话内容，边打边出结果，毫秒级响应。
+**全局搜索** — `⌘K` 搜任务标题、正文、会话内容，打字就出结果。
 
-📲 **移动端** — Expo 构建的 iOS/Android 客户端，查看任务、回复消息、操作团队，随时随地。
+**手机端** — Expo 做的 iOS/Android 客户端，能看任务、回消息、操作队列。
 
-♻️ **重启存活** — agent 进程与 server 解耦。`npm run restart` 会自动检测在跑的任务：能接管的无感接管，不能接管的拦住不重启。**单飞任务的 agent 进程完全不受重启影响**（输出写文件而非管道），三个平台都是；团队调度台自动 `--resume` 接回。
+**重启不丢活** — Agent 进程和 server 解耦。重启时自动检测在跑的任务：能接管的无感接管，不能的拦住不让重启。详见下面的开发章节。
 
-> [!NOTE]
-> **三个平台同一个契约**：pid + 落盘输出 + 退出码 + 可接管 + 可重连 stdin。实现不同 —— POSIX 套一层 `/bin/sh` + FIFO，Windows 套一层按次生成的 node 壳 + 具名管道（那边必须有个活过 Navi 的进程来写退出码、守着 stdin；libuv 还会把每个非 detached 的子进程塞进一个 `KILL_ON_JOB_CLOSE` 的 Job，所以那层壳是 detached 起的）。重启时不要绕过 `npm run restart` 自己 `taskkill /T`：`/T` 按父子关系杀整棵树，会把本该活下来的 agent 一起带走 —— `npm run restart` 那一刀按进程表里的壳记号认人并绕开它们（名单之外新起的 agent 也保得住），只有进程表压根读不出来且显式设置 `FORCE=1` 时才退回整树强杀；判据问不出来（超时/拒答）时它宁可中止也不下刀。
+## 编排方式
 
-## 编排模式
-
-**单任务** — 一个任务指派一个 agent，最基础的使用方式。
-
-**串行队列** — 多个任务按序编排，前一个完成后自动启动下一个，适用于有依赖关系的工作流。
-
-**并行分组** — 一批无关联的任务同时运行，各自在独立 worktree 中工作。
-
-**团队模式** — 指派一个 agent 担任调度台（常驻会话），由它自行拆分子任务、分派执行者、汇总结果。支持团队预设和执行者配置。
-
-**讨论** — 两个不同的智能体（如 Claude + Codex）围绕同一议题轮番发言，各自独立思考、互相质疑，形成共同结论。中间设有人工闸口（可关闭），轮数可限制或不限。讨论结束后输出合稿，可一键转交给团队模式继续执行。讨论者 A / B 各自独立配置执行器、模型和智能水平。
-
-**验证循环** — 实现 → 验证 → 打回 → 修复 → 再验证，轮数可配，循环至通过后由用户验收合并。
-
-## 任务接力
-
-跨机器任务迁移：把一台 Navi 上的任务——连同代码进度、对话历史和附件——接力到另一台 Navi 继续。
-
-### 接力什么
-
-- **git 状态** — 任务分支上的提交打成增量 bundle，未提交改动先做 WIP 提交
-- **CLI 会话** — claude / codex 的会话文件物理迁移，对端续跑时保留完整对话上下文
-- **附件和产物** — 上传的图片、会话 trace、定时计划一并迁移，路径自动改写
-- **审查历史** — 验证轮次和验收落账跟着任务走
-
-### 怎么用
-
-1. 设置 → 默认规则 → 添加目标机器地址（如 `http://192.168.1.50:4317`）
-2. 打开任务 → 输入框上方 → 「接力到另一台机器」（支持批量接力）
-3. 预检通过后确认发送，可选到达后自动续跑
-
-### 安全
-
-每台 Navi 实例有独立的 **ed25519 密钥对**。接力前校验目标机器指纹，首次配对核对一次即可。多人模式下接力按人授权（对端账号 key），传输可选加密。
-
-### 退化与兜底
-
-| 情况 | 结果 |
+| 方式 | 说明 |
 |---|---|
-| 会话文件迁移失败 | agent 全新起跑，任务正文嵌入首条消息，git 进度仍在 |
-| 对端不是 git 仓库 | 退化为共享目录运行，代码不迁移 |
-| 网络中断 | 本机标记「接力未确认」，重试幂等不重复导入 |
-| 目标机换了机器 | 指纹对不上，**打包之前**就拒绝 |
-| 对端没批准本机 | 预检如实报出，接力按钮按住不放 |
-| 需要回到本机 | 横幅 → 「在本机继续」移除标记即可 |
-
-> 完整的流程说明与故障排查见 **[docs/handoff.md](docs/handoff.md)**。
-
-## 实时预览
-
-任务改了前端或 Web 服务的代码后，可以直接在 Navi 里启动预览服务查看效果，不必离开界面手动起开发服务器。
-
-### 两种模式
-
-- **脚本模式** — 填一条启动命令（如 `npm run dev`），Navi 从端口池分配空闲端口注入 `$PORT`，启动后自动探测服务就绪并生成预览链接。
-- **服务列表模式** — 配置多个预览服务（最多 8 个同时运行），分别标记为 `web`（面向浏览器）或 `service`（后端依赖），Navi 并行启动并独立管理各自的生命周期。支持自动检测仓库中的常见框架脚本。
-
-### 认证反代
-
-多人模式下（或手动开启），预览链接自动挂载认证反代——带一次性 token 的 URL 可安全分享给外部访问，无需额外配置。
-
-### 生命周期
-
-预览随任务走：重新运行任务时自动关闭旧预览、启动新的；任务验收合并后自动清理预览进程和相关软链。启动过程中（依赖安装 + 服务就绪）用户随时可以取消。
-
-## 多人模式
-
-开启多人模式后，一台 Navi 可以供多人使用，各有独立的账号、CLI 环境、项目可见性和资源隔离。
-
-- **角色体系** — 管理员 / 成员，实例级与项目级双层权限
-- **CLI 额度隔离** — 可选「隔离」或「共用」两档，首次启动时选一次，设置里随时改
-- **按人派发** — 跨人回合按「谁点的」跑，换执行器前显式确认
-- **接力授权** — 接力凭对端账号 key 认人，不是认机器
-- **可见性过滤** — 任务、随手记、搜索结果均按归属过滤
-
-> [!WARNING]
-> 默认监听 `0.0.0.0`。自用模式下只有在 Navi 所在的那台机器上直接打开才免登录；别的设备打开后要你在 Navi 这边点一下「允许」完成配对（手机可以扫码），脚本凭访问密钥进，都在「设置 → 默认规则 → 远程访问」里管。连接本身不加密，跨网络访问请走 Tailscale 或带 TLS 的反向代理，细节见 [`docs/install.md`](docs/install.md)。
+| 单任务 | 一个任务一个 agent，最基本的用法 |
+| 串行队列 | 按顺序排，前一个做完自动启动下一个 |
+| 并行分组 | 一批不相关的任务同时跑，各自隔离 |
+| 前置依赖 | A 依赖 B 和 C，B 和 C 都过了 A 才开工 |
+| 验证循环 | 实现 → 验证 → 打回 → 修复 → 再验证，循环到通过 |
 
 ## 支持的执行器
 
-内置 15 个 CLI 执行器配置，机器上安装了哪些就能使用哪些：
+机器上装了哪些就能用哪些：
 
-<table>
-<tr>
-<td><code>claude</code></td><td><code>codex</code></td><td><code>gemini</code></td><td><code>cursor</code></td><td><code>copilot</code></td>
-</tr>
-<tr>
-<td><code>opencode</code></td><td><code>qwen</code></td><td><code>grok</code></td><td><code>kimi</code></td><td><code>trae</code></td>
-</tr>
-<tr>
-<td><code>kiro</code></td><td><code>kilo</code></td><td><code>qoder</code></td><td><code>antigravity</code></td><td><code>pi</code></td>
-</tr>
-</table>
+| | | | | |
+|---|---|---|---|---|
+| `claude` | `codex` | `gemini` | `cursor` | `copilot` |
+| `opencode` | `qwen` | `grok` | `kimi` | `trae` |
+| `kiro` | `kilo` | `qoder` | `antigravity` | `pi` |
 
-通过「设置 → 执行器」可为每个 CLI 创建 **profile**（固定模型与智能水平）。任务级别可在三段式胶囊中逐项覆盖：先选执行器，再选模型，最后选智能水平——任务运行中也能随时切换，下一轮回复立即生效。添加新 CLI 只需一个 TypeScript 文件 — 见 [catalog/README.md](server/src/executors/catalog/README.md)。
+每个 CLI 可以建多个 profile（固定模型和智能水平）。任务上选执行器 → 模型 → 智能水平，跑着的时候也能换。
 
-## MCP 工具
-
-Navi 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **28 个工具**，覆盖任务全生命周期：
-
-| 类别 | 工具 |
-|---|---|
-| 项目 / 分组 | `resolve_project` `create_group` `resolve_group` `list_groups` |
-| 任务管理 | `create_task_chain` `batch_create_tasks` `get_task` `list_tasks` `patch_task` |
-| 队列 | `create_queue` `get_queue` `queue_insert` `queue_remove` `queue_reorder` `requeue_task` |
-| 生命周期 | `run_task` `run_group` `stop_task` `complete_task` `pause_task` `accept_task` |
-| 协作 | `ask_question` `answer_question` `report_stage` `dispatch` `dispute_review` `debate_reply` |
-| 旁观 | `read_task_transcript` |
-
-`read_task_transcript` 读的是**别的任务**说过的话：拿到一个任务 id 就能看到它当时的指令、回复和结论，与界面上同一份语料。没有它时，agent 只能从工具清单得出「Navi 不提供这个能力」，转去翻各家 CLI 自己的落盘文件 —— 那条路只对单一执行器成立。
+加一个新 CLI 只要写一个 TypeScript 文件，见 [server/src/executors/catalog/README.md](server/src/executors/catalog/README.md)。
 
 ## 项目结构
 
 ```
-server/   Hono 后端 — API、任务编排、进程管理、前端托管
-web/      React + Vite + Tailwind 前端
+server/   后端 — Hono, SQLite (node:sqlite), Drizzle, SSE
+web/      前端 — React, Vite, Tailwind
 shared/   前后端共享类型
-mcp/      MCP server — 28 个工具供 agent 调用
-mobile/   Expo 移动端（iOS / Android）
-scripts/  setup / restart / package（.mjs，跨平台）
+mcp/      MCP server — agent 调用的工具集
+mobile/   Expo 移动端
+desktop/  Mac 客户端
+scripts/  setup / restart / package 等脚本
 ```
-
-<details>
-<summary>技术选型</summary>
-<br>
-
-- **SQLite** — Node 22 内置的 `node:sqlite`，零原生编译依赖。代价是 Node 最低版本要求 22.16。
-- **Drizzle** — 管理 schema，启动时自动补列，无需手动迁移。
-- **SSE** — 替代 WebSocket。数据流为服务端单向推送（任务状态、输出、trace），对反代透明。
-- **单实例锁** — 粒度是 DB 文件路径，不是端口。锁文件（`*.ash.lock`）由 server 写入，restart 脚本读取以识别进程归属。
-- **平台差异** — 收敛在 `server/src/platform.ts` 一个文件。进程表、进程树击杀、端口查询按平台分发实现。Windows 能力缺口在文件头部标注。
-
-</details>
 
 ## 配置
 
-| 变量 | 默认值 | 说明 |
+| 变量 | 默认 | 说明 |
 |---|---|---|
-| `PORT` | `4317` | 服务端口（界面与 API 共用） |
-| `NAVI_DB` | `./data/navi.db`（改名之前装的是 `ash.db`，见 `docs/rename-db.md`） | SQLite 数据库路径 |
+| `PORT` | `4317` | 界面和 API 共用 |
+| `NAVI_DB` | `./data/navi.db` | SQLite 数据库路径 |
 
-所有持久化数据存放在 `data/` 目录（数据库、运行记录、上传文件），该目录不入 git。备份迁移只需拷贝此目录。
-
-回合占位的人工放开使用离机签名，公钥或可信文件路径在启动环境中预配；部署与操作见[人工授权](docs/human-approval.md)。
+数据都在 `data/` 目录（数据库、运行记录、上传的文件），不入 git。备份就拷这个目录。
 
 ## 开发
 
 ```bash
 npm run dev          # 后端 :4317 + 前端 :5173（HMR，/api 代理到后端）
 npm run build        # 全量构建（shared → web → server → mcp）
-npm run restart      # 构建 + 后台常驻（自动检测任务安全）
-npm run stop         # 停掉后台常驻的服务端（同一套任务安全检测）
-npm run package      # 生成分发包（仅入库文件，不含 data/）
+npm run restart      # 构建 + 后台常驻
+npm run stop         # 停掉后台服务
 ```
 
-### `npm run restart` 安全机制
+前端改完只需 `npm run build`，server 从磁盘读 `web/dist`，不用重启。
 
-Restart 不是盲目的 kill + start。它会先问服务端「重启会真正打断几个任务」：
+### restart 的安全机制
 
-| 情况 | 行为 |
-|---|---|
-| 无任务 / 全部可接管 | 直接重启，全程无感 |
-| 有会被打断的任务 | **拒绝重启**，列出受影响任务 |
-| `node scripts/restart.mjs --wait` | 等会被打断的任务排空再重启，可接管任务不阻塞 |
-| `node scripts/restart.mjs --force` | 强制重启，被打断的标 failed；也会强制刷新 MCP |
-| MCP 通道被占 | 默认跳过 MCP 刷新，不掐断交卷 |
+`npm run restart` 不是无脑 kill。它先问 server「重启会打断几个任务」：
 
-以上 Node 命令在 PowerShell、cmd、Bash 和 zsh 中通用；`node scripts/restart.mjs --help` 查看完整选项。
-使用 npm 启动时，Windows 用 `npm.cmd run restart -- --force`，macOS/Linux 用 `npm run restart -- --force`（其它选项同理）。
-PowerShell 可能将裸 `npm` 解析为会吞掉 `--` 的 `npm.ps1`，带选项时可显式用 `npm.cmd` 或上面的 Node 命令。
-`--skip-mcp` 跳过 MCP 刷新，`--force-mcp` 强制刷新（会掐断在跑的 agent 的 MCP 通道）。
-`--force --skip-mcp` 只强制重启服务端，不刷新 MCP。
-仍兼容原环境变量；PowerShell 不支持 `FORCE=1 npm run restart`，旧版本可用
-`$env:FORCE='1'; npm run restart`（该变量会保留在当前 PowerShell 会话，之后可用 `Remove-Item Env:FORCE` 清除）。
+- 没任务或全部可接管 → 直接重启
+- 有会被打断的 → 拒绝，列出受影响的任务
+- `npm run restart -- --wait` → 等打断的跑完再重启
+- `npm run restart -- --force` → 强制重启，被打断的标 failed
 
-`npm run stop` 走同一套判据，只是停完不再起新的：可接管的任务照常跑完、下次启动时接管；有会被打断的任务就拒绝停止，`--wait` / `--force` 含义同上（`node scripts/stop.mjs --help`）。
-
-前端修改后仅需 `npm run build`，server 从磁盘读取 `web/dist`，**无需重启**。
+`npm run stop` 同一套逻辑，停完不再起新的。
 
 ### 回归测试
 
-`build` / `restart` 只做「约定检查 → 类型 → 打包」，**不再跑测试**；回归统一在验收时执行：
+构建不跑测试。回归统一在验收时执行：
 
 ```bash
-npm run test:web                      # 前端全量回归
-npm run test:accept                   # Navi 验收前置命令：前端全量回归
-npm run test:accept-gate              # 验收脚本自身的回归
-npm -w server run test:queue          # 队列推进与排序
-npm -w server run test:accept-merge   # 验收合并与冲突处理
-npm -w server run test:review         # 验证轮与证据落盘
-npm -w server run test:detached       # agent 重启存活
-npm -w server run test:handoff        # 跨机器接力
+npm run test:accept     # 验收前置命令
+npm run test:web        # 前端全量回归
 ```
 
 > [!CAUTION]
-> 端到端测试会实际启动 agent CLI，消耗真实 API 额度。
-
-在 Navi 项目设置的「验收前置命令」里填写 `npm run test:accept`，也可直接填写 `node scripts/accept-test.mjs`。入口在自身所在项目（验收时为独立快照）运行 `npm run test:web`，不按 Git diff 筛选，不受旧的 `SKIP_WEB_TEST` 开关影响；测试失败或启动失败都会返回非零退出码，不会因缺少依赖而放行。所需依赖可提前在任务工作区运行 `npm install` 安装，验收快照会复制现有依赖。
-
-`git push` 不再自动运行回归测试；`.githooks/pre-push` 已移除，其它提交钩子保留。
+> 端到端测试会启动真实的 agent CLI，消耗 API 额度。
 
 ## 常见问题
 
 <details>
-<summary>所有任务运行后均显示 <b>failed</b></summary>
+<summary>所有任务都显示 failed</summary>
 
-MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 Navi MCP 那一行（登记名是 `navi`）状态为 Connected。
-
-</details>
-
-<details>
-<summary>界面空白或样式异常</summary>
-
-前端产物未构建或已过期。执行 `npm run build`，无需重启 server。
+MCP 没接入。跑 `claude mcp list` 看 `navi` 那行是不是 Connected。
 
 </details>
 
 <details>
-<summary>派发任务时报 ENOENT</summary>
+<summary>界面空白</summary>
 
-目标 CLI 未安装，或未在 server 进程的 PATH 中。建议从终端（而非 GUI 应用）启动 server。
-
-</details>
-
-<details>
-<summary>claude 类任务 0 秒退出，报 <code>--dangerously-skip-permissions cannot be used with root/sudo privileges</code></summary>
-
-以 root 跑 Navi 时所有 claude 执行器必然 0 秒失败。三条出路：
-
-1. **换非 root 用户跑 Navi**（推荐）
-2. 启动环境设 `IS_SANDBOX=1`（代价：agent 以 root 无确认地操作整台机器）
-3. 在 bubblewrap 沙箱中跑 Navi
+前端没构建。跑 `npm run build`，不用重启 server。
 
 </details>
 
 <details>
-<summary>Windows 常用命令提示无法识别项目里的 kb.cmd 等脚本</summary>
+<summary>派任务报 ENOENT</summary>
 
-常用命令使用 PowerShell，不会自动搜索当前目录。项目目录里的脚本写为 `.\kb.cmd restart`；路径带空格时用 `& '.\my tool.cmd' restart`。启动和重启命令分别保存，两个字段都要检查。环境变量用 `$env:NAME='value'`，而不是 POSIX 的 `export NAME=value`。
+目标 CLI 没装，或者不在 server 进程的 PATH 里。建议从终端启动 server，别从 GUI 应用里起。
 
 </details>
 
 <details>
-<summary>Windows 上报 Filename too long</summary>
+<summary>claude 任务 0 秒退出，报 root/sudo 权限错误</summary>
 
-触发 260 字符路径限制。管理员 PowerShell 中启用 `LongPathsEnabled`，并执行 `git config --global core.longpaths true`。`npm run setup` 会自动检测。
+以 root 跑 Navi 时 claude 执行器必然失败。换非 root 用户跑，或者设环境变量 `IS_SANDBOX=1`（代价是 agent 以 root 权限无确认地操作机器）。
 
 </details>
 
 ---
 
 <p align="center">
-  <a href="docs/install.md"><b>📦 部署与运维</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/handoff.md"><b>🔄 任务接力指南</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/llm-relay.md"><b>🔌 供应商转发诊断</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/incidents.md"><b>📋 事故与踩坑记录</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/windows-testing.md"><b>🪟 Windows 测试基线</b></a>
+  <a href="docs/install.md">部署与运维</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/handoff.md">任务接力</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/llm-relay.md">供应商转发诊断</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/incidents.md">踩坑记录</a>
 </p>
+
+## License
+
+[MIT](LICENSE)
