@@ -37,7 +37,7 @@ import { dataDirFor, dbFileFor, lockFileFor, takeDown } from "./server-control.m
 import { processBirth } from "./process-birth.mjs";
 import { launchServer, refreshMcp } from "./server-start.mjs";
 import { identifyServer, inspectData, resolvePort, runtimeProblems } from "./upgrade-checks.mjs";
-import { backupDb, backupSources, buildStamp, dbInBackup, pendingBaselines, readState, renameDb, verifyData, writeState } from "./upgrade-data.mjs";
+import { backupDb, backupSources, buildStamp, dbIdentity, dbInBackup, pendingBaselines, readState, renameDb, verifyData, writeState } from "./upgrade-data.mjs";
 import {
   beforeLastPull, countBetween, fastForward, fetchRemote, inspectCheckout, isAncestor, relation, resetKeep, revParse, short,
   showFile, untrackedCollisions,
@@ -99,8 +99,14 @@ async function preflight(pkg, abort) {
   const data = inspectData({ repo: REPO, env, keepDbName: options.keepDbName, stamp });
   const problems = [...runtimeProblems(pkg), ...data.problems];
   let saved = {};
+  const db = data.problems.length ? null : dbIdentity(data);
   if (!data.problems.length) {
     try { saved = readState(data.dataDir); } catch (error) { problems.push(error.message); }
+  }
+  // 上次没做完的那次升的是另一份库(同一个数据目录,经 NAVI_DB 选了别的):它的备份、核对基线都是那份库的,不能拿来接着升这份。
+  if (saved.inProgress && saved.inProgress.db !== db) {
+    problems.push(`上次没做完的那次升级升的是${saved.inProgress.db ? `另一份库 ${saved.inProgress.db}` : "哪份库没记下来"},这一次选的是 ${db};`
+      + `它的备份(${saved.inProgress.backup ?? "还没留"})不是这份库的,不能接着用。先照那次的 NAVI_DB / NAVI_DATA_DIR 再跑一次 npm run upgrade 把它做完,再来升这份`);
   }
   // 库留不了底的(软链指着的东西不在了之类),在停服务之前就拦下。
   if (!data.problems.length) problems.push(...backupSources({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit }).problems);
@@ -117,7 +123,7 @@ async function preflight(pkg, abort) {
     return abort(2);
   }
   for (const w of data.warnings) say(`  ⚠ ${w}`);
-  return { data, port, portFrom, server };
+  return { data, db, port, portFrom, server };
 }
 
 /** 核对出来少了的那几张表,逐张说清少了哪几条。 */
@@ -133,7 +139,7 @@ function reportMissing(v) {
  * 顶替 —— 后来那份是从已经少了东西的库留的,拿它比只能证明「没再少」(审查实测:第一次少了一条,第二次改口说都在)。
  * 返回 { ok, line, left }:left = 还没过的那几份(照 verifyPending 的格式记回去)。
  */
-function settleChecks(owed, current, live) {
+function settleChecks(owed, current, live, db) {
   const left = [];
   const lines = [];
   for (const b of [...owed, ...(current && !owed.some((o) => o.file === current.file) ? [current] : [])]) {
@@ -147,7 +153,7 @@ function settleChecks(owed, current, live) {
     } else {
       say(`  ⚠ 上次升级的数据核对还是没过:${v.line}。升级前的库在 ${b.file},先别删它。`);
     }
-    if (v.state !== "ok") left.push({ backupFile: b.file, backupDigest: b.digest });
+    if (v.state !== "ok") left.push({ backupFile: b.file, backupDigest: b.digest, db });
   }
   // 小结里那一行:有没过的说头一份没过的,都过了说最后一份(这一次的基线排在最后)。
   const line = (lines.find((l) => !l.ok) ?? lines.at(-1))?.text ?? "没核对(升级前没有库)";
@@ -267,7 +273,17 @@ async function apply() {
   const entries = [entry, join(REPO, "mcp", "dist", "index.js"), join(REPO, "web", "dist", "index.html")];
   const built = state.built?.commit === head && entries.every(existsSync) && state.built.stamp === buildStamp(products);
   const renameNow = ["todo", "resume"].includes(data.rename);
-  const serving = ctx.server.running && state.servedPid && ctx.server.health?.pid === state.servedPid;
+  const serving = ctx.server.running && state.servedPid && ctx.server.health?.pid === state.servedPid && state.servedDb === ctx.db;
+  const debts = pendingBaselines(state, ctx.db);
+  /** 欠着的核对记回去:这份库还没过的 + 别的库的原样。 */
+  const keepDebts = (left) => {
+    const all = [...debts.others, ...left];
+    if (all.length) state.verifyPending = all;
+    else delete state.verifyPending;
+  };
+  for (const o of debts.others) {
+    say(`  ⚠ ${o?.db ? `另一份库 ${o.db}` : "一份没记是哪份的库"}还欠着一次数据核对(升级前的库在 ${o?.backupFile}):选它再跑一次 npm run upgrade 补核;这一次只核对 ${data.db}`);
+  }
   /** MCP 登记收拾成只有 navi(setup 那份逻辑):幂等,迁不了不算升级失败,说一句就行。 */
   const registerMcp = () => {
     if (options.skipMcp) return;
@@ -279,19 +295,17 @@ async function apply() {
   };
   if (!resumed && built && !renameNow && serving) {
     say(`✓ 已是最新:代码 ${short(head)},库 ${data.db},服务 http://localhost:${port}(pid ${state.servedPid})在跑。代码、依赖、服务都没动。`);
-    const owed = pendingBaselines(state);
     // 上次升级没核对过的数据补核一次(只读现在的库,不重启)。
-    const v = settleChecks(owed, null, dbFileFor(REPO, env));
-    if (v.left.length !== owed.length) {
-      if (v.left.length) state.verifyPending = v.left;
-      else delete state.verifyPending;
+    const v = settleChecks(debts.mine, null, dbFileFor(REPO, env), ctx.db);
+    if (v.left.length !== debts.mine.length) {
+      keepDebts(v.left);
       try { writeState(dataDir, state); } catch { /* 记不下来,下次再补核一遍而已 */ }
     }
     registerMcp();
     process.exit(v.ok ? 0 : 1);
   }
   if (resumed) say(`  · 上次升级(从 ${short(resumed.from)} 起)没做完,接着做`);
-  state.inProgress = { ...(resumed ?? { from, startedAt: new Date().toISOString() }), to: head };
+  state.inProgress = { ...(resumed ?? { from, db: ctx.db, startedAt: new Date().toISOString() }), to: head };
   state.port = port;
   createdProgress = !resumed;
   try {
@@ -441,19 +455,19 @@ async function apply() {
       await fail(`新服务没起来:${why}`);
     }
     state.servedPid = launched.pid;
+    state.servedDb = ctx.db;
     save();
     say(`  ✓ :${port} 已就绪(pid ${launched.pid},日志 ${log})`);
 
     say("▶ 6/6 核对数据、收尾…");
     // 核对有三种结局:都在 / 有缺 / 没核对成。后两种都不算升好:记进 verifyPending,往后每次升级都先补核它(settleChecks)。
-    const v = settleChecks(pendingBaselines(state), baseline, dbFileFor(REPO, env));
-    if (v.left.length) state.verifyPending = v.left;
-    else delete state.verifyPending;
+    const v = settleChecks(debts.mine, baseline, dbFileFor(REPO, env), ctx.db);
+    keepDebts(v.left);
     await refreshMcp({ repo: REPO, port, lockFile: lockFileFor(REPO, env), skip: options.skipMcp, force: false, say, command: restartCommand });
     registerMcp();
 
     const backup = state.inProgress.backup;
-    state.last = { from, to: head, at: new Date().toISOString(), backup };
+    state.last = { from, to: head, at: new Date().toISOString(), db: ctx.db, backup };
     delete state.inProgress;
     save();
     const branch = inspectCheckout(REPO).branch ?? "?";

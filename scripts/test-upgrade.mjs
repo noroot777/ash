@@ -394,11 +394,14 @@ const stateFile = join(DATA, "upgrade.json");
 const withState = (patch) => writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, "utf8")), ...patch }));
 writeFileSync(join(TMP, "garbage.db"), "这不是一份库");
 const firstDigest = fileDigest(join(firstBackup, "ash.db"));
+// 欠着的核对记着是哪份库的(dbIdentity),只拿那份库补核。
+const dbId = JSON.parse(readFileSync(stateFile, "utf8")).last?.db;
+assert.ok(dbId, "升好的那次没记升的是哪份库");
 // 读不出来的、指纹对不上的、不见了的(审查第 3 轮 R1:不见了的曾被建成一份空库、拿「零条都在」清掉了待核对)。
 for (const pending of [
-  { backupFile: join(TMP, "garbage.db"), backupDigest: fileDigest(join(TMP, "garbage.db")) },
-  { backupFile: join(firstBackup, "ash.db"), backupDigest: "0".repeat(64) },
-  { backupFile: join(firstBackup, "gone.db"), backupDigest: firstDigest },
+  { backupFile: join(TMP, "garbage.db"), backupDigest: fileDigest(join(TMP, "garbage.db")), db: dbId },
+  { backupFile: join(firstBackup, "ash.db"), backupDigest: "0".repeat(64), db: dbId },
+  { backupFile: join(firstBackup, "gone.db"), backupDigest: firstDigest, db: dbId },
 ]) {
   withState({ verifyPending: pending });
   out = await upgrade([], 1, { PORT: String(PORT) });
@@ -407,7 +410,7 @@ for (const pending of [
   assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, pending, "没核对成却清掉了待核对");
 }
 assert.ok(!existsSync(join(firstBackup, "gone.db")), "补核替不见了的备份建了一份空库");
-withState({ verifyPending: { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest } });
+withState({ verifyPending: { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest, db: dbId } });
 out = await upgrade([], 0, { PORT: String(PORT) });
 assert.match(out, /补核过了:项目 2 → 2/, out);
 assert.equal(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, undefined);
@@ -415,14 +418,14 @@ console.log("✓ 数据没核对成不算升好;再跑先补核,过了才清掉,
 
 // 欠着核对的时候这一次不走「已是最新」(产物要重建 → 停、留底、起):欠的那份照样得亲自过,不能拿这次新留的底
 // (从已经少了东西的库留的)比一遍就说都在、把账清掉(审查实测)。
-const owed = { backupFile: join(TMP, "garbage.db"), backupDigest: fileDigest(join(TMP, "garbage.db")) };
+const owed = { backupFile: join(TMP, "garbage.db"), backupDigest: fileDigest(join(TMP, "garbage.db")), db: dbId };
 withState({ verifyPending: owed });
 rmSync(join(INSTALL, "web", "dist", "assets", "app.js"));
 out = await upgrade([], 1, { PORT: String(PORT) });
 assert.doesNotMatch(out, /已是最新|✅ 升好了/, out);
 assert.match(out, /上次升级的数据核对还是没过/, out);
 assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, [owed], `欠着的核对被这一次的基线顶掉了\n${out}`);
-withState({ verifyPending: [owed, { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest }] });
+withState({ verifyPending: [owed, { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest, db: dbId }] });
 rmSync(join(INSTALL, "web", "dist", "assets", "app.js"));
 out = await upgrade([], 1, { PORT: String(PORT) });
 assert.match(out, /上次没核对成的数据补核过了:项目 2 → 2/, out);
@@ -439,6 +442,30 @@ assert.match(out, /升级进度 .*读不懂/, out);
 assert.equal((await health())?.pid, pid, "进度读不懂却动了服务");
 writeFileSync(stateFile, stateText);
 console.log("✓ 升级进度读不懂:停服务之前拦下");
+
+// 同一个数据目录、经 NAVI_DB 换了一份库(审查实测:A 库升到一半失败,换 B 库再跑接着用了 A 的备份、拿 A 的数字核对 B):
+// 上次没做完的那次是别的库的 → 停服务之前拦下;别的库欠的核对不拿这份库比,原样留着。
+{
+  const other = join(TMP, "other.sqlite");
+  writeFileSync(other, "");
+  const half = { from: "0".repeat(40), to: "0".repeat(40), db: dbId, backup: firstBackup, backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest };
+  withState({ inProgress: half });
+  pid = (await health())?.pid;
+  out = await upgrade([], 2, { PORT: String(PORT), NAVI_DB: other });
+  assert.match(out, /上次没做完的那次升级升的是另一份库 .*不是这份库的,不能接着用/, out);
+  assert.equal((await health())?.pid, pid, "换了库却动了服务");
+  assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).inProgress, half, "别的库的进度被动了");
+  withState({ inProgress: undefined });
+  // 别的库欠的核对:那份基线拿这份库比恰好都在,也不能替它清掉。
+  const theirs = { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest, db: realpathSync(TMP) + "/elsewhere/navi.db" };
+  withState({ verifyPending: [theirs] });
+  out = await upgrade([], 0, { PORT: String(PORT) });
+  assert.match(out, /另一份库 .*elsewhere.*还欠着一次数据核对/, out);
+  assert.doesNotMatch(out, /补核过了/, out);
+  assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, [theirs], "别的库欠的核对被这份库清掉了");
+  withState({ verifyPending: undefined });
+  console.log("✓ 换了一份库:别的库没做完的升级在停服务之前拦下,别的库欠的核对不拿这份库比");
+}
 
 // ── 已是最新也收拾 MCP 登记:navi 在、旧名 ash 起的也是 Navi 的脚本 → 删掉旧名 ─────────────────────
 {

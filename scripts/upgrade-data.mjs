@@ -1,9 +1,9 @@
 // 升级里碰数据的那几步:停着服务时给库留底、核对升级前后每一条都还在、把库改名交给 ⑨ 的改名命令、记下升级做到哪。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DB_FILE_NAME, DB_RENAME_JOURNAL, legacyDbState } from "./db-file.mjs";
 import { LEGACY_DB_FILE } from "./legacy-names.mjs";
@@ -197,12 +197,17 @@ export function verifyData(baseline, liveFile) {
 /**
  * 升级做到哪了,记在数据目录里(跟着这份数据走;不进 git):
  *   built      最后一次构建成功时的 { commit, stamp }(stamp 见 buildStamp)
- *   verifyPending [{ backupFile, backupDigest }] 数据核对还没过的那几份基线(读不出来、或者有缺;老格式是单个对象):往后每一次
- *              升级的成功出口都得先把它们亲自补核过(pendingBaselines),后来留的底顶替不了
+ *   verifyPending [{ backupFile, backupDigest, db }] 数据核对还没过的那几份基线(读不出来、或者有缺;老格式是单个对象):往后每一次
+ *              升级这份库(db,见 dbIdentity)的成功出口都得先把它们亲自补核过(pendingBaselines),后来留的底顶替不了
+ *   servedDb   servedPid 那个服务开的是哪份库(dbIdentity)
  *   servedPid  最后一次起好的服务            port       这份安装的服务端口(锁收了之后再跑也找得到)
- *   inProgress { from, to, backup, backupFile, backupDigest } 有它 = 上次没做完,再跑接着做(from 和备份沿用那一次的;
- *              backupFile / backupDigest = 备份里那份库和它留底时的指纹)
- *   last       上一次升好的那次:{ from, to, at, backup }
+ *   inProgress { from, to, db, backup, backupFile, backupDigest } 有它 = 上次没做完,再跑接着做(from 和备份沿用那一次的;
+ *              db = 那一次升的是哪份库,换了一份库不许接着用它的备份;backupFile / backupDigest = 备份里那份库和它留底时的指纹)
+ *   last       上一次升好的那次:{ from, to, at, db, backup }
+ *
+ * 文件按数据目录放,而一个数据目录底下可以经 NAVI_DB 选不同的库 —— 所以凡是跟某一份库绑着的(进度、备份、欠着的核对、起着的服务)
+ * 都记上 db,读的时候只认这份库自己的(审查实测:A 库升到一半失败,换 B 库再跑接着用了 A 的备份,B 少了任务还报都在)。
+ * built / port 是检出和端口的事,不分库。
  */
 export const stateFile = (dataDir) => join(dataDir, "upgrade.json");
 
@@ -225,10 +230,33 @@ export function readState(dataDir) {
   return state;
 }
 
-/** 还欠着的数据核对:[{ file, digest }](verifyPending 老格式是单个对象)。 */
-export function pendingBaselines(state) {
+/**
+ * 还欠着的数据核对(verifyPending 老格式是单个对象),按库分开:mine = 这份库(db)自己的 [{ file, digest }],拿现在的库补核;
+ * others = 别的库的(没记是哪份库的也算别人的 —— 拿谁比都证明不了),原样留着。
+ */
+export function pendingBaselines(state, db) {
   const p = state.verifyPending;
-  return (Array.isArray(p) ? p : p ? [p] : []).map((x) => ({ file: x?.backupFile ?? null, digest: x?.backupDigest ?? null }));
+  const all = Array.isArray(p) ? p : p ? [p] : [];
+  return {
+    mine: all.filter((x) => x?.db && x.db === db).map((x) => ({ file: x.backupFile ?? null, digest: x.backupDigest ?? null })),
+    others: all.filter((x) => !x?.db || x.db !== db),
+  };
+}
+
+/** 真实落点;路径还不存在就取最近一级存在的祖先的真实落点再接上剩下那段。 */
+function canonical(p) {
+  try { return realpathSync(p); } catch {
+    const up = dirname(p);
+    return up === p ? p : join(canonical(up), basename(p));
+  }
+}
+
+/**
+ * 这一次升的是哪份库(升级进度里 db 记的就是它)。没设 NAVI_DB:数据目录的真实落点 + 规范库名 —— 库改名(ash.db → navi.db)
+ * 不换身份,库文件本身是软链也不影响;设了 NAVI_DB:那个文件的真实落点(两个路径指着同一份库就是同一份)。
+ */
+export function dbIdentity({ db, explicit, dataDir }) {
+  return explicit ? canonical(resolve(db)) : join(canonical(resolve(dataDir)), DB_FILE_NAME);
 }
 
 export function writeState(dataDir, state) {
