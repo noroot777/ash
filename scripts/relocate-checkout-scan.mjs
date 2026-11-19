@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, openSync, readFileSync, readSync, closeSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { LEGACY_DB_FILE, LEGACY_REPO_DIR_NAMES, LEGACY_SINGLETON_LOCK_SUFFIX } from "./legacy-names.mjs";
 import { claudeSlug, CLAUDE_SLUG_MAX, countRefs, grokDirName, isUnder, mapPath, rewriteRules, rewriteText } from "./relocate-checkout-paths.mjs";
 
 const isDirNoFollow = (p) => { try { return lstatSync(p).isDirectory(); } catch { return false; } };
@@ -32,11 +33,11 @@ export function locateTree({ from, to }) {
   return { state: "missing", root: null, why: `${from} 和 ${to} 都不是目录` };
 }
 
-/** 库文件：显式给的优先；否则数据目录里 navi.db 在就用它，不然 ash.db（与 scripts/server-control.mjs 同口径）。 */
+/** 库文件：显式给的优先；否则数据目录里 navi.db 在就用它，不然用旧库名（与 scripts/server-control.mjs 同口径）。 */
 export function dbFileIn(root, explicit) {
   if (explicit) return resolve(explicit);
   const navi = join(root, "data", "navi.db");
-  return existsSync(navi) ? navi : join(root, "data", "ash.db");
+  return existsSync(navi) ? navi : join(root, "data", LEGACY_DB_FILE);
 }
 
 /** 库里每个文本列还有几处旧路径。只读打开，不碰 -wal（服务停着时本来就没有）。 */
@@ -87,7 +88,7 @@ export function scanDbState(dbFile) {
 /** 服务还开着这份库吗：单例锁里的进程活着、或者有进程开着库文件。 */
 export function scanService(dbFile) {
   const reasons = [];
-  for (const suffix of [".navi.lock", ".ash.lock"]) {
+  for (const suffix of [".navi.lock", LEGACY_SINGLETON_LOCK_SUFFIX]) {
     const lock = `${dbFile}${suffix}`;
     const text = readText(lock);
     if (text === null) continue;
@@ -403,7 +404,7 @@ export function scanDataFiles(root, rules) {
 /** 远端：仓库在 GitHub 上改名之后要换的地址。 */
 export function scanRemote(root) {
   const url = (sh("git", ["-C", root, "remote", "get-url", "origin"]) ?? "").trim() || null;
-  const m = url && /^(.*github\.com[:/][^/]+\/)ash(\.git)?$/.exec(url);
+  const m = url && new RegExp(`^(.*github\\.com[:/][^/]+\\/)(?:${LEGACY_REPO_DIR_NAMES.join("|")})(\\.git)?$`).exec(url);
   return { url, suggested: m ? `${m[1]}navi${m[2] ?? ""}` : null };
 }
 

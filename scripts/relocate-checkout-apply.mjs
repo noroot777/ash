@@ -178,11 +178,13 @@ export function apply(plan, { journal, link, log }) {
   }
 
   // 3. git 工作区两头的绝对路径。
-  for (const edit of scanWorktrees(to, { from, to }).edits) {
+  const { edits } = scanWorktrees(to, { from, to });
+  for (const edit of edits) {
     const backup = journal.backup(edit.file);
     writeAtomic(edit.file, edit.next);
     journal.add({ kind: "worktree", op: "restore", file: edit.file, backup });
   }
+  if (edits.length) log(`  git 工作区：改了 ${edits.length} 份路径文件`);
 
   // 4. 树里指向旧根的绝对链接改指新根（先建临时链接再改名盖上，任何时刻链接都在）。
   const { retarget } = scanSymlinks(to, { from, to });
