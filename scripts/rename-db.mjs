@@ -67,7 +67,7 @@ function locked(note, fn) {
 function explicitDbWarning() {
   const explicit = readStorageEnv(env, "NAVI_DB");
   if (!explicit) return;
-  say(`! 这个 shell 里设着 NAVI_DB（或旧名 ASH_DB）=${explicit}：服务照它开库，不看数据目录里叫什么。`);
+  say(`! 这个 shell 里设着 NAVI_DB（旧名也算）=${explicit}：服务照它开库，不看数据目录里叫什么。`);
   say(`  改名之后把它改成 ${join(dataDir, DB_FILE_NAME)}（启动脚本、计划任务里设的也一样），不然服务会去开那份路标。`);
 }
 
@@ -98,12 +98,12 @@ function main() {
   if (now.state === "both") {
     say(`✗ ${DB_FILE_NAME} 和 ${LEGACY_DB_FILE} 都是库，分不清哪份是在用的，不动。服务在这种情况下也不起。`);
     say(`  ${now.navi}：${describe(now.navi)}`);
-    say(`  ${now.ash}：${describe(now.ash)}`);
+    say(`  ${now.legacy}：${describe(now.legacy)}`);
     say("  确认要留哪一份，把另一份（连同它名字开头的 -wal、-shm、.identity.json 等）挪出数据目录。");
     return 2;
   }
   if (now.state === "orphan") {
-    say(`✗ ${now.ash} 是改名留下的路标，但 ${now.navi} 不在。库被挪走了？放回来再说，不动。`);
+    say(`✗ ${now.legacy} 是改名留下的路标，但 ${now.navi} 不在。库被挪走了？放回来再说，不动。`);
     return 2;
   }
   if (now.state === "empty") {

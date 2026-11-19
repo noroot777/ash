@@ -35,13 +35,13 @@ export function markerText(at) {
  */
 export function inspect(dataDir) {
   const navi = join(dataDir, DB_FILE_NAME);
-  const ash = join(dataDir, LEGACY_DB_FILE);
-  const old = legacyDbState(ash);
+  const legacy = join(dataDir, LEGACY_DB_FILE);
+  const old = legacyDbState(legacy);
   const hasNavi = existsSync(navi);
   const state = existsSync(journalFile(dataDir)) ? "interrupted"
     : hasNavi ? (old === "present" ? "both" : "renamed")
     : old === "present" ? "legacy" : old === "moved" ? "orphan" : "empty";
-  return { state, navi, ash, marker: old === "moved" };
+  return { state, navi, legacy, marker: old === "moved" };
 }
 
 /** 往 from 那个名字改成 to 那个名字要走的步骤。from 是旧名就是改名，反过来就是退回。 */
