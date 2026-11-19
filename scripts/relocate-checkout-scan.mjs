@@ -131,14 +131,17 @@ export function scanProcesses(roots) {
   const blocking = [];
   const shells = [];
   const argvRefs = [];
-  const lsof = sh("lsof", ["-a", "-d", "cwd", "-Fpcn"], { allowFail: true }) ?? "";
+  const lsof = sh("lsof", ["-a", "-d", "cwd", "-FpRcn"], { allowFail: true }) ?? "";
   let cur = null;
   for (const line of lsof.split("\n")) {
     if (line.startsWith("p")) cur = { pid: Number(line.slice(1)) };
+    else if (line.startsWith("R") && cur) cur.ppid = Number(line.slice(1));
     else if (line.startsWith("c") && cur) cur.command = line.slice(1);
     else if (line.startsWith("n") && cur) {
       cur.cwd = line.slice(1);
-      if (!self.has(cur.pid) && roots.some((r) => isUnder(cur.cwd, r))) (SHELLS.has(cur.command) ? shells : blocking).push(cur);
+      // 本脚本自己拉起的 lsof / ps / find 也站在这里，不算。
+      const ours = self.has(cur.pid) || cur.ppid === process.pid;
+      if (!ours && roots.some((r) => isUnder(cur.cwd, r))) (SHELLS.has(cur.command) ? shells : blocking).push({ pid: cur.pid, command: cur.command, cwd: cur.cwd });
     }
   }
   const ps = sh("ps", ["-axww", "-o", "pid=,command="]) ?? "";

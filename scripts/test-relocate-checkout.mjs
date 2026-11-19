@@ -40,7 +40,8 @@ const from = join(base, "code", "harness");
 const to = join(base, "code", "navi");
 const sibling = join(base, "code", "harness-old");
 const outside = join(base, "outside-wt");
-const run = (...args) => spawnSync(process.execPath, [SCRIPT, "--from", from, "--to", to, "--home", home, ...args], { env, encoding: "utf8", cwd: base });
+const runIn = (cwd, ...args) => spawnSync(process.execPath, [SCRIPT, "--from", from, "--to", to, "--home", home, ...args], { env, encoding: "utf8", cwd });
+const run = (...args) => runIn(base, ...args);
 
 function build() {
   mkdirSync(from, { recursive: true });
@@ -173,10 +174,10 @@ try {
     assert.deepEqual(snapshot(), before);
   });
 
-  test("中途失败：停在出错那一步、退出码 3；修好后重跑接着做完", () => {
+  test("中途失败：停在出错那一步、退出码 3；修好后重跑接着做完（在树里起跑，自己拉起的 lsof 不算占用）", () => {
     const ocFile = join(home, ".local", "share", "opencode", "opencode.db");
     chmodSync(ocFile, 0o444);
-    const r = run("--apply");
+    const r = runIn(from, "--apply");
     chmodSync(ocFile, 0o644);
     assert.equal(r.status, 3, r.stdout + r.stderr);
     assert.match(r.stdout, /做到一半失败/);
