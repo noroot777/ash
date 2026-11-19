@@ -10,7 +10,7 @@ import { bus } from "./bus.js";
 import { now, runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
-import { admissionKeysOf, admitMembers, TeamAcceptingError } from "./team-admission.js";
+import { admissionKeysOf, admitMembers, joinDispatchChain, TeamAcceptingError } from "./team-admission.js";
 import { execFileText as exec } from "./exec.js";
 import { expandHome } from "./git.js";
 import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
@@ -407,7 +407,15 @@ export async function createTasks(
     const admitted = admitMembers(await admissionKeysOf([...rows.flatMap((row) => [row.parentId, row.reviewOf]), ...alsoAdmit]));
     if (!admitted) throw new TeamAcceptingError();
     try {
-      await insertAdmitted();
+      // 收在别的任务名下的：跟那棵派活树的整棵归档互斥，归档了的任务名下不再长没归档的（team-admission.ts）。
+      // 本身就是归档态落库的（接力导入一条已归档的任务）不算「长出来」。
+      const dispatchers = new Set(normalizedRows.flatMap((row) => (row.dispatchedBy && !row.archived ? [row.dispatchedBy] : [])));
+      const joined = await joinDispatchChain([...dispatchers]);
+      try {
+        await insertAdmitted();
+      } finally {
+        joined();
+      }
     } finally {
       admitted();
     }

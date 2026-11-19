@@ -7,7 +7,7 @@ import type { PrimaryAction, RetryTurnAction, TaskActions } from "@navi/shared";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { groups, queueItems, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
-import { actorOf } from "./auth/context.js";
+import { actorOf, type Actor } from "./auth/context.js";
 import { rememberTaskProject } from "./auth/event-filter.js";
 import { canSeeProject } from "./auth/visibility.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
@@ -28,8 +28,11 @@ type TaskRow = typeof tasks.$inferSelect;
 
 const LEGACY_REVIEW_IN_FLIGHT = ["backlog", "queued", "running", "paused"];
 
-/** 判据要的全部事实。路由与下发共用这一个读法。 */
-export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
+/**
+ * 判据要的全部事实。路由与下发共用这一个读法。`actor` = 这次是谁在问：名下子孙有它看不见的项目时，那几条只记
+ * 「看不见」（dispatch-archive.ts）；不给 = 服务端自己读。
+ */
+export async function readActionFacts(row: TaskRow, actor?: Actor): Promise<ActionFacts> {
   const inQueue = (await db.select({ id: queueItems.taskId }).from(queueItems).where(eq(queueItems.taskId, row.id))).length > 0;
   const parent = row.parentId
     ? (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, row.parentId))).at(0)
@@ -55,7 +58,7 @@ export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
     prerequisiteRequest: (row.status === "backlog" || row.status === "paused") && !!(await db.select({ at: taskPrerequisiteLaunches.requestedAt })
       .from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, row.id))).at(0)?.at,
     team,
-    dispatchBelow: isDispatcher(row) ? await readDispatchBelow(row.id) : undefined,
+    dispatchBelow: isDispatcher(row) ? await readDispatchBelow(row.id, actor) : undefined,
   };
 }
 
@@ -93,10 +96,10 @@ const BOOT = randomUUID();
 let lastSeq = 0;
 const nextSeq = () => ++lastSeq;
 
-export async function computeTaskActions(taskId: string): Promise<TaskActions | null> {
+export async function computeTaskActions(taskId: string, actor?: Actor): Promise<TaskActions | null> {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row) return null;
-  const facts = await readActionFacts(row);
+  const facts = await readActionFacts(row, actor);
   const primary: PrimaryAction | null = primaryAction(facts);
   return {
     taskId,
@@ -122,7 +125,7 @@ export function mountTaskActionRoutes(api: Hono): void {
     // 多人模式下 SSE 过滤器按任务认项目、缓存没命中的第一条事件会丢：这里已经读到了，顺手记上，
     // 免得这个任务的第一条失效信号送不到正开着它的这张页面。
     rememberTaskProject(taskId, row.projectId);
-    const actions = await computeTaskActions(taskId);
+    const actions = await computeTaskActions(taskId, actorOf(c));
     return actions ? c.json(actions) : c.json({ error: "not found" }, 404);
   });
 }

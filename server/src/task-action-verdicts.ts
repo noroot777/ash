@@ -55,7 +55,13 @@ export type ActionFacts = {
   dispatchBelow?: DispatchBelow[];
 };
 
-export type DispatchBelow = { id: string; title: string | null; status: string; verifyRound: number | null; freeReviewActive: boolean };
+/** 整棵里有调用者看不见的项目时对人怎么说（不带那几条的标题）。 */
+export const HIDDEN_BELOW_TEXT = "名下有子任务在你看不到的项目里，不能整棵一起处置";
+
+/** `hidden` = 调用者看不见它所在的项目：只知道有这么一条，标题是 null，判据整笔拒、不点它的名。 */
+export type DispatchBelow = {
+  id: string; hidden: boolean; title: string | null; status: string; verifyRound: number | null; freeReviewActive: boolean;
+};
 
 /** 这一条自己能不能跟着冻结（口径同 archiveVerdict 对任务自己的那几项）。不能时回一个短词说它在干什么。 */
 function dispatchUnsettled(below: DispatchBelow): string | null {
@@ -207,7 +213,8 @@ export function archiveVerdict(f: ActionFacts): Verdict {
     return block("就地验证轮还没结束（可能正等你答复），处理完再归档", { status: task.status });
   }
   if (task.workflowMode === "free" && f.freeReviewActive) return block("自由审查正在进行，结束后再归档");
-  // 子孙跟着一起冻结（dispatch-archive.ts）：有一条还没结束，整棵都等着。
+  // 子孙跟着一起冻结（dispatch-archive.ts）：有一条看不见就整笔不做；有一条还没结束，整棵都等着。
+  if ((f.dispatchBelow ?? []).some((below) => below.hidden)) return block(HIDDEN_BELOW_TEXT);
   const unsettled = (f.dispatchBelow ?? []).flatMap((below) => {
     const doing = dispatchUnsettled(below);
     return doing ? [{ ...below, doing }] : [];

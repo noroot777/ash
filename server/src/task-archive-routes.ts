@@ -9,11 +9,13 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
 import { reclaimGateSnapshots } from "./accept-gate-reclaim.js";
-import { isAcceptingTask, isAdmitting } from "./acceptance-lock.js";
+import { beginFreezing, isAcceptingTask, isAdmitting } from "./acceptance-lock.js";
+import { actorOf } from "./auth/context.js";
+import { dispatchTree } from "./dispatch-hold.js";
 import { claimWorkspaceTurn, isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { cleanupArchivedWorkspaces, type ArchiveCleanupTarget } from "./task-archive-cleanup.js";
-import { archivedTogether, isDispatcher, readDispatchBelow } from "./dispatch-archive.js";
+import { archivedTogether, HIDDEN_BELOW_TEXT, isDispatcher, readDispatchBelow } from "./dispatch-archive.js";
 import { acceptedHeadRef, commitAt } from "./task-branch-plan.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { enrichTasks, publishTaskUpdated } from "./task-store.js";
@@ -37,7 +39,9 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     // 状态不是终态、团队执行者（跟着团队一起归档）、就地验证轮没结束、自由审查正在进行：
     // 判据见 archiveVerdict，界面上那颗「归档」读同一份。
     // 派出去的子孙有没结束的也在这里挡回去（判据同一份，界面上那颗键也读它）。
-    const facts = await readActionFacts(r);
+    // 名下有调用者看不见的项目里的子孙：整笔不做、不报那几条的标题（dispatch-archive.ts 文件头）。
+    const actor = actorOf(c);
+    const facts = await readActionFacts(r, actor);
     const verdict = archiveVerdict(facts);
     if (!verdict.ok) return c.json({ error: verdict.reason, ...verdict.detail }, 409);
     // 归档 = 冻结。回合被占（status 尚未落 running）或验收正在执行时归档，会让一个「冻结」
@@ -63,24 +67,30 @@ export function mountTaskArchiveRoutes(api: Hono): void {
         return c.json({ error, childId: busy.id }, 409);
       }
     }
-    // 派出去的子孙跟着冻结：同团队那段，占着回合锁、在验收、在加成员的都挡回去。
-    const below = facts.dispatchBelow ?? [];
-    const busyBelow = below.find((row) => isAcceptingTask(row.id) || isAdmitting(row.id) || isTurnClaimed(row.id));
-    if (busyBelow) {
-      return c.json({ error: `子任务「${busyBelow.title || busyBelow.id}」正在验收或回合中，结束后再归档`, childId: busyBelow.id }, 409);
-    }
     const ts = now();
-    const dispatched = below.map((row) => row.id);
-    // 判据读完到真的写下去之间，子孙可能被点了运行。占住它们的回合锁（挡住新回合起跑），占住后再判一遍
-    // 才写；写完就还，后面清理磁盘时 cleanupArchivedWorkspaces 要自己再占。
+    let dispatched: string[] = [];
+    // 派出去的子孙跟着冻结。判据读完到真的写下去之间，整棵不能长出新的（建任务那一层占「挂进来」位，
+    // team-admission.ts），子孙也不能被点了运行：先冻住整棵、占住子孙的回合锁，再重读、重判才写；
+    // 回合锁写完就还，后面清理磁盘时 cleanupArchivedWorkspaces 要自己再占。
     if (r.mode !== "team") {
-      const hold = dispatched.length ? claimWorkspaceTurn(dispatched) : () => {};
-      if (!hold) return c.json({ error: "子任务正有回合要开始，结束后再归档" }, 409);
+      const frozen = await freezeTree(r);
+      if (!frozen) return c.json({ error: "名下正在加入新的任务（子任务或审查），结束后再归档" }, 409);
       try {
-        const fresh: Verdict = dispatched.length ? archiveVerdict({ ...facts, dispatchBelow: await readDispatchBelow(r.id) }) : { ok: true };
+        const below = isDispatcher(r) ? await readDispatchBelow(r.id, actor) : [];
+        const fresh: Verdict = below.length ? archiveVerdict({ ...facts, dispatchBelow: below }) : { ok: true };
         if (!fresh.ok) return c.json({ error: fresh.reason, ...fresh.detail }, 409);
-        await archiveRows([r.id, ...dispatched], ts);
-      } finally { hold(); }
+        // 同团队那段：占着回合锁、在验收、在加成员的都挡回去。
+        const busyBelow = below.find((row) => isAcceptingTask(row.id) || isAdmitting(row.id) || isTurnClaimed(row.id));
+        if (busyBelow) {
+          return c.json({ error: `子任务「${busyBelow.title || busyBelow.id}」正在验收或回合中，结束后再归档`, childId: busyBelow.id }, 409);
+        }
+        dispatched = below.map((row) => row.id);
+        const hold = dispatched.length ? claimWorkspaceTurn(dispatched) : () => {};
+        if (!hold) return c.json({ error: "子任务正有回合要开始，结束后再归档" }, 409);
+        try {
+          await archiveRows([r.id, ...dispatched], ts);
+        } finally { hold(); }
+      } finally { frozen(); }
     }
     // 团队(§Team):归档才是「这件事结束了」—— 先停掉调度台进程和所有在跑的执行者,
     // 再把执行者一并归档(不管它们各自停在什么状态:团队没了,散在列表里的执行者只是
@@ -153,7 +163,9 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     // 执行者就能在正被删的目录里起跑。占同一把锁 = 排在清理后面;占不到就如实让用户
     // 稍后再点一次(清理是秒级的)。团队连执行者一起占,因为取回也是整支队伍一起回来。
     // 派出去的子孙：只带回跟它同一刻归档的那几条（dispatch-archive.ts 文件头）。
-    const dispatched = isDispatcher(r) ? await archivedTogether(r.id, r.archivedAt) : [];
+    const together = isDispatcher(r) ? await archivedTogether(r.id, r.archivedAt, actorOf(c)) : { ids: [], hidden: false };
+    if (together.hidden) return c.json({ error: HIDDEN_BELOW_TEXT }, 409);
+    const dispatched = together.ids;
     const family = [r.id, ...(r.mode === "team"
       ? (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, r.id))).map((w) => w.id)
       : dispatched)];
@@ -163,15 +175,13 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     }
     try {
       const ts = now();
-      await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.id, r.id));
+      // 派出去的子孙和它一笔解冻：分两笔的话中间失败，就剩「父任务回来了、子孙还冻着」，再点取回也只是幂等返回。
+      await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(inArray(tasks.id, [r.id, ...dispatched]));
       // 对称:团队回来了,它的执行者也一起回来(归档时是整支队伍一起走的)
       if (r.mode === "team") {
         await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
       }
-      if (dispatched.length) {
-        await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(inArray(tasks.id, dispatched));
-        for (const id of dispatched) await publishTaskUpdated(id);
-      }
+      for (const id of dispatched) await publishTaskUpdated(id);
       const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];
       // 归档会按设置把 worktree 删掉,所以「取回」之后的工作区状态必须当场说清楚 ——
       // 否则用户点开任务看见一个不存在的路径,只能自己猜还能不能接着跑。
@@ -200,6 +210,24 @@ async function restoreNoteFor(projectId: string, taskId: string): Promise<string
   if (head) return `工作区和任务分支都已清理，下次运行会从任务完成时的提交 ${head.slice(0, 8)} 重建。`;
   return "工作区和任务分支都已不在（归档清理或验收时收掉了），下次运行会退回这个任务的开工提交；"
     + "它做完的改动如果已经合进目标分支，需要你自己决定要不要带回来。";
+}
+
+/**
+ * 冻住它和名下整棵（含已归档的那几层）的成员集合（acceptance-lock.ts `beginFreezing`）。读整棵和冻上之间可能刚挂进来
+ * 一条，冻上之后再读一遍、把多出来的补冻上；之后不会再多（挂进来要占派它的那条往上每一层，`r` 已经冻着）。
+ * 有一位正在加成员 / 正在验收就返回 null。
+ */
+async function freezeTree(r: { id: string; mode: string | null; parentId: string | null }): Promise<(() => void) | null> {
+  const before = isDispatcher(r) ? await dispatchTree(r.id) : [];
+  const frozen = beginFreezing([r.id, ...before]);
+  if (!frozen || !isDispatcher(r)) return frozen;
+  const extra = (await dispatchTree(r.id)).filter((id) => !before.includes(id));
+  const more = extra.length ? beginFreezing(extra) : () => {};
+  if (!more) {
+    frozen();
+    return null;
+  }
+  return () => { more(); frozen(); };
 }
 
 /** 一起冻结的这一批落在同一刻（取回时按这一刻认「是这次一起归档的」，dispatch-archive.ts）。 */

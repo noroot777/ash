@@ -5,6 +5,10 @@
 //   2. 都结束了：整棵同一刻归档，各自的 worktree 和分支一起收；之前就单独归档的那条原样不动。
 //   3. 取回：只带回同一刻归档的那几条。
 //   4. 团队 / 讨论关着：新建团队 / 讨论任务、团队执行者、改成这两种模式、调度台派活一律拒；开着照旧。
+//   5. 已归档的任务名下建不出没归档的新任务（POST /tasks 带 dispatchedBy 回 409）。
+//   6. 建任务和整棵归档互斥：正在挂进来时归档挡回；正冻着时挂不进来。
+//   7. 取回是一笔：父任务和子孙同一条语句解冻，中途失败不会只回来一半。
+//   8. 名下有调用者看不见的项目里的子孙：归档、取回整笔不做，不报那条的标题，也不碰它的磁盘。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -14,6 +18,8 @@ import { Hono } from "hono";
 import { eq, inArray } from "drizzle-orm";
 import { legacyModeRefusal } from "@navi/shared/legacy-modes";
 import { releaseTmpDb } from "./tmp-db.js";
+
+type Json = Record<string, unknown>;
 
 const stage = mkdtempSync(join(tmpdir(), "navi-dispatch-archive-"));
 const repo = join(stage, "repo");
@@ -44,6 +50,8 @@ try {
   const { readActionFacts } = await import("../src/task-actions.js");
   const { archiveVerdict } = await import("../src/task-action-verdicts.js");
   const { dispatchWorkers } = await import("../src/team/dispatch.js");
+  const { createTasks } = await import("../src/task-store.js");
+  const { beginFreezing } = await import("../src/acceptance-lock.js");
   await ensureSchema();
   await setInstanceMode("single", stage);
 
@@ -137,6 +145,135 @@ try {
     assert.notEqual((await create({ mode: "duet" })).status, 409, "开着时讨论照旧建得出");
     delete process.env.NAVI_LEGACY_TEAM_AND_DUET;
     console.log("✓ 团队 / 讨论关着时建不出新的，开着照旧");
+  }
+
+  const create = (body: Json) => app.request("/tasks", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectId: "project", title: "新建", useWorktree: false, ...body }),
+  });
+  const newRow = (id: string, dispatchedBy: string) => ({
+    id, projectId: "project", dispatchedBy, title: id, body: "", mode: "single", status: "backlog" as const,
+    useWorktree: false, createdAt: ts, updatedAt: ts,
+  });
+
+  // ── 5. 已归档的名下建不出没归档的 ─────────────────────────────────────────
+  {
+    await task("closed");
+    assert.equal((await post("/tasks/closed/archive")).status, 200);
+    const refused = await create({ dispatchedBy: "closed", title: "迟来的子任务" });
+    assert.equal(refused.status, 409, "派它的任务已归档就不建");
+    assert.match((await refused.json() as { error: string }).error, /已归档/);
+    assert.equal((await db.select().from(tasks).where(eq(tasks.dispatchedBy, "closed"))).length, 0, "一行都不落");
+    console.log("✓ 已归档的任务名下建不出新任务");
+  }
+
+  // ── 6. 建任务和整棵归档互斥 ────────────────────────────────────────────────
+  {
+    await task("raceParent");
+    await task("raceChild", { dispatchedBy: "raceParent" });
+    // 孙辈正在落库（停在 beforeInsert）：归档挡回，落库照常，整棵都没归档。
+    let release!: () => void;
+    let reached!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    const arrived = new Promise<void>((resolve) => { reached = resolve; });
+    const creation = createTasks([newRow("raceGrandchild", "raceChild")], undefined, async () => { reached(); await paused; });
+    await arrived;
+    const archival = await post("/tasks/raceParent/archive");
+    assert.equal(archival.status, 409, "名下正在挂进来时归档挡回");
+    assert.match((await archival.json() as { error: string }).error, /正在加入新的任务/);
+    release();
+    await creation;
+    for (const id of ["raceParent", "raceChild", "raceGrandchild"]) assert.equal((await row(id)).archived, false, `${id} 没被归档`);
+    // 反过来：整棵正冻着（归档在「判 → 写」之间），孙辈挂不进来。
+    const frozen = beginFreezing(["raceParent", "raceChild", "raceGrandchild"])!;
+    assert.ok(frozen);
+    await assert.rejects(createTasks([newRow("lateGrandchild", "raceChild")]), /正在归档/, "冻着时挂不进来");
+    frozen();
+    assert.equal((await db.select().from(tasks).where(eq(tasks.id, "lateGrandchild"))).length, 0);
+    // 冻结放开后照常归档，刚才落库的孙辈一起走。
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "raceGrandchild"));
+    assert.equal((await post("/tasks/raceParent/archive")).status, 200);
+    assert.equal((await row("raceGrandchild")).archived, true);
+    console.log("✓ 建任务和整棵归档互斥，两个方向都不会落出「归档了的名下有没归档的」");
+  }
+
+  // ── 7. 取回是一笔 ─────────────────────────────────────────────────────────
+  {
+    // 数「解冻」那几笔写；`failFirst` 时第一笔抛错（Hono 会把它打到 stderr，那一行是预期的）。
+    const originalUpdate = db.update.bind(db);
+    const countRestores = (failFirst: boolean) => {
+      let writes = 0;
+      db.update = ((table: never) => {
+        const builder = originalUpdate(table);
+        const originalSet = builder.set.bind(builder);
+        builder.set = ((values: Json) => {
+          if (values.archived === false && ++writes === 1 && failFirst) throw new Error("注入：解冻那一笔写失败");
+          return originalSet(values as never);
+        }) as typeof builder.set;
+        return builder;
+      }) as typeof db.update;
+      return () => writes;
+    };
+    const family = ["raceParent", "raceChild", "raceGrandchild"];
+    let writes = countRestores(true);
+    try {
+      assert.equal((await post("/tasks/raceParent/unarchive")).status, 500);
+    } finally { db.update = originalUpdate; }
+    for (const id of family) assert.equal((await row(id)).archived, true, `${id} 原样冻着，不会只回来一半`);
+    writes = countRestores(false);
+    try {
+      assert.equal((await post("/tasks/raceParent/unarchive")).status, 200);
+    } finally { db.update = originalUpdate; }
+    assert.equal(writes(), 1, "父任务和子孙同一笔解冻（分两笔时第二笔失败就剩一半）");
+    for (const id of family) assert.equal((await row(id)).archived, false, `${id} 一起回来`);
+    console.log("✓ 取回是一笔，失败了整棵原样冻着、重试能整棵回来");
+  }
+
+  // ── 8. 名下有看不见的项目：整笔不做、不报标题、不碰磁盘 ──────────────────
+  {
+    const { users, projectMembers } = await import("../src/db/schema.js");
+    const { setActor } = await import("../src/auth/context.js");
+    const { resourceGate } = await import("../src/auth/resource-gate.js");
+    const { computeTaskActions } = await import("../src/task-actions.js");
+    const secretRepo = join(stage, "secret");
+    execFileSync("git", ["init", "-b", "main", secretRepo]);
+    execFileSync("git", ["-C", secretRepo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "seed"]);
+    await db.insert(projects).values({ id: "secret", name: "别人的项目", repoPath: secretRepo, createdAt: ts });
+    await task("scopeParent");
+    await task("secretChild", { projectId: "secret", dispatchedBy: "scopeParent", title: "机密子任务", useWorktree: true });
+    const secretWs = await prepareWorktree(secretRepo, "secretChild", "main");
+    // 取回那一半：先在自用模式下整棵一起归档好（取回时它们同一刻）。
+    await task("scopeArchived");
+    await task("secretArchived", { projectId: "secret", dispatchedBy: "scopeArchived", title: "机密已归档" });
+    assert.equal((await post("/tasks/scopeArchived/archive")).status, 200);
+
+    await db.insert(users).values({ id: "reader", name: "reader", dirName: "reader", role: "member", status: "active", createdAt: ts });
+    await db.insert(projectMembers).values({ projectId: "project", userId: "reader", role: "member", addedAt: ts });
+    await setInstanceMode("multi", stage);
+    const reader = { kind: "user", userId: "reader", role: "member", name: "reader" } as const;
+    const scoped = new Hono();
+    scoped.use("*", async (context, next) => { setActor(context, reader); await next(); });
+    scoped.use("*", resourceGate());
+    scoped.route("/api", app);
+
+    const archival = await scoped.request("/api/tasks/scopeParent/archive", { method: "POST" });
+    assert.equal(archival.status, 409, "名下有看不见的就不归档");
+    const archivalText = await archival.text();
+    assert.match(archivalText, /看不到的项目/);
+    assert.doesNotMatch(archivalText, /机密/, "不报看不见那条的标题");
+    assert.equal((await row("scopeParent")).archived, false);
+    assert.equal((await row("secretChild")).archived, false);
+    assert.ok(existsSync(secretWs.path) && execFileSync("git", ["-C", secretRepo, "branch", "--list", worktreeBranchName("secretChild")], { encoding: "utf8" }).trim(), "它的 worktree 和分支原样在");
+    const actions = await computeTaskActions("scopeParent", reader);
+    assert.equal(actions?.archive.ok, false, "界面那颗键读同一份");
+    assert.doesNotMatch(JSON.stringify(actions), /机密/);
+
+    const restore = await scoped.request("/api/tasks/scopeArchived/unarchive", { method: "POST" });
+    assert.equal(restore.status, 409, "同一刻归档的里有看不见的就不取回");
+    assert.doesNotMatch(await restore.text(), /机密/);
+    assert.equal((await row("scopeArchived")).archived, true);
+    assert.equal((await row("secretArchived")).archived, true);
+    console.log("✓ 名下有看不见的项目时归档、取回整笔不做，不报标题、不碰磁盘");
   }
 
   console.log("✓ test-dispatch-archive 全部通过");

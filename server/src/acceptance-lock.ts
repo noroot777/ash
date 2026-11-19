@@ -7,11 +7,32 @@
 // （team-acceptance-hold.ts），验收期间成员一多，多出来的那位不在占位里、照样起跑、改共享目录（审查实测：团队验收
 // 落章时新执行者正在跑）。所以加任务占一个位，跟验收互斥：加着的时候验收开不了，验收着的时候加不进来。
 // 加任务之间可以并发，按计数记。占哪几位见 team-admission.ts（只看挂靠关系，不看 mode）。
+//
+// 归档整棵派活树（dispatch-archive.ts）也要成员集合在「判 → 写」之间不长：占一个冻结位，冻着的时候加不进来，
+// 正在加的时候冻不上。派出去的任务落库时占的是「挂进来」的位（beginJoining），占在派它的那条往上每一层：它只跟冻结
+// 互斥，不跟验收互斥 —— 祖辈在验收不妨碍孙辈派活。
 const acceptingTaskIds = new Set<string>();
 const admitting = new Map<string, number>();
+const joining = new Map<string, number>();
+const freezing = new Set<string>();
+
+/** 计数位的占与放（同一个任务可以同时有几笔在加）。 */
+function hold(slots: Map<string, number>, ids: readonly string[]): () => void {
+  for (const id of ids) slots.set(id, (slots.get(id) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const id of ids) {
+      const left = (slots.get(id) ?? 1) - 1;
+      if (left > 0) slots.set(id, left);
+      else slots.delete(id);
+    }
+  };
+}
 
 export function beginAccepting(taskId: string): boolean {
-  if (acceptingTaskIds.has(taskId) || admitting.has(taskId)) return false;
+  if (acceptingTaskIds.has(taskId) || admitting.has(taskId) || freezing.has(taskId)) return false;
   acceptingTaskIds.add(taskId);
   return true;
 }
@@ -37,16 +58,15 @@ export function isAcceptingTask(taskId: string): boolean {
  * 新任务落库之后调。
  */
 export function beginAdmitting(taskId: string): (() => void) | null {
-  if (acceptingTaskIds.has(taskId)) return null;
-  admitting.set(taskId, (admitting.get(taskId) ?? 0) + 1);
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    const left = (admitting.get(taskId) ?? 1) - 1;
-    if (left > 0) admitting.set(taskId, left);
-    else admitting.delete(taskId);
-  };
+  if (acceptingTaskIds.has(taskId) || freezing.has(taskId)) return null;
+  return hold(admitting, [taskId]);
+}
+
+/** 派出去的任务挂进来：占住派它的那条往上每一层。其中有正冻着的就返回 null；否则返回释放函数。 */
+export function beginJoining(taskIds: readonly string[]): (() => void) | null {
+  const ids = [...new Set(taskIds)];
+  if (ids.some((id) => freezing.has(id))) return null;
+  return hold(joining, ids);
 }
 
 /**
@@ -57,7 +77,24 @@ export function isAdmitting(taskId: string): boolean {
   return admitting.has(taskId);
 }
 
-/** beginAccepting 没占到时对人怎么说：是有成员正在加进来，就说这个（几百毫秒的事），否则用调用方那一句。 */
+/**
+ * 冻住这几条的成员集合（整棵归档的「判 → 写」那一段）：同步，要么全冻上、要么一个不冻。其中有正在加成员、有派出去的
+ * 正在挂进来、正在验收或已经冻着的就返回 null；否则返回释放函数。
+ */
+export function beginFreezing(taskIds: readonly string[]): (() => void) | null {
+  const ids = [...new Set(taskIds)];
+  if (ids.some((id) => admitting.has(id) || joining.has(id) || acceptingTaskIds.has(id) || freezing.has(id))) return null;
+  for (const id of ids) freezing.add(id);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const id of ids) freezing.delete(id);
+  };
+}
+
+/** beginAccepting 没占到时对人怎么说：是有成员正在加进来或正冻着，就说这个（几百毫秒的事），否则用调用方那一句。 */
 export function acceptingBusyText(taskId: string, otherwise: string): string {
-  return admitting.has(taskId) ? "名下正在加入新的任务（执行者、子任务或审查），稍后再试" : otherwise;
+  if (admitting.has(taskId)) return "名下正在加入新的任务（执行者、子任务或审查），稍后再试";
+  return freezing.has(taskId) ? "它所在的派活树正在归档，稍后再试" : otherwise;
 }
