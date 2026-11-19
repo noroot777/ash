@@ -13,8 +13,10 @@
 // 能处置派活的那条，不等于能处置它名下的每一条：派活可以跨项目（task-dispatch.ts），名下可能有调用者看不见的
 // 项目里的任务。整棵里有一条看不见，整笔都不做（归档、取回、清磁盘都不碰它），说的时候也不带它的标题。
 //
-// 整棵的「判 → 写」期间成员集合不能长：归档占住整棵的冻结位，建任务那一层占「挂进来」的位，两边互斥
-// （acceptance-lock.ts、team-admission.ts）。
+// 整棵的「判 → 写」期间这次要处置的集合不能变。会改它的只有三种写：新任务挂进来、树里哪条被取回、树里别处也在
+// 归档（`dispatchedBy` 建好就不再改；删除只会让集合变小，归档按读到的 id 写，删掉的那行更新不到）。归档占住整棵的
+// 冻结位，建任务那一层占「挂进来」的位，取回占它要解冻那几条的冻结位，三者两两互斥（acceptance-lock.ts、
+// team-admission.ts、task-archive-routes.ts）。
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Actor } from "./auth/context.js";
 import { visibleProjectIds } from "./auth/visibility.js";

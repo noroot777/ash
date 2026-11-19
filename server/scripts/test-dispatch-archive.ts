@@ -8,7 +8,9 @@
 //   5. 已归档的任务名下建不出没归档的新任务（POST /tasks 带 dispatchedBy 回 409）。
 //   6. 建任务和整棵归档互斥：正在挂进来时归档挡回；正冻着时挂不进来。
 //   7. 取回是一笔：父任务和子孙同一条语句解冻，中途失败不会只回来一半。
-//   8. 名下有调用者看不见的项目里的子孙：归档、取回整笔不做，不报那条的标题，也不碰它的磁盘。
+//   8. 归档冻上整棵之后读库出错：冻结位当场放掉，之后验收、派活、重试归档都照常。
+//   9. 上层归档正在「判 → 写」时，树里已归档的那条取回不了（不然它漏在外面）；归档做完单独取回照旧。
+//  10. 名下有调用者看不见的项目里的子孙：归档、取回整笔不做，不报那条的标题，也不碰它的磁盘。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -51,7 +53,7 @@ try {
   const { archiveVerdict } = await import("../src/task-action-verdicts.js");
   const { dispatchWorkers } = await import("../src/team/dispatch.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { beginFreezing } = await import("../src/acceptance-lock.js");
+  const { beginAccepting, beginFreezing, beginJoining, endAccepting } = await import("../src/acceptance-lock.js");
   await ensureSchema();
   await setInstanceMode("single", stage);
 
@@ -180,7 +182,7 @@ try {
     await arrived;
     const archival = await post("/tasks/raceParent/archive");
     assert.equal(archival.status, 409, "名下正在挂进来时归档挡回");
-    assert.match((await archival.json() as { error: string }).error, /正在加入新的任务/);
+    assert.match((await archival.json() as { error: string }).error, /正在加入/);
     release();
     await creation;
     for (const id of ["raceParent", "raceChild", "raceGrandchild"]) assert.equal((await row(id)).archived, false, `${id} 没被归档`);
@@ -229,7 +231,88 @@ try {
     console.log("✓ 取回是一笔，失败了整棵原样冻着、重试能整棵回来");
   }
 
-  // ── 8. 名下有看不见的项目：整笔不做、不报标题、不碰磁盘 ──────────────────
+  // ── 8. 冻上之后读库出错：冻结位当场放掉 ─────────────────────────────────
+  {
+    await task("leakParent");
+    await task("leakChild", { dispatchedBy: "leakParent" });
+    const originalSelect = db.select.bind(db);
+    let armed = true;
+    // 只在冻结已经生效（挂进来被挡住）时注入一次读库失败，之后立刻恢复。
+    db.select = ((...args: never[]) => {
+      if (armed) {
+        const probe = beginJoining(["leakParent"]);
+        if (!probe) {
+          armed = false;
+          throw new Error("注入：冻上之后读库失败");
+        }
+        probe();
+      }
+      return originalSelect(...args);
+    }) as typeof db.select;
+    try {
+      assert.equal((await post("/tasks/leakParent/archive")).status, 500);
+    } finally { db.select = originalSelect; }
+    assert.equal(armed, false, "前提：确实是在冻着的时候出的错");
+    for (const id of ["leakParent", "leakChild"]) assert.equal((await row(id)).archived, false);
+    const joining = beginJoining(["leakParent", "leakChild"]);
+    assert.ok(joining, "冻结位放掉了，名下能接着挂新任务");
+    joining();
+    assert.equal(beginAccepting("leakParent"), true, "也能验收");
+    endAccepting("leakParent");
+    assert.equal((await post("/tasks/leakParent/archive")).status, 200, "重试归档照常");
+    console.log("✓ 冻上之后读库出错，冻结位当场放掉，重试照常");
+  }
+
+  // ── 9. 上层归档进行中，树里已归档的那条取回不了 ─────────────────────────
+  {
+    const earlierAt = "2026-11-18T00:00:00.000Z";
+    await task("treeParent");
+    await task("treeChild", { dispatchedBy: "treeParent", archived: true, archivedAt: earlierAt });
+    await task("treeGrandchild", { dispatchedBy: "treeChild", archived: true, archivedAt: earlierAt });
+    // 停在归档那一笔写之前，这时去取回子任务。
+    const originalUpdate = db.update.bind(db);
+    let armed = true;
+    let concurrent: Response | null = null;
+    db.update = ((table: never) => {
+      const builder = originalUpdate(table);
+      const originalSet = builder.set.bind(builder);
+      builder.set = ((values: Json) => {
+        const setBuilder = originalSet(values as never);
+        if (values.archived === true && armed) {
+          armed = false;
+          const originalWhere = setBuilder.where.bind(setBuilder);
+          setBuilder.where = (async (condition: never) => {
+            concurrent = await post("/tasks/treeChild/unarchive");
+            return originalWhere(condition);
+          }) as typeof setBuilder.where;
+        }
+        return setBuilder;
+      }) as typeof builder.set;
+      return builder;
+    }) as typeof db.update;
+    let archival: Response;
+    try {
+      archival = await post("/tasks/treeParent/archive");
+    } finally { db.update = originalUpdate; }
+    assert.equal(archival.status, 200);
+    assert.ok(concurrent, "前提：取回确实发生在归档写下去之前");
+    assert.equal((concurrent as Response).status, 409, "冻着时取回挡回");
+    assert.match(await (concurrent as Response).text(), /正在归档/);
+    assert.equal((await row("treeParent")).archived, true);
+    for (const id of ["treeChild", "treeGrandchild"]) assert.equal((await row(id)).archivedAt, earlierAt, `${id} 原样冻着，没漏在外面`);
+    // 归档做完之后，单独取回早先归档的那条照旧。
+    assert.equal((await post("/tasks/treeChild/unarchive")).status, 200);
+    for (const id of ["treeChild", "treeGrandchild"]) assert.equal((await row(id)).archived, false, `${id} 单独取回照旧`);
+    // 反过来：取回正在进行（冻着它那几条）时，上层归档冻不上。
+    const unfreezing = beginFreezing(["treeChild", "treeGrandchild"])!;
+    await db.update(tasks).set({ archived: false, archivedAt: null }).where(eq(tasks.id, "treeParent"));
+    const blocked = await post("/tasks/treeParent/archive");
+    assert.equal(blocked.status, 409, "取回进行中时上层归档挡回");
+    unfreezing();
+    console.log("✓ 上层归档进行中取回不了，取回进行中归档冻不上；做完之后单独取回照旧");
+  }
+
+  // ── 10. 名下有看不见的项目：整笔不做、不报标题、不碰磁盘 ──────────────────
   {
     const { users, projectMembers } = await import("../src/db/schema.js");
     const { setActor } = await import("../src/auth/context.js");
