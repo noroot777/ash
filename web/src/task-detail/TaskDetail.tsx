@@ -4,7 +4,8 @@ import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
-import { TaskRuntimeWorkspace } from "../task-runtime/TaskRuntimeWorkspace.tsx";
+import { RuntimeAutoOpen } from "../task-runtime/RuntimeAutoOpen.tsx";
+import { PlanModeChip } from "./PlanModeChip.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { TaskFileLinks } from "../components/TaskFileLink.tsx";
@@ -113,7 +114,7 @@ export function TaskDetail({
   const holder = useDispatchHolder(task.id, allTasks, task.status === "paused" || task.status === "backlog");
   const conversation = useConversation(task.id);
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, runtime, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
     task, allTasks, tasksReady, conversation,
   });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
@@ -352,6 +353,7 @@ export function TaskDetail({
           },
           onTasksSynced: applySnapshots,
           reviewRetry,
+          runtime,
           onOpenFile: openFileInCenter,
           onOpenFolder: openFolderInCenter,
           activeFilePath: fileView.activePath,
@@ -394,15 +396,12 @@ export function TaskDetail({
                 onDelete={() => setDeleteOpen(true)}
                 onOpenTask={onOpenTask}
                 inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
+                planChip={<PlanModeChip task={task} onOff={(executorId) => {
+                  replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })("/plan off", [], { agent: "codex", executorId })
+                    .catch((reason) => notify(reason instanceof Error ? reason.message : String(reason)));
+                }} />}
                 notify={notify}
               />
-              {task.mode === "single" && task.codexPlanMode && (
-                <div className="task-plan-mode-notice" role="status" aria-label="Codex 计划模式">
-                  <strong>计划模式</strong>
-                  <span>{task.codexPlanScopes?.map((scope) => scope.executorLabel).join("、") || "Codex"}</span>
-                  <code>/plan off</code>
-                </div>
-              )}
               {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
               {task.handoff && (
                 <HandoffBanner
@@ -412,7 +411,6 @@ export function TaskDetail({
                   onTaskUpdate={onTaskUpdate}
                 />
               )}
-              <TaskRuntimeWorkspace key={task.id} taskId={task.id} notify={notify}>
               {previewOpen ? (
                 <PreviewWorkspace key={task.id} taskId={task.id} onClose={() => setPreviewOpen(false)} />
               ) : reviewOpen ? (
@@ -623,7 +621,7 @@ export function TaskDetail({
                   </section>
                 </div>
               )}
-              </TaskRuntimeWorkspace>
+              <RuntimeAutoOpen taskId={task.id} browser={runtime.state.browser} openTab={openTab} />
               {markDoneOpen && (
                 <ConfirmDialog
                   title="标记为已完成"

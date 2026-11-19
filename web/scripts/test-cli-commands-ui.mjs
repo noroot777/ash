@@ -204,13 +204,25 @@ try {
     const completed = recorded.some((session) => session.endedAt && session.endedAt !== previousEnds.get(session.id));
     return completed && !["running", "queued"].includes(task.status) && task;
   }, { interval: 50, message: `任务 ${taskId} 跑完这一回合、回到空闲（task remained busy）` });
+  // 计划模式下的回合以一份定稿计划收尾（上面的假执行器照此产出），「实施此计划？」随即占住回复框
+  // （PlanReadyCard）。接着要用回复框的步骤先把它收起；收起按这一份计划记着，刷新后仍收着。
+  const settlePlanCard = async (task) => {
+    if (!page.url().includes(`task=${task.id}`)) return task;
+    const invocation = await lastInvocation();
+    const planned = invocation.taskId === task.id && invocation.cliState?.plan === true && invocation.cliCommand?.args !== "clarify-ui";
+    if (!planned || !task.codexPlanMode || task.question || !task.codexPlanScopes.some((scope) => scope.executorId === invocation.cliState.profileId)) return task;
+    const collapse = page.getByRole("button", { name: "收起，先看计划", exact: true });
+    await collapse.click();
+    await page.getByRole("textbox", { name: "回复任务" }).waitFor();
+    return task;
+  };
   const sendCodex = async (text) => {
     const previousEnds = await sessionEnds("codex-ui-task");
     await codexReply.fill(`${text} `);
     const replied = page.waitForResponse((value) => value.url().endsWith("/tasks/codex-ui-task/reply") && value.request().method() === "POST");
     await page.getByRole("button", { name: "发送回复", exact: true }).click();
     assert.equal((await replied).status(), 202);
-    return idleTask("codex-ui-task", previousEnds);
+    return settlePlanCard(await idleTask("codex-ui-task", previousEnds));
   };
   const planNotice = page.getByRole("status", { name: "Codex 计划模式" });
   const replyAs = async (text, agent, executorId, taskId = "codex-ui-task") => {
@@ -219,7 +231,7 @@ try {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, agent, executorId }),
     });
     assert.equal(response.status, 202);
-    return idleTask(taskId, previousEnds);
+    return settlePlanCard(await idleTask(taskId, previousEnds));
   };
   const lastInvocation = async () => JSON.parse((await readFile(traceFile, "utf8")).trim().split("\n").at(-1));
 
@@ -348,7 +360,7 @@ try {
     assert.equal(replied.status(), 202);
     assert.equal(replied.request().postDataJSON().agent, "codex");
     assert.equal(replied.request().postDataJSON().executorId, "codex-ui");
-    const task = await idleTask("codex-ui-task", previousEnds);
+    const task = await settlePlanCard(await idleTask("codex-ui-task", previousEnds));
     assert.equal(task.agentType, claudeStandingTask.agentType);
     assert.equal(task.executorId, claudeStandingTask.executorId);
     return task;

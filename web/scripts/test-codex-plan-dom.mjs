@@ -57,10 +57,18 @@ try {
   await dialog.waitFor({ state: "hidden" });
   assert.equal(await page.getByRole("button", { name: "展开计划" }).evaluate((element) => element === document.activeElement), true);
   await page.getByRole("button", { name: "下载计划" }).click();
-  await page.getByRole("button", { name: "继续修改", exact: true }).click();
-  await implement.waitFor({ state: "hidden" });
+  // 「实施此计划？」占着回复框：平常的框不在；收起后缩成一行，框回到它下面，点那一行再展开。
   const reply = page.getByRole("textbox", { name: "回复任务" });
-  assert.equal(await reply.evaluate((element) => element === document.activeElement), true);
+  assert.equal(await reply.count(), 0);
+  await page.getByRole("button", { name: "收起，先看计划", exact: true }).click();
+  await implement.waitFor({ state: "hidden" });
+  await reply.waitFor();
+  await page.getByRole("button", { name: "实施此计划？", exact: true }).click();
+  await implement.waitFor();
+  assert.equal(await reply.count(), 0);
+  await page.getByRole("button", { name: "收起，先看计划", exact: true }).focus();
+  await page.keyboard.press("1");
+  assert.equal(await implement.evaluate((element) => element === document.activeElement), true);
   await page.reload();
   await implement.waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -79,6 +87,17 @@ try {
   assert.equal(sent.agent, "codex");
   assert.equal(sent.executorId, "codex-plan");
   assert.equal(await implement.count(), 0);
+  // 第二条路：在卡里直接写要怎么改，交回出计划的同一个执行器（不是开工）。
+  await page.reload();
+  await implement.waitFor();
+  const revise = page.getByRole("button", { name: "发送修改", exact: true });
+  assert.equal(await revise.isEnabled(), false);
+  await page.getByRole("textbox", { name: "要怎么改这份计划", exact: true }).fill("验证一节再补上手机布局");
+  await revise.click();
+  const revised = JSON.parse(await page.getByLabel("实施请求").innerText());
+  assert.equal(revised.text, "验证一节再补上手机布局");
+  assert.equal(revised.executorId, "codex-plan");
+  await page.screenshot({ path: "/tmp/ash-codex-plan-revised.png", fullPage: true });
   await page.getByRole("button", { name: "重置计划" }).click();
   await page.getByRole("button", { name: "开始拟定", exact: true }).click();
   await page.getByRole("button", { name: "追加草稿" }).click();

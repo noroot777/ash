@@ -36,7 +36,7 @@ import { ReplySendKey } from "./ReplySendKey.tsx";
 import { DispatchDefaultRow, DispatchDefaultSegment, useDispatchDefault } from "./ReplyDispatchDefault.tsx";
 import { DiscussCapsule } from "./ReplyDiscussSegments.tsx";
 import type { ReplyBoxProps } from "./replyBoxProps.ts";
-import { PlanReadyDock, readyPlanFor, type ReadyPlan } from "./PlanReadyDock.tsx";
+import { PlanReadyCard, readyPlanFor, usePlanTakeover, type ReadyPlan } from "./PlanReadyCard.tsx";
 import { useStandingExecutor } from "./useStandingExecutor.ts";
 import { useExecutorProfiles } from "./useExecutorProfiles.ts";
 import { ComposerInput } from "./ComposerInput.tsx";
@@ -90,16 +90,9 @@ export function ReplyBox({
   const [stopping, setStopping] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [commandResult, setCommandResult] = useState<{ taskId: string; text: string } | null>(null);
-  const readyPlan = readyPlanFor(task, conversationItems ?? []);
-  const [revisingPlan, setRevisingPlan] = useState<string | null>(null);
-  const implementPlan = async (ready: ReadyPlan) => {
-    if (sending) return;
-    setSending(true);
-    setSendError(null);
-    try {
-      await onSend(`/plan implement ${ready.plan.id}`, [], { agent: "codex", executorId: ready.executorId, model: ready.model, reasoningEffort: ready.reasoningEffort });
-    } catch (error) { setSendError(error instanceof Error ? error.message : String(error)); }
-    finally { setSending(false); }
+  // 实施、改计划都交回出这份计划的那个执行器：换了人，计划模式的作用域就对不上了。
+  const sendToPlanner = async (ready: ReadyPlan, text: string, attachments: string[]) => {
+    await onSend(text, attachments, { agent: "codex", executorId: ready.executorId, model: ready.model, reasoningEffort: ready.reasoningEffort });
   };
   const currentTaskId = useRef(task.id);
   currentTaskId.current = task.id;
@@ -210,7 +203,9 @@ export function ReplyBox({
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
   // 之后选模型）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
   const takeover = useQuestionTakeover(onAnswer ? task : null);
-  const covering = takeover.covering;
+  // 计划定稿后的「实施此计划？」也照这套占住回复框（PlanReadyCard.tsx）；有题在问、框被别的事接管时让开。
+  const planTakeover = usePlanTakeover(task.id, takeover.card || take ? null : readyPlanFor(task, conversationItems ?? []));
+  const covering = takeover.covering || planTakeover.covering;
   useEffect(() => {
     if (covering) setAnnotating(false);
   }, [covering]);
@@ -513,15 +508,14 @@ export function ReplyBox({
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
-      {readyPlan && revisingPlan !== `${task.id}:${readyPlan.plan.id}` && !covering && !take && (
-        <PlanReadyDock ready={readyPlan} busy={sending} onImplement={(ready) => void implementPlan(ready)} onRevise={() => {
-          setRevisingPlan(`${task.id}:${readyPlan.plan.id}`);
-          textareaRef.current?.focus();
-        }} />
-      )}
       </div>
       {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
         dispatchTarget={dispatchDefault.value} />}
+      {planTakeover.ready && <div className="question-dock">
+        <PlanReadyCard key={planTakeover.ready.plan.id} takeover={planTakeover}
+          onImplement={(ready) => sendToPlanner(ready, `/plan implement ${ready.plan.id}`, [])}
+          onRevise={sendToPlanner} />
+      </div>}
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />

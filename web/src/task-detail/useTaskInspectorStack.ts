@@ -16,6 +16,7 @@ import { dispatchFacts } from "../lib/dispatchTree.ts";
 import { useDispatchFolds } from "./dispatched/dispatchFolds.ts";
 import { startDispatchArrivals, observeDispatchArrivals, type DispatchArrivals } from "./dispatched/dispatchArrivals.ts";
 import { CountedIcon } from "./dispatched/CountedIcon.tsx";
+import { useTaskRuntime } from "../task-runtime/useTaskRuntime.ts";
 
 // 这几档 stage 下默认落在「审议」那一格：到了这一步，用户要看的就是审查那摊事。
 const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
@@ -67,9 +68,22 @@ export function useTaskInspectorStack(
   const reviewing = task.workflowMode === "free"
     ? (free.state?.reviews ?? []).some((run) => run.status === "reviewing")
     : task.stage === "verifying";
-  const inspectors = useMemo(() => dispatchedTab.map((descriptor) => (descriptor.id === "review"
-    ? { ...descriptor, dot: reviewing ? "run" as const : null }
-    : descriptor)), [dispatchedTab, reviewing]);
+  // 服务、浏览器：托管过服务（浏览器还多一种：服务起来了、能去看）才上条；在跑的点主色，停了的灰点。
+  const runtime = useTaskRuntime(task.id);
+  const { service, browser } = runtime.state;
+  const serviceDot = service ? service.running ? "run" as const : "has" as const : null;
+  const browserDot = browser ? browser.status === "ready" ? "run" as const : "has" as const : null;
+  const serviceUsed = !!service;
+  const browserUsed = !!browser || runtime.serviceReady;
+  const inspectors = useMemo(() => {
+    const runtimeTabs = surfaceTabWhenUsed(
+      surfaceTabWhenUsed(dispatchedTab, "service", serviceUsed, () => ({ dot: serviceDot })),
+      "browser", browserUsed, () => ({ dot: browserDot }),
+    );
+    return runtimeTabs.map((descriptor) => (descriptor.id === "review"
+      ? { ...descriptor, dot: reviewing ? "run" as const : null }
+      : descriptor));
+  }, [dispatchedTab, reviewing, serviceUsed, browserUsed, serviceDot, browserDot]);
 
   // 回复框上方那块里还在盯的哨兵（MonitorTrayRow）：两种来源都列、ash 的排前面。ash 那几个才会把任务
   // 叫醒 —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那条已经
@@ -108,5 +122,5 @@ export function useTaskInspectorStack(
   // 「信息」格里最近一轮的用量、上下文、压缩中：取自会话流里最新那条回复（直播值比会话行新）。
   const runFacts = useMemo(() => latestRunFacts(conversation.items), [conversation.items]);
 
-  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds: ended, free, runFacts, dispatchedFolds };
+  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds: ended, free, runFacts, dispatchedFolds, runtime };
 }

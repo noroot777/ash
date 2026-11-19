@@ -6,11 +6,17 @@ import type { InspectorDescriptor, InspectorTabPolicy } from "./types.ts";
 export const INSPECTOR_MIN_WIDTH = 280;
 export const INSPECTOR_MAX_WIDTH = 720;
 export const INSPECTOR_DEFAULT_WIDTH = 340;
+/** 宽格（InspectorDescriptor.wide）占整块布局的比例：默认一半，拖动限在这两头之间。 */
+export const INSPECTOR_WIDE_DEFAULT = 0.5;
+export const INSPECTOR_WIDE_MIN = 0.3;
+export const INSPECTOR_WIDE_MAX = 0.7;
 
 export interface InspectorState {
   openTabs: string[];
   activeTab: string | null;
   width: number;
+  /** 宽格的比例；没拖过就是 INSPECTOR_WIDE_DEFAULT。 */
+  wideRatio: number;
   visible: boolean;
   policyKey: string | null;
   focusKey?: string | null;
@@ -25,6 +31,10 @@ export function clampWidth(value: number) {
   return Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, value));
 }
 
+export function clampWideRatio(value: number) {
+  return Math.min(INSPECTOR_WIDE_MAX, Math.max(INSPECTOR_WIDE_MIN, value));
+}
+
 function defaultState<Context>(
   descriptors: readonly InspectorDescriptor<Context>[],
   defaultVisible: boolean,
@@ -35,6 +45,7 @@ function defaultState<Context>(
     openTabs,
     activeTab: openTabs[0] ?? null,
     width: INSPECTOR_DEFAULT_WIDTH,
+    wideRatio: INSPECTOR_WIDE_DEFAULT,
     visible: defaultVisible && openTabs.length > 0,
     policyKey: null,
     dismissed: [],
@@ -118,13 +129,16 @@ export function readState<Context>(
     const width = typeof parsed.width === "number" && Number.isFinite(parsed.width)
       ? clampWidth(parsed.width)
       : fallback.width;
+    const wideRatio = typeof parsed.wideRatio === "number" && Number.isFinite(parsed.wideRatio)
+      ? clampWideRatio(parsed.wideRatio)
+      : fallback.wideRatio;
     const visible = (typeof parsed.visible === "boolean" ? parsed.visible : fallback.visible)
       && openTabs.length > 0;
     const policyKey = typeof parsed.policyKey === "string" ? parsed.policyKey : null;
     const dismissed = Array.isArray(parsed.dismissed)
       ? parsed.dismissed.filter((id): id is string => typeof id === "string" && descriptorIds.has(id))
       : [];
-    let restored: InspectorState = { openTabs, activeTab, width, visible, policyKey, dismissed, focusKey };
+    let restored: InspectorState = { openTabs, activeTab, width, wideRatio, visible, policyKey, dismissed, focusKey };
     if (tabPolicy && policyKey !== tabPolicy.stateKey) {
       // A semantic task-state change deliberately wins over restored focus once.
       return onEntry(applyTabPolicy(restored, tabPolicy, descriptors));
