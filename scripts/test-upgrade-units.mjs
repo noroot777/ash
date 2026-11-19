@@ -126,6 +126,39 @@ console.log(JSON.stringify({ ...r, held: readdirSync(${JSON.stringify(lockDir)})
     console.log("✓ 升级锁:有活着的别人就退下(同时到的都退下),同一次操作的下一段不冲突,死掉的不算数,读不懂的不删");
   }
 
+  // ── 漏出去的 token 不算通行证 ───────────────────────────────────────────────────
+  // token 会顺着环境变量漏进常驻服务、再被内置终端继承:两个毫不相干的维护进程拿着同一串字,不许互相放行(审查实测)。
+  {
+    const inst = join(dir, "inst"); // 不是 git 检出:锁放在安装目录下(checkoutLockDir)
+    mkdirSync(inst);
+    const lockDir = join(inst, ".navi-upgrade.lock.d");
+    const leaked = "ab".repeat(12);
+    const lockUrl = JSON.stringify(new URL("./upgrade-lock.mjs", import.meta.url).href);
+    const holder = spawn(process.execPath, ["--input-type=module", "-e", `import { acquireUpgradeLock } from ${lockUrl};
+const r = acquireUpgradeLock([${JSON.stringify(lockDir)}], { note: "restart", token: ${JSON.stringify(leaked)} });
+console.log(r.ok ? "held" : r.why);
+if (r.ok) process.on("exit", r.release);
+process.stdin.on("end", () => process.exit(0)).resume();`], { stdio: ["pipe", "pipe", "inherit"] });
+    const first = await new Promise((res) => holder.stdout.once("data", (b) => res(String(b).trim())));
+    assert.equal(first, "held", first);
+    try {
+      const twin = JSON.parse(spawnSync(process.execPath, ["--input-type=module", "-e", `import { acquireUpgradeLock } from ${lockUrl};
+const r = acquireUpgradeLock([${JSON.stringify(lockDir)}], { note: "setup", token: ${JSON.stringify(leaked)} });
+if (r.ok) r.release();
+console.log(JSON.stringify(r));`], { encoding: "utf8" }).stdout);
+      assert.equal(twin.ok, false, "拿着同一串 token 的另一个进程(不是那份登记主人的子进程)被放行了");
+      assert.match(twin.why, /正被另一次 restart 占着/);
+      const viaEnv = spawnSync(process.execPath, ["--input-type=module", "-e", `import { holdOrExit } from ${lockUrl};
+holdOrExit({ repo: ${JSON.stringify(inst)}, note: "setup" }); console.log("got it");`], { encoding: "utf8", env: { ...process.env, NAVI_UPGRADE_LOCK_TOKEN: leaked } });
+      assert.equal(viaEnv.status, 2, `环境里带着漏出来的 token,restart / setup 照样得让开\n${viaEnv.stdout}${viaEnv.stderr}`);
+    } finally {
+      holder.stdin.end();
+      await new Promise((res) => (holder.exitCode !== null ? res() : holder.once("exit", res)));
+    }
+    assert.deepEqual(readdirSync(lockDir), [], "让开的那几个留下了登记");
+    console.log("✓ 漏出去的 token 不算通行证:只有递锁的父进程那份放行,终端里继承来的同一串字照样要排队");
+  }
+
   // ── 数据锁按库文件的真实落点 ──────────────────────────────────────────────────────
   {
     const shared = join(dir, "shared");

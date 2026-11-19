@@ -197,7 +197,8 @@ export function verifyData(baseline, liveFile) {
 /**
  * 升级做到哪了,记在数据目录里(跟着这份数据走;不进 git):
  *   built      最后一次构建成功时的 { commit, stamp }(stamp 见 buildStamp)
- *   verifyPending { backupFile, backupDigest } 数据核对还没过(读不出来、或者有缺):再跑会先补核,过了才清掉
+ *   verifyPending [{ backupFile, backupDigest }] 数据核对还没过的那几份基线(读不出来、或者有缺;老格式是单个对象):往后每一次
+ *              升级的成功出口都得先把它们亲自补核过(pendingBaselines),后来留的底顶替不了
  *   servedPid  最后一次起好的服务            port       这份安装的服务端口(锁收了之后再跑也找得到)
  *   inProgress { from, to, backup, backupFile, backupDigest } 有它 = 上次没做完,再跑接着做(from 和备份沿用那一次的;
  *              backupFile / backupDigest = 备份里那份库和它留底时的指纹)
@@ -205,8 +206,29 @@ export function verifyData(baseline, liveFile) {
  */
 export const stateFile = (dataDir) => join(dataDir, "upgrade.json");
 
+/**
+ * 没有这份文件 = 头一回升级,返回 {};有却读不懂就抛出去 —— 里面可能记着还没核对过的数据(verifyPending),当成 {} 就把
+ * 那笔账悄悄抹了。
+ */
 export function readState(dataDir) {
-  try { return JSON.parse(readFileSync(stateFile(dataDir), "utf8")) ?? {}; } catch { return {}; }
+  const file = stateFile(dataDir);
+  let text;
+  try { text = readFileSync(file, "utf8"); } catch (error) {
+    if (error?.code === "ENOENT") return {};
+    throw new Error(`升级进度 ${file} 读不了(${error.code ?? error.message})`);
+  }
+  let state;
+  try { state = JSON.parse(text); } catch (error) { state = error; }
+  if (!state || typeof state !== "object" || Array.isArray(state) || state instanceof Error) {
+    throw new Error(`升级进度 ${file} 读不懂(不是一份 JSON 对象);里面可能记着上次没核对过的数据 —— 先看一眼,确定没用再挪走它`);
+  }
+  return state;
+}
+
+/** 还欠着的数据核对:[{ file, digest }](verifyPending 老格式是单个对象)。 */
+export function pendingBaselines(state) {
+  const p = state.verifyPending;
+  return (Array.isArray(p) ? p : p ? [p] : []).map((x) => ({ file: x?.backupFile ?? null, digest: x?.backupDigest ?? null }));
 }
 
 export function writeState(dataDir, state) {

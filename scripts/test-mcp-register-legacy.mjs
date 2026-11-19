@@ -6,7 +6,7 @@
 // 判据是「它们本人读完那份配置之后还列出哪些登记」,自己解析配置文件证明不了这件事。没装哪个就跳过哪个。
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { parseCodexList } from "./codex-mcp.mjs";
@@ -44,11 +44,11 @@ function stage(label) {
 }
 
 /** 在那个家里跑一遍 registerNaviMcp,收回它说了什么。 */
-function register({ home, entry, env }) {
+function register({ home, entry, env, cwd = home }) {
   const code = `import { registerNaviMcp } from ${JSON.stringify(REGISTER)};
 registerNaviMcp({ repo: ${JSON.stringify(dirname(dirname(dirname(entry))))}, port: 1,
   ok: (m) => console.log("OK " + m), warn: (m) => console.log("WARN " + m), say: (m) => console.log("SAY " + m) });`;
-  const res = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: home, env, encoding: "utf8", timeout: 180_000 });
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd, env, encoding: "utf8", timeout: 180_000 });
   assert.equal(res.status, 0, `registerNaviMcp 自己挂了\n${res.stdout}\n${res.stderr}`);
   return res.stdout;
 }
@@ -114,6 +114,24 @@ try {
       assert.match(out, /SAY .*codex:ash 这个名字的条目起的不是 Navi 的 MCP 脚本/);
       console.log("✓ codex:同名却起着别的程序的 ash 原样留着,报一句");
     }
+  }
+
+  // ③ 同一个名字两处都有:个人配置里的 ash 是别的工具,当前项目(local 作用域)里的 ash 起着 Navi 的脚本。
+  //    `claude mcp list` 在项目里看是合并视图;拿项目那条当依据去删 user 那条,删掉的就是人家的工具(审查实测)。
+  if (clis.claude) {
+    const s = stage("scopes");
+    const project = join(s.home, "some-project");
+    mkdirSync(project);
+    const other = stdio("user-private-tool", ["serve"]);
+    const local = { mcpServers: { ash: stdio("node", [s.entry]) } };
+    writeFileSync(claudeJson(s.home), JSON.stringify({ mcpServers: { ash: other }, projects: { [realpathSync(project)]: local } }));
+    const out = register({ ...s, cwd: project });
+    const after = JSON.parse(readFileSync(claudeJson(s.home), "utf8"));
+    assert.deepEqual(after.mcpServers.ash, other, `个人配置里同名的别的工具不许删\n${out}`);
+    assert.ok(after.mcpServers.navi, `navi 照常登记到 user 作用域\n${out}`);
+    assert.deepEqual(after.projects[realpathSync(project)].mcpServers, local.mcpServers, "项目自己的登记归项目,不替它动");
+    assert.match(out, /SAY .*claude:ash 这个名字的条目起的不是 Navi 的 MCP 脚本/);
+    console.log("✓ claude:认人和删除是同一个作用域 —— 项目里那条起着 Navi 不作数,个人配置里同名的别的工具不删");
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

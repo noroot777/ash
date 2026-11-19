@@ -11,7 +11,8 @@
 //     不做。两个同时到的会互相看见、都退下 —— 只会「都没拿到」,不会「都拿到了」;
 //   · 主人已死的登记不算数,顺手删掉(它的主人不会再回来写它,删它跟谁都不冲突);读不懂的按活着算,交给人删。
 // 锁两处:这份检出的 git 目录(依赖、产物;worktree 各有各的;解包装的没有 git 目录,放安装目录下)、库和 runs 的真实落点所在的目录
-// (两份检出可以经 NAVI_DATA_DIR / NAVI_DB / 软链指到同一份数据,见 dataLockDirs)。升级第一段拿到锁,拉完代码交给第二段时把 token 经环境变量递过去,第二段用同一个 token 放自己的登记 —— 同一次操作。
+// (两份检出可以经 NAVI_DATA_DIR / NAVI_DB / 软链指到同一份数据,见 dataLockDirs)。升级第一段拿到锁,拉完代码交给第二段时把 token 经环境变量递过去,第二段用同一个 token 放自己的登记 —— 同一次操作;
+// 认的是「父进程放的那份」,不是字符串本身(othersIn)。第二段一接到就把它从环境里抹掉,不往装依赖、起服务那些子进程里传。
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -19,7 +20,7 @@ import { readStorageEnv } from "./env.mjs";
 import { alive, atomicCreate, resourceKeys, selfStartedAtMs } from "./relocate-checkout-lock.mjs";
 import { git } from "./upgrade-git.mjs";
 
-/** 第一段递给第二段的那个 token。 */
+/** 第一段递给第二段的那个 token(只在这一对父子之间有效,见 othersIn)。 */
 export const UPGRADE_LOCK_ENV = "NAVI_UPGRADE_LOCK_TOKEN";
 
 const ENTRY = /^([0-9a-f]+)\.(\d+)\.json$/;
@@ -42,7 +43,11 @@ export function dataLockDirs(dbFile, env = process.env) {
   return [...new Set(keys.map((k) => join(dirname(k), ".navi-upgrade.lock.d")))].sort();
 }
 
-/** 目录里别人那几份还算数的登记:{ file, token, pid, note, startedAt }。 */
+/**
+ * 目录里别人那几份还算数的登记:{ file, token, pid, note, startedAt }。同一个 token 只放过**父进程**那一份(升级第一段把锁递给
+ * 它 spawn 的第二段)—— token 只是一串字,会顺着环境变量漏进常驻服务、再被内置终端继承;只比字符串,两个毫不相干的维护进程
+ * 拿着同一串字就互相放行了(审查实测)。
+ */
 function othersIn(dir, token) {
   let names;
   try { names = readdirSync(dir); } catch (error) {
@@ -52,7 +57,9 @@ function othersIn(dir, token) {
   const out = [];
   for (const name of names) {
     const m = ENTRY.exec(name);
-    if (!m || m[1] === token) continue;
+    if (!m) continue;
+    const pid = Number(m[2]);
+    if (m[1] === token && (pid === process.pid || pid === process.ppid)) continue;
     const file = join(dir, name);
     let body = null;
     try { body = JSON.parse(readFileSync(file, "utf8")); } catch { /* 下面按读不懂处理 */ }
@@ -97,13 +104,13 @@ export function acquireUpgradeLock(dirs, { token = null, note }) {
 
 /**
  * restart / setup 用:拿这份检出(和数据)的锁,拿不到就说清楚退出 2。进程退出时自动放掉。
- * 环境变量里带着 token 的(从某次升级里被叫起来的),算同一次操作。
+ * 一律现开 token:升级不会叫它们,环境里带着的 token 只可能是漏出来的(老版本升级起的服务、它的终端)。
  */
 export function holdOrExit({ repo, dbFile = null, note, env = process.env }) {
   let lock;
   try {
     const dirs = [checkoutLockDir(repo), ...(dbFile ? dataLockDirs(dbFile, env) : [])];
-    lock = acquireUpgradeLock(dirs, { token: env[UPGRADE_LOCK_ENV] || null, note });
+    lock = acquireUpgradeLock(dirs, { note });
   } catch (error) {
     lock = { ok: false, why: error.message };
   }

@@ -99,7 +99,7 @@ createServer((req, res) => {
   if (req.url.startsWith("/api/restart-impact")) {
     return res.end(existsSync(impact) ? readFileSync(impact, "utf8") : '{"survives":[],"resumes":[],"interrupted":[],"mcpDisrupted":[]}');
   }
-  res.end(JSON.stringify({ ok: true, pid: process.pid, version: VERSION, db, instance: { codeDir: repo, dataDir } }));
+  res.end(JSON.stringify({ ok: true, pid: process.pid, version: VERSION, db, instance: { codeDir: repo, dataDir }, upgradeToken: process.env.NAVI_UPGRADE_LOCK_TOKEN ?? null }));
 }).listen(port, "127.0.0.1", () => console.log("listening " + port + " " + VERSION));
 process.on("SIGTERM", () => { for (const l of locks) rmSync(l, { force: true }); process.exit(0); });
 `;

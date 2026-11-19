@@ -4,6 +4,7 @@
 // 幂等:已有 navi 条目的不重复写;但还留着的旧名条目(起的是 Navi 的 MCP 脚本)照样收掉 —— 不然每一回合
 // 两套一模一样的工具同时挂着。claude / codex 走它们自己的 CLI,其余各家见 mcp-legacy-retire.mjs。
 // 同名却起着别的程序的,是用户自己的东西,不动,报一句。
+import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WINDOWS, runCli, which } from "./platform.mjs";
@@ -38,7 +39,12 @@ export function registerNaviMcp({ repo, port, ok, warn, say }) {
   const mcpEntry = join(repo, "mcp", "dist", "index.js");
   // ── claude ────────────────────────────────────────────────────────────────
   if (which("claude")) {
-    const listed = runCli("claude", ["mcp", "list"]);
+    // 在一个空的临时目录里问:`claude mcp list` 会把 cwd 那个项目的 local / project 登记合进来、不标来源,而下面增删都是
+    // `--scope user` —— 拿项目里那条(起的是 Navi)当依据,删掉的却是个人配置里同名的别的工具(审查实测)。空目录里列出来的
+    // 只有用户级那几条,认的和删的是同一条;各项目自己的登记归那个项目,不替它动。
+    const blank = mkdtempSync(join(tmpdir(), "navi-claude-mcp-"));
+    let listed;
+    try { listed = runCli("claude", ["mcp", "list"], { cwd: blank }); } finally { rmSync(blank, { recursive: true, force: true }); }
     const { registered, legacy, foreign } = claudeEntries(listed.stdout);
     // 旧名条目删不掉的留着(两个名字都能用),如实报出来、给出手动删的命令;不算失败。
     const removeLegacy = () => legacy.filter((old) => runCli("claude", ["mcp", "remove", old, "--scope", "user"]).status !== 0);

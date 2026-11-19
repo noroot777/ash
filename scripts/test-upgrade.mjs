@@ -358,7 +358,8 @@ assert.doesNotMatch(out, /已是最新/, out);
 assert.equal(npmCalls().length, npmBefore + 2, `产物缺了文件却没重建\n${out}`);
 assert.ok(existsSync(join(INSTALL, "web", "dist", "assets", "app.js")));
 assert.notEqual((await health())?.pid, pid);
-console.log("✓ 产物里少了一个文件(入口还在)照样重建,不说已是最新");
+assert.equal((await health())?.upgradeToken, null, "升级的锁 token 漏进了常驻服务(它的终端会继承,restart / setup 就被放行了)");
+console.log("✓ 产物里少了一个文件(入口还在)照样重建,不说已是最新;起的服务环境里没有升级的锁 token");
 
 // ── 同一份检出、同一份数据同时只许一次升级 / restart;死掉的登记不算数 ─────────────────────────
 // (锁本身的交错 —— 同时到的都退下、读不懂的不删 —— 在 test-upgrade-units.mjs)
@@ -411,6 +412,33 @@ out = await upgrade([], 0, { PORT: String(PORT) });
 assert.match(out, /补核过了:项目 2 → 2/, out);
 assert.equal(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, undefined);
 console.log("✓ 数据没核对成不算升好;再跑先补核,过了才清掉,服务不重启");
+
+// 欠着核对的时候这一次不走「已是最新」(产物要重建 → 停、留底、起):欠的那份照样得亲自过,不能拿这次新留的底
+// (从已经少了东西的库留的)比一遍就说都在、把账清掉(审查实测)。
+const owed = { backupFile: join(TMP, "garbage.db"), backupDigest: fileDigest(join(TMP, "garbage.db")) };
+withState({ verifyPending: owed });
+rmSync(join(INSTALL, "web", "dist", "assets", "app.js"));
+out = await upgrade([], 1, { PORT: String(PORT) });
+assert.doesNotMatch(out, /已是最新|✅ 升好了/, out);
+assert.match(out, /上次升级的数据核对还是没过/, out);
+assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, [owed], `欠着的核对被这一次的基线顶掉了\n${out}`);
+withState({ verifyPending: [owed, { backupFile: join(firstBackup, "ash.db"), backupDigest: firstDigest }] });
+rmSync(join(INSTALL, "web", "dist", "assets", "app.js"));
+out = await upgrade([], 1, { PORT: String(PORT) });
+assert.match(out, /上次没核对成的数据补核过了:项目 2 → 2/, out);
+assert.deepEqual(JSON.parse(readFileSync(stateFile, "utf8")).verifyPending, [owed], "过了的那份该清掉、没过的留着");
+withState({ verifyPending: undefined });
+console.log("✓ 欠着核对时走重起那条路:欠的那份照样补核,没过就不算升好、账留着,过了的才清掉");
+
+// 升级进度读不懂:里面可能记着没核对的账,在停服务之前拦下,不当成头一回升级。
+const stateText = readFileSync(stateFile, "utf8");
+writeFileSync(stateFile, "{ 半份");
+pid = (await health())?.pid;
+out = await upgrade([], 2, { PORT: String(PORT) });
+assert.match(out, /升级进度 .*读不懂/, out);
+assert.equal((await health())?.pid, pid, "进度读不懂却动了服务");
+writeFileSync(stateFile, stateText);
+console.log("✓ 升级进度读不懂:停服务之前拦下");
 
 // ── 已是最新也收拾 MCP 登记:navi 在、旧名 ash 起的也是 Navi 的脚本 → 删掉旧名 ─────────────────────
 {

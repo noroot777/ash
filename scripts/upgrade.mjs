@@ -37,7 +37,7 @@ import { dataDirFor, dbFileFor, lockFileFor, takeDown } from "./server-control.m
 import { processBirth } from "./process-birth.mjs";
 import { launchServer, refreshMcp } from "./server-start.mjs";
 import { identifyServer, inspectData, resolvePort, runtimeProblems } from "./upgrade-checks.mjs";
-import { backupDb, backupSources, buildStamp, dbInBackup, readState, renameDb, verifyData, writeState } from "./upgrade-data.mjs";
+import { backupDb, backupSources, buildStamp, dbInBackup, pendingBaselines, readState, renameDb, verifyData, writeState } from "./upgrade-data.mjs";
 import {
   beforeLastPull, countBetween, fastForward, fetchRemote, inspectCheckout, isAncestor, relation, resetKeep, revParse, short,
   showFile, untrackedCollisions,
@@ -98,13 +98,17 @@ const gate = {
 async function preflight(pkg, abort) {
   const data = inspectData({ repo: REPO, env, keepDbName: options.keepDbName, stamp });
   const problems = [...runtimeProblems(pkg), ...data.problems];
+  let saved = {};
+  if (!data.problems.length) {
+    try { saved = readState(data.dataDir); } catch (error) { problems.push(error.message); }
+  }
   // 库留不了底的(软链指着的东西不在了之类),在停服务之前就拦下。
   if (!data.problems.length) problems.push(...backupSources({ backupRoot: data.backupRoot, db: data.db, explicit: data.explicit }).problems);
   // 库改名做到一半(账本在)、而这次升级之前没留过底:那一刻库和它的 -wal 可能分在新旧两个名字下,做不出一份可靠的快照。
-  if (data.rename === "resume" && !readState(data.dataDir).inProgress?.backup) {
+  if (data.rename === "resume" && !saved.inProgress?.backup) {
     problems.push(`库改名上次做到一半(账本还在),而且之前没留过底:先 node scripts/rename-db.mjs --apply --data ${shellArg(data.dataDir)} 做完(或 --rollback 退回),再升级`);
   }
-  const { port, from: portFrom } = data.problems.length ? { port: 0 } : resolvePort(REPO, env, readState(data.dataDir).port);
+  const { port, from: portFrom } = data.problems.length ? { port: 0 } : resolvePort(REPO, env, saved.port);
   const server = data.problems.length ? null : await identifyServer({ repo: REPO, env, port, dataDir: data.dataDir, explicit: data.explicit });
   if (server) problems.push(...server.problems);
   if (problems.length) {
@@ -122,6 +126,32 @@ function reportMissing(v) {
     if (!r.missing.length) continue;
     say(`  ✕ ${r.label}少了 ${r.missing.length} 条(id ${r.missing.slice(0, 5).join("、")}${r.missing.length > 5 ? " …" : ""})。先别动库备份,照下面的办法退回再查`);
   }
+}
+
+/**
+ * 核对数据:之前欠着的每一份(verifyPending)加上这一次的基线(有的话),全过才算数。欠着的必须亲自过,不能拿后来留的底
+ * 顶替 —— 后来那份是从已经少了东西的库留的,拿它比只能证明「没再少」(审查实测:第一次少了一条,第二次改口说都在)。
+ * 返回 { ok, line, left }:left = 还没过的那几份(照 verifyPending 的格式记回去)。
+ */
+function settleChecks(owed, current, live) {
+  const left = [];
+  const lines = [];
+  for (const b of [...owed, ...(current && !owed.some((o) => o.file === current.file) ? [current] : [])]) {
+    const v = verifyData(b, live);
+    lines.push({ ok: v.state === "ok", text: b === current ? v.line : `上次升级欠着的核对:${v.line}` });
+    reportMissing(v);
+    if (b === current) {
+      if (v.state !== "missing") say(`  ${v.state === "ok" ? "✓" : "⚠"} ${v.line}`);
+    } else if (v.state === "ok") {
+      say(`  ✓ 上次没核对成的数据补核过了:${v.line}`);
+    } else {
+      say(`  ⚠ 上次升级的数据核对还是没过:${v.line}。升级前的库在 ${b.file},先别删它。`);
+    }
+    if (v.state !== "ok") left.push({ backupFile: b.file, backupDigest: b.digest });
+  }
+  // 小结里那一行:有没过的说头一份没过的,都过了说最后一份(这一次的基线排在最后)。
+  const line = (lines.find((l) => !l.ok) ?? lines.at(-1))?.text ?? "没核对(升级前没有库)";
+  return { ok: !left.length, line, left };
 }
 
 /** 数据那一头的锁(upgrade-lock.mjs 的 dataLockDirs:按库和 runs 的真实落点);落点解析不了也算没拿到。 */
@@ -204,7 +234,10 @@ async function apply() {
   };
 
   // 第一段把锁递过来了就用同一个 token 放自己的登记(同一次升级);直接跑 --continue 的现拿一把。
-  const lock = acquireUpgradeLock([checkoutLockDir(REPO)], { token: env[UPGRADE_LOCK_ENV] || null, note: "升级" });
+  // 接到就从环境里抹掉:往后装依赖、构建、起服务都继承 process.env,带下去就漏进常驻服务和它的终端了。
+  const relayed = env[UPGRADE_LOCK_ENV] || null;
+  delete env[UPGRADE_LOCK_ENV];
+  const lock = acquireUpgradeLock([checkoutLockDir(REPO)], { token: relayed, note: "升级" });
   if (!lock.ok) { say(`  ✕ ${lock.why}`); undoPull(2); }
   process.on("exit", lock.release);
 
@@ -223,7 +256,7 @@ async function apply() {
   if (!dataLock.ok) { say(`  ✕ ${dataLock.why}`); undoPull(2); }
   process.on("exit", dataLock.release);
   dataDir = data.dataDir;
-  state = readState(dataDir);
+  try { state = readState(dataDir); } catch (error) { say(`  ✕ ${error.message}`); undoPull(2); }
   const log = logFor(port);
   const resumed = state.inProgress ?? null;
   const lastTo = state.last?.to && state.last.to !== head && isAncestor(REPO, state.last.to, head) ? state.last.to : null;
@@ -246,22 +279,16 @@ async function apply() {
   };
   if (!resumed && built && !renameNow && serving) {
     say(`✓ 已是最新:代码 ${short(head)},库 ${data.db},服务 http://localhost:${port}(pid ${state.servedPid})在跑。代码、依赖、服务都没动。`);
-    let code = 0;
-    if (state.verifyPending) {
-      // 上次升级没核对过的数据补核一次(只读现在的库,不重启)。
-      const v = verifyData({ file: state.verifyPending.backupFile, digest: state.verifyPending.backupDigest }, dbFileFor(REPO, env));
-      reportMissing(v);
-      if (v.state === "ok") {
-        delete state.verifyPending;
-        try { writeState(dataDir, state); } catch { /* 记不下来,下次再补核一遍而已 */ }
-        say(`  ✓ 上次没核对成的数据补核过了:${v.line}`);
-      } else {
-        code = 1;
-        say(`  ⚠ 上次升级的数据核对还是没过:${v.line}。升级前的库在 ${state.verifyPending.backupFile},先别删它。`);
-      }
+    const owed = pendingBaselines(state);
+    // 上次升级没核对过的数据补核一次(只读现在的库,不重启)。
+    const v = settleChecks(owed, null, dbFileFor(REPO, env));
+    if (v.left.length !== owed.length) {
+      if (v.left.length) state.verifyPending = v.left;
+      else delete state.verifyPending;
+      try { writeState(dataDir, state); } catch { /* 记不下来,下次再补核一遍而已 */ }
     }
     registerMcp();
-    process.exit(code);
+    process.exit(v.ok ? 0 : 1);
   }
   if (resumed) say(`  · 上次升级(从 ${short(resumed.from)} 起)没做完,接着做`);
   state.inProgress = { ...(resumed ?? { from, startedAt: new Date().toISOString() }), to: head };
@@ -418,16 +445,10 @@ async function apply() {
     say(`  ✓ :${port} 已就绪(pid ${launched.pid},日志 ${log})`);
 
     say("▶ 6/6 核对数据、收尾…");
-    // 核对有三种结局:都在 / 有缺 / 没核对成。后两种都不算升好:记成 verifyPending,再跑先补核(不重启服务)。
-    const v = baseline ? verifyData(baseline, dbFileFor(REPO, env)) : { state: "ok", line: "没核对(升级前没有库)" };
-    reportMissing(v);
-    if (v.state === "ok") {
-      if (baseline) say(`  ✓ ${v.line}`);
-      delete state.verifyPending;
-    } else {
-      if (v.state === "unverified") say(`  ⚠ ${v.line}`);
-      state.verifyPending = { backupFile: baseline.file, backupDigest: baseline.digest };
-    }
+    // 核对有三种结局:都在 / 有缺 / 没核对成。后两种都不算升好:记进 verifyPending,往后每次升级都先补核它(settleChecks)。
+    const v = settleChecks(pendingBaselines(state), baseline, dbFileFor(REPO, env));
+    if (v.left.length) state.verifyPending = v.left;
+    else delete state.verifyPending;
     await refreshMcp({ repo: REPO, port, lockFile: lockFileFor(REPO, env), skip: options.skipMcp, force: false, say, command: restartCommand });
     registerMcp();
 
@@ -436,7 +457,7 @@ async function apply() {
     delete state.inProgress;
     save();
     const branch = inspectCheckout(REPO).branch ?? "?";
-    const ok = v.state === "ok";
+    const ok = v.ok;
     printSummary(say, {
       ok, from, head, branch, commits: from === head ? 0 : countBetween(REPO, from, head),
       db: dbFileFor(REPO, env), dbOutcome, backup, check: v.line, port, pid: launched.pid, log,
