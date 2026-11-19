@@ -8,11 +8,7 @@ export const DB_FILE_NAME = "navi.db";
 export const DB_MOVED_MARKER = "NAVI-DB-MOVED";
 export const DB_RENAME_JOURNAL = `${DB_FILE_NAME}.renaming`;
 
-/**
- * 跟着库文件名走、要随库一起改名的文件（`${库}${后缀}`）：SQLite 自己的 -wal/-shm/-journal，退出账本、卡死判定账本
- * （各带一份轮转出来的 `.1`），接力身份、远程访问密钥、飞书配置。漏一项，改名之后服务就当它从没有过（身份换新、
- * 访问密钥作废）。`server/scripts/test-db-file.ts` 拿服务端各处的后缀常量对这份清单。
- */
+/** 跟着库文件名走、要随库一起改名的文件（`${库}${后缀}`）；为什么是这几个见 path.ts 那份。 */
 export const DB_CARRIED_SUFFIXES = [
   "-wal", "-shm", "-journal",
   ".exits.jsonl", ".exits.jsonl.1", ".stall-verdicts.jsonl", ".stall-verdicts.jsonl.1",

@@ -185,10 +185,12 @@ enum DatabaseFile {
   }
 
   /// 服务开着的（或会开的）那份库：给它留底、找它的锁。没有库是 nil；认不准时抛出原因 —— 「有库但分不清是哪份」
-  /// 跟「从没用过」不是一回事，留底、更新前备份不能把它当成没东西可备就放过去。
+  /// 跟「从没用过」不是一回事，留底、更新前备份不能把它当成没东西可备就放过去。只认一次：认两次，中间目录一变，
+  /// 第二次的「认不准」就成了 nil、被当成没有库。
   static func existing(in dir: URL) throws -> URL? {
-    if case .unclear(let why) = choose(in: dir) { throw Unclear(errorDescription: why) }
-    return choose(in: dir).url
+    let choice = choose(in: dir)
+    if case .unclear(let why) = choice { throw Unclear(errorDescription: why) }
+    return choice.url
   }
 
   /// 这个数据目录用过没有：两代库名、改名账本，有一样就算 —— 认不准的情形交给服务起来时说清楚，不当成第一次用。

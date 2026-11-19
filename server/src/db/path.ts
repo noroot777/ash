@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readSync, renameSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readStorageEnv } from "@navi/shared/env-names";
 import { LEGACY_DB_FILE, LEGACY_HARNESS_DB_FILE } from "@navi/shared/legacy-names";
@@ -16,6 +16,17 @@ export const DB_FILE_NAME = "navi.db";
 export const DB_MOVED_MARKER = "NAVI-DB-MOVED";
 /** 改名迁移的账本，就放在数据目录里。它在 = 上次迁移没做完，服务不起（见 chooseDbFileIn）。 */
 export const DB_RENAME_JOURNAL = `${DB_FILE_NAME}.renaming`;
+
+/**
+ * 跟着库文件名走的文件（`${库}${后缀}`）：SQLite 自己的 -wal/-shm/-journal，退出账本、卡死判定账本（各带一份轮转
+ * 出来的 `.1`），接力身份、远程访问密钥、飞书配置。改库名要带着它们走；改过去的那个名字下它们一个都不能先有 ——
+ * 剩着的 -wal 会被 SQLite 重放进改过去的库，剩着的身份、密钥会被当成这份库的。`scripts/db-file.mjs` 有同一份。
+ */
+export const DB_CARRIED_SUFFIXES = [
+  "-wal", "-shm", "-journal",
+  ".exits.jsonl", ".exits.jsonl.1", ".stall-verdicts.jsonl", ".stall-verdicts.jsonl.1",
+  ".identity.json", ".remote-access.json", ".feishu.json",
+];
 
 const RENAME_COMMAND = "npm run rename-db";
 
@@ -48,8 +59,10 @@ export function migrateLegacyDbFiles(defaultDb: string, legacyDb: string) {
   const moves = ["-wal", "-shm", ""]
     .map((suffix) => ({ source: `${legacyDb}${suffix}`, target: `${defaultDb}${suffix}` }))
     .filter(({ source }) => existsSync(source));
-  const occupied = moves.find(({ target }) => existsSync(target));
-  if (occupied) throw new Error(`无法迁移旧数据库：目标已存在 ${occupied.target}`);
+  // 新名下的位置一个都不能先有东西，不只是这次要搬过去的那几个（悬空的软链接也算有）
+  const occupied = ["", ...DB_CARRIED_SUFFIXES].map((suffix) => `${defaultDb}${suffix}`)
+    .find((target) => lstatSync(target, { throwIfNoEntry: false }) !== undefined);
+  if (occupied) throw new Error(`无法迁移旧数据库：目标已存在 ${occupied}`);
   for (const { source, target } of moves) renameSync(source, target);
 }
 

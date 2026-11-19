@@ -2,7 +2,7 @@
 //   ① 选库：新目录建 navi.db；只有 ash.db 开 ash.db；两份都是库、只剩路标、账本还在 —— 一律不起、说清楚；harness.db 改名成 navi.db；
 //   ② 镜像：scripts/db-file.mjs 与 server/src/db/path.ts 常量相同、认法相同；跟着库名走的派生文件都在迁移清单里；
 //   ③ 迁移命令：改名带上 -wal 与状态文件、留路标、旧版对着路标起不来；中途失败照原样退回；进程被杀之后接着做 / 撤销；
-//      有服务在用（新旧两代的锁）就不动；退回再改名来回都不丢东西；
+//      有服务在用（新旧两代的锁）就不动；退回再改名来回都不丢东西；目标名下剩着别的库的派生文件（源头没有的那几个也算）就不动；
 //   ③b 被杀矩阵：改名、退回、撤回途中，每一步之前 / 之后真杀进程、路标写到一半（按字节切）被杀，再 --apply / --rollback，
 //      都落在「做完」或「原样」上；
 //   ④ 真起服务（本机自用模式、临时 HOME、随机端口）：新目录起出来是 navi.db；两份都是库时不起；只有 ash.db 的目录
@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
@@ -88,6 +88,11 @@ try {
     writeFileSync(join(harness, LEGACY_HARNESS_DB_FILE), "db");
     assert.deepEqual(choose(harness), { file: join(harness, "navi.db"), legacy: false });
     assert.equal(readFileSync(join(harness, "navi.db"), "utf8"), "db", "harness.db 就地改名成 navi.db");
+    const harnessLeft = dir("harness-left");
+    writeFileSync(join(harnessLeft, LEGACY_HARNESS_DB_FILE), "db");
+    writeFileSync(join(harnessLeft, "navi.db.identity.json"), "{}");
+    assert.match(String(choose(harnessLeft)), /目标已存在 .*navi\.db\.identity\.json/, "新名下剩着别的库的身份（harness.db 那边没有）：不改");
+    assert.ok(existsSync(join(harnessLeft, LEGACY_HARNESS_DB_FILE)) && !existsSync(join(harnessLeft, "navi.db")));
     // 脚本侧要开库前问的那一句（drizzle 配置用），跟服务拒绝启动的情形一一对上。
     for (const d of [fresh, legacy, both, moved, halfway, harness]) {
       assert.equal(mirror.unclearDbReason(d) !== null, choose(d) instanceof Error, `${d}：脚本侧认不准的判断跟服务对不上`);
@@ -130,7 +135,7 @@ try {
 
   // ── ② 镜像与派生文件清单 ─────────────────────────────────────────────────
   {
-    for (const key of ["DB_FILE_NAME", "DB_MOVED_MARKER", "DB_RENAME_JOURNAL"] as const) assert.equal(mirror[key], path[key], `${key} 两份不一样`);
+    for (const key of ["DB_FILE_NAME", "DB_MOVED_MARKER", "DB_RENAME_JOURNAL", "DB_CARRIED_SUFFIXES"] as const) assert.deepEqual(mirror[key], path[key], `${key} 两份不一样`);
     const d = dir("mirror");
     for (const content of [null, "", "SQLite format 3\0", core.markerText("t"), "NAVI-DB"]) {
       const f = join(d, "probe.db");
@@ -250,7 +255,43 @@ try {
     const r = run(both, "--apply");
     assert.equal(r.status, 2);
     assert.match(r.stdout, /都是库/);
-    console.log("✓ 迁移命令：带上 -wal 与身份/密钥、留路标挡旧版、失败照原样退回、被杀后接着做、有服务在用不动、来回不丢东西");
+
+    // 目标名下剩着别的库的东西（源头那边没有对应的那一个也算，SQLite 会把剩着的 -wal 重放进改过去的库）：两个方向都一步不做。
+    for (const direction of ["forward", "backward"] as const) {
+      const [src, dst] = direction === "forward" ? [LEGACY_DB_FILE, "navi.db"] : ["navi.db", LEGACY_DB_FILE];
+      for (const suffix of mirror.DB_CARRIED_SUFFIXES as string[]) {
+        const d = dir(`left-${direction}`);
+        makeDb(join(d, src)).close(); // 关干净：源头没有 -wal
+        if (direction === "backward") writeFileSync(join(d, LEGACY_DB_FILE), core.markerText("t"));
+        writeFileSync(join(d, `${dst}${suffix}`), "another db's leftover");
+        const listed = readdirSync(d).sort();
+        const left = run(d, direction === "forward" ? "--apply" : "--rollback");
+        assert.equal(left.status, 2, `${direction} ${suffix}：${left.stdout}`);
+        assert.ok(left.stdout.includes(join(d, `${dst}${suffix}`)), `${direction} ${suffix}：说出是哪个位置`);
+        assert.deepEqual(readdirSync(d).sort(), listed, `${direction} ${suffix}：什么都没动`);
+      }
+    }
+    if (process.platform !== "win32") {
+      const d = dir("left-dangling");
+      makeDb(join(d, LEGACY_DB_FILE)).close();
+      symlinkSync(join(d, "nowhere"), join(d, "navi.db-wal"));
+      assert.equal(run(d, "--apply").status, 2, "悬空的软链接也算有东西");
+    }
+    // 做的途中目标名下冒出一份没人搬的文件：做完核对盘面时认出来，账本留着、服务不起；挪走之后 --apply 接着收尾。
+    {
+      const d = dir("left-appears");
+      makeDb(join(d, LEGACY_DB_FILE)).close();
+      let first = true;
+      const ops = { rename: (a: string, b: string) => { if (first) writeFileSync(join(d, "navi.db.feishu.json"), "{}"); first = false; renameSync(a, b); },
+        writeNew: (p: string, t: string) => writeFileSync(p, t, { flag: "wx" }), unlink: (p: string) => rmSync(p) };
+      assert.throws(() => core.start(d, core.planSteps(d, { direction: "forward", stamp: "appear" }), { ops }), /navi\.db\.feishu\.json 不是该有的样子/);
+      assert.ok(existsSync(core.journalFile(d)), "账本留着");
+      assert.match(String(choose(d)), /上次没做完/);
+      rmSync(join(d, "navi.db.feishu.json"));
+      assert.equal(run(d, "--apply").status, 0);
+      assert.equal(rowsIn(join(d, "navi.db")), 3);
+    }
+    console.log("✓ 迁移命令：带上 -wal 与身份/密钥、留路标挡旧版、失败照原样退回、被杀后接着做、有服务在用不动、来回不丢东西、目标名下有残留不动");
   }
 
   // ── ③b 被杀矩阵 ──────────────────────────────────────────────────────────

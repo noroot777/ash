@@ -12,13 +12,22 @@
 // 它在哪一头（做完 / 没动过 / 路标写到一半），两头都不像就停手、账本留着 —— 不拿「不是做完」当「撤完了」。
 // 路标按原始字节认，撤、写之前都核对是这一次的那份；删账本之前再核对一遍整个盘面是该有的样子。
 // 账本在，服务就不起（server/src/db/path.ts）。
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DB_CARRIED_SUFFIXES, DB_FILE_NAME, DB_MOVED_MARKER, DB_RENAME_JOURNAL, isRuntimeResidue, legacyDbState } from "./db-file.mjs";
 import { LEGACY_DB_FILE } from "./legacy-names.mjs";
 
 const JOURNAL_VERSION = 2;
-const realOps = { rename: renameSync, writeNew: (path, text) => writeFileSync(path, text, { flag: "wx" }), unlink: unlinkSync };
+const realOps = { rename: renameSync, writeNew: writeDurably, unlink: unlinkSync };
+
+/** 新建 path 写进 text 并刷盘：路标的内容要先于记它做完的那笔账落到盘上，不然断电后旧名位置可能是一份空文件。 */
+function writeDurably(path, text) {
+  const fd = openSync(path, "wx");
+  try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/** 这个名字上有没有东西：悬空的软链接也算有（existsSync 会把它当成不在）。 */
+const occupied = (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 
 export const journalFile = (dataDir) => join(dataDir, DB_RENAME_JOURNAL);
 
@@ -49,6 +58,13 @@ export function inspect(dataDir) {
   return { state, navi, legacy, marker: old === "moved" };
 }
 
+/**
+ * 一份库名下所有的位置：库文件本身和每个跟着库名走的派生文件（DB_CARRIED_SUFFIXES 全集，不看此刻在不在）。
+ * 改名的目标名下这些位置都得空着：源头没有 -wal、目标名旁边却剩着一份别的库的 -wal，SQLite 会把它当成刚改过去的
+ * 这份库的日志重放进来；身份、访问密钥同理，会被当成这份库的。
+ */
+export const dbNamespace = (db) => [db, ...DB_CARRIED_SUFFIXES.map((suffix) => `${db}${suffix}`)];
+
 /** 往 from 那个名字改成 to 那个名字要走的步骤。from 是旧名就是改名，反过来就是退回。 */
 export function planSteps(dataDir, { direction, stamp, at = new Date().toISOString() }) {
   const [fromName, toName] = direction === "forward" ? [LEGACY_DB_FILE, DB_FILE_NAME] : [DB_FILE_NAME, LEGACY_DB_FILE];
@@ -61,14 +77,15 @@ export function planSteps(dataDir, { direction, stamp, at = new Date().toISOStri
     if (isRuntimeResidue(name, fromName)) steps.push({ op: "move", from: join(dataDir, name), to: join(leftovers, name), leftover: true });
   }
   for (const suffix of DB_CARRIED_SUFFIXES) {
-    if (existsSync(`${from}${suffix}`)) steps.push({ op: "move", from: `${from}${suffix}`, to: `${to}${suffix}` });
+    if (occupied(`${from}${suffix}`)) steps.push({ op: "move", from: `${from}${suffix}`, to: `${to}${suffix}` });
   }
   steps.push({ op: "move", from, to });
   if (direction === "forward") steps.push({ op: "mark", path: from, text: markerText(at) });
-  // 目标位置已经有东西的，一步都不做：哪一份是真的只有人能认。
-  // （退回时旧名位置上的路标不算：第一步就是撤掉它。）
+  // 目标名下的位置（不只是这次要搬过去的那几个）已经有东西的，一步都不做：哪一份是真的只有人能认。
+  // （退回时旧名位置上的路标不算：第一步就是撤掉它。）留底目录里的位置同样得空着。
   const cleared = new Set(steps.filter((s) => s.op === "unmark").map((s) => s.path));
-  const taken = steps.filter((s) => s.op === "move" && existsSync(s.to) && !cleared.has(s.to)).map((s) => s.to);
+  const targets = new Set([...dbNamespace(to), ...steps.filter((s) => s.leftover).map((s) => s.to)]);
+  const taken = [...targets].filter((t) => occupied(t) && !cleared.has(t));
   return { direction, leftovers, steps, taken };
 }
 
@@ -94,7 +111,7 @@ function markerState(path, text) {
  */
 function stepState(step) {
   if (step.op === "move") {
-    const from = existsSync(step.from), to = existsSync(step.to);
+    const from = occupied(step.from), to = occupied(step.to);
     return !from && to ? "done" : from && !to ? "undone" : "unknown";
   }
   const m = markerState(step.path, step.text);
@@ -135,7 +152,8 @@ function writeMarker(step, ops) {
 }
 
 /**
- * 删账本之前核对整个盘面：每个路径都得是「最后动它的那一步」留下的样子（做完时按顺序数，撤完时倒着数、取反）。
+ * 删账本之前核对整个盘面：每个路径都得是「最后动它的那一步」留下的样子（做完时按顺序数，撤完时倒着数、取反）；
+ * 新旧两个库名下没被任何一步动到的位置，动手之前是空的（planSteps 拦过），完了也得是空的。
  * 对不上就不删账本 —— 宁可让服务因账本起不来、让人来认，也不报一句「回到原样」。
  */
 function verifyFinal(journal, phase) {
@@ -150,8 +168,10 @@ function verifyFinal(journal, phase) {
       want.set(s.path, [marked ? "marker" : "absent", s.text]);
     }
   }
+  const main = journal.steps.findLast((s) => s.op === "move" && !s.leftover); // 库文件本身那一步，排在派生文件之后
+  for (const path of [...dbNamespace(main.from), ...dbNamespace(main.to)]) if (!want.has(path)) want.set(path, ["absent"]);
   for (const [path, [kind, text]] of want) {
-    const ok = kind === "absent" ? !existsSync(path) : kind === "present" ? existsSync(path) : markerState(path, text) === "full";
+    const ok = kind === "absent" ? !occupied(path) : kind === "present" ? occupied(path) : markerState(path, text) === "full";
     if (!ok) throw new Error(`${phase === "do" ? "做完" : "撤完"}之后 ${path} 不是该有的样子（应当${kind === "absent" ? "不在" : kind === "present" ? "在" : "是路标"}），账本留着`);
   }
 }
