@@ -79,11 +79,18 @@ const REVIEWER_OUTPUT = [
     `> ${STOPPED}\n`,
     line({ t: "agentEnd", at: "2026-09-10T01:00:06.000Z" }),
   ].join("");
-  for (const [name, out] of [["现行格式", modern], ["改写法之后", late]] as const) {
+  // 九月的会话不带记录号是正常的（记录号 2026-11 才有）：只引用「异常结束」那一句作答，同样是回答。
+  const CRASHED = "续聊回合异常结束(退出码 1),任务状态保持「已完成」不变。";
+  const lateCrash = [
+    line({ t: "user", agent: "codex", text: "引用以下文字。", at: "2026-09-10T02:00:00.000Z" }),
+    `> ${CRASHED}\n`,
+    line({ t: "agentEnd", at: "2026-09-10T02:00:06.000Z" }),
+  ].join("");
+  for (const [name, out, said] of [["现行格式", modern, STOPPED], ["改写法之后", late, STOPPED], ["改写法之后·异常结束", lateCrash, CRASHED]] as const) {
     const segs = parseSessionTranscript(out).spans.map((span) => span.seg);
     assert.ok(!segs.some((seg) => seg.kind === "system"), `${name}：不该改成结算旁注：${JSON.stringify(segs)}`);
     const agent = segs.find((seg) => seg.kind === "agent");
-    assert.equal(agent?.kind === "agent" && agent.text, `> ${STOPPED}`, `${name}：那一句照旧是智能体的回答`);
+    assert.equal(agent?.kind === "agent" && agent.text, `> ${said}`, `${name}：那一句照旧是智能体的回答`);
   }
 }
 

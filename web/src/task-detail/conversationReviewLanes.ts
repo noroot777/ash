@@ -371,26 +371,47 @@ export function conversationFeedRows(
 ): ConversationFeedRow[] {
   const rows: ConversationFeedRow[] = [];
   let active: ActiveLane | null = null;
-  // 刚收口的那一轮和它的审查者会话：服务端先写结论旁注、后结算审查者那一回合，那一回合的结算说明
-  // （改落检查点暂停、会话轮换、归档失败…）和「这一轮为什么没结论」的原因旁注于是总落在收口之后。它们
-  // 说的是这一轮，记进这一轮的经过（在审查者那一回合上），同时照旧留在外面，归属那一步（conversationSystemRows）
-  // 贴在这一轮结论下面、不再记给执行者那一回合。认它们靠身份：带类型的原因旁注按 runId、轮号；其余的
-  // 按会话——得是这一轮审查者的那条会话。
-  let closed = null as { lane: ConversationReviewLane; reviewerSessionId: string | null } | null;
+  // 一轮审查收口以后才到的、审查自己的话：服务端先写结论旁注、后结算审查者那一回合，那一回合的结算说明
+  // （改落检查点暂停、会话轮换、归档失败…）和「这一轮为什么没结论」的原因旁注于是总落在收口之后；晚到
+  // 的、中间隔着别人的话的也有。它们说的是那一轮，记进那一轮的经过（在审查者那一回合上），**不交给相邻
+  // 的执行者回合**。认它们靠身份，不靠挨着谁、也不靠审查者开没开过口：
+  //   - 带类型的原因旁注按它带的 runId、轮号（namesLane）；
+  //   - 审查者会话自己那一回合的话（reviewerTurnNote）、老服务端那句原因按会话：那条会话在哪一轮里出现过
+  //     （那一轮的任何一条，开轮那一条除外——新一轮的「开始」写在上一位审查者的会话里），就是哪一轮的；
+  //     认不出会话的，紧跟在一轮收口后面的算那一轮（服务端就是这么写的）。
+  // 紧跟着收口的那几句同时照旧留在外面（归属那一步贴在结论下面、不记给执行者回合，见
+  // conversationSystemRows）；隔开了的审查者回合的话只留在它那一轮里。还是认不出的（会话里没有过审查段的
+  // 老记录），留在外面，归属那一步在原处单独记一笔。
+  let closed = null as ConversationReviewLane | null;
+  const laneOfSession = new Map<string, ConversationReviewLane>();
   const pushActive = (opts?: { complete?: boolean; superseded?: boolean }) => {
     if (!active) return;
-    const reviewerSessionId = active.reviewerSessionId;
+    const sessions = active.items.flatMap((item) => item.sessionRole === "reviewer" && item.sessionId && !laneStart(item) ? [item.sessionId] : []);
     const lane = finishLane(active, opts);
     rows.push(lane);
-    closed = opts?.complete ? { lane, reviewerSessionId } : null;
+    for (const id of sessions) laneOfSession.set(id, lane);
+    closed = opts?.complete ? lane : null;
     active = null;
+  };
+  /** 收口以后才到的这一句是哪一轮审查的；不是审查自己的话、或者认不出，返回 null。 */
+  const laneOfLate = (item: Extract<ConversationItem, { kind: "event" }>): ConversationReviewLane | null => {
+    if (item.notice?.kind === "review.no_verdict") {
+      const named = rows.findLast((row): row is ConversationReviewLane => row.kind === "review-lane" && namesLane(row, item));
+      if (named) return named;
+    }
+    if (!reviewerTurnNote(item) && !(item.sessionRole === "reviewer" && saysWhyNoVerdict(item))) return null;
+    return (item.sessionId ? laneOfSession.get(item.sessionId) : undefined) ?? (reviewerTurnNote(item) ? closed : null);
   };
 
   for (const item of items) {
     if (!active && closed && item.kind !== "event") closed = null;
-    if (!active && closed && item.kind === "event" && !laneStart(item) && (namesLane(closed.lane, item)
-      || (!!closed.reviewerSessionId && item.sessionId === closed.reviewerSessionId && (reviewerTurnNote(item) || saysWhyNoVerdict(item))))) {
-      closed.lane.items.push(item);
+    const late = !active && item.kind === "event" && !laneStart(item) ? laneOfLate(item) : null;
+    if (late === closed && late) late.items.push(item);
+    else if (late && item.kind === "event" && reviewerTurnNote(item)) {
+      // 隔开了的只留在它那一轮里（见上）。原因旁注不在此列：隔开了的照旧留在外面——认不出审查段时
+      // 「继续本轮审查」退回挂在它上面（footnoteActions 的 retryEventId）。
+      late.items.push(item);
+      continue;
     }
     const start = laneStart(item);
     const rerun = !!active && !!start && continuesLane(active, start);

@@ -128,6 +128,10 @@ const answerIdsOf = (value: unknown): { answerIds?: string[] } => {
  * 剩下的老记录里，只认当年写死的那几种起头（settle-status.ts 的落位说明）：提问那两种按完整的说明格式认
  * （settleNoteQuestion，题目里可以有空行、分几段）；其余几种都是一句话，要求这一段后面隔着空行就是收口。
  * 认出来就落成跟新会话同一种结算旁注（`level:"notice"`）。
+ *
+ * 这是「正文里哪几句其实是服务端写的结算说明」的**唯一入口**：当年只有 single-run 一处这样写，写完紧跟着
+ * 就是收口那一行，所以后面不是收口的就不是它。早先还有一条只按「> 续聊回合异常结束(」前缀删整行的路，
+ * 绕过了上面两道门，九月会话里智能体引用这一句作答就整条没了（2026-11-19 复审），已并进这里。
  */
 const LEGACY_SETTLEMENT_QUOTE = /^> (续聊回合(异常结束|被手动停止|分组被暂停|以提问结束)|分组被暂停,本回合被中止|本回合以提问暂停|回合正常结束,但 ?(本回合内没有收到|agent 未调用) ?complete_task)/;
 const LEGACY_SETTLEMENT_UNTIL = "2026-09-01T10:28:31.000Z";
@@ -219,8 +223,6 @@ export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan
       skipThrough = quote.last;
       return;
     }
-    // 认不出段落边界的那一句（后面不是收口）照旧只能按前缀藏掉；带身份的现行正文不猜。
-    if (!marker && trimmed.startsWith("> 续聊回合异常结束(")) return;
     if (line.startsWith("\x1e")) {
       let j: Sentinel | null = null;
       try { j = JSON.parse(line.slice(1)) as Sentinel; } catch { /* not a turn line — ordinary text */ }
@@ -274,14 +276,15 @@ export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan
         return;
       }
     }
-    if (trimmed === LEGACY_SYS_MARKER) {
+    // 下面两种是更早的行内标记（sentinel 之前的写法），带身份的现行正文里不会有，也不猜。
+    if (!marker && trimmed === LEGACY_SYS_MARKER) {
       flush();
       push({ kind: "system", text: LEGACY_SYS_MARKER }, index);
       return;
     }
     // Legacy reply marker — best-effort (only the first line is recoverable, since
     // old multi-line replies weren't fenced); the rest folds into the next bubble.
-    const m = /^〔你 → @[^〕]*〕([\s\S]*)$/.exec(trimmed);
+    const m = marker ? null : /^〔你 → @[^〕]*〕([\s\S]*)$/.exec(trimmed);
     if (m) {
       flush();
       push({ kind: "user", text: m[1] ?? "" }, index);

@@ -15,7 +15,10 @@
 //   ⑥ 认不出审查段的老记录：原因旁注照旧落在执行者回合上（「继续本轮审查」退回挂在它上面），结算说明不进尾注；
 //   ⑦ 审查者那一回合收口后说的别的事（改落检查点暂停）：不被「没结论」的原因吞掉，记进这一轮的经过
 //      （审查者那一回合的记录上），不进执行者回合的尾注和记录；这一轮被重跑盖过后，经过里照样在；
-//   ⑧ 另一条审查者会话说的事（归档没成）：认不出是哪一轮的，不吞、不丢，照记在记录里。
+//   ⑧ 另一条审查者会话说的事（归档没成）：那条会话没在哪一轮里出现过，紧跟在收口后面就算这一轮的，不吞、不丢；
+//   ⑨ 审查者一句没说就断了（会话身份只能从开轮/结论那几条认）：后到的检查点那一句照样是那一轮的；
+//   ⑩ 晚到、中间隔着执行者的新一回合：按会话认回那一轮，不记给执行者的新回合；
+//   ⑪ 会话里根本没有审查段（老记录）：审查者会话那一回合的话认不出是哪一轮，在原处单独记一笔，不记给执行者。
 // 跑：npm -w web run test:review-voice-footnote
 import assert from "node:assert/strict";
 import type { FreeReviewRun, Session } from "@ash/shared";
@@ -238,6 +241,25 @@ const reviewish = (text: string) => /中断|模型上游|续聊回合|没有给�
   assert.ok(records.some((text) => /第 4 轮审查中断/.test(text)), "没有结论那一行可代表这一轮：原因旁注照旧记在这一回合上，删除在这里");
 }
 
+/** 这一句在页面上落在哪儿：执行者回合的尾注/记录、哪一轮审查的经过、原处单独那一笔。 */
+function placesOf(view: ReturnType<typeof display>, test: (text: string) => boolean) {
+  const found = new Set<string>();
+  const has = (item: ConversationItem | undefined) => item?.kind === "event" && test(item.text);
+  if ((view.shown.footnotes.get(view.turnId)?.parts ?? []).some((part) => part.kind === "event" && has(part.item))) found.add("executor-footnote");
+  for (const [id, list] of view.shown.receipts) {
+    for (const receipt of list) {
+      if (receipt.lane?.items.some(has)) found.add("lane");
+      if (!receipt.lane && has(receipt.item)) found.add(id === view.turnId ? "executor-records" : `records:${id}`);
+    }
+  }
+  for (const row of view.shown.rows) {
+    if (row.kind === "verdict" && row.lane.items.some(has)) found.add("lane");
+    if (row.kind === "review-lane" && row.items.some(has)) found.add("lane");
+    if (row.kind === "footnote" && (row.receipts.some((receipt) => has(receipt.item)) || row.footnote.parts.some((part) => part.kind === "event" && has(part.item)))) found.add("standalone");
+  }
+  return found;
+}
+
 // ⑦ + ⑧：审查者开过口的一轮，中断收口后审查者会话又说了别的事。
 {
   const CHECKPOINT = "本回合要落的终态被拦下，改为检查点暂停：名下还有没了结的哨兵（回归测试）。";
@@ -272,15 +294,59 @@ const reviewish = (text: string) => /中断|模型上游|续聊回合|没有给�
   const round = laneReceipts(verdict.lane);
   const said = [...round.receipts.values()].flat().map((receipt) => receipt.item?.text ?? "");
   assert.ok(said.some(kept), `检查点那一句没被原因吞掉，记在这一轮审查者那一回合上：${JSON.stringify(said)}`);
-  assert.ok(loose.some((text) => text.includes("归档")), `另一条会话说的事不吞不丢：${JSON.stringify(loose)}`);
+  const archived = (text: string) => text.includes("归档");
+  assert.deepEqual([...placesOf(settled, archived)], ["lane"], "另一条会话说的事紧跟在收口后面：记进这一轮，不记给执行者");
 
   const superseded = display(build(true), runs);
   assert.deepEqual(superseded.footnote.filter((text) => kept(text) || reviewish(text)), [], `被盖过以后执行者回合的尾注里出现了审查的话：${JSON.stringify(superseded.footnote)}`);
   const lanes = (superseded.shown.receipts.get(superseded.turnId) ?? []).flatMap((receipt) => receipt.lane ? [receipt.lane] : []);
   assert.ok(lanes.some((lane) => [...laneReceipts(lane).receipts.values()].flat().some((receipt) => kept(receipt.item?.text ?? ""))),
     "被盖过的那一轮，经过里照样有检查点那一句");
-  const records = (superseded.shown.receipts.get(superseded.turnId) ?? []).filter((receipt) => !receipt.lane).map((receipt) => receipt.view.text);
-  assert.ok(records.some((text) => text.includes("归档")), `被盖过以后，另一条会话说的事还在记录里：${JSON.stringify(records)}`);
+  assert.deepEqual([...placesOf(superseded, archived)], ["lane"], "被盖过以后，另一条会话说的事还在那一轮里");
+}
+
+// ⑨ + ⑩ + ⑪：审查者一句没说就断了、晚到隔着执行者的新回合、会话里根本没有审查段。
+{
+  const PAUSED = "本回合要落的终态被拦下，改为检查点暂停：后台工作还没跑完。";
+  const LATER = "Codex 会话自动归档未完成，桌面端可能仍显示此会话；执行结果与续跑记录保留。late";
+  const silent = { ...reviewerA, id: "R-silent", startedAt: "2026-11-19T01:23:13.700Z" } as unknown as Session;
+  const runs = [run("RUN4", 1, "failed", "2026-11-19T01:23:13.264Z", { noVerdict: cause })] as unknown as FreeReviewRun[];
+  const reviewerOutput = transcript()
+    .start(1, "RUN4", "2026-11-19T01:23:13.722Z")
+    .resume("2026-11-19T01:23:14.176Z")
+    .noVerdict(1, "2026-11-19T01:23:20.000Z")
+    .crashed("2026-11-19T01:23:19.900Z", PAUSED);
+  const moreExec = [
+    line({ t: "user", agent: "claude", text: "先接着改别的。", at: "2026-11-19T01:30:00.000Z", seq: 4, turnStartedAt: "2026-11-19T01:30:00.000Z" }),
+    line({ t: "agent", at: "2026-11-19T01:31:00.000Z", seq: 5, turnStartedAt: "2026-11-19T01:30:00.000Z" }),
+    "好，另外两处也改了。\n",
+    line({ t: "agentEnd", at: "2026-11-19T01:31:30.000Z", seq: 6, turnStartedAt: "2026-11-19T01:30:00.000Z" }),
+  ].join("");
+  // 那条审查者会话后来又落了一句（归档没成），这时执行者已经跑完了新的一回合。
+  reviewerOutput.crashed("2026-11-19T01:32:00.000Z", LATER);
+  const items = buildConversationItems(
+    [{ session: exec, output: EXEC_OUTPUT + moreExec, trace: [] }, { session: silent, output: reviewerOutput.toString(), trace: [] }], [exec, silent], [],
+  );
+  const view = display(items, runs);
+  const executorTurns = items.filter((item) => item.kind === "agent" && item.sessionRole === "single").map((item) => item.id);
+  assert.equal(executorTurns.length, 2);
+  const onExecutor = (test: (text: string) => boolean) => executorTurns.some((id) =>
+    (view.shown.receipts.get(id) ?? []).some((receipt) => !receipt.lane && receipt.item?.kind === "event" && test(receipt.item.text))
+    || (view.shown.footnotes.get(id)?.parts ?? []).some((part) => part.kind === "event" && part.item?.kind === "event" && test(part.item.text)));
+  assert.ok(!onExecutor((text) => text.includes("后台工作还没跑完")), "⑨ 审查者没开过口，那一轮的检查点那一句也不记给执行者");
+  assert.ok(placesOf(view, (text) => text.includes("后台工作还没跑完")).has("lane"), "⑨ 检查点那一句在那一轮的经过里");
+  assert.ok(!onExecutor((text) => text.endsWith("late")), "⑩ 晚到、隔着执行者新回合的那一句不记给执行者");
+  const lanes = view.shown.rows.flatMap((row) => row.kind === "verdict" ? [row.lane] : [])
+    .concat([...view.shown.receipts.values()].flat().flatMap((receipt) => receipt.lane ? [receipt.lane] : []));
+  assert.ok(lanes.some((lane) => lane.items.some((item) => item.kind === "event" && item.text.endsWith("late"))), "⑩ 按会话认回了那一轮");
+
+  // ⑪ 会话里没有审查段：同一条审查者会话，只有它自己那一回合的话。
+  const bare = transcript().crashed("2026-11-19T01:24:00.000Z", PAUSED).toString();
+  const legacy = display(buildConversationItems(
+    [{ session: exec, output: EXEC_OUTPUT, trace: [] }, { session: silent, output: bare, trace: [] }], [exec, silent], [],
+  ), []);
+  const where = placesOf(legacy, (text) => text.includes("后台工作还没跑完"));
+  assert.deepEqual([...where], ["standalone"], `⑪ 认不出是哪一轮的，在原处单独记一笔：${JSON.stringify([...where])}`);
 }
 
 console.log("✓ review voice stays off the executor's footnote");

@@ -191,9 +191,12 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
   // 它们不回执行者回合的尾注，记录是它们唯一的去处。
   const inRound = (event: EventItem | undefined) => !!verdict && !!event
     && (verdict.row.lane.items.includes(event) || namesLane(verdict.row.lane, event));
+  // 审查者会话给它自己那一回合写的话（reviewerTurnNote）**不记给执行者回合**：认得出是哪一轮的，那一轮的
+  // 经过里有它（conversationFeedRows）；认不出的，在原处单独记一笔（跟前面没有回合可挂的那几句一样）。
+  const homeless = (event: EventItem | undefined) => !reviewerTurn && !!event && reviewerTurnNote(event);
   const record = (receipt: TurnReceipt, owned: boolean) => {
     if (owned && !reviewerTurn) return;
-    if (turn) give(turn, [receipt]);
+    if (turn && !homeless(receipt.item)) give(turn, [receipt]);
     else (orphan ?? openOrphan(receipt.id)).row.receipts.push(receipt);
   };
   const note = (part: FootnotePart, receipt: TurnReceipt | null) => {
@@ -202,12 +205,11 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       if (receipt) record(receipt, part.kind === "event" && inRound(part.item));
       return;
     }
-    if (turn) {
-      // 审查者会话给它自己那一回合写的结算说明，没有审查气泡可贴时只进记录：执行者回合的尾注不替审查记账。
-      // 一轮为什么没结论那一句照留——认不出审查段的老记录里（没有「开始」那一条）结论那一句也落在这儿，
-      // 原因得跟着它，「继续本轮审查」也退回挂在它上面（footnoteActions 的 retryEventId）。
-      const turnNote = part.kind === "event" && !!part.item && reviewerTurnNote(part.item);
-      if (reviewerTurn || !turnNote) parts.set(turn, [...parts.get(turn) ?? [], part]);
+    // 一轮为什么没结论那一句照留在回合上——认不出审查段的老记录里（没有「开始」那一条）结论那一句也落在
+    // 这儿，原因得跟着它，「继续本轮审查」也退回挂在它上面（footnoteActions 的 retryEventId）。审查者会话
+    // 自己那一回合的话不在此列（homeless）。
+    if (turn && !(part.kind === "event" && homeless(part.item))) {
+      parts.set(turn, [...parts.get(turn) ?? [], part]);
       if (receipt) give(turn, [receipt]);
       return;
     }
@@ -255,7 +257,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
         return;
       }
       if (view.tier !== "receipt") note({ kind: "event", id: event.id, at: event.at, view, item: event }, receipt);
-      else if (turn) record(receipt, inRound(event));
+      else if (turn || homeless(event)) record(receipt, inRound(event));
       else if (!inRound(event)) pending.push(receipt);
       return;
     }
