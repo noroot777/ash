@@ -103,10 +103,18 @@ export function readJournal(dataDir) {
   return journal;
 }
 
-/** 删掉账本；留底目录是空的就连它、以及这一次为它新建的上级（created）一起收掉。 */
-function dropJournal(dataDir, journal, created = journal.leftovers) {
+/** 把 dir 及缺的上级都建出来，返回新建的那几层（从深到浅）。 */
+function ensureDirs(dir) {
+  const created = [];
+  for (let d = dir; !existsSync(d); d = dirname(d)) created.push(d);
+  for (const d of [...created].reverse()) mkdirSync(d);
+  return created;
+}
+
+/** 删掉账本；这一次新建的目录（created，从深到浅）还空着就一起收掉。 */
+function dropJournal(dataDir, journal, created = [journal.leftovers]) {
   unlinkSync(journalFile(dataDir));
-  for (let d = journal.leftovers; created && d.startsWith(created); d = dirname(d)) {
+  for (const d of created) {
     try { rmdirSync(d); } catch { break; /* 不空（留了底）或本来就没建 */ }
   }
 }
@@ -118,7 +126,7 @@ function dropJournal(dataDir, journal, created = journal.leftovers) {
 export function runJournal(dataDir, journal, { ops = realOps, log = () => {} } = {}) {
   let created;
   try {
-    if (journal.steps.some((s) => s.leftover)) created = mkdirSync(journal.leftovers, { recursive: true });
+    if (journal.steps.some((s) => s.leftover)) created = ensureDirs(journal.leftovers);
     for (const step of journal.steps) {
       doStep(step, ops);
       log(step);
