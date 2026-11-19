@@ -1,6 +1,6 @@
 // 升级里碰数据的那几步:停着服务时给库留底、核对升级前后每一条都还在、把库改名交给 ⑨ 的改名命令、记下升级做到哪。
 import { spawnSync } from "node:child_process";
-import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,8 +77,20 @@ export function renameDb({ dataDir, env, say }) {
 }
 
 /**
+ * 依赖和构建产物此刻的指纹(各文件的大小 + 修改时刻)。「这一版构建过」不能只认提交号:中间有人跑了别的版本的
+ * restart / build(比如照抄退回命令回到旧版),产物就换了,提交号却对得上 —— 实测过,新代码配旧产物起不来。
+ */
+export function buildStamp(files) {
+  return files.map((f) => {
+    const st = statSync(f, { throwIfNoEntry: false });
+    return st ? `${st.size}:${Math.round(st.mtimeMs)}` : "-";
+  }).join("|");
+}
+
+/**
  * 升级做到哪了,记在数据目录里(跟着这份数据走;不进 git):
- *   built      最后一次构建成功时的提交      servedPid  最后一次起好的服务
+ *   built      最后一次构建成功时的 { commit, stamp }(stamp 见 buildStamp)
+ *   servedPid  最后一次起好的服务
  *   inProgress { from, to, backup }        有它 = 上次没做完,再跑接着做(from 和备份沿用那一次的)
  *   last       上一次升好的那次:{ from, to, at, backup }
  */

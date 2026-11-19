@@ -179,6 +179,7 @@ console.log("✓ 工作区脏、远端拉不动、两份库并存、有任务在
 // ── 第一次:git pull && npm run upgrade ───────────────────────────────────────────
 git(INSTALL, "pull", "-q", "--ff-only");
 out = await upgrade([], 0);
+const firstRun = out;
 let h = await health();
 assert.equal(h?.version, "v2", `服务不是新代码\n${out}`);
 assert.notEqual(h.pid, oldHealth.pid);
@@ -204,6 +205,23 @@ assert.equal((await health())?.pid, h.pid, "已是最新却重启了服务");
 assert.equal(npmCalls().length, 2);
 console.log("✓ 再跑一次:已是最新,服务没被重启");
 
+// ── 照抄小结里的退回命令回到改名之前的 v1,再升回来 ────────────────────────────────────
+// 退回时 v1 自己的 restart 把依赖和产物换回了 v1:再升时提交号跟上次构建的对得上,也必须照常重装重建
+// (只认提交号的那一版在这里跳过了构建,新代码配旧产物起不来 —— 真机演练撞上过)。
+let back = await followRollback(firstRun);
+assert.ok(back.commands.includes("node scripts/stop.mjs") && back.commands.some((c) => c.includes("rename-db.mjs --rollback")), back.commands.join("\n"));
+h = await health();
+assert.equal(h?.version, "v1", `照抄退回命令之后没回到改名之前的 v1\n${back.out}`);
+assert.ok(existsSync(join(DATA, "ash.db")) && !isMarker(join(DATA, "ash.db")) && !existsSync(join(DATA, "navi.db")), "库没退回 ash.db");
+assert.equal(head(), v1);
+const calls = npmCalls().length;
+git(INSTALL, "pull", "-q", "--ff-only");
+out = await upgrade([], 0, { PORT: String(PORT) });
+assert.equal(npmCalls().length, calls + 2, `产物换过了却没重装重建\n${out}`);
+assert.equal((await health())?.version, "v2", out);
+assert.match(out, /项目 2 → 2 · 任务 3 → 3 · 会话 4 → 4/, out);
+console.log("✓ 照抄退回命令回到改名之前的版本(库也退回旧名);再升回来时照常重装重建");
+
 // ── 命令更新自己 + 构建失败 → 照抄退回命令 ───────────────────────────────────────────
 const v3 = publish(DEV, "v3", { flags: ["BUILD_FAIL"], upgradeMarker: true });
 out = await upgrade([], 1);
@@ -211,7 +229,7 @@ assert.match(out, /\[v3 的升级逻辑\]/, `拉完代码跑的不是新版的�
 assert.match(out, /构建失败/, out);
 assert.equal(await health(), null, "构建失败之后服务应当停着(依赖已经换过)");
 assert.equal(head(), v3);
-let back = await followRollback(out);
+back = await followRollback(out);
 assert.ok(back.commands.includes(`git reset --keep ${v2}`), back.commands.join("\n"));
 assert.ok(!back.commands.some((c) => c.includes("rename-db")), "v2 认得 navi.db,不该退库名");
 h = await health();
@@ -221,11 +239,13 @@ console.log("✓ 拉完代码跑的是新版升级逻辑;构建失败后照抄�
 
 // ── 新服务起不来 → 照抄退回命令;接着修好的版本再跑,接着上次做完 ──────────────────────────
 publish(DEV, "v4", { flags: ["START_FAIL"] });
+const backupCount = () => readdirSync(join(DATA, "backups")).filter((n) => n.startsWith("upgrade-")).length;
+const backupsBefore = backupCount();
 out = await upgrade([], 1);
 assert.match(out, /上次升级\(从 [0-9a-f]+ 起\)没做完,接着做/, out);
 assert.match(out, /新服务没起来/, out);
 assert.match(out, /start: 这一版故意起不来/, `没把日志末尾打出来\n${out}`);
-assert.equal(readdirSync(join(DATA, "backups")).filter((n) => n.startsWith("upgrade-")).length, 2, "接着做时备份不该重做");
+assert.equal(backupCount(), backupsBefore, "接着做时备份不该重做");
 back = await followRollback(out);
 assert.equal((await health())?.version, "v2", back.out);
 const v5 = publish(DEV, "v5");

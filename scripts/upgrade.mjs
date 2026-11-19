@@ -34,7 +34,7 @@ import { restartCommand } from "./restart-options.mjs";
 import { dbFileFor, lockFileFor, takeDown } from "./server-control.mjs";
 import { launchServer, refreshMcp } from "./server-start.mjs";
 import { identifyServer, inspectData, resolvePort, runtimeProblems } from "./upgrade-checks.mjs";
-import { backupDb, compareIds, dbInBackup, readIds, readState, renameDb, writeState } from "./upgrade-data.mjs";
+import { backupDb, buildStamp, compareIds, dbInBackup, readIds, readState, renameDb, writeState } from "./upgrade-data.mjs";
 import {
   beforeLastPull, countBetween, fastForward, fetchRemote, inspectCheckout, isAncestor, relation, resetKeep, revParse, short,
   showFile, untrackedCollisions,
@@ -191,7 +191,8 @@ async function apply() {
   const lastTo = state.last?.to && state.last.to !== head && isAncestor(REPO, state.last.to, head) ? state.last.to : null;
   const from = resumed?.from ?? pulledFrom ?? lastTo ?? beforeLastPull(REPO) ?? head;
   const entry = isAbsolute(SERVER_ENTRY) ? SERVER_ENTRY : join(REPO, SERVER_ENTRY);
-  const built = state.built === head && [entry, join(REPO, "mcp", "dist", "index.js"), join(REPO, "web", "dist", "index.html")].every(existsSync);
+  const products = [entry, join(REPO, "mcp", "dist", "index.js"), join(REPO, "web", "dist", "index.html"), join(REPO, "node_modules", ".package-lock.json")];
+  const built = state.built?.commit === head && state.built.stamp === buildStamp(products) && products.slice(0, 3).every(existsSync);
   const renameNow = ["todo", "resume"].includes(data.rename);
   const serving = ctx.server.running && state.servedPid && ctx.server.health?.pid === state.servedPid;
   if (!resumed && built && !renameNow && serving) {
@@ -262,7 +263,7 @@ async function apply() {
     const npm = (args) => spawnSync(NPM, args, { stdio: "inherit", ...NPM_SPAWN_OPTS }).status;
     if (npm(["install", "--no-audit", "--no-fund"]) !== 0) fail("依赖没装上(npm install 失败,报错在上面)");
     if (npm(["run", "build"]) !== 0) fail("构建失败(报错在上面)");
-    state.built = head;
+    state.built = { commit: head, stamp: buildStamp(products) };
     save();
   }
 
