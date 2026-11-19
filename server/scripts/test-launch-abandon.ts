@@ -16,7 +16,19 @@ import { removeTmpStage } from "./tmp-db.js";
 //      东西管。两者混成一格就会凭空多出一句「已停止」,那是停止语义里最不许出现的谎。
 //
 // 残留事实用一个**外部的**活进程扮演(不是这次启动起来的),于是不依赖 lsof、也不依赖
-// 守护化形状,在 CI 和 Windows 上都是确定性的。
+// 守护化形状。
+//
+// **Windows 上这个死局不存在,整条跳过。** 账上的号算不算还活着走的是 `processAlive`
+// (terminal-stop-facts.ts 的 liveLeftovers),它在 win32 上恒为 false(terminal-process-tree.ts:
+// 那边没有进程组,脱管的进程判不出来,terminal.ts 起会话那段写明了这条边界)。于是 Windows 上
+// 欠着的号一律算「已经没了」,启动不会被顶回,也就没有出口可测;生产上那边也记不下这种号
+// (端口兜底与记号扫描在 Windows 上都整档不启用)。以前在真机上「断言都过」是巧合:等启动脚本
+// 退掉只给了 5 秒,PowerShell 还没退完,会话本来就在跑(2026-11-19 真机:等到真退了,第二次
+// 启动拿到 201)。哪天 Windows 有了真的判活,这一条要跟着打开。
+if (process.platform === "win32") {
+  console.log("test-launch-abandon: SKIP —— Windows 上账上的号恒判为已退出(processAlive),没有死局可解");
+  process.exit(0);
+}
 
 const temporary = realpathSync(mkdtempSync(join(tmpdir(), "navi-launch-abandon-")));
 process.env.NAVI_DB = join(temporary, "test.db");
