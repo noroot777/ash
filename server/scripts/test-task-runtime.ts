@@ -142,9 +142,17 @@ try {
     const page = await uiBrowser.newPage({ viewport: { width: 1600, height: 1000 } });
     const pageErrors: string[] = [];
     page.on("pageerror", (error: Error) => pageErrors.push(error.message));
+    // 扣住「runtime」任务的下一次状态查询，放行前切到别的任务：模拟上一个任务迟到的响应。
+    let holdNext = false;
+    let releaseHeld: (() => void) | null = null;
+    let heldSeen: (() => void) | null = null;
     await page.route("**/api/**", async (route: any) => {
       const req = route.request();
       const url = new URL(req.url());
+      if (holdNext && req.method() === "GET" && url.pathname === "/api/tasks/runtime/runtime") {
+        holdNext = false;
+        await new Promise<void>((resolve) => { releaseHeld = resolve; heldSeen?.(); });
+      }
       const response = await app.request(url.pathname + url.search, { method: req.method(), headers: req.headers(), body: req.postData() ?? undefined });
       await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers.entries()), body: Buffer.from(await response.arrayBuffer()) });
     });
@@ -241,6 +249,32 @@ try {
     await tab("浏览器").click();
     await pane.getByRole("img").waitFor();
     assert.equal(await pane.getByRole("img").count(), 1);
+    // 动作被拒的原因一直挂着：后面成功的状态轮询（1.5s 一次）不会把它冲掉。
+    await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "runtime"));
+    await tab("服务").click();
+    const restart = page.getByRole("button", { name: "重启", exact: true });
+    await restart.click();
+    const refused = page.getByRole("alert").filter({ hasText: /任务正在执行/ });
+    await refused.waitFor();
+    await page.waitForTimeout(3500);
+    assert.equal(await refused.count(), 1, "重启被拒的原因被后来的轮询清掉了");
+    // 任务执行中服务端本就不让用户起服务：重启键直接灰着，不留一颗点了才被拒的键。
+    await page.goto(`${web.origin}/scripts/fixtures/task-runtime.html?running=1`);
+    await restart.waitFor(); // 右栏记着停在「服务」（再点一下已选中的格是收起整栏）
+    assert.equal(await restart.isDisabled(), true);
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "runtime"));
+    // 换任务时上一个任务迟到的状态不能落到当前任务上（否则服务格会拿上一个任务的命令去重启）。
+    await page.goto(`${web.origin}/scripts/fixtures/task-runtime.html`);
+    await tab("服务").waitFor();
+    const held = new Promise<void>((resolve) => { heldSeen = resolve; });
+    holdNext = true;
+    await held;
+    await page.getByRole("button", { name: "切换任务", exact: true }).click();
+    await tab("服务").waitFor({ state: "hidden" });
+    releaseHeld!();
+    await page.waitForTimeout(1000);
+    assert.equal(await tab("服务").count(), 0, "上一个任务迟到的服务状态串进了当前任务");
+    assert.equal(await page.getByText("node service.cjs").count(), 0);
     assert.deepEqual(pageErrors, []);
     console.log(`UI screenshots: ${screenshots}`);
   }

@@ -17,7 +17,11 @@ export function serviceStatus(runtime: TaskRuntime) {
   return service.services?.[0]?.status === "failed" ? { tone: "failed", text: "启动失败" } as const : { tone: "stopped", text: "已停止" } as const;
 }
 
-export function ServiceInspector({ runtime }: { runtime: TaskRuntime }) {
+/**
+ * `taskRunning`：任务正在执行（跑着或排着）。这时服务归当前智能体管，服务端只让你看和停、不让你
+ * 起（task-runtime-routes.ts 同一判据），重启键照此灰着并说明原因，不留一颗点了才被拒的键。
+ */
+export function ServiceInspector({ runtime, taskRunning }: { runtime: TaskRuntime; taskRunning: boolean }) {
   const { state, serviceReady, busy, perform, taskId } = runtime;
   const service = state.service;
   const nav = useInspectorNav();
@@ -44,7 +48,9 @@ export function ServiceInspector({ runtime }: { runtime: TaskRuntime }) {
         {serviceReady && <a className="insp-tool" href={service.url!} target="_blank" rel="noreferrer" aria-label="打开"><ArrowSquareOut size={14} /></a>}
         {service.running
           ? <InspTool label="停止" disabled={busy} onClick={() => void perform(() => runtimeApi.stop(taskId))}><Stop size={14} /></InspTool>
-          : service.command && <InspTool label="重启" disabled={busy} onClick={() => void perform(() => runtimeApi.start(taskId, service.command!))}><Play size={14} /></InspTool>}
+          : service.command && <InspTool label="重启" disabled={busy || taskRunning}
+            tip={taskRunning ? "任务执行中，服务由智能体启动；结束后可重启" : undefined}
+            onClick={() => void perform(() => runtimeApi.start(taskId, service.command!))}><Play size={14} /></InspTool>}
       </InspectorHeadActions>
       <header className="runtime-service-head">
         <div className="runtime-service-name">

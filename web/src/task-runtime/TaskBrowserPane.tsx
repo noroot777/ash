@@ -13,7 +13,10 @@ import "./task-runtime.css";
 
 export function BrowserInspector({ runtime }: { runtime: TaskRuntime }) {
   const browser = runtime.state.browser;
-  if (browser) return <TaskBrowserPane key={browser.id} taskId={runtime.taskId} state={browser} onChange={runtime.setBrowser} />;
+  if (browser) {
+    const owner = runtime.taskId;
+    return <TaskBrowserPane key={browser.id} taskId={owner} state={browser} onChange={(next) => runtime.setBrowser(owner, next)} />;
+  }
   const open = () => void runtime.perform(() => runtimeApi.action(runtime.taskId, undefined, { action: "open" }));
   return (
     <div className="insp-pane">

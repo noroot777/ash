@@ -255,7 +255,8 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     cluster: 3,
     title: "服务",
     icon: <TerminalWindow size={14} />,
-    render: (context) => <ServiceInspector runtime={context.runtime} />,
+    render: (context) => <ServiceInspector runtime={context.runtime}
+      taskRunning={context.task.status === "running" || context.task.status === "queued"} />,
   },
   {
     id: "browser",
