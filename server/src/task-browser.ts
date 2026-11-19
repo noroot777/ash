@@ -130,7 +130,7 @@ export async function taskBrowserAction(taskId: string, input: BrowserUserAction
         if (!record?.gen || record.state !== "ready" || !record.url || !alive(record.pid)) throw new Error("请先启动此任务的托管服务，健康检查通过后再打开浏览器");
         const size = browserViewport(input.width ?? 1280, input.height ?? 800);
         live = { gen: record.gen, base: record.url, prefix: "", touched: Date.now(), controlVersion: 0, browser: null, page: null,
-          state: { id: randomUUID(), status: "starting", control: options.agent ? "agent" : "user", url: record.url,
+          state: { id: randomUUID(), status: "starting", control: "agent", url: record.url,
             title: "", ...size, revision: 0, updatedAt: now(), hasFrame: false, error: null, activity: [] } };
         browsers.set(taskId, live);
         publish(taskId, live);

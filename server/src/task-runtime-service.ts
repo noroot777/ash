@@ -42,8 +42,8 @@ export async function startDevelopmentService(
     return { reused: true, service: previewState(taskId) };
   }
   if (isPreviewStarting(taskId)) throw new Error("服务正在启动，请查看状态或停止后重试");
-  if (existing && (existing.purpose !== "development" || existing.cmd !== command)) throw new Error("此任务已有另一项预览服务，请先明确停止它再启动新服务");
-  const gen = beginPreviewStart(taskId);
+  if (existing && existing.purpose !== "development") throw new Error("此任务已有另一项预览服务，请先明确停止它再启动新服务");
+  const gen = beginPreviewStart(taskId, undefined, "development");
   try {
     const directory = await developmentDirectory(taskId);
     const result = await startPreview(taskId, {

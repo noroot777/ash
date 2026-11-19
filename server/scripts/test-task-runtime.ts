@@ -17,7 +17,9 @@ const { projects, tasks } = await import("../src/db/schema.js");
 const { mountTaskRuntimeRoutes } = await import("../src/task-runtime-routes.js");
 const { mountPreviewRoutes } = await import("../src/preview-routes.js");
 const { mountFreePreviewRoutes } = await import("../src/free-workflow-preview.js");
-const { stopPreview, stopPreviewOnRerun } = await import("../src/preview.js");
+const { startPreview, stopPreview, stopPreviewAtAccept, stopPreviewOnRerun, isPreviewStarting } = await import("../src/preview.js");
+const { beginPreviewStart, endPreviewStart, previewStartCanceled } = await import("../src/preview-start-state.js");
+const { setTaskStatus } = await import("../src/status.js");
 const { readAnyPreview, alive } = await import("../src/preview-store.js");
 const { taskBrowserState, closeTaskBrowser } = await import("../src/task-browser.js");
 const { browserFile } = await import("../src/task-browser-store.js");
@@ -61,6 +63,19 @@ const action = async (body: unknown, agent = true): Promise<BrowserObservation> 
 let uiBrowser: any;
 let web: any;
 try {
+  const ordinaryStart = beginPreviewStart("other");
+  const developmentStart = beginPreviewStart("other", undefined, "development");
+  try {
+    await stopPreviewOnRerun("other");
+    assert.equal(previewStartCanceled(ordinaryStart), true);
+    assert.equal(previewStartCanceled(developmentStart), false);
+    assert.equal(isPreviewStarting("other"), true);
+    await stopPreview("other", null);
+    assert.equal(previewStartCanceled(developmentStart), true);
+  } finally {
+    endPreviewStart("other", ordinaryStart);
+    endPreviewStart("other", developmentStart);
+  }
   assert.deepEqual(await okJson(await request("runtime")), { service: null, browser: null });
   assert.equal((await request("runtime/service", "POST", { command: "node service.cjs" })).status, 409);
   assert.equal((await request("runtime/service", "POST", { command: "node service.cjs" }, { ...agentHeaders, [NAVI_HEADERS.directionToken]: "old" })).status, 409);
@@ -76,15 +91,18 @@ try {
   const reused = await okJson(await request("runtime/service", "POST", { command: "node service.cjs" }, agentHeaders));
   assert.equal(reused.reused, true);
   assert.equal(readAnyPreview("runtime")?.pid, first.pid);
-  assert.equal((await request("runtime/service", "POST", { command: "node other.cjs" }, agentHeaders)).status, 409);
   const realChrome = process.env.CHROME_BIN;
   process.env.CHROME_BIN = join(root, "missing-chrome");
   assert.equal((await request("runtime/browser", "POST", { action: "open" }, agentHeaders)).status, 409);
   assert.equal(taskBrowserState("runtime")?.status, "failed");
   assert.match(taskBrowserState("runtime")!.error!, /不可用/);
   if (realChrome) process.env.CHROME_BIN = realChrome; else delete process.env.CHROME_BIN;
-  let observed = await action({ action: "open", width: 1280, height: 800, screenshot: true });
-  const browserId = observed.state.id;
+  let observed = await action({ action: "open", width: 1280, height: 800, screenshot: true }, false);
+  let browserId = observed.state.id;
+  assert.equal(observed.state.control, "agent");
+  assert.equal((await request("runtime/browser", "POST", { action: "reload", id: browserId })).status, 409);
+  observed = await action({ action: "open", screenshot: true });
+  assert.equal(observed.state.id, browserId);
   assert.ok(observed.image);
   const { registerTaskRuntimeTools } = await import("../../mcp/src/tools/task-runtime.js");
   const registered = new Map<string, (...args: any[]) => Promise<any>>();
@@ -117,6 +135,7 @@ try {
   observed = await action({ action: "snapshot", id: browserId });
   assert.equal(observed.state.error, null);
   if (process.env.ASH_RUNTIME_SERVER_ONLY !== "1") {
+    await action({ action: "close", id: browserId });
     const { launchChrome, startWebServer } = await import("../../web/scripts/dom-stage.mjs");
     web = await startWebServer();
     uiBrowser = await launchChrome();
@@ -131,7 +150,12 @@ try {
     });
     await page.goto(`${web.origin}/scripts/fixtures/task-runtime.html`);
     const pane = page.getByRole("complementary", { name: "共享浏览器" });
+    await page.getByRole("button", { name: "浏览器", exact: true }).click();
+    await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     await pane.getByRole("img").waitFor();
+    browserId = taskBrowserState("runtime")!.id;
+    assert.equal(taskBrowserState("runtime")?.control, "agent");
+    assert.equal((await action({ action: "open" })).state.id, browserId);
     await page.getByRole("button", { name: "接管", exact: true }).click();
     await page.getByRole("button", { name: "交还", exact: true }).waitFor();
     assert.equal(taskBrowserState("runtime")?.control, "user");
@@ -174,9 +198,9 @@ try {
     assert.equal(taskBrowserState("runtime")?.status, "closed");
     assert.equal(await pane.getByRole("img").count(), 1);
     await page.getByRole("button", { name: "重连", exact: true }).click();
-    await page.getByRole("button", { name: "交还", exact: true }).waitFor();
-    await page.getByRole("button", { name: "交还", exact: true }).click();
     await page.getByRole("button", { name: "接管", exact: true }).waitFor();
+    assert.equal(taskBrowserState("runtime")?.control, "agent");
+    assert.equal((await action({ action: "open" })).state.id, taskBrowserState("runtime")?.id);
     assert.notEqual(taskBrowserState("runtime")?.id, browserId);
     assert.equal((await request("runtime/browser", "POST", { action: "reload", id: browserId }, agentHeaders)).status, 409);
     await db.update(tasks).set({ activeTurnToken: null, activeDirectionToken: null, status: "done" }).where(eq(tasks.id, "runtime"));
@@ -184,6 +208,16 @@ try {
     await pane.getByRole("img").waitFor();
     assert.ok(readAnyPreview("runtime")?.url);
     assert.equal((await request("runtime/browser", "POST", { action: "snapshot", id: browserId }, agentHeaders)).status, 409);
+    const continuedBrowser = taskBrowserState("runtime")!.id;
+    await setTaskStatus("runtime", "running");
+    assert.equal(readAnyPreview("runtime")?.pid, first.pid);
+    assert.equal(taskBrowserState("runtime")?.id, continuedBrowser);
+    assert.equal(taskBrowserState("runtime")?.status, "ready");
+    await page.reload();
+    await page.getByRole("button", { name: "接管", exact: true }).waitFor();
+    await pane.getByRole("img").waitFor();
+    await page.screenshot({ path: join(screenshots, "shared-browser-continued.png"), fullPage: true });
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "runtime"));
     await page.getByRole("button", { name: "停止", exact: true }).click();
     await page.getByRole("button", { name: "重启", exact: true }).waitFor();
     await page.screenshot({ path: join(screenshots, "shared-browser-stopped.png"), fullPage: true });
@@ -202,12 +236,53 @@ try {
   assert.ok(existsSync(browserFile("runtime", "png")));
   assert.ok(JSON.parse(readFileSync(browserFile("runtime", "json"), "utf8")).activity.length);
   await db.update(tasks).set({ activeTurnToken: "turn-runtime", activeDirectionToken: "direction-runtime", status: "running" }).where(eq(tasks.id, "runtime"));
-  await okJson(await request("runtime/service", "POST", { command: "node service.cjs" }, agentHeaders));
+  let allowStartup = () => {};
+  let startupReached = () => {};
+  const startupBlocked = new Promise<void>((resolve) => { allowStartup = resolve; });
+  const startupReady = new Promise<void>((resolve) => { startupReached = resolve; });
+  let checks = 0;
+  const coldStart = startDevelopmentService("runtime", { command: "node service.cjs" }, async () => {
+    if (++checks === 2) { startupReached(); await startupBlocked; }
+  });
+  try {
+    await startupReady;
+    assert.equal(readAnyPreview("runtime"), null);
+    await stopPreviewOnRerun("runtime");
+    assert.equal(isPreviewStarting("runtime"), true);
+  } finally { allowStartup(); }
+  await coldStart;
+  const continuedService = readAnyPreview("runtime")!;
+  const continuedBrowser = (await action({ action: "open" })).state.id;
+  const pendingPreview = beginPreviewStart("runtime");
+  try {
+    for (const previous of ["done", "paused", "failed"] as const) {
+      await db.update(tasks).set({ status: previous }).where(eq(tasks.id, "runtime"));
+      await setTaskStatus("runtime", "running");
+      assert.equal(readAnyPreview("runtime")?.gen, continuedService.gen);
+      assert.equal(alive(continuedService.pid), true);
+      assert.equal(taskBrowserState("runtime")?.id, continuedBrowser);
+      assert.equal((await action({ action: "snapshot", id: continuedBrowser })).state.status, "ready");
+    }
+    assert.equal(previewStartCanceled(pendingPreview), true);
+  } finally { endPreviewStart("runtime", pendingPreview); }
+  const replacement = await okJson(await request("runtime/service", "POST", { command: "node ./service.cjs" }, agentHeaders));
+  assert.equal(replacement.reused, false);
+  assert.notEqual(readAnyPreview("runtime")?.gen, continuedService.gen);
+  assert.equal(alive(continuedService.pid), false);
+  assert.equal(taskBrowserState("runtime")?.status, "closed");
   await action({ action: "open" });
-  await stopPreviewOnRerun("runtime");
+  assert.equal((await stopPreviewAtAccept("runtime")).stopped, true);
   assert.equal(readAnyPreview("runtime"), null);
   assert.equal(taskBrowserState("runtime")?.status, "closed");
-  console.log("PASS task runtime: service ownership/reuse, current-turn authorization, shared DOM, takeover, persistent frames, lifecycle cleanup");
+  const ordinary = await startPreview("runtime", {
+    id: "preview", kind: "preview", p: { cmd: "node service.cjs", mode: "command", life: "task", ready: "port" }, fail: null,
+  }, workspace);
+  assert.equal(ordinary.ok, true);
+  await assert.rejects(() => startDevelopmentService("runtime", { command: "node ./service.cjs" }, async () => {}), /已有另一项预览服务/);
+  await stopPreviewOnRerun("runtime");
+  assert.equal(readAnyPreview("runtime"), null);
+  if (ordinary.ok) assert.equal(alive(ordinary.record.pid), false);
+  console.log("PASS task runtime: service ownership/reuse/replacement, continuation and cold-start lifetimes, watch-only open/reconnect, takeover, persistent frames, acceptance and ordinary preview cleanup");
 } finally {
   await uiBrowser?.close();
   await web?.close();
