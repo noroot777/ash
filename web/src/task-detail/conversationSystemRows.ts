@@ -257,7 +257,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
         return;
       }
       if (view.tier !== "receipt") note({ kind: "event", id: event.id, at: event.at, view, item: event }, receipt);
-      else if (turn || homeless(event)) record(receipt, inRound(event));
+      else if (turn) record(receipt, inRound(event));
       else if (!inRound(event)) pending.push(receipt);
       return;
     }
@@ -293,6 +293,12 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
     }
     const turnId = acc.turnIdOf(row);
     if (turnId) {
+      // 等着认领的回执里，审查者会话自己的话只交给审查者的回合；来认领的是别人，就在原处单独记一笔。
+      if (!(acc.reviewerTurnOf?.(row) ?? false)) {
+        const own = pending.filter((receipt) => receipt.item && reviewerTurnNote(receipt.item));
+        if (own.length) (orphan ?? openOrphan(own[0]!.id)).row.receipts.push(...own);
+        pending = pending.filter((receipt) => !own.includes(receipt));
+      }
       out.push(row);
       give(turnId, pending);
       pending = [];

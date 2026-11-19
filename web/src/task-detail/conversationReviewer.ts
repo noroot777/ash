@@ -54,15 +54,24 @@ export function monitorWakeFedReviewer(
 }
 
 /**
- * 审查者那条会话给**它自己那一回合**写的话：结算说明（`level:"notice"`，「续聊回合异常结束(退出码 1)…」）
- * 和直播的回合边界（「执行异常结束 · exit 1」）。这是审查的事，只能贴在审查那颗气泡下面或进记录，
- * 落进执行者回合的尾注，读起来就是执行者那一回合出了事（用户 2026-11-19 截图）。
+ * 审查者那条会话**它自己的事**：结算说明、会话说明（换人接手另开会话、版本替换、会话作废…）、回合边界
+ * （「执行异常结束 · exit 1」）。这是审查的事，只能贴在审查那颗气泡下面、记进那一轮或在原处单独记一笔；
+ * 落进执行者回合的尾注或记录，读起来就是执行者那一回合出了事（用户 2026-11-19 截图）。
  *
- * 只认这两种：老服务端把任务时间线（验收、预览、审查开始…）也写进当时最新的那条会话、不带 `aside`
- * 标，那些照样是任务的事，不在此列。
+ * 判据只认记录格式，不认措辞，也不认展示语气：
+ *   - `level:"notice"`（结算说明，2026-08-31 起；读进来是 `tone:"notice"`，那一档只从这个标来）和直播的
+ *     回合边界：一直都是会话自己的事；
+ *   - 其余不带 `aside` 的系统行：2026-09-14 起（f4fd774b8，再留一天给没重启的旧进程）任务时间线（验收、预览、
+ *     审查开始…）一律带 `aside`，会话里剩下的系统行（会话说明这一类生产者都不写 level）就全是会话自己的；
+ *     那之前任务时间线也不带标、老服务端还把它写进当时最新的那条会话，分不开，不算。
+ *   - 「继续（从中断处）」那种回合起点（`resume`）是下一回合的输入，不在此列。
  */
+const SESSION_NOTE_CONTRACT_SINCE = "2026-09-15T06:11:38.000Z";
+
 export function reviewerTurnNote(item: Extract<ConversationItem, { kind: "event" }>): boolean {
-  return item.sessionRole === "reviewer" && !item.aside && (item.tone === "notice" || item.variant === "boundary");
+  if (item.sessionRole !== "reviewer" || item.aside || item.resume) return false;
+  if (item.tone === "notice" || item.variant === "boundary") return true;
+  return !!item.at && item.at >= SESSION_NOTE_CONTRACT_SINCE;
 }
 
 /**

@@ -18,7 +18,9 @@
 //   ⑧ 另一条审查者会话说的事（归档没成）：那条会话没在哪一轮里出现过，紧跟在收口后面就算这一轮的，不吞、不丢；
 //   ⑨ 审查者一句没说就断了（会话身份只能从开轮/结论那几条认）：后到的检查点那一句照样是那一轮的；
 //   ⑩ 晚到、中间隔着执行者的新一回合：按会话认回那一轮，不记给执行者的新回合；
-//   ⑪ 会话里根本没有审查段（老记录）：审查者会话那一回合的话认不出是哪一轮，在原处单独记一笔，不记给执行者。
+//   ⑪ 会话里根本没有审查段（老记录）：审查者会话那一回合的话认不出是哪一轮，在原处单独记一笔，不记给执行者；
+//   ⑫ 会话说明（换人接手另开会话，生产者不写 level）：认它靠记录格式不靠语气——收口后到的记进那一轮，没有
+//      审查段的在原处单独记一笔；改写法之前的老任务时间线（同样不带标）照旧是任务的事。
 // 跑：npm -w web run test:review-voice-footnote
 import assert from "node:assert/strict";
 import type { FreeReviewRun, Session } from "@ash/shared";
@@ -53,6 +55,8 @@ function transcript() {
       }, at);
       return self;
     },
+    /** 会话自己的系统行（会话说明那一类：不带 level、不带 aside）。 */
+    note(text: string, at: string) { put({ t: "system", agent: "codex", text }, at); return self; },
     aside(text: string, notice: Record<string, unknown>, at: string) { put({ t: "system", agent: "codex", aside: true, text, notice }, at); return self; },
     noVerdict(round: number, at: string) {
       return self.aside(`自由工作流第 ${round} 轮审查未能正常给出结论，已停止自动链。`,
@@ -347,6 +351,43 @@ function placesOf(view: ReturnType<typeof display>, test: (text: string) => bool
   ), []);
   const where = placesOf(legacy, (text) => text.includes("后台工作还没跑完"));
   assert.deepEqual([...where], ["standalone"], `⑪ 认不出是哪一轮的，在原处单独记一笔：${JSON.stringify([...where])}`);
+}
+
+// ⑫ 会话说明不带 level：落盘、直播两路。
+{
+  const HANDOVER = "〔换人接手〕这一轮由另一位用户发起。CLI 的会话记录存在发起人自己的配置目录里（多人模式下一人一份），这条会话不在那儿，续用它只会当场扑空，所以本轮另开了一条新会话。这条会话原样保留，原来那位再回来时仍从这里接着跑。";
+  const handover = (text: string) => text.startsWith("〔换人接手〕");
+  const R = { ...reviewerA, id: "R-hand", startedAt: "2026-11-19T01:23:13.700Z" } as unknown as Session;
+  const runs = [run("RUN5", 1, "failed", "2026-11-19T01:23:13.264Z", { noVerdict: cause })] as unknown as FreeReviewRun[];
+  const onExecutor = (view: ReturnType<typeof display>, test: (text: string) => boolean) => {
+    const where = placesOf(view, test);
+    return where.has("executor-records") || where.has("executor-footnote");
+  };
+  // 收口之后到的。
+  const after = transcript().start(1, "RUN5", "2026-11-19T01:23:13.722Z").resume("2026-11-19T01:23:14.176Z")
+    .noVerdict(1, "2026-11-19T01:23:20.000Z").note(HANDOVER, "2026-11-19T01:23:21.000Z").toString();
+  const closed = display(buildConversationItems([{ session: exec, output: EXEC_OUTPUT, trace: [] }, { session: R, output: after, trace: [] }], [exec, R], []), runs);
+  assert.ok(!onExecutor(closed, handover), `收口后到的会话说明不记给执行者：${JSON.stringify([...placesOf(closed, handover)])}`);
+  assert.ok(placesOf(closed, handover).has("lane"), "收口后到的会话说明记进那一轮");
+  // 没有审查段，落盘那一路。
+  const bare = transcript().note(HANDOVER, "2026-11-19T01:24:00.000Z").toString();
+  const persistedBare = display(buildConversationItems([{ session: exec, output: EXEC_OUTPUT, trace: [] }, { session: R, output: bare, trace: [] }], [exec, R], []), []);
+  assert.deepEqual([...placesOf(persistedBare, handover)], ["standalone"], "没有审查段：会话说明在原处单独记一笔");
+  // 没有审查段，直播那一路（announceSessionNote 广播的就是一条不带 level 的 system）。
+  const timeline = [{ kind: "server", id: "live-hand", event: {
+    type: "agent.event", taskId: "y8S-yZjD0eaK", sessionId: R.id, role: "reviewer", agentType: "codex",
+    event: { kind: "system", text: HANDOVER, at: "2026-11-19T01:24:00.000Z" },
+  } }] as unknown as TimelineEntry[];
+  const live = display(buildConversationItems([{ session: exec, output: EXEC_OUTPUT, trace: [] }, { session: R, output: "", trace: [] }], [exec, R], timeline), []);
+  assert.ok(!onExecutor(live, handover), `直播到的会话说明不记给执行者：${JSON.stringify([...placesOf(live, handover)])}`);
+  // 改写法之前，任务时间线也不带标、写在审查者会话里：那是任务的事，照旧记给执行者那一回合。
+  const OLD = "验收完成：目标分支 main；任务 status 保持 done。";
+  const old = (text: string) => text.startsWith("验收完成");
+  const oldTimeline = transcript().note(OLD, "2026-08-20T01:24:00.000Z").toString();
+  const oldExec = { ...exec, startedAt: "2026-08-20T01:19:23.365Z" } as unknown as Session;
+  const oldOutput = EXEC_OUTPUT.replaceAll("2026-11-19", "2026-08-20");
+  const legacy = display(buildConversationItems([{ session: oldExec, output: oldOutput, trace: [] }, { session: R, output: oldTimeline, trace: [] }], [oldExec, R], []), []);
+  assert.ok(onExecutor(legacy, old), `改写法之前的任务时间线照旧是任务的事：${JSON.stringify([...placesOf(legacy, old)])}`);
 }
 
 console.log("✓ review voice stays off the executor's footnote");
