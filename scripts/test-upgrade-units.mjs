@@ -2,17 +2,21 @@
 //   · 留底:库交给 SQLite 做一致快照 —— 库是软链、-wal 在它指着的那份旁边时,-wal 里已提交的那些也在备份里;
 //   · 核对「升级前」那份先认人:不在、被换过、没记指纹都是没核对成,而且不会替它建一份空库;
 //   · 升级锁:谁都不删别人的登记 —— 有活着的别人就退下(两个同时到的都退下),死掉的不算数,读不懂的按活着算;
-//   · 退回命令里的 `stop.mjs --pid`:等那个服务进程真的退出才算完(它收到信号还要忙一阵也等),认不出是服务的不动。
+//   · 数据锁按库文件的真实落点上:两份安装经各自的软链指着同一份库,也是同一把锁;
+//   · 退回命令里的 `stop.mjs --pid --born`:等那个服务进程真的退出才算完(它收到信号还要忙一阵也等);出生时刻对不上、
+//     只是参数里含着入口路径、已经在端口上应答的,一律不动。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPidAlive, sleep } from "./platform.mjs";
 import { selfStartedAtMs } from "./relocate-checkout-lock.mjs";
 import { backupDb, backupSources, fileDigest, readIds, verifyData } from "./upgrade-data.mjs";
-import { acquireUpgradeLock } from "./upgrade-lock.mjs";
+import { processBirth } from "./process-birth.mjs";
+import { acquireUpgradeLock, dataLockDirs } from "./upgrade-lock.mjs";
 
 const dir = mkdtempSync(join(realpathSync(tmpdir()), "navi-upgrade-units-"));
 
@@ -117,12 +121,42 @@ console.log(JSON.stringify({ ...r, held: readdirSync(${JSON.stringify(lockDir)})
     console.log("✓ 升级锁:有活着的别人就退下(同时到的都退下),同一次操作的下一段不冲突,死掉的不算数,读不懂的不删");
   }
 
+  // ── 数据锁按库文件的真实落点 ──────────────────────────────────────────────────────
+  {
+    const shared = join(dir, "shared");
+    mkdirSync(shared);
+    writeFileSync(join(shared, "real.db"), "");
+    const homes = ["checkout-a", "checkout-b"].map((n) => join(dir, n, "data"));
+    let linked = true;
+    for (const h of homes) {
+      mkdirSync(h, { recursive: true });
+      try { symlinkSync(join(shared, "real.db"), join(h, "navi.db")); } catch { linked = false; }
+    }
+    if (linked) {
+      const env = {};
+      assert.deepEqual(dataLockDirs(join(homes[0], "navi.db"), env).filter((d) => dataLockDirs(join(homes[1], "navi.db"), env).includes(d)),
+        [join(realpathSync(shared), ".navi-upgrade.lock.d")], "两份安装经软链用同一份库,却没有共同的锁");
+      const a = acquireUpgradeLock(dataLockDirs(join(homes[0], "navi.db"), env), { note: "升级" });
+      assert.ok(a.ok, a.why);
+      const b = JSON.parse(spawnSync(process.execPath, ["--input-type=module", "-e",
+        `import { acquireUpgradeLock, dataLockDirs } from ${JSON.stringify(new URL("./upgrade-lock.mjs", import.meta.url).href)};
+console.log(JSON.stringify(acquireUpgradeLock(dataLockDirs(${JSON.stringify(join(homes[1], "navi.db"))}, {}), { note: "升级" })));`], { encoding: "utf8" }).stdout);
+      assert.equal(b.ok, false, "另一份安装经自己的软链照样拿到了同一份库的锁");
+      a.release();
+      console.log("✓ 数据锁按库文件的真实落点:两份安装经各自的软链用同一份库,只有一个拿得到");
+    } else {
+      console.log("⚠ 建不了软链,跳过数据锁的软链那一格");
+    }
+  }
+
   // ── stop.mjs --pid ──────────────────────────────────────────────────────────────
   {
     // 异步跑:被结束的假服务是本进程的子进程,事件循环得转着才收得走它(否则它留成僵尸、看着还「活着」)。
-    const stop = (pid, extra = [], timeout = "10") => new Promise((done) => {
-      const c = spawn(process.execPath, [fileURLToPath(new URL("./stop.mjs", import.meta.url)), "--pid", String(pid), ...extra], {
-        env: { ...process.env, SERVER_ENTRY: "", STOP_PID_TIMEOUT: timeout }, stdio: ["ignore", "pipe", "pipe"],
+    // 一个此刻空着的端口(先让系统挑一个再放掉),别跟同时在跑的别的回归撞上。
+    const port = await new Promise((done) => { const probe = createServer().listen(0, "127.0.0.1", () => { const p = probe.address().port; probe.close(() => done(p)); }); });
+    const stop = (pid, extra = [], timeout = "10", born = processBirth(pid)) => new Promise((done) => {
+      const c = spawn(process.execPath, [fileURLToPath(new URL("./stop.mjs", import.meta.url)), "--pid", String(pid), "--born", born, ...extra], {
+        env: { ...process.env, SERVER_ENTRY: "", STOP_PID_TIMEOUT: timeout, PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";
       c.stdout.on("data", (d) => { stdout += d; });
@@ -130,12 +164,14 @@ console.log(JSON.stringify({ ...r, held: readdirSync(${JSON.stringify(lockDir)})
       c.on("close", (status) => done({ status, stdout, stderr: "" }));
     });
     mkdirSync(join(dir, "server", "dist"), { recursive: true });
-    // 假服务:收到 SIGTERM 之后还要忙一阵(同步迁移那种)才退;stubborn 的干脆不退。
+    // 假服务:收到 SIGTERM 之后还要忙一阵(同步迁移那种)才退;stubborn 的干脆不退;listen 的在端口上应答(慢服务后来起来了)。
     writeFileSync(join(dir, "server", "dist", "index.js"), `const stubborn = process.argv[2] === "stubborn";
 process.on("SIGTERM", () => { if (stubborn) return; const until = Date.now() + 1500; while (Date.now() < until); process.exit(0); });
-setInterval(() => {}, 1000); console.log("up");`);
+if (process.argv[2] === "listen") require("node:http").createServer((q, s) => s.end(JSON.stringify({ pid: process.pid }))).listen(${port}, "127.0.0.1", () => console.log("up"));
+else { setInterval(() => {}, 1000); console.log("up"); }`);
+    writeFileSync(join(dir, "worker.js"), "setInterval(() => {}, 1000); console.log(\"up\");");
     const start = async (...args) => {
-      const child = spawn(process.execPath, ["server/dist/index.js", ...args], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] });
+      const child = spawn(process.execPath, args[0] === "worker" ? ["worker.js", "--artifact=server/dist/index.js"] : ["server/dist/index.js", ...args], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] });
       await new Promise((r) => child.stdout.once("data", r));
       return child.pid;
     };
@@ -153,14 +189,25 @@ setInterval(() => {}, 1000); console.log("up");`);
     assert.equal(r3.status, 0, r3.stdout + r3.stderr);
     for (let i = 0; i < 20 && isPidAlive(stubborn); i += 1) await sleep(50);
     assert.ok(!isPidAlive(stubborn));
-    const bystander = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-    const r4 = await stop(bystander.pid);
+    // 认人:参数里只是含着入口路径的别的程序、出生时刻对不上的(号码被复用)、已经在端口上应答的,都不动。
+    const worker = await start("worker");
+    const r4 = await stop(worker);
     assert.equal(r4.status, 2, r4.stdout);
-    assert.ok(isPidAlive(bystander.pid), "不是服务的进程被结束了");
-    bystander.kill("SIGKILL");
-    console.log("✓ stop.mjs --pid:等服务进程真的退出才算完;等满还不退如实失败、--force 才强杀;认不出是服务的不动");
+    assert.ok(isPidAlive(worker), "参数里只是提到入口路径的进程被结束了");
+    const reused = await start();
+    const r5 = await stop(reused, [], "10", String(Number(processBirth(reused).replace(/^w/, "")) - 1000));
+    assert.equal(r5.status, 2, r5.stdout);
+    assert.match(r5.stdout, /号码被复用了/);
+    assert.ok(isPidAlive(reused), "出生时刻对不上的进程被结束了");
+    const answering = await start("listen");
+    const r6 = await stop(answering, ["--force"]);
+    assert.equal(r6.status, 2, r6.stdout);
+    assert.match(r6.stdout, /已经在 :\d+ 上应答了/);
+    assert.ok(isPidAlive(answering), "已经在应答的服务被按号码结束了");
+    for (const pid of [worker, reused, answering]) process.kill(pid, "SIGKILL");
+    console.log("✓ stop.mjs --pid --born:等服务进程真的退出才算完;等满还不退如实失败、--force 才强杀;只是参数含入口的、号码被复用的、已经在应答的都不动");
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
-console.log("✅ 留底、核对认人、升级锁、按 pid 结束服务");
+console.log("✅ 留底、核对认人、升级锁(含软链库)、按 pid + 出生时刻结束服务");

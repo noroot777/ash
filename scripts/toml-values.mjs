@@ -8,6 +8,24 @@ import { stripTomlNoise, unquoteToml } from "./toml-scan.mjs";
 
 const HEADER = /^\s*(\[\[?)((?:[^\]"']|"(?:[^"\\]|\\.)*"|'[^']*')*)\]\]?\s*$/;
 
+/** 多行基本字符串里的转义,照 TOML 的全集解(\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX、行尾反斜杠);认不出的转义返回 null(读不通,不猜)。 */
+function basicEscapes(raw) {
+  const simple = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\" };
+  let bad = false;
+  const out = raw.replace(/\\([ \t]*\r?\n\s*|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)/g, (_, c) => {
+    if (/^[ \t]*\r?\n/.test(c)) return ""; // 行尾反斜杠:连同换行和下一行开头的空白一起去掉
+    if (c.length > 1) {
+      const cp = parseInt(c.slice(1), 16);
+      if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) bad = true;
+      return bad ? "" : String.fromCodePoint(cp);
+    }
+    if (Object.hasOwn(simple, c)) return simple[c];
+    bad = true;
+    return "";
+  });
+  return bad ? null : out;
+}
+
 /** text 里第 from 个字符开始的一个值;返回 [值, 结束位置] 或 null。字符串交出文本,数组交出数组,其余交出原文。 */
 function value(text, from) {
   let i = from;
@@ -22,7 +40,8 @@ function value(text, from) {
       let close = end + 3;
       while (text[close] === q[0] && close < end + 5) close += 1; // 结尾多出来的一两个引号属于正文
       const raw = text.slice(i + 3, close - 3).replace(/^\r?\n/, "");
-      return [q === "'''" ? raw : raw.replace(/\\\r?\n\s*/g, "").replace(/\\(.)/g, (_, c) => ({ n: "\n", t: "\t", r: "\r" }[c] ?? c)), close];
+      const body = q === "'''" ? raw : basicEscapes(raw);
+      return body === null ? null : [body, close];
     }
   }
   if (ch === '"' || ch === "'") {

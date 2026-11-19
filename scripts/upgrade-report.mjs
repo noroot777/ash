@@ -16,20 +16,49 @@ export function shellArg(s, windows = IS_WINDOWS) {
 }
 
 /**
- * 「依次执行」那几行。退回到 from 那一版:库已经改成 navi.db、而那一版认不得它时,先(用新版)把库退回旧名。
- * serverRunning = 端口上有服务在应答(用 stop.mjs 停);strayPid = 刚起的服务进程还活着、却没应答(起得慢、卡在迁移里),
- * stop.mjs 问不到它,只能按 pid 结束 —— 用 `stop.mjs --pid`:先认准那个 pid 还是这份检出的服务,结束它并**等到它真的退出**
- * 才算成功(只发一个信号不算:它卡在同步迁移里时信号要等迁移做完才处理,后面退库名、装旧依赖就跟它撞上)。
+ * 这份安装选数据的那几个环境变量(NAVI_DATA_DIR / NAVI_DB / NAVI_RUNS_DIR),这一次升级时的值。退回命令开头原样设回去:
+ * 用户常用命令前缀临时给(`NAVI_DATA_DIR=/x npm run upgrade`),父 shell 里没有,照抄的 restart 就会回落到检出下的默认数据,
+ * 起来的是另一份库(审查第 4 轮实测)。每一代名字都设成同一个值:退回去的可能是改名之前的版本,它只认 ASH_*。
  */
-export function rollbackCommands({ from, head, port, serverRunning, strayPid = null, renameBack, dataDir, windows = IS_WINDOWS }) {
+export function envLines(vars, windows = IS_WINDOWS) {
+  return Object.entries(vars).flatMap(([name, value]) => (windows
+    ? [`$env:${name} = '${String(value).replace(/'/g, "''")}'`]
+    : [`export ${name}=${shellArg(String(value), false)}`]));
+}
+
+/**
+ * 退回之后服务开的是不是升级前那份数据:问 /api/health 报的数据目录(跟升级前核对端口上那个服务用的是同一条判据,
+ * upgrade-checks 的 identifyServer),两边按真实落点比。对不上退出 1;旧服务不报数据目录就提醒人去页面上看一眼。
+ * 写成不带引号的一行 JS(模板字符串、String.raw),照抄进 sh 和 PowerShell 都一样。
+ */
+export function checkDataCommand(port, dataDir, windows = IS_WINDOWS) {
+  const js = "const fs=require(`node:fs`);const real=(p)=>{try{return fs.realpathSync(p)}catch{return p}};"
+    + `const want=String.raw\`${dataDir}\`;`
+    + `fetch(\`http://127.0.0.1:${port}/api/health\`).then((r)=>r.json()).then((h)=>{const got=h?.instance?.dataDir;`
+    + "if(!got){console.log(`⚠ 服务没报它用的数据目录,去页面上确认项目和任务都还在`);return}"
+    + "if(real(got)!==real(want)){console.error(`✕ 服务用的数据目录是 ${got},不是升级前那份 ${want}:先停掉它,照上面设好环境变量再起`);process.exit(1)}"
+    + "console.log(`✓ 服务用的是升级前那份数据 ${want}`)}).catch((e)=>{console.error(`✕ 问不到服务:${e.message}`);process.exit(1)})";
+  return `node -e ${shellArg(js, windows)}`;
+}
+
+/**
+ * 「依次执行」那几行。退回到 from 那一版:库已经改成 navi.db、而那一版认不得它时,先(用新版)把库退回旧名。
+ * serverRunning = 端口上有服务在应答(用 stop.mjs 停);stray = { pid, born }:刚起的服务进程还活着、却没应答(起得慢、卡在迁移里),
+ * stop.mjs 问不到它,只能按 pid 结束 —— 用 `stop.mjs --pid --born`:先认准还是当初那一个(出生时刻)、确实在跑服务入口,结束它并
+ * **等到它真的退出**才算成功(只发一个信号不算:它卡在同步迁移里时信号要等迁移做完才处理,后面退库名、装旧依赖就跟它撞上)。
+ * dataEnv = 这次升级选数据的环境变量(envLines);dataDir = 退回之后服务该用的数据目录,最后一行核对(checkDataCommand)。
+ */
+export function rollbackCommands({ from, head, port, serverRunning, stray = null, renameBack, dataDir, dataEnv = {}, windows = IS_WINDOWS }) {
   const cmds = [];
   if (port !== 4317) cmds.push(windows ? `$env:PORT = "${port}"` : `export PORT=${port}`);
+  cmds.push(...envLines(dataEnv, windows));
   if (serverRunning) cmds.push("node scripts/stop.mjs");
-  if (strayPid) cmds.push(`node scripts/stop.mjs --pid ${strayPid}`);
+  if (stray) cmds.push(`node scripts/stop.mjs --pid ${stray.pid} --born ${stray.born}`);
   if (renameBack) cmds.push(`node scripts/rename-db.mjs --rollback --data ${shellArg(dataDir, windows)}`);
   if (from !== head) cmds.push(`git reset --keep ${from}`);
   // 那一版自己的 restart:装回它的依赖、构建、起服务(服务停着,先装后停的老问题不存在)。
   cmds.push("node scripts/restart.mjs");
+  cmds.push(checkDataCommand(port, dataDir, windows));
   return cmds;
 }
 

@@ -26,14 +26,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DB_FILE_NAME } from "./db-file.mjs";
-import { readEnv } from "./env.mjs";
+import { envNameGenerations, readEnv, readStorageEnv } from "./env.mjs";
 import { LEGACY_DB_FILE } from "./legacy-names.mjs";
 import { registerNaviMcp } from "./mcp-register.mjs";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, isPidAlive, localJson } from "./platform.mjs";
 import { inspect } from "./rename-db-core.mjs";
 import { restartCommand } from "./restart-options.mjs";
-import { dbFileFor, lockFileFor, takeDown } from "./server-control.mjs";
+import { dataDirFor, dbFileFor, lockFileFor, takeDown } from "./server-control.mjs";
+import { processBirth } from "./process-birth.mjs";
 import { launchServer, refreshMcp } from "./server-start.mjs";
 import { identifyServer, inspectData, resolvePort, runtimeProblems } from "./upgrade-checks.mjs";
 import { backupDb, backupSources, buildStamp, dbInBackup, readState, renameDb, verifyData, writeState } from "./upgrade-data.mjs";
@@ -41,9 +42,9 @@ import {
   beforeLastPull, countBetween, fastForward, fetchRemote, inspectCheckout, isAncestor, relation, resetKeep, revParse, short,
   showFile, untrackedCollisions,
 } from "./upgrade-git.mjs";
-import { acquireUpgradeLock, checkoutLockDir, dataLockDir, UPGRADE_LOCK_ENV } from "./upgrade-lock.mjs";
+import { acquireUpgradeLock, checkoutLockDir, dataLockDirs, UPGRADE_LOCK_ENV } from "./upgrade-lock.mjs";
 import { parseUpgradeOptions, upgradeCommand, UPGRADE_USAGE, userArgs } from "./upgrade-options.mjs";
-import { printRollback, printSummary, rollbackCommands, shellArg } from "./upgrade-report.mjs";
+import { checkDataCommand, envLines, printRollback, printSummary, rollbackCommands, shellArg } from "./upgrade-report.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 
@@ -123,6 +124,11 @@ function reportMissing(v) {
   }
 }
 
+/** 数据那一头的锁(upgrade-lock.mjs 的 dataLockDirs:按库和 runs 的真实落点);落点解析不了也算没拿到。 */
+function lockData(db, token) {
+  try { return acquireUpgradeLock(dataLockDirs(db, env), { token, note: "升级" }); } catch (error) { return { ok: false, why: error.message }; }
+}
+
 const takeDownArgs = (ctx, extra) => ({
   port: ctx.port, lockFile: ctx.server.lockFile, log: logFor(ctx.port), force: options.force, wait: options.wait,
   waitTimeout: WAIT_TIMEOUT, say, gate, ...extra,
@@ -158,7 +164,7 @@ async function prepare() {
   catch { block(["新版的 package.json 读不出来,不知道它要什么版本的 Node/npm"]); }
   const ctx = await preflight(pkg, stopHere);
   // 数据那一头也锁上(别的检出可以经 NAVI_DATA_DIR / NAVI_DB 指到同一份数据)。
-  const dataLock = acquireUpgradeLock([dataLockDir(ctx.data.db)], { token: lock.token, note: "升级" });
+  const dataLock = lockData(ctx.data.db, lock.token);
   if (!dataLock.ok) block([dataLock.why]);
   process.on("exit", dataLock.release);
   // 有任务在跑就在这里拦下(--wait 在这里等):还没拉代码,什么都没变。
@@ -213,7 +219,7 @@ async function apply() {
   }
   const ctx = await preflight(JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")), undoPull);
   const { data, port } = ctx;
-  const dataLock = acquireUpgradeLock([dataLockDir(data.db)], { token: lock.token, note: "升级" });
+  const dataLock = lockData(data.db, lock.token);
   if (!dataLock.ok) { say(`  ✕ ${dataLock.why}`); undoPull(2); }
   process.on("exit", dataLock.release);
   dataDir = data.dataDir;
@@ -269,12 +275,18 @@ async function apply() {
     undoPull(2);
   }
   const save = () => writeState(dataDir, state);
+  // 这一次选数据的环境变量(各代名字设成同一个值):退回 / 手工重起的命令开头原样设回去(upgrade-report.mjs 的 envLines)。
+  const dataEnv = {};
+  for (const name of ["NAVI_DATA_DIR", "NAVI_DB", "NAVI_RUNS_DIR"]) {
+    const value = readStorageEnv(env, name);
+    if (value) for (const key of envNameGenerations(name)) dataEnv[key] = resolve(REPO, value);
+  }
 
   // 起过的服务进程都记下来(起回原来的那个、起新的那个):没应答的那种 stop.mjs 问不到,退回命令得按 pid 结束、等它真退。
-  let launchedPid = null;
+  let launchedProc = null; // { pid, born }:pid 会被复用,退回命令按 pid + 出生时刻认人(process-birth.mjs)
   const launch = async () => {
     const r = await launchServer({ port, log, serverNode: SERVER_NODE, serverEntry: SERVER_ENTRY, startTimeout: START_TIMEOUT, env: { ...env, PORT: String(port) } });
-    if (r.pid) launchedPid = r.pid;
+    if (r.pid) launchedProc = { pid: r.pid, born: processBirth(r.pid) };
     return r;
   };
   /**
@@ -284,8 +296,11 @@ async function apply() {
   const serviceNow = async () => {
     const h = await localJson(port, "/api/health");
     if (h) return { serverRunning: true, line: `:${port} 上有服务在应答(pid ${h.pid ?? "?"})` };
-    if (launchedPid && isPidAlive(launchedPid)) {
-      return { serverRunning: false, strayPid: launchedPid, line: `刚起的服务进程(pid ${launchedPid})还活着、只是没应答 —— 可能只是起得慢(看 ${log});等它起来了再跑一次 npm run upgrade 收尾就算升好` };
+    if (launchedProc && isPidAlive(launchedProc.pid)) {
+      const line = `刚起的服务进程(pid ${launchedProc.pid})还活着、只是没应答 —— 可能只是起得慢(看 ${log});等它起来了再跑一次 npm run upgrade 收尾就算升好`;
+      // 出生时刻没读出来就认不准它(stop --pid 不肯动它),只能如实说、让人自己处理。
+      const known = /^w?\d+$/.test(launchedProc.born ?? "");
+      return { serverRunning: false, stray: known ? launchedProc : null, line: known ? line : `${line}(没读出它的出生时刻,退回之前先自己结束它)` };
     }
     return { serverRunning: false, line: "服务现在没在跑" };
   };
@@ -300,14 +315,14 @@ async function apply() {
     process.exit(1);
   };
   /** 退回 from 那一版的命令。库现在叫 navi.db、那一版又认不得它,就先(用新版)退回旧名。 */
-  const rollbackFor = ({ serverRunning, strayPid = null }) => {
+  const rollbackFor = ({ serverRunning, stray = null }) => {
     let renameBack = false;
     try {
       // 那一版的服务开不开得了 navi.db:看它自己选库的那份代码(改名之前的版本里没有这个名字)。
       const fromKnowsNavi = (showFile(REPO, from, "server/src/db/path.ts") ?? "").includes(JSON.stringify(DB_FILE_NAME));
       renameBack = !data.explicit && !fromKnowsNavi && inspect(dataDir).state === "renamed";
     } catch { /* 认不出来:退库名那一步不写,rename-db 自己会在旧版起不来时说清楚 */ }
-    const cmds = rollbackCommands({ from, head, port, serverRunning, strayPid, renameBack, dataDir });
+    const cmds = rollbackCommands({ from, head, port, serverRunning, stray, renameBack, dataDir: dataDirFor(REPO, env), dataEnv });
     return { repo: REPO, backup: state.inProgress?.backup ?? state.last?.backup, cmds };
   };
 
@@ -335,8 +350,10 @@ async function apply() {
           else {
             const now = await serviceNow();
             say(`  ✕ 原来的服务也没起回来(${now.line})。`);
-            if (now.strayPid) say(`    要手工重来,先结束它、等它真退:node scripts/stop.mjs --pid ${now.strayPid};再 ${restartCommand()}`);
-            else say(`    手工起:${restartCommand()}`);
+            const tail = [...envLines(dataEnv), restartCommand(), checkDataCommand(port, dataDirFor(REPO, env))];
+            if (now.stray) say(`    要手工重来,先结束它、等它真退,再起(依次执行):`);
+            else say("    手工起(依次执行):");
+            for (const c of [...(now.stray ? [`node scripts/stop.mjs --pid ${now.stray.pid} --born ${now.stray.born}`] : []), ...tail]) say(`       ${c}`);
           }
         }
         say("✕ 没有升级:库留不了底就不往下做。腾出空间(或修好权限)再跑一次。");

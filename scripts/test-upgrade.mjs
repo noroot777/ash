@@ -46,8 +46,14 @@ assert.equal(parseUpgradeOptions([], { FORCE: "1", SKIP_MCP: "1" }).force, true)
 assert.throws(() => parseUpgradeOptions(["--keep-db"], {}));
 assert.throws(() => parseUpgradeOptions(["--pulled-from", "x; rm -rf /"], {}));
 assert.deepEqual(userArgs(["--wait", "--continue", "--pulled-from", "abc1234", "--keep-db-name"]), ["--wait", "--keep-db-name"]);
-const cmds = rollbackCommands({ from: "a".repeat(40), head: "b".repeat(40), port: 4317, serverRunning: true, renameBack: true, dataDir: "/d d" });
-assert.deepEqual(cmds, ["node scripts/stop.mjs", "node scripts/rename-db.mjs --rollback --data '/d d'", `git reset --keep ${"a".repeat(40)}`, "node scripts/restart.mjs"]);
+const cmds = rollbackCommands({ from: "a".repeat(40), head: "b".repeat(40), port: 4317, serverRunning: true, renameBack: true, dataDir: "/d d", windows: false });
+assert.deepEqual(cmds.slice(0, -1), ["node scripts/stop.mjs", "node scripts/rename-db.mjs --rollback --data '/d d'", `git reset --keep ${"a".repeat(40)}`, "node scripts/restart.mjs"]);
+assert.match(cmds.at(-1), /^node -e '.*String\.raw`\/d d`.*'$/, "最后一行核对退回之后服务用的是不是升级前那份数据");
+// 这次升级选数据的环境变量原样设回去(命令前缀临时给的,父 shell 里没有;各代名字同一个值)。
+assert.deepEqual(rollbackCommands({ from: "a", head: "a", port: 4317, serverRunning: false, renameBack: false, dataDir: "/x", dataEnv: { NAVI_DATA_DIR: "/x y", ASH_DATA_DIR: "/x y" }, windows: false }).slice(0, 2),
+  ["export NAVI_DATA_DIR='/x y'", "export ASH_DATA_DIR='/x y'"]);
+assert.equal(rollbackCommands({ from: "a", head: "a", port: 4317, serverRunning: false, renameBack: false, dataDir: "C:\\x", dataEnv: { NAVI_DATA_DIR: "C:\\it's" }, windows: true })[0],
+  "$env:NAVI_DATA_DIR = 'C:\\it''s'");
 // 照抄进 shell 也还是原样:双引号包不住 `$USER`,单引号才包得住;路径里本身的单引号各按各的 shell 转义。
 assert.equal(shellArg("/tmp/data$USER", false), "'/tmp/data$USER'");
 assert.equal(shellArg("/it's", false), "'/it'\\''s'");
@@ -56,8 +62,8 @@ assert.equal(shellArg("C:\\plain\\dir", true), "C:\\plain\\dir");
 assert.equal(shellArg("/a\\b", false), "'/a\\b'", "sh 里裸着的反斜杠会被吃掉");
 // 刚起的服务还活着却没应答:stop.mjs 问不到它,按 pid 结束、等它真的退出(stop-pid.mjs;单测在 test-upgrade-units.mjs)。
 for (const windows of [false, true]) {
-  assert.deepEqual(rollbackCommands({ from: "a", head: "b", port: 4317, serverRunning: false, strayPid: 42, renameBack: false, dataDir: "/d", windows }),
-    ["node scripts/stop.mjs --pid 42", "git reset --keep a", "node scripts/restart.mjs"]);
+  assert.deepEqual(rollbackCommands({ from: "a", head: "b", port: 4317, serverRunning: false, stray: { pid: 42, born: "1700000000000" }, renameBack: false, dataDir: "/d", windows }).slice(0, -1),
+    ["node scripts/stop.mjs --pid 42 --born 1700000000000", "git reset --keep a", "node scripts/restart.mjs"]);
 }
 console.log("✓ 版本范围、参数、退回命令的形状");
 
@@ -139,9 +145,14 @@ async function followRollback(out) {
   const [shell, shellArgs] = IS_WINDOWS
     ? ["powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(`[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\n${script}`, "utf16le").toString("base64")]]
     : ["/bin/sh", ["-c", script]];
-  const run = await runTestProcess(shell, shellArgs, { cwd: INSTALL, env, encoding: "utf8", timeout: 120_000, preserveScripts: [SERVER] });
+  // 照抄的那个 shell 里**没有**选数据的环境变量(用户多半是用命令前缀临时给的):退回命令自己得把它设回去,最后一行核对数据(审查第 4 轮 R1)。
+  const bare = { ...env };
+  clearEnv(bare, "NAVI_DATA_DIR");
+  const run = await runTestProcess(shell, shellArgs, { cwd: INSTALL, env: bare, encoding: "utf8", timeout: 120_000, preserveScripts: [SERVER] });
   adopt(run);
-  return { commands, out: `${run.stdout ?? ""}${run.stderr ?? ""}` };
+  const said = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+  assert.match(said, /✓ 服务用的是升级前那份数据/, `退回之后没核对、或者起在了别的数据上\n${said}`);
+  return { commands, out: said };
 }
 
 // ── 旧服务在跑:改名之前那一代(只写 ash.db.ash.lock) ─────────────────────────────────────
@@ -443,7 +454,7 @@ out = await upgrade([], 1, { PORT: String(PORT), START_TIMEOUT: "2" });
 const stray = Number(out.match(/刚起的服务进程\(pid (\d+)\)还活着/)?.[1]);
 assert.ok(stray && isPidAlive(stray), `没说清刚起的进程还活着\n${out}`);
 back = await followRollback(out);
-assert.equal(back.commands[1], `node scripts/stop.mjs --pid ${stray}`, back.commands.join("\n"));
+assert.ok(back.commands.some((c) => new RegExp(`^node scripts/stop\\.mjs --pid ${stray} --born w?\\d+$`).test(c)), back.commands.join("\n"));
 assert.ok(!isPidAlive(stray), "照抄退回命令之后那个慢服务还活着(stop --pid 报成功之前就该等到它退出)");
 assert.equal((await health())?.version, "v12", back.out);
 assert.equal(head(), v12);

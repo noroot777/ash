@@ -10,12 +10,13 @@
 //   · 放下之后再看目录:还有别的 token 的登记、而它的主人活着(pid + 进程启动时刻对得上,查不准按活着算)⇒ 撤掉自己那份、
 //     不做。两个同时到的会互相看见、都退下 —— 只会「都没拿到」,不会「都拿到了」;
 //   · 主人已死的登记不算数,顺手删掉(它的主人不会再回来写它,删它跟谁都不冲突);读不懂的按活着算,交给人删。
-// 锁两处:这份检出的 git 目录(依赖、产物;worktree 各有各的;解包装的没有 git 目录,放安装目录下)、库所在的目录(两份检出可以经 NAVI_DATA_DIR / NAVI_DB 指到同一份
-// 数据)。升级第一段拿到锁,拉完代码交给第二段时把 token 经环境变量递过去,第二段用同一个 token 放自己的登记 —— 同一次操作。
+// 锁两处:这份检出的 git 目录(依赖、产物;worktree 各有各的;解包装的没有 git 目录,放安装目录下)、库和 runs 的真实落点所在的目录
+// (两份检出可以经 NAVI_DATA_DIR / NAVI_DB / 软链指到同一份数据,见 dataLockDirs)。升级第一段拿到锁,拉完代码交给第二段时把 token 经环境变量递过去,第二段用同一个 token 放自己的登记 —— 同一次操作。
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { alive, atomicCreate, selfStartedAtMs } from "./relocate-checkout-lock.mjs";
+import { readStorageEnv } from "./env.mjs";
+import { alive, atomicCreate, resourceKeys, selfStartedAtMs } from "./relocate-checkout-lock.mjs";
 import { git } from "./upgrade-git.mjs";
 
 /** 第一段递给第二段的那个 token。 */
@@ -29,12 +30,16 @@ export function checkoutLockDir(repo) {
   return dir.ok && dir.out && isAbsolute(dir.out) ? join(dir.out, "navi-upgrade.lock.d") : join(resolve(repo), ".navi-upgrade.lock.d");
 }
 
-/** 库所在目录的锁目录(按真实落点:软链、`..` 过来的同一份数据是同一把)。 */
-export function dataLockDir(dbFile) {
-  const dir = resolve(dirname(dbFile));
-  let real = dir;
-  try { real = realpathSync(dir); } catch { /* 还不存在(新安装):就用这个名字,第一次放登记时建出来 */ }
-  return join(real, ".navi-upgrade.lock.d");
+/**
+ * 数据那一头的锁目录:按**资源的真实落点**定,跟离线维护锁同一套资源键(relocate-checkout-lock 的 resourceKeys:库文件和 runs
+ * 目录各取 realpath)—— 库文件本身是软链时,两份安装的数据目录不同、指着的却是同一份库,只按数据目录(链接所在的地方)上锁就
+ * 各锁各的(审查第 4 轮实测)。每个键的真实所在目录放一把,去重;库改名(ash.db → navi.db)不挪目录,锁不跟着变。
+ * 解析不了真实落点(权限、链接成环)就抛出去:证明不了是哪份资源,不凭字面路径放行。
+ */
+export function dataLockDirs(dbFile, env = process.env) {
+  const runs = readStorageEnv(env, "NAVI_RUNS_DIR");
+  const keys = resourceKeys(resolve(dbFile), [runs ? resolve(runs) : join(dirname(resolve(dbFile)), "runs")]);
+  return [...new Set(keys.map((k) => join(dirname(k), ".navi-upgrade.lock.d")))].sort();
 }
 
 /** 目录里别人那几份还算数的登记:{ file, token, pid, note, startedAt }。 */
@@ -95,8 +100,13 @@ export function acquireUpgradeLock(dirs, { token = null, note }) {
  * 环境变量里带着 token 的(从某次升级里被叫起来的),算同一次操作。
  */
 export function holdOrExit({ repo, dbFile = null, note, env = process.env }) {
-  const dirs = [checkoutLockDir(repo), ...(dbFile ? [dataLockDir(dbFile)] : [])];
-  const lock = acquireUpgradeLock(dirs, { token: env[UPGRADE_LOCK_ENV] || null, note });
+  let lock;
+  try {
+    const dirs = [checkoutLockDir(repo), ...(dbFile ? dataLockDirs(dbFile, env) : [])];
+    lock = acquireUpgradeLock(dirs, { token: env[UPGRADE_LOCK_ENV] || null, note });
+  } catch (error) {
+    lock = { ok: false, why: error.message };
+  }
   if (!lock.ok) {
     process.stderr.write(`✕ ${lock.why}\n`);
     process.exit(2);

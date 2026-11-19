@@ -160,7 +160,15 @@ try {
     const r3 = s.retire("grok");
     assert.deepEqual([r3.changed, r3.unsure], [[], ["ash"]], "启动参数那一行读不通 ⇒ 认不准,不动");
     assert.equal(readFileSync(file, "utf8"), odd);
-    console.log("✓ grok:只认服务自己那张表的启动命令 —— 子表里的同名键不算,多行数组认得出,读不通的不动");
+    // 多行基本字符串里按 TOML 全集解转义:\u002f 写的 / 照样认得出是 Navi 的脚本;认不出的转义算认不准,不当成别人的。
+    const escaped = `${navi}[mcp_servers.ash]\ncommand = "node"\nargs = ["""\n${s.entry.replaceAll("\\", "\\\\").replaceAll("/", "\\u002f")}"""]\n`;
+    writeFileSync(file, escaped);
+    assert.deepEqual(s.retire("grok").changed.map((c) => c.removed), [["ash"]], "\\u 转义写的 Navi 路径没认出来");
+    const bogus = `${navi}[mcp_servers.ash]\ncommand = "node"\nargs = ["""\n${s.entry.replaceAll("\\", "\\\\")}\\q"""]\n`;
+    writeFileSync(file, bogus);
+    const r4 = s.retire("grok");
+    assert.deepEqual([r4.changed, r4.foreign, r4.unsure], [[], [], ["ash"]], "认不出的转义该算认不准");
+    console.log("✓ grok:只认服务自己那张表的启动命令 —— 子表里的同名键不算,多行数组、\\u 转义都认得出,读不通的不动");
   }
 
   // ⑨ 已有 navi 时,被 gemini 根级 mcp.excluded 挡掉的 ash 也不动(关着就是关着,不看别的登记在不在)。
