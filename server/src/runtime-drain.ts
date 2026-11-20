@@ -1,9 +1,11 @@
 import type { MiddlewareHandler } from "hono";
 import { activeRuntimeChannels, runtimeAgentChannel, trackRuntimeChannel } from "./runtime-agent-channels.js";
+import { resumeRuntimeGateway, runtimeGatewayIdle } from "./runtime-channel-gateway.js";
 
 let deadline = 0;
 let activeRequests = 0;
 let lease: NodeJS.Timeout | undefined;
+let sealed = false;
 const cleanups = new Set<() => void>();
 export const runtimeDraining = () => Date.now() < deadline;
 export const beginRuntimeDrain = () => {
@@ -14,16 +16,23 @@ export const beginRuntimeDrain = () => {
 };
 export const endRuntimeDrain = () => {
   deadline = 0;
+  sealed = false;
   clearTimeout(lease);
+  void resumeRuntimeGateway().catch((error) => console.error("[navi] channel resume failed", error));
   for (const cleanup of cleanups) cleanup();
   cleanups.clear();
 };
 export const onRuntimeDrainEnd = (cleanup: () => void) => { cleanups.add(cleanup); };
+export const sealRuntimeChannels = () => { sealed = true; };
+export const holdRuntimeDrain = () => { deadline = Infinity; clearTimeout(lease); };
 
 export async function waitRuntimeRequests(timeout = 8_000): Promise<boolean> {
   const until = Date.now() + timeout;
-  while ((activeRequests || activeRuntimeChannels().length) && Date.now() < until) await new Promise((done) => setTimeout(done, 25));
-  return activeRequests === 0 && activeRuntimeChannels().length === 0;
+  while (Date.now() < until) {
+    if (activeRequests === 0 && activeRuntimeChannels().length === 0 && await runtimeGatewayIdle()) return true;
+    await new Promise((done) => setTimeout(done, 25));
+  }
+  return false;
 }
 
 export function runtimeDrainGate(): MiddlewareHandler {
@@ -32,6 +41,12 @@ export function runtimeDrainGate(): MiddlewareHandler {
       return next();
     }
     const channel = runtimeAgentChannel(context.req.path);
+    if (runtimeDraining() && sealed && channel) {
+      if (channel === "monitor") return context.json({ hookSpecificOutput: { hookEventName: "PreToolUse",
+        permissionDecision: "deny", permissionDecisionReason: "服务正在切换，Monitor 未执行，请用 Navi start_monitor" } });
+      context.header("x-navi-undelivered", "runtime-handoff-v1");
+      return context.json({ error: "服务正在切换，模型请求未执行" }, 503);
+    }
     if (runtimeDraining() && !channel) {
       context.header("x-navi-undelivered", "runtime-handoff-v1");
       return context.json({ error: "服务正在切换运行时，请稍后重试；请求未执行" }, 503);

@@ -3,10 +3,13 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Agent, fetch as directFetch } from "undici";
 import { withTestResources } from "./test-process-resources.mjs";
 import { isPidAlive } from "./platform.mjs";
 
 export async function testRuntimeChannelTasks({ base, data, work, schema, launchTask, request, dbRead, dbWrite, health, waitFor }) {
+  const direct = new Agent();
+  const fetch = (url, options) => directFetch(url, { ...options, dispatcher: direct });
   const streams = new Map();
   const key = "fixture-runtime-channel-key";
   const chunk = (text) => `data: ${JSON.stringify({ id: "chat-fixture", object: "chat.completion.chunk", created: 1,
@@ -42,18 +45,21 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
     const current = await health();
     const credentials = JSON.parse(readFileSync(join(data, "navi.db.navi.lock"), "utf8"));
     const headers = { "x-navi-host-token": credentials.token, "x-navi-instance": current.instance.id };
-    const checkBlocked = async () => {
+    const checkEligible = async () => {
       const impact = (await request("/restart-impact")).body.runtimeHandoff;
-      for (const [index, pattern] of [[0, /1M/], [0, /Monitor/], [1, /模型协议转换/], [2, /Monitor/]]) {
-        assert.match(impact.blocked.find((item) => item.id === tasks[index].id)?.reason ?? "", pattern);
+      for (const task of tasks) {
+        assert.equal(impact.blocked.some((item) => item.id === task.id), false);
+        assert.ok(impact.sessions.includes(task.sessionId));
       }
     };
-    await checkBlocked();
+    await checkEligible();
     const saved = dbRead("select agent_out_path from sessions where id=?", tasks[0].sessionId).agent_out_path;
     assert.doesNotMatch(readFileSync(saved + ".runtime-channels.json", "utf8"), new RegExp(key));
     dbWrite("update agents set provider_id=null where id in ('context-1m','convert')");
-    await checkBlocked();
-    const open = async (channel, model = "fixture-model") => fetch(`${base}/api/llm-providers/${channel}/${channel}/v1/${channel === "context-1m" ? "messages" : "responses"}`, {
+    await checkEligible();
+    const stable = new URL(tasks[0].monitorUrl).origin;
+    assert.notEqual(stable, base, "real ClaudeExecutor HTTP hook points at the independent listener");
+    const open = async (channel, model = "fixture-model") => fetch(`${stable}/api/llm-providers/${channel}/${channel}/v1/${channel === "context-1m" ? "messages" : "responses"}`, {
       method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
       body: JSON.stringify(channel === "context-1m" ? { model: model + "[1m]", messages: [], stream: true, max_tokens: 10 }
         : { model, input: "fixture", stream: true }),
@@ -68,21 +74,17 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
     }
     const pending = request("/runtime-handoff", "POST", { protocol: 1, schema }, headers);
     await waitFor(async () => (await request("/tasks/channel-probe/run", "POST", {})).status === 503, "handoff starts draining");
-    for (const channel of ["context-1m", "convert"]) {
-      const continuing = await open(channel, "short");
-      assert.equal(continuing.status, 200);
-      assert.equal(continuing.headers.get("x-navi-undelivered"), null);
-      await continuing.text();
-    }
-    const hook = await request("/hooks/claude-monitor", "POST", { tool_name: "Monitor", tool_input: {} });
+    const continuing = [open("context-1m", "short"), open("convert", "short")];
+    const hook = await fetch(stable + "/api/hooks/claude-monitor", { method: "POST", body: JSON.stringify({ tool_name: "Monitor", tool_input: {} }) });
     assert.equal(hook.status, 200);
-    assert.equal(hook.body.hookSpecificOutput.permissionDecision, "deny");
+    assert.equal((await hook.json()).hookSpecificOutput.permissionDecision, "deny");
     const unauthorized = await fetch(`${base}/api/llm-providers/convert/convert/v1/responses`, { method: "POST" });
     assert.equal(unauthorized.status, 401, "drain exemption does not bypass relay authentication");
     await unauthorized.text();
     const refused = await pending;
     assert.equal(refused.status, 409);
     assert.match(refused.body.error, /仍有请求/);
+    for (const response of await Promise.all(continuing)) { assert.equal(response.status, 200); await response.text(); }
     assert.equal((await health()).pid, current.pid);
     for (const [channel, reader] of readers) {
       streams.get(channel).end(chunk("second") + "data: [DONE]\n\n");
@@ -90,10 +92,21 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
       for (;;) { const value = await reader.read(); if (value.done) break; tail += new TextDecoder().decode(value.value); }
       assert.match(tail, /second/);
     }
-    await checkBlocked();
-    const idleRefusal = await request("/runtime-handoff", "POST", { protocol: 1, schema }, headers);
-    assert.equal(idleRefusal.status, 409, "between model requests a dependent turn must still block takeover");
-    for (const pattern of [/1M/, /Monitor/, /模型协议转换/]) assert.match(idleRefusal.body.error, pattern);
+    await checkEligible();
+    const prepared = await request("/runtime-handoff", "POST", { protocol: 1, schema }, headers);
+    assert.equal(prepared.status, 200, "channel-dependent turns can switch between requests");
+    let settled = false;
+    const waiting = open("convert", "short").then((response) => { settled = true; return response; });
+    await new Promise((done) => setTimeout(done, 100));
+    assert.equal(settled, false, "requests after the final handoff check stay at the stable listener");
+    const sealed = await fetch(`${base}/api/llm-providers/convert/convert/v1/responses`, { method: "POST" });
+    assert.equal(sealed.status, 503);
+    assert.equal(sealed.headers.get("x-navi-undelivered"), "runtime-handoff-v1");
+    await sealed.text();
+    assert.equal((await request("/runtime-handoff", "DELETE", undefined, headers)).status, 200);
+    const recovered = await waiting;
+    assert.equal(recovered.status, 200);
+    await recovered.text();
     assert.equal((await health()).pid, current.pid);
     for (const task of tasks) {
       assert.ok(isPidAlive(task.rootPid) && isPidAlive(task.pid) && isPidAlive(task.mcp));
@@ -101,8 +114,9 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
     }
     await waitFor(() => tasks.every((task) => dbRead("select status from tasks where id=?", task.id).status === "done"), "dependent turns finish through their original MCP");
     await waitFor(async () => (await request("/restart-impact")).body.runtimeHandoff.blocked.length === 0, "finished channel dependencies release takeover");
-    console.log("✓ real Claude 1M/Codex conversion streams and Monitor hook survive refused takeover; launch-time dependencies persist between requests/profile edits until original agents settle");
+    console.log("✓ real ClaudeExecutor HTTP hooks and 1M/Codex conversion use stable channels; in-flight streams block, idle turns switch, final-check requests queue and cancellation resumes safely");
   }, [
+    () => direct.destroy(),
     () => { for (const response of streams.values()) response.destroy(); upstream.closeAllConnections(); },
     () => new Promise((done) => upstream.close(done)),
     () => { for (const id of ["context-1m", "convert"]) { dbWrite("delete from agents where id=?", id); dbWrite("delete from llm_providers where id=?", id); } },

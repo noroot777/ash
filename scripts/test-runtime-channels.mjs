@@ -5,12 +5,15 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { once } from "node:events";
+import { Agent, fetch as directFetch } from "undici";
 import { recordListeningPort } from "../server/dist/listening-port.js";
 import { activeRuntimeChannels, recordRuntimeChannels, runtimeChannelFile, runtimeChannelReasons } from "../server/dist/runtime-agent-channels.js";
-import { beginRuntimeDrain, endRuntimeDrain, runtimeDrainGate, waitRuntimeRequests } from "../server/dist/runtime-drain.js";
+import { beginRuntimeDrain, endRuntimeDrain, runtimeDrainGate, sealRuntimeChannels, waitRuntimeRequests } from "../server/dist/runtime-drain.js";
 import { withTestResources } from "./test-process-resources.mjs";
 
 const temporary = mkdtempSync(join(tmpdir(), "navi-runtime-channels-"));
+const direct = new Agent();
+const fetch = (url, options) => directFetch(url, { ...options, dispatcher: direct });
 const app = new Hono();
 app.use("*", runtimeDrainGate());
 const streams = new Map();
@@ -86,8 +89,19 @@ await withTestResources(async () => {
     assert.equal(await waitRuntimeRequests(1000), true, mode);
   }
   console.log("✓ active streams remain in-flight until EOF/error/cancel; relay and Monitor requests continue during drain while ordinary MCP mutations remain definitely undelivered");
+  sealRuntimeChannels();
+  const sealed = await app.request("/api/llm-providers/p/convert/v1/responses", { method: "POST" });
+  assert.equal(sealed.status, 503);
+  assert.equal(sealed.headers.get("x-navi-undelivered"), "runtime-handoff-v1");
+  const denied = await app.request("/api/hooks/claude-monitor", { method: "POST" });
+  assert.equal(denied.status, 200);
+  assert.equal((await denied.json()).hookSpecificOutput.permissionDecision, "deny");
+  endRuntimeDrain();
+  assert.equal((await app.request("/api/llm-providers/p/convert/v1/responses", { method: "POST" })).status, 200);
+  console.log("✓ final handoff seal closes the admission race without silently allowing Monitor; cancellation restores admission");
 }, [
   () => endRuntimeDrain(),
+  () => direct.destroy(),
   async () => { server.closeAllConnections(); await new Promise((done) => server.close(done)); },
   () => rmSync(temporary, { recursive: true, force: true }),
 ]);

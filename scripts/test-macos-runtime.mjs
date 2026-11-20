@@ -3,11 +3,12 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
 import { createServer as netServer } from "node:net";
 import { once } from "node:events";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { Agent, fetch as directFetch } from "undici";
 import { runtimeManifest } from "../desktop/macos/scripts/runtime-manifest.mjs";
 import { ensureSparkle } from "../desktop/macos/scripts/sparkle.mjs";
 import { seedSource, agentSource, codexSource } from "./macos-runtime-fixture.mjs";
@@ -17,6 +18,7 @@ import { withTestResources } from "./test-process-resources.mjs";
 import { isPidAlive, sleep } from "./platform.mjs";
 import { queryImpact, noVerdictReason } from "./server-control.mjs";
 import { testRuntimeChannelTasks } from "./test-runtime-channel-tasks.mjs";
+import { gatewayRequest } from "../server/dist/runtime-channel-gateway.js";
 
 if (process.platform !== "darwin") {
   console.log("SKIP: macOS immutable runtime regression");
@@ -25,6 +27,8 @@ if (process.platform !== "darwin") {
   const mac = join(root, "desktop/macos");
   const temporary = realpathSync(mkdtempSync(join(tmpdir(), "navi-runtime-live-")));
   const fixtures = [];
+  const direct = new Agent();
+  const fetch = (url, options) => directFetch(url, { ...options, dispatcher: direct });
   const servers = [];
   const environment = { ...process.env, HOME: join(temporary, "home"), NAVI_INSTALL_LOCKS: join(temporary, "locks") };
   for (const name of Object.keys(environment)) if (/^(ASH_|HARNESS_|NAVI_)/.test(name) && !["NAVI_INSTALL_LOCKS"].includes(name)) delete environment[name];
@@ -172,6 +176,13 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     }, "new task output is consumed");
     return { id: created.body.id, sessionId: session.id, rootPid: session.agent_pid, ...JSON.parse(readFileSync(file, "utf8")) };
   }
+  async function checkHooks(task) {
+    const file = join(work, task.id + "-hooks.jsonl");
+    const records = () => existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+    const before = records().length;
+    await waitFor(() => records().length >= before + 2, "original Claude process receives Monitor decisions after service replacement");
+    for (const record of records()) assert.deepEqual(record, { status: 200, decision: "deny" });
+  }
   async function switchRuntime(app = installed, status = 0) {
     const child = await fixture(binary, ["switch"], { env: envFor(app) });
     const output = await finish(child, status);
@@ -254,6 +265,7 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     await probe("start");
     assert.equal(existsSync(recovery), false, "observing an already serving instance confirms adoption");
     await testRuntimeChannelTasks({ base, data, work, schema, launchTask, request, dbRead, dbWrite, health, waitFor });
+    const claudeTask = await launchTask("claude-default-hook");
     const codexTask = await launchTask("codex-continuous", "codex");
     await waitFor(async () => (await request("/restart-impact")).body.runtimeHandoff.blocked.length === 0,
       "Claude and Codex both advertise real handoff capability");
@@ -336,6 +348,8 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     assert.equal(realpathSync(newHealth.instance.codeDir), next);
     assert.ok(isPidAlive(agent.rootPid) && isPidAlive(agent.pid) && isPidAlive(agent.mcp));
     assert.ok(isPidAlive(codexTask.rootPid) && isPidAlive(codexTask.pid) && isPidAlive(codexTask.mcp));
+    assert.ok(isPidAlive(claudeTask.rootPid) && isPidAlive(claudeTask.pid) && isPidAlive(claudeTask.mcp));
+    await checkHooks(claudeTask);
     await probe("collect");
     assert.ok(existsSync(old), "agent/MCP leases retain all old files");
     await waitFor(() => dbRead("select agent_offset from sessions where id='s-continuous'").agent_offset > before, "new consumer advances old offset");
@@ -343,6 +357,8 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     await waitFor(() => dbRead("select status from tasks where id='continuous'").status === "done", "old MCP submission and settlement");
     writeFileSync(join(work, codexTask.id + "-finish"), "");
     await waitFor(() => dbRead("select status from tasks where id=?", codexTask.id).status === "done", "Codex App Server reattaches and submits through its old MCP");
+    writeFileSync(join(work, claudeTask.id + "-finish"), "");
+    await waitFor(() => dbRead("select status from tasks where id=?", claudeTask.id).status === "done", "Claude with default HTTP hook completes through its original MCP after manual install");
     const codexTranscript = readFileSync(join(data, "runs", codexTask.id, codexTask.sessionId + ".md"), "utf8");
     const codexSegments = [...codexTranscript.matchAll(new RegExp(codexTask.id + "-segment-(\\d+)", "g"))].map((item) => Number(item[1]));
     assert.ok(codexSegments.length > 3);
@@ -406,8 +422,31 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     await runSparkle(sparkle, sources);
     await legacyMigration(nextApp);
   }, [
+    async () => {
+      for (const name of ["data", "malformed-journal-data", "legacy-data"]) {
+        const digest = createHash("sha256").update(join(temporary, name)).digest("hex").slice(0, 24);
+        const socket = join(tmpdir(), `navi-channel-${process.getuid()}-${digest}.sock`);
+        if (!existsSync(socket)) continue;
+        try {
+          const state = await gatewayRequest(socket, "/status");
+          await waitFor(async () => {
+            try { await gatewayRequest(socket, "/retire", { owner: state.owner }); return true; }
+            catch (error) { if (error.message.includes("409")) return false; throw error; }
+          }, "independent channel gateway retires through its own control socket");
+          await waitFor(() => !existsSync(socket), "gateway closes its control socket before fixture cleanup");
+        } catch (error) { if (!["ECONNREFUSED", "ENOENT"].includes(error.code)) throw error; }
+      }
+    },
     async () => { for (const child of fixtures) await child.dispose(); },
+    () => direct.destroy(),
     async () => { for (const server of servers) await new Promise((done) => server.close(done)); },
+    () => {
+      for (const name of ["data", "malformed-journal-data", "legacy-data"]) {
+        const digest = createHash("sha256").update(join(temporary, name)).digest("hex").slice(0, 24);
+        try { unlinkSync(join(tmpdir(), `navi-channel-${process.getuid()}-${digest}.sock`)); }
+        catch (error) { if (error.code !== "ENOENT") throw error; }
+      }
+    },
     () => rmSync(temporary, { recursive: true, force: true }),
   ]);
 
@@ -504,7 +543,7 @@ UpdateGate.shared.report = { emit("GATE-ERROR \\($0)") }`);
     await run(join(sparkle, "bin/sign_update"), ["--ed-key-file", keyFile, join(feed, "appcast.xml")]);
     const oldHealth = await health();
     await switchRuntime(sparkleInstalled);
-    const continuous = await launchTask("sparkle-continuous", "codex");
+    const continuous = await launchTask("sparkle-continuous", "claude");
     const before = await health();
     await fixture(join(sparkleInstalled, "Contents/MacOS/Navi"), [], { env: environment });
     await waitFor(() => existsSync(log) && /NEW-SERVER ready/.test(readFileSync(log, "utf8")), "real signed Sparkle swap and relaunch", 180_000);
@@ -512,6 +551,7 @@ UpdateGate.shared.report = { emit("GATE-ERROR \\($0)") }`);
     assert.doesNotMatch(lines, /ERROR|FAILED|UNEXPECTED-PROMPT/);
     assert.notEqual((await health()).pid, before.pid);
     assert.ok(isPidAlive(continuous.rootPid) && isPidAlive(continuous.pid) && isPidAlive(continuous.mcp));
+    await checkHooks(continuous);
     writeFileSync(join(work, continuous.id + "-finish"), "");
     await waitFor(() => dbRead("select status from tasks where id=?", continuous.id).status === "done", "completion after actual Sparkle relaunch");
     const transcript = readFileSync(join(data, "runs", continuous.id, continuous.sessionId + ".md"), "utf8");

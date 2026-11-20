@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { currentListeningPort } from "./listening-port.js";
+import { runtimeGateway, runtimeMonitorFallback } from "./runtime-channel-gateway.js";
 
 export const MONITOR_HOOK_PATH = "/api/hooks/claude-monitor";
 export const RUNTIME_CHANNEL_SUFFIX = ".runtime-channels.json";
@@ -37,13 +38,17 @@ export function runtimeChannelFile(out: string): string { return out + RUNTIME_C
 
 export function recordRuntimeChannels(cwd: string, args: string[], env: NodeJS.ProcessEnv, out: string): void {
   const channels = new Set<Channel>();
+  const stable = new Set<Channel>();
+  const gateway = runtimeGateway();
   let unknown = false;
+  let monitorGuard = false;
   const scan = (text: string) => {
     for (const match of text.matchAll(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/[^\s"'\\<>]*/g)) {
       const url = new URL(match[0]);
-      if (Number(url.port || (url.protocol === "https:" ? 443 : 80)) !== currentListeningPort()) continue;
       const channel = runtimeAgentChannel(url.pathname);
-      if (channel) channels.add(channel);
+      const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+      if (channel && port === gateway?.port) stable.add(channel);
+      else if (channel && port === currentListeningPort()) channels.add(channel);
     }
   };
   for (const value of Object.values(env)) if (value) scan(value);
@@ -59,18 +64,27 @@ export function recordRuntimeChannels(cwd: string, args: string[], env: NodeJS.P
   if (settings !== undefined) {
     try {
       const text = settings.trim().startsWith("{") ? settings : readFileSync(resolve(cwd, settings), "utf8");
-      scan(JSON.stringify(JSON.parse(text)));
+      const parsed = JSON.parse(text);
+      scan(JSON.stringify(parsed));
+      monitorGuard = parsed.hooks?.PreToolUse?.some((entry: { matcher?: string; hooks?: { type: string; command?: string }[] }) =>
+        entry.matcher === "Monitor" && entry.hooks?.some((hook) => hook.type === "command" && hook.command === runtimeMonitorFallback())) ?? false;
     } catch { unknown = true; }
   }
-  writeFileSync(runtimeChannelFile(out), JSON.stringify({ version: 1, channels: [...channels], unknown }), { mode: 0o600 });
+  if (stable.has("monitor") && !monitorGuard) unknown = true;
+  writeFileSync(runtimeChannelFile(out), JSON.stringify({ version: 2, channels: [...channels], unknown,
+    stable: [...stable], gateway: stable.size ? gateway?.id : undefined }), { mode: 0o600 });
 }
 
 export function runtimeChannelReasons(out: string): string[] {
   try {
     const record = JSON.parse(readFileSync(runtimeChannelFile(out), "utf8"));
-    if (record.version !== 1 || !Array.isArray(record.channels) || typeof record.unknown !== "boolean"
+    if (![1, 2].includes(record.version) || !Array.isArray(record.channels) || typeof record.unknown !== "boolean"
       || record.channels.some((channel: unknown) => typeof channel !== "string" || !Object.hasOwn(labels, channel))) throw new Error("invalid channel record");
+    if (record.version === 2 && (!Array.isArray(record.stable)
+      || record.stable.some((channel: unknown) => typeof channel !== "string" || !Object.hasOwn(labels, channel))
+      || (record.stable.length && typeof record.gateway !== "string"))) throw new Error("invalid stable channels");
     return [...record.channels.map((channel: Channel) => `${labels[channel]}依赖旧服务，需等待本回合结束`),
+      ...(record.stable?.length && record.gateway !== runtimeGateway()?.id ? ["稳定服务通道身份已改变，不能无损切换"] : []),
       ...(record.unknown ? ["无法确认启动配置中的服务通道依赖"] : [])];
   } catch { return ["服务通道依赖记录缺失或无效，需等待本回合结束"]; }
 }

@@ -196,10 +196,13 @@ export async function claudeMonitorHookDecision(
  */
 export { MONITOR_HOOK_PATH } from "./runtime-agent-channels.js";
 import { MONITOR_HOOK_PATH } from "./runtime-agent-channels.js";
+import { runtimeGatewayOrigin, runtimeMonitorFallback } from "./runtime-channel-gateway.js";
 
 export function monitorRedirectHook(crossTurn: boolean): Record<string, unknown> {
   if (crossTurn) return {};
   const port = currentListeningPort() ?? 4317;
+  const origin = runtimeGatewayOrigin() || `http://127.0.0.1:${port}`;
+  const fallback = runtimeMonitorFallback();
   return {
     hooks: {
       PreToolUse: [
@@ -208,7 +211,7 @@ export function monitorRedirectHook(crossTurn: boolean): Record<string, unknown>
           hooks: [
             {
               type: "http",
-              url: `http://127.0.0.1:${port}${MONITOR_HOOK_PATH}`,
+              url: `${origin}${MONITOR_HOOK_PATH}`,
               // 本机一跳，起个进程就回。给 15s 是留余量：真超时了 CLI 会丢弃输出、不表态，
               // 那就等于放行 —— 所以这个数宁可宽一点。
               timeout: 15,
@@ -218,6 +221,7 @@ export function monitorRedirectHook(crossTurn: boolean): Record<string, unknown>
               },
               allowedEnvVars: [NAVI_TURN_IDENTITY_ENV.taskId, NAVI_TURN_IDENTITY_ENV.turnToken],
             },
+            ...(fallback ? [{ type: "command", command: fallback, timeout: 5 }] : []),
           ],
         },
       ],
