@@ -10,7 +10,7 @@
    (撑到上限就在框内滚),顶边拖动条(task-detail/ReplyResizeHandle.tsx)拖出来的高度只当下限,
    拖过也照样长高——那条拖动条的上限比自动撑高的上限宽,自动撑高的限度不限制用户拖。
    浏览器原生的右下角把手仍然关着:两套机制都往 style.height 上写会互相打架。 */
-.task-reply-box textarea { display: block; width: 100%; min-height: 58px; resize: none; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; }
+.task-reply-box textarea { display: block; width: 100%; min-height: 58px; resize: none; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.5; }
 /* 回复框是输入卡：里面的输入框不套环，环画在卡上——卡自己那圈线换成淡墨，外面再晕开一圈。 */
 .task-reply-box:has(textarea:focus-visible) { border-color: var(--focus-soft); box-shadow: 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent), var(--surface-shadow); }
 /* 拖动条贴在回复框自己的上边(框内侧):框有 overflow:hidden 来裁圆角和水印,

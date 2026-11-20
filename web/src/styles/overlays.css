@@ -569,6 +569,7 @@
 }
 
 .note-editor > textarea {
+  line-height: 1.5;
   resize: none;
 }
 
