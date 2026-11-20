@@ -162,6 +162,8 @@
 .task-markdown h4,
 .task-markdown h5,
 .task-markdown h6 { margin: 16px 0 7px; color: var(--ink); line-height: 1.35; }
+/* 文内锚点跳过来时（目录、脚注，见 markdownAnchors）标题别贴着滚动容器的上沿。 */
+.task-markdown [id] { scroll-margin-top: 12px; }
 .task-markdown h1 { font-size: 18px; font-weight: var(--w-strong); }
 .task-markdown h2 { font-size: 15px; font-weight: var(--w-strong); }
 .task-markdown h3 { font-size: 13.5px; font-weight: var(--w-medium); }

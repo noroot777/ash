@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
   CaretLeft,
@@ -20,6 +20,7 @@ import { formatSize, isImageName } from "./fileModel.ts";
 import { MARKDOWN_PATTERN, MarkdownFileBody } from "./MarkdownFileBody.tsx";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
+import type { FileAnchor } from "./useFileView.ts";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 function TextBody({ file }: { file: FileContent }) {
@@ -74,11 +75,13 @@ function PageBody({ url, path }: { url: string; path: string }) {
 function Body({
   taskId,
   file,
+  anchor,
   pageUrl,
   showSource,
 }: {
   taskId: string;
   file: FileContent;
+  anchor: FileAnchor | null;
   pageUrl: string | null;
   showSource: boolean;
 }) {
@@ -105,7 +108,7 @@ function Body({
     );
   }
   if (file.kind === "text" && MARKDOWN_PATTERN.test(file.path) && !showSource) {
-    return <MarkdownFileBody taskId={taskId} file={file} />;
+    return <MarkdownFileBody taskId={taskId} file={file} anchor={anchor} />;
   }
   if (file.kind === "binary") {
     return (
@@ -189,6 +192,7 @@ function ReelControl({
 export function FileViewer({
   taskId,
   path,
+  anchor = null,
   reel,
   onStep,
   zoomed = false,
@@ -200,6 +204,8 @@ export function FileViewer({
 }: {
   taskId: string;
   path: string;
+  /** 正文里的链接指着这份文件的哪一节；渲染完滚过去（只认 Markdown 排版那一面）。 */
+  anchor?: FileAnchor | null;
   /**
    * 这份文件是从哪一串里点开的（同一组生成物、同一层文件），按页面上的先后排。给了就能
    * 在这儿直接翻下一张，不用每看一张都回侧栏点一次——十几张截图的任务这是常态。
@@ -216,6 +222,8 @@ export function FileViewer({
   notify: (message: string) => void;
 }) {
   const [file, setFile] = useState<FileContent | null>(null);
+  /** `file` 是按哪个路径取回来的：换文件那一刻屏幕上还是上一份，锚点不能拿去滚它。 */
+  const [loadedPath, setLoadedPath] = useState<string | null>(null);
   /** 网页预览地址（带令牌，服务端随内容发下来）。不是网页就一直是 null。 */
   const [pageUrl, setPageUrl] = useState<string | null>(null);
   /** 这份网页在沙箱里跑不全时的说明，同样由服务端判定（前端没法知道它加载了什么）。 */
@@ -229,6 +237,13 @@ export function FileViewer({
   const markdown = file?.kind === "text" && MARKDOWN_PATTERN.test(file.path);
   const [showSource, setShowSource] = useState(false);
   useEffect(() => setShowSource(false), [path]);
+  // 点了一处指着某一节的链接：要的是排版里的那一节，源码那一面没有可滚的标题。
+  useEffect(() => { if (anchor) setShowSource(false); }, [anchor]);
+  const fileAnchor = anchor && anchor.path === path && loadedPath === path ? anchor : null;
+  // 换了一份文件就从开头读：滚动容器是同一个元素，不归零就带着上一份的位置。排在 layout
+  // 阶段，正文里那次滚到锚点（MarkdownFileBody 的 effect）在它之后。
+  const body = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (body.current) body.current.scrollTop = 0; }, [loadedPath]);
   const zoom = useZoomLayer({
     zoomed,
     onExit: () => onExitZoom?.(),
@@ -255,12 +270,14 @@ export function FileViewer({
       .then((result) => {
         if (!alive) return;
         setFile(result.file);
+        setLoadedPath(path);
         setPageUrl(result.pageUrl);
         setPageNotice(result.pageNotice);
       })
       .catch((reason) => {
         if (!alive) return;
         setFile(null);
+        setLoadedPath(null);
         setPageUrl(null);
         setPageNotice(null);
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -408,11 +425,11 @@ export function FileViewer({
         </p>
       )}
 
-      <div className="file-viewer__body">
+      <div className="file-viewer__body" ref={body}>
         {loading && <p className="file-viewer__state"><NaviLoader />正在读取…</p>}
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
         {!loading && !error && file && (
-          <Body taskId={taskId} file={file} pageUrl={pageUrl} showSource={showSource} />
+          <Body taskId={taskId} file={file} anchor={fileAnchor} pageUrl={pageUrl} showSource={showSource} />
         )}
       </div>
       {deletion.dialog}

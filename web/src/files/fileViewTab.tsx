@@ -28,6 +28,7 @@ function FileViewPane({ taskId, view, notify }: { taskId: string; view: FileView
       <FileViewer
         taskId={taskId}
         path={view.filePath}
+        anchor={view.anchor}
         reel={view.reel}
         onStep={view.stepFile}
         zoomed={view.zoomed}

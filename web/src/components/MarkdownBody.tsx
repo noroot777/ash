@@ -9,6 +9,7 @@ import { rehypeFreshText } from "./freshText.ts";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
 import { isLocalFileHref } from "./fileLinkTarget.ts";
+import { anchorScopeProps, followInDocumentAnchor, inDocumentAnchor, rehypeAnchors } from "./markdownAnchors.ts";
 import { destinationFilePath } from "@navi/shared/markdown-images";
 import { isAudioPath, isVideoPath } from "../task-detail/utils.ts";
 import { CodeBlockScope, MarkdownCode, TaskFileLinkBase, useTaskFileHref } from "./TaskFileLink.tsx";
@@ -138,6 +139,23 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
     // 由 PreviewableImageLink 自己让路。
     const image = imagePreviewTarget(href, resolveFile);
     const expired = useExpiredEvidence(image?.url);
+    // 文内锚点（目录、脚注角标与回跳）：在这一份文档里跳过去，不交给浏览器——那条兜底是
+    // 新开一页（mac 壳里是原地整页重载），文档就没了。见 markdownAnchors。
+    const anchor = inDocumentAnchor(href);
+    if (anchor !== null) {
+      return (
+        <a
+          {...props}
+          href={href}
+          onClick={(event) => {
+            onClick?.(event);
+            if (event.defaultPrevented) return;
+            event.preventDefault();
+            followInDocumentAnchor(event.currentTarget, anchor);
+          }}
+        />
+      );
+    }
     // 指向一张已过保留期的截图：点开只会是一个空灯箱，就地说清楚，原来那段链接文字留着。
     if (image && expired) return <MissingImage origin={href ?? ""} alt={props.children} expired />;
     if (image) {
@@ -265,14 +283,20 @@ function MarkdownDocument({ text, resolveFile, layout, onReviewReport, onActionE
   const latest = useRef({ resolveFile, layout, onReviewReport, onActionError });
   latest.current = { resolveFile, layout, onReviewReport, onActionError };
   const components = useMemo(() => markdownComponents(latest), []);
+  // 标题 id 与脚注 id 的作用域：一屏几十条消息各有各的「## 结论」和 `[^1]`，见 markdownAnchors。
+  const scope = `${useId()}-`;
   const rehypePlugins = useMemo(
-    () => (layout
-      ? [rehypeMarkdownLayout(layout), ...(layout.fresh ? [rehypeFreshText(layout.fresh.marks, layout.fresh.now)] : [])]
-      : []),
-    [layout],
+    () => [
+      ...(layout
+        ? [rehypeMarkdownLayout(layout), ...(layout.fresh ? [rehypeFreshText(layout.fresh.marks, layout.fresh.now)] : [])]
+        : []),
+      // 排最后：分区按脚注的原始 id 认，见 rehypeAnchors。
+      rehypeAnchors(scope),
+    ],
+    [layout, scope],
   );
   return (
-    <div className="task-markdown">
+    <div className="task-markdown" {...anchorScopeProps(scope)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkSoftBreaks]}
         rehypePlugins={rehypePlugins}

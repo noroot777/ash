@@ -26,6 +26,12 @@ type FileViewState = {
   folderPath: string | null;
   diff: ScmDiffTarget | null;
   /**
+   * 正文里的链接指着这份文件的某一节（`plan.md#实现方案`）：查看器渲染完滚到那里。带上
+   * 路径，是因为换文件那一刻上一份还在屏幕上，不能拿新锚点去滚旧文档；`seq` 让「再点一次
+   * 同一个锚点」也是一次新的请求（人可能已经滚走了）。
+   */
+  anchor: FileAnchor | null;
+  /**
    * 从 diff 切到全文时留下的回头路。存整份 target 而不只是路径：同一个文件在暂存侧和
    * 工作树侧是两份不同的 diff，光有路径切不回原来那一份。
    */
@@ -44,7 +50,9 @@ type FileViewState = {
   seq: number;
 };
 
-const CLOSED: FileViewState = { filePath: null, reel: null, folderPath: null, diff: null, behind: null, zoomed: false, seq: 0 };
+export type FileAnchor = { path: string; id: string; seq: number };
+
+const CLOSED: FileViewState = { filePath: null, reel: null, folderPath: null, diff: null, anchor: null, behind: null, zoomed: false, seq: 0 };
 
 export function useFileView(taskId: string) {
   const [state, setState] = useState<FileViewState>(CLOSED);
@@ -54,13 +62,26 @@ export function useFileView(taskId: string) {
   // 全部走函数式更新，回调才能一直是同一个引用 —— 调用方会把它们塞进 effect 依赖和
   // inspector 的 context 里。
   const openFile = useCallback((path: string, reel?: readonly string[]) => setState((current) => (
-    { filePath: path, reel: reel && reel.length > 1 ? reel : null, folderPath: null, diff: null, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
+    { filePath: path, reel: reel && reel.length > 1 ? reel : null, folderPath: null, diff: null, anchor: null, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
+  )), []);
+  /** 正文里的链接点开文件，可能指着其中一节（`anchor`）。已经摊着同一份时不重读，直接滚过去。 */
+  const openFileAt = useCallback((path: string, anchor?: string | null) => setState((current) => (
+    {
+      filePath: path,
+      reel: null,
+      folderPath: null,
+      diff: null,
+      anchor: anchor ? { path, id: anchor, seq: current.seq + 1 } : null,
+      behind: null,
+      zoomed: current.zoomed,
+      seq: current.seq + 1,
+    }
   )), []);
   const openFolder = useCallback((path: string) => setState((current) => (
-    { filePath: null, reel: null, folderPath: path, diff: null, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
+    { filePath: null, reel: null, folderPath: path, diff: null, anchor: null, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
   )), []);
   const openDiff = useCallback((target: ScmDiffTarget) => setState((current) => (
-    { filePath: null, reel: null, folderPath: null, diff: target, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
+    { filePath: null, reel: null, folderPath: null, diff: target, anchor: null, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
   )), []);
   /**
    * 在那一串里翻一格（左右箭头、顶栏的两颗按钮）。到头绕回另一端：翻图时「已经是最后
@@ -77,18 +98,18 @@ export function useFileView(taskId: string) {
     const next = reel[(at + delta % reel.length + reel.length) % reel.length];
     if (!next || next === current.filePath) return current;
     // `behind`（切回 diff 的回头路）是上一份文件的，翻走就不成立了。
-    return { ...current, filePath: next, behind: null };
+    return { ...current, filePath: next, anchor: null, behind: null };
   }), []);
   /** diff 视图里的「查看文件全文」。 */
   const showFile = useCallback(() => setState((current) => (
     current.diff
-      ? { ...current, filePath: current.diff.path, reel: null, folderPath: null, diff: null, behind: current.diff }
+      ? { ...current, filePath: current.diff.path, reel: null, folderPath: null, diff: null, anchor: null, behind: current.diff }
       : current
   )), []);
   /** 全文视图里的「查看改动」，回到刚才那份 diff。 */
   const showDiff = useCallback(() => setState((current) => (
     current.behind
-      ? { ...current, filePath: null, reel: null, folderPath: null, diff: current.behind, behind: null }
+      ? { ...current, filePath: null, reel: null, folderPath: null, diff: current.behind, anchor: null, behind: null }
       : current
   )), []);
   const toggleZoom = useCallback(() => setState((current) => ({ ...current, zoomed: !current.zoomed })), []);
@@ -101,6 +122,8 @@ export function useFileView(taskId: string) {
     reel: state.reel,
     folderPath: state.folderPath,
     diff: state.diff,
+    /** 这份文件要滚到的那一节（正文里的 `plan.md#实现方案` 点开的）。 */
+    anchor: state.anchor,
     /** 文件树和改动列表里该高亮哪一行——摊的是 diff、全文还是文件夹，对它们来说是同一个路径。 */
     activePath: state.filePath ?? state.diff?.path ?? state.folderPath ?? null,
     /** 全文视图能不能切回 diff：只有「从 diff 切过来的」那次才有回头路。 */
@@ -110,6 +133,7 @@ export function useFileView(taskId: string) {
     open: state.filePath !== null || state.folderPath !== null || state.diff !== null,
     seq: state.seq,
     openFile,
+    openFileAt,
     openFolder,
     openDiff,
     stepFile,
