@@ -66,21 +66,25 @@ enum DeepLink {
 
 extension BrowserWindowController {
   /// 收到一条 navi:// 链接：窗口拉到前面，等自家服务就绪、认过它的指纹再决定在窗口里开还是交给浏览器。
+  /// 连着点了几条时只有最后一条落地（linkSerial）：每条的回调各等各的，晚回来的旧链接不许把窗口带回去。
   func open(link url: URL) {
     showWindow(nil)
     if window?.isMiniaturized == true { window?.deminiaturize(nil) }
     NSApp.activate(ignoringOtherApps: true)
+    linkSerial += 1
+    let serial = linkSerial
     guard let link = DeepLink.parse(url) else { return }
     ServerLauncher.shared.ensureRunning { [weak self] outcome in
-      guard case .ready = outcome else { self?.perform(DeepLink.decide(link, servedTag: nil)); return }
+      guard case .ready = outcome else { self?.perform(DeepLink.decide(link, servedTag: nil), serial: serial); return }
       NaviHealth.probe(NaviConfig.windowHealthURL) { probe in
         let tag = NaviHealth.ours(probe)?.tag
-        DispatchQueue.main.async { self?.perform(DeepLink.decide(link, servedTag: tag)) }
+        DispatchQueue.main.async { self?.perform(DeepLink.decide(link, servedTag: tag), serial: serial) }
       }
     }
   }
 
-  private func perform(_ action: DeepLink.Action) {
+  private func perform(_ action: DeepLink.Action, serial: Int) {
+    guard serial == linkSerial else { return }
     switch action {
     case .front: return
     case .browser(let url): NSWorkspace.shared.open(url)

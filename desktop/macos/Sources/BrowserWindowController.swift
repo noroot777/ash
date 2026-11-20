@@ -19,6 +19,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private var resumeURL: URL?
   /// 页面还没载进来时收到的 navi:// 链接要去的路由（DeepLink），下一次载页面时直接载到那里。
   var pendingRoute: URL?
+  /// 收到的第几条 navi:// 链接：每条都要等服务就绪、认过人才落地，先到的回调晚回来时不许盖掉后点的那条（DeepLink）。
+  var linkSerial = 0
   /// 页面现在认的是哪一份服务（它的实例号已经作为 cookie 交给页面）。
   private(set) var boundInstance: String?
   /// 页面在的时候多久认一次人。测试把它调大，单独验导航那一道。

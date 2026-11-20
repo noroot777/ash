@@ -31,6 +31,7 @@ import { PairingCards } from "./pairing.js";
 import { QuotaMeter } from "./quota.js";
 import { Reconciler } from "./reconcile.js";
 import { RoomRelay } from "./relay.js";
+import { relinkStoredCards } from "./relink.js";
 import { SYSTEM_SCOPE } from "./scope.js";
 
 const FULL_SWEEP_MS = 10 * 60_000;
@@ -151,6 +152,8 @@ async function bringUp(): Promise<void> {
   if (!options.enabled) { gate = "disabled"; return; }
   (await quotaMeter()).setQuota(options.monthlyQuota);
   gate = "idle";
+  // 起服务时换过链接策略（只听本机 ⇄ 放开网络），存着的卡先按新策略重写、排上改卡，再让发件队列开跑。
+  await relinkStoredCards().catch((error) => console.error("[navi] 飞书卡片按新链接策略重写出错:", error));
   running = assemble(read.credentials, host.fetch);
   running.ws.start();
   running.sender.start();

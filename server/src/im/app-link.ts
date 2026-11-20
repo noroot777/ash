@@ -7,13 +7,18 @@
 // mac 版只听本机时，另给桌面端飞书一条 `navi://open?...`（Navi.app 注册了这个 scheme），放在按钮的
 // `pc_url` 上；手机端仍走 http（`default_url`）。发卡的服务判断不了收卡的是哪台电脑、装没装 app、
 // 那份 app 连的是不是这一份 Navi，所以两条约束：
-//   · 只在 http 在**任何**电脑上都打不开时才给（app 起的服务、只听本机）：这时 navi:// 只可能让本机
-//     那一台打得开，别的电脑本来就打不开，不会更糟。放开了别的设备访问，http 在每台电脑上都能用，
-//     就不再给 —— 否则没装 app、或装着的 app 连着别的 Navi 的电脑反倒打不开。
+//   · 只在 http 在别的电脑上一律打不开时才给（app 起的服务、只听本机）：这时 navi:// 只可能让本机
+//     那一台变好，别的电脑本来就打不开，不会更糟。放开了别的设备访问，http 打不打得开只看网络通不通、
+//     和装没装 app 无关，就不再给 —— 否则没装 app、或装着的 app 连着别的 Navi 的电脑反倒打不开。
 //   · 链接自带来源：这份服务的指纹（instance-tag.ts）和原来那条 http 地址。Navi.app 收到后比对自己
 //     那份服务报的指纹，对上才在窗口里打开，对不上（连着别的 Navi）就把 http 地址交给浏览器，
 //     不在别的工作台里打开一个同号的任务（desktop/macos/Sources/DeepLink.swift）。
 // 飞书文档写明 pc_url 支持 AppLink、没说第三方 scheme 支持与否，真飞书桌面端点没点得开没验证过。
+//
+// 这条决定是起服务那一下定的（两个开关、指纹都是进程级常量），可卡片会被存下来、跨重启一直留在飞书上。
+// 所以「会改变链接输出的一切」汇成一个 linkPolicy()：渲染出口（cards.ts openUrl）照它出链接，决策卡的
+// 渲染指纹（reconcile.ts renderKeyOf）把它算进去，库里存着的所有卡在它变了之后按它重写（relink.ts）。
+// 改了 desktopAppLink 的输出格式就把 LINK_FORMAT 加一，存着的旧格式卡才会被认出来、换掉。
 import { isLoopbackHost } from "../auth/remote-access.js";
 import { instanceTag } from "../instance-tag.js";
 import { DESKTOP_APP, LOCAL_ONLY } from "../local-only.js";
@@ -35,6 +40,12 @@ export function deepLinkWarning(base: string | null, env = { localOnly: LOCAL_ON
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
+const LINK_FORMAT = 2;
+
+/** 链接策略的指纹：同一个值 = 同一条 http 地址渲染出的按钮一模一样。 */
+export function linkPolicy(env = { localOnly: LOCAL_ONLY, desktopApp: DESKTOP_APP }, tag: () => string = instanceTag): string {
+  return env.desktopApp && env.localOnly ? `${LINK_FORMAT}:navi:${tag()}` : `${LINK_FORMAT}:http`;
+}
 
 /** 桌面端飞书用的那条 `navi://`；不该给（见文件头）、或者链接不是任务链接时是 null。 */
 export function desktopAppLink(

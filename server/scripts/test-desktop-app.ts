@@ -4,7 +4,11 @@
 //      不带凭证 401（不是本机模式那句拒绝）；
 //   ③ 卡片深链：放开了网络（http 在每台电脑上都打得开）就不给 pc_url，按钮和整行可点的项都只有 default_url；
 //      只听本机时才给 navi://，而且带着这份 Navi 的指纹和原来那条 http 地址（收到的 app 据此认是不是冲着
-//      自己来的、对不上退回 http），认不出的 id 不拼；深链地址的说明（只听本机 / 回环地址）按开关组合给出。
+//      自己来的、对不上退回 http），认不出的 id 不拼；深链地址的说明（只听本机 / 回环地址）按开关组合给出；
+//   ④ 换了链接策略（只听本机 ⇄ 放开网络、旧格式没带来源）之后，库里存着的卡不分种类按新策略重写：
+//      还在等人的决策卡渲染指纹对不上（上一版算的指纹也对不上），对账会整张重渲染；已收尾的、只推标题那版、
+//      还没发的、旧格式裸 navi:// 都被换掉，14 天内发出的排上改卡；超过 14 天的、已撤回的、发不出去的不动；
+//      同一个策略只扫一次。
 //
 // 本机模式（两个都带）那一侧由 test:local-only-auth 钉着。走真实 TCP：判据里「回环 socket + Host +
 // 转发头」只有真连接测得出来。
@@ -33,7 +37,15 @@ const { mountAuthRoutes } = await import("../src/auth/routes.js");
 const { ensureRemoteAccessKey } = await import("../src/auth/remote-access.js");
 const { DESKTOP_APP, LOCAL_ONLY, SINGLE_ONLY } = await import("../src/local-only.js");
 const { deepLinkWarning, desktopAppLink } = await import("../src/im/app-link.js");
-const { renderCard } = await import("../src/im/feishu/cards.js");
+const { renderCard, relinkCard } = await import("../src/im/feishu/cards.js");
+const { linkPolicy } = await import("../src/im/app-link.js");
+const { renderKeyOf } = await import("../src/im/reconcile.js");
+const { relinkStoredCards } = await import("../src/im/relink.js");
+const { readMeta } = await import("../src/im/meta.js");
+const { db } = await import("../src/db/index.js");
+const { imOutbox } = await import("../src/db/schema-im.js");
+const { createHash } = await import("node:crypto");
+const { eq } = await import("drizzle-orm");
 
 await ensureSchema();
 assert.deepEqual({ DESKTOP_APP, LOCAL_ONLY, SINGLE_ONLY }, { DESKTOP_APP: true, LOCAL_ONLY: false, SINGLE_ONLY: true }, "前提:开关读到了");
@@ -137,6 +149,67 @@ try {
   assert.match(deepLinkWarning("http://127.0.0.1:4317", { localOnly: false, desktopApp: false }) ?? "", /只有这台电脑打得开/);
   assert.match(deepLinkWarning("http://localhost:4317", { localOnly: true, desktopApp: true }) ?? "", /只有这台电脑打得开/);
   assert.equal(deepLinkWarning(null, { localOnly: true, desktopApp: true }), null);
+
+  // ④ 存着的卡按新策略重写
+  assert.equal(linkPolicy(), "2:http");
+  assert.equal(linkPolicy(closed, tag), "2:navi:AB12-CD34");
+  assert.notEqual(linkPolicy(closed, tag), linkPolicy(closed, () => "FFFF-0000"), "换了指纹（库搬到别的机器）也算换了策略");
+  const turnView = { task: { id: "t1", projectId: "p_1", title: "任务" }, projectName: "项目", turn: { kind: "failed", generation: "g1" } };
+  const dest = { receiveType: "open_id" as const, receiveId: "ou_1", recipientOpenId: "ou_1" };
+  const legacyKey = createHash("sha256").update(JSON.stringify(["任务", "项目", turnView.turn, "open_id", link, false])).digest("hex").slice(0, 16);
+  assert.notEqual(renderKeyOf(turnView as never, dest, "http://mbp.tail97f3a6.ts.net:4317", []), legacyKey,
+    "上一版算的指纹没带链接策略：对上了就会把带旧 pc_url 的决策卡当成不用改");
+
+  const navi = desktopAppLink(link, closed, tag)!;
+  const bare = "navi://open?project=p_1&task=dZL_L1D4ZCAb";
+  const stale = (pc: string) => JSON.stringify({
+    header: { title: { tag: "plain_text", content: "任务" } },
+    body: { elements: [
+      { tag: "button", behaviors: [{ type: "open_url", default_url: link, pc_url: pc }] },
+      { tag: "interactive_container", behaviors: [{ type: "open_url", default_url: link, pc_url: pc }], elements: [] },
+    ] },
+  });
+  const fresh = JSON.stringify(JSON.parse(stale(navi)), (k, v) => (k === "pc_url" ? undefined : v));
+  assert.equal(relinkCard(stale(navi)), fresh, "按钮和整行可点的项都按现在的策略重出");
+  assert.equal(relinkCard(fresh), fresh, "已经是现在这样的原样返回");
+  assert.equal(relinkCard("{坏的"), "{坏的");
+
+  const at = Date.now();
+  const ago = (days: number) => new Date(at - days * 24 * 3600_000).toISOString();
+  const base = { channel: "feishu", appId: "cli_x", receiveType: "open_id", receiveId: "ou_1", recipientOpenId: "ou_1",
+    taskId: "dZL_L1D4ZCAb", subject: "g1", msgType: "interactive", createdAt: ago(1), updatedAt: ago(1) };
+  const rows = {
+    open: { kind: "failed", state: "sent", messageId: "om_1", sentAt: ago(1), patchState: "done", content: stale(navi) },
+    resolved: { kind: "accept", state: "resolved", messageId: "om_2", sentAt: ago(2), patchState: "result", content: stale(navi) },
+    briefOnly: { kind: "question", state: "resolved", messageId: "om_3", sentAt: ago(1), patchState: null, content: fresh, brief: stale(navi) },
+    unsent: { kind: "notice", state: "held", messageId: null, sentAt: null, patchState: null, content: stale(navi) },
+    legacy: { kind: "accept", state: "sent", messageId: "om_4", sentAt: ago(1), patchState: "failed", content: stale(bare) },
+    recall: { kind: "question", state: "resolved", messageId: "om_5", sentAt: ago(1), patchState: "recall", content: stale(navi) },
+    old: { kind: "accept", state: "resolved", messageId: "om_6", sentAt: ago(15), patchState: "done", content: stale(navi) },
+    recalled: { kind: "question", state: "resolved", messageId: "om_7", sentAt: ago(1), patchState: "recalled", content: stale(navi) },
+    dead: { kind: "notice", state: "dead", messageId: null, sentAt: null, patchState: null, content: stale(navi) },
+    current: { kind: "accept", state: "sent", messageId: "om_8", sentAt: ago(1), patchState: "done", content: fresh },
+  };
+  for (const [id, row] of Object.entries(rows)) await db.insert(imOutbox).values({ ...base, id, subject: id, ...row });
+  assert.equal(await relinkStoredCards(undefined, at), 6, "open/resolved/briefOnly/unsent/legacy/recall 六行要换");
+  const read = async (id: string) => (await db.select().from(imOutbox).where(eq(imOutbox.id, id)))[0]!;
+  for (const id of ["open", "resolved", "unsent", "legacy", "recall"]) {
+    assert.equal((await read(id)).content, fresh, `${id}：换成现在的链接`);
+  }
+  assert.equal((await read("briefOnly")).brief, fresh, "只推标题时换上的那版也换");
+  assert.equal((await read("open")).patchState, "pending", "发出去的排上改卡");
+  assert.equal((await read("legacy")).patchState, "pending", "上次改卡失败的也重新排上");
+  assert.equal((await read("resolved")).patchState, "result", "排着回写结果的不降级");
+  assert.equal((await read("briefOnly")).patchState, "pending");
+  assert.equal((await read("unsent")).patchState, null, "没发出去的不用改卡，发出去就是新的");
+  assert.equal((await read("recall")).patchState, "recall", "排着撤回的照旧撤回，撤不回时改成这份");
+  for (const id of ["old", "recalled", "dead"]) assert.equal((await read(id)).content, stale(navi), `${id}：飞书上改不了 / 没有它，不动`);
+  assert.equal((await read("old")).patchState, "done");
+  assert.equal((await read("current")).patchState, "done", "本来就对的不改卡");
+  assert.equal(await readMeta("link_policy"), "2:http");
+  await db.update(imOutbox).set({ content: stale(navi) }).where(eq(imOutbox.id, "current"));
+  assert.equal(await relinkStoredCards(undefined, at), 0, "同一个策略只扫一次");
+  assert.equal(await relinkStoredCards("2:navi:AB12-CD34", at), 1, "策略一换就再扫");
 } finally {
   direct.destroy();
   server.closeAllConnections();

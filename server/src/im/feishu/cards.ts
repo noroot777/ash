@@ -69,6 +69,33 @@ function openUrl(url: string): Record<string, string> {
   const pc = desktopAppLink(url);
   return { type: "open_url", default_url: url, ...(pc ? { pc_url: pc } : {}) };
 }
+
+/**
+ * 存着的卡片 JSON 里每一个打开链接的动作按现在的链接策略重出（按钮、整行可点的项都在这里出）：
+ * 只认 `default_url`，`pc_url` 一律照它重算 —— 缺来源的旧格式、换了策略的都换掉。没有要换的原样返回同一个字符串。
+ */
+export function relinkCard(content: string): string {
+  let card: unknown;
+  try {
+    card = JSON.parse(content);
+  } catch {
+    return content;
+  }
+  let changed = false;
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (!node || typeof node !== "object") return node;
+    const record = node as Record<string, unknown>;
+    if (record.type === "open_url" && typeof record.default_url === "string") {
+      const next = openUrl(record.default_url);
+      if (JSON.stringify(next) !== JSON.stringify(record)) changed = true;
+      return next;
+    }
+    return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, walk(value)]));
+  };
+  const next = walk(card);
+  return changed ? JSON.stringify(next) : content;
+}
 const INPUT_MAX = 1000;
 
 function renderButton(button: CardButton, inForm: boolean): Record<string, unknown> {
