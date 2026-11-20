@@ -5,8 +5,8 @@ import Foundation
 /// 「就绪」不能只看状态码：端口上随便一个回 200 的东西（代理的错误页、`ok: false` 的自检）都会被
 /// 当成服务好了。也不能只看「是不是 navi」：:4317 上完全可能是仓库里的开发实例，悄悄连上去，用户
 /// 以为在用 app，数据其实写进了另一份库。所以本机地址还要认它是不是本 app 起的那一份
-/// （`/api/health` 对本机直连会报 `instance`）：数据根是 app 的、代码是 app 自带的、开着本机自用
-/// 模式，三样都对上才算。只看数据根不够 —— 仓库里的开发实例完全可以指着 app 的数据根起。
+/// （`/api/health` 对本机直连会报 `instance`）：数据根是 app 的、代码是 app 自带的、报自己是 app
+/// 起的那一份（`desktop`），三样都对上才算。只看数据根不够 —— 仓库里的开发实例完全可以指着 app 的数据根起。
 ///
 /// 认人只能回答「刚才那一刻是谁」。认过之后页面、原生发的请求还得带上那一份的实例号（`id`），
 /// 端口换了人，新来的那份见到别人的实例号就不执行（server/src/instance-binding.ts）。
@@ -28,6 +28,9 @@ struct NaviInstance {
   let dataDir: String?
   let codeDir: String?
   let localOnly: Bool?
+  /// 报自己是 app 起的那一份（server 的 `NAVI_DESKTOP_APP`）。比它旧的服务不报这一项，那时 app 只会
+  /// 带着本机自用模式起它，`localOnly` 就是同一个意思。
+  let desktop: Bool?
   /// 它给 app 窗口监听的专用端口（server/src/window-port.ts），没监听上是 nil。
   let windowPort: Int?
 
@@ -36,12 +39,12 @@ struct NaviInstance {
 
   /// 哪一样对不上（说给用户听），全对上是 nil。
   var mismatch: String? {
-    guard let id, !id.isEmpty, let dataDir, let codeDir, let localOnly else {
+    guard let id, !id.isEmpty, let dataDir, let codeDir, let appServed = desktop ?? localOnly else {
       return "它没报自己的实例号和代码、数据在哪（比这个 app 旧的版本），认不出来历。"
     }
     guard NaviHealth.samePath(dataDir, NaviConfig.dataURL.path) else { return "它用的是另一份数据。" }
     guard NaviHealth.samePath(codeDir, NaviConfig.runtimeURL.path) else { return "它用的是 app 的数据，跑的却不是 app 自带的代码。" }
-    guard localOnly else { return "它跑的是 app 自带的代码，但没开本机自用模式（不是 app 起的）。" }
+    guard appServed else { return "它跑的是 app 自带的代码，但不是 app 起的那一份。" }
     guard windowPort == NaviConfig.windowPort else {
       return "它没在 app 窗口的专用端口 \(NaviConfig.windowPort) 上监听（那个端口多半被别的程序占着，或者它不是这个版本的 app 起的）。"
     }
@@ -67,6 +70,7 @@ enum NaviHealth {
       dataDir: instance?["dataDir"] as? String,
       codeDir: instance?["codeDir"] as? String,
       localOnly: instance?["localOnly"] as? Bool,
+      desktop: instance?["desktop"] as? Bool,
       windowPort: instance?["windowPort"] as? Int))
   }
 
