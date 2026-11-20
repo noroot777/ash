@@ -12,11 +12,22 @@
 // （与 git 自己提交索引同一个动作，换上那一刻索引锁也放了）。
 //
 // 合并本身还是原来那几条命令、就在项目目录里跑：钩子的工作目录是项目目录、看得到项目里被忽略的本地依赖、看到的
-// 分支是目标分支（不能挪到另开的临时检出里合，审查第 1 轮 F3）。这几样记在私有目录里，落完搬回项目：`ORIG_HEAD`、
-// `SQUASH_MSG`。项目 HEAD 的 reflog 不会多出这次合并那一行（目标分支自己的 reflog 有）。
+// 分支是目标分支（不能挪到另开的临时检出里合，审查第 1 轮 F3）。合并记在 git 目录里的东西（`ORIG_HEAD`、
+// `SQUASH_MSG`、没中止成的合并状态）落在私有目录里，拆之前搬回项目（carryBack）。项目 HEAD 的 reflog 不会多出
+// 这次合并那一行（目标分支自己的 reflog 有）。
 //
 // 私有 HEAD 指着目标分支期间，它也算「检出在一处」：别处 `git switch <目标>` 会被 git 拒，与推送档占住分支同一个效果。
-import { copyFile, open, rename, rm } from "node:fs/promises";
+//
+// 私有 HEAD 只是换了一个 git 目录，下面三样不跟着换，所以都在持锁之后、动手之前补上（审查第 3 轮）：
+//  · 建、拆私有 HEAD 是 Navi 自己的准备动作，不调用户钩子（`reference-transaction` 会在 `worktree add`、
+//    `symbolic-ref` 时跑；合并预览档的发布整段都不许跑项目程序）。合并本身那几条照旧调钩子。
+//  · 原检出里没做完的操作（等着提交的合并、挑拣、变基……）记在项目的 git 目录里，私有目录看不见：
+//    持锁后先看项目的，有就拒（原生 `git merge` 也会拒）。反过来合并失败留在私有目录里的合并状态，
+//    拆之前搬回项目，`git merge --abort` 在项目目录里照样能用。
+//  · 依赖 git 目录位置的配置（`includeIf "gitdir:…"` 精确到项目那份 .git 时）换了目录就不生效，钩子目录、
+//    提交身份就可能悄悄换掉：就地合并前比一遍项目目录和私有 HEAD 下的有效配置，不一样就拒。按检出的配置
+//    （`config.worktree`）和稀疏检出规则 `git worktree add` 会照抄，比完也一致。
+import { copyFile, mkdtemp, open, rename, rm } from "node:fs/promises";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +46,21 @@ const rev = async (repo: string, ref: string) =>
 const gitPath = async (repo: string, name: string) =>
   (await exec("git", ["-C", repo, "rev-parse", "--path-format=absolute", "--git-path", name])).stdout.trim();
 
+let noHooks: Promise<string> | null = null;
+/** 放在 git 子命令前：钩子目录指向一个空目录、fsmonitor 关掉 —— Navi 自己的动作不调项目程序。 */
+export const noUserPrograms = async () => {
+  noHooks ??= mkdtemp(join(tmpdir(), "navi-no-hooks-"));
+  return ["-c", `core.hooksPath=${await noHooks}`, "-c", "core.fsmonitor=false"];
+};
+
+/** 原检出里没做完的操作留下的记号（都在每个检出自己的 git 目录里）。 */
+const PENDING = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_LOG"];
+async function pendingOperation(repo: string): Promise<string | null> {
+  const paths = (await exec("git", ["-C", repo, "rev-parse", "--path-format=absolute", ...PENDING.flatMap((name) => ["--git-path", name])])).stdout.trim().split("\n");
+  const found = PENDING.filter((_, i) => paths[i] && existsSync(paths[i]!));
+  return found.length ? found.join("、") : null;
+}
+
 export type HeldCheckout = {
   /** 私有 git 目录（HEAD 指着目标分支）。 */
   gitDir: string;
@@ -44,7 +70,7 @@ export type HeldCheckout = {
   install(from: string): Promise<void>;
 };
 
-export type HoldRefusal = { held: false; stage: "locked" | "moved" | "failed"; message: string };
+export type HoldRefusal = { held: false; stage: "locked" | "moved" | "busy" | "failed"; message: string };
 
 /**
  * 持住项目目录 `repo` 的检出（两把锁 + 私有 HEAD，见文件头），核过 HEAD 指着 `branch`、在 `at` 上（不给就不核
@@ -70,6 +96,7 @@ export async function holdCheckout<T>(repo: string, branch: string, at: string |
   const warnings: string[] = [];
   let temp: TemporaryWorktree | null = null;
   let outcome: { held: true; value: T } | HoldRefusal;
+  let busy: string | null = null;
   try {
     // 持锁之后才核：这之后谁也换不了这个检出的 HEAD，核到的就是写完之前一直不变的样子。
     const head = (await exec("git", ["-C", repo, "symbolic-ref", "-q", "HEAD"]).catch(() => null))?.stdout.trim() || null;
@@ -77,6 +104,8 @@ export async function holdCheckout<T>(repo: string, branch: string, at: string |
     if (head !== ref || !now || (at !== null && now !== at)) {
       outcome = { held: false, stage: "moved", message: `项目目录 ${repo} 已经不在 ${branch}${at ? ` 的 ${at.slice(0, 12)}` : ""} 上了（现在是`
         + `${head ? `分支 ${head.replace(/^refs\/heads\//, "")}` : "一个游离的提交"}${now && at && now !== at ? `，${branch} 在 ${now.slice(0, 12)}` : ""}）` };
+    } else if ((busy = await pendingOperation(repo))) {
+      outcome = { held: false, stage: "busy", message: `项目目录 ${repo} 里还有一场没做完的 git 操作（${busy}）` };
     } else {
       const made = await privateHead(repo, ref, now);
       if ("message" in made) outcome = { held: false, stage: "failed", message: made.message };
@@ -99,7 +128,7 @@ export async function holdCheckout<T>(repo: string, branch: string, at: string |
     if (indexOurs) await rm(lock, { force: true }).catch((error: unknown) => warnings.push(`${lock} 没能删掉（${gitError(error)}），请手动删掉`));
     await rm(headLock, { force: true }).catch((error: unknown) => warnings.push(`${headLock} 没能删掉（${gitError(error)}），请手动删掉`));
     if (temp) {
-      const failed = await removeTemporaryWorktree(repo, temp);
+      const failed = await removeTemporaryWorktree(repo, temp, await noUserPrograms());
       if (failed) console.warn(`[navi] 写目标分支用的私有 HEAD ${temp.path} 没拆干净：${failed}`);
     }
   }
@@ -110,18 +139,19 @@ export async function holdCheckout<T>(repo: string, branch: string, at: string |
 async function privateHead(repo: string, ref: string, at: string): Promise<{ temp: TemporaryWorktree; gitDir: string } | { message: string }> {
   const root = mkdtempSync(join(tmpdir(), "navi-hold-"));
   const temp = { root, path: join(root, "head") };
+  const sealed = await noUserPrograms();
   try {
-    await exec("git", ["-C", repo, "worktree", "add", "--detach", "--no-checkout", "--quiet", temp.path, at]);
+    await exec("git", ["-C", repo, ...sealed, "worktree", "add", "--detach", "--no-checkout", "--quiet", temp.path, at]);
   } catch (error) {
     rmSync(root, { recursive: true, force: true });
     return { message: `建不出写目标分支用的私有 HEAD（${gitError(error)}）` };
   }
   try {
     const gitDir = (await exec("git", ["-C", temp.path, "rev-parse", "--absolute-git-dir"])).stdout.trim();
-    await exec("git", ["--git-dir", gitDir, "symbolic-ref", "HEAD", ref]);
+    await exec("git", ["--git-dir", gitDir, ...sealed, "symbolic-ref", "HEAD", ref]);
     return { temp, gitDir };
   } catch (error) {
-    await removeTemporaryWorktree(repo, temp);
+    await removeTemporaryWorktree(repo, temp, sealed);
     return { message: `建不出写目标分支用的私有 HEAD（${gitError(error)}）` };
   }
 }
@@ -149,6 +179,12 @@ export async function mergeInLockedCheckout(repo: string, names: Names, run: (gi
       // 放在真索引旁边：拆分索引（core.splitIndex）的 sharedindex 文件 git 按「索引所在目录」找。
       await copyFile(index, scratch).catch(() => {});
       const git = gitIn(repo, { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: repo, GIT_INDEX_FILE: scratch });
+      const drift = await configDrift(repo, git);
+      if (drift) {
+        return fail(`项目目录 ${repo} 的 git 配置里有几项要看 git 目录的位置才生效（${drift}，多半是精确到这份 .git 的 \`includeIf "gitdir:…"\`），`
+          + "Navi 就地合并时没法保证它们原样生效（钩子、提交身份可能悄悄换掉），所以这次没合并，目标分支和工作区都没动。"
+          + "在项目目录里手动合并，或者把这几项改成不依赖 git 目录位置之后再验收。");
+      }
       // 与锁外那道「工作区干净」同一个口径（git status，未跟踪的也算）。
       const dirtyFiles = porcelainFiles((await git(["status", "--porcelain"])).stdout);
       if (dirtyFiles.length > 0) {
@@ -165,10 +201,14 @@ export async function mergeInLockedCheckout(repo: string, names: Names, run: (gi
           + `（${error instanceof Error ? error.message : String(error)}），索引还停在合并之前；Navi 没有替你复位，在项目目录里 \`git status\` 核对后`
           + "用 `git reset -q`（只改索引）或手动处理。");
       }
-      await carryBack(repo, gitDir);
-      return result;
+      const lost = await carryBack(repo, gitDir);
+      return lost ? withHoldWarning(result, lost) : result;
     });
     if (held.held) return withHoldWarning(held.value, held.warning);
+    if (held.stage === "busy") {
+      return fail(`${held.message}，目标分支 ${targetBranch} 就检出在那里，这次没合并，目标分支和工作区都没动；`
+        + "先在项目目录里把它做完或中止（`git status` 会提示怎么做），再验收。");
+    }
     return held.stage === "moved"
       ? fail(`合并的同时${held.message}，这次没动它，重新验收即可。`)
       : fail(`目标分支 ${targetBranch} 检出在项目目录 ${repo}，但没能持住那份检出（${held.message}），这次没合并，目标分支和工作区都没动；处理完再验收。`);
@@ -179,10 +219,39 @@ export async function mergeInLockedCheckout(repo: string, names: Names, run: (gi
   }
 }
 
-/** 就地合并留在 git 目录里的东西（合并前的位置、squash 的默认提交说明）从私有目录搬回项目。 */
-async function carryBack(repo: string, gitDir: string): Promise<void> {
-  const orig = (await exec("git", ["--git-dir", gitDir, "rev-parse", "--verify", "--quiet", "ORIG_HEAD"]).catch(() => null))?.stdout.trim();
-  if (orig) await exec("git", ["-C", repo, "update-ref", "--no-deref", "ORIG_HEAD", orig]).catch(() => {});
-  const squash = join(gitDir, "SQUASH_MSG");
-  if (existsSync(squash)) await copyFile(squash, await gitPath(repo, "SQUASH_MSG")).catch(() => {});
+/** 项目目录和私有 HEAD 下的有效配置（含 include）不一样的那些键；一样就是 null。 */
+async function configDrift(repo: string, git: GitIn): Promise<string | null> {
+  const entries = async (run: GitIn) => (await run(["config", "--list", "--includes", "-z"])).stdout.split("\0").filter(Boolean);
+  const [project, held] = await Promise.all([entries(gitIn(repo)), entries(git)]);
+  const remaining = [...held];
+  const differ = new Set<string>();
+  for (const entry of project) {
+    const at = remaining.indexOf(entry);
+    if (at >= 0) remaining.splice(at, 1);
+    else differ.add(entry.split("\n")[0]!);
+  }
+  for (const entry of remaining) differ.add(entry.split("\n")[0]!);
+  return differ.size ? [...differ].slice(0, 5).join("、") + (differ.size > 5 ? ` 等 ${differ.size} 项` : "") : null;
+}
+
+/** 就地合并留在私有 git 目录里、原生合并会留在项目里的东西。 */
+const STATE_FILES = ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "MERGE_RR", "SQUASH_MSG"];
+const STATE_REFS = ["ORIG_HEAD", "AUTO_MERGE"];
+
+/**
+ * 拆私有 HEAD 之前把这些搬回项目：合并前的位置、squash 的默认提交说明，以及合并失败又没中止成时的合并状态
+ * （搬回来 `git merge --abort` 在项目目录里才用得了）。搬不回去的列出来交给调用方告诉用户。
+ */
+async function carryBack(repo: string, gitDir: string): Promise<string | null> {
+  const lost: string[] = [];
+  const sealed = await noUserPrograms();
+  for (const name of STATE_REFS) {
+    const at = (await exec("git", ["--git-dir", gitDir, "rev-parse", "--verify", "--quiet", name]).catch(() => null))?.stdout.trim();
+    if (at) await exec("git", ["-C", repo, ...sealed, "update-ref", "--no-deref", name, at]).catch((error: unknown) => lost.push(`${name}（${gitError(error)}）`));
+  }
+  for (const name of STATE_FILES) {
+    const from = join(gitDir, name);
+    if (existsSync(from)) await copyFile(from, await gitPath(repo, name)).catch((error: unknown) => lost.push(`${name}（${gitError(error)}）`));
+  }
+  return lost.length ? `合并留在 git 目录里的 ${lost.join("、")} 没能搬回项目目录，它们在项目里可能是旧的` : null;
 }

@@ -2,7 +2,8 @@
 // 另一个终端切了分支 —— 原先的 `git merge` 对的是「届时的 HEAD」，合并就落进了那个分支。现在持着 index.lock
 // 和 HEAD.lock、经指着目标分支的私有 HEAD 就地合：核之前切走了就什么都不动；持住期间切已有分支、`switch -c`
 // 新建分支都被 git 当场拒；写的只有目标分支，别的分支（包括被拒的 `switch -c` 留下的那个）一个字节都不动。
-// 钩子照旧在项目目录里跑、看到的是目标分支。合并预览档的发布走同一层（holdCheckout）。
+// 钩子照旧在项目目录里跑、看到的是目标分支。合并预览档的发布走同一层（holdCheckout）。私有 HEAD 换了 git 目录
+// 带来的三处不等价（准备动作调钩子、看不见原检出没做完的操作、依赖 git 目录位置的配置）也在这里钉住。
 //
 // 用 PATH 上的 git 包装（git-race-shim.ts）在关键那条命令前后插一次 `git switch`。每个用例自带临时仓库。
 import assert from "node:assert/strict";
@@ -22,7 +23,7 @@ try {
   if (process.platform === "win32") {
     console.log("accept checkout race: 夹具是 sh 写的 git 包装，Windows 上跳过");
   } else {
-    const { prepareWorktree } = await import("../src/git.js");
+    const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
     const { mergeTaskBranch } = await import("../src/git-accept.js");
     const racing = raceShim(root);
 
@@ -205,7 +206,122 @@ try {
       clean(s.repo, `${c.name}-hooks`);
     }
 
-    console.log("accept checkout race: 核完再切走不落错分支 / 持锁期间切不走 / 无竞态照常落地 / 冲突照旧交回 / 持住检出时切不走 / switch -c 换不了 HEAD、只写目标分支 / 钩子在项目目录 全部通过");
+    // 9. 私有 HEAD 的建、拆是 Navi 自己的准备动作，不调用户钩子（审查第 3 轮 F1）：合并预览档的发布在
+    //    前置检查拒掉时 `reference-transaction` 一次都没跑；就地合并时它跑的次数和原生 `git merge` 一样多。
+    {
+      const { publishInCheckout } = await import("../src/git-accept-tested.js");
+      const hook = (repo: string) => {
+        const ran = join(repo, ".git", "navi-ref-hook.log");
+        writeFileSync(join(repo, ".git", "hooks", "reference-transaction"), `#!/bin/sh\necho "$1" >> "${ran}"\nprintf 'changed\\n' > "${join(repo, "shared.txt")}"\n`);
+        chmodSync(join(repo, ".git", "hooks", "reference-transaction"), 0o755);
+        return () => existsSync(ran) ? readFileSync(ran, "utf8").trim().split("\n") : [];
+      };
+      const s = await stage("guarded-hook", false);
+      const ran = hook(s.repo);
+      const branch = worktreeBranchName(s.taskId);
+      const source = git(s.repo, "rev-parse", branch);
+      const refused = await publishInCheckout(s.repo, "fast_forward", { target: s.main, tree: git(s.repo, "rev-parse", `${source}^{tree}`), physical: null },
+        source, { sourceBranch: branch, targetBranch: "main" });
+      assert.equal(refused.ok, false, "没有测过的物理内容，发布前就拒");
+      assert.deepEqual(ran(), [], "拒之前没有调过项目的钩子");
+      assert.equal(readFileSync(join(s.repo, "shared.txt"), "utf8"), "seed\n");
+      assert.equal(git(s.repo, "rev-parse", "main"), s.main);
+      clean(s.repo, "受保护发布不调钩子");
+
+      const native = await stage("ref-hook-native", true);
+      const nativeRan = hook(native.repo);
+      git(native.repo, "merge", "-q", "--no-ff", "--no-edit", worktreeBranchName(native.taskId));
+      const ours = await stage("ref-hook-navi", true);
+      const oursRan = hook(ours.repo);
+      const merged = await mergeTaskBranch(ours.repo, ours.taskId, "main");
+      assert.equal(merged.ok, true, merged.ok ? "" : merged.message);
+      assert.deepEqual(oursRan(), nativeRan(), "就地合并时钩子跑的就是原生合并那几次，准备动作没有多调");
+    }
+
+    // 10. 原检出里有没做完的合并（索引干净、只差提交，审查第 3 轮 F2）：原生 `git merge` 拒，Navi 也拒，
+    //     那场合并原样留着；合并预览档的发布走的同一层（holdCheckout）也拒。
+    {
+      const { holdCheckout } = await import("../src/git-merge-locked.js");
+      const s = await stage("pending", false);
+      git(s.repo, "switch", "-q", "-c", "waiting");
+      git(s.repo, "commit", "-q", "--allow-empty", "-m", "waiting");
+      git(s.repo, "switch", "-q", "main");
+      git(s.repo, "commit", "-q", "--allow-empty", "-m", "main moves");
+      git(s.repo, "merge", "-q", "--no-ff", "--no-commit", "waiting");
+      const pending = readFileSync(join(s.repo, ".git", "MERGE_HEAD"), "utf8");
+      const main = git(s.repo, "rev-parse", "main");
+      assert.equal(git(s.repo, "status", "--porcelain"), "", "前提：索引和工作区都是干净的");
+      const merged = await mergeTaskBranch(s.repo, s.taskId, "main");
+      assert.equal(merged.ok, false, "有没做完的合并就不合");
+      if (!merged.ok) assert.match(merged.message, /没做完的 git 操作（MERGE_HEAD）/);
+      assert.equal(git(s.repo, "rev-parse", "main"), main, "main 没动");
+      assert.equal(readFileSync(join(s.repo, ".git", "MERGE_HEAD"), "utf8"), pending, "那场合并还等着用户提交");
+      let called = false;
+      const held = await holdCheckout(s.repo, "main", main, async () => { called = true; });
+      assert.equal(held.held, false);
+      if (!held.held) assert.equal(held.stage, "busy");
+      assert.equal(called, false);
+      git(s.repo, "merge", "--abort");
+      clean(s.repo, "没做完的合并");
+    }
+
+    // 11. 冲突之后中止失败（审查第 3 轮 F2 失败出口）：合并状态留在私有目录里会随它一起删掉，所以搬回项目 ——
+    //     项目目录里 `git merge --abort` 照样能收场。
+    {
+      const s = await stage("abort-fails", false);
+      const ws = join(s.repo, ".worktrees", s.taskId);
+      writeFileSync(join(ws, "shared.txt"), "source\n");
+      git(ws, "commit", "-q", "-am", "source side");
+      writeFileSync(join(s.repo, "shared.txt"), "target\n");
+      git(s.repo, "commit", "-q", "-am", "target side");
+      const before = git(s.repo, "rev-parse", "main");
+      const bin = join(root, "abort-fails-bin");
+      execFileSync("mkdir", ["-p", bin]);
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" merge --abort "*) echo "abort refused" >&2; exit 1 ;; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+      const path = process.env.PATH;
+      process.env.PATH = `${bin}:${path}`;
+      let merged: Awaited<ReturnType<typeof mergeTaskBranch>>;
+      try { merged = await mergeTaskBranch(s.repo, s.taskId, "main"); } finally { process.env.PATH = path; }
+      assert.equal(merged.ok, false);
+      if (!merged.ok) assert.equal(merged.reason, "merge_conflict");
+      assert.ok(existsSync(join(s.repo, ".git", "MERGE_HEAD")), "没中止成的合并状态搬回了项目目录");
+      git(s.repo, "merge", "--abort");
+      assert.equal(git(s.repo, "rev-parse", "main"), before);
+      clean(s.repo, "中止失败");
+    }
+
+    // 12. 精确到项目那份 .git 的 `includeIf "gitdir:…"`（审查第 3 轮 F3）：换到私有 HEAD 就不生效，项目的钩子和
+    //     提交身份会悄悄换掉 —— 不一样就拒；按检出的配置（config.worktree）会被照抄，项目检查照常跑、照常拒。
+    {
+      const s = await stage("conditional", true);
+      const hooks = join(root, "conditional-hooks");
+      execFileSync("mkdir", ["-p", hooks]);
+      const checked = join(root, "conditional-checked");
+      writeFileSync(join(hooks, "pre-merge-commit"), `#!/bin/sh\necho ran >> "${checked}"\necho "project check refuses" >&2\nexit 1\n`, { mode: 0o755 });
+      git(s.repo, "config", "extensions.worktreeConfig", "true");
+      git(s.repo, "config", "--worktree", "core.hooksPath", hooks);
+      const perCheckout = await mergeTaskBranch(s.repo, s.taskId, "main");
+      assert.equal(perCheckout.ok, false, "按检出配的项目检查照常拒");
+      if (!perCheckout.ok) assert.match(perCheckout.message, /project check refuses/);
+      assert.ok(existsSync(checked), "检查真的跑了");
+      assert.equal(git(s.repo, "rev-parse", "main"), s.main);
+      git(s.repo, "config", "--worktree", "--unset", "core.hooksPath");
+      const included = join(root, "conditional.cfg");
+      writeFileSync(included, `[core]\n\thooksPath = ${hooks}\n[user]\n\tname = Conditional Identity\n`);
+      const gitDir = execFileSync("sh", ["-c", `cd "${join(s.repo, ".git")}" && pwd -P`], { encoding: "utf8" }).trim();
+      git(s.repo, "config", `includeIf.gitdir:${gitDir}.path`, included);
+      assert.equal(git(s.repo, "config", "user.name"), "Conditional Identity", "前提：条件配置在项目目录里生效");
+      execFileSync("rm", ["-f", checked]);
+      const conditional = await mergeTaskBranch(s.repo, s.taskId, "main");
+      assert.equal(conditional.ok, false, "条件配置换了 git 目录就不生效，不就地合");
+      if (!conditional.ok) assert.match(conditional.message, /core\.hookspath、user\.name/);
+      assert.equal(existsSync(checked), false, "没有绕过项目检查去合");
+      assert.equal(git(s.repo, "rev-parse", "main"), s.main, "main 没动");
+      clean(s.repo, "条件配置");
+    }
+
+    console.log("accept checkout race: 核完再切走不落错分支 / 持锁期间切不走 / 无竞态照常落地 / 冲突照旧交回 / 持住检出时切不走 / switch -c 换不了 HEAD、只写目标分支 / 钩子在项目目录 / 准备动作不调钩子 / 没做完的合并照拒 / 中止失败状态搬回 / 条件配置不等价就拒 全部通过");
   }
 } finally {
   await removeTmpStage(root);

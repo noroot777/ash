@@ -18,16 +18,13 @@
 //
 // 物理内容（第 5 轮复审 F2）：门禁起跑时把快照里被测的字节记成摘要（accept-gate-physical.ts）。发布前
 // 核目标检出里合并不重写的那些文件还是那份，发布后核整棵树。
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { checkoutMatches, type GatePhysical } from "./accept-gate-physical.js";
 import { checkoutSettings, materializationIdentity, readOnlyGit } from "./accept-gate-preview.js";
 import { type PathState, type SealedMove, sealedMove } from "./git-accept-publish.js";
 import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { registeredCheckout } from "./git-worktree-state.js";
-import { type HeldCheckout, holdCheckout, withHoldWarning } from "./git-merge-locked.js";
+import { type HeldCheckout, holdCheckout, noUserPrograms, withHoldWarning } from "./git-merge-locked.js";
 import type { TaskMergeResult } from "./git-accept.js";
 
 /** 验收移动目标分支时写进 reflog 的说明开头（后面接来源分支）。没有读取方，只给人翻 reflog 时看。 */
@@ -38,12 +35,8 @@ export type LandingGuard = { tree: string; target: string; physical: GatePhysica
 type Names = { sourceBranch: string; targetBranch: string };
 type Published = "merge_commit" | "squash" | "fast_forward";
 
-let noHooks: Promise<string> | null = null;
 /** 发布用的 git：钩子目录指向一个空目录，fsmonitor 关掉。 */
-const landingGit = async (cwd: string, args: string[]) => {
-  noHooks ??= mkdtemp(join(tmpdir(), "navi-no-hooks-"));
-  return exec("git", ["-C", cwd, "-c", `core.hooksPath=${await noHooks}`, "-c", "core.fsmonitor=false", ...args]);
-};
+const landingGit = async (cwd: string, args: string[]) => exec("git", ["-C", cwd, ...await noUserPrograms(), ...args]);
 
 const rev = async (cwd: string, ref: string): Promise<string | null> =>
   (await exec("git", ["-C", cwd, "rev-parse", "--verify", "--quiet", ref]).catch(() => null))?.stdout.trim() || null;
