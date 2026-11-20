@@ -1,15 +1,18 @@
 // 收编智能体自建的工作区（foreign-worktrees.ts 认、task-worktree-adopt.ts 办）。
 //
 // 钉住的几件事：
-//   1. 认：只认这条任务会话里出现过的 linked worktree（绝对路径或相对项目目录的写法都算）；没出现过的、
-//      Navi 自己的 `.worktrees/` 底下的、分支是别的任务的任务分支的，一律不提。
+//   1. 认：只认这条任务在里面干过活的 linked worktree —— 轨迹里建它、cd 进去、改里面的文件（绝对路径或相对
+//      项目目录的写法都算），或者会话本来就记在那个目录上；只是提到过路径的（「这是用户的，别用」）不算。
+//      Navi 自己的任务工作区、分支是别的任务的任务分支的，一律不提；`.worktrees/` 底下没登记的照样是候选。
 //   2. 收编：目录挪到 `.worktrees/<id>`、分支改名成 `navi/<id8>`，未提交的改动原样跟过去；起点冻结在跟合入分支的
 //      分叉点上，「改动」只算智能体在那条分支上做的；任务行、会话行改指新目录，claude 会话文件搬过去，
 //      下一回合给智能体一句交代；办完之后就是一条普通的开了独立工作区的任务，不再提示。
-//   3. 改名会碍着别人（分支是别的任务的合入目标）、项目目录里有未提交的改动：拒绝并说清楚，什么都不动；
-//      被收编的那个目录嵌在项目目录里时，它本身不算项目目录的改动。
-//   4. 半路失败（会话文件搬不过去）：目录挪回去、分支名改回去、冻结 ref 删掉，可以直接重试。
-//   5. 任务在跑时拒绝。
+//      会话本来就在被收编的目录里跑的，会话行和 claude 会话文件同样跟过去。
+//   3. 改名会碍着别人（分支是别的任务的合入目标，归档了的也算）、项目目录里有未提交的改动：拒绝并说清楚，
+//      什么都不动；被收编的那个目录嵌在项目目录里时，它本身不算项目目录的改动。合入分支选什么跟这些无关：
+//      项目目录没检出分支时，提示里不拦，提交时选一条就能办。
+//   4. 半路失败（会话文件搬不过去）：分支名改回去、冻结 ref 删掉，可以直接重试；收回本身失败时照实说哪几处没还原。
+//   5. 任务在跑时拒绝；预览实例一律拒绝（它的库是快照，仓库是真的）。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -37,7 +40,8 @@ const { taskBranchDiff } = await import("../src/git-diff.js");
 const { baseRef } = await import("../src/task-branch-plan.js");
 const { worktreeBranchName, worktreePathFor } = await import("../src/git.js");
 const { sessionTracePath } = await import("../src/transcript.js");
-const { mentionsPath } = await import("../src/foreign-worktrees.js");
+const { commandWorksIn, toolWorksIn } = await import("../src/foreign-worktrees.js");
+const { undoAdopt } = await import("../src/task-worktree-adopt.js");
 await ensureSchema();
 const api = new Hono();
 mountWorktreeMoveRoutes(api);
@@ -98,12 +102,18 @@ const adopt = (id: string, body: unknown) => api.request(`/tasks/${id}/worktree-
 
 try {
   {
-    assert.equal(mentionsPath(`cd /a/wt && ls`, "/a/wt"), true);
-    assert.equal(mentionsPath(`cd /a/wt2 && ls`, "/a/wt"), false, "前缀相同的别的目录不算");
-    assert.equal(mentionsPath(`{"file_path":"/a/wt/src/x.ts"}`, "/a/wt"), true, "目录里的文件算");
-    assert.equal(mentionsPath(`git worktree add ../wt -b x`, "../wt"), true, "相对写法也算");
-    assert.equal(mentionsPath(`cd x-.claude/w`, ".claude/w"), false);
-    console.log("✓ a path mention needs path boundaries on both sides");
+    assert.equal(commandWorksIn(`cd /a/wt && ls`, "/a/wt"), "worked");
+    assert.equal(commandWorksIn(`/bin/zsh -lc 'cd /a/wt && git commit -am x'`, "/a/wt"), "worked", "codex 那种整条命令");
+    assert.equal(commandWorksIn(`cd /a/wt2 && ls`, "/a/wt"), null, "前缀相同的别的目录不算");
+    assert.equal(commandWorksIn(`git worktree add ../wt -b x`, "../wt"), "created", "相对写法也算");
+    assert.equal(commandWorksIn(`git -C /a/wt status`, "/a/wt"), "worked");
+    assert.equal(commandWorksIn(`echo 'User worktree, do not use: /a/wt'`, "/a/wt"), null, "只是提到路径不算");
+    assert.equal(commandWorksIn(`ls /a/wt && cat /a/wt/x`, "/a/wt"), null, "读、列目录不算");
+    assert.equal(toolWorksIn("Edit", `{"file_path":"/a/wt/src/x.ts"}`, "/a/wt"), "worked", "改里面的文件算");
+    assert.equal(toolWorksIn("Read", `{"file_path":"/a/wt/src/x.ts"}`, "/a/wt"), null, "读里面的文件不算");
+    assert.equal(toolWorksIn("Bash", `{"command":"cd /a/wt && make"}`, "/a/wt"), "worked");
+    assert.equal(toolWorksIn("exec", `{"cmd":"make","workdir":"/a/wt"}`, "/a/wt"), "worked", "工作目录参数落在里面");
+    console.log("✓ only actions inside a worktree count as evidence, not mentions of its path");
   }
 
   {
@@ -202,10 +212,11 @@ try {
     const wt = join(root, "shared-branch-wt");
     git(repo, "worktree", "add", "-b", "integration", wt);
     await session("sess-shared", id, repo, [`cd ${wt}`]);
-    await task("othertask001", "shared-branch", { useWorktree: true, mergeTargetBranch: "integration", title: "合进集成分支的那条" });
+    // 归档了也算依赖：取回之后它照样要找这条分支。
+    await task("othertask001", "shared-branch", { useWorktree: true, mergeTargetBranch: "integration", title: "合进集成分支的那条", archived: true });
 
     const found = await foreign(id);
-    assert.match(found.worktrees[0]!.blocker ?? "", /合进集成分支的那条/, "改名会碍着的那条任务点名说出来");
+    assert.match(found.worktrees[0]!.blocker ?? "", /合进集成分支的那条」［已归档］/, "改名会碍着的那条任务点名说出来，归档的也算");
     const refused = await adopt(id, { path: found.worktrees[0]!.path });
     assert.equal(refused.status, 409);
     assert.equal(hasRef(repo, "refs/heads/integration"), true, "分支名没动");
@@ -223,7 +234,7 @@ try {
     git(repo, "worktree", "add", "-b", "feat/rb", wt);
     commit(wt, "rb.txt");
     await session("sess-rb", id, repo, [`cd ${wt}`]);
-    // 新目录对应的会话目录的位置上被一个文件占着：复制必然失败，走「目录已经挪过去之后」的失败分支。
+    // 新目录对应的会话目录的位置上被一个文件占着：复制必然失败，走「分支已经改过名之后」的失败分支。
     const blockedDir = dirname(claudeSessionFilePath(join(realRoot, "rollback", ".worktrees", id), "x", claudeConfig));
     mkdirSync(join(blockedDir, ".."), { recursive: true });
     writeFileSync(blockedDir, "not a directory");
@@ -243,7 +254,113 @@ try {
     rmSync(blockedDir);
     const retried = await adopt(id, { path });
     assert.equal(retried.status, 200, await retried.clone().text());
-    console.log("✓ a failure after the move puts the directory, branch name and frozen ref back, and can be retried");
+    console.log("✓ a failure midway puts the directory, branch name and frozen ref back, and can be retried");
+  }
+
+  {
+    // 收回本身也会失败（目录挪走之后原位置被别的东西占了）：照实说哪几处没还原，不报「已经收回原样」。
+    const repo = await repository("undo-left");
+    const from = join(root, "undo-left-wt");
+    git(repo, "worktree", "add", "-b", "feat/left", from);
+    const to = join(repo, ".worktrees", "undoleft0001");
+    mkdirSync(join(repo, ".worktrees"));
+    git(repo, "worktree", "move", from, to);
+    git(repo, "branch", "-m", "feat/left", worktreeBranchName("undoleft0001"));
+    mkdirSync(from);
+    writeFileSync(join(from, "occupied"), "x");
+    const left = await undoAdopt(repo, {
+      plan: {}, renamed: { from: "feat/left", to: worktreeBranchName("undoleft0001") }, moved: { from, to }, created: [],
+    });
+    assert.equal(left.length, 1, left.join("\n"));
+    assert.match(left[0]!, /工作区还在 .*没挪回/);
+    assert.ok(left[0]!.includes(`git worktree move ${to} ${from}`), "给出手动还原的命令");
+    assert.equal(hasRef(repo, "refs/heads/feat/left"), true, "能还原的那几项照样还原了");
+    console.log("✓ a rollback that cannot fully restore says exactly what is left");
+  }
+
+  {
+    // 只是提到过路径（「这是用户的，别用」）；`.worktrees/` 底下没登记的那个才是智能体干活的地方。
+    const repo = await repository("evidence");
+    const id = "evidence0001";
+    await task(id, "evidence");
+    const userWt = join(root, "evidence-user-wt");
+    git(repo, "worktree", "add", "-b", "user-branch", userWt);
+    mkdirSync(join(repo, ".worktrees"));
+    const manual = join(repo, ".worktrees", "manual");
+    git(repo, "worktree", "add", "-b", "manual-branch", manual);
+    await session("sess-evidence", id, repo, [
+      `echo 'User worktree, do not use: ${userWt}'`,
+      `git worktree add -b manual-branch .worktrees/manual`,
+      `cd ${manual} && git status`,
+    ]);
+    const found = await foreign(id);
+    assert.deepEqual(found.worktrees.map((wt) => wt.branch), ["manual-branch"], "提到过的用户目录不算；.worktrees/ 底下没登记的照样认");
+    assert.equal(found.worktrees[0]!.created, true, "轨迹里有建它的那一步");
+    console.log("✓ a mentioned-only worktree is ignored and an unregistered one under .worktrees/ is found");
+  }
+
+  {
+    // 会话本来就记在被收编的目录上（claude 从那里起跑），轨迹里没有路径：靠会话行认，收编时会话行和
+    // 会话文件都跟过去（会话文件按被收编目录的真实路径存）。
+    const repo = await repository("cwd-session");
+    const id = "cwdsession01";
+    await task(id, "cwd-session");
+    const wt = join(root, "cwd-session-wt");
+    git(repo, "worktree", "add", "-b", "feat/cwd", wt);
+    commit(wt, "cwd.txt");
+    await db.insert(sessions).values({
+      id: "sess-cwd", taskId: id, role: "single", agentType: "claude", executor: "claude@test", cwd: wt, worktreePath: wt, branch: "feat/cwd",
+      cliSessionId: "cli-cwd", cliConfigDir: claudeConfig, startedAt: at, endedAt: at, exitStatus: 0,
+    });
+    const source = claudeSessionFilePath(realpathSync(wt), "cli-cwd", claudeConfig);
+    mkdirSync(dirname(source), { recursive: true });
+    writeFileSync(source, `{"sessionId":"cli-cwd"}\n`);
+
+    const found = await foreign(id);
+    assert.equal(found.worktrees.length, 1, "会话行记在那个目录上就是证据");
+    assert.equal(found.worktrees[0]!.seenAs, wt, "照会话里的写法说");
+    const response = await adopt(id, { path: found.worktrees[0]!.path });
+    assert.equal(response.status, 200, await response.clone().text());
+    const path = worktreePathFor(repo, id);
+    const moved = (await db.select().from(sessions).where(eq(sessions.id, "sess-cwd")))[0]!;
+    assert.equal(moved.cwd, path, "原本就在被收编目录里的会话也改指新目录");
+    assert.equal(moved.worktreePath, path);
+    assert.equal(moved.branch, worktreeBranchName(id));
+    assert.equal(readFileSync(claudeSessionFilePath(realpathSync(path), "cli-cwd", claudeConfig), "utf8"), `{"sessionId":"cli-cwd"}\n`,
+      "会话文件从被收编目录的位置搬到新目录的位置");
+    console.log("✓ a session already running in the adopted worktree is detected and carried along");
+  }
+
+  {
+    // 项目目录没检出分支：提示里不拦（选一条合入分支就行），提交时给了合入分支就办。
+    const repo = await repository("detached");
+    const id = "detached0001";
+    await task(id, "detached");
+    const wt = join(root, "detached-wt");
+    git(repo, "worktree", "add", "-b", "feat/det", wt);
+    commit(wt, "det.txt");
+    git(repo, "checkout", "--detach");
+    await session("sess-det", id, repo, [`cd ${wt}`]);
+    const found = await foreign(id);
+    assert.equal(found.mergeTarget, null, "没有可缺省的合入分支");
+    assert.equal(found.worktrees[0]!.blocker, null, "合入分支怎么选不算拦路的条件");
+    const missing = await adopt(id, { path: found.worktrees[0]!.path });
+    assert.equal(missing.status, 400, "不给合入分支时说清楚要选一条");
+    const response = await adopt(id, { path: found.worktrees[0]!.path, mergeTargetBranch: "main" });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal((await row(id)).mergeTargetBranch, "main");
+    console.log("✓ the merge target is checked against the chosen branch, not the default");
+  }
+
+  {
+    // 预览实例：库是快照、仓库是真的，收编一律不办（另起一个带 NAVI_PREVIEW=1 的进程，它在 import 时就定了）。
+    const out = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      const { adoptionBlocker } = await import(${JSON.stringify(new URL("../src/task-worktree-adopt.ts", import.meta.url).pathname)});
+      const refused = await adoptionBlocker({ id: "x" }, "/nowhere", { path: "/nowhere/wt", seenAs: "/nowhere/wt", branch: "b", head: "h", locked: false, created: true });
+      console.log(refused?.message ?? "NOT REFUSED");
+    `], { encoding: "utf8", env: { ...process.env, NAVI_PREVIEW: "1", NAVI_DB: join(root, "preview.db") }, cwd: new URL("..", import.meta.url).pathname });
+    assert.match(out, /预览实例不做「收编智能体自建的工作区」/);
+    console.log("✓ a preview instance refuses to adopt");
   }
 
   {

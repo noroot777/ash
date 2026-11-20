@@ -112,7 +112,7 @@ export function mountWorktreeMoveRoutes(api: Hono): void {
     if (!project || await taskMoveBlocker(task, project.repoPath)) return c.json({ worktrees: [], mergeTarget: null });
     const found = await foreignWorktreesOf(task, project.repoPath);
     const worktrees = await Promise.all(found.map(async (worktree) => ({
-      path: worktree.path, seenAs: worktree.seenAs, branch: worktree.branch, head: worktree.head,
+      path: worktree.path, seenAs: worktree.seenAs, branch: worktree.branch, head: worktree.head, created: worktree.created,
       blocker: (await adoptionBlocker(task, project.repoPath, worktree))?.message ?? null,
     })));
     const mergeTarget = found.length ? await resolveTaskMergeTarget(project.repoPath, null) : null;

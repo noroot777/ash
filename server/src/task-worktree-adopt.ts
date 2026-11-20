@@ -15,7 +15,8 @@
 //
 // 只有用户入口（信息格里点，任务没在跑，路由占着回合锁）：智能体正在那个目录里跑的时候挪不得。
 // 建出来、改过的东西记一本账，落库之前任何一步失败都按账倒着收回：会话文件删掉、目录挪回去、分支名改回去、
-// 冻结 ref 删掉，仓库回到收编之前的样子。
+// 冻结 ref 删掉，仓库回到收编之前的样子；哪一项没还原（比如原位置被别的东西占了），照实说是哪几项、怎么手动还原。
+// 预览实例一律不办：它的库是主库的快照，仓库却是真的。
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -24,7 +25,8 @@ import { projects, tasks } from "./db/schema.js";
 import { ensureWorktreesIgnored, expandHome, listFiles, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName, worktreePathFor } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
-import { baseRef, branchName, initializeBranchPlan, undoBranchPlanSideEffects, type BranchPlanSideEffects } from "./task-branch-plan.js";
+import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
+import { baseRef, branchName, commitAt, initializeBranchPlan, undoBranchPlanSideEffects, type BranchPlanSideEffects } from "./task-branch-plan.js";
 import { foreignWorktreesOf, worktreeRecords, type ForeignWorktree } from "./foreign-worktrees.js";
 import { samePath } from "./git-worktree-state.js";
 import { carrySessions, planError, projectDirtyFiles, taskMoveBlocker, writeMovedTask, WorktreeMoveError, type SessionMove } from "./task-worktree-move.js";
@@ -49,8 +51,11 @@ export type WorktreeAdopted = {
 
 const git = (repo: string, ...args: string[]) => exec("git", ["-C", repo, ...args]).then((out) => out.stdout.trim());
 
-/** 合入分支：给了就用（必须是本地分支），没给按项目目录此刻检出的那条。 */
-async function adoptTarget(repo: string, worktree: ForeignWorktree, requested: string | null | undefined): Promise<string | WorktreeMoveError> {
+/**
+ * 合入分支：给了就用（必须是本地分支），没给按项目目录此刻检出的那条。跟着表单里选的那条变，所以单独
+ * 一道，不进 `adoptionBlocker`（那里只放跟合入分支无关、选哪条都改变不了的条件）。
+ */
+export async function adoptTarget(repo: string, worktree: ForeignWorktree, requested: string | null | undefined): Promise<string | WorktreeMoveError> {
   const target = requested?.trim() ? branchName(requested) : await resolveTaskMergeTarget(repo, null);
   if (!target || target === "HEAD") return new WorktreeMoveError("项目目录没有检出分支，选一条合入分支再收编", 400);
   if (!(await localBranchExists(repo, target))) return new WorktreeMoveError(`合入分支 ${target} 不在本地，请选一条本地分支`, 400);
@@ -59,10 +64,12 @@ async function adoptTarget(repo: string, worktree: ForeignWorktree, requested: s
 }
 
 /**
- * 能不能收编这个工作区：不能就给出原因。只读。信息格里提示时先问一遍（按钮旁边就写着为什么不行），
- * 真收编时在仓库锁里再问一遍。
+ * 能不能收编这个工作区：不能就给出原因。只读。只放跟合入分支无关的条件（合入分支那一道是 `adoptTarget`，
+ * 表单换一条分支就得重判）。信息格里提示时先问一遍（按钮旁边就写着为什么不行），真收编时在仓库锁里再问一遍。
  */
-export async function adoptionBlocker(task: TaskRow, repoPath: string, worktree: ForeignWorktree, requestedTarget?: string | null): Promise<WorktreeMoveError | null> {
+export async function adoptionBlocker(task: TaskRow, repoPath: string, worktree: ForeignWorktree): Promise<WorktreeMoveError | null> {
+  // 预览库是主库的快照，项目路径指的却是真仓库：挪的是真仓库里不是预览建的目录、改的是真分支名，记录却只进快照。
+  if (IS_PREVIEW_INSTANCE) return new WorktreeMoveError(previewRefusal("收编智能体自建的工作区"));
   const refused = await taskMoveBlocker(task, repoPath);
   if (refused) return refused;
   if (task.worktreeMoveRequest) return new WorktreeMoveError("智能体已经登记了一次改到独立工作区，先撤回它再收编");
@@ -75,20 +82,21 @@ export async function adoptionBlocker(task: TaskRow, repoPath: string, worktree:
     if (await localBranchExists(repo, ours)) return new WorktreeMoveError(`仓库里已经有分支 ${ours}（本任务的分支名），先把它改名或删掉再收编`);
     const checkouts = (await worktreeRecords(repo)).filter((record) => record.branch === worktree.branch);
     if (checkouts.length > 1) return new WorktreeMoveError(`分支 ${worktree.branch} 还检出在别的目录里，改不了名，收编不了`);
-    const users = (await db.select({ id: tasks.id, title: tasks.title, worktreeBase: tasks.worktreeBase, mergeTargetBranch: tasks.mergeTargetBranch,
-      worktreeBaseBranch: tasks.worktreeBaseBranch, acceptedTargetBranch: tasks.acceptedTargetBranch, archived: tasks.archived })
-      .from(tasks).where(eq(tasks.projectId, task.projectId)))
-      .filter((row) => row.id !== task.id && !row.archived && [row.worktreeBase, row.mergeTargetBranch, row.worktreeBaseBranch, row.acceptedTargetBranch]
-        .some((ref) => ref && branchName(ref) === worktree.branch));
+    // 依赖口径跟删任务分支同一份（task-branch-plan.ts `dependentTasks`）：归档不等于不再依赖（取回之后照样
+    // 要找这条分支），只有已经验收的那几条是历史记录、不算。
+    const users = (await db.select({ id: tasks.id, title: tasks.title, stage: tasks.stage, worktreeBase: tasks.worktreeBase,
+      mergeTargetBranch: tasks.mergeTargetBranch, worktreeBaseBranch: tasks.worktreeBaseBranch, acceptedTargetBranch: tasks.acceptedTargetBranch,
+      archived: tasks.archived }).from(tasks).where(eq(tasks.projectId, task.projectId)))
+      .filter((row) => row.id !== task.id && row.stage !== "accepted"
+        && [row.worktreeBase, row.mergeTargetBranch, row.worktreeBaseBranch, row.acceptedTargetBranch].some((ref) => ref && branchName(ref) === worktree.branch));
     if (users.length) {
-      return new WorktreeMoveError(`分支 ${worktree.branch} 是别的任务的起点或合入目标（${users.map((row) => `「${row.title || row.id}」`).join("、")}），`
+      const named = users.map((row) => `「${row.title || row.id}」${row.archived ? "［已归档］" : ""}`).join("、");
+      return new WorktreeMoveError(`分支 ${worktree.branch} 是别的任务的起点或合入目标（${named}），`
         + `收编要把它改名成 ${ours}，那几条会找不到它。先处理那几条任务再收编`);
     }
   }
   const path = worktreePathFor(repo, task.id);
   if (existsSync(path)) return new WorktreeMoveError(`目录 ${path} 已经存在，先把它挪走再收编`);
-  const target = await adoptTarget(repo, worktree, requestedTarget);
-  if (target instanceof WorktreeMoveError) return target;
   const dirty = await projectDirtyFiles(repo, worktree.path);
   if (dirty instanceof WorktreeMoveError) return dirty;
   if (dirty.length) {
@@ -99,18 +107,47 @@ export async function adoptionBlocker(task: TaskRow, repoPath: string, worktree:
 }
 
 /** 收编要改动的东西的账（见文件头）。 */
-type AdoptLedger = {
+export type AdoptLedger = {
   plan: BranchPlanSideEffects;
   renamed: { from: string; to: string } | null;
   moved: { from: string; to: string } | null;
   created: string[];
 };
 
-async function undoAdopt(repo: string, ledger: AdoptLedger) {
-  for (const path of [...ledger.created].reverse()) rmSync(path, { recursive: true, force: true });
-  if (ledger.moved) await git(repo, "worktree", "move", ledger.moved.to, ledger.moved.from).catch(() => {});
-  if (ledger.renamed) await git(repo, "branch", "-m", ledger.renamed.to, ledger.renamed.from).catch(() => {});
+/**
+ * 按账倒着收回，每一项收完都看一眼实际状态：没还原的那几项连同手动还原的办法一起返回，调用方照实说，
+ * 不能一律报「已经收回原样」。
+ */
+export async function undoAdopt(repo: string, ledger: AdoptLedger): Promise<string[]> {
+  const left: string[] = [];
+  for (const path of [...ledger.created].reverse()) {
+    try { rmSync(path, { recursive: true, force: true }); } catch { /* 下面按实际状态核对 */ }
+    if (existsSync(path)) left.push(`复制出来的会话文件 ${path} 没删掉（可以手动删）`);
+  }
+  if (ledger.moved) {
+    const { from, to } = ledger.moved;
+    // 原位置已经被别的东西占了就不挪：目标是个已有目录时 git 会挪进它里面，那就更乱了。挪没挪回去按 git 登记认。
+    if (!existsSync(from)) await git(repo, "worktree", "move", to, from).catch(() => {});
+    const records = await worktreeRecords(repo).catch(() => []);
+    if (!records.some((record) => samePath(record.path, from))) {
+      left.push(`工作区还在 ${to}，没挪回 ${from}（在项目目录运行 git worktree move ${to} ${from}）`);
+    }
+  }
+  if (ledger.renamed) {
+    const { from, to } = ledger.renamed;
+    await git(repo, "branch", "-m", to, from).catch(() => {});
+    if (!(await localBranchExists(repo, from)) || await localBranchExists(repo, to)) {
+      left.push(`分支还叫 ${to}，没改回 ${from}（运行 git branch -m ${to} ${from}）`);
+    }
+  }
   await undoBranchPlanSideEffects(repo, ledger.plan);
+  if (ledger.plan.frozenRef && await commitAt(repo, ledger.plan.frozenRef.ref)) {
+    left.push(`冻结的开工点 ${ledger.plan.frozenRef.ref} 没删掉（运行 git update-ref -d ${ledger.plan.frozenRef.ref}）`);
+  }
+  if (ledger.plan.trackingBranch && await localBranchExists(repo, ledger.plan.trackingBranch.name)) {
+    left.push(`顺手建的分支 ${ledger.plan.trackingBranch.name} 没删掉`);
+  }
+  return left;
 }
 
 const adoptedNote = (done: WorktreeAdopted) =>
@@ -139,9 +176,10 @@ export async function adoptForeignWorktree(taskId: string, input: AdoptInput): P
     // 进锁之后重新认一遍：这期间目录可能被删、被挪，或者已经有别的任务在里面跑。
     const worktree = (await foreignWorktreesOf(task, repo)).find((candidate) => samePath(candidate.path, input.path));
     if (!worktree) throw new WorktreeMoveError(`${input.path} 不是这条任务会话里用到过的、Navi 没管到的工作区（可能已经被挪走或删掉了）`);
-    const refused = await adoptionBlocker(task, repo, worktree, input.mergeTargetBranch);
+    const refused = await adoptionBlocker(task, repo, worktree);
     if (refused) throw refused;
-    const target = await adoptTarget(repo, worktree, input.mergeTargetBranch) as string;
+    const target = await adoptTarget(repo, worktree, input.mergeTargetBranch);
+    if (target instanceof WorktreeMoveError) throw target;
     const start = await git(repo, "merge-base", target, worktree.head).catch(() => "");
     if (!start) throw new WorktreeMoveError(`分支 ${worktree.branch} 跟 ${target} 没有共同的祖先提交，算不出改动从哪里起，收编不了`);
     const upstream = await git(repo, "rev-parse", "--abbrev-ref", `${worktree.branch}@{upstream}`).catch(() => "") || null;
@@ -172,12 +210,14 @@ export async function adoptForeignWorktree(taskId: string, input: AdoptInput): P
         ledger.renamed = { from: worktree.branch, to: branch };
       }
       const path = worktreePathFor(repo, task.id);
+      // 会话文件先搬、目录后挪：会话本来就在被收编的目录里跑的，claude 的会话文件按那个目录的真实路径存，
+      // 目录一挪走就认不出它的真实路径了。项目目录上的会话和被收编目录上的会话一起改指新目录。
+      const carried: SessionMove = { rows: [], created: ledger.created, notes: [] };
+      await carrySessions(task.id, [repo, worktree.path], path, carried);
       mkdirSync(join(repo, ".worktrees"), { recursive: true });
       await ensureWorktreesIgnored(repo);
       await git(repo, "worktree", "move", worktree.path, path);
       ledger.moved = { from: worktree.path, to: path };
-      const carried: SessionMove = { rows: [], created: ledger.created, notes: [] };
-      await carrySessions(task.id, repo, path, carried);
       const result: WorktreeAdopted = {
         from: worktree.seenAs, fromBranch: worktree.branch, path, branch, mergeTargetBranch: target, startCommit: start, upstream, notes: carried.notes,
       };
@@ -188,9 +228,11 @@ export async function adoptForeignWorktree(taskId: string, input: AdoptInput): P
       if (!written) throw new WorktreeMoveError("任务在办的过程中被改动了，没有收编，再试一次");
       return result;
     } catch (error) {
-      await undoAdopt(repo, ledger);
+      const left = await undoAdopt(repo, ledger);
+      const reason = error instanceof WorktreeMoveError ? error.message
+        : (error as { stderr?: string }).stderr?.trim() || (error instanceof Error ? error.message : String(error));
+      if (left.length) throw new WorktreeMoveError(`收编半路失败：${reason}。收回时有几处没能还原，需要手动处理：${left.join("；")}`);
       if (error instanceof WorktreeMoveError) throw error;
-      const reason = (error as { stderr?: string }).stderr?.trim() || (error instanceof Error ? error.message : String(error));
       throw new WorktreeMoveError(`收编半路失败，已经把目录、分支名和冻结的开工点收回原样：${reason}`);
     }
   });

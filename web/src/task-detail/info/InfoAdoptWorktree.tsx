@@ -29,7 +29,8 @@ export function useForeignWorktrees(task: Task, enabled: boolean): ForeignWorktr
 
 export function AdoptTool({ found, open, onToggle }: { found: ForeignWorktrees; open: boolean; onToggle: () => void }) {
   const [first, ...rest] = found.worktrees;
-  const tip = `智能体自己建了工作区 ${first!.seenAs}（分支 ${first!.branch}）${rest.length ? `等 ${found.worktrees.length} 个` : ""}，`
+  const what = first!.created ? "智能体自己建了工作区" : "智能体在工作区里干过活：";
+  const tip = `${what} ${first!.seenAs}（分支 ${first!.branch}）${rest.length ? `等 ${found.worktrees.length} 个` : ""}，`
     + "Navi 没管到它：这里的分支和改动对不上。点开收编";
   return (
     <InspTool label="收编智能体自建的工作区…" tip={tip} className="insp-copy" aria-expanded={open} onClick={onToggle}>
@@ -104,7 +105,7 @@ export function AdoptForm({ task, found, onClose, notify }: {
           filterPlaceholder="筛选分支…"
           placeholder="选一条合入分支"
           mono
-          onChange={setTarget}
+          onChange={(next) => { setTarget(next); setError(null); }}
         />
       </div>
       {(error ?? worktree.blocker) && <p className="insp-bad insp-move-error" role="alert">{error ?? worktree.blocker}</p>}

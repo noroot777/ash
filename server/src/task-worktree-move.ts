@@ -40,6 +40,7 @@ import {
 } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
+import { physicalPath } from "./git-worktree-state.js";
 import { branchName, commitAt, initializeBranchPlan, undoBranchPlanSideEffects, type BranchPlanSideEffects } from "./task-branch-plan.js";
 import { remoteBranchOf } from "./git-remote-branch.js";
 import { claudeSessionFilePath } from "./handoff-collect.js";
@@ -172,33 +173,35 @@ export async function planError(error: unknown): Promise<WorktreeMoveError | nul
 
 /**
  * claude 按进程的真实工作目录分会话目录：macOS 上 `/tmp/x` 起的进程，cwd 是 `/private/tmp/x`。
- * 库里记的是用户写的那种拼法，所以找旧文件两种都试，新文件按真实路径放（新目录这时已经建好了）。
+ * 库里记的是用户写的那种拼法，所以找旧文件两种都试，新文件按真实路径放。新目录此刻不一定已经在了
+ * （收编是先搬会话文件、再挪目录），所以真实路径按「最深一层已存在的祖先」算（`physicalPath`）。
  */
 const realDir = (path: string) => { try { return realpathSync(path); } catch { return path; } };
-const spellings = (path: string) => [...new Set([realDir(path), path])];
+const spellings = (path: string) => [...new Set([realDir(path), physicalPath(path), path])];
 
 export type SessionMove = { rows: string[]; created: string[]; notes: string[] };
 
 /**
- * 这条任务（和挂在它身上的老式审查任务）记在项目目录上的会话行：claude 的会话文件复制一份到新目录对应的
- * 位置，返回要改指新目录的会话行。只动记在**项目目录**上的那几条 —— 记在别处的（比如用户手动指定过目录）
- * 不归这里管。会话行本身不在这里改：跟任务行一起原子落库（`moveTaskToWorktree`）。
+ * 这条任务（和挂在它身上的老式审查任务）记在 `from` 这几个目录上的会话行：claude 的会话文件复制一份到新目录
+ * 对应的位置，返回要改指新目录的会话行。改到独立工作区只给项目目录；收编还要加上被收编的那个目录（会话
+ * 本来就在那里跑的）。记在别处的（比如用户手动指定过目录）不归这里管。会话行本身不在这里改：跟任务行
+ * 一起原子落库（`writeMovedTask`）。
  * 复制出来的每个文件、目录都记进 `created`，后面哪一步失败都按它收回；已经在那儿的不记、不碰。
  */
-export async function carrySessions(taskId: string, from: string, to: string, move: SessionMove): Promise<void> {
+export async function carrySessions(taskId: string, from: string[], to: string, move: SessionMove): Promise<void> {
   const reviewers = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.reviewOf, taskId));
   const rows = await db.select().from(sessions).where(inArray(sessions.taskId, [taskId, ...reviewers.map((row) => row.id)]));
-  const key = repoKey(from);
+  const keys = new Set(from.map(repoKey));
   for (const row of rows) {
     const dir = row.cwd || row.worktreePath;
-    if (!dir || repoKey(expandHome(dir)) !== key) continue;
+    if (!dir || !keys.has(repoKey(expandHome(dir)))) continue;
     move.rows.push(row.id);
     if (row.agentType !== "claude" || !row.cliSessionId) continue;
     const configDir = await sessionCliConfigDir(row, "claude");
     const source = [row.cwd, row.worktreePath].filter((cwd): cwd is string => !!cwd)
       .flatMap((cwd) => spellings(expandHome(cwd)))
       .map((cwd) => claudeSessionFilePath(cwd, row.cliSessionId!, configDir)).find((path) => existsSync(path));
-    const target = claudeSessionFilePath(realDir(to), row.cliSessionId, configDir);
+    const target = claudeSessionFilePath(physicalPath(to), row.cliSessionId, configDir);
     if (!source) {
       move.notes.push(`会话 ${row.id} 的 claude 会话文件没找到，下一回合接不上原来的对话`);
       continue;
@@ -340,7 +343,7 @@ export async function moveTaskToWorktree(taskId: string, input: WorktreeMoveInpu
         .catch((error: unknown) => { throw new WorktreeMoveError(error instanceof Error ? error.message : String(error)); });
       const made = { path: ws.path, branch: ws.branch ?? expectedBranch };
       const carried: SessionMove = { rows: [], created: ledger.created, notes: [] };
-      await carrySessions(task.id, repo, made.path, carried);
+      await carrySessions(task.id, [repo], made.path, carried);
       const result: WorktreeMoved = {
         from: repo, path: made.path, branch: made.branch, base: row.worktreeBaseBranch || row.worktreeBase || startCommit, startCommit,
         mergeTargetBranch: row.mergeTargetBranch ?? null, trackingBranch: plan.trackingBranch?.name ?? null, notes: carried.notes,
