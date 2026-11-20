@@ -77,9 +77,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  // 本机自用模式没有邀请这回事:领取 / 加入链接一律回工作台。领取页因此要等身份状态到了
-  // 再出(多一个 RTT),否则本机模式下会先闪一下「领取你的 navi 账号」。
-  const ignoreRoute = route !== null && state?.localOnly === true;
+  // 模式固定自用(本机自用模式、Navi.app 起的服务)就没有邀请这回事:领取 / 加入链接一律回工作台。
+  // 领取页因此要等身份状态到了再出(多一个 RTT),否则会先闪一下「领取你的 navi 账号」。
+  const ignoreRoute = route !== null && (state?.localOnly === true || state?.desktopApp === true);
   useEffect(() => {
     if (ignoreRoute) {
       window.history.replaceState(null, "", "/");

@@ -132,6 +132,21 @@
   margin-top: 6px;
 }
 
+/* 改到独立工作区：起点、合入两行，左边短标签，右边下拉 */
+.insp-move-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 12px;
+  color: var(--muted);
+}
+
+.insp-move-error {
+  margin: 6px 0 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .insp-inline-acts > .insp-cut {
   margin-right: auto;
   font-size: var(--t-xs);

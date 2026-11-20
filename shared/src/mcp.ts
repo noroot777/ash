@@ -47,6 +47,7 @@ export const NAVI_MCP_TOOLS = [
   "list_groups",
   "list_monitors",
   "list_tasks",
+  "move_to_worktree",
   "patch_task",
   "pause_task",
   "queue_insert",

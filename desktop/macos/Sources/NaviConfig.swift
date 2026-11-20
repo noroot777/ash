@@ -54,6 +54,14 @@ enum NaviConfig {
     return parts.url ?? baseURL
   }
 
+  /// 菜单里的「允许其他设备访问」。关着（默认）时 app 带着本机自用模式起服务：只听 127.0.0.1，
+  /// 没有远程配对和访问密钥；开着时不带 —— 服务听所有网卡，同一 Tailscale / 局域网里的设备经配对或
+  /// 访问密钥进来（手机上点飞书卡片打得开）。服务按起的那一下的值定，改了要重启（RemoteAccessSwitch）。
+  static var allowsOtherDevices: Bool {
+    get { UserDefaults.standard.bool(forKey: "NaviAllowOtherDevices") }
+    set { UserDefaults.standard.set(newValue, forKey: "NaviAllowOtherDevices") }
+  }
+
   /// 本机地址才有「自己起、认是不是自己那份」这回事；连局域网别的 navi 时 app 只是个窗口。
   static var isLocal: Bool { loopback.contains(baseURL.host?.lowercased() ?? "") }
 

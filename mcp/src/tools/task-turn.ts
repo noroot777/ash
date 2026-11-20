@@ -180,6 +180,27 @@ server.registerTool(
 );
 
 server.registerTool(
+  "move_to_worktree",
+  {
+    title: "把本任务改到独立工作区",
+    description:
+      "用户要求给本任务换到某个分支（本地或远端）、某个提交的 worktree 时调用：由 Navi 建 navi/<id8> 工作区，验收会合并它、清理会收掉它。"
+      + "**不要自己执行 `git worktree add` 充当本任务的工作区**——那个目录不会被验收合并，也不会被清理。\n\n"
+      + "调用成功后结束本回合：Navi 在新目录里续跑同一个会话，开头会告诉你新目录在哪。项目目录里有未提交的改动、本任务已有独立工作区时会被拒，原因原样告诉用户。",
+    inputSchema: {
+      taskId: z.string().describe("当前正在执行的任务 id"),
+      base: z.string().min(1).describe("起点：本地分支、远端分支（origin/foo）或提交"),
+      mergeTargetBranch: z.string().optional().describe("验收合入的本地分支；不传按起点定"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+    },
+  },
+  async ({ taskId, base, mergeTargetBranch, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/worktree-move`, { base, mergeTargetBranch }, directionToken)); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
   "stop_task",
   {
     title: "停止/取消任务(杀进程树)",

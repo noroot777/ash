@@ -1,8 +1,11 @@
+import { useRef, useState } from "react";
 import type { TaskListItem } from "@navi/shared";
+import { FunnelSimple, X } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
+import { SidebarIconButton } from "./SidebarIconButton.tsx";
 import { scopeHasFilters, type TaskScope } from "./taskScope.ts";
 import {
-  SPREAD_DOT_FILTERS,
   SPREAD_FILTERS,
   spreadCounts,
   type SidebarSpread,
@@ -10,20 +13,25 @@ import {
   type SpreadFilter,
 } from "./useSidebarSpread.ts";
 
-// 同一个筛选、两副长相：铺开态宽，摆得下带字带数的胶囊；窄态只剩顶部图标行那点空档，
-// 摆一排点。两边读写的是同一个 spread.filter，所以在哪边选的，回到另一边还是它。
+// 挑筛选的入口按屏幕分两种，由 WorkspaceSidebar 按 useNarrowScreen 二选一摆在工具行最左那一格：
+//   · 宽屏：那一格是 F（铺开），铺开后带字带数的胶囊夹在工具行中间（SpreadFilterControls）；
+//   · 手机：铺开没有意义，那一格换成一颗筛选键，点开是同样带字带数的一张菜单（FilterMenuButton）。
+// 两种入口都由同一处 JS 判据挑，而不是让 CSS 单独把 F 藏掉 —— 那样会出现「筛选只能从
+// 铺开态挑、铺开键却被藏了」的屏幕，项目明明支持筛选却一个入口都摸不到。
+// 窄侧栏里不再放一排只靠颜色认的小点：每行行首那颗记号已经说了它在哪一档。
+// 列表被筛过时由 FilterScopeLine 把这件事写出来，并给一个退回全部的口子。
 
-// 点已选中的那一项 = 取消筛选。窄态没有「全部」这颗点，不留这条路就只能靠按 F 进铺开态才能退回全集。
+// 点已选中的那一项 = 取消筛选。
 function filterToggler(spread: SidebarSpread) {
   return (key: SpreadFilter) => spread.setFilter(spread.filter === key ? "all" : key);
 }
 
-// 铺开时才出现的一排筛选。它占的是顶部图标那一行本来就空着的左半边 —— 不新起一行，
+// 铺开时才出现的一排筛选，夹在工具行左边三颗图标和右端「新建任务」之间 —— 不新起一行，
 // 否则下面每一行都会跟着下移，「铺开前后逐像素不动」当场就破了。
-export function SpreadFilterBar({ spread, counts }: { spread: SidebarSpread; counts: SpreadCounts }) {
+function SpreadFilterBar({ spread, counts }: { spread: SidebarSpread; counts: SpreadCounts }) {
   const toggle = filterToggler(spread);
   return (
-    <div className="workspace-spread-filters">
+    <div className="workspace-spread-filters" role="group" aria-label="按状态筛选任务">
       {SPREAD_FILTERS.map((item) => (
         <button
           key={item.key}
@@ -40,68 +48,64 @@ export function SpreadFilterBar({ spread, counts }: { spread: SidebarSpread; cou
   );
 }
 
-function SpreadFilterDot({
-  bucketKey,
-  label,
-  count,
-  on,
-  onToggle,
-}: {
-  bucketKey: string;
-  label: string;
-  count: number;
-  on: boolean;
-  onToggle: () => void;
-}) {
-  const tip = useHoverTip();
-  // 点太小，光靠颜色认不出是哪一档：指上去补一句状态名和条数。选中时还要说明再点一下能退回全集，
-  // 否则窄态里看着像「列表突然少了一半」。
-  const text = on ? `${label} · ${count}（再点看全部）` : `${label} · ${count}`;
-  return (
-    <>
-      <button
-        className={`workspace-spread-dot workspace-spread-dot--${bucketKey}${on ? " is-on" : ""}${count ? "" : " is-empty"}`}
-        type="button"
-        aria-label={text}
-        aria-pressed={on}
-        {...tip.anchorProps}
-        onClick={onToggle}
-      >
-        <i aria-hidden="true" />
-      </button>
-      {/* 点了不收气泡：这颗点一按就换档，那句话的内容跟着变（多出/去掉「再点看全部」），
-          鼠标还停在原地，正是最该让人读到新说法的时候。 */}
-      <HoverTip at={tip.at}>{text}</HoverTip>
-    </>
-  );
-}
-
-// 窄态的那排点：顶部图标行的左半边，跟铺开态那排胶囊同一个起点；图标组仍在最右边不动。
-// 一颗点 = 一档状态，选中即只看这一档。
-export function SpreadFilterDots({ spread, counts }: { spread: SidebarSpread; counts: SpreadCounts }) {
-  const toggle = filterToggler(spread);
-  return (
-    <div className="workspace-spread-dots" role="group" aria-label="按状态筛选任务">
-      {SPREAD_DOT_FILTERS.map((item) => (
-        <SpreadFilterDot
-          key={item.key}
-          bucketKey={item.key}
-          label={item.label}
-          count={counts[item.key]}
-          on={spread.filter === item.key}
-          onToggle={() => toggle(item.key)}
-        />
-      ))}
-    </div>
-  );
-}
-
 export function SpreadFilterControls({ spread, tasks, scope }: { spread: SidebarSpread; tasks: TaskListItem[]; scope: TaskScope }) {
   // 画不画由 scopeHasFilters 一处说了算（任务模式不画，理由在那儿）。useSidebarSpread 读的是
   // 同一条判据把筛选归一到「全部」—— 控件和生效值必须同源，否则会有筛过却没开关的列表。
+  if (!spread.open || !scopeHasFilters(scope)) return null;
+  return <SpreadFilterBar spread={spread} counts={spreadCounts(tasks, scope)} />;
+}
+
+// 手机上的筛选入口：一颗图标键加一张菜单，六档带字带数，当前那档底色加深。
+export function FilterMenuButton({ spread, tasks, scope }: { spread: SidebarSpread; tasks: TaskListItem[]; scope: TaskScope }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLSpanElement>(null);
+  useDismissable({ enabled: open, containerRef: root, onClose: () => setOpen(false) });
   if (!scopeHasFilters(scope)) return null;
   const counts = spreadCounts(tasks, scope);
-  return spread.open
-    ? <SpreadFilterBar spread={spread} counts={counts} />
-    : <SpreadFilterDots spread={spread} counts={counts} />;
+  return (
+    <span className="workspace-filter-menu-anchor" ref={root}>
+      <SidebarIconButton label="按状态筛选" haspopup="menu" expanded={open} onClick={() => setOpen((value) => !value)}>
+        <FunnelSimple size={15} weight={spread.filter === "all" ? "regular" : "fill"} aria-hidden="true" />
+      </SidebarIconButton>
+      {open && (
+        <div className="ui-icon-menu workspace-filter-menu" role="menu" aria-label="按状态筛选任务">
+          {SPREAD_FILTERS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="menuitemradio"
+              aria-checked={spread.filter === item.key}
+              className={item.key === "todo" ? "is-todo" : undefined}
+              onClick={() => { setOpen(false); spread.setFilter(item.key); }}
+            >
+              <b>{item.label}</b>
+              <span>{counts[item.key]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// 「列表现在是筛过的」—— 只在筛选生效时出现，紧贴在任务树上方。它说的是列表的状态，
+// 不是一个常驻控件：筛选是跨两态共享的（铺开里挑了一档再收起，窄态照样筛着），
+// 窄态少了这一行，看到的就是「任务突然少了一半」而且没地方取消。
+// 铺开态也照画：这一行在 F 前后都在原位，下面的行才不会因为铺开 / 收起而上下跳。
+export function FilterScopeLine({ spread, tasks, scope }: { spread: SidebarSpread; tasks: TaskListItem[]; scope: TaskScope }) {
+  const tip = useHoverTip();
+  if (spread.filter === "all") return null;
+  const item = SPREAD_FILTERS.find((entry) => entry.key === spread.filter);
+  if (!item) return null;
+  const count = spreadCounts(tasks, scope)[spread.filter];
+  return (
+    <div className={`workspace-filter-scope workspace-filter-scope--${item.key}`}>
+      <i aria-hidden="true" />
+      <span>只看 <b>{item.label}</b> · {count}</span>
+      <button type="button" aria-label="取消筛选，看全部任务" {...tip.anchorProps} onClick={() => { tip.hide(); spread.setFilter("all"); }}>
+        <X size={12} aria-hidden="true" />
+      </button>
+      <HoverTip at={tip.at}>看全部</HoverTip>
+    </div>
+  );
 }

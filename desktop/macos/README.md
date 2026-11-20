@@ -1,6 +1,6 @@
 # Navi for macOS
 
-装在「应用程序」里的一整份 Navi：自带 node 和 server/web/mcp，数据放在 `~/Library/Application Support/dev.navi.mac/`（从 Ash.app 升级上来的机器上还是原来的 `dev.ash.mac/`，见「从 Ash.app 升级」），打开就能用。不依赖仓库检出，也不依赖系统里有没有 node。个人自用：服务以本机自用模式运行（只听 127.0.0.1，没有多人、配对和邀请）。
+装在「应用程序」里的一整份 Navi：自带 node 和 server/web/mcp，数据放在 `~/Library/Application Support/dev.navi.mac/`（从 Ash.app 升级上来的机器上还是原来的 `dev.ash.mac/`，见「从 Ash.app 升级」），打开就能用。不依赖仓库检出，也不依赖系统里有没有 node。个人自用：没有多人和邀请；默认以本机自用模式运行（只听 127.0.0.1，没有远程配对），要在手机上用就打开菜单「Navi › 允许其他设备访问」（见「让别的设备进来」）。
 
 ```bash
 npm run install:mac                     # 构建并装进 /Applications，然后打开
@@ -24,7 +24,7 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Navi
 
 ## 服务怎么起
 
-- 打开 app 先探 `/api/health`。端口上是**自己那份**才载页面：health 报的数据根是 app 的数据根、代码目录是 app 自带的那份、开着本机自用模式，三样都对上（`NaviHealth.swift`，只看数据根的话仓库里指着同一份数据的开发实例也会被认成自己）。没人就用自带 node 起自带 server，带 `NAVI_DATA_DIR=<数据根>`、`NAVI_LOCAL_ONLY=1`。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；数据根、端口、本机模式写成命令里的字面量、由 `env` 在 exec 那一下落定，终端配置里给开发实例 export 的同名变量盖不掉它们。node 不从 PATH 找。
+- 打开 app 先探 `/api/health`。端口上是**自己那份**才载页面：health 报的数据根是 app 的数据根、代码目录是 app 自带的那份、报自己是 app 起的那一份（`desktop`），三样都对上（`NaviHealth.swift`，只看数据根的话仓库里指着同一份数据的开发实例也会被认成自己；比这一版旧、不报 `desktop` 的服务按 `localOnly` 认）。没人就用自带 node 起自带 server，带 `NAVI_DATA_DIR=<数据根>`、`NAVI_DESKTOP_APP=1`、`NAVI_LOCAL_ONLY=1`（打开了「允许其他设备访问」时是 `0`）。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；数据根、端口、本机模式写成命令里的字面量、由 `env` 在 exec 那一下落定，终端配置里给开发实例 export 的同名变量盖不掉它们。node 不从 PATH 找。
 - 窗口不连 4317，连这份服务**专用的端口**：app 按数据根的真实路径算出一个固定端口（42000–47999，`NaviConfig.windowPort`；`NAVI_MAC_WINDOW_PORT` 可指定），起服务时用 `NAVI_WINDOW_PORT` 交给它，服务在 4317 之外再监听这个端口（只听 127.0.0.1），health 里报出来（`server/src/window-port.ts`）；health 报的专用端口对不上（没监听上、或者不是这一版 app 起的）也不算自己那份。4317 照旧给浏览器、CLI 和 MCP 用，「在浏览器中打开」换回 4317 的地址。这样自己那份一停，窗口的端口就空着：别的 Navi 默认只会去占 4317，撤页之前页面还在发的请求连不上任何人。**剩余风险（用户 2026-11-14 选择接受）**：专用端口只是一个普通的本机端口，不归这份服务独占。有人特意把一份旧版 Navi（不认实例号）用 `PORT` 起在这个端口上，而且恰好赶在窗口撤页之前那一两秒，页面在那一下发出的请求仍会被它执行；新版 Navi 起在这个端口上则会因为实例号对不上而拒收。要彻底堵住得让窗口请求换成旧版接不住的形式（每次起服务都不同的地址前缀，或经 app 转发到只有新版才开的本机连接文件），改动大，没有做。代价：窗口和浏览器是两个来源，主题、草稿这些存在页面本地的设置各管各的。
 - 认过人之后，页面发的每个请求（页面本身、fetch、SSE、预览）还都带着那一份服务的实例号（cookie `ash_instance`，原生的补接请求放在请求头里）。实例号每次起服务都换；自家服务原地重起过、或者专用端口上换了一份新版 Navi，见到别人的实例号一律 409、什么都不执行（`server/src/instance-binding.ts`）。
 - 页面在的时候也一直认着人：本机地址的刷新、前进后退、页面自己跳转放行前各认一次，页面在时每秒再认一次。窗口的端口上不再是自己那份（比如服务停了）就把整页撤成空白、盖上说明，自己那份回来后回到原来的路由；自己那份重起过（实例号换了）就换上新的重载一遍。这一道管的是提示和撤页，不是请求归属：撤页之前还在路上的请求由上面两条挡下。
@@ -34,6 +34,21 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Navi
 - 日志在**数据根下的 `logs/`**：`server.log`（服务）、`login.log`（登录项），跟着数据走。起不来时占位页上有「日志」按钮。
 - 重装 app 不会重启已经在跑的服务，也不会换掉它脚下的代码：`install:mac` 先请窗口退出，再换包（`scripts/install-app.sh`）。换包和进程启动共用一把锁（`shared/src/code-lock.ts`）：跑包里代码的服务、Navi MCP 在读任何业务代码之前，以共享锁拿着包里的 `Contents/Resources/app/.in-use`，一直拿到进程结束；安装器对它拿排他锁，从最后一次检查一直拿到两次改名换完——拿不到就是有人在用，不装、列出是谁；换包那几秒里新起来的进程等在锁上，等到时读到的是一整份新代码。锁在文件本身上，包改名、经软链或相对路径拉起都认得出；进程被强杀内核就放锁，不留死登记；锁文件缺了入口拒绝启动，不会悄悄变成「没人用」。锁管不到的（Navi 本身、别的程序拿包里的可执行文件或脚本跑）另按真实文件身份扫（`scripts/bundle-users.sh`）：可执行文件、映射进来的库、工作目录按 lsof 报的真实路径比，命令行里提到的 .app 逐个按真实路径解析。挑没有任务在跑的时候 `kill` 掉服务（agent 不跟着停），等 MCP 那几个任务这一轮结束，再装一次。同一个安装目录同一时刻只有一个安装在换（按目录真实路径加锁）；新版先拷到旁边再换上，拷失败、最后一步失败时旧的那份放回原处。已经装着的是还没有代码锁的旧版 app 时，那一次只能靠扫描。
 - 换了新版 app 而服务还是旧版 app 起的（app 被强杀时 Sparkle 照样装上的那一档、手动换 app）：app 起服务时在数据根里记一笔 pid + 构建号（`.mac-server.json`），新版打开时认得出，走下面「装之前那道闸」把服务换成新版。
+
+## 让别的设备进来
+
+两个开关各管一件事（`server/src/local-only.ts`）：`NAVI_DESKTOP_APP` 说「这是 app 起的那一份」（health 里认自家、窗口专用端口、模式固定自用），`NAVI_LOCAL_ONLY` 只管网络暴露面（只听 127.0.0.1、关掉远程配对和访问密钥）。
+
+- 菜单「Navi › 允许其他设备访问」打勾 = 起服务时 `NAVI_LOCAL_ONLY=0`：服务听所有网卡，同一 Tailscale / 局域网里的设备打开 `http://<这台 Mac>:4317` 走现有的配对流程（这台电脑上批准，或者输访问密钥，「设置 › 默认规则 › 远程访问」），飞书卡片上的「在 Navi 中打开」在手机上也就打得开了。窗口专用端口不受影响，始终只听 127.0.0.1。
+- 设置存在 UserDefaults（`NaviAllowOtherDevices`），服务按起的那一下的值定，所以改了要重启：先问「现在重启会打断谁」，会打断或确认不了才弹窗让人选，放行后攥着维护锁只停评估过的那一份，确认停下之后才把新设置落盘，再按它起（`RemoteAccessSwitch.swift`）。这样中途在哪一步退出，留下的设置和服务都对得上；没停成就什么都不改。
+- 设置和在跑的服务还是可能对不上（手动改了 defaults、上一版 app 起的服务）：app 记着每次认出自家服务时它报的 `localOnly`（`ServedInstance`），对不上时菜单写「允许其他设备访问（重启服务后生效）」，点它就按现在的设置重启。
+- 只听本机时，飞书设置页存着的「卡片深链地址」不是本机地址的话，就地说明手机打不开、指向这个开关（`server/src/im/app-link.ts`）。
+
+## navi:// 链接
+
+app 注册了 `navi://`（`build.sh` 写进 Info.plist）。`navi://open?project=<项目>&task=<任务>&instance=<指纹>&fallback=<http 地址>` 把窗口拉到前面；自家服务报的指纹（`server/src/instance-tag.ts`，health 里的 `instance.tag`）和链接里的对上，才在窗口里打开那个任务（页面在着就原地换路由，还没载进来就载到那里），对不上或认不出（另一台 Mac 发的卡、app 指着别处）就把 http 地址交给浏览器（`DeepLink.swift`）。只收这几个参数、只收 id 和指纹的字形，fallback 只收指着同一个任务的 http(s) 地址；别的链接只把窗口拉到前面。
+
+飞书卡片只在 app 起的服务**只听本机**时给按钮的 `pc_url` 带这条链接（手机仍走 `default_url` 的 http）：那时 http 在别的电脑上一律打不开，`navi://` 只会让本机这一台变好。放开了别的设备访问就不给，桌面端也走 http —— 发卡的服务不知道收卡的电脑装没装 app。开关一换、服务按新设置起来，飞书通道会把库里存着的卡按新的链接策略重写，14 天内发出的逐张记着、改到飞书上才算完 —— 额度挡住就往后挪着再改，改卡放弃了下次起服务重新排上（更早的飞书不让改，`server/src/im/relink.ts`）。连着点了几条链接时只有最后一条落地。飞书开放平台文档写明 `pc_url` 支持 AppLink，没写第三方 scheme 支不支持，真飞书桌面端没验证过（`server/src/im/app-link.ts`）。
 
 ## 自更新
 
@@ -201,8 +216,10 @@ NAVI_URL=http://127.0.0.1:14977 NAVI_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home 
 | `scripts/bundle-users.sh` | 还有哪些进程在用某个 .app（按真实文件身份认） |
 | `Sources/NaviConfig.swift` | 连哪台、自带运行时在哪、数据和日志放哪 |
 | `Sources/LegacyIdentity.swift` | 改名前的 Ash.app 怎么交班：设置、网页数据、登录项接过来，旧包让位 |
-| `Sources/NaviHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式、窗口专用端口） |
+| `Sources/NaviHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、app 标记、窗口专用端口） |
 | `Sources/ServerLauncher.swift` | 起自带的服务；端口被占时说清是谁 |
+| `Sources/RemoteAccessSwitch.swift` | 「允许其他设备访问」：改设置、按新设置重启服务 |
+| `Sources/DeepLink.swift` | `navi://open?project=&task=`：拉起窗口、打开任务 |
 | `Sources/ServerStartLock.swift` | 同一数据根同时只有一处在起服务 |
 | `Sources/LaunchFlow.swift` | 窗口回到 Navi 的那条路，首启的全新开始 / 导入 |
 | `Sources/DataImport.swift` | 导入旧数据：暂存、洗副本（`server/src/import-snapshot.ts`）、持锁发布 |

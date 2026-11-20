@@ -483,6 +483,10 @@ export const api = {
     if (body && typeof body === "object" && "completed" in body) return body as FamilyAcceptanceResult;
     throw apiError(response, body);
   },
+  // 改到独立工作区（服务端 task-worktree-move-routes.ts）：项目目录有未提交改动、已经在独立工作区里时 409，原因原样给人看。
+  moveToWorktree: (taskId: string, base: string, mergeTargetBranch: string | null): Promise<{ moved: { path: string; branch: string } }> =>
+    request(`/tasks/${id(taskId)}/worktree-move`, json("POST", { base, mergeTargetBranch })),
+  cancelWorktreeMove: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}/worktree-move`, { method: "DELETE" }),
   taskDiff: (taskId: string): Promise<TaskDiffResult> =>
     request(`/tasks/${id(taskId)}/diff`),
   // 跟 `taskScmDiff` 是两个问题，别混：那个读的是工作目录此刻还没提交的东西（索引 + 工作树），

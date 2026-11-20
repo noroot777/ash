@@ -44,6 +44,9 @@ const server = {
     usage: configured
       ? { month: "2026-11", calls: 7400, quota: 10_000, level: "frugal", byKind: { send: 5200, patch: 1800, reaction: 380, token: 20 } }
       : { month: "2026-11", calls: 0, quota: 10_000, level: "normal", byKind: {} },
+    linkWarning: configured && params.get("linkWarning") === "1"
+      ? "这台 Navi 现在只允许本机访问，手机和别的电脑打不开这个地址。在 Navi.app 菜单「Navi › 允许其他设备访问」里打开之后就能用。"
+      : null,
     instanceTag: "7F3A-91C2-0B5D",
     outbox: configured ? { pending: 2, dead: 1 } : { pending: 0, dead: 0 },
   } as FeishuStatus,

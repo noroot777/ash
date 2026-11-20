@@ -5,16 +5,17 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   "mcp/accept_task": 1750,
   "mcp/answer_question": 600,
   "mcp/ask_question": 1750,
-  // 2026-11-20 +60（2300 → 2342 实测）、create_task_chain +500（2550 → 3035 实测）：开工起点上就超了（前置那几句
-  // 落进 taskShape 与工具说明时没跟着改这张表），本轮没动这两个工具，按实测补上，不算本轮的增长。
-  "mcp/batch_create_tasks": 2360,
+  // 2026-11-20 -200（实测 2624 → 2066）：`defaults` 直接复用 tasks[] 的字段实例（序列化成 `$ref`），
+  // 不再自带一份「默认 xxx」说明；默认带审查、远端起点这两项功能加进来的那几句也压紧了。
+  "mcp/batch_create_tasks": 2100,
   "mcp/complete_task": 1450,
   "mcp/create_group": 400,
   "mcp/create_queue": 220,
-  "mcp/create_task_chain": 3060,
+  // 2026-11-20 不变（实测 3317 → 2496）：批次默认那几个字段复用 tasks[] 的字段实例，审查说明不再发第二遍。
+  "mcp/create_task_chain": 2550,
   "mcp/debate_reply": 1400,
-  // mcp/dispatch（团队调度者派活）不在表里：团队停用后它只在 NAVI_LEGACY_TEAM_AND_DUET=1 时注册（shared/src/legacy-modes.ts），
-  // 缺省口径下发不出去，也就量不到。
+  // 只在老模式开着时注册（`LEGACY_ONLY_MCP_TOOLS`）；关着时这一条按设计量不到，测试里放过它。
+  "mcp/dispatch": 2100,
   // 三块判据全文的唯一落脚处（见 PLACEMENT），所以它理应是工具里偏大的一条。
   "mcp/dispute_review": 3400,
   "mcp/get_queue": 160,
@@ -24,6 +25,9 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   // 2026-11-15 +100（500 → 590 实测）：返回字段里多了 prerequisites（前置到哪一步 / 在不在等），派活的
   // 智能体靠它看一串任务卡在哪，不再在任务说明里让执行者「没合入就提问等着」。
   "mcp/list_tasks": 600,
+  // 2026-11-20 新增（786 实测）：把本任务改到独立工作区。说明里只留什么时候用、别自己 `git worktree add`、
+  // 调完结束回合、会被拒的两种情形。
+  "mcp/move_to_worktree": 850,
   "mcp/patch_task": 1100,
   "mcp/pause_task": 950,
   "mcp/queue_insert": 220,

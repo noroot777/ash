@@ -281,7 +281,7 @@ function ScopedTaskTree({
       {pinnedNode}
       {pinnedNode && restNode && <div className="workspace-task-gap" role="separator" />}
       {restNode}
-      {/* 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是
+      {/* 一条不剩时必须自己说出来，还得给条退路：不说清楚的话看着就是
           「任务全没了」。它排在离线提示**之后** —— 两句话可以同时出现，而且先说清楚
           「有台机器问不到」，再说「剩下的没有」。 */}
       {noVisibleTasks && (
