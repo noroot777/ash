@@ -12,10 +12,23 @@ export type { ResumeReason } from "@navi/shared/system-resume";
 import type { ResumeReason, SystemResume } from "@navi/shared/system-resume";
 import type { FreezeGuard } from "./turn-freeze.js";
 
-/** 这一回合在会话里记成哪一条系统续跑记录；null = 记成一句话（真人或后端代写）。 */
-export function turnResumeTrace(opts: Pick<ContinueTaskOptions, "system" | "retryCarryOn">, sideTurn: boolean): SystemResume | null {
+/**
+ * 这句话本来只在接回旧上下文时才说得通（`contextFallback`），这一轮最终却没续上旧 CLI 会话。判据只能在
+ * 选完会话之后下：会话 id 被清掉、跨人的配置目录、codex 版本守卫，都要到那一步才知道（turn-session-pick.ts）。
+ */
+export function contextLost(opts: Pick<ContinueTaskOptions, "contextFallback">, cliResume: boolean): boolean {
+  return opts.contextFallback !== undefined && !cliResume;
+}
+
+/**
+ * 这一回合在会话里记成哪一条系统续跑记录；null = 记成一句话（真人或后端代写）。重试的「接着做」没续上
+ * 旧会话时改发的是原话，就照原话记 —— 下一次重试从会话里读到的上一回合输入还是它，原话不会在链上断掉。
+ */
+export function turnResumeTrace(
+  opts: Pick<ContinueTaskOptions, "system" | "retryCarryOn" | "contextFallback">, sideTurn: boolean, cliResume: boolean,
+): SystemResume | null {
   if (opts.system) return { reason: opts.system, ...(sideTurn ? { side: true as const } : {}) };
-  return opts.retryCarryOn ? { reason: "retry", followUp: true } : null;
+  return opts.retryCarryOn && !contextLost(opts, cliResume) ? { reason: "retry", followUp: true } : null;
 }
 
 /**
@@ -110,10 +123,10 @@ export type ContinueTaskOptions = {
    */
   retryCarryOn?: true;
   /**
-   * 这句话只在接回旧上下文时才说得通（重试的「接着做」、审查的「从中断处继续」）：最终没续上旧 CLI
-   * 会话，就拿 `resumeSessionId` 那条会话的记录重建历史垫在前面（history-reseed.ts 的 `turnHistory`）。
+   * 这一轮的输入只在接回旧上下文时才说得通（重试的「接着做」、审查的「从中断处继续」）：最终没续上旧 CLI
+   * 会话（`contextLost`），就改发这一份自带全部意思的输入 —— 原话，或整份任务书。
    */
-  presumesContext?: true;
+  contextFallback?: string;
   monitorWake?: MonitorWakeData;
   /**
    * 这一轮输入的**投递凭据**:原样落进会话里那条用户回合的 `eventKey`(只在原话落盘的那一处写)。

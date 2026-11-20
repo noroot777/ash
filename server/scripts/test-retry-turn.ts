@@ -7,12 +7,11 @@ import assert from "node:assert/strict";
 import type { RetryTurnFacts, RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
 import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
 import {
-  carriesOnFollowUp, lastInputOf, latestSessionOf, resendInputOf, retryTurnActionOf, retryTurnKindOf, retryTurnIsExecution, retryTurnRejection,
+  carriesOnFollowUp, lastInputOf, retryInputsOf, latestSessionOf, resendInputOf, retryTurnActionOf, retryTurnKindOf, retryTurnIsExecution, retryTurnRejection,
   retryTurnTierOf,
 } from "../src/task-retry-turn.js";
-import { turnResumeTrace } from "../src/task-continue-options.js";
+import { contextLost, turnResumeTrace } from "../src/task-continue-options.js";
 import { systemResumeOf } from "@navi/shared/system-resume";
-import { turnHistory } from "../src/history-reseed.js";
 import { describeQueueBlockers, queueBlockedText, type QueueBlocker } from "../src/queues.js";
 
 const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
@@ -250,10 +249,15 @@ assert.equal(resendInputOf(lastInputOf(turn("system", "继续（从中断处）"
 assert.equal(resendInputOf(null, "claude"), null, "没有输入段");
 // 重试在续聊上代发的「接着做」:记成带 followUp 的系统续跑;它再崩,上一回合的输入就是它,仍按续聊接着做。
 {
-  const trace = turnResumeTrace({ retryCarryOn: true }, false);
+  const trace = turnResumeTrace({ retryCarryOn: true, contextFallback: "原话" }, false, true);
   assert.deepEqual(trace, { reason: "retry", followUp: true });
-  assert.deepEqual(turnResumeTrace({ system: "retry" }, true), { reason: "retry", side: true }, "后端续跑照旧");
-  assert.equal(turnResumeTrace({}, false), null, "一句话(真人或后端代写)不记成续跑");
+  assert.deepEqual(turnResumeTrace({ system: "retry" }, true, false), { reason: "retry", side: true }, "后端续跑照旧");
+  assert.equal(turnResumeTrace({}, false, true), null, "一句话(真人或后端代写)不记成续跑");
+  // 没续上旧 CLI 会话:改发的是原话,就照原话记,下一次重试读到的上一回合输入还是它。
+  assert.equal(turnResumeTrace({ retryCarryOn: true, contextFallback: "原话" }, false, false), null);
+  assert.equal(contextLost({ contextFallback: "原话" }, false), true);
+  assert.equal(contextLost({ contextFallback: "原话" }, true), false, "续上了旧会话:原话在上下文里");
+  assert.equal(contextLost({}, false), false, "普通输入自带全部意思");
   assert.deepEqual(systemResumeOf(trace), trace, "落盘再读回来,标记还在");
   const seg = lastInputOf([turn("user", "把标题也改一下"), "agent 干到一半", turn("system", "〔系统〕继续（从中断处）", { resume: trace }), "又崩了"].join("\n"));
   assert.equal(carriesOnFollowUp(seg), true);
@@ -262,11 +266,15 @@ assert.equal(resendInputOf(null, "claude"), null, "没有输入段");
     "任务的执行续跑(没有 followUp)不算");
   assert.equal(carriesOnFollowUp(lastInputOf(turn("user", "把标题也改一下"))), false);
 }
-// 「接着做」只在没续上旧 CLI 会话时才垫重建历史(读盘那一支由 test-retry-turn-queue 的 Q9 走真库钉)。
+// 原话:连着好几次「接着做」时,原话是它们前面那一段。
 {
-  const base = { taskId: "t", taskBody: "任务", reseed: false, resumeSessionId: "s" };
-  assert.equal(await turnHistory({ ...base, cliResume: true, presumesContext: true }), "", "续上了旧会话:原话在里面,不垫");
-  assert.equal(await turnHistory({ ...base, cliResume: false }), "", "普通输入自带全部意思,不垫");
+  const followUp = { resume: { reason: "retry", followUp: true } };
+  const out = [turn("user", "第一句"), "回复", turn("user", "把界面标题改为蓝鲸计划"), "干到一半",
+    turn("system", "〔系统〕继续（从中断处）", followUp), "又崩了", turn("system", "〔系统〕继续（从中断处）", followUp), "还崩"].join("\n");
+  const { last, original } = retryInputsOf(out);
+  assert.equal(carriesOnFollowUp(last), true);
+  assert.equal(original?.kind === "user" ? original.text : null, "把界面标题改为蓝鲸计划");
+  assert.deepEqual(retryInputsOf(turn("user", "就这一句")).original, retryInputsOf(turn("user", "就这一句")).last, "没有接着做:原话就是上一回合的输入");
 }
 // 是不是执行型,读的是执行层那一份判据(task-continuation-entry.ts 的 inputStartsExecution):
 // 两种执行器、普通与带 --scope 的恢复目标都是,开新目标、暂停目标、普通聊天都不是。

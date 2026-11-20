@@ -66,6 +66,7 @@ import { resumeOrRunTask } from "./task-resume.js";
 import { checkpointStartBlock, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { readableRunPath, sessionTranscriptPath, turnProducedWork } from "./transcript.js";
+import { attachmentsPrompt } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { dispatchHoldOf, dispatchHoldText, type DispatchHold } from "./task-hold.js";
 
@@ -108,22 +109,35 @@ type NonAgentSeg = Exclude<ConvSeg, { kind: "agent" }>;
 // 改成「失败」，「重试这一回合」从此消失（jV60dIbVuBga）。系统续跑的那一段带着 `resume`，又恒是
 // 它那一回合的第一段；同一回合里排在别的输入后面、又没有 `resume` 的系统段只能是注记。回合中途
 // 补进来的那句话（原生 steer）是 user 段，照旧算数。
-export function lastInputOf(out: string): NonAgentSeg | null {
+function turnInputsOf(out: string): NonAgentSeg[] {
   const inputs = parseSessionOutput(out).filter((seg): seg is NonAgentSeg =>
     seg.kind !== "agent" && !(seg.kind === "system" && (seg.level === "notice" || seg.aside)));
   const midTurnNote = (seg: NonAgentSeg, index: number) => seg.kind === "system" && !seg.resume && !!seg.turnStartedAt
     && inputs.findIndex((other) => other.turnStartedAt === seg.turnStartedAt) < index;
-  return inputs.filter((seg, index) => !midTurnNote(seg, index)).at(-1) ?? null;
+  return inputs.filter((seg, index) => !midTurnNote(seg, index));
 }
 
-async function lastInputSeg(path: string): Promise<NonAgentSeg | null> {
-  let hit: NonAgentSeg | null = null;
+export function lastInputOf(out: string): NonAgentSeg | null {
+  return turnInputsOf(out).at(-1) ?? null;
+}
+
+/**
+ * 上一回合的输入，加上它背后的**原话**：上一回合是重试代发的「接着做」（可能连着好几次）时，原话是
+ * 它们前面那一段。接着做没续上旧 CLI 会话时改发的就是它（task-continue-options.ts 的 `contextLost`）。
+ */
+export function retryInputsOf(out: string): { last: NonAgentSeg | null; original: NonAgentSeg | null } {
+  const inputs = turnInputsOf(out);
+  return { last: inputs.at(-1) ?? null, original: inputs.findLast((seg) => !carriesOnFollowUp(seg)) ?? null };
+}
+
+async function retryInputSegs(path: string): Promise<ReturnType<typeof retryInputsOf>> {
+  let hit: ReturnType<typeof retryInputsOf> = { last: null, original: null };
   for (const step of TAIL_STEPS) {
     const { text, whole } = await readTail(path, step);
-    hit = lastInputOf(text);
+    hit = retryInputsOf(text);
     // 切口正好落在回合输入和它后面的注记之间时，注记会被认成那一回合的第一段：再往前读一截。
-    const cut = hit?.kind === "system" && !hit.resume && !!hit.turnStartedAt;
-    if ((hit && !cut) || whole) return hit;
+    const cut = (seg: NonAgentSeg | null) => seg?.kind === "system" && !seg.resume && !!seg.turnStartedAt;
+    if ((hit.last && hit.original && !cut(hit.last) && !cut(hit.original)) || whole) return hit;
   }
   return hit;
 }
@@ -391,7 +405,9 @@ export async function readRetryTurnFacts(
   taskId: string,
   request: RetryTurnRequest = {},
 ): Promise<{
-  task: TaskRow; latest: SessionRow | null; kind: RetryTurnKind; resend: ResendInput | null; carryOn: boolean; facts: RetryTurnFacts;
+  task: TaskRow; latest: SessionRow | null; kind: RetryTurnKind; resend: ResendInput | null; carryOn: boolean;
+  /** 接着做档要是没续上旧会话,改发的原话(上一回合的输入就是那句话时;是上一次的「接着做」时往前找)。 */
+  fallback: ResendInput | null; facts: RetryTurnFacts;
 } | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return null;
@@ -418,21 +434,24 @@ export async function readRetryTurnFacts(
   }
   // 重投、接着做还是续跑,要读会话正文最后一段输入、再看崩掉那一回合干没干过活才知道;判据(队列
   // 那道闸)和路由走哪档读的是同一份。重投交给的执行器就是那条会话自己的(路由按它记下的 profile 重放)。
-  const input = kind === "turn" && latest
-    ? await lastInputSeg(readableRunPath(sessionTranscriptPath(taskId, latest.id))).catch(() => null)
-    : null;
+  const { last: input, original } = kind === "turn" && latest
+    ? await retryInputSegs(readableRunPath(sessionTranscriptPath(taskId, latest.id))).catch(() => ({ last: null, original: null }))
+    : { last: null, original: null };
   let resend = latest ? resendInputOf(input, latest.agentType ?? task.agentType) : null;
   // 干过活 = CLI 收下过那句话(读不出 trace 按没干过算:重投在任何上下文状态下都不丢指令)。
   const worked = !!resend && !!latest
     && await turnProducedWork(taskId, latest.id, latest.turnStartedAt ?? latest.startedAt).catch(() => false);
+  // 执行型输入(`/goal resume`)照旧重投:它本身就是「接着做」,重投不会让已做的从头来。
   const carryOn = carriesOnFollowUp(input) || (worked && !resend!.execution);
-  if (worked) resend = null;
+  const fallback = carryOn && latest ? resendInputOf(original, latest.agentType ?? task.agentType) : null;
+  if (carryOn) resend = null;
   return {
     task,
     latest: latest ?? null,
     kind,
     resend,
     carryOn,
+    fallback,
     facts: {
       task,
       latest: latest ?? null,
@@ -569,7 +588,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
           ? {}
           : { agent: latest.agentType as AgentType, model: null, reasoningEffort: null };
       // 重投、接着做还是续跑,是不是执行,按占位后那一遍读到的定(判据放行的就是这一档)。
-      const { resend, carryOn } = fresh!;
+      const { resend, carryOn, fallback } = fresh!;
       // **执行回合**(续跑档,或重投一句执行型输入如 `/goal resume`)必须先认领队列执行占位
       // (queue-seat.ts):从这里到 CLI 真正拉起之间隔着解析执行器、准备 worktree 等一串 await,
       // 任务状态却一直停在 done —— 消息补投扫描在这个窗口里按 DB 状态判定「整队空闲」,会放行
@@ -606,10 +625,11 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       }
       // 续聊干到一半崩了:原会话里接着做。后端代写的真人回合(byBackend),followUpFrom 照旧护住原终态;
       // 会话里记成一行「你点了重试」(retryCarryOn),不画成我又说了一遍。旧 CLI 会话最终没续上时,
-      // 原话靠重建历史带回去(presumesContext)。
+      // 改发原话、照原话记(contextFallback,判据在选完会话那一步)。
       if (carryOn) {
         handoff(continueTask(taskId, RETRY_CARRY_ON_PROMPT, {
-          ...route, actingUserId: acting, byBackend: true, retryCarryOn: true, presumesContext: true,
+          ...route, actingUserId: acting, byBackend: fallback ? fallback.bySystem : true, retryCarryOn: true,
+          ...(fallback ? { contextFallback: fallback.text + attachmentsPrompt(fallback.paths), monitorWake: fallback.monitorWake } : {}),
           resumeSessionId: latest.id, turnHeld: turn, freezeGuard: true,
         }), action);
         return c.json({ started: true, mode: "continue" }, 202);

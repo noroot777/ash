@@ -10,7 +10,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
 import { forgetHeldTrigger } from "./free-review-reservations.js";
-import { turnResumeTrace, type ContinueTaskOptions, type TurnStartDecline } from "./task-continue-options.js";
+import { contextLost, turnResumeTrace, type ContinueTaskOptions, type TurnStartDecline } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { heldFollowUpTaken, turnFollowUpFrom } from "./follow-up-held.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceReview, turnSourceRole } from "./runs.js";
@@ -41,7 +41,7 @@ import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
-import { turnHistory } from "./history-reseed.js";
+import { reseedHistory } from "./history-reseed.js";
 import { clearOnAcceptance, NO_ONE_SHOT_NOTICES, oneShotNotices } from "./undelivered-replies.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
@@ -292,7 +292,7 @@ export async function continueTask(
       taskId, task, agent, sessionRole, profileId, runOwner, slash,
       freshSession: opts.freshSession, resumeSessionId: opts.resumeSessionId,
     });
-    // 删过消息(reseed)、或「接着做」没续上旧 CLI 会话:拿那条会话的记录重建(history-reseed.ts)。
+    // 删过消息(reseed):会话行照旧续,CLI 会话换新的、拿删除后的记录重建(history-reseed.ts)。
     const cliResume = resuming && !reseed;
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
@@ -331,7 +331,7 @@ export async function continueTask(
     // (系统续跑、队列推进的回合同样会漏交卷)。详见 turn-output.ts。
     await recordTurnStart(taskId, cwd);
     const invited = !prev; // first time this agent is pulled into the task
-    const userTurnText = planInput.text + attachmentsPrompt(opts.attachments);
+    const userTurnText = (contextLost(opts, cliResume) ? opts.contextFallback! : planInput.text) + attachmentsPrompt(opts.attachments);
     const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText, userId: runOwner });
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
     // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
@@ -370,7 +370,7 @@ export async function continueTask(
     // @ 进来、旧会话接不上、/clear 之后新开)都是没有旧上下文的首条消息。原生命令那一支拿不到
     // 它 —— 它独占整条 prompt(见上)。
     const craft = { freshContext: !cliResume, verifying };
-    const history = await turnHistory({ taskId, taskBody: task.body, reseed, cliResume, presumesContext: opts.presumesContext, prevId: prev?.id, resumeSessionId: opts.resumeSessionId });
+    const history = reseed ? await reseedHistory(taskId, prev!.id, task.body) : "";
     const prompt = nativeCommand
       ? promptedUserTurnText
       : planning ? PLANNING_TURN(craft, history + promptedUserTurnText, agent)
@@ -563,7 +563,7 @@ export async function continueTask(
     await claimTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
     const noteTarget = { out, taskId, sessionId: sessId, role: sessionRole, agentType: agent, at: turnStart };
     // Backend-initiated 继续 (incl. 重试's carry-on): a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
-    const resume = turnResumeTrace(opts, sideTurn);
+    const resume = turnResumeTrace(opts, sideTurn, cliResume);
     if (resume) {
       recordSystemResumeTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, at: turnStart, resume });
     } else {

@@ -13,9 +13,10 @@
 //     (第 1 轮审查 F1:只凭「有原话可重投」就豁免,两条任务同时在跑)。
 //  Q7 接着做档:续聊干到一半崩了(trace 里有工具调用)→ 202 mode=continue,原会话里收到的是「接着做」
 //     不是原话,会话里记成重试代发的系统续跑记录;仍是续聊,同队有人在执行也放行、不多拉成员;
-//  Q8 接着做那一回合又崩了:再点重试仍是接着做,不退回任务的执行(不被队列挡)。
-//  Q9 接着做但旧 CLI 会话接不上(会话 id 被清掉):新会话里不能只剩「接着做」—— 原话随重建的历史一起
-//     送进去(第 1 轮审查 F1:实测只发了续跑提示,「把标题改成蓝鲸计划」整句丢了)。
+//  Q8 接着做那一回合又崩了、旧 CLI 会话也接不上了:仍是续聊、不退回任务的执行(不被队列挡),而且改发
+//     的是「接着做」前面那句原话(第 2 轮审查 F1:重建过一次的会话再失效,原话在链上断了);
+//  Q9 接着做但旧 CLI 会话接不上(会话 id 被清掉):改发原话、照原话记进会话,下一次重试读到的还是它
+//     (第 1 轮审查 F1:实测只发了续跑提示,「把标题改成蓝鲸计划」整句丢了)。
 //
 // 执行器是装在 PATH 上的假 claude:收到输入就记一行、一直挂着,直到用例放行那个任务。
 // 跑:npm -w server run test:retry-turn(跟纯判据那份一起跑)
@@ -318,7 +319,6 @@ try {
     await until("接着做的那句进了执行器", () => inputsOf(ids.done).length > 0);
     assert.ok(inputsOf(ids.done).every((input) => input.includes(RETRY_CARRY_ON_PROMPT.slice(0, 12))), "收到的是「接着做」");
     assert.ok(inputsOf(ids.done).every((input) => !input.includes("把标题也改一下")), "原话不再发一遍");
-    assert.ok(inputsOf(ids.done).every((input) => !input.includes("上下文已重建")), "续上了旧 CLI 会话,不垫重建历史");
     await until("接着做回合落 running", async () => (await row(ids.done)).status === "running");
     await assertQueueUntouched(ids);
     assert.equal(await sessionCount(ids.done), 1, "落回原来那条会话");
@@ -341,9 +341,13 @@ try {
     started.push(ids.done);
     await until("接着做回合落 running", async () => (await row(ids.done)).status === "running");
     await assertQueueUntouched(ids);
+    await until("那句进了执行器", () => inputsOf(ids.done).length > 0);
+    const [input] = inputsOf(ids.done);
+    assert.match(input!, /开工/, "旧会话接不上:改发「接着做」前面那句原话");
+    assert.ok(!input!.includes(RETRY_CARRY_ON_PROMPT.slice(0, 12)), "不再只发一句「接着做」");
     release(ids.done);
     await until("回到原终态", async () => (await row(ids.done)).status === "done" && !runs.turnIdentity(ids.done));
-    console.log("✓ Q8 接着做又崩了:再点重试仍接着做,不退回任务的执行");
+    console.log("✓ Q8 接着做又崩了、旧会话也接不上:仍是续聊,改发原话");
   }
 
   // ── Q9 接着做但旧 CLI 会话接不上 ────────────────────────────────────────────
@@ -357,14 +361,17 @@ try {
     started.push(ids.done);
     await until("接着做的那句进了执行器", () => inputsOf(ids.done).length > 0);
     const [input] = inputsOf(ids.done);
-    assert.match(input!, /上下文已重建/, "没续上旧 CLI 会话:垫了重建的历史");
-    assert.match(input!, /把界面标题改为蓝鲸计划/, "原话随历史带回去了");
-    assert.match(input!, /agent 刚开口就崩了/, "做到一半的回复也在");
-    assert.ok(input!.includes(RETRY_CARRY_ON_PROMPT.slice(0, 12)), "这一轮的输入仍是「接着做」");
-    await until("接着做回合落 running", async () => (await row(ids.done)).status === "running");
+    assert.match(input!, /把界面标题改为蓝鲸计划/, "旧会话接不上:改发原话");
+    assert.ok(!input!.includes(RETRY_CARRY_ON_PROMPT.slice(0, 12)), "不再只发一句「接着做」");
+    await until("回合落 running", async () => (await row(ids.done)).status === "running");
+    // 原话照原话记进这一轮的会话:它再崩、旧会话再接不上,下一次重试读到的上一回合输入还是它。
+    const rows = await db.select().from(sessions).where(eq(sessions.taskId, ids.done));
+    const newest = rows.sort((a, b) => (a.turnStartedAt ?? a.startedAt).localeCompare(b.turnStartedAt ?? b.startedAt)).at(-1)!;
+    const recorded = lastInputOf(readFileSync(transcript.sessionTranscriptPath(ids.done, newest.id), "utf8"));
+    assert.equal(recorded?.kind === "user" ? recorded.text : null, "把界面标题改为蓝鲸计划", "会话里记下的是原话");
     release(ids.done);
     await until("回到原终态", async () => (await row(ids.done)).status === "done" && !runs.turnIdentity(ids.done));
-    console.log("✓ Q9 接着做但旧会话接不上:原话随重建的历史带回去");
+    console.log("✓ Q9 接着做但旧会话接不上:改发原话,照原话记进会话");
   }
 } finally {
   for (const taskId of started) release(taskId);
