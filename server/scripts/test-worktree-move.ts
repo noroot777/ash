@@ -10,7 +10,7 @@
 //   4. 已经在独立工作区里的任务拒绝；还没办的登记可以撤回。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -31,7 +31,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
 const { mountWorktreeMoveRoutes } = await import("../src/task-worktree-move-routes.js");
-const { applyPendingWorktreeMove, takeWorkspaceNote } = await import("../src/task-worktree-move.js");
+const { applyPendingWorktreeMove, clearWorkspaceNote, peekWorkspaceNote, takeWorkspaceNote } = await import("../src/task-worktree-move.js");
 const { claudeSessionFilePath } = await import("../src/handoff-collect.js");
 const { taskBranchDiff } = await import("../src/git-diff.js");
 const { baseRef } = await import("../src/task-branch-plan.js");
@@ -374,6 +374,38 @@ try {
     assert.equal(hasRef(repo, `refs/heads/${worktreeBranchName(failing)}`), false);
     assert.equal(hasRef(repo, baseRef(failing)), false);
     console.log("✓ a remote start is fetched first, merges into a new local tracking branch, and a failed move takes it back");
+  }
+  {
+    // `git worktree add` 报错时分支和目录可能已经建出来了：post-checkout 钩子在它们建好之后才跑，钩子一失败
+    // 整条命令就算失败。这次建出来的照样要收回，否则重试会撞上「分支已经存在」。
+    const repo = await repository("hook-fails");
+    const id = "hookfail0013";
+    await task(id, "hook-fails");
+    const hook = join(repo, ".git", "hooks", "post-checkout");
+    writeFileSync(hook, "#!/bin/sh\necho HOOK_FAILED >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const failed = await post(id, { base: "main" });
+    assert.equal(failed.status, 409, await failed.clone().text());
+    assert.match((await failed.json()).error, /HOOK_FAILED/, "失败原因照 git 原话说");
+    assert.equal((await row(id)).useWorktree, false);
+    assert.equal(git(repo, "worktree", "list", "--porcelain").includes(id), false, "git 那边的工作区登记收回了");
+    assert.equal(existsSync(worktreePathFor(repo, id)), false, "目录收回了");
+    assert.equal(hasRef(repo, `refs/heads/${worktreeBranchName(id)}`), false, "任务分支收回了");
+    assert.equal(hasRef(repo, baseRef(id)), false, "冻结的开工点收回了");
+    rmSync(hook);
+    const retried = await post(id, { base: "main" });
+    assert.equal(retried.status, 200, await retried.clone().text());
+
+    // 换目录那句：续聊回合开头只看不划，prompt 交出去之后才划；这期间换成了新的一句就不动它。
+    const shown = await peekWorkspaceNote(id);
+    assert.match(shown, /工作目录已更换/);
+    assert.equal(await peekWorkspaceNote(id), shown, "起跑前失败了，下一次重试还看得到");
+    await db.update(tasks).set({ workspaceNote: "〔另一句〕" }).where(eq(tasks.id, id));
+    await clearWorkspaceNote(id, shown);
+    assert.equal((await row(id)).workspaceNote, "〔另一句〕", "交出去的是旧的那句，新的一句留着");
+    await clearWorkspaceNote(id, await peekWorkspaceNote(id));
+    assert.equal((await row(id)).workspaceNote, null, "交出去之后划掉");
+    console.log("✓ a worktree that git half-built before failing is rolled back too, and the note waits for delivery");
   }
 } finally {
   await removeTmpStage(realRoot);

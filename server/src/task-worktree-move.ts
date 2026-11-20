@@ -198,17 +198,36 @@ async function carrySessions(taskId: string, from: string, to: string, move: Ses
 }
 
 /**
- * 收回这次建出来的东西：复制出的会话文件（倒着删，先文件后目录）、worktree、任务分支，再交给分支计划收回它
- * 留下的冻结开工点和从远端开工时顺手建的跟踪分支（task-branch-plan.ts `undoBranchPlanSideEffects`）。
+ * 这一次迁移在仓库里、磁盘上建出来的东西的账。迁移没落库之前，**任何一个失败出口**都按它收回（`undoMove`），
+ * 任务和仓库回到这次动手之前的样子，可以直接重试。建出东西的动作只有这几处，账也只记这几处：
+ *   · 分支计划：冻结开工点的私有 ref、从远端开工时顺手建的跟踪分支（它自己半路失败会自己收回；之后的
+ *     失败由这里交还给 `undoBranchPlanSideEffects`）。拉远端只是刷新 `refs/remotes`，不算这次建的。
+ *   · 建工作区：worktree 目录和它在 git 里的登记、任务分支。**命令失败不等于没建出来**：`post-checkout`
+ *     钩子在分支和目录都建好之后才跑，它一报错整条 `git worktree add` 就算失败。所以动手之前先记下目录和
+ *     分支在不在（拦截条件已经保证都不在，仓库锁也挡住了别人），收回时只动这次之后才有的。
+ *     共用的 `.worktrees/` 目录和它的忽略规则别的任务也在用，不收。
+ *   · 搬会话：复制出来的会话文件、目录（`carrySessions` 逐个记）。
+ * 数据库那一批是原子的，不用收。进程在中途被杀不在此列：账只在内存里，重启后的残留要按拦截提示手动清。
  */
-async function undoMove(repo: string, made: { path: string; branch: string }, plan: BranchPlanSideEffects, created: string[]) {
-  for (const path of [...created].reverse()) rmSync(path, { recursive: true, force: true });
-  const git = (...args: string[]) => exec("git", ["-C", repo, ...args]).catch(() => {});
-  await git("worktree", "remove", "--force", made.path);
-  if (existsSync(made.path)) rmSync(made.path, { recursive: true, force: true });
-  await git("worktree", "prune");
-  await git("branch", "-D", "--end-of-options", made.branch);
-  await undoBranchPlanSideEffects(repo, plan);
+type MoveLedger = {
+  plan: BranchPlanSideEffects;
+  worktree: { path: string; branch: string; hadPath: boolean; hadBranch: boolean } | null;
+  created: string[];
+};
+
+async function undoMove(repo: string, ledger: MoveLedger) {
+  for (const path of [...ledger.created].reverse()) rmSync(path, { recursive: true, force: true });
+  const wt = ledger.worktree;
+  if (wt) {
+    const git = (...args: string[]) => exec("git", ["-C", repo, ...args]).catch(() => {});
+    if (!wt.hadPath) {
+      await git("worktree", "remove", "--force", wt.path);
+      if (existsSync(wt.path)) rmSync(wt.path, { recursive: true, force: true });
+    }
+    await git("worktree", "prune");
+    if (!wt.hadBranch && await localBranchExists(repo, wt.branch)) await git("branch", "-D", "--end-of-options", wt.branch);
+  }
+  await undoBranchPlanSideEffects(repo, ledger.plan);
 }
 
 /** 「登记此刻还是我读到的那一份」：没有登记的那条路（用户点）要求此刻也没有。 */
@@ -263,21 +282,20 @@ export async function moveTaskToWorktree(taskId: string, input: WorktreeMoveInpu
     } catch (error) {
       throw await planError(error) ?? error;
     }
-    const startCommit = row.worktreeStartCommit as string | null;
-    if (!startCommit) {
-      await undoBranchPlanSideEffects(repo, plan);
-      throw new WorktreeMoveError(`起点 ${row.worktreeBase} 读不出提交`, 400);
-    }
-    let made: { path: string; branch: string };
+    const ledger: MoveLedger = { plan, worktree: null, created: [] };
     try {
-      const ws = await prepareWorktree(repo, task.id, startCommit, true);
-      made = { path: ws.path, branch: ws.branch ?? await resolveWorktreeBranchName(repo, task.id) };
-    } catch (error) {
-      await undoBranchPlanSideEffects(repo, plan);
-      throw new WorktreeMoveError(error instanceof Error ? error.message : String(error));
-    }
-    const carried: SessionMove = { rows: [], created: [], notes: [] };
-    try {
+      const startCommit = row.worktreeStartCommit as string | null;
+      if (!startCommit) throw new WorktreeMoveError(`起点 ${row.worktreeBase} 读不出提交`, 400);
+      const expectedPath = worktreePathFor(repo, task.id);
+      const expectedBranch = await resolveWorktreeBranchName(repo, task.id);
+      ledger.worktree = {
+        path: expectedPath, branch: expectedBranch,
+        hadPath: existsSync(expectedPath), hadBranch: await localBranchExists(repo, expectedBranch),
+      };
+      const ws = await prepareWorktree(repo, task.id, startCommit, true)
+        .catch((error: unknown) => { throw new WorktreeMoveError(error instanceof Error ? error.message : String(error)); });
+      const made = { path: ws.path, branch: ws.branch ?? expectedBranch };
+      const carried: SessionMove = { rows: [], created: ledger.created, notes: [] };
       await carrySessions(task.id, repo, made.path, carried);
       const result: WorktreeMoved = {
         from: repo, path: made.path, branch: made.branch, base: row.worktreeBaseBranch || row.worktreeBase || startCommit, startCommit,
@@ -298,7 +316,8 @@ export async function moveTaskToWorktree(taskId: string, input: WorktreeMoveInpu
       if (!(written.at(-1) as unknown[]).length) throw expected === null ? new WorktreeMoveError("任务在办的过程中被改动了，没有改成，再试一次") : new WorktreeMoveWithdrawn();
       return result;
     } catch (error) {
-      await undoMove(repo, made, plan, carried.created);
+      // 唯一的失败出口：按账收回，不管是在哪一步失败的。
+      await undoMove(repo, ledger);
       if (error instanceof WorktreeMoveError) throw error;
       throw new WorktreeMoveError(`改到独立工作区半路失败，已经收回这次建的工作区和分支：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -337,12 +356,27 @@ export async function applyPendingWorktreeMove(task: TaskRow): Promise<void> {
   if (fresh) Object.assign(task, fresh);
 }
 
-/** 下一回合要告诉智能体的那句（工作目录换了 / 没换成），取走即清。只给任务自己的回合，审查旁路回合不取。 */
-export async function takeWorkspaceNote(taskId: string): Promise<string> {
+/**
+ * 下一回合要告诉智能体的那句（工作目录换了 / 没换成）。续聊回合开头只**看**（`peekWorkspaceNote`），
+ * prompt 真交到 CLI 手上之后才划掉（`clearWorkspaceNote`，orchestrator.ts spawn 之后）：起跑前失败了，
+ * 下一次重试照样带上它。只给任务自己的回合，审查旁路回合不取。
+ */
+export async function peekWorkspaceNote(taskId: string): Promise<string> {
   const row = (await db.select({ note: tasks.workspaceNote }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!row?.note) return "";
-  await db.update(tasks).set({ workspaceNote: null }).where(and(eq(tasks.id, taskId), eq(tasks.workspaceNote, row.note)));
-  return `\n\n${row.note}`;
+  return row?.note ? `\n\n${row.note}` : "";
+}
+
+/** 划掉已经交出去的那一句；这期间换成了新的一句（又改了一次）就不动。 */
+export async function clearWorkspaceNote(taskId: string, shown: string): Promise<void> {
+  const note = shown.replace(/^\n\n/, "");
+  if (note) await db.update(tasks).set({ workspaceNote: null }).where(and(eq(tasks.id, taskId), eq(tasks.workspaceNote, note)));
+}
+
+/** 取走即清：全新会话用不着这句（它没有旧目录的记忆），开跑前直接划掉。 */
+export async function takeWorkspaceNote(taskId: string): Promise<string> {
+  const shown = await peekWorkspaceNote(taskId);
+  await clearWorkspaceNote(taskId, shown);
+  return shown;
 }
 
 /** 有登记、停在检查点上的（智能体登记完回合就结束了）：叫起下一回合去办。开机补办和回合放锁时都走它。 */

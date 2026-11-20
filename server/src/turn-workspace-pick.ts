@@ -12,7 +12,7 @@ import type { projects, tasks } from "./db/schema.js";
 import { existsSync } from "node:fs";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
-import { takeWorkspaceNote } from "./task-worktree-move.js";
+import { peekWorkspaceNote } from "./task-worktree-move.js";
 
 /**
  * 解析这一轮的工作目录。
@@ -23,7 +23,7 @@ import { takeWorkspaceNote } from "./task-worktree-move.js";
  * - `freshWorkspace`:这个目录是这一轮新建出来的(基线快照要据此跳过比对)。
  * - `baseFallback`:登记的基线被换掉了 —— 说明由调用方在 spawn 之后补(见 base-fallback-notice.ts)。
  * - `workspaceMoved`:上一回合之后任务改到了独立工作区(或没改成),要贴进本轮 prompt 的那句
- *   (task-worktree-move.ts)。只给任务自己的回合取,审查旁路回合留着。
+ *   (task-worktree-move.ts)。只看不划:spawn 之后由调用方划掉。只给任务自己的回合取,审查旁路回合留着。
  */
 export async function pickTurnWorkspace(input: {
   task: typeof tasks.$inferSelect;
@@ -34,7 +34,7 @@ export async function pickTurnWorkspace(input: {
   sessionRole: string;
 }): Promise<{ cwd: string; workspaceReset: boolean; freshWorkspace: boolean; baseFallback: Workspace["baseFallback"]; workspaceMoved: string }> {
   const { task, project, recorded, resuming } = input;
-  const workspaceMoved = input.sessionRole === "single" ? await takeWorkspaceNote(task.id) : "";
+  const workspaceMoved = input.sessionRole === "single" ? await peekWorkspaceNote(task.id) : "";
   let baseFallback: Workspace["baseFallback"];
   // A recorded cwd that has since vanished (worktree cleaned up, project moved)
   // used to be handed to spawn as-is — which stuck the task in 'running' forever.

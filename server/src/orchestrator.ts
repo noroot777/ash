@@ -24,6 +24,7 @@ import { retireHistoricalReview } from "./review-retirement.js";
 import { consumeSingleRun } from "./single-run.js";
 import { pickTurnSession } from "./turn-session-pick.js";
 import { pickTurnWorkspace } from "./turn-workspace-pick.js";
+import { clearWorkspaceNote } from "./task-worktree-move.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
@@ -459,7 +460,7 @@ export async function continueTask(
     inputSettlement.handOver(handle);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
     // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
-
+    if (workspaceMoved) void clearWorkspaceNote(taskId, workspaceMoved).catch((error) => console.error(`[navi] 划掉换目录提示失败 ${taskId}:`, error));
     // Reuse the agent's session row when resuming; otherwise open a fresh line,
     // inheriting the task's worktree/branch from its first session.
     let cliSessionId = cliResume ? prev!.cliSessionId! : handle.sessionId;
