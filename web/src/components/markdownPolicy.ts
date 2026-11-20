@@ -1,13 +1,15 @@
 import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@navi/shared/markdown-images";
 import { api } from "../lib/api.ts";
-import { SITE_ROUTE, absoluteDiskPath, attachmentView, isImagePath } from "../task-detail/utils.ts";
+import { instanceRunsPath } from "../lib/resourceRoots.ts";
+import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
 // 名字那一段允许带子目录（`shots/a.png`）：证据接口服务得了它（evidence-path.ts）。`..`
 // 由 reviewFileTarget 里的 PARENT_SEGMENT 挡，不塞进正则 —— 正则里表达它既难读又易漏。
-// 证据目录是数据根下的 `runs/`，数据根叫什么不定（mac 版不叫 data，见 attachmentView 的注释），
-// 认 `runs/<任务>/review/round-N/` 这段结构本身。
-const REVIEW_FILE_PATH = /\/runs\/([\w-]+)\/review\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
-const FREE_REVIEW_FILE_PATH = /\/runs\/([\w-]+)\/free-review\/([\w-]+)\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
+// 证据目录里的那一段:`<任务>/review/round-N/<名>` 或 `<任务>/free-review/<运行>/round-N/<名>`。
+const REVIEW_FILE_PATH = /^([\w-]+)\/review\/round-(\d+)\/(.+)$/;
+const FREE_REVIEW_FILE_PATH = /^([\w-]+)\/free-review\/([\w-]+)\/round-(\d+)\/(.+)$/;
+// 别的根下的历史证据,同 attachmentView 的 LEGACY_UPLOAD。
+const LEGACY_RUNS = /^(?:[A-Za-z]:)?(?:\/.*)?\/data\/runs\/(.+)$/;
 
 export type ReviewFileTarget = {
   name: string;
@@ -25,29 +27,33 @@ function decodeSafe(value: string): string {
 
 export function reviewFileTarget(path?: string): ReviewFileTarget | null {
   if (!path) return null;
-  // 下面两条正则认的是**本机绝对路径**(`/Users/…/runs/…`、`file://…`)。站外网址里碰巧有
-  // 同样的路径形状时不许按它改写:那张图住在别人站上,改写过来只会 404,还顺手把「这是谁家
-  // 的资源」判错(审查第 3 轮 R3 第 5 条)。相对路径也不行:它属于引用它的那份文档,报告里的
-  // `assets/runs/…` 是这份报告证据目录里的文件,不是另一个任务的证据。
-  const onDisk = /^file:\/\//i.test(path.trim()) || absoluteDiskPath(path) !== null;
-  const review = onDisk ? path.match(REVIEW_FILE_PATH) : null;
+  // 磁盘上的证据按本实例真实的 runs 目录认(resourceRoots.ts):项目里完全可以有一个
+  // `runs/other/review/round-1/shot.png`,形状证明不了它是谁的证据。站外网址(审查第 3 轮 R3
+  // 第 5 条)与相对路径(属于引用它的那份文档)在这里都认不出,往下按 URL 处置。
+  const disk = evidenceDiskPath(path);
+  const evidence = disk ? instanceRunsPath(disk) ?? LEGACY_RUNS.exec(disk)?.[1] ?? null : null;
+  const review = evidence?.match(REVIEW_FILE_PATH);
   if (review) {
-    const [, taskId, round, encodedName] = review;
-    const name = decodeSafe(encodedName);
+    const [, taskId, round, name] = review;
     if (!PARENT_SEGMENT.test(name)) return { name, url: api.taskReviewFileUrl(taskId, Number(round), name) };
   }
-  const freeReview = onDisk ? path.match(FREE_REVIEW_FILE_PATH) : null;
+  const freeReview = evidence?.match(FREE_REVIEW_FILE_PATH);
   if (freeReview) {
-    const [, taskId, runId, round, encodedName] = freeReview;
-    const name = decodeSafe(encodedName);
+    const [, taskId, runId, round, name] = freeReview;
     if (!PARENT_SEGMENT.test(name)) return { name, url: api.freeReviewFileUrl(taskId, runId, Number(round), name) };
   }
   const url = sameOriginUrl(path);
   if (!url || !isReviewFileEndpoint(url.pathname)) return null;
   // query 参数已经被 `URLSearchParams` 解过码,不再解第二遍(理由见 siblingResolverForUrl)。
-  // 上面两条分支的输入是**磁盘路径或 file URL**混在一起的形状,那一层确实要自己解。
   const name = url.searchParams.get("name") ?? "";
   return name ? { name, url: url.toString() } : null;
+}
+
+/** 一处目的地所指的磁盘路径(`file:` 或裸路径,去查询/片段、解码一次),分隔符归一成 `/`。网址是 null。 */
+function evidenceDiskPath(destination: string): string | null {
+  const raw = destination.trim();
+  const path = /^file:\/\//i.test(raw) ? fileUrlPath(raw) : isNetworkDestination(raw) ? null : destinationFilePath(raw);
+  return path ? path.replaceAll("\\", "/") : null;
 }
 
 export function isLocalOpenHref(href?: string): href is string {
@@ -194,6 +200,18 @@ export function isDocumentRelative(destination?: string): boolean {
 
 /** `..` 爬出去的那一段——服务端一律 400,这里就别拼这个必败的地址。 */
 const PARENT_SEGMENT = /(^|[/\\])\.\.([/\\]|$)/;
+
+/**
+ * 这个站**自己服务**的那几条路径。`/` 开头的地址里只有它们是网址,其余都是磁盘路径。
+ *
+ * 为什么是「站内路由白名单」而不是「磁盘根白名单」:前者是我们自己的路由表,知道得全;
+ * 后者是整个文件系统的顶层目录,`/System`、`/data`、`/app`、`/code`、`/projects` 都合法,
+ * 列不全(审查第 1 轮 F3 —— 上一版照搬了 `localDiskPath` 的磁盘根白名单,于是容器里
+ * `/app/output/x.png` 这类合法绝对路径在到达文件接口之前就被当成站内地址拒掉了)。
+ * 猜错的代价也不对称:把站内地址当成磁盘路径,顶多多问一次服务端然后 404 收起;把磁盘
+ * 路径当成站内地址,那张图就永远画不出来。
+ */
+const SITE_ROUTE = /^\/(?:api|assets|review|mobile)(?:\/|$)/;
 
 /**
  * 这个 `![]()` 指的是**任务工作目录里**的哪个文件(相对路径原样留着,绝对路径按真路径)。

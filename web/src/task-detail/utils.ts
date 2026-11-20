@@ -1,4 +1,5 @@
 import type { Task } from "@navi/shared";
+import { instanceUploadName } from "../lib/resourceRoots.ts";
 
 export function formatInstant(value?: string | null): string {
   if (!value) return "";
@@ -115,46 +116,17 @@ export function isAudioPath(path: string): boolean {
 // 免得所有调用点跟着改 import。
 export { parseAttachmentText } from "@navi/shared/attachments";
 
-/**
- * 这个站**自己服务**的那几条路径。`/` 开头的地址里只有它们是网址,其余都是磁盘路径。
- *
- * 为什么是「站内路由白名单」而不是「磁盘根白名单」:前者是我们自己的路由表,知道得全;
- * 后者是整个文件系统的顶层目录,`/System`、`/data`、`/app`、`/code`、`/projects` 都合法,
- * 列不全(审查第 1 轮 F3 —— 上一版照搬了 `localDiskPath` 的磁盘根白名单,于是容器里
- * `/app/output/x.png` 这类合法绝对路径在到达文件接口之前就被当成站内地址拒掉了)。
- * 猜错的代价也不对称:把站内地址当成磁盘路径,顶多多问一次服务端然后 404 收起;把磁盘
- * 路径当成站内地址,那张图就永远画不出来。
- */
-export const SITE_ROUTE = /^\/(?:api|assets|review|mobile)(?:\/|$)/;
+// 本实例的附件按真实 uploads 目录认（resourceRoots.ts）。`data/uploads/` 是改认真实根之前就有
+// 的老口径，留着给**别的根**下的历史附件：mac 版导入、仓库搬家都不改写消息里的旧路径，而
+// `/api/uploads/:file` 按文件名取，同名文件在本机照样取得到。只认绝对路径：相对路径属于引用
+// 它的那份文档（报告里的 `data/uploads/x.png` 是证据目录里那一张）。
+const LEGACY_UPLOAD = /^(?:[A-Za-z]:)?(?:\/.*)?\/data\/uploads\/([^/]+)$/;
 
-/**
- * 本机绝对路径(POSIX 根、盘符、反斜杠 UNC),分隔符归一成 `/`;不是就 null。
- *
- * 数据根里的资源(上传附件、验证证据)只能凭**绝对路径**认:站内地址(`/api/uploads/…`)已经
- * 是能直接用的 URL,再当文件名编码一遍就取不到了;相对路径属于引用它的那份文档(报告里的
- * `uploads/x.png` 是证据目录里那一张),不归数据根。
- */
-export function absoluteDiskPath(path: string): string | null {
-  const raw = path.trim();
-  if (/^\\\\[^\\]+\\/.test(raw)) return raw.replaceAll("\\", "/");
-  const normalized = raw.replaceAll("\\", "/");
-  if (/^[A-Za-z]:\//.test(normalized)) return normalized;
-  return normalized.startsWith("/") && !normalized.startsWith("//") && !SITE_ROUTE.test(normalized) ? normalized : null;
-}
-
-// 上传附件落在**数据根下的 `uploads/`**，名字恒为 `<12 位 id>-原名`（server/src/upload-names.ts）。
-// 数据根不一定叫 `data`：仓库检出是 `<仓库>/data`，mac 版是 `~/Library/Application Support/<bundle>`，
-// 还能被 NAVI_DATA_DIR 指到任何地方。所以认「父目录是 uploads + 带 id 前缀」这个不变式；
-// `data/uploads/` 照旧无条件认，兜住早于 id 前缀的老附件。
-const UPLOADED_FILE = /\/(?:data\/uploads\/([^/]+)|uploads\/([A-Za-z0-9_-]{12}-[^/]+))$/;
-
-/** `path` 是磁盘路径(不是 URL):附件记录、agent 图副本存的都是它。 */
+/** `path` 是磁盘路径（不是 URL）：附件记录、agent 图副本存的都是它。 */
 export function attachmentView(path: string): { name: string; url: string | null; image: boolean } {
   const normalized = path.trim().replaceAll("\\", "/");
   const name = normalized.split("/").filter(Boolean).pop() ?? normalized;
-  const disk = absoluteDiskPath(path);
-  const match = disk ? UPLOADED_FILE.exec(disk) : null;
-  const uploaded = match?.[1] ?? match?.[2] ?? null;
+  const uploaded = instanceUploadName(normalized) ?? LEGACY_UPLOAD.exec(normalized)?.[1] ?? null;
   const url = uploaded ? `/api/uploads/${encodeURIComponent(uploaded)}` : null;
   const displayName = name.replace(/^[A-Za-z0-9_-]{12}-/, "") || name;
   return { name: displayName, url, image: !!url && isImagePath(uploaded ?? "") };
