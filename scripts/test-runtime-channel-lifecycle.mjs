@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { withTestResources } from "./test-process-resources.mjs";
 import { runTestProcess } from "./test-process.mjs";
+import { spawnTestFixture } from "./test-process-scope.mjs";
 
 if (process.platform === "win32") {
   console.log("SKIP: macOS stable channel lifecycle");
@@ -19,7 +21,8 @@ if (process.platform === "win32") {
   process.env.NAVI_DB = join(temporary, "navi.db");
   process.env.NAVI_RUNS_DIR = join(temporary, "runs");
   const { RuntimeGatewayController, gatewayRequest } = await import("../server/dist/runtime-channel-controller.js");
-  const { initializeRuntimeGateway } = await import("../server/dist/runtime-channel-gateway.js");
+  const { hasGatewayConsumers, processProof } = await import("../server/dist/runtime-channel-consumers.js");
+  const { initializeRuntimeGateway, runtimeMonitorFallback } = await import("../server/dist/runtime-channel-gateway.js");
   const { INSTANCE_ID } = await import("../server/dist/instance-binding.js");
   const { beginRuntimeDrain, endRuntimeDrain, holdRuntimeDrain, onRuntimeDrainEnd, runtimeDraining,
     runtimeDrainGate, sealRuntimeChannels } = await import("../server/dist/runtime-drain.js");
@@ -30,6 +33,23 @@ if (process.platform === "win32") {
   const servers = [];
   const controllers = [];
   const sockets = new Map();
+  const children = [];
+  const consumerDbFile = join(temporary, "consumers.db");
+  const consumerDb = new DatabaseSync(consumerDbFile);
+  consumerDb.exec("CREATE TABLE sessions (id TEXT, task_id TEXT, ended_at TEXT, agent_pid INTEGER, agent_started_at TEXT, agent_out_path TEXT)");
+  const insert = consumerDb.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)");
+  const child = async () => {
+    const fixture = spawnTestFixture(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    children.push(fixture);
+    await once(fixture, "spawn");
+    return fixture;
+  };
+  const consumer = (fixture, id, key, ended = null) => {
+    const out = join(temporary, key + ".out");
+    writeFileSync(out + ".runtime-channels.json", JSON.stringify({ version: 2, stable: ["monitor"], gateway: id, channels: [], unknown: false }));
+    insert.run(key, "missing-task", ended, fixture.pid, new Date(processProof(fixture.pid).startedAt).toISOString(), out);
+    return out;
+  };
   const waitFor = async (check, label) => {
     const until = Date.now() + 8_000;
     while (Date.now() < until) {
@@ -73,8 +93,8 @@ if (process.platform === "win32") {
   const start = async (overrides = {}) => {
     const controller = new RuntimeGatewayController({ ...options, ...overrides });
     controllers.push(controller);
-    sockets.set(overrides.socket ?? socket, overrides.owner ?? INSTANCE_ID);
     await controller.start();
+    if (controller.state) sockets.set(controller.socket, overrides.owner ?? INSTANCE_ID);
     return controller;
   };
   const stopDaemon = async (state) => {
@@ -99,7 +119,7 @@ if (process.platform === "win32") {
       return response;
     };
     assert.equal(original.protocol, 1);
-    assert.match(original.build, /^[a-f0-9]{64}-[a-f0-9]{64}$/);
+    assert.match(original.build, /^[a-f0-9]{64}(?:-[a-f0-9]{64}){2}$/);
     assert.deepEqual(await (await send("before-crash")).json(), { key: "before-crash" });
     process.kill(original.pid, "SIGKILL");
     const recovered = await waitFor(async () => {
@@ -134,13 +154,37 @@ if (process.platform === "win32") {
 
     const nextEntry = join(temporary, "next-gateway.mjs");
     writeFileSync(nextEntry, readFileSync(entry, "utf8") + "\n");
+    for (let index = 0; index < 81; index++) insert.run(`stale-${index}`, "missing-task", null, null, null, null);
+    insert.run("live-without-out", "done-task", null, process.pid, new Date(processProof(process.pid).startedAt).toISOString(), null);
+    const reusedOut = join(temporary, "reused.out");
+    writeFileSync(reusedOut + ".runtime-channels.json", JSON.stringify({ version: 2, stable: ["monitor"], gateway: original.id }));
+    insert.run("pid-reused", "missing-task", null, process.pid, "2001-01-01T00:00:00.000Z", reusedOut);
+    assert.equal(hasGatewayConsumers(consumerDbFile, original.id), false, "historical rows, missing snapshots and reused PIDs do not pin a gateway");
+    const live = await child();
+    consumer(live, original.id, "live-consumer", "2026-01-01");
+    assert.equal(hasGatewayConsumers(consumerDbFile, original.id), true, "a live generation with stable channel evidence counts even after its row was ended");
+    assert.equal(hasGatewayConsumers(consumerDbFile, "another-gateway"), false);
+    const unknownOut = consumer(live, "unknown-generation", "unknown-generation");
+    consumerDb.prepare("UPDATE sessions SET agent_started_at = NULL WHERE agent_out_path = ?").run(unknownOut);
+    assert.equal(hasGatewayConsumers(consumerDbFile, "unknown-generation"), true, "relevant channel evidence with an unverifiable generation conservatively retains its entry");
+    for (const stable of [null, "monitor", ["invalid-channel"]]) {
+      writeFileSync(unknownOut + ".runtime-channels.json", JSON.stringify({ version: 2, stable, gateway: "unknown-generation" }));
+      assert.equal(hasGatewayConsumers(consumerDbFile, "unknown-generation"), true, "invalid channel evidence cannot prove an entry unused");
+    }
+    assert.equal(hasGatewayConsumers(join(temporary, "unavailable.db"), original.id), true, "unreadable consumer database retains the entry");
+    consumerDb.prepare("DELETE FROM sessions WHERE agent_out_path = ?").run(unknownOut);
+    const realConsumers = { dbFile: consumerDbFile, hasConsumers: async (id) => hasGatewayConsumers(consumerDbFile, id) };
     offline.close();
-    const retained = await start({ entry: nextEntry, hasConsumers: async () => true });
+    const retained = await start({ entry: nextEntry, ...realConsumers });
     assert.equal(retained.state.build, original.build, "compatible entry is retained while a session still uses it");
     assert.notEqual(retained.script, offline.script, "new artifacts are staged by both script and Node content hashes");
     assert.equal((await (await send("retained-session")).json()).key, "retained-session");
+    const tracked = JSON.parse(readFileSync(join(home, "endpoint.json"), "utf8"));
+    assert.equal(tracked.script, offline.script, JSON.stringify({ tracked, proof: processProof(retained.state.pid) }));
     retained.close();
-    const upgraded = await start({ entry: nextEntry });
+    await live.dispose();
+    assert.equal(hasGatewayConsumers(consumerDbFile, original.id), false, "exited generations do not block upgrades even when snapshots/rows remain");
+    const upgraded = await start({ entry: nextEntry, ...realConsumers });
     assert.notEqual(upgraded.state.build, original.build);
     assert.equal(upgraded.state.id, original.id);
     assert.equal(upgraded.state.port, original.port);
@@ -153,7 +197,10 @@ if (process.platform === "win32") {
     upgraded.close();
     const busy = new RuntimeGatewayController(options);
     controllers.push(busy);
-    await assert.rejects(busy.start(), /409/, "an in-flight stream prevents replacing or reactivating its backend");
+    await busy.start();
+    assert.equal(busy.state, undefined, "an in-flight stream disables the entry rather than the entire service");
+    assert.match(busy.warning, /409/);
+    busy.close();
     assert.equal((await gatewayRequest(socket, "/status")).build, upgraded.state.build);
     stream.end("last\n");
     while (!(await reader.read()).done) {}
@@ -188,32 +235,187 @@ if (process.platform === "win32") {
     console.log("✓ unversioned legacy entry is adopted without moving live URLs, then upgraded after its consumers finish");
 
     const occupied = await listen(createServer(), original.port);
-    await assert.rejects(start(), /EADDRINUSE|ECONNREFUSED|ENOENT/, "a stolen port must not silently move an existing session's endpoint");
+    const protectedEntry = await start({ hasConsumers: async () => true });
+    assert.equal(protectedEntry.state, undefined);
+    assert.match(protectedEntry.warning, /EADDRINUSE|ECONNREFUSED|ENOENT/);
+    protectedEntry.close();
     assert.equal(JSON.parse(readFileSync(join(home, "endpoint.json"), "utf8")).port, original.port);
+    const repairedEntry = await start();
+    assert.ok(repairedEntry.state);
+    assert.notEqual(repairedEntry.state.id, original.id);
+    assert.notEqual(repairedEntry.state.port, original.port);
+    assert.equal(occupied.listening, true, "port repair never stops an unrelated listener");
+    repairedEntry.close();
     await new Promise((done) => occupied.close(done));
 
     const unknownSocket = join(temporary, "unknown.sock");
     const unknown = await listen(createServer((incoming, outgoing) => {
       outgoing.end(JSON.stringify({ ...original, protocol: 99 }));
     }), unknownSocket);
-    const incompatible = new RuntimeGatewayController({ ...options, socket: unknownSocket });
-    controllers.push(incompatible);
-    await assert.rejects(incompatible.start(), /unsupported channel gateway protocol/);
+    const unknownHome = join(temporary, "unknown");
+    const incompatible = await start({ home: unknownHome, socket: unknownSocket, hasConsumers: async () => true });
+    assert.equal(incompatible.state, undefined);
+    assert.match(incompatible.warning, /unsupported channel gateway protocol/);
+    incompatible.close();
+    const compatible = await start({ home: unknownHome, socket: unknownSocket });
+    assert.equal(compatible.state.protocol, 1);
+    assert.notEqual(compatible.socket, unknownSocket);
+    assert.equal(unknown.listening, true, "unknown control service is never terminated or unlinked");
+    compatible.close();
     await new Promise((done) => unknown.close(done));
-    console.log("✓ occupied persisted port and incompatible control protocol fail closed rather than changing endpoint identity");
+    console.log("✓ occupied port and unknown protocol preserve live identities, but recover unused entries without blocking service startup");
+
+    const discovered = await start({ socket: join(temporary, "different-tmp.sock"), hasConsumers: async () => true });
+    assert.equal(discovered.socket, repairedEntry.socket);
+    assert.equal(discovered.state.pid, repairedEntry.state.pid);
+    assert.equal(discovered.state.id, repairedEntry.state.id);
+    discovered.close();
+    unlinkSync(discovered.socket);
+    const rebound = await start({ hasConsumers: async () => true });
+    assert.equal(rebound.state.pid, discovered.state.pid, "missing socket is rebound by the original daemon, not a duplicate");
+    assert.equal(rebound.state.port, discovered.state.port);
+    rebound.close();
+    for (const damage of ["{", "{}", JSON.stringify({ id: "wrong-identity", port: original.port })]) {
+      writeFileSync(join(home, "endpoint.json"), damage);
+      const restored = await start({ hasConsumers: async () => true });
+      assert.equal(restored.state.id, repairedEntry.state.id);
+      assert.equal(restored.state.pid, repairedEntry.state.pid);
+      restored.close();
+    }
+    const watching = await start();
+    unlinkSync(join(home, "endpoint.json"));
+    unlinkSync(join(home, "endpoint.json.backup"));
+    await waitFor(() => existsSync(join(home, "endpoint.json")), "watchdog repairs missing identity metadata from the live control endpoint");
+    assert.equal(watching.state.id, repairedEntry.state.id);
+    watching.close();
+
+    const mismatchHome = join(temporary, "mismatch");
+    const mismatchSocket = join(temporary, "mismatch.sock");
+    mkdirSync(mismatchHome);
+    const mismatchEndpoint = join(mismatchHome, "endpoint.json");
+    const wrongIdentity = { ...original, id: "stored-identity", pid: process.pid,
+      startedAt: processProof(process.pid).startedAt, socket: mismatchSocket };
+    writeFileSync(mismatchEndpoint, JSON.stringify(wrongIdentity));
+    const mismatched = await listen(createServer((incoming, outgoing) => {
+      outgoing.end(JSON.stringify({ ...original, pid: process.pid, id: "unrelated-identity" }));
+    }), mismatchSocket);
+    const blockedIdentity = await start({ home: mismatchHome, socket: mismatchSocket, hasConsumers: async () => true });
+    assert.equal(blockedIdentity.state, undefined);
+    assert.match(blockedIdentity.warning, /identity changed/);
+    blockedIdentity.close();
+    assert.equal(JSON.parse(readFileSync(mismatchEndpoint, "utf8")).id, wrongIdentity.id);
+    const freshIdentity = await start({ home: mismatchHome, socket: mismatchSocket });
+    assert.ok(freshIdentity.state);
+    assert.notEqual(freshIdentity.state.id, "unrelated-identity");
+    assert.equal(mismatched.listening, true);
+    freshIdentity.close();
+    await new Promise((done) => mismatched.close(done));
+    console.log("✓ persisted process generations discover moved sockets, rebind deleted sockets, recover corrupt/deleted identities and isolate unrelated endpoints");
+
+    const faultHome = join(temporary, "faults");
+    const faultSocket = join(temporary, "faults.sock");
+    let statusPayload;
+    const faultyControl = await listen(createServer((incoming, outgoing) => outgoing.end(statusPayload)), faultSocket);
+    const faults = [
+      ["malformed response", "{"],
+      ["missing identity", JSON.stringify({ ...original, id: "" })],
+      ["invalid port", JSON.stringify({ ...original, port: 0 })],
+      ["invalid pid", JSON.stringify({ ...original, pid: null })],
+      ["unsupported protocol", JSON.stringify({ ...original, protocol: 99 })],
+    ];
+    for (const [label, payload] of faults) {
+      statusPayload = payload;
+      const withUsers = await start({ home: faultHome, socket: faultSocket, hasConsumers: async () => true });
+      assert.equal(withUsers.state, undefined, label + " must only disable channels with live consumers");
+      assert.ok(withUsers.warning);
+      withUsers.close();
+      await assert.rejects(withUsers.pause(), undefined, label + " must also be rejected on control paths");
+      const noUsers = await start({ home: faultHome, socket: faultSocket });
+      assert.ok(noUsers.state, label + " must permit safe unused-entry recovery");
+      noUsers.close();
+      await gatewayRequest(noUsers.socket, "/retire", { owner: INSTANCE_ID });
+      await waitFor(() => !existsSync(noUsers.socket), "fault fixture retires");
+      rmSync(join(faultHome, "endpoint.json"), { force: true });
+      rmSync(join(faultHome, "endpoint.json.backup"), { force: true });
+    }
+    assert.equal(faultyControl.listening, true);
+    await new Promise((done) => faultyControl.close(done));
+    console.log("✓ every invalid control identity/protocol/response fails closed for consumers and recovers without consumers, including pause control paths");
+
+    let unrelatedRetires = 0;
+    const unrelatedSocket = join(temporary, "unrelated.sock");
+    const unrelated = await listen(createServer(async (incoming, outgoing) => {
+      for await (const chunk of incoming) void chunk;
+      if (incoming.url === "/retire") unrelatedRetires++;
+      outgoing.end(JSON.stringify({ ...original, pid: process.pid, build: "different-build" }));
+    }), unrelatedSocket);
+    const ownership = await start({ home: faultHome, socket: unrelatedSocket });
+    assert.ok(ownership.state);
+    assert.notEqual(ownership.state.id, original.id);
+    assert.equal(unrelatedRetires, 0, "neither upgrades nor recovery may retire a process without data-root ownership proof");
+    assert.equal(unrelated.listening, true);
+    ownership.close();
+    await new Promise((done) => unrelated.close(done));
+
+    const idleEntry = await start({ home: join(temporary, "idle"), socket: join(temporary, "idle.sock"), idleMs: 200, ...realConsumers });
+    const idleState = { ...idleEntry.state };
+    idleEntry.close();
+    const marker = await child();
+    const idleConsumer = await child();
+    consumer(idleConsumer, idleState.id, "idle-consumer");
+    await gatewayRequest(idleEntry.socket, "/activate", { owner: INSTANCE_ID, port: options.port, pid: marker.pid });
+    const idleSend = (key, body = {}, signal = requests.signal) => fetch(`http://127.0.0.1:${idleState.port}/api/llm-providers/p/convert/v1/responses`, {
+      method: "POST", body: JSON.stringify({ key, ...body }), signal,
+    });
+    await marker.dispose();
+    await new Promise((done) => setTimeout(done, 500));
+    assert.equal((await gatewayRequest(idleEntry.socket, "/status")).pid, idleState.pid, "a real consumer retains the entry while backend is gone");
+    const idleStream = await idleSend("idle-stream", { hold: true });
+    const idleReader = idleStream.body.getReader();
+    await idleReader.read();
+    await gatewayRequest(idleEntry.socket, "/pause", { owner: INSTANCE_ID });
+    const idleAbort = new AbortController();
+    const idleQueued = idleSend("idle-queued", {}, idleAbort.signal).catch(() => undefined);
+    await waitFor(async () => (await gatewayRequest(idleEntry.socket, "/status")).queued === 1, "idle fixture request queues");
+    await idleConsumer.dispose();
+    await new Promise((done) => setTimeout(done, 500));
+    assert.equal((await gatewayRequest(idleEntry.socket, "/status")).active, 1, "delivered stream retains the orphan entry");
+    stream.end("last\n");
+    while (!(await idleReader.read()).done) {}
+    await new Promise((done) => setTimeout(done, 500));
+    assert.equal((await gatewayRequest(idleEntry.socket, "/status")).queued, 1, "unforwarded queued work independently retains the orphan entry");
+    idleAbort.abort();
+    await idleQueued;
+    await waitFor(() => !existsSync(idleEntry.socket), "idle entry retires after backend, consumers and pending requests disappear");
+    const retired = JSON.parse(readFileSync(join(temporary, "idle/endpoint.json"), "utf8"));
+    assert.equal(retired.retired, true);
+    assert.equal(retired.reason, "idle");
+    const restartedIdle = await start({ home: join(temporary, "idle"), socket: idleEntry.socket, ...realConsumers });
+    assert.equal(restartedIdle.state.id, idleState.id);
+    assert.equal(restartedIdle.state.port, idleState.port);
+    restartedIdle.close();
+    assert.equal(counts.get("idle-queued"), undefined, "aborted queues are not replayed after idle restart");
+    console.log("✓ autonomous idle retirement uses actual generations and shared channel evidence, retains streams/queues and reopens the same identity");
+
+    const unavailable = await initializeRuntimeGateway({ ...options, node: join(temporary, "missing-node") });
+    controllers.push(unavailable);
+    assert.equal(unavailable.state, undefined, "missing installation artifacts do not prevent service startup");
+    unavailable.close();
+    const guard = await runTestProcess("/bin/sh", ["-c", runtimeMonitorFallback()]);
+    assert.equal(JSON.parse(guard.stdout).hookSpecificOutput.permissionDecision, "deny", "Monitor fallback works independently of damaged gateway artifacts");
 
     const global = await initializeRuntimeGateway(options);
     controllers.push(global);
     global.close();
-    const current = await gatewayRequest(socket, "/status");
+    const current = await gatewayRequest(global.socket, "/status");
     await stopDaemon(current);
-    sockets.delete(socket);
+    sockets.delete(global.socket);
     let resumeFails = true;
     const brokenControl = await listen(createServer(async (incoming, outgoing) => {
       for await (const chunk of incoming) void chunk;
       outgoing.writeHead(incoming.url === "/resume" && resumeFails ? 500 : 200, { "content-type": "application/json" });
       outgoing.end(JSON.stringify(current));
-    }), socket);
+    }), global.socket);
     const api = new Hono();
     mountRuntimeHandoff(api);
     const app = new Hono();
@@ -251,7 +453,7 @@ if (process.platform === "win32") {
     await endRuntimeDrain();
     brokenControl.closeAllConnections();
     await new Promise((done) => brokenControl.close(done));
-    sockets.delete(socket);
+    sockets.delete(global.socket);
     console.log("✓ authenticated DELETE always releases an infinite local seal and consumer checkpoints; entry failure is explicit and retryable");
   }, [
     () => { for (const controller of controllers) controller.close(); requests.abort(); },
@@ -265,6 +467,8 @@ if (process.platform === "win32") {
       }
     },
     () => lock?.release(),
+    async () => { for (const fixture of children) await fixture.dispose(); },
+    () => consumerDb.close(),
     () => direct.destroy(),
     async () => { for (const server of servers) { server.closeAllConnections(); if (server.listening) await new Promise((done) => server.close(done)); } },
     () => rmSync(temporary, { recursive: true, force: true }),

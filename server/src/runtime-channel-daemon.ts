@@ -1,7 +1,9 @@
 import { Agent, createServer, request } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { chmodSync, createReadStream, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, createReadStream, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { hasGatewayConsumers, processProof } from "./runtime-channel-consumers.js";
 
 const deny = (reason: string) => ({ hookSpecificOutput: {
   hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason,
@@ -15,6 +17,8 @@ if (process.argv[2] === "--deny-monitor") {
 const socket = process.argv[2];
 if (!socket) throw new Error("missing channel control socket");
 const endpoint = process.argv[3] ?? socket + ".endpoint.json";
+const config = JSON.parse(process.argv[4] ?? "{}");
+const idleMs = typeof config.idleMs === "number" && config.idleMs > 0 ? config.idleMs : 600_000;
 const stored = existsSync(endpoint) ? JSON.parse(readFileSync(endpoint, "utf8")) : undefined;
 if (stored && (typeof stored.id !== "string" || !Number.isInteger(stored.port) || stored.port < 1 || stored.port > 65535)) {
   throw new Error("invalid persisted channel identity");
@@ -25,13 +29,16 @@ const digest = async (path: string) => {
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
 };
-const build = `${await digest(process.argv[1])}-${await digest(process.execPath)}`;
-const persist = (retired = false) => {
+const build = `${await digest(process.argv[1])}-${await digest(process.execPath)}-${await digest(fileURLToPath(new URL("./runtime-channel-consumers.js", import.meta.url)))}`;
+const ownProof = processProof(process.pid);
+const persist = (retired = false, reason?: string) => {
   const temporary = `${endpoint}.${process.pid}.tmp`;
-  writeFileSync(temporary, JSON.stringify({ id, port: (publicServer.address() as { port: number }).port, retired }), { mode: 0o600 });
+  writeFileSync(temporary, JSON.stringify({ id, port: (publicServer.address() as { port: number }).port, retired, reason,
+    pid: process.pid, startedAt: ownProof?.startedAt, socket, script: process.argv[1] }), { mode: 0o600 });
   renameSync(temporary, endpoint);
+  copyFileSync(endpoint, endpoint + ".backup");
 };
-let target: { port: number; owner: string; pid: number } | undefined;
+let target: { port: number; owner: string; pid: number; startedAt?: number } | undefined;
 let paused = true;
 let active = 0;
 const queued = new Set<() => void>();
@@ -146,7 +153,7 @@ const control = createServer(async (incoming, outgoing) => {
       json(outgoing, 400, { error: "invalid backend" }); return;
     }
     if (active) { json(outgoing, 409, { error: "old backend still has delivered requests" }); return; }
-    target = { owner: body.owner, port: body.port!, pid: body.pid! };
+    target = { owner: body.owner, port: body.port!, pid: body.pid!, startedAt: processProof(body.pid!)?.startedAt };
     paused = body.paused === true;
     flush();
   } else {
@@ -174,3 +181,16 @@ publicServer.listen(stored?.port ?? 0, "127.0.0.1", () => {
 const cleanup = () => { try { unlinkSync(socket); } catch {} process.exit(0); };
 process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
+let idleSince = 0;
+let rebinding = false;
+setInterval(() => {
+  if (!existsSync(socket) && !rebinding) {
+    rebinding = true;
+    control.close(() => control.listen(socket, () => { chmodSync(socket, 0o600); rebinding = false; }));
+  }
+  const backend = target ? processProof(target.pid) : null;
+  const backendAlive = backend === undefined || (backend && (!target?.startedAt || backend.startedAt === target.startedAt));
+  if (backendAlive || active || queued.size || hasGatewayConsumers(config.dbFile, id)) { idleSince = 0; return; }
+  if (!idleSince) idleSince = Date.now();
+  else if (Date.now() - idleSince >= idleMs) { persist(true, "idle"); cleanup(); }
+}, Math.min(1_000, Math.max(25, idleMs / 2))).unref();

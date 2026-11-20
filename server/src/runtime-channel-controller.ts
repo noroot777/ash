@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Agent, request } from "node:http";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { processProof } from "./runtime-channel-consumers.js";
 
 export type Gateway = { id: string; port: number; pid: number; active: number; paused: boolean; owner?: string;
   protocol?: number; build?: string; queued?: number };
+type Endpoint = { id: string; port: number; pid?: number; startedAt?: number; socket?: string; script?: string;
+  retired?: boolean; reason?: string };
 export type GatewayOptions = { home: string; socket: string; entry: string; node: string; owner: string; port: number;
-  hasConsumers: (id: string) => Promise<boolean> };
+  dbFile?: string; idleMs?: number; hasConsumers: (id?: string) => Promise<boolean> };
 const direct = new Agent();
 const unreachable = (error: unknown) => ["ENOENT", "ECONNREFUSED"].includes((error as NodeJS.ErrnoException).code ?? "");
 
@@ -39,58 +43,35 @@ async function digest(path: string): Promise<string> {
 
 export class RuntimeGatewayController {
   state?: Gateway;
+  warning?: string;
   node = "";
   script = "";
+  socket: string;
   private build = "";
   private paused = false;
   private timer?: NodeJS.Timeout;
   private closed = false;
   private checking = false;
+  private retryAt = 0;
+  private failures = 0;
   private operations: Promise<unknown> = Promise.resolve();
   private readonly endpoint: string;
-  constructor(private readonly options: GatewayOptions) { this.endpoint = join(options.home, "endpoint.json"); }
+  constructor(private readonly options: GatewayOptions) {
+    this.endpoint = join(options.home, "endpoint.json");
+    this.socket = options.socket;
+  }
 
   async start(): Promise<void> {
-    const { home, entry, node } = this.options;
-    this.build = `${await digest(entry)}-${await digest(node)}`;
-    const directory = join(home, "builds", this.build);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    this.node = join(directory, "node");
-    this.script = join(directory, "gateway.mjs");
-    for (const [source, destination, mode] of [[node, this.node, 0o700], [entry, this.script, 0o600]] as const) {
-      if (existsSync(destination) && await digest(source) === await digest(destination)) continue;
-      const temporary = `${destination}.${process.pid}.tmp`;
-      copyFileSync(source, temporary);
-      chmodSync(temporary, mode);
-      renameSync(temporary, destination);
-    }
-    await this.serial(async () => {
-      let current = await this.statusOrSpawn();
-      this.remember(current);
-      if (current.build !== this.build && !await this.options.hasConsumers(current.id)) {
-        try {
-          await gatewayRequest(this.options.socket, "/retire", { owner: current.owner });
-          await this.waitForExit();
-          current = await this.statusOrSpawn();
-        } catch (error) {
-          if (!(error instanceof Error) || !error.message.includes("409")) throw error;
-        }
-      }
-      if (current.build !== this.build) console.warn("[navi] channel update staged; retaining compatible entry until a session-free startup");
-      await this.activate(current);
-    });
+    await this.serial(() => this.attempt(true));
     this.timer = setInterval(() => {
-      if (this.checking || this.closed) return;
+      if (this.checking || this.closed || Date.now() < this.retryAt) return;
       this.checking = true;
       void this.serial(async () => {
         if (this.closed) return;
-        const stored = JSON.parse(readFileSync(this.endpoint, "utf8"));
-        if (stored.retired) { this.close(); return; }
-        const current = await this.statusOrSpawn();
-        if (current.owner && current.owner !== this.options.owner) { this.close(); return; }
-        if (!current.owner) await this.activate(current);
-        else this.remember(current);
-      }).catch((error) => console.error("[navi] channel recovery failed", error)).finally(() => { this.checking = false; });
+        const stored = this.readEndpoint();
+        if (stored?.retired && stored.reason !== "idle") { this.close(); return; }
+        await this.attempt(false);
+      }).catch((error) => this.disable(error)).finally(() => { this.checking = false; });
     }, 1_000);
     this.timer.unref();
   }
@@ -99,16 +80,121 @@ export class RuntimeGatewayController {
   pause(): Promise<Gateway> { this.paused = true; return this.control("/pause"); }
   resume(): Promise<Gateway> { this.paused = false; return this.control("/resume"); }
   async idle(): Promise<boolean> {
+    if (!this.state) return false;
     const current = await this.control("/status");
     return current.id === this.state?.id && current.owner === this.options.owner && current.paused && current.active === 0;
   }
+  private readEndpoint(path = this.endpoint): Endpoint | undefined {
+    try {
+      const value = JSON.parse(readFileSync(path, "utf8"));
+      if (typeof value.id === "string" && value.id.length && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535) {
+        if (path === this.endpoint) {
+          const backup = this.readEndpoint(this.endpoint + ".backup");
+          if (backup?.socket && backup.pid && backup.startedAt
+            && (backup.id !== value.id || backup.port !== value.port || backup.socket !== value.socket || backup.pid !== value.pid)) {
+            const proof = processProof(backup.pid);
+            if ((!value.pid && !value.socket) || (proof && proof.startedAt === backup.startedAt
+              && backup.script && proof.command.includes(backup.script))) return backup;
+          }
+        }
+        return value;
+      }
+    } catch {}
+    return path === this.endpoint ? this.readEndpoint(this.endpoint + ".backup") : undefined;
+  }
+  private async prepare(): Promise<void> {
+    if (this.build) return;
+    const helper = fileURLToPath(new URL("./runtime-channel-consumers.js", import.meta.url));
+    const sources = [this.options.entry, this.options.node, helper];
+    const hashes = await Promise.all(sources.map(digest));
+    const directory = join(this.options.home, "builds", hashes.join("-"));
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    this.node = join(directory, "node");
+    this.script = join(directory, "gateway.mjs");
+    const destinations = [this.script, this.node, join(directory, "runtime-channel-consumers.js")];
+    for (const [index, source] of sources.entries()) {
+      const destination = destinations[index];
+      if (existsSync(destination) && hashes[index] === await digest(destination)) continue;
+      const temporary = `${destination}.${process.pid}.tmp`;
+      copyFileSync(source, temporary);
+      chmodSync(temporary, index === 1 ? 0o700 : 0o600);
+      renameSync(temporary, destination);
+    }
+    this.build = hashes.join("-");
+  }
+  private async attempt(upgrade: boolean): Promise<void> {
+    try {
+      await this.prepare();
+      await this.reconcile(upgrade);
+      this.warning = undefined;
+      this.failures = 0;
+    } catch (error) {
+      try {
+        if (!this.build || await this.options.hasConsumers()) throw error;
+        if (!await this.resetUnused()) throw error;
+        console.warn("[navi] rebuilding unused channel entry:", String(error));
+        await this.reconcile(false);
+        this.warning = undefined;
+        this.failures = 0;
+      } catch (failure) { this.disable(failure); }
+    }
+  }
+  private disable(error: unknown): void {
+    this.state = undefined;
+    const message = `稳定通道暂不可用；服务继续运行，新任务使用直连：${String(error)}`;
+    if (this.warning !== message) console.warn("[navi]", message);
+    this.warning = message;
+    this.retryAt = Date.now() + Math.min(60_000, 1_000 * 2 ** Math.min(this.failures++, 6));
+  }
+  private async reconcile(upgrade: boolean): Promise<void> {
+    let current = await this.statusOrSpawn();
+    this.remember(current);
+    if (!upgrade && current.owner && current.owner !== this.options.owner) { this.close(); return; }
+    if (upgrade && current.build !== this.build && !await this.options.hasConsumers(current.id)) {
+      if (!this.owned(current)) throw new Error("channel gateway replacement requires verified process ownership");
+      try {
+        await gatewayRequest(this.socket, "/retire", { owner: current.owner });
+        await this.waitForExit();
+        current = await this.statusOrSpawn();
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("409")) throw error;
+      }
+    }
+    if (upgrade && current.build !== this.build) console.warn("[navi] channel update staged; retaining compatible entry until a session-free startup");
+    if (upgrade || !current.owner) await this.activate(current);
+    else this.remember(current);
+  }
+  private async resetUnused(): Promise<boolean> {
+    const stored = this.readEndpoint();
+    let current: Gateway | undefined;
+    try { current = await gatewayRequest(this.socket, "/status"); } catch {}
+    if (current) {
+      if (current.active !== 0 || (current.queued ?? 0) !== 0) return false;
+      if (this.owned(current)) {
+        await gatewayRequest(this.socket, "/retire", { owner: current.owner });
+        await this.waitForExit();
+      }
+    } else if (stored?.pid) {
+      const proof = processProof(stored.pid);
+      if (proof === undefined || (proof && (!stored.startedAt || proof.startedAt === stored.startedAt))) return false;
+    }
+    if (existsSync(this.endpoint)) renameSync(this.endpoint, `${this.endpoint}.previous`);
+    if (existsSync(this.endpoint + ".backup")) renameSync(this.endpoint + ".backup", this.endpoint + ".backup.previous");
+    const digest = createHash("sha256").update(this.options.home + randomUUID()).digest("hex").slice(0, 20);
+    this.socket = join(dirname(this.options.socket), `nc-${digest.slice(0, 12)}.sock`);
+    return true;
+  }
   private control(path: string): Promise<Gateway> {
     return this.serial(async () => {
-      const current = await this.statusOrSpawn();
-      if (!current.owner) await this.activate(current);
-      const result = await gatewayRequest(this.options.socket, path, path === "/status" ? undefined : { owner: this.options.owner });
-      if (path === "/status") this.remember(result);
-      return result;
+      try {
+        await this.prepare();
+        const current = await this.statusOrSpawn();
+        this.remember(current);
+        if (!current.owner) await this.activate(current);
+        const result = await gatewayRequest(this.socket, path, path === "/status" ? undefined : { owner: this.options.owner });
+        if (path === "/status") this.remember(result);
+        return result;
+      } catch (error) { this.disable(error); throw error; }
     });
   }
   private serial<Value>(operation: () => Promise<Value>): Promise<Value> {
@@ -116,39 +202,88 @@ export class RuntimeGatewayController {
     this.operations = next.catch(() => {});
     return next;
   }
+  private processScript(command: string): string | undefined {
+    const prefix = join(this.options.home, "builds") + "/";
+    if (!command.includes(this.endpoint) || !command.includes(this.socket)) return undefined;
+    for (const segment of command.split(prefix).slice(1)) {
+      const suffix = segment.match(/^[a-f0-9]{64}(?:-[a-f0-9]{64}){1,2}\/gateway\.mjs(?=\s|$)/)?.[0];
+      const script = suffix ? prefix + suffix : undefined;
+      if (script && command.startsWith(join(dirname(script), "node") + " ") && existsSync(script)) return script;
+    }
+    return undefined;
+  }
+  private owned(current: Gateway): boolean {
+    const stored = this.readEndpoint();
+    const proof = processProof(current.pid);
+    return !!(proof && stored?.pid === current.pid && stored.startedAt === proof.startedAt
+      && stored.id === current.id && stored.port === current.port && stored.socket === this.socket
+      && stored.script && this.processScript(proof.command) === stored.script);
+  }
   private remember(current: Gateway): void {
+    if (!current.id || !Number.isInteger(current.port) || current.port < 1 || current.port > 65535
+      || !Number.isInteger(current.pid) || current.pid < 1) throw new Error("invalid channel gateway identity");
     if ((current.protocol !== undefined && current.protocol !== 1)
       || (current.protocol === 1 && typeof current.build !== "string")
       || (current.protocol === undefined && current.build !== undefined)) throw new Error("unsupported channel gateway protocol");
-    if (existsSync(this.endpoint)) {
-      const stored = JSON.parse(readFileSync(this.endpoint, "utf8"));
-      if (stored.id !== current.id || stored.port !== current.port) throw new Error("channel gateway identity changed");
-    } else {
-      const temporary = `${this.endpoint}.${process.pid}.tmp`;
-      writeFileSync(temporary, JSON.stringify({ id: current.id, port: current.port }), { mode: 0o600 });
-      renameSync(temporary, this.endpoint);
+    let stored = this.readEndpoint();
+    const proof = processProof(current.pid);
+    if (stored && (stored.id !== current.id || stored.port !== current.port)) {
+      const backup = this.readEndpoint(this.endpoint + ".backup");
+      if (backup?.id !== current.id || backup.port !== current.port || backup.pid !== current.pid
+        || !proof || backup.startedAt !== proof.startedAt) throw new Error("channel gateway identity changed");
+      stored = backup;
     }
+    const temporary = `${this.endpoint}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify({ ...stored, id: current.id, port: current.port, pid: current.pid,
+      startedAt: proof?.startedAt, socket: this.socket, script: proof ? this.processScript(proof.command) : stored?.script,
+      retired: false }), { mode: 0o600 });
+    renameSync(temporary, this.endpoint);
+    copyFileSync(this.endpoint, this.endpoint + ".backup");
     this.state = current;
   }
   private async activate(current: Gateway): Promise<void> {
     this.remember(current);
-    await gatewayRequest(this.options.socket, "/activate", {
+    await gatewayRequest(this.socket, "/activate", {
       port: this.options.port, owner: this.options.owner, pid: process.pid, paused: this.paused,
     });
-    this.remember(await gatewayRequest(this.options.socket, "/status"));
+    this.remember(await gatewayRequest(this.socket, "/status"));
   }
   private async statusOrSpawn(): Promise<Gateway> {
-    try {
-      const current = await gatewayRequest(this.options.socket, "/status");
-      this.remember(current);
-      return current;
-    } catch (error) { if (!unreachable(error)) throw error; }
-    try { unlinkSync(this.options.socket); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const stored = this.readEndpoint();
+    if (stored?.socket) this.socket = stored.socket;
+    try { return await gatewayRequest(this.socket, "/status"); }
+    catch (error) { if (!unreachable(error)) throw error; }
+    if (!stored && await this.options.hasConsumers()) throw new Error("channel identity unavailable while consumers remain");
+    if (stored && await this.options.hasConsumers() && !await this.options.hasConsumers(stored.id)) {
+      throw new Error("persisted channel identity does not match live consumers");
+    }
+    if (stored?.pid) {
+      const recordedAlive = () => {
+        const proof = processProof(stored.pid!);
+        return proof === undefined || (proof && (!stored.startedAt || proof.startedAt === stored.startedAt));
+      };
+      if (recordedAlive()) {
+        const until = Date.now() + 2_500;
+        do {
+          await new Promise((done) => setTimeout(done, 100));
+          try { return await gatewayRequest(this.socket, "/status"); } catch {}
+        } while (recordedAlive() && Date.now() < until);
+        if (recordedAlive()) throw new Error("recorded channel process is alive but control socket is unavailable");
+      }
+    }
+    try { unlinkSync(this.socket); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (stored) {
+      const temporary = `${this.endpoint}.${process.pid}.tmp`;
+      writeFileSync(temporary, JSON.stringify(stored), { mode: 0o600 });
+      renameSync(temporary, this.endpoint);
+    }
     const logPath = join(this.options.home, "gateway.log");
+    if (existsSync(logPath) && statSync(logPath).size > 1_048_576) renameSync(logPath, logPath + ".previous");
     const log = openSync(logPath, "a", 0o600);
     let child;
     try {
-      child = spawn(this.node, [this.script, this.options.socket, this.endpoint], {
+      child = spawn(this.node, [this.script, this.socket, this.endpoint,
+        JSON.stringify({ dbFile: this.options.dbFile, idleMs: this.options.idleMs })], {
         detached: true, stdio: ["ignore", "ignore", log], cwd: this.options.home,
         env: { HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, PATH: "/usr/bin:/bin" },
       });
@@ -164,7 +299,7 @@ export class RuntimeGatewayController {
     const until = Date.now() + 5_000;
     for (;;) {
       if (spawnError) throw spawnError;
-      try { return await gatewayRequest(this.options.socket, "/status"); }
+      try { return await gatewayRequest(this.socket, "/status"); }
       catch (error) { if (!unreachable(error) || Date.now() > until) throw error; }
       await new Promise((done) => setTimeout(done, 25));
     }
@@ -172,7 +307,7 @@ export class RuntimeGatewayController {
   private async waitForExit(): Promise<void> {
     const until = Date.now() + 5_000;
     for (;;) {
-      try { await gatewayRequest(this.options.socket, "/status"); }
+      try { await gatewayRequest(this.socket, "/status"); }
       catch (error) {
         if (unreachable(error)) return;
         if ((error as NodeJS.ErrnoException).code !== "ECONNRESET") throw error;
