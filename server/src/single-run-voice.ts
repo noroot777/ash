@@ -56,7 +56,6 @@ export function createRunVoice(a: {
   return {
     publishEvent,
     flushTraceText,
-    checkpointReady: () => sessionNotices.length === 0,
     // 会话轮换旁注：实时立刻播（用户正看着），落盘攒到 writeTurnEnd 之后再补 —— 夹在正文和 agentEnd
     // 之间会让重建出来的回合用时失准（见 single-run.ts 事件循环里那段注释）。
     noteSessionNotice: (text: string, at = now(), level?: "notice") => {

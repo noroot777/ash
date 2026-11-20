@@ -27,7 +27,7 @@ import { now } from "./util.js";
 
 export function mountTaskArchiveRoutes(api: Hono): void {
   // Archiving is orthogonal to status (a separate `archived` flag, not an 8th
-  // status): a settled terminal task (done/failed/canceled) is frozen and tucked
+  // status): an inactive task is frozen and tucked
   // away into the archive view. It does NOT go through setTaskStatus — the status
   // is preserved so unarchiving restores it. Both endpoints are idempotent (already
   // in the target state → just return the task) so a double-click never errors.
@@ -36,9 +36,9 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     if (!r) return c.json({ error: "not found" }, 404);
     // idempotent：已经归档了就什么都不做（清理也不重跑——它在第一次归档时就做过了）
     if (r.archived) return c.json({ task: (await enrichTasks([r]))[0], cleanup: null });
-    // 状态不是终态、团队执行者（跟着团队一起归档）、就地验证轮没结束、自由审查正在进行：
+    // 存在执行活动、团队执行者（跟着团队一起归档）、就地验证轮没结束、自由审查正在进行：
     // 判据见 archiveVerdict，界面上那颗「归档」读同一份。
-    // 派出去的子孙有没结束的也在这里挡回去（判据同一份，界面上那颗键也读它）。
+    // 派出去的子孙有执行活动也在这里挡回去（判据同一份，界面上那颗键也读它）。
     // 名下有调用者看不见的项目里的子孙：整笔不做、不报那几条的标题（dispatch-archive.ts 文件头）。
     const actor = actorOf(c);
     const facts = await readActionFacts(r, actor);
@@ -91,8 +91,8 @@ export function mountTaskArchiveRoutes(api: Hono): void {
           return c.json({ error: `子任务「${busyBelow.title || busyBelow.id}」正在验收或回合中，结束后再归档`, childId: busyBelow.id }, 409);
         }
         dispatched = below.map((row) => row.id);
-        const hold = dispatched.length ? claimWorkspaceTurn(dispatched) : () => {};
-        if (!hold) return c.json({ error: "子任务正有回合要开始，结束后再归档" }, 409);
+        const hold = claimWorkspaceTurn([r.id, ...dispatched]);
+        if (!hold) return c.json({ error: "任务或子任务正有回合要开始，结束后再归档" }, 409);
         try {
           await archiveRows([r.id, ...dispatched], ts);
         } finally { hold(); }

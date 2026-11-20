@@ -22,7 +22,6 @@ import { acceptanceWorkspaceCommitBlock, assertAcceptanceWorkspaceCommit } from 
 import { acceptanceAutoCommitDecision } from "./accept-workspace-decision.js";
 import { assertInsideRoot, assertPathShape, gateScmPaths, scmNestedPaths } from "./scm-paths.js";
 import {
-  ARCHIVED_REFUSAL,
   claimWorkspaceWrite,
   resolveWorkspaceContext,
   workspaceBusyLabel,
@@ -190,7 +189,7 @@ export function mountScmRoutes(api: Hono) {
           context,
           forced,
           busyError: (who) => new ScmBusyError(who),
-          archivedError: () => new ScmOperationError(ARCHIVED_REFUSAL, 409),
+          archivedError: (message) => new ScmOperationError(message, 409),
           missingError: () => new ScmOperationError("这个任务已经不在了", 404),
         });
       };

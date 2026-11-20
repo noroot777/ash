@@ -44,6 +44,10 @@ export const COLLAB_INVITE =
 // preamble.
 export const RESUME_PROMPT =
   "继续：你上一次的运行被中断了（可能是服务重启、被手动停止或所在分组被暂停）。请从中断处接着完成这个任务，先简要说明你已做到哪一步、还差什么，然后继续推进直到完成。";
+// 「重试这一回合」在续聊上的接着做（task-retry-turn.ts）：崩掉那一回合已经在干活了，原话 CLI 早收下了，
+// 再发一遍原话会让它当成新指令从头来。
+export const RETRY_CARRY_ON_PROMPT =
+  "继续：上一回合中途异常中断了（比如上游连不上）。从中断处接着把上一条消息交代的事做完，已经做过的不要重做。";
 // Backend-initiated continue leaves this trace in the timeline (distinct from a
 // user reply), shown identically live (SSE) and on reload (.md).
 export const SYS_MARKER = "〔系统〕继续（从中断处）";

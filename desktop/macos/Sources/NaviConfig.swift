@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import Darwin
 
 /// 这个 app 连哪台、自带的那份 Navi 在 bundle 里哪儿、数据和日志放哪。
@@ -69,13 +68,12 @@ enum NaviConfig {
 
   /// 自带的那份 navi（`scripts/bundle-runtime.mjs` 装进来的，布局见那份脚本顶部）。
   static var runtimeURL: URL {
-    (try? RuntimeStore.selected.get()) ?? bundledRuntimeURL
+    RuntimeStore.destination ?? bundledRuntimeURL
   }
   static var bundledRuntimeURL: URL {
     if let raw = env("NAVI_MAC_RUNTIME") { return URL(fileURLWithPath: raw, isDirectory: true) }
     return Bundle.main.resourceURL!.appendingPathComponent("app", isDirectory: true)
   }
-  static var runtimeStoreURL: URL { dataURL.appendingPathComponent(".runtimes", isDirectory: true) }
   static var nodeURL: URL { runtimeURL.appendingPathComponent("node/bin/node") }
   static var serverEntryURL: URL { runtimeURL.appendingPathComponent("server/dist/index.js") }
   static var detachScriptURL: URL { runtimeURL.appendingPathComponent("scripts/start-detached.mjs") }
@@ -219,183 +217,78 @@ enum DatabaseFile {
 }
 
 enum RuntimeStore {
-  struct Envelope: Decodable { let id: String; let payload: String }
-  struct Manifest: Decodable {
-    struct Entry: Decodable {
-      let path: String
-      let sha: String?
-      let executable: Bool?
-      let link: String?
-    }
-    let `protocol`: Int
-    let schema: String
-    let files: [Entry]
-  }
-  struct Failure: LocalizedError { let errorDescription: String?; init(_ text: String) { errorDescription = text } }
-  static let manifestName = "runtime-manifest.json"
-  static let selected: Result<URL, Error> = Result { try prepare(NaviConfig.bundledRuntimeURL) }
-  private static var lease: Int32 = -1
-  private static var bundleLease: Int32 = -1
+  private static let lock = NSLock()
+  private static var prepared = false
+  static var root: URL { NaviConfig.dataURL.appendingPathComponent(".mac-runtimes", isDirectory: true) }
 
-  static func protectBundleUpdate() throws {
-    guard FileManager.default.fileExists(atPath: NaviConfig.bundledRuntimeURL.appendingPathComponent(manifestName).path), bundleLease < 0 else { return }
-    let descriptor = open(NaviConfig.bundledRuntimeURL.appendingPathComponent(".in-use").path, O_RDONLY | O_EXLOCK | O_NONBLOCK | O_CLOEXEC)
-    guard descriptor >= 0 else { throw Failure("仍有进程使用 app 内的旧代码，首次迁移需等待它们退出，未放行换包。") }
-    let resources = NaviConfig.bundledRuntimeURL.deletingLastPathComponent()
-    let scan = Process()
-    scan.executableURL = URL(fileURLWithPath: "/bin/bash")
-    scan.arguments = [resources.appendingPathComponent("bundle-users.sh").path, resources.deletingLastPathComponent().deletingLastPathComponent().path]
-    let output = Pipe()
-    scan.standardOutput = output
-    scan.standardError = FileHandle.nullDevice
-    do {
-      try scan.run()
-      let data = output.fileHandleForReading.readDataToEndOfFile()
-      scan.waitUntilExit()
-      let users = String(decoding: data, as: UTF8.self).split(separator: "\n").filter { !sparkleInstaller($0, resources: resources) }
-      guard scan.terminationStatus == 0, users.isEmpty else { throw Failure("仍有进程使用 app 包或无法确认：\(users.joined(separator: "\n"))") }
-      bundleLease = descriptor
-    } catch { close(descriptor); throw error }
+  static func identifier(at url: URL) -> String? {
+    guard let data = try? Data(contentsOf: url.appendingPathComponent(".runtime.json")),
+          let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          manifest["format"] as? Int == 1, let id = manifest["id"] as? String,
+          id.count == 64, id.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { return nil }
+    return id
   }
 
-  private static func sparkleInstaller(_ line: Substring, resources: URL) -> Bool {
-    guard let word = line.split(whereSeparator: { $0.isWhitespace }).first, let pid = Int32(word), pid > 1 else { return false }
-    var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-    guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
-    let actual = NaviHealth.realPath(String(cString: buffer))
-    let framework = resources.deletingLastPathComponent().appendingPathComponent("Frameworks/Sparkle.framework/Versions/Current")
-    return ["Autoupdate", "Updater.app/Contents/MacOS/Updater",
-      "XPCServices/InstallerLauncher.xpc/Contents/MacOS/InstallerLauncher"].contains {
-      actual == NaviHealth.realPath(framework.appendingPathComponent($0).path)
-    }
+  static var destination: URL? {
+    identifier(at: NaviConfig.bundledRuntimeURL).map { root.appendingPathComponent($0, isDirectory: true) }
   }
 
-  static func releaseBundleUpdate() {
-    if bundleLease >= 0 { close(bundleLease); bundleLease = -1 }
+  static func contains(_ path: String) -> Bool {
+    let url = URL(fileURLWithPath: path, isDirectory: true)
+    guard let id = identifier(at: url), url.lastPathComponent == id else { return false }
+    return NaviHealth.samePath(path, root.appendingPathComponent(id).path)
   }
 
-  static func manifest(_ root: URL) throws -> (Envelope, Manifest) {
-    let envelope = try JSONDecoder().decode(Envelope.self, from: Data(contentsOf: root.appendingPathComponent(manifestName)))
-    guard envelope.id == digest(Data(envelope.payload.utf8)) else { throw Failure("运行时清单指纹不符") }
-    let manifest = try JSONDecoder().decode(Manifest.self, from: Data(envelope.payload.utf8))
-    guard manifest.protocol == 1, manifest.schema.count == 64 else { throw Failure("不支持的运行时接管协议") }
-    return (envelope, manifest)
-  }
-
-  static func managed(_ path: String) -> Bool {
-    let root = URL(fileURLWithPath: NaviHealth.realPath(path), isDirectory: true)
-    guard NaviHealth.samePath(root.deletingLastPathComponent().path, NaviConfig.runtimeStoreURL.path),
-          let (envelope, _) = try? manifest(root) else { return false }
-    return root.lastPathComponent == envelope.id
-  }
-
-  static func compatible(_ path: String) -> Bool {
-    guard managed(path), let (_, old) = try? manifest(URL(fileURLWithPath: path)),
-          let (_, next) = try? manifest(NaviConfig.runtimeURL) else { return false }
-    return old.protocol == next.protocol && old.schema == next.schema
-  }
-
-  private static func digest(_ data: Data) -> String {
-    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-  }
-
-  private static func verify(_ root: URL, _ manifest: Manifest) throws {
-    let lock = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent(".in-use").path)
-    guard lock[.type] as? FileAttributeType == .typeRegular, (lock[.size] as? NSNumber)?.intValue == 0 else {
-      throw Failure("运行时使用锁不是有效的空文件")
-    }
-    var expected = Set<String>()
-    for entry in manifest.files {
-      guard !entry.path.isEmpty, !entry.path.hasPrefix("/"), !entry.path.split(separator: "/").contains(".."),
-            expected.insert(entry.path).inserted else { throw Failure("运行时清单路径无效") }
-      let file = root.appendingPathComponent(entry.path)
-      let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-      if let link = entry.link {
-        guard attributes[.type] as? FileAttributeType == .typeSymbolicLink,
-              try FileManager.default.destinationOfSymbolicLink(atPath: file.path) == link,
-              !link.hasPrefix("/"),
-              NaviHealth.realPath(file.path).hasPrefix(NaviHealth.realPath(root.path) + "/") else {
-          throw Failure("运行时软链越界或损坏：\(entry.path)")
-        }
-      } else {
-        guard attributes[.type] as? FileAttributeType == .typeRegular,
-              digest(try Data(contentsOf: file, options: .mappedIfSafe)) == entry.sha,
-              (((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o111 != 0) == entry.executable else {
-          throw Failure("运行时文件校验失败：\(entry.path)")
-        }
+  static func prepare() throws {
+    lock.lock()
+    defer { lock.unlock() }
+    if prepared { return }
+    let source = NaviConfig.bundledRuntimeURL
+    let manifest = source.appendingPathComponent(".runtime.json")
+    guard FileManager.default.fileExists(atPath: manifest.path) else {
+      if Bundle.main.resourceURL?.appendingPathComponent("app").path == source.path {
+        throw SQLiteFile.Failure("app 缺少运行时清单，请重新安装。")
       }
+      return
     }
-    let canonicalRoot = URL(fileURLWithPath: NaviHealth.realPath(root.path), isDirectory: true)
-    let prefix = canonicalRoot.path + "/"
-    guard let entries = FileManager.default.enumerator(at: canonicalRoot, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
-      throw Failure("无法枚举运行时文件")
+    guard destination != nil else { throw SQLiteFile.Failure("app 的运行时清单损坏。") }
+    let process = Process()
+    process.executableURL = source.appendingPathComponent("node/bin/node")
+    process.arguments = [source.appendingPathComponent("scripts/runtime-store.mjs").path, "install", source.path, root.path]
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    let errors = Pipe()
+    process.standardError = errors
+    try process.run()
+    let detail = errors.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+      throw SQLiteFile.Failure("准备独立运行时失败：\(String(data: detail, encoding: .utf8) ?? "")")
     }
-    var actual = Set<String>()
-    for case let file as URL in entries {
-      let values = try file.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-      if values.isDirectory == true && values.isSymbolicLink != true { continue }
-      guard file.path.hasPrefix(prefix) else { throw Failure("运行时枚举路径越界") }
-      let rel = String(file.path.dropFirst(prefix.count))
-      if rel != manifestName && rel != ".in-use" { actual.insert(rel) }
-    }
-    guard expected == actual else {
-      throw Failure("运行时文件集合不符；缺少：\(expected.subtracting(actual).sorted().prefix(8))；多出：\(actual.subtracting(expected).sorted().prefix(8))")
-    }
+    prepared = true
   }
 
-  private static func storeLock() throws -> Int32 {
-    try FileManager.default.createDirectory(at: NaviConfig.runtimeStoreURL, withIntermediateDirectories: true)
-    let descriptor = open(NaviConfig.runtimeStoreURL.appendingPathComponent(".store-lock").path,
-                          O_CREAT | O_RDWR | O_EXLOCK | O_CLOEXEC, 0o600)
-    guard descriptor >= 0 else { throw Failure("无法锁定运行时仓库") }
-    return descriptor
-  }
-
-  private static func prepare(_ source: URL) throws -> URL {
-    let files = FileManager.default
-    if !files.fileExists(atPath: source.appendingPathComponent(manifestName).path),
-       ProcessInfo.processInfo.environment["NAVI_MAC_RUNTIME"] != nil { return source }
-    let (envelope, manifest) = try self.manifest(source)
-    let lock = try storeLock()
-    defer { close(lock) }
-    let target = NaviConfig.runtimeStoreURL.appendingPathComponent(envelope.id, isDirectory: true)
-    if !files.fileExists(atPath: target.path) {
-      let staging = NaviConfig.runtimeStoreURL.appendingPathComponent(".staging-" + UUID().uuidString)
-      defer { try? files.removeItem(at: staging) }
-      try files.copyItem(at: source, to: staging)
-      try verify(staging, manifest)
-      try files.moveItem(at: staging, to: target)
-    } else { try verify(target, manifest) }
-    lease = open(target.appendingPathComponent(".in-use").path, O_RDONLY | O_SHLOCK | O_NONBLOCK | O_CLOEXEC)
-    guard lease >= 0 else { throw Failure("无法持有运行时使用锁") }
-    return target
-  }
-
-  static func reclaim() {
-    guard let current = try? selected.get(), managed(current.path), let lock = try? storeLock() else { return }
-    defer { close(lock) }
-    let files = FileManager.default
-    let entries = (try? files.contentsOfDirectory(at: NaviConfig.runtimeStoreURL, includingPropertiesForKeys: nil)) ?? []
-    for root in entries where root != current && managed(root.path) {
-      if files.fileExists(atPath: NaviConfig.runtimeStoreURL.appendingPathComponent(".host-pin-" + root.lastPathComponent).path) { continue }
-      let descriptor = open(root.appendingPathComponent(".in-use").path, O_RDONLY | O_EXLOCK | O_NONBLOCK | O_CLOEXEC)
-      guard descriptor >= 0 else { continue }
-      defer { close(descriptor) }
-      let scan = Process()
-      scan.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-      scan.arguments = ["-nP", "-w", "+D", root.path, "-F", "p"]
+  static func lockForReplacement() throws -> Int32 {
+    let file = NaviConfig.bundledRuntimeURL.appendingPathComponent(".in-use")
+    let descriptor = open(file.path, O_RDONLY | O_CLOEXEC)
+    guard descriptor >= 0 else { throw SQLiteFile.Failure("打不开 app 的运行时代码锁。") }
+    guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+      close(descriptor)
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+      process.arguments = ["-nP", "-w", "-F", "pc", "--", file.path]
       let output = Pipe()
-      scan.standardOutput = output
-      scan.standardError = FileHandle.nullDevice
-      do {
-        try scan.run()
+      process.standardOutput = output
+      process.standardError = FileHandle.nullDevice
+      var blockers = "（查不到持锁进程）"
+      if (try? process.run()) != nil {
         let data = output.fileHandleForReading.readDataToEndOfFile()
-        scan.waitUntilExit()
-        let users = (String(data: data, encoding: .utf8) ?? "").split(separator: "\n")
-          .filter { $0.hasPrefix("p") && $0 != "p\(getpid())" }
-        guard scan.terminationStatus == 1 || scan.terminationStatus == 0, users.isEmpty else { continue }
-        try files.removeItem(at: root)
-      } catch {}
+        process.waitUntilExit()
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        if !lines.isEmpty { blockers = lines.map { $0.hasPrefix("p") ? "PID \($0.dropFirst())" : String($0.dropFirst()) }.joined(separator: " ") }
+      }
+      throw SQLiteFile.Failure("app 内的代码仍被以下进程使用：\(blockers)\n这次未替换 app，也未停止服务。\n\n在「检查 Navi MCP 登记…」中把终端的登记迁到固定外置入口，再重开列出的 CLI 会话：\ncommand = /bin/sh\nargs = [\(root.appendingPathComponent("mcp.sh").path)]\n旧进程退出后再试更新；这条入口以后跟随新版服务，不再占用 app 包。")
     }
+    return descriptor
   }
 }

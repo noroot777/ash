@@ -40,8 +40,7 @@
     "test:restart": "node scripts/test-test-process-conventions.mjs && node scripts/test-test-process-resources.mjs && node scripts/test-test-process-cleanup.mjs && node scripts/test-test-process-lifecycle.mjs && node scripts/test-test-process-directory.mjs && node scripts/test-test-process-ownership.mjs && node scripts/test-test-process-failures.mjs && node scripts/test-test-process.mjs && node scripts/test-process-identity.mjs && node scripts/test-process-ownership.mjs && node scripts/test-restart-options.mjs && node scripts/test-workspace-repair.mjs && node scripts/test-windows-restart.mjs && node scripts/test-restart-lock-owner.mjs && node scripts/test-restart.mjs && node scripts/test-stop.mjs",
     "test:accept": "node scripts/accept-test.mjs",
     "test:accept-gate": "node scripts/test-accept-test.mjs",
-    "test:install:mac": "node scripts/test-macos-install.mjs && npm run test:runtime:mac",
-    "test:runtime:mac": "node scripts/test-mcp-runtime-handoff.mjs && node scripts/test-runtime-channels.mjs && node scripts/test-macos-runtime.mjs",
+    "test:install:mac": "node scripts/test-macos-install.mjs && node scripts/test-macos-runtime.mjs && npm -w server run test:shutdown-resources",
     "//test:accept-scripts": "验收命令的第三步（scripts/accept-test.mjs）：仓库根 scripts/ 下的脚本回归，加手机端不用构建产物的几条。",
     "test:accept-scripts": "node scripts/test-codex-mcp-setup.mjs && node scripts/test-mcp-register-legacy.mjs && node scripts/test-mcp-legacy-retire.mjs && node scripts/test-win-remote-project.mjs && node scripts/test-win-remote-encoding.mjs && node scripts/test-rename-navi.mjs && node scripts/test-relocate-checkout.mjs && node scripts/test-relocate-checkout-edges.mjs && node scripts/test-kimi-mcp.mjs && node scripts/test-process-identity.mjs && node scripts/test-restart-lock-owner.mjs && node scripts/test-restart-options.mjs && node scripts/test-stop.mjs && node scripts/test-test-process-cleanup.mjs && node scripts/test-test-process-conventions.mjs && node scripts/test-test-process-directory.mjs && node scripts/test-test-process-lifecycle.mjs && node scripts/test-test-process-ownership.mjs && node scripts/test-test-process-resources.mjs && node scripts/test-windows-restart.mjs && node scripts/test-workspace-repair.mjs && node scripts/test-upgrade.mjs && node scripts/test-upgrade-units.mjs && npm --prefix mobile run test:cli-capability && npm --prefix mobile run test:markdown-inline && npm --prefix mobile run test:monitor-strip && npm --prefix mobile run test:project-path && npm --prefix mobile run test:session-notices && npm --prefix mobile run test:stored-keys && npm --prefix mobile run test:task-branches && npm run test:install:mac",
     "//test:web": "前端全量回归。2026-09-09 之前它挂在 web 的 build 前置,npm run restart 每次都得等它跑完;现在 build 只做检查+类型+打包,回归靠这条显式跑。清单是 web 包的 test 链,由 scripts/test-runner.mjs 展开并行跑。",
@@ -50,7 +49,7 @@
     "mcp": "npm -w mcp run start",
     "db:push": "npm -w server run db:push",
     "test:diagnostics": "npm -w server run test:diagnostics",
-    "verify:mobile": "tsc -p mobile/tsconfig.json --noEmit && npm run build:mobile && npm --prefix mobile run test:web-smoke"
+    "verify:mobile": "tsc -p mobile/tsconfig.json --noEmit && npm run build:mobile && npm --prefix mobile run test:web-smoke && npm --prefix mobile run test:question-card-ui"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

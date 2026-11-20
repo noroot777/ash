@@ -21,8 +21,6 @@ import { instanceBinding } from "./instance-binding.js";
 import { listenWindowPort } from "./window-port.js";
 import { responseCompression } from "./response-compression.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
-import { runtimeDrainGate } from "./runtime-drain.js";
-import { markRuntimeAdoption } from "./runtime-recovery.js";
 
 let activeServer: ReturnType<typeof serve> | null = null;
 let startupComplete = false;
@@ -176,7 +174,6 @@ async function initializeServer() {
   if (!IS_PREVIEW_INSTANCE) {
     // 自动开工先按住，接回之后数名额才数得对（launch-request.ts），由下面 startPrerequisiteLaunches 放开。
     (await import("./launch-request.js")).holdLaunchesForBoot();
-    markRuntimeAdoption();
     await reattachRunningTasks();
     // 回合里交出去、那一轮却没被接回来的哨兵结果退回待发送 —— 必须夹在这两步之间
     // (顺序的理由见 monitor-turn-handoff.ts 的 `returnOrphanTurnHandoffs`)。
@@ -397,7 +394,6 @@ const app = new Hono();
 // 最先一道：请求点名要的是另一份 navi（端口换过人）就什么都不执行，预览代理、静态页面一起
 // （为什么非得在服务端做见 instance-binding.ts）。
 app.use("*", instanceBinding());
-app.use("*", runtimeDrainGate());
 // 预览资源凭证在已认证的任务入口签发；资源侧再核对有效期、运行代和项目权限。
 mountPreviewProxy(app);
 // 预览代理之后挂压缩:被代理的开发服务器自己管编码,其余接口与页面资源一律经它(为什么、

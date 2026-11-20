@@ -6,8 +6,6 @@ type TextActivity = Extract<NativeAgentActivity, { kind: "text" | "thinking" }>;
 export class NativeActivityBuffer {
   private pending = new Map<string, TextActivity>();
 
-  drain(): AgentEvent[] { return this.flush(); }
-
   private flush(id?: string): AgentEvent[] {
     const entries = id === undefined ? [...this.pending] : this.pending.has(id) ? [[id, this.pending.get(id)!] as const] : [];
     for (const [key] of entries) this.pending.delete(key);

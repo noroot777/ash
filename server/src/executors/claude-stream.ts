@@ -103,7 +103,7 @@ async function* claudeStreamEvents(
   // the model's output. With partial streaming ON, the complete `assistant`
   // message that trails the deltas is used ONLY for tool_use — replaying its text
   // would duplicate everything the deltas already streamed.
-  const events = eventQueue({ child, images, activity: new NativeActivityBuffer(), coalesce: { text: 40 } });
+  const events = eventQueue({ images, activity: new NativeActivityBuffer(), coalesce: { text: 40 } });
   // 重放水位之前那段输出时(见下面 `consumed`)一律静音:那些话上一个 navi 进程已经说过了。
   // 只有最后一个回合结尾推出的那几条要留着 —— 它们决定接回之后收不收台,见 `ending`。
   let replaying = false;

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { mountRuntimeHandoverRoutes } from "./runtime-handover-routes.js";
 import type { Context } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
@@ -32,7 +33,6 @@ import { mountImRoutes, mountImSweeps } from "./im/routes.js";
 import { feishuHealthPublic } from "./im/channel.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { mountWorkflowRoutes } from "./workflows.js";
-import { mountRuntimeHandoff } from "./runtime-handoff.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
 import { mountTaskRuntimeRoutes } from "./task-runtime-routes.js";
 import { mountPreviewAssistRoutes } from "./preview-assist-routes.js";
@@ -149,6 +149,7 @@ api.get("/health", (c) => c.json({
 //
 // 匿名那一档两种模式都要校验:自用模式下匿名 = 别的机器没带访问密钥就来打(本机跑
 // 重启脚本是本机直连,不是匿名),免登录名单放行的只是路径形状。
+mountRuntimeHandoverRoutes(api);
 api.get("/restart-impact", async (c) => {
   const { actorOf } = await import("./auth/context.js");
   if (actorOf(c).kind === "anonymous") {
@@ -161,9 +162,11 @@ api.get("/restart-impact", async (c) => {
     }
   }
   const { restartImpact } = await import("./reattach.js");
-  return c.json(await restartImpact());
+  const impact = await restartImpact();
+  if (c.req.query("shutdown") !== "1") return c.json(impact);
+  const { shutdownResources } = await import("./shutdown-resources.js");
+  return c.json({ ...impact, shutdown: await shutdownResources() });
 });
-mountRuntimeHandoff(api);
 
 // ── global settings ──────────────────────────────────────────────────────
 // 「server 跑在哪台机器上」。**不进 /settings** —— 那是一张可写的持久化设置表

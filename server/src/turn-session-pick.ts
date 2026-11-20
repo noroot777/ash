@@ -19,6 +19,7 @@ import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
 import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
 import { applyPendingWorktreeMove } from "./task-worktree-move.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
 export type SessionRow = typeof sessions.$inferSelect;
 
@@ -38,6 +39,7 @@ export async function pickTurnSession(input: {
   slash: CliCommand | null;
   freshSession?: boolean;
   resumeSessionId?: string;
+  contextFallback?: string | null;
 }): Promise<{ all: SessionRow[]; prev: SessionRow | undefined; resuming: boolean; reseed: boolean }> {
   const { taskId, task, agent, sessionRole, profileId, runOwner, slash } = input;
   const opts = { freshSession: input.freshSession, resumeSessionId: input.resumeSessionId };
@@ -103,8 +105,19 @@ export async function pickTurnSession(input: {
   const stale = !!prev?.contextRebuildAt;
   if (stale && slash && !["new", "clear"].includes(slash.name)) throw new Error(STALE_CONTEXT_COMMAND(slash.name));
   const resuming = (!!prev?.cliSessionId || stale) && !["fork", "new", "clear"].includes(slash?.name ?? "");
+  // 输入只在接回旧上下文时才说得通（`contextFallback`）：续不续得上到这里才定。没续上改发自带全部意思
+  // 的那一份，并如实留一句（之前那句「从中断处继续」是选会话之前写的）；连那一份都拿不出就不起跑 ——
+  // 只剩一句「接着做」的新会话不知道要做什么。
+  if (input.contextFallback !== undefined && !(resuming && !stale)) {
+    if (input.contextFallback === null) throw new Error(CONTEXT_LOST_WITHOUT_FALLBACK);
+    await appendTaskTimeline(taskId, receiptLine(CONTEXT_FALLBACK_SENT));
+  }
   return { all, prev, resuming, reseed: resuming && stale };
 }
+
+export const CONTEXT_FALLBACK_SENT = "原来那条会话接不上了，这一轮把完整的指令重新发了一遍，没有只说「接着做」。";
+export const CONTEXT_LOST_WITHOUT_FALLBACK = "原来那条会话接不上了，上一条指令的原话也没找到；只说「接着做」新会话不知道要做什么，所以没有启动。"
+  + "请在对话框里把要求重新发一遍。";
 
 export const STALE_CONTEXT_COMMAND = (name: string) =>
   `这条会话里删过消息，旧的 CLI 上下文已作废，/${name} 会在旧上下文上执行，所以没有发出。`

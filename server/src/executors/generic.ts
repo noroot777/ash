@@ -36,11 +36,11 @@ import { valueArgs, type CliSpec } from "./catalog/types.js";
  * 记录、两份拷贝(见 catalog/types.ts 的那个字段)。run 与 attach 共用这一个出口。
  */
 function markdownImages(parser: CliParser, ctx: Omit<CliParserContext, "events">): AsyncIterable<AgentEvent> {
-  if (parser.ownsMarkdownImages) return parser({ ...ctx, events: eventQueue({ child: ctx.child }) });
+  if (parser.ownsMarkdownImages) return parser({ ...ctx, events: eventQueue() });
   const images = markdownImageSink(ctx.cwd, ctx.images);
   // 解析器**不用** ctx.events 自己 yield 事件时(夹具、以后新写的某一份),收口那一层会把
   // 没记过账的事件补记一次 —— 字节拍得晚一点,但不会整条链一张图都不落盘。
-  return settleMarkdownImages(parser({ ...ctx, events: eventQueue({ child: ctx.child, images }) }), images);
+  return settleMarkdownImages(parser({ ...ctx, events: eventQueue({ images }) }), images);
 }
 
 export class GenericCliExecutor implements AgentExecutor {

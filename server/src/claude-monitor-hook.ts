@@ -194,8 +194,7 @@ export async function claudeMonitorHookDecision(
  * 这条回调的路径。**一个常量两处用**:这里拼给 CLI 的 URL,以及 index.ts 上那道失败兜底
  * 中间件装在哪 —— 两边漂了的话兜底就悄悄落在一条没人走的路径上(monitor-hook-failsafe.ts)。
  */
-export { MONITOR_HOOK_PATH } from "./runtime-agent-channels.js";
-import { MONITOR_HOOK_PATH } from "./runtime-agent-channels.js";
+export const MONITOR_HOOK_PATH = "/api/hooks/claude-monitor";
 
 export function monitorRedirectHook(crossTurn: boolean): Record<string, unknown> {
   if (crossTurn) return {};

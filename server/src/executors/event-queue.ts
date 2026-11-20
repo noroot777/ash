@@ -1,7 +1,6 @@
 import type { AgentEvent } from "@navi/shared";
 import type { MarkdownImageSink } from "./markdown-image-stream.js";
 import type { NativeActivityBuffer } from "./native-activity-buffer.js";
-import type { CheckpointChild, OutputCheckpoint } from "./output-checkpoint.js";
 
 // 「CLI 吐出一行 → 事件流里出来一条」中间那条流水线,**整个应用只写一次**。
 //
@@ -29,7 +28,6 @@ import type { CheckpointChild, OutputCheckpoint } from "./output-checkpoint.js";
 export type DeltaKind = "text" | "thinking";
 
 export type EventQueueOptions = {
-  child?: CheckpointChild;
   /** 正文图片账本。不给 = 这条流的正文图片由别处收(见 generic.ts 的 ownsMarkdownImages)。 */
   images?: MarkdownImageSink;
   /** 子智能体活动的合并缓冲(claude / codex app-server 两家有子智能体)。 */
@@ -64,13 +62,12 @@ export type EventQueue = {
   close(): void;
   /** 解析器把它直接 `yield*` 出去就是事件流本体。 */
   drain(): AsyncIterable<AgentEvent>;
-  checkpoint(): OutputCheckpoint;
 };
 
 export function eventQueue(options: EventQueueOptions = {}): EventQueue {
   const { images, activity, coalesce, maxHoldMs = 1_000 } = options;
   let holdTimer: NodeJS.Timeout | null = null;
-  const queue: Array<AgentEvent | (() => Promise<void>)> = [];
+  const queue: AgentEvent[] = [];
   let wake: (() => void) | null = null;
   let closed = false;
   let buffered: { kind: DeltaKind; text: string } | null = null;
@@ -94,21 +91,7 @@ export function eventQueue(options: EventQueueOptions = {}): EventQueue {
     enqueue(pending.kind === "text" ? { kind: "text", text: pending.text } : { kind: "thinking", text: pending.text });
   };
 
-  const checkpoint = (): OutputCheckpoint => {
-    flush();
-    for (const event of activity?.drain() ?? []) queue.push(...(images ? images.release(event) : [event]));
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    const ready = new Promise<void>((resolve) => {
-      queue.push(async () => { resolve(); await held; });
-      wakeUp();
-    });
-    return { ready, resume: release };
-  };
-  if (options.child) options.child.naviCheckpointQueue = checkpoint;
-
   return {
-    checkpoint,
     delta(kind, text) {
       if (!text) return;
       // **冻结字节就在这一刻**:后面还隔着增量合并、活动合并和整条队列。
@@ -141,9 +124,7 @@ export function eventQueue(options: EventQueueOptions = {}): EventQueue {
     async *drain(): AsyncIterable<AgentEvent> {
       while (true) {
         if (queue.length) {
-          const next = queue.shift()!;
-          if (typeof next === "function") await next();
-          else yield next;
+          yield queue.shift()!;
           continue;
         }
         if (closed) return;

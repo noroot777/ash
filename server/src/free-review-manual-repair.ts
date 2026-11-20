@@ -19,7 +19,7 @@ import { freeManualRepairPrompt } from "./free-review-prompts.js";
 import { latestWorkspaceRun, reviewingRun, type ReviewRunRow } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { claimOwnTurn, releaseTurn, whenTurnIdle } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline, alertLine, noticeLine } from "./task-timeline.js";
 
 // 「按意见修复」按钮 = 代发一条带报告链接的修复消息，**不翻转任何状态**。
@@ -160,7 +160,7 @@ export async function startManualFreeReviewRepair(
   // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
   // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  const turn = holdingTurn ? await claimOwnTurn(taskId, "dispatch") : null;
   if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再发起修复");
   }

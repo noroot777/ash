@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimOwnTurn, releaseTurn } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn } from "./runs.js";
 import { seatThenStart } from "./queue-seat.js";
 import { schedules, tasks } from "./db/schema.js";
 import { taskHoldOf } from "./task-hold.js";
@@ -92,7 +92,7 @@ async function fire(taskId: string): Promise<boolean> {
   // (审查实测:验收/turn 窗口里 once 被永久消费)。占位后再查验收锁与停着(admitClaimedFire);
   // 退避不消费班次,下个 tick 再试。duet 走同一把锁:它原来在占位之前就 fire-and-forget 并返回
   // true,于是验收锁里的 duet 一步没跑、once 班次却被永久消费(审查实测)。
-  const turn = claimOwnTurn(taskId, t.mode === "duet" ? "duet" : "single");
+  const turn = await claimOwnTurn(taskId, t.mode === "duet" ? "duet" : "single");
   if (!turn) return false;
   // 占到之后、交给 seatThenStart 之前这一段,锁归本函数管:不放行的每个出口 —— 退避,或者读库/
   // 写库抛错 —— 都在这里还掉。tick 会吞掉异常,漏还一次,任务就永远「回合正在进行」,自动和

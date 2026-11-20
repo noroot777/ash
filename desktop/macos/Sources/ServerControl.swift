@@ -54,49 +54,6 @@ struct ServerRecord: Codable {
   }
 }
 
-enum RuntimeRecovery {
-  struct Record: Codable {
-    let previous: String
-    let next: String
-    let backup: String?
-    let server: ServerRecord?
-    var adopting: Bool = false
-  }
-  static var url: URL { NaviConfig.dataURL.appendingPathComponent(".runtime-recovery.json") }
-  static func record(previous: String, backup: URL?) throws {
-    let entry = Record(previous: NaviHealth.realPath(previous), next: NaviHealth.realPath(NaviConfig.runtimeURL.path), backup: backup?.path, server: ServerRecord.read())
-    try JSONEncoder().encode(entry).write(to: url, options: .atomic)
-  }
-  static func confirmed(_ instance: NaviInstance) {
-    guard instance.isOurs, let code = instance.codeDir,
-          let data = try? Data(contentsOf: url),
-          let entry = try? JSONDecoder().decode(Record.self, from: data),
-          NaviHealth.samePath(entry.next, code) else { return }
-    try? FileManager.default.removeItem(at: url)
-  }
-  static func restoreBeforeAdoption() throws -> URL? {
-    guard let data = try? Data(contentsOf: url) else { return nil }
-    let entry = try JSONDecoder().decode(Record.self, from: data)
-    guard NaviHealth.samePath(entry.next, NaviConfig.runtimeURL.path), RuntimeStore.managed(entry.previous), !entry.adopting else {
-      throw RuntimeStore.Failure("新版已开始接管或恢复身份不符，未自动覆盖数据库；迁移前的恢复点仍保留。")
-    }
-    if let backup = entry.backup, let db = try DatabaseFile.existing(in: NaviConfig.dataURL) {
-      guard NaviHealth.samePath(URL(fileURLWithPath: backup).deletingLastPathComponent().path, NaviConfig.backupURL.path) else {
-        throw RuntimeStore.Failure("恢复点不属于本数据根")
-      }
-      let stage = db.appendingPathExtension("restoring-" + UUID().uuidString)
-      defer { try? FileManager.default.removeItem(at: stage) }
-      try SQLiteFile.snapshot(from: URL(fileURLWithPath: backup), to: stage)
-      try FileManager.default.copyItem(at: db, to: db.appendingPathExtension("failed-" + UUID().uuidString))
-      guard rename(stage.path, db.path) == 0 else { throw RuntimeStore.Failure("无法发布恢复后的数据库") }
-      for suffix in ["-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: db.path + suffix) }
-    }
-    if let server = entry.server { try JSONEncoder().encode(server).write(to: ServerRecord.url, options: .atomic) }
-    try FileManager.default.removeItem(at: url)
-    return URL(fileURLWithPath: entry.previous, isDirectory: true)
-  }
-}
-
 /// 评估时端口上是谁。放行之后只停评估过的那一份（ServerShutdown.stop）：中间换了人就重新评估，
 /// 不拿上一次的结论去停另一份服务。
 enum ServiceTarget: Equatable {

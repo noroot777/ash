@@ -6,7 +6,9 @@
   display: block;
   width: max-content;
   max-width: min(280px, calc(100vw - 16px));
-  transform: translateX(-50%);
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
   border-radius: var(--r-sm);
   background: var(--ink);
   padding: 3px 8px;
@@ -22,12 +24,6 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  transform: translate(-100%, -50%);
-  white-space: nowrap;
-}
-
-.ui-hover-tip.is-above {
-  transform: translate(-50%, -100%);
 }
 
 .ui-hover-tip kbd {

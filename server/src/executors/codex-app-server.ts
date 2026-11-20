@@ -98,7 +98,6 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   // 它在折叠块里只显示一行摘要,不像正文那样需要逐字顺滑。
   const images = markdownImageSink(opts.cwd, opts.images);
   const outbox = eventQueue({
-    child,
     images,
     activity: new NativeActivityBuffer(),
     coalesce: { text: 40, thinking: 240 },

@@ -15,7 +15,13 @@ export type ConflictHandoff = { notified: boolean; message: string };
 // fire-and-forget,退避连个响都没有:时间线上写着「已叫醒该任务去解冲突」,任务却
 // 一动没动(2026-08-14 现场:用户对着这句话干等了一早上)。
 // 登记态按 taskId 存:同一个任务的验收本来就被 acceptance-lock 串成一次一个。
-type PendingHandoff = { prompt: string; sourceBranch: string; targetBranch: string };
+type PendingHandoff = { prompt: string; sourceBranch: string; targetBranch: string; mergeRef: string };
+
+/**
+ * 推送档（task-accept-push.ts）撞上的是**远程**新推的提交、本地目标分支又没能同步时：让任务直接合远程那一头
+ * （这个提交已经拉进仓库，任务的工作区读得到），合本地那份旧的目标分支解不到这次的冲突。
+ */
+export type RemoteConflictTip = { label: string; commit: string };
 const pending = new Map<string, PendingHandoff>();
 
 // 走**不带 system** 的 continueTask:这一轮是「验收之后的对话」,不是重跑任务 ——
@@ -25,9 +31,14 @@ const CONFLICT_PROMPT = (p: {
   targetBranch: string;
   conflictFiles: string[];
   preview?: boolean;
+  remote?: RemoteConflictTip;
 }) =>
   `【验收未通过 · 需要你解冲突】\n` +
-  (p.preview
+  (p.remote
+    ? `用户点了「验收通过」并选了推送到 ${p.remote.label}。远程有别人新推的提交（${p.remote.commit.slice(0, 12)}），跟你的任务分支 ` +
+      `\`${p.sourceBranch}\` 冲突；本地 \`${p.targetBranch}\` 没能同步到它（项目目录里有东西挡着），所以这次要你直接合远程那个提交。` +
+      `目标分支和远程都一个字没动。\n\n`
+    : p.preview
     // 合并预览档（shared/src/accept-gate.ts 的 AcceptGateBaseline）：冲突是在**预演**里撞上的，
     // 真合并压根没开始。说成「已回滚」会让它去找一次并不存在的合并。
     ? `用户点了「验收通过」。这个项目的门禁基准是「合并预览」：跑验收前置命令之前，先预演把目标分支 \`${p.targetBranch}\` ` +
@@ -36,7 +47,9 @@ const CONFLICT_PROMPT = (p: {
       `已经安全回滚（merge --abort），目标分支一个字没动。\n\n`) +
   `冲突文件：\n${p.conflictFiles.map((f) => `- ${f}`).join("\n")}\n\n` +
   `请你来解决：\n` +
-  `1. 在你自己的工作目录里 \`git merge ${p.targetBranch}\`（把目标分支合进任务分支），逐个解掉冲突并提交；\n` +
+  (p.remote
+    ? `1. 在你自己的工作目录里 \`git merge ${p.remote.commit}\`（把远程那一头合进任务分支），逐个解掉冲突并提交；\n`
+    : `1. 在你自己的工作目录里 \`git merge ${p.targetBranch}\`（把目标分支合进任务分支），逐个解掉冲突并提交；\n`) +
   `2. 解完自查一遍（构建 / 类型检查 / 必要的真实验证），确认既没破坏你这次的改动，也没覆盖别人的改动；\n` +
   `3. **不要动目标分支**：不要 checkout 或合并到目标分支，不要删 worktree / 分支——这些一律由验收动作统一做；\n` +
   `4. 完成后告诉用户可以重新点验收（那时会是 fast-forward）。\n\n` +
@@ -47,7 +60,8 @@ const CONFLICT_PROMPT = (p: {
 
 export async function handOffConflict(
   task: { id: string; title: string },
-  merge: { reason?: string; sourceBranch?: string; targetBranch?: string | null; conflictFiles?: string[]; preview?: boolean },
+  merge: { reason?: string; sourceBranch?: string; targetBranch?: string | null; conflictFiles?: string[]; preview?: boolean;
+    remoteTip?: RemoteConflictTip },
 ): Promise<ConflictHandoff | null> {
   // 只接管真冲突。脏工作区、分支缺失这类是环境/用户侧问题,叫醒 agent 也解决不了。
   if (merge.reason !== "merge_conflict") return null;
@@ -56,9 +70,11 @@ export async function handOffConflict(
   const targetBranch = merge.targetBranch ?? "";
   if (!files.length || !sourceBranch || !targetBranch) return null;
 
-  const prompt = CONFLICT_PROMPT({ sourceBranch, targetBranch, conflictFiles: files, preview: merge.preview });
-  pending.set(task.id, { prompt, sourceBranch, targetBranch });
-  const message = `已叫醒该任务去解冲突：它会在 ${sourceBranch} 上合并 ${targetBranch} 并解决 ${files.length} 个冲突文件，完成后重新点验收即可（届时是 fast-forward）。`;
+  const remote = merge.remoteTip;
+  const prompt = CONFLICT_PROMPT({ sourceBranch, targetBranch, conflictFiles: files, preview: merge.preview, remote });
+  const mergeRef = remote?.commit ?? targetBranch;
+  pending.set(task.id, { prompt, sourceBranch, targetBranch, mergeRef });
+  const message = `已叫醒该任务去解冲突：它会在 ${sourceBranch} 上合并 ${remote ? `${remote.label} 的最新提交 ${remote.commit.slice(0, 12)}` : targetBranch} 并解决 ${files.length} 个冲突文件，完成后重新点验收即可（届时是 fast-forward）。`;
   await appendTaskTimeline(task.id, receiptLine(`冲突交接：${message}`));
   return { notified: true, message };
 }
@@ -85,7 +101,7 @@ export function flushConflictHandoff(taskId: string): void {
     await appendTaskTimeline(
       taskId,
       alertLine(`冲突交接失败：没能叫醒该任务解冲突（${why}）。请手动点运行或直接回复它，` +
-        `让它在 ${plan.sourceBranch} 上 \`git merge ${plan.targetBranch}\` 解掉冲突后再点验收。`),
+        `让它在 ${plan.sourceBranch} 上 \`git merge ${plan.mergeRef}\` 解掉冲突后再点验收。`),
     );
   };
   // byBackend：占真人回合，但字是后端写的 —— 别混进「我发的追问」里。

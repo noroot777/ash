@@ -83,9 +83,9 @@ function hostTokenHeaders(lockFile, port) {
  * 后两者过去被压成同一个 `{}`,于是 navi 响应慢的时候安全闸静默变成 0(第 1 轮审查 F1 / P1)。
  * **「问不出来」不等于「没有」**,所以这里把它单独报出来,由调用方 fail closed。
  */
-export async function queryImpact(port, lockFile, { requireOk = false } = {}) {
+export async function queryImpact(port, lockFile, { requireOk = false, includeShutdown = false } = {}) {
   const headers = hostTokenHeaders(lockFile, port);
-  const ask = (timeoutMs) => localGet(port, "/api/restart-impact", timeoutMs, headers);
+  const ask = (timeoutMs) => localGet(port, `/api/restart-impact${includeShutdown ? "?shutdown=1" : ""}`, timeoutMs, headers);
   let probe = await ask(2000);
   // 慢一次不代表问不出来(这台机器往往正忙):再给一次、时限放宽。两次都没拿到仍然算 unknown。
   if (!probe.json && probe.status === null && !isNotListening(probe.error)) probe = await ask(6000);

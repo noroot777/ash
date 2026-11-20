@@ -28,7 +28,7 @@ import type { SettlementFence } from "./regression-settlement.js";
 import { reviewInputHoldNow, reviewInputStillCurrent } from "./review-input-verdict.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { reviewLifecycle } from "./review-lifecycle-lock.js";
-import { claimOwnTurn, releaseTurn, turnIdentity } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn, turnIdentity } from "./runs.js";
 import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { turnProducedWork } from "./transcript.js";
@@ -345,11 +345,8 @@ export async function launchReviewRound(
         ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
         : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`));
   bus.publish({ type: "task.review", taskId: task.id });
-  const message = !opts.retry
-    ? prompt
-    : resumed
-      ? freeReviewResumeMessage(task, run, run.currentRound)
-      : `上一回合异常结束，本轮审查从头继续。\n\n${prompt}`;
+  const restartMessage = `上一回合异常结束，本轮审查从头继续。\n\n${prompt}`;
+  const message = !opts.retry ? prompt : resumed ? freeReviewResumeMessage(task, run, run.currentRound) : restartMessage;
   // 投递本身走 `dispatchReviewRound`:它在回合锁上抢不到位时**重排**而不是落终态(瞬时条件
   // 不该变成永久失败,整段理由见 free-review-dispatch.ts 文件头)。抢不到以外的失败照旧
   // `failReviewStart`,行为与改之前一致。
@@ -373,6 +370,8 @@ export async function launchReviewRound(
       turnSource: { role: "reviewer", review: { run: run.id, round: run.currentRound } },
       freshSession,
       resumeSessionId: opts.resumeSessionId,
+      // 「从中断处继续」只有一句续跑提示:旧 CLI 会话最终没续上时改发整份任务书(判据在选完会话那一步)。
+      ...(resumed ? { contextFallback: restartMessage } : {}),
       cwd,
       // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
       // 「先释放重试路由那把锁、排队再起」的交接——那段时间里分组可能已经被暂停。起跑前
@@ -583,7 +582,7 @@ export async function reopenFailedFreeReview(
   // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
   // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  const turn = holdingTurn ? await claimOwnTurn(taskId, "dispatch") : null;
   if (holdingTurn && !turn) throw new Error("任务回合正在进行，结束后再重跑");
   try {
     if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");

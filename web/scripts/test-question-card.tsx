@@ -11,7 +11,7 @@ import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
 import { longAnswer, longLegacyReply, longQuestion } from "./fixtures/question-card-long-answer.ts";
-import { formatQuestionAnswers, joinQuestionAnswer, legacyQuestionRecord, questionOptionSelected, settleNoteQuestion } from "@navi/shared/questions";
+import { ARCHIVED_QUESTION_HINT, formatQuestionAnswers, joinQuestionAnswer, legacyQuestionRecord, questionAnswerAvailability, questionOptionSelected, settleNoteQuestion } from "@navi/shared/questions";
 
 const task = { id: "question-card", title: "问答卡", body: "问答卡的原始需求", mode: "single", status: "paused", question: "两个细节", questionItems: [
   { question: "放在哪里？", options: ["会话里", "侧栏里"] },
@@ -65,6 +65,18 @@ assert.equal(count(settling, 'aria-pressed="false" disabled=""') + count(settlin
 assert.match(settling, /<textarea[^>]*disabled=""[^>]*placeholder="这一轮结束后即可答复"/);
 // 团队调度台是常驻会话，忙着也接得住：照常能答。
 assert.doesNotMatch(card({ status: "running", mode: "team" }), /这一轮结束后即可答复/);
+for (const mode of ["single", "duet", "team"] as const) {
+  for (const status of ["backlog", "paused", "awaiting_review", "running", "queued", "idle", "done", "failed", "canceled"] as const) {
+    assert.equal(questionAnswerAvailability({ mode, status, archived: true }), "archived", `${mode}/${status}:归档优先于所有状态`);
+    assert.equal(questionAnswerAvailability({ mode, status, archived: false }),
+      mode !== "team" && (status === "running" || status === "queued") ? "settling" : "ready");
+    for (const questionItems of [task.questionItems, undefined]) {
+      const archived = card({ mode, status, archived: true, questionItems, questionOptions: ["归档建议"] });
+      assert.ok(archived.includes(ARCHIVED_QUESTION_HINT));
+      assert.doesNotMatch(archived, /<textarea|<input|question-card-send|aria-pressed=/, `${mode}/${status}:归档只有题面`);
+    }
+  }
+}
 // 收起：只剩题目一行（一颗展开键），没有输入、没有发送键。
 const folded = card({}, true);
 assert.match(folded, /<button type="button" class="question-card-peek" aria-expanded="false"><span>放在哪里？<\/span>/);

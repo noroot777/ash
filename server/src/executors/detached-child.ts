@@ -136,26 +136,15 @@ export function makeDetachedChild(opts: {
   };
   child.naviCommitted = () => out.committed();
   child.naviPaths = opts.paths;
-  let suspended = false;
-  let deferredExit: (() => void) | null = null;
-  child.naviSuspend = () => {
-    suspended = true;
-    return () => {
-      suspended = false;
-      deferredExit?.();
-      deferredExit = null;
-    };
-  };
 
   const timer = setInterval(() => {
-    if (suspended) return;
     out.pump();
     err.pump();
   }, POLL_MS);
   (timer as { unref?: () => void }).unref?.();
 
   let settled = false;
-  const finishExit = (code: number | null) => {
+  opts.onExit((code) => {
     if (settled) return;
     settled = true;
     clearInterval(timer);
@@ -168,10 +157,6 @@ export function makeDetachedChild(opts: {
     child.exitCode = code;
     child.emit("exit", code, null);
     child.emit("close", code);
-  };
-  opts.onExit((code) => {
-    if (suspended) deferredExit = () => finishExit(code);
-    else finishExit(code);
   });
 
   return child as DetachedChild;

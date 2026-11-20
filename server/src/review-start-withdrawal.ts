@@ -10,7 +10,7 @@ import { announceResumePrompt } from "./task-resume-prompt.js";
 import { recordTaskStatus } from "./task-start-status.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
-import { claimOwnTurn, isTurnClaimed, releaseTurn } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, isTurnClaimed, releaseTurn } from "./runs.js";
 import { clearGuardedStart, withdrawRepairStart } from "./guarded-turn-start.js";
 import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
 
@@ -67,7 +67,7 @@ export async function reconcileReviewStarts(ownerTaskId?: string): Promise<void>
     if (!start || isTurnClaimed(owner.id)) continue;
     // 自己占下的那一把,自己还(核验在 releaseTurn 里按 seq 做):这中间要查库、要写时间线,
     // 人工放开可以在其间把锁拔走、另一轮占上(本轮审查 F1)。
-    const turn = claimOwnTurn(owner.id);
+    const turn = await claimOwnTurn(owner.id);
     if (!turn) continue;
     try {
       if (!await restoreUndeliveredReviewStart(owner.id, start)) await withdrawReviewStart(owner.id, start, start.priorStatus);
@@ -79,7 +79,7 @@ export async function reconcileReviewStarts(ownerTaskId?: string): Promise<void>
     const start = state.continuation?.start;
     if (!start || state.settlement || state.continuation?.phase === "uncertain" || (ownerTaskId && ownerTaskId !== start.ownerTaskId)
       || isTurnClaimed(start.ownerTaskId)) continue;
-    const turn = claimOwnTurn(start.ownerTaskId);
+    const turn = await claimOwnTurn(start.ownerTaskId);
     if (!turn) continue;
     try {
       await withdrawReviewStart(start.ownerTaskId, { directory: state.directory, generation: state.generation,

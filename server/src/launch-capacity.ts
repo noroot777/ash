@@ -16,6 +16,7 @@ import { inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { claimOwnTurn, heldTurns, isTurnClaimed, turnRole, type TurnIdentity } from "./turn-lock.js";
+import { afterRuntimeHandover, runtimeHandoverActive } from "./runtime-handover-state.js";
 
 export const PARALLEL_LIMIT = 4;
 
@@ -127,7 +128,9 @@ export type LaunchClaim = { ok: true; turn: TurnIdentity } | { ok: false; why: "
 /** 按 `groupId` 那一桶占一个名额并认领这条任务的执行回合。认领到之后照常由持有者在每条出路上还锁。 */
 export async function claimLaunchTurn(taskId: string, groupId: string | null): Promise<LaunchClaim> {
   for (let round = 0; round < MAX_READ_ROUNDS; round += 1) {
+    while (runtimeHandoverActive()) await new Promise<void>((resolve) => afterRuntimeHandover(resolve));
     const read = await readHolders();
+    if (runtimeHandoverActive()) { round -= 1; continue; }
     if (!read) break;
     // ── 从这里到认领，没有 await ──
     if (!read.fresh()) continue;

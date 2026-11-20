@@ -15,6 +15,7 @@ import { holdDrift, holdScope } from "./team-acceptance-hold.js";
 import { now } from "./util.js";
 import type { AcceptGateSnapshot } from "./accept-gate.js";
 import { reclaimGateSnapshots } from "./accept-gate-reclaim.js";
+import type { AcceptSuccess, AcceptTaskResult } from "./task-accept.js";
 
 type Finalization = { sharedWorkers: SharedWorkerAcceptance | null; failure?: never }
   | { failure: AcceptFailure; sharedWorkers?: never };
@@ -76,4 +77,25 @@ export async function finalizeAcceptance(
   await appendTaskTimeline(task.id, noticeLine(message.notice, `${message.text}${sharedWorkers ? ` ${sharedWorkerAcceptanceMessage(sharedWorkers)}` : ""}`));
   await publishTaskUpdated(task.id);
   return { sharedWorkers };
+}
+
+/** 不动 git 的那几档（就地工作区、线上不合并）：直接落章。 */
+export async function acceptWithoutCleanup(
+  task: typeof tasks.$inferSelect,
+  kind: AcceptSuccess["kind"],
+  message: TimelineLine,
+  authority?: ReviewAuthority,
+  basis: AcceptGateSnapshot | null = null,
+): Promise<AcceptTaskResult> {
+  const finalized = await finalizeAcceptance(task, message, false, {}, authority, basis);
+  if (finalized.failure) return finalized.failure;
+  const { sharedWorkers } = finalized;
+  return {
+    accepted: true,
+    taskId: task.id,
+    status: task.status,
+    stage: "accepted",
+    kind,
+    ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
+  };
 }

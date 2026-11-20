@@ -13,6 +13,8 @@ import type { AcceptMemoryWrite } from "@navi/shared/accept-gate";
  *    上一次（skipRemembered：上次跳过就不勾），取消 = 这次跳过。
  *  - 「提交」：默认就是项目设置，确认时写回项目设置（一处改了另一处跟着变）。发给后端的是**这一层里
  *    看到的那个值**，不让后端再读一次项目设置。
+ *  - 「推送」：只在会落提交、目标分支有远程时出现（不提交就没有可推的，取消「提交」它就收起来），默认跟上一次。
+ *    后端只认这一次明说的 push，不读任何默认 —— 推送是往外发。
  */
 export type ConfirmGate = {
   command: string;
@@ -55,6 +57,12 @@ export type ConfirmInput = {
   count: number;
   /** 独立验证尚未执行：要先勾「知情」。 */
   verification: "none" | "loading" | "error" | "unacknowledged" | "acknowledged";
+  /** 「推送」那一步：这一按推得了（推到哪读回来了）时给上一次勾没勾；不给 = 这一按不提供推送。 */
+  push?: { remembered: boolean } | null;
+  /** 「推送」那一勾；null = 没动过，跟上一次。 */
+  pushChoice?: boolean | null;
+  /** 推送那份事实还在读或读失败（只在会提交时拦）：上一次勾了推送，读不到就不能静悄悄不推。 */
+  pushPending?: boolean;
 };
 
 export type ConfirmView = {
@@ -62,11 +70,15 @@ export type ConfirmView = {
   commit: boolean;
   /** 一次多个任务又不提交：只能合一个。 */
   batchNeedsCommit: boolean;
+  /** 「推送」那一步画不画（会提交、而且推得了）。 */
+  pushChoosable: boolean;
+  push: boolean;
   confirmLabel: string;
   confirmDisabled: boolean;
-  /** 发给 /accept 的那两个参数。 */
+  /** 发给 /accept 的那几个参数。 */
   gateIntent: "skip" | "rerun" | undefined;
   commitParam: boolean | undefined;
+  pushParam: boolean | undefined;
   /** 点确认时记下的那几勾；null = 这一按没什么可记（放行、沿用或重跑、不合并）。 */
   memory: AcceptMemoryWrite | null;
 };
@@ -78,13 +90,17 @@ export function confirmView(input: ConfirmInput): ConfirmView {
   const commitKnown = input.commitDefault !== null && !input.commitDefaultPending;
   const commit = input.commitChoosable ? input.commitChoice ?? input.commitDefault ?? true : true;
   const batchNeedsCommit = input.commitChoosable && !commit && input.count > 1;
+  const pushChoosable = steps.kind === "merge" && commit && !!input.push;
+  const push = pushChoosable && (input.pushChoice ?? input.push!.remembered);
   const confirmLabel = steps.kind === "release" ? "放行"
     : gateIntent === "skip" ? "跳过并验收"
       : input.commitChoosable && !commit ? "验收，不提交"
-        : "确认验收";
+        : push ? "验收并推送"
+          : "确认验收";
   const confirmDisabled = (input.commitChoosable && !commitKnown)
     || input.gatePending === true
     || batchNeedsCommit
+    || (input.pushPending === true && commit)
     || input.verification === "loading" || input.verification === "error" || input.verification === "unacknowledged";
   // **每一次**有资格记的确认都登记，跟默认一样也登记：服务端靠到达顺序挡住超时后迟到的旧保存，没登记的那次
   // 确认它看不见，旧的就盖过来了（第 4 轮审查）。默认可能是旧快照这件事由 gatePending / commitDefaultPending
@@ -92,15 +108,19 @@ export function confirmView(input: ConfirmInput): ConfirmView {
   const memory: AcceptMemoryWrite = steps.kind === "release" ? {} : {
     ...(gate && !gate.reusable ? { skipGate: !runs } : {}),
     ...(input.commitChoosable ? { commit } : {}),
+    ...(pushChoosable ? { push } : {}),
   };
   return {
     runs,
     commit,
     batchNeedsCommit,
+    pushChoosable,
+    push,
     confirmLabel,
     confirmDisabled,
     gateIntent,
     commitParam: input.commitChoosable ? commit : undefined,
+    pushParam: pushChoosable ? push : undefined,
     memory: Object.keys(memory).length ? memory : null,
   };
 }

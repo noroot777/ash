@@ -16,7 +16,6 @@ import { cliSpec } from "../executors/catalog/index.js";
 import { currentListeningPort } from "../listening-port.js";
 import { naviMcpMechanism } from "./catalog.js";
 import { builtinEntry } from "./register.js";
-import { migrateHostRuntimes } from "./runtime-migration.js";
 import { naviMcpHostSources, readingFor, resolveNaviMcp } from "./sources.js";
 import type { NaviMcpEntry, NaviMcpLaunch } from "./types.js";
 
@@ -37,7 +36,6 @@ export interface HostNaviMcp {
 /** 逐家补接并归类。幂等:已经接好的机器上只是几次文件读。 */
 export async function setUpHostNaviMcp(): Promise<HostNaviMcp[]> {
   const wanted = builtinEntry();
-  await migrateHostRuntimes(wanted);
   const out: HostNaviMcp[] = [];
   for (const agentType of AGENT_TYPES) {
     const mechanism = naviMcpMechanism(agentType);

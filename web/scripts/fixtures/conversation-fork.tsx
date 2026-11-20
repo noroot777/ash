@@ -10,7 +10,7 @@ import { forkReadBlock, snapshotConversationFork } from "../../src/task-detail/c
 import "../../src/styles/global.css";
 
 const project = { id: "p1", name: "navi", repoPath: "/tmp/navi", workflowId: null, useWorktreeDefault: false, health: { exists: true, isRepo: false } } as ProjectView;
-const task = { id: "source", projectId: "p1", title: "对比两种方案", body: "研究方案 A 与 B", mode: "single", status: "done" } as Task;
+const task = { id: "source", projectId: "p1", title: "对比两种方案", body: "研究方案 A 与 B", mode: "single", status: "done", archived: new URLSearchParams(location.search).get("archived") === "1" } as Task;
 const reply = (id: string, markdown: string, done = true): ConversationItem => ({
   kind: "agent", id, sessionId: "s1", label: "Codex", markdown,
   at: "2026-09-10T01:00:00Z", endedAt: done ? "2026-09-10T01:01:00Z" : null,

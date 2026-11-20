@@ -42,8 +42,8 @@
 
 /* 选项：一行一个，行和行之间一条细线，整行都能点。行首那一格是数字（快捷键），选中变黑底对勾、这一行的字变重。 */
 .question-card-options { min-height: 0; flex: 0 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
-.question-card-options button { display: flex; width: 100%; align-items: flex-start; gap: 10px; min-height: 38px; padding: 9px 14px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--ink); text-align: left; font-size: 12.5px; line-height: 1.55; }
-.question-card-options button > span:last-child { min-width: 0; padding-top: 1px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.question-card-option { display: flex; width: 100%; align-items: flex-start; gap: 10px; min-height: 38px; padding: 9px 14px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--ink); text-align: left; font-size: 12.5px; line-height: 1.55; }
+.question-card-option > span:last-child { min-width: 0; padding-top: 1px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .question-card-options button:hover:not(:disabled) { background: var(--hover-bg); }
 .question-card-options button[aria-pressed="true"] > span:last-child { font-weight: var(--w-medium); }
 .question-card-options button:disabled { cursor: not-allowed; color: var(--muted); }
@@ -70,6 +70,7 @@
 .question-card > .task-upload-list + .question-card-note { border-top: 0; }
 .question-card-note > .task-reply-icon { flex: 0 0 auto; margin-bottom: 2px; }
 .question-card-error { flex: 0 0 auto; margin: 0; padding: 0 14px 9px; color: var(--red); font-size: var(--t-xs); overflow-wrap: anywhere; }
+.question-card-archived { flex: 0 0 auto; margin: 0; border-top: 1px solid var(--line); padding: 10px 14px; color: var(--muted); font-size: var(--t-xs); }
 
 /* 收起：只剩题目一行（一行截断），点它再展开。 */
 .question-card.is-collapsed { flex: 0 0 auto; box-shadow: var(--surface-shadow); }
@@ -106,6 +107,6 @@
 @media (max-width: 560px) {
   .question-card-head { padding-left: 12px; }
   .question-card-prompt { max-height: 26vh; }
-  .question-card-options button { min-height: 44px; padding-left: 12px; padding-right: 12px; }
+  .question-card-option { min-height: 44px; padding-left: 12px; padding-right: 12px; }
   .question-card-note, .question-card > .task-upload-list { padding-left: 12px; }
 }

@@ -3,6 +3,7 @@ import type { AgentType, ScheduledMessage, SkillEntry } from "@navi/shared";
 import { sameExecutor } from "@navi/shared/executors";
 import { parseCliCommand } from "@navi/shared/cli-commands";
 import { concreteReviewChoice } from "@navi/shared/review-on-create";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 import { PencilSimple } from "@phosphor-icons/react";
 import { IconMenu } from "../components/IconMenu.tsx";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
@@ -136,7 +137,7 @@ export function ReplyBox({
   // 可以派出去的活（suggestions/useSuggestionDock.tsx）：框顶那一行，选中一件时这个框就是「补一句」；
   // 智能体停下来等的那一批也是它（这时没选中也借着框：写一句就是发回去改），那一问不再挂答题卡。
   const suggestion = useSuggestionDock({
-    task, enabled: dispatchable && !task.archived, value, setValue,
+    task, enabled: dispatchable && taskInteractionAvailability(task) === "ready", value, setValue,
     attachments: uploads.attachments.map((attachment) => attachment.path), uploading: uploads.uploading,
     snapshotSent, dispatchTarget: dispatchDefault.value, tasks, onAnswer, focus: () => textareaRef.current?.focus(),
   });
