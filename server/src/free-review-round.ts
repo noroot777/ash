@@ -345,11 +345,8 @@ export async function launchReviewRound(
         ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
         : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`));
   bus.publish({ type: "task.review", taskId: task.id });
-  const message = !opts.retry
-    ? prompt
-    : resumed
-      ? freeReviewResumeMessage(task, run, run.currentRound)
-      : `上一回合异常结束，本轮审查从头继续。\n\n${prompt}`;
+  const restartMessage = `上一回合异常结束，本轮审查从头继续。\n\n${prompt}`;
+  const message = !opts.retry ? prompt : resumed ? freeReviewResumeMessage(task, run, run.currentRound) : restartMessage;
   // 投递本身走 `dispatchReviewRound`:它在回合锁上抢不到位时**重排**而不是落终态(瞬时条件
   // 不该变成永久失败,整段理由见 free-review-dispatch.ts 文件头)。抢不到以外的失败照旧
   // `failReviewStart`,行为与改之前一致。
@@ -373,6 +370,8 @@ export async function launchReviewRound(
       turnSource: { role: "reviewer", review: { run: run.id, round: run.currentRound } },
       freshSession,
       resumeSessionId: opts.resumeSessionId,
+      // 「从中断处继续」只有一句续跑提示:旧 CLI 会话最终没续上时改发整份任务书(判据在选完会话那一步)。
+      ...(resumed ? { contextFallback: restartMessage } : {}),
       cwd,
       // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
       // 「先释放重试路由那把锁、排队再起」的交接——那段时间里分组可能已经被暂停。起跑前

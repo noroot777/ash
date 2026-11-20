@@ -9,8 +9,27 @@ import type { TurnIdentity, TurnSource } from "./runs.js";
 // resumable session, else fresh). Note: a scheduled cron fire is NOT here — it always
 // starts a fresh run via runTask (schedules.ts), so it never resumes.
 export type { ResumeReason } from "@navi/shared/system-resume";
-import type { ResumeReason } from "@navi/shared/system-resume";
+import type { ResumeReason, SystemResume } from "@navi/shared/system-resume";
 import type { FreezeGuard } from "./turn-freeze.js";
+
+/**
+ * 这句话本来只在接回旧上下文时才说得通（`contextFallback`），这一轮最终却没续上旧 CLI 会话。判据只能在
+ * 选完会话之后下：会话 id 被清掉、跨人的配置目录、codex 版本守卫，都要到那一步才知道（turn-session-pick.ts）。
+ */
+export function contextLost(opts: Pick<ContinueTaskOptions, "contextFallback">, cliResume: boolean): boolean {
+  return opts.contextFallback !== undefined && !cliResume;
+}
+
+/**
+ * 这一回合在会话里记成哪一条系统续跑记录；null = 记成一句话（真人或后端代写）。重试的「接着做」没续上
+ * 旧会话时改发的是原话，就照原话记 —— 下一次重试从会话里读到的上一回合输入还是它，原话不会在链上断掉。
+ */
+export function turnResumeTrace(
+  opts: Pick<ContinueTaskOptions, "system" | "retryCarryOn" | "contextFallback">, sideTurn: boolean, cliResume: boolean,
+): SystemResume | null {
+  if (opts.system) return { reason: opts.system, ...(sideTurn ? { side: true as const } : {}) };
+  return opts.retryCarryOn && !contextLost(opts, cliResume) ? { reason: "retry", followUp: true } : null;
+}
 
 /**
  * **这一轮没能起跑,是哪一种**(`continueTask` 返回 false 时必定带一个)。
@@ -97,6 +116,18 @@ export type ContinueTaskOptions = {
    * 能把它跟我自己打的字分开。默认 false = 真人发的。
    */
   byBackend?: boolean;
+  /**
+   * 这一句是「重试这一回合」在续聊上代发的「接着做」（task-retry-turn.ts）。会话里记成一条系统续跑
+   * 记录（`turnResumeTrace`），不画成我说的话；回合语义仍照 `byBackend` 的真人回合走 —— 它是那次续聊
+   * 的后半段，followUpFrom 照旧护住原终态。
+   */
+  retryCarryOn?: true;
+  /**
+   * 这一轮的输入只在接回旧上下文时才说得通（重试的「接着做」、审查的「从中断处继续」）：最终没续上旧 CLI
+   * 会话（`contextLost`），就改发这一份自带全部意思的输入 —— 原话，或整份任务书。null = 依赖旧上下文、
+   * 却拿不出这一份：没续上就不起跑（turn-session-pick.ts）。缺省 = 输入自带全部意思。
+   */
+  contextFallback?: string | null;
   monitorWake?: MonitorWakeData;
   /**
    * 这一轮输入的**投递凭据**:原样落进会话里那条用户回合的 `eventKey`(只在原话落盘的那一处写)。
