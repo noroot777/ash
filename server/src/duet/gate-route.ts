@@ -22,10 +22,10 @@ import { actorOf, ownerIdOf } from "../auth/context.js";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";
 import { handoffBlockReason } from "../handoff-guard.js";
-import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn } from "../runs.js";
+import { releaseTurn } from "../runs.js";
 import { lastOpenedGateVersion } from "./gate-version.js";
 import { resolveGate } from "./gates.js";
-import { resumeAtGate } from "./index.js";
+import { acquireDuetTurn, resumeAtGate } from "./index.js";
 
 /**
  * 请求体里的动作 → 一个形状确定的 GateAction;不合法返回错误文案。
@@ -76,6 +76,8 @@ export function mountDuetGateRoutes(api: Hono): void {
     if (expectedVersion === null) return c.json({ error: "expectedVersion 必须是正整数" }, 400);
     const action = gateActionOf(body);
     if (typeof action === "string") return c.json({ error: action }, 400);
+    const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (t?.archived) return c.json({ error: "讨论已归档，先取消归档再继续", archived: true }, 409);
 
     // ① 讨论正在等这扇门。
     const resolved = resolveGate(taskId, action, expectedVersion);
@@ -84,7 +86,6 @@ export function mountDuetGateRoutes(api: Hono): void {
 
     // ② No in-memory gate (e.g. the server restarted). If the task is still awaiting
     // a decision, resume the duet from the gate and apply the action.
-    const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (t?.status === "awaiting_review" && t.mode === "duet") {
       // 重启后闸口重放会真的续跑讨论——接力出去的任务不给续(与 /run 同一条硬拦口径)。
       const blocked = handoffBlockReason(t.handoff);
@@ -100,8 +101,11 @@ export function mountDuetGateRoutes(api: Hono): void {
         if (current !== expectedVersion) return c.json({ error: STALE, stale: true, gateVersion: current || null }, 409);
       }
       // 同 /run:先原子占位再启动,占不到说明确有回合在跑(闸口重放会真的续跑讨论)。
-      const turn = await claimOwnTurn(taskId, "duet");
+      const turn = await acquireDuetTurn(taskId);
       if (!turn) {
+        const current = (await db.select({ archived: tasks.archived }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+        if (current?.archived) return c.json({ error: "讨论已归档，先取消归档再继续", archived: true }, 409);
+        if (isAcceptingTask(taskId)) return c.json({ error: "任务正在验收（含发布尾段），结束后再处理裁决", status: t.status }, 409);
         return c.json({ error: "任务回合正在进行，稍后再处理裁决", status: t.status }, 409);
       }
       if (isAcceptingTask(taskId)) {
@@ -122,11 +126,13 @@ export function mountDuetGateRoutes(api: Hono): void {
       if (t.stage === "accepted" || t.stage === "merged") {
         return c.json({ error: "讨论已经验收完成；如需继续，请先新开一轮讨论", stage: t.stage }, 409);
       }
-      if (t.archived) return c.json({ error: "讨论已归档，先取消归档再继续", archived: true }, 409);
       const blocked = handoffBlockReason(t.handoff);
       if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-      const turn = await claimOwnTurn(taskId, "duet");
+      const turn = await acquireDuetTurn(taskId);
       if (!turn) {
+        const current = (await db.select({ archived: tasks.archived }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+        if (current?.archived) return c.json({ error: "讨论已归档，先取消归档再继续", archived: true }, 409);
+        if (isAcceptingTask(taskId)) return c.json({ error: "讨论正在验收，结束后再提交意见", status: t.status }, 409);
         return c.json({ error: "讨论回合正在进行，稍后再提交验收意见", status: t.status }, 409);
       }
       if (isAcceptingTask(taskId)) {

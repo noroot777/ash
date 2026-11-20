@@ -3,6 +3,7 @@ import { ArrowUUpLeft, Check, CheckCircle } from "@phosphor-icons/react";
 import type { BranchPlanView, Task, TaskListItem } from "@navi/shared";
 import { hasPendingAcceptCommit } from "@navi/shared";
 import { isFinalHumanGate } from "@navi/shared/workflow-policy";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 import { acceptanceSteps } from "@navi/shared/accept-message";
 import type { AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 import { api, type AcceptTaskFailure } from "../lib/api.ts";
@@ -23,6 +24,7 @@ import { useAcceptanceVerification } from "./useAcceptanceVerification.ts";
 import { refreshTaskFacts, useTaskFacts } from "./taskFacts.ts";
 import { acceptTargetOf, sameBranch } from "./acceptTarget.ts";
 import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
+import { useAcceptPush } from "./useAcceptPush.ts";
 import { useReviewFacts, type FactRow } from "./useReviewFacts.ts";
 import { AutoCommitCheck, WorkspaceCheck } from "./WorkspaceCheck.tsx";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
@@ -65,7 +67,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
 }) {
   const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
   const settled = task.stage === "accepted" || task.stage === "merged";
-  const archived = !!task.archived;
+  const archived = taskInteractionAvailability(task) === "archived";
   const inFlight = task.status === "running" || task.status === "queued";
   const gate = useAcceptGate(task.id);
   const plan = useBranchPlan(task, !midGate && !settled);
@@ -76,6 +78,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const [checked, setChecked] = useState<string[]>([]);
   const [runChoice, setRunChoice] = useState<boolean | null>(null);
   const [commitChoice, setCommitChoice] = useState<boolean | null>(null);
+  const [pushChoice, setPushChoice] = useState<boolean | null>(null);
   const [proposal, setProposal] = useState<BranchPlanView | null>(null);
   const [familyAck, setFamilyAck] = useState(false);
   const [editGate, setEditGate] = useState(false);
@@ -89,6 +92,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const taskFacts = useTaskFacts(task.id, task.updatedAt);
   const retryTaskFacts = () => refreshTaskFacts(task, onTaskUpdated);
   useEffect(() => { setChecked([]); setFailure(null); setLayer(null); }, [task.id]);
+  useEffect(() => { if (archived) { setLayer(null); setEditGate(false); } }, [archived]);
   // 版本一推，前置命令那份状态（基准对照的目标分支跟着合入目标走）也重读一次。
   useEffect(() => { if (taskFacts.version) void gate.reload(); }, [taskFacts.version]);
 
@@ -130,6 +134,10 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const merging = family.filter((row) => row.stage !== "accepted" && row.strategy !== "tag");
   const commitChoosable = family.length ? merging.length > 0 : steps.kind === "merge" && steps.merge !== "tag";
   const commitDefault = useAcceptCommitDefault(task.projectId, commitChoosable && confirming);
+  // 「推送」只给单任务、会真合并的那一按（统一验收里子任务合进的是父任务分支，推不得）。
+  const pushOffered = confirming && !midGate && !family.length && !!task.useWorktree && steps.kind === "merge" && steps.merge !== "tag";
+  const pushRead = useAcceptPush(task.id, pushOffered);
+  const pushDestination = pushRead.view?.destination ?? null;
   const latest = gate.latest;
   const issue = gate.state?.baselineIssue;
   const confirmGate: ConfirmGate | null = !midGate && !family.length && gate.state?.command && steps.kind !== "release"
@@ -154,12 +162,13 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const view = confirmView({
     steps, gate: confirmGate, runChoice, commitChoosable, commitChoice, commitDefault: commitDefault.value,
     commitDefaultPending: commitDefault.pending, gatePending, count: family.length ? merging.length : 1, verification: verifyState,
+    push: pushDestination ? { remembered: pushRead.view!.remembered } : null, pushChoice, pushPending: pushOffered && pushRead.pending,
   });
   const described = acceptanceSteps(task, view.commit);
   const shownSteps = described.kind === "merge" && acceptTarget ? { ...described, target: acceptTarget } : described;
   // 关掉就回到默认 —— 默认就是上一次确认时的样子（confirmPlan.ts），只开关不确认不会改它。「知情」那一勾不记。
   useEffect(() => {
-    if (!confirming) { setRunChoice(null); setCommitChoice(null); setFamilyAck(false); verification.setAcknowledged(false); }
+    if (!confirming) { setRunChoice(null); setCommitChoice(null); setPushChoice(null); setFamilyAck(false); verification.setAcknowledged(false); }
   }, [confirming]);
 
   // 动作已经生效之后的「再拉一遍任务」是另一件事：失败只在成功提示后面缀一句，绝不报成动作失败；
@@ -176,7 +185,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const accept = async () => {
     if (acceptDisabled || view.confirmDisabled) return;
     // 发的是**这一层里看到的那个值**（提交、运行与否），不让后端再读一次项目设置。
-    const { commitParam, gateIntent, memory } = view;
+    const { commitParam, gateIntent, pushParam, memory } = view;
     setLayer(null);
     setBusy(true);
     setFailure(null);
@@ -215,7 +224,8 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         await plan.refresh();
         return;
       }
-      const result = await api.acceptTask(task.id, verifyState === "acknowledged", commitParam, gateIntent);
+      const result = await api.acceptTask(task.id, verifyState === "acknowledged", commitParam, gateIntent,
+        pushParam && pushDestination ? pushDestination : undefined);
       setAutoCommit(result.autoCommit ? { taskId: task.id, outcome: result.autoCommit } : null);
       if (!result.accepted) {
         const gateReason = result.reason.startsWith("accept_gate");
@@ -301,7 +311,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
             detail={<p className="acc-detail-text">{verification.verification.message}</p>} />
         )}
       </div>
-      {confirming && (
+      {!archived && confirming && (
         <AcceptConfirm
           anchorRef={acceptRef}
           steps={shownSteps}
@@ -311,6 +321,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           commitDefault={commitDefault}
           gateRead={{ pending: gatePending, error: gate.error }}
           commitRemembered={canManage !== false}
+          push={{ destination: pushDestination, pending: pushOffered && pushRead.pending, error: pushRead.error }}
           verification={{ state: verifyState, error: verification.error }}
           source={plan.view?.task.sourceBranch ?? "任务分支"}
           family={family.map((row) => row.title)}
@@ -319,6 +330,8 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           canSetGate={!midGate && canManage === true && !!gate.state && !gate.state.command}
           onRun={setRunChoice}
           onCommit={setCommitChoice}
+          onPush={setPushChoice}
+          onRetryPush={pushRead.reload}
           onAcknowledge={(value) => (family.length ? setFamilyAck(value) : verification.setAcknowledged(value))}
           onRetryDefault={commitDefault.reload}
           onRetryGate={() => void gate.reload()}
@@ -328,7 +341,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           onClose={() => setLayer(null)}
         />
       )}
-      {layer === "reject" && (
+      {!archived && layer === "reject" && (
         <AcceptReject task={task} anchorRef={rejectRef} onClose={() => setLayer(null)} onSent={returned} notify={notify} />
       )}
     </div>

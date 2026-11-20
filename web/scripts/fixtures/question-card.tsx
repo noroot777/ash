@@ -81,6 +81,7 @@ function Fixture() {
       <button onClick={() => update({ ...state, task: { ...state.task, question: null, questionOptions: null, questionItems: null } })}>撤下提问</button>
       <button onClick={() => update({ ...state, task: { ...initial, id: `${state.task.id}-next` } })}>切换任务</button>
       <button onClick={() => update({ ...state, task: { ...state.task, status: state.task.status === "running" ? "paused" : "running" } })}>切换提问状态</button>
+      <button onClick={() => update({ ...state, task: { ...state.task, archived: !state.task.archived } })}>切换归档</button>
       <label><input type="checkbox" checked={fail} onChange={(event) => setFail(event.target.checked)} />模拟发送失败</label>
       <output aria-label="提交次数">提交 {calls} 次</output>
     </header>

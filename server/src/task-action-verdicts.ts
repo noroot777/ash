@@ -10,6 +10,7 @@ import { canArchive, canSingleRun } from "@navi/shared";
 import { queueBlockedText, type QueueBlocker } from "@navi/shared/scheduled-message-wait";
 import { teamNeverStarted } from "@navi/shared/team";
 import { handoffBlockReason } from "./handoff-guard.js";
+import type { ArchiveActivity } from "./task-archive-activity.js";
 
 /** 判据要的那几列（任务行的子集，回归脚本直接喂字面量）。 */
 export type ActionTask = {
@@ -27,7 +28,7 @@ export type ActionTask = {
   queueAdvanceRequest: { resumePromptGeneration: number } | null;
 };
 
-export type ActionFacts = {
+export type ActionFacts = ArchiveActivity & {
   task: ActionTask;
   /** 在不在某条队列里。 */
   inQueue: boolean;
@@ -59,15 +60,18 @@ export type ActionFacts = {
 export const HIDDEN_BELOW_TEXT = "名下有子任务在你看不到的项目里，不能整棵一起处置";
 
 /** `hidden` = 调用者看不见它所在的项目：只知道有这么一条，标题是 null，判据整笔拒、不点它的名。 */
-export type DispatchBelow = {
+export type DispatchBelow = ArchiveActivity & {
   id: string; hidden: boolean; title: string | null; status: string; verifyRound: number | null; freeReviewActive: boolean;
 };
 
 /** 这一条自己能不能跟着冻结（口径同 archiveVerdict 对任务自己的那几项）。不能时回一个短词说它在干什么。 */
 function dispatchUnsettled(below: DispatchBelow): string | null {
   if (!canArchive(below.status as TaskStatus)) {
-    return live(below.status) ? "在跑" : below.status === "paused" ? "停着" : "还没开工";
+    return "在运行或等待执行";
   }
+  if (below.liveProcess) return "智能体仍在执行";
+  if (below.monitorRunning) return "有哨兵在运行";
+  if (below.acceptGateRunning) return "验收命令尚未收尾";
   if (below.verifyRound !== null) return "验证没结束";
   if (below.freeReviewActive) return "在审查";
   return null;
@@ -205,15 +209,18 @@ export function archiveVerdict(f: ActionFacts): Verdict {
   if (task.archived) return hide("任务已归档");
   if (f.parentIsTeam) return hide("执行者跟着所属团队一起归档", { parentId: task.parentId });
   if (!canArchive(task.status as TaskStatus)) {
-    return block("只有已完成/失败/已取消的任务可以归档", { status: task.status });
+    return block("任务正在运行或等待执行，停止后再归档", { status: task.status });
   }
+  if (f.liveProcess && task.mode !== "team") return block("智能体仍在执行，停止后再归档");
+  if (f.monitorRunning) return block("哨兵正在运行，停止后再归档");
+  if (f.acceptGateRunning) return block("验收命令尚未收尾，结束后再归档");
   // 就地验证轮中途提问后，旁路结算会把 status 放回原终态，而 verifyRound 和 question 都还挂着
   // —— 只看 status 会放行，于是「已冻结」的任务被答复后继续结算，留下 archived + verifying 的死局。
   if (task.verifyRound !== null) {
     return block("就地验证轮还没结束（可能正等你答复），处理完再归档", { status: task.status });
   }
   if (task.workflowMode === "free" && f.freeReviewActive) return block("自由审查正在进行，结束后再归档");
-  // 子孙跟着一起冻结（dispatch-archive.ts）：有一条看不见就整笔不做；有一条还没结束，整棵都等着。
+  // 子孙跟着一起冻结（dispatch-archive.ts）：有一条看不见就整笔不做；有一条仍有活动，整棵都等着。
   if ((f.dispatchBelow ?? []).some((below) => below.hidden)) return block(HIDDEN_BELOW_TEXT);
   const unsettled = (f.dispatchBelow ?? []).flatMap((below) => {
     const doing = dispatchUnsettled(below);
@@ -222,7 +229,7 @@ export function archiveVerdict(f: ActionFacts): Verdict {
   if (unsettled.length) {
     const named = unsettled.slice(0, 3).map((below) => `「${below.title || below.id}」${below.doing}`).join("、");
     const more = unsettled.length > 3 ? ` 等 ${unsettled.length} 条` : "";
-    return block(`子任务 ${named}${more}，都结束了再归档`, { unsettled: unsettled.map((below) => below.id) });
+    return block(`子任务 ${named}${more}，停止或结束后再归档`, { unsettled: unsettled.map((below) => below.id) });
   }
   return OK;
 }

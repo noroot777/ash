@@ -195,7 +195,7 @@ await withTestResources(async () => {
   execFileSync("git", ["init", "-b", "main", holdsDirectory], { stdio: "ignore" });
   const { holdTeamForAcceptance, holdMembers, topUpHold } = await import("../src/team-acceptance-hold.js");
   const { acceptanceGuard } = await import("../src/task-accept-guard.js");
-  const { isAcceptingTask } = await import("../src/acceptance-lock.js");
+  const { beginAccepting, endAccepting, isAcceptingTask } = await import("../src/acceptance-lock.js");
   const { claimWorkspaceWrite, resolveWorkspaceContext } = await import("../src/workspace-write-gate.js");
   const { Hono } = await import("hono");
   const { serve } = await import("@hono/node-server");
@@ -321,6 +321,37 @@ await withTestResources(async () => {
   releaseTurn("hold-worker", writingWorker);
   assert.equal(turnIdentity("hold-peer"), null);
   console.log("✓ 强制 SCM 写入与文件删除均返回 409（不是归档或待确认），不触碰文件或索引；解冻后仍保护闲置同伴");
+
+  const { acquireDuetTurn } = await import("../src/duet/index.js");
+  await db.insert(tasks).values({
+    id: "merged-duet", projectId: "hold-project", title: "merged duet", body: "", mode: "duet",
+    status: "done", useWorktree: 0, agentType: "claude", labels: "[]", autoTitle: 0, createdAt: at, updatedAt: at,
+  });
+  const duetLease = reserveRuntimeHandover();
+  assert.ok(duetLease);
+  const waitingDuet = acquireDuetTurn("merged-duet");
+  assert.equal(turnIdentity("merged-duet"), null);
+  try {
+    await db.update(tasks).set({ archived: true }).where(eq(tasks.id, "merged-duet"));
+  } finally { releaseRuntimeHandover(duetLease); }
+  assert.equal(await waitingDuet, null);
+  assert.equal(turnIdentity("merged-duet"), null);
+  await db.update(tasks).set({ archived: false }).where(eq(tasks.id, "merged-duet"));
+  const existingDuet = await acquireDuetTurn("merged-duet");
+  assert.ok(existingDuet);
+  await db.update(tasks).set({ archived: true }).where(eq(tasks.id, "merged-duet"));
+  assert.equal(await acquireDuetTurn("merged-duet", existingDuet), null);
+  assert.equal(turnIdentity("merged-duet"), null);
+  await db.update(tasks).set({ archived: false }).where(eq(tasks.id, "merged-duet"));
+  assert.equal(beginAccepting("merged-duet"), true);
+  try {
+    assert.equal(await acquireDuetTurn("merged-duet"), null);
+    assert.equal(turnIdentity("merged-duet"), null);
+  } finally { endAccepting("merged-duet"); }
+  const readyDuet = await acquireDuetTurn("merged-duet");
+  assert.ok(readyDuet);
+  releaseTurn("merged-duet", readyDuet);
+  console.log("✓ 合并保留讨论冻结等待、等待后归档复查、已有占位转交复查及验收互斥，拒绝后均释放原锁");
 
   const { continueWhenIdle } = await import("../src/turn-idle-delivery.js");
   const { claimReconcileTurnWhenReady } = await import("../src/runs.js");

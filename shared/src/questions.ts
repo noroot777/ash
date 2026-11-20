@@ -1,4 +1,13 @@
 import type { QuestionItem } from "./index.ts";
+import { taskInteractionAvailability } from "./task-interaction.ts";
+
+export const ARCHIVED_QUESTION_HINT = "已归档，取消归档后再答";
+
+export function questionAnswerAvailability(task: { archived?: boolean; mode: string; status: string }): "archived" | "settling" | "ready" {
+  if (taskInteractionAvailability(task) === "archived") return "archived";
+  if (task.mode !== "team" && (task.status === "running" || task.status === "queued")) return "settling";
+  return "ready";
+}
 
 export type QuestionSource = {
   question?: string | null;

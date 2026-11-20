@@ -86,6 +86,7 @@ function api(store) {
       }
       if (what === "accept-gate") return reply({ command: null, running: null, latest: null, basis: null });
       if (what === "acceptance-check") return reply({ verification: null });
+      if (what === "accept-push") return reply({ destination: null, unavailable: null, remembered: false });
       if (what === "scm") return reply(scm(taskId));
       if (what === "sessions") return reply([]);
       if (what === "workspace") {

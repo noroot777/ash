@@ -7,6 +7,7 @@
 // 轮审查 N2）。交出去的面孔只有一副（去定位、去修，或者拿出「跟本次改动无关」的依据），
 // 模板在 accept-gate-messages.ts；这两处共用 `gateFailureInputFor` / `gateHandoffTimeline`
 // 两个纯函数，所以「三处一致」不再靠人读两遍对齐。
+import { parsePushChoice } from "@navi/shared/accept-gate";
 import { existsSync, readFileSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { ACCEPT_GATE_STATUS_LABELS,
@@ -32,7 +33,12 @@ export type AcceptGateChoices = { by: AcceptBy; commit?: boolean; confirmUnverif
   /** 他点的是哪一版成果（task-result-version.ts）：门禁跑着时任务又跑完一轮，绿了也不替他验后来那一版。 */
   expectedResultVersion?: string;
   /** 他点的是哪一道「等我点头」（task-human-gate.ts）：门禁跑着时线换了一道关，绿了也不替他验。 */
-  expectedHumanGate?: string };
+  expectedHumanGate?: string;
+  /**
+   * 他选了推送到远程：第一次解析时冻结下来的目的地，绿了接着做完那一次照样推到这里（变了就拒）。存的那份认不出
+   * （上一版没有指纹）是 "stale"：续做时按确认失效拒，不当没选推送去合并清理。
+   */
+  push?: import("@navi/shared/accept-gate").AcceptPushDestination | "stale" };
 
 /**
  * 当初那一下验收的选择。没记（老数据）按「人点的、什么都没另选」；记了却读不出来（坏了）返回 null ——
@@ -45,7 +51,8 @@ export function parseChoices(raw: string | null): AcceptGateChoices | null {
   return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit,
     confirmUnverified: parsed.confirmUnverified, reviewAuthority: parsed.reviewAuthority,
     ...(typeof parsed.expectedResultVersion === "string" ? { expectedResultVersion: parsed.expectedResultVersion } : {}),
-    ...(typeof parsed.expectedHumanGate === "string" ? { expectedHumanGate: parsed.expectedHumanGate } : {}) };
+    ...(typeof parsed.expectedHumanGate === "string" ? { expectedHumanGate: parsed.expectedHumanGate } : {}),
+    ...(parsePushChoice(parsed.push) ? { push: parsePushChoice(parsed.push)! } : {}) };
 }
 
 /**

@@ -38,12 +38,20 @@ import { applyAutoTitle } from "../auto-title-apply.js";
 // 返回**取得的那把锁的身份**:null = 一步都没跑,调用方据此回 409 / 不消费调度班次。
 // 身份要一路带到 finally 的释放点 —— 按任务 id 还锁会撤掉人工放开之后那一轮的互斥
 // (本轮审查 F1,理由在 turn-lock.ts 的 `endOwnTurn`)。
-async function acquireDuetTurn(taskId: string, turnHeld?: TurnIdentity | null): Promise<TurnIdentity | null> {
-  if (turnHeld) return reclaimTurn(taskId, turnHeld, "duet");
-  const turn = await claimOwnTurn(taskId, "duet");
+export async function acquireDuetTurn(taskId: string, turnHeld?: TurnIdentity | null): Promise<TurnIdentity | null> {
+  const turn = turnHeld ? reclaimTurn(taskId, turnHeld, "duet") : await claimOwnTurn(taskId, "duet");
   if (!turn) return null;
-  if (isAcceptingTask(taskId)) { releaseTurn(taskId, turn); return null; }
-  return turn;
+  try {
+    const task = (await db.select({ archived: tasks.archived }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (task?.archived || isAcceptingTask(taskId)) {
+      releaseTurn(taskId, turn);
+      return null;
+    }
+    return turn;
+  } catch (error) {
+    releaseTurn(taskId, turn);
+    throw error;
+  }
 }
 
 async function setStatus(taskId: string, status: TaskStatus, opts?: { completion?: boolean }) {

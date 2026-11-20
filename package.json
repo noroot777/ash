@@ -49,7 +49,7 @@
     "mcp": "npm -w mcp run start",
     "db:push": "npm -w server run db:push",
     "test:diagnostics": "npm -w server run test:diagnostics",
-    "verify:mobile": "tsc -p mobile/tsconfig.json --noEmit && npm run build:mobile && npm --prefix mobile run test:web-smoke"
+    "verify:mobile": "tsc -p mobile/tsconfig.json --noEmit && npm run build:mobile && npm --prefix mobile run test:web-smoke && npm --prefix mobile run test:question-card-ui"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
