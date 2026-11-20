@@ -192,6 +192,50 @@ try {
       if (!value.ok) assert.match(value.message, /没法确认这次合并落在了 main 上/, what);
     }
 
+    // 7b. 证据只认不会再变的东西（审查第 5 轮 F1）：squash 的提交落在 side、切回 main 又有人加了一个无关提交（此刻 HEAD
+    //     指着的是那个无关提交）；合并落在 side 之后有人把来源分支改指到 main。都不报成功。
+    {
+      const s = await stage("squash-aba-unrelated", false);
+      const value = await aroundMerge("squash-aba-unrelated", shell(s.repo, "switch", "-q", "side"),
+        `${shell(s.repo, "switch", "-q", "main")} && ${shell(s.repo, "commit", "-q", "--allow-empty", "-m", "unrelated")}`,
+        () => mergeTaskBranch(s.repo, s.taskId, "main", "squash"), "commit");
+      assert.equal(git(s.repo, "log", "-1", "--format=%s", "main"), "unrelated", "前提：main 上多了一个无关提交，HEAD 指着它");
+      assert.equal(value.ok, false, "squash 的提交在 side 上，main 没收到，不算成功");
+      if (!value.ok) assert.match(value.message, /没法确认这次合并落在了 main 上/);
+    }
+    for (const c of cases.filter((c) => c.commit && c.strategy !== "squash")) {
+      const s = await stage(`${c.name}-moved-source`, c.diverge);
+      const source = worktreeBranchName(s.taskId);
+      const value = await aroundMerge(`${c.name}-moved-source`, shell(s.repo, "switch", "-q", "side"),
+        `${shell(s.repo, "switch", "-q", "main")} && ${shell(s.repo, "update-ref", `refs/heads/${source}`, "main")}`,
+        () => mergeTaskBranch(s.repo, s.taskId, "main", c.strategy));
+      const what = `${c.name}（来源分支被改指到 main）`;
+      assert.equal(git(s.repo, "rev-parse", source), s.main, `${what}：前提 —— 来源分支现在指着 main`);
+      assert.equal(value.ok, false, `${what}：main 没收到合并前那个来源提交，不算成功`);
+      if (!value.ok) assert.match(value.message, /没法确认这次合并落在了 main 上/, what);
+    }
+    // 不受竞态影响的「合并后不提交」照常成功：暂存的就是这次合进来的那一份。
+    {
+      const s = await stage("no-commit-plain", false);
+      const value = await mergeTaskBranch(s.repo, s.taskId, "main", "safe", { commit: false });
+      assert.equal(value.ok, true, value.ok ? "" : value.message);
+      if (value.ok) assert.equal(value.stagedTree, git(s.repo, "write-tree"));
+      assert.equal(git(s.repo, "diff", "--cached", "--name-only"), "task.txt");
+      assert.equal(git(s.repo, "rev-parse", "main"), s.main);
+    }
+    // 没做完的操作要按 git 目录逐个看：路径里带换行也不漏（审查第 5 轮 N1）。
+    {
+      const { pendingOperation } = await import("../src/git-accept-checkout.js");
+      const repo = join(root, "line\nbreak");
+      execFileSync("git", ["init", "-q", "-b", "main", repo]);
+      git(repo, "config", "user.name", "Navi Race Test");
+      git(repo, "config", "user.email", "race@example.test");
+      git(repo, "commit", "-q", "--allow-empty", "-m", "seed");
+      assert.equal(await pendingOperation(repo), null);
+      git(repo, "merge", "-q", "--no-ff", "--no-commit", git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "waiting"));
+      assert.equal(await pendingOperation(repo), "MERGE_HEAD");
+    }
+
     // 8. 钩子照旧在项目目录里跑（审查第 1 轮 F3）：看得到项目里被忽略的本地依赖，合并后钩子也在这里。
     for (const c of cases.filter((c) => c.commit && c.name !== "fast-forward")) {
       const s = await stage(`${c.name}-hooks`, c.diverge);
@@ -213,7 +257,7 @@ try {
       clean(s.repo, `${c.name}-hooks`);
     }
 
-    console.log("accept checkout race: 核完再切走什么都不动 / 合并前被切走如实报落在哪 / 无竞态照常落地 / 冲突照旧交回 / 合完再切走照常成功 / 成功只认实证 / 钩子在项目目录 全部通过");
+    console.log("accept checkout race: 核完再切走什么都不动 / 合并前被切走如实报落在哪 / 无竞态照常落地 / 冲突照旧交回 / 合完再切走照常成功 / 成功只认不会再变的实证 / 路径带换行也查得出没做完的操作 / 钩子在项目目录 全部通过");
   }
 } finally {
   await removeTmpStage(root);

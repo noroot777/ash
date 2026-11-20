@@ -344,6 +344,7 @@ async function squashInCheckedOutTarget(
   targetBranch: string,
   commit = true,
   sourceRef = sourceBranch,
+  committed?: (stdout: string) => void,
 ): Promise<TaskMergeResult> {
   try {
     await exec("git", ["-C", cwd, "merge", "--squash", sourceRef]);
@@ -387,7 +388,7 @@ async function squashInCheckedOutTarget(
     return { ok: true, sourceBranch, targetBranch, method: "no_commit", stagedTree: await writeIndexTree(cwd) };
   }
   try {
-    await exec("git", ["-C", cwd, "commit", "-m", squashCommitMessage(sourceBranch)]);
+    committed?.((await exec("git", ["-C", cwd, "commit", "-m", squashCommitMessage(sourceBranch)])).stdout);
     return { ok: true, sourceBranch, targetBranch, method: "squash" };
   } catch (error) {
     // 到这里 staged 一定非空过：commit 失败就是真失败（hook 拒绝/环境问题），如实报错。
@@ -575,9 +576,10 @@ async function mergeTaskBranchLocked(
   }
 
   if (strategy === "squash") {
-    const squash = (cwd: string) => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef);
+    const squash = (cwd: string, committed?: (stdout: string) => void) =>
+      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef, committed);
     return inTargetCheckout(repo, sourceBranch, targetBranch, (cwd, userCheckout) =>
-      userCheckout ? mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, sourceRef, () => squash(cwd)) : squash(cwd));
+      userCheckout ? mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, sourceRef, (committed) => squash(cwd, committed)) : squash(cwd));
   }
 
   // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。

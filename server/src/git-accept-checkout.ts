@@ -8,12 +8,15 @@
 // 所以这里给的是和两个终端同时操作时 git 本身一样的保证，外加如实报告：
 //  · 合并之前紧贴着再核一次 HEAD 指着目标分支（锁外那道检查之后已经切走的，什么都不动）；
 //  · 合并就是原生那几条命令，钩子、配置、进行中操作的检查都按 git 自己的规矩；
-//  · 合完按实证判成功：目标分支确实收到了这次合并（快进、合并提交 = 目标包含来源提交；squash = 这次
-//    `git commit` 建出的提交在目标上；已经合入 = 来源再合进目标什么都不变；不提交 = 项目目录还在目标上、
-//    暂存的就是记下的那棵）。不看「HEAD 现在叫什么」「目标动没动」—— 切走再切回、别人同时往目标上提交，
-//    这两样都会骗人（审查第 4 轮 F1）。证明不了就不报成功，说清落在哪 / 现在在哪，不替用户复位。
+//  · 合完按实证判成功：目标分支确实收到了这次合并。证据只取不会再变的东西 —— 合并前冻结的来源提交、git
+//    自己报出的新提交、目标此刻的历史和内容：快进、合并提交 = 目标包含来源提交；squash = `git commit` 打印的
+//    那个新提交在目标上；已经合入 = 来源再合进目标什么都不变；不提交 = 项目目录还在目标上、目标没动、暂存的
+//    就是记下的那棵、而且它包含来源。不看「HEAD 现在叫什么 / 指着哪个提交」「目标动没动」「来源分支现在指哪」
+//    —— 切走再切回、别人同时往目标上提交、改来源分支，都会骗人（审查第 4 轮 F1、第 5 轮 F1）。证明不了就不报
+//    成功，说清现在在哪，不替用户复位。
 // 剩下的窗口是「核完到 git 读 HEAD」那几十毫秒，那是 git 自己也不防的竞争。
-import { existsSync } from "node:fs";
+import { lstatSync } from "node:fs";
+import { join } from "node:path";
 import { execFileText as exec } from "./exec.js";
 import type { TaskMergeResult } from "./git-accept.js";
 
@@ -40,28 +43,40 @@ async function contentContains(repo: string, commit: string, source: string): Pr
   return !!merged && merged.stdout.split("\n")[0] === await tipOf(repo, `${commit}^{tree}`);
 }
 
-/** 原检出里没做完的操作留下的记号（都在每个检出自己的 git 目录里）；受保护发布不走原生合并，得自己拒。 */
+/**
+ * 原检出里没做完的操作留下的记号（都在每个检出自己的 git 目录里）；受保护发布不走原生合并，得自己拒。
+ * 查不了（读不到 git 目录、没权限看）就抛，不当成「没有」。
+ */
 const PENDING = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_LOG"];
 export async function pendingOperation(repo: string): Promise<string | null> {
-  const paths = (await exec("git", ["-C", repo, "rev-parse", "--path-format=absolute", ...PENDING.flatMap((name) => ["--git-path", name])])).stdout.trim().split("\n");
-  const found = PENDING.filter((_, i) => paths[i] && existsSync(paths[i]!));
+  // 只去掉末尾那一个换行：路径本身可以含换行。
+  const gitDir = (await exec("git", ["-C", repo, "rev-parse", "--absolute-git-dir"])).stdout.replace(/\n$/, "");
+  const found = PENDING.filter((name) => lstatSync(join(gitDir, name), { throwIfNoEntry: false }));
   return found.length ? found.join("、") : null;
 }
 
+/** `git commit` 的摘要行 `[<分支> <短提交号>] <标题>` 里那个提交号：git 刚建出的那个对象，事后改不了。 */
+const committedIn = (stdout: string | null) => stdout?.match(/^\[[^\]\n]* ([0-9a-f]{4,})\] /m)?.[1] ?? null;
+
 /**
- * 在项目目录 `repo`（检出着目标分支、已核过干净）里跑 `run` 这次原生合并（`sourceRef` 是被合的来源提交）：
- * 合并前紧贴着核 HEAD，合完按实证判成功（见文件头）。
+ * 在项目目录 `repo`（检出着目标分支、已核过干净）里跑 `run` 这次原生合并（`sourceRef` 是被合的来源）：
+ * 合并前紧贴着核 HEAD、冻结来源提交，合完按实证判成功（见文件头）。`run` 落了提交就把 `git commit` 的输出
+ * 交给 `committed`。
  */
 export async function mergeInUserCheckout(repo: string, names: Names, sourceRef: string,
-  run: () => Promise<TaskMergeResult>): Promise<TaskMergeResult> {
+  run: (committed: (stdout: string) => void) => Promise<TaskMergeResult>): Promise<TaskMergeResult> {
   const { targetBranch } = names;
   const ref = `refs/heads/${targetBranch}`;
   const fail = (message: string): TaskMergeResult => ({ ok: false, reason: "merge_failed", message, ...names, targetPath: repo });
   const left = await checkoutLeft(repo, targetBranch);
   if (left) return fail(`合并之前项目目录 ${repo} 已经不在 ${targetBranch} 上了（现在是${left}），这次没动它，重新验收即可。`);
   const before = await tipOf(repo, ref);
-  const result = await run();
-  const made = await tipOf(repo, "HEAD"); // 紧跟着读：squash 那一档 `git commit` 刚建出的提交
+  const source = await tipOf(repo, `${sourceRef}^{commit}`);
+  if (!before || !source) return fail(`读不到 ${before ? `来源 ${sourceRef}` : `目标分支 ${targetBranch}`} 指着的提交，这次没合并，重新验收即可。`);
+  let report: string | null = null;
+  const result = await run((stdout) => { report = stdout; });
+  const short = committedIn(report);
+  const made = short ? await tipOf(repo, `${short}^{commit}`) : null;
   const head = await headRef(repo);
   const where = describe(head);
   const now = await tipOf(repo, ref);
@@ -72,15 +87,17 @@ export async function mergeInUserCheckout(repo: string, names: Names, sourceRef:
   }
   if (result.method === "no_commit") {
     const staged = head === ref ? (await exec("git", ["-C", repo, "write-tree"]).catch(() => null))?.stdout.trim() : null;
-    if (head === ref && now === before && staged === result.stagedTree) return result;
+    // 暂存的那棵包含来源：挂在合并前的目标上临时做一个提交对象（不进任何分支）再按内容核。
+    const probe = staged ? (await exec("git", ["-C", repo, "commit-tree", staged, "-p", before, "-m", "navi accept probe"]).catch(() => null))?.stdout.trim() : null;
+    if (head === ref && now === before && staged === result.stagedTree && probe && await contentContains(repo, probe, source)) return result;
     return fail(`改动已经暂存，但合并的同时项目目录被切过（现在是${where}），暂存的改动${head === ref ? "已经不是这次合并记下的那一份" : "跟着到了那里、不在 " + targetBranch + " 的检出里"}，`
       + `所以这次不算验收通过。Navi 没有替你复位，在项目目录里 \`git status\` 核对后处理，再重新验收。`);
   }
   const landed = now !== null && (result.method === "squash"
-    ? !!made && made !== before && !!before && await ancestor(repo, before, made) && await ancestor(repo, made, now)
-    : result.method === "already_merged" ? await contentContains(repo, now, sourceRef) : await ancestor(repo, sourceRef, now));
+    ? !!made && made !== before && await ancestor(repo, made, now)
+    : result.method === "already_merged" ? await contentContains(repo, now, source) : await ancestor(repo, source, now));
   if (landed) return result;
   return fail(`没法确认这次合并落在了 ${targetBranch} 上：${targetBranch} 现在在 ${(now ?? "读不到").slice(0, 12)}，里面没有这次合并的结果，`
-    + `合并的同时项目目录多半被切换过（现在是${where}${made ? `，在 ${made.slice(0, 12)}` : ""}），这次合并可能落在了那里。所以这次不算验收通过。`
+    + `合并的同时项目目录多半被切换过（现在是${where}${made ? `；这次的提交是 ${made.slice(0, 12)}` : ""}），这次合并可能落在了那里。所以这次不算验收通过。`
     + "Navi 没有替你复位：要撤掉，在项目目录里用 `git reflog` 找到合并之前的位置、`git reset --hard` 回去；然后重新验收。");
 }
