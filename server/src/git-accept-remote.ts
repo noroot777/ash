@@ -22,6 +22,7 @@ import { expandHome, gitError, localBranchExists } from "./git.js";
 import { isAncestor } from "./git-accept.js";
 import { moveBranchGuarded, type GuardedMove } from "./git-guarded-move.js";
 import { gitNetInjection } from "./git-credentials.js";
+import { redactUrlsIn } from "./git-identity.js";
 
 /** 推到哪：远程名 + 远程上的分支名 + 推送地址（身份以地址为准）。 */
 export type PushTarget = { remote: string; remoteBranch: string; url: string };
@@ -33,11 +34,18 @@ export type RemoteSync =
 
 export type PushOutcome = AcceptPushOutcome;
 
+/** 网络命令里代表「确认过的那个推送地址」的远程名：地址本身走环境变量（下面 network），不进命令行。 */
+const BOUND_REMOTE = "navi-accept-push";
+
 // 网络命令一律不许等人输密码：服务端没有终端，等到的只会是超时。
-async function network(repo: string, projectId: string | null, args: string[], timeoutMs: number) {
+// 推送地址可能内嵌账号密码，**不进 argv**（server/CLAUDE.md「密钥绝不进 argv」）：用 GIT_CONFIG_COUNT 那组环境变量
+// 临时定义一个远程 BOUND_REMOTE 指向它，命令里只写这个名字。接在调用环境已有的那几条后面，不顶掉它们。
+async function network(repo: string, projectId: string | null, url: string, args: string[], timeoutMs: number) {
   const injection = await gitNetInjection(projectId);
+  const base = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "0", 10) || 0;
+  const bound = { GIT_CONFIG_COUNT: String(base + 1), [`GIT_CONFIG_KEY_${base}`]: `remote.${BOUND_REMOTE}.url`, [`GIT_CONFIG_VALUE_${base}`]: url };
   return exec("git", ["-C", repo, ...injection.args, ...args],
-    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", ...injection.env }, timeoutMs });
+    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", ...injection.env, ...bound }, timeoutMs });
 }
 const FETCH_TIMEOUT_MS = 90_000;
 const PUSH_TIMEOUT_MS = 180_000;
@@ -77,10 +85,6 @@ export async function resolvePushTarget(repoPath: string, branch: string): Promi
   return urls.length === 1 ? { remote, remoteBranch, url: urls[0]! } : null;
 }
 
-/** 两份推送目的地是不是同一处（确认时看到的 vs 执行时解析出来的）。 */
-export const samePushTarget = (a: PushTarget & { branch?: string }, b: PushTarget & { branch?: string }) =>
-  a.remote === b.remote && a.remoteBranch === b.remoteBranch && a.url === b.url && (a.branch ?? null) === (b.branch ?? null);
-
 /**
  * 从**推送地址**拉那一支的最新提交，返回它。拉取地址就是推送地址时落进 refs/remotes/<remote>/<branch>
  * （就是 `git fetch` 平常更新的那个）；两者不同时落进 Navi 自己的引用，不把另一个仓库的状态冒充成远程跟踪分支。
@@ -92,9 +96,9 @@ export async function fetchTip(repoPath: string, target: PushTarget, projectId: 
   const tracking = fetchUrl === target.url
     ? `refs/remotes/${target.remote}/${target.remoteBranch}` : `refs/navi/push-base/${target.remote}/${target.remoteBranch}`;
   try {
-    await network(repo, projectId, ["fetch", "--no-tags", "--quiet", target.url, `+refs/heads/${target.remoteBranch}:${tracking}`], FETCH_TIMEOUT_MS);
+    await network(repo, projectId, target.url, ["fetch", "--no-tags", "--quiet", BOUND_REMOTE, `+refs/heads/${target.remoteBranch}:${tracking}`], FETCH_TIMEOUT_MS);
   } catch (error) {
-    const message = gitError(error);
+    const message = redactUrlsIn(gitError(error));
     if (/couldn't find remote ref|could not find remote ref/i.test(message)) return { ok: true, tip: null };
     return { ok: false, message };
   }
@@ -140,7 +144,7 @@ export async function pushCommit(repoPath: string, commit: string, target: PushT
   const base = { remote: target.remote, remoteBranch: target.remoteBranch };
   try {
     // 推给确认过的那个地址，不推给「远程名此刻指着的地方」。
-    const { stdout } = await network(repo, projectId, ["push", "--porcelain", target.url, `${commit}:refs/heads/${target.remoteBranch}`], PUSH_TIMEOUT_MS);
+    const { stdout } = await network(repo, projectId, target.url, ["push", "--porcelain", BOUND_REMOTE, `${commit}:refs/heads/${target.remoteBranch}`], PUSH_TIMEOUT_MS);
     // --porcelain 每个 ref 一行，`=` 打头 = 远程本来就是这个提交。
     const upToDate = stdout.split("\n").some((line) => line.startsWith("=\t"));
     // 按地址推不会更新远程跟踪分支；拉取地址就是这个地址时补记一下，`git status` 才不会说本地领先。
@@ -154,7 +158,7 @@ export async function pushCommit(repoPath: string, commit: string, target: PushT
     const refs = String((error as { stdout?: string }).stdout ?? "");
     const rejected = /^!\t.*\[rejected\]|non-fast-forward|fetch first|\(stale info\)/im.test(`${refs}\n${gitError(error)}`);
     const refused = refs.split("\n").find((line) => line.startsWith("!\t"))?.split("\t").slice(2).join(" ").trim();
-    const message = refused ? `${refused}（${gitError(error)}）` : gitError(error);
+    const message = redactUrlsIn(refused ? `${refused}（${gitError(error)}）` : gitError(error));
     return { ...base, ok: false, reason: rejected ? "push_rejected" : "push_failed", message };
   }
 }

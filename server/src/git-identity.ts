@@ -86,6 +86,14 @@ export function redactRemoteUrl(raw: string): string {
   });
 }
 
+/** 一段文字（git 的报错、拼出来的说明）里出现的每一个带凭证的地址都按 redactRemoteUrl 抹掉。 */
+export function redactUrlsIn(text: string): string {
+  return text.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/@'"]*)@/g, (_all, scheme: string, auth: string) => {
+    const user = auth.split(":")[0] ?? "";
+    return auth.includes(":") ? `${scheme}${user}:***@` : `${scheme}${user}@`;
+  });
+}
+
 /** `git remote -v` 会把同一个远端报两遍（fetch/push），按名字去重，取第一条。 */
 export async function readRemotes(root: string): Promise<GitRemoteInfo[]> {
   let stdout = "";

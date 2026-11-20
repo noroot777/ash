@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -59,7 +59,7 @@ try {
   const { acceptTask } = await import("../src/task-accept.js");
   const { pushCommit, resolvePushTarget } = await import("../src/git-accept-remote.js");
   const { moveBranchGuarded } = await import("../src/git-guarded-move.js");
-  const { pushDestination } = await import("../src/task-accept-push.js");
+  const { pushDestinationView } = await import("../src/task-accept-push.js");
   const { parseChoices } = await import("../src/accept-gate-handoff.js");
   const { saveProjectGitCredential } = await import("../src/git-credentials.js");
   const { mergeTaskBranch } = await import("../src/git-accept.js");
@@ -223,10 +223,11 @@ try {
 
   // 8. 门禁跑完自动接着验收的那一次带的是冻结下来的目的地：存下来的读得回来，坏值、只有 true 都不当真。
   {
-    const dest = { branch: "main", remote: "origin", remoteBranch: "main", url: "/x.git" };
+    const dest = { branch: "main", remote: "origin", remoteBranch: "main", url: "/x.git", fingerprint: "fp" };
     assert.deepEqual(parseChoices(JSON.stringify({ by: "human", push: dest }))?.push, dest);
     assert.equal(parseChoices(JSON.stringify({ by: "human", push: true }))?.push, undefined, "续做只认冻结的目的地");
     assert.equal(parseChoices(JSON.stringify({ by: "human", push: { ...dest, url: 3 } }))?.push, undefined);
+    assert.equal(parseChoices(JSON.stringify({ by: "human", push: { ...dest, fingerprint: undefined } }))?.push, undefined, "没有指纹不认");
     assert.equal(parseChoices(JSON.stringify({ by: "human" }))?.push, undefined);
   }
 
@@ -236,8 +237,9 @@ try {
     const mirror = join(root, "dest-changed-mirror.git");
     execFileSync("git", ["clone", "-q", "--bare", remote, mirror]);
     const taskId = await seedTask(repo, "task.txt", "task\n");
-    const shown = (await pushDestination(await rowOf(taskId), await projectOf(taskId)))!;
-    assert.deepEqual(shown, { branch: "main", remote: "origin", remoteBranch: "main", url: remote });
+    const shown = (await pushDestinationView(await rowOf(taskId), await projectOf(taskId)))!;
+    assert.deepEqual({ ...shown, fingerprint: "" }, { branch: "main", remote: "origin", remoteBranch: "main", url: remote, fingerprint: "" });
+    assert.ok(shown.fingerprint);
     git(repo, "remote", "add", "mirror", mirror);
     git(repo, "config", "branch.main.pushRemote", "mirror");
     const before = git(repo, "rev-parse", "main");
@@ -611,7 +613,74 @@ try {
     assert.equal(git(remote, "rev-parse", "main"), theirs);
   }
 
-  console.log("accept push: 推到哪 / 先同步再合再推 / 不推不碰远程 / 冲突交回任务 / 分叉与推不了都先拒 / 被拒不强推 / 门禁续做带冻结目的地 / 目的地变了就拒 / 推送地址与拉取地址分离 / 推送期间远程又动（不冲突重来、冲突交回任务） / 推不上去本地不动 / 带护栏挪分支 / 挪没检出的分支先占住（三处） / 拉推带项目账号 / 推的是合出来的提交、本地被挪过只报落后 / 检出里有无关改动照样同步重合或交回冲突 / 远程已收下只差清理再点就收尾 / 本地同步不了照样按远程那一头交回冲突 全部通过");
+  // 22. 推送地址里内嵌账号密码（审查第 4 轮）：发给确认层的目的地只有脱敏地址和指纹；目的地变了的报错、任务记录里
+  //     都没有明文；指纹被改过就拒；真去拉推时密码不进命令行参数，拉不到的报错里也没有明文。
+  {
+    const { repo } = makeStage("cred-url");
+    const taskId = await seedTask(repo, "task.txt", "task\n");
+    git(repo, "remote", "set-url", "origin", "https://review-user:SECRET_OLD@127.0.0.1:1/r.git");
+    const view = (await pushDestinationView(await rowOf(taskId), await projectOf(taskId)))!;
+    assert.ok(!JSON.stringify(view).includes("SECRET_OLD"), JSON.stringify(view));
+    assert.equal(view.url, "https://review-user:***@127.0.0.1:1/r.git");
+    git(repo, "remote", "set-url", "origin", "https://review-user:SECRET_NEW@127.0.0.1:1/r.git");
+    const changed = await acceptTask(taskId, "human", { push: view });
+    assert.equal(changed.accepted, false);
+    if (!changed.accepted) {
+      assert.equal(changed.reason, "push_destination_changed", "只有密码变了也算目的地变了");
+      assert.ok(!/SECRET_(OLD|NEW)/.test(changed.error), changed.error);
+    }
+    const current = (await pushDestinationView(await rowOf(taskId), await projectOf(taskId)))!;
+    const forged = await acceptTask(taskId, "human", { push: { ...current, fingerprint: view.fingerprint } });
+    assert.equal(forged.accepted, false);
+    if (!forged.accepted) assert.equal(forged.reason, "push_destination_changed", "指纹对不上就拒");
+    // 照确认的目的地真去拉：127.0.0.1:1 连不上，报错里不带密码；git 的命令行参数里也不带。
+    const argvLog = join(root, "cred-argv.log");
+    const shim = join(root, "cred-shim");
+    mkdirSync(shim, { recursive: true });
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    writeFileSync(join(shim, "git"), ["#!/bin/sh", `printf '%s\\n' "$*" >> ${JSON.stringify(argvLog)}`, `exec "${realGit}" "$@"`, ""].join("\n"), { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${shim}:${savedPath}`;
+    let fetched;
+    try { fetched = await acceptTask(taskId, "human", { push: current }); } finally { process.env.PATH = savedPath; }
+    assert.equal(fetched.accepted, false);
+    if (!fetched.accepted) {
+      assert.equal(fetched.reason, "push_fetch_failed", fetched.error);
+      assert.ok(!fetched.error.includes("SECRET_NEW"), fetched.error);
+    }
+    const argv = readFileSync(argvLog, "utf8");
+    assert.ok(argv.includes("fetch"), "确实去拉了");
+    assert.ok(!argv.includes("SECRET_NEW"), "密码不进 git 的命令行参数");
+    const leaked = (dir: string): string[] => existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? leaked(join(dir, entry.name)) : readFileSync(join(dir, entry.name), "utf8").includes("SECRET_") ? [join(dir, entry.name)] : []) : [];
+    assert.deepEqual(leaked(process.env.NAVI_RUNS_DIR!), [], "任务记录里没有明文");
+  }
+
+  // 23. 推上去了但回执丢了（git push 报失败、远程其实已经收下）：按事实算推上去了，一按就验收完成（审查第 4 轮）。
+  {
+    const { repo, remote } = makeStage("ack-lost");
+    const taskId = await seedTask(repo, "task.txt", "task\n");
+    const source = git(wsOf.get(taskId)!, "rev-parse", "HEAD");
+    const shim = join(root, "ack-shim");
+    mkdirSync(shim, { recursive: true });
+    const mark = join(root, "ack-mark");
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    writeFileSync(join(shim, "git"), ["#!/bin/sh",
+      `for a in "$@"; do if [ "$a" = push ] && [ ! -e ${JSON.stringify(mark)} ]; then touch ${JSON.stringify(mark)}; "${realGit}" "$@" >/dev/null 2>&1; echo "fatal: the remote end hung up unexpectedly" >&2; exit 1; fi; done`,
+      `exec "${realGit}" "$@"`, ""].join("\n"), { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${shim}:${savedPath}`;
+    let result;
+    try { result = await acceptTask(taskId, "human", { push: true }); } finally { process.env.PATH = savedPath; }
+    assert.ok(existsSync(mark), "确实走到了那次报失败的推送");
+    assert.equal(result.accepted, true, result.accepted ? "" : `${result.reason}: ${result.error}`);
+    assert.equal(result.push?.ok, true);
+    assert.equal(git(remote, "rev-parse", "main"), source);
+    assert.equal(git(repo, "rev-parse", "main"), source, "本地也跟上了");
+    assert.equal(await stageOf(taskId), "accepted");
+  }
+
+  console.log("accept push: 推到哪 / 先同步再合再推 / 不推不碰远程 / 冲突交回任务 / 分叉与推不了都先拒 / 被拒不强推 / 门禁续做带冻结目的地 / 目的地变了就拒 / 推送地址与拉取地址分离 / 推送期间远程又动（不冲突重来、冲突交回任务） / 推不上去本地不动 / 带护栏挪分支 / 挪没检出的分支先占住（三处） / 拉推带项目账号 / 推的是合出来的提交、本地被挪过只报落后 / 检出里有无关改动照样同步重合或交回冲突 / 远程已收下只差清理再点就收尾 / 本地同步不了照样按远程那一头交回冲突 / 地址里的账号密码不出服务端 / 回执丢了按远程事实算推上去 全部通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

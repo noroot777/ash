@@ -12,7 +12,7 @@ import { mountAcceptGateRoutes } from "./accept-gate-routes.js";
 import { mountBranchPlanRoutes } from "./task-branch-routes.js";
 import { mountPendingMergeRoutes } from "./task-accept-pending.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
-import { pushDestination, pushUnavailable } from "./task-accept-push.js";
+import { pushDestinationView, pushUnavailable } from "./task-accept-push.js";
 import { rememberedPush } from "./accept-memory.js";
 import { actorOf } from "./auth/context.js";
 import { parsePushDestination, type AcceptPushView } from "@navi/shared/accept-gate";
@@ -35,7 +35,7 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     if (!task || !project) return c.json({ error: "not found" }, 404);
     const unavailable = pushUnavailable(task, project, "human", true);
     return c.json<AcceptPushView>({
-      destination: unavailable ? null : await pushDestination(task, project),
+      destination: unavailable ? null : await pushDestinationView(task, project),
       unavailable,
       remembered: await rememberedPush(actorOf(c), project.id),
     });

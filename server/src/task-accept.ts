@@ -177,11 +177,11 @@ async function acceptTaskUnlocked(
   const pushing = push.choice && gateProject ? await preparePush(task, gateProject, by, commitOverride, push.choice) : null;
   if (pushing?.failure) return pushing.failure;
   const pushPlan = pushing?.plan ?? null;
-  if (pushPlan) push.choice = pushPlan;
+  if (pushing?.destination) push.choice = pushing.destination;
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority, expectedResultVersion: expected.resultVersion,
-      expectedHumanGate: expected.humanGate, ...(pushPlan ? { push: pushPlan } : {}) },
+      expectedHumanGate: expected.humanGate, ...(pushing?.destination ? { push: pushing.destination } : {}) },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
     onBasis: basis => { gateBasis = basis; },

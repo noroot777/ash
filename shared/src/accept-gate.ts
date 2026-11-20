@@ -307,17 +307,19 @@ export type AcceptPushView = {
 };
 
 /**
- * 推到哪：本地目标分支 → 远程名/远程分支，身份以推送地址为准。确认层把它原样发回 /accept，服务端执行时
- * 解析出来的不是同一处就拒（server/src/task-accept-push.ts）。
+ * 推到哪：本地目标分支 → 远程名/远程分支，身份以推送地址为准。`url` 是**脱敏过**的推送地址，只给人看；
+ * `fingerprint` 是服务端对真实目的地算的指纹（server/src/accept-push-destination.ts）。确认层把它原样发回
+ * /accept，服务端按执行那一刻解析出的真实目的地重算，对不上就拒（server/src/task-accept-push.ts）。
  */
-export type AcceptPushDestination = { branch: string; remote: string; remoteBranch: string; url: string };
+export type AcceptPushDestination = { branch: string; remote: string; remoteBranch: string; url: string; fingerprint: string };
 
 /** 从不可信输入里认出一份推送目的地（请求体、存下来的门禁选择）；认不出返回 null。 */
 export function parsePushDestination(raw: unknown): AcceptPushDestination | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const { branch, remote, remoteBranch, url } = raw as Record<string, unknown>;
-  return [branch, remote, remoteBranch, url].every((v) => typeof v === "string" && v.length > 0)
-    ? { branch: branch as string, remote: remote as string, remoteBranch: remoteBranch as string, url: url as string } : null;
+  const { branch, remote, remoteBranch, url, fingerprint } = raw as Record<string, unknown>;
+  return [branch, remote, remoteBranch, url, fingerprint].every((v) => typeof v === "string" && v.length > 0)
+    ? { branch: branch as string, remote: remote as string, remoteBranch: remoteBranch as string, url: url as string,
+      fingerprint: fingerprint as string } : null;
 }
 
 /**
