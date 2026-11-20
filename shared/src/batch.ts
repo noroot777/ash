@@ -20,7 +20,7 @@ export interface BatchTaskInput {
   model?: string | null; // overrides defaults.model; null follows the resolved executor profile
   reasoningEffort?: string | null; // overrides defaults.reasoningEffort
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
-  worktreeBase?: string | null; // base ref when this task uses a worktree
+  worktreeBase?: string | null; // base ref when this task uses a worktree: local or remote branch (origin/foo), tag or commit
   mergeTargetBranch?: string | null;
   // 这一批都是顶层单任务，一律走自由工作流：起手式已停止新建，传 preset 或 workflowId
   // 会被整批打回（`createWorkflowMode`）。两个字段留着只为了能把旧调用方拒得明明白白。

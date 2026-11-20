@@ -1,13 +1,14 @@
 import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { mkdirSync, statSync, existsSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@navi/shared";
-import { taskBranchName, taskBranchNames } from "@navi/shared/task-branch";
+import { taskBranchName, taskBranchNames, type ProjectBranches } from "@navi/shared/task-branch";
 import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, expandHome, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
 import { removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
+import { listRemoteBranches, listRemotes, remoteBranchOf, remoteTrackingExists } from "./git-remote-branch.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -404,6 +405,10 @@ export async function staleBaseFallback(
   // `refs/heads/main` 这种写法下游会先 normalize 掉前缀再查，这里跟着剥，免得把一个其实
   // 好好的基线判成没了。
   if (await localBranchExists(repo, normalizeBranchName(requested))) return undefined;
+  // 远端分支（`origin/foo`）还在就不算失效：它当不了合并目标，但目标由 resolveTaskMergeTarget
+  // 换成本地同名分支去认；换成项目当前分支只会把成果悄悄合进 main。
+  const remote = await remoteBranchOf(repo, requested);
+  if (remote && await remoteTrackingExists(repo, remote.ref)) return undefined;
   return { requested, used: (await currentBranch(repo)) ?? "HEAD", ...workspace };
 }
 
@@ -596,23 +601,28 @@ export async function resolveTaskMergeTarget(
   requested: string | null | undefined,
 ): Promise<string | null> {
   const explicit = normalizeBranchName(requested ?? "");
-  return explicit || symbolicBranch(expandHome(repoPath));
+  if (!explicit) return symbolicBranch(expandHome(repoPath));
+  // 登记的是远端分支（从 `origin/foo` 开工的任务）：成果合进本地同名分支 `foo`，远端引用本身合不进去。
+  const remote = await remoteBranchOf(repoPath, explicit);
+  return remote ? remote.branch : explicit;
 }
 
 // List the project's local branch names (for the new-task form's base picker),
-// plus the current branch so the UI can default-select it. Quietly returns
-// empty when the path isn't a git repo — the picker degrades to a plain text
-// field client-side.
-export async function listBranches(repoPath: string): Promise<{ branches: string[]; current: string | null }> {
+// plus the current branch so the UI can default-select it. Remote branches go in
+// their own list (`origin/foo`), so callers that only want local ones keep working.
+// Quietly returns empty when the path isn't a git repo — the picker degrades to a
+// plain text field client-side.
+export async function listBranches(repoPath: string): Promise<ProjectBranches> {
   const p = expandHome(repoPath);
-  if (!(await isGitRepo(p))) return { branches: [], current: null };
+  if (!(await isGitRepo(p))) return { branches: [], remoteBranches: [], remotes: [], current: null };
   let branches: string[] = [];
   try {
     const { stdout } = await exec("git", ["-C", p, "for-each-ref", "--format=%(refname:short)", "refs/heads"]);
     branches = stdout.split("\n").map((s) => s.trim()).filter(Boolean);
   } catch { /* leave [] */ }
-  const current = await currentBranch(p);
-  return { branches, current };
+  const remotes = await listRemotes(p);
+  const [remoteBranches, current] = await Promise.all([listRemoteBranches(p, remotes), currentBranch(p)]);
+  return { branches, remoteBranches, remotes, current };
 }
 
 // 这个名字现在还能解析成一个提交吗？分支、tag、远程分支、裸 SHA 一视同仁 —— 问的就是

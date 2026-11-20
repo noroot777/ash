@@ -73,7 +73,10 @@ export default function NewTask() {
   const worktreeChoiceTouched = useRef(false);
   // Project the form is targeting determines which branch list we fetch.
   const project = projects.find((p) => p.id === projectId) ?? null;
-  const { base, branches, setBase } = useTaskBranches(projectId, useWorktree && !!project?.health.isRepo);
+  const { base, branches, remoteBranches, refreshRemotes, fetchingRemotes, fetchError, setBase } =
+    useTaskBranches(projectId, useWorktree && !!project?.health.isRepo);
+  // 从远端分支开工：成果合进本地同名分支，本地没有就由服务端照远端建一条跟踪它的。
+  const remoteBase = branches.includes(base) ? null : remoteBranches.find((b) => b.fullRef === base) ?? null;
   // 项目一确定（或换了一个），默认值就跟着换：它是项目的性质，不是这台手机或这个人的。
   useEffect(() => {
     if (!project) return;
@@ -461,6 +464,25 @@ export default function NewTask() {
                     <Pill key={b} label={b} active={b === base} onPress={() => setBase(b)} />
                   ))}
                 </View>
+                {remoteBranches.length || refreshRemotes || fetchingRemotes ? (
+                  <>
+                    <Text style={{ color: theme.faint, fontSize: 11 }}>远端</Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                      {remoteBranches.map((b) => (
+                        <Pill key={b.ref} label={b.ref} active={b.fullRef === base} onPress={() => setBase(b.fullRef)} />
+                      ))}
+                      {refreshRemotes || fetchingRemotes ? (
+                        <Pill label={fetchingRemotes ? "正在刷新…" : "刷新远端分支"} active={false} onPress={refreshRemotes ?? (() => {})} />
+                      ) : null}
+                    </View>
+                    {fetchError ? <Text style={{ color: theme.danger, fontSize: 11 }}>{fetchError}</Text> : null}
+                  </>
+                ) : null}
+                {remoteBase ? (
+                  <Text style={{ color: theme.faint, fontSize: 11 }}>
+                    合入 {remoteBase.branch}{branches.includes(remoteBase.branch) ? "" : `（新建，跟踪 ${remoteBase.ref}）`}
+                  </Text>
+                ) : null}
                 <Text style={{ color: theme.faint, fontSize: 11 }}>
                   将拉一个新分支 navi/&lt;id8&gt;，跑在 .worktrees/&lt;id&gt;/
                 </Text>

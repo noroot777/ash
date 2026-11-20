@@ -3,8 +3,8 @@
 // 跑：npm -w web run test:reply-call
 import assert from "node:assert/strict";
 import {
-  callChoices, callCommandVerb, dispatchBaseOptions, initialVerb, nextRounds, parseCallCommand, parseDispatchCommand,
-  rememberedTarget, SELF_ASK_HELD, SELF_DISCUSS_HELD, toggleDiscussPerson,
+  callChoices, callCommandVerb, dispatchBaseChoices, dispatchBaseOptions, initialVerb, nextRounds, parseCallCommand, parseDispatchCommand,
+  rememberedTarget, resolveDispatchBase, SELF_ASK_HELD, SELF_DISCUSS_HELD, toggleDiscussPerson,
 } from "../src/task-detail/replyCall.ts";
 import { dispatchNotes } from "../src/task-detail/dispatchNotes.ts";
 import { interleaveAsides } from "../src/task-detail/feedAsides.ts";
@@ -88,6 +88,22 @@ assert.deepEqual(dispatchBaseOptions({ ...source, id: "t-gone-01" }, context), [
 assert.deepEqual(dispatchBaseOptions(source, { ...context, isRepo: false }), [], "不是仓库：没有开工起点可选");
 assert.deepEqual(dispatchBaseOptions(source, { ...context, worktreeDefault: false }), [], "新任务不开 worktree：没有开工起点可选");
 assert.deepEqual(dispatchBaseOptions(source, null), [], "还没读到");
+
+// —— 从远端分支开工：分本地 / 远端两组，远端发完整引用；挑过的远端分支刷新后不在了不能顶成第一项 ——
+const vanish = { ref: "origin/vanish", fullRef: "refs/remotes/origin/vanish", remote: "origin", branch: "vanish" };
+const withRemote = { ...context, remotes: ["origin"], remoteBranches: [vanish] };
+const choices = dispatchBaseChoices(source, withRemote);
+assert.deepEqual(choices.map((option) => [option.id, option.group, option.worktreeBase]), [
+  ["here", "本地", "navi/t-source"], ["trunk", "本地", "main"], ["remote:origin/vanish", "远端", "refs/remotes/origin/vanish"],
+], "远端分支发完整引用，同名 tag 顶替不了");
+assert.deepEqual(dispatchBaseChoices(source, { ...context, remotes: ["origin"], remoteBranches: [] }).map((option) => option.group), ["本地", "本地"],
+  "有远端、还没拉到分支：照样分组，留出刷新的入口");
+assert.deepEqual(resolveDispatchBase(choices, "remote:origin/vanish"), { option: choices[2], stale: null });
+const afterPrune = dispatchBaseChoices(source, { ...withRemote, remoteBranches: [] });
+assert.deepEqual(resolveDispatchBase(afterPrune, "remote:origin/vanish"), { option: null, stale: "origin/vanish" },
+  "挑过的远端分支刷新后没了：报失效，不悄悄换成第一项");
+assert.deepEqual(resolveDispatchBase(dispatchBaseOptions({ ...source, mergeTargetBranch: "gone" }, context), "trunk").option?.id, "here",
+  "缺省的那两种不在候选里还是取第一项（那是没挑过）");
 
 // —— 会话里那一句 ——
 const task = (id, extra) => ({ id, title: id, agentType: "codex", createdAt: "2026-11-15T02:00:00.000Z", dispatchedBy: null, creationOrigin: { kind: "user" }, ...extra });
