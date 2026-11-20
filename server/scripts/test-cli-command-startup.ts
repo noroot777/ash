@@ -68,6 +68,9 @@ try {
     ["codex", "/usage 看一下用量", /\/usage 不接受参数/],
     ["codex", "/goal 完成测试 --budget 0", /目标预算必须是正整数/],
     ["claude", "/goal 完成测试 --budget 100", /不支持 token 预算参数/],
+    // claude 的裸 /plan、/plan off 只是计划模式开关：当任务正文起跑就成了一次可写的普通执行
+    ["claude", "/plan", /只是计划模式开关/],
+    ["claude", "/plan off", /只是计划模式开关/],
   ] as const) {
     const before = (await db.select().from(tasks)).length;
     const response = await create(body, agentType);
@@ -83,6 +86,12 @@ try {
   assert.match((await invalidBatch.json()).error, /\/status 不接受参数/);
   assert.equal((await db.select().from(tasks)).length, 0);
   assert.equal((await db.select().from(queueItems)).length, 0);
+  const toggleBatch = await request("/groups/group/tasks/batch", "POST", {
+    defaults: { agentType: "claude", useWorktree: false }, tasks: [{ title: "开关", body: "/plan" }],
+  });
+  assert.equal(toggleBatch.status, 400);
+  assert.match((await toggleBatch.json()).error, /只是计划模式开关/);
+  assert.equal((await db.select().from(tasks)).length, 0);
   for (const [agentType, body] of [
     ["claude", "/compact 保留重点"], ["claude", "/review 自定义技能"], ["claude", "/plan 怎么做这个功能"],
     ["codex", "/review 看看这次改动"], ["codex", "/goal 完成测试 --budget 100"],
@@ -104,6 +113,14 @@ try {
   await runFailed("legacy", /\/usage 不接受参数/);
   await db.insert(tasks).values({ id: "legacy-claude", projectId: "project", title: "Claude 老任务", body: "/status 看一下进度", agentType: "claude", status: "backlog", createdAt: at, updatedAt: at });
   await runFailed("legacy-claude", /Navi 通道不支持 \/status/);
+  // 改正文绕过创建校验、或校验之前建的老任务：起跑那一关照样拦下，不起智能体
+  const toggled = await (await create("普通正文", "claude")).json();
+  assert.equal((await request(`/tasks/${toggled.id}`, "PATCH", { body: "/plan" })).status, 200);
+  await runFailed(toggled.id, /只是计划模式开关/);
+  assert.equal((await row(toggled.id)).cliState ?? null, null, "被拦下的开关也不能把任务记成计划模式");
+  await db.insert(tasks).values({ id: "legacy-plan-off", projectId: "project", title: "Claude 老任务", body: "/plan off", agentType: "claude", status: "backlog", createdAt: at, updatedAt: at });
+  await runFailed("legacy-plan-off", /只是计划模式开关/);
+  assert.equal((await row("legacy-plan-off")).cliState ?? null, null);
   assert.equal((await db.select().from(sessions)).every((session) => !session.agentPid && !session.cliSessionId), true);
   console.log("native creation errors return 400; edited/legacy startup failures persist and remain visible after reload: passed");
 } finally {

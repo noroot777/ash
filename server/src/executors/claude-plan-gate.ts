@@ -142,6 +142,10 @@ type Verdict = "none" | "pending" | "failed" | "ok";
  * 追加一条 streaming，卡片与实施预检都只认最新一条 complete）；结清且可交时按盘上正文出一张新卡。
  * CLI 会把盘上的旧正文自己补进 ExitPlanMode 的 `input.plan`（2.1.283 实测），所以入参有正文不等于能交。
  * 哪个文件是计划文件以 CLI 在 ExitPlanMode 里报的 `planFilePath` 为准，没报（老版本）才用目录判。
+ *
+ * 接管重放不读盘：重放的是当年的历史，盘上此刻的正文是后来的事（服务停着时 CLI 可能接着改了）。
+ * 当年发过哪些卡、正文是什么，以会话记录里真落下的计划事件为准（`beginReplay`）；重放完把判出来的
+ * 结果跟记录里最新那张卡对账（`endReplay`），差在哪就补哪条事件。
  */
 export class ClaudePlanGate {
   private seq = 0;
@@ -159,8 +163,11 @@ export class ClaudePlanGate {
   private readonly realPlansDir: string | null;
   /** init 报的权限模式不对：进程正在被停掉，这期间到达的请求一律拒。 */
   private halted = false;
+  /** 接管重放中：会话记录里当年发出过的卡（id → 合并后的正文与是否完整）；null = 记录读不到，只能读盘。 */
+  private replay: { cards: Map<string, { text: string; live: boolean }> | null; last?: { id: string; live: boolean } } | null = null;
 
-  constructor(private readonly plansDir: string, private readonly write: ControlLine) {
+  /** `recorded`：接管时这一回合会话记录里已落下的计划事件（按先后）；新起跑不给，接管时读不到也不给。 */
+  constructor(private readonly plansDir: string, private readonly write: ControlLine, private readonly recorded?: readonly AgentEvent[]) {
     this.realPlansDir = realPath(resolve(plansDir));
   }
 
@@ -193,6 +200,48 @@ export class ClaudePlanGate {
     return { verdict, last: { ...last, id } };
   }
 
+  /** 接管重放开始。 */
+  beginReplay(): void {
+    const recorded = this.recorded;
+    if (!recorded) { this.replay = { cards: null }; return; }
+    const cards = new Map<string, { text: string; live: boolean }>();
+    let last: { id: string; live: boolean } | undefined;
+    for (const event of recorded) {
+      if (event.kind !== "plan") continue;
+      const text = event.delta ? (cards.get(event.id)?.text ?? "") + event.text : event.text;
+      const live = event.status === "complete" && !!text.trim();
+      cards.set(event.id, { text, live });
+      last = { id: event.id, live };
+    }
+    this.replay = { cards, last };
+  }
+
+  /**
+   * 接管重放结束：把「会话记录里最新那张卡的样子」当成已发出的状态，跟重放判出来的结果对账，返回要
+   * 补发的事件。重放读坏了（`failed`）就证明不了那张完整卡还有效，退回草稿。
+   */
+  endReplay(failed: boolean): AgentEvent[] {
+    const replay = this.replay;
+    if (!replay) return [];
+    if (replay.cards) this.shown = replay.last;
+    if (failed) {
+      this.replay = null;
+      if (!this.shown?.live) return [];
+      this.shown = { id: this.shown.id, live: false };
+      return [{ kind: "plan", id: this.shown.id, text: "", status: "streaming", delta: true }];
+    }
+    const events = this.reduce();
+    this.replay = null;
+    return events;
+  }
+
+  /** 这张卡的正文：重放时取会话记录里当年那份（记录读不到才读盘），直播时读盘上此刻的。 */
+  private textOf(id: string, path: string | null): string {
+    const cards = this.replay?.cards;
+    if (cards) return cards.get(id)?.text.trim() ?? "";
+    return path ? readText(path) : "";
+  }
+
   /** 交计划这一刻能交哪份正文；不能交时给出原因。`given` 是 CLI 随 ExitPlanMode 带来的正文。 */
   private current(planPath: string | null, given: unknown): { text: string; path: string | null } | { refuse: string } {
     const { verdict, last } = this.settle(planPath, -1);
@@ -210,8 +259,8 @@ export class ClaudePlanGate {
     const { verdict, last } = this.settle(latest.path, latest.seq);
     if (verdict === "ok" && last) {
       const path = latest.path ?? last.path;
-      const text = readText(path);
-      // 交出之后改成了：按盘上正文重新交一份，它之后的修改再从它算起。
+      const text = this.textOf(`plan:${last.id}`, path);
+      // 交出之后改成了：按正文重新交一份，它之后的修改再从它算起。
       if (text) this.submissions.push({ id: `plan:${last.id}`, seq: ++this.seq, path, text });
     }
     const current = this.submissions.at(-1)!;
@@ -258,7 +307,8 @@ export class ClaudePlanGate {
       // 交没交成以 CLI 收到的那句回执为准：跟权限请求那一刻判的不一致（重放时盘上正文变了）就按它改历史。
       const said = resultText(block.content);
       const at = this.submissions.findIndex((entry) => entry.id === `plan:${id}`);
-      if (said.includes(SUBMITTED) && at < 0) this.submissions.push({ id: `plan:${id}`, seq: exit.seq, path: exit.path, text: exit.text || readText(exit.path ?? "") });
+      const text = this.replay?.cards ? this.textOf(`plan:${id}`, exit.path) : exit.text || this.textOf(`plan:${id}`, exit.path);
+      if (said.includes(SUBMITTED) && at < 0 && text) this.submissions.push({ id: `plan:${id}`, seq: exit.seq, path: exit.path, text });
       if (REFUSALS.some((refusal) => said.includes(refusal)) && at >= 0) this.submissions.splice(at, 1);
       this.submissions.sort((a, b) => a.seq - b.seq);
     }
@@ -286,12 +336,15 @@ export class ClaudePlanGate {
     const deny = (message: string) => reply(response(requestId, { behavior: "deny", message }));
     if (this.halted) { deny("计划模式没有生效，本回合已停止。"); return []; }
     if (tool === "ExitPlanMode") {
-      const plan = this.current(absolutePath(input.planFilePath), input.plan);
+      const toolUseId = String(request.tool_use_id ?? requestId);
+      const id = `plan:${toolUseId}`;
+      const cards = this.replay?.cards;
+      // 重放里交没交成、交的是哪份正文，以会话记录为准（判定当年做过了，盘上此刻的正文不算数）。
+      const plan = cards ? (cards.has(id) ? { text: cards.get(id)!.text, path: absolutePath(input.planFilePath) } : { refuse: "" })
+        : this.current(absolutePath(input.planFilePath), input.plan);
       if ("refuse" in plan) { deny(plan.refuse); return []; }
       deny(SUBMITTED);
       this.spoken = "";
-      const toolUseId = String(request.tool_use_id ?? requestId);
-      const id = `plan:${toolUseId}`;
       if (!this.submissions.some((entry) => entry.id === id)) {
         this.submissions.push({ id, seq: this.exits.get(toolUseId)?.seq ?? ++this.seq, path: plan.path, text: plan.text });
         this.submissions.sort((a, b) => a.seq - b.seq);

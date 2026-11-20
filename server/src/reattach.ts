@@ -19,6 +19,7 @@ import {
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { cleanupAfterRun } from "./executors/kill.js";
+import { plansDirOfCommandLine } from "./executors/claude-plan-gate.js";
 import { RUNS_DIR } from "./paths.js";
 import { consumeSingleRun } from "./single-run.js";
 import { isSameProcess } from "./proc.js";
@@ -29,6 +30,7 @@ import { sessionCliConfigDir } from "./auth/run-env.js";
 import { closeSessionTurns, markTurnActive } from "./session-turns.js";
 import { reconcileInterruptedTask } from "./task-reconcile.js";
 import { sessionLaunchCompact } from "./usage.js";
+import { recordedPlanEvents } from "./task-plan.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -176,6 +178,8 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         // 接回的这个进程起跑时**最终生效**的压缩配置:起跑时随 commandLine 一起落下的那份,
         // 不是此刻解析出来的执行器(上面 resolveExecutorFor 拿的是**当前**配置)。
         compact: sessionLaunchCompact(sess),
+        // claude 计划回合：会话记录里这一回合已经发过的计划卡，重放对账用（claude-plan-gate.ts）。
+        planEvents: sess.agentType === "claude" && plansDirOfCommandLine(sess.commandLine ?? "") ? await recordedPlanEvents(task.id, sess.id, sess.turnStartedAt ?? sess.startedAt) : undefined,
         images: markdownImageAccounting(
           task.id,
           sess.id,

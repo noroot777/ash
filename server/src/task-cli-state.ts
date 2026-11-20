@@ -1,6 +1,6 @@
 import { desc, eq, sql, type SQL } from "drizzle-orm";
 import type { AgentType } from "@navi/shared";
-import { cliStateScopeKey, goalRequest, PLAN_AGENTS, hasCliGoalHold, isGoalExecution, isPlanImplementation, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@navi/shared/cli-commands";
+import { cliStateScopeKey, goalRequest, PLAN_AGENTS, hasCliGoalHold, isGoalExecution, isPlanImplementation, isPlanToggle, PLAN_TOGGLE_NOT_A_RUN, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import type { RunHandle } from "./executors/types.js";
@@ -74,6 +74,8 @@ async function resetCliPlanModes(taskId: string): Promise<void> {
 
 export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agentType: AgentType, text: string, profileId: string | null, ownerUserId: string | null, options: { resetPlan?: boolean; preserveState?: boolean } = {}) {
   const cliCommand = validateCliCommand(agentType, text);
+  // 走到这里的都要起智能体进程；开关落进来就是普通执行顶着计划模式的名义（plan-turn.ts）。
+  if (isPlanToggle(agentType, cliCommand)) throw new Error(PLAN_TOGGLE_NOT_A_RUN);
   const previousState = readCliState(task.cliState, agentType, profileId, ownerUserId);
   const cliState = { ...previousState, profileId, ownerUserId };
   if (cliCommand?.name === "goal" && cliCommand.args === "--scopes") throw new Error("查看目标作用域请在任务对话框即时发送 /goal --scopes");

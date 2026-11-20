@@ -1,3 +1,4 @@
+import type { AgentEvent } from "@navi/shared";
 import { readFile } from "node:fs/promises";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
@@ -29,4 +30,14 @@ export async function assertPlanReady(taskId: string, agentType: string, executo
     throw new Error("没有已完成的计划，请先生成计划");
   }
   if (planId && latest.event.id !== planId) throw new Error("计划已有新版本，请刷新后确认最新计划");
+}
+
+/**
+ * 一条会话这一回合里已经落进会话记录的计划事件（按先后）。接管 claude 计划回合时拿它当「当年发过哪些
+ * 卡」的事实（claude-plan-gate.ts 的重放对账）；记录不存在 = 一张都没发过，读不了就不给（undefined）。
+ */
+export async function recordedPlanEvents(taskId: string, sessionId: string, turnStartedAt: string): Promise<AgentEvent[] | undefined> {
+  const raw = await readFile(sessionTracePath(taskId, sessionId), "utf8").catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? "" : null);
+  if (raw === null) return undefined;
+  return parseSessionTraceLines(raw).entries.flatMap((entry) => entry.turnStartedAt === turnStartedAt && entry.event.kind === "plan" ? [entry.event] : []);
 }

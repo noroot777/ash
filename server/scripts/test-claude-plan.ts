@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AgentEvent } from "@navi/shared";
-import { cliCommandCatalog, parseCliCommand, validateCliCommand } from "@navi/shared/cli-commands";
+import { cliCommandCatalog, isPlanToggle, parseCliCommand, validateCliCommand } from "@navi/shared/cli-commands";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -44,6 +44,12 @@ try {
   assert.deepEqual(planTurnInput("claude", slash("/plan 怎么拆"), "/plan 怎么拆"), { question: true, text: "怎么拆" });
   assert.deepEqual(planTurnInput("claude", slash("/plan implement plan:x"), "/plan implement plan:x"), { question: false, text: PLAN_IMPLEMENT_TEXT });
   assert.deepEqual(planTurnInput("claude", slash("/plan off"), "/plan off"), { question: false, text: "/plan off" });
+  assert.deepEqual(planTurnInput("claude", slash("/plan"), "/plan"), { question: false, text: "/plan" }, "裸 /plan 是开关，不是带问题的计划回合");
+  assert.equal(isPlanToggle("claude", slash("/plan")), true);
+  assert.equal(isPlanToggle("claude", slash("/plan off")), true);
+  assert.equal(isPlanToggle("claude", slash("/plan 怎么拆")), false);
+  assert.equal(isPlanToggle("claude", slash("/plan implement plan:x")), false);
+  assert.equal(isPlanToggle("codex", parseCliCommand("codex", "/plan")), false, "codex 的 /plan 是原生命令，照旧透传");
   assert.deepEqual(planTurnInput("codex", parseCliCommand("codex", "/plan 怎么拆"), "/plan 怎么拆"), { question: false, text: "/plan 怎么拆" });
   assert.deepEqual(planTurnInput("claude", null, "普通回复"), { question: false, text: "普通回复" });
   assert.match(PLANNING_TURN({ freshContext: false, verifying: false }, "问题", "claude"), /ExitPlanMode/);
@@ -192,8 +198,13 @@ try {
     "交后改失败": { steps: [...opening, toolUse("w2", "Edit", { file_path: planFile }), res("exit", true, submittedReply), res("w2", true)], final: { status: "streaming", text: "# OLD" } },
     "交后改成": { steps: [...opening, res("exit", true, submittedReply), toolUse("w2", "Write", { file_path: planFile }), { fs: "# NEW" }, res("w2")], final: { status: "complete", text: "# NEW" } },
     "交后并发": { steps: [...opening, toolUse("w2", "Edit", { file_path: planFile }), toolUse("w3", "Edit", { file_path: planFile }), res("exit", true, submittedReply), { fs: "# B" }, res("w3"), { fs: "# A 最后落盘" }, res("w2")], final: { status: "complete", text: "# A 最后落盘" } },
+    // 交后改成、新卡发出去了，之后又写空：重启前发的那张 plan:w2 也得跟着失效
+    "交后改成再写空": { steps: [...opening, res("exit", true, submittedReply), toolUse("w2", "Write", { file_path: planFile }), { fs: "# NEW" }, res("w2"),
+      toolUse("w3", "Write", { file_path: planFile }), { fs: "" }, res("w3")], final: { status: "streaming", text: "# NEW" } },
   };
-  const finalCard = (steps: Step[], cut: number) => {
+  // 真实的接管：重启前直播发出的计划事件落在会话记录里，接管时交给新的闸（recorded）；`offline` = 服务停着
+  // 的时候 CLI 接着跑，后段的磁盘变化在重放之前就已经发生了（重放读盘会读到「后来」的正文）。
+  const finalCard = (steps: Step[], cut: number, offline: boolean) => {
     const persisted: AgentEvent[] = [];
     const feed = (g: InstanceType<typeof ClaudePlanGate>, step: Step, replaying: boolean): AgentEvent[] => {
       if (step.fs !== undefined) { if (!replaying) writeFileSync(planFile, step.fs); return []; }
@@ -203,9 +214,12 @@ try {
     };
     const before = new ClaudePlanGate(plansDir, () => {});
     for (const step of steps.slice(0, cut)) persisted.push(...feed(before, step, false));
-    const after = new ClaudePlanGate(plansDir, () => {});
+    if (offline) for (const step of steps.slice(cut)) if (step.fs !== undefined) writeFileSync(planFile, step.fs);
+    const after = new ClaudePlanGate(plansDir, () => {}, [...persisted]);
+    after.beginReplay();
     for (const step of steps.slice(0, cut)) feed(after, step, true);
-    for (const step of steps.slice(cut)) persisted.push(...feed(after, step, false));
+    persisted.push(...after.endReplay(false));
+    for (const step of steps.slice(cut)) if (!(offline && step.fs !== undefined)) persisted.push(...feed(after, step, false));
     const plans = persisted.filter((event): event is Extract<AgentEvent, { kind: "plan" }> => event.kind === "plan");
     const latest = plans.at(-1)!;
     const text = plans.filter((event) => event.id === latest.id).reduce((acc, event) => event.delta ? acc + event.text : event.text, "");
@@ -213,10 +227,41 @@ try {
   };
   for (const [name, { steps, final }] of Object.entries(scenarios)) {
     for (let cut = 0; cut <= steps.length; cut++) {
-      assert.deepEqual(finalCard(steps, cut), final, `${name}：在第 ${cut} 步重启接管`);
+      assert.deepEqual(finalCard(steps, cut, false), final, `${name}：在第 ${cut} 步重启接管`);
+      // 停机期间的积压输出接管后才直播处理，那时盘上已是最终状态：草稿上留哪版旧正文说不准，能不能实施必须一样
+      const offline = finalCard(steps, cut, true);
+      assert.deepEqual(final.status === "complete" ? offline : offline.status, final.status === "complete" ? final : final.status, `${name}：在第 ${cut} 步重启、停机期间 CLI 接着改了盘`);
     }
   }
+  // 审查给的那条：交后改成、plan:w2 已发；停机期间改成空。重放读盘的话 w2 读到空、认不出那张卡，它就永远不失效。
+  {
+    const steps = scenarios["交后改成再写空"].steps;
+    const cut = steps.findIndex((step) => step.r?.tool_use_id === "w2") + 1;
+    const persisted: AgentEvent[] = [];
+    writeFileSync(planFile, "# OLD");
+    const before = new ClaudePlanGate(plansDir, () => {});
+    for (const step of steps.slice(1, cut)) {
+      if (step.fs !== undefined) writeFileSync(planFile, step.fs);
+      else persisted.push(...(step.a ? before.noteAssistant(step.a) : step.r ? before.noteToolResult(step.r) : before.request(step.c)));
+    }
+    assert.equal((persisted.at(-1) as any).id, "plan:w2");
+    writeFileSync(planFile, "");
+    const after = new ClaudePlanGate(plansDir, () => {}, persisted);
+    after.beginReplay();
+    for (const step of steps.slice(1, cut)) if (step.fs === undefined) step.a ? after.noteAssistant(step.a) : step.r ? after.noteToolResult(step.r) : after.request(step.c, true);
+    assert.deepEqual(after.endReplay(false), [], "重放跟记录一致：不补发");
+    assert.deepEqual(after.noteAssistant(steps[cut].a), v.draft("plan:w2"), "停机期间那次写入一回放就让 plan:w2 失效");
+    assert.deepEqual(after.noteToolResult(steps.at(-1)!.r), [], "写成空：停在草稿");
+    // 重放读坏了：证明不了记录里那张完整卡还有效，退回草稿
+    const broken = new ClaudePlanGate(plansDir, () => {}, persisted);
+    broken.beginReplay();
+    assert.deepEqual(broken.endReplay(true), v.draft("plan:w2"));
+    const none = new ClaudePlanGate(plansDir, () => {}, []);
+    none.beginReplay();
+    assert.deepEqual(none.endReplay(true), [], "记录里没有完整卡：不用退");
+  }
   // ⑥ 接管重放：交计划的那次只能从回执认出来，之后的修改照样重交
+  writeFileSync(planFile, "# 计划");
   v = versioned();
   v.g.noteAssistant([{ type: "tool_use", id: "x6", name: "ExitPlanMode", input: { planFilePath: planFile } }]);
   v.g.noteToolResult({ type: "tool_result", tool_use_id: "x6", is_error: true, content: "计划已提交给用户审阅。不要再调用任何工具，用一两句话说明计划要点后结束本回合；用户确认后会让你开始实施。" });

@@ -1,5 +1,5 @@
 import type { AgentType } from "@navi/shared";
-import { isGoalExecution, isPlanImplementation, validateCliCommand } from "@navi/shared/cli-commands";
+import { isGoalExecution, isPlanImplementation, isPlanToggle, validateCliCommand } from "@navi/shared/cli-commands";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { ownerIdOf, actorOf } from "./auth/context.js";
@@ -37,7 +37,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     await assertPlanReady(task.id, agentType, state.profileId ?? null, userId, command.args.split(/\s+/)[1]);
     return null;
   }
-  if (agentType === "claude" && command.name === "plan" && (!command.args || command.args === "off")) {
+  if (isPlanToggle(agentType, command)) {
     if (deferred) throw new Error("Claude 的 /plan 开关当场生效，不支持稍后发送，请直接发送");
     const text = await setCliPlanMode(task, agentType, body.agent ? body.executorId ?? null : task.executorId, userId, command.args !== "off");
     const recorded = await appendTaskTimeline(task.id, noticeLine({ kind: "command.output", command: command.text }, `${command.text}\n${text}`), { agentType });

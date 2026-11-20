@@ -552,6 +552,7 @@ async function* claudeStreamEvents(
   if (consumed) {
     replaying = true;
     background.quiet = true;
+    resident?.planGate?.beginReplay();
     try {
       resident?.restore();
       if (consumed.offset > 0) for (const ev of consumedEvents(consumed)) handle(ev);
@@ -567,6 +568,8 @@ async function* claudeStreamEvents(
       capturing = false;
       background.quiet = false;
     }
+    // 计划卡跟会话记录对账：重放判出来的跟记录里最新那张不一致就补发（claude-plan-gate.ts）。
+    for (const event of resident?.planGate?.endReplay(recoveryUnknown) ?? []) push(event);
     // 读不出来时,单飞这一路就地开始「等后台」:不知道会不会还有下一个回合结尾,不能等到它来了
     // 才承担期限 —— CLI 若正闲着等自己的后台,那个结尾可能永远不来(自由审查 ZbBv9az0Qgtf R1-A)。
     // 说明当场给用户;期限到了按核实不了结算。真在回合中途,它一开口就开了新回合,这份等待随即

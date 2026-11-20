@@ -22,7 +22,7 @@ import { parseTaskCreationOrigin } from "@navi/shared/task-origin";
 import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
 import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@navi/shared/dispatch-plan";
 import { parseDispatchSuggestions, parseWithdrawnSuggestions, publicSuggestions } from "@navi/shared/dispatch-suggestion";
-import { CliCommandValidationError, PLAN_AGENTS, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
+import { CliCommandValidationError, PLAN_AGENTS, PLAN_TOGGLE_NOT_A_RUN, isPlanToggle, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
 import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { announceCreateReviews, reservationRows, resolveCreateReviews, type CreateReviewSlot } from "./review-on-create.js";
 
@@ -356,6 +356,7 @@ export async function createTasks(
     const agentType = row.agentType ?? "claude";
     const command = validateCliCommand(agentType, row.body ?? "");
     if (command && row.mode && row.mode !== "single" && !(agentType === "claude" && command.name === "compact")) throw new CliCommandValidationError("原生命令仅支持普通单任务");
+    if (isPlanToggle(agentType, command)) throw new CliCommandValidationError(PLAN_TOGGLE_NOT_A_RUN);
   }
   // Creation defaults belong here so every ordinary path (HTTP single, batch /
   // chain, duet handoff, future clients) gets the same behavior. Explicit
