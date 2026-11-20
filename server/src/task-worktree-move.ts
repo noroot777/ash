@@ -212,17 +212,21 @@ export async function carrySessions(taskId: string, sources: SessionSource[], to
   // 窄的来源排前面：嵌在项目目录里的工作区，按工作区映射，不按项目目录。
   const ordered = [...sources].sort((a, b) => physicalPath(b.dir).length - physicalPath(a.dir).length);
   for (const row of rows) {
-    const cwd = row.cwd ? mappedPath(expandHome(row.cwd), ordered, to) : null;
+    // 会话实际在哪跑：`cwd`，老行没有就是 `worktreePath`（接回命令也是这么兜的，task-session-routes.ts）。
+    // 会话行改不改指、会话文件搬不搬，都按这一份算，不能一边兜底一边不兜。
+    const dir = row.cwd ? expandHome(row.cwd) : row.worktreePath ? expandHome(row.worktreePath) : null;
+    if (!dir) continue;
+    const next = mappedPath(dir, ordered, to);
     const root = row.worktreePath ? mappedPath(expandHome(row.worktreePath), ordered, to) : null;
-    if (!cwd && !root) continue;
-    // 工作目录不在这次搬家里、只有 `worktreePath` 在的：工作目录照旧（那是别处），只把工作区改指新目录。
-    const nextCwd = cwd ?? (row.cwd ? expandHome(row.cwd) : to);
-    move.rows.push({ id: row.id, cwd: nextCwd });
-    if (row.agentType !== "claude" || !row.cliSessionId || !cwd) continue;
+    if (!next && !root) continue;
+    // 实际工作目录不在这次搬家里、只有 `worktreePath` 在的：工作目录照旧（那是别处，会话文件也还在原处），
+    // 只把工作区改指新目录。
+    move.rows.push({ id: row.id, cwd: next ?? dir });
+    if (row.agentType !== "claude" || !row.cliSessionId || !next) continue;
     const configDir = await sessionCliConfigDir(row, "claude");
-    const source = spellings(expandHome(row.cwd!))
-      .map((dir) => claudeSessionFilePath(dir, row.cliSessionId!, configDir)).find((path) => existsSync(path));
-    const target = claudeSessionFilePath(physicalPath(nextCwd), row.cliSessionId, configDir);
+    const source = spellings(dir)
+      .map((spelling) => claudeSessionFilePath(spelling, row.cliSessionId!, configDir)).find((path) => existsSync(path));
+    const target = claudeSessionFilePath(physicalPath(next), row.cliSessionId, configDir);
     if (!source) {
       move.notes.push(`会话 ${row.id} 的 claude 会话文件没找到，下一回合接不上原来的对话`);
       continue;

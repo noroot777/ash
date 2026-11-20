@@ -317,6 +317,15 @@ try {
     const source = claudeSessionFilePath(realpathSync(wt), "cli-cwd", claudeConfig);
     mkdirSync(dirname(source), { recursive: true });
     writeFileSync(source, `{"sessionId":"cli-cwd"}\n`);
+    // 老会话行没记 `cwd`、只有 `worktreePath`：它实际就在那里跑，会话文件和旁挂目录同样要跟过去。
+    await db.insert(sessions).values({
+      id: "sess-legacy", taskId: id, role: "single", agentType: "claude", executor: "claude@test", cwd: null, worktreePath: wt, branch: "feat/cwd",
+      cliSessionId: "cli-legacy", cliConfigDir: claudeConfig, startedAt: at, endedAt: at, exitStatus: 0,
+    });
+    const legacy = claudeSessionFilePath(realpathSync(wt), "cli-legacy", claudeConfig);
+    writeFileSync(legacy, `{"sessionId":"cli-legacy"}\n`);
+    mkdirSync(join(dirname(legacy), "cli-legacy"));
+    writeFileSync(join(dirname(legacy), "cli-legacy", "agent.jsonl"), "sidecar");
 
     const found = await foreign(id);
     assert.equal(found.worktrees.length, 1, "会话行记在那个目录上就是证据");
@@ -330,7 +339,12 @@ try {
     assert.equal(moved.branch, worktreeBranchName(id));
     assert.equal(readFileSync(claudeSessionFilePath(realpathSync(path), "cli-cwd", claudeConfig), "utf8"), `{"sessionId":"cli-cwd"}\n`,
       "会话文件从被收编目录的位置搬到新目录的位置");
-    console.log("✓ a session already running in the adopted worktree is detected and carried along");
+    const legacyMoved = (await db.select().from(sessions).where(eq(sessions.id, "sess-legacy")))[0]!;
+    assert.equal(legacyMoved.cwd, path, "没记 cwd 的老行按 worktreePath 改指新目录");
+    const legacyTarget = claudeSessionFilePath(realpathSync(path), "cli-legacy", claudeConfig);
+    assert.equal(readFileSync(legacyTarget, "utf8"), `{"sessionId":"cli-legacy"}\n`, "老行的会话文件按 worktreePath 那个位置搬过去");
+    assert.equal(readFileSync(join(dirname(legacyTarget), "cli-legacy", "agent.jsonl"), "utf8"), "sidecar", "旁挂目录一起带上");
+    console.log("✓ a session already running in the adopted worktree is detected and carried along, legacy rows without cwd included");
   }
 
   {
