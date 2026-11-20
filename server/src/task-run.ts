@@ -18,6 +18,7 @@ import { afterSettlement } from "./settle-status.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
 import { forgetHeldTrigger } from "./free-review-reservations.js";
 import { taskWorkspace } from "./task-workspace.js";
+import { applyPendingWorktreeMove, takeWorkspaceNote } from "./task-worktree-move.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
@@ -46,6 +47,7 @@ import { acknowledgeTaskStart } from "./task-start-receipt.js";
 import { AUTONOMY, backgroundWaitFor, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
+import { remoteStartNote } from "./remote-start-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
@@ -176,6 +178,9 @@ async function runHeldTask(
 
     // Ordinary tasks resolve exactly as before. Team workers additionally inherit
     // their lead's shared workspace unless they explicitly request another worktree.
+    // 登记过「改到独立工作区」的，全新一轮也先办掉；新会话本来就两手空空，那句「目录换了」不用再说。
+    await applyPendingWorktreeMove(task);
+    await takeWorkspaceNote(taskId);
     const ws = await taskWorkspace(task, project.repoPath);
     baseFallback = ws.baseFallback;
     // 这一轮到底留下了什么:只服务「没交卷」时的通知措辞(turn-output.ts)。fresh run
@@ -332,6 +337,12 @@ async function runHeldTask(
       const noted = writeTurn(out, { t: "system", agent: agentType, text: baseNote }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, ...noted, event: { kind: "system", text: baseNote, at: turnStart } });
       baseFallbackTold = true;
+    }
+    const remoteNote = await remoteStartNote(task, ws, project.repoPath);
+    if (remoteNote) {
+      const notice = { kind: "receipt" } as const;
+      const noted = writeTurn(out, { t: "system", agent: agentType, text: remoteNote, notice }, turnStart);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, ...noted, event: { kind: "system", text: remoteNote, at: turnStart, notice } });
     }
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,

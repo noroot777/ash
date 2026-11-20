@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     guard adoptLegacyIdentity() else { return }
     AppUpdater.shared.start()
     NSApp.mainMenu = MainMenu.build()
+    registerTextInputDefaults()
     let controller = BrowserWindowController()
     windowController = controller
     UpdateGate.shared.onHoldChanged = { [weak controller] note in
@@ -22,6 +23,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     pendingLinks = []
     do { try LoginService.reconcileAtLaunch() } catch { NSAlert(error: error).runModal() }
     DispatchQueue.global(qos: .utility).async { DownloadTransaction.reclaimAbandoned() }
+  }
+
+  /// WKWebView 的输入框默认跟着系统的「自动纠正拼写」「智能引号和破折号」：打一个英文词就弹「Dfsdf ×」的更正气泡，
+  /// `"` 变成 `“`、`--` 变成 `—`，交给 CLI 的提示词和命令就坏了。WebKit 只在这几个键没设时才回退系统设置
+  /// （UIProcess/mac/TextCheckerMac.mm），这里在第一个 WKWebView 之前注册成关。注册域不落盘：
+  /// 用 `defaults write` 显式设过的值仍然优先。用户自己配的「文本替换」不动。
+  private func registerTextInputDefaults() {
+    UserDefaults.standard.register(defaults: [
+      "WebAutomaticSpellingCorrectionEnabled": false,
+      "WebAutomaticQuoteSubstitutionEnabled": false,
+      "WebAutomaticDashSubstitutionEnabled": false,
+    ])
   }
 
   /// 网页数据没接过来就不建窗口（建了就再也接不回来，见 LegacyIdentity.webDataSettled）：说清卡在哪，让用户选。

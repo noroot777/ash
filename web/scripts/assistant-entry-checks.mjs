@@ -126,15 +126,16 @@ export async function checkAssistantEntry(page, fixtureUrl) {
     assert.ok(geometry.scrollWidth <= geometry.clientWidth, `${width}px footer scroll overflow: ${JSON.stringify(geometry)}`);
     assert.ok(geometry.children.every(child => child.left >= geometry.left - 0.2 && child.right <= geometry.right + 0.2),
       `${width}px footer child overflow: ${JSON.stringify(geometry)}`);
-    // 右边四颗只画图标，名字在提示里；F 不再是底部的一句提示，挪成了「找」那一行最右的一颗键
+    // 右边四颗只画图标，名字在提示里；F 不再是底部的一句提示，挪成了顶上工具行最左的一颗键
     const icons = ["聊天", "Navi 助手", /^配色：/u, "收起侧边栏"].map(name => geometry.children.find(child =>
       typeof name === "string" ? child.label === name : name.test(child.label ?? "")));
     assert.ok(icons.every(Boolean), `${width}px footer keeps chat, assistant, theme and collapse: ${JSON.stringify(geometry)}`);
     assert.ok(icons.every(icon => icon.text === "" && Math.abs(icon.width - 28) < 0.5), `${width}px footer icons carry no text: ${JSON.stringify(icons)}`);
     assert.equal(geometry.children.some(child => /任务列表/u.test(child.label ?? "")), false, `${width}px footer no longer holds the F hint`);
   }
-  const findRowKey = page.locator(".workspace-sidebar-find > button").last();
-  assert.equal(await findRowKey.getAttribute("aria-label"), "打开任务列表", "F becomes the rightmost key of the filter row");
+  const toolKeys = await page.locator(".workspace-sidebar-tools > button").evaluateAll(buttons =>
+    buttons.map(button => button.getAttribute("aria-label") ?? button.textContent.trim()));
+  assert.deepEqual(toolKeys, ["打开任务列表", "搜索", "随手记", "新建任务"], "tool row reads F, search, notes, then new task");
 
   await setSidebarWidth(220);
   await page.keyboard.press("f");
@@ -315,6 +316,26 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.doesNotMatch(page.url(), /[?&]view=chat(?:&|$)/u);
   assert.equal(await objective.inputValue(), "从聊天来源转来的随手记");
   await createAndCheckNoteLink(chatNoteId);
+
+  // 手机宽度：铺开没有意义，工具行最左那一格从 F 换成筛选菜单。状态筛选从前靠铺开态的胶囊，
+  // 铺开键在这里又不画 —— 少了这颗菜单，支持筛选的项目在手机上就一个筛选入口都摸不到。
+  await page.setViewportSize({ width: 375, height: 760 });
+  await page.goto(fixtureUrl);
+  const narrowTools = page.locator(".workspace-sidebar-tools");
+  await narrowTools.waitFor();
+  assert.equal(await narrowTools.getByRole("button", { name: "打开任务列表" }).count(), 0, "phone layout has no spread toggle");
+  await narrowTools.getByRole("button", { name: "按状态筛选" }).click();
+  const filterMenu = page.getByRole("menu", { name: "按状态筛选任务" });
+  await filterMenu.waitFor();
+  assert.equal(await filterMenu.getByRole("menuitemradio").count(), 6, "phone filter menu lists all six filters");
+  await filterMenu.getByRole("menuitemradio", { name: /^需要你处理/u }).click();
+  assert.equal(await filterMenu.count(), 0, "picking a filter closes the menu");
+  const scopeLine = page.locator(".workspace-filter-scope");
+  await scopeLine.waitFor();
+  assert.match(await scopeLine.innerText(), /只看\s*需要你处理/u, "the picked filter is written above the list");
+  await scopeLine.getByRole("button", { name: "取消筛选，看全部任务" }).click();
+  assert.equal(await scopeLine.count(), 0, "clearing the filter removes the scope line");
+  await page.setViewportSize({ width: 1200, height: 820 });
 
   await page.goto(fixtureUrl);
   await page.locator(".task-composer-panel.is-home").waitFor();

@@ -192,10 +192,18 @@ export async function testPreviewWorkspaceDom() {
       </script></body></html>`) }));
     await page.goto(`http://127.0.0.1:${address.port}/__preview-test`);
     const button = (name) => page.getByRole("button", { name, exact: true });
+    // 刷新后工作区在原地重开；下面这段流程照旧在放大态里走。
+    const reloadEnlarged = async () => { await page.reload(); await button("放大预览").click(); await button("还原预览").waitFor(); };
     await button("打开预览指正").waitFor();
     await checkPreviewPalette(page);
     await button("打开预览指正").click();
-    assert.deepEqual(await page.locator(".preview-workspace").boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the entry opens the expanded workspace directly, before preview launch");
+    // 入口打开在原地（真实页面里是右侧那一格），不再一打开就铺满窗口；放大是之后的一下。
+    const inPlace = await page.locator(".preview-workspace").boundingBox();
+    assert(inPlace.x >= 220 && inPlace.y >= 80 && inPlace.x + inPlace.width <= 1120 && inPlace.y + inPlace.height <= 840 && inPlace.width > 880,
+      `the entry opens the workspace in place, before preview launch: ${JSON.stringify(inPlace)}`);
+    assert.equal(await page.locator(".preview-workspace.is-expanded").count(), 0, "opening does not cover the whole window");
+    await button("放大预览").click();
+    assert.deepEqual(await page.locator(".preview-workspace").boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "enlarging covers the window");
     await checkExpandedPreviewShortcuts(page);
     await button("按已保存配置启动").waitFor().catch((error) => { throw new Error(`${error.message}\n${errors.join("\n")}`); });
     assert.equal(await button("启动 静态页面").isVisible(), false, "project configuration hides alternatives by default");
@@ -310,7 +318,7 @@ export async function testPreviewWorkspaceDom() {
     assert.equal(record.messageId, "sent");
     assert.equal(record.revision, savedRevision, "sending an equivalent draft does not save a redundant revision");
     assert.equal(await button("删除标注 #1").isDisabled(), true);
-    await page.reload();
+    await reloadEnlarged();
     await button("删除标注 #1").waitFor();
     assert.equal(await button("删除标注 #1").isDisabled(), true, "restored sent batches remain immutable");
     assert.equal(record.batch.items.length, 1);
@@ -327,7 +335,7 @@ export async function testPreviewWorkspaceDom() {
       record = { batch: oldBatch, revision: 1, state: "saved", messageId: null, error: null, savedAt: "2026-09-11" };
       savedRecords.clear(); savedRecords.set(oldBatch.id, record);
       await page.evaluate((batch) => localStorage.setItem("navi.annotation-batch.fixture", JSON.stringify(batch)), oldBatch);
-      await page.reload();
+      await reloadEnlarged();
       await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
       if (scenario === "service") {
         await waitForTools();
@@ -346,7 +354,7 @@ export async function testPreviewWorkspaceDom() {
         assert.match(await button(name).getAttribute("aria-describedby"), /.+/, "locked tools refer to the visible reason");
       }
       if (scenario === "restart") {
-        await page.reload();
+        await reloadEnlarged();
         await mismatchNotice.waitFor();
         assert.match(await mismatchNotice.textContent(), reason, "restored mismatched drafts keep a persistent explanation");
       } else {
@@ -387,7 +395,7 @@ export async function testPreviewWorkspaceDom() {
 
     await page.evaluate(() => localStorage.removeItem("navi.annotation-batch.fixture"));
     record = null; savedRecords.clear(); realRuntime = true;
-    await page.reload();
+    await reloadEnlarged();
     await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
     await button("矩形").click();
     await page.waitForFunction(() => [...document.querySelectorAll('.preview-workspace-tools button')]
@@ -501,7 +509,7 @@ export async function testPreviewWorkspaceDom() {
     await button('还原预览').click();
     await button('关闭预览指正').click();
     await button('打开预览指正').click();
-    assert.equal(await button('还原预览').isVisible(), true, 'reopening starts expanded even after the previous workspace was restored');
+    assert.equal(await button('放大预览').isVisible(), true, 'reopening starts in place, not enlarged');
     assert.equal(await page.getByText("未能连接页面标注", { exact: false }).count(), 0);
     assert.deepEqual(errors, []);
     console.log("preview workspace DOM: launch/layout, undo/delete/locks, evidence, restart/service mismatch recovery and saved history, real runtime drawing, focused iframe Escape/defaultPrevented in browse and annotate modes passed");

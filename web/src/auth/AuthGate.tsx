@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthState } from "@navi/shared";
 import { authApi } from "../lib/authApi.ts";
+import { setResourceRoots } from "../lib/resourceRoots.ts";
 import { ApiError } from "../lib/apiClient.ts";
 import { bindTaskReadsOwner } from "../lib/taskReadSync.ts";
 import { FirstRunWizard } from "../onboarding/FirstRunWizard.tsx";
@@ -43,7 +44,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      setState(await authApi.state());
+      const next = await authApi.state();
+      // 工作台只在拿到状态之后才渲染,所以附件/证据的同步判定一开画就认得本实例的目录。
+      setResourceRoots(next.resourceRoots);
+      setState(next);
       setError(null);
       return true;
     } catch (e) {

@@ -430,4 +430,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN dispatch_withdrawals TEXT",
   // 默认审查者(见 db/schema.ts 同名列)。存量行 0 = 谁都不是默认,派出去的任务照旧不带预约。
   "ALTER TABLE reviewer_profiles ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0",
+  // 改到独立工作区：登记着的那一次 / 下一回合要告诉智能体的话(见 db/schema.ts 同名列)。存量行 NULL = 都没有。
+  "ALTER TABLE tasks ADD COLUMN worktree_move_request TEXT",
+  "ALTER TABLE tasks ADD COLUMN workspace_note TEXT",
 ];

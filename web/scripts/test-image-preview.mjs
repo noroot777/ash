@@ -135,7 +135,7 @@ try {
   assert.match(await attachment.getAttribute("href"), /\/api\/uploads\/AbCdEfGh1234-image-preview-one\.png$/);
   // 文件名藏在 ?name= 里的证据接口 URL（从证据面板复制图片地址再贴回来就是这个形状）。
   assert.equal(await served.getAttribute("aria-haspopup"), "dialog", "证据接口 URL 也认得出是图片");
-  assert.equal(await report.getAttribute("aria-haspopup"), null, "报告 .md 仍走站内报告弹层，不是图片预览");
+  assert.equal(await report.getAttribute("aria-haspopup"), null, "报告 .md 走左侧读全文那一屉，不是图片预览");
   assert.equal(await freeReport.getAttribute("target"), null, "自由审查报告不再另开页面");
   assert.match(
     await freeReport.getAttribute("href"),
@@ -195,15 +195,22 @@ try {
 
   const pageCount = page.context().pages().length;
   await freeReport.click();
-  const reportDialog = page.getByRole("dialog", { name: "report.md" });
-  await reportDialog.waitFor();
+  const reportDrawer = page.getByRole("complementary", { name: "审查报告：report.md" });
+  await reportDrawer.waitFor();
   assert.equal(page.context().pages().length, pageCount, "自由审查报告必须留在当前页面内打开");
-  // 正文是弹窗打开之后才 fetch 回来的,先等它到货再断言 —— `count()` 不自动等,
+  assert.equal(await page.locator('[role="dialog"][aria-modal="true"]').count(), 0, "报告不再是盖住整页的模态层");
+  // 正文是抽屉打开之后才 fetch 回来的,先等它到货再断言 —— `count()` 不自动等,
   // 直接断言是在跟网络赛跑(本机也有三四成跑输)。
-  const reportHeading = reportDialog.getByRole("heading", { name: "自由审查报告" });
+  const reportHeading = reportDrawer.getByRole("heading", { name: "自由审查报告" });
   await reportHeading.waitFor();
   assert.equal(await reportHeading.count(), 1, "Markdown 报告应按正文渲染");
-  assert.equal(await reportDialog.getByText("报告已在应用内打开。").count(), 1);
+  assert.equal(await reportDrawer.getByText("报告已在应用内打开。").count(), 1);
+  await reportDrawer.getByRole("button", { name: "关闭审查报告" }).click();
+  await reportDrawer.waitFor({ state: "detached" });
+
+  const orphan = page.locator("#no-drawer").getByRole("link", { name: "孤立报告", exact: true });
+  assert.equal(await orphan.getAttribute("target"), "_blank", "没有左侧抽屉的地方，报告照普通链接另开标签页");
+  assert.match(await orphan.getAttribute("href"), /\/api\/tasks\/tsk1234\/review\/file\?round=1&name=report\.md$/);
 
   console.log("image preview group test passed");
 } finally {

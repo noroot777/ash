@@ -3,7 +3,7 @@ import { Clock, FolderOpen, Images, Info, MagnifyingGlass, NotePencil, Pulse, Ro
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "../task-detail/NativeWorkInspector.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { ArtifactsInspector } from "../files/ArtifactsInspector.tsx";
-import type { ScmDiffTarget } from "../scm/scmModel.ts";
+import type { FileView } from "../files/useFileView.ts";
 import { retireInspectorTab, type InspectorDescriptor } from "../inspector/index.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import type { Notify } from "../lib/notify.ts";
@@ -32,19 +32,17 @@ export interface TeamInspectorContext {
   onOpenTask: (taskId: string) => void;
   indicatorForTask: IndicatorForTask;
   workerLiveLines: Record<string, string>;
-  /** 文件树该高亮哪一行：摊的是全文、diff 还是文件夹，对它来说是同一个路径。 */
-  activeFilePath: string | null;
-  /** 第二个参数是「这一串」：同组生成物、同一层文件，中间栏据此能翻上一张/下一张。 */
-  onOpenFile: (path: string, reel?: readonly string[]) => void;
-  /** 在中间栏摊开文件夹详情（里面有多少东西、能不能删）。 */
-  onOpenFolder: (path: string) => void;
-  onOpenDiff: (target: ScmDiffTarget) => void;
+  /** 「查看」那一格摊着什么（files/fileViewTab.tsx）：文件、生成物两格从这里打开、读高亮。 */
+  fileView: FileView;
   notify: Notify;
 }
 
 // 团队模式的默认面板里不放子智能体：调度台自己那点工具调用远不如「谁跟谁在并行」有用，
 // 时间轴顶上它的位置。这一摘是一次性的历史迁移（当时它还是无条件默认开）；现在的开合统一
 // 走「用过才浮现」——调度台真派过子智能体才上条，否则从「+」或 I S 打开。
+/** 「查看」那一格插在这几格后面。 */
+export const TEAM_FILE_TABS = ["files", "artifacts"] as const;
+
 retireInspectorTab("team-subagents-default", /^navi:inspector:team:/, "subagents");
 
 export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>[] = [
@@ -124,10 +122,10 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     render: (context) => (
       <FileTreeInspector
         taskId={context.task.id}
-        activePath={context.activeFilePath}
-        onOpenFile={context.onOpenFile}
-        onOpenFolder={context.onOpenFolder}
-        onOpenDiff={context.onOpenDiff}
+        activePath={context.fileView.activePath}
+        onOpenFile={context.fileView.openFile}
+        onOpenFolder={context.fileView.openFolder}
+        onOpenDiff={context.fileView.openDiff}
         notify={context.notify}
       />
     ),
@@ -141,8 +139,8 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     render: (context) => (
       <ArtifactsInspector
         taskId={context.task.id}
-        activePath={context.activeFilePath}
-        onOpenFile={context.onOpenFile}
+        activePath={context.fileView.activePath}
+        onOpenFile={context.fileView.openFile}
         notify={context.notify}
       />
     ),

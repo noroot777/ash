@@ -2,7 +2,7 @@
 // 前端要先问「现在是什么模式、我登没登」才知道该渲染哪一屏。
 import type { Context, Hono } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
-import type { AuthState, InviteInfo, UserRole } from "@navi/shared";
+import type { AuthState, InviteInfo, ResourceRoots, UserRole } from "@navi/shared";
 import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@navi/shared/multiuser";
 import { hostname } from "node:os";
 import { actorOf, authErrorResponse, isAccountHolder, requireAdmin } from "./context.js";
@@ -35,6 +35,7 @@ import {
 } from "./store.js";
 import { DESKTOP_APP, LOCAL_ONLY, LOCAL_ONLY_REFUSAL, SINGLE_ONLY, SINGLE_ONLY_REFUSAL } from "../local-only.js";
 import { needsOnboarding } from "../onboarding.js";
+import { RUNS_DIR, RUNS_FALLBACK_DIR, UPLOADS_DIR } from "../paths.js";
 import { connectionOf, deviceByToken, enrollDevice, peerAddress, remoteKeyMatches, removeDevice } from "./remote-access.js";
 import { mountRemoteAccessRoutes } from "./remote-access-routes.js";
 import { deviceName } from "./remote-pairing.js";
@@ -57,6 +58,11 @@ function issueSessionCookie(c: Context, token: string): void {
   });
 }
 
+const RESOURCE_ROOTS: ResourceRoots = {
+  uploads: UPLOADS_DIR,
+  runs: RUNS_FALLBACK_DIR ? [RUNS_DIR, RUNS_FALLBACK_DIR] : [RUNS_DIR],
+};
+
 async function stateFor(c: Context): Promise<AuthState> {
   const config = await instanceConfig();
   const actor = actorOf(c);
@@ -74,6 +80,7 @@ async function stateFor(c: Context): Promise<AuthState> {
       needsOnboarding: locked ? false : await needsOnboarding(actor),
       localOnly: LOCAL_ONLY,
       desktopApp: DESKTOP_APP,
+      resourceRoots: locked ? null : RESOURCE_ROOTS,
     };
   }
   const user = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
@@ -91,6 +98,7 @@ async function stateFor(c: Context): Promise<AuthState> {
     needsOnboarding: user ? await needsOnboarding(actor) : false,
     localOnly: LOCAL_ONLY,
     desktopApp: DESKTOP_APP,
+    resourceRoots: user ? RESOURCE_ROOTS : null,
   };
 }
 

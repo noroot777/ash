@@ -1,6 +1,7 @@
 const labels: Record<string, string> = {
   not_git_repo: "项目不是 Git 仓库",
   target_unresolved: "无法确定目标分支",
+  no_own_workspace: "任务没有独立工作区，改动直接落在项目目录里",
   source_branch_missing: "任务分支不存在或已清理",
   target_branch_missing: "合入目标分支不在本地",
   no_merge_base: "任务分支与合入目标没有共同基点",
@@ -17,7 +18,7 @@ const labels: Record<string, string> = {
  * 任务分支已经清理不算：验收之后 diff 按冻结的区间读，那时是没有清单可列，不是读失败。
  */
 export function commitListFailure(commits: { total: number | null; reason?: string | null }, diffAvailable: boolean): string | null {
-  if (commits.total !== null || !diffAvailable || !commits.reason || commits.reason === "source_branch_missing") return null;
+  if (commits.total !== null || !diffAvailable || !commits.reason || commits.reason === "source_branch_missing" || commits.reason === "no_own_workspace") return null;
   return commits.reason;
 }
 

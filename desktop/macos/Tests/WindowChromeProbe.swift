@@ -39,7 +39,7 @@ func runWindowChromeProbe() -> Never {
   let window = ProbeWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 320),
     styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-  let webView = WKWebView(frame: window.contentLayoutRect)
+  let webView = NaviWebView(frame: window.contentLayoutRect)
   webView.autoresizingMask = [.width, .height]
   window.contentView = webView
   let chrome = WindowChrome(window: window, webView: webView)
@@ -194,6 +194,67 @@ func runWindowChromeProbe() -> Never {
     chrome.overlay && window.styleMask.contains(.fullSizeContentView) && js("document.title") == "opted" && titlebarNow() == titlebar
   }
 
+  probeFirstClickInBackgroundWindow(app, spin: spin)
+
   print("PASS: window chrome")
   exit(0)
+}
+
+/// 不是当前窗口的那扇窗：第一下点击 AppKit 要先问落点的视图收不收，不收就只拿去激活窗口。
+private final class BackgroundProbeWindow: NSWindow {
+  override var isKeyWindow: Bool { false }
+  override var isMainWindow: Bool { false }
+  override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+}
+
+/// 后台窗口里的第一下点击直接落到页面和首启的选项上，不用再点一次。
+private func probeFirstClickInBackgroundWindow(_ app: NSApplication, spin: (TimeInterval) -> Void) {
+  let window = BackgroundProbeWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+    styleMask: [.titled, .closable], backing: .buffered, defer: false)
+  let webView = NaviWebView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+  window.contentView = webView
+  window.setFrameOrigin(NSPoint(x: -24000, y: -20000))
+  window.orderFrontRegardless()
+  require(!window.isKeyWindow, "background probe window is not the key window")
+
+  var result: String?
+  func js(_ source: String) -> String {
+    result = nil
+    webView.evaluateJavaScript(source) { value, error in
+      result = error.map { "ERROR: \($0)" } ?? String(describing: value ?? "nil")
+    }
+    let deadline = Date().addingTimeInterval(10)
+    while result == nil && Date() < deadline { spin(0.01) }
+    return result ?? "TIMEOUT"
+  }
+  webView.loadHTMLString("""
+    <button id="first" style="position: fixed; inset: 0;">first</button>
+    <script>window.seen = []; document.addEventListener("click", (e) => window.seen.push(e.target.id));</script>
+    """, baseURL: nil)
+  let loaded = Date().addingTimeInterval(5)
+  while js("document.readyState") != "complete" && Date() < loaded { spin(0.02) }
+
+  let point = NSPoint(x: 160, y: 100)
+  for (number, type) in [(1, NSEvent.EventType.leftMouseDown), (2, .leftMouseUp)] {
+    let event = NSEvent.mouseEvent(
+      with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber, context: nil, eventNumber: 9000 + number, clickCount: 1,
+      pressure: type == .leftMouseUp ? 0 : 1)!
+    if type == .leftMouseDown {
+      require(webView.acceptsFirstMouse(for: event), "the page takes the first click of a background window")
+    }
+    app.sendEvent(event)
+    spin(0.05)
+  }
+  let deadline = Date().addingTimeInterval(5)
+  while js("window.seen.join(',')") != "first" && Date() < deadline { spin(0.02) }
+  require(js("window.seen.join(',')") == "first", "the first click in a background window reaches the page button (\(js("window.seen.join(',')")))")
+
+  let choice = ChoiceButton(title: "choice", detail: "", textWidth: 200)
+  let down = NSEvent.mouseEvent(
+    with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+    windowNumber: window.windowNumber, context: nil, eventNumber: 9100, clickCount: 1, pressure: 1)!
+  require(choice.acceptsFirstMouse(for: down), "first-run choices take the first click of a background window")
+  window.orderOut(nil)
 }

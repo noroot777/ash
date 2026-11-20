@@ -216,6 +216,10 @@ export const tasks = sqliteTable("tasks", {
   worktreeBaseBranch: text("worktree_base_branch"),
   mergeTargetBranch: text("merge_target_branch"),
   baseTaskId: text("base_task_id"),
+  // 「改到独立工作区」：登记着还没办的那一次（json shared WorktreeMoveRequest），和下一回合开头要
+  // 告诉智能体的那句「工作目录换了 / 没换成」。两列的读写都在 task-worktree-move.ts。
+  worktreeMoveRequest: text("worktree_move_request"),
+  workspaceNote: text("workspace_note"),
   acceptedSourceCommit: text("accepted_source_commit"),
   /**
    * **这一次验收**拿什么当凭据放的行:`passed` / `skipped` / `unset`(语义见

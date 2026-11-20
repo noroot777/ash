@@ -3,6 +3,8 @@ import type { AgentExecutorProfile, AgentType, DiscussionRounds } from "@navi/sh
 import { sameExecutor } from "@navi/shared/executors";
 import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { api } from "../lib/api.ts";
+import { readProjectGitRun } from "../workspace/projectGitRuns.ts";
+import { useProjectGit } from "../workspace/useProjectGit.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import {
   initialVerb, isSelfCall, readDiscussRounds, rememberCall, rememberDiscussRounds, rememberedTarget, toggleDiscussPerson,
@@ -134,9 +136,13 @@ export type DispatchBaseLoad =
   | { status: "ready"; value: BaseContext; error: null }
   | { status: "failed"; value: null; error: string };
 
-export function useDispatchBaseContext(projectId: string, active: boolean): DispatchBaseLoad & { retry: () => void } {
+export type DispatchRemotes = { refresh: () => void; fetching: boolean; error: string | null };
+
+export function useDispatchBaseContext(projectId: string, active: boolean): DispatchBaseLoad & { retry: () => void; remotes: DispatchRemotes | undefined } {
   type Loaded = { projectId: string; value: BaseContext; error: null } | { projectId: string; value: null; error: string };
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [fetchError, setFetchError] = useState<{ projectId: string; error: string } | null>(null);
+  const git = useProjectGit(active ? projectId : null, false);
   const load = useCallback(async (): Promise<Loaded> => {
     try {
       const [health, branches, projects] = await Promise.all([api.projectHealth(projectId), api.projectBranches(projectId), api.projects()]);
@@ -154,7 +160,38 @@ export function useDispatchBaseContext(projectId: string, active: boolean): Disp
     void load().then((next) => { if (alive) setLoaded(next); });
     return () => { alive = false; };
   }, [active, key, load]);
-  const retry = useCallback(() => setLoaded(null), []);
-  if (!key) return { status: "loading", value: null, error: null, retry };
-  return key.value ? { status: "ready", value: key.value, error: null, retry } : { status: "failed", value: null, error: key.error!, retry };
+  // 每趟刷新一个代次：结果只认最新那一趟（同一项目连刷两次、切走又切回，早先那趟迟到也作废）。
+  const refreshSeq = useRef(0);
+  const [refreshing, setRefreshing] = useState<{ projectId: string; seq: number } | null>(null);
+  const retry = useCallback(() => { refreshSeq.current += 1; setLoaded(null); }, []);
+  // 刷新远端分支：走侧栏分支胶囊同一本账（fetch --prune），拉取加重读算一趟，成了就在原地换上新清单，不闪回「读取中」。
+  const refresh = useCallback(() => {
+    const seq = ++refreshSeq.current;
+    const latest = () => seq === refreshSeq.current;
+    setRefreshing({ projectId, seq });
+    void git.run("fetch", () => api.projectGitFetch(projectId)).then(async (ok) => {
+      try {
+        if (!ok) {
+          if (latest()) setFetchError({ projectId, error: readProjectGitRun(projectId).error ?? "刷新远端分支失败" });
+          return;
+        }
+        // 拉到了、重读清单却没成：旧清单留着，但得说出来，不能当刷新成功。
+        const next = await load();
+        if (!latest()) return;
+        if (next.value) { setFetchError(null); setLoaded(next); }
+        else setFetchError({ projectId, error: `远端已经拉到，但重读分支清单失败：${next.error}` });
+      } finally {
+        setRefreshing((now) => (now?.seq === seq ? null : now));
+      }
+    });
+  }, [git, projectId, load]);
+  const remotes = key?.value?.remotes?.length
+    ? {
+      refresh,
+      fetching: git.busy === "fetch" || refreshing?.projectId === projectId,
+      error: fetchError?.projectId === projectId ? fetchError.error : null,
+    }
+    : undefined;
+  if (!key) return { status: "loading", value: null, error: null, retry, remotes };
+  return key.value ? { status: "ready", value: key.value, error: null, retry, remotes } : { status: "failed", value: null, error: key.error!, retry, remotes };
 }

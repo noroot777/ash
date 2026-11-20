@@ -78,7 +78,7 @@
 .monitor-composer label > span,
 .monitor-composer legend { color: var(--muted); font-size: var(--t-xs); }
 .monitor-composer textarea, .monitor-composer input, .monitor-composer select { width: 100%; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--panel); padding: 6px 8px; color: var(--ink); font-size: var(--t-sm); }
-.monitor-composer textarea { resize: none; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--t-xs); line-height: 1.6; }
+.monitor-composer textarea { resize: none; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--t-xs); line-height: 1.5; }
 .monitor-composer input, .monitor-composer select { height: 30px; padding: 0 8px; }
 .monitor-composer__hint { margin: -2px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
 .monitor-composer__wake,

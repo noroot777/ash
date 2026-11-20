@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LEGACY_ONLY_MCP_TOOLS, legacyTeamAndDuet } from "@navi/shared/legacy-modes";
 import { MCP_TOOL_BUDGETS } from "./prompt-budget-mcp.js";
 
 // 舞台根**故意含一个空格**：含空白的 `TMPDIR` 是合法环境（宿主给的临时目录就可能带空格），
@@ -150,7 +151,10 @@ const LONG_PATH = (id: string): boolean => id.startsWith("deep/");
 
 /** 片段集合加起来的顶。单条都压着、总量却靠「多加几份样本」涨回去，也算退步。 */
 // 2026-11-15 +2100：新工具 propose_dispatch（2068B，见 BUDGETS 里那一行）。
-const TOTAL_BUDGET = 85_500;
+// 2026-11-20 +1300（老模式实测 86715B，默认模式 83904B）：之后新加的 suggest_dispatch（849B）、
+// move_to_worktree（786B）没跟着调这个数——那时这份测试在默认模式下一直红在陈旧条目那一步，量不到这里；
+// 同日两个建任务工具折掉重复说明省回约 1400B。按老模式量，因为门禁开着它跑（scripts/accept-test.mjs）。
+const TOTAL_BUDGET = 86_800;
 
 /**
  * 动态段的上限：`<撑满的那一版> - <同名 -bare 样本>`。
@@ -477,8 +481,11 @@ try {
       .filter((id) => !CONTRACT.some((item) => item.id === id)), [],
     "长路径样本既不在 BUDGETS 也不在 CONTRACT：它现在什么都没约束",
   );
+  // 老模式关着时 MCP 不注册的工具（`LEGACY_ONLY_MCP_TOOLS`）本来就量不到：它的预算只在开着时约束东西，
+  // 门禁正是开着跑的（scripts/accept-test.mjs）。开着时它照样得在样本里，否则就真是陈旧条目。
+  const absentByDesign = new Set(legacyTeamAndDuet() ? [] : LEGACY_ONLY_MCP_TOOLS.map((name) => `mcp/${name}`));
   assert.deepEqual(
-    Object.keys(BUDGETS).filter((id) => !size.has(id)), [],
+    Object.keys(BUDGETS).filter((id) => !size.has(id) && !absentByDesign.has(id)), [],
     "预算表里有已经不存在的样本 id：删掉它，别留一条不约束任何东西的规则",
   );
 

@@ -145,4 +145,5 @@
   font-size: var(--t-xs);
   text-align: left;
 }
-.ui-dropdown-clear:hover { background: var(--hover-bg); color: var(--ink); }
+.ui-dropdown-clear:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
+.ui-dropdown-clear:disabled { opacity: 0.6; }

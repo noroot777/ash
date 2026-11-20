@@ -33,7 +33,7 @@ import {
   storageKeyFor,
   type InspectorState,
 } from "./inspectorState.ts";
-import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
+import type { InspectorDescriptor, InspectorHostControls, InspectorReveal, InspectorTabPolicy } from "./types.ts";
 
 export { INSPECTOR_DEFAULT_WIDTH, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH } from "./inspectorState.ts";
 
@@ -47,6 +47,7 @@ export function InspectorHost<Context>({
   context,
   defaultVisible = true,
   tabPolicy,
+  reveal,
   children,
 }: {
   contextKey: string;
@@ -54,6 +55,12 @@ export function InspectorHost<Context>({
   context: Context;
   defaultVisible?: boolean;
   tabPolicy?: InspectorTabPolicy;
+  /**
+   * 外面的状态要把某一格亮出来时用：key 每变一次就 openTab 一次。走声明式而不是让外面拿着
+   * openTab 去调，是因为这种格子往往跟着那份状态才出现（「查看」那一格有文件摊着才在表里）：
+   * 同一下点击里先改状态、再 openTab，那一刻的描述符表里还没有它，会被当成无效页签丢掉。
+   */
+  reveal?: InspectorReveal | null;
   children: (controls: InspectorHostControls) => ReactNode;
 }) {
   return (
@@ -64,6 +71,7 @@ export function InspectorHost<Context>({
       context={context}
       defaultVisible={defaultVisible}
       tabPolicy={tabPolicy}
+      reveal={reveal ?? null}
     >
       {children}
     </InspectorHostState>
@@ -76,6 +84,7 @@ function InspectorHostState<Context>({
   context,
   defaultVisible,
   tabPolicy,
+  reveal,
   children,
 }: {
   contextKey: string;
@@ -83,6 +92,7 @@ function InspectorHostState<Context>({
   context: Context;
   defaultVisible: boolean;
   tabPolicy?: InspectorTabPolicy;
+  reveal: InspectorReveal | null;
   children: (controls: InspectorHostControls) => ReactNode;
 }) {
   const storageKey = storageKeyFor(contextKey);
@@ -110,6 +120,8 @@ function InspectorHostState<Context>({
     if (narrow) setNarrowOpen(state.visible);
   }
   const panelVisible = (narrow ? narrowOpen : state.visible) && activeDescriptor !== null;
+  // 保活的格（descriptor.keepAlive）：在竖轨上就一直挂着，没轮到它、整栏收着时只是藏起来。
+  const keptDescriptors = openedDescriptors.filter((descriptor) => descriptor.keepAlive);
   // 宽格（descriptor.wide）按整块布局的比例算宽；窄屏上整栏本来就盖满，不分宽窄。
   const wide = !!activeDescriptor?.wide && !narrow;
   const dragStart = useRef<{ x: number; width: number; total: number; wide: boolean } | null>(null);
@@ -127,6 +139,9 @@ function InspectorHostState<Context>({
   const knownTabIds = useRef(new Set(
     descriptors.filter((descriptor) => descriptor.defaultOpen).map((descriptor) => descriptor.id),
   ));
+  // 跟着外面状态出现的格（reveal）消失时，回到点开它之前的样子：那时看的是哪一格就回哪一格，
+  // 那时整栏收着就再收起来。只认最近一次 reveal 的那一格，中间换过格就按普通规矩来。
+  const revealedFrom = useRef<{ tabId: string; from: string | null; visible: boolean } | null>(null);
   useEffect(() => {
     const appeared = descriptors
       .filter((descriptor) => descriptor.defaultOpen && !knownTabIds.current.has(descriptor.id))
@@ -134,12 +149,18 @@ function InspectorHostState<Context>({
     for (const descriptor of descriptors) {
       if (descriptor.defaultOpen) knownTabIds.current.add(descriptor.id);
     }
+    const back = revealedFrom.current;
+    const returning = back !== null && !descriptorById.has(back.tabId) && state.activeTab === back.tabId;
+    if (back && !descriptorById.has(back.tabId)) revealedFrom.current = null;
+    if (returning && narrow && !back?.visible) setNarrowOpen(false);
     setState((current) => {
       const openTabs = orderedValidTabs([...current.openTabs, ...appeared], descriptors);
       const activeTab = current.activeTab && openTabs.includes(current.activeTab)
         ? current.activeTab
-        : openTabs[0] ?? null;
-      const visible = current.visible && openTabs.length > 0;
+        : returning && back?.from && openTabs.includes(back.from)
+          ? back.from
+          : openTabs[0] ?? null;
+      const visible = current.visible && openTabs.length > 0 && !(returning && !back?.visible);
       if (
         openTabs.length === current.openTabs.length
         && openTabs.every((id, index) => id === current.openTabs[index])
@@ -269,6 +290,7 @@ function InspectorHostState<Context>({
     }
     switchedAt.current = performance.now();
     removedAt.current = 0;
+    revealedFrom.current = null;
     setState((current) => ({ ...current, activeTab: id }));
   };
 
@@ -299,6 +321,21 @@ function InspectorHostState<Context>({
     }));
     if (narrow) setNarrowOpen(true);
   }, [descriptors, narrow]);
+
+  const revealKey = reveal?.key ?? null;
+  const lastReveal = useRef(revealKey);
+  useEffect(() => {
+    if (!reveal || revealKey === lastReveal.current) return;
+    lastReveal.current = revealKey;
+    if (!revealKey || !descriptorById.has(reveal.tabId)) return;
+    const from = revealedFrom.current?.tabId === reveal.tabId ? revealedFrom.current : null;
+    revealedFrom.current = from ?? {
+      tabId: reveal.tabId,
+      from: state.activeTab === reveal.tabId ? null : state.activeTab,
+      visible: panelVisible,
+    };
+    openTab(reveal.tabId);
+  }, [revealKey]);
 
   // Registration order preserves drawer priority; changing icons/titles only refresh the callback data.
   const shortcutContext = useRef({ descriptors, openTab });
@@ -342,9 +379,11 @@ function InspectorHostState<Context>({
       <div className="inspector-layout__main">
         {children({ visible: panelVisible, toggle, openTab, toggleButton })}
       </div>
-      {panelVisible && activeDescriptor && (
+      {/* 有保活的格时整栏收起也不卸，只藏：卸掉 aside 就把里面那份活现场一起卸了。 */}
+      {activeDescriptor && (panelVisible || keptDescriptors.length > 0) && (
         <aside
           id={panelId}
+          hidden={!panelVisible}
           className={`inspector-host${resizing ? " inspector-host--resizing" : ""}`}
           style={{ "--inspector-width": wide ? `${state.wideRatio * 100}%` : `${state.width}px` } as CSSProperties}
           aria-label="Inspector 侧边栏"
@@ -388,7 +427,7 @@ function InspectorHostState<Context>({
             onOpen={openTab}
           />
           <div className="inspector-host__panel">
-            <div className="inspector-host__panel-head">
+            {!activeDescriptor.bare && <div className="inspector-host__panel-head">
               <span className="inspector-host__panel-title">{activeDescriptor.title}</span>
               {/* 当前面板自己的入口挂这里（InspectorHeadActions），省掉面板内部那条常驻工具栏。 */}
               <div className="inspector-host__panel-actions" ref={setHeadSlot} />
@@ -407,19 +446,41 @@ function InspectorHostState<Context>({
                 <X size={14} aria-hidden="true" />
               </button>
               <HoverTip at={closeTip.at}>{narrow ? "收起，回到内容" : "移出竖轨，可从 + 加回"}</HoverTip>
-            </div>
-            <div
-              id={contentIdFor(activeDescriptor.id)}
-              className="inspector-host__content"
-              role="tabpanel"
-              aria-labelledby={tabIdFor(activeDescriptor.id)}
-            >
-              <InspectorHeadSlotProvider value={headSlot}>
-                <InspectorNavProvider value={nav}>
-                  {activeDescriptor.render(context)}
-                </InspectorNavProvider>
-              </InspectorHeadSlotProvider>
-            </div>
+            </div>}
+            {!activeDescriptor.keepAlive && (
+              <div
+                id={contentIdFor(activeDescriptor.id)}
+                className={`inspector-host__content${activeDescriptor.bare ? " inspector-host__content--bare" : ""}`}
+                role="tabpanel"
+                aria-labelledby={tabIdFor(activeDescriptor.id)}
+              >
+                <InspectorHeadSlotProvider value={headSlot}>
+                  <InspectorNavProvider value={nav}>
+                    {activeDescriptor.render(context)}
+                  </InspectorNavProvider>
+                </InspectorHeadSlotProvider>
+              </div>
+            )}
+            {keptDescriptors.map((descriptor) => {
+              const active = descriptor.id === activeDescriptor.id;
+              return (
+                <div
+                  key={descriptor.id}
+                  id={contentIdFor(descriptor.id)}
+                  hidden={!active}
+                  className={`inspector-host__content${descriptor.bare ? " inspector-host__content--bare" : ""}`}
+                  role="tabpanel"
+                  aria-labelledby={tabIdFor(descriptor.id)}
+                >
+                  {/* 藏着的格不往头带里挂动作：那条头带此刻属于别的格。 */}
+                  <InspectorHeadSlotProvider value={active ? headSlot : null}>
+                    <InspectorNavProvider value={nav}>
+                      {descriptor.render(context)}
+                    </InspectorNavProvider>
+                  </InspectorHeadSlotProvider>
+                </div>
+              );
+            })}
           </div>
         </aside>
       )}

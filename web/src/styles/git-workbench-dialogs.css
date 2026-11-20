@@ -75,7 +75,7 @@
   width: 100%; resize: none;
   border: 1px solid var(--line2); border-radius: 8px;
   padding: 8px 10px;
-  font-family: var(--font-mono); font-size: var(--t-xs); line-height: 1.6;
+  font-family: var(--font-mono); font-size: var(--t-xs); line-height: 1.5;
   background: var(--panel);
 }
 
