@@ -1,8 +1,9 @@
 import "./isolated-data.js";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { acquireRuntimeHandover } from "../src/runtime-handover.js";
-import { releaseRuntimeHandover, runtimeHandoverActive, runtimeHandoverMatches } from "../src/runtime-handover-state.js";
-import { claimOwnTurn, claimOwnTurnWhenReady, heldTurns, releaseTurn, whenTurnIdle, turnBusyText, tryClaimOwnTurn } from "../src/turn-lock.js";
+import { releaseRuntimeHandover, reserveRuntimeHandover, RuntimeHandoverBlockedError, runtimeHandoverActive, runtimeHandoverMatches } from "../src/runtime-handover-state.js";
+import { claimAcceptanceHold, claimIdleWorkspaceTurns, claimOwnTurn, claimOwnTurnWhenReady, heldTurns, releaseTurn, whenTurnIdle, turnBusyText, tryClaimOwnTurn, turnIdentity } from "../src/turn-lock.js";
 import type { RestartImpact } from "../src/reattach.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -101,6 +102,32 @@ assert.equal(attempts, 1);
 assert.equal(canceledRan, false);
 console.log("✓ 冻结期间派审不消耗重排次数，手动起跑与空闲回调等许可释放，取消等待有效");
 
+for (const claim of [
+  (ids: string[]) => claimIdleWorkspaceTurns(ids),
+  (ids: string[]) => claimAcceptanceHold(ids).release,
+]) {
+  const busy = claimOwnTurn("partial-busy");
+  assert.ok(busy);
+  const lease = reserveRuntimeHandover();
+  assert.ok(lease);
+  for (const ids of [[], ["partial-busy"], ["partial-busy", "partial-idle", "partial-idle"]]) {
+    assert.throws(() => claim(ids), RuntimeHandoverBlockedError);
+    assert.equal(turnIdentity("partial-idle"), null);
+    assert.equal(turnIdentity("partial-busy"), busy);
+  }
+  const pending = claimOwnTurnWhenReady("partial-idle");
+  releaseRuntimeHandover(lease);
+  const release = claim(["partial-busy", "partial-idle", "partial-idle"]);
+  assert.equal(await pending, null);
+  assert.ok(turnIdentity("partial-idle"));
+  release();
+  release();
+  assert.equal(turnIdentity("partial-idle"), null);
+  assert.equal(turnIdentity("partial-busy"), busy);
+  releaseTurn("partial-busy", busy);
+}
+console.log("✓ 两类部分占位在冻结期整体拒绝（含空集合与全忙集合），只跳过真实占用，释放不伤原回合");
+
 if (process.platform === "darwin") {
   const { desktopRuntimeMcp } = await import("../src/mcp-registry/desktop-runtime.js");
   const { pointsAt } = await import("../src/mcp-registry/host-setup.js");
@@ -137,7 +164,6 @@ const { tasks, projects, sessions } = await import("../src/db/schema.js");
 const { reattachRunningTasks, restartImpact } = await import("../src/reattach.js");
 const { inspectProcess } = await import("../src/proc.js");
 const { isRunning } = await import("../src/runs.js");
-const { turnIdentity } = await import("../src/turn-lock.js");
 const { RUNS_DIR } = await import("../src/paths.js");
 const directory = mkdtempSync(join(tmpdir(), "navi-runtime-reattach-"));
 const runDir = join(RUNS_DIR, "upgrade-survivor");
@@ -164,6 +190,138 @@ setInterval(() => {
 const fixture = spawnTestFixture(process.execPath, [source], { cwd: directory, stdio: "ignore" });
 await withTestResources(async () => {
   await ensureSchema();
+  const holdsDirectory = join(directory, "holds");
+  mkdirSync(holdsDirectory);
+  execFileSync("git", ["init", "-b", "main", holdsDirectory], { stdio: "ignore" });
+  const { holdTeamForAcceptance, holdMembers, topUpHold } = await import("../src/team-acceptance-hold.js");
+  const { acceptanceGuard } = await import("../src/task-accept-guard.js");
+  const { isAcceptingTask } = await import("../src/acceptance-lock.js");
+  const { claimWorkspaceWrite, resolveWorkspaceContext } = await import("../src/workspace-write-gate.js");
+  const { Hono } = await import("hono");
+  const { serve } = await import("@hono/node-server");
+  const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
+  const { mountScmRoutes } = await import("../src/scm-routes.js");
+  const { mountFileRoutes } = await import("../src/file-routes.js");
+  const at = new Date().toISOString();
+  await db.insert(projects).values({ id: "hold-project", name: "holds", repoPath: holdsDirectory, createdAt: at });
+  await db.insert(tasks).values([
+    { id: "hold-lead", mode: "team", parentId: null },
+    { id: "hold-worker", mode: "single", parentId: "hold-lead" },
+    { id: "hold-peer", mode: "single", parentId: "hold-lead" },
+  ].map((task) => ({
+    ...task, projectId: "hold-project", title: task.id, body: "", status: "done", useWorktree: 0,
+    agentType: "claude", labels: "[]", autoTitle: 0, createdAt: at, updatedAt: at,
+  })));
+  const api = new Hono();
+  mountTaskAcceptanceRoutes(api);
+  mountScmRoutes(api);
+  mountFileRoutes(api);
+  await db.update(tasks).set({ acceptedMergeMethod: "no_commit" }).where(eq(tasks.id, "hold-lead"));
+  let listening!: (port: number) => void;
+  const port = new Promise<number>((resolve) => { listening = resolve; });
+  const http = serve({ fetch: api.fetch, hostname: "127.0.0.1", port: 0 }, (address) => listening(address.port));
+  const rejectionLease = reserveRuntimeHandover();
+  assert.ok(rejectionLease);
+  const queuedWorker = claimOwnTurnWhenReady("hold-worker");
+  try {
+    for (const action of ["accept", "pending-merge/commit", "pending-merge/remerge"]) {
+      const response = await fetch(`http://127.0.0.1:${await port}/tasks/hold-lead/${action}`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+      });
+      assert.equal(response.status, 409, action);
+      const body = await response.json();
+      assert.equal(body.reason, "runtime_handover", action);
+      assert.match(body.error, /正在切换新版服务/);
+      assert.equal(isAcceptingTask("hold-lead"), false);
+      assert.equal(holdMembers("hold-lead").size, 0);
+      assert.equal(turnIdentity("hold-lead"), null);
+      assert.equal(turnIdentity("hold-worker"), null);
+    }
+  } finally {
+    releaseRuntimeHandover(rejectionLease);
+    await new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve()));
+  }
+  const resumedWorker = await queuedWorker;
+  assert.ok(resumedWorker);
+  releaseTurn("hold-worker", resumedWorker);
+  console.log("✓ 真实 HTTP 团队验收、补提交、重合并均在冻结期返回 409，不开始验收、不留互斥位，排着的运行只在拒绝后恢复");
+
+  const occupiedWorker = claimOwnTurn("hold-worker");
+  assert.ok(occupiedWorker);
+  const releaseTeam = await holdTeamForAcceptance("hold-lead");
+  assert.deepEqual([...holdMembers("hold-lead")].sort(), ["hold-lead", "hold-peer"]);
+  releaseTurn("hold-worker", occupiedWorker);
+  const topUpLease = reserveRuntimeHandover();
+  assert.ok(topUpLease);
+  const topUpWaiter = claimOwnTurnWhenReady("hold-worker");
+  try {
+    assert.throws(() => topUpHold("hold-lead"), RuntimeHandoverBlockedError);
+    const guard = await acceptanceGuard("hold-lead", "before_merge");
+    assert.equal(guard.failure?.reason, "runtime_handover");
+    assert.equal(guard.failure?.httpStatus, 409);
+    assert.equal(guard.failure?.phase, "before_merge");
+    assert.equal(holdMembers("hold-lead").has("hold-worker"), false);
+    releaseRuntimeHandover(topUpLease);
+    topUpHold("hold-lead");
+    assert.equal(await topUpWaiter, null);
+    assert.equal(holdMembers("hold-lead").has("hold-worker"), true);
+    assert.equal(claimOwnTurn("hold-worker"), null);
+  } finally {
+    releaseRuntimeHandover(topUpLease);
+    releaseTeam();
+  }
+  assert.equal(holdMembers("hold-lead").size, 0);
+  console.log("✓ 验收补占在冻结期拒绝推进阶段，释放许可后补齐成员，验收结束前排着的成员仍不能开跑");
+
+  const context = await resolveWorkspaceContext("hold-worker");
+  assert.ok("task" in context);
+  const writingWorker = claimOwnTurn("hold-worker");
+  assert.ok(writingWorker);
+  const writeLease = reserveRuntimeHandover();
+  assert.ok(writeLease);
+  const marker = join(holdsDirectory, "force-write-marker");
+  writeFileSync(marker, "unchanged");
+  const writeOptions = {
+    taskId: "hold-worker", context, forced: true,
+    busyError: () => new Error("unexpected busy refusal"),
+    archivedError: (message: string) => new Error(message),
+    missingError: () => new Error("unexpected missing workspace"),
+  };
+  try {
+    await assert.rejects(async () => {
+      const release = await claimWorkspaceWrite(writeOptions);
+      try { writeFileSync(marker, "changed"); } finally { release?.(); }
+    }, /正在切换新版服务/);
+    assert.equal(readFileSync(marker, "utf8"), "unchanged");
+    assert.equal(turnIdentity("hold-peer"), null);
+    assert.equal(turnIdentity("hold-worker"), writingWorker);
+    for (const request of [
+      { path: "/tasks/hold-worker/scm/stage", method: "POST", body: { paths: ["force-write-marker"], force: true } },
+      { path: "/tasks/hold-worker/file", method: "DELETE", body: { path: "force-write-marker", mode: "permanent", force: true } },
+    ]) {
+      const response = await api.request(request.path, {
+        method: request.method, headers: { "content-type": "application/json" }, body: JSON.stringify(request.body),
+      });
+      assert.equal(response.status, 409, request.path);
+      const body = await response.json();
+      assert.match(body.error, /正在切换新版服务/);
+      assert.equal(body.needsForce, undefined);
+      assert.equal(readFileSync(marker, "utf8"), "unchanged");
+      assert.equal(turnIdentity("hold-peer"), null);
+      assert.equal(turnIdentity("hold-worker"), writingWorker);
+    }
+    assert.equal(execFileSync("git", ["-C", holdsDirectory, "diff", "--cached", "--name-only"], { encoding: "utf8" }).trim(), "");
+  } finally { releaseRuntimeHandover(writeLease); }
+  const releaseWrite = await claimWorkspaceWrite(writeOptions);
+  assert.ok(releaseWrite);
+  assert.equal(claimOwnTurn("hold-peer"), null);
+  releaseWrite();
+  releaseWrite();
+  assert.equal(turnIdentity("hold-worker"), writingWorker);
+  releaseTurn("hold-worker", writingWorker);
+  assert.equal(turnIdentity("hold-peer"), null);
+  console.log("✓ 强制 SCM 写入与文件删除均返回 409（不是归档或待确认），不触碰文件或索引；解冻后仍保护闲置同伴");
+
   const { continueWhenIdle } = await import("../src/turn-idle-delivery.js");
   const { claimReconcileTurnWhenReady } = await import("../src/runs.js");
   const { claimLaunchTurn } = await import("../src/launch-capacity.js");

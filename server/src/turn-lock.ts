@@ -10,7 +10,7 @@
 // 依赖是单向的:这个文件不 import runs 的运行时(只借一个类型),所以 `claimReconcileTurn`
 // 那条要问「有没有句柄在册」的,住在 runs.ts 里。
 import type { StopSettle } from "./runs.js";
-import { afterRuntimeHandover, runtimeHandoverActive } from "./runtime-handover-state.js";
+import { afterRuntimeHandover, RuntimeHandoverBlockedError, runtimeHandoverActive } from "./runtime-handover-state.js";
 import type { WindDown } from "./turn-wind-down.js";
 
 // ── 单飞锁与「这一轮跑完之后」────────────────────────────────────────────────
@@ -392,12 +392,7 @@ export function claimWorkspaceTurn(taskIds: string[]): (() => void) | null {
  * 占不到的那些不必回给调用方：force 路径本来就不再据此拒绝，知道也无事可做。
  */
 export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
-  const claimed: Array<{ taskId: string; owner: TurnIdentity }> = [];
-  for (const taskId of new Set(taskIds)) {
-    const owner = claimOwnTurn(taskId, WORKSPACE_TURN_ROLE);
-    if (owner) claimed.push({ taskId, owner });
-  }
-  return releaserFor(claimed);
+  return releaserFor(claimIdleTurns(taskIds, WORKSPACE_TURN_ROLE));
 }
 
 /**
@@ -405,12 +400,22 @@ export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
  * 不必回给调用方,验收自己的守卫照常看得见它们(`isTurnClaimed`)并拒绝验收。交回占到了谁和释放函数。
  */
 export function claimAcceptanceHold(taskIds: string[]): { held: ReadonlySet<string>; release: () => void } {
+  const claimed = claimIdleTurns(taskIds, ACCEPT_HOLD_ROLE);
+  return { held: new Set(claimed.map((item) => item.taskId)), release: releaserFor(claimed) };
+}
+
+function claimIdleTurns(taskIds: string[], role: string): Array<{ taskId: string; owner: TurnIdentity }> {
+  if (runtimeHandoverActive()) throw new RuntimeHandoverBlockedError();
   const claimed: Array<{ taskId: string; owner: TurnIdentity }> = [];
   for (const taskId of new Set(taskIds)) {
-    const owner = claimOwnTurn(taskId, ACCEPT_HOLD_ROLE);
-    if (owner) claimed.push({ taskId, owner });
+    const result = tryClaimOwnTurn(taskId, role);
+    if (result.kind === "handover") {
+      for (const held of claimed) endOwnTurn(held.taskId, held.owner, false);
+      throw new RuntimeHandoverBlockedError();
+    }
+    if (result.kind === "claimed") claimed.push({ taskId, owner: result.owner });
   }
-  return { held: new Set(claimed.map((item) => item.taskId)), release: releaserFor(claimed) };
+  return claimed;
 }
 
 /** 这个任务此刻是不是被团队验收占着。 */

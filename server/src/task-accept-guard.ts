@@ -11,6 +11,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
 import { hasOwnedGateProcess, hasStoppingGateProcess, reconcileGateProcesses } from "./accept-gate-ownership.js";
 import { holdDrift, holdMembers, holdScope, topUpHold } from "./team-acceptance-hold.js";
+import { RuntimeHandoverBlockedError } from "./runtime-handover-state.js";
 
 export type AcceptWarning = {
   reason: "temporary_cleanup_failed";
@@ -108,7 +109,12 @@ export async function acceptanceGuard(
 ): Promise<{ task: typeof tasks.$inferSelect | null; failure: AcceptFailure | null }> {
   await reconcileGateProcesses(taskId);
   // 团队验收占位那一刻没占到的，先补占（team-acceptance-hold.ts topUpHold）；还占不到的下面按在飞拒绝。
-  topUpHold(taskId);
+  try {
+    topUpHold(taskId);
+  } catch (error) {
+    if (!(error instanceof RuntimeHandoverBlockedError)) throw error;
+    return { task: null, failure: { accepted: false, httpStatus: 409, taskId, phase, reason: "runtime_handover", error: error.message } };
+  }
   const state = await acceptanceState(taskId);
   if (!state.task) {
     return {

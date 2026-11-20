@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 
+export class RuntimeHandoverBlockedError extends Error {
+  constructor() {
+    super("正在切换新版服务，完成后重试此操作");
+    this.name = "RuntimeHandoverBlockedError";
+  }
+}
+
 let lease: { token: string; deadline: number } | null = null;
 let expiry: ReturnType<typeof setTimeout> | null = null;
 const waiting = new Set<() => void>();

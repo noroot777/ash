@@ -26,7 +26,6 @@ import { pagePreviewNotice, taskPageUrlFor } from "./task-page.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import {
-  ARCHIVED_REFUSAL,
   claimWorkspaceWrite,
   resolveWorkspaceContext,
   workspaceBusyLabel,
@@ -351,7 +350,7 @@ export function mountFileRoutes(api: Hono) {
           context,
           forced,
           busyError: (who) => Object.assign(new Error(`${who}，删除已取消`), { status: 409, needsForce: true }),
-          archivedError: () => Object.assign(new Error(ARCHIVED_REFUSAL), { status: 409 }),
+          archivedError: (message) => Object.assign(new Error(message), { status: 409 }),
           missingError: () => Object.assign(new Error("这个任务已经不在了"), { status: 404 }),
         });
         try {
