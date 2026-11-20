@@ -6,8 +6,13 @@ export function markRuntimeAdoption(): void {
   if (process.platform !== "darwin") return;
   const file = join(DATA_DIR, ".runtime-recovery.json");
   if (!existsSync(file)) return;
-  const record = JSON.parse(readFileSync(file, "utf8"));
-  if (record.next !== CODE_DIR.replace(/\/$/, "")) throw new Error("运行时恢复记录不属于本次启动");
+  let record;
+  try { record = JSON.parse(readFileSync(file, "utf8")); }
+  catch (error) { console.warn("[navi] 忽略无法读取的运行时恢复记录，未自动恢复数据库", error); return; }
+  if (!record || record.next !== CODE_DIR.replace(/\/$/, "")) {
+    console.warn("[navi] 忽略其他版本的运行时恢复记录，未自动恢复数据库");
+    return;
+  }
   const stage = `${file}.${process.pid}.partial`;
   writeFileSync(stage, JSON.stringify({ ...record, adopting: true }), { mode: 0o600 });
   renameSync(stage, file);

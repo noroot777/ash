@@ -7,9 +7,8 @@
 //  · 补完再读一次最终生效的那条,看它是不是指向**这一份** navi(这份代码里的 MCP 入口 + 这个端口)。
 //    不是的话**不改**:那条可能是用户自己写的、也可能正连着仓库里的开发实例,改不改由用户定 ——
 //    交回去的是「现在指向哪、要指向这里该改成什么」,app 原样摆给用户。
-import { existsSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
-import { CODE_DIR } from "../paths.js";
+import { existsSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { AGENT_TYPES } from "@navi/shared";
 import { ensureNaviMcp, hostCliConfigDir, hostCliConfigFile } from "../auth/user-cli-mcp.js";
 import { resolveBin } from "../executors/bin-resolve.js";
@@ -17,6 +16,7 @@ import { cliSpec } from "../executors/catalog/index.js";
 import { currentListeningPort } from "../listening-port.js";
 import { naviMcpMechanism } from "./catalog.js";
 import { builtinEntry } from "./register.js";
+import { migrateHostRuntimes } from "./runtime-migration.js";
 import { naviMcpHostSources, readingFor, resolveNaviMcp } from "./sources.js";
 import type { NaviMcpEntry, NaviMcpLaunch } from "./types.js";
 
@@ -37,7 +37,7 @@ export interface HostNaviMcp {
 /** 逐家补接并归类。幂等:已经接好的机器上只是几次文件读。 */
 export async function setUpHostNaviMcp(): Promise<HostNaviMcp[]> {
   const wanted = builtinEntry();
-  pinHostRuntime();
+  await migrateHostRuntimes(wanted);
   const out: HostNaviMcp[] = [];
   for (const agentType of AGENT_TYPES) {
     const mechanism = naviMcpMechanism(agentType);
@@ -66,13 +66,6 @@ export async function setUpHostNaviMcp(): Promise<HostNaviMcp[]> {
     }
   }
   return out;
-}
-
-function pinHostRuntime(): void {
-  const root = CODE_DIR.replace(/\/$/, "");
-  if (process.platform !== "darwin" || !existsSync(join(root, "runtime-manifest.json"))
-    || basename(dirname(root)) !== ".runtimes") return;
-  writeFileSync(join(dirname(root), `.host-pin-${basename(root)}`), "host MCP configuration\n", { mode: 0o600 });
 }
 
 /**

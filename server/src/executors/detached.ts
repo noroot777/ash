@@ -15,7 +15,7 @@
 // stdin 从匿名管道换成可重开的具名管道，因此 server 重启后两边都能接回。
 import { spawn, spawnSync } from "node:child_process";
 import { inheritCodeLock } from "@navi/shared/code-lock";
-import { checkpointOutput, type OutputCheckpoint } from "./output-checkpoint.js";
+import { checkpointOutput, supportsOutputCheckpoint, type OutputCheckpoint } from "./output-checkpoint.js";
 import type { ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream, openSync, existsSync } from "node:fs";
 import { IS_WINDOWS } from "../platform.js";
@@ -343,12 +343,13 @@ export function spawnControllableForRun(
 // instanceof/鸭子类型试探。
 export function detachedInfo(
   child: ChildProcess,
-): { pid: number; committed: () => number; unitToken: string | null; checkpoint: () => OutputCheckpoint } | undefined {
+): { pid: number; committed: () => number; unitToken: string | null; checkpoint: () => OutputCheckpoint; checkpointAvailable: () => boolean } | undefined {
   const c = child as Partial<DetachedChild>;
   if (typeof c.naviCommitted !== "function" || !c.pid) return undefined;
   // 记号在这一处取出来是刻意的:九个执行器都从这个函数拿 `handle.detached`,在这里取就
   // 不会有哪条路忘记带上它(忘了的代价是静默的 —— 那一轮的后代只剩 pid 一条线索)。
-  return { pid: c.pid, committed: c.naviCommitted, unitToken: unitTokenOf(child), checkpoint: () => checkpointOutput(child) };
+  return { pid: c.pid, committed: c.naviCommitted, unitToken: unitTokenOf(child),
+    checkpoint: () => checkpointOutput(child), checkpointAvailable: () => supportsOutputCheckpoint(child) };
 }
 
 // 重启后接管一个还活着的 agent。

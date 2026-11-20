@@ -22,7 +22,7 @@ final class UpdateGate {
     case staleServer(from: String)
   }
 
-  enum Choice { case wait, now, cancel }
+  enum Choice { case wait, now, quit, cancel }
 
   struct Prompt {
     let title: String
@@ -141,6 +141,8 @@ final class UpdateGate {
       switch choice {
       case .now:
         prepare(verdict.target)
+      case .quit:
+        finish(stale: false)
       case .wait:
         answerQuit(false)
         if quitting, proceeds.isEmpty, let whenDrained { proceeds.append(whenDrained) }
@@ -307,8 +309,13 @@ final class UpdateGate {
       return
     }
     if RuntimeStore.managed(NaviConfig.runtimeURL.path) {
-      replies.forEach { $0(false) }
-      report(reason)
+      guard canKeepServiceOnQuit else { replies.forEach { $0(false) }; report(reason); return }
+      let choice = ask(Prompt(title: "服务暂未切换", detail: reason + "\n\n可以退出窗口并安装 app，旧服务和任务继续运行；下次打开再尝试切换服务。",
+                              buttons: ["不退出", "仍然退出"], choices: [.cancel, .quit]))
+      if choice == .quit {
+        do { try RuntimeStore.protectBundleUpdate(); replies.forEach { $0(true) } }
+        catch { replies.forEach { $0(false) }; report(error.localizedDescription) }
+      } else { replies.forEach { $0(false) } }
       return
     }
     // 要退出的那一档不能把人困住（盘满了备份一直不成功时总得退得掉）。可 Sparkle 没有「撤销
@@ -326,6 +333,12 @@ final class UpdateGate {
     guard holding else { return }
     holding = false
     onHoldChanged?(nil)
+  }
+
+  private var canKeepServiceOnQuit: Bool {
+    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
+          let code = instance.codeDir else { return false }
+    return RuntimeStore.managed(code)
   }
 
   private func prompt(for verdict: ImpactVerdict, quitting: Bool) -> Prompt {
@@ -358,6 +371,16 @@ final class UpdateGate {
     log("问用户：\(title)；\(lines.joined(separator: " "))")
     var buttons = [waitTitle, nowTitle]
     var choices: [Choice] = [.wait, .now]
+    if RuntimeStore.managed(NaviConfig.runtimeURL.path) {
+      lines.append("为保留任务和交卷通道，服务将在确认可接管后切换。")
+      buttons = [waitTitle]
+      choices = [.wait]
+      if quitting && canKeepServiceOnQuit {
+        buttons.append("退出并保留旧服务")
+        choices.append(.quit)
+      }
+      if !quitting { buttons.append("稍后"); choices.append(.cancel) }
+    }
     if quitting {
       buttons.append("取消")
       choices.append(.cancel)

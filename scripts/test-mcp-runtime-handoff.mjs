@@ -5,12 +5,22 @@ import { EventEmitter } from "node:events";
 import { withTestResources } from "./test-process-resources.mjs";
 
 const { eventQueue } = await import("../server/dist/executors/event-queue.js");
-const { checkpointOutput } = await import("../server/dist/executors/output-checkpoint.js");
+const { checkpointOutput, supportsOutputCheckpoint } = await import("../server/dist/executors/output-checkpoint.js");
 const { NativeActivityBuffer } = await import("../server/dist/executors/native-activity-buffer.js");
 const child = new EventEmitter();
 let suspended = false;
 child.naviSuspend = () => { suspended = true; return () => { suspended = false; }; };
+assert.equal(supportsOutputCheckpoint(child), false);
 const queue = eventQueue({ child, activity: new NativeActivityBuffer(), coalesce: { text: 1000 }, maxHoldMs: 10_000 });
+assert.equal(supportsOutputCheckpoint(child), true);
+const { registerRuntimeConsumer, runtimeConsumerAvailable } = await import("../server/dist/runtime-consumers.js");
+let available = false;
+const unregister = registerRuntimeConsumer("test-session", () => checkpointOutput(child), () => available);
+assert.equal(runtimeConsumerAvailable("test-session"), false);
+available = true;
+assert.equal(runtimeConsumerAvailable("test-session"), true);
+unregister();
+assert.equal(runtimeConsumerAvailable("test-session"), false);
 const received = [];
 const consuming = (async () => {
   for await (const event of queue.drain()) {

@@ -75,3 +75,53 @@ setInterval(()=>{
   }
 },100);
 `;
+
+export const codexSource = `
+import { existsSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+const inline=process.argv.findLast(value=>value.startsWith('mcp_servers.navi='));
+if (!inline || !process.argv.includes('app-server')) { console.log('codex fixture 1'); process.exit(0); }
+const script=JSON.parse(inline.match(/args=\\[("(?:[^"\\\\]|\\\\.)*")/)[1]);
+const root=dirname(dirname(dirname(script)));
+const {scanCodexToml}=await import(root+'/server/dist/codex-toml.js');
+const config=scanCodexToml(inline).servers.get('navi').spec;
+const fingerprint=inline.match(/NAVI_TURN_FINGERPRINT=("(?:[^"\\\\]|\\\\.)*")/);
+if (!config.naviUrl || !fingerprint || !process.env.FIXTURE_HOME) throw new Error('incomplete isolated Codex MCP configuration');
+process.env.NAVI_URL=config.naviUrl;
+process.env.NAVI_TURN_FINGERPRINT=JSON.parse(fingerprint[1]);
+const home=process.env.FIXTURE_HOME, task=process.env.NAVI_TASK_ID, thread='thread-'+task, turn='turn-'+task;
+const emit=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+const notify=(method,params)=>emit({method,params:{threadId:thread,...params}});
+const mcp=spawn(config.command,config.args,{stdio:['pipe','pipe','inherit']});
+const send=value=>mcp.stdin.write(JSON.stringify(value)+'\\n');
+let active=false, ready=false, pending=false, tools={}, sequence=0;
+createInterface({input:mcp.stdout}).on('line',line=>{
+  const reply=JSON.parse(line);
+  if(reply.id===1){send({jsonrpc:'2.0',method:'notifications/initialized'});send({jsonrpc:'2.0',id:3,method:'tools/list'});}
+  if(reply.id===3){
+    tools=Object.fromEntries(reply.result.tools.map(tool=>[tool.name,tool]));ready=true;
+    writeFileSync(join(home,task+'-agent.json'),JSON.stringify({pid:process.pid,mcp:mcp.pid,root}));
+    notify('mcpServer/startupStatus/updated',{name:'navi',status:'ready'});
+  }
+  if(reply.id===2){
+    writeFileSync(join(home,task+'-mcp.json'),JSON.stringify(reply));mcp.stdin.end();active=false;
+    notify('turn/completed',{turn:{id:turn,status:reply.error||reply.result?.isError?'failed':'completed'}});
+  }
+});
+send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'codex-runtime-test',version:'1'}}});
+createInterface({input:process.stdin}).on('line',line=>{
+ const request=JSON.parse(line); if(request.id===undefined)return;
+ let result={};
+ if(request.method.startsWith('thread/'))result={thread:{id:thread}};
+ if(request.method==='turn/start'){result={turn:{id:turn,status:'inProgress'}};active=true;notify('turn/started',{turn:result.turn});}
+ if(request.method==='mcpServerStatus/list')result={data:[{name:'navi',tools}],nextCursor:null};
+ if(request.method==='thread/read')result={thread:{id:thread,turns:[{id:turn,status:'inProgress'}]}};
+ emit({id:request.id,result});
+});
+setInterval(()=>{
+ if(active)notify('item/agentMessage/delta',{turnId:turn,itemId:'message',delta:task+'-segment-'+(++sequence)+'\\n'});
+ if(active&&ready&&!pending&&existsSync(join(home,task+'-finish'))){pending=true;send({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'complete_task',arguments:{taskId:task,directionToken:process.env.NAVI_DIRECTION_TOKEN}}});}
+},100);
+`;

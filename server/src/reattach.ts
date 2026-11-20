@@ -29,6 +29,7 @@ import { sessionCliConfigDir } from "./auth/run-env.js";
 import { closeSessionTurns, markTurnActive } from "./session-turns.js";
 import { reconcileInterruptedTask } from "./task-reconcile.js";
 import { sessionLaunchCompact } from "./usage.js";
+import { runtimeEligibility, type RuntimeEligibility } from "./runtime-eligibility.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -52,6 +53,7 @@ export type RestartImpact = {
   resumes: { id: string; title: string }[];
   interrupted: { id: string; title: string; reason: string }[];
   mcpDisrupted: { id: string; title: string; pid: number }[];
+  runtimeHandoff?: RuntimeEligibility;
 };
 
 export async function restartImpact(): Promise<RestartImpact> {
@@ -84,6 +86,7 @@ export async function restartImpact(): Promise<RestartImpact> {
   }
   const holders = await findMcpChannelHolders(out.survives.map((s) => s.pid));
   out.mcpDisrupted = out.survives.filter((s) => holders.has(s.pid));
+  if (process.platform === "darwin") out.runtimeHandoff = await runtimeEligibility(out);
   return out;
 }
 

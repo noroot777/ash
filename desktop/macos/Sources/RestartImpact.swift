@@ -20,6 +20,8 @@ struct RestartImpact: Decodable {
   let resumes: [Item]
   let interrupted: [Item]
   let mcpDisrupted: [Item]
+  struct Handoff: Decodable { let blocked: [Item] }
+  let runtimeHandoff: Handoff?
 
   /// 同一个任务两类都占时只算一次（interrupted 优先：它说的后果更重）。
   var disrupted: [(title: String, why: String)] {
@@ -100,8 +102,16 @@ enum RestartImpactProbe {
       }
       var disrupted = impact.disrupted
       if let runtime {
-        disrupted = impact.interrupted.map { ($0.title, $0.reason ?? "无法接管") }
-          + impact.resumes.map { ($0.title, "调度台当前回合不能无损接管") }
+        if RuntimeStore.managed(runtime) {
+          guard let handoff = impact.runtimeHandoff else {
+            verdict = .unknown("服务未提供运行时接管能力，需等待任务结束或升级旧服务")
+            return
+          }
+          disrupted = handoff.blocked.map { ($0.title, $0.reason ?? "无法接管") }
+        } else {
+          disrupted = impact.interrupted.map { ($0.title, $0.reason ?? "无法接管") }
+            + impact.resumes.map { ($0.title, "调度台当前回合不能无损接管") }
+        }
         if !RuntimeStore.compatible(runtime) {
           disrupted += impact.survives.map { ($0.title, "首次旧布局迁移或数据迁移不兼容，需等这一轮结束") }
           disrupted += impact.mcpDisrupted.map { ($0.title, "旧布局的 MCP 仍在使用 app 包") }
@@ -137,7 +147,8 @@ enum RuntimeHandoff {
       throw RuntimeStore.Failure("切换前服务身份发生变化，未停止服务")
     }
     let (_, manifest) = try RuntimeStore.manifest(NaviConfig.runtimeURL)
-    try send("POST", id: id, body: ["protocol": manifest.protocol, "schema": manifest.schema])
+    do { try send("POST", id: id, body: ["protocol": manifest.protocol, "schema": manifest.schema]) }
+    catch { cancel(instance); throw error }
     return instance
   }
 

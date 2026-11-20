@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { runtimeManifest } from "../desktop/macos/scripts/runtime-manifest.mjs";
 import { ensureSparkle } from "../desktop/macos/scripts/sparkle.mjs";
-import { seedSource, agentSource } from "./macos-runtime-fixture.mjs";
+import { seedSource, agentSource, codexSource } from "./macos-runtime-fixture.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { spawnTestFixture } from "./test-process-scope.mjs";
 import { withTestResources } from "./test-process-resources.mjs";
@@ -52,6 +52,11 @@ if (process.platform !== "darwin") {
   const cliScript = join(environment.HOME, "cli.mjs");
   writeFileSync(cli, `#!/bin/sh\nexec '${process.execPath}' '${cliScript}' "$@"\n`);
   chmodSync(cli, 0o755);
+  const codex = join(environment.HOME, ".local/bin/codex");
+  const codexScript = join(environment.HOME, "codex.mjs");
+  writeFileSync(codex, `#!/bin/sh\nexec '${process.execPath}' '${codexScript}' "$@"\n`);
+  chmodSync(codex, 0o755);
+  writeFileSync(codexScript, `process.env.FIXTURE_HOME=${JSON.stringify(work)};\n` + codexSource);
   writeFileSync(cliScript, `import {appendFileSync,readFileSync} from 'node:fs'; import {dirname} from 'node:path';
 appendFileSync(${JSON.stringify(join(work, "cli-invocations.jsonl"))},JSON.stringify({args:process.argv,task:process.env.NAVI_TASK_ID})+'\\n');
 if(process.argv.includes('--version')){console.log('claude fixture 1');process.exit(0)}
@@ -150,10 +155,10 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     return { ...seeded, rootPid: seeded.pid,
       ...JSON.parse(readFileSync(join(work, task + "-agent.json"), "utf8")) };
   }
-  async function launchTask(title) {
+  async function launchTask(title, agentType = "claude") {
     const project = await request("/projects", "POST", { name: title, repoPath: work });
     assert.equal(project.status, 201, JSON.stringify(project));
-    const created = await request("/tasks", "POST", { projectId: project.body.id, title, body: "fixture", agentType: "claude", useWorktree: false });
+    const created = await request("/tasks", "POST", { projectId: project.body.id, title, body: "fixture", agentType, useWorktree: false });
     assert.equal(created.status, 201, JSON.stringify(created));
     const started = await request(`/tasks/${created.body.id}/run`, "POST", {});
     assert.ok(started.status < 300, JSON.stringify(started));
@@ -203,12 +208,57 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     writeFileSync(join(installed, "Contents/Resources/fixture-version"), "old");
     copyFileSync(join(mac, "scripts/bundle-users.sh"), join(installed, "Contents/Resources/bundle-users.sh"));
     manifest(runtime);
+    async function packaged(app, target, label) {
+      const entry = join(app, "Contents/Resources/app");
+      const child = await fixture(join(entry, "node/bin/node"), [join(entry, "mcp/dist/index.js")], {
+        env: { ...environment, NAVI_URL: base, NAVI_DATA_DIR: data }, stdio: ["pipe", "pipe", "pipe"] });
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 17, method: "initialize", params: {
+        protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: label, version: "1" } } }) + "\n");
+      await waitFor(() => {
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error(`${label}: MCP exited ${child.exitCode}/${child.signalCode}\n${child.output()}`);
+        return child.output().includes('"id":17');
+      }, label, 30_000).catch((error) => { throw new Error(`${error.message}\nMCP startup output:\n${child.output()}`); });
+      const command = (await run("ps", ["-p", String(child.pid), "-o", "command="])).stdout;
+      assert.ok(command.includes(join(target, "mcp/dist/index.js")), command);
+      return child;
+    }
+    const envelope = JSON.parse(readFileSync(join(runtime, "runtime-manifest.json"), "utf8"));
+    const offline = await packaged(installed, join(data, ".runtimes", envelope.id), "MCP initializes without a desktop server");
+    offline.stdin.end(); await finish(offline);
     const old = await prepare(installed);
     assert.ok(old.startsWith(join(data, ".runtimes/")));
+    const malformedData = join(temporary, "malformed-journal-data");
+    mkdirSync(malformedData);
+    writeFileSync(join(malformedData, ".runtime-recovery.json"), "{broken journal");
+    const malformedPort = await port();
+    const malformedServer = await fixture(join(old, "node/bin/node"), [join(old, "server/dist/index.js")], {
+      env: { ...environment, NAVI_DATA_DIR: malformedData, NAVI_LOCAL_ONLY: "1", PORT: String(malformedPort) } });
+    await waitFor(async () => {
+      try { return (await fetch(`http://127.0.0.1:${malformedPort}/api/health`)).ok; } catch { return false; }
+    }, "malformed recovery journal cannot brick a later server");
+    assert.equal(readFileSync(join(malformedData, ".runtime-recovery.json"), "utf8"), "{broken journal");
+    malformedServer.kill("SIGTERM"); await once(malformedServer, "exit");
     const agent = await seed(old);
+    const recovery = join(data, ".runtime-recovery.json");
+    writeFileSync(recovery, JSON.stringify({ previous: old, next: "/unrelated/runtime", adopting: true }));
     const server = await fixture(join(old, "node/bin/node"), [join(old, "server/dist/index.js")], {
-      env: { ...environment, NAVI_DATA_DIR: data, NAVI_LOCAL_ONLY: "1", NAVI_DESKTOP_APP: "1", NAVI_WINDOW_PORT: String(windowPort), PORT: new URL(base).port } });
+      env: { ...environment, NAVI_DATA_DIR: data, NAVI_MAC_SOURCE_RUNTIME: runtime, NAVI_LOCAL_ONLY: "1", NAVI_DESKTOP_APP: "1", NAVI_WINDOW_PORT: String(windowPort), PORT: new URL(base).port } });
     await waitFor(async () => (await health())?.pid === server.pid, "initial real server");
+    await run(join(old, "node/bin/node"), [join(root, "scripts/test-runtime-host-migration.mjs"), old, environment.HOME, data, runtime], {
+      env: { ...environment, NAVI_DATA_DIR: data, NAVI_DESKTOP_APP: "1", NAVI_MAC_SOURCE_RUNTIME: runtime, PORT: new URL(base).port }, timeout: 60_000 });
+    await probe("start");
+    assert.ok(existsSync(recovery), "an unrelated journal is not consumed or rolled back");
+    writeFileSync(recovery, JSON.stringify({ previous: old, next: old, adopting: true }));
+    await probe("start");
+    assert.equal(existsSync(recovery), false, "observing an already serving instance confirms adoption");
+    const codexTask = await launchTask("codex-continuous", "codex");
+    await waitFor(async () => (await request("/restart-impact")).body.runtimeHandoff.blocked.length === 0,
+      "Claude and Codex both advertise real handoff capability");
+    const codexErrorFile = dbRead("select agent_err_path from sessions where id=?", codexTask.sessionId).agent_err_path;
+    dbWrite("update sessions set agent_err_path=null where id=?", codexTask.sessionId);
+    const unavailable = (await request("/restart-impact")).body.runtimeHandoff.blocked;
+    assert.ok(unavailable.some((item) => item.id === codexTask.id && /信息不完整/.test(item.reason)));
+    dbWrite("update sessions set agent_err_path=? where id=?", codexErrorFile, codexTask.sessionId);
     const packagedMcp = await fixture(join(runtime, "node/bin/node"), [join(runtime, "mcp/dist/index.js")], {
       env: { ...environment, NAVI_URL: base }, stdio: ["pipe", "pipe", "pipe"] });
     packagedMcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 17, method: "initialize", params: {
@@ -240,6 +290,7 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     console.log("✓ real Sparkle delegate entrypoints leave the old immutable service and MCP alive; abort releases the gate");
 
     const nextApp = await copyApp(join(temporary, "next/Navi.app"), "next");
+    const mismatchedMcp = await packaged(nextApp, old, "a newer bundle connects through the old serving MCP runtime");
     await run("/bin/bash", [join(mac, "scripts/install-app.sh"), nextApp, applications]);
     assert.equal((await health()).pid, server.pid);
     assert.equal(readFileSync(join(old, "version.txt"), "utf8"), "old");
@@ -256,11 +307,18 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     assert.notEqual(newHealth.pid, server.pid);
     assert.equal(realpathSync(newHealth.instance.codeDir), next);
     assert.ok(isPidAlive(agent.rootPid) && isPidAlive(agent.pid) && isPidAlive(agent.mcp));
+    assert.ok(isPidAlive(codexTask.rootPid) && isPidAlive(codexTask.pid) && isPidAlive(codexTask.mcp));
     await probe("collect");
     assert.ok(existsSync(old), "agent/MCP leases retain all old files");
     await waitFor(() => dbRead("select agent_offset from sessions where id='s-continuous'").agent_offset > before, "new consumer advances old offset");
     writeFileSync(join(work, "continuous-finish"), "");
     await waitFor(() => dbRead("select status from tasks where id='continuous'").status === "done", "old MCP submission and settlement");
+    writeFileSync(join(work, codexTask.id + "-finish"), "");
+    await waitFor(() => dbRead("select status from tasks where id=?", codexTask.id).status === "done", "Codex App Server reattaches and submits through its old MCP");
+    const codexTranscript = readFileSync(join(data, "runs", codexTask.id, codexTask.sessionId + ".md"), "utf8");
+    const codexSegments = [...codexTranscript.matchAll(new RegExp(codexTask.id + "-segment-(\\d+)", "g"))].map((item) => Number(item[1]));
+    assert.ok(codexSegments.length > 3);
+    assert.deepEqual(codexSegments, Array.from({ length: codexSegments.length }, (_, index) => index + 1));
     assert.ok(JSON.parse(readFileSync(join(work, "continuous-mcp.json"), "utf8")).result.isError !== true);
     const segments = [...readFileSync(transcript, "utf8").matchAll(/continuous-segment-(\d+)/g)].map((match) => Number(match[1]));
     assert.deepEqual(segments, [...new Set(segments)]);
@@ -269,6 +327,7 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     assert.ok(isPidAlive(packagedMcp.pid), "redirected packaged MCP survives manual bundle replacement");
     packagedMcp.stdin.end();
     await finish(packagedMcp);
+    mismatchedMcp.stdin.end(); await finish(mismatchedMcp);
     console.log("✓ manual install swaps the app while the same agent/MCP survive; offsets, transcript and strict completion continue");
 
     const created = await launchTask("new-version-task");
@@ -285,6 +344,10 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     const headers = { "x-navi-host-token": lock.token, "x-navi-instance": impactHealth.instance.id };
     assert.equal((await request("/runtime-handoff", "POST", { protocol: 1, schema }, {})).status, 403);
     dbWrite("update tasks set status='queued' where id=?", created.id);
+    const blockedImpact = (await request("/restart-impact")).body;
+    assert.ok(blockedImpact.runtimeHandoff.blocked.some((task) => task.id === created.id));
+    assert.doesNotMatch((await probe("blocked-prompt")).stdout, /IMPOSSIBLE-NOW|UNEXPECTED-SWITCH/);
+    assert.match((await probe("quit-blocked")).stdout, /QUIT true/);
     assert.equal((await request("/runtime-handoff", "POST", { protocol: 1, schema }, headers)).status, 409);
     dbWrite("update tasks set status='done' where id=?", created.id);
     assert.equal((await request("/runtime-handoff", "POST", { protocol: 1, schema }, headers)).status, 200);

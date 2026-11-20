@@ -67,7 +67,13 @@ enum RuntimeRecovery {
     let entry = Record(previous: NaviHealth.realPath(previous), next: NaviHealth.realPath(NaviConfig.runtimeURL.path), backup: backup?.path, server: ServerRecord.read())
     try JSONEncoder().encode(entry).write(to: url, options: .atomic)
   }
-  static func confirmed() { try? FileManager.default.removeItem(at: url) }
+  static func confirmed(_ instance: NaviInstance) {
+    guard instance.isOurs, let code = instance.codeDir,
+          let data = try? Data(contentsOf: url),
+          let entry = try? JSONDecoder().decode(Record.self, from: data),
+          NaviHealth.samePath(entry.next, code) else { return }
+    try? FileManager.default.removeItem(at: url)
+  }
   static func restoreBeforeAdoption() throws -> URL? {
     guard let data = try? Data(contentsOf: url) else { return nil }
     let entry = try JSONDecoder().decode(Record.self, from: data)
@@ -86,7 +92,7 @@ enum RuntimeRecovery {
       for suffix in ["-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: db.path + suffix) }
     }
     if let server = entry.server { try JSONEncoder().encode(server).write(to: ServerRecord.url, options: .atomic) }
-    confirmed()
+    try FileManager.default.removeItem(at: url)
     return URL(fileURLWithPath: entry.previous, isDirectory: true)
   }
 }

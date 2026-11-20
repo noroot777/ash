@@ -6,6 +6,11 @@ export type CheckpointChild = ChildProcess & {
   naviCheckpointQueue?: () => OutputCheckpoint;
 };
 
+export function supportsOutputCheckpoint(child: ChildProcess): boolean {
+  const source = child as CheckpointChild;
+  return typeof source.naviSuspend === "function" && typeof source.naviCheckpointQueue === "function";
+}
+
 export function checkpointOutput(child: ChildProcess): OutputCheckpoint {
   const source = child as CheckpointChild;
   if (!source.naviSuspend || !source.naviCheckpointQueue) throw new Error("执行器没有可验证的输出消费屏障");

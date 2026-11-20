@@ -22,6 +22,25 @@ case "collect":
 case "start":
   ServerLauncher.shared.freshStartApproved = true
   emit("START \(ServerLauncher.shared.ensureRunningSync(timeout: 20))")
+case "blocked-prompt", "quit-blocked":
+  var prompted = false
+  gate.ask = { prompt in
+    guard !prompt.choices.contains(.now) else { emit("IMPOSSIBLE-NOW"); exit(4) }
+    emit("BUTTONS \(prompt.buttons.joined(separator: "|"))")
+    prompted = true
+    return .cancel
+  }
+  gate.request(.staleServer(from: "test")) { emit("UNEXPECTED-SWITCH") }
+  until { prompted }
+  if mode == "quit-blocked" {
+    var replied = false
+    gate.ask = { prompt in
+      guard !prompt.choices.contains(.now), prompt.choices.contains(.quit) else { exit(4) }
+      return .quit
+    }
+    gate.requestForQuit(version: "test", whenDrained: {}) { emit("QUIT \($0)"); replied = true }
+    until { replied }
+  }
 case "switch":
   var proceeded = false
   var refused = false

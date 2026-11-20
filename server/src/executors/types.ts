@@ -121,7 +121,7 @@ export interface RunHandle {
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   // `unitToken` = 这一次运行的资源记号(executors/unit-token.ts):pid 认得出根,记号才认得出
   // 根死后仍在后台改文件的那些后代,所以它跟 pid 一样必须落库。
-  detached?: { pid: number; committed: () => number; unitToken?: string | null; checkpoint?: () => import("./output-checkpoint.js").OutputCheckpoint };
+  detached?: { pid: number; committed: () => number; unitToken?: string | null; checkpoint?: () => import("./output-checkpoint.js").OutputCheckpoint; checkpointAvailable?: () => boolean };
 }
 
 // 挂在执行器上的供应商(§5)。非空时启动 CLI 前注入 base_url + key,顶掉 CLI

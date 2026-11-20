@@ -95,7 +95,7 @@ final class ServerLauncher {
       // 都能认出是它、替它确认（见 settle）。
       ServerRecord.write(pid: Int(pid))
       let outcome = waitReady(pid: pid, timeout: timeout)
-      if case .ready = outcome { RuntimeRecovery.confirmed(); return outcome }
+      if case .ready = outcome { return outcome }
       guard kill(pid, 0) != 0 && errno == ESRCH else { return outcome }
       do {
         if let previous = try RuntimeRecovery.restoreBeforeAdoption() {
@@ -158,6 +158,7 @@ final class ServerLauncher {
       // 不管服务是谁起的、谁先看到它起来，确认都在这一处（窗口、登录项、另一个窗口的重试都经过这里）。
       if NaviConfig.isLocal {
         ServerRecord.confirmServing(pid: instance.pid)
+        RuntimeRecovery.confirmed(instance)
         ServedInstance.observe(instance)
         if instance.codeDir.map({ NaviHealth.samePath($0, NaviConfig.runtimeURL.path) }) == true {
           DispatchQueue.global(qos: .utility).async { RuntimeStore.reclaim() }
@@ -187,6 +188,7 @@ final class ServerLauncher {
     let localOnly = NaviConfig.allowsOtherDevices ? "0" : "1"
     let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT -u ASH_DATA_DIR -u HARNESS_DATA_DIR"
       + " NAVI_DATA_DIR=\(data) NAVI_DESKTOP_APP=1 NAVI_LOCAL_ONLY=\(localOnly)"
+      + " NAVI_MAC_SOURCE_RUNTIME=\(Self.quoted(NaviConfig.bundledRuntimeURL.path))"
       + " NAVI_WINDOW_PORT=\(NaviConfig.windowPort)\(port) "
       + "\(node) \(Self.quoted(runtime.appendingPathComponent("scripts/start-detached.mjs").path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(runtime.appendingPathComponent("server/dist/index.js").path))"
     shell.arguments = ["-ilc", script]
@@ -228,6 +230,7 @@ final class ServerLauncher {
       let probe = NaviHealth.probeSync()
       if case .navi(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
         ServerRecord.confirmServing(pid: Int(pid))
+        RuntimeRecovery.confirmed(instance)
         ServedInstance.observe(instance)
         return .ready
       }

@@ -299,7 +299,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       }),
       resume() { active = false; output.resume(); },
     };
-  });
+  }, () => detached?.checkpointAvailable?.() === true && progressSecured && checkpointReady());
 
   try {
     // **接管一个仍然存活的回合时,先把尚未兑现的熔断判决装回来,并且接着把它终止掉。**
