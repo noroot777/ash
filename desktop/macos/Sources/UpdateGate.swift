@@ -172,7 +172,7 @@ final class UpdateGate {
         verdict = .disrupts(target, [(title: "旧服务", why: handoverBlock)])
       } else { verdict = assessed }
       guard verdict.needsConsent else { prepare(verdict.target); return }
-      let choice: Choice = preservingRuntime ? .wait : ask(prompt(for: verdict, quitting: quitting))
+      let choice = ask(prompt(for: verdict, quitting: quitting))
       // 弹窗开着的时候 Sparkle 可能已经放弃了这次更新。
       guard mine == epoch else { return }
       switch choice {
