@@ -18,9 +18,11 @@ export const endRuntimeDrain = () => {
   deadline = 0;
   sealed = false;
   clearTimeout(lease);
-  void resumeRuntimeGateway().catch((error) => console.error("[navi] channel resume failed", error));
   for (const cleanup of cleanups) cleanup();
   cleanups.clear();
+  const resumed = resumeRuntimeGateway();
+  void resumed.catch((error) => console.error("[navi] channel resume failed", error));
+  return resumed;
 };
 export const onRuntimeDrainEnd = (cleanup: () => void) => { cleanups.add(cleanup); };
 export const sealRuntimeChannels = () => { sealed = true; };

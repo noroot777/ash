@@ -9,7 +9,7 @@ import { INSTANCE_ID } from "./instance-binding.js";
 import { heldTurns } from "./turn-lock.js";
 import { restartImpact } from "./reattach.js";
 import { beginRuntimeDrain, endRuntimeDrain, holdRuntimeDrain, onRuntimeDrainEnd, runtimeDraining, sealRuntimeChannels, waitRuntimeRequests } from "./runtime-drain.js";
-import { pauseRuntimeGateway, resumeRuntimeGateway } from "./runtime-channel-gateway.js";
+import { pauseRuntimeGateway } from "./runtime-channel-gateway.js";
 import { checkpointRuntimeConsumer } from "./runtime-consumers.js";
 
 export function mountRuntimeHandoff(api: Hono): void {
@@ -20,8 +20,8 @@ export function mountRuntimeHandoff(api: Hono): void {
       return context.json({ error: "运行时切换需要本机凭证及实例身份" }, 403);
     }
     if (context.req.method === "DELETE") {
-      await resumeRuntimeGateway();
-      endRuntimeDrain();
+      try { await endRuntimeDrain(); }
+      catch (error) { return context.json({ error: `旧服务已解封，但通道恢复失败：${String(error)}` }, 503); }
       return context.json({ ok: true });
     }
     if (process.platform !== "darwin" || !existsSync(join(CODE_DIR, "runtime-manifest.json")) || !existsSync(join(DATA_DIR, ".runtimes"))

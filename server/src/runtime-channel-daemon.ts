@@ -1,7 +1,7 @@
 import { Agent, createServer, request } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { chmodSync, unlinkSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { chmodSync, createReadStream, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 
 const deny = (reason: string) => ({ hookSpecificOutput: {
   hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason,
@@ -14,11 +14,26 @@ if (process.argv[2] === "--deny-monitor") {
 
 const socket = process.argv[2];
 if (!socket) throw new Error("missing channel control socket");
-const id = randomUUID();
+const endpoint = process.argv[3] ?? socket + ".endpoint.json";
+const stored = existsSync(endpoint) ? JSON.parse(readFileSync(endpoint, "utf8")) : undefined;
+if (stored && (typeof stored.id !== "string" || !Number.isInteger(stored.port) || stored.port < 1 || stored.port > 65535)) {
+  throw new Error("invalid persisted channel identity");
+}
+const id = stored?.id ?? randomUUID();
+const digest = async (path: string) => {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+};
+const build = `${await digest(process.argv[1])}-${await digest(process.execPath)}`;
+const persist = (retired = false) => {
+  const temporary = `${endpoint}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ id, port: (publicServer.address() as { port: number }).port, retired }), { mode: 0o600 });
+  renameSync(temporary, endpoint);
+};
 let target: { port: number; owner: string; pid: number } | undefined;
 let paused = true;
 let active = 0;
-let orphanedAt = 0;
 const queued = new Set<() => void>();
 const direct = new Agent();
 const hookPath = "/api/hooks/claude-monitor";
@@ -113,10 +128,11 @@ const flush = () => { if (!paused) for (const release of [...queued]) release();
 const control = createServer(async (incoming, outgoing) => {
   const path = incoming.url;
   if (path === "/status") {
-    json(outgoing, 200, { id, pid: process.pid, port: (publicServer.address() as { port: number }).port, active, paused, owner: target?.owner });
+    json(outgoing, 200, { protocol: 1, build, id, pid: process.pid, port: (publicServer.address() as { port: number }).port,
+      active, queued: queued.size, paused, owner: target?.owner });
     return;
   }
-  let body: { owner?: string; port?: number; pid?: number };
+  let body: { owner?: string; port?: number; pid?: number; paused?: boolean };
   try {
     let text = "";
     for await (const chunk of incoming) {
@@ -131,7 +147,7 @@ const control = createServer(async (incoming, outgoing) => {
     }
     if (active) { json(outgoing, 409, { error: "old backend still has delivered requests" }); return; }
     target = { owner: body.owner, port: body.port!, pid: body.pid! };
-    paused = false;
+    paused = body.paused === true;
     flush();
   } else {
     if (body.owner !== target?.owner) { json(outgoing, 409, { error: "backend ownership changed" }); return; }
@@ -142,23 +158,19 @@ const control = createServer(async (incoming, outgoing) => {
       flush();
     } else if (path === "/retire") {
       if (active || queued.size) { json(outgoing, 409, { error: "channel requests still pending" }); return; }
+      persist(true);
       outgoing.on("finish", () => setImmediate(cleanup));
     } else { json(outgoing, 404, { error: "unknown channel control" }); return; }
   }
   json(outgoing, 200, { id, active, paused });
 });
-control.on("error", () => process.exit(1));
-publicServer.on("error", () => process.exit(1));
-publicServer.listen(0, "127.0.0.1", () => {
+const startupError = (error: Error) => { console.error(error); process.exit(1); };
+control.on("error", startupError);
+publicServer.on("error", startupError);
+publicServer.listen(stored?.port ?? 0, "127.0.0.1", () => {
+  persist();
   control.listen(socket, () => chmodSync(socket, 0o600));
 });
 const cleanup = () => { try { unlinkSync(socket); } catch {} process.exit(0); };
 process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
-setInterval(() => {
-  let alive = false;
-  try { if (target) { process.kill(target.pid, 0); alive = true; } } catch {}
-  if (alive || active || queued.size) orphanedAt = 0;
-  else if (!orphanedAt) orphanedAt = Date.now();
-  else if (Date.now() - orphanedAt > 600_000) cleanup();
-}, 30_000).unref();

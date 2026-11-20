@@ -1,0 +1,272 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Agent, fetch as directFetch } from "undici";
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
+import { withTestResources } from "./test-process-resources.mjs";
+import { runTestProcess } from "./test-process.mjs";
+
+if (process.platform === "win32") {
+  console.log("SKIP: macOS stable channel lifecycle");
+} else {
+  const temporary = mkdtempSync(join(tmpdir(), "navi-channel-life-"));
+  process.env.NAVI_DATA_DIR = temporary;
+  process.env.NAVI_DB = join(temporary, "navi.db");
+  process.env.NAVI_RUNS_DIR = join(temporary, "runs");
+  const { RuntimeGatewayController, gatewayRequest } = await import("../server/dist/runtime-channel-controller.js");
+  const { initializeRuntimeGateway } = await import("../server/dist/runtime-channel-gateway.js");
+  const { INSTANCE_ID } = await import("../server/dist/instance-binding.js");
+  const { beginRuntimeDrain, endRuntimeDrain, holdRuntimeDrain, onRuntimeDrainEnd, runtimeDraining,
+    runtimeDrainGate, sealRuntimeChannels } = await import("../server/dist/runtime-drain.js");
+  const { acquireDbSingletonLock, liveLockToken } = await import("../server/dist/singleton.js");
+  const { NAVI_HEADERS } = await import("../server/dist/request-headers.js");
+  const direct = new Agent();
+  const fetch = (url, options) => directFetch(url, { ...options, dispatcher: direct });
+  const servers = [];
+  const controllers = [];
+  const sockets = new Map();
+  const waitFor = async (check, label) => {
+    const until = Date.now() + 8_000;
+    while (Date.now() < until) {
+      try { const result = await check(); if (result) return result; } catch {}
+      await new Promise((done) => setTimeout(done, 25));
+    }
+    throw new Error(label);
+  };
+  const listen = async (server, address) => {
+    servers.push(server);
+    server.listen(address, typeof address === "number" ? "127.0.0.1" : undefined);
+    await once(server, "listening");
+    return server;
+  };
+  const counts = new Map();
+  const requests = new AbortController();
+  let stream;
+  const backend = createServer(async (incoming, outgoing) => {
+    let text = "";
+    for await (const chunk of incoming) text += chunk;
+    const body = JSON.parse(text || "{}");
+    counts.set(body.key, (counts.get(body.key) ?? 0) + 1);
+    if (body.hold) { stream = outgoing; outgoing.writeHead(200); outgoing.write("first\n"); return; }
+    if (incoming.url.includes("hooks")) outgoing.end(JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny" } }));
+    else outgoing.end(JSON.stringify({ key: body.key }));
+  });
+  const entry = fileURLToPath(new URL("../server/dist/runtime-channel-daemon.js", import.meta.url));
+  let node = process.execPath;
+  if (process.platform === "darwin") {
+    const common = (await runTestProcess("git", ["rev-parse", "--git-common-dir"])).stdout.trim();
+    const root = dirname(realpathSync(common));
+    const bundler = readFileSync(new URL("../desktop/macos/scripts/bundle-runtime.mjs", import.meta.url), "utf8");
+    const version = bundler.match(/const NODE_VERSION = "([^"]+)"/)[1];
+    node = join(process.env.NAVI_MAC_CACHE ?? join(root, "desktop/macos/build/cache"), `node-${version}-darwin-arm64/bin/node`);
+    assert.ok(existsSync(node), "prepare the pinned macOS runtime cache before testing portable Node installation");
+  }
+  const home = join(temporary, "gateway");
+  const socket = join(temporary, "control.sock");
+  const options = { home, socket, entry, node, owner: INSTANCE_ID, port: 0,
+    hasConsumers: async () => false };
+  const start = async (overrides = {}) => {
+    const controller = new RuntimeGatewayController({ ...options, ...overrides });
+    controllers.push(controller);
+    sockets.set(overrides.socket ?? socket, overrides.owner ?? INSTANCE_ID);
+    await controller.start();
+    return controller;
+  };
+  const stopDaemon = async (state) => {
+    process.kill(state.pid, "SIGTERM");
+    await waitFor(() => { try { process.kill(state.pid, 0); return false; } catch { return true; } }, "owned daemon exits");
+  };
+  let lock;
+  await withTestResources(async () => {
+    lock = acquireDbSingletonLock();
+    assert.ok(lock);
+    const { mountRuntimeHandoff } = await import("../server/dist/runtime-handoff.js");
+    await listen(backend, 0);
+    options.port = backend.address().port;
+    const first = await start();
+    const original = { ...first.state };
+    const base = `http://127.0.0.1:${original.port}`;
+    const send = (key, hook = false, body = {}) => {
+      const response = fetch(base + (hook ? "/api/hooks/claude-monitor" : "/api/llm-providers/p/convert/v1/responses"), {
+        method: "POST", body: JSON.stringify({ key, ...body }), headers: { "content-type": "application/json" }, signal: requests.signal,
+      });
+      void response.catch(() => {});
+      return response;
+    };
+    assert.equal(original.protocol, 1);
+    assert.match(original.build, /^[a-f0-9]{64}-[a-f0-9]{64}$/);
+    assert.deepEqual(await (await send("before-crash")).json(), { key: "before-crash" });
+    process.kill(original.pid, "SIGKILL");
+    const recovered = await waitFor(async () => {
+      const state = await gatewayRequest(socket, "/status");
+      return state.pid !== original.pid && state.owner === INSTANCE_ID && state;
+    }, "live service automatically recovers gateway");
+    assert.equal(recovered.id, original.id);
+    assert.equal(recovered.port, original.port);
+    assert.deepEqual(await (await send("after-crash")).json(), { key: "after-crash" });
+    assert.equal((await (await send("hook-after-crash", true)).json()).hookSpecificOutput.permissionDecision, "deny");
+
+    await first.pause();
+    process.kill(recovered.pid, "SIGKILL");
+    await waitFor(async () => {
+      const state = await gatewayRequest(socket, "/status");
+      return state.pid !== recovered.pid && state.owner === INSTANCE_ID && state.paused;
+    }, "recovery preserves a successful handoff seal");
+    const waiting = send("paused-recovery");
+    await waitFor(async () => (await gatewayRequest(socket, "/status")).queued === 1, "request queues after recovered seal");
+    assert.equal(counts.get("paused-recovery"), undefined);
+    await first.resume();
+    assert.equal((await (await waiting).json()).key, "paused-recovery");
+    assert.equal(counts.get("paused-recovery"), 1);
+
+    first.close();
+    await stopDaemon(await gatewayRequest(socket, "/status"));
+    const offline = await start();
+    assert.equal(offline.state.id, original.id);
+    assert.equal(offline.state.port, original.port);
+    assert.equal((await (await send("service-reopened")).json()).key, "service-reopened");
+    console.log("✓ gateway id/port survive process death and service reopen; watchdog restores model/hooks and preserves the admission seal");
+
+    const nextEntry = join(temporary, "next-gateway.mjs");
+    writeFileSync(nextEntry, readFileSync(entry, "utf8") + "\n");
+    offline.close();
+    const retained = await start({ entry: nextEntry, hasConsumers: async () => true });
+    assert.equal(retained.state.build, original.build, "compatible entry is retained while a session still uses it");
+    assert.notEqual(retained.script, offline.script, "new artifacts are staged by both script and Node content hashes");
+    assert.equal((await (await send("retained-session")).json()).key, "retained-session");
+    retained.close();
+    const upgraded = await start({ entry: nextEntry });
+    assert.notEqual(upgraded.state.build, original.build);
+    assert.equal(upgraded.state.id, original.id);
+    assert.equal(upgraded.state.port, original.port);
+    assert.equal((await (await send("upgraded")).json()).key, "upgraded");
+    assert.equal(counts.get("upgraded"), 1);
+
+    const delivered = await send("upgrade-stream", false, { hold: true });
+    const reader = delivered.body.getReader();
+    await reader.read();
+    upgraded.close();
+    const busy = new RuntimeGatewayController(options);
+    controllers.push(busy);
+    await assert.rejects(busy.start(), /409/, "an in-flight stream prevents replacing or reactivating its backend");
+    assert.equal((await gatewayRequest(socket, "/status")).build, upgraded.state.build);
+    stream.end("last\n");
+    while (!(await reader.read()).done) {}
+    await waitFor(async () => (await gatewayRequest(socket, "/status")).active === 0, "upgrade stream drains");
+    const rolledBack = await start();
+    assert.equal(rolledBack.state.build, original.build);
+    assert.equal(rolledBack.state.id, original.id);
+    assert.equal(rolledBack.state.port, original.port);
+    assert.equal(counts.get("upgrade-stream"), 1, "upgrade never replays a delivered request");
+    console.log("✓ content-versioned entry upgrades/rolls back only at session-free startup; delivered streams are never interrupted or replayed");
+
+    rolledBack.close();
+    await stopDaemon(await gatewayRequest(socket, "/status"));
+    const legacyEntry = join(temporary, "legacy-gateway.mjs");
+    writeFileSync(legacyEntry, readFileSync(entry, "utf8").replace("protocol: 1, build, id,", "id,"));
+    const legacy = await start({ entry: legacyEntry, hasConsumers: async () => true });
+    assert.equal(legacy.state.protocol, undefined);
+    legacy.close();
+    unlinkSync(join(home, "endpoint.json"));
+    const adopted = await start({ hasConsumers: async () => true });
+    assert.equal(adopted.state.id, original.id);
+    assert.equal(adopted.state.port, original.port);
+    assert.equal(adopted.state.build, undefined);
+    assert.equal(JSON.parse(readFileSync(join(home, "endpoint.json"), "utf8")).id, original.id);
+    adopted.close();
+    const modern = await start();
+    assert.equal(modern.state.protocol, 1);
+    assert.equal(modern.state.build, original.build);
+    assert.equal((await (await send("legacy-upgraded")).json()).key, "legacy-upgraded");
+    modern.close();
+    await stopDaemon(await gatewayRequest(socket, "/status"));
+    console.log("✓ unversioned legacy entry is adopted without moving live URLs, then upgraded after its consumers finish");
+
+    const occupied = await listen(createServer(), original.port);
+    await assert.rejects(start(), /EADDRINUSE|ECONNREFUSED|ENOENT/, "a stolen port must not silently move an existing session's endpoint");
+    assert.equal(JSON.parse(readFileSync(join(home, "endpoint.json"), "utf8")).port, original.port);
+    await new Promise((done) => occupied.close(done));
+
+    const unknownSocket = join(temporary, "unknown.sock");
+    const unknown = await listen(createServer((incoming, outgoing) => {
+      outgoing.end(JSON.stringify({ ...original, protocol: 99 }));
+    }), unknownSocket);
+    const incompatible = new RuntimeGatewayController({ ...options, socket: unknownSocket });
+    controllers.push(incompatible);
+    await assert.rejects(incompatible.start(), /unsupported channel gateway protocol/);
+    await new Promise((done) => unknown.close(done));
+    console.log("✓ occupied persisted port and incompatible control protocol fail closed rather than changing endpoint identity");
+
+    const global = await initializeRuntimeGateway(options);
+    controllers.push(global);
+    global.close();
+    const current = await gatewayRequest(socket, "/status");
+    await stopDaemon(current);
+    sockets.delete(socket);
+    let resumeFails = true;
+    const brokenControl = await listen(createServer(async (incoming, outgoing) => {
+      for await (const chunk of incoming) void chunk;
+      outgoing.writeHead(incoming.url === "/resume" && resumeFails ? 500 : 200, { "content-type": "application/json" });
+      outgoing.end(JSON.stringify(current));
+    }), socket);
+    const api = new Hono();
+    mountRuntimeHandoff(api);
+    const app = new Hono();
+    app.use("*", runtimeDrainGate());
+    app.route("/api", api);
+    app.post("/api/projects", (context) => context.json({ executed: true }));
+    app.post("/api/llm-providers/p/convert/v1/responses", (context) => context.json({ executed: true }));
+    const http = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
+    servers.push(http);
+    if (!http.listening) await once(http, "listening");
+    const service = `http://127.0.0.1:${http.address().port}`;
+    beginRuntimeDrain();
+    sealRuntimeChannels();
+    holdRuntimeDrain();
+    let released = false;
+    onRuntimeDrainEnd(() => { released = true; });
+    const blocked = await fetch(service + "/api/projects", { method: "POST" });
+    assert.equal(blocked.status, 503);
+    await blocked.text();
+    const headers = { [NAVI_HEADERS.hostToken]: liveLockToken(), [NAVI_HEADERS.instance]: INSTANCE_ID };
+    const cancelled = await fetch(service + "/api/runtime-handoff", { method: "DELETE", headers });
+    assert.equal(cancelled.status, 503);
+    assert.match((await cancelled.json()).error, /已解封.*通道恢复失败/);
+    assert.equal(runtimeDraining(), false);
+    assert.equal(released, true);
+    for (const path of ["/api/projects", "/api/llm-providers/p/convert/v1/responses"]) {
+      const response = await fetch(service + path, { method: "POST" });
+      assert.equal(response.status, 200, "local admission recovers even while the entry is unavailable");
+      await response.text();
+    }
+    resumeFails = false;
+    const retried = await fetch(service + "/api/runtime-handoff", { method: "DELETE", headers });
+    assert.equal(retried.status, 200);
+    await retried.text();
+    await endRuntimeDrain();
+    brokenControl.closeAllConnections();
+    await new Promise((done) => brokenControl.close(done));
+    sockets.delete(socket);
+    console.log("✓ authenticated DELETE always releases an infinite local seal and consumer checkpoints; entry failure is explicit and retryable");
+  }, [
+    () => { for (const controller of controllers) controller.close(); requests.abort(); },
+    async () => {
+      for (const [path, owner] of sockets) {
+        if (!existsSync(path)) continue;
+        await waitFor(async () => {
+          try { await gatewayRequest(path, "/retire", { owner }); return true; } catch { return false; }
+        }, "owned gateway drains before retirement");
+        await waitFor(() => !existsSync(path), "owned gateway retires before cleanup");
+      }
+    },
+    () => lock?.release(),
+    () => direct.destroy(),
+    async () => { for (const server of servers) { server.closeAllConnections(); if (server.listening) await new Promise((done) => server.close(done)); } },
+    () => rmSync(temporary, { recursive: true, force: true }),
+  ]);
+}
