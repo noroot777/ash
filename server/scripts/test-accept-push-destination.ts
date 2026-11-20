@@ -82,10 +82,11 @@ try {
     assert.equal(git(mirror, "rev-parse", "main"), before);
   }
 
-  // 22. 推送地址里内嵌认证信息（审查第 4 轮第 2 条）：两种写法 —— `user:密码@` 和直接把令牌写在用户名位置的 `令牌@`。
+  // 22. 推送地址里内嵌认证信息（审查第 4 轮第 2 条）：`user:密码@`、直接把令牌写在用户名位置的 `令牌@`、密码里带引号。
   //     发给确认层的目的地只有抹掉整段认证信息的地址和指纹；目的地变了的报错、任务记录里都没有明文；指纹被改过就拒；
   //     真去拉推时认证信息不进 git 命令行参数，拉不到的报错里也没有明文。
-  for (const [name, auth] of [["cred-userpass", "review-user:SECRET"], ["cred-token", "SECRET"]] as const) {
+  // 第三种：密码里带引号（URL 认证段的合法字符），脱敏不能在引号处就停下（审查第 5 轮第 2 条）。
+  for (const [name, auth] of [["cred-userpass", "review-user:SECRET"], ["cred-token", "SECRET"], ["cred-quote", `review-user:SECRET'x"y`]] as const) {
     const { repo } = makeStage(name);
     const taskId = await seedTask(repo, "task.txt", "task\n");
     git(repo, "remote", "set-url", "origin", `https://${auth}_OLD@127.0.0.1:1/r.git`);
@@ -154,7 +155,7 @@ try {
     assert.equal(await stageOf(taskId), "verified");
   }
 
-  console.log("accept push destination: 推到哪 / 门禁续做带冻结目的地、存坏的算确认失效 / 目的地变了就拒 / 认证信息（两种写法）不出服务端 / 只联系确认过的地址 / 确认失效就拒 全部通过");
+  console.log("accept push destination: 推到哪 / 门禁续做带冻结目的地、存坏的算确认失效 / 目的地变了就拒 / 认证信息（三种写法）不出服务端 / 只联系确认过的地址 / 确认失效就拒 全部通过");
 } finally {
   await releaseTmpDb();
 }
