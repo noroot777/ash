@@ -68,8 +68,9 @@ enum NaviConfig {
 
   /// 自带的那份 navi（`scripts/bundle-runtime.mjs` 装进来的，布局见那份脚本顶部）。
   static var runtimeURL: URL {
-    RuntimeStore.restored ?? RuntimeStore.destination ?? bundledRuntimeURL
+    RuntimeStore.restored ?? targetRuntimeURL
   }
+  static var targetRuntimeURL: URL { RuntimeStore.destination ?? bundledRuntimeURL }
   static var bundledRuntimeURL: URL {
     if let raw = env("NAVI_MAC_RUNTIME") { return URL(fileURLWithPath: raw, isDirectory: true) }
     return Bundle.main.resourceURL!.appendingPathComponent("app", isDirectory: true)
@@ -294,7 +295,8 @@ enum RuntimeStore {
   }
 
   static func reclaimAfterConfirmation(_ instance: NaviInstance) {
-    guard instance.isOurs, let pid = instance.pid, let code = instance.codeDir, contains(code) else { return }
+    guard instance.isOurs, let pid = instance.pid, let code = instance.codeDir, contains(code),
+          NaviHealth.samePath(code, NaviConfig.targetRuntimeURL.path) else { return }
     lock.lock()
     let first = reclaimed.insert(pid).inserted
     lock.unlock()

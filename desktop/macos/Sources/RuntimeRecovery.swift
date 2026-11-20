@@ -12,9 +12,9 @@ enum RuntimeRecovery {
   }
   static var url: URL { NaviConfig.dataURL.appendingPathComponent(".mac-runtime-recovery.json") }
 
-  static func record(previous: String, backup: URL?, finalized: Bool = false, next: URL? = nil) throws {
+  static func record(previous: String, backup: URL?, finalized: Bool = false) throws {
     guard RuntimeStore.contains(previous) else { throw SQLiteFile.Failure("旧运行时身份不符") }
-    let record = Record(previous: NaviHealth.realPath(previous), next: NaviHealth.realPath((next ?? NaviConfig.runtimeURL).path),
+    let record = Record(previous: NaviHealth.realPath(previous), next: NaviHealth.realPath(NaviConfig.targetRuntimeURL.path),
                         backup: backup?.path, server: ServerRecord.read(), finalized: finalized)
     try JSONEncoder().encode(record).write(to: url, options: .atomic)
   }
@@ -29,7 +29,7 @@ enum RuntimeRecovery {
   static func restoreBeforeAdoption() throws -> URL? {
     guard let data = try? Data(contentsOf: url) else { return nil }
     let record = try JSONDecoder().decode(Record.self, from: data)
-    guard case .down = NaviHealth.probeSync(), NaviHealth.samePath(record.next, NaviConfig.runtimeURL.path),
+    guard case .down = NaviHealth.probeSync(), NaviHealth.samePath(record.next, NaviConfig.targetRuntimeURL.path),
           RuntimeStore.contains(record.previous), !record.adopting, record.finalized == true else {
       throw SQLiteFile.Failure("新版已开始接管或恢复身份不符，未自动覆盖数据库；迁移前恢复点仍保留。")
     }

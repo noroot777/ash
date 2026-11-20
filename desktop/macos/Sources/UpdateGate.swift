@@ -99,6 +99,16 @@ final class UpdateGate {
     evaluate()
   }
 
+  func pauseAfterRecovery(from version: String, reason: String) {
+    if phase == .idle, purpose == nil {
+      purpose = .staleServer(from: version)
+      proceeds.append({})
+      stopPolling()
+      phase = .blocked
+    }
+    report("新版启动失败，已恢复旧服务和迁移前数据库。自动切换已暂停；可以继续使用旧服务，从菜单重试切换新版服务。\n\n\(reason)")
+  }
+
   /// 用户要退出，而退出时 Sparkle 会把下好的更新装上：同一道闸，多一个「取消」。
   /// reply(true) = 可以退了；reply(false) = 这次别退。选了「等它们跑完」时，等完调 whenDrained。
   func requestForQuit(version: String, whenDrained: @escaping () -> Void, reply: @escaping (Bool) -> Void) {
@@ -331,7 +341,7 @@ final class UpdateGate {
         if let recovery, !recovery.matches(instance) { throw SQLiteFile.Failure("服务身份已变化，本次强制切换已取消") }
         previous = code
         let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
-        try RuntimeRecovery.record(previous: code, backup: backup, next: recovery == nil ? nil : RuntimeStore.destination)
+        try RuntimeRecovery.record(previous: code, backup: backup)
       }
       catch {
         maintenance.end()
@@ -354,10 +364,9 @@ final class UpdateGate {
         do {
           let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
           if let previous {
-            try RuntimeRecovery.record(previous: previous, backup: backup, finalized: true,
-                                       next: recovery == nil ? nil : RuntimeStore.destination)
+            try RuntimeRecovery.record(previous: previous, backup: backup, finalized: true)
           }
-          if recovery != nil, let next = RuntimeStore.destination { try RuntimeStore.activate(next) }
+          if let next = RuntimeStore.destination { try RuntimeStore.activate(next) }
           return .done(maintenance)
         } catch {
           maintenance.end()
@@ -482,10 +491,10 @@ final class UpdateGate {
     log("问用户：\(title)；\(lines.joined(separator: " "))")
     var buttons = [waitTitle, nowTitle]
     var choices: [Choice] = [.wait, .now]
-    if case .staleServer = purpose, RuntimeStore.destination != nil {
+    if case .staleServer = purpose, preservingRuntime {
       buttons = [waitTitle]
       choices = [.wait]
-      if preservingRuntime && !quitting {
+      if !quitting {
         buttons.append("强制切换服务…")
         choices.append(.recover)
       }

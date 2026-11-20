@@ -35,11 +35,29 @@ if (process.platform !== "darwin") {
     writeFileSync(join(path, "server/dist/index.js"), `const fs=require('node:fs'),http=require('node:http');
 const {DatabaseSync}=require('node:sqlite');
 const data=process.env.NAVI_DATA_DIR,root=fs.realpathSync(__dirname+'/../..');
-if(${JSON.stringify(version)}==='next'){
+if(${JSON.stringify(version)}==='next'&&!fs.existsSync(data+'/.recovery-retry-clear')){
  const database=new DatabaseSync(data+'/navi.db');database.exec('create table failed_migration (id text)');database.close();process.exit(7);
 }
-http.createServer((request,response)=>response.end(JSON.stringify({ok:true,pid:process.pid,
- instance:{id:'restored',dataDir:data,codeDir:root,desktop:true,windowPort:Number(process.env.NAVI_WINDOW_PORT)}})))
+const event=value=>fs.appendFileSync(data+'/../events.jsonl',JSON.stringify(value)+'\\n');
+http.createServer((request,response)=>{
+ const url=new URL(request.url,'http://localhost');
+ if(url.pathname==='/api/restart-impact'){
+  if(!fs.existsSync(data+'/.recovery-retry-clear')){response.writeHead(500);response.end('{}');return}
+  event({retryImpact:true,schema:url.searchParams.get('schema')});
+  response.end(JSON.stringify({survives:[],resumes:[],interrupted:[],mcpDisrupted:[],runtimeHandover:{blocked:[],sessions:[],
+   target:{protocol:1,schema:url.searchParams.get('schema')}}}));return;
+ }
+ if(url.pathname==='/api/runtime-handover'){
+  let body='';request.on('data',chunk=>body+=chunk);request.on('end',()=>{
+   const message=JSON.parse(body);event({retryHandoff:message});
+   const expected=JSON.parse(fs.readFileSync(data+'/.recovery-retry-target.json'));
+   if(!message.check&&!message.release&&message.schema!==expected.schema){response.writeHead(409);response.end('{}');return}
+   response.end(JSON.stringify(message.check?{valid:true}:{protocol:1,lease:'retry-lease'}));
+  });return;
+ }
+ response.end(JSON.stringify({ok:true,pid:process.pid,
+ instance:{id:'restored',dataDir:data,codeDir:root,desktop:true,windowPort:Number(process.env.NAVI_WINDOW_PORT)}}));
+})
  .listen(Number(process.env.PORT),'127.0.0.1');`);
     writeFileSync(join(path, ".in-use"), "");
     writeFileSync(join(path, "version.txt"), version);
@@ -81,7 +99,7 @@ const server=createServer((request,response)=>{
   if(request.url==='/api/health'){
     if((requested&&options.unidentified)||changed==='unidentified'){response.writeHead(503);response.end('{}');return}
     response.end(JSON.stringify({ok:true,pid:changed==='pid'?process.pid+100:process.pid,instance:{id:changed==='identity'?'replacement':'original',
-      dataDir:changed==='foreign'?data+'-foreign':data,codeDir:changed==='code'?${JSON.stringify(bundled)}:runtime,
+      dataDir:changed==='foreign'?data+'-foreign':data,codeDir:changed==='code'||options.legacy?${JSON.stringify(bundled)}:runtime,
       desktop:true,windowPort:45678}}));return;
   }
   if(url.pathname==='/api/restart-impact'){
@@ -118,7 +136,8 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       const recorded = () => existsSync(events) ? readFileSync(events, "utf8").trim().split("\n").map(JSON.parse) : [];
       const backupFiles = () => existsSync(join(data, "backups")) && !options.backupFailure
         ? readdirSync(join(data, "backups")).filter((name) => name.endsWith(".db")) : [];
-      await operation({ run, pid, data, previous, next: join(data, ".mac-runtimes", nextId), recorded, backupFiles });
+      const oldMetadata = JSON.parse(readFileSync(join(previous, ".handover.json"), "utf8"));
+      await operation({ run, pid, data, previous, next: join(data, ".mac-runtimes", nextId), oldMetadata, recorded, backupFiles });
     }, [
       async () => { for (const fixture of fixtures) await fixture.dispose(); },
       () => rmSync(directory, { recursive: true, force: true }),
@@ -142,6 +161,20 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       });
     }
     console.log("✓ waiting and both cancellation points preserve service, tasks and database");
+
+    for (const impactFailure of [false, true]) {
+      for (const answer of ["wait", "now"]) {
+        await scenario({ legacy: true, impactFailure }, async ({ run, pid, recorded, backupFiles }) => {
+          const output = await run(answer === "wait" ? 2 : 0, { ANSWERS: answer });
+          assert.match(output, /等它们跑完再重启\|现在重启/);
+          assert.doesNotMatch(output, /强制切换服务/);
+          assert.equal(isPidAlive(pid), answer === "wait");
+          assert.equal(recorded().some((event) => event.signal), answer === "now");
+          assert.equal(backupFiles().length, answer === "wait" ? 0 : 1);
+        });
+      }
+    }
+    console.log("✓ legacy packaged services retain both wait and restart-now for busy or unavailable impact");
 
     for (const options of [{}, { incompatible: true }, { impactFailure: true }]) {
       await scenario(options, async ({ run, pid, data, previous, next, recorded, backupFiles }) => {
@@ -289,6 +322,8 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
     await scenario({}, async ({ run, previous, data }) => {
       const output = await run(0, { START_FAILED_MIGRATION: "1" });
       assert.match(output, /OUTCOME ready/);
+      assert.match(output, /REPORT 新版启动失败，已恢复旧服务和迁移前数据库/);
+      assert.match(output, /RECOVERY_NOTICE_AND_PAUSE/);
       assert.ok(output.includes(`RESTORED_SERVICE ${realpathSync(previous)}`), output);
       const database = new DatabaseSync(join(data, "navi.db"));
       assert.equal(database.prepare("select id from tasks").get().id, "original");
@@ -300,6 +335,19 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       const output = await run(0, { START_FAILED_MIGRATION: "1", RETRY_AFTER_ROLLBACK: "1", ANSWERS: "recover,recover,recover,recover" });
       assert.ok(output.includes(`RETRY_TARGET ${realpathSync(next)}`), output);
     });
+    await scenario({ incompatible: true }, async ({ run, oldMetadata, next, recorded, data }) => {
+      const output = await run(0, { START_FAILED_MIGRATION: "1", NORMAL_RETRY_AFTER_ROLLBACK: "1" });
+      assert.match(output, /RECOVERY_NOTICE_AND_PAUSE/);
+      assert.match(output, /RETRY_OUTCOME ready/);
+      assert.ok(output.includes(`RETRY_SERVICE ${realpathSync(next)}`), output);
+      assert.doesNotMatch(output, /PROMPT 3/);
+      const target = JSON.parse(readFileSync(join(next, ".handover.json"), "utf8"));
+      assert.notEqual(target.schema, oldMetadata.schema);
+      assert.ok(recorded().some((event) => event.retryImpact && event.schema === target.schema));
+      assert.ok(recorded().some((event) => event.retryHandoff?.schema === target.schema));
+      assert.equal(realpathSync(join(data, ".mac-runtimes/current")), realpathSync(next));
+    });
+    console.log("✓ normal retry after rollback preflights, records and actually starts the new target instead of relabeling old code");
     await scenario({}, async ({ run, data }) => {
       const output = await run(0, { ADOPTED_ROLLBACK: "1" });
       assert.match(output, /REFUSED_ADOPTED/);

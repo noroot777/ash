@@ -162,7 +162,7 @@ enum RestartImpactProbe {
 
 enum RuntimeHandover {
   static func compatibility() -> [String: Any]? {
-    guard let data = try? Data(contentsOf: NaviConfig.runtimeURL.appendingPathComponent(".handover.json")) else { return nil }
+    guard let data = try? Data(contentsOf: NaviConfig.targetRuntimeURL.appendingPathComponent(".handover.json")) else { return nil }
     return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
   }
 

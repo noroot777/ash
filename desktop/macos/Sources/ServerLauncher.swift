@@ -79,8 +79,11 @@ final class ServerLauncher {
     defer { withExtendedLifetime(lock) {} }
     if let settled = Self.settle(NaviHealth.probeSync()) { return settled }
     if let hold { return .failed(hold) }
+    let runtime = NaviConfig.targetRuntimeURL
+    do { if RuntimeStore.destination != nil { try RuntimeStore.activate(runtime) } }
+    catch { return .failed("无法启用新版运行时，未启动服务：\(error.localizedDescription)") }
     if let failure = Self.backUpBeforeMigration() { return .failed(failure) }
-    let parts = [NaviConfig.nodeURL, NaviConfig.serverEntryURL, NaviConfig.detachScriptURL]
+    let parts = ["node/bin/node", "server/dist/index.js", "scripts/start-detached.mjs"].map { runtime.appendingPathComponent($0) }
     if let missing = parts.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
       return .failed("app 里自带的 Navi 不完整（缺 \(missing.path)）。重新装一次 Navi.app。")
     }
@@ -89,7 +92,7 @@ final class ServerLauncher {
     } catch {
       return .failed("建不了日志目录 \(NaviConfig.logURL.path)：\(error.localizedDescription)")
     }
-    switch spawnDetached() {
+    switch spawnDetached(runtime: runtime) {
     case .failure(let reason): return .failed(reason)
     case .success(let pid):
       // 进程一起来就记下 pid：这个启动器等不到它应答（被退掉、超时）也不要紧，之后谁看到它应答
@@ -98,15 +101,21 @@ final class ServerLauncher {
       let outcome = waitReady(pid: pid, timeout: timeout)
       if case .failed(let startupFailure) = outcome, kill(pid, 0) != 0, errno == ESRCH {
         do {
-          if try RuntimeRecovery.restoreBeforeAdoption() != nil {
-            switch spawnDetached() {
+          if let previous = try RuntimeRecovery.restoreBeforeAdoption() {
+            switch spawnDetached(runtime: previous) {
             case .failure(let reason): return .failed("已恢复迁移前数据库，但旧服务启动失败：\(reason)")
             case .success(let previousPID):
               if let record = ServerRecord.read() {
                 try JSONEncoder().encode(ServerRecord(pid: Int(previousPID), bundleVersion: record.bundleVersion,
                                                      confirmedAt: record.confirmedAt)).write(to: ServerRecord.url, options: .atomic)
               }
-              return waitReady(pid: previousPID, timeout: timeout)
+              let restored = waitReady(pid: previousPID, timeout: timeout)
+              if case .ready = restored {
+                let version = ServerRecord.read()?.bundleVersion ?? "unknown"
+                print("新版启动失败，已恢复旧服务和迁移前数据库。\n\(startupFailure)")
+                DispatchQueue.main.async { UpdateGate.shared.pauseAfterRecovery(from: version, reason: startupFailure) }
+              }
+              return restored
             }
           }
         } catch { return .failed("新版启动失败，自动恢复未执行：\(error.localizedDescription)\n\(startupFailure)") }
@@ -166,7 +175,7 @@ final class ServerLauncher {
 
   private enum Spawned { case success(Int32), failure(String) }
 
-  private func spawnDetached() -> Spawned {
+  private func spawnDetached(runtime: URL) -> Spawned {
     let shell = Process()
     shell.executableURL = URL(fileURLWithPath: Self.loginShell())
     // 登录 shell 只负责拼出 PATH、LANG 这些。.zprofile / .zshrc 跑在这段命令**之前**，里面给开发实例
@@ -177,7 +186,7 @@ final class ServerLauncher {
     // 这几个是给 server 的，它读完就从自己的环境里删掉（见 server/src/paths.ts、local-only.ts、
     // window-port.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
     let data = Self.quoted(NaviConfig.dataURL.path)
-    let node = Self.quoted(NaviConfig.nodeURL.path)
+    let node = Self.quoted(runtime.appendingPathComponent("node/bin/node").path)
     // 默认端口不传 PORT：server 的环境会一路继承给 agent 与应用内终端，多一个 PORT 会让
     // 里面起的前端 dev server 去抢 navi 的端口。
     let port = NaviConfig.port == 4317 ? "" : " PORT=\(NaviConfig.port)"
@@ -185,7 +194,7 @@ final class ServerLauncher {
     let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT -u ASH_DATA_DIR -u HARNESS_DATA_DIR"
       + " NAVI_DATA_DIR=\(data) NAVI_DESKTOP_APP=1 NAVI_LOCAL_ONLY=\(localOnly)"
       + " NAVI_WINDOW_PORT=\(NaviConfig.windowPort)\(port) "
-      + "\(node) \(Self.quoted(NaviConfig.detachScriptURL.path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(NaviConfig.serverEntryURL.path))"
+      + "\(node) \(Self.quoted(runtime.appendingPathComponent("scripts/start-detached.mjs").path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(runtime.appendingPathComponent("server/dist/index.js").path))"
     shell.arguments = ["-ilc", script]
     shell.environment = Self.terminalLikeEnvironment()
     let launchLog = NaviConfig.logURL.appendingPathComponent("launch-\(UUID().uuidString).log")
