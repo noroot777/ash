@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { mountRuntimeHandoverRoutes } from "./runtime-handover-routes.js";
 import type { Context } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
@@ -148,6 +149,7 @@ api.get("/health", (c) => c.json({
 //
 // 匿名那一档两种模式都要校验:自用模式下匿名 = 别的机器没带访问密钥就来打(本机跑
 // 重启脚本是本机直连,不是匿名),免登录名单放行的只是路径形状。
+mountRuntimeHandoverRoutes(api);
 api.get("/restart-impact", async (c) => {
   const { actorOf } = await import("./auth/context.js");
   if (actorOf(c).kind === "anonymous") {

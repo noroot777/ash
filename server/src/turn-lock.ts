@@ -10,6 +10,7 @@
 // 依赖是单向的:这个文件不 import runs 的运行时(只借一个类型),所以 `claimReconcileTurn`
 // 那条要问「有没有句柄在册」的,住在 runs.ts 里。
 import type { StopSettle } from "./runs.js";
+import { runtimeHandoverActive } from "./runtime-handover-state.js";
 import type { WindDown } from "./turn-wind-down.js";
 
 // ── 单飞锁与「这一轮跑完之后」────────────────────────────────────────────────
@@ -203,6 +204,7 @@ export function takeStartFreezeDetail(taskId: string): StartFreeze | null {
  * 既不代表进程活着、也不代表回合归属，审查实测两个方向都错过）。
  */
 export function claimOwnTurn(taskId: string, role = "single", review: TurnReview | null = null): TurnIdentity | null {
+  if (runtimeHandoverActive()) return null;
   if (turns.has(taskId)) return null;
   const identity: TurnIdentity = { role, review, token: null, agent: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
   turns.set(taskId, identity);

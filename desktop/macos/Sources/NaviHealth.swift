@@ -45,7 +45,9 @@ struct NaviInstance {
       return "它没报自己的实例号和代码、数据在哪（比这个 app 旧的版本），认不出来历。"
     }
     guard NaviHealth.samePath(dataDir, NaviConfig.dataURL.path) else { return "它用的是另一份数据。" }
-    guard NaviHealth.samePath(codeDir, NaviConfig.runtimeURL.path) else { return "它用的是 app 的数据，跑的却不是 app 自带的代码。" }
+    guard NaviHealth.samePath(codeDir, NaviConfig.runtimeURL.path) || RuntimeStore.contains(codeDir) else {
+      return "它用的是 app 的数据，跑的却不是 app 自带的代码。"
+    }
     guard appServed else { return "它跑的是 app 自带的代码，但不是 app 起的那一份。" }
     guard windowPort == NaviConfig.windowPort else {
       return "它没在 app 窗口的专用端口 \(NaviConfig.windowPort) 上监听（那个端口多半被别的程序占着，或者它不是这个版本的 app 起的）。"

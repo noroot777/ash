@@ -60,7 +60,7 @@ enum ImpactVerdict {
 
 enum RestartImpactProbe {
   /// 只在后台队列上调。
-  static func assessSync() -> ImpactVerdict {
+  static func assessSync(preservingRuntime: Bool = false) -> ImpactVerdict {
     guard NaviConfig.isLocal else { return .clear(.remote) }
     switch NaviHealth.probeSync() {
     case .down:
@@ -75,13 +75,13 @@ enum RestartImpactProbe {
       return .clear(.foreign(pid: instance.pid))
     case .navi(let instance):
       guard let pid = instance.pid, pid > 1 else { return .unknown("服务没报自己的进程号") }
-      return askImpact(of: .ours(pid: pid), instance: instance.id)
+      return askImpact(of: .ours(pid: pid), instance: instance.id, preservingRuntime: preservingRuntime)
     }
   }
 
   /// 带着认过的那一份的实例号问：问到之前端口换了人，新来的那份不答（server/src/instance-binding.ts），
   /// 闸拿不到别人的名单。
-  private static func askImpact(of target: ServiceTarget, instance: String?) -> ImpactVerdict {
+  private static func askImpact(of target: ServiceTarget, instance: String?, preservingRuntime: Bool) -> ImpactVerdict {
     var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // 与 restart.mjs 同一张凭证：单实例锁里那串 token（文件 0600）。本机直连多半用不上，带着不吃亏。
@@ -98,19 +98,61 @@ enum RestartImpactProbe {
         verdict = .unknown("答复看不懂（服务端版本太旧？）")
         return
       }
-      let disrupted = impact.disrupted
+      let disrupted = preservingRuntime
+        ? impact.interrupted.map { (title: $0.title, why: $0.reason ?? "不可接管") }
+          + impact.resumes.map { (title: $0.title, why: "当前团队回合仍由旧服务运行") }
+        : impact.disrupted
       verdict = disrupted.isEmpty ? .clear(target) : .disrupts(target, disrupted)
     }.resume()
     done.wait()
     return verdict
   }
 
-  private static func hostToken() -> String? {
+  static func hostToken() -> String? {
     guard let db = try? DatabaseFile.existing(in: NaviConfig.dataURL) else { return nil }
     for lock in DatabaseFile.lockFiles(of: db) {
       if let data = try? Data(contentsOf: lock), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
          let token = json["token"] as? String { return token }
     }
     return nil
+  }
+}
+
+enum RuntimeHandover {
+  static func acquire(target: ServiceTarget?) -> String? {
+    guard case .ours(let pid) = target,
+          case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, instance.pid == pid,
+          let codeDir = instance.codeDir, RuntimeStore.contains(codeDir), let id = instance.id else { return nil }
+    return send(instance: id, body: [:])?["lease"] as? String
+  }
+
+  static func release(_ lease: String) {
+    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, let id = instance.id else { return }
+    _ = send(instance: id, body: ["release": lease])
+  }
+
+  static func isValid(_ lease: String) -> Bool {
+    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, let id = instance.id else { return false }
+    return send(instance: id, body: ["check": lease])?["valid"] as? Bool == true
+  }
+
+  private static func send(instance: String, body: [String: String]) -> [String: Any]? {
+    guard let token = RestartImpactProbe.hostToken() else { return nil }
+    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/runtime-handover"), timeoutInterval: 8)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "content-type")
+    request.setValue(token, forHTTPHeaderField: "x-navi-host-token")
+    request.setValue(instance, forHTTPHeaderField: "x-navi-instance")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    let done = DispatchSemaphore(value: 0)
+    var result: [String: Any]?
+    URLSession.shared.dataTask(with: request) { data, response, _ in
+      if (response as? HTTPURLResponse)?.statusCode == 200, let data {
+        result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+      }
+      done.signal()
+    }.resume()
+    done.wait()
+    return result
   }
 }

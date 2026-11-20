@@ -55,6 +55,8 @@ final class ServerLauncher {
   }
 
   func ensureRunningSync(timeout: TimeInterval) -> Outcome {
+    do { if NaviConfig.isLocal { try RuntimeStore.prepare() } }
+    catch { return .failed(error.localizedDescription) }
     if let settled = Self.settle(NaviHealth.probeSync()) { return settled }
     if let hold { return .failed(hold) }
     guard NaviConfig.isLocal else {

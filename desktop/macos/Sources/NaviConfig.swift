@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// 这个 app 连哪台、自带的那份 Navi 在 bundle 里哪儿、数据和日志放哪。
 ///
@@ -67,6 +68,9 @@ enum NaviConfig {
 
   /// 自带的那份 navi（`scripts/bundle-runtime.mjs` 装进来的，布局见那份脚本顶部）。
   static var runtimeURL: URL {
+    RuntimeStore.destination ?? bundledRuntimeURL
+  }
+  static var bundledRuntimeURL: URL {
     if let raw = env("NAVI_MAC_RUNTIME") { return URL(fileURLWithPath: raw, isDirectory: true) }
     return Bundle.main.resourceURL!.appendingPathComponent("app", isDirectory: true)
   }
@@ -209,5 +213,69 @@ enum DatabaseFile {
   /// 这份库的单例锁，两代名字（新版服务两份都写，改名之前的只写旧名）。
   static func lockFiles(of db: URL) -> [URL] {
     [".navi.lock", LegacyIdentity.singletonLockSuffix].map { URL(fileURLWithPath: db.path + $0) }
+  }
+}
+
+enum RuntimeStore {
+  private static let lock = NSLock()
+  private static var prepared = false
+  static var root: URL { NaviConfig.dataURL.appendingPathComponent(".mac-runtimes", isDirectory: true) }
+
+  static func identifier(at url: URL) -> String? {
+    guard let data = try? Data(contentsOf: url.appendingPathComponent(".runtime.json")),
+          let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          manifest["format"] as? Int == 1, let id = manifest["id"] as? String,
+          id.count == 64, id.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { return nil }
+    return id
+  }
+
+  static var destination: URL? {
+    identifier(at: NaviConfig.bundledRuntimeURL).map { root.appendingPathComponent($0, isDirectory: true) }
+  }
+
+  static func contains(_ path: String) -> Bool {
+    let url = URL(fileURLWithPath: path, isDirectory: true)
+    guard let id = identifier(at: url), url.lastPathComponent == id else { return false }
+    return NaviHealth.samePath(path, root.appendingPathComponent(id).path)
+  }
+
+  static func prepare() throws {
+    lock.lock()
+    defer { lock.unlock() }
+    if prepared { return }
+    let source = NaviConfig.bundledRuntimeURL
+    let manifest = source.appendingPathComponent(".runtime.json")
+    guard FileManager.default.fileExists(atPath: manifest.path) else {
+      if Bundle.main.resourceURL?.appendingPathComponent("app").path == source.path {
+        throw SQLiteFile.Failure("app 缺少运行时清单，请重新安装。")
+      }
+      return
+    }
+    guard destination != nil else { throw SQLiteFile.Failure("app 的运行时清单损坏。") }
+    let process = Process()
+    process.executableURL = source.appendingPathComponent("node/bin/node")
+    process.arguments = [source.appendingPathComponent("scripts/runtime-store.mjs").path, "install", source.path, root.path]
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    let errors = Pipe()
+    process.standardError = errors
+    try process.run()
+    let detail = errors.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+      throw SQLiteFile.Failure("准备独立运行时失败：\(String(data: detail, encoding: .utf8) ?? "")")
+    }
+    prepared = true
+  }
+
+  static func lockForReplacement() throws -> Int32 {
+    let file = NaviConfig.bundledRuntimeURL.appendingPathComponent(".in-use")
+    let descriptor = open(file.path, O_RDONLY | O_CLOEXEC)
+    guard descriptor >= 0 else { throw SQLiteFile.Failure("打不开 app 的运行时代码锁。") }
+    guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+      close(descriptor)
+      throw SQLiteFile.Failure("还有旧布局的服务或 MCP 在使用 app 内的代码；这次未替换 app，也未停止服务。首次迁移需等这些旧进程结束。")
+    }
+    return descriptor
   }
 }
