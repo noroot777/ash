@@ -17,9 +17,10 @@
 //   · 交给谁里的执行器 id 只在挂它的那台机器上有意义：落地时置空、派出去时按类型重新解析（同任务自己的
 //     executorId）；本机存档里还留着同一件、类型没变，就接回本机原来选的那个。类型、模型、智能水平原样带。
 //   · 从哪开工（trunk / here）原样带：派出去时页面按本机项目的分支现算起点，清单里不带分支。
+//   · 挂着的那几件前置指着的已有任务本机都得有，缺了整个拒收（`checkCarriedPrerequisites`，理由见那里）。
 //   · 说明里引用的上传附件路径由调用方先改写成本机路径（handoff-import.ts，同提问那几列）；收回记录不改写，
 //     它是已经发生的事，改了字就认不出是不是同一条。
-import { eq, type SQL } from "drizzle-orm";
+import { eq, inArray, type SQL } from "drizzle-orm";
 import { AGENT_TYPES } from "@navi/shared";
 import type { DispatchRunTarget } from "@navi/shared/dispatch-target";
 import {
@@ -27,7 +28,7 @@ import {
 } from "@navi/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { appendWithdrawn, readSuggestions, serializedSuggestions } from "./dispatch-suggestion.js";
+import { appendWithdrawn, pendingReceiptsOf, readSuggestions, serializedSuggestions } from "./dispatch-suggestion.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { now } from "./util.js";
 
@@ -80,13 +81,15 @@ function landedTarget(raw: DispatchRunTarget | null | undefined, mine: DispatchR
 
 /**
  * 带来的那几件逐件按已知的几样重建（多出来的键不落库，读这一列的那一份解析器已经做了）；`mine` 只用来接回执行器。
- * 了结记录只接回还在等的那一批的（同一批、绑着同一问）：那一批已经不在了，记录也就没人要了。
+ * 了结记录接回两种：还在等的那一批的（同一批、绑着同一问），和还没交给智能体的回执（`pendingReceiptsOf`，那一批
+ * 不等了、建了的任务还没告诉它）；别的（不再等的那一批里点叉的）没人要了。
  */
 function landed(raw: string | null, settledRaw: string | null | undefined, mine: StoredSuggestion[]): StoredSuggestion[] {
   const kept = new Map(mine.map((item) => [item.id, item.target]));
   const hanging = hangingSuggestions(parseDispatchSuggestions(raw));
   const waiting = new Set(hanging.filter((item) => item.wait !== "none").map((item) => `${item.batch}\n${item.question ?? ""}`));
-  const settled = settledOf(settledRaw).filter((item) => waiting.has(`${item.batch}\n${item.question ?? ""}`));
+  const settled = settledOf(settledRaw)
+    .filter((item) => pendingReceiptsOf([item]).length || waiting.has(`${item.batch}\n${item.question ?? ""}`));
   return [...settled, ...hanging.map((item) => ({
     ...item, target: landedTarget(item.target, kept.get(item.id)), proposedAt: item.proposedAt || now(),
   }))];
@@ -103,6 +106,33 @@ function freshWithdrawn(raw: string | null, mine: WithdrawnSuggestion[]): Withdr
     have.add(recordKey(record));
     return [{ id: record.id, title: record.title, reason: record.reason, at: record.at }];
   });
+}
+
+/**
+ * 带来的那几件里，前置指着的已有任务（同一批里先派出去的那件换成的任务号、智能体直接指的任务号）本机都得有：任务
+ * 接力过来，它派出去的那几条留在原机上，指着它们的那一件在这里只会报「前置任务不存在」。不能把那条前置划掉了事
+ * ——那件要的是它们的代码，划掉就会在没有那份代码时开工。所以缺了就整个拒收（在任何落库之前），说清怎么办。
+ * 同一批里还挂着的件用 key 指的不算：它们跟着一起来了。
+ */
+export async function checkCarriedPrerequisites(store: Store, carried: Carried): Promise<void> {
+  if (carried.dispatchSuggestions == null) return;
+  const hanging = hangingSuggestions(parseDispatchSuggestions(carried.dispatchSuggestions));
+  const wanted = new Map<string, string>();
+  for (const item of hanging) {
+    for (const ref of item.prerequisites ?? []) {
+      const sameBatch = hanging.some((other) => other.batch === item.batch && other.key === ref);
+      if (!sameBatch && !wanted.has(ref)) wanted.set(ref, item.title);
+    }
+  }
+  if (!wanted.size) return;
+  const found = new Set((await store.select({ id: tasks.id }).from(tasks).where(inArray(tasks.id, [...wanted.keys()]))).map((row) => row.id));
+  const missing = [...wanted].filter(([ref]) => !found.has(ref));
+  if (!missing.length) return;
+  throw new HandoffError(
+    `${missing.map(([ref, title]) => `「${title}」要等的任务 ${ref} `).join("、")}不在这台机器上，接过来也派不出去，什么都没导入。`
+      + "请在原机上先把这几件派出去或点叉，或者把它们要等的任务一起接力过来，再接力这一条。",
+    409,
+  );
 }
 
 /** 第一次落到本机（新建任务行）：两列照带来的落，没带就是空的。 */

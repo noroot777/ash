@@ -7,7 +7,9 @@
 //   · 收回记录只增不减：对端带回来的比本机少（途中丢过），本机的不变少，新的接在后面；
 //   · 对端攒下的收回记录再多也移得回来（追加那条 SQL 的参数个数不跟条数涨），本机空着和已有记录两种都接得上；
 //   · 带了但不是 JSON 数组、或者数组里有认不出的条目：整份拒收，本机的不动；不认识的智能体类型按没指明交给谁落；
-//   · 等着用户过目的那一批原样落；里面已经派出的那几件的了结记录单开一个键带（老版本对端认不出它），只接回那一批的；
+//   · 等着用户过目的那一批原样落；里面已经派出的那几件的了结记录单开一个键带（老版本对端认不出它），接回那一批的和
+//     还没交给智能体的回执；
+//   · 挂着的那几件前置指着的任务本机没有：整个拒收、什么都不落（本机有就照收，同批 key 不算缺）；
 //   · 说明里引用的上传附件路径落地时改写成本机路径。
 //
 // 第一段起两台真服务走完整的接力与移回；后几段单进程直调 importHandoff 喂手写的清单（老版本对端、途中丢
@@ -317,6 +319,29 @@ try {
   assert.deepEqual(JSON.parse(reExported.dispatchSettled!), [created], "了结记录单独那个键带着");
   await assert.rejects(importHandoff(manifestFor("sgtwaitbad", { dispatchSettled: JSON.stringify([hung[0]]) }), { sourceUrl: "http://holder.test:4317" }),
     (error: unknown) => error instanceof HandoffError && /dispatchSettled/.test(error.message), "了结记录那个键里混了没了结的：整份拒收");
+
+  // 还没交给智能体的回执（那一批不等了、建了的任务还没告诉它）照样带着走；不再等的那一批里点叉的不带。
+  const { question: _bound, ...unbound } = created;
+  const receipt = { ...unbound, id: "sgReceipt01", batch: "batchOld", wait: "none" as const };
+  const droppedOld = { ...stale, id: "sgDroppedO1", batch: "batchOld", wait: "none" as const };
+  await importHandoff(manifestFor("sgtreceipt", {
+    dispatchSuggestions: null, dispatchSettled: JSON.stringify([receipt, droppedOld]),
+  }), { sourceUrl: "http://holder.test:4317" });
+  assert.deepEqual(JSON.parse((await localRow("sgtreceipt")).dispatchSuggestions!), [receipt], "回执跟着走，下一回合开头在这台机器上交");
+
+  // 挂着的那件要等的任务（同批先派出去的那件建出来的任务号）本机没有：接过来也派不出去，整个拒收、什么都不落；
+  // 本机有那条任务就照收。同一批里还挂着、用 key 指的不算缺。
+  const dependent = suggestion("sgNeedsTask", "要等原机任务的那件", { prerequisites: ["taskOnlyOnHolder"] });
+  const inBatch = [
+    suggestion("sgUpOne0001", "同批上游", { batch: "batchK", key: "up" }),
+    suggestion("sgDownOne01", "同批下游", { batch: "batchK", prerequisites: ["up"] }),
+  ];
+  await assert.rejects(importHandoff(manifestFor("sgtdangling", { dispatchSuggestions: JSON.stringify([dependent]) }), { sourceUrl: "http://holder.test:4317" }),
+    (error: unknown) => error instanceof HandoffError && /要等的任务 taskOnlyOnHolder 不在这台机器上/.test(error.message), "缺了就拒收，说清是哪件、缺哪条");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "sgtdangling"))).length, 0, "什么都没导入");
+  await archiveOnLocal("taskOnlyOnHolder", [], []);
+  await importHandoff(manifestFor("sgtdangling", { dispatchSuggestions: JSON.stringify([dependent, ...inBatch]) }), { sourceUrl: "http://holder.test:4317" });
+  assert.deepEqual(ids(JSON.parse((await localRow("sgtdangling")).dispatchSuggestions!)), [dependent.id, ...ids(inBatch)], "本机有那条任务：照收");
 
   // 对端攒了很多条收回记录（挂了收、收了挂，条数没有上限）：一次移回全接上，顺序不乱；本机那一列空着的、已经
   // 有记录的两种都走一遍。3000 条 = 逐条给路径和值时 6001 个函数实参，SQLite 各版本的上限（127 / 1000）都过了。

@@ -45,7 +45,7 @@ import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@navi/shared"
 import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns, returningAcceptanceId } from "./handoff-accept-gate.js";
 import { newHumanGate } from "./task-human-gate.js";
-import { landedSuggestionColumns, returnedSuggestionColumns } from "./handoff-suggestions.js";
+import { checkCarriedPrerequisites, landedSuggestionColumns, returnedSuggestionColumns } from "./handoff-suggestions.js";
 
 export interface HandoffImportResult {
   ok: true;
@@ -146,6 +146,8 @@ async function importValidated(
       );
     }
   }
+
+  await checkCarriedPrerequisites(db, m.task);
 
   const isRepo = projectHealthLight(project.repoPath).isRepo;
   // useWorktree 依赖本机项目真的是 git 仓库;不是就退化成共享目录,如实记 notes。

@@ -2,6 +2,10 @@
 // 不叫醒它，建好的清单记在问答记录上（`QuestionRecord.undelivered`），等这条任务下一回合开头一并交给它，
 // 交过就摘掉。
 //
+// 同一处还交另一样：等着的那一批派活被答复、处理完、新消息顶掉以外的路撤下了那一问（换方向、改判……）时，里面
+// 已经建了任务的那几件读成「待补交的回执」（dispatch-suggestion.ts `pendingReceiptsOf`），也在这里拼进下一回合、
+// 起跑成功后从那一列划掉：不交的话，它就不知道那几条任务已经建了。
+//
 // 为什么记在问答记录上、不排一条待发送消息：待发送消息一到空闲就送进会话、把智能体叫起来——不叫醒正是
 // 这件事的目的；它还会在托盘里留一条「你排着的话」，可这句话不是用户说的。投递方式照接力前言
 // （handoff-notice.ts）：拼进下一回合的 prompt，起跑成功后划掉。
@@ -9,6 +13,7 @@ import { and, eq } from "drizzle-orm";
 import type { QuestionRecord } from "@navi/shared/questions";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
+import { pendingReceiptsOf, readSuggestions, serializedSuggestions, type SuggestionColumns } from "./dispatch-suggestion.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 
 const historyOf = (raw: string | null | undefined): QuestionRecord[] => {
@@ -62,15 +67,49 @@ export type OneShotNotices = { handoff: string; carried: string; clear: () => Pr
 
 export const NO_ONE_SHOT_NOTICES: OneShotNotices = { handoff: "", carried: "", clear: async () => {} };
 
-export function oneShotNotices(task: { id: string; handoff: string | null; questionHistory: string | null }): OneShotNotices {
+/** 待补交的回执拼成一段话（没有就是空串），连同它们的 id。 */
+function pendingReceipts(task: SuggestionColumns): { text: string; ids: string[] } {
+  const receipts = pendingReceiptsOf(readSuggestions(task));
+  if (!receipts.length) return { text: "", ids: [] };
+  return {
+    text: [
+      `（Navi：你之前摆的那一批派活后来没再等用户（那一问已经撤下），其中用户派出的这 ${receipts.length} 个任务已经建好、`
+        + "挂在本任务名下、交给了调度，不要再建；要看进度用 list_tasks / get_task。",
+      ...receipts.map((item, index) => `${index + 1}. ${item.settled!.task!.id}「${item.settled!.task!.title}」`),
+      "）",
+    ].join("\n"),
+    ids: receipts.map((item) => item.id),
+  };
+}
+
+/** 交过的回执从那一列划掉。一笔立即加锁的事务里读、改、写：别处同时在写这一列也不会被盖掉。 */
+async function markReceiptsDelivered(taskId: string, ids: readonly string[]): Promise<void> {
+  if (!ids.length) return;
+  try {
+    await db.transaction(async (transaction) => {
+      const row = (await transaction.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+      if (!row) return;
+      const items = readSuggestions(row);
+      const next = items.filter((item) => !(ids.includes(item.id) && pendingReceiptsOf([item]).length));
+      if (next.length === items.length) return;
+      await transaction.update(tasks).set({ dispatchSuggestions: serializedSuggestions(next), dispatchPlan: null }).where(eq(tasks.id, taskId));
+    }, { behavior: "immediate" });
+  } catch (error) {
+    console.warn(`[navi] 补交的派出回执划不掉 ${taskId}:`, error);
+  }
+}
+
+export function oneShotNotices(task: { id: string; handoff: string | null; questionHistory: string | null } & SuggestionColumns): OneShotNotices {
   const handoff = handoffNoticeFrom(task.handoff);
   const carried = undeliveredReplies(task.questionHistory);
+  const receipts = pendingReceipts(task);
   return {
     handoff,
-    carried: carried.text,
+    carried: [carried.text, receipts.text].filter(Boolean).join("\n\n"),
     clear: async () => {
       if (handoff) await clearHandoffNotice(task.id);
       await markRepliesDelivered(task.id, carried.ids);
+      await markReceiptsDelivered(task.id, receipts.ids);
     },
   };
 }

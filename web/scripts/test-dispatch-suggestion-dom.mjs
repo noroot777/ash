@@ -184,7 +184,8 @@ try {
   await waitUntil(async () => launches("t-gone").length === 1, "分支清掉后照样派出去");
   assert.equal(launches("t-gone")[0].body.items[0].worktreeBase, "release", "从合入目标开工，不是项目此刻检出的那一支");
 
-  // ⑦ 上线前的老派活单：没动过就照它说定的——一个接一个；指定过分支的那条不交起点（服务端照存着的开工），没指定的照页面算的交。
+  // ⑦ 上线前的老派活单：没动过就照它说定的——一个接一个；开工起点不管写没写（没写读成 null = 不指定）都不交，
+  //   服务端照存着的开工，不拿页面现算的起点盖掉旧单的缺省。
   await button("legacy", "2 件可以派出去").click();
   await waitUntil(async () => await button("legacy", "全部派出去").isEnabled(), "读到分支后能派");
   await button("legacy", "全部派出去").click();
@@ -192,7 +193,7 @@ try {
   const old = launches("t-legacy")[0].body;
   assert.equal(old.order, "serial", "没改顺序：照老单子的一个接一个");
   assert.equal("worktreeBase" in old.items[0], false, "指定过分支、卡上没换：不交起点");
-  assert.equal("worktreeBase" in old.items[1], true, "没指定的照页面算出来的起点交");
+  assert.equal("worktreeBase" in old.items[1], false, "没写开工起点的旧单：也不交，照旧接口的「不指定」开工");
 
   // ⑤ 句中 `/派`：从菜单选中只拿掉命令，光标留在原处，叫上次那个人停在「派出去」。
   await box("slash").fill("前面的话 /派 后面的话");

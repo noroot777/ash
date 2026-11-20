@@ -4,6 +4,8 @@
 //     提问和要等的一批，只有一个写得进去，另一个明说被谁占了；
 //   · 「发回去改」就是对那一问的普通答复：一条任务都不建，那一批从框顶撤下，智能体收到那句话（带一句「没有派出」）；
 //     已经派出了几件时，那句话前面写明建好了哪几条（任务号）、剩下哪几条没派；智能体换掉、收回光这一批都不落；
+//   · 建了任务的记录交到智能体手上之前不丢：收回不了；新消息顶掉那一问时写进那一轮的提示；别的路清掉那一问时
+//     读成待补交的回执，下一回合开头交一次；
 //   · 派出去由 navi 照那几行此刻的样子建（换的人、同时 / 一个接一个），挂在这条任务名下、来源记用户；可以分几下处理：
 //     先派一件、再叉一件、最后派剩下的——最后一件了结那一下才算处理完；同批前置：被等的那件还挂着时不能单派等它的那件，
 //     先派出去的那件之后接得上（前置换成它建出来的任务号），叉掉的那件从前置里划掉；
@@ -475,6 +477,44 @@ try {
   assert.equal((await kidsOf(PP)).length, 1, "没有多建");
   console.log("✓ 先派一件再回一句话：智能体收到已经建好的那一条和没派的那一条；换掉、收回光这一批都不落");
 
+  // —— 建了任务的记录交到智能体手上之前不丢：收回不了已经派出去的那件；被新消息顶掉那一问时写进那一轮的提示、同一笔
+  //    拿掉；别的路（换方向、改判）清掉那一问时读成待补交的回执，下一回合开头交一次、交过划掉。
+  const partialBatch = async (id: string) => {
+    await db.insert(tasks).values(row(id, "backlog"));
+    assert.equal((await propose(id, await inTurn(id), {
+      tasks: [{ title: `${id} 先派的`, body: "说明 X", note: "" }, { title: `${id} 还挂着的`, body: "说明 Y", note: "" }],
+    })).status, 200);
+    assert.equal(await endTurn(id), "paused");
+    const [first, rest] = await waitingOf(id);
+    assert.equal((await launchOf(id, "parallel", [pickOf(first!)])).status, 200);
+    return { first: first!, rest: rest!, built: (await kidsOf(id))[0]! };
+  };
+  const W = await partialBatch("dw-withdraw-settled");
+  const pulled = agentChange(readSuggestions(await taskOf("dw-withdraw-settled")), [{ id: W.first.id, reason: "收回已派出的" }],
+    { items: [], order: "parallel", wait: "none" });
+  assert.deepEqual([pulled.refused, pulled.gone, pulled.withdrawn], [null, [W.first.id], []], "已经派出去的那件收回不了，按不在了报");
+  assert.equal(pulled.after.find((item) => item.id === W.first.id)?.settled?.task?.id, W.built.id, "它建过任务的记录原样留着");
+
+  const N = await partialBatch("dw-superseded");
+  const noteOf = (await import("../src/task-question-supersede.js"));
+  const snapshot = await taskOf("dw-superseded");
+  const note = noteOf.questionSupersededNote(snapshot);
+  assert.ok(note.includes(N.built.id) && note.includes("不要再建") && note.includes("suggest_dispatch"), "被新消息顶掉：这一轮的提示里写明建了哪条");
+  await noteOf.supersedeQuestion(snapshot);
+  const superseded = await taskOf("dw-superseded");
+  assert.deepEqual([superseded.question, readSuggestions(superseded)], [null, []], "那一问和那一批同一笔撤下，不再留成回执");
+
+  const O = await partialBatch("dw-orphaned");
+  await db.update(tasks).set({ question: null }).where(eq(tasks.id, "dw-orphaned"));
+  assert.deepEqual(await waitingOf("dw-orphaned"), [], "那一问被别的路清掉：页面上那一批没了");
+  const { oneShotNotices } = await import("../src/undelivered-replies.js");
+  const notices = oneShotNotices(await taskOf("dw-orphaned"));
+  assert.ok(notices.carried.includes(O.built.id) && notices.carried.includes("不要再建"), "下一回合开头补交：建了哪条");
+  assert.ok(!notices.carried.includes(O.rest.title), "没派的那件不算回执");
+  await notices.clear();
+  assert.equal(oneShotNotices(await taskOf("dw-orphaned")).carried, "", "交过就划掉，不再交第二遍");
+  console.log("✓ 建了任务的记录交到智能体手上之前不丢：收回不了；新消息顶掉时写进提示；别的路清掉那一问时下一回合补交一次");
+
   // —— 上线前摆的派活单（只有 tasks.dispatch_plan 那一列，旁边还挂着一件老格式的建议）：照旧能看、能派、能发回去改。
   const legacyPlan = (planId: string, questionText: string) => JSON.stringify({
     id: planId, question: questionText, order: "parallel", proposedAt: at,
@@ -490,6 +530,7 @@ try {
     [["dw-old-sg", "none", "dw-old-sg"], ["dw-plan-0", "continue", "dw-plan"], ["dw-plan-1", "continue", "dw-plan"]],
     "老建议读成不等的一件；老派活单读成等着的一批（没说 afterLaunch 的按 continue）");
   assert.equal("turnToken" in legacy[0]!, false, "页面拿不到老数据里的回合令牌");
+  assert.deepEqual(legacy.slice(1).map((item) => item.worktreeBase), [null, null], "老单子没写开工起点：按旧接口的「不指定」读，不是从主分支");
   const legacyAsk = await send("POST", `/tasks/${L}/ask`, { question: "插一句" }, await inTurn(L));
   assert.equal(legacyAsk.body.error, wait.DISPATCH_WAIT_BLOCKS_ASK, "老派活单在等时同样问不出来");
   await db.update(tasks).set({ status: "paused", activeTurnToken: null, activeDirectionToken: null }).where(eq(tasks.id, L));

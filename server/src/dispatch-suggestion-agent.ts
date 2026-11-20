@@ -1,5 +1,6 @@
 // 智能体那一笔（MCP suggest_dispatch → POST /tasks/:id/dispatch-suggestions）怎么落：
-//   · 先收回、再挂新的——所以「收回旧的、挂一件同名的新说明」一次就能换；要收回的那件已经不在了不算错；
+//   · 先收回、再挂新的——所以「收回旧的、挂一件同名的新说明」一次就能换；要收回的那件已经不在了不算错（只收得回
+//     还挂着的：已经派出去、点叉了的那几件的记录原样留着，等交到智能体手上）；
 //   · 不等的一批：跟还挂着的（或同一批里前面的）同名的不挂第二件，框顶同一件事只有一行——同一批里有别的要挂的
 //     那件等着它时照挂（前置不能指向一件没挂上的东西）；收回的那件被同一批里还挂着的等着时，那条前置跟着划掉；
 //   · 要等的一批：换掉之前在等的那一批（同一回合里再摆一次就是改），同一笔写下那一问（`task.question`，一句看得懂
@@ -79,7 +80,8 @@ export function agentChange(
   const waitingBefore = waitingBatchOf(current);
   // 收回的那几件：同一批里还挂着、等着它们的那几件划掉这条前置（同用户点叉）。
   const rewrite = new Map(pulled.flatMap((item) => (item.key ? [[scopedKey(item, item.key), null] as const] : [])));
-  let kept = rewritePrerequisites(current.filter((item) => !reasons.has(item.id)), rewrite);
+  // 只收得回还挂着的：已经了结的（派出去、点叉）那几件的记录要交到你手上，不因为一次收回就没了。
+  let kept = rewritePrerequisites(current.filter((item) => item.settled || !reasons.has(item.id)), rewrite);
   const replacing = incoming.wait !== "none";
   if (replacing) kept = kept.filter((item) => item.wait === "none");
   const skipped = replacing ? new Map<string, StoredSuggestion>() : duplicatesOf(incoming.items, hangingSuggestions(kept));

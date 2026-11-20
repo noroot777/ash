@@ -26,6 +26,7 @@ import { bus } from "./bus.js";
 import type { TaskRow } from "./task-store.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
 import { waitingBatchReturned } from "./task-question-record.js";
+import { readSuggestions, sameColumns, serializedSuggestions, waitingBatchOf } from "./dispatch-suggestion.js";
 import { now } from "./util.js";
 
 type Turn = { system?: boolean; byBackend?: boolean; sideTurn: boolean };
@@ -51,14 +52,22 @@ export async function supersedeQuestion(snapshot: TaskRow): Promise<void> {
     const occupancy = snapshot.waitOwnership?.question?.occupancy;
     if (!current || current.waitOwnership?.question?.occupancy !== occupancy) return false;
     if ((await questionWaitOrigin(transaction, current)).kind !== "ordinary") return false;
+    // 等着的那一批跟这一问一起撤：建了任务的那几件已经写进这一轮的提示（`questionSupersededNote`），同一笔拿掉，
+    // 免得它们再读成待补交的回执、下一回合又交一遍。
+    const items = readSuggestions(current);
+    const batch = waitingBatchOf(items).length > 0;
     const updated = await transaction.update(tasks)
-      .set({ question: null, questionOptions: null, questionItems: null, updatedAt })
+      .set({
+        question: null, questionOptions: null, questionItems: null, updatedAt,
+        ...(batch ? { dispatchSuggestions: serializedSuggestions(items.filter((item) => item.wait === "none")), dispatchPlan: null } : {}),
+      })
       .where(and(
         eq(tasks.id, snapshot.id),
         eq(tasks.question, snapshot.question!),
         sameNullable(tasks.questionOptions, snapshot.questionOptions),
         sameNullable(tasks.questionItems, snapshot.questionItems),
         sameNullable(tasks.questionHistory, snapshot.questionHistory),
+        batch ? sameColumns(current) : undefined,
       ))
       .returning({ id: tasks.id });
     return updated.length > 0;

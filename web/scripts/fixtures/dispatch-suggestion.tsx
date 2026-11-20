@@ -78,10 +78,10 @@ createRoot(document.getElementById("root")!).render(
         <Stage name="ruling" suggestions={[item("s-ruling", "让给裁定的那一件")]} reviews={disputed} />
         {/* 这条任务的分支已经清掉了（不在分支列表里），合入目标是 release、项目此刻检出 main。 */}
         <Stage name="gone" suggestions={[item("s-gone", "分支清掉后还挂着的一件")]} task={{ mergeTargetBranch: "release" } as Partial<Task>} />
-        {/* 上线前摆好的派活单：一个接一个，第一条指定了从哪条分支开工。 */}
+        {/* 上线前摆好的派活单：一个接一个，第一条指定了从哪条分支开工，第二条没写（服务端按旧接口读成 null = 不指定）。 */}
         <Stage name="legacy" suggestions={[
           item("s-l1", "老单子第一条", { batch: "plan-old", order: "serial", wait: "continue", worktreeBase: "feat/old" }),
-          item("s-l2", "老单子第二条", { batch: "plan-old", order: "serial", wait: "continue" }),
+          item("s-l2", "老单子第二条", { batch: "plan-old", order: "serial", wait: "continue", worktreeBase: null }),
         ]} />
         <Stage name="slash" />
       </main>

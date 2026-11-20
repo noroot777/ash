@@ -1,8 +1,11 @@
 // 挂在回复框顶上的那一列在服务端怎么读、怎么写（类型、三档 wait、接口形状见 shared/src/dispatch-suggestion.ts）：
 //   · 读（`readSuggestions`）：所有地方都按这一处归一——等着的那一批只在它绑的那一问还在时算数（被答掉、被新消息
-//     撤下、被别的提问换掉就不认它）；上线前摆的老派活单（tasks.dispatch_plan，仍跟 question 对得上）并进来，
-//     读成同一批、按它当时说定的 afterLaunch 等（没说的按 continue）。任何一次写回都落成这一列、清掉旧列，
-//     所以老单子不用迁移脚本，碰一下就是新的。
+//     撤下、换方向时清掉就不认它）；上线前摆的老派活单（tasks.dispatch_plan，仍跟 question 对得上）并进来，
+//     读成同一批、按它当时说定的 afterLaunch 等（没说的按 continue），没写的字段按旧接口的缺省读（开工起点 = 不指定）。
+//     任何一次写回都落成这一列、清掉旧列，所以老单子不用迁移脚本，碰一下就是新的。
+//   · 已经建了任务的记录在交到智能体手上之前不丢：答复、处理完、被新消息顶掉那几路自己交（同一笔拿掉）；别的路把
+//     那一问清掉了（换方向、改判……），那一批里建了任务的那几件读成「待补交的回执」（`pendingReceiptsOf`，
+//     不等、不挂、页面看不见），下一回合开头交给它、交过划掉（undelivered-replies.ts）。
 //   · 写：挂、收回、派、叉改的都是同一列，各在一笔立即加锁的事务里读、算、写（读到的就是写的底，谁都不吞掉谁）；
 //     答复那一问时顺带拿掉它绑的那一批，按「读到的那三列还在」条件写（`sameColumns`：归一的结果取决于它们）。
 //   · 收回的原因跟拿掉那一件**同一条更新**落库（`appendWithdrawn`）：不变量是「建议不见了 ⇒ 原因读得到」。
@@ -37,7 +40,8 @@ function legacyPlanSuggestions(raw: string | null, question: string | null): Sto
   if (!plan || typeof plan.id !== "string" || plan.question !== question || !Array.isArray(plan.items)) return [];
   const batch = plan.id;
   return plan.items.flatMap((item: Record<string, unknown>, index) => storedSuggestionOf({
-    ...item, id: `${batch}-${index}`, base: "trunk", proposedAt: plan.proposedAt, batch,
+    // 旧接口里没写开工起点 = 不指定（按项目此刻检出的开工），不是「从主分支」：显式写成 null，页面就不拿现算的起点盖它。
+    ...item, id: `${batch}-${index}`, base: "trunk", proposedAt: plan.proposedAt, batch, worktreeBase: item?.worktreeBase ?? null,
     order: plan.order === "parallel" ? "parallel" : "serial",
     wait: plan.afterLaunch === "done" ? "done" : "continue", question,
     review: item?.review ?? "default",
@@ -45,8 +49,10 @@ function legacyPlanSuggestions(raw: string | null, question: string | null): Sto
 }
 
 export function readSuggestions(row: SuggestionColumns): StoredSuggestion[] {
-  const items = parseDispatchSuggestions(row.dispatchSuggestions)
-    .filter((item) => item.wait === "none" || (!!row.question && item.question === row.question));
+  const items = parseDispatchSuggestions(row.dispatchSuggestions).flatMap((item): StoredSuggestion[] => {
+    if (item.wait === "none" || (!!row.question && item.question === row.question)) return [item];
+    return item.settled?.task ? [{ ...item, wait: "none" }] : [];
+  });
   if (waitingBatchOf(items).length) return items;
   return [...items, ...legacyPlanSuggestions(row.dispatchPlan, row.question)];
 }
@@ -72,6 +78,10 @@ export function rewritePrerequisites(items: StoredSuggestion[], rewrite: Readonl
     return prerequisites.length ? { ...item, prerequisites } : rest;
   });
 }
+
+/** 待补交的回执：那一批不再等了、却还没交给智能体的「这件已经建了」（不等的件派出去当场就拿掉，不会留下了结记录）。 */
+export const pendingReceiptsOf = (items: readonly StoredSuggestion[]): StoredSuggestion[] =>
+  items.filter((item) => item.wait === "none" && item.settled?.task);
 
 /** 那一问是不是一批派活在等（同一时刻只等用户一样东西：有它就不能再提问）。 */
 export const waitingOnDispatch = (row: SuggestionColumns): boolean => !!row.question && waitingBatchOf(readSuggestions(row)).length > 0;
