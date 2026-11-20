@@ -2,8 +2,7 @@
 /* 遮罩两种模式都是压暗的深色，不跟主题翻面。 */
 .task-modal-scrim,
 .overlay-scrim,
-.duet-handoff-scrim,
-.markdown-report-scrim {
+.duet-handoff-scrim {
   background: rgb(26 28 35 / 46%);
   backdrop-filter: blur(8px) saturate(.82);
   animation: dialog-scrim-in 150ms ease both;
@@ -14,8 +13,7 @@
 .notes-panel,
 .groups-panel,
 .free-review-dialog,
-.duet-handoff-modal,
-.markdown-report-dialog {
+.duet-handoff-modal {
   border-color: color-mix(in oklab, var(--line2) 70%, transparent);
   border-radius: 20px;
   box-shadow: 0 28px 90px rgb(20 22 30 / 22%), 0 6px 22px rgb(20 22 30 / 10%);
@@ -194,10 +192,6 @@
 .duet-handoff-modal footer button { height: 36px; border-radius: 10px; padding-inline: 14px; font-weight: var(--w-medium); }
 .duet-handoff-modal { width: min(600px, calc(100vw - 32px)); }
 
-.markdown-report-dialog { border-radius: 22px; }
-.markdown-report-dialog > header { min-height: 68px; padding: 13px 16px 13px 20px; }
-.markdown-report-dialog > header span { color: var(--muted); font-family: var(--font-mono); letter-spacing: .1em; }
-.markdown-report-dialog h2 { margin-top: 5px; font-size: 16px; letter-spacing: -.02em; }
 .markdown-report-body { padding: 22px 24px 28px; }
 
 /* 灯箱两种模式都是黑底。 */

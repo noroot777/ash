@@ -3,6 +3,7 @@ import type { HandoffTarget, Task, TaskListItem } from "@navi/shared";
 import { isAcceptedStage, TASK_STATUS_LABELS } from "@navi/shared";
 import { ArrowCounterClockwise, ArrowUp, DesktopTower, SpinnerGap } from "@phosphor-icons/react";
 import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
+import { LeftDrawerProvider, useLeftDrawerHost } from "../components/LeftDrawer.tsx";
 import type { RemoteReturns } from "./useRemoteReturns.ts";
 import { ComposerInput } from "../task-detail/ComposerInput.tsx";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
@@ -52,6 +53,8 @@ export function RemoteTaskDetail({
   const refreshVersion = useRef(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const sendKeys = useSendKeyLabels();
+  // 审查报告这类读全文的东西跟本机任务同一个位置：从左边推出来，会话和回复框留着。
+  const leftDrawer = useLeftDrawerHost({ resetKey: remoteKey });
 
   const refresh = useCallback(async (quiet = false) => {
     const version = refreshVersion.current;
@@ -168,6 +171,7 @@ export function RemoteTaskDetail({
   );
 
   return (
+    <LeftDrawerProvider value={leftDrawer.api}>
     <div className="task-detail remote-task-detail">
       <header className="task-detail-header remote-task-header">
         <span className="task-detail-kind">远程任务</span>
@@ -272,6 +276,8 @@ export function RemoteTaskDetail({
           {returnFailure}
         </ConfirmDialog>
       )}
+      {leftDrawer.drawer}
     </div>
+    </LeftDrawerProvider>
   );
 }

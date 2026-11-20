@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Session, Task } from "@navi/shared";
+import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
@@ -111,17 +112,28 @@ const reviews = [{
   }],
 }] as never;
 
+// 报告键从左边推出读全文那一屉：照 TaskDetail 的做法在会话外面挂一个左侧抽屉的宿主。
+function Fixture() {
+  const drawer = useLeftDrawerHost({ resetKey: "t1" });
+  return (
+    <LeftDrawerProvider value={drawer.api}>
+      <div style={{ position: "relative", height: "100vh", background: "var(--bg)" }}>
+        <ConversationFeed
+          task={task}
+          items={items}
+          sessions={[session]}
+          reviews={reviews}
+          loading={false}
+          error={null}
+        />
+        {drawer.drawer}
+      </div>
+    </LeftDrawerProvider>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <div style={{ height: "100vh", background: "var(--bg)" }}>
-      <ConversationFeed
-        task={task}
-        items={items}
-        sessions={[session]}
-        reviews={reviews}
-        loading={false}
-        error={null}
-      />
-    </div>
+    <Fixture />
   </StrictMode>,
 );
