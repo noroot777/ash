@@ -1,8 +1,9 @@
 // 挂在回复框顶上的活随任务接力（寿命规则、三档 wait 见 shared/src/dispatch-suggestion.ts 顶部）。
 //
 // 清单里带任务行上的两列：还挂着、用户没处理的那几件（`dispatchSuggestions`，按本机读这一列的口径归一过——
-// 等着的那一批只在那一问还在时带，老派活单并成这一列带，了结记录不带：对端老版本不认识它，会当成还挂着的），
-// 和智能体收回过的每一件（`dispatchWithdrawals`，JSON 原样）。等着的那一批绑的那一问随 question 那一列一起走，
+// 等着的那一批只在那一问还在时带，老派活单并成这一列带），等着的那一批里已经处理掉的那几件（`dispatchSettled`，
+// 单开一个键：老版本对端不认识了结记录，混在前一列里会被当成还挂着的；处理完时交给智能体的清单靠它，不带的话
+// 先派了一件再接力，最后交出去的清单里就没有那一件），和智能体收回过的每一件（`dispatchWithdrawals`，JSON 原样）。等着的那一批绑的那一问随 question 那一列一起走，
 // 到了对端照样停着等；老版本对端不认识 wait，那一批落成不等的几件、那一问落成普通提问。不带的话任务换一台机器
 // 那几件就不见了——用户没派也没点叉；移回时对端新挂的、新收回的也留在对端回不来。
 //
@@ -30,12 +31,13 @@ import { appendWithdrawn, readSuggestions, serializedSuggestions } from "./dispa
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { now } from "./util.js";
 
-type Carried = Pick<HandoffManifest["task"], "id" | "dispatchSuggestions" | "dispatchWithdrawals">;
+type Carried = Pick<HandoffManifest["task"], "id" | "dispatchSuggestions" | "dispatchWithdrawals" | "dispatchSettled">;
 type Store = Pick<typeof db, "select">;
 
-const FIELDS = ["dispatchSuggestions", "dispatchWithdrawals"] as const;
+const FIELDS = ["dispatchSuggestions", "dispatchWithdrawals", "dispatchSettled"] as const;
 
-const PARSED = { dispatchSuggestions: parseDispatchSuggestions, dispatchWithdrawals: parseWithdrawnSuggestions };
+const settledOf = (raw: string | null | undefined): StoredSuggestion[] => parseDispatchSuggestions(raw).filter((item) => item.settled);
+const PARSED = { dispatchSuggestions: parseDispatchSuggestions, dispatchWithdrawals: parseWithdrawnSuggestions, dispatchSettled: settledOf };
 
 /**
  * 带了就得是 JSON 数组的文本，里面每一条都得认得出（跟读这一列的地方同一个判据）。坏值整份拒收：当成「一件都
@@ -55,7 +57,12 @@ export function validateSuggestionPayload(task: Partial<Record<(typeof FIELDS)[n
 }
 
 export function exportSuggestions(task: typeof tasks.$inferSelect): Pick<Carried, (typeof FIELDS)[number]> {
-  return { dispatchSuggestions: serializedSuggestions(hangingSuggestions(readSuggestions(task))), dispatchWithdrawals: task.dispatchWithdrawals };
+  const items = readSuggestions(task);
+  return {
+    dispatchSuggestions: serializedSuggestions(hangingSuggestions(items)),
+    dispatchWithdrawals: task.dispatchWithdrawals,
+    dispatchSettled: serializedSuggestions(items.filter((item) => item.settled)),
+  };
 }
 
 const text = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
@@ -71,12 +78,18 @@ function landedTarget(raw: DispatchRunTarget | null | undefined, mine: DispatchR
   };
 }
 
-/** 带来的那几件逐件按已知的几样重建（多出来的键不落库，读这一列的那一份解析器已经做了）；`mine` 只用来接回执行器。 */
-function landed(raw: string | null, mine: StoredSuggestion[]): StoredSuggestion[] {
+/**
+ * 带来的那几件逐件按已知的几样重建（多出来的键不落库，读这一列的那一份解析器已经做了）；`mine` 只用来接回执行器。
+ * 了结记录只接回还在等的那一批的（同一批、绑着同一问）：那一批已经不在了，记录也就没人要了。
+ */
+function landed(raw: string | null, settledRaw: string | null | undefined, mine: StoredSuggestion[]): StoredSuggestion[] {
   const kept = new Map(mine.map((item) => [item.id, item.target]));
-  return hangingSuggestions(parseDispatchSuggestions(raw)).map((item) => ({
+  const hanging = hangingSuggestions(parseDispatchSuggestions(raw));
+  const waiting = new Set(hanging.filter((item) => item.wait !== "none").map((item) => `${item.batch}\n${item.question ?? ""}`));
+  const settled = settledOf(settledRaw).filter((item) => waiting.has(`${item.batch}\n${item.question ?? ""}`));
+  return [...settled, ...hanging.map((item) => ({
     ...item, target: landedTarget(item.target, kept.get(item.id)), proposedAt: item.proposedAt || now(),
-  }));
+  }))];
 }
 
 // 一条收回记录是一次收回：同一件、同一时刻的就是同一条。
@@ -95,7 +108,7 @@ function freshWithdrawn(raw: string | null, mine: WithdrawnSuggestion[]): Withdr
 /** 第一次落到本机（新建任务行）：两列照带来的落，没带就是空的。 */
 export function landedSuggestionColumns(carried: Carried): { dispatchSuggestions: string | null; dispatchWithdrawals: string | null } {
   return {
-    dispatchSuggestions: serializedSuggestions(landed(carried.dispatchSuggestions ?? null, [])),
+    dispatchSuggestions: serializedSuggestions(landed(carried.dispatchSuggestions ?? null, carried.dispatchSettled, [])),
     dispatchWithdrawals: serialized(freshWithdrawn(carried.dispatchWithdrawals ?? null, [])),
   };
 }
@@ -117,7 +130,10 @@ export async function returnedSuggestionColumns(
   return {
     ...(carried.dispatchSuggestions === undefined
       ? {}
-      : { dispatchSuggestions: serializedSuggestions(landed(carried.dispatchSuggestions, parseDispatchSuggestions(mine?.suggestions))), dispatchPlan: null }),
+      : {
+        dispatchSuggestions: serializedSuggestions(landed(carried.dispatchSuggestions, carried.dispatchSettled, parseDispatchSuggestions(mine?.suggestions))),
+        dispatchPlan: null,
+      }),
     ...(fresh.length ? { dispatchWithdrawals: appendWithdrawn(fresh) } : {}),
   };
 }

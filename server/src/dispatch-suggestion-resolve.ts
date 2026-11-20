@@ -16,7 +16,7 @@ import type { QuestionRecord } from "@navi/shared/questions";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { readSuggestions, serializedSuggestions, waitingBatchOf } from "./dispatch-suggestion.js";
+import { readSuggestions, rewritePrerequisites, scopedKey, serializedSuggestions, waitingBatchOf } from "./dispatch-suggestion.js";
 import { launchBubble, launchReply, settleDoneOnLaunch, type TargetLabel } from "./dispatch-suggestion-wait.js";
 import { deliverPendingMessages, pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
 import { answerRouteFor } from "./task-answer.js";
@@ -99,22 +99,12 @@ export async function resolveWithin(
   const rewrite = new Map<string, string | null>();
   for (const suggestion of targeted) {
     const item = hanging.get(suggestion)!;
-    if (item.key) rewrite.set(`${item.batch}\n${item.key}`, launched.get(suggestion)?.id ?? null);
+    if (item.key) rewrite.set(scopedKey(item, item.key), launched.get(suggestion)?.id ?? null);
   }
-  const next = items.flatMap((item): StoredSuggestion[] => {
-    if (launched.has(item.id) || dropped.has(item.id)) {
-      return item.wait === "none" ? [] : [{ ...item, settled: { at, task: launched.get(item.id) ?? null } }];
-    }
-    if (!item.prerequisites?.length) return [item];
-    const prerequisites = item.prerequisites.flatMap((ref) => {
-      const scoped = `${item.batch}\n${ref}`;
-      if (!rewrite.has(scoped)) return [ref];
-      const replaced = rewrite.get(scoped);
-      return replaced ? [replaced] : [];
-    });
-    const { prerequisites: _old, ...rest } = item;
-    return [prerequisites.length ? { ...item, prerequisites } : rest];
-  });
+  const next = rewritePrerequisites(items.flatMap((item): StoredSuggestion[] => {
+    if (!launched.has(item.id) && !dropped.has(item.id)) return [item];
+    return item.wait === "none" ? [] : [{ ...item, settled: { at, task: launched.get(item.id) ?? null } }];
+  }), rewrite);
 
   const batch = waitingBatchOf(next);
   if (!touchesWaiting || batch.some((item) => !item.settled)) {

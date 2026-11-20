@@ -25,6 +25,7 @@ import { tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import type { TaskRow } from "./task-store.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
+import { waitingBatchReturned } from "./task-question-record.js";
 import { now } from "./util.js";
 
 type Turn = { system?: boolean; byBackend?: boolean; sideTurn: boolean };
@@ -67,8 +68,11 @@ export async function supersedeQuestion(snapshot: TaskRow): Promise<void> {
 
 const QUOTE_LIMIT = 120;
 
-/** 跟着这一轮提示交给 agent：卡已经撤了，还要等答复就自己重新问。 */
-export function questionSupersededNote(question: string): string {
+/** 跟着这一轮提示交给 agent：卡已经撤了，还要等答复就自己重新问。等着的是一批派活时说清它们落到了哪、怎么再摆。 */
+export function questionSupersededNote(task: TaskRow): string {
+  const question = task.question!;
+  const batch = waitingBatchReturned(task, "仍然需要的话，按这条消息改完再用 suggest_dispatch 摆一次。");
+  if (batch) return `\n\n(Navi:你摆的那一批派活用户没有直接处理，而是发来了上面这条消息。${batch})`;
   const quoted = question.length > QUOTE_LIMIT ? `${question.slice(0, QUOTE_LIMIT)}…` : question;
   return `\n\n(Navi:你之前的提问「${quoted}」用户没有直接答复，而是发来了上面这条消息，那张问答卡已随之撤下。`
     + `这条消息没回答到它、你仍然需要用户拍板的话，就重新调用 ask_question。)`;

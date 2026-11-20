@@ -7,6 +7,7 @@
 //   · 收回记录只增不减：对端带回来的比本机少（途中丢过），本机的不变少，新的接在后面；
 //   · 对端攒下的收回记录再多也移得回来（追加那条 SQL 的参数个数不跟条数涨），本机空着和已有记录两种都接得上；
 //   · 带了但不是 JSON 数组、或者数组里有认不出的条目：整份拒收，本机的不动；不认识的智能体类型按没指明交给谁落；
+//   · 等着用户过目的那一批原样落；里面已经派出的那几件的了结记录单开一个键带（老版本对端认不出它），只接回那一批的；
 //   · 说明里引用的上传附件路径落地时改写成本机路径。
 //
 // 第一段起两台真服务走完整的接力与移回；后几段单进程直调 importHandoff 喂手写的清单（老版本对端、途中丢
@@ -189,6 +190,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
   const { importHandoff } = await import("../src/handoff-import.js");
+  const { exportSuggestions } = await import("../src/handoff-suggestions.js");
   const { HandoffError } = await import("../src/handoff-types.js");
   const { now } = await import("../src/util.js");
   type HandoffManifest = Awaited<ReturnType<typeof import("../src/handoff-import-payload.js")["validate"]>>;
@@ -292,14 +294,29 @@ try {
     }),
     suggestion("sgWaitTwo01", "等着的第二件", { batch: "batchW", order: "serial", wait: "continue", key: "two", prerequisites: ["one"], review: "none" }),
   ];
+  // 这一批里用户已经派出了一件（了结记录带着建好的任务号）：单开一个键带，处理完时交给智能体的清单要靠它；
+  // 不是这一批的了结记录（那一批早就不在了）不落。
+  const created = {
+    ...suggestion("sgWaitDone1", "已经派出的那件", { batch: "batchW", order: "serial", wait: "continue", review: "default" }),
+    question: waitingQuestion,
+    settled: { at: "2026-11-18T03:00:00.000Z", task: { id: "taskBuiltAway", title: "已经派出的那件", target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null } } },
+  };
+  const stale = { ...created, id: "sgStaleOne1", batch: "batchGone", settled: { at: created.settled.at, task: null } };
+  const hung = waiting.map((item) => ({ ...item, question: waitingQuestion }));
   await archiveOnLocal("sgtwaiting", [], []);
   await importHandoff(manifestFor("sgtwaiting", {
     status: "paused", question: waitingQuestion,
-    dispatchSuggestions: JSON.stringify(waiting.map((item) => ({ ...item, question: waitingQuestion }))),
+    dispatchSuggestions: JSON.stringify(hung),
+    dispatchSettled: JSON.stringify([created, stale]),
   }), { sourceUrl: "http://holder.test:4317" });
   const afterWaiting = await localRow("sgtwaiting");
   assert.equal(afterWaiting.question, waitingQuestion);
-  assert.deepEqual(JSON.parse(afterWaiting.dispatchSuggestions!), waiting.map((item) => ({ ...item, question: waitingQuestion })), "等着的那一批原样落，还绑着那一问");
+  assert.deepEqual(JSON.parse(afterWaiting.dispatchSuggestions!), [created, ...hung], "等着的那一批原样落，还绑着那一问；已经派出的那件的记录接上");
+  const reExported = exportSuggestions(afterWaiting);
+  assert.deepEqual(JSON.parse(reExported.dispatchSuggestions!), hung, "再往外接力：还挂着的那一列不混进了结记录（老版本对端认不出）");
+  assert.deepEqual(JSON.parse(reExported.dispatchSettled!), [created], "了结记录单独那个键带着");
+  await assert.rejects(importHandoff(manifestFor("sgtwaitbad", { dispatchSettled: JSON.stringify([hung[0]]) }), { sourceUrl: "http://holder.test:4317" }),
+    (error: unknown) => error instanceof HandoffError && /dispatchSettled/.test(error.message), "了结记录那个键里混了没了结的：整份拒收");
 
   // 对端攒了很多条收回记录（挂了收、收了挂，条数没有上限）：一次移回全接上，顺序不乱；本机那一列空着的、已经
   // 有记录的两种都走一遍。3000 条 = 逐条给路径和值时 6001 个函数实参，SQLite 各版本的上限（127 / 1000）都过了。

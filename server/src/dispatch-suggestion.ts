@@ -51,6 +51,28 @@ export function readSuggestions(row: SuggestionColumns): StoredSuggestion[] {
   return [...items, ...legacyPlanSuggestions(row.dispatchPlan, row.question)];
 }
 
+/** 同一批里一件的 key 在全列里的写法（不同批的 key 可以重名）。 */
+export const scopedKey = (item: Pick<StoredSuggestion, "batch">, key: string): string => `${item.batch}\n${key}`;
+
+/**
+ * 同一批里有几件不在了（派出去、点叉、被智能体收回）：还挂着的那几件指向它们的前置跟着改——派出去的换成建出来的
+ * 任务 id，没建的（点叉、收回）划掉。`rewrite` 的键是 `scopedKey`，值是任务 id 或 null。不在了的那几件本身由调用方处理。
+ */
+export function rewritePrerequisites(items: StoredSuggestion[], rewrite: ReadonlyMap<string, string | null>): StoredSuggestion[] {
+  if (!rewrite.size) return items;
+  return items.map((item) => {
+    if (item.settled || !item.prerequisites?.length) return item;
+    const prerequisites = item.prerequisites.flatMap((ref) => {
+      const scoped = scopedKey(item, ref);
+      if (!rewrite.has(scoped)) return [ref];
+      const replaced = rewrite.get(scoped);
+      return replaced ? [replaced] : [];
+    });
+    const { prerequisites: _old, ...rest } = item;
+    return prerequisites.length ? { ...item, prerequisites } : rest;
+  });
+}
+
 /** 那一问是不是一批派活在等（同一时刻只等用户一样东西：有它就不能再提问）。 */
 export const waitingOnDispatch = (row: SuggestionColumns): boolean => !!row.question && waitingBatchOf(readSuggestions(row)).length > 0;
 

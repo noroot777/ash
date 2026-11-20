@@ -60,12 +60,14 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
   const { profiles } = useExecutorProfiles();
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
   const [open, setOpen] = useState(false);
-  const [order, setOrder] = useState<DispatchOrder>("parallel");
+  const [chosenOrder, setOrder] = useState<DispatchOrder | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setOpen(false); setError(null); }, [task.id]);
+  useEffect(() => { setOpen(false); setError(null); setOrder(null); }, [task.id]);
 
   const list = enabled ? (task.dispatchSuggestions ?? []).filter((item) => !gone.has(item.id)) : [];
+  // 没动过就照挂的时候说定的（几件说定的不一样时同时）：上线前摆好「一个接一个」的老派活单照旧一个接一个。
+  const order = chosenOrder ?? (list.length && list.every((item) => item.order === list[0]!.order) ? list[0]!.order : "parallel");
   const reviewers = useReviewerList(list.length > 0);
   const baseContext = useDispatchBaseContext(task.projectId, list.length > 0);
   const options = suggestionBaseOptions(task, baseContext.value);
@@ -83,6 +85,8 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
     return {
       id: item.id, title, body, note: item.note, target: edit.target ?? item.target ?? fallback, review,
       base, filled: !!title.trim() && !!body.trim(), reviewHeld: reviewHold(review, reviewers),
+      // 挂的时候就说定了开工起点（上线前的老派活单）、卡上又没换过：不交，服务端照存着的那一个开工。
+      keepBase: edit.base === undefined && item.worktreeBase !== undefined,
     };
   });
   const storedArmed = armedOf(task.id);
@@ -131,7 +135,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
         order: several ? order : "parallel",
         items: picked.map((row, index) => ({
           id: row.id, title: row.title.trim(), body: row.body, extra, target: row.target, review: reviews[index]!,
-          worktreeBase: options.find((option) => option.id === row.base)?.worktreeBase ?? options[0]?.worktreeBase ?? null,
+          ...(row.keepBase ? {} : { worktreeBase: options.find((option) => option.id === row.base)?.worktreeBase ?? options[0]?.worktreeBase ?? null }),
         })),
         ...(extra !== undefined && attachments.length ? { attachments } : {}),
       });

@@ -383,7 +383,7 @@ export async function continueTask(
         completion: (followUpFrom
           ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
           : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow))
-          + (superseded ? questionSupersededNote(superseded.question!) : ""),
+          + (superseded ? questionSupersededNote(superseded) : ""),
         backgroundWait: backgroundWaitFor(agent),
         direction: DIRECTION_PROTOCOL(directionToken),
         reviewReminder,

@@ -14,6 +14,26 @@ import { readSuggestions, sameColumns, serializedSuggestions, waitingBatchOf } f
 /** 等着的那一批派活被发回来改时，答复最前面那一句（智能体据此知道一条都没建）。 */
 export const DISPATCH_PLAN_RETURNED = "（这一批派活没有派出，一条任务都没建，已经从回复框顶上撤下。用户的意见如下，按它改完可以再摆一次。）";
 
+/**
+ * 那一批不再等了（用户回了一句话、或者发来别的消息顶掉了那一问）时，先跟智能体说清它们落到了哪：一件都没派是
+ * `DISPATCH_PLAN_RETURNED`；用户已经从里面派出了几件，就写明建好了哪几条（别再建）、去掉了哪几条、剩下哪几条没派。
+ * 建好的那几条只记在这一批上，这一批随即拿掉，这里不说就再也没人告诉它。没有等着的那一批给 null。
+ */
+export function waitingBatchReturned(task: TaskRow, after: string): string | null {
+  const batch = waitingBatchOf(readSuggestions(task));
+  if (!batch.length) return null;
+  const created = batch.flatMap((item) => (item.settled?.task ? [item.settled.task] : []));
+  if (!created.length) return DISPATCH_PLAN_RETURNED;
+  const dropped = batch.filter((item) => item.settled && !item.settled.task).map((item) => `「${item.title}」`);
+  const left = batch.filter((item) => !item.settled).map((item) => `「${item.title}」`);
+  return [
+    `（这一批派活里用户已经派出了 ${created.length} 个任务，挂在本任务名下、已交给调度，不要再建：`,
+    ...created.map((task, index) => `${index + 1}. ${task.id}「${task.title}」`),
+    ...(dropped.length ? [`用户去掉了：${dropped.join("、")}（没有建）`] : []),
+    `剩下的${left.join("")}没有派出，已经从回复框顶上撤下。${after}）`,
+  ].join("\n");
+}
+
 export function prepareQuestionRecord(task: TaskRow, answer: string, input: QuestionAnswerInput): QuestionRecord {
   const source: QuestionSource = {
     question: task.question,
@@ -37,12 +57,12 @@ export function prepareQuestionRecord(task: TaskRow, answer: string, input: Ques
   }
   const text = answers ? formatQuestionAnswers(answers) : answer.trim();
   if (!text) throw new TypeError("answer 不能为空");
-  // 对着等着的那一批派活回的话（「发回去改」、手机或飞书里直接回一句）：一条任务都没建，先跟智能体说清。
-  const plan = waitingBatchOf(readSuggestions(task)).length > 0;
+  // 对着等着的那一批派活回的话（「发回去改」、手机或飞书里直接回一句）：先跟智能体说清哪些建了、哪些没建。
+  const plan = waitingBatchReturned(task, "用户的意见如下，按它改完剩下的可以再摆一次。");
   return {
     ...source, id: nanoid(12), answeredAt: now(), answer: text,
     ...(answers ? { answers: answers.map((value) => value.trim()) } : {}),
-    reply: `【答复】\n${plan ? `${DISPATCH_PLAN_RETURNED}\n` : ""}${text}`,
+    reply: `【答复】\n${plan ? `${plan}\n` : ""}${text}`,
   };
 }
 

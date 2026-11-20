@@ -19,7 +19,7 @@ import { requestLaunch, sweepLaunchRequests } from "./launch-request.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { createTasks, type TaskRow } from "./task-store.js";
 import { bindUploadsToTask } from "./uploads.js";
-import { readSuggestions } from "./dispatch-suggestion.js";
+import { readSuggestions, scopedKey } from "./dispatch-suggestion.js";
 import { launchedSettings, serialOrderConflict, type LaunchRequest } from "./dispatch-suggestion-input.js";
 import { proposedTarget, targetLabeler } from "./dispatch-suggestion-wait.js";
 import {
@@ -37,7 +37,6 @@ type Outcome =
  */
 function prerequisiteSpecs(picked: StoredSuggestion[], all: StoredSuggestion[]): { key?: string; prerequisites?: string[] }[] | string {
   const chosen = new Set(picked.map((item) => item.id));
-  const scoped = (item: StoredSuggestion, key: string) => `${item.batch}\n${key}`;
   const specs: { key?: string; prerequisites?: string[] }[] = [];
   for (const item of picked) {
     const refs: string[] = [];
@@ -46,9 +45,9 @@ function prerequisiteSpecs(picked: StoredSuggestion[], all: StoredSuggestion[]):
       if (dependency && !chosen.has(dependency.id)) {
         return `「${item.title}」要等同一批的「${dependency.title}」：一起派，或先把「${dependency.title}」点叉`;
       }
-      refs.push(dependency ? scoped(item, ref) : ref);
+      refs.push(dependency ? scopedKey(item, ref) : ref);
     }
-    specs.push({ ...(item.key ? { key: scoped(item, item.key) } : {}), ...(refs.length ? { prerequisites: refs } : {}) });
+    specs.push({ ...(item.key ? { key: scopedKey(item, item.key) } : {}), ...(refs.length ? { prerequisites: refs } : {}) });
   }
   return specs;
 }

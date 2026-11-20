@@ -1,6 +1,6 @@
 // 回复框顶上那一行「可以派出去的活」，以及正文任何位置都能敲的 `/派`。每一份是各自的任务（草稿按任务存）；
 // 派出去、叉掉都打到接口上，由测试那一侧接住记账。读全文的左抽屉照任务页挂一个宿主。
-// 有一份带着等裁定的驳回（框顶那一行让给裁定），一份分支已经清掉，一份一件建议都没有（只看斜杠）。
+// 有一份带着等裁定的驳回（框顶那一行让给裁定），一份分支已经清掉，一份上线前的老派活单，一份一件建议都没有（只看斜杠）。
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { FreeReviewDispute, FreeReviewRun, Task } from "@navi/shared";
@@ -78,6 +78,11 @@ createRoot(document.getElementById("root")!).render(
         <Stage name="ruling" suggestions={[item("s-ruling", "让给裁定的那一件")]} reviews={disputed} />
         {/* 这条任务的分支已经清掉了（不在分支列表里），合入目标是 release、项目此刻检出 main。 */}
         <Stage name="gone" suggestions={[item("s-gone", "分支清掉后还挂着的一件")]} task={{ mergeTargetBranch: "release" } as Partial<Task>} />
+        {/* 上线前摆好的派活单：一个接一个，第一条指定了从哪条分支开工。 */}
+        <Stage name="legacy" suggestions={[
+          item("s-l1", "老单子第一条", { batch: "plan-old", order: "serial", wait: "continue", worktreeBase: "feat/old" }),
+          item("s-l2", "老单子第二条", { batch: "plan-old", order: "serial", wait: "continue" }),
+        ]} />
         <Stage name="slash" />
       </main>
     </DraftProvider>

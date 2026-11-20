@@ -86,7 +86,7 @@ api.post("/tasks/:id/dispatch-suggestions", async (c) => {
   });
   if (written === "failed") return c.json({ error: "没能写进去，这一笔一样都没落：要收回的还挂着，要挂的没挂上" }, 500);
   if (written.kind === "question-taken") return c.json({ error: QUESTION_BLOCKS_DISPATCH_WAIT }, 409);
-  if (written.kind === "room") return c.json({ error: written.change.room }, 409);
+  if (written.kind === "refused") return c.json({ error: written.change.refused }, 409);
   // 入口核过之后、写进去之前，任务停了、回合结束了或用户换了方向：这一批是旧方向下的，不落。
   if (written.kind === "turn-gone") return c.json({ error: "这一轮的回合或方向已经变了（任务停了、回合结束了或用户补了新要求），已拒绝写入" }, 409);
   const { added, withdrawn, gone, already, after } = written.change;

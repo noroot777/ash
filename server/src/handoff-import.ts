@@ -204,6 +204,7 @@ async function importValidated(
     m.task.questionHistory = rwJson(m.task.questionHistory ?? null);
     // 建议任务的说明也是 JSON 列里的文本。没带（老版本对端）的保持没带：落成 null 就成了「持有机上一件都不剩」。
     if (m.task.dispatchSuggestions) m.task.dispatchSuggestions = rwJson(m.task.dispatchSuggestions);
+    if (m.task.dispatchSettled) m.task.dispatchSettled = rwJson(m.task.dispatchSettled);
     // 待发送消息:正文是纯文本,attachments 列是 JSON string[](路径以转义形态出现)。
     for (const msg of messages) {
       msg.text = applyUploadRewrites(msg.text, rewrites, "plain");

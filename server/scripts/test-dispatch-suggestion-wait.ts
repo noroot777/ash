@@ -3,6 +3,7 @@
 //   · 同一时刻只等用户一样东西：有提问在等时摆不出来，摆了之后也问不出来，两边的拒绝说得清；同一回合里同时发出
 //     提问和要等的一批，只有一个写得进去，另一个明说被谁占了；
 //   · 「发回去改」就是对那一问的普通答复：一条任务都不建，那一批从框顶撤下，智能体收到那句话（带一句「没有派出」）；
+//     已经派出了几件时，那句话前面写明建好了哪几条（任务号）、剩下哪几条没派；智能体换掉、收回光这一批都不落；
 //   · 派出去由 navi 照那几行此刻的样子建（换的人、同时 / 一个接一个），挂在这条任务名下、来源记用户；可以分几下处理：
 //     先派一件、再叉一件、最后派剩下的——最后一件了结那一下才算处理完；同批前置：被等的那件还挂着时不能单派等它的那件，
 //     先派出去的那件之后接得上（前置换成它建出来的任务号），叉掉的那件从前置里划掉；
@@ -53,6 +54,8 @@ const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, q
   import("../src/launch-request.js"),
 ]);
 const { DISPATCH_PLAN_RETURNED } = await import("../src/task-question-record.js");
+const { readSuggestions } = await import("../src/dispatch-suggestion.js");
+const { agentChange } = await import("../src/dispatch-suggestion-agent.js");
 const { groups, projects, queueItems, sessions, taskPrerequisiteLaunches, taskPrerequisites, tasks } = schema;
 await ensureSchema();
 // 派出去之后的起跑全走「等齐就起」那一套：开机那一下挂上事件总线、名额空出来就补放（跟 main.ts 一样）。
@@ -441,6 +444,36 @@ try {
   await launch.sweepLaunchRequests();
   assert.equal(await requestOf(chain[0]!), null, "停掉之后补办不挂回");
   console.log("✓ 一个接一个：只给队首挂请求，前置没站稳就等；停掉之后补办不挂回");
+
+  // —— 先派了一件、再回一句话：说清哪几条已经建了（别再建）、剩下哪几条没派；智能体换掉、收回光这一批都不落。
+  const PP = "dw-partial";
+  await db.insert(tasks).values(row(PP, "backlog"));
+  await db.insert(sessions).values({ id: `${PP}-prev`, taskId: PP, role: "single", agentType: "claude", executor: "claude@test", cwd: root, cliSessionId: `${PP}-cli`, startedAt: at });
+  assert.equal((await propose(PP, await inTurn(PP), {
+    tasks: [{ title: "先派的那件", body: "说明 X", note: "" }, { title: "后改的那件", body: "说明 Y", note: "" }],
+  })).status, 200);
+  assert.equal(await endTurn(PP), "paused");
+  const [launchedFirst, later] = await waitingOf(PP);
+  const partial = await launchOf(PP, "parallel", [pickOf(launchedFirst!)]);
+  assert.equal(partial.status, 200, JSON.stringify(partial.body));
+  assert.equal(partial.body.closed, false);
+  const [built] = await kidsOf(PP);
+  const stored = readSuggestions(await taskOf(PP));
+  assert.match(agentChange(stored, [], { items: [], order: "parallel", wait: "continue" }).refused ?? "", /先派的那件/,
+    "换掉这一批会抹掉「先派的那件」建过的记录：不落");
+  assert.match(agentChange(stored, [{ id: later!.id, reason: "不做了" }], { items: [], order: "parallel", wait: "none" }).refused ?? "", /先派的那件/,
+    "收回光剩下的同理");
+  assert.equal(agentChange(stored, [], { items: [], order: "parallel", wait: "none" }).refused, null, "不碰那一批的照写");
+  assert.equal((await send("POST", `/tasks/${PP}/answer`, { answer: "后改的那件换个做法(dw-partial-back)" })).status, 200);
+  await waitFor(() => delivered().includes("dw-partial-back"), "回的那句话没有送进会话");
+  const partialReply = delivered().split("\n").find((line) => line.includes("dw-partial-back"))!;
+  assert.ok(partialReply.includes(built!.id) && partialReply.includes("不要再建"), "说清「先派的那件」已经建了、任务号是哪个");
+  assert.ok(partialReply.includes("剩下的「后改的那件」没有派出"), "剩下的那件没派");
+  assert.ok(!partialReply.includes(DISPATCH_PLAN_RETURNED.slice(0, 12)), "不再说一条都没建");
+  assert.deepEqual(await waitingOf(PP), [], "那一批撤下");
+  await waitFor(() => settled(PP), "续上的那一轮没有结算");
+  assert.equal((await kidsOf(PP)).length, 1, "没有多建");
+  console.log("✓ 先派一件再回一句话：智能体收到已经建好的那一条和没派的那一条；换掉、收回光这一批都不落");
 
   // —— 上线前摆的派活单（只有 tasks.dispatch_plan 那一列，旁边还挂着一件老格式的建议）：照旧能看、能派、能发回去改。
   const legacyPlan = (planId: string, questionText: string) => JSON.stringify({
