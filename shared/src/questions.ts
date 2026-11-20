@@ -23,7 +23,15 @@ export type QuestionRecord = QuestionSource & {
   deleted?: true;
   /** 删的是会话里哪一段（会话行 + 段序号；删除不挪段序号）。正文还没换成墓碑时靠它认回原主。 */
   deletedFrom?: { sessionId: string; index: number };
+  /**
+   * 派活单「派出去」那一下的记录（server dispatch-plan-launch.ts 写，只有它写）：建好了哪几条。会话里按它画成
+   * 每条一句「开了新任务」，不画「你」的气泡（shared/dispatch-plan.ts `dispatchLaunchOf`）。
+   */
+  dispatchLaunch?: DispatchLaunchTask[];
 };
+
+/** 派出去建好的一条：任务号、标题、交给了谁（读成一句人话的执行器名）。 */
+export type DispatchLaunchTask = { id: string; title: string; agent: string };
 
 /** 会话里的一句真人输入，拿去对问答记录（`answerIds` 见 session-output.ts 的 ConvSeg）。 */
 export type AnswerMessage = {

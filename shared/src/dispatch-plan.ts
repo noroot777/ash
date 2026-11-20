@@ -6,6 +6,7 @@
 // 所以派活单只在「那一问还是它」的时候算数（`activeDispatchPlan`）：提问被答掉、被新消息撤下、
 // 被新的提问换掉，它就跟着作废，不必在每一处清提问的地方另清一遍。
 import type { AgentType } from "./index.ts";
+import type { DispatchLaunchTask, QuestionRecord } from "./questions.ts";
 import type { CreateReviewChoice } from "./review-on-create.ts";
 
 export type DispatchOrder = "serial" | "parallel";
@@ -61,15 +62,31 @@ export const MAX_DISPATCH_NOTE_LEN = 120;
 
 export const DISPATCH_ORDER_LABEL: Record<DispatchOrder, string> = { serial: "一个接一个", parallel: "同时" };
 
-/**
- * 「派出去」续上智能体会话的那段答复（server dispatch-plan.ts `launchReply`）以它开头。那段话只是交给智能体的
- * 回执：用户在会话里看到的是每条新任务各一句「开了新任务」（web dispatchNotes.ts，跟回复框、建议栏派出去
- * 同一种），所以会话里认出这段答复就不再画成一颗「你」的气泡——否则同一下要说两遍，气泡里还把整张清单引一遍。
- */
+/** 「派出去」续上智能体会话的那段答复（server dispatch-plan.ts `launchReply`）第二行的开头。 */
 export const DISPATCH_LAUNCH_REPLY_LEAD = "用户按了「派出去」：";
 
-export function isDispatchLaunchReply(text: string): boolean {
-  return text.trimStart().replace(/^【答复】\s*/, "").startsWith(DISPATCH_LAUNCH_REPLY_LEAD);
+/**
+ * 这条问答记录是不是「派出去」那一下，是的话建好了哪几条。会话里它不画成一颗「你」的气泡（那段答复只是交给
+ * 智能体的回执），而是每条一句「开了新任务」（web QuestionHistory.tsx）。
+ *
+ * 认的是服务端写下的 `dispatchLaunch`，不看正文：答复正文是用户能自由写的，开头撞上了也只是一句普通答复。
+ * 有这一列之前的老记录按完整形状认——答的那一句是 `launchBubble`（「派出这 N 个任务」开头），答复是
+ * `launchReply`（N 一致、后面恰好 N 行清单）。普通答复的这两段出自同一句话（task-question-record.ts：答复第二行
+ * 是那句话的第一行，或「发回去改」的说明），不可能一个以「派出这」开头、另一个第二行以「用户按了」开头。
+ */
+export function dispatchLaunchOf(record: QuestionRecord): DispatchLaunchTask[] | null {
+  if (record.deleted) return null;
+  if (record.dispatchLaunch) return record.dispatchLaunch;
+  const count = /^派出这 (\d+) 个任务(?:\n|$)/.exec(record.answer ?? "")?.[1];
+  const lines = (record.reply ?? "").split("\n");
+  if (!count || lines[0] !== "【答复】" || !lines[1]?.startsWith(`${DISPATCH_LAUNCH_REPLY_LEAD}Navi 已照派活单此刻的样子建好下面 ${count} 个任务`)) {
+    return null;
+  }
+  const tasks = lines.slice(2, 2 + Number(count)).map((line, index) => {
+    const match = /^(\d+)\. (\S+)「(.*)」→ (.+)$/.exec(line);
+    return match && Number(match[1]) === index + 1 ? { id: match[2]!, title: match[3]!, agent: match[4]! } : null;
+  });
+  return tasks.length === Number(count) && tasks.every((task) => task) ? tasks as DispatchLaunchTask[] : null;
 }
 
 /** 派活单还算不算数：那一问还是它。 */

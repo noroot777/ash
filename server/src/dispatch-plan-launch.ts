@@ -107,6 +107,8 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
     id: nanoid(12), answeredAt: now(),
     answer: launchBubble(plan, order, picks, proposedTarget(task), label),
     reply: launchReply(order, launched, dropped, label),
+    // 会话里认这一下只认它（shared dispatch-plan.ts `dispatchLaunchOf`），不看答复正文。
+    dispatchLaunch: launched.map((launch) => ({ id: launch.id, title: launch.title, agent: label(launch.target) })),
   };
 
   const delivery = await answerRouteFor(task);

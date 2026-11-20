@@ -151,7 +151,7 @@ export function TaskDetail({
   // 智能体收回的建议任务：收回的那一刻留一句为什么（suggestions/withdrawalNotes.ts），跟尾注同一种小灰字。
   const asides = useMemo(() => [
     ...dispatchNotes(task.id, allTasks).map((note) => ({
-      key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
+      key: `dispatch:${note.id}`, at: note.at, dispatchedTaskId: note.id, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
     })),
     ...withdrawalNotes(task.dispatchWithdrawals).map((note) => ({
       key: note.key, at: note.at, node: <FootnoteLine footnote={note.footnote} placement="standalone" />,
