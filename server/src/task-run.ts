@@ -9,7 +9,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, discardStartingRun, takeSteered, takeStopped, claimOwnTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, claimOwnTurnWhenReady as claimOwnTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
 import type { TurnIdentity } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { snapshotReviewWait } from "./review-wait.js";
@@ -131,7 +131,7 @@ async function runHeldTask(
   }
   // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。接管返回 null =
   // 那把锁已经不在手上(人工放开拔走之后另一轮占上),这一轮不起,也没有东西要还。
-  const turn = opts.turnHeld ? reclaimTurn(taskId, opts.turnHeld, "single") : claimOwnTurn(taskId);
+  const turn = opts.turnHeld ? reclaimTurn(taskId, opts.turnHeld, "single") : await claimOwnTurn(taskId);
   if (!turn) return;
   let handle: RunHandle | undefined;
   let invocationAgent: AgentType | undefined;

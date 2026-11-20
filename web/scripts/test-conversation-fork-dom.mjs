@@ -126,8 +126,26 @@ try {
     () => document.querySelectorAll('button[aria-label="派生新任务"]').length === 1,
   );
   assert.ok(!(await page.evaluate(() => document.body.innerText.includes("执行过程读取失败"))), "提示跟着消失");
+  await page.goto(`${web.origin}/scripts/fixtures/conversation-fork.html?archived=1`);
+  await page.getByText("方案 A 实现简单，适合先做原型。", { exact: true }).waitFor();
+  assert.equal(await forks.count(), 2, "归档只冻结原任务，完整回复仍能派生独立任务");
+  await forks.first().click();
+  await objective.fill("从已归档方案继续做独立验证");
+  await page.screenshot({ path: join(artifacts, "archived-fork-composer.png") });
+  const beforeArchivedFork = posts.length;
+  await submit.click();
+  await page.getByTestId("created").waitFor();
+  assert.equal(posts.length, beforeArchivedFork + 1);
+  const archivedFork = posts.at(-1);
+  assert.equal(archivedFork.originTaskId, "source");
+  assert.equal(archivedFork.mode, "single");
+  assert.equal(archivedFork.parentId, undefined);
+  assert.equal(archivedFork.dispatchedBy, undefined);
+  assert.match(archivedFork.body, /从已归档方案继续做独立验证/);
+  assert.match(archivedFork.body, /方案 A 实现简单/);
+  assert.equal(JSON.parse(await page.getByTestId("created").innerText()).originTaskId, "source");
   assert.deepEqual(errors, []);
-  console.log(`conversation fork UI, creation failure/retry, draft isolation, narrow screen: passed (${artifacts})`);
+  console.log(`conversation fork UI, archived forks, creation failure/retry, draft isolation, narrow screen: passed (${artifacts})`);
 } finally {
   await browser?.close();
   await web.close();

@@ -34,6 +34,7 @@ try {
   const { openGateVersion, resolveGate, waitForGate } = await import("../src/duet/gates.js");
   const { currentGateVersion, lastOpenedGateVersion, nextGateVersion, shownAtGate } = await import("../src/duet/gate-version.js");
   const { gateActionOf, mountDuetGateRoutes } = await import("../src/duet/gate-route.js");
+  const { runDuet, resumeDuet, resumeAtGate } = await import("../src/duet/index.js");
   const { recordGateEvent } = await import("../src/duet/timeline.js");
   const { claimOwnTurn, isTurnClaimed, releaseTurn } = await import("../src/runs.js");
 
@@ -259,9 +260,62 @@ try {
     "老讨论(没有 version、debate.gate)按开门序号认");
   await assert.rejects(shownAtGate("unreadable", 1), /EISDIR/, "读不了不当成没有");
 
+  const archivedActions = [
+    { kind: "approve" }, { kind: "reject" },
+    { kind: "inject", text: "归档后不能注入" }, { kind: "ask", text: "归档后不能提问" },
+  ] as const;
+  for (const status of ["awaiting_review", "done"] as const) {
+    const taskId = `archived-${status}`;
+    await duetTask(taskId, status);
+    writeTranscript(taskId, [{ type: "duet.gate", taskId, gate: "G1", open: true, version: 1 }]);
+    await db.update(tasks).set({ archived: true }).where(eq(tasks.id, taskId));
+    const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    const beforeTranscript = readFileSync(transcript(taskId), "utf8");
+    for (const expectedVersion of [undefined, 1]) {
+      for (const action of archivedActions) {
+        const rejected = await post(taskId, { ...action, expectedVersion });
+        assert.equal(rejected.status, 409, `${status}/${action.kind}:归档讨论不能被旧卡推进`);
+        assert.equal(rejected.body.archived, true);
+        assert.match(String(rejected.body.error), /已归档/);
+        assert.equal(isTurnClaimed(taskId), false);
+      }
+    }
+    assert.deepEqual((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0), before);
+    assert.equal(readFileSync(transcript(taskId), "utf8"), beforeTranscript);
+    if (status === "awaiting_review") {
+      const archivedGate = waitForGate(taskId, 1);
+      for (const action of archivedActions) {
+        assert.equal((await post(taskId, { ...action, expectedVersion: 1 })).body.archived, true);
+        assert.equal(openGateVersion(taskId), 1, "归档拒绝不能消费内存里的门");
+      }
+      await db.update(tasks).set({ archived: false }).where(eq(tasks.id, taskId));
+      assert.equal((await post(taskId, { kind: "approve", expectedVersion: 1 })).status, 200);
+      assert.deepEqual(await archivedGate, { kind: "approve" }, "取回后同一张卡恢复正常");
+      await db.update(tasks).set({ archived: true }).where(eq(tasks.id, taskId));
+    }
+    for (const held of [false, true]) {
+      for (const [name, start] of [
+        ["runDuet", (turnHeld: ReturnType<typeof claimOwnTurn>) => runDuet(taskId, { turnHeld })],
+        ["resumeDuet", (turnHeld: ReturnType<typeof claimOwnTurn>) => resumeDuet(taskId, { turnHeld })],
+        ...archivedActions.map((action) => [
+          `resumeAtGate/${action.kind}`,
+          (turnHeld: ReturnType<typeof claimOwnTurn>) => resumeAtGate(taskId, action, { turnHeld }),
+        ] as const),
+      ] as const) {
+        const turn = held ? claimOwnTurn(taskId, "duet") : null;
+        if (held) assert.ok(turn);
+        assert.equal(await start(turn), false, `${name}:直接调用也不能运行归档讨论`);
+        assert.equal(isTurnClaimed(taskId), false, `${name}:拒绝后归还自己或接管的锁`);
+      }
+    }
+    assert.deepEqual((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0), before);
+    assert.equal(readFileSync(transcript(taskId), "utf8"), beforeTranscript);
+  }
+
   console.log("✓ 闸口版本:旧卡点不中新门、门继续等;不带版本的老客户端照旧");
   console.log("✓ 版本在库里领(老讨论按 transcript 垫底、开门行写丢再重启也不重号、领不到就抛);重启补救 stale 不占锁,对上版本照常续、关门行带版本");
   console.log("✓ 已结束的讨论不被旧卡拉起;请求体非法一律 400;currentGateVersion 三档;卡片正文按版本取、取不到不借");
+  console.log("✓ 归档讨论所有裁决动作均拒绝（重启/内存门、带/不带版本）；启动/重试/续裁决统一冻结，取回恢复");
 } catch (error) {
   failure = error;
 } finally {

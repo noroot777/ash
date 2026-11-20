@@ -86,8 +86,7 @@ extension BrowserWindowController {
     guard UpdateGate.shared.phase == .idle else { return }
     DispatchQueue.global(qos: .utility).async {
       guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
-            let from = ServerRecord.staleVersion(servingPID: instance.pid)
-              ?? instance.codeDir.flatMap({ NaviHealth.samePath($0, NaviConfig.runtimeURL.path) ? nil : "上一版" }) else { return }
+            let from = ServerRecord.staleVersion(servingPID: instance.pid) else { return }
       DispatchQueue.main.async {
         guard UpdateGate.shared.phase == .idle else { return }
         UpdateGate.shared.request(.staleServer(from: from)) {}

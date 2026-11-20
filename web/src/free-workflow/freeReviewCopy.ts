@@ -1,5 +1,6 @@
 import type { FreeReviewDebate, FreeReviewRound, FreeReviewRun, FreeWorkflowState, Task } from "@navi/shared";
 import { reviewAnchorMatches } from "@navi/shared/free-workflow";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 
 // 审查链只有四个持久状态；「修复中 / 等待复审 / 结论过期」全部在这里**推导**出来：
 // - 修复中 = 任务本身 running/queued 且最近一轮停在未通过（或挂着预约）
@@ -137,7 +138,7 @@ export function openDisputeEntryIn(
  * 审查格那几颗键的禁用、回复框顶上那一行出不出，和会话里「等你裁定」那一句算不算现在的事，都认这一处。
  */
 export function reviewLocked(task: Pick<Task, "stage" | "archived" | "handoff">): boolean {
-  return task.stage === "accepted" || task.stage === "merged" || !!task.archived || task.handoff?.direction === "out";
+  return task.stage === "accepted" || task.stage === "merged" || taskInteractionAvailability(task) === "archived" || task.handoff?.direction === "out";
 }
 
 /**

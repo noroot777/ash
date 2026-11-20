@@ -23,11 +23,6 @@ export const CODE_LOCK_NAME = ".in-use";
 const O_SHLOCK = 0x10;
 let codeDescriptor: number | null = null;
 
-export function releaseCodeLockForExec(): void {
-  if (codeDescriptor !== null) closeSync(codeDescriptor);
-  codeDescriptor = null;
-}
-
 export function inheritCodeLock<T extends string | number>(stdio: T[]): Array<T | number> {
   if (codeDescriptor === null) return stdio;
   const inherited: Array<T | number | "ignore"> = [...stdio];
@@ -49,7 +44,7 @@ export function holdCodeLock(): void {
   if (process.platform !== "darwin") return;
   // node 加载模块时已经按真实路径解析过，这里不再 realpath：换包的那一下路径暂时不存在，realpath 会失败。
   const root = fileURLToPath(new URL("../..", import.meta.url));
-  if (!root.includes(".app/Contents/") && !existsSync(join(root, "runtime-manifest.json"))) return;
+  if (!root.includes(".app/Contents/") && !existsSync(join(root, ".runtime.json"))) return;
   const file = join(root, CODE_LOCK_NAME);
   const deadline = Date.now() + 30_000;
   for (;;) {

@@ -5,8 +5,9 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { monitorIdFromOrigin } from "@navi/shared/monitor";
 import { monitorsBrief } from "../monitors/monitorTray.ts";
 import { MonitorTrayRow, type TrayMonitors } from "./MonitorTrayRow.tsx";
+import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 import { ScheduledMessageRow, scheduledMessageLabel, SteerButton, WithdrawButton } from "./ScheduledMessageRow.tsx";
-import { bySendTime, scheduledMessageNeedsAttention, scheduledMessageSource, scheduledMessageText } from "./scheduledMessagePresentation.ts";
+import { bySendTime, scheduledMessageNeedsAttention, scheduledMessageSource, scheduledMessageText, scheduledMessageWhen } from "./scheduledMessagePresentation.ts";
 
 type TrayProps = {
   messages: ScheduledMessage[];
@@ -54,6 +55,7 @@ export function ScheduledMessageTray(props: TrayProps) {
   // server/src/task-steer-gate.ts);定时 / 等前置任务的不按这个顺序发,没有排队的才轮到它们。
   const mine = ordered.filter((message) => scheduledMessageSource(message) === "mine");
   const head = mine.find((message) => message.mode === "queued") ?? mine[0];
+  const headWhen = head ? scheduledMessageWhen(head, tasks) : null;
   const watching = monitors?.live ?? [];
   const waking = watching.some((monitor) => monitor.kind === "ash");
   const now = useMinuteClock(watching.length > 0);
@@ -121,10 +123,10 @@ export function ScheduledMessageTray(props: TrayProps) {
       {error && <p role="alert">待发送消息：{error}</p>}
       {hasItems && <div className="scheduled-tray-line">
         <button ref={toggleRef} type="button" className="scheduled-tray-toggle" aria-expanded={open} aria-controls={listId}
-          aria-label={[ordered.length > 0 && `排队 ${ordered.length}`, watching.length > 0 && `哨兵 ${watching.length}`].filter(Boolean).join("，")}
+          aria-label={[ordered.length > 0 && `待发送 ${ordered.length}`, watching.length > 0 && `哨兵 ${watching.length}`].filter(Boolean).join("，")}
           onClick={() => { if (open) collapse(); else setExpanded(true); }}>
           {open ? <CaretDown size={11} weight="bold" aria-hidden="true" /> : <CaretRight size={11} weight="bold" aria-hidden="true" />}
-          {ordered.length > 0 && <span>排队 {ordered.length}</span>}
+          {ordered.length > 0 && <span>待发送 {ordered.length}</span>}
           {ordered.length > 0 && watching.length > 0 && <span className="scheduled-tray-sep" aria-hidden="true">·</span>}
           {watching.length > 0 && <span className={`scheduled-tray-monitors${waking ? " is-live" : ""}`}>
             <Pulse size={12} aria-hidden="true" /><span className="scheduled-tray-monitors-word">哨兵 </span>{watching.length}
@@ -134,7 +136,9 @@ export function ScheduledMessageTray(props: TrayProps) {
           onClick={() => show(attention[0]!.id, { readable: false })}>{attention.length} 条要留意</button>}
         {!open && head && <>
           <span className="scheduled-tray-head">
-            <span className="scheduled-message-source">你</span>
+            {headWhen?.text
+              ? <CollapsedMessageWhen text={headWhen.text} stuck={headWhen.stuck} />
+              : <span className="scheduled-message-source">你</span>}
             <button type="button" className="scheduled-tray-head-summary" aria-label={`查看完整输入：${scheduledMessageLabel(head)}`}
               onClick={() => show(head.id, { readable: true })}>{scheduledMessageLabel(head)}</button>
           </span>
@@ -148,7 +152,7 @@ export function ScheduledMessageTray(props: TrayProps) {
           </button>
         </span>}
       </div>}
-      {open && <div ref={listRef} id={listId} className="scheduled-tray-list" role="region" aria-label="排队输入完整列表" tabIndex={0}>
+      {open && <div ref={listRef} id={listId} className="scheduled-tray-list" role="region" aria-label="待发送输入完整列表" tabIndex={0}>
         {monitors && watching.map((monitor) => <MonitorTrayRow key={monitor.id} monitor={monitor} monitors={monitors} now={now}
           open={openIds.has(`monitor:${monitor.id}`)} bodyId={`${bodyIdPrefix}-monitor-${monitor.id}`}
           onToggle={() => toggleBody(`monitor:${monitor.id}`)} />)}
@@ -166,6 +170,14 @@ export function ScheduledMessageTray(props: TrayProps) {
       <p className="scheduled-message-cancel-text">{scheduledMessageText(cancelMessage)}</p>
       {error && <p role="alert">{error}</p>}
     </ConfirmDialog>}
+  </>;
+}
+
+function CollapsedMessageWhen({ text, stuck }: { text: string; stuck: boolean }) {
+  const tip = useHoverTip();
+  return <>
+    <span className={`scheduled-tray-head-when${stuck ? " is-stuck" : ""}`} {...tip.anchorProps}>{text}</span>
+    <HoverTip at={tip.at}>{text}</HoverTip>
   </>;
 }
 

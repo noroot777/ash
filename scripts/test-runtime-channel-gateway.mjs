@@ -11,7 +11,7 @@ import { spawnTestFixture } from "./test-process-scope.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { withTestResources } from "./test-process-resources.mjs";
 
-if (process.platform === "win32") {
+if (process.platform !== "darwin") {
   console.log("SKIP: macOS channel gateway Unix control socket");
 } else {
   const temporary = mkdtempSync(join(tmpdir(), "navi-gateway-"));

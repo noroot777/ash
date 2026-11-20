@@ -97,18 +97,28 @@ export function useHoverTip(options?: { placement?: HoverTipPlacement }) {
 
 function PositionedHoverTip({ at, children }: { at: HoverTipAnchor; children: ReactNode }) {
   const ref = useRef<HTMLSpanElement>(null);
-  const [left, setLeft] = useState(at.x);
+  const [position, setPosition] = useState({ left: at.x, top: at.y });
   useLayoutEffect(() => {
-    if (at.placement === "left") { setLeft(at.x); return; }
-    const halfWidth = (ref.current?.getBoundingClientRect().width ?? 0) / 2;
-    setLeft(Math.max(halfWidth + 8, Math.min(at.x, window.innerWidth - halfWidth - 8)));
+    const place = () => {
+      const rect = ref.current?.getBoundingClientRect();
+      if (!rect) return;
+      const left = at.x - (at.placement === "left" ? rect.width : rect.width / 2);
+      const top = at.y - (at.placement === "above" ? rect.height : at.placement === "left" ? rect.height / 2 : 0);
+      setPosition({
+        left: Math.max(8, Math.min(left, window.innerWidth - rect.width - 8)),
+        top: Math.max(8, Math.min(top, window.innerHeight - rect.height - 8)),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
   }, [at, children]);
   return (
     <span
       ref={ref}
       className={`ui-hover-tip${at.placement === "below" ? "" : ` is-${at.placement}`}`}
       role="tooltip"
-      style={{ left, top: at.y }}
+      style={position}
     >
       {children}
     </span>

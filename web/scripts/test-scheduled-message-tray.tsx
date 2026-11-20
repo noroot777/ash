@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readSource } from "../../scripts/read-source.mjs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ScheduledMessage } from "@navi/shared";
+import type { ScheduledMessage, TaskListItem } from "@navi/shared";
 import type { TaskMonitor } from "@navi/shared/monitor";
 import type { TrayMonitors } from "../src/components/MonitorTrayRow.tsx";
 import { endedMonitorIds } from "../src/monitors/monitorTray.ts";
@@ -62,11 +62,33 @@ const line = (markup: string) => {
 const samples = Array.from({ length: 3 }, (_, index) => row(`sample-${index}`, `输入-${index}`, `2026-10-24T10:00:0${index}.000Z`));
 assert.equal(renderTray([]), "", "空队列不占回复区");
 
+{
+  const dependency = { id: "integration", title: "统一 macOS 更新运行时与安全接管", status: "running", archived: false } as TaskListItem;
+  const after: ScheduledMessage = { ...samples[0]!, mode: "after", afterTaskId: dependency.id, afterDoneAt: null };
+  const waiting = line(renderTray([after], { tasks: [dependency] }));
+  assert.match(waiting, /待发送 1/, "等待前置的消息不冒充当前回合排队");
+  assert.match(waiting, /scheduled-tray-head-when[^>]*>等「统一 macOS 更新运行时与安全接管」完成</,
+    "折叠状态直接说在等哪个任务，不要求先展开");
+  assert.doesNotMatch(waiting, /scheduled-message-source|等本任务这一轮结束|引导会话/, "发送条件替代多余的来源标签，不虚构当前回合");
+  assert.match(line(renderTray([after])), />等「前置任务」完成</, "没给任务列表时沿用已有的中性回退");
+  assert.match(line(renderTray([after], { tasks: [] })), /scheduled-tray-head-when is-stuck[^>]*>前置任务不存在</,
+    "前置消失时，折叠行也能看出等不到了");
+  assert.match(line(renderTray([after], { tasks: [{ ...dependency, status: "failed" }] })),
+    /scheduled-tray-head-when is-stuck[^>]*>「统一 macOS 更新运行时与安全接管」失败</, "前置失败不再冒充正常排队");
+  assert.match(line(renderTray([{ ...after, afterDoneAt: samples[0]!.sendAt }], { tasks: [dependency] })),
+    />「统一 macOS 更新运行时与安全接管」已完成</, "前置已完成沿用服务端确认的基线");
+  assert.match(line(renderTray([{ ...samples[0]!, mode: "timed" }])), /scheduled-tray-head-when[^>]*>\d\d\/\d\d \d\d:\d\d 发</,
+    "定时发送也在折叠行直接显示钟点");
+  assert.match(line(renderTray([{ ...samples[0]!, wait: { kind: "groupPaused" } }])),
+    /scheduled-tray-head-when[^>]*>分组已暂停，恢复后发送</, "排队消息沿用服务端等待事实");
+  assert.doesNotMatch(line(renderTray(samples)), /scheduled-tray-head-when|等本任务/, "未读到等待原因不靠猜测补一句");
+}
+
 // ── 收着:只有一行 ───────────────────────────────────────────────────────────
 for (const count of [1, 2, 3]) {
   const markup = renderTray(samples.slice(0, count));
   assert.equal((markup.match(/class="scheduled-tray-line"/g) ?? []).length, 1, "收着时只有一行");
-  assert.match(markup, new RegExp(`排队 ${count}<`));
+  assert.match(markup, new RegExp(`待发送 ${count}<`));
   assert.match(markup, /aria-expanded="false"/);
   assert.equal(openRows(markup).length, 0, "收着时不列出每一条");
   assert.match(line(markup), /查看完整输入：输入-0/, "这一行上带着用户自己最早那条");
@@ -108,7 +130,7 @@ const two = [watcher("m1", "等回归跑完"), watcher("m2", "盯构建日志")]
   const both = renderSteerTray([{ ...samples[0], steerable: true }], { monitors: trayMonitors(two) });
   assert.equal((both.match(/class="scheduled-tray-line"/g) ?? []).length, 1, "哨兵不另占一行");
   assert.doesNotMatch(both, /monitor-wait-line/, "那条单独的「哨兵在盯」不再出现");
-  assert.match(line(both), /aria-label="排队 1，哨兵 2"/, "条数那颗键把两样都数上");
+  assert.match(line(both), /aria-label="待发送 1，哨兵 2"/, "条数那颗键把两样都数上");
   assert.match(line(both), /scheduled-tray-monitors is-live/, "有会叫醒任务的哨兵在盯：脉冲在动");
   assert.match(line(both), /查看完整输入：输入-0[\s\S]*引导会话/, "有自己的消息时这一行仍带最早那条");
   assert.doesNotMatch(line(both), /等回归跑完/, "有自己的消息时不再挤上哨兵那一句");
@@ -162,7 +184,7 @@ assert.match(renderTray(samples), /role="status">3 条待发送消息</);
 // ── 点开:每一条一行,谁排进来的 · 摘要 · 什么时候发 · 行尾的键 ─────────────────
 const opened = renderTray(samples, { defaultExpanded: true });
 assert.equal(openRows(opened).length, 3);
-assert.match(opened, /aria-label="排队输入完整列表"/);
+assert.match(opened, /aria-label="待发送输入完整列表"/);
 assert.doesNotMatch(line(opened), /scheduled-tray-head/, "点开后那一行不再重复带最早那条");
 assert.equal((opened.match(/class="scheduled-message-summary" aria-expanded="false"/g) ?? []).length, 3, "每条的摘要都能点开全文");
 assert.equal((opened.match(/class="scheduled-message-source">你</g) ?? []).length, 3);
@@ -412,11 +434,11 @@ assert.notEqual(
 assert.equal(joinDraftText("撤回的话", ""), "撤回的话", "草稿为空时直接用撤回的正文");
 assert.equal(joinDraftText("", "草稿"), "草稿", "空正文不得清掉已有草稿");
 assert.equal(joinDraftText("撤回的话", "草稿"), "撤回的话\n\n草稿", "两边都有内容时撤回的排前面并空行隔开");
-const restored = attachmentsFromPaths([" data/uploads/abcdefghijkl-shot.png ", "/tmp/report.pdf", "data/uploads/abcdefghijkl-shot.png"]);
+const restored = attachmentsFromPaths([" /repo/data/uploads/abcdefghijkl-shot.png ", "/tmp/report.pdf", "/repo/data/uploads/abcdefghijkl-shot.png"]);
 assert.deepEqual(
   restored.map((attachment) => [attachment.path, attachment.name, attachment.kind, attachment.url]),
   [
-    ["data/uploads/abcdefghijkl-shot.png", "shot.png", "image", "/api/uploads/abcdefghijkl-shot.png"],
+    ["/repo/data/uploads/abcdefghijkl-shot.png", "shot.png", "image", "/api/uploads/abcdefghijkl-shot.png"],
     ["/tmp/report.pdf", "report.pdf", "file", null],
   ],
   "附件按路径还原:图片可预览、库外路径只当文件、重复路径去重",
@@ -424,7 +446,7 @@ assert.deepEqual(
 assert.deepEqual(
   mergeAttachments(restored, [{ path: "/tmp/report.pdf", name: "report.pdf", kind: "file", url: null, size: 12 }])
     .map((attachment) => attachment.path),
-  ["data/uploads/abcdefghijkl-shot.png", "/tmp/report.pdf"],
+  ["/repo/data/uploads/abcdefghijkl-shot.png", "/tmp/report.pdf"],
   "已经在草稿里的附件不得因撤回变成两份",
 );
 // 手机端那一屏没有附件通道：撤回承诺「内容原样回到输入框」，对带附件的消息做不到，

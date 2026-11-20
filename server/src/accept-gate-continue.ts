@@ -90,6 +90,7 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     reviewAuthority: choices.reviewAuthority,
     expectedResultVersion: choices.expectedResultVersion,
     expectedHumanGate: choices.expectedHumanGate,
+    push: choices.push,
   }).catch(async (error) => {
     // 门禁跑着的时候任务换了方向：acceptTask 按当初那份审查权限拒绝，用的是抛而不是返回。
     // 它是结果不是故障 —— 下次启动再续一次只会再被拒一次，「这一步还欠着」也不属实。

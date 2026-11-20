@@ -14,12 +14,12 @@ import { eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
-import { runtimeChannelFile, RUNTIME_CHANNEL_SUFFIX } from "./runtime-agent-channels.js";
+import { RUNTIME_CHANNEL_SUFFIX, runtimeChannelFile } from "./runtime-agent-channels.js";
 import {
   CONTROL_FIFO_SUFFIX, controlFifoPath, removeIdleControlFifos, restoreAbandonedRetirements,
 } from "./executors/control-fifo.js";
 
-// 只认以下后缀 —— 白名单而不是黑名单：这个目录里还躺着 .md 正文、审查证据、
+// 只认这三种后缀 —— 白名单而不是黑名单：这个目录里还躺着 .md 正文、审查证据、
 // 用户上传的图片，误删任何一样都是不可逆的。
 const SUFFIXES = [".agent-out.jsonl", ".agent-err.log", ".agent-rc", RUNTIME_CHANNEL_SUFFIX];
 // 哨兵的输出文件（`monitor-<id>.log`，见 monitor-spawn.ts）。性质跟上面三个一样：

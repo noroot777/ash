@@ -21,10 +21,10 @@ import { instanceBinding } from "./instance-binding.js";
 import { listenWindowPort } from "./window-port.js";
 import { responseCompression } from "./response-compression.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
-import { runtimeDrainGate } from "./runtime-drain.js";
-import { markRuntimeAdoption } from "./runtime-recovery.js";
+import { runtimeHandoverGate } from "./runtime-handover-gate.js";
 import { startRuntimeGateway } from "./runtime-channel-gateway.js";
 import { runtimeAgentChannel } from "./runtime-agent-channels.js";
+import { markRuntimeAdoption } from "./runtime-recovery.js";
 
 let activeServer: ReturnType<typeof serve> | null = null;
 let startupComplete = false;
@@ -100,6 +100,7 @@ async function initializeServer() {
     ]);
 
   await ensureSchema();
+  markRuntimeAdoption();
   const { chatService } = await import("./chat/service.js");
   await chatService.recover();
   // 实例模式(自用 / 多人)要在任何路由被打之前读出来:同步派进程那条路只认
@@ -178,7 +179,6 @@ async function initializeServer() {
   if (!IS_PREVIEW_INSTANCE) {
     // 自动开工先按住，接回之后数名额才数得对（launch-request.ts），由下面 startPrerequisiteLaunches 放开。
     (await import("./launch-request.js")).holdLaunchesForBoot();
-    markRuntimeAdoption();
     await reattachRunningTasks();
     // 回合里交出去、那一轮却没被接回来的哨兵结果退回待发送 —— 必须夹在这两步之间
     // (顺序的理由见 monitor-turn-handoff.ts 的 `returnOrphanTurnHandoffs`)。
@@ -406,7 +406,7 @@ app.use("*", async (context, next) => {
   }
   return next();
 });
-app.use("*", runtimeDrainGate());
+app.use("*", runtimeHandoverGate());
 // 预览资源凭证在已认证的任务入口签发；资源侧再核对有效期、运行代和项目权限。
 mountPreviewProxy(app);
 // 预览代理之后挂压缩:被代理的开发服务器自己管编码,其余接口与页面资源一律经它(为什么、
@@ -656,7 +656,7 @@ activeServer = serve({ fetch: app.fetch, port, ...(LOCAL_ONLY ? { hostname: LOCA
   // 改 process.env.PORT：应用内终端和 agent 都会继承它，前端 dev server 会误抢 navi 端口。
   recordListeningPort(info.port);
   try { await startRuntimeGateway(info.port); }
-  catch (error) { exitAfterStartupFailure("agent channel gateway failed to start", error); }
+  catch (error) { exitAfterStartupFailure("agent channel gateway failed", error); }
   // 预览实例**不跑调度器**：它连的是主库的快照，一条 cron 到点就会拿真项目目录去派活。
   // 快照压根没搬 schedules / scheduled_messages，这里是同一件事的第二道保险（成本一行）。
   if (IS_PREVIEW_INSTANCE) {

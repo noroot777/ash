@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Agent, fetch as directFetch } from "undici";
 import { withTestResources } from "./test-process-resources.mjs";
 import { isPidAlive } from "./platform.mjs";
+import { gatewayRequest } from "../server/dist/runtime-channel-controller.js";
 
 export async function testRuntimeChannelTasks({ base, data, work, schema, launchTask, request, dbRead, dbWrite, health, waitFor }) {
   const direct = new Agent();
@@ -46,7 +47,7 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
     const credentials = JSON.parse(readFileSync(join(data, "navi.db.navi.lock"), "utf8"));
     const headers = { "x-navi-host-token": credentials.token, "x-navi-instance": current.instance.id };
     const checkEligible = async () => {
-      const impact = (await request("/restart-impact")).body.runtimeHandoff;
+      const impact = (await request("/restart-impact")).body.runtimeHandover;
       for (const task of tasks) {
         assert.equal(impact.blocked.some((item) => item.id === task.id), false);
         assert.ok(impact.sessions.includes(task.sessionId));
@@ -72,19 +73,20 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
       await reader.read();
       readers.push([channel, reader]);
     }
-    const pending = request("/runtime-handoff", "POST", { protocol: 1, schema }, headers);
-    await waitFor(async () => (await request("/tasks/channel-probe/run", "POST", {})).status === 503, "handoff starts draining");
+    const endpoint = JSON.parse(readFileSync(join(data, ".agent-channel-v1/endpoint.json"), "utf8"));
+    const refused = await request("/runtime-handover", "POST", { protocol: 1, schema }, headers);
+    assert.equal(refused.status, 409);
+    assert.match(refused.body.error, /仍有请求|在途/);
+    assert.equal((await gatewayRequest(endpoint.socket, "/status")).paused, false, "known active streams must be rejected before pausing the gateway");
+    assert.equal((await request("/tasks")).status, 200, "known active streams must not seal backend admission");
     const continuing = [open("context-1m", "short"), open("convert", "short")];
     const hook = await fetch(stable + "/api/hooks/claude-monitor", { method: "POST", body: JSON.stringify({ tool_name: "Monitor", tool_input: {} }) });
     assert.equal(hook.status, 200);
     assert.equal((await hook.json()).hookSpecificOutput.permissionDecision, "deny");
     const unauthorized = await fetch(`${base}/api/llm-providers/convert/convert/v1/responses`, { method: "POST" });
-    assert.equal(unauthorized.status, 401, "drain exemption does not bypass relay authentication");
+    assert.equal(unauthorized.status, 401, "refused preflight keeps the ordinary authentication path intact");
     await unauthorized.text();
-    const refused = await pending;
-    assert.equal(refused.status, 409);
-    assert.match(refused.body.error, /仍有请求/);
-    for (const response of await Promise.all(continuing)) { assert.equal(response.status, 200); await response.text(); }
+    for (const response of await Promise.all(continuing)) { const body = await response.text(); assert.equal(response.status, 200, body); }
     assert.equal((await health()).pid, current.pid);
     for (const [channel, reader] of readers) {
       streams.get(channel).end(chunk("second") + "data: [DONE]\n\n");
@@ -93,8 +95,19 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
       assert.match(tail, /second/);
     }
     await checkEligible();
-    const prepared = await request("/runtime-handoff", "POST", { protocol: 1, schema }, headers);
-    assert.equal(prepared.status, 200, "channel-dependent turns can switch between requests");
+    const prepared = await waitFor(async () => {
+      const attempt = await request("/runtime-handover", "POST", { protocol: 1, schema }, headers);
+      if (attempt.status !== 409) return attempt;
+      assert.match(attempt.body.error, /^(稳定通道：稳定通道暂不可用：仍有请求或响应流在途|monitor：仍有请求或响应流在途，未切换服务)(；.*)?$/);
+      assert.equal((await gatewayRequest(endpoint.socket, "/status")).paused, false, "transient in-flight refusals must not pause the gateway");
+      assert.equal((await request("/tasks")).status, 200, "transient in-flight refusals must not seal backend admission");
+      return false;
+    }, "channel request accounting reaches an actual idle handover window");
+    assert.equal(prepared.status, 200, `channel-dependent turns can switch between requests: ${JSON.stringify(prepared.body)}; gateway=${JSON.stringify(await gatewayRequest(endpoint.socket, "/status"))}`);
+    assert.equal((await gatewayRequest(endpoint.socket, "/status")).paused, true);
+    const sealedHook = await fetch(stable + "/api/hooks/claude-monitor", { method: "POST", body: JSON.stringify({ tool_name: "Monitor", tool_input: {} }) });
+    assert.equal(sealedHook.status, 200);
+    assert.equal((await sealedHook.json()).hookSpecificOutput.permissionDecision, "deny");
     let settled = false;
     const waiting = open("convert", "short").then((response) => { settled = true; return response; });
     await new Promise((done) => setTimeout(done, 100));
@@ -103,7 +116,7 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
     assert.equal(sealed.status, 503);
     assert.equal(sealed.headers.get("x-navi-undelivered"), "runtime-handoff-v1");
     await sealed.text();
-    assert.equal((await request("/runtime-handoff", "DELETE", undefined, headers)).status, 200);
+    assert.equal((await request("/runtime-handover", "POST", { release: prepared.body.lease }, headers)).status, 200);
     const recovered = await waiting;
     assert.equal(recovered.status, 200);
     await recovered.text();
@@ -113,7 +126,7 @@ export async function testRuntimeChannelTasks({ base, data, work, schema, launch
       writeFileSync(join(work, task.id + "-finish"), "");
     }
     await waitFor(() => tasks.every((task) => dbRead("select status from tasks where id=?", task.id).status === "done"), "dependent turns finish through their original MCP");
-    await waitFor(async () => (await request("/restart-impact")).body.runtimeHandoff.blocked.length === 0, "finished channel dependencies release takeover");
+    await waitFor(async () => (await request("/restart-impact")).body.runtimeHandover.blocked.length === 0, "finished channel dependencies release takeover");
     console.log("✓ real ClaudeExecutor HTTP hooks and 1M/Codex conversion use stable channels; in-flight streams block, idle turns switch, final-check requests queue and cancellation resumes safely");
   }, [
     () => direct.destroy(),

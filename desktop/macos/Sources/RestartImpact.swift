@@ -20,8 +20,13 @@ struct RestartImpact: Decodable {
   let resumes: [Item]
   let interrupted: [Item]
   let mcpDisrupted: [Item]
-  struct Handoff: Decodable { let blocked: [Item] }
-  let runtimeHandoff: Handoff?
+  struct Handover: Decodable {
+    struct Target: Decodable { let `protocol`: Int; let schema: String }
+    let blocked: [Item]
+    let sessions: [String]
+    let target: Target?
+  }
+  let runtimeHandover: Handover?
 
   /// 同一个任务两类都占时只算一次（interrupted 优先：它说的后果更重）。
   var disrupted: [(title: String, why: String)] {
@@ -62,7 +67,7 @@ enum ImpactVerdict {
 
 enum RestartImpactProbe {
   /// 只在后台队列上调。
-  static func assessSync(forRuntimeSwitch: Bool = false) -> ImpactVerdict {
+  static func assessSync(preservingRuntime: Bool = false) -> ImpactVerdict {
     guard NaviConfig.isLocal else { return .clear(.remote) }
     switch NaviHealth.probeSync() {
     case .down:
@@ -77,14 +82,22 @@ enum RestartImpactProbe {
       return .clear(.foreign(pid: instance.pid))
     case .navi(let instance):
       guard let pid = instance.pid, pid > 1 else { return .unknown("服务没报自己的进程号") }
-      return askImpact(of: .ours(pid: pid), instance: instance.id, runtime: forRuntimeSwitch ? instance.codeDir : nil)
+      return askImpact(of: .ours(pid: pid), instance: instance.id, preservingRuntime: preservingRuntime)
     }
   }
 
   /// 带着认过的那一份的实例号问：问到之前端口换了人，新来的那份不答（server/src/instance-binding.ts），
   /// 闸拿不到别人的名单。
-  private static func askImpact(of target: ServiceTarget, instance: String?, runtime: String?) -> ImpactVerdict {
-    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
+  private static func askImpact(of target: ServiceTarget, instance: String?, preservingRuntime: Bool) -> ImpactVerdict {
+    var url = URLComponents(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), resolvingAgainstBaseURL: false)!
+    var nextSchema: String?
+    if preservingRuntime {
+      guard let next = RuntimeHandover.compatibility(), next["protocol"] as? Int == 1,
+            let schema = next["schema"] as? String else { return .unknown("新版接管协议无法核实") }
+      nextSchema = schema
+      url.queryItems = [URLQueryItem(name: "protocol", value: "1"), URLQueryItem(name: "schema", value: schema)]
+    }
+    var request = URLRequest(url: url.url!, timeoutInterval: 8)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // 与 restart.mjs 同一张凭证：单实例锁里那串 token（文件 0600）。本机直连多半用不上，带着不吃亏。
     if let token = hostToken() { request.setValue(token, forHTTPHeaderField: "x-ash-host-token") }
@@ -100,23 +113,14 @@ enum RestartImpactProbe {
         verdict = .unknown("答复看不懂（服务端版本太旧？）")
         return
       }
-      var disrupted = impact.disrupted
-      if let runtime {
-        if RuntimeStore.managed(runtime) {
-          guard let handoff = impact.runtimeHandoff else {
-            verdict = .unknown("服务未提供运行时接管能力，需等待任务结束或升级旧服务")
-            return
-          }
-          disrupted = handoff.blocked.map { ($0.title, $0.reason ?? "无法接管") }
-        } else {
-          disrupted = impact.interrupted.map { ($0.title, $0.reason ?? "无法接管") }
-            + impact.resumes.map { ($0.title, "调度台当前回合不能无损接管") }
-        }
-        if !RuntimeStore.compatible(runtime) {
-          disrupted += impact.survives.map { ($0.title, "首次旧布局迁移或数据迁移不兼容，需等这一轮结束") }
-          disrupted += impact.mcpDisrupted.map { ($0.title, "旧布局的 MCP 仍在使用 app 包") }
-        }
+      if let nextSchema, impact.runtimeHandover?.target?.protocol != 1 || impact.runtimeHandover?.target?.schema != nextSchema {
+        verdict = .unknown("旧服务未核对新版兼容性，未切换服务")
+        return
       }
+      let disrupted = preservingRuntime
+        ? (impact.runtimeHandover?.blocked.map { (title: $0.title, why: $0.reason ?? "不可接管") }
+          ?? [(title: "旧服务", why: "没有可验证的安全接管能力")])
+        : impact.disrupted
       verdict = disrupted.isEmpty ? .clear(target) : .disrupts(target, disrupted)
     }.resume()
     done.wait()
@@ -133,49 +137,49 @@ enum RestartImpactProbe {
   }
 }
 
-enum RuntimeHandoff {
-  static func freeze(_ target: ServiceTarget?) throws -> NaviInstance? {
-    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
-          let runtime = instance.codeDir else { return nil }
-    if !RuntimeStore.managed(runtime) {
-      if RuntimeStore.managed(NaviConfig.runtimeURL.path), RestartImpactProbe.assessSync(forRuntimeSwitch: true).needsConsent {
-        throw RuntimeStore.Failure("首次从 app 内运行的旧布局迁移，需要等待任务及 MCP 结束一次；现有进程不能自动改用新路径。")
-      }
-      return nil
-    }
-    guard target == .ours(pid: instance.pid ?? 0), let id = instance.id else {
-      throw RuntimeStore.Failure("切换前服务身份发生变化，未停止服务")
-    }
-    let (_, manifest) = try RuntimeStore.manifest(NaviConfig.runtimeURL)
-    do { try send("POST", id: id, body: ["protocol": manifest.protocol, "schema": manifest.schema]) }
-    catch { cancel(instance); throw error }
-    return instance
+enum RuntimeHandover {
+  static func compatibility() -> [String: Any]? {
+    guard let data = try? Data(contentsOf: NaviConfig.runtimeURL.appendingPathComponent(".handover.json")) else { return nil }
+    return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
   }
 
-  static func cancel(_ instance: NaviInstance?) {
-    if let id = instance?.id { try? send("DELETE", id: id, body: nil) }
+  static func acquire(target: ServiceTarget?) -> String? {
+    guard case .ours(let pid) = target,
+          case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, instance.pid == pid,
+          let codeDir = instance.codeDir, RuntimeStore.contains(codeDir), let id = instance.id else { return nil }
+    guard let compatibility = compatibility(),
+          let result = send(instance: id, body: compatibility), let lease = result["lease"] as? String else { return nil }
+    guard result["protocol"] as? Int == 1 else { _ = send(instance: id, body: ["release": lease]); return nil }
+    return lease
   }
 
-  private static func send(_ method: String, id: String, body: [String: Any]?) throws {
-    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/runtime-handoff"), timeoutInterval: 12)
-    request.httpMethod = method
-    request.setValue(id, forHTTPHeaderField: "x-navi-instance")
-    request.setValue(RestartImpactProbe.hostToken(), forHTTPHeaderField: "x-navi-host-token")
-    if let body {
-      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-      request.httpBody = try JSONSerialization.data(withJSONObject: body)
-    }
+  static func release(_ lease: String) {
+    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, let id = instance.id else { return }
+    _ = send(instance: id, body: ["release": lease])
+  }
+
+  static func isValid(_ lease: String) -> Bool {
+    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, let id = instance.id else { return false }
+    return send(instance: id, body: ["check": lease])?["valid"] as? Bool == true
+  }
+
+  private static func send(instance: String, body: [String: Any]) -> [String: Any]? {
+    guard let token = RestartImpactProbe.hostToken() else { return nil }
+    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/runtime-handover"), timeoutInterval: 45)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "content-type")
+    request.setValue(token, forHTTPHeaderField: "x-navi-host-token")
+    request.setValue(instance, forHTTPHeaderField: "x-navi-instance")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: body)
     let done = DispatchSemaphore(value: 0)
-    var result: Result<Void, Error> = .failure(RuntimeStore.Failure("切换未获答复"))
-    URLSession.shared.dataTask(with: request) { data, response, error in
-      defer { done.signal() }
-      if let error { result = .failure(error); return }
-      let status = (response as? HTTPURLResponse)?.statusCode
-      if status == 200 { result = .success(()); return }
-      let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? "没有答复"
-      result = .failure(RuntimeStore.Failure("服务未同意无损切换：\(text)"))
+    var result: [String: Any]?
+    URLSession.shared.dataTask(with: request) { data, response, _ in
+      if (response as? HTTPURLResponse)?.statusCode == 200, let data {
+        result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+      }
+      done.signal()
     }.resume()
     done.wait()
-    try result.get()
+    return result
   }
 }

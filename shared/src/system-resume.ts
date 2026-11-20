@@ -15,13 +15,19 @@ export type ResumeReason = (typeof RESUME_REASONS)[number];
 /**
  * side = 旁路回合（审查、就地验证、辩论那一段）起的续跑：它们自有身份和开头，展示端不在
  * 回合头上再说一遍缘由。
+ * followUp = 「重试这一回合」在续聊上代发的「接着做」（server 的 task-retry-turn.ts）：它不是任务的
+ * 执行，是那次续聊的后半段。它再崩一次时，重试据此仍按续聊接着做，不退回任务的执行。
  */
-export type SystemResume = { reason: ResumeReason; side?: true };
+export type SystemResume = { reason: ResumeReason; side?: true; followUp?: true };
 
 /** 读盘 / 读事件时的校验：形状不对就当没有（按老记录读），不抛。 */
 export function systemResumeOf(value: unknown): SystemResume | undefined {
   if (!value || typeof value !== "object") return undefined;
-  const { reason, side } = value as { reason?: unknown; side?: unknown };
+  const { reason, side, followUp } = value as { reason?: unknown; side?: unknown; followUp?: unknown };
   if (!RESUME_REASONS.includes(reason as ResumeReason)) return undefined;
-  return { reason: reason as ResumeReason, ...(side === true ? { side: true as const } : {}) };
+  return {
+    reason: reason as ResumeReason,
+    ...(side === true ? { side: true as const } : {}),
+    ...(followUp === true ? { followUp: true as const } : {}),
+  };
 }

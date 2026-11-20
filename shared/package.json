@@ -38,6 +38,10 @@
       "types": "./src/page-annotation.ts",
       "default": "./src/page-annotation.ts"
     },
+    "./task-interaction": {
+      "types": "./src/task-interaction.ts",
+      "default": "./src/task-interaction.ts"
+    },
     "./questions": {
       "types": "./src/questions.ts",
       "default": "./src/questions.ts"

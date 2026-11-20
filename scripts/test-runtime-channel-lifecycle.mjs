@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,20 +13,21 @@ import { withTestResources } from "./test-process-resources.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { spawnTestFixture } from "./test-process-scope.mjs";
 
-if (process.platform === "win32") {
+if (process.platform !== "darwin") {
   console.log("SKIP: macOS stable channel lifecycle");
 } else {
   const temporary = mkdtempSync(join(tmpdir(), "navi-channel-life-"));
+  process.env.NAVI_DESKTOP_APP = "1";
   process.env.NAVI_DATA_DIR = temporary;
   process.env.NAVI_DB = join(temporary, "navi.db");
   process.env.NAVI_RUNS_DIR = join(temporary, "runs");
   const { RuntimeGatewayController, gatewayRequest } = await import("../server/dist/runtime-channel-controller.js");
   const { hasGatewayConsumers, processProof } = await import("../server/dist/runtime-channel-consumers.js");
   const { readRuntimeRecord, replaceRuntimeRecord } = await import("../server/dist/runtime-channel-record.js");
-  const { initializeRuntimeGateway, runtimeMonitorFallback } = await import("../server/dist/runtime-channel-gateway.js");
+  const { initializeRuntimeGateway, runtimeMonitorFallback, runtimeGatewayIdle } = await import("../server/dist/runtime-channel-gateway.js");
   const { INSTANCE_ID } = await import("../server/dist/instance-binding.js");
-  const { beginRuntimeDrain, endRuntimeDrain, holdRuntimeDrain, onRuntimeDrainEnd, runtimeDraining,
-    runtimeDrainGate, sealRuntimeChannels } = await import("../server/dist/runtime-drain.js");
+  const { reserveRuntimeHandover, releaseRuntimeHandover, afterRuntimeHandover, runtimeHandoverActive } = await import("../server/dist/runtime-handover-state.js");
+  const { runtimeHandoverGate } = await import("../server/dist/runtime-handover-gate.js");
   const { acquireDbSingletonLock, liveLockToken } = await import("../server/dist/singleton.js");
   const { NAVI_HEADERS } = await import("../server/dist/request-headers.js");
   const direct = new Agent();
@@ -88,6 +89,11 @@ if (process.platform === "win32") {
     assert.ok(existsSync(node), "prepare the pinned macOS runtime cache before testing portable Node installation");
   }
   const home = join(temporary, "gateway");
+  const distribution = join(temporary, "node-distribution");
+  cpSync(dirname(dirname(node)), distribution, { recursive: true, verbatimSymlinks: true });
+  mkdirSync(join(distribution, "lib"), { recursive: true });
+  writeFileSync(join(distribution, "lib", "distribution-fixture"), "required sibling resource");
+  node = join(distribution, "bin/node");
   const socket = join(temporary, "control.sock");
   const options = { home, socket, entry, node, owner: INSTANCE_ID, port: 0,
     hasConsumers: async () => false };
@@ -106,7 +112,7 @@ if (process.platform === "win32") {
   await withTestResources(async () => {
     lock = acquireDbSingletonLock();
     assert.ok(lock);
-    const { mountRuntimeHandoff } = await import("../server/dist/runtime-handoff.js");
+    const { mountRuntimeHandoverRoutes } = await import("../server/dist/runtime-handover-routes.js");
     await listen(backend, 0);
     options.port = backend.address().port;
     const probe = join(temporary, "probe-endpoint.json");
@@ -186,6 +192,8 @@ if (process.platform === "win32") {
     hiddenWatcher.close();
     console.log("✓ empty, malformed and invalid identities rebuild without consumers or live entries; live/unknown consumers and hidden live entries stay protected, then recover after exit");
     const first = await start();
+    assert.equal(readFileSync(join(dirname(dirname(first.node)), "lib/distribution-fixture"), "utf8"), "required sibling resource");
+    assert.equal(readFileSync(join(dirname(first.script), "runtime-channel-record.js"), "utf8"), readFileSync(join(dirname(entry), "runtime-channel-record.js"), "utf8"));
     const original = { ...first.state };
     const base = `http://127.0.0.1:${original.port}`;
     const send = (key, hook = false, body = {}) => {
@@ -531,6 +539,7 @@ if (process.platform === "win32") {
     const unavailable = await initializeRuntimeGateway({ ...options, node: join(temporary, "missing-node") });
     controllers.push(unavailable);
     assert.equal(unavailable.state, undefined, "missing installation artifacts do not prevent service startup");
+    assert.equal(await runtimeGatewayIdle(), false, "a degraded entry cannot satisfy the main handover idle proof");
     unavailable.close();
     const guard = await runTestProcess("/bin/sh", ["-c", runtimeMonitorFallback()]);
     assert.equal(JSON.parse(guard.stdout).hookSpecificOutput.permissionDecision, "deny", "Monitor fallback works independently of damaged gateway artifacts");
@@ -548,9 +557,9 @@ if (process.platform === "win32") {
       outgoing.end(JSON.stringify(current));
     }), global.socket);
     const api = new Hono();
-    mountRuntimeHandoff(api);
+    mountRuntimeHandoverRoutes(api);
     const app = new Hono();
-    app.use("*", runtimeDrainGate());
+    app.use("*", runtimeHandoverGate());
     app.route("/api", api);
     app.post("/api/projects", (context) => context.json({ executed: true }));
     app.post("/api/llm-providers/p/convert/v1/responses", (context) => context.json({ executed: true }));
@@ -558,19 +567,18 @@ if (process.platform === "win32") {
     servers.push(http);
     if (!http.listening) await once(http, "listening");
     const service = `http://127.0.0.1:${http.address().port}`;
-    beginRuntimeDrain();
-    sealRuntimeChannels();
-    holdRuntimeDrain();
+    const lease = reserveRuntimeHandover();
+    assert.ok(lease);
     let released = false;
-    onRuntimeDrainEnd(() => { released = true; });
+    afterRuntimeHandover(() => { released = true; });
     const blocked = await fetch(service + "/api/projects", { method: "POST" });
     assert.equal(blocked.status, 503);
     await blocked.text();
     const headers = { [NAVI_HEADERS.hostToken]: liveLockToken(), [NAVI_HEADERS.instance]: INSTANCE_ID };
-    const cancelled = await fetch(service + "/api/runtime-handoff", { method: "DELETE", headers });
+    const cancelled = await fetch(service + "/api/runtime-handover", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ release: lease }) });
     assert.equal(cancelled.status, 503);
     assert.match((await cancelled.json()).error, /已解封.*通道恢复失败/);
-    assert.equal(runtimeDraining(), false);
+    assert.equal(runtimeHandoverActive(), false);
     assert.equal(released, true);
     for (const path of ["/api/projects", "/api/llm-providers/p/convert/v1/responses"]) {
       const response = await fetch(service + path, { method: "POST" });
@@ -578,14 +586,14 @@ if (process.platform === "win32") {
       await response.text();
     }
     resumeFails = false;
-    const retried = await fetch(service + "/api/runtime-handoff", { method: "DELETE", headers });
+    const retried = await fetch(service + "/api/runtime-handover", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ release: lease }) });
     assert.equal(retried.status, 200);
     await retried.text();
-    await endRuntimeDrain();
+    releaseRuntimeHandover(lease);
     brokenControl.closeAllConnections();
     await new Promise((done) => brokenControl.close(done));
     sockets.delete(global.socket);
-    console.log("✓ authenticated DELETE always releases an infinite local seal and consumer checkpoints; entry failure is explicit and retryable");
+    console.log("✓ authenticated cancellation always releases the main local lease and consumer checkpoints; entry failure is explicit and retryable");
   }, [
     () => { for (const controller of controllers) controller.close(); requests.abort(); },
     async () => {

@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, cpSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { Agent, request } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,21 @@ export class RuntimeGatewayController {
   }
 
   close(): void { this.closed = true; clearInterval(this.timer); }
+  async unavailableReason(): Promise<string | undefined> {
+    return this.serial(async () => {
+      try {
+        const expected = this.state;
+        if (!expected) throw new Error(this.warning ?? "通道身份尚未就绪");
+        const current = await gatewayRequest(this.socket, "/status");
+        if (current.protocol !== 1 || current.build !== expected.build) throw new Error("通道协议或版本无法核实");
+        if (current.id !== expected.id || current.port !== expected.port || current.pid !== expected.pid
+          || current.owner !== this.options.owner || !this.owned(current)) throw new Error("通道身份或服务归属无法核实");
+        if (!Number.isInteger(current.active) || current.active < 0) throw new Error("通道请求状态无法核实");
+        if (current.active) throw new Error("仍有请求或响应流在途");
+        return undefined;
+      } catch (error) { return `稳定通道暂不可用：${error instanceof Error ? error.message : String(error)}`; }
+    });
+  }
   pause(): Promise<Gateway> { this.paused = true; return this.control("/pause"); }
   resume(): Promise<Gateway> { this.paused = false; return this.control("/resume"); }
   async idle(): Promise<boolean> {
@@ -112,10 +127,20 @@ export class RuntimeGatewayController {
     const hashes = await Promise.all(sources.map(digest));
     const directory = join(this.options.home, "builds", createHash("sha256").update(hashes.join("-")).digest("hex"));
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    this.node = join(directory, "node");
+    const distribution = join(directory, "node");
+    this.node = join(distribution, "bin/node");
+    if (!existsSync(this.node)) {
+      const temporary = distribution + "." + randomUUID() + ".tmp";
+      try {
+        cpSync(dirname(dirname(this.options.node)), temporary, { recursive: true, verbatimSymlinks: true });
+        renameSync(temporary, distribution);
+      } finally { rmSync(temporary, { recursive: true, force: true }); }
+    }
+    if (await digest(this.node) !== hashes[1]) throw new Error("channel Node distribution identity changed");
     this.script = join(directory, "gateway.mjs");
     const destinations = [this.script, this.node, join(directory, "runtime-channel-consumers.js"), join(directory, "runtime-channel-record.js")];
     for (const [index, source] of sources.entries()) {
+      if (index === 1) continue;
       const destination = destinations[index];
       if (existsSync(destination) && hashes[index] === await digest(destination)) continue;
       const temporary = `${destination}.${process.pid}.tmp`;
@@ -231,7 +256,8 @@ export class RuntimeGatewayController {
     for (const segment of command.split(prefix).slice(1)) {
       const suffix = segment.match(/^[a-f0-9]{64}(?:-[a-f0-9]{64}){0,2}\/gateway\.mjs(?=\s|$)/)?.[0];
       const script = suffix ? prefix + suffix : undefined;
-      if (script && command.startsWith(join(dirname(script), "node") + " ") && existsSync(script)) return script;
+      if (script && ["node/bin/node", "node"].some((node) => command.startsWith(join(dirname(script), node) + " "))
+        && existsSync(script)) return script;
     }
     return undefined;
   }

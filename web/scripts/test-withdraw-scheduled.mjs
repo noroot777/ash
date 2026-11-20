@@ -26,7 +26,7 @@ const message = (id, text, attachments) => ({
 
 const PENDING = [
   message("msg-fail", "撤不掉的那条", []),
-  message("msg-ok", "排队里的原话", ["data/uploads/abcdefghijkl-shot.png", "/tmp/spec.pdf"]),
+  message("msg-ok", "排队里的原话", ["/repo/data/uploads/abcdefghijkl-shot.png", "/tmp/spec.pdf"]),
   message("msg-late", "迟到的原话", ["/tmp/late.pdf"]),
 ];
 
@@ -78,7 +78,7 @@ try {
 
   const input = page.getByRole("textbox", { name: "回复任务" });
   // 撤回在点开后那一行的行尾（指到这一行才出）。
-  await page.getByRole("button", { name: "排队 3", exact: true }).click();
+  await page.getByRole("button", { name: "待发送 3", exact: true }).click();
   const rows = page.locator(".scheduled-message-row");
   await rows.getByText("排队里的原话", { exact: true }).waitFor();
   await input.fill("我后来又写的草稿");

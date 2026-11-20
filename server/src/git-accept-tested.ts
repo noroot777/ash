@@ -3,7 +3,7 @@
 //
 // 不变量：落下的就是门禁测过的那棵树、落在被测时的目标提交之上，目标检出里的字节就是快照里测过的那份；
 // 落不成就**不动目标分支**。所以结果在任何检出之外生成（`commit-tree`，树就是测过的那棵），再只用
-// 「快进到它」发布 —— 检出里先演一遍两树合并、带旧值挪分支、再写文件，没有检出时带旧值的 `update-ref`。
+// 「快进到它」发布 —— 检出里先演一遍两树合并、带旧值挪分支、再写文件，没有检出时先占住分支再带旧值 `update-ref`。
 // 写文件之前的失败什么都不动；写到一半的失败停在那儿如实交付（git-accept-publish.ts 文件头），不替用户
 // 复位，不会把期间另一个终端提交到目标分支上的东西一并撤掉（第 4 轮复审 F1：旧做法先在用户检出里真合、
 // 树不对再 `reset --hard` 回合并前，连带抹掉了外部提交）。
@@ -28,8 +28,9 @@ import { type PathState, type SealedMove, sealedMove } from "./git-accept-publis
 import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { registeredCheckout } from "./git-worktree-state.js";
+import { whileBranchClaimed } from "./git-accept-temp.js";
 import { checkoutLeft } from "./git-accept-checkout.js";
-import type { TaskMergeResult } from "./git-accept.js";
+import { withTemporaryCleanupOutcome, type TaskMergeResult } from "./git-accept.js";
 
 /** 验收移动目标分支时写进 reflog 的说明开头（后面接来源分支）。没有读取方，只给人翻 reflog 时看。 */
 export const ACCEPT_REFLOG_PREFIX = "navi accept:";
@@ -224,24 +225,26 @@ export async function publishInCheckout(cwd: string, method: Published, guard: L
 }
 
 /**
- * 目标分支哪儿都没检出：带旧值原子地挪 ref（核对之后被别人挪过就失败）。挪完再看一眼它是不是在
- * 这期间被检出了 —— 是的话那份检出的文件还是旧的，把**自己刚挪的这一下**原子地挪回去（只在它还指着
- * 我们的结果时），不碰别的。
+ * 目标分支哪儿都没检出：先占住它（期间谁也检出不了，git-accept-temp.ts whileBranchClaimed），再带旧值原子地
+ * 挪 ref（核对之后被别人挪过就失败）。占不住就什么都不动。
  */
 export async function publishRefOnly(repo: string, method: Published, guard: LandingGuard, result: string,
   names: Names): Promise<TaskMergeResult> {
   const ref = `refs/heads/${names.targetBranch}`;
-  try {
-    await landingGit(repo, ["update-ref", "-m", `${ACCEPT_REFLOG_PREFIX} ${names.sourceBranch}`, ref, result, guard.target]);
-  } catch {
-    return refusal(names, movedTarget(names.targetBranch, guard.target, await rev(repo, ref)));
+  const claim = await whileBranchClaimed(repo, names.targetBranch, async () => {
+    try {
+      await landingGit(repo, ["update-ref", "-m", `${ACCEPT_REFLOG_PREFIX} ${names.sourceBranch}`, ref, result, guard.target]);
+      return null;
+    } catch {
+      return refusal(names, movedTarget(names.targetBranch, guard.target, await rev(repo, ref)));
+    }
+  });
+  if (!claim.claimed) {
+    return refusal(names, claim.checkedOutAt
+      ? `目标分支 ${names.targetBranch} 在合并的同时被检出到了 ${claim.checkedOutAt}，这次没动它，重新验收即可。`
+      : `合并之前没能占住目标分支 ${names.targetBranch}（${claim.message}），这次没动它，重新验收即可。`);
   }
-  const checkout = await registeredCheckout(repo, names.targetBranch).catch(() => ({ path: null }));
-  if (!checkout.path) return { ok: true, ...names, method };
-  const undone = await landingGit(repo, ["update-ref", ref, guard.target, result]).then(() => true, () => false);
-  return refusal(names, `目标分支 ${names.targetBranch} 在合并的同时被检出到了 ${checkout.path}，`
-    + (undone ? "已把这次的更新退回、那份检出没动。" : `没能退回这次的更新：它现在指着 ${result.slice(0, 12)}，合并之前是 ${guard.target.slice(0, 12)}。`)
-    + "重新验收即可。");
+  return withTemporaryCleanupOutcome(claim.value ?? { ok: true, ...names, method }, claim.cleanupError, claim.path);
 }
 
 /**

@@ -9,17 +9,15 @@ function Navi() {
   return (
     <div style={{ padding: 16 }}>
       <DuetGateControls
+        task={{ archived: false }}
         gate={{ gate: "G1", open: true, consensus: true, consensusBy: "both" }}
         round={2}
         maxRounds={4}
         busy={false}
         linkedTasks={[]}
-        allTasks={[]}
-        iterationBusyId={null}
         onGate={async (action: GateAction) => { setGated((current) => [...current, action.kind]); }}
         onOpenHandoff={() => {}}
         onOpenTask={() => {}}
-        onIterateTeam={() => {}}
       />
       <ul data-testid="gated">{gated.map((kind, index) => <li key={index}>{`门禁：${kind}`}</li>)}</ul>
     </div>

@@ -4,6 +4,7 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { ArrowRight, CaretDown, PencilSimple } from "@phosphor-icons/react";
 import type { AgentType, Task } from "@navi/shared";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 import type { ConversationItem } from "./conversationModel.ts";
 import type { ProposedPlanData } from "../components/ProposedPlan.tsx";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
@@ -20,7 +21,7 @@ export type ReadyPlan = {
 };
 
 export function readyPlanFor(task: Task, items: ConversationItem[]): ReadyPlan | null {
-  if (!task.planMode || task.mode !== "single" || task.archived || task.question || ["running", "queued"].includes(task.status)) return null;
+  if (!task.planMode || task.mode !== "single" || taskInteractionAvailability(task) === "archived" || task.question || ["running", "queued"].includes(task.status)) return null;
   const last = [...items].reverse().find((item) => item.kind === "agent");
   if (!last || last.kind !== "agent" || last.sessionRole !== "single" || !last.endedAt || last.interrupted || last.reviewer) return null;
   if (last.turnOutcome === "failed" || last.turnOutcome === "stopped" || last.session?.stoppedAs || (!last.turnOutcome && (last.session?.exitStatus ?? 0) !== 0)) return null;

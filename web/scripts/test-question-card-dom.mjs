@@ -42,6 +42,12 @@ try {
   const replyBox = page.getByRole("textbox", { name: "回复任务" });
   const option = (name) => card.getByRole("button", { name, exact: true });
   const visibleInputs = () => page.locator("textarea:visible, input[type=text]:visible").count();
+  const assertArchived = async () => {
+    await card.getByText("已归档，取消归档后再答", { exact: true }).waitFor();
+    assert.equal(await card.locator("textarea, input, .question-card-send, .question-card-options button").count(), 0,
+      "归档卡保留题目与静态选项，不挂输入、上传或发送控件");
+    assert.equal(await visibleInputs(), 0, "归档任务没有可编辑输入");
+  };
 
   // 卡停在回复框那一格（会话滚动区外面），展开时平常那个框不出现：全页一处输入、一颗发送键。
   await card.waitFor();
@@ -128,6 +134,33 @@ try {
   assert.equal(await note.isDisabled(), true);
   await page.getByRole("button", { name: "切换提问状态" }).click();
   assert.equal(await option("清楚展示问题").isDisabled(), false);
+
+  await option("清楚展示问题").click();
+  await note.fill("取回后继续答");
+  const callsBeforeArchive = await page.getByLabel("提交次数").innerText();
+  await page.getByRole("button", { name: "切换归档", exact: true }).click();
+  await assertArchived();
+  assert.equal(await card.locator(".question-card-title").innerText(), "选择界面优化方向");
+  assert.equal(await card.locator(".question-card-option").count(), 2);
+  await card.getByRole("button", { name: "收起答题卡，先看上文" }).focus();
+  await page.keyboard.press("1");
+  await page.keyboard.press("Control+Enter");
+  assert.equal(await page.getByLabel("提交次数").innerText(), callsBeforeArchive, "键盘操作不能发送归档问题");
+  await page.getByRole("button", { name: "切换归档", exact: true }).click();
+  assert.equal(await note.inputValue(), "取回后继续答", "归档取回不丢答题草稿");
+  assert.equal(await option("清楚展示问题").getAttribute("aria-pressed"), "true");
+  await page.getByRole("button", { name: "重置", exact: true }).click();
+  await page.getByRole("button", { name: "切换归档", exact: true }).click();
+  await assertArchived();
+  await card.getByRole("button", { name: "第 2 题（未答）" }).click();
+  assert.match(await card.locator(".question-card-title").innerText(), /发给智能体的回复保留哪些内容/);
+  await card.getByRole("button", { name: "收起答题卡，先看上文" }).click();
+  assert.equal(await replyBox.isDisabled(), true, "只读卡收起也不能绕过普通回复框的冻结位");
+  await card.locator(".question-card-peek").click();
+  await assertArchived();
+  await page.reload();
+  await assertArchived();
+  await page.getByRole("button", { name: "切换归档", exact: true }).click();
 
   // 没有选项：最后一行就是「写下你的答案…」，写了才能发。
   await page.getByRole("button", { name: "没有选项" }).click();
@@ -259,6 +292,14 @@ try {
   assert.equal(await visibleInputs(), 1);
   await openThenAsk({ input: page.locator(".team-reply-box textarea"), what: "团队页发送设置",
     open: () => page.locator(".team-reply-box .send-key-opt").click(), layer: ".send-key-panel" });
+
+  await card.locator(".question-card-peek").click();
+  await page.getByRole("button", { name: "切换归档", exact: true }).click();
+  await assertArchived();
+  await page.setViewportSize({ width: 360, height: 720 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.getByRole("button", { name: "切换归档", exact: true }).click();
+  assert.equal(await note.isEnabled(), true, "团队共用答题卡取回后恢复输入");
 
   assert.deepEqual(failures, []);
   console.log("question card DOM: docked in the reply slot, one input + one send key (composer portals unmounted in task and team hosts), picks not copied but sent, jump/next/send switch, digit keys + last cell, collapse shows the reply box, settling locked, failure keeps answers, question shown once, pasted images ride along with the answer, narrow screen (incl. many images keep the send row) passed");

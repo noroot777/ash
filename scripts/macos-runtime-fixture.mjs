@@ -39,7 +39,7 @@ process.exit(0);
 export const agentSource = `
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Agent, fetch } from "undici";
 const direct = new Agent();
@@ -51,7 +51,12 @@ const rawSettings = settingsAt >= 0 ? process.argv[settingsAt + 1] : '{}';
 const settings = JSON.parse(rawSettings.startsWith('{') ? rawSettings : readFileSync(rawSettings, 'utf8'));
 const hooks = settings.hooks?.PreToolUse?.find(entry => entry.matcher === 'Monitor')?.hooks;
 const monitor = hooks?.find(hook => hook.type === 'http');
-if (monitor && !hooks.some(hook => hook.type === 'command' && hook.command.includes('--deny-monitor'))) throw new Error('missing fail-closed Monitor guard');
+if (monitor) {
+  const fallback = hooks.find(hook => hook.type === 'command' && hook.command);
+  if (!fallback) throw new Error('missing fail-closed Monitor guard');
+  const decision = JSON.parse(execFileSync('/bin/sh', ['-c', fallback.command], { encoding: 'utf8', timeout: 5000 }));
+  if (decision.hookSpecificOutput?.permissionDecision !== 'deny') throw new Error('Monitor guard did not deny');
+}
 const hookHeaders = Object.fromEntries(Object.entries(monitor?.headers ?? {}).map(([name,value]) => [name, value.startsWith('$') ? process.env[value.slice(1)] : value]));
 let hooking = false;
 setInterval(async () => {

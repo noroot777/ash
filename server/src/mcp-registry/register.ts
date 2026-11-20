@@ -23,9 +23,9 @@ import { byHand, type ApprovalVerdict } from "../auth/codex-approve.js";
 import { publishFresh } from "../auth/config-publish.js";
 import { currentListeningPort } from "../listening-port.js";
 import { resolveBin } from "../executors/bin-resolve.js";
-import { CODE_DIR } from "../paths.js";
+import { CODE_DIR, DATA_DIR } from "../paths.js";
+import { desktopRuntimeMcp } from "./desktop-runtime.js";
 import { isInsidePath } from "../platform.js";
-import { hostRuntimeEntry } from "./host-runtime-entry.js";
 import { naviMcpConfigDir, naviMcpMechanism } from "./catalog.js";
 import { relocateHostFact, type RelocateResult } from "./relocate.js";
 import {
@@ -54,7 +54,7 @@ export function naviMcpEntry(): NaviMcpEntry {
  * 仓库里还没 build 出 MCP 产物就返回 null(别往配置里登记一个不存在的入口)。
  */
 export function builtinEntry(): NaviMcpEntry | null {
-  return hostRuntimeEntry(localUrl()) ?? (existsSync(MCP_ENTRY) ? naviMcpEntry() : null);
+  return existsSync(MCP_ENTRY) ? desktopRuntimeMcp(CODE_DIR, DATA_DIR, localUrl()) ?? naviMcpEntry() : null;
 }
 
 /**

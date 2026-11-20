@@ -6,9 +6,10 @@ import { resolveExecutorFor } from "./executors/index.js";
 import { heldTurns } from "./turn-lock.js";
 import { runtimeConsumerAvailable } from "./runtime-consumers.js";
 import { activeRuntimeChannels, runtimeChannelReasons } from "./runtime-agent-channels.js";
+import type { RuntimeCompatibility } from "./runtime-compatibility.js";
 
 type Item = { id: string; title: string };
-export type RuntimeEligibility = { blocked: (Item & { reason: string })[]; sessions: string[] };
+export type RuntimeEligibility = { blocked: (Item & { reason: string })[]; sessions: string[]; target?: RuntimeCompatibility };
 
 export async function runtimeEligibility(impact: {
   survives: (Item & { pid: number })[]; interrupted: (Item & { reason: string })[]; resumes: Item[];
@@ -43,7 +44,8 @@ export async function runtimeEligibility(impact: {
   for (const channel of activeRuntimeChannels()) result.blocked.push({
     id: `runtime-channel:${channel}`, title: channel, reason: "仍有请求或响应流在途，未切换服务",
   });
-  for (const turn of heldTurns()) if (!impact.survives.some((task) => task.id === turn.taskId)) {
+  for (const turn of heldTurns()) if (!impact.survives.some((task) => task.id === turn.taskId)
+    || !turn.token || !["single", "reviewer"].includes(turn.role)) {
     result.blocked.push({ id: turn.taskId, title: turn.taskId, reason: "仍有起跑或维护操作在途" });
   }
   return result;

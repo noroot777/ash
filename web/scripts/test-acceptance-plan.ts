@@ -232,4 +232,30 @@ assert.equal(line({ latest: run({ status: "failed", exitCode: 1, command: "npm r
   assert.equal(stale.tone, "idle");
 }
 
+// 16. 「推送」那一勾（2026-11-20）：只在会落提交、推得了时出现，默认跟上一次；发给后端的就是层里看见的那个值；
+//     推送那份事实读不到时不许确认（上一次勾了推送，读失败就静悄悄不推是最坏的那种）；取消「提交」它就收起来。
+{
+  const off = confirmView(input());
+  assert.equal(off.pushChoosable, false, "推不了（没读到推到哪）就不画");
+  assert.equal(off.pushParam, undefined, "不画就不发");
+  assert.equal(off.memory?.push, undefined, "不画就不记");
+  const remembered = confirmView(input({ push: { remembered: true } }));
+  assert.equal(remembered.push, true, "上一次勾了推送：这次默认勾着");
+  assert.equal(remembered.pushParam, true);
+  assert.equal(remembered.confirmLabel, "验收并推送", "推送要在确认键上说破");
+  assert.equal(remembered.memory?.push, true);
+  const unchecked = confirmView(input({ push: { remembered: true }, pushChoice: false }));
+  assert.equal(unchecked.pushParam, false);
+  assert.equal(unchecked.confirmLabel, "确认验收");
+  assert.equal(unchecked.memory?.push, false, "这次取消了，下次就默认不勾");
+  const noCommit = confirmView(input({ push: { remembered: true }, commitChoice: false }));
+  assert.equal(noCommit.pushChoosable, false, "不提交就没有可推的");
+  assert.equal(noCommit.pushParam, undefined);
+  assert.equal(noCommit.memory?.push, undefined, "收起来时不改记住的值");
+  assert.equal(confirmView(input({ pushPending: true })).confirmDisabled, true, "推送那份事实没读到：等它");
+  assert.equal(confirmView(input({ pushPending: true, commitChoice: false })).confirmDisabled, false, "不提交时推送无关，不等它");
+  assert.equal(confirmView(input({ push: { remembered: true }, gate: gate(), runChoice: false })).confirmLabel, "跳过并验收",
+    "跳过门禁比推送更要紧，确认键先说跳过");
+}
+
 console.log("acceptance plan: ok");

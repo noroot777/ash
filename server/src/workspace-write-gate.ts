@@ -4,6 +4,7 @@ import { tasks } from "./db/schema.js";
 import { taskFileRoot, type WorkspaceRoot } from "./file-browser.js";
 import { claimIdleWorkspaceTurns, claimWorkspaceTurn, heldForAcceptance, isTurnClaimed } from "./runs.js";
 import { isolatedWorkspaceOwner, workspaceParticipants, type WorkspacePeer } from "./task-workspace.js";
+import { RuntimeHandoverBlockedError } from "./runtime-handover-state.js";
 
 // ── 「能不能动这个任务的工作目录」的公共门禁 ─────────────────────────────────
 //
@@ -123,10 +124,11 @@ export async function claimWorkspaceWrite(options: WorkspaceClaimOptions): Promi
   if (context.peers.some((peer) => !held.has(peer.id) && heldForAcceptance(peer.id))) throw options.archivedError(ACCEPTING_REFUSAL);
   const claimed = new Set(context.peers.map((peer) => peer.id));
   const claimable = [...claimed].filter((id) => !held.has(id));
-  const release = (forced
-    ? claimIdleWorkspaceTurns(claimable)
-    : claimWorkspaceTurn(claimable)) ?? undefined;
+  let release: (() => void) | undefined;
   try {
+    release = (forced
+      ? claimIdleWorkspaceTurns(claimable)
+      : claimWorkspaceTurn(claimable)) ?? undefined;
     const fresh = await loadWorkspaceTask(taskId);
     if (!fresh) throw options.missingError();
     if (fresh.archived) throw options.archivedError(ARCHIVED_REFUSAL);
@@ -142,6 +144,7 @@ export async function claimWorkspaceWrite(options: WorkspaceClaimOptions): Promi
     return release;
   } catch (error) {
     release?.();
+    if (error instanceof RuntimeHandoverBlockedError) throw options.archivedError(error.message);
     throw error;
   }
 }

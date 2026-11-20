@@ -32,7 +32,7 @@ import { discussionSegmentPrompt, discussionSynthesisPrompt, type SpokenSegment 
 import { plainSummaryOf } from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimOwnTurn, continueWhenIdle, releaseTurn, turnIdentity } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, continueWhenIdle, releaseTurn, turnIdentity } from "./runs.js";
 import {
   activeTalkOf, commitSegment, failTalk, hangingTalks, openSegment, segmentEnding, speakingTurnOf,
   statementOf, talkOrphaned, talkTurnsOf, type TalkRow, type TalkTurnRow,
@@ -217,7 +217,7 @@ export async function startDiscussion(
   const attachments = Array.isArray(input.attachments)
     ? input.attachments.filter((item): item is string => typeof item === "string" && !!item) : [];
   // 占到的那把锁的身份一路带到 finally（同辩论：按任务 id 还锁会撤掉后来者那把，见 turn-lock.ts）。
-  const turnHold = opts.holdTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  const turnHold = opts.holdTurn ? await claimOwnTurn(taskId, "dispatch") : null;
   if (opts.holdTurn && !turnHold) throw new Error("任务回合正在进行，结束后再开讨论");
   try {
     if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("这条任务上正有别的操作在进行");

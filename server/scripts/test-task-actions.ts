@@ -30,7 +30,7 @@ process.env.NAVI_DB = join(root, "ash.db");
 process.env.NAVI_RUNS_DIR = join(root, "runs");
 
 const { ensureSchema, db } = await import("../src/db/index.js");
-const { groups, projects, queueItems, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
+const { acceptGateRuns, groups, monitors, projects, queueItems, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
 const { createTasks } = await import("../src/task-store.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
 const { bus } = await import("../src/bus.js");
@@ -128,6 +128,33 @@ async function seedCrashedSession(taskId: string): Promise<string> {
 
   await createTasks([{ ...baseTask, id: "arch-ok", title: "可以归档" }]);
   await assertPassesVerdict("arch-ok", (await actionsOf("arch-ok")).archive, "/tasks/arch-ok/archive", /回合正在进行/);
+}
+
+{
+  await createTasks([
+    { ...baseTask, id: "arch-parent", title: "静止的父任务", status: "paused" },
+    { ...baseTask, id: "arch-child", title: "静止的子任务", status: "backlog", dispatchedBy: "arch-parent" },
+    { ...baseTask, id: "arch-grandchild", title: "静止的孙任务", status: "paused", dispatchedBy: "arch-child" },
+  ]);
+  for (const taskId of ["arch-parent", "arch-grandchild"]) {
+    assert.equal((await actionsOf("arch-parent")).archive.ok, true);
+    const monitorId = `archive-monitor-${taskId}`;
+    await expectStale("arch-parent", () => db.insert(monitors).values({ id: monitorId, taskId, command: "fixture", cwd: root,
+      logPath: join(root, "archive-monitor.log"), status: "running", startedAt: stamp, expiresAt: stamp }), "哨兵开始");
+    await assertRefused((await actionsOf("arch-parent")).archive, "/tasks/arch-parent/archive");
+    await expectStale("arch-parent", () => db.update(monitors).set({ status: "exited" }).where(eq(monitors.id, monitorId)), "哨兵结束");
+    assert.equal((await actionsOf("arch-parent")).archive.ok, true);
+    const gateId = `archive-gate-${taskId}`;
+    await expectStale("arch-parent", () => db.insert(acceptGateRuns).values({ id: gateId, taskId, projectId: "p1", command: "fixture",
+      cwd: root, logPath: join(root, "archive-gate.log"), status: "running", startedAt: stamp }), "验收命令开始");
+    await assertRefused((await actionsOf("arch-parent")).archive, "/tasks/arch-parent/archive");
+    await expectStale("arch-parent", () => db.update(acceptGateRuns).set({ status: "passed", processPending: true })
+      .where(eq(acceptGateRuns.id, gateId)), "验收命令进入进程收尾");
+    await assertRefused((await actionsOf("arch-parent")).archive, "/tasks/arch-parent/archive");
+    await expectStale("arch-parent", () => db.update(acceptGateRuns).set({ processPending: false })
+      .where(eq(acceptGateRuns.id, gateId)), "验收命令收尾完毕");
+    assert.equal((await actionsOf("arch-parent")).archive.ok, true);
+  }
 }
 
 // ── 运行:队列挡路 / 放行 ─────────────────────────────────────────────────────

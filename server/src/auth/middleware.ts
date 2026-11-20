@@ -121,7 +121,7 @@ const PEER_REFS_PATH = /^\/api\/handoff\/projects\/[^/]+\/refs$/;
  * `x-navi-host-token` —— 单实例锁文件里那串随机 token,只有读得到 navi 数据目录的人拿得到
  * (见 routes.ts 的 `/restart-impact` 与 singleton.ts `liveLockToken`)。
  */
-const HOST_MAINTENANCE_PATHS = new Set(["/api/restart-impact", "/api/runtime-handoff"]);
+const HOST_MAINTENANCE_PATHS = new Set(["/api/restart-impact", "/api/runtime-handover"]);
 
 
 /**

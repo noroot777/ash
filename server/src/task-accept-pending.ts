@@ -40,6 +40,7 @@ import { gitError } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { holdTeamForAcceptance } from "./team-acceptance-hold.js";
+import { RuntimeHandoverBlockedError } from "./runtime-handover-state.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -360,6 +361,9 @@ export async function commitPendingMerge(taskId: string): Promise<PendingMergeAc
         message: `已提交 ${commitLabel(commit)} 到 ${state.targetBranch}。`,
       } as PendingMergeActionResult;
     });
+  } catch (error) {
+    if (!(error instanceof RuntimeHandoverBlockedError)) throw error;
+    return { ok: false, httpStatus: 409, reason: "runtime_handover", error: error.message };
   } finally {
     endAccepting(taskId); // 先摘互斥再放占位，理由同 acceptTask
     releaseHold();
@@ -432,6 +436,9 @@ export async function remergePendingMerge(
           : `已重新合并并提交 ${commitLabel(merge.afterCommit ?? "")}。`,
       } as PendingMergeActionResult;
     });
+  } catch (error) {
+    if (!(error instanceof RuntimeHandoverBlockedError)) throw error;
+    return { ok: false, httpStatus: 409, reason: "runtime_handover", error: error.message };
   } finally {
     endAccepting(taskId); // 先摘互斥再放占位，理由同 acceptTask
     releaseHold();
