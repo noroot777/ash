@@ -1,8 +1,8 @@
 // 派出去的子孙跟着派活的那条一起归档、一起取回（dispatch-archive.ts），以及团队 / 讨论停用后
 // 建不出新的（shared/src/legacy-modes.ts）。
 //
-//   1. 名下整棵（含孙辈、含中间那层已经归档的底下）有一条没结束：归档整个挡回，一条都不动；界面那颗键读同一份判据。
-//   2. 都结束了：整棵同一刻归档，各自的 worktree 和分支一起收；之前就单独归档的那条原样不动。
+//   1. 名下整棵（含孙辈、含中间那层已经归档的底下）有一条在运行：归档整个挡回，一条都不动；界面那颗键读同一份判据。
+//   2. 都静止了：整棵同一刻归档，各自的 worktree 和分支一起收；之前就单独归档的那条原样不动。
 //   3. 取回：只带回同一刻归档的那几条。
 //   4. 团队 / 讨论关着：新建团队 / 讨论任务、团队执行者、改成这两种模式、调度台派活一律拒；开着照旧。
 //   5. 已归档的任务名下建不出没归档的新任务（POST /tasks 带 dispatchedBy 回 409）。
@@ -44,13 +44,14 @@ try {
   git("commit", "-m", "seed");
 
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { projects, tasks } = await import("../src/db/schema.js");
+  const { acceptGateRuns, monitors, projects, tasks } = await import("../src/db/schema.js");
   const { setInstanceMode } = await import("../src/auth/mode.js");
   const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
   const { mountTaskArchiveRoutes } = await import("../src/task-archive-routes.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { readActionFacts } = await import("../src/task-actions.js");
   const { archiveVerdict } = await import("../src/task-action-verdicts.js");
+  const { trackRun, untrackRun } = await import("../src/runs.js");
   const { dispatchWorkers } = await import("../src/team/dispatch.js");
   const { createTasks } = await import("../src/task-store.js");
   const { beginAccepting, beginFreezing, beginJoining, endAccepting } = await import("../src/acceptance-lock.js");
@@ -67,10 +68,10 @@ try {
   const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
   const post = (path: string) => app.request(path, { method: "POST" });
 
-  // 父 → 子（有 worktree）→ 孙（停着）；父 → 早就单独归档的子 → 它底下的孙（结束了）
-  await task("parent");
-  await task("child", { dispatchedBy: "parent", useWorktree: true });
-  await task("grandchild", { dispatchedBy: "child", status: "paused" });
+  // 父 → 子（有 worktree）→ 孙（运行中）；父 → 早就单独归档的子 → 它底下的孙（结束了）
+  await task("parent", { status: "paused", resumePrompt: "继续处理" });
+  await task("child", { dispatchedBy: "parent", status: "backlog", useWorktree: true });
+  await task("grandchild", { dispatchedBy: "child", status: "running" });
   const earlier = "2026-01-01T00:00:00.000Z";
   await task("archivedChild", { dispatchedBy: "parent", archived: true, archivedAt: earlier });
   await task("underArchived", { dispatchedBy: "archivedChild" });
@@ -78,22 +79,22 @@ try {
   const childBranch = worktreeBranchName("child");
   assert.ok(existsSync(ws.path) && branchExists(childBranch), "前提：子任务有自己的 worktree 和分支");
 
-  // ── 1. 孙辈停着：整棵挡回，界面那颗键读同一份 ───────────────────────────────
+  // ── 1. 孙辈在跑：整棵挡回，界面那颗键读同一份 ───────────────────────────────
   {
     const verdict = archiveVerdict(await readActionFacts(await row("parent")));
     assert.equal(verdict.ok, false);
-    assert.match(verdict.ok ? "" : verdict.reason, /「grandchild」停着/, "要说清是哪一条、在干什么");
+    assert.match(verdict.ok ? "" : verdict.reason, /「grandchild」在运行/, "要说清是哪一条、在干什么");
     const response = await post("/tasks/parent/archive");
     assert.equal(response.status, 409);
-    assert.match((await response.json() as { error: string }).error, /「grandchild」停着.*都结束了再归档/);
+    assert.match((await response.json() as { error: string }).error, /「grandchild」在运行.*停止或结束后再归档/);
     for (const id of ["parent", "child", "grandchild", "underArchived"]) assert.equal((await row(id)).archived, false, `${id} 不该被动`);
     assert.ok(existsSync(ws.path), "挡回去时磁盘一样不动");
-    console.log("✓ 名下有没结束的（孙辈也算）就整棵挡回，键和路由同一句");
+    console.log("✓ 名下有在运行的（孙辈也算）就整棵挡回，键和路由同一句");
   }
 
-  // ── 2. 都结束了：整棵同一刻归档，worktree 和分支一起收 ─────────────────────
+  // ── 2. 都静止了：整棵同一刻归档，worktree 和分支一起收 ─────────────────────
   {
-    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "grandchild"));
+    await db.update(tasks).set({ status: "paused", question: "下一步怎么做？" }).where(eq(tasks.id, "grandchild"));
     assert.equal(archiveVerdict(await readActionFacts(await row("parent"))).ok, true);
     const response = await post("/tasks/parent/archive");
     assert.equal(response.status, 200);
@@ -104,11 +105,63 @@ try {
       assert.equal(r.archived, true, `${id} 跟着归档`);
       assert.equal(r.archivedAt, parentAt, `${id} 和父任务落在同一刻`);
     }
+    assert.equal((await row("parent")).status, "paused");
+    assert.equal((await row("parent")).resumePrompt, "继续处理");
+    assert.equal((await row("child")).status, "backlog");
+    assert.equal((await row("grandchild")).status, "paused");
+    assert.equal((await row("grandchild")).question, "下一步怎么做？");
     assert.equal((await row("archivedChild")).archivedAt, earlier, "之前单独归档的那条原样不动");
     const childItem = body.cleanup.items.find((item) => item.taskId === "child");
     assert.ok(childItem?.worktreeRemoved && childItem.branchDeleted, "子任务的 worktree 和分支跟着收了");
     assert.ok(!existsSync(ws.path) && !branchExists(childBranch));
-    console.log("✓ 都结束了就整棵同一刻归档，子孙的 worktree 和分支一起收");
+    console.log("✓ 都静止了就整棵同一刻归档，子孙的 worktree 和分支一起收");
+  }
+
+  {
+    const refusal = async (id: string, reason: RegExp) => {
+      const verdict = archiveVerdict(await readActionFacts(await row(id)));
+      assert.equal(verdict.ok, false);
+      const response = await post(`/tasks/${id}/archive`);
+      assert.equal(response.status, 409);
+      const body = await response.json() as { error: string };
+      assert.equal(body.error, verdict.ok ? "" : verdict.reason);
+      assert.match(body.error, reason);
+      assert.equal((await row(id)).archived, false);
+    };
+    for (const status of ["backlog", "paused", "awaiting_review", "done", "failed", "canceled"]) {
+      const id = `idle-${status}`;
+      await task(id, { status });
+      assert.equal(archiveVerdict(await readActionFacts(await row(id))).ok, true);
+      assert.equal((await post(`/tasks/${id}/archive`)).status, 200);
+      assert.equal((await row(id)).status, status);
+      assert.equal((await post(`/tasks/${id}/unarchive`)).status, 200);
+      assert.equal((await row(id)).status, status);
+    }
+    await task("busy-parent", { status: "paused" });
+    await task("busy-child", { dispatchedBy: "busy-parent", status: "backlog" });
+    await task("busy-grandchild", { dispatchedBy: "busy-child", status: "paused" });
+    const handle = { kill() { throw new Error("归档不能杀掉正在执行的智能体"); } };
+    for (const id of ["busy-parent", "busy-grandchild"]) {
+      trackRun(id, handle);
+      try { await refusal("busy-parent", /智能体仍在执行/); }
+      finally { untrackRun(id, handle); }
+      await db.insert(monitors).values({ id: `monitor-${id}`, taskId: id, command: "fixture", cwd: stage,
+        logPath: join(stage, "monitor.log"), status: "running", startedAt: ts, expiresAt: ts });
+      await refusal("busy-parent", /哨兵.*运行/);
+      assert.equal((await db.select().from(monitors).where(eq(monitors.id, `monitor-${id}`))).at(0)?.status, "running");
+      await db.update(monitors).set({ status: "exited" }).where(eq(monitors.id, `monitor-${id}`));
+      assert.equal(archiveVerdict(await readActionFacts(await row("busy-parent"))).ok, true);
+      await db.insert(acceptGateRuns).values({ id: `gate-${id}`, taskId: id, projectId: "project", command: "fixture",
+        cwd: stage, logPath: join(stage, "gate.log"), status: "running", startedAt: ts });
+      await refusal("busy-parent", /验收命令尚未收尾/);
+      await db.update(acceptGateRuns).set({ status: "passed", processPending: true }).where(eq(acceptGateRuns.id, `gate-${id}`));
+      await refusal("busy-parent", /验收命令尚未收尾/);
+      await db.update(acceptGateRuns).set({ processPending: false }).where(eq(acceptGateRuns.id, `gate-${id}`));
+      assert.equal(archiveVerdict(await readActionFacts(await row("busy-parent"))).ok, true);
+    }
+    assert.equal((await post("/tasks/busy-parent/archive")).status, 200);
+    assert.equal((await row("busy-grandchild")).archived, true);
+    console.log("✓ 静止的待办、暂停及终态任务可归档；自己或孙辈的进程、哨兵、验收命令仍挡回");
   }
 
   // ── 3. 取回：只带回同一刻归档的 ─────────────────────────────────────────────

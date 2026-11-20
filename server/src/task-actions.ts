@@ -16,7 +16,7 @@ import { reviewRetryGeneration } from "./free-review-retry-identity.js";
 import { isDispatcher, readDispatchBelow } from "./dispatch-archive.js";
 import { checkpointStartBlock } from "./pending-checkpoint-recovery.js";
 import { queueBlockerDetails } from "./queues.js";
-import { isRunning } from "./runs.js";
+import { readArchiveActivity } from "./task-archive-activity.js";
 import {
   archiveVerdict, primaryAction, publicVerdict, requeueVerdict, stopVerdict, teamHaltVerdict, verifyVerdict,
   type ActionFacts,
@@ -50,7 +50,7 @@ export async function readActionFacts(row: TaskRow, actor?: Actor): Promise<Acti
     task: row,
     inQueue,
     blockedBy: inQueue ? await queueBlockerDetails(row.id) : [],
-    liveProcess: isRunning(row.id),
+    ...await readArchiveActivity(row.id),
     parentIsTeam: parent?.mode === "team",
     freeReviewActive: row.workflowMode === "free" ? await hasActiveFreeReview(row.id) : false,
     legacyReviewActive: legacy.some((review) => LEGACY_REVIEW_IN_FLIGHT.includes(review.status)),
