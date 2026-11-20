@@ -17,6 +17,10 @@
 //   · 交给谁里的执行器 id 只在挂它的那台机器上有意义：落地时置空、派出去时按类型重新解析（同任务自己的
 //     executorId）；本机存档里还留着同一件、类型没变，就接回本机原来选的那个。类型、模型、智能水平原样带。
 //   · 从哪开工（trunk / here）原样带：派出去时页面按本机项目的分支现算起点，清单里不带分支。
+//   · 谁来审里指定的那一位，id 同样只在这台机器上有意义：导出时换成名字（`portableReviews`，同任务自己的审查预约
+//     handoff-collect.ts），落地照带，到哪台机器上都按那台的审查者重新认（id 优先、名字只认唯一的那一位）。认不出来
+//     （没有这个名字、重名）就停在「找不到」上等用户重选，绝不当成不审（shared/src/review-on-create.ts
+//     `concreteReviewChoice`）。
 //   · 挂着的那几件前置指着的已有任务本机都得有，缺了整个拒收（`checkCarriedPrerequisites`，理由见那里）。
 //   · 说明里引用的上传附件路径由调用方先改写成本机路径（handoff-import.ts，同提问那几列）；收回记录不改写，
 //     它是已经发生的事，改了字就认不出是不是同一条。
@@ -27,7 +31,7 @@ import {
   hangingSuggestions, parseDispatchSuggestions, parseWithdrawnSuggestions, type StoredSuggestion, type WithdrawnSuggestion,
 } from "@navi/shared/dispatch-suggestion";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
+import { reviewerProfiles, tasks } from "./db/schema.js";
 import { appendWithdrawn, pendingReceiptsOf, readSuggestions, serializedSuggestions } from "./dispatch-suggestion.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { now } from "./util.js";
@@ -57,8 +61,20 @@ export function validateSuggestionPayload(task: Partial<Record<(typeof FIELDS)[n
   }
 }
 
-export function exportSuggestions(task: typeof tasks.$inferSelect): Pick<Carried, (typeof FIELDS)[number]> {
-  const items = readSuggestions(task);
+/** 指定的那一位从本机 id 换成名字；本机也认不出的（审查者已经删了）原样带，到了对端同样认不出、等用户重选。 */
+async function portableReviews(items: StoredSuggestion[]): Promise<StoredSuggestion[]> {
+  const ids = [...new Set(items.flatMap((item) => (item.review && typeof item.review === "object" ? [item.review.reviewer] : [])))];
+  if (!ids.length) return items;
+  const names = new Map((await db.select({ id: reviewerProfiles.id, name: reviewerProfiles.name }).from(reviewerProfiles)
+    .where(inArray(reviewerProfiles.id, ids))).map((profile) => [profile.id, profile.name]));
+  return items.map((item) => {
+    const name = item.review && typeof item.review === "object" ? names.get(item.review.reviewer) : undefined;
+    return name ? { ...item, review: { reviewer: name } } : item;
+  });
+}
+
+export async function exportSuggestions(task: typeof tasks.$inferSelect): Promise<Pick<Carried, (typeof FIELDS)[number]>> {
+  const items = await portableReviews(readSuggestions(task));
   return {
     dispatchSuggestions: serializedSuggestions(hangingSuggestions(items)),
     dispatchWithdrawals: task.dispatchWithdrawals,

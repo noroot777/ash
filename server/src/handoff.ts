@@ -467,7 +467,7 @@ export async function exportHandoff(
         [
           task.body, task.resumePrompt ?? "", task.question ?? "",
           task.questionOptions ?? "", task.questionItems ?? "", task.questionHistory ?? "",
-          exportSuggestions(task).dispatchSuggestions ?? "",
+          (await exportSuggestions(task)).dispatchSuggestions ?? "",
           ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
           ...[...sessionFiles, ...artifacts]
             .filter((f) => isTextRel(f.rel))

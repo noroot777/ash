@@ -24,7 +24,7 @@ export type SuggestionRow = {
   base: DispatchSuggestionBase;
   /** 标题和说明都还在：派得出去。 */
   filled: boolean;
-  /** 看不出交给谁审（审查者清单没读到）时派不出去的原因（useReviewerList.ts `reviewHold`）。 */
+  /** 看不出交给谁审（审查者清单没读到、指定的那一位这里认不出）时派不出去的原因（useReviewerList.ts `reviewHold`）。 */
   reviewHeld: string | null;
 };
 

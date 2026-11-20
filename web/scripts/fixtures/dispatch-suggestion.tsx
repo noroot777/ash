@@ -83,6 +83,8 @@ createRoot(document.getElementById("root")!).render(
           item("s-l1", "老单子第一条", { batch: "plan-old", order: "serial", wait: "continue", worktreeBase: "feat/old" }),
           item("s-l2", "老单子第二条", { batch: "plan-old", order: "serial", wait: "continue", worktreeBase: null }),
         ]} />
+        {/* 接力过来的一件：指定的审查者是原机上的「严审」，这台机器上没有这一位。 */}
+        <Stage name="lost" suggestions={[item("s-lost", "指定严审后接力过来的", { review: { reviewer: "严审" } })]} />
         <Stage name="slash" />
       </main>
     </DraftProvider>

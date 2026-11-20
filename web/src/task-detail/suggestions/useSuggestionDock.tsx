@@ -198,7 +198,9 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
         readingId={readingId}
         busy={busy}
         held={held}
-        error={error ?? (baseContext.status === "failed" ? held : reviewers.failed ? rows.map((row) => row.reviewHeld).find(Boolean) ?? null : null)}
+        // 审查那一格停着的原因只在定论了的时候说：读失败了、或读到了却认不出指定的那一位（还在读不算）。
+        error={error ?? (baseContext.status === "failed" ? held
+          : reviewers.failed || reviewers.reviewers ? rows.map((row) => row.reviewHeld).find(Boolean) ?? null : null)}
         types={registeredAgentTypes(profiles)}
         profiles={profiles}
         reviewers={reviewers}

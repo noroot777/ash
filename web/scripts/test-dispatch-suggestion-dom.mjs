@@ -11,6 +11,7 @@
 // ④ 框顶只有一行：叫着人时让给叫人那一行、不叫了回来；有驳回等裁定时让给裁定那一行；
 // ⑥ 这条任务的分支已经清掉了：「接着这条的代码」没了，建议说的从主分支开工照旧落在合入目标上，
 //    不落到项目此刻检出的那一支；
+// ⑧ 指定的审查者这里认不出（接力过来的）：胶囊写明找不到哪一位、派不出去且说清原因，不读成「不审查」；
 // ⑤ `/派` 在句中：从菜单里选中只拿掉命令（两边空格并成一个）、光标留在原处、叫上次那个人停在「派出去」；
 //    `/讨论` 句中也出；a/b、web/、http:// 不弹；输入法组字时不弹；句中敲全了 `/派` 没从菜单选、直接发 = 原样发出去。
 // 跑法：npm -w web run test:dispatch-suggestion-dom
@@ -194,6 +195,18 @@ try {
   assert.equal(old.order, "serial", "没改顺序：照老单子的一个接一个");
   assert.equal("worktreeBase" in old.items[0], false, "指定过分支、卡上没换：不交起点");
   assert.equal("worktreeBase" in old.items[1], false, "没写开工起点的旧单：也不交，照旧接口的「不指定」开工");
+
+  // ⑧ 指定的审查者这里认不出（接力过来的）：胶囊写明找不到哪一位、不冒充「不审查」，派不出去且说清原因；亲手改成不审查才派得出去。
+  const lost = "指定严审后接力过来的";
+  await waitUntil(async () => (await scope("lost").locator(".reviewer-chip").innerText()).includes("找不到「严审」"), "胶囊写明找不到哪一位");
+  assert.equal(await button("lost", `把「${lost}」派出去`).isEnabled(), false, "认不出指定的审查者：派不出去");
+  await waitUntil(async () => (await scope("lost").innerText()).includes("这里认不出指定的审查者「严审」"), "说清为什么派不出去");
+  await scope("lost").locator(".reviewer-chip button").first().click();
+  await page.getByRole("option", { name: "不审查" }).click();
+  await waitUntil(async () => await button("lost", `把「${lost}」派出去`).isEnabled(), "改成不审查后能派");
+  await button("lost", `把「${lost}」派出去`).click();
+  await waitUntil(async () => launches("t-lost").length === 1, "改成不审查后派出去");
+  assert.equal(launches("t-lost")[0].body.items[0].review, "none", "派出去的是用户亲手选的不审查");
 
   // ⑤ 句中 `/派`：从菜单选中只拿掉命令，光标留在原处，叫上次那个人停在「派出去」。
   await box("slash").fill("前面的话 /派 后面的话");

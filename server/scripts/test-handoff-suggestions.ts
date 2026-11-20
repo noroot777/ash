@@ -10,6 +10,7 @@
 //   · 等着用户过目的那一批原样落；里面已经派出的那几件的了结记录单开一个键带（老版本对端认不出它），接回那一批的和
 //     还没交给智能体的回执；
 //   · 挂着的那几件前置指着的任务本机没有：整个拒收、什么都不落（本机有就照收，同批 key、接过来的这条任务自己不算缺）；
+//   · 谁来审里指定的那一位导出时换成名字，对端按名字认；认不出（没有、重名）派不出去，不读成不审查；
 //   · 说明里引用的上传附件路径落地时改写成本机路径。
 //
 // 第一段起两台真服务走完整的接力与移回；后几段单进程直调 importHandoff 喂手写的清单（老版本对端、途中丢
@@ -314,7 +315,7 @@ try {
   const afterWaiting = await localRow("sgtwaiting");
   assert.equal(afterWaiting.question, waitingQuestion);
   assert.deepEqual(JSON.parse(afterWaiting.dispatchSuggestions!), [created, ...hung], "等着的那一批原样落，还绑着那一问；已经派出的那件的记录接上");
-  const reExported = exportSuggestions(afterWaiting);
+  const reExported = await exportSuggestions(afterWaiting);
   assert.deepEqual(JSON.parse(reExported.dispatchSuggestions!), hung, "再往外接力：还挂着的那一列不混进了结记录（老版本对端认不出）");
   assert.deepEqual(JSON.parse(reExported.dispatchSettled!), [created], "了结记录单独那个键带着");
   await assert.rejects(importHandoff(manifestFor("sgtwaitbad", { dispatchSettled: JSON.stringify([hung[0]]) }), { sourceUrl: "http://holder.test:4317" }),
@@ -328,6 +329,26 @@ try {
     dispatchSuggestions: null, dispatchSettled: JSON.stringify([receipt, droppedOld]),
   }), { sourceUrl: "http://holder.test:4317" });
   assert.deepEqual(JSON.parse((await localRow("sgtreceipt")).dispatchSuggestions!), [receipt], "回执跟着走，下一回合开头在这台机器上交");
+
+  // 谁来审里指定的那一位：id 只在本机有意义，导出换成名字；对端按自己的审查者认，认不出（没有、重名）就停着等重选，
+  // 绝不读成「不审查」。本机也认不出的（已经删了）原样带。
+  {
+    const { reviewerProfiles } = await import("../src/db/schema.js");
+    const { concreteReviewChoice, missingReviewer } = await import("@navi/shared/review-on-create");
+    await db.insert(reviewerProfiles).values({ id: "rvSourceOnly", name: "严审", agentType: "claude", createdAt: now(), updatedAt: now() });
+    const pinned = suggestion("sgPinnedRev", "指定严审的那件", { review: { reviewer: "rvSourceOnly" } });
+    const gone = suggestion("sgGoneRevie", "指定的审查者已删", { review: { reviewer: "rvDeletedHere" } });
+    await archiveOnLocal("sgtreviewer", [pinned, gone], []);
+    const exported = JSON.parse((await exportSuggestions(await localRow("sgtreviewer"))).dispatchSuggestions!) as DispatchSuggestion[];
+    assert.deepEqual(exported.map((item) => item.review), [{ reviewer: "严审" }, { reviewer: "rvDeletedHere" }], "导出换成名字；本机认不出的原样带");
+    const profile = (id: string, name: string) => ({ id, name, agentType: "claude", isDefault: false }) as Parameters<typeof missingReviewer>[1][number];
+    const landedReview = exported[0]!.review!;
+    assert.deepEqual(concreteReviewChoice(landedReview, [profile("rvDest", "严审")]), { reviewer: "rvDest" }, "对端有同名的那一位：交给它");
+    assert.equal(concreteReviewChoice(landedReview, [profile("rvOther", "宽审")]), null, "对端没有这一位：派不出去，不是不审");
+    assert.equal(missingReviewer(landedReview, [profile("rvOther", "宽审")]), "严审", "说得出找不到的是哪一位");
+    assert.equal(concreteReviewChoice(landedReview, [profile("rvA", "严审"), profile("rvB", "严审")]), null, "对端重名：认不出是哪一位，同样停着");
+    assert.equal(concreteReviewChoice("default", [profile("rvOther", "宽审")]), "none", "默认那一档没设默认：照旧是不审（没丢东西）");
+  }
 
   // 挂着的那件要等的任务（同批先派出去的那件建出来的任务号）本机没有：接过来也派不出去，整个拒收、什么都不落；
   // 本机有那条任务就照收。同一批里还挂着、用 key 指的不算缺。

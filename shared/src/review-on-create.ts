@@ -42,15 +42,28 @@ export function reviewerOfChoice(choice: CreateReviewChoice | undefined, reviewe
 }
 
 /**
+ * 指定了一位、这张清单里却认不出是谁（没有这个 id 或名字、名字重了）：给出当初写的那一格，否则 null。典型来路是
+ * 接力——指定的那位在别的机器上建的，这台机器上没有同名的，或者有两位同名；本机删掉了那位也一样。
+ */
+export function missingReviewer(choice: CreateReviewChoice, reviewers: readonly ReviewerProfile[]): string | null {
+  return typeof choice === "object" && !reviewerOfChoice(choice, reviewers) ? choice.reviewer : null;
+}
+
+/**
  * 派出去那一下交给 navi 的那一份：照此刻画面上那一格的样子落成明确的一位或「不审」，不让服务端再替你挑一次
  * （按下之前你看到的默认就是派出去用的那位）。
  *
- * 清单还没读到（null：还在读，或者读失败了）时只有「不审」定得下来，其余给 null = **还不能派** —— 画面上
- * 看不出交给谁，就不能拿这个选择派出去（服务端会照样按默认带上预约，用户却没确认过是谁）。调用方据此拦住派出。
+ * 给 null = **还不能派**，调用方据此拦住派出：
+ *   · 清单还没读到（还在读，或者读失败了）：只有「不审」定得下来 —— 画面上看不出交给谁，就不能拿这个选择派出去
+ *     （服务端会照样按默认带上预约，用户却没确认过是谁）；
+ *   · 指定的那一位认不出（`missingReviewer`）：那是一个明确要审的选择，不能悄悄读成「不审」把审查丢掉，得用户
+ *     重选一位或亲手改成不审。
+ * 默认那一档没设默认审查者时落成「不审」：跟服务端「没设默认就不带」是同一个意思，不是丢了什么。
  */
 export function concreteReviewChoice(choice: CreateReviewChoice, reviewers: readonly ReviewerProfile[] | null): CreateReviewChoice | null {
   if (choice === "none") return "none";
   if (!reviewers) return null;
   const reviewer = reviewerOfChoice(choice, reviewers);
-  return reviewer ? { reviewer: reviewer.id } : "none";
+  if (reviewer) return { reviewer: reviewer.id };
+  return missingReviewer(choice, reviewers) === null ? "none" : null;
 }
