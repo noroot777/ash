@@ -10,7 +10,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
 import { forgetHeldTrigger } from "./free-review-reservations.js";
-import type { ContinueTaskOptions, TurnStartDecline } from "./task-continue-options.js";
+import { turnResumeTrace, type ContinueTaskOptions, type TurnStartDecline } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { heldFollowUpTaken, turnFollowUpFrom } from "./follow-up-held.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceReview, turnSourceRole } from "./runs.js";
@@ -562,9 +562,9 @@ export async function continueTask(
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     await claimTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
     const noteTarget = { out, taskId, sessionId: sessId, role: sessionRole, agentType: agent, at: turnStart };
-    if (opts.system) {
-      // Backend-initiated 继续: a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
-      const resume = { reason: opts.system, ...(sideTurn ? { side: true as const } : {}) };
+    // Backend-initiated 继续 (incl. 重试's carry-on): a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
+    const resume = turnResumeTrace(opts, sideTurn);
+    if (resume) {
       recordSystemResumeTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, at: turnStart, resume });
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows

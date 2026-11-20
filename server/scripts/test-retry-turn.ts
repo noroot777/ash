@@ -7,8 +7,11 @@ import assert from "node:assert/strict";
 import type { RetryTurnFacts, RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
 import { turnEndedAbnormally } from "@navi/shared/turn-outcome";
 import {
-  lastInputOf, latestSessionOf, resendInputOf, retryTurnActionOf, retryTurnKindOf, retryTurnIsExecution, retryTurnRejection, retryTurnTierOf,
+  carriesOnFollowUp, lastInputOf, latestSessionOf, resendInputOf, retryTurnActionOf, retryTurnKindOf, retryTurnIsExecution, retryTurnRejection,
+  retryTurnTierOf,
 } from "../src/task-retry-turn.js";
+import { turnResumeTrace } from "../src/task-continue-options.js";
+import { systemResumeOf } from "@navi/shared/system-resume";
 import { describeQueueBlockers, queueBlockedText, type QueueBlocker } from "../src/queues.js";
 
 const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
@@ -210,6 +213,11 @@ assert.ok(why(task(), sess({ id: "a" }), { groupPaused: true }), "分组暂停�
   assert.equal(retryTurnIsExecution("review", undefined), false, "审查档是旁路回合");
   assert.equal(why(task({ workflowMode: "free" }), sess({ id: "a", role: "reviewer" }), { reviewBlocker: null, blockedBy: [running] }), null,
     "审查档:旁路回合,派审本来就不查队列");
+  // 接着做档:续聊干到一半崩了,原会话里接着做。它是那次续聊的后半段,不是任务的执行,队列不挡。
+  assert.equal(retryTurnTierOf("turn", null, true), "continue");
+  assert.equal(retryTurnIsExecution("turn", null, true), false, "接着做是续聊,不占队列执行位");
+  assert.equal(why(task(), sess({ id: "a" }), { resend: null, carryOn: true, blockedBy: [running] }), null,
+    "接着做档:同队有人在执行也放行");
   assert.equal(retryTurnActionOf("review"), "继续本轮审查", "留痕跟按钮同名");
   assert.equal(retryTurnActionOf("turn"), "重试这一回合");
 }
@@ -239,6 +247,20 @@ assert.equal(resendInputOf(lastInputOf(turn("user", "把标题也改一下")), "
 assert.equal(resendInputOf(lastInputOf(turn("user", "   ")), "claude"), null, "空话没得重投,落续跑档");
 assert.equal(resendInputOf(lastInputOf(turn("system", "继续（从中断处）")), "claude"), null, "系统续跑提示不重投");
 assert.equal(resendInputOf(null, "claude"), null, "没有输入段");
+// 重试在续聊上代发的「接着做」:记成带 followUp 的系统续跑;它再崩,上一回合的输入就是它,仍按续聊接着做。
+{
+  const trace = turnResumeTrace({ retryCarryOn: true }, false);
+  assert.deepEqual(trace, { reason: "retry", followUp: true });
+  assert.deepEqual(turnResumeTrace({ system: "retry" }, true), { reason: "retry", side: true }, "后端续跑照旧");
+  assert.equal(turnResumeTrace({}, false), null, "一句话(真人或后端代写)不记成续跑");
+  assert.deepEqual(systemResumeOf(trace), trace, "落盘再读回来,标记还在");
+  const seg = lastInputOf([turn("user", "把标题也改一下"), "agent 干到一半", turn("system", "〔系统〕继续（从中断处）", { resume: trace }), "又崩了"].join("\n"));
+  assert.equal(carriesOnFollowUp(seg), true);
+  assert.equal(resendInputOf(seg, "claude"), null, "不重投");
+  assert.equal(carriesOnFollowUp(lastInputOf(turn("system", "〔系统〕继续（从中断处）", { resume: { reason: "retry" } }))), false,
+    "任务的执行续跑(没有 followUp)不算");
+  assert.equal(carriesOnFollowUp(lastInputOf(turn("user", "把标题也改一下"))), false);
+}
 // 是不是执行型,读的是执行层那一份判据(task-continuation-entry.ts 的 inputStartsExecution):
 // 两种执行器、普通与带 --scope 的恢复目标都是,开新目标、暂停目标、普通聊天都不是。
 for (const agent of ["claude", "codex"]) {

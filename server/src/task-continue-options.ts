@@ -9,8 +9,14 @@ import type { TurnIdentity, TurnSource } from "./runs.js";
 // resumable session, else fresh). Note: a scheduled cron fire is NOT here — it always
 // starts a fresh run via runTask (schedules.ts), so it never resumes.
 export type { ResumeReason } from "@navi/shared/system-resume";
-import type { ResumeReason } from "@navi/shared/system-resume";
+import type { ResumeReason, SystemResume } from "@navi/shared/system-resume";
 import type { FreezeGuard } from "./turn-freeze.js";
+
+/** 这一回合在会话里记成哪一条系统续跑记录；null = 记成一句话（真人或后端代写）。 */
+export function turnResumeTrace(opts: Pick<ContinueTaskOptions, "system" | "retryCarryOn">, sideTurn: boolean): SystemResume | null {
+  if (opts.system) return { reason: opts.system, ...(sideTurn ? { side: true as const } : {}) };
+  return opts.retryCarryOn ? { reason: "retry", followUp: true } : null;
+}
 
 /**
  * **这一轮没能起跑,是哪一种**(`continueTask` 返回 false 时必定带一个)。
@@ -97,6 +103,12 @@ export type ContinueTaskOptions = {
    * 能把它跟我自己打的字分开。默认 false = 真人发的。
    */
   byBackend?: boolean;
+  /**
+   * 这一句是「重试这一回合」在续聊上代发的「接着做」（task-retry-turn.ts）。会话里记成一条系统续跑
+   * 记录（`turnResumeTrace`），不画成我说的话；回合语义仍照 `byBackend` 的真人回合走 —— 它是那次续聊
+   * 的后半段，followUpFrom 照旧护住原终态。
+   */
+  retryCarryOn?: true;
   monitorWake?: MonitorWakeData;
   /**
    * 这一轮输入的**投递凭据**:原样落进会话里那条用户回合的 `eventKey`(只在原话落盘的那一处写)。

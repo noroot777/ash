@@ -276,7 +276,7 @@ export const api = {
   retryTurn: (
     taskId: string,
     target: { kind: "turn"; sessionId: string } | { kind: "review"; review: { runId: string; round: number; generation: string | null } },
-  ): Promise<{ started: true; mode: "resend" | "resume" | "review"; resumed?: boolean }> =>
+  ): Promise<{ started: true; mode: "resend" | "continue" | "resume" | "review"; resumed?: boolean }> =>
     request(`/tasks/${id(taskId)}/retry-turn`,
       json("POST", target.kind === "review" ? { review: target.review } : { sessionId: target.sessionId })),
   requeueTask: (taskId: string): Promise<{ task: Task; movedToEnd: boolean }> =>

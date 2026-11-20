@@ -243,7 +243,7 @@ export function TaskDetail({
         ? result.resumed
           ? "已从中断处继续这一轮审查"
           : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
-        : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
+        : result.mode === "resend" ? "上一回合没来得及开工，已重发上一条指令" : "已从中断处续跑");
       // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
       // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
       // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。

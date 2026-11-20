@@ -11,6 +11,9 @@
 //  Q5 审查档被别的原因挡回:留痕的操作名是「继续本轮审查」;
 //  Q6 执行型重投(上一句是 `/goal resume`):它不是续聊,同队有人在执行就 409,一个字不进执行器
 //     (第 1 轮审查 F1:只凭「有原话可重投」就豁免,两条任务同时在跑)。
+//  Q7 接着做档:续聊干到一半崩了(trace 里有工具调用)→ 202 mode=continue,原会话里收到的是「接着做」
+//     不是原话,会话里记成重试代发的系统续跑记录;仍是续聊,同队有人在执行也放行、不多拉成员;
+//  Q8 接着做那一回合又崩了:再点重试仍是接着做,不退回任务的执行(不被队列挡)。
 //
 // 执行器是装在 PATH 上的假 claude:收到输入就记一行、一直挂着,直到用例放行那个任务。
 // 跑:npm -w server run test:retry-turn(跟纯判据那份一起跑)
@@ -79,7 +82,7 @@ process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
 process.env.NAVI_TEST_AGENT_BIN = bin;
 
 const [{ db, ensureSchema }, schema, runRoutes, runs, { setTaskStatus }, { queueStatus }, transcript, store,
-  { freeWorkflowState }, { freeReviewEvidenceDir }, { evidenceState }] = await Promise.all([
+  { freeWorkflowState }, { freeReviewEvidenceDir }, { evidenceState }, { lastInputOf }, { RETRY_CARRY_ON_PROMPT }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/task-run-routes.js"),
@@ -91,6 +94,8 @@ const [{ db, ensureSchema }, schema, runRoutes, runs, { setTaskStatus }, { queue
   import("../src/free-workflow-state.js"),
   import("../src/free-review-files.js"),
   import("../src/regression-evidence-lifecycle.js"),
+  import("../src/task-retry-turn.js"),
+  import("../src/run-prompts.js"),
 ]);
 const { agents, freeReviewRounds, freeReviewRuns, groups, projects, queueItems, reviewerProfiles, sessions, taskNotices, tasks } = schema;
 
@@ -137,8 +142,11 @@ async function seedQueue(prefix: string, done: { workflowMode?: "free" }) {
   return ids;
 }
 
-/** 一条崩掉的普通回合:会话 exit 1,正文最后一段输入是 `lastInput`(null = 没有正文)。 */
-async function crashedTurn(taskId: string, lastInput: { t: "user" | "system"; text: string } | null) {
+/**
+ * 一条崩掉的普通回合:会话 exit 1,正文最后一段输入是 `lastInput`(null = 没有正文)。`worked` = 崩之前
+ * 这一回合已经调过工具(trace 里留了一条)。
+ */
+async function crashedTurn(taskId: string, lastInput: { t: "user" | "system"; text: string; resume?: unknown } | null, worked = false) {
   const sessionId = `${taskId}-session`;
   await db.insert(sessions).values({ id: sessionId, taskId, role: "single", agentType: "claude", executor: "claude",
     cwd: root, startedAt: at, turnStartedAt: at, endedAt: at, exitStatus: 1 });
@@ -151,6 +159,10 @@ async function crashedTurn(taskId: string, lastInput: { t: "user" | "system"; te
       `\x1e${JSON.stringify({ ...lastInput, agent: "claude", at })}`,
       "agent 刚开口就崩了",
     ].join("\n") + "\n");
+  }
+  if (worked) {
+    writeFileSync(transcript.sessionTracePath(taskId, sessionId), JSON.stringify({ at, turnStartedAt: at, seq: 1,
+      event: { kind: "tool", name: "Bash", detail: "{\"command\":\"sed -n 1,20p a.ts\"}" } }) + "\n");
   }
   return sessionId;
 }
@@ -288,6 +300,47 @@ try {
     assert.deepEqual(inputsOf(ids.done), [], "一个字都没进执行器");
     assert.deepEqual(await noticeActions(ids.done), ["重试这一回合"]);
     console.log("✓ Q6 执行型重投(/goal resume):同队有人在执行仍 409,不跟它一起跑");
+  }
+
+  // ── Q7 接着做档 ────────────────────────────────────────────────────────────
+  {
+    const ids = await seedQueue("q7", {});
+    const sessionId = await crashedTurn(ids.done, { t: "user", text: "把标题也改一下" }, true);
+    // 有 CLI 会话 id 才接得上(真实会话都有);没有的话服务端照规矩另开一行。
+    await db.update(sessions).set({ cliSessionId: "retry-queue-q7" }).where(eq(sessions.id, sessionId));
+    const res = await post(`/tasks/${ids.done}/retry-turn`, { sessionId });
+    const body = await res.json() as { mode?: string; error?: string };
+    assert.equal(res.status, 202, `续聊干到一半崩了,接着做应放行,实际 ${res.status}:${body.error ?? ""}`);
+    assert.equal(body.mode, "continue");
+    started.push(ids.done);
+    await until("接着做的那句进了执行器", () => inputsOf(ids.done).length > 0);
+    assert.ok(inputsOf(ids.done).every((input) => input.includes(RETRY_CARRY_ON_PROMPT.slice(0, 12))), "收到的是「接着做」");
+    assert.ok(inputsOf(ids.done).every((input) => !input.includes("把标题也改一下")), "原话不再发一遍");
+    await until("接着做回合落 running", async () => (await row(ids.done)).status === "running");
+    await assertQueueUntouched(ids);
+    assert.equal(await sessionCount(ids.done), 1, "落回原来那条会话");
+    const last = lastInputOf(readFileSync(transcript.sessionTranscriptPath(ids.done, sessionId), "utf8"));
+    assert.deepEqual(last?.kind === "system" ? last.resume : null, { reason: "retry", followUp: true },
+      "会话里记成重试代发的系统续跑,不是一条我说的话");
+    release(ids.done);
+    await until("接着做回合结束,回到原终态", async () => (await row(ids.done)).status === "done" && !runs.turnIdentity(ids.done));
+    console.log("✓ Q7 接着做档:原会话里接着做,不重发原话,仍按续聊看");
+  }
+
+  // ── Q8 接着做那一回合又崩了 ────────────────────────────────────────────────
+  {
+    const ids = await seedQueue("q8", {});
+    const sessionId = await crashedTurn(ids.done, { t: "system", text: "〔系统〕继续（从中断处）", resume: { reason: "retry", followUp: true } });
+    const res = await post(`/tasks/${ids.done}/retry-turn`, { sessionId });
+    const body = await res.json() as { mode?: string; error?: string };
+    assert.equal(res.status, 202, `接着做又崩了仍是续聊,不该被队列挡,实际 ${res.status}:${body.error ?? ""}`);
+    assert.equal(body.mode, "continue");
+    started.push(ids.done);
+    await until("接着做回合落 running", async () => (await row(ids.done)).status === "running");
+    await assertQueueUntouched(ids);
+    release(ids.done);
+    await until("回到原终态", async () => (await row(ids.done)).status === "done" && !runs.turnIdentity(ids.done));
+    console.log("✓ Q8 接着做又崩了:再点重试仍接着做,不退回任务的执行");
   }
 } finally {
   for (const taskId of started) release(taskId);
