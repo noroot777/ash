@@ -132,7 +132,8 @@ export function retryInputsOf(out: string): { last: NonAgentSeg | null; original
 
 async function retryInputSegs(path: string): Promise<ReturnType<typeof retryInputsOf>> {
   let hit: ReturnType<typeof retryInputsOf> = { last: null, original: null };
-  for (const step of TAIL_STEPS) {
+  // 原话可能被一连串「接着做」挤到很远：尾巴读完还没找到就读整份，不设上限。
+  for (const step of [...TAIL_STEPS, Infinity]) {
     const { text, whole } = await readTail(path, step);
     hit = retryInputsOf(text);
     // 切口正好落在回合输入和它后面的注记之间时，注记会被认成那一回合的第一段：再往前读一截。
@@ -625,11 +626,12 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       }
       // 续聊干到一半崩了:原会话里接着做。后端代写的真人回合(byBackend),followUpFrom 照旧护住原终态;
       // 会话里记成一行「你点了重试」(retryCarryOn),不画成我又说了一遍。旧 CLI 会话最终没续上时,
-      // 改发原话、照原话记(contextFallback,判据在选完会话那一步)。
+      // 改发原话、照原话记(contextFallback,判据在选完会话那一步);原话找不到(null)就不起跑。
       if (carryOn) {
         handoff(continueTask(taskId, RETRY_CARRY_ON_PROMPT, {
           ...route, actingUserId: acting, byBackend: fallback ? fallback.bySystem : true, retryCarryOn: true,
-          ...(fallback ? { contextFallback: fallback.text + attachmentsPrompt(fallback.paths), monitorWake: fallback.monitorWake } : {}),
+          contextFallback: fallback ? fallback.text + attachmentsPrompt(fallback.paths) : null,
+          ...(fallback ? { monitorWake: fallback.monitorWake } : {}),
           resumeSessionId: latest.id, turnHeld: turn, freezeGuard: true,
         }), action);
         return c.json({ started: true, mode: "continue" }, 202);

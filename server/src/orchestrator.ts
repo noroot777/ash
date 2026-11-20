@@ -290,7 +290,7 @@ export async function continueTask(
     // codex 版本守卫)——判据与两处持久说明都在 turn-session-pick.ts。
     const { all, prev, resuming, reseed } = await pickTurnSession({
       taskId, task, agent, sessionRole, profileId, runOwner, slash,
-      freshSession: opts.freshSession, resumeSessionId: opts.resumeSessionId,
+      freshSession: opts.freshSession, resumeSessionId: opts.resumeSessionId, contextFallback: opts.contextFallback,
     });
     // 删过消息(reseed):会话行照旧续,CLI 会话换新的、拿删除后的记录重建(history-reseed.ts)。
     const cliResume = resuming && !reseed;

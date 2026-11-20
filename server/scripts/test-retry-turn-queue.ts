@@ -16,7 +16,9 @@
 //  Q8 接着做那一回合又崩了、旧 CLI 会话也接不上了:仍是续聊、不退回任务的执行(不被队列挡),而且改发
 //     的是「接着做」前面那句原话(第 2 轮审查 F1:重建过一次的会话再失效,原话在链上断了);
 //  Q9 接着做但旧 CLI 会话接不上(会话 id 被清掉):改发原话、照原话记进会话,下一次重试读到的还是它
-//     (第 1 轮审查 F1:实测只发了续跑提示,「把标题改成蓝鲸计划」整句丢了)。
+//     (第 1 轮审查 F1:实测只发了续跑提示,「把标题改成蓝鲸计划」整句丢了)。并如实留一句「改发了完整指令」;
+//  Q10 原话被一长串记录挤到 32MB 以外:照样找到、改发它(第 3 轮审查 F1:尾读有上限,找不到也照样放行);
+//  Q11 原话根本找不到、旧会话又接不上:不起跑,留下为什么、请用户重发,任务回到原终态。
 //
 // 执行器是装在 PATH 上的假 claude:收到输入就记一行、一直挂着,直到用例放行那个任务。
 // 跑:npm -w server run test:retry-turn(跟纯判据那份一起跑)
@@ -85,7 +87,8 @@ process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
 process.env.NAVI_TEST_AGENT_BIN = bin;
 
 const [{ db, ensureSchema }, schema, runRoutes, runs, { setTaskStatus }, { queueStatus }, transcript, store,
-  { freeWorkflowState }, { freeReviewEvidenceDir }, { evidenceState }, { lastInputOf }, { RETRY_CARRY_ON_PROMPT }] = await Promise.all([
+  { freeWorkflowState }, { freeReviewEvidenceDir }, { evidenceState }, { lastInputOf }, { RETRY_CARRY_ON_PROMPT },
+  { CONTEXT_FALLBACK_SENT, CONTEXT_LOST_WITHOUT_FALLBACK }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/task-run-routes.js"),
@@ -99,6 +102,7 @@ const [{ db, ensureSchema }, schema, runRoutes, runs, { setTaskStatus }, { queue
   import("../src/regression-evidence-lifecycle.js"),
   import("../src/task-retry-turn.js"),
   import("../src/run-prompts.js"),
+  import("../src/turn-session-pick.js"),
 ]);
 const { agents, freeReviewRounds, freeReviewRuns, groups, projects, queueItems, reviewerProfiles, sessions, taskNotices, tasks } = schema;
 
@@ -122,6 +126,11 @@ const inputsOf = (taskId: string): string[] => existsSync(inputLog)
     .map((line) => JSON.parse(line) as { task: string; input: string })
     .filter((entry) => entry.task === taskId).map((entry) => entry.input)
   : [];
+/** 这个任务名下全部会话正文拼在一起(时间线旁注写在哪条会话里不重要)。 */
+const taskTranscripts = async (taskId: string): Promise<string> =>
+  (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
+    .map((session) => transcript.sessionTranscriptPath(taskId, session.id))
+    .filter((path) => existsSync(path)).map((path) => readFileSync(path, "utf8")).join("\n");
 const sessionCount = async (taskId: string) => (await db.select().from(sessions).where(eq(sessions.taskId, taskId))).length;
 const release = (taskId: string) => writeFileSync(join(releaseDir, taskId), "go");
 const noticeActions = async (taskId: string) =>
@@ -369,9 +378,45 @@ try {
     const newest = rows.sort((a, b) => (a.turnStartedAt ?? a.startedAt).localeCompare(b.turnStartedAt ?? b.startedAt)).at(-1)!;
     const recorded = lastInputOf(readFileSync(transcript.sessionTranscriptPath(ids.done, newest.id), "utf8"));
     assert.equal(recorded?.kind === "user" ? recorded.text : null, "把界面标题改为蓝鲸计划", "会话里记下的是原话");
+    assert.ok(await taskTranscripts(ids.done).then((all) => all.includes(CONTEXT_FALLBACK_SENT)), "如实留了一句改发了完整指令");
     release(ids.done);
     await until("回到原终态", async () => (await row(ids.done)).status === "done" && !runs.turnIdentity(ids.done));
     console.log("✓ Q9 接着做但旧会话接不上:改发原话,照原话记进会话");
+  }
+
+  // ── Q10 原话在 32MB 以外 ───────────────────────────────────────────────────
+  {
+    const ids = await seedQueue("q10", {});
+    const sessionId = await crashedTurn(ids.done, null);
+    const path = transcript.sessionTranscriptPath(ids.done, sessionId);
+    mkdirSync(dirname(path), { recursive: true });
+    const followUp = `\x1e${JSON.stringify({ t: "system", agent: "claude", text: "〔系统〕继续（从中断处）", at, resume: { reason: "retry", followUp: true } })}`;
+    writeFileSync(path, [`\x1e${JSON.stringify({ t: "user", agent: "claude", text: "把界面标题改为蓝鲸计划", at })}`,
+      "干了很多活 ".repeat(2_200_000), followUp, "又崩了"].join("\n") + "\n");
+    const res = await post(`/tasks/${ids.done}/retry-turn`, { sessionId });
+    assert.equal(res.status, 202);
+    started.push(ids.done);
+    await until("那句进了执行器", () => inputsOf(ids.done).length > 0, 30_000);
+    assert.match(inputsOf(ids.done)[0]!, /把界面标题改为蓝鲸计划/, "挤到很远的原话也找到了");
+    release(ids.done);
+    await until("回到原终态", async () => (await row(ids.done)).status === "done" && !runs.turnIdentity(ids.done), 30_000);
+    console.log("✓ Q10 原话在 32MB 以外:照样找到、改发它");
+  }
+
+  // ── Q11 原话找不到 ─────────────────────────────────────────────────────────
+  {
+    const ids = await seedQueue("q11", {});
+    const sessionId = await crashedTurn(ids.done, null);
+    const path = transcript.sessionTranscriptPath(ids.done, sessionId);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `\x1e${JSON.stringify({ t: "system", agent: "claude", text: "〔系统〕继续（从中断处）", at,
+      resume: { reason: "retry", followUp: true } })}\n又崩了\n`);
+    const res = await post(`/tasks/${ids.done}/retry-turn`, { sessionId });
+    assert.equal(res.status, 202, "能不能续上要到选会话那一步才知道");
+    await until("留下没起跑的原因", async () => (await taskTranscripts(ids.done)).includes(CONTEXT_LOST_WITHOUT_FALLBACK.slice(0, 20)));
+    await until("回到原终态", async () => (await row(ids.done)).status === "done" && !runs.turnIdentity(ids.done));
+    assert.deepEqual(inputsOf(ids.done), [], "没有拿一句「接着做」去起一个不知道要做什么的新会话");
+    console.log("✓ Q11 原话找不到、旧会话接不上:不起跑,说明原因");
   }
 } finally {
   for (const taskId of started) release(taskId);

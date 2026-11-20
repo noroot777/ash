@@ -124,9 +124,10 @@ export type ContinueTaskOptions = {
   retryCarryOn?: true;
   /**
    * 这一轮的输入只在接回旧上下文时才说得通（重试的「接着做」、审查的「从中断处继续」）：最终没续上旧 CLI
-   * 会话（`contextLost`），就改发这一份自带全部意思的输入 —— 原话，或整份任务书。
+   * 会话（`contextLost`），就改发这一份自带全部意思的输入 —— 原话，或整份任务书。null = 依赖旧上下文、
+   * 却拿不出这一份：没续上就不起跑（turn-session-pick.ts）。缺省 = 输入自带全部意思。
    */
-  contextFallback?: string;
+  contextFallback?: string | null;
   monitorWake?: MonitorWakeData;
   /**
    * 这一轮输入的**投递凭据**:原样落进会话里那条用户回合的 `eventKey`(只在原话落盘的那一处写)。

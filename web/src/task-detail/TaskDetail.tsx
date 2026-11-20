@@ -236,14 +236,12 @@ export function TaskDetail({
     try {
       if (!(await confirmExecutorSwap(task.id))) return;
       const result = await api.retryTurn(task.id, target);
-      // 审查档同一颗按钮有两种结果：上下文还在就接着做，上下文是空的
-      // （CLI 当时压根没起来）才重发整份任务书。别只说「已重跑」——
-      // 用户按之前看到的承诺是「继续」，退回从头跑时必须当面说清楚。
+      // 实际怎么发的（接回原会话说「接着做」，还是接不上改发完整指令）要到选会话那一步才定，服务端如实
+      // 写进会话和时间线；这里只报已经确定的那一半，不按事前分档替它下结论。
       notify(result.mode === "review"
-        ? result.resumed
-          ? "已从中断处继续这一轮审查"
-          : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
-        : result.mode === "resend" ? "没找到上一回合开工的记录，已重发上一条指令" : "已从中断处续跑");
+        ? result.resumed ? "已重试这一轮审查" : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
+        : result.mode === "resend" ? "已重发上一条指令"
+        : result.mode === "continue" ? "已重试这一回合" : "已从中断处续跑");
       // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
       // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
       // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
