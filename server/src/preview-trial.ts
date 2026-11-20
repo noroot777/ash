@@ -23,6 +23,7 @@ import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint
 import { nodeDepsAdvice } from "./preview-deps.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
+import { registerShutdownCleanup } from "./shutdown-resources.js";
 
 export interface PreviewTrialOutcome {
   ok: boolean;
@@ -58,15 +59,11 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
  * 谁也不认识的孤儿：占着端口、吃着 CPU，界面上一点痕迹都没有。所以 navi 自己退出前把它们
  * 带走，这是唯一的兜底。
  */
-const liveTrials = new Set<number>();
-let hooked = false;
-
-function hookProcessExit(): void {
-  if (hooked) return;
-  hooked = true;
-  // exit 回调里只能做同步的事，killTree 在 POSIX 上正是同步的 process.kill(-pid)。
-  process.on("exit", () => { for (const pid of liveTrials) killTree(pid, "SIGKILL"); });
-}
+const liveTrials = new Map<number, string>();
+registerShutdownCleanup(
+  () => [...liveTrials].map(([pid, cwd]) => ({ kind: "preview-trial", id: String(pid), label: `预览试跑 ${cwd}`, pid })),
+  () => { for (const pid of liveTrials.keys()) killTree(pid, "SIGKILL"); },
+);
 
 export async function trialPreviewScript(options: PreviewTrialOptions): Promise<PreviewTrialOutcome> {
   const { cwd, script, mode, timeoutMs } = options;
@@ -107,7 +104,7 @@ export async function trialPreviewScript(options: PreviewTrialOptions): Promise<
     child.on("error", (error) => { spawnError = error.message; });
     child.on("exit", () => { exited = true; });
     pid = child.pid ?? 0;
-    if (pid) { hookProcessExit(); liveTrials.add(pid); }
+    if (pid) liveTrials.set(pid, cwd);
     const deadline = Date.now() + timeoutMs;
     // navi 自己绑着的端口永远不是这条脚本本尊（它就在上面跑着）。日志里出现它只可能是脚本
     // 在说「我的 /api 打到 navi 那边」——认了它，就会把 navi 自己判成「脚本起来了」。

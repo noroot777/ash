@@ -56,6 +56,9 @@ http.createServer((req, res) => {
   if (req.url === '/api/health') return res.end(JSON.stringify({ ok: true, pid: process.pid,
     instance: { id: 'runtime-fixture', codeDir, dataDir: ${JSON.stringify(data)}, desktop: true, windowPort: 45555 } }));
   if (req.url === '/api/restart-impact') return res.end(JSON.stringify(settings().impact));
+  if (req.url === '/api/restart-impact?shutdown=1') {
+    const opts = settings(); return res.end(JSON.stringify({ ...opts.impact, shutdown: opts.shutdown }));
+  }
   if (req.url === '/api/runtime-handover') {
     if (req.headers['x-navi-host-token'] !== 'fixture-token' || req.headers['x-navi-instance'] !== 'runtime-fixture') {
       res.statusCode = 403; return res.end('{}');
@@ -144,7 +147,7 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     process.kill(stableMcp.pid, 0);
     assert.equal(realpathSync(readFileSync(beforeMcp, "utf8")), oldRuntime);
     console.log("✓ 固定 MCP 入口跟随新版本，已启动的旧 MCP 保留原运行时");
-    setOptions({});
+    setOptions({ shutdown: { version: 1, resources: [{ kind: "terminal", id: "external-terminal", label: "external terminal" }] } });
     let service = await start();
     const mcp = spawnTestFixture(join(oldRuntime, "node/bin/node"), [join(oldRuntime, "mcp/dist/index.js")], { cwd: data, stdio: "ignore" });
     fixtures.push(mcp);
@@ -155,7 +158,7 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     process.kill(service.pid, 0);
     process.kill(mcp.pid, 0);
     assert.equal(readFileSync(join(payload, "version"), "utf8"), "new");
-    console.log("✓ 真实安装器在服务和 MCP 运行中换 app，旧进程持续读取旧版本");
+    console.log("✓ 真实安装器在外置服务持有任务与退出资源、MCP 运行中换 app，旧进程持续读取旧版本");
 
     const url = () => ({ NAVI_URL: `http://127.0.0.1:${service.port}`, NAVI_MAC_RUNTIME: payload });
     setOptions({ impact: { ...empty, resumes: [{ id: "team", title: "active team" }] } });
@@ -220,6 +223,34 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     await waitFor(() => { try { process.kill(service.pid, 0); return false; } catch { return true; } });
     assert.equal(existsSync(requests), false);
     console.log("✓ 旧布局服务仍认作自家：有风险按旧闸等待，空闲时停服备份迁移，不申请外置接管许可");
+
+    const installMarker = join(app, "legacy-install-marker");
+    writeFileSync(installMarker, "keep");
+    setOptions({ impact: empty });
+    service = await start(payload);
+    for (const shutdown of [undefined, { version: 1, resources: [
+      { kind: "terminal", id: "legacy-terminal", label: "legacy terminal" },
+      { kind: "preview-trial", id: "legacy-preview", label: "legacy preview" },
+    ] }]) {
+      setOptions({ impact: empty, shutdown });
+      const refused = await runTestProcess("/bin/bash", [join(mac, "scripts/install-app.sh"), next, join(temporary, "Applications")], {
+        cwd: root, encoding: "utf8", timeout: 60_000,
+      }, 1);
+      assert.match(refused.stdout + refused.stderr, shutdown ? /legacy terminal[\s\S]*legacy preview/ : /退出清场清单/);
+      assert.match(refused.stderr, /检查 Navi MCP 登记[\s\S]*mcp.sh/);
+      assert.equal(readFileSync(installMarker, "utf8"), "keep");
+      process.kill(service.pid, 0);
+    }
+    console.log("✓ 合并后的旧布局安装仍拒绝缺失清场清单和存活退出资源，保留原包与原服务，并保留固定 MCP 迁移提示");
+    setOptions({ impact: empty, shutdown: { version: 1, resources: [] } });
+    await runTestProcess("/bin/bash", [join(mac, "scripts/install-app.sh"), next, join(temporary, "Applications")], {
+      cwd: root, encoding: "utf8", timeout: 60_000,
+    });
+    await waitFor(() => { try { process.kill(service.pid, 0); return false; } catch { return true; } });
+    assert.equal(existsSync(installMarker), false);
+    process.kill(stableMcp.pid, 0);
+    process.kill(upgradedMcp.pid, 0);
+    console.log("✓ 旧布局清场清单明确为空后才停止服务并换包，已有外置 MCP 不受影响");
   }, [
     async () => { for (const fixture of fixtures) await fixture.dispose(); },
     () => rmSync(temporary, { recursive: true, force: true }),
