@@ -50,6 +50,23 @@
 .run-target-seg--model { flex: 1 1 auto; }
 /* 尾段（回复框里派出去时的「从哪开工」）：字放在 span 里，跟执行器名同一套省略（长分支名窄屏下先省略）。 */
 .run-target-seg--tail { flex: 0 1 auto; }
+/* 还能从远端分支开工时尾段是一个下拉（ReplyCallDock.tsx）：触发器照别的段的样子画，不带下拉自己的框和内边距。 */
+.run-target-picker .run-target-seg--tail.ui-dropdown,
+.run-target-picker.is-chip .run-target-seg--tail.ui-dropdown { padding: 0; }
+.run-target-picker .run-target-seg--tail.ui-dropdown .ui-select-trigger {
+  width: auto;
+  max-width: 100%;
+  height: 100%;
+  gap: 4px;
+  border-radius: 0;
+  background: none;
+  padding: 0 7px;
+  color: inherit;
+  font-size: inherit;
+  box-shadow: none;
+}
+.run-target-picker .run-target-seg--tail.ui-dropdown .ui-select-trigger:hover:not(:disabled) { color: var(--ink); box-shadow: none; }
+.run-target-picker .run-target-seg--tail.ui-dropdown .ui-select-trigger > span:first-child { max-width: 96px; }
 .run-target-seg--model,
 .run-target-seg--tail,
 .run-target-picker .effort-picker-trigger { border-left: 1px solid var(--line); }
@@ -115,6 +132,9 @@
   background: transparent;
   padding: 0 8px;
   font-size: 12px;
+  /* 档位名只有一两个字，不参与压缩：挤的时候让智能体和模型两段去省略，别把它压成竖排。 */
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 /* chip 变体：对话框底部那一排。整颗更矮更圆，字号收一档。 */
