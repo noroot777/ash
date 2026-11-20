@@ -67,6 +67,34 @@ enum ServiceTarget: Equatable {
   case ours(pid: Int)
 }
 
+struct ServiceRecoveryIdentity {
+  let id: String
+  let pid: Int
+  let dataDir: String
+  let codeDir: String
+
+  init?(_ instance: NaviInstance) {
+    guard NaviConfig.isLocal, instance.isOurs, let id = instance.id, !id.isEmpty,
+          let pid = instance.pid, pid > 1, let dataDir = instance.dataDir,
+          let codeDir = instance.codeDir, RuntimeStore.contains(codeDir) else { return nil }
+    self.id = id
+    self.pid = pid
+    self.dataDir = NaviHealth.realPath(dataDir)
+    self.codeDir = NaviHealth.realPath(codeDir)
+  }
+
+  func matches(_ instance: NaviInstance) -> Bool {
+    guard let current = ServiceRecoveryIdentity(instance) else { return false }
+    return id == current.id && pid == current.pid && dataDir == current.dataDir && codeDir == current.codeDir
+  }
+
+  func verify() throws {
+    guard case .navi(let instance) = NaviHealth.probeSync(), matches(instance) else {
+      throw SQLiteFile.Failure("服务身份已变化或无法确认，本次强制切换已取消；没有停止其他服务。")
+    }
+  }
+}
+
 /// 让自己那份服务下线，给换代码让路。只停**评估过的那一份**（UpdateGate 问 restart-impact 时
 /// 端口上的那个进程）：这会儿端口上换了人、或者认不出是谁，一律不停、回去重新评估 —— 不拿上一次
 /// 「不会打断谁」的结论去停另一份服务。别的 navi 用的不是这份库，跟这次更新无关，不碰。
