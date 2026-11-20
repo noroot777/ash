@@ -27,6 +27,7 @@ import type {
 } from "@navi/shared";
 import type { AuthState, PairClaim, PairTicket } from "@navi/shared/multiuser";
 import type { CliModelCatalog } from "@navi/shared/cli-presets";
+import type { ProjectBranches } from "@navi/shared/task-branch";
 import { normalizeMonitorDto } from "@navi/shared/monitor";
 import type { TaskMonitor } from "@navi/shared/monitor";
 import { getApiKey, getBaseURL } from "./config";
@@ -217,9 +218,12 @@ export const api = {
     uri: api.taskReviewFileUrl(id, round, name),
     headers: authHeader(),
   }),
-  // Local branches + current HEAD for the new-task form's base picker.
-  projectBranches: (id: string): Promise<{ branches: string[]; current: string | null }> =>
+  // Local + remote branches and current HEAD for the new-task form's base picker.
+  projectBranches: (id: string): Promise<ProjectBranches> =>
     req(`/projects/${id}/branches`).then(j),
+  // 刷新远端分支（fetch --prune 全部远端），跟桌面端侧栏分支胶囊的「更新」是同一个接口。
+  projectGitFetch: (id: string): Promise<{ ok: boolean; message: string }> =>
+    req(`/projects/${id}/git/fetch`, { method: "POST", body: JSON.stringify({ remote: null }) }).then(j),
   // 清理某个任务残留的 worktree 目录 / 分支(任务行这时通常已经删了,所以挂在 project 上)。
   discardTaskWorkspace: (
     projectId: string,

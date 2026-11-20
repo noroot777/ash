@@ -8,8 +8,8 @@ import { useDiffLayout } from "../review/diffLayout.ts";
 import { branchDiffReason, type ScmDiffKind } from "./scmModel.ts";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
 
-// 单个文件的 diff，摆在中间那一栏（跟 FileViewer 同一个位置，也沿用它的外壳样式：
-// 两者是同一种「中间区换一块内容、关掉就回会话」的东西，没必要各长一套边框和标题栏）。
+// 单个文件的 diff，摆在右侧面板「查看」那一格（跟 FileViewer 同一个位置，也沿用它的外壳样式：
+// 两者是同一块内容的两种读法，没必要各长一套边框和标题栏）。
 //
 // 两类数据源共用这一个查看器：工作区那三档（索引/工作树/未跟踪）和 `branch`（这条任务
 // 分支相对合入目标**已经提交**的那份）。对用户来说都是「这个文件改了什么」，差别只在拿
@@ -123,7 +123,7 @@ export function ScmDiffViewer({
           </button>
         )}
         {onToggleZoom && <ZoomToggle zoomed={zoomed} onToggle={onToggleZoom} className="file-viewer__action" />}
-        <button type="button" className="file-viewer__action" aria-label="关闭 diff，回到会话" onClick={onClose}>
+        <button type="button" className="file-viewer__action" aria-label="关闭 diff 查看" onClick={onClose}>
           <X size={13} aria-hidden="true" />
         </button>
       </header>

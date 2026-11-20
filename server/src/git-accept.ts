@@ -23,6 +23,7 @@ import {
 } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
+import { mergeInUserCheckout } from "./git-accept-checkout.js";
 import { execFileText as exec } from "./exec.js";
 import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 import { addTemporaryWorktree, removeTemporaryWorktree, whileBranchClaimed, type TemporaryWorktree } from "./git-accept-temp.js";
@@ -40,7 +41,8 @@ function sameFilesystemPath(a: string, b: string): boolean {
 // These helpers never checkout another branch in the user's project working
 // directory. The only time that directory is touched is when it is ALREADY on
 // the target branch and completely clean; git forbids checking that branch out
-// in a temporary worktree, so merging in place is the safe, explicit fallback.
+// in a temporary worktree, so merging in place is the safe, explicit fallback
+// (re-checked right before and after the merge, git-accept-checkout.ts).
 
 export type TaskMergeMethod = "already_merged" | "fast_forward" | "merge_commit" | "squash" | "tagged" | "no_commit";
 export type TaskMergeWarning = {
@@ -278,8 +280,9 @@ export async function mergeTaskBranch(
 }
 
 // 目标分支得有个检出的地方才跑得了 merge。三种情况按危险程度排：目标就在项目目录上
-// 且干净 → 就地跑；目标在别的 worktree 上 → 一律不碰（那是别人正在用的工作区）；
-// 哪儿都没检出 → 开个临时 worktree，跑完就拆。
+// 且干净 → `fn(repo, true)` 就地跑（前后各核一次 HEAD，git-accept-checkout.ts）；目标在
+// 别的 worktree 上 → 一律不碰（那是别人正在用的工作区）；哪儿都没检出 → 开个临时 worktree，
+// 跑完就拆（`fn(临时目录, false)`）。
 /** 目标检出的「工作区干净」：普通落地照 `git status`（受保护落地换成不调程序的那一版，guardedDirtyFiles）。 */
 const statusDirtyFiles = async (repo: string) => porcelainFiles((await exec("git", ["-C", repo, "status", "--porcelain"])).stdout);
 
@@ -287,7 +290,7 @@ async function inTargetCheckout(
   repo: string,
   sourceBranch: string,
   targetBranch: string,
-  fn: (cwd: string) => Promise<TaskMergeResult>,
+  fn: (cwd: string, userCheckout: boolean) => Promise<TaskMergeResult>,
   beforeTemp?: () => TaskMergeResult | null | Promise<TaskMergeResult | null>,
   dirty = statusDirtyFiles,
 ): Promise<TaskMergeResult> {
@@ -308,7 +311,7 @@ async function inTargetCheckout(
         dirtyFiles,
       };
     }
-    return fn(repo);
+    return fn(repo, true);
   }
   if (targetPath) {
     return {
@@ -335,7 +338,7 @@ async function inTargetCheckout(
       targetBranch,
     };
   }
-  const result = await fn(temp.path);
+  const result = await fn(temp.path, false);
   const cleanupError = await removeTemporaryWorktree(repo, temp);
   return withTemporaryCleanupOutcome(result, cleanupError, temp.path);
 }
@@ -384,6 +387,7 @@ export async function squashInCheckedOutTarget(
   targetBranch: string,
   commit = true,
   sourceRef = sourceBranch,
+  committed?: (stdout: string) => void,
 ): Promise<TaskMergeResult> {
   try {
     await exec("git", ["-C", cwd, "merge", "--squash", sourceRef]);
@@ -427,7 +431,9 @@ export async function squashInCheckedOutTarget(
     return { ok: true, sourceBranch, targetBranch, method: "no_commit", stagedTree: await writeIndexTree(cwd) };
   }
   try {
-    await exec("git", ["-C", cwd, "commit", "-m", squashCommitMessage(sourceBranch)]);
+    // 提交号不缩写：摘要行里那个号就是这次建出的提交，调用方据此核落点（git-accept-checkout.ts）。
+    const { stdout } = await exec("git", ["-C", cwd, "-c", "core.abbrev=no", "commit", "-m", squashCommitMessage(sourceBranch)]);
+    committed?.(stdout);
     return { ok: true, sourceBranch, targetBranch, method: "squash" };
   } catch (error) {
     // 到这里 staged 一定非空过：commit 失败就是真失败（hook 拒绝/环境问题），如实报错。
@@ -451,7 +457,8 @@ async function mergeWithoutCommit(
   sourceBranch: string,
   targetBranch: string,
   sourceRef = sourceBranch,
-  stage = (cwd: string) => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, false, sourceRef),
+  stage = (cwd: string) => mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, sourceRef,
+    () => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, false, sourceRef)),
   dirty = statusDirtyFiles,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
@@ -595,8 +602,10 @@ async function mergeTaskBranchLocked(
   }
 
   if (strategy === "squash") {
-    return inTargetCheckout(repo, sourceBranch, targetBranch, (cwd) =>
-      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef));
+    const squash = (cwd: string, committed?: (stdout: string) => void) =>
+      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef, committed);
+    return inTargetCheckout(repo, sourceBranch, targetBranch, (cwd, userCheckout) =>
+      userCheckout ? mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, sourceRef, (committed) => squash(cwd, committed)) : squash(cwd));
   }
 
   // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。
@@ -614,7 +623,10 @@ async function mergeTaskBranchLocked(
       targetBranch,
       // 走到临时 worktree 时 fastForward 一定是 false（下面那个 beforeTemp 已经把
       // 「本来能 FF 却失败了」拦掉了），所以这儿直接把它透传下去。
-      (cwd) => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef),
+      (cwd, userCheckout) => {
+        const merge = () => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef);
+        return userCheckout ? mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, sourceRef, merge) : merge();
+      },
       // 目标分支哪儿都没检出、而且本来就该能 fast-forward：那句 ref-only 的 fetch 失败
       // 是真出事了，别再开临时 worktree 拿 merge 去糊。
       () => fastForward

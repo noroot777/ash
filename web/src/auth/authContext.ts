@@ -16,7 +16,7 @@ export interface AuthContextValue {
 // 自用模式的兜底值:`mode: "single"`、没有用户、已被认成机主。这样每个消费点都不必写
 // `?.` —— 「有没有多人这回事」用 `mode` 判断,而不是用「context 在不在」。
 const SINGLE: AuthContextValue = {
-  state: { mode: "single", needsSetup: false, needsAccessKey: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false, localOnly: false },
+  state: { mode: "single", needsSetup: false, needsAccessKey: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false, localOnly: false, desktopApp: false },
   refresh: async () => true,
 };
 
@@ -32,9 +32,15 @@ export function useIsInstanceAdmin(): boolean {
   return state.mode !== "multi" || state.user?.role === "admin";
 }
 
-/** 本机自用模式(`NAVI_LOCAL_ONLY`)吗。远程配对、转多人这些入口都看它藏起来。 */
+/** 本机自用模式(`NAVI_LOCAL_ONLY`)吗。远程配对这些「从别处进来」的入口都看它藏起来。 */
 export function useIsLocalOnly(): boolean {
   return useAuth().state.localOnly;
+}
+
+/** 模式固定自用吗(本机自用模式,或 Navi.app 起的服务)。转多人、邀请这些入口看它藏起来。 */
+export function useIsSingleOnly(): boolean {
+  const { state } = useAuth();
+  return state.localOnly || state.desktopApp;
 }
 
 /** 现在处于多人模式吗。界面上一大堆「要不要显示这一块」都问它。 */

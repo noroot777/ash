@@ -6,7 +6,7 @@
 //  R3 前置：上游完成时挂着预约 → 不是站稳、下游不起；审查通过 → 站稳、下游起；最后一轮没过 → 下游仍不起；
 //  R4 没设默认 / 明确不审 / 新建面板（不传）：都不带预约；指定一位不存在的 → 400，一条都不建；
 //  R5 别人名下的审查者既当不了我的默认，也指定不了；
-//  R6 派活单与可以派出去的活：卡上那一格换了人 / 关掉，照这一格；没交就照单子上的（再缺省是默认）。
+//  R6 回复框顶上那一列（等或不等）：卡上那一格换了人 / 关掉，照这一格；没交就照挂的时候说定的（再缺省是默认）。
 //  R7 任务和预约同一笔：预约写不进去时报错、任务也不留（单建和不串队的批次都是）；解析完、落库前那位审查者被删：
 //     指定的那位 → 整批不建，「默认」→ 按落库那一刻的默认（已经没有了）不带，都不留指向不存在审查者的预约。
 // 跑：npm -w server run test:review-on-create
@@ -16,13 +16,13 @@ import {
 } from "./prerequisite-fixture.js";
 import assert from "node:assert/strict";
 import { eq, sql } from "drizzle-orm";
+import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 
 const { reviewerProfiles } = await import("../src/db/schema.js");
 const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
 const { reserveFreeReview, cancelFreeReviewReservation } = await import("../src/free-workflow.js");
 const { resolveCreateReviews, ReviewOnCreateError } = await import("../src/review-on-create.js");
-const { normalizeLaunch } = await import("../src/dispatch-plan.js");
-const { normalizeSuggestionLaunch } = await import("../src/dispatch-suggestion-launch.js");
+const { launchedSettings, normalizeSuggestionLaunch } = await import("../src/dispatch-suggestion-input.js");
 const { executorScopeForOwner } = await import("../src/auth/owned-executors.js");
 mountReviewerProfileRoutes(api);
 
@@ -163,31 +163,29 @@ try {
     assert.deepEqual(skipped, []);
   }
 
-  // ── R6 派活单 / 可以派出去的活：照卡上那一格 ──
+  // ── R6 回复框顶上那一列：照卡上那一格 ──
   {
     const scope = await executorScopeForOwner(null);
     const target = { agentType: "claude" as const, executorId: null, model: null, reasoningEffort: null };
-    const plan = {
-      id: "plan", question: "q", order: "serial" as const, proposedAt: "",
-      items: [
-        { title: "a", body: "a", note: "", target: null, review: { reviewer: beta } },
-        { title: "b", body: "b", note: "", target: null },
-        { title: "c", body: "c", note: "", target: null, review: "none" as const },
-      ],
-    };
-    const launch = normalizeLaunch(plan, { planId: "plan", order: "serial", items: [
-      { index: 0, target }, { index: 1, target }, { index: 2, target, review: { reviewer: alpha } },
+    // 挂的时候说定的（缺省是默认审查者），用户派出去那一下在卡上换了才照卡上的——等着的那一批和不等的几件同一条路。
+    const stored = (review?: CreateReviewChoice) => ({
+      id: "s", title: "s", body: "s", note: "", target: null, base: "trunk" as const, proposedAt: "", batch: "b",
+      order: "serial" as const, wait: "continue" as const, ...(review ? { review } : {}),
+    });
+    const launch = normalizeSuggestionLaunch({ order: "serial", items: [
+      { id: "s1", title: "s", body: "s", target },
+      { id: "s2", title: "s", body: "s", target },
+      { id: "s3", title: "s", body: "s", target, review: { reviewer: alpha } },
+      { id: "s4", title: "s", body: "s", target, review: "none", worktreeBase: null },
     ] }, scope);
     assert.ok(!("error" in launch));
-    assert.deepEqual(launch.picks.map((pick) => pick.review), [{ reviewer: beta }, "default", { reviewer: alpha }]);
-    const bad = normalizeLaunch(plan, { planId: "plan", order: "serial", items: [{ index: 0, target, review: "maybe" }] }, scope);
-    assert.ok("error" in bad && bad.status === 400);
-    const suggested = normalizeSuggestionLaunch({ order: "parallel", items: [
-      { id: "s1", title: "s", body: "s", target, worktreeBase: null },
-      { id: "s2", title: "s", body: "s", target, worktreeBase: null, review: "none" },
-    ] }, scope);
-    assert.ok(!("error" in suggested));
-    assert.deepEqual(suggested.items.map((item) => item.review), ["default", "none"]);
+    assert.deepEqual(launch.items.map((pick) => pick.review), [undefined, undefined, { reviewer: alpha }, "none"], "没交就不带，落库时照挂的那一份");
+    const storedOf = [stored({ reviewer: beta }), stored(), stored("none"), stored({ reviewer: beta })];
+    assert.deepEqual(launch.items.map((pick, at) => launchedSettings(pick, storedOf[at]!).review), [{ reviewer: beta }, "default", { reviewer: alpha }, "none"]);
+    assert.deepEqual(launch.items.map((pick, at) => launchedSettings(pick, { ...storedOf[at]!, worktreeBase: "feat/x" }).worktreeBase),
+      ["feat/x", "feat/x", "feat/x", null], "起点同理：交了 null 就是不指定");
+    const bad = normalizeSuggestionLaunch({ order: "serial", items: [{ id: "s1", title: "s", body: "s", target, review: "maybe" as never }] }, scope);
+    assert.ok("error" in bad);
   }
 
   // ── R7 同一笔落库；落库前审查者被删 ──

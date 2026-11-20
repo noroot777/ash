@@ -11,6 +11,12 @@
 // ④ 框顶只有一行：叫着人时让给叫人那一行、不叫了回来；有驳回等裁定时让给裁定那一行；
 // ⑥ 这条任务的分支已经清掉了：「接着这条的代码」没了，建议说的从主分支开工照旧落在合入目标上，
 //    不落到项目此刻检出的那一支；
+// ⑧ 指定的审查者这里认不出（接力过来的）：胶囊写明找不到哪一位、派不出去且说清原因，不读成「不审查」；
+// ⑨ 智能体停下来等的一批（原派活单）：就画在这一行里、排在裁定前面、不另挂答题卡；「N 件等你派出」缺省摊开，
+//    同批前置写成「等 1」；没选中时框就是「发回去改」——回车把这句话作为那一问的答复交出去，一条不派；选中一件照样补一句；
+// ⑪ 先叫着人（问一句 / 讨论 / 派出去都一样）还没发，等着的一批才到：那一批占住这一格（框顶、框、发送键都归它），
+//    叫着的人搁着不显示；那一批收了尾，叫着的人和做法原样回来；
+// ⑩ 等着的一批照一个接一个会互相等住：服务端拒了，原因原样写在那一行下面，那几件都还在；
 // ⑤ `/派` 在句中：从菜单里选中只拿掉命令（两边空格并成一个）、光标留在原处、叫上次那个人停在「派出去」；
 //    `/讨论` 句中也出；a/b、web/、http:// 不弹；输入法组字时不弹；句中敲全了 `/派` 没从菜单选、直接发 = 原样发出去。
 // 跑法：npm -w web run test:dispatch-suggestion-dom
@@ -22,6 +28,8 @@ const PROFILES = [
   { id: "profile-codex", name: "codex@local", type: "codex", isDefault: true },
   { id: "profile-claude", name: "claude@local", type: "claude", isDefault: true },
 ];
+
+const DEADLOCK = "「等着后面那一件的」要等「被前面等着的」做完，一个接一个排会互相等住。改成「同时」再派，或者发回去让它调整顺序";
 
 const web = await startWebServer();
 let browser;
@@ -44,6 +52,7 @@ try {
     let match = /^\/tasks\/([^/]+)\/dispatch-suggestions\/launch$/.exec(path);
     if (match) {
       requests.push({ kind: "launch", task: match[1], body: JSON.parse(request.postData() ?? "{}") });
+      if (match[1] === "t-deadlock") return json({ error: DEADLOCK }, 409);
       return json({ tasks: [] });
     }
     match = /^\/tasks\/([^/]+)\/dispatch-suggestions\/([^/]+)$/.exec(path);
@@ -75,10 +84,11 @@ try {
   await waitUntil(async () => await button("one", `把「${one}」派出去`).isEnabled(), "读到从哪开工后能派");
   await button("one", `把「${one}」派出去`).click();
   await waitUntil(async () => launches("t-one").length === 1, "一件派出去");
+  // 谁来审照那一行：智能体没说、卡上也没换就是默认审查者，这里没设默认，落成不审。
   assert.deepEqual(launches("t-one")[0].body, {
     order: "parallel",
     items: [{ id: "s-one", title: one, body: `## 目标\n${one}的完整说明`,
-      target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, worktreeBase: "main" }],
+      target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, review: "none", worktreeBase: "main" }],
   }, "照那一行此刻的样子派：交给谁同这里、从主分支开工、没有补的话");
   await waitUntil(async () => (await dock("one").count()) === 0, "派完那一行没了");
 
@@ -129,7 +139,7 @@ try {
   await waitUntil(async () => launches("t-arm").length === 1, "回车派出去");
   assert.deepEqual(launches("t-arm")[0].body.items, [{
     id: "s-arm", title: "改过的标题", body: "## 改过的说明", extra: "高度要按任务记",
-    target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, worktreeBase: "navi/t-arm",
+    target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, review: "none", worktreeBase: "navi/t-arm",
   }], "派出去的是改过的标题、正文、补的话和选的开工起点");
   await waitUntil(async () => (await box("arm").inputValue()) === "", "派完框清空");
   assert.equal(await dock("arm").count(), 0);
@@ -183,6 +193,29 @@ try {
   await waitUntil(async () => launches("t-gone").length === 1, "分支清掉后照样派出去");
   assert.equal(launches("t-gone")[0].body.items[0].worktreeBase, "release", "从合入目标开工，不是项目此刻检出的那一支");
 
+  // ⑦ 上线前的老派活单：没动过就照它说定的——一个接一个；开工起点不管写没写（没写读成 null = 不指定）都不交，
+  //   服务端照存着的开工，不拿页面现算的起点盖掉旧单的缺省。
+  await button("legacy", "2 件可以派出去").click();
+  await waitUntil(async () => await button("legacy", "全部派出去").isEnabled(), "读到分支后能派");
+  await button("legacy", "全部派出去").click();
+  await waitUntil(async () => launches("t-legacy").length === 1, "老单子全部派出去");
+  const old = launches("t-legacy")[0].body;
+  assert.equal(old.order, "serial", "没改顺序：照老单子的一个接一个");
+  assert.equal("worktreeBase" in old.items[0], false, "指定过分支、卡上没换：不交起点");
+  assert.equal("worktreeBase" in old.items[1], false, "没写开工起点的旧单：也不交，照旧接口的「不指定」开工");
+
+  // ⑧ 指定的审查者这里认不出（接力过来的）：胶囊写明找不到哪一位、不冒充「不审查」，派不出去且说清原因；亲手改成不审查才派得出去。
+  const lost = "指定严审后接力过来的";
+  await waitUntil(async () => (await scope("lost").locator(".reviewer-chip").innerText()).includes("找不到「严审」"), "胶囊写明找不到哪一位");
+  assert.equal(await button("lost", `把「${lost}」派出去`).isEnabled(), false, "认不出指定的审查者：派不出去");
+  await waitUntil(async () => (await scope("lost").innerText()).includes("这里认不出指定的审查者「严审」"), "说清为什么派不出去");
+  await scope("lost").locator(".reviewer-chip button").first().click();
+  await page.getByRole("option", { name: "不审查" }).click();
+  await waitUntil(async () => await button("lost", `把「${lost}」派出去`).isEnabled(), "改成不审查后能派");
+  await button("lost", `把「${lost}」派出去`).click();
+  await waitUntil(async () => launches("t-lost").length === 1, "改成不审查后派出去");
+  assert.equal(launches("t-lost")[0].body.items[0].review, "none", "派出去的是用户亲手选的不审查");
+
   // ⑤ 句中 `/派`：从菜单选中只拿掉命令，光标留在原处，叫上次那个人停在「派出去」。
   await box("slash").fill("前面的话 /派 后面的话");
   for (let index = 0; index < " 后面的话".length; index += 1) await box("slash").press("ArrowLeft");
@@ -219,6 +252,71 @@ try {
   await box("slash").press("Enter");
   await waitUntil(async () => (await logged("__sent_slash")).length === 1, "原样发出去");
   assert.deepEqual(await logged("__sent_slash"), ["我刚才输入了 /派 你去修"]);
+
+  // ⑨ 等着的一批：画在这一行里，裁定那一行和答题卡都不出。
+  const waiting = scope("wait").getByRole("group", { name: "等你派出的活" });
+  await waiting.waitFor();
+  assert.equal(await scope("wait").getByRole("group", { name: "怎么裁定这条驳回" }).count(), 0, "在等的一批排在裁定前面");
+  assert.equal(await scope("wait").locator(".question-card").count(), 0, "那一问不另挂答题卡");
+  assert.equal(await button("wait", "2 件等你派出").getAttribute("aria-expanded"), "true", "在等的一批缺省摊开");
+  const waitRows = scope("wait").locator(".sg-list > li");
+  assert.equal(await waitRows.count(), 2);
+  assert.doesNotMatch(await waitRows.nth(0).innerText(), /等 \d/, "第一件不等谁");
+  assert.match(await waitRows.nth(1).innerText(), /等 1/, "第二件写明等第一件");
+  assert.equal(await box("wait").getAttribute("aria-label"), "发回去改", "没选中时框就是发回去改");
+  assert.equal(await box("wait").getAttribute("placeholder"), "写一句发回去改…");
+  assert.equal(await button("wait", "发回去改").isDisabled(), true, "没写字发不出去");
+  assert.equal(await standing("wait").count(), 0, "底栏胶囊收起");
+  // 选中一件照样是补一句，Esc 回到发回去改。
+  await button("wait", "选中「先拆出公共的那一块」，补一句再派").click();
+  assert.equal(await box("wait").getAttribute("aria-label"), "给「先拆出公共的那一块」补一句");
+  await box("wait").press("Escape");
+  assert.equal(await box("wait").getAttribute("aria-label"), "发回去改", "退出选中回到发回去改");
+  await box("wait").fill("第一件不用拆，直接改入口");
+  await box("wait").press("Enter");
+  await waitUntil(async () => (await logged("__answered_wait")).length === 1, "回车把这句话作为答复交出去");
+  assert.deepEqual(await logged("__answered_wait"), [{
+    answer: "第一件不用拆，直接改入口", input: { questionKey: JSON.stringify(["派出这 2 个任务（同时）：…", [], []]) }, attachments: [],
+  }], "答的是那一问（带着题面）");
+  await waitUntil(async () => (await box("wait").inputValue()) === "", "发出去框清空");
+  assert.equal(launches("t-wait").length, 0, "发回去改一条不派");
+  assert.deepEqual(await logged("__sent_wait"), [], "不是普通消息");
+
+  // ⑪ 先叫着人，等着的一批后到：这一格归那一批，叫着的人先搁着，收了尾再回来。
+  await box("arrive").fill("先写的 @co");
+  await scope("arrive").getByRole("option", { name: /@codex/ }).click();
+  const callRow = scope("arrive").getByRole("group", { name: "叫 codex 来做什么" });
+  await callRow.waitFor();
+  await callRow.getByRole("button", { name: "派出去", exact: true }).click();
+  await page.evaluate(() => window.__arrive_arrive(true));
+  await scope("arrive").getByRole("group", { name: "等你派出的活" }).waitFor();
+  assert.equal(await callRow.count(), 0, "叫人那一行让给等着的一批");
+  assert.equal(await button("arrive", "不叫 codex 了").count(), 0, "叫着的人整个搁着");
+  assert.equal(await scope("arrive").locator(".question-card").count(), 0);
+  assert.equal(await box("arrive").getAttribute("aria-label"), "发回去改", "框归那一批");
+  assert.equal(await box("arrive").inputValue(), "先写的 ", "框里还是同一份草稿");
+  await box("arrive").fill("换个人做");
+  await box("arrive").press("Enter");
+  await waitUntil(async () => (await logged("__answered_arrive")).length === 1, "发回去改交给那一问");
+  assert.equal((await logged("__answered_arrive"))[0].answer, "换个人做");
+  assert.equal(launches("t-arrive").length, 0, "没有借着叫着的人派出去");
+  assert.deepEqual(await logged("__created_arrive"), [], "也没走回复框里的派出去");
+  await page.evaluate(() => window.__arrive_arrive(false));
+  await callRow.waitFor();
+  assert.equal(await callRow.getByRole("button", { name: "派出去", exact: true }).getAttribute("aria-pressed"), "true", "收了尾，叫着的人和做法原样回来");
+  await button("arrive", "不叫 codex 了").click();
+
+  // ⑩ 一个接一个会互相等住：服务端拒了，原因原样写出来，那几件都还在。
+  const lock = scope("deadlock").getByRole("group", { name: "等你派出的活" });
+  await lock.waitFor();
+  assert.equal(await scope("deadlock").getByRole("group", { name: "派出顺序" }).getByRole("button", { name: "一个接一个" }).getAttribute("aria-pressed"), "true",
+    "照摆的时候说定的一个接一个");
+  assert.match(await scope("deadlock").locator(".sg-list > li").nth(0).innerText(), /等 2/);
+  await waitUntil(async () => await button("deadlock", "全部派出去").isEnabled(), "读到分支后能派");
+  await button("deadlock", "全部派出去").click();
+  await waitUntil(async () => (await lock.getByRole("alert").count()) === 1, "拒了要说出来");
+  assert.equal(await lock.getByRole("alert").innerText(), DEADLOCK, "原因原样显示");
+  assert.equal(await scope("deadlock").locator(".sg-list > li").count(), 2, "那几件都还在");
 
   console.log("dispatch suggestion dom test passed");
 } finally {

@@ -17,6 +17,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private var guardProbing = false
   /// 页面因为端口换了人被撤下时停在哪个路由，自己那份回来后回到那里。
   private var resumeURL: URL?
+  /// 页面还没载进来时收到的 navi:// 链接要去的路由（DeepLink），下一次载页面时直接载到那里。
+  var pendingRoute: URL?
+  /// 收到的第几条 navi:// 链接：每条都要等服务就绪、认过人才落地，先到的回调晚回来时不许盖掉后点的那条（DeepLink）。
+  var linkSerial = 0
   /// 页面现在认的是哪一份服务（它的实例号已经作为 cookie 交给页面）。
   private(set) var boundInstance: String?
   /// 页面在的时候多久认一次人。测试把它调大，单独验导航那一道。
@@ -36,7 +40,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     config.applicationNameForUserAgent = "Version/26.0 Safari/605.1.15 NaviMac/\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0")"
     config.preferences.isElementFullscreenEnabled = true
 
-    webView = WKWebView(frame: .zero, configuration: config)
+    webView = NaviWebView(frame: .zero, configuration: config)
     webView.allowsBackForwardNavigationGestures = true
     webView.allowsMagnification = true
     // 出问题时 Safari「开发」菜单里能直接挂上检查器。
@@ -194,8 +198,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     beginHandoff()
     // 失败页、撤下后的空白页之后 webView.url 不是 navi 的，此时回到撤下前的路由或首页；正常情况下
     // 原地重载保住当前路由。
-    let target = [webView.url, resumeURL].compactMap { $0 }.first(where: NaviConfig.isSameOrigin) ?? NaviConfig.windowURL
+    let target = [pendingRoute, webView.url, resumeURL].compactMap { $0 }.first(where: NaviConfig.isSameOrigin) ?? NaviConfig.windowURL
     resumeURL = nil
+    pendingRoute = nil
     webView.load(URLRequest(url: target))
     startInstanceGuard()
   }
@@ -326,12 +331,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     loadHome()
   }
 
-  /// 正在换代码（UpdateGate 停了服务）：盖上一屏、不探活，闸放开时 UpdateGate 会叫 loadHome。
-  func showInstalling(_ note: String) {
+  /// 正在换代码（UpdateGate 停了服务）、或者正按新设置重启服务（RemoteAccessSwitch）：盖上一屏、不探活，
+  /// 办完的那一方会叫 loadHome。
+  func showInstalling(_ note: String,
+                      detail: String = "装好后自动接上。接管得了的任务照常在跑；点了「现在装」的话，刚才列出的那些会被打断。") {
     stopHealthPolling()
     stopInstanceGuard()
     pendingStartingScreen?.cancel()
-    offlineView.show(title: note, detail: "装好后自动接上。接管得了的任务照常在跑；点了「现在装」的话，刚才列出的那些会被打断。", busy: true)
+    offlineView.show(title: note, detail: detail, busy: true)
   }
 
   /// 后台每 2 秒探一次 /api/health，自己那份通了就载回去 —— 服务也可能是别处（登录项、
@@ -381,4 +388,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     default: return true
     }
   }
+}
+
+/// 窗口不是当前窗口时（刚从别的应用切过来、另一扇窗或弹窗还在前面），AppKit 先问落点的视图收不收这一下：
+/// WKWebView 只在落点能拖起选区或拖拽时才收，点在按钮上一律不收，这一下就只拿去激活窗口，页面什么都收不到，
+/// 要再点一次。而页面在后台时照样显示悬停效果，看着能点、点了没反应。这里一律收下，和浏览器、Electron 应用一样：
+/// 第一下既激活窗口也交给页面。顶上那一条的空白处也因此能直接拖动后台窗口（见 WindowChrome）。
+final class NaviWebView: WKWebView {
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

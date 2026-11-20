@@ -26,6 +26,11 @@ export interface RunOpts {
   prompt: string;
   cliCommand?: CliCommand;
   cliState?: CliSessionState;
+  /**
+   * 这一回合是计划模式回合（`/plan`）：只读出计划、交给用户批准，不实施。codex 读 cliState.plan
+   * 选协作模式；claude 据此换权限参数（claude-plan-gate.ts）。由 orchestrator 判定，执行器不再自己猜。
+   */
+  planMode?: boolean;
   cwd: string;
   sessionId?: string; // resume an existing CLI session
   model?: string;

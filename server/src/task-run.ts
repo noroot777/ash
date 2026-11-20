@@ -18,6 +18,7 @@ import { afterSettlement } from "./settle-status.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
 import { forgetHeldTrigger } from "./free-review-reservations.js";
 import { taskWorkspace } from "./task-workspace.js";
+import { applyPendingWorktreeMove, takeWorkspaceNote } from "./task-worktree-move.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
@@ -37,15 +38,18 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@navi/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
-import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
+import { clearOnAcceptance, NO_ONE_SHOT_NOTICES, oneShotNotices } from "./undelivered-replies.js";
+import { createTurnInputSettlement } from "./turn-input-settlement.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { acknowledgeTaskStart } from "./task-start-receipt.js";
-import { AUTONOMY, backgroundWaitFor, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
+import { AUTONOMY, backgroundWaitFor, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL, PLANNING_TURN } from "./run-prompts.js";
+import { planTurnInput } from "./plan-turn.js";
 import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
+import { remoteStartNote } from "./remote-start-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
@@ -176,6 +180,9 @@ async function runHeldTask(
 
     // Ordinary tasks resolve exactly as before. Team workers additionally inherit
     // their lead's shared workspace unless they explicitly request another worktree.
+    // 登记过「改到独立工作区」的，全新一轮也先办掉；新会话本来就两手空空，那句「目录换了」不用再说。
+    await applyPendingWorktreeMove(task);
+    await takeWorkspaceNote(taskId);
     const ws = await taskWorkspace(task, project.repoPath);
     baseFallback = ws.baseFallback;
     // 这一轮到底留下了什么:只服务「没交卷」时的通知措辞(turn-output.ts)。fresh run
@@ -185,7 +192,9 @@ async function runHeldTask(
     const commandText = task.body.trim();
     const command = parseCliCommand(agentType, commandText);
     const localCommand = nativeCliCommand(agentType, commandText);
-    await db.update(tasks).set({ goalTurn: isGoalExecution(command), nativeTurn: !!localCommand }).where(eq(tasks.id, taskId));
+    // claude 的 `/plan 问题` 起跑同 codex 的原生 `/plan`：一个只出计划的旁路回合(plan-turn.ts)。
+    const planInput = planTurnInput(agentType, command, commandText);
+    await db.update(tasks).set({ goalTurn: isGoalExecution(command), nativeTurn: !!localCommand || planInput.question }).where(eq(tasks.id, taskId));
     // 多人模式:用**这一次起跑是谁点的**那个人的执行器与供应商跑(§八)。别人的执行器
     // 解析不到时降级到本人的默认执行器,并把这次降级如实写进时间线 —— 烧的是他自己的 key。
     const runOwner = opts.actingUserId ?? task.ownerUserId;
@@ -217,10 +226,9 @@ async function runHeldTask(
     // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
     const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
-    // 「你被搬过机器了」——接力导入时挂在 handoff 标记上的一次性前言。fresh run 这条路
-    // 同样要投:会话文件没随任务到货时,接过来的任务第一次跑走的正是这里(见
-    // handoff-notice.ts;续跑那条路在 orchestrator.ts)。
-    const handoffNotice = reviewTask ? "" : handoffNoticeFrom(task.handoff);
+    // 一次性前言(接力前言 + 补交的答复,见 undelivered-replies.ts)。fresh run 这条路同样要投:
+    // 会话文件没随任务到货、或换了智能体新开会话时,第一次跑走的正是这里(续跑那条路在 orchestrator.ts)。
+    const notices = reviewTask ? NO_ONE_SHOT_NOTICES : oneShotNotices(task);
     const prompt = assembleFreshPrompt({
       autonomy: AUTONOMY,
       // fresh run 一律是一条全新的 CLI 会话,所以 `freshContext` 恒真;这一轮交结论还是
@@ -231,7 +239,8 @@ async function runHeldTask(
       direction: DIRECTION_PROTOCOL(directionToken),
       teamPreamble,
       reviewProtocol,
-      handoffNotice,
+      handoffNotice: notices.handoff,
+      carried: notices.carried,
       peerNotice,
       objective: autoTitle ? TITLE_HINT + objective : objective,
     });
@@ -259,15 +268,21 @@ async function runHeldTask(
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
-      prompt: localCommand ? commandText : prompt, ...cli, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
+      prompt: localCommand ? commandText
+        : planInput.question ? PLANNING_TURN({ freshContext: true, verifying: false }, planInput.text, agentType) : prompt,
+      ...cli, planMode: planInput.question, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
       // 正文图片的持久账本(agent-image-journal.ts)。全新起跑没有身份可接,不带种子。
       images: markdownImageAccounting(taskId, sessId, turnStart),
       env: runEnv,
     });
     trackRun(taskId, handle);
-    // 前言已经随 prompt 交到 agent 手上就划掉（放在 spawn 之后:起跑前还有 takeFreeze
-    // 那道闸,清早了被冻住的那一轮会把它白白吃掉）。
-    if (handoffNotice) await clearHandoffNotice(taskId);
+    // 前言等 agent 确认收下这一轮的输入才划掉（undelivered-replies.ts `clearOnAcceptance`）;原生命令那一轮发出去的
+    // 是命令原文、不带前言,不划。不阻塞起跑:定论（含迟到的那一档）到了再划。
+    if (!localCommand) {
+      const delivery = createTurnInputSettlement(taskId, {});
+      clearOnAcceptance(notices, delivery);
+      void delivery.settle(handle).catch((error) => console.error(`[navi] 任务 ${taskId} 的前言划账出错，下一回合会再交一遍:`, error));
+    }
 
     let cliSessionId = handle.sessionId;
     const sessRow = {
@@ -332,6 +347,12 @@ async function runHeldTask(
       const noted = writeTurn(out, { t: "system", agent: agentType, text: baseNote }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, ...noted, event: { kind: "system", text: baseNote, at: turnStart } });
       baseFallbackTold = true;
+    }
+    const remoteNote = await remoteStartNote(task, ws, project.repoPath);
+    if (remoteNote) {
+      const notice = { kind: "receipt" } as const;
+      const noted = writeTurn(out, { t: "system", agent: agentType, text: remoteNote, notice }, turnStart);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, ...noted, event: { kind: "system", text: remoteNote, at: turnStart, notice } });
     }
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,

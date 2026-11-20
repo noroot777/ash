@@ -5,10 +5,15 @@
 // 派出去交给 navi 照那一行此刻的样子建（server/src/dispatch-suggestion-launch.ts），这条任务的智能体不被叫醒，
 // 所以它在跑时也照派。派掉、叉掉的那几件先在本地藏起来，不等服务端那一条广播回来。
 // 一行只有三种去处：你派了、你叉了、智能体收回了（为什么收回写在会话里收回的那一刻，withdrawalNotes.ts）——没有自己消失的。
+//
+// 智能体停下来等的那一批（wait 不是 none，任务暂停、task.question 是那句清单）也画在这一行里，不另挂答题卡：
+// 宿主照 `holdsQuestion` 不挂 QuestionDock，这一行排在裁定前面。这时框没选中哪一件也是借来的——写一句发出去
+// 就是对那一问的答复（POST /answer）=「发回去改」：一条不建，智能体按这句话重摆。派完、叉完那一批由服务端收尾。
 import { useEffect, useState } from "react";
-import type { AgentType, Task } from "@navi/shared";
-import { dispatchDefaultTarget, type DispatchOrder, type DispatchRunTarget } from "@navi/shared/dispatch-plan";
-import type { DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
+import type { AgentType, Task, TaskListItem } from "@navi/shared";
+import { questionKey, type QuestionAnswerInput } from "@navi/shared/questions";
+import { dispatchDefaultTarget, type DispatchRunTarget } from "@navi/shared/dispatch-target";
+import type { DispatchOrder, DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
 import { concreteReviewChoice } from "@navi/shared/review-on-create";
 import { api } from "../../lib/api.ts";
 import { useLeftDrawer } from "../../components/LeftDrawer.tsx";
@@ -41,7 +46,9 @@ function suggestionBaseOptions(task: Task, context: Parameters<typeof dispatchBa
     : options;
 }
 
-export function useSuggestionDock({ task, enabled, value, setValue, attachments, uploading, snapshotSent, dispatchTarget, focus }: {
+export function useSuggestionDock({
+  task, enabled, value, setValue, attachments, uploading, snapshotSent, dispatchTarget, tasks, onAnswer, focus,
+}: {
   task: Task;
   /** 这个框派得出去（普通任务、没归档）。 */
   enabled: boolean;
@@ -53,19 +60,30 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
   snapshotSent: () => () => void;
   /** 「派出去的活交给谁」此刻的值（null = 同这里）。 */
   dispatchTarget: DispatchRunTarget | null;
+  /** 前置写的是已有任务的 id 时，从这里认它叫什么。 */
+  tasks: readonly TaskListItem[];
+  /** 对这条任务那一问作答：给了，等着的那一批由这一行接住（发回去改）；不给就照普通提问交给答题卡。 */
+  onAnswer?: (answer: string, input: QuestionAnswerInput, attachments?: string[]) => Promise<void>;
   focus: () => void;
-}): ReplyOverride | undefined {
+}): { override: ReplyOverride | undefined; holdsQuestion: boolean } {
   useSuggestionStore();
   const drawer = useLeftDrawer();
   const { profiles } = useExecutorProfiles();
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
-  const [open, setOpen] = useState(false);
-  const [order, setOrder] = useState<DispatchOrder>("parallel");
+  // null = 没点过：在等的那一批缺省摊开（它停下来就是在等你看这几件），不等的收着。
+  const [toggled, setOpen] = useState<boolean | null>(null);
+  const [chosenOrder, setOrder] = useState<DispatchOrder | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setOpen(false); setError(null); }, [task.id]);
+  // 那一问还在、它绑的那一批才算在等（服务端读这一列时就不认作废的那一批，这里再对一次 question）。
+  const waitingBatch = enabled && onAnswer && task.question
+    ? (task.dispatchSuggestions ?? []).find((item) => item.wait !== "none")?.batch ?? null : null;
+  useEffect(() => { setOpen(null); setError(null); setOrder(null); }, [task.id, waitingBatch]);
 
   const list = enabled ? (task.dispatchSuggestions ?? []).filter((item) => !gone.has(item.id)) : [];
+  const open = toggled ?? list.some((item) => item.batch === waitingBatch);
+  // 没动过就照挂的时候说定的（几件说定的不一样时同时）：上线前摆好「一个接一个」的老派活单照旧一个接一个。
+  const order = chosenOrder ?? (list.length && list.every((item) => item.order === list[0]!.order) ? list[0]!.order : "parallel");
   const reviewers = useReviewerList(list.length > 0);
   const baseContext = useDispatchBaseContext(task.projectId, list.length > 0);
   const options = suggestionBaseOptions(task, baseContext.value);
@@ -78,10 +96,22 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
     const body = edit.body ?? item.body;
     const wanted = edit.base ?? item.base;
     const base = bases.some((option) => option.id === wanted) ? wanted : bases[0]?.id ?? wanted;
-    const review = edit.review ?? "default";
+    // 卡上没换过就照智能体挂的时候说定的那一位（没说是默认审查者）。
+    const review = edit.review ?? item.review ?? "default";
+    // 同一批里的前置写的是 key：好几件时读成行首的号，一件时（被等的那一件已经不在框顶了）读成它的标题；
+    // 派掉了的那一件服务端已经换成它建出来的任务 id，跟已有的任务一样按标题认。
+    const after = (item.prerequisites ?? []).map((ref) => {
+      const at = list.findIndex((other) => other.batch === item.batch && other.key === ref);
+      if (at >= 0) return list.length > 1 ? String(at + 1) : `「${list[at]!.title}」`;
+      const known = tasks.find((other) => other.id === ref);
+      return known ? `「${known.title}」` : ref;
+    });
     return {
       id: item.id, title, body, note: item.note, target: edit.target ?? item.target ?? fallback, review,
       base, filled: !!title.trim() && !!body.trim(), reviewHeld: reviewHold(review, reviewers),
+      waiting: item.batch === waitingBatch, after,
+      // 挂的时候就说定了开工起点（上线前的老派活单）、卡上又没换过：不交，服务端照存着的那一个开工。
+      keepBase: edit.base === undefined && item.worktreeBase !== undefined,
     };
   });
   const storedArmed = armedOf(task.id);
@@ -130,7 +160,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
         order: several ? order : "parallel",
         items: picked.map((row, index) => ({
           id: row.id, title: row.title.trim(), body: row.body, extra, target: row.target, review: reviews[index]!,
-          worktreeBase: options.find((option) => option.id === row.base)?.worktreeBase ?? options[0]?.worktreeBase ?? null,
+          ...(row.keepBase ? {} : { worktreeBase: options.find((option) => option.id === row.base)?.worktreeBase ?? options[0]?.worktreeBase ?? null }),
         })),
         ...(extra !== undefined && attachments.length ? { attachments } : {}),
       });
@@ -173,16 +203,30 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
     refocus();
   };
   // 回车 / 右下角那颗：带着框里那句话（和贴的图）派出去；派成了框清空、回到平常。
-  const submit = () => {
+  const submitLaunch = () => {
     if (!armedRow || uploading) return;
     const clear = snapshotSent();
     void launch([armedRow.id], value.trim()).then((sent) => { if (sent) clear(); });
   };
+  // 在等的那一批、没选中哪一件：框里这句话发回去改（同答题卡回一句话，带着那一问的题面，题换了服务端就拒）。
+  const returning = !!waitingBatch && !armedRow && rows.some((row) => row.waiting);
+  const submitReturn = () => {
+    const text = value.trim();
+    if (!onAnswer || busy || uploading || !text) return;
+    const clear = snapshotSent();
+    setBusy(true);
+    setError(null);
+    onAnswer(text, { questionKey: questionKey(task) }, attachments.length ? attachments : undefined)
+      .then(clear, (reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+      .finally(() => setBusy(false));
+  };
 
-  if (!rows.length) return undefined;
+  const holdsQuestion = !!waitingBatch;
+  if (!rows.length) return { override: undefined, holdsQuestion };
   const label = armedRow ? `「${armedRow.title || "没写标题"}」` : "";
-  const reason = !armedRow ? null : !armedRow.filled ? "标题或说明是空的，派不出去" : uploading ? "附件传完才能派" : held ?? armedRow.reviewHeld;
-  return {
+  const reason = returning ? (uploading ? "附件传完才能发" : !value.trim() ? "先写一句要它怎么改" : null)
+    : !armedRow ? null : !armedRow.filled ? "标题或说明是空的，派不出去" : uploading ? "附件传完才能派" : held ?? armedRow.reviewHeld;
+  const override: ReplyOverride = {
     head: (
       <SuggestionDock
         rows={rows as SuggestionRow[]}
@@ -193,7 +237,9 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
         readingId={readingId}
         busy={busy}
         held={held}
-        error={error ?? (baseContext.status === "failed" ? held : reviewers.failed ? rows.map((row) => row.reviewHeld).find(Boolean) ?? null : null)}
+        // 审查那一格停着的原因只在定论了的时候说：读失败了、或读到了却认不出指定的那一位（还在读不算）。
+        error={error ?? (baseContext.status === "failed" ? held
+          : reviewers.failed || reviewers.reviewers ? rows.map((row) => row.reviewHeld).find(Boolean) ?? null : null)}
         types={registeredAgentTypes(profiles)}
         profiles={profiles}
         reviewers={reviewers}
@@ -205,7 +251,7 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
         onBase={(id, base) => { editSuggestion(id, { base }); refocus(); }}
         onRead={read}
         onToggle={() => {
-          setOpen((current) => !current);
+          setOpen(!open);
           if (open) { disarm(); if (readingId) drawer?.close(); }
         }}
         onOrder={setOrder}
@@ -215,11 +261,15 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
     ),
     take: armedRow ? {
       input: { value, placeholder: `给${label}补一句（可不写）…`, label: `给${label}补一句`, onChange: setValue },
+    } : returning ? {
+      input: { value, placeholder: "写一句发回去改…", label: "发回去改", onChange: setValue },
     } : null,
-    send: <ReplyDockSend label="派出去" busy={busy} disabled={!!reason} reason={reason} onSend={submit} />,
-    submit,
+    send: <ReplyDockSend label={returning ? "发回去改" : "派出去"} busy={busy} disabled={!!reason} reason={reason}
+      onSend={returning ? submitReturn : submitLaunch} />,
+    submit: returning ? submitReturn : submitLaunch,
     cancel: disarm,
     attachable: true,
-    bare: !!armedRow,
+    bare: !!armedRow || returning,
   };
+  return { override, holdsQuestion };
 }

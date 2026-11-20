@@ -77,9 +77,12 @@ export function hasCliGoalHold(raw?: string | null): boolean {
   catch { return false; }
 }
 
+/** 有计划模式（`/plan`）的执行器类型：状态按类型分槽存（codex 走协作模式、claude 走权限模式）。 */
+export const PLAN_AGENTS = ["codex", "claude"] as const satisfies readonly AgentType[];
+
 export function cliCommandCatalog(agentType: string): Partial<Record<CliCommandName, string>> {
   if (agentType === "codex") return CODEX_COMMANDS;
-  if (agentType === "claude") return { goal: "持续目标：/goal 描述；pause / resume / clear；--scopes 查看作用域", compact: CODEX_COMMANDS.compact };
+  if (agentType === "claude") return { goal: "持续目标：/goal 描述；pause / resume / clear；--scopes 查看作用域", plan: CODEX_COMMANDS.plan, compact: CODEX_COMMANDS.compact };
   return {};
 }
 export function cliCommandsForMode<Entry extends { name: string; source: string }>(entries: Entry[] = [], agentType: string, mode: string): Entry[] {
@@ -103,6 +106,14 @@ export function isGoalRecovery(command: CliCommand | null): boolean {
 export function isPlanImplementation(command: CliCommand | null | undefined): boolean {
   return command?.name === "plan" && /^implement(?:\s+\S+)?$/.test(command.args);
 }
+/**
+ * claude 的裸 `/plan`、`/plan off`：只是计划模式的开关，Navi 当场改状态、**不起回合**（claude 没有可透传的
+ * `/plan`，计划回合靠 Navi 切权限参数）。凡是会起智能体进程的入口都要按它拦，别让开关落进普通执行。
+ */
+export function isPlanToggle(agentType: string, command: CliCommand | null | undefined): boolean {
+  return agentType === "claude" && command?.name === "plan" && (!command.args || command.args === "off");
+}
+export const PLAN_TOGGLE_NOT_A_RUN = "Claude 的 /plan、/plan off 只是计划模式开关，不起回合：要它出计划请写成 /plan 问题，或在任务对话框里直接发送 /plan";
 export function goalRequest(command: CliCommand, agentType: AgentType): { objective?: string; status?: CliGoal["status"]; tokenBudget?: number } {
   if (command.args === "resume") return { status: "active" };
   if (command.args === "pause") return { status: "paused" };

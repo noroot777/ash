@@ -27,7 +27,7 @@
 @import "./task-detail.css";
 @import "./task-conversation.css";
 @import "./question-card.css";
-@import "./dispatch-plan.css";
+@import "./dispatch-target.css";
 @import "./execution-trace.css";
 @import "./motion-text.css";
 @import "./navi-brand.css";
@@ -294,7 +294,9 @@ button {
   cursor: pointer;
 }
 
-/* 输入框随内容长高（components/AutoTextarea.tsx），不留原生拖拽角。 */
+/* 输入框随内容长高（components/AutoTextarea.tsx），不留原生拖拽角。
+   行高别超过 1.5：WebKit（mac 版、Safari）里 textarea 第二行起的光标从上一行字底画到本行字底，
+   高度恒等于行高；首行才是字高。行高拉开了，一换行光标就变得又长又往上顶。 */
 textarea {
   resize: none;
 }

@@ -93,6 +93,7 @@ export type {
   RemoteAccessView,
   RemoteDeviceVia,
   RemoteDeviceView,
+  ResourceRoots,
   UserHandoffTarget,
   UserRole,
   UserStatus,
@@ -292,6 +293,13 @@ export function canArchive(status: TaskStatus): boolean {
   return ARCHIVABLE_STATUSES.includes(status);
 }
 
+/** 「把任务改到独立工作区」的一次登记：起点（本地分支、远端分支、提交都行）和合入目标（null = 按起点定）。 */
+export interface WorktreeMoveRequest {
+  base: string;
+  mergeTargetBranch: string | null;
+  requestedAt: string;
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -320,8 +328,10 @@ export interface Task {
   // Per-task CLI overrides. null/omitted follows the resolved executor profile.
   model?: string | null;
   reasoningEffort?: string | null;
-  codexPlanMode?: boolean;
-  codexPlanScopes?: { executorId: string | null; executorLabel: string; isTaskOwner: boolean }[];
+  // 开着计划模式（`/plan`）的作用域：按执行器类型 + profile + 发起人分，codex 与 claude 各自一槽。
+  // 读时从 cliState 现算，不落库；改名前叫 codexPlanMode / codexPlanScopes（只认 codex）。
+  planMode?: boolean;
+  planScopes?: { agentType: AgentType; executorId: string | null; executorLabel: string; isTaskOwner: boolean }[];
   // Read-only label for the selected/default executor profile.
   executorLabel?: string | null;
   // duet (讨论) mode config (§7):
@@ -342,7 +352,8 @@ export interface Task {
   liveSince?: string | null;
   archived?: boolean;
   archivedAt?: string | null;
-  // §4 per-task worktree opt-in; worktreeBase null means current HEAD.
+  // §4 per-task worktree opt-in; worktreeBase null means current HEAD. A remote branch
+  // (`origin/foo`) is fetched at creation and merges into local `foo` (created to track it if missing).
   // Existing worktrees are reused. Cleanup happens on accept, on archive (per the
   // `archiveClean` setting), on handoff, or when the user deletes the task —
   // never as a side effect of anything else; see server/src/workspace-cleanup.ts.
@@ -354,6 +365,9 @@ export interface Task {
   worktreeBaseBranch?: string | null;
   mergeTargetBranch?: string | null;
   baseTaskId?: string | null;
+  // 登记着、还没办的「改到独立工作区」（智能体用 move_to_worktree 提的，下一回合开头由 Navi 办；
+  // 办完或办不成都清掉）。见 server/src/task-worktree-move.ts。
+  worktreeMoveRequest?: WorktreeMoveRequest | null;
   acceptedSourceCommit?: string | null;
   // 统一验收冻结的合并快照。三项齐全时才能发起合并结果审查。
   acceptedTargetBranch?: string | null;
@@ -399,11 +413,9 @@ export interface Task {
   // 多问题列表；null/[] 沿用单问题 question + questionOptions。
   questionItems?: QuestionItem[] | null;
   questionHistory?: QuestionRecord[];
-  // 摆在回复框上等用户过目的派活单（shared/src/dispatch-plan.ts）。只在它绑的那一问还在时下发，否则 null。
-  dispatchPlan?: import("./dispatch-plan.ts").DispatchPlan | null;
   // 「派出去的活交给谁」：null = 同这里（这条任务自己的执行器）。
-  dispatchTarget?: import("./dispatch-plan.ts").DispatchRunTarget | null;
-  // 挂在回复框顶上、可以派出去的活（shared/src/dispatch-suggestion.ts）；没有 = []。
+  dispatchTarget?: import("./dispatch-target.ts").DispatchRunTarget | null;
+  // 挂在回复框顶上、等用户派出去的活（shared/src/dispatch-suggestion.ts）；wait 不是 none 的那几件是在等的那一批。没有 = []。
   dispatchSuggestions?: import("./dispatch-suggestion.ts").DispatchSuggestion[];
   // 智能体收回过的那几件和各自的原因（跟拿掉同一笔落库）；会话里收回的那一处据它写一句。没有 = []。
   dispatchWithdrawals?: import("./dispatch-suggestion.ts").WithdrawnSuggestion[];

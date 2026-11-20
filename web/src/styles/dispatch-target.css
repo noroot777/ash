@@ -1,0 +1,14 @@
+/* 「派出去的活交给谁」：回复框胶囊点开智能体那一段，列表下面一行。 */
+.agent-model-picker-extra { border-top: 0.5px solid var(--line); padding: 6px 8px; }
+.dispatch-default-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--t-xs); }
+.dispatch-default-row > span { margin-right: 4px; color: var(--muted); white-space: nowrap; }
+.dispatch-default-same {
+  height: 24px; border: 0; border-radius: 999px; background: transparent; padding: 0 10px;
+  color: var(--muted); font: inherit; font-size: var(--t-xs); white-space: nowrap; box-shadow: inset 0 0 0 1px var(--line2);
+}
+.dispatch-default-same:hover:not(:disabled) { color: var(--ink); }
+.dispatch-default-same[aria-pressed="true"] { background: var(--overlay); color: var(--ink); font-weight: var(--w-medium); box-shadow: none; }
+.dispatch-default-row > .run-target-picker { max-width: 100%; }
+/* 底栏胶囊最后那一段：设成了非默认值才有，淡一档。 */
+.dispatch-default-seg { cursor: default; color: var(--muted); white-space: nowrap; }
+.dispatch-default-seg > code { font-size: var(--t-xs); color: var(--ink); }

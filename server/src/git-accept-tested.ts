@@ -13,8 +13,9 @@
 // 一个提交，返回却是合并成功），而且那是门禁命令之外的项目程序。改目标检出文件的那一步更进一步，在
 // 只含测过的检出语义的封好环境里做（git-accept-publish.ts）：仓库此刻配了什么过滤器都调不起来。门禁
 // 之前那道「工作区干净」也不跑 `git status`（它会按仓库配置调 clean 过滤器），见 guardedDirtyFiles。
-// 发布之后再核一遍后置条件：目标分支、HEAD 指着刚发布的结果、树是测过的那棵、检出里的字节是测过的
-// 那份；对不上就如实说，不替用户复位。
+// 发布之后再核一遍后置条件：项目目录还检出着目标分支（`git switch -c` 不拿索引锁，发布期间能把 HEAD 换成
+// 同一提交上的新分支）、目标分支和 HEAD 指着刚发布的结果、树是测过的那棵、检出里的字节是测过的那份；
+// 对不上就如实说，不替用户复位。
 //
 // 物理内容（第 5 轮复审 F2）：门禁起跑时把快照里被测的字节记成摘要（accept-gate-physical.ts）。发布前
 // 核目标检出里合并不重写的那些文件还是那份，发布后核整棵树。
@@ -28,6 +29,7 @@ import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { registeredCheckout } from "./git-worktree-state.js";
 import { whileBranchClaimed } from "./git-accept-temp.js";
+import { checkoutLeft } from "./git-accept-checkout.js";
 import { withTemporaryCleanupOutcome, type TaskMergeResult } from "./git-accept.js";
 
 /** 验收移动目标分支时写进 reflog 的说明开头（后面接来源分支）。没有读取方，只给人翻 reflog 时看。 */
@@ -64,6 +66,14 @@ async function untestedCheckout(cwd: string, guard: LandingGuard, names: Names):
   if (await checkoutMatches(cwd, cwd, physical, guard.target, guard.tree, false).catch(() => false)) return null;
   return refusal(names, `目标分支 ${names.targetBranch} 的检出里有这次合并不会重写的文件，在门禁测过之后变了（字节和测的时候不是同一份，`
     + "树和 `git status` 看不出来），合进去之后就不是测过的那份，所以这次没有合并，目标分支没动。重新验收会按现在的检出重新跑门禁。");
+}
+
+/** 发布之后：项目目录被切走了就如实说落到了哪一步（文件和索引是发布后的样子，HEAD 却不在目标分支上）。 */
+async function switchedDuring(cwd: string, names: Names, landed: string): Promise<TaskMergeResult | null> {
+  const left = await checkoutLeft(cwd, names.targetBranch);
+  if (!left) return null;
+  return refusal(names, `${landed}，但发布的同时项目目录 ${cwd} 被切到了${left}，那里的工作区和暂存区现在是发布后的样子，`
+    + "所以这次不算验收通过。Navi 没有替你复位，在项目目录里 `git status` 核对后处理，再重新验收。");
 }
 
 /** 发布之后（或者早已合入时）：检出里整棵树的字节是测过的那份。不是就如实说（不替用户复位）。 */
@@ -104,7 +114,7 @@ async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to:
     return refusal(names, `目标检出的换行 / 链接配置（core.autocrlf / core.eol / core.symlinks）和门禁测的时候不是同一份了，`
       + "照现在的配置写出来的文件就不是测过的那份，所以这次没有合并，目标分支没动。重新验收会按现在的配置重新跑门禁。");
   }
-  const moved = await sealedMove(cwd, settings, guard.target, to, guard.tree, publish)
+  const moved = await sealedMove(cwd, settings, names.targetBranch, guard.target, to, guard.tree, publish)
     .catch((error: unknown): SealedMove => ({ ok: false, stage: "blocked", message: gitError(error) }));
   if (moved.ok) return null;
   if (moved.stage === "locked") return refusal(names, `${moved.message}，目标分支和工作区都没动。处理完再重新验收。`);
@@ -203,6 +213,8 @@ export async function publishInCheckout(cwd: string, method: Published, guard: L
     }
   });
   if (failed) return failed;
+  const left = await switchedDuring(cwd, names, `目标分支 ${names.targetBranch} 已经快进到测过的结果 ${result.slice(0, 12)}`);
+  if (left) return left;
   const [now, ref, tree] = await Promise.all([rev(cwd, "HEAD"), rev(cwd, branch), rev(cwd, "HEAD^{tree}")]);
   if (now !== result || ref !== result || tree !== guard.tree) {
     return refusal(names, `快进之后目标分支 ${names.targetBranch} 不在刚发布的测过的结果 ${result.slice(0, 12)} 上`
@@ -247,6 +259,8 @@ export async function stageTestedTree(cwd: string, guard: LandingGuard, names: N
   if (untested) return untested;
   const failed = await sealedLanding(cwd, guard, names, guard.tree);
   if (failed) return failed;
+  const left = await switchedDuring(cwd, names, "测过的改动已经写进项目目录的工作区和暂存区（没有提交）");
+  if (left) return left;
   const staged = (await landingGit(cwd, ["write-tree"]).catch(() => null))?.stdout.trim() ?? null;
   if (staged !== guard.tree || await rev(cwd, "HEAD") !== guard.target) {
     return refusal(names, `工作区里暂存的（${staged?.slice(0, 12) ?? "读不到"}）不是验收前置命令测过的那一棵（${guard.tree.slice(0, 12)}）：`

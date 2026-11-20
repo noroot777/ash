@@ -364,7 +364,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
           options: event.questions.length === 1 ? event.questions[0]!.options : undefined,
           items: event.questions.length > 1 ? event.questions : undefined,
           currentTurn: { token: taskRow.activeTurnToken, directionToken: taskRow.activeDirectionToken },
-        })) throw new Error("Codex 的澄清问题未能保存，请重试当前回合");
+        })) throw new Error("执行器的澄清问题未能保存，请重试当前回合");
         continue;
       }
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物

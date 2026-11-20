@@ -1,5 +1,5 @@
 import type { AgentType } from "@navi/shared";
-import { isGoalExecution, isPlanImplementation, validateCliCommand } from "@navi/shared/cli-commands";
+import { isGoalExecution, isPlanImplementation, isPlanToggle, validateCliCommand } from "@navi/shared/cli-commands";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { ownerIdOf, actorOf } from "./auth/context.js";
@@ -7,14 +7,14 @@ import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { claimOwnTurn, nativeCommandRun, releaseTurn, stopTask, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline, alertLine, noticeLine } from "./task-timeline.js";
-import { preflightCliGoalCommand, readCliState, renameCliTask, resolvedCliState, saveCliState } from "./task-cli-state.js";
+import { preflightCliGoalCommand, readCliState, renameCliTask, resolvedCliState, saveCliState, setCliPlanMode } from "./task-cli-state.js";
 import { formatClaudeGoal } from "./executors/claude-goal.js";
 import type { TaskReplyBody } from "./task-reply.js";
 import { enqueueMessage, flushPendingWhenTurnIdle } from "./pending-messages.js";
 import { cliGoalScopeLabel, cliGoalScopeSelector, cliGoalScopes, formatCliGoalScopes, runnableCliGoalScope, selectCliGoalScope } from "./task-cli-goal-scopes.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { advanceQueueFromTask } from "./scheduler.js";
-import { assertCodexPlanReady } from "./task-plan.js";
+import { assertPlanReady } from "./task-plan.js";
 
 const LIVE_COMMANDS = new Set(["goal", "status", "usage", "mcp", "ps", "stop", "debug-config", "hooks", "apps", "plugins", "rename"]);
 
@@ -34,8 +34,14 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     if (running || deferred) throw new Error("请等计划回合结束后直接确认实施，不支持排队或定时确认");
     const state = await resolvedCliState(task, agentType, body.agent ? body.executorId ?? null : task.executorId, userId);
     if (!state.plan) throw new Error("当前作用域的计划模式已关闭，请重新确认计划");
-    await assertCodexPlanReady(task.id, state.profileId ?? null, userId, command.args.split(/\s+/)[1]);
+    await assertPlanReady(task.id, agentType, state.profileId ?? null, userId, command.args.split(/\s+/)[1]);
     return null;
+  }
+  if (isPlanToggle(agentType, command)) {
+    if (deferred) throw new Error("Claude 的 /plan 开关当场生效，不支持稍后发送，请直接发送");
+    const text = await setCliPlanMode(task, agentType, body.agent ? body.executorId ?? null : task.executorId, userId, command.args !== "off");
+    const recorded = await appendTaskTimeline(task.id, noticeLine({ kind: "command.output", command: command.text }, `${command.text}\n${text}`), { agentType });
+    return c.json({ started: false, command: true, text, recorded });
   }
   if (deferred && command.name === "goal" && (command.goalScope || command.args === "--scopes")) throw new Error("目标作用域查询与显式选择不支持稍后发送，请直接发送斜杠命令");
   if (command.name === "goal" && command.args === "--scopes") {

@@ -3,7 +3,8 @@
 // 测试的 node，server 是几行假服务），日常那一份 app 的数据与 :4317 一概不碰。
 //
 // 覆盖：下载事务；红绿灯下的页面；「端口上是谁」的判据（自己那份 / 别的 navi / 不是 navi）；空数据根
-// 不起服务、首启选了才起；起服务用自带 node、数据根/端口/窗口专用端口/本机自用开关传对（终端配置盖不掉）、不漏启动器自己的变量；
+// 不起服务、首启选了才起；起服务用自带 node、数据根/端口/窗口专用端口/app 标记/本机自用开关传对（终端配置盖不掉，
+// 「允许其他设备访问」打开时本机自用开关是 0）、不漏启动器自己的变量；
 // 别的 navi 或别的程序占着端口时不起、说清是谁；窗口只连专用端口、在线后服务换了人就撤下页面（导航与定时两道）；并发起服务只起一份；锁超时与重试；请求合并；
 // 进程起来就退时不干等；应答的 PID 对不上不算；启动器报错可见；运行时缺件；构建号严格递增；安装不换正被用着的旧包；导入旧数据（WAL 里
 // 没落盘的写入也带过来、在暂存里洗过再发布、和起服务同一把锁、只往空数据根里放、失败与抢跑不留
@@ -43,7 +44,7 @@ copyFileSync(join(root, "scripts/start-detached.mjs"), join(runtime, "scripts/st
 const build = spawnSync("swiftc", ["-swift-version", "5",
   ...["NaviConfig", "NaviHealth", "DataImport", "DatabaseBackup", "DownloadTransaction", "ServerControl", "ServerStartLock", "ServerLauncher",
     "WindowChrome", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "FirstRunView", "NaviPalette", "HostMcpSetup", "UpdateGate", "RestartImpact",
-    "LegacyIdentity", "LoginService"]
+    "LegacyIdentity", "LoginService", "DeepLink"]
     .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
   ...["main", "WindowChromeProbe", "InstanceGuardProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)),
   "-o", binary], { encoding: "utf8" });
@@ -60,7 +61,7 @@ async function freePort() {
 
 // app 的配置变量，两代名字都算。旧前缀取自旧名登记处：批量改名不会把这里的旧名也换掉。
 const OLD = LEGACY_ENV_PREFIXES[0];
-const APP_ENV = new RegExp(`^(?:(?:NAVI_|${OLD})(?:DATA_DIR|URL|LOCAL_ONLY|MAC_\\w+)|PORT)$`);
+const APP_ENV = new RegExp(`^(?:(?:NAVI_|${OLD})(?:DATA_DIR|URL|LOCAL_ONLY|DESKTOP_APP|WINDOW_PORT|MAC_\\w+)|PORT)$`);
 
 function launch(command, args, env = {}) {
   // 跑测试的这个进程自己带着的配置（两代名字都算：app 新旧都认）一概不往下传，只认这里给的。
@@ -96,14 +97,16 @@ const seen = join(temporary, "server-env.json");
 function serviceSource({ pidOffset = 0, exitAtOnce = false } = {}) {
   writeFileSync(join(runtime, "server/dist/index.js"), `const fs=require('node:fs');const http=require('node:http');const path=require('node:path');
 fs.appendFileSync(${JSON.stringify(marker)},process.pid+'\\n');
-const dataDir=process.env.ASH_DATA_DIR;
-fs.writeFileSync(${JSON.stringify(seen)},JSON.stringify({cwd:process.cwd(),dataDir,localOnly:process.env.ASH_LOCAL_ONLY??null,
-  port:process.env.PORT??null,windowPort:process.env.ASH_WINDOW_PORT??null,leaked:Object.keys(process.env).filter(k=>k.startsWith('NAVI_MAC_'))}));
+const dataDir=process.env.NAVI_DATA_DIR;
+fs.writeFileSync(${JSON.stringify(seen)},JSON.stringify({cwd:process.cwd(),dataDir,localOnly:process.env.NAVI_LOCAL_ONLY??null,
+  desktop:process.env.NAVI_DESKTOP_APP??null,port:process.env.PORT??null,windowPort:process.env.NAVI_WINDOW_PORT??null,
+  legacyDataDir:${JSON.stringify(LEGACY_ENV_PREFIXES)}.map(p=>process.env[p+'DATA_DIR']).filter(v=>v!==undefined),
+  leaked:Object.keys(process.env).filter(k=>k.startsWith('NAVI_MAC_'))}));
 ${exitAtOnce ? "process.exit(1);" : ""}
 fs.writeFileSync(path.join(dataDir,'navi.db'),'');
 http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');
 res.end(JSON.stringify({ok:true,pid:process.pid+${pidOffset},instance:{id:'svc-'+process.pid,dataDir,codeDir:path.resolve(__dirname,'../..'),
-  localOnly:process.env.ASH_LOCAL_ONLY==='1',windowPort:Number(process.env.ASH_WINDOW_PORT)}}));})
+  localOnly:process.env.NAVI_LOCAL_ONLY==='1',desktop:process.env.NAVI_DESKTOP_APP==='1',windowPort:Number(process.env.NAVI_WINDOW_PORT)}}));})
 .listen(Number(process.env.PORT),'127.0.0.1');`);
 }
 
@@ -213,6 +216,11 @@ try {
   assert.deepEqual(readdirSync(journal), [], "an entry unreachable for a month is given up");
   console.log("PASS: reclaim spares live downloads, collects killed ones, ignores malformed entries, expires unreachable ones");
 
+  result = await launch(binary, ["deeplink", "-NaviAllowOtherDevices", "NO"], env).done;
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.output, /DEEPLINK OK/);
+  console.log("PASS: navi:// links parse only known shapes; the window opens them only for our own instance, others go to the http fallback; a service not started per the menu setting is reported as pending");
+
   // 探针窗口摆在屏幕外、不激活应用；页面是内联的，不碰任何服务。
   result = await launch(binary, ["chrome"], env).done;
   assert.equal(result.status, 0, result.output);
@@ -243,13 +251,20 @@ try {
     assert.equal(await probe(200, { ok: true, pid: 1 }), "FOREIGN", "a navi that does not say where its data lives is not ours");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: join(temporary, "elsewhere"), codeDir: "/repo/" } }),
       "FOREIGN", "another data root is another navi");
-    const ours = { id: "inst-1", dataDir: `${dataAlias}/`, codeDir: `${runtimeAlias}/`, localOnly: true, windowPort };
+    const ours = { id: "inst-1", dataDir: `${dataAlias}/`, codeDir: `${runtimeAlias}/`, localOnly: true, desktop: true, windowPort };
     assert.equal(await probe(200, { ok: true, pid: 1, instance: ours }), "READY",
-      "same data root and same bundled code by realpath, local-only");
+      "same data root and same bundled code by realpath, started by the app");
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, localOnly: false } }), "READY",
+      "the app's service with other devices allowed is still ours");
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, desktop: false } }), "FOREIGN",
+      "the bundled code not marked as the app's service was not started by the app");
+    const older = { ...ours, desktop: undefined };
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: older }), "READY",
+      "an older service that predates the desktop flag counts as ours when it runs local-only (the app only ever started it so)");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, codeDir: "/repo/" } }), "FOREIGN",
       "a checkout serving the app's data root is not the app's service");
-    assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, localOnly: false } }), "FOREIGN",
-      "the bundled code without local-only mode was not started by the app");
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...older, localOnly: false } }), "FOREIGN",
+      "an older service without local-only mode was not started by the app");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: ours.dataDir, codeDir: ours.codeDir } }), "FOREIGN",
       "a navi that does not report its mode is not ours");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, id: undefined } }), "FOREIGN",
@@ -260,7 +275,7 @@ try {
       "a dedicated port other than the one the app derives is not this app's");
 
     // 仓库里的服务指着 app 的数据根：一样不连，说清哪一样对不上。
-    healthBody = JSON.stringify({ ok: true, pid: 4343, instance: { ...ours, codeDir: "/Users/someone/code/navi/", localOnly: false } });
+    healthBody = JSON.stringify({ ok: true, pid: 4343, instance: { ...ours, codeDir: "/Users/someone/code/navi/", localOnly: false, desktop: false } });
     result = await launch(binary, ["start", "2"], env).done;
     assert.equal(result.status, 2, result.output);
     assert.match(result.output, /用的是 app 的数据，跑的却不是 app 自带的代码/);
@@ -279,7 +294,7 @@ try {
     assert.equal(existsSync(marker), false, "an occupied port must not get a second service");
   });
   assert.equal(await probe(200, ""), "DOWN", "nobody listening");
-  console.log("PASS: own instance is recognised by data root + bundled code + local-only; another navi or a non-navi on the port is reported, never joined");
+  console.log("PASS: own instance is recognised by data root + bundled code + the app's mark; another navi or a non-navi on the port is reported, never joined");
 
   // ── 窗口在线之后服务换了人（scripts/macos-client-guard.mjs）──
   await testInstanceGuard({ binary, env, port, windowPort, data, runtime, children, until });
@@ -294,7 +309,10 @@ try {
   // 终端配置里给开发实例 export 过数据根、端口、模式，还有 `alias cd=…`：起服务照样用 app 定下的那几样。
   const shellHome = join(temporary, "shell-home");
   mkdirSync(shellHome);
-  const rc = `export ASH_DATA_DIR=${join(temporary, "dev-data")} PORT=1 ASH_LOCAL_ONLY=0 ASH_WINDOW_PORT=1\nalias cd=false\n`;
+  // 两代名字都 export 一遍：新名要被 app 的字面量盖掉，旧名的数据根要被清掉（server 见到两代数据根指向不同会拒绝起）。
+  const devData = join(temporary, "dev-data");
+  const rc = `export NAVI_DATA_DIR=${devData} ${OLD}DATA_DIR=${devData} PORT=1 NAVI_LOCAL_ONLY=0 ${OLD}LOCAL_ONLY=1`
+    + ` NAVI_DESKTOP_APP=0 NAVI_WINDOW_PORT=1 ${OLD}WINDOW_PORT=1\nalias cd=false\n`;
   for (const name of [".zprofile", ".zshrc", ".bash_profile", ".bashrc"]) writeFileSync(join(shellHome, name), rc);
   const shellEnv = { ...env, HOME: shellHome };
   const first = launch(binary, ["start-fresh", "8"], shellEnv);
@@ -307,7 +325,9 @@ try {
   assert.equal(serverPids.size, 1, "concurrent GUI/headless launch starts one service");
   const serverEnv = JSON.parse(readFileSync(seen, "utf8"));
   assert.equal(serverEnv.dataDir, data, "data root is handed to the server, whatever the shell rc exported");
-  assert.equal(serverEnv.localOnly, "1", "the app always starts the local-only mode");
+  assert.equal(serverEnv.localOnly, "1", "by default the app starts the local-only mode");
+  assert.equal(serverEnv.desktop, "1", "the server is told it is the app's service");
+  assert.deepEqual(serverEnv.legacyDataDir, [], "legacy data-root names from the rc are cleared");
   assert.equal(serverEnv.port, String(port));
   assert.equal(serverEnv.windowPort, String(windowPort), "the window's dedicated port is handed to the server");
   assert.equal(existsSync(join(temporary, "dev-data")), false, "the dev data root from the rc is never touched");
@@ -318,7 +338,14 @@ try {
   collectServers();
   assert.equal(serverPids.size, 1);
   await stopServers();
-  console.log("PASS: empty data root waits for first run; one detached service with data root, port, local-only flag fixed at exec and clean env");
+  // 「允许其他设备访问」打开（UserDefaults；这里走参数域，不往用户的 defaults 里写）：本机自用开关写明 0。
+  result = await launch(binary, ["start", "8", "-NaviAllowOtherDevices", "YES"], shellEnv).done;
+  assert.equal(result.status, 0, result.output);
+  const openEnv = JSON.parse(readFileSync(seen, "utf8"));
+  assert.equal(openEnv.localOnly, "0", "other devices allowed: not local-only, and the rc's legacy 1 cannot win");
+  assert.equal(openEnv.desktop, "1");
+  await stopServers();
+  console.log("PASS: empty data root waits for first run; one detached service with data root, port, app mark and local-only flag fixed at exec and clean env");
 
   // ── 锁超时与重试（数据根里已经有库了）──
   const lockFile = join(data, ".mac-launch.lock");

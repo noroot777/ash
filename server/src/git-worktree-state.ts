@@ -1,4 +1,4 @@
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { lstatSync, realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { execFileText as exec } from "./exec.js";
@@ -48,6 +48,13 @@ export function physicalPath(path: string): string {
 
 export function samePath(a: string, b: string): boolean {
   return physicalPath(a) === physicalPath(b);
+}
+
+/** `path` 就是 `root`，或者在它底下（都按真实路径比）。 */
+export function insidePath(path: string, root: string): boolean {
+  const child = physicalPath(path);
+  const parent = physicalPath(root);
+  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 
 function missing(path: string): boolean {

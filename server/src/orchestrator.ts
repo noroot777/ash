@@ -24,6 +24,7 @@ import { retireHistoricalReview } from "./review-retirement.js";
 import { consumeSingleRun } from "./single-run.js";
 import { pickTurnSession } from "./turn-session-pick.js";
 import { pickTurnWorkspace } from "./turn-workspace-pick.js";
+import { clearWorkspaceNote } from "./task-worktree-move.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
@@ -41,7 +42,7 @@ import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { reseedHistory } from "./history-reseed.js";
-import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
+import { clearOnAcceptance, NO_ONE_SHOT_NOTICES, oneShotNotices } from "./undelivered-replies.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
@@ -50,6 +51,7 @@ import { freeReviewReminder } from "./free-workflow.js";
 import { NO_REMINDER, assembleTurnPrompt } from "./turn-prompt.js";
 import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { resolvePlanTurn } from "./plan-turn.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
@@ -269,7 +271,8 @@ export async function continueTask(
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
     const preserveCliState = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
     const resetPlan = !!opts.system && !preserveCliState;
-    const planning = !resetPlan && !goalExecution && !inputExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
+    const planInput = await resolvePlanTurn(taskId, agent, slash, userText, profileId, runOwner ?? null);
+    const planning = !resetPlan && !goalExecution && !inputExecution && !sideTurn && (planInput.question || readCliState(task.cliState, agent, profileId, runOwner).plan === true);
     if (planning) {
       sideTurn = true;
       if (sessionRole === "single") reclaimTurn(taskId, turn, "side");
@@ -295,8 +298,8 @@ export async function continueTask(
     // invitee sees prior output), else materialize the task workdir.
     const recorded = opts.cwd || prev?.cwd || prev?.worktreePath || all[0]?.cwd || all[0]?.worktreePath || "";
     // 目录没了怎么办、还在又要刷什么,都在 turn-workspace-pick.ts。
-    const { cwd, workspaceReset, freshWorkspace, baseFallback: resolvedFallback } = await pickTurnWorkspace({
-      task, project, recorded, resuming,
+    const { cwd, workspaceReset, freshWorkspace, baseFallback: resolvedFallback, workspaceMoved } = await pickTurnWorkspace({
+      task, project, recorded, resuming, sessionRole,
     });
     baseFallback = resolvedFallback;
     // 执行回合开跑，被裁定闸按住的旧预约触发作废（旁路回合不改代码不算；理由见 forgetHeldTrigger ①）。
@@ -328,7 +331,7 @@ export async function continueTask(
     // (系统续跑、队列推进的回合同样会漏交卷)。详见 turn-output.ts。
     await recordTurnStart(taskId, cwd);
     const invited = !prev; // first time this agent is pulled into the task
-    const userTurnText = userText + attachmentsPrompt(opts.attachments);
+    const userTurnText = planInput.text + attachmentsPrompt(opts.attachments);
     const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText, userId: runOwner });
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
     // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
@@ -355,10 +358,10 @@ export async function continueTask(
     // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
     // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
     const peerNotice = opts.withholdPeerNotice ? "" : peerNoticeFor({ taskId, self: agent, all, prev });
-    // 「你被搬过机器了」——接力导入时挂在 handoff 标记上的一次性前言（不占 resume_prompt
-    // 那一列，理由见 handoff-notice.ts）。只投给任务自己的正式回合：审查/验证/就地旁路
-    // 回合吃掉它，任务本人就再也收不到了。
-    const handoffNotice = sideTurn || verifying ? "" : handoffNoticeFrom(task.handoff);
+    // 一次性前言：「你被搬过机器了」和「没叫醒你时替你办完的事」（undelivered-replies.ts）。
+    // 只投给任务自己的正式回合：审查/验证/就地旁路回合吃掉它，任务本人就再也收不到了。
+    const notices = sideTurn || verifying ? NO_ONE_SHOT_NOTICES : oneShotNotices(task);
+    clearOnAcceptance(notices, inputSettlement);
     // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
     const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
     // 原生命令必须**独占整条 prompt**:前面垫一个字它就退化成普通模型请求,压缩不会
@@ -370,20 +373,21 @@ export async function continueTask(
     const history = reseed ? await reseedHistory(taskId, prev!.id, task.body) : "";
     const prompt = nativeCommand
       ? promptedUserTurnText
-      : planning ? PLANNING_TURN(craft, history + promptedUserTurnText)
+      : planning ? PLANNING_TURN(craft, history + promptedUserTurnText, agent)
       : assembleTurnPrompt({
         invite: invited ? COLLAB_INVITE : "",
         brief: invitedTaskBrief(task.body, invited, verifying),
-        handoffNotice,
+        handoffNotice: notices.handoff,
+        carried: notices.carried,
         peerNotice,
         craft,
         history,
         userText: promptedUserTurnText,
-        workspaceReset: workspaceReset ? WORKSPACE_RESET(cwd) : "",
+        workspaceReset: (workspaceReset ? WORKSPACE_RESET(cwd) : "") + workspaceMoved,
         completion: (followUpFrom
           ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
           : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow))
-          + (superseded ? questionSupersededNote(superseded.question!) : ""),
+          + (superseded ? questionSupersededNote(superseded) : ""),
         backgroundWait: backgroundWaitFor(agent),
         direction: DIRECTION_PROTOCOL(directionToken),
         reviewReminder,
@@ -443,7 +447,7 @@ export async function continueTask(
     }
     handle = run({
       prompt,
-      ...cli,
+      ...cli, planMode: planning,
       cwd,
       sessionId: cliResume || slash?.name === "fork" ? prev?.cliSessionId ?? undefined : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
@@ -459,7 +463,7 @@ export async function continueTask(
     inputSettlement.handOver(handle);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
     // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
-
+    if (workspaceMoved) void clearWorkspaceNote(taskId, workspaceMoved).catch((error) => console.error(`[navi] 划掉换目录提示失败 ${taskId}:`, error));
     // Reuse the agent's session row when resuming; otherwise open a fresh line,
     // inheriting the task's worktree/branch from its first session.
     let cliSessionId = cliResume ? prev!.cliSessionId! : handle.sessionId;
@@ -548,7 +552,6 @@ export async function continueTask(
     };
     if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner, sessId);
     else await persistRunner(db);
-    if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
     await openTurn({
       sessionId: sessId, taskId, cwd, startedAt: turnStart,

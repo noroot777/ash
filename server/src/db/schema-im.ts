@@ -97,6 +97,11 @@ export const imOutbox = sqliteTable("im_outbox", {
    * done / skipped / failed 是结果。
    */
   patchState: text("patch_state"),
+  /**
+   * 换了链接策略后重写过内容、飞书上那张可能还带着旧链接（im/relink.ts）：值是要改成的策略。改卡送到了才清掉；
+   * 额度挡住只往后挪、不记成 skipped，改卡放弃了下次起通道重新排上。
+   */
+  linkDue: text("link_due"),
   resolution: text("resolution"),
   attempts: integer("attempts").notNull().default(0),
   lastError: text("last_error"),
@@ -224,7 +229,7 @@ export async function ensureImSchema(client: Client): Promise<void> {
       task_id TEXT, kind TEXT NOT NULL, subject TEXT NOT NULL,
       reply_to TEXT, reply_in_thread INTEGER NOT NULL DEFAULT 0,
       msg_type TEXT NOT NULL, content TEXT NOT NULL, render_key TEXT, scope TEXT, brief TEXT, state TEXT NOT NULL, message_id TEXT,
-      patch_state TEXT, resolution TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_at TEXT,
+      patch_state TEXT, link_due TEXT, resolution TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_at TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sent_at TEXT, resolved_at TEXT
     );
     DROP INDEX IF EXISTS im_outbox_subject;
@@ -264,6 +269,7 @@ export async function ensureImSchema(client: Client): Promise<void> {
     ["im_outbox", "render_key", "ALTER TABLE im_outbox ADD COLUMN render_key TEXT"],
     ["im_outbox", "scope", "ALTER TABLE im_outbox ADD COLUMN scope TEXT"],
     ["im_outbox", "brief", "ALTER TABLE im_outbox ADD COLUMN brief TEXT"],
+    ["im_outbox", "link_due", "ALTER TABLE im_outbox ADD COLUMN link_due TEXT"],
     ["im_actions", "audit", "ALTER TABLE im_actions ADD COLUMN audit TEXT"],
     ["im_actions", "claimed_by", "ALTER TABLE im_actions ADD COLUMN claimed_by TEXT"],
     ["im_inbound", "payload", "ALTER TABLE im_inbound ADD COLUMN payload TEXT"],

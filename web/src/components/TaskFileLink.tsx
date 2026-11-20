@@ -10,6 +10,7 @@ import {
 import { FileText, Folder } from "@phosphor-icons/react";
 import { locateTaskFile, useTaskFileTarget, type TaskFileTarget } from "../lib/taskFileLocate.ts";
 import { codeFilePath, linkFilePath } from "./fileLinkTarget.ts";
+import { fileLinkAnchor } from "./markdownAnchors.ts";
 import { isDocumentRelative, isLocalOpenHref, openLocalPath } from "./markdownPolicy.ts";
 
 // 正文里提到的文件点一下就在中间栏摊开——跟「生成物」「文件」两格同一个出口。
@@ -26,14 +27,15 @@ type FileLinks = {
    * ——那些链接不归这里管，只认绝对路径。
    */
   baseDir: string | null;
-  open: (target: TaskFileTarget) => void;
+  /** `anchor`：链接指着那份文件里的哪一节（`plan.md#实现方案`），打开后滚到那里。 */
+  open: (target: TaskFileTarget, anchor?: string | null) => void;
 };
 
 const FileLinksContext = createContext<FileLinks | null>(null);
 
 export function TaskFileLinks({ taskId, onOpenFile, onOpenFolder, onOpenError, children }: {
   taskId: string;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, anchor?: string | null) => void;
   onOpenFolder: (path: string) => void;
   /** 工作区外的本机文件交给本机程序打开，没打开时说一句。 */
   onOpenError: (message: string) => void;
@@ -46,7 +48,7 @@ export function TaskFileLinks({ taskId, onOpenFile, onOpenFolder, onOpenError, c
   const value = useMemo((): FileLinks => ({
     taskId,
     baseDir: "",
-    open: (target) => {
+    open: (target, anchor) => {
       // 工作区外的（成片常落在 `~/Movies`、素材库）中间栏摊不开，交给本机的播放器 / 访达
       if (target.local) {
         void openLocalPath(target.path).catch((reason: unknown) => {
@@ -54,7 +56,8 @@ export function TaskFileLinks({ taskId, onOpenFile, onOpenFolder, onOpenError, c
         });
         return;
       }
-      (target.kind === "dir" ? latest.current.onOpenFolder : latest.current.onOpenFile)(target.path);
+      if (target.kind === "dir") latest.current.onOpenFolder(target.path);
+      else latest.current.onOpenFile(target.path, anchor);
     },
   }), [taskId]);
   return <FileLinksContext.Provider value={value}>{children}</FileLinksContext.Provider>;
@@ -134,7 +137,7 @@ export function useTaskFileHref(href: string | undefined) {
     open: async () => {
       const found = target ?? await locateTaskFile(links.taskId, path);
       if (!found) return false;
-      links.open(found);
+      links.open(found, fileLinkAnchor(href));
       return true;
     },
   };

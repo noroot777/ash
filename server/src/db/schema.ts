@@ -216,6 +216,10 @@ export const tasks = sqliteTable("tasks", {
   worktreeBaseBranch: text("worktree_base_branch"),
   mergeTargetBranch: text("merge_target_branch"),
   baseTaskId: text("base_task_id"),
+  // 「改到独立工作区」：登记着还没办的那一次（json shared WorktreeMoveRequest），和下一回合开头要
+  // 告诉智能体的那句「工作目录换了 / 没换成」。两列的读写都在 task-worktree-move.ts。
+  worktreeMoveRequest: text("worktree_move_request"),
+  workspaceNote: text("workspace_note"),
   acceptedSourceCommit: text("accepted_source_commit"),
   /**
    * **这一次验收**拿什么当凭据放的行:`passed` / `skipped` / `unset`(语义见
@@ -247,13 +251,13 @@ export const tasks = sqliteTable("tasks", {
   // 派它的那条任务：普通任务里（智能体经 MCP、或用户从回复框）派出去的独立任务。只管「收在谁名下」，
   // 不是 parentId —— 那一列是团队执行者，带着共用目录、跟团队一起验收的整套语义（见 task-dispatch.ts）。
   dispatchedBy: text("dispatched_by"),
-  // 摆在回复框上等用户过目的派活单（JSON，shared/src/dispatch-plan.ts）。跟 question 同一笔写下，
-  // 只在 question 还是它绑的那一问时算数，所以清提问的各处不必另清它。
+  // 只读不写的老列：派活单合并进 dispatch_suggestions 之前摆的那一张（JSON）。仍跟 question 对得上时，读那一列的
+  // 那一处把它并进来（server/src/dispatch-suggestion.ts `readSuggestions`），任何一次写回都清掉它。
   dispatchPlan: text("dispatch_plan"),
   // 「派出去的活交给谁」（JSON 的 DispatchRunTarget）；NULL = 同这里。
   dispatchTarget: text("dispatch_target"),
-  // 挂在回复框顶上、可以派出去的活（JSON 的 DispatchSuggestion[]，server/src/dispatch-suggestion.ts）。
-  // 不占提问那一格，跟 question / dispatchPlan 互不相干。NULL = 一件都没有。
+  // 挂在回复框顶上、等用户派出去的活（JSON 的 StoredSuggestion[]，shared/src/dispatch-suggestion.ts）。要等用户的
+  // 那一批记着它绑的那一问，question 换了就不算数。NULL = 一件都没有。
   dispatchSuggestions: text("dispatch_suggestions"),
   // 智能体收回过的那几件和原因（JSON 的 WithdrawnSuggestion[]）。跟从上一列拿掉那一件**同一条更新**写：
   // 建议不见了，原因就一定在。NULL = 没收回过。

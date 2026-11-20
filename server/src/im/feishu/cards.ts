@@ -3,10 +3,12 @@
 // 只用到实测过的几样：标题栏、div 纯文本、按钮（回调 / 打开链接 / 原生二次确认）、
 // 表单（输入框 + 提交按钮）、整行可点的交互容器（打开链接，/tasks 的任务行）。所有来自任务的文字一律 plain_text —— 智能体写的 markdown
 // 在卡片里不渲染，换来的是谁也没法借一段任务正文往卡片里塞链接、@ 全员或者伪造按钮。
-// 深链也只做成按钮（open_url），不出现在正文里。
+// 深链也只做成按钮（open_url），不出现在正文里；mac 版给桌面端另带一条 navi://（pc_url，见 ../app-link.ts）。
 //
 // `config.update_multi`：同一张卡在所有人眼里是同一份，改卡（回调回卡、PATCH）对大家都生效 ——
 // 群卡片上一个人点了「放行」，其他人看到的也随之变成「已放行」。
+
+import { desktopAppLink } from "../app-link.js";
 
 export type CardTone = "orange" | "red" | "purple" | "blue" | "green" | "grey" | "turquoise" | "wathet";
 
@@ -62,6 +64,38 @@ export interface CardModel {
 }
 
 const plain = (content: string) => ({ tag: "plain_text", content });
+
+function openUrl(url: string): Record<string, string> {
+  const pc = desktopAppLink(url);
+  return { type: "open_url", default_url: url, ...(pc ? { pc_url: pc } : {}) };
+}
+
+/**
+ * 存着的卡片 JSON 里每一个打开链接的动作按现在的链接策略重出（按钮、整行可点的项都在这里出）：
+ * 只认 `default_url`，`pc_url` 一律照它重算 —— 缺来源的旧格式、换了策略的都换掉。没有要换的原样返回同一个字符串。
+ */
+export function relinkCard(content: string): string {
+  let card: unknown;
+  try {
+    card = JSON.parse(content);
+  } catch {
+    return content;
+  }
+  let changed = false;
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (!node || typeof node !== "object") return node;
+    const record = node as Record<string, unknown>;
+    if (record.type === "open_url" && typeof record.default_url === "string") {
+      const next = openUrl(record.default_url);
+      if (JSON.stringify(next) !== JSON.stringify(record)) changed = true;
+      return next;
+    }
+    return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, walk(value)]));
+  };
+  const next = walk(card);
+  return changed ? JSON.stringify(next) : content;
+}
 const INPUT_MAX = 1000;
 
 function renderButton(button: CardButton, inForm: boolean): Record<string, unknown> {
@@ -69,7 +103,7 @@ function renderButton(button: CardButton, inForm: boolean): Record<string, unkno
   const out: Record<string, unknown> = { tag: "button", text: plain(button.text), type, width: "default" };
   if (button.name) out.name = button.name;
   if (inForm) out.form_action_type = "submit";
-  if (button.url) out.behaviors = [{ type: "open_url", default_url: button.url }];
+  if (button.url) out.behaviors = [openUrl(button.url)];
   else if (button.value) out.behaviors = [{ type: "callback", value: button.value }];
   if (button.confirm) out.confirm = { title: plain(button.confirm.title), text: plain(button.confirm.text) };
   return out;
@@ -100,7 +134,7 @@ function renderLink(item: CardLink): Record<string, unknown>[] {
     has_border: true,
     border_color: "grey",
     corner_radius: "6px",
-    behaviors: [{ type: "open_url", default_url: item.url }],
+    behaviors: [openUrl(item.url)],
     elements,
   }];
 }

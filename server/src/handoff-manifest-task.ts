@@ -25,7 +25,7 @@ export async function manifestTask(task: typeof tasks.$inferSelect): Promise<Han
     waitOrigins: await exportWaitOrigins(task),
     questionOptions: task.questionOptions, questionItems: task.questionItems,
     questionHistory: task.questionHistory,
-    ...exportSuggestions(task),
+    ...await exportSuggestions(task),
     acceptedTargetBranch: task.acceptedTargetBranch,
     acceptedBaseCommit: task.acceptedBaseCommit,
     acceptedMergeCommit: task.acceptedMergeCommit,

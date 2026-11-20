@@ -18,6 +18,40 @@ interface ChangeData {
 }
 
 /**
+ * 没有独立工作区的任务：本来就没有任务分支可比，改动直接落在项目目录里 —— 那就说那个目录此刻有几个
+ * 未提交的文件（同一个文件暂存了又改了只算一个）。目录里可能也有别人的改动，所以只报数，点进去看是哪些。
+ */
+function WorkspaceChangeSummary({ taskId, updatedAt, onOpen }: { taskId: string; updatedAt: string; onOpen: () => void }) {
+  const [count, setCount] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.taskScm(taskId).then(
+      ({ status }) => {
+        if (!alive) return;
+        const paths = new Set([...status.merge, ...status.staged, ...status.unstaged, ...status.untracked].map((change) => change.path));
+        setCount(paths.size);
+        setError(null);
+      },
+      (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
+    );
+    return () => { alive = false; };
+  }, [taskId, updatedAt]);
+  return (
+    <InspRow label="改动">
+      {error ? <span className="insp-bad insp-cut">读取失败：{error}</span>
+        : count === null ? <span className="insp-faint">汇总中…</span>
+        : (
+          <button type="button" className="insp-val" aria-label={`项目目录里 ${count} 个未提交的文件；去「改动」看`} onClick={onOpen}>
+            <span className={count ? "insp-num" : "insp-faint"}>{count ? `${count} 个未提交的文件` : "没有未提交的改动"}</span>
+            <CaretRight size={12} aria-hidden="true" />
+          </button>
+        )}
+    </InspRow>
+  );
+}
+
+/**
  * 「信息」格里的改动统计：压成一行「N 个文件 +a −d · k 个提交」，点它去「改动」那一格
  * （面板外单独渲染时退回打开改动工作区）。分支名不在这里写——下面「分支」那一行已经有了，
  * 同一屏不说两遍。是一组 dt/dd，放在 InspKv 里用。
@@ -39,7 +73,9 @@ export function TaskChangeSummary({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const ownBranch = !!sourceTask.useWorktree;
   useEffect(() => {
+    if (!ownBranch) return;
     let alive = true;
     setLoading(true);
     setError(null);
@@ -55,12 +91,13 @@ export function TaskChangeSummary({
       },
     ).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [sourceTask.id, sourceTask.updatedAt]);
+  }, [ownBranch, sourceTask.id, sourceTask.updatedAt]);
 
   const additions = data?.diff.files.reduce((sum, file) => sum + (file.additions ?? 0), 0) ?? 0;
   const deletions = data?.diff.files.reduce((sum, file) => sum + (file.deletions ?? 0), 0) ?? 0;
   const open = () => (nav ? nav.openTab("scm") : onOpenReview());
   const shared = sharedParent ? "这个执行者和团队共用工作区，改动按所属团队汇总" : null;
+  if (!ownBranch) return <WorkspaceChangeSummary taskId={sourceTask.id} updatedAt={sourceTask.updatedAt} onOpen={open} />;
 
   return (
     <>

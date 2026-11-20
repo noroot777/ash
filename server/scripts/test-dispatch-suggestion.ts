@@ -1,10 +1,11 @@
-// 可以派出去的活（src/dispatch-suggestion*.ts、MCP suggest_dispatch）：
+// 不等用户的那一档（MCP suggest_dispatch 缺省 wait = none，src/dispatch-suggestion*.ts；要等的两档在 test-dispatch-suggestion-wait.ts）：
 //   · 智能体在执行回合里挂出来：任务不停，照常结算成完成；刷新（重读任务、列表）后还在；页面拿不到回合令牌；
 //   · 只有这条任务自己的执行回合能挂：没在跑、方向身份过期、审查回合、被 `@` 来问一句的，一律拒；挂满了拒；
 //   · 「派出去」照那一行此刻的样子建：改过的标题和说明、换过的人、补的那句话（标明是用户补的）；挂在这条任务名下、
 //     来源记用户；那一件同一笔摘掉；这条任务的会话里不多一个回合、不多一条待发送；同一件再按一次不再建；
 //   · 好几件「一个接一个」：成一组、按顺序排进队列；叉掉一件就没了；
 //   · 用户还没处理的不随回合消失：之后又跑完几个执行回合，没重挂的那一件还在；同名的不挂第二件；
+//   · 同批前置不被去重、收回弄断：同名的那件有同一批的人等着就照挂；收回被等着的那件，等它的前置划掉；
 //   · 智能体收回：要写一句为什么，那一件从框顶拿掉、原因同一笔落库并随任务下发；收回再挂同名的一次就换了说明；
 //     要收回的已经不在了不算错；审查回合收不了；
 //   · 「建议不见了 ⇒ 原因读得到」不看会话：这条任务一条会话都没有时收回，原因照样在；写的权利没了（方向换了）
@@ -169,11 +170,12 @@ try {
   const listedThree = await shown(S);
   assert.deepEqual(listedThree.map((item) => [item.title, item.base, item.target?.agentType ?? null]),
     [["第一件", "trunk", null], ["第二件", "here", "gemini"], ["第三件", "trunk", null]]);
-  const full = await suggest(S, headers, Array.from({ length: 6 }, (_, index) => ({ ...RED, title: `多余 ${index}` })));
-  assert.equal(full.status, 200);
-  assert.equal((await suggest(S, headers, Array.from({ length: 4 }, (_, index) => ({ ...RED, title: `再多 ${index}` })))).status, 409, "一条任务上挂满了拒");
+  const full = await suggest(S, headers, Array.from({ length: 12 }, (_, index) => ({ ...RED, title: `多余 ${index}` })));
+  assert.equal(full.status, 200, JSON.stringify(full.body));
+  assert.equal((await suggest(S, headers, Array.from({ length: 13 }, (_, index) => ({ ...RED, title: `超一次 ${index}` })))).status, 400, "一次挂太多拒");
+  assert.equal((await suggest(S, headers, Array.from({ length: 10 }, (_, index) => ({ ...RED, title: `再多 ${index}` })))).status, 409, "一条任务上挂满了拒");
   const extras = (await shown(S)).filter((item) => item.title.startsWith("多余"));
-  for (const extra of extras) assert.equal((await send("DELETE", `/tasks/${S}/dispatch-suggestions/${extra.id}`)).status, 200);
+  for (const extra of extras) assert.equal((await send("DELETE", `/tasks/${S}/dispatch-suggestions/${extra.id}`)).body.closed, false);
   const serial = await send("POST", `/tasks/${S}/dispatch-suggestions/launch`, {
     order: "serial",
     items: [listedThree[1]!, listedThree[0]!].map((item) => ({ id: item.id, title: item.title, body: item.body, target: claude, worktreeBase: null })),
@@ -276,6 +278,34 @@ try {
   await db.update(tasks).set({ dispatchWithdrawals: sound }).where(eq(tasks.id, B));
   await endTurnDone(B);
   console.log("✓ 收回和原因同一笔：没有会话也读得到；写的权利没了两样都不落；记录只增不减，记不上就不收回");
+
+  // —— 同批前置不被去重、收回弄断：同名的那件有同一批的人等着就照挂；收回被等着的那件，等它的那条前置跟着划掉。
+  const PR = "ds-prereq";
+  await db.insert(tasks).values(row(PR, "backlog"));
+  const prHeaders = await inTurn(PR);
+  assert.equal((await suggest(PR, prHeaders, [{ title: "同名的那件", body: "先挂着的说明", note: "" }])).status, 200);
+  const pair = await suggest(PR, prHeaders, [
+    { key: "a", title: "同名的那件", body: "这一批的上游", note: "" },
+    { key: "b", title: "要等上游的", body: "下游", note: "", prerequisites: ["a"] },
+    { title: "同名的那件", body: "没人等的同名件", note: "" },
+  ]);
+  assert.equal(pair.status, 200, JSON.stringify(pair.body));
+  const hungPair = await shown(PR);
+  assert.deepEqual(hungPair.map((item) => [item.title, item.body]),
+    [["同名的那件", "先挂着的说明"], ["同名的那件", "这一批的上游"], ["要等上游的", "下游"]], "有人等着的同名件照挂，没人等的不挂第二件");
+  const [, upstream, downstream] = hungPair;
+  const pick = (item: typeof downstream) => ({ id: item!.id, title: item!.title, body: item!.body, target: claude, worktreeBase: null });
+  const alone = await send("POST", `/tasks/${PR}/dispatch-suggestions/launch`, { items: [pick(downstream)] });
+  assert.equal(alone.status, 409);
+  assert.match(String(alone.body.error), /要等同一批的「同名的那件」/, "前置认得出指的是同一批里那件，不是一个不存在的任务");
+  assert.equal((await suggest(PR, prHeaders, undefined, [{ id: upstream!.id, reason: "上游不做了" }])).status, 200);
+  const freed = (await shown(PR)).find((item) => item.id === downstream!.id)!;
+  assert.equal(freed.prerequisites, undefined, "收回了上游：下游那条前置划掉（同用户点叉）");
+  const freedLaunch = await send("POST", `/tasks/${PR}/dispatch-suggestions/launch`, { items: [pick(freed)] });
+  assert.equal(freedLaunch.status, 200, JSON.stringify(freedLaunch.body));
+  assert.equal((await kidsOf(PR)).at(-1)?.title, "要等上游的", "照样派得出去");
+  await endTurnDone(PR);
+  console.log("✓ 同批前置：有人等着的同名件照挂；收回被等着的那件，等它的那条前置划掉、照样派得出去");
 
   // —— 端到端复现：挂建议 → 同一回合提问停下 → 用户答题 → 续跑回合（假 CLI 真跑）结束 → 那一件还在、照样派得出去。
   headers = await inTurn(S);

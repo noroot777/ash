@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { AppSettings } from "@navi/shared";
 import { DEFAULT_APP_SETTINGS } from "@navi/shared";
 import type { ComposerSendKey } from "@navi/shared";
-import { useIsInstanceAdmin, useIsLocalOnly, useIsMultiUser } from "../auth/authContext.ts";
+import { useIsInstanceAdmin, useIsLocalOnly, useIsMultiUser, useIsSingleOnly } from "../auth/authContext.ts";
 import { api } from "../lib/api.ts";
 import { ColorThemeCard } from "./ColorThemeCard.tsx";
 import { ComposerSendKeyCard } from "./ComposerSendKeyCard.tsx";
@@ -23,6 +23,7 @@ export function DefaultsSettings({ notify, onOpen }: {
   // (§八)。这里只负责别把改不动的东西显示成能改 —— 真正的闸在服务端。
   const isMulti = useIsMultiUser();
   const localOnly = useIsLocalOnly();
+  const singleOnly = useIsSingleOnly();
   const isInstanceAdmin = useIsInstanceAdmin();
   const canManageInstance = !isMulti || isInstanceAdmin;
 
@@ -95,9 +96,9 @@ export function DefaultsSettings({ notify, onOpen }: {
         notify={notify}
       />
       {/* 访问密钥是自用模式才有的东西：多人模式下每个人凭自己的 key 进；本机自用模式下
-          别的设备连不进来，这两张卡（远程访问、转多人）都没有可做的事。 */}
+          别的设备连不进来，远程访问没有可做的事。Navi.app 起的服务模式固定自用，没有转多人。 */}
       {!isMulti && !localOnly && <RemoteAccessCard notify={notify} />}
-      {canManageInstance && !localOnly && (
+      {canManageInstance && !singleOnly && (
         <InstanceModeCard
           settings={settings}
           loading={loading}
