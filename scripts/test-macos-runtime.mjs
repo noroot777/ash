@@ -15,6 +15,7 @@ import { runTestProcess } from "./test-process.mjs";
 import { spawnTestFixture } from "./test-process-scope.mjs";
 import { withTestResources } from "./test-process-resources.mjs";
 import { isPidAlive, sleep } from "./platform.mjs";
+import { queryImpact, noVerdictReason } from "./server-control.mjs";
 
 if (process.platform !== "darwin") {
   console.log("SKIP: macOS immutable runtime regression");
@@ -254,6 +255,31 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     const codexTask = await launchTask("codex-continuous", "codex");
     await waitFor(async () => (await request("/restart-impact")).body.runtimeHandoff.blocked.length === 0,
       "Claude and Codex both advertise real handoff capability");
+    const originalExecutor = dbRead("select executor from sessions where id=?", codexTask.sessionId).executor;
+    dbWrite("insert into agents(id,name,type,model,reasoning_effort) values(?,?,?,?,?)",
+      "invalid-runtime-profile", "invalid-runtime-profile", "codex", "gpt-5", "unsupported-fixture-effort");
+    dbWrite("update sessions set executor=? where id=?", "invalid-runtime-profile", codexTask.sessionId);
+    try {
+      const invalid = await request("/restart-impact");
+      assert.equal(invalid.status, 200, JSON.stringify(invalid.body));
+      assert.ok(invalid.body.survives.some((task) => task.id === codexTask.id));
+      assert.ok(invalid.body.runtimeHandoff.blocked.some((task) => task.id === codexTask.id
+        && /无法确认接管能力.*unsupported-fixture-effort/.test(task.reason)));
+      assert.ok(invalid.body.runtimeHandoff.sessions.includes("s-continuous"), "other tasks retain their own capability");
+      const cliImpact = await queryImpact(Number(new URL(base).port), join(data, "navi.db.navi.lock"));
+      assert.equal(noVerdictReason(cliImpact), null);
+      assert.ok(cliImpact.mcpDisrupted.some((task) => task.id === codexTask.id), "CLI restart retains the MCP-disruption warning");
+      const current = await health();
+      const credentials = JSON.parse(readFileSync(join(data, "navi.db.navi.lock"), "utf8"));
+      const rejected = await request("/runtime-handoff", "POST", { protocol: 1, schema }, {
+        "x-navi-host-token": credentials.token, "x-navi-instance": current.instance.id });
+      assert.equal(rejected.status, 409);
+      assert.match(rejected.body.error, /unsupported-fixture-effort/);
+      assert.equal((await health()).pid, server.pid);
+    } finally {
+      dbWrite("update sessions set executor=? where id=?", originalExecutor, codexTask.sessionId);
+      dbWrite("delete from agents where id=?", "invalid-runtime-profile");
+    }
     const codexErrorFile = dbRead("select agent_err_path from sessions where id=?", codexTask.sessionId).agent_err_path;
     dbWrite("update sessions set agent_err_path=null where id=?", codexTask.sessionId);
     const unavailable = (await request("/restart-impact")).body.runtimeHandoff.blocked;
