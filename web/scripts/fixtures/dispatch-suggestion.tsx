@@ -2,7 +2,7 @@
 // 派出去、叉掉都打到接口上，由测试那一侧接住记账。读全文的左抽屉照任务页挂一个宿主。
 // 有一份带着等裁定的驳回（框顶那一行让给裁定），一份分支已经清掉，一份上线前的老派活单，一份一件建议都没有（只看斜杠）；
 // 两份是智能体停下来在等的一批（任务暂停、那一问是清单那句话）：一份带同批前置、还压着一条驳回，一份照一个接一个会互相等住。
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { FreeReviewDispute, FreeReviewRun, Task } from "@navi/shared";
 import type { DispatchSuggestion } from "@navi/shared/dispatch-suggestion";
@@ -42,11 +42,16 @@ const disputed = [{
   createdAt: "2026-11-17T00:30:00.000Z", updatedAt: "2026-11-17T01:00:00.000Z", finishedAt: "2026-11-17T00:50:00.000Z",
 }] as unknown as FreeReviewRun[];
 
-function Stage({ name, suggestions = [], reviews: initial = [], task: patch = {} }: {
+function Stage({ name, suggestions = [], reviews: initial = [], task: patch = {}, arrive }: {
   name: string; suggestions?: DispatchSuggestion[]; reviews?: FreeReviewRun[]; task?: Partial<Task>;
+  /** 测试那一侧调 `window.__arrive_<name>(true)` 时任务换成这个样子（智能体摆出一批），`(false)` 换回来（那一批收了尾）。 */
+  arrive?: { suggestions: DispatchSuggestion[]; task: Partial<Task> };
 }) {
+  const [arrived, setArrived] = useState(false);
+  useEffect(() => { (window as unknown as Record<string, unknown>)[`__arrive_${name}`] = setArrived; }, [name]);
+  const now = arrived && arrive ? arrive : { suggestions, task: patch };
   // id 前 8 个字就是它的 worktree 分支名（navi/<前 8 个字>），测试那一侧按它给分支列表。
-  const task = { ...baseTask, ...patch, id: `t-${name}`, dispatchSuggestions: suggestions } as Task;
+  const task = { ...baseTask, ...now.task, id: `t-${name}`, dispatchSuggestions: now.suggestions } as Task;
   const [reviews, setReviews] = useState(initial);
   const override = useDisputeRulingDock({
     task, reviews, known: true, onChanged: (state) => setReviews(state.reviews), notify: (message) => log(`__notices_${name}`, message),
@@ -93,6 +98,11 @@ createRoot(document.getElementById("root")!).render(
           item("s-w1", "先拆出公共的那一块", { batch: "b-wait", wait: "done", key: "a" }),
           item("s-w2", "再接上新的入口", { batch: "b-wait", wait: "done", key: "b", prerequisites: ["a"] }),
         ]} />
+        {/* 先叫着人（还没发），智能体才摆出一批等着的：那一批占住这一格，叫着的人先搁着、收了尾再回来。 */}
+        <Stage name="arrive" arrive={{
+          task: { status: "paused", question: "派出这 1 个任务（同时）：…" } as Partial<Task>,
+          suggestions: [item("s-arrive", "后到的那一件", { batch: "b-arrive", wait: "continue" })],
+        }} />
         {/* 等着、要结果的一批：一个接一个排时第一件等着第二件，服务端会拒。 */}
         <Stage name="deadlock" task={{ status: "paused", question: "派出这 2 个任务（一个接一个）：…" } as Partial<Task>} suggestions={[
           item("s-d1", "等着后面那一件的", { batch: "b-lock", order: "serial", wait: "continue", key: "a", prerequisites: ["b"] }),

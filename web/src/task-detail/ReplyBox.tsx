@@ -120,19 +120,6 @@ export function ReplyBox({
   const dispatchable = !!onDispatch;
   const ability = { dispatchable, discussable: !!onDiscuss };
   const calling = useReplyCall({ ownAgent: standing.config.agentType, ability, profiles });
-  const call = calling.call;
-  const target = call?.target ?? null;
-  const dispatching = call?.verb === "dispatch";
-  const baseContext = useDispatchBaseContext(task.projectId, dispatching);
-  const baseOptions = dispatchBaseChoices(task, baseContext.value);
-  // 候选还在读时不判失效：那会儿远端那组本来就不在。
-  const dispatchBase = baseContext.status === "ready" ? resolveDispatchBase(baseOptions, call?.base) : { option: baseOptions[0] ?? null, stale: null };
-  const worktreeBase = dispatchBase.option?.worktreeBase ?? null;
-  const baseStaleHold = dispatching && dispatchBase.stale ? `远端已经没有 ${dispatchBase.stale} 了，重选新任务从哪开工` : null;
-  // 谁来审：照胶囊此刻画着的那一位派（按下那一刻就定，不等派出途中缓存再变）；清单没读到时只有「不审查」派得出去。
-  const reviewerList = useReviewerList(dispatching);
-  const dispatchReview = concreteReviewChoice(call?.review ?? "default", reviewerList.reviewers);
-  const dispatchReviewHold = dispatching ? reviewHold(call?.review ?? "default", reviewerList) : null;
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -153,11 +140,26 @@ export function ReplyBox({
     attachments: uploads.attachments.map((attachment) => attachment.path), uploading: uploads.uploading,
     snapshotSent, dispatchTarget: dispatchDefault.value, tasks, onAnswer, focus: () => textareaRef.current?.focus(),
   });
-  // 框顶任何时候只有一行：叫着人时是做法那一行；智能体在等的那一批排在裁定前面（任务就停在它上面）；
-  // 否则有驳回在等裁定是裁定那一行，都没有才是可以派出去的活（让开不是丢掉，前面的事了了它再回来）。
+  // 智能体在等的那一批一到，这一格就归它（显示、输入、发送一起）：叫着的人连同做法先搁着——框顶、胶囊、发送都不认它，
+  // 那一批处理完（派完、叉完、发回去）原样回来，框里写的字一直是同一份草稿。
+  const callSuspended = suggestion.holdsQuestion && !!suggestion.override;
+  const call = callSuspended ? null : calling.call;
+  const target = call?.target ?? null;
+  const dispatching = call?.verb === "dispatch";
+  const baseContext = useDispatchBaseContext(task.projectId, dispatching);
+  const baseOptions = dispatchBaseChoices(task, baseContext.value);
+  // 候选还在读时不判失效：那会儿远端那组本来就不在。
+  const dispatchBase = baseContext.status === "ready" ? resolveDispatchBase(baseOptions, call?.base) : { option: baseOptions[0] ?? null, stale: null };
+  const worktreeBase = dispatchBase.option?.worktreeBase ?? null;
+  const baseStaleHold = dispatching && dispatchBase.stale ? `远端已经没有 ${dispatchBase.stale} 了，重选新任务从哪开工` : null;
+  // 谁来审：照胶囊此刻画着的那一位派（按下那一刻就定，不等派出途中缓存再变）；清单没读到时只有「不审查」派得出去。
+  const reviewerList = useReviewerList(dispatching);
+  const dispatchReview = concreteReviewChoice(call?.review ?? "default", reviewerList.reviewers);
+  const dispatchReviewHold = dispatching ? reviewHold(call?.review ?? "default", reviewerList) : null;
+  // 框顶任何时候只有一行：智能体在等的那一批排在最前面（任务就停在它上面，叫着的人见上面 callSuspended）；
+  // 其次叫着人时是做法那一行；否则有驳回在等裁定是裁定那一行，都没有才是可以派出去的活（让开不是丢掉，前面的事了了它再回来）。
   const callDock = !!call && (ability.dispatchable || ability.discussable);
-  const activeOverride = callDock ? undefined
-    : suggestion.holdsQuestion && suggestion.override ? suggestion.override : override ?? suggestion.override;
+  const activeOverride = callDock ? undefined : callSuspended ? suggestion.override : override ?? suggestion.override;
   // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
   const { take, takeInput } = overrideTake(activeOverride);
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送

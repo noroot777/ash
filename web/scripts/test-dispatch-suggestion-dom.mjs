@@ -14,6 +14,8 @@
 // ⑧ 指定的审查者这里认不出（接力过来的）：胶囊写明找不到哪一位、派不出去且说清原因，不读成「不审查」；
 // ⑨ 智能体停下来等的一批（原派活单）：就画在这一行里、排在裁定前面、不另挂答题卡；「N 件等你派出」缺省摊开，
 //    同批前置写成「等 1」；没选中时框就是「发回去改」——回车把这句话作为那一问的答复交出去，一条不派；选中一件照样补一句；
+// ⑪ 先叫着人（问一句 / 讨论 / 派出去都一样）还没发，等着的一批才到：那一批占住这一格（框顶、框、发送键都归它），
+//    叫着的人搁着不显示；那一批收了尾，叫着的人和做法原样回来；
 // ⑩ 等着的一批照一个接一个会互相等住：服务端拒了，原因原样写在那一行下面，那几件都还在；
 // ⑤ `/派` 在句中：从菜单里选中只拿掉命令（两边空格并成一个）、光标留在原处、叫上次那个人停在「派出去」；
 //    `/讨论` 句中也出；a/b、web/、http:// 不弹；输入法组字时不弹；句中敲全了 `/派` 没从菜单选、直接发 = 原样发出去。
@@ -279,6 +281,30 @@ try {
   await waitUntil(async () => (await box("wait").inputValue()) === "", "发出去框清空");
   assert.equal(launches("t-wait").length, 0, "发回去改一条不派");
   assert.deepEqual(await logged("__sent_wait"), [], "不是普通消息");
+
+  // ⑪ 先叫着人，等着的一批后到：这一格归那一批，叫着的人先搁着，收了尾再回来。
+  await box("arrive").fill("先写的 @co");
+  await scope("arrive").getByRole("option", { name: /@codex/ }).click();
+  const callRow = scope("arrive").getByRole("group", { name: "叫 codex 来做什么" });
+  await callRow.waitFor();
+  await callRow.getByRole("button", { name: "派出去", exact: true }).click();
+  await page.evaluate(() => window.__arrive_arrive(true));
+  await scope("arrive").getByRole("group", { name: "等你派出的活" }).waitFor();
+  assert.equal(await callRow.count(), 0, "叫人那一行让给等着的一批");
+  assert.equal(await button("arrive", "不叫 codex 了").count(), 0, "叫着的人整个搁着");
+  assert.equal(await scope("arrive").locator(".question-card").count(), 0);
+  assert.equal(await box("arrive").getAttribute("aria-label"), "发回去改", "框归那一批");
+  assert.equal(await box("arrive").inputValue(), "先写的 ", "框里还是同一份草稿");
+  await box("arrive").fill("换个人做");
+  await box("arrive").press("Enter");
+  await waitUntil(async () => (await logged("__answered_arrive")).length === 1, "发回去改交给那一问");
+  assert.equal((await logged("__answered_arrive"))[0].answer, "换个人做");
+  assert.equal(launches("t-arrive").length, 0, "没有借着叫着的人派出去");
+  assert.deepEqual(await logged("__created_arrive"), [], "也没走回复框里的派出去");
+  await page.evaluate(() => window.__arrive_arrive(false));
+  await callRow.waitFor();
+  assert.equal(await callRow.getByRole("button", { name: "派出去", exact: true }).getAttribute("aria-pressed"), "true", "收了尾，叫着的人和做法原样回来");
+  await button("arrive", "不叫 codex 了").click();
 
   // ⑩ 一个接一个会互相等住：服务端拒了，原因原样写出来，那几件都还在。
   const lock = scope("deadlock").getByRole("group", { name: "等你派出的活" });
