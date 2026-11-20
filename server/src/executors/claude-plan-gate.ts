@@ -35,8 +35,6 @@ const ASKED = "问题已转交给用户。不要再调用任何工具，结束�
 const NO_PLAN = "没有找到计划正文。先把完整计划写进计划文件，再调用 ExitPlanMode。";
 const WRITE_FAILED = "最近一次写计划文件失败了，计划文件里不是你最新的计划。先把完整计划成功写进计划文件，再调用 ExitPlanMode。";
 const WRITE_PENDING = "计划文件最近一次修改还没完成。等它完成后再调用 ExitPlanMode。";
-/** 交计划被拒时回给 CLI 的那几句：重放里认得出「当年没交成」。 */
-const REFUSALS = [NO_PLAN, WRITE_FAILED, WRITE_PENDING];
 const READ_ONLY_DENIAL = (tool: string) => `计划模式只读：本回合不能执行 ${tool}。需要的话把这一步写进计划，用户确认实施后再做。`;
 
 // 额外参数里能把权限模式改掉的那几个：跟计划参数同传时 CLI 认后来的（实测 `--dangerously-skip-permissions`
@@ -127,34 +125,25 @@ function questionsOf(input: any): QuestionItem[] {
 
 /** 一次对文件的修改（Write / Edit / MultiEdit）。`seq` 是它在会话历史里出现的先后，状态只认工具回执。 */
 interface Mutation { seq: number; path: string; state: "pending" | "ok" | "failed" }
-/** 一次交出的计划：卡片 id、在历史里的位置、对应的计划文件（null = 交的是模型说的话）、正文。 */
-interface Submission { id: string; seq: number; path: string | null; text: string }
-type Verdict = "none" | "pending" | "failed" | "ok";
 
 /**
- * 计划卡能不能实施，是**从会话历史推出来的**，不是一路改出来的标志：历史里记着每次文件修改（何时
- * 开始、回执成败）与每次交计划（在哪个位置交的），任何一条新输入进来都从头判一遍，再把「会话记录
- * 里这张卡此刻的样子」和判出来的样子比，差在哪就发哪条事件。于是不中断直播、从任意位置接管重放、
- * 修改并发/乱序，得到的都是同一个结果。判据只有一个 `settle()`：
- *   · 相关修改里还有没回执的 → 不可交 / 不可实施；最后发起的那次失败了 → 同上（模型的最新意图没落盘）；
- *   · 都结清且最后那次成功，正文还得非空，才可交 / 可实施。
- * 交计划时按整段历史判；交出之后按「交计划那个位置之后」的修改判：一有修改开始，卡就退回草稿（同 id
- * 追加一条 streaming，卡片与实施预检都只认最新一条 complete）；结清且可交时按盘上正文出一张新卡。
- * CLI 会把盘上的旧正文自己补进 ExitPlanMode 的 `input.plan`（2.1.283 实测），所以入参有正文不等于能交。
- * 哪个文件是计划文件以 CLI 在 ExitPlanMode 里报的 `planFilePath` 为准，没报（老版本）才用目录判。
+ * 计划卡是**交计划那一刻的快照**：ExitPlanMode 到达时判一次能不能交、交哪份正文，出一张卡，此后
+ * 这张卡不再变。用户批准的就是卡上这份原文，「实施此计划」时服务端从会话记录里取出它交给模型
+ * （task-plan.ts `assertPlanReady` → plan-turn.ts），所以交出之后计划文件怎么改都不影响实施内容；
+ * 模型要改计划只能再交一次，出一张新卡（实施只认最新那张）。不追交出之后的修改——那等于持续证明一个
+ * Navi 管不着的文件没变，乱序、并发、接管重放、停机期间改盘，每一种都是新的对不上的窗口。
  *
- * 接管重放不读盘：重放的是当年的历史，盘上此刻的正文是后来的事（服务停着时 CLI 可能接着改了）。
- * 当年发过哪些卡、正文是什么，以会话记录里真落下的计划事件为准（`beginReplay`）；重放完把判出来的
- * 结果跟记录里最新那张卡对账（`endReplay`），差在哪就补哪条事件。
+ * 交的那一刻按会话历史判（`settle`）：改到计划文件的修改里还有没回执的、或最后发起的那次失败了，
+ * 不收（模型的最新意图没落盘）；都结清且最后那次成功，正文还得非空才收。CLI 会把盘上的旧正文自己
+ * 补进 ExitPlanMode 的 `input.plan`（2.1.283 实测），所以入参有正文不等于能交。哪个文件是计划文件
+ * 以 CLI 在 ExitPlanMode 里报的 `planFilePath` 为准，没报（老版本）才用目录判。
+ *
+ * 接管重放只记账（文件修改的先后与回执，供之后直播里的交计划判），不回 CLI、不出卡：当年出的卡已经
+ * 在会话记录里了。
  */
 export class ClaudePlanGate {
   private seq = 0;
   private readonly mutations = new Map<string, Mutation>();
-  /** ExitPlanMode 的 tool_use_id → 它在历史里的位置、报的计划文件、CLI 补进来的正文。 */
-  private readonly exits = new Map<string, { seq: number; path: string | null; text: string }>();
-  private readonly submissions: Submission[] = [];
-  /** 会话记录里最新那张卡此刻的样子（直播发出去的，或重放里当年已发出去的）。 */
-  private shown: { id: string; live: boolean } | undefined;
   /**
    * 没有计划文件时的兜底正文：最后一次工具调用之后模型说的话。工具调用前那几句是「我先看看 X」
    * 这类过程叙述，计划本身写在交计划之前那一段里。
@@ -163,11 +152,8 @@ export class ClaudePlanGate {
   private readonly realPlansDir: string | null;
   /** init 报的权限模式不对：进程正在被停掉，这期间到达的请求一律拒。 */
   private halted = false;
-  /** 接管重放中：会话记录里当年发出过的卡（id → 合并后的正文与是否完整）；null = 记录读不到，只能读盘。 */
-  private replay: { cards: Map<string, { text: string; live: boolean }> | null; last?: { id: string; live: boolean } } | null = null;
 
-  /** `recorded`：接管时这一回合会话记录里已落下的计划事件（按先后）；新起跑不给，接管时读不到也不给。 */
-  constructor(private readonly plansDir: string, private readonly write: ControlLine, private readonly recorded?: readonly AgentEvent[]) {
+  constructor(private readonly plansDir: string, private readonly write: ControlLine) {
     this.realPlansDir = realPath(resolve(plansDir));
   }
 
@@ -186,170 +172,69 @@ export class ClaudePlanGate {
     return within(resolve(this.plansDir), target) && !!this.realPlansDir && !!real && within(this.realPlansDir, real);
   }
 
-  /** 这处修改改的是不是这份计划的文件（CLI 报了路径就按路径，否则按目录）。 */
-  private touches(planPath: string | null, path: string): boolean {
-    return planPath ? path === planPath : this.isPlanFile(path);
-  }
-
-  /** 历史里 `since` 之后、改到这份计划文件的修改结清了没有。 */
-  private settle(planPath: string | null, since: number): { verdict: Verdict; last?: Mutation & { id: string } } {
-    const changes = [...this.mutations].filter(([, m]) => m.seq > since && this.touches(planPath, m.path));
-    if (!changes.length) return { verdict: "none" };
-    const [id, last] = changes.reduce((a, b) => b[1].seq > a[1].seq ? b : a);
-    const verdict = changes.some(([, m]) => m.state === "pending") ? "pending" : last.state === "failed" ? "failed" : "ok";
-    return { verdict, last: { ...last, id } };
-  }
-
-  /** 接管重放开始。 */
-  beginReplay(): void {
-    const recorded = this.recorded;
-    if (!recorded) { this.replay = { cards: null }; return; }
-    const cards = new Map<string, { text: string; live: boolean }>();
-    let last: { id: string; live: boolean } | undefined;
-    for (const event of recorded) {
-      if (event.kind !== "plan") continue;
-      const text = event.delta ? (cards.get(event.id)?.text ?? "") + event.text : event.text;
-      const live = event.status === "complete" && !!text.trim();
-      cards.set(event.id, { text, live });
-      last = { id: event.id, live };
-    }
-    this.replay = { cards, last };
-  }
-
-  /**
-   * 接管重放结束：把「会话记录里最新那张卡的样子」当成已发出的状态，跟重放判出来的结果对账，返回要
-   * 补发的事件。重放读坏了（`failed`）就证明不了那张完整卡还有效，退回草稿。
-   */
-  endReplay(failed: boolean): AgentEvent[] {
-    const replay = this.replay;
-    if (!replay) return [];
-    if (replay.cards) this.shown = replay.last;
-    if (failed) {
-      this.replay = null;
-      if (!this.shown?.live) return [];
-      this.shown = { id: this.shown.id, live: false };
-      return [{ kind: "plan", id: this.shown.id, text: "", status: "streaming", delta: true }];
-    }
-    const events = this.reduce();
-    this.replay = null;
-    return events;
-  }
-
-  /** 这张卡的正文：重放时取会话记录里当年那份（记录读不到才读盘），直播时读盘上此刻的。 */
-  private textOf(id: string, path: string | null): string {
-    const cards = this.replay?.cards;
-    if (cards) return cards.get(id)?.text.trim() ?? "";
-    return path ? readText(path) : "";
-  }
-
-  /** 交计划这一刻能交哪份正文；不能交时给出原因。`given` 是 CLI 随 ExitPlanMode 带来的正文。 */
-  private current(planPath: string | null, given: unknown): { text: string; path: string | null } | { refuse: string } {
-    const { verdict, last } = this.settle(planPath, -1);
-    if (verdict === "pending") return { refuse: WRITE_PENDING };
-    if (verdict === "failed") return { refuse: WRITE_FAILED };
+  /** 这一刻能交哪份正文；不能交时给出原因。`given` 是 CLI 随 ExitPlanMode 带来的正文。 */
+  private current(planPath: string | null, given: unknown): { text: string } | { refuse: string } {
+    const changes = [...this.mutations].filter(([, m]) => planPath ? m.path === planPath : this.isPlanFile(m.path));
+    const last = changes.length ? changes.reduce((a, b) => b[1].seq > a[1].seq ? b : a)[1] : undefined;
+    if (changes.some(([, m]) => m.state === "pending")) return { refuse: WRITE_PENDING };
+    if (last?.state === "failed") return { refuse: WRITE_FAILED };
     const file = planPath ?? last?.path ?? null;
     const text = (typeof given === "string" ? given.trim() : "") || (file ? readText(file) : "") || (last ? "" : this.spoken.trim());
-    return text ? { text, path: file } : { refuse: NO_PLAN };
+    return text ? { text } : { refuse: NO_PLAN };
   }
 
-  /** 从历史判出最新那张卡此刻该是什么样，跟会话记录里的样子比，返回补齐差距要发的事件。 */
-  private reduce(): AgentEvent[] {
-    const latest = this.submissions.at(-1);
-    if (!latest) return [];
-    const { verdict, last } = this.settle(latest.path, latest.seq);
-    if (verdict === "ok" && last) {
-      const path = latest.path ?? last.path;
-      const text = this.textOf(`plan:${last.id}`, path);
-      // 交出之后改成了：按正文重新交一份，它之后的修改再从它算起。
-      if (text) this.submissions.push({ id: `plan:${last.id}`, seq: ++this.seq, path, text });
-    }
-    const current = this.submissions.at(-1)!;
-    const live = this.settle(current.path, current.seq).verdict === "none";
-    if (this.shown?.id === current.id && this.shown.live === live) return [];
-    const was = this.shown;
-    this.shown = { id: current.id, live };
-    if (live) return [{ kind: "plan", id: current.id, text: current.text, status: "complete" }];
-    // 退回草稿：同 id 追加一条 streaming，正文不动。记录里没有这张完整卡就不用退。
-    return was?.id === current.id && was.live ? [{ kind: "plan", id: current.id, text: "", status: "streaming", delta: true }] : [];
-  }
-
-  /** 任一智能体（主 / 子）的一次工具调用：文件修改与交计划记进历史。 */
-  noteToolUse(block: any): AgentEvent[] {
+  /** 任一智能体（主 / 子）的一次工具调用：改文件的记进历史。 */
+  noteToolUse(block: any): void {
     const id = block?.id;
-    if (typeof id !== "string") return [];
-    if (block.name === "ExitPlanMode" && !this.exits.has(id)) {
-      this.exits.set(id, { seq: ++this.seq, path: absolutePath(block.input?.planFilePath), text: typeof block.input?.plan === "string" ? block.input.plan.trim() : "" });
-    }
-    const path = PLAN_FILE_TOOLS.has(block.name) ? absolutePath(block.input?.file_path) : null;
-    if (!path || this.mutations.has(id)) return [];
-    this.mutations.set(id, { seq: ++this.seq, path, state: "pending" });
-    return this.reduce();
+    const path = typeof id === "string" && PLAN_FILE_TOOLS.has(block.name) ? absolutePath(block.input?.file_path) : null;
+    if (path && !this.mutations.has(id)) this.mutations.set(id, { seq: ++this.seq, path, state: "pending" });
   }
 
   /** 主智能体的每条 assistant 消息（重放时也要喂：接管回来照样认得出计划文件和兜底正文）。 */
-  noteAssistant(content: unknown): AgentEvent[] {
-    const events: AgentEvent[] = [];
+  noteAssistant(content: unknown): void {
     for (const block of Array.isArray(content) ? content as any[] : []) {
       if (block?.type === "text" && typeof block.text === "string") this.spoken += block.text;
       if (block?.type !== "tool_use") continue;
-      events.push(...this.noteToolUse(block));
+      this.noteToolUse(block);
       if (!PLAN_HANDOFF_TOOLS.has(block.name)) this.spoken = "";
     }
-    return events;
   }
 
   /** 任一智能体的工具回执（同样要在重放时喂）。 */
-  noteToolResult(block: any): AgentEvent[] {
-    const id = block?.tool_use_id;
-    if (typeof id !== "string") return [];
-    const exit = this.exits.get(id);
-    if (exit) {
-      // 交没交成以 CLI 收到的那句回执为准：跟权限请求那一刻判的不一致（重放时盘上正文变了）就按它改历史。
-      const said = resultText(block.content);
-      const at = this.submissions.findIndex((entry) => entry.id === `plan:${id}`);
-      const text = this.replay?.cards ? this.textOf(`plan:${id}`, exit.path) : exit.text || this.textOf(`plan:${id}`, exit.path);
-      if (said.includes(SUBMITTED) && at < 0 && text) this.submissions.push({ id: `plan:${id}`, seq: exit.seq, path: exit.path, text });
-      if (REFUSALS.some((refusal) => said.includes(refusal)) && at >= 0) this.submissions.splice(at, 1);
-      this.submissions.sort((a, b) => a.seq - b.seq);
-    }
-    const mutation = this.mutations.get(id);
+  noteToolResult(block: any): void {
+    const mutation = typeof block?.tool_use_id === "string" ? this.mutations.get(block.tool_use_id) : undefined;
     if (mutation?.state === "pending") mutation.state = block.is_error === true ? "failed" : "ok";
-    return exit || mutation ? this.reduce() : [];
   }
 
   /**
    * 回一条 control_request；返回要推进事件流的事件（计划、澄清问题）。接管重放（`replaying`）时那条请求
-   * 当年已经回过：照样走一遍判定，把交计划记进历史，只是不再回 CLI。
+   * 当年已经回过、卡也出过了：只记账，不回 CLI、不出事件。
    */
   request(ev: any, replaying = false): AgentEvent[] {
     const requestId = ev?.request_id;
     if (typeof requestId !== "string") return [];
     const request = ev.request ?? {};
-    const reply = (line: string) => { if (!replaying) this.write(line); };
-    if (request.subtype !== "can_use_tool") {
-      reply(failure(requestId, `Navi 不处理 ${String(request.subtype)} 控制请求`));
-      return [];
-    }
     const tool = String(request.tool_name ?? "");
     const input = request.input ?? {};
-    const allow = () => reply(response(requestId, { behavior: "allow", updatedInput: input }));
-    const deny = (message: string) => reply(response(requestId, { behavior: "deny", message }));
+    const planFileWrite = request.subtype === "can_use_tool" && PLAN_FILE_TOOLS.has(tool) && this.isPlanFile(input.file_path);
+    if (replaying) {
+      if (tool === "ExitPlanMode") this.spoken = "";
+      if (planFileWrite) this.noteToolUse({ id: request.tool_use_id, name: tool, input });
+      return [];
+    }
+    if (request.subtype !== "can_use_tool") {
+      this.write(failure(requestId, `Navi 不处理 ${String(request.subtype)} 控制请求`));
+      return [];
+    }
+    const allow = () => this.write(response(requestId, { behavior: "allow", updatedInput: input }));
+    const deny = (message: string) => this.write(response(requestId, { behavior: "deny", message }));
     if (this.halted) { deny("计划模式没有生效，本回合已停止。"); return []; }
     if (tool === "ExitPlanMode") {
-      const toolUseId = String(request.tool_use_id ?? requestId);
-      const id = `plan:${toolUseId}`;
-      const cards = this.replay?.cards;
-      // 重放里交没交成、交的是哪份正文，以会话记录为准（判定当年做过了，盘上此刻的正文不算数）。
-      const plan = cards ? (cards.has(id) ? { text: cards.get(id)!.text, path: absolutePath(input.planFilePath) } : { refuse: "" })
-        : this.current(absolutePath(input.planFilePath), input.plan);
+      const plan = this.current(absolutePath(input.planFilePath), input.plan);
       if ("refuse" in plan) { deny(plan.refuse); return []; }
       deny(SUBMITTED);
       this.spoken = "";
-      if (!this.submissions.some((entry) => entry.id === id)) {
-        this.submissions.push({ id, seq: this.exits.get(toolUseId)?.seq ?? ++this.seq, path: plan.path, text: plan.text });
-        this.submissions.sort((a, b) => a.seq - b.seq);
-      }
-      return this.reduce();
+      return [{ kind: "plan", id: `plan:${String(request.tool_use_id ?? requestId)}`, text: plan.text, status: "complete" }];
     }
     if (tool === "AskUserQuestion") {
       const questions = questionsOf(input);
@@ -357,10 +242,10 @@ export class ClaudePlanGate {
       deny(ASKED);
       return [{ kind: "userInput", questions }];
     }
-    if (PLAN_FILE_TOOLS.has(tool) && this.isPlanFile(input.file_path)) {
-      const events = this.noteToolUse({ id: request.tool_use_id, name: tool, input });
+    if (planFileWrite) {
+      this.noteToolUse({ id: request.tool_use_id, name: tool, input });
       allow();
-      return events;
+      return [];
     }
     if (READ_ONLY.has(tool)) { allow(); return []; }
     deny(READ_ONLY_DENIAL(tool));
@@ -377,6 +262,3 @@ function readText(path: string): string {
     return "";
   }
 }
-
-const resultText = (content: unknown): string => typeof content === "string" ? content
-  : Array.isArray(content) ? content.map((part: any) => typeof part?.text === "string" ? part.text : "").join("") : "";

@@ -50,7 +50,7 @@ import { freeReviewReminder } from "./free-workflow.js";
 import { NO_REMINDER, assembleTurnPrompt } from "./turn-prompt.js";
 import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
-import { planTurnInput } from "./plan-turn.js";
+import { resolvePlanTurn } from "./plan-turn.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
@@ -270,7 +270,7 @@ export async function continueTask(
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
     const preserveCliState = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
     const resetPlan = !!opts.system && !preserveCliState;
-    const planInput = planTurnInput(agent, slash, userText);
+    const planInput = await resolvePlanTurn(taskId, agent, slash, userText, profileId, runOwner ?? null);
     const planning = !resetPlan && !goalExecution && !inputExecution && !sideTurn && (planInput.question || readCliState(task.cliState, agent, profileId, runOwner).plan === true);
     if (planning) {
       sideTurn = true;

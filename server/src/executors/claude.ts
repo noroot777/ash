@@ -299,7 +299,7 @@ export class ClaudeExecutor implements AgentExecutor {
     );
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; cwd?: string; images?: MarkdownImageAccounting; consumed?: ConsumedOutput; compact?: CompactSnapshot | null; planEvents?: AgentEvent[] }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; cwd?: string; images?: MarkdownImageAccounting; consumed?: ConsumedOutput; compact?: CompactSnapshot | null }): RunHandle {
     // 接回的是**旧进程**:压缩快照只能用它起跑时那份(调用方从会话行里取),此刻的执行器配置
     // 可能早改过了(第 2 轮审查)。没给 = 不知道,水位上就不带压缩字段,不编。
     const compact = opts.compact ?? null;
@@ -312,7 +312,7 @@ export class ClaudeExecutor implements AgentExecutor {
       // 和配置，计划文件目录用起跑时记在 commandLine 上的那个。
       const plansDir = plansDirOfCommandLine(opts.commandLine);
       return singleRunFromResident(
-        this.residentFromChild(child, opts.sessionId, opts.commandLine, compact, settingsCleanup, opts.cwd, opts.images, true, opts.consumed, undefined, plansDir, opts.planEvents),
+        this.residentFromChild(child, opts.sessionId, opts.commandLine, compact, settingsCleanup, opts.cwd, opts.images, true, opts.consumed, undefined, plansDir),
         detached,
       );
     }
@@ -368,10 +368,8 @@ export class ClaudeExecutor implements AgentExecutor {
     navi?: ClaudeNaviMcpInjection,
     // 计划模式回合才给：计划文件所在目录，同时表示「权限请求由计划闸回」。
     plansDir?: string,
-    // 接管计划回合时：这一回合会话记录里已落下的计划事件，重放据它认当年发过的卡（不读盘）。
-    planEvents?: AgentEvent[],
   ): ResidentHandle {
-    const planGate = plansDir ? new ClaudePlanGate(plansDir, (line) => { child.stdin?.write(line); }, planEvents) : undefined;
+    const planGate = plansDir ? new ClaudePlanGate(plansDir, (line) => { child.stdin?.write(line); }) : undefined;
     // 打断/发送记录只给单飞落:接管(attach)只接单飞,常驻调度台重启是另开一台,不重放。
     const resident = new ClaudeControlBridge(reapsAtTurnEnd, reapsAtTurnEnd ? (child as { naviPaths?: { out?: string } }).naviPaths?.out : undefined, planGate);
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {

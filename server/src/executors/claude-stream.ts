@@ -232,9 +232,9 @@ async function* claudeStreamEvents(
         if (block.type === "tool_result") background.toolResult(block.tool_use_id, block.is_error === true);
         // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
         if (block.type === "tool_use") writeLedger.toolUse(block.name, block.input, block.id);
-        // 子智能体改计划文件同样算数：交出去的计划必须是计划文件最新那一版（claude-plan-gate.ts）。
-        if (block.type === "tool_use") for (const event of resident?.planGate?.noteToolUse(block) ?? []) push(event);
-        if (block.type === "tool_result") for (const event of resident?.planGate?.noteToolResult(block) ?? []) push(event);
+        // 子智能体改计划文件同样算数：交计划那一刻要看计划文件最近一次修改成没成（claude-plan-gate.ts）。
+        if (block.type === "tool_use") resident?.planGate?.noteToolUse(block);
+        if (block.type === "tool_result") resident?.planGate?.noteToolResult(block);
         if (block.type === "tool_result") {
           const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true, soleReceipt(ev));
           if (writes) push(writes);
@@ -374,7 +374,7 @@ async function* claudeStreamEvents(
       // text 必须照收,跳过就等于把唯一一句错误说明扔了(见 docs/incidents.md
       // 「空白回合」:404 model_not_found 整个被吞,用户只看到任务停着不动)。
       const synthetic = ev.message.model === "<synthetic>";
-      for (const event of resident?.planGate?.noteAssistant(ev.message.content) ?? []) push(event);
+      resident?.planGate?.noteAssistant(ev.message.content);
       let hadText = false;
       for (const block of ev.message.content) {
         if (block.type === "text") {
@@ -397,7 +397,7 @@ async function* claudeStreamEvents(
       flushText();
       for (const block of ev.message.content) {
         if (block?.type !== "tool_result") continue;
-        for (const event of resident?.planGate?.noteToolResult(block) ?? []) push(event);
+        resident?.planGate?.noteToolResult(block);
         // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
         // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
         if (!replaying) claudeMonitors.toolResult(block.tool_use_id, block.content);
@@ -552,7 +552,6 @@ async function* claudeStreamEvents(
   if (consumed) {
     replaying = true;
     background.quiet = true;
-    resident?.planGate?.beginReplay();
     try {
       resident?.restore();
       if (consumed.offset > 0) for (const ev of consumedEvents(consumed)) handle(ev);
@@ -568,8 +567,6 @@ async function* claudeStreamEvents(
       capturing = false;
       background.quiet = false;
     }
-    // 计划卡跟会话记录对账：重放判出来的跟记录里最新那张不一致就补发（claude-plan-gate.ts）。
-    for (const event of resident?.planGate?.endReplay(recoveryUnknown) ?? []) push(event);
     // 读不出来时,单飞这一路就地开始「等后台」:不知道会不会还有下一个回合结尾,不能等到它来了
     // 才承担期限 —— CLI 若正闲着等自己的后台,那个结尾可能永远不来(自由审查 ZbBv9az0Qgtf R1-A)。
     // 说明当场给用户;期限到了按核实不了结算。真在回合中途,它一开口就开了新回合,这份等待随即
