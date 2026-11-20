@@ -16,6 +16,7 @@ import { spawnTestFixture } from "./test-process-scope.mjs";
 import { withTestResources } from "./test-process-resources.mjs";
 import { isPidAlive, sleep } from "./platform.mjs";
 import { queryImpact, noVerdictReason } from "./server-control.mjs";
+import { testRuntimeChannelTasks } from "./test-runtime-channel-tasks.mjs";
 
 if (process.platform !== "darwin") {
   console.log("SKIP: macOS immutable runtime regression");
@@ -156,10 +157,10 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     return { ...seeded, rootPid: seeded.pid,
       ...JSON.parse(readFileSync(join(work, task + "-agent.json"), "utf8")) };
   }
-  async function launchTask(title, agentType = "claude") {
+  async function launchTask(title, agentType = "claude", executorId) {
     const project = await request("/projects", "POST", { name: title, repoPath: work });
     assert.equal(project.status, 201, JSON.stringify(project));
-    const created = await request("/tasks", "POST", { projectId: project.body.id, title, body: "fixture", agentType, useWorktree: false });
+    const created = await request("/tasks", "POST", { projectId: project.body.id, title, body: "fixture", agentType, executorId, useWorktree: false });
     assert.equal(created.status, 201, JSON.stringify(created));
     const started = await request(`/tasks/${created.body.id}/run`, "POST", {});
     assert.ok(started.status < 300, JSON.stringify(started));
@@ -252,6 +253,7 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     writeFileSync(recovery, JSON.stringify({ previous: old, next: old, adopting: true }));
     await probe("start");
     assert.equal(existsSync(recovery), false, "observing an already serving instance confirms adoption");
+    await testRuntimeChannelTasks({ base, data, work, schema, launchTask, request, dbRead, dbWrite, health, waitFor });
     const codexTask = await launchTask("codex-continuous", "codex");
     await waitFor(async () => (await request("/restart-impact")).body.runtimeHandoff.blocked.length === 0,
       "Claude and Codex both advertise real handoff capability");
@@ -502,7 +504,7 @@ UpdateGate.shared.report = { emit("GATE-ERROR \\($0)") }`);
     await run(join(sparkle, "bin/sign_update"), ["--ed-key-file", keyFile, join(feed, "appcast.xml")]);
     const oldHealth = await health();
     await switchRuntime(sparkleInstalled);
-    const continuous = await launchTask("sparkle-continuous");
+    const continuous = await launchTask("sparkle-continuous", "codex");
     const before = await health();
     await fixture(join(sparkleInstalled, "Contents/MacOS/Navi"), [], { env: environment });
     await waitFor(() => existsSync(log) && /NEW-SERVER ready/.test(readFileSync(log, "utf8")), "real signed Sparkle swap and relaunch", 180_000);

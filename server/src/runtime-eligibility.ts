@@ -5,6 +5,7 @@ import { agents, sessions, tasks } from "./db/schema.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { heldTurns } from "./turn-lock.js";
 import { runtimeConsumerAvailable } from "./runtime-consumers.js";
+import { activeRuntimeChannels, runtimeChannelReasons } from "./runtime-agent-channels.js";
 
 type Item = { id: string; title: string };
 export type RuntimeEligibility = { blocked: (Item & { reason: string })[]; sessions: string[] };
@@ -26,9 +27,11 @@ export async function runtimeEligibility(impact: {
         const profile = (await db.select().from(agents).where(eq(agents.name, session.executor))).at(0);
         const record = (await db.select().from(tasks).where(eq(tasks.id, task.id))).at(0);
         if (!record) throw new Error("任务记录已不存在");
+        const dependencies = runtimeChannelReasons(session.agentOutPath!);
         const executor = await resolveExecutorFor({ executorId: profile?.id ?? record.executorId,
           type: session.agentType as AgentType, model: null, reasoningEffort: null });
         if (!executor.attach) reason = "执行器不支持接管";
+        else if (dependencies.length) reason = dependencies.join("；");
         else if (!runtimeConsumerAvailable(session.id)) reason = "输出消费屏障尚未就绪或仍有未持久化状态";
         else result.sessions.push(session.id);
       }
@@ -37,6 +40,9 @@ export async function runtimeEligibility(impact: {
     }
     if (reason) result.blocked.push({ id: task.id, title: task.title, reason });
   }
+  for (const channel of activeRuntimeChannels()) result.blocked.push({
+    id: `runtime-channel:${channel}`, title: channel, reason: "仍有请求或响应流在途，未切换服务",
+  });
   for (const turn of heldTurns()) if (!impact.survives.some((task) => task.id === turn.taskId)) {
     result.blocked.push({ id: turn.taskId, title: turn.taskId, reason: "仍有起跑或维护操作在途" });
   }

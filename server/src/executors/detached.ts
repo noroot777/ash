@@ -16,6 +16,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { inheritCodeLock } from "@navi/shared/code-lock";
 import { checkpointOutput, supportsOutputCheckpoint, type OutputCheckpoint } from "./output-checkpoint.js";
+import { recordRuntimeChannels } from "../runtime-agent-channels.js";
 import type { ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream, openSync, existsSync } from "node:fs";
 import { IS_WINDOWS } from "../platform.js";
@@ -111,6 +112,10 @@ export function spawnControllableDetachedAgent(
     NAVI_ERR: paths.err,
     NAVI_RC: paths.rc,
   };
+  if (process.platform === "darwin") {
+    try { recordRuntimeChannels(cwd, args, env, paths.out); }
+    catch { return failedChild("无法保存服务通道依赖，未启动任务"); }
+  }
   const track = openTrackFd();
   const stdio: Array<"ignore" | number> =
     track.fd === null ? ["ignore", "ignore", "ignore"] : ["ignore", "ignore", "ignore", track.fd];
@@ -227,6 +232,10 @@ export function spawnDetachedAgent(
     NAVI_ERR: paths.err,
     NAVI_RC: paths.rc,
   };
+  if (process.platform === "darwin") {
+    try { recordRuntimeChannels(cwd, args, env, paths.out); }
+    catch { return failedChild("无法保存服务通道依赖，未启动任务"); }
+  }
   // 逃逸追踪跟普通 spawn 走同一套(见 spawn.ts 的 openTrackFd 注释)。
   const track = openTrackFd();
   const stdio: Array<"pipe" | "ignore" | number> =
