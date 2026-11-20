@@ -25,7 +25,7 @@ export const AUTONOMY =
 // （executors/claude-plan-gate.ts），所以多点一句。
 export const PLANNING_TURN = (craft: CraftContext, userText: string, agent?: AgentType) =>
   craftRulesFor(craft) + userText +
-  "\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。" +
+  "\n\n本回合只讨论计划，不实施、不确认任务完成；等用户确认计划后再开始实施。" +
   (agent === "claude" ? "计划定稿后调用 ExitPlanMode 提交，供用户确认。" : "");
 
 // Prefix for an agent invited into an existing task via @-mention. It joins in

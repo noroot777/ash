@@ -58,7 +58,10 @@ function questionsOf(input: any): QuestionItem[] {
 
 export class ClaudePlanGate {
   private planFile: string | null = null;
-  /** 上一次交计划之后模型说过的话：计划文件读不到时的兜底正文。 */
+  /**
+   * 计划文件读不到时的兜底正文：最后一次工具调用之后模型说的话。工具调用前那几句是「我先看看 X」
+   * 这类过程叙述，计划本身写在交计划之前那一段里。
+   */
   private spoken = "";
 
   constructor(private readonly plansDir: string, private readonly write: ControlLine) {}
@@ -73,7 +76,9 @@ export class ClaudePlanGate {
   noteAssistant(content: unknown): void {
     for (const block of Array.isArray(content) ? content as any[] : []) {
       if (block?.type === "text" && typeof block.text === "string") this.spoken += block.text;
-      if (block?.type === "tool_use" && PLAN_FILE_TOOLS.has(block.name) && this.isPlanFile(block.input?.file_path)) this.planFile = resolve(block.input.file_path);
+      if (block?.type !== "tool_use" || PLAN_HANDOFF_TOOLS.has(block.name)) continue;
+      this.spoken = "";
+      if (PLAN_FILE_TOOLS.has(block.name) && this.isPlanFile(block.input?.file_path)) this.planFile = resolve(block.input.file_path);
     }
   }
 

@@ -81,7 +81,8 @@ try {
   assert.equal(last().request_id, "req-exit1");
   assert.deepEqual(ask("ExitPlanMode", { plan: "老版本 CLI 把正文放在 input 里" }, "exit2"), [{ kind: "plan", id: "plan:toolu_exit2", text: "老版本 CLI 把正文放在 input 里", status: "complete" }]);
   const noFile = new ClaudePlanGate(plansDir, (line) => written.push(JSON.parse(line)));
-  noFile.noteAssistant([{ type: "text", text: "计划写在回复里：先读再改。" }]);
+  noFile.noteAssistant([{ type: "text", text: "我先看看现有代码。" }, { type: "tool_use", name: "Read", input: { file_path: "/x" } }]);
+  noFile.noteAssistant([{ type: "text", text: "计划写在回复里：先读再改。" }, { type: "tool_use", name: "ExitPlanMode", input: {} }]);
   assert.equal((noFile.request({ request_id: "r", request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input: {}, tool_use_id: "toolu_t" } })[0] as any).text, "计划写在回复里：先读再改。");
   const empty = new ClaudePlanGate(plansDir, (line) => written.push(JSON.parse(line)));
   assert.deepEqual(empty.request({ request_id: "r2", request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input: {} } }), []);
