@@ -178,6 +178,44 @@ try {
   v = versioned();
   v.submit("x10", { plan: "旧计划", planFilePath: planFile });
   assert.deepEqual(v.use("other", join(root, "src.ts"), "Write"), []);
+  // ⑦ 同一段历史：不中断直播与在任意位置重启接管（前段静音重放、权限请求不再回、后段直播），会话记录里
+  //    最终那张卡必须一样；并发修改要等全部结清，卡上是盘上最终那份。
+  type Step = { a?: any; c?: any; r?: any; fs?: string };
+  const toolUse = (id: string, name: string, input: unknown): Step => ({ a: [{ type: "tool_use", id, name, input }] });
+  const exitStep = (id: string): Step[] => [toolUse(id, "ExitPlanMode", { plan: "# OLD", planFilePath: planFile }),
+    { c: { type: "control_request", request_id: `req-${id}`, request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input: { plan: "# OLD", planFilePath: planFile }, tool_use_id: id } } }];
+  const res = (id: string, isError = false, content = "ok"): Step => ({ r: { type: "tool_result", tool_use_id: id, content, ...(isError ? { is_error: true } : {}) } });
+  const submittedReply = "计划已提交给用户审阅。不要再调用任何工具，用一两句话说明计划要点后结束本回合；用户确认后会让你开始实施。";
+  const opening: Step[] = [{ fs: "# OLD" }, toolUse("w1", "Write", { file_path: planFile }), res("w1"), ...exitStep("exit")];
+  const scenarios: Record<string, { steps: Step[]; final: { status: string; text: string } }> = {
+    "交后写空": { steps: [...opening, toolUse("w2", "Write", { file_path: planFile }), res("exit", true, submittedReply), { fs: "" }, res("w2")], final: { status: "streaming", text: "# OLD" } },
+    "交后改失败": { steps: [...opening, toolUse("w2", "Edit", { file_path: planFile }), res("exit", true, submittedReply), res("w2", true)], final: { status: "streaming", text: "# OLD" } },
+    "交后改成": { steps: [...opening, res("exit", true, submittedReply), toolUse("w2", "Write", { file_path: planFile }), { fs: "# NEW" }, res("w2")], final: { status: "complete", text: "# NEW" } },
+    "交后并发": { steps: [...opening, toolUse("w2", "Edit", { file_path: planFile }), toolUse("w3", "Edit", { file_path: planFile }), res("exit", true, submittedReply), { fs: "# B" }, res("w3"), { fs: "# A 最后落盘" }, res("w2")], final: { status: "complete", text: "# A 最后落盘" } },
+  };
+  const finalCard = (steps: Step[], cut: number) => {
+    const persisted: AgentEvent[] = [];
+    const feed = (g: InstanceType<typeof ClaudePlanGate>, step: Step, replaying: boolean): AgentEvent[] => {
+      if (step.fs !== undefined) { if (!replaying) writeFileSync(planFile, step.fs); return []; }
+      if (step.a) return g.noteAssistant(step.a);
+      if (step.r) return g.noteToolResult(step.r);
+      return g.request(step.c, replaying);
+    };
+    const before = new ClaudePlanGate(plansDir, () => {});
+    for (const step of steps.slice(0, cut)) persisted.push(...feed(before, step, false));
+    const after = new ClaudePlanGate(plansDir, () => {});
+    for (const step of steps.slice(0, cut)) feed(after, step, true);
+    for (const step of steps.slice(cut)) persisted.push(...feed(after, step, false));
+    const plans = persisted.filter((event): event is Extract<AgentEvent, { kind: "plan" }> => event.kind === "plan");
+    const latest = plans.at(-1)!;
+    const text = plans.filter((event) => event.id === latest.id).reduce((acc, event) => event.delta ? acc + event.text : event.text, "");
+    return { status: latest.status, text };
+  };
+  for (const [name, { steps, final }] of Object.entries(scenarios)) {
+    for (let cut = 0; cut <= steps.length; cut++) {
+      assert.deepEqual(finalCard(steps, cut), final, `${name}：在第 ${cut} 步重启接管`);
+    }
+  }
   // ⑥ 接管重放：交计划的那次只能从回执认出来，之后的修改照样重交
   v = versioned();
   v.g.noteAssistant([{ type: "tool_use", id: "x6", name: "ExitPlanMode", input: { planFilePath: planFile } }]);

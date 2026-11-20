@@ -247,10 +247,10 @@ async function* claudeStreamEvents(
       }
       return;
     }
-    // 只有计划模式回合会来（起跑带 `--permission-prompt-tool stdio`，见 claude-plan-gate.ts）；
-    // 重放里的请求上一代已经回过了。
+    // 只有计划模式回合会来（起跑带 `--permission-prompt-tool stdio`，见 claude-plan-gate.ts）。
+    // 重放里的请求上一代已经回过了，不再回 CLI；但交计划要照样记进计划闸的历史，否则接管后认不出它。
     if (ev.type === "control_request") {
-      if (!replaying && resident?.planGate) for (const event of resident.planGate.request(ev)) push(event);
+      if (resident?.planGate) for (const event of resident.planGate.request(ev, replaying)) push(event);
       return;
     }
     if (ev.type === "control_response") {
