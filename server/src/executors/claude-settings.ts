@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // claude 自己的配置分层(高 → 低),2026-08-13 用真 CLI 逐条黑盒实测(2.1.220):
 //   企业策略 managed-settings.json > `--settings` > 项目 .claude/settings.local.json
@@ -209,4 +209,41 @@ export function claudeMaxOutputTokens(cwd?: string, configDir?: ClaudeConfigDir)
 function toPositiveInt(raw: string | undefined): number | null {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+/** 额外参数里 `--flag v` / `--flag=v` 的最后一个值(没给 = undefined)。 */
+function lastFlagValue(args: readonly string[], flag: string): string | undefined {
+  let value: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag && i + 1 < args.length) value = args[++i];
+    else if (args[i].startsWith(`${flag}=`)) value = args[i].slice(flag.length + 1);
+  }
+  return value;
+}
+
+/**
+ * 这次起跑的 claude 把计划文件写在哪个目录。CLI 2.1.283 的判法(反编译摘录,2026-11-20):合并后的
+ * settings 里有 `plansDirectory` 就按**项目根**解析,解出来出了项目根则报错退回默认;没有就是
+ * `<配置目录>/plans`。合并顺序同顶部那张表:企业策略 > 额外参数的 `--settings`(路径或 JSON 原文)
+ * > 项目两档 > 用户层;`--setting-sources` 只留它点名的那几层(企业策略与 `--settings` 不受它管)。
+ * navi 自己那份 `--settings` 不写这一项,不参与。
+ */
+export function claudePlansDirectory(cwd: string | undefined, configDir: ClaudeConfigDir, extraArgs: readonly string[] = []): string {
+  const root = resolve(cwd ?? process.cwd());
+  const flag = lastFlagValue(extraArgs, "--settings");
+  const flagSettings: Settings = flag === undefined ? null
+    : flag.trim().startsWith("{") ? (() => { try { return JSON.parse(flag) as Settings; } catch { return null; } })()
+    : readJsonFile(resolve(root, flag));
+  const sources = lastFlagValue(extraArgs, "--setting-sources")?.split(",").map((s) => s.trim());
+  const keep = (source: string) => !sources || sources.includes(source);
+  const project = cwd ? projectLayers(cwd).filter((path) => keep(path.endsWith("settings.local.json") ? "local" : "project")) : [];
+  const user = keep("user") ? [join(userConfigDir(configDir), "settings.json")] : [];
+  const layers = [readJsonFile(managedSettingsPath()), flagSettings, ...[...project, ...user].map(readJsonFile)];
+  const setting = layers.map((settings) => settings?.plansDirectory).find((v): v is string => typeof v === "string" && !!v.trim());
+  if (setting) {
+    const dir = resolve(root, setting);
+    const inside = relative(root, dir);
+    if (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)) return dir;
+  }
+  return join(userConfigDir(configDir), "plans");
 }

@@ -22,7 +22,7 @@ import { parseClaudeStream } from "./claude-stream.js";
 import { claudeNaviMcpInjection, type ClaudeNaviMcpInjection } from "./navi-mcp-inject.js";
 import { claudeGoalInvocation, cleanupClaudeGoalContext } from "./claude-goal.js";
 import { singleRunFromResident } from "./claude-single-run.js";
-import { CLAUDE_PLAN_ARGS, ClaudePlanGate, claudePlansDir } from "./claude-plan-gate.js";
+import { CLAUDE_PLAN_ARGS, ClaudePlanGate, claudePlansDir, planFilesMarker, planSafeExtraArgs, plansDirOfCommandLine } from "./claude-plan-gate.js";
 export { parseClaudeStream } from "./claude-stream.js";
 export { singleRunFromResident } from "./claude-single-run.js";
 export { claudeEffortUnsupportedMessage, claudeRootBypassMessage, normalizeClaudeCliError, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
@@ -277,8 +277,10 @@ export class ClaudeExecutor implements AgentExecutor {
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
       : this.runtimeSettings(opts.cwd, host, model, false);
-    const { args, navi } = this.buildArgs(opts, sessionId, true, model, settings.arg);
-    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
+    const { args, navi, extraArgs } = this.buildArgs(opts, sessionId, true, model, settings.arg);
+    // 计划回合：计划文件目录按这次起跑的配置解一次，闸用它、commandLine 也记下它（接管认回同一个目录）。
+    const plansDir = opts.planMode ? claudePlansDir(opts.cwd, opts.env, extraArgs) : undefined;
+    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`) + (plansDir ? planFilesMarker(plansDir) : "");
     const child = this.startupError || settings.error
       ? failedChild(this.startupError ?? settings.error!)
       : spawnControllableForRun(
@@ -292,8 +294,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", settings.cleanup);
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, true, undefined, navi,
-        opts.planMode ? claudePlansDir(opts.env) : undefined),
+      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, true, undefined, navi, plansDir),
       detached,
     );
   }
@@ -307,9 +308,9 @@ export class ClaudeExecutor implements AgentExecutor {
     const settingsCleanup = runtimeSettingsCleanupFromCommandLine(opts.commandLine);
     child.on("close", settingsCleanup);
     if (child.stdin && opts.commandLine.includes("--input-format")) {
-      // 接回的是计划回合：还没回的权限请求照样要有人回，否则 CLI 一直等着。接管拿不到起跑时的
-      // 环境，计划文件目录按本机默认算——profile 改过 CLAUDE_CONFIG_DIR 时退回模型说过的话当正文。
-      const plansDir = opts.commandLine.includes(CLAUDE_PLAN_ARGS.join(" ")) ? claudePlansDir(undefined) : undefined;
+      // 接回的是计划回合：还没回的权限请求照样要有人回，否则 CLI 一直等着。接管拿不到起跑时的环境
+      // 和配置，计划文件目录用起跑时记在 commandLine 上的那个。
+      const plansDir = plansDirOfCommandLine(opts.commandLine);
       return singleRunFromResident(
         this.residentFromChild(child, opts.sessionId, opts.commandLine, compact, settingsCleanup, opts.cwd, opts.images, true, opts.consumed, undefined, plansDir),
         detached,
@@ -470,13 +471,15 @@ export class ClaudeExecutor implements AgentExecutor {
     // 一份。放在 extraArgs 之前:用户自带 --settings 时以他那份为准(设置页会警告本覆盖
     // 被顶掉)。
     if (settingsArg) args.push("--settings", settingsArg);
-    // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
-    if (this.extraArgs.length) args.push(...this.extraArgs);
-    if (opts.extraArgs?.length) args.push(...opts.extraArgs);
+    // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。计划回合摘掉其中改权限
+    // 模式的那几个:它们排在计划参数后面,CLI 认后来的。
+    const extra = [...this.extraArgs, ...(opts.extraArgs ?? [])];
+    const extraArgs = plan ? planSafeExtraArgs(extra) : extra;
+    args.push(...extraArgs);
     // navi 自己的 MCP 起跑时注入:同名以最后一个 `--mcp-config` 为准,所以排在全部参数之后(navi-mcp-inject.ts)。
     const navi = claudeNaviMcpInjection(opts.env);
     args.push(...navi.args);
-    return { args, navi };
+    return { args, navi, extraArgs };
   }
 }
 

@@ -11,7 +11,7 @@ import { NativeWorkTrace } from "./native-work.js";
 import { childActivity } from "./native-agent-activity.js";
 import { ClaudeWriteLedger, soleReceipt } from "./tool-writes.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
-import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
+import { spawnAgent, spawnErrorMessage, forceFinishOnExit, killChild } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
@@ -264,6 +264,13 @@ async function* claudeStreamEvents(
     }
     if (ev.type === "system" && ev.session_id) {
       if (ev.subtype === "init" && !replaying) onInitialized();
+      // 计划回合以 CLI 自己报的权限模式为准：被 settings 之类顶成别的模式，就等于没拦着写文件，当场停下。
+      const planProblem = ev.subtype === "init" && !replaying ? resident?.planGate?.initProblem(ev.permissionMode) : null;
+      if (planProblem) {
+        push({ kind: "error", message: planProblem });
+        killChild(child);
+        return;
+      }
       // navi 的工具在不在,以 CLI 自己在 init 里报的为准(navi-mcp-confirm.ts)。只有注入过的那一回合
       // 才问:复用这份解析的别家 CLI 不注入 navi,它们清单里有没有 navi 不归这里说。
       if (ev.subtype === "init" && !replaying && naviMcp) {
@@ -387,6 +394,7 @@ async function* claudeStreamEvents(
       flushText();
       for (const block of ev.message.content) {
         if (block?.type !== "tool_result") continue;
+        resident?.planGate?.noteToolResult(block);
         // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
         // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
         if (!replaying) claudeMonitors.toolResult(block.tool_use_id, block.content);

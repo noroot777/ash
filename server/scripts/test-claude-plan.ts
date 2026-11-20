@@ -3,7 +3,7 @@
 // src/executors/claude-plan-gate.ts 文件头；这里用假 CLI 按同一形状回放。
 import "./isolated-data.js";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -17,7 +17,7 @@ const root = mkdtempSync(join(tmpdir(), "navi-claude-plan-"));
 process.env.NAVI_DB = join(root, "navi.db");
 process.env.NAVI_RUNS_DIR = join(root, "runs");
 const { ClaudeExecutor } = await import("../src/executors/claude.js");
-const { ClaudePlanGate, CLAUDE_PLAN_ARGS, claudePlansDir } = await import("../src/executors/claude-plan-gate.js");
+const { ClaudePlanGate, CLAUDE_PLAN_ARGS, claudePlansDir, planFilesMarker, planSafeExtraArgs, plansDirOfCommandLine } = await import("../src/executors/claude-plan-gate.js");
 const { planTurnInput, PLAN_IMPLEMENT_TEXT } = await import("../src/plan-turn.js");
 const { nativeCliCommand } = await import("../src/skills.js");
 const { inputStartsExecution } = await import("../src/task-continuation-entry.js");
@@ -53,7 +53,24 @@ try {
   // ── 计划闸：只读放行、计划文件放行、写操作拒、ExitPlanMode 交出计划并拒、提问转成答题卡
   const plansDir = join(root, "config", "plans");
   mkdirSync(plansDir, { recursive: true });
-  assert.equal(claudePlansDir({ CLAUDE_CONFIG_DIR: join(root, "config") }), plansDir);
+  const configEnv = { CLAUDE_CONFIG_DIR: join(root, "config") };
+  assert.equal(claudePlansDir(root, configEnv, []), plansDir, "没配 plansDirectory：随这次起跑的配置目录走");
+  // 计划目录按 CLI 自己的合并结果：项目 settings 的 plansDirectory 按项目根解；额外参数的 --settings 压过它；
+  // 出了项目根退回默认；--setting-sources 不点名 project 时项目那层不算。
+  const project = join(root, "project");
+  mkdirSync(join(project, ".claude"), { recursive: true });
+  writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({ plansDirectory: ".plans" }));
+  assert.equal(claudePlansDir(project, configEnv, []), join(project, ".plans"));
+  assert.equal(claudePlansDir(project, configEnv, ["--settings", JSON.stringify({ plansDirectory: "docs/plans" })]), join(project, "docs", "plans"));
+  writeFileSync(join(root, "flag-settings.json"), JSON.stringify({ plansDirectory: "notes" }));
+  assert.equal(claudePlansDir(project, configEnv, [`--settings=${join(root, "flag-settings.json")}`]), join(project, "notes"));
+  assert.equal(claudePlansDir(project, configEnv, ["--settings", JSON.stringify({ plansDirectory: "../outside" })]), plansDir);
+  assert.equal(claudePlansDir(project, configEnv, ["--setting-sources", "user"]), plansDir);
+  // 接管认回起跑时的目录：它记在 commandLine 上
+  assert.equal(plansDirOfCommandLine(`claude ${CLAUDE_PLAN_ARGS.join(" ")} <messages via stdin>${planFilesMarker(join(project, "目录 \"x\""))}`), join(project, "目录 \"x\""));
+  assert.equal(plansDirOfCommandLine(`claude --dangerously-skip-permissions <messages via stdin>${planFilesMarker(plansDir)}`), undefined);
+  // 额外参数里改权限模式的那几个在计划回合摘掉
+  assert.deepEqual(planSafeExtraArgs(["--dangerously-skip-permissions", "--permission-mode", "acceptEdits", "--permission-mode=default", "--permission-prompt-tool", "mcp__x", "--allow-dangerously-skip-permissions", "--add-dir", "/d"]), ["--add-dir", "/d"]);
   const written: any[] = [];
   const gate = new ClaudePlanGate(plansDir, (line) => written.push(JSON.parse(line)));
   const ask = (tool: string, input: unknown, id = tool) => gate.request({ type: "control_request", request_id: `req-${id}`, request: { subtype: "can_use_tool", tool_name: tool, input, tool_use_id: `toolu_${id}` } });
@@ -68,18 +85,35 @@ try {
   assert.equal(last().response.behavior, "deny", "计划文件以外的写一律拒");
   ask("Write", { file_path: join(plansDir, "../../escape.md"), content: "x" }, "w2");
   assert.equal(last().response.behavior, "deny", "路径穿出计划目录不算计划文件");
+  writeFileSync(join(root, "outside.md"), "外面");
+  symlinkSync(join(root, "outside.md"), join(plansDir, "link.md"));
+  ask("Write", { file_path: join(plansDir, "link.md"), content: "x" }, "w3");
+  assert.equal(last().response.behavior, "deny", "目录内指向外面的软链接不能借道写出去");
   ask("mcp__navi__complete_task", { taskId: "t" });
   assert.equal(last().response.behavior, "deny");
   const planFile = join(plansDir, "snug-milner.md");
   ask("Write", { file_path: planFile, content: "# 计划" }, "plan-write");
   assert.equal(last().response.behavior, "allow");
   writeFileSync(planFile, "# 计划\n\n1. 改 a.txt\n");
+  gate.noteToolResult({ type: "tool_result", tool_use_id: "toolu_plan-write", content: "ok" });
   gate.noteAssistant([{ type: "text", text: "我准备这样做。" }]);
   const submitted = ask("ExitPlanMode", {}, "exit1");
   assert.deepEqual(submitted, [{ kind: "plan", id: "plan:toolu_exit1", text: "# 计划\n\n1. 改 a.txt", status: "complete" }]);
   assert.equal(last().response.behavior, "deny", "交计划要拒：放行等于当场退出计划模式接着动手");
   assert.equal(last().request_id, "req-exit1");
   assert.deepEqual(ask("ExitPlanMode", { plan: "老版本 CLI 把正文放在 input 里" }, "exit2"), [{ kind: "plan", id: "plan:toolu_exit2", text: "老版本 CLI 把正文放在 input 里", status: "complete" }]);
+  // 改计划失败：文件里还是旧方案，不能把它当新计划交出去；改成了才交
+  ask("Edit", { file_path: planFile, old_string: "a.txt", new_string: "b.txt" }, "plan-edit");
+  assert.equal(last().response.behavior, "allow");
+  gate.noteToolResult({ type: "tool_result", tool_use_id: "toolu_plan-edit", is_error: true, content: "EACCES" });
+  gate.noteAssistant([{ type: "text", text: "新方案：改 b.txt。" }]);
+  assert.deepEqual(ask("ExitPlanMode", {}, "exit3"), []);
+  assert.equal(last().response.behavior, "deny");
+  assert.match(last().response.message, /写计划文件失败/);
+  gate.noteAssistant([{ type: "tool_use", id: "toolu_plan-edit2", name: "Edit", input: { file_path: planFile } }]);
+  writeFileSync(planFile, "# 计划\n\n1. 改 b.txt\n");
+  gate.noteToolResult({ type: "tool_result", tool_use_id: "toolu_plan-edit2", content: "ok" });
+  assert.equal((ask("ExitPlanMode", {}, "exit4")[0] as any).text, "# 计划\n\n1. 改 b.txt", "CLI 不来问的写入照样从 tool_use 认，以回执为准");
   const noFile = new ClaudePlanGate(plansDir, (line) => written.push(JSON.parse(line)));
   noFile.noteAssistant([{ type: "text", text: "我先看看现有代码。" }, { type: "tool_use", name: "Read", input: { file_path: "/x" } }]);
   noFile.noteAssistant([{ type: "text", text: "计划写在回复里：先读再改。" }, { type: "tool_use", name: "ExitPlanMode", input: {} }]);
@@ -93,6 +127,10 @@ try {
   assert.equal(last().response.behavior, "deny");
   gate.request({ request_id: "hook", request: { subtype: "hook_callback" } });
   assert.equal(last().subtype, "error", "不认的控制请求回错误，别让 CLI 干等");
+  assert.equal(gate.initProblem("plan"), null);
+  assert.match(gate.initProblem("bypassPermissions") ?? "", /计划模式没有生效/);
+  ask("Read", { file_path: "/elsewhere/a.txt" }, "after-halt");
+  assert.equal(last().response.behavior, "deny", "权限模式不对之后到达的请求一律拒");
   console.log("plan gate answers permission requests and hands over the plan: passed");
 
   // ── 执行器：计划回合换权限参数；假 CLI 按真 CLI 的形状走一遍
@@ -112,6 +150,7 @@ const steps = [
   () => { emit({ type: "assistant", message: { model: "m", content: [{ type: "tool_use", id: "toolu_w", name: "Write", input: { file_path: planFile, content: "# 假计划" } }] } });
     emit({ type: "control_request", request_id: "c1", request: { subtype: "can_use_tool", tool_name: "Write", input: { file_path: planFile, content: "# 假计划" }, tool_use_id: "toolu_w" } }); },
   () => { writeFileSync(planFile, "# 假计划\\n\\n先读后改");
+    emit({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_w", content: "ok" }] } });
     emit({ type: "control_request", request_id: "c2", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "touch x" }, tool_use_id: "toolu_b" } }); },
   () => { emit({ type: "assistant", message: { model: "m", content: [{ type: "tool_use", id: "toolu_exit", name: "ExitPlanMode", input: {} }] } });
     emit({ type: "control_request", request_id: "c3", request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input: {}, tool_use_id: "toolu_exit" } }); },
@@ -121,7 +160,8 @@ const steps = [
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.type === "user") {
-    emit({ type: "system", subtype: "init", session_id: "plan-session", permissionMode: planMode ? "plan" : "bypassPermissions", tools: planMode ? ["ExitPlanMode"] : [] });
+    emit({ type: "system", subtype: "init", session_id: "plan-session", permissionMode: process.env.FAKE_INIT_MODE ?? (planMode ? "plan" : "bypassPermissions"), tools: planMode ? ["ExitPlanMode"] : [] });
+    if (process.env.FAKE_INIT_MODE) return; // 等着被停掉
     if (!planMode) return emit({ type: "result", subtype: "success", session_id: "plan-session" });
     return steps.shift()();
   }
@@ -133,6 +173,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const executor = new ClaudeExecutor({ bin });
   const plan = executor.runSteerable({ cwd: root, prompt: "怎么改", planMode: true, env: { CLAUDE_CONFIG_DIR: join(root, "config") } });
   assert.ok(plan.commandLine.includes(CLAUDE_PLAN_ARGS.join(" ")));
+  assert.equal(plansDirOfCommandLine(plan.commandLine), plansDir, "计划文件目录随 commandLine 落库");
   assert.doesNotMatch(plan.commandLine, /--dangerously-skip-permissions/, "两者同传时 bypass 会赢，计划回合必须不带它");
   const events: AgentEvent[] = [];
   for await (const event of plan.events) events.push(event);
@@ -143,6 +184,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   assert.deepEqual(events.filter((event) => event.kind === "plan"), [{ kind: "plan", id: "plan:toolu_exit", text: "# 假计划\n\n先读后改", status: "complete" }]);
   assert.equal(events.some((event) => event.kind === "tool" && event.name === "ExitPlanMode"), false, "交计划那一步换成计划卡，不画成被拒的工具调用");
   assert.equal(events.at(-1)?.kind, "done");
+  // 执行器额外参数里留着跳过权限：计划回合把它摘掉；CLI 仍报别的模式（settings 之类顶掉的）就当场停
+  const bypassing = new ClaudeExecutor({ bin, extraArgs: ["--dangerously-skip-permissions"] });
+  const overridden = bypassing.runSteerable({ cwd: root, prompt: "怎么改", planMode: true, env: { ...configEnv, FAKE_INIT_MODE: "bypassPermissions" } });
+  assert.doesNotMatch(overridden.commandLine, /--dangerously-skip-permissions/);
+  const overriddenEvents: AgentEvent[] = [];
+  for await (const event of overridden.events) overriddenEvents.push(event);
+  assert.ok(overriddenEvents.some((event) => event.kind === "error" && /计划模式没有生效/.test(event.message)), "实际权限模式不是 plan 时报错并停下");
+  assert.equal(overriddenEvents.some((event) => event.kind === "plan"), false);
+  assert.equal(JSON.parse(readFileSync(argvFile, "utf8")).includes("--dangerously-skip-permissions"), false);
   const normal = executor.runSteerable({ cwd: root, prompt: "直接改", env: { CLAUDE_CONFIG_DIR: join(root, "config") } });
   assert.match(normal.commandLine, /--dangerously-skip-permissions/);
   assert.doesNotMatch(normal.commandLine, /--permission-mode/);
