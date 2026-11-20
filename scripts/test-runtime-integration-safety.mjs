@@ -2,11 +2,18 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Hono } from "hono";
 import { withTestResources } from "./test-process-resources.mjs";
 import { assertRuntimeCompatibility } from "../server/dist/runtime-compatibility.js";
 import { acquireRuntimeHandover } from "../server/dist/runtime-handover.js";
 import { checkpointRuntimeHandover } from "../server/dist/runtime-handover-prepare.js";
 import { releaseRuntimeHandover, reserveRuntimeHandover, runtimeHandoverMatches } from "../server/dist/runtime-handover-state.js";
+import { preflightRuntimeHandover } from "../server/dist/runtime-handover-preflight.js";
+import { initializeRuntimeGateway } from "../server/dist/runtime-channel-gateway.js";
+import { runtimeHandoverGate } from "../server/dist/runtime-handover-gate.js";
 
 const compatibility = { protocol: 1, schema: "a".repeat(64) };
 assert.throws(() => assertRuntimeCompatibility(compatibility, { ...compatibility, protocol: 2 }, false), /协议/);
@@ -75,7 +82,7 @@ let replacementLease;
 let assessments = 0;
 try {
   const replaced = await acquireRuntimeHandover(async () => {
-    if (++assessments === 2) {
+    if (++assessments === 3) {
       try { Date.now = () => now() + 61_000; replacementLease = reserveRuntimeHandover(); }
       finally { Date.now = now; }
     }
@@ -89,6 +96,58 @@ try {
   if (replacementLease) releaseRuntimeHandover(replacementLease);
 }
 console.log("✓ a lease replaced during the final assessment cannot authorize the stale takeover");
+
+let changed = false;
+let raceSeals = 0;
+let raceResumes = 0;
+const raceImpact = async () => ({ survives: [], interrupted: [], resumes: [], mcpDisrupted: [],
+  runtimeHandover: { sessions: [], blocked: changed ? [{ id: "runtime-gateway", title: "稳定通道", reason: "准备期间通道失效" }] : [] } });
+await assert.rejects(acquireRuntimeHandover(raceImpact, () => [], {
+  async seal() {
+    raceSeals++;
+    const { afterRuntimeHandover } = await import("../server/dist/runtime-handover-state.js");
+    afterRuntimeHandover(() => { raceResumes++; });
+    changed = true;
+  }, checkpoint: checkpointRuntimeHandover,
+}), /准备期间通道失效/);
+assert.equal(raceResumes, 1, "a failure after sealing must release the local lease and its consumers");
+for (let cycle = 0; cycle < 3; cycle++) {
+  const result = await acquireRuntimeHandover(raceImpact, () => [], { async seal() { raceSeals++; }, checkpoint: checkpointRuntimeHandover });
+  assert.equal(result.lease, undefined);
+}
+assert.equal(raceSeals, 1, "a dynamically discovered blocker must prevent the next attempt from sealing again");
+console.log("✓ a blocker appearing after preflight is rechecked, releases its lease and prevents subsequent repeated seals");
+
+const temporary = mkdtempSync(join(tmpdir(), "navi-preflight-"));
+let degraded;
+try {
+  degraded = await initializeRuntimeGateway({ home: join(temporary, "gateway"), socket: join(temporary, "control.sock"),
+    entry: join(temporary, "missing-daemon.js"), node: process.execPath, owner: "preflight", port: 4317, hasConsumers: async () => false });
+  assert.equal(degraded.state, undefined);
+  const app = new Hono();
+  app.use("*", runtimeHandoverGate());
+  app.get("/api/check", (context) => context.json({ available: true }));
+  let seals = 0;
+  let checkpoints = 0;
+  const assess = async () => {
+    const impact = { survives: [], interrupted: [], resumes: [], mcpDisrupted: [], runtimeHandover: { sessions: [], blocked: [] } };
+    await preflightRuntimeHandover(impact);
+    return impact;
+  };
+  for (let cycle = 0; cycle < 3; cycle++) {
+    const preview = await assess();
+    assert.ok(preview.runtimeHandover.blocked.some((item) => item.id === "runtime-gateway" && /暂不可用/.test(item.reason)));
+    const refused = await acquireRuntimeHandover(assess, () => [], {
+      async seal() { seals++; }, async checkpoint() { checkpoints++; },
+    });
+    assert.equal(refused.lease, undefined);
+    assert.match(refused.error, /稳定通道暂不可用/);
+    assert.equal((await app.request("/api/check")).status, 200, "refused preflight must never seal normal API traffic");
+  }
+  assert.equal(seals, 0);
+  assert.equal(checkpoints, 0);
+  console.log("✓ disabled gateway is reported by the shared preflight; repeated attempts never reserve, seal or checkpoint even without tasks");
+} finally { degraded?.close(); rmSync(temporary, { recursive: true, force: true }); }
 
 const attempts = new Map();
 const executed = new Map();

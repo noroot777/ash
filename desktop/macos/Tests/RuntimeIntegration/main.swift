@@ -40,6 +40,24 @@ case "switch":
   until { proceeded || refused || gate.phase == .waiting }
   guard proceeded else { emit("SWITCH blocked phase=\(gate.phase)"); exit(2) }
   emit("START \(ServerLauncher.shared.ensureRunningSync(timeout: 20))")
+case "blocked":
+  try RuntimeStore.prepare()
+  switch RestartImpactProbe.assessSync(preservingRuntime: true) {
+  case .disrupts(_, let items): emit("BLOCKED \(items.map { $0.why }.joined(separator: "；"))")
+  case .unknown(let reason): emit("BLOCKED \(reason)")
+  case .clear: emit("ERROR preflight allowed"); exit(1)
+  }
+  var proceeded = false
+  var holds = 0
+  gate.pollInterval = 0.05
+  gate.onHoldChanged = { if $0 != nil { holds += 1 } }
+  gate.ask = { emit("BLOCKED \($0.detail)"); return .wait }
+  gate.request(.staleServer(from: "test")) { proceeded = true }
+  until { gate.phase == .waiting || proceeded }
+  let deadline = Date().addingTimeInterval(0.5)
+  while Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+  guard !proceeded, holds == 0, gate.phase == .waiting else { emit("ERROR repeated hold \(holds)"); exit(1) }
+  emit("WAITING WITHOUT HOLD")
 case "sparkle-relaunch", "sparkle-quit", "sparkle-abort":
   let updater = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil).updater
   let item = SUAppcastItem(dictionary: ["enclosure": ["url": "https://example.invalid/Navi.zip", "sparkle:version": "2"]])!

@@ -6,7 +6,7 @@ var answers = (environment["ANSWERS"] ?? "").split(separator: ",").map(String.in
 let gate = UpdateGate.shared
 gate.shutdownTimeout = 0.4
 gate.lockTimeout = 0.4
-gate.pollInterval = 60
+gate.pollInterval = environment["VERIFY_BLOCKED_PAUSE"] == "1" ? 0.05 : 60
 var proceeded = false
 var reported = false
 var promptCount = 0
@@ -86,8 +86,15 @@ let deadline = Date().addingTimeInterval(35)
 while !proceeded && !reported && gate.phase != .waiting && Date() < deadline {
   RunLoop.main.run(until: Date().addingTimeInterval(0.02))
 }
-if environment["RECONSIDER"] == "1", gate.phase == .waiting {
+if environment["VERIFY_BLOCKED_PAUSE"] == "1" {
+  precondition(gate.phase == .blocked && !proceeded && !gate.isHolding)
+  RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+  precondition(gate.phase == .blocked && !proceeded && !gate.isHolding)
+  emit("BLOCKED_PAUSE")
+}
+if environment["RECONSIDER"] == "1", gate.phase == .waiting || gate.phase == .blocked {
   emit("MENU \(gate.pendingMenuTitle)")
+  reported = false
   gate.reconsider()
   while !proceeded && !reported && gate.phase != .waiting && Date() < deadline {
     RunLoop.main.run(until: Date().addingTimeInterval(0.02))

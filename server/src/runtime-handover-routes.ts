@@ -10,7 +10,7 @@ import { releaseRuntimeHandover, runtimeHandoverActive, runtimeHandoverMatches }
 import { resumeRuntimeGateway } from "./runtime-channel-gateway.js";
 import { acquireRuntimeHandover } from "./runtime-handover.js";
 import { checkpointRuntimeHandover, sealRuntimeHandover } from "./runtime-handover-prepare.js";
-import { assertRuntimeCompatibility, runtimeCompatibility, type RuntimeCompatibility } from "./runtime-compatibility.js";
+import { runtimeCompatibility, type RuntimeCompatibility } from "./runtime-compatibility.js";
 
 export function mountRuntimeHandoverRoutes(api: Hono) {
   api.post("/runtime-handover", async (context) => {
@@ -33,11 +33,9 @@ export function mountRuntimeHandoverRoutes(api: Hono) {
     const { restartImpact } = await import("./reattach.js");
     try {
       const current = runtimeCompatibility();
-      assertRuntimeCompatibility(current, body, false);
-      const result = await acquireRuntimeHandover(restartImpact, heldTurns, {
+      const result = await acquireRuntimeHandover(() => restartImpact(body), heldTurns, {
         seal: sealRuntimeHandover,
         async checkpoint(impact, lease) {
-          assertRuntimeCompatibility(current, body, impact.survives.length > 0);
           await checkpointRuntimeHandover(impact, lease);
         },
       });

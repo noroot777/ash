@@ -20,7 +20,12 @@ struct RestartImpact: Decodable {
   let resumes: [Item]
   let interrupted: [Item]
   let mcpDisrupted: [Item]
-  struct Handover: Decodable { let blocked: [Item]; let sessions: [String] }
+  struct Handover: Decodable {
+    struct Target: Decodable { let `protocol`: Int; let schema: String }
+    let blocked: [Item]
+    let sessions: [String]
+    let target: Target?
+  }
   let runtimeHandover: Handover?
 
   /// 同一个任务两类都占时只算一次（interrupted 优先：它说的后果更重）。
@@ -98,7 +103,15 @@ enum RestartImpactProbe {
   /// 带着认过的那一份的实例号问：问到之前端口换了人，新来的那份不答（server/src/instance-binding.ts），
   /// 闸拿不到别人的名单。
   private static func askImpact(of target: ServiceTarget, instance: String?, preservingRuntime: Bool, recovery: Bool = false) -> ImpactVerdict {
-    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
+    var url = URLComponents(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), resolvingAgainstBaseURL: false)!
+    var nextSchema: String?
+    if preservingRuntime {
+      guard let next = RuntimeHandover.compatibility(), next["protocol"] as? Int == 1,
+            let schema = next["schema"] as? String else { return .unknown("新版接管协议无法核实") }
+      nextSchema = schema
+      url.queryItems = [URLQueryItem(name: "protocol", value: "1"), URLQueryItem(name: "schema", value: schema)]
+    }
+    var request = URLRequest(url: url.url!, timeoutInterval: 8)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // 与 restart.mjs 同一张凭证：单实例锁里那串 token（文件 0600）。本机直连多半用不上，带着不吃亏。
     if let token = hostToken() { request.setValue(token, forHTTPHeaderField: "x-ash-host-token") }
@@ -112,6 +125,10 @@ enum RestartImpactProbe {
       guard status == 200, let data else { verdict = .unknown("服务端回 \(status)"); return }
       guard let impact = try? JSONDecoder().decode(RestartImpact.self, from: data) else {
         verdict = .unknown("答复看不懂（服务端版本太旧？）")
+        return
+      }
+      if let nextSchema, impact.runtimeHandover?.target?.protocol != 1 || impact.runtimeHandover?.target?.schema != nextSchema {
+        verdict = .unknown("旧服务未核对新版兼容性，未切换服务")
         return
       }
       if recovery {
@@ -144,12 +161,16 @@ enum RestartImpactProbe {
 }
 
 enum RuntimeHandover {
+  static func compatibility() -> [String: Any]? {
+    guard let data = try? Data(contentsOf: NaviConfig.runtimeURL.appendingPathComponent(".handover.json")) else { return nil }
+    return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+  }
+
   static func acquire(target: ServiceTarget?) -> String? {
     guard case .ours(let pid) = target,
           case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, instance.pid == pid,
           let codeDir = instance.codeDir, RuntimeStore.contains(codeDir), let id = instance.id else { return nil }
-    guard let data = try? Data(contentsOf: NaviConfig.runtimeURL.appendingPathComponent(".handover.json")),
-          let compatibility = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    guard let compatibility = compatibility(),
           let result = send(instance: id, body: compatibility), let lease = result["lease"] as? String else { return nil }
     guard result["protocol"] as? Int == 1 else { _ = send(instance: id, body: ["release": lease]); return nil }
     return lease

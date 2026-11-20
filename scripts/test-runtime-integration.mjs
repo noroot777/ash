@@ -315,6 +315,35 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     }
     console.log("✓ real Sparkle delegate entrypoints leave the old immutable service and MCP alive; abort releases the gate");
 
+    const incompatibleApp = await copyApp(join(temporary, "incompatible/Navi.app"), "incompatible");
+    const incompatibleRoot = join(incompatibleApp, "Contents/Resources/app");
+    const schemaFile = join(incompatibleRoot, "server/dist/db/schema.js");
+    writeFileSync(schemaFile, readFileSync(schemaFile, "utf8") + "\nexport const preflightSchemaFixture = true;\n");
+    manifest(incompatibleRoot);
+    const incompatible = JSON.parse(readFileSync(join(incompatibleRoot, ".handover.json"), "utf8"));
+    assert.notEqual(incompatible.schema, schema);
+    const preflightHealth = await health();
+    const preflightLock = JSON.parse(readFileSync(join(data, "navi.db.navi.lock"), "utf8"));
+    const preflightHeaders = { "x-navi-host-token": preflightLock.token, "x-navi-instance": preflightHealth.instance.id };
+    const endpoint = JSON.parse(readFileSync(join(data, ".agent-channel-v1/endpoint.json"), "utf8"));
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const preview = await request(`/restart-impact?protocol=1&schema=${incompatible.schema}`);
+      assert.equal(preview.status, 200);
+      assert.deepEqual(preview.body.runtimeHandover.target, incompatible);
+      assert.ok(preview.body.runtimeHandover.blocked.some((item) => item.id === "runtime-compatibility" && /迁移兼容性/.test(item.reason)));
+      const refused = await request("/runtime-handover", "POST", incompatible, preflightHeaders);
+      assert.equal(refused.status, 409);
+      assert.match(refused.body.error, /迁移兼容性/);
+      assert.equal((await request("/tasks")).status, 200, "schema mismatch must not freeze ordinary API traffic");
+      assert.equal((await gatewayRequest(endpoint.socket, "/status")).paused, false, "schema mismatch must not pause stable channels");
+    }
+    const blocked = await probe("blocked", incompatibleApp);
+    assert.match(blocked.stdout, /BLOCKED[\s\S]*迁移兼容性/);
+    assert.match(blocked.stdout, /WAITING WITHOUT HOLD/);
+    assert.equal((await health()).pid, server.pid);
+    await checkHooks(claudeTask);
+    console.log("✓ shared target-aware preflight rejects schema changes before sealing; repeated Swift polls never hold or reload the window");
+
     const nextApp = await copyApp(join(temporary, "next/Navi.app"), "next");
     await run("/bin/bash", [join(mac, "scripts/install-app.sh"), nextApp, applications]);
     assert.equal((await health()).pid, server.pid);
@@ -373,6 +402,9 @@ await import(process.env.FIXTURE_ROOT+'/agent-fixture.mjs');`);
     assert.ok(blockedImpact.runtimeHandover.blocked.some((task) => task.id === created.id));
     assert.equal((await request("/runtime-handover", "POST", { protocol: 1, schema }, headers)).status, 409);
     dbWrite("update tasks set status='done' where id=?", created.id);
+    const idlePreview = await request(`/restart-impact?protocol=1&schema=${incompatible.schema}`);
+    assert.equal(idlePreview.body.survives.length, 0);
+    assert.deepEqual(idlePreview.body.runtimeHandover.blocked, [], "schema changes remain permitted once active tasks have finished");
     const acquired = await request("/runtime-handover", "POST", { protocol: 1, schema }, headers);
     assert.equal(acquired.status, 200);
     const refused = await request("/projects", "POST", { name: "never-created", repoPath: work });

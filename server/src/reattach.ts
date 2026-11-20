@@ -30,6 +30,8 @@ import { closeSessionTurns, markTurnActive } from "./session-turns.js";
 import { reconcileInterruptedTask } from "./task-reconcile.js";
 import { sessionLaunchCompact } from "./usage.js";
 import { runtimeEligibility, type RuntimeEligibility } from "./runtime-eligibility.js";
+import { preflightRuntimeHandover } from "./runtime-handover-preflight.js";
+import type { RuntimeCompatibility } from "./runtime-compatibility.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -56,7 +58,7 @@ export type RestartImpact = {
   runtimeHandover?: RuntimeEligibility;
 };
 
-export async function restartImpact(): Promise<RestartImpact> {
+export async function restartImpact(next?: Partial<RuntimeCompatibility>): Promise<RestartImpact> {
   const out: RestartImpact = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [] };
   for (const t of await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]))) {
     const label = { id: t.id, title: t.title || t.id };
@@ -86,7 +88,10 @@ export async function restartImpact(): Promise<RestartImpact> {
   }
   const holders = await findMcpChannelHolders(out.survives.map((s) => s.pid));
   out.mcpDisrupted = out.survives.filter((s) => holders.has(s.pid));
-  if (process.platform === "darwin") out.runtimeHandover = await runtimeEligibility(out);
+  if (process.platform === "darwin") {
+    out.runtimeHandover = await runtimeEligibility(out);
+    await preflightRuntimeHandover(out, next);
+  }
   return out;
 }
 

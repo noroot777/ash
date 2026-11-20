@@ -43,3 +43,4 @@ export async function startRuntimeGateway(port: number): Promise<void> {
 export async function pauseRuntimeGateway(): Promise<void> { await controller?.pause(); }
 export async function resumeRuntimeGateway(): Promise<void> { await controller?.resume(); }
 export async function runtimeGatewayIdle(): Promise<boolean> { return controller ? controller.idle() : true; }
+export async function runtimeGatewayUnavailable(): Promise<string | undefined> { return controller?.unavailableReason(); }

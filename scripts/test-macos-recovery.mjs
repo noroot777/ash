@@ -73,6 +73,7 @@ import {appendFileSync,existsSync,readdirSync,writeFileSync} from 'node:fs';
 const options=${JSON.stringify(options)}, data=${JSON.stringify(data)}, runtime=${JSON.stringify(previous)};
 const event=value=>appendFileSync(${JSON.stringify(events)},JSON.stringify(value)+'\\n');
 const server=createServer((request,response)=>{
+  const url=new URL(request.url,'http://localhost');
   const requested=existsSync(${JSON.stringify(requestMarker)}),confirmed=existsSync(${JSON.stringify(confirmMarker)});
   const afterBackup=options.changeAfterBackup&&existsSync(data+'/backups')&&
     readdirSync(data+'/backups').some(name=>name.endsWith('.db'));
@@ -83,11 +84,14 @@ const server=createServer((request,response)=>{
       dataDir:changed==='foreign'?data+'-foreign':data,codeDir:changed==='code'?${JSON.stringify(bundled)}:runtime,
       desktop:true,windowPort:45678}}));return;
   }
-  if(request.url==='/api/restart-impact'){
-    event({impact:true,instance:request.headers['x-ash-instance']});
+  if(url.pathname==='/api/restart-impact'){
+    event({impact:true,instance:request.headers['x-ash-instance'],protocol:url.searchParams.get('protocol'),schema:url.searchParams.get('schema')});
     response.writeHead(options.impactFailure?500:200);
-    response.end(JSON.stringify(options.impactFailure?{error:'cannot classify'}:options.clearImpact?
-      {survives:[],resumes:[],interrupted:[],mcpDisrupted:[],runtimeHandover:{blocked:[],sessions:[]}}:${JSON.stringify(impact)}));return;
+    const impact=options.clearImpact?
+      {survives:[],resumes:[],interrupted:[],mcpDisrupted:[],runtimeHandover:{blocked:[],sessions:[]}}:${JSON.stringify(impact)};
+    if(url.searchParams.has('schema')&&!options.omitTarget)impact.runtimeHandover.target={
+      protocol:1,schema:options.targetMismatch?'wrong-target':url.searchParams.get('schema')};
+    response.end(JSON.stringify(options.impactFailure?{error:'cannot classify'}:impact));return;
   }
   if(request.url==='/api/runtime-handover')event({handoff:request.method});
   response.writeHead(409);response.end('blocked');
@@ -258,12 +262,29 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
     console.log("✓ concurrent Sparkle and quit requests run their own package checks instead of inheriting force consent");
 
     await scenario({ clearImpact: true }, async ({ run, pid, recorded }) => {
-      const output = await run(0, { RECONSIDER: "1" });
+      const output = await run(0, { RECONSIDER: "1", VERIFY_BLOCKED_PAUSE: "1" });
       assert.match(output, /打断任务并切换服务/);
+      assert.match(output, /BLOCKED_PAUSE/);
+      assert.match(output, /MENU 重试切换新版服务/);
       assert.equal(isPidAlive(pid), false);
-      assert.ok(recorded().some((event) => event.handoff));
+      assert.equal(recorded().filter((event) => event.handoff).length, 1);
+      const impacts = recorded().filter((event) => event.impact);
+      assert.ok(impacts.some((event) => event.protocol === "1" && event.schema));
+      assert.equal(impacts.at(-1).schema, null);
     });
     console.log("✓ compatibility or consumer barriers absent from impact still expose recovery through the retry menu");
+
+    for (const option of ["targetMismatch", "omitTarget"]) {
+      await scenario({ [option]: true }, async ({ run, pid, recorded }) => {
+        const output = await run(0);
+        assert.match(output, /旧服务未核对新版兼容性/);
+        assert.match(output, /可接管但未获保证的任务/);
+        assert.equal(isPidAlive(pid), false);
+        assert.equal(recorded().some((event) => event.handoff), false);
+        assert.equal(recorded().filter((event) => event.signal).length, 1);
+      });
+    }
+    console.log("✓ missing or mismatched target preflight never permits normal takeover, but explicit fresh recovery remains available");
 
     await scenario({}, async ({ run, previous, data }) => {
       const output = await run(0, { START_FAILED_MIGRATION: "1" });

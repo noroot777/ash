@@ -5,6 +5,11 @@ type HeldTurn = { taskId: string; seq: number; token: string | null; role: strin
 
 export async function acquireRuntimeHandover(assess: () => Promise<RestartImpact>, held: () => HeldTurn[],
   preparation?: { seal(lease: string): Promise<void>; checkpoint(impact: RestartImpact, lease: string): Promise<void> }) {
+  const preview = await assess();
+  if (preview.interrupted.length || preview.resumes.length || preview.runtimeHandover?.blocked.length) {
+    return { error: preview.runtimeHandover?.blocked.map((item) => `${item.title}：${item.reason}`).join("；")
+      || "旧服务继续运行，稍后再接管" };
+  }
   const lease = reserveRuntimeHandover();
   if (!lease) return { error: "另一处正在接管服务" };
   let keep = false;
