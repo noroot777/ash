@@ -1,4 +1,4 @@
-// mac app 窗口专用的那个端口（`NAVI_WINDOW_PORT`，只在本机自用模式下生效）。
+// mac app 窗口专用的那个端口（`NAVI_WINDOW_PORT`，只对 app 起的那份服务（`NAVI_DESKTOP_APP`）生效）。
 //
 // 窗口原来直接连 :4317。app 那份服务停掉、端口被另一份 navi 接手的那一秒里，页面还在发的请求
 // 会落到新来的那一份上：新版 navi 见到别人的实例号会拒收（instance-binding.ts），可旧版 ash 不认
@@ -9,14 +9,16 @@
 // 这个端口不归这份服务独占：有人特意用 PORT 把旧版 ash 起在它上面、又赶在撤页前那一下，请求仍会被
 // 执行。这是用户知情接受的剩余风险（desktop/macos/README.md），彻底堵住要换掉窗口的请求形式。
 //
+// 不管 app 放没放开别的设备访问（`NAVI_LOCAL_ONLY` 带没带），这个端口都只听 127.0.0.1：它只给本机的窗口用。
+//
 // 端口被别的程序占着就不监听，health 答 null：app 据此不载页面、说明是哪个端口被占，绝不退回 4317。
 import { clearEnv, readEnv } from "@navi/shared/env-names";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
-import { LOCAL_ONLY, LOCAL_ONLY_HOSTNAME } from "./local-only.js";
+import { DESKTOP_APP, LOCAL_ONLY_HOSTNAME } from "./local-only.js";
 
 const raw = Number(readEnv(process.env, "NAVI_WINDOW_PORT"));
-const requested = LOCAL_ONLY && Number.isInteger(raw) && raw > 0 && raw <= 65_535 ? raw : null;
+const requested = DESKTOP_APP && Number.isInteger(raw) && raw > 0 && raw <= 65_535 ? raw : null;
 // 读完就拿掉：agent 与应用内终端会继承服务的环境，再起一份服务不该抢这个端口。
 clearEnv(process.env, "NAVI_WINDOW_PORT");
 

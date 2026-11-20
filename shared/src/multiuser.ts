@@ -85,10 +85,15 @@ export interface AuthState {
    */
   needsOnboarding: boolean;
   /**
-   * 以本机自用模式启动(`NAVI_LOCAL_ONLY`,独立 app 就这么起):只听 127.0.0.1、模式固定自用。
+   * 以本机自用模式启动(`NAVI_LOCAL_ONLY`,独立 app 默认这么起):只听 127.0.0.1、模式固定自用。
    * 远程配对、转多人、邀请这些入口在界面上都不出现。
    */
   localOnly: boolean;
+  /**
+   * 这份服务是 Navi.app 起的(`NAVI_DESKTOP_APP`)。只听本机时让别的设备进来的开关在 app 菜单里
+   * 「允许其他设备访问」,界面指路时据此说得出在哪。
+   */
+  desktopApp: boolean;
 }
 
 /**

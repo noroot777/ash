@@ -12,7 +12,7 @@ import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSy
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
 import { stampHumanActionToken } from "./auth/human-action-token.js";
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
-import { LOCAL_ONLY, LOCAL_ONLY_HOSTNAME, LOCAL_ONLY_REFUSAL } from "./local-only.js";
+import { LOCAL_ONLY, LOCAL_ONLY_HOSTNAME, SINGLE_ONLY, SINGLE_ONLY_REFUSAL } from "./local-only.js";
 import { CODE_DIR, DATA_DIR, REPO_DIR } from "./paths.js";
 import { recordListeningPort } from "./listening-port.js";
 import { guardMonitorHook } from "./monitor-hook-failsafe.js";
@@ -110,8 +110,8 @@ async function initializeServer() {
       import("./auth/context.js"),
     ]);
   let instance = await modeModule.instanceConfig();
-  if (LOCAL_ONLY) {
-    if (instance.mode === "multi") throw new Error(`${LOCAL_ONLY_REFUSAL}；这份数据已经是多人模式，不能以本机自用模式打开`);
+  if (SINGLE_ONLY) {
+    if (instance.mode === "multi") throw new Error(`${SINGLE_ONLY_REFUSAL}；这份数据已经是多人模式，不能以自用模式打开`);
     // 首启那一问的答案是开关已经给定的：直接落成自用，向导不出。
     if (instance.mode === "") {
       await modeModule.setInstanceMode("single", "");

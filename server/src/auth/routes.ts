@@ -33,7 +33,7 @@ import {
   toUserView,
   touchUser,
 } from "./store.js";
-import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
+import { DESKTOP_APP, LOCAL_ONLY, LOCAL_ONLY_REFUSAL, SINGLE_ONLY, SINGLE_ONLY_REFUSAL } from "../local-only.js";
 import { needsOnboarding } from "../onboarding.js";
 import { connectionOf, deviceByToken, enrollDevice, peerAddress, remoteKeyMatches, removeDevice } from "./remote-access.js";
 import { mountRemoteAccessRoutes } from "./remote-access-routes.js";
@@ -73,6 +73,7 @@ async function stateFor(c: Context): Promise<AuthState> {
       homeDir: null,
       needsOnboarding: locked ? false : await needsOnboarding(actor),
       localOnly: LOCAL_ONLY,
+      desktopApp: DESKTOP_APP,
     };
   }
   const user = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
@@ -89,6 +90,7 @@ async function stateFor(c: Context): Promise<AuthState> {
     // 没登录就答不上「我还缺什么」,也不该答:那一屏是登录页。
     needsOnboarding: user ? await needsOnboarding(actor) : false,
     localOnly: LOCAL_ONLY,
+    desktopApp: DESKTOP_APP,
   };
 }
 
@@ -208,7 +210,7 @@ export function mountAuthRoutes(api: Hono): void {
     }
     if (body.mode !== "multi") return c.json({ error: "mode 只能是 single 或 multi" }, 400);
     // 排在建目录之前:拒绝就得一个字都不落盘(setInstanceMode 自己也拦,那一道太晚)。
-    if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
+    if (SINGLE_ONLY) return c.json({ error: SINGLE_ONLY_REFUSAL }, 403);
 
     const adminName = (body.adminName ?? "").trim();
     if (!adminName) return c.json({ error: "管理员姓名必填" }, 400);
@@ -277,7 +279,7 @@ export function mountAuthRoutes(api: Hono): void {
   // 而多人模式下执行器是个人资源。不关的话,任何一个登录成员都能从这里读到管理员和
   // 其他人的执行器名字与总数(第 1 轮审查 P2)。首启/补做向导跑在 multi 之前,不受影响。
   api.get("/auth/setup/preflight", async (c) => {
-    if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
+    if (SINGLE_ONLY) return c.json({ error: SINGLE_ONLY_REFUSAL }, 403);
     if (await isMultiUser()) {
       return c.json({ error: "这台 Navi 已经是多人模式了，转换前的盘点只在转换那一刻有意义" }, 409);
     }
