@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { constants, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { sealRuntime, installRuntime, verifyRuntime } from "../desktop/macos/scripts/runtime-store.mjs";
@@ -32,6 +32,13 @@ if (process.platform !== "darwin") {
     function makePayload(directory, version) {
       for (const relative of ["node/bin", "scripts", "server/dist", "mcp/dist"]) mkdirSync(join(directory, relative), { recursive: true });
       copyFileSync(process.execPath, join(directory, "node/bin/node"), constants.COPYFILE_FICLONE);
+      const libraries = join(dirname(process.execPath), "../lib");
+      if (existsSync(libraries)) {
+        for (const name of readdirSync(libraries).filter((entry) => /^libnode.*\.dylib$/.test(entry))) {
+          mkdirSync(join(directory, "node/lib"), { recursive: true });
+          copyFileSync(join(libraries, name), join(directory, "node/lib", name), constants.COPYFILE_FICLONE);
+        }
+      }
       copyFileSync(runtimeTool, join(directory, "scripts/runtime-store.mjs"));
       writeFileSync(join(directory, ".in-use"), "");
       writeFileSync(join(directory, "version"), version);
