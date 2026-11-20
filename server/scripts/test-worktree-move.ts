@@ -36,6 +36,8 @@ const { claudeSessionFilePath } = await import("../src/handoff-collect.js");
 const { taskBranchDiff } = await import("../src/git-diff.js");
 const { baseRef } = await import("../src/task-branch-plan.js");
 const { worktreeBranchName, worktreePathFor } = await import("../src/git.js");
+const { withRepoLock } = await import("../src/repo-lock.js");
+const { serializeWorktreeMoveRequest } = await import("../src/worktree-move-request.js");
 await ensureSchema();
 const api = new Hono();
 mountWorktreeMoveRoutes(api);
@@ -219,6 +221,112 @@ try {
     const missing = await post(id, { base: "no-such-branch" }, { "x-navi-turn-token": "turn-3", "x-navi-direction-token": "dir-3" });
     assert.equal(missing.status, 400, "起点读不出提交当场说清");
     console.log("✓ a pending move can be withdrawn; an unreadable start point is refused up front");
+  }
+  // 撤回与办抢同一把仓库锁：谁先进锁谁成立，撤回回了成功就一定没搬。
+  const pendingRequest = serializeWorktreeMoveRequest({ base: "main", mergeTargetBranch: null, requestedAt: at });
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const holdLock = (repo: string) => {
+    let release!: () => void;
+    const held = withRepoLock(repo, () => new Promise<void>((resolve) => { release = resolve; }));
+    return { release: () => release(), held };
+  };
+  const cancel = (id: string) => api.request(`/tasks/${id}/worktree-move`, { method: "DELETE" });
+
+  {
+    const repo = await repository("race-cancel-first");
+    const id = "racecancel06";
+    await task(id, "race-cancel-first", { status: "paused", resumePrompt: "继续", worktreeMoveRequest: pendingRequest });
+    // 下一回合在撤回之前读到了那份登记，进锁却排在撤回后面。
+    const snapshot = await row(id);
+    const lock = holdLock(repo);
+    await sleep(20);
+    const withdrawing = cancel(id);
+    await sleep(100);
+    const applying = applyPendingWorktreeMove(snapshot);
+    await sleep(100);
+    lock.release();
+    await lock.held;
+    const withdrawn = await withdrawing;
+    await applying;
+    assert.equal(withdrawn.status, 200, await withdrawn.clone().text());
+    const after = await row(id);
+    assert.equal(after.useWorktree, false, "撤回成功了，后面那次办就不能再搬");
+    assert.equal(after.worktreeMoveRequest, null);
+    assert.equal(existsSync(worktreePathFor(repo, id)), false);
+    assert.equal(hasRef(repo, `refs/heads/${worktreeBranchName(id)}`), false);
+    const note = await takeWorkspaceNote(id);
+    assert.match(note, /撤回/);
+    assert.doesNotMatch(note, /没做成/, "撤回那句不被「没做成」盖掉");
+    console.log("✓ a withdrawal that wins the lock stops a move that read the request before it");
+  }
+
+  {
+    const repo = await repository("race-move-first");
+    const id = "racemove0007";
+    await task(id, "race-move-first", { status: "paused", resumePrompt: "继续", worktreeMoveRequest: pendingRequest });
+    const lock = holdLock(repo);
+    await sleep(20);
+    const applying = applyPendingWorktreeMove(await row(id));
+    await sleep(100);
+    const withdrawing = cancel(id);
+    await sleep(100);
+    lock.release();
+    await lock.held;
+    await applying;
+    const withdrawn = await withdrawing;
+    assert.equal(withdrawn.status, 409, "已经办完了就如实说，不回一个假的撤回成功");
+    assert.equal((await row(id)).useWorktree, true);
+    assert.match(await takeWorkspaceNote(id), /工作目录已更换/);
+    console.log("✓ a withdrawal that loses the lock is refused instead of claiming success");
+  }
+
+  {
+    const repo = await repository("copy-fails");
+    const id = "copyfail0008";
+    await task(id, "copy-fails");
+    await db.insert(sessions).values({
+      id: "sess-copy", taskId: id, role: "single", agentType: "claude", executor: "claude@test", cwd: repo, worktreePath: repo,
+      branch: "main", cliSessionId: "cli-copy-1", cliConfigDir: claudeConfig, startedAt: at, endedAt: at, exitStatus: 0,
+    });
+    // 会话文件的位置上是个目录：复制必然失败，走「工作区已经建好之后」的失败分支。
+    const source = claudeSessionFilePath(realpathSync(repo), "cli-copy-1", claudeConfig);
+    mkdirSync(source, { recursive: true });
+    const failed = await post(id, { base: "main" });
+    assert.equal(failed.status, 409);
+    assert.match((await failed.json()).error, /半路失败/);
+    const after = await row(id);
+    assert.equal(after.useWorktree, false);
+    assert.equal(after.worktreeStartCommit, null);
+    assert.equal(existsSync(worktreePathFor(repo, id)), false, "建出来的 worktree 收回了");
+    assert.equal(hasRef(repo, `refs/heads/${worktreeBranchName(id)}`), false, "任务分支收回了");
+    assert.equal(hasRef(repo, baseRef(id)), false, "冻结的开工点收回了");
+    assert.equal(git(repo, "worktree", "list", "--porcelain").includes(id), false);
+    const session = (await db.select().from(sessions).where(eq(sessions.id, "sess-copy")))[0]!;
+    assert.equal(session.cwd, repo, "会话行没改");
+    const worktreeSlug = claudeSessionFilePath(realpathSync(realRoot) + "/copy-fails/.worktrees/" + id, "cli-copy-1", claudeConfig);
+    assert.equal(existsSync(join(worktreeSlug, "..")), false, "复制时新建的会话目录收回了");
+
+    rmSync(source, { recursive: true });
+    writeFileSync(source, `{"sessionId":"cli-copy-1"}\n`);
+    const retried = await post(id, { base: "main" });
+    assert.equal(retried.status, 200, await retried.clone().text());
+    assert.equal((await row(id)).useWorktree, true, "收回干净了，直接重试就能办成");
+    console.log("✓ a failure after the worktree is built rolls everything back and the move can be retried");
+  }
+
+  {
+    await repository("accepted-move");
+    const id = "acceptmove09";
+    await task(id, "accepted-move", { stage: "accepted" });
+    const response = await post(id, { base: "main" });
+    assert.equal(response.status, 409);
+    assert.match((await response.json()).error, /验收/);
+    const pending = "pendingmove10";
+    await task(pending, "accepted-move", { status: "paused", resumePrompt: "继续", worktreeMoveRequest: pendingRequest });
+    const userTry = await post(pending, { base: "main" });
+    assert.equal(userTry.status, 409, "有待办的登记时，用户入口先要撤回它");
+    assert.match((await userTry.json()).error, /先撤回/);
+    console.log("✓ an accepted in-place task, or one with a pending request, is refused with the real reason");
   }
 } finally {
   await removeTmpStage(realRoot);

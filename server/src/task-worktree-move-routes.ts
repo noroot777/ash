@@ -5,8 +5,11 @@
 //       只登记 + 留一段续跑交代，回合结束后叫起下一回合，由下一回合开头办。
 //     · 任务没在跑（用户在信息格里点）：当场占住回合锁办完。
 //   DELETE /tasks/:id/worktree-move   撤回还没办的登记（下一回合照旧在原目录里跑，并告诉智能体撤回了）。
+//
+// 登记和撤回都按「此刻还是我读到的那一份」比对着写；撤回在仓库锁里做，跟「办」的那一段互斥
+// （办的一方进锁后会重读登记，见 task-worktree-move.ts），所以撤回回了成功，任务就一定没被搬走。
 import type { Context, Hono } from "hono";
-import { eq, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
@@ -16,9 +19,11 @@ import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import {
-  dirtyProjectError, moveTaskToWorktree, wakeForWorktreeMove, worktreeMoveBlocker, worktreeMoveInputError, WorktreeMoveError,
+  dirtyProjectError, moveTaskToWorktree, requestIs, wakeForWorktreeMove, worktreeMoveBlocker, worktreeMoveInputError, WorktreeMoveError,
 } from "./task-worktree-move.js";
 import { parseWorktreeMoveRequest, serializeWorktreeMoveRequest } from "./worktree-move-request.js";
+import { withRepoLock } from "./repo-lock.js";
+import { expandHome } from "./git.js";
 import { now } from "./util.js";
 
 const refused = (c: Context, error: unknown) => {
@@ -59,13 +64,21 @@ export function mountWorktreeMoveRoutes(api: Hono): void {
         task.activeTurnToken === null ? isNull(tasks.activeTurnToken) : eq(tasks.activeTurnToken, task.activeTurnToken),
         task.activeDirectionToken === null ? isNull(tasks.activeDirectionToken) : eq(tasks.activeDirectionToken, task.activeDirectionToken),
       ];
+      // 先登记（跟这一回合的身份、「此刻没有别的登记」一起比对），再写续跑交代；交代没写上就把自己这一份收回。
+      const raw = serializeWorktreeMoveRequest({ base, mergeTargetBranch, requestedAt: now() });
+      const registered = await db.update(tasks).set({ worktreeMoveRequest: raw, updatedAt: now() })
+        .where(and(eq(tasks.id, taskId), requestIs(null), ...identity)).returning({ id: tasks.id });
+      if (!registered.length) return c.json({ error: "当前回合已经结束、已被引导，或已经登记过一次，没有登记" }, 409);
       // 续跑交代跟 pause_task 写的是同一格：这一回合结束落「已暂停」，而不是按没交卷记未完成。
       if (!(await occupyResumePrompt(taskId, resumeText(base), false, identity))) {
-        return c.json({ error: "当前回合已经结束或已被引导，没有登记" }, 409);
+        const withdrawn = await withRepoLock(expandHome(project.repoPath), () => db.update(tasks)
+          .set({ worktreeMoveRequest: null, updatedAt: now() })
+          .where(and(eq(tasks.id, taskId), requestIs(raw))).returning({ id: tasks.id }));
+        await publishTaskUpdated(taskId);
+        return withdrawn.length
+          ? c.json({ error: "当前回合已经结束或已被引导，没有登记" }, 409)
+          : c.json({ requested: true, note: "这一回合刚好结束，登记已经被下一回合接手去办了。" });
       }
-      await db.update(tasks).set({
-        worktreeMoveRequest: serializeWorktreeMoveRequest({ base, mergeTargetBranch, requestedAt: now() }), updatedAt: now(),
-      }).where(eq(tasks.id, taskId));
       await publishTaskUpdated(taskId);
       whenTurnIdle(taskId, () => void wakeForWorktreeMove(taskId).catch((error) =>
         console.error(`[navi] 叫起改到独立工作区的下一回合失败 ${taskId}:`, error)));
@@ -92,13 +105,21 @@ export function mountWorktreeMoveRoutes(api: Hono): void {
     const taskId = c.req.param("id");
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) return c.json({ error: "not found" }, 404);
-    const request = parseWorktreeMoveRequest(task.worktreeMoveRequest);
-    if (!request) return c.json({ error: "没有待办的改到独立工作区" }, 409);
-    await db.update(tasks).set({
-      worktreeMoveRequest: null, updatedAt: now(),
-      workspaceNote: `〔改到独立工作区已撤回〕用户撤回了把本任务改到独立工作区（起点 ${request.base}）的请求，工作目录没变。`,
-    }).where(eq(tasks.id, taskId));
-    await appendTaskTimeline(taskId, alertLine(`已撤回改到独立工作区（起点 ${request.base}），工作目录没变。`));
+    const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+    if (!project) return c.json({ error: "任务所在的项目不存在" }, 404);
+    // 等「办」的那一段（如果正在办）做完再看：办完了登记就没了，如实说「已经办了」，不回一个假的撤回成功。
+    const withdrawn = await withRepoLock(expandHome(project.repoPath), async () => {
+      const raw = (await db.select({ raw: tasks.worktreeMoveRequest }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.raw ?? null;
+      const request = parseWorktreeMoveRequest(raw);
+      if (!raw || !request) return null;
+      const cleared = await db.update(tasks).set({
+        worktreeMoveRequest: null, updatedAt: now(),
+        workspaceNote: `〔改到独立工作区已撤回〕用户撤回了把本任务改到独立工作区（起点 ${request.base}）的请求，工作目录没变。`,
+      }).where(and(eq(tasks.id, taskId), requestIs(raw))).returning({ id: tasks.id });
+      return cleared.length ? request : null;
+    });
+    if (!withdrawn) return c.json({ error: "没有待办的改到独立工作区（可能刚刚已经办完了）" }, 409);
+    await appendTaskTimeline(taskId, alertLine(`已撤回改到独立工作区（起点 ${withdrawn.base}），工作目录没变。`));
     return c.json(await publishTaskUpdated(taskId));
   });
 }

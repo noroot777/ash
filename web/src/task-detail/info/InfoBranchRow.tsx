@@ -123,7 +123,9 @@ export function InfoBranchRow({ task, session, notify }: { task: Task; session: 
   const hover = useHoverTip();
   const [moving, setMoving] = useState(false);
   const branch = session.branch!;
+  // 跟服务端 worktreeMoveBlocker 同一组条件：验收合并过的，改动早已落在项目里，不给入口。
   const movable = !task.useWorktree && !task.reviewOf && task.mode === "single" && !task.archived
+    && task.stage !== "accepted" && task.stage !== "merged"
     && task.status !== "running" && task.status !== "queued" && !task.worktreeMoveRequest;
   useEffect(() => {
     if (!movable) setMoving(false);
