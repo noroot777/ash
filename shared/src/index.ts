@@ -93,6 +93,7 @@ export type {
   RemoteAccessView,
   RemoteDeviceVia,
   RemoteDeviceView,
+  ResourceRoots,
   UserHandoffTarget,
   UserRole,
   UserStatus,

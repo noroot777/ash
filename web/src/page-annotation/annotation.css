@@ -81,7 +81,7 @@
 .annotation-position { margin: 0; color: var(--muted); font: var(--t-xs)/1.6 var(--font-mono); }
 .annotation-note-fields label { display: grid; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
 .annotation-note-fields input,
-.annotation-note-fields textarea { width: 100%; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 8px; color: var(--ink); font: 12px/1.6 var(--font-sans); }
+.annotation-note-fields textarea { width: 100%; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 8px; color: var(--ink); font: 12px/1.5 var(--font-sans); }
 .annotation-note-fields textarea { resize: none; min-height: 80px; }
 .annotation-dialog .annotation-delete { justify-self: start; border: 0; color: var(--red); }
 .annotation-reply-preview { flex-shrink: 0; border-top: 1px solid var(--line); padding: 8px 16px; color: var(--muted); font-size: var(--t-xs); }

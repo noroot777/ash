@@ -22,7 +22,7 @@
   color: var(--ink);
   font: inherit;
   font-size: var(--t-sm);
-  line-height: 1.6;
+  line-height: 1.5;
   resize: none;
   transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }

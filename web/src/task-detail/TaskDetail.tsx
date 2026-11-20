@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { Group, Task, TaskListItem } from "@navi/shared";
 import { isUserFollowUp } from "@navi/shared";
 import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
-import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
+import { usePreviewTab } from "../preview-workspace/previewTab.tsx";
 import { RuntimeAutoOpen } from "../task-runtime/RuntimeAutoOpen.tsx";
 import { PlanModeChip } from "./PlanModeChip.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
@@ -98,8 +98,9 @@ export function TaskDetail({
   const confirmExecutorSwap = useExecutorGate();
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // 中间那一栏同一时刻只放一样东西：会话 / 预览指正 / 审查工作区。点开的文件、文件夹、diff
-  // 摊在右侧面板「查看」那一格（files/fileViewTab.tsx），会话和回复框一直留着。
+  // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区。点开的文件、文件夹、diff 摊在右侧面板
+  // 「查看」那一格（files/fileViewTab.tsx），预览指正长在「预览指正」那一格（preview-workspace/
+  // previewTab.tsx），会话和回复框一直留着。
   const fileView = useFileView(task.id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markDoneOpen, setMarkDoneOpen] = useState(false);
@@ -115,7 +116,8 @@ export function TaskDetail({
   const { subagents, monitorTab, inspectors: stackInspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, runtime, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
     task, allTasks, tasksReady, conversation,
   });
-  const { inspectors, reveal: fileViewReveal } = useFileViewTab(stackInspectors, fileView, TASK_FILE_TABS);
+  const { inspectors: fileViewInspectors, reveal: fileViewReveal } = useFileViewTab(stackInspectors, fileView, TASK_FILE_TABS);
+  const inspectors = usePreviewTab(fileViewInspectors, previewOpen);
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
@@ -191,10 +193,7 @@ export function TaskDetail({
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
-    if (open) {
-      setPreviewOpen(false);
-      closeDrawers();
-    }
+    if (open) closeDrawers();
     onReviewOpenChange?.(open);
   };
 
@@ -326,7 +325,7 @@ export function TaskDetail({
           runFacts,
           onOpenTask,
           onOpenReview: () => changeReviewOpen(true),
-          onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); closeDrawers(); },
+          preview: { open: previewOpen, onOpen: () => setPreviewOpen(true), onClose: () => setPreviewOpen(false) },
           onTaskUpdated: onTaskUpdate,
           onPatch: patch,
           onQueueChanged: (updatedTask) => {
@@ -389,9 +388,7 @@ export function TaskDetail({
                   onTaskUpdate={onTaskUpdate}
                 />
               )}
-              {previewOpen ? (
-                <PreviewWorkspace key={task.id} taskId={task.id} onClose={() => setPreviewOpen(false)} />
-              ) : reviewOpen ? (
+              {reviewOpen ? (
                 <TaskReviewWorkspace
                   task={task}
                   allTasks={allTasks}

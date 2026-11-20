@@ -279,8 +279,113 @@ try {
   assert.equal(await take(), "第 2 条改完，测试也过了。\n\n接下来做第 3 条。",
     "按下去要兑现当时选的那段话,不许静默丢弃");
 
+  // ⑰ 三击一段、或双击后手往下抖进气泡内边距,WebKit 会把段尾分段符一起选进去,终点落在**下一条
+  //    的开头** —— 两条之间的空隙被整条涂成选中色,浮条也被推到那条灰带下面(mac 版用户报的那一幕)。
+  //    松手后终点拉回这段话最后一个字后面;反着选的,方向也不许翻。
+  await page.getByTestId("clear").click();
+  const userLine = "第 2 条改完就接着做第 3 条。";
+  await page.getByText(userLine, { exact: true }).scrollIntoViewIfNeeded();
+  await settle();
+  for (const backward of [false, true]) {
+    const crossedBlock = await page.evaluate(([line, reverse]) => {
+      const walker = document.createTreeWalker(document.querySelector(".conversation-selection-scope"), NodeFilter.SHOW_TEXT);
+      while (walker.nextNode() && walker.currentNode.textContent !== line);
+      const text = walker.currentNode;
+      const message = text.parentElement.closest(".task-message");
+      const next = message.nextElementSibling;
+      const selection = getSelection();
+      if (reverse) selection.setBaseAndExtent(next, 0, text, 0);
+      else selection.setBaseAndExtent(text, 0, next, 0);
+      document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+      text.parentElement.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      return !message.contains(selection.getRangeAt(0).endContainer);
+    }, [userLine, backward]);
+    assert.equal(crossedBlock, true, "原生选区确实搭到了下一条上(没搭到的话这条用例什么都没证明)");
+    // 上一轮的浮条还挂着,光等浮条会赶在这一轮那一帧之前读选区;排在它后面的两帧过完,它一定算过了。
+    await flush();
+    await memo.waitFor();
+    const trimmed = await page.evaluate((line) => {
+      const selection = getSelection();
+      const range = selection.getRangeAt(0);
+      const point = (node, offset) => node.nodeType === Node.TEXT_NODE && node.textContent === line ? offset : `${node.nodeName}:${offset}`;
+      return {
+        text: selection.toString(),
+        start: point(range.startContainer, range.startOffset),
+        end: point(range.endContainer, range.endOffset),
+        anchor: point(selection.anchorNode, selection.anchorOffset),
+      };
+    }, userLine);
+    assert.deepEqual(trimmed, { text: userLine, start: 0, end: userLine.length, anchor: backward ? userLine.length : 0 },
+      backward ? "反着选的剪完仍是反向" : "终点拉回这段话最后一个字后面");
+  }
+  assert.equal(await take(), userLine);
+
+  // ⑱ 鼠标还按着时不碰选区:取文要借用选区再还原,还原会冲掉 WebKit 这一下手势的扩展粒度
+  //    (双击后第二下手一抖,选中的词当场塌没)。按着时浮条不出,收尾时补算。
+  //    收尾只认「左键已松」的证据:按着切去别的窗口、在那边松的手,页面收不到 mouseup ——
+  //    回来一移动看出键没按着就补算(只清标记不补算,浮条再也不出:审查第 1 轮必修);
+  //    回到窗口(focus)本身不带按键状态、松开的是右键,都不算松手,左键还按着时照旧不碰
+  //    选区(审查第 2 轮必修);浏览器接走手势(pointercancel)当场补算。
+  const holdAndSelect = (count) => page.evaluate(([line, n]) => {
+    getSelection().removeAllRanges();
+    const walker = document.createTreeWalker(document.querySelector(".conversation-selection-scope"), NodeFilter.SHOW_TEXT);
+    while (walker.nextNode() && walker.currentNode.textContent !== line);
+    const text = walker.currentNode;
+    text.parentElement.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, buttons: 1 }));
+    getSelection().setBaseAndExtent(text, 0, text, n);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+  }, [userLine, count]);
+  const element = page.getByText(userLine, { exact: true });
+  const fire = (event) => element.evaluate((node, [type, init]) => {
+    const Kind = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+    node.dispatchEvent(new Kind(type, { bubbles: true, ...init }));
+  }, event);
+  const toWindow = (type) => page.evaluate((name) => window.dispatchEvent(new Event(name)), type);
+  const stillHeld = async (why) => {
+    await frames(6);
+    assert.equal(await memo.isVisible().catch(() => false), false, why);
+  };
+  const leftUp = () => fire(["mouseup", { button: 0, buttons: 0 }]);
+  const endings = [
+    ["松手", leftUp],
+    ["失焦后回来一移动", async () => {
+      await toWindow("blur");
+      await stillHeld("失焦那一下手可能还按着,不收尾");
+      await fire(["mousemove", { buttons: 0 }]);
+    }],
+    ["按着切出再切回、接着拖(多拖出一个字)", async () => {
+      await toWindow("blur");
+      await toWindow("focus");
+      await stillHeld("回到窗口不带按键状态,不能当成松手");
+      await fire(["mousemove", { buttons: 1 }]);
+      await page.evaluate(() => {
+        const { anchorNode, focusNode, focusOffset } = getSelection();
+        getSelection().setBaseAndExtent(anchorNode, 0, focusNode, focusOffset + 1);
+        document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+      });
+      await stillHeld("左键一直按着接着拖,浮条照旧不出");
+      await leftUp();
+    }],
+    ["松开右键", async () => {
+      await fire(["mouseup", { button: 2, buttons: 1 }]);
+      await stillHeld("松的是右键,左键还按着");
+      await leftUp();
+    }],
+    ["浏览器接走手势", () => fire(["pointercancel", {}])],
+  ];
+  for (const [index, [name, end]] of endings.entries()) {
+    await page.getByTestId("clear").click();
+    await holdAndSelect(index + 2);
+    await frames(6);
+    assert.equal(await memo.isVisible().catch(() => false), false, `${name}:鼠标还按着时浮条不出`);
+    await end();
+    await memo.waitFor();
+    const dragged = name.includes("多拖出一个字") ? 1 : 0;
+    assert.equal(await take(), userLine.slice(0, index + 2 + dragged), `${name}:收尾后补算出按着时选的那段`);
+  }
+
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("✓ 会话选文只取正文:剔不出正文时内部还原能收口(不逐帧重算)、每一截都是原选区的子区间(从正文岛中间起步不补前半句)、只选到空白时撤掉浮条、折起来的卡片保住摘要行那段正文、隐藏子树一个字不漏、浮条按下去必定兑现、跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
+  console.log("✓ 会话选文只取正文:搭到下一条开头的段尾分段符松手后剪掉(反向选区不翻)、鼠标按着时不借用选区(只认左键已松或手势被接走才补算,切回窗口/松右键不算)、剔不出正文时内部还原能收口(不逐帧重算)、每一截都是原选区的子区间(从正文岛中间起步不补前半句)、只选到空白时撤掉浮条、折起来的卡片保住摘要行那段正文、隐藏子树一个字不漏、浮条按下去必定兑现、跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
 } finally {
   await browser?.close();
   await web.close();

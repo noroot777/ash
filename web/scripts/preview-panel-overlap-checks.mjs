@@ -62,5 +62,7 @@ export async function checkPreviewPanelOverlap(page, draft) {
   assert.equal(await page.locator(".preview-workspace").count(), 0, "the close button remains operable after moving and resizing");
   await button("打开预览指正").click();
   await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
+  assert.equal(await page.locator(".preview-workspace.is-expanded").count(), 0, "reopening starts in place");
+  await button("放大预览").click();
   console.log("floating panel overlap: drag in both directions, compact clamp, tool expansion, keyboard collision, notes, viewport resize and closing passed");
 }

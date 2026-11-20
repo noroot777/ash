@@ -120,6 +120,8 @@ function InspectorHostState<Context>({
     if (narrow) setNarrowOpen(state.visible);
   }
   const panelVisible = (narrow ? narrowOpen : state.visible) && activeDescriptor !== null;
+  // 保活的格（descriptor.keepAlive）：在竖轨上就一直挂着，没轮到它、整栏收着时只是藏起来。
+  const keptDescriptors = openedDescriptors.filter((descriptor) => descriptor.keepAlive);
   // 宽格（descriptor.wide）按整块布局的比例算宽；窄屏上整栏本来就盖满，不分宽窄。
   const wide = !!activeDescriptor?.wide && !narrow;
   const dragStart = useRef<{ x: number; width: number; total: number; wide: boolean } | null>(null);
@@ -377,9 +379,11 @@ function InspectorHostState<Context>({
       <div className="inspector-layout__main">
         {children({ visible: panelVisible, toggle, openTab, toggleButton })}
       </div>
-      {panelVisible && activeDescriptor && (
+      {/* 有保活的格时整栏收起也不卸，只藏：卸掉 aside 就把里面那份活现场一起卸了。 */}
+      {activeDescriptor && (panelVisible || keptDescriptors.length > 0) && (
         <aside
           id={panelId}
+          hidden={!panelVisible}
           className={`inspector-host${resizing ? " inspector-host--resizing" : ""}`}
           style={{ "--inspector-width": wide ? `${state.wideRatio * 100}%` : `${state.width}px` } as CSSProperties}
           aria-label="Inspector 侧边栏"
@@ -443,18 +447,40 @@ function InspectorHostState<Context>({
               </button>
               <HoverTip at={closeTip.at}>{narrow ? "收起，回到内容" : "移出竖轨，可从 + 加回"}</HoverTip>
             </div>}
-            <div
-              id={contentIdFor(activeDescriptor.id)}
-              className={`inspector-host__content${activeDescriptor.bare ? " inspector-host__content--bare" : ""}`}
-              role="tabpanel"
-              aria-labelledby={tabIdFor(activeDescriptor.id)}
-            >
-              <InspectorHeadSlotProvider value={headSlot}>
-                <InspectorNavProvider value={nav}>
-                  {activeDescriptor.render(context)}
-                </InspectorNavProvider>
-              </InspectorHeadSlotProvider>
-            </div>
+            {!activeDescriptor.keepAlive && (
+              <div
+                id={contentIdFor(activeDescriptor.id)}
+                className={`inspector-host__content${activeDescriptor.bare ? " inspector-host__content--bare" : ""}`}
+                role="tabpanel"
+                aria-labelledby={tabIdFor(activeDescriptor.id)}
+              >
+                <InspectorHeadSlotProvider value={headSlot}>
+                  <InspectorNavProvider value={nav}>
+                    {activeDescriptor.render(context)}
+                  </InspectorNavProvider>
+                </InspectorHeadSlotProvider>
+              </div>
+            )}
+            {keptDescriptors.map((descriptor) => {
+              const active = descriptor.id === activeDescriptor.id;
+              return (
+                <div
+                  key={descriptor.id}
+                  id={contentIdFor(descriptor.id)}
+                  hidden={!active}
+                  className={`inspector-host__content${descriptor.bare ? " inspector-host__content--bare" : ""}`}
+                  role="tabpanel"
+                  aria-labelledby={tabIdFor(descriptor.id)}
+                >
+                  {/* 藏着的格不往头带里挂动作：那条头带此刻属于别的格。 */}
+                  <InspectorHeadSlotProvider value={active ? headSlot : null}>
+                    <InspectorNavProvider value={nav}>
+                      {descriptor.render(context)}
+                    </InspectorNavProvider>
+                  </InspectorHeadSlotProvider>
+                </div>
+              );
+            })}
           </div>
         </aside>
       )}

@@ -53,7 +53,7 @@
 /* 最后一行：自己写的话 + 全卡唯一的发送键。 */
 .question-card-note { display: flex; flex: 0 0 auto; align-items: flex-end; gap: 10px; border-top: 1px solid var(--line); padding: 7px 8px 7px 14px; }
 .question-card-note > .question-card-key { margin-bottom: 7px; }
-.question-card-note textarea { min-width: 0; flex: 1 1 auto; min-height: 34px; resize: none; border: 0; padding: 7px 0; background: transparent; color: var(--ink); font: 12.5px/1.55 var(--font-sans); }
+.question-card-note textarea { min-width: 0; flex: 1 1 auto; min-height: 34px; resize: none; border: 0; padding: 7px 0; background: transparent; color: var(--ink); font: 12.5px/1.5 var(--font-sans); }
 .question-card-note textarea:focus-visible { outline: none; }
 .question-card:has(.question-card-note textarea:focus-visible) { border-color: var(--focus-soft); }
 .question-card-note textarea:disabled { cursor: not-allowed; }

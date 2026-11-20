@@ -442,3 +442,10 @@
   overflow: hidden;
   flex-direction: column;
 }
+
+/* 保活的格（descriptor.keepAlive）藏起来时、整栏因它而只藏不卸时：上面几条 display 会盖过
+   `hidden` 的默认样式，这里补回来。 */
+.inspector-host[hidden],
+.inspector-host__content[hidden] {
+  display: none;
+}
