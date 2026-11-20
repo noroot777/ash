@@ -136,7 +136,10 @@ final class ServerLauncher {
     case .navi(let instance):
       guard NaviHealth.isServing(probe) else { return .occupied(Occupant.otherNavi(instance)) }
       // 不管服务是谁起的、谁先看到它起来，确认都在这一处（窗口、登录项、另一个窗口的重试都经过这里）。
-      if NaviConfig.isLocal { ServerRecord.confirmServing(pid: instance.pid) }
+      if NaviConfig.isLocal {
+        ServerRecord.confirmServing(pid: instance.pid)
+        ServedInstance.observe(instance)
+      }
       return .ready
     }
   }
@@ -202,6 +205,7 @@ final class ServerLauncher {
       let probe = NaviHealth.probeSync()
       if case .navi(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
         ServerRecord.confirmServing(pid: Int(pid))
+        ServedInstance.observe(instance)
         return .ready
       }
       if case .navi(let instance) = probe, !instance.isOurs { return .occupied(Occupant.otherNavi(instance)) }

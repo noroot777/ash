@@ -40,14 +40,15 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Navi
 两个开关各管一件事（`server/src/local-only.ts`）：`NAVI_DESKTOP_APP` 说「这是 app 起的那一份」（health 里认自家、窗口专用端口、模式固定自用），`NAVI_LOCAL_ONLY` 只管网络暴露面（只听 127.0.0.1、关掉远程配对和访问密钥）。
 
 - 菜单「Navi › 允许其他设备访问」打勾 = 起服务时 `NAVI_LOCAL_ONLY=0`：服务听所有网卡，同一 Tailscale / 局域网里的设备打开 `http://<这台 Mac>:4317` 走现有的配对流程（这台电脑上批准，或者输访问密钥，「设置 › 默认规则 › 远程访问」），飞书卡片上的「在 Navi 中打开」在手机上也就打得开了。窗口专用端口不受影响，始终只听 127.0.0.1。
-- 设置存在 UserDefaults（`NaviAllowOtherDevices`），服务按起的那一下的值定，所以改了要重启：先问「现在重启会打断谁」，会打断或确认不了才弹窗让人选，放行后攥着维护锁只停评估过的那一份，再按新设置起（`RemoteAccessSwitch.swift`）。没停成就把设置改回去。
+- 设置存在 UserDefaults（`NaviAllowOtherDevices`），服务按起的那一下的值定，所以改了要重启：先问「现在重启会打断谁」，会打断或确认不了才弹窗让人选，放行后攥着维护锁只停评估过的那一份，确认停下之后才把新设置落盘，再按它起（`RemoteAccessSwitch.swift`）。这样中途在哪一步退出，留下的设置和服务都对得上；没停成就什么都不改。
+- 设置和在跑的服务还是可能对不上（手动改了 defaults、上一版 app 起的服务）：app 记着每次认出自家服务时它报的 `localOnly`（`ServedInstance`），对不上时菜单写「允许其他设备访问（重启服务后生效）」，点它就按现在的设置重启。
 - 只听本机时，飞书设置页存着的「卡片深链地址」不是本机地址的话，就地说明手机打不开、指向这个开关（`server/src/im/app-link.ts`）。
 
 ## navi:// 链接
 
-app 注册了 `navi://`（`build.sh` 写进 Info.plist）。`navi://open?project=<项目>&task=<任务>` 把窗口拉到前面、打开那个任务：页面在着就原地换路由，还没载进来就载到那里（`DeepLink.swift`）。只收这两个参数、只收 id 的字形，别的链接只把窗口拉到前面。
+app 注册了 `navi://`（`build.sh` 写进 Info.plist）。`navi://open?project=<项目>&task=<任务>&instance=<指纹>&fallback=<http 地址>` 把窗口拉到前面；自家服务报的指纹（`server/src/instance-tag.ts`，health 里的 `instance.tag`）和链接里的对上，才在窗口里打开那个任务（页面在着就原地换路由，还没载进来就载到那里），对不上或认不出（另一台 Mac 发的卡、app 指着别处）就把 http 地址交给浏览器（`DeepLink.swift`）。只收这几个参数、只收 id 和指纹的字形，fallback 只收指着同一个任务的 http(s) 地址；别的链接只把窗口拉到前面。
 
-飞书卡片在 app 起的服务上给按钮的 `pc_url` 带这条链接（手机仍走 `default_url` 的 http）。飞书开放平台文档写明 `pc_url` 支持 AppLink，没写第三方 scheme 支不支持——桌面端飞书点了没反应的话，回退办法是把 `server/src/im/app-link.ts` 的 `desktopAppLink` 关掉。
+飞书卡片只在 app 起的服务**只听本机**时给按钮的 `pc_url` 带这条链接（手机仍走 `default_url` 的 http）：那时 http 在哪台电脑上都打不开，`navi://` 只会让本机这一台变好。放开了别的设备访问就不给，桌面端也走 http —— 发卡的服务不知道收卡的电脑装没装 app。飞书开放平台文档写明 `pc_url` 支持 AppLink，没写第三方 scheme 支不支持，真飞书桌面端没验证过（`server/src/im/app-link.ts`）。
 
 ## 自更新
 

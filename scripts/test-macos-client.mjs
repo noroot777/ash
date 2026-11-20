@@ -44,7 +44,7 @@ copyFileSync(join(root, "scripts/start-detached.mjs"), join(runtime, "scripts/st
 const build = spawnSync("swiftc", ["-swift-version", "5",
   ...["NaviConfig", "NaviHealth", "DataImport", "DatabaseBackup", "DownloadTransaction", "ServerControl", "ServerStartLock", "ServerLauncher",
     "WindowChrome", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "FirstRunView", "NaviPalette", "HostMcpSetup", "UpdateGate", "RestartImpact",
-    "LegacyIdentity", "LoginService"]
+    "LegacyIdentity", "LoginService", "DeepLink"]
     .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
   ...["main", "WindowChromeProbe", "InstanceGuardProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)),
   "-o", binary], { encoding: "utf8" });
@@ -215,6 +215,11 @@ try {
   result = await launch(binary, ["reclaim"], env).done;
   assert.deepEqual(readdirSync(journal), [], "an entry unreachable for a month is given up");
   console.log("PASS: reclaim spares live downloads, collects killed ones, ignores malformed entries, expires unreachable ones");
+
+  result = await launch(binary, ["deeplink", "-NaviAllowOtherDevices", "NO"], env).done;
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.output, /DEEPLINK OK/);
+  console.log("PASS: navi:// links parse only known shapes; the window opens them only for our own instance, others go to the http fallback; a service not started per the menu setting is reported as pending");
 
   // 探针窗口摆在屏幕外、不激活应用；页面是内联的，不碰任何服务。
   result = await launch(binary, ["chrome"], env).done;

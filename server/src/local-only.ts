@@ -29,4 +29,3 @@ export const LOCAL_ONLY_REFUSAL = "这台 Navi 以本机自用模式启动（NAV
 
 /** 转多人被拒时说的那句：本机模式按上面那句说，app 放开了网络的按 app 说。 */
 export const SINGLE_ONLY_REFUSAL = LOCAL_ONLY ? LOCAL_ONLY_REFUSAL : "这台 Navi 是 Navi.app 的个人自用版：没有多人和邀请";
-

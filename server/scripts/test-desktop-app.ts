@@ -2,8 +2,9 @@
 //   ① 实例模式仍固定自用：转多人 403、被拒的转换不落库；`auth/state` 报 desktopApp、不报 localOnly；
 //   ② 远程访问回到普通自用实例的样子：本机看得到远程访问页和访问密钥；转进来的请求拿访问密钥认成机主，
 //      不带凭证 401（不是本机模式那句拒绝）；
-//   ③ 卡片深链：任务链接在按钮和整行可点的项上都带一条 `navi://` 的 pc_url，手机走的 default_url 不变；
-//      深链地址的说明（只听本机 / 回环地址）按开关组合给出。
+//   ③ 卡片深链：放开了网络（http 在每台电脑上都打得开）就不给 pc_url，按钮和整行可点的项都只有 default_url；
+//      只听本机时才给 navi://，而且带着这份 Navi 的指纹和原来那条 http 地址（收到的 app 据此认是不是冲着
+//      自己来的、对不上退回 http），认不出的 id 不拼；深链地址的说明（只听本机 / 回环地址）按开关组合给出。
 //
 // 本机模式（两个都带）那一侧由 test:local-only-auth 钉着。走真实 TCP：判据里「回环 socket + Host +
 // 转发头」只有真连接测得出来。
@@ -101,10 +102,21 @@ try {
 
   // ③ 卡片深链
   const link = "http://mbp.tail97f3a6.ts.net:4317/?project=p_1&task=dZL_L1D4ZCAb";
-  assert.equal(desktopAppLink(link), "navi://open?project=p_1&task=dZL_L1D4ZCAb");
-  assert.equal(desktopAppLink(link, false), null, "不是 app 起的服务不给 navi://");
-  assert.equal(desktopAppLink("http://x:4317/?task=t1"), null, "没有项目的不是任务链接");
-  assert.equal(desktopAppLink("http://x:4317/?project=p&task=a%22b"), null, "认不出的 id 不拼进 navi://");
+  const closed = { localOnly: true, desktopApp: true };
+  const tag = () => "AB12-CD34";
+  const app = desktopAppLink(link, closed, tag);
+  assert.ok(app, "只听本机的 app 服务给 navi://");
+  const parsed = new URL(app);
+  assert.equal(parsed.protocol, "navi:");
+  assert.equal(parsed.host, "open");
+  assert.deepEqual(Object.fromEntries(parsed.searchParams),
+    { project: "p_1", task: "dZL_L1D4ZCAb", instance: "AB12-CD34", fallback: link }, "带着来源：指纹和原来那条 http 地址");
+  const other = new URL(desktopAppLink("http://another-mac.tailnet.ts.net:4317/?project=p_1&task=dZL_L1D4ZCAb", closed, tag)!);
+  assert.notEqual(other.searchParams.get("fallback"), parsed.searchParams.get("fallback"), "两个来源不会变成同一条链接");
+  assert.equal(desktopAppLink(link), null, "这份服务放开了网络：http 每台电脑都打得开，不给 navi://");
+  assert.equal(desktopAppLink(link, { localOnly: true, desktopApp: false }, tag), null, "不是 app 起的服务不给 navi://");
+  assert.equal(desktopAppLink("http://x:4317/?task=t1", closed, tag), null, "没有项目的不是任务链接");
+  assert.equal(desktopAppLink("http://x:4317/?project=p&task=a%22b", closed, tag), null, "认不出的 id 不拼进 navi://");
   const card = JSON.stringify(renderCard({
     title: "t", tone: "green",
     blocks: [
@@ -115,7 +127,7 @@ try {
   const behaviors = [...card.matchAll(/"behaviors":\[(\{[^\]]*\})\]/g)].map((m) => JSON.parse(m[1]!) as Record<string, string>);
   assert.equal(behaviors.length, 2);
   for (const behavior of behaviors) {
-    assert.deepEqual(behavior, { type: "open_url", default_url: link, pc_url: "navi://open?project=p_1&task=dZL_L1D4ZCAb" });
+    assert.deepEqual(behavior, { type: "open_url", default_url: link }, "放开了网络的服务：桌面端也走 http");
   }
 
   const tail = "http://mbp.tail97f3a6.ts.net:4317";

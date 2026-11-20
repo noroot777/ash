@@ -4,10 +4,18 @@
 // 以本机自用模式起的（NAVI_LOCAL_ONLY，mac 版默认）只听 127.0.0.1，手机、别的电脑连端口都连不上，
 // 地址填得再对也打不开 —— 设置页和保存时据此就地说一句（不拒存：开关一打开它就能用了）。
 //
-// mac 版另给桌面端飞书一条 `navi://open?project=&task=`（Navi.app 注册了这个 scheme，收到就把窗口
-// 拉到前面、打开那个任务），放在按钮的 `pc_url` 上；手机端仍走 http（`default_url`）。飞书文档写明
-// pc_url 支持 AppLink、没说第三方 scheme 支持与否，所以只在 app 起的那份服务上给。
+// mac 版只听本机时，另给桌面端飞书一条 `navi://open?...`（Navi.app 注册了这个 scheme），放在按钮的
+// `pc_url` 上；手机端仍走 http（`default_url`）。发卡的服务判断不了收卡的是哪台电脑、装没装 app、
+// 那份 app 连的是不是这一份 Navi，所以两条约束：
+//   · 只在 http 在**任何**电脑上都打不开时才给（app 起的服务、只听本机）：这时 navi:// 只可能让本机
+//     那一台打得开，别的电脑本来就打不开，不会更糟。放开了别的设备访问，http 在每台电脑上都能用，
+//     就不再给 —— 否则没装 app、或装着的 app 连着别的 Navi 的电脑反倒打不开。
+//   · 链接自带来源：这份服务的指纹（instance-tag.ts）和原来那条 http 地址。Navi.app 收到后比对自己
+//     那份服务报的指纹，对上才在窗口里打开，对不上（连着别的 Navi）就把 http 地址交给浏览器，
+//     不在别的工作台里打开一个同号的任务（desktop/macos/Sources/DeepLink.swift）。
+// 飞书文档写明 pc_url 支持 AppLink、没说第三方 scheme 支持与否，真飞书桌面端点没点得开没验证过。
 import { isLoopbackHost } from "../auth/remote-access.js";
+import { instanceTag } from "../instance-tag.js";
 import { DESKTOP_APP, LOCAL_ONLY } from "../local-only.js";
 
 /** 深链地址在这台服务上为什么打不开（说给设置页看）；没问题是 null。 */
@@ -28,9 +36,13 @@ export function deepLinkWarning(base: string | null, env = { localOnly: LOCAL_ON
 
 const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 
-/** 桌面端飞书用的那条 `navi://`；不是 app 起的服务、或者链接不是任务链接时是 null。 */
-export function desktopAppLink(url: string, desktopApp = DESKTOP_APP): string | null {
-  if (!desktopApp) return null;
+/** 桌面端飞书用的那条 `navi://`；不该给（见文件头）、或者链接不是任务链接时是 null。 */
+export function desktopAppLink(
+  url: string,
+  env = { localOnly: LOCAL_ONLY, desktopApp: DESKTOP_APP },
+  tag: () => string = instanceTag,
+): string | null {
+  if (!env.desktopApp || !env.localOnly) return null;
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -44,5 +56,8 @@ export function desktopAppLink(url: string, desktopApp = DESKTOP_APP): string | 
     if (!ID_RE.test(value)) return null;
     out.set(key, value);
   }
-  return out.has("project") ? `navi://open?${out}` : null;
+  if (!out.has("project")) return null;
+  out.set("instance", tag());
+  out.set("fallback", url);
+  return `navi://open?${out}`;
 }

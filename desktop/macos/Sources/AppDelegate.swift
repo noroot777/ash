@@ -104,6 +104,8 @@ extension AppDelegate: NSMenuItemValidation {
     // 只有本机那份才有「让不让别的设备进来」这回事：连别处的 navi 时 app 只是个窗口。
     if item.action == #selector(toggleOtherDevices(_:)) {
       item.state = NaviConfig.allowsOtherDevices ? .on : .off
+      // 在跑的服务没按这个勾起（ServedInstance）：如实写出来，点它就是按勾重启。
+      item.title = ServedInstance.networkPending ? "允许其他设备访问（重启服务后生效）" : "允许其他设备访问"
       return NaviConfig.isLocal && !RemoteAccessSwitch.busy
     }
     // 只有本机那份才有「替这台机器的 CLI 接 MCP」这回事。
