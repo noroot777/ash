@@ -614,11 +614,45 @@ try {
     git(sample.repo, "config", "--unset", "core.autocrlf");
   }
 
+  // ㊼ 发布期间另一个终端 `git switch -c`（不拿索引锁，换得了 HEAD）：分支已经挪了 / 改动已经写进检出，可项目目录
+  // 现在是另一个分支 —— 不报成功，说清落到了哪一步、项目目录在哪，不替用户复位。
+  for (const commit of [true, false]) {
+    const sample = await fixture(`landing-switch-during-${commit ? "commit" : "stage"}`, { baseline: "merge_preview" });
+    const before = git(sample.repo, "rev-parse", "main");
+    // 封好的发布环境带着 GIT_DIR / GIT_INDEX_FILE 等，另一个终端没有：清掉再切（`G[I]T`：wrapGit 会把 GIT 换成真 git）。
+    const bin = wrapGit(`switch-during-${commit}`, " read-tree -m -u ",
+      `(for v in $(env | sed -n 's/^\\(G[I]T_[A-Z_]*\\)=.*/\\1/p'); do unset "$v"; done; GIT -C '${sample.repo}' switch -q -c fresh)`);
+    const outcome = await withPath(bin, arm => landGuarded(sample, arm, { commit }));
+    assert.ok(existsSync(join(bin, "fired")));
+    assert.equal(git(sample.repo, "symbolic-ref", "HEAD"), "refs/heads/fresh", "前提：发布期间项目目录被切到了 fresh");
+    assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
+    if (!outcome.landed.ok) assert.match(outcome.landed.message, /发布的同时项目目录 [^]*被切到了分支 fresh/);
+    if (commit) assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), outcome.expectedTree, "分支已经挪到测过的结果，回执如实说了");
+    else assert.equal(git(sample.repo, "rev-parse", "main"), before, "不提交那一档不挪分支");
+  }
+
+  // ㊽ 项目目录里有一场没做完的合并（索引干净、只差提交，审查第 4 轮 F2）：原生 `git merge` 会拒，受保护发布不走它，
+  // 得自己在写引用和文件之前拒；那场合并原样留着。提交 / 不提交两档都钉。
+  for (const commit of [true, false]) {
+    const sample = await fixture(`landing-pending-${commit ? "commit" : "stage"}`, { baseline: "merge_preview" });
+    const waiting = git(sample.repo, "commit-tree", "main^{tree}", "-p", "main", "-m", "waiting");
+    git(sample.repo, "merge", "-q", "--no-ff", "--no-commit", waiting);
+    assert.equal(git(sample.repo, "status", "--porcelain"), "", "前提：索引和工作区都是干净的");
+    const before = git(sample.repo, "rev-parse", "main");
+    const { landed } = await landGuarded(sample, undefined, { commit });
+    assert.equal(landed.ok, false, JSON.stringify(landed));
+    if (!landed.ok) assert.match(landed.message, /没做完的 git 操作（MERGE_HEAD）[^]*目标分支没动，检出里的文件也没动/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+    assert.equal(git(sample.repo, "rev-parse", "MERGE_HEAD"), waiting, "那场合并还等着用户提交");
+    assert.equal(git(sample.repo, "status", "--porcelain"), "", "什么都没写");
+    git(sample.repo, "merge", "--abort");
+  }
+
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
     hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
     dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true,
-    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true, truncated: true, unreadable: true }));
+    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true, truncated: true, unreadable: true, switchDuring: true, pendingOperation: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

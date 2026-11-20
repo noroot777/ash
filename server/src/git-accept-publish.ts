@@ -13,7 +13,12 @@
 //    文件（会覆盖本地改动或未跟踪文件时 git 自己拒绝、什么都不写）。
 //
 // 这几步全程持有目标检出的 `index.lock`（与 git 自己的约定相同：拿不到就说明有别的 git 在用这个检出，
-// 拒），最后才把临时索引换进去。分支本身由调用方带旧值挪（update-ref 不读属性、不调过滤器）。
+// 拒），最后才把临时索引换进去。拿到锁之后先核这份检出的 HEAD 仍指着目标分支、仍在被测的目标提交上：
+// 调用方是在锁外看的，那之后另一个终端切了分支，文件就会写进那个分支的检出。索引锁挡不住 `git switch -c`
+// （同一提交上建分支不碰索引），所以发布之后调用方还要核项目目录仍检出着目标分支（git-accept-tested.ts
+// 的 switchedDuring，为什么不再多持一把锁见 git-accept-checkout.ts 文件头）。锁内还核这份检出里没有没做完的
+// git 操作（等着提交的合并、挑拣、变基……）：原生合并会拒，这里不走原生合并。分支本身由调用方带旧值挪
+// （update-ref 不读属性、不调过滤器）。
 //
 // 顺序是「先演、再挪分支、最后写文件」（用户 2026-11-04 拍板，第 6 轮审查第 3～5 轮 F1）。写文件那一步
 // 不是事务，旧做法先写文件、挪分支被拒再把写下的放回原样；但「放回」要删掉这次写下的条目，而删之前
@@ -32,6 +37,7 @@ import { access, copyFile, lstat, open, rename, rm } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { type CheckoutSettings, readOnlyGit, sealedGitDir } from "./accept-gate-preview.js";
 import { execFileText as exec } from "./exec.js";
+import { pendingOperation } from "./git-accept-checkout.js";
 
 const MAX_BUFFER = 32 * 1024 * 1024;
 
@@ -145,7 +151,7 @@ async function stagedBeyond(env: Awaited<ReturnType<typeof sealedCheckout>>, att
  *
  * 不抛异常：回执由真实走到了哪一步决定（见 SealedMove）。之后只剩清理临时目录，它失败不改变回执。
  */
-export async function sealedMove(checkout: string, settings: CheckoutSettings, from: string, to: string, attrs: string,
+export async function sealedMove(checkout: string, settings: CheckoutSettings, branch: string, from: string, to: string, attrs: string,
   publish?: () => Promise<string | null>): Promise<SealedMove> {
   const index = (await readOnlyGit(checkout, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).stdout.trim();
   const lock = `${index}.lock`;
@@ -158,6 +164,14 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
     let published = false;
     let wrote = false;
     try {
+      const head = (await readOnlyGit(checkout, ["symbolic-ref", "-q", "HEAD"]).catch(() => null))?.stdout.trim() || null;
+      const at = (await readOnlyGit(checkout, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => null))?.stdout.trim() || null;
+      if (head !== `refs/heads/${branch}` || at !== from) {
+        return { ok: false, stage: "blocked", message: `这份检出已经不在 ${branch} 的 ${from.slice(0, 12)} 上了（现在是 ${head?.replace(/^refs\/heads\//, "") ?? "游离的提交"} 的 ${at?.slice(0, 12) ?? "读不到"}），有别的程序同时切了它` };
+      }
+      // 原生 `git merge` 遇到没做完的合并会拒，这里不走它，得自己拒（审查第 4 轮 F2）。
+      const pending = await pendingOperation(checkout);
+      if (pending) return { ok: false, stage: "blocked", message: `这份检出里还有一场没做完的 git 操作（${pending}），先把它做完或中止` };
       const env = sealed = await sealedCheckout(checkout, settings);
       const drift = await stagedBeyond(env, attrs, checkout, index, from);
       if (drift) return { ok: false, stage: "blocked", message: drift };
