@@ -67,9 +67,9 @@ try {
   await page.goto(`${web.origin}/scripts/fixtures/scheduled-message-tray.html`);
   const tray = page.locator(".scheduled-message-tray");
   const trayLine = page.locator(".scheduled-tray-line");
-  const list = page.getByRole("region", { name: "排队输入完整列表" });
+  const list = page.getByRole("region", { name: "待发送输入完整列表" });
   const draft = page.getByRole("textbox", { name: "回复草稿" });
-  const toggle = page.getByRole("button", { name: /^排队 \d+$/ });
+  const toggle = page.getByRole("button", { name: /^待发送 \d+$/ });
   const item = (id) => page.locator(`.scheduled-message-item[data-message-id="${id}"]`);
   const focused = (locator) => locator.evaluate((element) => element === document.activeElement);
   const opacity = (locator) => locator.evaluate((element) => Number(getComputedStyle(element).opacity));
@@ -87,12 +87,12 @@ try {
   const expand = async () => { await toggle.click(); await list.waitFor(); await settle(); };
 
   // ── 收着:只占一行,带着自己最早那条和它的引导键 ───────────────────────────────
-  await page.getByRole("button", { name: "排队 10", exact: true }).waitFor();
+  await page.getByRole("button", { name: "待发送 10", exact: true }).waitFor();
   assert.equal(await trayLine.count(), 1);
   assert.equal(await list.count(), 0, "默认收着");
   const collapsed = await geometry();
   assert.ok(collapsed.tray.height < 36, `收着时只占一行：${collapsed.tray.height}`);
-  assert.match(await trayLine.innerText(), /排队 10\s*2 条要留意\s*你\s*输入-1/, "那一行：条数、要留意、自己最早那条");
+  assert.match(await trayLine.innerText(), /待发送 10\s*2 条要留意\s*你\s*输入-1/, "那一行：条数、要留意、自己最早那条");
   assert.doesNotMatch(await tray.innerText(), /我的消息|审查答复 \d|筛选|展开全部|#\d|按发送时间|monitorId=|REGRESSION_FINISHED|@codex/);
   const lineGuide = trayLine.getByRole("button", { name: /引导会话/ });
   assert.match(await lineGuide.getAttribute("aria-label"), /输入-1/, "引导键在这一行上,指向自己最早那条");
@@ -312,9 +312,9 @@ try {
     if (width === 1280 || width === 390) await shot(page, `scheduled-message-production-${width}`, { fullPage: true });
   }
   // 窄窗收着、排队 + 哨兵 + 要留意 + 引导撤回全挤在一行：摘要仍留得下一截（第 1 轮审查 N1：300px 时被挤成 0 宽）。
-  await page.getByRole("button", { name: "排队 30", exact: true }).click();
+  await page.getByRole("button", { name: "待发送 30", exact: true }).click();
   await page.getByRole("button", { name: "挂上哨兵", exact: true }).click();
-  await page.getByRole("button", { name: "排队 30，哨兵 4", exact: true }).waitFor();
+  await page.getByRole("button", { name: "待发送 30，哨兵 4", exact: true }).waitFor();
   for (const width of [420, 340, 300]) {
     await resizeViewport(page, { width, height: 700 });
     await settle();
@@ -323,7 +323,7 @@ try {
     assert.equal(await trayLine.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true, `${width}px 收着那一行不横溢`);
   }
   await page.getByRole("button", { name: "挂上哨兵", exact: true }).click();
-  await page.getByRole("button", { name: "排队 30", exact: true }).click();
+  await page.getByRole("button", { name: "待发送 30", exact: true }).click();
   await resizeViewport(page, { width: 320, height: 700 });
   await settle();
   // 深色主题：颜色都取主题变量，琥珀色仍与普通来源分得开。
@@ -343,9 +343,43 @@ try {
   assert.ok(teamPosition.tray.top >= 48 && teamPosition.draft.bottom <= 700, "团队托盘和回复框同样保持可见");
   await shot(page, `scheduled-message-production-team`, { fullPage: true });
   await page.getByRole("button", { name: "切换任务", exact: true }).click();
-  await page.getByRole("button", { name: "排队 30", exact: true }).waitFor();
+  await page.getByRole("button", { name: "待发送 30", exact: true }).waitFor();
   assert.equal(await list.count(), 0, "切换任务重置点开状态");
   assert.equal(await draft.inputValue(), "未发送的草稿", "浏览、引导和取消哨兵不改动草稿");
+  await page.goto(`${web.origin}/scripts/fixtures/scheduled-message-tray.html?scenario=after`);
+  const waiting = trayLine.locator(".scheduled-tray-head-when");
+  await waiting.waitFor();
+  for (const width of [1280, 640, 390, 320]) {
+    await resizeViewport(page, { width, height: 750 });
+    assert.equal(await waiting.innerText(), "等「统一 macOS 更新运行时与安全接管」完成", "空闲终态任务也说清等的是别的任务");
+    assert.equal(await waiting.getAttribute("title"), null, "不用原生 title 提示");
+    assert.equal(await trayLine.locator(".scheduled-message-source").count(), 0, "不额外挤一个来源标签");
+    assert.equal(await trayLine.getByRole("button", { name: /引导会话/ }).count(), 0, "不把前置条件伪装成可引导的执行回合");
+    const sizes = await trayLine.evaluate((element) => {
+      const summary = element.querySelector(".scheduled-tray-head-summary").getBoundingClientRect();
+      const condition = element.querySelector(".scheduled-tray-head-when").getBoundingClientRect();
+      return { summary: summary.width, condition: condition.width, height: element.getBoundingClientRect().height,
+        overflow: document.documentElement.scrollWidth > innerWidth };
+    });
+    assert.ok(sizes.summary >= 24 && sizes.condition >= 40 && sizes.height <= 30 && !sizes.overflow,
+      `${width}px 条件和正文同一行可见：${JSON.stringify(sizes)}`);
+  }
+  await waiting.hover();
+  await page.getByRole("tooltip").waitFor();
+  assert.equal(await page.getByRole("tooltip").innerText(), "等「统一 macOS 更新运行时与安全接管」完成", "窄窗截断后也可悬停读完整条件");
+  await page.getByRole("heading", { name: "适配主线强制恢复入口与失败回退" }).hover();
+  await shot(page, "scheduled-message-after-collapsed-mobile", { fullPage: true });
+  await resizeViewport(page, { width: 1280, height: 750 });
+  await shot(page, "scheduled-message-after-collapsed", { fullPage: true });
+  await toggle.click();
+  assert.equal(await item("after-integration").locator(".scheduled-message-when").innerText(), "等「统一 macOS 更新运行时与安全接管」完成");
+  await toggle.click();
+  await page.getByRole("button", { name: "前置失败", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".scheduled-tray-head-when")?.classList.contains("is-stuck"));
+  assert.equal(await waiting.innerText(), "「统一 macOS 更新运行时与安全接管」失败");
+  await page.getByRole("button", { name: "前置完成", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".scheduled-tray-head-when")?.textContent?.endsWith("已完成"));
+  assert.equal(await waiting.getAttribute("class"), "scheduled-tray-head-when", "服务端已确认完成后不残留警告状态");
   assert.deepEqual(errors, []);
   console.log("✓ 排队输入那一行：收着只占一行且带着自己最早那条与引导键、点开向上长、行尾的键按来源给、"
     + "指到才出的键键盘可达、全文就地摊开、要留意的跳转、确认失败/重试、引导、实时新增、任务切换、深色及四档宽度通过");
