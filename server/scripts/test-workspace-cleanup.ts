@@ -5,12 +5,14 @@
 //   2. 勾了「一起删」→ 目录和分支都真的没了
 //   3. worktree 脏 / 分支未合并 → 默认路径**不删**，把 git 原话回给用户
 //   4. force 是第二次点击才有的逃生口：--force / -D 才真的丢掉那些改动
+//   6. 按提交删分支时不和别人检出它撞车：先占住再删
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTmpStage } from "./tmp-db.js";
+import { raceShim } from "./git-race-shim.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-workspace-cleanup-"));
 const repo = join(root, "repo");
@@ -129,6 +131,49 @@ try {
       branchError: null,
     });
     assert.equal(branchExists(branch), true);
+  }
+
+  // ── 6. 按提交删分支（forceBranchAt）与别人检出它撞在一起 ─────────────────
+  // 原先先看一眼「没被检出」再 update-ref -d：两步之间项目目录 switch 到它，那份检出就停在一个不存在的分支上
+  // （HEAD 悬空、所有文件都成了暂存的新增）。现在先用临时 worktree 占住再删：删的那一下切不过去；
+  // 占之前已经被检出了就不删。夹具是 sh 写的 git 包装，Windows 上跳过。
+  if (process.platform !== "win32") {
+    const racing = raceShim(root);
+    const prepare = async (taskId: string) => {
+      const ws = await prepareWorktree(repo, taskId, "main");
+      writeFileSync(join(ws.path, `${taskId}.txt`), "work\n");
+      git(ws.path, "add", "-A");
+      git(ws.path, "commit", "-m", "work");
+      return { branch: worktreeBranchName(taskId), tip: git(ws.path, "rev-parse", "HEAD") };
+    };
+
+    { // 删的那一下有人 switch 过来：占着，git 拒掉，分支照删，项目目录还在 main 上、干净
+      const taskId = "raceDelete6";
+      const { branch, tip } = await prepare(taskId);
+      const { value, switched, log } = await racing({ repo, branch, when: ["update-ref", "-d"] },
+        () => discardTaskWorkspace(repo, taskId, { worktree: true, branch: true, forceBranchAt: tip }));
+      assert.equal(switched, false, `删的时候切不过去（${log}）`);
+      assert.match(log, /already (used by worktree|checked out)/, "是被占位挡下的");
+      assert.equal(value.branchDeleted, true, value.branchError ?? "分支应被删除");
+      assert.equal(branchExists(branch), false);
+      assert.equal(git(repo, "symbolic-ref", "HEAD"), "refs/heads/main", "项目目录没被切到要删的分支上");
+      assert.equal(git(repo, "status", "--porcelain"), "", "没有凭空多出的暂存");
+      assert.equal(git(repo, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length, 1, "占位的临时 worktree 拆掉了");
+    }
+    { // 占之前就被检出了：占不住，不删，那份检出原样留着
+      const taskId = "raceKeep006";
+      const { branch, tip } = await prepare(taskId);
+      const { value, switched } = await racing({ repo, branch, when: ["worktree", "add", "--no-checkout"] },
+        () => discardTaskWorkspace(repo, taskId, { worktree: true, branch: true, forceBranchAt: tip }));
+      assert.equal(switched, true, "前提：占位之前项目目录切到了它");
+      assert.equal(value.worktreeRemoved, true);
+      assert.equal(value.branchDeleted, false, "被检出着的分支不许删");
+      assert.match(value.branchError ?? "", /检出/);
+      assert.equal(git(repo, "rev-parse", branch), tip, "分支还在原处");
+      assert.equal(git(repo, "rev-parse", "HEAD"), tip, "项目目录的检出完好");
+      assert.equal(git(repo, "status", "--porcelain"), "");
+      git(repo, "switch", "-q", "main");
+    }
   }
 
   console.log("删除任务的 worktree/分支清理：全部通过");

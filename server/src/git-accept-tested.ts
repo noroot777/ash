@@ -103,7 +103,7 @@ async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to:
     return refusal(names, `目标检出的换行 / 链接配置（core.autocrlf / core.eol / core.symlinks）和门禁测的时候不是同一份了，`
       + "照现在的配置写出来的文件就不是测过的那份，所以这次没有合并，目标分支没动。重新验收会按现在的配置重新跑门禁。");
   }
-  const moved = await sealedMove(cwd, settings, guard.target, to, guard.tree, publish)
+  const moved = await sealedMove(cwd, settings, names.targetBranch, guard.target, to, guard.tree, publish)
     .catch((error: unknown): SealedMove => ({ ok: false, stage: "blocked", message: gitError(error) }));
   if (moved.ok) return null;
   if (moved.stage === "locked") return refusal(names, `${moved.message}，目标分支和工作区都没动。处理完再重新验收。`);

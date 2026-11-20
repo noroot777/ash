@@ -5,6 +5,7 @@ import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
 import { assertReadableWorktree, registeredCheckout, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
+import { whileBranchClaimed } from "./git-accept-temp.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -111,7 +112,13 @@ export async function discardTaskWorkspace(
 /**
  * 分支仍指向 `expected` 才删(见 `discardTaskWorkspace` 的 `forceBranchAt`)。换掉 `git branch -D`
  * 之后,它原本替我们做的几件事都得自己补齐:
- *  · 检出保护:被检出的分支删掉后那个目录的 HEAD 就悬空了。
+ *  · 检出保护:被检出的分支删掉后那个目录的 HEAD 就悬空了。不能「先看一眼没被检出、再删」—— 看完到删之间
+ *    别处 `git switch` 了它,那份检出就停在一个不存在的分支上。所以先用不检出文件的临时 worktree 占住它
+ *    (git-accept-temp.ts whileBranchClaimed:一个分支同时只能在一处检出,占着期间别处检出会被 git 当场拒),
+ *    在占着的时候删;占不住(已被检出 / 开不出来)就不删。删完拆占位时那份临时 worktree 的 HEAD 悬空,
+ *    `worktree remove --force` 照样拆得掉,它里面一个文件都没有。分支是符号引用别名时不占:git 检出别名会
+ *    顺着解到它指向的分支(HEAD 永远不会指着别名本身),删别名悬空不了任何检出;而拿别名去开占位 worktree,
+ *    git 会把它指向的那个分支再检出一份,不拒。
  *  · 只删这个名字本身(`--no-deref`):不加时 update-ref 会顺着符号引用删掉它指向的分支 ——
  *    `navi/<id8>` 是指向 main 的别名时,删掉的是 main(第 2 轮审查实测)。
  *  · 删掉 `branch.<name>.*` 配置节:否则取回后同名分支重建,会沿用旧的上游等设置。
@@ -119,8 +126,23 @@ export async function discardTaskWorkspace(
 async function deleteBranchAt(repo: string, branch: string, expected: string): Promise<void> {
   const checkout = await registeredCheckout(repo, branch);
   if (checkout.path) throw new Error(`分支 ${branch} 正被工作区 ${checkout.path} 检出，不能删除`);
+  const remove = () => exec("git", ["-C", repo, "update-ref", "--no-deref", "-d", `refs/heads/${branch}`, expected])
+    .then(() => null, (error: unknown) => error);
+  const alias = await exec("git", ["-C", repo, "symbolic-ref", "-q", `refs/heads/${branch}`]).then(() => true, () => false);
+  let failed: unknown;
+  if (alias) failed = await remove();
+  else {
+    const claim = await whileBranchClaimed(repo, branch, remove);
+    if (!claim.claimed) {
+      throw new Error(claim.checkedOutAt
+        ? `分支 ${branch} 正被工作区 ${claim.checkedOutAt} 检出，不能删除`
+        : `删除分支 ${branch} 之前没能占住它（${claim.message}），没有删`);
+    }
+    if (claim.cleanupError) console.warn(`[navi] 删分支 ${branch} 时用来占住它的临时 worktree ${claim.path} 没拆干净：${claim.cleanupError}`);
+    failed = claim.value;
+  }
   try {
-    await exec("git", ["-C", repo, "update-ref", "--no-deref", "-d", `refs/heads/${branch}`, expected]);
+    if (failed) throw failed;
     // 没有这个配置节时 git 报错退出,那正是「没什么要清」
     await exec("git", ["-C", repo, "config", "--remove-section", `branch.${branch}`]).catch(() => {});
   } catch (error) {
