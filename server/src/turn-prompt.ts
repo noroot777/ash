@@ -91,6 +91,8 @@ export interface TurnPromptParts {
   brief: string;
   /** 「你被搬过机器了」的一次性前言。 */
   handoffNotice: string;
+  /** 没叫醒你的那段时间里替你办完的事（`undelivered-replies.ts`）；没有就不传。 */
+  carried?: string;
   /** 「本任务里还有别人」。 */
   peerNotice: string;
   /**
@@ -126,6 +128,7 @@ export function assembleTurnPrompt(parts: TurnPromptParts): string {
   return parts.invite +
     parts.brief +
     (parts.handoffNotice ? `${parts.handoffNotice}\n\n` : "") +
+    (parts.carried ? `${parts.carried}\n\n` : "") +
     parts.peerNotice +
     // 紧挨正文，和 fresh 那条同一个落位。不必补前导空行：它前面那几段（邀请语、需求抬头、
     // 接力前言、同伴告知）都自带尾部空行，全空时它就是整条消息的开头。
@@ -173,6 +176,8 @@ export interface FreshPromptParts {
   reviewProtocol: string;
   /** 「你被搬过机器了」的一次性前言。 */
   handoffNotice: string;
+  /** 没叫醒你的那段时间里替你办完的事（`undelivered-replies.ts`）；没有就不传。 */
+  carried?: string;
   /** 「本任务里还有别人」。 */
   peerNotice: string;
   /** 任务目标正文（含 autoTitle 的标题提示）。 */
@@ -191,6 +196,7 @@ export function assembleFreshPrompt(parts: FreshPromptParts): string {
     parts.teamPreamble +
     parts.reviewProtocol +
     (parts.handoffNotice ? `${parts.handoffNotice}\n\n` : "") +
+    (parts.carried ? `${parts.carried}\n\n` : "") +
     parts.peerNotice +
     parts.objective;
 }

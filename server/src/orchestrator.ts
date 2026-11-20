@@ -41,7 +41,7 @@ import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { reseedHistory } from "./history-reseed.js";
-import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
+import { NO_ONE_SHOT_NOTICES, oneShotNotices } from "./undelivered-replies.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
@@ -355,10 +355,9 @@ export async function continueTask(
     // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
     // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
     const peerNotice = opts.withholdPeerNotice ? "" : peerNoticeFor({ taskId, self: agent, all, prev });
-    // 「你被搬过机器了」——接力导入时挂在 handoff 标记上的一次性前言（不占 resume_prompt
-    // 那一列，理由见 handoff-notice.ts）。只投给任务自己的正式回合：审查/验证/就地旁路
-    // 回合吃掉它，任务本人就再也收不到了。
-    const handoffNotice = sideTurn || verifying ? "" : handoffNoticeFrom(task.handoff);
+    // 一次性前言：「你被搬过机器了」和「没叫醒你时替你办完的事」（undelivered-replies.ts）。
+    // 只投给任务自己的正式回合：审查/验证/就地旁路回合吃掉它，任务本人就再也收不到了。
+    const notices = sideTurn || verifying ? NO_ONE_SHOT_NOTICES : oneShotNotices(task);
     // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
     const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
     // 原生命令必须**独占整条 prompt**:前面垫一个字它就退化成普通模型请求,压缩不会
@@ -374,7 +373,8 @@ export async function continueTask(
       : assembleTurnPrompt({
         invite: invited ? COLLAB_INVITE : "",
         brief: invitedTaskBrief(task.body, invited, verifying),
-        handoffNotice,
+        handoffNotice: notices.handoff,
+        carried: notices.carried,
         peerNotice,
         craft,
         history,
@@ -548,7 +548,7 @@ export async function continueTask(
     };
     if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner, sessId);
     else await persistRunner(db);
-    if (handoffNotice) await clearHandoffNotice(taskId);
+    await notices.clear();
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
     await openTurn({
       sessionId: sessId, taskId, cwd, startedAt: turnStart,

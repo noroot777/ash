@@ -37,7 +37,7 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@navi/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
-import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
+import { NO_ONE_SHOT_NOTICES, oneShotNotices } from "./undelivered-replies.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -217,10 +217,9 @@ async function runHeldTask(
     // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
     const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
-    // 「你被搬过机器了」——接力导入时挂在 handoff 标记上的一次性前言。fresh run 这条路
-    // 同样要投:会话文件没随任务到货时,接过来的任务第一次跑走的正是这里(见
-    // handoff-notice.ts;续跑那条路在 orchestrator.ts)。
-    const handoffNotice = reviewTask ? "" : handoffNoticeFrom(task.handoff);
+    // 一次性前言(接力前言 + 补交的答复,见 undelivered-replies.ts)。fresh run 这条路同样要投:
+    // 会话文件没随任务到货、或换了智能体新开会话时,第一次跑走的正是这里(续跑那条路在 orchestrator.ts)。
+    const notices = reviewTask ? NO_ONE_SHOT_NOTICES : oneShotNotices(task);
     const prompt = assembleFreshPrompt({
       autonomy: AUTONOMY,
       // fresh run 一律是一条全新的 CLI 会话,所以 `freshContext` 恒真;这一轮交结论还是
@@ -231,7 +230,8 @@ async function runHeldTask(
       direction: DIRECTION_PROTOCOL(directionToken),
       teamPreamble,
       reviewProtocol,
-      handoffNotice,
+      handoffNotice: notices.handoff,
+      carried: notices.carried,
       peerNotice,
       objective: autoTitle ? TITLE_HINT + objective : objective,
     });
@@ -267,7 +267,7 @@ async function runHeldTask(
     trackRun(taskId, handle);
     // 前言已经随 prompt 交到 agent 手上就划掉（放在 spawn 之后:起跑前还有 takeFreeze
     // 那道闸,清早了被冻住的那一轮会把它白白吃掉）。
-    if (handoffNotice) await clearHandoffNotice(taskId);
+    await notices.clear();
 
     let cliSessionId = handle.sessionId;
     const sessRow = {

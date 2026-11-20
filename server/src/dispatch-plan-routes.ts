@@ -1,6 +1,6 @@
 // 派活单的三个端点（逻辑在 dispatch-plan.ts / dispatch-plan-launch.ts）：
 //   POST /tasks/:id/dispatch-plan          智能体摆单（MCP propose_dispatch），跟提问同一套回合与方向身份核对
-//   POST /tasks/:id/dispatch-plan/launch   用户按「派出去」：navi 照卡上此刻的样子建任务并续上会话
+//   POST /tasks/:id/dispatch-plan/launch   用户按「派出去」：navi 照卡上此刻的样子建任务，再结成完成或续上会话
 //   PUT  /tasks/:id/dispatch-target        「派出去的活交给谁」（回复框胶囊点开那一层里的一行）
 // 「发回去改」不在这里：它就是对那一问的普通答复（POST /tasks/:id/answer），一条任务都不建。
 import { eq } from "drizzle-orm";
@@ -24,7 +24,8 @@ import { pinReviewChoice, ReviewOnCreateError } from "./review-on-create.js";
 export function mountDispatchPlanRoutes(api: Hono): void {
 api.post("/tasks/:id/dispatch-plan", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ order?: unknown; tasks?: unknown }>().catch(() => ({}) as { order?: unknown; tasks?: unknown });
+  type Proposal = { order?: unknown; tasks?: unknown; afterLaunch?: unknown };
+  const b = await c.req.json<Proposal>().catch(() => ({}) as Proposal);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   // 建出来的任务要收在这条名下：只有普通的独立任务能派（团队、讨论、团队执行者各有各的归属，见 task-dispatch.ts）。
@@ -65,7 +66,7 @@ api.post("/tasks/:id/dispatch-plan", async (c) => {
     const target = proposed(item);
     return target ? label(target) : "默认执行器";
   });
-  const plan = newPlan(proposal.order, proposal.items, question);
+  const plan = newPlan(proposal.order, proposal.items, question, proposal.afterLaunch);
   const written = await setTaskQuestion({
     taskId, question, dispatchPlan: plan,
     currentTurn: { token: r.activeTurnToken, directionToken: r.activeDirectionToken },
@@ -75,7 +76,7 @@ api.post("/tasks/:id/dispatch-plan", async (c) => {
     if (latest && waitSlotTaken(latest, true)) return c.json({ error: QUESTION_BLOCKS_PLAN }, 409);
     return c.json({ error: "当前回合已经结束或已被引导，派活单未写入" }, 409);
   }
-  return c.json({ proposed: true, planId: plan.id, tasks: plan.items.length, willSettleAs: "paused" });
+  return c.json({ proposed: true, planId: plan.id, tasks: plan.items.length, afterLaunch: plan.afterLaunch, willSettleAs: "paused" });
 });
 
 api.post("/tasks/:id/dispatch-plan/launch", async (c) => {

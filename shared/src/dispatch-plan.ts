@@ -39,12 +39,22 @@ export type DispatchPlanItem = {
   prerequisites?: string[];
 };
 
+/**
+ * 派出去之后这条任务还有没有智能体的事，摆单时由智能体说定：
+ *   · done：派出去就是这条任务的最后一步。按下「派出去」那一下由 Navi 把这条任务结成完成、不叫醒它——
+ *     摆单那一刻它已经替这一下确认过了；建好的清单留到它下一回合开头再交给它（问答记录的 `undelivered`）。
+ *   · continue：派出去之后还要接着做，照旧把清单作为答复续上它的会话。
+ */
+export type DispatchAfterLaunch = "done" | "continue";
+
 export type DispatchPlan = {
   id: string;
   /** 跟它绑在一起的那一问（`task.question` 的原文）。 */
   question: string;
   order: DispatchOrder;
   items: DispatchPlanItem[];
+  /** 缺省 = continue：这一项上线前摆的单，摆单的智能体是按「会被叫醒」写的。 */
+  afterLaunch?: DispatchAfterLaunch;
   proposedAt: string;
 };
 

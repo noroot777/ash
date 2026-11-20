@@ -8,7 +8,7 @@
 import { AGENT_TYPES, type AgentType } from "@navi/shared";
 import {
   DISPATCH_LAUNCH_REPLY_LEAD, DISPATCH_ORDER_LABEL, MAX_DISPATCH_NOTE_LEN, MAX_DISPATCH_PLAN_ITEMS,
-  type DispatchOrder, type DispatchPlan, type DispatchPlanItem, type DispatchRunTarget,
+  type DispatchAfterLaunch, type DispatchOrder, type DispatchPlan, type DispatchPlanItem, type DispatchRunTarget,
 } from "@navi/shared/dispatch-plan";
 import { parseCreateReviewChoice, type CreateReviewChoice } from "@navi/shared/review-on-create";
 import type { ExecutorScope } from "./auth/owned-executors.js";
@@ -70,11 +70,15 @@ export function serialOrderConflict(items: { title: string; key?: string; prereq
 }
 
 export function normalizeProposal(
-  body: { order?: unknown; tasks?: unknown },
+  body: { order?: unknown; tasks?: unknown; afterLaunch?: unknown },
   scope: ExecutorScope,
-): { order: DispatchOrder; items: DispatchPlanItem[] } | { error: string } {
+): { order: DispatchOrder; items: DispatchPlanItem[]; afterLaunch: DispatchAfterLaunch } | { error: string } {
   const order = body.order === undefined ? "serial" : body.order;
   if (order !== "serial" && order !== "parallel") return { error: "order 只能是 serial（一个接一个）或 parallel（同时）" };
+  const afterLaunch = body.afterLaunch === undefined ? "done" : body.afterLaunch;
+  if (afterLaunch !== "done" && afterLaunch !== "continue") {
+    return { error: "afterLaunch 只能是 done（派出去就算完成）或 continue（派出去后还要接着做）" };
+  }
   if (!Array.isArray(body.tasks) || !body.tasks.length) return { error: "tasks 不能为空" };
   if (body.tasks.length > MAX_DISPATCH_PLAN_ITEMS) {
     return { error: `一张派活单最多 ${MAX_DISPATCH_PLAN_ITEMS} 条，收到 ${body.tasks.length} 条；拆成几批摆` };
@@ -116,7 +120,7 @@ export function normalizeProposal(
   }
   const deadlock = order === "serial" ? serialOrderConflict(items) : null;
   if (deadlock) return { error: `${deadlock}：改成 parallel，或把被等的那条排到前面` };
-  return { order, items };
+  return { order, items, afterLaunch };
 }
 
 /** 交给谁读成一个名字：执行器名，没有就类型名；模型、智能水平跟在后面。 */
@@ -131,8 +135,8 @@ export function planQuestionText(order: DispatchOrder, items: DispatchPlanItem[]
   return [`派出这 ${items.length} 个任务（${DISPATCH_ORDER_LABEL[order]}）：`, ...lines].join("\n");
 }
 
-export function newPlan(order: DispatchOrder, items: DispatchPlanItem[], question: string): DispatchPlan {
-  return { id: id(), question, order, items, proposedAt: now() };
+export function newPlan(order: DispatchOrder, items: DispatchPlanItem[], question: string, afterLaunch: DispatchAfterLaunch): DispatchPlan {
+  return { id: id(), question, order, items, afterLaunch, proposedAt: now() };
 }
 
 const sameTarget = (left: DispatchRunTarget | null, right: DispatchRunTarget | null) =>
@@ -163,18 +167,26 @@ export function launchBubble(
   return `派出这 ${picks.length} 个任务\n${changes.join(" · ")}`;
 }
 
-/** 续上智能体会话的那段答复：建好了哪几条（任务号、标题、交给了谁），去掉了哪几条，别再建一遍。 */
+/**
+ * 交给智能体的那段话：建好了哪几条（任务号、标题、交给了谁），去掉了哪几条，别再建一遍。`settledDone` = 派出去
+ * 就算完成（`afterLaunch: "done"`）：这段不是续上会话的答复，是它下一回合开头才收到的补交，所以不带【答复】、
+ * 写明这条任务已经替它结成了完成。两种都以 `DISPATCH_LAUNCH_REPLY_LEAD` 开头，会话里据此认出它、不画成气泡。
+ */
 export function launchReply(
   order: DispatchOrder,
   launched: { id: string; title: string; target: DispatchRunTarget }[],
   dropped: DispatchPlanItem[],
   label: TargetLabel,
+  settledDone = false,
 ): string {
   const lines = launched.map((task, index) => `${index + 1}. ${task.id}「${task.title}」→ ${label(task.target)}`);
+  const built = `${DISPATCH_LAUNCH_REPLY_LEAD}Navi 已照${settledDone ? "你上次摆的" : ""}派活单此刻的样子建好下面 ${launched.length} 个任务`
+    + `（${DISPATCH_ORDER_LABEL[order]}），挂在本任务名下、已交给调度（可能还在等名额、等前置或排队）。`;
   return [
-    `【答复】`,
-    `${DISPATCH_LAUNCH_REPLY_LEAD}Navi 已照派活单此刻的样子建好下面 ${launched.length} 个任务（${DISPATCH_ORDER_LABEL[order]}），`
-      + "挂在本任务名下、已交给调度（可能还在等名额、等前置或排队）。不要再调用建任务的工具重复建；要看进度用 list_tasks / get_task。",
+    ...(settledDone ? [] : ["【答复】"]),
+    built
+      + (settledDone ? "本任务按你摆单时说定的（派出去就算完成）随即结成了完成，当时没有叫醒你。" : "")
+      + "不要再调用建任务的工具重复建；要看进度用 list_tasks / get_task。",
     ...lines,
     ...(dropped.length ? [`用户去掉了：${dropped.map((item) => `「${item.title}」`).join("、")}（没有建）`] : []),
   ].join("\n");

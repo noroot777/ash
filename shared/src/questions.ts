@@ -19,6 +19,11 @@ export type QuestionRecord = QuestionSource & {
   answer: string;
   answers?: string[];
   reply: string;
+  /**
+   * `reply` 还没交给智能体：派活单「派出去就算完成」时不叫醒它（shared/dispatch-plan.ts `DispatchAfterLaunch`），
+   * 这段留到这条任务下一回合开头一并交给它，交过就摘掉（server/src/undelivered-replies.ts）。
+   */
+  undelivered?: true;
   /** 用户删掉了这条答复（server/src/conversation-redact.ts）：只留 id 与时刻，问答正文已清空。 */
   deleted?: true;
   /** 删的是会话里哪一段（会话行 + 段序号；删除不挪段序号）。正文还没换成墓碑时靠它认回原主。 */

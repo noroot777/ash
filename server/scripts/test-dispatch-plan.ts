@@ -6,6 +6,8 @@
 //   · 「派出去」由 navi 照卡上此刻的样子建（换的人、去掉的条、一个接一个 / 同时、顺序），挂在这条任务名下；
 //     建任务的不是智能体（来源记的是用户），续上会话的那段答复里有建好的任务号、标题、交给了谁；
 //   · 派过一次的单子再按一次、拿着旧单子的号来按，都不再建；
+//   · 派出去就算完成（afterLaunch 缺省 done）：当场结成完成、不叫醒智能体；清单记在问答记录上，用户接着聊时随
+//     下一回合开头补交一次，交过就不再交；会话里认得出它，不画成气泡（continue 那一路的答复同样认得出）；
 //   · 派出中途写库失败（队列那一笔）：整笔回滚，一条任务、一个分组都不留，单子原样还在；再按还是那样，修好再按只建一批；
 //   · 建好之后的「让人看见」出错（刷新前置视图写库失败）：照派出了报，那一组照常起跑，答复照常送进会话；
 //   · 起跑不记派活单自己的账：该开工的几条（同时：每一条；一个接一个：队首）跟建任务同一笔挂上「等齐就起」，
@@ -102,7 +104,9 @@ const endTurn = async (id: string) => {
   return result.status;
 };
 const kidsOf = async (id: string) => db.select().from(tasks).where(eq(tasks.dispatchedBy, id)).orderBy(asc(tasks.createdAt));
-const propose = (id: string, headers: Record<string, string>, body: unknown) => send("POST", `/tasks/${id}/dispatch-plan`, body, headers);
+// 下面多数场景看的是「清单续上会话」那一路，所以缺省按 continue 摆；「派出去就算完成」那一段显式不传。
+const propose = (id: string, headers: Record<string, string>, body: object) =>
+  send("POST", `/tasks/${id}/dispatch-plan`, { afterLaunch: "continue", ...body }, headers);
 const PLAN = [
   { key: "gate", title: "验收门禁加准备命令", body: "在快照里现装依赖（完整说明 A）", note: "不再自己拒绝起跑" },
   { key: "entry", title: "关掉起手式的新建入口", body: "只关入口（完整说明 B）", note: "代码不动", prerequisites: ["gate"] },
@@ -239,6 +243,43 @@ try {
   await waitFor(() => settled(P), "续上的那一轮没有结算");
   assert.equal((await kidsOf(P)).length, directIds.size + 2);
   console.log("✓ 派出去：照卡上此刻的样子建（换人、去掉、同时、顺序），挂在这条名下；智能体续上时拿到清单，再按不重建");
+
+  // —— 派出去就算完成（不传 afterLaunch = done）：当场结成完成，不叫醒智能体；清单留到下一回合开头补交一次。
+  headers = await inTurn(P);
+  const finale = await send("POST", `/tasks/${P}/dispatch-plan`, { tasks: [{ title: "收尾那一条", body: "派出去就算完成(dp-done)", note: "" }] }, headers);
+  assert.equal(finale.status, 200, JSON.stringify(finale.body));
+  assert.equal(finale.body.afterLaunch, "done", "缺省是派出去就算完成");
+  await endTurn(P);
+  const doneSeqBefore = (await taskOf(P)).doneSeq;
+  const leadBefore = delivered().length;
+  const finished = await send("POST", `/tasks/${P}/dispatch-plan/launch`, {
+    planId: finale.body.planId, order: "serial", items: [{ index: 0, target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null } }],
+  });
+  assert.equal(finished.status, 200, JSON.stringify(finished.body));
+  const finaleKid = (finished.body.tasks as { id: string }[])[0]!;
+  await waitFor(async () => (await taskOf(P)).status === "done", "派出去之后没有结成完成");
+  assert.equal((await taskOf(P)).doneSeq, doneSeqBefore + 1, "记的是一次完成（等它完成后发送的消息认这一次）");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  // 日志里记着每一次起跑的输入：新建的那一条自己会起跑，这里只看这条任务有没有被叫起来。
+  assert.ok(!delivered().slice(leadBefore).includes(P), "没有叫醒智能体");
+  assert.equal(runs.isRunning(P), false);
+  const finaleRecord = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { reply: string; undelivered?: boolean }[]).at(-1)!;
+  assert.equal(finaleRecord.undelivered, true, "清单记在问答记录上，还没交给智能体");
+  assert.ok(isDispatchLaunchReply(finaleRecord.reply) && !finaleRecord.reply.startsWith("【答复】"), "补交的那段认得出，且不冒充答复");
+  const chat = await send("POST", `/tasks/${P}/reply`, { text: "接着聊一句(dp-after)" });
+  assert.ok(chat.status < 300, JSON.stringify(chat.body));
+  await waitFor(() => delivered().includes("dp-after"), "接着聊的那句没有送进会话");
+  const turnInput = (marker: string) => delivered().split("\n").find((line) => line.includes(marker)) ?? "";
+  const carriedTurn = turnInput("dp-after");
+  assert.ok(carriedTurn.includes(finaleKid.id) && carriedTurn.includes("随即结成了完成"), "下一回合开头补交了建好的清单");
+  assert.ok(carriedTurn.indexOf(finaleKid.id) < carriedTurn.indexOf("dp-after"), "补交的在用户这句话前面");
+  await waitFor(() => settled(P), "接着聊的那一轮没有结算");
+  assert.equal((JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { undelivered?: boolean }[]).at(-1)!.undelivered, undefined, "交过就划掉");
+  assert.ok((await send("POST", `/tasks/${P}/reply`, { text: "再聊一句(dp-again)" })).status < 300);
+  await waitFor(() => delivered().includes("dp-again"), "再聊的那句没有送进会话");
+  assert.ok(!turnInput("dp-again").includes(finaleKid.id), "补交只交一次");
+  await waitFor(() => settled(P), "再聊的那一轮没有结算");
+  console.log("✓ 派出去就算完成：当场结成完成、不叫醒；清单在下一回合开头补交一次，交过就不再交");
 
   // —— 一个接一个：串成一条队列，按卡上的顺序；派活单上没指明的那一格取默认值（设成了 codex）。
   headers = await inTurn(P);

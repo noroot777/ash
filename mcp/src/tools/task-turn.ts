@@ -243,20 +243,25 @@ server.registerTool(
     title: "摆出派活单(派出一批任务前先给用户过目)",
     description:
       "想派出一批任务、而用户还没看过这批活时用它：回复框那一格变成派活单，用户可以换执行器、去掉某条、改一个接一个/同时。"
-      + "调完正常结束回合，任务落 paused 等用户。用户按「派出去」时由 Navi 照单建好、挂在本任务名下、交给调度，再把建好的清单(任务号、标题、交给谁)作为答复续上你的会话——**不要再自己建一遍**；"
+      + "调完正常结束回合，任务落 paused 等用户。用户按「派出去」时由 Navi 照单建好、挂在本任务名下、交给调度；"
       + "用户写一句发回来时一条都没建，按他的话改完可以再摆一次。\n\n"
+      + "派出去之后还有没有你的事，用 afterLaunch 说定：done(缺省)=派出去就是本任务最后一步，Navi 当场把本任务结成完成、不叫醒你，"
+      + "建好的清单(任务号、标题、交给谁)留到你下一回合开头再给你；continue=派出去后你还要接着做(比如等它们的结果)，Navi 把清单作为答复续上你的会话。"
+      + "两种都**不要再自己建一遍**。选 done 就把要对用户说的话在摆单这一回合说完。\n\n"
       + "用户已经明确说过开工、或已经确认过这份清单，直接用 batch_create_tasks / create_task_chain 建，别再摆一遍。有提问在等时会被拒，摆了单就别再 ask_question。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       tasks: z.array(planTaskShape).min(1).max(MAX_DISPATCH_PLAN_ITEMS).describe("按派出顺序排列；agentType/executorId 不填 = 交给本任务「派出去的活交给谁」的默认"),
       order: MODE.optional().describe("serial=一个接一个(默认)；parallel=同时"),
+      afterLaunch: z.enum(["done", "continue"]).optional()
+        .describe("done(默认)=派出去就算本任务完成、不叫醒你；continue=派出去后把清单作为答复续上你的会话，你还要接着做"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, tasks, order, directionToken }) => {
+  async ({ taskId, tasks, order, afterLaunch, directionToken }) => {
     // 卡上每一行都摆着谁来审（缺省默认审查者），用户按「派出去」前能换、能关。
     const items = tasks.map(({ reviewer, ...task }) => ({ ...task, review: reviewChoiceOf(reviewer) }));
-    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-plan`, { tasks: items, order: order ?? "serial" }, directionToken)); }
+    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-plan`, { tasks: items, order: order ?? "serial", afterLaunch: afterLaunch ?? "done" }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );
