@@ -15,7 +15,7 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { taskWorkflowDef } from "./workflows.js";
 import { stopPreviewForWorktreeCleanup } from "./preview.js";
 import { acceptWithoutCleanup, finalizeAcceptance } from "./task-accept-finalize.js";
-import { mergeThenPush, preparePush, pushMerged, untilRemoteSettles, type PushChoice, type PushOutcome } from "./task-accept-push.js";
+import { preparePush, pushFirst, pushMerged, untilRemoteSettles, type PushChoice, type PushOutcome } from "./task-accept-push.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
@@ -162,13 +162,14 @@ async function acceptTaskUnlocked(
   // 这里直接 null 放行）。判在锁里、跑在锁外 —— 那条命令动辄十几分钟，占着仓库锁会让
   // 同仓库其它任务的验收全部干等，所以这里只登记意图，发射在 acceptTask 的锁外那一段。
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
-  const cheap = await mergePreflight(task, gateProject, by, commitOverride);
+  const pushes = !!push.choice;
+  const cheap = await mergePreflight(task, gateProject, by, commitOverride, pushes);
   task = cheap.task;
   if (cheap.failure) return cheap.failure;
   if (gateProject?.acceptAutoCommit) {
     const autoCommitFailure = await autoCommitAcceptanceWorkspace(task, true, onAutoCommit);
     if (autoCommitFailure) return autoCommitFailure;
-    const afterCommit = await mergePreflight(task, gateProject, by, commitOverride);
+    const afterCommit = await mergePreflight(task, gateProject, by, commitOverride, pushes);
     task = afterCommit.task;
     if (afterCommit.failure) return afterCommit.failure;
   }
@@ -284,10 +285,11 @@ async function acceptTaskUnlocked(
     const source = testedSource ?? await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
     await db.update(tasks).set({ acceptedSourceCommit: source }).where(eq(tasks.id, taskId));
   }
-  // 选了推送：推上去了才算合完，推不上去就把合并退回去（task-accept-push.ts）。
-  const strategy = plan.merge;
-  const { merge, push: pushed } = await mergeThenPush(task, project.repoPath, pushPlan, () => mergeTaskBranch(project.repoPath, taskId,
-    intendedTarget, strategy, { commit: commitOnAccept, retryOfMerged: retrying, sourceCommit: testedSource, ...tested }));
+  // 选了推送：先在临时检出里合好、推上去，远程收下了才快进本地；推不上去本地不动（task-accept-push.ts）。
+  const mergeOptions = { commit: commitOnAccept, retryOfMerged: retrying, sourceCommit: testedSource, ...tested };
+  const { merge, push: pushed } = pushPlan
+    ? await pushFirst(task, project.repoPath, pushPlan, { target: intendedTarget, strategy: plan.merge, options: mergeOptions })
+    : { merge: await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge, mergeOptions), push: undefined };
   if (!merge.ok && merge.reason === "push_remote_moved") {
     return { accepted: false, httpStatus: 409, taskId, reason: merge.reason, error: merge.message, status: task.status,
       sourceBranch: merge.sourceBranch, targetBranch: merge.targetBranch };
@@ -312,7 +314,7 @@ async function acceptTaskUnlocked(
       && !!task.acceptedMergeCommit
       && await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch);
     if (mergeReachable) {
-      const pushed = pushPlan ? await pushMerged(task, project.repoPath, pushPlan) : undefined;
+      const pushed = pushPlan ? await pushMerged(task, project.repoPath, pushPlan, task.acceptedMergeCommit!) : undefined;
       if (pushed && !pushed.ok) {
         return { accepted: false, httpStatus: 409, taskId, reason: pushed.reason, error: pushed.message, status: task.status, push: pushed,
           completedMerge: { targetBranch, commit: task.acceptedMergeCommit } };
@@ -365,6 +367,7 @@ async function acceptTaskUnlocked(
       conflictFiles: merge.conflictFiles,
       dirtyFiles: merge.dirtyFiles,
       targetPath: merge.targetPath,
+      ...(pushed ? { push: pushed } : {}),
       ...(conflictHandoff ? { conflictHandoff } : {}),
     };
   }
@@ -443,11 +446,6 @@ async function acceptTaskUnlocked(
   }
   const pushField = pushed ? { push: pushed } : {};
   const completedMerge = tagged ? undefined : { targetBranch: merge.targetBranch, commit: noCommit ? null : merge.afterCommit ?? null };
-  // 推送没成功、合并又退不回去：停在 merged，不清理（任务的分支和工作区留着），再验收会再推一次。
-  if (pushed && !pushed.ok) {
-    return { accepted: false, httpStatus: 409, taskId, reason: pushed.reason, status: task.status, completedMerge, push: pushed,
-      sourceBranch: merge.sourceBranch, targetBranch: merge.targetBranch, error: `合并已完成但还没推上去：${pushed.message}` };
-  }
   const completedTag = tagged ? merge.tag : undefined;
   const completedSummary = noCommit
     ? `合并已完成但按你的选择没有提交：改动在 ${merge.targetBranch} 的工作区里等你自己提交。清理尚未完成。`
@@ -490,11 +488,14 @@ async function acceptTaskUnlocked(
   // 按**计划**判而不是按本次 method：squash 计划的重试会拿到 already_merged，但分支
   // 依旧不是目标的祖先，`git branch -d` 一样删不掉——按 method 判会让重试卡死在清理
   // （审查实测：worktree 已删、分支删不动、任务永久停 merged）。
-  const branchUnmergeable = plan.merge === "squash" || plan.merge === "tag" || merge.method === "squash" || tagged || noCommit;
+  // 推上去了、本地目标分支没跟上（task-accept-push.ts）：本地 git 看它没合并，分支留着，pull 之后再删。
+  const localBehind = !!(pushed?.ok && pushed.localBehind);
+  const branchUnmergeable = plan.merge === "squash" || plan.merge === "tag" || merge.method === "squash" || tagged || noCommit || localBehind;
   const branchKeptReason = !cleanPlan.branch
     ? `线上写的是「${ACCEPT_CLEAN_LABELS[plan.clean]}」`
     : branchUnmergeable
-      ? `${tagged ? "只打了标签没合并" : noCommit ? "这次合并没有落提交，分支是那份改动唯一的版本库副本" : "squash 之后 git 不认为它已合并"}，按约定不强删`
+      ? `${tagged ? "只打了标签没合并" : noCommit ? "这次合并没有落提交，分支是那份改动唯一的版本库副本"
+        : localBehind ? `成果已推到远程，但本地 ${merge.targetBranch} 还没跟上` : "squash 之后 git 不认为它已合并"}，按约定不强删`
       : null;
   if (branchUnmergeable) cleanPlan.branch = false;
 
@@ -654,7 +655,7 @@ export async function acceptTask(
               receiptLine(`验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`),
             );
           }
-          // 推送时远程又进了新提交：已退回、已同步，在同一把锁里从头再验一遍（task-accept-push.ts 文件头）。
+          // 推送时远程又进了新提交：本地没动、已同步，在同一把锁里从头再验一遍（task-accept-push.ts 文件头）。
           return untilRemoteSettles(taskId, advanceOpts.push ?? false, (push) => acceptTaskUnlocked(
             taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit,
             advanceOpts.acceptGate, advanceOpts.acceptGatePassedRunId,

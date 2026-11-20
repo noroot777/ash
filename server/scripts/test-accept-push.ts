@@ -1,6 +1,6 @@
 // 验收「推送到远程」那一档的回归用例（task-accept-push.ts / git-accept-remote.ts）：
-// 先把远程的新提交快进进本地目标分支再合、合完推上去不强推；远程的新改动跟任务撞冲突照常交回任务去解；
-// 本地和远程分叉、拉不到远程、不提交、没有远程，都在动 git 之前拒绝。
+// 先把远程的新提交快进进本地目标分支，在临时检出里合好、先推远程（不强推），远程收下了才快进本地；
+// 远程的新改动跟任务撞冲突照常交回任务去解；本地和远程分叉、拉不到远程、不提交、没有远程，都在动 git 之前拒绝。
 //
 // 每个用例自带一个临时仓库 + 一个裸仓库当远程（再 clone 一份当「别人」往远程推），出不了临时目录。
 import assert from "node:assert/strict";
@@ -57,7 +57,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
   const { acceptTask } = await import("../src/task-accept.js");
-  const { pushTargetBranch, resolvePushTarget } = await import("../src/git-accept-remote.js");
+  const { pushCommit, resolvePushTarget } = await import("../src/git-accept-remote.js");
   const { moveBranchGuarded } = await import("../src/git-guarded-move.js");
   const { pushDestination } = await import("../src/task-accept-push.js");
   const { parseChoices } = await import("../src/accept-gate-handoff.js");
@@ -208,14 +208,14 @@ try {
     void remote;
   }
 
-  // 7. 推的那一下被拒（远程在合完之后又被人推了）：如实报 push_rejected，不强推。
+  // 7. 推的那一下被拒（远程在合完之后又被人推了）：如实报 push_rejected，不强推。推的是给定的那个提交。
   {
     const { repo, remote } = makeStage("rejected");
     writeFileSync(join(repo, "mine.txt"), "mine\n");
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "local");
     const theirs = pushFromOther(join(root, "rejected-other"), "other.txt", "other\n");
-    const outcome = await pushTargetBranch(repo, "main", { remote: "origin", remoteBranch: "main", url: remote }, null);
+    const outcome = await pushCommit(repo, git(repo, "rev-parse", "main"), { remote: "origin", remoteBranch: "main", url: remote }, null);
     assert.equal(outcome.ok, false);
     if (!outcome.ok) assert.equal(outcome.reason, "push_rejected");
     assert.equal(git(remote, "rev-parse", "main"), theirs, "被拒就是被拒，远程上别人的提交不许盖掉");
@@ -272,7 +272,7 @@ try {
     assert.equal(git(remote, "rev-parse", "main"), fetchSide, "拉取地址那个仓库不碰");
   }
 
-  // 11. 合完到推之间远程又被推了一个不冲突的提交（审查第 1 轮 F3）：退回本地合并、同步、重新合、再推，最后验收通过。
+  // 11. 合完到推之间远程又被推了一个不冲突的提交（审查第 1 轮 F3）：本地没动过，同步、从头重新合、再推，最后验收通过。
   {
     const { repo, remote } = makeStage("race-clean");
     const taskId = await seedTask(repo, "task.txt", "task\n");
@@ -286,7 +286,7 @@ try {
     assert.equal(git(repo, "status", "--porcelain"), "", "项目目录干净");
   }
 
-  // 12. 合完到推之间远程又被推了一个冲突的提交：退回本地合并、同步进来、重新合撞冲突 → 交回任务去解，
+  // 12. 合完到推之间远程又被推了一个冲突的提交：同步进来、从头重新合撞冲突 → 交回任务去解，
   //     任务的分支和工作区都还在、没有落已验收；远程只有别人的那一个。
   {
     const { repo, remote } = makeStage("race-conflict");
@@ -306,7 +306,7 @@ try {
     assert.equal(readFileSync(join(wsOf.get(taskId)!, "shared.txt"), "utf8"), "task side\n", "任务工作区还在，交回去能接着解");
   }
 
-  // 13. 推不上去（远程拒收、远程也没动）：把这次合并从本地退回去，什么都没留下；任务照旧可以再验收。
+  // 13. 推不上去（远程拒收、远程也没动）：本地一个字节都没动（先推后落本地），什么都没留下；任务照旧可以再验收。
   {
     const { repo, remote } = makeStage("refused");
     writeFileSync(join(remote, "hooks", "pre-receive"), "#!/bin/sh\necho nope >&2\nexit 1\n", { mode: 0o755 });
@@ -315,19 +315,20 @@ try {
     const result = await acceptTask(taskId, "human", { push: true });
     assert.equal(result.accepted, false);
     if (!result.accepted) assert.equal(result.reason, "push_failed");
-    assert.equal(git(repo, "rev-parse", "main"), before, "推不上去就退回合并之前");
-    assert.equal(git(repo, "status", "--porcelain"), "", "检出也跟着退回去了");
+    assert.equal(git(repo, "rev-parse", "main"), before, "推不上去本地 main 就没动过");
+    assert.equal(git(repo, "status", "--porcelain"), "", "检出也没动过");
     assert.equal(git(remote, "rev-parse", "main"), before);
     assert.notEqual((await rowOf(taskId)).stage, "merged");
     assert.equal(readFileSync(join(wsOf.get(taskId)!, "task.txt"), "utf8"), "task\n", "任务工作区还在");
   }
 
-  // 14. 带护栏挪分支（审查第 1 轮 F2）：有别的 git 拿着 index.lock 就不动；检出脏就不动；
-  //     项目目录不在这个分支上就只挪 ref、不碰检出；正常时检出跟着挪、干净。
+  // 14. 带护栏挪分支（审查第 1 轮 F2）：有别的 git 拿着 index.lock 就不动；这次要改的文件在检出里改着就不动，
+  //     无关文件改着照挪、改动原样留着（审查第 3 轮 F2）；项目目录不在这个分支上就只挪 ref、不碰检出；正常时检出跟着挪。
   {
     const { repo } = makeStage("guarded");
     const base = git(repo, "rev-parse", "main");
     writeFileSync(join(repo, "next.txt"), "next\n");
+    writeFileSync(join(repo, "shared.txt"), "next shared\n");
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "next");
     const next = git(repo, "rev-parse", "main");
@@ -340,17 +341,21 @@ try {
     rmSync(join(repo, ".git", "index.lock"));
     writeFileSync(join(repo, "shared.txt"), "dirty\n");
     const dirty = await moveBranchGuarded(repo, "main", base, next, "测试");
-    assert.equal(dirty.ok, false);
+    assert.equal(dirty.ok, false, "这次要改的文件改着：会被覆盖，不动");
     if (!dirty.ok) assert.equal(dirty.reason, "target_dirty");
     assert.equal(git(repo, "rev-parse", "main"), base);
+    assert.equal(readFileSync(join(repo, "shared.txt"), "utf8"), "dirty\n", "用户的改动原样在");
     git(repo, "checkout", "-q", "--", "shared.txt");
+    writeFileSync(join(repo, ".gitignore"), ".worktrees/\nlocal-edit\n");
     const stale = await moveBranchGuarded(repo, "main", next, base, "测试");
     assert.equal(stale.ok, false, "分支不在 from 上就不动");
     const moved = await moveBranchGuarded(repo, "main", base, next, "测试");
     assert.equal(moved.ok, true, moved.ok ? "" : moved.message);
     assert.equal(git(repo, "rev-parse", "main"), next);
     assert.equal(readFileSync(join(repo, "next.txt"), "utf8"), "next\n", "检出跟着挪");
-    assert.equal(git(repo, "status", "--porcelain"), "", "索引和工作区都对齐");
+    assert.equal(readFileSync(join(repo, "shared.txt"), "utf8"), "next shared\n");
+    assert.equal(git(repo, "status", "--porcelain"), "M .gitignore", "无关文件的改动留着，其余索引和工作区都对齐");
+    git(repo, "checkout", "-q", "--", ".gitignore");
     git(repo, "switch", "-q", "-c", "side", base);
     const refOnly = await moveBranchGuarded(repo, "main", next, base, "测试");
     assert.equal(refOnly.ok, true);
@@ -393,7 +398,7 @@ try {
       assert.equal(git(repo, "status", "--porcelain"), "", `${what}：没有凭空多出的改动`);
     };
 
-    { // 推送档的带护栏挪分支（同步快进、推送失败退回都走它）
+    { // 推送档的带护栏挪分支（同步快进、推上去之后快进本地都走它）
       const { repo } = makeStage("claim-guarded");
       const base = unchecked(repo);
       writeFileSync(join(repo, "shared.txt"), "remote next\n");
@@ -477,7 +482,55 @@ try {
     }
   }
 
-  console.log("accept push: 推到哪 / 先同步再合再推 / 不推不碰远程 / 冲突交回任务 / 分叉与推不了都先拒 / 被拒不强推 / 门禁续做带冻结目的地 / 目的地变了就拒 / 推送地址与拉取地址分离 / 推送期间远程又动（不冲突重来、冲突交回任务） / 推不上去退回合并 / 带护栏挪分支 / 挪没检出的分支先占住（三处） / 拉推带项目账号 全部通过");
+  // 17. 推的是临时检出里合出来的那个提交，不是「推那一刻本地 main 指着谁」（审查第 3 轮 F1）：推的同时另一个终端
+  //     往本地 main 上提交了一个（等同于把合并撤掉、改了别的）。远程收下的仍是这次合并、验收完成；本地 main 被挪过就不硬快进，
+  //     如实报本地落后（localBehind），那个终端的提交原样留着。
+  {
+    const { repo, remote } = makeStage("local-moved");
+    const taskId = await seedTask(repo, "task.txt", "task\n");
+    const source = git(wsOf.get(taskId)!, "rev-parse", "HEAD");
+    const branch = git(wsOf.get(taskId)!, "rev-parse", "--abbrev-ref", "HEAD");
+    writeFileSync(join(repo, ".git", "hooks", "pre-push"), ["#!/bin/sh", 'rm -f "$0"', "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX",
+      `cd ${JSON.stringify(repo)} && git commit -q --allow-empty -m meanwhile`, ""].join("\n"), { mode: 0o755 });
+    const result = await acceptTask(taskId, "human", { push: true });
+    assert.equal(result.accepted, true, result.accepted ? "" : result.error);
+    assert.equal(result.push?.ok, true);
+    if (result.push?.ok) {
+      assert.equal(result.push.commit, source, "推的是这次合并的结果");
+      assert.ok(result.push.localBehind, "本地没跟上要说出来");
+    }
+    assert.equal(git(remote, "rev-parse", "main"), source, "远程是任务的成果");
+    assert.equal(git(repo, "log", "-1", "--format=%s", "main"), "meanwhile", "那个终端的提交原样留着，没被硬快进盖掉");
+    assert.equal(await stageOf(taskId), "accepted");
+    assert.equal(git(repo, "rev-parse", branch), source, "本地 main 没含它，任务分支留着不删");
+  }
+
+  // 18. 用户在项目目录改着一个无关文件，推的那一刻远程又被推了新提交（审查第 3 轮 F2）：不冲突就同步、从头重合、推上去，
+  //     冲突就交回任务去解 —— 两种都不因为那个无关改动卡住，那个改动原样留着。
+  for (const [name, file, content] of [["dirty-race-clean", "other.txt", "other\n"], ["dirty-race-conflict", "shared.txt", "their side\n"]] as const) {
+    const { repo, remote } = makeStage(name);
+    const taskId = await seedTask(repo, file === "shared.txt" ? "shared.txt" : "task.txt", file === "shared.txt" ? "task side\n" : "task\n");
+    writeFileSync(join(repo, ".gitignore"), ".worktrees/\nlocal-edit\n");
+    raceOnPush(repo, join(root, `${name}-other`), file, content);
+    const result = await acceptTask(taskId, "human", { push: true });
+    assert.equal(readFileSync(join(repo, ".gitignore"), "utf8"), ".worktrees/\nlocal-edit\n", `${name}：无关改动原样留着`);
+    if (file === "other.txt") {
+      assert.equal(result.accepted, true, result.accepted ? "" : result.error);
+      assert.equal(git(remote, "rev-parse", "main"), git(repo, "rev-parse", "main"));
+      assert.equal(git(repo, "show", "main:other.txt"), "other");
+      assert.equal(git(repo, "show", "main:task.txt"), "task");
+      assert.equal(git(repo, "status", "--porcelain"), "M .gitignore");
+    } else {
+      assert.equal(result.accepted, false);
+      if (result.accepted) throw new Error("撞冲突不该验收通过");
+      assert.equal(result.reason, "merge_conflict", result.error);
+      assert.equal(result.conflictHandoff?.notified, true, "冲突交回任务去解，不是报一句 push_diverged");
+      assert.equal(git(repo, "rev-parse", "main"), git(remote, "rev-parse", "main"), "本地 main 同步到了远程那一头");
+      assert.notEqual(await stageOf(taskId), "merged");
+    }
+  }
+
+  console.log("accept push: 推到哪 / 先同步再合再推 / 不推不碰远程 / 冲突交回任务 / 分叉与推不了都先拒 / 被拒不强推 / 门禁续做带冻结目的地 / 目的地变了就拒 / 推送地址与拉取地址分离 / 推送期间远程又动（不冲突重来、冲突交回任务） / 推不上去本地不动 / 带护栏挪分支 / 挪没检出的分支先占住（三处） / 拉推带项目账号 / 推的是合出来的提交、本地被挪过只报落后 / 检出里有无关改动照样同步重合或交回冲突 全部通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

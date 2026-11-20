@@ -37,7 +37,7 @@ export async function claimAcceptTarget(taskId: string, resolved: string): Promi
  * 命令、合并),不能接着用传进来的那份 —— 理由见 claimAcceptTarget。
  */
 export async function mergePreflight(task: TaskRow, project: typeof projects.$inferSelect | null,
-  by: AcceptBy, commit?: boolean): Promise<{ failure: AcceptFailure | null; task: TaskRow }> {
+  by: AcceptBy, commit?: boolean, pushing = false): Promise<{ failure: AcceptFailure | null; task: TaskRow }> {
   const pass = { failure: null, task };
   if (!project || !task.useWorktree || task.stage === "merged") return pass;
   const plan = acceptPlan(taskWorkflowDef(task.workflow), by, task.workflowAt);
@@ -79,7 +79,9 @@ export async function mergePreflight(task: TaskRow, project: typeof projects.$in
   if (!checkout.atRepo && (commit ?? project.acceptCommit) === false) {
     return fail("target_not_checked_out", "合并后不提交要求目标分支检出在项目目录；未运行验收前置命令");
   }
-  if (checkout.atRepo) {
+  // 推送档的合并不在项目目录里做（git-accept-detached.ts），检出里的改动挡不着它；推上去之后快进本地时
+  // 会被覆盖的改动由 git 自己拒，那时只是本地落后、不影响验收（task-accept-push.ts 文件头）。
+  if (checkout.atRepo && !pushing) {
     // `repoPath` 是用户填的原文,可能以 `~` 开头 —— git 自己不展开它(`fatal: cannot change
     // to '~/repo'`)。仓库里其它每一处 git 调用都先过 expandHome,这一处漏了。
     const { stdout } = await execFileText("git", ["-C", expandHome(project.repoPath), "status", "--porcelain"]);

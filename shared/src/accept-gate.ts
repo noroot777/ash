@@ -320,7 +320,10 @@ export function parsePushDestination(raw: unknown): AcceptPushDestination | null
     ? { branch: branch as string, remote: remote as string, remoteBranch: remoteBranch as string, url: url as string } : null;
 }
 
-/** 选了推送时，合完那一下推没推上去（server/src/task-accept-push.ts）。推不上去不改「已验收」。 */
+/**
+ * 选了推送时推没推上去（server/src/task-accept-push.ts）。推上去之后才快进本地目标分支：快进不了（本地期间被挪了、
+ * 检出里的改动会被覆盖）时 `localBehind` 写明原因 —— 远程已经是这次合并，本地落后，pull 一下就好。
+ */
 export type AcceptPushOutcome =
-  | { ok: true; remote: string; remoteBranch: string; commit: string; upToDate: boolean }
+  | { ok: true; remote: string; remoteBranch: string; commit: string; upToDate: boolean; localBehind?: string }
   | { ok: false; remote: string; remoteBranch: string; reason: "push_rejected" | "push_failed"; message: string };

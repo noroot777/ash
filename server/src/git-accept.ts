@@ -114,7 +114,7 @@ export async function isAncestor(repo: string, ancestor: string, descendant: str
 }
 
 /** 某个 ref 指向的 commit；ref 不存在返回 null。 */
-async function commitOf(repo: string, ref: string): Promise<string | null> {
+export async function commitOf(repo: string, ref: string): Promise<string | null> {
   try {
     const { stdout } = await exec("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
     return stdout.trim() || null;
@@ -186,15 +186,17 @@ export function withTemporaryCleanupOutcome(
   return { ...result, warnings: [...(result.warnings ?? []), warning] };
 }
 
-async function mergeInCheckedOutTarget(
+export async function mergeInCheckedOutTarget(
   cwd: string,
   sourceBranch: string,
   targetBranch: string,
   fastForward: boolean,
   sourceRef = sourceBranch,
+  /** 不在目标分支上合（推送档的临时 detached 检出）时给出提交说明，否则 git 会写成「into HEAD」。 */
+  message?: string,
 ): Promise<TaskMergeResult> {
   try {
-    await exec("git", ["-C", cwd, "merge", ...(fastForward ? ["--ff-only"] : ["--no-ff", "--no-edit"]), sourceRef]);
+    await exec("git", ["-C", cwd, "merge", ...(fastForward ? ["--ff-only"] : ["--no-ff", ...(message ? ["-m", message] : ["--no-edit"])]), sourceRef]);
     return { ok: true, sourceBranch, targetBranch, method: fastForward ? "fast_forward" : "merge_commit" };
   } catch (error) {
     const files = await conflictFiles(cwd);
@@ -335,6 +337,35 @@ async function inTargetCheckout(
   return withTemporaryCleanupOutcome(result, cleanupError, temp.path);
 }
 
+/** 合并之前那几道核对（仓库、目标、来源、被测提交）。就地合并与推送档的离线合并（git-accept-detached.ts）共用。 */
+export async function mergeInputs(repoPath: string, taskId: string, requestedTarget: string | null | undefined,
+  options: TaskMergeOptions): Promise<{ ok: true; repo: string; sourceBranch: string; targetBranch: string; sourceRef: string }
+  | Extract<TaskMergeResult, { ok: false }>> {
+  const repo = expandHome(repoPath);
+  const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
+  if (!(await isGitRepo(repo))) {
+    return { ok: false, reason: "not_git_repo", message: `${repoPath} 不是 git 仓库`, sourceBranch, targetBranch: null };
+  }
+  const targetBranch = await resolveTaskMergeTarget(repo, requestedTarget);
+  if (!targetBranch) {
+    return { ok: false, reason: "target_unresolved", message: "目标分支为空且项目当前处于 detached HEAD", sourceBranch, targetBranch: null };
+  }
+  if (!(await localBranchExists(repo, sourceBranch))) {
+    return { ok: false, reason: "source_branch_missing", message: `任务分支 ${sourceBranch} 不存在`, sourceBranch, targetBranch };
+  }
+  if (!(await localBranchExists(repo, targetBranch))) {
+    return { ok: false, reason: "target_branch_missing", message: `目标本地分支 ${targetBranch} 不存在`, sourceBranch, targetBranch };
+  }
+  if (sourceBranch === targetBranch) {
+    return { ok: false, reason: "source_equals_target", message: "任务分支不能同时作为验收目标分支", sourceBranch, targetBranch };
+  }
+  const sourceRef = options.sourceCommit ?? sourceBranch;
+  if (options.sourceCommit && await commitOf(repo, sourceBranch) !== options.sourceCommit) {
+    return { ok: false, reason: "source_changed", message: "任务分支已不再指向被测提交；请重新验收", sourceBranch, targetBranch };
+  }
+  return { ok: true, repo, sourceBranch, targetBranch, sourceRef };
+}
+
 // squash 合并：任务分支上那串提交在目标分支上压成一个提交。**不能走 ref-only 的
 // fast-forward 那条快路**——那条路是把 ref 直接前移，压根不产生新提交，跟 squash 的
 // 语义正相反，所以这里一律找个检出的地方老老实实 merge --squash + commit。
@@ -344,7 +375,7 @@ async function inTargetCheckout(
 // 用 `--squash` 而不是 `merge --no-commit` 是有意的：后者会留下 MERGE_HEAD，整个仓库
 // 停在「合并进行中」的状态里，用户自己的终端、别的 agent、navi 的下一次 git 操作全都
 // 会撞上它；`--squash` 只动工作区和索引，`git commit` 或 `git reset --hard` 一句就收场。
-async function squashInCheckedOutTarget(
+export async function squashInCheckedOutTarget(
   cwd: string,
   sourceBranch: string,
   targetBranch: string,
@@ -481,28 +512,9 @@ async function mergeTaskBranchLocked(
   strategy: AcceptStrategy,
   options: TaskMergeOptions = {},
 ): Promise<TaskMergeResult> {
-  const repo = expandHome(repoPath);
-  const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
-  if (!(await isGitRepo(repo))) {
-    return { ok: false, reason: "not_git_repo", message: `${repoPath} 不是 git 仓库`, sourceBranch, targetBranch: null };
-  }
-  const targetBranch = await resolveTaskMergeTarget(repo, requestedTarget);
-  if (!targetBranch) {
-    return { ok: false, reason: "target_unresolved", message: "目标分支为空且项目当前处于 detached HEAD", sourceBranch, targetBranch: null };
-  }
-  if (!(await localBranchExists(repo, sourceBranch))) {
-    return { ok: false, reason: "source_branch_missing", message: `任务分支 ${sourceBranch} 不存在`, sourceBranch, targetBranch };
-  }
-  if (!(await localBranchExists(repo, targetBranch))) {
-    return { ok: false, reason: "target_branch_missing", message: `目标本地分支 ${targetBranch} 不存在`, sourceBranch, targetBranch };
-  }
-  if (sourceBranch === targetBranch) {
-    return { ok: false, reason: "source_equals_target", message: "任务分支不能同时作为验收目标分支", sourceBranch, targetBranch };
-  }
-  const sourceRef = options.sourceCommit ?? sourceBranch;
-  if (options.sourceCommit && await commitOf(repo, sourceBranch) !== options.sourceCommit) {
-    return { ok: false, reason: "source_changed", message: "任务分支已不再指向被测提交；请重新验收", sourceBranch, targetBranch };
-  }
+  const inputs = await mergeInputs(repoPath, taskId, requestedTarget, options);
+  if (!inputs.ok) return inputs;
+  const { repo, sourceBranch, targetBranch, sourceRef } = inputs;
 
   // 「只打标签不合并」：目标分支一动不动，只在任务分支的头上钉一个标签，日后要找回
   // 这份产物有个稳定的名字。
@@ -644,7 +656,13 @@ async function landTested(repo: string, guard: LandingGuard, strategy: AcceptStr
   const message = method === "squash" ? squashCommitMessage(sourceBranch) : `Merge branch '${sourceBranch}' into ${targetBranch}`;
   const result = await testedResultCommit(repo, method, guard, sourceRef, message, names);
   if (typeof result !== "string") return result;
-  return inTargetCheckout(repo, sourceBranch, targetBranch,
+  return publishTestedResult(repo, guard, method, result, names);
+}
+
+/** 把已经生成好的测过的结果发布到目标分支（检出三种情况同 inTargetCheckout）。推送档推上去之后也走这一下。 */
+export function publishTestedResult(repo: string, guard: LandingGuard, method: "merge_commit" | "squash" | "fast_forward",
+  result: string, names: { sourceBranch: string; targetBranch: string }): Promise<TaskMergeResult> {
+  return inTargetCheckout(repo, names.sourceBranch, names.targetBranch,
     (cwd) => publishInCheckout(cwd, method, guard, result, names),
     () => publishRefOnly(repo, method, guard, result, names), guardedDirtyFiles);
 }

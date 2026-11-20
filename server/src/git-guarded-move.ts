@@ -1,12 +1,15 @@
-// 带护栏地挪一个本地分支（连同它在项目目录里的检出）：推送档的「远程同步进来」和「推送失败退回去」共用。
+// 带护栏地挪一个本地分支（连同它在项目目录里的检出）：推送档的「远程同步进来」和「推上去之后快进本地」共用。
 //
-// 不变量：**只动这一个分支**，而且只在它还指着 `from` 时动。项目目录检出着它时，HEAD 指着谁、检出干不干净，
+// 不变量：**只动这一个分支**，而且只在它还指着 `from` 时动。项目目录检出着它时，HEAD 指着谁、会不会覆盖检出里的改动，
 // 都在持有那份检出的 `index.lock` 时核（git 自己的约定：切分支、提交、合并都要先拿它，拿不到就退），
 // 核完到写完之间别的 git 进不来 —— 不能像 `git merge --ff-only` 那样先看一眼再对「届时的 HEAD」下手：
 // 两条命令之间另一个终端切了分支，被快进的就是那个分支（审查第 1 轮 F2 实测）。
 //
 // 顺序与合并预览档的发布一样（git-accept-publish.ts 文件头）：先演（`read-tree -n`，不写文件），再带旧值挪
-// 分支（被别人挪过就拒），最后才写文件、把新索引换进去。写文件写到一半失败就停在那儿如实说，不替用户复位。
+// 分支（被别人挪过就拒），最后才写文件、把新索引换进去。检出里有改动不拦：两树 `read-tree -m -u` 就是
+// `git checkout` / `git merge --ff-only` 换版本的那套规则 —— 这次不改的路径上的改动原样留着，会被覆盖的
+// （改过的文件这次也要改、挡路的未跟踪文件）git 自己拒，演的那一步就停下（审查第 3 轮 F2：用户在项目目录
+// 改着一个无关文件时，同步远程不该被拦住）。写文件写到一半失败就停在那儿如实说，不替用户复位。
 // 目标哪儿都没检出：先用不检出文件的临时 worktree 占住它（期间谁也检出不了），再带旧值 `update-ref`
 // （git-accept-temp.ts whileBranchClaimed，那里写着为什么不能「挪完再看一眼、被检出了就退回」）。
 import { open, copyFile, rename, rm } from "node:fs/promises";
@@ -70,11 +73,6 @@ async function moveInCheckout(repo: string, branch: string, from: string, to: st
     await copyFile(join(gitDir, "index"), scratch).catch(() => {});
     const git = (args: string[]) => exec("git", ["-C", repo, ...args], { env: { ...process.env, GIT_INDEX_FILE: scratch } });
     await git(["update-index", "-q", "--refresh"]).catch(() => {});
-    const clean = await git(["diff-index", "--cached", "--quiet", from]).then(() => true, () => false)
-      && await git(["diff-files", "--quiet"]).then(() => true, () => false);
-    if (!clean) {
-      return { ok: false, reason: "target_dirty", message: `${what}要改项目目录 ${repo} 里检出的 ${branch}，但工作区或暂存区有没提交的改动，这次没动。` };
-    }
     try { await git(["read-tree", "-m", "-u", "-n", from, to]); } catch (error) {
       return { ok: false, reason: "target_dirty", message: `${what}会覆盖项目目录 ${repo} 里的文件（${gitError(error)}），这次没动。` };
     }

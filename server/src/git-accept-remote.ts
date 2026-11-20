@@ -130,14 +130,15 @@ export async function syncTargetWithRemote(repoPath: string, branch: string, tar
   return { ok: true, tip, fastForwarded: behind, ...(moved.warning ? { warning: moved.warning } : {}) };
 }
 
-/** 合完之后推上去。不强推：远程在这期间又被人推过，就如实报被拒。 */
-export async function pushTargetBranch(repoPath: string, branch: string, target: PushTarget, projectId: string | null): Promise<PushOutcome> {
+/**
+ * 把**这个提交**推上去（推送档生成的那次合并，task-accept-push.ts）—— 不读任何分支头：推那一刻目标分支指着谁
+ * 跟这一次推的是什么无关（审查第 3 轮 F1）。不强推：远程在这期间又被人推过、不再是它的祖先，就如实报被拒。
+ */
+export async function pushCommit(repoPath: string, commit: string, target: PushTarget, projectId: string | null): Promise<PushOutcome> {
   const repo = expandHome(repoPath);
   const base = { remote: target.remote, remoteBranch: target.remoteBranch };
-  const commit = await commitOf(repo, `refs/heads/${branch}`);
-  if (!commit) return { ...base, ok: false, reason: "push_failed", message: `本地分支 ${branch} 不存在` };
   try {
-    // 推给确认过的那个地址，不推给「远程名此刻指着的地方」。推的是读到的那个提交，不是届时的分支头。
+    // 推给确认过的那个地址，不推给「远程名此刻指着的地方」。
     const { stdout } = await network(repo, projectId, ["push", "--porcelain", target.url, `${commit}:refs/heads/${target.remoteBranch}`], PUSH_TIMEOUT_MS);
     // --porcelain 每个 ref 一行，`=` 打头 = 远程本来就是这个提交。
     const upToDate = stdout.split("\n").some((line) => line.startsWith("=\t"));

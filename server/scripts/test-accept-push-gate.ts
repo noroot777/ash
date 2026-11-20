@@ -1,7 +1,7 @@
 // 推送档 × 验收前置命令（合并预览档）：门禁绿了、自动接着验收并推送，推的那一刻远程又被别人推了新提交。
 //
 // 钉的是审查第 2 轮 F2：不能拿第一次门禁测过的那棵树 / 那个目标提交再合一次 —— 那会被旧基准拦成一般的
-// merge_failed，真冲突不交回任务、不冲突也合不上。要退回、同步，从头重新验收：
+// merge_failed，真冲突不交回任务、不冲突也合不上。推不上去时本地没动过，同步进来，从头重新验收：
 // ① 同步进来的提交跟任务冲突 → 按冲突口径交回任务去解，门禁不再跑，本地目标分支停在远程那一头；
 // ② 不冲突 → 按同步之后的目标分支重跑门禁，绿了带着同一个冻结的目的地接着验收并推送。
 import assert from "node:assert/strict";
@@ -48,7 +48,7 @@ try {
     assert.equal(all.length, 1, "重来那一遍撞冲突：门禁不再跑");
     assert.equal(all[0]!.status, "passed");
     const theirs = git(remote, "rev-parse", "main");
-    assert.equal(git(sample.repo, "rev-parse", "main"), theirs, "本地 main 退回合并之前、同步到远程那一头");
+    assert.equal(git(sample.repo, "rev-parse", "main"), theirs, "本地 main 没落下这次合并、同步到了远程那一头");
     assert.equal(git(sample.repo, "status", "--porcelain"), "");
     const row = await taskRow(sample.taskId);
     assert.equal(row.stage, "verified", "没推上去就不算合完");

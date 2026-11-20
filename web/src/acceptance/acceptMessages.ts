@@ -20,6 +20,7 @@ export function acceptMessage(result: AcceptTaskSuccess): string {
         : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过";
   const push = result.push
     ? result.push.ok ? `；已推送到 ${result.push.remote}/${result.push.remoteBranch}`
+        + (result.push.localBehind ? `，但本地分支没跟着更新，在项目目录 pull 一下（${result.push.localBehind}）` : "")
       : `；但推送到 ${result.push.remote}/${result.push.remoteBranch} 没成功，详情见任务时间线`
     : "";
   return head + push + (result.autoCommit ? `；${acceptanceAutoCommitMessage(result.autoCommit)}` : "");
