@@ -5,7 +5,8 @@
 // `worktreePathFor`），网页端也一样。加一个「这条任务的分支其实叫 X」的字段，就得把每一处都改成先查它，
 // 漏一处就是悄悄合错、删错、比错 —— 跟 task-worktree-move.ts 头上说的那条一样：办完之后任务行要跟建任务时
 // 就开了 worktree 的任务长得一模一样，下游不用另认一种。所以收编就是把那个工作区**变成** Navi 的形状：
-//   · `git worktree move` 到 `.worktrees/<id>`：整个目录原样挪过去，未提交的改动、未跟踪的文件都在；
+//   · `git worktree move` 到 `.worktrees/<id>`：整个目录原样挪过去，未提交的改动、未跟踪的文件都在。智能体
+//     恰好就建在这个位置上的不挪，只登记；
 //   · 分支改名成 `navi/<id8>`（已经叫这个名字就不动）。改名会影响到别人的情况一律不办，拒绝的话里说清楚：
 //     分支还检出在别处、是合入目标、别的任务拿它当起点或合入目标、被 git worktree lock 锁着；
 //   · 起点：合入分支（缺省是项目目录此刻检出的那条）跟这条分支的分叉点（merge-base），冻结成开工点 ——
@@ -96,7 +97,7 @@ export async function adoptionBlocker(task: TaskRow, repoPath: string, worktree:
     }
   }
   const path = worktreePathFor(repo, task.id);
-  if (existsSync(path)) return new WorktreeMoveError(`目录 ${path} 已经存在，先把它挪走再收编`);
+  if (!samePath(worktree.path, path) && existsSync(path)) return new WorktreeMoveError(`目录 ${path} 已经存在，先把它挪走再收编`);
   const dirty = await projectDirtyFiles(repo, worktree.path);
   if (dirty instanceof WorktreeMoveError) return dirty;
   if (dirty.length) {
@@ -105,6 +106,9 @@ export async function adoptionBlocker(task: TaskRow, repoPath: string, worktree:
   }
   return null;
 }
+
+/** 给手动还原的命令用：路径、分支名按 shell 单引号包起来，带空格、引号的照样能直接粘贴运行。 */
+const quoted = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
 /** 收编要改动的东西的账（见文件头）。 */
 export type AdoptLedger = {
@@ -122,7 +126,7 @@ export async function undoAdopt(repo: string, ledger: AdoptLedger): Promise<stri
   const left: string[] = [];
   for (const path of [...ledger.created].reverse()) {
     try { rmSync(path, { recursive: true, force: true }); } catch { /* 下面按实际状态核对 */ }
-    if (existsSync(path)) left.push(`复制出来的会话文件 ${path} 没删掉（可以手动删）`);
+    if (existsSync(path)) left.push(`复制出来的会话文件 ${path} 没删掉（可以手动删：rm -r ${quoted(path)}）`);
   }
   if (ledger.moved) {
     const { from, to } = ledger.moved;
@@ -130,14 +134,15 @@ export async function undoAdopt(repo: string, ledger: AdoptLedger): Promise<stri
     if (!existsSync(from)) await git(repo, "worktree", "move", to, from).catch(() => {});
     const records = await worktreeRecords(repo).catch(() => []);
     if (!records.some((record) => samePath(record.path, from))) {
-      left.push(`工作区还在 ${to}，没挪回 ${from}（在项目目录运行 git worktree move ${to} ${from}）`);
+      const occupied = existsSync(from) ? `原位置 ${from} 已经被别的东西占了，先把它挪开，再` : "";
+      left.push(`工作区还在 ${to}，没挪回 ${from}（${occupied}在项目目录运行 git worktree move ${quoted(to)} ${quoted(from)}）`);
     }
   }
   if (ledger.renamed) {
     const { from, to } = ledger.renamed;
     await git(repo, "branch", "-m", to, from).catch(() => {});
     if (!(await localBranchExists(repo, from)) || await localBranchExists(repo, to)) {
-      left.push(`分支还叫 ${to}，没改回 ${from}（运行 git branch -m ${to} ${from}）`);
+      left.push(`分支还叫 ${to}，没改回 ${from}（运行 git branch -m ${quoted(to)} ${quoted(from)}）`);
     }
   }
   await undoBranchPlanSideEffects(repo, ledger.plan);
@@ -211,13 +216,16 @@ export async function adoptForeignWorktree(taskId: string, input: AdoptInput): P
       }
       const path = worktreePathFor(repo, task.id);
       // 会话文件先搬、目录后挪：会话本来就在被收编的目录里跑的，claude 的会话文件按那个目录的真实路径存，
-      // 目录一挪走就认不出它的真实路径了。项目目录上的会话和被收编目录上的会话一起改指新目录。
+      // 目录一挪走就认不出它的真实路径了。记在项目目录上的会话，和记在被收编目录（或它底下哪一层）上的会话
+      // 一起改指新目录；后一种按相对位置映射，原来在子目录里跑的挪完还在同一个子目录里。
       const carried: SessionMove = { rows: [], created: ledger.created, notes: [] };
-      await carrySessions(task.id, [repo, worktree.path], path, carried);
+      await carrySessions(task.id, [{ dir: repo, match: "exact" }, { dir: worktree.path, match: "inside" }], path, carried);
       mkdirSync(join(repo, ".worktrees"), { recursive: true });
       await ensureWorktreesIgnored(repo);
-      await git(repo, "worktree", "move", worktree.path, path);
-      ledger.moved = { from: worktree.path, to: path };
+      if (!samePath(worktree.path, path)) {
+        await git(repo, "worktree", "move", worktree.path, path);
+        ledger.moved = { from: worktree.path, to: path };
+      }
       const result: WorktreeAdopted = {
         from: worktree.seenAs, fromBranch: worktree.branch, path, branch, mergeTargetBranch: target, startCommit: start, upstream, notes: carried.notes,
       };

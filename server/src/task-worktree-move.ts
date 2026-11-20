@@ -35,12 +35,12 @@ import { HTTPException } from "hono/http-exception";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
 import {
-  countsAsProjectChange, expandHome, isGitRepo, listFiles, localBranchExists, porcelainFiles, prepareWorktree, repoKey,
+  countsAsProjectChange, expandHome, isGitRepo, listFiles, localBranchExists, porcelainFiles, prepareWorktree,
   resolveWorktreeBranchName, worktreePathFor,
 } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
-import { physicalPath } from "./git-worktree-state.js";
+import { insidePath, physicalPath, samePath } from "./git-worktree-state.js";
 import { branchName, commitAt, initializeBranchPlan, undoBranchPlanSideEffects, type BranchPlanSideEffects } from "./task-branch-plan.js";
 import { remoteBranchOf } from "./git-remote-branch.js";
 import { claudeSessionFilePath } from "./handoff-collect.js";
@@ -179,29 +179,50 @@ export async function planError(error: unknown): Promise<WorktreeMoveError | nul
 const realDir = (path: string) => { try { return realpathSync(path); } catch { return path; } };
 const spellings = (path: string) => [...new Set([realDir(path), physicalPath(path), path])];
 
-export type SessionMove = { rows: string[]; created: string[]; notes: string[] };
+/** 要改指新目录的一条会话行：新的工作目录（原来在被挪目录的子目录里的，映射到新目录的同一个子目录）。 */
+export type MovedSession = { id: string; cwd: string };
+export type SessionMove = { rows: MovedSession[]; created: string[]; notes: string[] };
 
 /**
- * 这条任务（和挂在它身上的老式审查任务）记在 `from` 这几个目录上的会话行：claude 的会话文件复制一份到新目录
- * 对应的位置，返回要改指新目录的会话行。改到独立工作区只给项目目录；收编还要加上被收编的那个目录（会话
- * 本来就在那里跑的）。记在别处的（比如用户手动指定过目录）不归这里管。会话行本身不在这里改：跟任务行
- * 一起原子落库（`writeMovedTask`）。
- * 复制出来的每个文件、目录都记进 `created`，后面哪一步失败都按它收回；已经在那儿的不记、不碰。
+ * 会话从哪些目录搬：`exact` 只认记在这个目录本身上的（改到独立工作区时的项目目录：项目目录不动，记在它
+ * 子目录里的会话不归这里管）；`inside` 认这个目录和它底下的（收编时被整个挪走的那个工作区：里面任何
+ * 一层的旧路径挪完都不在了）。
  */
-export async function carrySessions(taskId: string, from: string[], to: string, move: SessionMove): Promise<void> {
+export type SessionSource = { dir: string; match: "exact" | "inside" };
+
+/** `path` 挪到 `to` 之后在哪：落在某个来源上就按相对位置映射过去，否则 null（这次搬家跟它无关）。 */
+function mappedPath(path: string, sources: SessionSource[], to: string): string | null {
+  for (const source of sources) {
+    const hit = source.match === "exact" ? samePath(path, source.dir) : insidePath(path, source.dir);
+    if (hit) return join(to, relative(physicalPath(source.dir), physicalPath(path)));
+  }
+  return null;
+}
+
+/**
+ * 这条任务（和挂在它身上的老式审查任务）受这次搬家影响的会话行：工作目录（没有就看 `worktreePath`）落在
+ * `sources` 上的那几条。claude 的会话文件按原工作目录存，复制一份到映射后的工作目录对应的位置；返回要改指
+ * 新目录的会话行和各自的新工作目录。会话行本身不在这里改：跟任务行一起原子落库（`writeMovedTask`）。
+ * 复制出来的每个文件、目录都记进 `created`，后面哪一步失败都按它收回；已经在那儿的不记、不碰。
+ * 要在挪目录**之前**调：原工作目录还在，才认得出它的真实路径（claude 按真实路径存会话文件）。
+ */
+export async function carrySessions(taskId: string, sources: SessionSource[], to: string, move: SessionMove): Promise<void> {
   const reviewers = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.reviewOf, taskId));
   const rows = await db.select().from(sessions).where(inArray(sessions.taskId, [taskId, ...reviewers.map((row) => row.id)]));
-  const keys = new Set(from.map(repoKey));
+  // 窄的来源排前面：嵌在项目目录里的工作区，按工作区映射，不按项目目录。
+  const ordered = [...sources].sort((a, b) => physicalPath(b.dir).length - physicalPath(a.dir).length);
   for (const row of rows) {
-    const dir = row.cwd || row.worktreePath;
-    if (!dir || !keys.has(repoKey(expandHome(dir)))) continue;
-    move.rows.push(row.id);
-    if (row.agentType !== "claude" || !row.cliSessionId) continue;
+    const cwd = row.cwd ? mappedPath(expandHome(row.cwd), ordered, to) : null;
+    const root = row.worktreePath ? mappedPath(expandHome(row.worktreePath), ordered, to) : null;
+    if (!cwd && !root) continue;
+    // 工作目录不在这次搬家里、只有 `worktreePath` 在的：工作目录照旧（那是别处），只把工作区改指新目录。
+    const nextCwd = cwd ?? (row.cwd ? expandHome(row.cwd) : to);
+    move.rows.push({ id: row.id, cwd: nextCwd });
+    if (row.agentType !== "claude" || !row.cliSessionId || !cwd) continue;
     const configDir = await sessionCliConfigDir(row, "claude");
-    const source = [row.cwd, row.worktreePath].filter((cwd): cwd is string => !!cwd)
-      .flatMap((cwd) => spellings(expandHome(cwd)))
-      .map((cwd) => claudeSessionFilePath(cwd, row.cliSessionId!, configDir)).find((path) => existsSync(path));
-    const target = claudeSessionFilePath(physicalPath(to), row.cliSessionId, configDir);
+    const source = spellings(expandHome(row.cwd!))
+      .map((dir) => claudeSessionFilePath(dir, row.cliSessionId!, configDir)).find((path) => existsSync(path));
+    const target = claudeSessionFilePath(physicalPath(nextCwd), row.cliSessionId, configDir);
     if (!source) {
       move.notes.push(`会话 ${row.id} 的 claude 会话文件没找到，下一回合接不上原来的对话`);
       continue;
@@ -279,12 +300,12 @@ export type MovedPlan = Pick<TaskRow, "worktreeBase" | "worktreeStartCommit" | "
  * 新目录、要么一行不动。每条都带着「登记还是那一份、任务还没有独立工作区」。没写上（被改动了）回 false。
  */
 export async function writeMovedTask(
-  taskId: string, expected: string | null, sessionRows: string[], made: { path: string; branch: string }, plan: MovedPlan, note: string,
+  taskId: string, expected: string | null, sessionRows: MovedSession[], made: { path: string; branch: string }, plan: MovedPlan, note: string,
 ): Promise<boolean> {
   const unchanged = and(eq(tasks.id, taskId), requestIs(expected), eq(tasks.useWorktree, false));
   const stillMine = exists(db.select({ id: tasks.id }).from(tasks).where(unchanged));
-  const sessionWrites: BatchItem<"sqlite">[] = sessionRows.map((id) => db.update(sessions)
-    .set({ cwd: made.path, worktreePath: made.path, branch: made.branch }).where(and(eq(sessions.id, id), stillMine)));
+  const sessionWrites: BatchItem<"sqlite">[] = sessionRows.map((row) => db.update(sessions)
+    .set({ cwd: row.cwd, worktreePath: made.path, branch: made.branch }).where(and(eq(sessions.id, row.id), stillMine)));
   const taskWrite = db.update(tasks).set({
     useWorktree: true, ...plan, worktreeMoveRequest: null, workspaceNote: note, updatedAt: now(),
   }).where(unchanged).returning({ id: tasks.id });
@@ -343,7 +364,7 @@ export async function moveTaskToWorktree(taskId: string, input: WorktreeMoveInpu
         .catch((error: unknown) => { throw new WorktreeMoveError(error instanceof Error ? error.message : String(error)); });
       const made = { path: ws.path, branch: ws.branch ?? expectedBranch };
       const carried: SessionMove = { rows: [], created: ledger.created, notes: [] };
-      await carrySessions(task.id, [repo], made.path, carried);
+      await carrySessions(task.id, [{ dir: repo, match: "exact" }], made.path, carried);
       const result: WorktreeMoved = {
         from: repo, path: made.path, branch: made.branch, base: row.worktreeBaseBranch || row.worktreeBase || startCommit, startCommit,
         mergeTargetBranch: row.mergeTargetBranch ?? null, trackingBranch: plan.trackingBranch?.name ?? null, notes: carried.notes,

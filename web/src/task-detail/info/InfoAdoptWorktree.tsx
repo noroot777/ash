@@ -1,5 +1,5 @@
 // 「分支」那一行上的兜底：智能体没用「改到独立工作区」，自己 `git worktree add` 了一个目录在里面干活，
-// Navi 不知道 —— 这一行还写着项目目录的分支，「改动」也对不上。服务端从会话里认出那个目录
+// Navi 不知道 —— 这一行还写着项目目录的分支，「改动」也对不上。服务端按这条任务在里面干过活的事实认出那个目录
 // （server/src/foreign-worktrees.ts），这里指到这一行才出一颗按钮，提示写在它的指到提示里；点开在这一行底下
 // 铺开：哪个目录、分支改成什么名字、合入哪条，确认后交给服务端收编（server/src/task-worktree-adopt.ts）。
 // 收编之后任务就开了独立工作区，这颗按钮自然不再出现。
@@ -29,8 +29,7 @@ export function useForeignWorktrees(task: Task, enabled: boolean): ForeignWorktr
 
 export function AdoptTool({ found, open, onToggle }: { found: ForeignWorktrees; open: boolean; onToggle: () => void }) {
   const [first, ...rest] = found.worktrees;
-  const what = first!.created ? "智能体自己建了工作区" : "智能体在工作区里干过活：";
-  const tip = `${what} ${first!.seenAs}（分支 ${first!.branch}）${rest.length ? `等 ${found.worktrees.length} 个` : ""}，`
+  const tip = `智能体在工作区 ${first!.seenAs}（分支 ${first!.branch}）${rest.length ? `等 ${found.worktrees.length} 个` : ""}里干过活，`
     + "Navi 没管到它：这里的分支和改动对不上。点开收编";
   return (
     <InspTool label="收编智能体自建的工作区…" tip={tip} className="insp-copy" aria-expanded={open} onClick={onToggle}>

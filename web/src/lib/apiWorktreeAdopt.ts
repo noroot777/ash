@@ -3,10 +3,10 @@
 import { id, json, request } from "./apiClient.ts";
 
 /**
- * 这条任务在里面干过活、Navi 没管到的一个 worktree。`created`：轨迹里有智能体建它的那一步。`blocker` 是跟
- * 合入分支无关、此刻收编不了的原因（合入分支选得对不对，提交时由服务端判）。
+ * 这条任务在里面干过活、Navi 没管到的一个 worktree。`blocker` 是跟合入分支无关、此刻收编不了的原因
+ * （合入分支选得对不对，提交时由服务端判）。
  */
-export type ForeignWorktree = { path: string; seenAs: string; branch: string; head: string; created: boolean; blocker: string | null };
+export type ForeignWorktree = { path: string; seenAs: string; branch: string; head: string; blocker: string | null };
 
 export const worktreeAdoptApi = {
   // 还没重启到新版的服务端没有这个端点：当成没有，别在信息格里报错。
