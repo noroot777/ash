@@ -412,7 +412,8 @@ export async function createTasks(
       // 收在别的任务名下的：跟那棵派活树的整棵归档互斥，归档了的任务名下不再长没归档的（team-admission.ts）。
       // 本身就是归档态落库的（接力导入一条已归档的任务）不算「长出来」。
       const dispatchers = new Set(normalizedRows.flatMap((row) => (row.dispatchedBy && !row.archived ? [row.dispatchedBy] : [])));
-      const joined = await joinDispatchChain([...dispatchers]);
+      const origins = normalizedRows.flatMap((row) => row.originTaskId ? [row.originTaskId] : []);
+      const joined = await joinDispatchChain([...new Set([...dispatchers, ...origins])]);
       try {
         await insertAdmitted();
       } finally {

@@ -1,5 +1,6 @@
 import type { SkillEntry, Task } from "@navi/shared";
 import type { CliCommand } from "@navi/shared/cli-commands";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 
 /**
  * 回复框此刻接得住什么。分两层，各有各的去处：
@@ -27,7 +28,7 @@ const UNSTARTED = "先运行任务，再继续回复";
 const answersWithoutSession = (command: CliCommand | null) => command?.name === "goal" && command.args === "--scopes";
 
 export function replyGate(task: Pick<Task, "mode" | "archived" | "status">, hasConversation: boolean, command: CliCommand | null): ReplyGate {
-  const closed = task.mode !== "single" ? "请在对应的团队或讨论页面继续操作" : task.archived ? "任务已归档，无法继续回复" : null;
+  const closed = task.mode !== "single" ? "请在对应的团队或讨论页面继续操作" : taskInteractionAvailability(task) === "archived" ? "任务已归档，无法继续回复" : null;
   // 在跑 / 排着的任务说了先排队，这一轮一结束就有会话接。
   const unstarted = !closed && !hasConversation && task.status !== "running" && task.status !== "queued";
   return {
