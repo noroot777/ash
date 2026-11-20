@@ -189,7 +189,7 @@
     "test:diff-model": "tsx --import ./scripts/ignore-css-hooks.mjs scripts/test-diff-model.ts",
     "//test:file-diff-view": "文件树里有颜色的文件点开摊 diff、diff 与全文互切。",
     "test:file-diff-view": "node scripts/test-file-diff-view.mjs",
-    "//test:file-view-zoom": "中间栏摊开的文件全文 / 单文件 diff 放大：盖住任务栏、让开 inspector、换文件与互切时放大不掉。",
+    "//test:file-view-zoom": "文件 / 文件夹 / diff 摊在右侧宽格、会话留着；放大铺满工作区、互切时放大不掉；关掉这一格回到点开前的样子。",
     "test:file-view-zoom": "node scripts/test-file-view-zoom.mjs",
     "//test:file-reel": "生成物/同一层文件点开之后一张接一张地翻：翻的是点开那一刻的那一组、到头绕回去、方向键只在图片上接管（输入框里和非图片上不许翻）、一组只有一个就不出控件。",
     "test:file-reel": "node scripts/test-file-reel.mjs",

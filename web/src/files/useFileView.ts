@@ -2,14 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 
 /**
- * 中间那一栏里「文件」这一块的开关：同一时刻摊一份文件全文、一份 diff，或者一个文件夹的
- * 详情。
+ * 右侧面板里「查看」那一格（files/fileViewTab.tsx）的内容：同一时刻摊一份文件全文、一份
+ * diff，或者一个文件夹的详情。格子只在这里有东西时存在，关掉内容那一格就跟着收起。
  *
  * 之所以是一个 hook 而不是三个各管各的 `useState`：这几块内容**互为对方的另一种读法**。
  * 文件树里有颜色（git 有改动）的文件一律用对比打开——那是用户点它时真正想看的东西——
  * 但「看全文」不能因此没了入口，所以 diff 摊开时要记住回头路，两边互相能切；文件夹详情
  * 跟它们抢的是同一块位置（点开一个文件夹，上一份文件就该收起来）。单飞任务和团队调度台
- * 的中间栏是同一套规矩，逻辑放在这儿，两边各自只接线。
+ * 是同一套规矩，逻辑放在这儿，两边各自只接线。
  */
 type FileViewState = {
   filePath: string | null;
@@ -31,14 +31,20 @@ type FileViewState = {
    */
   behind: ScmDiffTarget | null;
   /**
-   * 放大：铺满窗口、只让开右边的 inspector。挂在这儿而不是各自组件里，因为全文和 diff 是
-   * 同一块内容的两种读法，互切时组件会换一个，状态留在组件里就会掉。放大态下右边的文件树
-   * 照样点得到，所以换一个文件也接着放大；关掉这一块内容才退出。
+   * 放大：铺满工作区。挂在这儿而不是各自组件里，因为全文和 diff 是同一块内容的两种读法，
+   * 互切时组件会换一个，状态留在组件里就会掉；文档里点开别的文件也接着放大，关掉这一块
+   * 内容才退出。
    */
   zoomed: boolean;
+  /**
+   * 第几次「从外面点开」（文件树、生成物、改动列表、正文里的路径）。面板据此切到「查看」
+   * 那一格——哪怕点的还是同一份文件：人已经切去别的格了，再点一下就是想回来看。查看器
+   * 里自己的翻页、全文 / diff 互切不算，那时人就在这一格上。
+   */
+  seq: number;
 };
 
-const CLOSED: FileViewState = { filePath: null, reel: null, folderPath: null, diff: null, behind: null, zoomed: false };
+const CLOSED: FileViewState = { filePath: null, reel: null, folderPath: null, diff: null, behind: null, zoomed: false, seq: 0 };
 
 export function useFileView(taskId: string) {
   const [state, setState] = useState<FileViewState>(CLOSED);
@@ -48,13 +54,13 @@ export function useFileView(taskId: string) {
   // 全部走函数式更新，回调才能一直是同一个引用 —— 调用方会把它们塞进 effect 依赖和
   // inspector 的 context 里。
   const openFile = useCallback((path: string, reel?: readonly string[]) => setState((current) => (
-    { filePath: path, reel: reel && reel.length > 1 ? reel : null, folderPath: null, diff: null, behind: null, zoomed: current.zoomed }
+    { filePath: path, reel: reel && reel.length > 1 ? reel : null, folderPath: null, diff: null, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
   )), []);
   const openFolder = useCallback((path: string) => setState((current) => (
-    { filePath: null, reel: null, folderPath: path, diff: null, behind: null, zoomed: current.zoomed }
+    { filePath: null, reel: null, folderPath: path, diff: null, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
   )), []);
   const openDiff = useCallback((target: ScmDiffTarget) => setState((current) => (
-    { filePath: null, reel: null, folderPath: null, diff: target, behind: null, zoomed: current.zoomed }
+    { filePath: null, reel: null, folderPath: null, diff: target, behind: null, zoomed: current.zoomed, seq: current.seq + 1 }
   )), []);
   /**
    * 在那一串里翻一格（左右箭头、顶栏的两颗按钮）。到头绕回另一端：翻图时「已经是最后
@@ -76,18 +82,18 @@ export function useFileView(taskId: string) {
   /** diff 视图里的「查看文件全文」。 */
   const showFile = useCallback(() => setState((current) => (
     current.diff
-      ? { filePath: current.diff.path, reel: null, folderPath: null, diff: null, behind: current.diff, zoomed: current.zoomed }
+      ? { ...current, filePath: current.diff.path, reel: null, folderPath: null, diff: null, behind: current.diff }
       : current
   )), []);
   /** 全文视图里的「查看改动」，回到刚才那份 diff。 */
   const showDiff = useCallback(() => setState((current) => (
     current.behind
-      ? { filePath: null, reel: null, folderPath: null, diff: current.behind, behind: null, zoomed: current.zoomed }
+      ? { ...current, filePath: null, reel: null, folderPath: null, diff: current.behind, behind: null }
       : current
   )), []);
   const toggleZoom = useCallback(() => setState((current) => ({ ...current, zoomed: !current.zoomed })), []);
   const exitZoom = useCallback(() => setState((current) => (current.zoomed ? { ...current, zoomed: false } : current)), []);
-  const close = useCallback(() => setState(CLOSED), []);
+  const close = useCallback(() => setState((current) => ({ ...CLOSED, seq: current.seq })), []);
 
   return {
     filePath: state.filePath,
@@ -100,6 +106,9 @@ export function useFileView(taskId: string) {
     /** 全文视图能不能切回 diff：只有「从 diff 切过来的」那次才有回头路。 */
     canShowDiff: state.behind !== null,
     zoomed: state.zoomed,
+    /** 摊着东西没有：没有时「查看」那一格不存在。 */
+    open: state.filePath !== null || state.folderPath !== null || state.diff !== null,
+    seq: state.seq,
     openFile,
     openFolder,
     openDiff,

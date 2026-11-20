@@ -33,7 +33,7 @@ import {
   storageKeyFor,
   type InspectorState,
 } from "./inspectorState.ts";
-import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
+import type { InspectorDescriptor, InspectorHostControls, InspectorReveal, InspectorTabPolicy } from "./types.ts";
 
 export { INSPECTOR_DEFAULT_WIDTH, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH } from "./inspectorState.ts";
 
@@ -47,6 +47,7 @@ export function InspectorHost<Context>({
   context,
   defaultVisible = true,
   tabPolicy,
+  reveal,
   children,
 }: {
   contextKey: string;
@@ -54,6 +55,12 @@ export function InspectorHost<Context>({
   context: Context;
   defaultVisible?: boolean;
   tabPolicy?: InspectorTabPolicy;
+  /**
+   * 外面的状态要把某一格亮出来时用：key 每变一次就 openTab 一次。走声明式而不是让外面拿着
+   * openTab 去调，是因为这种格子往往跟着那份状态才出现（「查看」那一格有文件摊着才在表里）：
+   * 同一下点击里先改状态、再 openTab，那一刻的描述符表里还没有它，会被当成无效页签丢掉。
+   */
+  reveal?: InspectorReveal | null;
   children: (controls: InspectorHostControls) => ReactNode;
 }) {
   return (
@@ -64,6 +71,7 @@ export function InspectorHost<Context>({
       context={context}
       defaultVisible={defaultVisible}
       tabPolicy={tabPolicy}
+      reveal={reveal ?? null}
     >
       {children}
     </InspectorHostState>
@@ -76,6 +84,7 @@ function InspectorHostState<Context>({
   context,
   defaultVisible,
   tabPolicy,
+  reveal,
   children,
 }: {
   contextKey: string;
@@ -83,6 +92,7 @@ function InspectorHostState<Context>({
   context: Context;
   defaultVisible: boolean;
   tabPolicy?: InspectorTabPolicy;
+  reveal: InspectorReveal | null;
   children: (controls: InspectorHostControls) => ReactNode;
 }) {
   const storageKey = storageKeyFor(contextKey);
@@ -127,6 +137,9 @@ function InspectorHostState<Context>({
   const knownTabIds = useRef(new Set(
     descriptors.filter((descriptor) => descriptor.defaultOpen).map((descriptor) => descriptor.id),
   ));
+  // 跟着外面状态出现的格（reveal）消失时，回到点开它之前的样子：那时看的是哪一格就回哪一格，
+  // 那时整栏收着就再收起来。只认最近一次 reveal 的那一格，中间换过格就按普通规矩来。
+  const revealedFrom = useRef<{ tabId: string; from: string | null; visible: boolean } | null>(null);
   useEffect(() => {
     const appeared = descriptors
       .filter((descriptor) => descriptor.defaultOpen && !knownTabIds.current.has(descriptor.id))
@@ -134,12 +147,18 @@ function InspectorHostState<Context>({
     for (const descriptor of descriptors) {
       if (descriptor.defaultOpen) knownTabIds.current.add(descriptor.id);
     }
+    const back = revealedFrom.current;
+    const returning = back !== null && !descriptorById.has(back.tabId) && state.activeTab === back.tabId;
+    if (back && !descriptorById.has(back.tabId)) revealedFrom.current = null;
+    if (returning && narrow && !back?.visible) setNarrowOpen(false);
     setState((current) => {
       const openTabs = orderedValidTabs([...current.openTabs, ...appeared], descriptors);
       const activeTab = current.activeTab && openTabs.includes(current.activeTab)
         ? current.activeTab
-        : openTabs[0] ?? null;
-      const visible = current.visible && openTabs.length > 0;
+        : returning && back?.from && openTabs.includes(back.from)
+          ? back.from
+          : openTabs[0] ?? null;
+      const visible = current.visible && openTabs.length > 0 && !(returning && !back?.visible);
       if (
         openTabs.length === current.openTabs.length
         && openTabs.every((id, index) => id === current.openTabs[index])
@@ -269,6 +288,7 @@ function InspectorHostState<Context>({
     }
     switchedAt.current = performance.now();
     removedAt.current = 0;
+    revealedFrom.current = null;
     setState((current) => ({ ...current, activeTab: id }));
   };
 
@@ -299,6 +319,21 @@ function InspectorHostState<Context>({
     }));
     if (narrow) setNarrowOpen(true);
   }, [descriptors, narrow]);
+
+  const revealKey = reveal?.key ?? null;
+  const lastReveal = useRef(revealKey);
+  useEffect(() => {
+    if (!reveal || revealKey === lastReveal.current) return;
+    lastReveal.current = revealKey;
+    if (!revealKey || !descriptorById.has(reveal.tabId)) return;
+    const from = revealedFrom.current?.tabId === reveal.tabId ? revealedFrom.current : null;
+    revealedFrom.current = from ?? {
+      tabId: reveal.tabId,
+      from: state.activeTab === reveal.tabId ? null : state.activeTab,
+      visible: panelVisible,
+    };
+    openTab(reveal.tabId);
+  }, [revealKey]);
 
   // Registration order preserves drawer priority; changing icons/titles only refresh the callback data.
   const shortcutContext = useRef({ descriptors, openTab });
@@ -388,7 +423,7 @@ function InspectorHostState<Context>({
             onOpen={openTab}
           />
           <div className="inspector-host__panel">
-            <div className="inspector-host__panel-head">
+            {!activeDescriptor.bare && <div className="inspector-host__panel-head">
               <span className="inspector-host__panel-title">{activeDescriptor.title}</span>
               {/* 当前面板自己的入口挂这里（InspectorHeadActions），省掉面板内部那条常驻工具栏。 */}
               <div className="inspector-host__panel-actions" ref={setHeadSlot} />
@@ -407,10 +442,10 @@ function InspectorHostState<Context>({
                 <X size={14} aria-hidden="true" />
               </button>
               <HoverTip at={closeTip.at}>{narrow ? "收起，回到内容" : "移出竖轨，可从 + 加回"}</HoverTip>
-            </div>
+            </div>}
             <div
               id={contentIdFor(activeDescriptor.id)}
-              className="inspector-host__content"
+              className={`inspector-host__content${activeDescriptor.bare ? " inspector-host__content--bare" : ""}`}
               role="tabpanel"
               aria-labelledby={tabIdFor(activeDescriptor.id)}
             >

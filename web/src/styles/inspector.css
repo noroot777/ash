@@ -435,3 +435,10 @@
     display: none;
   }
 }
+
+/* 自带头带的面板（descriptor.bare，文件查看那一格）：宿主不套滚动，内容自己撑满这一栏。 */
+.inspector-host__content--bare {
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+}
