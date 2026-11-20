@@ -1,6 +1,9 @@
+import { useRef, useState } from "react";
 import type { TaskListItem } from "@navi/shared";
-import { X } from "@phosphor-icons/react";
+import { FunnelSimple, X } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
+import { SidebarIconButton } from "./SidebarIconButton.tsx";
 import { scopeHasFilters, type TaskScope } from "./taskScope.ts";
 import {
   SPREAD_FILTERS,
@@ -10,9 +13,13 @@ import {
   type SpreadFilter,
 } from "./useSidebarSpread.ts";
 
-// 挑筛选只在铺开态：那里宽，摆得下带字带数的胶囊。窄态不再放一排只靠颜色认的小点 ——
-// 每行行首那颗记号已经说了它在哪一档，再来一套颜色图例是重复。窄态只负责一件事：
-// 列表被筛过时把这件事写出来，并给一个退回全部的口子（FilterScopeLine）。
+// 挑筛选的入口按屏幕分两种，由 WorkspaceSidebar 按 useNarrowScreen 二选一摆在工具行最左那一格：
+//   · 宽屏：那一格是 F（铺开），铺开后带字带数的胶囊夹在工具行中间（SpreadFilterControls）；
+//   · 手机：铺开没有意义，那一格换成一颗筛选键，点开是同样带字带数的一张菜单（FilterMenuButton）。
+// 两种入口都由同一处 JS 判据挑，而不是让 CSS 单独把 F 藏掉 —— 那样会出现「筛选只能从
+// 铺开态挑、铺开键却被藏了」的屏幕，项目明明支持筛选却一个入口都摸不到。
+// 窄侧栏里不再放一排只靠颜色认的小点：每行行首那颗记号已经说了它在哪一档。
+// 列表被筛过时由 FilterScopeLine 把这件事写出来，并给一个退回全部的口子。
 
 // 点已选中的那一项 = 取消筛选。
 function filterToggler(spread: SidebarSpread) {
@@ -46,6 +53,39 @@ export function SpreadFilterControls({ spread, tasks, scope }: { spread: Sidebar
   // 同一条判据把筛选归一到「全部」—— 控件和生效值必须同源，否则会有筛过却没开关的列表。
   if (!spread.open || !scopeHasFilters(scope)) return null;
   return <SpreadFilterBar spread={spread} counts={spreadCounts(tasks, scope)} />;
+}
+
+// 手机上的筛选入口：一颗图标键加一张菜单，六档带字带数，当前那档底色加深。
+export function FilterMenuButton({ spread, tasks, scope }: { spread: SidebarSpread; tasks: TaskListItem[]; scope: TaskScope }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLSpanElement>(null);
+  useDismissable({ enabled: open, containerRef: root, onClose: () => setOpen(false) });
+  if (!scopeHasFilters(scope)) return null;
+  const counts = spreadCounts(tasks, scope);
+  return (
+    <span className="workspace-filter-menu-anchor" ref={root}>
+      <SidebarIconButton label="按状态筛选" haspopup="menu" expanded={open} onClick={() => setOpen((value) => !value)}>
+        <FunnelSimple size={15} weight={spread.filter === "all" ? "regular" : "fill"} aria-hidden="true" />
+      </SidebarIconButton>
+      {open && (
+        <div className="ui-icon-menu workspace-filter-menu" role="menu" aria-label="按状态筛选任务">
+          {SPREAD_FILTERS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="menuitemradio"
+              aria-checked={spread.filter === item.key}
+              className={item.key === "todo" ? "is-todo" : undefined}
+              onClick={() => { setOpen(false); spread.setFilter(item.key); }}
+            >
+              <b>{item.label}</b>
+              <span>{counts[item.key]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
 }
 
 // 「列表现在是筛过的」—— 只在筛选生效时出现，紧贴在任务树上方。它说的是列表的状态，

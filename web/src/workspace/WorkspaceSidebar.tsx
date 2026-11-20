@@ -17,13 +17,14 @@ import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
 import { SidebarIconButton } from "./SidebarIconButton.tsx";
-import { FilterScopeLine, SpreadFilterControls } from "./SpreadFilterControls.tsx";
+import { FilterMenuButton, FilterScopeLine, SpreadFilterControls } from "./SpreadFilterControls.tsx";
 import { TaskTree } from "./TaskTree.tsx";
 import { TASK_MODE_LABEL, type TaskScope } from "./taskScope.ts";
 import { type SidebarSpread } from "./useSidebarSpread.ts";
 import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { useNarrowScreen } from "../lib/useNarrowScreen.ts";
 
 
 export function WorkspaceSidebar({
@@ -98,6 +99,7 @@ export function WorkspaceSidebar({
   onSettings: () => void;
 }) {
   const modifier = workspaceModifierLabel();
+  const narrowScreen = useNarrowScreen();
   const taskMode = scope.kind === "tasks";
   if (collapsed) {
     return (
@@ -158,11 +160,16 @@ export function WorkspaceSidebar({
           />
         </div>
         {/* 第二行工具条：左边按 F、⌘K、随手记排三颗图标，右端是「新建任务」。铺开时
-            状态筛选的胶囊夹在中间，不另起一行。 */}
+            状态筛选的胶囊夹在中间，不另起一行。手机上铺开没有意义，最左那一格换成筛选菜单 ——
+            两种筛选入口在这里二选一，保证支持筛选的项目在哪种屏幕上都摸得到一个入口。 */}
         <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
-          <SidebarIconButton className="workspace-spread-toggle" label={spread.open ? "收起任务列表" : "打开任务列表"} keys="F" pressed={spread.open} onClick={spread.toggle}>
-            <ListBullets size={16} aria-hidden="true" />
-          </SidebarIconButton>
+          {narrowScreen
+            ? <FilterMenuButton spread={spread} tasks={tasks} scope={scope} />
+            : (
+              <SidebarIconButton label={spread.open ? "收起任务列表" : "打开任务列表"} keys="F" pressed={spread.open} onClick={spread.toggle}>
+                <ListBullets size={16} aria-hidden="true" />
+              </SidebarIconButton>
+            )}
           <SidebarIconButton label="搜索" keys={`${modifier} K`} haspopup="dialog" onClick={onSearch}>
             <MagnifyingGlass size={15} aria-hidden="true" />
           </SidebarIconButton>

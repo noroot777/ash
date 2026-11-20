@@ -317,6 +317,26 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.equal(await objective.inputValue(), "从聊天来源转来的随手记");
   await createAndCheckNoteLink(chatNoteId);
 
+  // 手机宽度：铺开没有意义，工具行最左那一格从 F 换成筛选菜单。状态筛选从前靠铺开态的胶囊，
+  // 铺开键在这里又不画 —— 少了这颗菜单，支持筛选的项目在手机上就一个筛选入口都摸不到。
+  await page.setViewportSize({ width: 375, height: 760 });
+  await page.goto(fixtureUrl);
+  const narrowTools = page.locator(".workspace-sidebar-tools");
+  await narrowTools.waitFor();
+  assert.equal(await narrowTools.getByRole("button", { name: "打开任务列表" }).count(), 0, "phone layout has no spread toggle");
+  await narrowTools.getByRole("button", { name: "按状态筛选" }).click();
+  const filterMenu = page.getByRole("menu", { name: "按状态筛选任务" });
+  await filterMenu.waitFor();
+  assert.equal(await filterMenu.getByRole("menuitemradio").count(), 6, "phone filter menu lists all six filters");
+  await filterMenu.getByRole("menuitemradio", { name: /^需要你处理/u }).click();
+  assert.equal(await filterMenu.count(), 0, "picking a filter closes the menu");
+  const scopeLine = page.locator(".workspace-filter-scope");
+  await scopeLine.waitFor();
+  assert.match(await scopeLine.innerText(), /只看\s*需要你处理/u, "the picked filter is written above the list");
+  await scopeLine.getByRole("button", { name: "取消筛选，看全部任务" }).click();
+  assert.equal(await scopeLine.count(), 0, "clearing the filter removes the scope line");
+  await page.setViewportSize({ width: 1200, height: 820 });
+
   await page.goto(fixtureUrl);
   await page.locator(".task-composer-panel.is-home").waitFor();
   await page.getByRole("button", { name: "收起侧边栏" }).click();

@@ -80,6 +80,27 @@
 .workspace-new-task:hover { background: var(--hover-bg); }
 .workspace-new-task:active { background: var(--sel-bg); }
 
+/* 手机上工具行最左那颗筛选键弹出来的菜单：长相沿用 .ui-icon-menu，每项右边带条数。 */
+.workspace-filter-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.workspace-filter-menu b {
+  flex: 1;
+  font-weight: var(--w-regular);
+}
+
+.workspace-filter-menu button.is-todo b { color: var(--amber); }
+
+.workspace-filter-menu button > span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+}
+
+.workspace-filter-menu button[aria-checked="true"] { background: var(--sel-bg); }
+
 /* 筛选生效时贴在任务树上方的那一行：说的是「列表被筛过」，点 × 回到全部。
    不筛时不画；铺开 / 收起时它都在原位，下面的行不跟着跳。 */
 .workspace-filter-scope {
@@ -247,8 +268,8 @@
 .color-theme-menu > button:focus-visible { background: var(--hover-bg); color: var(--ink); }
 .color-theme-menu > button[aria-checked="true"] { color: var(--ink); }
 
-/* 窄屏（手机）上列表和内容一次只给一样，铺开和收起都没有意义 */
+/* 窄屏（手机）上列表和内容一次只给一样，收起没有意义。铺开键不在这里藏：它和手机上的
+   筛选菜单由 WorkspaceSidebar 按 useNarrowScreen 二选一，筛选入口才不会被样式单独抹掉。 */
 @media (max-width: 720px) {
-  .workspace-spread-toggle,
   .workspace-sidebar-collapse { display: none; }
 }
