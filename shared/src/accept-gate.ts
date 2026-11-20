@@ -301,10 +301,24 @@ export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; comm
  * remembered = 这个人在这个项目里上一次确认时勾没勾它（server/src/accept-memory.ts）。
  */
 export type AcceptPushView = {
-  destination: { branch: string; remote: string; remoteBranch: string } | null;
+  destination: AcceptPushDestination | null;
   unavailable: string | null;
   remembered: boolean;
 };
+
+/**
+ * 推到哪：本地目标分支 → 远程名/远程分支，身份以推送地址为准。确认层把它原样发回 /accept，服务端执行时
+ * 解析出来的不是同一处就拒（server/src/task-accept-push.ts）。
+ */
+export type AcceptPushDestination = { branch: string; remote: string; remoteBranch: string; url: string };
+
+/** 从不可信输入里认出一份推送目的地（请求体、存下来的门禁选择）；认不出返回 null。 */
+export function parsePushDestination(raw: unknown): AcceptPushDestination | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { branch, remote, remoteBranch, url } = raw as Record<string, unknown>;
+  return [branch, remote, remoteBranch, url].every((v) => typeof v === "string" && v.length > 0)
+    ? { branch: branch as string, remote: remote as string, remoteBranch: remoteBranch as string, url: url as string } : null;
+}
 
 /** 选了推送时，合完那一下推没推上去（server/src/task-accept-push.ts）。推不上去不改「已验收」。 */
 export type AcceptPushOutcome =

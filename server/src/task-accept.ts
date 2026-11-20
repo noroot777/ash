@@ -15,7 +15,7 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { taskWorkflowDef } from "./workflows.js";
 import { stopPreviewForWorktreeCleanup } from "./preview.js";
 import { acceptWithoutCleanup, finalizeAcceptance } from "./task-accept-finalize.js";
-import { preparePush, pushAfterMerge, type PushOutcome } from "./task-accept-push.js";
+import { mergeThenPush, preparePush, pushMerged, type PushOutcome, type PushPlan } from "./task-accept-push.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
@@ -99,7 +99,7 @@ async function acceptTaskUnlocked(
   reviewAuthority?: ReviewAuthority,
   expected: AcceptExpectation = {},
   onAutoCommit?: (outcome: AcceptanceAutoCommitOutcome) => void,
-  push = false,
+  push: boolean | PushPlan = false,
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
   if (preflight) return preflight;
@@ -172,13 +172,13 @@ async function acceptTaskUnlocked(
     if (afterCommit.failure) return afterCommit.failure;
   }
   // 「推送到远程」：门禁之前先把远程同步进本地目标分支（task-accept-push.ts），门禁和合并都按同步之后的判。
-  const pushing = push && gateProject ? await preparePush(task, gateProject, by, commitOverride) : null;
+  const pushing = push && gateProject ? await preparePush(task, gateProject, by, commitOverride, push) : null;
   if (pushing?.failure) return pushing.failure;
   const pushPlan = pushing?.plan ?? null;
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority, expectedResultVersion: expected.resultVersion,
-      expectedHumanGate: expected.humanGate, ...(push ? { push } : {}) },
+      expectedHumanGate: expected.humanGate, ...(pushPlan ? { push: pushPlan } : {}) },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
     onBasis: basis => { gateBasis = basis; },
@@ -282,12 +282,10 @@ async function acceptTaskUnlocked(
     const source = testedSource ?? await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
     await db.update(tasks).set({ acceptedSourceCommit: source }).where(eq(tasks.id, taskId));
   }
-  const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge, {
-    commit: commitOnAccept,
-    retryOfMerged: retrying,
-    sourceCommit: testedSource,
-    ...tested,
-  });
+  // 选了推送：推上去了才算合完，推不上去就把合并退回去（task-accept-push.ts）。
+  const strategy = plan.merge;
+  const { merge, push: pushed } = await mergeThenPush(taskId, project.repoPath, pushPlan, () => mergeTaskBranch(project.repoPath, taskId,
+    intendedTarget, strategy, { commit: commitOnAccept, retryOfMerged: retrying, sourceCommit: testedSource, ...tested }));
   if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
     const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);
     merge.message += owner ? `占用者是任务「${owner.title}」（${owner.id}）。任务结束后 worktree 仍会占用分支，删除分支会使验收目标丢失。请保留分支并处理验收目标。` : "请保留目标分支，删除工作区不能替代验收目标配置。";
@@ -308,7 +306,11 @@ async function acceptTaskUnlocked(
       && !!task.acceptedMergeCommit
       && await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch);
     if (mergeReachable) {
-      const pushed = pushPlan ? await pushAfterMerge(taskId, project.repoPath, pushPlan) : undefined;
+      const pushed = pushPlan ? await pushMerged(taskId, project.repoPath, pushPlan) : undefined;
+      if (pushed && !pushed.ok) {
+        return { accepted: false, httpStatus: 409, taskId, reason: pushed.reason, error: pushed.message, status: task.status, push: pushed,
+          completedMerge: { targetBranch, commit: task.acceptedMergeCommit } };
+      }
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
       const finalized = await finalizeAcceptance(
@@ -433,9 +435,13 @@ async function acceptTaskUnlocked(
   for (const warning of merge.warnings ?? []) {
     await appendTaskTimeline(taskId, alertLine(`合并清理警告：${warning.message}`));
   }
-  const pushed = pushPlan && !tagged && !noCommit ? await pushAfterMerge(taskId, project.repoPath, pushPlan) : undefined;
   const pushField = pushed ? { push: pushed } : {};
   const completedMerge = tagged ? undefined : { targetBranch: merge.targetBranch, commit: noCommit ? null : merge.afterCommit ?? null };
+  // 推送没成功、合并又退不回去：停在 merged，不清理（任务的分支和工作区留着），再验收会再推一次。
+  if (pushed && !pushed.ok) {
+    return { accepted: false, httpStatus: 409, taskId, reason: pushed.reason, status: task.status, completedMerge, push: pushed,
+      sourceBranch: merge.sourceBranch, targetBranch: merge.targetBranch, error: `合并已完成但还没推上去：${pushed.message}` };
+  }
   const completedTag = tagged ? merge.tag : undefined;
   const completedSummary = noCommit
     ? `合并已完成但按你的选择没有提交：改动在 ${merge.targetBranch} 的工作区里等你自己提交。清理尚未完成。`
@@ -586,8 +592,8 @@ export async function acceptTask(
     expectedResultVersion?: string;
     /** 调用方看到的那一道「等我点头」（task-human-gate.ts）；线已经不停在那一道就拒绝。不传 = 不核。 */
     expectedHumanGate?: string;
-    /** 合完推送到目标分支的远程（task-accept-push.ts）。只认明说的 true，不读任何默认。 */
-    push?: boolean;
+    /** 合完推送到目标分支的远程（task-accept-push.ts）：确认过的目的地，或只说了「推」的 true。不读任何默认。 */
+    push?: boolean | PushPlan;
   } = {},
 ): Promise<AcceptTaskResult> {
   const originalFinalizer = !!advanceOpts.reviewAuthority?.finalization && !advanceOpts.acceptGatePassedRunId;
@@ -648,7 +654,7 @@ export async function acceptTask(
             advanceOpts.reviewAuthority,
             { resultVersion: advanceOpts.expectedResultVersion, humanGate: advanceOpts.expectedHumanGate },
             outcome => { autoCommit = outcome; },
-            advanceOpts.push === true,
+            advanceOpts.push ?? false,
           );
         });
       }

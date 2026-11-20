@@ -222,7 +222,8 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         await plan.refresh();
         return;
       }
-      const result = await api.acceptTask(task.id, verifyState === "acknowledged", commitParam, gateIntent, pushParam);
+      const result = await api.acceptTask(task.id, verifyState === "acknowledged", commitParam, gateIntent,
+        pushParam && pushDestination ? pushDestination : undefined);
       setAutoCommit(result.autoCommit ? { taskId: task.id, outcome: result.autoCommit } : null);
       if (!result.accepted) {
         const gateReason = result.reason.startsWith("accept_gate");

@@ -21,7 +21,8 @@
 //    读到之后才放开 —— **读失败不放行**（「没读到」不等于「没在跑」）。
 // ⑯ 合并预览撞冲突那一行是红的，但**不禁用主按钮**（取消「运行」= 这次跳过，本来就不判基准）；
 //    「让任务解决」直达 POST conflict-handoff，交过之后那一行换成「任务正在解决冲突」。
-// ⑰ 「推送」那一勾：推得了才画，默认跟上一次，勾上 = push:true，取消「提交」就收起，读不出来不放行。
+// ⑰ 「推送」那一勾：推得了才画，默认跟上一次，勾上 = 发层里显示的那个目的地（含推送地址），取消「提交」就收起，读不出来不放行；
+//    开着的时候别的页面记下了新的「勾没勾」（task.acceptGate），没动过那一勾就跟着换默认。
 import assert from "node:assert/strict";
 import { assertTone, checkRow, confirmLayer, deskSettled, freezeAutoRetry, gateRow, mainButton, openConfirm, stateOf } from "./accept-gate-stage.mjs";
 import { waitUntil } from "./wait-until.mjs";
@@ -452,11 +453,12 @@ export async function testAcceptGateConfirm({ open, run }) {
     assert.equal(await mainButton(page).isEnabled(), true);
     await page.close();
   }
-  // ⑰ 「推送」那一勾（2026-11-20）：推得了才画、写明推到哪；默认跟上一次；勾上发 push:true、确认键改口「验收并推送」、
+  // ⑰ 「推送」那一勾（2026-11-20）：推得了才画、写明推到哪；默认跟上一次；勾上发显示的那个目的地、确认键改口「验收并推送」、
   //    确认时记下；取消「提交」它就收起来（不提交就没有可推的）；推送那份读不出来时写明、给重试，确认锁着。
+  const destination = { branch: "main", remote: "origin", remoteBranch: "main", url: "git@example.com:kb.git" };
   {
     const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null },
-      push: { destination: { branch: "main", remote: "origin", remoteBranch: "main" }, unavailable: null, remembered: false } });
+      push: { destination, unavailable: null, remembered: false } });
     let layer = await openConfirm(page);
     const pushBox = () => confirmLayer(page).getByRole("checkbox", { name: "合并后推送到远程" });
     const commitBox = () => confirmLayer(page).getByRole("checkbox", { name: "合并后提交" });
@@ -473,7 +475,7 @@ export async function testAcceptGateConfirm({ open, run }) {
     assert.equal(await pushBox().isChecked(), true, "收起来再出来，层里动过的那一勾还在");
     await layer.getByRole("button", { name: "验收并推送", exact: true }).click();
     await accepted(store, 1);
-    assert.equal(store.accepts[0].push, true, "发给 /accept 的就是层里看见的那一勾");
+    assert.deepEqual(store.accepts[0].push, destination, "发给 /accept 的就是层里看见的那个目的地，执行时换了地方服务端会拒");
     assert.deepEqual(store.memory.at(-1), { commit: true, push: true }, "确认时记下推送那一勾");
     await confirmLayer(page).waitFor({ state: "detached" });
 
@@ -487,10 +489,24 @@ export async function testAcceptGateConfirm({ open, run }) {
     layer = await openConfirm(page);
     await layer.getByText("远程读不出来").waitFor();
     assert.equal(await layer.getByRole("button", { name: "确认验收", exact: true }).isDisabled(), true, "推送那份没读到：不许确认");
+    await freezeAutoRetry(store, "push");
     store.pushDown = false;
     await layer.getByRole("button", { name: "重试", exact: true }).click();
     await pushBox().waitFor();
     assert.equal(await layer.getByRole("button", { name: "验收并推送", exact: true }).isEnabled(), true, "读到了就放开");
+    await page.close();
+  }
+  {
+    const { page, store } = await open({ events: true, gate: { command: null, running: null, latest: null, basis: null },
+      push: { destination, unavailable: null, remembered: false } });
+    const layer = await openConfirm(page);
+    const pushBox = () => confirmLayer(page).getByRole("checkbox", { name: "合并后推送到远程" });
+    await pushBox().waitFor();
+    assert.equal(await pushBox().isChecked(), false);
+    store.push = { ...store.push, remembered: true };
+    await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
+    await waitUntil(async () => await pushBox().isChecked(), "别的页面记下了推送：开着的层跟着换默认");
+    await layer.getByRole("button", { name: "验收并推送", exact: true }).waitFor();
     await page.close();
   }
   console.log("accept gate confirm: run/commit/push checks ↔ /accept params, remembered defaults ↔ gate row, blocking rows ↔ main button, baseline conflict hand-off covered");

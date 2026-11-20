@@ -77,7 +77,8 @@ export function mountAcceptMemoryRoutes(api: Hono): void {
         if (!row || row.seq < seq) {
           await tx.insert(acceptMemory).values({ owner, projectId: pid, ...mine, seq, updatedAt: now() })
             .onConflictDoUpdate({ target: [acceptMemory.owner, acceptMemory.projectId], set: { ...mine, seq, updatedAt: now() } });
-          skipWritten = "skipGate" in mine;
+          // 推送那一勾的记忆也随这个事件让打开着的确认层重读（web/src/acceptance/useAcceptPush.ts）。
+          skipWritten = true;
         }
       }
       const commitChanged = commitSaved ? (await writeAcceptCommit(tx, pid, body.commit === true, seq))?.changed === true : false;

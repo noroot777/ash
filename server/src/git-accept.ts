@@ -60,7 +60,15 @@ export type TaskMergeFailureReason =
   | "merge_conflict"
   | "fast_forward_failed"
   | "merge_failed"
-  | "temporary_cleanup_failed";
+  | "temporary_cleanup_failed"
+  // 推送档（task-accept-push.ts）：推不上去、退回了这次合并；或远程又动了、同步它时没成功。
+  | "push_failed"
+  | "push_rejected"
+  | "push_fetch_failed"
+  | "push_diverged"
+  | "target_moved"
+  | "target_busy"
+  | "move_partial";
 
 export type TaskMergeResult =
   | {

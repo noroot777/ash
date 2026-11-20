@@ -1,5 +1,6 @@
 import type { ReactNode, RefObject } from "react";
 import type { AcceptanceSteps } from "@navi/shared/accept-message";
+import type { AcceptPushDestination } from "@navi/shared/accept-gate";
 import { AcceptLayer } from "./AcceptLayer.tsx";
 import { cleanText, type ConfirmGate, type ConfirmView } from "./confirmPlan.ts";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
@@ -21,7 +22,7 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitCh
   /** 确认时「提交」那一勾会写回项目设置（有项目管理权限）；false = 只管这一次。 */
   commitRemembered: boolean;
   /** 「推送」那一步：推到哪（null = 这一按推不了，不画）、还在读 / 读不出来。 */
-  push: { destination: { branch: string; remote: string; remoteBranch: string } | null; pending: boolean; error: string | null };
+  push: { destination: AcceptPushDestination | null; pending: boolean; error: string | null };
   verification: { state: "none" | "loading" | "error" | "unacknowledged" | "acknowledged"; error: string | null };
   source: string;
   /** 一起验收的那几个任务（父任务在前）；只验一个时为空。 */
@@ -75,9 +76,10 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitCh
               {commitDefault.pending && <ReadStatus what="项目默认" error={commitDefault.error} onRetry={onRetryDefault} />}</>} />)}
         {merge && view.pushChoosable && push.destination && (
           <Step verb="推送" checked={view.push} onToggle={onPush} label="合并后推送到远程"
-            what={<><code>{push.destination.branch}</code> → <code>{push.destination.remote}/{push.destination.remoteBranch}</code></>} />
+            what={<><code>{push.destination.branch}</code> → <code>{push.destination.remote}/{push.destination.remoteBranch}</code>
+              {push.pending && <ReadStatus what="远程" error={push.error} onRetry={onRetryPush} />}</>} />
         )}
-        {merge && view.commit && push.pending && <Step verb="推送" what={<ReadStatus what="远程" error={push.error} onRetry={onRetryPush} />} />}
+        {merge && view.commit && push.pending && !push.destination && <Step verb="推送" what={<ReadStatus what="远程" error={push.error} onRetry={onRetryPush} />} />}
         {merge && <Step verb="清理" what={cleanText(merge, view.commit)} />}
         {steps.kind !== "release" && steps.team && <Step verb="联动" what="共享执行者一起标为验收完成" />}
         {verification.state === "loading" && <Step verb="验证" what={<em><NaviLoader size={14} />核对独立验证</em>} />}

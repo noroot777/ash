@@ -37,7 +37,7 @@ import type {
   TaskWorkspaceDiscardResult,
 } from "@navi/shared";
 
-import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult, AcceptPushView } from "@navi/shared/accept-gate";
+import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult, AcceptPushDestination, AcceptPushView } from "@navi/shared/accept-gate";
 import type { BaseUpdateRecovery } from "@navi/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@navi/shared/workflow";
 import type { CliHostEnv } from "@navi/shared/cli-overrides";
@@ -438,7 +438,8 @@ export const api = {
     // 不传 = 照常（有现成结果就沿用，没有就跑一遍）。
     gate?: "skip" | "rerun",
     // 合完推到目标分支的远程（先同步远程、不强推，server/src/task-accept-push.ts）。不传 = 不推。
-    push?: boolean,
+    // 发的是确认层显示的那个目的地（含推送地址）：执行时不是同一处服务端就拒。
+    push?: AcceptPushDestination,
   ): Promise<AcceptTaskResult> => {
     const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit, gate, push }));
     const body = await parseBody(response);
