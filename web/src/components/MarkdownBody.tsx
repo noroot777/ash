@@ -1,6 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { CaretDown, X } from "@phosphor-icons/react";
+import { CaretDown } from "@phosphor-icons/react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ReviewConclusion } from "@navi/shared";
@@ -9,10 +8,12 @@ import { rehypeFreshText } from "./freshText.ts";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
 import { isLocalFileHref } from "./fileLinkTarget.ts";
+import { anchorScopeProps, followInDocumentAnchor, inDocumentAnchor, rehypeAnchors } from "./markdownAnchors.ts";
 import { destinationFilePath } from "@navi/shared/markdown-images";
 import { isAudioPath, isVideoPath } from "../task-detail/utils.ts";
 import { CodeBlockScope, MarkdownCode, TaskFileLinkBase, useTaskFileHref } from "./TaskFileLink.tsx";
 import { refreshExpiredEvidence, useExpiredEvidence } from "../free-workflow/expiredEvidence.ts";
+import { useLeftDrawer, type LeftDrawerEntry } from "./LeftDrawer.tsx";
 import {
   insertIndexOf,
   regionIndexOf,
@@ -116,28 +117,48 @@ function MarkdownImage({ alt, origin, url, name }: {
 type MarkdownContext = {
   resolveFile?: MarkdownFileResolver;
   layout?: MarkdownLayout;
-  onReviewReport: (target: ReviewFileTarget) => void;
+  /** 证据目录里的 `.md` 在哪儿读；null = 这一处没地方读，照普通链接在新标签页打开。 */
+  onReviewReport: ReviewReportOpener;
   onActionError: (message: string | null) => void;
 };
 
 /** 渲染器的组件表 —— 只建一次,每次渲染的新值从 `latest.current` 取(见 MarkdownDocument)。 */
 function markdownComponents(latest: { current: MarkdownContext }): Components {
   const resolveFile = (destination: string) => latest.current.resolveFile?.(destination) ?? null;
-  const onReviewReport = (target: ReviewFileTarget) => latest.current.onReviewReport(target);
+  const onReviewReport = (target: ReviewFileTarget) => latest.current.onReviewReport?.(target);
   const onActionError = (message: string | null) => latest.current.onActionError(message);
   const a: NonNullable<Components["a"]> = ({ node: _node, href, onClick, ...props }) => {
     // 指着工作区里文件的链接(`[方案](docs/plan.md)`)摊在中间栏,见 TaskFileLink。
-    // 证据目录里的报告除外:它不在工作区里,还是那个报告弹窗。
+    // 证据目录里的报告除外:它不在工作区里,从左边推出读全文那一屉(见 useReviewReportOpener)。
     const evidence = reviewFileTarget(href);
     const fileLink = useTaskFileHref(evidence ? undefined : href);
     const reviewFile = evidence ?? resolveFile(href ?? "") ?? null;
-    const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
-    const localOpen = localOpenUrl(href);
+    const reportFile = reviewFile !== null && /\.md$/i.test(reviewFile.name);
+    const reviewMarkdown = reportFile && latest.current.onReviewReport !== null;
+    // 报告没地方读时照它的证据地址另开标签页，不去本机系统里开那份文件（浏览器可能不在那台机器上）。
+    const localOpen = reportFile ? null : localOpenUrl(href);
     // 指向图片的链接跟内嵌图走同一个灯箱（也就跟同一条消息里的其它图编在一组，
     // 能左右翻）。按住 ⌘/Ctrl/Shift 或中键仍然是浏览器原来那套「新标签页打开」，
     // 由 PreviewableImageLink 自己让路。
     const image = imagePreviewTarget(href, resolveFile);
     const expired = useExpiredEvidence(image?.url);
+    // 文内锚点（目录、脚注角标与回跳）：在这一份文档里跳过去，不交给浏览器——那条兜底是
+    // 新开一页（mac 壳里是原地整页重载），文档就没了。见 markdownAnchors。
+    const anchor = inDocumentAnchor(href);
+    if (anchor !== null) {
+      return (
+        <a
+          {...props}
+          href={href}
+          onClick={(event) => {
+            onClick?.(event);
+            if (event.defaultPrevented) return;
+            event.preventDefault();
+            followInDocumentAnchor(event.currentTarget, anchor);
+          }}
+        />
+      );
+    }
     // 指向一张已过保留期的截图：点开只会是一个空灯箱，就地说清楚，原来那段链接文字留着。
     if (image && expired) return <MissingImage origin={href ?? ""} alt={props.children} expired />;
     if (image) {
@@ -251,7 +272,7 @@ function MarkdownDocument({ text, resolveFile, layout, onReviewReport, onActionE
   resolveFile?: MarkdownFileResolver;
   /** 执行步骤 / 折叠块怎么摆进这一次解析的结果里（见 markdownLayout）。 */
   layout?: MarkdownLayout;
-  onReviewReport: (target: ReviewFileTarget) => void;
+  onReviewReport: ReviewReportOpener;
   onActionError: (message: string | null) => void;
 }) {
   /**
@@ -265,14 +286,20 @@ function MarkdownDocument({ text, resolveFile, layout, onReviewReport, onActionE
   const latest = useRef({ resolveFile, layout, onReviewReport, onActionError });
   latest.current = { resolveFile, layout, onReviewReport, onActionError };
   const components = useMemo(() => markdownComponents(latest), []);
+  // 标题 id 与脚注 id 的作用域：一屏几十条消息各有各的「## 结论」和 `[^1]`，见 markdownAnchors。
+  const scope = `${useId()}-`;
   const rehypePlugins = useMemo(
-    () => (layout
-      ? [rehypeMarkdownLayout(layout), ...(layout.fresh ? [rehypeFreshText(layout.fresh.marks, layout.fresh.now)] : [])]
-      : []),
-    [layout],
+    () => [
+      ...(layout
+        ? [rehypeMarkdownLayout(layout), ...(layout.fresh ? [rehypeFreshText(layout.fresh.marks, layout.fresh.now)] : [])]
+        : []),
+      // 排最后：分区按脚注的原始 id 认，见 rehypeAnchors。
+      rehypeAnchors(scope),
+    ],
+    [layout, scope],
   );
   return (
-    <div className="task-markdown">
+    <div className="task-markdown" {...anchorScopeProps(scope)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkSoftBreaks]}
         rehypePlugins={rehypePlugins}
@@ -347,7 +374,7 @@ function ReviewReportSplit({ text, reportKey, conclusion, resolveFile, onReviewR
   reportKey: string;
   conclusion: ReviewConclusion;
   resolveFile?: MarkdownFileResolver;
-  onReviewReport: (target: ReviewFileTarget) => void;
+  onReviewReport: ReviewReportOpener;
   onActionError: (message: string | null) => void;
 }) {
   const { more, rest, detail, kind, cuts } = useMemo(
@@ -505,7 +532,7 @@ export function ReviewReportBody({ text, reportKey, conclusion, resolveFile }: {
   /** 报告里的 `![](shot.png)` 指的是**证据目录里**那张截图，调用点必须把那个目录交代清楚。 */
   resolveFile?: MarkdownFileResolver;
 }) {
-  const [reviewReport, setReviewReport] = useState<ReviewFileTarget | null>(null);
+  const openReport = useReviewReportOpener();
   const [actionError, setActionError] = useState<string | null>(null);
   return (
     <ImagePreviewGroup>
@@ -516,21 +543,18 @@ export function ReviewReportBody({ text, reportKey, conclusion, resolveFile }: {
           reportKey={reportKey}
           conclusion={conclusion}
           resolveFile={resolveFile}
-          onReviewReport={setReviewReport}
+          onReviewReport={openReport}
           onActionError={setActionError}
         />
       </TaskFileLinkBase>
       {actionError && <p className="markdown-action-error" role="status">本地文件打开失败：{actionError}</p>}
-      {reviewReport && (
-        <ReviewReportDialog target={reviewReport} onReviewReport={setReviewReport} onClose={() => setReviewReport(null)} />
-      )}
     </ImagePreviewGroup>
   );
 }
 
 /**
- * 一份**孤立的报告文件**（只有地址，没有它属于哪一轮）：取回来照报告的读法画。正文里点 report.md
- * 弹出的那一层、会话里审查气泡那颗报告键打开的左侧抽屉（就地验证那一路）都是它。
+ * 一份**孤立的报告文件**（只有地址，没有它属于哪一轮）：取回来照报告的读法画。正文里点 report.md、
+ * 会话里审查气泡那颗报告键（就地验证那一路）打开的左侧抽屉里装的都是它。
  */
 export function ReviewReportFile({ target, onReviewReport }: {
   target: ReviewFileTarget;
@@ -584,44 +608,29 @@ export function ReviewReportFileView({ target }: { target: ReviewFileTarget }) {
   return <ReviewReportFile target={current} onReviewReport={setCurrent} />;
 }
 
-export function ReviewReportDialog({ target, onReviewReport, onClose }: {
-  target: ReviewFileTarget;
-  onReviewReport: (target: ReviewFileTarget) => void;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      onClose();
-    };
-    document.addEventListener("keydown", close, true);
-    return () => document.removeEventListener("keydown", close, true);
-  }, [onClose]);
+type ReviewReportOpener = ((target: ReviewFileTarget) => void) | null;
 
-  return createPortal(
-    <div
-      className="markdown-report-scrim"
-      role="presentation"
-      onClick={(event) => event.stopPropagation()}
-      onMouseDown={(event) => {
-        event.stopPropagation();
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section className="markdown-report-dialog" role="dialog" aria-modal="true" aria-labelledby="markdown-report-title">
-        <header>
-          <div><span>审查报告</span><h2 id="markdown-report-title">{target.name}</h2></div>
-          <button type="button" autoFocus aria-label="关闭审查报告" onClick={onClose}><X size={16} /></button>
-        </header>
-        <div className="markdown-report-body">
-          <ReviewReportFile target={target} onReviewReport={onReviewReport} />
-        </div>
-      </section>
-    </div>,
-    document.body,
-  );
+/** 正文里点到的那份报告文件在左侧抽屉里的那一屉；同一份再点只是换停的位置。 */
+export function reviewReportFileEntry(target: ReviewFileTarget): LeftDrawerEntry {
+  return {
+    key: `review-report:${target.url}`,
+    kind: "审查报告",
+    title: target.name,
+    ariaLabel: `审查报告：${target.name}`,
+    closeLabel: "关闭审查报告",
+    body: <ReviewReportFileView target={target} />,
+  };
+}
+
+/**
+ * 正文里点到证据目录下的 `.md`：从左边推出读全文那一屉，跟会话里审查气泡的报告键、审议格里的报告
+ * 同一个位置——会话和回复框留着，右侧面板照样点得着。这一处没有左侧抽屉（随手记、助手这类没有主区
+ * 容器的地方）就不接管，照普通链接在新标签页打开。
+ */
+function useReviewReportOpener(): ReviewReportOpener {
+  const drawer = useLeftDrawer();
+  const open = drawer?.open;
+  return useMemo(() => (open ? (target: ReviewFileTarget) => open(reviewReportFileEntry(target)) : null), [open]);
 }
 
 export function MarkdownBody({ text, resolveFile, layout }: {
@@ -633,15 +642,12 @@ export function MarkdownBody({ text, resolveFile, layout }: {
    */
   layout?: MarkdownLayout;
 }) {
-  const [reviewReport, setReviewReport] = useState<ReviewFileTarget | null>(null);
+  const openReport = useReviewReportOpener();
   const [actionError, setActionError] = useState<string | null>(null);
   return (
     <ImagePreviewGroup>
-      <MarkdownDocument text={text} resolveFile={resolveFile} layout={layout} onReviewReport={setReviewReport} onActionError={setActionError} />
+      <MarkdownDocument text={text} resolveFile={resolveFile} layout={layout} onReviewReport={openReport} onActionError={setActionError} />
       {actionError && <p className="markdown-action-error" role="status">本地文件打开失败：{actionError}</p>}
-      {reviewReport && (
-        <ReviewReportDialog target={reviewReport} onReviewReport={setReviewReport} onClose={() => setReviewReport(null)} />
-      )}
     </ImagePreviewGroup>
   );
 }

@@ -2,12 +2,11 @@ import type { Group, Session, Task, TaskListItem } from "@navi/shared";
 import { Browser, FolderOpen, GitPullRequest, Globe, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TerminalWindow, TreeView } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
-import { InspButton, InspNone } from "../inspector/parts.tsx";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { ArtifactsInspector } from "../files/ArtifactsInspector.tsx";
 import { ScmInspector } from "../scm/ScmInspector.tsx";
-import type { ScmDiffTarget } from "../scm/scmModel.ts";
+import type { FileView } from "../files/useFileView.ts";
 import type { Notify } from "../lib/notify.ts";
 import { TaskInspector } from "./TaskInspector.tsx";
 import { DispatchedInspector } from "./dispatched/DispatchedInspector.tsx";
@@ -28,6 +27,7 @@ import type { ReviewRetryAction } from "./turnRetry.ts";
 import type { TaskRuntime } from "../task-runtime/useTaskRuntime.ts";
 import { ServiceInspector } from "../task-runtime/ServiceInspector.tsx";
 import { BrowserInspector } from "../task-runtime/TaskBrowserPane.tsx";
+import { PREVIEW_TAB, PreviewPane, type PreviewTabState } from "../preview-workspace/previewTab.tsx";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -43,20 +43,18 @@ export interface TaskInspectorContext {
   runFacts: InfoRunFacts;
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
-  onOpenPreview: () => void;
+  /** 「预览指正」那一格开没开、怎么开关（preview-workspace/previewTab.tsx）。 */
+  preview: PreviewTabState;
   onTaskUpdated: (task: Task) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
   /** 入队响应波及的全体成员快照(含前驱)整批上交,由上层按 updatedAt 合并进任务列表。 */
   onTasksSynced: (tasks: Task[]) => void;
-  /** 第二个参数是「这一串」：同组生成物、同一层文件，中间栏据此能翻上一张/下一张。 */
-  onOpenFile: (path: string, reel?: readonly string[]) => void;
-  /** 在中间栏摊开文件夹详情（里面有多少东西、能不能删）。 */
-  onOpenFolder: (path: string) => void;
-  /** 文件树该高亮哪一行：摊的是全文、diff 还是文件夹，对它来说是同一个路径。 */
-  activeFilePath: string | null;
-  openScmDiff: ScmDiffTarget | null;
-  onOpenScmDiff: (target: ScmDiffTarget) => void;
+  /**
+   * 「查看」那一格摊着什么（files/fileViewTab.tsx）。文件、生成物、改动几格从这里打开文件 /
+   * 文件夹 / diff，也从这里读该高亮哪一行。
+   */
+  fileView: FileView;
   /** 此刻能「继续本轮审查」的那一轮和那个动作（会话尾注上那颗同一份，见 turnRetry.ts）。 */
   reviewRetry: ReviewRetryAction | null;
   /** 托管服务与共享浏览器（「服务」「浏览器」两格），由 useTaskInspectorStack 拉。 */
@@ -64,6 +62,9 @@ export interface TaskInspectorContext {
 
   notify: Notify;
 }
+
+/** 「查看」那一格插在这几格后面。 */
+export const TASK_FILE_TABS = ["files", "artifacts", "scm"] as const;
 
 /**
  * 哨兵那一格外面这一层只为一件事：**审查进行中的终态任务，哨兵其实是挂得上的**。
@@ -93,7 +94,7 @@ function MonitorInspectorPane({ context }: { context: TaskInspectorContext }) {
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
-// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 子任务 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 服务 · 浏览器 · 哨兵。
+// 信息 · 文件 · 生成物 · 改动 ·（查看，有东西摊着才在，见 files/fileViewTab.tsx）· 子智能体 · 子任务 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 服务 · 浏览器 · 哨兵。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 //
 // 子智能体和哨兵这两格的 `defaultOpen` 是动态的（见 inspector/usedTabs.tsx）：全部面板一直
@@ -118,10 +119,10 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => (
       <FileTreeInspector
         taskId={context.task.id}
-        activePath={context.activeFilePath}
-        onOpenFile={context.onOpenFile}
-        onOpenFolder={context.onOpenFolder}
-        onOpenDiff={context.onOpenScmDiff}
+        activePath={context.fileView.activePath}
+        onOpenFile={context.fileView.openFile}
+        onOpenFolder={context.fileView.openFolder}
+        onOpenDiff={context.fileView.openDiff}
         notify={context.notify}
       />
     ),
@@ -139,8 +140,8 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => (
       <ArtifactsInspector
         taskId={context.task.id}
-        activePath={context.activeFilePath}
-        onOpenFile={context.onOpenFile}
+        activePath={context.fileView.activePath}
+        onOpenFile={context.fileView.openFile}
         notify={context.notify}
       />
     ),
@@ -155,8 +156,8 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => (
       <ScmInspector
         taskId={context.task.id}
-        activeDiff={context.openScmDiff}
-        onOpenDiff={context.onOpenScmDiff}
+        activeDiff={context.fileView.diff}
+        onOpenDiff={context.fileView.openDiff}
         onOpenReview={context.onOpenReview}
         notify={context.notify}
       />
@@ -233,20 +234,14 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
       : <TaskReviewInspector {...context} />,
   },
   {
-    id: "preview",
+    // 打开之后是宽格、自带头带（usePreviewTab），预览指正整个长在这一格里，会话和回复框留着。
+    id: PREVIEW_TAB,
     cluster: 3,
     title: "预览指正",
     icon: <Browser size={14} />,
     defaultOpen: true,
     shortcut: "p",
-    // 空着的一格：一句话说这是干什么的，一颗键把预览指正在中间栏打开。
-    render: (context) => (
-      <div className="insp-pane">
-        <InspNone action={<InspButton onClick={context.onOpenPreview}>打开预览指正</InspButton>}>
-          在页面上圈出要改的地方，逐条写意见。
-        </InspNone>
-      </div>
-    ),
+    render: (context) => <PreviewPane taskId={context.task.id} preview={context.preview} />,
   },
   {
     // 服务、浏览器也走「用过才浮现」（开合由 useTaskInspectorStack 按运行环境翻）：智能体托管过服务、

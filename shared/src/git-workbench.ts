@@ -154,7 +154,8 @@ export type GitAction =
     }
   | { kind: "commit"; message: string; amend: boolean }
   | { kind: "checkout"; name: string }
-  | { kind: "branch-create"; name: string; target: string; checkout: boolean }
+  // `track`：从远端分支建出来时跟踪它（upstream 设成这条远端分支，`origin/foo` 这种写法）。
+  | { kind: "branch-create"; name: string; target: string; checkout: boolean; track?: string }
   | { kind: "branch-delete"; name: string; sha: string; force: boolean }
   | { kind: "branch-rename"; name: string; next: string; sha: string }
   | { kind: "upstream"; name: string; target: string }

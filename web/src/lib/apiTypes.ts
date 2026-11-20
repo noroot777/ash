@@ -1,5 +1,6 @@
 // 只有服务端 API 才会返回的形状（shared 里没有对应类型的那些）。
 // 从 `api.ts` 搬出来的，调用点照旧从 `api.ts` 引：那边整份再导出。
+import type { ProjectBranches } from "@navi/shared/task-branch";
 import type {
   AgentType,
   FreeWorkflowState,
@@ -102,9 +103,7 @@ export type SessionTraceEntry = {
     | { kind: "usage"; usage: TokenUsage; accounting?: UsageAccountingMark };
 };
 
-export type GitOverview = {
-  branches: string[];
-  current: string | null;
+export type GitOverview = ProjectBranches & {
   worktrees: {
     path: string;
     branch: string | null;

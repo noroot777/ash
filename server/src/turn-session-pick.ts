@@ -18,6 +18,7 @@ import { sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
 import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
+import { applyPendingWorktreeMove } from "./task-worktree-move.js";
 
 export type SessionRow = typeof sessions.$inferSelect;
 
@@ -40,6 +41,9 @@ export async function pickTurnSession(input: {
 }): Promise<{ all: SessionRow[]; prev: SessionRow | undefined; resuming: boolean; reseed: boolean }> {
   const { taskId, task, agent, sessionRole, profileId, runOwner, slash } = input;
   const opts = { freshSession: input.freshSession, resumeSessionId: input.resumeSessionId };
+  // 上一回合智能体登记了「改到独立工作区」：排在读会话行之前办 —— 办完会话行已经改指新目录，
+  // 这一轮就在新目录里续同一条会话（task-worktree-move.ts）。审查旁路回合不办，留给任务自己的回合。
+  if (sessionRole === "single") await applyPendingWorktreeMove(task);
   // A single task can now host several agents — one session line per agentType,
   // each invited via @-mention. Newest first.
   const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))

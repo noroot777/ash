@@ -1,11 +1,15 @@
 import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@navi/shared/markdown-images";
 import { api } from "../lib/api.ts";
+import { instanceRunsPath } from "../lib/resourceRoots.ts";
 import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
 // 名字那一段允许带子目录（`shots/a.png`）：证据接口服务得了它（evidence-path.ts）。`..`
 // 由 reviewFileTarget 里的 PARENT_SEGMENT 挡，不塞进正则 —— 正则里表达它既难读又易漏。
-const REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/review\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
-const FREE_REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/free-review\/([\w-]+)\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
+// 证据目录里的那一段:`<任务>/review/round-N/<名>` 或 `<任务>/free-review/<运行>/round-N/<名>`。
+const REVIEW_FILE_PATH = /^([\w-]+)\/review\/round-(\d+)\/(.+)$/;
+const FREE_REVIEW_FILE_PATH = /^([\w-]+)\/free-review\/([\w-]+)\/round-(\d+)\/(.+)$/;
+// 别的根下的历史证据,同 attachmentView 的 LEGACY_UPLOAD。
+const LEGACY_RUNS = /^(?:[A-Za-z]:)?(?:\/.*)?\/data\/runs\/(.+)$/;
 
 export type ReviewFileTarget = {
   name: string;
@@ -23,28 +27,33 @@ function decodeSafe(value: string): string {
 
 export function reviewFileTarget(path?: string): ReviewFileTarget | null {
   if (!path) return null;
-  // 下面两条正则认的是**磁盘路径形状**(`/Users/…/data/runs/…`、`file://…`)。站外网址里
-  // 碰巧有同样的路径形状时不许按它改写:那张图住在别人站上,改写过来只会 404,还顺手把
-  // 「这是谁家的资源」判错(审查第 3 轮 R3 第 5 条)。`file:` 例外 —— 它指的就是本机文件。
-  const offSite = isNetworkDestination(path) && !/^file:\/\//i.test(path.trim());
-  const review = offSite ? null : path.match(REVIEW_FILE_PATH);
+  // 磁盘上的证据按本实例真实的 runs 目录认(resourceRoots.ts):项目里完全可以有一个
+  // `runs/other/review/round-1/shot.png`,形状证明不了它是谁的证据。站外网址(审查第 3 轮 R3
+  // 第 5 条)与相对路径(属于引用它的那份文档)在这里都认不出,往下按 URL 处置。
+  const disk = evidenceDiskPath(path);
+  const evidence = disk ? instanceRunsPath(disk) ?? LEGACY_RUNS.exec(disk)?.[1] ?? null : null;
+  const review = evidence?.match(REVIEW_FILE_PATH);
   if (review) {
-    const [, taskId, round, encodedName] = review;
-    const name = decodeSafe(encodedName);
+    const [, taskId, round, name] = review;
     if (!PARENT_SEGMENT.test(name)) return { name, url: api.taskReviewFileUrl(taskId, Number(round), name) };
   }
-  const freeReview = offSite ? null : path.match(FREE_REVIEW_FILE_PATH);
+  const freeReview = evidence?.match(FREE_REVIEW_FILE_PATH);
   if (freeReview) {
-    const [, taskId, runId, round, encodedName] = freeReview;
-    const name = decodeSafe(encodedName);
+    const [, taskId, runId, round, name] = freeReview;
     if (!PARENT_SEGMENT.test(name)) return { name, url: api.freeReviewFileUrl(taskId, runId, Number(round), name) };
   }
   const url = sameOriginUrl(path);
   if (!url || !isReviewFileEndpoint(url.pathname)) return null;
   // query 参数已经被 `URLSearchParams` 解过码,不再解第二遍(理由见 siblingResolverForUrl)。
-  // 上面两条分支的输入是**磁盘路径或 file URL**混在一起的形状,那一层确实要自己解。
   const name = url.searchParams.get("name") ?? "";
   return name ? { name, url: url.toString() } : null;
+}
+
+/** 一处目的地所指的磁盘路径(`file:` 或裸路径,去查询/片段、解码一次),分隔符归一成 `/`。网址是 null。 */
+function evidenceDiskPath(destination: string): string | null {
+  const raw = destination.trim();
+  const path = /^file:\/\//i.test(raw) ? fileUrlPath(raw) : isNetworkDestination(raw) ? null : destinationFilePath(raw);
+  return path ? path.replaceAll("\\", "/") : null;
 }
 
 export function isLocalOpenHref(href?: string): href is string {
@@ -414,13 +423,13 @@ function servableImage(href: string): ImagePreviewTarget | null {
   const review = reviewFileTarget(href);
   if (review) return isImagePath(review.name) ? review : null;
 
-  const url = sameOriginUrl(href);
-  const external = /^https?:/i.test(href) && !url;
-  if (!external) {
-    const attachment = attachmentView(href.replace(/^file:\/\//i, ""));
-    if (attachment.image && attachment.url) return { name: attachment.name, url: attachment.url };
-  }
+  // 附件只按磁盘路径认,路径成分与工作目录那一档同一份口径(去查询/片段、解码一次);
+  // 站内地址与网址在 taskFilePath 里就是 null,往下按 URL 原样用。
+  const disk = taskFilePath(href);
+  const attachment = disk ? attachmentView(disk) : null;
+  if (attachment?.image && attachment.url) return { name: attachment.name, url: attachment.url };
 
+  const url = sameOriginUrl(href);
   if (!url) return null;
   // 站内 URL 的文件名一般就在 pathname 末段；两个例外把它放在查询串里：验证证据接口用
   // `?name=`（用户从证据面板「复制图片地址」再贴回对话里，走的就是这一条），任务工作

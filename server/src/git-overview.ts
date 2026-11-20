@@ -1,3 +1,4 @@
+import type { ProjectBranches } from "@navi/shared/task-branch";
 import { expandHome, listBranches } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { worktreePorcelain } from "./git-worktree-state.js";
@@ -9,9 +10,7 @@ export type GitWorktreeOverview = {
   detached: boolean;
 };
 
-export type GitOverview = {
-  branches: string[];
-  current: string | null;
+export type GitOverview = ProjectBranches & {
   worktrees: GitWorktreeOverview[];
 };
 

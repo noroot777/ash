@@ -3,12 +3,15 @@ import Sparkle
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var windowController: BrowserWindowController?
+  /// 窗口建出来之前就收到的 navi:// 链接（被链接拉起时，系统可能先递链接、后报启动完成）。
+  private var pendingLinks: [URL] = []
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     // 第一个 WKWebView 建出来之前：要先让旧 app 退出、把改名前的网页数据复制过来（见 LegacyIdentity）。
     guard adoptLegacyIdentity() else { return }
     AppUpdater.shared.start()
     NSApp.mainMenu = MainMenu.build()
+    registerTextInputDefaults()
     let controller = BrowserWindowController()
     windowController = controller
     UpdateGate.shared.onHoldChanged = { [weak controller] note in
@@ -16,8 +19,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     controller.showWindow(nil)
     NSApp.activate(ignoringOtherApps: true)
+    pendingLinks.forEach(controller.open(link:))
+    pendingLinks = []
     do { try LoginService.reconcileAtLaunch() } catch { NSAlert(error: error).runModal() }
     DispatchQueue.global(qos: .utility).async { DownloadTransaction.reclaimAbandoned() }
+  }
+
+  /// WKWebView 的输入框默认跟着系统的「自动纠正拼写」「智能引号和破折号」：打一个英文词就弹「Dfsdf ×」的更正气泡，
+  /// `"` 变成 `“`、`--` 变成 `—`，交给 CLI 的提示词和命令就坏了。WebKit 只在这几个键没设时才回退系统设置
+  /// （UIProcess/mac/TextCheckerMac.mm），这里在第一个 WKWebView 之前注册成关。注册域不落盘：
+  /// 用 `defaults write` 显式设过的值仍然优先。用户自己配的「文本替换」不动。
+  private func registerTextInputDefaults() {
+    UserDefaults.standard.register(defaults: [
+      "WebAutomaticSpellingCorrectionEnabled": false,
+      "WebAutomaticQuoteSubstitutionEnabled": false,
+      "WebAutomaticDashSubstitutionEnabled": false,
+    ])
   }
 
   /// 网页数据没接过来就不建窗口（建了就再也接不回来，见 LegacyIdentity.webDataSettled）：说清卡在哪，让用户选。
@@ -66,6 +83,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
+  /// navi:// 链接（DeepLink）。
+  func application(_ application: NSApplication, open urls: [URL]) {
+    guard let controller = windowController else {
+      pendingLinks.append(contentsOf: urls)
+      return
+    }
+    urls.forEach(controller.open(link:))
+  }
+
+  @objc func toggleOtherDevices(_ sender: NSMenuItem) {
+    RemoteAccessSwitch.toggle(windowController)
+  }
+
   @objc func checkHostMcp(_ sender: Any?) {
     HostMcpSetup.check(window: windowController?.window)
   }
@@ -83,6 +113,13 @@ extension AppDelegate: NSMenuItemValidation {
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
     if item.action == #selector(toggleLoginService(_:)) {
       item.state = LoginService.isEnabled ? .on : .off
+    }
+    // 只有本机那份才有「让不让别的设备进来」这回事：连别处的 navi 时 app 只是个窗口。
+    if item.action == #selector(toggleOtherDevices(_:)) {
+      item.state = NaviConfig.allowsOtherDevices ? .on : .off
+      // 在跑的服务没按这个勾起（ServedInstance）：如实写出来，点它就是按勾重启。
+      item.title = ServedInstance.networkPending ? "允许其他设备访问（重启服务后生效）" : "允许其他设备访问"
+      return NaviConfig.isLocal && !RemoteAccessSwitch.busy
     }
     // 只有本机那份才有「替这台机器的 CLI 接 MCP」这回事。
     if item.action == #selector(checkHostMcp(_:)) { return NaviConfig.isLocal }
@@ -138,6 +175,7 @@ enum MainMenu {
     }
     menu.addItem(.separator())
     menu.addItem(item("登录时启动 Navi 服务", #selector(AppDelegate.toggleLoginService(_:))))
+    menu.addItem(item("允许其他设备访问", #selector(AppDelegate.toggleOtherDevices(_:))))
     menu.addItem(item("检查 Navi MCP 登记…", #selector(AppDelegate.checkHostMcp(_:))))
     menu.addItem(.separator())
     menu.addItem(item("隐藏 Navi", #selector(NSApplication.hide(_:)), "h"))

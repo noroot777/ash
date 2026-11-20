@@ -1,7 +1,8 @@
 import Foundation
 
 /// 把自带的那份 navi 服务起起来：用 bundle 里的 node 跑 bundle 里的 server，数据根交给
-/// `ASH_DATA_DIR`，带 `ASH_LOCAL_ONLY=1`（只听 127.0.0.1、固定自用模式）。
+/// `NAVI_DATA_DIR`，带 `NAVI_DESKTOP_APP=1`（app 起的那一份：固定自用、听窗口专用端口），没打开
+/// 「允许其他设备访问」时再带 `NAVI_LOCAL_ONLY=1`（只听 127.0.0.1、没有远程配对）。
 ///
 /// server 由 `scripts/start-detached.mjs` 放进自己的会话、脱离本进程 —— 关窗、退出 app 都不会
 /// 带走服务，更不会带走它名下在跑的 agent。这里**只负责起**：不杀旧进程、不守护。
@@ -135,7 +136,10 @@ final class ServerLauncher {
     case .navi(let instance):
       guard NaviHealth.isServing(probe) else { return .occupied(Occupant.otherNavi(instance)) }
       // 不管服务是谁起的、谁先看到它起来，确认都在这一处（窗口、登录项、另一个窗口的重试都经过这里）。
-      if NaviConfig.isLocal { ServerRecord.confirmServing(pid: instance.pid) }
+      if NaviConfig.isLocal {
+        ServerRecord.confirmServing(pid: instance.pid)
+        ServedInstance.observe(instance)
+      }
       return .ready
     }
   }
@@ -146,17 +150,21 @@ final class ServerLauncher {
     let shell = Process()
     shell.executableURL = URL(fileURLWithPath: Self.loginShell())
     // 登录 shell 只负责拼出 PATH、LANG 这些。.zprofile / .zshrc 跑在这段命令**之前**，里面给开发实例
-    // export 过的 ASH_DATA_DIR、PORT、ASH_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
-    // 写成命令里的字面量，由 `env` 在 exec 的边界上落定（shell 带来的 PORT 先清掉）。
-    // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
-    // 环境里删掉（见 server/src/paths.ts、local-only.ts、window-port.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
+    // export 过的 NAVI_DATA_DIR、PORT、NAVI_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
+    // 写成命令里的字面量，由 `env` 在 exec 的边界上落定（shell 带来的 PORT 先清掉）。server 读变量时
+    // 新名优先、退到改名前的 ASH_ / HARNESS_（shared/src/env-names.ts），所以开关一律写新名、两个值都写明
+    // （本机模式写 0 而不是不写，rc 里旧名的 1 就顶不上来）；数据根几代名字指向不同就拒绝起，旧名先清掉。
+    // 这几个是给 server 的，它读完就从自己的环境里删掉（见 server/src/paths.ts、local-only.ts、
+    // window-port.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
     let data = Self.quoted(NaviConfig.dataURL.path)
     let node = Self.quoted(NaviConfig.nodeURL.path)
     // 默认端口不传 PORT：server 的环境会一路继承给 agent 与应用内终端，多一个 PORT 会让
     // 里面起的前端 dev server 去抢 navi 的端口。
     let port = NaviConfig.port == 4317 ? "" : " PORT=\(NaviConfig.port)"
-    let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1"
-      + " ASH_WINDOW_PORT=\(NaviConfig.windowPort)\(port) "
+    let localOnly = NaviConfig.allowsOtherDevices ? "0" : "1"
+    let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT -u ASH_DATA_DIR -u HARNESS_DATA_DIR"
+      + " NAVI_DATA_DIR=\(data) NAVI_DESKTOP_APP=1 NAVI_LOCAL_ONLY=\(localOnly)"
+      + " NAVI_WINDOW_PORT=\(NaviConfig.windowPort)\(port) "
       + "\(node) \(Self.quoted(NaviConfig.detachScriptURL.path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(NaviConfig.serverEntryURL.path))"
     shell.arguments = ["-ilc", script]
     shell.environment = Self.terminalLikeEnvironment()
@@ -197,6 +205,7 @@ final class ServerLauncher {
       let probe = NaviHealth.probeSync()
       if case .navi(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
         ServerRecord.confirmServing(pid: Int(pid))
+        ServedInstance.observe(instance)
         return .ready
       }
       if case .navi(let instance) = probe, !instance.isOurs { return .occupied(Occupant.otherNavi(instance)) }

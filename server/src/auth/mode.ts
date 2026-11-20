@@ -11,7 +11,7 @@ import { getAppSettings, writeSystemSetting } from "../app-settings.js";
 import { db } from "../db/index.js";
 import { users } from "../db/schema.js";
 import { expandHome } from "../git.js";
-import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
+import { SINGLE_ONLY, SINGLE_ONLY_REFUSAL } from "../local-only.js";
 import { isInsidePath, windowsPathRejection } from "../platform.js";
 import { setHostCliIsolatedFlag, setMultiUserFlag } from "./multi-flag.js";
 // 「登录得进来」的判据只有 store.ts 那一份 —— 这里和最后管理员保护问的是同一件事。
@@ -112,7 +112,7 @@ export async function setInstanceMode(
   rootDir: string,
   sharedHostCli?: boolean,
 ): Promise<void> {
-  if (LOCAL_ONLY && mode === "multi") throw Object.assign(new Error(LOCAL_ONLY_REFUSAL), { status: 403 });
+  if (SINGLE_ONLY && mode === "multi") throw Object.assign(new Error(SINGLE_ONLY_REFUSAL), { status: 403 });
   const current = await instanceConfig();
   if (current.mode === "multi" && mode !== "multi") throw new Error("多人模式不能转回自用模式");
   if (mode === "multi") {

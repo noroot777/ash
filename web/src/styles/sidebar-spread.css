@@ -2,7 +2,7 @@
 
    1) 铺开时侧边栏 position:absolute 铺满，主区补一个等宽的 margin-left ——
       主区的内容盒逐像素不动，所以 TaskDetail 不会跟着重排一遍。
-   2) 行高恒定 34px，行的上方不新增任何一行（筛选条塞进顶部工具行本来就空着的左半边），
+   2) 行高恒定 34px，行的上方不新增任何一行（筛选条塞进顶部工具行中间那段空档），
       所以铺开前后每一行的纵向位置逐像素相同：铺开是「右边露出来」，不是「重新排版」。
 
    行宽在切换瞬间就钉到最终宽度（100cqw 由 .workspace-shell 这个查询容器给出，跟正在
@@ -185,16 +185,19 @@
   background: var(--lifted);
 }
 
-/* ── 筛选条：占的是顶部工具行本来就空着的左半边 ─────────── */
+/* ── 筛选条：夹在工具行左边三颗图标和右端「新建任务」之间 ─────────── */
 
 .workspace-spread-filters {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 4px;
-  margin-right: auto;
+  margin: 0 auto 0 12px;
   overflow: hidden;
 }
+
+/* 胶囊已经用 margin-right:auto 把新建任务顶到了右端，它自己不必再顶。 */
+.workspace-spread-filters + .workspace-new-task { margin-left: 0; }
 
 .workspace-spread-filter {
   height: 24px;
@@ -227,72 +230,6 @@
 }
 
 .workspace-spread-filter.is-todo b { color: var(--amber); }
-
-/* ── 窄态的一排点：同一个筛选的另一副长相 ────────────────
-   靠左摆，占的是顶部图标行本来就空着的左半边（margin-right:auto 把图标组顶回右端），
-   跟铺开态那排胶囊同一个起点 —— 按 F 来回切时点和胶囊原地换脸，不会左右跳。
-   一颗点 = 一档状态；「全部」不占点位，表现为一颗都没亮。
-   尺寸是按侧边栏最窄那档（220px）算死的：五颗点 65px + 四颗图标 112px + 四道 3px 间隙
-   = 189px，正好落在可用的 195px 里。想把点做大先回来算这道题，否则最窄时会溢出侧栏。 */
-
-.workspace-spread-dots {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0;
-  margin-right: auto;
-  animation: workspace-spread-dots-in 160ms ease-out;
-}
-
-@keyframes workspace-spread-dots-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.workspace-spread-dot {
-  display: grid;
-  width: 13px;
-  height: 22px;
-  flex: 0 0 13px;
-  place-items: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  padding: 0;
-  --spread-dot: var(--faint);
-}
-
-.workspace-spread-dot i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--spread-dot);
-  font-style: normal;
-  transition: transform 140ms ease-out, box-shadow 140ms ease-out;
-}
-
-/* 这一档一个任务都没有：还是实心，只是淡下去。位置不动（不然点会左右挪，指哪打哪就没了）。 */
-.workspace-spread-dot.is-empty i { opacity: 0.4; }
-
-.workspace-spread-dot:hover i,
-.workspace-spread-dot:focus-visible i { transform: scale(1.28); }
-
-.workspace-spread-dot.is-empty:hover i,
-.workspace-spread-dot.is-empty:focus-visible i,
-.workspace-spread-dot.is-empty.is-on i { opacity: 1; }
-
-
-.workspace-spread-dot.is-on i {
-  background: var(--spread-dot);
-  transform: scale(1.14);
-  box-shadow: 0 0 0 2.5px color-mix(in oklab, var(--spread-dot) 26%, transparent);
-}
-
-.workspace-spread-dot--todo { --spread-dot: var(--amber); }
-.workspace-spread-dot--run { --spread-dot: var(--accent); }
-.workspace-spread-dot--wait { --spread-dot: var(--faint); }
-.workspace-spread-dot--done { --spread-dot: var(--green); }
-.workspace-spread-dot--accepted { --spread-dot: var(--cyan); }
 
 .workspace-spread-hint {
   margin-left: 12px;

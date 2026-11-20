@@ -96,6 +96,39 @@ if mode == "chrome" {
 if mode == "guard" {
   runInstanceGuardProbe(mode: CommandLine.arguments[2])
 }
+if mode == "deeplink" {
+  // navi:// 链接：只收认得的形状；自家服务指纹对上才在窗口里开，对不上 / 认不出交给浏览器。
+  let fallback = "http://mbp.tail97f3a6.ts.net:4317/?project=p_1&task=t-2"
+  let encoded = fallback.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+  let full = DeepLink.parse(URL(string: "navi://open?project=p_1&task=t-2&instance=AB12-CD34&fallback=\(encoded)")!)
+  require(full == DeepLink.Link(route: "/?project=p_1&task=t-2", instance: "AB12-CD34", fallback: URL(string: fallback)), "full link parses")
+  require(DeepLink.decide(full!, servedTag: "AB12-CD34") == .window("/?project=p_1&task=t-2"), "same instance opens in the window")
+  require(DeepLink.decide(full!, servedTag: "FFFF-0000") == .browser(URL(string: fallback)!), "another instance goes to the http fallback")
+  require(DeepLink.decide(full!, servedTag: nil) == .browser(URL(string: fallback)!), "unconfirmed service goes to the http fallback")
+  let bare = DeepLink.parse(URL(string: "navi://open?project=p_1")!)!
+  require(DeepLink.decide(bare, servedTag: "AB12-CD34") == .window("/?project=p_1"), "a link without origin opens in our window")
+  require(DeepLink.decide(bare, servedTag: nil) == .front, "nothing to fall back to: only bring the window forward")
+  for bad in ["navi://open?task=t", "navi://open?project=a%22b", "navi://other?project=p", "https://x/?project=p",
+              "navi://open?project=p&instance=nope", "navi://open?project=p&fallback=file%3A%2F%2F%2Fetc%2Fpasswd",
+              "navi://open?project=p&task=t&fallback=\("https://evil.example/?project=p&task=other".addingPercentEncoding(withAllowedCharacters: .alphanumerics)!)"] {
+    require(DeepLink.parse(URL(string: bad)!) == nil, "rejects \(bad)")
+  }
+  // 在跑的服务没按菜单上的设置起：看得出来。设置由调用方经参数域给（-NaviAllowOtherDevices NO），不写 defaults。
+  require(!NaviConfig.allowsOtherDevices, "driver runs with other devices not allowed")
+  let served = { (localOnly: Bool) in
+    NaviInstance(pid: 1, id: "i", dataDir: "/d", codeDir: "/c", localOnly: localOnly, desktop: true, tag: nil, windowPort: 1)
+  }
+  require(!ServedInstance.networkPending, "unknown service is not reported as pending")
+  ServedInstance.observe(served(false))
+  require(ServedInstance.networkPending, "local-only wanted, service listens everywhere: pending")
+  ServedInstance.observe(served(true))
+  require(!ServedInstance.networkPending, "service started local-only matches")
+  ServedInstance.observe(served(false))
+  ServedInstance.forget()
+  require(!ServedInstance.networkPending, "forgotten service is unknown again")
+  print("DEEPLINK OK")
+  exit(0)
+}
 
 let destination = URL(fileURLWithPath: CommandLine.arguments[2])
 if mode == "pending" {

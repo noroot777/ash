@@ -93,6 +93,7 @@ export type {
   RemoteAccessView,
   RemoteDeviceVia,
   RemoteDeviceView,
+  ResourceRoots,
   UserHandoffTarget,
   UserRole,
   UserStatus,
@@ -292,6 +293,13 @@ export function canArchive(status: TaskStatus): boolean {
   return ARCHIVABLE_STATUSES.includes(status);
 }
 
+/** 「把任务改到独立工作区」的一次登记：起点（本地分支、远端分支、提交都行）和合入目标（null = 按起点定）。 */
+export interface WorktreeMoveRequest {
+  base: string;
+  mergeTargetBranch: string | null;
+  requestedAt: string;
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -344,7 +352,8 @@ export interface Task {
   liveSince?: string | null;
   archived?: boolean;
   archivedAt?: string | null;
-  // §4 per-task worktree opt-in; worktreeBase null means current HEAD.
+  // §4 per-task worktree opt-in; worktreeBase null means current HEAD. A remote branch
+  // (`origin/foo`) is fetched at creation and merges into local `foo` (created to track it if missing).
   // Existing worktrees are reused. Cleanup happens on accept, on archive (per the
   // `archiveClean` setting), on handoff, or when the user deletes the task —
   // never as a side effect of anything else; see server/src/workspace-cleanup.ts.
@@ -356,6 +365,9 @@ export interface Task {
   worktreeBaseBranch?: string | null;
   mergeTargetBranch?: string | null;
   baseTaskId?: string | null;
+  // 登记着、还没办的「改到独立工作区」（智能体用 move_to_worktree 提的，下一回合开头由 Navi 办；
+  // 办完或办不成都清掉）。见 server/src/task-worktree-move.ts。
+  worktreeMoveRequest?: WorktreeMoveRequest | null;
   acceptedSourceCommit?: string | null;
   // 统一验收冻结的合并快照。三项齐全时才能发起合并结果审查。
   acceptedTargetBranch?: string | null;
