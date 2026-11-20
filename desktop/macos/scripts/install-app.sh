@@ -32,7 +32,7 @@ refuse_if_in_use() {
 explain_in_use() {
   echo "✕ 没有安装：下面这些进程还在用 ${DEST} 里的代码，现在换掉会让它们新旧代码混着跑。" >&2
   printf '%s\n' "$1" | sed 's/^/    /' >&2
-  echo "  Navi 服务（server/dist/index.js 那一行）：手上没有在跑的任务时 kill 它（agent 不会跟着停）；" >&2
+  echo "  空闲的 Navi 服务会自动停止；仍列在这里的服务有任务在跑，或无法安全确认其状态。" >&2
   echo "  Navi MCP（mcp/dist/index.js）是在跑的 agent 拉起的，等那几个任务这一轮结束；Navi 本身先退出。" >&2
   echo "  都停了再装一次。" >&2
 }
@@ -74,6 +74,9 @@ restore() {
 trap restore EXIT
 rm -rf "$STAGE"
 ditto "$APP" "$STAGE"
+if [[ -d "$DEST" ]]; then
+  node "$HERE/stop-idle-server.mjs" "$DEST"
+fi
 if [[ ! -e "$DEST" ]]; then
   mv "$STAGE" "$DEST"
 elif [[ -f "$DEST/$CODE_LOCK" ]]; then
