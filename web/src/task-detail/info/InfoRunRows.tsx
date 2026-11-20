@@ -16,6 +16,7 @@ import { placementStyle, usePanelPlacement } from "../../lib/usePanelPlacement.t
 import { formatInstant, formatInstantRange, taskDurationInfo } from "../utils.ts";
 import type { InfoRunFacts } from "./infoRunFacts.ts";
 import { RollingNumber } from "../../lib/motion/index.ts";
+import { InfoBranchRow } from "./InfoBranchRow.tsx";
 
 /** 一段字，指上去 / 键盘走到再说一句补充（不用原生 title）。 */
 function Tipped({ tip, children, className = "" }: { tip: string; children: React.ReactNode; className?: string }) {
@@ -183,12 +184,7 @@ export function InfoSessionRows({ task, session, notify }: { task: Task; session
   return (
     <>
       <InfoBaseRow task={task} />
-      {session.branch && (
-        <InspRow label="分支" className={task.useWorktree ? "" : "is-danger"}>
-          <Tipped tip={task.useWorktree ? session.branch : `${session.branch}（没有独立工作区，直接在这条分支上改）`} className="insp-cut">{session.branch}</Tipped>
-          <InspCopy text={session.branch} label="复制分支名" onError={notify} />
-        </InspRow>
-      )}
+      {session.branch && <InfoBranchRow task={task} session={session} notify={notify} />}
       {(session.worktreePath || session.cwd) && (
         <InspRow label="目录">
           <Tipped tip={(session.worktreePath || session.cwd)!} className="insp-cut">{session.worktreePath || session.cwd}</Tipped>

@@ -295,8 +295,8 @@ export async function continueTask(
     // invitee sees prior output), else materialize the task workdir.
     const recorded = opts.cwd || prev?.cwd || prev?.worktreePath || all[0]?.cwd || all[0]?.worktreePath || "";
     // 目录没了怎么办、还在又要刷什么,都在 turn-workspace-pick.ts。
-    const { cwd, workspaceReset, freshWorkspace, baseFallback: resolvedFallback } = await pickTurnWorkspace({
-      task, project, recorded, resuming,
+    const { cwd, workspaceReset, freshWorkspace, baseFallback: resolvedFallback, workspaceMoved } = await pickTurnWorkspace({
+      task, project, recorded, resuming, sessionRole,
     });
     baseFallback = resolvedFallback;
     // 执行回合开跑，被裁定闸按住的旧预约触发作废（旁路回合不改代码不算；理由见 forgetHeldTrigger ①）。
@@ -379,7 +379,7 @@ export async function continueTask(
         craft,
         history,
         userText: promptedUserTurnText,
-        workspaceReset: workspaceReset ? WORKSPACE_RESET(cwd) : "",
+        workspaceReset: (workspaceReset ? WORKSPACE_RESET(cwd) : "") + workspaceMoved,
         completion: (followUpFrom
           ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
           : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow))

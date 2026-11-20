@@ -18,6 +18,7 @@ import { afterSettlement } from "./settle-status.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
 import { forgetHeldTrigger } from "./free-review-reservations.js";
 import { taskWorkspace } from "./task-workspace.js";
+import { applyPendingWorktreeMove, takeWorkspaceNote } from "./task-worktree-move.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
@@ -176,6 +177,9 @@ async function runHeldTask(
 
     // Ordinary tasks resolve exactly as before. Team workers additionally inherit
     // their lead's shared workspace unless they explicitly request another worktree.
+    // 登记过「改到独立工作区」的，全新一轮也先办掉；新会话本来就两手空空，那句「目录换了」不用再说。
+    await applyPendingWorktreeMove(task);
+    await takeWorkspaceNote(taskId);
     const ws = await taskWorkspace(task, project.repoPath);
     baseFallback = ws.baseFallback;
     // 这一轮到底留下了什么:只服务「没交卷」时的通知措辞(turn-output.ts)。fresh run

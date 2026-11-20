@@ -14,6 +14,7 @@ import { admissionKeysOf, admitMembers, joinDispatchChain, TeamAcceptingError } 
 import { execFileText as exec } from "./exec.js";
 import { expandHome } from "./git.js";
 import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
+import { parseWorktreeMoveRequest } from "./worktree-move-request.js";
 import { assertPrerequisiteEdges, insertPrerequisiteEdges, withPrerequisiteGraph, type EdgeTask, type PrerequisiteEdge } from "./prerequisite-store.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
@@ -125,6 +126,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   worktreeBaseBranch: r.worktreeBaseBranch ?? null,
   mergeTargetBranch: r.mergeTargetBranch,
   baseTaskId: r.baseTaskId,
+  worktreeMoveRequest: parseWorktreeMoveRequest(r.worktreeMoveRequest),
   acceptedSourceCommit: r.acceptedSourceCommit,
   acceptedTargetBranch: r.acceptedTargetBranch ?? null,
   acceptedBaseCommit: r.acceptedBaseCommit ?? null,

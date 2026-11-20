@@ -12,6 +12,7 @@ import type { projects, tasks } from "./db/schema.js";
 import { existsSync } from "node:fs";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
+import { takeWorkspaceNote } from "./task-worktree-move.js";
 
 /**
  * 解析这一轮的工作目录。
@@ -21,6 +22,8 @@ import type { Workspace } from "./git.js";
  *   调用方要把这件事贴进本轮 prompt(只有续聊才需要:新会话本来就两手空空)。
  * - `freshWorkspace`:这个目录是这一轮新建出来的(基线快照要据此跳过比对)。
  * - `baseFallback`:登记的基线被换掉了 —— 说明由调用方在 spawn 之后补(见 base-fallback-notice.ts)。
+ * - `workspaceMoved`:上一回合之后任务改到了独立工作区(或没改成),要贴进本轮 prompt 的那句
+ *   (task-worktree-move.ts)。只给任务自己的回合取,审查旁路回合留着。
  */
 export async function pickTurnWorkspace(input: {
   task: typeof tasks.$inferSelect;
@@ -28,8 +31,10 @@ export async function pickTurnWorkspace(input: {
   /** 会话行上记着的那个目录（调用方按 opts.cwd → prev → 任意会话的顺序取好）。 */
   recorded: string;
   resuming: boolean;
-}): Promise<{ cwd: string; workspaceReset: boolean; freshWorkspace: boolean; baseFallback: Workspace["baseFallback"] }> {
+  sessionRole: string;
+}): Promise<{ cwd: string; workspaceReset: boolean; freshWorkspace: boolean; baseFallback: Workspace["baseFallback"]; workspaceMoved: string }> {
   const { task, project, recorded, resuming } = input;
+  const workspaceMoved = input.sessionRole === "single" ? await takeWorkspaceNote(task.id) : "";
   let baseFallback: Workspace["baseFallback"];
   // A recorded cwd that has since vanished (worktree cleaned up, project moved)
   // used to be handed to spawn as-is — which stuck the task in 'running' forever.
@@ -57,5 +62,5 @@ export async function pickTurnWorkspace(input: {
     // 到 diff / 验收那头才撞墙 —— 那正是上一轮修的「起得来但交不掉」。
     baseFallback = await refreshTaskBase(task, project.repoPath);
   }
-  return { cwd, workspaceReset, freshWorkspace, baseFallback };
+  return { cwd, workspaceReset, freshWorkspace, baseFallback, workspaceMoved };
 }
