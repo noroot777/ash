@@ -6,11 +6,8 @@ import { SideDrawer } from "../components/SideDrawer.tsx";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../components/LeftDrawer.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { TaskFileLinks } from "../components/TaskFileLink.tsx";
-import { FileViewer } from "../files/FileViewer.tsx";
-import { FolderViewer } from "../files/FolderViewer.tsx";
 import { useFileView } from "../files/useFileView.ts";
-import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
-import type { ScmDiffTarget } from "../scm/scmModel.ts";
+import { FILE_VIEW_TAB, useFileViewTab } from "../files/fileViewTab.tsx";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
 import { toggleArchive } from "../lib/archive.ts";
 import { refreshTaskActions, useTaskActions } from "../lib/useTaskActions.ts";
@@ -33,7 +30,7 @@ import { TeamReplyBox } from "./TeamReplyBox.tsx";
 import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
 import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
 import { TeamHeader } from "./TeamHeader.tsx";
-import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx";
+import { TEAM_FILE_TABS, TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { activeTeamHaltMarker, leadTurns, teamFeedRows } from "./teamModel.ts";
 import { useWorkerLiveLines } from "./workerLiveLines.ts";
@@ -103,7 +100,8 @@ export function TeamView({
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
-  // 中间那一栏同一时刻只放一样东西：团队会话 / 验收台 / 文件（全文或 diff）。
+  // 中间那一栏同一时刻只放一样东西：团队会话 / 验收台。点开的文件、文件夹、diff 摊在右侧面板
+  // 「查看」那一格（files/fileViewTab.tsx），团队会话一直留着。
   const fileView = useFileView(task.id);
   const [busy, setBusy] = useState(false);
   // 「这一轮会换执行器」的确认闸(§八);对话框住在 App 层。
@@ -128,7 +126,7 @@ export function TeamView({
   }, { onOpen: () => { setSelectedWorkerId(null); leftDrawer.close(); } });
   // 哨兵那一格：挂在调度台自己身上，看着别的面板时也要拉（图标条上那点活信号靠它）。
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
-  const inspectors = monitorTab.inspectors;
+  const { inspectors, reveal: fileViewReveal } = useFileViewTab(monitorTab.inspectors, fileView, TEAM_FILE_TABS);
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const waiting = useMemo(() => waitingWorkers(workers), [workers]);
   const workerLiveLines = useWorkerLiveLines(task.id, workers);
@@ -153,7 +151,7 @@ export function TeamView({
     requiredTabId: "info",
     // 停在备忘上时不要被自动切走：执行者一个个收工就会换挡（stateKey 含
     // allWorkersComplete），而那一格里可能正编辑着一条没保存的（同 TaskDetail 那份）。
-    preserveActiveTabIds: ["memos"],
+    preserveActiveTabIds: ["memos", FILE_VIEW_TAB],
     defaultOpenTabIds: allWorkersComplete
       ? ["info", "review", "artifacts", "memos", "timeline"]
       : ["info", "workers", "artifacts", "memos", "timeline"],
@@ -215,10 +213,7 @@ export function TeamView({
   const closeDrawers = () => { subagents.closeAgent(); leftDrawer.close(); };
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
-    if (open) {
-      fileView.close();
-      closeDrawers();
-    }
+    if (open) closeDrawers();
     onReviewOpenChange?.(open);
   };
   useEffect(() => {
@@ -285,22 +280,9 @@ export function TeamView({
     }
   };
 
-  // 中间栏摊开一份文件 / 一个文件夹：侧栏的生成物、文件树，和正文里提到的路径（TaskFileLinks）同一个出口。
-  const openFileInCenter = (path: string, reel?: readonly string[]) => {
-    fileView.openFile(path, reel);
-    setSelectedWorkerId(null);
-    closeDrawers();
-    if (reviewOpen) changeReviewOpen(false);
-  };
-  const openFolderInCenter = (path: string) => {
-    fileView.openFolder(path);
-    setSelectedWorkerId(null);
-    closeDrawers();
-    if (reviewOpen) changeReviewOpen(false);
-  };
-
   return (
-    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter} onOpenError={notify}>
+    // 正文里提到的路径跟侧栏的生成物、文件树同一个出口：摊进「查看」那一格（InspectorHost 也在里面）。
+    <TaskFileLinks taskId={task.id} onOpenFile={fileView.openFile} onOpenFolder={fileView.openFolder} onOpenError={notify}>
       <LeftDrawerProvider value={leftDrawer.api}>
       <InspectorHost
         contextKey={`team:${task.id}`}
@@ -319,18 +301,11 @@ export function TeamView({
           onOpenTask: openTaskById,
           indicatorForTask,
           workerLiveLines,
-          activeFilePath: fileView.activePath,
-          onOpenFile: openFileInCenter,
-          onOpenFolder: openFolderInCenter,
-          onOpenDiff: (target: ScmDiffTarget) => {
-            fileView.openDiff(target);
-            setSelectedWorkerId(null);
-            closeDrawers();
-            if (reviewOpen) changeReviewOpen(false);
-          },
+          fileView,
           notify,
         } satisfies TeamInspectorContext}
         tabPolicy={inspectorPolicy}
+        reveal={fileViewReveal}
       >
         {({ toggleButton, openTab }) => <div className="team-view">
         <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
@@ -360,44 +335,6 @@ export function TeamView({
               changeReviewOpen(false);
               if (target.id !== task.id) selectWorker(target.id);
             }} />
-        ) : fileView.filePath ? (
-          <FileViewer
-            taskId={task.id}
-            path={fileView.filePath}
-            reel={fileView.reel}
-            onStep={fileView.stepFile}
-            zoomed={fileView.zoomed}
-            onToggleZoom={fileView.toggleZoom}
-            onExitZoom={fileView.exitZoom}
-            onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
-            onClose={fileView.close}
-            notify={notify}
-          />
-        ) : fileView.folderPath ? (
-          <FolderViewer
-            taskId={task.id}
-            path={fileView.folderPath}
-            zoomed={fileView.zoomed}
-            onToggleZoom={fileView.toggleZoom}
-            onExitZoom={fileView.exitZoom}
-            onOpenFile={fileView.openFile}
-            onOpenFolder={fileView.openFolder}
-            onClose={fileView.close}
-            notify={notify}
-          />
-        ) : fileView.diff ? (
-          <ScmDiffViewer
-            taskId={task.id}
-            path={fileView.diff.path}
-            source={fileView.diff.source}
-            origPath={fileView.diff.origPath}
-            kind={fileView.diff.kind}
-            zoomed={fileView.zoomed}
-            onToggleZoom={fileView.toggleZoom}
-            onExitZoom={fileView.exitZoom}
-            onOpenFile={fileView.showFile}
-            onClose={fileView.close}
-          />
         ) : (
           <>
             {stopped && <HaltNotice workers={workers} groupCount={teamGroups.length} historyOnly={teamGroups.length === 0} />}

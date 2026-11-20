@@ -316,12 +316,12 @@ try {
   assert.equal(await showDiff.count(), 0, "没有改动的文件不该给「查看改动」");
   assert.equal(diffCalls.length, afterBack, "干净的文件不该去请求 diff");
 
-  // 关掉就回会话，不是回到上一份 diff。
-  await center.getByRole("button", { name: "关闭文件，回到会话" }).click();
+  // 关掉就收起，不是回到上一份 diff。
+  await center.getByRole("button", { name: "关闭文件查看" }).click();
   await page.getByTestId("center-empty").waitFor();
   await row("changed.ts").click();
   await diffView.waitFor();
-  await center.getByRole("button", { name: "关闭 diff，回到会话" }).click();
+  await center.getByRole("button", { name: "关闭 diff 查看" }).click();
   await page.getByTestId("center-empty").waitFor();
 
   console.log("file tree opens changed files as diff: ok");

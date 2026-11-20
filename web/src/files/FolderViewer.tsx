@@ -18,7 +18,7 @@ import { OpenInIdeMenu } from "./OpenInIdeMenu.tsx";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
 
 /**
- * 会话区里的文件夹详情，和 `FileViewer` 占中间栏同一个位置。
+ * 文件夹详情，和 `FileViewer` 占右侧面板「查看」那一格同一个位置。
  *
  * 它存在的第一理由不是「给删除按钮找个地方放」，而是**点开一个文件夹本来就想知道里面是
  * 什么**：多少个文件、多大、其中几个改过没提交、几个压根没进过 git。这几个数字同时也
@@ -149,7 +149,7 @@ export function FolderViewer({
             {deletion.preparing ? "准备中…" : "删除"}
           </button>
           {onToggleZoom && <ZoomToggle zoomed={zoomed} onToggle={onToggleZoom} className="file-viewer__action" />}
-          <button type="button" className="file-viewer__action" aria-label="关闭文件夹，回到会话" onClick={onClose}>
+          <button type="button" className="file-viewer__action" aria-label="关闭文件夹详情" onClick={onClose}>
             <X size={13} aria-hidden="true" />
           </button>
         </span>

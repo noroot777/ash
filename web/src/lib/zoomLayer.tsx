@@ -3,9 +3,11 @@ import { createPortal } from "react-dom";
 import { CornersIn, CornersOut } from "@phosphor-icons/react";
 import { useDismissable } from "./useDismissable.ts";
 
-// 「把中间这块内容铺开来看」的放大层，三处共用：审查里的分支 diff、文件全文、单文件 diff。
-// 它们摆的是同一个位置（中间那一栏），放大的语义也该是同一个——铺满工作区、盖掉左边的任务
-// 栏、右边让开 inspector（文件树/改动列表还要接着点）、底下让开终端和全局状态栏、Esc 退出。
+// 「把这块内容铺开来看」的放大层，几处共用：审查里的分支 diff（中间那一栏），文件全文、单文件
+// diff、文件夹详情（右侧面板「查看」那一格）。放大的语义是同一个——铺满工作区、盖掉左边的
+// 任务栏、底下让开终端和全局状态栏、Esc 退出。右边看内容长在哪：长在中间那一栏的让开
+// inspector（审查记录、改动列表还要接着点）；本身就长在 inspector 里的连它一起盖住——让开
+// 自己所在的那一条，等于把放大层挤进左边那半块，而面板里原来那格只剩一个空壳。
 //
 // 放大层必须 portal 到 body：主工作区自己开了一个堆叠上下文（`sidebar-spread.css`），留在
 // 原地的 z-index 只在它家里排座次，再大也盖不住左边的任务栏。层高从 92 起：压过所有页面
@@ -99,6 +101,7 @@ export function useZoomLayer({
       setInset({ right: 0, bottom: 0 });
       return;
     }
+    const insideInspector = !!anchor.current?.closest(".inspector-host");
     // 每次测量都重新问一遍「现在贴着右缘的 inspector 是谁」，而不是进放大态时捕获一次：
     // 面板是一个个关掉的，关掉最后一个时整条 `.inspector-host` 从 DOM 里消失。捕获节点再
     // 反复量它，卸载后 `getBoundingClientRect()` 全是 0——left 读成 0，右缘就被算成整个
@@ -109,7 +112,7 @@ export function useZoomLayer({
 
     // 量边缘而不是宽高：右边留白、边框怎么算都不用管，让开的正好是它们占的那块。
     const sync = () => {
-      const host = rightEdgeInspector();
+      const host = insideInspector ? null : rightEdgeInspector();
       const row = workspaceRow();
       const right = host ? Math.max(0, window.innerWidth - host.getBoundingClientRect().left) : 0;
       const bottom = row ? Math.max(0, window.innerHeight - row.getBoundingClientRect().bottom) : 0;

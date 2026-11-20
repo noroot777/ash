@@ -34,7 +34,7 @@ function TextBody({ file }: { file: FileContent }) {
   );
 }
 
-// 文件里的图片就在中栏原地缩放，跟大图灯箱同一套手势与工具条；左右键照旧留给连续翻图。
+// 文件里的图片就在查看器里原地缩放，跟大图灯箱同一套手势与工具条；左右键照旧留给连续翻图。
 function ImageBody({ src, name }: { src: string; name: string }) {
   const box = useRef<HTMLDivElement>(null);
   const zoom = useImageZoom(src, box);
@@ -181,10 +181,10 @@ function ReelControl({
 }
 
 /**
- * 会话区里的文件查看器。
+ * 文件查看器，摆在右侧面板「查看」那一格（files/fileViewTab.tsx）。
  *
- * 摆在中间那一栏而不是另开弹层：看文件时通常要对着 agent 说话，弹层会把回复框盖住。
- * 关掉它就回到会话，跟审查工作区是同一套「中间区换一块内容」的做法。
+ * 不另开弹层、也不替换中间那一栏：看文件时通常要对着 agent 说话，会话和回复框得一直在。
+ * 顶上这条就是那一格的头带（名字、动作、关闭），宿主不再另画一条。
  */
 export function FileViewer({
   taskId,
@@ -235,7 +235,7 @@ export function FileViewer({
     label: `放大查看文件：${path}`,
     className: "zoom-layer--file",
   });
-  // 删完这个文件就没得看了，跟着关掉这块内容回到会话。
+  // 删完这个文件就没得看了，跟着关掉这一格。
   const deletion = useDeleteEntry({ taskId, notify, onDeleted: () => onClose() });
 
   const reelIndex = reel ? reel.indexOf(path) : -1;
@@ -379,7 +379,7 @@ export function FileViewer({
             {deletion.preparing ? "准备中…" : "删除"}
           </button>
           {onToggleZoom && <ZoomToggle zoomed={zoomed} onToggle={onToggleZoom} className="file-viewer__action" />}
-          <button type="button" className="file-viewer__action" aria-label="关闭文件，回到会话" onClick={onClose}>
+          <button type="button" className="file-viewer__action" aria-label="关闭文件查看" onClick={onClose}>
             <X size={13} aria-hidden="true" />
           </button>
         </span>
