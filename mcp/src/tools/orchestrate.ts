@@ -11,7 +11,7 @@ import { legacyTeamAndDuet, whenLegacy } from "@navi/shared/legacy-modes";
 import { call, fail, ok } from "../runtime.js";
 import type { TaskPrerequisites } from "@navi/shared/prerequisites";
 import { prerequisiteStepText } from "@navi/shared/prerequisites";
-import { AGENT_TYPE, MODE, QUEUE_VS_PREREQUISITES, REVIEWER, REVIEWER_GUIDE, TASK_STATUS, WORKFLOW_MODE, reviewChoiceOf, taskShape } from "../schemas.js";
+import { AGENT_TYPE, MODE, QUEUE_VS_PREREQUISITES, TASK_STATUS, WORKFLOW_MODE, reviewChoiceOf, taskShape } from "../schemas.js";
 
 type ToolTask = z.infer<typeof taskShape>;
 
@@ -89,17 +89,10 @@ server.registerTool(
       chain: z.boolean().optional().describe("按数组顺序串依赖 A→B→C→D"),
       stack: z.boolean().optional().describe("每一条建在上一条上(第 n 条的前置加上第 n-1 条);跟 chain 可以同时用"),
       run: z.boolean().optional().describe("建完立即运行该分组"),
-      defaults: z.object({
-        agentType: AGENT_TYPE.optional(),
-        executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
-        model: z.string().nullable().optional().describe("默认模型；缺省/null=跟随执行器"),
-        reasoningEffort: z.string().nullable().optional().describe("默认思考强度；缺省/null=跟随执行器"),
-        useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认"),
-        worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref（本地分支、远端分支如 origin/foo、tag 或提交）"),
-        mergeTargetBranch: z.string().nullable().optional().describe("默认最终合入分支，独立于开工起点"),
-        workflowMode: WORKFLOW_MODE.optional(),
-        labels: z.array(z.string()).optional(),
-        reviewer: REVIEWER,
+      // 取值与说明跟 tasks[] 的同名字段是同一份（复用字段实例，序列化成 `$ref`）。
+      defaults: taskShape.pick({
+        agentType: true, executorId: true, model: true, reasoningEffort: true, useWorktree: true,
+        worktreeBase: true, mergeTargetBranch: true, workflowMode: true, labels: true, reviewer: true,
       }).optional().describe("每个任务的兜底值，任务自身同名字段可覆盖"),
     },
   },
@@ -232,15 +225,16 @@ server.registerTool(
       mode: MODE.optional(),
       chain: z.boolean().optional().describe("默认 true=创建 queue 串成依赖链(serial 才允许);false=互不依赖(配 mode=parallel 才真正并行)"),
       stack: z.boolean().optional().describe("每一条建在上一条上(第 n 条的前置加上第 n-1 条)"),
+      // 从这里起到 reviewer 都是批次默认值，复用 tasks[] 同名字段的实例（序列化成 `$ref`，说明只发一遍）。
       agentType: AGENT_TYPE.optional().describe("批次默认 agent（任务可逐个覆盖，下同）"),
-      executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
-      model: z.string().nullable().optional().describe("默认模型；缺省/null=跟随执行器"),
-      reasoningEffort: z.string().nullable().optional().describe("默认思考强度；缺省/null=跟随执行器"),
-      useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认"),
-      worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref（本地分支、远端分支如 origin/foo、tag 或提交）"),
-      mergeTargetBranch: z.string().nullable().optional().describe("默认最终合入分支"),
+      executorId: taskShape.shape.executorId,
+      model: taskShape.shape.model,
+      reasoningEffort: taskShape.shape.reasoningEffort,
+      useWorktree: taskShape.shape.useWorktree,
+      worktreeBase: taskShape.shape.worktreeBase,
+      mergeTargetBranch: taskShape.shape.mergeTargetBranch,
       workflowMode: WORKFLOW_MODE.optional(),
-      reviewer: REVIEWER.describe(`批次默认（任务可逐个覆盖）。${REVIEWER_GUIDE}`),
+      reviewer: taskShape.shape.reviewer,
       run: z.boolean().optional(),
     },
   },

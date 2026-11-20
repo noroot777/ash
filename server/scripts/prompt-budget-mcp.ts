@@ -5,12 +5,16 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   "mcp/accept_task": 1750,
   "mcp/answer_question": 600,
   "mcp/ask_question": 1750,
-  "mcp/batch_create_tasks": 2300,
+  // 2026-11-20 -200（实测 2624 → 2066）：`defaults` 直接复用 tasks[] 的字段实例（序列化成 `$ref`），
+  // 不再自带一份「默认 xxx」说明；默认带审查、远端起点这两项功能加进来的那几句也压紧了。
+  "mcp/batch_create_tasks": 2100,
   "mcp/complete_task": 1450,
   "mcp/create_group": 400,
   "mcp/create_queue": 220,
+  // 2026-11-20 不变（实测 3317 → 2496）：批次默认那几个字段复用 tasks[] 的字段实例，审查说明不再发第二遍。
   "mcp/create_task_chain": 2550,
   "mcp/debate_reply": 1400,
+  // 只在老模式开着时注册（`LEGACY_ONLY_MCP_TOOLS`）；关着时这一条按设计量不到，测试里放过它。
   "mcp/dispatch": 2100,
   // 三块判据全文的唯一落脚处（见 PLACEMENT），所以它理应是工具里偏大的一条。
   "mcp/dispute_review": 3400,
@@ -28,7 +32,10 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   "mcp/pause_task": 950,
   // 2026-11-15 新增（2068 实测）：派活单。说明里只留「什么时候用、调完会怎样、别再自己建一遍」；
   // 字段大半是建任务那几个参数的原有说明（跟 batch_create_tasks 同一份 taskShape）。
-  "mcp/propose_dispatch": 2150,
+  // 2026-11-20 +330（2068 → 2447 实测）：两项已上线功能的字段说明——`reviewer`（派出去缺省带默认审查者、
+  // 只有用户明说才关）和 `worktreeBase` 认远端分支（先 fetch、合入目标落本地同名分支）。每段只出现一次，
+  // 已压过措辞；跟另外两个建任务工具不同，它没有批次默认那一层重复可以折掉。
+  "mcp/propose_dispatch": 2480,
   "mcp/queue_insert": 220,
   "mcp/queue_remove": 190,
   "mcp/queue_reorder": 270,
