@@ -1,6 +1,7 @@
 // 回复框顶上那一行「可以派出去的活」，以及正文任何位置都能敲的 `/派`。每一份是各自的任务（草稿按任务存）；
 // 派出去、叉掉都打到接口上，由测试那一侧接住记账。读全文的左抽屉照任务页挂一个宿主。
-// 有一份带着等裁定的驳回（框顶那一行让给裁定），一份分支已经清掉，一份上线前的老派活单，一份一件建议都没有（只看斜杠）。
+// 有一份带着等裁定的驳回（框顶那一行让给裁定），一份分支已经清掉，一份上线前的老派活单，一份一件建议都没有（只看斜杠）；
+// 两份是智能体停下来在等的一批（任务暂停、那一问是清单那句话）：一份带同批前置、还压着一条驳回，一份照一个接一个会互相等住。
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { FreeReviewDispute, FreeReviewRun, Task } from "@navi/shared";
@@ -60,6 +61,7 @@ function Stage({ name, suggestions = [], reviews: initial = [], task: patch = {}
           hasConversation
           override={reviews.length ? override : undefined}
           onSend={async (text) => { log(`__sent_${name}`, text); return { started: true } as never; }}
+          onAnswer={async (answer, input, attachments) => { log(`__answered_${name}`, { answer, input, attachments: attachments ?? [] }); }}
           onDiscuss={replyDiscuss({ task, onChanged: () => {} })}
           onDispatch={replyDispatch({ task, onCreated: (created) => log(`__created_${name}`, created.id), notify: (message) => log(`__notices_${name}`, message) })}
         />
@@ -86,6 +88,16 @@ createRoot(document.getElementById("root")!).render(
         {/* 接力过来的一件：指定的审查者是原机上的「严审」，这台机器上没有这一位。 */}
         <Stage name="lost" suggestions={[item("s-lost", "指定严审后接力过来的", { review: { reviewer: "严审" } })]} />
         <Stage name="slash" />
+        {/* 智能体等着的一批（派完就算完成）：第二件建在第一件上面；同时还有一条驳回在等裁定，这一批排在它前面。 */}
+        <Stage name="wait" reviews={disputed} task={{ status: "paused", question: "派出这 2 个任务（同时）：…" } as Partial<Task>} suggestions={[
+          item("s-w1", "先拆出公共的那一块", { batch: "b-wait", wait: "done", key: "a" }),
+          item("s-w2", "再接上新的入口", { batch: "b-wait", wait: "done", key: "b", prerequisites: ["a"] }),
+        ]} />
+        {/* 等着、要结果的一批：一个接一个排时第一件等着第二件，服务端会拒。 */}
+        <Stage name="deadlock" task={{ status: "paused", question: "派出这 2 个任务（一个接一个）：…" } as Partial<Task>} suggestions={[
+          item("s-d1", "等着后面那一件的", { batch: "b-lock", order: "serial", wait: "continue", key: "a", prerequisites: ["b"] }),
+          item("s-d2", "被前面等着的", { batch: "b-lock", order: "serial", wait: "continue", key: "b" }),
+        ]} />
       </main>
     </DraftProvider>
   </StrictMode>,

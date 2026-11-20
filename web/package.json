@@ -77,7 +77,7 @@
     "//test:reply-call": "回复框里 @ 一个人：默认问一句且跟原来的一次性召唤等价、@ 自己只有派出去、换做法/取消不丢字、派出去建的任务带着背景挂在这条名下且这条不多回合、在跑时也能派、失败全留着、跟裁定那一行和答题卡并存时框顶只有一行、/派。",
     "test:reply-call": "node --experimental-strip-types scripts/test-reply-call.mjs && node scripts/test-reply-call-dom.mjs",
     "test:reply-call-dom": "node scripts/test-reply-call-dom.mjs",
-    "//test:dispatch-suggestion-dom": "回复框顶上那一行可以派出去的活:一件一按就派、点标题选中后框变补一句(已有的字算补的话、底栏胶囊收起)、从哪开工两段、完整说明从左边出能改且派出去的是改过的、Esc 退出不丢字;好几件折成一行、叉掉、一个接一个全部派出去;框顶让给叫人和裁定;句中 /派 /讨论 只拿掉命令光标不动,路径网址和组字时不弹,敲全了没选就原样发。",
+    "//test:dispatch-suggestion-dom": "回复框顶上那一行可以派出去的活:一件一按就派、点标题选中后框变补一句(已有的字算补的话、底栏胶囊收起)、从哪开工两段、完整说明从左边出能改且派出去的是改过的、Esc 退出不丢字;好几件折成一行、叉掉、一个接一个全部派出去;框顶让给叫人和裁定;智能体在等的一批画在同一行(排在裁定前、不挂答题卡、缺省摊开、同批前置写成等 N),没选中时框就是发回去改(答那一问、一条不派),一个接一个互相等住时服务端的拒绝原样显示;句中 /派 /讨论 只拿掉命令光标不动,路径网址和组字时不弹,敲全了没选就原样发。",
     "test:dispatch-suggestion-dom": "node scripts/test-dispatch-suggestion-dom.mjs",
     "test:suggestion-withdrawals": "node --experimental-strip-types scripts/test-suggestion-withdrawals.mjs",
     "//test:free-review-delete": "派审对话框和审查者被删:四行字段、没有新建/删除入口、「管理审查者…」走到设置页;别处删掉选中项时回退并说一声、正在填的草稿不动;换任务/在飞请求/派审前核对;回车派审;这一次换个执行器点开才出。",

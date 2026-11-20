@@ -2,6 +2,9 @@
 // 一件时：记号、标题（点它 = 选中）、交给谁那颗胶囊、谁来审、描边的「派出去」、指到才出的叉。选中时下面多一段：一句为什么、
 // 从哪开工、完整说明；这时下面的输入区是「补一句」，右下角那颗写着「派出去」，所以行尾那颗不重复出现。
 // 好几件时平时只占一行「N 件可以派出去」，点开一行一件，多一组「同时 / 一个接一个」和「全部派出去」。
+// 建在别的几件上面的那一件，标题后面跟一句「等 2」（好几件时是行首的号，一件时是那一条的标题）。
+// 智能体停下来等的那一批（wait 不是 none）记号换成强调色、好几件全在等时那一行写「N 件等你派出」并缺省摊开；
+// 这时框里直接写的一句就是「发回去改」（useSuggestionDock.tsx）。
 // 状态和派出去那一下都在 useSuggestionDock.tsx，这里只画。
 import type { KeyboardEvent } from "react";
 import type { AgentExecutorProfile, AgentType } from "@navi/shared";
@@ -26,6 +29,10 @@ export type SuggestionRow = {
   filled: boolean;
   /** 看不出交给谁审（审查者清单没读到、指定的那一位这里认不出）时派不出去的原因（useReviewerList.ts `reviewHold`）。 */
   reviewHeld: string | null;
+  /** 智能体停下来在等这一件所在的那一批。 */
+  waiting: boolean;
+  /** 等哪几件做完再开工：同批的写行首的号（一件时写标题），已有的任务写标题。 */
+  after: string[];
 };
 
 export type SuggestionDockProps = {
@@ -71,11 +78,13 @@ function Row({ row, at, props }: { row: SuggestionRow; at: number | null; props:
   return (
     <>
       <div className="sg-row">
-        {at === null ? <ArrowBendUpRight size={14} className="sg-mark" aria-hidden="true" /> : <span className="sg-key" aria-hidden="true">{at}</span>}
+        {at === null ? <ArrowBendUpRight size={14} className="sg-mark" aria-hidden="true" />
+          : <span className="sg-key" aria-hidden="true">{at}</span>}
         <button type="button" className="sg-name" aria-pressed={armed} onClick={() => props.onArm(row.id)}
           aria-label={armed ? `「${title}」已选中，再点一下退出` : `选中「${title}」，补一句再派`}>
           <span>{title}</span>
         </button>
+        {row.after.length > 0 && <span className="sg-after">等 {row.after.join("、")}</span>}
         <span className="sg-gap" aria-hidden="true" />
         <RunTargetPicker
           label={`「${title}」交给 ${who}`}
@@ -129,20 +138,23 @@ export function SuggestionDock(props: SuggestionDockProps) {
     if (props.onEscape()) event.preventDefault();
   };
   const error = props.error && <p className="reply-dock-error" role="alert">{props.error}</p>;
+  const waiting = rows.filter((row) => row.waiting).length;
+  const className = `reply-dock sg${waiting ? " is-waiting" : ""}`;
+  const label = waiting === rows.length ? "等你派出的活" : "可以派出去的活";
   if (rows.length === 1) {
     return (
-      <div className="reply-dock sg" role="group" aria-label="可以派出去的活" onKeyDown={onKeyDown}>
+      <div className={className} role="group" aria-label={label} onKeyDown={onKeyDown}>
         <Row row={rows[0]!} at={null} props={props} />
         {error}
       </div>
     );
   }
   return (
-    <div className="reply-dock sg" role="group" aria-label="可以派出去的活" onKeyDown={onKeyDown}>
+    <div className={className} role="group" aria-label={label} onKeyDown={onKeyDown}>
       <div className="sg-row">
         <ArrowBendUpRight size={14} className="sg-mark" aria-hidden="true" />
         <button type="button" className="sg-name" aria-expanded={open} onClick={props.onToggle}>
-          <span>{rows.length} 件可以派出去</span>
+          <span>{rows.length} 件{waiting === rows.length ? "等你派出" : "可以派出去"}</span>
           <CaretDown size={11} weight="bold" aria-hidden="true" />
         </button>
         <span className="sg-gap" aria-hidden="true" />
@@ -159,8 +171,10 @@ export function SuggestionDock(props: SuggestionDockProps) {
         )}
       </div>
       {open && (
-        <ol className="sg-list" aria-label="可以派出去的活">
-          {rows.map((row, at) => <li key={row.id}><Row row={row} at={at + 1} props={props} /></li>)}
+        <ol className="sg-list" aria-label={label}>
+          {rows.map((row, at) => <li key={row.id} className={row.waiting && waiting < rows.length ? "is-waiting" : undefined}>
+            <Row row={row} at={at + 1} props={props} />
+          </li>)}
         </ol>
       )}
       {error}

@@ -146,16 +146,18 @@ export function ReplyBox({
     const sentSelection = sentSelections(uploads.attachments);
     return () => clearSent(draftAtSend, sentSelection);
   };
-  // 可以派出去的活（suggestions/useSuggestionDock.tsx）：框顶那一行，选中一件时这个框就是「补一句」。
+  // 可以派出去的活（suggestions/useSuggestionDock.tsx）：框顶那一行，选中一件时这个框就是「补一句」；
+  // 智能体停下来等的那一批也是它（这时没选中也借着框：写一句就是发回去改），那一问不再挂答题卡。
   const suggestion = useSuggestionDock({
     task, enabled: dispatchable && !task.archived, value, setValue,
     attachments: uploads.attachments.map((attachment) => attachment.path), uploading: uploads.uploading,
-    snapshotSent, dispatchTarget: dispatchDefault.value, focus: () => textareaRef.current?.focus(),
+    snapshotSent, dispatchTarget: dispatchDefault.value, tasks, onAnswer, focus: () => textareaRef.current?.focus(),
   });
-  // 框顶任何时候只有一行：叫着人时是做法那一行，否则有驳回在等裁定是裁定那一行，都没有才是可以派出去的活
-  // （让开不是丢掉，前面的事了了它再回来）。
+  // 框顶任何时候只有一行：叫着人时是做法那一行；智能体在等的那一批排在裁定前面（任务就停在它上面）；
+  // 否则有驳回在等裁定是裁定那一行，都没有才是可以派出去的活（让开不是丢掉，前面的事了了它再回来）。
   const callDock = !!call && (ability.dispatchable || ability.discussable);
-  const activeOverride = callDock ? undefined : override ?? suggestion;
+  const activeOverride = callDock ? undefined
+    : suggestion.holdsQuestion && suggestion.override ? suggestion.override : override ?? suggestion.override;
   // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
   const { take, takeInput } = overrideTake(activeOverride);
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
@@ -204,7 +206,7 @@ export function ReplyBox({
   // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
   // 之后选模型）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
-  const takeover = useQuestionTakeover(onAnswer ? task : null);
+  const takeover = useQuestionTakeover(onAnswer && !suggestion.holdsQuestion ? task : null);
   // 计划定稿后的「实施此计划？」也照这套占住回复框（PlanReadyCard.tsx）；有题在问、框被别的事接管时让开。
   const planTakeover = usePlanTakeover(task.id, takeover.card || take ? null : readyPlanFor(task, conversationItems ?? []));
   const covering = takeover.covering || planTakeover.covering;

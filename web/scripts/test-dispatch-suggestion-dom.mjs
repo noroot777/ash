@@ -12,6 +12,9 @@
 // ⑥ 这条任务的分支已经清掉了：「接着这条的代码」没了，建议说的从主分支开工照旧落在合入目标上，
 //    不落到项目此刻检出的那一支；
 // ⑧ 指定的审查者这里认不出（接力过来的）：胶囊写明找不到哪一位、派不出去且说清原因，不读成「不审查」；
+// ⑨ 智能体停下来等的一批（原派活单）：就画在这一行里、排在裁定前面、不另挂答题卡；「N 件等你派出」缺省摊开，
+//    同批前置写成「等 1」；没选中时框就是「发回去改」——回车把这句话作为那一问的答复交出去，一条不派；选中一件照样补一句；
+// ⑩ 等着的一批照一个接一个会互相等住：服务端拒了，原因原样写在那一行下面，那几件都还在；
 // ⑤ `/派` 在句中：从菜单里选中只拿掉命令（两边空格并成一个）、光标留在原处、叫上次那个人停在「派出去」；
 //    `/讨论` 句中也出；a/b、web/、http:// 不弹；输入法组字时不弹；句中敲全了 `/派` 没从菜单选、直接发 = 原样发出去。
 // 跑法：npm -w web run test:dispatch-suggestion-dom
@@ -23,6 +26,8 @@ const PROFILES = [
   { id: "profile-codex", name: "codex@local", type: "codex", isDefault: true },
   { id: "profile-claude", name: "claude@local", type: "claude", isDefault: true },
 ];
+
+const DEADLOCK = "「等着后面那一件的」要等「被前面等着的」做完，一个接一个排会互相等住。改成「同时」再派，或者发回去让它调整顺序";
 
 const web = await startWebServer();
 let browser;
@@ -45,6 +50,7 @@ try {
     let match = /^\/tasks\/([^/]+)\/dispatch-suggestions\/launch$/.exec(path);
     if (match) {
       requests.push({ kind: "launch", task: match[1], body: JSON.parse(request.postData() ?? "{}") });
+      if (match[1] === "t-deadlock") return json({ error: DEADLOCK }, 409);
       return json({ tasks: [] });
     }
     match = /^\/tasks\/([^/]+)\/dispatch-suggestions\/([^/]+)$/.exec(path);
@@ -244,6 +250,47 @@ try {
   await box("slash").press("Enter");
   await waitUntil(async () => (await logged("__sent_slash")).length === 1, "原样发出去");
   assert.deepEqual(await logged("__sent_slash"), ["我刚才输入了 /派 你去修"]);
+
+  // ⑨ 等着的一批：画在这一行里，裁定那一行和答题卡都不出。
+  const waiting = scope("wait").getByRole("group", { name: "等你派出的活" });
+  await waiting.waitFor();
+  assert.equal(await scope("wait").getByRole("group", { name: "怎么裁定这条驳回" }).count(), 0, "在等的一批排在裁定前面");
+  assert.equal(await scope("wait").locator(".question-card").count(), 0, "那一问不另挂答题卡");
+  assert.equal(await button("wait", "2 件等你派出").getAttribute("aria-expanded"), "true", "在等的一批缺省摊开");
+  const waitRows = scope("wait").locator(".sg-list > li");
+  assert.equal(await waitRows.count(), 2);
+  assert.doesNotMatch(await waitRows.nth(0).innerText(), /等 \d/, "第一件不等谁");
+  assert.match(await waitRows.nth(1).innerText(), /等 1/, "第二件写明等第一件");
+  assert.equal(await box("wait").getAttribute("aria-label"), "发回去改", "没选中时框就是发回去改");
+  assert.equal(await box("wait").getAttribute("placeholder"), "写一句发回去改…");
+  assert.equal(await button("wait", "发回去改").isDisabled(), true, "没写字发不出去");
+  assert.equal(await standing("wait").count(), 0, "底栏胶囊收起");
+  // 选中一件照样是补一句，Esc 回到发回去改。
+  await button("wait", "选中「先拆出公共的那一块」，补一句再派").click();
+  assert.equal(await box("wait").getAttribute("aria-label"), "给「先拆出公共的那一块」补一句");
+  await box("wait").press("Escape");
+  assert.equal(await box("wait").getAttribute("aria-label"), "发回去改", "退出选中回到发回去改");
+  await box("wait").fill("第一件不用拆，直接改入口");
+  await box("wait").press("Enter");
+  await waitUntil(async () => (await logged("__answered_wait")).length === 1, "回车把这句话作为答复交出去");
+  assert.deepEqual(await logged("__answered_wait"), [{
+    answer: "第一件不用拆，直接改入口", input: { questionKey: JSON.stringify(["派出这 2 个任务（同时）：…", [], []]) }, attachments: [],
+  }], "答的是那一问（带着题面）");
+  await waitUntil(async () => (await box("wait").inputValue()) === "", "发出去框清空");
+  assert.equal(launches("t-wait").length, 0, "发回去改一条不派");
+  assert.deepEqual(await logged("__sent_wait"), [], "不是普通消息");
+
+  // ⑩ 一个接一个会互相等住：服务端拒了，原因原样写出来，那几件都还在。
+  const lock = scope("deadlock").getByRole("group", { name: "等你派出的活" });
+  await lock.waitFor();
+  assert.equal(await scope("deadlock").getByRole("group", { name: "派出顺序" }).getByRole("button", { name: "一个接一个" }).getAttribute("aria-pressed"), "true",
+    "照摆的时候说定的一个接一个");
+  assert.match(await scope("deadlock").locator(".sg-list > li").nth(0).innerText(), /等 2/);
+  await waitUntil(async () => await button("deadlock", "全部派出去").isEnabled(), "读到分支后能派");
+  await button("deadlock", "全部派出去").click();
+  await waitUntil(async () => (await lock.getByRole("alert").count()) === 1, "拒了要说出来");
+  assert.equal(await lock.getByRole("alert").innerText(), DEADLOCK, "原因原样显示");
+  assert.equal(await scope("deadlock").locator(".sg-list > li").count(), 2, "那几件都还在");
 
   console.log("dispatch suggestion dom test passed");
 } finally {

@@ -63,7 +63,10 @@ export type ReplyBoxProps = {
   tasks?: TaskListItem[];
   /** 这个框此刻被借用（等你裁定时框顶那一行）；见 replyOverride.ts。 */
   override?: ReplyOverride;
-  /** 这条任务自己有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
+  /**
+   * 这条任务自己有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）；那一问是智能体在等的一批派活时
+   * 不挂答题卡，由框顶那一行接住，写一句就是发回去改（suggestions/useSuggestionDock.tsx）。
+   */
   onAnswer?: (answer: string, input: QuestionAnswerInput, attachments?: string[]) => Promise<void>;
   /** 「派出去的活交给谁」（胶囊点开那一层里的一行）：null = 同这里。不给就不出这一行。 */
   onDispatchTargetChange?: (target: DispatchRunTarget | null) => Promise<void>;

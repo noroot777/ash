@@ -7,7 +7,7 @@ import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 import type { ReviewerList } from "./useReviewerList.ts";
 
 /**
- * 派出去那几处（派活单的每一行、可以派出去的活那一行、回复框里「派出去」）跟「交给谁」那颗胶囊并排的
+ * 派出去那几处（回复框顶上要派出去的活那一行、回复框里「派出去」）跟「交给谁」那颗胶囊并排的
  * 「谁来审」：同一身小胶囊，一段，写着这条建出来会交给哪位审查者，没人审就写「不审查」。点开一列审查者加一行
  * 「不审查」。只多这一个选择 —— 轮数和检查类型跟默认走（shared/src/review-on-create.ts），要改的人任务建出来
  * 之后在预约审查框里改。

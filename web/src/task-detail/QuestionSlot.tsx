@@ -30,17 +30,16 @@ export function useQuestionTakeover(task: TaskListItem | null): QuestionTakeover
   const [shown, setShown] = useState<TaskListItem | null>(asking);
   const [leaving, setLeaving] = useState(false);
   // 收起记在这一次提问上：换了一道题（或换了任务）就重新展开；题走了就忘掉，同一句话再问一次也是新的一次。
-  // 那一问是一批派活在等（shared/src/dispatch-suggestion.ts）时反过来，缺省收起：要派的那几件在回复框顶上，
-  // 框得露出来；展开就是对那一问回一句话（= 发回去改）。
+  // 那一问是一批派活在等（shared/src/dispatch-suggestion.ts）时，任务页由回复框顶上那一行接住、不传给这里
+  // （ReplyBox `holdsQuestion`）；派不出去的宿主（远程任务页）照普通提问画：清单那句话是题目，回一句话就是发回去改。
   const [collapsedKey, setCollapsedKey] = useState<string | null>(null);
-  const [openedKey, setOpenedKey] = useState<string | null>(null);
   useEffect(() => {
     if (asking) {
       setShown(asking);
       setLeaving(false);
       return;
     }
-    const gone = () => { setShown(null); setLeaving(false); setCollapsedKey(null); setOpenedKey(null); };
+    const gone = () => { setShown(null); setLeaving(false); setCollapsedKey(null); };
     if (!shown || motionReduced()) {
       gone();
       return;
@@ -51,18 +50,16 @@ export function useQuestionTakeover(task: TaskListItem | null): QuestionTakeover
   }, [asking]);
   const card = asking ?? shown;
   const key = card ? cardKey(card) : null;
-  const waiting = !!card && waitingOnDispatch(card);
-  const collapsed = !!key && (waiting ? openedKey !== key : collapsedKey === key);
+  const collapsed = !!key && collapsedKey === key;
   return {
     card,
     leaving: leaving && !asking,
     collapsed,
-    setCollapsed: (next) => (waiting ? setOpenedKey(next ? null : key) : setCollapsedKey(next ? key : null)),
+    setCollapsed: (next) => setCollapsedKey(next ? key : null),
     covering: !!card && !collapsed,
   };
 }
 
-const waitingOnDispatch = (task: TaskListItem) => (task.dispatchSuggestions ?? []).some((item) => item.wait !== "none");
 // 等着的一批派活摆第二批时题面可能一字不差：带上那一批的号，换一批就是新的一次。
 const cardKey = (task: TaskListItem) =>
   `${task.id}:${questionKey(task)}:${(task.dispatchSuggestions ?? []).find((item) => item.wait !== "none")?.batch ?? ""}`;
