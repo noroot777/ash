@@ -55,6 +55,7 @@ final class ServerLauncher {
   }
 
   func ensureRunningSync(timeout: TimeInterval) -> Outcome {
+    if case .failure(let error) = RuntimeStore.selected { return .failed("运行时准备失败：\(error.localizedDescription)") }
     if let settled = Self.settle(NaviHealth.probeSync()) { return settled }
     if let hold { return .failed(hold) }
     guard NaviConfig.isLocal else {
@@ -93,7 +94,26 @@ final class ServerLauncher {
       // 进程一起来就记下 pid：这个启动器等不到它应答（被退掉、超时）也不要紧，之后谁看到它应答
       // 都能认出是它、替它确认（见 settle）。
       ServerRecord.write(pid: Int(pid))
-      return waitReady(pid: pid, timeout: timeout)
+      let outcome = waitReady(pid: pid, timeout: timeout)
+      if case .ready = outcome { RuntimeRecovery.confirmed(); return outcome }
+      guard kill(pid, 0) != 0 && errno == ESRCH else { return outcome }
+      do {
+        if let previous = try RuntimeRecovery.restoreBeforeAdoption() {
+          switch spawnDetached(runtime: previous) {
+          case .failure(let reason): return .failed("新版启动失败，库已恢复，但旧服务也未启动：\(reason)")
+          case .success(let restoredPID):
+            if case .ready = waitReady(pid: restoredPID, timeout: timeout) {
+              if let record = ServerRecord.read() {
+                let restored = ServerRecord(pid: Int(restoredPID), bundleVersion: record.bundleVersion, confirmedAt: Date())
+                try JSONEncoder().encode(restored).write(to: ServerRecord.url, options: .atomic)
+              }
+              return .failed("新版迁移未完成，已恢复迁移前的库并启动旧运行时；任务继续运行。修复新版后点「重试」。")
+            }
+            return .failed("库已恢复，但旧服务未就绪；恢复点仍在 backups 目录。")
+          }
+        }
+      } catch { return .failed("新版启动失败：\(error.localizedDescription)") }
+      return outcome
     }
   }
 
@@ -139,6 +159,9 @@ final class ServerLauncher {
       if NaviConfig.isLocal {
         ServerRecord.confirmServing(pid: instance.pid)
         ServedInstance.observe(instance)
+        if instance.codeDir.map({ NaviHealth.samePath($0, NaviConfig.runtimeURL.path) }) == true {
+          DispatchQueue.global(qos: .utility).async { RuntimeStore.reclaim() }
+        }
       }
       return .ready
     }
@@ -146,7 +169,7 @@ final class ServerLauncher {
 
   private enum Spawned { case success(Int32), failure(String) }
 
-  private func spawnDetached() -> Spawned {
+  private func spawnDetached(runtime: URL = NaviConfig.runtimeURL) -> Spawned {
     let shell = Process()
     shell.executableURL = URL(fileURLWithPath: Self.loginShell())
     // 登录 shell 只负责拼出 PATH、LANG 这些。.zprofile / .zshrc 跑在这段命令**之前**，里面给开发实例
@@ -157,7 +180,7 @@ final class ServerLauncher {
     // 这几个是给 server 的，它读完就从自己的环境里删掉（见 server/src/paths.ts、local-only.ts、
     // window-port.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
     let data = Self.quoted(NaviConfig.dataURL.path)
-    let node = Self.quoted(NaviConfig.nodeURL.path)
+    let node = Self.quoted(runtime.appendingPathComponent("node/bin/node").path)
     // 默认端口不传 PORT：server 的环境会一路继承给 agent 与应用内终端，多一个 PORT 会让
     // 里面起的前端 dev server 去抢 navi 的端口。
     let port = NaviConfig.port == 4317 ? "" : " PORT=\(NaviConfig.port)"
@@ -165,7 +188,7 @@ final class ServerLauncher {
     let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT -u ASH_DATA_DIR -u HARNESS_DATA_DIR"
       + " NAVI_DATA_DIR=\(data) NAVI_DESKTOP_APP=1 NAVI_LOCAL_ONLY=\(localOnly)"
       + " NAVI_WINDOW_PORT=\(NaviConfig.windowPort)\(port) "
-      + "\(node) \(Self.quoted(NaviConfig.detachScriptURL.path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(NaviConfig.serverEntryURL.path))"
+      + "\(node) \(Self.quoted(runtime.appendingPathComponent("scripts/start-detached.mjs").path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(runtime.appendingPathComponent("server/dist/index.js").path))"
     shell.arguments = ["-ilc", script]
     shell.environment = Self.terminalLikeEnvironment()
     let launchLog = NaviConfig.logURL.appendingPathComponent("launch-\(UUID().uuidString).log")

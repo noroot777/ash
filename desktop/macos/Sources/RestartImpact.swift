@@ -60,7 +60,7 @@ enum ImpactVerdict {
 
 enum RestartImpactProbe {
   /// 只在后台队列上调。
-  static func assessSync() -> ImpactVerdict {
+  static func assessSync(forRuntimeSwitch: Bool = false) -> ImpactVerdict {
     guard NaviConfig.isLocal else { return .clear(.remote) }
     switch NaviHealth.probeSync() {
     case .down:
@@ -75,13 +75,13 @@ enum RestartImpactProbe {
       return .clear(.foreign(pid: instance.pid))
     case .navi(let instance):
       guard let pid = instance.pid, pid > 1 else { return .unknown("服务没报自己的进程号") }
-      return askImpact(of: .ours(pid: pid), instance: instance.id)
+      return askImpact(of: .ours(pid: pid), instance: instance.id, runtime: forRuntimeSwitch ? instance.codeDir : nil)
     }
   }
 
   /// 带着认过的那一份的实例号问：问到之前端口换了人，新来的那份不答（server/src/instance-binding.ts），
   /// 闸拿不到别人的名单。
-  private static func askImpact(of target: ServiceTarget, instance: String?) -> ImpactVerdict {
+  private static func askImpact(of target: ServiceTarget, instance: String?, runtime: String?) -> ImpactVerdict {
     var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // 与 restart.mjs 同一张凭证：单实例锁里那串 token（文件 0600）。本机直连多半用不上，带着不吃亏。
@@ -98,19 +98,73 @@ enum RestartImpactProbe {
         verdict = .unknown("答复看不懂（服务端版本太旧？）")
         return
       }
-      let disrupted = impact.disrupted
+      var disrupted = impact.disrupted
+      if let runtime {
+        disrupted = impact.interrupted.map { ($0.title, $0.reason ?? "无法接管") }
+          + impact.resumes.map { ($0.title, "调度台当前回合不能无损接管") }
+        if !RuntimeStore.compatible(runtime) {
+          disrupted += impact.survives.map { ($0.title, "首次旧布局迁移或数据迁移不兼容，需等这一轮结束") }
+          disrupted += impact.mcpDisrupted.map { ($0.title, "旧布局的 MCP 仍在使用 app 包") }
+        }
+      }
       verdict = disrupted.isEmpty ? .clear(target) : .disrupts(target, disrupted)
     }.resume()
     done.wait()
     return verdict
   }
 
-  private static func hostToken() -> String? {
+  static func hostToken() -> String? {
     guard let db = try? DatabaseFile.existing(in: NaviConfig.dataURL) else { return nil }
     for lock in DatabaseFile.lockFiles(of: db) {
       if let data = try? Data(contentsOf: lock), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
          let token = json["token"] as? String { return token }
     }
     return nil
+  }
+}
+
+enum RuntimeHandoff {
+  static func freeze(_ target: ServiceTarget?) throws -> NaviInstance? {
+    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
+          let runtime = instance.codeDir else { return nil }
+    if !RuntimeStore.managed(runtime) {
+      if RuntimeStore.managed(NaviConfig.runtimeURL.path), RestartImpactProbe.assessSync(forRuntimeSwitch: true).needsConsent {
+        throw RuntimeStore.Failure("首次从 app 内运行的旧布局迁移，需要等待任务及 MCP 结束一次；现有进程不能自动改用新路径。")
+      }
+      return nil
+    }
+    guard target == .ours(pid: instance.pid ?? 0), let id = instance.id else {
+      throw RuntimeStore.Failure("切换前服务身份发生变化，未停止服务")
+    }
+    let (_, manifest) = try RuntimeStore.manifest(NaviConfig.runtimeURL)
+    try send("POST", id: id, body: ["protocol": manifest.protocol, "schema": manifest.schema])
+    return instance
+  }
+
+  static func cancel(_ instance: NaviInstance?) {
+    if let id = instance?.id { try? send("DELETE", id: id, body: nil) }
+  }
+
+  private static func send(_ method: String, id: String, body: [String: Any]?) throws {
+    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/runtime-handoff"), timeoutInterval: 12)
+    request.httpMethod = method
+    request.setValue(id, forHTTPHeaderField: "x-navi-instance")
+    request.setValue(RestartImpactProbe.hostToken(), forHTTPHeaderField: "x-navi-host-token")
+    if let body {
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.httpBody = try JSONSerialization.data(withJSONObject: body)
+    }
+    let done = DispatchSemaphore(value: 0)
+    var result: Result<Void, Error> = .failure(RuntimeStore.Failure("切换未获答复"))
+    URLSession.shared.dataTask(with: request) { data, response, error in
+      defer { done.signal() }
+      if let error { result = .failure(error); return }
+      let status = (response as? HTTPURLResponse)?.statusCode
+      if status == 200 { result = .success(()); return }
+      let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? "没有答复"
+      result = .failure(RuntimeStore.Failure("服务未同意无损切换：\(text)"))
+    }.resume()
+    done.wait()
+    try result.get()
   }
 }

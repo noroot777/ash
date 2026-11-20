@@ -57,10 +57,11 @@ export const RECONNECT_WINDOW_MS = Number(readEnv(process.env, "NAVI_RECONNECT_M
 export function retryableCode(e: unknown): string | null {
   const cause = (e as { cause?: unknown })?.cause;
   const code = (cause as { code?: string })?.code;
-  if (code && UNDELIVERED_NET_CODES.has(code)) return code;
+  if (code === "NAVI_RUNTIME_UNDELIVERED") return code;
   const inner = (cause as { errors?: Array<{ code?: string }> })?.errors;
-  const first = inner?.find((x) => x?.code && UNDELIVERED_NET_CODES.has(x.code));
-  return first?.code ?? null;
+  if (inner?.length) return inner.every((entry) => entry?.code && UNDELIVERED_NET_CODES.has(entry.code))
+    ? inner[0].code ?? null : null;
+  return code && UNDELIVERED_NET_CODES.has(code) ? code : null;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -90,6 +91,10 @@ async function request(method: string, path: string, body: unknown, directionTok
         headers: Object.keys(headers).length ? headers : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
+      if (res.status === 503 && res.headers.get("x-navi-undelivered") === "runtime-handoff-v1") {
+        await res.body?.cancel();
+        throw new Error("运行时切换，请求未执行", { cause: { code: "NAVI_RUNTIME_UNDELIVERED" } });
+      }
       break;
     } catch (e) {
       const code = retryableCode(e);

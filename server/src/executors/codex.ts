@@ -352,7 +352,7 @@ async function* codexStreamEvents(
   // 队列、唤醒、收尾和**图片记账的时点**都在这条共用流水线里(见 event-queue.ts):字节在
   // push 的那一刻就冻住,交代排在队列之后 —— 挂反了,正文写着「修改前是红色」就会存成后来
   // 那张蓝图(审查第 5 轮 R1)。
-  const events = eventQueue({ images });
+  const events = eventQueue({ child, images });
   const push = (event: AgentEvent) => events.push(event);
 
   const rl = createInterface({ input: child.stdout! });

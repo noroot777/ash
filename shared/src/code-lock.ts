@@ -13,7 +13,7 @@
 //   · 锁拿不到（文件缺了、打不开）不照跑：说清原因退出，否则安装器会把它当成没人用。
 // 所以入口只做这一件事，业务模块一律在拿到锁之后动态加载（server/src/index.ts、mcp/src/index.ts）。
 // 仓库检出不换包，不锁。
-import { closeSync, constants, fstatSync, openSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,20 @@ import { fileURLToPath } from "node:url";
 export const CODE_LOCK_NAME = ".in-use";
 // macOS <fcntl.h> 的 O_SHLOCK：open 的同时拿 flock 共享锁。node 的 fs.constants 里没有这一项。
 const O_SHLOCK = 0x10;
+let codeDescriptor: number | null = null;
+
+export function releaseCodeLockForExec(): void {
+  if (codeDescriptor !== null) closeSync(codeDescriptor);
+  codeDescriptor = null;
+}
+
+export function inheritCodeLock<T extends string | number>(stdio: T[]): Array<T | number> {
+  if (codeDescriptor === null) return stdio;
+  const inherited: Array<T | number | "ignore"> = [...stdio];
+  while (inherited.length < 8) inherited.push("ignore");
+  inherited.push(codeDescriptor);
+  return inherited as Array<T | number>;
+}
 
 function pause(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -35,7 +49,7 @@ export function holdCodeLock(): void {
   if (process.platform !== "darwin") return;
   // node 加载模块时已经按真实路径解析过，这里不再 realpath：换包的那一下路径暂时不存在，realpath 会失败。
   const root = fileURLToPath(new URL("../..", import.meta.url));
-  if (!root.includes(".app/Contents/")) return;
+  if (!root.includes(".app/Contents/") && !existsSync(join(root, "runtime-manifest.json"))) return;
   const file = join(root, CODE_LOCK_NAME);
   const deadline = Date.now() + 30_000;
   for (;;) {
@@ -57,7 +71,10 @@ export function holdCodeLock(): void {
     const held = fstatSync(fd);
     let current: ReturnType<typeof statSync> | null = null;
     try { current = statSync(file); } catch {}
-    if (current && current.ino === held.ino && current.dev === held.dev) return;
+    if (current && current.ino === held.ino && current.dev === held.dev) {
+      codeDescriptor = fd;
+      return;
+    }
     // 锁着的是换下去的旧文件：放掉，锁路径上现在那一个。
     closeSync(fd);
     if (Date.now() >= deadline) refuse(file, "换包后路径上的锁文件一直对不上");

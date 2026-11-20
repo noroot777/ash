@@ -32,6 +32,7 @@ import { mountImRoutes, mountImSweeps } from "./im/routes.js";
 import { feishuHealthPublic } from "./im/channel.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { mountWorkflowRoutes } from "./workflows.js";
+import { mountRuntimeHandoff } from "./runtime-handoff.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
 import { mountTaskRuntimeRoutes } from "./task-runtime-routes.js";
 import { mountPreviewAssistRoutes } from "./preview-assist-routes.js";
@@ -162,6 +163,7 @@ api.get("/restart-impact", async (c) => {
   const { restartImpact } = await import("./reattach.js");
   return c.json(await restartImpact());
 });
+mountRuntimeHandoff(api);
 
 // ── global settings ──────────────────────────────────────────────────────
 // 「server 跑在哪台机器上」。**不进 /settings** —— 那是一张可写的持久化设置表

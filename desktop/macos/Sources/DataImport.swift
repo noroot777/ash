@@ -42,7 +42,7 @@ enum DataImport {
   typealias Failure = SQLiteFile.Failure
 
   /// 数据根里本来就会有的 app 自己的东西：导入前它们可以在，源目录里同名的不搬。
-  static let appOwned: Set<String> = ["logs", "downloads", "backups", ".mac-launch.lock", ServerRecord.fileName,
+  static let appOwned: Set<String> = ["logs", "downloads", "backups", ".runtimes", ".runtime-recovery.json", ".mac-launch.lock", ServerRecord.fileName,
                                       Maintenance.fileName, ".DS_Store"]
   private static let journalName = ".import-publishing.json"
   private static let stagingPrefix = ".import-staging-"

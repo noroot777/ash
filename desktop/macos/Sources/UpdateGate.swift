@@ -104,6 +104,7 @@ final class UpdateGate {
   /// 正在停服务 / 备份的那一步回来时认得出自己已经作废（见 `settle`），由它收尾。
   func abandon(_ reason: String) {
     guard case .update = purpose else { return }
+    RuntimeStore.releaseBundleUpdate()
     log("Sparkle 放弃了这次更新（\(reason)）：作废排着的安装")
     epoch += 1
     stopPolling()
@@ -125,6 +126,12 @@ final class UpdateGate {
     epoch += 1
     let mine = epoch
     let quitting = !quitReplies.isEmpty
+    if case .update = purpose, RuntimeStore.managed(NaviConfig.runtimeURL.path),
+       case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
+       let code = instance.codeDir, RuntimeStore.managed(code) {
+      finish(stale: false)
+      return
+    }
     assess { [self] verdict in
       guard mine == epoch else { return }
       guard verdict.needsConsent else { prepare(verdict.target); return }
@@ -147,7 +154,7 @@ final class UpdateGate {
 
   private func assess(_ completion: @escaping (ImpactVerdict) -> Void) {
     DispatchQueue.global(qos: .userInitiated).async {
-      let verdict = RestartImpactProbe.assessSync()
+      let verdict = RestartImpactProbe.assessSync(forRuntimeSwitch: RuntimeStore.managed(NaviConfig.runtimeURL.path))
       DispatchQueue.main.async { completion(verdict) }
     }
   }
@@ -214,17 +221,26 @@ final class UpdateGate {
     } catch {
       return .failed("\(error.localizedDescription)：先没停服务，更新没装。")
     }
+    let frozen: NaviInstance?
+    do { frozen = try RuntimeHandoff.freeze(target) }
+    catch {
+      maintenance.end()
+      return .failed(error.localizedDescription)
+    }
     switch ServerShutdown.stop(expecting: target, timeout: shutdownTimeout) {
     case .changed(let why):
+      RuntimeHandoff.cancel(frozen)
       maintenance.end()
       return .changed(why)
     case .failed(let reason):
+      RuntimeHandoff.cancel(frozen)
       maintenance.end()
       return .failed(reason)
     case .stopped(let pid):
       logger.notice("服务已下线（进程 \(pid.map(String.init) ?? "本来就不在", privacy: .public)）")
       do {
         let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
+        if let previous = frozen?.codeDir { try RuntimeRecovery.record(previous: previous, backup: backup) }
         logger.notice("库已备份：\(backup?.path ?? "数据根里还没有库，不用备份", privacy: .public)")
         return .done(maintenance)
       } catch {
@@ -257,6 +273,10 @@ final class UpdateGate {
   }
 
   private func finish(stale: Bool) {
+    if !stale {
+      do { try RuntimeStore.protectBundleUpdate() }
+      catch { fail(error.localizedDescription); return }
+    }
     let run = proceeds
     let replies = quitReplies
     proceeds = []
@@ -283,6 +303,11 @@ final class UpdateGate {
     let replies = quitReplies
     quitReplies = []
     if replies.isEmpty {
+      report(reason)
+      return
+    }
+    if RuntimeStore.managed(NaviConfig.runtimeURL.path) {
+      replies.forEach { $0(false) }
       report(reason)
       return
     }

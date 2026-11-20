@@ -4,4 +4,5 @@
 import { holdCodeLock } from "@navi/shared/code-lock";
 
 holdCodeLock();
+await (await import("./runtime-redirect.js")).redirectPackagedMcp();
 await import("./main.js");
