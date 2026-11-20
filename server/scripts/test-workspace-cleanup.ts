@@ -174,6 +174,33 @@ try {
       assert.equal(git(repo, "status", "--porcelain"), "");
       git(repo, "switch", "-q", "main");
     }
+    { // 删之前看到的是别名，看完被换成同一提交上的普通分支、还被检出了（审查第 1 轮 F1）：不许删
+      const taskId = "raceAlias06";
+      const branch = worktreeBranchName(taskId);
+      const tip = git(repo, "rev-parse", "main");
+      git(repo, "symbolic-ref", `refs/heads/${branch}`, "refs/heads/main");
+      const { value, switched, log } = await racing({ repo, branch, after: true, when: ["symbolic-ref", "-q", `refs/heads/${branch}`],
+        prep: `"$SHIM_GIT" -C "$SHIM_REPO" update-ref --no-deref refs/heads/${branch} HEAD` },
+      () => discardTaskWorkspace(repo, taskId, { worktree: false, branch: true, forceBranchAt: tip }));
+      assert.equal(switched, true, `前提：别名被换成普通分支并检出了（${log}）`);
+      assert.equal(value.branchDeleted, false, "类型变了就不删");
+      assert.match(value.branchError ?? "", /已经不是/);
+      assert.equal(git(repo, "symbolic-ref", "HEAD"), `refs/heads/${branch}`);
+      assert.equal(git(repo, "rev-parse", "HEAD"), tip, "那份检出的分支还在");
+      assert.equal(git(repo, "status", "--porcelain"), "", "没有凭空多出的暂存");
+      git(repo, "switch", "-q", "main");
+      git(repo, "branch", "-D", branch);
+    }
+    { // 一直是别名：照删别名本身，它指向的 main 原样留着
+      const taskId = "aliasKeep06";
+      const branch = worktreeBranchName(taskId);
+      const tip = git(repo, "rev-parse", "main");
+      git(repo, "symbolic-ref", `refs/heads/${branch}`, "refs/heads/main");
+      const res = await discardTaskWorkspace(repo, taskId, { worktree: false, branch: true, forceBranchAt: tip });
+      assert.equal(res.branchDeleted, true, res.branchError ?? "别名应被删除");
+      assert.equal(branchExists(branch), false);
+      assert.equal(git(repo, "rev-parse", "refs/heads/main"), tip, "main 原样还在");
+    }
   }
 
   console.log("删除任务的 worktree/分支清理：全部通过");

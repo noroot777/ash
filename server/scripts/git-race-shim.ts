@@ -17,13 +17,19 @@ export type Race = {
   when: string[];
   /** true = 那条命令执行完再 switch（「看完一眼」之后）；缺省 = 执行之前。 */
   after?: boolean;
+  /** true = `switch -c`：在当前提交上新建分支切过去（不拿索引锁）。 */
+  create?: boolean;
+  /** switch 之前先跑的 sh 片段（`$SHIM_GIT` 是真 git，`$SHIM_REPO` 是项目目录），同样不带被包装命令的 GIT_* 环境。 */
+  prep?: string;
 };
 
 export function raceShim(root: string) {
   const dir = join(root, "git-race-shim");
   mkdirSync(dir, { recursive: true });
   const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-  const other = `env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE -u GIT_OPTIONAL_LOCKS "${realGit}" -C "$SHIM_REPO" switch -q "$SHIM_BRANCH" 2>>"$SHIM_MARK"; echo "switch=$?" >>"$SHIM_MARK"`;
+  const clean = "env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE -u GIT_OPTIONAL_LOCKS";
+  const other = `{ [ -z "$SHIM_PREP" ] || ${clean} SHIM_GIT="${realGit}" sh -c "$SHIM_PREP" >>"$SHIM_MARK" 2>&1; }; `
+    + `${clean} "${realGit}" -C "$SHIM_REPO" switch -q $SHIM_CREATE "$SHIM_BRANCH" 2>>"$SHIM_MARK"; echo "switch=$?" >>"$SHIM_MARK"`;
   writeFileSync(join(dir, "git"), [
     "#!/bin/sh",
     'if [ -n "$SHIM_REPO" ] && [ ! -e "$SHIM_MARK" ]; then',
@@ -43,13 +49,14 @@ export function raceShim(root: string) {
     "",
   ].join("\n"), { mode: 0o755 });
   let seq = 0;
-  const keys = ["PATH", "SHIM_REPO", "SHIM_BRANCH", "SHIM_MARK", "SHIM_WHEN", "SHIM_AFTER"];
+  const keys = ["PATH", "SHIM_REPO", "SHIM_BRANCH", "SHIM_MARK", "SHIM_WHEN", "SHIM_AFTER", "SHIM_CREATE", "SHIM_PREP"];
   /** 跑 `run`，期间第一条命中的 git 触发一次 switch。`switched` = null 时没触发。 */
   return async <T>(race: Race, run: () => Promise<T>): Promise<{ value: T; switched: boolean | null; log: string }> => {
     const mark = join(dir, `mark-${seq++}`);
     const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     Object.assign(process.env, { PATH: `${dir}:${process.env.PATH}`, SHIM_REPO: race.repo, SHIM_BRANCH: race.branch,
-      SHIM_MARK: mark, SHIM_WHEN: race.when.join(" "), SHIM_AFTER: race.after ? "1" : "" });
+      SHIM_MARK: mark, SHIM_WHEN: race.when.join(" "), SHIM_AFTER: race.after ? "1" : "", SHIM_CREATE: race.create ? "-c" : "",
+      SHIM_PREP: race.prep ?? "" });
     try {
       const value = await run();
       const log = existsSync(mark) ? readFileSync(mark, "utf8") : "";

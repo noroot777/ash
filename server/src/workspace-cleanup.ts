@@ -118,7 +118,9 @@ export async function discardTaskWorkspace(
  *    在占着的时候删;占不住(已被检出 / 开不出来)就不删。删完拆占位时那份临时 worktree 的 HEAD 悬空,
  *    `worktree remove --force` 照样拆得掉,它里面一个文件都没有。分支是符号引用别名时不占:git 检出别名会
  *    顺着解到它指向的分支(HEAD 永远不会指着别名本身),删别名悬空不了任何检出;而拿别名去开占位 worktree,
- *    git 会把它指向的那个分支再检出一份,不拒。
+ *    git 会把它指向的那个分支再检出一份,不拒。但「它是别名」是删之前看的,看完它可能被换成同一提交上的
+ *    普通分支再被检出(审查第 1 轮 F1 实测),旧值比较只比提交、认不出类型变了 —— 所以别名用 `symref-delete
+ *    <引用> <原目标>` 删:「仍是指向那个目标的别名」和「删」在同一个引用事务里,类型一变 git 就拒,不删。
  *  · 只删这个名字本身(`--no-deref`):不加时 update-ref 会顺着符号引用删掉它指向的分支 ——
  *    `navi/<id8>` 是指向 main 的别名时,删掉的是 main(第 2 轮审查实测)。
  *  · 删掉 `branch.<name>.*` 配置节:否则取回后同名分支重建,会沿用旧的上游等设置。
@@ -126,12 +128,17 @@ export async function discardTaskWorkspace(
 async function deleteBranchAt(repo: string, branch: string, expected: string): Promise<void> {
   const checkout = await registeredCheckout(repo, branch);
   if (checkout.path) throw new Error(`分支 ${branch} 正被工作区 ${checkout.path} 检出，不能删除`);
-  const remove = () => exec("git", ["-C", repo, "update-ref", "--no-deref", "-d", `refs/heads/${branch}`, expected])
+  const ref = `refs/heads/${branch}`;
+  const remove = () => exec("git", ["-C", repo, "update-ref", "--no-deref", "-d", ref, expected])
     .then(() => null, (error: unknown) => error);
-  const alias = await exec("git", ["-C", repo, "symbolic-ref", "-q", `refs/heads/${branch}`]).then(() => true, () => false);
+  const alias = await exec("git", ["-C", repo, "symbolic-ref", "-q", ref]).then((r) => r.stdout.trim() || null, () => null);
   let failed: unknown;
-  if (alias) failed = await remove();
-  else {
+  if (alias) {
+    failed = await exec("git", ["-C", repo, "update-ref", "--no-deref", "--stdin"], { input: `symref-delete ${ref} ${alias}\n` })
+      .then(() => null, (error: unknown) => new Error(/unknown command/i.test(gitError(error))
+        ? `分支 ${branch} 是指向 ${alias} 的别名，这个 git 版本没法在一个引用事务里核对并删掉它（需要 git 2.46 以上），没有删`
+        : `分支 ${branch} 删之前是指向 ${alias} 的别名，删的那一刻已经不是了（${gitError(error)}），没有删；重试会按它现在的样子重新判断`));
+  } else {
     const claim = await whileBranchClaimed(repo, branch, remove);
     if (!claim.claimed) {
       throw new Error(claim.checkedOutAt

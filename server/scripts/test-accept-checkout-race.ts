@@ -1,11 +1,12 @@
-// 验收合并在「目标分支就检出在项目目录」时的竞态（git-checkout-land.ts）：锁外核完干净、目标检出在这里之后，
-// 另一个终端切了分支 —— 原先的 `git merge` 对的是「届时的 HEAD」，合并就落进了那个分支。现在合并在旁边的
-// 临时检出里合，持 index.lock 核过 HEAD 才落进来：切走了就什么都不动；持锁期间想切，git 当场拒。
+// 验收合并在「目标分支就检出在项目目录」时的竞态（git-merge-locked.ts）：锁外核完干净、目标检出在这里之后，
+// 另一个终端切了分支 —— 原先的 `git merge` 对的是「届时的 HEAD」，合并就落进了那个分支。现在持着 index.lock
+// 核过 HEAD 再用临时索引就地合：核之前切走了就什么都不动；持锁期间想切，git 当场拒；不拿锁的 `switch -c`
+// 抢进来时，按合完的真实状态回报，不把没落进目标的合并说成成功、也不留下对不上的索引。钩子照旧在项目目录里跑。
 //
-// 用 PATH 上的 git 包装（git-race-shim.ts）在关键那条命令前后插一次 `git switch side`。每个用例自带临时仓库。
+// 用 PATH 上的 git 包装（git-race-shim.ts）在关键那条命令前后插一次 `git switch`。每个用例自带临时仓库。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTmpStage } from "./tmp-db.js";
@@ -49,7 +50,8 @@ try {
     };
     const clean = (repo: string, what: string) => {
       assert.equal(git(repo, "status", "--porcelain"), "", `${what}：项目目录没有凭空多出的暂存或改动`);
-      assert.equal(git(repo, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length, 2, `${what}：临时合并 worktree 拆掉了`);
+      assert.equal(git(repo, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length, 2, `${what}：没有遗留多余的 worktree`);
+      assert.equal(existsSync(join(repo, ".git", "index.lock")), false, `${what}：索引锁放了`);
     };
 
     // 1. 锁外那道「工作区干净」（git status）看完之后、真正动手之前，另一个终端把项目目录切到了 side。
@@ -73,10 +75,10 @@ try {
       clean(s.repo, c.name);
     }
 
-    // 2. 持锁期间（落进项目目录之前那次演练）另一个终端想切：拿不到 index.lock，被 git 当场拒；合并照常落进 main。
+    // 2. 持锁期间（开合的那一下）另一个终端想切：拿不到 index.lock，被 git 当场拒；合并照常落进 main。
     for (const c of cases) {
       const s = await stage(`${c.name}-held`, c.diverge);
-      const { value, switched, log } = await racing({ repo: s.repo, branch: "side", when: ["read-tree", "-n"] },
+      const { value, switched, log } = await racing({ repo: s.repo, branch: "side", when: ["merge"] },
         () => mergeTaskBranch(s.repo, s.taskId, "main", c.strategy, { commit: c.commit }));
       assert.equal(switched, false, `${c.name}：持锁期间切不走（${log}）`);
       assert.match(log, /index\.lock/, `${c.name}：是被锁挡下的`);
@@ -90,11 +92,10 @@ try {
         assert.equal(git(s.repo, "rev-parse", "main"), s.main, "不提交那一档 main 不动");
         assert.equal(git(s.repo, "diff", "--cached", "--name-only"), "task.txt", "改动暂存在项目目录里");
         assert.equal(value.ok && value.stagedTree, git(s.repo, "write-tree"), "记下的指纹就是项目目录里暂存的那棵");
+        assert.ok(existsSync(join(s.repo, ".git", "SQUASH_MSG")), "默认提交说明留在项目目录里，手动提交时照样有");
       }
-      if (c.name === "merge-commit") {
-        assert.equal(git(s.repo, "log", "-1", "--format=%s", "main"), `Merge branch '${git(s.repo, "branch", "--list", "navi/*", "--format=%(refname:short)")}' into main`,
-          "游离的临时检出里合，提交说明照样写明合进的是 main（不是 into HEAD）");
-      }
+      // 就地合的副产物照旧：合并前的位置记在项目目录的 ORIG_HEAD 上（squash 那一档的 git commit 不写它）。
+      if (c.commit && c.strategy !== "squash") assert.equal(git(s.repo, "rev-parse", "ORIG_HEAD"), s.main, `${c.name}：ORIG_HEAD 指着合并之前`);
     }
 
     // 3. 不受竞态影响时，项目目录里的合并结果和原来就地合一样：文件写进来、索引对齐。
@@ -109,7 +110,7 @@ try {
       clean(s.repo, "无竞态");
     }
 
-    // 4. 冲突照旧交回：在旁边的临时检出里撞上，项目目录和 main 一个字节都不动。
+    // 4. 冲突照旧交回：撞上之后中止，项目目录和 main 一个字节都不动。
     {
       const s = await stage("conflict", false);
       const ws = join(s.repo, ".worktrees", s.taskId);
@@ -148,7 +149,57 @@ try {
       assert.equal(git(s.repo, "status", "--porcelain"), "", "side 的检出没被写");
     }
 
-    console.log("accept checkout race: 核完再切走不落错分支 / 持锁期间切不走 / 无竞态照常落地 / 冲突照旧交回 / 预览档发布持锁核 HEAD 全部通过");
+    // 6. 不拿索引锁的 `switch -c` 在开合之前抢进来（HEAD 换成同一提交上的新分支）：合并落在了新分支上，
+    //    不许说成合进了 main；索引是 git 按那次合并维护的，换上之后项目目录对得上，不凭空多出暂存。
+    for (const c of cases) {
+      const s = await stage(`${c.name}-create-before`, c.diverge);
+      const { value, switched, log } = await racing({ repo: s.repo, branch: "fresh", create: true, when: ["merge"] },
+        () => mergeTaskBranch(s.repo, s.taskId, "main", c.strategy, { commit: c.commit }));
+      assert.equal(switched, true, `${c.name}：前提 —— switch -c 不拿索引锁，抢进来了（${log}）`);
+      assert.equal(value.ok, false, `${c.name}：合并没落进 main，不该算成功`);
+      if (!value.ok) assert.match(value.message, /被切到了分支 fresh/, `${c.name}：要说清落在了哪儿`);
+      assert.equal(git(s.repo, "rev-parse", "main"), s.main, `${c.name}：main 没动`);
+      assert.equal(git(s.repo, "rev-parse", "--abbrev-ref", "HEAD"), "fresh");
+      if (c.commit) clean(s.repo, `${c.name}-create-before`);
+      else assert.equal(git(s.repo, "diff", "--cached", "--name-only"), "task.txt", "不提交那一档：改动暂存在了 fresh 的检出里，与它的文件对得上");
+    }
+
+    // 7. `switch -c` 在目标分支已经挪到合并结果之后抢进来（审查第 1 轮 F2 那一幕）：新分支从合并结果起，
+    //    main 也确实合进去了 —— 算成功，而且项目目录的文件和索引就是合并结果，不留暂存删除。
+    for (const c of cases.filter((c) => c.commit)) {
+      const s = await stage(`${c.name}-create-after`, c.diverge);
+      const { value, switched, log } = await racing({ repo: s.repo, branch: "fresh", create: true, after: true,
+        when: c.strategy === "squash" ? ["commit"] : ["merge"] },
+      () => mergeTaskBranch(s.repo, s.taskId, "main", c.strategy, { commit: c.commit }));
+      assert.equal(switched, true, `${c.name}：前提 —— 挪完之后切走了（${log}）`);
+      assert.equal(value.ok, true, value.ok ? "" : `${c.name}：${value.message}`);
+      assert.equal(git(s.repo, "show", "main:task.txt"), "task", `${c.name}：合进了 main`);
+      assert.equal(git(s.repo, "rev-parse", "fresh"), git(s.repo, "rev-parse", "main"), `${c.name}：新分支从合并结果起`);
+      assert.equal(readFileSync(join(s.repo, "task.txt"), "utf8"), "task\n", `${c.name}：文件在磁盘上`);
+      clean(s.repo, `${c.name}-create-after`);
+    }
+
+    // 8. 钩子照旧在项目目录里跑（审查第 1 轮 F3）：看得到项目里被忽略的本地依赖，合并后钩子也在这里。
+    for (const c of cases.filter((c) => c.commit && c.name !== "fast-forward")) {
+      const s = await stage(`${c.name}-hooks`, c.diverge);
+      writeFileSync(join(s.repo, ".git", "info", "exclude"), "local-ready\n");
+      writeFileSync(join(s.repo, "local-ready"), "installed\n");
+      const ran = join(s.repo, ".git", "navi-test-hooks.log");
+      for (const hook of ["pre-merge-commit", "pre-commit", "post-merge", "post-commit"]) {
+        writeFileSync(join(s.repo, ".git", "hooks", hook),
+          `#!/bin/sh\necho "${hook} $(pwd -P)" >> "${ran}"\n[ -e local-ready ] || { echo "local dependency missing" >&2; exit 1; }\n`);
+        chmodSync(join(s.repo, ".git", "hooks", hook), 0o755);
+      }
+      const merged = await mergeTaskBranch(s.repo, s.taskId, "main", c.strategy);
+      assert.equal(merged.ok, true, merged.ok ? "" : `${c.name}：${merged.message}`);
+      const log = readFileSync(ran, "utf8");
+      const real = execFileSync("sh", ["-c", `cd "${s.repo}" && pwd -P`], { encoding: "utf8" }).trim();
+      assert.ok(log.trim().split("\n").every((line) => line.endsWith(` ${real}`)), `${c.name}：钩子都在项目目录里跑（${log}）`);
+      assert.match(log, c.strategy === "squash" ? /^pre-commit /m : /^post-merge /m, `${c.name}：该跑的钩子跑了`);
+      clean(s.repo, `${c.name}-hooks`);
+    }
+
+    console.log("accept checkout race: 核完再切走不落错分支 / 持锁期间切不走 / 无竞态照常落地 / 冲突照旧交回 / 预览档发布持锁核 HEAD / switch -c 抢进来如实回报 / 钩子在项目目录 全部通过");
   }
 } finally {
   await removeTmpStage(root);

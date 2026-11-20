@@ -22,7 +22,7 @@ import {
 } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
-import { mergeBeside } from "./git-checkout-land.js";
+import { gitIn, mergeInLockedCheckout, type GitIn } from "./git-merge-locked.js";
 import { execFileText as exec } from "./exec.js";
 import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
@@ -40,9 +40,8 @@ function sameFilesystemPath(a: string, b: string): boolean {
 // These helpers never checkout another branch in the user's project working
 // directory. The only time that directory is touched is when it is ALREADY on
 // the target branch and completely clean; git forbids checking that branch out
-// in a temporary worktree, so the merge runs in a detached temporary checkout
-// beside it and the result lands in the project directory under its index lock
-// (mergeBeside / git-checkout-land.ts).
+// in a temporary worktree, so the merge runs right there, while navi holds that
+// checkout's index lock (git-merge-locked.ts).
 
 export type TaskMergeMethod = "already_merged" | "fast_forward" | "merge_commit" | "squash" | "tagged" | "no_commit";
 export type TaskMergeWarning = {
@@ -158,9 +157,9 @@ export async function targetCheckout(repoPath: string, branch: string) {
   return { ...checkout, atRepo };
 }
 
-async function conflictFiles(cwd: string): Promise<string[]> {
+async function conflictFiles(git: GitIn): Promise<string[]> {
   try {
-    const { stdout } = await exec("git", ["-C", cwd, "diff", "--name-only", "--diff-filter=U"]);
+    const { stdout } = await git(["diff", "--name-only", "--diff-filter=U"]);
     return stdout.split("\n").map((line) => line.trim()).filter(Boolean).sort();
   } catch {
     return [];
@@ -180,21 +179,20 @@ export function withTemporaryCleanupOutcome(
   return { ...result, warnings: [...(result.warnings ?? []), warning] };
 }
 
+/** `git` = 在目标检出里跑 git（临时 worktree 里直接跑；项目目录里带着持锁时的临时索引，git-merge-locked.ts）。 */
 async function mergeInCheckedOutTarget(
-  cwd: string,
+  git: GitIn,
   sourceBranch: string,
   targetBranch: string,
   fastForward: boolean,
   sourceRef = sourceBranch,
-  message?: string,
 ): Promise<TaskMergeResult> {
   try {
-    const noFf = message ? ["--no-ff", "-m", message] : ["--no-ff", "--no-edit"];
-    await exec("git", ["-C", cwd, "merge", ...(fastForward ? ["--ff-only"] : noFf), sourceRef]);
+    await git(["merge", ...(fastForward ? ["--ff-only"] : ["--no-ff", "--no-edit"]), sourceRef]);
     return { ok: true, sourceBranch, targetBranch, method: fastForward ? "fast_forward" : "merge_commit" };
   } catch (error) {
-    const files = await conflictFiles(cwd);
-    await exec("git", ["-C", cwd, "merge", "--abort"]).catch(() => {});
+    const files = await conflictFiles(git);
+    await git(["merge", "--abort"]).catch(() => {});
     if (files.length > 0) {
       return {
         ok: false,
@@ -269,7 +267,7 @@ export async function mergeTaskBranch(
 }
 
 // 目标分支得有个检出的地方才跑得了 merge。三种情况按危险程度排：目标就在项目目录上
-// 且干净 → `fn(repo, true)`（合并在旁边合、持锁落进来，见 mergeBeside）；目标在别的
+// 且干净 → `fn(repo, true)`（持着它的索引锁就地合，git-merge-locked.ts）；目标在别的
 // worktree 上 → 一律不碰（那是别人正在用的工作区）；哪儿都没检出 → 开个临时 worktree
 // 把目标分支检出过去（期间谁也检出不了它），`fn(临时目录, false)` 就地跑，跑完就拆。
 /** 目标检出的「工作区干净」：普通落地照 `git status`（受保护落地换成不调程序的那一版，guardedDirtyFiles）。 */
@@ -342,18 +340,18 @@ async function inTargetCheckout(
 // 停在「合并进行中」的状态里，用户自己的终端、别的 agent、navi 的下一次 git 操作全都
 // 会撞上它；`--squash` 只动工作区和索引，`git commit` 或 `git reset --hard` 一句就收场。
 async function squashInCheckedOutTarget(
-  cwd: string,
+  git: GitIn,
   sourceBranch: string,
   targetBranch: string,
   commit = true,
   sourceRef = sourceBranch,
 ): Promise<TaskMergeResult> {
   try {
-    await exec("git", ["-C", cwd, "merge", "--squash", sourceRef]);
+    await git(["merge", "--squash", sourceRef]);
   } catch (error) {
-    const files = await conflictFiles(cwd);
-    await exec("git", ["-C", cwd, "merge", "--abort"]).catch(() => {});
-    await exec("git", ["-C", cwd, "reset", "--hard"]).catch(() => {});
+    const files = await conflictFiles(git);
+    await git(["merge", "--abort"]).catch(() => {});
+    await git(["reset", "--hard"]).catch(() => {});
     if (files.length > 0) {
       return {
         ok: false,
@@ -376,26 +374,26 @@ async function squashInCheckedOutTarget(
   // = merge 结果与目标无差异，这是**内容证据**。commit 失败后再查 staged 不可信——恶意/
   // 异常的 pre-commit hook 可以在失败前 reset 掉暂存区，把「什么都没合进去」伪装成
   // already_merged（审查实测：目标 ref 没动、产物丢失，接口却返回 accepted）。
-  const stagedEmptyAfterMerge = await exec("git", ["-C", cwd, "diff", "--cached", "--quiet"])
+  const stagedEmptyAfterMerge = await git(["diff", "--cached", "--quiet"])
     .then(() => true)
     .catch(() => false);
   if (stagedEmptyAfterMerge) {
-    await exec("git", ["-C", cwd, "reset", "--hard"]).catch(() => {});
+    await git(["reset", "--hard"]).catch(() => {});
     return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
   }
   // 不提交这一档到此为止：改动就留在工作区和暂存区里，**绝不 reset**（那会把刚合进来的
   // 东西全扔了）。目标分支的 ref 一动没动，这一点由调用方如实记账（见 task-accept.ts）。
   // 顺手记下索引的内容指纹：事后要替用户提交时，只有内容一致才敢动手。
   if (!commit) {
-    return { ok: true, sourceBranch, targetBranch, method: "no_commit", stagedTree: await writeIndexTree(cwd) };
+    return { ok: true, sourceBranch, targetBranch, method: "no_commit", stagedTree: await git(["write-tree"]).then((r) => r.stdout.trim() || null, () => null) };
   }
   try {
-    await exec("git", ["-C", cwd, "commit", "-m", squashCommitMessage(sourceBranch)]);
+    await git(["commit", "-m", squashCommitMessage(sourceBranch)]);
     return { ok: true, sourceBranch, targetBranch, method: "squash" };
   } catch (error) {
     // 到这里 staged 一定非空过：commit 失败就是真失败（hook 拒绝/环境问题），如实报错。
     const message = gitError(error);
-    await exec("git", ["-C", cwd, "reset", "--hard"]).catch(() => {});
+    await git(["reset", "--hard"]).catch(() => {});
     return {
       ok: false,
       reason: "merge_failed",
@@ -414,8 +412,8 @@ async function mergeWithoutCommit(
   sourceBranch: string,
   targetBranch: string,
   sourceRef = sourceBranch,
-  stage = (cwd: string) => mergeBeside(cwd, { sourceBranch, targetBranch },
-    (temp) => squashInCheckedOutTarget(temp, sourceBranch, targetBranch, false, sourceRef)),
+  stage = (cwd: string) => mergeInLockedCheckout(cwd, { sourceBranch, targetBranch },
+    (git) => squashInCheckedOutTarget(git, sourceBranch, targetBranch, false, sourceRef)),
   dirty = statusDirtyFiles,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
@@ -578,9 +576,9 @@ async function mergeTaskBranchLocked(
   }
 
   if (strategy === "squash") {
-    const squash = (cwd: string) => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef);
+    const squash = (git: GitIn) => squashInCheckedOutTarget(git, sourceBranch, targetBranch, true, sourceRef);
     return inTargetCheckout(repo, sourceBranch, targetBranch, (cwd, userCheckout) =>
-      userCheckout ? mergeBeside(cwd, { sourceBranch, targetBranch }, squash) : squash(cwd));
+      userCheckout ? mergeInLockedCheckout(cwd, { sourceBranch, targetBranch }, squash) : squash(gitIn(cwd)));
   }
 
   // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。
@@ -598,13 +596,11 @@ async function mergeTaskBranchLocked(
       targetBranch,
       // 走到临时 worktree 时 fastForward 一定是 false（下面那个 beforeTemp 已经把
       // 「本来能 FF 却失败了」拦掉了），所以这儿直接把它透传下去。检出在项目目录时
-      // 能不能快进由 mergeBeside 按它自己读到的目标提交重新判（这两步之间目标可能被挪过）；
-      // 游离的临时检出里 `--no-edit` 会写成 "into HEAD"，所以照常写明合进的是哪个分支。
+      // 能不能快进在拿到锁之后重新判（这两步之间目标可能被挪过）。
       (cwd, userCheckout) => userCheckout
-        ? mergeBeside(cwd, { sourceBranch, targetBranch },
-          (temp) => mergeInCheckedOutTarget(temp, sourceBranch, targetBranch, false, sourceRef, `Merge branch '${sourceBranch}' into ${targetBranch}`),
-          sourceRef)
-        : mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef),
+        ? mergeInLockedCheckout(cwd, { sourceBranch, targetBranch }, async (git) =>
+          mergeInCheckedOutTarget(git, sourceBranch, targetBranch, await isAncestor(repo, targetBranch, sourceRef), sourceRef))
+        : mergeInCheckedOutTarget(gitIn(cwd), sourceBranch, targetBranch, fastForward, sourceRef),
       // 目标分支哪儿都没检出、而且本来就该能 fast-forward：那句 ref-only 的 fetch 失败
       // 是真出事了，别再开临时 worktree 拿 merge 去糊。
       () => fastForward
