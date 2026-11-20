@@ -20,15 +20,18 @@
 // 本地目标分支同步不了（项目目录里改着会被覆盖的文件、本地另有没推的提交、别的 git 占着）不等于任务跟远程的
 // 冲突不用管（审查第 3 轮第 2 条）：门禁之前那次同步、推送被拒之后那次同步，失败了都先只读预演一次「远程那一头
 // ← 任务分支」，冲突就照常交回任务、让它直接合远程那个提交；不冲突才停下，告诉用户本地是被什么挡住的。
-// 远程已经含着数据库记下的那次合并（上一次推上去了，只差清理 / 落章）：不再要求本地先同步、也不再合一次，
-// 直接把剩下的做完（审查第 3 轮第 1 条）—— 远程才是这次验收的成果，本地落后只报 localBehind。
+// 拉到的远程那一头已经含着数据库记下的那次合并（上一次推上去了，只差清理 / 落章）：不再要求本地先同步、也不再合一次
+// （审查第 3 轮第 1 条），把那一头推给接收端、接收端收下了再把剩下的做完 —— 远程才是这次验收的成果，本地落后只报 localBehind。
+//
+// 「推上去了」只认接收端自己的回答（git-accept-remote.ts pushToReceiver）：拉取和推送可以是两个仓库，拉到的那一份里有
+// 不等于接收端收到了（自由审查第 1 轮）。拉到的状态只用来决定合什么、要不要同步了从头重来，从不把推送的失败改成成功。
 import type { tasks, projects } from "./db/schema.js";
 import { acceptPlan, type AcceptBy } from "@navi/shared/workflow-policy";
 import type { AcceptPushDestination } from "@navi/shared/accept-gate";
 import { taskWorkflowDef } from "./workflows.js";
 import { plannedMergeTarget } from "./task-branch-plan.js";
 import type { AcceptStrategy } from "@navi/shared/workflow";
-import { fetchTip, pushCommit, resolvePushTarget, syncTargetWithRemote, type PushOutcome } from "./git-accept-remote.js";
+import { fetchTip, pushToReceiver, resolvePushTarget, syncTargetWithRemote, type PushOutcome } from "./git-accept-remote.js";
 import { confirmsDestination, describeDestination, publicDestination, type PushPlan } from "./accept-push-destination.js";
 import { commitOf, isAncestor, type TaskMergeFailureReason, type TaskMergeOptions, type TaskMergeResult } from "./git-accept.js";
 import { handOffConflict, type RemoteConflictTip } from "./accept-conflict.js";
@@ -99,11 +102,20 @@ export async function pushDestination(task: TaskRow, project: ProjectRow): Promi
   return branch && target ? { ...target, branch } : null;
 }
 
-/** 远程是不是已经含着 `recorded`（上一次推上去的那次合并）；是就返回远程那一头，不是 / 拉不到就是 null。 */
+/**
+ * 拉到的远程那一头是不是已经含着 `recorded`（上一次推上去的那次合并）；是就返回那一头，不是 / 拉不到就是 null。
+ * 这只是「不必再合一次、不必先同步」的线索，**不是接收端收到了的证据**（拉取和推送可能是两个仓库）：
+ * 收尾之前照样把这一头推给接收端，接收端收下（或本来就是它）才算推上去了（resumePushed）。
+ */
 async function remoteHolding(repoPath: string, plan: PushPlan, projectId: string | null, recorded: string | null | undefined) {
   if (!recorded) return null;
   const fetched = await fetchTip(repoPath, plan, projectId);
   return fetched.ok && fetched.tip && await isAncestor(expandHome(repoPath), recorded, fetched.tip) ? fetched.tip : null;
+}
+
+/** 推报了错、再推一次接收端说收下了：记一句，按接收端的话算。 */
+async function noteRetried(taskId: string, plan: PushPlan, retried: string | undefined) {
+  if (retried) await appendTaskTimeline(taskId, alertLine(`推送报了错（${retried}），再推一次 ${plan.remote}/${plan.remoteBranch} 回答已经收下了，按推上去了算。`));
 }
 
 /**
@@ -155,8 +167,8 @@ export async function preparePush(task: TaskRow, project: ProjectRow, by: Accept
   }
   const holding = task.stage === "merged" ? await remoteHolding(project.repoPath, plan, project.id, task.acceptedMergeCommit) : null;
   if (holding) {
-    await appendTaskTimeline(task.id, receiptLine(`${plan.remote}/${plan.remoteBranch} 已经含着这次合并（${task.acceptedMergeCommit!.slice(0, 8)}），`
-      + `上一次已经推上去了：不再要求本地 ${plan.branch} 先同步，直接把剩下的清理和验收做完。`));
+    await appendTaskTimeline(task.id, receiptLine(`从 ${plan.remote}/${plan.remoteBranch} 拉到的那一头已经含着这次合并（${task.acceptedMergeCommit!.slice(0, 8)}）：`
+      + `不再要求本地 ${plan.branch} 先同步、不再合一次；把它推给接收端确认收下了，再把剩下的清理和验收做完。`));
     return { plan, destination: await publicDestination(plan) };
   }
   const sync = await syncTargetWithRemote(project.repoPath, plan.branch, plan, project.id);
@@ -205,13 +217,10 @@ async function pushFirstLocked(task: { id: string; projectId: string }, repoPath
   const merged = await mergeDetached(repoPath, task.id, args.target, args.strategy, args.options);
   if (!merged.ok) return { merge: merged };
   const names = { sourceBranch: merged.sourceBranch, targetBranch: merged.targetBranch };
-  let outcome = await pushCommit(repoPath, merged.result, plan, task.projectId);
-  // 报了失败、远程其实已经收下了（回执丢在路上）：按事实算推上去了，不让用户为一次已经成功的推送再点一遍。
+  const { outcome, retried } = await pushToReceiver(repoPath, merged.result, plan, task.projectId);
+  await noteRetried(task.id, plan, retried);
+  // 推不上去时才拉一次：只用来判「要不要同步了从头重来」，不用来把失败改成成功（pushToReceiver）。
   const landedRemotely = outcome.ok ? null : await fetchTip(repoPath, plan, task.projectId);
-  if (!outcome.ok && landedRemotely?.ok && landedRemotely.tip && await isAncestor(expandHome(repoPath), merged.result, landedRemotely.tip)) {
-    await appendTaskTimeline(task.id, alertLine(`推送报了错（${outcome.message}），但 ${plan.remote}/${plan.remoteBranch} 已经含着这次合并，按推上去了算。`));
-    outcome = { remote: plan.remote, remoteBranch: plan.remoteBranch, ok: true, commit: merged.result, upToDate: false };
-  }
   if (!outcome.ok) {
     const failure = outcome;
     const failed = (reason: TaskMergeFailureReason, why: string) => ({ push: failure, merge: { ok: false as const, reason, ...names,
@@ -258,44 +267,49 @@ async function localBehind(repoPath: string, branch: string, commit: string): Pr
     : `本地 ${branch}（${local?.slice(0, 12) ?? "读不到"}）不含已经推上去的 ${commit.slice(0, 12)}`;
 }
 
-/** 远程早已含着上一次推上去的那次合并：不再合、不再推，本地没跟上就如实报（文件头）。 */
-async function resumePushed(task: { id: string }, repoPath: string, plan: PushPlan, target: string, recorded: string,
+/**
+ * 拉到的远程那一头早已含着上一次那次合并：不再合，把那一头推给接收端（文件头）—— 接收端收下或本来就是它才收尾；
+ * 推不上去就如实失败，本地、任务分支和工作区都不动。本地没跟上就如实报。
+ */
+async function resumePushed(task: { id: string; projectId: string }, repoPath: string, plan: PushPlan, target: string, recorded: string,
   tip: string): Promise<{ merge: TaskMergeResult; push: PushOutcome }> {
-  const behind = await localBehind(repoPath, target, recorded);
-  const push: PushOutcome = { ok: true, remote: plan.remote, remoteBranch: plan.remoteBranch, commit: tip, upToDate: true,
-    ...(behind ? { localBehind: behind } : {}) };
-  await pushed(task.id, plan, push);
   const sourceBranch = await resolveWorktreeBranchName(expandHome(repoPath), task.id);
+  const { outcome, retried } = await pushToReceiver(repoPath, tip, plan, task.projectId);
+  if (!outcome.ok) {
+    return { push: outcome, merge: { ok: false, reason: "push_failed", sourceBranch, targetBranch: target,
+      message: `推送到 ${plan.remote}/${plan.remoteBranch} 没成功（${outcome.message}）：从它拉到的那一头含着上一次那次合并，`
+        + `但接收推送的仓库没有收下；本地 ${target}、任务的分支和工作区都没动，处理好之后再验收` } };
+  }
+  await noteRetried(task.id, plan, retried);
+  const behind = await localBehind(repoPath, target, recorded);
+  const push: PushOutcome = { ...outcome, ...(behind ? { localBehind: behind } : {}) };
+  await pushed(task.id, plan, push);
   return { push, merge: { ok: true, sourceBranch, targetBranch: target, method: "already_merged", beforeCommit: recorded, afterCommit: recorded } };
 }
 
 /**
- * 合并早已落下（上一次停在 merged、任务分支也删了）时只推：远程已经有那次合并就不用推；没有就推本地目标分支
- * **此刻那一个提交**（先读成哈希、核过它含着那次合并，推的是这个哈希，不是推送那一刻分支指着谁）。
+ * 合并早已落下（上一次停在 merged、任务分支也删了）时只推。推哪个提交：拉到的远程那一头含着那次合并就推它（多半是
+ * `=`，本来就是它），否则推本地目标分支**此刻那一个提交**（先读成哈希、核过它含着那次合并）。不管哪种都真推一次：
+ * 接收端收下才算推上去了（pushToReceiver）。
  */
 export async function pushMerged(task: { id: string; projectId: string }, repoPath: string, plan: PushPlan,
   mergeCommit: string): Promise<PushOutcome> {
   const repo = expandHome(repoPath);
   const base = { remote: plan.remote, remoteBranch: plan.remoteBranch };
-  const fetched = await fetchTip(repoPath, plan, task.projectId);
   const fail = async (message: string): Promise<PushOutcome> => {
     await appendTaskTimeline(task.id, alertLine(`推送到 ${plan.remote}/${plan.remoteBranch} 没成功：${message}。合并留在本地 ${plan.branch}，没有清理，再验收会再推一次。`));
     return { ...base, ok: false, reason: "push_failed", message };
   };
+  const fetched = await fetchTip(repoPath, plan, task.projectId);
   if (!fetched.ok) return fail(fetched.message);
-  let outcome: PushOutcome;
-  if (fetched.tip && await isAncestor(repo, mergeCommit, fetched.tip)) {
-    const behind = await localBehind(repoPath, plan.branch, mergeCommit);
-    outcome = { ...base, ok: true, commit: fetched.tip, upToDate: true, ...(behind ? { localBehind: behind } : {}) };
-  } else {
-    const tip = await commitOf(repo, `refs/heads/${plan.branch}`);
-    if (!tip || !(await isAncestor(repo, mergeCommit, tip))) return fail(`本地 ${plan.branch} 已经不含那次合并（${mergeCommit.slice(0, 8)}）`);
-    outcome = await pushCommit(repoPath, tip, plan, task.projectId);
-    // 报了失败、远程其实已经收下（回执丢在路上）：同 pushFirstLocked，按事实算推上去了。
-    const after = outcome.ok ? null : await fetchTip(repoPath, plan, task.projectId);
-    if (!outcome.ok && !(after?.ok && after.tip && await isAncestor(repo, mergeCommit, after.tip))) return fail(outcome.message);
-    if (!outcome.ok) outcome = { ...base, ok: true, commit: tip, upToDate: false };
-  }
-  await pushed(task.id, plan, outcome);
-  return outcome;
+  const fromRemote = fetched.tip && await isAncestor(repo, mergeCommit, fetched.tip) ? fetched.tip : null;
+  const tip = fromRemote ?? await commitOf(repo, `refs/heads/${plan.branch}`);
+  if (!tip || !(await isAncestor(repo, mergeCommit, tip))) return fail(`本地 ${plan.branch} 已经不含那次合并（${mergeCommit.slice(0, 8)}）`);
+  const { outcome, retried } = await pushToReceiver(repoPath, tip, plan, task.projectId);
+  if (!outcome.ok) return fail(outcome.message);
+  await noteRetried(task.id, plan, retried);
+  const behind = fromRemote ? await localBehind(repoPath, plan.branch, mergeCommit) : undefined;
+  const push: PushOutcome = { ...outcome, ...(behind ? { localBehind: behind } : {}) };
+  await pushed(task.id, plan, push);
+  return push;
 }

@@ -454,8 +454,8 @@ export async function testAcceptGateConfirm({ open, run }) {
     await page.close();
   }
   // ⑰ 「推送」那一勾（2026-11-20）：推得了才画、写明推到哪；默认跟上一次；勾上发显示的那个目的地、确认键改口「验收并推送」、
-  //    确认时记下；取消「提交」它就收起来（不提交就没有可推的）；推送那份读不出来时写明、给重试，确认锁着。
-  const destination = { branch: "main", remote: "origin", remoteBranch: "main", url: "git@example.com:kb.git" };
+  //    确认时记下（带着服务端给的指纹原样发回）；取消「提交」它就收起来（不提交就没有可推的）；推送那份读不出来时写明、给重试，确认锁着。
+  const destination = { branch: "main", remote: "origin", remoteBranch: "main", url: "git@example.com:kb.git", fingerprint: "fp-test" };
   {
     const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null },
       push: { destination, unavailable: null, remembered: false } });
@@ -464,7 +464,7 @@ export async function testAcceptGateConfirm({ open, run }) {
     const commitBox = () => confirmLayer(page).getByRole("checkbox", { name: "合并后提交" });
     await pushBox().waitFor();
     assert.equal(await pushBox().isChecked(), false, "没推过：默认不推");
-    assert.match(await layer.locator("li", { has: page.getByRole("checkbox", { name: "合并后推送到远程" }) }).innerText(), /main\s*→\s*origin\/main/, "写明推到哪");
+    assert.match(await layer.locator("li", { has: page.getByRole("checkbox", { name: "合并后推送到远程" }) }).innerText(), /main\s*→\s*origin\/main\s*git@example\.com:kb\.git/, "写明推到哪、推往哪个地址");
     await pushBox().check();
     await layer.getByRole("button", { name: "验收并推送", exact: true }).waitFor();
     if (process.env.NAVI_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.NAVI_BROWSER_EVIDENCE_DIR}/confirm-push.png` });

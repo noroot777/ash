@@ -77,6 +77,8 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitCh
         {merge && view.pushChoosable && push.destination && (
           <Step verb="推送" checked={view.push} onToggle={onPush} label="合并后推送到远程"
             what={<><code>{push.destination.branch}</code> → <code>{push.destination.remote}/{push.destination.remoteBranch}</code>
+              {/* git 为这个远程算出的推送地址（已脱敏）：推的时候按远程名推，实际推往的就是这一处。 */}
+              <em>{push.destination.url}</em>
               {push.pending && <ReadStatus what="远程" error={push.error} onRetry={onRetryPush} />}</>} />
         )}
         {merge && view.commit && push.pending && !push.destination && <Step verb="推送" what={<ReadStatus what="远程" error={push.error} onRetry={onRetryPush} />} />}

@@ -3,7 +3,7 @@
 // 报错、任务记录、git 命令行参数里都没有）；确认框显示的、实际接收的、回执写的是同一处；确认失效（旧版本、坏值）就拒，不当没选推送。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parsePushChoice } from "@navi/shared/accept-gate";
 import { git, makeStage, pushHarness, root } from "./accept-push-fixture.js";
@@ -170,7 +170,48 @@ try {
     assert.equal(await stageOf(taskId), "verified");
   }
 
-  console.log("accept push destination: 推到哪 / 门禁续做带冻结目的地、存坏的算确认失效 / 目的地变了就拒 / 认证信息（三种写法）不出服务端 / 显示的就是实际推往的地址 / 确认失效就拒 全部通过");
+  // 26. 拉取那个仓库已经有成果、接收推送的那个仓库没有（自由审查第 1 轮）：拉到的状态不能当接收端收到了的证据。
+  //     首次验收（同步进来就成了 already_merged）和停在 merged 只差收尾的重试两种：接收端拒收 → 如实失败，任务分支、
+  //     工作区和阶段都留着；接收端恢复收推送后再点，真推上去了才验收完成。
+  {
+    const { db } = await import("../src/db/index.js");
+    const { tasks } = await import("../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    for (const mode of ["first", "resume-merged"] as const) {
+      const { repo, remote } = makeStage(`recv-${mode}`);
+      const receiver = join(root, `recv-${mode}-receiver.git`);
+      execFileSync("git", ["clone", "-q", "--bare", remote, receiver]);
+      git(repo, "remote", "set-url", "--push", "origin", receiver);
+      const taskId = await seedTask(repo, "task.txt", "task\n");
+      const ws = wsOf.get(taskId)!;
+      const source = git(ws, "rev-parse", "HEAD");
+      git(ws, "push", "-q", remote, "HEAD:main");
+      if (mode === "resume-merged") {
+        git(repo, "merge", "-q", "--ff-only", source);
+        await db.update(tasks).set({ stage: "merged", acceptedTargetBranch: "main", acceptedMergeCommit: source, acceptedSourceCommit: source })
+          .where(eq(tasks.id, taskId));
+      }
+      const receiverBefore = git(receiver, "rev-parse", "main");
+      const hook = join(receiver, "hooks", "pre-receive");
+      writeFileSync(hook, "#!/bin/sh\necho 'receiver says no' >&2\nexit 1\n", { mode: 0o755 });
+      const view = (await pushDestinationView(await rowOf(taskId), await projectOf(taskId)))!;
+      assert.equal(view.url, receiver);
+      const refused = await acceptTask(taskId, "human", { push: view });
+      assert.equal(refused.accepted, false, `${mode}：接收端拒收，不能算推上去了`);
+      if (!refused.accepted) assert.equal(refused.reason, "push_failed", refused.error);
+      assert.equal(git(receiver, "rev-parse", "main"), receiverBefore, `${mode}：接收端确实没有成果`);
+      assert.ok(existsSync(ws), `${mode}：任务工作区还在`);
+      assert.equal(git(repo, "rev-parse", `refs/heads/${git(ws, "rev-parse", "--abbrev-ref", "HEAD")}`), source, `${mode}：任务分支还在`);
+      assert.equal(await stageOf(taskId), mode === "first" ? "verified" : "merged");
+      rmSync(hook);
+      const accepted = await acceptTask(taskId, "human", { push: view });
+      assert.equal(accepted.accepted, true, accepted.accepted ? "" : `${accepted.reason}: ${accepted.error}`);
+      assert.equal(git(receiver, "rev-parse", "main"), source, `${mode}：接收端真收下了才验收完成`);
+      assert.equal(await stageOf(taskId), "accepted");
+    }
+  }
+
+  console.log("accept push destination: 推到哪 / 门禁续做带冻结目的地、存坏的算确认失效 / 目的地变了就拒 / 认证信息（三种写法）不出服务端 / 显示的就是实际推往的地址 / 拉取端有、接收端没有不算推上去 / 确认失效就拒 全部通过");
 } finally {
   await releaseTmpDb();
 }

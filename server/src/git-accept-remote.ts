@@ -154,3 +154,16 @@ export async function pushCommit(repoPath: string, commit: string, target: PushT
     return { ...base, ok: false, reason: rejected ? "push_rejected" : "push_failed", message };
   }
 }
+
+/**
+ * 让**接收推送的那个仓库**含着 `commit`，结果就是它含不含的证据。接收端的事实只有推送本身给得出：拉取按远程名拉，
+ * 拉取地址和推送地址可以是两个仓库（pushurl / pushInsteadOf），拉到的那一份里有，不证明接收端收到了（自由审查第 1 轮）。
+ * 推报了错就原样再推一次：回执丢在路上、其实已经收下时，第二次是 `=`（本来就是它）或照常收下 —— 都是接收端亲口说的；
+ * 还是失败就是失败，调用方不得拿拉取端的状态把它改成成功。`retried`：第一次的失败被第二次推翻了。
+ */
+export async function pushToReceiver(repoPath: string, commit: string, target: PushTarget, projectId: string | null): Promise<{ outcome: PushOutcome; retried?: string }> {
+  const first = await pushCommit(repoPath, commit, target, projectId);
+  if (first.ok) return { outcome: first };
+  const second = await pushCommit(repoPath, commit, target, projectId);
+  return second.ok ? { outcome: second, retried: first.message } : { outcome: first };
+}
