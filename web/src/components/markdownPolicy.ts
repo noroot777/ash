@@ -4,8 +4,10 @@ import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
 // 名字那一段允许带子目录（`shots/a.png`）：证据接口服务得了它（evidence-path.ts）。`..`
 // 由 reviewFileTarget 里的 PARENT_SEGMENT 挡，不塞进正则 —— 正则里表达它既难读又易漏。
-const REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/review\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
-const FREE_REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/free-review\/([\w-]+)\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
+// 证据目录是数据根下的 `runs/`，数据根叫什么不定（mac 版不叫 data，见 attachmentView 的注释），
+// 认 `runs/<任务>/review/round-N/` 这段结构本身。
+const REVIEW_FILE_PATH = /\/runs\/([\w-]+)\/review\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
+const FREE_REVIEW_FILE_PATH = /\/runs\/([\w-]+)\/free-review\/([\w-]+)\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
 
 export type ReviewFileTarget = {
   name: string;

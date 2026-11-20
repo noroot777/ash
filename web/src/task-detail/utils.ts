@@ -115,10 +115,17 @@ export function isAudioPath(path: string): boolean {
 // 免得所有调用点跟着改 import。
 export { parseAttachmentText } from "@navi/shared/attachments";
 
+// 上传附件落在**数据根下的 `uploads/`**，名字恒为 `<12 位 id>-原名`（server/src/upload-names.ts）。
+// 数据根不一定叫 `data`：仓库检出是 `<仓库>/data`，mac 版是 `~/Library/Application Support/<bundle>`，
+// 还能被 NAVI_DATA_DIR 指到任何地方。所以认「父目录是 uploads + 带 id 前缀」这个不变式；
+// `data/uploads/` 照旧无条件认，兜住早于 id 前缀的老附件。
+const UPLOADED_FILE = /(?:^|\/)(?:data\/uploads\/([^/]+)|uploads\/([A-Za-z0-9_-]{12}-[^/]+))$/;
+
 export function attachmentView(path: string): { name: string; url: string | null; image: boolean } {
   const normalized = path.trim().replaceAll("\\", "/");
   const name = normalized.split("/").filter(Boolean).pop() ?? normalized;
-  const uploaded = /(?:^|\/)data\/uploads\/([^/]+)$/.exec(normalized)?.[1] ?? null;
+  const match = UPLOADED_FILE.exec(normalized);
+  const uploaded = match?.[1] ?? match?.[2] ?? null;
   const url = uploaded ? `/api/uploads/${encodeURIComponent(uploaded)}` : null;
   const displayName = name.replace(/^[A-Za-z0-9_-]{12}-/, "") || name;
   return { name: displayName, url, image: !!url && isImagePath(uploaded ?? "") };
