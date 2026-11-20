@@ -23,6 +23,7 @@ const { listBranches, resolveTaskMergeTarget, staleBaseFallback } = await import
 const { remoteStartNote } = await import("../src/remote-start-notice.js");
 const { undoBranchPlanSideEffects } = await import("../src/task-branch-plan.js");
 const { runRefAction } = await import("../src/git-workbench/refs.js");
+const { removeCreatedBranch } = await import("../src/git-remote-branch.js");
 await ensureSchema();
 const api = new Hono();
 mountTaskRoutes(api);
@@ -201,6 +202,31 @@ try {
   }
   assert.equal(git(repo, "symbolic-ref", "--short", "HEAD"), checkoutBefore, "a failed track never leaves the checkout switched");
   assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/wb-track"), "and the half-made branch is removed");
+  // 切换之后的钩子报错：git 已经切过去了，收回不能把正被检出的分支删掉（那会让 HEAD 变成「尚无提交」）。
+  const hook = join(repo, ".git", "hooks", "post-checkout");
+  writeFileSync(hook, "#!/bin/sh\necho REMOTE_TEST_POST_CHECKOUT_FAILURE >&2\nexit 1\n");
+  chmodSync(hook, 0o755);
+  try {
+    await assert.rejects(
+      runRefAction(repo, repo, { kind: "branch-create", name: "wb-hooked", target: remoteTip, checkout: true, track: "origin/feature-r" }, "test"),
+      /已建立并切到 wb-hooked/,
+    );
+  } finally {
+    rmSync(hook, { force: true });
+  }
+  assert.equal(git(repo, "symbolic-ref", "--short", "HEAD"), "wb-hooked", "the switch did happen");
+  assert.equal(git(repo, "rev-parse", "HEAD"), remoteTip, "and the checked-out branch is kept, not deleted into an unborn HEAD");
+  assert.equal(git(repo, "config", "branch.wb-hooked.merge"), "refs/heads/feature-r");
+  git(repo, "switch", checkoutBefore);
+  // 收回那一层自己也拦：别的工作区正检出着这条分支就不删。
+  const elsewhere = join(root, "elsewhere");
+  git(repo, "worktree", "add", elsewhere, "wb-hooked");
+  assert.equal(await removeCreatedBranch(async (args) => git(repo, ...args), "wb-hooked", remoteTip), false);
+  assert.equal(git(repo, "rev-parse", "refs/heads/wb-hooked"), remoteTip, "a branch checked out in another worktree is never removed");
+  git(repo, "worktree", "remove", elsewhere);
+  assert.equal(await removeCreatedBranch(async (args) => git(repo, ...args), "wb-hooked", remoteTip), true);
+  console.log("✓ a failing post-checkout hook keeps the switched-to branch, and removal refuses any checked-out branch");
+
   git(repo, "tag", "origin/feature-r", seed);
   await runRefAction(repo, repo, { kind: "branch-create", name: "wb-track", target: remoteTip, checkout: false, track: "origin/feature-r" }, "test");
   assert.deepEqual([git(repo, "config", "branch.wb-track.remote"), git(repo, "config", "branch.wb-track.merge")],

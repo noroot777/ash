@@ -39,6 +39,9 @@ export function GitProjectStep({
   );
 }
 
+/** 重读一个项目的概览并换上去；返回这趟是不是最新那趟（不是就没换），读失败抛错。 */
+export type GitOverviewReload = (projectId: string) => Promise<boolean>;
+
 function Section({ title, count, action, children }: { title: string; count: number; action?: ReactNode; children: ReactNode }) {
   return (
     <section className="min-h-0 min-w-0 overflow-y-auto">
@@ -56,23 +59,29 @@ function Section({ title, count, action, children }: { title: string; count: num
  * 远端分支那一栏的刷新：只为了看到协作者刚推上去的分支（新建任务要从它开工）。走侧栏分支胶囊同一本账
  * （fetch --prune），不是另一套操作；成了就在原地换上新的概览。
  */
-function RemoteRefresh({ projectId, onOverview }: { projectId: string; onOverview: (projectId: string, next: GitOverview) => void }) {
+function RemoteRefresh({ projectId, reload }: { projectId: string; reload: GitOverviewReload }) {
   const git = useProjectGit(projectId, false);
   const [error, setError] = useState<string | null>(null);
+  const [rereading, setRereading] = useState(false);
   const current = useRef(projectId);
   useEffect(() => { current.current = projectId; setError(null); }, [projectId]);
+  // 拉取加重读算一趟：重读完才收起「正在刷新」。结果认不认由 reload 按代次定（CommandPalette.tsx）。
   const refresh = async () => {
-    const ok = await git.run("fetch", () => api.projectGitFetch(projectId));
-    if (current.current !== projectId) return;
-    if (!ok) { setError(readProjectGitRun(projectId).error ?? "刷新远端分支失败"); return; }
-    await api.projectGitOverview(projectId).then(
-      (next) => { if (current.current === projectId) { setError(null); onOverview(projectId, next); } },
-      (reason: unknown) => {
+    setRereading(true);
+    try {
+      const ok = await git.run("fetch", () => api.projectGitFetch(projectId));
+      if (current.current !== projectId) return;
+      if (!ok) { setError(readProjectGitRun(projectId).error ?? "刷新远端分支失败"); return; }
+      const latest = await reload(projectId).catch((reason: unknown) => {
         if (current.current === projectId) setError(`远端已经拉到，但重读失败：${reason instanceof Error ? reason.message : String(reason)}`);
-      },
-    );
+        return false;
+      });
+      if (latest && current.current === projectId) setError(null);
+    } finally {
+      setRereading(false);
+    }
   };
-  const fetching = git.busy === "fetch";
+  const fetching = git.busy === "fetch" || rereading;
   return (
     <span className="ml-auto flex min-w-0 items-center gap-2">
       {error && <span className="min-w-0 truncate text-[length:var(--t-xs)] text-red">{error}</span>}
@@ -93,13 +102,13 @@ export function GitOverviewPanel({
   overview,
   loading,
   error,
-  onOverview,
+  reload,
 }: {
   project: ProjectView | undefined;
   overview: GitOverview | null;
   loading: boolean;
   error: string | null;
-  onOverview: (projectId: string, next: GitOverview) => void;
+  reload: GitOverviewReload;
 }) {
   if (loading) return <p className="palette-empty">正在读取仓库状态…</p>;
   if (error) return <p className="palette-empty text-red">{error}</p>;
@@ -125,7 +134,7 @@ export function GitOverviewPanel({
       </Section>
       {(overview.remotes?.length > 0 || overview.remoteBranches?.length > 0) && (
         <Section title="远端分支" count={overview.remoteBranches?.length ?? 0}
-          action={project && overview.remotes?.length > 0 ? <RemoteRefresh projectId={project.id} onOverview={onOverview} /> : undefined}>
+          action={project && overview.remotes?.length > 0 ? <RemoteRefresh projectId={project.id} reload={reload} /> : undefined}>
           <div className="space-y-0.5">
             {(overview.remoteBranches ?? []).map((branch) => (
               <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "branches", ref: branch.ref }); }} key={branch.ref} className="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2">

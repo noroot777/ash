@@ -116,9 +116,15 @@ export function CommandPalette({
   const [scope, setScope] = useState<SearchScope | null>(null);
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [gitProjectId, setGitProjectId] = useState<string | null>(null);
-  // 读回来的概览只落在发起它时那个项目上：途中切了项目，迟到的结果作废（初读与远端刷新同一道闸）。
-  const gitProjectRef = useRef<string | null>(null);
-  gitProjectRef.current = gitProjectId;
+  // 读概览一趟一个代次，只认最新那一趟：途中切了项目、或同一项目又读了一次，迟到的结果作废（初读与远端刷新同一道闸）。
+  const gitRead = useRef(0);
+  const readGitOverview = (projectId: string) => {
+    const read = ++gitRead.current;
+    return api.projectGitOverview(projectId).then(
+      (next) => ({ latest: read === gitRead.current, next }),
+      (error: unknown) => { if (read === gitRead.current) throw error; return { latest: false, next: null }; },
+    );
+  };
   const [gitOverview, setGitOverview] = useState<GitOverview | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [gitError, setGitError] = useState<string | null>(null);
@@ -354,11 +360,11 @@ export function CommandPalette({
     setGitError(null);
     setGitLoading(true);
     resetActive();
-    gitProjectRef.current = projectId;
-    void api.projectGitOverview(projectId)
-      .then((next) => { if (gitProjectRef.current === projectId) setGitOverview(next); })
-      .catch((error: unknown) => { if (gitProjectRef.current === projectId) setGitError(error instanceof Error ? error.message : String(error)); })
-      .finally(() => { if (gitProjectRef.current === projectId) setGitLoading(false); });
+    const read = gitRead.current + 1;
+    void readGitOverview(projectId)
+      .then(({ latest, next }) => { if (latest && next) setGitOverview(next); })
+      .catch((error: unknown) => setGitError(error instanceof Error ? error.message : String(error)))
+      .finally(() => { if (read === gitRead.current) setGitLoading(false); });
   };
   const chooseSlashCommand = (command: SlashCommand | undefined) => {
     if (!command) return;
@@ -479,7 +485,11 @@ export function CommandPalette({
           <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><GitProjectStep projects={projects} active={active} onChoose={loadGitOverview} /></div>
         )}
         {step === "git-overview" && <GitOverviewPanel project={gitProject} overview={gitOverview} loading={gitLoading} error={gitError}
-          onOverview={(projectId, next) => { if (projectId === gitProjectRef.current) setGitOverview(next); }} />}
+          reload={async (projectId) => {
+            const { latest, next } = await readGitOverview(projectId);
+            if (latest && next) setGitOverview(next);
+            return latest;
+          }} />}
 
         {step === "search" && slashMode && (
           <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto p-1">

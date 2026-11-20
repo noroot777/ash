@@ -96,14 +96,21 @@ export async function createTrackingBranch(run: GitRun, name: string, start: str
 }
 
 /**
- * 收回自己刚建的分支：只在它还停在建出来那个提交上时删（比较并删除是 git 一步做的，删不掉说明有人动过，
- * 就留着），连带它的 upstream 配置。
+ * 收回自己刚建的分支，连带它的 upstream 配置。两道闸，哪道不过就留着、返回 false：
+ * - 有工作区正检出着它就不删。命令报错不等于没切过去（post-checkout 钩子在切换完成之后才跑，它失败时
+ *   `switch` 报错、HEAD 却已经指过去了）；`update-ref -d` 又绕开了 `git branch -D` 对已检出分支的保护，
+ *   删掉就是把那个工作区的 HEAD 变成「尚无提交」。
+ * - 只在它还停在建出来那个提交上时删（比较并删除是 git 一步做的，删不掉说明有人动过）。
  */
-export async function removeCreatedBranch(run: GitRun, name: string, start: string): Promise<void> {
+export async function removeCreatedBranch(run: GitRun, name: string, start: string): Promise<boolean> {
+  const ref = `refs/heads/${name}`;
   try {
-    await run(["update-ref", "-d", `refs/heads/${name}`, start]);
+    const worktrees = await run(["worktree", "list", "--porcelain"]);
+    if (worktrees.split("\n").some((line) => line === `branch ${ref}`)) return false;
+    await run(["update-ref", "-d", ref, start]);
   } catch {
-    return;
+    return false;
   }
   await run(["config", "--remove-section", `branch.${name}`]).catch(() => {});
+  return true;
 }

@@ -40,14 +40,20 @@ export async function runRefAction(
         await git(root, action.checkout ? ["switch", "-c", action.name, target] : ["branch", "--", action.name, target]);
         return true;
       }
-      // 先建好带 upstream 的分支（两步各自可收回，createTrackingBranch），再切过去；切不过去也收回，
-      // 不留下「报了错却多了一条分支」的半截状态。
+      // 先建好带 upstream 的分支（两步各自可收回，createTrackingBranch），再切过去；没切过去就收回，
+      // 不留下「报了错却多了一条分支」的半截状态。切换报错时 HEAD 可能已经指过去了（切换后的钩子失败），
+      // 先看真实的检出状态：已经在它上面就照实说切过去了、分支留着（收回那一层也拒绝删正被检出的分支）。
       const run = (args: string[]) => git(root, args);
       await createTrackingBranch(run, action.name, target, `refs/remotes/${action.track}`);
       if (action.checkout) {
         await git(root, ["switch", action.name]).catch(async (error: unknown) => {
-          await removeCreatedBranch(run, action.name, target);
-          throw error;
+          const head = await git(root, ["symbolic-ref", "-q", "HEAD"]).then((out) => out.trim(), () => "");
+          if (head !== `refs/heads/${action.name}`) {
+            await removeCreatedBranch(run, action.name, target);
+            throw error;
+          }
+          const detail = error instanceof Error ? error.message : String(error);
+          fail(`已建立并切到 ${action.name}（跟踪 ${action.track}），但切换之后报了错：${detail}`);
         });
       }
       return true;
