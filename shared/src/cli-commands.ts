@@ -77,9 +77,12 @@ export function hasCliGoalHold(raw?: string | null): boolean {
   catch { return false; }
 }
 
+/** 有计划模式（`/plan`）的执行器类型：状态按类型分槽存（codex 走协作模式、claude 走权限模式）。 */
+export const PLAN_AGENTS = ["codex", "claude"] as const satisfies readonly AgentType[];
+
 export function cliCommandCatalog(agentType: string): Partial<Record<CliCommandName, string>> {
   if (agentType === "codex") return CODEX_COMMANDS;
-  if (agentType === "claude") return { goal: "持续目标：/goal 描述；pause / resume / clear；--scopes 查看作用域", compact: CODEX_COMMANDS.compact };
+  if (agentType === "claude") return { goal: "持续目标：/goal 描述；pause / resume / clear；--scopes 查看作用域", plan: CODEX_COMMANDS.plan, compact: CODEX_COMMANDS.compact };
   return {};
 }
 export function cliCommandsForMode<Entry extends { name: string; source: string }>(entries: Entry[] = [], agentType: string, mode: string): Entry[] {

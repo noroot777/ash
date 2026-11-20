@@ -28,6 +28,7 @@ import { ClaudeRequestTimer } from "./request-timing.js";
 import { claudeNaviMcpProblem } from "./navi-mcp-confirm.js";
 import type { ClaudeNaviMcpInjection } from "./navi-mcp-inject.js";
 import { claudeApiStatus, modelFailureOf } from "./model-failure.js";
+import { PLAN_HANDOFF_TOOLS } from "./claude-plan-gate.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
 // 流要一直开着;只有进程真的没了才 done。
@@ -243,6 +244,12 @@ async function* claudeStreamEvents(
       }
       return;
     }
+    // 只有计划模式回合会来（起跑带 `--permission-prompt-tool stdio`，见 claude-plan-gate.ts）；
+    // 重放里的请求上一代已经回过了。
+    if (ev.type === "control_request") {
+      if (!replaying && resident?.planGate) for (const event of resident.planGate.request(ev)) push(event);
+      return;
+    }
     if (ev.type === "control_response") {
       // 重放里的回执配不上这一代的请求;哪个结尾是打断出来的由打断记录认(ClaudeControlBridge)。
       if (!replaying) resident?.handleResponse(ev);
@@ -357,6 +364,7 @@ async function* claudeStreamEvents(
       // text 必须照收,跳过就等于把唯一一句错误说明扔了(见 docs/incidents.md
       // 「空白回合」:404 model_not_found 整个被吞,用户只看到任务停着不动)。
       const synthetic = ev.message.model === "<synthetic>";
+      resident?.planGate?.noteAssistant(ev.message.content);
       let hadText = false;
       for (const block of ev.message.content) {
         if (block.type === "text") {
@@ -367,6 +375,8 @@ async function* claudeStreamEvents(
           // 才分得清「内置 Monitor」和「普通后台 Bash」。
           if (!replaying) claudeMonitors.toolUse(block.name, block.input, block.id);
           background.toolUse(block.name, block.id, block.input);
+          // 交计划、提问由权限闸换成计划卡 / 答题卡，这一步本身不再画成一次（被拒的）工具调用。
+          if (resident?.planGate && PLAN_HANDOFF_TOOLS.has(block.name)) continue;
           push(nativeWork.call(block.name, block.input, block.id)
             ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
           writeLedger.toolUse(block.name, block.input, block.id);

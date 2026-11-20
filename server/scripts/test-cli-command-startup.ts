@@ -63,7 +63,8 @@ try {
   await db.insert(projects).values({ id: "project", name: "命令验证", repoPath: root, createdAt: at });
   await db.insert(groups).values({ id: "group", projectId: "project", name: "串行验证", mode: "serial", createdAt: at });
   for (const [agentType, body, expected] of [
-    ["claude", "/plan 怎么做这个功能", /当前执行器的 Navi 通道不支持 \/plan/],
+    ["claude", "/status", /当前执行器的 Navi 通道不支持 \/status/],
+    ["claude", "/plan --deep 怎么做这个功能", /\/plan 不支持这个参数/],
     ["codex", "/usage 看一下用量", /\/usage 不接受参数/],
     ["codex", "/goal 完成测试 --budget 0", /目标预算必须是正整数/],
     ["claude", "/goal 完成测试 --budget 100", /不支持 token 预算参数/],
@@ -83,7 +84,7 @@ try {
   assert.equal((await db.select().from(tasks)).length, 0);
   assert.equal((await db.select().from(queueItems)).length, 0);
   for (const [agentType, body] of [
-    ["claude", "/compact 保留重点"], ["claude", "/review 自定义技能"],
+    ["claude", "/compact 保留重点"], ["claude", "/review 自定义技能"], ["claude", "/plan 怎么做这个功能"],
     ["codex", "/review 看看这次改动"], ["codex", "/goal 完成测试 --budget 100"],
   ]) assert.equal((await create(body!, agentType!)).status, 201, body);
 
@@ -101,8 +102,8 @@ try {
 
   await db.insert(tasks).values({ id: "legacy", projectId: "project", title: "老任务", body: "/usage 看一下这个月的用量再决定", agentType: "codex", status: "backlog", createdAt: at, updatedAt: at });
   await runFailed("legacy", /\/usage 不接受参数/);
-  await db.insert(tasks).values({ id: "legacy-claude", projectId: "project", title: "Claude 老任务", body: "/plan 怎么做这个功能", agentType: "claude", status: "backlog", createdAt: at, updatedAt: at });
-  await runFailed("legacy-claude", /Navi 通道不支持 \/plan/);
+  await db.insert(tasks).values({ id: "legacy-claude", projectId: "project", title: "Claude 老任务", body: "/status 看一下进度", agentType: "claude", status: "backlog", createdAt: at, updatedAt: at });
+  await runFailed("legacy-claude", /Navi 通道不支持 \/status/);
   assert.equal((await db.select().from(sessions)).every((session) => !session.agentPid && !session.cliSessionId), true);
   console.log("native creation errors return 400; edited/legacy startup failures persist and remain visible after reload: passed");
 } finally {

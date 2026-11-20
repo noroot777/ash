@@ -43,7 +43,8 @@ import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js"
 import { handoffBlockReason } from "./handoff-guard.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { acknowledgeTaskStart } from "./task-start-receipt.js";
-import { AUTONOMY, backgroundWaitFor, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
+import { AUTONOMY, backgroundWaitFor, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL, PLANNING_TURN } from "./run-prompts.js";
+import { planTurnInput } from "./plan-turn.js";
 import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
@@ -185,7 +186,9 @@ async function runHeldTask(
     const commandText = task.body.trim();
     const command = parseCliCommand(agentType, commandText);
     const localCommand = nativeCliCommand(agentType, commandText);
-    await db.update(tasks).set({ goalTurn: isGoalExecution(command), nativeTurn: !!localCommand }).where(eq(tasks.id, taskId));
+    // claude 的 `/plan 问题` 起跑同 codex 的原生 `/plan`：一个只出计划的旁路回合(plan-turn.ts)。
+    const planInput = planTurnInput(agentType, command, commandText);
+    await db.update(tasks).set({ goalTurn: isGoalExecution(command), nativeTurn: !!localCommand || planInput.question }).where(eq(tasks.id, taskId));
     // 多人模式:用**这一次起跑是谁点的**那个人的执行器与供应商跑(§八)。别人的执行器
     // 解析不到时降级到本人的默认执行器,并把这次降级如实写进时间线 —— 烧的是他自己的 key。
     const runOwner = opts.actingUserId ?? task.ownerUserId;
@@ -259,7 +262,9 @@ async function runHeldTask(
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
-      prompt: localCommand ? commandText : prompt, ...cli, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
+      prompt: localCommand ? commandText
+        : planInput.question ? PLANNING_TURN({ freshContext: true, verifying: false }, planInput.text, agentType) : prompt,
+      ...cli, planMode: planInput.question, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
       // 正文图片的持久账本(agent-image-journal.ts)。全新起跑没有身份可接,不带种子。
       images: markdownImageAccounting(taskId, sessId, turnStart),
       env: runEnv,

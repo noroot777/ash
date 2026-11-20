@@ -81,7 +81,7 @@ export function claudeConfigDirOf(env: Readonly<Record<string, string | undefine
 }
 
 /** 用户那一层的目录:`CLAUDE_CONFIG_DIR` 设了就是它,**不回落** `~/.claude`(实测②)。 */
-function userConfigDir(configDir: ClaudeConfigDir): string {
+export function userConfigDir(configDir: ClaudeConfigDir): string {
   const configured = (configDir === undefined ? process.env.CLAUDE_CONFIG_DIR : configDir ?? undefined)?.trim();
   return configured ? resolve(configured) : join(homedir(), ".claude");
 }
