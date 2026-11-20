@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ScheduledMessage } from "@navi/shared";
+import type { ScheduledMessage, TaskListItem, TaskStatus } from "@navi/shared";
 import type { TaskMonitor } from "@navi/shared/monitor";
 import { ScheduledMessageTray, useScheduledMessages } from "../../src/components/ScheduledMessages.tsx";
 import { joinDraftText } from "../../src/task-detail/withdrawDraft.ts";
@@ -65,4 +65,30 @@ function Fixture() {
   </>;
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />);
+function AfterFixture() {
+  const [status, setStatus] = useState<TaskStatus>("running");
+  const [visible, setVisible] = useState(true);
+  const dependency = { id: "integration", title: "统一 macOS 更新运行时与安全接管", status, archived: false } as TaskListItem;
+  const message: ScheduledMessage = {
+    id: "after-integration", taskId: "completed-task", text: "前置整合完成后，适配显式强制恢复入口及失败回退。",
+    attachments: [], agent: null, executorId: null, model: null, reasoningEffort: null, sessionRole: null, origin: null,
+    mode: "after", sendAt: "2026-11-20T12:37:58.480Z", status: "pending", createdAt: "2026-11-20T12:37:58.480Z", sentAt: null,
+    afterTaskId: dependency.id, afterDoneAt: status === "done" ? "2026-11-20T13:00:00.000Z" : null,
+  };
+  return <main className="task-detail-main" style={{ height: "100dvh", maxWidth: 1000, margin: "0 auto" }}>
+    <div className="conversation-scroll-region"><section className="task-conversation">
+      <h1 style={{ fontSize: 18 }}>适配主线强制恢复入口与失败回退</h1>
+      <p>本任务已完成，没有智能体在运行。</p>
+      <button onClick={() => setStatus("running")}>前置运行中</button>
+      <button onClick={() => setStatus("failed")}>前置失败</button>
+      <button onClick={() => setStatus("done")}>前置完成</button>
+    </section></div>
+    <div className="task-reply-shell">
+      <div className="reply-context"><ScheduledMessageTray messages={visible ? [message] : []} tasks={[dependency]}
+        loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => setVisible(false)} /></div>
+      <div className="task-reply-box"><textarea aria-label="回复草稿" placeholder="回复…" style={{ height: 110 }} /></div>
+    </div>
+  </main>;
+}
+
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).get("scenario") === "after" ? <AfterFixture /> : <Fixture />);
