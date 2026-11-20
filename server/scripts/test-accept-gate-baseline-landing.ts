@@ -231,14 +231,13 @@ try {
   }
 
   // ㊱ 最终合并 · 分支刚挪到测过的结果、另一个终端紧跟着往目标分支提交（发布的后置条件，第 5 轮复审 F1）：
-  // 不报成功，那个外部提交原样留着。外部提交由一个 git 包装在真正的 update-ref 之后插进来（发布期间项目目录的
-  // HEAD.lock 在 navi 手里，从任务工作区那份检出去挪 main）。
+  // 不报成功，那个外部提交原样留着。外部提交由一个 git 包装在真正的 update-ref 之后插进来。
   {
     const sample = await fixture("landing-after-race", { baseline: "merge_preview" });
     const bin = join(root, "after-race-bin");
     mkdirSync(bin);
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-    const real = `'${realGit}' -C '${sample.cwd}'`;
+    const real = `'${realGit}' -C '${sample.repo}'`;
     writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ${ACCEPT_REFLOG_PREFIX}"*) '${realGit}' "$@"; rc=$?\n`
       + `  c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"; exit $rc ;; esac\n`
       + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
@@ -484,7 +483,7 @@ try {
     git(sample.cwd, "commit", "-qm", "task edits the tool and adds a directory");
     const acl = process.platform === "darwin";
     if (acl) execFileSync("chmod", ["+a", `user:${userInfo().username} deny execute`, tool]);
-    const real = `GIT -C '${sample.cwd}'`; // 项目目录的 HEAD.lock 在 navi 手里，从任务工作区挪 main
+    const real = `GIT -C '${sample.repo}'`;
     const bin = wrapGit("restore-whole", ` update-ref -m ${ACCEPT_REFLOG_PREFIX}`,
       `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`);
     const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
@@ -615,11 +614,28 @@ try {
     git(sample.repo, "config", "--unset", "core.autocrlf");
   }
 
+  // ㊼ 发布期间另一个终端 `git switch -c`（不拿索引锁，换得了 HEAD）：分支已经挪了 / 改动已经写进检出，可项目目录
+  // 现在是另一个分支 —— 不报成功，说清落到了哪一步、项目目录在哪，不替用户复位。
+  for (const commit of [true, false]) {
+    const sample = await fixture(`landing-switch-during-${commit ? "commit" : "stage"}`, { baseline: "merge_preview" });
+    const before = git(sample.repo, "rev-parse", "main");
+    // 封好的发布环境带着 GIT_DIR / GIT_INDEX_FILE 等，另一个终端没有：清掉再切（`G[I]T`：wrapGit 会把 GIT 换成真 git）。
+    const bin = wrapGit(`switch-during-${commit}`, " read-tree -m -u ",
+      `(for v in $(env | sed -n 's/^\\(G[I]T_[A-Z_]*\\)=.*/\\1/p'); do unset "$v"; done; GIT -C '${sample.repo}' switch -q -c fresh)`);
+    const outcome = await withPath(bin, arm => landGuarded(sample, arm, { commit }));
+    assert.ok(existsSync(join(bin, "fired")));
+    assert.equal(git(sample.repo, "symbolic-ref", "HEAD"), "refs/heads/fresh", "前提：发布期间项目目录被切到了 fresh");
+    assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
+    if (!outcome.landed.ok) assert.match(outcome.landed.message, /发布的同时项目目录 [^]*被切到了分支 fresh/);
+    if (commit) assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), outcome.expectedTree, "分支已经挪到测过的结果，回执如实说了");
+    else assert.equal(git(sample.repo, "rev-parse", "main"), before, "不提交那一档不挪分支");
+  }
+
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
     hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
     dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true,
-    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true, truncated: true, unreadable: true }));
+    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true, truncated: true, unreadable: true, switchDuring: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

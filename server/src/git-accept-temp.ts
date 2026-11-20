@@ -27,11 +27,10 @@ export async function addTemporaryWorktree(repo: string, ref: string, detached: 
   }
 }
 
-/** `gitArgs` 放在子命令之前（比如关掉钩子的 `-c core.hooksPath=…`）。 */
-export async function removeTemporaryWorktree(repo: string, temp: TemporaryWorktree, gitArgs: string[] = []): Promise<string | null> {
+export async function removeTemporaryWorktree(repo: string, temp: TemporaryWorktree): Promise<string | null> {
   const failures: string[] = [];
   try {
-    await exec("git", ["-C", repo, ...gitArgs, "worktree", "remove", "--force", temp.path]);
+    await exec("git", ["-C", repo, "worktree", "remove", "--force", temp.path]);
   } catch (error) {
     failures.push(gitError(error));
   }
