@@ -6,7 +6,8 @@
 // 和建任务时就开了 worktree 的任务长得一模一样，信息格、diff、验收、清理不用另认一种。
 //
 // 起点、合入目标的规则跟新建任务是同一份（task-branch-plan.ts `initializeBranchPlan`）：本地分支、
-// 远端分支、提交都按那边的口径冻结起点、定合入目标，这里不另写一套。
+// 远端分支、提交都按那边的口径冻结起点、定合入目标，这里不另写一套 —— 远端分支先拉那一条再冻结，
+// 没给合入分支时合进本地同名分支（本地没有就照远端建一条跟踪分支）。
 //
 // 两个入口，同一个动作（`moveTaskToWorktree`，调用方必须握着这条任务的回合锁）：
 //   · 用户在信息格里点：任务没在跑，路由当场占锁办完（task-worktree-move-routes.ts）；
@@ -39,7 +40,8 @@ import {
 } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
-import { baseRef, branchName, commitAt, initializeBranchPlan } from "./task-branch-plan.js";
+import { branchName, commitAt, initializeBranchPlan, undoBranchPlanSideEffects, type BranchPlanSideEffects } from "./task-branch-plan.js";
+import { remoteBranchOf } from "./git-remote-branch.js";
 import { claudeSessionFilePath } from "./handoff-collect.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
@@ -71,6 +73,8 @@ export type WorktreeMoved = {
   base: string;
   startCommit: string;
   mergeTargetBranch: string | null;
+  /** 从远端分支开工、本地没有同名分支时，照远端新建的那条（它就是合入目标）。 */
+  trackingBranch: string | null;
   /** 会话文件没能带过去的那几条（下一回合接不上、会另开会话）。 */
   notes: string[];
 };
@@ -107,9 +111,9 @@ export async function worktreeMoveBlocker(task: TaskRow, repoPath: string): Prom
 export async function worktreeMoveInputError(repoPath: string, input: WorktreeMoveInput): Promise<WorktreeMoveError | null> {
   const base = input.base.trim();
   if (!base) return new WorktreeMoveError("要给出起点（分支、远端分支或提交）", 400);
-  // 远端分支（`<远端>/<分支>`）此刻在本地没有记录也放过去：拉不拉、怎么拉归分支计划管（initializeBranchPlan），
-  // 这里只拦一眼就知道不成的。
-  if (!(await commitAt(repoPath, base)) && !(await looksRemote(repoPath, base))) {
+  // 远端分支（`origin/x`、`refs/remotes/origin/x`）此刻在本地没有记录也放过去：分支计划会先拉那一条再冻结
+  // （initializeBranchPlan），这里只拦一眼就知道不成的。
+  if (!(await commitAt(repoPath, base)) && !(await remoteBranchOf(repoPath, base))) {
     return new WorktreeMoveError(`起点 ${base} 读不出提交（不是本地分支、远端分支、tag 或提交）。远端分支请先刷新远端分支`, 400);
   }
   const target = input.mergeTargetBranch?.trim();
@@ -117,13 +121,6 @@ export async function worktreeMoveInputError(repoPath: string, input: WorktreeMo
     return new WorktreeMoveError(`合入分支 ${target} 不在本地，请选一条本地分支`, 400);
   }
   return null;
-}
-
-async function looksRemote(repoPath: string, base: string): Promise<boolean> {
-  const ref = base.replace(/^refs\/remotes\//, "");
-  const remotes = await exec("git", ["-C", expandHome(repoPath), "remote"])
-    .then(({ stdout }) => stdout.split("\n").map((name) => name.trim()).filter(Boolean), () => [] as string[]);
-  return remotes.some((remote) => ref.startsWith(`${remote}/`) && ref.length > remote.length + 1);
 }
 
 /** 项目目录里有未提交的改动 → 不办，并说清楚是哪几个、该怎么处理。 */
@@ -200,15 +197,18 @@ async function carrySessions(taskId: string, from: string, to: string, move: Ses
   }
 }
 
-/** 收回这次建出来的东西：复制出的会话文件（倒着删，先文件后目录）、worktree、任务分支、冻结的开工点。 */
-async function undoMove(repo: string, taskId: string, made: { path: string; branch: string; startCommit: string }, created: string[]) {
+/**
+ * 收回这次建出来的东西：复制出的会话文件（倒着删，先文件后目录）、worktree、任务分支，再交给分支计划收回它
+ * 留下的冻结开工点和从远端开工时顺手建的跟踪分支（task-branch-plan.ts `undoBranchPlanSideEffects`）。
+ */
+async function undoMove(repo: string, made: { path: string; branch: string }, plan: BranchPlanSideEffects, created: string[]) {
   for (const path of [...created].reverse()) rmSync(path, { recursive: true, force: true });
   const git = (...args: string[]) => exec("git", ["-C", repo, ...args]).catch(() => {});
   await git("worktree", "remove", "--force", made.path);
   if (existsSync(made.path)) rmSync(made.path, { recursive: true, force: true });
   await git("worktree", "prune");
   await git("branch", "-D", "--end-of-options", made.branch);
-  await git("update-ref", "-d", baseRef(taskId), made.startCommit);
+  await undoBranchPlanSideEffects(repo, plan);
 }
 
 /** 「登记此刻还是我读到的那一份」：没有登记的那条路（用户点）要求此刻也没有。 */
@@ -222,7 +222,9 @@ const movedNote = (moved: WorktreeMoved) =>
 
 const movedLine = (moved: WorktreeMoved) =>
   `已改到独立工作区 ${moved.path}（分支 ${moved.branch}，从 ${moved.base} 的 ${moved.startCommit.slice(0, 7)} 开出`
-  + `${moved.mergeTargetBranch ? `，验收合入 ${moved.mergeTargetBranch}` : ""}）。原项目目录 ${moved.from} 里的东西没有动。`
+  + `${moved.mergeTargetBranch ? `，验收合入 ${moved.mergeTargetBranch}` : ""}`
+  + `${moved.trackingBranch ? `；本地原来没有 ${moved.trackingBranch}，已照 ${moved.base} 建了一条跟踪它的` : ""}）。`
+  + `原项目目录 ${moved.from} 里的东西没有动。`
   + (moved.notes.length ? ` ${moved.notes.join("；")}。` : "");
 
 /**
@@ -249,23 +251,29 @@ export async function moveTaskToWorktree(taskId: string, input: WorktreeMoveInpu
     const refused = await worktreeMoveBlocker(task, repo) ?? await worktreeMoveInputError(repo, input)
       ?? await dirtyProjectError(repo, input.base.trim());
     if (refused) throw refused;
+    // 交给分支计划的是一份按「新建任务」摆的副本：它对已经结束的任务（导入的历史任务）不联网、不建跟踪分支，
+    // 而这里改的多半正是停下来的任务，状态照实传进去就会把远端起点当成历史记录跳过。只取它算出来的那几格。
     const row = {
-      ...task, useWorktree: true, worktreeBase: input.base.trim(), worktreeStartCommit: null,
+      ...task, status: "backlog" as const, stage: null, useWorktree: true, worktreeBase: input.base.trim(), worktreeStartCommit: null,
       worktreeBaseBranch: null, mergeTargetBranch: input.mergeTargetBranch?.trim() || null, baseTaskId: null,
     };
+    let plan: BranchPlanSideEffects;
     try {
-      await initializeBranchPlan(row, repo);
+      plan = await initializeBranchPlan(row, repo);
     } catch (error) {
       throw await planError(error) ?? error;
     }
     const startCommit = row.worktreeStartCommit as string | null;
-    if (!startCommit) throw new WorktreeMoveError(`起点 ${row.worktreeBase} 读不出提交`, 400);
-    let made: { path: string; branch: string; startCommit: string };
+    if (!startCommit) {
+      await undoBranchPlanSideEffects(repo, plan);
+      throw new WorktreeMoveError(`起点 ${row.worktreeBase} 读不出提交`, 400);
+    }
+    let made: { path: string; branch: string };
     try {
       const ws = await prepareWorktree(repo, task.id, startCommit, true);
-      made = { path: ws.path, branch: ws.branch ?? await resolveWorktreeBranchName(repo, task.id), startCommit };
+      made = { path: ws.path, branch: ws.branch ?? await resolveWorktreeBranchName(repo, task.id) };
     } catch (error) {
-      await exec("git", ["-C", repo, "update-ref", "-d", baseRef(task.id), startCommit]).catch(() => {});
+      await undoBranchPlanSideEffects(repo, plan);
       throw new WorktreeMoveError(error instanceof Error ? error.message : String(error));
     }
     const carried: SessionMove = { rows: [], created: [], notes: [] };
@@ -273,7 +281,7 @@ export async function moveTaskToWorktree(taskId: string, input: WorktreeMoveInpu
       await carrySessions(task.id, repo, made.path, carried);
       const result: WorktreeMoved = {
         from: repo, path: made.path, branch: made.branch, base: row.worktreeBaseBranch || row.worktreeBase || startCommit, startCommit,
-        mergeTargetBranch: row.mergeTargetBranch ?? null, notes: carried.notes,
+        mergeTargetBranch: row.mergeTargetBranch ?? null, trackingBranch: plan.trackingBranch?.name ?? null, notes: carried.notes,
       };
       // 会话行和任务行一批落：中间没有 await，要么全改指新目录、要么一行不动。每条都带着「登记还是那一份」。
       const unchanged = and(eq(tasks.id, task.id), requestIs(expected), eq(tasks.useWorktree, false));
@@ -290,7 +298,7 @@ export async function moveTaskToWorktree(taskId: string, input: WorktreeMoveInpu
       if (!(written.at(-1) as unknown[]).length) throw expected === null ? new WorktreeMoveError("任务在办的过程中被改动了，没有改成，再试一次") : new WorktreeMoveWithdrawn();
       return result;
     } catch (error) {
-      await undoMove(repo, task.id, made, carried.created);
+      await undoMove(repo, made, plan, carried.created);
       if (error instanceof WorktreeMoveError) throw error;
       throw new WorktreeMoveError(`改到独立工作区半路失败，已经收回这次建的工作区和分支：${error instanceof Error ? error.message : String(error)}`);
     }

@@ -328,6 +328,53 @@ try {
     assert.match((await userTry.json()).error, /先撤回/);
     console.log("✓ an accepted in-place task, or one with a pending request, is refused with the real reason");
   }
+  {
+    // 从远端分支改：本地还没拉过那一条，先拉再冻结；没给合入分支时合进本地同名分支，本地没有就照远端建一条跟踪分支。
+    const repo = await repository("remote-move");
+    const origin = join(root, "remote-move-origin.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", origin], { stdio: "ignore" });
+    const publisher = join(root, "remote-move-publisher");
+    execFileSync("git", ["clone", "-q", origin, publisher], { stdio: "ignore" });
+    git(publisher, "config", "user.name", "Move Test");
+    git(publisher, "config", "user.email", "move@example.test");
+    git(publisher, "checkout", "-q", "-b", "remote-only");
+    const remoteHead = commit(publisher, "remote.txt");
+    git(publisher, "push", "-q", "origin", "remote-only");
+    git(publisher, "checkout", "-q", "-b", "remote-two");
+    commit(publisher, "remote-two.txt");
+    git(publisher, "push", "-q", "origin", "remote-two");
+    git(repo, "remote", "add", "origin", origin);
+    assert.equal(hasRef(repo, "refs/remotes/origin/remote-only"), false, "前提：本地还没拉过");
+
+    const id = "remotemove11";
+    await task(id, "remote-move", { status: "done" });
+    const response = await post(id, { base: "origin/remote-only" });
+    assert.equal(response.status, 200, await response.clone().text());
+    const after = await row(id);
+    assert.equal(after.worktreeStartCommit, remoteHead, "先拉远端那一条，再冻结它此刻的提交");
+    assert.equal(after.worktreeBase, "refs/remotes/origin/remote-only", "认出是远端分支后按完整引用落库（同新建任务）");
+    assert.equal(after.worktreeBaseBranch, "origin/remote-only");
+    assert.equal(after.mergeTargetBranch, "remote-only", "合入目标落到本地同名分支");
+    assert.equal(git(repo, "rev-parse", "refs/heads/remote-only"), remoteHead, "本地没有就照远端建出来");
+    assert.equal(git(repo, "rev-parse", "--abbrev-ref", "remote-only@{upstream}"), "origin/remote-only", "建的是跟踪分支");
+    assert.equal(git(worktreePathFor(repo, id), "rev-parse", "HEAD"), remoteHead);
+
+    // 同样从远端分支改、却在建好工作区之后失败：顺手建的跟踪分支也一并收回。
+    const failing = "remotefail12";
+    await task(failing, "remote-move", { status: "done" });
+    await db.insert(sessions).values({
+      id: "sess-remote-fail", taskId: failing, role: "single", agentType: "claude", executor: "claude@test", cwd: repo, worktreePath: repo,
+      branch: "main", cliSessionId: "cli-remote-fail", cliConfigDir: claudeConfig, startedAt: at, endedAt: at, exitStatus: 0,
+    });
+    mkdirSync(claudeSessionFilePath(realpathSync(repo), "cli-remote-fail", claudeConfig), { recursive: true });
+    const failed = await post(failing, { base: "origin/remote-two" });
+    assert.equal(failed.status, 409, await failed.clone().text());
+    assert.equal((await row(failing)).useWorktree, false);
+    assert.equal(hasRef(repo, "refs/heads/remote-two"), false, "照远端建的跟踪分支收回了");
+    assert.equal(hasRef(repo, `refs/heads/${worktreeBranchName(failing)}`), false);
+    assert.equal(hasRef(repo, baseRef(failing)), false);
+    console.log("✓ a remote start is fetched first, merges into a new local tracking branch, and a failed move takes it back");
+  }
 } finally {
   await removeTmpStage(realRoot);
   rmSync(root, { force: true });
