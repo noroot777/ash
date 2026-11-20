@@ -15,7 +15,7 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { taskWorkflowDef } from "./workflows.js";
 import { stopPreviewForWorktreeCleanup } from "./preview.js";
 import { acceptWithoutCleanup, finalizeAcceptance } from "./task-accept-finalize.js";
-import { mergeThenPush, preparePush, pushMerged, type PushOutcome, type PushPlan } from "./task-accept-push.js";
+import { mergeThenPush, preparePush, pushMerged, untilRemoteSettles, type PushChoice, type PushOutcome } from "./task-accept-push.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
@@ -99,7 +99,8 @@ async function acceptTaskUnlocked(
   reviewAuthority?: ReviewAuthority,
   expected: AcceptExpectation = {},
   onAutoCommit?: (outcome: AcceptanceAutoCommitOutcome) => void,
-  push: boolean | PushPlan = false,
+  /** 解析过就换成冻结的目的地：从头重来（push_remote_moved）的那一遍沿用它，不再按那一刻重新解析。 */
+  push: PushChoice = { choice: false },
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
   if (preflight) return preflight;
@@ -172,9 +173,10 @@ async function acceptTaskUnlocked(
     if (afterCommit.failure) return afterCommit.failure;
   }
   // 「推送到远程」：门禁之前先把远程同步进本地目标分支（task-accept-push.ts），门禁和合并都按同步之后的判。
-  const pushing = push && gateProject ? await preparePush(task, gateProject, by, commitOverride, push) : null;
+  const pushing = push.choice && gateProject ? await preparePush(task, gateProject, by, commitOverride, push.choice) : null;
   if (pushing?.failure) return pushing.failure;
   const pushPlan = pushing?.plan ?? null;
+  if (pushPlan) push.choice = pushPlan;
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority, expectedResultVersion: expected.resultVersion,
@@ -284,8 +286,12 @@ async function acceptTaskUnlocked(
   }
   // 选了推送：推上去了才算合完，推不上去就把合并退回去（task-accept-push.ts）。
   const strategy = plan.merge;
-  const { merge, push: pushed } = await mergeThenPush(taskId, project.repoPath, pushPlan, () => mergeTaskBranch(project.repoPath, taskId,
+  const { merge, push: pushed } = await mergeThenPush(task, project.repoPath, pushPlan, () => mergeTaskBranch(project.repoPath, taskId,
     intendedTarget, strategy, { commit: commitOnAccept, retryOfMerged: retrying, sourceCommit: testedSource, ...tested }));
+  if (!merge.ok && merge.reason === "push_remote_moved") {
+    return { accepted: false, httpStatus: 409, taskId, reason: merge.reason, error: merge.message, status: task.status,
+      sourceBranch: merge.sourceBranch, targetBranch: merge.targetBranch };
+  }
   if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
     const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);
     merge.message += owner ? `占用者是任务「${owner.title}」（${owner.id}）。任务结束后 worktree 仍会占用分支，删除分支会使验收目标丢失。请保留分支并处理验收目标。` : "请保留目标分支，删除工作区不能替代验收目标配置。";
@@ -306,7 +312,7 @@ async function acceptTaskUnlocked(
       && !!task.acceptedMergeCommit
       && await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch);
     if (mergeReachable) {
-      const pushed = pushPlan ? await pushMerged(taskId, project.repoPath, pushPlan) : undefined;
+      const pushed = pushPlan ? await pushMerged(task, project.repoPath, pushPlan) : undefined;
       if (pushed && !pushed.ok) {
         return { accepted: false, httpStatus: 409, taskId, reason: pushed.reason, error: pushed.message, status: task.status, push: pushed,
           completedMerge: { targetBranch, commit: task.acceptedMergeCommit } };
@@ -593,7 +599,7 @@ export async function acceptTask(
     /** 调用方看到的那一道「等我点头」（task-human-gate.ts）；线已经不停在那一道就拒绝。不传 = 不核。 */
     expectedHumanGate?: string;
     /** 合完推送到目标分支的远程（task-accept-push.ts）：确认过的目的地，或只说了「推」的 true。不读任何默认。 */
-    push?: boolean | PushPlan;
+    push?: PushChoice["choice"];
   } = {},
 ): Promise<AcceptTaskResult> {
   const originalFinalizer = !!advanceOpts.reviewAuthority?.finalization && !advanceOpts.acceptGatePassedRunId;
@@ -648,14 +654,15 @@ export async function acceptTask(
               receiptLine(`验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`),
             );
           }
-          return acceptTaskUnlocked(
+          // 推送时远程又进了新提交：已退回、已同步，在同一把锁里从头再验一遍（task-accept-push.ts 文件头）。
+          return untilRemoteSettles(taskId, advanceOpts.push ?? false, (push) => acceptTaskUnlocked(
             taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit,
             advanceOpts.acceptGate, advanceOpts.acceptGatePassedRunId,
             advanceOpts.reviewAuthority,
             { resultVersion: advanceOpts.expectedResultVersion, humanGate: advanceOpts.expectedHumanGate },
             outcome => { autoCommit = outcome; },
-            advanceOpts.push ?? false,
-          );
+            push,
+          ));
         });
       }
     } finally {

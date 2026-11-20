@@ -7,16 +7,18 @@
 //
 // 顺序与合并预览档的发布一样（git-accept-publish.ts 文件头）：先演（`read-tree -n`，不写文件），再带旧值挪
 // 分支（被别人挪过就拒），最后才写文件、把新索引换进去。写文件写到一半失败就停在那儿如实说，不替用户复位。
-// 目标哪儿都没检出：带旧值 `update-ref`，挪完再看一眼期间有没有被检出，有就把自己这一下原子地挪回去。
+// 目标哪儿都没检出：先用不检出文件的临时 worktree 占住它（期间谁也检出不了），再带旧值 `update-ref`
+// （git-accept-temp.ts whileBranchClaimed，那里写着为什么不能「挪完再看一眼、被检出了就退回」）。
 import { open, copyFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { execFileText as exec } from "./exec.js";
 import { expandHome, gitError } from "./git.js";
 import { targetCheckout } from "./git-accept.js";
-import { checkoutRecovery, registeredCheckout } from "./git-worktree-state.js";
+import { checkoutRecovery } from "./git-worktree-state.js";
+import { whileBranchClaimed } from "./git-accept-temp.js";
 
 export type GuardedMove =
-  | { ok: true }
+  | { ok: true; warning?: string }
   | { ok: false; reason: "target_dirty" | "target_checked_out" | "target_moved" | "target_busy" | "move_partial"; message: string };
 
 const rev = async (repo: string, ref: string) =>
@@ -34,12 +36,15 @@ export async function moveBranchGuarded(repoPath: string, branch: string, from: 
       message: `${what}要挪 ${branch}，但它检出在另一个 worktree ${checkout.path} 上；未操作该工作区。${checkoutRecovery(checkout) ?? ""}` };
   }
   if (!checkout.path) {
-    try { await exec("git", ["-C", repo, "update-ref", ref, to, from]); } catch { return moved(); }
-    const now = await registeredCheckout(repo, branch).catch(() => ({ path: null }));
-    if (!now.path) return { ok: true };
-    const undone = await exec("git", ["-C", repo, "update-ref", ref, from, to]).then(() => true, () => false);
-    return { ok: false, reason: "target_checked_out", message: `${what}的同时 ${branch} 被检出到了 ${now.path}，`
-      + (undone ? "已把这一下退回，那份检出没动。" : `没能退回：它现在指着 ${to.slice(0, 12)}，原来是 ${from.slice(0, 12)}。`) };
+    const claim = await whileBranchClaimed(repo, branch,
+      () => exec("git", ["-C", repo, "update-ref", ref, to, from]).then(() => true, () => false));
+    if (!claim.claimed) {
+      return claim.checkedOutAt
+        ? { ok: false, reason: "target_checked_out", message: `${what}的同时 ${branch} 被检出到了 ${claim.checkedOutAt}，这次没动它。` }
+        : { ok: false, reason: "target_busy", message: `${what}之前没能占住 ${branch}（${claim.message}），这次没动它。` };
+    }
+    if (!claim.value) return moved();
+    return claim.cleanupError ? { ok: true, warning: `${what}时用来占住 ${branch} 的临时 worktree 没拆干净：${claim.cleanupError}` } : { ok: true };
   }
   return moveInCheckout(repo, branch, from, to, what, moved);
 }
@@ -79,10 +84,16 @@ async function moveInCheckout(repo: string, branch: string, from: string, to: st
         + "索引还停在原来那一版，Navi 没有替你复位；在项目目录里 `git status` 核对后用 `git reset --keep HEAD` 或手动处理。" };
     }
     // 新索引写进锁文件再换上去 —— 跟 git 自己提交索引是同一个动作，换上的那一刻锁也就放了。
-    await handle.close();
-    handle = undefined;
-    await copyFile(scratch, lock);
-    await rename(lock, join(gitDir, "index"));
+    try {
+      await handle.close();
+      handle = undefined;
+      await copyFile(scratch, lock);
+      await rename(lock, join(gitDir, "index"));
+    } catch (error) {
+      return { ok: false, reason: "move_partial", message: `${branch} 已经挪到 ${to.slice(0, 12)}、文件也写进了项目目录 ${repo}，但换上新索引时失败了`
+        + `（${error instanceof Error ? error.message : String(error)}），索引还停在原来那一版；Navi 没有替你复位，在项目目录里 \`git status\` 核对后`
+        + "用 `git reset --keep HEAD` 或手动处理。" };
+    }
     committed = true;
     return { ok: true };
   } finally {

@@ -24,9 +24,9 @@ import { withRepoLock } from "./repo-lock.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { execFileText as exec } from "./exec.js";
 import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
-import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
+import { addTemporaryWorktree, removeTemporaryWorktree, whileBranchClaimed, type TemporaryWorktree } from "./git-accept-temp.js";
 import type { GatePhysical } from "./accept-gate-physical.js";
-import { alreadyLandedUntested, guardedDirtyFiles, movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
+import { ACCEPT_REFLOG_PREFIX, alreadyLandedUntested, guardedDirtyFiles, movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
 import { LEGACY_ACCEPT_TAG_PREFIX } from "@navi/shared/legacy-names";
 
 function sameFilesystemPath(a: string, b: string): boolean {
@@ -61,9 +61,10 @@ export type TaskMergeFailureReason =
   | "fast_forward_failed"
   | "merge_failed"
   | "temporary_cleanup_failed"
-  // 推送档（task-accept-push.ts）：推不上去、退回了这次合并；或远程又动了、同步它时没成功。
+  // 推送档（task-accept-push.ts）：推不上去、退回了这次合并；远程又动了、已同步进来要从头重新验收
+  // （push_remote_moved，acceptTask 自己接着重来，不会落到调用方手里，除非连着几轮都这样）；或同步它时没成功。
   | "push_failed"
-  | "push_rejected"
+  | "push_remote_moved"
   | "push_fetch_failed"
   | "push_diverged"
   | "target_moved"
@@ -588,8 +589,8 @@ async function mergeTaskBranchLocked(
   // First attempt the ref-only fast-forward. This changes no checked-out files;
   // non-FF and checked-out-target failures fall through to the guarded paths.
   try {
-    await exec("git", ["-C", repo, "fetch", ".", `${sourceRef}:${targetBranch}`]);
-    return { ok: true, sourceBranch, targetBranch, method: "fast_forward" };
+    const moved = await fastForwardUnchecked(repo, sourceBranch, targetBranch, sourceRef);
+    return withTemporaryCleanupOutcome({ ok: true, sourceBranch, targetBranch, method: "fast_forward" }, moved.cleanupError, moved.path);
   } catch (fetchError) {
     const fastForward = await isAncestor(repo, targetBranch, sourceRef);
     return inTargetCheckout(
@@ -612,6 +613,22 @@ async function mergeTaskBranchLocked(
         : null,
     );
   }
+}
+
+/**
+ * 目标分支哪儿都没检出时的纯快进：先占住它（期间谁也检出不了，git-accept-temp.ts whileBranchClaimed）再带旧值挪 ref。
+ * 原先是 `git fetch . <源>:<目标>` —— git 只在开头看一眼目标有没有被检出，看完到写 ref 之间别处检出了它，
+ * 那份检出就停在旧版上、HEAD 却指着新版。检出着、不是快进、占不住、期间被挪过都抛，交给调用方那几条带检出的路。
+ */
+async function fastForwardUnchecked(repo: string, sourceBranch: string, targetBranch: string, sourceRef: string) {
+  const ref = `refs/heads/${targetBranch}`;
+  const [target, source] = await Promise.all([commitOf(repo, ref), commitOf(repo, sourceRef)]);
+  if (!target || !source || !(await isAncestor(repo, target, source))) throw new Error(`${targetBranch} 不能纯快进到 ${sourceRef}`);
+  const claim = await whileBranchClaimed(repo, targetBranch, () =>
+    exec("git", ["-C", repo, "update-ref", "-m", `${ACCEPT_REFLOG_PREFIX} ${sourceBranch}`, ref, source, target]).then(() => null, (error: unknown) => error));
+  if (!claim.claimed) throw new Error(claim.message);
+  if (claim.value) throw claim.value;
+  return claim;
 }
 
 /**

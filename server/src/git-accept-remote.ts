@@ -11,6 +11,9 @@
 //  · 本地目标分支和远程分叉了（本地有没推的、远程也有新的）不替他合：那不是这个任务造成的；
 //  · 不碰别人的工作区：挪本地目标分支一律走 git-guarded-move.ts（只动这一个分支、持锁核检出）。
 //
+// 网络那两下（拉、推）带项目里存的账号（git-credentials.ts gitNetInjection，同「更新远程」「推送」那几个入口）：
+// 私有仓库在项目里配了令牌，验收这一档不能退回去只认系统凭证。
+//
 // 「推到哪」的身份是**推送地址**（`git remote get-url --push`），不只是远程名：用户确认的是那个仓库，
 // 拉也从它拉、推也推给它（远程名的 url 与 pushurl 指向不同仓库时，从 url 拉来的不是接收推送的那一份）。
 import type { AcceptPushOutcome } from "@navi/shared/accept-gate";
@@ -18,18 +21,23 @@ import { execFileText as exec } from "./exec.js";
 import { expandHome, gitError, localBranchExists } from "./git.js";
 import { isAncestor } from "./git-accept.js";
 import { moveBranchGuarded, type GuardedMove } from "./git-guarded-move.js";
+import { gitNetInjection } from "./git-credentials.js";
 
 /** 推到哪：远程名 + 远程上的分支名 + 推送地址（身份以地址为准）。 */
 export type PushTarget = { remote: string; remoteBranch: string; url: string };
 
 export type RemoteSync =
-  | { ok: true; tip: string | null; fastForwarded: number }
+  | { ok: true; tip: string | null; fastForwarded: number; warning?: string }
   | { ok: false; reason: "push_fetch_failed" | "push_diverged" | Extract<GuardedMove, { ok: false }>["reason"]; message: string };
 
 export type PushOutcome = AcceptPushOutcome;
 
 // 网络命令一律不许等人输密码：服务端没有终端，等到的只会是超时。
-const NETWORK_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
+async function network(repo: string, projectId: string | null, args: string[], timeoutMs: number) {
+  const injection = await gitNetInjection(projectId);
+  return exec("git", ["-C", repo, ...injection.args, ...args],
+    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", ...injection.env }, timeoutMs });
+}
 const FETCH_TIMEOUT_MS = 90_000;
 const PUSH_TIMEOUT_MS = 180_000;
 
@@ -77,14 +85,13 @@ export const samePushTarget = (a: PushTarget & { branch?: string }, b: PushTarge
  * （就是 `git fetch` 平常更新的那个）；两者不同时落进 Navi 自己的引用，不把另一个仓库的状态冒充成远程跟踪分支。
  * 远程上还没有这一支 → tip:null（第一次推，推上去就是新建）。
  */
-export async function fetchTip(repoPath: string, target: PushTarget): Promise<{ ok: true; tip: string | null } | { ok: false; message: string }> {
+export async function fetchTip(repoPath: string, target: PushTarget, projectId: string | null): Promise<{ ok: true; tip: string | null } | { ok: false; message: string }> {
   const repo = expandHome(repoPath);
   const fetchUrl = (await exec("git", ["-C", repo, "remote", "get-url", target.remote]).catch(() => null))?.stdout.trim();
   const tracking = fetchUrl === target.url
     ? `refs/remotes/${target.remote}/${target.remoteBranch}` : `refs/navi/push-base/${target.remote}/${target.remoteBranch}`;
   try {
-    await exec("git", ["-C", repo, "fetch", "--no-tags", "--quiet", target.url, `+refs/heads/${target.remoteBranch}:${tracking}`],
-      { env: NETWORK_ENV, timeoutMs: FETCH_TIMEOUT_MS });
+    await network(repo, projectId, ["fetch", "--no-tags", "--quiet", target.url, `+refs/heads/${target.remoteBranch}:${tracking}`], FETCH_TIMEOUT_MS);
   } catch (error) {
     const message = gitError(error);
     if (/couldn't find remote ref|could not find remote ref/i.test(message)) return { ok: true, tip: null };
@@ -98,10 +105,10 @@ export async function fetchTip(repoPath: string, target: PushTarget): Promise<{ 
  *
  * 快进本地目标分支走 git-guarded-move.ts：只动这一个分支、只在它还指着刚读到的那一版时动，检出着时持锁核检出。
  */
-export async function syncTargetWithRemote(repoPath: string, branch: string, target: PushTarget): Promise<RemoteSync> {
+export async function syncTargetWithRemote(repoPath: string, branch: string, target: PushTarget, projectId: string | null): Promise<RemoteSync> {
   const repo = expandHome(repoPath);
   const remoteName = `${target.remote}/${target.remoteBranch}`;
-  const fetched = await fetchTip(repoPath, target);
+  const fetched = await fetchTip(repoPath, target, projectId);
   if (!fetched.ok) {
     return { ok: false, reason: "push_fetch_failed",
       message: `选了「推送到 ${remoteName}」，但拉不到远程的最新状态：${fetched.message}。这次什么都没动；网络或权限好了再验收，或这次不推送。` };
@@ -120,19 +127,18 @@ export async function syncTargetWithRemote(repoPath: string, branch: string, tar
   const behind = await count(repo, `${local}..${tip}`);
   const moved = await moveBranchGuarded(repo, branch, local, tip, `把 ${remoteName} 的 ${behind} 个新提交同步进 ${branch}`);
   if (!moved.ok) return { ok: false, reason: moved.reason, message: `${moved.message}这次没有合并。` };
-  return { ok: true, tip, fastForwarded: behind };
+  return { ok: true, tip, fastForwarded: behind, ...(moved.warning ? { warning: moved.warning } : {}) };
 }
 
 /** 合完之后推上去。不强推：远程在这期间又被人推过，就如实报被拒。 */
-export async function pushTargetBranch(repoPath: string, branch: string, target: PushTarget): Promise<PushOutcome> {
+export async function pushTargetBranch(repoPath: string, branch: string, target: PushTarget, projectId: string | null): Promise<PushOutcome> {
   const repo = expandHome(repoPath);
   const base = { remote: target.remote, remoteBranch: target.remoteBranch };
   const commit = await commitOf(repo, `refs/heads/${branch}`);
   if (!commit) return { ...base, ok: false, reason: "push_failed", message: `本地分支 ${branch} 不存在` };
   try {
     // 推给确认过的那个地址，不推给「远程名此刻指着的地方」。推的是读到的那个提交，不是届时的分支头。
-    const { stdout } = await exec("git", ["-C", repo, "push", "--porcelain", target.url, `${commit}:refs/heads/${target.remoteBranch}`],
-      { env: NETWORK_ENV, timeoutMs: PUSH_TIMEOUT_MS });
+    const { stdout } = await network(repo, projectId, ["push", "--porcelain", target.url, `${commit}:refs/heads/${target.remoteBranch}`], PUSH_TIMEOUT_MS);
     // --porcelain 每个 ref 一行，`=` 打头 = 远程本来就是这个提交。
     const upToDate = stdout.split("\n").some((line) => line.startsWith("=\t"));
     // 按地址推不会更新远程跟踪分支；拉取地址就是这个地址时补记一下，`git status` 才不会说本地领先。

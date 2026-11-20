@@ -4,8 +4,9 @@
 //
 // 每个用例自带一个临时仓库 + 一个裸仓库当远程（再 clone 一份当「别人」往远程推），出不了临时目录。
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -60,6 +61,8 @@ try {
   const { moveBranchGuarded } = await import("../src/git-guarded-move.js");
   const { pushDestination } = await import("../src/task-accept-push.js");
   const { parseChoices } = await import("../src/accept-gate-handoff.js");
+  const { saveProjectGitCredential } = await import("../src/git-credentials.js");
+  const { mergeTaskBranch } = await import("../src/git-accept.js");
   await ensureSchema();
 
   const createdAt = new Date().toISOString();
@@ -212,7 +215,7 @@ try {
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "local");
     const theirs = pushFromOther(join(root, "rejected-other"), "other.txt", "other\n");
-    const outcome = await pushTargetBranch(repo, "main", { remote: "origin", remoteBranch: "main", url: remote });
+    const outcome = await pushTargetBranch(repo, "main", { remote: "origin", remoteBranch: "main", url: remote }, null);
     assert.equal(outcome.ok, false);
     if (!outcome.ok) assert.equal(outcome.reason, "push_rejected");
     assert.equal(git(remote, "rev-parse", "main"), theirs, "被拒就是被拒，远程上别人的提交不许盖掉");
@@ -356,7 +359,125 @@ try {
     assert.equal(git(repo, "rev-parse", "--abbrev-ref", "HEAD"), "side", "项目目录检出着的那个分支不受影响");
   }
 
-  console.log("accept push: 推到哪 / 先同步再合再推 / 不推不碰远程 / 冲突交回任务 / 分叉与推不了都先拒 / 被拒不强推 / 门禁续做带冻结目的地 / 目的地变了就拒 / 推送地址与拉取地址分离 / 推送期间远程又动（不冲突重来、冲突交回任务） / 推不上去退回合并 / 带护栏挪分支 全部通过");
+  // 15. 目标分支哪儿都没检出时，挪它的那一下和别人 `git switch` 它撞在一起（审查第 2 轮 F1 实测的那一幕）：
+  //     先占住再挪，那一下 switch 被 git 拒掉，项目目录还在原来的分支上、干净，不会凭空多出暂存改动。
+  //     三处同形的挪法都钉：推送档的带护栏挪分支、普通纯快进、合并预览档的发布。
+  {
+    const shim = join(root, "shim");
+    mkdirSync(shim, { recursive: true });
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    // 第一次见到挪 refs/heads/<分支> 的 update-ref 时，先在项目目录里 switch 过去（stderr 记进 mark），再照常执行。
+    writeFileSync(join(shim, "git"), [
+      "#!/bin/sh",
+      'if [ -n "$SHIM_REPO" ] && [ ! -e "$SHIM_MARK" ]; then',
+      "  u=; r=",
+      '  for a in "$@"; do [ "$a" = update-ref ] && u=1; [ "$a" = "refs/heads/$SHIM_BRANCH" ] && r=1; done',
+      `  if [ -n "$u" ] && [ -n "$r" ]; then "${realGit}" -C "$SHIM_REPO" switch -q "$SHIM_BRANCH" 2>"$SHIM_MARK" || true; touch "$SHIM_MARK"; fi`,
+      "fi",
+      `exec "${realGit}" "$@"`,
+      "",
+    ].join("\n"), { mode: 0o755 });
+    const racing = async <T>(repo: string, run: () => Promise<T>): Promise<{ value: T; refused: string }> => {
+      const mark = join(root, `mark-${seq++}`);
+      const saved = { ...process.env };
+      Object.assign(process.env, { PATH: `${shim}:${process.env.PATH}`, SHIM_REPO: repo, SHIM_BRANCH: "main", SHIM_MARK: mark });
+      try { return { value: await run(), refused: existsSync(mark) ? readFileSync(mark, "utf8") : "（没触发）" }; }
+      finally { for (const key of ["PATH", "SHIM_REPO", "SHIM_BRANCH", "SHIM_MARK"]) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; } }
+    };
+    const unchecked = (repo: string) => {
+      git(repo, "switch", "-q", "-c", "side");
+      return git(repo, "rev-parse", "main");
+    };
+    const untouched = (repo: string, what: string) => {
+      assert.equal(git(repo, "rev-parse", "--abbrev-ref", "HEAD"), "side", `${what}：项目目录还在原来的分支上`);
+      assert.equal(git(repo, "status", "--porcelain"), "", `${what}：没有凭空多出的改动`);
+    };
+
+    { // 推送档的带护栏挪分支（同步快进、推送失败退回都走它）
+      const { repo } = makeStage("claim-guarded");
+      const base = unchecked(repo);
+      writeFileSync(join(repo, "shared.txt"), "remote next\n");
+      git(repo, "commit", "-q", "-am", "next");
+      const next = git(repo, "rev-parse", "HEAD");
+      git(repo, "reset", "-q", "--hard", base);
+      const { value, refused } = await racing(repo, () => moveBranchGuarded(repo, "main", base, next, "测试"));
+      assert.equal(value.ok, true, value.ok ? "" : value.message);
+      assert.match(refused, /already (used by worktree|checked out)/, "占着期间别人检出不了它");
+      assert.equal(git(repo, "rev-parse", "main"), next);
+      untouched(repo, "带护栏挪分支");
+      assert.equal(git(repo, "worktree", "list", "--porcelain").split("\n").filter((line) => line.startsWith("worktree ")).length, 1, "占用的临时 worktree 拆掉了");
+    }
+    { // 普通纯快进（验收合并没设门禁时）
+      const { repo } = makeStage("claim-ff");
+      const taskId = await seedTask(repo, "task.txt", "task\n");
+      unchecked(repo);
+      const { value, refused } = await racing(repo, () => acceptTask(taskId, "human"));
+      assert.equal(value.accepted, true, value.accepted ? "" : value.error);
+      assert.match(refused, /already (used by worktree|checked out)/);
+      assert.equal(git(repo, "show", "main:task.txt"), "task");
+      untouched(repo, "纯快进");
+    }
+    { // 合并预览档的发布（带测过的树）
+      const { repo } = makeStage("claim-tested");
+      const taskId = await seedTask(repo, "task.txt", "task\n");
+      const base = unchecked(repo);
+      const source = git(wsOf.get(taskId)!, "rev-parse", "HEAD");
+      const { value, refused } = await racing(repo, () => mergeTaskBranch(repo, taskId, "main", "safe",
+        { sourceCommit: source, expectedTarget: base, expectedTree: git(repo, "rev-parse", `${source}^{tree}`) }));
+      assert.equal(value.ok, true, value.ok ? "" : value.message);
+      assert.match(refused, /already (used by worktree|checked out)/);
+      assert.equal(git(repo, "rev-parse", "main"), source);
+      untouched(repo, "合并预览档发布");
+    }
+  }
+
+  // 16. 项目里存了账号（私有仓库）：验收这一档的拉和推都带上它（审查第 2 轮 F3），同「更新远程」那几个入口。
+  //     远程是要求 Basic 认证的 smart HTTP（git http-backend），凭证只存在 Navi 库里，不在 URL、不在 git 配置里。
+  {
+    const { repo, remote, other } = makeStage("credential");
+    const theirs = pushFromOther(other, "theirs.txt", "theirs\n");
+    const requests: { method: string; authed: boolean }[] = [];
+    const expected = `Basic ${Buffer.from("push-user:push-token").toString("base64")}`;
+    const server = createServer((req, res) => {
+      const authed = req.headers.authorization === expected;
+      requests.push({ method: req.method ?? "", authed });
+      if (!authed) { res.writeHead(401, { "www-authenticate": 'Basic realm="push"' }).end(); return; }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const cgi = spawn("git", ["http-backend"], { env: { ...process.env, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: "1",
+        REMOTE_USER: "push-user", REQUEST_METHOD: req.method ?? "GET", PATH_INFO: url.pathname, QUERY_STRING: url.search.slice(1),
+        CONTENT_TYPE: String(req.headers["content-type"] ?? ""), ...(req.headers["content-encoding"] ? { HTTP_CONTENT_ENCODING: String(req.headers["content-encoding"]) } : {}) } });
+      req.pipe(cgi.stdin);
+      const chunks: Buffer[] = [];
+      cgi.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+      cgi.on("close", () => {
+        const all = Buffer.concat(chunks);
+        const split = all.indexOf("\r\n\r\n");
+        const head = all.subarray(0, split).toString().split("\r\n");
+        const status = Number(head.find((line) => line.startsWith("Status:"))?.split(" ")[1] ?? 200);
+        const headers = Object.fromEntries(head.filter((line) => !line.startsWith("Status:")).map((line) => [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 1).trim()]));
+        res.writeHead(status, headers).end(all.subarray(split + 4));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (server.address() as { port: number }).port;
+      const url = `http://127.0.0.1:${port}/${remote.slice(root.length + 1)}`;
+      git(repo, "remote", "set-url", "origin", url);
+      const taskId = await seedTask(repo, "task.txt", "task\n");
+      await saveProjectGitCredential((await rowOf(taskId)).projectId, "push-user", "push-token");
+      const result = await acceptTask(taskId, "human", { push: true });
+      assert.equal(result.accepted, true, result.accepted ? "" : result.error);
+      git(repo, "merge-base", "--is-ancestor", theirs, "main");
+      assert.equal(git(remote, "rev-parse", "main"), git(repo, "rev-parse", "main"), "带着项目里的账号推上去了");
+      assert.ok(requests.some((r) => r.method === "POST" && r.authed), "推送那一下是认证过的");
+      assert.equal(git(repo, "remote", "get-url", "origin"), url, "账号没写进远程地址");
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  console.log("accept push: 推到哪 / 先同步再合再推 / 不推不碰远程 / 冲突交回任务 / 分叉与推不了都先拒 / 被拒不强推 / 门禁续做带冻结目的地 / 目的地变了就拒 / 推送地址与拉取地址分离 / 推送期间远程又动（不冲突重来、冲突交回任务） / 推不上去退回合并 / 带护栏挪分支 / 挪没检出的分支先占住（三处） / 拉推带项目账号 全部通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
