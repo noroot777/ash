@@ -8,7 +8,7 @@
 //   · 还没发出去的：直接换掉内容，发出去就是新的；
 //   · 已经发出去、14 天内的：换掉内容、排上改卡，并记下 link_due —— 「库里改好了」不等于「飞书上改好了」，
 //     这笔账逐张记着，改卡送到了才清（outbox.ts patchOne / actions.ts 回执确认）。额度挡住只往后挪
-//     （outbox.ts deferLinkDue），改卡放弃了（failed / skipped）下次起通道在这里重新排上，往后挪着的当场就试；
+//     （outbox.ts deferLinkDue），改卡放弃了（failed / skipped）、没等到回执确认就退出了（acking）的下次起通道在这里重新排上，往后挪着的当场就试；
 //     排着撤回的只换内容：撤回成了这笔账跟着清，撤不回退回成改卡，改的是这份；
 //   · 发出去超过 14 天的：飞书不让改了（ENVELOPE_TTL_MS），库里留着和飞书上一致的那份，不动、不记账；
 //   · 已撤回、发不出去的（dead）：飞书上没有它，不管。
@@ -26,8 +26,6 @@ import { linkDueAlive, RECALL, RECALLED } from "./outbox.js";
 import { REPATCH } from "./reconcile.js";
 
 const META_KEY = "link_policy";
-/** 改卡已经结了、链接却没送到的几种（done 照理会连账一起清，留着它兜别处漏清的）：这笔账要重新排上。 */
-const GAVE_UP = ["skipped", "failed", "done"];
 
 /** 返回这次重写了几行（策略没变就是 0；重新排上的欠账不算在内）。 */
 export async function relinkStoredCards(policy = linkPolicy(), at = Date.now()): Promise<number> {
@@ -70,16 +68,29 @@ async function rewrite(policy: string, at: number): Promise<number> {
 }
 
 /**
- * 欠着新链接的卡：过了 14 天的销账；改卡已经结了（额度降级跳过、重试耗尽）的重新排上；还排着、只是被额度或
- * 退避往后挪了的现在就试（重启多半是因为额度调高了、网络好了，不让它再干等一轮）。
+ * 欠着新链接的卡，起通道时一张张放回改卡队列。不变量：做完之后每一笔还没销的账都处在发件队列**当场就挑得到**的
+ * 状态 —— PATCHING 里的一种、next_at 为空（outbox.ts nextPatch）。重启多半是因为额度调高了、网络好了，
+ * 往后挪着的也不再干等一轮。只改 next_at 而不看状态会造出永远挑不到的行（acking 只按到点的期限挑，空期限永远不到点）。
  */
 async function rearm(at: number): Promise<void> {
   const owed = await db.select({ id: imOutbox.id, sentAt: imOutbox.sentAt, patchState: imOutbox.patchState }).from(imOutbox)
     .where(and(isNotNull(imOutbox.linkDue), isNotNull(imOutbox.messageId)));
   for (const row of owed) {
-    const gaveUp = row.patchState === null || GAVE_UP.includes(row.patchState);
-    await db.update(imOutbox).set(!linkDueAlive(row.sentAt, at) ? { linkDue: null }
-      : gaveUp ? { patchState: "pending", attempts: 0, nextAt: null, updatedAt: now() }
-        : { nextAt: null }).where(eq(imOutbox.id, row.id));
+    await db.update(imOutbox).set(linkDueAlive(row.sentAt, at) ? requeued(row.patchState) : { linkDue: null })
+      .where(and(eq(imOutbox.id, row.id), row.patchState === null ? isNull(imOutbox.patchState) : eq(imOutbox.patchState, row.patchState)));
+  }
+}
+
+/** 每一种改卡状态放回队列的样子；没列到的（skipped / failed / done / 空 / 以后新加的）一律当作改卡已经结了、重新排上。 */
+export function requeued(patchState: string | null): Partial<typeof imOutbox.$inferInsert> {
+  switch (patchState) {
+    // 卡已经撤掉了：飞书上没有它，这笔账不用再还（gone() 照理已经连账一起清了，这里兜底）。
+    case RECALLED: return { linkDue: null };
+    // 结果卡随回执带回去了、没等到确认就退出了：照「到期没确认就当 result 改一次」的约定，现在就改。
+    case "acking": return { patchState: "result", nextAt: null };
+    case "pending":
+    case "result":
+    case RECALL: return { nextAt: null };
+    default: return { patchState: "pending", attempts: 0, nextAt: null, updatedAt: now() };
   }
 }

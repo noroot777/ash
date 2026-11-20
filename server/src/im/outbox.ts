@@ -73,7 +73,8 @@ export interface OutboxGuard {
 
 const GUARD_RETRY_MS = 30_000;
 /** 还要改到飞书上的（acking 另按期限算）。 */
-const PATCHING = ["pending", "result", "recall"];
+/** 改卡队列按 next_at 为空或已到点挑的几种（acking 另算：只在确认期限到点后挑，见 nextPatch）。 */
+export const PATCHING = ["pending", "result", "recall"];
 export const RECALL = "recall";
 export const RECALLED = "recalled";
 

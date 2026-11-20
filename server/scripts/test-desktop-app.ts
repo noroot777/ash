@@ -11,6 +11,8 @@
 //      同一个策略只扫一次；
 //   ⑤ 「库里改好了」不等于「飞书上改好了」：发出去的卡重写后逐张记着欠账（link_due），额度降级挡住只往后挪、
 //      额度回来了接着改，改到了才销账；改卡放弃了（failed / skipped）下次起通道重新排上；过了 14 天销账不再改。
+//      结果卡随回执带回去、没等到确认就退出了（acking）的，起通道时照约定当 result 当场补改；起通道放回队列之后，
+//      每一种改卡状态都落在队列当场挑得到的样子（或销账），不许造出永远挑不到的行。
 //      走真实的发件队列与额度判据，只把飞书 HTTP 换成计数的假响应。
 //
 // 本机模式（两个都带）那一侧由 test:local-only-auth 钉着。走真实 TCP：判据里「回环 socket + Host +
@@ -43,7 +45,8 @@ const { deepLinkWarning, desktopAppLink } = await import("../src/im/app-link.js"
 const { renderCard, relinkCard } = await import("../src/im/feishu/cards.js");
 const { linkPolicy } = await import("../src/im/app-link.js");
 const { renderKeyOf } = await import("../src/im/reconcile.js");
-const { relinkStoredCards } = await import("../src/im/relink.js");
+const { relinkStoredCards, requeued } = await import("../src/im/relink.js");
+const { PATCHING } = await import("../src/im/outbox.js");
 const { readMeta } = await import("../src/im/meta.js");
 const { db } = await import("../src/db/index.js");
 const { imOutbox } = await import("../src/db/schema-im.js");
@@ -276,6 +279,22 @@ try {
   await reconciler.sender.drainNow();
   assert.equal(patches, 3);
   assert.equal((await read("quota")).linkDue, null);
+
+  // 欠着链接时点了卡上的按钮、结果卡随回执带回去（acking），没等到确认就退出：起通道当场补改一次
+  await db.update(imOutbox).set({ linkDue: "2:http", patchState: "acking", nextAt: new Date(clock + 6_000).toISOString() })
+    .where(eq(imOutbox.id, "quota"));
+  await relinkStoredCards(undefined, clock);
+  row = await read("quota");
+  assert.deepEqual({ patchState: row.patchState, nextAt: row.nextAt }, { patchState: "result", nextAt: null }, "没确认的回执当 result，不留空期限的 acking");
+  await reconciler.sender.drainNow();
+  assert.equal(patches, 4, "当场补改");
+  assert.deepEqual({ patchState: (await read("quota")).patchState, linkDue: (await read("quota")).linkDue }, { patchState: "done", linkDue: null });
+  for (const state of [null, "pending", "result", "recall", "acking", "done", "skipped", "failed", "recalled", "以后新加的"]) {
+    const next = requeued(state);
+    const after = next.patchState === undefined ? state : next.patchState;
+    assert.ok(next.linkDue === null || (PATCHING.includes(String(after)) && next.nextAt === null),
+      `${state}：放回队列后要么销账，要么当场挑得到（${JSON.stringify(next)}）`);
+  }
   reconciler.stop();
   reconciler.sender.stop();
 } finally {
