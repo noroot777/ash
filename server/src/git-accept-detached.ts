@@ -9,7 +9,7 @@
 // 合并预览档用门禁测过的那棵树直接生成（git-accept-tested.ts testedResultCommit）。
 import type { AcceptStrategy } from "@navi/shared/workflow";
 import { execFileText as exec } from "./exec.js";
-import { gitError } from "./git.js";
+import { expandHome, gitError } from "./git.js";
 import {
   commitOf, isAncestor, mergeInCheckedOutTarget, mergeInputs, publishTestedResult, squashCommitMessage,
   squashInCheckedOutTarget, treeOfCommit, withTemporaryCleanupOutcome,
@@ -100,15 +100,21 @@ export async function mergeDetached(repoPath: string, taskId: string, requestedT
 /**
  * 远程收下之后，把本地目标分支快进到推上去的那个提交。合并预览档走测过的发布（检出里的字节核对同就地合并）；
  * 其余走带护栏挪分支（检出着时持锁、只在它还指着 base 时挪、会覆盖检出里改动的路径就不动）。
+ * 早已合过（推的就是本地那一头）也核一眼：推的期间本地被挪走、不再含它，同样如实报本地没跟上。
  */
-export async function landDetached(repoPath: string, merged: DetachedMerge): Promise<{ ok: true } | { ok: false; message: string }> {
-  if (merged.result === merged.base) return { ok: true };
+export async function landDetached(repoPath: string, merged: DetachedMerge): Promise<{ ok: true; warnings: string[] } | { ok: false; message: string }> {
+  const repo = expandHome(repoPath);
   const names = { sourceBranch: merged.sourceBranch, targetBranch: merged.targetBranch };
+  if (merged.result === merged.base) {
+    const local = await commitOf(repo, `refs/heads/${merged.targetBranch}`);
+    return local && await isAncestor(repo, merged.result, local) ? { ok: true, warnings: [] }
+      : { ok: false, message: `本地 ${merged.targetBranch} 在推送期间被挪走了（现在 ${local?.slice(0, 12) ?? "读不到"}），不含推上去的 ${merged.result.slice(0, 12)}` };
+  }
   if (merged.guard && merged.method !== "already_merged") {
     const published = await publishTestedResult(repoPath, merged.guard, merged.method, merged.result, names);
-    return published.ok ? { ok: true } : { ok: false, message: published.message };
+    return published.ok ? { ok: true, warnings: (published.warnings ?? []).map((w) => w.message) } : { ok: false, message: published.message };
   }
   const moved = await moveBranchGuarded(repoPath, merged.targetBranch, merged.base, merged.result,
     `把推上去的合并快进进本地 ${merged.targetBranch}`);
-  return moved.ok ? { ok: true } : { ok: false, message: moved.message };
+  return moved.ok ? { ok: true, warnings: moved.warning ? [moved.warning] : [] } : { ok: false, message: moved.message };
 }

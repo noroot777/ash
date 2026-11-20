@@ -530,7 +530,88 @@ try {
     }
   }
 
-  console.log("accept push: 推到哪 / 先同步再合再推 / 不推不碰远程 / 冲突交回任务 / 分叉与推不了都先拒 / 被拒不强推 / 门禁续做带冻结目的地 / 目的地变了就拒 / 推送地址与拉取地址分离 / 推送期间远程又动（不冲突重来、冲突交回任务） / 推不上去本地不动 / 带护栏挪分支 / 挪没检出的分支先占住（三处） / 拉推带项目账号 / 推的是合出来的提交、本地被挪过只报落后 / 检出里有无关改动照样同步重合或交回冲突 全部通过");
+  // 19. 远程已经收下、只差清理（审查第 3 轮第 1 条）：推的同时本地 main 被另一个终端提交过（快进不了），任务工作区里
+  //     还有没提交的编辑（清理被挡）。处理掉编辑再点验收：远程含着记下的那次合并，不再要求本地先同步，直接收尾。
+  {
+    const { repo, remote } = makeStage("pushed-cleanup-retry");
+    const taskId = await seedTask(repo, "shared.txt", "task version\n");
+    const ws = wsOf.get(taskId)!;
+    const source = git(ws, "rev-parse", "HEAD");
+    writeFileSync(join(repo, ".git", "hooks", "pre-push"), ["#!/bin/sh", 'rm -f "$0"', "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX",
+      `cd ${JSON.stringify(repo)} && git commit -q --allow-empty -m meanwhile`,
+      `printf 'extra\\n' >> ${JSON.stringify(join(ws, "shared.txt"))}`, ""].join("\n"), { mode: 0o755 });
+    const first = await acceptTask(taskId, "human", { push: true });
+    assert.equal(first.accepted, false);
+    if (first.accepted) throw new Error("任务工作区有编辑，清理应当停下");
+    assert.equal(first.reason, "worktree_remove_failed", first.error);
+    assert.equal(first.push?.ok, true);
+    assert.equal(git(remote, "rev-parse", "main"), source, "远程已经收下");
+    assert.equal(await stageOf(taskId), "merged");
+    git(ws, "checkout", "-q", "--", "shared.txt");
+    const second = await acceptTask(taskId, "human", { push: true });
+    assert.equal(second.accepted, true, second.accepted ? "" : `${second.reason}: ${second.error}`);
+    if (second.push?.ok) assert.ok(second.push.localBehind, "本地还是没跟上，照实说");
+    assert.equal(await stageOf(taskId), "accepted");
+    assert.equal(git(repo, "log", "-1", "--format=%s", "main"), "meanwhile", "不替用户同步、不覆盖他那个提交");
+    assert.equal(git(remote, "rev-parse", "main"), source);
+  }
+
+  // 20. 推的那一刻别人推了同一文件的冲突改动，而用户正在项目目录改着这个文件（审查第 3 轮第 2 条）：本地同步不了，
+  //     照样按远程那一头交回任务去解，用户的编辑原样在；任务解完、用户的编辑还在时，不冲突但本地同步不了就停下说明；
+  //     用户收拾好之后再点，正常推上去。
+  {
+    const { repo, remote } = makeStage("overlap-race");
+    const taskId = await seedTask(repo, "shared.txt", "task version\n");
+    const ws = wsOf.get(taskId)!;
+    const other = join(root, "overlap-race-other");
+    writeFileSync(join(repo, ".git", "hooks", "pre-push"), ["#!/bin/sh", 'rm -f "$0"', "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX",
+      `printf 'user editing\\n' > ${JSON.stringify(join(repo, "shared.txt"))}`,
+      `cd ${JSON.stringify(other)} && printf 'other version\\n' > shared.txt && git commit -q -am other && git push -q origin main`, ""].join("\n"), { mode: 0o755 });
+    const base = git(repo, "rev-parse", "main");
+    const result = await acceptTask(taskId, "human", { push: true });
+    assert.equal(result.accepted, false);
+    if (result.accepted) throw new Error("撞冲突不该验收通过");
+    assert.equal(result.reason, "merge_conflict", result.error);
+    assert.deepEqual(result.conflictFiles, ["shared.txt"]);
+    const theirs = git(remote, "rev-parse", "main");
+    assert.equal(result.conflictHandoff?.notified, true, "冲突交回任务去解");
+    assert.ok(result.conflictHandoff?.message.includes(theirs.slice(0, 12)), "让任务去合远程那个提交，不是本地那份旧的 main");
+    assert.equal(readFileSync(join(repo, "shared.txt"), "utf8"), "user editing\n", "用户的编辑原样在");
+    assert.equal(git(repo, "rev-parse", "main"), base);
+    assert.notEqual(await stageOf(taskId), "merged");
+    // 任务照交接说的去合远程那个提交、解掉冲突。
+    try { git(ws, "merge", "-q", theirs); } catch {}
+    writeFileSync(join(ws, "shared.txt"), "task version\n");
+    git(ws, "commit", "-q", "-am", "resolve");
+    const blocked = await acceptTask(taskId, "human", { push: true });
+    assert.equal(blocked.accepted, false);
+    if (!blocked.accepted) assert.equal(blocked.reason, "target_dirty", blocked.error);
+    assert.equal(readFileSync(join(repo, "shared.txt"), "utf8"), "user editing\n");
+    assert.equal(git(remote, "rev-parse", "main"), theirs, "没冲突但本地同步不了：停下，远程不动");
+    git(repo, "checkout", "-q", "--", "shared.txt");
+    const done = await acceptTask(taskId, "human", { push: true });
+    assert.equal(done.accepted, true, done.accepted ? "" : done.error);
+    assert.equal(git(remote, "show", "main:shared.txt"), "task version");
+    assert.equal(git(remote, "rev-parse", "main"), git(repo, "rev-parse", "main"));
+  }
+
+  // 21. 门禁之前那次同步就被挡住（远程早有冲突的新提交，用户改着同一个文件）：同样交回任务去合远程那一头。
+  {
+    const { repo, remote, other } = makeStage("overlap-prepare");
+    const taskId = await seedTask(repo, "shared.txt", "task version\n");
+    const theirs = pushFromOther(other, "shared.txt", "other version\n");
+    writeFileSync(join(repo, "shared.txt"), "user editing\n");
+    const result = await acceptTask(taskId, "human", { push: true });
+    assert.equal(result.accepted, false);
+    if (result.accepted) throw new Error("撞冲突不该验收通过");
+    assert.equal(result.reason, "merge_conflict", result.error);
+    assert.equal(result.conflictHandoff?.notified, true);
+    assert.ok(result.conflictHandoff?.message.includes(theirs.slice(0, 12)));
+    assert.equal(readFileSync(join(repo, "shared.txt"), "utf8"), "user editing\n");
+    assert.equal(git(remote, "rev-parse", "main"), theirs);
+  }
+
+  console.log("accept push: 推到哪 / 先同步再合再推 / 不推不碰远程 / 冲突交回任务 / 分叉与推不了都先拒 / 被拒不强推 / 门禁续做带冻结目的地 / 目的地变了就拒 / 推送地址与拉取地址分离 / 推送期间远程又动（不冲突重来、冲突交回任务） / 推不上去本地不动 / 带护栏挪分支 / 挪没检出的分支先占住（三处） / 拉推带项目账号 / 推的是合出来的提交、本地被挪过只报落后 / 检出里有无关改动照样同步重合或交回冲突 / 远程已收下只差清理再点就收尾 / 本地同步不了照样按远程那一头交回冲突 全部通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

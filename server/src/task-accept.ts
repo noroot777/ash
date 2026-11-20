@@ -288,7 +288,8 @@ async function acceptTaskUnlocked(
   // 选了推送：先在临时检出里合好、推上去，远程收下了才快进本地；推不上去本地不动（task-accept-push.ts）。
   const mergeOptions = { commit: commitOnAccept, retryOfMerged: retrying, sourceCommit: testedSource, ...tested };
   const { merge, push: pushed } = pushPlan
-    ? await pushFirst(task, project.repoPath, pushPlan, { target: intendedTarget, strategy: plan.merge, options: mergeOptions })
+    ? await pushFirst(task, project.repoPath, pushPlan, { target: intendedTarget, strategy: plan.merge, options: mergeOptions,
+      recorded: retrying ? task.acceptedMergeCommit : null })
     : { merge: await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge, mergeOptions), push: undefined };
   if (!merge.ok && merge.reason === "push_remote_moved") {
     return { accepted: false, httpStatus: 409, taskId, reason: merge.reason, error: merge.message, status: task.status,

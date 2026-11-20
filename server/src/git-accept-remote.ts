@@ -28,7 +28,8 @@ export type PushTarget = { remote: string; remoteBranch: string; url: string };
 
 export type RemoteSync =
   | { ok: true; tip: string | null; fastForwarded: number; warning?: string }
-  | { ok: false; reason: "push_fetch_failed" | "push_diverged" | Extract<GuardedMove, { ok: false }>["reason"]; message: string };
+  /** `tip`：拉到了的远程那一头（拉不到时没有）—— 本地同步不了，调用方仍拿它判任务跟远程冲不冲突（task-accept-push.ts）。 */
+  | { ok: false; reason: "push_fetch_failed" | "push_diverged" | Extract<GuardedMove, { ok: false }>["reason"]; message: string; tip?: string };
 
 export type PushOutcome = AcceptPushOutcome;
 
@@ -119,14 +120,14 @@ export async function syncTargetWithRemote(repoPath: string, branch: string, tar
   if (!local || local === tip || await isAncestor(repo, tip, local)) return { ok: true, tip, fastForwarded: 0 };
   if (!(await isAncestor(repo, local, tip))) {
     const [ahead, behind] = await Promise.all([count(repo, `${tip}..${local}`), count(repo, `${local}..${tip}`)]);
-    return { ok: false, reason: "push_diverged",
+    return { ok: false, reason: "push_diverged", tip,
       message: `本地 ${branch} 和 ${remoteName} 分叉了：本地有 ${ahead} 个提交还没推，远程又多了 ${behind} 个本地没有的提交。`
         + `这不是这个任务造成的，Navi 不替你合；先自己把 ${branch} 跟 ${remoteName} 同步好（比如 git -C ${repo} pull），`
         + "再验收，或这次不推送。这次什么都没动。" };
   }
   const behind = await count(repo, `${local}..${tip}`);
   const moved = await moveBranchGuarded(repo, branch, local, tip, `把 ${remoteName} 的 ${behind} 个新提交同步进 ${branch}`);
-  if (!moved.ok) return { ok: false, reason: moved.reason, message: `${moved.message}这次没有合并。` };
+  if (!moved.ok) return { ok: false, reason: moved.reason, tip, message: `${moved.message}这次没有合并。` };
   return { ok: true, tip, fastForwarded: behind, ...(moved.warning ? { warning: moved.warning } : {}) };
 }
 

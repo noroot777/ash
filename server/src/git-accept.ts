@@ -7,6 +7,7 @@
 //
 // 怎么合由**线上那一站**说了算（AcceptStrategy），调用方在 task-accept.ts 里从任务的
 // 工作流快照读出来传进来；不传就是老规矩（安全合并）。
+import type { RemoteConflictTip } from "./accept-conflict.js";
 import { resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import type { AcceptStrategy } from "@navi/shared/workflow";
@@ -101,6 +102,8 @@ export type TaskMergeResult =
       conflictFiles?: string[];
       dirtyFiles?: string[];
       targetPath?: string;
+      /** 推送档：冲突对的是远程新推的提交（本地目标分支没能同步到它），交接时让任务合它（accept-conflict.ts）。 */
+      remoteTip?: RemoteConflictTip;
     };
 
 
