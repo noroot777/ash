@@ -76,7 +76,7 @@ export default function NewTask() {
   const { base, branches, remoteBranches, refreshRemotes, fetchingRemotes, fetchError, setBase } =
     useTaskBranches(projectId, useWorktree && !!project?.health.isRepo);
   // 从远端分支开工：成果合进本地同名分支，本地没有就由服务端照远端建一条跟踪它的。
-  const remoteBase = branches.includes(base) ? null : remoteBranches.find((b) => b.ref === base) ?? null;
+  const remoteBase = branches.includes(base) ? null : remoteBranches.find((b) => b.fullRef === base) ?? null;
   // 项目一确定（或换了一个），默认值就跟着换：它是项目的性质，不是这台手机或这个人的。
   useEffect(() => {
     if (!project) return;
@@ -469,7 +469,7 @@ export default function NewTask() {
                     <Text style={{ color: theme.faint, fontSize: 11 }}>远端</Text>
                     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                       {remoteBranches.map((b) => (
-                        <Pill key={b.ref} label={b.ref} active={b.ref === base} onPress={() => setBase(b.ref)} />
+                        <Pill key={b.ref} label={b.ref} active={b.fullRef === base} onPress={() => setBase(b.fullRef)} />
                       ))}
                       {refreshRemotes || fetchingRemotes ? (
                         <Pill label={fetchingRemotes ? "正在刷新…" : "刷新远端分支"} active={false} onPress={refreshRemotes ?? (() => {})} />

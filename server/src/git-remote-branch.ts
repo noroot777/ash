@@ -29,18 +29,21 @@ export function splitRemoteRef(name: string, remotes: readonly string[]): Remote
   const remote = remotes
     .filter((candidate) => ref.startsWith(`${candidate}/`) && ref.length > candidate.length + 1)
     .sort((left, right) => right.length - left.length)[0];
-  return remote ? { ref, remote, branch: ref.slice(remote.length + 1) } : null;
+  return remote ? { ref, fullRef: `refs/remotes/${ref}`, remote, branch: ref.slice(remote.length + 1) } : null;
 }
 
 /**
- * 这个名字指的是不是一条远端分支。本地有同名分支（真有人把本地分支起名叫 `origin/x`）时按本地算，
- * 跟 git 自己解析 `<name>` 的先后一致。
+ * 这个名字指的是不是一条远端分支。写成 `refs/remotes/origin/x` 的就是（界面选远端分支时发的就是这种）；
+ * 短名 `origin/x` 照 git 自己解析 `<name>` 的先后：同名的 tag、本地分支排在远端分支前面，有就按它们算。
  */
 export async function remoteBranchOf(repoPath: string, name: string | null | undefined): Promise<RemoteBranch | null> {
   const repo = expandHome(repoPath);
   const trimmed = (name ?? "").trim();
-  if (!trimmed || trimmed.startsWith("refs/heads/")) return null;
-  if (await refExists(repo, `refs/heads/${trimmed}`)) return null;
+  if (trimmed.startsWith("refs/remotes/")) return splitRemoteRef(trimmed, await listRemotes(repo));
+  if (!trimmed || trimmed.startsWith("refs/")) return null;
+  for (const shadow of [`refs/${trimmed}`, `refs/tags/${trimmed}`, `refs/heads/${trimmed}`]) {
+    if (await refExists(repo, shadow)) return null;
+  }
   return splitRemoteRef(trimmed, await listRemotes(repo));
 }
 

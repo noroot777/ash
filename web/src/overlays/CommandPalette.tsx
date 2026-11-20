@@ -474,7 +474,8 @@ export function CommandPalette({
         {step === "git-project" && (
           <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><GitProjectStep projects={projects} active={active} onChoose={loadGitOverview} /></div>
         )}
-        {step === "git-overview" && <GitOverviewPanel project={gitProject} overview={gitOverview} loading={gitLoading} error={gitError} />}
+        {step === "git-overview" && <GitOverviewPanel project={gitProject} overview={gitOverview} loading={gitLoading} error={gitError}
+          onOverview={(projectId, next) => { if (projectId === gitProjectId) setGitOverview(next); }} />}
 
         {step === "search" && slashMode && (
           <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto p-1">

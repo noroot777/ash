@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -22,6 +22,7 @@ const { acceptTask } = await import("../src/task-accept.js");
 const { listBranches, resolveTaskMergeTarget, staleBaseFallback } = await import("../src/git.js");
 const { remoteStartNote } = await import("../src/remote-start-notice.js");
 const { undoBranchPlanSideEffects } = await import("../src/task-branch-plan.js");
+const { runRefAction } = await import("../src/git-workbench/refs.js");
 await ensureSchema();
 const api = new Hono();
 mountTaskRoutes(api);
@@ -69,7 +70,8 @@ try {
   assert.deepEqual(listed.branches, ["main"], "local list stays local-only for old callers");
   assert.deepEqual(listed.remotes, ["origin"]);
   assert.deepEqual(listed.remoteBranches.map((branch) => branch.ref).sort(), ["origin/feature-r", "origin/main"], "origin/HEAD is not listed");
-  assert.deepEqual(listed.remoteBranches.find((branch) => branch.ref === "origin/feature-r"), { ref: "origin/feature-r", remote: "origin", branch: "feature-r" });
+  assert.deepEqual(listed.remoteBranches.find((branch) => branch.ref === "origin/feature-r"),
+    { ref: "origin/feature-r", fullRef: "refs/remotes/origin/feature-r", remote: "origin", branch: "feature-r" });
   console.log("✓ branch list carries remote branches separately and drops the origin/HEAD symref");
 
   // 本地记着的 origin/feature-r 落后于远端：建任务时得先拉到远端此刻那一版再冻结。
@@ -78,7 +80,7 @@ try {
   assert.equal(git(repo, "rev-parse", "origin/feature-r"), firstPush);
   const task = await create({ worktreeBase: "origin/feature-r" });
   assert.equal(task.worktreeStartCommit, latest, "remote base is fetched before the start is frozen");
-  assert.equal(task.worktreeBase, "origin/feature-r");
+  assert.equal(task.worktreeBase, "refs/remotes/origin/feature-r", "a recognized remote start is stored as the full ref");
   assert.equal(task.worktreeBaseBranch, "origin/feature-r", "the start reads as coming from the remote");
   assert.equal(task.mergeTargetBranch, "feature-r", "merges into the same-named local branch");
   assert.equal(git(repo, "rev-parse", "refs/heads/feature-r"), latest, "missing local branch is created from the remote");
@@ -100,7 +102,7 @@ try {
 
   // 本地已有同名分支：直接用它当合入目标，不另建。
   const again = await create({ worktreeBase: "refs/remotes/origin/feature-r" });
-  assert.equal(again.worktreeBase, "origin/feature-r", "refs/remotes/ prefix is normalized");
+  assert.equal(again.worktreeBase, "refs/remotes/origin/feature-r");
   assert.equal(again.mergeTargetBranch, "feature-r");
   // 显式给了合入分支就照它。
   const explicit = await create({ worktreeBase: "origin/feature-r", mergeTargetBranch: "main" });
@@ -128,10 +130,73 @@ try {
   assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/no-such-branch"));
   console.log("✓ missing remote branch and unresolvable base are rejected with a clear 400 before anything is created");
 
+  // 同名 tag：界面发的完整引用照样取远端那一版；短名照 git 的先后按 tag 算，不联网、不建分支。
+  const remoteTip = git(repo, "rev-parse", "refs/remotes/origin/feature-r");
+  const seed = git(repo, "rev-parse", "main");
+  git(repo, "tag", "origin/feature-r", seed);
+  const viaFullRef = await create({ worktreeBase: "refs/remotes/origin/feature-r" });
+  assert.equal(viaFullRef.worktreeStartCommit, remoteTip, "a same-named tag cannot shadow the selected remote branch");
+  assert.equal(viaFullRef.mergeTargetBranch, "feature-r");
+  const viaTag = await create({ worktreeBase: "origin/feature-r" });
+  assert.equal(viaTag.worktreeStartCommit, seed, "a short name that is also a tag means the tag, as git resolves it");
+  assert.equal(viaTag.worktreeBaseBranch, null);
+  assert.equal(await remoteStartNote(viaTag, { ...ws, fresh: true }, repo), null, "a tag start gets no remote note");
+  git(repo, "tag", "-d", "origin/feature-r");
+  console.log("✓ the full remote ref beats a same-named tag, and a short name that is a tag stays a tag");
+
+  // 冻结起点写不进去（ref 目录不可写）：建任务失败，顺手建的跟踪分支一并收回。
+  git(peer, "checkout", "-b", "rollback-remote", "main");
+  commit(peer, "rollback-remote.txt");
+  git(peer, "push", "-u", "origin", "rollback-remote");
+  const frozenDir = join(repo, ".git", "refs", "ash", "task-bases");
+  mkdirSync(frozenDir, { recursive: true });
+  const countBefore = (await db.select().from(tasks)).length;
+  chmodSync(frozenDir, 0o555);
+  try {
+    const blocked = await post({ worktreeBase: "refs/remotes/origin/rollback-remote" });
+    assert.ok(blocked.status >= 400, `expected a failure, got ${blocked.status}`);
+  } finally {
+    chmodSync(frozenDir, 0o755);
+  }
+  assert.equal((await db.select().from(tasks)).length, countBefore);
+  assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/rollback-remote"), "the tracking branch made before the failure is removed");
+  console.log("✓ a failure after the tracking branch is made rolls it back inside the branch plan");
+
+  // 空仓库里写错的显式起点也当场拒绝；没指定起点的照旧惰性创建。
+  const empty = join(root, "empty");
+  execFileSync("git", ["init", "-b", "main", empty], { stdio: "ignore" });
+  await db.insert(projects).values({ id: "empty", name: "empty", repoPath: empty, createdAt: at });
+  const emptyPost = (body: Record<string, unknown>) => api.request("/tasks", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectId: "empty", title: "空仓库", useWorktree: true, workflowMode: "free", ...body }) });
+  const mistyped = await emptyPost({ worktreeBase: "mistyped-base" });
+  assert.equal(mistyped.status, 400, await mistyped.clone().text());
+  assert.match((await mistyped.json()).error, /开工起点 mistyped-base 不存在/);
+  const lazy = await emptyPost({});
+  assert.equal(lazy.status, 201, await lazy.clone().text());
+  console.log("✓ an explicit base that does not resolve is rejected in an empty repo too; no base stays lazy");
+
+  // 工作台「检出为本地分支」：设 upstream 失败时把刚建的分支收回，也没切过去。
+  const checkoutBefore = git(repo, "symbolic-ref", "--short", "HEAD");
+  writeFileSync(join(repo, ".git", "config.lock"), "");
+  try {
+    await assert.rejects(runRefAction(repo, repo, { kind: "branch-create", name: "wb-track", target: remoteTip, checkout: true, track: "origin/feature-r" }, "test"));
+  } finally {
+    rmSync(join(repo, ".git", "config.lock"), { force: true });
+  }
+  assert.equal(git(repo, "symbolic-ref", "--short", "HEAD"), checkoutBefore, "a failed track never leaves the checkout switched");
+  assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/wb-track"), "and the half-made branch is removed");
+  git(repo, "tag", "origin/feature-r", seed);
+  await runRefAction(repo, repo, { kind: "branch-create", name: "wb-track", target: remoteTip, checkout: false, track: "origin/feature-r" }, "test");
+  assert.deepEqual([git(repo, "config", "branch.wb-track.remote"), git(repo, "config", "branch.wb-track.merge")],
+    ["origin", "refs/heads/feature-r"], "upstream binds the remote branch even with a same-named tag");
+  git(repo, "tag", "-d", "origin/feature-r");
+  console.log("✓ workbench track is all-or-nothing and binds the remote ref, not a same-named tag");
+
   // 起跑时的失效判断与合入目标解析：存在的远端分支不算失效，目标换成本地同名分支。
   assert.equal(await staleBaseFallback(repo, "origin/feature-r"), undefined, "an existing remote branch is not stale");
   assert.equal((await staleBaseFallback(repo, "gone-branch"))?.used, "main");
   assert.equal(await resolveTaskMergeTarget(repo, "origin/feature-r"), "feature-r");
+  assert.equal(await resolveTaskMergeTarget(repo, "refs/remotes/origin/feature-r"), "feature-r");
   assert.equal(await resolveTaskMergeTarget(repo, "main"), "main");
   console.log("✓ runtime fallback keeps remote bases and the target chain maps origin/x to local x");
 

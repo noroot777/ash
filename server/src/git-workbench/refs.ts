@@ -31,14 +31,25 @@ export async function runRefAction(
     case "branch-create": {
       await refName(root, action.name);
       const target = await commitOid(root, action.target);
-      // 跟踪的远端分支要先核对在不在，建出来之后再设 upstream：起点仍按核对过的提交钉住。
+      // 跟踪的远端分支要先核对在不在；起点仍按核对过的提交钉住。
       if (action.track && !(await readRefs(root)).some((r) => r.kind === "remote" && r.name === action.track))
         fail("远端分支不存在，请先 fetch");
-      if (action.checkout) {
-        requireClean(await readScmStatus(root));
-        await git(root, ["switch", "-c", action.name, target]);
-      } else await git(root, ["branch", "--", action.name, target]);
-      if (action.track) await git(root, ["branch", `--set-upstream-to=${action.track}`, "--", action.name]);
+      if (action.checkout) requireClean(await readScmStatus(root));
+      if (!action.track) {
+        await git(root, action.checkout ? ["switch", "-c", action.name, target] : ["branch", "--", action.name, target]);
+        return true;
+      }
+      // 建分支、设 upstream、切过去是三步：先建、设好 upstream 再切，哪一步失败就把刚建的分支收回，
+      // 不留下「报了错却已经切到新分支」的半截状态。upstream 用完整引用，短名会被同名 tag 抢先解析。
+      await git(root, ["branch", "--", action.name, target]);
+      try {
+        await git(root, ["branch", `--set-upstream-to=refs/remotes/${action.track}`, "--", action.name]);
+        if (action.checkout) await git(root, ["switch", action.name]);
+      } catch (error) {
+        if ((await commitOid(root, `refs/heads/${action.name}`).catch(() => null)) === target)
+          await git(root, ["branch", "-D", "--", action.name]).catch(() => {});
+        throw error;
+      }
       return true;
     }
     case "branch-rename":

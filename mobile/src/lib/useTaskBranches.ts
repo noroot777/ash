@@ -9,8 +9,9 @@ type Refs = { projectId: string; branches: string[]; remoteBranches: RemoteBranc
 export function useTaskBranches(projectId: string | null, enabled: boolean) {
   const [selection, setSelection] = useState({ projectId, base: "" });
   const [refs, setRefs] = useState<Refs | null>(null);
-  const [fetching, setFetching] = useState<{ projectId: string; error: string | null } | null>(null);
-  const reload = useRef<() => void>(() => {});
+  const [fetching, setFetching] = useState<{ projectId: string; request: number; error: string | null } | null>(null);
+  const reload = useRef<{ projectId: string | null; run: () => void }>({ projectId: null, run: () => {} });
+  const fetchRequest = useRef(0);
 
   useEffect(() => {
     setSelection({ projectId, base: "" });
@@ -26,14 +27,14 @@ export function useTaskBranches(projectId: string | null, enabled: boolean) {
         if (alive && request === sequence) setRefs({ projectId, branches, remoteBranches: remoteBranches ?? [], remotes: remotes ?? [] });
       }).catch(() => {});
     };
-    reload.current = refresh;
+    reload.current = { projectId, run: refresh };
     refresh();
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") refresh();
     });
     return () => {
       alive = false;
-      reload.current = () => {};
+      reload.current = { projectId: null, run: () => {} };
       subscription.remove();
     };
   }, [projectId, enabled]));
@@ -44,13 +45,21 @@ export function useTaskBranches(projectId: string | null, enabled: boolean) {
     base: selection.projectId === projectId ? selection.base : "",
     branches: current?.branches ?? [],
     remoteBranches: current?.remoteBranches ?? [],
-    /** 有远端才给：先 fetch 再重读清单。失败的原因留在 fetchError 里给页面说。 */
+    /**
+     * 有远端才给：先 fetch 再重读清单。失败的原因留在 fetchError 里给页面说。结果只落在发起它的那一趟上：
+     * 切过项目、又刷新过一次之后，早先那趟回来既不清掉新的等待/报错，也不去重读别的项目。
+     */
     refreshRemotes: current?.remotes.length && projectId && !busy
       ? () => {
-        setFetching({ projectId, error: null });
+        const request = ++fetchRequest.current;
+        const settle = (error: string | null) => setFetching((now) => (now?.request === request ? (error === null ? null : { ...now, error }) : now));
+        setFetching({ projectId, request, error: null });
         api.projectGitFetch(projectId).then(
-          () => { setFetching(null); reload.current(); },
-          (error: unknown) => setFetching({ projectId, error: error instanceof Error ? error.message : String(error) }),
+          () => {
+            settle(null);
+            if (reload.current.projectId === projectId) reload.current.run();
+          },
+          (error: unknown) => settle(error instanceof Error ? error.message : String(error)),
         );
       }
       : null,

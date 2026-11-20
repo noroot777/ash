@@ -97,13 +97,14 @@ export function ComposerFields({
   // 设置页去改，用户只好每建一个任务手动拨一次。
   const following = !!followPrerequisites && useWorktree;
   // 有远端分支时两组分开摆；从远端分支开工，成果合进本地同名分支（本地没有就建一条跟踪它的）。
+  // 远端分支发完整引用：短名 `origin/foo` 会被同名 tag 抢先解析（RemoteBranch.fullRef）。
   const grouped = remote.branches.length > 0;
   const baseOptions = [
     { value: "", label: following ? FOLLOW_PREREQUISITES : automaticBaseLabel },
     ...branches.map((branch) => ({ value: branch, label: branch, mono: true, group: grouped ? "本地" : undefined })),
-    ...remote.branches.map((branch) => ({ value: branch.ref, label: branch.ref, mono: true, group: "远端" })),
+    ...remote.branches.map((branch) => ({ value: branch.fullRef, label: branch.ref, mono: true, group: "远端" })),
   ];
-  const remoteBase = following || branches.includes(base) ? null : remote.branches.find((branch) => branch.ref === base) ?? null;
+  const remoteBase = following || branches.includes(base) ? null : remote.branches.find((branch) => branch.fullRef === base) ?? null;
   const mergeInto = following ? followPrerequisites.mergeTarget ?? automaticBaseLabel
     : remoteBase ? branches.includes(remoteBase.branch) ? remoteBase.branch : `${remoteBase.branch}（新建，跟踪 ${remoteBase.ref}）`
     : null;

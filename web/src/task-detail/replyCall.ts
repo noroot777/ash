@@ -150,10 +150,12 @@ export type BaseContext = {
   current: string | null;
   /** 新任务默认开不开 worktree（projects.useWorktreeDefault）。 */
   worktreeDefault: boolean;
-  /** 本地记着的远端分支；没有就不给「从远端开工」那一组。 */
+  /** 本地记着的远端分支。 */
   remoteBranches?: RemoteBranch[];
+  /** 项目配了哪些远端；有远端就给「远端」那一组（哪怕还没 fetch 到分支，也要留出刷新的入口）。 */
+  remotes?: string[];
 };
-/** `group` 只有远端那一组带（「远端」），段上据此换成下拉。 */
+/** 带 `group`（「本地」/「远端」）时段上换成下拉。 */
 export type BaseOption = { id: DispatchBase; label: string; worktreeBase: string | null; group?: string };
 
 /**
@@ -189,11 +191,12 @@ export function dispatchBaseChoices(
   context: BaseContext | null,
 ): BaseOption[] {
   const local = dispatchBaseOptions(task, context);
-  if (!context?.isRepo || !context.worktreeDefault || !context.remoteBranches?.length) return local;
-  const remote = context.remoteBranches.map((branch): BaseOption =>
-    ({ id: `remote:${branch.ref}`, label: `从 ${branch.ref} 开工`, worktreeBase: branch.ref, group: "远端" }));
+  if (!context?.isRepo || !context.worktreeDefault || !context.remotes?.length) return local;
+  // 发完整引用：短名 `origin/foo` 会被同名 tag 抢先解析（RemoteBranch.fullRef）。
+  const remote = (context.remoteBranches ?? []).map((branch): BaseOption =>
+    ({ id: `remote:${branch.ref}`, label: `从 ${branch.ref} 开工`, worktreeBase: branch.fullRef, group: "远端" }));
   const fallback: BaseOption = { id: "trunk", label: `从 ${context.current ?? "项目分支"} 开工`, worktreeBase: null };
-  return [...(local.length ? local : [fallback]), ...remote];
+  return [...(local.length ? local : [fallback]).map((option) => ({ ...option, group: "本地" })), ...remote];
 }
 
 // —— `/派`、`/讨论`：叫上次那个人，停在「派出去」/「讨论」 ——

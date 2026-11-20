@@ -7,12 +7,12 @@ import { remoteBranchOf } from "./git-remote-branch.js";
  * 所以落在头一回合里；工作目录复用、恢复时不再重复。
  */
 export async function remoteStartNote(
-  task: { worktreeBaseBranch?: string | null; worktreeStartCommit?: string | null; mergeTargetBranch?: string | null },
+  task: { worktreeBase?: string | null; worktreeStartCommit?: string | null; mergeTargetBranch?: string | null },
   ws: Pick<Workspace, "fresh" | "isWorktree">,
   repoPath: string,
 ): Promise<string | null> {
-  if (!ws.isWorktree || !ws.fresh || !task.worktreeBaseBranch || !task.worktreeStartCommit) return null;
-  const remote = await remoteBranchOf(repoPath, task.worktreeBaseBranch);
+  if (!ws.isWorktree || !ws.fresh || !task.worktreeBase || !task.worktreeStartCommit) return null;
+  const remote = await remoteBranchOf(repoPath, task.worktreeBase);
   if (!remote) return null;
   const target = task.mergeTargetBranch ? `，验收合入本地分支 ${task.mergeTargetBranch}` : "";
   return `从远端分支 ${remote.ref}（提交 ${task.worktreeStartCommit.slice(0, 7)}）开工${target}。`;

@@ -596,8 +596,8 @@ export function ReplyBox({
             disabled={configDisabled}
             onCommit={target ? calling.commitTarget : commitStanding}
             onEffortChange={target ? calling.commitEffort : commitStandingEffort}
-            tail={call && dispatching && baseOptions.length > 1
-              ? <DispatchBaseSegment options={baseOptions} value={call.base} disabled={configDisabled} onChange={calling.setBase} />
+            tail={call && dispatching && (baseOptions.length > 1 || baseOptions.some((option) => option.group))
+              ? <DispatchBaseSegment options={baseOptions} value={call.base} disabled={configDisabled} onChange={calling.setBase} remotes={baseContext.remotes} />
               : !target && dispatchDefault.value ? <DispatchDefaultSegment value={dispatchDefault.value} profiles={profiles} /> : undefined}
             // 没叫人时点开智能体那一段，列表下面一行「派出去的活交给谁」。
             agentExtra={!target && onDispatchTargetChange ? <DispatchDefaultRow value={dispatchDefault.value}

@@ -92,12 +92,26 @@ async function finalTarget(repo: string, row: BranchTask, seen = new Set<string>
 const rejectPlan = (status: 400 | 409, error: string) =>
   new HTTPException(status, { res: Response.json({ error }, { status }) });
 
-/** 建任务时顺手建出来的本地分支：落库失败要收回去（task-store.ts）。 */
-export type BranchPlanSideEffects = { trackingBranch?: { name: string; commit: string } };
+/**
+ * 分支计划在仓库里留下的东西：冻结起点的私有 ref，从远端开工时顺手建的本地跟踪分支。
+ * 本函数半路失败自己收回；整批落库失败由调用方收回（task-store.ts）。
+ */
+export type BranchPlanSideEffects = { frozenRef?: { ref: string; commit: string }; trackingBranch?: { name: string; commit: string } };
 
 // 起点钉住提交，目标钉住分支。私有 ref 让尚未启动的子任务在父分支清理后仍可开工。
 export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id: string }, repo: string): Promise<BranchPlanSideEffects> {
-  if (!row.useWorktree || row.reviewOf || row.worktreeStartCommit || row.stage === "accepted" || row.stage === "merged") return {};
+  const effects: BranchPlanSideEffects = {};
+  try {
+    await planBranch(row, repo, effects);
+    return effects;
+  } catch (error) {
+    await undoBranchPlanSideEffects(repo, effects);
+    throw error;
+  }
+}
+
+async function planBranch(row: typeof tasks.$inferInsert & { id: string }, repo: string, effects: BranchPlanSideEffects): Promise<void> {
+  if (!row.useWorktree || row.reviewOf || row.worktreeStartCommit || row.stage === "accepted" || row.stage === "merged") return;
   const explicitTarget = row.mergeTargetBranch?.trim();
   if (explicitTarget && !(await localBranchExists(repo, branchName(explicitTarget)))) {
     throw rejectPlan(400, `最终合入分支 ${explicitTarget} 不存在，请选择本地分支`);
@@ -107,7 +121,7 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
   if (!base && row.parentId) {
     const lead = (await db.select().from(tasks).where(eq(tasks.id, row.parentId))).at(0);
     // 团队默认隔离执行者在各自起跑时从共享分支开叉，串行后续执行者能看到领队的新提交。
-    if (lead?.projectId === row.projectId && lead.mode === "team") return {};
+    if (lead?.projectId === row.projectId && lead.mode === "team") return;
   }
   if (base) parent ??= await branchOwner(repo, row.projectId, base);
   // 从远端分支开工：先把那一条拉到远端此刻的样子再冻结，否则钉住的是本地上次 fetch 时那一版。
@@ -116,20 +130,20 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
   const settled = SETTLED_ON_CREATE.has(row.status ?? "");
   const remote = base && !parent && !settled ? await remoteBranchOf(repo, base) : null;
   if (remote) {
-    base = remote.ref;
+    // 认出是远端分支之后一律用完整引用（也照它落库）：短名 `origin/foo` 交给 git 解析，同名 tag 排在远端分支前面。
+    base = remote.fullRef;
     await fetchRemoteBranch(repo, remote.remote, remote.branch, row.projectId ?? null).catch((error: unknown) => {
       throw error instanceof ScmOperationError ? rejectPlan(error.status === 400 ? 400 : 409, error.message) : error;
     });
   }
   const start = await commitAt(repo, base || "HEAD");
   if (!start) {
-    // 空仓库还没有可冻结的提交，起点留给运行时的惰性准备；导入的历史任务这边未必有那条分支，
+    // 没指定起点的空仓库还没有可冻结的提交，起点留给运行时的惰性准备；导入的历史任务这边未必有那条分支，
     // 同样留给运行时的 staleBaseFallback。
-    if (!base || settled || !(await commitAt(repo, "HEAD"))) return {};
+    if (!base || settled) return;
     // 显式指定的起点读不出提交：当场说清楚，不再建出来、等起跑时悄悄换成项目当前分支。
     throw rejectPlan(400, `开工起点 ${base} 不存在（不是本地分支、远端分支、tag 或提交）。远端分支请先刷新远端分支再选`);
   }
-  const effects: BranchPlanSideEffects = {};
   let target: string | null;
   if (explicitTarget) target = branchName(explicitTarget);
   else if (parent) target = await finalTarget(repo, parent);
@@ -137,7 +151,7 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
     // 远端分支合不进去：成果合进本地同名分支，本地没有就照远端建一条跟踪分支。
     target = remote.branch;
     if (!(await localBranchExists(repo, target))) {
-      await exec("git", ["-C", expandHome(repo), "branch", "--track", "--end-of-options", target, remote.ref]).catch((error: unknown) => {
+      await exec("git", ["-C", expandHome(repo), "branch", "--track", "--end-of-options", target, remote.fullRef]).catch((error: unknown) => {
         throw rejectPlan(409, `按远端分支 ${remote.ref} 建本地分支 ${target} 失败：${gitError(error)}`);
       });
       effects.trackingBranch = { name: target, commit: start };
@@ -155,14 +169,16 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
   row.mergeTargetBranch = target;
   row.baseTaskId = parent?.id ?? null;
   await exec("git", ["-C", expandHome(repo), "update-ref", baseRef(row.id), start, ""]);
-  return effects;
+  effects.frozenRef = { ref: baseRef(row.id), commit: start };
 }
 
-/** 收回建任务时顺手建的跟踪分支（落库失败那条路）。分支已经动过就不碰。 */
+/** 收回分支计划留下的东西（半路失败、落库失败两条路）。已经被动过的就不碰。 */
 export async function undoBranchPlanSideEffects(repo: string, effects: BranchPlanSideEffects): Promise<void> {
+  const git = (...args: string[]) => exec("git", ["-C", expandHome(repo), ...args]).catch(() => {});
+  if (effects.frozenRef) await git("update-ref", "-d", effects.frozenRef.ref, effects.frozenRef.commit);
   const tracking = effects.trackingBranch;
   if (!tracking || await commitAt(repo, `refs/heads/${tracking.name}`) !== tracking.commit) return;
-  await exec("git", ["-C", expandHome(repo), "branch", "-D", "--end-of-options", tracking.name]).catch(() => {});
+  await git("branch", "-D", "--end-of-options", tracking.name);
 }
 
 const SETTLED_ON_CREATE = new Set(["done", "failed", "canceled"]);

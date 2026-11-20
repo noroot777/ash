@@ -35,19 +35,23 @@ export function ReplyCallDock({ call, self, ability, onVerb, onCancel, baseError
 }
 
 /** 派出去时胶囊最后那一段：新任务从哪开工。两种之间点一下就换；还能从远端分支开工时点开是一份清单。 */
-export function DispatchBaseSegment({ options, value, disabled, onChange }: {
+export function DispatchBaseSegment({ options, value, disabled, onChange, remotes }: {
   options: BaseOption[];
   value: DispatchBase;
   disabled?: boolean;
   onChange: (base: DispatchBase) => void;
+  /** 刷新远端分支（useDispatchBaseContext）：失败的原因写在下拉里。 */
+  remotes?: { refresh: () => void; fetching: boolean; error: string | null };
 }) {
   const index = Math.max(0, options.findIndex((option) => option.id === value));
   const current = options[index]!;
   if (options.some((option) => option.group)) {
     return (
       <Select size="compact" className="run-target-seg run-target-seg--tail" label="新任务从哪开工" value={current.id}
-        options={options.map((option) => ({ value: option.id, label: option.group ? option.worktreeBase ?? option.label : option.label, group: option.group, mono: !!option.group }))}
-        display={current.label} disabled={disabled} filterable={options.length > 8} filterPlaceholder="筛选分支…" onChange={onChange} />
+        options={options.map((option) => ({ value: option.id, label: option.label, group: option.group, mono: option.group === "远端" }))}
+        display={current.label} disabled={disabled} filterable={options.length > 8} filterPlaceholder="筛选分支…" onChange={onChange}
+        status={remotes?.error ? "failed" : undefined} note={remotes?.error ?? ""}
+        footerAction={remotes && { label: remotes.fetching ? "正在刷新远端分支…" : "刷新远端分支", onClick: remotes.refresh, disabled: remotes.fetching }} />
     );
   }
   const next = options[(index + 1) % options.length]!;
