@@ -1,5 +1,6 @@
 import type { ReactNode, RefObject } from "react";
 import type { AcceptanceSteps } from "@navi/shared/accept-message";
+import type { AcceptPushDestination } from "@navi/shared/accept-gate";
 import { AcceptLayer } from "./AcceptLayer.tsx";
 import { cleanText, type ConfirmGate, type ConfirmView } from "./confirmPlan.ts";
 import { NaviLoader } from "../brand/NaviLoader.tsx";
@@ -8,8 +9,8 @@ import { NaviLoader } from "../brand/NaviLoader.tsx";
  * 「这一按会做什么」：挂在主按钮下面的一层，一步一行。可以不做的那两步（运行、提交）前面带勾，
  * 取消了那一行自己写后果；两勾打开时是上一次确认的样子，确认了就记成新的（confirmPlan.ts）。事实来自 shared 的 acceptanceSteps —— 和飞书待验收卡那句话同源。
  */
-export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitChoosable, commitDefault, commitRemembered, verification, source, family,
-  waiting, submitting, canSetGate, onRun, onCommit, onAcknowledge, onRetryDefault, onRetryGate, onRetryVerification, onSetGate, onConfirm, onClose }: {
+export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitChoosable, commitDefault, commitRemembered, push, verification, source, family,
+  waiting, submitting, canSetGate, onRun, onCommit, onPush, onAcknowledge, onRetryDefault, onRetryGate, onRetryPush, onRetryVerification, onSetGate, onConfirm, onClose }: {
   anchorRef: RefObject<HTMLElement | null>;
   steps: AcceptanceSteps;
   view: ConfirmView;
@@ -20,6 +21,8 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitCh
   commitDefault: { value: boolean | null; error: string | null; pending: boolean };
   /** 确认时「提交」那一勾会写回项目设置（有项目管理权限）；false = 只管这一次。 */
   commitRemembered: boolean;
+  /** 「推送」那一步：推到哪（null = 这一按推不了，不画）、还在读 / 读不出来。 */
+  push: { destination: AcceptPushDestination | null; pending: boolean; error: string | null };
   verification: { state: "none" | "loading" | "error" | "unacknowledged" | "acknowledged"; error: string | null };
   source: string;
   /** 一起验收的那几个任务（父任务在前）；只验一个时为空。 */
@@ -31,9 +34,11 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitCh
   canSetGate: boolean;
   onRun: (value: boolean) => void;
   onCommit: (value: boolean) => void;
+  onPush: (value: boolean) => void;
   onAcknowledge: (value: boolean) => void;
   onRetryDefault: () => void;
   onRetryGate: () => void;
+  onRetryPush: () => void;
   onRetryVerification: () => void;
   onSetGate: () => void;
   onConfirm: () => void;
@@ -69,6 +74,14 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, gateRead, commitCh
               {!commitRemembered && view.commit !== commitDefault.value && <em>只管这一次，项目默认要管理员改</em>}
               {/* 重读中、重读失败：勾留着给人看，确认键等它读到（confirmPlan.ts）。 */}
               {commitDefault.pending && <ReadStatus what="项目默认" error={commitDefault.error} onRetry={onRetryDefault} />}</>} />)}
+        {merge && view.pushChoosable && push.destination && (
+          <Step verb="推送" checked={view.push} onToggle={onPush} label="合并后推送到远程"
+            what={<><code>{push.destination.branch}</code> → <code>{push.destination.remote}/{push.destination.remoteBranch}</code>
+              {/* git 为这个远程算出的推送地址（已脱敏）：推的时候按远程名推，实际推往的就是这一处。 */}
+              <em>{push.destination.url}</em>
+              {push.pending && <ReadStatus what="远程" error={push.error} onRetry={onRetryPush} />}</>} />
+        )}
+        {merge && view.commit && push.pending && !push.destination && <Step verb="推送" what={<ReadStatus what="远程" error={push.error} onRetry={onRetryPush} />} />}
         {merge && <Step verb="清理" what={cleanText(merge, view.commit)} />}
         {steps.kind !== "release" && steps.team && <Step verb="联动" what="共享执行者一起标为验收完成" />}
         {verification.state === "loading" && <Step verb="验证" what={<em><NaviLoader size={14} />核对独立验证</em>} />}

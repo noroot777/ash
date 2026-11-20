@@ -161,7 +161,10 @@ api.get("/restart-impact", async (c) => {
     }
   }
   const { restartImpact } = await import("./reattach.js");
-  return c.json(await restartImpact());
+  const impact = await restartImpact();
+  if (c.req.query("shutdown") !== "1") return c.json(impact);
+  const { shutdownResources } = await import("./shutdown-resources.js");
+  return c.json({ ...impact, shutdown: await shutdownResources() });
 });
 mountRuntimeHandoff(api);
 

@@ -14,14 +14,15 @@ import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { stopPreviewForWorktreeCleanup } from "./preview.js";
-import { finalizeAcceptance } from "./task-accept-finalize.js";
+import { acceptWithoutCleanup, finalizeAcceptance } from "./task-accept-finalize.js";
+import { preparePush, pushFirst, pushMerged, untilRemoteSettles, type PushChoice, type PushOutcome } from "./task-accept-push.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
 import { commitAcceptanceStage, reviewAcceptanceAuthority } from "./review-acceptance.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage } from "./task-accept-shared-workers.js";
 import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
-import { appendTaskTimeline, alertLine, receiptLine, type TimelineLine, noticeLine } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTarget } from "./task-branch-plan.js";
@@ -68,6 +69,8 @@ export type AcceptSuccess = {
    * 的时候。所以合并的结论和尾段的结论分开报，各说各的。
    */
   tail?: AcceptTail;
+  /** 这一按选了推送到远程：推没推上去（推不上去不改 accepted，见 task-accept-push.ts）。 */
+  push?: PushOutcome;
 };
 
 
@@ -86,26 +89,6 @@ const mergeLabel: Record<string, string> = {
 
 
 
-async function acceptWithoutCleanup(
-  task: typeof tasks.$inferSelect,
-  kind: AcceptSuccess["kind"],
-  message: TimelineLine,
-  authority?: ReviewAuthority,
-  basis: AcceptGateSnapshot | null = null,
-): Promise<AcceptTaskResult> {
-  const finalized = await finalizeAcceptance(task, message, false, {}, authority, basis);
-  if (finalized.failure) return finalized.failure;
-  const { sharedWorkers } = finalized;
-  return {
-    accepted: true,
-    taskId: task.id,
-    status: task.status,
-    stage: "accepted",
-    kind,
-    ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
-  };
-}
-
 async function acceptTaskUnlocked(
   taskId: string,
   by: AcceptBy,
@@ -116,6 +99,8 @@ async function acceptTaskUnlocked(
   reviewAuthority?: ReviewAuthority,
   expected: AcceptExpectation = {},
   onAutoCommit?: (outcome: AcceptanceAutoCommitOutcome) => void,
+  /** 解析过就换成冻结的目的地：从头重来（push_remote_moved）的那一遍沿用它，不再按那一刻重新解析。 */
+  push: PushChoice = { choice: false },
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
   if (preflight) return preflight;
@@ -177,20 +162,26 @@ async function acceptTaskUnlocked(
   // 这里直接 null 放行）。判在锁里、跑在锁外 —— 那条命令动辄十几分钟，占着仓库锁会让
   // 同仓库其它任务的验收全部干等，所以这里只登记意图，发射在 acceptTask 的锁外那一段。
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
-  const cheap = await mergePreflight(task, gateProject, by, commitOverride);
+  const pushes = !!push.choice;
+  const cheap = await mergePreflight(task, gateProject, by, commitOverride, pushes);
   task = cheap.task;
   if (cheap.failure) return cheap.failure;
   if (gateProject?.acceptAutoCommit) {
     const autoCommitFailure = await autoCommitAcceptanceWorkspace(task, true, onAutoCommit);
     if (autoCommitFailure) return autoCommitFailure;
-    const afterCommit = await mergePreflight(task, gateProject, by, commitOverride);
+    const afterCommit = await mergePreflight(task, gateProject, by, commitOverride, pushes);
     task = afterCommit.task;
     if (afterCommit.failure) return afterCommit.failure;
   }
+  // 「推送到远程」：门禁之前先把远程同步进本地目标分支（task-accept-push.ts），门禁和合并都按同步之后的判。
+  const pushing = push.choice && gateProject ? await preparePush(task, gateProject, by, commitOverride, push.choice) : null;
+  if (pushing?.failure) return pushing.failure;
+  const pushPlan = pushing?.plan ?? null;
+  if (pushing?.destination) push.choice = pushing.destination;
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority, expectedResultVersion: expected.resultVersion,
-      expectedHumanGate: expected.humanGate },
+      expectedHumanGate: expected.humanGate, ...(pushing?.destination ? { push: pushing.destination } : {}) },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
     onBasis: basis => { gateBasis = basis; },
@@ -294,12 +285,16 @@ async function acceptTaskUnlocked(
     const source = testedSource ?? await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
     await db.update(tasks).set({ acceptedSourceCommit: source }).where(eq(tasks.id, taskId));
   }
-  const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge, {
-    commit: commitOnAccept,
-    retryOfMerged: retrying,
-    sourceCommit: testedSource,
-    ...tested,
-  });
+  // 选了推送：先在临时检出里合好、推上去，远程收下了才快进本地；推不上去本地不动（task-accept-push.ts）。
+  const mergeOptions = { commit: commitOnAccept, retryOfMerged: retrying, sourceCommit: testedSource, ...tested };
+  const { merge, push: pushed } = pushPlan
+    ? await pushFirst(task, project.repoPath, pushPlan, { target: intendedTarget, strategy: plan.merge, options: mergeOptions,
+      recorded: retrying ? task.acceptedMergeCommit : null })
+    : { merge: await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge, mergeOptions), push: undefined };
+  if (!merge.ok && merge.reason === "push_remote_moved") {
+    return { accepted: false, httpStatus: 409, taskId, reason: merge.reason, error: merge.message, status: task.status,
+      sourceBranch: merge.sourceBranch, targetBranch: merge.targetBranch };
+  }
   if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
     const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);
     merge.message += owner ? `占用者是任务「${owner.title}」（${owner.id}）。任务结束后 worktree 仍会占用分支，删除分支会使验收目标丢失。请保留分支并处理验收目标。` : "请保留目标分支，删除工作区不能替代验收目标配置。";
@@ -320,6 +315,11 @@ async function acceptTaskUnlocked(
       && !!task.acceptedMergeCommit
       && await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch);
     if (mergeReachable) {
+      const pushed = pushPlan ? await pushMerged(task, project.repoPath, pushPlan, task.acceptedMergeCommit!) : undefined;
+      if (pushed && !pushed.ok) {
+        return { accepted: false, httpStatus: 409, taskId, reason: pushed.reason, error: pushed.message, status: task.status, push: pushed,
+          completedMerge: { targetBranch, commit: task.acceptedMergeCommit } };
+      }
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
       const finalized = await finalizeAcceptance(
@@ -342,6 +342,7 @@ async function acceptTaskUnlocked(
         merge: "already_merged",
         branch: merge.sourceBranch,
         branchDeleted: true,
+        ...(pushed ? { push: pushed } : {}),
         ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
       };
     }
@@ -367,6 +368,7 @@ async function acceptTaskUnlocked(
       conflictFiles: merge.conflictFiles,
       dirtyFiles: merge.dirtyFiles,
       targetPath: merge.targetPath,
+      ...(pushed ? { push: pushed } : {}),
       ...(conflictHandoff ? { conflictHandoff } : {}),
     };
   }
@@ -443,6 +445,7 @@ async function acceptTaskUnlocked(
   for (const warning of merge.warnings ?? []) {
     await appendTaskTimeline(taskId, alertLine(`合并清理警告：${warning.message}`));
   }
+  const pushField = pushed ? { push: pushed } : {};
   const completedMerge = tagged ? undefined : { targetBranch: merge.targetBranch, commit: noCommit ? null : merge.afterCommit ?? null };
   const completedTag = tagged ? merge.tag : undefined;
   const completedSummary = noCommit
@@ -462,6 +465,7 @@ async function acceptTaskUnlocked(
       sourceBranch: merge.sourceBranch,
       targetBranch: merge.targetBranch,
       warnings: merge.warnings,
+      ...pushField,
     };
   }
 
@@ -485,11 +489,14 @@ async function acceptTaskUnlocked(
   // 按**计划**判而不是按本次 method：squash 计划的重试会拿到 already_merged，但分支
   // 依旧不是目标的祖先，`git branch -d` 一样删不掉——按 method 判会让重试卡死在清理
   // （审查实测：worktree 已删、分支删不动、任务永久停 merged）。
-  const branchUnmergeable = plan.merge === "squash" || plan.merge === "tag" || merge.method === "squash" || tagged || noCommit;
+  // 推上去了、本地目标分支没跟上（task-accept-push.ts）：本地 git 看它没合并，分支留着，pull 之后再删。
+  const localBehind = !!(pushed?.ok && pushed.localBehind);
+  const branchUnmergeable = plan.merge === "squash" || plan.merge === "tag" || merge.method === "squash" || tagged || noCommit || localBehind;
   const branchKeptReason = !cleanPlan.branch
     ? `线上写的是「${ACCEPT_CLEAN_LABELS[plan.clean]}」`
     : branchUnmergeable
-      ? `${tagged ? "只打了标签没合并" : noCommit ? "这次合并没有落提交，分支是那份改动唯一的版本库副本" : "squash 之后 git 不认为它已合并"}，按约定不强删`
+      ? `${tagged ? "只打了标签没合并" : noCommit ? "这次合并没有落提交，分支是那份改动唯一的版本库副本"
+        : localBehind ? `成果已推到远程，但本地 ${merge.targetBranch} 还没跟上` : "squash 之后 git 不认为它已合并"}，按约定不强删`
       : null;
   if (branchUnmergeable) cleanPlan.branch = false;
 
@@ -499,7 +506,7 @@ async function acceptTaskUnlocked(
     catch (failure) {
       const error = `${completedSummary}${failure instanceof Error ? failure.message : String(failure)}`;
       await appendTaskTimeline(taskId, alertLine(error));
-      return { accepted: false, httpStatus: 409, taskId, reason: "preview_cleanup_pending", error, completedMerge, completedTag, status: task.status, phase: "before_cleanup" };
+      return { accepted: false, httpStatus: 409, taskId, reason: "preview_cleanup_pending", error, completedMerge, completedTag, status: task.status, phase: "before_cleanup", ...pushField };
     }
   }
   const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch, cleanPlan);
@@ -525,6 +532,7 @@ async function acceptTaskUnlocked(
       worktreePath: cleanup.worktreePath,
       dirtyFiles: cleanup.dirtyFiles,
       warnings: merge.warnings,
+      ...pushField,
     };
   }
 
@@ -551,7 +559,7 @@ async function acceptTaskUnlocked(
     { completedMerge, completedTag },
     reviewAuthority,
   );
-  if (finalized.failure) return finalized.failure;
+  if (finalized.failure) return { ...finalized.failure, ...pushField };
   const { sharedWorkers } = finalized;
   return {
     accepted: true,
@@ -567,6 +575,7 @@ async function acceptTaskUnlocked(
     branch: cleanup.sourceBranch,
     branchDeleted: cleanup.branchDeleted,
     warnings: merge.warnings,
+    ...pushField,
     ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
   };
 }
@@ -591,6 +600,8 @@ export async function acceptTask(
     expectedResultVersion?: string;
     /** 调用方看到的那一道「等我点头」（task-human-gate.ts）；线已经不停在那一道就拒绝。不传 = 不核。 */
     expectedHumanGate?: string;
+    /** 合完推送到目标分支的远程（task-accept-push.ts）：确认过的目的地，或只说了「推」的 true。不读任何默认。 */
+    push?: PushChoice["choice"];
   } = {},
 ): Promise<AcceptTaskResult> {
   const originalFinalizer = !!advanceOpts.reviewAuthority?.finalization && !advanceOpts.acceptGatePassedRunId;
@@ -645,13 +656,15 @@ export async function acceptTask(
               receiptLine(`验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`),
             );
           }
-          return acceptTaskUnlocked(
+          // 推送时远程又进了新提交：本地没动、已同步，在同一把锁里从头再验一遍（task-accept-push.ts 文件头）。
+          return untilRemoteSettles(taskId, advanceOpts.push ?? false, (push) => acceptTaskUnlocked(
             taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit,
             advanceOpts.acceptGate, advanceOpts.acceptGatePassedRunId,
             advanceOpts.reviewAuthority,
             { resultVersion: advanceOpts.expectedResultVersion, humanGate: advanceOpts.expectedHumanGate },
             outcome => { autoCommit = outcome; },
-          );
+            push,
+          ));
         });
       }
     } finally {

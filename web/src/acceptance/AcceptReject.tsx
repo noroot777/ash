@@ -1,5 +1,6 @@
 import { useState, type RefObject } from "react";
 import type { TaskListItem } from "@navi/shared";
+import { ARCHIVED_DECISION_HINT, taskInteractionAvailability } from "@navi/shared/task-interaction";
 import { api } from "../lib/api.ts";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
@@ -9,6 +10,7 @@ export type ReturnOutcome = { scheduled: boolean };
 
 /** 打回的意见原样作为真人回复送进原会话（讨论则送回讨论，让双方沿原记录再来一轮）。 */
 export async function sendReturn(task: TaskListItem, text: string): Promise<ReturnOutcome> {
+  if (taskInteractionAvailability(task) === "archived") throw new Error(ARCHIVED_DECISION_HINT);
   if (task.mode === "duet") {
     await api.gate(task.id, { kind: "inject", text: `【验收打回】请根据以下意见继续讨论，并重新形成可验收结论。\n\n${text}` });
     return { scheduled: false };

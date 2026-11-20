@@ -75,6 +75,8 @@ const TRIGGERS = [
   watch("scheduled_messages", onTask, changed(["task_id", "status", "checkpoint_taken", "delivering_since", "delivering_owner", "origin"])),
   // 挂着还没兑现的开工请求时能停（撤回那一笔请求）：task-actions.ts readActionFacts 的 prerequisiteRequest。
   watch("task_prerequisite_launches", onTask, changed(["requested_at"])),
+  watch("monitors", onTask, changed(["task_id", "status"])),
+  watch("accept_gate_runs", onTask, changed(["task_id", "status", "process_pending"])),
   // 执行器 profile 改了 / 删了：重跑上一回合的保真前提（会话记下的指纹）全变，说不清是哪些任务。
   `
   CREATE TEMP TRIGGER IF NOT EXISTS navi_actions_agents_upd AFTER UPDATE ON agents BEGIN SELECT navi_actions_dirty('all', NULL); END;

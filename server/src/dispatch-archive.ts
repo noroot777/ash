@@ -1,6 +1,6 @@
 // 派出去的子孙（`dispatchedBy` 整棵往下）跟着派活的那条一起归档、一起取回。
 //
-// 用户 2026-11-19 定的：主任务归档了，子孙任务都跟着归档；有还没结束的就挡回去，等都结束了再归档。
+// 主任务归档时，静止的子孙任务一并归档；仍有执行或后台活动时整棵挡回。
 // 原先归档只收派活那一条：它从侧栏消失，名下还停着的那几条各自浮到顶层，挂着一颗指向已归档任务的
 // 「父任务」图标，看着像来路不明的任务（T1Au21zo7wPK 那一次）。
 //
@@ -24,6 +24,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { dispatchTree } from "./dispatch-hold.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
+import { readArchiveActivity } from "./task-archive-activity.js";
 import type { DispatchBelow } from "./task-action-verdicts.js";
 export { HIDDEN_BELOW_TEXT } from "./task-action-verdicts.js";
 
@@ -55,6 +56,7 @@ export async function readDispatchBelow(taskId: string, actor?: Actor): Promise<
     hidden: hidden(row.projectId),
     title: hidden(row.projectId) ? null : row.title,
     status: row.status,
+    ...await readArchiveActivity(row.id),
     verifyRound: row.verifyRound,
     freeReviewActive: row.workflowMode === "free" ? await hasActiveFreeReview(row.id) : false,
   })));

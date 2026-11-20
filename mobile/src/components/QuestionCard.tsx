@@ -2,6 +2,7 @@ import { useEffect, useState, type RefObject } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { MAX_QUESTION_ITEMS, type TaskListItem } from "@navi/shared";
+import { ARCHIVED_QUESTION_HINT, questionAnswerAvailability } from "@navi/shared/questions";
 import { api } from "@/lib/api";
 import { appendQuestionOption, formatQuestionAnswers } from "@/lib/question";
 import { fonts, radius, useTheme } from "@/lib/theme";
@@ -27,7 +28,9 @@ export function QuestionCard({
   const items = task.questionItems ?? [];
   const isMulti = items.length > 0;
   const isLead = task.mode === "team";
-  const settling = !isLead && (task.status === "running" || task.status === "queued");
+  const availability = questionAnswerAvailability(task);
+  const readOnly = availability === "archived";
+  const settling = availability === "settling";
   const [draft, setDraft] = useState("");
   const [itemDrafts, setItemDrafts] = useState<string[]>(() => items.map(() => ""));
   const [sending, setSending] = useState(false);
@@ -47,11 +50,12 @@ export function QuestionCard({
   const answerText = isMulti
     ? formatQuestionAnswers(items, itemDrafts)
     : draft.trim();
+  const disabled = availability !== "ready" || sending || sent;
 
   const send = async () => {
     // Multi-question answers may intentionally leave every item unanswered; the
     // explicit markers still communicate that choice. A single answer cannot be empty.
-    if (sending || sent || settling || (!isMulti && !answerText)) return;
+    if (disabled || (!isMulti && !answerText)) return;
     setSending(true);
     try {
       await api.answer(task.id, answerText);
@@ -65,11 +69,10 @@ export function QuestionCard({
     }
   };
 
-  const disabled = settling || sending || sent;
-
   return (
     <View
       ref={cardRef}
+      testID="question-card"
       style={{
         overflow: "hidden",
         borderRadius: radius.md,
@@ -131,6 +134,7 @@ export function QuestionCard({
                     value={itemDrafts[index] ?? ""}
                     options={item.options ?? []}
                     disabled={disabled}
+                    readOnly={readOnly}
                     placeholder={settling ? "提问回合还没结束，稍候再答…" : "选择建议或填写这一题（可留空）"}
                     accessibilityLabel={`问题 ${index + 1} 的答复`}
                     onFocus={onFocusInput}
@@ -144,15 +148,16 @@ export function QuestionCard({
                   />
                 </View>
               ))}
-              <Text style={{ color: theme.faint, fontSize: 11, lineHeight: 16, fontFamily: fonts.body }}>
+              {!readOnly && <Text style={{ color: theme.faint, fontSize: 11, lineHeight: 16, fontFamily: fonts.body }}>
                 可以部分答复；留空的问题会明确写为“(未答)”
-              </Text>
+              </Text>}
             </View>
           ) : (
             <AnswerEditor
               value={draft}
               options={task.questionOptions ?? []}
               disabled={disabled}
+              readOnly={readOnly}
               placeholder={
                 settling
                   ? "提问回合还没结束，稍候再答…"
@@ -166,7 +171,9 @@ export function QuestionCard({
             />
           )}
 
-          <Pressable
+          {readOnly ? <Text selectable style={{ color: theme.muted, fontSize: 12, lineHeight: 18, fontFamily: fonts.body }}>
+            {ARCHIVED_QUESTION_HINT}
+          </Text> : <Pressable
             accessibilityRole="button"
             accessibilityLabel="发送答复"
             onPress={() => void send()}
@@ -187,7 +194,7 @@ export function QuestionCard({
             <Text style={{ color: "#06202A", fontSize: 13, fontFamily: fonts.bodySemi }}>
               {sent ? "已发送，等待刷新" : sending ? "发送中…" : "发送答复"}
             </Text>
-          </Pressable>
+          </Pressable>}
         </View>
       </View>
     </View>
@@ -198,6 +205,7 @@ function AnswerEditor({
   value,
   options,
   disabled,
+  readOnly,
   placeholder,
   accessibilityLabel,
   onChange,
@@ -206,6 +214,7 @@ function AnswerEditor({
   value: string;
   options: string[];
   disabled: boolean;
+  readOnly: boolean;
   placeholder: string;
   accessibilityLabel: string;
   onChange: (value: string) => void;
@@ -231,7 +240,12 @@ function AnswerEditor({
         <View style={{ gap: 6 }}>
           {options.map((option, index) => {
             const selected = selectedOption === index;
-            return (
+            return readOnly ? (
+              <View key={`${index}-${option}`} style={{ flexDirection: "row", gap: 8, paddingVertical: 6 }}>
+                <Text style={{ color: theme.muted, fontSize: 11, lineHeight: 18, fontFamily: fonts.monoMed }}>{index + 1}</Text>
+                <Text selectable style={{ flex: 1, color: theme.ink, fontSize: 13, lineHeight: 18, fontFamily: fonts.body }}>{option}</Text>
+              </View>
+            ) : (
               <Pressable
                 key={`${index}-${option}`}
                 accessibilityRole="button"
@@ -271,7 +285,7 @@ function AnswerEditor({
         </View>
       ) : null}
 
-      <TextInput
+      {!readOnly && <TextInput
         value={value}
         onChangeText={(next) => {
           onChange(next);
@@ -299,7 +313,7 @@ function AnswerEditor({
           fontFamily: fonts.body,
           opacity: disabled ? 0.55 : 1,
         }}
-      />
+      />}
     </View>
   );
 }

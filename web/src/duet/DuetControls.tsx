@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { GateAction, TaskListItem } from "@navi/shared";
+import { ARCHIVED_DECISION_HINT, taskInteractionAvailability } from "@navi/shared/task-interaction";
 import { CheckCircle, Question, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
@@ -9,6 +10,7 @@ import { gateAllowsRevision } from "./handoffPolicy.ts";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 export function DuetGateControls({
+  task,
   gate,
   round,
   maxRounds,
@@ -18,6 +20,7 @@ export function DuetGateControls({
   onOpenHandoff,
   onOpenTask,
 }: {
+  task: Pick<TaskListItem, "archived">;
   gate: DuetGate;
   round: number;
   maxRounds: number | null;
@@ -31,10 +34,11 @@ export function DuetGateControls({
   const [text, setText] = useState("");
   const [target, setTarget] = useState<"A" | "B" | "both">("both");
   const uploads = useAttachments();
+  const readOnly = taskInteractionAvailability(task) === "archived";
   // 只贴一张图不打字也算数(截图往往就是全部要说的话):文本或附件有一样就能提交。
   const canSubmit = !!text.trim() || uploads.attachments.length > 0;
   const submit = async () => {
-    if (!canSubmit || !mode || uploads.uploading) return;
+    if (readOnly || busy || !canSubmit || !mode || uploads.uploading) return;
     const message = text.trim();
     const attachments = uploads.attachments.map((attachment) => attachment.path);
     await onGate(mode === "inject"
@@ -71,21 +75,23 @@ export function DuetGateControls({
       )}
       <div className="duet-control-actions">
         <DuetHandoffBar
+          task={task}
           linkedTasks={linkedTasks}
           busy={busy}
           onOpenHandoff={onOpenHandoff}
           onOpenTask={onOpenTask}
         />
-        <button type="button" className="is-approve" disabled={busy || !!hold} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>
-        {!handedOff && <>
+        {!readOnly && <button type="button" className="is-approve" disabled={busy || !!hold} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>}
+        {!readOnly && !handedOff && <>
           <button type="button" disabled={busy || !!hold} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>
           <button type="button" className={mode === "inject" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "inject" ? null : "inject")}>注入意见</button>
           <button type="button" className={mode === "ask" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "ask" ? null : "ask")}><Question size={12} />提问继续</button>
         </>}
       </div>
+      {readOnly && <p className="duet-gate-hold">{ARCHIVED_DECISION_HINT}</p>}
       {/* 附件和在途状态都挂在输入区外面：再点一次「注入意见」把输入区收起来（mode 变回 null）
           也照样看得见，否则界面上什么都没有、放行按钮又是灰的，就成了「按钮无缘无故坏了」。 */}
-      <div className="duet-gate-uploads">
+      {!readOnly && <div className="duet-gate-uploads">
         <UploadAttachmentList
           attachments={uploads.attachments}
           pending={uploads.pending}
@@ -94,8 +100,8 @@ export function DuetGateControls({
           onCancel={uploads.cancel}
         />
         {hold && <p className="duet-gate-hold">{hold}</p>}
-      </div>
-      {mode && !handedOff && (
+      </div>}
+      {!readOnly && mode && !handedOff && (
         <div className="duet-gate-composer">
           {mode === "ask" && <div className="duet-targets"><span>提问对象</span>{(["both", "A", "B"] as const).map((value) => <button type="button" className={target === value ? "is-selected" : ""} key={value} onClick={() => setTarget(value)}>{value === "both" ? "双方" : `讨论者 ${value}`}</button>)}</div>}
           <AutoTextarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再讨论（可粘贴截图）…" : "写下要澄清的问题（可粘贴截图）…"} onChange={(event) => setText(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => { if (isSendKeyEvent(event)) { event.preventDefault(); void submit(); } }} />

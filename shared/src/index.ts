@@ -286,9 +286,7 @@ export function isUserSettableStatus(status: TaskStatus): boolean {
   return USER_SETTABLE_STATUSES.includes(status);
 }
 
-// 归档 = 结束。team 任务没有 done —— 它只在忙(running)/闲(idle)之间摆动，所以
-// `idle` 也算可归档：归档才是团队解散的那一刻。
-export const ARCHIVABLE_STATUSES: TaskStatus[] = ["done", "failed", "canceled", "idle"];
+export const ARCHIVABLE_STATUSES: TaskStatus[] = ["backlog", "paused", "awaiting_review", "done", "failed", "canceled", "idle"];
 export function canArchive(status: TaskStatus): boolean {
   return ARCHIVABLE_STATUSES.includes(status);
 }

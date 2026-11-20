@@ -32,10 +32,21 @@ refuse_if_in_use() {
 explain_in_use() {
   echo "✕ 没有安装：下面这些进程还在用 ${DEST} 里的代码，现在换掉会让它们新旧代码混着跑。" >&2
   printf '%s\n' "$1" | sed 's/^/    /' >&2
-  echo "  空闲的 Navi 服务会自动停止；仍列在这里的服务有任务在跑，或无法安全确认其状态。" >&2
+  echo "  仅当全部占用者都是可确认的空闲服务，且退出清场清单为空时才会自动停止；有终端、项目服务、预览试跑、聊天执行或状态不明就保留服务。" >&2
   echo "  Navi MCP（mcp/dist/index.js）是在跑的 agent 拉起的，等那几个任务这一轮结束；Navi 本身先退出。" >&2
   echo "  都停了再装一次。" >&2
 }
+
+if [[ "${3:-}" == --open ]]; then
+  status=0
+  /bin/bash "$0" "$APP" "$DEST_DIR" || status=$?
+  if [[ -d "$DEST" ]]; then
+    open_status=0
+    open "$DEST" || open_status=$?
+    if (( status == 0 )); then status=$open_status; fi
+  fi
+  exit "$status"
+fi
 
 # 换包那一段：父进程 lockf 拿着旧包代码锁的排他锁，跑旧包代码的进程这时起不来。
 if [[ "${3:-}" == --swap ]]; then
