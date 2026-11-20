@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
 import { MarkdownBody } from "../../src/components/MarkdownBody.tsx";
 import "../../src/styles/global.css";
 
@@ -33,15 +34,34 @@ const links = [
   "[站外图](https://example.com/remote.png)",
 ].join("\n");
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
+// 没有左侧抽屉的地方（随手记、助手）：报告 .md 不接管，照普通链接另开标签页。
+const orphan = "[孤立报告](/Users/example/code/navi/data/runs/tsk1234/review/round-1/report.md)";
+
+// 前两块照 TaskDetail 的做法挂在左侧抽屉的宿主里：正文里点到报告 .md 从左边推出读全文那一屉。
+function Fixture() {
+  const drawer = useLeftDrawerHost({ resetKey: "demo" });
+  return (
     <main>
-      <section id="inline">
-        <MarkdownBody text={inline} />
-      </section>
-      <section id="links">
-        <MarkdownBody text={links} />
+      <LeftDrawerProvider value={drawer.api}>
+        <div id="drawer-host" style={{ position: "relative" }}>
+          <section id="inline">
+            <MarkdownBody text={inline} />
+          </section>
+          <section id="links">
+            <MarkdownBody text={links} />
+          </section>
+          {drawer.drawer}
+        </div>
+      </LeftDrawerProvider>
+      <section id="no-drawer">
+        <MarkdownBody text={orphan} />
       </section>
     </main>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <Fixture />
   </StrictMode>,
 );

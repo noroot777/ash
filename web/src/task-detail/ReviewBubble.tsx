@@ -1,8 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import { FileText, ListBullets } from "@phosphor-icons/react";
 import { useLeftDrawer } from "../components/LeftDrawer.tsx";
-import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
-import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { useNow } from "../lib/useNow.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
@@ -10,7 +8,7 @@ import { BubbleKey, BubbleShell } from "./BubbleShell.tsx";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { FootnoteDot } from "./FootnoteLine.tsx";
 import { laneReportEntry } from "./laneReportEntry.tsx";
-import { laneReportUrl, laneReviewTarget } from "./reviewLaneLinks.ts";
+import { laneReviewTarget } from "./reviewLaneLinks.ts";
 import { reviewProgress, type ReviewProgress, type ReviewProgressPhase } from "./reviewProgress.ts";
 import { laneVerdictView, reviewLaneTail } from "./turnFootnote.ts";
 import { durationBetween, formatDuration, formatInstant } from "./utils.ts";
@@ -91,7 +89,6 @@ export function ReviewBubble({
         {open && (pending ? hasBody : !onOpenRound || traceToggle) && <LaneBody lane={lane} id={bodyId} renderLane={renderLane} />}
         {state && !open && (state.phase === "stopped" ? trailing : <ProgressLine lane={lane} progress={state} />)}
         {!state && trailing}
-        {report.dialog}
       </>}
     >
       {state ? (
@@ -130,24 +127,15 @@ export function ReviewBubble({
 
 /**
  * 这一轮的报告键：从左边推出报告全文（同子智能体那个抽屉的位置，右边的审查格还点得着）。这一处没有
- * 左侧抽屉可开（远程任务那种只读视图）才退回居中弹窗。没有报告就没有键。
+ * 左侧抽屉可开（单摆一份会话、没有主区容器的地方）就不出键；没有报告也没有键。
  */
 function useLaneReport(taskId: string | undefined, lane: ConversationReviewLane) {
   const drawer = useLeftDrawer();
-  const [dialog, setDialog] = useState<ReviewFileTarget | null>(null);
   const report = lane.reportAvailable && lane.report && taskId ? lane.report : null;
-  if (!report || !taskId) return { open: null, active: undefined, dialog: null };
-  const entry = drawer ? laneReportEntry(taskId, report) : null;
-  // 只有开的是左侧那一屉才谈得上「按下」；退回居中阅读层时这颗键只是打开它。
-  const active = entry ? drawer?.activeKey === entry.key : undefined;
-  return {
-    open: () => {
-      if (drawer && entry) return active ? drawer.close() : drawer.open(entry);
-      setDialog({ name: "report.md", url: laneReportUrl(taskId, report) });
-    },
-    active,
-    dialog: dialog && <ReviewReportDialog target={dialog} onReviewReport={setDialog} onClose={() => setDialog(null)} />,
-  };
+  if (!report || !taskId || !drawer) return { open: null, active: undefined };
+  const entry = laneReportEntry(taskId, report);
+  const active = drawer.activeKey === entry.key;
+  return { open: () => (active ? drawer.close() : drawer.open(entry)), active };
 }
 
 /** 进行中那一轮浮出的那一行：谁在审、模型、智能水平、第几轮、什么时候开始的；带附言的看得出来。 */
@@ -217,7 +205,6 @@ export function LaneBody({ lane, id, taskId, renderLane }: {
       )}
       {lane.note && <ReviewNote text={lane.note} />}
       {renderLane?.(lane)}
-      {report.dialog}
     </div>
   );
 }

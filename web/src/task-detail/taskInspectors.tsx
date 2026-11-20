@@ -2,7 +2,6 @@ import type { Group, Session, Task, TaskListItem } from "@navi/shared";
 import { Browser, FolderOpen, GitPullRequest, Globe, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats, TerminalWindow, TreeView } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
-import { InspButton, InspNone } from "../inspector/parts.tsx";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { ArtifactsInspector } from "../files/ArtifactsInspector.tsx";
@@ -28,6 +27,7 @@ import type { ReviewRetryAction } from "./turnRetry.ts";
 import type { TaskRuntime } from "../task-runtime/useTaskRuntime.ts";
 import { ServiceInspector } from "../task-runtime/ServiceInspector.tsx";
 import { BrowserInspector } from "../task-runtime/TaskBrowserPane.tsx";
+import { PREVIEW_TAB, PreviewPane, type PreviewTabState } from "../preview-workspace/previewTab.tsx";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -43,7 +43,8 @@ export interface TaskInspectorContext {
   runFacts: InfoRunFacts;
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
-  onOpenPreview: () => void;
+  /** 「预览指正」那一格开没开、怎么开关（preview-workspace/previewTab.tsx）。 */
+  preview: PreviewTabState;
   onTaskUpdated: (task: Task) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
@@ -233,20 +234,14 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
       : <TaskReviewInspector {...context} />,
   },
   {
-    id: "preview",
+    // 打开之后是宽格、自带头带（usePreviewTab），预览指正整个长在这一格里，会话和回复框留着。
+    id: PREVIEW_TAB,
     cluster: 3,
     title: "预览指正",
     icon: <Browser size={14} />,
     defaultOpen: true,
     shortcut: "p",
-    // 空着的一格：一句话说这是干什么的，一颗键把预览指正在中间栏打开。
-    render: (context) => (
-      <div className="insp-pane">
-        <InspNone action={<InspButton onClick={context.onOpenPreview}>打开预览指正</InspButton>}>
-          在页面上圈出要改的地方，逐条写意见。
-        </InspNone>
-      </div>
-    ),
+    render: (context) => <PreviewPane taskId={context.task.id} preview={context.preview} />,
   },
   {
     // 服务、浏览器也走「用过才浮现」（开合由 useTaskInspectorStack 按运行环境翻）：智能体托管过服务、
