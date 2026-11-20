@@ -631,11 +631,28 @@ try {
     else assert.equal(git(sample.repo, "rev-parse", "main"), before, "不提交那一档不挪分支");
   }
 
+  // ㊽ 项目目录里有一场没做完的合并（索引干净、只差提交，审查第 4 轮 F2）：原生 `git merge` 会拒，受保护发布不走它，
+  // 得自己在写引用和文件之前拒；那场合并原样留着。提交 / 不提交两档都钉。
+  for (const commit of [true, false]) {
+    const sample = await fixture(`landing-pending-${commit ? "commit" : "stage"}`, { baseline: "merge_preview" });
+    const waiting = git(sample.repo, "commit-tree", "main^{tree}", "-p", "main", "-m", "waiting");
+    git(sample.repo, "merge", "-q", "--no-ff", "--no-commit", waiting);
+    assert.equal(git(sample.repo, "status", "--porcelain"), "", "前提：索引和工作区都是干净的");
+    const before = git(sample.repo, "rev-parse", "main");
+    const { landed } = await landGuarded(sample, undefined, { commit });
+    assert.equal(landed.ok, false, JSON.stringify(landed));
+    if (!landed.ok) assert.match(landed.message, /没做完的 git 操作（MERGE_HEAD）[^]*目标分支没动，检出里的文件也没动/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+    assert.equal(git(sample.repo, "rev-parse", "MERGE_HEAD"), waiting, "那场合并还等着用户提交");
+    assert.equal(git(sample.repo, "status", "--porcelain"), "", "什么都没写");
+    git(sample.repo, "merge", "--abort");
+  }
+
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
     hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
     dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true,
-    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true, truncated: true, unreadable: true, switchDuring: true }));
+    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true, truncated: true, unreadable: true, switchDuring: true, pendingOperation: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

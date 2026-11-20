@@ -411,7 +411,7 @@ async function mergeWithoutCommit(
   sourceBranch: string,
   targetBranch: string,
   sourceRef = sourceBranch,
-  stage = (cwd: string) => mergeInUserCheckout(cwd, { sourceBranch, targetBranch },
+  stage = (cwd: string) => mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, sourceRef,
     () => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, false, sourceRef)),
   dirty = statusDirtyFiles,
 ): Promise<TaskMergeResult> {
@@ -577,7 +577,7 @@ async function mergeTaskBranchLocked(
   if (strategy === "squash") {
     const squash = (cwd: string) => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef);
     return inTargetCheckout(repo, sourceBranch, targetBranch, (cwd, userCheckout) =>
-      userCheckout ? mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, () => squash(cwd)) : squash(cwd));
+      userCheckout ? mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, sourceRef, () => squash(cwd)) : squash(cwd));
   }
 
   // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。
@@ -597,7 +597,7 @@ async function mergeTaskBranchLocked(
       // 「本来能 FF 却失败了」拦掉了），所以这儿直接把它透传下去。
       (cwd, userCheckout) => {
         const merge = () => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef);
-        return userCheckout ? mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, merge) : merge();
+        return userCheckout ? mergeInUserCheckout(cwd, { sourceBranch, targetBranch }, sourceRef, merge) : merge();
       },
       // 目标分支哪儿都没检出、而且本来就该能 fast-forward：那句 ref-only 的 fetch 失败
       // 是真出事了，别再开临时 worktree 拿 merge 去糊。
