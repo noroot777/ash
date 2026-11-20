@@ -49,25 +49,49 @@ async function idle(target, runtime, say) {
 export async function stopIdleServers(bundle, { say = console.log, timeoutMs = 20_000 } = {}) {
   const runtime = realPath(join(bundle, "Contents/Resources/app"));
   if (!runtime) return;
-  const users = execFileSync("/bin/bash", [join(here, "bundle-users.sh"), bundle], { encoding: "utf8" });
-  const pids = [...new Set(users.split("\n").map((line) => Number(line.match(/^(\d+) /)?.[1]))
-    .filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid))];
-  for (const pid of pids) {
+  const users = () => {
+    const output = execFileSync("/bin/bash", [join(here, "bundle-users.sh"), bundle], { encoding: "utf8" });
+    return [...new Set(output.split("\n").map((line) => Number(line.match(/^(\d+) /)?.[1]))
+      .filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid))];
+  };
+  const candidates = [];
+  let blocked = false;
+  for (const pid of users()) {
     const born = processBirth(pid);
-    if (!born || born === "gone") continue;
+    if (born === "gone") continue;
     let target;
     for (const port of listeningPorts(pid)) {
       target = await targetAt(port, pid, runtime);
       if (target) break;
     }
-    if (!target || !(await idle(target, runtime, say))) continue;
+    if (!born || !target) {
+      say(`  · 无法确认占用进程 ${pid} 是可安全停止的 Navi 服务，未停止任何服务。`);
+      blocked = true;
+    } else if (!(await idle(target, runtime, say))) blocked = true;
+    else candidates.push({ ...target, born });
+  }
+  if (blocked) return;
+  for (const target of candidates) {
+    const { pid, born } = target;
     const current = await targetAt(target.port, pid, runtime);
     if (!current || current.dataDir !== target.dataDir || current.instance !== target.instance
-      || !(await idle(current, runtime, say)) || processBirth(pid) !== born) continue;
+      || !(await idle(current, runtime, say)) || processBirth(pid) !== born) {
+      say(`  · 服务 ${pid} 的状态发生变化，未停止任何服务。`);
+      return;
+    }
+  }
+  const allowed = new Set(candidates.map((target) => target.pid));
+  if (users().some((pid) => !allowed.has(pid)) || candidates.some(({ pid, born }) => processBirth(pid) !== born)) {
+    say("  · 占用进程发生变化，未停止任何服务。");
+    return;
+  }
+  for (const { pid } of candidates) {
     say(`  ▶ 停止空闲的 Navi 服务（${pid}）…`);
     try { process.kill(pid, "SIGTERM"); }
     catch (error) { if (error.code !== "ESRCH") throw error; }
-    const deadline = Date.now() + timeoutMs;
+  }
+  const deadline = Date.now() + timeoutMs;
+  for (const { pid } of candidates) {
     while (isPidAlive(pid) && Date.now() < deadline) await sleep(100);
     if (isPidAlive(pid)) throw new Error(`服务 ${pid} 没有在 ${timeoutMs / 1000} 秒内退出，没有安装，也没有强杀。`);
     say(`  ✓ 空闲服务 ${pid} 已退出`);

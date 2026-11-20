@@ -156,8 +156,7 @@ case "${1:-}" in
       [[ -n "$GUI" ]] && lsof -nP -w -a -d txt -c Navi -F n 2>/dev/null | grep -qxF "n$GUI" || break
       sleep 0.2
     done
-    bash "$HERE/scripts/install-app.sh" "$APP" "$DEST_DIR"
-    open "$DEST_DIR/Navi.app"
+    bash "$HERE/scripts/install-app.sh" "$APP" "$DEST_DIR" --open
     ;;
   --dmg)
     bash "$HERE/scripts/make-dmg.sh" "$APP" "$BUILD/Navi.dmg"
