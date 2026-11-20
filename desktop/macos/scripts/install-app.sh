@@ -33,7 +33,7 @@ explain_in_use() {
   echo "✕ 没有安装：下面这些进程还在用 ${DEST} 里的代码，现在换掉会让它们新旧代码混着跑。" >&2
   printf '%s\n' "$1" | sed 's/^/    /' >&2
   echo "  仅当全部占用者都是可确认的空闲服务，且退出清场清单为空时才会自动停止；有终端、项目服务、预览试跑、聊天执行或状态不明就保留服务。" >&2
-  echo "  Navi MCP（mcp/dist/index.js）是在跑的 agent 拉起的，等那几个任务这一轮结束；Navi 本身先退出。" >&2
+  echo "  若列出 Navi MCP，在 app 菜单「检查 Navi MCP 登记…」中把登记改到固定外置入口（数据目录/.mac-runtimes/mcp.sh），再重开对应 CLI 会话。Navi 本身先退出。" >&2
   echo "  都停了再装一次。" >&2
 }
 

@@ -10,7 +10,7 @@
 // 依赖是单向的:这个文件不 import runs 的运行时(只借一个类型),所以 `claimReconcileTurn`
 // 那条要问「有没有句柄在册」的,住在 runs.ts 里。
 import type { StopSettle } from "./runs.js";
-import { runtimeDraining } from "./runtime-drain.js";
+import { afterRuntimeHandover, RuntimeHandoverBlockedError, runtimeHandoverActive } from "./runtime-handover-state.js";
 import type { WindDown } from "./turn-wind-down.js";
 
 // ── 单飞锁与「这一轮跑完之后」────────────────────────────────────────────────
@@ -203,11 +203,27 @@ export function takeStartFreezeDetail(taskId: string): StartFreeze | null {
  * 归属检查（report_stage）读它，而不是查 sessions 表猜（session 行的 endedAt 语义
  * 既不代表进程活着、也不代表回合归属，审查实测两个方向都错过）。
  */
-export function claimOwnTurn(taskId: string, role = "single", review: TurnReview | null = null): TurnIdentity | null {
-  if (runtimeDraining() || turns.has(taskId)) return null;
+export type TurnClaimResult = { kind: "claimed"; owner: TurnIdentity } | { kind: "handover" | "busy" };
+
+export function tryClaimOwnTurn(taskId: string, role = "single", review: TurnReview | null = null): TurnClaimResult {
+  if (runtimeHandoverActive()) return { kind: "handover" };
+  if (turns.has(taskId)) return { kind: "busy" };
   const identity: TurnIdentity = { role, review, token: null, agent: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
   turns.set(taskId, identity);
-  return identity;
+  return { kind: "claimed", owner: identity };
+}
+
+export function claimOwnTurn(taskId: string, role = "single", review: TurnReview | null = null): TurnIdentity | null {
+  const result = tryClaimOwnTurn(taskId, role, review);
+  return result.kind === "claimed" ? result.owner : null;
+}
+
+export async function claimOwnTurnWhenReady(taskId: string, role = "single", review: TurnReview | null = null): Promise<TurnIdentity | null> {
+  for (;;) {
+    const result = tryClaimOwnTurn(taskId, role, review);
+    if (result.kind !== "handover") return result.kind === "claimed" ? result.owner : null;
+    await new Promise<void>((resolve) => afterRuntimeHandover(resolve));
+  }
 }
 
 /**
@@ -376,12 +392,7 @@ export function claimWorkspaceTurn(taskIds: string[]): (() => void) | null {
  * 占不到的那些不必回给调用方：force 路径本来就不再据此拒绝，知道也无事可做。
  */
 export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
-  const claimed: Array<{ taskId: string; owner: TurnIdentity }> = [];
-  for (const taskId of new Set(taskIds)) {
-    const owner = claimOwnTurn(taskId, WORKSPACE_TURN_ROLE);
-    if (owner) claimed.push({ taskId, owner });
-  }
-  return releaserFor(claimed);
+  return releaserFor(claimIdleTurns(taskIds, WORKSPACE_TURN_ROLE));
 }
 
 /**
@@ -389,12 +400,22 @@ export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
  * 不必回给调用方,验收自己的守卫照常看得见它们(`isTurnClaimed`)并拒绝验收。交回占到了谁和释放函数。
  */
 export function claimAcceptanceHold(taskIds: string[]): { held: ReadonlySet<string>; release: () => void } {
+  const claimed = claimIdleTurns(taskIds, ACCEPT_HOLD_ROLE);
+  return { held: new Set(claimed.map((item) => item.taskId)), release: releaserFor(claimed) };
+}
+
+function claimIdleTurns(taskIds: string[], role: string): Array<{ taskId: string; owner: TurnIdentity }> {
+  if (runtimeHandoverActive()) throw new RuntimeHandoverBlockedError();
   const claimed: Array<{ taskId: string; owner: TurnIdentity }> = [];
   for (const taskId of new Set(taskIds)) {
-    const owner = claimOwnTurn(taskId, ACCEPT_HOLD_ROLE);
-    if (owner) claimed.push({ taskId, owner });
+    const result = tryClaimOwnTurn(taskId, role);
+    if (result.kind === "handover") {
+      for (const held of claimed) endOwnTurn(held.taskId, held.owner, false);
+      throw new RuntimeHandoverBlockedError();
+    }
+    if (result.kind === "claimed") claimed.push({ taskId, owner: result.owner });
   }
-  return { held: new Set(claimed.map((item) => item.taskId)), release: releaserFor(claimed) };
+  return claimed;
 }
 
 /** 这个任务此刻是不是被团队验收占着。 */
@@ -404,6 +425,7 @@ export function heldForAcceptance(taskId: string): boolean {
 
 /** 「回合占着」对人怎么说:团队验收占着的说清是在验收,别让人以为有一轮在跑、去点人工放开。 */
 export function turnBusyText(taskId: string, then: string): string {
+  if (runtimeHandoverActive()) return `正在切换新版服务，完成后再${then}`;
   return heldForAcceptance(taskId) ? `所属团队正在验收（含发布尾段），结束后再${then}` : `任务回合正在进行，结束后再${then}`;
 }
 
@@ -421,6 +443,11 @@ export function claimWakeTurn(taskId: string): (() => void) | null {
   const owner = claimOwnTurn(taskId, WAKE_TURN_ROLE);
   if (!owner) return null;
   return releaserFor([{ taskId, owner }]);
+}
+
+export async function claimWakeTurnWhenReady(taskId: string): Promise<(() => void) | null> {
+  const owner = await claimOwnTurnWhenReady(taskId, WAKE_TURN_ROLE);
+  return owner ? releaserFor([{ taskId, owner }]) : null;
 }
 
 /**
@@ -584,17 +611,28 @@ export function waitForTurnIdle(taskId: string, timeoutMs: number): Promise<bool
  * 排着的交接一并吃掉。空着那一侧已经当场执行完了,取消是个空操作(调了也不抛)。
  */
 export function whenTurnIdle(taskId: string, fn: () => void): () => void {
+  if (runtimeHandoverActive()) {
+    let cancelIdle: (() => void) | undefined;
+    const cancelHandover = afterRuntimeHandover(() => { cancelIdle = whenTurnIdle(taskId, fn); });
+    return () => { cancelHandover(); cancelIdle?.(); };
+  }
   if (!turns.has(taskId)) {
     fn();
     return () => {};
   }
+  let cancelTransferred = () => {};
+  const queued = () => {
+    if (runtimeHandoverActive()) cancelTransferred = whenTurnIdle(taskId, fn);
+    else fn();
+  };
   const waiting = afterTurn.get(taskId);
-  if (waiting) waiting.push(fn);
-  else afterTurn.set(taskId, [fn]);
+  if (waiting) waiting.push(queued);
+  else afterTurn.set(taskId, [queued]);
   return () => {
+    cancelTransferred();
     const list = afterTurn.get(taskId);
     if (!list) return; // 这一轮已经释放过了:整组被 endOwnTurn 取走并清掉
-    const at = list.indexOf(fn);
+    const at = list.indexOf(queued);
     if (at >= 0) list.splice(at, 1);
     if (!list.length) afterTurn.delete(taskId);
   };

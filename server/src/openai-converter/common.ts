@@ -1,6 +1,7 @@
 import { readEnv } from "@navi/shared/env-names";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { currentListeningPort } from "../listening-port.js";
+import { runtimeGatewayOrigin } from "../runtime-channel-gateway.js";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -58,7 +59,7 @@ export function secretsEqual(left: string, right: string): boolean {
 
 export function protocolConverterBaseUrl(providerId: string): string {
   const configured = readEnv(process.env, "NAVI_PROTOCOL_CONVERTER_URL")?.trim();
-  const origin = (configured || `http://127.0.0.1:${currentListeningPort() ?? 4317}`).replace(/\/+$/, "");
+  const origin = (configured || runtimeGatewayOrigin() || `http://127.0.0.1:${currentListeningPort() ?? 4317}`).replace(/\/+$/, "");
   return `${origin}/api/llm-providers/${encodeURIComponent(providerId)}/convert`;
 }
 

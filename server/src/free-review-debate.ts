@@ -44,7 +44,7 @@ import {
 } from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimOwnTurn, continueWhenIdle, releaseTurn, turnRole } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, continueWhenIdle, releaseTurn, turnRole } from "./runs.js";
 import {
   activeTalkOf, commitSegment, failTalk, hangingTalks, MAX_SEGMENT_STATEMENT_LEN, openSegment, segmentEnding,
   speakingTurnOf, statementOf, talkOrphaned, talkTurnsOf, type TalkRow, type TalkTurnRow,
@@ -197,7 +197,7 @@ export async function startFreeReviewDebate(
   // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
   // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  const turn = holdingTurn ? await claimOwnTurn(taskId, "dispatch") : null;
   if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再开辩论");
   }

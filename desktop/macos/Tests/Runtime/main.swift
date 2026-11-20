@@ -1,69 +1,34 @@
 import Foundation
-import Sparkle
 
 func emit(_ text: String) { print(text); fflush(stdout) }
-func until(_ done: () -> Bool) {
-  let deadline = Date().addingTimeInterval(25)
-  while !done() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
-}
-
 let mode = CommandLine.arguments[1]
+guard DataImport.skipped(".mac-runtimes") else { exit(4) }
 let gate = UpdateGate.shared
-gate.ask = { prompt in emit("REFUSED \(prompt.detail)"); return .cancel }
-gate.report = { emit("REFUSED \($0)") }
-gate.shutdownTimeout = 5
-gate.lockTimeout = 5
-switch mode {
-case "prepare":
-  do { emit("RUNTIME \(try RuntimeStore.selected.get().path)") } catch { emit("ERROR \(error)"); exit(1) }
-case "collect":
-  _ = try RuntimeStore.selected.get()
-  RuntimeStore.reclaim()
-case "start":
-  ServerLauncher.shared.freshStartApproved = true
-  emit("START \(ServerLauncher.shared.ensureRunningSync(timeout: 20))")
-case "blocked-prompt", "quit-blocked":
-  var prompted = false
-  gate.ask = { prompt in
-    guard !prompt.choices.contains(.now) else { emit("IMPOSSIBLE-NOW"); exit(4) }
-    emit("BUTTONS \(prompt.buttons.joined(separator: "|"))")
-    prompted = true
-    return .cancel
+gate.pollInterval = 0.1
+gate.shutdownTimeout = 3
+gate.lockTimeout = 3
+gate.ask = { _ in
+  if mode == "legacy-wait" { emit("ASK LEGACY"); return .wait }
+  emit("UNEXPECTED ASK"); exit(3)
+}
+var finished = false
+gate.report = { emit("FAILED \($0)"); finished = true }
+if mode == "prepare" {
+  do { try RuntimeStore.prepare(); emit("READY \(NaviConfig.runtimeURL.path)") }
+  catch { emit("FAILED \(error.localizedDescription)"); exit(1) }
+} else {
+  if mode == "stale" || mode.hasPrefix("legacy") {
+    do { try RuntimeStore.prepare() } catch { emit("FAILED \(error)"); exit(1) }
   }
-  gate.request(.staleServer(from: "test")) { emit("UNEXPECTED-SWITCH") }
-  until { prompted }
-  if mode == "quit-blocked" {
-    var replied = false
-    gate.ask = { prompt in
-      guard !prompt.choices.contains(.now), prompt.choices.contains(.quit) else { exit(4) }
-      return .quit
-    }
-    gate.requestForQuit(version: "test", whenDrained: {}) { emit("QUIT \($0)"); replied = true }
-    until { replied }
+  gate.request(mode == "stale" || mode.hasPrefix("legacy") ? .staleServer(from: "old") : .update(version: "new")) {
+    emit("PROCEED")
+    finished = true
   }
-case "switch":
-  var proceeded = false
-  var refused = false
-  gate.report = { emit("REFUSED \($0)"); refused = true }
-  gate.request(.staleServer(from: "test")) { proceeded = true }
-  until { proceeded || refused || gate.phase == .waiting }
-  guard proceeded else { exit(2) }
-  emit("START \(ServerLauncher.shared.ensureRunningSync(timeout: 20))")
-case "sparkle-relaunch", "sparkle-quit", "sparkle-abort":
-  let updater = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil).updater
-  let item = SUAppcastItem(dictionary: ["enclosure": ["url": "https://example.invalid/Navi.zip", "sparkle:version": "2"]])!
-  var proceeded = false
-  if mode == "sparkle-quit" {
-    _ = AppUpdater.shared.updater(updater, willInstallUpdateOnQuit: item) { proceeded = true }
-  } else {
-    _ = AppUpdater.shared.updater(updater, shouldPostponeRelaunchForUpdate: item) { proceeded = true }
+  let deadline = Date().addingTimeInterval(8)
+  while !finished && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+  if !finished { emit("WAITING \(gate.pendingMenuTitle)") }
+  if mode == "abort" {
+    gate.abandon("simulated Sparkle failure")
+    emit("ABANDONED \(gate.phase == .idle)")
   }
-  until { proceeded }
-  guard proceeded else { exit(2) }
-  emit("PROCEED")
-  if mode == "sparkle-abort" {
-    AppUpdater.shared.updater(updater, didAbortWithError: NSError(domain: "SUErrorDomain", code: 4000))
-    emit("ABORT \(gate.phase) \(ServerLauncher.shared.hold ?? "none")")
-  }
-default: exit(3)
 }

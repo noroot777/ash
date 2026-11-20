@@ -3,6 +3,16 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { EventEmitter } from "node:events";
 import { withTestResources } from "./test-process-resources.mjs";
+import { assertRuntimeCompatibility } from "../server/dist/runtime-compatibility.js";
+import { acquireRuntimeHandover } from "../server/dist/runtime-handover.js";
+import { checkpointRuntimeHandover } from "../server/dist/runtime-handover-prepare.js";
+import { releaseRuntimeHandover, reserveRuntimeHandover, runtimeHandoverMatches } from "../server/dist/runtime-handover-state.js";
+
+const compatibility = { protocol: 1, schema: "a".repeat(64) };
+assert.throws(() => assertRuntimeCompatibility(compatibility, { ...compatibility, protocol: 2 }, false), /协议/);
+assert.throws(() => assertRuntimeCompatibility(compatibility, { ...compatibility, schema: "b".repeat(64) }, true), /迁移/);
+assertRuntimeCompatibility(compatibility, { ...compatibility, schema: "b".repeat(64) }, false);
+console.log("✓ the sole handover protocol rejects unknown versions and active schema changes");
 
 const { eventQueue } = await import("../server/dist/executors/event-queue.js");
 const { checkpointOutput, supportsOutputCheckpoint } = await import("../server/dist/executors/output-checkpoint.js");
@@ -44,6 +54,41 @@ queue.close();
 await consuming;
 assert.equal(received[2].text, "after barrier");
 console.log("✓ output checkpoint flushes partial text/child activity, waits for slow persistence, and holds subsequent events until resumed");
+
+let thawed = false;
+const unregisterFrozen = registerRuntimeConsumer("frozen", () => ({ ready: Promise.resolve(), resume() { thawed = true; } }), () => true);
+const frozenImpact = { survives: [], interrupted: [], resumes: [], mcpDisrupted: [], runtimeHandover: { sessions: ["frozen"], blocked: [] } };
+const prepared = await acquireRuntimeHandover(async () => frozenImpact, () => [], { seal: async () => {}, checkpoint: checkpointRuntimeHandover });
+assert.ok(prepared.lease);
+assert.equal(thawed, false);
+releaseRuntimeHandover(prepared.lease);
+assert.equal(thawed, true);
+thawed = false;
+const expiring = await acquireRuntimeHandover(async () => frozenImpact, () => [], { seal: async () => {}, checkpoint: checkpointRuntimeHandover });
+const now = Date.now;
+try { Date.now = () => now() + 61_000; assert.equal(runtimeHandoverMatches(expiring.lease), false); }
+finally { Date.now = now; releaseRuntimeHandover(expiring.lease); unregisterFrozen(); }
+assert.equal(thawed, true);
+console.log("✓ lease release and expiry thaw the very same persisted consumer checkpoint");
+
+let replacementLease;
+let assessments = 0;
+try {
+  const replaced = await acquireRuntimeHandover(async () => {
+    if (++assessments === 2) {
+      try { Date.now = () => now() + 61_000; replacementLease = reserveRuntimeHandover(); }
+      finally { Date.now = now; }
+    }
+    return { ...frozenImpact, runtimeHandover: { sessions: [], blocked: [] } };
+  }, () => [], { seal: async () => {}, checkpoint: async () => {} });
+  assert.ok(replacementLease);
+  assert.equal(replaced.lease, undefined, "an expired acquisition cannot return a replacement lease's authority");
+  assert.equal(runtimeHandoverMatches(replacementLease), true, "stale cleanup cannot release the new lease");
+} finally {
+  Date.now = now;
+  if (replacementLease) releaseRuntimeHandover(replacementLease);
+}
+console.log("✓ a lease replaced during the final assessment cannot authorize the stale takeover");
 
 const attempts = new Map();
 const executed = new Map();

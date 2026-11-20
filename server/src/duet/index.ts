@@ -9,7 +9,7 @@ import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id } from "../util.js";
 import { setTaskStatus } from "../status.js";
-import { takeCanceled, CanceledRun, claimOwnTurn, reclaimTurn, releaseTurn } from "../runs.js";
+import { takeCanceled, CanceledRun, claimOwnTurnWhenReady as claimOwnTurn, reclaimTurn, releaseTurn } from "../runs.js";
 import type { TurnIdentity } from "../runs.js";
 import { isAcceptingTask } from "../acceptance-lock.js";
 import { reopenAcceptedStage } from "../task-stage.js";
@@ -39,7 +39,7 @@ import { applyAutoTitle } from "../auto-title-apply.js";
 // 身份要一路带到 finally 的释放点 —— 按任务 id 还锁会撤掉人工放开之后那一轮的互斥
 // (本轮审查 F1,理由在 turn-lock.ts 的 `endOwnTurn`)。
 export async function acquireDuetTurn(taskId: string, turnHeld?: TurnIdentity | null): Promise<TurnIdentity | null> {
-  const turn = turnHeld ? reclaimTurn(taskId, turnHeld, "duet") : claimOwnTurn(taskId, "duet");
+  const turn = turnHeld ? reclaimTurn(taskId, turnHeld, "duet") : await claimOwnTurn(taskId, "duet");
   if (!turn) return null;
   try {
     const task = (await db.select({ archived: tasks.archived }).from(tasks).where(eq(tasks.id, taskId))).at(0);

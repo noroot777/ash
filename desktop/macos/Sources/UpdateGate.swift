@@ -1,11 +1,9 @@
 import AppKit
 import os
 
-/// 换代码之前的那道闸：装新版 app = 重启它里面的服务。先问 server「现在重启会打断谁」
-/// （RestartImpact），确认没人会被打断就直接换；会打断、或者确认不了，就把是谁、几个、为什么
-/// 摆给用户，让他选「等它们跑完」还是「现在」。放行之后：攥住维护锁（任何入口都不许起服务，见
-/// Maintenance）、停**评估过的那一份**服务、备份库（新版一起来就迁移），最后才交给调用方去换
-/// （Sparkle 的安装回调）。停不下来、备份不成就不放行。
+/// 外置运行时把换 app 与换服务分开：Sparkle 只换窗口，旧服务和 MCP 继续用原来的版本。
+/// 新窗口接管服务时先备份并取得起跑闸门；不可接管的当前回合继续由旧服务运行。
+/// 尚未迁出的旧布局沿用原先的确认、停服务、备份流程。
 ///
 /// 两种来由：
 ///  · `.update`       Sparkle 下好了新版、要装了（装完重开 / 退出时装）
@@ -22,7 +20,7 @@ final class UpdateGate {
     case staleServer(from: String)
   }
 
-  enum Choice { case wait, now, quit, cancel, recover }
+  enum Choice { case wait, now, cancel, recover }
 
   struct Prompt {
     let title: String
@@ -63,6 +61,7 @@ final class UpdateGate {
   private var epoch = 0
   private var maintenance: Maintenance?
   private var holding = false
+  private var replacementLock: Int32?
 
   /// 这道闸正盖着窗口（本进程在停服务 / 备份 / 等 Sparkle 换 app）。
   var isHolding: Bool { holding }
@@ -78,8 +77,17 @@ final class UpdateGate {
   /// 「可以换代码了吗」。放行后（服务已停、库已备份）调 proceed。已经放行过就直接调。
   func request(_ purpose: Purpose, proceed: @escaping () -> Void) {
     if phase == .prepared { proceed(); return }
+    if case .update = purpose, phase == .preparing {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.request(purpose, proceed: proceed) }
+      return
+    }
     if case .update = purpose { self.purpose = purpose } else if self.purpose == nil { self.purpose = purpose }
     proceeds.append(proceed)
+    if case .update = purpose, RuntimeStore.destination != nil {
+      stopPolling()
+      evaluate()
+      return
+    }
     if phase == .idle { evaluate() }
   }
 
@@ -93,12 +101,18 @@ final class UpdateGate {
   /// 用户要退出，而退出时 Sparkle 会把下好的更新装上：同一道闸，多一个「取消」。
   /// reply(true) = 可以退了；reply(false) = 这次别退。选了「等它们跑完」时，等完调 whenDrained。
   func requestForQuit(version: String, whenDrained: @escaping () -> Void, reply: @escaping (Bool) -> Void) {
+    if case .staleServer = purpose, phase == .preparing {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        self.requestForQuit(version: version, whenDrained: whenDrained, reply: reply)
+      }
+      return
+    }
     switch phase {
     case .prepared: reply(true); return
     case .preparing: quitReplies.append(reply); return
     default: break
     }
-    if purpose == nil { purpose = .update(version: version) }
+    if purpose == nil || RuntimeStore.destination != nil { purpose = .update(version: version) }
     quitReplies.append(reply)
     self.whenDrained = whenDrained
     resumeWaitingOnCancel = phase == .waiting
@@ -110,7 +124,6 @@ final class UpdateGate {
   /// 正在停服务 / 备份的那一步回来时认得出自己已经作废（见 `settle`），由它收尾。
   func abandon(_ reason: String) {
     guard case .update = purpose else { return }
-    RuntimeStore.releaseBundleUpdate()
     log("Sparkle 放弃了这次更新（\(reason)）：作废排着的安装")
     epoch += 1
     stopPolling()
@@ -131,26 +144,41 @@ final class UpdateGate {
     phase = .checking
     epoch += 1
     let mine = epoch
-    let quitting = !quitReplies.isEmpty
-    if case .update = purpose, RuntimeStore.managed(NaviConfig.runtimeURL.path),
-       case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
-       let code = instance.codeDir, RuntimeStore.managed(code) {
-      finish(stale: false)
+    if case .update = purpose, RuntimeStore.destination != nil {
+      DispatchQueue.global(qos: .userInitiated).async { [self] in
+        let result: Result<Int32, Error> = Result {
+          try RuntimeStore.prepare()
+          return try RuntimeStore.lockForReplacement()
+        }
+        DispatchQueue.main.async {
+          guard mine == self.epoch else {
+            if case .success(let descriptor) = result { close(descriptor) }
+            return
+          }
+          switch result {
+          case .success(let descriptor): self.replacementLock = descriptor; self.finish(stale: false)
+          case .failure(let error): self.fail(error.localizedDescription)
+          }
+        }
+      }
       return
     }
-    assess { [self] verdict in
+    let quitting = !quitReplies.isEmpty
+    assess { [self] assessed in
       guard mine == epoch else { return }
+      let verdict: ImpactVerdict
+      if !assessed.needsConsent, preservingRuntime, let handoverBlock, let target = assessed.target {
+        verdict = .disrupts(target, [(title: "旧服务", why: handoverBlock)])
+      } else { verdict = assessed }
       guard verdict.needsConsent else { prepare(verdict.target); return }
       let choice = ask(prompt(for: verdict, quitting: quitting))
       // 弹窗开着的时候 Sparkle 可能已经放弃了这次更新。
       guard mine == epoch else { return }
       switch choice {
-      case .recover:
-        confirmRecovery(epoch: mine)
       case .now:
         prepare(verdict.target)
-      case .quit:
-        finish(stale: false)
+      case .recover:
+        confirmRecovery(epoch: mine)
       case .wait:
         answerQuit(false)
         if quitting, proceeds.isEmpty, let whenDrained { proceeds.append(whenDrained) }
@@ -163,42 +191,43 @@ final class UpdateGate {
   }
 
   private func confirmRecovery(epoch mine: Int) {
-    guard case .staleServer = purpose, quitReplies.isEmpty,
-          RuntimeStore.managed(NaviConfig.runtimeURL.path) else { startWaiting(); return }
-    DispatchQueue.global(qos: .userInitiated).async {
-      let assessment = Result { try RestartImpactProbe.assessRecoverySync() }
-      DispatchQueue.main.async { [self] in
-        guard mine == epoch else { return }
-        switch assessment {
-        case .failure(let error): fail(error.localizedDescription)
-        case .success(let recovery):
-          var lines = ["这不是无损接管。运行和排队中的任务可能中断，Navi MCP 交卷可能失败。"]
-          var affectedTasks: [String] = []
-          switch recovery.verdict {
-          case .disrupts(_, let items):
-            affectedTasks = items.map { "· \($0.title) —— \($0.why)" }
-          case .unknown(let reason):
-            lines.append("无法取得完整任务清单（\(reason)）；可能打断该服务中的所有任务。")
-          case .clear:
-            lines.append("当前未发现任务；确认期间新起的任务也可能被打断。")
+    guard case .staleServer = purpose, quitReplies.isEmpty, preservingRuntime else { return }
+    DispatchQueue.global(qos: .userInitiated).async { [self] in
+      let result = Result { try RestartImpactProbe.assessRecoverySync() }
+      DispatchQueue.main.async {
+        guard mine == self.epoch, case .staleServer = self.purpose, self.quitReplies.isEmpty else { return }
+        switch result {
+        case .failure(let error): self.fail(error.localizedDescription)
+        case .success(let assessment):
+          var detail = "将停止已确认的本机旧服务。任务、模型请求和 MCP 交卷可能中断；强制切换不保证无损接管。"
+          var affected: [String] = []
+          switch assessment.verdict {
+          case .disrupts(_, let items): affected = items.map { "· \($0.title) —— \($0.why)" }
+          case .unknown(let why): detail += "\n无法获取完整影响清单（\(why)），可能打断所有任务。"
+          case .clear: detail += "\n当前没有已登记的任务；仍可能中断尚未登记的请求。"
           }
-          lines.append("将停止已确认的本机旧服务，备份数据库后切换；新版启动失败时保留旧运行时和迁移前恢复点。")
-          let choice = ask(Prompt(title: "打断任务并切换服务？", detail: lines.joined(separator: "\n"),
-                                  buttons: ["取消", "打断任务并切换"], choices: [.cancel, .recover], affectedTasks: affectedTasks))
-          guard mine == epoch else { return }
-          if choice == .recover, case .staleServer = purpose, quitReplies.isEmpty {
-            log("用户已二次确认强制切换：任务和 MCP 交卷可能中断")
-            prepare(recovery.target, recovery: recovery.instance)
-          } else { startWaiting() }
+          detail += "\n停服务前会再次核对身份并保留迁移前恢复点；新版启动失败且未开始接管时自动恢复旧服务。"
+          let choice = self.ask(Prompt(title: "打断任务并切换服务？", detail: detail,
+            buttons: ["取消", "打断任务并切换"], choices: [.cancel, .recover], affectedTasks: affected))
+          guard mine == self.epoch, case .staleServer = self.purpose, self.quitReplies.isEmpty else { return }
+          if choice == .recover {
+            self.prepare(.ours(pid: assessment.identity.pid), recovery: assessment.identity)
+          } else { self.startWaiting() }
         }
       }
     }
   }
 
   private func assess(_ completion: @escaping (ImpactVerdict) -> Void) {
-    DispatchQueue.global(qos: .userInitiated).async {
-      let verdict = RestartImpactProbe.assessSync(forRuntimeSwitch: RuntimeStore.managed(NaviConfig.runtimeURL.path))
-      DispatchQueue.main.async { completion(verdict) }
+    let canPreserve: Bool = { if case .staleServer = purpose { return RuntimeStore.destination != nil }; return false }()
+    DispatchQueue.global(qos: .userInitiated).async { [self] in
+      let preservingRuntime: Bool = {
+        guard canPreserve, case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
+              let codeDir = instance.codeDir else { return false }
+        return RuntimeStore.contains(codeDir)
+      }()
+      let verdict = RestartImpactProbe.assessSync(preservingRuntime: preservingRuntime)
+      DispatchQueue.main.async { self.preservingRuntime = preservingRuntime; completion(verdict) }
     }
   }
 
@@ -237,8 +266,11 @@ final class UpdateGate {
     case failed(String)
   }
 
+  private var preservingRuntime = false
+  private var handoverBlock: String?
+
   /// 放行。`target` 是评估时端口上那一份；nil = 用户在确认不了时点了「现在」。
-  private func prepare(_ target: ServiceTarget?, recovery: NaviInstance? = nil) {
+  private func prepare(_ target: ServiceTarget?, recovery: ServiceRecoveryIdentity? = nil) {
     guard phase != .preparing && phase != .prepared else { return }
     stopPolling()
     phase = .preparing
@@ -249,41 +281,91 @@ final class UpdateGate {
     onHoldChanged?(note)
     log("放行：停服务、备份库")
     let (shutdownTimeout, lockTimeout) = (shutdownTimeout, lockTimeout)
+    let preservingRuntime = self.preservingRuntime
     DispatchQueue.global(qos: .userInitiated).async { [self] in
       let step = Self.stopAndBackUp(target, note: note, fromVersion: stale ?? NaviConfig.bundleVersion,
-                                    shutdownTimeout: shutdownTimeout, lockTimeout: lockTimeout, recovery: recovery)
-      DispatchQueue.main.async { self.settle(step, epoch: mine, stale: stale != nil, recovery: recovery != nil) }
+                                    shutdownTimeout: shutdownTimeout, lockTimeout: lockTimeout,
+                                    preservingRuntime: preservingRuntime, recovery: recovery)
+      DispatchQueue.main.async {
+        if recovery != nil, case .changed(let why) = step { self.fail(why); return }
+        self.settle(step, epoch: mine, stale: stale != nil)
+      }
     }
   }
 
   private static func stopAndBackUp(_ target: ServiceTarget?, note: String, fromVersion: String,
-                                    shutdownTimeout: TimeInterval, lockTimeout: TimeInterval, recovery: NaviInstance?) -> Step {
+                                    shutdownTimeout: TimeInterval, lockTimeout: TimeInterval, preservingRuntime: Bool,
+                                    recovery: ServiceRecoveryIdentity?) -> Step {
     let maintenance: Maintenance
     do {
       maintenance = try Maintenance.begin(note: note, timeout: lockTimeout)
     } catch {
       return .failed("\(error.localizedDescription)：先没停服务，更新没装。")
     }
-    let frozen: NaviInstance?
-    do { frozen = recovery == nil ? try RuntimeHandoff.freeze(target) : nil }
-    catch {
-      maintenance.end()
-      return .failed(error.localizedDescription)
+    if let recovery {
+      do {
+        try RuntimeStore.prepare()
+        guard let next = RuntimeStore.destination, RuntimeStore.contains(next.path) else {
+          throw SQLiteFile.Failure("新版运行时未完整准备，未停止旧服务")
+        }
+        try recovery.verify()
+      }
+      catch { maintenance.end(); return .changed(error.localizedDescription) }
+    }
+    var lease: String?
+    if recovery == nil, preservingRuntime, case .ours = target {
+      lease = RuntimeHandover.acquire(target: target)
+      guard lease != nil else {
+        maintenance.end()
+        return .changed("旧服务暂不能安全接管，继续使用旧服务")
+      }
+    }
+    defer { if let lease { RuntimeHandover.release(lease) } }
+    var previous: String?
+    if preservingRuntime {
+      do {
+        guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, let code = instance.codeDir else {
+          throw SQLiteFile.Failure("旧服务身份已改变")
+        }
+        if let recovery, !recovery.matches(instance) { throw SQLiteFile.Failure("服务身份已变化，本次强制切换已取消") }
+        previous = code
+        let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
+        try RuntimeRecovery.record(previous: code, backup: backup, next: recovery == nil ? nil : RuntimeStore.destination)
+      }
+      catch {
+        maintenance.end()
+        return .failed("迁移前备份失败，旧服务未停止：\(error.localizedDescription)")
+      }
+      if let lease, !RuntimeHandover.isValid(lease) {
+        maintenance.end()
+        return .changed("接管许可已失效，旧服务未停止")
+      }
     }
     switch ServerShutdown.stop(expecting: target, timeout: shutdownTimeout, identity: recovery) {
     case .changed(let why):
-      RuntimeHandoff.cancel(frozen)
       maintenance.end()
       return .changed(why)
     case .failed(let reason):
-      RuntimeHandoff.cancel(frozen)
       maintenance.end()
       return .failed(reason)
     case .stopped(let pid):
+      if preservingRuntime {
+        do {
+          let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
+          if let previous {
+            try RuntimeRecovery.record(previous: previous, backup: backup, finalized: true,
+                                       next: recovery == nil ? nil : RuntimeStore.destination)
+          }
+          if recovery != nil, let next = RuntimeStore.destination { try RuntimeStore.activate(next) }
+          return .done(maintenance)
+        } catch {
+          maintenance.end()
+          return .failed("服务已停止，但迁移前最终快照失败，未启动新版：\(error.localizedDescription)")
+        }
+      }
       logger.notice("服务已下线（进程 \(pid.map(String.init) ?? "本来就不在", privacy: .public)）")
       do {
         let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
-        if let previous = recovery?.codeDir ?? frozen?.codeDir { try RuntimeRecovery.record(previous: previous, backup: backup) }
         logger.notice("库已备份：\(backup?.path ?? "数据根里还没有库，不用备份", privacy: .public)")
         return .done(maintenance)
       } catch {
@@ -293,7 +375,7 @@ final class UpdateGate {
     }
   }
 
-  private func settle(_ step: Step, epoch mine: Int, stale: Bool, recovery: Bool) {
+  private func settle(_ step: Step, epoch mine: Int, stale: Bool) {
     guard mine == epoch else {
       // 停服务、备份的时候这一轮被作废了（Sparkle 放弃了）：收回维护，窗口重连、服务照常起。
       // 这期间已经开了新的一轮、也走到了停服务那一步的话，闸归它管。
@@ -306,21 +388,16 @@ final class UpdateGate {
       self.maintenance = maintenance
       finish(stale: stale)
     case .changed(let why):
-      if recovery { fail("\(why)。本次强制切换已取消，请重新选择切换服务并确认。"); return }
       // 评估完到停服务之间端口上换了人：上一次的结论不算数，从头再评估（会打断就再问）。
       log("没停服务：\(why)。重新评估")
       releaseHold()
-      evaluate()
+      if preservingRuntime { handoverBlock = why; startWaiting() } else { evaluate() }
     case .failed(let reason):
       fail(reason)
     }
   }
 
   private func finish(stale: Bool) {
-    if !stale {
-      do { try RuntimeStore.protectBundleUpdate() }
-      catch { fail(error.localizedDescription); return }
-    }
     let run = proceeds
     let replies = quitReplies
     proceeds = []
@@ -329,6 +406,7 @@ final class UpdateGate {
     if stale {
       // 服务换代码这件事到这儿就完了：放开闸，窗口重连时用新版起服务。
       purpose = nil
+      handoverBlock = nil
       phase = .idle
       releaseHold()
     } else {
@@ -350,16 +428,6 @@ final class UpdateGate {
       report(reason)
       return
     }
-    if RuntimeStore.managed(NaviConfig.runtimeURL.path) {
-      guard canKeepServiceOnQuit else { replies.forEach { $0(false) }; report(reason); return }
-      let choice = ask(Prompt(title: "服务暂未切换", detail: reason + "\n\n可以退出窗口并安装 app，旧服务和任务继续运行；下次打开再尝试切换服务。",
-                              buttons: ["不退出", "仍然退出"], choices: [.cancel, .quit]))
-      if choice == .quit {
-        do { try RuntimeStore.protectBundleUpdate(); replies.forEach { $0(true) } }
-        catch { replies.forEach { $0(false) }; report(error.localizedDescription) }
-      } else { replies.forEach { $0(false) } }
-      return
-    }
     // 要退出的那一档不能把人困住（盘满了备份一直不成功时总得退得掉）。可 Sparkle 没有「撤销
     // 退出时安装」的接口，退出就会换上新版 —— 所以兜底在新版那头：起服务前先备份，备份不成就
     // 不起、不碰库（ServerLauncher.backUpBeforeMigration）；旧服务没停下的，新版认得出、再过一次闸。
@@ -370,17 +438,12 @@ final class UpdateGate {
   }
 
   private func releaseHold() {
+    if let replacementLock { close(replacementLock); self.replacementLock = nil }
     maintenance?.end()
     maintenance = nil
     guard holding else { return }
     holding = false
     onHoldChanged?(nil)
-  }
-
-  private var canKeepServiceOnQuit: Bool {
-    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
-          let code = instance.codeDir else { return false }
-    return RuntimeStore.managed(code)
   }
 
   private func prompt(for verdict: ImpactVerdict, quitting: Bool) -> Prompt {
@@ -413,17 +476,12 @@ final class UpdateGate {
     log("问用户：\(title)；\(lines.joined(separator: " "))")
     var buttons = [waitTitle, nowTitle]
     var choices: [Choice] = [.wait, .now]
-    if RuntimeStore.managed(NaviConfig.runtimeURL.path) {
-      lines.append("为保留任务和交卷通道，默认等待确认可接管后切换。")
+    if case .staleServer = purpose, RuntimeStore.destination != nil {
       buttons = [waitTitle]
       choices = [.wait]
-      if case .staleServer = purpose, !quitting {
+      if preservingRuntime && !quitting {
         buttons.append("强制切换服务…")
         choices.append(.recover)
-      }
-      if quitting && canKeepServiceOnQuit {
-        buttons.append("退出并保留旧服务")
-        choices.append(.quit)
       }
       if !quitting { buttons.append("稍后"); choices.append(.cancel) }
     }
@@ -434,7 +492,7 @@ final class UpdateGate {
     return Prompt(title: title, detail: lines.joined(separator: "\n"), buttons: buttons, choices: choices)
   }
 
-  private static func runAlert(_ prompt: Prompt) -> Choice {
+  static func runAlert(_ prompt: Prompt) -> Choice {
     let alert = NSAlert()
     alert.messageText = prompt.title
     alert.informativeText = prompt.detail
@@ -458,6 +516,16 @@ final class UpdateGate {
       alert.accessoryView = scroll
     }
     for title in prompt.buttons { alert.addButton(withTitle: title) }
+    alert.buttons.first?.keyEquivalent = "\r"
+    if let cancel = prompt.choices.firstIndex(of: .cancel) { alert.buttons[cancel].keyEquivalent = "\u{1b}" }
+    alert.window.defaultButtonCell = alert.buttons.first?.cell as? NSButtonCell
+    let cancelMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      guard event.keyCode == 53, event.window === alert.window,
+            let cancel = prompt.choices.firstIndex(of: .cancel) else { return event }
+      alert.buttons[cancel].performClick(nil)
+      return nil
+    }
+    defer { if let cancelMonitor { NSEvent.removeMonitor(cancelMonitor) } }
     NSApp.activate(ignoringOtherApps: true)
     let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
     return prompt.choices.indices.contains(index) ? prompt.choices[index] : .cancel

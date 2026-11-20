@@ -16,7 +16,7 @@ import { writingGroupMembership } from "./launch-capacity.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
 import { monitorBlockedReason } from "@navi/shared/monitor";
-import { claimOwnTurn, heldForAcceptance, releaseTurn, turnBusyText } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, heldForAcceptance, releaseTurn, turnBusyText } from "./runs.js";
 import { TeamAcceptingError } from "./team-admission.js";
 import { advanceQueueInBackground } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
@@ -570,7 +570,7 @@ api.patch("/tasks/:id", async (c) => {
     return c.json({ error: turnBusyText(tid, "改状态"), status: existing.status }, 409);
   }
   const lockTurn = b.status !== undefined && monitorBlockedReason({ status: b.status }) !== null;
-  const turn = lockTurn ? claimOwnTurn(tid, "status") : null;
+  const turn = lockTurn ? await claimOwnTurn(tid, "status") : null;
   if (lockTurn && !turn) {
     return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再改状态", status: existing.status }, 409);
   }

@@ -1,8 +1,8 @@
 import AppKit
 import Sparkle
 
-/// 自更新：Sparkle 管查、下载、验签、换 app、重开；装之前那一步交给 UpdateGate（会不会打断任务、
-/// 停服务、备份库）。
+/// 自更新：Sparkle 管查、下载、验签、换 app、重开；UpdateGate 让外置服务继续运行，
+/// 新窗口再独立完成服务接管与迁移前备份。
 ///
 /// 校验只靠 EdDSA：app 是 ad-hoc 签名，没有能跨版本延续的 Apple 签名身份，Sparkle 的规则是两者
 /// 至少有一样不变 —— 所以 Info.plist 里的 SUPublicEDKey **永远不能换**，换了已装的 app 就再也装

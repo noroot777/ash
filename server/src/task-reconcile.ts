@@ -10,7 +10,7 @@ import { stallReconcileText, stallReconcileUnverifiableText } from "./turn-stall
 import { pendingStallObligations, restoreStallVerdict } from "./turn-stall-persist.js";
 import { stallIdentityKey } from "./turn-stall-journal.js";
 import { failedTurnLanding } from "./settle-landing.js";
-import { claimReconcileTurn } from "./runs.js";
+import { claimReconcileTurnWhenReady } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { startTeam } from "./team/session.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
@@ -275,7 +275,7 @@ type InterruptedVerdict = {
 // 两种交错)。占住锁之后新回合起不来,这段读-判-写就是真临界区;占不到 = 这条任务此刻归
 // 别人,我们一个字都不改。
 export async function reconcileInterruptedTask(taskId: string): Promise<boolean> {
-  const release = claimReconcileTurn(taskId);
+  const release = await claimReconcileTurnWhenReady(taskId);
   if (!release) return false;
   try {
     const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));

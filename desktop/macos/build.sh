@@ -139,7 +139,7 @@ PLIST
 # 签一遍，最后封整个 app。
 find "$APP/Contents/Resources/app/node_modules/node-pty/build/Release" -type f \( -name '*.node' -o -name spawn-helper \) \
   -exec codesign --force --sign - {} + 2>/dev/null
-node "$HERE/scripts/runtime-manifest.mjs" "$APP/Contents/Resources/app"
+node "$HERE/scripts/runtime-store.mjs" seal "$APP/Contents/Resources/app" >/dev/null
 codesign --force --sign - "$APP" 2>/dev/null
 codesign --verify --deep --strict "$APP"
 echo "✓ ${APP}（${VERSION} / ${BUILD_NUMBER}）"

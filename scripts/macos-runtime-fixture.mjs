@@ -37,13 +37,39 @@ process.exit(0);
 `;
 
 export const agentSource = `
-import { existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { Agent, fetch } from "undici";
+const direct = new Agent();
 const root = process.env.FIXTURE_ROOT;
 const home = process.env.FIXTURE_HOME;
 const task = process.env.FIXTURE_TASK;
+const settingsAt = process.argv.lastIndexOf('--settings');
+const rawSettings = settingsAt >= 0 ? process.argv[settingsAt + 1] : '{}';
+const settings = JSON.parse(rawSettings.startsWith('{') ? rawSettings : readFileSync(rawSettings, 'utf8'));
+const hooks = settings.hooks?.PreToolUse?.find(entry => entry.matcher === 'Monitor')?.hooks;
+const monitor = hooks?.find(hook => hook.type === 'http');
+if (monitor) {
+  const fallback = hooks.find(hook => hook.type === 'command' && hook.command);
+  if (!fallback) throw new Error('missing fail-closed Monitor guard');
+  const decision = JSON.parse(execFileSync('/bin/sh', ['-c', fallback.command], { encoding: 'utf8', timeout: 5000 }));
+  if (decision.hookSpecificOutput?.permissionDecision !== 'deny') throw new Error('Monitor guard did not deny');
+}
+const hookHeaders = Object.fromEntries(Object.entries(monitor?.headers ?? {}).map(([name,value]) => [name, value.startsWith('$') ? process.env[value.slice(1)] : value]));
+let hooking = false;
+setInterval(async () => {
+  if (!monitor || hooking) return;
+  hooking = true;
+  try {
+    const response = await fetch(monitor.url, { dispatcher:direct, method:'POST', headers:{...hookHeaders,'content-type':'application/json'},
+      body:JSON.stringify({tool_name:'Monitor',tool_input:{}}) });
+    const body = await response.json();
+    appendFileSync(join(home,task+'-hooks.jsonl'), JSON.stringify({status:response.status,decision:body.hookSpecificOutput?.permissionDecision})+'\\n');
+  } catch(error) { appendFileSync(join(home,task+'-hooks.jsonl'), JSON.stringify({error:String(error)})+'\\n'); }
+  finally { hooking = false; }
+},200);
 const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const child = spawn(join(root,"node/bin/node"), [join(root,"mcp/dist/index.js")], {stdio:["pipe","pipe","inherit"]});
 const send = (message) => child.stdin.write(JSON.stringify(message) + "\\n");
@@ -54,7 +80,7 @@ createInterface({input:child.stdout}).on("line", (line) => {
   if (reply.id === 1) {
     send({jsonrpc:"2.0",method:"notifications/initialized"});
     ready = true;
-    writeFileSync(join(home,task + "-agent.json"),JSON.stringify({pid:process.pid,mcp:child.pid,root}));
+    writeFileSync(join(home,task + "-agent.json"),JSON.stringify({pid:process.pid,mcp:child.pid,root,monitorUrl:monitor?.url}));
   }
   if (reply.id === 2) {
     writeFileSync(join(home,task + "-mcp.json"),JSON.stringify(reply));

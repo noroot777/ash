@@ -45,8 +45,8 @@ struct NaviInstance {
       return "它没报自己的实例号和代码、数据在哪（比这个 app 旧的版本），认不出来历。"
     }
     guard NaviHealth.samePath(dataDir, NaviConfig.dataURL.path) else { return "它用的是另一份数据。" }
-    guard NaviHealth.samePath(codeDir, NaviConfig.runtimeURL.path) || RuntimeStore.managed(codeDir)
-      || NaviHealth.samePath(codeDir, NaviConfig.bundledRuntimeURL.path) else {
+    guard NaviHealth.samePath(codeDir, NaviConfig.runtimeURL.path)
+      || NaviHealth.samePath(codeDir, NaviConfig.bundledRuntimeURL.path) || RuntimeStore.contains(codeDir) else {
       return "它用的是 app 的数据，跑的却不是 app 自带的代码。"
     }
     guard appServed else { return "它跑的是 app 自带的代码，但不是 app 起的那一份。" }

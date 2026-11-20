@@ -15,13 +15,13 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { taskWorkflowDef } from "./workflows.js";
 import { stopPreviewForWorktreeCleanup } from "./preview.js";
 import { acceptWithoutCleanup, finalizeAcceptance } from "./task-accept-finalize.js";
-import { preparePush, pushFirst, pushMerged, untilRemoteSettles, type PushChoice, type PushOutcome } from "./task-accept-push.js";
+import { preparePush, pushFirst, pushMerged, untilRemoteSettles, type PushChoice } from "./task-accept-push.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
-import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
+import { finishAcceptedTail } from "./task-accept-tail.js";
 import { commitAcceptanceStage, reviewAcceptanceAuthority } from "./review-acceptance.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage } from "./task-accept-shared-workers.js";
-import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
+import { acceptanceGuard } from "./task-accept-guard.js";
 import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import { recordBranchReceipt } from "./task-branch-receipts.js";
@@ -30,6 +30,7 @@ import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { holdTeamForAcceptance } from "./team-acceptance-hold.js";
+import { RuntimeHandoverBlockedError } from "./runtime-handover-state.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
@@ -40,42 +41,9 @@ import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from 
 import { discardPendingAcceptanceGate, finishAcceptanceGate } from "./task-accept-gate-launch.js";
 import { acceptanceContext } from "./task-accept-context.js";
 import { releaseHumanGate, staleAcceptance, type AcceptExpectation } from "./task-human-gate.js";
-import type { UnexecutedVerification } from "@navi/shared/workflow-policy";
 import type { AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
-
-export type AcceptSuccess = {
-  accepted: true;
-  taskId: string;
-  status: string;
-  /** 中途关口放行不是验收，stage 会被清回「进行中」，所以这里可能是 null */
-  stage: "accepted" | null;
-  kind: "already_accepted" | "in_place" | "isolated_worktree" | "marked_only" | "gate_released";
-  sharedWorkersAccepted?: number;
-  targetBranch?: string;
-  merge?: string;
-  /** 「只打标签不合并」那一档打下的标签名 */
-  tag?: string;
-  worktreePath?: string;
-  worktreeRemoved?: boolean;
-  branch?: string;
-  branchDeleted?: boolean;
-  warnings?: AcceptWarning[];
-  verification?: UnexecutedVerification;
-  /**
-   * 「点头之后」那一段（发布脚本之类）跑得怎么样。线上没写这一段就没有这个字段。
-   *
-   * 它**不影响 accepted**：合并和清理已经真的做完了，改回 accepted:false 等于谎报另一头。
-   * 但也不能不说 —— 一个挂掉的发布脚本被吞成「验收成功」，用户下一次知道是在线上出事
-   * 的时候。所以合并的结论和尾段的结论分开报，各说各的。
-   */
-  tail?: AcceptTail;
-  /** 这一按选了推送到远程：推没推上去（推不上去不改 accepted，见 task-accept-push.ts）。 */
-  push?: PushOutcome;
-};
-
-
-
-export type AcceptTaskResult = (AcceptSuccess | AcceptFailure) & { autoCommit?: AcceptanceAutoCommitOutcome };
+import type { AcceptTaskResult } from "./task-accept-result.js";
+export type { AcceptSuccess, AcceptTaskResult } from "./task-accept-result.js";
 
 const mergeLabel: Record<string, string> = {
   already_merged: "任务分支此前已合并",
@@ -681,6 +649,9 @@ export async function acceptTask(
       result = await finishAcceptedTail(result, by, advanceOpts, originalFinalizer);
     }
   } catch (error) {
+    if (error instanceof RuntimeHandoverBlockedError) {
+      return { accepted: false, httpStatus: 409, taskId, reason: "runtime_handover", error: error.message };
+    }
     await discardPendingAcceptanceGate(taskId, error);
     throw error;
   } finally {
