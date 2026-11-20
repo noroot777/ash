@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { Agent, request } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processProof } from "./runtime-channel-consumers.js";
+import { readRuntimeRecord, replaceRuntimeRecord } from "./runtime-channel-record.js";
 
 export type Gateway = { id: string; port: number; pid: number; active: number; paused: boolean; owner?: string;
   protocol?: number; build?: string; queued?: number };
@@ -84,12 +85,13 @@ export class RuntimeGatewayController {
     const current = await this.control("/status");
     return current.id === this.state?.id && current.owner === this.options.owner && current.paused && current.active === 0;
   }
-  private readEndpoint(path = this.endpoint): Endpoint | undefined {
+  private readEndpoint(path = this.endpoint, snapshot = readRuntimeRecord(this.endpoint)): Endpoint | undefined {
     try {
-      const value = JSON.parse(readFileSync(path, "utf8"));
+      const text = path === this.endpoint ? snapshot.current : snapshot.backup;
+      const value = JSON.parse(text ?? "null");
       if (typeof value.id === "string" && value.id.length && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535) {
         if (path === this.endpoint) {
-          const backup = this.readEndpoint(this.endpoint + ".backup");
+          const backup = this.readEndpoint(this.endpoint + ".backup", snapshot);
           if (backup?.socket && backup.pid && backup.startedAt
             && (backup.id !== value.id || backup.port !== value.port || backup.socket !== value.socket || backup.pid !== value.pid)) {
             const proof = processProof(backup.pid);
@@ -100,18 +102,19 @@ export class RuntimeGatewayController {
         return value;
       }
     } catch {}
-    return path === this.endpoint ? this.readEndpoint(this.endpoint + ".backup") : undefined;
+    return path === this.endpoint ? this.readEndpoint(this.endpoint + ".backup", snapshot) : undefined;
   }
   private async prepare(): Promise<void> {
     if (this.build) return;
     const helper = fileURLToPath(new URL("./runtime-channel-consumers.js", import.meta.url));
-    const sources = [this.options.entry, this.options.node, helper];
+    const record = fileURLToPath(new URL("./runtime-channel-record.js", import.meta.url));
+    const sources = [this.options.entry, this.options.node, helper, record];
     const hashes = await Promise.all(sources.map(digest));
-    const directory = join(this.options.home, "builds", hashes.join("-"));
+    const directory = join(this.options.home, "builds", createHash("sha256").update(hashes.join("-")).digest("hex"));
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.node = join(directory, "node");
     this.script = join(directory, "gateway.mjs");
-    const destinations = [this.script, this.node, join(directory, "runtime-channel-consumers.js")];
+    const destinations = [this.script, this.node, join(directory, "runtime-channel-consumers.js"), join(directory, "runtime-channel-record.js")];
     for (const [index, source] of sources.entries()) {
       const destination = destinations[index];
       if (existsSync(destination) && hashes[index] === await digest(destination)) continue;
@@ -165,21 +168,24 @@ export class RuntimeGatewayController {
     else this.remember(current);
   }
   private async resetUnused(): Promise<boolean> {
-    const stored = this.readEndpoint();
+    let snapshot = readRuntimeRecord(this.endpoint);
+    const stored = this.readEndpoint(this.endpoint, snapshot);
     let current: Gateway | undefined;
-    try { current = await gatewayRequest(this.socket, "/status"); } catch {}
+    try { current = await gatewayRequest(this.socket, "/status"); }
+    catch (error) { if (!unreachable(error)) return false; }
     if (current) {
       if (current.active !== 0 || (current.queued ?? 0) !== 0) return false;
-      if (this.owned(current)) {
-        await gatewayRequest(this.socket, "/retire", { owner: current.owner });
-        await this.waitForExit();
-      }
+      if (!this.owned(current)) return false;
+      await gatewayRequest(this.socket, "/retire", { owner: current.owner });
+      await this.waitForExit();
+      snapshot = readRuntimeRecord(this.endpoint);
+      const retired = this.readEndpoint(this.endpoint, snapshot);
+      if (retired?.id !== current.id || retired.pid !== current.pid || retired.socket !== this.socket) return false;
     } else if (stored?.pid) {
       const proof = processProof(stored.pid);
       if (proof === undefined || (proof && (!stored.startedAt || proof.startedAt === stored.startedAt))) return false;
-    }
-    if (existsSync(this.endpoint)) renameSync(this.endpoint, `${this.endpoint}.previous`);
-    if (existsSync(this.endpoint + ".backup")) renameSync(this.endpoint + ".backup", this.endpoint + ".backup.previous");
+    } else if (snapshot.current !== undefined || snapshot.backup !== undefined) return false;
+    replaceRuntimeRecord(this.endpoint, snapshot, null);
     const digest = createHash("sha256").update(this.options.home + randomUUID()).digest("hex").slice(0, 20);
     this.socket = join(dirname(this.options.socket), `nc-${digest.slice(0, 12)}.sock`);
     return true;
@@ -206,7 +212,7 @@ export class RuntimeGatewayController {
     const prefix = join(this.options.home, "builds") + "/";
     if (!command.includes(this.endpoint) || !command.includes(this.socket)) return undefined;
     for (const segment of command.split(prefix).slice(1)) {
-      const suffix = segment.match(/^[a-f0-9]{64}(?:-[a-f0-9]{64}){1,2}\/gateway\.mjs(?=\s|$)/)?.[0];
+      const suffix = segment.match(/^[a-f0-9]{64}(?:-[a-f0-9]{64}){0,2}\/gateway\.mjs(?=\s|$)/)?.[0];
       const script = suffix ? prefix + suffix : undefined;
       if (script && command.startsWith(join(dirname(script), "node") + " ") && existsSync(script)) return script;
     }
@@ -225,20 +231,19 @@ export class RuntimeGatewayController {
     if ((current.protocol !== undefined && current.protocol !== 1)
       || (current.protocol === 1 && typeof current.build !== "string")
       || (current.protocol === undefined && current.build !== undefined)) throw new Error("unsupported channel gateway protocol");
-    let stored = this.readEndpoint();
+    const snapshot = readRuntimeRecord(this.endpoint);
+    let stored = this.readEndpoint(this.endpoint, snapshot);
     const proof = processProof(current.pid);
+    if (!stored && (!proof || !this.processScript(proof.command))) throw new Error("channel gateway process ownership cannot be verified");
     if (stored && (stored.id !== current.id || stored.port !== current.port)) {
-      const backup = this.readEndpoint(this.endpoint + ".backup");
+      const backup = this.readEndpoint(this.endpoint + ".backup", snapshot);
       if (backup?.id !== current.id || backup.port !== current.port || backup.pid !== current.pid
         || !proof || backup.startedAt !== proof.startedAt) throw new Error("channel gateway identity changed");
       stored = backup;
     }
-    const temporary = `${this.endpoint}.${process.pid}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ ...stored, id: current.id, port: current.port, pid: current.pid,
-      startedAt: proof?.startedAt, socket: this.socket, script: proof ? this.processScript(proof.command) : stored?.script,
-      retired: false }), { mode: 0o600 });
-    renameSync(temporary, this.endpoint);
-    copyFileSync(this.endpoint, this.endpoint + ".backup");
+    replaceRuntimeRecord(this.endpoint, snapshot, { ...stored, id: current.id, port: current.port, pid: current.pid,
+      startedAt: proof?.startedAt ?? stored?.startedAt, socket: this.socket, script: proof ? this.processScript(proof.command) : stored?.script,
+      retired: false });
     this.state = current;
   }
   private async activate(current: Gateway): Promise<void> {
@@ -249,10 +254,14 @@ export class RuntimeGatewayController {
     this.remember(await gatewayRequest(this.socket, "/status"));
   }
   private async statusOrSpawn(): Promise<Gateway> {
-    const stored = this.readEndpoint();
+    const snapshot = readRuntimeRecord(this.endpoint);
+    const stored = this.readEndpoint(this.endpoint, snapshot);
     if (stored?.socket) this.socket = stored.socket;
     try { return await gatewayRequest(this.socket, "/status"); }
     catch (error) { if (!unreachable(error)) throw error; }
+    if (!stored && (snapshot.current !== undefined || snapshot.backup !== undefined)) {
+      throw new Error("channel identity record is damaged; process ownership cannot be verified");
+    }
     if (!stored && await this.options.hasConsumers()) throw new Error("channel identity unavailable while consumers remain");
     if (stored && await this.options.hasConsumers() && !await this.options.hasConsumers(stored.id)) {
       throw new Error("persisted channel identity does not match live consumers");
@@ -273,9 +282,7 @@ export class RuntimeGatewayController {
     }
     try { unlinkSync(this.socket); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if (stored) {
-      const temporary = `${this.endpoint}.${process.pid}.tmp`;
-      writeFileSync(temporary, JSON.stringify(stored), { mode: 0o600 });
-      renameSync(temporary, this.endpoint);
+      replaceRuntimeRecord(this.endpoint, snapshot, stored);
     }
     const logPath = join(this.options.home, "gateway.log");
     if (existsSync(logPath) && statSync(logPath).size > 1_048_576) renameSync(logPath, logPath + ".previous");

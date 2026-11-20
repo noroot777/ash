@@ -1,9 +1,10 @@
 import { Agent, createServer, request } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { chmodSync, copyFileSync, createReadStream, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, statSync, unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { hasGatewayConsumers, processProof } from "./runtime-channel-consumers.js";
+import { readRuntimeRecord, replaceRuntimeRecord } from "./runtime-channel-record.js";
 
 const deny = (reason: string) => ({ hookSpecificOutput: {
   hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason,
@@ -19,7 +20,8 @@ if (!socket) throw new Error("missing channel control socket");
 const endpoint = process.argv[3] ?? socket + ".endpoint.json";
 const config = JSON.parse(process.argv[4] ?? "{}");
 const idleMs = typeof config.idleMs === "number" && config.idleMs > 0 ? config.idleMs : 600_000;
-const stored = existsSync(endpoint) ? JSON.parse(readFileSync(endpoint, "utf8")) : undefined;
+const initialRecord = readRuntimeRecord(endpoint);
+const stored = initialRecord.current === undefined ? undefined : JSON.parse(initialRecord.current);
 if (stored && (typeof stored.id !== "string" || !Number.isInteger(stored.port) || stored.port < 1 || stored.port > 65535)) {
   throw new Error("invalid persisted channel identity");
 }
@@ -29,14 +31,31 @@ const digest = async (path: string) => {
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
 };
-const build = `${await digest(process.argv[1])}-${await digest(process.execPath)}-${await digest(fileURLToPath(new URL("./runtime-channel-consumers.js", import.meta.url)))}`;
+const build = (await Promise.all([process.argv[1], process.execPath,
+  fileURLToPath(new URL("./runtime-channel-consumers.js", import.meta.url)),
+  fileURLToPath(new URL("./runtime-channel-record.js", import.meta.url))].map(digest))).join("-");
 const ownProof = processProof(process.pid);
+let claimed = false;
 const persist = (retired = false, reason?: string) => {
-  const temporary = `${endpoint}.${process.pid}.tmp`;
-  writeFileSync(temporary, JSON.stringify({ id, port: (publicServer.address() as { port: number }).port, retired, reason,
-    pid: process.pid, startedAt: ownProof?.startedAt, socket, script: process.argv[1] }), { mode: 0o600 });
-  renameSync(temporary, endpoint);
-  copyFileSync(endpoint, endpoint + ".backup");
+  try {
+    if (!ownProof) return false;
+    const snapshot = readRuntimeRecord(endpoint);
+    const current = snapshot.current === undefined ? undefined : JSON.parse(snapshot.current);
+    if (claimed) {
+      if (current?.id !== id || current.pid !== process.pid || current.startedAt !== ownProof.startedAt
+        || current.socket !== socket || current.port !== (publicServer.address() as { port: number }).port) return false;
+    } else {
+      if (snapshot.current !== initialRecord.current || snapshot.backup !== initialRecord.backup) return false;
+      if (stored?.pid) {
+        const previous = processProof(stored.pid);
+        if (previous === undefined || (previous && (!stored.startedAt || previous.startedAt === stored.startedAt))) return false;
+      }
+    }
+    replaceRuntimeRecord(endpoint, snapshot, { id, port: (publicServer.address() as { port: number }).port, retired, reason,
+      pid: process.pid, startedAt: ownProof.startedAt, socket, script: process.argv[1] });
+    claimed = true;
+    return true;
+  } catch (error) { console.warn("channel identity write skipped:", String(error)); return false; }
 };
 let target: { port: number; owner: string; pid: number; startedAt?: number } | undefined;
 let paused = true;
@@ -175,10 +194,18 @@ const startupError = (error: Error) => { console.error(error); process.exit(1); 
 control.on("error", startupError);
 publicServer.on("error", startupError);
 publicServer.listen(stored?.port ?? 0, "127.0.0.1", () => {
-  persist();
-  control.listen(socket, () => chmodSync(socket, 0o600));
+  if (!persist()) { startupError(new Error("channel identity startup claim failed")); return; }
+  control.listen(socket, rememberSocket);
 });
-const cleanup = () => { try { unlinkSync(socket); } catch {} process.exit(0); };
+let socketIdentity: { dev: number; ino: number } | undefined;
+function rememberSocket() { chmodSync(socket, 0o600); socketIdentity = statSync(socket); }
+const cleanup = () => {
+  try {
+    const current = statSync(socket);
+    if (current.dev === socketIdentity?.dev && current.ino === socketIdentity.ino) unlinkSync(socket);
+  } catch {}
+  process.exit(0);
+};
 process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
 let idleSince = 0;
@@ -186,7 +213,7 @@ let rebinding = false;
 setInterval(() => {
   if (!existsSync(socket) && !rebinding) {
     rebinding = true;
-    control.close(() => control.listen(socket, () => { chmodSync(socket, 0o600); rebinding = false; }));
+    control.close(() => control.listen(socket, () => { rememberSocket(); rebinding = false; }));
   }
   const backend = target ? processProof(target.pid) : null;
   const backendAlive = backend === undefined || (backend && (!target?.startedAt || backend.startedAt === target.startedAt));

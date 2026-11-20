@@ -22,6 +22,7 @@ if (process.platform === "win32") {
   process.env.NAVI_RUNS_DIR = join(temporary, "runs");
   const { RuntimeGatewayController, gatewayRequest } = await import("../server/dist/runtime-channel-controller.js");
   const { hasGatewayConsumers, processProof } = await import("../server/dist/runtime-channel-consumers.js");
+  const { readRuntimeRecord, replaceRuntimeRecord } = await import("../server/dist/runtime-channel-record.js");
   const { initializeRuntimeGateway, runtimeMonitorFallback } = await import("../server/dist/runtime-channel-gateway.js");
   const { INSTANCE_ID } = await import("../server/dist/instance-binding.js");
   const { beginRuntimeDrain, endRuntimeDrain, holdRuntimeDrain, onRuntimeDrainEnd, runtimeDraining,
@@ -108,6 +109,22 @@ if (process.platform === "win32") {
     const { mountRuntimeHandoff } = await import("../server/dist/runtime-handoff.js");
     await listen(backend, 0);
     options.port = backend.address().port;
+    const probe = join(temporary, "probe-endpoint.json");
+    const empty = readRuntimeRecord(probe);
+    replaceRuntimeRecord(probe, empty, { id: "winner" });
+    const winner = readRuntimeRecord(probe);
+    assert.throws(() => replaceRuntimeRecord(probe, empty, { id: "stale-writer" }), /changed concurrently/);
+    assert.throws(() => replaceRuntimeRecord(probe, empty, null), /changed concurrently/);
+    const writerLock = new DatabaseSync(probe + ".writer.sqlite");
+    try {
+      writerLock.exec("BEGIN IMMEDIATE");
+      assert.throws(() => replaceRuntimeRecord(probe, winner, { id: "locked-out" }), /locked|busy/);
+      assert.deepEqual(readRuntimeRecord(probe), winner);
+    } finally { writerLock.close(); }
+    replaceRuntimeRecord(probe, winner, null);
+    assert.deepEqual(readRuntimeRecord(probe), empty);
+    assert.equal(JSON.parse(readFileSync(probe + ".previous", "utf8")).id, "winner");
+    console.log("✓ identity writes and archives reject stale snapshots; a process-shared transaction excludes concurrent writers and releases on close");
     const first = await start();
     const original = { ...first.state };
     const base = `http://127.0.0.1:${original.port}`;
@@ -119,7 +136,7 @@ if (process.platform === "win32") {
       return response;
     };
     assert.equal(original.protocol, 1);
-    assert.match(original.build, /^[a-f0-9]{64}(?:-[a-f0-9]{64}){2}$/);
+    assert.match(original.build, /^[a-f0-9]{64}(?:-[a-f0-9]{64}){3}$/);
     assert.deepEqual(await (await send("before-crash")).json(), { key: "before-crash" });
     process.kill(original.pid, "SIGKILL");
     const recovered = await waitFor(async () => {
@@ -258,8 +275,8 @@ if (process.platform === "win32") {
     assert.match(incompatible.warning, /unsupported channel gateway protocol/);
     incompatible.close();
     const compatible = await start({ home: unknownHome, socket: unknownSocket });
-    assert.equal(compatible.state.protocol, 1);
-    assert.notEqual(compatible.socket, unknownSocket);
+    assert.equal(compatible.state, undefined, "an unverified live endpoint blocks replacement, not service startup");
+    assert.match(compatible.warning, /unsupported channel gateway protocol/);
     assert.equal(unknown.listening, true, "unknown control service is never terminated or unlinked");
     compatible.close();
     await new Promise((done) => unknown.close(done));
@@ -305,8 +322,8 @@ if (process.platform === "win32") {
     blockedIdentity.close();
     assert.equal(JSON.parse(readFileSync(mismatchEndpoint, "utf8")).id, wrongIdentity.id);
     const freshIdentity = await start({ home: mismatchHome, socket: mismatchSocket });
-    assert.ok(freshIdentity.state);
-    assert.notEqual(freshIdentity.state.id, "unrelated-identity");
+    assert.equal(freshIdentity.state, undefined);
+    assert.equal(JSON.parse(readFileSync(mismatchEndpoint, "utf8")).id, wrongIdentity.id);
     assert.equal(mismatched.listening, true);
     freshIdentity.close();
     await new Promise((done) => mismatched.close(done));
@@ -331,16 +348,13 @@ if (process.platform === "win32") {
       withUsers.close();
       await assert.rejects(withUsers.pause(), undefined, label + " must also be rejected on control paths");
       const noUsers = await start({ home: faultHome, socket: faultSocket });
-      assert.ok(noUsers.state, label + " must permit safe unused-entry recovery");
+      assert.equal(noUsers.state, undefined, label + " must not spawn a second writer beside an unverified live endpoint");
       noUsers.close();
-      await gatewayRequest(noUsers.socket, "/retire", { owner: INSTANCE_ID });
-      await waitFor(() => !existsSync(noUsers.socket), "fault fixture retires");
-      rmSync(join(faultHome, "endpoint.json"), { force: true });
-      rmSync(join(faultHome, "endpoint.json.backup"), { force: true });
+      assert.equal(existsSync(join(faultHome, "endpoint.json")), false);
     }
     assert.equal(faultyControl.listening, true);
     await new Promise((done) => faultyControl.close(done));
-    console.log("✓ every invalid control identity/protocol/response fails closed for consumers and recovers without consumers, including pause control paths");
+    console.log("✓ every invalid live control identity/protocol/response degrades without adding a second writer, including pause control paths");
 
     let unrelatedRetires = 0;
     const unrelatedSocket = join(temporary, "unrelated.sock");
@@ -350,12 +364,69 @@ if (process.platform === "win32") {
       outgoing.end(JSON.stringify({ ...original, pid: process.pid, build: "different-build" }));
     }), unrelatedSocket);
     const ownership = await start({ home: faultHome, socket: unrelatedSocket });
-    assert.ok(ownership.state);
-    assert.notEqual(ownership.state.id, original.id);
+    assert.equal(ownership.state, undefined);
+    assert.equal(existsSync(join(faultHome, "endpoint.json")), false);
     assert.equal(unrelatedRetires, 0, "neither upgrades nor recovery may retire a process without data-root ownership proof");
     assert.equal(unrelated.listening, true);
     ownership.close();
     await new Promise((done) => unrelated.close(done));
+
+    const writerHome = join(temporary, "writer");
+    const writerEndpoint = join(writerHome, "endpoint.json");
+    const writerOptions = { home: writerHome, socket: join(temporary, "writer.sock"), idleMs: 1500, ...realConsumers };
+    const priorWriter = await start(writerOptions);
+    priorWriter.close();
+    const priorState = { ...priorWriter.state };
+    const priorBackend = await child();
+    await gatewayRequest(priorWriter.socket, "/activate", { owner: INSTANCE_ID, port: options.port, pid: priorBackend.pid });
+    const damaged = { ...JSON.parse(readFileSync(writerEndpoint, "utf8")), id: "damaged-" + priorState.id };
+    replaceRuntimeRecord(writerEndpoint, readRuntimeRecord(writerEndpoint), damaged);
+    const recovering = await start(writerOptions);
+    assert.equal(recovering.state, undefined, "corrupted identity with a live unverified entry must not create a replacement writer");
+    assert.match(recovering.warning, /identity changed/);
+    assert.equal((await gatewayRequest(priorWriter.socket, "/status")).pid, priorState.pid);
+    assert.equal(JSON.parse(readFileSync(writerEndpoint, "utf8")).id, damaged.id);
+    await priorBackend.dispose();
+    await waitFor(() => processProof(priorState.pid) === null, "unowned old entry safely exits when truly idle");
+    assert.equal(JSON.parse(readFileSync(writerEndpoint, "utf8")).id, damaged.id, "old idle exit cannot resurrect its identity");
+    await waitFor(() => recovering.state && recovering.state.pid !== priorState.pid, "watchdog recovers only after old writer actually exits");
+    sockets.set(recovering.socket, INSTANCE_ID);
+    const surviving = { ...recovering.state };
+    assert.equal(surviving.id, damaged.id);
+    const survivingConsumer = await child();
+    consumer(survivingConsumer, surviving.id, "surviving-consumer");
+    await new Promise((done) => setTimeout(done, 2200));
+    assert.equal(recovering.state.id, surviving.id);
+    assert.equal(recovering.state.pid, surviving.pid);
+    assert.equal(JSON.parse(readFileSync(writerEndpoint, "utf8")).id, surviving.id);
+    recovering.close();
+
+    const staleHome = join(temporary, "stale");
+    const staleWriter = await start({ home: staleHome, socket: join(temporary, "stale.sock") });
+    staleWriter.close();
+    const staleEndpoint = join(staleHome, "endpoint.json");
+    const successor = JSON.parse(readFileSync(writerEndpoint, "utf8"));
+    replaceRuntimeRecord(staleEndpoint, readRuntimeRecord(staleEndpoint), successor);
+    const successorBytes = readRuntimeRecord(staleEndpoint);
+    await gatewayRequest(staleWriter.socket, "/retire", { owner: INSTANCE_ID });
+    await waitFor(() => processProof(staleWriter.state.pid) === null, "superseded explicit retirement exits without rewriting identity");
+    assert.deepEqual(readRuntimeRecord(staleEndpoint), successorBytes);
+    assert.equal((await gatewayRequest(recovering.socket, "/status")).pid, surviving.pid);
+
+    const spare = await listen(createServer(), 0);
+    const sparePort = spare.address().port;
+    await new Promise((done) => spare.close(done));
+    replaceRuntimeRecord(staleEndpoint, successorBytes, { ...successor, port: sparePort });
+    const beforeClaim = readRuntimeRecord(staleEndpoint);
+    const startupSocket = join(temporary, "claim.sock");
+    const claimant = spawnTestFixture(node, [entry, startupSocket, staleEndpoint], { stdio: "ignore" });
+    children.push(claimant);
+    const [claimCode] = await once(claimant, "exit");
+    assert.equal(claimCode, 1, "startup cannot take an identity still owned by a live generation, even on an available port");
+    assert.deepEqual(readRuntimeRecord(staleEndpoint), beforeClaim);
+    assert.equal(existsSync(startupSocket), false);
+    await survivingConsumer.dispose();
+    console.log("✓ all daemon writes are fenced: corrupt-record recovery never forks a live unknown writer; idle/explicit exit and rejected startup cannot overwrite a successor");
 
     const idleEntry = await start({ home: join(temporary, "idle"), socket: join(temporary, "idle.sock"), idleMs: 200, ...realConsumers });
     const idleState = { ...idleEntry.state };
