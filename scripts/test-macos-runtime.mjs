@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { constants, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -102,7 +102,7 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     const drive = async (mode, extra = {}) => (await runTestProcess(binary, [mode], {
       cwd: root, encoding: "utf8", timeout: 20_000, env: { ...env, ...extra },
     })).stdout;
-    assert.match(await drive("prepare"), new RegExp(newRuntime.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(realpathSync((await drive("prepare")).trim().slice("READY ".length)), newRuntime);
     assert.match(await drive("abort"), /PROCEED[\s\S]*ABANDONED true/);
     console.log("✓ Swift 启动路径使用独立版本，Sparkle 安装及中止不停止旧服务");
 
