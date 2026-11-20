@@ -126,15 +126,16 @@ export async function checkAssistantEntry(page, fixtureUrl) {
     assert.ok(geometry.scrollWidth <= geometry.clientWidth, `${width}px footer scroll overflow: ${JSON.stringify(geometry)}`);
     assert.ok(geometry.children.every(child => child.left >= geometry.left - 0.2 && child.right <= geometry.right + 0.2),
       `${width}px footer child overflow: ${JSON.stringify(geometry)}`);
-    // 右边四颗只画图标，名字在提示里；F 不再是底部的一句提示，挪成了「找」那一行最右的一颗键
+    // 右边四颗只画图标，名字在提示里；F 不再是底部的一句提示，挪成了顶上工具行最左的一颗键
     const icons = ["聊天", "Navi 助手", /^配色：/u, "收起侧边栏"].map(name => geometry.children.find(child =>
       typeof name === "string" ? child.label === name : name.test(child.label ?? "")));
     assert.ok(icons.every(Boolean), `${width}px footer keeps chat, assistant, theme and collapse: ${JSON.stringify(geometry)}`);
     assert.ok(icons.every(icon => icon.text === "" && Math.abs(icon.width - 28) < 0.5), `${width}px footer icons carry no text: ${JSON.stringify(icons)}`);
     assert.equal(geometry.children.some(child => /任务列表/u.test(child.label ?? "")), false, `${width}px footer no longer holds the F hint`);
   }
-  const findRowKey = page.locator(".workspace-sidebar-find > button").last();
-  assert.equal(await findRowKey.getAttribute("aria-label"), "打开任务列表", "F becomes the rightmost key of the filter row");
+  const toolKeys = await page.locator(".workspace-sidebar-tools > button").evaluateAll(buttons =>
+    buttons.map(button => button.getAttribute("aria-label") ?? button.textContent.trim()));
+  assert.deepEqual(toolKeys, ["打开任务列表", "搜索", "随手记", "新建任务"], "tool row reads F, search, notes, then new task");
 
   await setSidebarWidth(220);
   await page.keyboard.press("f");

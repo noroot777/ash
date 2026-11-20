@@ -32,8 +32,8 @@ export const SPREAD_FILTERS: { key: SpreadFilter; label: string }[] = [
   { key: "accepted", label: "验收完成" },
 ];
 
-// 窄态那排点：「全部」在点上表现为「一个都没选中」，不占一个点位。
-export const SPREAD_DOT_FILTERS = SPREAD_FILTERS.filter(
+// 五个互斥的桶本身（不含「全部」）：各档计数加起来必须等于「全部」。
+export const SPREAD_BUCKET_FILTERS = SPREAD_FILTERS.filter(
   (item): item is { key: Exclude<SpreadFilter, "all">; label: string } => item.key !== "all",
 );
 
@@ -124,9 +124,9 @@ export type SidebarSpread = {
   open: boolean;
   // 铺开态的排版是否生效（open，或者收起动画还没跑完）。
   laidOut: boolean;
-  // 筛选是**跨两态共享的一份状态**：铺开态那排胶囊和窄态那排点读写的是同一个值，
-  // 所以在哪边选的，切到另一边还是它 —— 铺开里挑了「在跑」，收起后窄态那颗点也亮着。
-  // 但**只在有筛选控件的作用域里生效**（scopeHasFilters；任务模式没有那排点，也就不筛）。
+  // 筛选是**跨两态共享的一份状态**：在铺开态那排胶囊里挑的，收起后窄态照样筛着，
+  // 所以窄态要在任务树上方写出「只看 某一档」（FilterScopeLine），不然就是悄悄少了一半。
+  // 但**只在有筛选控件的作用域里生效**（scopeHasFilters；任务模式没有那排胶囊，也就不筛）。
   filter: SpreadFilter;
   setFilter: (filter: SpreadFilter) => void;
   followUps: Map<string, TaskFollowUp>;
