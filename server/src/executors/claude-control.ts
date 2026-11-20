@@ -1,5 +1,6 @@
 import { LEGACY_CLAUDE_INTERRUPT_ID_PREFIX } from "@navi/shared/legacy-names";
 import { loadSteerJournal, saveSteerJournal, type SteerEntry } from "./claude-recovery.js";
+import type { ClaudePlanGate } from "./claude-plan-gate.js";
 
 /**
  * 打断请求号的前缀（`<前缀><序号>`）。请求号记进打断记录、重启接管时读回来：整串对回执，序号接着编。
@@ -31,6 +32,8 @@ export class ClaudeControlBridge {
     readonly reapsAtTurnEnd = false,
     /** 打断记录落在哪(输出文件旁,见 claude-recovery.ts 的 steer journal)。不传 = 不会被接管,不必落。 */
     private readonly journalPath?: string,
+    /** 计划模式回合（`/plan`）才有：CLI 发来的权限请求由它回（claude-plan-gate.ts）。 */
+    readonly planGate?: ClaudePlanGate,
   ) {}
   /** 第几个回合结尾(孤儿回执不算),由解析层推进。打断认领哪一个结尾按它记。 */
   turns = 0;

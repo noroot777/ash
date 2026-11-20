@@ -46,7 +46,6 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
-import { mountDispatchPlanRoutes } from "./dispatch-plan-routes.js";
 import { mountDispatchSuggestionRoutes } from "./dispatch-suggestion-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { handMonitorResultsOnPause, pauseHandedNote } from "./monitor-turn-handoff.js";
@@ -83,7 +82,6 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskSteerRoutes(api);
   mountWorktreeMoveRoutes(api);
   mountTaskQuestionRoutes(api);
-  mountDispatchPlanRoutes(api);
   mountDispatchSuggestionRoutes(api);
   // 收敛闸口 `POST /tasks/:id/gate`(放行 / 打回 / 注入意见 / 提问)住在 duet/gate-route.ts。
   mountDuetGateRoutes(api);

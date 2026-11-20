@@ -53,10 +53,7 @@ export async function afterSettlement(
   executionFailed = false,
 ) {
   try {
-    // 讨论的每一段（连同合稿）都是旁路回合，排在审查那一路之前收：交给它会被当成普通回合去消费预约、推审查链。
-    if (await settleDiscussionTurn(taskId, turnOk, role)) return;
-    if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk, role, exitObserved, executionFailed)) return;
-    await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
+    await settlementHooks(taskId, status, confirmedDone, turnOk, role, exitObserved, executionFailed);
   } catch (error) {
     // Review orchestration is a post-settlement side effect. A failure here must
     // never rewrite an already-settled worker/reviewer status.
@@ -70,6 +67,25 @@ export async function afterSettlement(
         .catch((error) => console.error(`[navi] 结算后的待发送扫描失败 ${taskId}:`, error));
     }
   }
+}
+
+/**
+ * 结算后续本体（审查链、讨论、推进线），出错照抛。`afterSettlement` 把它包成「出错只记日志」；要知道后续
+ * 到底交付了没有的调用方（派完就算完成的补办，dispatch-suggestion-settle.ts）直接调它，做成了才销账。
+ */
+export async function settlementHooks(
+  taskId: string,
+  status: TaskStatus,
+  confirmedDone: boolean,
+  turnOk = true,
+  role: SessionRole = "single",
+  exitObserved = true,
+  executionFailed = false,
+): Promise<void> {
+  // 讨论的每一段（连同合稿）都是旁路回合，排在审查那一路之前收：交给它会被当成普通回合去消费预约、推审查链。
+  if (await settleDiscussionTurn(taskId, turnOk, role)) return;
+  if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk, role, exitObserved, executionFailed)) return;
+  await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
 }
 
 // 任务跑完一回合时的状态落位：续聊回合(followUpFrom 非空) → 除非确认完成,否则

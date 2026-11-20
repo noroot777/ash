@@ -20,7 +20,7 @@ export function FeishuPushCard({ status, projects, onStatus, notify }: {
   onStatus: (next: FeishuStatus) => void;
   notify: (message: string) => void;
 }) {
-  const { options, canManage } = status;
+  const { options, canManage, linkWarning } = status;
   const [busy, setBusy] = useState(false);
   const [baseUrl, setBaseUrl, baseUrlDirty] = useServerDraft(options.publicBaseUrl ?? "");
   const [quota, setQuota, quotaDirty] = useServerDraft(String(options.monthlyQuota));
@@ -42,6 +42,8 @@ export function FeishuPushCard({ status, projects, onStatus, notify }: {
 
   const normalizedUrl = normalizeTargetUrl(baseUrl);
   const urlInvalid = normalizedUrl !== "" && !HANDOFF_URL_RE.test(normalizedUrl);
+  // 服务端的判断只对存着的那份地址：输入框里改了还没存时不拿它说新地址。
+  const savedWarning = !baseUrlDirty ? linkWarning : null;
   const quotaNumber = Number(quota.trim());
   const quotaInvalid = !Number.isInteger(quotaNumber) || quotaNumber < 1;
   // 已经不在列表里的项目（删掉了 / 看不见）照样留在勾选清单里：清掉它不是这张卡该替用户做的决定。
@@ -95,10 +97,10 @@ export function FeishuPushCard({ status, projects, onStatus, notify }: {
               aria-invalid={urlInvalid}
               onChange={(event) => setBaseUrl(event.target.value)}
             />
-            <small className={urlInvalid ? "feishu-field-error" : undefined}>
+            <small className={urlInvalid || savedWarning ? "feishu-field-error" : undefined}>
               {urlInvalid
                 ? "要以 http:// 或 https:// 开头，中间不能有空格"
-                : "卡片上「在 Navi 中打开」的地址前缀。填 Tailscale 等手机能打开的地址；为空则卡片不带链接。"}
+                : savedWarning ?? "卡片上「在 Navi 中打开」的地址前缀。填 Tailscale 等手机能打开的地址；为空则卡片不带链接。"}
             </small>
           </span>
           {canManage && (

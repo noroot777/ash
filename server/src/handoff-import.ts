@@ -45,7 +45,8 @@ import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@navi/shared"
 import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns, returningAcceptanceId } from "./handoff-accept-gate.js";
 import { newHumanGate } from "./task-human-gate.js";
-import { landedSuggestionColumns, returnedSuggestionColumns } from "./handoff-suggestions.js";
+import { checkCarriedPrerequisites, landedSuggestionColumns, returnedSuggestionColumns } from "./handoff-suggestions.js";
+import { questionHistoryWithoutDebt } from "./dispatch-suggestion-settle.js";
 
 export interface HandoffImportResult {
   ok: true;
@@ -147,6 +148,8 @@ async function importValidated(
     }
   }
 
+  await checkCarriedPrerequisites(db, m.task);
+
   const isRepo = projectHealthLight(project.repoPath).isRepo;
   // useWorktree 依赖本机项目真的是 git 仓库;不是就退化成共享目录,如实记 notes。
   const useWorktree = m.task.useWorktree && isRepo;
@@ -204,6 +207,7 @@ async function importValidated(
     m.task.questionHistory = rwJson(m.task.questionHistory ?? null);
     // 建议任务的说明也是 JSON 列里的文本。没带（老版本对端）的保持没带：落成 null 就成了「持有机上一件都不剩」。
     if (m.task.dispatchSuggestions) m.task.dispatchSuggestions = rwJson(m.task.dispatchSuggestions);
+    if (m.task.dispatchSettled) m.task.dispatchSettled = rwJson(m.task.dispatchSettled);
     // 待发送消息:正文是纯文本,attachments 列是 JSON string[](路径以转义形态出现)。
     for (const msg of messages) {
       msg.text = applyUploadRewrites(msg.text, rewrites, "plain");
@@ -382,7 +386,8 @@ async function importValidated(
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,
-    questionHistory: jsonOr(m.task.questionHistory, "") || null,
+    // 派出去就算完成的欠账不随过来：那份授权属于源机上派出那一刻的局面（dispatch-suggestion-settle.ts）。
+    questionHistory: questionHistoryWithoutDebt(jsonOr(m.task.questionHistory, "") || null),
     // 验收落账随任务走(老 manifest 没有这几个字段,按缺失处理)。尾段进度位与
     // 「不提交那一档的索引指纹」不带,理由见 handoff-types.ts。
     acceptedTargetBranch: m.task.acceptedTargetBranch ?? null,

@@ -5,7 +5,11 @@ import type { ConversationDisplayRow } from "./conversationSystemRows.ts";
 // 插回正文行的哪一处。正文行本来就按时间排，所以按时刻找第一条比它晚的行，插在那一行前面；
 // 比所有行都晚的跟在最后。说不出时刻的行（极少）不参与比较，紧跟在前一行后面。
 
-export type FeedAside = { key: string; at: string; node: ReactNode };
+export type FeedAside = {
+  key: string; at: string; node: ReactNode;
+  /** 说的是派出去的哪条任务：问答记录里已经有那一下（派活单的派出记录）时，会话按记录画，这句不再重复。 */
+  dispatchedTaskId?: string;
+};
 
 /** 一行从什么时候开始：一条消息的时刻、一轮审查 / 一场辩论开始的时刻、一句旁注的时刻。 */
 export function feedRowAt(row: ConversationDisplayRow): string | null {

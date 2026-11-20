@@ -1,6 +1,6 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql, type SQL } from "drizzle-orm";
 import type { AgentType } from "@navi/shared";
-import { cliStateScopeKey, goalRequest, hasCliGoalHold, isGoalExecution, isPlanImplementation, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@navi/shared/cli-commands";
+import { cliStateScopeKey, goalRequest, PLAN_AGENTS, hasCliGoalHold, isGoalExecution, isPlanImplementation, isPlanToggle, PLAN_TOGGLE_NOT_A_RUN, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import type { RunHandle } from "./executors/types.js";
@@ -9,7 +9,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 import { cliGoalRoute, cliGoalScopeSelector, currentCliGoalProfile, selectCliGoalScope } from "./task-cli-goal-scopes.js";
 import { taskStartStatus } from "./task-start-status.js";
-import { assertCodexPlanReady } from "./task-plan.js";
+import { assertPlanReady } from "./task-plan.js";
 
 export { readCliState };
 
@@ -47,26 +47,42 @@ export async function resolvedCliState(task: typeof tasks.$inferSelect, agentTyp
   return readCliState(task.cliState, agentType, profileId, ownerUserId);
 }
 
+/** claude 的裸 `/plan`、`/plan off`：只改这个作用域的开关、不起进程（plan-turn.ts）。返回回给用户的那句。 */
+export async function setCliPlanMode(task: typeof tasks.$inferSelect, agentType: AgentType, executorId: string | null, ownerUserId: string | null, on: boolean): Promise<string> {
+  const profileId = await currentCliGoalProfile(agentType, executorId, ownerUserId);
+  const state = readCliState(task.cliState, agentType, profileId, ownerUserId);
+  await saveCliState(task.id, agentType, { ...state, profileId, ownerUserId, plan: on }, true);
+  await publishTaskUpdated(task.id);
+  return on ? "计划模式已开启；下一条消息只做计划。/plan off 退出" : "计划模式已关闭";
+}
+
+function withoutPlan(raw: SQL, agent: string): SQL {
+  const path = `$.${agent}`;
+  const scopes = sql`(SELECT json_group_object(key, json_object('plan', json('false'))) FROM json_each(${raw}, ${`${path}.scopes`}) WHERE type = 'object')`;
+  return sql`CASE
+    WHEN json_type(${raw}, ${`${path}.scopes`}) = 'object'
+      THEN json_patch(${raw}, json_object(${agent}, json_object('scopes', json(${scopes}))))
+    WHEN json_type(${raw}, ${path}) = 'object'
+      THEN json_set(${raw}, ${`${path}.plan`}, json('false'))
+    ELSE ${raw} END`;
+}
+
 async function resetCliPlanModes(taskId: string): Promise<void> {
-  const raw = sql`CASE WHEN json_valid(${tasks.cliState}) THEN ${tasks.cliState} ELSE '{}' END`;
-  const scopes = sql`(SELECT json_group_object(key, json_object('plan', json('false'))) FROM json_each(${raw}, '$.codex.scopes') WHERE type = 'object')`;
-  await db.update(tasks).set({ cliState: sql`CASE
-    WHEN json_type(${raw}, '$.codex.scopes') = 'object'
-      THEN json_patch(${raw}, json_object('codex', json_object('scopes', json(${scopes}))))
-    WHEN json_type(${raw}, '$.codex') = 'object'
-      THEN json_set(${raw}, '$.codex.plan', json('false'))
-    ELSE ${tasks.cliState} END` }).where(eq(tasks.id, taskId));
+  const reset = PLAN_AGENTS.reduce((raw: SQL, agent) => withoutPlan(raw, agent), sql`${tasks.cliState}`);
+  await db.update(tasks).set({ cliState: sql`CASE WHEN json_valid(${tasks.cliState}) THEN ${reset} ELSE ${tasks.cliState} END` }).where(eq(tasks.id, taskId));
 }
 
 export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agentType: AgentType, text: string, profileId: string | null, ownerUserId: string | null, options: { resetPlan?: boolean; preserveState?: boolean } = {}) {
   const cliCommand = validateCliCommand(agentType, text);
+  // 走到这里的都要起智能体进程；开关落进来就是普通执行顶着计划模式的名义（plan-turn.ts）。
+  if (isPlanToggle(agentType, cliCommand)) throw new Error(PLAN_TOGGLE_NOT_A_RUN);
   const previousState = readCliState(task.cliState, agentType, profileId, ownerUserId);
   const cliState = { ...previousState, profileId, ownerUserId };
   if (cliCommand?.name === "goal" && cliCommand.args === "--scopes") throw new Error("查看目标作用域请在任务对话框即时发送 /goal --scopes");
   if (cliCommand?.goalScope && cliCommand.goalScope !== cliGoalScopeSelector(agentType, cliState)) throw new Error("目标作用域与本次执行器不一致；使用 /goal --scopes 选择原作用域");
   assertResumableGoal(cliCommand, cliState);
   if (options.preserveState) return { cliCommand: cliCommand ?? undefined, cliState: { ...cliState, plan: false } };
-  const resetPlanChanged = !!options.resetPlan && Object.values(readCliStateScopes(task.cliState, "codex").scopes).some((state) => state?.plan === true);
+  const resetPlanChanged = !!options.resetPlan && PLAN_AGENTS.some((agent) => Object.values(readCliStateScopes(task.cliState, agent).scopes).some((state) => state?.plan === true));
   if (options.resetPlan) { await resetCliPlanModes(task.id); cliState.plan = false; }
   if (isGoalExecution(cliCommand)) {
     delete cliState.goalClearStart;
@@ -77,7 +93,7 @@ export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agen
   if (!cliCommand || isGoalExecution(cliCommand)) cliState.goalHold = false;
   if (isPlanImplementation(cliCommand)) {
     if (!cliState.plan) throw new Error("该执行器的计划模式已关闭，请先重新确认计划");
-    await assertCodexPlanReady(task.id, profileId, ownerUserId, cliCommand!.args.split(/\s+/)[1]);
+    await assertPlanReady(task.id, agentType, profileId, ownerUserId, cliCommand!.args.split(/\s+/)[1]);
   }
   if (cliCommand?.name === "plan") cliState.plan = cliCommand.args !== "off" && !isPlanImplementation(cliCommand);
   if (cliCommand?.name === "personality" && cliCommand.args) cliState.personality = cliCommand.args as CliSessionState["personality"];

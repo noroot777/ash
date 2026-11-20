@@ -28,7 +28,7 @@ import { tasks } from "./db/schema.js";
 import type { Actor } from "./auth/context.js";
 import { canSeeProject } from "./auth/visibility.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
-import { dispatchDefaultTarget, parseDispatchTarget } from "@navi/shared/dispatch-plan";
+import { dispatchDefaultTarget, parseDispatchTarget } from "@navi/shared/dispatch-target";
 import type { AgentType } from "@navi/shared";
 
 type DispatchCandidate = {

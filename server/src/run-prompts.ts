@@ -21,9 +21,12 @@ export const AUTONOMY =
 // 产出质量规则**必须经过这里**：一条全新会话的第一条消息完全可能就是规划回合（用户先
 // `/plan on` 讨论方案、再 `/plan off` 动手），而动手那一轮走的是同一条会话的续跑、按
 // 「规则只贴一次」不会再贴 —— 不接这一处，「先规划后实施」整条路一个字都收不到。
-export const PLANNING_TURN = (craft: CraftContext, userText: string) =>
+// claude 的计划回合跑在 CLI 自己的 plan 权限模式里，计划要经 ExitPlanMode 交出来才会变成计划卡
+// （executors/claude-plan-gate.ts），所以多点一句。
+export const PLANNING_TURN = (craft: CraftContext, userText: string, agent?: AgentType) =>
   craftRulesFor(craft) + userText +
-  "\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。";
+  "\n\n本回合只讨论计划，不实施、不确认任务完成；等用户确认计划后再开始实施。" +
+  (agent === "claude" ? "计划定稿后调用 ExitPlanMode 提交，供用户确认。" : "");
 
 // Prefix for an agent invited into an existing task via @-mention. It joins in
 // the SAME working directory, so it should read the current state before acting.

@@ -1,8 +1,9 @@
-// 可以派出去的活的三道边界（主链路在 test-dispatch-suggestion.ts）：
+// 挂在回复框顶上的活的三道边界（主链路在 test-dispatch-suggestion.ts / test-dispatch-suggestion-wait.ts）：
 //   · 派出去的新任务归点「派出去」的人：共享项目里 Bob 在 Alice 的任务上选了自己的非默认执行器，新任务就交给它，
 //     不按 Alice 看得见的那一份核成 null、悄悄落到 Bob 的默认执行器上；
 //   · 智能体挂建议：入口核过回合与方向之后、真写进去之前，用户补了新要求（方向换了）或任务停了——这一批不挂，
-//     回 409；两处时机各钉一次：查执行器的空档里、读完建议列正要写的那一刻；
+//     回 409；两处时机各钉一次：查执行器的空档里、开始写的那一笔事务之前（读和写在同一笔立即加锁的事务里，
+//     事务中间插不进别人）；
 //   · 补了图再派：图的归属跟建任务同一笔。归属写不进去整笔不落（没有新任务、建议还在）；写得进去时回包之前
 //     就已经归到新任务上。
 //
@@ -103,16 +104,15 @@ function beforeNextRead(table: unknown, before: () => Promise<void>): () => bool
   }) as typeof db.select;
   return () => fired;
 }
-function beforeNextWrite(table: unknown, before: () => Promise<void>): () => boolean {
-  const update = db.update.bind(db);
+function beforeNextTransaction(before: () => Promise<void>): () => boolean {
+  const transaction = db.transaction.bind(db);
   let fired = false;
-  db.update = ((target: never) => {
-    const builder = update(target);
-    if (target !== table || fired) return builder;
+  db.transaction = (async (...args: Parameters<typeof transaction>) => {
+    db.transaction = transaction;
     fired = true;
-    db.update = update;
-    return holdOnce(builder, before);
-  }) as typeof db.update;
+    await before();
+    return transaction(...args);
+  }) as typeof db.transaction;
   return () => fired;
 }
 
@@ -145,13 +145,13 @@ try {
   assert.equal(raced.status, 409, JSON.stringify(raced.body));
   assert.equal((await taskOf("race-scope")).dispatchSuggestions, null, "旧方向的建议没挂上去");
 
-  // ② 读完建议列、正要写的那一刻任务停了（回合也随之结束）。
+  // ② 正要开始写的那一笔之前任务停了（回合也随之结束）。
   await insertTask("race-write", running);
-  const writeHeld = beforeNextWrite(tasks, async () => {
+  const writeHeld = beforeNextTransaction(async () => {
     await dbClient.execute("UPDATE tasks SET status = 'done', active_turn_token = NULL, active_direction_token = NULL WHERE id = 'race-write'");
   });
   const stopped = await post("race-write");
-  assert.ok(writeHeld(), "确实停在写建议列那一下");
+  assert.ok(writeHeld(), "确实停在写的那一笔之前");
   assert.equal(stopped.status, 409, JSON.stringify(stopped.body));
   assert.equal((await taskOf("race-write")).dispatchSuggestions, null, "停了之后不再落下这一轮的建议");
 

@@ -74,7 +74,7 @@ if (phase === "seed") {
       notePrerequisiteProgress(pre!);
     }
     if (source === "dispatch") {
-      // 派活单派出：请求跟建任务同一笔事务落库，再走放行口（dispatch-plan-launch.ts 那一套）。
+      // 回复框顶上那一列派出：请求跟建任务同一笔事务落库，再走放行口（dispatch-suggestion-launch.ts 那一套）。
       await db.transaction(async (transaction) => requestLaunch(ids, { source: "run" }, transaction));
       await sweepLaunchRequests();
     }

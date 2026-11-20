@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  SPREAD_DOT_FILTERS,
+  SPREAD_BUCKET_FILTERS,
   SPREAD_FILTERS,
   indexWorkers,
   matchesSpreadFilter,
@@ -40,12 +40,12 @@ function task(id, extra = {}) {
   };
 }
 
-// 窄态那排点必须画满每一档：少一档就等于那档的任务从筛选里消失了，而且没人会发现。
+// 桶的清单必须覆盖每一档：少一档，下面「各档计数加起来等于全部」的账就对不上。
 assert.deepEqual(
-  SPREAD_DOT_FILTERS.map((item) => item.key),
+  SPREAD_BUCKET_FILTERS.map((item) => item.key),
   SPREAD_FILTERS.filter((item) => item.key !== "all").map((item) => item.key),
 );
-assert.ok(!SPREAD_DOT_FILTERS.some((item) => item.key === "all"));
+assert.ok(!SPREAD_BUCKET_FILTERS.some((item) => item.key === "all"));
 
 const tasks = [
   task("todo-question", { status: "running", question: "选哪个？" }),
@@ -103,7 +103,7 @@ assert.equal(spreadBucket(task("x", { status: "failed", stage: "accepted" })), "
 
 // 五个桶互斥且铺满：加起来必须正好是「全部」，否则筛选条上的数字自己就打架了。
 assert.equal(
-  SPREAD_DOT_FILTERS.reduce((sum, item) => sum + counts[item.key], 0),
+  SPREAD_BUCKET_FILTERS.reduce((sum, item) => sum + counts[item.key], 0),
   counts.all,
 );
 
@@ -113,7 +113,7 @@ const rows = orderedTopLevelTasks(
   { unifiedPinned: true },
 );
 assert.equal(rows.length, counts.all);
-for (const item of SPREAD_DOT_FILTERS) {
+for (const item of SPREAD_BUCKET_FILTERS) {
   assert.equal(
     rows.filter((row) => matchesSpreadFilter(row, item.key, workersFrom(indexWorkers(tasks), row.id))).length,
     counts[item.key],
@@ -125,7 +125,7 @@ for (const item of SPREAD_DOT_FILTERS) {
 const workerIndex = indexWorkers(tasks);
 for (const row of rows) {
   const rowWorkers = workersFrom(workerIndex, row.id);
-  for (const item of SPREAD_DOT_FILTERS) {
+  for (const item of SPREAD_BUCKET_FILTERS) {
     assert.equal(
       matchesSpreadFilter(row, item.key, rowWorkers),
       spreadBucket(row, rowWorkers) === item.key,
@@ -147,7 +147,7 @@ for (const item of SPREAD_FILTERS) {
 // 空项目：每一档都是 0，点还是画满一排（画不出来就没地方取消筛选了）。
 const empty = spreadCounts(tasks, P3);
 assert.equal(empty.all, 0);
-assert.equal(SPREAD_DOT_FILTERS.reduce((sum, item) => sum + empty[item.key], 0), 0);
+assert.equal(SPREAD_BUCKET_FILTERS.reduce((sum, item) => sum + empty[item.key], 0), 0);
 
 // 「任务模式」作用域：跨项目，但只收四类顶层行 —— 在跑、摔了（跑挂 / 验证没过）、
 // 等我说句话（提问 / 停在检查点）、等我盖章（干完了没点头，不看年龄）。它回答的是
@@ -174,11 +174,11 @@ for (const id of ["wait-backlog", "accepted-merged", "archived", "worker", "done
 }
 assert.equal(taskMode.all, taskModeRows.length);
 assert.equal(
-  SPREAD_DOT_FILTERS.reduce((sum, item) => sum + taskMode[item.key], 0),
+  SPREAD_BUCKET_FILTERS.reduce((sum, item) => sum + taskMode[item.key], 0),
   taskMode.all,
 );
 // 计数与列表同口径（跟单项目态一样的钉子，换个作用域再钉一次）。
-for (const item of SPREAD_DOT_FILTERS) {
+for (const item of SPREAD_BUCKET_FILTERS) {
   assert.equal(
     spreadVisibleTasks(tasks, TASKS, item.key).length,
     taskMode[item.key],

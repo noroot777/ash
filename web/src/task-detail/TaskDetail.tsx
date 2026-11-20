@@ -27,7 +27,7 @@ import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
-import { launchPlan, saveDispatchTarget } from "./dispatchPlanActions.ts";
+import { saveDispatchTarget } from "./dispatchTargetActions.ts";
 import { replyDiscuss } from "./replyDiscuss.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
 import { withdrawalNotes } from "./suggestions/withdrawalNotes.ts";
@@ -152,7 +152,7 @@ export function TaskDetail({
   // 智能体收回的建议任务：收回的那一刻留一句为什么（suggestions/withdrawalNotes.ts），跟尾注同一种小灰字。
   const asides = useMemo(() => [
     ...dispatchNotes(task.id, allTasks).map((note) => ({
-      key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
+      key: `dispatch:${note.id}`, at: note.at, dispatchedTaskId: note.id, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
     })),
     ...withdrawalNotes(task.dispatchWithdrawals).map((note) => ({
       key: note.key, at: note.at, node: <FootnoteLine footnote={note.footnote} placement="standalone" />,
@@ -373,8 +373,8 @@ export function TaskDetail({
                 onDelete={() => setDeleteOpen(true)}
                 onOpenTask={onOpenTask}
                 inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
-                planChip={<PlanModeChip task={task} onOff={(executorId) => {
-                  replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })("/plan off", [], { agent: "codex", executorId })
+                planChip={<PlanModeChip task={task} onOff={(agent, executorId) => {
+                  replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })("/plan off", [], { agent, executorId })
                     .catch((reason) => notify(reason instanceof Error ? reason.message : String(reason)));
                 }} />}
                 notify={notify}
@@ -525,7 +525,6 @@ export function TaskDetail({
                         await api.answerTask(task.id, answer, input, attachments);
                         notify("已发送答复，任务正在续跑");
                       }}
-                      onLaunchPlan={launchPlan(task.id, notify)}
                       onDispatchTargetChange={task.mode === "single" && !task.parentId && !task.archived ? saveDispatchTarget(task, onTaskUpdate, notify) : undefined}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}

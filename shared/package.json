@@ -42,9 +42,9 @@
       "types": "./src/questions.ts",
       "default": "./src/questions.ts"
     },
-    "./dispatch-plan": {
-      "types": "./src/dispatch-plan.ts",
-      "default": "./src/dispatch-plan.ts"
+    "./dispatch-target": {
+      "types": "./src/dispatch-target.ts",
+      "default": "./src/dispatch-target.ts"
     },
     "./review-on-create": {
       "types": "./src/review-on-create.ts",

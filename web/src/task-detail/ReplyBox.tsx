@@ -74,7 +74,6 @@ export function ReplyBox({
   onAnswer,
   onOpenTask,
   onDispatch,
-  onLaunchPlan,
   onDispatchTargetChange,
   onDiscuss,
   discussHeld = null,
@@ -92,7 +91,7 @@ export function ReplyBox({
   const [commandResult, setCommandResult] = useState<{ taskId: string; text: string } | null>(null);
   // 实施、改计划都交回出这份计划的那个执行器：换了人，计划模式的作用域就对不上了。
   const sendToPlanner = async (ready: ReadyPlan, text: string, attachments: string[]) => {
-    await onSend(text, attachments, { agent: "codex", executorId: ready.executorId, model: ready.model, reasoningEffort: ready.reasoningEffort });
+    await onSend(text, attachments, { agent: ready.agentType, executorId: ready.executorId, model: ready.model, reasoningEffort: ready.reasoningEffort });
   };
   const currentTaskId = useRef(task.id);
   currentTaskId.current = task.id;
@@ -121,19 +120,6 @@ export function ReplyBox({
   const dispatchable = !!onDispatch;
   const ability = { dispatchable, discussable: !!onDiscuss };
   const calling = useReplyCall({ ownAgent: standing.config.agentType, ability, profiles });
-  const call = calling.call;
-  const target = call?.target ?? null;
-  const dispatching = call?.verb === "dispatch";
-  const baseContext = useDispatchBaseContext(task.projectId, dispatching);
-  const baseOptions = dispatchBaseChoices(task, baseContext.value);
-  // 候选还在读时不判失效：那会儿远端那组本来就不在。
-  const dispatchBase = baseContext.status === "ready" ? resolveDispatchBase(baseOptions, call?.base) : { option: baseOptions[0] ?? null, stale: null };
-  const worktreeBase = dispatchBase.option?.worktreeBase ?? null;
-  const baseStaleHold = dispatching && dispatchBase.stale ? `远端已经没有 ${dispatchBase.stale} 了，重选新任务从哪开工` : null;
-  // 谁来审：照胶囊此刻画着的那一位派（按下那一刻就定，不等派出途中缓存再变）；清单没读到时只有「不审查」派得出去。
-  const reviewerList = useReviewerList(dispatching);
-  const dispatchReview = concreteReviewChoice(call?.review ?? "default", reviewerList.reviewers);
-  const dispatchReviewHold = dispatching ? reviewHold(call?.review ?? "default", reviewerList) : null;
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -147,16 +133,33 @@ export function ReplyBox({
     const sentSelection = sentSelections(uploads.attachments);
     return () => clearSent(draftAtSend, sentSelection);
   };
-  // 可以派出去的活（suggestions/useSuggestionDock.tsx）：框顶那一行，选中一件时这个框就是「补一句」。
+  // 可以派出去的活（suggestions/useSuggestionDock.tsx）：框顶那一行，选中一件时这个框就是「补一句」；
+  // 智能体停下来等的那一批也是它（这时没选中也借着框：写一句就是发回去改），那一问不再挂答题卡。
   const suggestion = useSuggestionDock({
     task, enabled: dispatchable && !task.archived, value, setValue,
     attachments: uploads.attachments.map((attachment) => attachment.path), uploading: uploads.uploading,
-    snapshotSent, dispatchTarget: dispatchDefault.value, focus: () => textareaRef.current?.focus(),
+    snapshotSent, dispatchTarget: dispatchDefault.value, tasks, onAnswer, focus: () => textareaRef.current?.focus(),
   });
-  // 框顶任何时候只有一行：叫着人时是做法那一行，否则有驳回在等裁定是裁定那一行，都没有才是可以派出去的活
-  // （让开不是丢掉，前面的事了了它再回来）。
+  // 智能体在等的那一批一到，这一格就归它（显示、输入、发送一起）：叫着的人连同做法先搁着——框顶、胶囊、发送都不认它，
+  // 那一批处理完（派完、叉完、发回去）原样回来，框里写的字一直是同一份草稿。
+  const callSuspended = suggestion.holdsQuestion && !!suggestion.override;
+  const call = callSuspended ? null : calling.call;
+  const target = call?.target ?? null;
+  const dispatching = call?.verb === "dispatch";
+  const baseContext = useDispatchBaseContext(task.projectId, dispatching);
+  const baseOptions = dispatchBaseChoices(task, baseContext.value);
+  // 候选还在读时不判失效：那会儿远端那组本来就不在。
+  const dispatchBase = baseContext.status === "ready" ? resolveDispatchBase(baseOptions, call?.base) : { option: baseOptions[0] ?? null, stale: null };
+  const worktreeBase = dispatchBase.option?.worktreeBase ?? null;
+  const baseStaleHold = dispatching && dispatchBase.stale ? `远端已经没有 ${dispatchBase.stale} 了，重选新任务从哪开工` : null;
+  // 谁来审：照胶囊此刻画着的那一位派（按下那一刻就定，不等派出途中缓存再变）；清单没读到时只有「不审查」派得出去。
+  const reviewerList = useReviewerList(dispatching);
+  const dispatchReview = concreteReviewChoice(call?.review ?? "default", reviewerList.reviewers);
+  const dispatchReviewHold = dispatching ? reviewHold(call?.review ?? "default", reviewerList) : null;
+  // 框顶任何时候只有一行：智能体在等的那一批排在最前面（任务就停在它上面，叫着的人见上面 callSuspended）；
+  // 其次叫着人时是做法那一行；否则有驳回在等裁定是裁定那一行，都没有才是可以派出去的活（让开不是丢掉，前面的事了了它再回来）。
   const callDock = !!call && (ability.dispatchable || ability.discussable);
-  const activeOverride = callDock ? undefined : override ?? suggestion;
+  const activeOverride = callDock ? undefined : callSuspended ? suggestion.override : override ?? suggestion.override;
   // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
   const { take, takeInput } = overrideTake(activeOverride);
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
@@ -205,7 +208,7 @@ export function ReplyBox({
   // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
   // 之后选模型）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
-  const takeover = useQuestionTakeover(onAnswer ? task : null);
+  const takeover = useQuestionTakeover(onAnswer && !suggestion.holdsQuestion ? task : null);
   // 计划定稿后的「实施此计划？」也照这套占住回复框（PlanReadyCard.tsx）；有题在问、框被别的事接管时让开。
   const planTakeover = usePlanTakeover(task.id, takeover.card || take ? null : readyPlanFor(task, conversationItems ?? []));
   const covering = takeover.covering || planTakeover.covering;
@@ -512,8 +515,7 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
-        dispatchTarget={dispatchDefault.value} />}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable />}
       {planTakeover.ready && <div className="question-dock">
         <PlanReadyCard key={planTakeover.ready.plan.id} takeover={planTakeover}
           onImplement={(ready) => sendToPlanner(ready, `/plan implement ${ready.plan.id}`, [])}

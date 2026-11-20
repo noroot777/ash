@@ -1,4 +1,4 @@
-// 读全文的那一屉里，一件可以派出去的活长什么样（从左边出，同派活单读完整说明那一屉，components/LeftDrawer.tsx）。
+// 读全文的那一屉里，一件可以派出去的活长什么样（从左边出，同子智能体那一屉，components/LeftDrawer.tsx）。
 // 抽屉头：「交给 xx · 从哪开工」和标题，一颗「改」；正文：排好版的说明，用户补了话时末尾多一段「你补的话」。
 // 按下「改」：标题变成一格输入、正文变成 markdown 原文直接改，再按一次（「改好了」）回到排好版的样子。
 //
@@ -51,7 +51,7 @@ export function SuggestionDrawerBody({ id }: { id: string }) {
     );
   }
   return (
-    <div className="dispatch-plan-reading">
+    <div className="sg-reading">
       <MarkdownBody text={view.body} />
       {view.extra.trim() && (
         <div className="sg-reading-extra">

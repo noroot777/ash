@@ -17,8 +17,9 @@ import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
 import { previousResidualLockPublic } from "./singleton.js";
 import { CODE_DIR, DATA_DIR } from "./paths.js";
-import { LOCAL_ONLY } from "./local-only.js";
+import { DESKTOP_APP, LOCAL_ONLY } from "./local-only.js";
 import { INSTANCE_ID } from "./instance-binding.js";
+import { instanceTag } from "./instance-tag.js";
 import { windowPort } from "./window-port.js";
 import { isLocalDirect } from "./auth/remote-access.js";
 import { mountHostNaviMcpRoutes } from "./host-navi-mcp-routes.js";
@@ -127,9 +128,12 @@ api.get("/health", (c) => c.json({
   // 这个端点免登录，别的机器不该从这里读到这台机器的目录结构。
   // `id` 是这个进程的实例号：认过人的窗口拿它给页面请求打上记号，换了人的那一份据此拒收
   // （instance-binding.ts）。
+  // `desktop`：是不是 Navi.app 起的那一份（local-only.ts）—— app 认自家只看它，不看 `localOnly`：
+  // 用户放开别的设备访问之后 `localOnly` 是 false，服务照样是 app 那份。
+  // `tag`：这份 Navi 跨重启不变的指纹（instance-tag.ts），app 收到 navi:// 链接时拿它认链接是不是冲着自己这份来的。
   // `windowPort` 是 mac app 窗口专用、真正监听上了的那个端口（window-port.ts），没有就是 null。
   ...(isLocalDirect(c) ? { instance: { id: INSTANCE_ID, dataDir: DATA_DIR, codeDir: CODE_DIR, localOnly: LOCAL_ONLY,
-    windowPort: windowPort() } } : {}),
+    desktop: DESKTOP_APP, tag: instanceTag(), windowPort: windowPort() } } : {}),
 }));
 
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数

@@ -35,6 +35,7 @@ import { tasks } from "../db/schema.js";
 import { openDisputeTargets } from "../free-review-dispute.js";
 import { isTurnClaimed, whenTurnIdle } from "../turn-lock.js";
 import { now } from "../util.js";
+import { linkPolicy } from "./app-link.js";
 import { acceptIdentityOf, awaitsPress, DECISION_KINDS, viewsOf, withTeamLeads, type TaskView, type Turn } from "./attention.js";
 import { acceptedLabel, KIND_LABEL, settledCard, summaryCard, taskLink, turnCard } from "./cards.js";
 import { createEnvelope } from "./envelopes.js";
@@ -55,7 +56,7 @@ const OPEN_STATES = ["pending", "sent", "held"];
 export const ACTED = "acted";
 const BATCH = 40;
 /** 改卡标记：已经排着结果回写（result / acking）的不降级成受额度约束的 pending。 */
-const REPATCH = sql`CASE WHEN ${imOutbox.patchState} IN ('result', 'acking') THEN 'result' ELSE 'pending' END`;
+export const REPATCH = sql`CASE WHEN ${imOutbox.patchState} IN ('result', 'acking') THEN 'result' ELSE 'pending' END`;
 
 type Clock = ConstructorParameters<typeof OutboxSender>[3];
 
@@ -490,12 +491,14 @@ async function resolutionLine(row: OutboxRow, view: TaskView | null): Promise<st
 }
 
 /**
- * 决策卡的渲染输入指纹。只收会改变卡面、又不改变代次的那几样；出错提示、闸口结论这类现读的补充
+ * 决策卡的渲染输入指纹。只收会改变卡面、又不改变代次的那几样（链接策略也是：只听本机 / 放开网络、指纹都会
+ * 改按钮的 pc_url，见 app-link.ts）；出错提示、闸口结论这类现读的补充
  * 在同一代里不会变，不算进来（算进来就得每次对账都去读 trace）。
  */
 export function renderKeyOf(view: Creation["view"], dest: Destination, base: string | null, titleOnly: string[]): string {
   const input = JSON.stringify([
     view.task.title, view.projectName, view.turn, dest.receiveType, taskLink(base, view), titleOnly.includes(view.task.projectId),
+    linkPolicy(),
   ]);
   return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }

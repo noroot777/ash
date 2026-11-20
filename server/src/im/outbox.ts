@@ -12,6 +12,7 @@
 // （result = 回写用户刚点的那一下，额度见底也照发）；acking = 结果卡已随卡片回调回执带回去、还没确认
 // 送到，next_at 到期还没确认就当 result 改一次（至少交付一次，同样的内容改两次没有副作用）；
 // done / skipped / failed 是结果。改卡失败按 next_at 退避，不在同一圈里连撞。
+// 例外是 link_due（换了链接策略、飞书上那张还欠着新链接，relink.ts）：额度挡住只往后挪，送到了才清。
 // recall = 不改了、整条撤回（卡上那件事没了、任务只是又跑起来了：留一张「又开始跑了」的灰卡没人要看，reconcile.ts
 // resolve）；撤回不了（发出超过一天、类型不支持）就退回成改卡，改成库里那份收好的样子。recalled = 已撤回。
 //
@@ -21,6 +22,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
 import { now } from "../util.js";
+import { ENVELOPE_TTL_MS } from "./envelopes.js";
 import { isAnchorGone, isMessageGone, isQuotaBlocked, isTokenFailure, type FeishuApi } from "./feishu/api.js";
 import type { ImPurpose } from "./quota.js";
 
@@ -71,7 +73,8 @@ export interface OutboxGuard {
 
 const GUARD_RETRY_MS = 30_000;
 /** 还要改到飞书上的（acking 另按期限算）。 */
-const PATCHING = ["pending", "result", "recall"];
+/** 改卡队列按 next_at 为空或已到点挑的几种（acking 另算：只在确认期限到点后挑，见 nextPatch）。 */
+export const PATCHING = ["pending", "result", "recall"];
 export const RECALL = "recall";
 export const RECALLED = "recalled";
 
@@ -262,6 +265,7 @@ export class OutboxSender {
     }
     const lastError = `${res.code} ${res.msg}`.slice(0, 500);
     if (isQuotaBlocked(res)) {
+      if (await this.deferLinkDue(row, lastError)) return;
       await db.update(imOutbox).set({ patchState: "skipped", lastError, updatedAt: at }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, RECALL)));
       return;
     }
@@ -285,11 +289,27 @@ export class OutboxSender {
    */
   private async gone(row: OutboxRow, lastError: string | null): Promise<void> {
     const that = and(eq(imOutbox.id, row.id), eq(imOutbox.messageId, row.messageId!));
-    const settled = await db.update(imOutbox).set({ patchState: RECALLED, attempts: 0, nextAt: null, lastError, updatedAt: now() })
+    const settled = await db.update(imOutbox).set({ patchState: RECALLED, linkDue: null, attempts: 0, nextAt: null, lastError, updatedAt: now() })
       .where(and(that, eq(imOutbox.state, "resolved"))).returning({ id: imOutbox.id });
     if (settled.length) return;
     await db.delete(imOutbox).where(that);
     if (row.taskId) this.onLost(row.taskId);
+  }
+
+  /**
+   * 额度挡住了一张欠着新链接的卡（linkDue，relink.ts）：省额度的降级只许往后挪，不许把它记成 skipped ——
+   * 记了就再也没人改它，飞书上那张一直带着旧链接。过一阵再试；飞书已经不让改了（超过 14 天）就清掉这笔账。
+   * 返回 false = 不归这里管（没欠着链接），照原来的办。
+   */
+  private async deferLinkDue(row: OutboxRow, lastError: string): Promise<boolean> {
+    if (!row.linkDue) return false;
+    if (!linkDueAlive(row.sentAt, this.clock.now())) {
+      await db.update(imOutbox).set({ linkDue: null }).where(eq(imOutbox.id, row.id));
+      return false;
+    }
+    await db.update(imOutbox).set({ lastError, updatedAt: now(), nextAt: new Date(this.clock.now() + QUOTA_RETRY_MS).toISOString() })
+      .where(eq(imOutbox.id, row.id));
+    return true;
   }
 
   private async patchOne(row: OutboxRow): Promise<void> {
@@ -309,6 +329,8 @@ export class OutboxSender {
         await db.update(imOutbox).set({ patchState: "result", nextAt: null, updatedAt: at })
           .where(and(eq(imOutbox.id, row.id), inArray(imOutbox.patchState, ["acking", "done"])));
       }
+      // 改出去的这份（不论 CAS 落没落空）是重写之后的内容：飞书上那张的链接已经是新的了。
+      if (row.linkDue) await db.update(imOutbox).set({ linkDue: null }).where(eq(imOutbox.id, row.id));
       return;
     }
     const lastError = `${res.code} ${res.msg}`.slice(0, 500);
@@ -318,6 +340,7 @@ export class OutboxSender {
       return;
     }
     if (isQuotaBlocked(res)) {
+      if (await this.deferLinkDue(row, lastError)) return;
       await db.update(imOutbox).set({ patchState: "skipped", lastError, updatedAt: at }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
       return;
     }
@@ -340,6 +363,11 @@ export class OutboxSender {
       ...(row.patchState === "acking" ? { patchState: "result" } : {}),
     }).where(eq(imOutbox.id, row.id));
   }
+}
+
+/** 欠着新链接的卡还能不能改：飞书只让改 14 天内发出的消息。 */
+export function linkDueAlive(sentAt: string | null, at: number): boolean {
+  return !sentAt || at - Date.parse(sentAt) <= ENVELOPE_TTL_MS;
 }
 
 /** 网页上「发件积压」那一格。 */

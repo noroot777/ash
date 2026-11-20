@@ -19,9 +19,10 @@ import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@navi/shared/task-origin";
 import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
-import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@navi/shared/dispatch-plan";
-import { parseDispatchSuggestions, parseWithdrawnSuggestions, publicSuggestions } from "@navi/shared/dispatch-suggestion";
-import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
+import { parseDispatchTarget } from "@navi/shared/dispatch-target";
+import { parseWithdrawnSuggestions, publicSuggestions } from "@navi/shared/dispatch-suggestion";
+import { readSuggestions } from "./dispatch-suggestion.js";
+import { CliCommandValidationError, PLAN_AGENTS, PLAN_TOGGLE_NOT_A_RUN, isPlanToggle, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
 import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { announceCreateReviews, reservationRows, resolveCreateReviews, type CreateReviewSlot } from "./review-on-create.js";
 
@@ -69,18 +70,19 @@ const enrichTeamExecutorLabels = (
 const toTask = (r: TaskRow, allProfiles: AgentLabelRow[] = []): Task =>
   toTaskWith(r, profilesOwnedBy(allProfiles, r.ownerUserId));
 
-const codexPlanStateFor = (task: TaskRow, profiles: AgentLabelRow[]): Pick<Task, "codexPlanMode" | "codexPlanScopes"> => {
-  const states = task.mode === "single"
-    ? Object.values(readCliStateScopes(task.cliState, "codex").scopes).filter((state) => state?.plan === true)
-    : [];
-  const codexPlanScopes = states.map((state) => ({
-    executorId: state.profileId ?? null,
-    executorLabel: state.profileId
-      ? profiles.find((profile) => profile.id === state.profileId)?.name ?? state.profileId
-      : "Codex（未绑定执行器）",
-    isTaskOwner: (state.ownerUserId ?? null) === task.ownerUserId,
-  }));
-  return { codexPlanMode: codexPlanScopes.length > 0, codexPlanScopes };
+const UNBOUND_PLAN_LABEL: Record<(typeof PLAN_AGENTS)[number], string> = { codex: "Codex（未绑定执行器）", claude: "Claude Code（未绑定执行器）" };
+
+const planStateFor = (task: TaskRow, profiles: AgentLabelRow[]): Pick<Task, "planMode" | "planScopes"> => {
+  const planScopes = task.mode !== "single" ? [] : PLAN_AGENTS.flatMap((agentType) =>
+    Object.values(readCliStateScopes(task.cliState, agentType).scopes).filter((state) => state?.plan === true).map((state) => ({
+      agentType,
+      executorId: state.profileId ?? null,
+      executorLabel: state.profileId
+        ? profiles.find((profile) => profile.id === state.profileId)?.name ?? state.profileId
+        : UNBOUND_PLAN_LABEL[agentType],
+      isTaskOwner: (state.ownerUserId ?? null) === task.ownerUserId,
+    })));
+  return { planMode: planScopes.length > 0, planScopes };
 };
 
 const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
@@ -104,7 +106,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   executorId: r.executorId ?? null,
   model: r.model ?? null,
   reasoningEffort: r.reasoningEffort ?? null,
-  ...codexPlanStateFor(r, profiles),
+  ...planStateFor(r, profiles),
   executorLabel: executorLabelFor(profiles, r.executorId, (r.agentType as AgentType) ?? null),
   autoTitle: r.autoTitle,
   // 读出口归一:老库 JSON 可能还是改名前的 debaterA… 形状,前端永远只见 voiceA…。
@@ -145,10 +147,9 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
   questionHistory: r.questionHistory ? JSON.parse(r.questionHistory) : [],
-  // 只在它绑的那一问还在时下发（shared/src/dispatch-plan.ts `activeDispatchPlan`）。
-  dispatchPlan: activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) }),
   dispatchTarget: parseDispatchTarget(r.dispatchTarget),
-  dispatchSuggestions: publicSuggestions(parseDispatchSuggestions(r.dispatchSuggestions)),
+  // 归一过的（等着的那一批只在它绑的那一问还在时算数、老派活单并进来，server/src/dispatch-suggestion.ts）。
+  dispatchSuggestions: publicSuggestions(readSuggestions(r)),
   dispatchWithdrawals: parseWithdrawnSuggestions(r.dispatchWithdrawals),
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
@@ -339,7 +340,7 @@ export async function createTasks(
   /** 这一批里逐条写的前置（下游可以是这一批里的，前置也可以是已有的任务）。不成立就整批不建。 */
   prerequisites: PrerequisiteEdge[] = [],
   /**
-   * 要跟这批任务同一笔提交的写（派活单：认领那一问、分组、队列，dispatch-plan-launch.ts；串到队尾 / 串成队列：
+   * 要跟这批任务同一笔提交的写（派出挂着的活：认领那几件和等着的那一问、分组、队列，dispatch-suggestion-launch.ts；串到队尾 / 串成队列：
    * queue-membership-guard.ts `joinQueueOnCreate`）。`before` 在插任务之前、`after` 在之后，都在同一个事务里，整笔
    * 排在队列认领链上（见上）；任一步抛错整笔回滚，一条都不留。只能用传进来的事务写，别碰根 `db`，也别再等那条链。
    */
@@ -355,6 +356,7 @@ export async function createTasks(
     const agentType = row.agentType ?? "claude";
     const command = validateCliCommand(agentType, row.body ?? "");
     if (command && row.mode && row.mode !== "single" && !(agentType === "claude" && command.name === "compact")) throw new CliCommandValidationError("原生命令仅支持普通单任务");
+    if (isPlanToggle(agentType, command)) throw new CliCommandValidationError(PLAN_TOGGLE_NOT_A_RUN);
   }
   // Creation defaults belong here so every ordinary path (HTTP single, batch /
   // chain, duet handoff, future clients) gets the same behavior. Explicit

@@ -46,8 +46,8 @@ export const QUEUE_VS_PREREQUISITES =
 // 谁来审：建出来就带审查预约，执行回合正常结束后自动开审（shared/src/review-on-create.ts）。
 // MCP 这一侧**缺省就带**（落成 "default" = 用户在设置里设的默认审查者），关掉只认用户的原话。
 export const REVIEWER_GUIDE =
-  "谁来审：缺省 = 用户设的默认审查者，建出来就带审查预约、完成后自动开审（没设默认就不审）；"
-  + "写审查者名字或 id = 交给那一位；null = 不审查 —— 只有用户明确说「不用审」才传 null，别自己判断「这条不用审」就关掉";
+  "谁来审：缺省 = 用户设的默认审查者（没设就不审），建出来就带审查预约、完成后自动开审；写名字或 id = 交给那一位；"
+  + "null = 不审 —— 只有用户明说「不用审」才传，别自己判断这条不用审";
 // 空白不是一位审查者，也不是「不审」（关掉只认 null）：当参数错退回去，跟 HTTP 那一侧对显式空名的处理一样。
 export const REVIEWER = z.string().trim().min(1, "reviewer 不能是空白；不审查请传 null").nullable().optional().describe(REVIEWER_GUIDE);
 
@@ -59,18 +59,20 @@ export function reviewChoiceOf(reviewer: string | null | undefined): "default" |
 }
 
 // One task spec, reused by batch_create_tasks and create_task_chain.
+// 字段说明不写「覆盖批次默认」：两个工具的批次默认值直接复用这里的字段实例，序列化时折成 `$ref`，
+// 同一段说明只发一遍（覆盖关系由批次默认那一层自己的说明交代）。
 // 注意:不再接受 dependsOn / resumeDependsOn —— 顺序依赖统一走 queue,
 // chain:true 是创建队列的语法糖。要细调队列请用 queue_* 工具。
 export const taskShape = z.object({
   key: z.string().optional().describe("此任务在这一批里的本地标识，同一批的 prerequisites 用它指这条"),
   title: z.string().optional().describe("省略则首次运行时由 agent 自动起名"),
   body: z.string().optional().describe("交给 agent 执行的 prompt / 目标"),
-  agentType: AGENT_TYPE.optional().describe("覆盖批次默认 agent"),
-  executorId: z.string().nullable().optional().describe("覆盖批次默认执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
-  model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省/null=跟随执行器"),
-  reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省/null=跟随执行器"),
+  agentType: AGENT_TYPE.optional().describe("交给哪类 agent"),
+  executorId: z.string().nullable().optional().describe("执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
+  model: z.string().nullable().optional().describe("模型；缺省/null=跟随执行器"),
+  reasoningEffort: z.string().nullable().optional().describe("思考强度；缺省/null=跟随执行器"),
   useWorktree: z.boolean().optional().describe("是否在独立 worktree 中运行；缺省跟随全局默认，非 git 项目始终为 false"),
-  worktreeBase: z.string().nullable().optional().describe("开工起点：本地分支、远端分支（如 origin/foo）、tag 或提交；可选父任务分支，服务端冻结该提交并记录验收依赖。远端分支建任务前先 fetch，没给合入分支时合进本地同名分支（本地没有就建跟踪分支）。解析不出提交直接报错"),
+  worktreeBase: z.string().nullable().optional().describe("开工起点：本地/远端分支（如 origin/foo）、tag、提交，或父任务分支（另记验收依赖）；服务端冻结成提交，解析不出直接报错。远端的建任务前先 fetch，没给合入分支就合进本地同名分支（没有就建跟踪分支）"),
   mergeTargetBranch: z.string().nullable().optional().describe("最终合入分支；派生任务默认继承父任务的最终目标，独立于开工起点"),
   workflowMode: WORKFLOW_MODE.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
@@ -78,24 +80,21 @@ export const taskShape = z.object({
   reviewer: REVIEWER,
 });
 
-// 派活单上的一条（propose_dispatch）：建任务那几个参数照旧（去掉 workflowMode —— 一律自由工作流），
-// 标题、完整说明、一句备注必填：卡上一行就是标题和备注，建出来的任务正文就是 body。
-export const planTaskShape = taskShape.omit({ workflowMode: true }).extend({
-  title: z.string().min(1).describe("卡上这一行的标题"),
-  body: z.string().min(1).describe("完整说明，建出的任务正文就是它（目标、背景、约束、验收标准）"),
-  note: z.string().max(120).describe("标题下那一行小字：一句话说这条为什么、要注意什么"),
-});
-
-// 可以派出去的活的一件（suggest_dispatch）：只要挂一行、一按就派，所以只留建任务最少的那几样。
+// 要派出去的活的一件（suggest_dispatch）：标题、完整说明、一句为什么必填——框顶一行就是标题和那句话，建出来的
+// 任务正文就是 body；其余照建任务那几个参数（交给谁、谁来审、标签、同批前置），从哪开工只留 trunk / here 两档。
 export const suggestionShape = z.object({
-  title: z.string().min(1),
+  key: taskShape.shape.key,
+  title: z.string().min(1).describe("框顶这一行的标题"),
   body: z.string().min(1).describe("新任务的完整正文：目标、背景、约束、验收标准"),
-  note: z.string().max(120).describe("一句话：为什么该做、为什么不属于本任务"),
+  note: z.string().max(120).describe("一句话：为什么该做、要注意什么"),
   base: z.enum(["trunk", "here"]).optional().describe("trunk=从主分支开工(默认)；here=接着本任务的代码"),
-  agentType: AGENT_TYPE.optional().describe("交给谁；不填=本任务的默认"),
+  agentType: AGENT_TYPE.optional().describe("交给谁；不填=本任务「派出去的活交给谁」的默认"),
   executorId: z.string().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
+  labels: taskShape.shape.labels,
+  prerequisites: taskShape.shape.prerequisites,
+  reviewer: REVIEWER,
 });
 
 // 收回一件挂着的（suggest_dispatch 的 withdraw）：原因原样给用户看，是他知道「它为什么不在了」的唯一去处。

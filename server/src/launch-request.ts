@@ -4,7 +4,7 @@
 // 挂请求的来路：
 //   · 前置没站齐时被要求起跑（点运行、队列 / 分组轮到它、底层起跑闸，prerequisite-gate.ts `recordRequest`）；
 //   · 「运行分组」：这一刻该起的成员各挂一笔（scheduler.ts runGroup）—— 团队派执行者、恢复分组都走它；
-//   · 派活单派出：跟建任务同一笔事务挂上（dispatch-plan-launch.ts）；
+//   · 派出挂在回复框顶上的活：跟建任务同一笔事务挂上（dispatch-suggestion-launch.ts）；
 //   · 「接着跑」兑现不在队列里的欠账（dispatch-hold.ts）。
 // 队列推进不走这里：它按位置一个接一个起，不占名额，自己有一份持久的推进意图（scheduler.ts advanceQueue）。
 //
@@ -54,7 +54,7 @@ export function setLaunchRetryBase(ms: number): void {
 
 /**
  * 给这几条任务挂上开工请求（已经挂着的不动它的时刻和来由）。重新被要求一次就是新的一代：换代号、清掉上一轮
- * 「起不来」的退避和没写完的交代。`writer` 传事务就跟调用方那一笔一起提交（派活单、接着跑）。
+ * 「起不来」的退避和没写完的交代。`writer` 传事务就跟调用方那一笔一起提交（派出挂着的活、接着跑）。
  */
 export async function requestLaunch(taskIds: string[], request: { source: LaunchSource | "hold"; actingUserId?: string | null }, writer: Writer = db): Promise<void> {
   if (!taskIds.length) return;

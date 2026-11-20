@@ -76,7 +76,7 @@ export async function resolveCreateReviews(rows: Candidate[], reader: Reader = d
 }
 
 /**
- * 摆单那一刻就把指定的那位核一遍、名字换成 id（派活单：智能体按名字指了一位，卡上要画得出是谁）。找不到当场
+ * 摆单那一刻就把指定的那位核一遍、名字换成 id（挂在回复框顶上的活：智能体按名字指了一位，那一行要画得出是谁）。找不到当场
  * 退回给智能体（`ReviewOnCreateError`），不等用户按「派出去」才失败。默认、不审原样交回。
  */
 export async function pinReviewChoice(choice: CreateReviewChoice | undefined, owner: string | null): Promise<CreateReviewChoice | undefined> {

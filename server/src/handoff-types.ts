@@ -289,6 +289,9 @@ export interface HandoffManifest {
     // 一件都没有）是两回事，落法见 handoff-suggestions.ts。
     dispatchSuggestions?: string | null;
     dispatchWithdrawals?: string | null;
+    // 等着用户过目的那一批里已经处理掉的那几件（派出去的带着建好的任务号）：处理完时交给智能体的清单要靠它。
+    // 不混进 dispatchSuggestions：老版本对端认不出了结记录，会把它们当成还挂着的再画一遍；单开一个键，老版本不认识就丢。
+    dispatchSettled?: string | null;
     // 统一验收合并的落账三件套。老版本导出的 manifest 没有这三个字段,导入侧按缺失
     // 处理(置 null),所以新旧两端可以互相接力。
     // 不带 acceptedTailPending/acceptedTailDone:那两列是**尾段崩溃续跑**的进度位,

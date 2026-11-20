@@ -198,7 +198,7 @@ export class CardActions {
       if (!row || row.msgType !== "interactive") return false;
       if (ack.envelopeId && await isConcluding(ack.envelopeId)) return false;
       if (ack.delivered && row.content === JSON.stringify(ack.card)) {
-        await db.update(imOutbox).set({ patchState: "done", nextAt: null, updatedAt: now() })
+        await db.update(imOutbox).set({ patchState: "done", linkDue: null, nextAt: null, updatedAt: now() })
           .where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, "acking"), eq(imOutbox.content, row.content)));
         return false;
       }

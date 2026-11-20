@@ -11,6 +11,7 @@
 //   ⑤ 清除凭证必须经过确认框：点「清除」只开框、不发请求；取消不发；确认才发 DELETE。
 //   ⑥ 群：已绑的群列出来；被群认领的码显示群名和目标项目，确认走真人凭据后进列表；
 //      新生成的群码显示明文；解绑同样先过确认框。
+//   ⑦ 服务端说存着的深链地址打不开（只听本机）：就写在地址框下面；改了还没存就不再拿它说新地址。
 //   真人专属动作每一下都带页面凭据，且用的是上一个响应轮换下来的那一份。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -187,8 +188,20 @@ try {
     await page.close();
   }
 
+  // ⑦ 深链地址打不开的说明
+  {
+    const page = await open("scenario=connected&linkWarning=1");
+    const field = page.locator(".feishu-inline-field").filter({ hasText: "卡片深链地址" });
+    await field.getByText(/只允许本机访问，手机和别的电脑打不开这个地址/).waitFor();
+    assert.equal(await field.locator("small.feishu-field-error").count(), 1, "打不开要按出错的样子写");
+    await page.getByLabel("卡片深链地址", { exact: true }).fill("https://other.tailnet.ts.net:4317");
+    await field.getByText(/填 Tailscale 等手机能打开的地址/).waitFor();
+    assert.equal(await field.getByText(/只允许本机访问/).count(), 0, "没存的新地址不拿旧地址的判断说");
+    await page.close();
+  }
+
   assert.deepEqual(errors, []);
-  console.log("feishu settings: unconfigured → save → connected, quota levels, binding none→code→pending→bound (stale poll dropped), refresh-lost code, clear via confirm dialog, group claim/confirm/code/unbind verified");
+  console.log("feishu settings: unconfigured → save → connected, quota levels, binding none→code→pending→bound (stale poll dropped), refresh-lost code, clear via confirm dialog, group claim/confirm/code/unbind, unreachable deep-link note verified");
 } finally {
   await browser?.close();
   await web.close();
