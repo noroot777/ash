@@ -6,6 +6,7 @@ import { getGitOverview } from "../git-overview.js";
 import { readScmStatus } from "../git-status.js";
 import { checkoutProjectBranch } from "../git-project-ops.js";
 import { ensureWorktreesIgnored, repoKey } from "../git.js";
+import { createTrackingBranch, removeCreatedBranch } from "../git-remote-branch.js";
 import {
   commitOid,
   exactRef,
@@ -39,16 +40,15 @@ export async function runRefAction(
         await git(root, action.checkout ? ["switch", "-c", action.name, target] : ["branch", "--", action.name, target]);
         return true;
       }
-      // 建分支、设 upstream、切过去是三步：先建、设好 upstream 再切，哪一步失败就把刚建的分支收回，
-      // 不留下「报了错却已经切到新分支」的半截状态。upstream 用完整引用，短名会被同名 tag 抢先解析。
-      await git(root, ["branch", "--", action.name, target]);
-      try {
-        await git(root, ["branch", `--set-upstream-to=refs/remotes/${action.track}`, "--", action.name]);
-        if (action.checkout) await git(root, ["switch", action.name]);
-      } catch (error) {
-        if ((await commitOid(root, `refs/heads/${action.name}`).catch(() => null)) === target)
-          await git(root, ["branch", "-D", "--", action.name]).catch(() => {});
-        throw error;
+      // 先建好带 upstream 的分支（两步各自可收回，createTrackingBranch），再切过去；切不过去也收回，
+      // 不留下「报了错却多了一条分支」的半截状态。
+      const run = (args: string[]) => git(root, args);
+      await createTrackingBranch(run, action.name, target, `refs/remotes/${action.track}`);
+      if (action.checkout) {
+        await git(root, ["switch", action.name]).catch(async (error: unknown) => {
+          await removeCreatedBranch(run, action.name, target);
+          throw error;
+        });
       }
       return true;
     }

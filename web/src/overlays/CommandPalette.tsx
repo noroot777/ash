@@ -116,6 +116,9 @@ export function CommandPalette({
   const [scope, setScope] = useState<SearchScope | null>(null);
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [gitProjectId, setGitProjectId] = useState<string | null>(null);
+  // 读回来的概览只落在发起它时那个项目上：途中切了项目，迟到的结果作废（初读与远端刷新同一道闸）。
+  const gitProjectRef = useRef<string | null>(null);
+  gitProjectRef.current = gitProjectId;
   const [gitOverview, setGitOverview] = useState<GitOverview | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [gitError, setGitError] = useState<string | null>(null);
@@ -351,10 +354,11 @@ export function CommandPalette({
     setGitError(null);
     setGitLoading(true);
     resetActive();
+    gitProjectRef.current = projectId;
     void api.projectGitOverview(projectId)
-      .then(setGitOverview)
-      .catch((error: unknown) => setGitError(error instanceof Error ? error.message : String(error)))
-      .finally(() => setGitLoading(false));
+      .then((next) => { if (gitProjectRef.current === projectId) setGitOverview(next); })
+      .catch((error: unknown) => { if (gitProjectRef.current === projectId) setGitError(error instanceof Error ? error.message : String(error)); })
+      .finally(() => { if (gitProjectRef.current === projectId) setGitLoading(false); });
   };
   const chooseSlashCommand = (command: SlashCommand | undefined) => {
     if (!command) return;
@@ -475,7 +479,7 @@ export function CommandPalette({
           <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><GitProjectStep projects={projects} active={active} onChoose={loadGitOverview} /></div>
         )}
         {step === "git-overview" && <GitOverviewPanel project={gitProject} overview={gitOverview} loading={gitLoading} error={gitError}
-          onOverview={(projectId, next) => { if (projectId === gitProjectId) setGitOverview(next); }} />}
+          onOverview={(projectId, next) => { if (projectId === gitProjectRef.current) setGitOverview(next); }} />}
 
         {step === "search" && slashMode && (
           <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto p-1">

@@ -4,7 +4,7 @@ import type { BranchDependency } from "@navi/shared/branch-plan";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
 import { expandHome, gitError, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
-import { remoteBranchOf } from "./git-remote-branch.js";
+import { createTrackingBranch, remoteBranchOf, removeCreatedBranch, type GitRun } from "./git-remote-branch.js";
 import { fetchRemoteBranch } from "./git-project-ops.js";
 import { ScmOperationError } from "./scm-paths.js";
 import { execFileText as exec } from "./exec.js";
@@ -151,7 +151,8 @@ async function planBranch(row: typeof tasks.$inferInsert & { id: string }, repo:
     // 远端分支合不进去：成果合进本地同名分支，本地没有就照远端建一条跟踪分支。
     target = remote.branch;
     if (!(await localBranchExists(repo, target))) {
-      await exec("git", ["-C", expandHome(repo), "branch", "--track", "--end-of-options", target, remote.fullRef]).catch((error: unknown) => {
+      // 建分支与写 upstream 分两步、第二步失败自己收回（createTrackingBranch）；成了才登记，后面的步骤失败由下面收回。
+      await createTrackingBranch(gitIn(repo), target, start, remote.fullRef).catch((error: unknown) => {
         throw rejectPlan(409, `按远端分支 ${remote.ref} 建本地分支 ${target} 失败：${gitError(error)}`);
       });
       effects.trackingBranch = { name: target, commit: start };
@@ -172,13 +173,13 @@ async function planBranch(row: typeof tasks.$inferInsert & { id: string }, repo:
   effects.frozenRef = { ref: baseRef(row.id), commit: start };
 }
 
+const gitIn = (repo: string): GitRun => async (args) => (await exec("git", ["-C", expandHome(repo), ...args])).stdout;
+
 /** 收回分支计划留下的东西（半路失败、落库失败两条路）。已经被动过的就不碰。 */
 export async function undoBranchPlanSideEffects(repo: string, effects: BranchPlanSideEffects): Promise<void> {
-  const git = (...args: string[]) => exec("git", ["-C", expandHome(repo), ...args]).catch(() => {});
-  if (effects.frozenRef) await git("update-ref", "-d", effects.frozenRef.ref, effects.frozenRef.commit);
-  const tracking = effects.trackingBranch;
-  if (!tracking || await commitAt(repo, `refs/heads/${tracking.name}`) !== tracking.commit) return;
-  await git("branch", "-D", "--end-of-options", tracking.name);
+  const run = gitIn(repo);
+  if (effects.frozenRef) await run(["update-ref", "-d", effects.frozenRef.ref, effects.frozenRef.commit]).catch(() => {});
+  if (effects.trackingBranch) await removeCreatedBranch(run, effects.trackingBranch.name, effects.trackingBranch.commit);
 }
 
 const SETTLED_ON_CREATE = new Set(["done", "failed", "canceled"]);

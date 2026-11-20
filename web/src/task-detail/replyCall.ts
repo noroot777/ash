@@ -199,6 +199,18 @@ export function dispatchBaseChoices(
   return [...(local.length ? local : [fallback]).map((option) => ({ ...option, group: "本地" })), ...remote];
 }
 
+/**
+ * 派出去时「从哪开工」落到哪一项。缺省的「这里 / 主干」不在候选里时取第一项（那是还没挑过）；明确挑了某条
+ * 远端分支、刷新后它不在了（远端删了、`fetch --prune` 收掉了）却不能顶成第一项 —— 那会从另一条分支悄悄开工。
+ * 这时给 `stale`（那条分支的名字），显示和派出都认它：段上照写原来那项、派出拦住，等人重选。
+ */
+export function resolveDispatchBase(options: BaseOption[], base: DispatchBase | undefined): { option: BaseOption | null; stale: string | null } {
+  const chosen = options.find((option) => option.id === base);
+  if (chosen) return { option: chosen, stale: null };
+  if (base?.startsWith("remote:")) return { option: null, stale: base.slice("remote:".length) };
+  return { option: options[0] ?? null, stale: null };
+}
+
 // —— `/派`、`/讨论`：叫上次那个人，停在「派出去」/「讨论」 ——
 export const DISPATCH_COMMAND = "/派";
 export const DISCUSS_COMMAND = "/讨论";

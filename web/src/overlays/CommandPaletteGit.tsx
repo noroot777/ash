@@ -65,8 +65,12 @@ function RemoteRefresh({ projectId, onOverview }: { projectId: string; onOvervie
     const ok = await git.run("fetch", () => api.projectGitFetch(projectId));
     if (current.current !== projectId) return;
     if (!ok) { setError(readProjectGitRun(projectId).error ?? "刷新远端分支失败"); return; }
-    setError(null);
-    await api.projectGitOverview(projectId).then((next) => onOverview(projectId, next), () => {});
+    await api.projectGitOverview(projectId).then(
+      (next) => { if (current.current === projectId) { setError(null); onOverview(projectId, next); } },
+      (reason: unknown) => {
+        if (current.current === projectId) setError(`远端已经拉到，但重读失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      },
+    );
   };
   const fetching = git.busy === "fetch";
   return (

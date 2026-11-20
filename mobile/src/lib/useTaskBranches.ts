@@ -10,7 +10,7 @@ export function useTaskBranches(projectId: string | null, enabled: boolean) {
   const [selection, setSelection] = useState({ projectId, base: "" });
   const [refs, setRefs] = useState<Refs | null>(null);
   const [fetching, setFetching] = useState<{ projectId: string; request: number; error: string | null } | null>(null);
-  const reload = useRef<{ projectId: string | null; run: () => void }>({ projectId: null, run: () => {} });
+  const reload = useRef<{ projectId: string | null; run: () => Promise<void> }>({ projectId: null, run: async () => {} });
   const fetchRequest = useRef(0);
 
   useEffect(() => {
@@ -21,20 +21,20 @@ export function useTaskBranches(projectId: string | null, enabled: boolean) {
     if (!enabled || !projectId) return;
     let alive = true;
     let sequence = 0;
-    const refresh = () => {
+    // 后台那几趟（进页面、回到前台）读不到就安静地留着旧清单；刷新远端那一趟要知道成没成（见下）。
+    const refresh = async () => {
       const request = ++sequence;
-      api.projectBranches(projectId).then(({ branches, remoteBranches, remotes }) => {
-        if (alive && request === sequence) setRefs({ projectId, branches, remoteBranches: remoteBranches ?? [], remotes: remotes ?? [] });
-      }).catch(() => {});
+      const { branches, remoteBranches, remotes } = await api.projectBranches(projectId);
+      if (alive && request === sequence) setRefs({ projectId, branches, remoteBranches: remoteBranches ?? [], remotes: remotes ?? [] });
     };
     reload.current = { projectId, run: refresh };
-    refresh();
+    refresh().catch(() => {});
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") refresh();
+      if (state === "active") refresh().catch(() => {});
     });
     return () => {
       alive = false;
-      reload.current = { projectId: null, run: () => {} };
+      reload.current = { projectId: null, run: async () => {} };
       subscription.remove();
     };
   }, [projectId, enabled]));
@@ -54,12 +54,14 @@ export function useTaskBranches(projectId: string | null, enabled: boolean) {
         const request = ++fetchRequest.current;
         const settle = (error: string | null) => setFetching((now) => (now?.request === request ? (error === null ? null : { ...now, error }) : now));
         setFetching({ projectId, request, error: null });
+        const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+        // 拉取和重读算一趟：重读完才结束等待，重读失败也说出来（旧清单留着）。
         api.projectGitFetch(projectId).then(
-          () => {
-            settle(null);
-            if (reload.current.projectId === projectId) reload.current.run();
-          },
-          (error: unknown) => settle(error instanceof Error ? error.message : String(error)),
+          () => (reload.current.projectId === projectId ? reload.current.run() : Promise.resolve()).then(
+            () => settle(null),
+            (error: unknown) => settle(`远端已经拉到，但重读分支清单失败：${message(error)}`),
+          ),
+          (error: unknown) => settle(message(error)),
         );
       }
       : null,

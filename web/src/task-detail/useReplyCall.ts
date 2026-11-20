@@ -165,9 +165,10 @@ export function useDispatchBaseContext(projectId: string, active: boolean): Disp
   const refresh = useCallback(() => {
     void git.run("fetch", () => api.projectGitFetch(projectId)).then(async (ok) => {
       if (!ok) { setFetchError({ projectId, error: readProjectGitRun(projectId).error ?? "刷新远端分支失败" }); return; }
-      setFetchError(null);
+      // 拉到了、重读清单却没成：旧清单留着，但得说出来，不能当刷新成功。
       const next = await load();
-      if (next.value) setLoaded(next);
+      if (next.value) { setFetchError(null); setLoaded(next); }
+      else setFetchError({ projectId, error: `远端已经拉到，但重读分支清单失败：${next.error}` });
     });
   }, [git, projectId, load]);
   const remotes = key?.value?.remotes?.length

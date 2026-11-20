@@ -71,3 +71,39 @@ export async function listRemoteBranches(repoPath: string, known?: readonly stri
     return parsed ? [parsed] : [];
   });
 }
+
+/** 跑一条 git 子命令（不带 `-C`，调用方自己绑仓库），返回 stdout。 */
+export type GitRun = (args: string[]) => Promise<string>;
+
+/**
+ * 建一条跟踪远端分支的本地分支。
+ *
+ * `git branch --track` 一条命令里先建引用、再写 upstream 配置：配置写不进去（`.git/config` 被别的 git 进程
+ * 锁着、没有写权限）时引用已经留下，命令却报错——拿「命令成没成」判断有没有东西要收回，就会漏掉这条分支。
+ * 所以拆成两步：先建引用（单个 ref，要么有要么没有），再写 upstream；第二步失败就把刚建的分支收回。
+ * upstream 用完整引用，短名会被同名 tag 抢先解析。
+ *
+ * 成功之后的步骤（切过去、写冻结 ref、落库）失败时，调用方用 {@link removeCreatedBranch} 收回。
+ */
+export async function createTrackingBranch(run: GitRun, name: string, start: string, remoteFullRef: string): Promise<void> {
+  await run(["branch", "--no-track", "--end-of-options", name, start]);
+  try {
+    await run(["branch", `--set-upstream-to=${remoteFullRef}`, "--", name]);
+  } catch (error) {
+    await removeCreatedBranch(run, name, start);
+    throw error;
+  }
+}
+
+/**
+ * 收回自己刚建的分支：只在它还停在建出来那个提交上时删（比较并删除是 git 一步做的，删不掉说明有人动过，
+ * 就留着），连带它的 upstream 配置。
+ */
+export async function removeCreatedBranch(run: GitRun, name: string, start: string): Promise<void> {
+  try {
+    await run(["update-ref", "-d", `refs/heads/${name}`, start]);
+  } catch {
+    return;
+  }
+  await run(["config", "--remove-section", `branch.${name}`]).catch(() => {});
+}

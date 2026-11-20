@@ -162,6 +162,22 @@ try {
   assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/rollback-remote"), "the tracking branch made before the failure is removed");
   console.log("✓ a failure after the tracking branch is made rolls it back inside the branch plan");
 
+  // 写 upstream 配置时 `.git/config` 被别的 git 进程锁着：建分支那一步已经成了、写配置失败，那条分支也收回。
+  git(peer, "checkout", "-b", "config-locked", "main");
+  commit(peer, "config-locked.txt");
+  git(peer, "push", "-u", "origin", "config-locked");
+  const lockedBefore = (await db.select().from(tasks)).length;
+  writeFileSync(join(repo, ".git", "config.lock"), "");
+  try {
+    const locked = await post({ worktreeBase: "refs/remotes/origin/config-locked" });
+    assert.equal(locked.status, 409, await locked.clone().text());
+  } finally {
+    rmSync(join(repo, ".git", "config.lock"), { force: true });
+  }
+  assert.equal((await db.select().from(tasks)).length, lockedBefore);
+  assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/config-locked"), "the branch made before the config write failed is removed");
+  console.log("✓ a tracking branch whose upstream config cannot be written is removed, not left behind");
+
   // 空仓库里写错的显式起点也当场拒绝；没指定起点的照旧惰性创建。
   const empty = join(root, "empty");
   execFileSync("git", ["init", "-b", "main", empty], { stdio: "ignore" });
