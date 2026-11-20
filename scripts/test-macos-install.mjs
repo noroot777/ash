@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stopIdleServers } from "../desktop/macos/scripts/stop-idle-server.mjs";
-import { isPidAlive, sleep } from "./platform.mjs";
+import { isPidAlive, localGet, sleep } from "./platform.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { spawnTestFixture } from "./test-process-scope.mjs";
 import { withTestResources } from "./test-process-resources.mjs";
@@ -30,6 +30,9 @@ if (process.platform !== "darwin") {
       const config = join(temporary, "config.json");
       const requests = join(temporary, "requests.json");
       const opened = join(temporary, "opened.txt");
+      const selfResult = join(temporary, "self-install.json");
+      const selfOutput = join(temporary, "self-install.log");
+      const grandchildReady = join(temporary, "grandchild.json");
       const mocks = join(temporary, "bin");
       mkdirSync(mocks);
       writeFileSync(join(mocks, "open"), '#!/bin/bash\nprintf "%s\\n" "$1" >> "$NAVI_TEST_OPEN_LOG"\n');
@@ -51,7 +54,8 @@ if (process.platform !== "darwin") {
       const entry = join(runtime, "server/dist/index.mjs");
       writeFileSync(entry, `
 import { createServer } from "node:http";
-import { readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { holdCodeLock } from "../../shared/src/code-lock.ts";
 const configPath = ${JSON.stringify(config)};
 const dataDir = ${JSON.stringify(data)};
@@ -59,18 +63,43 @@ const codeDir = ${JSON.stringify(runtime)};
 const overrides = JSON.parse(process.env.NAVI_INSTALL_FIXTURE_OPTIONS || "{}");
 const initial = { ...JSON.parse(readFileSync(configPath, "utf8")), ...overrides };
 if (!initial.legacy) holdCodeLock();
+const dependents = [];
+const terminalEntry = ${JSON.stringify(join(temporary, "terminal-child.mjs"))};
+function startTerminal(kind) {
+  writeFileSync(terminalEntry, kind === "nested"
+    ? 'import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs"; const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); writeFileSync(' + ${JSON.stringify(JSON.stringify(grandchildReady))} + ', JSON.stringify({ pid: child.pid })); setInterval(() => {}, 1000);'
+    : 'setInterval(() => {}, 1000);');
+  const child = spawn(process.execPath, [terminalEntry], { cwd: ${JSON.stringify(temporary)}, stdio: "ignore" });
+  dependents.push(child);
+  return child;
+}
+const terminal = initial.terminalChild ? startTerminal(initial.terminalChild) : null;
+process.once("exit", () => { for (const child of dependents) { try { child.kill("SIGKILL"); } catch {} } });
+if (initial.terminalChild || initial.selfInstall || initial.lateTerminal) process.on("SIGTERM", () => process.exit(0));
 let healthReads = 0;
 let impactReads = 0;
 const server = createServer((req, res) => {
   const options = { ...JSON.parse(readFileSync(configPath, "utf8")), ...overrides };
   res.setHeader("content-type", "application/json");
-  if (req.url === "/api/health") {
+  if (req.url === "/install-from-terminal" && initial.selfInstall) {
+    const output = openSync(${JSON.stringify(selfOutput)}, "w");
+    const child = spawn("/bin/bash", [${JSON.stringify(install)}, ${JSON.stringify(newApp)}, ${JSON.stringify(apps)}, "--open"], {
+      cwd: ${JSON.stringify(root)}, stdio: ["ignore", output, output],
+      env: { ...process.env, PATH: ${JSON.stringify(mocks)} + ":" + process.env.PATH,
+        NAVI_TEST_OPEN_LOG: ${JSON.stringify(opened)}, NAVI_INSTALL_LOCKS: ${JSON.stringify(join(temporary, "install-locks"))} },
+    });
+    closeSync(output);
+    dependents.push(child);
+    child.once("exit", (code, signal) => writeFileSync(${JSON.stringify(selfResult)}, JSON.stringify({ code, signal })));
+    res.end(JSON.stringify({ pid: child.pid }));
+  } else if (req.url === "/api/health") {
     healthReads++;
     res.end(JSON.stringify({ ok: true, pid: options.wrongPid ? 1 : process.pid,
       instance: { id: options.changedIdentity && healthReads > 1 ? "changed" : "fixture",
         codeDir: options.foreignCode ? dataDir : codeDir, dataDir } }));
   } else if (req.url === "/api/restart-impact") {
     impactReads++;
+    if (options.lateTerminal && impactReads === 2) startTerminal("shell");
     writeFileSync(${JSON.stringify(requests)}, JSON.stringify({ healthReads, impactReads }));
     if (options.timeout) return;
     if (options.auth && req.headers["x-navi-host-token"] !== "fixture-token") res.statusCode = 401;
@@ -85,7 +114,7 @@ if (initial.delayedTerm) process.on("SIGTERM", () => setTimeout(() => process.ex
 server.listen(0, "127.0.0.1", () => {
   const port = server.address().port;
   if (initial.auth) writeFileSync(dataDir + "/navi.db.navi.lock", JSON.stringify({ port, token: "fixture-token" }));
-  writeFileSync(process.env.NAVI_INSTALL_FIXTURE_READY, JSON.stringify({ pid: process.pid, port }));
+  writeFileSync(process.env.NAVI_INSTALL_FIXTURE_READY, JSON.stringify({ pid: process.pid, port, childPid: terminal?.pid }));
 });
 `);
       const waitReady = async (file) => {
@@ -96,7 +125,15 @@ server.listen(0, "127.0.0.1", () => {
       const fixture = spawnTestFixture(process.execPath, [options.alias ? join(alias, "Navi.app/Contents/Resources/app/server/dist/index.mjs") : entry],
         { cwd: temporary, stdio: "ignore", env: { ...process.env, NAVI_INSTALL_FIXTURE_OPTIONS: "{}", NAVI_INSTALL_FIXTURE_READY: ready } });
       fixtures.push(fixture);
-      const { pid } = await waitReady(ready);
+      const { pid, port, childPid } = await waitReady(ready);
+      const runInstallFromServer = async () => {
+        const response = await localGet(port, "/install-from-terminal", 2000);
+        assert.equal(response.status, 200);
+        for (let attempt = 0; attempt < 300 && !existsSync(selfResult); attempt++) await sleep(100);
+        assert.ok(existsSync(selfResult), "the self-hosted installer must finish without killing itself or its server");
+        assert.deepEqual(JSON.parse(readFileSync(selfResult, "utf8")), { code: 1, signal: null });
+        return readFileSync(selfOutput, "utf8");
+      };
       const startOtherServer = async (overrides = {}) => {
         const file = join(temporary, `ready-${fixtures.length}.json`);
         const child = spawnTestFixture(process.execPath, [entry], { cwd: temporary, stdio: "ignore",
@@ -130,7 +167,8 @@ server.listen(0, "127.0.0.1", () => {
         fixtures.push(child);
         return child;
       };
-      await operation({ pid, oldApp, data, runtime, temporary, runInstall, installed, startMcp, requests, opened, startOtherServer, startOtherUser });
+      await operation({ pid, childPid, oldApp, data, runtime, temporary, runInstall, installed, startMcp, requests,
+        opened, startOtherServer, startOtherUser, runInstallFromServer, grandchildReady, apps });
     }, [
       async () => { for (const fixture of fixtures) await fixture.dispose(); },
       () => rmSync(temporary, { recursive: true, force: true }),
@@ -242,4 +280,46 @@ server.listen(0, "127.0.0.1", () => {
     assert.equal(readFileSync(opened, "utf8").trim(), oldApp, "reopen the restored app even after shutdown and failed replacement");
   });
   console.log("✓ failed replacement after shutdown restores and reopens the old app, preserving the install failure status");
+
+  for (const terminalChild of ["shell", "nested"]) {
+    await scenario({ terminalChild, reopen: true }, async ({ pid, childPid, runInstall, installed, oldApp, opened, grandchildReady }) => {
+      if (terminalChild === "nested") {
+        for (let attempt = 0; attempt < 100 && !existsSync(grandchildReady); attempt++) await sleep(50);
+        assert.ok(existsSync(grandchildReady));
+      }
+      const output = await runInstall(1);
+      assert.match(output, /存活后代/);
+      assert.doesNotMatch(output, /停止空闲的 Navi 服务/);
+      assert.ok(isPidAlive(pid));
+      assert.ok(isPidAlive(childPid));
+      if (terminalChild === "nested") assert.ok(isPidAlive(JSON.parse(readFileSync(grandchildReady, "utf8")).pid));
+      assert.equal(installed(), "old");
+      assert.equal(readFileSync(opened, "utf8").trim(), oldApp);
+    });
+  }
+  console.log("✓ terminal children and nested project processes prevent shutdown even with no running tasks");
+
+  for (const overrides of [{ terminalChild: "shell" }, { lateTerminal: true }]) {
+    await scenario({}, async ({ pid, runInstall, installed, startOtherServer }) => {
+      const other = await startOtherServer(overrides);
+      const output = await runInstall(1);
+      assert.match(output, /存活后代/);
+      assert.doesNotMatch(output, /停止空闲的 Navi 服务/);
+      assert.ok(isPidAlive(pid), "a terminal owned by another service must preserve the entire group");
+      assert.ok(isPidAlive(other.pid));
+      assert.equal(installed(), "old");
+    });
+  }
+  console.log("✓ existing and late-created terminals on a later service preserve all services");
+
+  await scenario({ selfInstall: true }, async ({ pid, oldApp, runInstallFromServer, installed, opened, apps }) => {
+    const output = await runInstallFromServer();
+    assert.match(output, /请在 Navi 之外的终端里安装/);
+    assert.doesNotMatch(output, /停止空闲的 Navi 服务/);
+    assert.ok(isPidAlive(pid));
+    assert.equal(installed(), "old");
+    assert.equal(readFileSync(opened, "utf8").trim(), oldApp);
+    assert.deepEqual(readdirSync(apps), ["Navi.app"], "a refused self-hosted install must leave no staging bundle");
+  });
+  console.log("✓ an installer descended from its target server refuses safely, cleans staging and reopens the old app");
 }

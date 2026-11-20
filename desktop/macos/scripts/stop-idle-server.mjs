@@ -33,6 +33,31 @@ async function targetAt(port, pid, runtime) {
   return { port, pid, dataDir, instance: health.instance.id };
 }
 
+function descendants(pid) {
+  const output = execFileSync("/bin/ps", ["-axo", "pid=,ppid=,stat="], { encoding: "utf8" });
+  const rows = output.trim().split("\n").map((line) => {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/);
+    if (!match) throw new Error("无法确认服务的子进程状态，没有停止服务。");
+    return { pid: Number(match[1]), parent: Number(match[2]), state: match[3] };
+  });
+  if (!rows.some((row) => row.pid === pid)) throw new Error(`服务 ${pid} 的进程身份发生变化，没有停止服务。`);
+  const family = new Set([pid]);
+  for (let size = 0; size !== family.size;) {
+    size = family.size;
+    for (const row of rows) if (family.has(row.parent)) family.add(row.pid);
+  }
+  return rows.filter((row) => row.pid !== pid && family.has(row.pid) && !row.state.startsWith("Z"));
+}
+
+function noDependentProcesses(pid, say) {
+  const children = descendants(pid);
+  if (!children.length) return true;
+  say(children.some((child) => child.pid === process.pid)
+    ? `  · 安装器运行在服务 ${pid} 的终端进程树中，请在 Navi 之外的终端里安装；未停止任何服务。`
+    : `  · 服务 ${pid} 还有 ${children.length} 个存活后代（可能是终端或项目进程），未停止任何服务。`);
+  return false;
+}
+
 async function idle(target, runtime, say) {
   const impact = await queryImpact(target.port, lockFileFor(runtime, { NAVI_DATA_DIR: target.dataDir }), { requireOk: true });
   const why = noVerdictReason(impact);
@@ -41,7 +66,7 @@ async function idle(target, runtime, say) {
     return false;
   }
   const tasks = taskGroups.flatMap((group) => impact[group]);
-  if (!tasks.length) return true;
+  if (!tasks.length) return noDependentProcesses(target.pid, say);
   say(`  · 服务 ${target.pid} 还有 ${tasks.length} 个运行或排队中的任务，没有停止。`);
   return false;
 }
@@ -85,6 +110,7 @@ export async function stopIdleServers(bundle, { say = console.log, timeoutMs = 2
     say("  · 占用进程发生变化，未停止任何服务。");
     return;
   }
+  if (candidates.some(({ pid }) => !noDependentProcesses(pid, say))) return;
   for (const { pid } of candidates) {
     say(`  ▶ 停止空闲的 Navi 服务（${pid}）…`);
     try { process.kill(pid, "SIGTERM"); }
