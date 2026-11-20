@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { constants, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,7 +56,17 @@ http.createServer((req, res) => {
   res.setHeader('content-type', 'application/json');
   if (req.url === '/api/health') return res.end(JSON.stringify({ ok: true, pid: process.pid,
     instance: { id: 'runtime-fixture', codeDir, dataDir: ${JSON.stringify(data)}, desktop: true, windowPort: 45555 } }));
-  if (req.url === '/api/restart-impact') return res.end(JSON.stringify(settings().impact));
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/api/restart-impact' && !url.searchParams.has('shutdown')) {
+    const opts = settings();
+    const target = opts.omitPreflight || !url.searchParams.has('protocol') ? undefined
+      : { protocol: Number(url.searchParams.get('protocol')), schema: url.searchParams.get('schema') };
+    const impact = opts.impact;
+    const blocked = [...(impact.runtimeHandover?.blocked ?? []), ...impact.interrupted,
+      ...impact.resumes.map(item => ({ ...item, reason: '调度台当前回合不能无损接管' })),
+      ...(opts.gatewayUnavailable ? [{ id: 'runtime-gateway', title: '稳定通道', reason: '稳定通道暂不可用' }] : [])];
+    return res.end(JSON.stringify({ ...impact, runtimeHandover: impact.runtimeHandover && { ...impact.runtimeHandover, blocked, target } }));
+  }
   if (req.url === '/api/restart-impact?shutdown=1') {
     const opts = settings(); return res.end(JSON.stringify({ ...opts.impact, shutdown: opts.shutdown }));
   }
@@ -148,6 +158,9 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     process.kill(stableMcp.pid, 0);
     assert.equal(realpathSync(readFileSync(beforeMcp, "utf8")), oldRuntime);
     console.log("✓ 固定 MCP 入口跟随新版本，已启动的旧 MCP 保留原运行时");
+    const database = new DatabaseSync(join(data, "navi.db"));
+    database.exec("CREATE TABLE fixture(value TEXT); INSERT INTO fixture VALUES ('before migration')");
+    database.close();
     setOptions({ shutdown: { version: 1, resources: [{ kind: "terminal", id: "external-terminal", label: "external terminal" }] } });
     let service = await start();
     const mcp = spawnTestFixture(join(oldRuntime, "node/bin/node"), [join(oldRuntime, "mcp/dist/index.js")], { cwd: data, stdio: "ignore" });
@@ -167,7 +180,14 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     process.kill(service.pid, 0);
     assert.match(await drive("stale", url()), /WAITING 切换新版服务/);
     process.kill(service.pid, 0);
+    assert.equal(existsSync(requests), false, "known team blockers must never request a lease");
     console.log("✓ 团队回合不阻止 Sparkle 换 app，服务接管延后且不弹强制中断选项");
+
+    setOptions({ impact: empty, gatewayUnavailable: true });
+    assert.match(await drive("stale", url()), /WAITING 切换新版服务/);
+    assert.equal(existsSync(requests), false, "disabled gateway without tasks must remain a side-effect-free wait");
+    process.kill(service.pid, 0);
+    setOptions({});
 
     const lockReady = join(temporary, "legacy-ready");
     const legacy = spawnTestFixture(process.execPath, ["-e", `
@@ -186,22 +206,34 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     await legacy.dispose();
     console.log("✓ 包内 MCP 持锁时列出进程与固定迁移入口，不误停外置服务");
 
-    setOptions({ rejectLease: true });
+    rmSync(requests, { force: true });
+    setOptions({ omitPreflight: true });
     assert.match(await drive("stale", url()), /WAITING/);
+    assert.equal(existsSync(requests), false, "an older service cannot silently acknowledge target-aware preflight");
+    process.kill(service.pid, 0);
+    setOptions({ rejectLease: true });
+    rmSync(requests, { force: true });
+    assert.match(await drive("rejected", url()), /FAILED[\s\S]*RETRY explicit blocked/);
+    const attempts = readFileSync(requests, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(attempts.filter((entry) => !entry.check && !entry.release).length, 2, "only an explicit retry may acquire again after execution refusal");
     process.kill(service.pid, 0);
     setOptions({ expired: true });
-    assert.match(await drive("stale", url()), /WAITING/);
+    assert.match(await drive("stale", url()), /FAILED[\s\S]*重试/);
     process.kill(service.pid, 0);
     console.log("✓ 接管被拒或许可过期时旧服务继续运行");
 
-    const database = new DatabaseSync(join(data, "navi.db"));
-    database.exec("CREATE TABLE fixture(value TEXT); INSERT INTO fixture VALUES ('before migration')");
-    database.close();
-    writeFileSync(join(data, "backups"), "cannot create backups directory");
-    setOptions({});
-    assert.match(await drive("stale", url()), /FAILED[\s\S]*旧服务未停止/);
-    process.kill(service.pid, 0);
-    rmSync(join(data, "backups"));
+    const backups = join(data, "backups");
+    const savedBackups = join(data, "saved-backups");
+    if (existsSync(backups)) renameSync(backups, savedBackups);
+    try {
+      writeFileSync(backups, "cannot create backups directory");
+      setOptions({});
+      assert.match(await drive("stale", url()), /FAILED[\s\S]*旧服务未停止/);
+      process.kill(service.pid, 0);
+    } finally {
+      rmSync(backups, { force: true });
+      if (existsSync(savedBackups)) renameSync(savedBackups, backups);
+    }
     console.log("✓ 备份失败不停止旧服务，也不开始迁移");
 
     setOptions({});

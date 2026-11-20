@@ -162,7 +162,10 @@ api.get("/restart-impact", async (c) => {
     }
   }
   const { restartImpact } = await import("./reattach.js");
-  const impact = await restartImpact();
+  const protocol = c.req.query("protocol");
+  const schema = c.req.query("schema");
+  const impact = await restartImpact(protocol !== undefined || schema !== undefined
+    ? { protocol: Number(protocol), schema } : undefined);
   if (c.req.query("shutdown") !== "1") return c.json(impact);
   const { shutdownResources } = await import("./shutdown-resources.js");
   return c.json({ ...impact, shutdown: await shutdownResources() });

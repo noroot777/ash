@@ -78,6 +78,21 @@ export class RuntimeGatewayController {
   }
 
   close(): void { this.closed = true; clearInterval(this.timer); }
+  async unavailableReason(): Promise<string | undefined> {
+    return this.serial(async () => {
+      try {
+        const expected = this.state;
+        if (!expected) throw new Error(this.warning ?? "通道身份尚未就绪");
+        const current = await gatewayRequest(this.socket, "/status");
+        if (current.protocol !== 1 || current.build !== expected.build) throw new Error("通道协议或版本无法核实");
+        if (current.id !== expected.id || current.port !== expected.port || current.pid !== expected.pid
+          || current.owner !== this.options.owner || !this.owned(current)) throw new Error("通道身份或服务归属无法核实");
+        if (!Number.isInteger(current.active) || current.active < 0) throw new Error("通道请求状态无法核实");
+        if (current.active) throw new Error("仍有请求或响应流在途");
+        return undefined;
+      } catch (error) { return `稳定通道暂不可用：${error instanceof Error ? error.message : String(error)}`; }
+    });
+  }
   pause(): Promise<Gateway> { this.paused = true; return this.control("/pause"); }
   resume(): Promise<Gateway> { this.paused = false; return this.control("/resume"); }
   async idle(): Promise<boolean> {

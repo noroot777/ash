@@ -30,7 +30,7 @@ final class UpdateGate {
     let choices: [Choice]
   }
 
-  enum Phase { case idle, checking, waiting, preparing, prepared }
+  enum Phase { case idle, checking, waiting, blocked, preparing, prepared }
 
   static let shared = UpdateGate()
 
@@ -69,6 +69,7 @@ final class UpdateGate {
   var hasPending: Bool { !proceeds.isEmpty && phase != .preparing && phase != .prepared }
 
   var pendingMenuTitle: String {
+    if phase == .blocked { return "重试切换新版服务…" }
     if case .staleServer = purpose { return "切换新版服务…" }
     return phase == .waiting ? "等任务跑完后安装更新…" : "安装更新…"
   }
@@ -87,12 +88,12 @@ final class UpdateGate {
       evaluate()
       return
     }
-    if phase == .idle { evaluate() }
+    if phase == .idle || phase == .blocked { evaluate() }
   }
 
   /// 菜单里那一项：在等的时候重新问一遍（「现在装」的入口），没装成的时候再试一次。
   func reconsider() {
-    guard hasPending, phase == .waiting || phase == .idle else { return }
+    guard hasPending, phase == .waiting || phase == .idle || phase == .blocked else { return }
     stopPolling()
     evaluate()
   }
@@ -326,10 +327,14 @@ final class UpdateGate {
       self.maintenance = maintenance
       finish(stale: stale)
     case .changed(let why):
-      // 评估完到停服务之间端口上换了人：上一次的结论不算数，从头再评估（会打断就再问）。
       log("没停服务：\(why)。重新评估")
-      releaseHold()
-      if preservingRuntime { startWaiting() } else { evaluate() }
+      if preservingRuntime {
+        stopPolling()
+        phase = .blocked
+        releaseHold()
+        answerQuit(false)
+        report("\(why)。旧服务继续运行，自动切换已暂停；请从菜单重试切换新版服务。")
+      } else { releaseHold(); evaluate() }
     case .failed(let reason):
       fail(reason)
     }
