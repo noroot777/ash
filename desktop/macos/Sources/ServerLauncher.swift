@@ -95,7 +95,23 @@ final class ServerLauncher {
       // 进程一起来就记下 pid：这个启动器等不到它应答（被退掉、超时）也不要紧，之后谁看到它应答
       // 都能认出是它、替它确认（见 settle）。
       ServerRecord.write(pid: Int(pid))
-      return waitReady(pid: pid, timeout: timeout)
+      let outcome = waitReady(pid: pid, timeout: timeout)
+      if case .failed(let startupFailure) = outcome, kill(pid, 0) != 0, errno == ESRCH {
+        do {
+          if try RuntimeRecovery.restoreBeforeAdoption() != nil {
+            switch spawnDetached() {
+            case .failure(let reason): return .failed("已恢复迁移前数据库，但旧服务启动失败：\(reason)")
+            case .success(let previousPID):
+              if let record = ServerRecord.read() {
+                try JSONEncoder().encode(ServerRecord(pid: Int(previousPID), bundleVersion: record.bundleVersion,
+                                                     confirmedAt: record.confirmedAt)).write(to: ServerRecord.url, options: .atomic)
+              }
+              return waitReady(pid: previousPID, timeout: timeout)
+            }
+          }
+        } catch { return .failed("新版启动失败，自动恢复未执行：\(error.localizedDescription)\n\(startupFailure)") }
+      }
+      return outcome
     }
   }
 
@@ -139,6 +155,8 @@ final class ServerLauncher {
       guard NaviHealth.isServing(probe) else { return .occupied(Occupant.otherNavi(instance)) }
       // 不管服务是谁起的、谁先看到它起来，确认都在这一处（窗口、登录项、另一个窗口的重试都经过这里）。
       if NaviConfig.isLocal {
+        RuntimeRecovery.confirmed(instance)
+        RuntimeStore.reclaimAfterConfirmation(instance)
         ServerRecord.confirmServing(pid: instance.pid)
         ServedInstance.observe(instance)
       }
@@ -206,6 +224,8 @@ final class ServerLauncher {
     while Date() < deadline {
       let probe = NaviHealth.probeSync()
       if case .navi(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
+        RuntimeRecovery.confirmed(instance)
+        RuntimeStore.reclaimAfterConfirmation(instance)
         ServerRecord.confirmServing(pid: Int(pid))
         ServedInstance.observe(instance)
         return .ready

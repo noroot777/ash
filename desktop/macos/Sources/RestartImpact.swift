@@ -20,6 +20,8 @@ struct RestartImpact: Decodable {
   let resumes: [Item]
   let interrupted: [Item]
   let mcpDisrupted: [Item]
+  struct Handover: Decodable { let blocked: [Item]; let sessions: [String] }
+  let runtimeHandover: Handover?
 
   /// 同一个任务两类都占时只算一次（interrupted 优先：它说的后果更重）。
   var disrupted: [(title: String, why: String)] {
@@ -99,8 +101,8 @@ enum RestartImpactProbe {
         return
       }
       let disrupted = preservingRuntime
-        ? impact.interrupted.map { (title: $0.title, why: $0.reason ?? "不可接管") }
-          + impact.resumes.map { (title: $0.title, why: "当前团队回合仍由旧服务运行") }
+        ? (impact.runtimeHandover?.blocked.map { (title: $0.title, why: $0.reason ?? "不可接管") }
+          ?? [(title: "旧服务", why: "没有可验证的安全接管能力")])
         : impact.disrupted
       verdict = disrupted.isEmpty ? .clear(target) : .disrupts(target, disrupted)
     }.resume()
@@ -123,7 +125,11 @@ enum RuntimeHandover {
     guard case .ours(let pid) = target,
           case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, instance.pid == pid,
           let codeDir = instance.codeDir, RuntimeStore.contains(codeDir), let id = instance.id else { return nil }
-    return send(instance: id, body: [:])?["lease"] as? String
+    guard let data = try? Data(contentsOf: NaviConfig.runtimeURL.appendingPathComponent(".handover.json")),
+          let compatibility = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let result = send(instance: id, body: compatibility), let lease = result["lease"] as? String else { return nil }
+    guard result["protocol"] as? Int == 1 else { _ = send(instance: id, body: ["release": lease]); return nil }
+    return lease
   }
 
   static func release(_ lease: String) {
@@ -136,9 +142,9 @@ enum RuntimeHandover {
     return send(instance: id, body: ["check": lease])?["valid"] as? Bool == true
   }
 
-  private static func send(instance: String, body: [String: String]) -> [String: Any]? {
+  private static func send(instance: String, body: [String: Any]) -> [String: Any]? {
     guard let token = RestartImpactProbe.hostToken() else { return nil }
-    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/runtime-handover"), timeoutInterval: 8)
+    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/runtime-handover"), timeoutInterval: 45)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "content-type")
     request.setValue(token, forHTTPHeaderField: "x-navi-host-token")

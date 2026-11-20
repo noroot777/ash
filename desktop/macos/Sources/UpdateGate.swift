@@ -264,8 +264,16 @@ final class UpdateGate {
       }
     }
     defer { if let lease { RuntimeHandover.release(lease) } }
+    var previous: String?
     if preservingRuntime {
-      do { _ = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion) }
+      do {
+        guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, let code = instance.codeDir else {
+          throw SQLiteFile.Failure("旧服务身份已改变")
+        }
+        previous = code
+        let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
+        try RuntimeRecovery.record(previous: code, backup: backup)
+      }
       catch {
         maintenance.end()
         return .failed("迁移前备份失败，旧服务未停止：\(error.localizedDescription)")
@@ -283,7 +291,16 @@ final class UpdateGate {
       maintenance.end()
       return .failed(reason)
     case .stopped(let pid):
-      if preservingRuntime { return .done(maintenance) }
+      if preservingRuntime {
+        do {
+          let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
+          if let previous { try RuntimeRecovery.record(previous: previous, backup: backup, finalized: true) }
+          return .done(maintenance)
+        } catch {
+          maintenance.end()
+          return .failed("服务已停止，但迁移前最终快照失败，未启动新版：\(error.localizedDescription)")
+        }
+      }
       logger.notice("服务已下线（进程 \(pid.map(String.init) ?? "本来就不在", privacy: .public)）")
       do {
         let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)

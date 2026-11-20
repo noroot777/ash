@@ -32,6 +32,7 @@ if (process.platform !== "darwin") {
     function makePayload(directory, version) {
       for (const relative of ["node/bin", "scripts", "server/dist", "mcp/dist"]) mkdirSync(join(directory, relative), { recursive: true });
       copyFileSync(process.execPath, join(directory, "node/bin/node"), constants.COPYFILE_FICLONE);
+      copyFileSync(join(root, "desktop/macos/scripts/bundle-users.sh"), join(directory, "../bundle-users.sh"));
       const libraries = join(dirname(process.execPath), "../lib");
       if (existsSync(libraries)) {
         for (const name of readdirSync(libraries).filter((entry) => /^libnode.*\.dylib$/.test(entry))) {
@@ -67,7 +68,7 @@ http.createServer((req, res) => {
       const request = JSON.parse(body); fs.appendFileSync(${JSON.stringify(requests)}, body + '\\n');
       const opts = settings();
       if (!request.check && !request.release && opts.rejectLease) { res.statusCode = 409; return res.end('{}'); }
-      res.end(JSON.stringify(request.check ? { valid: !opts.expired } : request.release ? { released: true } : { lease: 'lease' }));
+      res.end(JSON.stringify(request.check ? { valid: !opts.expired } : request.release ? { released: true } : { lease: 'lease', protocol: 1 }));
     }); return;
   }
   res.statusCode = 404; res.end('{}');
@@ -101,7 +102,7 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
 
     const mac = join(root, "desktop/macos");
     await runTestProcess("swiftc", ["-swift-version", "5",
-      ...["NaviConfig", "NaviHealth", "DataImport", "DatabaseBackup", "LegacyIdentity", "LoginService", "RestartImpact", "ServerControl", "ServerLauncher", "ServerStartLock", "UpdateGate"]
+      ...["NaviConfig", "NaviHealth", "DataImport", "DatabaseBackup", "LegacyIdentity", "LoginService", "RestartImpact", "ServerControl", "ServerLauncher", "ServerStartLock", "UpdateGate", "RuntimeRecovery", "BundleRuntimeUse"]
         .map((name) => join(mac, `Sources/${name}.swift`)),
       join(mac, "Tests/Runtime/main.swift"), "-o", binary], { cwd: root, encoding: "utf8", timeout: 120_000 });
     const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(NAVI|ASH|HARNESS)_/.test(name)));
@@ -113,7 +114,7 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     assert.match(await drive("abort"), /PROCEED[\s\S]*ABANDONED true/);
     console.log("✓ Swift 启动路径使用独立版本，Sparkle 安装及中止不停止旧服务");
 
-    const empty = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [] };
+    const empty = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [], runtimeHandover: { blocked: [], sessions: [] } };
     const survivor = { id: "single", title: "still working", pid: process.pid };
     const setOptions = (value) => writeFileSync(options, JSON.stringify({ impact: { ...empty, survives: [survivor], mcpDisrupted: [survivor] }, ...value }));
     const waitFor = async (predicate) => {

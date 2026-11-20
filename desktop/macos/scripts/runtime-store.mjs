@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 const manifestName = ".runtime.json";
 
@@ -51,6 +52,8 @@ exec "$store/$version/node/bin/node" "$store/$version/mcp/dist/index.js" "$@"
 }
 
 export function sealRuntime(source) {
+  const schema = inventory(source).filter(([path]) => /^server\/dist\/db\/.*\.js$/.test(path));
+  writeFileSync(join(source, ".handover.json"), JSON.stringify({ protocol: 1, schema: identifier(schema) }));
   const entries = inventory(source);
   const manifest = { format: 1, id: identifier(entries), entries };
   writeFileSync(join(source, manifestName), JSON.stringify(manifest));
@@ -58,6 +61,8 @@ export function sealRuntime(source) {
 }
 
 export function verifyRuntime(source, expectedID) {
+  const lock = lstatSync(join(source, ".in-use"));
+  if (!lock.isFile() || lock.size !== 0) throw new Error(`运行时代码锁损坏：${source}`);
   const manifest = JSON.parse(readFileSync(join(source, manifestName), "utf8"));
   if (manifest.format !== 1 || !/^[a-f0-9]{64}$/.test(manifest.id) || (expectedID && manifest.id !== expectedID)
       || identifier(manifest.entries) !== manifest.id || identifier(inventory(source)) !== manifest.id) {
@@ -68,8 +73,57 @@ export function verifyRuntime(source, expectedID) {
 
 export function installRuntime(source, store) {
   const descriptor = process.platform === "darwin" ? openSync(join(source, ".in-use"), constants.O_RDONLY | 0x10) : null;
-  try { return publishRuntime(source, store); }
+  try { return withStoreLock(store, () => publishRuntime(source, store)); }
   finally { if (descriptor !== null) closeSync(descriptor); }
+}
+
+function withStoreLock(store, operation) {
+  mkdirSync(store, { recursive: true, mode: 0o700 });
+  const descriptor = openSync(join(store, ".store.lock"), constants.O_CREAT | constants.O_RDWR | (process.platform === "darwin" ? 0x20 : 0), 0o600);
+  try { return operation(); } finally { closeSync(descriptor); }
+}
+
+export function selectRuntime(source, store) {
+  return withStoreLock(store, () => {
+    const root = realpathSync(source);
+    if (dirname(root) !== realpathSync(store)) throw new Error("运行时不属于本数据根");
+    const manifest = verifyRuntime(root);
+    if (manifest.id !== root.split("/").at(-1)) throw new Error("运行时目录身份不符");
+    activateRuntime(store, manifest.id);
+  });
+}
+
+export function collectRuntimes(store) {
+  if (process.platform !== "darwin") return [];
+  return withStoreLock(store, () => {
+    const pinned = new Set([readlinkSync(join(store, "current"))]);
+    const journal = join(dirname(store), ".mac-runtime-recovery.json");
+    if (existsSync(journal)) {
+      try {
+        const record = JSON.parse(readFileSync(journal, "utf8"));
+        if (typeof record.previous !== "string" || typeof record.next !== "string") return [];
+        for (const path of [record.previous, record.next]) pinned.add(path.split("/").at(-1));
+      } catch { return []; }
+    }
+    const removed = [];
+    for (const id of readdirSync(store).filter((name) => /^[a-f0-9]{64}$/.test(name))) {
+      if (pinned.has(id)) continue;
+      const root = join(store, id);
+      if (lstatSync(root).isSymbolicLink()) continue;
+      let descriptor;
+      try {
+        descriptor = openSync(join(root, ".in-use"), constants.O_RDONLY | constants.O_NONBLOCK | 0x20);
+        verifyRuntime(root, id);
+        const scan = spawnSync("/usr/sbin/lsof", ["-nP", "-w", "-t", "+D", root], { encoding: "utf8" });
+        if (scan.error || ![0, 1].includes(scan.status) || scan.stderr.trim()
+          || scan.stdout.trim().split(/\s+/).some((pid) => pid && Number(pid) !== process.pid)) continue;
+        rmSync(root, { recursive: true });
+        removed.push(id);
+      } catch {}
+      finally { if (descriptor !== undefined) closeSync(descriptor); }
+    }
+    return removed;
+  });
 }
 
 function publishRuntime(source, store) {
@@ -103,6 +157,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const [operation, source, store] = process.argv.slice(2);
     if (operation === "seal" && source) console.log(sealRuntime(source).id);
     else if (operation === "install" && source && store) console.log(installRuntime(source, store));
+    else if (operation === "activate" && source && store) selectRuntime(source, store);
+    else if (operation === "gc" && source) console.log(JSON.stringify(collectRuntimes(source)));
     else throw new Error("usage: runtime-store.mjs seal <runtime> | install <runtime> <store>");
   } catch (error) {
     console.error(error.message);

@@ -68,7 +68,7 @@ enum NaviConfig {
 
   /// 自带的那份 navi（`scripts/bundle-runtime.mjs` 装进来的，布局见那份脚本顶部）。
   static var runtimeURL: URL {
-    RuntimeStore.destination ?? bundledRuntimeURL
+    RuntimeStore.restored ?? RuntimeStore.destination ?? bundledRuntimeURL
   }
   static var bundledRuntimeURL: URL {
     if let raw = env("NAVI_MAC_RUNTIME") { return URL(fileURLWithPath: raw, isDirectory: true) }
@@ -219,6 +219,8 @@ enum DatabaseFile {
 enum RuntimeStore {
   private static let lock = NSLock()
   private static var prepared = false
+  private static var reclaimed = Set<Int>()
+  static var restored: URL?
   static var root: URL { NaviConfig.dataURL.appendingPathComponent(".mac-runtimes", isDirectory: true) }
 
   static func identifier(at url: URL) -> String? {
@@ -268,6 +270,37 @@ enum RuntimeStore {
     prepared = true
   }
 
+  static func activate(_ runtime: URL) throws {
+    guard contains(runtime.path) else { throw SQLiteFile.Failure("恢复运行时身份不符") }
+    let process = Process()
+    process.executableURL = NaviConfig.bundledRuntimeURL.appendingPathComponent("node/bin/node")
+    process.arguments = [NaviConfig.bundledRuntimeURL.appendingPathComponent("scripts/runtime-store.mjs").path,
+                         "activate", runtime.path, root.path]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else { throw SQLiteFile.Failure("恢复运行时校验失败") }
+    restored = runtime
+  }
+
+  static func reclaim() {
+    let process = Process()
+    process.executableURL = NaviConfig.bundledRuntimeURL.appendingPathComponent("node/bin/node")
+    process.arguments = [NaviConfig.bundledRuntimeURL.appendingPathComponent("scripts/runtime-store.mjs").path, "gc", root.path]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    if (try? process.run()) != nil { process.waitUntilExit() }
+  }
+
+  static func reclaimAfterConfirmation(_ instance: NaviInstance) {
+    guard instance.isOurs, let pid = instance.pid, let code = instance.codeDir, contains(code) else { return }
+    lock.lock()
+    let first = reclaimed.insert(pid).inserted
+    lock.unlock()
+    if first { DispatchQueue.global(qos: .utility).async { reclaim() } }
+  }
+
   static func lockForReplacement() throws -> Int32 {
     let file = NaviConfig.bundledRuntimeURL.appendingPathComponent(".in-use")
     let descriptor = open(file.path, O_RDONLY | O_CLOEXEC)
@@ -289,6 +322,8 @@ enum RuntimeStore {
       }
       throw SQLiteFile.Failure("app 内的代码仍被以下进程使用：\(blockers)\n这次未替换 app，也未停止服务。\n\n在「检查 Navi MCP 登记…」中把终端的登记迁到固定外置入口，再重开列出的 CLI 会话：\ncommand = /bin/sh\nargs = [\(root.appendingPathComponent("mcp.sh").path)]\n旧进程退出后再试更新；这条入口以后跟随新版服务，不再占用 app 包。")
     }
+    do { try BundleRuntimeUse.verify() }
+    catch { close(descriptor); throw error }
     return descriptor
   }
 }

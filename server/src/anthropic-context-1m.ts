@@ -6,6 +6,7 @@ import { llmProviders } from "./db/schema.js";
 import { relayApi } from "./llm.js";
 import { bearerToken, errorResponse, responseHeaders, secretsEqual } from "./openai-converter/common.js";
 import { currentListeningPort } from "./listening-port.js";
+import { runtimeGatewayOrigin } from "./runtime-channel-gateway.js";
 import { relayErrorResponse, relayFetch } from "./llm-relay.js";
 import { CONTEXT_1M_SUFFIX, modelUsesContext1m, stripContext1mSuffix } from "@navi/shared/context-1m";
 
@@ -23,7 +24,7 @@ export function withContext1mSuffix(model: string | undefined, configured: reado
 export function anthropicContext1mBaseUrl(providerId: string): string {
   const configured = readEnv(process.env, "NAVI_ANTHROPIC_1M_RELAY_URL")?.trim()
     || readEnv(process.env, "NAVI_PROTOCOL_CONVERTER_URL")?.trim();
-  const origin = (configured || `http://127.0.0.1:${currentListeningPort() ?? 4317}`).replace(/\/+$/, "");
+  const origin = (configured || runtimeGatewayOrigin() || `http://127.0.0.1:${currentListeningPort() ?? 4317}`).replace(/\/+$/, "");
   return `${origin}/api/llm-providers/${encodeURIComponent(providerId)}/context-1m`;
 }
 
