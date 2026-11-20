@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { normalizeDuetConfig } from "@navi/shared/duet";
 import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@navi/shared";
 import { db } from "./db/index.js";
@@ -412,8 +412,11 @@ export async function createTasks(
       // 收在别的任务名下的：跟那棵派活树的整棵归档互斥，归档了的任务名下不再长没归档的（team-admission.ts）。
       // 本身就是归档态落库的（接力导入一条已归档的任务）不算「长出来」。
       const dispatchers = new Set(normalizedRows.flatMap((row) => (row.dispatchedBy && !row.archived ? [row.dispatchedBy] : [])));
-      const origins = normalizedRows.flatMap((row) => row.originTaskId ? [row.originTaskId] : []);
-      const joined = await joinDispatchChain([...new Set([...dispatchers, ...origins])]);
+      const origins = [...new Set(normalizedRows.flatMap((row) => row.originTaskId ? [row.originTaskId] : []))];
+      const duetOrigins = origins.length
+        ? await db.select({ id: tasks.id }).from(tasks).where(and(inArray(tasks.id, origins), eq(tasks.mode, "duet")))
+        : [];
+      const joined = await joinDispatchChain([...new Set([...dispatchers, ...duetOrigins.map((origin) => origin.id)])]);
       try {
         await insertAdmitted();
       } finally {
