@@ -89,6 +89,19 @@ export interface AuthState {
    * 远程配对、转多人、邀请这些入口在界面上都不出现。
    */
   localOnly: boolean;
+  /**
+   * 这台实例真实的资源目录(上传附件、验证证据),给不进来的人是 null。数据根可以在任何地方
+   * (mac 版在 `~/Library/Application Support/…`,NAVI_DATA_DIR 能指到别处),前端凭它判断消息里
+   * 的一条磁盘路径是不是本实例的附件/证据 —— 路径长什么样证明不了它属于谁。这些路径本来就
+   * 写在进得来的人看得到的消息里,答给他们不多暴露什么。
+   */
+  resourceRoots?: ResourceRoots | null;
+}
+
+/** 见 `AuthState.resourceRoots`。`runs` 不止一个:预览实例还挂着一份只读回退目录。 */
+export interface ResourceRoots {
+  uploads: string;
+  runs: string[];
 }
 
 /**
