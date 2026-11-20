@@ -37,3 +37,12 @@ export function taskIdPrefixOfBranch(branch: string): string | null {
   }
   return null;
 }
+
+/** 一条远端分支：`ref` 是 `origin/foo` 这种写法，`branch` 是它在本地对应的同名分支。 */
+export type RemoteBranch = { ref: string; remote: string; branch: string };
+
+/**
+ * 项目的分支清单（新建任务挑开工起点用）。`branches` 只列本地分支，跟老调用方兼容；远端分支另列在
+ * `remoteBranches`，是本地记着的那份（刷新要先 fetch）。
+ */
+export type ProjectBranches = { branches: string[]; remoteBranches: RemoteBranch[]; remotes: string[]; current: string | null };

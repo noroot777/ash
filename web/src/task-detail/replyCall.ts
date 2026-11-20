@@ -1,5 +1,6 @@
 import type { AgentType, DiscussionRounds, Task } from "@navi/shared";
 import type { CreateReviewChoice } from "@navi/shared/review-on-create";
+import type { RemoteBranch } from "@navi/shared/task-branch";
 import { DISCUSSION_ROUND_CHOICES, MAX_DISCUSSION_GUESTS, discussionRoundsOf } from "@navi/shared/discussion";
 import type { DockChoice } from "./ReplyDock.tsx";
 import type { MentionTarget } from "./mentionPicker.ts";
@@ -19,8 +20,8 @@ import { sourceWorktreeBranch } from "./taskDerivation.ts";
 export type CallVerb = "ask" | "discuss" | "dispatch";
 export const CALL_VERBS: readonly CallVerb[] = ["ask", "discuss", "dispatch"];
 
-/** 派出去的新任务从哪开工：接着这条任务的代码 / 从主分支开工。 */
-export type DispatchBase = "here" | "trunk";
+/** 派出去的新任务从哪开工：接着这条任务的代码 / 从主分支开工 / 从某条远端分支开工（`remote:origin/foo`）。 */
+export type DispatchBase = "here" | "trunk" | `remote:${string}`;
 
 /**
  * `target` 是胶囊上那个人；讨论时可以再叫一个（`others`，三方），问一句和派出去只认 `target`，离开讨论就清掉。
@@ -149,8 +150,11 @@ export type BaseContext = {
   current: string | null;
   /** 新任务默认开不开 worktree（projects.useWorktreeDefault）。 */
   worktreeDefault: boolean;
+  /** 本地记着的远端分支；没有就不给「从远端开工」那一组。 */
+  remoteBranches?: RemoteBranch[];
 };
-export type BaseOption = { id: DispatchBase; label: string; worktreeBase: string | null };
+/** `group` 只有远端那一组带（「远端」），段上据此换成下拉。 */
+export type BaseOption = { id: DispatchBase; label: string; worktreeBase: string | null; group?: string };
 
 /**
  * 两种开工起点各落成哪个 `worktreeBase`：
@@ -174,6 +178,22 @@ export function dispatchBaseOptions(
   if (!trunk || !context.branches.includes(trunk)) return source ? [here] : [];
   if (!source && context.current === trunk) return [];
   return [here, { id: "trunk", label: `从 ${trunk} 开工`, worktreeBase: trunk }];
+}
+
+/**
+ * 回复框里派出去时的全部起点：上面那两种，再加本地记着的远端分支（从 `origin/foo` 开工，服务端照它建本地
+ * 跟踪分支当合入目标）。两种落到同一处、上面一种都不给时，有远端分支就补一项「从项目分支开工」当缺省。
+ */
+export function dispatchBaseChoices(
+  task: Pick<Task, "id" | "useWorktree" | "mergeTargetBranch">,
+  context: BaseContext | null,
+): BaseOption[] {
+  const local = dispatchBaseOptions(task, context);
+  if (!context?.isRepo || !context.worktreeDefault || !context.remoteBranches?.length) return local;
+  const remote = context.remoteBranches.map((branch): BaseOption =>
+    ({ id: `remote:${branch.ref}`, label: `从 ${branch.ref} 开工`, worktreeBase: branch.ref, group: "远端" }));
+  const fallback: BaseOption = { id: "trunk", label: `从 ${context.current ?? "项目分支"} 开工`, worktreeBase: null };
+  return [...(local.length ? local : [fallback]), ...remote];
 }
 
 // —— `/派`、`/讨论`：叫上次那个人，停在「派出去」/「讨论」 ——

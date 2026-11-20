@@ -1,0 +1,149 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Hono } from "hono";
+import { eq } from "drizzle-orm";
+import { releaseTmpDb } from "./tmp-db.js";
+
+// 从远端分支开工：建任务前先 fetch 那一条、冻结远端此刻的提交，合入目标落到本地同名分支（没有就照远端建
+// 跟踪分支），验收把成果合进那条本地分支而不是项目当前检出的 main。
+
+const root = mkdtempSync(join(tmpdir(), "navi-remote-branch-start-"));
+process.env.NAVI_DB = join(root, "navi.db");
+process.env.NAVI_RUNS_DIR = join(root, "runs");
+const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+const { db, ensureSchema } = await import("../src/db/index.js");
+const { projects, tasks } = await import("../src/db/schema.js");
+const { mountTaskRoutes } = await import("../src/task-routes.js");
+const { taskWorkspace } = await import("../src/task-workspace.js");
+const { acceptTask } = await import("../src/task-accept.js");
+const { listBranches, resolveTaskMergeTarget, staleBaseFallback } = await import("../src/git.js");
+const { remoteStartNote } = await import("../src/remote-start-notice.js");
+const { undoBranchPlanSideEffects } = await import("../src/task-branch-plan.js");
+await ensureSchema();
+const api = new Hono();
+mountTaskRoutes(api);
+const at = new Date().toISOString();
+const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!;
+const commit = (repo: string, name: string) => {
+  writeFileSync(join(repo, name), name);
+  git(repo, "add", "--", name);
+  git(repo, "commit", "-m", name);
+  return git(repo, "rev-parse", "HEAD");
+};
+const identify = (repo: string) => {
+  git(repo, "config", "user.name", "Remote Test");
+  git(repo, "config", "user.email", "remote@example.test");
+};
+const post = (body: Record<string, unknown>) => api.request("/tasks", { method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ projectId: "remote", title: "远端开工", useWorktree: true, workflowMode: "free", ...body }) });
+async function create(body: Record<string, unknown>) {
+  const response = await post(body);
+  assert.equal(response.status, 201, await response.clone().text());
+  return row((await response.json()).id);
+}
+
+try {
+  // 远端（裸仓库）+ 另一位协作者的克隆：远端分支都从那边推上去。
+  const origin = join(root, "origin.git");
+  execFileSync("git", ["init", "--bare", "-b", "main", origin], { stdio: "ignore" });
+  const repo = join(root, "repo");
+  execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
+  identify(repo);
+  commit(repo, "seed.txt");
+  git(repo, "remote", "add", "origin", origin);
+  git(repo, "push", "-u", "origin", "main");
+  const peer = join(root, "peer");
+  execFileSync("git", ["clone", origin, peer], { stdio: "ignore" });
+  identify(peer);
+  git(peer, "checkout", "-b", "feature-r");
+  const firstPush = commit(peer, "feature-1.txt");
+  git(peer, "push", "-u", "origin", "feature-r");
+  git(repo, "fetch", "origin");
+  git(repo, "remote", "set-head", "origin", "main");
+  await db.insert(projects).values({ id: "remote", name: "remote", repoPath: repo, createdAt: at });
+
+  const listed = await listBranches(repo);
+  assert.deepEqual(listed.branches, ["main"], "local list stays local-only for old callers");
+  assert.deepEqual(listed.remotes, ["origin"]);
+  assert.deepEqual(listed.remoteBranches.map((branch) => branch.ref).sort(), ["origin/feature-r", "origin/main"], "origin/HEAD is not listed");
+  assert.deepEqual(listed.remoteBranches.find((branch) => branch.ref === "origin/feature-r"), { ref: "origin/feature-r", remote: "origin", branch: "feature-r" });
+  console.log("✓ branch list carries remote branches separately and drops the origin/HEAD symref");
+
+  // 本地记着的 origin/feature-r 落后于远端：建任务时得先拉到远端此刻那一版再冻结。
+  const latest = commit(peer, "feature-2.txt");
+  git(peer, "push");
+  assert.equal(git(repo, "rev-parse", "origin/feature-r"), firstPush);
+  const task = await create({ worktreeBase: "origin/feature-r" });
+  assert.equal(task.worktreeStartCommit, latest, "remote base is fetched before the start is frozen");
+  assert.equal(task.worktreeBase, "origin/feature-r");
+  assert.equal(task.worktreeBaseBranch, "origin/feature-r", "the start reads as coming from the remote");
+  assert.equal(task.mergeTargetBranch, "feature-r", "merges into the same-named local branch");
+  assert.equal(git(repo, "rev-parse", "refs/heads/feature-r"), latest, "missing local branch is created from the remote");
+  assert.equal(git(repo, "rev-parse", "--abbrev-ref", "feature-r@{upstream}"), "origin/feature-r", "and tracks it");
+  assert.equal(git(repo, "symbolic-ref", "--short", "HEAD"), "main", "project checkout is untouched");
+  console.log("✓ remote base fetches the latest commit, freezes it, and creates a tracking branch as the merge target");
+
+  const ws = await taskWorkspace(task, repo);
+  assert.equal(git(ws.path, "rev-parse", "HEAD"), latest, "worktree starts from the remote commit");
+  assert.match((await remoteStartNote(task, ws, repo))!, /从远端分支 origin\/feature-r（提交 [0-9a-f]{7}）开工，验收合入本地分支 feature-r/);
+  assert.equal(await remoteStartNote(task, { ...ws, fresh: false }, repo), null, "reused workspaces don't repeat the note");
+  const work = commit(ws.path, "remote-task.txt");
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, task.id));
+  assert.equal((await acceptTask(task.id)).accepted, true);
+  assert.equal(git(repo, "show", "feature-r:remote-task.txt"), "remote-task.txt", "accepted into the local tracking branch");
+  assert.doesNotThrow(() => git(repo, "merge-base", "--is-ancestor", work, "feature-r"));
+  assert.throws(() => git(repo, "show", "main:remote-task.txt"), "never silently merged into the project checkout");
+  console.log("✓ worktree starts from the remote commit and acceptance merges into the local tracking branch, not main");
+
+  // 本地已有同名分支：直接用它当合入目标，不另建。
+  const again = await create({ worktreeBase: "refs/remotes/origin/feature-r" });
+  assert.equal(again.worktreeBase, "origin/feature-r", "refs/remotes/ prefix is normalized");
+  assert.equal(again.mergeTargetBranch, "feature-r");
+  // 显式给了合入分支就照它。
+  const explicit = await create({ worktreeBase: "origin/feature-r", mergeTargetBranch: "main" });
+  assert.equal(explicit.mergeTargetBranch, "main");
+  console.log("✓ an existing local branch is reused as the target and an explicit merge target wins");
+
+  // 从没 fetch 过的远端分支：建任务时拉下来。
+  git(peer, "checkout", "-b", "never-fetched", "main");
+  const fresh = commit(peer, "never-fetched.txt");
+  git(peer, "push", "-u", "origin", "never-fetched");
+  const unfetched = await create({ worktreeBase: "origin/never-fetched" });
+  assert.equal(unfetched.worktreeStartCommit, fresh);
+  assert.equal(unfetched.mergeTargetBranch, "never-fetched");
+  console.log("✓ a remote branch that was never fetched locally is fetched at creation");
+
+  // 远端上没有的分支、根本不存在的起点：建任务当场 400，不留下任务也不留下分支。
+  const before = (await db.select().from(tasks)).length;
+  const missing = await post({ worktreeBase: "origin/no-such-branch" });
+  assert.equal(missing.status, 400);
+  assert.match((await missing.json()).error, /远端 origin 上没有分支 no-such-branch/);
+  const typo = await post({ worktreeBase: "no-such-thing" });
+  assert.equal(typo.status, 400);
+  assert.match((await typo.json()).error, /开工起点 no-such-thing 不存在/);
+  assert.equal((await db.select().from(tasks)).length, before);
+  assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/no-such-branch"));
+  console.log("✓ missing remote branch and unresolvable base are rejected with a clear 400 before anything is created");
+
+  // 起跑时的失效判断与合入目标解析：存在的远端分支不算失效，目标换成本地同名分支。
+  assert.equal(await staleBaseFallback(repo, "origin/feature-r"), undefined, "an existing remote branch is not stale");
+  assert.equal((await staleBaseFallback(repo, "gone-branch"))?.used, "main");
+  assert.equal(await resolveTaskMergeTarget(repo, "origin/feature-r"), "feature-r");
+  assert.equal(await resolveTaskMergeTarget(repo, "main"), "main");
+  console.log("✓ runtime fallback keeps remote bases and the target chain maps origin/x to local x");
+
+  // 落库失败时收回顺手建的跟踪分支；分支已经被动过就不碰。
+  git(repo, "branch", "rollback-me", "main");
+  await undoBranchPlanSideEffects(repo, { trackingBranch: { name: "rollback-me", commit: git(repo, "rev-parse", "main") } });
+  assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/rollback-me"));
+  git(repo, "branch", "moved", "main");
+  await undoBranchPlanSideEffects(repo, { trackingBranch: { name: "moved", commit: firstPush } });
+  assert.ok(git(repo, "rev-parse", "--verify", "refs/heads/moved"), "a branch that moved since creation is kept");
+  console.log("✓ rollback removes the created tracking branch only while it is untouched");
+} finally {
+  await releaseTmpDb();
+  rmSync(root, { recursive: true, force: true });
+}

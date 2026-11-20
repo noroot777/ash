@@ -26,7 +26,7 @@ import { useReplySlash } from "./useReplySlash.ts";
 import { useSuggestionDock } from "./suggestions/useSuggestionDock.tsx";
 import type { AgentModelSelection } from "./mentionPicker.ts";
 import {
-  CALL_COPY, DISCUSS_SLASH_ITEM, DISPATCH_SLASH_ITEM, callCommandVerb, discussPeople, dispatchBaseOptions, parseCallCommand,
+  CALL_COPY, DISCUSS_SLASH_ITEM, DISPATCH_SLASH_ITEM, callCommandVerb, discussPeople, dispatchBaseChoices, parseCallCommand,
   readCallMemory, type CallVerb, type ReplyCall,
 } from "./replyCall.ts";
 import { useDispatchBaseContext, useReplyCall } from "./useReplyCall.ts";
@@ -125,7 +125,7 @@ export function ReplyBox({
   const target = call?.target ?? null;
   const dispatching = call?.verb === "dispatch";
   const baseContext = useDispatchBaseContext(task.projectId, dispatching);
-  const baseOptions = dispatchBaseOptions(task, baseContext.value);
+  const baseOptions = dispatchBaseChoices(task, baseContext.value);
   const worktreeBase = baseOptions.find((option) => option.id === call?.base)?.worktreeBase ?? baseOptions[0]?.worktreeBase ?? null;
   // 谁来审：照胶囊此刻画着的那一位派（按下那一刻就定，不等派出途中缓存再变）；清单没读到时只有「不审查」派得出去。
   const reviewerList = useReviewerList(dispatching);

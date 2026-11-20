@@ -31,10 +31,14 @@ export async function runRefAction(
     case "branch-create": {
       await refName(root, action.name);
       const target = await commitOid(root, action.target);
+      // 跟踪的远端分支要先核对在不在，建出来之后再设 upstream：起点仍按核对过的提交钉住。
+      if (action.track && !(await readRefs(root)).some((r) => r.kind === "remote" && r.name === action.track))
+        fail("远端分支不存在，请先 fetch");
       if (action.checkout) {
         requireClean(await readScmStatus(root));
         await git(root, ["switch", "-c", action.name, target]);
       } else await git(root, ["branch", "--", action.name, target]);
+      if (action.track) await git(root, ["branch", `--set-upstream-to=${action.track}`, "--", action.name]);
       return true;
     }
     case "branch-rename":

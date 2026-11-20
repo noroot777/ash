@@ -156,7 +156,7 @@ export function Branches({
     else if (action === "track")
       ask({
         title: "检出远端分支",
-        message: `从 ${row.name} 建立本地分支并切换过去，之后可设置上游。`,
+        message: `从 ${row.name} 建立跟踪它的本地分支并切换过去。`,
         fields: [
           {
             key: "name",
@@ -170,6 +170,7 @@ export function Branches({
           name: v.name,
           target: row.sha,
           checkout: true,
+          track: row.name,
         }),
       });
   };

@@ -13,7 +13,7 @@ import { withRepoLock } from "./repo-lock.js";
 import { admissionKeysOf, admitMembers, joinDispatchChain, TeamAcceptingError } from "./team-admission.js";
 import { execFileText as exec } from "./exec.js";
 import { expandHome } from "./git.js";
-import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
+import { baseRef, initializeBranchPlan, undoBranchPlanSideEffects, type BranchPlanSideEffects } from "./task-branch-plan.js";
 import { assertPrerequisiteEdges, insertPrerequisiteEdges, withPrerequisiteGraph, type EdgeTask, type PrerequisiteEdge } from "./prerequisite-store.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
@@ -423,10 +423,12 @@ export async function createTasks(
   const insertAdmitted = async (): Promise<void> => {
     await beforeInsert?.();
     const pinned: typeof normalizedRows = [];
+    const sideEffects: { repo: string; effects: BranchPlanSideEffects }[] = [];
     try {
       for (const row of normalizedRows) {
         const hadStart = !!row.worktreeStartCommit;
-        await initializeBranchPlan(row, repoByProject.get(row.projectId) || "");
+        const repo = repoByProject.get(row.projectId) || "";
+        sideEffects.push({ repo, effects: await initializeBranchPlan(row, repo) });
         if (!hadStart && row.worktreeStartCommit) pinned.push(row);
       }
       // 合入目标要等分支计划算出来才判得了（prerequisite-store.ts），所以排在它后面、落库前面。
@@ -450,6 +452,7 @@ export async function createTasks(
       await (prerequisites.length ? withPrerequisiteGraph(land) : land());
     } catch (error) {
       for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
+      for (const { repo, effects } of sideEffects) await undoBranchPlanSideEffects(repo, effects);
       throw error;
     }
   };

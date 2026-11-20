@@ -39,7 +39,7 @@ export function displayCommand(action: GitAction): string {
     case "checkout":
       return `git switch ${name}`;
     case "branch-create":
-      return `git ${action.checkout ? "switch -c" : "branch"} ${name} ${target}`;
+      return `git ${action.checkout ? "switch -c" : "branch"} ${name} ${action.track ? `--track ${quote(action.track)}` : target}`;
     case "branch-rename":
       return `git branch -m ${name} ${quote(action.next)}`;
     case "branch-delete":

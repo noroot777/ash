@@ -68,6 +68,7 @@ export function GitOverviewPanel({
 
   return (
     <div className="grid h-[min(58vh,520px)] min-h-[320px] grid-cols-[38%_62%] divide-x divide-line">
+      <div className="flex min-h-0 min-w-0 flex-col divide-y divide-line">
       <Section title="本地分支" count={overview.branches.length}>
         <div className="space-y-0.5">
           {overview.branches.map((branch) => {
@@ -83,6 +84,19 @@ export function GitOverviewPanel({
           {!overview.branches.length && <p className="px-2.5 py-6 text-center text-xs text-faint">未发现本地分支</p>}
         </div>
       </Section>
+      {overview.remoteBranches?.length > 0 && (
+        <Section title="远端分支" count={overview.remoteBranches.length}>
+          <div className="space-y-0.5">
+            {overview.remoteBranches.map((branch) => (
+              <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "branches", ref: branch.ref }); }} key={branch.ref} className="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2">
+                <GitBranch size={13} className="shrink-0 text-faint" />
+                <span className="min-w-0 truncate font-mono text-xs text-muted">{branch.ref}</span>
+              </button>
+            ))}
+          </div>
+        </Section>
+      )}
+      </div>
 
       <Section title="Worktrees" count={overview.worktrees.length}>
         <div className="space-y-1.5">

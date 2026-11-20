@@ -3,7 +3,10 @@ import { and, eq, sql } from "drizzle-orm";
 import type { BranchDependency } from "@navi/shared/branch-plan";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
-import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
+import { expandHome, gitError, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
+import { remoteBranchOf } from "./git-remote-branch.js";
+import { fetchRemoteBranch } from "./git-project-ops.js";
+import { ScmOperationError } from "./scm-paths.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
 import { FROZEN_GIT_REF_NAMESPACE } from "@navi/shared/legacy-names";
@@ -86,37 +89,83 @@ async function finalTarget(repo: string, row: BranchTask, seen = new Set<string>
     : resolveTaskMergeTarget(repo, oldTarget);
 }
 
+const rejectPlan = (status: 400 | 409, error: string) =>
+  new HTTPException(status, { res: Response.json({ error }, { status }) });
+
+/** 建任务时顺手建出来的本地分支：落库失败要收回去（task-store.ts）。 */
+export type BranchPlanSideEffects = { trackingBranch?: { name: string; commit: string } };
+
 // 起点钉住提交，目标钉住分支。私有 ref 让尚未启动的子任务在父分支清理后仍可开工。
-export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id: string }, repo: string): Promise<void> {
-  if (!row.useWorktree || row.reviewOf || row.worktreeStartCommit || row.stage === "accepted" || row.stage === "merged") return;
+export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id: string }, repo: string): Promise<BranchPlanSideEffects> {
+  if (!row.useWorktree || row.reviewOf || row.worktreeStartCommit || row.stage === "accepted" || row.stage === "merged") return {};
   const explicitTarget = row.mergeTargetBranch?.trim();
   if (explicitTarget && !(await localBranchExists(repo, branchName(explicitTarget)))) {
-    throw new HTTPException(400, { res: Response.json({ error: `最终合入分支 ${explicitTarget} 不存在，请选择本地分支` }, { status: 400 }) });
+    throw rejectPlan(400, `最终合入分支 ${explicitTarget} 不存在，请选择本地分支`);
   }
   let base = row.worktreeBase?.trim() || null;
   let parent: BranchTask | undefined;
   if (!base && row.parentId) {
     const lead = (await db.select().from(tasks).where(eq(tasks.id, row.parentId))).at(0);
     // 团队默认隔离执行者在各自起跑时从共享分支开叉，串行后续执行者能看到领队的新提交。
-    if (lead?.projectId === row.projectId && lead.mode === "team") return;
+    if (lead?.projectId === row.projectId && lead.mode === "team") return {};
   }
   if (base) parent ??= await branchOwner(repo, row.projectId, base);
+  // 从远端分支开工：先把那一条拉到远端此刻的样子再冻结，否则钉住的是本地上次 fetch 时那一版。
+  // 调用方持着仓库锁（task-store.ts），拉取和冻结在同一段里。
+  // 导入的历史任务（落库就是终态）是在别的机器上开的工：不联网、不建分支，起点交给运行时。
+  const settled = SETTLED_ON_CREATE.has(row.status ?? "");
+  const remote = base && !parent && !settled ? await remoteBranchOf(repo, base) : null;
+  if (remote) {
+    base = remote.ref;
+    await fetchRemoteBranch(repo, remote.remote, remote.branch, row.projectId ?? null).catch((error: unknown) => {
+      throw error instanceof ScmOperationError ? rejectPlan(error.status === 400 ? 400 : 409, error.message) : error;
+    });
+  }
   const start = await commitAt(repo, base || "HEAD");
-  // 空仓库和失效基线沿用运行时的惰性准备 / staleBaseFallback；此刻没有可冻结的提交。
-  if (!start) return;
-  const target = row.mergeTargetBranch?.trim()
-    ? branchName(row.mergeTargetBranch)
-    : parent ? await finalTarget(repo, parent) : await resolveTaskMergeTarget(repo, base && await localBranchExists(repo, branchName(base)) ? base : null);
+  if (!start) {
+    // 空仓库还没有可冻结的提交，起点留给运行时的惰性准备；导入的历史任务这边未必有那条分支，
+    // 同样留给运行时的 staleBaseFallback。
+    if (!base || settled || !(await commitAt(repo, "HEAD"))) return {};
+    // 显式指定的起点读不出提交：当场说清楚，不再建出来、等起跑时悄悄换成项目当前分支。
+    throw rejectPlan(400, `开工起点 ${base} 不存在（不是本地分支、远端分支、tag 或提交）。远端分支请先刷新远端分支再选`);
+  }
+  const effects: BranchPlanSideEffects = {};
+  let target: string | null;
+  if (explicitTarget) target = branchName(explicitTarget);
+  else if (parent) target = await finalTarget(repo, parent);
+  else if (remote) {
+    // 远端分支合不进去：成果合进本地同名分支，本地没有就照远端建一条跟踪分支。
+    target = remote.branch;
+    if (!(await localBranchExists(repo, target))) {
+      await exec("git", ["-C", expandHome(repo), "branch", "--track", "--end-of-options", target, remote.ref]).catch((error: unknown) => {
+        throw rejectPlan(409, `按远端分支 ${remote.ref} 建本地分支 ${target} 失败：${gitError(error)}`);
+      });
+      effects.trackingBranch = { name: target, commit: start };
+    }
+  } else {
+    target = await resolveTaskMergeTarget(repo, base && await localBranchExists(repo, branchName(base)) ? base : null);
+  }
   row.worktreeBase = base;
   row.worktreeStartCommit = start;
-  // 起点所在的分支：没指定就是此刻项目检出的那条；指定的是提交号、tag 时记不出分支
-  row.worktreeBaseBranch = base
-    ? await localBranchExists(repo, branchName(base)) ? branchName(base) : null
+  // 起点所在的分支：没指定就是此刻项目检出的那条；远端分支照写 `origin/foo`（看得出来自远端）；
+  // 指定的是提交号、tag 时记不出分支
+  row.worktreeBaseBranch = remote ? remote.ref
+    : base ? await localBranchExists(repo, branchName(base)) ? branchName(base) : null
     : await symbolicBranch(repo);
   row.mergeTargetBranch = target;
   row.baseTaskId = parent?.id ?? null;
   await exec("git", ["-C", expandHome(repo), "update-ref", baseRef(row.id), start, ""]);
+  return effects;
 }
+
+/** 收回建任务时顺手建的跟踪分支（落库失败那条路）。分支已经动过就不碰。 */
+export async function undoBranchPlanSideEffects(repo: string, effects: BranchPlanSideEffects): Promise<void> {
+  const tracking = effects.trackingBranch;
+  if (!tracking || await commitAt(repo, `refs/heads/${tracking.name}`) !== tracking.commit) return;
+  await exec("git", ["-C", expandHome(repo), "branch", "-D", "--end-of-options", tracking.name]).catch(() => {});
+}
+
+const SETTLED_ON_CREATE = new Set(["done", "failed", "canceled"]);
 
 export type { BranchDependency } from "@navi/shared/branch-plan";
 

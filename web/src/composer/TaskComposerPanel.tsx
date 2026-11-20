@@ -128,7 +128,7 @@ export function TaskComposerPanel({
   // 它什么时候刷新不归这里管，弹层上的提示不能等它。
   const [worktreeDefault, setWorktreeDefault] = useState(project.useWorktreeDefault);
   const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
-  const { branches, base, setBase, automaticLabel, switching, isSwitching } = useComposerBranches(project, notify);
+  const { branches, remoteBranches, refreshRemotes, fetchingRemotes, base, setBase, automaticLabel, switching, isSwitching } = useComposerBranches(project, notify);
   const [busy, setBusy] = useState(false);
   // 「创建并等前置」记在草稿里（已选的前置跟正文同生共死）：草稿里有它，启动方式就是它。
   const [otherLaunchMode, setLaunchMode] = useState<LaunchMode>("run");
@@ -428,6 +428,7 @@ export function TaskComposerPanel({
             savingWorktreeDefault={savingWorktreeDefault}
             onSaveWorktreeDefault={saveWorktreeDefault}
             branches={branches}
+            remote={{ branches: remoteBranches, refresh: refreshRemotes, fetching: fetchingRemotes }}
             base={shown ? shown.worktreeBase ?? "" : base}
             automaticBaseLabel={automaticLabel}
             switchingBranch={switching}

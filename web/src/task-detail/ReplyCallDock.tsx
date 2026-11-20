@@ -3,6 +3,7 @@ import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { ReviewerChip } from "../free-workflow/ReviewerChip.tsx";
 import type { ReviewerList } from "../free-workflow/useReviewerList.ts";
 import { ReplyDockRow } from "./ReplyDock.tsx";
+import { Select } from "../components/Select.tsx";
 import { callChoices, type BaseOption, type CallAbility, type CallVerb, type DispatchBase, type ReplyCall } from "./replyCall.ts";
 
 /**
@@ -33,7 +34,7 @@ export function ReplyCallDock({ call, self, ability, onVerb, onCancel, baseError
   );
 }
 
-/** 派出去时胶囊最后那一段：新任务从哪开工。两种之间点一下就换。 */
+/** 派出去时胶囊最后那一段：新任务从哪开工。两种之间点一下就换；还能从远端分支开工时点开是一份清单。 */
 export function DispatchBaseSegment({ options, value, disabled, onChange }: {
   options: BaseOption[];
   value: DispatchBase;
@@ -42,6 +43,13 @@ export function DispatchBaseSegment({ options, value, disabled, onChange }: {
 }) {
   const index = Math.max(0, options.findIndex((option) => option.id === value));
   const current = options[index]!;
+  if (options.some((option) => option.group)) {
+    return (
+      <Select size="compact" className="run-target-seg run-target-seg--tail" label="新任务从哪开工" value={current.id}
+        options={options.map((option) => ({ value: option.id, label: option.group ? option.worktreeBase ?? option.label : option.label, group: option.group, mono: !!option.group }))}
+        display={current.label} disabled={disabled} filterable={options.length > 8} filterPlaceholder="筛选分支…" onChange={onChange} />
+    );
+  }
   const next = options[(index + 1) % options.length]!;
   return (
     <button
