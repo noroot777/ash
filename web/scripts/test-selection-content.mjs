@@ -301,6 +301,8 @@ try {
       return !message.contains(selection.getRangeAt(0).endContainer);
     }, [userLine, backward]);
     assert.equal(crossedBlock, true, "原生选区确实搭到了下一条上(没搭到的话这条用例什么都没证明)");
+    // 上一轮的浮条还挂着,光等浮条会赶在这一轮那一帧之前读选区;排在它后面的两帧过完,它一定算过了。
+    await flush();
     await memo.waitFor();
     const trimmed = await page.evaluate((line) => {
       const selection = getSelection();
