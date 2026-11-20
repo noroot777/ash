@@ -1,11 +1,11 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { Agent, request } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processProof } from "./runtime-channel-consumers.js";
-import { readRuntimeRecord, replaceRuntimeRecord } from "./runtime-channel-record.js";
+import { readRuntimeRecord, replaceRuntimeRecord, type RuntimeRecordSnapshot } from "./runtime-channel-record.js";
 
 export type Gateway = { id: string; port: number; pid: number; active: number; paused: boolean; owner?: string;
   protocol?: number; build?: string; queued?: number };
@@ -184,11 +184,28 @@ export class RuntimeGatewayController {
     } else if (stored?.pid) {
       const proof = processProof(stored.pid);
       if (proof === undefined || (proof && (!stored.startedAt || proof.startedAt === stored.startedAt))) return false;
-    } else if (snapshot.current !== undefined || snapshot.backup !== undefined) return false;
+    } else if (this.hasUnverifiedProcess(snapshot)) return false;
+    if (await this.options.hasConsumers()) return false;
     replaceRuntimeRecord(this.endpoint, snapshot, null);
     const digest = createHash("sha256").update(this.options.home + randomUUID()).digest("hex").slice(0, 20);
     this.socket = join(dirname(this.options.socket), `nc-${digest.slice(0, 12)}.sock`);
     return true;
+  }
+  private hasUnverifiedProcess(snapshot: RuntimeRecordSnapshot): boolean {
+    for (const text of [snapshot.current, snapshot.backup]) {
+      let partial: Partial<Endpoint> | undefined;
+      try { partial = JSON.parse(text ?? "null"); } catch {}
+      const pid = partial?.pid;
+      if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+        const proof = processProof(pid);
+        if (proof === undefined || (proof && (!partial?.startedAt || proof.startedAt === partial.startedAt))) return true;
+      }
+    }
+    try {
+      return execFileSync("ps", ["-ax", "-o", "command=", "-ww"], {
+        encoding: "utf8", timeout: 1_000, maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
+      }).split("\n").some((command) => command.includes(this.endpoint));
+    } catch { return true; }
   }
   private control(path: string): Promise<Gateway> {
     return this.serial(async () => {

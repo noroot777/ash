@@ -125,6 +125,66 @@ if (process.platform === "win32") {
     assert.deepEqual(readRuntimeRecord(probe), empty);
     assert.equal(JSON.parse(readFileSync(probe + ".previous", "utf8")).id, "winner");
     console.log("✓ identity writes and archives reject stale snapshots; a process-shared transaction excludes concurrent writers and releases on close");
+    const damagedHome = join(temporary, "damaged");
+    const damagedEndpoint = join(damagedHome, "endpoint.json");
+    const damagedOptions = { home: damagedHome, socket: join(temporary, "damaged.sock"), dbFile: consumerDbFile,
+      hasConsumers: async (id) => hasGatewayConsumers(consumerDbFile, id) };
+    mkdirSync(damagedHome);
+    for (const damage of ["", "{", "null", "{}", JSON.stringify({ id: "invalid", port: -1 })]) {
+      writeFileSync(damagedEndpoint, damage);
+      writeFileSync(damagedEndpoint + ".backup", damage);
+      const before = readRuntimeRecord(damagedEndpoint);
+      for (const hasConsumers of [async () => true, async () => hasGatewayConsumers(join(temporary, "unreadable.db"))]) {
+        const blocked = await start({ ...damagedOptions, hasConsumers });
+        blocked.close();
+        assert.equal(blocked.state, undefined, "live or unknown consumers retain damaged identity records");
+        assert.deepEqual(readRuntimeRecord(damagedEndpoint), before);
+      }
+      const repaired = await start(damagedOptions);
+      assert.ok(repaired.state, "unreadable records without consumers or live process evidence rebuild immediately");
+      assert.equal(readFileSync(damagedEndpoint + ".previous", "utf8"), damage);
+      assert.equal(readFileSync(damagedEndpoint + ".backup.previous", "utf8"), damage);
+      assert.notEqual(repaired.socket, damagedOptions.socket);
+      repaired.close();
+      const reopened = await start(damagedOptions);
+      reopened.close();
+      assert.equal(reopened.state.pid, repaired.state.pid);
+      assert.equal(reopened.state.id, repaired.state.id);
+      await gatewayRequest(reopened.socket, "/retire", { owner: INSTANCE_ID });
+      await waitFor(() => processProof(reopened.state.pid) === null, "repaired entry retires before the next damaged-record fixture");
+    }
+    const partialIdentity = JSON.stringify({ pid: process.pid });
+    writeFileSync(damagedEndpoint, partialIdentity);
+    writeFileSync(damagedEndpoint + ".backup", partialIdentity);
+    const partialSnapshot = readRuntimeRecord(damagedEndpoint);
+    const partialOwner = await start(damagedOptions);
+    partialOwner.close();
+    assert.equal(partialOwner.state, undefined, "a live PID in otherwise invalid metadata remains evidence against replacement");
+    assert.deepEqual(readRuntimeRecord(damagedEndpoint), partialSnapshot);
+    writeFileSync(damagedEndpoint, "");
+    writeFileSync(damagedEndpoint + ".backup", "");
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = "";
+      const unverified = await start(damagedOptions);
+      unverified.close();
+      assert.equal(unverified.state, undefined, "failed process discovery cannot be treated as an empty process list");
+      assert.deepEqual(readRuntimeRecord(damagedEndpoint), { current: "", backup: "" });
+    } finally { if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath; }
+    const hidden = await start(damagedOptions);
+    hidden.close();
+    writeFileSync(damagedEndpoint, "");
+    writeFileSync(damagedEndpoint + ".backup", "");
+    const hiddenSnapshot = readRuntimeRecord(damagedEndpoint);
+    const hiddenWatcher = await start({ ...damagedOptions, socket: join(temporary, "lost-damaged.sock") });
+    assert.equal(hiddenWatcher.state, undefined, "a data-root entry on a lost socket blocks replacement even when both records are unreadable");
+    assert.deepEqual(readRuntimeRecord(damagedEndpoint), hiddenSnapshot);
+    assert.equal((await gatewayRequest(hidden.socket, "/status")).pid, hidden.state.pid);
+    await stopDaemon(hidden.state);
+    await waitFor(() => hiddenWatcher.state, "damaged-record watchdog recovers after the hidden entry exits");
+    sockets.set(hiddenWatcher.socket, INSTANCE_ID);
+    hiddenWatcher.close();
+    console.log("✓ empty, malformed and invalid identities rebuild without consumers or live entries; live/unknown consumers and hidden live entries stay protected, then recover after exit");
     const first = await start();
     const original = { ...first.state };
     const base = `http://127.0.0.1:${original.port}`;
