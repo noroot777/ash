@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Chats, NotePencil, Quotes } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { selectionContentText } from "./selectionContent.ts";
+import { trimBlockOvershoot } from "./selectionOvershoot.ts";
 import { stageSideChatQuote } from "./sideChatQuote.ts";
 import "./conversation-selection.css";
 
@@ -71,6 +72,8 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
   useEffect(() => {
     forget();
     let frame = 0;
+    // 左键此刻按着。
+    let pressed = false;
     const update = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
@@ -78,12 +81,24 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
         if (document.activeElement?.matches("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return forget();
         const selection = window.getSelection();
         if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return forget();
-        const range = selection.getRangeAt(0);
+        /* 鼠标还按着就不碰选区，松手再算。底下取文要借用选区再还原，还原在 WebKit
+           里会冲掉这一下手势的扩展粒度：双击之后第二下按着时手一抖，本该按词扩展的选区改成按
+           字走，抖两个像素选中的词就塌没了；双击拖选也不再按词吸附。 */
+        if (pressed) return forget();
+        let range = selection.getRangeAt(0);
         // 这一段算过了就收手 —— 底下取文会借用选区再还原，还原本身又触发一次事件。
         if (seen.current && sameBounds(range, seen.current)) return;
         const scope = root.current;
-        if (!scope?.contains(range.startContainer) || !scope.contains(range.endContainer)
-          || elementOf(range.startContainer)?.closest(controls) || elementOf(range.endContainer)?.closest(controls)
+        if (!scope?.contains(range.startContainer) || !scope.contains(range.endContainer)) return forget();
+        // 先剪掉搭到下一块开头的那一截再看碰没碰到控件：三击一段，终点常常落在紧跟着的附件卡（按钮）上。
+        const trimmed = trimBlockOvershoot(range);
+        if (trimmed) {
+          const backward = selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
+          if (backward) selection.setBaseAndExtent(trimmed.endContainer, trimmed.endOffset, trimmed.startContainer, trimmed.startOffset);
+          else selection.setBaseAndExtent(trimmed.startContainer, trimmed.startOffset, trimmed.endContainer, trimmed.endOffset);
+          range = trimmed;
+        }
+        if (elementOf(range.startContainer)?.closest(controls) || elementOf(range.endContainer)?.closest(controls)
           || range.cloneContents().querySelector("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return forget();
         const rect = range.getBoundingClientRect();
         if ((!rect.width && !rect.height) || rect.bottom < 0 || rect.top > innerHeight) return forget();
@@ -104,17 +119,40 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
       });
     };
     const dismiss = () => { cancelAnimationFrame(frame); forget(); };
-    const afterPointer = (event: PointerEvent) => {
-      if (event.target instanceof Node && root.current?.contains(event.target)) update();
+    /* 按下 / 松开认的是 mousedown / mouseup，不是 pointer 事件：WKWebView 里连击时后几下只派
+       mouse 事件，pointerdown / pointerup 不来，按 pointer 事件记会一直以为键还按着、浮条再也
+       不出。松手那一下万一没送到页面（在窗口外松的手），下一次移动时看 buttons 补上。 */
+    const press = (event: MouseEvent) => {
+      if (event.button === 0) pressed = true;
     };
+    const released = (event: MouseEvent) => {
+      // 拖选可能在会话区外头松手（拖进了回复框），按着时那几次都没算，这一下得补上。
+      const held = pressed;
+      pressed = false;
+      if (held || (event.target instanceof Node && root.current?.contains(event.target))) update();
+    };
+    const moved = (event: MouseEvent) => {
+      if (pressed && event.buttons === 0) released(event);
+    };
+    const release = () => { pressed = false; };
     document.addEventListener("selectionchange", update);
-    document.addEventListener("pointerup", afterPointer);
+    document.addEventListener("mousedown", press, true);
+    document.addEventListener("mousemove", moved, true);
+    document.addEventListener("mouseup", released);
+    document.addEventListener("pointerup", released);
+    document.addEventListener("pointercancel", release);
+    window.addEventListener("blur", release);
     window.addEventListener("resize", dismiss);
     document.addEventListener("scroll", dismiss, true);
     return () => {
       cancelAnimationFrame(frame);
       document.removeEventListener("selectionchange", update);
-      document.removeEventListener("pointerup", afterPointer);
+      document.removeEventListener("mousedown", press, true);
+      document.removeEventListener("mousemove", moved, true);
+      document.removeEventListener("mouseup", released);
+      document.removeEventListener("pointerup", released);
+      document.removeEventListener("pointercancel", release);
+      window.removeEventListener("blur", release);
       window.removeEventListener("resize", dismiss);
       document.removeEventListener("scroll", dismiss, true);
     };
