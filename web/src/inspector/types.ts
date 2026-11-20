@@ -22,6 +22,24 @@ export interface InspectorDescriptor<Context> {
    * 给要「看一整页」的格子用（共享浏览器）；比例单独记，拖它不改别的格子的宽度。
    */
   wide?: boolean;
+  /**
+   * 整块交给面板自己：它自带头带（名字、动作、关闭），自己撑满、自己滚动，宿主不再画那条
+   * 「标题 + 叉」，也不替它套滚动。给本身就是一份完整查看器的格子用（文件查看）。
+   */
+  bare?: boolean;
+  /**
+   * 切到别的格、整栏收起时只藏起来、不卸载：里面是一份活的现场（预览指正嵌着的页面、标注通道、
+   * 页面里没提交的输入），卸掉再挂回来就是重新打开一遍。只有它从竖轨上下去（或描述符不再要求
+   * 保活）才真卸。
+   */
+  keepAlive?: boolean;
+}
+
+/** 「每当 key 变了，就切到 tabId 那一格」：格子由外面的状态决定该不该露面时用（见 InspectorHost 的 reveal）。 */
+export interface InspectorReveal {
+  tabId: string;
+  /** 变一次切一次；0 / 空串不算（初始值）。 */
+  key: number | string;
 }
 
 export interface InspectorTabPolicy {

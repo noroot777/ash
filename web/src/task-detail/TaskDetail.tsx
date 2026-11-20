@@ -3,17 +3,15 @@ import { createPortal } from "react-dom";
 import type { Group, Task, TaskListItem } from "@navi/shared";
 import { isUserFollowUp } from "@navi/shared";
 import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
-import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
+import { usePreviewTab } from "../preview-workspace/previewTab.tsx";
 import { RuntimeAutoOpen } from "../task-runtime/RuntimeAutoOpen.tsx";
 import { PlanModeChip } from "./PlanModeChip.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { TaskFileLinks } from "../components/TaskFileLink.tsx";
-import { FileViewer } from "../files/FileViewer.tsx";
-import { FolderViewer } from "../files/FolderViewer.tsx";
 import { useFileView } from "../files/useFileView.ts";
-import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
-import type { ScmDiffTarget } from "../scm/scmModel.ts";
+import { useFileViewTab } from "../files/fileViewTab.tsx";
+import { TASK_FILE_TABS } from "./taskInspectors.tsx";
 import { api } from "../lib/api.ts";
 import { toggleArchive } from "../lib/archive.ts";
 import type { Notify } from "../lib/notify.ts";
@@ -100,8 +98,9 @@ export function TaskDetail({
   const confirmExecutorSwap = useExecutorGate();
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区 / 文件 / 工作区 diff。
-  // 文件与 diff 互为对方的另一种读法，合在一个 hook 里（见 files/useFileView.ts）。
+  // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区。点开的文件、文件夹、diff 摊在右侧面板
+  // 「查看」那一格（files/fileViewTab.tsx），预览指正长在「预览指正」那一格（preview-workspace/
+  // previewTab.tsx），会话和回复框一直留着。
   const fileView = useFileView(task.id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markDoneOpen, setMarkDoneOpen] = useState(false);
@@ -114,9 +113,11 @@ export function TaskDetail({
   const holder = useDispatchHolder(task.id, allTasks, task.status === "paused" || task.status === "backlog");
   const conversation = useConversation(task.id);
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, runtime, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
+  const { subagents, monitorTab, inspectors: stackInspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, runtime, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
     task, allTasks, tasksReady, conversation,
   });
+  const { inspectors: fileViewInspectors, reveal: fileViewReveal } = useFileViewTab(stackInspectors, fileView, TASK_FILE_TABS);
+  const inspectors = usePreviewTab(fileViewInspectors, previewOpen);
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
@@ -192,11 +193,7 @@ export function TaskDetail({
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
-    if (open) {
-      setPreviewOpen(false);
-      fileView.close();
-      closeDrawers();
-    }
+    if (open) closeDrawers();
     onReviewOpenChange?.(open);
   };
 
@@ -308,22 +305,10 @@ export function TaskDetail({
 
   const inspectorContextKey = inspectorMode === "drawer" ? `task-drawer:${task.id}` : `task:${task.id}`;
 
-  // 中间栏摊开一份文件 / 一个文件夹：侧栏的生成物、文件树，和正文里提到的路径（TaskFileLinks）同一个出口。
-  const openFileInCenter = (path: string, reel?: readonly string[]) => {
-    setPreviewOpen(false);
-    fileView.openFile(path, reel);
-    closeDrawers();
-    if (reviewOpen) changeReviewOpen(false);
-  };
-  const openFolderInCenter = (path: string) => {
-    setPreviewOpen(false);
-    fileView.openFolder(path);
-    closeDrawers();
-    if (reviewOpen) changeReviewOpen(false);
-  };
-
   return (
-    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter} onOpenError={notify}>
+    // 正文里提到的路径跟侧栏的生成物、文件树同一个出口：摊进「查看」那一格。InspectorHost 也在它里面——
+    // 那一格里的 Markdown 再点别的文件，走的是同一条路，在原地换内容。
+    <TaskFileLinks taskId={task.id} onOpenFile={fileView.openFile} onOpenFolder={fileView.openFolder} onOpenError={notify}>
       <LeftDrawerProvider value={leftDrawer.api}>
       <InspectorHost
         contextKey={inspectorContextKey}
@@ -340,7 +325,7 @@ export function TaskDetail({
           runFacts,
           onOpenTask,
           onOpenReview: () => changeReviewOpen(true),
-          onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); closeDrawers(); },
+          preview: { open: previewOpen, onOpen: () => setPreviewOpen(true), onClose: () => setPreviewOpen(false) },
           onTaskUpdated: onTaskUpdate,
           onPatch: patch,
           onQueueChanged: (updatedTask) => {
@@ -354,20 +339,12 @@ export function TaskDetail({
           onTasksSynced: applySnapshots,
           reviewRetry,
           runtime,
-          onOpenFile: openFileInCenter,
-          onOpenFolder: openFolderInCenter,
-          activeFilePath: fileView.activePath,
-          openScmDiff: fileView.diff,
-          onOpenScmDiff: (target: ScmDiffTarget) => {
-            setPreviewOpen(false);
-            fileView.openDiff(target);
-            closeDrawers();
-            if (reviewOpen) changeReviewOpen(false);
-          },
+          fileView,
           notify,
         }}
         defaultVisible={inspectorMode === "page"}
         tabPolicy={inspectorPolicy}
+        reveal={fileViewReveal}
       >
         {({ toggleButton, openTab }) => (
           <>
@@ -411,9 +388,7 @@ export function TaskDetail({
                   onTaskUpdate={onTaskUpdate}
                 />
               )}
-              {previewOpen ? (
-                <PreviewWorkspace key={task.id} taskId={task.id} onClose={() => setPreviewOpen(false)} />
-              ) : reviewOpen ? (
+              {reviewOpen ? (
                 <TaskReviewWorkspace
                   task={task}
                   allTasks={allTasks}
@@ -425,44 +400,6 @@ export function TaskDetail({
                   } : undefined}
                   onOpenReview={() => openTab("review")}
                   onClose={() => changeReviewOpen(false)}
-                />
-              ) : fileView.filePath ? (
-                <FileViewer
-                  taskId={task.id}
-                  path={fileView.filePath}
-                  reel={fileView.reel}
-                  onStep={fileView.stepFile}
-                  zoomed={fileView.zoomed}
-                  onToggleZoom={fileView.toggleZoom}
-                  onExitZoom={fileView.exitZoom}
-                  onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
-                  onClose={fileView.close}
-                  notify={notify}
-                />
-              ) : fileView.folderPath ? (
-                <FolderViewer
-                  taskId={task.id}
-                  path={fileView.folderPath}
-                  zoomed={fileView.zoomed}
-                  onToggleZoom={fileView.toggleZoom}
-                  onExitZoom={fileView.exitZoom}
-                  onOpenFile={fileView.openFile}
-                  onOpenFolder={fileView.openFolder}
-                  onClose={fileView.close}
-                  notify={notify}
-                />
-              ) : fileView.diff ? (
-                <ScmDiffViewer
-                  taskId={task.id}
-                  path={fileView.diff.path}
-                  source={fileView.diff.source}
-                  origPath={fileView.diff.origPath}
-                  kind={fileView.diff.kind}
-                  zoomed={fileView.zoomed}
-                  onToggleZoom={fileView.toggleZoom}
-                  onExitZoom={fileView.exitZoom}
-                  onOpenFile={fileView.showFile}
-                  onClose={fileView.close}
                 />
               ) : (
                 <div className="task-detail-body">

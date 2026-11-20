@@ -47,6 +47,7 @@ import { acknowledgeTaskStart } from "./task-start-receipt.js";
 import { AUTONOMY, backgroundWaitFor, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
+import { remoteStartNote } from "./remote-start-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
@@ -336,6 +337,12 @@ async function runHeldTask(
       const noted = writeTurn(out, { t: "system", agent: agentType, text: baseNote }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, ...noted, event: { kind: "system", text: baseNote, at: turnStart } });
       baseFallbackTold = true;
+    }
+    const remoteNote = await remoteStartNote(task, ws, project.repoPath);
+    if (remoteNote) {
+      const notice = { kind: "receipt" } as const;
+      const noted = writeTurn(out, { t: "system", agent: agentType, text: remoteNote, notice }, turnStart);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, ...noted, event: { kind: "system", text: remoteNote, at: turnStart, notice } });
     }
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,

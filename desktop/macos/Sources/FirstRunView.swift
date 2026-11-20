@@ -294,6 +294,10 @@ final class ChoiceButton: NSControl {
                                    owner: self, userInfo: nil))
   }
 
+  // 悬停在后台窗口里也会亮（上面的 .activeAlways），那第一下就得算数：NSControl 默认不收，
+  // 这一下只拿去激活窗口。系统按钮（NSButton）也是收的。
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
   override func mouseEntered(with event: NSEvent) { if pressable { hovering = true } }
   override func mouseExited(with event: NSEvent) { hovering = false }
 

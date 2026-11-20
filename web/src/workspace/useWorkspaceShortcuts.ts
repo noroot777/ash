@@ -50,7 +50,9 @@ function hasBlockingLayer(): boolean {
 function previewOwnsNavigation(target: EventTarget | null): boolean {
   // Expanded preview covers the workspace even with focus on its opener. Compact preview
   // owns only its own events; its controls handle keys after this window capture listener.
-  return document.querySelector(".preview-workspace.is-expanded") !== null
+  // 预览指正那一格保活：藏起来的那份仍在 DOM 里，只认看得见的。
+  const expanded = document.querySelector(".preview-workspace.is-expanded");
+  return (expanded !== null && expanded.getClientRects().length > 0)
     || (target instanceof Element && target.closest(".preview-workspace") !== null);
 }
 

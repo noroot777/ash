@@ -39,6 +39,7 @@ import type {
 
 import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult } from "@navi/shared/accept-gate";
 import type { BaseUpdateRecovery } from "@navi/shared/branch-plan";
+import type { ProjectBranches } from "@navi/shared/task-branch";
 import type { WorkflowDef, WorkflowItem } from "@navi/shared/workflow";
 import type { CliHostEnv } from "@navi/shared/cli-overrides";
 import type { CliModelCatalog } from "@navi/shared/cli-presets";
@@ -139,7 +140,7 @@ export const api = {
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
   projectHealth: (projectId: string): Promise<ProjectHealth> =>
     request(`/projects/${id(projectId)}/health`),
-  projectBranches: (projectId: string): Promise<{ branches: string[]; current: string | null }> =>
+  projectBranches: (projectId: string): Promise<ProjectBranches> =>
     request(`/projects/${id(projectId)}/branches`),
   projectGitOverview: (projectId: string): Promise<GitOverview> =>
     request(`/projects/${id(projectId)}/git-overview`),

@@ -120,6 +120,8 @@ export function parseAction(body: unknown): GitActionRequest {
     fail("父提交编号不合法", 400);
   if (action!.lease !== undefined && !valid(action!.lease, "sha"))
     fail("保护强推的期望提交不合法", 400);
+  if (action!.track !== undefined && !valid(action!.track, "string"))
+    fail("跟踪的远端分支不合法", 400);
   if (action!.content !== undefined && !valid(action!.content, "text"))
     fail("冲突内容不合法", 400);
   if (value.confirmation !== undefined && !valid(value.confirmation, "string"))
