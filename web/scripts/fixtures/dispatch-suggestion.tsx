@@ -25,7 +25,7 @@ const baseTask = {
 
 const item = (id: string, title: string, extra: Partial<DispatchSuggestion> = {}): DispatchSuggestion => ({
   id, title, body: `## 目标\n${title}的完整说明`, note: `${title}：和这条任务改的东西无关`, target: null, base: "trunk",
-  proposedAt: "2026-11-17T01:00:00.000Z", ...extra,
+  proposedAt: "2026-11-17T01:00:00.000Z", batch: id, order: "parallel", wait: "none", ...extra,
 });
 
 const DISPUTE = {

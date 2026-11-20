@@ -75,10 +75,11 @@ try {
   await waitUntil(async () => await button("one", `把「${one}」派出去`).isEnabled(), "读到从哪开工后能派");
   await button("one", `把「${one}」派出去`).click();
   await waitUntil(async () => launches("t-one").length === 1, "一件派出去");
+  // 谁来审照那一行：智能体没说、卡上也没换就是默认审查者，这里没设默认，落成不审。
   assert.deepEqual(launches("t-one")[0].body, {
     order: "parallel",
     items: [{ id: "s-one", title: one, body: `## 目标\n${one}的完整说明`,
-      target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, worktreeBase: "main" }],
+      target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, review: "none", worktreeBase: "main" }],
   }, "照那一行此刻的样子派：交给谁同这里、从主分支开工、没有补的话");
   await waitUntil(async () => (await dock("one").count()) === 0, "派完那一行没了");
 
@@ -129,7 +130,7 @@ try {
   await waitUntil(async () => launches("t-arm").length === 1, "回车派出去");
   assert.deepEqual(launches("t-arm")[0].body.items, [{
     id: "s-arm", title: "改过的标题", body: "## 改过的说明", extra: "高度要按任务记",
-    target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, worktreeBase: "navi/t-arm",
+    target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null }, review: "none", worktreeBase: "navi/t-arm",
   }], "派出去的是改过的标题、正文、补的话和选的开工起点");
   await waitUntil(async () => (await box("arm").inputValue()) === "", "派完框清空");
   assert.equal(await dock("arm").count(), 0);

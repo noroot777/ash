@@ -8,10 +8,11 @@ import type { TaskRow } from "./task-store.js";
 import { now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { questionOccurrenceOf } from "./task-wait-ownership.js";
-import { activeDispatchPlan, parseDispatchPlan } from "@navi/shared/dispatch-plan";
+import type { StoredSuggestion } from "@navi/shared/dispatch-suggestion";
+import { readSuggestions, sameColumns, serializedSuggestions, waitingBatchOf } from "./dispatch-suggestion.js";
 
-/** 派活单被发回来改时，答复最前面那一句（智能体据此知道一条都没建）。 */
-export const DISPATCH_PLAN_RETURNED = "（派活单没有派出，一条任务都没建。用户的意见如下，按它改完可以再摆一次。）";
+/** 等着的那一批派活被发回来改时，答复最前面那一句（智能体据此知道一条都没建）。 */
+export const DISPATCH_PLAN_RETURNED = "（这一批派活没有派出，一条任务都没建，已经从回复框顶上撤下。用户的意见如下，按它改完可以再摆一次。）";
 
 export function prepareQuestionRecord(task: TaskRow, answer: string, input: QuestionAnswerInput): QuestionRecord {
   const source: QuestionSource = {
@@ -36,8 +37,8 @@ export function prepareQuestionRecord(task: TaskRow, answer: string, input: Ques
   }
   const text = answers ? formatQuestionAnswers(answers) : answer.trim();
   if (!text) throw new TypeError("answer 不能为空");
-  // 对着一张派活单回的话（网页上的「发回去改」、手机或飞书里直接回一句）：一条任务都没建，先跟智能体说清。
-  const plan = activeDispatchPlan({ question: task.question, dispatchPlan: parseDispatchPlan(task.dispatchPlan) });
+  // 对着等着的那一批派活回的话（「发回去改」、手机或飞书里直接回一句）：一条任务都没建，先跟智能体说清。
+  const plan = waitingBatchOf(readSuggestions(task)).length > 0;
   return {
     ...source, id: nanoid(12), answeredAt: now(), answer: text,
     ...(answers ? { answers: answers.map((value) => value.trim()) } : {}),
@@ -51,14 +52,24 @@ export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord,
   return db.transaction((transaction) => claimQuestionAnswerWithin(transaction, task, record, onClaim), { behavior: "immediate" });
 }
 
-/** 同上，但落在调用方的事务里：派活单「派出去」要让认领和建任务同一笔提交（dispatch-plan-launch.ts）。 */
+/**
+ * 同上，但落在调用方的事务里：等着的那一批派活处理完时，认领和建任务同一笔提交（dispatch-suggestion-resolve.ts）。
+ *
+ * 那一问绑着的那一批派活跟着这一问一起了结（同一条更新）：答复 = 发回去改，那一批从框顶撤下；处理完的那一路
+ * 自己算好这一列的新值交进来（`suggestionsAfter`）。没有等着的那一批时这一列不碰。
+ */
 export async function claimQuestionAnswerWithin(transaction: ConclusionTransaction, task: TaskRow, record: QuestionRecord,
-  onClaim?: (transaction: ConclusionTransaction) => Promise<void>): Promise<boolean> {
+  onClaim?: (transaction: ConclusionTransaction) => Promise<void>, suggestionsAfter?: StoredSuggestion[]): Promise<boolean> {
   const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
+  const current = readSuggestions(task);
+  const after = suggestionsAfter ?? current.filter((item) => item.wait === "none");
+  const touch = suggestionsAfter !== undefined || after.length !== current.length || task.dispatchPlan !== null;
   const claimed = await transaction.update(tasks).set({
-    question: null, questionOptions: null, questionItems: null, dispatchPlan: null,
+    question: null, questionOptions: null, questionItems: null,
+    ...(touch ? { dispatchSuggestions: serializedSuggestions(after), dispatchPlan: null } : {}),
     questionHistory: JSON.stringify([...history, record]), updatedAt: record.answeredAt,
   }).where(and(
+    touch ? sameColumns(task) : undefined,
     eq(tasks.id, task.id),
     eq(tasks.question, task.question!),
     task.questionOptions === null ? isNull(tasks.questionOptions) : eq(tasks.questionOptions, task.questionOptions),

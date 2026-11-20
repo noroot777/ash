@@ -130,7 +130,7 @@ process.stdin.on("end", () => {
  * 只铺假 claude 时，交给别家的任务会解析到机器上真装着的那家 CLI：找可执行文件除了 PATH 还会看
  * /opt/homebrew/bin 这些常见安装目录（executors/bin-resolve.ts 的 extraPaths）。隔离闸按路径放行
  * （NAVI_TEST_AGENT_BIN 只列假目录）之后那一步得到的是一条禁启错误；用例要的是「起得来、一起就退」
- * 才铺这些垫片。闸还是整体放行的时候没有这层保护：test-dispatch-plan 在 2026-11-15～16 拿着测试
+ * 才铺这些垫片。闸还是整体放行的时候没有这层保护：test-dispatch-plan（现 test-dispatch-suggestion-wait）在 2026-11-15～16 拿着测试
  * 正文起过 54 个真 codex 会话。
  */
 export async function installExitingClis(fakeBin: string, names: string[]): Promise<void> {

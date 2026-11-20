@@ -150,6 +150,7 @@ const LONG_PATH = (id: string): boolean => id.startsWith("deep/");
 
 /** 片段集合加起来的顶。单条都压着、总量却靠「多加几份样本」涨回去，也算退步。 */
 // 2026-11-15 +2100：新工具 propose_dispatch（2068B，见 BUDGETS 里那一行）。
+// 2026-11-20 不动：propose_dispatch 并进 suggest_dispatch（-2150 +1490），团队停用后 mcp/dispatch 不再计入。
 const TOTAL_BUDGET = 85_500;
 
 /**

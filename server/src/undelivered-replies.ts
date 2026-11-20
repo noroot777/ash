@@ -1,4 +1,4 @@
-// 还没交给智能体的答复：派活单「派出去就算完成」（shared/dispatch-plan.ts `DispatchAfterLaunch`）那一下
+// 还没交给智能体的答复：等着的那一批派活说定「派完就算完成」（shared/dispatch-suggestion.ts `DispatchWait`），处理完那一下
 // 不叫醒它，建好的清单记在问答记录上（`QuestionRecord.undelivered`），等这条任务下一回合开头一并交给它，
 // 交过就摘掉。
 //

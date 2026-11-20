@@ -71,8 +71,9 @@ export function applyTaskMetadataEvent<T extends TaskListItem>(task: T, event: T
     question: event.question,
     questionOptions: event.questionOptions,
     questionItems: event.questionItems,
-    // 每一次提问的变动都带着这一问是不是派活单：换了题、答了、撤下都让卡跟着走。
-    dispatchPlan: event.dispatchPlan ?? null,
+    // 等着的那一批派活只在它绑的那一问还在时算数：那一问一变（答了、撤下、换了题）它就作废；新摆的一批紧跟着
+    // 由 task.updated 带来（服务端先发这一条）。
+    dispatchSuggestions: (task.dispatchSuggestions ?? []).filter((item) => item.wait === "none"),
   };
 }
 

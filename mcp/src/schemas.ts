@@ -78,24 +78,21 @@ export const taskShape = z.object({
   reviewer: REVIEWER,
 });
 
-// 派活单上的一条（propose_dispatch）：建任务那几个参数照旧（去掉 workflowMode —— 一律自由工作流），
-// 标题、完整说明、一句备注必填：卡上一行就是标题和备注，建出来的任务正文就是 body。
-export const planTaskShape = taskShape.omit({ workflowMode: true }).extend({
-  title: z.string().min(1).describe("卡上这一行的标题"),
-  body: z.string().min(1).describe("完整说明，建出的任务正文就是它（目标、背景、约束、验收标准）"),
-  note: z.string().max(120).describe("标题下那一行小字：一句话说这条为什么、要注意什么"),
-});
-
-// 可以派出去的活的一件（suggest_dispatch）：只要挂一行、一按就派，所以只留建任务最少的那几样。
+// 要派出去的活的一件（suggest_dispatch）：标题、完整说明、一句为什么必填——框顶一行就是标题和那句话，建出来的
+// 任务正文就是 body；其余照建任务那几个参数（交给谁、谁来审、标签、同批前置），从哪开工只留 trunk / here 两档。
 export const suggestionShape = z.object({
-  title: z.string().min(1),
+  key: taskShape.shape.key,
+  title: z.string().min(1).describe("框顶这一行的标题"),
   body: z.string().min(1).describe("新任务的完整正文：目标、背景、约束、验收标准"),
-  note: z.string().max(120).describe("一句话：为什么该做、为什么不属于本任务"),
+  note: z.string().max(120).describe("一句话：为什么该做、要注意什么"),
   base: z.enum(["trunk", "here"]).optional().describe("trunk=从主分支开工(默认)；here=接着本任务的代码"),
-  agentType: AGENT_TYPE.optional().describe("交给谁；不填=本任务的默认"),
+  agentType: AGENT_TYPE.optional().describe("交给谁；不填=本任务「派出去的活交给谁」的默认"),
   executorId: z.string().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
+  labels: taskShape.shape.labels,
+  prerequisites: taskShape.shape.prerequisites,
+  reviewer: REVIEWER,
 });
 
 // 收回一件挂着的（suggest_dispatch 的 withdraw）：原因原样给用户看，是他知道「它为什么不在了」的唯一去处。

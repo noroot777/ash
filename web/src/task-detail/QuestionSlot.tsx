@@ -9,10 +9,8 @@
 import { useEffect, useState } from "react";
 import type { TaskListItem } from "@navi/shared";
 import { questionKey, type QuestionAnswerInput } from "@navi/shared/questions";
-import { activeDispatchPlan, type DispatchLaunchInput, type DispatchRunTarget } from "@navi/shared/dispatch-plan";
 import { motionReduced } from "../lib/useSwapText.ts";
 import { QuestionCard } from "./QuestionCard.tsx";
-import { DispatchPlanCard } from "./DispatchPlanCard.tsx";
 
 const LEAVE_MS = 200;
 
@@ -32,14 +30,17 @@ export function useQuestionTakeover(task: TaskListItem | null): QuestionTakeover
   const [shown, setShown] = useState<TaskListItem | null>(asking);
   const [leaving, setLeaving] = useState(false);
   // 收起记在这一次提问上：换了一道题（或换了任务）就重新展开；题走了就忘掉，同一句话再问一次也是新的一次。
+  // 那一问是一批派活在等（shared/src/dispatch-suggestion.ts）时反过来，缺省收起：要派的那几件在回复框顶上，
+  // 框得露出来；展开就是对那一问回一句话（= 发回去改）。
   const [collapsedKey, setCollapsedKey] = useState<string | null>(null);
+  const [openedKey, setOpenedKey] = useState<string | null>(null);
   useEffect(() => {
     if (asking) {
       setShown(asking);
       setLeaving(false);
       return;
     }
-    const gone = () => { setShown(null); setLeaving(false); setCollapsedKey(null); };
+    const gone = () => { setShown(null); setLeaving(false); setCollapsedKey(null); setOpenedKey(null); };
     if (!shown || motionReduced()) {
       gone();
       return;
@@ -50,48 +51,38 @@ export function useQuestionTakeover(task: TaskListItem | null): QuestionTakeover
   }, [asking]);
   const card = asking ?? shown;
   const key = card ? cardKey(card) : null;
-  const collapsed = !!key && collapsedKey === key;
+  const waiting = !!card && waitingOnDispatch(card);
+  const collapsed = !!key && (waiting ? openedKey !== key : collapsedKey === key);
   return {
     card,
     leaving: leaving && !asking,
     collapsed,
-    setCollapsed: (next) => setCollapsedKey(next ? key : null),
+    setCollapsed: (next) => (waiting ? setOpenedKey(next ? null : key) : setCollapsedKey(next ? key : null)),
     covering: !!card && !collapsed,
   };
 }
 
-// 派活单摆第二张时题面可能一字不差：带上单子的号，换一张就是新的一次。
-const cardKey = (task: TaskListItem) => `${task.id}:${questionKey(task)}:${activeDispatchPlan(task)?.id ?? ""}`;
+const waitingOnDispatch = (task: TaskListItem) => (task.dispatchSuggestions ?? []).some((item) => item.wait !== "none");
+// 等着的一批派活摆第二批时题面可能一字不差：带上那一批的号，换一批就是新的一次。
+const cardKey = (task: TaskListItem) =>
+  `${task.id}:${questionKey(task)}:${(task.dispatchSuggestions ?? []).find((item) => item.wait !== "none")?.batch ?? ""}`;
 
 /**
  * 卡本身，摆在宿主的回复框那一格（展开时框不挂，卡就占了那一格；收起时框在它下面）。卡只会是宿主
  * 自己的：名下子任务来问、摆单，卡在那一条自己的页面上，不借这一格。
  */
-export function QuestionDock({ takeover, onAnswer, attachable, onLaunchPlan, dispatchTarget }: {
+export function QuestionDock({ takeover, onAnswer, attachable }: {
   takeover: QuestionTakeover;
   onAnswer: (answer: string, input: QuestionAnswerInput, attachments?: string[]) => Promise<void>;
   /** 答复能带本机附件（贴图）。远程任务页不给：对端读不到本机路径。 */
   attachable?: boolean;
-  /**
-   * 这一问是一张派活单时「派出去」怎么做（DispatchPlanCard.tsx）。不给（远程任务页、团队页）就照普通提问
-   * 画：清单那句话就是题目，回一句话就是发回去改。
-   */
-  onLaunchPlan?: (input: DispatchLaunchInput) => Promise<void>;
-  /** 宿主「派出去的活交给谁」此刻的值（刚改、还在写回的也算）：没指明的行跟它走。 */
-  dispatchTarget?: DispatchRunTarget | null;
 }) {
   const { card, leaving } = takeover;
   if (!card) return null;
-  const plan = onLaunchPlan ? activeDispatchPlan(card) : null;
   return (
     <div className={`question-dock${leaving ? " is-leaving" : ""}`} inert={leaving ? true : undefined}>
-      {plan && onLaunchPlan
-        ? <DispatchPlanCard key={cardKey(card)} plan={plan}
-          task={dispatchTarget !== undefined ? { ...card, dispatchTarget } : card}
-          onLaunch={onLaunchPlan} onAnswer={onAnswer}
-          collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />
-        : <QuestionCard key={cardKey(card)} task={card} onAnswer={onAnswer} attachable={attachable}
-          collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />}
+      <QuestionCard key={cardKey(card)} task={card} onAnswer={onAnswer} attachable={attachable}
+        collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />
     </div>
   );
 }

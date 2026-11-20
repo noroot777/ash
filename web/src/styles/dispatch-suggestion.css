@@ -87,3 +87,5 @@
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) .sg-detail { animation: none; }
 }
+/* 读全文的左抽屉里那一件的正文（SuggestionReader.tsx）。 */
+.sg-reading { padding: 4px 2px 12px; }

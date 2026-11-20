@@ -20,7 +20,7 @@ export type QuestionRecord = QuestionSource & {
   answers?: string[];
   reply: string;
   /**
-   * `reply` 还没交给智能体：派活单「派出去就算完成」时不叫醒它（shared/dispatch-plan.ts `DispatchAfterLaunch`），
+   * `reply` 还没交给智能体：等着的那一批派活处理完、说定了「派完就算完成」时不叫醒它（shared/dispatch-suggestion.ts `DispatchWait`），
    * 这段留到这条任务下一回合开头一并交给它，交过就摘掉（server/src/undelivered-replies.ts）。
    */
   undelivered?: true;

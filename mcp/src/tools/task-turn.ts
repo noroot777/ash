@@ -26,8 +26,7 @@ import {
 } from "@navi/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { callWithMonitorResults } from "./monitor-results.js";
-import { MODE, RECURS, TASK_STAGE, planTaskShape, reviewChoiceOf, suggestionShape, suggestionWithdrawShape } from "../schemas.js";
-import { MAX_DISPATCH_PLAN_ITEMS } from "@navi/shared/dispatch-plan";
+import { MODE, RECURS, TASK_STAGE, reviewChoiceOf, suggestionShape, suggestionWithdrawShape } from "../schemas.js";
 import { legacyTeamAndDuet, whenLegacy } from "@navi/shared/legacy-modes";
 import { MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK } from "@navi/shared/dispatch-suggestion";
 
@@ -237,53 +236,32 @@ server.registerTool(
   },
 );
 
-server.registerTool(
-  "propose_dispatch",
-  {
-    title: "摆出派活单(派出一批任务前先给用户过目)",
-    description:
-      "想派出一批任务、而用户还没看过这批活时用它：回复框那一格变成派活单，用户可以换执行器、去掉某条、改一个接一个/同时。"
-      + "调完正常结束回合，任务落 paused 等用户。用户按「派出去」时由 Navi 照单建好、挂在本任务名下、交给调度；"
-      + "用户写一句发回来时一条都没建，按他的话改完可以再摆一次。\n\n"
-      + "派出去之后还有没有你的事，用 afterLaunch 说定：done(缺省)=派出去就是本任务最后一步，Navi 当场把本任务结成完成、不叫醒你，"
-      + "建好的清单(任务号、标题、交给谁)留到你下一回合开头再给你；continue=派出去后你还要接着做(比如等它们的结果)，Navi 把清单作为答复续上你的会话。"
-      + "两种都**不要再自己建一遍**。选 done 就把要对用户说的话在摆单这一回合说完。\n\n"
-      + "用户已经明确说过开工、或已经确认过这份清单，直接用 batch_create_tasks / create_task_chain 建，别再摆一遍。有提问在等时会被拒，摆了单就别再 ask_question。",
-    inputSchema: {
-      taskId: z.string().describe("当前正在执行的任务 id"),
-      tasks: z.array(planTaskShape).min(1).max(MAX_DISPATCH_PLAN_ITEMS).describe("按派出顺序排列；agentType/executorId 不填 = 交给本任务「派出去的活交给谁」的默认"),
-      order: MODE.optional().describe("serial=一个接一个(默认)；parallel=同时"),
-      afterLaunch: z.enum(["done", "continue"]).optional()
-        .describe("done(默认)=派出去就算本任务完成、不叫醒你；continue=派出去后把清单作为答复续上你的会话，你还要接着做"),
-      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
-    },
-  },
-  async ({ taskId, tasks, order, afterLaunch, directionToken }) => {
-    // 卡上每一行都摆着谁来审（缺省默认审查者），用户按「派出去」前能换、能关。
-    const items = tasks.map(({ reviewer, ...task }) => ({ ...task, review: reviewChoiceOf(reviewer) }));
-    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-plan`, { tasks: items, order: order ?? "serial", afterLaunch: afterLaunch ?? "done" }, directionToken)); }
-    catch (e) { return fail(e); }
-  },
-);
-
 // 门槛写在说明里：每个回合都带着它，卡不住就每次回复挂两三条。
 server.registerTool(
   "suggest_dispatch",
   {
-    title: "挂出/收回可以另开的任务(不停下)",
+    title: "列出要派出去的活(挂在回复框顶上，用户一按就派)",
     description:
-      "只在你本来就要写「建议另开任务」时用：那件事该做、但不属于本任务。说明写好挂在用户回复框顶上，用户一按就派成新任务。"
-      + "不停任务，调完照常往下做、照常结束。拆自己的活用 propose_dispatch；顺手能做完的、想法没成形的不挂。新任务看不到这场对话，body 要自带上下文。\n\n"
-      + "挂上的一直留到用户派掉或点叉，不用重挂。后来不成立了（你自己做了、情况变了）用 withdraw 收回。",
+      "列出一批要派出去的活：说明写好挂在用户回复框顶上，用户可以换执行器、改说明、去掉某件，按「派出去」由 Navi 照着建好、挂在本任务名下——"
+      + "**不要再自己建一遍**。新任务看不到这场对话，body 要自带上下文。用户已经明确说过开工，就直接用 batch_create_tasks 建。\n\n"
+      + "wait 说清要不要等用户：\n"
+      + "· none(默认)：不等。该做但不属于本任务的活；调完照常往下做、照常结束，挂着的一直留到用户派掉或点叉，不用重挂。顺手能做完的、想法没成形的不挂。\n"
+      + "· done：等，派完就是本任务最后一步。调完正常结束回合，任务停住等用户；用户处理完由 Navi 把本任务结成完成、不叫醒你，建好的清单下一回合开头给你。要对用户说的话这一回合说完。\n"
+      + "· continue：等，你还要接着做(比如要用它们的结果)。用户处理完，建好的清单作为答复续上你的会话。\n"
+      + "等着时用户回一句话 = 一条没建、这一批撤下，按他的话改完可以再摆；等着时不能 ask_question，有提问在等时也摆不出要等的一批。后来不成立了用 withdraw 收回。",
     inputSchema: {
       taskId: z.string(),
       tasks: z.array(suggestionShape).max(MAX_SUGGESTIONS_PER_CALL).optional(),
+      order: MODE.optional().describe("parallel=同时(默认)；serial=一个接一个"),
+      wait: z.enum(["none", "done", "continue"]).optional().describe("要不要等用户，见上"),
       withdraw: z.array(suggestionWithdrawShape).max(MAX_SUGGESTIONS_PER_TASK).optional(),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken，原样传入"),
     },
   },
-  async ({ taskId, tasks, withdraw, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-suggestions`, { tasks, withdraw }, directionToken)); }
+  async ({ taskId, tasks, order, wait, withdraw, directionToken }) => {
+    // 每一件都摆着谁来审（缺省默认审查者），用户按「派出去」前能换、能关。
+    const items = tasks?.map(({ reviewer, ...task }) => ({ ...task, review: reviewChoiceOf(reviewer) }));
+    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-suggestions`, { tasks: items, order, wait, withdraw }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

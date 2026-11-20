@@ -54,7 +54,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
 }
 
 /**
- * 这一问的答复该送给谁、算不算任务的执行回合（普通答复和派活单「派出去」共用，后者见 dispatch-plan-launch.ts）。
+ * 这一问的答复该送给谁、算不算任务的执行回合（普通答复和等着的那一批派活处理完共用，后者见 dispatch-suggestion-resolve.ts）。
  * `sideways` 见 deliverAnswer 里那段说明：不是任务执行的答复不占队列位。
  */
 export async function answerRouteFor(task: TaskRow) {

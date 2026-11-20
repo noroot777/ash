@@ -3,7 +3,7 @@ import {
   formatQuestionAnswers, legacyQuestionRecord, pairAnswerMessages, questionItems, questionOptionSelected, type QuestionRecord,
 } from "@navi/shared/questions";
 import { parseAttachmentText } from "@navi/shared/attachments";
-import { isDispatchLaunchReply } from "@navi/shared/dispatch-plan";
+import { isDispatchLaunchReply } from "@navi/shared/dispatch-suggestion";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { ConversationSource } from "./conversationModel.ts";

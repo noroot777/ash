@@ -170,7 +170,7 @@ export async function bindUploadsToTask(
   paths: string[] | undefined,
   taskId: string,
   actorUserId: string | null,
-  /** 跟建任务同一笔事务时传进来（派出可以派出去的活，dispatch-suggestion-launch.ts）。 */
+  /** 跟建任务同一笔事务时传进来（派出挂在回复框顶上的活，dispatch-suggestion-launch.ts）。 */
   store: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0] = db,
 ): Promise<void> {
   const names = [...new Set((paths ?? []).map(uploadNameOf).filter((name): name is string => !!name))];

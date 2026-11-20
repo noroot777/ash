@@ -63,6 +63,7 @@ import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
 import { manifestTask } from "./handoff-manifest-task.js";
+import { exportSuggestions } from "./handoff-suggestions.js";
 import { collectGateRuns } from "./handoff-accept-gate.js";
 import { withRunFileLock } from "./run-file-lock.js";
 import { sessionContextCompact } from "./usage.js";
@@ -466,7 +467,7 @@ export async function exportHandoff(
         [
           task.body, task.resumePrompt ?? "", task.question ?? "",
           task.questionOptions ?? "", task.questionItems ?? "", task.questionHistory ?? "",
-          task.dispatchSuggestions ?? "",
+          exportSuggestions(task).dispatchSuggestions ?? "",
           ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
           ...[...sessionFiles, ...artifacts]
             .filter((f) => isTextRel(f.rel))

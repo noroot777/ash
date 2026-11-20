@@ -7,8 +7,8 @@
 // 一行只有三种去处：你派了、你叉了、智能体收回了（为什么收回写在会话里收回的那一刻，withdrawalNotes.ts）——没有自己消失的。
 import { useEffect, useState } from "react";
 import type { AgentType, Task } from "@navi/shared";
-import { dispatchDefaultTarget, type DispatchOrder, type DispatchRunTarget } from "@navi/shared/dispatch-plan";
-import type { DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
+import { dispatchDefaultTarget, type DispatchRunTarget } from "@navi/shared/dispatch-target";
+import type { DispatchOrder, DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
 import { concreteReviewChoice } from "@navi/shared/review-on-create";
 import { api } from "../../lib/api.ts";
 import { useLeftDrawer } from "../../components/LeftDrawer.tsx";
@@ -78,7 +78,8 @@ export function useSuggestionDock({ task, enabled, value, setValue, attachments,
     const body = edit.body ?? item.body;
     const wanted = edit.base ?? item.base;
     const base = bases.some((option) => option.id === wanted) ? wanted : bases[0]?.id ?? wanted;
-    const review = edit.review ?? "default";
+    // 卡上没换过就照智能体挂的时候说定的那一位（没说是默认审查者）。
+    const review = edit.review ?? item.review ?? "default";
     return {
       id: item.id, title, body, note: item.note, target: edit.target ?? item.target ?? fallback, review,
       base, filled: !!title.trim() && !!body.trim(), reviewHeld: reviewHold(review, reviewers),

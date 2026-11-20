@@ -5,8 +5,8 @@
 // 状态和派出去那一下都在 useSuggestionDock.tsx，这里只画。
 import type { KeyboardEvent } from "react";
 import type { AgentExecutorProfile, AgentType } from "@navi/shared";
-import { DISPATCH_ORDER_LABEL, type DispatchOrder, type DispatchRunTarget } from "@navi/shared/dispatch-plan";
-import type { DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
+import type { DispatchRunTarget } from "@navi/shared/dispatch-target";
+import { DISPATCH_ORDER_LABEL, type DispatchOrder, type DispatchSuggestionBase } from "@navi/shared/dispatch-suggestion";
 import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { sameExecutor } from "@navi/shared/executors";
 import { ArrowBendUpRight, CaretDown, X } from "@phosphor-icons/react";

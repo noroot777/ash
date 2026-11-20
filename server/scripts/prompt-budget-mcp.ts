@@ -5,13 +5,16 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   "mcp/accept_task": 1750,
   "mcp/answer_question": 600,
   "mcp/ask_question": 1750,
-  "mcp/batch_create_tasks": 2300,
+  // 2026-11-20 +60（2300 → 2342 实测）、create_task_chain +500（2550 → 3035 实测）：开工起点上就超了（前置那几句
+  // 落进 taskShape 与工具说明时没跟着改这张表），本轮没动这两个工具，按实测补上，不算本轮的增长。
+  "mcp/batch_create_tasks": 2360,
   "mcp/complete_task": 1450,
   "mcp/create_group": 400,
   "mcp/create_queue": 220,
-  "mcp/create_task_chain": 2550,
+  "mcp/create_task_chain": 3060,
   "mcp/debate_reply": 1400,
-  "mcp/dispatch": 2100,
+  // mcp/dispatch（团队调度者派活）不在表里：团队停用后它只在 NAVI_LEGACY_TEAM_AND_DUET=1 时注册（shared/src/legacy-modes.ts），
+  // 缺省口径下发不出去，也就量不到。
   // 三块判据全文的唯一落脚处（见 PLACEMENT），所以它理应是工具里偏大的一条。
   "mcp/dispute_review": 3400,
   "mcp/get_queue": 160,
@@ -23,9 +26,6 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   "mcp/list_tasks": 600,
   "mcp/patch_task": 1100,
   "mcp/pause_task": 950,
-  // 2026-11-15 新增（2068 实测）：派活单。说明里只留「什么时候用、调完会怎样、别再自己建一遍」；
-  // 字段大半是建任务那几个参数的原有说明（跟 batch_create_tasks 同一份 taskShape）。
-  "mcp/propose_dispatch": 2150,
   "mcp/queue_insert": 220,
   "mcp/queue_remove": 190,
   "mcp/queue_reorder": 270,
@@ -45,9 +45,11 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   "mcp/start_monitor": 5100,
   "mcp/stop_monitor": 850,
   "mcp/stop_task": 480,
-  // 2026-11-18 新增（654 实测）：挂出「该做但不属于本任务」的活，不停任务。说明里只留什么时候用、跟
-  // propose_dispatch 怎么分、什么不挂、body 要自带上下文；字段是一件活的标题、说明、为什么、交给谁、从哪开工。
+  // 2026-11-18 新增（654 实测）：挂出「该做但不属于本任务」的活，不停任务。
   // 2026-11-18 +160（654 → 849 实测）：挂上的不再按回合收掉，多一样 `withdraw`（哪一件、为什么）和一句
   // 「挂上的一直留着、不成立了就收回」——智能体不知道这条就会每回合重挂，或者让过时的一直挂着。
-  "mcp/suggest_dispatch": 860,
+  // 2026-11-20 +1490（849 → 2307 实测）：派活单（propose_dispatch，2150）并进来，那个工具删掉——两样合计从约
+  // 3000 降到这一份。多出来的是三档 wait 各一句（不等 / 等完结成完成 / 等完续上会话）和每件可带的谁来审、标签、
+  // 同批前置（照建任务那几个参数的原有说明）。
+  "mcp/suggest_dispatch": 2350,
 };

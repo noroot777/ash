@@ -1,9 +1,9 @@
 // 「派出去的活交给谁」：回复框底栏那颗胶囊点开智能体那一段，列表下面一行（RunTargetPicker 的 agentExtra）。
-// 同这里 = 这条任务自己的那一套；或者指定一个（同一颗三段胶囊）。派活单上没指明的那几条、智能体绕过派活单
-// 直接建任务又没给执行器的，都交给它（服务端 task-dispatch.ts `withDispatchDefaults`）。
+// 同这里 = 这条任务自己的那一套；或者指定一个（同一颗三段胶囊）。回复框顶上那几件里没指明交给谁的、智能体绕过
+// 回复框直接建任务又没给执行器的，都交给它（服务端 task-dispatch.ts `withDispatchDefaults`）。
 // 设成了非默认值时，底栏胶囊最后多一段「派活 codex」，不点开也看得出来。
 import type { AgentExecutorProfile, AgentType, Task } from "@navi/shared";
-import type { DispatchLaunchInput, DispatchRunTarget } from "@navi/shared/dispatch-plan";
+import type { DispatchRunTarget } from "@navi/shared/dispatch-target";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { executorRunSummary } from "../lib/agentAvailability.ts";
 import { useOrderedSave } from "./useOrderedSave.ts";
@@ -24,13 +24,7 @@ export function useDispatchDefault(
 ) {
   const saved = useOrderedSave(task.dispatchTarget ?? null, sameTarget, task.id, save, onError);
   const failedText = (reason: string) => `「派出去的活交给谁」没能改过去（${reason}），先没发出去。重选一次再试。`;
-  const gateLaunch = (launch: ((input: DispatchLaunchInput) => Promise<void>) | undefined) =>
-    launch && (async (input: DispatchLaunchInput) => {
-      const failed = await saved.settle();
-      if (failed) throw new Error(failedText(failed));
-      await launch(input);
-    });
-  return { ...saved, failedText, gateLaunch };
+  return { ...saved, failedText };
 }
 
 // 没指定执行器 = 那个 CLI 的默认执行器（服务端照这个解析），写它的名字。

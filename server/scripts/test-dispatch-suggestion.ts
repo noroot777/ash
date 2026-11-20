@@ -1,4 +1,4 @@
-// 可以派出去的活（src/dispatch-suggestion*.ts、MCP suggest_dispatch）：
+// 不等用户的那一档（MCP suggest_dispatch 缺省 wait = none，src/dispatch-suggestion*.ts；要等的两档在 test-dispatch-suggestion-wait.ts）：
 //   · 智能体在执行回合里挂出来：任务不停，照常结算成完成；刷新（重读任务、列表）后还在；页面拿不到回合令牌；
 //   · 只有这条任务自己的执行回合能挂：没在跑、方向身份过期、审查回合、被 `@` 来问一句的，一律拒；挂满了拒；
 //   · 「派出去」照那一行此刻的样子建：改过的标题和说明、换过的人、补的那句话（标明是用户补的）；挂在这条任务名下、
@@ -169,11 +169,12 @@ try {
   const listedThree = await shown(S);
   assert.deepEqual(listedThree.map((item) => [item.title, item.base, item.target?.agentType ?? null]),
     [["第一件", "trunk", null], ["第二件", "here", "gemini"], ["第三件", "trunk", null]]);
-  const full = await suggest(S, headers, Array.from({ length: 6 }, (_, index) => ({ ...RED, title: `多余 ${index}` })));
-  assert.equal(full.status, 200);
-  assert.equal((await suggest(S, headers, Array.from({ length: 4 }, (_, index) => ({ ...RED, title: `再多 ${index}` })))).status, 409, "一条任务上挂满了拒");
+  const full = await suggest(S, headers, Array.from({ length: 12 }, (_, index) => ({ ...RED, title: `多余 ${index}` })));
+  assert.equal(full.status, 200, JSON.stringify(full.body));
+  assert.equal((await suggest(S, headers, Array.from({ length: 13 }, (_, index) => ({ ...RED, title: `超一次 ${index}` })))).status, 400, "一次挂太多拒");
+  assert.equal((await suggest(S, headers, Array.from({ length: 10 }, (_, index) => ({ ...RED, title: `再多 ${index}` })))).status, 409, "一条任务上挂满了拒");
   const extras = (await shown(S)).filter((item) => item.title.startsWith("多余"));
-  for (const extra of extras) assert.equal((await send("DELETE", `/tasks/${S}/dispatch-suggestions/${extra.id}`)).status, 200);
+  for (const extra of extras) assert.equal((await send("DELETE", `/tasks/${S}/dispatch-suggestions/${extra.id}`)).body.closed, false);
   const serial = await send("POST", `/tasks/${S}/dispatch-suggestions/launch`, {
     order: "serial",
     items: [listedThree[1]!, listedThree[0]!].map((item) => ({ id: item.id, title: item.title, body: item.body, target: claude, worktreeBase: null })),

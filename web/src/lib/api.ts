@@ -289,16 +289,14 @@ export const api = {
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
   answerTask: (taskId: string, answer: string, input?: import("@navi/shared/questions").QuestionAnswerInput, attachments?: string[]): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(attachments?.length ? { attachments } : {}) })),
-  // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
-  launchDispatchPlan: (taskId: string, input: import("@navi/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
-    request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
-  // 可以派出去的活：「派出去」照那一行此刻的样子建任务（这条任务的智能体不被叫醒）；叉 = 这一件不派。
-  launchSuggestions: (taskId: string, input: import("@navi/shared/dispatch-suggestion").DispatchSuggestionLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
+  // 挂在回复框顶上的活（接口形状见 shared/src/dispatch-suggestion.ts 文件头）：「派出去」照那几行此刻的样子建任务；
+  // 叉 = 这一件不派。等着的那一批这一下处理完了回 closed: true。
+  launchSuggestions: (taskId: string, input: import("@navi/shared/dispatch-suggestion").DispatchSuggestionLaunchInput): Promise<{ tasks: { id: string; title: string }[]; closed: boolean }> =>
     request(`/tasks/${id(taskId)}/dispatch-suggestions/launch`, json("POST", input)),
-  dropSuggestion: (taskId: string, suggestionId: string): Promise<{ dropped: boolean }> =>
+  dropSuggestion: (taskId: string, suggestionId: string): Promise<{ dropped: boolean; closed: boolean }> =>
     request(`/tasks/${id(taskId)}/dispatch-suggestions/${id(suggestionId)}`, { method: "DELETE" }),
   // 「派出去的活交给谁」：null = 同这里。
-  setDispatchTarget: (taskId: string, target: import("@navi/shared/dispatch-plan").DispatchRunTarget | null): Promise<Task> =>
+  setDispatchTarget: (taskId: string, target: import("@navi/shared/dispatch-target").DispatchRunTarget | null): Promise<Task> =>
     request(`/tasks/${id(taskId)}/dispatch-target`, json("PUT", { target })),
   replyTask: (
     taskId: string,

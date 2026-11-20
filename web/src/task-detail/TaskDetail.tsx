@@ -29,7 +29,7 @@ import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
-import { launchPlan, saveDispatchTarget } from "./dispatchPlanActions.ts";
+import { saveDispatchTarget } from "./dispatchTargetActions.ts";
 import { replyDiscuss } from "./replyDiscuss.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
 import { withdrawalNotes } from "./suggestions/withdrawalNotes.ts";
@@ -588,7 +588,6 @@ export function TaskDetail({
                         await api.answerTask(task.id, answer, input, attachments);
                         notify("已发送答复，任务正在续跑");
                       }}
-                      onLaunchPlan={launchPlan(task.id, notify)}
                       onDispatchTargetChange={task.mode === "single" && !task.parentId && !task.archived ? saveDispatchTarget(task, onTaskUpdate, notify) : undefined}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}

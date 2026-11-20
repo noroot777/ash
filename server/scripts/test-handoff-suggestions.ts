@@ -71,8 +71,10 @@ function setColumns(dbPath: string, taskId: string, suggestions: DispatchSuggest
 
 const suggestion = (id: string, title: string, extra: Partial<DispatchSuggestion> = {}): DispatchSuggestion => ({
   id, title, body: `${title}的完整说明`, note: `${title}的一行为什么`, target: null, base: "trunk",
-  proposedAt: "2026-11-18T01:00:00.000Z", ...extra,
+  proposedAt: "2026-11-18T01:00:00.000Z", batch: id, order: "parallel", wait: "none", ...extra,
 });
+// 老版本对端存的那一份：没有同一批、先后、等不等这三样。
+const oldFormat = ({ batch: _batch, order: _order, wait: _wait, ...item }: DispatchSuggestion) => item;
 const ids = (items: { id: string }[]) => items.map((item) => item.id);
 
 const beforeLeaving: WithdrawnSuggestion = { id: "sgOldGone01", title: "出发前收回的那件", reason: "顺手做完了", at: "2026-11-18T02:00:00.000Z" };
@@ -270,7 +272,7 @@ try {
   await archiveOnLocal("sgtonlyhung", [], [beforeLeaving]);
   await importHandoff(manifestFor("sgtonlyhung", {
     dispatchSuggestions: JSON.stringify([{
-      ...suggestion("sgForeign01", "带着本机不认识的东西"), turnToken: "对端库里多记的回合令牌",
+      ...oldFormat(suggestion("sgForeign01", "带着本机不认识的东西")), turnToken: "对端库里多记的回合令牌",
       target: { agentType: "not-an-agent", executorId: "executor-elsewhere", model: "m", reasoningEffort: null },
     }]),
   }), { sourceUrl: "http://holder.test:4317" });
@@ -278,9 +280,26 @@ try {
   assert.deepEqual(
     JSON.parse(afterOnlyHung.dispatchSuggestions!),
     [suggestion("sgForeign01", "带着本机不认识的东西")],
-    "逐件按已知的几样重建：多出来的键不落库，不认识的智能体类型按没指明交给谁",
+    "逐件按已知的几样重建：多出来的键不落库，不认识的智能体类型按没指明交给谁；老格式按不等的单件落",
   );
   assert.equal(afterOnlyHung.dispatchWithdrawals, JSON.stringify([beforeLeaving]));
+
+  // 等着用户过目的那一批：绑的那一问随 question 一起走，同一批、先后、等不等、谁来审、标签、同批前置原样落。
+  const waitingQuestion = "这 2 个任务等你过目";
+  const waiting = [
+    suggestion("sgWaitOne01", "等着的第一件", {
+      batch: "batchW", order: "serial", wait: "continue", key: "one", labels: ["ui"], review: { reviewer: "alpha" },
+    }),
+    suggestion("sgWaitTwo01", "等着的第二件", { batch: "batchW", order: "serial", wait: "continue", key: "two", prerequisites: ["one"], review: "none" }),
+  ];
+  await archiveOnLocal("sgtwaiting", [], []);
+  await importHandoff(manifestFor("sgtwaiting", {
+    status: "paused", question: waitingQuestion,
+    dispatchSuggestions: JSON.stringify(waiting.map((item) => ({ ...item, question: waitingQuestion }))),
+  }), { sourceUrl: "http://holder.test:4317" });
+  const afterWaiting = await localRow("sgtwaiting");
+  assert.equal(afterWaiting.question, waitingQuestion);
+  assert.deepEqual(JSON.parse(afterWaiting.dispatchSuggestions!), waiting.map((item) => ({ ...item, question: waitingQuestion })), "等着的那一批原样落，还绑着那一问");
 
   // 对端攒了很多条收回记录（挂了收、收了挂，条数没有上限）：一次移回全接上，顺序不乱；本机那一列空着的、已经
   // 有记录的两种都走一遍。3000 条 = 逐条给路径和值时 6001 个函数实参，SQLite 各版本的上限（127 / 1000）都过了。

@@ -51,7 +51,7 @@ export function SuggestionDrawerBody({ id }: { id: string }) {
     );
   }
   return (
-    <div className="dispatch-plan-reading">
+    <div className="sg-reading">
       <MarkdownBody text={view.body} />
       {view.extra.trim() && (
         <div className="sg-reading-extra">

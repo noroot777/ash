@@ -74,7 +74,6 @@ export function ReplyBox({
   onAnswer,
   onOpenTask,
   onDispatch,
-  onLaunchPlan,
   onDispatchTargetChange,
   onDiscuss,
   discussHeld = null,
@@ -509,8 +508,7 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
-        dispatchTarget={dispatchDefault.value} />}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} attachable />}
       {planTakeover.ready && <div className="question-dock">
         <PlanReadyCard key={planTakeover.ready.plan.id} takeover={planTakeover}
           onImplement={(ready) => sendToPlanner(ready, `/plan implement ${ready.plan.id}`, [])}

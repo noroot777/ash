@@ -20,8 +20,9 @@ import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@navi/shared/task-origin";
 import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
-import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@navi/shared/dispatch-plan";
-import { parseDispatchSuggestions, parseWithdrawnSuggestions, publicSuggestions } from "@navi/shared/dispatch-suggestion";
+import { parseDispatchTarget } from "@navi/shared/dispatch-target";
+import { parseWithdrawnSuggestions, publicSuggestions } from "@navi/shared/dispatch-suggestion";
+import { readSuggestions } from "./dispatch-suggestion.js";
 import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
 import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { announceCreateReviews, reservationRows, resolveCreateReviews, type CreateReviewSlot } from "./review-on-create.js";
@@ -145,10 +146,9 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
   questionHistory: r.questionHistory ? JSON.parse(r.questionHistory) : [],
-  // 只在它绑的那一问还在时下发（shared/src/dispatch-plan.ts `activeDispatchPlan`）。
-  dispatchPlan: activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) }),
   dispatchTarget: parseDispatchTarget(r.dispatchTarget),
-  dispatchSuggestions: publicSuggestions(parseDispatchSuggestions(r.dispatchSuggestions)),
+  // 归一过的（等着的那一批只在它绑的那一问还在时算数、老派活单并进来，server/src/dispatch-suggestion.ts）。
+  dispatchSuggestions: publicSuggestions(readSuggestions(r)),
   dispatchWithdrawals: parseWithdrawnSuggestions(r.dispatchWithdrawals),
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
@@ -339,7 +339,7 @@ export async function createTasks(
   /** 这一批里逐条写的前置（下游可以是这一批里的，前置也可以是已有的任务）。不成立就整批不建。 */
   prerequisites: PrerequisiteEdge[] = [],
   /**
-   * 要跟这批任务同一笔提交的写（派活单：认领那一问、分组、队列，dispatch-plan-launch.ts；串到队尾 / 串成队列：
+   * 要跟这批任务同一笔提交的写（派出挂着的活：认领那几件和等着的那一问、分组、队列，dispatch-suggestion-launch.ts；串到队尾 / 串成队列：
    * queue-membership-guard.ts `joinQueueOnCreate`）。`before` 在插任务之前、`after` 在之后，都在同一个事务里，整笔
    * 排在队列认领链上（见上）；任一步抛错整笔回滚，一条都不留。只能用传进来的事务写，别碰根 `db`，也别再等那条链。
    */
