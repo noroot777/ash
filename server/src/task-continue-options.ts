@@ -109,6 +109,11 @@ export type ContinueTaskOptions = {
    * 的后半段，followUpFrom 照旧护住原终态。
    */
   retryCarryOn?: true;
+  /**
+   * 这句话只在接回旧上下文时才说得通（重试的「接着做」、审查的「从中断处继续」）：最终没续上旧 CLI
+   * 会话，就拿 `resumeSessionId` 那条会话的记录重建历史垫在前面（history-reseed.ts 的 `turnHistory`）。
+   */
+  presumesContext?: true;
   monitorWake?: MonitorWakeData;
   /**
    * 这一轮输入的**投递凭据**:原样落进会话里那条用户回合的 `eventKey`(只在原话落盘的那一处写)。

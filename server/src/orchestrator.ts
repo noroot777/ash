@@ -41,7 +41,7 @@ import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
-import { reseedHistory } from "./history-reseed.js";
+import { turnHistory } from "./history-reseed.js";
 import { clearOnAcceptance, NO_ONE_SHOT_NOTICES, oneShotNotices } from "./undelivered-replies.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
@@ -292,7 +292,7 @@ export async function continueTask(
       taskId, task, agent, sessionRole, profileId, runOwner, slash,
       freshSession: opts.freshSession, resumeSessionId: opts.resumeSessionId,
     });
-    // 删过消息(reseed):会话行照旧续,CLI 会话换新的、拿删除后的记录重建(history-reseed.ts)。
+    // 删过消息(reseed)、或「接着做」没续上旧 CLI 会话:拿那条会话的记录重建(history-reseed.ts)。
     const cliResume = resuming && !reseed;
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
@@ -370,7 +370,7 @@ export async function continueTask(
     // @ 进来、旧会话接不上、/clear 之后新开)都是没有旧上下文的首条消息。原生命令那一支拿不到
     // 它 —— 它独占整条 prompt(见上)。
     const craft = { freshContext: !cliResume, verifying };
-    const history = reseed ? await reseedHistory(taskId, prev!.id, task.body) : "";
+    const history = await turnHistory({ taskId, taskBody: task.body, reseed, cliResume, presumesContext: opts.presumesContext, prevId: prev?.id, resumeSessionId: opts.resumeSessionId });
     const prompt = nativeCommand
       ? promptedUserTurnText
       : planning ? PLANNING_TURN(craft, history + promptedUserTurnText, agent)

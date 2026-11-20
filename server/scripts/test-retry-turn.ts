@@ -12,6 +12,7 @@ import {
 } from "../src/task-retry-turn.js";
 import { turnResumeTrace } from "../src/task-continue-options.js";
 import { systemResumeOf } from "@navi/shared/system-resume";
+import { turnHistory } from "../src/history-reseed.js";
 import { describeQueueBlockers, queueBlockedText, type QueueBlocker } from "../src/queues.js";
 
 const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
@@ -260,6 +261,12 @@ assert.equal(resendInputOf(null, "claude"), null, "没有输入段");
   assert.equal(carriesOnFollowUp(lastInputOf(turn("system", "〔系统〕继续（从中断处）", { resume: { reason: "retry" } }))), false,
     "任务的执行续跑(没有 followUp)不算");
   assert.equal(carriesOnFollowUp(lastInputOf(turn("user", "把标题也改一下"))), false);
+}
+// 「接着做」只在没续上旧 CLI 会话时才垫重建历史(读盘那一支由 test-retry-turn-queue 的 Q9 走真库钉)。
+{
+  const base = { taskId: "t", taskBody: "任务", reseed: false, resumeSessionId: "s" };
+  assert.equal(await turnHistory({ ...base, cliResume: true, presumesContext: true }), "", "续上了旧会话:原话在里面,不垫");
+  assert.equal(await turnHistory({ ...base, cliResume: false }), "", "普通输入自带全部意思,不垫");
 }
 // 是不是执行型,读的是执行层那一份判据(task-continuation-entry.ts 的 inputStartsExecution):
 // 两种执行器、普通与带 --scope 的恢复目标都是,开新目标、暂停目标、普通聊天都不是。

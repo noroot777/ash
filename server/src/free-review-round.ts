@@ -373,6 +373,8 @@ export async function launchReviewRound(
       turnSource: { role: "reviewer", review: { run: run.id, round: run.currentRound } },
       freshSession,
       resumeSessionId: opts.resumeSessionId,
+      // 「从中断处继续」只有一句续跑提示:旧 CLI 会话最终没续上时,任务书靠重建历史带回去。
+      ...(resumed ? { presumesContext: true as const } : {}),
       cwd,
       // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
       // 「先释放重试路由那把锁、排队再起」的交接——那段时间里分组可能已经被暂停。起跑前

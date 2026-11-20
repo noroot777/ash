@@ -605,10 +605,11 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         return c.json({ started: true, mode: "resend" }, 202);
       }
       // 续聊干到一半崩了:原会话里接着做。后端代写的真人回合(byBackend),followUpFrom 照旧护住原终态;
-      // 会话里记成一行「你点了重试」(retryCarryOn),不画成我又说了一遍。
+      // 会话里记成一行「你点了重试」(retryCarryOn),不画成我又说了一遍。旧 CLI 会话最终没续上时,
+      // 原话靠重建历史带回去(presumesContext)。
       if (carryOn) {
         handoff(continueTask(taskId, RETRY_CARRY_ON_PROMPT, {
-          ...route, actingUserId: acting, byBackend: true, retryCarryOn: true,
+          ...route, actingUserId: acting, byBackend: true, retryCarryOn: true, presumesContext: true,
           resumeSessionId: latest.id, turnHeld: turn, freezeGuard: true,
         }), action);
         return c.json({ started: true, mode: "continue" }, 202);
