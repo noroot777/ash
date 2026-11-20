@@ -233,7 +233,7 @@ async function* claudeStreamEvents(
         // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
         if (block.type === "tool_use") writeLedger.toolUse(block.name, block.input, block.id);
         // 子智能体改计划文件同样算数：交出去的计划必须是计划文件最新那一版（claude-plan-gate.ts）。
-        if (block.type === "tool_use") resident?.planGate?.noteToolUse(block);
+        if (block.type === "tool_use") for (const event of resident?.planGate?.noteToolUse(block) ?? []) push(event);
         if (block.type === "tool_result") for (const event of resident?.planGate?.noteToolResult(block) ?? []) push(event);
         if (block.type === "tool_result") {
           const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true, soleReceipt(ev));
@@ -374,7 +374,7 @@ async function* claudeStreamEvents(
       // text 必须照收,跳过就等于把唯一一句错误说明扔了(见 docs/incidents.md
       // 「空白回合」:404 model_not_found 整个被吞,用户只看到任务停着不动)。
       const synthetic = ev.message.model === "<synthetic>";
-      resident?.planGate?.noteAssistant(ev.message.content);
+      for (const event of resident?.planGate?.noteAssistant(ev.message.content) ?? []) push(event);
       let hadText = false;
       for (const block of ev.message.content) {
         if (block.type === "text") {

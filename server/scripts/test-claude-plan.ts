@@ -3,7 +3,7 @@
 // src/executors/claude-plan-gate.ts 文件头；这里用假 CLI 按同一形状回放。
 import "./isolated-data.js";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -120,8 +120,9 @@ try {
     const g = new ClaudePlanGate(plansDir, (line) => out.push(JSON.parse(line)));
     const submit = (id: string, input: unknown = {}) => g.request({ request_id: `req-${id}`, request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input, tool_use_id: id } });
     const use = (id: string, path = planFile, name = "Edit") => g.noteAssistant([{ type: "tool_use", id, name, input: { file_path: path } }]);
+    const draft = (id: string) => [{ kind: "plan", id, text: "", status: "streaming", delta: true }];
     const result = (id: string, isError = false) => g.noteToolResult({ type: "tool_result", tool_use_id: id, ...(isError ? { is_error: true } : {}), content: isError ? "<tool_use_error>String to replace not found</tool_use_error>" : "ok" });
-    return { g, out, submit, use, result, reply: () => out.at(-1).response.response };
+    return { g, out, submit, use, result, draft, reply: () => out.at(-1).response.response };
   };
   writeFileSync(planFile, "# 旧计划\n\n保留数据库");
   // ① 真 CLI 的形状（2.1.283）：改失败后 ExitPlanMode 入参里 CLI 自己补上了盘上的旧正文和路径
@@ -146,15 +147,42 @@ try {
   v = versioned();
   v.use("src", join(root, "src.ts"), "Write"); v.result("src", true);
   assert.equal((v.submit("x5", { plan: "旧计划", planFilePath: planFile })[0] as any).text, "旧计划");
-  // ⑤ 交完又改成了：按改后的正文重新交一次；改失败了卡上那份仍是文件里的版本，不重交
-  v.use("after-fail"); v.result("after-fail", true);
-  v.use("after"); writeFileSync(planFile, "# 改后的计划"); 
+  // ⑤ 交出之后：计划文件一开始改，那张卡当场退回草稿（不可实施）；改完按同一判据重算
+  assert.deepEqual(v.use("after-fail"), v.draft("plan:x5"), "修改开始就让旧卡失效");
+  assert.deepEqual(v.result("after-fail", true), [], "改失败：停在草稿，不把旧卡恢复成可实施");
+  assert.deepEqual(v.use("after"), [], "已经是草稿，不重复退回");
+  writeFileSync(planFile, "# 改后的计划");
   assert.deepEqual(v.result("after"), [{ kind: "plan", id: "plan:after", text: "# 改后的计划", status: "complete" }]);
+  // 改成空、读不到：停在草稿
+  assert.deepEqual(v.use("blank", planFile, "Write"), v.draft("plan:after"));
+  writeFileSync(planFile, "   \n");
+  assert.deepEqual(v.result("blank"), []);
+  v = versioned();
+  v.submit("x7", { plan: "旧计划", planFilePath: planFile });
+  v.use("gone", planFile, "Write");
+  rmSync(planFile);
+  assert.deepEqual(v.result("gone"), []);
+  // 交出之后的乱序与未结：较新那次失败 / 还没回执时，较旧那次的成功不重新出卡
+  writeFileSync(planFile, "# 新计划");
+  v = versioned();
+  v.submit("x8", { plan: "旧计划", planFilePath: planFile });
+  assert.deepEqual(v.use("a"), v.draft("plan:x8"));
+  v.use("b");
+  assert.deepEqual(v.result("a"), [], "较新那次还没回执");
+  assert.deepEqual(v.result("b", true), [], "较新那次失败了");
+  v = versioned();
+  v.submit("x9", { plan: "旧计划", planFilePath: planFile });
+  v.use("c"); v.use("d"); v.result("d", true);
+  assert.deepEqual(v.result("c"), [], "回执乱序：较旧的成功晚到也不出卡");
+  // 改的是别的文件：不影响交出去的那份
+  v = versioned();
+  v.submit("x10", { plan: "旧计划", planFilePath: planFile });
+  assert.deepEqual(v.use("other", join(root, "src.ts"), "Write"), []);
   // ⑥ 接管重放：交计划的那次只能从回执认出来，之后的修改照样重交
   v = versioned();
   v.g.noteAssistant([{ type: "tool_use", id: "x6", name: "ExitPlanMode", input: { planFilePath: planFile } }]);
   v.g.noteToolResult({ type: "tool_result", tool_use_id: "x6", is_error: true, content: "计划已提交给用户审阅。不要再调用任何工具，用一两句话说明计划要点后结束本回合；用户确认后会让你开始实施。" });
-  v.g.noteToolUse({ id: "sub-edit", name: "Edit", input: { file_path: planFile } });
+  assert.deepEqual(v.g.noteToolUse({ id: "sub-edit", name: "Edit", input: { file_path: planFile } }), v.draft("plan:x6"));
   writeFileSync(planFile, "# 子智能体改过的计划");
   assert.equal((v.result("sub-edit")[0] as any)?.text, "# 子智能体改过的计划", "子智能体的修改与重放都进同一本账");
   writeFileSync(planFile, "# 计划\n\n1. 改 a.txt\n");
@@ -286,6 +314,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   writeFileSync(sessionTracePath("task", "session"), JSON.stringify({ at, turnStartedAt: at, event: events.find((event) => event.kind === "plan") }) + "\n");
   await assertPlanReady("task", "claude", null, null, "plan:toolu_exit");
   await assert.rejects(assertPlanReady("task", "claude", null, null, "plan:older"), /新版本/);
+  // 交出后计划文件又被改：退回草稿那条事件进了记录，这一版就不能再实施
+  appendFileSync(sessionTracePath("task", "session"), JSON.stringify({ at, turnStartedAt: at, event: { kind: "plan", id: "plan:toolu_exit", text: "", status: "streaming", delta: true } }) + "\n");
+  await assert.rejects(assertPlanReady("task", "claude", null, null, "plan:toolu_exit"), /没有已完成的计划/);
+  writeFileSync(sessionTracePath("task", "session"), JSON.stringify({ at, turnStartedAt: at, event: events.find((event) => event.kind === "plan") }) + "\n");
   await assert.rejects(assertPlanReady("task", "codex", null, null, "plan:toolu_exit"), /没有可实施的计划/, "按执行器类型找出计划的那位");
   const approved = await prepareCliInvocation(await row(), "claude", "/plan implement plan:toolu_exit", null, null);
   assert.equal(approved.cliState.plan, false, "批准即退出计划模式，实施回合以默认权限跑");

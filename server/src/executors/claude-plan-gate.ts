@@ -127,19 +127,21 @@ function questionsOf(input: any): QuestionItem[] {
 interface Mutation { path: string; state: "pending" | "ok" | "failed" }
 
 /**
- * 交给用户确认的计划只有一个来源判据：**计划文件最近一次修改成功之后的那一版**。正文从哪来
- * （CLI 在 ExitPlanMode 入参里带的 `plan`、计划文件本身、模型说过的话）都要先过这道：
- *   · 计划文件最后一次修改失败了或还没回执 → 不收，让模型改成了再交（CLI 会把盘上的旧正文
- *     自己补进 `input.plan`，2.1.283 实测，所以不能因为入参有正文就跳过）；
- *   · 先后以 tool_use 出现的顺序为准，回执晚到的旧修改成功不会冲掉新修改的失败；
- *   · 交完之后计划文件又改成了 → 按改后的正文重新交一次，卡上永远是会话里最新的那一版。
- * 哪个文件是计划文件以 CLI 自己在 ExitPlanMode 里报的 `planFilePath` 为准，没报（老版本）才用目录判。
+ * 交给用户确认的计划只有一个判据：**计划文件最近一次修改成功之后的那一版**，交计划与交后重算共用
+ * 同一个 `current()`：
+ *   · 计划文件最后一次修改失败了或还没回执 → 不可交（CLI 会把盘上的旧正文自己补进 ExitPlanMode 的
+ *     `input.plan`，2.1.283 实测，所以不能因为入参有正文就跳过）；先后以 tool_use 出现的顺序为准，
+ *     回执晚到的旧修改成功不会冲掉新修改的失败；正文为空同样不可交。
+ *   · 交出之后计划文件一开始改，那张卡当场退回草稿（同 id 追加一条 streaming 事件，正文不变）——
+ *     卡片与实施预检都只认最新一条 complete，于是它不再可实施；改完按 `current()` 重算，可交就以
+ *     新正文出一张新卡，否则（失败、写空、读不到、还有没结的修改）停在草稿，等模型重新交。
+ * 哪个文件是计划文件以 CLI 在 ExitPlanMode 里报的 `planFilePath` 为准，没报（老版本）才用目录判。
  * 主智能体与子智能体的修改、直播与接管重放都记进同一本账。
  */
 export class ClaudePlanGate {
   private readonly mutations = new Map<string, Mutation>();
-  /** 已交出的计划对应的计划文件（null = 交的是模型说的话，没有文件）；还没交过 = undefined。 */
-  private submitted: { path: string | null } | undefined;
+  /** 最近交出的那份计划：卡片 id、对应的计划文件（null = 交的是模型说的话）、此刻是否仍可实施。 */
+  private submitted: { id: string; path: string | null; live: boolean } | undefined;
   /** 交计划那次 ExitPlanMode 的 tool_use_id → 它报的计划文件：重放时靠回执认出「交过了」。 */
   private readonly exits = new Map<string, string | null>();
   /**
@@ -170,55 +172,65 @@ export class ClaudePlanGate {
     return within(resolve(this.plansDir), target) && !!this.realPlansDir && !!real && within(this.realPlansDir, real);
   }
 
-  /** 任一智能体（主 / 子）的一次工具调用：文件修改记账，交计划记下它报的计划文件。 */
-  noteToolUse(block: any): void {
-    const id = block?.id;
-    if (typeof id !== "string") return;
-    if (block.name === "ExitPlanMode") this.exits.set(id, absolutePath(block.input?.planFilePath));
-    const path = PLAN_FILE_TOOLS.has(block.name) ? absolutePath(block.input?.file_path) : null;
-    if (path && !this.mutations.has(id)) this.mutations.set(id, { path, state: "pending" });
+  /** 这处修改改的是不是这份计划的文件（CLI 报了路径就按路径，否则按目录）。 */
+  private touches(planPath: string | null, path: string): boolean {
+    return planPath ? path === planPath : this.isPlanFile(path);
   }
 
-  /** 主智能体的每条 assistant 消息（重放时也要喂：接管回来照样认得出计划文件和兜底正文）。 */
-  noteAssistant(content: unknown): void {
-    for (const block of Array.isArray(content) ? content as any[] : []) {
-      if (block?.type === "text" && typeof block.text === "string") this.spoken += block.text;
-      if (block?.type !== "tool_use") continue;
-      this.noteToolUse(block);
-      if (!PLAN_HANDOFF_TOOLS.has(block.name)) this.spoken = "";
-    }
-  }
-
-  /** 任一智能体的工具回执（同样要在重放时喂）。交过计划之后计划文件又改成了，返回重新交的那份计划。 */
-  noteToolResult(block: any): AgentEvent[] {
-    const id = block?.tool_use_id;
-    if (typeof id !== "string") return [];
-    if (this.exits.has(id) && resultText(block.content).includes(SUBMITTED)) this.submitted = { path: this.exits.get(id) ?? null };
-    const mutation = this.mutations.get(id);
-    if (!mutation || mutation.state !== "pending") return [];
-    mutation.state = block.is_error === true ? "failed" : "ok";
-    if (mutation.state !== "ok" || !this.submitted || !this.isSubmittedPlan(mutation.path)) return [];
-    const text = readText(mutation.path);
-    if (!text) return [];
-    this.submitted = { path: mutation.path };
-    return [{ kind: "plan", id: `plan:${id}`, text, status: "complete" }];
-  }
-
-  private isSubmittedPlan(path: string): boolean {
-    return this.submitted?.path ? path === this.submitted.path : this.isPlanFile(path);
-  }
-
-  /** 这次交计划的正文；计划文件最后一次修改没成功 / 没完成时给出拒收原因。 */
-  private planText(input: any): { text: string; path: string | null } | { refuse: string } {
-    const path = absolutePath(input?.planFilePath);
-    const changes = [...this.mutations.values()].filter((m) => path ? m.path === path : this.isPlanFile(m.path));
+  /** 计划此刻能交哪份正文；不能交时给出原因。`given` 是 CLI 随 ExitPlanMode 带来的正文。 */
+  private current(planPath: string | null, given?: unknown): { text: string; path: string | null } | { refuse: string } {
+    const changes = [...this.mutations.values()].filter((m) => this.touches(planPath, m.path));
     const latest = changes.at(-1);
     if (latest?.state === "pending") return { refuse: WRITE_PENDING };
     if (latest?.state === "failed") return { refuse: WRITE_FAILED };
-    const file = path ?? latest?.path ?? null;
-    const given = typeof input?.plan === "string" ? input.plan.trim() : "";
-    const text = given || (file ? readText(file) : "") || (changes.length ? "" : this.spoken.trim());
-    return { text, path: file };
+    const file = planPath ?? latest?.path ?? null;
+    const text = (typeof given === "string" ? given.trim() : "") || (file ? readText(file) : "") || (changes.length ? "" : this.spoken.trim());
+    return text ? { text, path: file } : { refuse: NO_PLAN };
+  }
+
+  /** 任一智能体（主 / 子）的一次工具调用：文件修改记账；改到已交出的计划就把那张卡退回草稿。 */
+  noteToolUse(block: any): AgentEvent[] {
+    const id = block?.id;
+    if (typeof id !== "string") return [];
+    if (block.name === "ExitPlanMode") this.exits.set(id, absolutePath(block.input?.planFilePath));
+    const path = PLAN_FILE_TOOLS.has(block.name) ? absolutePath(block.input?.file_path) : null;
+    if (!path || this.mutations.has(id)) return [];
+    this.mutations.set(id, { path, state: "pending" });
+    const submitted = this.submitted;
+    if (!submitted?.live || !this.touches(submitted.path, path)) return [];
+    submitted.live = false;
+    return [{ kind: "plan", id: submitted.id, text: "", status: "streaming", delta: true }];
+  }
+
+  /** 主智能体的每条 assistant 消息（重放时也要喂：接管回来照样认得出计划文件和兜底正文）。 */
+  noteAssistant(content: unknown): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    for (const block of Array.isArray(content) ? content as any[] : []) {
+      if (block?.type === "text" && typeof block.text === "string") this.spoken += block.text;
+      if (block?.type !== "tool_use") continue;
+      events.push(...this.noteToolUse(block));
+      if (!PLAN_HANDOFF_TOOLS.has(block.name)) this.spoken = "";
+    }
+    return events;
+  }
+
+  /** 任一智能体的工具回执（同样要在重放时喂）。退回草稿的计划改完可交时，返回重新交的那份。 */
+  noteToolResult(block: any): AgentEvent[] {
+    const id = block?.tool_use_id;
+    if (typeof id !== "string") return [];
+    // 直播里交计划那一刻已经记下了；这里补的是接管重放（那时的权限请求不再经过闸）。
+    if (this.exits.has(id) && this.submitted?.id !== `plan:${id}` && resultText(block.content).includes(SUBMITTED)) {
+      this.submitted = { id: `plan:${id}`, path: this.exits.get(id) ?? null, live: true };
+    }
+    const mutation = this.mutations.get(id);
+    if (!mutation || mutation.state !== "pending") return [];
+    mutation.state = block.is_error === true ? "failed" : "ok";
+    const submitted = this.submitted;
+    if (!submitted || submitted.live || !this.touches(submitted.path, mutation.path)) return [];
+    const plan = this.current(submitted.path ?? mutation.path);
+    if ("refuse" in plan) return [];
+    this.submitted = { id: `plan:${id}`, path: plan.path, live: true };
+    return [{ kind: "plan", id: `plan:${id}`, text: plan.text, status: "complete" }];
   }
 
   /** 回一条 control_request；返回要推进事件流的事件（计划、澄清问题）。 */
@@ -236,13 +248,13 @@ export class ClaudePlanGate {
     const deny = (message: string) => this.write(response(requestId, { behavior: "deny", message }));
     if (this.halted) { deny("计划模式没有生效，本回合已停止。"); return []; }
     if (tool === "ExitPlanMode") {
-      const plan = this.planText(input);
+      const plan = this.current(absolutePath(input.planFilePath), input.plan);
       if ("refuse" in plan) { deny(plan.refuse); return []; }
-      if (!plan.text) { deny(NO_PLAN); return []; }
       deny(SUBMITTED);
       this.spoken = "";
-      this.submitted = { path: plan.path };
-      return [{ kind: "plan", id: `plan:${String(request.tool_use_id ?? requestId)}`, text: plan.text, status: "complete" }];
+      const id = `plan:${String(request.tool_use_id ?? requestId)}`;
+      this.submitted = { id, path: plan.path, live: true };
+      return [{ kind: "plan", id, text: plan.text, status: "complete" }];
     }
     if (tool === "AskUserQuestion") {
       const questions = questionsOf(input);
@@ -251,9 +263,9 @@ export class ClaudePlanGate {
       return [{ kind: "userInput", questions }];
     }
     if (PLAN_FILE_TOOLS.has(tool) && this.isPlanFile(input.file_path)) {
-      this.noteToolUse({ id: request.tool_use_id, name: tool, input });
+      const events = this.noteToolUse({ id: request.tool_use_id, name: tool, input });
       allow();
-      return [];
+      return events;
     }
     if (READ_ONLY.has(tool)) { allow(); return []; }
     deny(READ_ONLY_DENIAL(tool));

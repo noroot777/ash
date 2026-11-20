@@ -78,7 +78,7 @@ Claude 的普通执行回合也能用无参数 `/goal` 查询已保存的目标�
 Claude 也有 `/plan`，语义是 Claude Code 自己的 plan mode：
 
 - 裸 `/plan`、`/plan off` 当场改当前作用域的开关，不起进程、不排定时，标题行的「计划」小标随之出现或消失。
-- `/plan 问题`（或计划模式开着时的普通回复）进计划回合：Navi 以 `--permission-mode plan --permission-prompt-tool stdio` 起跑（不带 `--dangerously-skip-permissions`，两者同传时后者生效），CLI 要权限的调用由 Navi 回答——只读工具和写计划文件放行，其余一律拒；执行器额外参数里改权限模式的那几个在计划回合摘掉，CLI 起跑后报的权限模式仍不是 plan 就报错停下。模型调用 ExitPlanMode 时，Navi 把计划文件的正文变成计划卡并拒掉这次调用，回合自然收尾，不把进程挂着等批准；计划文件最近一次修改失败或还没完成时不收，交完之后计划文件又改成了就按改后的正文重新出一张卡。计划回合里的 AskUserQuestion 转成答题卡。
+- `/plan 问题`（或计划模式开着时的普通回复）进计划回合：Navi 以 `--permission-mode plan --permission-prompt-tool stdio` 起跑（不带 `--dangerously-skip-permissions`，两者同传时后者生效），CLI 要权限的调用由 Navi 回答——只读工具和写计划文件放行，其余一律拒；执行器额外参数里改权限模式的那几个在计划回合摘掉，CLI 起跑后报的权限模式仍不是 plan 就报错停下。模型调用 ExitPlanMode 时，Navi 把计划文件的正文变成计划卡并拒掉这次调用，回合自然收尾，不把进程挂着等批准；计划文件最近一次修改失败、还没完成或正文为空时不收；交出之后计划文件一开始改，那张卡就退回草稿、不能再实施，改成了才按改后的正文重新出一张卡（改失败、改成空就停在草稿，等模型重新交）。计划回合里的 AskUserQuestion 转成答题卡。
 - 计划卡「实施此计划」发 `/plan implement`：以默认权限 `--resume` 同一会话，按已确认的计划开工，并退出计划模式。
 
 headless 下 Claude 没有可透传的 `/plan`（init 的 `slash_commands` 里没有它），所以这条命令由 Navi 实现，不当原生命令原样发给 CLI。
