@@ -13,7 +13,7 @@ import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
 import { agents, freeReviewRuns, tasks, sessions } from "./db/schema.js";
 import {
-  bindTurnToken, claimOwnTurn, discardStartingRun, finalizeAbandonedRun, releaseTurn, trackRun,
+  bindTurnToken, claimOwnTurnWhenReady as claimOwnTurn, discardStartingRun, finalizeAbandonedRun, releaseTurn, trackRun,
   type Killable, type TurnIdentity,
 } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
@@ -203,7 +203,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
           .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.status, "reviewing")))).at(0) ?? null
         : null;
       // claimedTurn 是外层那个 let(不是 const):下面接管失败的 catch 出口也要凭它放锁。
-      claimedTurn = claimOwnTurn(
+      claimedTurn = await claimOwnTurn(
         task.id, sess.role,
         restoredReview ? { run: restoredReview.id, round: restoredReview.round } : null,
       );

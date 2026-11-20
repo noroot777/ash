@@ -28,7 +28,7 @@
 // 送达的通知把一个已经结束的任务拉起来),只是下游没有那个大 try 可以托管占位,所以它把
 // 「送完要还的那把锁」当返回值交出去。两个入口的判据(验收互斥、唤醒资格、读失败的退避
 // 语义)必须逐字一致 —— 分家一次就是第 6 轮审查那两条:单飞这侧全部修好,团队那侧照旧。
-import { claimOwnTurn, claimWakeTurn, reclaimTurn, releaseTurn, turnSourceRole, turnSourceReview } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, claimWakeTurnWhenReady, reclaimTurn, releaseTurn, turnSourceRole, turnSourceReview } from "./runs.js";
 import type { TurnIdentity, TurnOwner, TurnSource } from "./runs.js";
 import type { TurnStartDecline } from "./task-continue-options.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
@@ -118,7 +118,7 @@ async function decideTurnEntry(input: TurnEntryInput): Promise<TurnIdentity | Tu
   // 不起,而且**没有任何东西需要还** —— 现在占着的那把不是我们的。
   const owner = input.turnHeld
     ? reclaimTurn(taskId, input.turnHeld, turnSourceRole(input.source), turnSourceReview(input.source))
-    : claimOwnTurn(taskId, turnSourceRole(input.source), turnSourceReview(input.source));
+    : await claimOwnTurn(taskId, turnSourceRole(input.source), turnSourceReview(input.source));
   // **这一条就是那个瞬时档**:锁此刻在别人手上(或者入口占下的那把已经被人工放开拔走、另一轮
   // 合法占上)。这一侧到这一刻一个字节都没动,而锁总会被还回来 —— 所以它和下面几条退避不是
   // 一件事,压成同一个 `null` 就是第 1 轮审查问题 2。
@@ -204,7 +204,7 @@ export async function enterLeadDelivery(input: {
   if (input.turnHeld) releaseTurn(taskId, input.turnHeld);
   // 抢不到 = 正有人改着这个任务的状态(或另一条唤醒正在送)。这一句一个字都没送出去,
   // 消息按「未投递」留在托盘里,下一次扫描再判 —— 那时它读到的就是落库后的终态。
-  const release = wakeGuard ? claimWakeTurn(taskId) : () => {};
+  const release = wakeGuard ? await claimWakeTurnWhenReady(taskId) : () => {};
   if (!release) return null;
   // 验收互斥对 team 只能靠这一次检查(调度台不走验收链,摘牌对它本来就是 no-op,
   // 破坏面只有消息时序)。

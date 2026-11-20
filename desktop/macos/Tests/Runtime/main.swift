@@ -7,17 +7,20 @@ let gate = UpdateGate.shared
 gate.pollInterval = 0.1
 gate.shutdownTimeout = 3
 gate.lockTimeout = 3
-gate.ask = { _ in emit("UNEXPECTED ASK"); exit(3) }
+gate.ask = { _ in
+  if mode == "legacy-wait" { emit("ASK LEGACY"); return .wait }
+  emit("UNEXPECTED ASK"); exit(3)
+}
 var finished = false
 gate.report = { emit("FAILED \($0)"); finished = true }
 if mode == "prepare" {
   do { try RuntimeStore.prepare(); emit("READY \(NaviConfig.runtimeURL.path)") }
   catch { emit("FAILED \(error.localizedDescription)"); exit(1) }
 } else {
-  if mode == "stale" {
+  if mode == "stale" || mode.hasPrefix("legacy") {
     do { try RuntimeStore.prepare() } catch { emit("FAILED \(error)"); exit(1) }
   }
-  gate.request(mode == "stale" ? .staleServer(from: "old") : .update(version: "new")) {
+  gate.request(mode == "stale" || mode.hasPrefix("legacy") ? .staleServer(from: "old") : .update(version: "new")) {
     emit("PROCEED")
     finished = true
   }

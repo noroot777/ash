@@ -23,7 +23,7 @@ import { win32 } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, queueItems, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
-import { claimOwnTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { expandHome, worktreePathFor } from "./git.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
@@ -416,7 +416,7 @@ export async function exportHandoff(
     // 占住回合:导出期间队列/调度器不能再把它拉起来;占不到 = 有回合在收尾,让用户重试。
     // 身份留住:导出整段都是 await(对端预检、打包、传输),还锁只能还自己那一把
     // (本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
-    const turn = claimOwnTurn(taskId, "handoff");
+    const turn = await claimOwnTurn(taskId, "handoff");
     if (!turn) throw new HandoffError("任务回合还在收尾,稍等几秒再试", 409);
     try {
       const checkpointBlocked = await preparePendingCheckpointStart(taskId);

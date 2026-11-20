@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,27 @@ function inventory(root, directory = "") {
 
 function identifier(entries) {
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+}
+
+function activateRuntime(store, id) {
+  const launcher = join(store, `.mcp-${randomUUID()}`);
+  const pointer = join(store, `.current-${randomUUID()}`);
+  try {
+    writeFileSync(launcher, `#!/bin/sh
+set -eu
+store=$(CDPATH= cd -P -- "$(/usr/bin/dirname -- "$0")" && pwd)
+version=$(/usr/bin/readlink "$store/current")
+case "$version" in ''|*[!0-9a-f]*) exit 1 ;; esac
+[ "\${#version}" -eq 64 ] || exit 1
+exec "$store/$version/node/bin/node" "$store/$version/mcp/dist/index.js" "$@"
+`, { mode: 0o755 });
+    renameSync(launcher, join(store, "mcp.sh"));
+    symlinkSync(id, pointer);
+    renameSync(pointer, join(store, "current"));
+  } finally {
+    rmSync(launcher, { force: true });
+    rmSync(pointer, { force: true });
+  }
 }
 
 export function sealRuntime(source) {
@@ -58,6 +79,7 @@ function publishRuntime(source, store) {
   if (existsSync(target)) {
     if (lstatSync(target).isSymbolicLink()) throw new Error(`运行时目标不能是链接：${target}`);
     verifyRuntime(target, manifest.id);
+    activateRuntime(store, manifest.id);
     return target;
   }
   const stage = join(store, `.installing-${randomUUID()}`);
@@ -69,6 +91,7 @@ function publishRuntime(source, store) {
       if (!existsSync(target) || lstatSync(target).isSymbolicLink()) throw error;
       verifyRuntime(target, manifest.id);
     }
+    activateRuntime(store, manifest.id);
     return target;
   } finally {
     rmSync(stage, { recursive: true, force: true });

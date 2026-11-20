@@ -42,7 +42,11 @@ if (process.platform !== "darwin") {
       copyFileSync(runtimeTool, join(directory, "scripts/runtime-store.mjs"));
       writeFileSync(join(directory, ".in-use"), "");
       writeFileSync(join(directory, "version"), version);
-      writeFileSync(join(directory, "mcp/dist/index.js"), `setInterval(() => {}, 1000);`);
+      writeFileSync(join(directory, "mcp/dist/index.js"), `
+const fs = require('node:fs');
+if (process.argv[2]) fs.writeFileSync(process.argv[2], fs.realpathSync(__dirname + '/../..'));
+setInterval(() => {}, 1000);
+`);
       writeFileSync(join(directory, "server/dist/index.js"), `
 const http = require('node:http'); const fs = require('node:fs');
 const codeDir = fs.realpathSync(__dirname + '/../..');
@@ -116,15 +120,30 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
       }
       assert.fail("fixture did not become ready");
     };
-    const start = async () => {
+    const start = async (runtime = oldRuntime) => {
       rmSync(ready, { force: true });
-      const fixture = spawnTestFixture(join(oldRuntime, "node/bin/node"), [join(oldRuntime, "server/dist/index.js")], { cwd: data, stdio: "ignore" });
+      const fixture = spawnTestFixture(join(runtime, "node/bin/node"), [join(runtime, "server/dist/index.js")], { cwd: data, stdio: "ignore" });
       fixtures.push(fixture);
       await waitFor(() => existsSync(ready));
       const identity = JSON.parse(readFileSync(ready, "utf8"));
       writeFileSync(join(data, "navi.db.navi.lock"), JSON.stringify({ ...identity, token: "fixture-token" }));
       return identity;
     };
+    const beforeMcp = join(temporary, "before-mcp");
+    const afterMcp = join(temporary, "after-mcp");
+    installRuntime(payload, store);
+    const stableMcp = spawnTestFixture("/bin/sh", [join(store, "mcp.sh"), beforeMcp], { cwd: data, stdio: "ignore" });
+    fixtures.push(stableMcp);
+    await waitFor(() => existsSync(beforeMcp));
+    assert.equal(realpathSync(readFileSync(beforeMcp, "utf8")), oldRuntime);
+    installRuntime(nextPayload, store);
+    const upgradedMcp = spawnTestFixture("/bin/sh", [join(store, "mcp.sh"), afterMcp], { cwd: data, stdio: "ignore" });
+    fixtures.push(upgradedMcp);
+    await waitFor(() => existsSync(afterMcp));
+    assert.equal(realpathSync(readFileSync(afterMcp, "utf8")), newRuntime);
+    process.kill(stableMcp.pid, 0);
+    assert.equal(realpathSync(readFileSync(beforeMcp, "utf8")), oldRuntime);
+    console.log("✓ 固定 MCP 入口跟随新版本，已启动的旧 MCP 保留原运行时");
     setOptions({});
     let service = await start();
     const mcp = spawnTestFixture(join(oldRuntime, "node/bin/node"), [join(oldRuntime, "mcp/dist/index.js")], { cwd: data, stdio: "ignore" });
@@ -154,10 +173,14 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     `], { cwd: data, stdio: "ignore" });
     fixtures.push(legacy);
     await waitFor(() => existsSync(lockReady));
-    assert.match(await drive("update", url()), /FAILED[\s\S]*首次迁移/);
+    const blockedUpdate = await drive("update", url());
+    assert.match(blockedUpdate, /FAILED[\s\S]*PID/);
+    assert.ok(blockedUpdate.includes(String(legacy.pid)));
+    assert.match(blockedUpdate, /检查 Navi MCP 登记[\s\S]*mcp.sh/);
+    assert.doesNotMatch(blockedUpdate, /首次迁移/);
     process.kill(service.pid, 0);
     await legacy.dispose();
-    console.log("✓ 首次迁移仍有旧布局 MCP 持锁时拒绝换包，不误停外置服务");
+    console.log("✓ 包内 MCP 持锁时列出进程与固定迁移入口，不误停外置服务");
 
     setOptions({ rejectLease: true });
     assert.match(await drive("stale", url()), /WAITING/);
@@ -185,6 +208,18 @@ setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(
     assert.match(readFileSync(requests, "utf8"), /"check":"lease"/);
     assert.equal(readFileSync(join(oldRuntime, "version"), "utf8"), "old");
     console.log("✓ detached/MCP 回合取得许可后服务下线，旧 MCP 与旧运行时保留");
+
+    rmSync(requests, { force: true });
+    setOptions({ impact: { ...empty, mcpDisrupted: [survivor] } });
+    service = await start(payload);
+    assert.match(await drive("legacy-wait", url()), /ASK LEGACY[\s\S]*WAITING/);
+    process.kill(service.pid, 0);
+    assert.equal(existsSync(requests), false);
+    setOptions({ impact: empty });
+    assert.match(await drive("legacy-idle", url()), /PROCEED/);
+    await waitFor(() => { try { process.kill(service.pid, 0); return false; } catch { return true; } });
+    assert.equal(existsSync(requests), false);
+    console.log("✓ 旧布局服务仍认作自家：有风险按旧闸等待，空闲时停服备份迁移，不申请外置接管许可");
   }, [
     async () => { for (const fixture of fixtures) await fixture.dispose(); },
     () => rmSync(temporary, { recursive: true, force: true }),

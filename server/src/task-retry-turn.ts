@@ -59,7 +59,7 @@ import { continueTask } from "./orchestrator.js";
 import { inputStartsExecution } from "./task-continuation-entry.js";
 import { queueBlockedText, queueBlockerDetails, type QueueBlocker } from "./queues.js";
 import { claimQueueSeat, queueClaimError, type QueueSeat } from "./queue-seat.js";
-import { claimOwnTurn, releaseTurn } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn } from "./runs.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { checkpointStartBlock, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
@@ -461,7 +461,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     // 占到的那把锁的**身份**一路带到交接与释放:这中间全是 await(权威重查、队列认领),
     // 人工放开可以把锁拔走、另一轮合法占上,按任务 id 还锁撤掉的就是后来者那把互斥
     // (本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
-    const turn = claimOwnTurn(taskId, kind === "review" ? "dispatch" : "single");
+    const turn = await claimOwnTurn(taskId, kind === "review" ? "dispatch" : "single");
     if (!turn) {
       return c.json(await noted(taskId, action, { error: "任务回合正在进行，结束后再重试", status: first.task.status }), 409);
     }

@@ -15,7 +15,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { claimOwnTurn, releaseTurn, turnBusyText, whenTurnIdle } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn, turnBusyText, whenTurnIdle } from "./runs.js";
 import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -93,7 +93,7 @@ export function mountWorktreeMoveRoutes(api: Hono): void {
     }
     if (task.status === "queued") return c.json({ error: "任务正要起跑，等这一回合跑起来或停下再改" }, 409);
     if (isAcceptingTask(taskId)) return c.json({ error: "任务正在验收，结束后再改" }, 409);
-    const turn = claimOwnTurn(taskId, "single");
+    const turn = await claimOwnTurn(taskId, "single");
     if (!turn) return c.json({ error: turnBusyText(taskId, "改到独立工作区") }, 409);
     try {
       const moved = await moveTaskToWorktree(taskId, input);
@@ -130,7 +130,7 @@ export function mountWorktreeMoveRoutes(api: Hono): void {
     // 智能体正在那个目录里跑的时候挪不得：收编只在任务停着时办。
     if (task.status === "running" || task.status === "queued") return c.json({ error: "任务正在运行，等它停下再收编" }, 409);
     if (isAcceptingTask(taskId)) return c.json({ error: "任务正在验收，结束后再收编" }, 409);
-    const turn = claimOwnTurn(taskId, "single");
+    const turn = await claimOwnTurn(taskId, "single");
     if (!turn) return c.json({ error: turnBusyText(taskId, "收编工作区") }, 409);
     try {
       return c.json({ adopted: await adoptForeignWorktree(taskId, { path, mergeTargetBranch }) });

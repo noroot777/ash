@@ -33,7 +33,7 @@ explain_in_use() {
   echo "✕ 没有安装：下面这些进程还在用 ${DEST} 里的代码，现在换掉会让它们新旧代码混着跑。" >&2
   printf '%s\n' "$1" | sed 's/^/    /' >&2
   echo "  空闲的 Navi 服务会自动停止；仍列在这里的服务有任务在跑，或无法安全确认其状态。" >&2
-  echo "  Navi MCP（mcp/dist/index.js）是在跑的 agent 拉起的，等那几个任务这一轮结束；Navi 本身先退出。" >&2
+  echo "  若列出 Navi MCP，在 app 菜单「检查 Navi MCP 登记…」中把登记改到固定外置入口（数据目录/.mac-runtimes/mcp.sh），再重开对应 CLI 会话。" >&2
   echo "  都停了再装一次。" >&2
 }
 

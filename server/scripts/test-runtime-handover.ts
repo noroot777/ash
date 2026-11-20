@@ -2,9 +2,9 @@ import "./isolated-data.js";
 import assert from "node:assert/strict";
 import { acquireRuntimeHandover } from "../src/runtime-handover.js";
 import { releaseRuntimeHandover, runtimeHandoverActive, runtimeHandoverMatches } from "../src/runtime-handover-state.js";
-import { claimOwnTurn, heldTurns, releaseTurn } from "../src/turn-lock.js";
+import { claimOwnTurn, claimOwnTurnWhenReady, heldTurns, releaseTurn, whenTurnIdle, turnBusyText, tryClaimOwnTurn } from "../src/turn-lock.js";
 import type { RestartImpact } from "../src/reattach.js";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -15,6 +15,8 @@ const empty: RestartImpact = { survives: [], resumes: [], interrupted: [], mcpDi
 const owner = claimOwnTurn("survivor");
 assert.ok(owner);
 owner.token = "turn-token";
+let transferredRan = false;
+const cancelTransferred = whenTurnIdle("survivor", () => { transferredRan = true; });
 const survivor = { id: "survivor", title: "still working", pid: process.pid };
 const impact = { ...empty, survives: [survivor], mcpDisrupted: [survivor] };
 const accepted = await acquireRuntimeHandover(async () => {
@@ -27,8 +29,10 @@ assert.equal(runtimeHandoverMatches(accepted.lease), true);
 assert.equal(releaseRuntimeHandover("wrong-lease"), false);
 assert.equal(claimOwnTurn("another"), null);
 assert.ok((await acquireRuntimeHandover(async () => empty, heldTurns)).error);
-releaseRuntimeHandover(accepted.lease);
 releaseTurn("survivor", owner);
+cancelTransferred();
+releaseRuntimeHandover(accepted.lease);
+assert.equal(transferredRan, false);
 assert.equal(runtimeHandoverActive(), false);
 console.log("✓ 保留 MCP 的 detached 回合可接管，接管期间新起跑与并发接管被拦住");
 
@@ -50,17 +54,80 @@ console.log("✓ 团队当前回合、排队、未落库起跑与探测失败均
 const originalNow = Date.now;
 const expires = await acquireRuntimeHandover(async () => empty, heldTurns);
 assert.ok(expires.lease);
+const expirationWaiter = claimOwnTurnWhenReady("expiry-waiter");
 try {
   Date.now = () => originalNow() + 61_000;
   assert.equal(runtimeHandoverMatches(expires.lease), false);
   const after = claimOwnTurn("after-expiry");
   assert.ok(after);
   releaseTurn("after-expiry", after);
+  const resumed = await expirationWaiter;
+  assert.ok(resumed);
+  releaseTurn("expiry-waiter", resumed);
 } finally {
   Date.now = originalNow;
   releaseRuntimeHandover(expires.lease);
 }
 console.log("✓ 启动器退出后接管许可自动过期，不留下永久冻结");
+
+const waitingLease = await acquireRuntimeHandover(async () => empty, heldTurns);
+assert.ok(waitingLease.lease);
+assert.equal(tryClaimOwnTurn("manual-run").kind, "handover");
+let attempts = 0;
+let canceledRan = false;
+const cancelWaiting = whenTurnIdle("canceled-wait", () => { canceledRan = true; });
+cancelWaiting();
+const reviewStarted = new Promise<void>((resolve) => {
+  const dispatch = () => whenTurnIdle("review-target", () => {
+    attempts += 1;
+    const review = claimOwnTurn("review-target", "reviewer");
+    assert.ok(review, "a released handover must not consume review retries");
+    releaseTurn("review-target", review);
+    resolve();
+  });
+  dispatch();
+});
+const pendingRun = claimOwnTurnWhenReady("manual-run");
+await new Promise((resolve) => setTimeout(resolve, 20));
+assert.equal(attempts, 0);
+assert.match(turnBusyText("manual-run", "运行"), /切换新版服务/);
+releaseRuntimeHandover(waitingLease.lease);
+await reviewStarted;
+const resumedRun = await pendingRun;
+assert.ok(resumedRun);
+releaseTurn("manual-run", resumedRun);
+assert.equal(attempts, 1);
+assert.equal(canceledRan, false);
+console.log("✓ 冻结期间派审不消耗重排次数，手动起跑与空闲回调等许可释放，取消等待有效");
+
+if (process.platform === "darwin") {
+  const { desktopRuntimeMcp } = await import("../src/mcp-registry/desktop-runtime.js");
+  const { pointsAt } = await import("../src/mcp-registry/host-setup.js");
+  const home = mkdtempSync(join(tmpdir(), "navi-runtime-host-mcp-"));
+  try {
+    const store = join(home, ".mac-runtimes");
+    const versions = ["a".repeat(64), "b".repeat(64)];
+    for (const id of versions) {
+      const code = join(store, id);
+      mkdirSync(code, { recursive: true });
+      writeFileSync(join(code, ".runtime.json"), JSON.stringify({ format: 1, id }));
+    }
+    writeFileSync(join(store, "mcp.sh"), "#!/bin/sh\n");
+    symlinkSync(versions[0], join(store, "current"));
+    const first = desktopRuntimeMcp(join(store, versions[0]), home, "http://127.0.0.1:4317");
+    assert.ok(first);
+    assert.equal(first.command, "/bin/sh");
+    const registration = { command: first.command, args: first.args, naviUrl: first.env.NAVI_URL };
+    rmSync(join(store, "current"));
+    symlinkSync(versions[1], join(store, "current"));
+    const second = desktopRuntimeMcp(join(store, versions[1]), home, "http://127.0.0.1:4317");
+    assert.deepEqual(second, first);
+    assert.equal(pointsAt(registration, second!), true);
+    assert.equal(pointsAt({ ...registration, args: [join(home, "Navi.app/Contents/Resources/app/mcp/dist/index.js")] }, second!), false);
+    assert.equal(desktopRuntimeMcp(home, home, "http://127.0.0.1:4317"), null);
+    console.log("✓ 宿主登记建议使用不变的外置入口，更新后仍认作自家，旧包登记明确提示迁移");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+}
 
 process.env.NAVI_LAX_DONE = "1";
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -95,6 +162,32 @@ setInterval(() => {
 const fixture = spawnTestFixture(process.execPath, [source], { cwd: directory, stdio: "ignore" });
 await withTestResources(async () => {
   await ensureSchema();
+  const { continueWhenIdle } = await import("../src/turn-idle-delivery.js");
+  const { claimReconcileTurnWhenReady } = await import("../src/runs.js");
+  const { claimLaunchTurn } = await import("../src/launch-capacity.js");
+  const deferredLease = await acquireRuntimeHandover(async () => empty, heldTurns);
+  assert.ok(deferredLease.lease);
+  const failures: string[] = [];
+  const deferredReview = new Promise<void>((resolve) => {
+    continueWhenIdle("deferred-review", "review", {}, (_message, failure) => {
+      failures.push(failure); resolve();
+    }, undefined, async () => "test ownership superseded");
+  });
+  const reconciliation = claimReconcileTurnWhenReady("deferred-reconcile");
+  const launch = claimLaunchTurn("deferred-launch", null);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(failures, []);
+  assert.equal(heldTurns().length, 0);
+  releaseRuntimeHandover(deferredLease.lease);
+  await deferredReview;
+  assert.deepEqual(failures, ["superseded"]);
+  const finishReconciliation = await reconciliation;
+  assert.ok(finishReconciliation);
+  finishReconciliation();
+  const launched = await launch;
+  assert.equal(launched.ok, true);
+  if (launched.ok) releaseTurn("deferred-launch", launched.turn);
+  console.log("✓ 生产派审投递、残留结算与容量认领都等待冻结释放，不落误失败、不丢结算");
   const startedAt = new Date().toISOString();
   await db.insert(projects).values({ id: "runtime-upgrade-project", name: "upgrade", repoPath: directory, createdAt: startedAt });
   await db.insert(tasks).values({

@@ -178,10 +178,15 @@ final class UpdateGate {
   }
 
   private func assess(_ completion: @escaping (ImpactVerdict) -> Void) {
-    let preservingRuntime = self.preservingRuntime
-    DispatchQueue.global(qos: .userInitiated).async {
+    let canPreserve: Bool = { if case .staleServer = purpose { return RuntimeStore.destination != nil }; return false }()
+    DispatchQueue.global(qos: .userInitiated).async { [self] in
+      let preservingRuntime: Bool = {
+        guard canPreserve, case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
+              let codeDir = instance.codeDir else { return false }
+        return RuntimeStore.contains(codeDir)
+      }()
       let verdict = RestartImpactProbe.assessSync(preservingRuntime: preservingRuntime)
-      DispatchQueue.main.async { completion(verdict) }
+      DispatchQueue.main.async { self.preservingRuntime = preservingRuntime; completion(verdict) }
     }
   }
 
@@ -220,10 +225,7 @@ final class UpdateGate {
     case failed(String)
   }
 
-  private var preservingRuntime: Bool {
-    if case .staleServer = purpose { return RuntimeStore.destination != nil }
-    return false
-  }
+  private var preservingRuntime = false
 
   /// 放行。`target` 是评估时端口上那一份；nil = 用户在确认不了时点了「现在」。
   private func prepare(_ target: ServiceTarget?) {

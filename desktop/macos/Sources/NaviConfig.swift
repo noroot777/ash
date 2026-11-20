@@ -274,7 +274,20 @@ enum RuntimeStore {
     guard descriptor >= 0 else { throw SQLiteFile.Failure("打不开 app 的运行时代码锁。") }
     guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
       close(descriptor)
-      throw SQLiteFile.Failure("还有旧布局的服务或 MCP 在使用 app 内的代码；这次未替换 app，也未停止服务。首次迁移需等这些旧进程结束。")
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+      process.arguments = ["-nP", "-w", "-F", "pc", "--", file.path]
+      let output = Pipe()
+      process.standardOutput = output
+      process.standardError = FileHandle.nullDevice
+      var blockers = "（查不到持锁进程）"
+      if (try? process.run()) != nil {
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        if !lines.isEmpty { blockers = lines.map { $0.hasPrefix("p") ? "PID \($0.dropFirst())" : String($0.dropFirst()) }.joined(separator: " ") }
+      }
+      throw SQLiteFile.Failure("app 内的代码仍被以下进程使用：\(blockers)\n这次未替换 app，也未停止服务。\n\n在「检查 Navi MCP 登记…」中把终端的登记迁到固定外置入口，再重开列出的 CLI 会话：\ncommand = /bin/sh\nargs = [\(root.appendingPathComponent("mcp.sh").path)]\n旧进程退出后再试更新；这条入口以后跟随新版服务，不再占用 app 包。")
     }
     return descriptor
   }

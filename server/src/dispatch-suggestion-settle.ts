@@ -22,7 +22,7 @@ import type { TaskStatus } from "@navi/shared";
 import type { LaunchSettleDebt, QuestionRecord } from "@navi/shared/questions";
 import { db, dbClient } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { claimOwnTurn, releaseTurn } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn } from "./runs.js";
 import { setTaskStatus, type StatusTxWriter } from "./status.js";
 import { settlementHooks } from "./settle-status.js";
 import { beginTerminalLanding, releaseTerminalLanding } from "./task-complete.js";
@@ -102,7 +102,7 @@ const alerted = new Set<string>();
 
 /** 还一次。回合锁被占着就留给下一次（那一回合若是智能体的，起跑时世代已经前进，这份欠账随之作废）。 */
 export async function settleLaunchDebt(taskId: string): Promise<void> {
-  const turn = claimOwnTurn(taskId, "status");
+  const turn = await claimOwnTurn(taskId, "status");
   if (!turn) return;
   let latched = false;
   try {

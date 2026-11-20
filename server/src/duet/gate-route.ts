@@ -22,7 +22,7 @@ import { actorOf, ownerIdOf } from "../auth/context.js";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";
 import { handoffBlockReason } from "../handoff-guard.js";
-import { claimOwnTurn, releaseTurn } from "../runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn } from "../runs.js";
 import { lastOpenedGateVersion } from "./gate-version.js";
 import { resolveGate } from "./gates.js";
 import { resumeAtGate } from "./index.js";
@@ -100,7 +100,7 @@ export function mountDuetGateRoutes(api: Hono): void {
         if (current !== expectedVersion) return c.json({ error: STALE, stale: true, gateVersion: current || null }, 409);
       }
       // 同 /run:先原子占位再启动,占不到说明确有回合在跑(闸口重放会真的续跑讨论)。
-      const turn = claimOwnTurn(taskId, "duet");
+      const turn = await claimOwnTurn(taskId, "duet");
       if (!turn) {
         return c.json({ error: "任务回合正在进行，稍后再处理裁决", status: t.status }, 409);
       }
@@ -125,7 +125,7 @@ export function mountDuetGateRoutes(api: Hono): void {
       if (t.archived) return c.json({ error: "讨论已归档，先取消归档再继续", archived: true }, 409);
       const blocked = handoffBlockReason(t.handoff);
       if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-      const turn = claimOwnTurn(taskId, "duet");
+      const turn = await claimOwnTurn(taskId, "duet");
       if (!turn) {
         return c.json({ error: "讨论回合正在进行，稍后再提交验收意见", status: t.status }, 409);
       }
