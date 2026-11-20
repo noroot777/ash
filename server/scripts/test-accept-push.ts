@@ -124,7 +124,8 @@ try {
     assert.equal(git(remote, "rev-parse", "main"), theirs, "被拒就是被拒，远程上别人的提交不许盖掉");
   }
 
-  // 10. 拉取地址和推送地址指向不同仓库（审查第 1 轮 N2）：从接收推送的那一个拉、推给它，拉取那个不碰。
+  // 10. 拉取地址和推送地址指向不同仓库：照 `git pull` / `git push` 的口径，从拉取地址拉、推给推送地址（不再把推送地址
+  //     塞回 git 冒充拉取地址，git-accept-remote.ts 文件头）。推送地址那边有拉不到的新提交 → 推被拒，如实报、什么都不盖。
   {
     const { repo, remote } = makeStage("pushurl");
     const receiver = join(root, "pushurl-receiver.git");
@@ -136,11 +137,17 @@ try {
     git(repo, "remote", "set-url", "--push", "origin", receiver);
     const fetchSide = git(remote, "rev-parse", "main");
     const taskId = await seedTask(repo, "task.txt", "task\n");
+    const before = git(repo, "rev-parse", "main");
     const result = await acceptTask(taskId, "human", { push: true });
-    assert.equal(result.accepted, true, result.accepted ? "" : result.error);
-    git(repo, "merge-base", "--is-ancestor", theirs, "main");
-    assert.equal(git(receiver, "rev-parse", "main"), git(repo, "rev-parse", "main"), "推给的是推送地址那个仓库");
+    assert.equal(result.accepted, false);
+    if (!result.accepted) {
+      assert.equal(result.reason, "push_failed", result.error);
+      assert.match(result.error, /拉取地址和推送地址/, "说清可能是拉推不是同一个仓库");
+    }
+    assert.equal(git(receiver, "rev-parse", "main"), theirs, "推送地址那边别人的提交没被盖掉");
     assert.equal(git(remote, "rev-parse", "main"), fetchSide, "拉取地址那个仓库不碰");
+    assert.equal(git(repo, "rev-parse", "main"), before, "本地一个字节都没动");
+    assert.ok(existsSync(wsOf.get(taskId)!), "任务工作区还在");
   }
 
   // 11. 合完到推之间远程又被推了一个不冲突的提交（审查第 1 轮 F3）：本地没动过，同步、从头重新合、再推，最后验收通过。

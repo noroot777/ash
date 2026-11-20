@@ -2,8 +2,9 @@
 // git 那几下在 git-accept-remote.ts / git-guarded-move.ts，那边的文件头写着为什么是「先同步、再合、再推」。
 //
 // 只有用户明说要推（确认层那一勾、accept_task 的 push 参数）才推：推送是往外发，不从项目设置里推出来，
-// 飞书卡片和工作流自己走到的验收都不推。确认层发来的是**它显示的那个目的地**（含推送地址），执行时
-// 解析出来的不是同一处就拒 —— `push:true` 只说明用户同意推，不说明他同意推到执行那一刻算出来的任何地方。
+// 飞书卡片和工作流自己走到的验收都不推。确认层发来的是**它显示的那个目的地**（远程名 + git 为它算出的推送地址），
+// 执行时解析出来的不是同一处就拒 —— `push:true` 只说明用户同意推，不说明他同意推到执行那一刻算出来的任何地方。
+// 推本身按远程名推、地址交给用户自己的 git 配置（git-accept-remote.ts 文件头），回执写 git 报出的实际地址。
 // 门禁续做带的也是第一次解析时冻结下来的那一份。
 //
 // 顺序是「先推、后落本地」（git-accept-detached.ts 文件头）：合并结果在 Navi 自己的临时检出里生成，推的就是
@@ -36,6 +37,7 @@ import { resolveWorktreeBranchName } from "./git.js";
 import { landDetached, mergeDetached } from "./git-accept-detached.js";
 import { expandHome } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
+import { redactUrlsIn } from "./git-identity.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
@@ -179,7 +181,7 @@ export async function preparePush(task: TaskRow, project: ProjectRow, by: Accept
 async function pushed(taskId: string, plan: PushPlan, outcome: Extract<PushOutcome, { ok: true }>) {
   await appendTaskTimeline(taskId, receiptLine(outcome.upToDate
     ? `推送：${plan.remote}/${plan.remoteBranch} 已经是 ${outcome.commit.slice(0, 8)}，不用再推。`
-    : `已推送：${plan.branch} → ${plan.remote}/${plan.remoteBranch}（${outcome.commit.slice(0, 8)}）。`));
+    : `已推送：${plan.branch} → ${plan.remote}/${plan.remoteBranch}（${outcome.commit.slice(0, 8)}${outcome.to ? `，git 推往 ${outcome.to}` : ""}）。`));
 }
 
 /** `recorded`：重试上一次已经合过的验收（stage=merged）时，数据库记下的那次合并。 */
@@ -218,7 +220,10 @@ async function pushFirstLocked(task: { id: string; projectId: string }, repoPath
     // 并发推送时 git 报的可能是 remote rejected (failed to update ref)，不是 non-fast-forward。
     const fetched = landedRemotely!;
     const remoteMoved = fetched.ok && !!fetched.tip && !(await isAncestor(expandHome(repoPath), fetched.tip, merged.result));
-    if (!remoteMoved) return failed("push_failed", `；本地 ${plan.branch} 一个字节都没动，任务的分支和工作区都留着，处理好之后再验收`);
+    // 被拒了、拉到的远程却没有挡住它的新提交：多半是这个远程的拉取地址和推送地址不是同一个仓库（git-accept-remote.ts 文件头）。
+    const elsewhere = failure.reason === "push_rejected" && fetched.ok
+      ? `；从 ${plan.remote} 拉到的状态里没有挡住这次推送的新提交，它的拉取地址和推送地址（${redactUrlsIn(plan.url)}）可能不是同一个仓库` : "";
+    if (!remoteMoved) return failed("push_failed", `${elsewhere}；本地 ${plan.branch} 一个字节都没动，任务的分支和工作区都留着，处理好之后再验收`);
     const sync = await syncTargetWithRemote(repoPath, plan.branch, plan, task.projectId);
     if (!sync.ok) {
       const conflict = await remoteConflict(repoPath, task.id, plan, sync.tip);

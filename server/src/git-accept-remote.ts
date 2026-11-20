@@ -14,9 +14,13 @@
 // 网络那两下（拉、推）带项目里存的账号（git-credentials.ts gitNetInjection，同「更新远程」「推送」那几个入口）：
 // 私有仓库在项目里配了令牌，验收这一档不能退回去只认系统凭证。
 //
-// 「推到哪」的身份是**推送地址**（`git remote get-url --push`），不只是远程名：用户确认的是那个仓库，
-// 拉也从它拉、推也推给它（远程名的 url 与 pushurl 指向不同仓库时，从 url 拉来的不是接收推送的那一份）。
-import { randomBytes } from "node:crypto";
+// 「推到哪」照 git 自己的口径：推给**远程名**，跟用户在终端里 `git push <远程>` 一样 —— 地址由用户自己的 git 配置
+// 算出（pushurl、pushInsteadOf 等都算进去）。Navi 不把算好的地址再塞回 git：塞回去会被 insteadOf 这类改写规则
+// 再改一遍，确认的和实际接收的反而对不上（审查第 4 轮起三轮，熔断后用户交我定，选了这条）。担保的边界因此是：
+// 推给你确认的那个远程、目的地是 `git remote get-url --push` 此刻算出的那一处（确认框显示的就是它，执行时核指纹），
+// 回执写的是 git 推送时自己报出的地址（`--porcelain` 的 `To` 行），推到哪一目了然。
+// 拉也按远程名拉（同 `git pull`）：远程的拉取地址和推送地址指向不同仓库时，拉到的不是接收推送的那一份 —— 那样
+// 推会被当成非快进拒掉（从不强推），如实报错，不会盖掉谁的提交。
 import type { AcceptPushOutcome } from "@navi/shared/accept-gate";
 import { execFileText as exec } from "./exec.js";
 import { expandHome, gitError, localBranchExists } from "./git.js";
@@ -25,7 +29,7 @@ import { moveBranchGuarded, type GuardedMove } from "./git-guarded-move.js";
 import { gitNetInjection } from "./git-credentials.js";
 import { redactUrlsIn } from "./git-identity.js";
 
-/** 推到哪：远程名 + 远程上的分支名 + 推送地址（身份以地址为准）。 */
+/** 推到哪：远程名 + 远程上的分支名 + 此刻 git 为这个远程算出的推送地址（确认框显示、指纹核对用；推的时候只写远程名）。 */
 export type PushTarget = { remote: string; remoteBranch: string; url: string };
 
 export type RemoteSync =
@@ -35,19 +39,12 @@ export type RemoteSync =
 
 export type PushOutcome = AcceptPushOutcome;
 
-// 网络命令一律不许等人输密码：服务端没有终端，等到的只会是超时。
-// 推送地址可能内嵌账号密码，**不进 argv**（server/CLAUDE.md「密钥绝不进 argv」）：用 GIT_CONFIG_COUNT 那组环境变量
-// 临时定义一个远程指向它，命令里只写这个远程名（`args(remote)`）。接在调用环境已有的那几条后面，不顶掉它们。
-// 远程名**每一次都是新取的随机名**：Git 会把仓库 / 全局配置里同名远程的 pushurl、多值 url 一起算进来，名字要是
-// 固定的，用户（或任何能写配置的程序）给它配一条 pushurl，推的就是另一个仓库 —— 确认的目的地和实际接收者不再
-// 是同一处（审查第 4 轮第 1 条）。随机名没有任何既有配置可继承，拉和推联系的只有确认过的那一个地址。
-async function network(repo: string, projectId: string | null, url: string, args: (remote: string) => string[], timeoutMs: number) {
+// 网络命令一律不许等人输密码：服务端没有终端，等到的只会是超时。命令里只写远程名，地址（可能内嵌账号密码）
+// 不进 argv（server/CLAUDE.md「密钥绝不进 argv」）。
+async function network(repo: string, projectId: string | null, args: string[], timeoutMs: number) {
   const injection = await gitNetInjection(projectId);
-  const remote = `navi-accept-${randomBytes(9).toString("hex")}`;
-  const base = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "0", 10) || 0;
-  const bound = { GIT_CONFIG_COUNT: String(base + 1), [`GIT_CONFIG_KEY_${base}`]: `remote.${remote}.url`, [`GIT_CONFIG_VALUE_${base}`]: url };
-  return exec("git", ["-C", repo, ...injection.args, ...args(remote)],
-    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", ...injection.env, ...bound }, timeoutMs });
+  return exec("git", ["-C", repo, ...injection.args, ...args],
+    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", ...injection.env }, timeoutMs });
 }
 const FETCH_TIMEOUT_MS = 90_000;
 const PUSH_TIMEOUT_MS = 180_000;
@@ -88,17 +85,14 @@ export async function resolvePushTarget(repoPath: string, branch: string): Promi
 }
 
 /**
- * 从**推送地址**拉那一支的最新提交，返回它。拉取地址就是推送地址时落进 refs/remotes/<remote>/<branch>
- * （就是 `git fetch` 平常更新的那个）；两者不同时落进 Navi 自己的引用，不把另一个仓库的状态冒充成远程跟踪分支。
+ * 从远程拉那一支的最新提交（同 `git fetch <远程>`，落进 refs/remotes/<remote>/<branch>），返回它。
  * 远程上还没有这一支 → tip:null（第一次推，推上去就是新建）。
  */
 export async function fetchTip(repoPath: string, target: PushTarget, projectId: string | null): Promise<{ ok: true; tip: string | null } | { ok: false; message: string }> {
   const repo = expandHome(repoPath);
-  const fetchUrl = (await exec("git", ["-C", repo, "remote", "get-url", target.remote]).catch(() => null))?.stdout.trim();
-  const tracking = fetchUrl === target.url
-    ? `refs/remotes/${target.remote}/${target.remoteBranch}` : `refs/navi/push-base/${target.remote}/${target.remoteBranch}`;
+  const tracking = `refs/remotes/${target.remote}/${target.remoteBranch}`;
   try {
-    await network(repo, projectId, target.url, (remote) => ["fetch", "--no-tags", "--quiet", remote, `+refs/heads/${target.remoteBranch}:${tracking}`], FETCH_TIMEOUT_MS);
+    await network(repo, projectId, ["fetch", "--no-tags", "--quiet", target.remote, `+refs/heads/${target.remoteBranch}:${tracking}`], FETCH_TIMEOUT_MS);
   } catch (error) {
     const message = redactUrlsIn(gitError(error));
     if (/couldn't find remote ref|could not find remote ref/i.test(message)) return { ok: true, tip: null };
@@ -145,16 +139,12 @@ export async function pushCommit(repoPath: string, commit: string, target: PushT
   const repo = expandHome(repoPath);
   const base = { remote: target.remote, remoteBranch: target.remoteBranch };
   try {
-    // 推给确认过的那个地址，不推给「远程名此刻指着的地方」。
-    const { stdout } = await network(repo, projectId, target.url, (remote) => ["push", "--porcelain", remote, `${commit}:refs/heads/${target.remoteBranch}`], PUSH_TIMEOUT_MS);
-    // --porcelain 每个 ref 一行，`=` 打头 = 远程本来就是这个提交。
-    const upToDate = stdout.split("\n").some((line) => line.startsWith("=\t"));
-    // 按地址推不会更新远程跟踪分支；拉取地址就是这个地址时补记一下，`git status` 才不会说本地领先。
-    const fetchUrl = (await exec("git", ["-C", repo, "remote", "get-url", target.remote]).catch(() => null))?.stdout.trim();
-    if (fetchUrl === target.url) {
-      await exec("git", ["-C", repo, "update-ref", `refs/remotes/${target.remote}/${target.remoteBranch}`, commit]).catch(() => {});
-    }
-    return { ...base, ok: true, commit, upToDate };
+    const { stdout } = await network(repo, projectId, ["push", "--porcelain", target.remote, `${commit}:refs/heads/${target.remoteBranch}`], PUSH_TIMEOUT_MS);
+    // --porcelain 每个 ref 一行，`=` 打头 = 远程本来就是这个提交；`To <地址>` 是 git 实际推往的地方，写进回执。
+    const lines = stdout.split("\n");
+    const upToDate = lines.some((line) => line.startsWith("=\t"));
+    const to = lines.find((line) => line.startsWith("To "))?.slice(3).trim();
+    return { ...base, ok: true, commit, upToDate, ...(to ? { to: redactUrlsIn(to) } : {}) };
   } catch (error) {
     // --porcelain 把每个 ref 的结局写在 stdout（`!` 打头 = 被拒），stderr 只剩一句 failed to push。
     const refs = String((error as { stdout?: string }).stdout ?? "");

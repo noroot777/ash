@@ -1,6 +1,6 @@
 // 验收「推送到远程」的目的地这一面（task-accept-push.ts / accept-push-destination.ts / git-accept-remote.ts 的 network）：
 // 推到哪照 git 的口径解析；确认层看到的就是执行时推的那一处（指纹核）；推送地址里的认证信息不出服务端（发给页面的、
-// 报错、任务记录、git 命令行参数里都没有）；实际联系的只有确认过的那个地址；确认失效（旧版本、坏值）就拒，不当没选推送。
+// 报错、任务记录、git 命令行参数里都没有）；确认框显示的、实际接收的、回执写的是同一处；确认失效（旧版本、坏值）就拒，不当没选推送。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -120,25 +120,40 @@ try {
     entry.isDirectory() ? leaked(join(dir, entry.name)) : readFileSync(join(dir, entry.name), "utf8").includes("SECRET") ? [join(dir, entry.name)] : []) : [];
   assert.deepEqual(leaked(process.env.NAVI_RUNS_DIR!), [], "任务记录里没有明文");
 
-  // 24. 实际联系的只有确认过的那一个地址（审查第 4 轮第 1 条）：仓库配置里给上一版借用的固定远程名配了 pushurl 指向
-  //     另一个仓库，推的仍是确认的那一处；每一次借的远程名都不一样，配置里也就没有可继承的。
-  {
-    const { repo, remote } = makeStage("bound-remote");
-    const decoy = join(root, "bound-remote-decoy.git");
+  // 24. 确认框显示的地址就是实际接收推送的那一处，回执写的也是它（审查第 4 轮起 F1，熔断后选了「照 git push 的口径」）：
+  //     · 改写规则串着（A → B，又有一条 B → C）：git 只改写一次，推给 B；不能把展开后的 B 再交给 git 改成 C；
+  //     · pushInsteadOf 只改推送地址：确认框显示改写后的那一处，推也推给它，拉取地址那个不碰。
+  //     两种情况下 git 的命令行参数里都只有远程名，没有地址。
+  for (const kind of ["chain", "push-instead-of"] as const) {
+    const { repo, remote } = makeStage(`dest-${kind}`);
+    const receiver = join(root, `dest-${kind}-receiver.git`);
+    const decoy = join(root, `dest-${kind}-decoy.git`);
+    execFileSync("git", ["clone", "-q", "--bare", remote, receiver]);
     execFileSync("git", ["clone", "-q", "--bare", remote, decoy]);
-    const before = git(decoy, "rev-parse", "main");
-    git(repo, "config", "remote.navi-accept-push.pushurl", decoy);
+    const decoyBefore = git(decoy, "rev-parse", "main");
+    const fetchSide = git(remote, "rev-parse", "main");
+    if (kind === "chain") {
+      git(repo, "remote", "set-url", "origin", "navi-alias-a:");
+      git(repo, "config", `url.${receiver}.insteadOf`, "navi-alias-a:");
+      git(repo, "config", `url.${decoy}.insteadOf`, receiver);
+    } else {
+      git(repo, "config", `url.${receiver}.pushInsteadOf`, remote);
+      git(repo, "config", `url.${decoy}.insteadOf`, receiver);
+    }
     const taskId = await seedTask(repo, "task.txt", "task\n");
     const source = git(wsOf.get(taskId)!, "rev-parse", "HEAD");
     const view = (await pushDestinationView(await rowOf(taskId), await projectOf(taskId)))!;
-    const argvLog = join(root, "bound-remote-argv.log");
+    assert.equal(view.url, receiver, `${kind}：确认框显示 git 算出的最终地址`);
+    const argvLog = join(root, `dest-${kind}-argv.log`);
     const result = await recordingArgv(argvLog, () => acceptTask(taskId, "human", { push: view }));
     assert.equal(result.accepted, true, result.accepted ? "" : result.error);
-    assert.equal(git(remote, "rev-parse", "main"), source, "确认的那个仓库收下了");
-    assert.equal(git(decoy, "rev-parse", "main"), before, "另一个仓库一个字没收到");
-    const names = [...readFileSync(argvLog, "utf8").matchAll(/(?:fetch|push) .*?(navi-accept-[0-9a-f]+)/g)].map((m) => m[1]);
-    assert.ok(names.length >= 2, readFileSync(argvLog, "utf8"));
-    assert.equal(new Set(names).size, names.length, "每一次借的远程名都不同");
+    assert.equal(git(receiver, "rev-parse", "main"), source, `${kind}：确认的那一处收下了`);
+    assert.equal(git(decoy, "rev-parse", "main"), decoyBefore, `${kind}：没有被再改写一遍推到别处`);
+    if (kind === "push-instead-of") assert.equal(git(remote, "rev-parse", "main"), fetchSide, "拉取地址那个仓库不碰");
+    assert.equal(result.push?.ok && result.push.to, receiver, `${kind}：回执写的是 git 实际推往的地址`);
+    const argv = readFileSync(argvLog, "utf8").split("\n").filter((line) => / (?:fetch|push) /.test(line));
+    assert.ok(argv.some((line) => line.includes("push")), readFileSync(argvLog, "utf8"));
+    for (const line of argv) assert.ok(!line.includes(receiver) && !line.includes(decoy), `命令行里只有远程名：${line}`);
   }
 
   // 25. 确认失效（更新之前打开的确认框发来的、没有指纹的那一份）：拒，什么都不动 —— 不当「没选推送」去合并、清理。
@@ -155,7 +170,7 @@ try {
     assert.equal(await stageOf(taskId), "verified");
   }
 
-  console.log("accept push destination: 推到哪 / 门禁续做带冻结目的地、存坏的算确认失效 / 目的地变了就拒 / 认证信息（三种写法）不出服务端 / 只联系确认过的地址 / 确认失效就拒 全部通过");
+  console.log("accept push destination: 推到哪 / 门禁续做带冻结目的地、存坏的算确认失效 / 目的地变了就拒 / 认证信息（三种写法）不出服务端 / 显示的就是实际推往的地址 / 确认失效就拒 全部通过");
 } finally {
   await releaseTmpDb();
 }

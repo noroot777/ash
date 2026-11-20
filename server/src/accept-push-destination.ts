@@ -14,7 +14,7 @@ import { appSettings } from "./db/schema.js";
 import { redactUrlsIn } from "./git-identity.js";
 import type { PushTarget } from "./git-accept-remote.js";
 
-/** 服务端内部的推送目的地：`url` 是真实推送地址（可能带凭证），只用来推和拉，不往外送。 */
+/** 服务端内部的推送目的地：`url` 是 git 此刻为这个远程算出的推送地址（可能带凭证），只用来算指纹、脱敏后给人看，不往外送；推和拉只写远程名。 */
 export type PushPlan = PushTarget & { branch: string };
 
 const KEY_ROW = "accept_push.destination_key";
