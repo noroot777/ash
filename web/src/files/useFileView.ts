@@ -71,7 +71,8 @@ export function useFileView(taskId: string) {
       reel: null,
       folderPath: null,
       diff: null,
-      anchor: anchor ? { path, id: anchor, seq: current.seq + 1 } : null,
+      // `""` 也是一个锚点：`plan.md#` = 回到这份文件开头（已经摊着、滚到下面时要滚回去）。
+      anchor: anchor != null ? { path, id: anchor, seq: current.seq + 1 } : null,
       behind: null,
       zoomed: current.zoomed,
       seq: current.seq + 1,

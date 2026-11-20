@@ -164,6 +164,9 @@
 .task-markdown h6 { margin: 16px 0 7px; color: var(--ink); line-height: 1.35; }
 /* 文内锚点跳过来时（目录、脚注，见 markdownAnchors）标题别贴着滚动容器的上沿。 */
 .task-markdown [id] { scroll-margin-top: 12px; }
+/* 跳过来时焦点也跟过来（见 scrollToAnchor）；鼠标点的不画焦点框，键盘来的照常画。 */
+.task-markdown[tabindex="-1"]:focus:not(:focus-visible),
+.task-markdown [tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
 .task-markdown h1 { font-size: 18px; font-weight: var(--w-strong); }
 .task-markdown h2 { font-size: 15px; font-weight: var(--w-strong); }
 .task-markdown h3 { font-size: 13.5px; font-weight: var(--w-medium); }

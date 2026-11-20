@@ -1,4 +1,5 @@
-// 文内锚点的回归（components/markdownAnchors.ts）：目录链接、中文锚点、脚注、跨文件 `other.md#section`。
+// 文内锚点的回归（components/markdownAnchors.ts）：目录链接、中文锚点、脚注、跨文件 `other.md#section`、
+// 空片段（回到顶部）。
 // 跑:npm -w web run test:markdown-anchors
 //
 // 盯的是 2026-11-20 那一幕：点 `[实现方案](#实现方案)` 在浏览器里新开一页、在 mac 壳里整页
@@ -21,6 +22,10 @@ import { createSlugger, fileLinkAnchor, inDocumentAnchor } from "../src/componen
     ["C++ & Rust", "c--rust"],
     ["🚀 发布", "-发布"],
     ["結論・まとめ", "結論まとめ"],
+    // Unicode 里算数字、GitHub 照样去掉的那几个（审查第 1 轮 F2：拿 \p{N} 近似会生成 on²）。
+    ["O(n²)", "on"],
+    ["x³", "x"],
+    ["1½ 方案", "1-方案"],
   ]) assert.equal(slug(text), expected, `「${text}」的 slug`);
   const dup = createSlugger();
   assert.deepEqual(
@@ -30,12 +35,18 @@ import { createSlugger, fileLinkAnchor, inDocumentAnchor } from "../src/componen
   );
 }
 assert.equal(inDocumentAnchor("#%E5%AE%9E%E7%8E%B0%E6%96%B9%E6%A1%88"), "实现方案", "百分号编码的中文锚点要解码");
-assert.equal(inDocumentAnchor("#"), null);
+assert.equal(inDocumentAnchor("#"), "", "空片段 # 也是文内导航：回到文档开头（审查第 1 轮 F1）");
+assert.equal(inDocumentAnchor("docs/a.md"), null);
+{
+  const slug = createSlugger(["user-content-fn-1"]);
+  assert.equal(slug("user-content-fn-1"), "user-content-fn-1-1", "标题给脚注已经占掉的 id 让路");
+}
 assert.equal(inDocumentAnchor("docs/a.md#x"), null, "指着别的文件的不是文内锚点");
 assert.equal(fileLinkAnchor("docs/other.md#%E7%AC%AC%E4%BA%8C%E8%8A%82"), "第二节");
 assert.equal(fileLinkAnchor("docs/other.md#L12"), null, "#L12 行号后缀照旧只是打开整份文件");
 assert.equal(fileLinkAnchor("docs/other.md#L12-L20"), null);
 assert.equal(fileLinkAnchor("docs/other.md"), null);
+assert.equal(fileLinkAnchor("docs/other.md#"), "", "other.md# 是「这份文件开头」，不等于没有片段");
 assert.equal(fileLinkAnchor("#x"), null);
 
 // ── DOM ─────────────────────────────────────────────────────────────────────────
@@ -146,6 +157,7 @@ try {
     ["Hello World!", "Hello, World!", 0],
     ["第二个结论", "结论", 1],
     ["大小写不一致", "Hello, World!", 0],
+    ["GitHub 抄来的", "Hello, World!", 0],
   ]) {
     await resetScroll(doc);
     await page.locator(doc).getByRole("link", { name: label, exact: true }).click();
@@ -156,6 +168,17 @@ try {
   await page.locator(doc).getByRole("link", { name: "不存在的一节" }).click();
   assertStayed("指着不存在的一节");
   assert.equal(await page.locator(doc).evaluate((node) => node.scrollTop), 0, "找不到那一节就原地不动");
+  // 回到顶部：空片段 `#` 也是文内导航（审查第 1 轮 F1：它曾漏回 target=_blank 新开一页）。
+  await page.locator(doc).evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await page.locator(doc).getByRole("link", { name: "回到顶部" }).click();
+  // 目标是文档根本身（会话里就是这条消息的开头）：比的是根离容器上沿多远，刚才可是滚在最底下。
+  const top = await placement(doc, ".task-markdown", "方案文档");
+  assert(top && top.offset >= -2 && top.offset <= 20 && top.scrollTop <= 20, `「回到顶部」要回到这份文档开头：${JSON.stringify(top)}`);
+  assertStayed("回到顶部");
+  // 标题叫 `user-content-fn-1`，跟脚注条目的 id 撞名：脚注角标要跳到脚注，不是这个标题。
+  await page.locator(`${doc} a[data-footnote-ref]`).click();
+  await assertAtTop(doc, "li", "文档里的脚注正文", 0, "标题与脚注 id 撞名时的脚注角标");
+  assertStayed("撞名脚注");
   assert.equal(
     await page.locator(`${doc} a[target="_blank"]`).count(),
     0,
@@ -169,6 +192,12 @@ try {
   await page.locator(`${conversation} .message-2 a[data-footnote-ref]`).click();
   await assertAtTop(conversation, "li", "第二条消息的脚注正文", 0, "第二条消息的脚注角标");
   assertStayed("脚注角标");
+  // 阅读焦点跟着过去：原生 hash 跳转本来就会移动顺序焦点起点，拦下默认行为后要自己补。
+  assert.match(
+    await page.evaluate(() => document.activeElement?.textContent ?? ""),
+    /第二条消息的脚注正文/,
+    "跳到脚注后焦点要落在那条脚注上",
+  );
   await page.locator(`${conversation} .message-2 a[data-footnote-backref]`).click();
   const back = await page.evaluate((container) => {
     const box = document.querySelector(container).getBoundingClientRect();
@@ -201,6 +230,14 @@ try {
   await resetScroll(pane);
   await cross.getByRole("link", { name: "第三节" }).click();
   await assertAtTop(pane, "h2", "第三节", 0, "再点一次同一个锚点");
+
+  // `other.md#`：同一份文件已经摊着、滚在下面，空片段要滚回文件开头。
+  await cross.getByRole("link", { name: "文件开头" }).click();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
+  assert(await page.locator(pane).evaluate((node) => node.scrollTop) <= 40, "other.md# 要回到文件开头");
+  assertStayed("跨文件空片段");
+  await cross.getByRole("link", { name: "第三节" }).click();
+  await assertAtTop(pane, "h2", "第三节", 0, "空片段之后再跳回第三节");
 
   // 查看器里那份文档自己的目录链接也在查看器里跳。
   await page.locator(pane).getByRole("link", { name: "回到开头" }).nth(1).click();
