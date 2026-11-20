@@ -66,6 +66,15 @@ try {
   assert.equal(claudePlansDir(project, configEnv, [`--settings=${join(root, "flag-settings.json")}`]), join(project, "notes"));
   assert.equal(claudePlansDir(project, configEnv, ["--settings", JSON.stringify({ plansDirectory: "../outside" })]), plansDir);
   assert.equal(claudePlansDir(project, configEnv, ["--setting-sources", "user"]), plansDir);
+  // 高层写了空串：合并后就是空，回默认，不往下层找非空值（真 CLI 实测）
+  assert.equal(claudePlansDir(project, configEnv, ["--settings", JSON.stringify({ plansDirectory: "" })]), plansDir);
+  // 从仓库子目录起跑：项目根与项目档都就在 cwd，不读仓库根那份（真 CLI 实测：用户层的值按子目录解）
+  const userConfig = join(root, "config-user");
+  mkdirSync(userConfig, { recursive: true });
+  writeFileSync(join(userConfig, "settings.json"), JSON.stringify({ plansDirectory: "user-plans" }));
+  mkdirSync(join(project, ".git"), { recursive: true });
+  mkdirSync(join(project, "nested"), { recursive: true });
+  assert.equal(claudePlansDir(join(project, "nested"), { CLAUDE_CONFIG_DIR: userConfig }, []), join(project, "nested", "user-plans"));
   // 接管认回起跑时的目录：它记在 commandLine 上
   assert.equal(plansDirOfCommandLine(`claude ${CLAUDE_PLAN_ARGS.join(" ")} <messages via stdin>${planFilesMarker(join(project, "目录 \"x\""))}`), join(project, "目录 \"x\""));
   assert.equal(plansDirOfCommandLine(`claude --dangerously-skip-permissions <messages via stdin>${planFilesMarker(plansDir)}`), undefined);
@@ -89,6 +98,9 @@ try {
   symlinkSync(join(root, "outside.md"), join(plansDir, "link.md"));
   ask("Write", { file_path: join(plansDir, "link.md"), content: "x" }, "w3");
   assert.equal(last().response.behavior, "deny", "目录内指向外面的软链接不能借道写出去");
+  symlinkSync(join(root, "not-yet.md"), join(plansDir, "dangling.md"));
+  ask("Write", { file_path: join(plansDir, "dangling.md"), content: "x" }, "w4");
+  assert.equal(last().response.behavior, "deny", "悬空软链接证明不了落点，不当成还没建的新文件");
   ask("mcp__navi__complete_task", { taskId: "t" });
   assert.equal(last().response.behavior, "deny");
   const planFile = join(plansDir, "snug-milner.md");
@@ -102,18 +114,50 @@ try {
   assert.equal(last().response.behavior, "deny", "交计划要拒：放行等于当场退出计划模式接着动手");
   assert.equal(last().request_id, "req-exit1");
   assert.deepEqual(ask("ExitPlanMode", { plan: "老版本 CLI 把正文放在 input 里" }, "exit2"), [{ kind: "plan", id: "plan:toolu_exit2", text: "老版本 CLI 把正文放在 input 里", status: "complete" }]);
-  // 改计划失败：文件里还是旧方案，不能把它当新计划交出去；改成了才交
-  ask("Edit", { file_path: planFile, old_string: "a.txt", new_string: "b.txt" }, "plan-edit");
-  assert.equal(last().response.behavior, "allow");
-  gate.noteToolResult({ type: "tool_result", tool_use_id: "toolu_plan-edit", is_error: true, content: "EACCES" });
-  gate.noteAssistant([{ type: "text", text: "新方案：改 b.txt。" }]);
-  assert.deepEqual(ask("ExitPlanMode", {}, "exit3"), []);
-  assert.equal(last().response.behavior, "deny");
-  assert.match(last().response.message, /写计划文件失败/);
-  gate.noteAssistant([{ type: "tool_use", id: "toolu_plan-edit2", name: "Edit", input: { file_path: planFile } }]);
-  writeFileSync(planFile, "# 计划\n\n1. 改 b.txt\n");
-  gate.noteToolResult({ type: "tool_result", tool_use_id: "toolu_plan-edit2", content: "ok" });
-  assert.equal((ask("ExitPlanMode", {}, "exit4")[0] as any).text, "# 计划\n\n1. 改 b.txt", "CLI 不来问的写入照样从 tool_use 认，以回执为准");
+  // 交出去的必须是计划文件最近一次修改成功后的那一版，不管正文从哪来
+  const versioned = () => {
+    const out: any[] = [];
+    const g = new ClaudePlanGate(plansDir, (line) => out.push(JSON.parse(line)));
+    const submit = (id: string, input: unknown = {}) => g.request({ request_id: `req-${id}`, request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input, tool_use_id: id } });
+    const use = (id: string, path = planFile, name = "Edit") => g.noteAssistant([{ type: "tool_use", id, name, input: { file_path: path } }]);
+    const result = (id: string, isError = false) => g.noteToolResult({ type: "tool_result", tool_use_id: id, ...(isError ? { is_error: true } : {}), content: isError ? "<tool_use_error>String to replace not found</tool_use_error>" : "ok" });
+    return { g, out, submit, use, result, reply: () => out.at(-1).response.response };
+  };
+  writeFileSync(planFile, "# 旧计划\n\n保留数据库");
+  // ① 真 CLI 的形状（2.1.283）：改失败后 ExitPlanMode 入参里 CLI 自己补上了盘上的旧正文和路径
+  let v = versioned();
+  v.use("w-ok", planFile, "Write"); v.result("w-ok");
+  v.use("e-fail"); v.result("e-fail", true);
+  assert.deepEqual(v.submit("x1", { plan: "# 旧计划\n\n保留数据库", planFilePath: planFile }), []);
+  assert.match(v.reply().message, /写计划文件失败/, "入参带正文也不能绕过失败检查");
+  v.use("e-ok"); writeFileSync(planFile, "# 新计划\n\n迁移数据库"); v.result("e-ok");
+  assert.equal((v.submit("x2", { plan: "# 新计划\n\n迁移数据库", planFilePath: planFile })[0] as any).text, "# 新计划\n\n迁移数据库");
+  // ② 较新的修改还没回执：不收
+  v = versioned();
+  v.use("p1"); v.result("p1"); v.use("p2");
+  assert.deepEqual(v.submit("x3", { plan: "旧", planFilePath: planFile }), []);
+  assert.match(v.reply().message, /还没完成/);
+  // ③ 回执乱序：较旧那次的成功不冲掉较新那次的失败
+  v = versioned();
+  v.use("old"); v.use("new"); v.result("new", true); v.result("old");
+  assert.deepEqual(v.submit("x4", {}), []);
+  assert.match(v.reply().message, /写计划文件失败/);
+  // ④ 改的是别的文件（被拒的源码写入）不影响计划文件的版本
+  v = versioned();
+  v.use("src", join(root, "src.ts"), "Write"); v.result("src", true);
+  assert.equal((v.submit("x5", { plan: "旧计划", planFilePath: planFile })[0] as any).text, "旧计划");
+  // ⑤ 交完又改成了：按改后的正文重新交一次；改失败了卡上那份仍是文件里的版本，不重交
+  v.use("after-fail"); v.result("after-fail", true);
+  v.use("after"); writeFileSync(planFile, "# 改后的计划"); 
+  assert.deepEqual(v.result("after"), [{ kind: "plan", id: "plan:after", text: "# 改后的计划", status: "complete" }]);
+  // ⑥ 接管重放：交计划的那次只能从回执认出来，之后的修改照样重交
+  v = versioned();
+  v.g.noteAssistant([{ type: "tool_use", id: "x6", name: "ExitPlanMode", input: { planFilePath: planFile } }]);
+  v.g.noteToolResult({ type: "tool_result", tool_use_id: "x6", is_error: true, content: "计划已提交给用户审阅。不要再调用任何工具，用一两句话说明计划要点后结束本回合；用户确认后会让你开始实施。" });
+  v.g.noteToolUse({ id: "sub-edit", name: "Edit", input: { file_path: planFile } });
+  writeFileSync(planFile, "# 子智能体改过的计划");
+  assert.equal((v.result("sub-edit")[0] as any)?.text, "# 子智能体改过的计划", "子智能体的修改与重放都进同一本账");
+  writeFileSync(planFile, "# 计划\n\n1. 改 a.txt\n");
   const noFile = new ClaudePlanGate(plansDir, (line) => written.push(JSON.parse(line)));
   noFile.noteAssistant([{ type: "text", text: "我先看看现有代码。" }, { type: "tool_use", name: "Read", input: { file_path: "/x" } }]);
   noFile.noteAssistant([{ type: "text", text: "计划写在回复里：先读再改。" }, { type: "tool_use", name: "ExitPlanMode", input: {} }]);

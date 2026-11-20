@@ -232,6 +232,9 @@ async function* claudeStreamEvents(
         if (block.type === "tool_result") background.toolResult(block.tool_use_id, block.is_error === true);
         // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
         if (block.type === "tool_use") writeLedger.toolUse(block.name, block.input, block.id);
+        // 子智能体改计划文件同样算数：交出去的计划必须是计划文件最新那一版（claude-plan-gate.ts）。
+        if (block.type === "tool_use") resident?.planGate?.noteToolUse(block);
+        if (block.type === "tool_result") for (const event of resident?.planGate?.noteToolResult(block) ?? []) push(event);
         if (block.type === "tool_result") {
           const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true, soleReceipt(ev));
           if (writes) push(writes);
@@ -394,7 +397,7 @@ async function* claudeStreamEvents(
       flushText();
       for (const block of ev.message.content) {
         if (block?.type !== "tool_result") continue;
-        resident?.planGate?.noteToolResult(block);
+        for (const event of resident?.planGate?.noteToolResult(block) ?? []) push(event);
         // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
         // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
         if (!replaying) claudeMonitors.toolResult(block.tool_use_id, block.content);

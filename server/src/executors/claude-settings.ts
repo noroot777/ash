@@ -121,7 +121,10 @@ function canonicalRepoOf(projectRoot: string): string | null {
 
 /** 项目那两档的文件,按实测优先级从高到低排开。 */
 function projectLayers(cwd: string): string[] {
-  const root = projectRootOf(cwd) ?? resolve(cwd);
+  return projectLayersAt(projectRootOf(cwd) ?? resolve(cwd));
+}
+
+function projectLayersAt(root: string): string[] {
   const canonical = canonicalRepoOf(root);
   const local = (dir: string) => join(dir, ".claude", "settings.local.json");
   const shared = (dir: string) => join(dir, ".claude", "settings.json");
@@ -223,10 +226,14 @@ function lastFlagValue(args: readonly string[], flag: string): string | undefine
 
 /**
  * 这次起跑的 claude 把计划文件写在哪个目录。CLI 2.1.283 的判法(反编译摘录,2026-11-20):合并后的
- * settings 里有 `plansDirectory` 就按**项目根**解析,解出来出了项目根则报错退回默认;没有就是
+ * settings 里有非空的 `plansDirectory` 就按**项目根**解析,解出来出了项目根则报错退回默认;没有就是
  * `<配置目录>/plans`。合并顺序同顶部那张表:企业策略 > 额外参数的 `--settings`(路径或 JSON 原文)
  * > 项目两档 > 用户层;`--setting-sources` 只留它点名的那几层(企业策略与 `--settings` 不受它管)。
  * navi 自己那份 `--settings` 不写这一项,不参与。
+ *
+ * 两处跟压缩那套解析不同,都是真 CLI 实测(第 2 轮审查):高层写了空串就是空串,不往下层找非空值
+ * (合并后为空 → 默认目录);项目根与项目档都**就在 cwd**,从仓库子目录起跑时不往上找仓库根那份。
+ * 这个目录只决定权限闸放不放行计划文件的写入;交出去的正文认 CLI 自己报的计划文件(claude-plan-gate.ts)。
  */
 export function claudePlansDirectory(cwd: string | undefined, configDir: ClaudeConfigDir, extraArgs: readonly string[] = []): string {
   const root = resolve(cwd ?? process.cwd());
@@ -236,11 +243,11 @@ export function claudePlansDirectory(cwd: string | undefined, configDir: ClaudeC
     : readJsonFile(resolve(root, flag));
   const sources = lastFlagValue(extraArgs, "--setting-sources")?.split(",").map((s) => s.trim());
   const keep = (source: string) => !sources || sources.includes(source);
-  const project = cwd ? projectLayers(cwd).filter((path) => keep(path.endsWith("settings.local.json") ? "local" : "project")) : [];
+  const project = cwd ? projectLayersAt(root).filter((path) => keep(path.endsWith("settings.local.json") ? "local" : "project")) : [];
   const user = keep("user") ? [join(userConfigDir(configDir), "settings.json")] : [];
   const layers = [readJsonFile(managedSettingsPath()), flagSettings, ...[...project, ...user].map(readJsonFile)];
-  const setting = layers.map((settings) => settings?.plansDirectory).find((v): v is string => typeof v === "string" && !!v.trim());
-  if (setting) {
+  const setting = layers.find((settings) => settings?.plansDirectory !== undefined)?.plansDirectory;
+  if (typeof setting === "string" && setting.trim()) {
     const dir = resolve(root, setting);
     const inside = relative(root, dir);
     if (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)) return dir;
