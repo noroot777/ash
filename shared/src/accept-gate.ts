@@ -323,6 +323,16 @@ export function parsePushDestination(raw: unknown): AcceptPushDestination | null
 }
 
 /**
+ * 请求体 / 存下来的门禁选择里那一项 push（`true` 由调用方自己认）：没给 = null；认得 = 目的地；给了却认不出
+ * （上一版没有指纹、坏值）= "stale" —— 那是用户明确选了推送、只是确认失效了，不能当「没选推送」照常合并清理，
+ * 调用方拒绝、让他重新确认（server/src/task-accept-push.ts preparePush）。
+ */
+export function parsePushChoice(raw: unknown): AcceptPushDestination | "stale" | null {
+  if (raw === undefined || raw === null || raw === false) return null;
+  return parsePushDestination(raw) ?? "stale";
+}
+
+/**
  * 选了推送时推没推上去（server/src/task-accept-push.ts）。推上去之后才快进本地目标分支：快进不了（本地期间被挪了、
  * 检出里的改动会被覆盖）时 `localBehind` 写明原因 —— 远程已经是这次合并，本地落后，pull 一下就好。
  */

@@ -16,6 +16,7 @@
 //
 // 「推到哪」的身份是**推送地址**（`git remote get-url --push`），不只是远程名：用户确认的是那个仓库，
 // 拉也从它拉、推也推给它（远程名的 url 与 pushurl 指向不同仓库时，从 url 拉来的不是接收推送的那一份）。
+import { randomBytes } from "node:crypto";
 import type { AcceptPushOutcome } from "@navi/shared/accept-gate";
 import { execFileText as exec } from "./exec.js";
 import { expandHome, gitError, localBranchExists } from "./git.js";
@@ -34,17 +35,18 @@ export type RemoteSync =
 
 export type PushOutcome = AcceptPushOutcome;
 
-/** 网络命令里代表「确认过的那个推送地址」的远程名：地址本身走环境变量（下面 network），不进命令行。 */
-const BOUND_REMOTE = "navi-accept-push";
-
 // 网络命令一律不许等人输密码：服务端没有终端，等到的只会是超时。
 // 推送地址可能内嵌账号密码，**不进 argv**（server/CLAUDE.md「密钥绝不进 argv」）：用 GIT_CONFIG_COUNT 那组环境变量
-// 临时定义一个远程 BOUND_REMOTE 指向它，命令里只写这个名字。接在调用环境已有的那几条后面，不顶掉它们。
-async function network(repo: string, projectId: string | null, url: string, args: string[], timeoutMs: number) {
+// 临时定义一个远程指向它，命令里只写这个远程名（`args(remote)`）。接在调用环境已有的那几条后面，不顶掉它们。
+// 远程名**每一次都是新取的随机名**：Git 会把仓库 / 全局配置里同名远程的 pushurl、多值 url 一起算进来，名字要是
+// 固定的，用户（或任何能写配置的程序）给它配一条 pushurl，推的就是另一个仓库 —— 确认的目的地和实际接收者不再
+// 是同一处（审查第 4 轮第 1 条）。随机名没有任何既有配置可继承，拉和推联系的只有确认过的那一个地址。
+async function network(repo: string, projectId: string | null, url: string, args: (remote: string) => string[], timeoutMs: number) {
   const injection = await gitNetInjection(projectId);
+  const remote = `navi-accept-${randomBytes(9).toString("hex")}`;
   const base = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "0", 10) || 0;
-  const bound = { GIT_CONFIG_COUNT: String(base + 1), [`GIT_CONFIG_KEY_${base}`]: `remote.${BOUND_REMOTE}.url`, [`GIT_CONFIG_VALUE_${base}`]: url };
-  return exec("git", ["-C", repo, ...injection.args, ...args],
+  const bound = { GIT_CONFIG_COUNT: String(base + 1), [`GIT_CONFIG_KEY_${base}`]: `remote.${remote}.url`, [`GIT_CONFIG_VALUE_${base}`]: url };
+  return exec("git", ["-C", repo, ...injection.args, ...args(remote)],
     { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", ...injection.env, ...bound }, timeoutMs });
 }
 const FETCH_TIMEOUT_MS = 90_000;
@@ -96,7 +98,7 @@ export async function fetchTip(repoPath: string, target: PushTarget, projectId: 
   const tracking = fetchUrl === target.url
     ? `refs/remotes/${target.remote}/${target.remoteBranch}` : `refs/navi/push-base/${target.remote}/${target.remoteBranch}`;
   try {
-    await network(repo, projectId, target.url, ["fetch", "--no-tags", "--quiet", BOUND_REMOTE, `+refs/heads/${target.remoteBranch}:${tracking}`], FETCH_TIMEOUT_MS);
+    await network(repo, projectId, target.url, (remote) => ["fetch", "--no-tags", "--quiet", remote, `+refs/heads/${target.remoteBranch}:${tracking}`], FETCH_TIMEOUT_MS);
   } catch (error) {
     const message = redactUrlsIn(gitError(error));
     if (/couldn't find remote ref|could not find remote ref/i.test(message)) return { ok: true, tip: null };
@@ -144,7 +146,7 @@ export async function pushCommit(repoPath: string, commit: string, target: PushT
   const base = { remote: target.remote, remoteBranch: target.remoteBranch };
   try {
     // 推给确认过的那个地址，不推给「远程名此刻指着的地方」。
-    const { stdout } = await network(repo, projectId, target.url, ["push", "--porcelain", BOUND_REMOTE, `${commit}:refs/heads/${target.remoteBranch}`], PUSH_TIMEOUT_MS);
+    const { stdout } = await network(repo, projectId, target.url, (remote) => ["push", "--porcelain", remote, `${commit}:refs/heads/${target.remoteBranch}`], PUSH_TIMEOUT_MS);
     // --porcelain 每个 ref 一行，`=` 打头 = 远程本来就是这个提交。
     const upToDate = stdout.split("\n").some((line) => line.startsWith("=\t"));
     // 按地址推不会更新远程跟踪分支；拉取地址就是这个地址时补记一下，`git status` 才不会说本地领先。

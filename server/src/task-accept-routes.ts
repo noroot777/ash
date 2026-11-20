@@ -15,7 +15,7 @@ import { unexecutedVerification } from "./task-accept-verification.js";
 import { pushDestinationView, pushUnavailable } from "./task-accept-push.js";
 import { rememberedPush } from "./accept-memory.js";
 import { actorOf } from "./auth/context.js";
-import { parsePushDestination, type AcceptPushView } from "@navi/shared/accept-gate";
+import { parsePushChoice, type AcceptPushView } from "@navi/shared/accept-gate";
 
 export function mountTaskAcceptanceRoutes(api: Hono): void {
   mountBranchPlanRoutes(api, acceptTask);
@@ -56,8 +56,9 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     const expectedHumanGate = typeof input?.expectedHumanGate === "string" ? input.expectedHumanGate : undefined;
     const result = await acceptTask(c.req.param("id"), "human", {
       confirmUnverified: input?.confirmUnverified === true, commit, acceptGate: gate, expectedResultVersion, expectedHumanGate,
-      // 推送是往外发：确认层发来它显示的目的地（执行时不是同一处就拒），accept_task 只说 true；别的一律不推。
-      push: input?.push === true ? true : parsePushDestination(input?.push) ?? false,
+      // 推送是往外发：确认层发来它显示的目的地（执行时不是同一处就拒），accept_task 只说 true；没给就不推，
+      // 给了却认不出（旧页面发来的、坏值）是确认失效，不是没选 —— 交下去由 preparePush 拒（parsePushChoice）。
+      push: input?.push === true ? true : parsePushChoice(input?.push) ?? false,
     });
     if (result.accepted) return c.json(result);
     const { httpStatus, ...body } = result;

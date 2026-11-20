@@ -86,12 +86,13 @@ export function redactRemoteUrl(raw: string): string {
   });
 }
 
-/** 一段文字（git 的报错、拼出来的说明）里出现的每一个带凭证的地址都按 redactRemoteUrl 抹掉。 */
+/**
+ * 一段文字（git 的报错、拼出来的说明、要发出去的地址）里每一个 URL 的**整段**认证信息都换成 `***`。比
+ * redactRemoteUrl 严：用户名的位置也能放令牌（`https://ghp_xxx@github.com/…`），所以不留用户名。
+ * 验收推送这一档对外的地址和报错走它（accept-push-destination.ts、git-accept-remote.ts）。
+ */
 export function redactUrlsIn(text: string): string {
-  return text.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/@'"]*)@/g, (_all, scheme: string, auth: string) => {
-    const user = auth.split(":")[0] ?? "";
-    return auth.includes(":") ? `${scheme}${user}:***@` : `${scheme}${user}@`;
-  });
+  return text.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\s/@'"]*@/g, "$1***@");
 }
 
 /** `git remote -v` 会把同一个远端报两遍（fetch/push），按名字去重，取第一条。 */

@@ -54,7 +54,7 @@ const MAX_PUSH_ROUNDS = 3;
  * 这一按的推送选择：解析过就换成冻结的目的地（对外那一份，带指纹不带凭证），从头重来的那一遍沿用它、
  * 按指纹核，不再按那一刻重新解析。
  */
-export type PushChoice = { choice: boolean | AcceptPushDestination };
+export type PushChoice = { choice: boolean | AcceptPushDestination | "stale" };
 
 /** acceptTask 在仓库锁里调：`push_remote_moved` 就带着同一份推送选择从头再验一遍，连着几轮都这样才停。 */
 export async function untilRemoteSettles<R extends { accepted: boolean; reason?: string; error?: string }>(taskId: string,
@@ -129,12 +129,16 @@ const conflictText = (plan: PushPlan, files: string[], blocked: string) =>
  * `confirmed`：调用方确认过的目的地（确认层、门禁续做）；`true` = 调用方只说了「推」（accept_task）。
  */
 export async function preparePush(task: TaskRow, project: ProjectRow, by: AcceptBy, commitOverride: boolean | undefined,
-  confirmed: AcceptPushDestination | true): Promise<{ plan: PushPlan; destination: AcceptPushDestination; failure?: never }
+  confirmed: AcceptPushDestination | true | "stale"): Promise<{ plan: PushPlan; destination: AcceptPushDestination; failure?: never }
     | { failure: AcceptFailure; plan?: never; destination?: never }> {
   const refuse = async (reason: string, error: string) => {
     await appendTaskTimeline(task.id, alertLine(`验收未执行：${error}`));
     return { failure: { accepted: false as const, httpStatus: 409 as const, taskId: task.id, reason, error, status: task.status } };
   };
+  if (confirmed === "stale") {
+    return refuse("push_confirmation_stale", "选了推送到远程，但这一次的推送确认已经失效（来自更新之前打开的确认，或内容不完整）。"
+      + "这次什么都没动；重新打开确认、看一眼推到哪再验收。");
+  }
   const unavailable = pushUnavailable(task, project, by, commitOverride);
   if (unavailable) return refuse("push_unavailable", `选了推送到远程，但${unavailable}。这次什么都没动；不推送就能照常验收。`);
   const plan = await pushDestination(task, project);
@@ -282,7 +286,10 @@ export async function pushMerged(task: { id: string; projectId: string }, repoPa
     const tip = await commitOf(repo, `refs/heads/${plan.branch}`);
     if (!tip || !(await isAncestor(repo, mergeCommit, tip))) return fail(`本地 ${plan.branch} 已经不含那次合并（${mergeCommit.slice(0, 8)}）`);
     outcome = await pushCommit(repoPath, tip, plan, task.projectId);
-    if (!outcome.ok) return fail(outcome.message);
+    // 报了失败、远程其实已经收下（回执丢在路上）：同 pushFirstLocked，按事实算推上去了。
+    const after = outcome.ok ? null : await fetchTip(repoPath, plan, task.projectId);
+    if (!outcome.ok && !(after?.ok && after.tip && await isAncestor(repo, mergeCommit, after.tip))) return fail(outcome.message);
+    if (!outcome.ok) outcome = { ...base, ok: true, commit: tip, upToDate: false };
   }
   await pushed(task.id, plan, outcome);
   return outcome;

@@ -1,8 +1,8 @@
 // 推送目的地对外的样子（GET /tasks/:id/accept-push 发出去、确认层原样发回、门禁续做存进库里的那一份）。
 //
-// 不变量：**推送地址里的账号密码不出服务端**（审查第 4 轮）。仓库地址里内嵌令牌（`https://user:ghp_xxx@…`，
-// `git clone https://token@…` 会留下它）并不罕见，而这份目的地会进浏览器、进报错、进任务记录。所以对外只给
-// 脱敏过的地址（git-identity.ts redactRemoteUrl，跟项目设置页那份远程列表同一个口径）供人看，「确认的就是这一处」
+// 不变量：**推送地址里的认证信息不出服务端**（审查第 4 轮）。仓库地址里内嵌令牌（`https://user:ghp_xxx@…`、
+// `git clone https://token@…` 留下的 `https://ghp_xxx@…`）并不罕见，而这份目的地会进浏览器、进报错、进任务记录。
+// 所以对外只给抹掉整段认证信息的地址（git-identity.ts redactUrlsIn，用户名位置也可能是令牌）供人看，「确认的就是这一处」
 // 靠指纹核：服务端用自己的密钥对真实目的地算 HMAC，执行时按那一刻解析出的真实地址重算一遍比对 —— 客户端
 // 拿不到真实地址，也算不出另一处地址的指纹。密钥存在库里（app_settings 里一个不对外的键），重启之后存下来的
 // 门禁续做照样核得上。
@@ -11,7 +11,7 @@ import { eq } from "drizzle-orm";
 import type { AcceptPushDestination } from "@navi/shared/accept-gate";
 import { db } from "./db/index.js";
 import { appSettings } from "./db/schema.js";
-import { redactRemoteUrl } from "./git-identity.js";
+import { redactUrlsIn } from "./git-identity.js";
 import type { PushTarget } from "./git-accept-remote.js";
 
 /** 服务端内部的推送目的地：`url` 是真实推送地址（可能带凭证），只用来推和拉，不往外送。 */
@@ -33,7 +33,7 @@ const fingerprintOf = async (plan: PushPlan) => createHmac("sha256", await desti
 
 /** 发出去的那一份：地址脱敏，带指纹。 */
 export async function publicDestination(plan: PushPlan): Promise<AcceptPushDestination> {
-  return { branch: plan.branch, remote: plan.remote, remoteBranch: plan.remoteBranch, url: redactRemoteUrl(plan.url),
+  return { branch: plan.branch, remote: plan.remote, remoteBranch: plan.remoteBranch, url: redactUrlsIn(plan.url),
     fingerprint: await fingerprintOf(plan) };
 }
 
@@ -44,6 +44,6 @@ export async function confirmsDestination(confirmed: AcceptPushDestination, plan
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
-/** 给人看的「推到哪」：`main → origin/main（https://user:***@host/r.git）`，不带凭证。 */
+/** 给人看的「推到哪」：`main → origin/main（https://***@host/r.git）`，不带凭证。 */
 export const describeDestination = (plan: { branch: string; remote: string; remoteBranch: string; url: string }) =>
-  `${plan.branch} → ${plan.remote}/${plan.remoteBranch}（${redactRemoteUrl(plan.url)}）`;
+  `${plan.branch} → ${plan.remote}/${plan.remoteBranch}（${redactUrlsIn(plan.url)}）`;
