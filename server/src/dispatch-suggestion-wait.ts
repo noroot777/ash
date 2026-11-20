@@ -68,7 +68,7 @@ export function launchBubble(batch: readonly Settled[], order: DispatchOrder, pr
 /**
  * 交给智能体的那段话：建好了哪几条（任务号、标题、交给了谁），去掉了哪几条，别再建一遍。`settledDone` = 派完就算完成：
  * 这段不是续上会话的答复，是它下一回合开头才收到的补交，所以不带【答复】、写明这条任务已经替它结成了完成。
- * 建了任务的那种以 `DISPATCH_LAUNCH_REPLY_LEAD` 开头，那条问答记录带 `dispatchLaunch`，会话里据此认出它、不画成
+ * 建了任务的那种以 `DISPATCH_LAUNCH_REPLY_LEAD` 开头，那条问答记录带 `dispatchLaunch`（建好的清单），会话里据此认出它、不画成
  * 气泡（那一下由「开了新任务」说）；全点叉了的那种照常画：会话里没有别的地方说过这件事。
  */
 export function launchReply(batch: readonly Settled[], order: DispatchOrder, label: TargetLabel, settledDone: boolean): string {

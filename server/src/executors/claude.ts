@@ -22,6 +22,7 @@ import { parseClaudeStream } from "./claude-stream.js";
 import { claudeNaviMcpInjection, type ClaudeNaviMcpInjection } from "./navi-mcp-inject.js";
 import { claudeGoalInvocation, cleanupClaudeGoalContext } from "./claude-goal.js";
 import { singleRunFromResident } from "./claude-single-run.js";
+import { CLAUDE_PLAN_ARGS, ClaudePlanGate, claudePlansDir, planFilesMarker, planSafeExtraArgs, plansDirOfCommandLine } from "./claude-plan-gate.js";
 export { parseClaudeStream } from "./claude-stream.js";
 export { singleRunFromResident } from "./claude-single-run.js";
 export { claudeEffortUnsupportedMessage, claudeRootBypassMessage, normalizeClaudeCliError, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
@@ -276,8 +277,10 @@ export class ClaudeExecutor implements AgentExecutor {
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
       : this.runtimeSettings(opts.cwd, host, model, false);
-    const { args, navi } = this.buildArgs(opts, sessionId, true, model, settings.arg);
-    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
+    const { args, navi, extraArgs } = this.buildArgs(opts, sessionId, true, model, settings.arg);
+    // 计划回合：计划文件目录按这次起跑的配置解一次，闸用它、commandLine 也记下它（接管认回同一个目录）。
+    const plansDir = opts.planMode ? claudePlansDir(opts.cwd, opts.env, extraArgs) : undefined;
+    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`) + (plansDir ? planFilesMarker(plansDir) : "");
     const child = this.startupError || settings.error
       ? failedChild(this.startupError ?? settings.error!)
       : spawnControllableForRun(
@@ -291,7 +294,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", settings.cleanup);
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, true, undefined, navi),
+      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, true, undefined, navi, plansDir),
       detached,
     );
   }
@@ -305,8 +308,11 @@ export class ClaudeExecutor implements AgentExecutor {
     const settingsCleanup = runtimeSettingsCleanupFromCommandLine(opts.commandLine);
     child.on("close", settingsCleanup);
     if (child.stdin && opts.commandLine.includes("--input-format")) {
+      // 接回的是计划回合：还没回的权限请求照样要有人回，否则 CLI 一直等着。接管拿不到起跑时的环境
+      // 和配置，计划文件目录用起跑时记在 commandLine 上的那个。
+      const plansDir = plansDirOfCommandLine(opts.commandLine);
       return singleRunFromResident(
-        this.residentFromChild(child, opts.sessionId, opts.commandLine, compact, settingsCleanup, opts.cwd, opts.images, true, opts.consumed),
+        this.residentFromChild(child, opts.sessionId, opts.commandLine, compact, settingsCleanup, opts.cwd, opts.images, true, opts.consumed, undefined, plansDir),
         detached,
       );
     }
@@ -360,9 +366,12 @@ export class ClaudeExecutor implements AgentExecutor {
     reapsAtTurnEnd = false,
     consumed?: ConsumedOutput,
     navi?: ClaudeNaviMcpInjection,
+    // 计划模式回合才给：计划文件所在目录，同时表示「权限请求由计划闸回」。
+    plansDir?: string,
   ): ResidentHandle {
+    const planGate = plansDir ? new ClaudePlanGate(plansDir, (line) => { child.stdin?.write(line); }) : undefined;
     // 打断/发送记录只给单飞落:接管(attach)只接单飞,常驻调度台重启是另开一台,不重放。
-    const resident = new ClaudeControlBridge(reapsAtTurnEnd, reapsAtTurnEnd ? (child as { naviPaths?: { out?: string } }).naviPaths?.out : undefined);
+    const resident = new ClaudeControlBridge(reapsAtTurnEnd, reapsAtTurnEnd ? (child as { naviPaths?: { out?: string } }).naviPaths?.out : undefined, planGate);
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
       const input = child.stdin;
       if (!input || input.destroyed || input.writableEnded || !input.writable) {
@@ -446,7 +455,10 @@ export class ClaudeExecutor implements AgentExecutor {
     // only one complete `assistant` message per turn. Without it the mobile/web
     // client sees nothing until a whole message lands, then the entire block
     // appears at once — the "laggy, dumps-in-one-go" feel. See parseClaudeStream.
-    const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
+    // 计划模式回合换掉 `--dangerously-skip-permissions`(两者同传它会赢),权限请求走 stdin/stdout,
+    // 所以只有 stdin 一直开着的 resident 形态能跑(claude-plan-gate.ts)。
+    const plan = resident && !!opts.planMode;
+    const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", ...(plan ? CLAUDE_PLAN_ARGS : ["--dangerously-skip-permissions"])];
     // stdin 从「一次性 prompt」变成「一行行 JSON 消息」(CLI help 原文:realtime
     // streaming input),于是同一进程能连吃多个回合。
     if (resident) args.push("--input-format", "stream-json");
@@ -459,13 +471,15 @@ export class ClaudeExecutor implements AgentExecutor {
     // 一份。放在 extraArgs 之前:用户自带 --settings 时以他那份为准(设置页会警告本覆盖
     // 被顶掉)。
     if (settingsArg) args.push("--settings", settingsArg);
-    // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
-    if (this.extraArgs.length) args.push(...this.extraArgs);
-    if (opts.extraArgs?.length) args.push(...opts.extraArgs);
+    // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。计划回合摘掉其中改权限
+    // 模式的那几个:它们排在计划参数后面,CLI 认后来的。
+    const extra = [...this.extraArgs, ...(opts.extraArgs ?? [])];
+    const extraArgs = plan ? planSafeExtraArgs(extra) : extra;
+    args.push(...extraArgs);
     // navi 自己的 MCP 起跑时注入:同名以最后一个 `--mcp-config` 为准,所以排在全部参数之后(navi-mcp-inject.ts)。
     const navi = claudeNaviMcpInjection(opts.env);
     args.push(...navi.args);
-    return { args, navi };
+    return { args, navi, extraArgs };
   }
 }
 

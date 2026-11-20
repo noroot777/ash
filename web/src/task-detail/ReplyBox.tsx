@@ -91,7 +91,7 @@ export function ReplyBox({
   const [commandResult, setCommandResult] = useState<{ taskId: string; text: string } | null>(null);
   // 实施、改计划都交回出这份计划的那个执行器：换了人，计划模式的作用域就对不上了。
   const sendToPlanner = async (ready: ReadyPlan, text: string, attachments: string[]) => {
-    await onSend(text, attachments, { agent: "codex", executorId: ready.executorId, model: ready.model, reasoningEffort: ready.reasoningEffort });
+    await onSend(text, attachments, { agent: ready.agentType, executorId: ready.executorId, model: ready.model, reasoningEffort: ready.reasoningEffort });
   };
   const currentTaskId = useRef(task.id);
   currentTaskId.current = task.id;

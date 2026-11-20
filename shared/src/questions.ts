@@ -24,17 +24,18 @@ export type QuestionRecord = QuestionSource & {
    * 这段留到这条任务下一回合开头一并交给它，交过就摘掉（server/src/undelivered-replies.ts）。
    */
   undelivered?: true;
-  /**
-   * 这一问是等着的那一批派活处理完、而且真建了任务的那一下认领的（server/src/dispatch-suggestion-resolve.ts）。
-   * 会话里认派出回执靠这一项，不靠正文：用户在普通问答里贴一段派出回执，也只是一句普通答复。
-   */
-  dispatchLaunch?: true;
   /** 派完就算完成，这条任务还欠的那一下（跟派出同一笔落库，server/src/dispatch-suggestion-settle.ts 消费）。 */
   settleOwed?: LaunchSettleDebt;
   /** 用户删掉了这条答复（server/src/conversation-redact.ts）：只留 id 与时刻，问答正文已清空。 */
   deleted?: true;
   /** 删的是会话里哪一段（会话行 + 段序号；删除不挪段序号）。正文还没换成墓碑时靠它认回原主。 */
   deletedFrom?: { sessionId: string; index: number };
+  /**
+   * 等着的那一批派活处理完、真建了任务的那一下（server dispatch-suggestion-resolve.ts 写，只有它写）：建好了哪几条。
+   * 会话里按它画成每条一句「开了新任务」，不画「你」的气泡（shared/dispatch-suggestion.ts `dispatchLaunchOf`）——
+   * 认的是这一列，不看正文：用户在普通问答里贴一段派出回执，也只是一句普通答复。
+   */
+  dispatchLaunch?: DispatchLaunchTask[];
 };
 
 /**
@@ -43,6 +44,9 @@ export type QuestionRecord = QuestionSource & {
  * 之后起过新回合、被引导过、状态被别处改过，这份授权就过期了，不能越过后来的决定。
  */
 export type LaunchSettleDebt = { stage: "complete" | "followUp"; epoch: number; from: string };
+
+/** 派出去建好的一条：任务号、标题、交给了谁（读成一句人话的执行器名）。 */
+export type DispatchLaunchTask = { id: string; title: string; agent: string };
 
 /** 会话里的一句真人输入，拿去对问答记录（`answerIds` 见 session-output.ts 的 ConvSeg）。 */
 export type AnswerMessage = {

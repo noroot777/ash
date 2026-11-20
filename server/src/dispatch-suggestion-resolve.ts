@@ -120,11 +120,13 @@ export async function resolveWithin(
   const settled = batch.map((item) => ({ ...item, settled: item.settled! }));
   const order = context.order ?? batch[0]!.order;
   const settleDone = wait === "done";
+  const built = settled.flatMap((item) => (item.settled.task ? [item.settled.task] : []));
   const record: QuestionRecord = {
     question: row.question, questionOptions: null, questionItems: null, id: nanoid(12), answeredAt: at,
     answer: launchBubble(settled, order, context.proposed, context.label),
     reply: launchReply(settled, order, context.label, settleDone),
-    ...(settled.some((item) => item.settled.task) ? { dispatchLaunch: true as const } : {}),
+    // 会话里认这一下只认它（shared dispatch-suggestion.ts `dispatchLaunchOf`），不看答复正文。
+    ...(built.length ? { dispatchLaunch: built.map((task) => ({ id: task.id, title: task.title, agent: context.label(task.target) })) } : {}),
     ...(settleDone ? { undelivered: true as const, settleOwed: launchDebtFor(row) } : {}),
   };
   const remaining = next.filter((item) => item.wait === "none");

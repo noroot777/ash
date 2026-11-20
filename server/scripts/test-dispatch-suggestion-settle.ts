@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { eq, sql } from "drizzle-orm";
 import { appendMonitorWake } from "@navi/shared/monitor-wake";
-import { isDispatchLaunchRecord } from "@navi/shared/dispatch-suggestion";
+import { dispatchLaunchOf } from "@navi/shared/dispatch-suggestion";
 import type { QuestionRecord } from "@navi/shared/questions";
 
 const { dbClient } = await import("../src/db/index.js");
@@ -38,7 +38,8 @@ const owe = async (taskId: string) => {
   const task = await row(taskId);
   const record: QuestionRecord = {
     id: `${taskId}-rec`, answeredAt: at, question: "派出这 1 个任务", answer: "派出这 1 个任务\n一个接一个",
-    reply: "用户按了「派出去」：Navi 已照你上次摆的那一批此刻的样子建好下面 1 个任务", dispatchLaunch: true,
+    reply: "用户按了「派出去」：Navi 已照你上次摆的那一批此刻的样子建好下面 1 个任务",
+    dispatchLaunch: [{ id: `${taskId}-kid`, title: "收尾那一条", agent: "claude" }],
     undelivered: true, settleOwed: settle.launchDebtFor(task),
   };
   await db.update(tasks).set({ questionHistory: JSON.stringify([record]) }).where(eq(tasks.id, taskId));
@@ -188,12 +189,22 @@ try {
     const carried = JSON.parse(settle.questionHistoryWithoutDebt(raw)!) as QuestionRecord[];
     assert.deepEqual([carried[0]!.settleOwed, carried[0]!.undelivered], [undefined, true], "接力过来的不带欠账，待补交的清单照带");
     assert.equal(settle.questionHistoryWithoutDebt(null), null);
-    const receipt = "用户按了「派出去」：Navi 已照那一批此刻的样子建好下面 1 个任务";
-    assert.equal(isDispatchLaunchRecord({ answer: "派出这 1 个任务\n一个接一个", reply: `【答复】\n${receipt}`, dispatchLaunch: true }), true);
-    assert.equal(isDispatchLaunchRecord({ answer: "派出这 1 个任务\n同时", reply: `【答复】\n${receipt}` }), true, "没有标记的老记录按完整形状认");
-    assert.equal(isDispatchLaunchRecord({ answer: receipt, reply: `【答复】\n${receipt}` }), false, "用户贴一段回执原文的普通答复不被吞掉");
+    const launched = [{ id: "kid-1", title: "收尾那一条", agent: "codex · gpt-5.6" }];
+    const marked: QuestionRecord = { id: "m", answeredAt: at, answer: "派出这 1 个任务\n一个接一个", reply: "用户按了「派出去」：…", dispatchLaunch: launched };
+    assert.deepEqual(dispatchLaunchOf(marked), launched, "认服务端写下的那一列");
+    assert.equal(dispatchLaunchOf({ ...marked, deleted: true }), null, "删掉的派出记录不再认");
+    // 合一之前的派活单记下的老记录：没有那一列，按完整形状认，清单照样读得出来。
+    const legacy: QuestionRecord = {
+      id: "l", answeredAt: at, answer: "派出这 1 个任务\n同时",
+      reply: "【答复】\n用户按了「派出去」：Navi 已照派活单此刻的样子建好下面 1 个任务（同时），挂在本任务名下。\n1. kid-1「收尾那一条」→ codex · gpt-5.6",
+    };
+    assert.deepEqual(dispatchLaunchOf(legacy), launched, "老的派出记录按完整形状认");
+    assert.equal(dispatchLaunchOf({ ...legacy, reply: legacy.reply.split("\n").slice(0, 2).join("\n") }), null, "清单行数对不上不算");
+    const typed = "用户按了「派出去」：但没有反应，请继续排查。";
+    assert.equal(dispatchLaunchOf({ id: "t", answeredAt: at, answer: typed, reply: `【答复】\n${typed}` }), null, "普通答复撞上回执开头不算派出记录");
+    assert.equal(dispatchLaunchOf({ ...legacy, answer: typed }), null, "答的那一句不是「派出这 N 个任务」不算");
   }
-  console.log("✓ S7 接力不带欠账；认派出回执靠记录标记，普通答复贴回执不被吞");
+  console.log("✓ S7 接力不带欠账；认派出记录靠服务端写下的清单（老记录按完整形状），普通答复贴回执不被吞");
 } catch (error) {
   failure = error;
   console.error(error);

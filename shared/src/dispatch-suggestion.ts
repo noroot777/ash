@@ -48,6 +48,7 @@
 import type { DispatchRunTarget } from "./dispatch-target.ts";
 import { targetOf } from "./dispatch-target.ts";
 import { parseCreateReviewChoice, type CreateReviewChoice } from "./review-on-create.ts";
+import type { DispatchLaunchTask, QuestionRecord } from "./questions.ts";
 
 export type DispatchOrder = "serial" | "parallel";
 /** 要不要等用户（见文件头）。 */
@@ -137,20 +138,26 @@ export function suggestionTaskBody(body: string, extra?: string | null): string 
 
 /**
  * 等着的那一批处理完、建了任务时交给智能体的那段话（server dispatch-suggestion-wait.ts `launchReply`）以它开头。
- * 那段话只是回执：用户在会话里看到的是每条新任务各一句「开了新任务」（web dispatchNotes.ts），所以会话里认出
- * 这一问就不再画成一颗「你」的气泡。
+ * 那段话只是回执：用户在会话里看到的是每条新任务各一句「开了新任务」（web QuestionHistory.tsx 按 `dispatchLaunchOf` 画）。
  */
 export const DISPATCH_LAUNCH_REPLY_LEAD = "用户按了「派出去」：";
 
 /**
- * 这条问答记录是不是派出去那一下留下的。认结构化标记（`dispatchLaunch`）；没有标记的老记录只认派出那一下的
- * 完整形状——用户答的那一句是「派出这 N 个任务」开头、交给智能体的那段是派出回执开头——用户自己在普通问答
- * 里贴一段回执，`answer` 是他贴的原文，对不上。
+ * 这条问答记录是不是派出去那一下留下的，是的话建好了哪几条。认服务端写下的 `dispatchLaunch`，不看正文：答复正文
+ * 是用户能自由写的，开头撞上了也只是一句普通答复。没有这一列的老记录（合一之前的派活单）只认派出那一下的完整
+ * 形状——答的那一句是「派出这 N 个任务」、交给智能体的那段是派出回执，后面恰好 N 行任务清单——清单照样读得出来。
  */
-export function isDispatchLaunchRecord(record: { answer?: string; reply?: string; dispatchLaunch?: true }): boolean {
-  if (record.dispatchLaunch) return true;
-  return /^派出这 \d+ 个任务\n/.test(record.answer ?? "")
-    && (record.reply ?? "").replace(/^【答复】\s*/, "").startsWith(DISPATCH_LAUNCH_REPLY_LEAD);
+export function dispatchLaunchOf(record: QuestionRecord): DispatchLaunchTask[] | null {
+  if (record.deleted) return null;
+  if (record.dispatchLaunch) return record.dispatchLaunch;
+  const count = /^派出这 (\d+) 个任务(?:\n|$)/.exec(record.answer ?? "")?.[1];
+  const lines = (record.reply ?? "").split("\n");
+  if (!count || lines[0] !== "【答复】" || !lines[1]?.startsWith(`${DISPATCH_LAUNCH_REPLY_LEAD}Navi 已照派活单此刻的样子建好下面 ${count} 个任务`)) return null;
+  const tasks = lines.slice(2, 2 + Number(count)).map((line, index) => {
+    const match = /^(\d+)\. (\S+)「(.*)」→ (.+)$/.exec(line);
+    return match && Number(match[1]) === index + 1 ? { id: match[2]!, title: match[3]!, agent: match[4]! } : null;
+  });
+  return tasks.length === Number(count) && tasks.every((task) => task) ? tasks as DispatchLaunchTask[] : null;
 }
 
 const stringList = (value: unknown): string[] | undefined =>

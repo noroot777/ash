@@ -28,7 +28,8 @@ import { delimiter, join } from "node:path";
 import { asc, eq, inArray, like, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Task } from "@navi/shared";
-import { isDispatchLaunchRecord, type DispatchSuggestion } from "@navi/shared/dispatch-suggestion";
+import { dispatchLaunchOf, type DispatchSuggestion } from "@navi/shared/dispatch-suggestion";
+import type { QuestionRecord } from "@navi/shared/questions";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installExitingClis, installFakeClaude } from "./scheduled-messages-fixture.js";
 
@@ -245,9 +246,15 @@ try {
   assert.ok(kids.every((kid) => JSON.parse(kid.creationOrigin ?? "{}").kind === "user"), "建任务的是 navi 照用户按下的那一下建的");
   assert.equal((await db.select().from(taskPrerequisites).where(inArray(taskPrerequisites.taskId, kids.map((kid) => kid.id)))).length, 0,
     "等的那件叉掉了：最后那件不再带它的前置");
-  const record = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { answer: string; reply: string; dispatchLaunch?: true }[]).at(-1)!;
+  const record = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as QuestionRecord[]).at(-1)!;
   assert.equal(record.answer, "派出这 2 个任务\n同时 · 第 2 条交给 gemini · 去掉了「关掉起手式的新建入口」", "问答记录里答的那一句：派出几个、一句改动");
-  assert.ok(record.dispatchLaunch && isDispatchLaunchRecord(record), "续上会话的答复认得出是派出回执（会话里不画成气泡）");
+  // 会话里不画成一颗「你」的气泡、改成每条一句「开了新任务」：认的是服务端写下的那一列，不看答复正文。
+  const launchedTasks = [
+    { id: kids[0]!.id, title: "验收门禁加准备命令", agent: "codex · gpt-5.6" },
+    { id: kids[1]!.id, title: kids[1]!.title, agent: "gemini" },
+  ];
+  assert.deepEqual(record.dispatchLaunch, launchedTasks, "问答记录上记下了建好的是哪几条（早先那一下派的也在）、交给了谁");
+  assert.deepEqual(dispatchLaunchOf(record), launchedTasks, "派出记录认得出");
   await waitFor(() => delivered().includes(kids[1]!.id), "续上的会话里没有建好的任务清单");
   const reply = delivered();
   assert.ok(reply.includes(`${kids[0]!.id}「验收门禁加准备命令」→ codex · gpt-5.6`), "智能体拿得到任务号、标题、交给了谁（早先那一下派的也在）");
@@ -275,9 +282,10 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.ok(!delivered().slice(leadBefore).includes(P), "没有叫醒智能体");
   assert.equal(runs.isRunning(P), false);
-  const finaleRecord = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { answer: string; reply: string; undelivered?: boolean; dispatchLaunch?: true; settleOwed?: unknown }[]).at(-1)!;
+  const finaleRecord = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as QuestionRecord[]).at(-1)!;
   assert.equal(finaleRecord.undelivered, true, "清单记在问答记录上，还没交给智能体");
-  assert.ok(isDispatchLaunchRecord(finaleRecord) && !finaleRecord.reply.startsWith("【答复】"), "补交的那段认得出，且不冒充答复");
+  assert.deepEqual(dispatchLaunchOf(finaleRecord)?.map((task) => task.id), [finaleKid.id], "补交的那段认得出是派出记录");
+  assert.ok(!finaleRecord.reply.startsWith("【答复】"), "补交的那段不冒充答复");
   await waitFor(async () => !(await taskOf(P)).questionHistory?.includes('"settleOwed"'),
     "当场收尾做完没有销账（还不上的那几种见 test-dispatch-suggestion-settle.ts）");
   const chat = await send("POST", `/tasks/${P}/reply`, { text: "接着聊一句(dw-after)" });
