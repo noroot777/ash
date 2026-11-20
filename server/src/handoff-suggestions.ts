@@ -112,7 +112,7 @@ function freshWithdrawn(raw: string | null, mine: WithdrawnSuggestion[]): Withdr
  * 带来的那几件里，前置指着的已有任务（同一批里先派出去的那件换成的任务号、智能体直接指的任务号）本机都得有：任务
  * 接力过来，它派出去的那几条留在原机上，指着它们的那一件在这里只会报「前置任务不存在」。不能把那条前置划掉了事
  * ——那件要的是它们的代码，划掉就会在没有那份代码时开工。所以缺了就整个拒收（在任何落库之前），说清怎么办。
- * 同一批里还挂着的件用 key 指的不算：它们跟着一起来了。
+ * 同一批里还挂着的件用 key 指的、指着这条任务自己的，都不算：它们跟着一起来了。
  */
 export async function checkCarriedPrerequisites(store: Store, carried: Carried): Promise<void> {
   if (carried.dispatchSuggestions == null) return;
@@ -124,6 +124,9 @@ export async function checkCarriedPrerequisites(store: Store, carried: Carried):
       if (!sameBatch && !wanted.has(ref)) wanted.set(ref, item.title);
     }
   }
+  // 按导入之后的任务集合核：这次接过来的这条任务自己也在里面（挂一件「等这条做完再做」的活是合法的，首次接过来时本机
+  // 还没有它的行）。
+  wanted.delete(carried.id);
   if (!wanted.size) return;
   const found = new Set((await store.select({ id: tasks.id }).from(tasks).where(inArray(tasks.id, [...wanted.keys()]))).map((row) => row.id));
   const missing = [...wanted].filter(([ref]) => !found.has(ref));

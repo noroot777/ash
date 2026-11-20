@@ -37,7 +37,8 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@navi/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
-import { NO_ONE_SHOT_NOTICES, oneShotNotices } from "./undelivered-replies.js";
+import { clearOnAcceptance, NO_ONE_SHOT_NOTICES, oneShotNotices } from "./undelivered-replies.js";
+import { createTurnInputSettlement } from "./turn-input-settlement.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -265,9 +266,13 @@ async function runHeldTask(
       env: runEnv,
     });
     trackRun(taskId, handle);
-    // 前言已经随 prompt 交到 agent 手上就划掉（放在 spawn 之后:起跑前还有 takeFreeze
-    // 那道闸,清早了被冻住的那一轮会把它白白吃掉）。
-    await notices.clear();
+    // 前言等 agent 确认收下这一轮的输入才划掉（undelivered-replies.ts `clearOnAcceptance`）;原生命令那一轮发出去的
+    // 是命令原文、不带前言,不划。不阻塞起跑:定论（含迟到的那一档）到了再划。
+    if (!localCommand) {
+      const delivery = createTurnInputSettlement(taskId, {});
+      clearOnAcceptance(notices, delivery);
+      void delivery.settle(handle).catch((error) => console.error(`[navi] 任务 ${taskId} 的前言划账出错，下一回合会再交一遍:`, error));
+    }
 
     let cliSessionId = handle.sessionId;
     const sessRow = {

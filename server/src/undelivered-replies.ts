@@ -59,11 +59,19 @@ export async function markRepliesDelivered(taskId: string, ids: readonly string[
 }
 
 /**
- * 回合开头一次性交出去的两段：接力前言（handoff-notice.ts）和补交的答复。两条起跑入口（orchestrator 续跑、
- * task-run 全新起跑）都按这一处取、在 spawn 之后 `clear()` 划掉——早了被冻住的那一轮会把它们白白吃掉。
- * 审查、验证、原生命令这类旁路回合不取（交给它们，任务本人就再也收不到了），用 `NO_ONE_SHOT_NOTICES`。
+ * 回合开头一次性交出去的两段：接力前言（handoff-notice.ts）和补交的答复（连同待补交的回执）。两条起跑入口
+ * （orchestrator 续跑、task-run 全新起跑）都按这一处取，**智能体确认收下这一轮的输入之后**才 `clear()` 划掉
+ * （`clearOnAcceptance`，挂在 turn-input-settlement.ts 的 `whenAccepted` 上）：进程起来只说明 spawn 成功，拒收、
+ * 结果不明都留着下一回合再交——这几段是它们唯一的一份，划早了就再也交不到；被冻住、没起跑的那一轮同样不划。
+ * 审查、验证、原生命令这类旁路回合不取（交给它们，任务本人就再也收不到了；原生命令的 prompt 里也放不下它们），
+ * 用 `NO_ONE_SHOT_NOTICES`。
  */
 export type OneShotNotices = { handoff: string; carried: string; clear: () => Promise<void> };
+
+/** 这一轮的 prompt 里确实带着它们时，登记成「输入确认送达之后才划掉」。 */
+export function clearOnAcceptance(notices: OneShotNotices, settlement: { whenAccepted(effect: () => Promise<void>): void }): void {
+  if (notices.handoff || notices.carried) settlement.whenAccepted(() => notices.clear());
+}
 
 export const NO_ONE_SHOT_NOTICES: OneShotNotices = { handoff: "", carried: "", clear: async () => {} };
 

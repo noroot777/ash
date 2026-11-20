@@ -5,7 +5,7 @@
 //   · 「发回去改」就是对那一问的普通答复：一条任务都不建，那一批从框顶撤下，智能体收到那句话（带一句「没有派出」）；
 //     已经派出了几件时，那句话前面写明建好了哪几条（任务号）、剩下哪几条没派；智能体换掉、收回光这一批都不落；
 //   · 建了任务的记录交到智能体手上之前不丢：收回不了；新消息顶掉那一问时写进那一轮的提示；别的路清掉那一问时
-//     读成待补交的回执，下一回合开头交一次；
+//     读成待补交的回执，下一回合开头交——智能体确认收下那一轮的输入才划掉（拒收、结果不明都留着，迟到的确认到了再划）；
 //   · 派出去由 navi 照那几行此刻的样子建（换的人、同时 / 一个接一个），挂在这条任务名下、来源记用户；可以分几下处理：
 //     先派一件、再叉一件、最后派剩下的——最后一件了结那一下才算处理完；同批前置：被等的那件还挂着时不能单派等它的那件，
 //     先派出去的那件之后接得上（前置换成它建出来的任务号），叉掉的那件从前置里划掉；
@@ -507,13 +507,29 @@ try {
   const O = await partialBatch("dw-orphaned");
   await db.update(tasks).set({ question: null }).where(eq(tasks.id, "dw-orphaned"));
   assert.deepEqual(await waitingOf("dw-orphaned"), [], "那一问被别的路清掉：页面上那一批没了");
-  const { oneShotNotices } = await import("../src/undelivered-replies.js");
+  const { clearOnAcceptance, oneShotNotices } = await import("../src/undelivered-replies.js");
+  const { createTurnInputSettlement } = await import("../src/turn-input-settlement.js");
   const notices = oneShotNotices(await taskOf("dw-orphaned"));
   assert.ok(notices.carried.includes(O.built.id) && notices.carried.includes("不要再建"), "下一回合开头补交：建了哪条");
   assert.ok(!notices.carried.includes(O.rest.title), "没派的那件不算回执");
-  await notices.clear();
-  assert.equal(oneShotNotices(await taskOf("dw-orphaned")).carried, "", "交过就划掉，不再交第二遍");
-  console.log("✓ 建了任务的记录交到智能体手上之前不丢：收回不了；新消息顶掉时写进提示；别的路清掉那一问时下一回合补交一次");
+  // 划不划只看智能体收没收下这一轮的输入（照两条起跑入口的接法：登记在输入定论上，进程起来不算）。
+  const deliverWith = async (inputAccepted: Promise<"accepted" | "refused" | "unknown">) => {
+    const settlement = createTurnInputSettlement("dw-orphaned", {});
+    clearOnAcceptance(oneShotNotices(await taskOf("dw-orphaned")), settlement);
+    await settlement.settle({ inputAccepted } as never);
+  };
+  const stillCarried = async () => oneShotNotices(await taskOf("dw-orphaned")).carried.includes(O.built.id);
+  await deliverWith(Promise.resolve("refused"));
+  assert.ok(await stillCarried(), "拒收：留着，下一回合再交");
+  process.env.NAVI_TURN_INPUT_ACK_MS = "30";
+  let lateAccept!: (fact: "accepted") => void;
+  await deliverWith(new Promise((resolve) => { lateAccept = resolve; }));
+  assert.ok(await stillCarried(), "等不到回执（结果不明）：留着");
+  lateAccept("accepted");
+  await waitFor(async () => !(await stillCarried()), "迟到的确认到了却没划掉");
+  delete process.env.NAVI_TURN_INPUT_ACK_MS;
+  assert.equal(oneShotNotices(await taskOf("dw-orphaned")).carried, "", "确认收下才划掉，不再交第二遍");
+  console.log("✓ 建了任务的记录交到智能体手上之前不丢：收回不了；新消息顶掉时写进提示；别的路清掉那一问时下一回合补交，收下才划掉");
 
   // —— 上线前摆的派活单（只有 tasks.dispatch_plan 那一列，旁边还挂着一件老格式的建议）：照旧能看、能派、能发回去改。
   const legacyPlan = (planId: string, questionText: string) => JSON.stringify({

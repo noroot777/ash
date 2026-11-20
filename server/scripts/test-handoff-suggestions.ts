@@ -9,7 +9,7 @@
 //   · 带了但不是 JSON 数组、或者数组里有认不出的条目：整份拒收，本机的不动；不认识的智能体类型按没指明交给谁落；
 //   · 等着用户过目的那一批原样落；里面已经派出的那几件的了结记录单开一个键带（老版本对端认不出它），接回那一批的和
 //     还没交给智能体的回执；
-//   · 挂着的那几件前置指着的任务本机没有：整个拒收、什么都不落（本机有就照收，同批 key 不算缺）；
+//   · 挂着的那几件前置指着的任务本机没有：整个拒收、什么都不落（本机有就照收，同批 key、接过来的这条任务自己不算缺）；
 //   · 说明里引用的上传附件路径落地时改写成本机路径。
 //
 // 第一段起两台真服务走完整的接力与移回；后几段单进程直调 importHandoff 喂手写的清单（老版本对端、途中丢
@@ -339,6 +339,10 @@ try {
   await assert.rejects(importHandoff(manifestFor("sgtdangling", { dispatchSuggestions: JSON.stringify([dependent]) }), { sourceUrl: "http://holder.test:4317" }),
     (error: unknown) => error instanceof HandoffError && /要等的任务 taskOnlyOnHolder 不在这台机器上/.test(error.message), "缺了就拒收，说清是哪件、缺哪条");
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "sgtdangling"))).length, 0, "什么都没导入");
+  // 「等这条做完再做」：前置指着接过来的这条任务自己——首次接过来时本机还没有它的行，也照收。
+  const followUp = suggestion("sgFollowUp1", "等这条做完再做的", { prerequisites: ["sgtparent01"] });
+  await importHandoff(manifestFor("sgtparent01", { dispatchSuggestions: JSON.stringify([followUp]) }), { sourceUrl: "http://holder.test:4317" });
+  assert.deepEqual(ids(JSON.parse((await localRow("sgtparent01")).dispatchSuggestions!)), [followUp.id], "指着这条任务自己的前置不算缺");
   await archiveOnLocal("taskOnlyOnHolder", [], []);
   await importHandoff(manifestFor("sgtdangling", { dispatchSuggestions: JSON.stringify([dependent, ...inBatch]) }), { sourceUrl: "http://holder.test:4317" });
   assert.deepEqual(ids(JSON.parse((await localRow("sgtdangling")).dispatchSuggestions!)), [dependent.id, ...ids(inBatch)], "本机有那条任务：照收");
