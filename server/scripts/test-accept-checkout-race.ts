@@ -236,6 +236,53 @@ try {
       assert.equal(await pendingOperation(repo), "MERGE_HEAD");
     }
 
+    // 7c. 不受竞态影响的正常路径不许被成功判据误伤（审查第 6 轮）：目标没检出、走临时工作区的 squash 真的落了提交；
+    //     没配提交身份时「不提交」照常成功（核对内容用的临时提交对象不借用户身份）；分支名里带 `]` 时 squash 照常成功。
+    {
+      const s = await stage("temp-squash", false);
+      git(s.repo, "switch", "-q", "side");
+      const value = await mergeTaskBranch(s.repo, s.taskId, "main", "squash");
+      assert.equal(value.ok, true, value.ok ? "" : value.message);
+      if (value.ok) assert.equal(value.method, "squash");
+      assert.equal(git(s.repo, "show", "main:task.txt"), "task", "临时工作区里的 squash 真的提交进了 main");
+      assert.equal(git(s.repo, "rev-parse", "main^"), s.main);
+    }
+    {
+      const s = await stage("no-identity", false);
+      git(s.repo, "config", "--unset", "user.name");
+      git(s.repo, "config", "--unset", "user.email");
+      git(s.repo, "config", "user.useConfigOnly", "true");
+      const saved = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
+      process.env.GIT_CONFIG_GLOBAL = join(root, "no-global-config");
+      process.env.GIT_CONFIG_NOSYSTEM = "1";
+      let value: Awaited<ReturnType<typeof mergeTaskBranch>>;
+      try { value = await mergeTaskBranch(s.repo, s.taskId, "main", "safe", { commit: false }); } finally {
+        for (const [key, was] of [["GIT_CONFIG_GLOBAL", saved.global], ["GIT_CONFIG_NOSYSTEM", saved.nosystem]] as const) {
+          if (was === undefined) delete process.env[key]; else process.env[key] = was;
+        }
+      }
+      assert.equal(value.ok, true, value.ok ? "" : `没配提交身份时不提交也该成功：${value.message}`);
+      assert.equal(git(s.repo, "diff", "--cached", "--name-only"), "task.txt");
+    }
+    {
+      const repo = join(root, "bracket-target");
+      const target = "release]candidate";
+      execFileSync("git", ["init", "-q", "-b", target, repo]);
+      git(repo, "config", "user.name", "Navi Race Test");
+      git(repo, "config", "user.email", "race@example.test");
+      writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
+      git(repo, "add", "-A");
+      git(repo, "commit", "-q", "-m", "seed");
+      const taskId = "racebracket1";
+      const ws = await prepareWorktree(repo, taskId, target);
+      writeFileSync(join(ws.path, "task.txt"), "task\n");
+      git(ws.path, "add", "-A");
+      git(ws.path, "commit", "-q", "-m", "task");
+      const value = await mergeTaskBranch(repo, taskId, target, "squash");
+      assert.equal(value.ok, true, value.ok ? "" : `分支名带 ] 时 squash 也该成功：${value.message}`);
+      assert.equal(git(repo, "show", `${target}:task.txt`), "task");
+    }
+
     // 8. 钩子照旧在项目目录里跑（审查第 1 轮 F3）：看得到项目里被忽略的本地依赖，合并后钩子也在这里。
     for (const c of cases.filter((c) => c.commit && c.name !== "fast-forward")) {
       const s = await stage(`${c.name}-hooks`, c.diverge);
@@ -257,7 +304,7 @@ try {
       clean(s.repo, `${c.name}-hooks`);
     }
 
-    console.log("accept checkout race: 核完再切走什么都不动 / 合并前被切走如实报落在哪 / 无竞态照常落地 / 冲突照旧交回 / 合完再切走照常成功 / 成功只认不会再变的实证 / 路径带换行也查得出没做完的操作 / 钩子在项目目录 全部通过");
+    console.log("accept checkout race: 核完再切走什么都不动 / 合并前被切走如实报落在哪 / 无竞态照常落地 / 冲突照旧交回 / 合完再切走照常成功 / 成功只认不会再变的实证 / 正常路径不被误伤 / 路径带换行也查得出没做完的操作 / 钩子在项目目录 全部通过");
   }
 } finally {
   await removeTmpStage(root);

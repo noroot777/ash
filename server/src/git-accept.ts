@@ -388,7 +388,9 @@ async function squashInCheckedOutTarget(
     return { ok: true, sourceBranch, targetBranch, method: "no_commit", stagedTree: await writeIndexTree(cwd) };
   }
   try {
-    committed?.((await exec("git", ["-C", cwd, "commit", "-m", squashCommitMessage(sourceBranch)])).stdout);
+    // 提交号不缩写：摘要行里那个号就是这次建出的提交，调用方据此核落点（git-accept-checkout.ts）。
+    const { stdout } = await exec("git", ["-C", cwd, "-c", "core.abbrev=no", "commit", "-m", squashCommitMessage(sourceBranch)]);
+    committed?.(stdout);
     return { ok: true, sourceBranch, targetBranch, method: "squash" };
   } catch (error) {
     // 到这里 staged 一定非空过：commit 失败就是真失败（hook 拒绝/环境问题），如实报错。

@@ -18,6 +18,7 @@
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { execFileText as exec } from "./exec.js";
+import { gitError } from "./git.js";
 import type { TaskMergeResult } from "./git-accept.js";
 
 type Names = { sourceBranch: string; targetBranch: string };
@@ -55,8 +56,15 @@ export async function pendingOperation(repo: string): Promise<string | null> {
   return found.length ? found.join("、") : null;
 }
 
-/** `git commit` 的摘要行 `[<分支> <短提交号>] <标题>` 里那个提交号：git 刚建出的那个对象，事后改不了。 */
-const committedIn = (stdout: string | null) => stdout?.match(/^\[[^\]\n]* ([0-9a-f]{4,})\] /m)?.[1] ?? null;
+/**
+ * `git -c core.abbrev=no commit` 的摘要行 `[<分支> <完整提交号>] <标题>` 里那个号：git 刚建出的那个对象，事后改不了。
+ * 分支名里可以有 `]`、不能有空格，所以认的是第一个「空格 + 完整提交号 + `] `」；钩子的输出 git 一律导到 stderr，
+ * 不在这里。
+ */
+const committedIn = (stdout: string | null) => stdout?.match(/^\[[^\n]*? ([0-9a-f]{40}|[0-9a-f]{64})\] /m)?.[1] ?? null;
+
+/** 只为按内容核对临时做的提交对象用固定身份：不要求用户配过 user.name / user.email（「不提交」本来不需要）。 */
+const PROBE_IDENTITY = { GIT_AUTHOR_NAME: "navi", GIT_AUTHOR_EMAIL: "navi@localhost", GIT_COMMITTER_NAME: "navi", GIT_COMMITTER_EMAIL: "navi@localhost" };
 
 /**
  * 在项目目录 `repo`（检出着目标分支、已核过干净）里跑 `run` 这次原生合并（`sourceRef` 是被合的来源）：
@@ -75,8 +83,8 @@ export async function mergeInUserCheckout(repo: string, names: Names, sourceRef:
   if (!before || !source) return fail(`读不到 ${before ? `来源 ${sourceRef}` : `目标分支 ${targetBranch}`} 指着的提交，这次没合并，重新验收即可。`);
   let report: string | null = null;
   const result = await run((stdout) => { report = stdout; });
-  const short = committedIn(report);
-  const made = short ? await tipOf(repo, `${short}^{commit}`) : null;
+  const reported = committedIn(report);
+  const made = reported ? await tipOf(repo, `${reported}^{commit}`) : null;
   const head = await headRef(repo);
   const where = describe(head);
   const now = await tipOf(repo, ref);
@@ -87,11 +95,22 @@ export async function mergeInUserCheckout(repo: string, names: Names, sourceRef:
   }
   if (result.method === "no_commit") {
     const staged = head === ref ? (await exec("git", ["-C", repo, "write-tree"]).catch(() => null))?.stdout.trim() : null;
+    if (head !== ref || now !== before || !staged || staged !== result.stagedTree) {
+      return fail(`改动已经暂存，但合并的同时项目目录被切过（现在是${where}），暂存的改动${head === ref ? "已经不是这次合并记下的那一份" : "跟着到了那里、不在 " + targetBranch + " 的检出里"}，`
+        + `所以这次不算验收通过。Navi 没有替你复位，在项目目录里 \`git status\` 核对后处理，再重新验收。`);
+    }
     // 暂存的那棵包含来源：挂在合并前的目标上临时做一个提交对象（不进任何分支）再按内容核。
-    const probe = staged ? (await exec("git", ["-C", repo, "commit-tree", staged, "-p", before, "-m", "navi accept probe"]).catch(() => null))?.stdout.trim() : null;
-    if (head === ref && now === before && staged === result.stagedTree && probe && await contentContains(repo, probe, source)) return result;
-    return fail(`改动已经暂存，但合并的同时项目目录被切过（现在是${where}），暂存的改动${head === ref ? "已经不是这次合并记下的那一份" : "跟着到了那里、不在 " + targetBranch + " 的检出里"}，`
-      + `所以这次不算验收通过。Navi 没有替你复位，在项目目录里 \`git status\` 核对后处理，再重新验收。`);
+    let probe: string;
+    try {
+      probe = (await exec("git", ["-C", repo, "commit-tree", staged, "-p", before, "-m", "navi accept probe"],
+        { env: { ...process.env, ...PROBE_IDENTITY } })).stdout.trim();
+    } catch (error) {
+      return fail(`改动已经暂存在项目目录里，但没能核对暂存的内容（${gitError(error)}），所以这次不算验收通过。`
+        + "Navi 没有替你复位，在项目目录里 `git status` 核对后处理，再重新验收。");
+    }
+    if (await contentContains(repo, probe, source)) return result;
+    return fail(`项目目录里暂存的内容不包含任务分支这次要合进来的改动（来源 ${source.slice(0, 12)}），所以这次不算验收通过。`
+      + "Navi 没有替你复位，在项目目录里 `git status` 核对后处理，再重新验收。");
   }
   const landed = now !== null && (result.method === "squash"
     ? !!made && made !== before && await ancestor(repo, made, now)
