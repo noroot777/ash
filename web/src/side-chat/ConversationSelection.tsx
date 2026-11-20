@@ -121,27 +121,35 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
     const dismiss = () => { cancelAnimationFrame(frame); forget(); };
     /* 按下 / 松开认的是 mousedown / mouseup，不是 pointer 事件：WKWebView 里连击时后几下只派
        mouse 事件，pointerdown / pointerup 不来，按 pointer 事件记会一直以为键还按着、浮条再也
-       不出。松手那一下万一没送到页面（在窗口外松的手），下一次移动时看 buttons 补上。 */
+       不出。
+       「按着」只有一个出口 settle：清掉标记的同时补算一次 —— 按着时的那几次选区变化都被跳过
+       了，只清标记不补算，选区还亮着浮条却再也不出（没有新的 selectionchange 会来叫它）。
+       松手那一下可能根本送不到页面：按着切到别的窗口、在那边松的手。所以失焦时不收尾（手
+       可能还按着，这时借用选区又会冲掉手势），等回到这个窗口（focus）或者下一次移动时看出
+       一个键都没按着再收；pointercancel 是浏览器把这一下手势接走了（拖起了选中的字），当场收。 */
     const press = (event: MouseEvent) => {
       if (event.button === 0) pressed = true;
     };
-    const released = (event: MouseEvent) => {
-      // 拖选可能在会话区外头松手（拖进了回复框），按着时那几次都没算，这一下得补上。
-      const held = pressed;
+    const settle = () => {
+      if (!pressed) return;
       pressed = false;
-      if (held || (event.target instanceof Node && root.current?.contains(event.target))) update();
+      update();
+    };
+    const released = (event: MouseEvent) => {
+      // 拖选可能在会话区外头松手（拖进了回复框），按着时没算的那几次由 settle 补上。
+      if (pressed) settle();
+      else if (event.target instanceof Node && root.current?.contains(event.target)) update();
     };
     const moved = (event: MouseEvent) => {
-      if (pressed && event.buttons === 0) released(event);
+      if (event.buttons === 0) settle();
     };
-    const release = () => { pressed = false; };
     document.addEventListener("selectionchange", update);
     document.addEventListener("mousedown", press, true);
     document.addEventListener("mousemove", moved, true);
     document.addEventListener("mouseup", released);
     document.addEventListener("pointerup", released);
-    document.addEventListener("pointercancel", release);
-    window.addEventListener("blur", release);
+    document.addEventListener("pointercancel", settle);
+    window.addEventListener("focus", settle);
     window.addEventListener("resize", dismiss);
     document.addEventListener("scroll", dismiss, true);
     return () => {
@@ -151,8 +159,8 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
       document.removeEventListener("mousemove", moved, true);
       document.removeEventListener("mouseup", released);
       document.removeEventListener("pointerup", released);
-      document.removeEventListener("pointercancel", release);
-      window.removeEventListener("blur", release);
+      document.removeEventListener("pointercancel", settle);
+      window.removeEventListener("focus", settle);
       window.removeEventListener("resize", dismiss);
       document.removeEventListener("scroll", dismiss, true);
     };

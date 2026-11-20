@@ -32,8 +32,12 @@ export function trimBlockOvershoot(range: Range): Range | null {
 /** 选区里真选到了看得见的字的那些文本节点，按文档顺序。 */
 function visibleTexts(range: Range): Text[] {
   const found: Text[] = [];
-  const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) => range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
+  // 元素也过一遍过滤器：没碰到选区的整棵子树当场剪掉，开销跟选区多大成正比，跟会话多长无关。
+  const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => {
+      if (!range.intersectsNode(node)) return NodeFilter.FILTER_REJECT;
+      return node.nodeType === Node.TEXT_NODE ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+    },
   });
   while (walker.nextNode()) {
     const text = walker.currentNode as Text;
