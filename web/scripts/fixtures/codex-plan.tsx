@@ -15,8 +15,8 @@ const initial: State = { events: [], ended: false, failed: false };
 const taskBase = {
   id: "plan-fixture", projectId: "fixture", title: "Codex 计划模式", body: "", mode: "single", status: "running",
   agentType: "codex", executorId: "codex-main", archived: false, labels: [], dependsOn: [], resumeDependsOn: [],
-  createdAt: at, updatedAt: at, codexPlanMode: true,
-  codexPlanScopes: [{ executorId: "codex-plan", executorLabel: "codex@规划", isTaskOwner: true }],
+  createdAt: at, updatedAt: at, planMode: true,
+  planScopes: [{ agentType: "codex", executorId: "codex-plan", executorLabel: "codex@规划", isTaskOwner: true }],
 } as unknown as Task;
 
 function Fixture() {
@@ -25,7 +25,7 @@ function Fixture() {
   const [sendingFailure, setSendingFailure] = useState(false);
   const drawer = useLeftDrawerHost({ resetKey: "plan-fixture" });
   const change = (next: State) => { localStorage.setItem("codex-plan-state", JSON.stringify(next)); setState(next); setSent(""); };
-  const task = { ...taskBase, status: state.ended ? "paused" : "running", ...(sent ? { codexPlanMode: false, codexPlanScopes: [] } : {}) } as Task;
+  const task = { ...taskBase, status: state.ended ? "paused" : "running", ...(sent ? { planMode: false, planScopes: [] } : {}) } as Task;
   const session = {
     id: "plan-session", taskId: task.id, role: "single", agentType: "codex", executor: "codex@规划", executorId: "codex-plan",
     startedAt: at, turnStartedAt: at, endedAt: state.ended ? "2026-11-19T01:02:00.000Z" : null,

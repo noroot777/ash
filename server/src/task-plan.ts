@@ -5,9 +5,13 @@ import { sessions } from "./db/schema.js";
 import { turnOutcome } from "./session-turns.js";
 import { parseSessionTraceLines, sessionTracePath } from "./transcript.js";
 
-export async function assertCodexPlanReady(taskId: string, executorId: string | null, ownerId: string | null, planId: string | undefined): Promise<void> {
+/**
+ * 「实施此计划」之前：出计划的那位（执行器类型 + profile + 发起人）最近一回合正常结束，且交出了这一版计划。
+ * 返回那张卡——卡是交计划那一刻的快照（executors/claude-plan-gate.ts），实施的就是卡上这份原文。
+ */
+export async function assertPlanReady(taskId: string, agentType: string, executorId: string | null, ownerId: string | null, planId: string | undefined): Promise<{ id: string; text: string }> {
   const [session] = await db.select().from(sessions).where(and(
-    eq(sessions.taskId, taskId), eq(sessions.agentType, "codex"), eq(sessions.role, "single"),
+    eq(sessions.taskId, taskId), eq(sessions.agentType, agentType), eq(sessions.role, "single"),
     executorId === null ? isNull(sessions.executorId) : eq(sessions.executorId, executorId),
     ownerId === null ? isNull(sessions.runOwnerUserId) : eq(sessions.runOwnerUserId, ownerId),
   )).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
@@ -28,4 +32,5 @@ export async function assertCodexPlanReady(taskId: string, executorId: string | 
     throw new Error("没有已完成的计划，请先生成计划");
   }
   if (planId && latest.event.id !== planId) throw new Error("计划已有新版本，请刷新后确认最新计划");
+  return { id: latest.event.id, text: latest.event.text.trim() };
 }

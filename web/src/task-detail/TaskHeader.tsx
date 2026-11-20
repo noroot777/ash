@@ -96,7 +96,7 @@ export function TaskHeader({
   onPostMergeReview?: () => void;
   onDelete: () => void;
   inspectorToggle?: ReactNode;
-  /** 标题后面那枚「计划」（PlanModeChip）：开着 Codex 计划模式时常驻，回复框被接管时也看得到。 */
+  /** 标题后面那枚「计划」（PlanModeChip）：开着计划模式时常驻，回复框被接管时也看得到。 */
   planChip?: ReactNode;
   notify: (message: string) => void;
 }) {

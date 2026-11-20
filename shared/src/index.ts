@@ -328,8 +328,10 @@ export interface Task {
   // Per-task CLI overrides. null/omitted follows the resolved executor profile.
   model?: string | null;
   reasoningEffort?: string | null;
-  codexPlanMode?: boolean;
-  codexPlanScopes?: { executorId: string | null; executorLabel: string; isTaskOwner: boolean }[];
+  // 开着计划模式（`/plan`）的作用域：按执行器类型 + profile + 发起人分，codex 与 claude 各自一槽。
+  // 读时从 cliState 现算，不落库；改名前叫 codexPlanMode / codexPlanScopes（只认 codex）。
+  planMode?: boolean;
+  planScopes?: { agentType: AgentType; executorId: string | null; executorLabel: string; isTaskOwner: boolean }[];
   // Read-only label for the selected/default executor profile.
   executorLabel?: string | null;
   // duet (讨论) mode config (§7):

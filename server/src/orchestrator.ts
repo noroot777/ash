@@ -51,6 +51,7 @@ import { freeReviewReminder } from "./free-workflow.js";
 import { NO_REMINDER, assembleTurnPrompt } from "./turn-prompt.js";
 import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { resolvePlanTurn } from "./plan-turn.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
@@ -270,7 +271,8 @@ export async function continueTask(
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
     const preserveCliState = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
     const resetPlan = !!opts.system && !preserveCliState;
-    const planning = !resetPlan && !goalExecution && !inputExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
+    const planInput = await resolvePlanTurn(taskId, agent, slash, userText, profileId, runOwner ?? null);
+    const planning = !resetPlan && !goalExecution && !inputExecution && !sideTurn && (planInput.question || readCliState(task.cliState, agent, profileId, runOwner).plan === true);
     if (planning) {
       sideTurn = true;
       if (sessionRole === "single") reclaimTurn(taskId, turn, "side");
@@ -329,7 +331,7 @@ export async function continueTask(
     // (系统续跑、队列推进的回合同样会漏交卷)。详见 turn-output.ts。
     await recordTurnStart(taskId, cwd);
     const invited = !prev; // first time this agent is pulled into the task
-    const userTurnText = userText + attachmentsPrompt(opts.attachments);
+    const userTurnText = planInput.text + attachmentsPrompt(opts.attachments);
     const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText, userId: runOwner });
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
     // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
@@ -371,7 +373,7 @@ export async function continueTask(
     const history = reseed ? await reseedHistory(taskId, prev!.id, task.body) : "";
     const prompt = nativeCommand
       ? promptedUserTurnText
-      : planning ? PLANNING_TURN(craft, history + promptedUserTurnText)
+      : planning ? PLANNING_TURN(craft, history + promptedUserTurnText, agent)
       : assembleTurnPrompt({
         invite: invited ? COLLAB_INVITE : "",
         brief: invitedTaskBrief(task.body, invited, verifying),
@@ -444,7 +446,7 @@ export async function continueTask(
     }
     handle = run({
       prompt,
-      ...cli,
+      ...cli, planMode: planning,
       cwd,
       sessionId: cliResume || slash?.name === "fork" ? prev?.cliSessionId ?? undefined : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),

@@ -21,7 +21,7 @@ import { parseTaskCreationOrigin } from "@navi/shared/task-origin";
 import { resolveDispatchedBy, withDispatchDefaults } from "./task-dispatch.js";
 import { activeDispatchPlan, parseDispatchPlan, parseDispatchTarget } from "@navi/shared/dispatch-plan";
 import { parseDispatchSuggestions, parseWithdrawnSuggestions, publicSuggestions } from "@navi/shared/dispatch-suggestion";
-import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
+import { CliCommandValidationError, PLAN_AGENTS, PLAN_TOGGLE_NOT_A_RUN, isPlanToggle, readCliStateScopes, validateCliCommand } from "@navi/shared/cli-commands";
 import type { CreateReviewChoice } from "@navi/shared/review-on-create";
 import { announceCreateReviews, reservationRows, resolveCreateReviews, type CreateReviewSlot } from "./review-on-create.js";
 
@@ -69,18 +69,19 @@ const enrichTeamExecutorLabels = (
 const toTask = (r: TaskRow, allProfiles: AgentLabelRow[] = []): Task =>
   toTaskWith(r, profilesOwnedBy(allProfiles, r.ownerUserId));
 
-const codexPlanStateFor = (task: TaskRow, profiles: AgentLabelRow[]): Pick<Task, "codexPlanMode" | "codexPlanScopes"> => {
-  const states = task.mode === "single"
-    ? Object.values(readCliStateScopes(task.cliState, "codex").scopes).filter((state) => state?.plan === true)
-    : [];
-  const codexPlanScopes = states.map((state) => ({
-    executorId: state.profileId ?? null,
-    executorLabel: state.profileId
-      ? profiles.find((profile) => profile.id === state.profileId)?.name ?? state.profileId
-      : "Codex（未绑定执行器）",
-    isTaskOwner: (state.ownerUserId ?? null) === task.ownerUserId,
-  }));
-  return { codexPlanMode: codexPlanScopes.length > 0, codexPlanScopes };
+const UNBOUND_PLAN_LABEL: Record<(typeof PLAN_AGENTS)[number], string> = { codex: "Codex（未绑定执行器）", claude: "Claude Code（未绑定执行器）" };
+
+const planStateFor = (task: TaskRow, profiles: AgentLabelRow[]): Pick<Task, "planMode" | "planScopes"> => {
+  const planScopes = task.mode !== "single" ? [] : PLAN_AGENTS.flatMap((agentType) =>
+    Object.values(readCliStateScopes(task.cliState, agentType).scopes).filter((state) => state?.plan === true).map((state) => ({
+      agentType,
+      executorId: state.profileId ?? null,
+      executorLabel: state.profileId
+        ? profiles.find((profile) => profile.id === state.profileId)?.name ?? state.profileId
+        : UNBOUND_PLAN_LABEL[agentType],
+      isTaskOwner: (state.ownerUserId ?? null) === task.ownerUserId,
+    })));
+  return { planMode: planScopes.length > 0, planScopes };
 };
 
 const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
@@ -104,7 +105,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   executorId: r.executorId ?? null,
   model: r.model ?? null,
   reasoningEffort: r.reasoningEffort ?? null,
-  ...codexPlanStateFor(r, profiles),
+  ...planStateFor(r, profiles),
   executorLabel: executorLabelFor(profiles, r.executorId, (r.agentType as AgentType) ?? null),
   autoTitle: r.autoTitle,
   // 读出口归一:老库 JSON 可能还是改名前的 debaterA… 形状,前端永远只见 voiceA…。
@@ -355,6 +356,7 @@ export async function createTasks(
     const agentType = row.agentType ?? "claude";
     const command = validateCliCommand(agentType, row.body ?? "");
     if (command && row.mode && row.mode !== "single" && !(agentType === "claude" && command.name === "compact")) throw new CliCommandValidationError("原生命令仅支持普通单任务");
+    if (isPlanToggle(agentType, command)) throw new CliCommandValidationError(PLAN_TOGGLE_NOT_A_RUN);
   }
   // Creation defaults belong here so every ordinary path (HTTP single, batch /
   // chain, duet handoff, future clients) gets the same behavior. Explicit

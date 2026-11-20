@@ -27,6 +27,7 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { attachmentsPrompt, now } from "./util.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { nativeCliCommand } from "./skills.js";
+import { parseCliCommand } from "@navi/shared/cli-commands";
 import { isUserAuthoredMessage } from "@navi/shared/scheduled-message-author";
 import { steerRefusal } from "./task-steer-gate.js";
 import { DIRECTION_PROTOCOL } from "./run-prompts.js";
@@ -159,7 +160,9 @@ function nativeMessageCanSteer(message: MessageRow, agentType: Parameters<typeof
     && !message.model
     && !message.reasoningEffort
     && !message.sessionRole
-    && !nativeCliCommand(agentType, message.text);
+    && !nativeCliCommand(agentType, message.text)
+    // `/plan …` 要换权限模式或开新回合（plan-turn.ts），插进正在跑的回合里只会变成一句普通话。
+    && parseCliCommand(agentType, message.text)?.name !== "plan";
 }
 
 async function deliverNativeSteer(

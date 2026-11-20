@@ -373,8 +373,8 @@ export function TaskDetail({
                 onDelete={() => setDeleteOpen(true)}
                 onOpenTask={onOpenTask}
                 inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
-                planChip={<PlanModeChip task={task} onOff={(executorId) => {
-                  replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })("/plan off", [], { agent: "codex", executorId })
+                planChip={<PlanModeChip task={task} onOff={(agent, executorId) => {
+                  replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })("/plan off", [], { agent, executorId })
                     .catch((reason) => notify(reason instanceof Error ? reason.message : String(reason)));
                 }} />}
                 notify={notify}
