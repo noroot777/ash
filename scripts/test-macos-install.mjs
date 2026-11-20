@@ -14,7 +14,7 @@ if (process.platform !== "darwin") {
 } else {
   const root = fileURLToPath(new URL("..", import.meta.url));
   const install = join(root, "desktop/macos/scripts/install-app.sh");
-  const empty = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [] };
+  const empty = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [], shutdown: { version: 1, resources: [] } };
 
   async function scenario(options, operation) {
     const temporary = mkdtempSync(join(tmpdir(), "navi-install-idle-"));
@@ -97,14 +97,16 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ ok: true, pid: options.wrongPid ? 1 : process.pid,
       instance: { id: options.changedIdentity && healthReads > 1 ? "changed" : "fixture",
         codeDir: options.foreignCode ? dataDir : codeDir, dataDir } }));
-  } else if (req.url === "/api/restart-impact") {
+  } else if (req.url === "/api/restart-impact?shutdown=1") {
     impactReads++;
     if (options.lateTerminal && impactReads === 2) startTerminal("shell");
     writeFileSync(${JSON.stringify(requests)}, JSON.stringify({ healthReads, impactReads }));
     if (options.timeout) return;
     if (options.auth && req.headers["x-navi-host-token"] !== "fixture-token") res.statusCode = 401;
     else res.statusCode = options.status || 200;
-    res.end(JSON.stringify(options.becomesBusy && impactReads > 1
+    res.end(JSON.stringify(options.lateShutdown && impactReads > 1
+      ? { ...options.impact, shutdown: { version: 1, resources: options.lateShutdown } }
+      : options.becomesBusy && impactReads > 1
       ? { ...options.impact, survives: [{ id: "late", title: "late task", pid: process.pid }] }
       : options.impact));
   } else { res.statusCode = 404; res.end("{}"); }
@@ -322,4 +324,43 @@ server.listen(0, "127.0.0.1", () => {
     assert.deepEqual(readdirSync(apps), ["Navi.app"], "a refused self-hosted install must leave no staging bundle");
   });
   console.log("✓ an installer descended from its target server refuses safely, cleans staging and reopens the old app");
+
+  for (const shutdown of [undefined, null, {}, { version: 2, resources: [] }, { version: 1, resources: null },
+    { version: 1, resources: [null] }, { version: 1, resources: [{ kind: "terminal" }] }]) {
+    await scenario({ impact: { ...empty, shutdown } }, async ({ pid, runInstall, installed }) => {
+      const output = await runInstall(1);
+      assert.match(output, /无法提供完整的退出清场清单/);
+      assert.doesNotMatch(output, /停止空闲的 Navi 服务/);
+      assert.ok(isPidAlive(pid));
+      assert.equal(installed(), "old");
+    });
+  }
+  console.log("✓ missing, legacy and malformed shutdown censuses never authorize automatic shutdown");
+
+  for (const kind of ["terminal", "terminal-start", "preview-trial", "chat"]) {
+    const resource = { kind, id: "owned-resource", label: "后台开发服务", ports: [14999] };
+    await scenario({ impact: { ...empty, shutdown: { version: 1, resources: [resource] } } }, async ({ pid, runInstall, installed }) => {
+      const output = await runInstall(1);
+      assert.match(output, /后台开发服务/);
+      assert.match(output, /owned-resource/);
+      assert.doesNotMatch(output, /停止空闲的 Navi 服务/);
+      assert.ok(isPidAlive(pid));
+      assert.equal(installed(), "old");
+    });
+  }
+  console.log("✓ server-owned shutdown resources block installation even outside the process tree");
+
+  const resources = [{ kind: "terminal", id: "daemon", label: "守护化项目服务" }];
+  for (const overrides of [{ impact: { ...empty, shutdown: { version: 1, resources } } }, { lateShutdown: resources }]) {
+    await scenario({}, async ({ pid, startOtherServer, runInstall, installed }) => {
+      const other = await startOtherServer(overrides);
+      const output = await runInstall(1);
+      assert.match(output, /守护化项目服务/);
+      assert.doesNotMatch(output, /停止空闲的 Navi 服务/);
+      assert.ok(isPidAlive(pid));
+      assert.ok(isPidAlive(other.pid));
+      assert.equal(installed(), "old");
+    });
+  }
+  console.log("✓ existing and late-arriving shutdown resources on a later service preserve the entire group");
 }

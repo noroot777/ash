@@ -59,16 +59,34 @@ function noDependentProcesses(pid, say) {
 }
 
 async function idle(target, runtime, say) {
-  const impact = await queryImpact(target.port, lockFileFor(runtime, { NAVI_DATA_DIR: target.dataDir }), { requireOk: true });
+  const impact = await queryImpact(target.port, lockFileFor(runtime, { NAVI_DATA_DIR: target.dataDir }), {
+    requireOk: true, includeShutdown: true,
+  });
   const why = noVerdictReason(impact);
   if (why || taskGroups.some((group) => !Array.isArray(impact[group]))) {
     say(`  · 服务 ${target.pid} 的任务状态无法确认${why ? `（${why}）` : ""}，没有停止。`);
     return false;
   }
   const tasks = taskGroups.flatMap((group) => impact[group]);
-  if (!tasks.length) return noDependentProcesses(target.pid, say);
-  say(`  · 服务 ${target.pid} 还有 ${tasks.length} 个运行或排队中的任务，没有停止。`);
-  return false;
+  if (tasks.length) {
+    say(`  · 服务 ${target.pid} 还有 ${tasks.length} 个运行或排队中的任务，没有停止。`);
+    return false;
+  }
+  if (!noDependentProcesses(target.pid, say)) return false;
+  const shutdown = impact.shutdown;
+  if (shutdown?.version !== 1 || !Array.isArray(shutdown.resources)
+    || shutdown.resources.some((resource) => !resource || ["kind", "id", "label"].some((key) => typeof resource[key] !== "string"))) {
+    say(`  · 服务 ${target.pid} 无法提供完整的退出清场清单（可能是旧版本），未停止任何服务；请先手动停止旧服务再安装。`);
+    return false;
+  }
+  if (shutdown.resources.length) {
+    say(`  · 服务 ${target.pid} 退出会清理以下资源，未停止任何服务：`);
+    for (const resource of shutdown.resources) {
+      say(`    ${JSON.stringify(resource.label)} (${resource.kind}, ${resource.id})`);
+    }
+    return false;
+  }
+  return true;
 }
 
 export async function stopIdleServers(bundle, { say = console.log, timeoutMs = 20_000 } = {}) {

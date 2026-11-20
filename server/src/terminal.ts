@@ -23,6 +23,8 @@ import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
 import { TerminalCapacity } from "./terminal-capacity.js";
+import { registerShutdownCleanup } from "./shutdown-resources.js";
+import { terminalShutdownResources } from "./terminal-shutdown-resources.js";
 import {
   recordPorts, retainHistory, sessionAlive, sessionInfo, sessionRunning,
 } from "./terminal-session-view.js";
@@ -515,6 +517,10 @@ export class TerminalSessionManager {
       .map((session) => sessionInfo(session));
   }
 
+  shutdownResources() {
+    return terminalShutdownResources(this.sessions.values(), this.creations);
+  }
+
   /**
    * 某条常用命令当前活着的会话;判「活」用 sessionAlive 而不是 exitCode ——
    * daemonize 形状(组长退了、后台子进程还在)也算活:stop/restart 得能找到它交给
@@ -682,4 +688,4 @@ export const terminalSessions = new TerminalSessionManager();
 // 收养成孤儿 —— navi 重启后会话表(内存态)清零,UI 显示「未启动」,旧进程却继续占端口,
 // 再点启动只会得到端口冲突(第 3 轮审查实锤)。kill -9 / 崩溃 / 断电没有钩子能接,
 // 属已知边界。
-process.once("exit", () => terminalSessions.shutdown());
+registerShutdownCleanup(() => terminalSessions.shutdownResources(), () => terminalSessions.shutdown());
