@@ -1,6 +1,6 @@
 import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@navi/shared/markdown-images";
 import { api } from "../lib/api.ts";
-import { attachmentView, isImagePath } from "../task-detail/utils.ts";
+import { SITE_ROUTE, absoluteDiskPath, attachmentView, isImagePath } from "../task-detail/utils.ts";
 
 // 名字那一段允许带子目录（`shots/a.png`）：证据接口服务得了它（evidence-path.ts）。`..`
 // 由 reviewFileTarget 里的 PARENT_SEGMENT 挡，不塞进正则 —— 正则里表达它既难读又易漏。
@@ -25,17 +25,18 @@ function decodeSafe(value: string): string {
 
 export function reviewFileTarget(path?: string): ReviewFileTarget | null {
   if (!path) return null;
-  // 下面两条正则认的是**磁盘路径形状**(`/Users/…/data/runs/…`、`file://…`)。站外网址里
-  // 碰巧有同样的路径形状时不许按它改写:那张图住在别人站上,改写过来只会 404,还顺手把
-  // 「这是谁家的资源」判错(审查第 3 轮 R3 第 5 条)。`file:` 例外 —— 它指的就是本机文件。
-  const offSite = isNetworkDestination(path) && !/^file:\/\//i.test(path.trim());
-  const review = offSite ? null : path.match(REVIEW_FILE_PATH);
+  // 下面两条正则认的是**本机绝对路径**(`/Users/…/runs/…`、`file://…`)。站外网址里碰巧有
+  // 同样的路径形状时不许按它改写:那张图住在别人站上,改写过来只会 404,还顺手把「这是谁家
+  // 的资源」判错(审查第 3 轮 R3 第 5 条)。相对路径也不行:它属于引用它的那份文档,报告里的
+  // `assets/runs/…` 是这份报告证据目录里的文件,不是另一个任务的证据。
+  const onDisk = /^file:\/\//i.test(path.trim()) || absoluteDiskPath(path) !== null;
+  const review = onDisk ? path.match(REVIEW_FILE_PATH) : null;
   if (review) {
     const [, taskId, round, encodedName] = review;
     const name = decodeSafe(encodedName);
     if (!PARENT_SEGMENT.test(name)) return { name, url: api.taskReviewFileUrl(taskId, Number(round), name) };
   }
-  const freeReview = offSite ? null : path.match(FREE_REVIEW_FILE_PATH);
+  const freeReview = onDisk ? path.match(FREE_REVIEW_FILE_PATH) : null;
   if (freeReview) {
     const [, taskId, runId, round, encodedName] = freeReview;
     const name = decodeSafe(encodedName);
@@ -193,18 +194,6 @@ export function isDocumentRelative(destination?: string): boolean {
 
 /** `..` 爬出去的那一段——服务端一律 400,这里就别拼这个必败的地址。 */
 const PARENT_SEGMENT = /(^|[/\\])\.\.([/\\]|$)/;
-
-/**
- * 这个站**自己服务**的那几条路径。`/` 开头的地址里只有它们是网址,其余都是磁盘路径。
- *
- * 为什么是「站内路由白名单」而不是「磁盘根白名单」:前者是我们自己的路由表,知道得全;
- * 后者是整个文件系统的顶层目录,`/System`、`/data`、`/app`、`/code`、`/projects` 都合法,
- * 列不全(审查第 1 轮 F3 —— 上一版照搬了 `localDiskPath` 的磁盘根白名单,于是容器里
- * `/app/output/x.png` 这类合法绝对路径在到达文件接口之前就被当成站内地址拒掉了)。
- * 猜错的代价也不对称:把站内地址当成磁盘路径,顶多多问一次服务端然后 404 收起;把磁盘
- * 路径当成站内地址,那张图就永远画不出来。
- */
-const SITE_ROUTE = /^\/(?:api|assets|review|mobile)(?:\/|$)/;
 
 /**
  * 这个 `![]()` 指的是**任务工作目录里**的哪个文件(相对路径原样留着,绝对路径按真路径)。
@@ -416,13 +405,13 @@ function servableImage(href: string): ImagePreviewTarget | null {
   const review = reviewFileTarget(href);
   if (review) return isImagePath(review.name) ? review : null;
 
-  const url = sameOriginUrl(href);
-  const external = /^https?:/i.test(href) && !url;
-  if (!external) {
-    const attachment = attachmentView(href.replace(/^file:\/\//i, ""));
-    if (attachment.image && attachment.url) return { name: attachment.name, url: attachment.url };
-  }
+  // 附件只按磁盘路径认,路径成分与工作目录那一档同一份口径(去查询/片段、解码一次);
+  // 站内地址与网址在 taskFilePath 里就是 null,往下按 URL 原样用。
+  const disk = taskFilePath(href);
+  const attachment = disk ? attachmentView(disk) : null;
+  if (attachment?.image && attachment.url) return { name: attachment.name, url: attachment.url };
 
+  const url = sameOriginUrl(href);
   if (!url) return null;
   // 站内 URL 的文件名一般就在 pathname 末段；两个例外把它放在查询串里：验证证据接口用
   // `?name=`（用户从证据面板「复制图片地址」再贴回对话里，走的就是这一条），任务工作
