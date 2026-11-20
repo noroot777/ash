@@ -48,7 +48,7 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Navi
 
 app 注册了 `navi://`（`build.sh` 写进 Info.plist）。`navi://open?project=<项目>&task=<任务>&instance=<指纹>&fallback=<http 地址>` 把窗口拉到前面；自家服务报的指纹（`server/src/instance-tag.ts`，health 里的 `instance.tag`）和链接里的对上，才在窗口里打开那个任务（页面在着就原地换路由，还没载进来就载到那里），对不上或认不出（另一台 Mac 发的卡、app 指着别处）就把 http 地址交给浏览器（`DeepLink.swift`）。只收这几个参数、只收 id 和指纹的字形，fallback 只收指着同一个任务的 http(s) 地址；别的链接只把窗口拉到前面。
 
-飞书卡片只在 app 起的服务**只听本机**时给按钮的 `pc_url` 带这条链接（手机仍走 `default_url` 的 http）：那时 http 在别的电脑上一律打不开，`navi://` 只会让本机这一台变好。放开了别的设备访问就不给，桌面端也走 http —— 发卡的服务不知道收卡的电脑装没装 app。开关一换、服务按新设置起来，飞书通道会把库里存着的卡按新的链接策略重写，14 天内发出的顺带在飞书上改过来（更早的飞书不让改，`server/src/im/relink.ts`）。连着点了几条链接时只有最后一条落地。飞书开放平台文档写明 `pc_url` 支持 AppLink，没写第三方 scheme 支不支持，真飞书桌面端没验证过（`server/src/im/app-link.ts`）。
+飞书卡片只在 app 起的服务**只听本机**时给按钮的 `pc_url` 带这条链接（手机仍走 `default_url` 的 http）：那时 http 在别的电脑上一律打不开，`navi://` 只会让本机这一台变好。放开了别的设备访问就不给，桌面端也走 http —— 发卡的服务不知道收卡的电脑装没装 app。开关一换、服务按新设置起来，飞书通道会把库里存着的卡按新的链接策略重写，14 天内发出的逐张记着、改到飞书上才算完 —— 额度挡住就往后挪着再改，改卡放弃了下次起服务重新排上（更早的飞书不让改，`server/src/im/relink.ts`）。连着点了几条链接时只有最后一条落地。飞书开放平台文档写明 `pc_url` 支持 AppLink，没写第三方 scheme 支不支持，真飞书桌面端没验证过（`server/src/im/app-link.ts`）。
 
 ## 自更新
 

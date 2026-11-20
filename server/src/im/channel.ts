@@ -153,7 +153,8 @@ async function bringUp(): Promise<void> {
   (await quotaMeter()).setQuota(options.monthlyQuota);
   gate = "idle";
   // 起服务时换过链接策略（只听本机 ⇄ 放开网络），存着的卡先按新策略重写、排上改卡，再让发件队列开跑。
-  await relinkStoredCards().catch((error) => console.error("[navi] 飞书卡片按新链接策略重写出错:", error));
+  // 出错不吞：吞了发件队列就会先把旧内容发出去 —— 抛给 restartFeishuChannel，通道记成失败、过一会儿整套重来。
+  await relinkStoredCards();
   running = assemble(read.credentials, host.fetch);
   running.ws.start();
   running.sender.start();

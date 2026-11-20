@@ -278,7 +278,7 @@
     "test:instance-binding": "tsx scripts/test-instance-binding.ts",
     "//test:local-only-auth": "本机自用模式只认本机直连：同机反代转进来的请求带旧访问密钥、旧设备 cookie/Bearer 一律 401，密钥登录、配对、远程访问、转多人 403。走真实 TCP。",
     "test:local-only-auth": "tsx scripts/test-local-only-auth.ts",
-    "//test:desktop-app": "mac 版放开其他设备访问（NAVI_DESKTOP_APP 不带 NAVI_LOCAL_ONLY）：模式仍固定自用、转多人 403；远程访问页与访问密钥可用；卡片深链：放开网络时只走 http、只听本机时 navi:// 带指纹与 http 退路；换了链接策略后存着的卡（还在等人的、已收尾的、旧格式的）按新策略重写并排上改卡；深链地址打不开时的说明。走真实 TCP。",
+    "//test:desktop-app": "mac 版放开其他设备访问（NAVI_DESKTOP_APP 不带 NAVI_LOCAL_ONLY）：模式仍固定自用、转多人 403；远程访问页与访问密钥可用；卡片深链：放开网络时只走 http、只听本机时 navi:// 带指纹与 http 退路；换了链接策略后存着的卡（还在等人的、已收尾的、旧格式的）按新策略重写并排上改卡，逐张记账到飞书上改成了才销（额度挡住只往后挪、放弃了起通道重排、过 14 天销账）；深链地址打不开时的说明。走真实 TCP。",
     "test:desktop-app": "tsx scripts/test-desktop-app.ts",
     "test:duet-attachments": "tsx scripts/test-duet-attachments.ts",
     "//test:duet-gate-version": "收敛闸口的版本号：旧卡片（飞书消息、另一个标签页）点不中新开的那扇门、门继续等；老记录按开门序号补版本；重启补救那一路 stale 在占锁前就回；已结束的讨论带版本一律 409，不被旧卡拉起；请求体非法回 400。",

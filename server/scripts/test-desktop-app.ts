@@ -8,7 +8,10 @@
 //   ④ 换了链接策略（只听本机 ⇄ 放开网络、旧格式没带来源）之后，库里存着的卡不分种类按新策略重写：
 //      还在等人的决策卡渲染指纹对不上（上一版算的指纹也对不上），对账会整张重渲染；已收尾的、只推标题那版、
 //      还没发的、旧格式裸 navi:// 都被换掉，14 天内发出的排上改卡；超过 14 天的、已撤回的、发不出去的不动；
-//      同一个策略只扫一次。
+//      同一个策略只扫一次；
+//   ⑤ 「库里改好了」不等于「飞书上改好了」：发出去的卡重写后逐张记着欠账（link_due），额度降级挡住只往后挪、
+//      额度回来了接着改，改到了才销账；改卡放弃了（failed / skipped）下次起通道重新排上；过了 14 天销账不再改。
+//      走真实的发件队列与额度判据，只把飞书 HTTP 换成计数的假响应。
 //
 // 本机模式（两个都带）那一侧由 test:local-only-auth 钉着。走真实 TCP：判据里「回环 socket + Host +
 // 转发头」只有真连接测得出来。
@@ -46,6 +49,9 @@ const { db } = await import("../src/db/index.js");
 const { imOutbox } = await import("../src/db/schema-im.js");
 const { createHash } = await import("node:crypto");
 const { eq } = await import("drizzle-orm");
+const { Reconciler } = await import("../src/im/reconcile.js");
+const { FeishuApi } = await import("../src/im/feishu/api.js");
+const { purposeAllowed } = await import("../src/im/quota.js");
 
 await ensureSchema();
 assert.deepEqual({ DESKTOP_APP, LOCAL_ONLY, SINGLE_ONLY }, { DESKTOP_APP: true, LOCAL_ONLY: false, SINGLE_ONLY: true }, "前提:开关读到了");
@@ -206,10 +212,72 @@ try {
   for (const id of ["old", "recalled", "dead"]) assert.equal((await read(id)).content, stale(navi), `${id}：飞书上改不了 / 没有它，不动`);
   assert.equal((await read("old")).patchState, "done");
   assert.equal((await read("current")).patchState, "done", "本来就对的不改卡");
+  for (const id of ["open", "resolved", "briefOnly", "legacy", "recall"]) assert.equal((await read(id)).linkDue, "2:http", `${id}：记着飞书上还欠新链接`);
+  for (const id of ["unsent", "old", "current"]) assert.equal((await read(id)).linkDue, null, `${id}：不欠（没发 / 改不了 / 本来就对）`);
   assert.equal(await readMeta("link_policy"), "2:http");
   await db.update(imOutbox).set({ content: stale(navi) }).where(eq(imOutbox.id, "current"));
   assert.equal(await relinkStoredCards(undefined, at), 0, "同一个策略只扫一次");
   assert.equal(await relinkStoredCards("2:navi:AB12-CD34", at), 1, "策略一换就再扫");
+
+  // ⑤ 欠账要送到飞书才算完
+  let level: Parameters<typeof purposeAllowed>[0] = "essential";
+  let clock = Date.now();
+  let patches = 0;
+  const feishu = new FeishuApi({
+    appId: "review", appSecret: "x", domain: "https://invalid.example",
+    beforeCall: (_kind, purpose) => purposeAllowed(level, purpose),
+    deps: { fetch: (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes("tenant_access_token")) return Response.json({ code: 0, tenant_access_token: "t", expire: 7200 });
+      if (init?.method === "PATCH") { patches++; return Response.json({ code: 0 }); }
+      throw new Error(`没想到的调用 ${init?.method} ${url}`);
+    }) as typeof fetch },
+  });
+  const reconciler = new Reconciler("review", feishu, { now: () => clock, sleep: async (ms: number) => { clock += ms; } });
+  const stamp = new Date(clock - 60_000).toISOString();
+  const owed = { ...base, appId: "review", taskId: null, kind: "notice", state: "resolved", messageId: "om_q", sentAt: stamp,
+    patchState: "done", scope: JSON.stringify({ kind: "system" }), createdAt: stamp, updatedAt: stamp };
+  await db.insert(imOutbox).values({ ...owed, id: "quota", subject: "quota", content: stale(bare) });
+  await relinkStoredCards(undefined, clock);
+  assert.deepEqual({ linkDue: (await read("quota")).linkDue, patchState: (await read("quota")).patchState }, { linkDue: "2:http", patchState: "pending" });
+  await reconciler.sender.drainNow();
+  let row = await read("quota");
+  assert.equal(patches, 0, "额度降级到只保底：已收尾的卡不改");
+  assert.equal(row.patchState, "pending", "挡住只往后挪，不记成 skipped");
+  assert.equal(row.linkDue, "2:http");
+  assert.ok(row.nextAt && Date.parse(row.nextAt) > clock, "过一阵再试");
+  level = "normal";
+  await reconciler.sender.drainNow();
+  assert.equal(patches, 0, "没到点不提前撞");
+  clock = Date.parse(row.nextAt!) + 1;
+  await reconciler.sender.drainNow();
+  row = await read("quota");
+  assert.equal(patches, 1, "额度回来了接着改");
+  assert.deepEqual({ patchState: row.patchState, linkDue: row.linkDue }, { patchState: "done", linkDue: null }, "送到了才销账");
+
+  // 额度挡住之后调高额度、重启：起通道时往后挪着的当场就试，不再干等一轮
+  await db.update(imOutbox).set({ linkDue: "2:http", patchState: "pending", nextAt: new Date(clock + 30 * 60_000).toISOString() })
+    .where(eq(imOutbox.id, "quota"));
+  await relinkStoredCards(undefined, clock);
+  assert.equal((await read("quota")).nextAt, null);
+  await reconciler.sender.drainNow();
+  row = await read("quota");
+  assert.equal(patches, 2, "重启之后马上改");
+  assert.deepEqual({ patchState: row.patchState, linkDue: row.linkDue }, { patchState: "done", linkDue: null }, "送到了才销账");
+
+  await db.update(imOutbox).set({ linkDue: "2:http", patchState: "failed", attempts: 7 }).where(eq(imOutbox.id, "quota"));
+  await db.insert(imOutbox).values({ ...owed, id: "expired", subject: "expired", content: fresh, linkDue: "2:http", patchState: "skipped",
+    sentAt: new Date(clock - 15 * 24 * 3600_000).toISOString() });
+  assert.equal(await relinkStoredCards(undefined, clock), 0, "策略没变：不再重写全表");
+  row = await read("quota");
+  assert.deepEqual({ patchState: row.patchState, attempts: row.attempts, linkDue: row.linkDue }, { patchState: "pending", attempts: 0, linkDue: "2:http" },
+    "改卡放弃了的欠账，起通道时重新排上");
+  assert.deepEqual({ patchState: (await read("expired")).patchState, linkDue: (await read("expired")).linkDue }, { patchState: "skipped", linkDue: null },
+    "过了 14 天飞书不让改：销账，不再排");
+  await reconciler.sender.drainNow();
+  assert.equal(patches, 3);
+  assert.equal((await read("quota")).linkDue, null);
+  reconciler.stop();
+  reconciler.sender.stop();
 } finally {
   direct.destroy();
   server.closeAllConnections();

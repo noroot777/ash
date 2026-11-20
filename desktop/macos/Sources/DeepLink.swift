@@ -87,14 +87,16 @@ extension BrowserWindowController {
     guard serial == linkSerial else { return }
     switch action {
     case .front: return
-    case .browser(let url): NSWorkspace.shared.open(url)
-    case .window(let route): navigate(to: route)
+    case .browser(let url):
+      pendingRoute = nil
+      NSWorkspace.shared.open(url)
+    case .window(let route): navigate(to: route, serial: serial)
     }
   }
 
   /// 页面在着就原地换路由（同 web 里 git-workbench/navigation.ts 那样推一条历史、发一次 popstate），不重载；
   /// 页面还没载进来（服务在起、被占着、首启）就记下，载页面时直接载到那里。
-  private func navigate(to route: String) {
+  private func navigate(to route: String, serial: Int) {
     guard let target = URL(string: route, relativeTo: NaviConfig.windowURL)?.absoluteURL else { return }
     guard let current = webView.url, NaviConfig.isSameOrigin(current) else {
       pendingRoute = target
@@ -105,7 +107,9 @@ extension BrowserWindowController {
       return
     }
     webView.evaluateJavaScript("history.pushState(null, '', \(literal)); dispatchEvent(new PopStateEvent('popstate'))") { [weak self] _, error in
-      if error != nil { self?.webView.load(URLRequest(url: target)) }
+      // 脚本失败退回整页重载：这时可能已经又点了一条，旧的这条不许再把窗口载回去。
+      guard error != nil, let self, serial == self.linkSerial else { return }
+      self.webView.load(URLRequest(url: target))
     }
   }
 }
