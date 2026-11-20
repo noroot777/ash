@@ -38,12 +38,20 @@ import { applyAutoTitle } from "../auto-title-apply.js";
 // 返回**取得的那把锁的身份**:null = 一步都没跑,调用方据此回 409 / 不消费调度班次。
 // 身份要一路带到 finally 的释放点 —— 按任务 id 还锁会撤掉人工放开之后那一轮的互斥
 // (本轮审查 F1,理由在 turn-lock.ts 的 `endOwnTurn`)。
-function acquireDuetTurn(taskId: string, turnHeld?: TurnIdentity | null): TurnIdentity | null {
-  if (turnHeld) return reclaimTurn(taskId, turnHeld, "duet");
-  const turn = claimOwnTurn(taskId, "duet");
+export async function acquireDuetTurn(taskId: string, turnHeld?: TurnIdentity | null): Promise<TurnIdentity | null> {
+  const turn = turnHeld ? reclaimTurn(taskId, turnHeld, "duet") : claimOwnTurn(taskId, "duet");
   if (!turn) return null;
-  if (isAcceptingTask(taskId)) { releaseTurn(taskId, turn); return null; }
-  return turn;
+  try {
+    const task = (await db.select({ archived: tasks.archived }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (task?.archived || isAcceptingTask(taskId)) {
+      releaseTurn(taskId, turn);
+      return null;
+    }
+    return turn;
+  } catch (error) {
+    releaseTurn(taskId, turn);
+    throw error;
+  }
 }
 
 async function setStatus(taskId: string, status: TaskStatus, opts?: { completion?: boolean }) {
@@ -220,7 +228,7 @@ export async function runDuet(
   taskId: string,
   opts: { turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
 ): Promise<boolean> {
-  const turn = acquireDuetTurn(taskId, opts.turnHeld);
+  const turn = await acquireDuetTurn(taskId, opts.turnHeld);
   if (!turn) return false;
   try {
     const base = await loadBase(taskId, opts.actingUserId);
@@ -271,7 +279,7 @@ export async function resumeDuet(
   taskId: string,
   opts: { turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
 ): Promise<boolean> {
-  const turn = acquireDuetTurn(taskId, opts.turnHeld);
+  const turn = await acquireDuetTurn(taskId, opts.turnHeld);
   if (!turn) return false;
   // 交棒给 runDuet 时由它释放:两边都释放会把**下一次**运行占的锁误删。
   let handedOff = false;
@@ -433,7 +441,7 @@ export async function resumeAtGate(
 ): Promise<boolean> {
   // 占不到 = 确有回合在跑(活着的 duet 停在闸口时也占着这把锁,那种情况 resolveGate
   // 已经就地处理了,根本走不到这儿)。
-  const turn = acquireDuetTurn(taskId, opts.turnHeld);
+  const turn = await acquireDuetTurn(taskId, opts.turnHeld);
   if (!turn) return false;
   try {
     const base = await loadBase(taskId, opts.actingUserId);

@@ -95,7 +95,7 @@ export function QuestionCard({ task, onAnswer, attachable = false, collapsed, on
   // 旧提问，见 server/src/task-question-supersede.ts）。两种都只能等这一轮结束。团队调度台是常驻
   // 会话，忙着也接得住。
   const settling = task.mode !== "team" && (task.status === "running" || task.status === "queued");
-  const unavailable = settling || sending || sent;
+  const unavailable = task.archived || settling || sending || sent;
   const last = current >= items.length - 1;
   const context = multi ? task.question?.trim() ?? "" : "";
   const clampable = context.length > CONTEXT_CLAMP_CHARS;
@@ -210,8 +210,13 @@ export function QuestionCard({ task, onAnswer, attachable = false, collapsed, on
         <div className="question-card-options" ref={optionsRef} role="group" aria-label={`${plain(item.question)}的建议答案`}>
           {options.map((option, i) => {
             const selected = draft.picked.has(i);
-            return (
-              <button type="button" key={`${current}:${i}:${option}`} disabled={unavailable} aria-pressed={selected}
+            return task.archived ? (
+              <div className="question-card-option" key={`${current}:${i}:${option}`}>
+                <span className="question-card-key" aria-hidden="true">{i + 1}</span>
+                <span>{option}</span>
+              </div>
+            ) : (
+              <button type="button" className="question-card-option" key={`${current}:${i}:${option}`} disabled={unavailable} aria-pressed={selected}
                 aria-describedby={i === 0 ? hintId : undefined} onClick={() => toggle(i)}>
                 <span className="question-card-key" aria-hidden="true">
                   {selected ? <Check size={11} weight="bold" /> : i < 9 ? i + 1 : ""}
@@ -223,13 +228,13 @@ export function QuestionCard({ task, onAnswer, attachable = false, collapsed, on
         </div>
       )}
       {/* 读屏看不见行首那一格的意思，照旧念给它听。 */}
-      {!!options.length && <small id={hintId} className="task-visually-hidden">
+      {!task.archived && !!options.length && <small id={hintId} className="task-visually-hidden">
         可多选 · 数字键 1–{Math.min(options.length, 9)} 勾选{noteKey ? `，${noteKey} 写自己的话` : ""}
       </small>}
       {/* 上传失败的那句不放进附件列表：列表图多了会在自己里面滚，那句话得跟卡底的报错一样始终看得见。 */}
-      {attachable && <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending} error={null}
+      {!task.archived && attachable && <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending} error={null}
         onRemove={uploads.remove} onCancel={uploads.cancel} />}
-      <div className="question-card-note">
+      {task.archived ? <p className="question-card-archived">已归档，取消归档后再答</p> : <div className="question-card-note">
         {!!options.length && <span className="question-card-key" aria-hidden="true">{noteKey ?? ""}</span>}
         <NoteField inputRef={input} value={draft.note} disabled={unavailable}
           label={`答复：${plain(item.question)}`}
@@ -247,9 +252,9 @@ export function QuestionCard({ task, onAnswer, attachable = false, collapsed, on
         {/* 键名不常驻；读屏仍从按钮的描述里念到此刻生效的那一档。 */}
         <span id={`${task.id}-answer-key`} className="task-visually-hidden">{sendKeys.send} {last ? "发送" : "下一题"}</span>
         {!sendBlocked && <HoverTip at={sendTip.at}>{last ? "发送答复" : "下一题"}<kbd>{sendKeys.send}</kbd></HoverTip>}
-      </div>
-      {attachable && uploads.error && <p className="question-card-error" role="alert">{uploads.error}</p>}
-      {error && <p className="question-card-error" role="alert">{error}</p>}
+      </div>}
+      {!task.archived && attachable && uploads.error && <p className="question-card-error" role="alert">{uploads.error}</p>}
+      {!task.archived && error && <p className="question-card-error" role="alert">{error}</p>}
     </section>
   );
 }
