@@ -52,6 +52,7 @@ import type { ReviewRetryAction, TurnRetryAction } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
 import { useQuestionHistory } from "./useQuestionHistory.ts";
+import { dispatchLaunchOf } from "@navi/shared/dispatch-plan";
 import { isQuestionAnswer, type QuestionRecord } from "@navi/shared/questions";
 import { canForkReply } from "./conversationFork.ts";
 import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
@@ -414,6 +415,9 @@ export function ConversationFeed({
   // 跟答过的气泡读同一份合并后的问答历史，补读、推送、删除一到两边同时变（useQuestionHistory.ts）。
   const history = useQuestionHistory(task.id, questionHistory, liveQuestionHistory);
   const onScreen = questionsOnScreen(task, history.records);
+  // 派活单派出去的那几条由问答记录自己画（QuestionHistory.tsx），宿主按子任务列表给的同一句不再重复。
+  const launched = new Set(history.records.flatMap((record) => dispatchLaunchOf(record)?.map((launch) => launch.id) ?? []));
+  const shownAsides = (asides ?? []).filter((aside) => !aside.dispatchedTaskId || !launched.has(aside.dispatchedTaskId));
   const { rows, receipts, footnotes } = conversationSystemRows(
     conversationDiscussionRows(conversationDebateRows(feedRows, { reviews }), { discussions }),
     { failures: crashed, context: noticeContext, causes, held: actions.held, onScreen },
@@ -549,7 +553,7 @@ export function ConversationFeed({
   ) : <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
 
   return (
-    <QuestionHistoryProvider history={history}
+    <QuestionHistoryProvider history={history} onOpenTask={onOpenTask}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
     <MessageDeleteProvider onDelete={onDeleteMessage} onDeleteDiscussion={onDeleteDiscussion}>
     <ReceiptReviewContext.Provider value={receiptReview}>
@@ -557,7 +561,7 @@ export function ConversationFeed({
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
           {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} onReuse={onReuseInput} />}
-          {interleaveAsides(rows, asides ?? [], feedRowAt).map(({ row, aside }) => {
+          {interleaveAsides(rows, shownAsides, feedRowAt).map(({ row, aside }) => {
             if (aside) return <Fragment key={aside.key}>{aside.node}</Fragment>;
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
@@ -615,7 +619,7 @@ export function ConversationFeed({
           {task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked) && !activityPhase && (
             <PrerequisiteWait view={task.prerequisites} onOpenTask={onOpenTask} />
           )}
-          {!items.length && !asides?.length && !loading && !error && !forkBlockedReason && !activityPhase
+          {!items.length && !shownAsides.length && !loading && !error && !forkBlockedReason && !activityPhase
             && !(task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked)) && (
             <div className="task-conversation-empty">
               <File size={20} aria-hidden="true" />

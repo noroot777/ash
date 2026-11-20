@@ -24,6 +24,8 @@ import { delimiter, join } from "node:path";
 import { asc, eq, inArray, like, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Task } from "@navi/shared";
+import { dispatchLaunchOf } from "@navi/shared/dispatch-plan";
+import type { QuestionRecord } from "@navi/shared/questions";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installExitingClis, installFakeClaude } from "./scheduled-messages-fixture.js";
 
@@ -224,8 +226,23 @@ try {
   assert.equal(group.mode, "parallel", "同时");
   assert.equal((await db.select().from(queueItems).where(inArray(queueItems.taskId, kids.map((kid) => kid.id)))).length, 0, "同时：不排队");
   const answered = (await taskOf(P)).questionHistory ?? "[]";
-  const record = (JSON.parse(answered) as { answer: string }[]).at(-1)!;
-  assert.equal(record.answer, "派出这 2 个任务\n同时 · 第 2 条交给 gemini · 去掉了「关掉起手式的新建入口」", "你那颗气泡：派出几个、一句改动");
+  const record = (JSON.parse(answered) as QuestionRecord[]).at(-1)!;
+  assert.equal(record.answer, "派出这 2 个任务\n同时 · 第 2 条交给 gemini · 去掉了「关掉起手式的新建入口」", "问答记录里答的那一句：派出几个、一句改动");
+  // 会话里不画成一颗「你」的气泡、改成每条一句「开了新任务」：认的是服务端写下的那一列，不看答复正文。
+  const launchedTasks = [
+    { id: kids[0]!.id, title: "验收门禁加准备命令", agent: "codex · gpt-5.6" },
+    { id: kids[1]!.id, title: kids[1]!.title, agent: "gemini" },
+  ];
+  assert.deepEqual(record.dispatchLaunch, launchedTasks, "问答记录上记下了建好的是哪几条、交给了谁");
+  assert.deepEqual(dispatchLaunchOf(record), launchedTasks, "派出记录认得出");
+  // 有这一列之前的老记录：按完整形状认，清单照样读得出来。
+  const { dispatchLaunch: _marker, ...legacy } = record;
+  assert.deepEqual(dispatchLaunchOf(legacy), launchedTasks, "老的派出记录按完整形状认");
+  assert.equal(dispatchLaunchOf({ ...legacy, deleted: true }), null, "删掉的派出记录不再认");
+  // 普通答复开头撞上回执那一句，也只是普通答复（答复正文是用户自由写的）。
+  const typed = "用户按了「派出去」：但没有反应，请继续排查。";
+  assert.equal(dispatchLaunchOf({ id: "x", answeredAt: record.answeredAt, answer: typed, reply: `【答复】\n${typed}` }), null, "普通答复撞上回执开头不算派出记录");
+  assert.equal(dispatchLaunchOf({ ...legacy, answer: typed }), null, "答的那一句不是「派出这 N 个任务」不算");
   await waitFor(() => delivered().includes(kids[1]!.id), "续上的会话里没有建好的任务清单");
   const reply = delivered();
   assert.ok(reply.includes(`${kids[0]!.id}「验收门禁加准备命令」→ codex · gpt-5.6`), "智能体拿得到任务号、标题、交给了谁");
