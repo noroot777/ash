@@ -24,6 +24,7 @@ import { delimiter, join } from "node:path";
 import { asc, eq, inArray, like, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Task } from "@navi/shared";
+import { isDispatchLaunchReply } from "@navi/shared/dispatch-plan";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installExitingClis, installFakeClaude } from "./scheduled-messages-fixture.js";
 
@@ -224,8 +225,10 @@ try {
   assert.equal(group.mode, "parallel", "同时");
   assert.equal((await db.select().from(queueItems).where(inArray(queueItems.taskId, kids.map((kid) => kid.id)))).length, 0, "同时：不排队");
   const answered = (await taskOf(P)).questionHistory ?? "[]";
-  const record = (JSON.parse(answered) as { answer: string }[]).at(-1)!;
-  assert.equal(record.answer, "派出这 2 个任务\n同时 · 第 2 条交给 gemini · 去掉了「关掉起手式的新建入口」", "你那颗气泡：派出几个、一句改动");
+  const record = (JSON.parse(answered) as { answer: string; reply: string }[]).at(-1)!;
+  assert.equal(record.answer, "派出这 2 个任务\n同时 · 第 2 条交给 gemini · 去掉了「关掉起手式的新建入口」", "问答记录里答的那一句：派出几个、一句改动");
+  // 会话里认得出这段答复（不再画成一颗气泡，那一下由「开了新任务」说）：认法跟写法是同一个开头。
+  assert.ok(isDispatchLaunchReply(record.reply), "派出去续上会话的答复认得出是派出回执");
   await waitFor(() => delivered().includes(kids[1]!.id), "续上的会话里没有建好的任务清单");
   const reply = delivered();
   assert.ok(reply.includes(`${kids[0]!.id}「验收门禁加准备命令」→ codex · gpt-5.6`), "智能体拿得到任务号、标题、交给了谁");

@@ -1,13 +1,13 @@
 // 派活单在服务端的那一半：智能体摆出来的清单怎么收（`normalizeProposal`）、写进 `task.question` 的那一句
-// 清单长什么样（`planQuestionText`），以及「派出去」那一下按卡上此刻的样子留下的两段话——用户那颗气泡里
-// 的一句（`launchBubble`）和续上智能体会话的那段答复（`launchReply`）。路由在 dispatch-plan-routes.ts，
+// 清单长什么样（`planQuestionText`），以及「派出去」那一下按卡上此刻的样子留下的两段话——问答记录里
+// 用户答的那一句（`launchBubble`）和续上智能体会话的那段答复（`launchReply`）。路由在 dispatch-plan-routes.ts，
 // 建任务那一下在 dispatch-plan-launch.ts。
 //
 // 为什么是 navi 建、不是让智能体再调一次工具：用户在卡上换的人、去掉的条、选的一个接一个 / 同时，
 // 只有照着卡建才保证「看到的就是派出去的」。智能体续上时拿到的是已经建好的清单，它不必、也不该再建一遍。
 import { AGENT_TYPES, type AgentType } from "@navi/shared";
 import {
-  DISPATCH_ORDER_LABEL, MAX_DISPATCH_NOTE_LEN, MAX_DISPATCH_PLAN_ITEMS,
+  DISPATCH_LAUNCH_REPLY_LEAD, DISPATCH_ORDER_LABEL, MAX_DISPATCH_NOTE_LEN, MAX_DISPATCH_PLAN_ITEMS,
   type DispatchOrder, type DispatchPlan, type DispatchPlanItem, type DispatchRunTarget,
 } from "@navi/shared/dispatch-plan";
 import { parseCreateReviewChoice, type CreateReviewChoice } from "@navi/shared/review-on-create";
@@ -143,7 +143,7 @@ const sameTarget = (left: DispatchRunTarget | null, right: DispatchRunTarget | n
 export type LaunchPick = { index: number; target: DispatchRunTarget; review: CreateReviewChoice };
 
 /**
- * 用户那颗气泡里留下的话：「派出这 N 个任务」，下一行一句改动——一个接一个还是同时、第几条换了人、
+ * 问答记录里用户答的那一句：「派出这 N 个任务」，下一行一句改动——一个接一个还是同时、第几条换了人、
  * 去掉了哪几条。第几条按派出去的顺序数（卡上去掉一条之后，下面的序号跟着往上补）。
  */
 export function launchBubble(
@@ -173,7 +173,7 @@ export function launchReply(
   const lines = launched.map((task, index) => `${index + 1}. ${task.id}「${task.title}」→ ${label(task.target)}`);
   return [
     `【答复】`,
-    `用户按了「派出去」：Navi 已照派活单此刻的样子建好下面 ${launched.length} 个任务（${DISPATCH_ORDER_LABEL[order]}），`
+    `${DISPATCH_LAUNCH_REPLY_LEAD}Navi 已照派活单此刻的样子建好下面 ${launched.length} 个任务（${DISPATCH_ORDER_LABEL[order]}），`
       + "挂在本任务名下、已交给调度（可能还在等名额、等前置或排队）。不要再调用建任务的工具重复建；要看进度用 list_tasks / get_task。",
     ...lines,
     ...(dropped.length ? [`用户去掉了：${dropped.map((item) => `「${item.title}」`).join("、")}（没有建）`] : []),

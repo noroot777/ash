@@ -61,6 +61,17 @@ export const MAX_DISPATCH_NOTE_LEN = 120;
 
 export const DISPATCH_ORDER_LABEL: Record<DispatchOrder, string> = { serial: "一个接一个", parallel: "同时" };
 
+/**
+ * 「派出去」续上智能体会话的那段答复（server dispatch-plan.ts `launchReply`）以它开头。那段话只是交给智能体的
+ * 回执：用户在会话里看到的是每条新任务各一句「开了新任务」（web dispatchNotes.ts，跟回复框、建议栏派出去
+ * 同一种），所以会话里认出这段答复就不再画成一颗「你」的气泡——否则同一下要说两遍，气泡里还把整张清单引一遍。
+ */
+export const DISPATCH_LAUNCH_REPLY_LEAD = "用户按了「派出去」：";
+
+export function isDispatchLaunchReply(text: string): boolean {
+  return text.trimStart().replace(/^【答复】\s*/, "").startsWith(DISPATCH_LAUNCH_REPLY_LEAD);
+}
+
 /** 派活单还算不算数：那一问还是它。 */
 export function activeDispatchPlan(task: { question?: string | null; dispatchPlan?: DispatchPlan | null }): DispatchPlan | null {
   const plan = task.dispatchPlan;
