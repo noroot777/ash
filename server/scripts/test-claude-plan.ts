@@ -96,22 +96,20 @@ try {
   ask("Bash", { command: "rm -rf build" });
   assert.equal(last().response.behavior, "deny");
   assert.match(last().response.message, /计划模式只读/);
-  ask("Write", { file_path: join(root, "src.ts"), content: "x" }, "w1");
-  assert.equal(last().response.behavior, "deny", "计划文件以外的写一律拒");
-  ask("Write", { file_path: join(plansDir, "../../escape.md"), content: "x" }, "w2");
-  assert.equal(last().response.behavior, "deny", "路径穿出计划目录不算计划文件");
-  writeFileSync(join(root, "outside.md"), "外面");
-  symlinkSync(join(root, "outside.md"), join(plansDir, "link.md"));
-  ask("Write", { file_path: join(plansDir, "link.md"), content: "x" }, "w3");
-  assert.equal(last().response.behavior, "deny", "目录内指向外面的软链接不能借道写出去");
-  symlinkSync(join(root, "not-yet.md"), join(plansDir, "dangling.md"));
-  ask("Write", { file_path: join(plansDir, "dangling.md"), content: "x" }, "w4");
-  assert.equal(last().response.behavior, "deny", "悬空软链接证明不了落点，不当成还没建的新文件");
+  // 写文件一律拒：本会话的计划文件 CLI 自己放行、从不来问（2.1.283 实测），来问的都是别的文件——
+  // 计划目录里的其他 md、项目文档（plansDirectory 设在项目里时两者重叠）、新建的 md 都一样
+  const planFile = join(plansDir, "snug-milner.md");
+  writeFileSync(join(plansDir, "other-session.md"), "别的会话");
+  for (const [tool, path] of [["Write", join(root, "src.ts")], ["Write", join(plansDir, "other-session.md")], ["Edit", join(plansDir, "other-session.md")],
+    ["MultiEdit", join(plansDir, "README.md")], ["Write", join(plansDir, "brand-new.md")], ["Write", planFile]] as const) {
+    assert.deepEqual(ask(tool, { file_path: path, content: "x" }, `deny-${tool}`), []);
+    assert.equal(last().response.behavior, "deny", `${tool} ${path}`);
+    assert.match(last().response.message, /不是本会话的计划文件/);
+  }
   ask("mcp__navi__complete_task", { taskId: "t" });
   assert.equal(last().response.behavior, "deny");
-  const planFile = join(plansDir, "snug-milner.md");
-  ask("Write", { file_path: planFile, content: "# 计划" }, "plan-write");
-  assert.equal(last().response.behavior, "allow");
+  // 模型写自己的计划文件（CLI 放行，不来问）：只记账
+  gate.noteAssistant([{ type: "tool_use", id: "toolu_plan-write", name: "Write", input: { file_path: planFile, content: "# 计划" } }]);
   writeFileSync(planFile, "# 计划\n\n1. 改 a.txt\n");
   gate.noteToolResult({ type: "tool_result", tool_use_id: "toolu_plan-write", content: "ok" });
   gate.noteAssistant([{ type: "text", text: "我准备这样做。" }]);
@@ -152,6 +150,16 @@ try {
   v = versioned();
   v.use("src", join(root, "src.ts"), "Write"); v.result("src", true);
   assert.equal((v.submit("x5", { plan: "旧计划", planFilePath: planFile })[0] as any).text, "旧计划");
+  // 等价路径是同一个文件：经软链接拼写的修改与 CLI 报的真实路径对得上（/tmp 与 /private/tmp 同理）
+  const alias = join(root, "plans-alias");
+  symlinkSync(plansDir, alias);
+  const viaAlias = versioned();
+  viaAlias.use("via-alias", join(alias, "snug-milner.md")); viaAlias.result("via-alias", true);
+  assert.deepEqual(viaAlias.submit("x-alias", { plan: "旧计划", planFilePath: planFile }), []);
+  assert.match(viaAlias.reply().message, /写计划文件失败/, "经别名改失败也认得出是这份计划文件");
+  const aliased = new ClaudePlanGate(alias, () => {});
+  aliased.noteAssistant([{ type: "tool_use", id: "pending-real", name: "Edit", input: { file_path: planFile } }]);
+  assert.deepEqual(aliased.request({ request_id: "r-alias", request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input: {}, tool_use_id: "x-old" } }), [], "老版本 CLI 不报路径：按目录认，目录与文件拼写不同也一样");
   // ⑤ 交出之后：卡是交那一刻的快照。计划文件再改（成、败、改空、删掉）都不出事件、不动那张卡；要改计划就再交一次
   const card = (id: string, text: string) => [{ kind: "plan", id, text, status: "complete" }];
   v.use("after"); writeFileSync(planFile, "# 改后的计划"); v.result("after");
@@ -242,10 +250,10 @@ writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2))
 const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const planMode = process.argv.includes("plan");
 const planFile = ${JSON.stringify(join(plansDir, "fake-session.md"))};
+// 本会话的计划文件 CLI 自己放行、不来问（2.1.283 实测）；来问的只有别的写和交计划
 const steps = [
   () => { emit({ type: "assistant", message: { model: "m", content: [{ type: "tool_use", id: "toolu_w", name: "Write", input: { file_path: planFile, content: "# 假计划" } }] } });
-    emit({ type: "control_request", request_id: "c1", request: { subtype: "can_use_tool", tool_name: "Write", input: { file_path: planFile, content: "# 假计划" }, tool_use_id: "toolu_w" } }); },
-  () => { writeFileSync(planFile, "# 假计划\\n\\n先读后改");
+    writeFileSync(planFile, "# 假计划\\n\\n先读后改");
     emit({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_w", content: "ok" }] } });
     emit({ type: "control_request", request_id: "c2", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "touch x" }, tool_use_id: "toolu_b" } }); },
   () => { emit({ type: "assistant", message: { model: "m", content: [{ type: "tool_use", id: "toolu_exit", name: "ExitPlanMode", input: {} }] } });
@@ -276,7 +284,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const argv: string[] = JSON.parse(readFileSync(argvFile, "utf8"));
   assert.ok(argv.includes("--permission-prompt-tool") && argv.includes("--input-format"));
   const answers = readFileSync(answersFile, "utf8").trim().split("\n").map((line) => JSON.parse(line).response);
-  assert.deepEqual(answers.map((answer) => [answer.request_id, answer.response.behavior]), [["c1", "allow"], ["c2", "deny"], ["c3", "deny"]]);
+  assert.deepEqual(answers.map((answer) => [answer.request_id, answer.response.behavior]), [["c2", "deny"], ["c3", "deny"]]);
   assert.deepEqual(events.filter((event) => event.kind === "plan"), [{ kind: "plan", id: "plan:toolu_exit", text: "# 假计划\n\n先读后改", status: "complete" }]);
   assert.equal(events.some((event) => event.kind === "tool" && event.name === "ExitPlanMode"), false, "交计划那一步换成计划卡，不画成被拒的工具调用");
   assert.equal(events.at(-1)?.kind, "done");

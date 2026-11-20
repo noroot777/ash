@@ -6,8 +6,12 @@
 //     下 `plans/<slug>.md`）被当敏感文件拒写——模型交不出计划，回合白跑。
 //   · 跟 `--dangerously-skip-permissions` 同传：后者赢（init 报 bypassPermissions），等于没进计划模式。
 //   · 加了 stdio：CLI 把每一次要权限的工具调用以 `control_request{subtype:"can_use_tool"}` 写到
-//     stdout，等 stdin 回 `control_response`。ExitPlanMode 也走这条，`input` 是空对象——计划正文
-//     不在调用里，在计划文件里。
+//     stdout，等 stdin 回 `control_response`。ExitPlanMode 也走这条，`input` 里是 CLI 自己从计划文件
+//     读出的正文（`plan`）和计划文件路径（`planFilePath`）。
+//   · 本会话的计划文件（CLI 告诉模型的那一份，`<计划目录>/<slug>.md`）CLI 自己放行，**从不来问**——
+//     默认 `~/.claude/plans`、自定义配置目录、项目内 `plansDirectory` 都实测过（2026-11-20）。来问的
+//     写文件请求（`decision_reason_type: "mode"`）都是别的文件：项目文档、别的会话的计划、新建的 md，
+//     哪怕它们也在计划目录里、也是 .md。所以计划回合 Navi 一个写请求都不放行，授权不靠按目录猜。
 //
 // 一回合一进程：ExitPlanMode 到达时把计划正文推成 `{kind:"plan"}` 事件、**拒掉**这次调用，
 // 模型据拒绝消息收尾，回合自然结束。不放行——放行等于让它当场退出计划模式接着动手，用户还没批准。
@@ -26,6 +30,7 @@ const READ_ONLY = new Set([
   "Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "TodoWrite", "Task", "Agent",
   "ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool", "BashOutput", "TaskOutput",
 ]);
+/** 改文件的工具：只为记账（交计划那一刻计划文件最近一次修改成没成），不据它放行。 */
 const PLAN_FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
 /** 由闸换成计划 / 澄清问题事件的两种工具：流里不再把它们画成一次工具调用。 */
 export const PLAN_HANDOFF_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"]);
@@ -36,6 +41,7 @@ const NO_PLAN = "没有找到计划正文。先把完整计划写进计划文件
 const WRITE_FAILED = "最近一次写计划文件失败了，计划文件里不是你最新的计划。先把完整计划成功写进计划文件，再调用 ExitPlanMode。";
 const WRITE_PENDING = "计划文件最近一次修改还没完成。等它完成后再调用 ExitPlanMode。";
 const READ_ONLY_DENIAL = (tool: string) => `计划模式只读：本回合不能执行 ${tool}。需要的话把这一步写进计划，用户确认实施后再做。`;
+const WRITE_DENIAL = (path: unknown) => `计划模式只读：${String(path ?? "这个文件")} 不是本会话的计划文件，不能写。计划只写进 Claude Code 指定给你的那份计划文件（写它不需要批准）；其他文件的改动写进计划，用户确认实施后再做。`;
 
 // 额外参数里能把权限模式改掉的那几个：跟计划参数同传时 CLI 认后来的（实测 `--dangerously-skip-permissions`
 // 在后 → init 报 bypassPermissions），计划回合装配时一律摘掉。带值的两个连值一起摘。
@@ -164,17 +170,16 @@ export class ClaudePlanGate {
     return `计划模式没有生效：claude 起跑后报告的权限模式是 ${String(permissionMode ?? "未知")}，本回合已停止，以免在你确认计划前改动文件。请检查执行器的 settings 里有没有改权限模式的设置。`;
   }
 
-  // 计划目录内、.md 结尾；软链接解开后也得还在目录里（目录内一个指向外面的链接不能借道写出去）。
-  private isPlanFile(path: unknown): path is string {
-    if (typeof path !== "string" || !isAbsolute(path) || !path.endsWith(".md")) return false;
-    const target = resolve(path);
-    const real = realPath(target);
-    return within(resolve(this.plansDir), target) && !!this.realPlansDir && !!real && within(this.realPlansDir, real);
+  // 没报计划文件路径的老版本 CLI 才用：计划目录内、.md 结尾。两边都按真实路径比（`/tmp` 与 `/private/tmp`、
+  // 项目软链接这类等价拼写是同一个文件）。只用于记账，不据它放行。
+  private isPlanFile(path: string): boolean {
+    return path.endsWith(".md") && within(this.realPlansDir ?? resolve(this.plansDir), path);
   }
 
   /** 这一刻能交哪份正文；不能交时给出原因。`given` 是 CLI 随 ExitPlanMode 带来的正文。 */
   private current(planPath: string | null, given: unknown): { text: string } | { refuse: string } {
-    const changes = [...this.mutations].filter(([, m]) => planPath ? m.path === planPath : this.isPlanFile(m.path));
+    const target = planPath ? identity(planPath) : null;
+    const changes = [...this.mutations].filter(([, m]) => target ? m.path === target : this.isPlanFile(m.path));
     const last = changes.length ? changes.reduce((a, b) => b[1].seq > a[1].seq ? b : a)[1] : undefined;
     if (changes.some(([, m]) => m.state === "pending")) return { refuse: WRITE_PENDING };
     if (last?.state === "failed") return { refuse: WRITE_FAILED };
@@ -187,7 +192,7 @@ export class ClaudePlanGate {
   noteToolUse(block: any): void {
     const id = block?.id;
     const path = typeof id === "string" && PLAN_FILE_TOOLS.has(block.name) ? absolutePath(block.input?.file_path) : null;
-    if (path && !this.mutations.has(id)) this.mutations.set(id, { seq: ++this.seq, path, state: "pending" });
+    if (path && !this.mutations.has(id)) this.mutations.set(id, { seq: ++this.seq, path: identity(path), state: "pending" });
   }
 
   /** 主智能体的每条 assistant 消息（重放时也要喂：接管回来照样认得出计划文件和兜底正文）。 */
@@ -216,10 +221,8 @@ export class ClaudePlanGate {
     const request = ev.request ?? {};
     const tool = String(request.tool_name ?? "");
     const input = request.input ?? {};
-    const planFileWrite = request.subtype === "can_use_tool" && PLAN_FILE_TOOLS.has(tool) && this.isPlanFile(input.file_path);
     if (replaying) {
       if (tool === "ExitPlanMode") this.spoken = "";
-      if (planFileWrite) this.noteToolUse({ id: request.tool_use_id, name: tool, input });
       return [];
     }
     if (request.subtype !== "can_use_tool") {
@@ -242,11 +245,7 @@ export class ClaudePlanGate {
       deny(ASKED);
       return [{ kind: "userInput", questions }];
     }
-    if (planFileWrite) {
-      this.noteToolUse({ id: request.tool_use_id, name: tool, input });
-      allow();
-      return [];
-    }
+    if (PLAN_FILE_TOOLS.has(tool)) { deny(WRITE_DENIAL(input.file_path)); return []; }
     if (READ_ONLY.has(tool)) { allow(); return []; }
     deny(READ_ONLY_DENIAL(tool));
     return [];
@@ -254,6 +253,8 @@ export class ClaudePlanGate {
 }
 
 const absolutePath = (path: unknown): string | null => typeof path === "string" && isAbsolute(path) ? resolve(path) : null;
+/** 一个文件的身份：解开软链接后的真实路径；证明不了（悬空链接、读不了）就用字面路径。 */
+const identity = (path: string): string => realPath(path) ?? path;
 
 function readText(path: string): string {
   try {
