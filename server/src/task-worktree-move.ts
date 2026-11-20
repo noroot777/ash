@@ -21,7 +21,7 @@
 //
 // 项目目录里有未提交的改动时一律不办：新工作区从起点的提交开出，那些改动带不过去；悄悄留在原地，
 // 智能体换了目录就再也看不见它们，替用户搬走或丢掉更不行。拒绝的话里列出是哪几个文件、该怎么处理。
-import { cpSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { cpSync, copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
@@ -129,6 +129,13 @@ async function planError(error: unknown): Promise<WorktreeMoveError | null> {
  * 这条任务（和挂在它身上的老式审查任务）记在项目目录上的会话行：改指新目录，claude 的会话文件复制一份
  * 到新目录对应的位置。只改记在**项目目录**上的那几条 —— 记在别处的（比如用户手动指定过目录）不归这里管。
  */
+/**
+ * claude 按进程的真实工作目录分会话目录：macOS 上 `/tmp/x` 起的进程，cwd 是 `/private/tmp/x`。
+ * 库里记的是用户写的那种拼法，所以找旧文件两种都试，新文件按真实路径放（新目录这时已经建好了）。
+ */
+const realDir = (path: string) => { try { return realpathSync(path); } catch { return path; } };
+const spellings = (path: string) => [...new Set([realDir(path), path])];
+
 async function moveSessions(taskId: string, from: string, to: string, branch: string): Promise<string[]> {
   const reviewers = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.reviewOf, taskId));
   const rows = await db.select().from(sessions).where(inArray(sessions.taskId, [taskId, ...reviewers.map((row) => row.id)]));
@@ -140,8 +147,9 @@ async function moveSessions(taskId: string, from: string, to: string, branch: st
     if (row.agentType === "claude" && row.cliSessionId) {
       const configDir = await sessionCliConfigDir(row, "claude");
       const source = [row.cwd, row.worktreePath].filter((cwd): cwd is string => !!cwd)
-        .map((cwd) => claudeSessionFilePath(expandHome(cwd), row.cliSessionId!, configDir)).find((path) => existsSync(path));
-      const target = claudeSessionFilePath(to, row.cliSessionId, configDir);
+        .flatMap((cwd) => spellings(expandHome(cwd)))
+        .map((cwd) => claudeSessionFilePath(cwd, row.cliSessionId!, configDir)).find((path) => existsSync(path));
+      const target = claudeSessionFilePath(realDir(to), row.cliSessionId, configDir);
       if (!source) notes.push(`会话 ${row.id} 的 claude 会话文件没找到，下一回合接不上原来的对话`);
       else if (!existsSync(target)) {
         mkdirSync(dirname(target), { recursive: true });

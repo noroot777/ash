@@ -10,14 +10,18 @@
 //   4. 已经在独立工作区里的任务拒绝；还没办的登记可以撤回。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { removeTmpStage } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "navi-worktree-move-"));
+const realRoot = realpathSync(mkdtempSync(join(tmpdir(), "navi-worktree-move-")));
+// 项目路径故意走一层软链（像 macOS 上的 /tmp → /private/tmp）：claude 按进程的真实目录存会话文件，
+// 库里记的却是软链那种拼法，搬会话文件时两边都得按真实路径对上。
+const root = `${realRoot}-link`;
+symlinkSync(realRoot, root);
 process.env.NAVI_DB = join(root, "navi.db");
 process.env.NAVI_RUNS_DIR = join(root, "runs");
 // claude 的会话文件一律落在这个临时配置目录里（会话行记着它），不碰真的 ~/.claude。
@@ -69,7 +73,7 @@ async function claudeSession(id: string, taskId: string, cwd: string, cliSession
     id, taskId, role: "single", agentType: "claude", executor: "claude@test", cwd, worktreePath: cwd, branch: "main",
     cliSessionId, cliConfigDir: claudeConfig, startedAt: at, endedAt: at, exitStatus: 0,
   });
-  const file = claudeSessionFilePath(cwd, cliSessionId, claudeConfig);
+  const file = claudeSessionFilePath(realpathSync(cwd), cliSessionId, claudeConfig);
   mkdirSync(join(file, "..", cliSessionId, "subagents"), { recursive: true });
   writeFileSync(file, `{"sessionId":"${cliSessionId}"}\n`);
   writeFileSync(join(file, "..", cliSessionId, "subagents", "agent-1.jsonl"), "{}\n");
@@ -113,10 +117,10 @@ try {
     assert.equal(session.cwd, path, "下一回合按会话行上的目录起跑，必须改指新目录");
     assert.equal(session.worktreePath, path);
     assert.equal(session.branch, worktreeBranchName(id));
-    const carried = claudeSessionFilePath(path, "cli-user-1", claudeConfig);
+    const carried = claudeSessionFilePath(realpathSync(path), "cli-user-1", claudeConfig);
     assert.equal(readFileSync(carried, "utf8"), `{"sessionId":"cli-user-1"}\n`, "claude 会话文件跟着搬到新目录的项目目录下");
     assert.ok(existsSync(join(carried, "..", "cli-user-1", "subagents", "agent-1.jsonl")), "旁挂目录一并带上");
-    assert.ok(existsSync(claudeSessionFilePath(repo, "cli-user-1", claudeConfig)), "原来那份留着（复制，不是挪走）");
+    assert.ok(existsSync(claudeSessionFilePath(realpathSync(repo), "cli-user-1", claudeConfig)), "原来那份留着（复制，不是挪走）");
 
     const note = await takeWorkspaceNote(id);
     assert.match(note, /工作目录已更换/);
@@ -178,7 +182,7 @@ try {
     assert.equal(current.worktreeMoveRequest, null);
     const session = (await db.select().from(sessions).where(eq(sessions.id, "sess-agent")))[0]!;
     assert.equal(session.cwd, worktreePathFor(repo, id));
-    assert.ok(existsSync(claudeSessionFilePath(worktreePathFor(repo, id), "cli-agent-1", claudeConfig)));
+    assert.ok(existsSync(claudeSessionFilePath(realpathSync(worktreePathFor(repo, id)), "cli-agent-1", claudeConfig)));
     assert.match(await takeWorkspaceNote(id), /工作目录已更换/);
     console.log("✓ agent entry records the request and the next turn applies it before picking the session");
   }
@@ -217,5 +221,6 @@ try {
     console.log("✓ a pending move can be withdrawn; an unreadable start point is refused up front");
   }
 } finally {
-  await removeTmpStage(root);
+  await removeTmpStage(realRoot);
+  rmSync(root, { force: true });
 }
